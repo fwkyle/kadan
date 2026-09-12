@@ -1,6 +1,10 @@
 import {currentProgressReport,stateText} from './human-brief.mjs';
 import {escapeHtml as e} from './card-content.mjs';
 
+// 첫 화면 분류 기준(2026-09-12). 오래된 미정리는 담당 세션이 없고 신호가 이 시간보다 오래된 확인 필요 카드다.
+export const STALE_MS=24*60*60_000;
+export const RECENT_MS=24*60*60_000;
+
 // 카드 편집 시각은 실행 신호로 쓰지 않는다. 기존 발령·보고·결과와 세션 조회만 읽는다.
 export function executionHealth(card,now=Date.now()) {
  const state=card.displayState||card.status,report=currentProgressReport(card,now);
@@ -23,7 +27,18 @@ export function executionHealth(card,now=Date.now()) {
  if(report.state==='unknown')return result('attention','보고 확인 필요','현재 발령과 보고의 작성자·시각을 확인할 수 없습니다.');
  if(state==='running'&&report.state==='reported')return result('running','작업 중',report.note||'현재 담당의 진행 보고가 있고 수집 시점에 같은 세션이 열려 있습니다.');
  if(state==='waiting'&&report.state==='reported')return result('waiting','결과 대기',report.note||'현재 담당이 결과 대기를 보고했습니다. 작업 중단으로 판정하지 않습니다.');
+ if(report.state==='reported')return result('attention','활동 보고 확인','진행 메모는 있지만 작업 중·결과 대기 활동 보고(kadan card progress)가 없어 상태를 확정하지 않습니다.');
  return result('attention','시작 확인 필요','지시 전달 이후 현재 작업 중인지 확인할 진행 보고가 없습니다.');
+}
+// 첫 화면 묶음. 확인 필요를 '지금 막힌 것'(세션이 살아 있거나 신호가 최근)과 '오래된 미정리'(세션 없음·신호 오래됨)로 나눈다.
+export function executionBucket(card,now=Date.now()){
+ const h=card.healthKind?card:{...card,...executionHealth(card,now)};
+ if(h.healthKind!=='attention')return h.healthKind;
+ const run=(card.runs||[]).filter(r=>r.role===card.role).at(-1);
+ const sessionAlive=run?.sessionState==='alive';
+ const signal=Date.parse(h.signalAt);
+ const fresh=Number.isFinite(signal)&&now-signal<STALE_MS;
+ return sessionAlive||fresh?'stuck':'stale';
 }
 
 export function workHealth(work,executions,now=Date.now()) {

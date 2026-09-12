@@ -4,13 +4,13 @@ import {workDashboardModel,renderWorkDetail,renderWorkCreate,workDashboardStyle}
 import {uiFoundationStyle} from './ui-foundation.mjs';
 import {activityGuide,activityGuideStyle} from './activity-guide.mjs';
 import {watchOverviewStyle} from './watch-overview-wall.mjs';
-import {buildHumanBrief,progressLabel,queueLabel} from './human-brief.mjs';
+import {buildHumanBrief} from './human-brief.mjs';
 import {renderDashboardWorkspace,renderWorkspaceDetail} from './dashboard-workspace.mjs';
 import {dashboardWorkspaceStyle} from './dashboard-workspace-style.mjs';
 import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
-import {renderDashboardHome,dashboardStyle} from './dashboard-home.mjs';
+import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
-import {renderBoardProgress,statusPaletteCss} from './board-progress.mjs';
+import {statusPaletteCss} from './board-progress.mjs';
 import {decisionCommand} from './decisions.mjs';
 import {renderDecisions,renderActivity} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
@@ -20,7 +20,6 @@ const e=htmlEscape;
 const labels={archived:'과거 자료·미분류',running:'작업 중',waiting:'결과 대기',draft:'초안',ready:'발령 가능',assigned:'배정',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',unconfirmed:'발령됨',orphaned:'세션 없음·미완료',failed:'실패',planned:'계획', 'needs-check':'확인 필요'};
 const label=x=>labels[x]??x;
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
-const cardPill=c=>`<span class="state ${e(c.displayState)}">${e(['unconfirmed','running','waiting'].includes(c.displayState)?progressLabel(c):label(c.displayState))}</span>${queueLabel(c)?`<small style="display:block">${e(queueLabel(c))}</small>`:''}`;
 const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;
 export function renderCenterWall({center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home}, {token='',url=new URL('http://localhost')}={}) {
  if(centerError)center=null;
@@ -37,12 +36,6 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
   const html=renderWorkspaceDetail(c,{brief:briefs?.get(c.key),center,decisions,decisionError,form:management(c),collectedAt,entries,home,url});
   return parent?html.replace('<header>',`<p class="bw-parent-link">업무 ${`<a data-card-key="${e(parent.key)}" href="?card=${encodeURIComponent(parent.key)}#detail">${e(parent.title)}</a>`} · 이 화면은 업무 안의 실행입니다.</p><header>`):html;
  };
- const attention=(center?.cards??[]).filter(c=>['unconfirmed','orphaned','failed'].includes(c.displayState));
- const unassignedAttention=attention.filter(c=>!c.board);
- const attentionBreakdown=center?`<p class="muted">실행 기록 확인: 판 안 ${attention.length-unassignedAttention.length}장 · 판 미지정 ${unassignedAttention.length}장. 사용자 답변 요청은 ‘내 결정 필요’에 표시합니다.</p>`:'';
- const unassignedPanel=()=>!unassignedAttention.length?'':`<section class="panel unassigned-attention"><h2>판 미지정 · 실행 기록 확인 ${unassignedAttention.length}장</h2><p class="muted">카드의 저장 상태와 과거 실행 기록을 구분해서 보여줍니다. 초안이어도 과거 발령 기록이 남아 있을 수 있습니다.</p><div class="scroll"><table><thead><tr><th>저장소 / 카드</th><th>카드 상태</th><th>실행 기록</th></tr></thead><tbody>${unassignedAttention.map(c=>`<tr><td><small>${e(c.repo)}</small><a class="row-title" href="?${new URLSearchParams({card:c.key})}#detail">${e(briefs?.get(c.key)?.title||c.title)}</a><small>${e(c.id)}</small></td><td>${pill(c.status)}</td><td>${cardPill(c)}</td></tr>`).join('')}</tbody></table></div></section>`;
-
-
  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>카단 · 카드와 작업</title><style>
  *{box-sizing:border-box}body{margin:0}a{color:#176849;text-underline-offset:3px}a:hover{text-decoration-thickness:2px}input,select,textarea{border:1px solid #acb7af;border-radius:5px;padding:8px;background:white;color:#202824}textarea{resize:vertical;width:100%}:focus-visible{outline:3px solid #b07712;outline-offset:3px}header.top{background:#fff;border-bottom:1px solid #d8ded8;padding:22px 32px;display:flex;gap:16px;align-items:center;justify-content:space-between}h1{margin:0;font-size:23px}h2{font-size:18px;margin:0 0 15px}h3{font-size:15px;margin:22px 0 10px}p{margin:8px 0}.muted,small,dt{color:#5e6b62}nav{display:flex;gap:18px;flex-wrap:wrap}main{max-width:1480px;margin:24px auto;padding:0 28px}.stats{display:flex;gap:25px;flex-wrap:wrap;padding:16px 0 24px}.stats strong{font-size:24px;display:block}.panel,.card-detail{background:white;border:1px solid #d8ded8;border-radius:9px;padding:22px;margin-bottom:20px}.toolbar{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:18px}label{display:flex;flex-direction:column;gap:5px}input[name=q]{min-width:230px}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;text-align:left}th{color:#5e6b62;font-weight:500;font-size:12px;border-bottom:1px solid #bfc8c1;white-space:nowrap}th,td{padding:12px 10px;vertical-align:top}td{border-bottom:1px solid #e6eae5}td:first-child{min-width:220px}.state{display:inline-block;padding:2px 7px;border-radius:4px;background:#edf0ed;white-space:normal;overflow-wrap:anywhere;font-size:12px}.cols{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(340px,1fr);gap:22px}.cols>*{min-width:0}details{margin:12px 0}summary{cursor:pointer;color:#245c44}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:500px;overflow:auto;background:#f6f7f5;padding:16px;font-size:12px}dd{margin:0 0 9px;overflow-wrap:anywhere}.history{padding-left:22px}.history li{margin-bottom:18px}.history p{white-space:pre-wrap;overflow-wrap:anywhere}.history span{font-size:12px;color:#5e6b62}.edit{border-top:1px solid #d8ded8}.edit label{margin:10px 0}.error{background:#fff0d0;padding:18px;border:1px solid #b07712;border-radius:7px;margin-bottom:20px}.empty{padding:25px 0;color:#5e6b62}.row-title{font-weight:600;display:block}footer{color:#5e6b62;padding:12px 0 30px}@media(max-width:800px){header.top{padding:18px;display:block}nav{margin-top:12px}main{padding:0 14px;margin-top:14px}.panel,.card-detail{padding:16px}.cols{display:flex;flex-direction:column}.cols>.card-detail{order:-1}.toolbar label{flex:1;min-width:110px}.toolbar input{min-width:0;width:100%}.stats{gap:20px}.stats strong{font-size:21px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
 
@@ -58,17 +51,15 @@ ${dashboardWorkspaceStyle}
  ${workDashboardStyle}
  ${uiFoundationStyle}
  ${operationsFlowStyle}
- </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['overview','관제 요약'],['boards','판 현황'],['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['ledger','사건순 원장'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
+ </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
- ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt})}
+ ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
  ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail})}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}
  ${renderDecisions(decisions,decisionError,token)}
- ${renderDashboardHome({center,decisions,decisionError,briefs,entries,ledgerLines}).replaceAll('data-view="dashboard"','data-view="overview"')}
  <section class="panel" id="create" data-view="create"><h2>새 카드 만들기</h2><form method="post" action="/cards/create" class="edit"><input type="hidden" name="token" value="${e(token)}"><label>저장소 이름<input name="repo" required placeholder="my-repo"></label><label>저장소 절대경로<input name="repoPath" required></label><label>카드 ID<input name="id" required placeholder="card-product-search"></label><label>제목<input name="title" required></label><label>작업 내용<textarea name="body" rows="5" required></textarea></label><button>초안으로 저장</button></form></section>
- <section class="panel" id="boards" data-view="boards"><h2>판 진행</h2><p class="muted">이 화면은 실행 기준입니다. 업무의 최종 완료는 업무 카드에서 확인합니다. 작업 중·결과 대기는 마지막 유효 보고를 유지하며, 보고 시각은 따로 표시합니다. 완료·실패 또는 세션 이상은 별도로 반영합니다.</p>${renderBoardProgress(center,{briefs})}${attentionBreakdown}</section><div data-view="boards">${unassignedPanel()}</div>
  <section class="panel" id="sessions" data-view="sessions"><h2>담당자 세션</h2>${activityGuide('sessions')}${center&&!center.runtimeKnown?'<p role="alert">현재 세션 상태 모름</p>':''}<p class="muted">생존 여부와 카드 완료 여부는 별개입니다.</p><div class="scroll"><table><thead><tr><th>역할</th><th>생존</th><th>실행 도구 / 모델</th></tr></thead><tbody>${(center?.roles??[]).filter(r=>r.life.state==='alive').map(r=>`<tr><td>${e(r.role)}</td><td>${!center.runtimeKnown?'모름':r.life.pidState==='match'?'열려 있음':'PID 변경 — 확인 필요'}</td><td>${e([r.harness,r.model].filter(Boolean).join(' / ')||'모름')}</td></tr>`).join('')}</tbody></table></div></section>
  ${renderActivity({center,entries,ledgerLines,error,home},url)}
  <details class="panel" data-view="runs"><summary>중앙 카드에 연결되지 않은 실행 ${center?(center.unregistered??[]).length+'건':'모름'}</summary><p>등록 전의 과거 실행도 보존합니다. 같은 카드 ID가 여러 저장소에 있으면 자동 연결하지 않습니다.</p><div class="scroll"><table><thead><tr><th>카드 ID</th><th>역할</th><th>상태</th><th>판</th></tr></thead><tbody>${(center?.unregistered??[]).map(r=>`<tr><td>${e(r.taskId)}</td><td>${e(r.role)}</td><td>${pill(r.state)}</td><td>${e(r.board||'미분류')}</td></tr>`).join('')}</tbody></table></div></details>

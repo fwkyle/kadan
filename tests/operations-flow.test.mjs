@@ -140,6 +140,6 @@ test('전용 GET은 전체 관제 수집·쓰기·통지를 호출하지 않으�
  }finally{await new Promise(resolve=>server.close(resolve));}
  const html=renderCenterWall({center:{cards:[],roles:[],boards:[],unregistered:[]},entries:[],collectedAt:new Date()});
  for(const route of ['dashboard','decisions','ledger','operations-flow'])assert.ok(html.includes(`data-route="${route}"`));
- for(const view of ['dashboard','decisions','ledger','overview','boards','sessions','mailbox','runs','operations-flow'])assert.ok(html.includes(`data-view="${view}"`));
+ for(const view of ['status','dashboard','decisions','ledger','sessions','mailbox','runs','operations-flow'])assert.ok(html.includes(`data-view="${view}"`));
  const flow=html.match(/<section id="operations-flow"[\s\S]*?<\/section>/)[0];assert.ok(!flow.includes('<form'));assert.match(flow,/ hidden/);
 });

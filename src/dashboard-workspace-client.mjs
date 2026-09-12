@@ -18,8 +18,9 @@ function workspaceClient() {
  const ledgerView=installLedgerTable(()=>{lastActivity=Date.now();refreshStatus();});
  const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},workspaceColumns);
  const columns=installWorkspaceColumns(()=>{lastActivity=Date.now();},()=>resizing.resetColumns());
- const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'관제 요약','operations-flow':'운영 흐름',boards:'판 현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
- const activeView=()=>{const hash=location.hash.slice(1);return hash.startsWith('decision-')?'decisions':views[hash]?(hash==='cards'||hash==='detail'||hash==='card-list'?'dashboard':hash):'status';};
+ // 옛 관제 요약(#overview)·판 현황(#boards)은 현황 안의 접힘 구역이 됐다(2026-09-12). 옛 주소는 현황으로 보낸다.
+ const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'운영 흐름',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
+ const activeView=()=>{const hash=location.hash.slice(1);return hash.startsWith('decision-')?'decisions':views[hash]?(hash==='cards'||hash==='detail'||hash==='card-list'?'dashboard':hash==='overview'||hash==='boards'?'status':hash):'status';};
  const filtered=()=>sortWorkspaceRows(filterWorkspaceRows(rows,state),state.sort,state.dir);
  function remember(){const el=$('#dw-scroll');if(el.getClientRects().length)scroll[state.layout]={top:el.scrollTop,left:el.scrollLeft};}
  function restore(){const el=$('#dw-scroll');if(el.getClientRects().length){el.scrollTop=scroll[state.layout].top;el.scrollLeft=scroll[state.layout].left;}}
@@ -157,7 +158,7 @@ function workspaceClient() {
   }
   const button=event.target.closest('button');
   if(!button){const row=event.target.closest('[data-card-row]');if(row&&!window.getSelection()?.toString())openCard(row.dataset.cardRow);return;}
-  if(button.classList.contains('copy-question')){const feedback=$('.copy-feedback');navigator.clipboard.writeText(button.dataset.question).then(()=>{if(feedback)feedback.textContent='질문을 복사했습니다.';},()=>{if(feedback)feedback.textContent='복사하지 못했습니다. 질문을 직접 선택해 복사하세요.';});}
+  if(button.classList.contains('copy-question')){const feedback=button.closest('[data-view]')?.querySelector('.copy-feedback')||$('.copy-feedback');const what=button.dataset.copyLabel||'질문';navigator.clipboard.writeText(button.dataset.question).then(()=>{if(feedback)feedback.textContent=what+'을(를) 복사했습니다.';},()=>{if(feedback)feedback.textContent='복사하지 못했습니다. '+what+'을(를) 직접 선택해 복사하세요.';});}
   else if(button.dataset.collection){
    if(!mayReplaceDetail())return;dirty=false;cancelLoad();
    const collection=button.dataset.collection;

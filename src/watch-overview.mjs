@@ -4,6 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {parseHierarchy,hierarchyRecipient} from './hierarchy.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {watchAILabel} from './watch-report.mjs';
+import {cycleStatus,watchVerdict} from './watch-cycle.mjs';
 
 // 이름의 접두사가 아니라 실제 직속 관계를 따라 부모 다음에 소속 역할을 놓는다.
 export function orderWatchRoles(roles){
@@ -26,11 +27,12 @@ export function readWatchProcesses(spawn=spawnSync){
  }
  return processes;
 }
-export function watchOverview({center,entries,works=[],processes,processError=null,readFile=file=>fs.readFileSync(file,'utf8'),now=Date.now()}){
- const result={checkedAt:new Date(now).toISOString(),process:{state:processError?'unknown':processes.length===1?'running':processes.length?'duplicate':'absent',instances:processes,error:processError},configuration:{state:'unknown'},cycle:{state:'unknown',reason:'감시 주기 완료 기록 없음 — 프로세스 생존과 구분'},boards:[]};
+export function watchOverview({center,entries,works=[],processes,processError=null,readFile=file=>fs.readFileSync(file,'utf8'),now=Date.now(),profilePath=null}){
+ const result={checkedAt:new Date(now).toISOString(),process:{state:processError?'unknown':processes.length===1?'running':processes.length?'duplicate':'absent',instances:processes,error:processError},configuration:{state:'unknown'},cycle:{state:'unknown',reason:'감시 주기 완료 기록 없음 — 프로세스 생존과 구분'},boards:[],profilePath};
  let parents=null;
  const worker=processes.length===1?processes[0]:null;
  const ledgerKnown=Array.isArray(entries)&&!entries.some(e=>e?.broken);
+ result.cycle=cycleStatus(ledgerKnown?entries:null,worker,now);
  if(!ledgerKnown)result.configuration={state:'unknown',reason:'원장을 읽을 수 없습니다'};
  else if(!worker||processError)result.configuration={state:'unknown',reason:'단일 감시 프로세스를 확인할 수 없습니다'};
  else {
@@ -76,13 +78,14 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   const state=!ledgerKnown?'unknown':result.process.state==='absent'?'absent':result.process.state==='duplicate'?'duplicate':!scope?'unknown':!roles.length?'not-required':missing.length?'incomplete':'configured';
   result.boards.push({name:board.name,state,roles:orderWatchRoles(roles),missingRoles:missing,registeredRoles:scope?roles.filter(r=>r.registered).length:null,totalRoles:scope?roles.length:null,
    aiActivity:scope?aiActivity(names):aiActivity(new Set()).map(a=>({...a,requests:null,reported:null,timeouts:null,failed:null})),
-   recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,delivered:e.delivered??null,resolved:e.resolved===true})):null});
+  recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,delivered:e.delivered??null,resolved:e.resolved===true})):null});
  }
+ result.verdict=watchVerdict(result,now);
  return result;
 }
 export function attachWatchOverview(center,entries,options={}){
  let processes=[],processError=null;
  try{processes=(options.readProcesses??readWatchProcesses)();}catch{processError='프로세스 목록을 읽을 수 없습니다';}
- const monitoring=watchOverview({center,entries,works:options.works,processes,processError,readFile:options.readFile,now:options.now});
+ const monitoring=watchOverview({center,entries,works:options.works,processes,processError,readFile:options.readFile,now:options.now,profilePath:options.profilePath??null});
  return {...center,monitoring,boards:center.boards.map(b=>({...b,monitoring:monitoring.boards.find(x=>x.name===b.name)}))};
 }

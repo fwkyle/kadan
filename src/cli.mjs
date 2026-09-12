@@ -7,6 +7,8 @@ import {assertWritable} from './storage.mjs';
 import {SecretaryMailbox,inboxCommand} from './secretary-mailbox.mjs';
 import {composeRoleInstructions,startRoleProfile} from './role-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
+import {PROFILE_FILE} from "./watch-cycle.mjs";
+import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
 import {decisionCommand} from "./decisions.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand } from "./card-command.mjs";
@@ -1423,13 +1425,14 @@ function sendWatchMessage(role,message) {
 
 function cmdWatch(argv, flags) {
   const usage =
-    "사용법: kadan watch [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]";
+    "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. 옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
   if (flags.help) {
     console.log(usage);
     return;
   }
   if (argv.length > 0) die(usage, 2);
   const allowed = new Set([
+    "profile",
     "interval",
     "stall",
     "stall-after",
@@ -1446,6 +1449,17 @@ function cmdWatch(argv, flags) {
   ]);
   const unknown = Object.keys(flags).find((name) => !allowed.has(name));
   if (unknown) die(`watch가 모르는 옵션: --${unknown}`, 2);
+  if (flags.profile === true || Array.isArray(flags.profile)) die("watch --profile에는 파일 하나가 필요하다", 2);
+  const defaultProfile = defaultProfilePath(ledgerHome());
+  const profileFile = flags.profile ? path.resolve(flags.profile) : Object.keys(flags).length === 0 && fs.existsSync(defaultProfile) ? defaultProfile : null;
+  let profile = null;
+  if (profileFile) {
+    try { profile = readWatchProfile(profileFile); } catch (error) { die(error.message, 2); }
+    delete flags.profile;
+    const applied = applyWatchProfile(flags, profile);
+    console.log(`감시 프로필 적용: ${profileFile}${applied.length ? " (" + applied.join(", ") + ")" : " (적용한 옵션 없음)"}`);
+  }
+  for (const line of watchStartupWarnings(flags, {profileFile, defaultProfile, exists: fs.existsSync})) console.error(line);
 
   const intervalSeconds = flags.interval == null ? 60 : Number(flags.interval);
   const stallAfterMinutes=flags["stall-after"]==null?5:Number(flags["stall-after"]);
@@ -1525,6 +1539,7 @@ function cmdWatch(argv, flags) {
     },
     ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage}) : null,
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
+    profilePath: profileFile,
     intervalMs: intervalSeconds * 1000,
     stallN,
     routes,
@@ -1654,7 +1669,7 @@ function loadWallSnapshot() {
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
     center=buildCardCenter({cards:new CardStore(ledgerHome()).list(),entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
-    center=attachWatchOverview(center,entries,{works:new WorkStore(ledgerHome()).list()});
+    center=attachWatchOverview(center,entries,{works:new WorkStore(ledgerHome()).list(),profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
   } catch(error) { centerError=error.message; }
   return {
     center,centerError,tree,

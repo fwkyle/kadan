@@ -4,6 +4,7 @@ import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {SupervisorHealth,observationContext} from './watch-supervisor-health.mjs';
 import {ProgressWatch,WORKER_RECHECK_MS} from './watch-progress.mjs';
 import {assessMissingStartReports} from './watch-start-report.mjs';
+import {buildCycleEntry,cycleRecordDue} from './watch-cycle.mjs';
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -321,6 +322,7 @@ export async function runWatch({
   judgeCmd = null,
   ai = null,
   hierarchyPath = null,
+  profilePath = null,
   judgeCooldownMs = 5 * 60 * 1_000,
   now = Date.now,
   spawn = spawnSync,
@@ -352,6 +354,7 @@ export async function runWatch({
   const progressWatch = new ProgressWatch();
   const supervisorHealth = new SupervisorHealth();
   let lastCycleAt = now();
+  let lastCycleRecordedAt = null;
   let lastWakeAt = null;
   let hierarchyHash = null;
   let scopeSignature = null;
@@ -668,6 +671,14 @@ export async function runWatch({
     activeAlerts = [...new Map(
       [...changes.active, ...deliveryFailures.values(), ...absorbed.screenAlerts].map(alert => [alert.id, alert])
     ).values()];
+    // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
+    if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
+      try {
+        record(buildCycleEntry({pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
+          sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError}));
+        lastCycleRecordedAt = cycleAt;
+      } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
+    }
     lastCycleAt = cycleAt;
     try {await sleep(intervalMs,signal);}
     catch(error) {if(!signal?.aborted)throw error;}
