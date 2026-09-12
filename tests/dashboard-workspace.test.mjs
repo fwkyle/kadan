@@ -30,7 +30,9 @@ test('403장 목록 모델에 원본 본문과 이력을 일괄 복사하지 않
 });
 test('센터 오류는 모름이며 기존 운영 메뉴와 폼 토큰·revision을 보존한다',()=>{
  const c=card();const html=render([c],'?card=repo%2Fcard-a&refresh=0');
- for(const id of ['boards','sessions','mailbox','ledger','runs','create','decisions','overview'])assert.ok(html.includes('data-view="'+id+'"'));
+ for(const id of ['sessions','mailbox','ledger','runs','create','decisions','status'])assert.ok(html.includes('data-view="'+id+'"'));
+ // 관제 요약·판 현황은 현황의 접힘 구역이 됐다(2026-09-12). 별도 화면과 운영 메뉴 항목은 없고 옛 주소 앵커만 남는다.
+ for(const id of ['boards','overview'])assert.ok(!html.includes('data-view="'+id+'"'));assert.ok(!html.includes('data-route="overview"'));assert.ok(!html.includes('data-route="boards"'));
  for(const action of ['/cards/create','/cards/update'])assert.ok(html.includes('action="'+action+'"'));
  assert.match(html,/name="token" value="fixture-token"/);assert.match(html,/name="revision" value="2"/);
  for(const other of [{center:null},{centerError:'조회 실패'}]){const bad=render([c],'',other);assert.match(bad,/id="dw-count" role="status">모름/);assert.equal(readData(bad).rows,null);}
@@ -79,7 +81,7 @@ function browserHarness({conflict=false,deferred=false,filterCards=null}={}) {
  const options=['running','waiting','unconfirmed','orphaned','failed','hold','draft','ready','assigned','done','cancelled','superseded','archived'].map(value=>({value,checked:true}));
  make('#dw-data').textContent=JSON.stringify(initial);
  const location=Object.assign(new URL('http://localhost/?card=repo%2Fcard-a&layout=table&state=all&refresh=0#detail'),{reload(){reloads++}});
- const views=['dashboard','decisions','overview','ledger'].map(view=>Object.assign(make('#view-'+view),{dataset:{view}}));
+ const views=['dashboard','decisions','status','ledger'].map(view=>Object.assign(make('#view-'+view),{dataset:{view}}));
  const history={state:null,replaceState(data,title,url){this.state=data;if(url)location.href=String(url)},pushState(data,title,url){this.state=data;if(url)location.href=String(url)}};
  const makeForm=(key,revision)=>({action:'http://localhost/cards/update',fields:{token:'fixture-token',key,revision:String(revision),note:'보존할 작성 내용'},matches:s=>s==='form[method="post"]',controls:[{disabled:false}],querySelectorAll(){return this.controls;}});
  const form=makeForm('repo/card-a',2);
@@ -117,9 +119,9 @@ function browserHarness({conflict=false,deferred=false,filterCards=null}={}) {
   requests,snapshot,flush,nodes,form
  };
 }
-for(const [view,title] of [['decisions','내 결정'],['overview','관제 요약'],['ledger','기록']])test('선택한 카드 URL에서도 #'+view+' 메뉴로 이동한다',()=>{
+for(const [view,title,shown] of [['decisions','내 결정'],['overview','현황','status'],['boards','현황','status'],['ledger','기록']])test('선택한 카드 URL에서도 #'+view+' 메뉴로 이동한다',()=>{
  const result=browserHarness().clickLink('#'+view);
- assert.equal(result.prevented,false);assert.deepEqual(result.visible,[view]);assert.equal(result.title,title);
+ assert.equal(result.prevented,false);assert.deepEqual(result.visible,[shown||view]);assert.equal(result.title,title);
  const url=new URL(result.url);assert.equal(url.hash,'#'+view);assert.equal(url.searchParams.get('card'),'repo/card-a');
 });
 test('명시적인 카드 링크는 상세 선택 처리를 유지한다',()=>{
@@ -140,9 +142,9 @@ test('표는 제목 원문과 전체 시각을 보존하면서 짧은 상태·�
  const table=html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
  assert.match(table,/title="card-a — 전체 원본 제목"/);assert.match(table,/결과 대기/);assert.match(table,/09\.08 10:00/);assert.match(table,/title="2020\. 9\. 8\. 10(?:시 0분 0초|:00:00)"/);
 });
-test('관제 요약과 내 결정 뱃지는 별도 경로로 보존하고 결정 조회 실패는 모름이다',()=>{
+test('내 결정 뱃지는 별도 경로로 보존하고 결정 조회 실패는 모름이다',()=>{
  const html=render([card()],'',{decisionError:'결정 읽기 실패'});
- assert.match(html,/href="#overview"/);assert.match(html,/data-view="overview"/);assert.match(html,/class="dw-decision-count"[^>]*>모름/);
+ assert.match(html,/class="dw-decision-count"[^>]*>모름/);
  const live=render([card()],'',{decisions:[{id:'d1',status:'open',question:'범위?',recommendation:'확인',options:[],revision:1}]});
  assert.match(live,/aria-label="열린 사용자 결정 1건"/);assert.match(live,/action="\/decisions\/answer"/);assert.match(live,/name="revision" value="1"/);
 });
