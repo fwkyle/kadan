@@ -112,10 +112,17 @@ assert.equal(center.models['other-역할'],undefined);
 });
 
 test('강도는 실행기마다 다른 플래그에서 읽는다 — codex·claude·omo',()=>{
+const entries=[...rows,
+ {kind:'start',role:'claude-검수자',harness:'claude',model:'fable',cmd:'claude --model fable --effort xhigh --dangerously-skip-permissions',t:'2020-09-07T00:05:00Z'},
+ {kind:'start',role:'omo-작업자',harness:'omo',model:'openai-codex/gpt-6-astra',cmd:'omo --model openai-codex/gpt-6-astra --thinking high --no-recommended-models',t:'2020-09-07T00:06:00Z'}];
+const center=buildCardCenter({cards:[],entries,tree});
+assert.equal(center.models['claude-검수자'].effort,'xhigh');
+assert.equal(center.models['omo-작업자'].effort,'high');
+});
+
+test('겹따옴표로 감싼 강도도 읽는다',()=>{
  const entries=[...rows,
-  {kind:'start',role:'claude-검수자',harness:'claude',model:'fable',cmd:'claude --model fable --effort xhigh --dangerously-skip-permissions',t:'2020-09-07T00:05:00Z'},
-  {kind:'start',role:'omo-작업자',harness:'omo',model:'openai-codex/gpt-6-astra',cmd:'omo --model openai-codex/gpt-6-astra --thinking high --no-recommended-models',t:'2020-09-07T00:06:00Z'}];
+  {kind:'start',role:'kimi-작업자',harness:'codex',model:'kimi/k3[1m]',cmd:`codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort='"max"'`,t:'2020-09-07T00:07:00Z'}];
  const center=buildCardCenter({cards:[],entries,tree});
- assert.equal(center.models['claude-검수자'].effort,'xhigh');
- assert.equal(center.models['omo-작업자'].effort,'high');
+ assert.equal(center.models['kimi-작업자'].effort,'max');
 });

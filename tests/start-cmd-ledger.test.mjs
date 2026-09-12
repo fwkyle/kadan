@@ -72,3 +72,10 @@ test("모델을 안 고정한 명령은 실행기만 남는다 — 없는 값을
   assert.equal("model" in described, false);
   assert.equal(described.cmd, "codex -p orca");
 });
+
+test("따옴표로 감싼 모델 이름은 벗겨서 남긴다 — 2026-09-12 kimi 발령 실측", () => {
+  const described = describeStartCmd(`codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort='"max"'`);
+
+  assert.equal(described.harness, "codex");
+  assert.equal(described.model, "kimi/k3[1m]");
+});

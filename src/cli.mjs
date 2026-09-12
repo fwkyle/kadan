@@ -1087,7 +1087,8 @@ export function describeStartCmd(cmd) {
   let index = 0;
   while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
   const harness = tokens[index]?.split("/").pop();
-  const model = text.match(/--model[=\s]+"?([^\s"]+)"?/)?.[1];
+  // 따옴표를 벗겨서 남긴다. 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 따옴표째 박힌다(2026-09-12 실측).
+  const model = text.match(/--model[=\s]+["']*([^\s"']+)["']*/)?.[1];
   return {
     ...(harness ? { harness } : {}),
     ...(model ? { model } : {}),
