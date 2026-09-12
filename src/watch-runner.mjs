@@ -3,7 +3,7 @@ import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} 
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {SupervisorHealth,observationContext} from './watch-supervisor-health.mjs';
 import {ProgressWatch,WORKER_RECHECK_MS} from './watch-progress.mjs';
-import {assessMissingStartReports} from './watch-start-report.mjs';
+import {assessMissingStartReports,alertedStartReports} from './watch-start-report.mjs';
 import {buildCycleEntry,cycleRecordDue} from './watch-cycle.mjs';
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { createHash } from "node:crypto";
@@ -494,7 +494,7 @@ export async function runWatch({
         responsibility:watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works)});
     };
     if(cards&&!observationError){
-      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs);
+      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))});
       const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
         enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session))});
       if(progress) invokeAI(progress);
