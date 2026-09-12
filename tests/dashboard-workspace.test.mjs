@@ -71,11 +71,12 @@ test('기록 탭은 변경 이유를 한 번 표시하고 실행 사건을 같�
  assert.equal((html.match(/class="dd-history-note">고유 변경 이유</g)||[]).length,1);assert.match(html,/초안 → 배정됨/);assert.match(html,/지시 전달/);
 });
 
-function browserHarness({conflict=false,deferred=false}={}) {
- const cards=['a','b','c'].map(id=>card({key:'repo/card-'+id,id:'card-'+id}));
+function browserHarness({conflict=false,deferred=false,filterCards=null}={}) {
+ const cards=filterCards||['a','b','c'].map(id=>card({key:'repo/card-'+id,id:'card-'+id}));
  const initial=readData(render(cards,'?card=repo%2Fcard-a&layout=table&state=all&refresh=0'));
  const nodes=new Map(),events=new Map(),windowEvents=new Map(),requests=[];let posts=0,reloads=0,intervals=0,renderedArticle=null,focused='';
- const make=key=>{if(!nodes.has(key))nodes.set(key,{textContent:'',innerHTML:'',hidden:false,value:'',scrollTop:0,scrollLeft:0,dataset:{},classList:{toggle(){}},getClientRects(){return this.hidden?[]:[{}]},setAttribute(){},focus(){focused=key;},matches(){return false},querySelectorAll(){return []},addEventListener(){}});return nodes.get(key);};
+ const make=key=>{if(!nodes.has(key))nodes.set(key,{textContent:'',innerHTML:'',hidden:false,value:'',scrollTop:0,scrollLeft:0,dataset:{},classList:{toggle(){}},getClientRects(){return this.hidden?[]:[{}]},setAttribute(){},focus(){focused=key;},matches(){return false},querySelectorAll(){return []},addEventListener(type,fn){events.set(key+':'+type,fn);}});return nodes.get(key);};
+ const options=['running','waiting','unconfirmed','orphaned','failed','hold','draft','ready','assigned','done','cancelled','superseded','archived'].map(value=>({value,checked:true}));
  make('#dw-data').textContent=JSON.stringify(initial);
  const location=Object.assign(new URL('http://localhost/?card=repo%2Fcard-a&layout=table&state=all&refresh=0#detail'),{reload(){reloads++}});
  const views=['dashboard','decisions','overview','ledger'].map(view=>Object.assign(make('#view-'+view),{dataset:{view}}));
@@ -88,7 +89,7 @@ function browserHarness({conflict=false,deferred=false}={}) {
  detail.replaceChildren=article=>{renderedArticle=currentArticle=article;currentForm=makeForm(article.dataset.key,article.dataset.revision);detailHTML='';};
  const response=(key='repo/card-a',revision=3,title='저장한 제목')=>({ok:true,status:200,text:async()=>JSON.stringify({key,revision,title})});
  const context={URL,URLSearchParams,AbortController,structuredClone,Date,Promise,FormData:class extends Map {constructor(f){super(Object.entries(f.fields))}},
-  document:{hidden:false,activeElement:null,querySelector:s=>s==='article#detail'?currentArticle:s==='details[open]'||s==='.dw-management[open]'||s==='#dw-card-heading'&&!currentArticle?null:make(s),querySelectorAll:s=>s==='[data-view]'?views:[],addEventListener:(type,fn)=>events.set(type,fn),importNode:x=>x},
+  document:{hidden:false,activeElement:null,querySelector:s=>s==='article#detail'?currentArticle:s==='details[open]'||s==='.dw-management[open]'||s==='#dw-card-heading'&&!currentArticle?null:make(s),querySelectorAll:s=>s==='[data-view]'?views:s==='[data-state-option]'?options:[],addEventListener:(type,fn)=>events.set(type,fn),importNode:x=>x},
   window:{getSelection:()=>null,addEventListener:(type,fn)=>windowEvents.set(type,fn)},matchMedia:()=>({matches:false}),requestAnimationFrame:fn=>fn(),setInterval:()=>intervals++,confirm:()=>true,location,history,
   fetch:async(url,opts)=>{if(opts.method==='POST')posts++;if(deferred)return new Promise((resolve,reject)=>requests.push({url:String(url),...opts,resolve,reject}));return conflict?{ok:false,status:409,text:async()=>'카드가 변경됨: 새로 읽고 다시 저장'}:response();},
   DOMParser:class{parseFromString(html){const {key,revision,title}=JSON.parse(html);return {querySelector:s=>s==='article#detail'?{dataset:{key,revision:String(revision)}}:s==='#dw-data'?{textContent:JSON.stringify({rows:[{...initial.rows.find(c=>c.key===key),revision,title}]})}:null};}}
@@ -97,6 +98,10 @@ function browserHarness({conflict=false,deferred=false}={}) {
  const snapshot=()=>({posts,reloads,intervals,renderedArticle,currentKey:currentArticle?.dataset.key,status:make('#dw-detail-status').textContent,body:make('#dw-table-body').innerHTML,url:location.href,note:currentForm?.fields.note,detailHTML,focused,visible:views.filter(el=>!el.hidden).map(el=>el.dataset.view),title:make('#page-title').textContent});
  const flush=()=>new Promise(resolve=>setImmediate(resolve));
  return {
+  preset(value){const button={dataset:{statePreset:value},classList:{contains:()=>false},hasAttribute:name=>name==='data-state-preset'};events.get('click')({target:{closest:s=>s==='button'?button:null},button:0});return snapshot();},
+  selectStates(values){options.forEach(el=>{el.checked=values.includes(el.value);});events.get('#dw-state:change')({target:{matches:()=>true}});return snapshot();},
+  restoreUrl(url){location.href=url;return windowEvents.get('popstate')();},
+  options,
   clickLink(href,cardKey){
    let prevented=false;
    const link={href:new URL(href,location.href).href,getAttribute:name=>name==='href'?href:name==='data-card-key'?cardKey:null};
@@ -268,4 +273,35 @@ test('상세는 진행 중 카드의 실행 도구·강도를 보여주고 종�
  const allTable=allHtml.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
  assert.match(allTable,/관리·조율/);
  assert.ok(!allTable.includes('라운드 미기록'));
+});
+
+
+test('상태 다중 필터는 합집합이며 검색·판 조건과 함께 적용하고 모두 제외는 0장이다',()=>{
+ const rows=[{key:'a',state:'running',title:'같은 제목',board:'a'},{key:'b',state:'waiting',title:'같은 제목',board:'a'},{key:'c',state:'done',title:'같은 제목',board:'a'},{key:'d',state:'waiting',title:'다른 제목',board:'b'}];
+ assert.deepEqual(filterWorkspaceRows(rows,{state:'running,waiting',board:'a',q:'같은'}).map(c=>c.key),['a','b']);
+ assert.equal(filterWorkspaceRows(rows,{state:'none'}).length,0);
+ assert.equal(filterWorkspaceRows(rows,{state:'all'}).length,4);
+ assert.equal(filterWorkspaceRows(rows,{}).length,3);
+ assert.deepEqual(filterWorkspaceRows(rows,{state:'done'}).map(c=>c.key),['c']);
+});
+test('서버 렌더는 다중 상태·선택 없음 URL의 목록과 체크 표시를 복원한다',()=>{
+ const cards=['running','waiting','done'].map(state=>card({key:'repo/'+state,id:state,displayState:state}));
+ for(const [value,expected] of [['running,waiting',['running','waiting']],['none',[]],['done',['done']]]){
+  const html=render(cards,'?state='+encodeURIComponent(value));
+  const body=html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+  assert.equal((body.match(/<tr data-card-row=/g)||[]).length,expected.length);
+  assert.deepEqual([...html.matchAll(/data-state-option value="([^"]+)" checked/g)].map(m=>m[1]),expected);
+  assert.equal(readData(html).state.state,value);
+ }
+});
+test('브라우저 전체 선택·제외·미완료와 개별 선택은 URL·목록·뒤로 가기에 함께 반영된다',async()=>{
+ const h=browserHarness({filterCards:['running','waiting','done'].map(state=>card({key:'repo/'+state,id:state,displayState:state}))});
+ const count=()=> (h.snapshot().body.match(/<tr data-card-row=/g)||[]).length;
+ h.preset('none');assert.equal(count(),0);assert.ok(h.options.every(el=>!el.checked));assert.equal(new URL(h.snapshot().url).searchParams.get('state'),'none');
+ h.selectStates(['running','waiting']);assert.equal(count(),2);const multiUrl=h.snapshot().url;
+ assert.equal(new URL(multiUrl).searchParams.get('state'),'running,waiting');
+ h.preset('all');assert.equal(count(),3);assert.ok(h.options.every(el=>el.checked));
+ await h.restoreUrl(multiUrl);assert.equal(count(),2);assert.deepEqual(h.options.filter(el=>el.checked).map(el=>el.value),['running','waiting']);
+ h.preset('');assert.equal(count(),2);assert.equal(new URL(h.snapshot().url).searchParams.has('state'),false);assert.equal(h.options.find(el=>el.value==='done').checked,false);
+ h.selectStates([]);assert.equal(count(),0);assert.equal(new URL(h.snapshot().url).searchParams.get('state'),'none');
 });

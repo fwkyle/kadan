@@ -1,5 +1,5 @@
 import {installLedgerTable} from './ledger-table.mjs';
-import {workspaceColumns,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
+import {workspaceColumns,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
 import {escapeHtml,stateText} from './dashboard-workspace-client-support.mjs';
 import {installWorkspaceDetail} from './dashboard-detail-client.mjs';
 import {installWorkspaceResize} from './dashboard-workspace-resize.mjs';
@@ -59,7 +59,7 @@ function workspaceClient() {
   const visible=filtered(),table=state.layout==='table';
   $('#dw-panes').classList.toggle('dw-table-layout',table);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
   const totalInCollection=(rows||[]).filter(c=>state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)).length;
-  const filterName=state.state===''?'미완료':state.state==='all'?'전체':(stateText[state.state]||state.state);
+  const filterName=workspaceStateLabel(state.state);
   $('#dw-count').textContent=rows===null||state.collection==='work'&&data.workError?'모름':visible.length===totalInCollection?('전체 '+totalInCollection+'장'):((state.q||state.repo||state.board)?'조건':filterName)+' '+visible.length+'장 · 전체 '+totalInCollection+'장';
   $$('[data-collection]').forEach(el=>{
    el.setAttribute('aria-pressed',String(el.dataset.collection===state.collection));
@@ -74,7 +74,9 @@ function workspaceClient() {
   $('#dw-empty').hidden=rows!==null&&visible.length>0;
   const emptyTitle=$('#dw-empty-title');if(emptyTitle)emptyTitle.textContent=state.collection==='work'&&data.workError?'업무 상태 모름':state.collection==='work'&&!(rows||[]).some(c=>c.kind==='work')?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.';
   $$('[data-layout]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.layout===state.layout)));
-  for(const [id,key] of [['dw-search','q'],['dw-board','board'],['dw-repo','repo'],['dw-state','state']])$('#'+id).value=state[key];
+  for(const [id,key] of [['dw-search','q'],['dw-board','board'],['dw-repo','repo']])$('#'+id).value=state[key];
+  $('#dw-state-summary').textContent=filterName;
+  $$('[data-state-option]').forEach(el=>{el.checked=workspaceSelectedStates(state.state).includes(el.value);});
   $$('[data-sort-column]').forEach(el=>{const active=el.dataset.sortColumn===state.sort;el.setAttribute('aria-sort',active?(state.dir==='asc'?'ascending':'descending'):'none');const button=el.querySelector('button');const title=button.querySelector('[data-column-label]');if(title)title.textContent=(state.collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록'})[el.dataset.sortColumn]:null)||workspaceColumns.find(([key])=>key===el.dataset.sortColumn)?.[1]||'';(button.querySelector('[data-sort-arrow]')||button.querySelector('span')).textContent=active?(state.dir==='asc'?' ↑':' ↓'):' ↕';button.setAttribute('aria-label',button.textContent.replace(/[↑↓↕]/g,'')+' · '+(active&&state.dir==='asc'?'내림차순':'오름차순')+' 정렬');});
   const close=$('[data-detail-close]'),expand=$('[data-detail-expand]');close.textContent=table?'표로 돌아가기':'목록으로';expand.textContent=state.expanded?'나란히 보기':'상세 확대';expand.setAttribute('aria-expanded',String(state.expanded));
   columns.refresh();resizing.refresh();showTab(state.tab);refreshStatus();
@@ -162,6 +164,7 @@ function workspaceClient() {
    change({collection,card:target,q:'',board:'',repo:'',opened:false,expanded:false},{reset:true});
    if(state.layout==='split')loadCard(target,{focus:false});
   }
+  else if(button.hasAttribute('data-state-preset'))change({state:button.dataset.statePreset,opened:false,expanded:false},{reset:true});
   else if(button.dataset.detailView){state.detailView=button.dataset.detailView;detailView.apply(state.detailView);$('#dw-detail').scrollTop=0;write(true);}
   else if(button.dataset.layout){change({layout:button.dataset.layout,opened:false,expanded:false});if(state.layout==='split')loadCard(state.card,{focus:false});}
   else if(button.dataset.sort){const sort=button.dataset.sort;change({sort,dir:state.sort===sort&&state.dir==='asc'?'desc':'asc'},{focus:'[data-sort="'+sort+'"]',reset:true});}
@@ -172,7 +175,15 @@ function workspaceClient() {
   else if(button.hasAttribute('data-workspace-reset'))change({q:'',repo:'',board:'',state:'all'},{reset:true,focus:'#dw-search'});
   else if(button.hasAttribute('data-refresh')){if(activeView()==='operations-flow'){window.dispatchEvent(new CustomEvent('operations-flow-refresh'));return;}if(!saving&&(!dirty||confirm('작성 중인 기록을 저장하지 않고 새로 읽을까요?'))){dirty=false;saveCurrent();location.reload();}}
  });
- for(const [id,key,event] of [['dw-search','q','input'],['dw-board','board','change'],['dw-repo','repo','change'],['dw-state','state','change']])$('#'+id).addEventListener(event,e=>{lastActivity=Date.now();change({[key]:e.target.value,opened:false,expanded:false},{replace:event==='input',reset:true});});
+ for(const [id,key,event] of [['dw-search','q','input'],['dw-board','board','change'],['dw-repo','repo','change']])$('#'+id).addEventListener(event,e=>{lastActivity=Date.now();change({[key]:e.target.value,opened:false,expanded:false},{replace:event==='input',reset:true});});
+ $('#dw-state').addEventListener('change',event=>{
+  if(!event.target.matches('[data-state-option]'))return;
+  lastActivity=Date.now();
+  const selected=$$('[data-state-option]').filter(el=>el.checked).map(el=>el.value);
+  change({state:selected.length===Object.keys(stateText).length?'all':selected.join(',')||'none',opened:false,expanded:false},{reset:true});
+ });
+ document.addEventListener('pointerdown',event=>{if(!event.target.closest('#dw-state'))$('#dw-state').open=false;});
+ $('#dw-state').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();$('#dw-state').open=false;$('#dw-state summary').focus({preventScroll:true});}});
  document.addEventListener('input',e=>{detailView.input(e);if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
  document.addEventListener('change',e=>{if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
  document.addEventListener('submit',async event=>{
@@ -217,4 +228,4 @@ function workspaceClient() {
  requestAnimationFrame(restore);
  if(!refreshOff)setInterval(()=>{refreshStatus();if(!paused()){saveCurrent();location.reload();}},15000);
 }
-export const dashboardWorkspaceScript=`const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
+export const dashboardWorkspaceScript=`const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
