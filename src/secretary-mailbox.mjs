@@ -4,6 +4,7 @@ import {isUserActor} from './actors.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 import {appendLedger,readLedger,readMailBody} from './ledger.mjs';
 import {resolveWorkMail} from './work-mail.mjs';
+import {composeRoleInstructions,readRoleInstructionsConfig} from './role-instructions.mjs';
 export const SECRETARY='비서';
 const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const categories=new Set(['request','decision','report']);
@@ -21,6 +22,7 @@ export class SecretaryMailbox {
   const entries=readLedger(this.home);secretaryLetters(entries);
   if(replyTo&&!entries.some(e=>e.kind==='send'&&(e.mailId===replyTo||e.digest===replyTo)))throw new Error('연결할 원본 우편 없음');
   const context=resolveWorkMail(this.home,{workKey,executionKey,replyTo});
+  readRoleInstructionsConfig(this.home);
   const digest=createHash('sha256').update(message).digest('hex'),mailId=randomUUID(),dir=path.join(this.home,'mail');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const file=path.join(dir,`${digest}.txt`);
@@ -36,7 +38,9 @@ export class SecretaryMailbox {
   if(!idPattern.test(id))throw new Error('올바른 우편 ID 필요');
   const letter=this.list({all:true}).find(e=>e.mailId===id);if(!letter)throw new Error('비서 우편 없음');
   const body=readMailBody(letter.digest,this.home);if(body===null)throw new Error('본문 없음 또는 읽기 실패: 읽음 처리하지 않습니다');
-  return {...letter,body};
+  const receiver=composeRoleInstructions({home:this.home,role:SECRETARY,profile:'secretary',mailContext:letter});
+  return {...letter,body,receiverInstructions:receiver.instructions,receiverInstructionsProfile:receiver.metadata.profile,
+    receiverInstructionsDigest:receiver.metadata.digest,roleInstructions:receiver.metadata};
  }
  acknowledge(id,by){
   if(!(by==='비서'||isUserActor(by)))throw new Error('비서 또는 사용자만 읽음 기록 가능');

@@ -198,6 +198,7 @@ export class AutomaticReview {
    const identity=s.identities[kind==='execution'?(s.phase==='review'?'reviewer':'worker'):'notify'];
    if(JSON.stringify(this.identity(identity.role))!==JSON.stringify(identity))throw new Error('통지 또는 발령 수신 세대 변경');
    receipt=this.send({role:identity.role,pid:identity.pid,taskId:kind==='execution'?s.current.key.split('/')[1]:undefined,
+    ...(kind==='execution'?{roleProfile:s.phase==='review'?'reviewer':'worker'}:{}),
     executionKey:kind==='execution'?s.current.key:undefined,workKey:s.key,
     transmit:fn=>this.locked(()=>{
      const fresh=this.get(s.key);if(fresh.claim!==s.claim||fresh.status!==s.status)throw new Error('전달 예약 변경');
@@ -206,7 +207,7 @@ export class AutomaticReview {
      return fn();
     }),
     message:kind==='execution'?`중앙 카드 ${s.current.path} 및 최신 card show를 읽고 수행하라. 카드 id는 ${s.current.key.split('/')[1]}이다.`:
-     `자동 전달 결과: ${s.key} / ${s.terminal} / ${s.reason} / 실행 ${s.current?.key||'없음'} / 결과 ${s.report?.resultFile||'없음'}. kadan work auto-show ${s.key} 확인. 업무 최종 완료는 감독 판단.`});
+     `자동 전달 결과: ${s.key} / ${s.terminal} / ${s.reason} / 실행 ${s.current?.key||'없음'} / 결과 ${s.report?.resultFile||'없음'}. kadan work auto-show ${s.key} 확인. 다음 행동(next action): 결과 근거와 미확정 done·빠진 검수/후속을 확인하고, kadan work show ${s.key}의 최신 revision·owner·전체 완료 조건을 대조하라. 전체 조건 충족 시 책임 owner만 work complete하며 PASS만으로 자동 마감하지 않는다.`});
   }catch(e){error={message:e.message,delivery:e.delivery||'unknown'};}
   return this.locked(()=>{
    const current=this.get(s.key);if(current.claim!==s.claim)return current;

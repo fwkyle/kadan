@@ -21,9 +21,9 @@ function fixture(){
  for(const [role,pid] of Object.entries(pids))start(role,pid);
  for(const id of ['implementation','review']){let c=cards.create({repo:'test',id,repoPath:home,body:`# 原本 ${id}\n최초 지시를 그대로 따른다`});cards.update(c.key,{status:'ready',scope:'시험 파일'},{revision:1,note:'승인'});}
  let beforeSend=()=>{},observe=()=>null;
- const context={home,by:'test-super',floor,observeDone:s=>observe(s),send:({role,pid,message,taskId,workKey,executionKey,transmit})=>{
+ const context={home,by:'test-super',floor,observeDone:s=>observe(s),send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>{
   beforeSend({role,taskId});
-  return guardedSend({floor:{...floor,send:(n,m)=>transmit(()=>floor.send(n,m))},role,session:`kadan-${role}`,message,taskId,recordedPid:pid,
+  return guardedSend({floor:{...floor,send:(n,m)=>transmit(()=>floor.send(n,m))},role,session:`kadan-${role}`,message,taskId,roleProfile,recordedPid:pid,
    env:{KADAN_HOME:home,KADAN_ROLE:'test-super'},readEntries:()=>readLedger(home),record:e=>appendLedger(e,home),saveBody:(d,b)=>saveMailBody(d,b,home),mailContext:{workKey,executionKey}});
  }};
  const auto=new AutomaticReview(context);
@@ -47,9 +47,22 @@ test('구현→독립검수→동일 작업자 수정→조기 PASS, 새 실행I
  assert.equal(s.status,'pass');assert.equal(s.notification.status,'sent');assert.equal(f.works.get(f.key).status,'open');
  for(let i=0;i<3;i++)f.auto.step(f.key);
  const sends=readLedger(f.home).filter(e=>e.kind==='send');assert.equal(sends.length,5);assert.equal(sends.filter(e=>!e.taskId).length,1);
+ assert.deepEqual(sends.map(e=>e.roleProfile),['worker','reviewer','worker','reviewer','conductor']);
+ assert.ok(f.sent.slice(0,4).every(x=>x.message.includes('완료 방식: 자동.')));
  assert.equal(new Set(sends.filter(e=>e.taskId).map(e=>e.taskId)).size,4);
  assert.ok(f.sent.every(x=>!/^\s*KADAN:DONE\s+\S+\s+(?:ok|failed)\s*$/m.test(x.message)));
  assert.deepEqual(f.works.get(f.key).executions.map(x=>[x.phase,x.round]),[['implementation',1],['review',1],['fix',2],['review',2]]);
+});
+
+test('자동 최종 통지는 owner가 아닌 슈퍼 수신자의 명시 profile을 존중한다',()=>{
+ const f=fixture();f.start('test-top','20003');
+ appendLedger({kind:'start',role:'test-top',session:'kadan-test-top',floor:'tmux',panePid:'20003',roleProfile:'super'},f.home);
+ f.configure({notify:'test-top'});f.auto.step(f.key);f.finish('implemented');const state=f.finish('pass');
+ assert.equal(state.notification.status,'sent');
+ const notice=readLedger(f.home).filter(e=>e.kind==='send').at(-1);
+ assert.equal(notice.role,'test-top');assert.equal(notice.roleProfile,'super');
+ assert.match(f.sent.at(-1).message,/next action/);assert.match(f.sent.at(-1).message,/kadan work show test\/automatic/);
+ assert.equal(f.works.get(f.key).status,'open');
 });
 
 test('3라운드 경계는 한번 통지, 4라운드는 새 두 세션 확인 후에만 시작',()=>{

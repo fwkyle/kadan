@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { appendLedger, readLedger, readMailBody } from '../src/ledger.mjs';
 import { createDatabase, writeStorageMarker } from '../src/storage.mjs';
 
-test('09-07 실제 CLI 인계: 선임 이름 접두사가 후임과 겹쳐도 후임을 보존한다', {skip:spawnSync('tmux',['-V']).status!==0}, ()=>{
+for (const profileSource of ['start','roles']) test(`09-07 실제 CLI 인계: ${profileSource} 프로필 승계와 이름 접두사가 겹치는 후임 보존`, {skip:spawnSync('tmux',['-V']).status!==0}, ()=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-handover-cli-test-'));
  const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
  const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:'비서'};
@@ -20,16 +20,30 @@ test('09-07 실제 CLI 인계: 선임 이름 접두사가 후임과 겹쳐도 �
  const graph=path.join(home,'parents.json'),context=path.join(home,'context.md'),receipt=path.join(home,'receipt.json');
  fs.writeFileSync(graph,JSON.stringify({'qa-감독':'@user'}));fs.writeFileSync(context,'격리 시험 범위');
  try {
-  run(['start','qa-감독','--cmd','cat']);
+  run(['start','qa-감독','--cmd','cat',...(profileSource==='start'?['--profile','conductor']:[])]);
+  // 이미 시작한 legacy 선임에 정확한 role 매핑만 추가된 경우도 승계한다.
+  fs.writeFileSync(path.join(home,'role-instructions.json'),JSON.stringify({version:1,roles:{'qa-감독':profileSource==='start'?'worker':'conductor','qa-감독-2':'reviewer'}}));
+  assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role==='qa-감독').at(-1).roleProfile,profileSource==='start'?'conductor':undefined);
   const s=JSON.parse(run(['handover','qa-감독','--manual','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',home,'--cmd','cat']));
   assert.equal(s.runner,null);
+  assert.equal(s.roleProfile,'conductor');
+  assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role===s.to).at(-1).roleProfile,'conductor');
+  const prepared=readLedger(home).filter(e=>e.kind==='send'&&e.role===s.to).at(-1);
+  assert.equal(prepared.roleProfile,'conductor');assert.ok(readMailBody(prepared.digest,home).startsWith('인수 준비:'));
+  assert.match(readMailBody(prepared.digest,home),/전환 완료 전 새 작업 금지/);
+  assert.equal(spawnSync('tmux',['-L',env.KADAN_SOCKET,'has-session','-t','=kadan-qa-감독']).status,0);
+  fs.writeFileSync(path.join(home,'profile-inheritance.json'),JSON.stringify({profileSource,state:s,prepared,body:readMailBody(prepared.digest,home)},null,2));
+  console.log(`교대 프로필 승계 증거: ${home}/profile-inheritance.json`);
   fs.writeFileSync(receipt,JSON.stringify({taskIds:[],evidencePaths:[context],nextAction:'시험 종료'}));
   run(['handover','accept',s.id,'--receipt',receipt],s.to);
   assert.equal(JSON.parse(run(['handover','finish',s.id,'--timeout','0'])).phase,'routes-pending');
   // watch 재로딩은 별도 시험. 여기서는 승인 신호만 격리 원장에 모의 입력한다.
   appendLedger({kind:'hierarchy-loaded',path:graph,hash:createHash('sha256').update(fs.readFileSync(graph)).digest('hex'),pid:process.pid},home);
   assert.equal(JSON.parse(run(['handover','finish',s.id,'--timeout','0'])).phase,'complete');
-  assert.match(run(['read',s.to,'--lines','30']),/인계 전환 완료/);
+  assert.match(run(['read',s.to,'--lines','200']),/kadan:receiver-instructions/);
+  // 긴 첨부 앞 원문은 현재 화면 밖에 있으므로 실제 수신 화면 기록까지 확인한다.
+  const captured=spawnSync('tmux',['-L',env.KADAN_SOCKET,'capture-pane','-p','-J','-S','-2000','-t',`=kadan-${s.to}:`],{encoding:'utf8'});
+  assert.equal(captured.status,0,captured.stderr);assert.match(captured.stdout,/인계 전환 완료/);
   assert.equal(spawnSync('tmux',['-L',env.KADAN_SOCKET,'has-session','-t','=kadan-qa-감독']).status,1);
   assert.equal(spawnSync('tmux',['-L',env.KADAN_SOCKET,'has-session','-t','=kadan-qa-감독-2']).status,0);
  } finally {

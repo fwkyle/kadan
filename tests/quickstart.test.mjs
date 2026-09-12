@@ -74,8 +74,10 @@ test('runUp은 비서(보이게)와 대시보드(숨김)를 띄우고 준비된 
  const out = runUp({ home, flags: { cmd: 'codex', port: '8123' }, floor: w.floor, start: w.start, send: w.send, cliPath: '/repo/src/cli.mjs', nodePath: '/usr/bin/node', sessionName, log: quiet, sleep: () => {} });
  assert.deepEqual(w.started.map((s) => s.role), [SECRETARY_ROLE, DASHBOARD_ROLE]);
  assert.equal(w.started[0].cmd, 'codex'); assert.equal(w.started[0].hidden, false);
+ assert.equal(w.started[0].profile, 'secretary');
  assert.equal(w.started[1].hidden, true); assert.equal(w.started[1].cmd, '/usr/bin/node /repo/src/cli.mjs dashboard --port 8123');
  assert.equal(w.sent.length, 1); assert.equal(w.sent[0].role, SECRETARY_ROLE); assert.equal(w.sent[0].message, FIRST_PROMPT);
+ assert.equal(w.sent[0].roleProfile, 'secretary');
  assert.deepEqual([out.secretary, out.dashboard, out.prompt], ['started', 'started', 'sent']);
 });
 
