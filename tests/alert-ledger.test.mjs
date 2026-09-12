@@ -20,6 +20,7 @@ async function exercise({ failure, superFails = false, stdout = false, recordFai
       floor: { list: () => cycle === 1 || cycle === 2 ? [] : [{ session, pid: 1 }], read: () => screen },
       readEntries: () => [start],
       record: entry => {
+        if (entry.kind === "watch-cycle") return; // 주기 기록은 경보 원장 규칙과 별개다(watch-cycle.test.mjs)
         records.push(entry); events.push(["record", entry.recipient, entry.resolved ?? false]);
         if (recordFails) throw new Error("controlled append failure");
       },
