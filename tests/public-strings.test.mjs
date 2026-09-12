@@ -154,3 +154,24 @@ test('hook installer preserves an existing custom hook directory', () => {
   assert.equal(result.status, 1);
   assert.equal(git(root, 'config', '--get', 'core.hooksPath'), 'custom-hooks');
 });
+
+test('outgoing history ignores unchanged published legacy content but still checks all tip files', () => {
+  const root = fixture();
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-public-legacy-remote-'));
+  git(remote, 'init', '--bare');
+  write(root, 'legacy-policy.txt', personal);
+  git(root, 'add', 'legacy-policy.txt');
+  git(root, 'commit', '-m', 'legacy policy already published');
+  git(root, 'push', remote, 'HEAD:refs/heads/main');
+  const base = git(root, 'rev-parse', 'HEAD');
+  write(root, 'safe.txt', 'unrelated work');
+  git(root, 'add', 'safe.txt');
+  git(root, 'commit', '-m', 'unrelated work inherits legacy policy');
+  assert.equal(check(root, '--range', base, 'HEAD').status, 1, 'tip is always checked in full');
+  git(root, 'rm', '--cached', 'legacy-policy.txt');
+  git(root, 'commit', '-m', 'retire old policy');
+  assert.equal(check(root, '--range', base, 'HEAD').status, 0);
+  hooks(root);
+  git(root, 'push', remote, 'HEAD:refs/heads/continued-work');
+  assert.equal(git(remote, 'rev-parse', 'refs/heads/continued-work'), git(root, 'rev-parse', 'HEAD'));
+});

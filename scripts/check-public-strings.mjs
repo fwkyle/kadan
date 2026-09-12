@@ -52,10 +52,11 @@ function index() {
     inspect(file, mode, () => git(['cat-file', 'blob', oid]), oid);
   }
 }
-function tree(ref) {
+function tree(ref, changed) {
   for (const row of git(['ls-tree', '-r', '-z', '--full-tree', ref]).split('\0').filter(Boolean)) {
     const [, mode, , oid, file] = row.match(/^(\d+) (blob|commit) ([a-f0-9]+)\t([\s\S]+)$/) ?? [];
     if (!file) throw new Error('Invalid Git tree; public check stopped');
+    if (changed && !changed.has(file)) continue;
     inspect(file, mode, () => git(['cat-file', 'blob', oid]), oid);
   }
 }
@@ -65,7 +66,12 @@ function commit(ref) {
 function history(tip, bases) {
   tree(tip);
   const commits = git(['rev-list', tip, '--not', ...bases]).trim().split('\n').filter(Boolean);
-  for (const sha of commits) tree(sha);
+  for (const sha of commits) {
+    // Check each introduced version, including merge changes against every parent.
+    // Unchanged files inherited from published history are not new disclosures.
+    const changed = new Set(git(['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', '-z', sha]).split('\0').filter(Boolean));
+    tree(sha, changed);
+  }
 }
 function prePush(remote) {
   if (!remote) throw new Error('Missing push destination');

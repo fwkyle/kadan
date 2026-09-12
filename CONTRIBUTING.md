@@ -16,7 +16,7 @@ This repository intentionally ships no `AGENTS.md` / `CLAUDE.md`. If you work wi
 ## Workflow
 
 - Behaviour changes ship with tests in the same commit: `npm test`.
-- Run `npm run setup:hooks` once per clone. The commit hook checks the exact staged contents; the push hook checks the outgoing tip and every commit not already on the destination, including files removed in later commits. Existing custom hook configurations are preserved.
+- Run `npm run setup:hooks` once per clone. The commit hook checks the exact staged contents; the push hook checks the entire outgoing tip and every changed file version in commits not already on the destination, including files removed in later commits. Existing custom hook configurations are preserved.
 - Run `npm run check:public` while editing. It checks tracked and non-ignored new files throughout the repository, including hidden configuration files. Keep private notes in the ignored local workspace.
 - These checks detect known private paths and identifiers, not every possible secret. Review the staged diff before committing; CI runs after upload and cannot undo publication.
 - Open a pull request for `main`. The required `ci` check passes only when both platform tests and the public-file check succeed.
