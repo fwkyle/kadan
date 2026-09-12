@@ -3,8 +3,17 @@ on:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -12,6 +21,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -26,12 +37,28 @@ jobs:
           KADAN_HOME: ${{ runner.temp }}/kadan-home
   public-strings:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node scripts/check-public-strings.mjs
-      - name: no tracked files under docs/daily
-        run: |
-          if git ls-files docs/daily | grep -q .; then echo "docs/daily must not be tracked"; exit 1; fi
+      - run: node scripts/check-public-strings.mjs --staged
+      - name: Check every introduced commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/check-public-strings.mjs --range "$BASE_SHA" HEAD
+  ci:
+    if: always()
+    needs: [test, public-strings]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every check to succeed
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          PUBLIC_RESULT: ${{ needs.public-strings.result }}
+        run: test "$TEST_RESULT" = success && test "$PUBLIC_RESULT" = success

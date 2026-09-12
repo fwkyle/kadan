@@ -12,7 +12,7 @@ import {createDatabase,writeStorageMarker,transaction,readStream,openDatabase,st
 import {importStorage,exportStorage,verifyStorage,storageCommand} from '../src/storage-migration.mjs';
 const root=()=>fs.mkdtempSync(path.join(os.tmpdir(),'kadan-sqlite-'));
 function setup(){const home=root();createDatabase(home);writeStorageMarker(home,'sqlite');return home;}
-const child=(code,args=[])=>new Promise(resolve=>{const p=spawn(process.execPath,['--input-type=module','-e',code,...args],{cwd:process.cwd(),stdio:['ignore','pipe','pipe']});let stdout='',stderr='';p.stdout.on('data',x=>stdout+=x);p.stderr.on('data',x=>stderr+=x);p.on('close',status=>resolve({status,stdout,stderr}));});
+const child=(code,args=[],options={})=>new Promise((resolve,reject)=>{const p=spawn(process.execPath,['--input-type=module','-e',code,...args],{cwd:process.cwd(),stdio:['ignore','pipe','pipe'],...options});let stdout='',stderr='';p.stdout.on('data',x=>stdout+=x);p.stderr.on('data',x=>stderr+=x);p.on('error',reject);p.on('close',status=>resolve({status,stdout,stderr}));});
 test('SQLite: 카드 revision/이력과 설명, 다른 단계 조치는 원자적으로 저장된다',()=>{
  const home=setup(),s=new CardStore(home);let c=s.create({repo:'r',id:'a',repoPath:home,body:'# a'});
  assert.equal(s.list()[0].key,'r/a');assert.ok(!fs.existsSync(path.join(home,'cards/r/a/events.jsonl')));
@@ -68,10 +68,20 @@ test('SQLite: 프로세스가 트랜잭션 도중 죽으면 상태·이력이 �
  const result=await child(`import {transaction} from './src/storage.mjs';import {CardStore} from './src/card-store.mjs';transaction(process.argv[1],()=>{new CardStore(process.argv[1]).update('r/a',{status:'hold'},{revision:1,note:'강제 중단'});process.kill(process.pid,'SIGKILL')})`,[home]);
  assert.notEqual(result.status,0);assert.equal(new CardStore(home).get('r/a').revision,1);assert.equal(verifyStorage(home).integrity,'ok');
 });
-test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',async()=>{
+test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:35000},async()=>{
  const home=setup(),db=openDatabase(home);db.exec('BEGIN IMMEDIATE');
- const start=Date.now();const result=await child(`import {appendLedger} from './src/ledger.mjs';try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){console.log(e.message);process.exitCode=2}`,[home]);
- db.exec('ROLLBACK');db.close();assert.equal(result.status,2);assert.match(result.stdout,/locked|busy/i);assert.ok(Date.now()-start<20000,'busy_timeout 5초 뒤 실패해야 한다 (느린 CI 러너의 node 기동 시간을 포함해 20초 상한)');assert.equal(readLedger(home).length,0);
+ let result;
+ try{
+  assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout,5000);
+  // Measure inside the child after imports, excluding process startup and module loading.
+  result=await child(`import {appendLedger} from './src/ledger.mjs';const start=performance.now();try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){console.log(JSON.stringify({message:e.message,elapsedMs:performance.now()-start}));process.exitCode=2}`,[home],{timeout:30000,killSignal:'SIGKILL'});
+ }finally{db.exec('ROLLBACK');db.close()}
+ assert.equal(result.status,2,result.stderr);
+ const {message,elapsedMs}=JSON.parse(result.stdout);
+ assert.match(message,/locked|busy/i);
+ assert.ok(elapsedMs>=4500,`잠금 대기 없이 너무 빨리 실패함: ${elapsedMs}ms`);
+ assert.ok(elapsedMs<15000,`잠금 작업이 제한 시간을 넘김: ${elapsedMs}ms`);
+ assert.equal(readLedger(home).length,0);
 });
 test('SQLite: 전환 중 send는 실제 터미널 전송 전에 거절한다',async()=>{
  const {guardedSend}=await import('../src/cli.mjs');const home=setup();storageCommand(['pause'],{},{home});let sent=0;
