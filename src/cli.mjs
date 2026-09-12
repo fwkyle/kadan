@@ -285,6 +285,8 @@ export function modelFamily(model) {
   const name = model.trim().split("/").pop() ?? "";
   if (/^gpt/i.test(name)) return "gpt";
   if (/^claude/i.test(name)) return "claude";
+  // claude 실행기는 짧은 별명으로 띄운다(--model fable, --model opus). 앞머리가 claude가 아니라 모름으로 빠졌다(2026-09-12 실측).
+  if (/^(fable|opus|sonnet|haiku)/i.test(name)) return "claude";
   if (/^glm/i.test(name)) return "glm";
   if (/^kimi/i.test(name) || /^k3/i.test(name)) return "kimi";
   if (/^grok/i.test(name)) return "grok";
