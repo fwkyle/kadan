@@ -6,7 +6,7 @@ export function installWorkspaceColumns(onActivity=()=>{},resetWidths=()=>{}) {
  const status=document.querySelector('#dw-column-status'),storageKey='kadan.dashboard.columns.v1';
  const defaults=buttons.map(button=>button.dataset.sort),headers=new Map(buttons.map(button=>[button.dataset.sort,button.closest('th')]));
  let order=[...defaults],drag=null,suppressClick=null,frame=0;
- try{const saved=JSON.parse(localStorage.getItem(storageKey));if(Array.isArray(saved?.order))order=[...new Set([...saved.order.filter(key=>defaults.includes(key)),...defaults])];}catch{}
+ try{const saved=JSON.parse(localStorage.getItem(storageKey));if(Array.isArray(saved?.order)){order=[...new Set([...saved.order.filter(key=>defaults.includes(key)),...defaults])];const added=['healthLabel','signalAt'].filter(key=>defaults.includes(key)&&!saved.order.includes(key));if(added.length&&order.includes('title')){order=order.filter(key=>!added.includes(key));order.splice(order.indexOf('title')+1,0,...added);}}}catch{}
  function save(){try{localStorage.setItem(storageKey,JSON.stringify({order}));}catch{}}
  function refresh(){
   for(const row of table.querySelectorAll('colgroup,thead tr,tbody tr')){

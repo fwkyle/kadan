@@ -232,7 +232,7 @@ test('표는 미연결 빈 문구를 비우고 확인 필요 우선 정렬과 �
  assert.equal(model.find(c=>c.key==='repo/coord').flowLabel,'관리·조율');
  assert.equal(model.find(c=>c.key==='repo/coord').flowPhase,'');
  const sorted=sortWorkspaceRows([...model,...workspaceModel(center([attn,fail]))],'attention');
- assert.deepEqual(sorted.map(c=>c.key),['repo/attn','repo/fail','repo/coord','repo/free']);
+ assert.deepEqual(sorted.map(c=>c.key),['repo/attn','repo/fail','repo/free','repo/coord']);
  const html=render([free,attn,fail,coord]);
  assert.equal(readData(html).state.sort,'attention');
  assert.match(html,/미완료 3장 · 전체 4장/);

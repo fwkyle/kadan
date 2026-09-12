@@ -1,3 +1,4 @@
+import {executionHealth,renderExecutionHealth} from './dashboard-execution.mjs';
 import {buildRallies,renderRallies} from './rallies.mjs';
 import {secretaryLetters} from './secretary-mailbox.mjs';
 import {renderWatchOverview} from './watch-overview-wall.mjs';
@@ -29,7 +30,7 @@ export function renderDashboardHome({center,decisions=[],decisionError,briefs,en
  const ask=c=>`${explain(c).title}: ${c.displayState==='hold'?'보류 이유와 다시 시작할 조건이 뭐야?':c.displayState==='failed'?'실패 원인과 다음 조치는 뭐야?':'마지막으로 확인된 진행과 다음 단계가 뭐야?'}`;
  const askItem=c=>`<li><strong>${e(ask(c))}</strong><p>${link(c,'관련 카드 보기')} · <button type="button" class="copy-question" data-question="${e(ask(c))}">질문 복사</button></p></li>`;
 
- const taskTable=cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">상태</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream)}</small></td><td><span class="state ${e(c.displayState)}">${e(stateText[c.displayState]||c.displayState)}</span></td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(reportTime(h))}</small></td></tr>`;}).join('')}</tbody></table></div>`;
+ const taskTable=cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">실행 흐름</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream)}</small></td><td>${renderExecutionHealth(executionHealth(c))}</td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(reportTime(h))}</small></td></tr>`;}).join('')}</tbody></table></div>`;
  const board=b=>{
   const allCards=b.cards, rallies=buildRallies(allCards);
   b={...b,cards:allCards.filter(c=>!c.rallyId||c.workType==='coordination')};

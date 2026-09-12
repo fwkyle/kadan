@@ -1,3 +1,4 @@
+import {executionHealthStyle} from './dashboard-execution.mjs';
 import {cardFlowStyle} from './dashboard-flow.mjs';
 import {ledgerTableStyle} from './ledger-table.mjs';
 import {dashboardDetailStyle} from './dashboard-detail-style.mjs';
@@ -13,6 +14,8 @@ body{margin:0}[hidden]{display:none!important}button,a,input,select,summary{touc
 @media(min-width:800px) and (max-width:1199px){.dw-top{padding-inline:20px;gap:20px}.dw-shell>main{padding:14px 18px}.dw-reader.card-detail{padding:20px}.dw-tabs{gap:13px}.dw-controls select{max-width:150px}.dw-facts{gap:8px}.dw-facts dd{font-size:12px}}
 @media(max-width:799px){.dw-top{padding:10px 14px;gap:12px;flex-wrap:wrap}.dw-brand{font-size:16px}.dw-top nav{gap:2px}.dw-top nav a{font-size:13px;padding:5px 8px}.dw-more{margin-left:auto}.dw-shell>main{padding:10px 0 0}.dw-shell>footer{padding:6px 14px;font-size:10.5px;gap:6px}.dw-controls{padding:0 14px;gap:7px}.dw-controls label{flex:1;min-width:100px;font-size:11px}.dw-controls select{max-width:100%;width:100%}.dw-controls .dw-search{min-width:55%}.dw-search input{min-width:0}.dw-heading{padding:0 14px;font-size:11px;gap:8px}.dw-heading>span:not([id]){display:none}.dw-column-hint{display:none}.dw-panes,.dw-table-layout.dw-detail-open{grid-template-columns:minmax(0,1fr);border-inline:0;border-bottom:0;border-radius:0}.dw-pane-resize{display:none}.dw-detail{display:none}.dw-detail-open .dw-master{display:none}.dw-detail-open .dw-detail{display:block}.dw-expanded .dw-detail{display:block}.dw-card-row{padding:15px 18px}.dw-reader.card-detail{padding:19px}.dw-reader header h2{font-size:23px}.dw-detail-tools{padding:8px 14px}.dw-detail-tools [data-detail-expand]{display:none}.dw-tabs{gap:13px}.dw-facts{gap:8px}.dw-facts dd{font-size:12px}.dw-next{grid-template-columns:1fr;gap:4px}.dw-table{--title-width:190px}.dw-card-title small{max-width:100%;font-size:9px}.dw-card-title{gap:0}.dw-prose h2{font-size:20px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+${executionHealthStyle}
+.dw-evidence-help{font-size:12px;color:#606b65;margin:0 0 8px}
 ${dashboardDetailStyle}
 ${cardFlowStyle}
 ${ledgerTableStyle}

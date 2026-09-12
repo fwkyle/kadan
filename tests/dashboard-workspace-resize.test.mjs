@@ -62,7 +62,7 @@ test('각 열 너비는 키로 독립 저장하고 전체 초기화는 목록·�
  const h=harness({saved:JSON.stringify({title:400,split:.45,table:.6,owner:180})});
  h.send('next','pointerdown');h.send('next','pointermove',{clientX:480});h.send('next','pointerup');
  assert.equal(h.value('next'),360);assert.equal(h.table.props.has('--column-owner'),false);assert.equal(h.value('title'),400);
- assert.equal(h.table.props.get('--table-width'),'1740px');
+ assert.equal(h.table.props.get('--table-width'),'2060px');
  const restored=harness({saved:h.stored()});assert.equal(restored.value('next'),360);assert.equal(restored.table.props.has('--column-owner'),false);
  h.send('board','keydown',{key:'Home'});assert.equal(h.value('board'),80);
  h.api.resetColumns();assert.equal(h.value('next'),200);assert.equal(h.value('title'),320);

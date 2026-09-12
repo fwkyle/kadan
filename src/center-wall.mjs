@@ -26,7 +26,7 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
  if(centerError)center=null;
  const briefs=buildHumanBrief(center,home);
  let works=home?[]:null,workError=null;
- if(home)try{works=workDashboardModel(new WorkStore(home).list(),center,entries)}catch(error){workError=error.message;}
+ if(home)try{works=workDashboardModel(new WorkStore(home).list(),center,entries)}catch(error){works=null;workError=error.message;}
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
  const options=(values,current)=>values.map(([value,name])=>`<option value="${e(value)}"${current===value?' selected':''}>${e(name)}</option>`).join('');
  const hidden=c=>`<input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="key" value="${e(c.key)}"><input type="hidden" name="revision" value="${c.revision}">`;
@@ -61,7 +61,7 @@ ${dashboardWorkspaceStyle}
  </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['overview','관제 요약'],['boards','판 현황'],['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['ledger','사건순 원장'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
- ${renderDashboardStatus({center,works,workError,decisions,decisionError})}
+ ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt})}
  ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail})}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}

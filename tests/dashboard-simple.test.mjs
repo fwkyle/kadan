@@ -23,7 +23,7 @@ test('인박스 페이지는 카드·검색 조건을 보존하고 표시용 본
  assert.match(html,/tab=summary/);assert.match(html,/layout=table/);assert.match(html,/card=work%3Arepo%2Fw/);
 });
 test('목록은 현재 차례를 남기고 고정 실행 담당 열과 반복 담당 줄을 제거한다',()=>{
- assert.equal(workspaceColumns.length,9);assert.ok(!workspaceColumns.some(([key])=>key==='owner'));
+ assert.equal(workspaceColumns.length,11);assert.ok(!workspaceColumns.some(([key])=>key==='owner'));
  const row={...card,owner:'고정담당이름',turnLabel:'현재차례이름'};
  for(const view of ['table','split']){const html=workspaceRowsHtml([row],view,'');assert.match(html,/현재차례이름/);assert.doesNotMatch(html,/고정담당이름|data-column="owner"|실행 담당/);}
 });
