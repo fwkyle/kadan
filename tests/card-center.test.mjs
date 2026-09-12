@@ -107,6 +107,15 @@ test('역할별 최신 시작 기록의 실행기·모델을 모은다 — 모�
   {kind:'start',role:'different-작업자',harness:'codex',model:'command-code/deepseek-v4',cmd:'codex -p orca --model command-code/deepseek-v4 -c model_reasoning_effort="max"',t:'2020-09-07T00:03:00Z'},
   {kind:'start',role:'other-역할',t:'2020-09-07T00:04:00Z'}];
  const center=buildCardCenter({cards:[],entries,tree});
- assert.deepEqual(center.models['different-작업자'],{harness:'codex',model:'command-code/deepseek-v4',at:'2020-09-07T00:03:00Z',effort:'max'});
- assert.equal(center.models['other-역할'],undefined);
+assert.deepEqual(center.models['different-작업자'],{harness:'codex',model:'command-code/deepseek-v4',at:'2020-09-07T00:03:00Z',effort:'max'});
+assert.equal(center.models['other-역할'],undefined);
+});
+
+test('강도는 실행기마다 다른 플래그에서 읽는다 — codex·claude·omo',()=>{
+ const entries=[...rows,
+  {kind:'start',role:'claude-검수자',harness:'claude',model:'fable',cmd:'claude --model fable --effort xhigh --dangerously-skip-permissions',t:'2020-09-07T00:05:00Z'},
+  {kind:'start',role:'omo-작업자',harness:'omo',model:'openai-codex/gpt-6-astra',cmd:'omo --model openai-codex/gpt-6-astra --thinking high --no-recommended-models',t:'2020-09-07T00:06:00Z'}];
+ const center=buildCardCenter({cards:[],entries,tree});
+ assert.equal(center.models['claude-검수자'].effort,'xhigh');
+ assert.equal(center.models['omo-작업자'].effort,'high');
 });
