@@ -12,7 +12,7 @@ test("codex 명령이면 실행기와 모델을 원장에 남기고 명령 원�
     session: "kadan-b1-작업자",
     evidence: { panePid: "111" },
     window: "rottie",
-    cmd: 'codex -p orca --model gpt-6-astra -c model_reasoning_effort="medium"',
+    cmd: 'codex -p lite --model gpt-6-astra -c model_reasoning_effort="medium"',
     env: {},
   });
 
@@ -66,15 +66,15 @@ test("--cmd 없이 띄운 세션과 이미 살아 있어 재사용한 세션에�
 });
 
 test("모델을 안 고정한 명령은 실행기만 남는다 — 없는 값을 지어내지 않는다", () => {
-  const described = describeStartCmd("codex -p orca");
+  const described = describeStartCmd("codex -p lite");
 
   assert.equal(described.harness, "codex");
   assert.equal("model" in described, false);
-  assert.equal(described.cmd, "codex -p orca");
+  assert.equal(described.cmd, "codex -p lite");
 });
 
 test("따옴표로 감싼 모델 이름은 벗겨서 남긴다 — 2026-09-12 kimi 발령 실측", () => {
-  const described = describeStartCmd(`codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort='"max"'`);
+  const described = describeStartCmd(`codex -p lite --model 'kimi/k3[1m]' -c model_reasoning_effort='"max"'`);
 
   assert.equal(described.harness, "codex");
   assert.equal(described.model, "kimi/k3[1m]");

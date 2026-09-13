@@ -104,7 +104,7 @@ test('작업/결과대기 상태는 하루 뒤에도 유지하지만 재발령·
 test('역할별 최신 시작 기록의 실행기·모델을 모은다 — 모델 없는 시작은 제외',()=>{
  const entries=[...rows,
   {kind:'start',role:'different-작업자',harness:'codex',model:'xai/grok-4.6',t:'2020-09-07T00:02:00Z'},
-  {kind:'start',role:'different-작업자',harness:'codex',model:'command-code/deepseek-v4',cmd:'codex -p orca --model command-code/deepseek-v4 -c model_reasoning_effort="max"',t:'2020-09-07T00:03:00Z'},
+  {kind:'start',role:'different-작업자',harness:'codex',model:'command-code/deepseek-v4',cmd:'codex -p lite --model command-code/deepseek-v4 -c model_reasoning_effort="max"',t:'2020-09-07T00:03:00Z'},
   {kind:'start',role:'other-역할',t:'2020-09-07T00:04:00Z'}];
  const center=buildCardCenter({cards:[],entries,tree});
 assert.deepEqual(center.models['different-작업자'],{harness:'codex',model:'command-code/deepseek-v4',at:'2020-09-07T00:03:00Z',effort:'max'});
@@ -122,7 +122,7 @@ assert.equal(center.models['omo-작업자'].effort,'high');
 
 test('겹따옴표로 감싼 강도도 읽는다',()=>{
  const entries=[...rows,
-  {kind:'start',role:'kimi-작업자',harness:'codex',model:'kimi/k3[1m]',cmd:`codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort='"max"'`,t:'2020-09-07T00:07:00Z'}];
+  {kind:'start',role:'kimi-작업자',harness:'codex',model:'kimi/k3[1m]',cmd:`codex -p lite --model 'kimi/k3[1m]' -c model_reasoning_effort='"max"'`,t:'2020-09-07T00:07:00Z'}];
  const center=buildCardCenter({cards:[],entries,tree});
  assert.equal(center.models['kimi-작업자'].effort,'max');
 });
