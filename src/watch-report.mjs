@@ -41,6 +41,19 @@ export function latestWatchReports(entries) {
   return [...states.values()];
 }
 
+// Why: 카드가 진행 중인 작업자가 프롬프트에 서 있으면 화면만으로는 "감독 답 기다리는 중"과
+// "차례만 끝내고 멈춘 것"이 똑같아 보인다. 원장으로 가른다 — 마지막 발령 뒤 그 작업자가
+// 감독에게 편지를 보냈으면 답을 줄 사람은 감독이니 정상 대기, 아무것도 안 보냈으면 멈춘 것이다.
+// (2026-09-13 실사고 2건: 작업자가 카드 중간에 차례를 끝냈고 감시는 입력대기로만 기록했다.)
+export function waitingWithoutAsking(entries, {role, taskId}) {
+  if (!role) return false;
+  const dispatch = entries.findLast(e => e.kind === 'send' && e.role === role && (taskId == null || e.taskId === taskId));
+  if (!dispatch) return false;
+  const since = Date.parse(dispatch.t);
+  if (!Number.isFinite(since)) return false;
+  return !entries.some(e => e.kind === 'send' && e.by === role && Date.parse(e.t) >= since);
+}
+
 function currentRequest(request,cards,entries,parents,works=[]) {
   if(watchResponsibility(request.role,cards,entries,parents,request.source,works)!==request.responsibility)return false;
   if(request.source!=='progress')return true;
@@ -116,20 +129,25 @@ export class WatchReports {
       const previous=latestWatchReports(entries).find(e=>e.key===request.key);
       const consecutive=verdict==='조정'?(previous?.verdict==='조정'?previous.consecutive:0)+1:0;
       const level=verdict==='죽음'||consecutive>=2?'RED':'AMBER';
-      const notify=!stale&&!normal(verdict)&&(!previous||previous.verdict!==verdict||previous.level!==level);
+      // 진행 중인 카드를 맡은 작업자가 아무것도 묻지 않은 채 입력 대기면 멈춘 것으로 보고 감독에게 알린다.
+      const idleWithoutAsk=!stale&&verdict==='입력대기'&&request.source==='progress'
+        &&waitingWithoutAsking(entries,{role:request.role,taskId:request.taskId});
+      const notify=!stale&&(!normal(verdict)||idleWithoutAsk)
+        &&(!previous||previous.verdict!==verdict||previous.level!==level||Boolean(previous.idleWithoutAsk)!==idleWithoutAsk);
       const reasonPath=path.join(request.evidencePath,'reason.txt');
       fs.writeFileSync(reasonPath,reason,{mode:0o600});
       report={kind:'watch-ai-report',by:'watch-ai',requestId,key:request.key,source:request.source,
         role:request.role,session:request.session,taskId:request.taskId,responsibility:request.responsibility,observationDigest:request.observationDigest,
-        verdict,level,consecutive,accepted:!stale,notify,reasonPath,t:new Date(this.now()).toISOString()};
+        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),t:new Date(this.now()).toISOString()};
       // 먼저 기록해 같은 명령/문제의 재전송을 막는다. 외부 발송은 저장 잠금 밖에서 한다.
       this.record(report);
-      if (!stale&&normal(verdict)&&previous&&!normal(previous.verdict)) this.record({kind:'alert',by:'watch',source:'watch-ai',
+      if (!stale&&normal(verdict)&&!idleWithoutAsk&&previous&&(!normal(previous.verdict)||previous.idleWithoutAsk)) this.record({kind:'alert',by:'watch',source:'watch-ai',
         requestId,role:request.role,session:request.session,taskId:request.taskId,alertKind:previous.verdict,
         level:previous.level,resolved:true,delivered:false,recipient:null,resolution:'ai-normal'});
     });
     if (duplicate||!report.notify) return this.completed(request,{...report,duplicate});
-    const label={'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
+    const label=report.idleWithoutAsk?'카드 미완인데 입력 대기'
+      :{'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
     const message=`[${watchAILabel(request.source)}] ${label} · ${request.role}${request.taskId?` / ${request.taskId}`:''}: ${reason}${report.consecutive>=2?' 반복 조정 판정입니다. 상위 감독과 범위·담당 조정을 검토하세요.':''} 감독이 확인 후 후속 조치를 결정하세요.`;
     const live=new Set(this.floor.list().filter(x=>x.alive!==false).map(x=>x.session));
     const routes=new Map(request.routes);
