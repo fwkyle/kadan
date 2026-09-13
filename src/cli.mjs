@@ -41,6 +41,7 @@ import {
 } from "./ledger.mjs";
 import {
   closeRottieWindow,
+  removeRottieWindow,
   rottieConnectivity,
   SOCKET,
   buildOrcaCreateArgv,
@@ -1177,7 +1178,7 @@ export function openStartedWindow(session, platform = process.platform, deps = {
   return { ...(openWindow(session, platform, deps) ?? { method: "manual" }), ...fields };
 }
 
-export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, connectFn = rottieConnectivity, print = console.log } = {}) {
+export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, removeFn = removeRottieWindow, connectFn = rottieConnectivity, print = console.log } = {}) {
   const terminalId = lastStart?.rottieTerminalId;
   if (!terminalId) return {};
   if (!env.KADAN_ROTTIE_BIN) {
@@ -1185,15 +1186,21 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
     return { rottieTerminalId: terminalId, rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" };
   }
   const result = closeFn({ bin: env.KADAN_ROTTIE_BIN, terminalId });
-  if (result.closed) print(`창 닫힘: ${terminalId}`);
-  else {
+  if (!result.closed) {
     const connection = connectFn({ bin: env.KADAN_ROTTIE_BIN });
     print(`창 닫기 실패: ${terminalId} ${result.code} (번들 ${connection.bundleId ?? "모름"})`);
+    return { rottieTerminalId: terminalId, rottieWindowClosed: false, rottieWindowError: String(result.code) };
   }
+  print(`창 닫힘: ${terminalId}`);
+  // 닫힌 탭은 목록에 '종료됨'으로 남으므로 한 번 더 제거한다. 제거 실패는 기록만 하고 재시도하지 않는다.
+  const removal = removeFn({ bin: env.KADAN_ROTTIE_BIN, terminalId });
+  if (removal.removed) print(`탭 제거됨: ${terminalId}`);
+  else print(`탭 제거 실패: ${terminalId} ${removal.code} — 탭이 '종료됨'으로 남는다`);
   return {
     rottieTerminalId: terminalId,
-    rottieWindowClosed: result.closed,
-    ...(!result.closed ? { rottieWindowError: String(result.code) } : {}),
+    rottieWindowClosed: true,
+    rottieWindowRemoved: removal.removed,
+    ...(!removal.removed ? { rottieRemoveError: String(removal.code) } : {}),
   };
 }
 

@@ -382,7 +382,9 @@ export function renderWallHtml({ tree, mailbox = [], entries = [], collectedAt, 
   const boardPanel = board => {
     const boardRoles = board.roles.map(role=>{
       const latest = entries.filter(entry=>entry.role===role.role && ['start','stop'].includes(entry.kind)).at(-1);
-      return latest?.kind==='stop' && typeof latest.rottieWindowClosed==='boolean' ? {...role,window:`rottie ${latest.rottieWindowClosed?'닫힘':'열림'}`} : role;
+      if (latest?.kind!=='stop' || typeof latest.rottieWindowClosed!=='boolean') return role;
+      const window = !latest.rottieWindowClosed ? '열림' : latest.rottieWindowRemoved===true ? '제거됨' : latest.rottieWindowRemoved===false ? '닫힘·탭 남음' : '닫힘';
+      return {...role,window:`rottie ${window}`};
     });
     return `<section class="board panel" data-board-panel="${escapeHtml(board.name)}"><h2>판 ${escapeHtml(board.name)}${board.about?` <small class="about">${escapeHtml(board.about)}</small>`:''}</h2><div>${pills(board)}</div><p>마지막 활동 ${timeTag(activityOf(board))}</p>${planned(board)?`<p>발령 전 ${planned(board)}장: ${board.plannedCards.map(card=>escapeHtml(card.title?`${card.taskId}(${card.title})`:card.taskId)).join(', ')}</p>`:''}${(board.rounds??[]).map(group=>`<p>${escapeHtml(renderRound(group))}</p>`).join('')}${renderRoleTable({...board,roles:boardRoles},collectedAt,true)}<h3>이 판 우편</h3>${renderMailbox(mailFor(board.name),collectedAt,true,'최근 10건')}</section><!-- end board -->`;
   };

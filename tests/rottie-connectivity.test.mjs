@@ -68,19 +68,21 @@ test("connectivity returns runtime and never throws or retries for spawn and mal
   }
 });
 
-test("stop failure diagnoses bundle once; success never probes", () => {
+test("stop failure diagnoses bundle once; success never probes and removes the tab once", () => {
   for (const closed of [true, false]) {
-    let probes = 0, closes = 0;
+    let probes = 0, closes = 0, removes = 0;
     const lines = [];
     cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
       env: { KADAN_ROTTIE_BIN: "/fake" },
       closeFn() { closes++; return { closed, code: "ROTTIE_INTERNAL" }; },
+      removeFn() { removes++; return { removed: true }; },
       connectFn({ bin }) { assert.equal(bin, "/fake"); probes++; return { ok: false, ...runtime }; },
       print: line => lines.push(line),
     });
     assert.equal(closes, 1);
     assert.equal(probes, closed ? 0 : 1);
-    assert.equal(lines.length, 1);
+    assert.equal(removes, closed ? 1 : 0);
+    assert.equal(lines.length, closed ? 2 : 1);
     if (!closed) assert.ok(lines[0].includes(runtime.bundleId));
   }
 });
