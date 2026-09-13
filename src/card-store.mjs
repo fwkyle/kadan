@@ -128,6 +128,23 @@ export class CardStore {
       return card;
     });
   }
+  // Why: 감독이 등록 뒤 원본 카드 파일을 고쳤을 때(예: '읽고 시작할 것' 보완) 아직 발령 전(draft·담당 없음)이면
+  // 중앙 사본만 다시 읽는다. link는 원본을 심볼릭 링크로 바꿔 문서 저장소를 더럽히므로 여기서는 쓰지 않는다.
+  refresh(key,{by='사람'}={}) {
+    return this.locked(()=>{
+      const card=this.get(key),source=card.sourcePath;
+      card.role=effectiveCardRole(card,readLedger(this.home));
+      if(!source)throw new Error('다시 읽을 원본 경로 없음');
+      if(card.status!=='draft'||card.role)throw new Error(`발령 전 초안만 다시 읽을 수 있다: ${card.status}, 담당 ${card.role??'없음'}`);
+      const text=fs.readFileSync(source,'utf8');
+      if(!text.trim())throw new Error('카드 내용 필요');
+      if(text===card.body)return card;
+      fs.writeFileSync(card.path,text,{mode:0o600});
+      const {history,body,path:bodyPath,...previous}=card;
+      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,revision:card.revision+1,by,at:new Date().toISOString(),noteKind:'decision',note:'원본 카드 파일 다시 읽음(발령 전)'});
+      return this.get(key);
+    });
+  }
   findTask(id) {return this.list().filter(c=>c.id===id);}
   checkSend(id,role) {
     const cards=this.findTask(id);
