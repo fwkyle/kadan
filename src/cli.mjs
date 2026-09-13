@@ -296,6 +296,8 @@ export function modelFamily(model) {
   if (/^grok/i.test(name)) return "grok";
   if (/^deepseek/i.test(name)) return "deepseek";
   if (/^gemini/i.test(name)) return "gemini";
+  // devin 실행기는 자기 모델을 swe-2-max 처럼 부른다. 모름으로 빠지면 계열 겹침 검사가 무력해진다(2026-09-13 실측).
+  if (/^swe/i.test(name)) return "swe";
   return "모름";
 }
 

@@ -40,6 +40,9 @@ test("openai-codex 접두가 있어도 gpt로 읽고, 모르는 이름은 모름
   assert.equal(modelFamily("xai/grok-4.6"), "grok");
   assert.equal(modelFamily("command-code/deepseek-deepseek-v4-flash"), "deepseek");
   assert.equal(modelFamily("google/gemini-2.5-pro"), "gemini");
+  // devin 실행기 (devin --model swe-2-max)
+  assert.equal(modelFamily("swe-2-max"), "swe");
+  assert.equal(modelFamily("swe-2-high"), "swe");
   assert.equal(modelFamily("mystery-model"), "모름");
   assert.equal(modelFamily(undefined), "모름");
   assert.equal(modelFamily(""), "모름");
