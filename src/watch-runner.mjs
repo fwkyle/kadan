@@ -13,6 +13,7 @@ import {
   DISCONNECT_ALERT_KINDS,
   assessRoles,
   dedupAlerts,
+  filterConfirmedCompletions,
   routeAlert,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
@@ -467,6 +468,11 @@ export async function runWatch({
           stallN
         );
     roleStates = roleAssessment.states;
+    // 확정된 완료의 완료후보는 여기서 거른다 — assessRoles는 원장을 모르고,
+    // 경보가 아예 만들어지지 않아야 해소 우편도 없다.
+    roleAssessment.alerts = observationError
+      ? roleAssessment.alerts
+      : filterConfirmedCompletions(roleAssessment.alerts, entries);
 
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session));
     let reportAlerts=[];
