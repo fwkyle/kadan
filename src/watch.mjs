@@ -289,6 +289,48 @@ export function assessResources(previousState, current, ncpu) {
   };
 }
 
+// 완료후보 경보는 "감독 확인이 필요한 완료"를 알리는 것이다. 원장에 그 역할·그 카드의
+// done 줄이 이미 있으면 확인할 것이 없으므로 경보 자체를 만들지 않는다 — done 줄이 곧
+// 확정 기록이라 별도 경보 줄을 남길 이유가 없고, 경보가 없으면 해소 우편도 생기지 않는다.
+// 마지막 발령(또는 세션 시작) 이후의 done만 확정으로 본다 — 그보다 이전의 done은
+// 지난 실행의 기록이라 재실행의 새 완료를 덮으면 안 된다.
+export function filterConfirmedCompletions(alerts, entries) {
+  if (!alerts.some((alert) => alert.kind === "완료후보")) return alerts;
+  const assignedAt = new Map();
+  const startedAt = new Map();
+  const dones = [];
+  for (const entry of entries || []) {
+    const at = Date.parse(entry?.t);
+    if (entry?.kind === "send" && entry.role && entry.taskId && Number.isFinite(at)) {
+      assignedAt.set(`${entry.role} ${entry.taskId}`, at);
+    } else if (
+      entry?.kind === "start" &&
+      typeof entry.session === "string" &&
+      Number.isFinite(at)
+    ) {
+      startedAt.set(entry.session, at);
+    } else if (entry?.kind === "done" && entry.role && entry.taskId) {
+      dones.push({ entry, at });
+    }
+  }
+  return alerts.filter((alert) => {
+    if (alert.kind !== "완료후보") return true;
+    const since =
+      assignedAt.get(`${alert.role} ${alert.taskId}`) ??
+      startedAt.get(alert.session) ??
+      0;
+    const confirmed = dones.some(
+      ({ entry, at }) =>
+        entry.role === alert.role &&
+        entry.taskId === alert.taskId &&
+        (entry.result ?? "") === (alert.result ?? "") &&
+        Number.isFinite(at) &&
+        at >= since
+    );
+    return !confirmed;
+  });
+}
+
 export function routeAlert(alert, routes, liveSessions, superRole, parents = new Map()) {
   if (alert.kind === '자원' && Object.hasOwn(alert,'recipient')) return alert.recipient;
   if (alert.id === "hierarchy:unreadable") return "@user";
