@@ -53,7 +53,7 @@
 ## 검색과 출력
 
 코드·파일 검색은 `rg`로 한다. `grep -r`·`find`는 `rg`가 없거나 `rg`로 안 되는 경우에만 쓴다.
-`rg`는 `.gitignore`를 기본으로 무시하므로 빌드 산출물·무시된 설정을 찾을 때는 `--no-ignore`,
+`rg`는 `.gitignore`를 기본으로 존중해 무시된 파일을 건너뛰므로 빌드 산출물·무시된 설정을 찾을 때는 `--no-ignore`,
 숨김 파일까지는 `--hidden`을 붙인다. **"없다"는 결론은 무시 규칙을 끈 재검색으로 확인한 뒤에만 적는다.**
 서로 의존하지 않는 조회는 한 번에 묶어 돌리고, 출력은 `| head`·`| wc -l`로 상한을 건 뒤 필요한 줄만 남긴다.
 
@@ -181,7 +181,7 @@ kadan card progress <저장소/카드id> --revision <현재 revision> --activity
 착수하면 곧바로 이 검수 카드에 진행 기록을 1회 남겨라:
 `kadan card progress <저장소/카드id> --revision <현재 revision> --activity running --note "착수: <검수 범위 한 줄>"`.
 이미 현재 실행의 running 기록이 있으면 중복해서 남기지 마라.
-검색은 `rg`로 하고, `rg`가 `.gitignore`를 무시한다는 점을 감안해 "없다"는 판정 전에 `--no-ignore`로 재확인하라.
+검색은 `rg`로 하고, `rg`가 `.gitignore`를 존중해 무시된 파일을 건너뛴다는 점을 감안해 "없다"는 판정 전에 `--no-ignore`로 재확인하라.
 
 ## 대상
 - 카드: `<카드 경로>` / 결과 파일: `<결과 파일 경로>`
