@@ -1,3 +1,4 @@
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {isUserActor} from './actors.mjs';
@@ -27,7 +28,7 @@ export class AutomaticReview {
  locked(fn){if(storageMode(this.home)!=='sqlite')throw new Error('자동 전달에는 기존 SQLite 저장소가 필요합니다');return transaction(this.home,fn);}
  get(key){const rows=readStream(this.home,this.stream(key),{optional:true});return rows.at(-1)||null;}
  save(s,patch){const next={...s,...patch,revision:(s.revision||0)+1,at:new Date(this.now()).toISOString(),by:this.by};appendStream(this.home,this.stream(s.key),next);return next;}
- entries(){const rows=readLedger(this.home);if(rows.some(x=>x.broken))throw new Error('원장 손상: 자동 전달 중단');return rows;}
+ entries(){const rows=readLedger(this.home);if(rows.some(x=>x.broken))throw new Error('원장 손상: 자동 전달 중단');return taskIdentity(this.cards.list()).project(rows);}
  identity(role){
   if(typeof role!=='string'||! /^[\p{L}\p{N}_-]+$/u.test(role))throw new Error('담당 역할 이름 필요');
   const rows=this.entries(),last=rows.filter(e=>e.role===role&&['start','stop'].includes(e.kind)).at(-1);
@@ -73,28 +74,29 @@ export class AutomaticReview {
   if(s.deadline&&this.now()>=Date.parse(s.deadline))throw new Error('기존 시한 도달');
   if(s.previous?.sha256&&hash(fs.readFileSync(s.previous.resultFile))!==s.previous.sha256)throw new Error('확인 뒤 결과 파일 변경');
   for(const ref of Object.values(s.references))if(JSON.stringify(this.reference(ref.key))!==JSON.stringify(ref))throw new Error('원본 카드 범위 변경');
-  const entries=this.entries();
+  const entries=this.entries(),cards=this.cards.list(),identity=taskIdentity(cards);
   for(const kind of ['worker','reviewer']){
    const expected=s.identities[kind];
    if(JSON.stringify(this.identity(expected.role))!==JSON.stringify(expected))throw new Error(`시작 세대 변경: ${expected.role}`);
   }
   if(s.current){
-   const c=this.cards.get(s.current.key),role=effectiveCardRole(c,entries);
+   const c=this.cards.get(s.current.key),role=effectiveCardRole(c,entries,identity);
    if(c.role!==s.current.role||role!==s.current.role||cardStamp(c)!==s.current.stamp||!['assigned',...(allowCurrentDone?['done']:[])].includes(c.status))throw new Error('현재 실행 보류·취소·범위·담당 변경');
    if(c.turnOwner&&c.turnOwner!==s.current.role)throw new Error('다른 담당이 실행 차례를 점유');
-   if(target)this.cards.checkSend(c.id,target);
+   if(target)this.cards.checkSend(c.key,target);
   }
   const ownedRoles=[s.identities.worker.role,s.identities.reviewer.role];
-  for(const c of this.cards.list()){
+  for(const c of cards){
    if(c.key===s.current?.key||closed.includes(c.status))continue;
-   const role=effectiveCardRole(c,entries);
+   const role=effectiveCardRole(c,entries,identity);
    if(!ownedRoles.includes(role))continue;
-   if(c.status==='assigned'&&!entries.some(e=>e.kind==='done'&&e.role===role&&e.taskId===c.id))throw new Error(`다른 실행이 담당을 점유: ${c.key}`);
+   if(c.status==='assigned'&&!entries.some(e=>e.kind==='done'&&!taskConnectionError(e)&&e.role===role&&e.executionKey===c.key))throw new Error(`다른 실행이 담당을 점유: ${c.key}`);
   }
   for(const e of entries.filter(e=>e.kind==='send'&&e.taskId&&ownedRoles.includes(e.role)&&e.transport!=='mailbox')){
-   if(e.taskId===s.current?.key.split('/')[1])continue;
-   const c=this.cards.findTask(e.taskId);
-   if(!entries.some(d=>d.kind==='done'&&d.role===e.role&&d.taskId===e.taskId)&&!(c.length===1&&closed.includes(c[0].status)))throw new Error(`다른 미완료 발령이 담당을 점유: ${e.taskId}`);
+   if(taskConnectionError(e))throw new Error(`기록 연결 실패: ${e.rawTaskId}`);
+   if(e.executionKey===s.current?.key)continue;
+   const c=this.cards.findTask(e.executionKey||e.taskId);
+   if(!entries.some(d=>d.kind==='done'&&!taskConnectionError(d)&&d.role===e.role&&d.taskId===e.taskId)&&!(c.length===1&&closed.includes(c[0].status)))throw new Error(`다른 미완료 발령이 담당을 점유: ${e.taskId}`);
   }
   return w;
  }
@@ -124,7 +126,7 @@ export class AutomaticReview {
   const next=this.works.change(s.key,'execute',{title:`자동 ${s.phase} ${s.round}라운드`,body,phase:s.phase,round:s.round},{revision:w.revision,by:this.by,note:'명시 설정한 구현·검수 자동 전달'});
   const link=next.executions.at(-1),created=this.cards.get(link.key);
   const card=this.cards.update(link.key,{status:'assigned',scope:w.scope,board:w.board,role,rallyId:w.id,rallyTitle:w.title.slice(0,160),rallyRound:String(s.round),rallyStep:s.phase},{revision:created.revision,by:this.by,note:'기존 원본 기준과 자동 전달 설정으로 배정'});
-  appendLedger({kind:'plan',board:w.board,taskId:card.id,by:this.by},this.home);
+  appendLedger({kind:'plan',board:w.board,...taskIdentity(this.cards.list()).write(card.key),by:this.by},this.home);
   return this.save(s,{status:'ready',links:next.executions,report:null,current:{key:card.key,role,stamp:cardStamp(card),path:card.path},claim:null});
  }
  step(key){
@@ -140,13 +142,13 @@ export class AutomaticReview {
    try{
     this.guard(s,{allowCurrentDone:s.status==='waiting'});
     if(s.status==='waiting'){
-     const entries=this.entries(),id=s.current.key.split('/')[1];
-     const sendIndex=entries.findIndex(e=>e.kind==='send'&&e.taskId===id&&e.role===s.current.role);
+     const entries=this.entries(),address=taskIdentity(this.cards.list()).write(s.current.key),id=address.taskId;
+     const sendIndex=entries.findIndex(e=>e.kind==='send'&&!taskConnectionError(e)&&e.taskId===id&&e.role===s.current.role);
      if(sendIndex<0)throw new Error('현재 실행 전달 영수증 없음');
-     let done=entries.slice(sendIndex+1).find(e=>e.kind==='done'&&e.taskId===id&&e.role===s.current.role);
+     let done=entries.slice(sendIndex+1).find(e=>e.kind==='done'&&!taskConnectionError(e)&&e.taskId===id&&e.role===s.current.role);
      if(!done){
       const result=this.observeDone(s);
-      if(result){if(!['ok','failed'].includes(result))throw new Error('완료 마커 판정 불명확');appendLedger({kind:'done',role:s.current.role,taskId:id,result,by:this.by},this.home);done={result};}
+      if(result){if(!['ok','failed'].includes(result))throw new Error('완료 마커 판정 불명확');appendLedger({kind:'done',role:s.current.role,...address,result,by:this.by},this.home);done={result};}
      }
      if(!done)return {state:s};
      if(done.result!=='ok')return this.reserveNotice(this.stop(s,'실행 자체 실패 또는 완료 판정 불명확'));
@@ -197,7 +199,7 @@ export class AutomaticReview {
    });
    const identity=s.identities[kind==='execution'?(s.phase==='review'?'reviewer':'worker'):'notify'];
    if(JSON.stringify(this.identity(identity.role))!==JSON.stringify(identity))throw new Error('통지 또는 발령 수신 세대 변경');
-   receipt=this.send({role:identity.role,pid:identity.pid,taskId:kind==='execution'?s.current.key.split('/')[1]:undefined,
+   receipt=this.send({role:identity.role,pid:identity.pid,taskId:kind==='execution'?taskIdentity(this.cards.list()).taskIdFor(this.cards.get(s.current.key)):undefined,
     ...(kind==='execution'?{roleProfile:s.phase==='review'?'reviewer':'worker'}:{}),
     executionKey:kind==='execution'?s.current.key:undefined,workKey:s.key,
     transmit:fn=>this.locked(()=>{

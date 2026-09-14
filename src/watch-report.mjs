@@ -1,3 +1,4 @@
+import {taskIdentity} from './task-identity.mjs';
 // 감시AI가 호출하는 보고 경계. 판단은 AI, 저장·중복 방지·상신은 이 명령의 책임이다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -57,9 +58,10 @@ export function waitingWithoutAsking(entries, {role, taskId}) {
 function currentRequest(request,cards,entries,parents,works=[]) {
   if(watchResponsibility(request.role,cards,entries,parents,request.source,works)!==request.responsibility)return false;
   if(request.source!=='progress')return true;
-  return cards.some(card=>card.id===request.taskId&&card.status==='assigned'&&card.activity==='running'
-    &&card.workType!=='coordination'&&effectiveCardRole(card,entries)===request.role)
-    &&openTaskIds(entries,request.role).includes(request.taskId);
+  const identity=taskIdentity(cards);entries=identity.project(entries);
+  return cards.some(card=>identity.resolve(request.taskId).key===card.key&&card.status==='assigned'&&card.activity==='running'
+    &&card.workType!=='coordination'&&effectiveCardRole(card,entries,identity)===request.role)
+    &&openTaskIds(entries,request.role).includes(identity.resolve(request.taskId).taskId);
 }
 
 export class WatchReports {
@@ -122,7 +124,8 @@ export class WatchReports {
       const old=entries.find(e=>e.kind==='watch-ai-report'&&e.requestId===requestId);
       if (old) { duplicate=true; report=old; return; }
       parents=request.hierarchyPath ? parseHierarchy(JSON.parse(fs.readFileSync(request.hierarchyPath,'utf8'))) : new Map(request.parents);
-      const current=currentRequest(request,this.readCards(),entries,parents,this.readWorks());
+      const cards=this.readCards(),identity=taskIdentity(cards);
+      const current=currentRequest(request,cards,entries,parents,this.readWorks());
       const stale=this.now()>request.expiresAt||entries.some(e=>e.kind==='watch-ai-call'&&e.requestId===requestId)
         ||!current
         ||entries.findLast(e=>e.kind==='watch-ai-request'&&e.key===request.key)?.requestId!==requestId;
@@ -131,7 +134,7 @@ export class WatchReports {
       const level=verdict==='죽음'||consecutive>=2?'RED':'AMBER';
       // 진행 중인 카드를 맡은 작업자가 아무것도 묻지 않은 채 입력 대기면 멈춘 것으로 보고 감독에게 알린다.
       const idleWithoutAsk=!stale&&verdict==='입력대기'&&request.source==='progress'
-        &&waitingWithoutAsking(entries,{role:request.role,taskId:request.taskId});
+        &&waitingWithoutAsking(identity.project(entries),{role:request.role,taskId:identity.resolve(request.taskId).taskId});
       const notify=!stale&&(!normal(verdict)||idleWithoutAsk)
         &&(!previous||previous.verdict!==verdict||previous.level!==level||Boolean(previous.idleWithoutAsk)!==idleWithoutAsk);
       const reasonPath=path.join(request.evidencePath,'reason.txt');

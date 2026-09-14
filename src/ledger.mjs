@@ -59,6 +59,7 @@ export function readMailBody(digestValue, home = ledgerHome()) {
 export function readLedger(home = ledgerHome()) {
   const file = path.join(home, "ledger.jsonl");
   if (storageMode(home)==='jsonl'&&!fs.existsSync(file)) return [];
+  // 원문 조회에서는 입력 주소 쌍만 중복 제거한다. 카드 연결/별칭의 최초 done은 계산 시 결정한다.
   const seenDone = new Set();
   const sqliteRows=storageMode(home)==='sqlite'?readStream(home,'ledger.jsonl',{optional:true}):null;
   return (sqliteRows?sqliteRows.map(JSON.stringify).join('\n'):fs.readFileSync(file, "utf8"))
@@ -73,7 +74,7 @@ export function readLedger(home = ledgerHome()) {
     })
     .filter((entry) => {
       if (entry?.kind !== "done" || !entry.role || !entry.taskId) return true;
-      const key = `${entry.role}\0${entry.taskId}`;
+      const key = `${entry.role}\0${entry.taskId}\0${entry.executionKey || ""}`;
       if (seenDone.has(key)) return false;
       seenDone.add(key);
       return true;

@@ -1,3 +1,4 @@
+import {taskIdentity} from './task-identity.mjs';
 import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -73,7 +74,7 @@ export class CardStore {
   update(key,patch,{revision,by='사람',noteKind='decision',note,manual=false}={}) {
     return this.locked(()=>{
       const current=this.get(key);
-      current.role=effectiveCardRole(current,readLedger(this.home));
+      current.role=effectiveCardRole(current,readLedger(this.home),this.list());
       if(Number(revision)!==current.revision)throw new Error('카드가 변경됨: 새로 읽고 다시 저장');
       if(!note?.trim())throw new Error('변경 이유/질문/답변을 적어야 한다');
       if(!['decision','question','answer','progress'].includes(noteKind))throw new Error('잘못된 기록 종류');
@@ -133,7 +134,7 @@ export class CardStore {
   refresh(key,{by='사람'}={}) {
     return this.locked(()=>{
       const card=this.get(key),source=card.sourcePath;
-      card.role=effectiveCardRole(card,readLedger(this.home));
+      card.role=effectiveCardRole(card,readLedger(this.home),this.list());
       if(!source)throw new Error('다시 읽을 원본 경로 없음');
       if(card.status!=='draft'||card.role)throw new Error(`발령 전 초안만 다시 읽을 수 있다: ${card.status}, 담당 ${card.role??'없음'}`);
       const text=fs.readFileSync(source,'utf8');
@@ -145,12 +146,12 @@ export class CardStore {
       return this.get(key);
     });
   }
-  findTask(id) {return this.list().filter(c=>c.id===id);}
-  checkSend(id,role) {
-    const cards=this.findTask(id);
-    if(!cards.length)return null;
-    if(cards.length!==1)throw new Error('카드ID가 여러 저장소에 있음: 고유 ID로 구분 필요');
-    const c=cards[0];c.role=effectiveCardRole(c,readLedger(this.home));
+  findTask(id) {return this.list().filter(c=>id.includes('/')?c.key===id:c.id===id);}
+  checkSend(id,role,cards=this.list()) {
+    const identity=taskIdentity(cards),found=identity.resolve(id);
+    identity.write(id);
+    if(!found.card)return null;
+    const c=found.card;c.role=effectiveCardRole(c,readLedger(this.home),identity);
     if(c.status!=='assigned'||c.role!==role||!c.scope.trim())throw new Error(`중앙 카드 발령 불가: ${c.key} (${c.status}, 담당 ${c.role??'미배정'})`);
     return c;
   }

@@ -1,3 +1,4 @@
+import {taskIdentity} from './task-identity.mjs';
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
@@ -64,10 +65,12 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
    reported:count(e=>e.kind==='watch-ai-call'&&e.reason==='reported'),timeouts:count(e=>e.kind==='watch-ai-call'&&e.reason==='timeout'),
    failed:count(e=>e.kind==='watch-ai-call'&&['call-failed','report-missing','report-incomplete','report-error'].includes(e.reason))};
  });
+ const cardList=center.cards??center.boards.flatMap(b=>b.cards);
+ const identity=taskIdentity(Array.isArray(cardList)?cardList:[]);
  for(const board of center.boards){
-  const ids=new Set(board.cards.map(c=>c.id));
+  const ids=new Set(board.cards.map(c=>identity.taskIdFor(c))),keys=new Set(board.cards.map(c=>c.key));
   const names=new Set(scope?.entries.filter(e=>ids.has(e.taskId)).map(e=>e.role)??[]);
-  const supervisors=new Set(supervisorScope?.entries.filter(e=>ids.has(e.taskId)||works.some(w=>w.key===e.workKey&&(w.board===board.name||w.executions.some(x=>ids.has(x.key.split('/').at(-1)))))).map(e=>e.role)??[]);
+  const supervisors=new Set(supervisorScope?.entries.filter(e=>ids.has(e.taskId)||works.some(w=>w.key===e.workKey&&(w.board===board.name||w.executions.some(x=>keys.has(x.key))))).map(e=>e.role)??[]);
   for(const role of supervisors)names.add(role);
   const roles=[...names].map(role=>({role,parent:parents?.get(role)??null,registered:parents?parents.has(role):null,
    recipient:parents?.has(role)&&center.runtimeKnown?hierarchyRecipient(role,parents,live):null,

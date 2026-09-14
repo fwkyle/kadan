@@ -12,7 +12,7 @@
 | 화면 봐줘 | `kadan read <역할> [--lines N]` |
 | 원장 보여줘 | `kadan log` |
 | 새 작업자 띄워 | `kadan start <판>-작업자 --profile worker --cmd "<실행기 명령>"` |
-| 카드 보내 | `kadan send <역할> --task <카드id> "<카드 경로>를 읽고 수행…마커 형식…"` |
+| 카드 보내 | `kadan send <역할> --task <저장소/카드ID> "<카드 경로>를 읽고 수행…마커 형식…"` |
 | 끝날 때까지 봐 | `kadan wait <역할> [--timeout 초] [--quiet 초]` |
 | 창에서 직접 볼게 | `kadan attach <역할>` |
 | 역할 멈춰 | `kadan stop <정확한 역할>` |
@@ -24,6 +24,8 @@
 
 새 역할은 [역할별 프로필 명령](worker-creation.md#새-역할의-프로필)을 따른다.
 기존 세션은 프로필을 넣기 위해 재시작하거나 소급 변경하지 않는다.
+
+카드 주소·짧은 ID 호환·DONE 연결은 [카드 주소 규칙](../../../docs/task-identity.md)을 따른다.
 
 ## 카드 파일 최소 항목
 

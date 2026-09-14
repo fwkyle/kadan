@@ -1,3 +1,4 @@
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRecipient } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 
@@ -294,8 +295,10 @@ export function assessResources(previousState, current, ncpu) {
 // 확정 기록이라 별도 경보 줄을 남길 이유가 없고, 경보가 없으면 해소 우편도 생기지 않는다.
 // 마지막 발령(또는 세션 시작) 이후의 done만 확정으로 본다 — 그보다 이전의 done은
 // 지난 실행의 기록이라 재실행의 새 완료를 덮으면 안 된다.
-export function filterConfirmedCompletions(alerts, entries) {
+export function filterConfirmedCompletions(alerts, entries, cards = null) {
   if (!alerts.some((alert) => alert.kind === "완료후보")) return alerts;
+  const identity=cards?taskIdentity(cards):null;
+  if(identity)entries=identity.project(entries).filter(e=>!taskConnectionError(e));
   const assignedAt = new Map();
   const startedAt = new Map();
   const dones = [];
@@ -315,14 +318,18 @@ export function filterConfirmedCompletions(alerts, entries) {
   }
   return alerts.filter((alert) => {
     if (alert.kind !== "완료후보") return true;
+    // 비교에만 별칭을 해석한다. 경보 ID와 화면의 원래 taskId는 유지한다.
+    const target=identity?.resolve(alert.taskId);
+    if(target&&!['resolved','unregistered'].includes(target.state))return true;
+    const taskId=target?.taskId??alert.taskId;
     const since =
-      assignedAt.get(`${alert.role} ${alert.taskId}`) ??
+      assignedAt.get(`${alert.role} ${taskId}`) ??
       startedAt.get(alert.session) ??
       0;
     const confirmed = dones.some(
       ({ entry, at }) =>
         entry.role === alert.role &&
-        entry.taskId === alert.taskId &&
+        entry.taskId === taskId &&
         (entry.result ?? "") === (alert.result ?? "") &&
         Number.isFinite(at) &&
         at >= since

@@ -1,3 +1,5 @@
+import {taskIdentity} from './task-identity.mjs';
+import {workEntries} from './handover-state.mjs';
 // 운영 흐름은 저장된 관계와 근거만 읽는다. 실행·업무·인수 상태를 쓰거나 추정하지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -54,11 +56,13 @@ export function operationsFlowIndex(home){
 
 function linkedRecords(home,work,cardHeads){
  const read=eventReader(home),keys=work.executions.map(x=>x.key);
- const ids=cardHeads.filter(c=>keys.includes(c.key)&&cardHeads.filter(x=>x.id===c.id).length===1).map(c=>c.id);
+ const identity=taskIdentity(cardHeads);
+ const ids=[...keys,...cardHeads.filter(c=>keys.includes(c.key)&&identity.resolve(c.id).key===c.key).map(c=>c.id)];
+ const eventIds=[...keys,...cardHeads.filter(c=>keys.includes(c.key)).map(c=>c.id)];
  const mailRefs=work.mailRefs;
  const seed=read("(json_extract(payload,'$.kind') IN ('send','done') AND (json_extract(payload,'$.workKey')=? OR json_extract(payload,'$.executionKey') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.taskId') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.mailId') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.digest') IN (SELECT value FROM json_each(?)))) OR (json_extract(payload,'$.kind')='handover' AND EXISTS(SELECT 1 FROM json_each(payload,'$.taskIds') WHERE value IN (SELECT value FROM json_each(?))))",
-  [work.key,JSON.stringify(keys),JSON.stringify(ids),JSON.stringify(mailRefs),JSON.stringify(mailRefs),JSON.stringify(ids)],
-  e=>['send','done'].includes(e.kind)&&(e.workKey===work.key||keys.includes(e.executionKey)||ids.includes(e.taskId)||mailRefs.includes(e.mailId)||mailRefs.includes(e.digest))||e.kind==='handover'&&e.taskIds?.some(id=>ids.includes(id)));
+  [work.key,JSON.stringify(keys),JSON.stringify(eventIds),JSON.stringify(mailRefs),JSON.stringify(mailRefs),JSON.stringify(ids)],
+  e=>['send','done'].includes(e.kind)&&(e.workKey===work.key||keys.includes(e.executionKey)||eventIds.includes(e.taskId)||mailRefs.includes(e.mailId)||mailRefs.includes(e.digest))||e.kind==='handover'&&e.taskIds?.some(id=>ids.includes(id)));
  const candidates=new Map(seed.map(e=>[e.seq,e]));
  const connected=e=>(!e.workKey||e.workKey===work.key)&&(!e.executionKey||keys.includes(e.executionKey));
  let letters=[];
@@ -83,9 +87,10 @@ function executionModel(home,link,cardHeads,records){
   if(!validKey(link.key))throw failure('실행 주소 확인 필요');
   const history=readStream(home,`cards/${link.key}/events.jsonl`);
   if(!history.length||history.some((c,i)=>c.key!==link.key||c.revision!==i+1))throw failure('실행 이력 확인 필요');
-  const card=history.at(-1),ambiguous=cardHeads.filter(c=>c.id===card.id).length!==1;
+  const card=history.at(-1),identity=taskIdentity(cardHeads);
+  const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
   const runs=new Map(),seen=new Set();
-  if(records&&!ambiguous)for(const e of records.events.filter(e=>e.taskId===card.id&&e.role)){
+  if(records&&!ambiguous)for(const e of workEntries([...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq),identity).filter(e=>e.taskConnection?.state==='resolved'&&e.executionKey===card.key&&e.role)){
    if(e.kind==='send')runs.set(e.role,null);
    else if(!seen.has(e.role)){seen.add(e.role);runs.set(e.role,e);}
   }
@@ -95,11 +100,12 @@ function executionModel(home,link,cardHeads,records){
  }catch(error){return {...base,error:error.message};}
 }
 
-function handoverModels(home,events,executions){
+function handoverModels(home,events,executions,cards){
+ const identity=taskIdentity(cards);
  return [...new Set(events.map(e=>e.handoverId))].map(id=>{
   const rows=events.filter(e=>e.handoverId===id),base=rows.find(e=>e.taskIds?.length)||rows[0],last=rows.at(-1),accepted=rows.find(e=>e.phase==='accepted');
   const value={id,from:base.from,to:base.to,phase:last.phase,at:last.t||null,ref:ref(last.seq),accepted:Boolean(accepted),acceptedAt:accepted?.t||null,acceptedRef:accepted?ref(accepted.seq):null,
-   executionKeys:executions.filter(c=>!c.ambiguous&&base.taskIds?.includes(c.id)).map(c=>c.key)};
+   executionKeys:executions.filter(c=>!c.ambiguous&&base.taskIds?.some(id=>identity.resolve(id).key===c.key)).map(c=>c.key)};
   try{
    const current=new Handover({home}).status(id);
    if(current.id!==id||current.from!==base.from||current.to!==base.to||!Array.isArray(current.taskIds)||JSON.stringify([...current.taskIds].sort())!==JSON.stringify([...base.taskIds].sort()))throw failure('인계 파일과 연결 근거가 다릅니다.');
@@ -124,7 +130,7 @@ export function operationsFlowDetail(home,key,{page=1}={}){
   const total=records?records.letters.length:null,pages=total===null?null:Math.max(1,Math.ceil(total/100));
   const selectedPage=Math.min(pages||1,Math.max(1,Number.parseInt(page,10)||1));
   return {collectedAt:stamp(),work:fields(work,['key','title','goal','scope','acceptance','owner','status','progress','nextAction','result','revision','at','by']),executions,
-   handovers:records?handoverModels(home,records.handovers,executions):null,
+   handovers:records?handoverModels(home,records.handovers,executions,cards):null,
    mail:{total,page:selectedPage,pages,items:records?records.letters.slice((selectedPage-1)*100,selectedPage*100).map(mailModel):[]},errors,
    history:work.history.slice(-30).reverse().map(h=>fields(h,['revision','at','by','action','status','note']))};
  });

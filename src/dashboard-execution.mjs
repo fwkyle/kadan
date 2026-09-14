@@ -19,7 +19,7 @@ export function executionHealth(card,now=Date.now()) {
  const result=(kind,label,reason)=>({healthKind:kind,healthLabel:label,healthReason:String(reason||'').slice(0,280),signalAt:signal?.at||null,signalLabel:signal?.label||'실행 신호 없음'});
  if(['done','cancelled','superseded','archived'].includes(state))return result('closed',stateText[state]||'종료','실행을 마친 카드입니다.');
  if(state==='hold')return result('hold','보류',card.statusReason||'보류 결정이 있어 진행 중 집계에서 제외합니다.');
- if(card.ambiguous)return result('attention','실행 확인 필요','같은 카드 ID가 겹쳐 실행을 구분할 수 없습니다.');
+ if(card.connectionErrors?.length||card.ambiguous)return result('attention','기록 연결 실패',card.connectionErrors?.map(x=>`${x.taskId}: ${x.reason}`).join(' · ')||'같은 카드 ID가 겹쳐 실행을 구분할 수 없습니다.');
  if(state==='failed')return result('attention','실패 확인 필요','실패 기록과 후속 조치를 확인하세요.');
  if(state==='orphaned'||run?.sessionState==='absent')return result('attention','세션 확인 필요','미완료 실행의 담당 세션이 확인되지 않습니다.');
  if(['draft','ready'].includes(state))return result('planned',stateText[state],'아직 실행 전입니다.');

@@ -1,3 +1,4 @@
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 // 수신 책임을 매번 상기시키되 새 권한이나 발령을 만들지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -86,12 +87,12 @@ function facts(home,entries,{taskId,mailContext={},infer=false}) {
   const unavailable=[];
   const read=(label,fn,fallback)=>{try{return fn();}catch(error){unavailable.push(`${label}: ${error.message}`);return fallback;}};
   const works=infer?read('업무 조회',()=>new WorkStore(home).list(),[]):[];
-  const cards=infer?read('카드 조회',()=>new CardStore(home).list(),[]):[];
+  const cards=read('카드 조회',()=>new CardStore(home).list(),[]),identity=taskIdentity(cards);
   const {workKey,executionKey}=mailContext;
   let card=executionKey ? read('연결 실행',()=>new CardStore(home).get(executionKey),null) : null;
   if (taskId) {
-    const matches=card?[]:read('발령 카드',()=>new CardStore(home).findTask(taskId),[]);
-    if (card && card.id !== taskId) throw failure('task와 실행 연결 불일치');
+    const found=identity.resolve(taskId,executionKey),matches=found.card?[found.card]:[];
+    if (card && identity.resolve(taskId,executionKey).key !== card.key) throw failure('task와 실행 연결 불일치');
     if (!card && matches.length===1) card=matches[0];
   }
   const linked=card ? works.filter(w=>w.executions.some(e=>e.key===card.key)) : [];
@@ -102,15 +103,15 @@ function facts(home,entries,{taskId,mailContext={},infer=false}) {
   const hierarchyPath=activeHierarchyPath(entries);
   const parents=hierarchyPath?read('현재 hierarchy',()=>parseHierarchy(JSON.parse(fs.readFileSync(hierarchyPath,'utf8'))),new Map()):new Map();
   if (entries.some(e=>e.broken)) unavailable.push('원장 손상: 현재 담당·완료 상태 모름');
-  const projected=workEntries(entries);
+  const projected=workEntries(entries,identity);
   const active=c=>{
     if (c.status!=='assigned' || entries.some(e=>e.broken)) return false;
-    const owner=effectiveCardRole(c,entries);
+    const owner=effectiveCardRole(c,entries,identity);
     // 동일 ID를 쓴 다른 역할의 완료는 이 담당의 완료가 아니다. 확정 인계는 투영한다.
-    const history=projected.filter(e=>e.taskId===c.id&&e.role===owner&&['send','done'].includes(e.kind));
+    const history=projected.filter(e=>!taskConnectionError(e)&&e.executionKey===c.key&&e.role===owner&&['send','done'].includes(e.kind));
     return history.at(-1)?.kind!=='done';
   };
-  return {works,cards,card,work,parents,hierarchyPath,active,unavailable};
+  return {works,cards,card,work,parents,hierarchyPath,active,unavailable,identity};
 }
 function explicitProfile({role,profile,entries,config}) {
   if (profile !== undefined) return {profile:validateRoleProfile(profile),source:'explicit'};
@@ -121,6 +122,7 @@ function explicitProfile({role,profile,entries,config}) {
   return null;
 }
 function selectProfile({role,entries,context}) {
+  const {identity}=context;
   if (context.works.some(w=>w.owner===role&&['open','hold'].includes(w.status))) return {profile:'conductor',source:'work-owner'};
   const phases=new Set();
   const addPhase=phase=>{
@@ -129,13 +131,13 @@ function selectProfile({role,entries,context}) {
   };
   const candidates=context.card ? [context.card] : context.cards;
   for (const c of candidates) {
-    if (!context.active(c) || effectiveCardRole(c,entries)!==role) continue;
+    if (!context.active(c) || effectiveCardRole(c,entries,identity)!==role) continue;
     addPhase(c.rallyStep);
   }
   for (const work of context.works.filter(w=>['open','hold'].includes(w.status))) {
     for (const link of work.executions) {
       const c=context.cards.find(c=>c.key===link.key);
-      if (!c || !candidates.some(candidate=>candidate.key===c.key) || !context.active(c) || effectiveCardRole(c,entries)!==role) continue;
+      if (!c || !candidates.some(candidate=>candidate.key===c.key) || !context.active(c) || effectiveCardRole(c,entries,identity)!==role) continue;
       addPhase(link.phase);
     }
   }
@@ -163,7 +165,7 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
       const selected=explicit||selectProfile({role,entries,context});
       if (!selected.profile) return {message,instructions:null,metadata:{status:'not-applied',reason:selected.source,...(context.unavailable.length?{unavailable:context.unavailable}: {})}};
       const templates=['common',selected.profile].map(name=>({name,...readFile(config.templates[name]||path.join(templateRoot,`${name}.md`),{template:true})}));
-      const {work,card,parents,active}=context;
+      const {work,card,parents,active,identity}=context;
       const lines=['최신 승인·카드·보류·인계 조건을 먼저 대조하라. 이 기본 지침은 새 권한·발령·업무 완료를 만들지 않는다.',
         `수신 역할: ${role}; 적용 프로필: ${selected.profile} (근거: ${selected.source}).`];
       if (context.unavailable.length) lines.push(`확인 불가(모름): ${context.unavailable.join('; ')}. 누락한 자료로 실행·완료를 판단하지 않는다.`);
@@ -171,9 +173,9 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
       if (reply && reply!=='@user') lines.push(`확인된 직속 회신 대상: ${reply} (근거: ${work?.owner===reply?'연결 업무 owner':'현재 hierarchy'}).`);
       if (work) lines.push(`연결 업무: ${work.key}; 상태: ${work.status}; 책임 owner: ${work.owner}; 확인 revision: ${work.revision}. 최신 확인: kadan work show ${work.key}.`);
       if (card) lines.push(`연결 실행: ${card.key}; 상태: ${card.status}; 확인 revision: ${card.revision}. 최신 확인: kadan card show ${card.key}.`);
-      const current=taskId&&card&&card.id===taskId&&active(card)&&effectiveCardRole(card,entries)===role&&(!work||work.status==='open');
+      const current=taskId&&card&&identity.resolve(taskId,mailContext?.executionKey).key===card.key&&active(card)&&effectiveCardRole(card,entries,identity)===role&&(!work||work.status==='open');
       if (current) {
-        lines.push(`현재 발령 ID: ${card.id}. 실제 착수 시 최신 kadan card show ${card.key}의 revision을 사용해 한 번 기록하라. 아래 명령의 ${card.revision}은 이 지침 생성 시점의 revision이므로 실행 전에 최신 값과 대조한다.\n\n`+
+        lines.push(`현재 발령 ID: ${identity.taskIdFor(card)}. 실제 착수 시 최신 kadan card show ${card.key}의 revision을 사용해 한 번 기록하라. 아래 명령의 ${card.revision}은 이 지침 생성 시점의 revision이므로 실행 전에 최신 값과 대조한다.\n\n`+
           `KADAN_ROLE=${role} kadan card progress ${card.key} --revision ${card.revision} --activity running --note "시작: 현재 실행 착수"\n\n`+
           '같은 시작을 이미 기록했으면 중복하지 않는다. 실제 대기 전환은 같은 card progress 명령에서 최신 revision과 --activity waiting, 대기 이유를 사용한다.');
         const auto=work?readStream(home,`automatic-review/${work.key}/events.jsonl`,{optional:true}).at(-1):null;

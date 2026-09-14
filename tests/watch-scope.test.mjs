@@ -27,7 +27,8 @@ test('활성 assigned 실행의 미완료 실제 send가 있는 작업자만 감
  }
  assert.equal(buildWatchScope([card],[],parents).sessions.size,0);
  assert.equal(buildWatchScope([card],[{...send,transport:'mailbox'}],parents).sessions.size,0);
- assert.equal(buildWatchScope([card],[send,{...send,kind:'done'},again,{...again,kind:'done'}],parents).sessions.size,0);
+ // 원장의 최초 done만 인정한다. 같은 ID 재발령 뒤 중복 done은 새 완료가 아니다.
+ assert.equal(buildWatchScope([card],[send,{...send,kind:'done'},again,{...again,kind:'done'}],parents).sessions.size,1);
 });
 test('완료 뒤 우편은 실행을 다시 열지 않고 다른 담당·실행의 done은 종료 근거가 아니다',()=>{
  const done={...send,kind:'done'};

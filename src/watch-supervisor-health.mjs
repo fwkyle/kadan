@@ -1,13 +1,15 @@
+import {taskIdentity} from './task-identity.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
 const errorPattern = /stream disconnected|stream error|idle timeout waiting for SSE|Error running remote compact task|Reconnecting\.\.\.|502 Bad Gateway|Provider unreachable|rate limit|No API key/iu;
 
 export function observationContext(role, observation, entries, cards, tasks) {
+  const identity=taskIdentity(cards);
   const ids = new Set(tasks.filter(e => e.role === role).map(e => e.taskId));
   return {
     process:{alive:observation.alive,pid:observation.pid,expectedPid:observation.expectedPid},
-    tasks:cards.filter(c => ids.has(c.id)).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,scope:c.scope?.slice(0,1000)})),
+    tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,scope:c.scope?.slice(0,1000)})),
     responsibilities:tasks.filter(e => e.role === role),
     recentMail:entries.filter(e => ['send','mail-read','done'].includes(e.kind) && (e.role === role || e.by === role))
       .slice(-12).map(e => ({at:e.t,kind:e.kind,from:e.by,to:e.role,taskId:e.taskId,replyTo:e.replyTo,preview:e.preview?.slice(0,400)})),

@@ -1,3 +1,4 @@
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
@@ -390,6 +391,7 @@ export async function runWatch({
     if (readCards && !ledgerError) {
       try {
         cards = readCards(); works = readWorks();
+        entries = taskIdentity(cards).project(entries).filter(e=>!taskConnectionError(e));
         scope = buildWatchScope(cards, entries, parents, works);
         supervisorScope = buildSupervisorScope(cards, entries, parents, works);
       }
@@ -446,8 +448,9 @@ export async function runWatch({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
-          const currentEntries=readEntries();
-          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks());
+          const currentCards=readCards();
+          const currentEntries=taskIdentity(currentCards).project(readEntries()).filter(e=>!taskConnectionError(e));
+          const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks());
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
           const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.role===seen.role);
@@ -472,7 +475,7 @@ export async function runWatch({
     // 경보가 아예 만들어지지 않아야 해소 우편도 없다.
     roleAssessment.alerts = observationError
       ? roleAssessment.alerts
-      : filterConfirmedCompletions(roleAssessment.alerts, entries);
+      : filterConfirmedCompletions(roleAssessment.alerts, entries, cards);
 
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session));
     let reportAlerts=[];

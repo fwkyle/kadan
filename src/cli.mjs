@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs';
 import {WatchAI} from './watch-ai.mjs';
 import {watchReportCommand,watchAILabel} from './watch-report.mjs';
 import {notifyUser} from './watch-system.mjs';
@@ -387,8 +388,8 @@ export function renderRound(group) {
   return "라운드 " + group.family + ": " + group.latestRound + "/18 (블록 " + Math.ceil(group.latestRound / 3) + "/6) — " + detail + (group.latestRound >= 9 ? " · 정체 확인" : "") + (group.latestRound >= 18 ? " · 상한 — 사용자 결정" : "");
 }
 
-export function buildTree(entries, aliveBySession = {}) {
-  entries = workEntries(entries).filter(e=>e?.transport!=='mailbox');
+export function buildTree(entries, aliveBySession = {}, cards = null) {
+  entries = workEntries(entries,cards).filter(e=>e?.transport!=='mailbox');
   const roles = new Map();
   const boards = new Map();
   const planned = new Map();
@@ -396,7 +397,7 @@ export function buildTree(entries, aliveBySession = {}) {
   for (const entry of entries) {
     const board = entry?.kind === "plan" ? entry.board : boardFromRole(entry?.role);
     if (!board || !entry.taskId) continue;
-    const key = `${board}\0${entry.taskId}`;
+    const key = `${board}\0${taskEventKey(entry)}`;
     if (entry.kind === "plan") {
       if (!boards.has(board)) boards.set(board, { name: board, roles: [], plannedCards: [], plannedAt: null, about: null, titleById: {} });
       const item = boards.get(board);
@@ -449,20 +450,22 @@ export function buildTree(entries, aliveBySession = {}) {
       if (!entry.taskId) {
         item.untrackedSends++;
       } else {
-        const card = item.cardsById.get(entry.taskId) || {
+        const card = item.cardsById.get(taskEventKey(entry)) || {
           taskId: entry.taskId,
+          ...(taskConnectionError(entry)?{connectionError:entry.taskConnection.reason}:{}),
         };
         card.sentAt = entry.t;
         card.by = ledgerBy(entry);
-        item.cardsById.set(entry.taskId, card);
+        item.cardsById.set(taskEventKey(entry), card);
       }
     } else if (entry.kind === "done" && entry.taskId) {
-      const card = item.cardsById.get(entry.taskId) || {
+      const card = item.cardsById.get(taskEventKey(entry)) || {
         taskId: entry.taskId,
+        ...(taskConnectionError(entry)?{connectionError:entry.taskConnection.reason}:{}),
       };
       card.doneAt = entry.t;
       card.result = entry.result;
-      item.cardsById.set(entry.taskId, card);
+      item.cardsById.set(taskEventKey(entry), card);
     }
   }
 
@@ -497,7 +500,9 @@ export function buildTree(entries, aliveBySession = {}) {
     }
 
     const cards = [...item.cardsById.values()].map((card) =>
-      card.doneAt
+      card.connectionError
+        ? {taskId:card.taskId,state:'connection-error',connectionError:card.connectionError,at:card.doneAt||card.sentAt,by:card.by??'모름'}
+        : card.doneAt
         ? {
             taskId: card.taskId,
             state: "done",
@@ -606,7 +611,9 @@ export function renderTree(tree) {
         const sender = `← ${card.by ?? "모름"}  `;
         const title = card.title ? `  — ${card.title}` : "";
         lines.push(
-          card.state === "done"
+          card.connectionError
+            ? `    ${label}${sender}기록 연결 실패: ${card.connectionError}${title}`
+            : card.state === "done"
             ? `    ${label}${sender}done ${card.result} (${shortTime(card.at)})${title}`
             : `    ${label}${sender}보냄 ${shortTime(card.at)} (완료 없음)${title}`
         );
@@ -652,6 +659,17 @@ export function guardedSend({
   assertWritable(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome());
   if (taskId != null && (typeof taskId !== "string" || !/^\S+$/.test(taskId))) {
     throw new Error("taskId는 공백 없는 한 덩어리여야 한다");
+  }
+  const originalTaskId=taskId;
+  if (taskId != null) {
+    const store=new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()),cards=store.list();
+    const card = store.checkSend(mailContext?.executionKey||taskId,role,cards);
+    if (card) {
+      if (taskId!==card.id&&taskId!==card.key) throw new Error('발령 대상과 실행 연결이 다릅니다');
+      mailContext={...mailContext,executionKey:card.key};
+      // 같은 이름의 카드는 전체 주소로 지문과 DONE을 구분한다.
+      taskId=taskIdentity(cards).taskIdFor(card);
+    }
   }
   // 파일/기록 읽기는 생존 검사 전에 끝낸다. 본문은 항상 앞에 그대로 둔다.
   let entries;
@@ -709,6 +727,7 @@ export function guardedSend({
     ...(composed.metadata.profile ? {roleProfile:composed.metadata.profile} : {}),
     by: resolveLedgerBy({ source, env }),
     ...(taskId != null ? { taskId } : {}),
+    ...(originalTaskId!==taskId?{rawTaskId:originalTaskId}:{}),
     bytes: Buffer.byteLength(message),
     digest: digest(message),
     ...(mailPreview(message) ? { preview: mailPreview(message) } : {}),
@@ -806,22 +825,27 @@ export function parsePlanCard(item) {
   return { taskId: item.slice(0, index), ...(title ? { title } : {}) };
 }
 
-export function planCards({ board, taskIds, about = null, env = process.env, record = appendLedger }) {
+export function planCards({ board, taskIds, about = null, env = process.env, record = appendLedger, cards = null }) {
   const valid = value => typeof value === "string" && /^\S+$/.test(value);
-  const cards = Array.isArray(taskIds) ? taskIds.map(parsePlanCard) : [];
-  if (!valid(board) || cards.length === 0 ||
-      !cards.every(card => valid(card.taskId)) ||
-      new Set(cards.map(card => card.taskId)).size !== cards.length) {
+  const planned = Array.isArray(taskIds) ? taskIds.map(parsePlanCard) : [];
+  if (!valid(board) || planned.length === 0 ||
+      !planned.every(card => valid(card.taskId)) ||
+      new Set(planned.map(card => card.taskId)).size !== planned.length) {
     const error = new Error("판과 카드 id는 공백 없는 문자열이어야 하며 카드 중복은 허용하지 않는다");
     error.exitCode = 2;
     throw error;
   }
+  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).list());
+  const resolved=planned.map(card=>({...card,...identity.write(card.taskId)}));
+  if(new Set(resolved.map(c=>c.executionKey||c.taskId)).size!==resolved.length)throw new Error('같은 카드의 별칭을 중복 계획할 수 없습니다');
   const boardAbout = typeof about === "string" && about.trim() ? about.trim() : null;
-  for (const { taskId, title } of cards) {
+  for (const { taskId, title, executionKey, rawTaskId } of resolved) {
     record({
       kind: "plan",
       board,
       taskId,
+      ...(executionKey?{executionKey}:{}),
+      ...(rawTaskId?{rawTaskId}:{}),
       ...(title ? { title } : {}),
       ...(boardAbout ? { about: boardAbout } : {}),
       by: resolveLedgerBy({ env }),
@@ -836,6 +860,7 @@ export function confirmDone({
   result,
   env = process.env,
   record = appendLedger,
+  cards = null,
 }) {
   const reject = (message) => {
     const error = new Error(message);
@@ -849,12 +874,15 @@ export function confirmDone({
   if (result !== "ok" && result !== "failed") {
     reject("결과는 ok 또는 failed여야 한다");
   }
+  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).list());
+  const address=identity.write(taskId);
+  entries=workEntries(entries,identity);
   if (
     entries.some(
       (entry) =>
         entry?.kind === "done" &&
         entry.role === role &&
-        entry.taskId === taskId
+        entry.taskId === address.taskId && !taskConnectionError(entry)
     )
   ) {
     reject(`이미 완료 확정됨: 역할=${role} 카드=${taskId}`);
@@ -875,7 +903,7 @@ export function confirmDone({
     role,
     session: start.session || session,
     by: resolveLedgerBy({ env }),
-    taskId,
+    ...address,
     result,
   };
   record(entry);
@@ -894,6 +922,7 @@ export function runWaitLoop({
   now = Date.now,
   record = appendLedger,
   snapshotHome = null,
+  cards = null,
   snapshotAt = () => new Date(),
 }) {
   const incomplete = (result) => {
@@ -929,13 +958,17 @@ export function runWaitLoop({
       findDoneMarkers(stripAnsi(accumulated))
     );
     if (fresh.length === 0) return null;
-    for (const marker of fresh) {
+    const identity=taskIdentity(cards ?? (snapshotHome?new CardStore(snapshotHome).list():[]));
+    const resolved=fresh.map(marker=>({...marker,...identity.write(marker.taskId)}));
+    for (const marker of resolved) {
       record({
         kind: "done",
         floor: selectedFloor.name,
         role,
         session,
         taskId: marker.taskId,
+        ...(marker.executionKey?{executionKey:marker.executionKey}:{}),
+        ...(marker.rawTaskId?{rawTaskId:marker.rawTaskId}:{}),
         result: marker.result,
       });
     }
@@ -1311,7 +1344,6 @@ function cmdSend(argv, flags) {
     die("사용법: kadan send <역할> [--task <카드id>] [--raw] <메시지...> (메시지 생략 시 표준 입력)");
   }
   if(role==='비서'&&flags.task)throw new Error('비서 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
-  if (flags.task) new CardStore(ledgerHome()).checkSend(flags.task, role);
   const session = sessionName(role);
   const argText = argv.slice(1).join(" ");
   const input = argText || fs.readFileSync(0, "utf8");
@@ -1340,7 +1372,7 @@ function cmdSend(argv, flags) {
     die(error.message, error.exitCode || 1);
   }
   console.log(
-    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${session} (${receipt.bytes}B, 지문 ${receipt.digest})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
+    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${session} (${receipt.bytes}B, 지문 ${receipt.digest})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
   );
 }
 
@@ -1573,7 +1605,7 @@ function cmdStop(argv) {
   if (!role) die("사용법: kadan stop <역할>");
   const session = sessionName(role);
   if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  const pending = pendingCardsFor(readLedger(), role);
+  const pending = pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).list()).project(readLedger()), role);
   if (pending.length > 0) {
     console.log(
       `미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`
@@ -1645,7 +1677,7 @@ function cmdTree(_argv, flags = {}) {
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
-  console.log(renderTree(buildTree(readLedger(), aliveBySession)));
+  console.log(renderTree(buildTree(readLedger(), aliveBySession,new CardStore(ledgerHome()).list())));
 }
 
 function loadWallSnapshot() {
@@ -1673,11 +1705,14 @@ function loadWallSnapshot() {
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
-  const tree=withWaitSnapshots(buildTree(entries,aliveBySession),ledgerHome());
+  let cards=[],cardError=null;
+  try {cards=new CardStore(ledgerHome()).list();}catch(error){cardError=error;}
+  const tree=withWaitSnapshots(buildTree(entries,aliveBySession,cards),ledgerHome());
   let center=null, centerError=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
-    center=buildCardCenter({cards:new CardStore(ledgerHome()).list(),entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
+    if(cardError)throw cardError;
+    center=buildCardCenter({cards,entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
     center=attachWatchOverview(center,entries,{works:new WorkStore(ledgerHome()).list(),profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
   } catch(error) { centerError=error.message; }
   return {
@@ -1915,8 +1950,9 @@ const COMMANDS = {
     observeDone:s=>{
       const observation=normalizeFloorRead(floor.read(sessionName(s.current.role)));
       if(observation.gap)throw new Error('완료 화면 출력 누락');
+      const identity=taskIdentity(new CardStore(ledgerHome()).list());
       const markers=diffDoneMarkers(findDoneMarkers(stripAnsi(s.baseline)),findDoneMarkers(stripAnsi(observation.text)))
-        .filter(m=>m.taskId===s.current.key.split('/')[1]);
+        .filter(m=>identity.resolve(m.taskId).key===s.current.key);
       if(new Set(markers.map(m=>m.result)).size>1)throw new Error('완료 마커 충돌');
       return markers[0]?.result||null;
     },

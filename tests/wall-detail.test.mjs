@@ -204,7 +204,7 @@ test('새 원문 경로 영수증: null은 footer 검색 금지, 명시 경로�
   assert.equal(files.explicit.path,'/repo/at-send/tasks/card.md');
   assert.equal(files.legacy.path,'/repo/latest/tasks/old.md');
   assert.deepEqual(reads,['/repo/at-send/tasks/card.md','/repo/latest/tasks/old.md']);
-  const html=renderWallHtml({tree:buildTree(entries,{}),entries,cardFiles:files,collectedAt:new Date().toISOString(),ledgerPath:'/tmp/isolated/ledger.jsonl',ledgerLines:entries.length});
+  const html=renderWallHtml({tree:buildTree(entries,{}),entries,cardFiles:files,collectedAt:'2026-09-12T00:05:00.000Z',ledgerPath:'/tmp/isolated/ledger.jsonl',ledgerLines:entries.length});
   const cardsSection=html.match(/<section class="page" id="cards">([\s\S]*?)<\/section>/)[1];
   assert.equal((cardsSection.match(/<summary>카드 본문 보기<\/summary>/g)||[]).length,2);
   assert.ok(!cardsSection.includes('카드 본문: /templates/common.md'));

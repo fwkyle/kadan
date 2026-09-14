@@ -46,7 +46,7 @@ kadan work execute 저장소/work-product-photos \
   --note '전체 업무 안의 생성 실행'
 ```
 
-`execute` 응답의 `executions[].key`가 새 실행 주소다. 이후 기존 `card update`에서 허용 범위·판·역할을 배정하고 `send --task`에는 **실행 ID**를 쓴다. 업무 ID를 발령하지 않는다. 화면의 ‘실행 초안 등록’도 등록만 하며 메시지를 전송하지 않는다. 실행 카드를 `assigned`로 바꿀 때는 티키타카 묶음 정보(`--rally-id --rally-title --rally-round --rally-step`)가 필수다. 업무 안의 실행은 업무와 같은 단계·라운드로 적고, 업무 밖 작은 작업은 1싸이클 구현 라운드로 시작한다. 관리·조율 카드는 묶음 없이 발령한다(2026-09-11 [kyle] 승인).
+`execute` 응답의 `executions[].key`가 새 실행 주소다. 이후 기존 `card update`에서 허용 범위·판·역할을 배정하고 `send --task`에는 **실행 카드 주소**를 쓴다([정식 주소와 짧은 ID 호환](task-identity.md)). 업무 ID를 발령하지 않는다. 화면의 ‘실행 초안 등록’도 등록만 하며 메시지를 전송하지 않는다. 실행 카드를 `assigned`로 바꿀 때는 티키타카 묶음 정보(`--rally-id --rally-title --rally-round --rally-step`)가 필수다. 업무 안의 실행은 업무와 같은 단계·라운드로 적고, 업무 밖 작은 작업은 1싸이클 구현 라운드로 시작한다. 관리·조율 카드는 묶음 없이 발령한다(2026-09-11 [kyle] 승인).
 
 ```sh
 kadan work update 저장소/work-product-photos --revision 2 \

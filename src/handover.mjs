@@ -1,3 +1,5 @@
+import {CardStore} from './card-store.mjs';
+import {taskIdentity} from './task-identity.mjs';
 import {storageMode,storagePath,assertWritable} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,7 +22,7 @@ export class Handover {
   entries() {
     const rows = this.readEntries();
     if (rows.some(e => e?.broken)) throw new Error('원장 손상: 인계 중단');
-    return rows;
+    return taskIdentity(new CardStore(this.home).list()).project(rows);
   }
   file(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('잘못된 인계 ID');
