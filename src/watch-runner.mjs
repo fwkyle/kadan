@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import {setTimeout as delay} from 'node:timers/promises';
 import {
   DISCONNECT_ALERT_KINDS,
+  assessQueuedInput,
   assessRoles,
   dedupAlerts,
   filterConfirmedCompletions,
@@ -64,19 +65,22 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null) {
   const observations = new Map();
   const screenAlerts = [];
   for (const [session, start] of starts) {
-    if (monitoredSessions && !monitoredSessions.has(session)) continue;
+    const monitored =
+      monitoredSessions == null || monitoredSessions.has(session);
     const live = liveBySession.get(session);
     const role = start.role ?? session.slice("kadan-".length);
     const expectedPid = start.panePid ?? start.rottiePid ?? null;
     let screen = null;
     let screenError = null;
+    // 카드가 없는 세션도 화면은 읽는다 — 큐에 쌓인 입력은 발령과 무관하게 생긴다.
+    // 다만 화면 읽기 실패 경보의 표면은 그대로 두어 감시 대상에만 올린다.
     if (live) {
       try {
         screen = readText(selectedFloor.read(session));
         if (screen == null) throw new Error("빈 응답");
       } catch (error) {
         screenError = error.message;
-        if (!/감독$/u.test(role)) {
+        if (monitored && !/감독$/u.test(role)) {
           screenAlerts.push({
             id: `screen-read:${session}`,
             kind: "모름",
@@ -160,6 +164,7 @@ const ALERT_LABELS = {
   "감시제외": "감시 대상에서 빠짐",
   "계열겹침": "같은 계열 역할 중복 실행",
   "시작보고누락": "시작 보고 누락",
+  "큐대기": "입력이 큐에 쌓여 대기",
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
@@ -200,6 +205,10 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "완료후보") {
     return `끝난 것 같음 ${alert.session} (${alert.taskId} ${alert.result}, 감독 확인 필요)`;
+  }
+  if (alert.kind === "큐대기") {
+    const minutes = Math.floor((alert.queuedMs ?? 0) / 60_000);
+    return `입력이 큐에 쌓여 대기 ${alert.session} (${minutes}분째 '${alert.line}' — 해당 창에서 Enter를 눌러 큐를 흘려내면 처리됨)`;
   }
   if (alert.kind === "정체") {
     const judged = alert.judgeVerdict ? `, 판정 ${alertLabel(alert.judgeVerdict)}` : "";
@@ -279,6 +288,12 @@ export function deliverResolution({
     recipients.delete(alert.id);
     return null;
   }
+  // 큐 대기가 풀린 소식도 소음이다(2026-09-15 [kyle]). 우편 없이 경보 줄만 닫는다.
+  if (alert.kind === "큐대기") {
+    recipients.delete(alert.id);
+    recordAlert(record, alert, null, false, true);
+    return null;
+  }
   const message = `[watch ${clockTime(cycleAt)}] ${resolvedBody(alert)}`;
   const recipient = recipients.get(alert.id) ?? null;
   recipients.delete(alert.id);
@@ -308,6 +323,8 @@ export async function runWatch({
   readWorks = () => [],
   startReportGraceMs = 5 * 60_000,
   stallAfterMs = 0,
+  // 큐 대기의 경보 기준은 정체와 같다 — 입력이 닿지 않은 채 같은 시간을 견딘 것이다.
+  queuedAfterMs = stallAfterMs,
   sendAlert,
   resume429 = null,
   record = () => {},
@@ -346,6 +363,7 @@ export async function runWatch({
   };
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429});
   let roleStates = new Map();
+  let queuedStates = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   const seeded = seedAlertState(readEntries());
   let activeAlerts = seeded.active;
@@ -434,6 +452,9 @@ export async function runWatch({
       }
       for (const session of workerChecks.keys()) if (!scope.sessions.has(session)) workerChecks.delete(session);
       activeAlerts = activeAlerts.filter(alert => {
+        // 큐 대기 경보의 수명은 scope가 아니라 화면 문구가 정한다 — 여기서
+        // 퇴역시키면 scope 밖 세션에서 매 주기 알림이 다시 울린다.
+        if (alert.kind === '큐대기') return true;
         if (!alert.session || observedSessions.has(alert.session)) return true;
         recordAlert(record, {...alert, kind:'감시제외'}, null, false, true);
         alertRecipients.delete(alert.id); deliveryFailures.delete(alert.id);
@@ -476,6 +497,18 @@ export async function runWatch({
     roleAssessment.alerts = observationError
       ? roleAssessment.alerts
       : filterConfirmedCompletions(roleAssessment.alerts, entries, cards);
+    // 큐 대기는 scope 밖 세션까지 포함한 전체 관측으로 본다 — 발령이 없어 감시
+    // 대상이 아니던 작업자가 큐가 쌓인 채 멈춘 사고(2026-09-15)를 잡기 위해서다.
+    const queuedAssessment = observationError
+      ? { states: queuedStates, alerts: [] }
+      : assessQueuedInput(
+          queuedStates,
+          roles.observations,
+          cycleAt - lastCycleAt,
+          intervalMs,
+          queuedAfterMs
+        );
+    queuedStates = queuedAssessment.states;
 
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session));
     let reportAlerts=[];
@@ -558,6 +591,7 @@ export async function runWatch({
       ...(hierarchyError ? [hierarchyError] : []),
       ...(aiStoreError ? [aiStoreError] : []),
       ...roleAlerts.filter(a=>!rateLimitRetry.alerts?.some(r=>r.session===a.session&&a.kind==='한도')),
+      ...queuedAssessment.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...reportAlerts,
       ...judgeFailures.values(),
