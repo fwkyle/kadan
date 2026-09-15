@@ -40,6 +40,26 @@ export function disconnectKind(line) {
 }
 const DONE_MARKER = /^\s*KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/u;
 
+// 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 문구.
+// 추측으로 넣지 않는다 — 2026-09-15 설치본 바이너리에서 확인한 문자열만 둔다.
+// - devin v3000.10.21: 입력란 자리표시자(설치 바이너리·체인지로그·당일 사고 화면에서 확인)
+// - codex 0.154.0: 큐에 쌓인 제출 목록의 헤더(설치 바이너리 문자열에서 확인)
+// codex의 "Press Tab to queue a message…" 안내는 작업 중 상시 노출될 수 있어
+// 경보 근거로 쓰지 않는다.
+const QUEUED_INPUT_PATTERNS = [
+  /press enter to send queued messages now/iu,
+  /messages to be submitted (?:at end of turn|after next tool call)/iu,
+];
+
+export function queuedInputLine(screenText) {
+  for (const line of lastScreenLines(screenText, 15)) {
+    if (QUEUED_INPUT_PATTERNS.some((pattern) => pattern.test(line))) {
+      return line.trim();
+    }
+  }
+  return null;
+}
+
 function lastScreenLines(screenText, count = 6) {
   if (typeof screenText !== "string") return [];
   const lines = screenText.split("\n");
@@ -236,6 +256,47 @@ export function assessRoles(
     }
   }
 
+  return { states, alerts };
+}
+
+// '입력이 큐에 쌓인 채 대기'는 카드 발령과 무관하게 생긴다 — 감시 대상(scope)에
+// 없는 세션도 같은 규칙으로 본다(2026-09-15 사고가 이 사각이었다). 문구가 기준
+// 시간 이상 계속 떠 있을 때만 경보로 올려, 정상적인 짧은 대기는 흘린다.
+export function assessQueuedInput(
+  previousStates,
+  currentObservations,
+  elapsedMs,
+  intervalMs,
+  queuedAfterMs
+) {
+  const states = new Map();
+  const alerts = [];
+  const slept = elapsedMs > intervalMs * 3;
+  for (const [session, current] of currentObservations) {
+    const line =
+      current?.alive === true && current.screen != null
+        ? queuedInputLine(current.screen)
+        : null;
+    const previous = previousStates.get(session);
+    // 첫 발견은 0부터 센다 — 지금 떠 있다는 사실만 확실하고, 언제 쌓였는지는 모른다.
+    // 잠든 공백(slept)도 정체 카운트와 같이 누적하지 않는다.
+    const queuedMs =
+      line == null || previous?.line !== line
+        ? 0
+        : (previous.queuedMs ?? 0) + (slept ? 0 : elapsedMs);
+    states.set(session, { queuedMs, line });
+    if (line != null && queuedMs >= queuedAfterMs) {
+      alerts.push({
+        id: `queued:${session}`,
+        kind: "큐대기",
+        level: "AMBER",
+        role: current.role,
+        session,
+        line,
+        queuedMs,
+      });
+    }
+  }
   return { states, alerts };
 }
 
