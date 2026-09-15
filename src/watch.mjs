@@ -40,20 +40,56 @@ export function disconnectKind(line) {
 }
 const DONE_MARKER = /^\s*KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/u;
 
-// 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 문구.
-// 추측으로 넣지 않는다 — 2026-09-15 설치본 바이너리에서 확인한 문자열만 둔다.
-// - devin v3000.10.21: 입력란 자리표시자(설치 바이너리·체인지로그·당일 사고 화면에서 확인)
-// - codex 0.154.0: 큐에 쌓인 제출 목록의 헤더(설치 바이너리 문자열에서 확인)
+// 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 표시.
+// 판단은 '입력줄 자리'의 구조로 한다 — 본문에 같은 글자가 있어도 걸리지 않게
+// (2026-09-15 결과 보고 문구가 본문에 남아 오탐을 낸 사고).
+// 추측으로 넣지 않는다 — 설치본과 실제 화면에서 확인한 형태만 둔다.
+// - devin v3000.10.21: ❭ 입력줄의 자리표시자가 이 문구로 바뀐다 — 세 자리표시자
+//   (Ask Devin…/Guide Devin…/Press Enter…)가 설치 바이너리에 나란히 있고,
+//   실제 화면에서도 `❭ Guide Devin while it works` 줄로 확인했다. 정상
+//   자리표시자가 함께 보이면 큐가 아니다 — 자리는 하나다.
+// - codex 0.154.0: 하단 pane에 '• ' 헤더 + '↳' 항목 블록으로 선다
+//   (pending_input_preview.rs 스냅샷·설치 바이너리 문자열에서 확인). codex는
+//   큐 상태에서도 composer(› Ask Codex…)가 남으므로 프롬프트 공존으로 걸지 않고,
+//   '• ' 헤더 + '↳' 항목 구조가 입력 영역 근거다.
 // codex의 "Press Tab to queue a message…" 안내는 작업 중 상시 노출될 수 있어
 // 경보 근거로 쓰지 않는다.
-const QUEUED_INPUT_PATTERNS = [
-  /press enter to send queued messages now/iu,
-  /messages to be submitted (?:at end of turn|after next tool call)/iu,
-];
+const DEVIN_QUEUED = /press enter to send queued messages now/iu;
+const DEVIN_INPUT_LINE = /^\s*❭/u;
+const DEVIN_NORMAL_PROMPT = /❭\s*(?:Ask Devin|Guide Devin)/u;
+const CODEX_QUEUED_HEADER =
+  /^\s*•\s*(?:messages to be submitted (?:at end of turn|after next tool call)|queued follow-up inputs)/iu;
+const CODEX_QUEUED_ITEM = /^\s*↳/u;
+const BOTTOM_PANE_LINES = 8;
 
 export function queuedInputLine(screenText) {
-  for (const line of lastScreenLines(screenText, 15)) {
-    if (QUEUED_INPUT_PATTERNS.some((pattern) => pattern.test(line))) {
+  if (typeof screenText !== "string") return null;
+  const lines = screenText.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  const devinPromptVisible = lines.some((line) =>
+    DEVIN_NORMAL_PROMPT.test(line)
+  );
+  // 화면 어딘가에 ❭ 줄이 있어야 devin TUI다 — 다른 실행기·셸 출력의 문구 인용을
+  // 보조 경로로 걸러 오탐을 내지 않는다.
+  const devinSession = lines.some((line) => DEVIN_INPUT_LINE.test(line));
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (devinSession && !devinPromptVisible) {
+      // devin: ❭ 입력줄 자리표시자가 큐 문구로 바뀐 상태.
+      if (DEVIN_INPUT_LINE.test(line) && DEVIN_QUEUED.test(line)) {
+        return line.trim();
+      }
+      // devin 보조: 표시 형태가 달라도 문구가 맨 아래 입력 영역에 있고 정상
+      // 프롬프트가 없으면 대기로 본다.
+      if (DEVIN_QUEUED.test(line) && i >= lines.length - BOTTOM_PANE_LINES) {
+        return line.trim();
+      }
+    }
+    // codex: '• ' 큐 헤더에 '↳' 항목이 따라붙는 하단 pane 블록.
+    if (
+      CODEX_QUEUED_HEADER.test(line) &&
+      lines.slice(i + 1, i + 9).some((item) => CODEX_QUEUED_ITEM.test(item))
+    ) {
       return line.trim();
     }
   }

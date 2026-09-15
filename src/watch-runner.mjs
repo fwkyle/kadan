@@ -208,7 +208,10 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "큐대기") {
     const minutes = Math.floor((alert.queuedMs ?? 0) / 60_000);
-    return `입력이 큐에 쌓여 대기 ${alert.session} (${minutes}분째 '${alert.line}' — 해당 창에서 Enter를 눌러 큐를 흘려내면 처리됨)`;
+    const action = /press enter/iu.test(alert.line ?? "")
+      ? "해당 창에서 Enter를 눌러 큐를 흘려내면 처리됨"
+      : "턴 종료·다음 도구 호출 때 자동 제출 예정 — 계속 쌓여 있으면 해당 창 확인";
+    return `입력이 큐에 쌓여 대기 ${alert.session} (${minutes}분째 '${alert.line}' — ${action})`;
   }
   if (alert.kind === "정체") {
     const judged = alert.judgeVerdict ? `, 판정 ${alertLabel(alert.judgeVerdict)}` : "";
