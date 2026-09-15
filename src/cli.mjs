@@ -18,6 +18,7 @@ import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
 import {WorkStore} from './work-store.mjs';
 import {resolveWorkMail} from './work-mail.mjs';
+import {looksLikeWorkDirective} from './work-directive.mjs';
 import { buildCardCenter } from "./card-center.mjs";
 import { Handover } from "./handover.mjs";
 import { HandoverRunner } from "./handover-runner.mjs";
@@ -1341,7 +1342,7 @@ function cmdStart(argv, flags) {
 function cmdSend(argv, flags) {
   const role = argv[0];
   if (!role) {
-    die("사용법: kadan send <역할> [--task <카드id>] [--raw] <메시지...> (메시지 생략 시 표준 입력)");
+    die("사용법: kadan send <역할> [--task <카드id>] [--raw] [--force-no-card] <메시지...> (메시지 생략 시 표준 입력)");
   }
   if(role==='비서'&&flags.task)throw new Error('비서 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
   const session = sessionName(role);
@@ -1353,6 +1354,18 @@ function cmdSend(argv, flags) {
     if (flags.raw) throw new Error('비서 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
     const receipt=new SecretaryMailbox(ledgerHome()).send({by:resolveLedgerBy({env:process.env}),message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution});
     console.log(JSON.stringify(receipt));return;
+  }
+
+  // 카드 없는 작업 지시 가드 (2026-09-15 card-kadan-send-no-card-guard): --task 없이
+  // 작업 지시로 보이는 말을 본내면 그 작업자는 AI 감시 밖으로 빠진다. 감독 계열을
+  // 향한 보고는 지시가 아니므로 걸지 않고, 깨우기·확인은 지시 어미가 없어 통과한다.
+  if (flags.task == null && !flags["force-no-card"] && !/감독/u.test(role) && looksLikeWorkDirective(message)) {
+    die(
+      "이 메시지는 작업 지시로 보입니다. 카드 없이 본내면 이 작업자는 AI 감시 대상에서 제외됩니다.\n" +
+        "카드를 만들고 --task로 본내세요.\n" +
+        "아니라면 --force-no-card로 본내세요 (깨우기·확인만).",
+      2
+    );
   }
 
   let receipt;
@@ -1857,7 +1870,7 @@ export function parseFlags(argv) {
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended") {
+    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card") {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
