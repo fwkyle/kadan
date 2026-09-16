@@ -20,7 +20,7 @@ async function run(cycles, { failFirst = false } = {}) {
   };
   os.loadavg = () => [0, 0, 0];
   try {
-    await assert.rejects(() => runWatch({
+    await assert.rejects(() => runWatch({completionGraceMs:0,
       floor: { list: () => cycles[cycle] === null ? [] : [{ session, pid: 1 }], read: () => cycles[cycle] },
       readEntries: () => [{ kind: "start", role: "a-작업자", session, panePid: 1, t: "2026-09-05T00:00:00Z" }],
       sendAlert: (role, message) => {

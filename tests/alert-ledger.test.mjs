@@ -16,7 +16,7 @@ async function exercise({ failure, superFails = false, stdout = false, recordFai
   os.loadavg = () => [0, 0, 0];
   console.error = line => errors.push(line);
   try {
-    await assert.rejects(() => runWatch({
+    await assert.rejects(() => runWatch({completionGraceMs:0,
       floor: { list: () => cycle === 1 || cycle === 2 ? [] : [{ session, pid: 1 }], read: () => screen },
       readEntries: () => [start],
       record: entry => {
