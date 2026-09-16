@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { spawnSync } from 'node:child_process';
+import {readSystemLedger,readMailLedger} from '../src/ledger.mjs';
 import { linkSkills, runInit, runUp, waitForSettled, readConfig, FIRST_PROMPT, SECRETARY_ROLE, DASHBOARD_ROLE } from '../src/quickstart.mjs';
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -119,8 +120,11 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
   assert.equal(status, 200);
   const again = spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden'], { env, encoding: 'utf8', timeout: 60000 });
   assert.match(again.stdout, /비서 이미 살아 있음/); assert.match(again.stdout, /대시보드 이미 살아 있음/);
-  const starts = fs.readFileSync(path.join(home, 'ledger.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"kind":"start"'));
+  const starts = readSystemLedger(home).filter(e=>e.kind==='start');
   assert.equal(starts.length, 2, '두 번째 up은 start를 다시 기록하지 않는다');
+  assert.deepEqual(starts.map(e=>e.role),[SECRETARY_ROLE,DASHBOARD_ROLE]);
+  const sends=readMailLedger(home).filter(e=>e.kind==='send');assert.equal(sends.length,1,'재실행은 첫 지문을 중복 전달하지 않는다');
+  assert.equal(sends[0].role,SECRETARY_ROLE);assert.equal(sends[0].floor,'tmux');assert.notEqual(sends[0].transport,'mailbox');
  } finally {
   spawnSync('tmux', ['-L', socket, 'kill-server']);
  }

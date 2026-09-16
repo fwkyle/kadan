@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {spawnSync,spawn} from 'node:child_process';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
-import {readLedger,readMailBody} from '../src/ledger.mjs';
+import {readLedger,readMailLedger,readTaskLedger,readMailBody} from '../src/ledger.mjs';
 import {digest,findDoneMarkers} from '../src/cli.mjs';
 
 const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
@@ -22,6 +23,7 @@ test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→�
  fs.writeFileSync(receiver,`
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import readline from 'node:readline';
 import {spawnSync} from 'node:child_process';
 const home=process.env.KADAN_HOME,role=process.env.KADAN_ROLE;let count=0,pending=null;
@@ -61,7 +63,21 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
   assert.ok(results.some(s=>s.status==='pass'));
   const before=readLedger(home).filter(e=>e.kind==='send').length;run('work','auto-step','ar-test/work');assert.equal(readLedger(home).filter(e=>e.kind==='send').length,before);
   const work=JSON.parse(run('work','show','ar-test/work'));assert.equal(work.status,'open');assert.equal(work.executions.length,4);
-  const entries=readLedger(home),sends=entries.filter(e=>e.kind==='send');
+  const entries=readLedger(home),mail=readMailLedger(home),tasks=readTaskLedger(home);
+  const sends=mail.filter(e=>e.kind==='send'&&e.transport!=='mailbox'),completions=mail.filter(e=>e.kind==='send'&&e.completion);
+  assert.equal(mail.filter(e=>e.kind==='send').length,9);assert.equal(completions.length,4);
+  assert.equal(tasks.filter(e=>e.kind==='dispatch').length,4);
+  for(const dispatch of tasks.filter(e=>e.kind==='dispatch')){
+   const stored=completions.filter(e=>e.replyTo===dispatch.mailId);assert.equal(stored.length,1);
+   const completion=stored[0],done=tasks.find(e=>e.kind==='done'&&e.completionMailId===completion.mailId);
+   assert.ok(done);assert.equal(completion.by,dispatch.role);assert.equal(completion.role,dispatch.by);
+   assert.equal(completion.transport,'mailbox');assert.equal(completion.systemGenerated,'task-completion');
+   assert.equal(completion.taskId,undefined);assert.equal(completion.executionKey,dispatch.executionKey);
+   assert.equal(completion.workKey,dispatch.workKey);assert.equal(completion.result,done.result);
+   const body=readMailBody(completion.digest,home);assert.equal(typeof body,'string');
+   assert.equal(completion.bytes,Buffer.byteLength(body));assert.equal(completion.digest,createHash('sha256').update(body).digest('hex'));
+   assert.ok(!fs.readFileSync(path.join(home,completion.role+'.received'),'utf8').includes(body+'\n'),'저장 완료 통지는 감독 화면에 주입하지 않는다');
+  }
   assert.deepEqual(sends.map(e=>e.role),[roles[0],roles[1],roles[0],roles[1],roles[2]]);
   assert.deepEqual(sends.map(e=>e.roleProfile),['worker','reviewer','worker','reviewer','conductor']);
   for(const e of sends){

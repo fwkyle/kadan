@@ -78,3 +78,15 @@ test('watch cycle schedules/resumes with fresh ownership and stops when card bec
  assert(records.some(e=>e.kind==='rate-limit-retry'&&e.action==='cancelled'));
  assert(!alerts.some(([,message])=>message.includes('한도')));
 });
+
+
+test('mailbox completion is stored mail, not fresh terminal input for a pending 429 resume',()=>{
+ const f=fixture();f.tick();
+ f.entries.push({kind:'send',role:'worker',by:'reviewer',transport:'mailbox',completion:true,
+  replyFinal:true,systemGenerated:'task-completion',executionKey:'repo/review',t:new Date(1000).toISOString()});
+ f.setTime(30000);f.tick();
+ assert.equal(f.entries.filter(e=>e.action==='scheduled').length,1);
+ assert.equal(f.entries.filter(e=>e.action==='cancelled').length,0);
+ f.setTime(60000);f.tick();assert.equal(f.sent.length,1);
+ assert.equal(f.entries.filter(e=>e.action==='scheduled').length,1);
+});

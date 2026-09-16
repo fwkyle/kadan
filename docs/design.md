@@ -1,6 +1,6 @@
 # kadan 설계 원칙과 잠긴 규칙
 
-이 문서는 카단이 왜 이렇게 생겼는지, 무엇을 바꾸지 않는지, 원장에 무엇을 어떻게 적는지의 원본이다. 기여 절차와 코드 변경 규칙은 `CONTRIBUTING.md`에 있고, 그 이유가 여기 있다.
+이 문서는 카단이 왜 이렇게 생겼는지와 무엇을 바꾸지 않는지의 원본이다. 구성요소와 원장의 관계는 [구조 기준](architecture.md), 신규 사건의 저장·연결은 [원장 계약](mail-task-ledgers.md)을 따른다. 기여 절차와 코드 변경 규칙은 `CONTRIBUTING.md`에 있고, 그 이유가 여기 있다.
 
 카드 주소·과거 실행 연결·DONE 호환은 [카드 주소 규칙](task-identity.md)을 따른다.
 
@@ -69,6 +69,7 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
 
 1. **원장은 append-only다.** `~/.kadan`(또는 `$KADAN_HOME`)의 `storage.json`으로 저장 방식을 선택한다.
    현재 원본은 `kadan.sqlite`의 events이고 기존 JSONL은 동결 보존한다. 사건 수정·삭제·재정렬 금지.
+   신규 사건은 같은 SQLite 안의 작업(tasks)·우편(mail)·시스템(system) 스트림으로 나눈다. 작업 영역은 기존 works/cards 상태 이력도 포함한다. 기존 ledger 이력은 불변이며 통합 조회는 호환용이다. [원장 계약](mail-task-ledgers.md)을 따른다.
    직접 JSONL을 쓰지 않고 CLI/저장 모듈을 사용한다. 전환·복구는 `docs/sqlite-storage.md`를 따른다.
 2. **밀어넣기 직전에 생존을 확인한다.** `send` 전에 `has-session`과 pane PID 대조를
    매번 수행한다. 세션이 없거나 PID가 다르면 보내지 않고 보고한다(실패 닫힘).
@@ -159,7 +160,7 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
 
 ### 원장 기록 형식
 
-모든 기록은 뒤에만 추가하는(append-only) JSON 사건이며, `kind`는 다음 여섯 가지다.
+모든 기록은 뒤에만 추가하는(append-only) JSON 사건이다. 아래는 기존 통합 조회의 대표 사건이며 전체 종류 목록이 아니다. 신규 저장의 `dispatch`·우편 읽음·질문 취소와 세 영역의 관계는 [원장 계약](mail-task-ledgers.md)을 따른다.
 
 - `plan`: `role` 없이 `board`, `taskId`, `by`를 기록한다. 감독이 판을 열 때 카드
   목록을 미리 적는다. 남은 일은 distinct(plan ∪ send) − distinct(done)이다.

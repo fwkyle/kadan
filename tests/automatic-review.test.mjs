@@ -7,7 +7,7 @@ import {AutomaticReview} from '../src/automatic-review.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {createDatabase,writeStorageMarker,appendStream} from '../src/storage.mjs';
-import {appendLedger,readLedger,saveMailBody} from '../src/ledger.mjs';
+import {appendLedger,readLedger,readMailLedger,readTaskLedger,readMailBody,saveMailBody} from '../src/ledger.mjs';
 import {guardedSend} from '../src/cli.mjs';
 
 function fixture(){
@@ -46,7 +46,23 @@ test('구현→독립검수→동일 작업자 수정→조기 PASS, 새 실행I
  s=f.finish('implemented');assert.equal(s.phase,'review');s=f.finish('pass');
  assert.equal(s.status,'pass');assert.equal(s.notification.status,'sent');assert.equal(f.works.get(f.key).status,'open');
  for(let i=0;i<3;i++)f.auto.step(f.key);
- const sends=readLedger(f.home).filter(e=>e.kind==='send');assert.equal(sends.length,5);assert.equal(sends.filter(e=>!e.taskId).length,1);
+ const mail=readMailLedger(f.home),sends=mail.filter(e=>e.kind==='send'&&e.transport!=='mailbox');
+ const completions=mail.filter(e=>e.kind==='send'&&e.completion),tasks=readTaskLedger(f.home);
+ assert.equal(sends.length,5);assert.equal(sends.filter(e=>!e.taskId).length,1);
+ assert.equal(f.sent.length,5,'실제 화면 전달은 발령 4건과 감독 최종 통지 1건이다');
+ assert.equal(f.sent.filter(e=>e.name==='kadan-test-super').length,1);
+ assert.equal(tasks.filter(e=>e.kind==='dispatch').length,4);
+ assert.equal(mail.filter(e=>e.kind==='send').length,9);assert.equal(completions.length,4);
+ for(const dispatch of tasks.filter(e=>e.kind==='dispatch')){
+  const stored=completions.filter(e=>e.replyTo===dispatch.mailId);assert.equal(stored.length,1);
+  const completion=stored[0],done=tasks.find(e=>e.kind==='done'&&e.completionMailId===completion.mailId);
+  assert.ok(done);assert.equal(completion.by,dispatch.role);assert.equal(completion.role,dispatch.by);
+  assert.equal(completion.transport,'mailbox');assert.equal(completion.systemGenerated,'task-completion');
+  assert.equal(completion.taskId,undefined);assert.equal(completion.executionKey,dispatch.executionKey);
+  assert.equal(completion.workKey,dispatch.workKey);assert.equal(completion.result,done.result);
+  const body=readMailBody(completion.digest,f.home);assert.equal(typeof body,'string');
+  assert.ok(f.sent.every(e=>e.message!==body),'저장 완료 통지는 화면에 주입하지 않는다');
+ }
  assert.deepEqual(sends.map(e=>e.roleProfile),['worker','reviewer','worker','reviewer','conductor']);
  assert.ok(f.sent.slice(0,4).every(x=>x.message.includes('완료 방식: 자동.')));
  assert.equal(new Set(sends.filter(e=>e.taskId).map(e=>e.taskId)).size,4);

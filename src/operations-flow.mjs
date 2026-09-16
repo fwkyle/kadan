@@ -1,3 +1,5 @@
+import {readLedgerState} from './ledger-domains.mjs';
+import {classifyLedgerEntry} from './ledger.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {workEntries} from './handover-state.mjs';
 // 운영 흐름은 저장된 관계와 근거만 읽는다. 실행·업무·인수 상태를 쓰거나 추정하지 않는다.
@@ -11,7 +13,7 @@ import {Handover} from './handover.mjs';
 const validKey=value=>typeof value==='string'&&/^[\p{L}\p{N}_-]+\/[\p{L}\p{N}_-]+$/u.test(value);
 const failure=(message,status=503)=>Object.assign(new Error(message),{status});
 const fields=(value,names)=>Object.fromEntries(names.map(name=>[name,value[name]??null]));
-const ref=seq=>`ledger:${seq}`;
+const ref=entry=>entry.ledgerRef;
 const stamp=()=>new Date().toISOString();
 
 // headsは現在値だけ。カード本文や他業務の変更履歴を読み込まない。
@@ -34,13 +36,12 @@ function heads(home,kind){
 }
 
 function eventReader(home){
- let legacy;
- return (where,args,predicate)=>{
-  if(storageMode(home)==='sqlite')return transaction(home,db=>db.prepare(`SELECT seq,payload FROM events WHERE stream='ledger.jsonl' AND (${where}) ORDER BY seq`).all(...args).map(r=>({...JSON.parse(r.payload),seq:r.seq})),{readOnly:true});
-  legacy??=readStream(home,'ledger.jsonl',{optional:true}).map((e,i)=>({...e,seq:i+1}));
-  if(legacy.some(e=>e.broken||!e.kind))throw failure('원장 손상: 관련 기록을 확인할 수 없습니다.');
-  return legacy.filter(predicate);
- };
+ const state=readLedgerState(home);
+ // 주소는 출처와 저장 순번을 함께 보존한다. 날짜나 조회 위치를 원장 주소로 쓰지 않는다.
+ const rows=[...state.legacy.map((entry,i)=>({...entry,seq:i+1,ledgerRef:`ledger:legacy:${i+1}`})),
+  ...state.ordered.filter(entry=>entry.kind!=='dispatch').map(entry=>({...entry,seq:state.legacy.length+entry._ledgerOrder,ledgerRef:`ledger:new:${entry._ledgerOrder}`}))];
+ if(rows.some(entry=>entry.broken||!entry.kind))throw failure('원장 손상: 관련 기록을 확인할 수 없습니다.');
+ return predicate=>rows.filter(predicate);
 }
 
 function workAt(home,key){
@@ -60,9 +61,7 @@ function linkedRecords(home,work,cardHeads){
  const ids=[...keys,...cardHeads.filter(c=>keys.includes(c.key)&&identity.resolve(c.id).key===c.key).map(c=>c.id)];
  const eventIds=[...keys,...cardHeads.filter(c=>keys.includes(c.key)).map(c=>c.id)];
  const mailRefs=work.mailRefs;
- const seed=read("(json_extract(payload,'$.kind') IN ('send','done') AND (json_extract(payload,'$.workKey')=? OR json_extract(payload,'$.executionKey') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.taskId') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.mailId') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.digest') IN (SELECT value FROM json_each(?)))) OR (json_extract(payload,'$.kind')='handover' AND EXISTS(SELECT 1 FROM json_each(payload,'$.taskIds') WHERE value IN (SELECT value FROM json_each(?))))",
-  [work.key,JSON.stringify(keys),JSON.stringify(eventIds),JSON.stringify(mailRefs),JSON.stringify(mailRefs),JSON.stringify(ids)],
-  e=>['send','done'].includes(e.kind)&&(e.workKey===work.key||keys.includes(e.executionKey)||eventIds.includes(e.taskId)||mailRefs.includes(e.mailId)||mailRefs.includes(e.digest))||e.kind==='handover'&&e.taskIds?.some(id=>ids.includes(id)));
+ const seed=read(e=>['send','done'].includes(e.kind)&&(e.workKey===work.key||keys.includes(e.executionKey)||eventIds.includes(e.taskId)||mailRefs.includes(e.mailId)||mailRefs.includes(e.digest))||e.kind==='handover'&&e.taskIds?.some(id=>ids.includes(id)));
  const candidates=new Map(seed.map(e=>[e.seq,e]));
  const connected=e=>(!e.workKey||e.workKey===work.key)&&(!e.executionKey||keys.includes(e.executionKey));
  let letters=[];
@@ -71,13 +70,12 @@ function linkedRecords(home,work,cardHeads){
   const safeRefs=mailRefs.filter(id=>entries.filter(e=>e.kind==='send'&&(e.mailId===id||e.digest===id)).length===1);
   letters=workLetters({...work,mailRefs:safeRefs},entries,cardHeads).filter(connected);
   const refs=[...new Set(letters.flatMap(e=>[e.mailId,e.digest]).filter(Boolean))];
-  const extra=refs.length?read("json_extract(payload,'$.kind')='send' AND (json_extract(payload,'$.replyTo') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.mailId') IN (SELECT value FROM json_each(?)) OR json_extract(payload,'$.digest') IN (SELECT value FROM json_each(?)))",
-   [JSON.stringify(refs),JSON.stringify(refs),JSON.stringify(refs)],e=>e.kind==='send'&&(refs.includes(e.replyTo)||refs.includes(e.mailId)||refs.includes(e.digest))):[];
+  const extra=refs.length?read(e=>e.kind==='send'&&(refs.includes(e.replyTo)||refs.includes(e.mailId)||refs.includes(e.digest))||['mail-read','mail-cancel'].includes(e.kind)&&refs.includes(e.mailId)):[];
   const before=candidates.size;for(const e of extra)candidates.set(e.seq,e);
   if(candidates.size===before)break;
  }
  const handoverIds=[...new Set(seed.filter(e=>e.kind==='handover').map(e=>e.handoverId))];
- const handovers=handoverIds.length?read("json_extract(payload,'$.kind')='handover' AND json_extract(payload,'$.handoverId') IN (SELECT value FROM json_each(?))",[JSON.stringify(handoverIds)],e=>e.kind==='handover'&&handoverIds.includes(e.handoverId)):[];
+ const handovers=handoverIds.length?read(e=>e.kind==='handover'&&handoverIds.includes(e.handoverId)):[];
  return {events:seed.filter(e=>['send','done'].includes(e.kind)&&connected(e)),letters,handovers,ids};
 }
 
@@ -91,10 +89,10 @@ function executionModel(home,link,cardHeads,records){
   const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
   const runs=new Map(),seen=new Set();
   if(records&&!ambiguous)for(const e of workEntries([...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq),identity).filter(e=>e.taskConnection?.state==='resolved'&&e.executionKey===card.key&&e.role)){
-   if(e.kind==='send')runs.set(e.role,null);
-   else if(!seen.has(e.role)){seen.add(e.role);runs.set(e.role,e);}
+   if(e.kind==='send'&&classifyLedgerEntry(e).dispatch)runs.set(e.role,null);
+   else if(e.kind==='done'&&!seen.has(e.role)){seen.add(e.role);runs.set(e.role,e);}
   }
-  const signals=[...runs.values()].filter(Boolean).map(e=>({ref:ref(e.seq),role:e.role,by:e.by||null,result:e.result,at:e.t||null}));
+  const signals=[...runs.values()].filter(Boolean).map(e=>({ref:ref(e),role:e.role,by:e.by||null,result:e.result,at:e.t||null}));
   return {...base,...fields(card,['title','role','status','id','revision','at']),ambiguous,signals,
    reportState:!records||ambiguous?'unknown':signals.some(e=>e.result==='failed')?'failed':signals.length&&[...runs.values()].every(e=>e?.result==='ok')?'ok':signals.length?'partial':'unreported'};
  }catch(error){return {...base,error:error.message};}
@@ -104,7 +102,7 @@ function handoverModels(home,events,executions,cards){
  const identity=taskIdentity(cards);
  return [...new Set(events.map(e=>e.handoverId))].map(id=>{
   const rows=events.filter(e=>e.handoverId===id),base=rows.find(e=>e.taskIds?.length)||rows[0],last=rows.at(-1),accepted=rows.find(e=>e.phase==='accepted');
-  const value={id,from:base.from,to:base.to,phase:last.phase,at:last.t||null,ref:ref(last.seq),accepted:Boolean(accepted),acceptedAt:accepted?.t||null,acceptedRef:accepted?ref(accepted.seq):null,
+  const value={id,from:base.from,to:base.to,phase:last.phase,at:last.t||null,ref:ref(last),accepted:Boolean(accepted),acceptedAt:accepted?.t||null,acceptedRef:accepted?ref(accepted):null,
    executionKeys:executions.filter(c=>!c.ambiguous&&base.taskIds?.some(id=>identity.resolve(id).key===c.key)).map(c=>c.key)};
   try{
    const current=new Handover({home}).status(id);
@@ -119,7 +117,7 @@ function handoverModels(home,events,executions,cards){
  });
 }
 
-const mailModel=e=>({ref:ref(e.seq),mailId:e.mailId||null,at:e.t||null,by:e.by||null,to:e.role||null,executionKey:e.executionKey||null,replyTo:e.replyTo||null,kind:e.mailKind||null,hasBodyRef:Boolean(e.digest)});
+const mailModel=e=>({ref:ref(e),mailId:e.mailId||null,at:e.t||null,by:e.by||null,to:e.role||null,executionKey:e.executionKey||null,replyTo:e.replyTo||null,kind:e.mailKind||null,read:e.read,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,replyFinalRejected:e.replyFinalRejected===true,completion:e.completion===true,completionTaskId:e.completionTaskId||null,hasBodyRef:Boolean(e.digest)});
 
 export function operationsFlowDetail(home,key,{page=1}={}){
  return storageSnapshot(home,()=>{
@@ -137,10 +135,11 @@ export function operationsFlowDetail(home,key,{page=1}={}){
 }
 
 export function operationsFlowMail(home,key,recordRef){
- if(!/^ledger:[1-9]\d*$/.test(recordRef||''))throw failure('올바른 기록 주소가 필요합니다.',400);
+ if(!/^ledger:(?:(?:legacy|new):)?[1-9]\d*$/.test(recordRef||''))throw failure('올바른 기록 주소가 필요합니다.',400);
  return storageSnapshot(home,()=>{
   const work=workAt(home,key),records=linkedRecords(home,work,heads(home,'cards'));
-  const letter=records.letters.find(e=>ref(e.seq)===recordRef);
+  const canonicalRef=/^ledger:[1-9]\d*$/.test(recordRef)?recordRef.replace('ledger:','ledger:legacy:'):recordRef;
+  const letter=records.letters.find(e=>ref(e)===canonicalRef);
   if(!letter)throw failure('이 업무에 연결된 원문이 아닙니다.',404);
   if(!/^(?:[a-f0-9]{12}|[a-f0-9]{64})$/.test(letter.digest||''))throw failure('원문 참조를 확인할 수 없습니다.',404);
   const dir=path.join(home,'mail'),file=path.join(dir,`${letter.digest}.txt`);

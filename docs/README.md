@@ -15,6 +15,8 @@
 
 | 주제 | 상세 원본 | 그림 안내 |
 | --- | --- | --- |
+| 전체 구조·원장 관계·개편 경계 | [구조 기준](architecture.md) | 문서 안 구조도 |
+| 작업·우편 원장과 역할 inbox | [원장 계약](mail-task-ledgers.md), [우편함 명령](secretary-mailbox.md) | — |
 | 작업 감시와 감독 관찰 | [감시 기준](watch-overview.md) | [HTML 안내](watch-overview.html) |
 | 업무와 실행 | [업무 카드](business-work.md) | — |
 | 중앙 카드 | [카드 안내](card-center.md) | — |

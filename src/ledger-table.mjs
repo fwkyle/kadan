@@ -1,16 +1,26 @@
 import {escapeHtml as e} from './card-content.mjs';
+import {readTaskLedger,readMailLedger,readSystemLedger,classifyLedgerEntry} from './ledger.mjs';
+import {projectLedger} from './ledger-domains.mjs';
 import {watchAILabel} from './watch-report.mjs';
 
-const kinds={start:'세션 시작',send:'메시지 전달',done:'실행 결과',stop:'세션 종료',plan:'카드 계획',alert:'감시 알림',handover:'담당 인계','mail-read':'우편 확인','hierarchy-loaded':'책임 관계 읽음','progress-judgment':'진행 판단','watch-scope':'감시 대상 설정'};
+export const ledgerViews=[['all','전체 · 호환 조회'],['tasks','작업원장'],['mail','우편원장'],['system','시스템원장']];
+export function ledgerView(entries,home,domain='all'){
+ if(!['tasks','mail','system'].includes(domain))return entries;
+ if(home)return {tasks:readTaskLedger,mail:readMailLedger,system:readSystemLedger}[domain](home);
+ // 저장소 없는 렌더 fixture도 코어의 과거 호환 분류 규칙을 재사용한다.
+ return projectLedger({legacy:entries,ordered:[]},domain);
+}
+const kinds={dispatch:'작업 발령','mail-cancel':'질문 취소',start:'세션 시작',send:'메시지 전달',done:'실행 결과',stop:'세션 종료',plan:'카드 계획',alert:'감시 알림',handover:'담당 인계','mail-read':'우편 확인','hierarchy-loaded':'책임 관계 읽음','progress-judgment':'진행 판단','watch-scope':'감시 대상 설정'};
 const text=value=>typeof value==='string'?value:'';
 function eventLabel(entry){
- if(entry.kind==='send'&&entry.taskId)return '작업 지시';
+ if(entry.completion)return '실행 결과 통지';
+ if(entry.kind==='send'&&classifyLedgerEntry(entry).dispatch)return classifyLedgerEntry(entry).dispatch==='legacy'?'작업 지시 · 과거 겸용':'작업 지시 · 우편 연결';
  if(entry.kind==='done')return entry.result==='ok'?'실행 완료':entry.result==='failed'?'실행 실패':'실행 결과';
  if(entry.kind?.startsWith('watch-ai-'))return watchAILabel(entry.source);
  return kinds[entry.kind]||text(entry.kind)||'종류 모름';
 }
 function eventSummary(entry){
- const parts=[text(entry.taskId)];
+ const parts=[text(entry.completion?entry.executionKey||entry.completionTaskId:entry.taskId)];
  if(entry.kind?.startsWith('watch-ai-')){
   const step={'watch-ai-request':'호출 시작','watch-ai-report':'판정 기록','watch-ai-delivery':'보고 전달','watch-ai-call':'호출 종료','watch-ai-retired':'감시 제외'}[entry.kind]||entry.kind;
   const reason={reported:'보고 완료',timeout:'시간 초과',cancelled:'호출 취소','call-failed':'호출 실패','report-missing':'보고 누락','report-incomplete':'전달 기록 미완료','report-error':'보고 경로 오류'}[entry.reason]||entry.reason;

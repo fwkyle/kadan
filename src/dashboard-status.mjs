@@ -1,7 +1,7 @@
 import {escapeHtml as e} from './card-content.mjs';
 import {executionHealth,renderExecutionHealth,executionBucket,STALE_MS,RECENT_MS} from './dashboard-execution.mjs';
 import {renderWatchVerdict} from './watch-overview-wall.mjs';
-import {renderSecretaryQuestions,renderUpcoming,secretaryUnread} from './dashboard-home.mjs';
+import {renderSecretaryQuestions,renderUpcoming,mailboxUnread} from './dashboard-home.mjs';
 import {renderBoardProgress} from './board-progress.mjs';
 
 const stamp=x=>Number.isFinite(Date.parse(x))?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'모름';
@@ -38,7 +38,7 @@ export function renderDashboardStatus({center,works,workError=null,decisions=[],
  const recentCount=kind=>recent.filter(x=>x.kind===kind).length;
  const open=(works||[]).filter(w=>w.state==='running'),held=(works||[]).filter(w=>w.state==='hold'),closed=(works||[]).filter(w=>['done','cancelled'].includes(w.state));
  const openBoards=(center?.boards||[]).filter(b=>b.state!=='done'),closedBoards=(center?.boards||[]).filter(b=>b.state==='done');
- let unread=null;try{unread=secretaryUnread(entries,ledgerLines);}catch{unread=null;}
+ let unread=null;try{unread=mailboxUnread(entries,ledgerLines);}catch{unread=null;}
  const chip=(kind,href,num,label)=>`<a class="st-chip st-c-${kind}" href="${href}"><span class="st-num">${num}</span><span class="st-lbl">${label}</span></a>`;
  const list=items=>items.length<=8?items.map(executionCard).join(''):items.slice(0,8).map(executionCard).join('')+`<details class="st-fold"><summary>나머지 ${items.length-8}장</summary>${items.slice(8).map(executionCard).join('')}</details>`;
  const section=(id,title,items,hint)=>`<section id="${id}" class="st-section"><header class="st-sec-head"><h2>${title}</h2><span class="st-cnt${id==='status-attention'?' st-cnt-attn':''}">${center?items.length+'건':'모름'}</span><span class="st-hint">${hint}</span></header>${!center?'<p class="st-error">카드 기록을 읽지 못해 확인 필요 수를 계산하지 않았습니다.</p>':items.length?list(items):'<p class="st-empty">해당 실행이 없습니다.</p>'}</section>`;
@@ -53,7 +53,7 @@ export function renderDashboardStatus({center,works,workError=null,decisions=[],
  return `<div data-view="status" class="st-view">
  <header class="st-lead"><h1>지금 작업이 어떻게 진행되고 있나요?</h1><p>발령·진행 보고·결과와 담당 세션을 함께 봅니다. 카드 수정 시각은 실행 신호가 아닙니다.</p><small>수집 ${e(stamp(collectedAt))}</small></header>
  ${renderWatchVerdict(center)}
- <div class="st-band" role="group" aria-label="지금 상황 요약">${chip('run','#status-executing',center?running.length:'모름','작업 중')}${chip('wait','#status-waiting',center?waiting.length:'모름','결과 대기')}${chip('attn','#status-attention',center?stuck.length:'모름','지금 막힌 것')}${chip('stale','#status-stale',center?stale.length:'모름','오래된 미정리')}${chip('decision','#decisions',decisionError?'모름':decisions.filter(d=>d.status==='open').length,'내 결정 대기')}${chip('mail','?mailRole='+encodeURIComponent('비서')+'&mailUnread=1#mailbox',unread===null?'모름':unread,'비서 미확인 보고')}${chip('dim','#status-running',works===null?'모름':open.length,'열린 업무')}${chip('dim','?collection=executions&state=all#dashboard',center?executions.length:'모름','전체 실행 카드')}</div>
+ <div class="st-band" role="group" aria-label="지금 상황 요약">${chip('run','#status-executing',center?running.length:'모름','작업 중')}${chip('wait','#status-waiting',center?waiting.length:'모름','결과 대기')}${chip('attn','#status-attention',center?stuck.length:'모름','지금 막힌 것')}${chip('stale','#status-stale',center?stale.length:'모름','오래된 미정리')}${chip('decision','#decisions',decisionError?'모름':decisions.filter(d=>d.status==='open').length,'내 결정 대기')}${chip('mail','?mailUnread=1#mailbox',unread===null?'모름':unread,'전체 역할 미확인 우편')}${chip('dim','#status-running',works===null?'모름':open.length,'열린 업무')}${chip('dim','?collection=executions&state=all#dashboard',center?executions.length:'모름','전체 실행 카드')}</div>
  ${recentSection}
  ${section('status-attention','지금 막힌 것',stuck,'담당 세션이 살아 있거나 신호가 최근인데 시작 보고·실패·PID 근거를 확인할 실행입니다. 오래된 미정리는 아래에 따로 묶습니다.')}
  ${section('status-executing','작업 중인 실행',running,'현재 담당의 진행 보고와 같은 세션이 확인됩니다. 업무 연결 여부와 관계없이 표시합니다.')}

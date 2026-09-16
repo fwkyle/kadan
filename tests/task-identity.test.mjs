@@ -61,12 +61,13 @@ test('동명 full key는 구분, bare는 모호함, 틀린 repo는 연결 실패
 for(const mode of ['jsonl','sqlite'])test(`${mode}: 원문 보존, 충돌 done이 뒤 정상 done의 최초 완료를 소모하지 않는다`,()=>{
  const f=fixture(mode),rows=[send(),done('wrong','failed',{executionKey:'r/c'}),done('c','ok',{executionKey:'r/c'}),done('r/c','failed')];
  for(const row of rows)appendLedger(row,f.home);
- const before=JSON.stringify(readStream(f.home,'ledger.jsonl'));
+ const snapshot=()=>['tasks/events.jsonl','mail/events.jsonl','system/events.jsonl','ledger.jsonl'].map(stream=>readStream(f.home,stream,{optional:true}));
+ const before=JSON.stringify(snapshot());
  const raw=readLedger(f.home);
  assert.deepEqual(raw.map(e=>e.taskId),rows.map(e=>e.taskId));
  assert.equal(center(f.cards,raw).cards[0].runs[0].state,'done');
  assert.equal(buildWatchScope(f.cards,raw).sessions.size,0);
- assert.equal(JSON.stringify(readStream(f.home,'ledger.jsonl')),before);
+ assert.equal(JSON.stringify(snapshot()),before);
 });
 
 test('missing/conflict done은 연결된 실행을 끝내거나 인계하지 못한다',()=>{

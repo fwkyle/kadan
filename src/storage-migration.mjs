@@ -7,8 +7,9 @@ import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {DecisionStore} from './decisions.mjs';
 import {BriefStore} from './human-brief.mjs';
+import {ledgerStreams,validateDomainEvent,validateDomainStreams} from './ledger-domains.mjs';
 const sha=data=>createHash('sha256').update(data).digest('hex');
-const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.storage-gate','.storage-writers'].includes(name)||name.startsWith('.released-');
+const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.ledger-lock','.storage-gate','.storage-writers'].includes(name)||name.startsWith('.released-');
 function files(root,relative=''){
  if(!fs.existsSync(path.join(root,relative)))return [];
  const result=[];
@@ -17,11 +18,11 @@ function files(root,relative=''){
   const rel=path.join(relative,item.name);
   if(item.isDirectory())result.push(...files(root,rel));
   else if(item.isFile())result.push(rel);
-  else if(item.isSymbolicLink()&&(isStream(rel)||['cards','works'].includes(rel)||/^(cards|works)\/[^/]+(?:\/[^/]+)?$/.test(rel)||/^cards\/[^/]+\/[^/]+\/card\.md$/.test(rel)))throw new Error(`중앙 기록 심볼릭 링크 확인 필요: ${rel}`);
+  else if(item.isSymbolicLink()&&(isStream(rel)||['cards','works','tasks','mail','system'].includes(rel)||/^(cards|works)\/[^/]+(?:\/[^/]+)?$/.test(rel)||/^cards\/[^/]+\/[^/]+\/card\.md$/.test(rel)))throw new Error(`중앙 기록 심볼릭 링크 확인 필요: ${rel}`);
  }
  return result.sort();
 }
-const isStream=p=>p==='ledger.jsonl'||p==='decisions/events.jsonl'||/^cards\/[^/]+\/[^/]+\/(events|briefs)\.jsonl$/.test(p)||/^works\/[^/]+\/[^/]+\/events\.jsonl$/.test(p);
+const isStream=p=>p==='ledger.jsonl'||Object.values(ledgerStreams).includes(p)||p==='decisions/events.jsonl'||/^cards\/[^/]+\/[^/]+\/(events|briefs)\.jsonl$/.test(p)||/^works\/[^/]+\/[^/]+\/events\.jsonl$/.test(p);
 function validateWorks(home,keys){
  const linked=new Set();
  for(const work of new WorkStore(home).list())for(const x of work.executions){
@@ -32,6 +33,7 @@ function validateWorks(home,keys){
 }
 function capture(home){return files(home).map(source=>{const bytes=fs.readFileSync(path.join(home,source));return {source,sha256:sha(bytes),bytes:bytes.length};});}
 function validateJsonl(home){
+ if(fs.existsSync(path.join(home,'.ledger-lock')))throw new Error('도메인 원장 저장 중 또는 미완료 잠금');
  const manifest=capture(home),streams=[];
  for(const file of manifest.filter(f=>isStream(f.source))){
   const text=fs.readFileSync(path.join(home,file.source),'utf8'),rows=[];
@@ -39,10 +41,12 @@ function validateJsonl(home){
    let value;try{value=JSON.parse(raw)}catch{throw new Error(`기록 해석 실패: ${file.source}:${i+1}`)}
    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error(`사건 객체 필요: ${file.source}:${i+1}`);
    if(file.source==='ledger.jsonl'&&(typeof value.kind!=='string'||!value.kind||value.broken))throw new Error(`원장 종류 손상: ${i+1}`);
+   validateDomainEvent(file.source,value);
    rows.push({value,raw,line:i+1});
   }
   streams.push({...file,rows});
  }
+ validateDomainStreams(new Map(streams.filter(s=>Object.values(ledgerStreams).includes(s.source)).map(s=>[s.source,s.rows.map(r=>r.value)])),streams.find(s=>s.source==='ledger.jsonl')?.rows.map(r=>r.value) || []);
  // 기존 validator가 허용하는 역사/미등록 실행은 보존한다.
  const cards=new CardStore(home).list();const keys=new Set(cards.map(c=>c.key));
  validateWorks(home,keys);
@@ -102,8 +106,9 @@ export function verifyStorage(home){
   if(integrity.length!==1||integrity[0].integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('SQLite 무결성 실패');
   const events=db.prepare('SELECT stream,seq,payload FROM events ORDER BY stream,seq').all();
   const heads=new Map(db.prepare('SELECT * FROM heads').all().map(h=>[h.stream,h]));
-  const current=new Map();
-  for(const row of events){if(row.seq!==(current.get(row.stream)?.seq??0)+1)throw new Error('사건 순번 손상');JSON.parse(row.payload);current.set(row.stream,row);}
+  const current=new Map(),domains=new Map();
+  for(const row of events){if(row.seq!==(current.get(row.stream)?.seq??0)+1)throw new Error('사건 순번 손상');const value=JSON.parse(row.payload);validateDomainEvent(row.stream,value);if(Object.values(ledgerStreams).includes(row.stream)){if(!domains.has(row.stream))domains.set(row.stream,[]);domains.get(row.stream).push(value);}current.set(row.stream,row);}
+  validateDomainStreams(domains,events.filter(row=>row.stream==='ledger.jsonl').map(row=>JSON.parse(row.payload)));
   if(current.size!==heads.size)throw new Error('현재 상태와 이력 수 불일치');
   for(const [stream,last] of current){const h=heads.get(stream);if(!h||h.seq!==last.seq||h.payload!==last.payload)throw new Error('현재 상태와 마지막 사건 불일치');}
   const imports=db.prepare('SELECT * FROM imports').all();
@@ -132,8 +137,9 @@ export function exportStorage(source,target){
   const streams=db.prepare('SELECT stream FROM heads ORDER BY stream').all();
   for(const {stream} of streams){
    if(!isStream(stream))throw new Error('지원하지 않는 내보내기 스트림');
-   const rows=db.prepare('SELECT payload FROM events WHERE stream=? ORDER BY seq').all(stream);
-   const f=path.join(dst,stream);fs.mkdirSync(path.dirname(f),{recursive:true,mode:0o700});fs.writeFileSync(f,rows.map(r=>r.payload).join('\n')+'\n',{mode:0o600});
+   const rows=db.prepare('SELECT payload,source,raw FROM events WHERE stream=? ORDER BY seq').all(stream);
+   if(stream==='ledger.jsonl'&&rows.every(r=>r.source===stream)&&fs.existsSync(path.join(dst,stream)))continue;
+   const f=path.join(dst,stream);fs.mkdirSync(path.dirname(f),{recursive:true,mode:0o700});fs.writeFileSync(f,rows.map(r=>r.raw??r.payload).join('\n')+'\n',{mode:0o600});
   }
  });
  if(JSON.stringify(before)!==JSON.stringify(capture(src)))throw new Error('내보내기 중 파일 변경: 복구 대상 확인 필요');
