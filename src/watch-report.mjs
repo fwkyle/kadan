@@ -3,12 +3,13 @@ import {taskIdentity} from './task-identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
-import {appendLedger, readLedger} from './ledger.mjs';
+import {appendLedger, readLedger, classifyLedgerEntry} from './ledger.mjs';
 import {assertWritable, storageMode, transaction} from './storage.mjs';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
-import {effectiveCardRole,openTaskIds} from './handover-state.mjs';
+import {mailboxLetters} from './mailbox-state.mjs';
+import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
 import {routeAlert} from './watch.mjs';
 
@@ -42,17 +43,26 @@ export function latestWatchReports(entries) {
   return [...states.values()];
 }
 
-// Why: 카드가 진행 중인 작업자가 프롬프트에 서 있으면 화면만으로는 "감독 답 기다리는 중"과
-// "차례만 끝내고 멈춘 것"이 똑같아 보인다. 원장으로 가른다 — 마지막 발령 뒤 그 작업자가
-// 감독에게 편지를 보냈으면 답을 줄 사람은 감독이니 정상 대기, 아무것도 안 보냈으면 멈춘 것이다.
-// (2026-09-13 실사고 2건: 작업자가 카드 중간에 차례를 끝냈고 감시는 입력대기로만 기록했다.)
-export function waitingWithoutAsking(entries, {role, taskId}) {
-  if (!role) return false;
-  const dispatch = entries.findLast(e => e.kind === 'send' && e.role === role && (taskId == null || e.taskId === taskId));
-  if (!dispatch) return false;
-  const since = Date.parse(dispatch.t);
-  if (!Number.isFinite(since)) return false;
-  return !entries.some(e => e.kind === 'send' && e.by === role && Date.parse(e.t) >= since);
+// 현재 실행을 맡은 사람이 실제로 답을 기다리는 질문만 정상 대기의 근거다.
+export function waitingWithoutAsking(entries, {role, taskId}, cards = []) {
+  if (!role || !taskId) return false;
+  const identity = taskIdentity(cards);
+  const projected = identity.project(entries);
+  const address = identity.resolve(taskId);
+  const task = address.key || address.taskId;
+  const execution = e => {
+    const found = identity.resolve(e.taskId, e.executionKey);
+    return ['resolved','unregistered'].includes(found.state) ? found.key || e.executionKey || found.taskId : null;
+  };
+  const inherited = workEntries(projected);
+  const index = inherited.findLastIndex(e => e.kind === 'send' && e.role === role && e.taskId
+    && execution(e) === task && classifyLedgerEntry(e).dispatch);
+  if (index < 0) return false;
+  const afterDispatch = new Set(projected.slice(index + 1).filter(e => e.kind === 'send' && e.mailId).map(e => e.mailId));
+  const questions = mailboxLetters(entries, role, {view:'waiting'});
+  return !questions.some(e => e.expectReply && e.replyStatus === 'waiting'
+    && !e.replyFinal && !e.notificationOnly && !e.systemGenerated && execution(e) === task
+    && afterDispatch.has(e.mailId));
 }
 
 function currentRequest(request,cards,entries,parents,works=[]) {
@@ -134,7 +144,7 @@ export class WatchReports {
       const level=verdict==='죽음'||consecutive>=2?'RED':'AMBER';
       // 진행 중인 카드를 맡은 작업자가 아무것도 묻지 않은 채 입력 대기면 멈춘 것으로 보고 감독에게 알린다.
       const idleWithoutAsk=!stale&&verdict==='입력대기'&&request.source==='progress'
-        &&waitingWithoutAsking(identity.project(entries),{role:request.role,taskId:identity.resolve(request.taskId).taskId});
+        &&waitingWithoutAsking(entries,{role:request.role,taskId:identity.resolve(request.taskId).taskId},cards);
       const notify=!stale&&(!normal(verdict)||idleWithoutAsk)
         &&(!previous||previous.verdict!==verdict||previous.level!==level||Boolean(previous.idleWithoutAsk)!==idleWithoutAsk);
       const reasonPath=path.join(request.evidencePath,'reason.txt');

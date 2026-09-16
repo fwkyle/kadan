@@ -254,10 +254,10 @@ test('진행 중인 카드의 작업자가 아무것도 묻지 않은 채 입력
  assert.equal(f.sent.length,1);
  assert(f.rows().some(e=>e.kind==='alert'&&e.resolution==='ai-normal'&&e.alertKind==='입력대기'));
 });
-test('작업자가 감독에게 편지를 보낸 뒤의 입력 대기는 정상으로 본다',()=>{
+test('현재 실행의 미종결 질문을 보낸 뒤의 입력 대기는 정상으로 본다',()=>{
  const f=fixture();
  f.cards=[{id:'a',key:'r/a',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'}];
- appendLedger({kind:'send',role:'p-감독',by:'p-작업자',taskId:'a'},f.home);
+ appendLedger({kind:'send',role:'p-감독',by:'p-작업자',executionKey:'r/a',expectReply:true},f.home);
  const waiting=f.r.submit(f.request({source:'progress',taskId:'a'}).requestId,'입력대기','승인 답을 기다리는 중');
  assert.equal(waiting.idleWithoutAsk,undefined);
  assert.equal(f.sent.length,0);
@@ -265,10 +265,19 @@ test('작업자가 감독에게 편지를 보낸 뒤의 입력 대기는 정상�
 test('발령 뒤 감독이 답을 보내면 기준이 다시 그 시점으로 옮겨간다',()=>{
  const f=fixture();
  f.cards=[{id:'a',key:'r/a',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'}];
- appendLedger({kind:'send',role:'p-감독',by:'p-작업자',taskId:'a'},f.home);
+ appendLedger({kind:'send',role:'p-감독',by:'p-작업자',executionKey:'r/a',expectReply:true},f.home);
  appendLedger({kind:'send',role:'p-작업자',by:'p-감독',taskId:'a'},f.home);
  const idle=f.r.submit(f.request({source:'progress',taskId:'a'}).requestId,'입력대기','답을 받고도 다시 멈춰 있음');
  assert.equal(idle.idleWithoutAsk,true);
  assert.equal(f.sent.length,1);
 });
 
+test('progress submit은 과거 taskId-only 질문과 최종답장의 원문 답변완료 상태를 유지',()=>{
+ const f=fixture();
+ f.cards=[{id:'a',key:'r/a',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'}];
+ const ask=JSON.parse(appendLedger({kind:'send',role:'p-감독',by:'p-작업자',taskId:'a',expectReply:true},f.home));
+ appendLedger({kind:'send',role:'p-작업자',by:'p-감독',replyTo:ask.mailId,replyFinal:true},f.home);
+ const report=f.r.submit(f.request({source:'progress',taskId:'a'}).requestId,'입력대기','최종답장 뒤에도 멈춤');
+ assert.equal(report.idleWithoutAsk,true);
+ assert.equal(f.sent.length,1);
+});

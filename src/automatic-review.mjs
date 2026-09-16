@@ -201,7 +201,7 @@ export class AutomaticReview {
    if(JSON.stringify(this.identity(identity.role))!==JSON.stringify(identity))throw new Error('통지 또는 발령 수신 세대 변경');
    receipt=this.send({role:identity.role,pid:identity.pid,taskId:kind==='execution'?taskIdentity(this.cards.list()).taskIdFor(this.cards.get(s.current.key)):undefined,
     ...(kind==='execution'?{roleProfile:s.phase==='review'?'reviewer':'worker'}:{}),
-    executionKey:kind==='execution'?s.current.key:undefined,workKey:s.key,
+    executionKey:s.current?.key,workKey:s.key,
     transmit:fn=>this.locked(()=>{
      const fresh=this.get(s.key);if(fresh.claim!==s.claim||fresh.status!==s.status)throw new Error('전달 예약 변경');
      if(kind==='execution')this.guard(fresh,{target:s.current.role});

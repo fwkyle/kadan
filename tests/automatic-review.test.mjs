@@ -49,6 +49,10 @@ test('구현→독립검수→동일 작업자 수정→조기 PASS, 새 실행I
  const mail=readMailLedger(f.home),sends=mail.filter(e=>e.kind==='send'&&e.transport!=='mailbox');
  const completions=mail.filter(e=>e.kind==='send'&&e.completion),tasks=readTaskLedger(f.home);
  assert.equal(sends.length,5);assert.equal(sends.filter(e=>!e.taskId).length,1);
+ const notice=sends.find(e=>!e.taskId);
+ assert.equal(notice.executionKey,s.current.key);assert.equal(notice.workKey,f.key);
+ assert.equal(notice.notificationOnly,undefined);
+ assert.ok(readMailBody(notice.digest,f.home).includes(`우편 ID: ${notice.mailId}`));
  assert.equal(f.sent.length,5,'실제 화면 전달은 발령 4건과 감독 최종 통지 1건이다');
  assert.equal(f.sent.filter(e=>e.name==='kadan-test-super').length,1);
  assert.equal(tasks.filter(e=>e.kind==='dispatch').length,4);

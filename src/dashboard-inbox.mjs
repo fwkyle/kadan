@@ -6,12 +6,15 @@ export const replyStates=[['','모든 답변 상태'],['waiting','답변 대기'
 export function mailStatus(m){
  const read=m.read===true?'받는 사람 읽음 확인':m.read===false?'읽음 미확인':'전달 기록 · 읽음 모름';
  const reply=replyStates.find(([value])=>value&&value===m.replyStatus)?.[1];
- return [m.completion?'실행 결과 통지':'',m.replyFinalRejected?'전달됨 · 답변종결 반영 안됨':'',read,reply,m.replyFinal?'최종 답장':m.replyTo?'답장':''].filter(Boolean).join(' · ');
+ const sender=m.currentSender||m.by,recipient=m.currentRecipient||m.role;
+ const responsibility=sender!==m.by||recipient!==m.role?`현재 책임: ${sender||'모름'} → ${recipient||'모름'}`:'';
+ return [m.completion?'실행 결과 통지':'',m.notificationOnly===true||m.systemGenerated==='task-completion'?'기록용 · 추가 알림 없음':'',m.replyFinalRejected?'전달됨 · 답변종결 반영 안됨':'',read,reply,m.replyFinal?'최종 답장':m.replyTo?'답장':'',responsibility].filter(Boolean).join(' · ');
 }
 export function filterMail(letters,url){
  const role=url.searchParams.get('mailRole')||'',view=url.searchParams.get('mailView')||'all',reply=url.searchParams.get('mailReply')||'';
  return letters.filter(m=>{
-  if(role&&(view==='received'||view==='to-reply'?m.role!==role:view==='sent'||view==='waiting'?m.by!==role:m.role!==role&&m.by!==role))return false;
+  const recipient=m.currentRecipient||m.role,sender=m.currentSender||m.by;
+  if(role&&(view==='received'||view==='to-reply'?recipient!==role:view==='sent'||view==='waiting'?sender!==role:recipient!==role&&sender!==role))return false;
   if(['to-reply','waiting'].includes(view)&&m.replyStatus!=='waiting')return false;
   return (!reply||m.replyStatus===reply)&&(url.searchParams.get('mailUnread')!=='1'||m.read===false)&&(url.searchParams.get('hideWatch')!=='1'||m.by!=='watch');
  });

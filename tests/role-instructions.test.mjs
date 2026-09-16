@@ -86,7 +86,11 @@ test('standalone rallyStep: 다른 역할 동일 ID done은 무관·task 없는 
   appendLedger({kind:'send',role:'other',taskId:c.id},f.home);
   appendLedger({kind:'done',role:'other',taskId:c.id,result:'ok'},f.home);
   const current=f.compose({taskId:c.id});assert.equal(current.metadata.profile,'reviewer');assert.match(current.instructions,/현재 발령 ID: current/);
+  assert.match(current.instructions,/--execution 'test\/current'/);
+  assert.match(current.instructions,/추가 카드나 중복 send를 만들지 않는다/);
+  assert.match(current.instructions,/--execution 'test\/current' --expect-reply/);
   const reply=f.compose();assert.equal(reply.metadata.profile,'reviewer');assert.doesNotMatch(reply.instructions,/현재 발령 ID:|연결 실행:/);
+  assert.doesNotMatch(reply.instructions,/--expect-reply/);
   appendLedger({kind:'send',role:'recipient',taskId:c.id},f.home);
   appendLedger({kind:'done',role:'recipient',taskId:c.id,result:'ok'},f.home);
   assert.equal(f.compose().metadata.status,'not-applied');

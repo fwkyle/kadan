@@ -51,11 +51,13 @@ for(const mode of ['jsonl','sqlite']) {
     const h=home(mode);appendLedger({...send,originalCardPath:'/cards/a.md',expectReply:true},h);
     appendLedger({...done,resultFile:'/results/a.md'},h);
     appendLedger({...done,result:'failed'},h);
-    const letters=readMailLedger(h),completion=letters.find(r=>r.completion);
+    const mailEntries=readMailLedger(h),letters=mailEntries.filter(r=>r.kind==='send'),completion=letters.find(r=>r.completion);
+    assert.equal(mailEntries.filter(r=>r.kind==='done'&&r.completionMailId===completion.mailId).length,1);
     assert.equal(letters.length,2);assert.equal(completion.role,'lead');assert.equal(completion.by,'worker');
     assert.equal(completion.replyTo,send.mailId);assert.equal(completion.replyFinal,true);
     assert.equal(completion.transport,'mailbox');assert.equal(completion.mailKind,'report');
     assert.equal(completion.systemGenerated,'task-completion');assert.equal(completion.result,'ok');
+    assert.equal(completion.notificationOnly,true);
     assert.equal(Object.hasOwn(completion,'taskId'),false);assert.equal(completion.completionTaskId,'a');
     assert.equal(completion.executionKey,'r/a');assert.equal(completion.resultFile,'/results/a.md');
     assert.equal(readMailBody(completion.digest,h),'ok: r/a\n/cards/a.md\n/results/a.md');
