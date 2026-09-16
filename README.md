@@ -11,6 +11,8 @@ Interface language is currently Korean (role names, CLI output, dashboards). Con
 
 ## 작업과 우편 확인
 
+전체 관계와 구현·미구현 경계는 [카단 구조와 원장 기준](docs/architecture.md)에서 확인합니다.
+
 기존 대시보드에서 모든 역할의 받은·보낸 편지와 답변 대기 질문을 조회하고, 사건 기록을 작업·우편·시스템으로 나눠 볼 수 있습니다. 같은 SQLite를 사용하며 과거 원장은 보존합니다. 업무·카드 상태 이력은 기존 상세 화면에 유지합니다. 질문은 `send --expect-reply`, 최종 답장은 `send --reply-to <우편ID> --reply-final`, 역할별 대기는 `inbox waiting --role <역할>`로 확인합니다.
 
 실행 완료 시 결과 우편은 원본 요청자의 우편함에 저장됩니다. 이 저장은 터미널 깨움이나 업무 최종 완료를 뜻하지 않습니다. 자세한 범위는 [작업·우편 원장 계약](docs/mail-task-ledgers.md), 명령은 [역할 우편함 안내](docs/secretary-mailbox.md)를 참고하세요.
