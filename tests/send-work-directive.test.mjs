@@ -28,7 +28,7 @@ test('작업 지시 구분기: 지시 어미·일 동사 결합만 잡는다',()
     assert.equal(looksLikeWorkDirective(m),false,m);
 });
 
-test('카드 없는 작업 지시 가드: 지시는 멈추고 깨우기·강제는 간다', {skip:spawnSync('tmux',['-V']).status!==0},()=>{
+test('카드 없는 대화는 말투와 무관하고 구 강제 옵션은 호환 no-op이다', {skip:spawnSync('tmux',['-V']).status!==0},()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-guard-'));
   createDatabase(home);writeStorageMarker(home,'sqlite');
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
@@ -43,27 +43,23 @@ test('카드 없는 작업 지시 가드: 지시는 멈추고 깨우기·강제�
     while(Date.now()<end&&(!fs.existsSync(file)||!fs.readFileSync(file,'utf8').trim()))pause();
     return fs.existsSync(file)?fs.readFileSync(file,'utf8'):''};
   try {
-    // 1) 작업 지시 + 카드 없음 → 전달 전에 멈춘다
-    const blocked=call('send','guard-worker','결과를 확인해라');
-    assert.notEqual(blocked.status,0);
-    assert.match(blocked.stderr,GUARD);
-    assert.match(blocked.stderr,/AI 감시 대상에서 제외/);
-    assert.match(blocked.stderr,/--task/);
-    assert.match(blocked.stderr,/--force-no-card/);
-    assert.equal(sends().length,0);
-    assert.equal(fs.existsSync(path.join(home,'guard-worker.received')),false);
+    // 카드 없는 대화는 말투와 관계없이 전달한다.
+    const sent=call('send','guard-worker','결과를 확인해라');
+    assert.equal(sent.status,0,sent.stderr);
+    assert.match(sent.stdout,/우편ID [a-f0-9-]+/);
+    assert.equal(sends().length,1);
     // 2) --force-no-card → 경고 없이 전달
     const forced=call('send','guard-worker','--force-no-card','결과를 확인해라');
     assert.equal(forced.status,0,forced.stderr);
     assert.doesNotMatch(forced.stderr,GUARD);
-    assert.equal(sends().length,1);
+    assert.equal(sends().length,2);
     // 3) 깨우기 말 → 경고 없이 전달
     for(const wake of ['계속해','멈춰','뭐하고 있어']) {
       const w=call('send','guard-worker',wake);
       assert.equal(w.status,0,wake+': '+w.stderr);
       assert.doesNotMatch(w.stderr,GUARD);
     }
-    assert.equal(sends().length,4);
+    assert.equal(sends().length,5);
     // 4) --task 경로는 가드를 거치지 않는다 — 카드가 없으면 기존 발령 검사가 막고,
     //    어느 쪽이든 가드 문구는 나오지 않아야 한다
     const tasked=call('send','guard-worker','--task','kadan/card-guard-x','결과를 확인해라');
@@ -74,7 +70,7 @@ test('카드 없는 작업 지시 가드: 지시는 멈추고 깨우기·강제�
     assert.doesNotMatch(report.stderr,GUARD);
     // 실제로 수신 파일까지 갔는지 본다 — 멈춘 1건만 없어야 한다
     const workerBody=received('guard-worker');
-    assert.equal((workerBody.match(/결과를 확인해라/g)||[]).length,1);
+    assert.equal((workerBody.match(/결과를 확인해라/g)||[]).length,2);
     assert.match(workerBody,/계속해/);assert.match(workerBody,/멈춰/);assert.match(workerBody,/뭐하고 있어/);
     assert.match(received('guard-감독'),/결과를 정리해라/);
   } finally {

@@ -21,7 +21,6 @@ const {
   diffDoneMarkers,
   appendLedger,
   readLedger,
-  ledgerPath,
   ledgerBy,
   resolveLedgerBy,
   parseFlags,
@@ -1398,7 +1397,7 @@ test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20
 
   const successes = runs.filter((run) => run.code === 0).length;
   const firstDone = fs
-    .readFileSync(path.join(home, "ledger.jsonl"), "utf8")
+    .readFileSync(path.join(home, "tasks", "events.jsonl"), "utf8")
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line))
@@ -1409,6 +1408,7 @@ test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20
         entry.taskId === "card-race"
     );
   assert.ok(successes >= 1);
+  assert.ok(firstDone);
   appendLedger(
     {
       kind: "done",
@@ -1421,7 +1421,7 @@ test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20
     home
   );
   const rawDoneLines = fs
-    .readFileSync(path.join(home, "ledger.jsonl"), "utf8")
+    .readFileSync(path.join(home, "tasks", "events.jsonl"), "utf8")
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line))
@@ -1432,6 +1432,9 @@ test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20
         entry.taskId === "card-race"
     );
   assert.equal(rawDoneLines.length, successes + 1);
+  assert.deepEqual(rawDoneLines[0], firstDone);
+  assert.equal(rawDoneLines.at(-1).result, "failed");
+  assert.equal(rawDoneLines.at(-1).by, "늦게 쓴 중복");
   assert.equal(
     readLedger(home).filter(
       (entry) =>
@@ -1606,8 +1609,8 @@ test("우편함은 보낸이(by)와 받는이(role)를 구분한다 — send의 
   assert.equal(mailbox[0].role, "c47-작업자");
   assert.equal(mailbox.at(-1).role, "c47-받는이-1");
   assert.match(html, /<th>시각<\/th>\s*<th>보낸이<\/th>\s*<th>받는이<\/th>\s*<th>카드<\/th>\s*<th>크기<\/th>/);
-  assert.match(html, /<td><time title="[^"]+">09-05 11:20<\/time><\/td>\s*<td>c47-감독<\/td>\s*<td>c47-작업자<\/td>\s*<td>card-47<\/td>\s*<td>123바이트<\/td>/);
-  assert.match(html, /<td>모름<\/td>\s*<td>c47-받는이-1<\/td>\s*<td>-<\/td>\s*<td>1바이트<\/td>/);
+  assert.match(html, /<td><time title="[^"]+">09-05 11:20<\/time><\/td>\s*<td>c47-감독<\/td>\s*<td>c47-작업자<\/td>\s*<td>card-47<div class="about">전달 기록 · 읽음 모름<\/div><\/td>\s*<td>123바이트<\/td>/);
+  assert.match(html, /<td>모름<\/td>\s*<td>c47-받는이-1<\/td>\s*<td>-<div class="about">전달 기록 · 읽음 모름<\/div><\/td>\s*<td>1바이트<\/td>/);
   assert.doesNotMatch(html, /c47-받는이-0/);
 });
 
@@ -1880,7 +1883,26 @@ test("원장은 append-only로 쌓이고 순서대로 읽힌다", () => {
   assert.equal(rows[0].kind, "start");
   assert.equal(rows[1].digest, "abc");
   assert.ok(rows.every((r) => typeof r.t === "string"));
-  assert.equal(fs.readFileSync(ledgerPath(), "utf8").endsWith("\n"), true);
+  appendLedger({ kind: "plan", board: "시험판", taskId: "order" });
+  const streams = [
+    { domain: "system", kinds: ["start", "stop"], order: [1, 4] },
+    { domain: "mail", kinds: ["send", "mail-read"], order: [2, 5] },
+    { domain: "tasks", kinds: ["plan", "done"], order: [3, 6] },
+  ];
+  const rawStream = domain => fs.readFileSync(path.join(process.env.KADAN_HOME, domain, "events.jsonl"), "utf8");
+  const before = streams.map(({ domain }) => rawStream(domain));
+  appendLedger({ kind: "stop", role: "작업자", session: "kadan-작업자" });
+  appendLedger({ kind: "mail-read", role: "작업자", mailId: rows[1].mailId });
+  appendLedger({ kind: "done", role: "작업자", taskId: "order", result: "ok" });
+  for (const [index, { domain, kinds, order }] of streams.entries()) {
+    const raw = rawStream(domain);
+    assert.equal(raw.startsWith(before[index]), true, `${domain}: 기존 원문 보존`);
+    assert.equal(raw.endsWith("\n"), true);
+    const events = raw.trimEnd().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(entry => entry.kind), kinds);
+    assert.deepEqual(events.map(entry => entry._ledgerOrder), order);
+  }
+  assert.deepEqual(readLedger().map(entry => entry.kind), ["start", "send", "plan", "stop", "mail-read", "done"]);
 });
 
 test("원장의 깨진 JSON 줄은 원본을 broken 속성으로 보존한다", async () => {

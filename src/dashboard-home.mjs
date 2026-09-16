@@ -1,6 +1,6 @@
 import {executionHealth,renderExecutionHealth} from './dashboard-execution.mjs';
 import {buildRallies,renderRallies} from './rallies.mjs';
-import {secretaryLetters} from './secretary-mailbox.mjs';
+import {mailboxLetters} from './mailbox.mjs';
 import {renderWatchOverview} from './watch-overview-wall.mjs';
 import {renderBoardProgress} from './board-progress.mjs';
 import {stateText,finished,isExecution,executionUnknown,progressLabel} from './human-brief.mjs';
@@ -8,10 +8,10 @@ const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceA
 const when=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'보고 없음';
 const reportTime=h=>h.reportState==='unknown'?({'author-unknown':'보고자 모름','role-unknown':'보고 담당 모름','dispatch-time':'발령 시각 모름','assignment-time':'배정 시각 모름','future-time':'보고 시각 확인 필요'}[h.reportReason]||'보고 시각 모름'):when(h.evidenceAt);
 const link=(c,title)=>`<a href="?card=${encodeURIComponent(c.key)}#detail">${e(title)}</a>`;
-// 비서가 아직 확인하지 않은 공식 우편 수. 원장을 못 읽으면 null(모름)이다.
-export function secretaryUnread(entries=[],ledgerLines=0){
+// 모든 역할이 아직 확인하지 않은 우편 수. 원장을 못 읽으면 null(모름)이다.
+export function mailboxUnread(entries=[],ledgerLines=0){
  if(ledgerLines===null||!Array.isArray(entries)||entries.some(e=>e?.broken))return null;
- return secretaryLetters(entries).filter(e=>!e.read).length;
+ return mailboxLetters(entries).filter(e=>e.read===false).length;
 }
 const taskTableFor=(briefs)=>{
  const explain=c=>briefs?.get(c.key)||{title:c.title||c.id,workstream:'',summary:''};
@@ -41,8 +41,8 @@ export function renderSecretaryQuestions(center,briefs,{fold=false}={}){
 }
 export function renderDashboardHome({center,decisions=[],decisionError,briefs,entries=[],ledgerLines=0}){
  const mailUnknown=ledgerLines===null||entries.some(e=>e?.broken);
- const unread=mailUnknown?null:secretaryLetters(entries).filter(e=>!e.read).length;
- const secretaryShortcut=`<a class="decision-shortcut secretary-shortcut" href="?mailRole=${encodeURIComponent('비서')}&mailUnread=1#mailbox" title="비서가 아직 확인하지 않은 공식 우편입니다. 사용자 결정 요청과 구분합니다."><span>비서 미확인 보고</span><strong>${mailUnknown?'모름':unread+'건'}</strong></a>`;
+ const unread=mailboxUnread(entries,ledgerLines);
+ const secretaryShortcut=`<a class="decision-shortcut secretary-shortcut" href="?mailUnread=1#mailbox" title="모든 역할의 읽음 미확인 우편입니다. 사용자 결정 요청과 구분합니다."><span>전체 역할 미확인 우편</span><strong>${mailUnknown?'모름':unread+'건'}</strong></a>`;
  if(!center)return `<section class="panel" data-view="dashboard">${secretaryShortcut}<h2>현재 상황을 확인할 수 없습니다</h2><p>카드 기록을 읽지 못해 진행 수와 남은 수를 계산하지 않았습니다.</p></section>`;
  const open=center.boards.filter(b=>b.state!=='done'),closed=center.boards.filter(b=>b.state==='done');
  const decisionsOpen=decisions.filter(d=>d.status==='open');

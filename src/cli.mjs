@@ -4,8 +4,10 @@ import {WatchAI} from './watch-ai.mjs';
 import {watchReportCommand,watchAILabel} from './watch-report.mjs';
 import {notifyUser} from './watch-system.mjs';
 import {storageCommand} from './storage-migration.mjs';
-import {assertWritable} from './storage.mjs';
-import {SecretaryMailbox,inboxCommand} from './secretary-mailbox.mjs';
+import {assertWritable,storageTransaction} from './storage.mjs';
+import {SecretaryMailbox} from './secretary-mailbox.mjs';
+import {Mailbox,inboxCommand} from './mailbox.mjs';
+import {isUserActor} from './actors.mjs';
 import {composeRoleInstructions,startRoleProfile} from './role-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
@@ -18,7 +20,6 @@ import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
 import {WorkStore} from './work-store.mjs';
 import {resolveWorkMail} from './work-mail.mjs';
-import {looksLikeWorkDirective} from './work-directive.mjs';
 import { buildCardCenter } from "./card-center.mjs";
 import { Handover } from "./handover.mjs";
 import { HandoverRunner } from "./handover-runner.mjs";
@@ -661,6 +662,14 @@ export function guardedSend({
   if (taskId != null && (typeof taskId !== "string" || !/^\S+$/.test(taskId))) {
     throw new Error("taskId는 공백 없는 한 덩어리여야 한다");
   }
+  if(raw&&mailContext?.expectReply)throw new Error('--raw는 원문 보존 옵션이므로 --expect-reply와 함께 사용할 수 없습니다');
+  if(taskId!=null&&mailContext?.replyFinal)throw new Error('최종 답변은 --task 발령과 함께 사용할 수 없습니다');
+  const home=env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome();
+  const by=resolveLedgerBy({source,env});
+  if(mailContext?.replyTo||mailContext?.replyFinal||mailContext?.expectReply){
+    mailContext=resolveWorkMail(home,{...mailContext,taskId,by,role});
+  }
+  const mailId=randomUUID();
   const originalTaskId=taskId;
   if (taskId != null) {
     const store=new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()),cards=store.list();
@@ -681,6 +690,10 @@ export function guardedSend({
   const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
     role,message,profile:roleProfile,raw,taskId,mailContext,entries});
   message = composed.message;
+  if(mailContext?.expectReply===true){
+    const recipient="'"+by.replaceAll("'","'\\''")+"'";
+    message+=`\n\n질문ID: ${mailId}. 최종 답변: kadan send ${recipient} --reply-to ${mailId} --reply-final${isUserActor(by,env)?' --mailbox':''} <답변>. 일반 답장과 읽음은 답변 대기를 끝내지 않습니다.`;
+  }
   const conflicts = familyConflictAlerts({role,session,entries,source,env});
   for (const conflict of conflicts) {
     console.error(conflict.warning);
@@ -715,7 +728,9 @@ export function guardedSend({
   }
   const entry = {
     kind: "send",
-    mailId:randomUUID(),
+    mailId,
+    ...(mailContext?.expectReply?{expectReply:true}:{}),
+    ...(mailContext?.replyFinal?{replyFinal:true}:{}),
     ...(mailContext?.workKey?{workKey:mailContext.workKey}:{}),
     ...(mailContext?.executionKey?{executionKey:mailContext.executionKey}:{}),
     ...(mailContext?.replyTo?{replyTo:mailContext.replyTo}:{}),
@@ -753,7 +768,19 @@ export function guardedSend({
     console.error(`편지 본문 저장 실패(전달은 됨): ${error.message}`);
   }
   try {
-    record(entry);
+    const rejection=storageTransaction(home,()=>{
+      if(entry.replyFinal){
+        try { resolveWorkMail(home,{...mailContext,by,role}); }
+        catch(error){
+          // 화면 전달 뒤 경쟁에서 밀려도 그 전달 사실은 남긴다. 최종 답변으로는 인정하지 않는다.
+          record({...entry,replyFinal:false,replyFinalRejected:true});
+          return error;
+        }
+      }
+      record(entry);
+      return null;
+    });
+    if(rejection)throw rejection;
   } catch (error) {
     error.delivery = "sent";
     throw error;
@@ -1342,35 +1369,23 @@ function cmdStart(argv, flags) {
 function cmdSend(argv, flags) {
   const role = argv[0];
   if (!role) {
-    die("사용법: kadan send <역할> [--task <카드id>] [--raw] [--force-no-card] <메시지...> (메시지 생략 시 표준 입력)");
+    die("사용법: kadan send <역할> [--task <카드id>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력)");
   }
-  if(role==='비서'&&flags.task)throw new Error('비서 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
+  if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
   const session = sessionName(role);
   const argText = argv.slice(1).join(" ");
   const input = argText || fs.readFileSync(0, "utf8");
   const message = flags.raw || argText ? input : input.replace(/\n+$/, "");
   if (!message) die("보낼 메시지가 비어 있다");
-  if(role==='비서'){
-    if (flags.raw) throw new Error('비서 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
-    const receipt=new SecretaryMailbox(ledgerHome()).send({by:resolveLedgerBy({env:process.env}),message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution});
+  if(role==='비서'||flags.mailbox===true){
+    if (flags.raw) throw new Error('저장 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
+    const receipt=new Mailbox(ledgerHome(),role).send({by:resolveLedgerBy({env:process.env}),message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
     console.log(JSON.stringify(receipt));return;
-  }
-
-  // 카드 없는 작업 지시 가드 (2026-09-15 card-kadan-send-no-card-guard): --task 없이
-  // 작업 지시로 보이는 말을 본내면 그 작업자는 AI 감시 밖으로 빠진다. 감독 계열을
-  // 향한 보고는 지시가 아니므로 걸지 않고, 깨우기·확인은 지시 어미가 없어 통과한다.
-  if (flags.task == null && !flags["force-no-card"] && !/감독/u.test(role) && looksLikeWorkDirective(message)) {
-    die(
-      "이 메시지는 작업 지시로 보입니다. 카드 없이 본내면 이 작업자는 AI 감시 대상에서 제외됩니다.\n" +
-        "카드를 만들고 --task로 본내세요.\n" +
-        "아니라면 --force-no-card로 본내세요 (깨우기·확인만).",
-      2
-    );
   }
 
   let receipt;
   try {
-    const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId:flags.task});
+    const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId:flags.task,by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
     receipt = guardedSend({
       floor,
       session,
@@ -1382,10 +1397,10 @@ function cmdSend(argv, flags) {
       recordedPid: recordedPid(lastStartFor(session)),
     });
   } catch (error) {
-    die(error.message, error.exitCode || 1);
+    die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
   }
   console.log(
-    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${session} (${receipt.bytes}B, 지문 ${receipt.digest})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
+    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
   );
 }
 
@@ -1796,7 +1811,7 @@ function cmdUp(_argv, flags) {
     start: (argv, startFlags) => cmdStart(argv, startFlags),
     send: ({ role, session, message, roleProfile }) => {
       const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
-      console.log(`첫 지문 전송됨: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}) — 입력 접수·AI 실행 미확인`);
+      console.log(`첫 지문 전송됨: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
     },
   });
 }
@@ -1870,7 +1885,7 @@ export function parseFlags(argv) {
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card") {
+    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox") {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);

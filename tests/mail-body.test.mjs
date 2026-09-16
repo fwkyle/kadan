@@ -27,7 +27,7 @@ test("보낸 본문은 지문 이름의 옆 파일로 남고 원장 줄에는 �
     message,
     taskId: "card-66",
     recordedPid: "111",
-    env: {},
+    env: {KADAN_HOME:home},
     record: line => lines.push(line),
     readEntries: () => [],
     saveBody: (digestValue, body) => saveMailBody(digestValue, body, home),
@@ -43,8 +43,8 @@ test("보낸 본문은 지문 이름의 옆 파일로 남고 원장 줄에는 �
   assert.equal(saved, message);
   assert.equal(fs.existsSync(path.join(mailDir(home), `${entry.digest}.txt`)), true);
 
-  // 사람이 그 파일만 지우면 원장은 그대로고 본문만 사라진다.
-  fs.rmSync(path.join(mailDir(home), `${entry.digest}.txt`));
+  // 본문을 보관 위치로 옮겨도 원장은 그대로다.
+  fs.renameSync(path.join(mailDir(home), `${entry.digest}.txt`),path.join(mailDir(home), `${entry.digest}.saved`));
   assert.equal(readMailBody(entry.digest, home), null);
   assert.equal(lines.length, 1);
 });
