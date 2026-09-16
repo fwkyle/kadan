@@ -8,6 +8,7 @@ import path from 'node:path';
 import {storageMode,storageSnapshot,transaction,readStream} from './storage.mjs';
 import {WorkStore} from './work-store.mjs';
 import {workLetters} from './work-mail.mjs';
+import {isMailTransfer} from './mail-routing.mjs';
 import {Handover} from './handover.mjs';
 
 const validKey=value=>typeof value==='string'&&/^[\p{L}\p{N}_-]+\/[\p{L}\p{N}_-]+$/u.test(value);
@@ -62,7 +63,8 @@ function linkedRecords(home,work,cardHeads){
  const eventIds=[...keys,...cardHeads.filter(c=>keys.includes(c.key)).map(c=>c.id)];
  const mailRefs=work.mailRefs;
  const seed=read(e=>['send','done'].includes(e.kind)&&(e.workKey===work.key||keys.includes(e.executionKey)||eventIds.includes(e.taskId)||mailRefs.includes(e.mailId)||mailRefs.includes(e.digest))||e.kind==='handover'&&e.taskIds?.some(id=>ids.includes(id)));
- const candidates=new Map(seed.map(e=>[e.seq,e]));
+ // 우편 책임은 카드 연결이 없는 인계와 여러 차례의 후임 이전도 따른다.
+ const candidates=new Map([...seed,...read(isMailTransfer)].map(e=>[e.seq,e]));
  const connected=e=>(!e.workKey||e.workKey===work.key)&&(!e.executionKey||keys.includes(e.executionKey));
  let letters=[];
  for(;;){
@@ -117,7 +119,7 @@ function handoverModels(home,events,executions,cards){
  });
 }
 
-const mailModel=e=>({ref:ref(e),mailId:e.mailId||null,at:e.t||null,by:e.by||null,to:e.role||null,executionKey:e.executionKey||null,replyTo:e.replyTo||null,kind:e.mailKind||null,read:e.read,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,replyFinalRejected:e.replyFinalRejected===true,completion:e.completion===true,completionTaskId:e.completionTaskId||null,hasBodyRef:Boolean(e.digest)});
+const mailModel=e=>({ref:ref(e),mailId:e.mailId||null,at:e.t||null,by:e.by||null,to:e.role||null,currentSender:e.currentSender||e.by||null,currentRecipient:e.currentRecipient||e.role||null,executionKey:e.executionKey||null,replyTo:e.replyTo||null,kind:e.mailKind||null,read:e.read,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,replyFinalRejected:e.replyFinalRejected===true,completion:e.completion===true,notificationOnly:e.notificationOnly===true,systemGenerated:e.systemGenerated||null,completionTaskId:e.completionTaskId||null,hasBodyRef:Boolean(e.digest)});
 
 export function operationsFlowDetail(home,key,{page=1}={}){
  return storageSnapshot(home,()=>{

@@ -1,3 +1,4 @@
+import {MailWatch} from './watch-mail.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
@@ -330,6 +331,8 @@ export async function runWatch({
   queuedAfterMs = stallAfterMs,
   sendAlert,
   resume429 = null,
+  sendMailReminder = null,
+  mailUnreadGraceMs = 300_000,
   record = () => {},
   intervalMs,
   stallN,
@@ -365,6 +368,14 @@ export async function runWatch({
     }
   };
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429});
+  const mailDelivered = new Set();
+  const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,send:(role,message,pid)=>{
+    try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
+    catch (error) {
+      if (error.delivery === 'sent') mailDelivered.add(role);
+      throw error;
+    }
+  }}) : null;
   let roleStates = new Map();
   let queuedStates = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
@@ -387,10 +398,11 @@ export async function runWatch({
 
   try { while (!signal?.aborted) {
     const cycleAt = now();
-    let entries = [];
+    let entries = [], mailEntries = [];
     let ledgerError = null;
     try {
       entries = readEntries();
+      mailEntries = entries;
     } catch (error) {
       ledgerError = error;
     }
@@ -477,7 +489,7 @@ export async function runWatch({
           const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks());
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
-          const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.role===seen.role);
+          const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.transport!=='mailbox'&&e.role===seen.role);
           if(JSON.stringify(lastInput(entries))!==JSON.stringify(lastInput(currentEntries)))return false;
           const current=collectRoles(floor,currentEntries,new Set([session])).observations.get(session);
           return current?.alive && String(current.pid)===String(seen.pid) && String(current.expectedPid)===String(seen.pid) &&
@@ -517,8 +529,8 @@ export async function runWatch({
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
-      const context=observationContext(candidate.role,seen,entries,cards??[],scope?.entries??[]);
-      const evidenceDigest=shortDigest(JSON.stringify([seen.screen,context.process,context.tasks,context.recentMail]));
+      const context=observationContext(candidate.role,seen,mailEntries,cards??[],scope?.entries??[]);
+      const evidenceDigest=shortDigest(JSON.stringify([seen.screen,context.process,context.tasks,context.recentTaskEvents,context.recentMail]));
       const previous=workerChecks.get(candidate.session);
       const same=previous?.responsibility===responsibility;
       const interval=same&&previous.evidenceDigest===evidenceDigest?WORKER_RECHECK_MS:judgeCooldownMs;
@@ -545,7 +557,7 @@ export async function runWatch({
       if(progress) invokeAI(progress);
     }
     const supervisorCheck=supervisorScope&&!observationError
-      ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,cards,now:cycleAt,enabled:Boolean(judgeCmd)})
+      ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,mailEntries,cards,now:cycleAt,enabled:Boolean(judgeCmd)})
       : {candidate:null,alerts:[]};
     if(supervisorCheck.candidate)invokeAI(supervisorCheck.candidate);
     if(cardError) reportAlerts=[{id:'cards:unreadable',kind:'모름',level:'AMBER',screenError:'감시 대상 카드 읽기 실패'}];
@@ -570,7 +582,7 @@ export async function runWatch({
       if(!seen?.alive||!seen.screen)continue;
       const check=candidate.source==='supervisor-health'?null:workerCheck(candidate,seen);
       if(check&&!check.due)continue;
-      const input={...candidate.input,...observationContext(role,seen,entries,cards??[],
+      const input={...candidate.input,...observationContext(role,seen,mailEntries,cards??[],
         candidate.source==='supervisor-health'?supervisorScope.entries:scope?.entries??[])};
       if(candidate.source==='stall')input.screen=seen.screen.slice(-8000);
       else input.current=seen.screen.slice(-8000);
@@ -711,6 +723,22 @@ export async function runWatch({
         lastWakeAt = cycleAt;
       }
     }
+    let mailError = false;
+    if (mailWatch && !observationError) {
+      try {
+        mailWatch.tick({entries:mailEntries,cards:cards??[],works,now:cycleAt,
+          floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal});
+        mailError = mailWatch.failed;
+      } catch (error) {
+        mailError = true;
+        print(`[watch] 미확인 우편 감시 실패: ${error.message}`);
+        try { record({kind:'watch-mail-reminder',by:'watch',action:'error',phase:'cycle',
+          reason:'mail-reminder-cycle-failed',error:error.message,t:new Date(cycleAt).toISOString()}); }
+        catch (storeError) { print(`[watch] 우편 감시 실패 기록 오류: ${storeError.message}`); }
+      }
+      for (const role of mailDelivered) deliveredRecipients.add(role);
+      mailDelivered.clear();
+    }
     const absorbed = observationError ? {states:roleStates,screenAlerts:[]} : absorbDeliveredScreens(floor, roleStates, deliveredRecipients);
     roleStates = absorbed.states;
     // Absorption belongs to this cycle's baseline, not a second delivery pass.
@@ -721,7 +749,7 @@ export async function runWatch({
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
         record(buildCycleEntry({pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
-          sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError}));
+          sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
         lastCycleRecordedAt = cycleAt;
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
     }

@@ -7,8 +7,8 @@ import {storageCommand} from './storage-migration.mjs';
 import {assertWritable,storageTransaction} from './storage.mjs';
 import {SecretaryMailbox} from './secretary-mailbox.mjs';
 import {Mailbox,inboxCommand} from './mailbox.mjs';
-import {isUserActor} from './actors.mjs';
 import {composeRoleInstructions,startRoleProfile} from './role-instructions.mjs';
+import {composeMailInstructions} from './mail-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
 import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
@@ -651,6 +651,7 @@ export function guardedSend({
   mailContext,
   roleProfile,
   raw = false,
+  notificationOnly = false,
   source,
   env = process.env,
   recordedPid: expectedPid,
@@ -659,6 +660,7 @@ export function guardedSend({
   saveBody = saveMailBody,
 }) {
   assertWritable(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome());
+  if (typeof notificationOnly !== 'boolean') throw new Error('notificationOnly는 boolean이어야 합니다');
   if (taskId != null && (typeof taskId !== "string" || !/^\S+$/.test(taskId))) {
     throw new Error("taskId는 공백 없는 한 덩어리여야 한다");
   }
@@ -666,8 +668,17 @@ export function guardedSend({
   if(taskId!=null&&mailContext?.replyFinal)throw new Error('최종 답변은 --task 발령과 함께 사용할 수 없습니다');
   const home=env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome();
   const by=resolveLedgerBy({source,env});
+  const resolveReplyContext=()=>{
+    const resolved=resolveWorkMail(home,{...mailContext,taskId,by,role});
+    if (resolved.currentRecipient && resolved.currentRecipient !== role) {
+      const error=new Error(`답장 수신 책임자가 ${role}에서 ${resolved.currentRecipient}(으)로 변경되었습니다. inbox read로 현재 주소를 확인하세요`);
+      error.code='KADAN_MAIL_RECIPIENT_CHANGED';error.delivery='not-sent';
+      throw error;
+    }
+    return resolved;
+  };
   if(mailContext?.replyTo||mailContext?.replyFinal||mailContext?.expectReply){
-    mailContext=resolveWorkMail(home,{...mailContext,taskId,by,role});
+    mailContext=resolveReplyContext();
   }
   const mailId=randomUUID();
   const originalTaskId=taskId;
@@ -690,9 +701,9 @@ export function guardedSend({
   const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
     role,message,profile:roleProfile,raw,taskId,mailContext,entries});
   message = composed.message;
-  if(mailContext?.expectReply===true){
-    const recipient="'"+by.replaceAll("'","'\\''")+"'";
-    message+=`\n\n질문ID: ${mailId}. 최종 답변: kadan send ${recipient} --reply-to ${mailId} --reply-final${isUserActor(by,env)?' --mailbox':''} <답변>. 일반 답장과 읽음은 답변 대기를 끝내지 않습니다.`;
+  if (!raw) {
+    const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,expectReply:mailContext?.expectReply===true,sender:by,env});
+    if (instructions) message+=`\n\n${instructions}`;
   }
   const conflicts = familyConflictAlerts({role,session,entries,source,env});
   for (const conflict of conflicts) {
@@ -718,6 +729,7 @@ export function guardedSend({
   if (!expectedPid) {
     console.error("경고: 원장에 이 세션의 시작 기록이 없다 (PID 대조 생략)");
   }
+  if (mailContext?.replyTo) resolveReplyContext();
 
   let receipt;
   try {
@@ -729,6 +741,7 @@ export function guardedSend({
   const entry = {
     kind: "send",
     mailId,
+    ...(notificationOnly?{notificationOnly:true}:{}),
     ...(mailContext?.expectReply?{expectReply:true}:{}),
     ...(mailContext?.replyFinal?{replyFinal:true}:{}),
     ...(mailContext?.workKey?{workKey:mailContext.workKey}:{}),
@@ -770,7 +783,7 @@ export function guardedSend({
   try {
     const rejection=storageTransaction(home,()=>{
       if(entry.replyFinal){
-        try { resolveWorkMail(home,{...mailContext,by,role}); }
+        try { resolveReplyContext(); }
         catch(error){
           // 화면 전달 뒤 경쟁에서 밀려도 그 전달 사실은 남긴다. 최종 답변으로는 인정하지 않는다.
           record({...entry,replyFinal:false,replyFinalRejected:true});
@@ -1372,7 +1385,6 @@ function cmdSend(argv, flags) {
     die("사용법: kadan send <역할> [--task <카드id>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력)");
   }
   if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
-  const session = sessionName(role);
   const argText = argv.slice(1).join(" ");
   const input = argText || fs.readFileSync(0, "utf8");
   const message = flags.raw || argText ? input : input.replace(/\n+$/, "");
@@ -1386,21 +1398,27 @@ function cmdSend(argv, flags) {
   let receipt;
   try {
     const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId:flags.task,by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
+    const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
+    const expectedPid=recordedPid(lastStartFor(session));
+    if (recipient!==role && !expectedPid) {
+      const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
+      error.delivery='not-sent';throw error;
+    }
     receipt = guardedSend({
       floor,
       session,
-      role,
+      role:recipient,
       message,
       taskId: flags.task,
       mailContext,
       raw:flags.raw===true,
-      recordedPid: recordedPid(lastStartFor(session)),
+      recordedPid: expectedPid,
     });
   } catch (error) {
     die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
   }
   console.log(
-    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
+    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${receipt.session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
   );
 }
 
@@ -1490,6 +1508,18 @@ function sendWatchMessage(role,message) {
   }
   const session=sessionName(role);
   guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session))});
+}
+
+export function sendWatchMailReminder(role,message,expectedPid,{
+  selectedFloor=floor,readStart=lastStartFor,send=guardedSend,
+}={}) {
+  const session=sessionName(role);
+  if (expectedPid == null || expectedPid === '' || String(recordedPid(readStart(session))) !== String(expectedPid)) {
+    const error=new Error('미확인 우편 알림 수신 세대 변경');
+    error.delivery='not-sent';
+    throw error;
+  }
+  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,notificationOnly:true});
 }
 
 function cmdWatch(argv, flags) {
@@ -1601,6 +1631,7 @@ function cmdWatch(argv, flags) {
     stallAfterMs: stallAfterMinutes*60_000,
     record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
     sendAlert: sendWatchMessage,
+    sendMailReminder: sendWatchMailReminder,
     resume429: (role,message,expectedPid) => {
       const session=sessionName(role);
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');

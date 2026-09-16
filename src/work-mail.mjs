@@ -17,17 +17,17 @@ export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,rol
  if(taskId){const identity=taskIdentity(cards);identity.write(taskId,executionKey);const found=identity.resolve(taskId,executionKey);if(!found.card&&works.some(w=>w.id===taskId||w.key===taskId))throw new Error('업무 ID는 실행 발령에 쓰지 않습니다. 업무 안에 새 실행을 등록하세요');if(found.card){executionKey=found.key;}}
  let parent;
  if(replyTo){
-  const matches=entries.filter(x=>x.kind==='send'&&(x.mailId===replyTo||x.digest===replyTo));
+  const matches=mailboxLetters(entries).filter(x=>x.mailId===replyTo||x.digest===replyTo);
   if(matches.length!==1)throw new Error('고유한 원본 우편 ID 필요');
   parent=matches[0];
   if(typeof parent.by!=='string'||!parent.by.trim()||typeof parent.role!=='string'||!parent.role.trim())throw new Error('원본 우편 참가자 정보 손상');
   if(workKey&&workKey!==parent.workKey)throw new Error('답장과 원본의 업무가 다릅니다');
   if(executionKey&&executionKey!==parent.executionKey)throw new Error('답장과 원본의 실행이 다릅니다');
-  if(role!==undefined&&role!==parent.by)throw new Error('답장 받는 역할은 원본 발신자여야 합니다');
-  if(by!==undefined&&by!==parent.role&&!isUserActor(by))throw new Error('원본 수신자 또는 사용자만 답장할 수 있습니다');
+  if(role!==undefined&&!parent.replyRecipients.includes(role))throw new Error(`답장 받는 역할은 원본 발신자의 현재 책임자 ${parent.currentSender}여야 합니다`);
+  if(by!==undefined&&by!==parent.currentRecipient&&!isUserActor(by))throw new Error(`원본 수신자의 현재 책임자 ${parent.currentRecipient} 또는 사용자만 답장할 수 있습니다`);
   if(replyFinal&&parent.expectReply!==true)throw new Error('답변을 요청한 원본 우편이 아닙니다');
-  if(replyFinal&&entries.some(x=>x.kind==='mail-cancel'&&x.mailId===parent.mailId&&x.role===parent.role&&(x.by===parent.by||isUserActor(x.by))))throw new Error('답변 대기가 취소된 우편입니다');
-  if(replyFinal&&mailboxLetters(entries).find(x=>x.mailId===parent.mailId)?.replyStatus==='answered')throw new Error('이미 최종 답변이 도착한 우편입니다');
+  if(replyFinal&&parent.replyStatus==='cancelled')throw new Error('답변 대기가 취소된 우편입니다');
+  if(replyFinal&&parent.replyStatus==='answered')throw new Error('이미 최종 답변이 도착한 우편입니다');
   workKey??=parent.workKey;executionKey??=parent.executionKey;
  }
  if(executionKey){
@@ -39,7 +39,7 @@ export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,rol
  if(workKey&&!works.some(w=>w.key===workKey))throw new Error('연결할 업무 없음');
  if(parent&&(workKey!==parent.workKey||executionKey!==parent.executionKey))throw new Error('답장과 원본의 업무 또는 실행이 다릅니다');
  if(taskId&&workKey&&['done','cancelled'].includes(works.find(w=>w.key===workKey).status))throw new Error('종료한 업무입니다. 업무를 다시 열고 새 실행을 등록하세요');
- return {...replyFlags,...(workKey?{workKey}:{}),...(executionKey?{executionKey}:{}),...(replyTo?{replyTo}:{})};
+ return {...replyFlags,...(workKey?{workKey}:{}),...(executionKey?{executionKey}:{}),...(replyTo?{replyTo,currentRecipient:parent.currentSender}:{})};
 }
 
 export function workLetters(work,entries,cards){

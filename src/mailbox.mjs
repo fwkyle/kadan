@@ -6,6 +6,7 @@ import * as ledger from './ledger.mjs';
 import {assertWritable,storageTransaction} from './storage.mjs';
 import {resolveWorkMail} from './work-mail.mjs';
 import {composeRoleInstructions,readRoleInstructionsConfig} from './role-instructions.mjs';
+import {composeMailInstructions} from './mail-instructions.mjs';
 
 export const SECRETARY='비서';
 const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -36,8 +37,9 @@ export class Mailbox {
   const file=path.join(dir,`${digest}.txt`);
   if(fs.existsSync(file)){if(fs.readFileSync(file,'utf8')!==message)throw new Error('우편 본문 지문 충돌');}
   else fs.writeFileSync(file,message,{mode:0o600,flag:'wx'});
-  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...context},this.home);
-  return {mailId,recipient:this.role,status:'stored',wake:'not-connected'};
+  const {currentRecipient,...connection}=context;
+  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...connection},this.home);
+  return {mailId,recipient:currentRecipient||this.role,currentRecipient:currentRecipient||this.role,status:'stored',wake:'not-connected'};
  }
  list({all=false,view='received',unread=false}={}){
   return mailboxLetters(readMailboxEntries(this.home),this.role,{all:view==='sent'||all,view,unread}).reverse();
@@ -47,25 +49,29 @@ export class Mailbox {
   const letter=[...this.list({all:true}),...this.list({view:'sent'})].find(e=>e.mailId===id);
   if(!letter)throw new Error(`${this.role} 우편 없음`);
   const body=ledger.readMailBody(letter.digest,this.home);if(body===null)throw new Error('본문 없음 또는 읽기 실패: 읽음 처리하지 않습니다');
-  const receiver=composeRoleInstructions({home:this.home,role:letter.role,...(letter.role===SECRETARY?{profile:'secretary'}:{}),mailContext:letter});
-  return {...letter,body,receiverInstructions:receiver.instructions,receiverInstructionsProfile:receiver.metadata.profile,
-   receiverInstructionsDigest:receiver.metadata.digest,roleInstructions:receiver.metadata};
+  const recipient=letter.currentRecipient||letter.role;
+  const receiver=composeRoleInstructions({home:this.home,role:recipient,...(recipient===SECRETARY?{profile:'secretary'}:{}),mailContext:letter});
+  const instructions=composeMailInstructions({mailId:letter.mailId,recipient,sender:letter.currentSender||letter.by,
+   expectReply:letter.replyStatus==='waiting',notificationOnly:letter.notificationOnly===true||letter.systemGenerated==='task-completion'});
+  const receiverInstructions=[receiver.instructions,instructions].filter(Boolean).join('\n\n');
+  return {...letter,body,receiverInstructions,receiverInstructionsProfile:receiver.metadata.profile,
+   receiverInstructionsDigest:createHash('sha256').update(receiverInstructions).digest('hex'),roleInstructions:receiver.metadata};
  }
  acknowledge(id,by){return storageTransaction(this.home,()=>this.#recordRead(id,by));}
  #recordRead(id,by){
   if(!canAct(by,this.role))throw new Error(`${this.role} 또는 사용자만 읽음 기록 가능`);
   const letter=this.read(id);
-  if(letter.role!==this.role)throw new Error('수신한 우편만 읽음 기록 가능');
+  if(letter.currentRecipient!==this.role)throw new Error('수신한 우편만 읽음 기록 가능');
   if(!letter.read)ledger.appendLedger({kind:'mail-read',role:this.role,transport:letter.transport,mailId:id,by},this.home);
   return {mailId:id,read:true};
  }
  cancel(id,by){return storageTransaction(this.home,()=>this.#recordCancel(id,by));}
  #recordCancel(id,by){
   const letter=this.read(id);
-  if(letter.by!==this.role||!canAct(by,letter.by))throw new Error('보낸 역할 또는 사용자만 답변 대기 취소 가능');
+  if(letter.currentSender!==this.role||!canAct(by,letter.currentSender))throw new Error('보낸 역할 또는 사용자만 답변 대기 취소 가능');
   if(letter.expectReply!==true)throw new Error('답변을 요청한 우편이 아닙니다');
   if(letter.replyStatus==='answered')throw new Error('이미 최종 답변이 도착한 우편입니다');
-  if(!letter.cancelled)ledger.appendLedger({kind:'mail-cancel',role:letter.role,mailId:id,by},this.home);
+  if(!letter.cancelled)ledger.appendLedger({kind:'mail-cancel',role:letter.currentRecipient,mailId:id,by},this.home);
   return {mailId:id,replyStatus:'cancelled'};
  }
 }

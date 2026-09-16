@@ -168,7 +168,8 @@ test('새 완료 결과 우편은 실행 담당을 늘리지 않고 읽음·중�
  let detail=operationsFlowDetail(f.home,f.work.key);
  assert.equal(detail.executions[0].reportState,'ok');
  assert.deepEqual(detail.executions[0].signals.map(s=>s.role),['작업자']);
- assert.equal(detail.mail.items.filter(m=>m.completion).length,1);
+ const completions=detail.mail.items.filter(m=>m.completion);
+ assert.equal(completions.length,1);assert.equal(completions[0].notificationOnly,true);assert.equal(completions[0].read,false);
  const q=f.mail('답변할 질문',{expectReply:true});
  f.record({kind:'mail-read',mailId:q.mailId,role:'감독',by:'감독'});
  f.mail('중간 답장',{replyTo:q.mailId,by:'감독',role:'작업자'});
@@ -182,4 +183,22 @@ test('새 완료 결과 우편은 실행 담당을 늘리지 않고 읽음·중�
  detail=operationsFlowDetail(f.home,f.work.key);
  assert.equal(detail.mail.items.find(m=>m.mailId===cancelled.mailId).replyStatus,'cancelled');
  assert.equal(detail.executions[0].reportState,'ok');
+});
+
+for(const mode of ['sqlite','jsonl'])test(`${mode}: 카드 없는 연속 인계도 우편 현재 책임에 반영하고 원본·조회 전후 기록을 보존한다`,()=>{
+ const f=fixture(mode),q=f.mail('인계 뒤 답할 질문',{expectReply:true});
+ f.record({kind:'handover',phase:'transferred',handoverId:randomUUID(),from:'감독',to:'다음감독',taskIds:[]});
+ f.record({kind:'handover',phase:'transferred',handoverId:randomUUID(),from:'다음감독',to:'최종감독',taskIds:[]});
+ f.record({kind:'handover',phase:'transferred',handoverId:randomUUID(),from:'작업자',to:'다음작업자',taskIds:[]});
+ f.record({kind:'mail-read',mailId:q.mailId,role:'최종감독',by:'최종감독'});
+ const streams=['ledger.jsonl','tasks/events.jsonl','mail/events.jsonl','system/events.jsonl'];
+ const before=streams.map(name=>readStream(f.home,name,{optional:true}));
+ const detail=operationsFlowDetail(f.home,f.work.key),letter=detail.mail.items.find(m=>m.mailId===q.mailId);
+ assert.equal(letter.by,'작업자');assert.equal(letter.to,'감독');
+ assert.equal(letter.currentSender,'다음작업자');assert.equal(letter.currentRecipient,'최종감독');
+ assert.equal(letter.read,true);assert.equal(letter.replyStatus,'waiting');
+ const body=operationsFlowMail(f.home,f.work.key,q.ref);
+ assert.equal(body.body,'인계 뒤 답할 질문');assert.equal(body.currentRecipient,'최종감독');assert.equal(body.currentSender,'다음작업자');
+ assert.deepEqual(streams.map(name=>readStream(f.home,name,{optional:true})),before);
+ assert.equal(detail.handovers.length,1); // 우편 책임용 인계를 실행 인수 목록에 추가하지 않는다.
 });

@@ -376,10 +376,10 @@ export function renderWallHtml({ tree, mailbox = [], entries = [], collectedAt, 
   const options = (values,selected) => values.map(([value,label])=>`<option value="${escapeHtml(value)}"${value===selected?' selected':''}>${escapeHtml(label)}</option>`).join('');
   const allMail = !known ? [] : entries.length ? mailboxLetters(entries).reverse().map(item=>({...item,at:item.t})) : (mailbox ?? []);
   const mailUrl=new URL(query({}),'http://localhost');
-  const selectedMail=filterMail(allMail,mailUrl).filter(item=>!mailBoard||boardFromRole(item.role)===mailBoard);
+  const selectedMail=filterMail(allMail,mailUrl).filter(item=>!mailBoard||boardFromRole(item.currentRecipient||item.role)===mailBoard);
   let ledgerRows=[],ledgerError=null;
   try{ledgerRows=known?ledgerView(entries,home,ledgerDomain):[];if(ledgerRows.some(row=>row?.broken))throw new Error('원장 손상');}catch(error){ledgerError=error.message;}
-  const mailFor = board => allMail.filter(item=>boardFromRole(item.role)===board).slice(0,10);
+  const mailFor = board => allMail.filter(item=>boardFromRole(item.currentRecipient||item.role)===board).slice(0,10);
   const pills = board => board.roles.map(role=>`<span class="pill ${roleState(role).className}">${escapeHtml(role.role)} ${roleState(role).label}</span>`).join(' ') || '-';
   const summary = known ? `살아있는 역할 ${alive}개 · 도는 판 ${currentTree.length}개 · 안 끝난 카드 ${currentTree.reduce((n,b)=>n+pending(b),0)}장 · 발령 전 ${currentTree.reduce((n,b)=>n+planned(b),0)}장` : '살아있는 역할 모름 · 도는 판 모름 · 안 끝난 카드 모름 · 발령 전 모름';
   const status = !known || !resources ? '모름' : missing || (judge && assessResources(null,resources.current,resources.ncpu).alerts.length) ? '주의' : '정상';

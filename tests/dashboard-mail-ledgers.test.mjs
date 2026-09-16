@@ -9,12 +9,56 @@ import {mailboxLetters} from '../src/mailbox.mjs';
 import {renderActivity} from '../src/decision-wall.mjs';
 import {renderInbox,filterMail} from '../src/dashboard-inbox.mjs';
 import {renderDashboardHome,mailboxUnread} from '../src/dashboard-home.mjs';
-import {createWallServer} from '../src/wall.mjs';
+import {createWallServer,renderWallHtml} from '../src/wall.mjs';
 const url=query=>new URL('http://localhost/'+query);
 const send=(patch={})=>({kind:'send',mailId:'q1',by:'worker',role:'boss',expectReply:true,preview:'검토 질문',t:'2026-09-16T00:00:00Z',...patch});
 const section=(html,id)=>html.match(new RegExp(`<section[^>]*id="${id}"[^>]*>[\\s\\S]*?</section>`))?.[0];
 const decode=s=>s.replaceAll('&quot;','"').replaceAll('&#39;',"'").replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&amp;','&');
 const originals=html=>[...html.matchAll(/<pre>([\s\S]*?)<\/pre>/g)].map(m=>JSON.parse(decode(m[1])));
+
+test('인계 뒤 현재 책임자로 필터하고 원래 발수신자와 읽었지만 미답인 질문을 보존한다',()=>{
+ const entries=[send(),
+  {kind:'handover',phase:'transferred',from:'boss',to:'next-boss'},
+  {kind:'handover',phase:'transferred',from:'next-boss',to:'final-boss'},
+  {kind:'handover',phase:'transferred',from:'worker',to:'next-worker'},
+  {kind:'mail-read',mailId:'q1',role:'final-boss',by:'final-boss'}];
+ const before=structuredClone(entries),letters=mailboxLetters(entries);
+ for(const query of ['?mailRole=final-boss&mailView=received','?mailRole=final-boss&mailView=to-reply','?mailRole=next-worker&mailView=sent','?mailRole=next-worker&mailView=waiting','?mailRole=final-boss','?mailRole=next-worker']){
+  assert.deepEqual(filterMail(letters,url(query)).map(m=>m.mailId),['q1']);
+ }
+ for(const role of ['boss','next-boss','worker'])assert.equal(filterMail(letters,url('?mailRole='+role)).length,0);
+ assert.equal(letters[0].read,true);assert.equal(letters[0].replyStatus,'waiting');
+ const query=url('?mailRole=final-boss&mailView=to-reply');
+ for(const html of [renderInbox({key:'c',letters},null,query),section(renderActivity({entries,ledgerLines:entries.length},query),'mailbox')]){
+  assert.match(html,/worker/);assert.match(html,/boss/);assert.match(html,/현재 책임: next-worker → final-boss/);
+  assert.match(html,/받는 사람 읽음 확인/);assert.match(html,/답변 대기/);
+ }
+ const wall=renderWallHtml({tree:[],entries,ledgerLines:entries.length,mailRole:'final-boss',mailView:'to-reply',mailBoard:'final',collectedAt:'2026-09-16T00:00:00Z'});
+ assert.match(section(wall,'mailbox'),/현재 책임: next-worker → final-boss/);
+ assert.deepEqual(entries,before);
+});
+
+test('현재 책임자 필드가 없거나 비어도 옛 역할을 사용하고 책임자 표시를 이스케이프한다',()=>{
+ for(const fields of [{},{currentRecipient:null,currentSender:null},{currentRecipient:'',currentSender:''}]){
+  const letters=[send({read:false,replyStatus:'waiting',...fields})];
+  assert.equal(filterMail(letters,url('?mailRole=boss&mailView=received')).length,1);
+  assert.equal(filterMail(letters,url('?mailRole=worker&mailView=sent')).length,1);
+  assert.doesNotMatch(renderInbox({key:'c',letters}),/현재 책임:/);
+ }
+ const html=renderInbox({key:'c',letters:[send({currentRecipient:'<img src=x>',currentSender:'<script>'})]});
+ assert.match(html,/현재 책임: &lt;script&gt; → &lt;img src=x&gt;/);
+ assert.doesNotMatch(html,/<script>|<img src=x>/);
+});
+
+test('기록용 자동 결과와 확인 알림은 추가 알림 제외 표시만 붙이고 미확인 집계를 유지한다',()=>{
+ const entries=[send({notificationOnly:true}),send({mailId:'old-result',systemGenerated:'task-completion',completion:true,expectReply:false})];
+ const letters=mailboxLetters(entries),before=structuredClone(letters);
+ assert.equal(mailboxUnread(entries,entries.length),2);
+ const html=renderInbox({key:'c',letters},null,url('?mailUnread=1'));
+ assert.match(html,/기록용 · 추가 알림 없음/);
+ assert.match(html,/2통/);assert.match(html,/읽음 미확인/);
+ assert.deepEqual(letters,before);
+});
 
 test('모든 역할의 질문은 읽음·중간 답장 뒤에도 대기하며 역할별 받은/보낸/답할 목록을 구분한다',()=>{
  const entries=[send(),{kind:'mail-read',mailId:'q1',role:'boss',by:'boss'},send({mailId:'r1',expectReply:false,by:'boss',role:'worker',replyTo:'q1',preview:'중간 답장'}),send({mailId:'q2',by:'other',role:'reviewer',preview:'다른 질문'})];

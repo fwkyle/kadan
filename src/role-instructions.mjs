@@ -11,6 +11,7 @@ import {readStream} from './storage.mjs';
 import {activeHierarchyPath} from './hierarchy-register.mjs';
 import {parseHierarchy} from './hierarchy.mjs';
 import {effectiveCardRole,workEntries} from './handover-state.mjs';
+import {shellQuote} from './mail-instructions.mjs';
 
 export const ROLE_PROFILES = ['secretary','super','conductor','worker','reviewer'];
 const root = fileURLToPath(new URL('..',import.meta.url));
@@ -175,13 +176,14 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
       if (card) lines.push(`연결 실행: ${card.key}; 상태: ${card.status}; 확인 revision: ${card.revision}. 최신 확인: kadan card show ${card.key}.`);
       const current=taskId&&card&&identity.resolve(taskId,mailContext?.executionKey).key===card.key&&active(card)&&effectiveCardRole(card,entries,identity)===role&&(!work||work.status==='open');
       if (current) {
+        lines.push(`현재 실행에 관한 질문으로 답변을 기다릴 때는 기존 질문에 --execution ${shellQuote(card.key)} --expect-reply를 붙인다: kadan send ${reply&&reply!=='@user'?shellQuote(reply):'<확인된 직속 상위>'} --execution ${shellQuote(card.key)} --expect-reply <질문>. 일반 대화를 억지로 연결하거나 다른 실행을 추정하지 않는다.`);
         lines.push(`현재 발령 ID: ${identity.taskIdFor(card)}. 실제 착수 시 최신 kadan card show ${card.key}의 revision을 사용해 한 번 기록하라. 아래 명령의 ${card.revision}은 이 지침 생성 시점의 revision이므로 실행 전에 최신 값과 대조한다.\n\n`+
           `KADAN_ROLE=${role} kadan card progress ${card.key} --revision ${card.revision} --activity running --note "시작: 현재 실행 착수"\n\n`+
           '같은 시작을 이미 기록했으면 중복하지 않는다. 실제 대기 전환은 같은 card progress 명령에서 최신 revision과 --activity waiting, 대기 이유를 사용한다.');
         const auto=work?readStream(home,`automatic-review/${work.key}/events.jsonl`,{optional:true}).at(-1):null;
         if (auto?.current?.key===card.key && auto.current.role===role && ['sending','waiting'].includes(auto.status)) {
           lines.push(`완료 방식: 자동. 결과파일 → kadan work auto-report ${work.key} --execution ${card.key} --outcome ${auto.phase==='review'?'pass|changes|exception':'implemented|exception'} --result-file <절대경로> → 현재 ID의 자기 DONE. 정상 중간 완료 편지를 감독에게 중복 전송하지 않는다.`);
-        } else lines.push('완료 방식: 수동. 결과파일 → 확인된 직속 감독에게 완료 통지 1회 → 현재 ID의 자기 DONE. 회신 대상이 모르면 추측하지 말고 최신 카드의 지정 수신자를 확인한다.');
+        } else lines.push(`완료 방식: 수동. 결과파일 → 확인된 직속 감독에게 완료 통지 1회 → 현재 ID의 자기 DONE. 기존 완료 통지에 --execution ${shellQuote(card.key)}를 붙여 현재 실행에 연결한다. 추가 카드나 중복 send를 만들지 않는다. 회신 대상이 모르면 추측하지 말고 최신 카드의 지정 수신자를 확인한다.`);
         lines.push('마커 형식: KADAN:DONE <현재카드id> <ok|failed>. ID와 결과는 완료 시 조립한다.');
       } else lines.push('이 편지만으로 새 실행을 시작하거나 과거 완료 ID의 DONE을 다시 출력하지 않는다. 연결 ID는 조회 근거이며 현재 발령을 뜻하지 않는다.');
       if (['super','conductor'].includes(selected.profile)) lines.push('완료 수신 다음 행동: 근거 확인 → 아직 확정되지 않은 실행만 done 기록 → 빠진 검수·후속 연결. 전체 완료 조건 충족을 확인한 책임 owner만 최신 work show revision으로 work complete한다. PASS만으로 업무를 자동 종료하지 않는다.');

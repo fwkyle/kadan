@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {appendStream,readStream,storageMode,storageSnapshot,storageTransaction,assertWritable} from './storage.mjs';
+import {isMailTransfer} from './mail-routing.mjs';
+import {taskIdentity} from './task-identity.mjs';
 
 export const ledgerStreams = Object.freeze({tasks:'tasks/events.jsonl',mail:'mail/events.jsonl',system:'system/events.jsonl'});
 const taskKinds = new Set(['plan','dispatch','done']);
@@ -71,13 +73,14 @@ export function validateDomainStreams(streams,legacy = []) {
     } else if (rows.length !== 1) throw new Error('도메인 원장 순번 중복');
   }
   const result = ordered.flatMap(([,rows]) => rows);
-  const mails = new Map([...legacy,...result].filter(row=>row?.kind==='send' && row.mailId).map(row=>[row.mailId,row]));
+  const history=[...legacy,...result];
+  const mails = new Map(history.filter(row=>row?.kind==='send' && row.mailId).map(row=>[row.mailId,row]));
   const completions = new Map();
   for (const done of result.filter(row=>row.kind==='done' && row.completionMailId)) {
     const mail=mails.get(done.completionMailId),request=mail && mails.get(mail.replyTo);
     if (!mail || mail.systemGenerated!=='task-completion' || !mail.completion || !mail.replyFinal || mail.transport!=='mailbox' || own(mail,'taskId') ||
         mail._ledgerOrder!==done._ledgerOrder+1 || mail.by!==done.role || mail.completionTaskId!==done.taskId || mail.result!==done.result ||
-        !request || !taskSend(request) || !sameTask(request,done) || request.by!==mail.role || !request.by || request.by==='모름')
+        !request || request!==completionRequest(done,history.slice(0,history.indexOf(done))) || request.by!==mail.role || !request.by || request.by==='모름')
       throw new Error('도메인 원장 완료 우편 연결 손상');
     if (completions.has(mail.mailId)) throw new Error('도메인 원장 완료 우편 중복');
     completions.set(mail.mailId,done);
@@ -116,22 +119,55 @@ const validTask = value => typeof value.taskId === 'string' && value.taskId &&
   (!value.executionKey || (typeof value.executionKey === 'string' &&
     (value.taskId === value.executionKey || value.taskId === value.executionKey.split('/').at(-1))));
 const explicitTaskKey = value => value.executionKey || (value.taskId?.includes('/') ? value.taskId : null);
-function sameTask(a,b) {
-  if (!validTask(a) || !validTask(b) || a.role !== b.role) return false;
-  const ak=explicitTaskKey(a),bk=explicitTaskKey(b);
-  if (ak && bk) return ak === bk;
-  return a.taskId.split('/').at(-1) === b.taskId.split('/').at(-1);
+function completionRequest(done,history) {
+  // 우편 책임과 달리 작업은 확정 인계의 taskIds에 적힌 실행만 옮긴다.
+  // 원장 안의 정식 주소로 같은 taskIdentity 별칭 규칙을 적용하며 모호하면 통지하지 않는다.
+  const keys=new Set([done,...history].flatMap(row=>[
+    ...(validTask(row||{})&&explicitTaskKey(row)?[explicitTaskKey(row)]:[]),
+    ...(isMailTransfer(row)&&Array.isArray(row.taskIds)?row.taskIds.filter(id=>typeof id==='string'&&id.includes('/')):[]),
+  ]));
+  const identity=taskIdentity([...keys].map(key=>({key,id:key.split('/').at(-1)})));
+  const address=(taskId,executionKey)=>{
+    const found=identity.resolve(taskId,executionKey);
+    return found.state==='resolved'?found.key:found.state==='unregistered'?taskId:null;
+  };
+  const target=address(done.taskId,done.executionKey);
+  if(!target)return null;
+  const projected=[],transfers=new Set();
+  for(const entry of history){
+    if(isMailTransfer(entry)&&Array.isArray(entry.taskIds)){
+      const id=entry.handoverId||JSON.stringify([entry.from,entry.to]);
+      if(transfers.has(id))continue;
+      transfers.add(id);
+      const tasks=new Set(entry.taskIds.map(id=>address(id)));
+      for(const item of projected)if(item.role===entry.from&&item.key&&tasks.has(item.key))item.role=entry.to;
+    }else if((taskSend(entry||{})||entry?.kind==='done')&&validTask(entry)){
+      projected.push({entry,role:entry.role,key:address(entry.taskId,entry.executionKey)});
+    }
+  }
+  const matches=projected.filter(item=>item.role===done.role&&item.key===target);
+  // 최초 완료만 인정한다. 인계 전에 이미 완료된 실행도 다시 결과 우편을 만들지 않는다.
+  if(matches.some(item=>item.entry.kind==='done'))return null;
+  return matches.filter(item=>taskSend(item.entry)).at(-1)?.entry||null;
+}
+
+// 일반 답장의 연결 검사를 완화하지 않는다. 저장된 done과 원발령을 확인한 결과 우편만 예외다.
+export function isTaskCompletionReply(entries,mail,request) {
+  if(!request||!taskSend(request)||mail.systemGenerated!=='task-completion'||mail.completion!==true||
+    mail.replyFinal!==true||mail.transport!=='mailbox'||own(mail,'taskId')||mail.replyTo!==request.mailId)return false;
+  const mailIndex=entries.indexOf(mail);
+  const doneIndex=entries.findIndex(entry=>entry?.kind==='done'&&entry.completionMailId===mail.mailId);
+  if(doneIndex<0||doneIndex>=mailIndex)return false;
+  const done=entries[doneIndex];
+  return validTask(done)&&['ok','failed'].includes(done.result)&&done.role===mail.by&&done.taskId===mail.completionTaskId&&
+    done.result===mail.result&&mail.role===request.by&&mail.workKey===request.workKey&&
+    mail.executionKey===(done.executionKey??request.executionKey)&&completionRequest(done,entries.slice(0,doneIndex))===request;
 }
 function completionFor(done,state,home) {
   if (done.kind !== 'done' || !done.role || !validTask(done) || !['ok','failed'].includes(done.result)) return null;
   const history = [...state.legacy,...state.ordered];
-  // 최초 완료에만 통지한다. 과거 완료를 재기록해도 소급 우편을 만들지 않는다.
-  if (history.some(value => value?.kind === 'done' && sameTask(value,done))) return null;
-  const candidates = history.filter(value => value && taskSend(value) && sameTask(value,done));
-  if (!candidates.length) return null;
-  const knownKeys = new Set(candidates.map(explicitTaskKey).filter(Boolean));
-  if (knownKeys.size > 1) return null;
-  const request = candidates.at(-1);
+  const request=completionRequest(done,history);
+  if(!request)return null;
   if (request._ledgerOrder) {
     const dispatch=state.ordered.find(row=>row.kind==='dispatch' && row.mailId===request.mailId);
     if (!dispatch || JSON.stringify(dispatchFor(request))!==JSON.stringify(dispatchFor({...dispatch,kind:'send'}))) throw new Error('도메인 원장 send/dispatch 연결 손상');
@@ -152,7 +188,7 @@ function completionFor(done,state,home) {
   } else fs.writeFileSync(file,body,{flag:'wx',mode:0o600});
   done.completionMailId = mailId;
   return {t:done.t,kind:'send',mailId,transport:'mailbox',mailKind:'report',replyFinal:true,
-    completion:true,systemGenerated:'task-completion',role:request.by,by:done.role,replyTo:request.mailId,
+    completion:true,systemGenerated:'task-completion',notificationOnly:true,role:request.by,by:done.role,replyTo:request.mailId,
     completionTaskId:done.taskId,...refs,result:done.result,digest,bytes:Buffer.byteLength(body),_ledgerOrder:done._ledgerOrder+1};
 }
 
@@ -177,13 +213,14 @@ export function appendDomainLedger(entry,home) {
       if (taskSend(value)) value.dispatchId = value.mailId;
     }
     if (db && value.kind === 'done' && value.role && validTask(value)) {
-      // JSON은 해당 역할/작업 주소 후보만 JS로 읽는다. 다른 역할의 감시/우편은 읽지 않는다.
-      // r/a → a 별칭 후보를 모든 저장소에서 모은 뒤 sameTask/knownKeys로 모호성을 판정한다.
+      // 같은 작업 주소 후보와 확정 인계만 읽는다. 후임 완료는 선임 발령도 함께 확인한다.
       const address=value.executionKey || value.taskId,shortId=value.taskId.split('/').at(-1);
-      const rows=db.prepare(`SELECT stream,payload FROM events WHERE stream IN ('ledger.jsonl','tasks/events.jsonl','mail/events.jsonl')
-        AND json_extract(payload,'$.kind') IN ('send','dispatch','done') AND json_extract(payload,'$.role')=?
-        AND (json_extract(payload,'$.taskId') IN (?,?,?) OR json_extract(payload,'$.executionKey')=?
-          OR substr(json_extract(payload,'$.taskId'),-length(?)-1)='/'||?) ORDER BY stream,seq`).all(value.role,value.taskId,address,shortId,address,shortId,shortId);
+      const rows=db.prepare(`SELECT stream,payload FROM events WHERE
+        (stream IN ('ledger.jsonl','system/events.jsonl') AND json_extract(payload,'$.kind')='handover' AND json_extract(payload,'$.phase')='transferred')
+        OR (stream IN ('ledger.jsonl','tasks/events.jsonl','mail/events.jsonl')
+          AND json_extract(payload,'$.kind') IN ('send','dispatch','done')
+          AND (json_extract(payload,'$.taskId') IN (?,?,?) OR json_extract(payload,'$.executionKey')=?
+            OR substr(json_extract(payload,'$.taskId'),-length(?)-1)='/'||?)) ORDER BY stream,seq`).all(value.taskId,address,shortId,address,shortId,shortId);
       state.legacy=rows.filter(row=>row.stream==='ledger.jsonl').map(row=>JSON.parse(row.payload));
       state.ordered=rows.filter(row=>row.stream!=='ledger.jsonl').map(row=>JSON.parse(row.payload)).sort((a,b)=>a._ledgerOrder-b._ledgerOrder);
     }
@@ -226,13 +263,15 @@ export function uniqueDone(rows) {
 
 export function projectLedger(state,domain) {
   if (domain && state.legacy.some(row=>!row || typeof row.kind!=='string' || row.broken)) throw new Error('과거 원장 손상: 도메인 조회 불가');
+  const mailEvidence=value=>isMailTransfer(value)||value?.kind==='done'&&value.completionMailId;
   const legacy = state.legacy.flatMap(value => {
     if (!domain) return [value];
     if (domain === 'tasks' && taskSend(value || {})) {
       return [{...value,kind:'dispatch',legacy:true}];
     }
-    return ledgerDomain(value?.kind) === domain ? [value] : [];
+    return ledgerDomain(value?.kind) === domain || domain === 'mail' && mailEvidence(value) ? [value] : [];
   });
-  const rows = state.ordered.filter(value => domain ? ledgerDomain(value.kind) === domain : value.kind !== 'dispatch').map(publicEvent);
+  // 인계와 완료는 자기 영역에 한 번만 저장한다. 우편 조회에는 판정 근거를 원래 순서로 포함한다.
+  const rows = state.ordered.filter(value => domain ? ledgerDomain(value.kind) === domain || domain === 'mail' && mailEvidence(value) : value.kind !== 'dispatch').map(publicEvent);
   return uniqueDone([...legacy,...rows]);
 }
