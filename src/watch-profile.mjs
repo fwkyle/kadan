@@ -5,7 +5,7 @@ import {PROFILE_FILE} from './watch-cycle.mjs';
 // 감시기 정식 명령을 한 파일에 둔다. 맨 `kadan watch`로 다시 띄우다가 관계 파일·AI 판정을
 // 잃어버린 사고(2026-09-12)를 막기 위한 진입점이며, 새 옵션이나 권한을 만들지 않는다.
 // 형식: {"flags":{"route":["판=역할"],"super":"역할","hierarchy":"경로","judge-cmd":"명령",...},"env":{"KADAN_JUDGE_MODEL":"..."}}
-export const PROFILE_FLAGS = new Set(['interval','stall','stall-after','start-report-after','idle','route','super','hierarchy','wake','wake-every','user-notify','judge-cmd','judge-cooldown']);
+export const PROFILE_FLAGS = new Set(['interval','stall','stall-after','start-report-after','completion-grace','idle','route','super','hierarchy','wake','wake-every','user-notify','judge-cmd','judge-cooldown']);
 const PATH_FLAGS = new Set(['hierarchy']);
 
 export function defaultProfilePath(home) { return path.join(home, PROFILE_FILE); }

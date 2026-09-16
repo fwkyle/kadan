@@ -326,6 +326,7 @@ export async function runWatch({
   readCards = null,
   readWorks = () => [],
   startReportGraceMs = 5 * 60_000,
+  completionGraceMs = 15 * 60_000,
   stallAfterMs = 0,
   // 큐 대기의 경보 기준은 정체와 같다 — 입력이 닿지 않은 채 같은 시간을 견딘 것이다.
   queuedAfterMs = stallAfterMs,
@@ -378,6 +379,7 @@ export async function runWatch({
   }}) : null;
   let roleStates = new Map();
   let queuedStates = new Map();
+  const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   const seeded = seedAlertState(readEntries());
   let activeAlerts = seeded.active;
@@ -507,11 +509,32 @@ export async function runWatch({
           stallN
         );
     roleStates = roleAssessment.states;
-    // 확정된 완료의 완료후보는 여기서 거른다 — assessRoles는 원장을 모르고,
-    // 경보가 아예 만들어지지 않아야 해소 우편도 없다.
-    roleAssessment.alerts = observationError
-      ? roleAssessment.alerts
-      : filterConfirmedCompletions(roleAssessment.alerts, entries, cards);
+    // 완료후보는 정상 완료 처리에 시간을 준다. 화면에서 사라져도 done을 재확인한다.
+    if (!observationError) {
+      for (const alert of roleAssessment.alerts) {
+        if (alert.kind !== '완료후보' || pendingCompletions.has(alert.id)) continue;
+        pendingCompletions.set(alert.id, {alert, at:cycleAt,
+          startedAt:roles.observations.get(alert.session)?.startedAt});
+      }
+      const visible = new Set(roleAssessment.alerts.map(a => a.id));
+      const unconfirmed = new Set(filterConfirmedCompletions(
+        [...pendingCompletions.values()].map(p => p.alert), entries, cards
+      ).map(a => a.id));
+      roleAssessment.alerts = roleAssessment.alerts.filter(a => a.kind !== '완료후보');
+      for (const [id, pending] of pendingCompletions) {
+        const {alert, at, startedAt} = pending;
+        if ((pending.emitted && !visible.has(id)) || !roleStates.get(alert.session)?.alive ||
+            !unconfirmed.has(id) || (scope && !scope.sessions.has(alert.session)) ||
+            roles.observations.get(alert.session)?.startedAt !== startedAt) {
+          pendingCompletions.delete(id);
+          continue;
+        }
+        if (cycleAt - at >= completionGraceMs) {
+          roleAssessment.alerts.push(alert);
+          pending.emitted = true;
+        }
+      }
+    }
     // 큐 대기는 scope 밖 세션까지 포함한 전체 관측으로 본다 — 발령이 없어 감시
     // 대상이 아니던 작업자가 큐가 쌓인 채 멈춘 사고(2026-09-15)를 잡기 위해서다.
     const queuedAssessment = observationError

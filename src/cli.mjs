@@ -1524,7 +1524,7 @@ export function sendWatchMailReminder(role,message,expectedPid,{
 
 function cmdWatch(argv, flags) {
   const usage =
-    "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. 옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
+    "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--completion-grace 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. 옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
   if (flags.help) {
     console.log(usage);
     return;
@@ -1536,6 +1536,7 @@ function cmdWatch(argv, flags) {
     "stall",
     "stall-after",
     "start-report-after",
+    "completion-grace",
     "idle",
     "route",
     "super",
@@ -1564,6 +1565,12 @@ function cmdWatch(argv, flags) {
   const stallAfterMinutes=flags["stall-after"]==null?5:Number(flags["stall-after"]);
   const startReportMinutes=flags["start-report-after"]==null?5:Number(flags["start-report-after"]);
   if(!Number.isFinite(stallAfterMinutes)||stallAfterMinutes<=0||!Number.isFinite(startReportMinutes)||startReportMinutes<=0)die("감시 시간은 0보다 큰 분이어야 한다",2);
+  const completionGrace = flags['completion-grace'];
+  const completionGraceMinutes = completionGrace == null ? 15 : Number(completionGrace);
+  if (completionGrace === true || Array.isArray(completionGrace) ||
+      !Number.isFinite(completionGraceMinutes) || completionGraceMinutes < 0) {
+    die("watch --completion-grace는 0 이상의 분이어야 한다", 2);
+  }
   const stallN = flags.stall == null ? 2 : Number(flags.stall);
   const idleMinutes = flags.idle == null ? 30 : Number(flags.idle);
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
@@ -1628,6 +1635,7 @@ function cmdWatch(argv, flags) {
     readCards: () => new CardStore(ledgerHome()).list(),
     readWorks: () => new WorkStore(ledgerHome()).list(),
     startReportGraceMs: startReportMinutes*60_000,
+    completionGraceMs: completionGraceMinutes*60_000,
     stallAfterMs: stallAfterMinutes*60_000,
     record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
     sendAlert: sendWatchMessage,
