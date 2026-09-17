@@ -16,6 +16,8 @@ description: Kadan conductor harness. Coordinate workers and reviewers with card
 
 카드 작성·발령·현황 확인 전에는 [중앙 카드 절차](references/central-cards.md)를 읽는다. 카드 본문과 최신 승인/판단 기록을 함께 사용한다.
 
+작업자·검수자는 새 작업마다 새 세션을 세우고, 같은 대상의 연속 작업에만 재사용한다. 결과·DONE을 확정한 뒤 남은 담당 일이 없으면 판 종료를 기다리지 않고 종료한다. 유지 예외와 판 종료 순서는 [종료·정리 기준](references/cleanup.md)을 따른다.
+
 자동 리마인더 원본은 [공통](references/role-templates/common.md)과 [일반감독](references/role-templates/conductor.md) 템플릿이다.
 역할 지침은 책임을 상기시키며 새 발령·승인이나 카드의 범위·시작·검증·완료 계약을 대신하지 않는다.
 메시지 본문과 안내된 최신 카드·판단을 읽고, 스킬은 이번 행동에 필요한 상세 절만 다시 읽는다.
@@ -35,7 +37,7 @@ description: Kadan conductor harness. Coordinate workers and reviewers with card
 | `references/tiki-taka.md` | 유일한 왕복 루프·LIGHT/HEAVY·래칫·배틀 | 모든 구현 판 시작 전 |
 | `references/dispatch-wait.md` | start→창 확인→send→응답 종료→완료 편지→결과→검수 | 첫 발령 전 |
 | `references/worker-creation.md` | 실행기 선택·역할 생성·worktree 기준·세션 유실 복구 | 역할 생성 전, 세션이 통째로 사라졌을 때 |
-| `references/cleanup.md` | 정확한 역할만 종료하는 판 정리 | 판 종료 전 |
+| `references/cleanup.md` | 완료 역할 정리·연속 작업 유지·판 종료 순서 | 실행 완료 후, 판 종료 전 |
 | `references/commands.md` | 사용자의 말과 카단 명령 치트시트 | 필요할 때 |
 | `$KADAN_HOME/agent-runners.json`(예시: `skills/kadan-conductor/references/agent-runners.example.json`) | 실행기별 실행법·모델 프리셋 | 실행기 선택 전 |
 
