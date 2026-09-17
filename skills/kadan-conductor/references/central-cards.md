@@ -13,7 +13,7 @@
 - 일반감독·슈퍼의 질문/판단은 `card note <키> --revision N --kind question|decision --note <내용>`, 사용자 답변은 answer로 남긴다. 웹 저장은 우편 배달이나 자동 재개가 아니다. 다음 정상 입력에서 최신 카드를 읽는다. 이 목록을 보려고 AI를 주기적으로 깨우지 않는다.
 - 담당 역할은 작업 시작/외부 결과 대기 등 상태 전이마다 `card progress <키> --revision N --activity running|waiting --note <근거>`로 1회 기록한다. 이는 상태 기록이며 `send`가 아니므로 상위에 별도 편지를 붙이지 않는다. 편지의 필요 여부는 [진행 기록과 상위 통지](operating-contract.md#진행-기록과-상위-통지)를 따른다. 진행 표시 유지용 반복 조회·타이머는 금지한다. 작업 중·결과 대기는 시간 경과만으로 만료되지 않으며 기록 시각을 별도로 표시한다. 이것만으로 재시작하지 않는다.
 - 재개 조건이 있는 보류는 hold, 방향 변경으로 다시 하지 않을 작업은 superseded와 replacedBy 후속 카드, 확인된 카드 범위 완료는 done으로 이유·근거를 기록한다. 실제 실행 DONE는 원래의 `kadan done`/완료마커 계약을 지킨다. card done은 제품 전체 완료나 운영 배포 완료가 아니다.
-- 명령과 복구 상세는 [카드 중앙 관리](../../../docs/card-center.md)가 기준이다. 중앙 데이터는 `KADAN_HOME/cards`이며 코드 레포·원격으로 자동 게시하지 않는다.
+- 명령과 복구 상세는 [카드 중앙 관리](../../../docs/card-center.md)가 기준이다. 중앙 데이터는 `KADAN_HOME/cards`이며 코드 레포·원격으로 자동 게시하지 않는다. 새 실행의 결과·검증 자료도 `card show`의 `resultPath`·`evidenceDir`에 둔다. 수동 결과 등록과 기존 경로 보존은 [결과 저장 계약](../../../docs/card-center.md#카드-결과와-검증-자료)을 따른다.
 
 ## 사용자 결정 요청 전용 경로
 

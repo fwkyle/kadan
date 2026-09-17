@@ -87,6 +87,9 @@ test('standalone rallyStep: 다른 역할 동일 ID done은 무관·task 없는 
   appendLedger({kind:'done',role:'other',taskId:c.id,result:'ok'},f.home);
   const current=f.compose({taskId:c.id});assert.equal(current.metadata.profile,'reviewer');assert.match(current.instructions,/현재 발령 ID: current/);
   assert.match(current.instructions,/--execution 'test\/current'/);
+  assert.ok(current.instructions.includes(c.resultPath));
+  assert.ok(current.instructions.includes(c.evidenceDir));
+  assert.ok(current.instructions.includes("kadan card report 'test/current'"));
   assert.match(current.instructions,/추가 카드나 중복 send를 만들지 않는다/);
   assert.match(current.instructions,/--execution 'test\/current' --expect-reply/);
   const reply=f.compose();assert.equal(reply.metadata.profile,'reviewer');assert.doesNotMatch(reply.instructions,/현재 발령 ID:|연결 실행:/);

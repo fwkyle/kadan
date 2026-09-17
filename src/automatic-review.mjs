@@ -106,7 +106,7 @@ export class AutomaticReview {
    if(this.by!==s.current.role)throw new Error('배정된 담당만 결과를 보고할 수 있습니다');
    const allowed=s.phase==='review'?['pass','changes','exception']:['implemented','exception'];
    if(!allowed.includes(outcome))throw new Error('실행 완료와 품질 판정을 구분해 명시하세요');
-   if(typeof resultFile!=='string'||!path.isAbsolute(resultFile))throw new Error('결과 파일 절대경로 필요');
+   resultFile=this.cards.resultLocation(execution,resultFile);
    const report={execution,outcome,resultFile};
    if(s.report){if(['execution','outcome','resultFile'].some(k=>report[k]!==s.report[k]))return this.stop(s,'기존 보고와 충돌: 감독 확인 필요');return s;}
    return this.save(s,{report});
@@ -120,7 +120,8 @@ export class AutomaticReview {
   const body=[`# 자동 전달 — ${s.phase} / ${s.round}라운드`,`원본 지시: ${ref.path}`,`업무 정본: kadan work show ${s.key}`,
    `원본의 범위·검증·시한을 그대로 따른다. 원본과 최신 card show를 읽어라. 검수자는 수정하지 않는다.`,
    s.previous?`직전 실행 결과 원문: ${s.previous.resultFile} (SHA256 ${s.previous.sha256})`:'',
-   `이번 자동 경로에서는 정상 중간 완료 편지를 감독에게 보내지 않는다. 결과 파일을 완성하고 현재 실행ID로 kadan work auto-report ${s.key} --execution <저장소/현재실행ID> --outcome ${s.phase==='review'?'pass|changes|exception':'implemented|exception'} --result-file <절대경로>를 실행한다.`,
+   `이번 실행의 card show에 표시된 resultPath에 보고서, evidenceDir에 검증 자료를 쓴다. 원본 카드나 직전 실행의 결과 경로를 재사용하지 않는다. 제품 코드·설계·사용 설명서는 대상 레포에 둔다.`,
+   `이번 자동 경로에서는 정상 중간 완료 편지를 감독에게 보내지 않는다. 결과 파일을 완성하고 현재 실행ID로 kadan work auto-report ${s.key} --execution <저장소/현재실행ID> --outcome ${s.phase==='review'?'pass|changes|exception':'implemented|exception'}를 실행한다. result-file 생략 시 현재 실행의 resultPath를 사용한다.`,
    '구현 자체 실패·범위 밖 수정·판정 불명확은 exception이다. changes는 승인 범위 안의 품질 수정에만 쓴다.',
    '이어 자기 화면 마지막 줄에 완료 마커를 출력한다. 형식: KADAN:DONE <카드id> <ok 또는 failed>. 새 실행ID는 이 중앙 카드의 ID다.'].filter(Boolean).join('\n\n');
   const next=this.works.change(s.key,'execute',{title:`자동 ${s.phase} ${s.round}라운드`,body,phase:s.phase,round:s.round},{revision:w.revision,by:this.by,note:'명시 설정한 구현·검수 자동 전달'});
@@ -156,8 +157,10 @@ export class AutomaticReview {
      if(!fs.existsSync(s.report.resultFile))return {state:s};
      if(!fs.statSync(s.report.resultFile).isFile())throw new Error('결과 경로가 파일이 아님');
      const bytes=fs.readFileSync(s.report.resultFile);if(!bytes.length)return {state:s};
-     const report={...s.report,sha256:hash(bytes)};
-     const c=this.cards.get(s.current.key);
+     const report={...s.report};
+     let c=this.cards.get(s.current.key);
+     c=this.cards.report(c.key,{revision:c.revision,resultFile:report.resultFile,outcome:report.outcome,by:s.current.role});
+     report.sha256=c.result.sha256;
      if(c.status==='assigned')this.cards.update(c.key,{status:'done'},{revision:c.revision,by:this.by,note:`현재 실행 완료 근거와 결과 파일 확인: ${report.resultFile}`});
      s=this.save(s,{report,previous:report});
      if(report.outcome==='exception')return this.reserveNotice(this.stop(s,'담당이 예외로 보고함'));

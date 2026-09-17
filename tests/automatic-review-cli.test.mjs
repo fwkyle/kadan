@@ -32,10 +32,12 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
  const match=line.match(/카드 id는 (exec-[a-f0-9-]+)이다/);if(match)pending=match[1];
  // 실제 AI처럼 원문과 첨부를 모두 받은 뒤 결과를 낸다. 원문 줄의 ID 파싱은 유지한다.
  if(line!=='<!-- /kadan:receiver-instructions -->'||!pending)return;
- count++;const id=pending;pending=null;const result=path.join(home,id+'.md');
+ count++;const id=pending;pending=null;
+ const shown=spawnSync(process.execPath,[${JSON.stringify(cli)},'card','show','ar-test/'+id],{encoding:'utf8',env:process.env});
+ const result=JSON.parse(shown.stdout).resultPath;
  const outcome=role==='ar-test-reviewer'?(count===1?'changes':'pass'):'implemented';
  fs.writeFileSync(result,'실제 CLI 결과 '+role+' '+outcome+'\\n');
- const p=spawnSync(process.execPath,[${JSON.stringify(cli)},'work','auto-report','ar-test/work','--execution','ar-test/'+id,'--outcome',outcome,'--result-file',result],{encoding:'utf8',env:process.env});
+ const p=spawnSync(process.execPath,[${JSON.stringify(cli)},'work','auto-report','ar-test/work','--execution','ar-test/'+id,'--outcome',outcome],{encoding:'utf8',env:process.env});
  fs.appendFileSync(path.join(home,role+'.reports'),JSON.stringify({status:p.status,stdout:p.stdout,stderr:p.stderr})+'\\n');
  if(p.status!==0){console.log('보고 실패 '+p.stderr);return;}
  console.log(['KADAN:DONE',id,'ok'].join(' '));
@@ -63,6 +65,12 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
   assert.ok(results.some(s=>s.status==='pass'));
   const before=readLedger(home).filter(e=>e.kind==='send').length;run('work','auto-step','ar-test/work');assert.equal(readLedger(home).filter(e=>e.kind==='send').length,before);
   const work=JSON.parse(run('work','show','ar-test/work'));assert.equal(work.status,'open');assert.equal(work.executions.length,4);
+  for(const execution of work.executions){
+   const card=JSON.parse(run('card','show',execution.key));
+   assert.equal(card.resultPath,path.join(home,'cards',...card.key.split('/'),'result.md'));
+   assert.equal(card.result.path,card.resultPath);
+   assert.equal(card.result.sha256,createHash('sha256').update(fs.readFileSync(card.resultPath)).digest('hex'));
+  }
   const entries=readLedger(home),mail=readMailLedger(home),tasks=readTaskLedger(home);
   const sends=mail.filter(e=>e.kind==='send'&&e.transport!=='mailbox'),completions=mail.filter(e=>e.kind==='send'&&e.completion);
   assert.equal(mail.filter(e=>e.kind==='send').length,9);assert.equal(completions.length,4);

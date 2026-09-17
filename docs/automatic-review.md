@@ -46,13 +46,15 @@ kadan work auto-run repo/work-id
 
 ## 작업자·검수자의 보고
 
+새 실행은 `card show <현재실행키>`의 `resultPath`에 보고서를, `evidenceDir`에 검증 자료를 쓴다. `auto-report`에서 결과 경로를 생략하면 그 경로를 사용한다. 프로그램이 파일·완료 근거를 확인하면서 카드에 경로·지문·판정을 등록하므로 별도 `card report`는 필요 없다. 이전 실행은 기존 `--result-file <절대경로>`를 유지한다. [결과 저장 계약](card-center.md#카드-결과와-검증-자료).
+
 자동 생성된 실행 카드는 원본 카드 경로, 현재 실행 ID, 직전 결과 경로·지문을 전달한다.
 원본의 범위·검수 기준·필수 근거는 유지하고, 이 경로의 **중간 통지만** 아래로 바꾼다.
 원본에 옛 카드 ID가 있더라도 보고·완료 마커에는 새로 발령받은 현재 실행 ID를 쓴다.
 
 ```sh
 kadan work auto-report repo/work-id --execution repo/exec-현재UUID \
-  --outcome implemented --result-file /절대경로/현재실행-result.md
+  --outcome implemented
 ```
 
 | 담당 | outcome | 의미 |

@@ -29,8 +29,8 @@ function fixture(){
  const auto=new AutomaticReview(context);
  const configure=(extra={})=>auto.configure(key,{revision:works.get(key).revision,implementation:'test/implementation',review:'test/review',worker:'test-worker',reviewer:'test-reviewer',notify:'test-super',...extra});
  const report=(outcome='implemented',write=true)=>{
-  const s=auto.get(key),resultFile=path.join(home,s.current.key.split('/')[1]+'.md');if(write)fs.writeFileSync(resultFile,'실제 결과 원문 '+outcome);
-  const r=new AutomaticReview({...context,by:s.current.role});return r.report(key,{execution:s.current.key,outcome,resultFile});
+  const s=auto.get(key),resultFile=cards.get(s.current.key).resultPath;if(write)fs.writeFileSync(resultFile,'실제 결과 원문 '+outcome);
+  const r=new AutomaticReview({...context,by:s.current.role});return r.report(key,{execution:s.current.key,outcome});
  };
  const done=(result='ok')=>{const s=auto.get(key);appendLedger({kind:'done',role:s.current.role,taskId:s.current.key.split('/')[1],result},home);};
  const finish=(outcome)=>{report(outcome);done();return auto.step(key);};
@@ -42,6 +42,10 @@ test('구현→독립검수→동일 작업자 수정→조기 PASS, 새 실행I
  assert.equal(s.phase,'implementation');assert.equal(s.status,'waiting');
  const first=s.current.key;assert.match(f.cards.get(first).body,/원본 지시:/);assert.doesNotMatch(f.cards.get(first).body,/原本/);
  s=f.finish('implemented');assert.equal(s.phase,'review');assert.equal(s.current.role,'test-reviewer');assert.equal(s.round,1);
+ assert.equal(f.cards.get(first).result.path,f.cards.get(first).resultPath);
+ assert.equal(f.cards.get(first).result.outcome,'implemented');
+ assert.notEqual(f.cards.get(first).resultPath,f.cards.get(s.current.key).resultPath);
+ assert.equal(fs.readFileSync(f.cards.get(first).resultPath,'utf8'),'실제 결과 원문 implemented');
  s=f.finish('changes');assert.equal(s.phase,'fix');assert.equal(s.current.role,'test-worker');assert.equal(s.round,2);
  s=f.finish('implemented');assert.equal(s.phase,'review');s=f.finish('pass');
  assert.equal(s.status,'pass');assert.equal(s.notification.status,'sent');assert.equal(f.works.get(f.key).status,'open');
@@ -169,6 +173,7 @@ test('현재 실행ID·담당 보고만 수용, 충돌 보고·결과 파일 변
  const f=fixture();f.configure();f.auto.step(f.key);const s=f.auto.get(f.key);
  assert.throws(()=>f.auto.report(f.key,{execution:s.current.key,outcome:'implemented',resultFile:'/tmp/a'}),/담당만/);
  const r=new AutomaticReview({...f.context,by:s.current.role});assert.throws(()=>r.report(f.key,{execution:'test/old',outcome:'implemented',resultFile:'/tmp/a'}),/현재 자동/);
+ assert.throws(()=>r.report(f.key,{execution:s.current.key,outcome:'implemented',resultFile:'/tmp/a'}),/resultPath/);
  f.report();
  f.done();f.auto.step(f.key);fs.appendFileSync(f.auto.get(f.key).previous.resultFile,'변조');assert.equal(f.auto.step(f.key).status,'exception');
 });
@@ -176,7 +181,7 @@ test('현재 실행ID·담당 보고만 수용, 충돌 보고·결과 파일 변
 test('같은 실행의 서로 다른 결과 보고는 감독 판단으로 넘김',()=>{
  const f=fixture();f.configure();f.auto.step(f.key);f.report();
  const s=f.auto.get(f.key),r=new AutomaticReview({...f.context,by:s.current.role});
- assert.equal(r.report(f.key,{execution:s.current.key,outcome:'exception',resultFile:'/tmp/different'}).status,'exception');
+ assert.equal(r.report(f.key,{execution:s.current.key,outcome:'exception'}).status,'exception');
  const end=f.auto.step(f.key);assert.match(end.reason,/충돌/);assert.equal(end.notification.status,'sent');assert.equal(f.works.get(f.key).executions.length,1);
 });
 
