@@ -7,7 +7,8 @@ import {CardStore} from './card-store.mjs';
 export const isExecution=c=>c.workType!=='coordination';
 export const finished=c=>['done','cancelled','superseded','archived'].includes(c.displayState);
 export const executionUnknown=c=>['unconfirmed','orphaned','failed'].includes(c.displayState);
-export const stateText={running:'작업 중',waiting:'결과 기다리는 중',unconfirmed:'발령됨',orphaned:'담당 세션 확인 필요',failed:'실패 기록 있음',hold:'보류',draft:'초안',ready:'발령 가능',assigned:'배정됨 · 시작 확인 전',done:'완료',cancelled:'취소',superseded:'대체됨',archived:'보관'};
+// 같은 상태는 화면마다 같은 낱말을 쓴다. 결과 대기·세션 확인 필요는 실행 흐름·현황·그래프와 한 낱말로 맞췄다(2026-09-18).
+export const stateText={running:'작업 중',waiting:'결과 대기',unconfirmed:'발령됨',orphaned:'세션 확인 필요',failed:'실패 기록 있음',hold:'보류',draft:'초안',ready:'발령 가능',assigned:'배정됨 · 시작 확인 전',done:'완료',cancelled:'취소',superseded:'대체됨',archived:'보관'};
 export function cleanTitle(card){
  const title=String(card.title||card.id||'제목 없음').replace(/^#+\s*/,'').replace(/\*\*/g,'');
  const stripped=title.startsWith(card.id)?title.slice(card.id.length).replace(/^\s*[—–:·-]\s*/,''):title;

@@ -8,9 +8,15 @@ import {renderDetailSummary,renderInstructionTable,renderDetailHistory,detailEve
 import {buildCardFlows,cardPurpose,renderCardFlow,renderRallyFlow} from './dashboard-flow.mjs';
 
 // 열 키 · 화면 이름 · 기본 너비 · 최소 너비. 저장된 배치는 키로 연결한다.
-export const workspaceColumns=[['title','카드 · 목적',320,180],['healthLabel','실행 흐름',170,130],['signalAt','최근 실행 신호',150,120],['flowLabel','티키타카',205,110],['turnLabel','현재 차례',190,110],['model','실행 모델',150,90],['stateLabel','카드 상태',105,90],['next','다음 행동',200,100],['board','판',110,80],['reportAt','마지막 보고',110,100],['at','카드 수정',110,100]];
-// 실행 표에는 카드 상태 열을 두지 않는다. 실행 흐름이 같은 값을 근거와 함께 보여주므로 두 열이 같은 글자를 반복한다(2026-09-18 검수).
-export const workspaceColumnSets={work:workspaceColumns,execution:workspaceColumns.filter(([key])=>key!=='stateLabel')};
+export const workspaceColumns=[['title','카드 · 목적',290,180],['healthLabel','실행 흐름',145,130],['signalAt','최근 실행 신호',135,120],['flowLabel','티키타카',170,110],['turnLabel','현재 차례',140,110],['model','실행 모델',110,90],['stateLabel','카드 상태',105,90],['next','다음 행동',200,100],['board','판',110,80],['reportAt','마지막 보고',110,100],['at','카드 수정',110,100]];
+// 기본 표는 여섯 열만 그린다(실행 990px · 업무 960px). 다음 행동·판·마지막 보고·카드 수정은 상세에서 확인한다(2026-09-18).
+// 실행 표에는 카드 상태를 두지 않는다. 실행 흐름이 같은 값을 근거와 함께 보여준다.
+const columnByKey=new Map(workspaceColumns.map(column=>[column[0],column]));
+const pickColumns=keys=>keys.map(key=>columnByKey.get(key));
+export const workspaceColumnSets={
+ work:pickColumns(['title','stateLabel','healthLabel','flowLabel','turnLabel','model']),
+ execution:pickColumns(['title','healthLabel','signalAt','flowLabel','turnLabel','model'])
+};
 export function workspaceColumnsFor(collection){return collection==='work'?workspaceColumnSets.work:workspaceColumnSets.execution;}
 // 값이 하나도 없는 열은 표 머리글까지 남기지 않는다. 실행 모델은 대부분의 카드에서 빈 칸이다.
 export function workspaceVisibleColumns(collection,rows){return workspaceColumnsFor(collection).filter(([key])=>key!=='model'||(rows||[]).some(row=>row.model));}
@@ -53,8 +59,14 @@ export function workspaceSelectedStates(value='') {
 export function workspaceStateLabel(value='') {
  if(!value)return '미완료';
  if(value==='all')return '전체';
- const selected=workspaceSelectedStates(value);
- return selected.length===0?'선택 없음':selected.length===1?stateText[selected[0]]:selected.length===Object.keys(stateText).length?'전체':`상태 ${selected.length}개`;
+ const all=Object.keys(stateText),selected=workspaceSelectedStates(value);
+ if(!selected.length)return '선택 없음';
+ if(selected.length===all.length)return '전체';
+ // 고른 이름이 많으면 뺀 이름으로 말한다. '상태 12개'처럼 세는 표시는 무엇을 보는지 알려주지 않는다.
+ const excluded=all.filter(key=>!selected.includes(key));
+ if(excluded.length<=2)return excluded.map(key=>stateText[key]).join('·')+' 제외';
+ if(selected.length<=2)return selected.map(key=>stateText[key]).join('·');
+ return `상태 ${selected.length}개`;
 }
 export function filterWorkspaceRows(rows,state) {
  const words=String(state.q||'').trim().toLocaleLowerCase('ko').split(/\s+/).filter(Boolean);
@@ -85,7 +97,7 @@ export function shortTimeLabel(value) {
 // 표는 넘겨받은 열 순서대로 셀을 조립한다. 실행 표에는 카드 상태 열이 없고, 값이 없는 실행 모델 열도 빠진다.
 export function workspaceRowsHtml(rows,layout,selected,columns=workspaceColumns) {
  if(layout==='table')return rows.map(c=>{
-  const short=c.kind==='work'?c.stateLabel:({waiting:'결과 대기',orphaned:'세션 확인 필요',assigned:'배정·시작 전',unconfirmed:'발령됨',failed:'실패 기록',running:'작업 중'})[c.state]||c.stateLabel;
+
   // 끝난 실행과 아직 시작하지 않은 초안은 라벨만으로 충분하다. 같은 설명을 모든 줄에 반복하지 않는다.
   const showReason=!['closed','planned'].includes(c.healthKind);
   const signal=c.signalAt?shortTimeLabel(c.signalAt):'';
@@ -98,7 +110,7 @@ export function workspaceRowsHtml(rows,layout,selected,columns=workspaceColumns)
    flowLabel:`<td data-column="flowLabel" class="dw-flow-cell" title="${e([c.flowTitle,c.flowLabel,c.flowPhase].filter(Boolean).join(' · '))}"><strong>${e(c.flowLabel)}</strong><small>${e(c.flowPhase)}</small></td>`,
    turnLabel:`<td data-column="turnLabel" class="dw-turn-cell" title="${e(c.turnReason)}">${showTurn?`<strong>${e(turn)}</strong>${c.turnSource?`<small>${e(c.turnSource)}</small>`:''}`:''}</td>`,
    model:`<td data-column="model" class="dw-model-cell" title="${e(c.modelTitle)}"><strong>${e(c.model||'')}</strong>${c.effort?`<small>강도 ${e(c.effort)}</small>`:''}</td>`,
-   stateLabel:`<td data-column="stateLabel" title="${e(c.stateLabel)}">${statePill({...c,stateLabel:short})}</td>`,
+   stateLabel:`<td data-column="stateLabel" title="${e(c.stateLabel)}">${statePill(c)}</td>`,
    next:`<td data-column="next" title="${e(c.next)}">${e(c.next||'기록 없음')}</td>`,
    board:`<td data-column="board" title="${e(c.board)}">${e(c.board||'판 미지정')}</td>`,
    reportAt:`<td data-column="reportAt" title="${e(c.reportLabel)}">${e(c.reportAt?shortTimeLabel(c.reportAt):c.reportLabel)}</td>`,
@@ -131,7 +143,7 @@ export function renderDashboardWorkspace({center,briefs,centerError,url,detail,w
  return `<section class="dw-workspace" id="dashboard-workspace" data-view="dashboard">
  ${works!==null?`<div class="bw-collections" role="group" aria-label="업무와 실행 전환">${[['work','업무 카드'],['executions','모든 실행'],['unlinked','연결 전 실행']].map(([k,label])=>`<button type="button" data-collection="${k}" aria-pressed="${collection===k}">${label} <span>${k==='work'?(workError?'모름':works.length):k==='executions'?(baseRows?.length??'모름'):(baseRows?.filter(c=>!parent.has(c.key)).length??'모름')}</span></button>`).join('')}<small>업무 하나 안에 실행·검수·인박스가 이어집니다.</small></div>${workError?`<p role="alert" class="error">업무 상태 모름: ${e(workError)}</p>`:''}<p id="dw-work-help" class="bw-empty-help"${collection==='work'?'':' hidden'}>업무는 약속한 결과를 확인한 뒤 완료합니다. 기존 카드는 ‘연결 전 실행’에서 찾을 수 있습니다.</p>`:''}
  <div class="dw-controls"><label>판<select id="dw-board" aria-label="작업판">${options([['','모든 판'],...[...new Set((rows||[]).map(c=>c.board).filter(Boolean))].sort().map(b=>[b,b])],state.board)}</select></label><label>저장소<select id="dw-repo">${options([['','전체'],...[...new Set((rows||[]).map(c=>c.repo))].sort().map(r=>[r,r])],state.repo)}</select></label><label class="dw-search">검색<input id="dw-search" value="${e(state.q)}" placeholder="제목 · 카드 ID · 현재 차례 · 담당"></label><div class="dw-state-filter"><span id="dw-state-label">상태</span><details id="dw-state"><summary aria-labelledby="dw-state-label dw-state-summary"><span id="dw-state-summary">${e(filterName)}</span></summary><div class="dw-state-menu"><div class="dw-state-actions"><button type="button" data-state-preset="all">모두 선택</button><button type="button" data-state-preset="none">모두 제외</button><button type="button" data-state-preset="">미완료만</button></div><div class="dw-state-options" role="group" aria-label="표시할 상태">${Object.entries(stateText).map(([key,label])=>`<label><input type="checkbox" data-state-option value="${key}"${workspaceSelectedStates(state.state).includes(key)?' checked':''}>${e(label)}</label>`).join('')}</div></div></details></div><div class="dw-layout" role="group" aria-label="보기 전환"><button type="button" data-layout="table" aria-pressed="${state.layout==='table'}">표 보기</button><button type="button" data-layout="split" aria-pressed="${state.layout==='split'}">목록·상세</button></div></div>
- <p class="dw-evidence-help">실행 흐름은 발령·진행 보고·결과·세션 조회를 함께 봅니다. 카드 수정은 실행 신호가 아닙니다.</p><div class="dw-heading"><h1 id="dw-collection-title">${collection==='work'?'업무 카드':collection==='unlinked'?'연결 전 실행':collection==='executions'?'실행':'카드'}</h1><span id="dw-count" role="status">${e(countLabel)}</span><span>실행 흐름 → 최근 실행 신호 → 현재 차례</span><div class="dw-heading-actions"><div id="dw-column-tools" class="dw-column-tools"${state.layout!=='table'?' hidden':''}><span class="dw-column-hint">제목 드래그: 순서 · 경계 드래그: 너비</span><button type="button" class="ds-button--quiet" data-columns-reset title="열 순서와 너비를 기본값으로 되돌리기">열 초기화</button></div>${works!==null?'<a href="#work-create">새 업무 만들기</a>':'<a href="#create">새 카드 만들기</a>'}</div><span class="dw-sr" id="dw-column-help">열 제목을 클릭하면 정렬합니다. 제목을 좌우로 드래그하거나 Alt와 방향키를 함께 누르면 열 순서가 바뀝니다. 첫 열은 가로 스크롤해도 고정됩니다. 열 경계를 드래그하거나 경계에서 방향키를 누르면 너비가 바뀝니다. 경계를 두 번 클릭하면 그 열의 기본 너비로 돌아갑니다.</span><span class="dw-sr" id="dw-column-status" role="status"></span></div>
+ <p class="dw-evidence-help">실행 흐름은 발령·진행 보고·결과·세션 조회를 함께 봅니다. 카드 수정은 실행 신호가 아닙니다. 상태 필터는 카드에 기록된 상태이고, 실행 흐름은 그 기록을 근거로 다시 판단한 값이라 서로 다를 수 있습니다.</p><div class="dw-heading"><h1 id="dw-collection-title">${collection==='work'?'업무 카드':collection==='unlinked'?'연결 전 실행':collection==='executions'?'실행':'카드'}</h1><span id="dw-count" role="status">${e(countLabel)}</span><span>실행 흐름 → 최근 실행 신호 → 현재 차례</span><div class="dw-heading-actions"><div id="dw-column-tools" class="dw-column-tools"${state.layout!=='table'?' hidden':''}><span class="dw-column-hint">제목 드래그: 순서 · 경계 드래그: 너비</span><button type="button" class="ds-button--quiet" data-columns-reset title="열 순서와 너비를 기본값으로 되돌리기">열 초기화</button></div>${works!==null?'<a href="#work-create">새 업무 만들기</a>':'<a href="#create">새 카드 만들기</a>'}</div><span class="dw-sr" id="dw-column-help">열 제목을 클릭하면 정렬합니다. 제목을 좌우로 드래그하거나 Alt와 방향키를 함께 누르면 열 순서가 바뀝니다. 첫 열은 가로 스크롤해도 고정됩니다. 열 경계를 드래그하거나 경계에서 방향키를 누르면 너비가 바뀝니다. 경계를 두 번 클릭하면 그 열의 기본 너비로 돌아갑니다.</span><span class="dw-sr" id="dw-column-status" role="status"></span></div>
  <div class="dw-panes ${state.layout==='table'?'dw-table-layout':''} ${opened?'dw-detail-open':''}" id="dw-panes"><section class="dw-master" id="dw-master" aria-label="작업 목록"><div class="dw-scroll" id="dw-scroll" tabindex="0" aria-label="카드 목록 · 표는 좌우로 스크롤 가능"><ul id="dw-list"${state.layout==='table'?' hidden':''}>${state.layout==='split'?workspaceRowsHtml(filtered,'split',selected,columns):''}</ul><table class="dw-table" id="dw-table"${state.layout!=='table'?' hidden':''}><caption class="dw-sr">열 제목을 클릭하면 정렬, 드래그하면 순서 변경. 열 경계로 너비 조절. 카드 제목으로 상세를 엽니다.</caption><colgroup>${columns.map(([key,,width])=>`<col data-column="${key}" style="width:var(--column-${key},${width}px)">`).join('')}</colgroup><thead><tr>${columns.map(([key,label])=>`<th scope="col" data-column="${key}" data-sort-column="${key}" aria-sort="${state.sort===key?(state.dir==='asc'?'ascending':'descending'):'none'}"><button type="button" data-sort="${key}" aria-describedby="dw-column-help" aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Alt+Home Alt+End" title="클릭: 정렬 · 드래그: 열 순서 이동 · Alt+방향키: 순서 이동">${`<span data-column-label>${collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록',at:'관련 기록 갱신'})[key]||label:label}</span>`}<span data-sort-arrow aria-hidden="true">${state.sort===key?(state.dir==='asc'?' ↑':' ↓'):' ↕'}</span></button><span class="dw-column-resize" data-workspace-resize="${key}" role="separator" aria-orientation="vertical" aria-label="${label} 열 너비" aria-controls="dw-table" aria-describedby="dw-column-help" tabindex="0" title="드래그로 ${label} 너비 조절 · 두 번 클릭하면 기본 너비"></span></th>`).join('')}</tr></thead><tbody id="dw-table-body">${state.layout==='table'?workspaceRowsHtml(filtered,'table',selected,columns):''}</tbody></table><div id="dw-empty"${rows!==null&&filtered.length?' hidden':''}>${rows===null?`<h2>카드 상태 모름</h2><p>${e(centerError||'카드 기록을 읽지 못했습니다.')}</p>`:`<h2 id="dw-empty-title">${collection==='work'&&workError?'업무 상태 모름':works!==null&&collection==='work'&&!works.length?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.'}</h2>${works!==null?'<p><a href="#work-create">새 업무 만들기</a> · <button type="button" data-collection="unlinked">기존 실행 확인</button></p>':''}<button type="button" data-workspace-reset>검색·필터 초기화</button>`}</div></div></section>
  <div class="dw-pane-resize" data-workspace-resize="panes" role="separator" aria-orientation="vertical" aria-label="목록과 상세 너비" aria-controls="dw-master dw-detail" tabindex="0" title="드래그로 목록과 상세 너비 조절 · 두 번 클릭하면 기본 너비"></div>
  <section id="dw-detail" class="dw-detail" aria-label="선택한 카드 상세"><div class="dw-detail-tools"><button type="button" data-detail-close>목록으로</button><span id="dw-detail-status" role="status"></span><button type="button" data-detail-expand>상세 확대</button></div><div id="dw-detail-content">${work?workDetail(work):card?detail(card):`<h2>카드 ${explicit?'확인 필요':'선택'}</h2><p>${explicit?'요청한 카드를 읽을 수 없습니다.':'카드를 선택하면 여기에서 내용을 읽을 수 있습니다.'}</p>`}</div></section></div>

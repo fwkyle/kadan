@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Script,runInNewContext} from 'node:vm';
 import {renderCenterWall} from '../src/center-wall.mjs';
-import {buildHumanBrief} from '../src/human-brief.mjs';
+import {buildHumanBrief,stateText} from '../src/human-brief.mjs';
 import {renderCardDocument,documentLink} from '../src/card-content.mjs';
-import {workspaceModel,filterWorkspaceRows,sortWorkspaceRows,renderWorkspaceDetail,workspaceRowsHtml,renderDashboardWorkspace} from '../src/dashboard-workspace.mjs';
+import {workspaceModel,filterWorkspaceRows,sortWorkspaceRows,renderWorkspaceDetail,workspaceRowsHtml,renderDashboardWorkspace,workspaceColumnSets,workspaceStateLabel} from '../src/dashboard-workspace.mjs';
 import {dashboardWorkspaceScript} from '../src/dashboard-workspace-client.mjs';
 
 const at='2020-09-08T01:00:00Z',sent='2020-09-08T00:00:00Z';
@@ -207,9 +207,9 @@ test('기록 탭에서 revision별 활동 변경과 이유는 단일 이력에 �
  const waiting={...started,revision:3,at:'2020-09-08T02:00:00Z',activity:'waiting',activityAt:'2020-09-08T02:00:00Z',note:'고유 대기 보고'};
  const memo={...waiting,revision:4,at:'2020-09-08T03:00:00Z',noteKind:'question',note:'고유 질문'};
  const html=renderWorkspaceDetail(card({history:[first,started,waiting,memo]})).match(/id="dw-panel-history"[\s\S]*?<\/section>/)[0];
- assert.match(html,/작업 중 → 결과 기다리는 중/);
+ assert.match(html,/작업 중 → 결과 대기/);
  for(const note of ['고유 착수 보고','고유 대기 보고','고유 질문'])assert.equal(html.split('class="dd-history-note">'+note+'<').length-1,1);
- assert.equal(html.split('작업 중 → 결과 기다리는 중').length-1,1);
+ assert.equal(html.split('작업 중 → 결과 대기').length-1,1);
 });
 test('기록 탭의 네 기록 종류를 한국어로 표시한다',()=>{
  const history=['decision','question','answer','progress'].map((noteKind,i)=>({revision:i+1,at,status:'assigned',noteKind}));
@@ -313,6 +313,30 @@ test('실행 모델 열은 원장 문자열의 인용부호를 걷어내고 값�
  const headers=html=>{const m=html.match(/<thead><tr>([\s\S]*?)<\/tr><\/thead>/);return m?[...m[1].matchAll(/data-column="([^"]+)"/g)].map(x=>x[1]):[];};
  assert.ok(headers(withModel).includes('model'));
  assert.deepEqual(headers(view()).includes('model'),false);
+});
+test('작업 표 기본 열은 여섯이며 폭 합계가 1000px 안쪽이다',()=>{
+ const c=card({displayState:'running',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at}],history:[{by:'작업자',role:'작업자',noteKind:'progress',note:'진행 중',at}]});
+ const works=[{key:'work:repo/w1',workKey:'repo/w1',kind:'work',workType:'business',owner:'감독',state:'running',stateLabel:'진행 중',stored:'open',title:'업무',originalTitle:'업무',board:'판',repo:'repo',at,revision:1,executions:[]}];
+ const headers=html=>{const m=html.match(/<thead><tr>([\s\S]*?)<\/tr><\/thead>/);return m?[...m[1].matchAll(/data-column="([^"]+)"/g)].map(x=>x[1]):[];};
+ const view=(collection,cards,list,models)=>renderDashboardWorkspace({center:{...center(cards),...models},briefs:null,centerError:null,url:new URL('http://localhost/?collection='+collection+'&state=all'),detail:()=>'',works:list,workError:null,workDetail:()=>''});
+ assert.deepEqual(headers(view('executions',[c],null,{models:{'작업자':{harness:'codex',model:'xai/grok-4.6',effort:'xhigh',at:sent}}})),['title','healthLabel','signalAt','flowLabel','turnLabel','model']);
+ assert.deepEqual(headers(view('work',[],works,{models:{'감독':{harness:'codex',model:'xai/grok-4.6',effort:'xhigh',at:sent}}})),['title','stateLabel','healthLabel','flowLabel','turnLabel','model']);
+ for(const [name,set] of [['실행',workspaceColumnSets.execution],['업무',workspaceColumnSets.work]]){
+  const width=set.reduce((sum,column)=>sum+column[2],0);
+  assert.ok(width<=1000,name+' 표 기본 폭 합계 '+width);
+ }
+});
+test('상태 필터 요약은 고른 개수가 아니라 뜻으로 표시한다',()=>{
+ const keys=Object.keys(stateText);
+ assert.equal(workspaceStateLabel(''),'미완료');
+ assert.equal(workspaceStateLabel('all'),'전체');
+ assert.equal(workspaceStateLabel(keys.join(',')),'전체');
+ assert.equal(workspaceStateLabel(keys.filter(key=>key!=='done').join(',')),'완료 제외');
+ assert.equal(workspaceStateLabel(keys.filter(key=>!['done','cancelled'].includes(key)).join(',')),'완료·취소 제외');
+ assert.equal(workspaceStateLabel('running'),'작업 중');
+ assert.equal(workspaceStateLabel('running,waiting'),'작업 중·결과 대기');
+ assert.equal(workspaceStateLabel('none'),'선택 없음');
+ assert.equal(workspaceStateLabel(['draft','ready','hold','failed'].join(',')),'상태 4개');
 });
 
 

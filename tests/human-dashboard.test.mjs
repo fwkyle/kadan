@@ -60,7 +60,7 @@ test('작업 중과 결과 대기는 마지막 보고 시각을 함께 표시한
  const {progressLabel}=await import('../src/human-brief.mjs');
  const card={role:'worker',activity:'running',displayState:'running',activityAt:'2026-09-07T00:00:00Z',activityRole:'worker',runs:[{role:'worker',sentAt:'2026-09-06T23:00:00Z'}],history:[]};
  assert.equal(progressLabel(card,Date.parse('2026-09-07T00:32:00Z')),'작업 중 · 마지막 보고 32분 전');
- assert.equal(progressLabel({...card,displayState:'waiting'},Date.parse('2026-09-08T00:00:00Z')),'결과 기다리는 중 · 마지막 보고 1일 전');
+ assert.equal(progressLabel({...card,displayState:'waiting'},Date.parse('2026-09-08T00:00:00Z')),'결과 대기 · 마지막 보고 1일 전');
 });
 test('감독 조율은 막대와 남은 일에서 제외하지만 관리 기록은 보존하며 감독 독립 작업은 센다',async()=>{
  const {boardProgressCounts}=await import('../src/board-progress.mjs');
@@ -176,7 +176,7 @@ test('F1: 발령 후 중앙 이관·배정된 카드의 유효한 결과 대기 
  const card=buildCardCenter({cards:[source],entries:[{kind:'send',role:'worker',taskId:source.id,t:sent}],tree:[{roles:[{role:'worker',life:{state:'alive',pidState:'match'}}]}],now}).cards[0];
  assert.equal(card.displayState,'waiting');assert.equal(currentProgressReport(card,now).at,reportedAt);
  assert.equal(new Scribe().summarize(card,null,now).evidenceAt,reportedAt);assert.equal(statusContext(card).displayEvidence.at,reportedAt);
- assert.equal(progressLabel(card,now),'결과 기다리는 중 · 마지막 보고 1시간 0분 전');
+ assert.equal(progressLabel(card,now),'결과 대기 · 마지막 보고 1시간 0분 전');
  const beforeAssignment={...card,activityAt:'2026-09-06T16:00:00Z',history:[assigned,report({at:'2026-09-06T16:00:00Z'})]};
  assert.equal(currentProgressReport(beforeAssignment,now).at,null);assert.equal(currentProgressReport(beforeAssignment,now).reason,'before-assignment');
  const atAssignment={...card,activityAt:assignedAt,history:[assigned,report({at:assignedAt})]};
