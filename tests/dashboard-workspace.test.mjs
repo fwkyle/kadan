@@ -4,7 +4,7 @@ import {Script,runInNewContext} from 'node:vm';
 import {renderCenterWall} from '../src/center-wall.mjs';
 import {buildHumanBrief,stateText} from '../src/human-brief.mjs';
 import {renderCardDocument,documentLink} from '../src/card-content.mjs';
-import {workspaceModel,filterWorkspaceRows,sortWorkspaceRows,renderWorkspaceDetail,workspaceRowsHtml,renderDashboardWorkspace,workspaceColumnSets,workspaceStateLabel} from '../src/dashboard-workspace.mjs';
+import {workspaceModel,filterWorkspaceRows,sortWorkspaceRows,renderWorkspaceDetail,workspaceRowsHtml,renderDashboardWorkspace,workspaceColumnSets,workspaceStateLabel,workspacePresetCounts} from '../src/dashboard-workspace.mjs';
 import {dashboardWorkspaceScript} from '../src/dashboard-workspace-client.mjs';
 
 const at='2020-09-08T01:00:00Z',sent='2020-09-08T00:00:00Z';
@@ -337,6 +337,32 @@ test('상태 필터 요약은 고른 개수가 아니라 뜻으로 표시한다'
  assert.equal(workspaceStateLabel('running,waiting'),'작업 중·결과 대기');
  assert.equal(workspaceStateLabel('none'),'선택 없음');
  assert.equal(workspaceStateLabel(['draft','ready','hold','failed'].join(',')),'상태 4개');
+});
+test('상태 빠른 선택 칩은 뜻과 개수를 보여주고 주소의 상태 값과 같다',()=>{
+ const cards=[
+  card({key:'repo/running',id:'running',displayState:'running'}),
+  card({key:'repo/draft',id:'draft',displayState:'draft',status:'draft'}),
+  card({key:'repo/done',id:'done',displayState:'done',status:'done',runs:[]})
+ ];
+ const model=workspaceModel(center(cards));
+ assert.deepEqual(workspacePresetCounts(model,{collection:''}),{'':2,'running,waiting':1,'draft,ready':1,'assigned,unconfirmed,orphaned,failed':0,done:1,all:3});
+ const chips=html=>[...html.matchAll(/data-state-preset="([^"]*)" aria-pressed="([^"]*)" title="[^"]*"><span>([^<]*)<\/span><span class="dw-preset-count" data-preset-count="[^"]*">([0-9]+)</g)].map(m=>({value:m[1],pressed:m[2],label:m[3],count:Number(m[4])}));
+ const all=chips(render(cards,'?state=all'));
+ assert.deepEqual(all.map(c=>c.label),['미완료','진행 중·대기','발령 전','확인 필요','완료','전체']);
+ assert.deepEqual(all.map(c=>c.count),[2,1,1,0,1,3]);
+ assert.deepEqual(all.filter(c=>c.pressed==='true').map(c=>c.label),['전체']);
+ assert.deepEqual(chips(render(cards,'')).filter(c=>c.pressed==='true').map(c=>c.label),['미완료']);
+});
+test('실행 흐름·묶음 빠른 필터는 그 값만 남기고 선택지에 개수를 보여준다',()=>{
+ const rows=[{key:'a',healthLabel:'작업 중',flowTitle:'묶음 하나'},{key:'b',healthLabel:'결과 대기',flowTitle:'묶음 하나'},{key:'c',healthLabel:'작업 중',flowTitle:''}];
+ assert.deepEqual(filterWorkspaceRows(rows,{health:'작업 중'}).map(c=>c.key),['a','c']);
+ assert.deepEqual(filterWorkspaceRows(rows,{rally:'묶음 하나'}).map(c=>c.key),['a','b']);
+ assert.deepEqual(filterWorkspaceRows(rows,{health:'작업 중',rally:'묶음 하나'}).map(c=>c.key),['a']);
+ const live=card({displayState:'running',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at}],history:[{by:'작업자',role:'작업자',noteKind:'progress',note:'진행 중',at}]});
+ const html=render([live],'?state=all&board='+encodeURIComponent('판-a'));
+ assert.match(html,/id="dw-health"/);assert.match(html,/id="dw-rally"/);
+ assert.match(html,/>작업 중 \(1\)<\/option>/);
+ assert.match(html,/선택한 판|판-a/);
 });
 
 

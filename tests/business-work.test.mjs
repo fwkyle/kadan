@@ -109,6 +109,21 @@ test('업무 표 기본값·내부 실행 링크·완료 대기·가벼운 목�
  const legacy=renderCenterWall(snapshot,{url:new URL('http://localhost/?card='+execution)});
  assert.match(legacy,/이 화면은 업무 안의 실행/);
 });
+test('업무 표는 병행 대신 남은 실행 수를 말한다',()=>{
+ const {home,work,store,cards,change}=fixture();
+ change('execute',{title:'구현',body:'허용한 작업만 수행',phase:'implementation',round:1});
+ change('execute',{title:'검수',body:'허용한 작업만 수행',phase:'review',round:1});
+ const [first,second]=store.get(work.key).executions;
+ cards.update(first.key,{status:'done'},{revision:1,note:'구현 종료',by:'작업자'});
+ const center=buildCardCenter({cards:cards.list(),entries:[],tree:[]});
+ const model=workDashboardModel(store.list(),center,[])[0];
+ assert.equal(model.flowPhase,'실행 1/2건 종료 · 남은 실행 1건 · 업무는 미완료');
+ assert.doesNotMatch(model.flowPhase,/병행/);
+ const html=renderCenterWall({home,center,entries:[]},{url:new URL('http://localhost/?collection=work&state=all')});
+ assert.match(html,/남은 실행 1건/);
+ assert.ok(!html.includes('건 병행'));
+});
+
 test('웹 업무 쓰기는 출처·토큰·버전을 확인하고 실행을 시작하지 않는다',async()=>{
  const {home,store,cards,work}=fixture();
  const server=createWallServer(()=>({center:buildCardCenter({cards:cards.list(),entries:readLedger(home),tree:[]}),entries:readLedger(home)}),{home});

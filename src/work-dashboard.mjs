@@ -31,7 +31,7 @@ export function workDashboardModel(works,center,entries){
   const stage=closed?(active.length?'종료 후 미종료 실행 · 확인 필요':workState[w.status]):w.status==='hold'?'보류':!executions.length?'실행 준비':!active.length?'감독 최종 확인':(latest.length?latest:active).map(x=>workPhases[x.phase]).filter((x,i,a)=>a.indexOf(x)===i).join(' · ');
   const letters=workLetters(w,entries,cards);
   return {...w,...workHealth(w,executions),key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
-   purpose:w.goal,flowLabel:round?`${round}라운드 · ${stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length>1?' · '+active.length+'건 병행':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
+   purpose:w.goal,flowLabel:round?`${round}라운드 · ${stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
    turnLabel:turn,turnReason:explicit?'업무에 명시한 현재 차례':active.length?'각 실행의 차례 기록·전달·진행 보고 기준':'책임 감독이 결과를 확인할 차례',turnSource:closed?'업무 종료':explicit?'차례 기록':!active.length?'책임 감독':owners.length>1?'병렬 진행':'실행별 근거',
    next:w.nextAction||(!active.length&&executions.length?'약속한 결과와 완료 조건을 감독이 확인':'다음 행동 미기록'),summary:w.progress,reportAt:w.at,reportLabel:short(w.at),
    executions,active,ended,letters,round,at:new Date(Math.max(Date.parse(w.at)||0,lastChild,...letters.map(x=>Date.parse(x.t)||0))).toISOString()};

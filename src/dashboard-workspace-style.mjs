@@ -16,6 +16,10 @@ body{margin:0}[hidden]{display:none!important}button,a,input,select,summary{touc
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
 ${executionHealthStyle}
 .dw-evidence-help{font-size:12px;color:#606b65;margin:0 0 8px}
+.dw-presets{display:flex;gap:4px;align-items:center;margin:0 0 10px;flex-wrap:wrap}
+.dw-presets button[aria-pressed=true]{background:#e6f1ea;color:#155e43;border-color:#9fbfac}
+.dw-presets .dw-preset-count{margin-left:6px;font-size:11px;color:#606b65;font-variant-numeric:tabular-nums}
+.dw-presets button[aria-pressed=true] .dw-preset-count{color:#155e43}
 ${dashboardDetailStyle}
 ${cardFlowStyle}
 ${ledgerTableStyle}
