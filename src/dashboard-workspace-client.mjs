@@ -1,6 +1,7 @@
 import {renderExecutionHealth} from './dashboard-execution.mjs';
 import {installLedgerTable} from './ledger-table.mjs';
 import {workspaceColumnSets,workspaceColumns,workspaceColumnsFor,workspaceVisibleColumns,workspaceStatePresets,workspacePresetCounts,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
+import {workspaceWallHtml,workspaceMapHtml} from './dashboard-canvas.mjs';
 import {escapeHtml,stateText} from './dashboard-workspace-client-support.mjs';
 import {installWorkspaceDetail} from './dashboard-detail-client.mjs';
 import {installWorkspaceResize} from './dashboard-workspace-resize.mjs';
@@ -29,7 +30,7 @@ function workspaceClient() {
  function saveCurrent(){remember();try{history.replaceState(entry(),'');}catch{status('이 창에서는 방문 위치를 저장할 수 없습니다.');}}
  function write(replace=false){
   const url=new URL(location.href);
-  for(const key of ['collection','q','repo','board','health','rally','state','layout','sort','dir']){if(state[key])url.searchParams.set(key,state[key]);else url.searchParams.delete(key);}
+  for(const key of ['collection','q','repo','board','health','rally','state','layout','axis','root','sort','dir']){if(state[key])url.searchParams.set(key,state[key]);else url.searchParams.delete(key);}
   if(state.card)url.searchParams.set('card',state.card);else url.searchParams.delete('card');
   url.searchParams.set('detail',state.opened?'1':'0');url.searchParams.set('tab',state.tab);url.searchParams.set('detailView',state.detailView);
   if(state.expanded)url.searchParams.set('expanded','1');else url.searchParams.delete('expanded');
@@ -59,8 +60,8 @@ function workspaceClient() {
   if(focus)$('#dw-tab-'+tab)?.focus({preventScroll:true});
  }
  function render(){
-  const visible=filtered(),table=state.layout==='table',cols=workspaceVisibleColumns(state.collection,rows);
-  $('#dw-panes').classList.toggle('dw-table-layout',table);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
+  const visible=filtered(),table=state.layout==='table',split=state.layout==='split',wall=state.layout==='wall',map=state.layout==='map',cols=workspaceVisibleColumns(state.collection,rows);
+  $('#dw-panes').classList.toggle('dw-table-layout',!split);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
   const totalInCollection=(rows||[]).filter(c=>state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)).length;
   const filterName=workspaceStateLabel(state.state);
   $('#dw-count').textContent=rows===null||state.collection==='work'&&data.workError?'모름':visible.length===totalInCollection?('전체 '+totalInCollection+'장'):((state.q||state.repo||state.board)?'조건':filterName)+' '+visible.length+'장 · 전체 '+totalInCollection+'장';
@@ -71,9 +72,9 @@ function workspaceClient() {
   const heading=$('#dw-collection-title');if(heading)heading.textContent=({work:'업무 카드',executions:'실행',unlinked:'연결 전 실행'})[state.collection]||'카드';
   const help=$('#dw-work-help');if(help)help.hidden=state.collection!=='work';
   $('#dw-column-tools').hidden=!table;
-  $('#dw-list').hidden=table||rows===null;$('#dw-table').hidden=!table||rows===null;
-  $('#dw-list').innerHTML=!table&&rows!==null?workspaceRowsHtml(visible,'split',state.card,cols):'';
-  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card,cols):'';
+  $('#dw-list').hidden=!split||rows===null;$('#dw-table').hidden=!table||rows===null;$('#dw-wall').hidden=!wall||rows===null;$('#dw-map').hidden=!map||rows===null;
+  $('#dw-list').innerHTML=split&&rows!==null?workspaceRowsHtml(visible,'split',state.card,cols):'';
+  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card,cols):'';if(wall&&rows!==null)$('#dw-wall').innerHTML=workspaceWallHtml(visible,state.card,state.axis);if(map&&rows!==null)$('#dw-map').innerHTML=workspaceMapHtml(visible,state.card,state.root,data.hierarchy||null,rows);
   $('#dw-empty').hidden=rows!==null&&visible.length>0;
   const emptyTitle=$('#dw-empty-title');if(emptyTitle)emptyTitle.textContent=state.collection==='work'&&data.workError?'업무 상태 모름':state.collection==='work'&&!(rows||[]).some(c=>c.kind==='work')?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.';
   $$('[data-layout]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.layout===state.layout)));
@@ -135,7 +136,7 @@ function workspaceClient() {
  }
  function readLocation(){
   const q=new URLSearchParams(location.search);
-  state={...state,collection:data.state.collection?(['work','executions','unlinked'].includes(q.get('collection'))?q.get('collection'):q.get('card')&&!q.get('card').startsWith('work:')?'executions':'work'):'',q:q.get('q')||'',repo:q.get('repo')||'',board:q.get('board')||'',health:q.get('health')||'',rally:q.get('rally')||'',state:q.get('state')||'',layout:q.get('layout')==='split'?'split':'table',sort:data.columns.some(([k])=>k===q.get('sort'))?q.get('sort'):'attention',dir:q.get('dir')==='asc'?'asc':'desc',tab:q.get('tab')||'summary',detailView:q.get('detailView')==='document'?'document':'table',card:q.get('card')||data.selected,opened:q.has('card')&&q.get('detail')!=='0',expanded:q.get('expanded')==='1'};
+  state={...state,collection:data.state.collection?(['work','executions','unlinked'].includes(q.get('collection'))?q.get('collection'):q.get('card')&&!q.get('card').startsWith('work:')?'executions':'work'):'',q:q.get('q')||'',repo:q.get('repo')||'',board:q.get('board')||'',health:q.get('health')||'',rally:q.get('rally')||'',state:q.get('state')||'',layout:['table','split','wall','map'].includes(q.get('layout'))?q.get('layout'):'table',axis:q.get('axis')==='step'?'step':'status',root:q.get('root')==='role'?'role':'work',sort:data.columns.some(([k])=>k===q.get('sort'))?q.get('sort'):'attention',dir:q.get('dir')==='asc'?'asc':'desc',tab:q.get('tab')||'summary',detailView:q.get('detailView')==='document'?'document':'table',card:q.get('card')||data.selected,opened:q.has('card')&&q.get('detail')!=='0',expanded:q.get('expanded')==='1'};
   if(!state.opened)state.expanded=false;
  }
  async function restoreHistory(){
@@ -178,6 +179,8 @@ function workspaceClient() {
   else if(button.hasAttribute('data-state-preset'))change({state:button.dataset.statePreset,opened:false,expanded:false},{reset:true});
   else if(button.dataset.detailView){state.detailView=button.dataset.detailView;detailView.apply(state.detailView);$('#dw-detail').scrollTop=0;write(true);}
   else if(button.dataset.layout){change({layout:button.dataset.layout,opened:false,expanded:false});if(state.layout==='split')loadCard(state.card,{focus:false});}
+  else if(button.dataset.axis)change({axis:button.dataset.axis,opened:false,expanded:false});
+  else if(button.dataset.root)change({root:button.dataset.root,opened:false,expanded:false});
   else if(button.dataset.sort){const sort=button.dataset.sort;change({sort,dir:state.sort===sort&&state.dir==='asc'?'desc':'asc'},{focus:'[data-sort="'+sort+'"]',reset:true});}
   else if(button.hasAttribute('data-detail-close'))closeDetail();
   else if(button.hasAttribute('data-detail-expand'))change({expanded:!state.expanded,opened:true},{focus:'[data-detail-expand]'});
@@ -239,4 +242,4 @@ function workspaceClient() {
  requestAnimationFrame(restore);
  if(!refreshOff)setInterval(()=>{refreshStatus();if(!paused()){saveCurrent();location.reload();}},15000);
 }
-export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
+export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;

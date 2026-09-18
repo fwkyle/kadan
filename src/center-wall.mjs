@@ -6,6 +6,7 @@ import {activityGuide,activityGuideStyle} from './activity-guide.mjs';
 import {watchOverviewStyle} from './watch-overview-wall.mjs';
 import {buildHumanBrief} from './human-brief.mjs';
 import {renderDashboardWorkspace,renderWorkspaceDetail} from './dashboard-workspace.mjs';
+import {readActiveHierarchy} from './hierarchy-register.mjs';
 import {dashboardWorkspaceStyle} from './dashboard-workspace-style.mjs';
 import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
 import {dashboardStyle} from './dashboard-home.mjs';
@@ -27,6 +28,8 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
  let works=home?[]:null,workError=null;
  if(home)try{works=workDashboardModel(new WorkStore(home).list(),center,entries)}catch(error){works=null;workError=error.message;}
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
+ // 관계도에 쓰는 직속 상위. 읽기 실패는 모름(null)으로 두고 화면이 담당별 묶음으로 내려간다.
+ const hierarchy=home?readActiveHierarchy(entries):null;
  const options=(values,current)=>values.map(([value,name])=>`<option value="${e(value)}"${current===value?' selected':''}>${e(name)}</option>`).join('');
  const hidden=c=>`<input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="key" value="${e(c.key)}"><input type="hidden" name="revision" value="${c.revision}">`;
  const management=c=>`<form method="post" action="/cards/update" class="edit">${hidden(c)}<h3>기록 남기기</h3><label>기록 종류<select name="noteKind">${options([['decision','내부 판단'],['question','감독에게 질문'],['answer','내부 답변']], 'decision')}</select></label><label>현재 차례 변경 (바꿀 때만 입력)<input name="turnOwner" maxlength="160" placeholder="예: 제품-감독 · 검수자 · 사용자"><small>이 카드에서 다음에 행동할 사람입니다. 기록만 남기며 메시지를 보내지는 않습니다.</small></label><label>변경 이유 / 기록 내용 (상태를 바꿀 때는 이유를 적어주세요)<textarea name="note" required rows="3"></textarea></label>
@@ -55,7 +58,7 @@ ${dashboardWorkspaceStyle}
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
  ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
- ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail})}
+ ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail,hierarchy})}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}
  ${renderDecisions(decisions,decisionError,token)}
