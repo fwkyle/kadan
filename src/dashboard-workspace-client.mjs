@@ -1,6 +1,6 @@
 import {renderExecutionHealth} from './dashboard-execution.mjs';
 import {installLedgerTable} from './ledger-table.mjs';
-import {workspaceColumns,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
+import {workspaceColumnSets,workspaceColumns,workspaceColumnsFor,workspaceVisibleColumns,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
 import {escapeHtml,stateText} from './dashboard-workspace-client-support.mjs';
 import {installWorkspaceDetail} from './dashboard-detail-client.mjs';
 import {installWorkspaceResize} from './dashboard-workspace-resize.mjs';
@@ -16,7 +16,8 @@ function workspaceClient() {
  const mobile=matchMedia('(max-width:799px)');
  const detailView=installWorkspaceDetail();
  const ledgerView=installLedgerTable(()=>{lastActivity=Date.now();refreshStatus();});
- const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},workspaceColumns);
+ // 너비 계산은 이 화면에 실제로 그려진 열만 쓴다. 컬렉션이 바뀌면 새로 읽어 열 구성을 맞춘다.
+ const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},data.columns);
  const columns=installWorkspaceColumns(()=>{lastActivity=Date.now();},()=>resizing.resetColumns());
  // 옛 관제 요약(#overview)·판 현황(#boards)은 현황 안의 접힘 구역이 됐다(2026-09-12). 옛 주소는 현황으로 보낸다.
  const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'운영 흐름',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
@@ -58,7 +59,7 @@ function workspaceClient() {
   if(focus)$('#dw-tab-'+tab)?.focus({preventScroll:true});
  }
  function render(){
-  const visible=filtered(),table=state.layout==='table';
+  const visible=filtered(),table=state.layout==='table',cols=workspaceVisibleColumns(state.collection,rows);
   $('#dw-panes').classList.toggle('dw-table-layout',table);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
   const totalInCollection=(rows||[]).filter(c=>state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)).length;
   const filterName=workspaceStateLabel(state.state);
@@ -71,15 +72,15 @@ function workspaceClient() {
   const help=$('#dw-work-help');if(help)help.hidden=state.collection!=='work';
   $('#dw-column-tools').hidden=!table;
   $('#dw-list').hidden=table||rows===null;$('#dw-table').hidden=!table||rows===null;
-  $('#dw-list').innerHTML=!table&&rows!==null?workspaceRowsHtml(visible,'split',state.card):'';
-  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card):'';
+  $('#dw-list').innerHTML=!table&&rows!==null?workspaceRowsHtml(visible,'split',state.card,cols):'';
+  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card,cols):'';
   $('#dw-empty').hidden=rows!==null&&visible.length>0;
   const emptyTitle=$('#dw-empty-title');if(emptyTitle)emptyTitle.textContent=state.collection==='work'&&data.workError?'업무 상태 모름':state.collection==='work'&&!(rows||[]).some(c=>c.kind==='work')?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.';
   $$('[data-layout]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.layout===state.layout)));
   for(const [id,key] of [['dw-search','q'],['dw-board','board'],['dw-repo','repo']])$('#'+id).value=state[key];
   $('#dw-state-summary').textContent=filterName;
   $$('[data-state-option]').forEach(el=>{el.checked=workspaceSelectedStates(state.state).includes(el.value);});
-  $$('[data-sort-column]').forEach(el=>{const active=el.dataset.sortColumn===state.sort;el.setAttribute('aria-sort',active?(state.dir==='asc'?'ascending':'descending'):'none');const button=el.querySelector('button');const title=button.querySelector('[data-column-label]');if(title)title.textContent=(state.collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록',at:'관련 기록 갱신'})[el.dataset.sortColumn]:null)||workspaceColumns.find(([key])=>key===el.dataset.sortColumn)?.[1]||'';(button.querySelector('[data-sort-arrow]')||button.querySelector('span')).textContent=active?(state.dir==='asc'?' ↑':' ↓'):' ↕';button.setAttribute('aria-label',button.textContent.replace(/[↑↓↕]/g,'')+' · '+(active&&state.dir==='asc'?'내림차순':'오름차순')+' 정렬');});
+  $$('[data-sort-column]').forEach(el=>{const active=el.dataset.sortColumn===state.sort;el.setAttribute('aria-sort',active?(state.dir==='asc'?'ascending':'descending'):'none');const button=el.querySelector('button');const title=button.querySelector('[data-column-label]');if(title)title.textContent=(state.collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록',at:'관련 기록 갱신'})[el.dataset.sortColumn]:null)||cols.find(([key])=>key===el.dataset.sortColumn)?.[1]||'';(button.querySelector('[data-sort-arrow]')||button.querySelector('span')).textContent=active?(state.dir==='asc'?' ↑':' ↓'):' ↕';button.setAttribute('aria-label',button.textContent.replace(/[↑↓↕]/g,'')+' · '+(active&&state.dir==='asc'?'내림차순':'오름차순')+' 정렬');});
   const close=$('[data-detail-close]'),expand=$('[data-detail-expand]');close.textContent=table?'표로 돌아가기':'목록으로';expand.textContent=state.expanded?'나란히 보기':'상세 확대';expand.setAttribute('aria-expanded',String(state.expanded));
   columns.refresh();resizing.refresh();showTab(state.tab);refreshStatus();
  }
@@ -118,6 +119,8 @@ function workspaceClient() {
   if(!state.opened){state.card=key;write(true);}
   const row=(rows||[]).find(c=>c.key===key);
   const collection=state.collection?(row?.kind==='work'?'work':state.collection==='unlinked'&&!row?.parentWorkKey?'unlinked':'executions'):'';
+  // 업무 카드와 실행 카드는 열 구성이 다르다. 그 전환은 서버가 표 머리글을 다시 그리도록 새로 읽는다.
+  if((collection==='work')!==(state.collection==='work')){saveCurrent();Object.assign(state,{card:key,collection,opened:true,expanded:false});write(true);location.reload();return;}
   change({card:key,collection,opened:true,expanded:false});loadCard(key);
  }
  function route(){
@@ -163,7 +166,10 @@ function workspaceClient() {
    if(!mayReplaceDetail())return;dirty=false;cancelLoad();
    const collection=button.dataset.collection;
    const target=sortWorkspaceRows(filterWorkspaceRows(rows,{...state,collection,q:'',board:'',repo:'',state:state.state}),state.sort,state.dir)[0]?.key||'';
-   change({collection,card:target,q:'',board:'',repo:'',opened:false,expanded:false},{reset:true});
+   const patch={collection,card:target,q:'',board:'',repo:'',opened:false,expanded:false};
+   // 업무 표와 실행 표는 열 구성이 다르다. 그 전환은 서버가 머리글을 다시 그리도록 새로 읽는다.
+   if((collection==='work')!==(state.collection==='work')){saveCurrent();Object.assign(state,patch);write();location.reload();return;}
+   change(patch,{reset:true});
    if(state.layout==='split')loadCard(target,{focus:false});
   }
   else if(button.hasAttribute('data-state-preset'))change({state:button.dataset.statePreset,opened:false,expanded:false},{reset:true});
@@ -230,4 +236,4 @@ function workspaceClient() {
  requestAnimationFrame(restore);
  if(!refreshOff)setInterval(()=>{refreshStatus();if(!paused()){saveCurrent();location.reload();}},15000);
 }
-export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
+export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;

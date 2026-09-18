@@ -277,6 +277,44 @@ test('상세는 진행 중 카드의 실행 도구·강도를 보여주고 종�
  assert.ok(!allTable.includes('라운드 미기록'));
 });
 
+test('실행 표는 카드 상태 열을 중복해 두지 않고 업무 표에서만 업무 상태를 따로 보여준다',()=>{
+ const c=card({status:'hold',displayState:'hold'});
+ const works=[{key:'work:repo/w1',workKey:'repo/w1',kind:'work',workType:'business',owner:'감독',state:'running',stateLabel:'진행 중',stored:'open',title:'업무',originalTitle:'업무',board:'판',repo:'repo',at,revision:1,executions:[]}];
+ const view=(collection,list)=>renderDashboardWorkspace({center:center([c]),briefs:null,centerError:null,url:new URL('http://localhost/?collection='+collection+'&state=all'),detail:()=>'',works:list,workError:null,workDetail:()=>''});
+ const exec=view('executions',works),work=view('work',works);
+ const headers=html=>{const m=html.match(/<thead><tr>([\s\S]*?)<\/tr><\/thead>/);return m?[...m[1].matchAll(/data-column="([^"]+)"/g)].map(x=>x[1]):[];};
+ assert.deepEqual(headers(exec).includes('stateLabel'),false);
+ assert.ok(headers(exec).includes('healthLabel'));
+ assert.ok(!readData(exec).columns.some(([key])=>key==='stateLabel'));
+ assert.ok(headers(work).includes('stateLabel'));
+ assert.match(work,/>업무 상태</);
+ assert.deepEqual(headers(render([c],'?collection=executions&state=all')).includes('stateLabel'),false);
+});
+test('종료 카드는 실행 흐름 설명·중복 신호 문구·현재 차례를 표에서 반복하지 않는다',()=>{
+ const cells=(html,key)=>{const m=html.match(new RegExp('<td data-column="'+key+'"[^>]*>([^]*?)</td>'));return m?m[1]:'';};
+ const done=card({status:'done',displayState:'done',runs:[]});
+ const table=render([done],'?state=all').match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ assert.equal(cells(table,'healthLabel'),'<span class="execution-health eh-closed" title="실행을 마친 카드입니다.">완료</span>');
+ assert.equal(cells(table,'signalAt'),'<strong>신호 없음</strong>');
+ assert.equal(cells(table,'turnLabel'),'');
+ assert.doesNotMatch(workspaceRowsHtml([done],'split',''),/현재 차례/);
+ const live=card({displayState:'running',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at:sent}],history:[{by:'작업자',role:'작업자',noteKind:'progress',note:'배포 확인 중',at}]});
+ const liveTable=render([live],'?state=all').match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ assert.match(cells(liveTable,'healthLabel'),/작업 중/);
+ assert.match(cells(liveTable,'healthLabel'),/<small>배포 확인 중<\/small>/);
+ assert.match(cells(liveTable,'signalAt'),/<strong>09\.08 10:00<\/strong><small>진행 보고<\/small>/);
+ assert.match(cells(liveTable,'turnLabel'),/<strong>작업자<\/strong>/);
+});
+test('실행 모델 열은 원장 문자열의 인용부호를 걷어내고 값이 없으면 머리글까지 지운다',()=>{
+ const active=card();
+ const view=models=>renderDashboardWorkspace({center:{...center([active]),...(models?{models}:{})},briefs:null,centerError:null,url:new URL('http://localhost/?state=all'),detail:()=>'',works:null,workError:null,workDetail:()=>''});
+ const withModel=view({'작업자':{harness:'codex',model:"kimi/k3[1m]'",effort:'max',at:sent}});
+ assert.match(withModel,/data-column="model"[^>]*><strong>k3\[1m\]<\/strong><small>강도 max<\/small>/);
+ const headers=html=>{const m=html.match(/<thead><tr>([\s\S]*?)<\/tr><\/thead>/);return m?[...m[1].matchAll(/data-column="([^"]+)"/g)].map(x=>x[1]):[];};
+ assert.ok(headers(withModel).includes('model'));
+ assert.deepEqual(headers(view()).includes('model'),false);
+});
+
 
 test('상태 다중 필터는 합집합이며 검색·판 조건과 함께 적용하고 모두 제외는 0장이다',()=>{
  const rows=[{key:'a',state:'running',title:'같은 제목',board:'a'},{key:'b',state:'waiting',title:'같은 제목',board:'a'},{key:'c',state:'done',title:'같은 제목',board:'a'},{key:'d',state:'waiting',title:'다른 제목',board:'b'}];

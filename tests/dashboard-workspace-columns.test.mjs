@@ -4,7 +4,7 @@ import {runInNewContext} from 'node:vm';
 import {installWorkspaceColumns} from '../src/dashboard-workspace-columns.mjs';
 
 function harness({saved=null,blocked=false,overlay=false}={}) {
- const keys=['title','next','owner'],stored=new Map([['kadan.dashboard.columns.v1',saved]]),windowEvents=new Map();let resets=0;
+ const keys=['title','next','owner'],stored=new Map([['kadan.dashboard.columns.v2',saved]]),windowEvents=new Map();let resets=0;
  const element=dataset=>{const events=new Map(),classes=new Set();let pointer;return {dataset,events,children:[],textContent:'',classList:{add:(...names)=>names.forEach(n=>classes.add(n)),remove:(...names)=>names.forEach(n=>classes.delete(n)),contains:n=>classes.has(n)},addEventListener:(type,fn)=>events.set(type,fn),appendChild(el){this.children=this.children.filter(c=>c!==el);this.children.push(el)},focus(){},scrollIntoView(){},setPointerCapture:id=>pointer=id,hasPointerCapture:id=>pointer===id,releasePointerCapture(){pointer=null}};};
  const group=element({}),head=element({}),body=element({}),reset=element({}),status=element({});
  group.children=keys.map(key=>element({column:key}));
@@ -18,7 +18,7 @@ function harness({saved=null,blocked=false,overlay=false}={}) {
  const context={document:{body,querySelectorAll:()=>buttons,querySelector:s=>nodes[s],elementFromPoint:x=>overlay?null:head.children[Math.floor(x/200)]},window:{addEventListener:(type,fn)=>windowEvents.set(type,fn)},localStorage:{getItem:key=>{if(blocked)throw Error('blocked');return stored.get(key)},setItem:(key,value)=>{if(blocked)throw Error('blocked');stored.set(key,value)}},requestAnimationFrame:()=>1,cancelAnimationFrame(){},onReset:()=>resets++};
  const api=runInNewContext('('+installWorkspaceColumns.toString()+')(()=>{},onReset)',context);
  const send=(key,type,patch={})=>{let prevented=false,stopped=false;buttons.find(b=>b.dataset.sort===key).events.get(type)({button:0,detail:1,isPrimary:true,pointerId:1,clientX:100,preventDefault(){prevented=true},stopPropagation(){stopped=true},...patch});return {prevented,stopped};};
- return {api,send,stored:()=>stored.get('kadan.dashboard.columns.v1'),order:()=>head.children.map(el=>el.dataset.column),allOrders:()=>[group,head,row].map(r=>r.children.map(el=>el.dataset.column)),values:()=>row.children.map(el=>el.textContent),replaceRows(){row=makeRow();api.refresh()},reset(){reset.events.get('click')()},resets:()=>resets,status,windowEvents};
+ return {api,send,stored:()=>stored.get('kadan.dashboard.columns.v2'),order:()=>head.children.map(el=>el.dataset.column),allOrders:()=>[group,head,row].map(r=>r.children.map(el=>el.dataset.column)),values:()=>row.children.map(el=>el.textContent),replaceRows(){row=makeRow();api.refresh()},reset(){reset.events.get('click')()},resets:()=>resets,status,windowEvents};
 }
 test('열 드래그는 머리글·너비·카드 값을 함께 이동하고 정렬 클릭을 막는다',()=>{
  const h=harness();h.send('owner','pointerdown',{clientX:500});h.send('owner','pointermove',{clientX:20});
