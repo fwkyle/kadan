@@ -1798,7 +1798,7 @@ function loadWallSnapshot() {
 
 function cmdWall(_argv, flags) {
   if (flags.help) {
-    console.log("사용법: kadan wall [--port 8790]  (모든 판: 주소 뒤에 ?all=1, 카단 판정: ?judge=1)");
+    console.log("사용법: kadan wall [--port 8790] [--cache-sec 초]  (모든 판: 주소 뒤에 ?all=1, 카단 판정: ?judge=1)");
     return;
   }
   const rawPort = flags.port ?? "8790";
@@ -1809,7 +1809,10 @@ function cmdWall(_argv, flags) {
   ) {
     die("--port는 0부터 65535까지의 정수여야 한다");
   }
-  const server = createWallServer(loadWallSnapshot, {home:ledgerHome()});
+  const cacheSec=flags['cache-sec']===undefined?10:Number(flags['cache-sec']);
+  // 같은 주소를 15초마다 다시 읽는 화면을 위해 응답을 잠깐 재사용한다. 0이면 끈다.
+  if(!Number.isInteger(cacheSec)||cacheSec<0)die('--cache-sec는 0 이상의 정수여야 한다');
+  const server = createWallServer(loadWallSnapshot, {home:ledgerHome(),cacheSec});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;

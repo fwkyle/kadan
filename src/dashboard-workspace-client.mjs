@@ -138,6 +138,8 @@ function workspaceClient() {
   const q=new URLSearchParams(location.search);
   state={...state,collection:data.state.collection?(['work','executions','unlinked'].includes(q.get('collection'))?q.get('collection'):q.get('card')&&!q.get('card').startsWith('work:')?'executions':'work'):'',q:q.get('q')||'',repo:q.get('repo')||'',board:q.get('board')||'',health:q.get('health')||'',rally:q.get('rally')||'',state:q.get('state')||'',layout:['table','split','wall','map'].includes(q.get('layout'))?q.get('layout'):'table',axis:q.get('axis')==='step'?'step':'status',root:q.get('root')==='role'?'role':'work',sort:data.columns.some(([k])=>k===q.get('sort'))?q.get('sort'):'attention',dir:q.get('dir')==='asc'?'asc':'desc',tab:q.get('tab')||'summary',detailView:q.get('detailView')==='document'?'document':'table',card:q.get('card')||data.selected,opened:q.has('card')&&q.get('detail')!=='0',expanded:q.get('expanded')==='1'};
   if(!state.opened)state.expanded=false;
+  // 새로 읽기 표시는 한 번만 쓴다. 주소를 깨끗이 해야 다음 자동 갱신이 캐시를 쓴다.
+  if(location.search.includes('fresh=')){const clean=new URL(location.href);clean.searchParams.delete('fresh');try{history.replaceState(history.state,'',clean);}catch{}}
  }
  async function restoreHistory(){
   const generation=++navigation;
@@ -187,7 +189,7 @@ function workspaceClient() {
   else if(button.hasAttribute('data-detail-retry'))loadCard(state.card);
   else if(button.dataset.tab||button.dataset.readTab){showTab(button.dataset.tab||button.dataset.readTab,true);write(true);}
   else if(button.hasAttribute('data-workspace-reset'))change({q:'',repo:'',board:'',health:'',rally:'',state:'all'},{reset:true,focus:'#dw-search'});
-  else if(button.hasAttribute('data-refresh')){if(activeView()==='operations-flow'){window.dispatchEvent(new CustomEvent('operations-flow-refresh'));return;}if(!saving&&(!dirty||confirm('작성 중인 기록을 저장하지 않고 새로 읽을까요?'))){dirty=false;saveCurrent();location.reload();}}
+  else if(button.hasAttribute('data-refresh')){if(activeView()==='operations-flow'){window.dispatchEvent(new CustomEvent('operations-flow-refresh'));return;}if(!saving&&(!dirty||confirm('작성 중인 기록을 저장하지 않고 새로 읽을까요?'))){dirty=false;saveCurrent();const fresh=new URL(location.href);fresh.searchParams.set('fresh',String(Date.now()));location.replace(fresh);}}
  });
  for(const [id,key,event] of [['dw-search','q','input'],['dw-board','board','change'],['dw-repo','repo','change'],['dw-health','health','change'],['dw-rally','rally','change']])$('#'+id).addEventListener(event,e=>{lastActivity=Date.now();change({[key]:e.target.value,opened:false,expanded:false},{replace:event==='input',reset:true});});
  $('#dw-state').addEventListener('change',event=>{
