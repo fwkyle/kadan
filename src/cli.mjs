@@ -1128,6 +1128,26 @@ function formatRottiePreflightFailure({ reason, bin, connection, candidates }) {
   ].join("\n");
 }
 
+export function inspectHiddenStartPolicy({
+  env = process.env,
+  floorName,
+  hidden = false,
+  roleProfile,
+  reusing = false,
+} = {}) {
+  const forbidden =
+    hidden === true &&
+    floorName === "tmux" &&
+    env.KADAN_WINDOW === "rottie" &&
+    roleProfile != null &&
+    reusing === false;
+  if (!forbidden) return { ok: true };
+  return {
+    ok: false,
+    message: `KADAN_HIDDEN_FORBIDDEN: KADAN_WINDOW=rottie에서 역할 프로필(${roleProfile}) 세션은 --hidden으로 시작할 수 없다 — 로티 창이 기본이다. 로티가 없거나 연결 불가를 확인했을 때만 KADAN_WINDOW=none --hidden으로 백그라운드 시작한다 (worker-creation.md 92~94행).`,
+  };
+}
+
 // 임시 장치: 로티 정식 출시로 경로가 고정되면 이 점검은 걷어낸다 (2026-09-06 [kyle] 결정).
 export function inspectRottieStartPreflight({
   env = process.env,
@@ -1292,6 +1312,8 @@ function cmdStart(argv, flags) {
   const session = sessionName(role);
   const reusing = floor.alive(session);
   const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
+  const hiddenPolicy = inspectHiddenStartPolicy({ floorName: floor.name, hidden: Boolean(flags.hidden), roleProfile, reusing });
+  if (!hiddenPolicy.ok) die(hiddenPolicy.message, 2);
   let evidence;
   let startedCmd;
   if (reusing) {
