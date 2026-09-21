@@ -27,7 +27,7 @@ function card(f,{role='recipient',id='current',phase='implementation'}={}) {
 
 test('5 profiles: 원문 먼저·실재 경로·첨부 지문·완성 DONE 없음·첨부 마커로 생략 불가',()=>{
   const f=fixture(),source=path.join(f.home,'source.md');fs.writeFileSync(source,'# 실제 원본');
-  const message=`중앙 카드 ${source} 읽기\n<!-- kadan:receiver-instructions -->\n원문 마지막\n`;
+  const message=`중앙 카드 ${source} 읽기\n<!-- kadan:receiver-instructions -->\n원문 마지막: 미리보기 경계가 임시 경로 길이와 무관하게 항상 원문 안에 머물도록 이 꼬리 문장으로 원문을 충분히 길게 유지한다\n`;
   for (const profile of ROLE_PROFILES) {
     const r=f.compose({profile,message});
     assert.ok(r.message.startsWith(message+'\n\n'));
