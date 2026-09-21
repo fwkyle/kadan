@@ -1,3 +1,4 @@
+import {workHealth,executionHealth,renderExecutionHealth} from './dashboard-execution.mjs';
 import {escapeHtml as e} from './card-content.mjs';
 import {cardTurn} from './card-turn.mjs';
 import {stateText} from './human-brief.mjs';
@@ -29,8 +30,8 @@ export function workDashboardModel(works,center,entries){
   const latest=active.filter(x=>x.round===round);
   const stage=closed?(active.length?'종료 후 미종료 실행 · 확인 필요':workState[w.status]):w.status==='hold'?'보류':!executions.length?'실행 준비':!active.length?'감독 최종 확인':(latest.length?latest:active).map(x=>workPhases[x.phase]).filter((x,i,a)=>a.indexOf(x)===i).join(' · ');
   const letters=workLetters(w,entries,cards);
-  return {...w,key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
-   purpose:w.goal,flowLabel:round?`${round}라운드 · ${stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length>1?' · '+active.length+'건 병행':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
+  return {...w,...workHealth(w,executions),key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
+   purpose:w.goal,flowLabel:round?`${round}라운드 · ${stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
    turnLabel:turn,turnReason:explicit?'업무에 명시한 현재 차례':active.length?'각 실행의 차례 기록·전달·진행 보고 기준':'책임 감독이 결과를 확인할 차례',turnSource:closed?'업무 종료':explicit?'차례 기록':!active.length?'책임 감독':owners.length>1?'병렬 진행':'실행별 근거',
    next:w.nextAction||(!active.length&&executions.length?'약속한 결과와 완료 조건을 감독이 확인':'다음 행동 미기록'),summary:w.progress,reportAt:w.at,reportLabel:short(w.at),
    executions,active,ended,letters,round,at:new Date(Math.max(Date.parse(w.at)||0,lastChild,...letters.map(x=>Date.parse(x.t)||0))).toISOString()};
@@ -40,7 +41,7 @@ export function workDashboardModel(works,center,entries){
 const facts=items=>`<table class="bw-facts"><tbody>${items.map(([label,text])=>`<tr><th scope="row">${e(label)}</th><td>${e(text||'미기록')}</td></tr>`).join('')}</tbody></table>`;
 function executionTable(executions){
  if(!executions.length)return '<p class="muted">연결된 실행이 없습니다. 아래에서 실행을 등록하거나 기존 실행을 연결하세요.</p>';
- return `<div class="bw-scroll" tabindex="0" aria-label="업무 안의 실행"><table class="bw-executions"><thead><tr><th>라운드</th><th>단계</th><th>실행 · 맡긴 내용</th><th>상태</th><th>현재 차례</th></tr></thead><tbody>${[...executions].sort((a,b)=>b.round-a.round).map(x=>`<tr><td>${x.round}</td><td>${e(workPhases[x.phase])}</td><td>${anchor(x.key,x.card?.title||x.key)}</td><td>${e(x.card?stateText[x.card.displayState]||'모름':'기록 모름')}</td><td>${e(x.card?cardTurn(x.card).label:'확인 필요')}</td></tr>`).join('')}</tbody></table></div>`;
+ return `<div class="bw-scroll" tabindex="0" aria-label="업무 안의 실행"><table class="bw-executions"><thead><tr><th>라운드</th><th>단계</th><th>실행 · 맡긴 내용</th><th>상태</th><th>현재 차례</th></tr></thead><tbody>${[...executions].sort((a,b)=>b.round-a.round).map(x=>`<tr><td>${x.round}</td><td>${e(workPhases[x.phase])}</td><td>${anchor(x.key,x.card?.title||x.key)}</td><td>${renderExecutionHealth(x.card?executionHealth(x.card):{})}</td><td>${e(x.card?cardTurn(x.card).label:'확인 필요')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 export function renderWorkDetail(w,{token,center,models,home,url}){
@@ -56,7 +57,7 @@ export function renderWorkDetail(w,{token,center,models,home,url}){
  const update=closed?form('reopen',note+'<button>업무 다시 열기</button>'):form('update',area('progress','진척 · 처리 수 / 남은 대상 / 재개 위치',w.progress)+input('turnOwner','현재 차례 (여럿이면 함께 기재)',w.turnOwner)+area('nextAction','다음 행동 · 대기 이유',w.nextAction)+note+`<details><summary>업무 약속 · 책임 · 보류 변경</summary>${input('title','업무 제목',w.title,true)}${area('goal','약속한 결과',w.goal,true)}${area('scope','전체 대상 범위',w.scope,true)}${area('acceptance','완료 조건',w.acceptance,true)}${input('owner','책임 감독',w.owner,true)}${input('board','판',w.board)}<label>업무 상태<select name="status">${option('open','진행 중',w.status)}${option('hold','보류',w.status)}</select></label></details><button>업무 기록 저장</button>`);
  const complete=closed?'':`<details><summary>업무 최종 완료 · 취소</summary><p class="muted">실행 종료 ${w.ended.length}/${w.executions.length}건. 책임 감독이 약속한 결과를 확인한 뒤 업무를 끝냅니다.</p>${form('complete',area('result','확인한 최종 결과 · 검수 근거','',true)+note+`<button${w.active.length?' disabled':''}>업무 최종 완료 확인</button>${w.active.length?'<p>미종료 실행을 먼저 마치거나 취소하세요.</p>':''}`)}${form('cancel',area('result','취소 근거 · 남은 내용','',true)+note+`<button class="ds-button--quiet"${w.active.length?' disabled':''}>업무 취소 기록</button>`)}</details>`;
  const panels={
-  summary:facts([['약속한 결과',w.goal],['지금',w.flowLabel],['현재 차례',w.turnLabel],['다음 행동',w.next],...(w.progress?[['진척',w.progress]]:[])])+renderInbox(w,home,url),
+  summary:facts([['약속한 결과',w.goal],['지금',w.flowLabel],['실행 흐름',w.healthLabel+' · '+w.healthReason],['최근 실행 신호',w.signalLabel+' · '+short(w.signalAt)],['현재 차례',w.turnLabel],['다음 행동',w.next],...(w.progress?[['진척',w.progress]]:[])])+renderInbox(w,home,url),
   instructions:facts([['전체 대상',w.scope],['완료 조건',w.acceptance],...(w.result?[['최종 결과·근거',w.result]]:[])]),
   manage:update+complete,
   technical:facts([['업무 ID',w.workKey],['책임 감독',w.owner],['차례 근거',w.turnReason],['실행 종료',w.flowPhase]])+renderDetailSections('',[

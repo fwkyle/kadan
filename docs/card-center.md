@@ -37,6 +37,34 @@ kadan card link repo/card-search
 - 상태 손상/생존 조회 실패는 모름이다. 질문 저장은 알림 전송이 아니며, 웹 저장은 사람 명의의 로컬 카드 기록이다. `by`는 인증 신분이 아니라 기존 원장과 같은 선언값이다.
 - 중앙 데이터는 이 컴퓨터의 KADAN_HOME에 있다. 코드 Git 저장소나 원격 서비스로 자동 게시하지 않는다. 다른 컴퓨터로 이동할 때 cards 디렉토리와 원장을 함께 보존해야 한다.
 
+## 카드 결과와 검증 자료
+
+새 카드는 결과 보고서와 검증 자료를 대상 코드 저장소 밖, 카드와 같은 폴더에 둔다. 작업공간을 옮기거나 역할을 종료해도 카단에서 근거를 찾기 위해서다.
+
+```text
+KADAN_HOME/cards/<저장소>/<실행ID>/
+  card.md
+  result.md
+  evidence/
+```
+
+`card show <현재실행키>`의 `resultPath`와 `evidenceDir`가 실제 절대경로다. 생성 시 검증 자료 폴더만 준비하며, 보고서가 있는 것처럼 빈 `result.md`를 만들지 않는다. 구현·검수·수정 실행마다 자기 경로를 쓰고 참조 카드나 직전 실행의 결과를 덮어쓰지 않는다. 제품 코드·테스트·계속 사용할 설계/사용 문서는 대상 저장소에 둔다.
+
+수동 실행은 보고서를 완성한 뒤 최신 revision으로 등록한다.
+
+```sh
+kadan card show repo/exec-id
+kadan card report repo/exec-id --revision 3 --outcome implemented
+```
+
+결과의 경로·SHA256·바이트 수·판정·작성자·시각을 기존 카드 이력에 추가한다. 긴 보고서 본문은 원장에 복사하지 않는다. `implemented`는 구현 종료, `pass`·`changes`는 검수 판정, `exception`은 판단 필요, `ok`·`failed`는 일반 실행 결과다. **결과 등록은 카드 상태·DONE·업무 완료를 바꾸지 않는다.** 기존 완료 통지와 마커 절차를 이어간다.
+
+등록 후 같은 결과를 다시 등록하면 이력을 늘리지 않는다. 등록한 보고서는 보존하며, 수정·재검수는 후속 실행의 결과로 남긴다. 등록 뒤 통지 실패 등 추가 상황은 카드 메모나 `evidence/`에 남긴다. 파일 외부 편집을 막는 기능은 아니며, SHA256은 등록 당시 내용의 지문이다.
+
+자동 실행은 기존 `work auto-report`가 현재 실행의 경로를 기본으로 사용하고, 프로그램이 파일과 완료 근거를 확인할 때 카드 결과도 등록한다. 별도 `card report`를 추가하지 않는다. [자동 전달](automatic-review.md)을 따른다.
+
+이전 카드는 새 경로를 강제하거나 파일을 옮기지 않는다. `resultPath`가 없는 카드는 기존 지정 경로를 유지하며, 결과를 등록하려면 `--result-file /기존/절대경로`를 명시한다. 새 카드의 외부 경로 지정은 거부한다. 결과 원문과 `evidence/`는 DB 밖 파일이므로 **DB와 `cards/`를 함께 백업**한다.
+
 ## 진행 보고
 
 여기서 진행 보고는 카드의 상태 기록이며, 상대 AI에게 보내는 편지(`send`)와 다르다. 상태 기록 뒤 상위에 같은 내용을 별도 발송하지 않는다. 편지가 필요한 경우는 [진행 기록과 상위 통지](../skills/kadan-conductor/references/operating-contract.md#진행-기록과-상위-통지)를 따른다.
@@ -88,4 +116,4 @@ kadan card update 저장소/카드 --revision 4 --status-reason '검색 방식 �
 
 ## SQLite 저장소
 
-명시적으로 전환한 저장소에서는 카드 변경 이력·현재 상태와 사용자 결정·brief가 kadan.sqlite에 저장된다. card.md와 sourcePath 심볼릭 링크는 유지한다. 전체 이전·복구 시 DB와 파일을 함께 보존한다. [절차와 경계](sqlite-storage.md).
+명시적으로 전환한 저장소에서는 카드 변경 이력·현재 상태와 사용자 결정·brief가 kadan.sqlite에 저장된다. card.md·result.md·evidence/와 sourcePath 심볼릭 링크는 유지한다. 전체 이전·복구 시 DB와 파일을 함께 보존한다. [절차와 경계](sqlite-storage.md).

@@ -7,7 +7,7 @@ import {AutomaticReview} from '../src/automatic-review.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {createDatabase,writeStorageMarker,appendStream} from '../src/storage.mjs';
-import {appendLedger,readLedger,saveMailBody} from '../src/ledger.mjs';
+import {appendLedger,readLedger,readMailLedger,readTaskLedger,readMailBody,saveMailBody} from '../src/ledger.mjs';
 import {guardedSend} from '../src/cli.mjs';
 
 function fixture(){
@@ -21,16 +21,16 @@ function fixture(){
  for(const [role,pid] of Object.entries(pids))start(role,pid);
  for(const id of ['implementation','review']){let c=cards.create({repo:'test',id,repoPath:home,body:`# 原本 ${id}\n최초 지시를 그대로 따른다`});cards.update(c.key,{status:'ready',scope:'시험 파일'},{revision:1,note:'승인'});}
  let beforeSend=()=>{},observe=()=>null;
- const context={home,by:'test-super',floor,observeDone:s=>observe(s),send:({role,pid,message,taskId,workKey,executionKey,transmit})=>{
+ const context={home,by:'test-super',floor,observeDone:s=>observe(s),send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>{
   beforeSend({role,taskId});
-  return guardedSend({floor:{...floor,send:(n,m)=>transmit(()=>floor.send(n,m))},role,session:`kadan-${role}`,message,taskId,recordedPid:pid,
+  return guardedSend({floor:{...floor,send:(n,m)=>transmit(()=>floor.send(n,m))},role,session:`kadan-${role}`,message,taskId,roleProfile,recordedPid:pid,
    env:{KADAN_HOME:home,KADAN_ROLE:'test-super'},readEntries:()=>readLedger(home),record:e=>appendLedger(e,home),saveBody:(d,b)=>saveMailBody(d,b,home),mailContext:{workKey,executionKey}});
  }};
  const auto=new AutomaticReview(context);
  const configure=(extra={})=>auto.configure(key,{revision:works.get(key).revision,implementation:'test/implementation',review:'test/review',worker:'test-worker',reviewer:'test-reviewer',notify:'test-super',...extra});
  const report=(outcome='implemented',write=true)=>{
-  const s=auto.get(key),resultFile=path.join(home,s.current.key.split('/')[1]+'.md');if(write)fs.writeFileSync(resultFile,'실제 결과 원문 '+outcome);
-  const r=new AutomaticReview({...context,by:s.current.role});return r.report(key,{execution:s.current.key,outcome,resultFile});
+  const s=auto.get(key),resultFile=cards.get(s.current.key).resultPath;if(write)fs.writeFileSync(resultFile,'실제 결과 원문 '+outcome);
+  const r=new AutomaticReview({...context,by:s.current.role});return r.report(key,{execution:s.current.key,outcome});
  };
  const done=(result='ok')=>{const s=auto.get(key);appendLedger({kind:'done',role:s.current.role,taskId:s.current.key.split('/')[1],result},home);};
  const finish=(outcome)=>{report(outcome);done();return auto.step(key);};
@@ -42,14 +42,51 @@ test('구현→독립검수→동일 작업자 수정→조기 PASS, 새 실행I
  assert.equal(s.phase,'implementation');assert.equal(s.status,'waiting');
  const first=s.current.key;assert.match(f.cards.get(first).body,/원본 지시:/);assert.doesNotMatch(f.cards.get(first).body,/原本/);
  s=f.finish('implemented');assert.equal(s.phase,'review');assert.equal(s.current.role,'test-reviewer');assert.equal(s.round,1);
+ assert.equal(f.cards.get(first).result.path,f.cards.get(first).resultPath);
+ assert.equal(f.cards.get(first).result.outcome,'implemented');
+ assert.notEqual(f.cards.get(first).resultPath,f.cards.get(s.current.key).resultPath);
+ assert.equal(fs.readFileSync(f.cards.get(first).resultPath,'utf8'),'실제 결과 원문 implemented');
  s=f.finish('changes');assert.equal(s.phase,'fix');assert.equal(s.current.role,'test-worker');assert.equal(s.round,2);
  s=f.finish('implemented');assert.equal(s.phase,'review');s=f.finish('pass');
  assert.equal(s.status,'pass');assert.equal(s.notification.status,'sent');assert.equal(f.works.get(f.key).status,'open');
  for(let i=0;i<3;i++)f.auto.step(f.key);
- const sends=readLedger(f.home).filter(e=>e.kind==='send');assert.equal(sends.length,5);assert.equal(sends.filter(e=>!e.taskId).length,1);
+ const mail=readMailLedger(f.home),sends=mail.filter(e=>e.kind==='send'&&e.transport!=='mailbox');
+ const completions=mail.filter(e=>e.kind==='send'&&e.completion),tasks=readTaskLedger(f.home);
+ assert.equal(sends.length,5);assert.equal(sends.filter(e=>!e.taskId).length,1);
+ const notice=sends.find(e=>!e.taskId);
+ assert.equal(notice.executionKey,s.current.key);assert.equal(notice.workKey,f.key);
+ assert.equal(notice.notificationOnly,undefined);
+ assert.ok(readMailBody(notice.digest,f.home).includes(`우편 ID: ${notice.mailId}`));
+ assert.equal(f.sent.length,5,'실제 화면 전달은 발령 4건과 감독 최종 통지 1건이다');
+ assert.equal(f.sent.filter(e=>e.name==='kadan-test-super').length,1);
+ assert.equal(tasks.filter(e=>e.kind==='dispatch').length,4);
+ assert.equal(mail.filter(e=>e.kind==='send').length,9);assert.equal(completions.length,4);
+ for(const dispatch of tasks.filter(e=>e.kind==='dispatch')){
+  const stored=completions.filter(e=>e.replyTo===dispatch.mailId);assert.equal(stored.length,1);
+  const completion=stored[0],done=tasks.find(e=>e.kind==='done'&&e.completionMailId===completion.mailId);
+  assert.ok(done);assert.equal(completion.by,dispatch.role);assert.equal(completion.role,dispatch.by);
+  assert.equal(completion.transport,'mailbox');assert.equal(completion.systemGenerated,'task-completion');
+  assert.equal(completion.taskId,undefined);assert.equal(completion.executionKey,dispatch.executionKey);
+  assert.equal(completion.workKey,dispatch.workKey);assert.equal(completion.result,done.result);
+  const body=readMailBody(completion.digest,f.home);assert.equal(typeof body,'string');
+  assert.ok(f.sent.every(e=>e.message!==body),'저장 완료 통지는 화면에 주입하지 않는다');
+ }
+ assert.deepEqual(sends.map(e=>e.roleProfile),['worker','reviewer','worker','reviewer','conductor']);
+ assert.ok(f.sent.slice(0,4).every(x=>x.message.includes('완료 방식: 자동.')));
  assert.equal(new Set(sends.filter(e=>e.taskId).map(e=>e.taskId)).size,4);
  assert.ok(f.sent.every(x=>!/^\s*KADAN:DONE\s+\S+\s+(?:ok|failed)\s*$/m.test(x.message)));
  assert.deepEqual(f.works.get(f.key).executions.map(x=>[x.phase,x.round]),[['implementation',1],['review',1],['fix',2],['review',2]]);
+});
+
+test('자동 최종 통지는 owner가 아닌 슈퍼 수신자의 명시 profile을 존중한다',()=>{
+ const f=fixture();f.start('test-top','20003');
+ appendLedger({kind:'start',role:'test-top',session:'kadan-test-top',floor:'tmux',panePid:'20003',roleProfile:'super'},f.home);
+ f.configure({notify:'test-top'});f.auto.step(f.key);f.finish('implemented');const state=f.finish('pass');
+ assert.equal(state.notification.status,'sent');
+ const notice=readLedger(f.home).filter(e=>e.kind==='send').at(-1);
+ assert.equal(notice.role,'test-top');assert.equal(notice.roleProfile,'super');
+ assert.match(f.sent.at(-1).message,/next action/);assert.match(f.sent.at(-1).message,/kadan work show test\/automatic/);
+ assert.equal(f.works.get(f.key).status,'open');
 });
 
 test('3라운드 경계는 한번 통지, 4라운드는 새 두 세션 확인 후에만 시작',()=>{
@@ -136,6 +173,7 @@ test('현재 실행ID·담당 보고만 수용, 충돌 보고·결과 파일 변
  const f=fixture();f.configure();f.auto.step(f.key);const s=f.auto.get(f.key);
  assert.throws(()=>f.auto.report(f.key,{execution:s.current.key,outcome:'implemented',resultFile:'/tmp/a'}),/담당만/);
  const r=new AutomaticReview({...f.context,by:s.current.role});assert.throws(()=>r.report(f.key,{execution:'test/old',outcome:'implemented',resultFile:'/tmp/a'}),/현재 자동/);
+ assert.throws(()=>r.report(f.key,{execution:s.current.key,outcome:'implemented',resultFile:'/tmp/a'}),/resultPath/);
  f.report();
  f.done();f.auto.step(f.key);fs.appendFileSync(f.auto.get(f.key).previous.resultFile,'변조');assert.equal(f.auto.step(f.key).status,'exception');
 });
@@ -143,7 +181,7 @@ test('현재 실행ID·담당 보고만 수용, 충돌 보고·결과 파일 변
 test('같은 실행의 서로 다른 결과 보고는 감독 판단으로 넘김',()=>{
  const f=fixture();f.configure();f.auto.step(f.key);f.report();
  const s=f.auto.get(f.key),r=new AutomaticReview({...f.context,by:s.current.role});
- assert.equal(r.report(f.key,{execution:s.current.key,outcome:'exception',resultFile:'/tmp/different'}).status,'exception');
+ assert.equal(r.report(f.key,{execution:s.current.key,outcome:'exception'}).status,'exception');
  const end=f.auto.step(f.key);assert.match(end.reason,/충돌/);assert.equal(end.notification.status,'sent');assert.equal(f.works.get(f.key).executions.length,1);
 });
 

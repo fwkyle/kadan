@@ -1,5 +1,6 @@
+import {executionHealth,renderExecutionHealth} from './dashboard-execution.mjs';
 import {buildRallies,renderRallies} from './rallies.mjs';
-import {secretaryLetters} from './secretary-mailbox.mjs';
+import {mailboxLetters} from './mailbox.mjs';
 import {renderWatchOverview} from './watch-overview-wall.mjs';
 import {renderBoardProgress} from './board-progress.mjs';
 import {stateText,finished,isExecution,executionUnknown,progressLabel} from './human-brief.mjs';
@@ -7,10 +8,41 @@ const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceA
 const when=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'보고 없음';
 const reportTime=h=>h.reportState==='unknown'?({'author-unknown':'보고자 모름','role-unknown':'보고 담당 모름','dispatch-time':'발령 시각 모름','assignment-time':'배정 시각 모름','future-time':'보고 시각 확인 필요'}[h.reportReason]||'보고 시각 모름'):when(h.evidenceAt);
 const link=(c,title)=>`<a href="?card=${encodeURIComponent(c.key)}#detail">${e(title)}</a>`;
+// 모든 역할이 아직 확인하지 않은 우편 수. 원장을 못 읽으면 null(모름)이다.
+export function mailboxUnread(entries=[],ledgerLines=0){
+ if(ledgerLines===null||!Array.isArray(entries)||entries.some(e=>e?.broken))return null;
+ return mailboxLetters(entries).filter(e=>e.read===false).length;
+}
+const taskTableFor=(briefs)=>{
+ const explain=c=>briefs?.get(c.key)||{title:c.title||c.id,workstream:'',summary:''};
+ return cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">실행 흐름</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream||'')}</small></td><td>${renderExecutionHealth(executionHealth(c))}</td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(h.evidenceAt!==undefined?reportTime(h):'')}</small></td></tr>`;}).join('')}</tbody></table></div>`;
+};
+// 다음으로 시작할 일: 판에 붙지 않은 발령 가능 실행 카드. 현황 화면의 접힘 구역으로 쓴다.
+export function renderUpcoming(center,briefs,{fold=false}={}){
+ const upcoming=(center?.cards||[]).filter(c=>!c.board&&c.displayState==='ready'&&isExecution(c));
+ if(!upcoming.length)return '';
+ const body=taskTableFor(briefs)(upcoming);
+ return fold?`<details class="st-fold" id="status-upcoming"><summary>다음으로 시작할 일 · 발령 가능 ${upcoming.length}장</summary><p class="st-hint">맡길 준비가 된 후보이며 순서가 정해졌다는 뜻은 아닙니다.</p>${body}</details>`:`<section class="panel"><h2>다음으로 시작할 일 · 발령 가능 ${upcoming.length}장</h2>${body}</section>`;
+}
+// 비서에게 확인할 질문. 사용자 결정 요청이 아니다.
+export function renderSecretaryQuestions(center,briefs,{fold=false}={}){
+ const open=(center?.boards||[]).filter(b=>b.state!=='done');
+ const activeCards=open.flatMap(b=>b.cards).filter(c=>!finished(c)&&isExecution(c));
+ const hold=activeCards.filter(c=>c.displayState==='hold'),unknown=activeCards.filter(executionUnknown);
+ const explain=c=>briefs?.get(c.key)||{title:c.title||c.id,workstream:''};
+ const questionCards=[...hold,...unknown];
+ const primaryQuestions=[];const questionGroups=new Set();
+ for(const c of questionCards){const group=explain(c).workstream;if(primaryQuestions.length<3&&!questionGroups.has(group)){primaryQuestions.push(c);questionGroups.add(group);}}
+ const moreQuestions=questionCards.filter(c=>!primaryQuestions.includes(c));
+ const ask=c=>`${explain(c).title}: ${c.displayState==='hold'?'보류 이유와 다시 시작할 조건이 뭐야?':c.displayState==='failed'?'실패 원인과 다음 조치는 뭐야?':'마지막으로 확인된 진행과 다음 단계가 뭐야?'}`;
+ const askItem=c=>`<li><strong>${e(ask(c))}</strong><p>${link(c,'관련 카드 보기')} · <button type="button" class="copy-question" data-question="${e(ask(c))}">질문 복사</button></p></li>`;
+ const body=`<p class="muted">사용자 결정 요청이 아닙니다. 아래 질문을 복사해 비서에게 물어볼 수 있습니다.</p>${questionCards.length?`<ul class="question-list">${primaryQuestions.map(askItem).join('')}</ul>${moreQuestions.length?`<details><summary>나머지 ${moreQuestions.length}장 확인 질문</summary><ul class="question-list">${moreQuestions.map(askItem).join('')}</ul></details>`:''}`:'<p>현재 판에서 별도로 확인할 항목이 없습니다.</p>'}`;
+ return fold?`<details class="st-fold" id="status-questions"><summary>비서에게 확인할 일 ${questionCards.length}건</summary>${body}</details>`:`<section class="panel secretary-questions"><h2>비서에게 확인할 일</h2>${body}<p class="copy-feedback" role="status" aria-live="polite"></p></section>`;
+}
 export function renderDashboardHome({center,decisions=[],decisionError,briefs,entries=[],ledgerLines=0}){
  const mailUnknown=ledgerLines===null||entries.some(e=>e?.broken);
- const unread=mailUnknown?null:secretaryLetters(entries).filter(e=>!e.read).length;
- const secretaryShortcut=`<a class="decision-shortcut secretary-shortcut" href="?mailRole=${encodeURIComponent('비서')}&mailUnread=1#mailbox" title="비서가 아직 확인하지 않은 공식 우편입니다. 사용자 결정 요청과 구분합니다."><span>비서 미확인 보고</span><strong>${mailUnknown?'모름':unread+'건'}</strong></a>`;
+ const unread=mailboxUnread(entries,ledgerLines);
+ const secretaryShortcut=`<a class="decision-shortcut secretary-shortcut" href="?mailUnread=1#mailbox" title="모든 역할의 읽음 미확인 우편입니다. 사용자 결정 요청과 구분합니다."><span>전체 역할 미확인 우편</span><strong>${mailUnknown?'모름':unread+'건'}</strong></a>`;
  if(!center)return `<section class="panel" data-view="dashboard">${secretaryShortcut}<h2>현재 상황을 확인할 수 없습니다</h2><p>카드 기록을 읽지 못해 진행 수와 남은 수를 계산하지 않았습니다.</p></section>`;
  const open=center.boards.filter(b=>b.state!=='done'),closed=center.boards.filter(b=>b.state==='done');
  const decisionsOpen=decisions.filter(d=>d.status==='open');
@@ -29,7 +61,7 @@ export function renderDashboardHome({center,decisions=[],decisionError,briefs,en
  const ask=c=>`${explain(c).title}: ${c.displayState==='hold'?'보류 이유와 다시 시작할 조건이 뭐야?':c.displayState==='failed'?'실패 원인과 다음 조치는 뭐야?':'마지막으로 확인된 진행과 다음 단계가 뭐야?'}`;
  const askItem=c=>`<li><strong>${e(ask(c))}</strong><p>${link(c,'관련 카드 보기')} · <button type="button" class="copy-question" data-question="${e(ask(c))}">질문 복사</button></p></li>`;
 
- const taskTable=cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">상태</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream)}</small></td><td><span class="state ${e(c.displayState)}">${e(stateText[c.displayState]||c.displayState)}</span></td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(reportTime(h))}</small></td></tr>`;}).join('')}</tbody></table></div>`;
+ const taskTable=cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">실행 흐름</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream)}</small></td><td>${renderExecutionHealth(executionHealth(c))}</td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(reportTime(h))}</small></td></tr>`;}).join('')}</tbody></table></div>`;
  const board=b=>{
   const allCards=b.cards, rallies=buildRallies(allCards);
   b={...b,cards:allCards.filter(c=>!c.rallyId||c.workType==='coordination')};

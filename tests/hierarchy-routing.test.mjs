@@ -44,7 +44,7 @@ async function watchExercise({role='prod-슈퍼감독', notificationFails=false,
   const oldLoad=os.loadavg;os.loadavg=()=>[0,0,0];
   const starts=[...parents.keys()].map((r,i)=>({kind:'start',role:r,session:`kadan-${r}`,panePid:i+1,t}));
   const sentinel=new Error('test-finished');
-  try {await assert.rejects(()=>runWatch({
+  try {await assert.rejects(()=>runWatch({completionGraceMs:0,
     parents, routes:{prod:'prod-감독'},superRole:'옛-슈퍼', intervalMs:1000,stallN:100,
     floor:{list:()=>starts.map(x=>({session:x.session,pid:x.panePid})),read:s=>s===`kadan-${role}`?'KADAN:DONE card-test ok':'idle'},
     readEntries:()=>starts,record:e=>records.push(e),now:()=>Date.parse(t)+cycle*1000,
@@ -84,7 +84,7 @@ test('09-07 인계 관계표를 재시작 없이 읽고 오류 때 마지막 정
  let cycle=0;const records=[],sent=[];const stop=new Error('finished');
  const original=os.loadavg;os.loadavg=()=>[0,0,0];
  const starts=['p-작업자','p-감독','p-감독-2'].map((role,i)=>({kind:'start',role,session:`kadan-${role}`,panePid:i+1,t}));
- try {await assert.rejects(()=>runWatch({
+ try {await assert.rejects(()=>runWatch({completionGraceMs:0,
   floor:{list:()=>starts.map(x=>({session:x.session,pid:x.panePid})),read:s=>s==='kadan-p-작업자'?`KADAN:DONE card-${cycle} ok`:'idle'},
   readEntries:()=>starts,record:e=>records.push(e),sendAlert:(role,message)=>sent.push({role,message}),
   intervalMs:1000,stallN:100,routes:{},superRole:'legacy',now:()=>Date.parse(t)+cycle*1000,print:()=>{},

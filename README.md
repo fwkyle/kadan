@@ -9,6 +9,16 @@ and never auto-judges an agent's output: completion is an explicit `KADAN:DONE <
 
 Interface language is currently Korean (role names, CLI output, dashboards). Contributions are welcome in any language.
 
+## 작업과 우편 확인
+
+전체 관계와 읽음·알림·인계 책임 기준은 [카단 구조와 원장 기준](docs/architecture.md)에서 확인합니다.
+
+기존 대시보드에서 모든 역할의 받은·보낸 편지와 답변 대기 질문을 조회하고, 사건 기록을 작업·우편·시스템으로 나눠 볼 수 있습니다. 같은 SQLite를 사용하며 과거 원장은 보존합니다. 업무·카드 상태 이력은 기존 상세 화면에 유지합니다. 인계 뒤에는 후임 역할로 우편을 찾고 원래 발수신 정보도 확인할 수 있습니다. 질문은 `send --expect-reply`, 최종 답장은 `send --reply-to <우편ID> --reply-final`, 역할별 대기는 `inbox waiting --role <역할>`로 확인합니다.
+
+일반 메시지는 즉시 전달하고 우편 ID와 읽음 확인 안내를 붙입니다. 수신자가 직접 `inbox ack`로 확인하며, 5분 지난 미확인 우편은 기존 감시가 역할별로 묶어 한 번 알립니다. 읽음과 답변 대기는 별개입니다.
+
+실행 완료 시 기록용 결과 우편은 원본 요청자의 우편함에 저장되며 추가 미확인 알림에서 제외합니다. 기존 최종 완료 통지는 정상 터미널 우편으로 유지합니다. 이 저장은 터미널 깨움이나 업무 최종 완료를 뜻하지 않습니다. 자세한 범위는 [작업·우편 원장 계약](docs/mail-task-ledgers.md), 명령은 [역할 우편함 안내](docs/secretary-mailbox.md)를 참고하세요.
+
 ## Requirements
 
 - Node.js 24 or newer (the default SQLite storage uses the built-in node:sqlite)

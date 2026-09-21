@@ -1,5 +1,7 @@
+import {renderExecutionHealth} from './dashboard-execution.mjs';
 import {installLedgerTable} from './ledger-table.mjs';
-import {workspaceColumns,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
+import {workspaceColumnSets,workspaceColumns,workspaceColumnsFor,workspaceVisibleColumns,workspaceStatePresets,workspacePresetCounts,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
+import {workspaceWallHtml,workspaceMapHtml} from './dashboard-canvas.mjs';
 import {escapeHtml,stateText} from './dashboard-workspace-client-support.mjs';
 import {installWorkspaceDetail} from './dashboard-detail-client.mjs';
 import {installWorkspaceResize} from './dashboard-workspace-resize.mjs';
@@ -15,10 +17,12 @@ function workspaceClient() {
  const mobile=matchMedia('(max-width:799px)');
  const detailView=installWorkspaceDetail();
  const ledgerView=installLedgerTable(()=>{lastActivity=Date.now();refreshStatus();});
- const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},workspaceColumns);
+ // 너비 계산은 이 화면에 실제로 그려진 열만 쓴다. 컬렉션이 바뀌면 새로 읽어 열 구성을 맞춘다.
+ const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},data.columns);
  const columns=installWorkspaceColumns(()=>{lastActivity=Date.now();},()=>resizing.resetColumns());
- const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'관제 요약','operations-flow':'운영 흐름',boards:'판 현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
- const activeView=()=>{const hash=location.hash.slice(1);return hash.startsWith('decision-')?'decisions':views[hash]?(hash==='cards'||hash==='detail'||hash==='card-list'?'dashboard':hash):'status';};
+ // 옛 관제 요약(#overview)·판 현황(#boards)은 현황 안의 접힘 구역이 됐다(2026-09-12). 옛 주소는 현황으로 보낸다.
+ const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'운영 흐름',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
+ const activeView=()=>{const hash=location.hash.slice(1);return hash.startsWith('decision-')?'decisions':views[hash]?(hash==='cards'||hash==='detail'||hash==='card-list'?'dashboard':hash==='overview'||hash==='boards'?'status':hash):'status';};
  const filtered=()=>sortWorkspaceRows(filterWorkspaceRows(rows,state),state.sort,state.dir);
  function remember(){const el=$('#dw-scroll');if(el.getClientRects().length)scroll[state.layout]={top:el.scrollTop,left:el.scrollLeft};}
  function restore(){const el=$('#dw-scroll');if(el.getClientRects().length){el.scrollTop=scroll[state.layout].top;el.scrollLeft=scroll[state.layout].left;}}
@@ -26,7 +30,7 @@ function workspaceClient() {
  function saveCurrent(){remember();try{history.replaceState(entry(),'');}catch{status('이 창에서는 방문 위치를 저장할 수 없습니다.');}}
  function write(replace=false){
   const url=new URL(location.href);
-  for(const key of ['collection','q','repo','board','state','layout','sort','dir']){if(state[key])url.searchParams.set(key,state[key]);else url.searchParams.delete(key);}
+  for(const key of ['collection','q','repo','board','health','rally','state','layout','axis','root','sort','dir']){if(state[key])url.searchParams.set(key,state[key]);else url.searchParams.delete(key);}
   if(state.card)url.searchParams.set('card',state.card);else url.searchParams.delete('card');
   url.searchParams.set('detail',state.opened?'1':'0');url.searchParams.set('tab',state.tab);url.searchParams.set('detailView',state.detailView);
   if(state.expanded)url.searchParams.set('expanded','1');else url.searchParams.delete('expanded');
@@ -56,10 +60,10 @@ function workspaceClient() {
   if(focus)$('#dw-tab-'+tab)?.focus({preventScroll:true});
  }
  function render(){
-  const visible=filtered(),table=state.layout==='table';
-  $('#dw-panes').classList.toggle('dw-table-layout',table);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
+  const visible=filtered(),table=state.layout==='table',split=state.layout==='split',wall=state.layout==='wall',map=state.layout==='map',cols=workspaceVisibleColumns(state.collection,rows);
+  $('#dw-panes').classList.toggle('dw-table-layout',!split);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
   const totalInCollection=(rows||[]).filter(c=>state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)).length;
-  const filterName=state.state===''?'미완료':state.state==='all'?'전체':(stateText[state.state]||state.state);
+  const filterName=workspaceStateLabel(state.state);
   $('#dw-count').textContent=rows===null||state.collection==='work'&&data.workError?'모름':visible.length===totalInCollection?('전체 '+totalInCollection+'장'):((state.q||state.repo||state.board)?'조건':filterName)+' '+visible.length+'장 · 전체 '+totalInCollection+'장';
   $$('[data-collection]').forEach(el=>{
    el.setAttribute('aria-pressed',String(el.dataset.collection===state.collection));
@@ -68,14 +72,19 @@ function workspaceClient() {
   const heading=$('#dw-collection-title');if(heading)heading.textContent=({work:'업무 카드',executions:'실행',unlinked:'연결 전 실행'})[state.collection]||'카드';
   const help=$('#dw-work-help');if(help)help.hidden=state.collection!=='work';
   $('#dw-column-tools').hidden=!table;
-  $('#dw-list').hidden=table||rows===null;$('#dw-table').hidden=!table||rows===null;
-  $('#dw-list').innerHTML=!table&&rows!==null?workspaceRowsHtml(visible,'split',state.card):'';
-  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card):'';
+  $('#dw-list').hidden=!split||rows===null;$('#dw-table').hidden=!table||rows===null;$('#dw-wall').hidden=!wall||rows===null;$('#dw-map').hidden=!map||rows===null;
+  $('#dw-list').innerHTML=split&&rows!==null?workspaceRowsHtml(visible,'split',state.card,cols):'';
+  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card,cols):'';if(wall&&rows!==null)$('#dw-wall').innerHTML=workspaceWallHtml(visible,state.card,state.axis);if(map&&rows!==null)$('#dw-map').innerHTML=workspaceMapHtml(visible,state.card,state.root,data.hierarchy||null,rows);
   $('#dw-empty').hidden=rows!==null&&visible.length>0;
   const emptyTitle=$('#dw-empty-title');if(emptyTitle)emptyTitle.textContent=state.collection==='work'&&data.workError?'업무 상태 모름':state.collection==='work'&&!(rows||[]).some(c=>c.kind==='work')?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.';
   $$('[data-layout]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.layout===state.layout)));
-  for(const [id,key] of [['dw-search','q'],['dw-board','board'],['dw-repo','repo'],['dw-state','state']])$('#'+id).value=state[key];
-  $$('[data-sort-column]').forEach(el=>{const active=el.dataset.sortColumn===state.sort;el.setAttribute('aria-sort',active?(state.dir==='asc'?'ascending':'descending'):'none');const button=el.querySelector('button');const title=button.querySelector('[data-column-label]');if(title)title.textContent=(state.collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록'})[el.dataset.sortColumn]:null)||workspaceColumns.find(([key])=>key===el.dataset.sortColumn)?.[1]||'';(button.querySelector('[data-sort-arrow]')||button.querySelector('span')).textContent=active?(state.dir==='asc'?' ↑':' ↓'):' ↕';button.setAttribute('aria-label',button.textContent.replace(/[↑↓↕]/g,'')+' · '+(active&&state.dir==='asc'?'내림차순':'오름차순')+' 정렬');});
+  for(const [id,key] of [['dw-search','q'],['dw-board','board'],['dw-repo','repo'],['dw-health','health'],['dw-rally','rally']])$('#'+id).value=state[key];
+  $('#dw-state-summary').textContent=filterName;
+ const presetCounts=rows===null?null:workspacePresetCounts(rows,state);
+ if(presetCounts)for(const el of $$('[data-preset-count]'))el.textContent=presetCounts[el.dataset.presetCount]??'';
+ $$('#dw-presets [data-state-preset]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.statePreset===state.state)));
+  $$('[data-state-option]').forEach(el=>{el.checked=workspaceSelectedStates(state.state).includes(el.value);});
+  $$('[data-sort-column]').forEach(el=>{const active=el.dataset.sortColumn===state.sort;el.setAttribute('aria-sort',active?(state.dir==='asc'?'ascending':'descending'):'none');const button=el.querySelector('button');const title=button.querySelector('[data-column-label]');if(title)title.textContent=(state.collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록',at:'관련 기록 갱신'})[el.dataset.sortColumn]:null)||cols.find(([key])=>key===el.dataset.sortColumn)?.[1]||'';(button.querySelector('[data-sort-arrow]')||button.querySelector('span')).textContent=active?(state.dir==='asc'?' ↑':' ↓'):' ↕';button.setAttribute('aria-label',button.textContent.replace(/[↑↓↕]/g,'')+' · '+(active&&state.dir==='asc'?'내림차순':'오름차순')+' 정렬');});
   const close=$('[data-detail-close]'),expand=$('[data-detail-expand]');close.textContent=table?'표로 돌아가기':'목록으로';expand.textContent=state.expanded?'나란히 보기':'상세 확대';expand.setAttribute('aria-expanded',String(state.expanded));
   columns.refresh();resizing.refresh();showTab(state.tab);refreshStatus();
  }
@@ -114,6 +123,8 @@ function workspaceClient() {
   if(!state.opened){state.card=key;write(true);}
   const row=(rows||[]).find(c=>c.key===key);
   const collection=state.collection?(row?.kind==='work'?'work':state.collection==='unlinked'&&!row?.parentWorkKey?'unlinked':'executions'):'';
+  // 업무 카드와 실행 카드는 열 구성이 다르다. 그 전환은 서버가 표 머리글을 다시 그리도록 새로 읽는다.
+  if((collection==='work')!==(state.collection==='work')){saveCurrent();Object.assign(state,{card:key,collection,opened:true,expanded:false});write(true);location.reload();return;}
   change({card:key,collection,opened:true,expanded:false});loadCard(key);
  }
  function route(){
@@ -125,8 +136,10 @@ function workspaceClient() {
  }
  function readLocation(){
   const q=new URLSearchParams(location.search);
-  state={...state,collection:data.state.collection?(['work','executions','unlinked'].includes(q.get('collection'))?q.get('collection'):q.get('card')&&!q.get('card').startsWith('work:')?'executions':'work'):'',q:q.get('q')||'',repo:q.get('repo')||'',board:q.get('board')||'',state:q.get('state')||'',layout:q.get('layout')==='split'?'split':'table',sort:data.columns.some(([k])=>k===q.get('sort'))?q.get('sort'):'attention',dir:q.get('dir')==='asc'?'asc':'desc',tab:q.get('tab')||'summary',detailView:q.get('detailView')==='document'?'document':'table',card:q.get('card')||data.selected,opened:q.has('card')&&q.get('detail')!=='0',expanded:q.get('expanded')==='1'};
+  state={...state,collection:data.state.collection?(['work','executions','unlinked'].includes(q.get('collection'))?q.get('collection'):q.get('card')&&!q.get('card').startsWith('work:')?'executions':'work'):'',q:q.get('q')||'',repo:q.get('repo')||'',board:q.get('board')||'',health:q.get('health')||'',rally:q.get('rally')||'',state:q.get('state')||'',layout:['table','split','wall','map'].includes(q.get('layout'))?q.get('layout'):'table',axis:q.get('axis')==='step'?'step':'status',root:q.get('root')==='role'?'role':'work',sort:data.columns.some(([k])=>k===q.get('sort'))?q.get('sort'):'attention',dir:q.get('dir')==='asc'?'asc':'desc',tab:q.get('tab')||'summary',detailView:q.get('detailView')==='document'?'document':'table',card:q.get('card')||data.selected,opened:q.has('card')&&q.get('detail')!=='0',expanded:q.get('expanded')==='1'};
   if(!state.opened)state.expanded=false;
+  // 새로 읽기 표시는 한 번만 쓴다. 주소를 깨끗이 해야 다음 자동 갱신이 캐시를 쓴다.
+  if(location.search.includes('fresh=')){const clean=new URL(location.href);clean.searchParams.delete('fresh');try{history.replaceState(history.state,'',clean);}catch{}}
  }
  async function restoreHistory(){
   const generation=++navigation;
@@ -154,25 +167,39 @@ function workspaceClient() {
   }
   const button=event.target.closest('button');
   if(!button){const row=event.target.closest('[data-card-row]');if(row&&!window.getSelection()?.toString())openCard(row.dataset.cardRow);return;}
-  if(button.classList.contains('copy-question')){const feedback=$('.copy-feedback');navigator.clipboard.writeText(button.dataset.question).then(()=>{if(feedback)feedback.textContent='질문을 복사했습니다.';},()=>{if(feedback)feedback.textContent='복사하지 못했습니다. 질문을 직접 선택해 복사하세요.';});}
+  if(button.classList.contains('copy-question')){const feedback=button.closest('[data-view]')?.querySelector('.copy-feedback')||$('.copy-feedback');const what=button.dataset.copyLabel||'질문';navigator.clipboard.writeText(button.dataset.question).then(()=>{if(feedback)feedback.textContent=what+'을(를) 복사했습니다.';},()=>{if(feedback)feedback.textContent='복사하지 못했습니다. '+what+'을(를) 직접 선택해 복사하세요.';});}
   else if(button.dataset.collection){
    if(!mayReplaceDetail())return;dirty=false;cancelLoad();
    const collection=button.dataset.collection;
    const target=sortWorkspaceRows(filterWorkspaceRows(rows,{...state,collection,q:'',board:'',repo:'',state:state.state}),state.sort,state.dir)[0]?.key||'';
-   change({collection,card:target,q:'',board:'',repo:'',opened:false,expanded:false},{reset:true});
+   const patch={collection,card:target,q:'',board:'',repo:'',opened:false,expanded:false};
+   // 업무 표와 실행 표는 열 구성이 다르다. 그 전환은 서버가 머리글을 다시 그리도록 새로 읽는다.
+   if((collection==='work')!==(state.collection==='work')){saveCurrent();Object.assign(state,patch);write();location.reload();return;}
+   change(patch,{reset:true});
    if(state.layout==='split')loadCard(target,{focus:false});
   }
+  else if(button.hasAttribute('data-state-preset'))change({state:button.dataset.statePreset,opened:false,expanded:false},{reset:true});
   else if(button.dataset.detailView){state.detailView=button.dataset.detailView;detailView.apply(state.detailView);$('#dw-detail').scrollTop=0;write(true);}
   else if(button.dataset.layout){change({layout:button.dataset.layout,opened:false,expanded:false});if(state.layout==='split')loadCard(state.card,{focus:false});}
+  else if(button.dataset.axis)change({axis:button.dataset.axis,opened:false,expanded:false});
+  else if(button.dataset.root)change({root:button.dataset.root,opened:false,expanded:false});
   else if(button.dataset.sort){const sort=button.dataset.sort;change({sort,dir:state.sort===sort&&state.dir==='asc'?'desc':'asc'},{focus:'[data-sort="'+sort+'"]',reset:true});}
   else if(button.hasAttribute('data-detail-close'))closeDetail();
   else if(button.hasAttribute('data-detail-expand'))change({expanded:!state.expanded,opened:true},{focus:'[data-detail-expand]'});
   else if(button.hasAttribute('data-detail-retry'))loadCard(state.card);
   else if(button.dataset.tab||button.dataset.readTab){showTab(button.dataset.tab||button.dataset.readTab,true);write(true);}
-  else if(button.hasAttribute('data-workspace-reset'))change({q:'',repo:'',board:'',state:'all'},{reset:true,focus:'#dw-search'});
-  else if(button.hasAttribute('data-refresh')){if(activeView()==='operations-flow'){window.dispatchEvent(new CustomEvent('operations-flow-refresh'));return;}if(!saving&&(!dirty||confirm('작성 중인 기록을 저장하지 않고 새로 읽을까요?'))){dirty=false;saveCurrent();location.reload();}}
+  else if(button.hasAttribute('data-workspace-reset'))change({q:'',repo:'',board:'',health:'',rally:'',state:'all'},{reset:true,focus:'#dw-search'});
+  else if(button.hasAttribute('data-refresh')){if(activeView()==='operations-flow'){window.dispatchEvent(new CustomEvent('operations-flow-refresh'));return;}if(!saving&&(!dirty||confirm('작성 중인 기록을 저장하지 않고 새로 읽을까요?'))){dirty=false;saveCurrent();const fresh=new URL(location.href);fresh.searchParams.set('fresh',String(Date.now()));location.replace(fresh);}}
  });
- for(const [id,key,event] of [['dw-search','q','input'],['dw-board','board','change'],['dw-repo','repo','change'],['dw-state','state','change']])$('#'+id).addEventListener(event,e=>{lastActivity=Date.now();change({[key]:e.target.value,opened:false,expanded:false},{replace:event==='input',reset:true});});
+ for(const [id,key,event] of [['dw-search','q','input'],['dw-board','board','change'],['dw-repo','repo','change'],['dw-health','health','change'],['dw-rally','rally','change']])$('#'+id).addEventListener(event,e=>{lastActivity=Date.now();change({[key]:e.target.value,opened:false,expanded:false},{replace:event==='input',reset:true});});
+ $('#dw-state').addEventListener('change',event=>{
+  if(!event.target.matches('[data-state-option]'))return;
+  lastActivity=Date.now();
+  const selected=$$('[data-state-option]').filter(el=>el.checked).map(el=>el.value);
+  change({state:selected.length===Object.keys(stateText).length?'all':selected.join(',')||'none',opened:false,expanded:false},{reset:true});
+ });
+ document.addEventListener('pointerdown',event=>{if(!event.target.closest('#dw-state'))$('#dw-state').open=false;});
+ $('#dw-state').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();$('#dw-state').open=false;$('#dw-state summary').focus({preventScroll:true});}});
  document.addEventListener('input',e=>{detailView.input(e);if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
  document.addEventListener('change',e=>{if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
  document.addEventListener('submit',async event=>{
@@ -217,4 +244,4 @@ function workspaceClient() {
  requestAnimationFrame(restore);
  if(!refreshOff)setInterval(()=>{refreshStatus();if(!paused()){saveCurrent();location.reload();}},15000);
 }
-export const dashboardWorkspaceScript=`const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
+export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;

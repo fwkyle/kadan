@@ -1,16 +1,27 @@
+import {mailboxLetters} from './mailbox-state.mjs';
+import {workEntries} from './handover-state.mjs';
+import {taskIdentity} from './task-identity.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
 const errorPattern = /stream disconnected|stream error|idle timeout waiting for SSE|Error running remote compact task|Reconnecting\.\.\.|502 Bad Gateway|Provider unreachable|rate limit|No API key/iu;
 
 export function observationContext(role, observation, entries, cards, tasks) {
+  const identity=taskIdentity(cards);
   const ids = new Set(tasks.filter(e => e.role === role).map(e => e.taskId));
   return {
     process:{alive:observation.alive,pid:observation.pid,expectedPid:observation.expectedPid},
-    tasks:cards.filter(c => ids.has(c.id)).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,scope:c.scope?.slice(0,1000)})),
+    tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,scope:c.scope?.slice(0,1000)})),
     responsibilities:tasks.filter(e => e.role === role),
-    recentMail:entries.filter(e => ['send','mail-read','done'].includes(e.kind) && (e.role === role || e.by === role))
-      .slice(-12).map(e => ({at:e.t,kind:e.kind,from:e.by,to:e.role,taskId:e.taskId,replyTo:e.replyTo,preview:e.preview?.slice(0,400)})),
+    recentTaskEvents:workEntries(entries,identity).filter(e => e.kind === 'done' && (e.role === role || e.by === role))
+      .slice(-12).map(e => ({at:e.t,kind:e.kind,role:e.role,by:e.by,taskId:e.taskId,executionKey:e.executionKey,result:e.result})),
+    recentMail:mailboxLetters(entries).filter(e => (e.currentRecipient || e.role) === role || (e.currentSender || e.by) === role)
+      .slice(-12).map(e => ({at:e.t,kind:e.kind,mailId:e.mailId,from:e.by,to:e.role,
+        currentRecipient:e.currentRecipient || e.role,currentSender:e.currentSender || e.by,
+        taskId:e.taskId,executionKey:e.executionKey,workKey:e.workKey,replyTo:e.replyTo,
+        transport:e.transport,completion:e.completion,systemGenerated:e.systemGenerated,notificationOnly:e.notificationOnly,
+        read:e.read,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,
+        preview:e.preview?.slice(0,400)})),
   };
 }
 
@@ -22,7 +33,7 @@ export class SupervisorHealth {
     state.lastCheck=now;state.at=now;state.screen=screen.slice(-8000);
     if(state.errorSince!=null)state.errorChecked=true;
   }
-  select({scope,observations,entries,cards,now,enabled}) {
+  select({scope,observations,entries,mailEntries=entries,cards,now,enabled}) {
     for (const session of this.states.keys()) if (!scope.sessions.has(session)) this.states.delete(session);
     const candidates = [], alerts = [];
     for (const session of scope.sessions) {
@@ -45,7 +56,7 @@ export class SupervisorHealth {
       const early = error && !state.errorChecked && now-state.errorSince >= SUPERVISOR_ERROR_MS;
       if (enabled && (early || now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
-          ...observationContext(role,seen,entries,cards,scope.entries),
+          ...observationContext(role,seen,mailEntries,cards,scope.entries),
           check:early?'persistent-error':'hourly',minutes:Math.floor((now-state.at)/60000),
           errorMinutes:error?Math.floor((now-state.errorSince)/60000):0,
           previous:state.screen,current:seen.screen.slice(-8000),

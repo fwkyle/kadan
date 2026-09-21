@@ -46,14 +46,15 @@ test('SQLite: 같은 카드에 동시에 쓰면 하나만 성공하고 다른 �
 test('SQLite: JSONL 수입은 중복 done 원문을 보존하고 새 DB 기록도 JSONL로 복구한다',()=>{
  const source=root(),target=source+'-import',output=source+'-export';const store=new CardStore(source);
  store.create({repo:'r',id:'a',repoPath:source,body:'# a'});
- for(let i=0;i<2;i++)appendLedger({kind:'done',role:'r',taskId:'a',result:'ok'},source);
+ // 과거 원문을 직접 준비한다. 신규 appendLedger는 tasks 원장만 쓴다.
+ fs.writeFileSync(path.join(source,'ledger.jsonl'),Array.from({length:2},()=>JSON.stringify({kind:'done',role:'r',taskId:'a',result:'ok'})).join('\n')+'\n');
  const raw=fs.readFileSync(path.join(source,'ledger.jsonl'),'utf8');const imported=importStorage(source,target);
  assert.equal(imported.events,3);assert.equal(readStream(target,'ledger.jsonl').length,2);assert.equal(readLedger(target).length,1);
  new CardStore(target).update('r/a',{status:'hold'},{revision:1,note:'새 DB 변경'});appendLedger({kind:'test',id:'new'},target);
  assert.equal(fs.readFileSync(path.join(source,'ledger.jsonl'),'utf8'),raw);
  assert.throws(()=>exportStorage(target,output),/pause/);
  storageCommand(['pause'],{},{home:target});const out=exportStorage(target,output);
- assert.equal(out.backend,'jsonl');assert.equal(new CardStore(output).get('r/a').status,'hold');assert.equal(readLedger(output).at(-1).id,'new');assert.equal(readStream(output,'ledger.jsonl').length,3);
+ assert.equal(out.backend,'jsonl');assert.equal(new CardStore(output).get('r/a').status,'hold');assert.equal(readLedger(output).at(-1).id,'new');assert.equal(readStream(output,'ledger.jsonl').length,2);assert.equal(readStream(output,'system/events.jsonl').length,1);
  assert.equal(storageMode(source),'jsonl');assert.equal(fs.readFileSync(path.join(source,'ledger.jsonl'),'utf8'),raw);
 });
 test('SQLite: 손상/기록 없음/미래 버전/중지 표식을 정상이나 JSONL로 숨기지 않는다',()=>{

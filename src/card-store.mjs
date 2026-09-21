@@ -1,7 +1,8 @@
+import {taskIdentity} from './task-identity.mjs';
 import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readLedger } from './ledger.mjs';
 import { effectiveCardRole } from './handover-state.mjs';
 const slug = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
@@ -32,7 +33,9 @@ export class CardStore {
     const dir=this.dir(key);
     const history=readStream(this.home,`cards/${key}/events.jsonl`);
     if(!history.length||history.some((e,i)=>e.revision!==i+1||e.key!==key))throw new Error('카드 이력 손상');
-    return {...history.at(-1),history,body:fs.readFileSync(path.join(dir,'card.md'),'utf8'),path:path.join(dir,'card.md')};
+    const latest=history.at(-1);
+    return {...latest,history,body:fs.readFileSync(path.join(dir,'card.md'),'utf8'),path:path.join(dir,'card.md'),
+      ...(latest.artifactLayout==='card-v1'?{resultPath:path.resolve(dir,'result.md'),evidenceDir:path.resolve(dir,'evidence')}: {})};
   }
   list() {
     if(storageMode(this.home)==='sqlite')return transaction(this.home,()=>listStreams(this.home,'cards/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13))),{readOnly:true});
@@ -62,8 +65,9 @@ export class CardStore {
       if(typeof text!=='string'||!text.trim())throw new Error('카드 내용 필요');
       fs.mkdirSync(dir,{recursive:true,mode:0o700});
       fs.writeFileSync(path.join(dir,'card.md'),text,{flag:'wx',mode:0o600});
+      fs.mkdirSync(path.join(dir,'evidence'),{mode:0o700});
       const entry={key,repo,id,repoPath,sourcePath:sourcePath??null,title:title||text.match(/^#\s+(.+)$/m)?.[1]||id,
-        status:'draft',workType,scope:'',board:null,role:null,revision:1,by,at:new Date().toISOString(),note:'중앙 등록',noteKind:'decision'};
+        status:'draft',workType,artifactLayout:'card-v1',scope:'',board:null,role:null,revision:1,by,at:new Date().toISOString(),note:'중앙 등록',noteKind:'decision'};
       if(storageMode(this.home)==='jsonl')fs.writeFileSync(path.join(dir,'events.jsonl'),JSON.stringify(entry)+'\n',{flag:'wx',mode:0o600});
       fs.mkdirSync(path.dirname(target),{recursive:true});fs.renameSync(dir,target);
       if(storageMode(this.home)==='sqlite')appendStream(this.home,`cards/${key}/events.jsonl`,entry);
@@ -73,13 +77,13 @@ export class CardStore {
   update(key,patch,{revision,by='사람',noteKind='decision',note,manual=false}={}) {
     return this.locked(()=>{
       const current=this.get(key);
-      current.role=effectiveCardRole(current,readLedger(this.home));
+      current.role=effectiveCardRole(current,readLedger(this.home),this.list());
       if(Number(revision)!==current.revision)throw new Error('카드가 변경됨: 새로 읽고 다시 저장');
       if(!note?.trim())throw new Error('변경 이유/질문/답변을 적어야 한다');
       if(!['decision','question','answer','progress'].includes(noteKind))throw new Error('잘못된 기록 종류');
       const allowed=new Set(['title','status','scope','board','role','activity','workType','resolutionOwner','nextAction','statusReason','rallyId','rallyTitle','rallyRound','rallyStep','replacedBy','turnOwner']);
       for(const k of Object.keys(patch))if(!allowed.has(k)||!(typeof patch[k]==='string'||patch[k]===null))throw new Error('잘못된 수정 항목');
-      const {history,body,path:bodyPath,...previous}=current;
+      const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=current;
       const next={...previous,...patch,revision:current.revision+1,by,at:new Date().toISOString(),noteKind,note};
       if(next.status!==current.status||(patch.activity!==undefined&&patch.activity!==current.activity)){
         next.statusReason=patch.statusReason?.trim()||note;next.resolutionOwner=patch.resolutionOwner??null;next.nextAction=patch.nextAction??null;
@@ -128,12 +132,55 @@ export class CardStore {
       return card;
     });
   }
-  findTask(id) {return this.list().filter(c=>c.id===id);}
-  checkSend(id,role) {
-    const cards=this.findTask(id);
-    if(!cards.length)return null;
-    if(cards.length!==1)throw new Error('카드ID가 여러 저장소에 있음: 고유 ID로 구분 필요');
-    const c=cards[0];c.role=effectiveCardRole(c,readLedger(this.home));
+  // Why: 감독이 등록 뒤 원본 카드 파일을 고쳤을 때(예: '읽고 시작할 것' 보완) 아직 발령 전(draft·담당 없음)이면
+  // 중앙 사본만 다시 읽는다. link는 원본을 심볼릭 링크로 바꿔 문서 저장소를 더럽히므로 여기서는 쓰지 않는다.
+  refresh(key,{by='사람'}={}) {
+    return this.locked(()=>{
+      const card=this.get(key),source=card.sourcePath;
+      card.role=effectiveCardRole(card,readLedger(this.home),this.list());
+      if(!source)throw new Error('다시 읽을 원본 경로 없음');
+      if(card.status!=='draft'||card.role)throw new Error(`발령 전 초안만 다시 읽을 수 있다: ${card.status}, 담당 ${card.role??'없음'}`);
+      const text=fs.readFileSync(source,'utf8');
+      if(!text.trim())throw new Error('카드 내용 필요');
+      if(text===card.body)return card;
+      fs.writeFileSync(card.path,text,{mode:0o600});
+      const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=card;
+      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,revision:card.revision+1,by,at:new Date().toISOString(),noteKind:'decision',note:'원본 카드 파일 다시 읽음(발령 전)'});
+      return this.get(key);
+    });
+  }
+  findTask(id) {return this.list().filter(c=>id.includes('/')?c.key===id:c.id===id);}
+  resultLocation(key,resultFile) {
+    const card=this.get(key),file=resultFile===undefined?card.resultPath:resultFile;
+    if(typeof file!=='string'||!path.isAbsolute(file))throw new Error('결과 파일 절대경로 필요: 기존 카드는 지정 경로를 유지하세요');
+    if(card.resultPath&&path.resolve(file)!==card.resultPath)throw new Error(`새 실행의 결과 파일은 card show의 resultPath를 사용하세요: ${card.resultPath}`);
+    return path.resolve(file);
+  }
+  report(key,{revision,resultFile,outcome,by='사람'}={}) {
+    return this.locked(()=>{
+      const card=this.get(key);
+      if(Number(revision)!==card.revision)throw new Error('카드가 변경됨: 새로 읽고 다시 저장');
+      if(!['implemented','pass','changes','exception','ok','failed'].includes(outcome))throw new Error('결과 판정은 implemented|pass|changes|exception|ok|failed');
+      const file=this.resultLocation(key,resultFile);
+      if(!(card.resultPath?fs.lstatSync(file):fs.statSync(file)).isFile())throw new Error('결과 경로는 일반 파일이어야 합니다');
+      const bytes=fs.readFileSync(file);
+      if(!bytes.length)throw new Error('빈 결과 파일은 등록할 수 없습니다');
+      const result={path:file,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,outcome};
+      if(card.result){
+        if(['path','sha256','bytes','outcome'].every(k=>card.result[k]===result[k]))return card;
+        throw new Error('이미 등록한 결과와 다릅니다. 기존 근거를 보존하고 수정·재검수는 새 실행으로 연결하세요');
+      }
+      const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=card;
+      const at=new Date().toISOString();
+      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,result:{...result,at,by},revision:card.revision+1,at,by,noteKind:'progress',note:'실행 결과 파일과 지문 등록 (완료 확정과 별개)'});
+      return this.get(key);
+    });
+  }
+  checkSend(id,role,cards=this.list()) {
+    const identity=taskIdentity(cards),found=identity.resolve(id);
+    identity.write(id);
+    if(!found.card)return null;
+    const c=found.card;c.role=effectiveCardRole(c,readLedger(this.home),identity);
     if(c.status!=='assigned'||c.role!==role||!c.scope.trim())throw new Error(`중앙 카드 발령 불가: ${c.key} (${c.status}, 담당 ${c.role??'미배정'})`);
     return c;
   }

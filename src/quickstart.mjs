@@ -108,7 +108,7 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
 
  const secretarySession = sessionName(SECRETARY_ROLE);
  if (floor.alive(secretarySession)) { out.secretary = 'reused'; log(`비서 이미 살아 있음: ${secretarySession}`); }
- else { start([SECRETARY_ROLE], { cmd: runner, hidden: Boolean(flags.hidden) }); out.secretary = 'started'; }
+ else { start([SECRETARY_ROLE], { cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary' }); out.secretary = 'started'; }
 
  const dashboardSession = sessionName(DASHBOARD_ROLE);
  if (floor.alive(dashboardSession)) { out.dashboard = 'reused'; log(`대시보드 이미 살아 있음: ${dashboardSession}`); }
@@ -116,7 +116,7 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
 
  if (out.secretary === 'started' && !flags['no-prompt']) {
   const settled = waitForSettled({ read: () => floor.read(secretarySession), ...(sleep ? { sleep } : {}) });
-  if (settled) { send({ role: SECRETARY_ROLE, session: secretarySession, message: FIRST_PROMPT }); out.prompt = 'sent'; }
+  if (settled) { send({ role: SECRETARY_ROLE, session: secretarySession, message: FIRST_PROMPT, roleProfile:'secretary' }); out.prompt = 'sent'; }
   else { out.prompt = 'not-ready'; log('비서 화면이 아직 준비되지 않아 첫 지문을 보내지 않았습니다. 창에서 직접 말을 거세요.'); }
  }
  log('');

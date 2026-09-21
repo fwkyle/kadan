@@ -1,4 +1,6 @@
-import {appendStream,readStream,storageMode,storagePath} from './storage.mjs';
+import {storageMode,storagePath} from './storage.mjs';
+import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
+export {classifyLedgerEntry} from './ledger-domains.mjs';
 // 원장 — 바닥과 무관한 append-only 사건. 저장 backend는 공통 저장 경계가 선택한다.
 import fs from "node:fs";
 import os from "node:os";
@@ -22,10 +24,7 @@ export function ledgerBy(entry) {
 }
 
 export function appendLedger(entry, home = ledgerHome()) {
-  fs.mkdirSync(home, { recursive: true });
-  const line = JSON.stringify({ t: new Date().toISOString(), ...entry });
-  appendStream(home, "ledger.jsonl", JSON.parse(line));
-  return line;
+  return appendDomainLedger(entry,home);
 }
 
 // 본문은 원장이 아니라 옆 파일에 둔다 (2026-09-06 [kyle] 승인).
@@ -56,26 +55,16 @@ export function readMailBody(digestValue, home = ledgerHome()) {
   }
 }
 
+// 읽기용 호환 투영: 과거 원문 뒤에 새 저장 순서로 이어 붙인다. 시각으로 재정렬하지 않는다.
 export function readLedger(home = ledgerHome()) {
-  const file = path.join(home, "ledger.jsonl");
-  if (storageMode(home)==='jsonl'&&!fs.existsSync(file)) return [];
-  const seenDone = new Set();
-  const sqliteRows=storageMode(home)==='sqlite'?readStream(home,'ledger.jsonl',{optional:true}):null;
-  return (sqliteRows?sqliteRows.map(JSON.stringify).join('\n'):fs.readFileSync(file, "utf8"))
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return { t: null, broken: line };
-      }
-    })
-    .filter((entry) => {
-      if (entry?.kind !== "done" || !entry.role || !entry.taskId) return true;
-      const key = `${entry.role}\0${entry.taskId}`;
-      if (seenDone.has(key)) return false;
-      seenDone.add(key);
-      return true;
-    });
+  return projectLedger(readLedgerState(home));
+}
+export function readTaskLedger(home = ledgerHome()) {
+  return projectLedger(readLedgerState(home),'tasks');
+}
+export function readMailLedger(home = ledgerHome()) {
+  return projectLedger(readLedgerState(home),'mail');
+}
+export function readSystemLedger(home = ledgerHome()) {
+  return projectLedger(readLedgerState(home),'system');
 }

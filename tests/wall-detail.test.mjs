@@ -190,6 +190,27 @@ test("레포마다 카드 폴더가 달라도 상대경로를 역할의 작업 �
   assert.equal(extractCardPath("카드: /절대/b.md", "/무시됨"), "/절대/b.md");
 });
 
+test('새 원문 경로 영수증: null은 footer 검색 금지, 명시 경로만 읽고 옛 원장은 기존 파싱 유지',()=>{
+  const entries=[
+    {kind:'start',role:'worker',cwd:'/repo/at-send'},
+    {kind:'send',role:'worker',taskId:'pathless',executionKey:'test/pathless',digest:'footer',preview:'/templates/common.md',originalCardPath:null},
+    {kind:'send',role:'worker',taskId:'explicit',digest:'footer',originalCardPath:'/repo/at-send/tasks/card.md'},
+    {kind:'send',role:'worker',taskId:'legacy',digest:'legacy'},
+    {kind:'start',role:'worker',cwd:'/repo/latest'},
+  ].map((entry,index)=>({t:`2026-09-12T00:0${index}:00.000Z`,session:'kadan-worker',...entry}));
+  const reads=[];
+  const files=collectCardFiles(entries,{readBody:d=>{assert.equal(d,'legacy','새 영수증은 전달 footer를 읽지 않는다');return 'tasks/old.md 읽기';},readFile:file=>{reads.push(file);return `카드 본문: ${file}`;}});
+  assert.equal(files.pathless,undefined);
+  assert.equal(files.explicit.path,'/repo/at-send/tasks/card.md');
+  assert.equal(files.legacy.path,'/repo/latest/tasks/old.md');
+  assert.deepEqual(reads,['/repo/at-send/tasks/card.md','/repo/latest/tasks/old.md']);
+  const html=renderWallHtml({tree:buildTree(entries,{}),entries,cardFiles:files,collectedAt:'2026-09-12T00:05:00.000Z',ledgerPath:'/tmp/isolated/ledger.jsonl',ledgerLines:entries.length});
+  const cardsSection=html.match(/<section class="page" id="cards">([\s\S]*?)<\/section>/)[1];
+  assert.equal((cardsSection.match(/<summary>카드 본문 보기<\/summary>/g)||[]).length,2);
+  assert.ok(!cardsSection.includes('카드 본문: /templates/common.md'));
+  assert.ok(cardsSection.includes('카드 본문: /repo/at-send/tasks/card.md'));
+});
+
 test("판 나무는 슈퍼감독→감독→검수자→작업자 순으로 접히고 카드 안에 왕복이 있다 — 2026-09-06 [kyle]", () => {
   const entries = [
     { t: "2026-09-06T02:00:00.000Z", kind: "plan", board: "mp", taskId: "card-66", title: "계열 겹침 경고", about: "모델 편성", by: "슈퍼감독" },

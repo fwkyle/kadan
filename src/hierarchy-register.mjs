@@ -14,6 +14,17 @@ export function activeHierarchyPath(entries) {
   return loaded?.path ?? null;
 }
 
+// 화면·표시용 읽기. 실패는 모름(null)이며 관계표를 고치지 않는다.
+export function readActiveHierarchy(entries) {
+  const hierarchyPath = activeHierarchyPath(entries ?? []);
+  if (!hierarchyPath) return null;
+  try {
+    return Object.fromEntries(parseHierarchy(JSON.parse(fs.readFileSync(hierarchyPath, "utf8"))));
+  } catch {
+    return null;
+  }
+}
+
 function readTable(hierarchyPath) {
   const raw = fs.readFileSync(hierarchyPath, "utf8");
   const value = JSON.parse(raw);

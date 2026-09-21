@@ -1,18 +1,23 @@
+import {MailWatch} from './watch-mail.mjs';
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
 import {QueueResume,queuedInputBanner} from './watch-queue-resume.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {SupervisorHealth,observationContext} from './watch-supervisor-health.mjs';
 import {ProgressWatch,WORKER_RECHECK_MS} from './watch-progress.mjs';
-import {assessMissingStartReports} from './watch-start-report.mjs';
+import {assessMissingStartReports,alertedStartReports} from './watch-start-report.mjs';
+import {buildCycleEntry,cycleRecordDue} from './watch-cycle.mjs';
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {setTimeout as delay} from 'node:timers/promises';
 import {
   DISCONNECT_ALERT_KINDS,
+  assessQueuedInput,
   assessRoles,
   dedupAlerts,
+  filterConfirmedCompletions,
   routeAlert,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
@@ -62,19 +67,22 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null) {
   const observations = new Map();
   const screenAlerts = [];
   for (const [session, start] of starts) {
-    if (monitoredSessions && !monitoredSessions.has(session)) continue;
+    const monitored =
+      monitoredSessions == null || monitoredSessions.has(session);
     const live = liveBySession.get(session);
     const role = start.role ?? session.slice("kadan-".length);
     const expectedPid = start.panePid ?? start.rottiePid ?? null;
     let screen = null;
     let screenError = null;
+    // 카드가 없는 세션도 화면은 읽는다 — 큐에 쌓인 입력은 발령과 무관하게 생긴다.
+    // 다만 화면 읽기 실패 경보의 표면은 그대로 두어 감시 대상에만 올린다.
     if (live) {
       try {
         screen = readText(selectedFloor.read(session));
         if (screen == null) throw new Error("빈 응답");
       } catch (error) {
         screenError = error.message;
-        if (!/감독$/u.test(role)) {
+        if (monitored && !/감독$/u.test(role)) {
           screenAlerts.push({
             id: `screen-read:${session}`,
             kind: "모름",
@@ -158,6 +166,7 @@ const ALERT_LABELS = {
   "감시제외": "감시 대상에서 빠짐",
   "계열겹침": "같은 계열 역할 중복 실행",
   "시작보고누락": "시작 보고 누락",
+  "큐대기": "입력이 큐에 쌓여 대기",
   "입력큐": "입력 큐 대기",
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
@@ -204,6 +213,13 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "완료후보") {
     return `끝난 것 같음 ${alert.session} (${alert.taskId} ${alert.result}, 감독 확인 필요)`;
+  }
+  if (alert.kind === "큐대기") {
+    const minutes = Math.floor((alert.queuedMs ?? 0) / 60_000);
+    const action = /press enter/iu.test(alert.line ?? "")
+      ? "해당 창에서 Enter를 눌러 큐를 흘려내면 처리됨"
+      : "턴 종료·다음 도구 호출 때 자동 제출 예정 — 계속 쌓여 있으면 해당 창 확인";
+    return `입력이 큐에 쌓여 대기 ${alert.session} (${minutes}분째 '${alert.line}' — ${action})`;
   }
   if (alert.kind === "정체") {
     const judged = alert.judgeVerdict ? `, 판정 ${alertLabel(alert.judgeVerdict)}` : "";
@@ -283,6 +299,12 @@ export function deliverResolution({
     recipients.delete(alert.id);
     return null;
   }
+  // 큐 대기가 풀린 소식도 소음이다(2026-09-15 [kyle]). 우편 없이 경보 줄만 닫는다.
+  if (alert.kind === "큐대기") {
+    recipients.delete(alert.id);
+    recordAlert(record, alert, null, false, true);
+    return null;
+  }
   const message = `[watch ${clockTime(cycleAt)}] ${resolvedBody(alert)}`;
   const recipient = recipients.get(alert.id) ?? null;
   recipients.delete(alert.id);
@@ -311,9 +333,14 @@ export async function runWatch({
   readCards = null,
   readWorks = () => [],
   startReportGraceMs = 5 * 60_000,
+  completionGraceMs = 15 * 60_000,
   stallAfterMs = 0,
+  // 큐 대기의 경보 기준은 정체와 같다 — 입력이 닿지 않은 채 같은 시간을 견딘 것이다.
+  queuedAfterMs = stallAfterMs,
   sendAlert,
   resume429 = null,
+  sendMailReminder = null,
+  mailUnreadGraceMs = 300_000,
   sendQueueEnter = null,
   record = () => {},
   intervalMs,
@@ -329,6 +356,7 @@ export async function runWatch({
   judgeCmd = null,
   ai = null,
   hierarchyPath = null,
+  profilePath = null,
   judgeCooldownMs = 5 * 60 * 1_000,
   now = Date.now,
   spawn = spawnSync,
@@ -349,9 +377,19 @@ export async function runWatch({
     }
   };
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429});
+  const mailDelivered = new Set();
+  const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,send:(role,message,pid)=>{
+    try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
+    catch (error) {
+      if (error.delivery === 'sent') mailDelivered.add(role);
+      throw error;
+    }
+  }}) : null;
   const queueResume = new QueueResume({record, sendEnter:sendQueueEnter, sleep,
     readScreen: session => { try { return readText(floor.read(session)); } catch { return null; } }});
   let roleStates = new Map();
+  let queuedStates = new Map();
+  const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   const seeded = seedAlertState(readEntries());
   let activeAlerts = seeded.active;
@@ -362,6 +400,7 @@ export async function runWatch({
   const progressWatch = new ProgressWatch();
   const supervisorHealth = new SupervisorHealth();
   let lastCycleAt = now();
+  let lastCycleRecordedAt = null;
   let lastWakeAt = null;
   let hierarchyHash = null;
   let scopeSignature = null;
@@ -371,10 +410,11 @@ export async function runWatch({
 
   try { while (!signal?.aborted) {
     const cycleAt = now();
-    let entries = [];
+    let entries = [], mailEntries = [];
     let ledgerError = null;
     try {
       entries = readEntries();
+      mailEntries = entries;
     } catch (error) {
       ledgerError = error;
     }
@@ -396,6 +436,7 @@ export async function runWatch({
     if (readCards && !ledgerError) {
       try {
         cards = readCards(); works = readWorks();
+        entries = taskIdentity(cards).project(entries).filter(e=>!taskConnectionError(e));
         scope = buildWatchScope(cards, entries, parents, works);
         supervisorScope = buildSupervisorScope(cards, entries, parents, works);
       }
@@ -438,6 +479,9 @@ export async function runWatch({
       }
       for (const session of workerChecks.keys()) if (!scope.sessions.has(session)) workerChecks.delete(session);
       activeAlerts = activeAlerts.filter(alert => {
+        // 큐 대기 경보의 수명은 scope가 아니라 화면 문구가 정한다 — 여기서
+        // 퇴역시키면 scope 밖 세션에서 매 주기 알림이 다시 울린다.
+        if (alert.kind === '큐대기') return true;
         if (!alert.session || observedSessions.has(alert.session)) return true;
         recordAlert(record, {...alert, kind:'감시제외'}, null, false, true);
         alertRecipients.delete(alert.id); deliveryFailures.delete(alert.id);
@@ -452,11 +496,12 @@ export async function runWatch({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
-          const currentEntries=readEntries();
-          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks());
+          const currentCards=readCards();
+          const currentEntries=taskIdentity(currentCards).project(readEntries()).filter(e=>!taskConnectionError(e));
+          const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks());
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
-          const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.role===seen.role);
+          const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.transport!=='mailbox'&&e.role===seen.role);
           if(JSON.stringify(lastInput(entries))!==JSON.stringify(lastInput(currentEntries)))return false;
           const current=collectRoles(floor,currentEntries,new Set([session])).observations.get(session);
           return current?.alive && String(current.pid)===String(seen.pid) && String(current.expectedPid)===String(seen.pid) &&
@@ -489,13 +534,51 @@ export async function runWatch({
           stallN
         );
     roleStates = roleAssessment.states;
+    // 완료후보는 정상 완료 처리에 시간을 준다. 화면에서 사라져도 done을 재확인한다.
+    if (!observationError) {
+      for (const alert of roleAssessment.alerts) {
+        if (alert.kind !== '완료후보' || pendingCompletions.has(alert.id)) continue;
+        pendingCompletions.set(alert.id, {alert, at:cycleAt,
+          startedAt:roles.observations.get(alert.session)?.startedAt});
+      }
+      const visible = new Set(roleAssessment.alerts.map(a => a.id));
+      const unconfirmed = new Set(filterConfirmedCompletions(
+        [...pendingCompletions.values()].map(p => p.alert), entries, cards
+      ).map(a => a.id));
+      roleAssessment.alerts = roleAssessment.alerts.filter(a => a.kind !== '완료후보');
+      for (const [id, pending] of pendingCompletions) {
+        const {alert, at, startedAt} = pending;
+        if ((pending.emitted && !visible.has(id)) || !roleStates.get(alert.session)?.alive ||
+            !unconfirmed.has(id) || (scope && !scope.sessions.has(alert.session)) ||
+            roles.observations.get(alert.session)?.startedAt !== startedAt) {
+          pendingCompletions.delete(id);
+          continue;
+        }
+        if (cycleAt - at >= completionGraceMs) {
+          roleAssessment.alerts.push(alert);
+          pending.emitted = true;
+        }
+      }
+    }
+    // 큐 대기는 scope 밖 세션까지 포함한 전체 관측으로 본다 — 발령이 없어 감시
+    // 대상이 아니던 작업자가 큐가 쌓인 채 멈춘 사고(2026-09-15)를 잡기 위해서다.
+    const queuedAssessment = observationError
+      ? { states: queuedStates, alerts: [] }
+      : assessQueuedInput(
+          queuedStates,
+          roles.observations,
+          cycleAt - lastCycleAt,
+          intervalMs,
+          queuedAfterMs
+        );
+    queuedStates = queuedAssessment.states;
 
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueHandled.has(a.session));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
-      const context=observationContext(candidate.role,seen,entries,cards??[],scope?.entries??[]);
-      const evidenceDigest=shortDigest(JSON.stringify([seen.screen,context.process,context.tasks,context.recentMail]));
+      const context=observationContext(candidate.role,seen,mailEntries,cards??[],scope?.entries??[]);
+      const evidenceDigest=shortDigest(JSON.stringify([seen.screen,context.process,context.tasks,context.recentTaskEvents,context.recentMail]));
       const previous=workerChecks.get(candidate.session);
       const same=previous?.responsibility===responsibility;
       const interval=same&&previous.evidenceDigest===evidenceDigest?WORKER_RECHECK_MS:judgeCooldownMs;
@@ -516,13 +599,13 @@ export async function runWatch({
         responsibility:watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works)});
     };
     if(cards&&!observationError){
-      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs);
+      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))});
       const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
         enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session))});
       if(progress) invokeAI(progress);
     }
     const supervisorCheck=supervisorScope&&!observationError
-      ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,cards,now:cycleAt,enabled:Boolean(judgeCmd)})
+      ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,mailEntries,cards,now:cycleAt,enabled:Boolean(judgeCmd)})
       : {candidate:null,alerts:[]};
     if(supervisorCheck.candidate)invokeAI(supervisorCheck.candidate);
     if(cardError) reportAlerts=[{id:'cards:unreadable',kind:'모름',level:'AMBER',screenError:'감시 대상 카드 읽기 실패'}];
@@ -547,7 +630,7 @@ export async function runWatch({
       if(!seen?.alive||!seen.screen)continue;
       const check=candidate.source==='supervisor-health'?null:workerCheck(candidate,seen);
       if(check&&!check.due)continue;
-      const input={...candidate.input,...observationContext(role,seen,entries,cards??[],
+      const input={...candidate.input,...observationContext(role,seen,mailEntries,cards??[],
         candidate.source==='supervisor-health'?supervisorScope.entries:scope?.entries??[])};
       if(candidate.source==='stall')input.screen=seen.screen.slice(-8000);
       else input.current=seen.screen.slice(-8000);
@@ -571,6 +654,7 @@ export async function runWatch({
       ...(hierarchyError ? [hierarchyError] : []),
       ...(aiStoreError ? [aiStoreError] : []),
       ...roleAlerts.filter(a=>!rateLimitRetry.alerts?.some(r=>r.session===a.session&&a.kind==='한도')),
+      ...queuedAssessment.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       ...reportAlerts,
@@ -688,12 +772,36 @@ export async function runWatch({
         lastWakeAt = cycleAt;
       }
     }
+    let mailError = false;
+    if (mailWatch && !observationError) {
+      try {
+        mailWatch.tick({entries:mailEntries,cards:cards??[],works,now:cycleAt,
+          floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal});
+        mailError = mailWatch.failed;
+      } catch (error) {
+        mailError = true;
+        print(`[watch] 미확인 우편 감시 실패: ${error.message}`);
+        try { record({kind:'watch-mail-reminder',by:'watch',action:'error',phase:'cycle',
+          reason:'mail-reminder-cycle-failed',error:error.message,t:new Date(cycleAt).toISOString()}); }
+        catch (storeError) { print(`[watch] 우편 감시 실패 기록 오류: ${storeError.message}`); }
+      }
+      for (const role of mailDelivered) deliveredRecipients.add(role);
+      mailDelivered.clear();
+    }
     const absorbed = observationError ? {states:roleStates,screenAlerts:[]} : absorbDeliveredScreens(floor, roleStates, deliveredRecipients);
     roleStates = absorbed.states;
     // Absorption belongs to this cycle's baseline, not a second delivery pass.
     activeAlerts = [...new Map(
       [...changes.active, ...deliveryFailures.values(), ...absorbed.screenAlerts].map(alert => [alert.id, alert])
     ).values()];
+    // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
+    if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
+      try {
+        record(buildCycleEntry({pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
+          sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
+        lastCycleRecordedAt = cycleAt;
+      } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
+    }
     lastCycleAt = cycleAt;
     try {await sleep(intervalMs,signal);}
     catch(error) {if(!signal?.aborted)throw error;}

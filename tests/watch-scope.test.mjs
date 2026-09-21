@@ -27,7 +27,8 @@ test('활성 assigned 실행의 미완료 실제 send가 있는 작업자만 감
  }
  assert.equal(buildWatchScope([card],[],parents).sessions.size,0);
  assert.equal(buildWatchScope([card],[{...send,transport:'mailbox'}],parents).sessions.size,0);
- assert.equal(buildWatchScope([card],[send,{...send,kind:'done'},again,{...again,kind:'done'}],parents).sessions.size,0);
+ // 원장의 최초 done만 인정한다. 같은 ID 재발령 뒤 중복 done은 새 완료가 아니다.
+ assert.equal(buildWatchScope([card],[send,{...send,kind:'done'},again,{...again,kind:'done'}],parents).sessions.size,1);
 });
 test('완료 뒤 우편은 실행을 다시 열지 않고 다른 담당·실행의 done은 종료 근거가 아니다',()=>{
  const done={...send,kind:'done'};
@@ -106,7 +107,8 @@ async function exercise(failure=null,completeExecution=false,empty=false){
 test('AI 점검 도중 완료되면 늦은 호출 실패·화면읽기·해소 깨움 없음', async () =>{
  for(const execution of [false,true]){
   const r=await exercise(null,execution);assert.deepEqual(r.judges,[[1,card.role]]);
-  assert(r.reads.every(([c,session])=>c<2&&['kadan-p-작업자','kadan-p-감독'].includes(session)));
+  // 화면은 live 세션 전부를 읽되(큐 감시), 완료 뒤 새 AI·우편은 없어야 한다.
+  assert(r.reads.every(([c,session])=>['kadan-p-작업자','kadan-p-감독','kadan-p-슈퍼감독'].includes(session)));
   assert(r.messages.every(([c])=>c<2));
   assert(!r.records.some(e=>e.role===card.role&&e.delivered));
   assert(r.records.some(e=>e.kind==='watch-scope'&&e.sessions.length===0));
@@ -122,9 +124,11 @@ test('카드·원장 읽기 실패와 불명 scope는 AI호출·가짜회복 없
   assert(!r.messages.some(([, ,m])=>m.includes('의심 해제')));
  }
 });
-test('실제 작업자가 없으면 화면·AI·자원 수집은 0이고 관계 오류 감시는 남는다', async () =>{
+test('실제 작업자가 없으면 AI·자원 수집·우편은 0이고 화면은 큐 감시용으로만 읽는다', async () =>{
  for(const failure of [null,'hierarchy','resources']){
-  const r=await exercise(failure,false,true);assert.deepEqual(r.reads,[]);assert.deepEqual(r.judges,[]);
+  const r=await exercise(failure,false,true);
+  // 발령 없는 세션도 큐 대기는 잡아야 하므로 화면은 live 세션 전부를 읽는다(2026-09-15 사고).
+  assert(r.reads.length>0&&r.reads.every(([c])=>c<4));assert.deepEqual(r.judges,[]);
   assert.deepEqual(r.resources,[]);
   if(failure==='hierarchy')assert(r.records.some(e=>e.alertKind==='모름'&&e.recipient==='@user'&&e.delivered===true));
   else assert.deepEqual(r.messages,[]);

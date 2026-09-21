@@ -1,11 +1,17 @@
 #!/usr/bin/env node
+import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs';
 import {WatchAI} from './watch-ai.mjs';
 import {watchReportCommand,watchAILabel} from './watch-report.mjs';
 import {notifyUser} from './watch-system.mjs';
 import {storageCommand} from './storage-migration.mjs';
-import {assertWritable} from './storage.mjs';
-import {SecretaryMailbox,inboxCommand} from './secretary-mailbox.mjs';
+import {assertWritable,storageTransaction} from './storage.mjs';
+import {SecretaryMailbox} from './secretary-mailbox.mjs';
+import {Mailbox,inboxCommand} from './mailbox.mjs';
+import {composeRoleInstructions,startRoleProfile} from './role-instructions.mjs';
+import {composeMailInstructions} from './mail-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
+import {PROFILE_FILE} from "./watch-cycle.mjs";
+import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
 import {decisionCommand} from "./decisions.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand } from "./card-command.mjs";
@@ -38,6 +44,7 @@ import {
 } from "./ledger.mjs";
 import {
   closeRottieWindow,
+  removeRottieWindow,
   rottieConnectivity,
   SOCKET,
   buildOrcaCreateArgv,
@@ -285,11 +292,15 @@ export function modelFamily(model) {
   const name = model.trim().split("/").pop() ?? "";
   if (/^gpt/i.test(name)) return "gpt";
   if (/^claude/i.test(name)) return "claude";
+  // claude 실행기는 짧은 별명으로 띄운다(--model fable, --model opus). 앞머리가 claude가 아니라 모름으로 빠졌다(2026-09-12 실측).
+  if (/^(fable|opus|sonnet|haiku)/i.test(name)) return "claude";
   if (/^glm/i.test(name)) return "glm";
   if (/^kimi/i.test(name) || /^k3/i.test(name)) return "kimi";
   if (/^grok/i.test(name)) return "grok";
   if (/^deepseek/i.test(name)) return "deepseek";
   if (/^gemini/i.test(name)) return "gemini";
+  // devin 실행기는 자기 모델을 swe-2-max 처럼 부른다. 모름으로 빠지면 계열 겹침 검사가 무력해진다(2026-09-13 실측).
+  if (/^swe/i.test(name)) return "swe";
   return "모름";
 }
 
@@ -379,8 +390,8 @@ export function renderRound(group) {
   return "라운드 " + group.family + ": " + group.latestRound + "/18 (블록 " + Math.ceil(group.latestRound / 3) + "/6) — " + detail + (group.latestRound >= 9 ? " · 정체 확인" : "") + (group.latestRound >= 18 ? " · 상한 — 사용자 결정" : "");
 }
 
-export function buildTree(entries, aliveBySession = {}) {
-  entries = workEntries(entries).filter(e=>e?.transport!=='mailbox');
+export function buildTree(entries, aliveBySession = {}, cards = null) {
+  entries = workEntries(entries,cards).filter(e=>e?.transport!=='mailbox');
   const roles = new Map();
   const boards = new Map();
   const planned = new Map();
@@ -388,7 +399,7 @@ export function buildTree(entries, aliveBySession = {}) {
   for (const entry of entries) {
     const board = entry?.kind === "plan" ? entry.board : boardFromRole(entry?.role);
     if (!board || !entry.taskId) continue;
-    const key = `${board}\0${entry.taskId}`;
+    const key = `${board}\0${taskEventKey(entry)}`;
     if (entry.kind === "plan") {
       if (!boards.has(board)) boards.set(board, { name: board, roles: [], plannedCards: [], plannedAt: null, about: null, titleById: {} });
       const item = boards.get(board);
@@ -441,20 +452,22 @@ export function buildTree(entries, aliveBySession = {}) {
       if (!entry.taskId) {
         item.untrackedSends++;
       } else {
-        const card = item.cardsById.get(entry.taskId) || {
+        const card = item.cardsById.get(taskEventKey(entry)) || {
           taskId: entry.taskId,
+          ...(taskConnectionError(entry)?{connectionError:entry.taskConnection.reason}:{}),
         };
         card.sentAt = entry.t;
         card.by = ledgerBy(entry);
-        item.cardsById.set(entry.taskId, card);
+        item.cardsById.set(taskEventKey(entry), card);
       }
     } else if (entry.kind === "done" && entry.taskId) {
-      const card = item.cardsById.get(entry.taskId) || {
+      const card = item.cardsById.get(taskEventKey(entry)) || {
         taskId: entry.taskId,
+        ...(taskConnectionError(entry)?{connectionError:entry.taskConnection.reason}:{}),
       };
       card.doneAt = entry.t;
       card.result = entry.result;
-      item.cardsById.set(entry.taskId, card);
+      item.cardsById.set(taskEventKey(entry), card);
     }
   }
 
@@ -489,7 +502,9 @@ export function buildTree(entries, aliveBySession = {}) {
     }
 
     const cards = [...item.cardsById.values()].map((card) =>
-      card.doneAt
+      card.connectionError
+        ? {taskId:card.taskId,state:'connection-error',connectionError:card.connectionError,at:card.doneAt||card.sentAt,by:card.by??'모름'}
+        : card.doneAt
         ? {
             taskId: card.taskId,
             state: "done",
@@ -598,7 +613,9 @@ export function renderTree(tree) {
         const sender = `← ${card.by ?? "모름"}  `;
         const title = card.title ? `  — ${card.title}` : "";
         lines.push(
-          card.state === "done"
+          card.connectionError
+            ? `    ${label}${sender}기록 연결 실패: ${card.connectionError}${title}`
+            : card.state === "done"
             ? `    ${label}${sender}done ${card.result} (${shortTime(card.at)})${title}`
             : `    ${label}${sender}보냄 ${shortTime(card.at)} (완료 없음)${title}`
         );
@@ -632,6 +649,9 @@ export function guardedSend({
   message,
   taskId,
   mailContext,
+  roleProfile,
+  raw = false,
+  notificationOnly = false,
   source,
   env = process.env,
   recordedPid: expectedPid,
@@ -640,8 +660,56 @@ export function guardedSend({
   saveBody = saveMailBody,
 }) {
   assertWritable(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome());
+  if (typeof notificationOnly !== 'boolean') throw new Error('notificationOnly는 boolean이어야 합니다');
   if (taskId != null && (typeof taskId !== "string" || !/^\S+$/.test(taskId))) {
     throw new Error("taskId는 공백 없는 한 덩어리여야 한다");
+  }
+  if(raw&&mailContext?.expectReply)throw new Error('--raw는 원문 보존 옵션이므로 --expect-reply와 함께 사용할 수 없습니다');
+  if(taskId!=null&&mailContext?.replyFinal)throw new Error('최종 답변은 --task 발령과 함께 사용할 수 없습니다');
+  const home=env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome();
+  const by=resolveLedgerBy({source,env});
+  const resolveReplyContext=()=>{
+    const resolved=resolveWorkMail(home,{...mailContext,taskId,by,role});
+    if (resolved.currentRecipient && resolved.currentRecipient !== role) {
+      const error=new Error(`답장 수신 책임자가 ${role}에서 ${resolved.currentRecipient}(으)로 변경되었습니다. inbox read로 현재 주소를 확인하세요`);
+      error.code='KADAN_MAIL_RECIPIENT_CHANGED';error.delivery='not-sent';
+      throw error;
+    }
+    return resolved;
+  };
+  if(mailContext?.replyTo||mailContext?.replyFinal||mailContext?.expectReply){
+    mailContext=resolveReplyContext();
+  }
+  const mailId=randomUUID();
+  const originalTaskId=taskId;
+  if (taskId != null) {
+    const store=new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()),cards=store.list();
+    const card = store.checkSend(mailContext?.executionKey||taskId,role,cards);
+    if (card) {
+      if (taskId!==card.id&&taskId!==card.key) throw new Error('발령 대상과 실행 연결이 다릅니다');
+      mailContext={...mailContext,executionKey:card.key};
+      // 같은 이름의 카드는 전체 주소로 지문과 DONE을 구분한다.
+      taskId=taskIdentity(cards).taskIdFor(card);
+    }
+  }
+  // 파일/기록 읽기는 생존 검사 전에 끝낸다. 본문은 항상 앞에 그대로 둔다.
+  let entries;
+  try { entries = readEntries(); }
+  catch (error) { entries = [{broken:`원장 읽기 실패: ${error.message}`}]; }
+  const sourceCwd = entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd ?? null;
+  const originalCardPath = extractCardPath(message,sourceCwd);
+  const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
+    role,message,profile:roleProfile,raw,taskId,mailContext,entries});
+  message = composed.message;
+  if (!raw) {
+    const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,expectReply:mailContext?.expectReply===true,sender:by,env});
+    if (instructions) message+=`\n\n${instructions}`;
+  }
+  const conflicts = familyConflictAlerts({role,session,entries,source,env});
+  for (const conflict of conflicts) {
+    console.error(conflict.warning);
+    try { record(conflict.alert); }
+    catch (error) { console.error(`원장 기록 실패: ${error.message}`); }
   }
   if (!selectedFloor.alive(session)) {
     const error = new Error(`세션 없음: ${session} — 먼저 kadan start ${role}`);
@@ -661,22 +729,7 @@ export function guardedSend({
   if (!expectedPid) {
     console.error("경고: 원장에 이 세션의 시작 기록이 없다 (PID 대조 생략)");
   }
-
-  const conflicts = familyConflictAlerts({
-    role,
-    session,
-    entries: readEntries(),
-    source,
-    env,
-  });
-  for (const conflict of conflicts) {
-    console.error(conflict.warning);
-    try {
-      record(conflict.alert);
-    } catch (error) {
-      console.error(`원장 기록 실패: ${error.message}`);
-    }
-  }
+  if (mailContext?.replyTo) resolveReplyContext();
 
   let receipt;
   try {
@@ -687,7 +740,10 @@ export function guardedSend({
   }
   const entry = {
     kind: "send",
-    mailId:randomUUID(),
+    mailId,
+    ...(notificationOnly?{notificationOnly:true}:{}),
+    ...(mailContext?.expectReply?{expectReply:true}:{}),
+    ...(mailContext?.replyFinal?{replyFinal:true}:{}),
     ...(mailContext?.workKey?{workKey:mailContext.workKey}:{}),
     ...(mailContext?.executionKey?{executionKey:mailContext.executionKey}:{}),
     ...(mailContext?.replyTo?{replyTo:mailContext.replyTo}:{}),
@@ -695,8 +751,12 @@ export function guardedSend({
     ...(receipt.keyDelivery ? {keyDelivery:receipt.keyDelivery, inputAcceptance:receipt.inputAcceptance} : {}),
     role,
     session,
+    roleInstructions: composed.metadata,
+    originalCardPath,
+    ...(composed.metadata.profile ? {roleProfile:composed.metadata.profile} : {}),
     by: resolveLedgerBy({ source, env }),
     ...(taskId != null ? { taskId } : {}),
+    ...(originalTaskId!==taskId?{rawTaskId:originalTaskId}:{}),
     bytes: Buffer.byteLength(message),
     digest: digest(message),
     ...(mailPreview(message) ? { preview: mailPreview(message) } : {}),
@@ -721,7 +781,19 @@ export function guardedSend({
     console.error(`편지 본문 저장 실패(전달은 됨): ${error.message}`);
   }
   try {
-    record(entry);
+    const rejection=storageTransaction(home,()=>{
+      if(entry.replyFinal){
+        try { resolveReplyContext(); }
+        catch(error){
+          // 화면 전달 뒤 경쟁에서 밀려도 그 전달 사실은 남긴다. 최종 답변으로는 인정하지 않는다.
+          record({...entry,replyFinal:false,replyFinalRejected:true});
+          return error;
+        }
+      }
+      record(entry);
+      return null;
+    });
+    if(rejection)throw rejection;
   } catch (error) {
     error.delivery = "sent";
     throw error;
@@ -759,8 +831,14 @@ export function collectCardFiles(entries, deps = {}) {
   }
   for (const entry of entries ?? []) {
     if (entry?.kind !== "send" || !entry.taskId || files[entry.taskId]) continue;
-    const source = (entry.digest ? readBody(entry.digest) : null) ?? entry.preview ?? "";
-    const file = extractCardPath(source, cwdByRole.get(entry.role) ?? null);
+    // 새 영수증의 null은 원문에 경로가 없었다는 뜻이다. 첨부를 대신 카드로 읽지 않는다.
+    let file;
+    if (Object.hasOwn(entry,'originalCardPath')) {
+      file = typeof entry.originalCardPath==='string'&&path.isAbsolute(entry.originalCardPath)&&entry.originalCardPath.endsWith('.md') ? entry.originalCardPath : null;
+    } else {
+      const source = (entry.digest ? readBody(entry.digest) : null) ?? entry.preview ?? "";
+      file = extractCardPath(source, cwdByRole.get(entry.role) ?? null);
+    }
     if (!file) continue;
     try {
       const text = readFile(file);
@@ -788,22 +866,27 @@ export function parsePlanCard(item) {
   return { taskId: item.slice(0, index), ...(title ? { title } : {}) };
 }
 
-export function planCards({ board, taskIds, about = null, env = process.env, record = appendLedger }) {
+export function planCards({ board, taskIds, about = null, env = process.env, record = appendLedger, cards = null }) {
   const valid = value => typeof value === "string" && /^\S+$/.test(value);
-  const cards = Array.isArray(taskIds) ? taskIds.map(parsePlanCard) : [];
-  if (!valid(board) || cards.length === 0 ||
-      !cards.every(card => valid(card.taskId)) ||
-      new Set(cards.map(card => card.taskId)).size !== cards.length) {
+  const planned = Array.isArray(taskIds) ? taskIds.map(parsePlanCard) : [];
+  if (!valid(board) || planned.length === 0 ||
+      !planned.every(card => valid(card.taskId)) ||
+      new Set(planned.map(card => card.taskId)).size !== planned.length) {
     const error = new Error("판과 카드 id는 공백 없는 문자열이어야 하며 카드 중복은 허용하지 않는다");
     error.exitCode = 2;
     throw error;
   }
+  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).list());
+  const resolved=planned.map(card=>({...card,...identity.write(card.taskId)}));
+  if(new Set(resolved.map(c=>c.executionKey||c.taskId)).size!==resolved.length)throw new Error('같은 카드의 별칭을 중복 계획할 수 없습니다');
   const boardAbout = typeof about === "string" && about.trim() ? about.trim() : null;
-  for (const { taskId, title } of cards) {
+  for (const { taskId, title, executionKey, rawTaskId } of resolved) {
     record({
       kind: "plan",
       board,
       taskId,
+      ...(executionKey?{executionKey}:{}),
+      ...(rawTaskId?{rawTaskId}:{}),
       ...(title ? { title } : {}),
       ...(boardAbout ? { about: boardAbout } : {}),
       by: resolveLedgerBy({ env }),
@@ -818,6 +901,7 @@ export function confirmDone({
   result,
   env = process.env,
   record = appendLedger,
+  cards = null,
 }) {
   const reject = (message) => {
     const error = new Error(message);
@@ -831,12 +915,15 @@ export function confirmDone({
   if (result !== "ok" && result !== "failed") {
     reject("결과는 ok 또는 failed여야 한다");
   }
+  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).list());
+  const address=identity.write(taskId);
+  entries=workEntries(entries,identity);
   if (
     entries.some(
       (entry) =>
         entry?.kind === "done" &&
         entry.role === role &&
-        entry.taskId === taskId
+        entry.taskId === address.taskId && !taskConnectionError(entry)
     )
   ) {
     reject(`이미 완료 확정됨: 역할=${role} 카드=${taskId}`);
@@ -857,7 +944,7 @@ export function confirmDone({
     role,
     session: start.session || session,
     by: resolveLedgerBy({ env }),
-    taskId,
+    ...address,
     result,
   };
   record(entry);
@@ -876,6 +963,7 @@ export function runWaitLoop({
   now = Date.now,
   record = appendLedger,
   snapshotHome = null,
+  cards = null,
   snapshotAt = () => new Date(),
 }) {
   const incomplete = (result) => {
@@ -911,13 +999,17 @@ export function runWaitLoop({
       findDoneMarkers(stripAnsi(accumulated))
     );
     if (fresh.length === 0) return null;
-    for (const marker of fresh) {
+    const identity=taskIdentity(cards ?? (snapshotHome?new CardStore(snapshotHome).list():[]));
+    const resolved=fresh.map(marker=>({...marker,...identity.write(marker.taskId)}));
+    for (const marker of resolved) {
       record({
         kind: "done",
         floor: selectedFloor.name,
         role,
         session,
         taskId: marker.taskId,
+        ...(marker.executionKey?{executionKey:marker.executionKey}:{}),
+        ...(marker.rawTaskId?{rawTaskId:marker.rawTaskId}:{}),
         result: marker.result,
       });
     }
@@ -1036,6 +1128,26 @@ function formatRottiePreflightFailure({ reason, bin, connection, candidates }) {
   ].join("\n");
 }
 
+export function inspectHiddenStartPolicy({
+  env = process.env,
+  floorName,
+  hidden = false,
+  roleProfile,
+  reusing = false,
+} = {}) {
+  const forbidden =
+    hidden === true &&
+    floorName === "tmux" &&
+    env.KADAN_WINDOW === "rottie" &&
+    roleProfile != null &&
+    reusing === false;
+  if (!forbidden) return { ok: true };
+  return {
+    ok: false,
+    message: `KADAN_HIDDEN_FORBIDDEN: KADAN_WINDOW=rottie에서 역할 프로필(${roleProfile}) 세션은 --hidden으로 시작할 수 없다 — 로티 창이 기본이다. 로티가 없거나 연결 불가를 확인했을 때만 KADAN_WINDOW=none --hidden으로 백그라운드 시작한다 (worker-creation.md 92~94행).`,
+  };
+}
+
 // 임시 장치: 로티 정식 출시로 경로가 고정되면 이 점검은 걷어낸다 (2026-09-06 [kyle] 결정).
 export function inspectRottieStartPreflight({
   env = process.env,
@@ -1087,7 +1199,8 @@ export function describeStartCmd(cmd) {
   let index = 0;
   while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
   const harness = tokens[index]?.split("/").pop();
-  const model = text.match(/--model[=\s]+"?([^\s"]+)"?/)?.[1];
+  // 따옴표를 벗겨서 남긴다. 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 따옴표째 박힌다(2026-09-12 실측).
+  const model = text.match(/--model[=\s]+["']*([^\s"']+)["']*/)?.[1];
   return {
     ...(harness ? { harness } : {}),
     ...(model ? { model } : {}),
@@ -1161,7 +1274,7 @@ export function openStartedWindow(session, platform = process.platform, deps = {
   return { ...(openWindow(session, platform, deps) ?? { method: "manual" }), ...fields };
 }
 
-export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, connectFn = rottieConnectivity, print = console.log } = {}) {
+export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, removeFn = removeRottieWindow, connectFn = rottieConnectivity, print = console.log } = {}) {
   const terminalId = lastStart?.rottieTerminalId;
   if (!terminalId) return {};
   if (!env.KADAN_ROTTIE_BIN) {
@@ -1169,21 +1282,27 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
     return { rottieTerminalId: terminalId, rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" };
   }
   const result = closeFn({ bin: env.KADAN_ROTTIE_BIN, terminalId });
-  if (result.closed) print(`창 닫힘: ${terminalId}`);
-  else {
+  if (!result.closed) {
     const connection = connectFn({ bin: env.KADAN_ROTTIE_BIN });
     print(`창 닫기 실패: ${terminalId} ${result.code} (번들 ${connection.bundleId ?? "모름"})`);
+    return { rottieTerminalId: terminalId, rottieWindowClosed: false, rottieWindowError: String(result.code) };
   }
+  print(`창 닫힘: ${terminalId}`);
+  // 닫힌 탭은 목록에 '종료됨'으로 남으므로 한 번 더 제거한다. 제거 실패는 기록만 하고 재시도하지 않는다.
+  const removal = removeFn({ bin: env.KADAN_ROTTIE_BIN, terminalId });
+  if (removal.removed) print(`탭 제거됨: ${terminalId}`);
+  else print(`탭 제거 실패: ${terminalId} ${removal.code} — 탭이 '종료됨'으로 남는다`);
   return {
     rottieTerminalId: terminalId,
-    rottieWindowClosed: result.closed,
-    ...(!result.closed ? { rottieWindowError: String(result.code) } : {}),
+    rottieWindowClosed: true,
+    rottieWindowRemoved: removal.removed,
+    ...(!removal.removed ? { rottieRemoveError: String(removal.code) } : {}),
   };
 }
 
 function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령>]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령>] [--profile secretary|super|conductor|worker|reviewer]");
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
   const preflight = inspectRottieStartPreflight({
     floorName: floor.name,
@@ -1191,9 +1310,13 @@ function cmdStart(argv, flags) {
   });
   if (!preflight.ok) die(preflight.message, 2);
   const session = sessionName(role);
+  const reusing = floor.alive(session);
+  const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
+  const hiddenPolicy = inspectHiddenStartPolicy({ floorName: floor.name, hidden: Boolean(flags.hidden), roleProfile, reusing });
+  if (!hiddenPolicy.ok) die(hiddenPolicy.message, 2);
   let evidence;
   let startedCmd;
-  if (floor.alive(session)) {
+  if (reusing) {
     console.log(`이미 살아 있음: ${session}`);
     const existingPid = floor.pid(session);
     evidence =
@@ -1258,7 +1381,7 @@ function cmdStart(argv, flags) {
     reused,
     cmd: startedCmd,
     cwd: process.cwd(),
-  }), ...rottieConnection });
+  }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}) });
   console.log(
     `시작됨: ${session} (${floor.name === "rottie" ? "Rottie PID" : "pane PID"} ${pid ?? "?"}, 창: ${method}${
       method === "manual" ? ` — 직접: ${floor.attach(session)}` : ""
@@ -1281,42 +1404,50 @@ function cmdStart(argv, flags) {
 function cmdSend(argv, flags) {
   const role = argv[0];
   if (!role) {
-    die("사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] [--execution <실행키>] [--reply-to <우편ID>] <메시지...> (메시지 생략 시 표준 입력). --task는 작업 발령이고 --work·--execution은 우편의 연결 주소다");
+    die("사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] [--execution <실행키>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). --task는 작업 발령이고 --work·--execution은 우편의 연결 주소다");
   }
-  if(role==='비서'&&flags.task)throw new Error('비서 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
-  if (flags.task) new CardStore(ledgerHome()).checkSend(flags.task, role);
-  const session = sessionName(role);
+  if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
   const argText = argv.slice(1).join(" ");
-  const message = argText || fs.readFileSync(0, "utf8").replace(/\n+$/, "");
+  const input = argText || fs.readFileSync(0, "utf8");
+  const message = flags.raw || argText ? input : input.replace(/\n+$/, "");
   if (!message) die("보낼 메시지가 비어 있다");
-  if(role==='비서'){
-    const receipt=new SecretaryMailbox(ledgerHome()).send({by:resolveLedgerBy({env:process.env}),message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution});
+  if(role==='비서'||flags.mailbox===true){
+    if (flags.raw) throw new Error('저장 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
+    const receipt=new Mailbox(ledgerHome(),role).send({by:resolveLedgerBy({env:process.env}),message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
     console.log(JSON.stringify(receipt));return;
   }
 
+  let receipt;
   try {
     // --execution만 쓴 발령은 taskId 없이 기록되어 감시에서 빠진다. 수신 역할의 발령 카드로
     // 확인될 때만 taskId를 추론해 채운다. 답장·다른 담당의 실행 연결은 그대로 둔다.
     let taskId=flags.task;
     if(taskId==null){
-      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to']});
+      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true});
       if(inferred){taskId=inferred;new CardStore(ledgerHome()).checkSend(taskId,role);console.error(`실행 연결 ${flags.execution}은(는) ${role}의 발령 카드입니다 — taskId로 기록합니다. 명시 발령은 --task <카드id>를 사용하세요`);}
     }
-    const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId});
-    guardedSend({
+    const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId,by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
+    const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
+    const expectedPid=recordedPid(lastStartFor(session));
+    if (recipient!==role && !expectedPid) {
+      const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
+      error.delivery='not-sent';throw error;
+    }
+    receipt = guardedSend({
       floor,
       session,
-      role,
+      role:recipient,
       message,
       taskId,
       mailContext,
-      recordedPid: recordedPid(lastStartFor(session)),
+      raw:flags.raw===true,
+      recordedPid: expectedPid,
     });
   } catch (error) {
-    die(error.message, error.exitCode || 1);
+    die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
   }
   console.log(
-    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${session} (${Buffer.byteLength(message)}B, 지문 ${digest(message)})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}`
+    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${receipt.session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
   );
 }
 
@@ -1408,19 +1539,33 @@ function sendWatchMessage(role,message) {
   guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session))});
 }
 
+export function sendWatchMailReminder(role,message,expectedPid,{
+  selectedFloor=floor,readStart=lastStartFor,send=guardedSend,
+}={}) {
+  const session=sessionName(role);
+  if (expectedPid == null || expectedPid === '' || String(recordedPid(readStart(session))) !== String(expectedPid)) {
+    const error=new Error('미확인 우편 알림 수신 세대 변경');
+    error.delivery='not-sent';
+    throw error;
+  }
+  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,notificationOnly:true});
+}
+
 function cmdWatch(argv, flags) {
   const usage =
-    "사용법: kadan watch [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]";
+    "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--completion-grace 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. 옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
   if (flags.help) {
     console.log(usage);
     return;
   }
   if (argv.length > 0) die(usage, 2);
   const allowed = new Set([
+    "profile",
     "interval",
     "stall",
     "stall-after",
     "start-report-after",
+    "completion-grace",
     "idle",
     "route",
     "super",
@@ -1433,11 +1578,28 @@ function cmdWatch(argv, flags) {
   ]);
   const unknown = Object.keys(flags).find((name) => !allowed.has(name));
   if (unknown) die(`watch가 모르는 옵션: --${unknown}`, 2);
+  if (flags.profile === true || Array.isArray(flags.profile)) die("watch --profile에는 파일 하나가 필요하다", 2);
+  const defaultProfile = defaultProfilePath(ledgerHome());
+  const profileFile = flags.profile ? path.resolve(flags.profile) : Object.keys(flags).length === 0 && fs.existsSync(defaultProfile) ? defaultProfile : null;
+  let profile = null;
+  if (profileFile) {
+    try { profile = readWatchProfile(profileFile); } catch (error) { die(error.message, 2); }
+    delete flags.profile;
+    const applied = applyWatchProfile(flags, profile);
+    console.log(`감시 프로필 적용: ${profileFile}${applied.length ? " (" + applied.join(", ") + ")" : " (적용한 옵션 없음)"}`);
+  }
+  for (const line of watchStartupWarnings(flags, {profileFile, defaultProfile, exists: fs.existsSync})) console.error(line);
 
   const intervalSeconds = flags.interval == null ? 60 : Number(flags.interval);
   const stallAfterMinutes=flags["stall-after"]==null?5:Number(flags["stall-after"]);
   const startReportMinutes=flags["start-report-after"]==null?5:Number(flags["start-report-after"]);
   if(!Number.isFinite(stallAfterMinutes)||stallAfterMinutes<=0||!Number.isFinite(startReportMinutes)||startReportMinutes<=0)die("감시 시간은 0보다 큰 분이어야 한다",2);
+  const completionGrace = flags['completion-grace'];
+  const completionGraceMinutes = completionGrace == null ? 15 : Number(completionGrace);
+  if (completionGrace === true || Array.isArray(completionGrace) ||
+      !Number.isFinite(completionGraceMinutes) || completionGraceMinutes < 0) {
+    die("watch --completion-grace는 0 이상의 분이어야 한다", 2);
+  }
   const stallN = flags.stall == null ? 2 : Number(flags.stall);
   const idleMinutes = flags.idle == null ? 30 : Number(flags.idle);
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
@@ -1502,9 +1664,11 @@ function cmdWatch(argv, flags) {
     readCards: () => new CardStore(ledgerHome()).list(),
     readWorks: () => new WorkStore(ledgerHome()).list(),
     startReportGraceMs: startReportMinutes*60_000,
+    completionGraceMs: completionGraceMinutes*60_000,
     stallAfterMs: stallAfterMinutes*60_000,
     record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
     sendAlert: sendWatchMessage,
+    sendMailReminder: sendWatchMailReminder,
     resume429: (role,message,expectedPid) => {
       const session=sessionName(role);
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');
@@ -1517,6 +1681,7 @@ function cmdWatch(argv, flags) {
     } : null,
     ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage}) : null,
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
+    profilePath: profileFile,
     intervalMs: intervalSeconds * 1000,
     stallN,
     routes,
@@ -1541,7 +1706,7 @@ function cmdStop(argv) {
   if (!role) die("사용법: kadan stop <역할>");
   const session = sessionName(role);
   if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  const pending = pendingCardsFor(readLedger(), role);
+  const pending = pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).list()).project(readLedger()), role);
   if (pending.length > 0) {
     console.log(
       `미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`
@@ -1613,7 +1778,7 @@ function cmdTree(_argv, flags = {}) {
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
-  console.log(renderTree(buildTree(readLedger(), aliveBySession)));
+  console.log(renderTree(buildTree(readLedger(), aliveBySession,new CardStore(ledgerHome()).list())));
 }
 
 function loadWallSnapshot() {
@@ -1641,12 +1806,15 @@ function loadWallSnapshot() {
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
-  const tree=withWaitSnapshots(buildTree(entries,aliveBySession),ledgerHome());
+  let cards=[],cardError=null;
+  try {cards=new CardStore(ledgerHome()).list();}catch(error){cardError=error;}
+  const tree=withWaitSnapshots(buildTree(entries,aliveBySession,cards),ledgerHome());
   let center=null, centerError=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
-    center=buildCardCenter({cards:new CardStore(ledgerHome()).list(),entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
-    center=attachWatchOverview(center,entries,{works:new WorkStore(ledgerHome()).list()});
+    if(cardError)throw cardError;
+    center=buildCardCenter({cards,entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
+    center=attachWatchOverview(center,entries,{works:new WorkStore(ledgerHome()).list(),profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
   } catch(error) { centerError=error.message; }
   return {
     center,centerError,tree,
@@ -1664,7 +1832,7 @@ function loadWallSnapshot() {
 
 function cmdWall(_argv, flags) {
   if (flags.help) {
-    console.log("사용법: kadan wall [--port 8790]  (모든 판: 주소 뒤에 ?all=1, 카단 판정: ?judge=1)");
+    console.log("사용법: kadan wall [--port 8790] [--cache-sec 초]  (모든 판: 주소 뒤에 ?all=1, 카단 판정: ?judge=1)");
     return;
   }
   const rawPort = flags.port ?? "8790";
@@ -1675,7 +1843,10 @@ function cmdWall(_argv, flags) {
   ) {
     die("--port는 0부터 65535까지의 정수여야 한다");
   }
-  const server = createWallServer(loadWallSnapshot, {home:ledgerHome()});
+  const cacheSec=flags['cache-sec']===undefined?10:Number(flags['cache-sec']);
+  // 같은 주소를 15초마다 다시 읽는 화면을 위해 응답을 잠깐 재사용한다. 0이면 끈다.
+  if(!Number.isInteger(cacheSec)||cacheSec<0)die('--cache-sec는 0 이상의 정수여야 한다');
+  const server = createWallServer(loadWallSnapshot, {home:ledgerHome(),cacheSec});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;
@@ -1714,9 +1885,9 @@ function cmdUp(_argv, flags) {
     sessionName,
     cliPath: new URL(import.meta.url).pathname,
     start: (argv, startFlags) => cmdStart(argv, startFlags),
-    send: ({ role, session, message }) => {
-      guardedSend({ floor, session, role, message, recordedPid: recordedPid(lastStartFor(session)) });
-      console.log(`첫 지문 전송됨: ${session} (${Buffer.byteLength(message)}B) — 입력 접수·AI 실행 미확인`);
+    send: ({ role, session, message, roleProfile }) => {
+      const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
+      console.log(`첫 지문 전송됨: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
     },
   });
 }
@@ -1790,7 +1961,7 @@ export function parseFlags(argv) {
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended") {
+    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox") {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
@@ -1817,10 +1988,10 @@ export function parseFlags(argv) {
 export function createHandoverRunner() {
   const operation = new Handover({ home: ledgerHome(), floor, readEntries: readLedger,
     record: entry => appendLedger({ ...entry, by: resolveLedgerBy({env:operation.env}) }),
-    start: (role, command, cwd) => {
+    start: (role, command, cwd, roleProfile) => {
       let window = process.env.KADAN_WINDOW;
       if (!window) window = process.env.KADAN_ROTTIE_BIN ? "rottie" : "none";
-      const result = spawnSync(process.execPath, [new URL(import.meta.url).pathname, "start", role, "--cmd", command],
+      const result = spawnSync(process.execPath, [new URL(import.meta.url).pathname, "start", role, "--cmd", command,...(roleProfile?['--profile',roleProfile]:[])],
         {cwd, env:{...process.env,KADAN_WINDOW:window},encoding:"utf8"});
       if (result.status !== 0) throw new Error(`후임 생성 실패: ${result.stderr || result.stdout}`);
     },
@@ -1875,16 +2046,17 @@ function cmdHandover(argv, flags) {
 const COMMANDS = {
   work:async(args,flags)=>console.log(JSON.stringify(await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
-    send:({role,pid,message,taskId,workKey,executionKey,transmit})=>guardedSend({
+    send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
       floor:{...floor,send:(name,text)=>transmit(()=>floor.send(name,text))},
-      session:sessionName(role),role,message,taskId,recordedPid:pid,
+      session:sessionName(role),role,message,taskId,roleProfile,recordedPid:pid,
       mailContext:{workKey,executionKey},
     }),
     observeDone:s=>{
       const observation=normalizeFloorRead(floor.read(sessionName(s.current.role)));
       if(observation.gap)throw new Error('완료 화면 출력 누락');
+      const identity=taskIdentity(new CardStore(ledgerHome()).list());
       const markers=diffDoneMarkers(findDoneMarkers(stripAnsi(s.baseline)),findDoneMarkers(stripAnsi(observation.text)))
-        .filter(m=>m.taskId===s.current.key.split('/')[1]);
+        .filter(m=>identity.resolve(m.taskId).key===s.current.key);
       if(new Set(markers.map(m=>m.result)).size>1)throw new Error('완료 마커 충돌');
       return markers[0]?.result||null;
     },

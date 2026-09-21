@@ -1,9 +1,12 @@
+import {CardStore} from './card-store.mjs';
+import {taskIdentity} from './task-identity.mjs';
 import {storageMode,storagePath,assertWritable} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseHierarchy } from './hierarchy.mjs';
 import { openTaskIds } from './handover-state.mjs';
+import {startRoleProfile} from './role-instructions.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const session = role => `kadan-${role}`;
@@ -19,7 +22,7 @@ export class Handover {
   entries() {
     const rows = this.readEntries();
     if (rows.some(e => e?.broken)) throw new Error('원장 손상: 인계 중단');
-    return rows;
+    return taskIdentity(new CardStore(this.home).list()).project(rows);
   }
   file(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('잘못된 인계 ID');
@@ -70,6 +73,7 @@ export class Handover {
       if (!validRole(from) || !validRole(to) || from === to) throw new Error('서로 다른 유효 역할명이 필요하다');
       const previous = this.lastStart(from);
       if (!previous) throw new Error('선임 start 기록 없음');
+      const roleProfile = startRoleProfile({home:this.home,role:from,profile:previous.roleProfile??undefined});
       const oldPid = previous.panePid ?? previous.rottiePid;
       if (oldPid == null) throw new Error('선임 PID 기록 없음');
       this.sourceIdentity({from, oldPid, sourceEnded});
@@ -92,6 +96,7 @@ export class Handover {
       }
       const id = randomUUID();
       const state = { id, sourceEnded, phase: 'preparing', from, to, oldPid: String(oldPid), command, cwd: directory,
+        ...(roleProfile?{roleProfile}:{}),
         hierarchy, originalHierarchy: graph.text, originalHash: graph.hash,
         context, contextHash: hash(fs.readFileSync(context)), taskIds: openTaskIds(this.entries(), from),
         createdAt: new Date(this.now()).toISOString() };
@@ -105,7 +110,7 @@ export class Handover {
         `KADAN_ROLE=${to} kadan handover accept ${id} --receipt <절대경로> 로 인수를 확인한 뒤 응답을 끝내라.\n` +
         '전환 완료 편지 전에는 카드 발령·구현·관계 변경·선임 종료를 하지 않는다.\n', { mode: 0o600 });
       try {
-      this.start(to, command, directory);
+      this.start(to, command, directory, roleProfile);
       const successor = this.lastStart(to);
       state.newPid = String(successor?.panePid ?? successor?.rottiePid ?? '');
       this.identity(to, state.newPid);

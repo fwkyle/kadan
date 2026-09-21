@@ -45,7 +45,7 @@ export class DecisionStore {
  const d=saved;
   let delivery;try{
    const rows=readLedger(this.home);if(rows.some(e=>e?.broken))throw new Error('원장 손상');
-   const role=effectiveCardRole({role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows);
+   const role=effectiveCardRole({key:d.card,role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows,new CardStore(this.home).list());
    this.notify(role,`[kyle] 결정 답변 ${id} / 카드 ${d.card}: ${text}${choice?` (선택: ${choice})`:''}. decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`);
    delivery={status:'sent',role};
   }catch(error){delivery={status:'failed',error:error.message};}

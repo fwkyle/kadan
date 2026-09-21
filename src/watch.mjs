@@ -1,3 +1,4 @@
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRecipient } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 
@@ -38,6 +39,62 @@ export function disconnectKind(line) {
   return "끊김";
 }
 const DONE_MARKER = /^\s*KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/u;
+
+// 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 표시.
+// 판단은 '입력줄 자리'의 구조로 한다 — 본문에 같은 글자가 있어도 걸리지 않게
+// (2026-09-15 결과 보고 문구가 본문에 남아 오탐을 낸 사고).
+// 추측으로 넣지 않는다 — 설치본과 실제 화면에서 확인한 형태만 둔다.
+// - devin v3000.10.21: ❭ 입력줄의 자리표시자가 이 문구로 바뀐다 — 세 자리표시자
+//   (Ask Devin…/Guide Devin…/Press Enter…)가 설치 바이너리에 나란히 있고,
+//   실제 화면에서도 `❭ Guide Devin while it works` 줄로 확인했다. 정상
+//   자리표시자가 함께 보이면 큐가 아니다 — 자리는 하나다.
+// - codex 0.154.0: 하단 pane에 '• ' 헤더 + '↳' 항목 블록으로 선다
+//   (pending_input_preview.rs 스냅샷·설치 바이너리 문자열에서 확인). codex는
+//   큐 상태에서도 composer(› Ask Codex…)가 남으므로 프롬프트 공존으로 걸지 않고,
+//   '• ' 헤더 + '↳' 항목 구조가 입력 영역 근거다.
+// codex의 "Press Tab to queue a message…" 안내는 작업 중 상시 노출될 수 있어
+// 경보 근거로 쓰지 않는다.
+const DEVIN_QUEUED = /press enter to send queued messages now/iu;
+const DEVIN_INPUT_LINE = /^\s*❭/u;
+const DEVIN_NORMAL_PROMPT = /❭\s*(?:Ask Devin|Guide Devin)/u;
+const CODEX_QUEUED_HEADER =
+  /^\s*•\s*(?:messages to be submitted (?:at end of turn|after next tool call)|queued follow-up inputs)/iu;
+const CODEX_QUEUED_ITEM = /^\s*↳/u;
+const BOTTOM_PANE_LINES = 8;
+
+export function queuedInputLine(screenText) {
+  if (typeof screenText !== "string") return null;
+  const lines = screenText.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  const devinPromptVisible = lines.some((line) =>
+    DEVIN_NORMAL_PROMPT.test(line)
+  );
+  // 화면 어딘가에 ❭ 줄이 있어야 devin TUI다 — 다른 실행기·셸 출력의 문구 인용을
+  // 보조 경로로 걸러 오탐을 내지 않는다.
+  const devinSession = lines.some((line) => DEVIN_INPUT_LINE.test(line));
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (devinSession && !devinPromptVisible) {
+      // devin: ❭ 입력줄 자리표시자가 큐 문구로 바뀐 상태.
+      if (DEVIN_INPUT_LINE.test(line) && DEVIN_QUEUED.test(line)) {
+        return line.trim();
+      }
+      // devin 보조: 표시 형태가 달라도 문구가 맨 아래 입력 영역에 있고 정상
+      // 프롬프트가 없으면 대기로 본다.
+      if (DEVIN_QUEUED.test(line) && i >= lines.length - BOTTOM_PANE_LINES) {
+        return line.trim();
+      }
+    }
+    // codex: '• ' 큐 헤더에 '↳' 항목이 따라붙는 하단 pane 블록.
+    if (
+      CODEX_QUEUED_HEADER.test(line) &&
+      lines.slice(i + 1, i + 9).some((item) => CODEX_QUEUED_ITEM.test(item))
+    ) {
+      return line.trim();
+    }
+  }
+  return null;
+}
 
 function lastScreenLines(screenText, count = 6) {
   if (typeof screenText !== "string") return [];
@@ -238,6 +295,47 @@ export function assessRoles(
   return { states, alerts };
 }
 
+// '입력이 큐에 쌓인 채 대기'는 카드 발령과 무관하게 생긴다 — 감시 대상(scope)에
+// 없는 세션도 같은 규칙으로 본다(2026-09-15 사고가 이 사각이었다). 문구가 기준
+// 시간 이상 계속 떠 있을 때만 경보로 올려, 정상적인 짧은 대기는 흘린다.
+export function assessQueuedInput(
+  previousStates,
+  currentObservations,
+  elapsedMs,
+  intervalMs,
+  queuedAfterMs
+) {
+  const states = new Map();
+  const alerts = [];
+  const slept = elapsedMs > intervalMs * 3;
+  for (const [session, current] of currentObservations) {
+    const line =
+      current?.alive === true && current.screen != null
+        ? queuedInputLine(current.screen)
+        : null;
+    const previous = previousStates.get(session);
+    // 첫 발견은 0부터 센다 — 지금 떠 있다는 사실만 확실하고, 언제 쌓였는지는 모른다.
+    // 잠든 공백(slept)도 정체 카운트와 같이 누적하지 않는다.
+    const queuedMs =
+      line == null || previous?.line !== line
+        ? 0
+        : (previous.queuedMs ?? 0) + (slept ? 0 : elapsedMs);
+    states.set(session, { queuedMs, line });
+    if (line != null && queuedMs >= queuedAfterMs) {
+      alerts.push({
+        id: `queued:${session}`,
+        kind: "큐대기",
+        level: "AMBER",
+        role: current.role,
+        session,
+        line,
+        queuedMs,
+      });
+    }
+  }
+  return { states, alerts };
+}
+
 export function assessResources(previousState, current, ncpu) {
   const swapHistory = Number.isFinite(current.swapUsed)
     ? [...(previousState?.swapHistory ?? []).slice(-2), current.swapUsed]
@@ -287,6 +385,54 @@ export function assessResources(previousState, current, ncpu) {
     },
     alerts: resourceAlert ? [resourceAlert] : [],
   };
+}
+
+// 완료후보 경보는 "감독 확인이 필요한 완료"를 알리는 것이다. 원장에 그 역할·그 카드의
+// done 줄이 이미 있으면 확인할 것이 없으므로 경보 자체를 만들지 않는다 — done 줄이 곧
+// 확정 기록이라 별도 경보 줄을 남길 이유가 없고, 경보가 없으면 해소 우편도 생기지 않는다.
+// 마지막 발령(또는 세션 시작) 이후의 done만 확정으로 본다 — 그보다 이전의 done은
+// 지난 실행의 기록이라 재실행의 새 완료를 덮으면 안 된다.
+export function filterConfirmedCompletions(alerts, entries, cards = null) {
+  if (!alerts.some((alert) => alert.kind === "완료후보")) return alerts;
+  const identity=cards?taskIdentity(cards):null;
+  if(identity)entries=identity.project(entries).filter(e=>!taskConnectionError(e));
+  const assignedAt = new Map();
+  const startedAt = new Map();
+  const dones = [];
+  for (const entry of entries || []) {
+    const at = Date.parse(entry?.t);
+    if (entry?.kind === "send" && entry.role && entry.taskId && Number.isFinite(at)) {
+      assignedAt.set(`${entry.role} ${entry.taskId}`, at);
+    } else if (
+      entry?.kind === "start" &&
+      typeof entry.session === "string" &&
+      Number.isFinite(at)
+    ) {
+      startedAt.set(entry.session, at);
+    } else if (entry?.kind === "done" && entry.role && entry.taskId) {
+      dones.push({ entry, at });
+    }
+  }
+  return alerts.filter((alert) => {
+    if (alert.kind !== "완료후보") return true;
+    // 비교에만 별칭을 해석한다. 경보 ID와 화면의 원래 taskId는 유지한다.
+    const target=identity?.resolve(alert.taskId);
+    if(target&&!['resolved','unregistered'].includes(target.state))return true;
+    const taskId=target?.taskId??alert.taskId;
+    const since =
+      assignedAt.get(`${alert.role} ${taskId}`) ??
+      startedAt.get(alert.session) ??
+      0;
+    const confirmed = dones.some(
+      ({ entry, at }) =>
+        entry.role === alert.role &&
+        entry.taskId === taskId &&
+        (entry.result ?? "") === (alert.result ?? "") &&
+        Number.isFinite(at) &&
+        at >= since
+    );
+    return !confirmed;
+  });
 }
 
 export function routeAlert(alert, routes, liveSessions, superRole, parents = new Map()) {

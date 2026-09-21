@@ -160,6 +160,28 @@ export function closeRottieWindow({ bin, terminalId, spawnFn = spawnSync }) {
   }
 }
 
+// close는 프로세스만 끝내고 탭을 '종료됨'으로 남긴다. 목록·화면에서 지우는 것은 remove다
+// (로티 CLI 2026-09-11). 살아 있는 탭은 로티가 ROTTIE_TERMINAL_RUNNING으로 거부하므로 종료 신호 부작용이 없다.
+export function removeRottieWindow({ bin, terminalId, spawnFn = spawnSync }) {
+  try {
+    const result = spawnFn(bin, ["terminal", "remove", "--terminal", terminalId, "--json"], { encoding: "utf8" });
+    if (result.status === 0) return { removed: true };
+    let error;
+    try {
+      error = JSON.parse(result.stdout || "{}").error;
+    } catch {
+      // Non-JSON failures still carry the process exit status and stderr.
+    }
+    return {
+      removed: false,
+      code: error?.code || result.error?.code || result.status || "ROTTIE_REMOVE_FAILED",
+      message: error?.message || result.error?.message || (result.stderr || "").trim() || "Rottie terminal remove failed",
+    };
+  } catch (error) {
+    return { removed: false, code: error.code || "ROTTIE_REMOVE_FAILED", message: error.message || String(error) };
+  }
+}
+
 function rottieCreate(bin, argv, spawnFn) {
   const run = (args) => spawnFn(bin, args, { encoding: "utf8" });
   let result = run(argv);

@@ -78,3 +78,41 @@ test('watch cycle schedules/resumes with fresh ownership and stops when card bec
  assert(records.some(e=>e.kind==='rate-limit-retry'&&e.action==='cancelled'));
  assert(!alerts.some(([,message])=>message.includes('한도')));
 });
+
+
+test('mailbox completion is stored mail, not fresh terminal input for a pending 429 resume',()=>{
+ const f=fixture();f.tick();
+ f.entries.push({kind:'send',role:'worker',by:'reviewer',transport:'mailbox',completion:true,
+  replyFinal:true,systemGenerated:'task-completion',executionKey:'repo/review',t:new Date(1000).toISOString()});
+ f.setTime(30000);f.tick();
+ assert.equal(f.entries.filter(e=>e.action==='scheduled').length,1);
+ assert.equal(f.entries.filter(e=>e.action==='cancelled').length,0);
+ f.setTime(60000);f.tick();assert.equal(f.sent.length,1);
+ assert.equal(f.entries.filter(e=>e.action==='scheduled').length,1);
+});
+
+test('runWatch 마지막 429 검사 경합: mailbox/ack는 입력 아님, 실제 reminder는 새 입력',async()=>{
+ const {runWatch}=await import('../src/watch-runner.mjs');
+ for(const kind of ['mailbox','ack','reminder']) {
+  const controller=new AbortController();let now=0,cycle=0,dueReads=0;
+  const entries=[{kind:'start',role:'worker',session:'kadan-worker',panePid:1,t:new Date(0).toISOString()},
+   {kind:'send',role:'worker',taskId:'task',t:new Date(0).toISOString()}];
+  const records=[],resumes=[];
+  await runWatch({floor:{list:()=>[{session:'kadan-worker',pid:1,alive:true}],read:()=>screen(1)},
+   readEntries:()=>{
+    if(now===60000&&++dueReads===2)entries.push(kind==='ack'
+     ? {kind:'mail-read',role:'worker',mailId:'mail',by:'worker',t:new Date(now).toISOString()}
+     : {kind:'send',role:'worker',mailId:'mail',by:'boss',t:new Date(now).toISOString(),
+       ...(kind==='mailbox'?{transport:'mailbox'}:{notificationOnly:true})});
+    return [...entries];
+   },
+   readCards:()=>[{id:'task',key:'repo/task',role:'worker',status:'assigned',workType:'execution'}],readWorks:()=>[],
+   record:e=>{records.push(e);entries.push({...e,t:new Date(now).toISOString()});},
+   resume429:(...args)=>resumes.push(args),sendAlert:()=>{},intervalMs:60000,stallN:100,routes:new Map(),
+   now:()=>now,spawn:()=>({status:0,stdout:String(process.pid)}),signal:controller.signal,print:()=>{},
+   sleep:async()=>{now+=60000;if(++cycle===2)controller.abort();}});
+  assert.equal(resumes.length,kind==='reminder'?0:1,kind);
+  assert.equal(records.filter(e=>e.kind==='rate-limit-retry'&&e.action==='scheduled').length,1,kind);
+  assert.equal(records.filter(e=>e.kind==='rate-limit-retry'&&e.action==='cancelled').length,kind==='reminder'?1:0,kind);
+ }
+});

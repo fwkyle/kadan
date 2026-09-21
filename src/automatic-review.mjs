@@ -1,3 +1,4 @@
+import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {isUserActor} from './actors.mjs';
@@ -27,7 +28,7 @@ export class AutomaticReview {
  locked(fn){if(storageMode(this.home)!=='sqlite')throw new Error('자동 전달에는 기존 SQLite 저장소가 필요합니다');return transaction(this.home,fn);}
  get(key){const rows=readStream(this.home,this.stream(key),{optional:true});return rows.at(-1)||null;}
  save(s,patch){const next={...s,...patch,revision:(s.revision||0)+1,at:new Date(this.now()).toISOString(),by:this.by};appendStream(this.home,this.stream(s.key),next);return next;}
- entries(){const rows=readLedger(this.home);if(rows.some(x=>x.broken))throw new Error('원장 손상: 자동 전달 중단');return rows;}
+ entries(){const rows=readLedger(this.home);if(rows.some(x=>x.broken))throw new Error('원장 손상: 자동 전달 중단');return taskIdentity(this.cards.list()).project(rows);}
  identity(role){
   if(typeof role!=='string'||! /^[\p{L}\p{N}_-]+$/u.test(role))throw new Error('담당 역할 이름 필요');
   const rows=this.entries(),last=rows.filter(e=>e.role===role&&['start','stop'].includes(e.kind)).at(-1);
@@ -73,28 +74,29 @@ export class AutomaticReview {
   if(s.deadline&&this.now()>=Date.parse(s.deadline))throw new Error('기존 시한 도달');
   if(s.previous?.sha256&&hash(fs.readFileSync(s.previous.resultFile))!==s.previous.sha256)throw new Error('확인 뒤 결과 파일 변경');
   for(const ref of Object.values(s.references))if(JSON.stringify(this.reference(ref.key))!==JSON.stringify(ref))throw new Error('원본 카드 범위 변경');
-  const entries=this.entries();
+  const entries=this.entries(),cards=this.cards.list(),identity=taskIdentity(cards);
   for(const kind of ['worker','reviewer']){
    const expected=s.identities[kind];
    if(JSON.stringify(this.identity(expected.role))!==JSON.stringify(expected))throw new Error(`시작 세대 변경: ${expected.role}`);
   }
   if(s.current){
-   const c=this.cards.get(s.current.key),role=effectiveCardRole(c,entries);
+   const c=this.cards.get(s.current.key),role=effectiveCardRole(c,entries,identity);
    if(c.role!==s.current.role||role!==s.current.role||cardStamp(c)!==s.current.stamp||!['assigned',...(allowCurrentDone?['done']:[])].includes(c.status))throw new Error('현재 실행 보류·취소·범위·담당 변경');
    if(c.turnOwner&&c.turnOwner!==s.current.role)throw new Error('다른 담당이 실행 차례를 점유');
-   if(target)this.cards.checkSend(c.id,target);
+   if(target)this.cards.checkSend(c.key,target);
   }
   const ownedRoles=[s.identities.worker.role,s.identities.reviewer.role];
-  for(const c of this.cards.list()){
+  for(const c of cards){
    if(c.key===s.current?.key||closed.includes(c.status))continue;
-   const role=effectiveCardRole(c,entries);
+   const role=effectiveCardRole(c,entries,identity);
    if(!ownedRoles.includes(role))continue;
-   if(c.status==='assigned'&&!entries.some(e=>e.kind==='done'&&e.role===role&&e.taskId===c.id))throw new Error(`다른 실행이 담당을 점유: ${c.key}`);
+   if(c.status==='assigned'&&!entries.some(e=>e.kind==='done'&&!taskConnectionError(e)&&e.role===role&&e.executionKey===c.key))throw new Error(`다른 실행이 담당을 점유: ${c.key}`);
   }
   for(const e of entries.filter(e=>e.kind==='send'&&e.taskId&&ownedRoles.includes(e.role)&&e.transport!=='mailbox')){
-   if(e.taskId===s.current?.key.split('/')[1])continue;
-   const c=this.cards.findTask(e.taskId);
-   if(!entries.some(d=>d.kind==='done'&&d.role===e.role&&d.taskId===e.taskId)&&!(c.length===1&&closed.includes(c[0].status)))throw new Error(`다른 미완료 발령이 담당을 점유: ${e.taskId}`);
+   if(taskConnectionError(e))throw new Error(`기록 연결 실패: ${e.rawTaskId}`);
+   if(e.executionKey===s.current?.key)continue;
+   const c=this.cards.findTask(e.executionKey||e.taskId);
+   if(!entries.some(d=>d.kind==='done'&&!taskConnectionError(d)&&d.role===e.role&&d.taskId===e.taskId)&&!(c.length===1&&closed.includes(c[0].status)))throw new Error(`다른 미완료 발령이 담당을 점유: ${e.taskId}`);
   }
   return w;
  }
@@ -104,7 +106,7 @@ export class AutomaticReview {
    if(this.by!==s.current.role)throw new Error('배정된 담당만 결과를 보고할 수 있습니다');
    const allowed=s.phase==='review'?['pass','changes','exception']:['implemented','exception'];
    if(!allowed.includes(outcome))throw new Error('실행 완료와 품질 판정을 구분해 명시하세요');
-   if(typeof resultFile!=='string'||!path.isAbsolute(resultFile))throw new Error('결과 파일 절대경로 필요');
+   resultFile=this.cards.resultLocation(execution,resultFile);
    const report={execution,outcome,resultFile};
    if(s.report){if(['execution','outcome','resultFile'].some(k=>report[k]!==s.report[k]))return this.stop(s,'기존 보고와 충돌: 감독 확인 필요');return s;}
    return this.save(s,{report});
@@ -118,13 +120,14 @@ export class AutomaticReview {
   const body=[`# 자동 전달 — ${s.phase} / ${s.round}라운드`,`원본 지시: ${ref.path}`,`업무 정본: kadan work show ${s.key}`,
    `원본의 범위·검증·시한을 그대로 따른다. 원본과 최신 card show를 읽어라. 검수자는 수정하지 않는다.`,
    s.previous?`직전 실행 결과 원문: ${s.previous.resultFile} (SHA256 ${s.previous.sha256})`:'',
-   `이번 자동 경로에서는 정상 중간 완료 편지를 감독에게 보내지 않는다. 결과 파일을 완성하고 현재 실행ID로 kadan work auto-report ${s.key} --execution <저장소/현재실행ID> --outcome ${s.phase==='review'?'pass|changes|exception':'implemented|exception'} --result-file <절대경로>를 실행한다.`,
+   `이번 실행의 card show에 표시된 resultPath에 보고서, evidenceDir에 검증 자료를 쓴다. 원본 카드나 직전 실행의 결과 경로를 재사용하지 않는다. 제품 코드·설계·사용 설명서는 대상 레포에 둔다.`,
+   `이번 자동 경로에서는 정상 중간 완료 편지를 감독에게 보내지 않는다. 결과 파일을 완성하고 현재 실행ID로 kadan work auto-report ${s.key} --execution <저장소/현재실행ID> --outcome ${s.phase==='review'?'pass|changes|exception':'implemented|exception'}를 실행한다. result-file 생략 시 현재 실행의 resultPath를 사용한다.`,
    '구현 자체 실패·범위 밖 수정·판정 불명확은 exception이다. changes는 승인 범위 안의 품질 수정에만 쓴다.',
    '이어 자기 화면 마지막 줄에 완료 마커를 출력한다. 형식: KADAN:DONE <카드id> <ok 또는 failed>. 새 실행ID는 이 중앙 카드의 ID다.'].filter(Boolean).join('\n\n');
   const next=this.works.change(s.key,'execute',{title:`자동 ${s.phase} ${s.round}라운드`,body,phase:s.phase,round:s.round},{revision:w.revision,by:this.by,note:'명시 설정한 구현·검수 자동 전달'});
   const link=next.executions.at(-1),created=this.cards.get(link.key);
   const card=this.cards.update(link.key,{status:'assigned',scope:w.scope,board:w.board,role,rallyId:w.id,rallyTitle:w.title.slice(0,160),rallyRound:String(s.round),rallyStep:s.phase},{revision:created.revision,by:this.by,note:'기존 원본 기준과 자동 전달 설정으로 배정'});
-  appendLedger({kind:'plan',board:w.board,taskId:card.id,by:this.by},this.home);
+  appendLedger({kind:'plan',board:w.board,...taskIdentity(this.cards.list()).write(card.key),by:this.by},this.home);
   return this.save(s,{status:'ready',links:next.executions,report:null,current:{key:card.key,role,stamp:cardStamp(card),path:card.path},claim:null});
  }
  step(key){
@@ -140,13 +143,13 @@ export class AutomaticReview {
    try{
     this.guard(s,{allowCurrentDone:s.status==='waiting'});
     if(s.status==='waiting'){
-     const entries=this.entries(),id=s.current.key.split('/')[1];
-     const sendIndex=entries.findIndex(e=>e.kind==='send'&&e.taskId===id&&e.role===s.current.role);
+     const entries=this.entries(),address=taskIdentity(this.cards.list()).write(s.current.key),id=address.taskId;
+     const sendIndex=entries.findIndex(e=>e.kind==='send'&&!taskConnectionError(e)&&e.taskId===id&&e.role===s.current.role);
      if(sendIndex<0)throw new Error('현재 실행 전달 영수증 없음');
-     let done=entries.slice(sendIndex+1).find(e=>e.kind==='done'&&e.taskId===id&&e.role===s.current.role);
+     let done=entries.slice(sendIndex+1).find(e=>e.kind==='done'&&!taskConnectionError(e)&&e.taskId===id&&e.role===s.current.role);
      if(!done){
       const result=this.observeDone(s);
-      if(result){if(!['ok','failed'].includes(result))throw new Error('완료 마커 판정 불명확');appendLedger({kind:'done',role:s.current.role,taskId:id,result,by:this.by},this.home);done={result};}
+      if(result){if(!['ok','failed'].includes(result))throw new Error('완료 마커 판정 불명확');appendLedger({kind:'done',role:s.current.role,...address,result,by:this.by},this.home);done={result};}
      }
      if(!done)return {state:s};
      if(done.result!=='ok')return this.reserveNotice(this.stop(s,'실행 자체 실패 또는 완료 판정 불명확'));
@@ -154,8 +157,10 @@ export class AutomaticReview {
      if(!fs.existsSync(s.report.resultFile))return {state:s};
      if(!fs.statSync(s.report.resultFile).isFile())throw new Error('결과 경로가 파일이 아님');
      const bytes=fs.readFileSync(s.report.resultFile);if(!bytes.length)return {state:s};
-     const report={...s.report,sha256:hash(bytes)};
-     const c=this.cards.get(s.current.key);
+     const report={...s.report};
+     let c=this.cards.get(s.current.key);
+     c=this.cards.report(c.key,{revision:c.revision,resultFile:report.resultFile,outcome:report.outcome,by:s.current.role});
+     report.sha256=c.result.sha256;
      if(c.status==='assigned')this.cards.update(c.key,{status:'done'},{revision:c.revision,by:this.by,note:`현재 실행 완료 근거와 결과 파일 확인: ${report.resultFile}`});
      s=this.save(s,{report,previous:report});
      if(report.outcome==='exception')return this.reserveNotice(this.stop(s,'담당이 예외로 보고함'));
@@ -197,8 +202,9 @@ export class AutomaticReview {
    });
    const identity=s.identities[kind==='execution'?(s.phase==='review'?'reviewer':'worker'):'notify'];
    if(JSON.stringify(this.identity(identity.role))!==JSON.stringify(identity))throw new Error('통지 또는 발령 수신 세대 변경');
-   receipt=this.send({role:identity.role,pid:identity.pid,taskId:kind==='execution'?s.current.key.split('/')[1]:undefined,
-    executionKey:kind==='execution'?s.current.key:undefined,workKey:s.key,
+   receipt=this.send({role:identity.role,pid:identity.pid,taskId:kind==='execution'?taskIdentity(this.cards.list()).taskIdFor(this.cards.get(s.current.key)):undefined,
+    ...(kind==='execution'?{roleProfile:s.phase==='review'?'reviewer':'worker'}:{}),
+    executionKey:s.current?.key,workKey:s.key,
     transmit:fn=>this.locked(()=>{
      const fresh=this.get(s.key);if(fresh.claim!==s.claim||fresh.status!==s.status)throw new Error('전달 예약 변경');
      if(kind==='execution')this.guard(fresh,{target:s.current.role});
@@ -206,7 +212,7 @@ export class AutomaticReview {
      return fn();
     }),
     message:kind==='execution'?`중앙 카드 ${s.current.path} 및 최신 card show를 읽고 수행하라. 카드 id는 ${s.current.key.split('/')[1]}이다.`:
-     `자동 전달 결과: ${s.key} / ${s.terminal} / ${s.reason} / 실행 ${s.current?.key||'없음'} / 결과 ${s.report?.resultFile||'없음'}. kadan work auto-show ${s.key} 확인. 업무 최종 완료는 감독 판단.`});
+     `자동 전달 결과: ${s.key} / ${s.terminal} / ${s.reason} / 실행 ${s.current?.key||'없음'} / 결과 ${s.report?.resultFile||'없음'}. kadan work auto-show ${s.key} 확인. 다음 행동(next action): 결과 근거와 미확정 done·빠진 검수/후속을 확인하고, kadan work show ${s.key}의 최신 revision·owner·전체 완료 조건을 대조하라. 전체 조건 충족 시 책임 owner만 work complete하며 PASS만으로 자동 마감하지 않는다.`});
   }catch(e){error={message:e.message,delivery:e.delivery||'unknown'};}
   return this.locked(()=>{
    const current=this.get(s.key);if(current.claim!==s.claim)return current;

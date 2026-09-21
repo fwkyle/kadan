@@ -1,30 +1,35 @@
+import {taskIdentity,taskEventKey} from './task-identity.mjs';
 import {buildRallies} from './rallies.mjs';
 import { workEntries, effectiveCardRole } from './handover-state.mjs';
 
 // 카드 한 장과 그 카드에 대한 여러 역할의 실행을 분리한다.
 export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now()}) {
   if(entries.some(e=>e?.broken))throw new Error('원장 손상: 카드 실행 상태 모름');
+  const identity=taskIdentity(cards);
+  entries=identity.project(entries);
   const roles=new Map(tree.flatMap(b=>b.roles).map(r=>[r.role,r]));
   const plans=new Map(),runs=new Map();
-  for(const e of workEntries(entries)) {
+  for(const e of workEntries(entries,identity)) {
     if(!e?.taskId)continue;
     if(e.kind==='plan') {
       if(!plans.has(e.taskId))plans.set(e.taskId,new Set());
       plans.get(e.taskId).add(e.board);continue;
     }
     if(!['send','done'].includes(e.kind)||!e.role)continue;
-    const key=`${e.role}\0${e.taskId}`;
+    const key=`${e.role}\0${taskEventKey(e)}`;
     const old=runs.get(key);
-    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,at:e.t,state:'unconfirmed',board:e.board??null});
-    else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result});
+    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
+    else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
   }
-  const counts=new Map();for(const c of cards)counts.set(c.id,(counts.get(c.id)??0)+1);
   // 역할별 가장 최근 시작 기록의 실행기·모델. 카단은 판단에 쓰지 않고 화면 답변용으로만 옮긴다(2026-09-06 결정).
   const models={};
   for(const e of entries) {
     if(e?.kind!=='start'||!e.role||!e.model)continue;
     const stamp=Date.parse(e.t)||0;
-    const effort=typeof e.cmd==='string'?(e.cmd.match(/model_reasoning_effort\s*=\s*"?([A-Za-z]+)"?/)?.[1]||''):'';
+    // 실행기마다 강도 플래그가 다르다: codex는 model_reasoning_effort, claude는 --effort, omo는 --thinking.
+    // 하나만 읽으면 다른 실행기의 강도가 화면에서 빈칸이 된다(2026-09-12 fable 발령에서 실제로 빔).
+    // 따옴표는 셸을 거치며 '"max"' 처럼 겹쳐 들어온다. 한 겹만 벗기면 강도가 빈칸이 된다(2026-09-12 kimi 발령에서 실제로 빔).
+    const effort=typeof e.cmd==='string'?(e.cmd.match(/model_reasoning_effort\s*=\s*["']*([A-Za-z]+)["']*|--(?:effort|thinking)[=\s]+["']*([A-Za-z]+)["']*/)?.slice(1).find(Boolean)||''):'';
     if(!models[e.role]||stamp>=(Date.parse(models[e.role].at)||0))models[e.role]={harness:e.harness||'',model:String(e.model),at:e.t||'',effort};
   }
   const classify=run=>{
@@ -33,9 +38,10 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     return {...run,sessionState:life,state:run.state==='unconfirmed'&&life==='absent'?'orphaned':run.state};
   };
   const result=cards.map(source=>{
-    const card={...source,role:effectiveCardRole(source,entries)};
-    const own=counts.get(card.id)===1?[...runs.values()].filter(r=>r.taskId===card.id).map(classify):[];
-    const possible=plans.get(card.id);
+    const card={...source,role:effectiveCardRole(source,entries,identity)};
+    const own=[...runs.values()].filter(r=>r.taskConnection?.state==='resolved'&&r.executionKey===card.key).map(classify);
+    const connectionErrors=[...runs.values()].filter(r=>r.taskConnection?.state==='ambiguous'&&r.taskConnection.candidates.includes(card.key)).map(r=>({taskId:r.rawTaskId,reason:r.taskConnection.reason}));
+    const possible=plans.get(identity.taskIdFor(card));
     const board=card.board||(possible?.size===1?[...possible][0]:null);
     const lastEdit=Date.parse(card.at)||0;
     const lastRun=Math.max(0,...own.map(r=>Date.parse(r.at)||0));
@@ -52,12 +58,11 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
        own.some(r=>r.role===card.activityRole&&r.role===card.role&&r.state==='unconfirmed'&&r.sessionState==='alive'&&activityAt>=(Date.parse(r.sentAt)||0)))state=card.activity;
     const question=card.history.filter(h=>h.noteKind==='question').at(-1);
     const answer=card.history.filter(h=>h.noteKind==='answer').at(-1);
-    return {...card,board,runs:own,displayState:state,ambiguous:counts.get(card.id)>1,pendingQuestion:!!question&&(!answer||question.revision>answer.revision)};
+    return {...card,board,runs:own,displayState:state,ambiguous:connectionErrors.length>0,connectionErrors,pendingQuestion:!!question&&(!answer||question.revision>answer.revision)};
   });
   const order=['running','waiting','unconfirmed','orphaned','failed','ready','assigned','draft','hold','done','cancelled','superseded','archived'];
   result.sort((a,b)=>order.indexOf(a.displayState)-order.indexOf(b.displayState)||(Date.parse(b.at)-Date.parse(a.at))||a.key.localeCompare(b.key));
-  const registered=new Set(cards.filter(c=>counts.get(c.id)===1).map(c=>c.id));
-  const unregistered=[...runs.values()].filter(r=>!registered.has(r.taskId)).map(r=>({...classify(r),board:plans.get(r.taskId)?.size===1?[...plans.get(r.taskId)][0]:null}));
+  const unregistered=[...runs.values()].filter(r=>r.taskConnection?.state!=='resolved').map(r=>({...classify(r),connectionLabel:r.taskConnection?.state==='unregistered'?'중앙 카드 미등록':'기록 연결 실패',connectionReason:r.taskConnection?.reason,board:plans.get(r.taskId)?.size===1?[...plans.get(r.taskId)][0]:null}));
   const boards=new Map();
   const ensure=name=>{if(!boards.has(name))boards.set(name,{name,cards:[],runs:[],state:'done'});return boards.get(name);};
   for(const c of result)if(c.board)ensure(c.board).cards.push(c);

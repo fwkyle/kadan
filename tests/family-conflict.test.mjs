@@ -32,11 +32,17 @@ test("openai-codex 접두가 있어도 gpt로 읽고, 모르는 이름은 모름
   assert.equal(modelFamily("gpt-6-astra"), "gpt");
   assert.equal(modelFamily("anthropic/claude-opus-5"), "claude");
   assert.equal(modelFamily("claude-fable-5-1"), "claude");
+  // claude 실행기의 짧은 별명 (claude --model fable / --model opus)
+  assert.equal(modelFamily("fable"), "claude");
+  assert.equal(modelFamily("opus"), "claude");
   assert.equal(modelFamily("zai/glm-5.3-flash"), "glm");
   assert.equal(modelFamily("kimi/k3[1m]"), "kimi");
   assert.equal(modelFamily("xai/grok-4.6"), "grok");
   assert.equal(modelFamily("command-code/deepseek-deepseek-v4-flash"), "deepseek");
   assert.equal(modelFamily("google/gemini-2.5-pro"), "gemini");
+  // devin 실행기 (devin --model swe-2-max)
+  assert.equal(modelFamily("swe-2-max"), "swe");
+  assert.equal(modelFamily("swe-2-high"), "swe");
   assert.equal(modelFamily("mystery-model"), "모름");
   assert.equal(modelFamily(undefined), "모름");
   assert.equal(modelFamily(""), "모름");
@@ -167,4 +173,3 @@ test("검수자가 아닌 역할에게 보낼 때는 비교 자체를 하지 않
   assert.equal(records.length, 1);
   assert.equal(records[0].kind, "send");
 });
-

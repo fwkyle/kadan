@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {spawnSync,spawn} from 'node:child_process';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
-import {readLedger} from '../src/ledger.mjs';
+import {readLedger,readMailLedger,readTaskLedger,readMailBody} from '../src/ledger.mjs';
+import {digest,findDoneMarkers} from '../src/cli.mjs';
 
 const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
@@ -21,16 +23,21 @@ test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→�
  fs.writeFileSync(receiver,`
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import readline from 'node:readline';
 import {spawnSync} from 'node:child_process';
-const home=process.env.KADAN_HOME,role=process.env.KADAN_ROLE;let count=0;
+const home=process.env.KADAN_HOME,role=process.env.KADAN_ROLE;let count=0,pending=null;
 readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
  fs.appendFileSync(path.join(home,role+'.received'),line+'\\n');
- const match=line.match(/카드 id는 (exec-[a-f0-9-]+)이다/);if(!match)return;
- count++;const id=match[1],result=path.join(home,id+'.md');
+ const match=line.match(/카드 id는 (exec-[a-f0-9-]+)이다/);if(match)pending=match[1];
+ // 실제 AI처럼 원문과 첨부를 모두 받은 뒤 결과를 낸다. 원문 줄의 ID 파싱은 유지한다.
+ if(line!=='<!-- /kadan:receiver-instructions -->'||!pending)return;
+ count++;const id=pending;pending=null;
+ const shown=spawnSync(process.execPath,[${JSON.stringify(cli)},'card','show','ar-test/'+id],{encoding:'utf8',env:process.env});
+ const result=JSON.parse(shown.stdout).resultPath;
  const outcome=role==='ar-test-reviewer'?(count===1?'changes':'pass'):'implemented';
  fs.writeFileSync(result,'실제 CLI 결과 '+role+' '+outcome+'\\n');
- const p=spawnSync(process.execPath,[${JSON.stringify(cli)},'work','auto-report','ar-test/work','--execution','ar-test/'+id,'--outcome',outcome,'--result-file',result],{encoding:'utf8',env:process.env});
+ const p=spawnSync(process.execPath,[${JSON.stringify(cli)},'work','auto-report','ar-test/work','--execution','ar-test/'+id,'--outcome',outcome],{encoding:'utf8',env:process.env});
  fs.appendFileSync(path.join(home,role+'.reports'),JSON.stringify({status:p.status,stdout:p.stdout,stderr:p.stderr})+'\\n');
  if(p.status!==0){console.log('보고 실패 '+p.stderr);return;}
  console.log(['KADAN:DONE',id,'ok'].join(' '));
@@ -58,8 +65,38 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
   assert.ok(results.some(s=>s.status==='pass'));
   const before=readLedger(home).filter(e=>e.kind==='send').length;run('work','auto-step','ar-test/work');assert.equal(readLedger(home).filter(e=>e.kind==='send').length,before);
   const work=JSON.parse(run('work','show','ar-test/work'));assert.equal(work.status,'open');assert.equal(work.executions.length,4);
-  const entries=readLedger(home),sends=entries.filter(e=>e.kind==='send');
+  for(const execution of work.executions){
+   const card=JSON.parse(run('card','show',execution.key));
+   assert.equal(card.resultPath,path.join(home,'cards',...card.key.split('/'),'result.md'));
+   assert.equal(card.result.path,card.resultPath);
+   assert.equal(card.result.sha256,createHash('sha256').update(fs.readFileSync(card.resultPath)).digest('hex'));
+  }
+  const entries=readLedger(home),mail=readMailLedger(home),tasks=readTaskLedger(home);
+  const sends=mail.filter(e=>e.kind==='send'&&e.transport!=='mailbox'),completions=mail.filter(e=>e.kind==='send'&&e.completion);
+  assert.equal(mail.filter(e=>e.kind==='send').length,9);assert.equal(completions.length,4);
+  assert.equal(tasks.filter(e=>e.kind==='dispatch').length,4);
+  for(const dispatch of tasks.filter(e=>e.kind==='dispatch')){
+   const stored=completions.filter(e=>e.replyTo===dispatch.mailId);assert.equal(stored.length,1);
+   const completion=stored[0],done=tasks.find(e=>e.kind==='done'&&e.completionMailId===completion.mailId);
+   assert.ok(done);assert.equal(completion.by,dispatch.role);assert.equal(completion.role,dispatch.by);
+   assert.equal(completion.transport,'mailbox');assert.equal(completion.systemGenerated,'task-completion');
+   assert.equal(completion.taskId,undefined);assert.equal(completion.executionKey,dispatch.executionKey);
+   assert.equal(completion.workKey,dispatch.workKey);assert.equal(completion.result,done.result);
+   const body=readMailBody(completion.digest,home);assert.equal(typeof body,'string');
+   assert.equal(completion.bytes,Buffer.byteLength(body));assert.equal(completion.digest,createHash('sha256').update(body).digest('hex'));
+   assert.ok(!fs.readFileSync(path.join(home,completion.role+'.received'),'utf8').includes(body+'\n'),'저장 완료 통지는 감독 화면에 주입하지 않는다');
+  }
   assert.deepEqual(sends.map(e=>e.role),[roles[0],roles[1],roles[0],roles[1],roles[2]]);
+  assert.deepEqual(sends.map(e=>e.roleProfile),['worker','reviewer','worker','reviewer','conductor']);
+  for(const e of sends){
+   const body=readMailBody(e.digest,home);assert.equal(e.bytes,Buffer.byteLength(body));assert.equal(e.digest,digest(body));
+   assert.deepEqual(findDoneMarkers(body),[]);
+   if(e.taskId){assert.ok(body.startsWith('중앙 카드 '));assert.match(body,/완료 방식: 자동\./);}
+   else {assert.match(body,/next action/);assert.match(body,/kadan work show ar-test\/work/);}
+   const end=Date.now()+2000;
+   while(Date.now()<end&&!fs.readFileSync(path.join(home,e.role+'.received'),'utf8').includes(body+'\n'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
+   assert.ok(fs.readFileSync(path.join(home,e.role+'.received'),'utf8').includes(body+'\n'));
+  }
   assert.equal(new Set(sends.filter(e=>e.taskId).map(e=>e.taskId)).size,4);assert.equal(entries.filter(e=>e.kind==='done').length,4);
   assert.equal(sends.filter(e=>!e.taskId).length,1);
   for(const role of roles){run('read',role,'--lines','30');assert.ok(fs.readFileSync(path.join(home,role+'.received'),'utf8').length>0);}

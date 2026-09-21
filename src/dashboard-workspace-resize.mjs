@@ -11,7 +11,8 @@ export function installWorkspaceResize(onActivity=()=>{},columns=[]) {
  const layout=()=>panes.classList.contains('dw-table-layout')?'table':'split';
  function bounds(kind){
   const total=Math.max(1,panes.clientWidth-8);
-  if(kind==='title')return {key:'title',min:180,max:Math.max(180,Math.min(1000,master.clientWidth-100)),total:1,fallback:mobile.matches?190:320};
+  // 제목 열 기본 너비는 열 정의에서 읽는다. 모바일만 더 좁게 시작한다.
+  if(kind==='title')return {key:'title',min:180,max:Math.max(180,Math.min(1000,master.clientWidth-100)),total:1,fallback:mobile.matches?190:(sizes.get('title')?.width??320)};
   if(sizes.has(kind))return {key:kind,min:sizes.get(kind).min,max:1000,total:1,fallback:sizes.get(kind).width};
   return {key:layout(),min:260,max:Math.max(260,total-320),total,fallback:layout()==='table'?.52:(innerWidth>=1700?.38:.4)};
  }

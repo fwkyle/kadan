@@ -1,13 +1,15 @@
+import {taskIdentity} from './task-identity.mjs';
 // 감시AI가 호출하는 보고 경계. 판단은 AI, 저장·중복 방지·상신은 이 명령의 책임이다.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
-import {appendLedger, readLedger} from './ledger.mjs';
+import {appendLedger, readLedger, classifyLedgerEntry} from './ledger.mjs';
 import {assertWritable, storageMode, transaction} from './storage.mjs';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
-import {effectiveCardRole,openTaskIds} from './handover-state.mjs';
+import {mailboxLetters} from './mailbox-state.mjs';
+import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
 import {routeAlert} from './watch.mjs';
 
@@ -41,12 +43,35 @@ export function latestWatchReports(entries) {
   return [...states.values()];
 }
 
+// 현재 실행을 맡은 사람이 실제로 답을 기다리는 질문만 정상 대기의 근거다.
+export function waitingWithoutAsking(entries, {role, taskId}, cards = []) {
+  if (!role || !taskId) return false;
+  const identity = taskIdentity(cards);
+  const projected = identity.project(entries);
+  const address = identity.resolve(taskId);
+  const task = address.key || address.taskId;
+  const execution = e => {
+    const found = identity.resolve(e.taskId, e.executionKey);
+    return ['resolved','unregistered'].includes(found.state) ? found.key || e.executionKey || found.taskId : null;
+  };
+  const inherited = workEntries(projected);
+  const index = inherited.findLastIndex(e => e.kind === 'send' && e.role === role && e.taskId
+    && execution(e) === task && classifyLedgerEntry(e).dispatch);
+  if (index < 0) return false;
+  const afterDispatch = new Set(projected.slice(index + 1).filter(e => e.kind === 'send' && e.mailId).map(e => e.mailId));
+  const questions = mailboxLetters(entries, role, {view:'waiting'});
+  return !questions.some(e => e.expectReply && e.replyStatus === 'waiting'
+    && !e.replyFinal && !e.notificationOnly && !e.systemGenerated && execution(e) === task
+    && afterDispatch.has(e.mailId));
+}
+
 function currentRequest(request,cards,entries,parents,works=[]) {
   if(watchResponsibility(request.role,cards,entries,parents,request.source,works)!==request.responsibility)return false;
   if(request.source!=='progress')return true;
-  return cards.some(card=>card.id===request.taskId&&card.status==='assigned'&&card.activity==='running'
-    &&card.workType!=='coordination'&&effectiveCardRole(card,entries)===request.role)
-    &&openTaskIds(entries,request.role).includes(request.taskId);
+  const identity=taskIdentity(cards);entries=identity.project(entries);
+  return cards.some(card=>identity.resolve(request.taskId).key===card.key&&card.status==='assigned'&&card.activity==='running'
+    &&card.workType!=='coordination'&&effectiveCardRole(card,entries,identity)===request.role)
+    &&openTaskIds(entries,request.role).includes(identity.resolve(request.taskId).taskId);
 }
 
 export class WatchReports {
@@ -109,27 +134,33 @@ export class WatchReports {
       const old=entries.find(e=>e.kind==='watch-ai-report'&&e.requestId===requestId);
       if (old) { duplicate=true; report=old; return; }
       parents=request.hierarchyPath ? parseHierarchy(JSON.parse(fs.readFileSync(request.hierarchyPath,'utf8'))) : new Map(request.parents);
-      const current=currentRequest(request,this.readCards(),entries,parents,this.readWorks());
+      const cards=this.readCards(),identity=taskIdentity(cards);
+      const current=currentRequest(request,cards,entries,parents,this.readWorks());
       const stale=this.now()>request.expiresAt||entries.some(e=>e.kind==='watch-ai-call'&&e.requestId===requestId)
         ||!current
         ||entries.findLast(e=>e.kind==='watch-ai-request'&&e.key===request.key)?.requestId!==requestId;
       const previous=latestWatchReports(entries).find(e=>e.key===request.key);
       const consecutive=verdict==='조정'?(previous?.verdict==='조정'?previous.consecutive:0)+1:0;
       const level=verdict==='죽음'||consecutive>=2?'RED':'AMBER';
-      const notify=!stale&&!normal(verdict)&&(!previous||previous.verdict!==verdict||previous.level!==level);
+      // 진행 중인 카드를 맡은 작업자가 아무것도 묻지 않은 채 입력 대기면 멈춘 것으로 보고 감독에게 알린다.
+      const idleWithoutAsk=!stale&&verdict==='입력대기'&&request.source==='progress'
+        &&waitingWithoutAsking(entries,{role:request.role,taskId:identity.resolve(request.taskId).taskId},cards);
+      const notify=!stale&&(!normal(verdict)||idleWithoutAsk)
+        &&(!previous||previous.verdict!==verdict||previous.level!==level||Boolean(previous.idleWithoutAsk)!==idleWithoutAsk);
       const reasonPath=path.join(request.evidencePath,'reason.txt');
       fs.writeFileSync(reasonPath,reason,{mode:0o600});
       report={kind:'watch-ai-report',by:'watch-ai',requestId,key:request.key,source:request.source,
         role:request.role,session:request.session,taskId:request.taskId,responsibility:request.responsibility,observationDigest:request.observationDigest,
-        verdict,level,consecutive,accepted:!stale,notify,reasonPath,t:new Date(this.now()).toISOString()};
+        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),t:new Date(this.now()).toISOString()};
       // 먼저 기록해 같은 명령/문제의 재전송을 막는다. 외부 발송은 저장 잠금 밖에서 한다.
       this.record(report);
-      if (!stale&&normal(verdict)&&previous&&!normal(previous.verdict)) this.record({kind:'alert',by:'watch',source:'watch-ai',
+      if (!stale&&normal(verdict)&&!idleWithoutAsk&&previous&&(!normal(previous.verdict)||previous.idleWithoutAsk)) this.record({kind:'alert',by:'watch',source:'watch-ai',
         requestId,role:request.role,session:request.session,taskId:request.taskId,alertKind:previous.verdict,
         level:previous.level,resolved:true,delivered:false,recipient:null,resolution:'ai-normal'});
     });
     if (duplicate||!report.notify) return this.completed(request,{...report,duplicate});
-    const label={'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
+    const label=report.idleWithoutAsk?'카드 미완인데 입력 대기'
+      :{'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
     const message=`[${watchAILabel(request.source)}] ${label} · ${request.role}${request.taskId?` / ${request.taskId}`:''}: ${reason}${report.consecutive>=2?' 반복 조정 판정입니다. 상위 감독과 범위·담당 조정을 검토하세요.':''} 감독이 확인 후 후속 조치를 결정하세요.`;
     const live=new Set(this.floor.list().filter(x=>x.alive!==false).map(x=>x.session));
     const routes=new Map(request.routes);

@@ -5,6 +5,10 @@ umask 077
 judge_dir=${KADAN_JUDGE_DIR:?감시sh가 만든 호출 폴더가 필요합니다}
 judge_home=${KADAN_HOME:-${KADAN_LITE_HOME:?카단 데이터 폴더(KADAN_HOME)가 필요합니다}}
 judge_model=${KADAN_JUDGE_MODEL:?감시AI 모델을 KADAN_JUDGE_MODEL로 지정해야 합니다 (기본값 없음)}
+# Codex 0.154+는 심볼릭 링크가 낀 쓰기 루트를 거부한다(~/.kadan -> ~/.kadan-lite 링크 때문에 2026-09-12 21:56부터
+# 감독 관찰AI 호출 5회 전부 실패). 실제 경로로 풀어서 넘긴다. 폴더가 없으면 아래 :? 검사와 같이 멈춘다.
+judge_dir=$(cd "$judge_dir" && pwd -P)
+judge_home=$(cd "$judge_home" && pwd -P)
 printf 'KADAN_JUDGE_LOG_DIR=%s\nKADAN_JUDGE_MODEL=%s\n' "$judge_dir" "$judge_model" >&2
 cat >"$judge_dir/input.txt"
 printf '%s\n' "$judge_model" >"$judge_dir/model.txt"

@@ -59,7 +59,7 @@ export class RateLimitRetry {
       }
       const taskId = assigned[0].taskId;
       if (pending) {
-        const newInput = entries.some(e => e.kind === 'send' && e.role === seen.role && Date.parse(e.t) > last.at);
+        const newInput = entries.some(e => e.kind === 'send' && e.transport !== 'mailbox' && e.role === seen.role && Date.parse(e.t) > last.at);
         if (last.taskId !== taskId || error.fingerprint !== last.fingerprint || newInput) {
           emit('cancelled', {reason:'input-changed'}); continue;
         }

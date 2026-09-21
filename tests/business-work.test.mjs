@@ -8,6 +8,7 @@ import {WorkStore} from '../src/work-store.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {workCommand} from '../src/work-command.mjs';
 import {SecretaryMailbox} from '../src/secretary-mailbox.mjs';
+import {Mailbox} from '../src/mailbox.mjs';
 import {resolveWorkMail,workLetters} from '../src/work-mail.mjs';
 import {appendLedger,readLedger} from '../src/ledger.mjs';
 import {buildCardCenter} from '../src/card-center.mjs';
@@ -63,16 +64,16 @@ test('기존 SQLite 인박스의 업무 참조·답장·읽음은 한 원장을 
  change('execute',{title:'사진 생성',body:'지시',phase:'implementation',round:1});
  const execution=store.get(work.key).executions[0].key,mail=new SecretaryMailbox(home);
  const first=mail.send({by:'감독',message:'생성 실행 결과를 확인해 주세요',workKey:work.key,executionKey:execution});
- const reply=mail.send({by:'작업자',message:'남은 다섯 장을 이어 처리합니다',replyTo:first.mailId});
+ const reply=new Mailbox(home,'감독').send({by:'비서',message:'남은 다섯 장을 이어 처리합니다',replyTo:first.mailId});
  mail.send({by:'다른감독',message:'관계 없는 업무'});
  const entries=readLedger(home),letters=workLetters(store.get(work.key),entries,cards.list());
  assert.equal(letters.length,2);assert.ok(letters.every(x=>x.workKey===work.key&&x.executionKey===execution));
- assert.equal(mail.list().length,3);assert.equal(readStream(home,'ledger.jsonl').length,3);
+ assert.equal(mail.list().length,2);assert.equal(readStream(home,'mail/events.jsonl').length,3);
  assert.deepEqual(resolveWorkMail(home,{taskId:execution.split('/')[1]}),{workKey:work.key,executionKey:execution});
  assert.throws(()=>mail.send({by:'감독',message:'잘못된 연결',workKey:'repo/no-work',replyTo:reply.mailId}),/다릅니다/);
- mail.acknowledge(reply.mailId,'비서');
+ new Mailbox(home,'감독').acknowledge(reply.mailId,'감독');
  assert.equal(workLetters(store.get(work.key),readLedger(home),cards.list()).find(x=>x.mailId===reply.mailId).read,true);
- assert.equal(readStream(home,'ledger.jsonl').length,4);
+ assert.equal(readStream(home,'mail/events.jsonl').length,4);
 });
 test('과거 task 연결만 복원하고 본문 키워드·중복 ID로 임의 묶지 않는다',()=>{
  const {home,work,store,cards,change}=fixture();
@@ -101,13 +102,28 @@ test('업무 표 기본값·내부 실행 링크·완료 대기·가벼운 목�
  assert.equal(models[0].turnLabel,'감독');assert.match(models[0].flowLabel,/2라운드 · 감독 최종 확인/);assert.equal(models[0].stateLabel,'진행 중');
  const html=renderCenterWall(snapshot,{url:new URL('http://localhost/?card=work:repo/photos')});
  const data=JSON.parse(html.match(/id="dw-data">([^<]+)</)[1]);
- assert.equal(data.state.collection,'work');assert.equal(data.rows.length,2);assert.ok(data.rows.every(x=>!x.executions&&!x.history&&!x.body&&!x.letters));
+ assert.equal(data.state.collection,'work');assert.equal(data.rows.length,2);assert.ok(data.rows.every(x=>!x.executions&&!x.history&&!x.body&&!x.letters));assert.ok(data.rows.filter(x=>x.kind==='work').every(x=>x.workKey),'업무 행은 관계도 연결에 쓸 workKey를 남긴다');
  assert.equal(filterWorkspaceRows(data.rows,{collection:'work',state:'all'}).length,1);
  assert.equal(filterWorkspaceRows(data.rows,{collection:'unlinked',state:'all'}).length,0);
  assert.ok(!JSON.stringify(data).includes('원본 비공개 지시'));assert.match(html,/data-card-key="repo\/exec-/);
  const legacy=renderCenterWall(snapshot,{url:new URL('http://localhost/?card='+execution)});
  assert.match(legacy,/이 화면은 업무 안의 실행/);
 });
+test('업무 표는 병행 대신 남은 실행 수를 말한다',()=>{
+ const {home,work,store,cards,change}=fixture();
+ change('execute',{title:'구현',body:'허용한 작업만 수행',phase:'implementation',round:1});
+ change('execute',{title:'검수',body:'허용한 작업만 수행',phase:'review',round:1});
+ const [first,second]=store.get(work.key).executions;
+ cards.update(first.key,{status:'done'},{revision:1,note:'구현 종료',by:'작업자'});
+ const center=buildCardCenter({cards:cards.list(),entries:[],tree:[]});
+ const model=workDashboardModel(store.list(),center,[])[0];
+ assert.equal(model.flowPhase,'실행 1/2건 종료 · 남은 실행 1건 · 업무는 미완료');
+ assert.doesNotMatch(model.flowPhase,/병행/);
+ const html=renderCenterWall({home,center,entries:[]},{url:new URL('http://localhost/?collection=work&state=all')});
+ assert.match(html,/남은 실행 1건/);
+ assert.ok(!html.includes('건 병행'));
+});
+
 test('웹 업무 쓰기는 출처·토큰·버전을 확인하고 실행을 시작하지 않는다',async()=>{
  const {home,store,cards,work}=fixture();
  const server=createWallServer(()=>({center:buildCardCenter({cards:cards.list(),entries:readLedger(home),tree:[]}),entries:readLedger(home)}),{home});

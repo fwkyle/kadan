@@ -25,7 +25,7 @@ async function fixture(entries,cards){
  const {runWatch}=await import('./helpers/watch-runner.mjs');
  const starts=['worker','boss'].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:String(i+1),t:at}));
  let cycle=0;const messages=[],records=[],end=new Error('end');
- await assert.rejects(()=>runWatch({floor:{list:()=>starts.map(s=>({session:s.session,pid:s.panePid})),read:()=> 'working'},readEntries:()=>[...starts,send,...entries],readCards:()=>typeof cards==='function'?cards(cycle):cards,startReportGraceMs:grace,intervalMs:1000,stallN:100,parents:new Map([['worker','boss'],['boss','@user']]),routes:new Map(),superRole:'boss',now:()=>now+cycle*1000,record:r=>records.push(r),sendAlert:(role,text)=>messages.push({role,text}),print:()=>{},spawn:cmd=>{if(cmd==='sleep'&&++cycle===3)throw end;if(cmd==='memory_pressure')return{status:0,stdout:'System-wide memory free percentage: 80%'};if(cmd==='sysctl')return{status:0,stdout:'used = 0M'};return{status:0,stdout:''};}}),e=>e===end);
+ await assert.rejects(()=>runWatch({floor:{list:()=>starts.map(s=>({session:s.session,pid:s.panePid})),read:()=> 'working'},readEntries:()=>[...starts,send,...entries],readCards:()=>typeof cards==='function'?cards(cycle):cards,startReportGraceMs:grace,intervalMs:grace,stallN:100,parents:new Map([['worker','boss'],['boss','@user']]),routes:new Map(),superRole:'boss',now:()=>now+cycle*grace,record:r=>records.push(r),sendAlert:(role,text)=>messages.push({role,text}),print:()=>{},spawn:cmd=>{if(cmd==='sleep'&&++cycle===3)throw end;if(cmd==='memory_pressure')return{status:0,stdout:'System-wide memory free percentage: 80%'};if(cmd==='sysctl')return{status:0,stdout:'used = 0M'};return{status:0,stdout:''};}}),e=>e===end);
  return {messages,records};
 }
 
