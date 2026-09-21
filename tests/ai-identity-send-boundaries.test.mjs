@@ -52,6 +52,9 @@ for (const [name, config, code] of [
   ['커서를 맨 앞으로 옮긴 미제출 입력', {screen:'› USER_PENDING_'}, 'KADAN_PANE_INPUT_PENDING'],
   ['여러 줄 입력', {state:'11|0|2|0',screen:'› first\nsecond\n'}, 'KADAN_PANE_INPUT_PENDING'],
   ['커서 아래 미제출 입력', {screen:'› \nSECOND_PENDING'}, 'KADAN_PANE_INPUT_PENDING'],
+  ...['›', '>', '❯'].map(prompt => ['본문 속 가짜 프롬프트 '+prompt, {state:'11|0|1|2',screen:'› USER_UNSUBMITTED\n'+prompt+' '}, 'KADAN_PANE_INPUT_UNKNOWN']),
+  ['본문 속 가짜 구분선', {screen:'› \n──────\nUSER_BELOW_BORDER'}, 'KADAN_PANE_INPUT_PENDING'],
+  ['본문 끝의 구분선도 빈 입력이 아니다', {screen:'› \n──────'}, 'KADAN_PANE_INPUT_PENDING'],
   ['테두리 안 커서 아래 미제출 입력', {state:'11|0|1|2',screen:'╭────╮\n│ ›  │\n│ SECOND_PENDING │\n╰────╯\nstatus'}, 'KADAN_PANE_INPUT_PENDING'],
   ['프롬프트 없는 빈 화면', {screen:''}, 'KADAN_PANE_INPUT_UNKNOWN'],
   ['실제 모델 불일치', {ps:'11 1 11 11 codex --model other'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
@@ -78,10 +81,10 @@ test('빈 프롬프트·현재 pane 자식 AI는 허용하고 일반 우편은 �
   assert.equal(mail.calls.filter(a=>a[0]==='paste-buffer').length,1);
 });
 
-test('현재 입력 영역 밖의 과거 출력과 상태 줄은 입력으로 세지 않는다', () => {
+test('과거 출력과 본문의 프롬프트·상태 줄을 구별할 수 없으면 거부한다', () => {
   const f=fixture({state:'11|0|3|4',screen:'old output\n› OLD_PROMPT\n╭────╮\n│ ›  │\n│    │\n╰────╯\nstatus'});
-  sendTmux('kadan-r','CARD',f.options);
-  assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,1);
+  assert.throws(()=>sendTmux('kadan-r','CARD',f.options), e=>e.code==='KADAN_PANE_INPUT_UNKNOWN');
+  assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,0);
 });
 
 test('현재 프로세스의 명시 모델은 실행기 자리와 함께 일치해야 한다', () => {

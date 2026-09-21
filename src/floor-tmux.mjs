@@ -407,21 +407,17 @@ function checkCardPane(session, identity, run, spawn) {
   const screen = run(["capture-pane", "-p", "-t", `=${session}:`]);
   const lines = screen.split("\n");
   if (Number(y) >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 입력 줄 미확인");
-  // 현재 입력은 커서 위의 가장 가까운 프롬프트부터 아래 구분선까지다.
-  // 구분선이 없으면 화면 끝까지 검사한다. 커서 아래의 편집 중인 줄도 포함한다.
-  const border = line => /^\s*[╰└]?[─━]{3,}[╯┘]?\s*$/u.test(line);
+  // 화면 문자열만으로 본문 속 프롬프트/구분선을 UI와 구별할 수 없다.
+  // 후보가 여럿이면 거부하고, 아래쪽 줄도 구분선 모양으로 잘라내지 않는다.
   let first = -1;
   for (let i = Number(y); i >= 0; i--) {
-    if (/^\s*[│┃]?[ \t]*[›>❯]/u.test(lines[i])) { first = i; break; }
-    if (border(lines[i]) || /^\s*[╭┌]/u.test(lines[i])) break;
+    if (/^\s*[│┃]?[ \t]*[›>❯]/u.test(lines[i])) {
+      if (first >= 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 프롬프트 후보가 여러 개여서 입력 경계 미확인");
+      first = i;
+    }
   }
   if (first < 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 현재 입력 영역의 프롬프트 미확인");
-  let end = lines.length;
-  for (let i = first + 1; i < lines.length; i++) {
-    if (border(lines[i])) { end = i; break; }
-  }
-  if (Number(y) >= end) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 커서가 현재 입력 영역 밖에 있다");
-  const input = lines.slice(first, end).map(line => line.trim().replace(/^[│┃]\s*/u, "").replace(/[│┃]$/u, "").trim());
+  const input = lines.slice(first).map(line => line.trim().replace(/^[│┃]\s*/u, "").replace(/[│┃]$/u, "").trim());
   if (input.some((line, i) => (i === 0 ? line.replace(/^[›>❯]\s*/u, "") : line).trim())) {
     deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면");
   }

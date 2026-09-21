@@ -87,6 +87,24 @@ process.stdin.on('data',b=>{const data=b.toString();if(data==='\\x1b[A')row=Math
   assert.equal(fs.existsSync(path.join(home,'editor-state.json.submitted')),false);
   waitState({lines:['','SECOND_PENDING'],row:0});
   tm('send-keys','-t','kadan-editor','C-c');waitState({lines:[''],row:0});
+  // 실제 편집 버퍼의 경계처럼 보이는 본문도 raw/일반 전송 모두 보존한다.
+  for(const raw of [true,false])for(const [name,lines,up] of [
+   ...['›','>','❯'].map((prompt,i)=>['fake-prompt-'+i,['USER_UNSUBMITTED',prompt+' '],0]),
+   ['fake-border',['','──────','USER_BELOW_BORDER'],2],
+  ]) {
+   for(let i=0;i<lines.length;i++) {
+    if(i){tm('send-keys','-t','kadan-editor','C-j');waitState({lines:[...lines.slice(0,i),''],row:i});}
+    if(lines[i]){tm('send-keys','-t','kadan-editor','-l',lines[i]);waitState({lines:lines.slice(0,i+1),row:i});}
+   }
+   for(let i=0;i<up;i++){tm('send-keys','-t','kadan-editor','-l','\x1b[A');waitState({lines,row:lines.length-2-i});}
+   const result=probe(name+(raw?'-raw':'-plain'),'editor',[...(raw?['--raw']:[]),'--task','editor']);
+   assert.notEqual(result.exit,0,JSON.stringify(result));
+   assert.match(result.error,/입력 경계 미확인|미제출 입력/);
+   for(const key of ['paste','enter','send','dispatch'])assert.equal(result.delta[key],0,JSON.stringify(result));
+   waitState({lines,row:lines.length-1-up});
+   assert.equal(fs.existsSync(path.join(home,'editor-state.json.submitted')),false);
+   tm('send-keys','-t','kadan-editor','C-c');waitState({lines:[''],row:0});
+  }
   probe('cleared-editor','editor',['--raw','--task','editor'],'accept fixture');
   // 버퍼 준비 뒤 입력/종료가 발생해도 두 번째 검사에서 paste 전에 거부한다.
   waitState({lines:[''],row:0});
