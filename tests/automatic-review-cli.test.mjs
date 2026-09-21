@@ -51,7 +51,10 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
    run('card','create','ar-test/'+id,'--source',source,'--repo-path',home);
    run('card','update','ar-test/'+id,'--revision','1','--status','ready','--scope','격리 receiver','--note','시험 승인');
   }
-  for(const role of roles){run('start',role,'--cmd',`${quote(process.execPath)} ${quote(receiver)}`);started.push(role);}
+  // 카드 전달은 등록 실행기+모델로 시작한 세대만 받는다 — 시험 실행기도 그 형태를 갖춘다.
+  const harness=path.join(home,'codex');
+  fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
+  for(const role of roles){run('start',role,'--cmd',`${quote(harness)} --model test-model`);started.push(role);}
   run('work','auto-configure','ar-test/work','--revision','1','--implementation','ar-test/implementation','--review','ar-test/review','--worker',roles[0],'--reviewer',roles[1],'--notify',roles[2],'--deadline',new Date(Date.now()+45000).toISOString());
   const program=()=>new Promise((resolve,reject)=>{
    const child=spawn(process.execPath,[cli,'work','auto-run','ar-test/work','--interval','0.1'],{env});let stdout='',stderr='';

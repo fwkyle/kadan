@@ -49,7 +49,10 @@ test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 
  const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
  const receiver=path.join(home,'receiver.mjs');
  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
- run('start','p-worker','--hidden','--cmd',`${quote(process.execPath)} ${quote(receiver)}`);
+ // 카드 발령 대상은 등록 실행기+모델로 시작한 세대여야 한다 — 시험 실행기도 그 형태를 갖춘다.
+ const harness=path.join(home,'codex');
+ fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
+ run('start','p-worker','--hidden','--cmd',`${quote(harness)} --model test-model`);
  const mine=store.create({repo:'r',id:'card-x',repoPath:home,body:'# 지시'});assign(mine.key,'p-worker');
  const other=store.create({repo:'r',id:'card-y',repoPath:home,body:'# 지시'});assign(other.key,'q-worker');
  const sends=()=>readLedger(home).filter(e=>e.kind==='send'&&e.transport!=='mailbox');
@@ -99,7 +102,9 @@ test('질문(--expect-reply)은 실행 카드 추론에서 빠지고 taskId·dis
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
   const receiver=path.join(home,'receiver.mjs');
   fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
-  run('start','q-worker','--hidden','--cmd',`${quote(process.execPath)} ${quote(receiver)}`);
+  const harness=path.join(home,'codex');
+  fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
+  run('start','q-worker','--hidden','--cmd',`${quote(harness)} --model test-model`);
   const card=store.create({repo:'r',id:`q-${backend}`,repoPath:home,body:'# 지시'});
   store.update(card.key,{status:'assigned',role:'q-worker',board:'q',scope:'시험 범위',...rally},{revision:1,note:'배정'});
   try{

@@ -24,6 +24,7 @@ import { buildCardCenter } from "./card-center.mjs";
 import { Handover } from "./handover.mjs";
 import { HandoverRunner } from "./handover-runner.mjs";
 import { workEntries, openTaskIds } from "./handover-state.mjs";
+import { inspectStartCmdPolicy, inspectCardSendIdentity } from "./ai-identity.mjs";
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
 
 import { parseHierarchy } from "./hierarchy.mjs";
@@ -729,6 +730,17 @@ export function guardedSend({
   if (!expectedPid) {
     console.error("경고: 원장에 이 세션의 시작 기록이 없다 (PID 대조 생략)");
   }
+  // 카드 연결 전송은 현재 세대의 AI 신원(등록 실행기+모델)이 확인될 때만 전달한다.
+  // 일반 우편·질문·답장은 taskId가 없으므로 이 경계를 거치지 않는다.
+  if (taskId != null) {
+    const identity = inspectCardSendIdentity({ entries, session, currentPid });
+    if (!identity.ok) {
+      const error = new Error(identity.message);
+      error.code = "KADAN_AI_IDENTITY_UNVERIFIED";
+      error.delivery = "not-sent";
+      throw error;
+    }
+  }
   if (mailContext?.replyTo) resolveReplyContext();
 
   let receipt;
@@ -1314,6 +1326,9 @@ function cmdStart(argv, flags) {
   const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
   const hiddenPolicy = inspectHiddenStartPolicy({ floorName: floor.name, hidden: Boolean(flags.hidden), roleProfile, reusing });
   if (!hiddenPolicy.ok) die(hiddenPolicy.message, 2);
+  // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
+  const cmdPolicy = inspectStartCmdPolicy({ roleProfile, cmd: flags.cmd, reusing });
+  if (!cmdPolicy.ok) die(cmdPolicy.message, 2);
   let evidence;
   let startedCmd;
   if (reusing) {

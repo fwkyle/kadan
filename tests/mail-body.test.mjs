@@ -33,7 +33,7 @@ test("보낸 본문은 지문 이름의 옆 파일로 남고 원장 줄에는 �
     recordedPid: "111",
     env: {KADAN_HOME:home},
     record: line => lines.push(line),
-    readEntries: () => [],
+    readEntries: () => [{kind:'start',role:'b-작업자',session:'kadan-b-작업자',panePid:'111',cmd:'codex --model test-model'}],
     saveBody: (digestValue, body) => saveMailBody(digestValue, body, home),
   });
 
@@ -89,7 +89,9 @@ test('ack 명령의 수신자 작은따옴표·명령 치환·세미콜론은 �
 });
 
 test('본문 조회·최종 답장·DONE은 읽음이 아니며 수신자 ack 반복은 로컬 사건 1건뿐이다',()=>{
-  const f=mailFixture(),original=f.send({taskId:'legacy-run',mailContext:{expectReply:true}}),inbox=new Mailbox(f.home,'recipient');
+  const f=mailFixture();
+  appendLedger({kind:'start',role:'recipient',session:'kadan-recipient',panePid:'111',cmd:'codex --model test-model'},f.home);
+  const original=f.send({taskId:'legacy-run',mailContext:{expectReply:true}}),inbox=new Mailbox(f.home,'recipient');
   assert.equal(inbox.read(original.mailId).read,false);
   f.send({role:'sender',session:'kadan-sender',env:{KADAN_HOME:f.home,KADAN_ROLE:'recipient'},mailContext:{replyTo:original.mailId,replyFinal:true}});
   appendLedger({kind:'done',role:'recipient',taskId:'legacy-run',result:'ok'},f.home);
