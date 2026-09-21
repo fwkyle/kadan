@@ -14,20 +14,58 @@
 // 카드 발령을 받을 수 있는 실행기 — agent-runners.json의 등록 실행기와 같다.
 export const AI_HARNESS_NAMES = new Set(["codex", "omo", "claude", "devin"]);
 
-// 명령 첫 낱말에서 실행기를 읽는다 — start 원장의 harness 기록 규칙과 같이
-// 앞의 NAME=value 낱말은 건너뛰고 basename을 본다 (예: '/opt/bin/codex' → codex).
-function harnessOf(cmd) {
-  const tokens = cmd.trim().split(/\s+/);
-  let index = 0;
-  while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
-  return tokens[index]?.replace(/^["']|["']$/g, "").split("/").pop() ?? "";
+// 단일 셸 명령만 허용한다. 인용 문자열은 한 인자로 유지하고 셸 연산/확장은 거부한다.
+export function commandWords(command) {
+  if (typeof command !== "string") return null;
+  const words = []; let word = "", quote = "", started = false;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (c === "\n" || c === "\r") return null;
+    if (quote) {
+      if (c === quote) { quote = ""; continue; }
+      if (quote === '"' && /[$`\\]/.test(c)) return null;
+      word += c; continue;
+    }
+    if (c === "'" || c === '"') { quote = c; started = true; continue; }
+    if (/\s/.test(c)) {
+      if (started) words.push(word);
+      word = ""; started = false; continue;
+    }
+    if (/[;&|<>#()$`\\*?{}~]/.test(c)) return null;
+    word += c; started = true;
+  }
+  if (quote) return null;
+  if (started) words.push(word);
+  return words;
 }
 
-// 모델 지정을 읽는다. --model <값>·--model=<값>과 codex resume의 -m <값>을 인정한다.
-// 값 자리가 다른 옵션(-로 시작)이면 지정이 없는 것으로 본다.
-function modelOf(cmd) {
-  const value = cmd.match(/(?:^|\s)(?:--model|-m)[=\s]+["']*([^\s"']+)/)?.[1];
-  return value && !value.startsWith("-") ? value : null;
+function modelOf(args) {
+  let model = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--") break;
+    if (["--help", "-h", "--version", "-V"].includes(args[i])) return null;
+    if (args[i] === "--model" || args[i] === "-m") {
+      const value = args[++i];
+      if (!value || value.startsWith("-") || /\s/.test(value)) return null;
+      model = value;
+    } else if (args[i].startsWith("--model=")) {
+      const value = args[i].slice(8);
+      if (!value || value.startsWith("-") || /\s/.test(value)) return null;
+      model = value;
+    }
+  }
+  return model;
+}
+
+// ps의 실제 실행 인자에서 실행 파일 또는 Node/Bun 스크립트 자리만 확인한다.
+// 프롬프트/주석에 등장하는 실행기 이름은 프로세스 신원이 아니다.
+export function matchesAiProcess(args, harness) {
+  const words = args.trim().split(/\s+/);
+  const base = value => value?.split("/").pop();
+  const executable = base(words[0]);
+  if (executable === harness) return true;
+  return ["node", "bun", "nodejs"].includes(executable) &&
+    [harness, `${harness}.js`, `${harness}.mjs`, `${harness}.cjs`].includes(base(words[1]));
 }
 
 // 프로필을 달고 새 pane을 만들 때는 실행 명령이 필수다. 살아있는 세대 재사용에는
@@ -71,7 +109,10 @@ export function inspectCardSendIdentity({ entries, session, currentPid } = {}) {
         `빈 셸이나 기록 없는 pane에는 카드를 보내지 않는다`,
     };
   }
-  const harness = harnessOf(launch.cmd);
+  const words = commandWords(launch.cmd);
+  if (!words) return {ok:false, reason:"unsafe-command", message:"카드 전송 불가: 단일 AI 실행 명령만 허용한다 (셸 결합·주석·확장 불가)"};
+  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
+  const harness = words.shift()?.split("/").pop() ?? "";
   if (!AI_HARNESS_NAMES.has(harness)) {
     return {
       ok: false,
@@ -82,7 +123,7 @@ export function inspectCardSendIdentity({ entries, session, currentPid } = {}) {
         `아니다: ${launch.cmd.slice(0, 80)}`,
     };
   }
-  const model = modelOf(launch.cmd);
+  const model = modelOf(words);
   if (!model) {
     return {
       ok: false,

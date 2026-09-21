@@ -732,6 +732,7 @@ export function guardedSend({
   }
   // 카드 연결 전송은 현재 세대의 AI 신원(등록 실행기+모델)이 확인될 때만 전달한다.
   // 일반 우편·질문·답장은 taskId가 없으므로 이 경계를 거치지 않는다.
+  let cardIdentity;
   if (taskId != null) {
     const identity = inspectCardSendIdentity({ entries, session, currentPid });
     if (!identity.ok) {
@@ -740,12 +741,13 @@ export function guardedSend({
       error.delivery = "not-sent";
       throw error;
     }
+    cardIdentity = {...identity, currentPid};
   }
   if (mailContext?.replyTo) resolveReplyContext();
 
   let receipt;
   try {
-    receipt = selectedFloor.send(session, message) || {};
+    receipt = selectedFloor.send(session, message, {cardIdentity}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     throw error;

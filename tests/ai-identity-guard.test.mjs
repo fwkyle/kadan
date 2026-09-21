@@ -92,7 +92,7 @@ test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI �
   const sends=()=>readLedger(home).filter(e=>e.kind==='send'&&e.transport!=='mailbox');
   const paneText=s=>tmux('capture-pane','-p','-S','-200','-t',s).stdout||'';
   // 등록 실행기 이름의 수신기 — pane에 붙여넣은 본문을 <역할>.received에 쓴다
-  const receiver=path.join(home,'receiver.mjs');
+  const receiver=path.join(home,'codex.mjs');
   fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
   const harness=path.join(home,'codex');
   fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);

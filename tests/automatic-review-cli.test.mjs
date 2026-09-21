@@ -19,7 +19,7 @@ test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→�
  const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_FLOOR:'tmux',KADAN_WINDOW:'none',KADAN_ROLE:'ar-test-super'};
  const roles=['ar-test-worker','ar-test-reviewer','ar-test-super'],transcript=[];
  const run=(...args)=>{const p=spawnSync(process.execPath,[cli,...args],{env,encoding:'utf8',timeout:15000});transcript.push({args,status:p.status,stdout:p.stdout,stderr:p.stderr});assert.equal(p.status,0,p.stderr||p.error?.message);return p.stdout;};
- const receiver=path.join(home,'receiver.mjs');
+ const receiver=path.join(home,'codex.mjs');
  fs.writeFileSync(receiver,`
 import fs from 'node:fs';
 import path from 'node:path';
