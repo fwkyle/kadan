@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
-import {readLedger} from '../src/ledger.mjs';
+import {readLedger,readTaskLedger} from '../src/ledger.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {guardedSend} from '../src/cli.mjs';
 import {inspectStartCmdPolicy,inspectCardSendIdentity} from '../src/ai-identity.mjs';
@@ -93,7 +93,8 @@ test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI �
   const paneText=s=>tmux('capture-pane','-p','-S','-200','-t',s).stdout||'';
   // 등록 실행기 이름의 수신기 — pane에 붙여넣은 본문을 <역할>.received에 쓴다
   const receiver=path.join(home,'codex.mjs');
-  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
+  fs.writeFileSync(receiver,"process.stdout.write('› ');import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
+  const mailReceiver=path.join(home,'mail-receiver.mjs');fs.copyFileSync(receiver,mailReceiver);
   const harness=path.join(home,'codex');
   fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
   const store=new CardStore(home);
@@ -148,10 +149,27 @@ test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI �
    const end=Date.now()+3000;while(Date.now()<end&&!received().includes('카드 지시를 수행하라'))pause(50);
    assert.ok(received().includes('카드 지시를 수행하라'),`${backend}: AI pane이 카드 본문을 받지 못했다`);
    // (8) 일반 우편·질문은 비AI pane에도 그대로 전달된다 — 이 경계는 카드 연결에만 적용된다
-   run('send','bare-shell','일반 우편 도착');
-   run('send','bare-shell','--execution',cardB.key,'--expect-reply','진행 상황을 알려달라');
-   assert.equal(sends().length,3);
-   pause(300);assert.match(paneText('kadan-bare-shell'),/일반 우편|우편 ID/,`${backend}: 일반 우편이 빈 셸 pane에 전달되지 않았다`);
+   // 빈 셸의 현재 세대에서 비AI 수신기를 실행한다. 셸 오류/화면 기록 대신 수신 바이트를 확인한다.
+   assert.equal(tmux('send-keys','-t','kadan-bare-shell','-l',`${quote(process.execPath)} ${quote(mailReceiver)}`).status,0);
+   assert.equal(tmux('send-keys','-t','kadan-bare-shell','Enter').status,0);
+   const readyEnd=Date.now()+3000;while(Date.now()<readyEnd&&!fs.existsSync(path.join(home,'bare-shell.ready')))pause(20);
+   assert.ok(fs.existsSync(path.join(home,'bare-shell.ready')),`${backend}: 비AI 수신기 준비 미확인`);
+   const mailPath=path.join(home,'bare-shell.received');
+   for(const args of [ ['일반 우편 도착'], ['--execution',cardB.key,'--expect-reply','진행 상황을 알려달라'] ]) {
+    const before=sends().length,dispatch=readTaskLedger(home).filter(e=>e.kind==='dispatch').length;
+    run('send','bare-shell',...args);
+    const response=sends().at(-1);
+    const end=Date.now()+3000;
+    let actual='';
+    while(Date.now()<end) {
+     actual=fs.existsSync(mailPath)?fs.readFileSync(mailPath,'utf8'):'';
+     if(actual.includes(response.mailId))break;
+     pause(20);
+    }
+    assert.ok(actual.includes(args.at(-1)) && actual.includes(response.mailId),`${backend}: 우편 수신 원문 미확인: ${actual}`);
+    assert.equal(sends().length-before,1);
+    assert.equal(readTaskLedger(home).filter(e=>e.kind==='dispatch').length-dispatch,0);
+   }
   }finally{
    for(const s of [...started,'kadan-stale-pane'])tmux('kill-session','-t',s);
   }

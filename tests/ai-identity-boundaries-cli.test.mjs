@@ -21,9 +21,26 @@ for(const backend of ['jsonl','sqlite']){
  if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  const bin=path.join(home,'bin');fs.mkdirSync(bin);
  const trace=path.join(home,'tmux.jsonl');
- fs.writeFileSync(path.join(bin,'tmux'),`#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(a)+'\\n');const r=spawnSync(${JSON.stringify(realTmux)},a,{stdio:'inherit'});process.exit(r.status??1);\n`,{mode:0o755});
+ fs.writeFileSync(path.join(bin,'tmux'),`#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(a)+'\\n');const r=spawnSync(${JSON.stringify(realTmux)},a,{stdio:'inherit'});
+const raceFile=${JSON.stringify(path.join(home,'race.json'))};
+if(a.includes('load-buffer')&&fs.existsSync(raceFile)) {
+ const race=JSON.parse(fs.readFileSync(raceFile,'utf8'));
+ if(race.active) {
+  fs.writeFileSync(raceFile,JSON.stringify({...race,active:false}));
+  spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,'send-keys','-t','kadan-'+race.role,...race.keys]);
+  const end=Date.now()+3000;let observed=false;
+  while(Date.now()<end) {
+   const query=race.dead?['display-message','-p','-t','kadan-'+race.role,'#{pane_dead}']:['capture-pane','-p','-t','kadan-'+race.role];
+   const state=spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,...query],{encoding:'utf8'}).stdout;
+   if(race.dead?state.trim()==='1':state.includes('RACE_PENDING')){observed=true;break;}
+   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
+  }
+  if(!observed)throw Error('race fixture readiness timeout');
+ }
+}
+process.exit(r.status??1);\n`,{mode:0o755});
  const receiver=path.join(home,'receiver.mjs');
- fs.writeFileSync(receiver,"import fs from 'node:fs';process.stdin.on('data',b=>fs.appendFileSync(process.env.KADAN_HOME+'/'+process.env.KADAN_ROLE+'.received',b));\n");
+ fs.writeFileSync(receiver,"process.stdout.write('› ');import fs from 'node:fs';process.stdin.on('data',b=>fs.appendFileSync(process.env.KADAN_HOME+'/'+process.env.KADAN_ROLE+'.received',b));\n");
  for(const name of ['codex','devin','omo','claude'])fs.writeFileSync(path.join(bin,name),`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("test receiver");process.exit(0); }\n`+fs.readFileSync(receiver,'utf8'),{mode:0o755});
  const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_FLOOR:'tmux',KADAN_WINDOW:'none',KADAN_ROLE:'',PATH:bin+':'+process.env.PATH};
  const call=(args,extra={})=>{const r=spawnSync(process.execPath,[cli,...args],{env:{...env,...extra},cwd:home,encoding:'utf8',timeout:15000});transcript.push({backend,args,status:r.status,stdout:r.stdout,stderr:r.stderr});return r;};
@@ -51,6 +68,39 @@ for(const backend of ['jsonl','sqlite']){
   const replaced=path.join(home,'replaced');fs.mkdirSync(replaced);
   fs.writeFileSync(path.join(replaced,'codex'),'#!/bin/sh\nexec cat\n',{mode:0o755});
   start('replaced',replaced+'/codex --model model-a');probe('replaced-process','replaced',['--task','replaced']);
+  // 실제 입력 버퍼를 두 줄로 편집하고 커서를 위쪽 빈 줄로 옮긴다.
+  const editorDir=path.join(home,'editor');fs.mkdirSync(editorDir);
+  fs.writeFileSync(path.join(editorDir,'codex'),`#!${process.execPath}
+import fs from 'node:fs';
+const file=process.env.KADAN_HOME+'/editor-state.json';
+let lines=[''],row=0;
+const paint=()=>{process.stdout.write('\\x1b[2J\\x1b[H› '+lines.join('\\r\\n')+'\\x1b['+(row+1)+';'+(row===0?3:1)+'H');fs.writeFileSync(file,JSON.stringify({lines,row}));};
+process.stdin.setRawMode(true);process.stdin.resume();
+process.stdin.on('data',b=>{const data=b.toString();if(data==='\\x1b[A')row=Math.max(0,row-1);else for(const c of data){if(c==='\\n'){lines.splice(row+1,0,'');row++;}else if(c==='\\r'){fs.appendFileSync(file+'.submitted',JSON.stringify(lines)+'\\n');lines=[''];row=0;}else if(c==='\\u0003'){lines=[''];row=0;}else lines[row]+=c;}paint();});paint();
+`,{mode:0o755});
+  const waitState=expected=>{const end=Date.now()+3000;while(Date.now()<end){try{if(fs.readFileSync(path.join(home,'editor-state.json'),'utf8')===JSON.stringify(expected))return;}catch{}pause(20);}assert.fail('editor state timeout '+JSON.stringify(expected));};
+  start('editor',editorDir+'/codex --model model-a');waitState({lines:[''],row:0});
+  tm('send-keys','-t','kadan-editor','C-j');waitState({lines:['',''],row:1});
+  tm('send-keys','-t','kadan-editor','-l','SECOND_PENDING');waitState({lines:['','SECOND_PENDING'],row:1});
+  tm('send-keys','-t','kadan-editor','-l','\x1b[A');waitState({lines:['','SECOND_PENDING'],row:0});
+  probe('pending-below-cursor','editor',['--raw','--task','editor']);
+  assert.equal(fs.existsSync(path.join(home,'editor-state.json.submitted')),false);
+  waitState({lines:['','SECOND_PENDING'],row:0});
+  tm('send-keys','-t','kadan-editor','C-c');waitState({lines:[''],row:0});
+  probe('cleared-editor','editor',['--raw','--task','editor'],'accept fixture');
+  // 버퍼 준비 뒤 입력/종료가 발생해도 두 번째 검사에서 paste 전에 거부한다.
+  waitState({lines:[''],row:0});
+  fs.writeFileSync(path.join(home,'race.json'),JSON.stringify({active:true,role:'editor',keys:['-l','RACE_PENDING']}));
+  probe('input-during-load','editor',['--raw','--task','editor']);
+  start('race-dead',bin+'/codex --model model-a');tm('set-option','-t','kadan-race-dead','remain-on-exit','on');
+  fs.writeFileSync(path.join(home,'race.json'),JSON.stringify({active:true,role:'race-dead',keys:['C-c'],dead:true}));
+  probe('death-during-load','race-dead',['--task','race-dead']);
+  // start의 모델 A와 같은 pane의 실제 프로세스 모델 B/미지정 경계.
+  for(const [role,flags] of [['mismatch','--model model-b'],['unknown-model','']]) {
+   const dir=path.join(home,role);fs.mkdirSync(dir);
+   fs.writeFileSync(path.join(dir,'codex'),'#!/bin/sh\nexec '+bin+'/codex '+flags+'\n',{mode:0o755});
+   start(role,dir+'/codex --model model-a');probe(role,role,['--task',role]);
+  }
   probe('ordinary-mail','cat',[],'accept mail');
   probe('question','cat',['--execution','r/cat','--expect-reply'],'accept mail');
   const question=readLedger(home).filter(x=>x.kind==='send').at(-1);out.push({backend,name:'question-taskId',taskId:question.taskId??null,expectReply:question.expectReply});

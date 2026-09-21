@@ -25,7 +25,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r.stdout;};
   const tx=(...args)=>{const r=spawnSync('tmux',['-L',socket,...args],{env,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout;};
   const receiver=path.join(home,'codex.mjs');
-  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
+  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});\n");
   // 카드 발령 대상은 등록 실행기+모델로 시작한 세대여야 한다 — 시험 실행기도 그 형태를 갖춘다.
   const harness=path.join(home,'codex');
   fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);

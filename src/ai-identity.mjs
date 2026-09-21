@@ -59,13 +59,15 @@ function modelOf(args) {
 
 // ps의 실제 실행 인자에서 실행 파일 또는 Node/Bun 스크립트 자리만 확인한다.
 // 프롬프트/주석에 등장하는 실행기 이름은 프로세스 신원이 아니다.
-export function matchesAiProcess(args, harness) {
-  const words = args.trim().split(/\s+/);
+export function matchesAiProcess(args, harness, model) {
+  const words = commandWords(args);
+  if (!words) return false;
   const base = value => value?.split("/").pop();
   const executable = base(words[0]);
-  if (executable === harness) return true;
-  return ["node", "bun", "nodejs"].includes(executable) &&
-    [harness, `${harness}.js`, `${harness}.mjs`, `${harness}.cjs`].includes(base(words[1]));
+  const offset = executable === harness ? 1 :
+    ["node", "bun", "nodejs"].includes(executable) &&
+    [harness, `${harness}.js`, `${harness}.mjs`, `${harness}.cjs`].includes(base(words[1])) ? 2 : 0;
+  return offset > 0 && (model === undefined || modelOf(words.slice(offset)) === model);
 }
 
 // 프로필을 달고 새 pane을 만들 때는 실행 명령이 필수다. 살아있는 세대 재사용에는

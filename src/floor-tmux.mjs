@@ -401,20 +401,27 @@ function checkCardPane(session, identity, run, spawn) {
     for (const row of rows) if (descendants.has(row[2]) && !descendants.has(row[1])) { descendants.add(row[1]); changed = true; }
   }
   const foreground = rows.find(row => row[1] === pid)?.[4];
-  if (!(Number(foreground) > 0) || !rows.some(row => descendants.has(row[1]) && row[3] === foreground && matchesAiProcess(row[5], identity.harness))) {
-    deny("KADAN_AI_PROCESS_UNVERIFIED", "카드 전송 불가: 현재 pane 프로세스가 시작 기록의 AI 실행기와 다르다");
+  if (!(Number(foreground) > 0) || !rows.some(row => descendants.has(row[1]) && row[3] === foreground && matchesAiProcess(row[5], identity.harness, identity.model))) {
+    deny("KADAN_AI_PROCESS_UNVERIFIED", "카드 전송 불가: 현재 pane 프로세스의 AI 실행기·명시 모델이 시작 기록과 다르거나 미확인이다");
   }
   const screen = run(["capture-pane", "-p", "-t", `=${session}:`]);
   const lines = screen.split("\n");
   if (Number(y) >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 입력 줄 미확인");
-  // 커서 앞만 보면 Home/왼쪽 이동으로 우회된다. 현재 줄 전체를 검사한다.
-  // 여러 줄 입력은 가장 가까운 프롬프트부터 커서 줄까지 검사한다.
-  let first = Number(y);
-  for (let i = first; i >= 0; i--) {
+  // 현재 입력은 커서 위의 가장 가까운 프롬프트부터 아래 구분선까지다.
+  // 구분선이 없으면 화면 끝까지 검사한다. 커서 아래의 편집 중인 줄도 포함한다.
+  const border = line => /^\s*[╰└]?[─━]{3,}[╯┘]?\s*$/u.test(line);
+  let first = -1;
+  for (let i = Number(y); i >= 0; i--) {
     if (/^\s*[│┃]?[ \t]*[›>❯]/u.test(lines[i])) { first = i; break; }
-    if (/^\s*[─━╭╰┌└]/u.test(lines[i])) break;
+    if (border(lines[i]) || /^\s*[╭┌]/u.test(lines[i])) break;
   }
-  const input = lines.slice(first, Number(y) + 1).map(line => line.trim().replace(/^[│┃]\s*/u, "").replace(/[│┃]$/u, "").trim());
+  if (first < 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 현재 입력 영역의 프롬프트 미확인");
+  let end = lines.length;
+  for (let i = first + 1; i < lines.length; i++) {
+    if (border(lines[i])) { end = i; break; }
+  }
+  if (Number(y) >= end) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 커서가 현재 입력 영역 밖에 있다");
+  const input = lines.slice(first, end).map(line => line.trim().replace(/^[│┃]\s*/u, "").replace(/[│┃]$/u, "").trim());
   if (input.some((line, i) => (i === 0 ? line.replace(/^[›>❯]\s*/u, "") : line).trim())) {
     deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면");
   }

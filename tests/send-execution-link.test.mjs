@@ -53,7 +53,7 @@ test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 
  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
  const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
  const receiver=path.join(home,'codex.mjs');
- fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
+ fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
  // 카드 발령 대상은 등록 실행기+모델로 시작한 세대여야 한다 — 시험 실행기도 그 형태를 갖춘다.
  const harness=path.join(home,'codex');
  fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
@@ -107,7 +107,7 @@ test('질문(--expect-reply)은 실행 카드 추론에서 빠지고 taskId·dis
   const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
   const receiver=path.join(home,'codex.mjs');
-  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
+  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
   const harness=path.join(home,'codex');
   fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
   run('start','q-worker','--hidden','--cmd',`${quote(harness)} --model test-model`);
