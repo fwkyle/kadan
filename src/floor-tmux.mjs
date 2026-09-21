@@ -359,26 +359,35 @@ function create({ session, role, cwd, cmd }) {
   };
 }
 
+function checkPaneMode(session, run) {
+  let mode;
+  try {
+    mode = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_in_mode}"]);
+    if (typeof mode !== "string" || !/^\d+$/.test(mode.trim())) throw new Error("pane_in_mode 응답 없음 또는 잘못된 값");
+  } catch (cause) {
+    const error = new Error(`전송 보류: 기록보기 모드 조회 실패 — ${cause.message}`, {cause});
+    error.code = "KADAN_PANE_MODE_UNKNOWN";
+    throw error;
+  }
+  if (Number(mode.trim()) !== 0) {
+    const error = new Error("전송 보류: 기록보기(복사모드 등) 중 — 선택·스크롤을 유지합니다");
+    error.code = "KADAN_PANE_IN_MODE";
+    throw error;
+  }
+}
+
+// 본문 없이 Enter 한 키만 보낸다 — 입력 큐 배너의 대기 메시지 전송에만 쓴다.
+export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
+  checkPaneMode(session, run);
+  run(["send-keys", "-t", session, "Enter"]);
+  return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
+}
+
 export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint} = {}) {
   const buffer = `kadan-send-${pid}-${hrtime().toString(36)}`;
   let stage = "not-started";
   let loaded = false;
-  const checkMode = () => {
-    let mode;
-    try {
-      mode = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_in_mode}"]);
-      if (typeof mode !== "string" || !/^\d+$/.test(mode.trim())) throw new Error("pane_in_mode 응답 없음 또는 잘못된 값");
-    } catch (cause) {
-      const error = new Error(`전송 보류: 기록보기 모드 조회 실패 — ${cause.message}`, {cause});
-      error.code = "KADAN_PANE_MODE_UNKNOWN";
-      throw error;
-    }
-    if (Number(mode.trim()) !== 0) {
-      const error = new Error("전송 보류: 기록보기(복사모드 등) 중 — 선택·스크롤을 유지합니다");
-      error.code = "KADAN_PANE_IN_MODE";
-      throw error;
-    }
-  };
+  const checkMode = () => checkPaneMode(session, run);
   try {
     checkMode();
     run(["load-buffer", "-b", buffer, "-"], text);
@@ -452,6 +461,7 @@ export const tmuxFloor = {
   alive: hasSession,
   pid: panePid,
   send: sendTmux,
+  sendEnter: sendTmuxEnter,
   read: capturePane,
   stop,
   list,

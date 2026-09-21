@@ -19,7 +19,7 @@ import { registerStartedRole } from "./hierarchy-register.mjs";
 import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
 import {WorkStore} from './work-store.mjs';
-import {resolveWorkMail} from './work-mail.mjs';
+import {resolveWorkMail,inferDispatchTask} from './work-mail.mjs';
 import { buildCardCenter } from "./card-center.mjs";
 import { Handover } from "./handover.mjs";
 import { HandoverRunner } from "./handover-runner.mjs";
@@ -1404,7 +1404,7 @@ function cmdStart(argv, flags) {
 function cmdSend(argv, flags) {
   const role = argv[0];
   if (!role) {
-    die("사용법: kadan send <역할> [--task <카드id>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력)");
+    die("사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] [--execution <실행키>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). --task는 작업 발령이고 --work·--execution은 우편의 연결 주소다");
   }
   if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
   const argText = argv.slice(1).join(" ");
@@ -1419,7 +1419,14 @@ function cmdSend(argv, flags) {
 
   let receipt;
   try {
-    const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId:flags.task,by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
+    // --execution만 쓴 발령은 taskId 없이 기록되어 감시에서 빠진다. 수신 역할의 발령 카드로
+    // 확인될 때만 taskId를 추론해 채운다. 답장·다른 담당의 실행 연결은 그대로 둔다.
+    let taskId=flags.task;
+    if(taskId==null){
+      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to']});
+      if(inferred){taskId=inferred;new CardStore(ledgerHome()).checkSend(taskId,role);console.error(`실행 연결 ${flags.execution}은(는) ${role}의 발령 카드입니다 — taskId로 기록합니다. 명시 발령은 --task <카드id>를 사용하세요`);}
+    }
+    const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId,by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
     const expectedPid=recordedPid(lastStartFor(session));
     if (recipient!==role && !expectedPid) {
@@ -1431,7 +1438,7 @@ function cmdSend(argv, flags) {
       session,
       role:recipient,
       message,
-      taskId: flags.task,
+      taskId,
       mailContext,
       raw:flags.raw===true,
       recordedPid: expectedPid,
@@ -1667,6 +1674,11 @@ function cmdWatch(argv, flags) {
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');
       guardedSend({floor,session,role,message,source:'watch',recordedPid:expectedPid});
     },
+    sendQueueEnter: typeof floor.sendEnter==='function' ? (role,expectedPid) => {
+      const session=sessionName(role);
+      if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('입력 큐 재개 세대 변경');
+      return floor.sendEnter(session);
+    } : null,
     ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage}) : null,
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,

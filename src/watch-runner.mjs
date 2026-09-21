@@ -1,6 +1,7 @@
 import {MailWatch} from './watch-mail.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
+import {QueueResume,queuedInputBanner} from './watch-queue-resume.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {SupervisorHealth,observationContext} from './watch-supervisor-health.mjs';
@@ -166,13 +167,19 @@ const ALERT_LABELS = {
   "계열겹침": "같은 계열 역할 중복 실행",
   "시작보고누락": "시작 보고 누락",
   "큐대기": "입력이 큐에 쌓여 대기",
+  "입력큐": "입력 큐 대기",
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
 export function formatAlertBody(alert) {
   if (alert.kind === "감시AI오류") {
-    const reason={timeout:"응답 시간 초과", "call-failed":"호출 실패", "report-missing":"보고 명령 미실행", "report-incomplete":"보고 전달 기록 미완료", "report-error":"보고 실행·기록 오류"}[alert.reason] || "호출 상태 확인 필요";
+    // 판정 AI 자체의 시간 초과는 작업자 응답 장애가 아니다 — 작업 상태는 미판정으로 둔다.
+    if (alert.reason === "timeout") return `${alert.source?watchAILabel(alert.source):'감시AI'} 점검 필요 · ${alert.role} (감시 판정 AI 시간 초과 — 작업 상태 미판정)`;
+    const reason={ "call-failed":"호출 실패", "report-missing":"보고 명령 미실행", "report-incomplete":"보고 전달 기록 미완료", "report-error":"보고 실행·기록 오류"}[alert.reason] || "호출 상태 확인 필요";
     return `${alert.source?watchAILabel(alert.source):'감시AI'} 점검 필요 · ${alert.role} (${reason}; 작업 상태 판정과 별개)`;
+  }
+  if (alert.kind === "입력큐") {
+    return `입력 큐 대기 ${alert.session} (${alert.line})`;
   }
   if (alert.kind === "전달실패") {
     return `전달실패 ${alert.sourceBody} (수신자 ${alert.failedRecipient} 없음: ${alert.deliveryError})`;
@@ -334,6 +341,7 @@ export async function runWatch({
   resume429 = null,
   sendMailReminder = null,
   mailUnreadGraceMs = 300_000,
+  sendQueueEnter = null,
   record = () => {},
   intervalMs,
   stallN,
@@ -377,6 +385,8 @@ export async function runWatch({
       throw error;
     }
   }}) : null;
+  const queueResume = new QueueResume({record, sendEnter:sendQueueEnter, sleep,
+    readScreen: session => { try { return readText(floor.read(session)); } catch { return null; } }});
   let roleStates = new Map();
   let queuedStates = new Map();
   const pendingCompletions = new Map();
@@ -499,6 +509,21 @@ export async function runWatch({
         } catch { return false; }
       },
     });
+    // 명시 큐 배너는 AI 판정 없이 결정식으로 먼저 처리한다. Enter를 보낸 세션은 이번 주기의 정체·AI 판정에서 뺀다.
+    const queueHandled = observationError || !scope ? new Set() : await queueResume.tick({
+      observations:workerObservations, tasks:scope.entries, cards:cards??[], entries, now:cycleAt,
+      fresh:(session,seen,taskId,fingerprint)=> {
+        try {
+          const currentEntries=readEntries();
+          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks());
+          const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
+          if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
+          const current=collectRoles(floor,currentEntries,new Set([session])).observations.get(session);
+          return current?.alive && String(current.pid)===String(seen.pid) && String(current.expectedPid)===String(seen.pid) &&
+            queuedInputBanner(current.screen)?.fingerprint===fingerprint;
+        } catch { return false; }
+      },
+    });
     const roleAssessment = observationError
       ? { states: roleStates, alerts: [] }
       : assessRoles(
@@ -548,7 +573,7 @@ export async function runWatch({
         );
     queuedStates = queuedAssessment.states;
 
-    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session));
+    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueHandled.has(a.session));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
@@ -560,7 +585,7 @@ export async function runWatch({
       return {responsibility,evidenceDigest,due:!same||cycleAt-previous.at>=interval};
     };
     const invokeAI=candidate=>{
-      if(retrySessions.has(candidate.session))return;
+      if(retrySessions.has(candidate.session)||queueHandled.has(candidate.session))return;
       const seen=roles.observations.get(candidate.session);
       if(candidate.source!=='supervisor-health'&&!workerCheck(candidate,seen).due)return;
       const previous=latestWatchReports(entries).find(e=>e.role===candidate.role&&e.source===candidate.source&&e.taskId===(candidate.taskId??null));
@@ -631,6 +656,7 @@ export async function runWatch({
       ...roleAlerts.filter(a=>!rateLimitRetry.alerts?.some(r=>r.session===a.session&&a.kind==='한도')),
       ...queuedAssessment.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
+      ...(!observationError ? queueResume.alerts ?? [] : []),
       ...reportAlerts,
       ...judgeFailures.values(),
       ...roles.screenAlerts.filter(a=>!supervisorScope?.sessions.has(a.session)),

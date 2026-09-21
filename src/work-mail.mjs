@@ -1,11 +1,23 @@
 import {taskIdentity} from './task-identity.mjs';
 import {WorkStore} from './work-store.mjs';
 import {CardStore} from './card-store.mjs';
-import {readMailLedger} from './ledger.mjs';
+import {readMailLedger,readLedger} from './ledger.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {isUserActor} from './actors.mjs';
+import {effectiveCardRole} from './handover-state.mjs';
 
 // --task는 발령, --work/--execution은 우편의 연결 주소다. 원문에서 대상을 추측하지 않는다.
+// --execution만 썼는데 그 주소가 수신 역할에 발령된 중앙 카드이면 카드 없는 발령이 되어
+// 감시에서 빠진다 (card-send-execution-card-link-guard). 카드 실재·assigned 상태·
+// 실제 담당이 모두 확인될 때만 발령으로 추론하고, 답장·다른 담당의 실행 연결은 건드리지 않는다.
+export function inferDispatchTask(home,{executionKey,role,replyTo}={}){
+ if(!executionKey||typeof role!=='string'||!role.trim()||replyTo)return null;
+ const card=new CardStore(home).list().find(c=>c.key===executionKey);
+ if(!card||card.status!=='assigned')return null;
+ if(effectiveCardRole(card,readLedger(home))!==role)return null;
+ return card.id;
+}
+
 export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,role,expectReply=false,replyFinal=false}={}){
  if(typeof expectReply!=='boolean'||typeof replyFinal!=='boolean')throw new Error('답변 옵션은 true/false여야 합니다');
  if(replyFinal&&!replyTo)throw new Error('최종 답변에는 원본 우편 ID가 필요합니다');
