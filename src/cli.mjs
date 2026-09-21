@@ -1423,7 +1423,7 @@ function cmdSend(argv, flags) {
     // 확인될 때만 taskId를 추론해 채운다. 답장·다른 담당의 실행 연결은 그대로 둔다.
     let taskId=flags.task;
     if(taskId==null){
-      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to']});
+      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true});
       if(inferred){taskId=inferred;new CardStore(ledgerHome()).checkSend(taskId,role);console.error(`실행 연결 ${flags.execution}은(는) ${role}의 발령 카드입니다 — taskId로 기록합니다. 명시 발령은 --task <카드id>를 사용하세요`);}
     }
     const mailContext=resolveWorkMail(ledgerHome(),{workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId,by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
