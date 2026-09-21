@@ -1510,6 +1510,11 @@ function cmdWatch(argv, flags) {
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');
       guardedSend({floor,session,role,message,source:'watch',recordedPid:expectedPid});
     },
+    sendQueueEnter: typeof floor.sendEnter==='function' ? (role,expectedPid) => {
+      const session=sessionName(role);
+      if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('입력 큐 재개 세대 변경');
+      return floor.sendEnter(session);
+    } : null,
     ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage}) : null,
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     intervalMs: intervalSeconds * 1000,
