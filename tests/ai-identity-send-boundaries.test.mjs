@@ -52,6 +52,12 @@ for (const [name, config, code] of [
   ['커서를 맨 앞으로 옮긴 미제출 입력', {screen:'› USER_PENDING_'}, 'KADAN_PANE_INPUT_PENDING'],
   ['여러 줄 입력', {state:'11|0|2|0',screen:'› first\nsecond\n'}, 'KADAN_PANE_INPUT_PENDING'],
   ['커서 아래 미제출 입력', {screen:'› \nSECOND_PENDING'}, 'KADAN_PANE_INPUT_PENDING'],
+  ...['│', '┃', '│ │', '┃ ┃', '│┃', ' │ ', ' ┃ '].flatMap(text => [
+    ['첫 줄 세로 문자 '+JSON.stringify(text), {screen:'› '+text}, 'KADAN_PANE_INPUT_PENDING'],
+    ['커서 아래 세로 문자 '+JSON.stringify(text), {screen:'› \n'+text}, 'KADAN_PANE_INPUT_PENDING'],
+  ]),
+  ['테두리인지 입력인지 미확인', {screen:'│ ›  │'}, 'KADAN_PANE_INPUT_PENDING'],
+  ['버퍼 준비 중 세로 문자 입력', {afterLoad:{screen:'› │'}}, 'KADAN_PANE_INPUT_PENDING'],
   ...['›', '>', '❯'].map(prompt => ['본문 속 가짜 프롬프트 '+prompt, {state:'11|0|1|2',screen:'› USER_UNSUBMITTED\n'+prompt+' '}, 'KADAN_PANE_INPUT_UNKNOWN']),
   ['본문 속 가짜 구분선', {screen:'› \n──────\nUSER_BELOW_BORDER'}, 'KADAN_PANE_INPUT_PENDING'],
   ['본문 끝의 구분선도 빈 입력이 아니다', {screen:'› \n──────'}, 'KADAN_PANE_INPUT_PENDING'],

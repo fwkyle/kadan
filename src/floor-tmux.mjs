@@ -417,7 +417,7 @@ function checkCardPane(session, identity, run, spawn) {
     }
   }
   if (first < 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 현재 입력 영역의 프롬프트 미확인");
-  const input = lines.slice(first).map(line => line.trim().replace(/^[│┃]\s*/u, "").replace(/[│┃]$/u, "").trim());
+  const input = lines.slice(first).map(line => line.trim());
   if (input.some((line, i) => (i === 0 ? line.replace(/^[›>❯]\s*/u, "") : line).trim())) {
     deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면");
   }

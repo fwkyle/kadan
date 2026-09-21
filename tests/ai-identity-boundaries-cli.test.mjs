@@ -91,13 +91,20 @@ process.stdin.on('data',b=>{const data=b.toString();if(data==='\\x1b[A')row=Math
   for(const raw of [true,false])for(const [name,lines,up] of [
    ...['›','>','❯'].map((prompt,i)=>['fake-prompt-'+i,['USER_UNSUBMITTED',prompt+' '],0]),
    ['fake-border',['','──────','USER_BELOW_BORDER'],2],
+   ...['│','┃','│ │','┃ ┃','│┃',' │ ',' ┃ '].flatMap((text,i)=>[
+    ['vertical-first-'+i,[text],0],
+    ['vertical-below-'+i,['',text],1],
+   ]),
   ]) {
    for(let i=0;i<lines.length;i++) {
     if(i){tm('send-keys','-t','kadan-editor','C-j');waitState({lines:[...lines.slice(0,i),''],row:i});}
     if(lines[i]){tm('send-keys','-t','kadan-editor','-l',lines[i]);waitState({lines:lines.slice(0,i+1),row:i});}
    }
    for(let i=0;i<up;i++){tm('send-keys','-t','kadan-editor','-l','\x1b[A');waitState({lines,row:lines.length-2-i});}
-   const result=probe(name+(raw?'-raw':'-plain'),'editor',[...(raw?['--raw']:[]),'--task','editor']);
+   const result=probe(name+(raw?'-raw':'-plain'),'editor',raw?['--raw','--task','editor']:['--execution','r/editor']);
+   result.inputBefore={lines,row:lines.length-1-up};
+   result.inputAfter=JSON.parse(fs.readFileSync(path.join(home,'editor-state.json'),'utf8'));
+   result.submitted=fs.existsSync(path.join(home,'editor-state.json.submitted'));
    assert.notEqual(result.exit,0,JSON.stringify(result));
    assert.match(result.error,/입력 경계 미확인|미제출 입력/);
    for(const key of ['paste','enter','send','dispatch'])assert.equal(result.delta[key],0,JSON.stringify(result));
