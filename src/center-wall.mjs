@@ -1,3 +1,4 @@
+import {operationsFlowSummaries} from './operations-flow.mjs';
 import {WorkStore} from './work-store.mjs';
 import {renderOperationsFlow,operationsFlowStyle,operationsFlowScript} from './operations-flow-view.mjs';
 import {workDashboardModel,renderWorkDetail,renderWorkCreate,workDashboardStyle} from './work-dashboard.mjs';
@@ -26,7 +27,7 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
  if(centerError)center=null;
  const briefs=buildHumanBrief(center,home);
  let works=home?[]:null,workError=null;
- if(home)try{works=workDashboardModel(new WorkStore(home).list(),center,entries)}catch(error){works=null;workError=error.message;}
+ if(home)try{const registered=new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered))}catch(error){works=null;workError=error.message;}
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
  // 관계도에 쓰는 직속 상위. 읽기 실패는 모름(null)으로 두고 화면이 담당별 묶음으로 내려간다.
  const hierarchy=home?readActiveHierarchy(entries):null;
