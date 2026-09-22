@@ -79,6 +79,9 @@ test("원장 role은 kind마다 뜻이 다르다 — send는 받는 사람, done
     recordedPid: "111",
     env: { KADAN_ROLE: "b1-감독" },
     record: () => null,
+    readEntries: () => [
+      { kind: "start", role: "b1-작업자", session: "kadan-b1-작업자", panePid: "111", cmd: "codex --model test-model" },
+    ],
   });
   const started = buildStartLedgerEntry({
     floorName: "tmux",
@@ -1222,6 +1225,9 @@ test("send --task는 taskId를 원장에 남기고 옵션이 없으면 예전 se
     taskId: "card-21-demo",
     recordedPid: "111",
     record: (entry) => records.push(entry),
+    readEntries: () => [
+      { kind: "start", role: "c21", session: "kadan-c21", panePid: "111", cmd: "codex --model test-model" },
+    ],
   });
   guardedSend({
     floor: fakeFloor,

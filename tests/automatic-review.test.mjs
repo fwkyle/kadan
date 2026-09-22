@@ -17,7 +17,7 @@ function fixture(){
  works.create({key,title:'자동 전달 시험',goal:'독립검수 완료',scope:'시험 파일',acceptance:'필수 시험',owner:'test-super',board:'test',repoPath:home});
  const pids={'test-worker':'10001','test-reviewer':'10002','test-super':'10003'},sent=[];
  const floor={name:'tmux',alive:n=>!!pids[n.slice(6)],pid:n=>pids[n.slice(6)],read:()=>'',send:(name,message)=>{sent.push({name,message});return {};}};
- const start=(role,pid)=>{pids[role]=pid;appendLedger({kind:'start',role,session:`kadan-${role}`,floor:'tmux',panePid:pid},home);};
+ const start=(role,pid)=>{pids[role]=pid;appendLedger({kind:'start',role,session:`kadan-${role}`,floor:'tmux',panePid:pid,cmd:'codex --model test-model'},home);};
  for(const [role,pid] of Object.entries(pids))start(role,pid);
  for(const id of ['implementation','review']){let c=cards.create({repo:'test',id,repoPath:home,body:`# 原本 ${id}\n최초 지시를 그대로 따른다`});cards.update(c.key,{status:'ready',scope:'시험 파일'},{revision:1,note:'승인'});}
  let beforeSend=()=>{},observe=()=>null;

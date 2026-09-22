@@ -96,7 +96,7 @@ test('인계는 전체 목록으로만 bare 별칭을 판단하고 서로 다른
 
 test('전체 주소도 send 상태/담당/범위 guard를 적용하며 raw 옵션도 우회하지 못한다',()=>{
  const f=fixture();let sent=0;const records=[];
- const args={floor:{name:'tmux',alive:()=>true,pid:()=>'11',send:()=>{sent++;return {}}},session:start.session,role:'p-worker',taskId:'r/c',raw:true,message:'go',env:f.env,recordedPid:11,record:e=>records.push(e),readEntries:()=>[start],saveBody:()=>{}};
+ const args={floor:{name:'tmux',alive:()=>true,pid:()=>'11',send:()=>{sent++;return {}}},session:start.session,role:'p-worker',taskId:'r/c',raw:true,message:'go',env:f.env,recordedPid:11,record:e=>records.push(e),readEntries:()=>[{...start,cmd:'codex --model test-model'}],saveBody:()=>{}};
  guardedSend(args);assert.equal(sent,1);assert.equal(records[0].taskId,'c');assert.equal(records[0].executionKey,'r/c');assert.equal(records[0].rawTaskId,'r/c');
  assert.throws(()=>guardedSend({...args,role:'other'}),/발령 불가/);
  assert.throws(()=>guardedSend({...args,taskId:'wrong/c'}),/연결 실패/);
@@ -160,7 +160,7 @@ test('동명 카드의 전체 주소 쓰기와 같은 역할의 두 done은 원�
  f.store.update(second.key,{status:'assigned',role:'p-worker',board:'p',scope:'local',rallyId:'two',rallyTitle:'two',rallyRound:'1',rallyStep:'implementation'},{revision:1,note:'approved'});
  const record=e=>appendLedger(e,f.home),cards=f.store.list();
  planCards({board:'p',taskIds:['r/c','s/c'],env:f.env,record});
- const args={floor:{name:'tmux',alive:()=>true,pid:()=>'11',send:()=>({})},session:start.session,role:'p-worker',raw:true,message:'go',env:f.env,recordedPid:11,record,readEntries:()=>[start],saveBody:()=>{}};
+ const args={floor:{name:'tmux',alive:()=>true,pid:()=>'11',send:()=>({})},session:start.session,role:'p-worker',raw:true,message:'go',env:f.env,recordedPid:11,record,readEntries:()=>[{...start,cmd:'codex --model test-model'}],saveBody:()=>{}};
  for(const key of ['r/c','s/c'])guardedSend({...args,taskId:key});
  for(const [taskId,result] of [['r/c','failed'],['s/c','ok']])confirmDone({entries:[start,...readLedger(f.home)],role:'p-worker',taskId,result,env:f.env,record});
  const rows=readLedger(f.home);
