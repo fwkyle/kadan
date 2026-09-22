@@ -2071,7 +2071,7 @@ const COMMANDS = {
   work:async(args,flags)=>console.log(JSON.stringify(await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
     send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
-      floor:{...floor,send:(name,text)=>transmit(()=>floor.send(name,text))},
+      floor:{...floor,send:(name,text,options)=>transmit(()=>floor.send(name,text,options))},
       session:sessionName(role),role,message,taskId,roleProfile,recordedPid:pid,
       mailContext:{workKey,executionKey},
     }),
