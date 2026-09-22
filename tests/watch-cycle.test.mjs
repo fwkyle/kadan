@@ -85,3 +85,14 @@ test('감시 루프는 첫 주기와 5분마다 watch-cycle을 남기고 관계 
  assert.deepEqual(cycles.map(c=>[c.pid,c.hierarchy,c.judge,c.profile,c.intervalMs,c.ok]),[[process.pid,'/h.json',false,'/p.json',60_000,true],[process.pid,'/h.json',false,'/p.json',60_000,true]]);
  assert.equal(cycles[0].sessions,null);
 });
+
+test('순회 계측은 기존 주기 사건에만 기록하며 잠든 시간과 AI 대기를 합치지 않는다',async()=>{
+ const {runWatch}=await import('../src/watch-runner.mjs');
+ let clock=0;const records=[],stop=new Error('finished');
+ await assert.rejects(()=>runWatch({floor:{list:()=>[{session:'kadan-worker',pid:'1'}],read:()=> 'working'},
+  readEntries:()=>[{kind:'start',role:'worker',session:'kadan-worker',panePid:'1'}],record:e=>records.push(e),
+  measure:()=>{clock+=10;return clock;},now:()=>1700000000000,print:()=>{},spawn:()=>({status:0,stdout:''}),
+  sleep:async()=>{throw stop;},sendAlert:()=>{},intervalMs:60000}),e=>e===stop);
+ const cycles=records.filter(e=>e.kind==='watch-cycle');assert.equal(cycles.length,1);
+ assert.deepEqual(cycles[0].timing,{totalMs:40,ledgerMs:10,prepareMs:10,screenMs:10,otherMs:10,observedSessions:1});
+});

@@ -1,5 +1,5 @@
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
-import { hierarchyRecipient } from "./hierarchy.mjs";
+import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 
 const JUDGE_INPUT_PREFIX = [
@@ -435,26 +435,25 @@ export function filterConfirmedCompletions(alerts, entries, cards = null) {
   });
 }
 
-export function routeAlert(alert, routes, liveSessions, superRole, parents = new Map()) {
-  if (alert.kind === '자원' && Object.hasOwn(alert,'recipient')) return alert.recipient;
-  if (alert.id === "hierarchy:unreadable") return "@user";
-  const explicitParent = hierarchyRecipient(alert.role, parents, liveSessions);
-  if (explicitParent !== undefined) return explicitParent;
-  if (alert.id.startsWith("idle:") || alert.id === "ledger:unreadable") {
-    return superRole || null;
-  }
-  if (alert.role) {
-    const board = boardFromRole(alert.role);
-    if (board) {
-      const explicit =
-        routes instanceof Map ? routes.get(board) : routes?.[board];
-      if (explicit) return explicit;
-      const boardSupervisor = supervisorForBoard(board, liveSessions);
-      if (boardSupervisor) return boardSupervisor;
+export function explainAlertRoute(alert, routes, liveSessions, superRole, parents = new Map()) {
+  const chosen=(recipient,basis)=>({recipient:recipient||null,basis,skipped:[]});
+  if (alert.kind === '자원' && Object.hasOwn(alert,'recipient')) return chosen(alert.recipient,'explicit');
+  if (alert.id === 'hierarchy:unreadable') return chosen('@user','hierarchy-unreadable');
+  const hierarchy=hierarchyRoute(alert.role,parents,liveSessions);
+  if(hierarchy)return hierarchy;
+  if(alert.id.startsWith('idle:')||alert.id==='ledger:unreadable')return chosen(superRole,'supervisor');
+  if(alert.role){
+    const board=boardFromRole(alert.role);
+    if(board){
+      const explicit=routes instanceof Map?routes.get(board):routes?.[board];
+      if(explicit)return chosen(explicit,'board-route');
+      const supervisor=supervisorForBoard(board,liveSessions);
+      if(supervisor)return chosen(supervisor,'role-name');
     }
   }
-  return superRole || null;
+  return chosen(superRole,superRole?'supervisor':'none');
 }
+export function routeAlert(...args) {return explainAlertRoute(...args).recipient;}
 
 export function dedupAlerts(previousAlerts, nextAlerts) {
   const previousById = new Map(

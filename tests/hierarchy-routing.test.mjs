@@ -105,3 +105,15 @@ test('09-07 인계 관계표를 재시작 없이 읽고 오류 때 마지막 정
  assert.ok(records.some(e=>e.recipient==='@user'&&e.alertKind==='모름'));
  assert.deepEqual(sent.filter(e=>e.message.includes('끝난 것 같음')&&!e.message.includes('해소')).map(e=>e.role),['p-감독','p-감독','p-감독-2','p-감독-2']);
 });
+
+test('수신자 선택 근거와 건너뛴 상위 역할을 실제 선택과 함께 남긴다',async()=>{
+ const {explainAlertRoute,routeAlert}=await import('../src/watch.mjs');
+ const chain=new Map([['worker','lead'],['lead','super'],['super','@user']]);
+ const live=new Set(['kadan-super']);
+ const route=explainAlertRoute({id:'death:worker',role:'worker'},new Map(),live,'fallback',chain);
+ assert.deepEqual(route,{recipient:'super',basis:'hierarchy',skipped:['lead']});
+ assert.equal(routeAlert({id:'death:worker',role:'worker'},new Map(),live,'fallback',chain),route.recipient);
+ assert.deepEqual(explainAlertRoute({id:'death:worker',role:'worker'},new Map(),new Set(),'fallback',chain),{recipient:'@user',basis:'hierarchy',skipped:['lead','super']});
+ assert.equal(explainAlertRoute({id:'death:prod-worker',role:'prod-worker'},{prod:'explicit'},new Set(),'fallback').basis,'board-route');
+ assert.equal(explainAlertRoute({id:'ledger:unreadable'},{},new Set(),null).recipient,null);
+});

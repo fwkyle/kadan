@@ -23,15 +23,18 @@ export function parseHierarchy(value) {
   return parents;
 }
 
-export function hierarchyRecipient(role, parents, liveSessions) {
+export function hierarchyRoute(role, parents, liveSessions) {
   if (!parents?.has(role)) return undefined;
-  const live = new Set(liveSessions);
+  const live = new Set(liveSessions), skipped=[];
   let parent = parents.get(role);
   while (parent !== USER_RECIPIENT) {
-    if (live.has(`kadan-${parent}`)) return parent;
-    parent = parents.get(parent);
+    if (live.has(`kadan-${parent}`)) return {recipient:parent,basis:'hierarchy',skipped};
+    skipped.push(parent);parent = parents.get(parent);
   }
-  return USER_RECIPIENT;
+  return {recipient:USER_RECIPIENT,basis:'hierarchy',skipped};
+}
+export function hierarchyRecipient(role, parents, liveSessions) {
+  return hierarchyRoute(role,parents,liveSessions)?.recipient;
 }
 
 export function isDescendant(role, ancestor, parents) {

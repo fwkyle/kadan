@@ -19,6 +19,7 @@ import {
   dedupAlerts,
   filterConfirmedCompletions,
   routeAlert,
+  explainAlertRoute,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import {
@@ -260,6 +261,7 @@ function recordAlert(record, alert, recipient, delivered, resolved = false) {
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
       recipient,
+      ...(alert.route?{route:alert.route}:{}),
       delivered,
       by: "watch",
       ...(resolved ? { resolved: true } : {}),
@@ -329,6 +331,7 @@ export function deliverResolution({
 
 export async function runWatch({
   runtime = null,
+  measure = () => performance.now(),
   floor,
   readEntries,
   readCards = null,
@@ -410,7 +413,7 @@ export async function runWatch({
   let activeAI = null;
 
   try { while (!signal?.aborted) {
-    const cycleAt = now();
+    const cycleAt = now(),began=measure();
     let entries = [], mailEntries = [];
     let ledgerError = null;
     try {
@@ -419,6 +422,7 @@ export async function runWatch({
     } catch (error) {
       ledgerError = error;
     }
+    const ledgerReadAt=measure();
     let hierarchyError = null;
     if (loadHierarchy) {
       try {
@@ -489,9 +493,11 @@ export async function runWatch({
         return false;
       });
     }
+    const preparedAt=measure();
     const roles = observationError
       ? { observations: new Map(), liveSessions: new Set(), screenAlerts: [] }
       : collectRoles(floor, entries, observedSessions);
+    const observedAt=measure();
     const workerObservations = scope ? new Map([...roles.observations].filter(([s])=>scope.sessions.has(s))) : roles.observations;
     const retrySessions = observationError || !scope ? new Set() : rateLimitRetry.tick({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
@@ -679,13 +685,14 @@ export async function runWatch({
     for (const alert of changes.notify) {
       if (deliveryFailures.has(alert.id)) continue;
       const message = `[watch ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
-      const recipient = routeAlert(
+      const route = explainAlertRoute(
         alert,
         routes,
         roles.liveSessions,
         superRole,
         parents
       );
+      const recipient=route.recipient;
       let target = "stdout";
       const failureRecipient = parents.has(recipient)
         ? routeAlert({ id: "delivery", role: recipient }, routes, roles.liveSessions, superRole, parents)
@@ -733,7 +740,7 @@ export async function runWatch({
           }
         }
       }
-      recordAlert(record, alert, recipient ?? null, delivered);
+      recordAlert(record, {...alert,route}, recipient ?? null, delivered);
       if (recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
         const notifyError = notifyUser(message, spawn);
         if (notifyError) target += `; 사용자 알림 실패(${notifyError})`;
@@ -798,7 +805,9 @@ export async function runWatch({
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
-        record(buildCycleEntry({runtime,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
+        const finished=measure();
+        const timing={totalMs:finished-began,ledgerMs:ledgerReadAt-began,prepareMs:preparedAt-ledgerReadAt,screenMs:observedAt-preparedAt,otherMs:finished-observedAt,observedSessions:[...roles.observations.values()].filter(r=>r.alive).length};
+        record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
         lastCycleRecordedAt = cycleAt;
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }

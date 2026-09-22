@@ -441,45 +441,50 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 </script></body></html>`;
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10} = {}) {
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  const cache=new Map();
+ let sharedSnapshot=null;
+ const clear=()=>{cache.clear();sharedSnapshot=null;};
  const cacheKey=url=>{const query=[...url.searchParams].filter(([key])=>key!=='fresh').sort((a,b)=>a[0].localeCompare(b[0])).map(([key,value])=>key+'='+value).join('&');return url.pathname+(query?'?'+query:'');};
  const cached=url=>{
   if(!cacheSec||url.searchParams.has('fresh'))return null;
   const key=cacheKey(url),hit=cache.get(key);
   if(!hit)return null;
-  if(Date.now()-hit.at>=cacheSec*1000){cache.delete(key);return null;}
+  if(now()-hit.at>=cacheSec*1000){cache.delete(key);return null;}
   return hit;
  };
- const remember=(url,body,type)=>{
+ const remember=(url,body,type,at=now())=>{
   if(!cacheSec)return;
   const key=cacheKey(url);
-  cache.delete(key);cache.set(key,{at:Date.now(),body,type});
+  cache.delete(key);cache.set(key,{at,body,type});
   while(cache.size>50)cache.delete(cache.keys().next().value);
  };
   return http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (centerHandler && !/^(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(request.headers.host??"")) { response.writeHead(403); response.end("local host required"); return; }
- if (request.method === 'GET') {const hit=cached(url);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
-    if (home && handleOperationsFlow(home,request,response,url)) return;
-    if (centerHandler && await centerHandler.handle(request,response,url)) { cache.clear(); return; }
+ if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
+ if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(url);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
+    if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(url),remember:(body,type)=>remember(url,body,type)})) return;
+    if (centerHandler && await centerHandler.handle(request,response,url)) { clear(); return; }
     const serve=()=>{
-    const snapshot=loadSnapshot();
+    const snapshot=sharedSnapshot&&cacheSec&&now()-sharedSnapshot.at<cacheSec*1000
+      ? sharedSnapshot.value : loadSnapshot();
+    if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshot={at:sharedSnapshot?.value===snapshot?sharedSnapshot.at:now(),value:snapshot};
     if(centerHandler) {
       snapshot.home=home;
       try{snapshot.decisions=new DecisionStore(home).list()}catch(error){snapshot.decisionError=error.message;snapshot.decisions=[]}
     }
     if (url.pathname === '/api/cards') {
       const body=JSON.stringify({center:snapshot.center,error:snapshot.centerError});
-      remember(url,body,'application/json; charset=utf-8');
+      if(!snapshot.centerError)remember(url,body,'application/json; charset=utf-8',sharedSnapshot?.at);
       response.writeHead(snapshot.centerError?503:200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});
       response.end(body); return;
     }
     if (centerHandler && url.searchParams.get('legacy')!=='1') {
       const html=renderCenterWall(snapshot,{token:centerHandler.token,url});
-      remember(url,html,'text/html; charset=utf-8');
+      remember(url,html,'text/html; charset=utf-8',sharedSnapshot?.at);
       response.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});response.end(html);return;
     }
     let html = renderWallHtml({
@@ -498,7 +503,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10} = {}) {
       kind: url.searchParams.get("kind") ?? "",
     });
     if(url.searchParams.get("legacy")=== "1") html=html.replace("<body>",'<body><div style="padding:16px;background:#fff0d0">참고용 옛 화면: 진행률은 현재 중앙 상태와 다를 수 있습니다. <a href="/">새 화면으로 돌아가기</a></div>');
-    remember(url,html,'text/html; charset=utf-8');
+    remember(url,html,'text/html; charset=utf-8',sharedSnapshot?.at);
     response.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",

@@ -10,8 +10,8 @@ export function cycleRecordDue(lastRecordedAt, now) {
  return lastRecordedAt == null || now - lastRecordedAt >= CYCLE_RECORD_MS;
 }
 
-export function buildCycleEntry({runtime = null,pid, hierarchyPath = null, hierarchyHash = null, judge = false, profile = null, intervalMs = null, sessions = null, supervisorSessions = null, ok = true}) {
- return {kind: 'watch-cycle', by: 'watch', pid,...(runtime?{runtime}:{}), hierarchy: hierarchyPath, hierarchyHash, judge: Boolean(judge), profile,
+export function buildCycleEntry({runtime = null,timing = null,pid, hierarchyPath = null, hierarchyHash = null, judge = false, profile = null, intervalMs = null, sessions = null, supervisorSessions = null, ok = true}) {
+ return {kind: 'watch-cycle', by: 'watch', pid,...(runtime?{runtime}:{}),...(timing?{timing}:{}), hierarchy: hierarchyPath, hierarchyHash, judge: Boolean(judge), profile,
   intervalMs, sessions: sessions == null ? null : sessions.length, supervisorSessions: supervisorSessions == null ? null : supervisorSessions.length, ok};
 }
 
@@ -24,7 +24,7 @@ export function cycleStatus(entries, worker, now, {windowMs = 24 * 60 * 60_000} 
  const cycles = entries.filter(e => e?.kind === 'watch-cycle' && ms(e.t) != null && ms(e.t) <= now);
  const mine = worker ? cycles.filter(e => Number(e.pid) === worker.pid && ms(e.t) >= (ms(worker.startedAt) ?? 0)) : [];
  const last = mine.at(-1) ?? null;
- const settings = last ? {...(last.runtime?{runtime:last.runtime}:{}),hierarchy: last.hierarchy ?? null, judge: last.judge === true, profile: last.profile ?? null, intervalMs: last.intervalMs ?? null} : null;
+ const settings = last ? {...(last.timing?{timing:last.timing}:{}),...(last.runtime?{runtime:last.runtime}:{}),hierarchy: last.hierarchy ?? null, judge: last.judge === true, profile: last.profile ?? null, intervalMs: last.intervalMs ?? null} : null;
  const gaps = [];
  const first = cycles[0];
  let gapMinutes = null;

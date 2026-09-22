@@ -24,12 +24,12 @@ test('같은 주소는 캐시로 돌려주고 fresh와 저장 요청은 캐시�
   const after=await fetch(base+'/');
   assert.equal(after.headers.get('x-kadan-cache'),'hit');assert.equal(loads,2,'새로 읽은 결과가 캐시를 갱신한다');
   const other=await fetch(base+'/?layout=wall');
-  assert.equal(other.headers.get('x-kadan-cache'),'miss');assert.equal(loads,3,'주소가 다르면 따로 센다');
+  assert.equal(other.headers.get('x-kadan-cache'),'miss');assert.equal(loads,2,'다른 화면도 유효한 공통 수집 결과를 쓴다');
   const token=(await (await fetch(base+'/')).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
   const post=await fetch(base+'/cards/update',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',origin:base},body:new URLSearchParams({token,key:'repo/none',revision:'1',note:'없는 카드'})});
   assert.ok(post.status>=400);
   const flushed=await fetch(base+'/');
-  assert.equal(flushed.headers.get('x-kadan-cache'),'miss');assert.equal(loads,4,'저장 시도 뒤에는 캐시를 비운다');
+  assert.equal(flushed.headers.get('x-kadan-cache'),'miss');assert.equal(loads,3,'저장 시도 뒤에는 응답·공통 수집 캐시를 비운다');
  }finally{server.close();}
 });
 
@@ -55,3 +55,26 @@ test('cacheSec 0은 캐시를 끄고 시간이 지나면 다시 읽는다',async
  }finally{short.close();}
 });
 
+
+test('다른 화면의 응답 캐시는 원본 수집 시각보다 수명을 늘리지 않는다',async()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-cache-age-'));let clock=0,loads=0;
+ const server=createWallServer(()=>{loads++;return snapshot();},{home,cacheSec:10,now:()=>clock});const base=await start(server);
+ try{
+  await fetch(base+'/');clock=9000;await fetch(base+'/?layout=wall');assert.equal(loads,1);
+  clock=11000;const next=await fetch(base+'/?layout=wall');assert.equal(next.headers.get('x-kadan-cache'),'miss');assert.equal(loads,2);
+ }finally{server.close();}
+});
+test('업무 조회 캐시는 권한 검사 뒤에만 쓰고 원문·오류는 저장하지 않는다',async()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-cache-flow-'));
+ const server=createWallServer(snapshot,{home,cacheSec:10});const base=await start(server);
+ try{
+  assert.equal((await fetch(base+'/api/operations-flow')).headers.get('x-kadan-cache'),'miss');
+  assert.equal((await fetch(base+'/api/operations-flow')).headers.get('x-kadan-cache'),'hit');
+  assert.equal((await fetch(base+'/api/operations-flow',{headers:{origin:'https://other.invalid'}})).status,403);
+  assert.equal((await fetch(base+'/api/operations-flow',{method:'POST'})).status,405);
+  for(let i=0;i<2;i++){
+   const bad=await fetch(base+'/api/operations-flow?work=invalid');assert.equal(bad.status,400);assert.equal(bad.headers.get('x-kadan-cache'),'miss');
+   const mail=await fetch(base+'/api/operations-flow/mail?work=invalid');assert.equal(mail.status,400);assert.equal(mail.headers.get('x-kadan-cache'),'miss');
+  }
+ }finally{server.close();}
+});

@@ -66,12 +66,15 @@ export function capturePane(session) {
   return result.status === 0 ? result.stdout : "";
 }
 
-export function outputLogPath(session, home = ledgerHome()) {
-  return path.join(home, "out", `${session}.log`);
+export function outputLogPath(session, home = ledgerHome(), compressed = true) {
+  return path.join(home, "out", `${session}.log${compressed?'.gz':''}`);
 }
 
 function attachOutputLog(session) {
-  const outLog = outputLogPath(session);
+  // 새 출력만 압축한다. 기존 원문 로그·완료 마커를 읽는 화면 경로는 그대로 둔다.
+  const compressed=spawnSync("gzip",["--version"],{stdio:"ignore",timeout:1000}).status===0;
+  if(!compressed)console.error("경고: gzip 사용 불가 — 출력은 원문 .log로 보존합니다");
+  const outLog = outputLogPath(session,ledgerHome(),compressed);
   try {
     fs.mkdirSync(path.dirname(outLog), { recursive: true });
   } catch (error) {
@@ -79,7 +82,7 @@ function attachOutputLog(session) {
     return null;
   }
   const quoted = outLog.replace(/'/g, "'\\''");
-  const result = tmux(["pipe-pane", "-t", session, `cat >> '${quoted}'`]);
+  const result = tmux(["pipe-pane", "-t", session, `${compressed?'gzip -1c':'cat'} >> '${quoted}'`]);
   if (result.status !== 0) {
     console.error(`경고: 출력 로그 설정 실패: ${(result.stderr || "").trim()}`);
     return null;
