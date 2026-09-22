@@ -57,7 +57,7 @@ test('표본 수집은 한 번이고 예외는 오류와 null로 남는다(card-
   assert.deepEqual(wall.buildWallSnapshot({ collect: () => { throw Error('broken'); } }), { resources: null, resourceError: 'broken' });
 });
 
-test('HTTP judge=1만 판정을 켜고 요청마다 한 표본을 받는다(card-60)', async () => {
+test('HTTP judge=1만 판정을 켜고 같은 수집 표본을 재사용한다(card-60)', async () => {
   let calls = 0;
   const server = wall.createWallServer(() => { calls++; return snapshot(); });
   const ready = once(server, 'listening');
@@ -71,7 +71,7 @@ test('HTTP judge=1만 판정을 켜고 요청마다 한 표본을 받는다(card
       assert.equal(/카단 판정 AMBER/.test(html), on);
       if (on) assert.match(html, /href="\?all=1"/);
     }
-    assert.equal(calls, 3);
+    assert.equal(calls, 1);
   } finally {
     const closed = once(server, 'close');
     server.close();

@@ -38,8 +38,7 @@ function heads(home,kind){
  });
 }
 
-function eventReader(home){
- const state=readLedgerState(home);
+function eventReader(home,state=readLedgerState(home)){
  // 주소는 출처와 저장 순번을 함께 보존한다. 날짜나 조회 위치를 원장 주소로 쓰지 않는다.
  const rows=[...state.legacy.map((entry,i)=>({...entry,seq:i+1,ledgerRef:`ledger:legacy:${i+1}`})),
   ...state.ordered.filter(entry=>entry.kind!=='dispatch').map(entry=>({...entry,seq:state.legacy.length+entry._ledgerOrder,ledgerRef:`ledger:new:${entry._ledgerOrder}`}))];
@@ -54,9 +53,9 @@ function workAt(home,key){
  return work;
 }
 
-function followupContext(home){
+function followupContext(home,snapshot={}){
  const context={cards:[],read:null,decisions:[],error:null};
- try{context.cards=heads(home,'cards');context.read=eventReader(home);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');context.decisions=new DecisionStore(home).list();}
+ try{context.cards=snapshot.cards??heads(home,'cards');context.read=eventReader(home,snapshot.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');context.decisions=snapshot.decisions??new DecisionStore(home).list();}
  catch{context.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
  return context;
 }
@@ -79,10 +78,10 @@ function followupFor(home,work,executions,context,now=stamp()){
 }
 
 // 목록도 본문을 열지 않고 같은 실행·결정 기록을 한 번만 읽는다.
-export function operationsFlowSummaries(home,works){
+export function operationsFlowSummaries(home,works,snapshot={}){
  if(!works.length)return new Map();
  return storageSnapshot(home,()=>{
-  const context=followupContext(home),now=stamp();
+  const context=followupContext(home,snapshot),now=stamp();
   return new Map(works.map(work=>{
    if(!work.history)work={...work,history:readStream(home,`works/${work.key}/events.jsonl`)};
    let records=null;
@@ -217,11 +216,13 @@ export function operationsFlowMail(home,key,recordRef){
  });
 }
 
-export function handleOperationsFlow(home,request,response,url){
+export function handleOperationsFlow(home,request,response,url,cache={}){
  if(!['/api/operations-flow','/api/operations-flow/mail'].includes(url.pathname))return false;
- const send=(status,value)=>{response.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});response.end(JSON.stringify(value));};
+ const type='application/json; charset=utf-8',canCache=url.pathname==='/api/operations-flow';
+ const send=(status,value)=>{const body=JSON.stringify(value);if(status===200&&canCache)cache.remember?.(body,type);response.writeHead(status,{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','x-kadan-cache':'miss'});response.end(body);};
  if(request.method!=='GET'){send(405,{error:'조회 전용입니다.'});return true;}
  if(request.headers.origin&&request.headers.origin!==`http://${request.headers.host}`||request.headers['sec-fetch-site']==='cross-site'){send(403,{error:'같은 대시보드에서만 조회할 수 있습니다.'});return true;}
+ if(canCache){const hit=cache.cached?.();if(hit){response.writeHead(200,{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','x-kadan-cache':'hit'});response.end(hit.body);return true;}}
  try{
   const key=url.searchParams.get('work');
   const value=url.pathname.endsWith('/mail')?operationsFlowMail(home,key,url.searchParams.get('ref')):key?operationsFlowDetail(home,key,{page:url.searchParams.get('page')}):operationsFlowIndex(home);

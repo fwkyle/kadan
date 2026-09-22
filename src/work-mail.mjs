@@ -12,19 +12,19 @@ import {effectiveCardRole} from './handover-state.mjs';
 // 실제 담당이 모두 확인될 때만 발령으로 추론하고, 답장·질문(--expect-reply)·다른 담당의 실행 연결은 건드리지 않는다.
 export function inferDispatchTask(home,{executionKey,role,replyTo,expectReply}={}){
  if(!executionKey||typeof role!=='string'||!role.trim()||replyTo||expectReply)return null;
- const card=new CardStore(home).list().find(c=>c.key===executionKey);
+ const card=new CardStore(home).listSummaries().find(c=>c.key===executionKey);
  if(!card||card.status!=='assigned')return null;
  if(effectiveCardRole(card,readLedger(home))!==role)return null;
  return card.id;
 }
 
-export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,role,expectReply=false,replyFinal=false}={}){
+export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,role,expectReply=false,replyFinal=false}={},snapshot={}){
  if(typeof expectReply!=='boolean'||typeof replyFinal!=='boolean')throw new Error('답변 옵션은 true/false여야 합니다');
  if(replyFinal&&!replyTo)throw new Error('최종 답변에는 원본 우편 ID가 필요합니다');
  if(replyFinal&&expectReply)throw new Error('최종 답변은 다시 답변을 요청하지 않습니다');
  const replyFlags={...(expectReply?{expectReply:true}:{}),...(replyFinal?{replyFinal:true}:{})};
  if(!workKey&&!executionKey&&!replyTo&&!taskId)return replyFlags;
- const works=new WorkStore(home).list(),cards=new CardStore(home).list(),entries=readMailLedger(home);
+ const works=new WorkStore(home).list(),cards=snapshot.cards??new CardStore(home).listSummaries(),entries=snapshot.entries??readMailLedger(home);
  if(entries.some(x=>x.broken))throw new Error('원장 손상: 우편 연결 확인 불가');
  if(taskId){const identity=taskIdentity(cards);identity.write(taskId,executionKey);const found=identity.resolve(taskId,executionKey);if(!found.card&&works.some(w=>w.id===taskId||w.key===taskId))throw new Error('업무 ID는 실행 발령에 쓰지 않습니다. 업무 안에 새 실행을 등록하세요');if(found.card){executionKey=found.key;}}
  let parent;

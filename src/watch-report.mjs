@@ -11,7 +11,7 @@ import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
-import {routeAlert} from './watch.mjs';
+import {routeAlert,explainAlertRoute} from './watch.mjs';
 
 export const WATCH_VERDICTS = ['진행중','입력대기','실행완료','응답장애','정체','죽음','모름','조정'];
 export const WATCH_AI_TIMEOUT_MS = 300_000;
@@ -164,7 +164,7 @@ export class WatchReports {
     const message=`[${watchAILabel(request.source)}] ${label} · ${request.role}${request.taskId?` / ${request.taskId}`:''}: ${reason}${report.consecutive>=2?' 반복 조정 판정입니다. 상위 감독과 범위·담당 조정을 검토하세요.':''} 감독이 확인 후 후속 조치를 결정하세요.`;
     const live=new Set(this.floor.list().filter(x=>x.alive!==false).map(x=>x.session));
     const routes=new Map(request.routes);
-    const recipient=routeAlert({id:request.key,role:request.role},routes,live,request.superRole,parents);
+    const route=explainAlertRoute({id:request.key,role:request.role},routes,live,request.superRole,parents),recipient=route.recipient;
     let delivery='no-recipient',escalation=null;
     if (recipient) {
       try { this.send(recipient,message); delivery='sent'; }
@@ -181,9 +181,9 @@ export class WatchReports {
     if(request.userNotify&&report.level==='RED'&&recipient!=='@user'&&escalation?.recipient!=='@user') {
       try { this.send('@user',message); userNotification='sent'; } catch { userNotification='failed'; }
     }
-    this.record({kind:'watch-ai-delivery',by:'watch-ai',requestId,source:request.source,role:request.role,recipient,delivery,escalation,userNotification});
+    this.record({kind:'watch-ai-delivery',by:'watch-ai',requestId,source:request.source,role:request.role,recipient,route,delivery,escalation,userNotification});
     this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
-      taskId:request.taskId,alertKind:verdict,level:report.level,recipient,delivered:delivery==='sent'});
+      taskId:request.taskId,alertKind:verdict,level:report.level,recipient,route,delivered:delivery==='sent'});
     if(escalation) this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
       taskId:request.taskId,alertKind:'전달실패',level:report.level,recipient:escalation.recipient,delivered:escalation.delivery==='sent'});
     return this.completed(request,{...report,recipient,delivery,escalation});

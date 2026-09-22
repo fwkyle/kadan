@@ -84,17 +84,17 @@ export function startRoleProfile({home,role,profile,previous,reusing=false}) {
   return profile ?? (Object.hasOwn(config.roles,role) ? config.roles[role] : undefined);
 }
 
-function facts(home,entries,{taskId,mailContext={},infer=false}) {
+function facts(home,entries,{taskId,mailContext={},infer=false,cards:providedCards}) {
   const unavailable=[];
   const read=(label,fn,fallback)=>{try{return fn();}catch(error){unavailable.push(`${label}: ${error.message}`);return fallback;}};
   const works=infer?read('업무 조회',()=>new WorkStore(home).list(),[]):[];
-  const cards=read('카드 조회',()=>new CardStore(home).list(),[]),identity=taskIdentity(cards);
+  const cards=providedCards?[...providedCards]:read('카드 조회',()=>new CardStore(home).listSummaries(),[]),identity=taskIdentity(cards);
   const {workKey,executionKey}=mailContext;
   let card=executionKey ? read('연결 실행',()=>new CardStore(home).get(executionKey),null) : null;
   if (taskId) {
     const found=identity.resolve(taskId,executionKey),matches=found.card?[found.card]:[];
     if (card && identity.resolve(taskId,executionKey).key !== card.key) throw failure('task와 실행 연결 불일치');
-    if (!card && matches.length===1) card=matches[0];
+    if (!card && matches.length===1) card=read('연결 실행',()=>new CardStore(home).get(matches[0].key),null);
   }
   const linked=card ? works.filter(w=>w.executions.some(e=>e.key===card.key)) : [];
   let work=workKey ? read('연결 업무',()=>new WorkStore(home).get(workKey),null) : linked.length===1 ? linked[0] : null;
@@ -156,13 +156,13 @@ function referencePaths(profile) {
     .filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
 }
 
-export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home)}) {
+export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home),cards}) {
   try {
     const config=readRoleInstructionsConfig(home);
     if (raw) return {message,instructions:null,metadata:{status:'not-applied',reason:'explicit-raw',...(config.configDigest?{configDigest:config.configDigest}: {})}};
     {
       const explicit=explicitProfile({role,profile,entries,config});
-      const context=facts(home,entries,{taskId,mailContext,infer:!explicit});
+      const context=facts(home,entries,{taskId,mailContext,infer:!explicit,cards});
       const selected=explicit||selectProfile({role,entries,context});
       if (!selected.profile) return {message,instructions:null,metadata:{status:'not-applied',reason:selected.source,...(context.unavailable.length?{unavailable:context.unavailable}: {})}};
       const templates=['common',selected.profile].map(name=>({name,...readFile(config.templates[name]||path.join(templateRoot,`${name}.md`),{template:true})}));
@@ -176,7 +176,7 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
       if (card) lines.push(`연결 실행: ${card.key}; 상태: ${card.status}; 확인 revision: ${card.revision}. 최신 확인: kadan card show ${card.key}.`);
       const current=taskId&&card&&identity.resolve(taskId,mailContext?.executionKey).key===card.key&&active(card)&&effectiveCardRole(card,entries,identity)===role&&(!work||work.status==='open');
       if (current) {
-        if(card.resultPath)lines.push(`현재 실행 결과 파일: ${card.resultPath}\n검증 자료 폴더: ${card.evidenceDir}\n보고서·검수 로그는 이 카드 저장소에, 제품 코드·설계·사용 설명서는 대상 레포에 둔다. 원본 카드나 이전 실행의 결과 파일을 덮어쓰지 않는다.`);
+        if(card.resultPath)lines.push(`현재 실행 결과 파일: ${card.resultPath}\n검증 자료 폴더: ${card.evidenceDir}\n보고서·검수 로그는 이 카드 저장소에, 제품 코드·설계·사용 설명서는 대상 레포에 둔다. Git 체크아웃·worktree·node_modules·빌드 캐시는 evidenceDir 밖의 작업 공간에 두고 경로·커밋·검증 명령만 근거에 남긴다. 원본 카드나 이전 실행의 결과 파일을 덮어쓰지 않는다.`);
         lines.push(`현재 실행에 관한 질문으로 답변을 기다릴 때는 기존 질문에 --execution ${shellQuote(card.key)} --expect-reply를 붙인다: kadan send ${reply&&reply!=='@user'?shellQuote(reply):'<확인된 직속 상위>'} --execution ${shellQuote(card.key)} --expect-reply <질문>. 일반 대화를 억지로 연결하거나 다른 실행을 추정하지 않는다.`);
         lines.push(`현재 발령 ID: ${identity.taskIdFor(card)}. 실제 착수 시 최신 kadan card show ${card.key}의 revision을 사용해 한 번 기록하라. 아래 명령의 ${card.revision}은 이 지침 생성 시점의 revision이므로 실행 전에 최신 값과 대조한다.\n\n`+
           `KADAN_ROLE=${role} kadan card progress ${card.key} --revision ${card.revision} --activity running --note "시작: 현재 실행 착수"\n\n`+

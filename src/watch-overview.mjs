@@ -2,7 +2,7 @@ import {taskIdentity} from './task-identity.mjs';
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {parseHierarchy,hierarchyRecipient} from './hierarchy.mjs';
+import {parseHierarchy,hierarchyRecipient,hierarchyRoute} from './hierarchy.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {watchAILabel} from './watch-report.mjs';
 import {cycleStatus,watchVerdict} from './watch-cycle.mjs';
@@ -74,6 +74,7 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   for(const role of supervisors)names.add(role);
   const roles=[...names].map(role=>({role,parent:parents?.get(role)??null,registered:parents?parents.has(role):null,
    recipient:parents?.has(role)&&center.runtimeKnown?hierarchyRecipient(role,parents,live):null,
+   route:parents?.has(role)&&center.runtimeKnown?hierarchyRoute(role,parents,live):null,
    recipientKnown:!!(parents?.has(role)&&center.runtimeKnown),scope:supervisors.has(role)?'supervisor-health':'card',
    observer:watchAILabel(supervisors.has(role)?'supervisor-health':'worker'),
    ...(supervisors.has(role)?{checkIntervalMinutes:60,lastCheckedAt:entries.findLast(e=>e.kind==='watch-ai-report'&&e.role===role&&e.source==='supervisor-health'&&e.accepted)?.t??null}: {})}));
@@ -81,7 +82,7 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   const state=!ledgerKnown?'unknown':result.process.state==='absent'?'absent':result.process.state==='duplicate'?'duplicate':!scope?'unknown':!roles.length?'not-required':missing.length?'incomplete':'configured';
   result.boards.push({name:board.name,state,roles:orderWatchRoles(roles),missingRoles:missing,registeredRoles:scope?roles.filter(r=>r.registered).length:null,totalRoles:scope?roles.length:null,
    aiActivity:scope?aiActivity(names):aiActivity(new Set()).map(a=>({...a,requests:null,reported:null,timeouts:null,failed:null})),
-  recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,delivered:e.delivered??null,resolved:e.resolved===true})):null});
+  recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,route:e.route??null,delivered:e.delivered??null,resolved:e.resolved===true})):null});
  }
  result.verdict=watchVerdict(result,now);
  return result;

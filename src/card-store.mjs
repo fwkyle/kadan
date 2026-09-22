@@ -29,22 +29,40 @@ export class CardStore {
     if(parts.length!==2||!parts.every(slug))throw new Error('카드 주소는 저장소/카드ID');
     return path.join(this.root,...parts);
   }
-  get(key) {
+  get(key,{body=true}={}) {
     const dir=this.dir(key);
     const history=readStream(this.home,`cards/${key}/events.jsonl`);
     if(!history.length||history.some((e,i)=>e.revision!==i+1||e.key!==key))throw new Error('카드 이력 손상');
     const latest=history.at(-1);
-    return {...latest,history,body:fs.readFileSync(path.join(dir,'card.md'),'utf8'),path:path.join(dir,'card.md'),
+    return {...latest,history,...(body?{body:fs.readFileSync(path.join(dir,'card.md'),'utf8')}: {}),path:path.join(dir,'card.md'),
       ...(latest.artifactLayout==='card-v1'?{resultPath:path.resolve(dir,'result.md'),evidenceDir:path.resolve(dir,'evidence')}: {})};
   }
   list() {
     if(storageMode(this.home)==='sqlite')return transaction(this.home,()=>listStreams(this.home,'cards/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13))),{readOnly:true});
+    return this.listWithoutBody().map(card=>({...card,body:fs.readFileSync(card.path,'utf8')}));
+  }
+  // 목록/주소 확인에는 본문이 필요 없다. SQLite는 이력의 주소·순번을 SQL로 검증한다.
+  listSummaries() {
+    if(storageMode(this.home)!=='sqlite')return this.listWithoutBody().map(({history,...card})=>card);
+    return transaction(this.home,db=>db.prepare(`
+      SELECT h.stream,h.seq,h.payload,COUNT(e.seq) AS count,MAX(e.seq) AS lastSeq,
+        MAX(CASE WHEN e.seq=h.seq THEN e.payload END) AS lastPayload,
+        SUM(CASE WHEN json_type(e.payload,'$.revision')='integer'
+          AND json_extract(e.payload,'$.revision')=e.seq
+          AND json_extract(e.payload,'$.key')=substr(h.stream,7,length(h.stream)-19)
+          THEN 0 ELSE 1 END) AS invalid
+      FROM heads h LEFT JOIN events e ON e.stream=h.stream
+      WHERE h.stream GLOB 'cards/*/*/events.jsonl' GROUP BY h.stream ORDER BY h.stream
+    `).all().map(row=>{
+      const key=row.stream.slice(6,-13),dir=this.dir(key),latest=JSON.parse(row.payload);
+      if(row.invalid||row.count!==row.seq||row.lastSeq!==row.seq||row.lastPayload!==row.payload||latest.key!==key||latest.revision!==row.seq)throw new Error('카드 이력 손상');
+      return {...latest,path:path.join(dir,'card.md'),...(latest.artifactLayout==='card-v1'?{resultPath:path.resolve(dir,'result.md'),evidenceDir:path.resolve(dir,'evidence')}: {})};
+    }),{readOnly:true});
+  }
+  listWithoutBody() {
     if(!fs.existsSync(this.root))return [];
-    const result=[];
-    for(const repo of fs.readdirSync(this.root,{withFileTypes:true}).filter(x=>x.isDirectory()&&!x.name.startsWith('.'))) {
-      for(const card of fs.readdirSync(path.join(this.root,repo.name),{withFileTypes:true}).filter(x=>x.isDirectory()))result.push(this.get(`${repo.name}/${card.name}`));
-    }
-    return result;
+    return fs.readdirSync(this.root,{withFileTypes:true}).filter(x=>x.isDirectory()&&!x.name.startsWith('.')).flatMap(repo=>
+      fs.readdirSync(path.join(this.root,repo.name),{withFileTypes:true}).filter(x=>x.isDirectory()).map(card=>this.get(`${repo.name}/${card.name}`,{body:false})));
   }
   locked(fn) {
     assertWritable(this.home);
@@ -101,7 +119,7 @@ export class CardStore {
       if(!['draft','ready','assigned','hold','done','cancelled','superseded','archived'].includes(next.status))throw new Error('잘못된 카드 상태');
       if(['ready','assigned'].includes(next.status)&&!next.scope?.trim())throw new Error('발령 가능한 범위를 먼저 적어야 한다');
       if(next.status==='assigned'&&(!slug(next.board)||!slug(next.role)))throw new Error('판과 담당 역할이 필요하다');
-      if(next.status==='assigned'&&current.status!=='assigned'&&next.workType==='execution'&&!next.rallyId)throw new Error('실행 카드 수동 발령에는 티키타카 묶음 정보가 필요하다. --rally-id --rally-title --rally-round --rally-step을 함께 적어라(작은 작업은 1싸이클 구현 라운드: --rally-round 1 --rally-step implementation). 업무 안의 실행은 work execute·자동 전달 경로를 쓴다.');
+      if(next.status==='assigned'&&current.status!=='assigned'&&next.workType==='execution'&&!next.rallyId)throw new Error('실행 카드 수동 발령에는 티키타카 묶음 정보가 필요하다. --rally-id --rally-title --rally-round --rally-step을 함께 적어라(작은 작업은 1라운드 구현 턴: --rally-round 1 --rally-step implementation). 업무 안의 실행은 work execute·자동 전달 경로를 쓴다.');
       // worktree 작업자는 상위 폴더 지침이 자동으로 걸리지 않는다. 읽을 문서를 카드가 직접 알려주게 한다.
       if(manual&&next.status==='assigned'&&current.status!=='assigned'&&next.workType==='execution'&&readFirstPaths(body).length===0)throw new Error("실행 카드 수동 발령에는 카드 본문 '읽고 시작할 것'에 읽을 문서를 절대경로로 최소 1개 적어야 한다. worktree는 저장소 루트 밑이 아닌 경우가 많아 작업자가 위로 올라가며 찾는 지침이 하나도 안 걸린다. 예: '## 읽고 시작할 것' 아래에 '- /절대경로/저장소/AGENTS.md — 저장소 공통 규칙'. 양식의 예시 문구(<>·…)는 적힌 것으로 보지 않는다.");
       if(patch.activity!==undefined){
@@ -176,11 +194,12 @@ export class CardStore {
       return this.get(key);
     });
   }
-  checkSend(id,role,cards=this.list()) {
+  checkSend(id,role,cards=this.listSummaries(),entries=readLedger(this.home)) {
     const identity=taskIdentity(cards),found=identity.resolve(id);
     identity.write(id);
     if(!found.card)return null;
-    const c=found.card;c.role=effectiveCardRole(c,readLedger(this.home),identity);
+    if(entries.some(e=>e.broken))throw new Error('원장 손상: 발령 확인 불가');
+    const c=this.get(found.card.key);c.role=effectiveCardRole(c,entries,identity);
     if(c.status!=='assigned'||c.role!==role||!c.scope.trim())throw new Error(`중앙 카드 발령 불가: ${c.key} (${c.status}, 담당 ${c.role??'미배정'})`);
     return c;
   }

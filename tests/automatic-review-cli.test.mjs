@@ -12,6 +12,40 @@ import {digest,findDoneMarkers} from '../src/cli.mjs';
 const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
 
+test('자동 발령도 기존 미제출 입력을 보존하고 paste·Enter·발령을 거부한다',()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-auto-input-'));
+ createDatabase(home);writeStorageMarker(home,'sqlite');
+ const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_FLOOR:'tmux',KADAN_WINDOW:'none',KADAN_ROLE:'auto-owner'};
+ const run=(...args)=>{const p=spawnSync(process.execPath,[cli,...args],{env,encoding:'utf8',timeout:15000});assert.equal(p.status,0,p.stderr);return p.stdout;};
+ const tm=(...args)=>spawnSync('tmux',['-L',env.KADAN_SOCKET,...args],{encoding:'utf8'});
+ const harness=path.join(home,'codex');
+ fs.writeFileSync(harness,`#!${process.execPath}\nprocess.stdout.write('› ');process.stdin.on('data',()=>{});\n`,{mode:0o755});
+ const roles=['auto-worker','auto-reviewer','auto-owner'],started=[];
+ try{
+  for(const role of roles){run('start',role,'--hidden','--cmd',`${quote(harness)} --model test-model`);started.push(role);}
+  const target='kadan-auto-worker';
+  tm('send-keys','-t',target,'-l','USER_PENDING');
+  const until=Date.now()+3000;
+  while(!tm('capture-pane','-p','-t',target).stdout.includes('USER_PENDING')){
+   assert.ok(Date.now()<until,'시험 입력 준비 시간 초과');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
+  }
+  run('work','create','input/work','--title','입력 보존','--goal','미제출 입력 보존','--scope','격리 시험','--acceptance','발령 없음','--owner','auto-owner','--board','input','--repo-path',home);
+  for(const id of ['implementation','review']){
+   const source=path.join(home,id+'.md');fs.writeFileSync(source,'# 격리 카드\n자동 발령 경계 확인');
+   run('card','create','input/'+id,'--source',source,'--repo-path',home);
+   run('card','update','input/'+id,'--revision','1','--status','ready','--scope','격리 시험','--note','시험 승인');
+  }
+  run('work','auto-configure','input/work','--revision','1','--implementation','input/implementation','--review','input/review','--worker',roles[0],'--reviewer',roles[1],'--notify',roles[2]);
+  const before=tm('capture-pane','-p','-t',target).stdout;
+  const state=JSON.parse(run('work','auto-step','input/work'));
+  assert.equal(state.status,'exception');
+  assert.match(state.reason,/미제출 입력|입력 경계/);
+  assert.equal(tm('capture-pane','-p','-t',target).stdout,before,'paste·Enter 없이 기존 화면 보존');
+  assert.equal(readLedger(home).filter(e=>e.kind==='send'&&e.role===roles[0]).length,0);
+  assert.equal(readTaskLedger(home).filter(e=>e.kind==='dispatch').length,0);
+ }finally{for(const role of started)run('stop',role);}
+});
+
 test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→수정→PASS·마커·동시 실행',async()=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-auto-review-cli-'));
  createDatabase(home);writeStorageMarker(home,'sqlite');
@@ -27,6 +61,7 @@ import {createHash} from 'node:crypto';
 import readline from 'node:readline';
 import {spawnSync} from 'node:child_process';
 const home=process.env.KADAN_HOME,role=process.env.KADAN_ROLE;let count=0,pending=null;
+process.stdout.write('› ');
 readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
  fs.appendFileSync(path.join(home,role+'.received'),line+'\\n');
  const match=line.match(/카드 id는 (exec-[a-f0-9-]+)이다/);if(match)pending=match[1];
@@ -40,7 +75,9 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
  const p=spawnSync(process.execPath,[${JSON.stringify(cli)},'work','auto-report','ar-test/work','--execution','ar-test/'+id,'--outcome',outcome],{encoding:'utf8',env:process.env});
  fs.appendFileSync(path.join(home,role+'.reports'),JSON.stringify({status:p.status,stdout:p.stdout,stderr:p.stderr})+'\\n');
  if(p.status!==0){console.log('보고 실패 '+p.stderr);return;}
+ process.stdout.write('\\x1b[2J\\x1b[H');
  console.log(['KADAN:DONE',id,'ok'].join(' '));
+ process.stdout.write('› ');
 });
 `);
  const started=[];

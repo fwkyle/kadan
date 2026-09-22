@@ -82,7 +82,7 @@ test('음수 시간과 모호한 주소는 빠른 성공으로 표시하지 않�
  assert.equal(f.detail().followup.state,'unknown');assert.equal(f.detail().executions[0].timing.dispatchToDoneMs,null);
 });
 
-test('자동 PASS·3싸이클 경계·총 상한·예외가 다음 담당으로 연결되고 이후 실행은 옛 자동 상태를 쓰지 않는다',()=>{
+test('자동 PASS·3라운드 경계·총 상한·예외가 다음 담당으로 연결되고 이후 실행은 옛 자동 상태를 쓰지 않는다',()=>{
  for(const status of ['pass','boundary','limit','exception']){
   const f=fixture();f.done();f.report(status==='pass'?'pass':'changes');
   appendStream(f.home,`automatic-review/${f.key}/events.jsonl`,{key:f.key,revision:1,links:f.works.get(f.key).executions,current:{key:f.execution},status,at:new Date().toISOString(),notification:{status:'sent'}});
@@ -102,7 +102,7 @@ test('근거 읽기 실패는 다음 행동 미지정으로 축소하지 않는�
  assert.equal(f.detail().followup.state,'unknown');
 });
 
-test('지난 실패는 보존하되 새 싸이클의 합격과 명시 연결 감시 호출을 구분한다',()=>{
+test('지난 실패는 보존하되 새 라운드의 합격과 명시 연결 감시 호출을 구분한다',()=>{
  const f=fixture();f.done('failed');
  const review=f.add('review',2);f.send(review,'review');f.done('ok',review,'review');f.report('pass',review);
  appendLedger({kind:'watch-ai-call',role:'review',taskId:review,requestId:'linked'},f.home);

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs';
+import {readLedgerState,projectLedger} from './ledger-domains.mjs';
+import {captureRuntimeVersion} from './runtime-version.mjs';
 import {WatchAI} from './watch-ai.mjs';
 import {watchReportCommand,watchAILabel} from './watch-report.mjs';
 import {notifyUser} from './watch-system.mjs';
@@ -669,8 +671,13 @@ export function guardedSend({
   if(taskId!=null&&mailContext?.replyFinal)throw new Error('최종 답변은 --task 발령과 함께 사용할 수 없습니다');
   const home=env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome();
   const by=resolveLedgerBy({source,env});
-  const resolveReplyContext=()=>{
-    const resolved=resolveWorkMail(home,{...mailContext,taskId,by,role});
+  // 이번 시도의 읽기 결과만 공유한다. 전송 직전 생존·답장 수신자 확인은 따로 한다.
+  let entries;
+  try { entries = readEntries(); }
+  catch (error) { entries = [{broken:`원장 읽기 실패: ${error.message}`}]; }
+  let cards;
+  const resolveReplyContext=(snapshot)=>{
+    const resolved=resolveWorkMail(home,{...mailContext,taskId,by,role},snapshot);
     if (resolved.currentRecipient && resolved.currentRecipient !== role) {
       const error=new Error(`답장 수신 책임자가 ${role}에서 ${resolved.currentRecipient}(으)로 변경되었습니다. inbox read로 현재 주소를 확인하세요`);
       error.code='KADAN_MAIL_RECIPIENT_CHANGED';error.delivery='not-sent';
@@ -679,28 +686,24 @@ export function guardedSend({
     return resolved;
   };
   if(mailContext?.replyTo||mailContext?.replyFinal||mailContext?.expectReply){
-    mailContext=resolveReplyContext();
+    cards=new CardStore(home).listSummaries();
+    mailContext=resolveReplyContext({cards,entries});
   }
   const mailId=randomUUID();
   const originalTaskId=taskId;
   if (taskId != null) {
-    const store=new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()),cards=store.list();
-    const card = store.checkSend(mailContext?.executionKey||taskId,role,cards);
+    const store=new CardStore(home);cards??=store.listSummaries();
+    const card = store.checkSend(mailContext?.executionKey||taskId,role,cards,entries);
     if (card) {
       if (taskId!==card.id&&taskId!==card.key) throw new Error('발령 대상과 실행 연결이 다릅니다');
       mailContext={...mailContext,executionKey:card.key};
-      // 같은 이름의 카드는 전체 주소로 지문과 DONE을 구분한다.
       taskId=taskIdentity(cards).taskIdFor(card);
     }
   }
-  // 파일/기록 읽기는 생존 검사 전에 끝낸다. 본문은 항상 앞에 그대로 둔다.
-  let entries;
-  try { entries = readEntries(); }
-  catch (error) { entries = [{broken:`원장 읽기 실패: ${error.message}`}]; }
   const sourceCwd = entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd ?? null;
   const originalCardPath = extractCardPath(message,sourceCwd);
   const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
-    role,message,profile:roleProfile,raw,taskId,mailContext,entries});
+    role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards});
   message = composed.message;
   if (!raw) {
     const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,expectReply:mailContext?.expectReply===true,sender:by,env});
@@ -890,7 +893,7 @@ export function planCards({ board, taskIds, about = null, env = process.env, rec
     error.exitCode = 2;
     throw error;
   }
-  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).list());
+  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).listSummaries());
   const resolved=planned.map(card=>({...card,...identity.write(card.taskId)}));
   if(new Set(resolved.map(c=>c.executionKey||c.taskId)).size!==resolved.length)throw new Error('같은 카드의 별칭을 중복 계획할 수 없습니다');
   const boardAbout = typeof about === "string" && about.trim() ? about.trim() : null;
@@ -929,7 +932,7 @@ export function confirmDone({
   if (result !== "ok" && result !== "failed") {
     reject("결과는 ok 또는 failed여야 한다");
   }
-  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).list());
+  const identity=taskIdentity(cards ?? new CardStore(env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome()).listSummaries());
   const address=identity.write(taskId);
   entries=workEntries(entries,identity);
   if (
@@ -1013,7 +1016,7 @@ export function runWaitLoop({
       findDoneMarkers(stripAnsi(accumulated))
     );
     if (fresh.length === 0) return null;
-    const identity=taskIdentity(cards ?? (snapshotHome?new CardStore(snapshotHome).list():[]));
+    const identity=taskIdentity(cards ?? (snapshotHome?new CardStore(snapshotHome).listSummaries():[]));
     const resolved=fresh.map(marker=>({...marker,...identity.write(marker.taskId)}));
     for (const marker of resolved) {
       record({
@@ -1676,6 +1679,7 @@ function cmdWatch(argv, flags) {
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   return runWatch({
+    runtime:captureRuntimeVersion(),
     floor,
     readEntries: readLedger,
     readCards: () => new CardStore(ledgerHome()).list(),
@@ -1723,7 +1727,7 @@ function cmdStop(argv) {
   if (!role) die("사용법: kadan stop <역할>");
   const session = sessionName(role);
   if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  const pending = pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).list()).project(readLedger()), role);
+  const pending = pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).listSummaries()).project(readLedger()), role);
   if (pending.length > 0) {
     console.log(
       `미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`
@@ -1795,18 +1799,19 @@ function cmdTree(_argv, flags = {}) {
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
-  console.log(renderTree(buildTree(readLedger(), aliveBySession,new CardStore(ledgerHome()).list())));
+  console.log(renderTree(buildTree(readLedger(), aliveBySession,new CardStore(ledgerHome()).listSummaries())));
 }
 
-function loadWallSnapshot() {
+function loadWallSnapshot(runtime=null) {
   const collectedAt = new Date();
   const resourceSnapshot = buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   const file = ledgerPath();
   let entries = [];
-  let ledgerLines = null;
+  let ledgerLines = null,ledgerState=null;
   const errors = [];
   try {
-    entries = readLedger();
+    ledgerState=readLedgerState(ledgerHome());
+    entries = projectLedger(ledgerState);
     ledgerLines = entries.length;
   } catch (error) {
     errors.push(`원장 못 읽음(0개가 아니라 모름): ${error.message}`);
@@ -1826,15 +1831,16 @@ function loadWallSnapshot() {
   let cards=[],cardError=null;
   try {cards=new CardStore(ledgerHome()).list();}catch(error){cardError=error;}
   const tree=withWaitSnapshots(buildTree(entries,aliveBySession,cards),ledgerHome());
-  let center=null, centerError=null;
+  let center=null, centerError=null,registeredWorks=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
     if(cardError)throw cardError;
     center=buildCardCenter({cards,entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
-    center=attachWatchOverview(center,entries,{works:new WorkStore(ledgerHome()).list(),profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
+    registeredWorks=new WorkStore(ledgerHome()).list();
+    center=attachWatchOverview(center,entries,{works:registeredWorks,profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
   } catch(error) { centerError=error.message; }
   return {
-    center,centerError,tree,
+    center,centerError,tree,ledgerState,registeredWorks,runtime,
     ...resourceSnapshot,
     entries,
     version: fs.existsSync(new URL("../package.json", import.meta.url)) ? JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version : "",
@@ -1863,7 +1869,8 @@ function cmdWall(_argv, flags) {
   const cacheSec=flags['cache-sec']===undefined?10:Number(flags['cache-sec']);
   // 같은 주소를 15초마다 다시 읽는 화면을 위해 응답을 잠깐 재사용한다. 0이면 끈다.
   if(!Number.isInteger(cacheSec)||cacheSec<0)die('--cache-sec는 0 이상의 정수여야 한다');
-  const server = createWallServer(loadWallSnapshot, {home:ledgerHome(),cacheSec});
+  const runtime=captureRuntimeVersion();
+  const server = createWallServer(()=>loadWallSnapshot(runtime), {home:ledgerHome(),cacheSec});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;
@@ -2064,14 +2071,14 @@ const COMMANDS = {
   work:async(args,flags)=>console.log(JSON.stringify(await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
     send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
-      floor:{...floor,send:(name,text)=>transmit(()=>floor.send(name,text))},
+      floor:{...floor,send:(name,text,options)=>transmit(()=>floor.send(name,text,options))},
       session:sessionName(role),role,message,taskId,roleProfile,recordedPid:pid,
       mailContext:{workKey,executionKey},
     }),
     observeDone:s=>{
       const observation=normalizeFloorRead(floor.read(sessionName(s.current.role)));
       if(observation.gap)throw new Error('완료 화면 출력 누락');
-      const identity=taskIdentity(new CardStore(ledgerHome()).list());
+      const identity=taskIdentity(new CardStore(ledgerHome()).listSummaries());
       const markers=diffDoneMarkers(findDoneMarkers(stripAnsi(s.baseline)),findDoneMarkers(stripAnsi(observation.text)))
         .filter(m=>identity.resolve(m.taskId).key===s.current.key);
       if(new Set(markers.map(m=>m.result)).size>1)throw new Error('완료 마커 충돌');
