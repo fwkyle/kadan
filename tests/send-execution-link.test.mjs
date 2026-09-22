@@ -14,6 +14,11 @@ import {buildWatchScope} from '../src/watch-scope.mjs';
 const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
 const pause=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);
+function waitForReceiver(home,role) {
+ const ready=path.join(home,role+'.ready'),deadline=Date.now()+5000;
+ while(!fs.existsSync(ready)&&Date.now()<deadline)pause(20);
+ assert.ok(fs.existsSync(ready),'시험 수신기가 아직 시작되지 않았다');
+}
 const rally={rallyId:'rally',rallyTitle:'묶음',rallyRound:'1',rallyStep:'implementation'};
 
 function fixture(){
@@ -47,13 +52,17 @@ test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 
  const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
  const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
- const receiver=path.join(home,'receiver.mjs');
- fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
- run('start','p-worker','--hidden','--cmd',`${quote(process.execPath)} ${quote(receiver)}`);
+ const receiver=path.join(home,'codex.mjs');
+ fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
+ // 카드 발령 대상은 등록 실행기+모델로 시작한 세대여야 한다 — 시험 실행기도 그 형태를 갖춘다.
+ const harness=path.join(home,'codex');
+ fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
+ run('start','p-worker','--hidden','--cmd',`${quote(harness)} --model test-model`);
  const mine=store.create({repo:'r',id:'card-x',repoPath:home,body:'# 지시'});assign(mine.key,'p-worker');
  const other=store.create({repo:'r',id:'card-y',repoPath:home,body:'# 지시'});assign(other.key,'q-worker');
  const sends=()=>readLedger(home).filter(e=>e.kind==='send'&&e.transport!=='mailbox');
  try{
+  waitForReceiver(home,'p-worker');
   // 재현 조합: --task 없이 --execution만 — 수신 역할의 발령 카드이므로 taskId로 기록한다
   const incident=call('send','p-worker','--execution',mine.key,'카드 지시를 확인하고 수행하라');
   assert.equal(incident.status,0,incident.stderr);
@@ -97,12 +106,15 @@ test('질문(--expect-reply)은 실행 카드 추론에서 빠지고 taskId·dis
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
   const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
-  const receiver=path.join(home,'receiver.mjs');
-  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
-  run('start','q-worker','--hidden','--cmd',`${quote(process.execPath)} ${quote(receiver)}`);
+  const receiver=path.join(home,'codex.mjs');
+  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
+  const harness=path.join(home,'codex');
+  fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
+  run('start','q-worker','--hidden','--cmd',`${quote(harness)} --model test-model`);
   const card=store.create({repo:'r',id:`q-${backend}`,repoPath:home,body:'# 지시'});
   store.update(card.key,{status:'assigned',role:'q-worker',board:'q',scope:'시험 범위',...rally},{revision:1,note:'배정'});
   try{
+   waitForReceiver(home,'q-worker');
    // 명시 발령 뒤 작업자가 유효 waiting으로 전환하면 감시 범위에서 빠진다
    run('send','q-worker','--task',card.id,'작업을 시작하라');
    const waiting=store.update(card.key,{activity:'waiting'},{revision:store.get(card.key).revision,note:'작업자 대기',noteKind:'progress',by:'q-worker'});

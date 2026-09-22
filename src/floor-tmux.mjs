@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { matchesAiProcess } from "./ai-identity.mjs";
 import { ledgerHome } from "./ledger.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
@@ -383,16 +384,57 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
   return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
 }
 
-export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint} = {}) {
+// 카드만 검사한다. 일반 우편/Enter 전용 경로와 기존 복사모드 검사는 그대로 둔다.
+function checkCardPane(session, identity, run, spawn) {
+  const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
+  const state = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}"]).trim();
+  if (!/^\d+\|[01]\|\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "카드 전송 불가: pane 상태 미확인");
+  const [pid, dead, y] = state.split("|");
+  if (dead !== "0") deny("KADAN_PANE_DEAD", "카드 전송 불가: 종료된 pane");
+  if (pid !== String(identity.currentPid)) deny("KADAN_PID_MISMATCH", "카드 전송 불가: 검사 중 pane 세대 변경");
+  const ps = spawn("ps", ["-ww", "-axo", "pid=,ppid=,pgid=,tpgid=,args="], {encoding:"utf8"});
+  if (ps.status !== 0 || typeof ps.stdout !== "string") deny("KADAN_AI_PROCESS_UNKNOWN", "카드 전송 불가: 현재 프로세스 조회 실패");
+  const rows = ps.stdout.split("\n").map(line => line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(.+)$/)).filter(Boolean);
+  const descendants = new Set([pid]);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const row of rows) if (descendants.has(row[2]) && !descendants.has(row[1])) { descendants.add(row[1]); changed = true; }
+  }
+  const foreground = rows.find(row => row[1] === pid)?.[4];
+  if (!(Number(foreground) > 0) || !rows.some(row => descendants.has(row[1]) && row[3] === foreground && matchesAiProcess(row[5], identity.harness, identity.model))) {
+    deny("KADAN_AI_PROCESS_UNVERIFIED", "카드 전송 불가: 현재 pane 프로세스의 AI 실행기·명시 모델이 시작 기록과 다르거나 미확인이다");
+  }
+  const screen = run(["capture-pane", "-p", "-t", `=${session}:`]);
+  const lines = screen.split("\n");
+  if (Number(y) >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 입력 줄 미확인");
+  // 화면 문자열만으로 본문 속 프롬프트/구분선을 UI와 구별할 수 없다.
+  // 후보가 여럿이면 거부하고, 아래쪽 줄도 구분선 모양으로 잘라내지 않는다.
+  let first = -1;
+  for (let i = Number(y); i >= 0; i--) {
+    if (/^\s*[│┃]?[ \t]*[›>❯]/u.test(lines[i])) {
+      if (first >= 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 프롬프트 후보가 여러 개여서 입력 경계 미확인");
+      first = i;
+    }
+  }
+  if (first < 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 현재 입력 영역의 프롬프트 미확인");
+  const input = lines.slice(first).map(line => line.trim());
+  if (input.some((line, i) => (i === 0 ? line.replace(/^[›>❯]\s*/u, "") : line).trim())) {
+    deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면");
+  }
+}
+
+export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity} = {}) {
   const buffer = `kadan-send-${pid}-${hrtime().toString(36)}`;
   let stage = "not-started";
   let loaded = false;
   const checkMode = () => checkPaneMode(session, run);
   try {
     checkMode();
+    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
     run(["load-buffer", "-b", buffer, "-"], text);
     loaded = true;
     checkMode();
+    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
     stage = "paste-attempted";
     run(["paste-buffer", "-d", "-b", buffer, "-t", session]);
     loaded = false;

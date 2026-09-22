@@ -24,9 +24,12 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
   const call=(...args)=>{const r=spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});transcript.push({args,status:r.status,stdout:r.stdout,stderr:r.stderr});return r;};
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r.stdout;};
   const tx=(...args)=>{const r=spawnSync('tmux',['-L',socket,...args],{env,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout;};
-  const receiver=path.join(home,'receiver.mjs');
-  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
-  const begin=(role,profile)=>{run('start',role,'--hidden','--cmd',`${quote(process.execPath)} ${quote(receiver)}`,...(profile?['--profile',profile]:[]));started.push(role);};
+  const receiver=path.join(home,'codex.mjs');
+  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});\n");
+  // 카드 발령 대상은 등록 실행기+모델로 시작한 세대여야 한다 — 시험 실행기도 그 형태를 갖춘다.
+  const harness=path.join(home,'codex');
+  fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
+  const begin=(role,profile)=>{run('start',role,'--hidden','--cmd',`${quote(harness)} --model test-model`,...(profile?['--profile',profile]:[]));started.push(role);};
   const entries=()=>readLedger(home),sends=()=>entries().filter(e=>e.kind==='send'&&e.transport!=='mailbox');
   const ack=(mailId,role)=>`우편 ID: ${mailId}. 내용을 확인한 수신자가 직접 읽음 확인을 기록하라.\n`+
     `KADAN_ROLE=${quote(role)} kadan inbox ack ${quote(mailId)} --role ${quote(role)}\n`+

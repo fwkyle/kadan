@@ -159,6 +159,25 @@ test('비서 read는 읽기 전용 저장소 안에서도 원문/digest 보존 +
   assert.deepEqual(readLedger(f.home),before);
 });
 
+test('conductor 지침: 정상 발령 후 AI 반복 폴링·문맥 유입 금지와 사건 기반 재개가 직접 포함',()=>{
+  const f=fixture();
+  const r=f.compose({profile:'conductor'});
+  assert.equal(r.metadata.status,'applied');
+  // 정상 대기 중 AI의 반복 조회 루프와 중간 출력의 대화 문맥 유입을 명시 금지
+  assert.match(r.instructions,/반복 호출/);
+  assert.match(r.instructions,/tmux capture-pane/);
+  assert.match(r.instructions,/write_stdin/);
+  assert.match(r.instructions,/kadan read\/status\/log\/wait/);
+  assert.match(r.instructions,/대화 문맥으로 가져오지 않는다/);
+  // 완료 우편·watch·작업자 질문·사용자 지시 같은 새 사건으로만 재개
+  assert.match(r.instructions,/완료 우편·watch[^·\n]*·작업자의 질문·사용자 새 지시 같은 새 사건/);
+  // 한 실행을 기다리는 프로그램의 wait는 허용, AI의 반복 조회와 구분
+  assert.match(r.instructions,/외부 대기 프로그램 자체는 허용/);
+  assert.match(r.instructions,/반복 조회하지 않는다/);
+  // conductor 템플릿 전용 규칙 — 템플릿에서 문장이 빠지면 위 매칭이 실패한다
+  assert.doesNotMatch(f.compose({profile:'worker'}).instructions,/대화 문맥으로 가져오지 않는다/);
+});
+
 test('관계 없는 카드 본문 유실·hierarchy 실패·원장 오류의 통지도 전달하며 모름 표시',()=>{
   const f=fixture(),c=card(f);
   fs.renameSync(c.path,c.path+'.preserved');
