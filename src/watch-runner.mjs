@@ -328,6 +328,7 @@ export function deliverResolution({
 }
 
 export async function runWatch({
+  runtime = null,
   floor,
   readEntries,
   readCards = null,
@@ -797,7 +798,7 @@ export async function runWatch({
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
-        record(buildCycleEntry({pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
+        record(buildCycleEntry({runtime,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
         lastCycleRecordedAt = cycleAt;
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }

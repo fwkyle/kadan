@@ -19,7 +19,7 @@ function executionFollowup(work,c,decisions){
  if(c.running)return item('running',c.phase==='review'?'검수 중':c.phase==='fix'?'수정 중':'실행 중',c.role,c.nextAction||'배정된 실행을 진행합니다.',c.activityAt);
  if(c.reportState==='ok'){
   if(c.quality==='pass'&&c.phase==='review')return item('confirm','감독 최종 확인 대기',owner,'빠진 적용·후속과 전체 완료 조건을 확인하세요.',c.completedAt);
-  if(c.quality==='changes'&&c.phase==='review')return item('fix','수정 연결 대기',owner,'승인 범위·싸이클·시간 상한을 확인하고 수정을 연결하세요.',c.completedAt);
+  if(c.quality==='changes'&&c.phase==='review')return item('fix','수정 연결 대기',owner,'승인 범위·라운드·시간 상한을 확인하고 수정을 연결하세요.',c.completedAt);
   if(['implementation','fix'].includes(c.phase))return item('review','검수 연결 확인',owner,'필요한 독립검수와 연결된 후속 실행을 확인하세요.',c.completedAt);
   return item('confirm','감독 최종 확인 대기',owner,'실행은 종료됐습니다. 품질 근거와 전체 완료 조건을 확인하세요.',c.completedAt);
  }
@@ -36,7 +36,7 @@ export function workFollowup(work,executions,{automatic=null,decisions=[],error=
  // 옛 자동 종료가 이후 수동 실행·새 연결을 덮지 않는다.
  const auto=automatic&&JSON.stringify(automatic.links)===JSON.stringify(work.executions)&&executions.find(c=>c.key===automatic.current?.key);
  const autoState=automatic?.status==='notifying'?automatic.terminal:automatic?.status;
- const reasons={pass:['confirm','감독 최종 확인 대기','검수 합격 근거와 전체 완료 조건을 확인하세요.'],boundary:['boundary','다음 블록 판단 대기','3싸이클이 끝났습니다. 교대·계속·보류를 판단하세요.'],limit:['limit','사용자 결정 요청 필요','전체 싸이클 상한에 도달했습니다. 기존 결정 요청 경로로 판단을 요청하세요.'],exception:['exception','예외 확인 필요','자동 전달의 실패·불명확 근거를 확인하세요.']};
+ const reasons={pass:['confirm','감독 최종 확인 대기','검수 합격 근거와 전체 완료 조건을 확인하세요.'],boundary:['boundary','다음 블록 판단 대기','3라운드가 끝났습니다. 교대·계속·보류를 판단하세요.'],limit:['limit','사용자 결정 요청 필요','전체 라운드 상한에 도달했습니다. 기존 결정 요청 경로로 판단을 요청하세요.'],exception:['exception','예외 확인 필요','자동 전달의 실패·불명확 근거를 확인하세요.']};
  const pending=steps.filter((s,i)=>!closed(executions[i])&&!['ok','failed'].includes(executions[i].reportState));
  let next;
  if(pending.length){

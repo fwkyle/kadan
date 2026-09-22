@@ -38,8 +38,7 @@ function heads(home,kind){
  });
 }
 
-function eventReader(home){
- const state=readLedgerState(home);
+function eventReader(home,state=readLedgerState(home)){
  // 주소는 출처와 저장 순번을 함께 보존한다. 날짜나 조회 위치를 원장 주소로 쓰지 않는다.
  const rows=[...state.legacy.map((entry,i)=>({...entry,seq:i+1,ledgerRef:`ledger:legacy:${i+1}`})),
   ...state.ordered.filter(entry=>entry.kind!=='dispatch').map(entry=>({...entry,seq:state.legacy.length+entry._ledgerOrder,ledgerRef:`ledger:new:${entry._ledgerOrder}`}))];
@@ -54,9 +53,9 @@ function workAt(home,key){
  return work;
 }
 
-function followupContext(home){
+function followupContext(home,snapshot={}){
  const context={cards:[],read:null,decisions:[],error:null};
- try{context.cards=heads(home,'cards');context.read=eventReader(home);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');context.decisions=new DecisionStore(home).list();}
+ try{context.cards=snapshot.cards??heads(home,'cards');context.read=eventReader(home,snapshot.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');context.decisions=snapshot.decisions??new DecisionStore(home).list();}
  catch{context.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
  return context;
 }
@@ -79,10 +78,10 @@ function followupFor(home,work,executions,context,now=stamp()){
 }
 
 // 목록도 본문을 열지 않고 같은 실행·결정 기록을 한 번만 읽는다.
-export function operationsFlowSummaries(home,works){
+export function operationsFlowSummaries(home,works,snapshot={}){
  if(!works.length)return new Map();
  return storageSnapshot(home,()=>{
-  const context=followupContext(home),now=stamp();
+  const context=followupContext(home,snapshot),now=stamp();
   return new Map(works.map(work=>{
    if(!work.history)work={...work,history:readStream(home,`works/${work.key}/events.jsonl`)};
    let records=null;

@@ -31,7 +31,7 @@ description: Kadan conductor harness. Coordinate workers and reviewers with card
 
 1. 작업공간·브랜치·기존 업무와 담당을 확인한다. 상태는 `kadan tree` 등 필요한 원장 조회로 한 번 확인하고 다른 판은 건드리지 않는다.
 2. 실행기는 `$KADAN_HOME/agent-runners.json`에서 고른다. 기본 모델·강도는 `_기본모델`, 역할별 값은 `_역할별기본`, 작업자≠검수자 계열은 `_계열`을 따른다. 실행 명령을 스킬에 복제하지 않는다. 값이 없으면 묻는다.
-3. 새 작업은 새 세션으로 시작한다. 같은 대상의 수정·재검수처럼 직전 맥락이 필요한 연속 작업만 재사용한다. 자동 전달은 같은 3싸이클 블록의 두 세션을 유지하고 다음 블록에는 둘 다 교대한다.
+3. 새 작업은 새 세션으로 시작한다. 같은 대상의 수정·재검수처럼 직전 맥락이 필요한 연속 작업만 재사용한다. 자동 전달은 같은 3라운드 블록의 두 세션을 유지하고 다음 블록에는 둘 다 교대한다.
 4. [역할 생성](references/worker-creation.md) → [발령과 대기](references/dispatch-wait.md) 순으로 진행한다. 새 세션의 TUI·훅·신뢰 창을 확인하고, 중앙 배정과 plan을 기록한 뒤 발령한다. 카드 없는 위임은 하지 않는다.
 5. 전달 성공을 같은 목적의 read/status/log로 재확인하지 않는다. 독립적인 승인 작업을 이어가고 완료·질문 통지를 기다릴 때는 응답을 끝낸다. AI 폴링을 만들지 않는다.
 
@@ -39,7 +39,7 @@ description: Kadan conductor harness. Coordinate workers and reviewers with card
 
 ## 구현·검수와 종료
 
-왕복 단위·LIGHT/HEAVY·상한은 [티키타카](references/tiki-taka.md)가 원본이다. 1싸이클은 구현 또는 수정 + 독립검수이며, 품질 `pass|changes`와 실행 종료 `ok|failed`를 구분한다.
+왕복 단위·LIGHT/HEAVY·상한은 [티키타카](references/tiki-taka.md)가 원본이다. 1라운드는 구현 또는 수정 + 독립검수이며, 품질 `pass|changes`와 실행 종료 `ok|failed`를 구분한다.
 
 | 전달 방식 | 중간 실행 종료 | 다음 실행 연결 |
 |---|---|---|

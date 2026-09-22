@@ -84,17 +84,17 @@ export function startRoleProfile({home,role,profile,previous,reusing=false}) {
   return profile ?? (Object.hasOwn(config.roles,role) ? config.roles[role] : undefined);
 }
 
-function facts(home,entries,{taskId,mailContext={},infer=false}) {
+function facts(home,entries,{taskId,mailContext={},infer=false,cards:providedCards}) {
   const unavailable=[];
   const read=(label,fn,fallback)=>{try{return fn();}catch(error){unavailable.push(`${label}: ${error.message}`);return fallback;}};
   const works=infer?read('업무 조회',()=>new WorkStore(home).list(),[]):[];
-  const cards=read('카드 조회',()=>new CardStore(home).list(),[]),identity=taskIdentity(cards);
+  const cards=providedCards?[...providedCards]:read('카드 조회',()=>new CardStore(home).listSummaries(),[]),identity=taskIdentity(cards);
   const {workKey,executionKey}=mailContext;
   let card=executionKey ? read('연결 실행',()=>new CardStore(home).get(executionKey),null) : null;
   if (taskId) {
     const found=identity.resolve(taskId,executionKey),matches=found.card?[found.card]:[];
     if (card && identity.resolve(taskId,executionKey).key !== card.key) throw failure('task와 실행 연결 불일치');
-    if (!card && matches.length===1) card=matches[0];
+    if (!card && matches.length===1) card=read('연결 실행',()=>new CardStore(home).get(matches[0].key),null);
   }
   const linked=card ? works.filter(w=>w.executions.some(e=>e.key===card.key)) : [];
   let work=workKey ? read('연결 업무',()=>new WorkStore(home).get(workKey),null) : linked.length===1 ? linked[0] : null;
@@ -156,13 +156,13 @@ function referencePaths(profile) {
     .filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
 }
 
-export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home)}) {
+export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home),cards}) {
   try {
     const config=readRoleInstructionsConfig(home);
     if (raw) return {message,instructions:null,metadata:{status:'not-applied',reason:'explicit-raw',...(config.configDigest?{configDigest:config.configDigest}: {})}};
     {
       const explicit=explicitProfile({role,profile,entries,config});
-      const context=facts(home,entries,{taskId,mailContext,infer:!explicit});
+      const context=facts(home,entries,{taskId,mailContext,infer:!explicit,cards});
       const selected=explicit||selectProfile({role,entries,context});
       if (!selected.profile) return {message,instructions:null,metadata:{status:'not-applied',reason:selected.source,...(context.unavailable.length?{unavailable:context.unavailable}: {})}};
       const templates=['common',selected.profile].map(name=>({name,...readFile(config.templates[name]||path.join(templateRoot,`${name}.md`),{template:true})}));

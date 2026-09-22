@@ -35,7 +35,7 @@ test('공백은 첫 기록 이후 15분 넘게 비어 있는 구간만 세고 �
 test('한 줄 판정은 설정 빠짐·없음·지연·정상을 구분하고 정식 명령을 알려준다',()=>{
  const base={process:{state:'running',instances:[{pid:7}]},configuration:{state:'matched',reason:'지문 일치'},profilePath:'/home/watch-profile.json'};
  const ok=watchVerdict({...base,cycle:cycleStatus([cycle(2)],worker,now)},now);
- assert.equal(ok.level,'ok');assert.match(ok.text,/^감시 정상 · 관계 파일 반영 · AI 판정 켜짐 · 마지막 주기 2분 전$/);
+ assert.equal(ok.level,'ok');assert.match(ok.text,/^감시 정상 · 관계 파일 반영 · AI 판정 켜짐 · 마지막 주기 2분 전 · 실행 코드 모름$/);
  const bare=watchVerdict({...base,configuration:{state:'missing',reason:'없음'},cycle:cycleStatus([cycle(2,{hierarchy:null,judge:false})],worker,now)},now);
  assert.equal(bare.level,'warn');assert.match(bare.text,/감시 설정 빠짐 · 관계 파일 없음 · AI 판정 꺼짐/);assert.match(bare.hints[0],/kadan watch --profile \/home\/watch-profile.json/);
  const stale=watchVerdict({...base,cycle:cycleStatus([cycle(40)],worker,now)},now);
