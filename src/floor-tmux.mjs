@@ -387,12 +387,20 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
   return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
 }
 
+// 카드 입력창 판별. 추측으로 넣지 않고 실제 화면에서 확인한 형태만 둔다(2026-09-23 실측).
+// - 빈 입력 자리표시자: devin v3000.11.1, codex v0.155.0. 작업 중 자리표시자(Guide Devin…)는 빈 입력이 아니다.
+// - 입력 상자 경계(devin·claude): 0열에서 pane 폭을 꽉 채우는 가로줄. 입력의 이어지는 줄은 들여쓰기되므로
+//   사용자 글이 이 모양이 될 수 없다. 윗줄에는 devin처럼 `(bypass permissions on)` 표지가 섞인다.
+const PROMPT_LINE = /^\s*[│┃]?[ \t]*[›>❯❭](.*)$/u;
+const EMPTY_INPUT_PLACEHOLDERS = new Set(["Ask Devin to build features, fix bugs, or work on your code", "Ask Codex to do anything"]);
+const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
+
 // 카드만 검사한다. 일반 우편/Enter 전용 경로와 기존 복사모드 검사는 그대로 둔다.
 function checkCardPane(session, identity, run, spawn) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  const state = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}"]).trim();
-  if (!/^\d+\|[01]\|\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "카드 전송 불가: pane 상태 미확인");
-  const [pid, dead, y] = state.split("|");
+  const state = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}|#{pane_width}"]).trim();
+  if (!/^\d+\|[01]\|\d+\|\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "카드 전송 불가: pane 상태 미확인");
+  const [pid, dead, y, , w] = state.split("|");
   if (dead !== "0") deny("KADAN_PANE_DEAD", "카드 전송 불가: 종료된 pane");
   if (pid !== String(identity.currentPid)) deny("KADAN_PID_MISMATCH", "카드 전송 불가: 검사 중 pane 세대 변경");
   const ps = spawn("ps", ["-ww", "-axo", "pid=,ppid=,pgid=,tpgid=,args="], {encoding:"utf8"});
@@ -409,21 +417,27 @@ function checkCardPane(session, identity, run, spawn) {
   }
   const screen = run(["capture-pane", "-p", "-t", `=${session}:`]);
   const lines = screen.split("\n");
-  if (Number(y) >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 입력 줄 미확인");
-  // 화면 문자열만으로 본문 속 프롬프트/구분선을 UI와 구별할 수 없다.
-  // 후보가 여럿이면 거부하고, 아래쪽 줄도 구분선 모양으로 잘라내지 않는다.
-  let first = -1;
-  for (let i = Number(y); i >= 0; i--) {
-    if (/^\s*[│┃]?[ \t]*[›>❯]/u.test(lines[i])) {
-      if (first >= 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 프롬프트 후보가 여러 개여서 입력 경계 미확인");
-      first = i;
-    }
+  const row = Number(y);
+  if (row >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 입력 줄 미확인");
+  // 입력 줄은 커서가 있는 프롬프트 줄 하나다. 화면 전체를 훑으면 배너(`│ >_ OpenAI Codex`)나
+  // 본문 인용까지 후보가 되어 실제 대기 화면을 거부한다(2026-09-23 devin·claude·codex 실측).
+  const prompt = lines[row].match(PROMPT_LINE);
+  if (!prompt) {
+    if (lines.slice(0, row).some(line => PROMPT_LINE.test(line))) deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 커서가 프롬프트 줄 밖이라 여러 줄 미제출 입력일 수 있음");
+    deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 현재 입력 영역의 프롬프트 미확인");
   }
-  if (first < 0) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 현재 입력 영역의 프롬프트 미확인");
-  const input = lines.slice(first).map(line => line.trim());
-  if (input.some((line, i) => (i === 0 ? line.replace(/^[›>❯]\s*/u, "") : line).trim())) {
-    deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면");
-  }
+  // 위쪽 가장 가까운 글 줄도 프롬프트 모양이면 여러 줄 입력의 이어지는 줄인지 구별할 수 없다.
+  if (PROMPT_LINE.test(lines.slice(0, row).findLast(line => line.trim()) ?? "")) deny("KADAN_PANE_INPUT_UNKNOWN", "카드 전송 불가: 프롬프트 위 입력 경계 미확인");
+  const width = Number(w);
+  const boxed = row > 0 && isInputRule(lines[row - 1], width, true);
+  const rest = prompt[1].trim();
+  if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest)) deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력이 있음");
+  // 상자형(devin·claude)은 바로 아래 닫는 줄 밑을 상태줄로 본다. 상자 없음(codex)은 빈 줄 뒤 상태줄 한 줄만 허용한다.
+  const below = lines.slice(row + 1);
+  const footer = below.findIndex(line => line.trim());
+  const closed = boxed ? isInputRule(below[0] ?? "", width, false)
+    : footer < 0 || (footer > 0 && below.slice(footer + 1).every(line => !line.trim()));
+  if (!closed) deny("KADAN_PANE_INPUT_PENDING", "카드 전송 불가: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면");
 }
 
 export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity} = {}) {
