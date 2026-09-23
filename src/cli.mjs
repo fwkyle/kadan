@@ -1427,6 +1427,7 @@ function cmdStart(argv, flags) {
   // 감시 알림이 갈 곳을 사람이 따로 적지 않아도 되게 한다. 실패는 알리기만 하고 시작을 막지 않는다.
   const registration = registerStartedRole({
     role,
+    cmd: startedCmd,
     creator: resolveLedgerBy({ env: process.env }),
     home: ledgerHome(),
   });

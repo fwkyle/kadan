@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ledgerHome, readLedger } from "./ledger.mjs";
 import { parseHierarchy } from "./hierarchy.mjs";
+import { commandWords } from "./ai-identity.mjs";
 
 // 감시기가 실제로 읽고 있는 관계표 경로. 원장의 마지막 hierarchy-loaded가 원본이다.
 export function activeHierarchyPath(entries) {
@@ -49,8 +50,30 @@ function withLock(hierarchyPath, run) {
   }
 }
 
-export function registerStartedRole({ role, creator, home = ledgerHome(), entries = null } = {}) {
+// 카단 자신의 감시기·대시보드 세션은 보고 관계의 역할이 아니다. 관계표에 넣으면 트리에 부하처럼 보이고,
+// 만든 감독의 인계 때 "보고 대상 변경" 편지가 그 프로그램 창에 붙는다(2026-09-23 [kyle] 지시로 제외).
+const TOOL_SUBCOMMANDS = new Set(["watch", "dashboard", "wall"]);
+export function isKadanToolCommand(cmd) {
+  const words = commandWords(cmd);
+  if (!words) return false;
+  let i = 0;
+  if (words[i]?.split("/").pop() === "env") {
+    for (i++; i < words.length; i++) {
+      if (words[i] === "-u" || words[i] === "--unset") i++;
+      else if (!words[i].startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) break;
+    }
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "")) i++;
+  const base = value => value?.split("/").pop();
+  if (["node", "nodejs", "bun"].includes(base(words[i])) && base(words[i + 1]) === "cli.mjs") i += 2;
+  else if (base(words[i]) === "kadan") i += 1;
+  else return false;
+  return TOOL_SUBCOMMANDS.has(words[i]);
+}
+
+export function registerStartedRole({ role, creator, cmd, home = ledgerHome(), entries = null } = {}) {
   if (!role) return { registered: false, reason: "역할 없음" };
+  if (isKadanToolCommand(cmd)) return { registered: false, reason: "카단 운영 도구 세션" };
   if (!creator || creator === "사람" || creator === "watch") {
     return { registered: false, reason: "만든 사람의 역할을 모름" };
   }
