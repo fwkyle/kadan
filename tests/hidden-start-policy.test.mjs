@@ -55,10 +55,13 @@ test("KADAN_WINDOW=rottie에서 프로필 세션의 --hidden은 세션을 만들
     KADAN_HOME: process.env.KADAN_HOME,
     KADAN_WINDOW: process.env.KADAN_WINDOW,
     KADAN_ROTTIE_BIN: process.env.KADAN_ROTTIE_BIN,
+    KADAN_ROTTIE_AUTO_ATTACH: process.env.KADAN_ROTTIE_AUTO_ATTACH,
   };
   process.env.KADAN_HOME = home;
   process.env.KADAN_WINDOW = "rottie";
   process.env.KADAN_ROTTIE_BIN = path.join(home, "missing-rottie");
+  // 이 컴퓨터에 켜진 진짜 로티에 자동으로 붙어 탭을 열지 않게 끈다.
+  process.env.KADAN_ROTTIE_AUTO_ATTACH = "off";
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
@@ -90,10 +93,13 @@ test("프로필 없는 세션은 같은 환경에서도 --hidden이 허용된다
     KADAN_HOME: process.env.KADAN_HOME,
     KADAN_WINDOW: process.env.KADAN_WINDOW,
     KADAN_ROTTIE_BIN: process.env.KADAN_ROTTIE_BIN,
+    KADAN_ROTTIE_AUTO_ATTACH: process.env.KADAN_ROTTIE_AUTO_ATTACH,
   };
   process.env.KADAN_HOME = home;
   process.env.KADAN_WINDOW = "rottie";
   process.env.KADAN_ROTTIE_BIN = path.join(home, "missing-rottie");
+  // 이 컴퓨터에 켜진 진짜 로티에 자동으로 붙어 탭을 열지 않게 끈다.
+  process.env.KADAN_ROTTIE_AUTO_ATTACH = "off";
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

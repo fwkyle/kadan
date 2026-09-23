@@ -89,7 +89,7 @@ test("stop failure diagnoses bundle once; success never probes and removes the t
 
 test("cmdStart writes failed preflight receipt but hidden/none never probe", (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-c58-wiring-"));
-  const env = { KADAN_HOME: home, KADAN_WINDOW: "rottie", KADAN_ROTTIE_BIN: path.join(home, "missing-rottie") };
+  const env = { KADAN_HOME: home, KADAN_WINDOW: "rottie", KADAN_ROTTIE_BIN: path.join(home, "missing-rottie"), KADAN_ROTTIE_AUTO_ATTACH: "off" };
   const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
   Object.assign(process.env, env);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
