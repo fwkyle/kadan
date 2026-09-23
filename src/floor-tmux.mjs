@@ -439,10 +439,12 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     checkMode();
     if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
     stage = "paste-attempted";
-    run(["paste-buffer", "-d", "-b", buffer, "-t", session]);
+    // -p: 괄호 붙여넣기. 없으면 Claude Code가 본문 줄바꿈과 뒤따르는 Enter를 구분하지 못해
+    // 짧은 본문에서 Enter가 먹힌다(2026-09-23 실측: 2초 뒤 Enter도 누락, -p면 0.4초도 제출).
+    run(["paste-buffer", "-p", "-d", "-b", buffer, "-t", session]);
     loaded = false;
     stage = "body-pasted";
-    spawn("sleep", ["0.4"]);
+    spawn("sleep", ["1"]);
     checkMode();
     stage = "enter-attempted";
     run(["send-keys", "-t", session, "Enter"]);
