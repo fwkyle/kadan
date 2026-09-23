@@ -68,3 +68,15 @@ test('판 미지정 옛 실행 기록은 현황의 오래된 미정리에 저장
  assert.ok(!panel.includes('새 초안'));assert.match(panel,/card=r%2Fold/);
  assert.ok(!html.includes('unassigned-attention'));
 });
+
+test('결정 화면: 첫 질문만 제목으로, 나머지는 줄바꿈을 살리고 주소는 누를 수 있는 링크로 보인다', async () => {
+  const {renderDecisions} = await import('../src/decision-wall.mjs');
+  const html = renderDecisions([{id:'d1', status:'open', card:'r/c', requestedBy:'슈퍼', recommendation:'승인', options:['승인','보류'],
+    question:'PR #1을 합류할까요?\n- 노션: https://app.notion.com/p/abc\n- PR: https://github.com/o/r/pull/1.',
+    reason:'<b>근거</b> https://x.y/z'}], null, 't');
+  assert.match(html, /<h3>PR #1을 합류할까요\?<\/h3>/);
+  assert.match(html, /white-space:pre-line">- 노션: <a href="https:\/\/app\.notion\.com\/p\/abc" target="_blank" rel="noopener noreferrer">/);
+  assert.match(html, /<a href="https:\/\/github\.com\/o\/r\/pull\/1" [^>]+>https:\/\/github\.com\/o\/r\/pull\/1<\/a>\./);
+  assert.match(html, /&lt;b&gt;근거&lt;\/b&gt; <a href="https:\/\/x\.y\/z"/);
+  assert.doesNotMatch(html, /<b>근거/);
+});
