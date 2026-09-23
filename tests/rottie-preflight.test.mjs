@@ -29,10 +29,13 @@ test("창이 실패해도 세션은 만들어져 manual로 조용히 떨어지�
     KADAN_HOME: process.env.KADAN_HOME,
     KADAN_WINDOW: process.env.KADAN_WINDOW,
     KADAN_ROTTIE_BIN: process.env.KADAN_ROTTIE_BIN,
+    KADAN_ROTTIE_AUTO_ATTACH: process.env.KADAN_ROTTIE_AUTO_ATTACH,
   };
   process.env.KADAN_HOME = home;
   process.env.KADAN_WINDOW = "rottie";
   process.env.KADAN_ROTTIE_BIN = missing;
+  // 이 컴퓨터에 켜진 진짜 로티에 자동으로 붙어 탭을 열지 않게 끈다.
+  process.env.KADAN_ROTTIE_AUTO_ATTACH = "off";
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
@@ -75,14 +78,40 @@ test("연결이 안 되면 세션을 만들지 않고 후보만 보여 준다", 
         build: "test-build",
       };
     },
-    listBinsFn: () => ["/home/tester/Rottie/src-tauri/target/debug/rottie"],
+    listBinsFn: () => ["/home/tester/Rottie/src-tauri/target/debug/rottie", "/home/tester/Rottie-2/rottie"],
   });
   assert.equal(inspected.ok, false);
   assert.equal(inspected.reason, "connect");
   assert.match(inspected.message, /연결 실패/);
   assert.match(inspected.message, /ROTTIE_APP_NOT_RUNNING/);
   assert.match(inspected.message, /target\/debug\/rottie/);
-  assert.match(inspected.message, /카단은 자동으로 갈아타지 않는다/);
+  assert.match(inspected.message, /정확히 하나이고 연결될 때만 자동으로 붙는다/);
+});
+
+test("설정 경로가 없거나 끊겨도 켜진 로티가 하나이고 연결되면 그쪽에 붙는다(2026-09-23)", () => {
+  const live = "/opt/Rottie/Rottie Local.app/Contents/MacOS/rottie";
+  for (const [reason, exists, connect] of [["missing", false, () => ({ ok: true, build: "live" })],
+    ["connect", true, ({ bin }) => (bin === live ? { ok: true, build: "live" } : { ok: false, code: "ROTTIE_APP_NOT_RUNNING" })]]) {
+    const env = { KADAN_WINDOW: "rottie", KADAN_ROTTIE_BIN: "/gone/rottie" };
+    const inspected = cli.inspectRottieStartPreflight({ env, floorName: "tmux", existsFn: () => exists, connectFn: connect, listBinsFn: () => [live] });
+    assert.equal(inspected.ok, true, reason);
+    assert.deepEqual(inspected.switched, { from: "/gone/rottie", to: live, reason });
+    assert.equal(env.KADAN_ROTTIE_BIN, live);
+  }
+});
+
+test("자동으로 붙지 않는 경우: 후보 여러 개·후보 연결 실패·끔 설정", () => {
+  const base = { floorName: "tmux", existsFn: () => false };
+  const cases = [
+    [{ KADAN_WINDOW: "rottie", KADAN_ROTTIE_BIN: "/gone/rottie" }, () => ["/a/rottie", "/b/rottie"], () => ({ ok: true })],
+    [{ KADAN_WINDOW: "rottie", KADAN_ROTTIE_BIN: "/gone/rottie" }, () => ["/a/rottie"], () => ({ ok: false, code: "X" })],
+    [{ KADAN_WINDOW: "rottie", KADAN_ROTTIE_BIN: "/gone/rottie", KADAN_ROTTIE_AUTO_ATTACH: "off" }, () => ["/a/rottie"], () => ({ ok: true })],
+  ];
+  for (const [env, listBinsFn, connectFn] of cases) {
+    const inspected = cli.inspectRottieStartPreflight({ ...base, env, listBinsFn, connectFn });
+    assert.equal(inspected.ok, false);
+    assert.equal(env.KADAN_ROTTIE_BIN, "/gone/rottie");
+  }
 });
 
 test("hidden·none·tmux 전용 경로는 점검을 타지 않는다", (t) => {
@@ -203,6 +232,8 @@ test("자식 프로세스로 없는 경로 start는 세션 0개·원장 start 0�
       KADAN_SOCKET: socket,
       KADAN_WINDOW: "rottie",
       KADAN_ROTTIE_BIN: missing,
+      // 이 컴퓨터에 켜진 진짜 로티에 자동으로 붙어 탭을 열지 않게 끈다.
+      KADAN_ROTTIE_AUTO_ATTACH: "off",
       KADAN_FLOOR: "tmux",
     },
   });

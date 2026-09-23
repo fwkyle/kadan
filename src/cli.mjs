@@ -1144,7 +1144,8 @@ function formatRottiePreflightFailure({ reason, bin, connection, candidates }) {
     what,
     "지금 켜진 로티 실행 파일 후보:",
     listed,
-    "사람이 할 일: KADAN_ROTTIE_BIN을 위 후보 중 하나로 바꾼다. 카단은 자동으로 갈아타지 않는다.",
+    "켜진 로티가 정확히 하나이고 연결될 때만 자동으로 붙는다. 지금은 후보가 하나가 아니거나 연결되지 않아 멈춘다.",
+    "사람이 할 일: KADAN_ROTTIE_BIN을 위 후보 중 하나로 바꾼다.",
   ].join("\n");
 }
 
@@ -1181,7 +1182,19 @@ export function inspectRottieStartPreflight({
   if (!needsWindow || hidden) return { ok: true, skipped: true };
   const bin = env.KADAN_ROTTIE_BIN;
   const candidates = listBinsFn();
+  // 로컬 빌드 폴더가 정리되면 경로가 끊긴다. 켜진 로티가 정확히 하나이고 연결되면 그쪽에 붙는다
+  // (2026-09-23 [kyle]: "현재 켜져 있는 로티에 딱 붙여 줘"). 여러 개면 어느 쪽인지 모르므로 멈춘다.
+  const attach = (reason) => {
+    if (env.KADAN_ROTTIE_AUTO_ATTACH === "off" || candidates.length !== 1 || candidates[0] === bin) return null;
+    const to = candidates[0];
+    const attached = connectFn({ bin: to });
+    if (!attached?.ok) return null;
+    env.KADAN_ROTTIE_BIN = to;
+    return { ok: true, bin: to, connection: attached, candidates, switched: { from: bin ?? null, to, reason } };
+  };
   if (!bin || !existsFn(bin)) {
+    const switched = attach("missing");
+    if (switched) return switched;
     return {
       ok: false,
       reason: "missing",
@@ -1192,6 +1205,8 @@ export function inspectRottieStartPreflight({
   }
   const connection = connectFn({ bin });
   if (!connection?.ok) {
+    const switched = attach("connect");
+    if (switched) return switched;
     return {
       ok: false,
       reason: "connect",
@@ -1329,6 +1344,7 @@ function cmdStart(argv, flags) {
     hidden: Boolean(flags.hidden),
   });
   if (!preflight.ok) die(preflight.message, 2);
+  if (preflight.switched) console.error(`로티 경로 자동 교정: ${preflight.switched.from ?? "(없음)"} → ${preflight.switched.to} (켜진 로티 1개, 연결 확인)`);
   const session = sessionName(role);
   const reusing = floor.alive(session);
   const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
@@ -1431,7 +1447,7 @@ function cmdStart(argv, flags) {
     reused,
     cmd: startedCmd,
     cwd: process.cwd(),
-  }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...launchRecord });
+  }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
   console.log(
     `시작됨: ${session} (${floor.name === "rottie" ? "Rottie PID" : "pane PID"} ${pid ?? "?"}, 창: ${method}${
       method === "manual" ? ` — 직접: ${floor.attach(session)}` : ""
