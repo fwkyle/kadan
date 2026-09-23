@@ -395,13 +395,38 @@ const PROMPT_LINE = /^\s*[│┃]?[ \t]*[›>❯❭](.*)$/u;
 const EMPTY_INPUT_PLACEHOLDERS = new Set(["Ask Devin to build features, fix bugs, or work on your code", "Ask Codex to do anything"]);
 // claude-code v2.1.280: 새 창 입력창에 흐린 글씨(SGR 2)로 `Try "…"` 예시가 뜬다. 문구는 매번 바뀌어 모양으로만 맞춘다(2026-09-23 실측).
 const CLAUDE_PLACEHOLDER = /^Try "[^"\n]+"$/u;
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/gu;
+// 입력칸 글이 모두 흐린 글씨(SGR 2)면 실행기가 띄운 예시·추천 문구다. 사람이 친 글은 흐리지 않다.
+// claude-code는 새 창의 `Try "…"` 예시와 작업 뒤 "다음 입력 추천"을 흐리게 띄운다(2026-09-23 capture -e 실측).
+function allDimAfterPrompt(raw = "") {
+  let dim = false, prompt = false, seen = false;
+  for (let i = 0; i < raw.length;) {
+    const sgr = raw.slice(i).match(/^\x1b\[([0-9;?]*)([A-Za-z])/u);
+    if (sgr) {
+      if (sgr[2] === "m") for (const code of (sgr[1] || "0").split(";")) {
+        if (code === "2") dim = true;
+        else if (code === "" || code === "0" || code === "22") dim = false;
+      }
+      i += sgr[0].length;
+      continue;
+    }
+    const ch = String.fromCodePoint(raw.codePointAt(i));
+    i += ch.length;
+    if (!prompt) { prompt = /[›>❯❭]/u.test(ch); continue; }
+    if (/\s/u.test(ch)) continue;
+    if (!dim) return false;
+    seen = true;
+  }
+  return seen;
+}
 const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
 
 // 화면에 보이는 입력창이 비었는지 확인한다. 카드 전송과 감시기 알림이 같은 기준을 쓴다.
 function checkEmptyInput(session, run, row, width, label) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  const screen = run(["capture-pane", "-p", "-t", `=${session}:`]);
-  const lines = screen.split("\n");
+  // 글자 모양(-e)까지 읽어 흐린 추천 문구와 사람이 친 글을 가른다. 판단은 모양을 뺀 글로 한다.
+  const raw = run(["capture-pane", "-e", "-p", "-t", `=${session}:`]).split("\n");
+  const lines = raw.map(line => line.replace(ANSI, ""));
   if (row >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 입력 줄 미확인`);
   // 입력 줄은 커서가 있는 프롬프트 줄 하나다. 화면 전체를 훑으면 배너(`│ >_ OpenAI Codex`)나
   // 본문 인용까지 후보가 되어 실제 대기 화면을 거부한다(2026-09-23 devin·claude·codex 실측).
@@ -414,7 +439,7 @@ function checkEmptyInput(session, run, row, width, label) {
   if (PROMPT_LINE.test(lines.slice(0, row).findLast(line => line.trim()) ?? "")) deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 프롬프트 위 입력 경계 미확인`);
   const boxed = row > 0 && isInputRule(lines[row - 1], width, true);
   const rest = prompt[1].trim();
-  if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest) && !CLAUDE_PLACEHOLDER.test(rest)) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
+  if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest) && !CLAUDE_PLACEHOLDER.test(rest) && !allDimAfterPrompt(raw[row])) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
   // 상자형(devin·claude)은 바로 아래 닫는 줄 밑을 상태줄로 본다. 상자 없음(codex)은 빈 줄 뒤 상태줄 한 줄만 허용한다.
   const below = lines.slice(row + 1);
   const footer = below.findIndex(line => line.trim());
