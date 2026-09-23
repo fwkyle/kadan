@@ -30,6 +30,17 @@ export function openTaskIds(entries, role, cards = null) {
   return [...pending].sort();
 }
 
+// 업무 owner도 확정된 역할 인계를 따라간다. 원장의 owner 원문은 그대로 두고,
+// owner를 정한 뒤에 확정된 인계만 이어서 현재 책임 감독을 계산한다(2026-09-23 감독-3→4 사고).
+export function effectiveWorkOwner(work, entries) {
+  const history = work.history ?? [];
+  const since = history.findLast((h, i) => i === 0 || history[i - 1].owner !== h.owner)?.at ?? work.at;
+  let owner = work.owner;
+  for (const e of entries) if (e?.kind === 'handover' && e.phase === 'transferred' && e.from === owner &&
+    (!since || !e.t || Date.parse(e.t) >= Date.parse(since))) owner = e.to;
+  return owner;
+}
+
 // 중앙 카드의 담당도 과거 인계 기록을 따라간다. 이후 명시 재배정은 우선한다.
 export function effectiveCardRole(card, entries, cards = null) {
   const identity = Array.isArray(cards) ? taskIdentity(cards) : cards;

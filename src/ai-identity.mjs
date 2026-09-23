@@ -114,7 +114,11 @@ export function inspectCardSendIdentity({ entries, session, currentPid } = {}) {
   const words = commandWords(launch.cmd);
   if (!words) return {ok:false, reason:"unsafe-command", message:"카드 전송 불가: 단일 AI 실행 명령만 허용한다 (셸 결합·주석·확장 불가)"};
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
-  const harness = words.shift()?.split("/").pop() ?? "";
+  const executable = words.shift()?.split("/").pop() ?? "";
+  // `kadan-<실행기>` 래퍼(예: ~/.kadan/bin/kadan-claude)는 인증 환경만 준비하고 실행기로 exec한다.
+  // 붙여넣기 직전 실제 전경 프로세스가 그 실행기·모델인지 matchesAiProcess로 다시 확인한다.
+  const wrapped = executable.startsWith("kadan-") ? executable.slice(6) : "";
+  const harness = AI_HARNESS_NAMES.has(wrapped) ? wrapped : executable;
   if (!AI_HARNESS_NAMES.has(harness)) {
     return {
       ok: false,
