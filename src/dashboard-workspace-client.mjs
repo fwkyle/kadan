@@ -21,7 +21,7 @@ function workspaceClient() {
  const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},data.columns);
  const columns=installWorkspaceColumns(()=>{lastActivity=Date.now();},()=>resizing.resetColumns());
  // 옛 관제 요약(#overview)·판 현황(#boards)은 현황 안의 접힘 구역이 됐다(2026-09-12). 옛 주소는 현황으로 보낸다.
- const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'운영 흐름',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
+ const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'운영 흐름','runner-settings':'실행 모델',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
  const activeView=()=>{const hash=location.hash.slice(1);return hash.startsWith('decision-')?'decisions':views[hash]?(hash==='cards'||hash==='detail'||hash==='card-list'?'dashboard':hash==='overview'||hash==='boards'?'status':hash):'status';};
  const filtered=()=>sortWorkspaceRows(filterWorkspaceRows(rows,state),state.sort,state.dir);
  function remember(){const el=$('#dw-scroll');if(el.getClientRects().length)scroll[state.layout]={top:el.scrollTop,left:el.scrollLeft};}

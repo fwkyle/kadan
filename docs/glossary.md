@@ -92,4 +92,5 @@
 ### 실행 모델 설정 (2026-09-23)
 
 - 실행 모델 설정(runner settings): 역할(작업자·검수자·일반감독·슈퍼감독)별 실행기·모델·강도의 기계용 기준. `$KADAN_HOME/runner-settings.json` 한 곳에 둔다. 상세는 [실행 모델 설정](runner-settings.md).
+- 활성 프리셋(active preset): 역할 값 묶음 가운데 발령이 지금 읽는 하나. 대시보드 '실행 모델'이나 `kadan runners preset`으로 바꾸고, 원장에 `action: preset`으로 남는다.
 - 설정 명령 대체(override): `start --profile`에서 설정과 다른 `--cmd`를 이유와 함께 쓴 발령. start 기록에 `launchSource: override`로 남는다.
