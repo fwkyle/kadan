@@ -70,6 +70,19 @@ test("동시 send는 서로의 tmux 버퍼를 붙여넣거나 지우지 않는�
   }
 });
 
+test("본문은 괄호 붙여넣기(-p)로 넣고 1초 뒤 Enter를 보낸다 — Claude Code Enter 누락(2026-09-23)", () => {
+  const calls = [];
+  const run = (args) => { calls.push(["run", ...args]); if (args[0] === "display-message") return "0\n"; };
+  const spawn = (cmd, args) => { calls.push(["spawn", cmd, ...args]); return {}; };
+  sendTmux("kadan-a", "짧은 지시\n", { run, spawn, pid: 1, hrtime: () => 1n });
+  const paste = calls.findIndex((c) => c[1] === "paste-buffer");
+  const sleep = calls.findIndex((c) => c[1] === "sleep");
+  const enter = calls.findIndex((c) => c[1] === "send-keys");
+  assert.ok(calls[paste].includes("-p"), "paste-buffer 에 -p 가 있어야 한다");
+  assert.deepEqual(calls[sleep], ["spawn", "sleep", "1"]);
+  assert.ok(paste < sleep && sleep < enter, "붙여넣기 → 대기 → Enter 순서");
+});
+
 for (const sample of [
   {name:'처음부터 복사모드',modes:['1'],pastes:0,delivery:'not-sent'},
   {name:'버퍼 준비 뒤 복사모드',modes:['0','1'],pastes:0,delivery:'not-sent'},
