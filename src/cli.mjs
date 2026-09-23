@@ -1560,8 +1560,9 @@ function sendWatchMessage(role,message) {
   guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session))});
 }
 
-// 사람이 이 시간 안에 창에서 키를 눌렀으면 대화 중으로 보고 미확인 우편 알림을 미룬다.
-export const WATCH_MAIL_HUMAN_IDLE_MS = 10 * 60_000;
+// 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.
+// 2026-09-23 [kyle]: 10분은 계속 대화하는 창의 질문 알림을 너무 늦춰 30초로 줄였다. 입력창 글 검사는 그대로다.
+export const WATCH_MAIL_HUMAN_IDLE_MS = 30_000;
 
 export function sendWatchMailReminder(role,message,expectedPid,{
   selectedFloor=floor,readStart=lastStartFor,send=guardedSend,
