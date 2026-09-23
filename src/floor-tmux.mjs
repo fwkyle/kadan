@@ -393,6 +393,8 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
 //   사용자 글이 이 모양이 될 수 없다. 윗줄에는 devin처럼 `(bypass permissions on)` 표지가 섞인다.
 const PROMPT_LINE = /^\s*[│┃]?[ \t]*[›>❯❭](.*)$/u;
 const EMPTY_INPUT_PLACEHOLDERS = new Set(["Ask Devin to build features, fix bugs, or work on your code", "Ask Codex to do anything"]);
+// claude-code v2.1.280: 새 창 입력창에 흐린 글씨(SGR 2)로 `Try "…"` 예시가 뜬다. 문구는 매번 바뀌어 모양으로만 맞춘다(2026-09-23 실측).
+const CLAUDE_PLACEHOLDER = /^Try "[^"\n]+"$/u;
 const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
 
 // 화면에 보이는 입력창이 비었는지 확인한다. 카드 전송과 감시기 알림이 같은 기준을 쓴다.
@@ -412,7 +414,7 @@ function checkEmptyInput(session, run, row, width, label) {
   if (PROMPT_LINE.test(lines.slice(0, row).findLast(line => line.trim()) ?? "")) deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 프롬프트 위 입력 경계 미확인`);
   const boxed = row > 0 && isInputRule(lines[row - 1], width, true);
   const rest = prompt[1].trim();
-  if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest)) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
+  if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest) && !CLAUDE_PLACEHOLDER.test(rest)) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
   // 상자형(devin·claude)은 바로 아래 닫는 줄 밑을 상태줄로 본다. 상자 없음(codex)은 빈 줄 뒤 상태줄 한 줄만 허용한다.
   const below = lines.slice(row + 1);
   const footer = below.findIndex(line => line.trim());
