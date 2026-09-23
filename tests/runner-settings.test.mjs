@@ -16,8 +16,10 @@ const codexModels = [
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-runner-settings-'));
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners:[
-    {name:'codex', spawn:'codex -p lite --model {model} -c model_reasoning_effort="{effort}"'},
-    {name:'devin', spawn:'devin --model {model} --permission-mode dangerous'},
+    // 실제 agent-runners.json처럼 실행기 이름은 id에 둔다(2026-09-23 name만 읽어 실제 파일에서 실패한 사고).
+    {id:'codex', spawn:'codex -p lite --model {model} -c model_reasoning_effort="{effort}"'},
+    {id:'devin', spawn:'devin --model {model} --permission-mode dangerous'},
+    {id:'claude-code', spawn:'claude --model {model} --effort {effort}'},
   ]}));
   const cache = path.join(home, 'models_cache.json');
   fs.writeFileSync(cache, JSON.stringify({models:codexModels}));
@@ -33,7 +35,7 @@ test('처음 만들기는 실행기 틀만 옮기고 역할 값은 비워 두며
   assert.throws(() => initSettings(f.home, {by:'kyle', reason:' ', record:f.record}), /이유/);
   const value = initialize(f);
   assert.equal(value.revision, 1);
-  assert.deepEqual(Object.keys(value.runners).sort(), ['codex', 'devin']);
+  assert.deepEqual(Object.keys(value.runners).sort(), ['claude', 'codex', 'devin']);
   assert.deepEqual(value.presets.B.roles, {});
   assert.throws(() => initialize(f), /이미 있다/);
   assert.equal(f.records.filter(e => e.kind === 'runner-settings' && e.action === 'init').length, 1);
