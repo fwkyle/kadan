@@ -154,6 +154,17 @@ export function blockModel(home, {model, roles, ...meta}) {
   });
 }
 
+// 활성 프리셋 전환. 있는 프리셋만 고를 수 있고, 전환도 같은 공통 경로로 기록한다.
+export function setActivePreset(home, {preset, ...meta}) {
+  return change(home, {...meta, action: 'preset'}, next => {
+    if (typeof preset !== 'string' || !Object.hasOwn(next.presets, preset)) throw new Error(`없는 프리셋: ${preset ?? '(없음)'}`);
+    if (preset === next.activePreset) throw new Error(`이미 활성 프리셋: ${preset}`);
+    const before = next.activePreset;
+    next.activePreset = preset;
+    return {before, after: preset};
+  });
+}
+
 // 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
 export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
   if (!Object.values(PROFILE_ROLES).includes(role)) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);

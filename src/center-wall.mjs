@@ -17,6 +17,9 @@ import {decisionCommand} from './decisions.mjs';
 import {renderDecisions,renderActivity} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
 import { CardStore } from './card-store.mjs';
+import {appendLedger} from './ledger.mjs';
+import {setActivePreset,setRole} from './runner-settings.mjs';
+import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
 const labels={archived:'과거 자료·미분류',running:'작업 중',waiting:'결과 대기',draft:'초안',ready:'발령 가능',assigned:'배정',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',unconfirmed:'발령됨',orphaned:'세션 없음·미완료',failed:'실패',planned:'계획', 'needs-check':'확인 필요'};
@@ -54,8 +57,9 @@ ${dashboardStyle}
 ${dashboardWorkspaceStyle}
  ${workDashboardStyle}
  ${uiFoundationStyle}
+ ${runnerSettingsStyle}
  ${operationsFlowStyle}
- </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
+ </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a><a href="#runner-settings" data-route="runner-settings">실행 모델</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
  ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
@@ -63,6 +67,7 @@ ${dashboardWorkspaceStyle}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}
  ${renderDecisions(decisions,decisionError,token)}
+ ${renderRunnerSettings({home,entries,token,saved:url.searchParams.get('runnersSaved')})}
  <section class="panel" id="create" data-view="create"><h2>새 카드 만들기</h2><form method="post" action="/cards/create" class="edit"><input type="hidden" name="token" value="${e(token)}"><label>저장소 이름<input name="repo" required placeholder="my-repo"></label><label>저장소 절대경로<input name="repoPath" required></label><label>카드 ID<input name="id" required placeholder="card-product-search"></label><label>제목<input name="title" required></label><label>작업 내용<textarea name="body" rows="5" required></textarea></label><button>초안으로 저장</button></form></section>
  <section class="panel" id="sessions" data-view="sessions"><h2>담당자 세션</h2>${activityGuide('sessions')}${center&&!center.runtimeKnown?'<p role="alert">현재 세션 상태 모름</p>':''}<p class="muted">생존 여부와 카드 완료 여부는 별개입니다.</p><div class="scroll"><table><thead><tr><th>역할</th><th>생존</th><th>실행 도구 / 모델</th></tr></thead><tbody>${(center?.roles??[]).filter(r=>r.life.state==='alive').map(r=>`<tr><td>${e(r.role)}</td><td>${!center.runtimeKnown?'모름':r.life.pidState==='match'?'열려 있음':'PID 변경 — 확인 필요'}</td><td>${e([r.harness,r.model].filter(Boolean).join(' / ')||'모름')}</td></tr>`).join('')}</tbody></table></div></section>
  ${renderActivity({center,entries,ledgerLines,error,home},url)}
@@ -76,7 +81,7 @@ ${dashboardWorkspaceStyle}
 export function createCenterHandler(home, {notify}={}) {
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/cards/update','/cards/create','/decisions/answer',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`){fail(403,'다른 사이트에서 저장할 수 없습니다');return true;}
   if(req.headers['content-type']?.split(';')[0]!=='application/x-www-form-urlencoded'){fail(415,'폼 입력만 지원합니다');return true;}
@@ -88,6 +93,11 @@ export function createCenterHandler(home, {notify}={}) {
    if(url.pathname==='/decisions/answer') {
      decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      res.writeHead(303,{location:'/#decision-'+encodeURIComponent(f.id),'cache-control':'no-store'});res.end();return true;
+   }
+   if(url.pathname.startsWith('/runners/')){
+    const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};
+    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):setActivePreset(home,{preset:f.preset,...meta});
+    res.writeHead(303,{location:'/?runnersSaved='+next.revision+'#runner-settings','cache-control':'no-store'});res.end();return true;
    }
    if(url.pathname.startsWith('/works/')){
     const action=url.pathname.slice(7);let work;
