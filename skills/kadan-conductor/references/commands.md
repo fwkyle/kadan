@@ -14,7 +14,7 @@
 | 관제 화면 열어줘 | `kadan wall` |
 | 작업 내용 봐줘 | `kadan read <역할> --lines 30` 이상. 상태 판정은 원장 사용 |
 | 원장 보여줘 | `kadan log` |
-| 새 작업자 띄워 | `kadan start <판>-작업자 --profile worker --cmd "<확인한 실행 명령>"` |
+| 새 작업자 띄워 | `kadan start <판>-작업자 --profile worker` (설정과 다른 명령은 `--cmd … --reason …`) |
 | 카드 보내 | 중앙 배정·plan 후 `kadan send <역할> --task <현재실행키> "<카드 경로와 지시>"` |
 | 반복 구현·검수 이어줘 | [자동 전달 설정](../../../docs/automatic-review.md). 명시 설정한 업무만 auto-run |
 | 수동 검수 붙여 | 원본 기준을 참조하는 검수 실행·독립 reviewer 역할 → send → 응답 종료 |

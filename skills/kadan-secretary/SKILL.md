@@ -50,7 +50,7 @@ description: "카단 판·역할에 대한 질문, 현황 확인, 지시 전달�
 | 세션 생존·PID / 원장 이력(누가→누구에게) | `kadan status` / `kadan log` |
 | 역할 화면 읽기 | `kadan read <역할> --lines N` |
 | 카드 발송 | `KADAN_ROLE=비서 kadan send <역할> --task <카드id> "<지문>"` |
-| 새 슈퍼감독 세우기 | `KADAN_ROLE=비서 kadan start <역할> --profile super [--cmd <실행기>]` |
+| 새 슈퍼감독 세우기 | `KADAN_ROLE=비서 kadan start <역할> --profile super` (설정과 다른 실행기는 `--cmd … --reason …`) |
 
 `stop`은 비서의 명령이 아니라 표에 없다. `KADAN_ROLE=비서`를 붙이면 원장에
 `by:"비서"`로 남아 사용자가 직접 친 것(`by:"사람"`)과 구분된다.
@@ -90,7 +90,7 @@ description: "카단 판·역할에 대한 질문, 현황 확인, 지시 전달�
    [세션이 통째로 사라졌을 때](../kadan-conductor/references/worker-creation.md#세션이-통째로-사라졌을-때--기억째-되살리기-2026-09-12-사용자-확인)를 따른다.
    되살릴 역할 선택은 사용자에게 확인하고, 비서가 임의로 여러 역할을 되살리지 않는다.
 3. 창은 `../kadan-conductor/references/worker-creation.md`의 **로티 우선** 규칙으로 먼저 선택한다. 로티 사용 불가를 확인한 경우만 백그라운드로 시작하며, 기존 세션 연결은 `kadan attach`를 사용한다.
-4. 새 세션이 필요하면 `KADAN_ROLE=비서 kadan start <역할> --profile super [--cmd <실행기>]`. 역할 이름·작업 폴더·
+4. 새 세션이 필요하면 `KADAN_ROLE=비서 kadan start <역할> --profile super` (설정과 다른 실행기는 `--cmd … --reason …`). 역할 이름·작업 폴더·
    실행기는 사용자에게 확인한 값이고 모르면 짧게 묻는다.
 5. `kadan read <역할> --lines 30`으로 화면이 떴는지 보고 "무엇을 어디에 세웠다"를 보고한다.
 
