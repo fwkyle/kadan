@@ -166,3 +166,17 @@ test('업무 ID는 발령하지 않으며 종료한 업무 안의 실행 재발�
  assert.throws(()=>resolveWorkMail(home,{taskId:execution.split('/')[1]}),/종료한 업무/);
  assert.equal(resolveWorkMail(home,{workKey:work.key}).workKey,work.key,'완료 뒤 결과 우편은 연결할 수 있다');
 });
+
+for(const mode of ['jsonl','sqlite'])test(`${mode}: 업무 owner는 owner를 정한 뒤 확정된 역할 인계를 따라간다`,()=>{
+ const {home,store,change}=fixture(mode);
+ const transfer=(from,to,t)=>appendLedger({kind:'handover',phase:'transferred',handoverId:`${from}-${to}`,from,to,taskIds:[],t},home);
+ transfer('감독','옛-후임','2000-01-01T00:00:00.000Z');
+ transfer('다른-감독','다른-후임',new Date().toISOString());
+ assert.throws(()=>change('complete',{result:'완료'},{by:'옛-후임'}),/책임 감독/);
+ transfer('감독','감독-2',new Date(Date.now()+1000).toISOString());
+ transfer('감독-2','감독-3',new Date(Date.now()+2000).toISOString());
+ for(const by of ['감독','감독-2','다른-후임'])assert.throws(()=>change('complete',{result:'완료'},{by}),/책임 감독/);
+ const done=change('complete',{result:'인계받은 감독이 전체 결과 확인'},{by:'감독-3'});
+ assert.equal(done.status,'done');assert.equal(done.owner,'감독');
+ assert.equal(store.get(done.key).history.at(-1).by,'감독-3');
+});

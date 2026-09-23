@@ -20,6 +20,17 @@ test('카드 명령 파서: 셸 결합·주석·프롬프트의 모델 문자열
   assert.equal(inspect('codex --model x "explain --model fake"').model, 'x');
 });
 
+test('kadan-<실행기> 래퍼는 그 실행기로 읽고, 실제 프로세스 대조는 그대로 한다', () => {
+  const found = inspect('/opt/kadan/bin/kadan-claude --model claude-opus-5-5 --effort high');
+  assert.equal(found.ok, true);
+  assert.equal(found.harness, 'claude');
+  assert.equal(found.model, 'claude-opus-5-5');
+  for (const cmd of ['/opt/kadan/bin/kadan-bash --model x', 'kadan- --model x', 'kadan-claude']) assert.equal(inspect(cmd).ok, false, cmd);
+  // 래퍼가 exec하지 않고 남아 있으면 전경 프로세스가 claude가 아니므로 카드는 거부된다.
+  assert.equal(matchesAiProcess('/bin/sh /opt/kadan/bin/kadan-claude --model x', 'claude', 'x'), false);
+  assert.equal(matchesAiProcess('/opt/bin/claude --model x --effort high', 'claude', 'x'), true);
+});
+
 test('프로세스 실행 파일/스크립트 자리만 실행기 이름으로 인정한다', () => {
   for (const args of ['/opt/bin/codex --model x', '/usr/bin/node /opt/bin/codex.js --model x', '/usr/bin/bun /opt/bin/omo --model x']) {
     assert.equal(matchesAiProcess(args, args.includes('omo') ? 'omo' : 'codex'), true, args);

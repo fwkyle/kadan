@@ -6,6 +6,7 @@ import {assertWritable,storageMode,storageSnapshot,transaction,readStream,append
 import {CardStore} from './card-store.mjs';
 import {buildCardCenter} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
+import {effectiveWorkOwner} from './handover-state.mjs';
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 export const endedExecution=c=>['done','failed','cancelled','superseded','archived'].includes(c.displayState);
@@ -77,7 +78,7 @@ export class WorkStore {
     if(matches.length!==1)throw new Error('고유한 우편 ID 필요: 우편 없음 또는 같은 본문으로 여러 번 보냄');
     if(!next.mailRefs.includes(fields.mail))next.mailRefs.push(fields.mail);
    }else if(action==='complete'||action==='cancel'||action==='reopen'){
-    if(!(isUserActor(by)||by===old.owner))throw new Error('책임 감독 또는 사용자가 업무의 최종 결과를 확인해야 합니다');
+    if(!(isUserActor(by)||by===effectiveWorkOwner(current,readLedger(this.home))))throw new Error('책임 감독 또는 사용자가 업무의 최종 결과를 확인해야 합니다');
     if(action==='reopen'){
      if(!['done','cancelled'].includes(old.status))throw new Error('종료한 업무만 다시 열 수 있습니다');
      next.status='open';next.result='';next.turnOwner=old.owner;next.turnAt=next.at;next.turnBy=by;
