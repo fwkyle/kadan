@@ -98,23 +98,70 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
   return value;
 }
 
-// 역할 하나의 값을 바꾼다. 선택지·강도·정책·계열을 검사하고, 바꾸기 전→후를 원장에 남긴다.
-export function setRole(home, {role, runner, model, effort, preset, revision, by, reason, record, ...options}) {
-  if (!Object.values(PROFILE_ROLES).includes(role)) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+// 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 계열 확인 → 저장 → 원장 사건.
+function change(home, {revision, by, reason, record, action}, apply) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
   const current = readSettings(home);
   if (!current) throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
   if (Number(revision) !== current.revision) throw new Error(`설정이 바뀌었다(현재 revision ${current.revision}) — 다시 읽고 저장`);
-  const name = preset ?? current.activePreset;
   const next = structuredClone(current);
-  next.presets[name] ??= {label: name, roles: {}};
-  const value = {runner, model, ...(effort != null ? {effort} : {})};
-  checkChoice(next, role, value, options);
-  const before = next.presets[name].roles[role] ?? null;
-  next.presets[name].roles[role] = value;
-  checkFamilies(next.presets[name].roles, next.families);
+  const detail = apply(next);
+  for (const preset of Object.values(next.presets)) checkFamilies(preset.roles, next.families);
   next.revision = current.revision + 1;
   write(home, next);
-  record({kind: 'runner-settings', action: 'set', by, reason: reason.trim(), revision: next.revision, preset: name, role, before, after: value});
+  record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision, ...detail});
   return next;
+}
+
+// 실행기 명령 틀. codex처럼 모델 목록 파일을 쓰는 실행기는 catalog를 유지한다.
+export function setRunner(home, {runner, spawn, ...meta}) {
+  if (typeof runner !== 'string' || !VALUE.test(runner)) throw new Error('실행기 이름 필요');
+  if (typeof spawn !== 'string' || !spawn.includes('{model}')) throw new Error('실행기 틀에는 {model}이 있어야 한다 (--spawn)');
+  return change(home, {...meta, action: 'runner'}, next => {
+    const before = next.runners[runner] ?? null;
+    next.runners[runner] = {...(before ?? {models: []}), spawn};
+    return {runner, before, after: next.runners[runner]};
+  });
+}
+
+// 목록 파일이 없는 실행기의 실측 모델·강도.
+export function setRunnerModel(home, {runner, model, efforts, ...meta}) {
+  if (typeof model !== 'string' || !VALUE.test(model)) throw new Error('모델 이름 필요');
+  const list = String(efforts ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  if (list.some(v => !VALUE.test(v))) throw new Error('강도 목록은 쉼표로 구분한 영문');
+  return change(home, {...meta, action: 'model'}, next => {
+    const spec = next.runners[runner];
+    if (!spec) throw new Error(`등록되지 않은 실행기: ${runner}`);
+    if (spec.catalog) throw new Error(`${runner}은 모델 목록 파일을 쓴다 — 직접 추가하지 않는다`);
+    const before = spec.models.find(m => m.model === model) ?? null;
+    spec.models = [...spec.models.filter(m => m.model !== model), {model, efforts: list}];
+    return {runner, before, after: {model, efforts: list}};
+  });
+}
+
+// 정책으로 막은 모델. roles를 비우면 모든 역할에서 막는다.
+export function blockModel(home, {model, roles, ...meta}) {
+  if (typeof model !== 'string' || !VALUE.test(model)) throw new Error('모델 이름 필요');
+  const list = String(roles ?? '').split(',').map(v => v.trim()).filter(Boolean);
+  if (list.some(r => !Object.values(PROFILE_ROLES).includes(r))) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+  return change(home, {...meta, action: 'block'}, next => {
+    const entry = {model, ...(list.length ? {roles: list} : {}), reason: meta.reason.trim()};
+    next.blocked = [...(next.blocked ?? []).filter(b => b.model !== model), entry];
+    return {after: entry};
+  });
+}
+
+// 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
+export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
+  if (!Object.values(PROFILE_ROLES).includes(role)) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+  const {readCodexModels, ...rest} = meta;
+  return change(home, {...rest, action: 'set'}, next => {
+    const name = preset ?? next.activePreset;
+    next.presets[name] ??= {label: name, roles: {}};
+    const value = {runner, model, ...(effort != null ? {effort} : {})};
+    checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
+    const before = next.presets[name].roles[role] ?? null;
+    next.presets[name].roles[role] = value;
+    return {preset: name, role, before, after: value};
+  });
 }

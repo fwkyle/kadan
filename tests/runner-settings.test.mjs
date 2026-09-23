@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {checkFamilies, initSettings, launchFor, modelFamily, readSettings, setRole} from '../src/runner-settings.mjs';
+import {blockModel, checkFamilies, initSettings, launchFor, modelFamily, readSettings, setRole, setRunner, setRunnerModel} from '../src/runner-settings.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
@@ -122,4 +122,28 @@ test('CLI: runners set/show와 start --profile 자동 채움·다른 명령의 �
   } finally {
     spawnSync('tmux', ['-L', socket, 'kill-server']);
   }
+});
+
+test('감독 자리: 실행기 틀·실측 모델을 기록으로 등록한 뒤 claude-code 래퍼 명령으로 채운다', () => {
+  const f = fixture(); initialize(f);
+  const meta = revision => ({revision, by:'kyle', reason:'감독도 설정으로 띄운다', record:f.record});
+  const spawn = '/opt/kadan/bin/kadan-claude --model {model} --effort {effort} --dangerously-skip-permissions';
+  assert.throws(() => setRunner(f.home, {runner:'claude', spawn:'claude', ...meta(1)}), /\{model\}/);
+  setRunner(f.home, {runner:'claude', spawn, ...meta(1)});
+  assert.throws(() => setRole(f.home, {role:'conductor', runner:'claude', model:'claude-opus-5-5', effort:'high', ...meta(2)}), /고를 수 없는 모델/);
+  assert.throws(() => setRunnerModel(f.home, {runner:'codex', model:'x', efforts:'low', ...meta(2)}), /목록 파일/);
+  setRunnerModel(f.home, {runner:'claude', model:'claude-opus-5-5', efforts:'low,medium,high,xhigh,max', ...meta(2)});
+  assert.throws(() => setRole(f.home, {role:'super', runner:'claude', model:'claude-opus-5-5', effort:'ultra', ...meta(3)}), /지원하지 않는 강도/);
+  setRole(f.home, {role:'super', runner:'claude', model:'claude-opus-5-5', effort:'high', ...meta(3)});
+  assert.equal(launchFor(readSettings(f.home), 'super').cmd, '/opt/kadan/bin/kadan-claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions');
+  assert.deepEqual(f.records.slice(-3).map(e => e.action), ['runner', 'model', 'set']);
+});
+
+test('정책 차단은 기록으로 추가하고 역할을 비우면 모든 역할에서 막는다', () => {
+  const f = fixture(); initialize(f);
+  assert.throws(() => blockModel(f.home, {model:'gpt-6-astra', roles:'secretary', revision:1, by:'kyle', reason:'시험', record:f.record}), /역할은/);
+  blockModel(f.home, {model:'gpt-6-astra', roles:'reviewer', revision:1, by:'kyle', reason:'astra는 검수자로 쓰지 않는다', record:f.record});
+  assert.deepEqual(readSettings(f.home).blocked, [{model:'gpt-6-astra', roles:['reviewer'], reason:'astra는 검수자로 쓰지 않는다'}]);
+  assert.throws(() => setRole(f.home, {role:'reviewer', runner:'codex', model:'gpt-6-astra', effort:'medium', revision:2, by:'kyle', reason:'시험', record:f.record, ...f.options}), /정책으로 막은/);
+  assert.equal(f.records.at(-1).action, 'block');
 });

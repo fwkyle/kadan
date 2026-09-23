@@ -27,10 +27,14 @@
 kadan runners init --reason <이유>          # agent-runners.json의 실행기 틀만 옮겨 처음 만든다
 kadan runners set worker --runner codex --model xai/grok-4.7-build-fast --effort xhigh --revision N --reason <이유>
 kadan runners show                          # 역할별 값과 채워질 실행 명령
+kadan runners runner claude --spawn '<명령 틀>' --revision N --reason <이유>      # 실행기 명령 틀(래퍼 포함)
+kadan runners model claude claude-opus-5-5 --efforts low,medium,high,xhigh,max --revision N --reason <이유>  # 목록 파일이 없는 실행기의 실측 모델
+kadan runners block gpt-6-astra --roles reviewer --revision N --reason <이유>      # 정책 차단(역할 생략 시 모든 역할)
 kadan start <역할> --profile worker          # --cmd 없이: 설정의 명령으로 띄운다
 kadan start <역할> --profile worker --cmd '<명령>' --reason <이유>   # 설정과 다른 명령
 ```
 
+- 역할은 실행기·모델·추론 강도 세 값으로 정한다. 실행기가 명령 틀을 정하고, 모델·강도가 틀을 채운다.
 - `set`은 목록에 없는 모델, 지원하지 않는 강도, 정책으로 막은 모델, 작업자와 같은 계열의 검수자를 거부한다. 모르는 계열끼리는 막지 않는다.
 - 모든 변경은 원장에 `runner-settings` 사건으로 남는다(`by`·`t`·`revision`·`before`·`after`·`reason`).
 - `start`의 start 기록에는 `launchSource`(`settings`/`override`), `settingsRevision`을 남긴다. `override`면 `overrideReason`과 그때의 설정 명령(`settingsCmd`)도 남긴다.
