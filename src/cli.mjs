@@ -50,6 +50,7 @@ import {
 import {
   closeRottieWindow,
   removeRottieWindow,
+  showRottieWindow,
   rottieConnectivity,
   SOCKET,
   buildOrcaCreateArgv,
@@ -65,6 +66,7 @@ import {
   hasSession,
 } from "./floor-tmux.mjs";
 import { buildRottieFloorCreateArgv } from "./floor-rottie.mjs";
+import { currentRottieWindow, planRestore, runRestore } from "./restore.mjs";
 import {
   buildWallSnapshot,
   createWallServer,
@@ -1796,9 +1798,44 @@ function cmdStop(argv) {
   } catch (error) {
     die(error.message);
   }
-  const windowFields = floor.name === "tmux" ? closeStartedWindow(lastStartFor(session)) : {};
+  const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(), session)) : {};
   appendLedger({ ...buildStopLedgerEntry({ role, session }), ...windowFields });
   console.log(`종료됨: ${session}`);
+}
+
+function cmdRestore(argv, flags) {
+  if (floor.name !== "tmux") die("restore는 tmux 바닥에서만 쓴다 — 로티 바닥은 데몬과 함께 에이전트도 끝난다", 2);
+  const choice = requireWindowChoice();
+  if (choice.kind !== "rottie") die(`restore는 KADAN_WINDOW=rottie에서만 쓴다 (지금 ${choice.kind})`, 2);
+  const preflight = inspectRottieStartPreflight({ floorName: floor.name });
+  if (!preflight.ok) die(preflight.message, 2);
+  if (preflight.switched) console.error(`로티 경로 자동 교정: ${preflight.switched.from ?? "(없음)"} → ${preflight.switched.to} (켜진 로티 1개, 연결 확인)`);
+  const bin = process.env.KADAN_ROTTIE_BIN;
+  const plan = planRestore({
+    sessions: floor.list(),
+    entries: readLedger(),
+    only: argv.length ? argv.map(sessionName) : null,
+    show: (terminalId) => showRottieWindow({ bin, terminalId }),
+  });
+  if (plan.error) die(`${plan.error} — 아무것도 복구하지 않았다`);
+  if (flags["dry-run"]) {
+    for (const item of plan.items) {
+      console.log(item.action === "restore"
+        ? `복구 대상: ${item.session} (옛 탭 ${item.oldTerminalId} ${item.oldState})`
+        : `건너뜀: ${item.session} — ${item.reason}`);
+    }
+    return;
+  }
+  const { failed } = runRestore({
+    items: plan.items,
+    open: (item) => openWindow(item.session, process.platform, {
+      choice, role: item.role, cwd: item.cwd, panePid: item.pid, idempotencyKey: item.idempotencyKey,
+    }),
+    remove: (terminalId) => removeRottieWindow({ bin, terminalId }),
+    record: (entry) => appendLedger({ ...entry, by: resolveLedgerBy({ env: process.env }) }),
+    print: console.log,
+  });
+  if (failed) process.exitCode = 1;
 }
 
 function cmdStatus() {
@@ -2002,6 +2039,8 @@ export function renderLogEntry(entry) {
         ? `taskId=${entry.taskId} ${entry.result}`
         : entry.kind === "start"
           ? `PID=${entry.panePid ?? entry.rottiePid ?? "?"} 창=${entry.window}`
+          : entry.kind === "window"
+            ? `탭=${entry.rottieTerminalId} (옛 탭 ${entry.restoredFrom} ${entry.oldState})`
           : entry.kind.startsWith('watch-ai-')
             ? `${watchAILabel(entry.source)} ${entry.verdict ?? entry.reason ?? entry.delivery ?? ''}`
             : "";
@@ -2043,7 +2082,7 @@ export function parseFlags(argv) {
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox") {
+    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox" || arg === "--dry-run") {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
@@ -2167,6 +2206,7 @@ const COMMANDS = {
   read: cmdRead,
   log: cmdLog,
   attach: cmdAttach,
+  restore: cmdRestore,
 };
 
 export function main(argv) {
@@ -2174,13 +2214,13 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|handover|work|card|decision|storage|inbox> [대상] [옵션]"
+      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|work|card|decision|storage|inbox> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
   const { flags, rest: args } = parseFlags(rest);
   try {
-    if(['init','up','start','send','stop','done','plan','watch-report'].includes(command)||command==='handover'&&!['show','list'].includes(args[0])||command==='card'&&!['list','show'].includes(args[0])||command==='decision'&&!['list','show'].includes(args[0]))assertWritable(ledgerHome());
+    if(['init','up','start','send','stop','done','plan','watch-report','restore'].includes(command)||command==='handover'&&!['show','list'].includes(args[0])||command==='card'&&!['list','show'].includes(args[0])||command==='decision'&&!['list','show'].includes(args[0]))assertWritable(ledgerHome());
     const result=fn(args, flags);
     if(result?.catch)return result.catch(error=>{
       console.error(`오류: ${error.message}`);

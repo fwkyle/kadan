@@ -57,6 +57,8 @@ kadan send worker-a --task card-1 \
   "Do card-1. When finished, print one last line in the form: KADAN:DONE <card-id> <ok|failed>, card-id is card-1"
 kadan wait worker-a                        # reports the DONE marker or silence; never decides for you
 kadan attach worker-a                      # jump into the live terminal
+kadan restore --dry-run                    # after a Rottie daemon restart: list live sessions whose Rottie tab died
+kadan restore [worker-a ...]               # reattach those sessions in new Rottie tabs (KADAN_WINDOW=rottie)
 kadan status
 kadan stop worker-a                        # only sessions Kadan created can be stopped
 ```

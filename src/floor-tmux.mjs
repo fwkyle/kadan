@@ -90,7 +90,7 @@ function attachOutputLog(session) {
   return outLog;
 }
 
-export function buildRottieCreateArgv({ role, session, cwd, socket, panePid: pid, command }) {
+export function buildRottieCreateArgv({ role, session, cwd, socket, panePid: pid, command, idempotencyKey }) {
   return [
     "terminal",
     "create",
@@ -101,7 +101,7 @@ export function buildRottieCreateArgv({ role, session, cwd, socket, panePid: pid
     "--command",
     command ?? `tmux -L ${socket} attach -t ${session}`,
     "--idempotency-key",
-    `kadan-${session}-${pid}`,
+    idempotencyKey ?? `kadan-${session}-${pid}`,
     "--json",
   ];
 }
@@ -186,12 +186,31 @@ export function removeRottieWindow({ bin, terminalId, spawnFn = spawnSync }) {
   }
 }
 
+// 탭 상태를 묻는다. 데몬에 없는 탭은 로티가 unknown으로, 지운 탭은 ROTTIE_TERMINAL_NOT_FOUND로 돌려준다
+// (로티 CLI terminal show, 2026-09-23 실측).
+export function showRottieWindow({ bin, terminalId, spawnFn = spawnSync }) {
+  try {
+    const result = spawnFn(bin, ["terminal", "show", "--terminal", terminalId, "--json"], { encoding: "utf8" });
+    let reply;
+    try {
+      reply = JSON.parse(result.stdout || "{}");
+    } catch {
+      // Non-JSON failures still carry the process exit status.
+    }
+    const state = reply?.result?.terminal?.state;
+    if (reply?.ok === true && typeof state === "string") return { ok: true, state };
+    return { ok: false, code: reply?.error?.code || result.error?.code || result.status || "ROTTIE_SHOW_FAILED" };
+  } catch (error) {
+    return { ok: false, code: error.code || "ROTTIE_SHOW_FAILED" };
+  }
+}
+
 function rottieCreate(bin, argv, spawnFn) {
   const run = (args) => spawnFn(bin, args, { encoding: "utf8" });
   let result = run(argv);
   let parsed = parseRottieCreateResult((result.stdout || "").trim());
   if (!parsed.ok && parsed.code === "ROTTIE_WORKSPACE_NOT_OPEN") {
-    run(["workspace", "add", "--path", process.cwd(), "--json"]);
+    run(["workspace", "add", "--path", argv[argv.indexOf("--workspace") + 1] ?? process.cwd(), "--json"]);
     result = run(argv);
     parsed = parseRottieCreateResult((result.stdout || "").trim());
   }
@@ -289,6 +308,7 @@ export function openWindow(session, platform = process.platform, deps = {}) {
         cwd: deps.cwd ?? process.cwd(),
         socket: deps.socket ?? SOCKET,
         panePid: deps.panePid ?? "unknown",
+        idempotencyKey: deps.idempotencyKey,
       }),
       spawnFn
     );
