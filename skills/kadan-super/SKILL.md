@@ -71,7 +71,7 @@ PID 0개면 원인보다 재가동이 먼저다. 2개 이상이면 RED 후보다
    프로필을 넣으려고 기존 역할을 재시작하거나 소급 변경하지 않는다.
 3. 창 선택은 `../kadan-conductor/references/worker-creation.md`의 로티 우선·사용 불가 시 백그라운드 규칙을 따른다.
    역할은 `<판>-감독`·`<판>-작업자`·`<판>-검수자`로 일할 레포의 `cwd`에서 세운다.
-   새 일반감독은 `kadan start <판>-감독 --profile conductor --cmd "<감독 실행 명령>"`로 만든다.
+   새 일반감독은 `kadan start <판>-감독 --profile conductor`로 만든다. 실행 명령은 실행 모델 설정이 채우고, 다른 명령은 `--cmd … --reason …`로만 쓴다.
    새 작업자·검수자는 각각 `--profile worker`·`--profile reviewer`를 쓴다.
    정확한 명령은 [새 역할의 프로필](../kadan-conductor/references/worker-creation.md#새-역할의-프로필)을 따른다.
    실행기와 모델은 `$KADAN_HOME/agent-runners.json`(예시: `skills/kadan-conductor/references/agent-runners.example.json`)의 `_기본모델`을 쓰고, 쿼터·429처럼 원인이 확인된 막힘이면 같은 파일의 `_폴백순서`를 한 칸 내려간다. 둘 다 안 맞으면 짧게 묻는다. 세운 뒤 `ps`로 실제 명령줄과
