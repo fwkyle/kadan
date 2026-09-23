@@ -4,6 +4,8 @@ import {taskIdentity} from './task-identity.mjs';
 import {shellQuote} from './mail-instructions.mjs';
 
 const recipient = mail => mail.currentRecipient || mail.role;
+// 사람 입력·대화 중이라 붙여넣기 전에 멈춘 알림. 전달하지 않았으므로 다음 순회에 다시 시도한다.
+const HOLD_CODES = new Set(['KADAN_HUMAN_ACTIVE','KADAN_HUMAN_ACTIVITY_UNKNOWN','KADAN_PANE_INPUT_PENDING','KADAN_PANE_INPUT_UNKNOWN','KADAN_PANE_STATE_UNKNOWN']);
 const reminderKey = (mailId, role) => JSON.stringify([mailId, role]);
 
 // 판의 독립적인 활성 상태는 없다. 명시적으로 연결된 업무의 보류/종료만 따른다.
@@ -34,16 +36,19 @@ function currentPid(role, entries, live) {
 }
 
 export class MailWatch {
-  constructor({record, send, graceMs = 300_000}) {
+  constructor({record, send, hold = null, graceMs = 300_000}) {
     if (!Number.isFinite(graceMs) || graceMs < 0) throw new Error('우편 유예 시간은 0 이상이어야 합니다');
-    Object.assign(this, {record, send, graceMs});
+    Object.assign(this, {record, send, hold, graceMs});
     this.reserved = new Set();
+    this.heldLogged = new Map();
   }
 
   tick({entries, cards, works, now, floor, readEntries, readCards, readWorks, signal}) {
     this.failed = false;
-    for (const e of entries) if (e.kind === 'watch-mail-reminder' && e.mailId && e.role)
-      this.reserved.add(reminderKey(e.mailId, e.role));
+    for (const e of entries) if (e.kind === 'watch-mail-reminder' && e.mailId && e.role) {
+      if (e.action === 'result' && e.held === true) this.reserved.delete(reminderKey(e.mailId, e.role));
+      else this.reserved.add(reminderKey(e.mailId, e.role));
+    }
     const groups = new Map();
     for (const mail of eligibleLetters(entries,cards,works,now,this.graceMs)) {
       const role = recipient(mail);
@@ -56,6 +61,17 @@ export class MailWatch {
       if (signal?.aborted) break;
       const expectedPid = currentPid(role,entries,floor.list());
       if (expectedPid == null) continue;
+      // 예약 기록 전에 사람 입력·대화 여부를 본다. 같은 보류는 한 번만 기록한다.
+      const held = this.hold?.(role);
+      if (held) {
+        const key = JSON.stringify([held.code, ids]);
+        if (this.heldLogged.get(role) !== key) {
+          this.heldLogged.set(role, key);
+          this.record({kind:'watch-mail-held',by:'watch',role,mailIds:ids,expectedPid,code:held.code,reason:held.message,t:new Date(now).toISOString()});
+        }
+        continue;
+      }
+      this.heldLogged.delete(role);
       const emit = (mailId, action, details = {}) => this.record({kind:'watch-mail-reminder',by:'watch',
         role,mailId,expectedPid,action,t:new Date(now).toISOString(),...details});
       // 예약 실패/중단/전달 불명확은 재전송하지 않는다. 후임 수신자는 별도 예약이다.
@@ -78,6 +94,14 @@ export class MailWatch {
           delivery = 'sent'; reason = null; delivered.add(role);
         }
       } catch (error) {
+        // 확인과 붙여넣기 사이에 사람이 입력을 시작한 경우. 붙여넣기 전 멈췄으므로 예약을 풀고 다음 순회에 다시 본다.
+        if (error.delivery === 'not-sent' && HOLD_CODES.has(error.code)) {
+          for (const id of ids) {
+            this.reserved.delete(reminderKey(id,role));
+            emit(id,'result',{delivery:'not-sent',reason:error.message,held:true});
+          }
+          continue;
+        }
         this.failed = true;
         delivery = !attempted || error.delivery === 'not-sent' ? 'not-sent'
           : error.delivery === 'sent' ? 'sent' : 'unknown';
