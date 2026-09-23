@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {blockModel, initSettings, readSettings, setActivePreset, setRole, setRunnerModel} from '../src/runner-settings.mjs';
+import {blockModel, initSettings, readSettings, setActivePreset, setFallback, setRole, setRunnerModel} from '../src/runner-settings.mjs';
 import {renderRunnerSettings} from '../src/runner-settings-wall.mjs';
 import {renderCenterWall} from '../src/center-wall.mjs';
 import {createWallServer} from '../src/wall.mjs';
@@ -182,4 +182,69 @@ test('화면 스크립트는 실행기를 바꾸면 모델을, 모델을 바꾸�
   const astra = form.model.options.find(o => o.value === 'gpt-6-astra');
   assert.equal(astra.disabled, true);
   assert.match(astra.textContent, /차단: 준비/);
+});
+
+test('폴백 순서 화면: 내려가는 조건, 역할 4개 편집 폼, 번호별 명령과 순서 버튼을 보여 준다', () => {
+  const f = fixture();
+  setFallback(f.home, {role:'worker', items:[{runner:'devin', model:'swe-2-max'}, {runner:'codex', model:'xai/grok-5-review', effort:'medium'}], revision:6, by:'kyle', reason:'준비', record:() => {}});
+  const entries = [{kind:'runner-settings', action:'fallback', by:'사람', preset:'B', role:'worker', before:[], after:[{runner:'devin', model:'swe-2-max'}], reason:'쿼터 대비'}];
+  const html = renderRunnerSettings({home:f.home, token:'tok', entries});
+  assert.match(html, /내려가는 조건: 원인이 확인된 막힘\(쿼터·429·로그인 실패·모델 이름 오류\)만\. 원인을 모르면 멈추고 보고/);
+  assert.equal(html.match(/action="\/runners\/fallback"/g).length, 4);
+  const worker = html.slice(html.indexOf('<h4>작업자 폴백'), html.indexOf('<h4>검수자 폴백'));
+  assert.match(worker, /1번 devin \/ swe-2-max<\/span> <code>devin --model swe-2-max --permission-mode dangerous<\/code>/);
+  assert.match(worker, /<button name="op" value="up:1" disabled>위로<\/button>/);
+  assert.match(worker, /<button name="op" value="down:2" disabled>아래로<\/button>/);
+  assert.match(worker, /<button name="op" value="remove:2">삭제<\/button>/);
+  assert.match(worker, /--fallback N --reason/);
+  const reviewer = html.slice(html.indexOf('<h4>검수자 폴백'), html.indexOf('<h4>일반감독 폴백'));
+  assert.match(reviewer, /폴백 없음/);
+  assert.match(reviewer, /<option value="gpt-6-astra" disabled>gpt-6-astra — 차단: 준비<\/option>/);
+  assert.match(html, /폴백 순서 · B 작업자<\/td><td>없음 → 1\. devin \/ swe-2-max/);
+});
+
+test('폴백 쓰기 경로: 추가·순서·삭제는 사람 명의로 저장하고 출처·토큰·revision·이유·목록 밖·차단·계열·없는 번호를 거부한다', async () => {
+  const f = fixture();
+  const server = createWallServer(() => ({center:null, entries:readLedger(f.home), tree:[], ledgerLines:0, collectedAt:new Date()}), {home:f.home, cacheSec:0});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    let revision = 6;
+    const post = (fields, {origin = base, where = '/runners/fallback'} = {}) => fetch(base + where, {method:'POST', redirect:'manual',
+      headers:{'content-type':'application/x-www-form-urlencoded', origin}, body:new URLSearchParams({token, revision:String(revision), reason:'시험', role:'worker', ...fields})});
+    const refused = async (response, status, pattern) => { assert.equal(response.status, status); assert.match(await response.text(), pattern); };
+    const saved = async response => { assert.equal(response.status, 303); revision++; assert.equal(response.headers.get('location'), `/?runnersSaved=${revision}#runner-settings`); };
+    const add = (model, effort, extra = {}) => post({op:'add', runner:effort ? 'codex' : 'devin', model, ...(effort ? {effort} : {}), ...extra});
+
+    await refused(await add('swe-2-max', null, {token:''}), 403, /새로 읽은 뒤/);
+    await refused(await post({op:'add', runner:'devin', model:'swe-2-max'}, {origin:'http://evil.example'}), 403, /다른 사이트/);
+    await refused(await add('swe-2-max', null, {revision:'5'}), 409, /현재 revision 6.*다시 읽고 저장/);
+    await refused(await add('swe-2-max', null, {reason:''}), 409, /이유/);
+    await refused(await post({op:'add', runner:'codex'}), 409, /추가할 모델을 고르세요/);
+    await refused(await add('gpt-9-nowhere', 'low'), 409, /폴백 1번: codex에서 고를 수 없는 모델/);
+    await refused(await add('gpt-6-sol', 'xhigh'), 409, /지원하지 않는 강도/);
+    await refused(await add('gpt-6-sol', 'low'), 409, /작업자 폴백 1번\(gpt-6-sol\)이 검수자 1순위와 같은 계열\(gpt\)/);
+    await refused(await add('gpt-6-astra', 'low', {role:'reviewer'}), 409, /정책으로 막은 모델/);
+    await refused(await add('xai/grok-5-review', 'medium', {role:'reviewer'}), 409, /검수자 폴백 1번.*작업자 1순위와 같은 계열\(grok\)/);
+    await refused(await post({op:'remove:1'}), 409, /없는 폴백 번호: 1 — 가능: 없음/);
+    assert.equal(readSettings(f.home).revision, 6);
+
+    await saved(await add('swe-2-max', null));
+    await saved(await add('xai/grok-5-review', 'medium'));
+    await refused(await post({op:'down:2'}), 409, /2번은 더 아래로 옮길 수 없다/);
+    await refused(await post({op:'remove:3'}), 409, /없는 폴백 번호: 3 — 가능: 1\.\.2/);
+    await saved(await post({op:'up:2'}));
+    assert.deepEqual(readSettings(f.home).presets.B.fallback.worker.map(x => x.model), ['xai/grok-5-review', 'swe-2-max']);
+    await saved(await post({op:'remove:1'}));
+    assert.deepEqual(readSettings(f.home).presets.B.fallback.worker, [{runner:'devin', model:'swe-2-max'}]);
+    // 1순위를 기존 폴백과 같은 계열로 바꾸는 저장도 거부한다.
+    await refused(await post({role:'reviewer', runner:'devin', model:'swe-2-max'}, {where:'/runners/set'}), 409, /작업자 폴백 1번\(swe-2-max\)이 검수자 1순위와 같은 계열\(devin-swe\)/);
+
+    const events = readLedger(f.home).filter(e => e.kind === 'runner-settings' && e.action === 'fallback');
+    assert.deepEqual(events.map(e => [e.by, e.revision, e.after.length]), [['사람', 7, 1], ['사람', 8, 2], ['사람', 9, 2], ['사람', 10, 1]]);
+    const html = await (await fetch(base + '/?runnersSaved=10')).text();
+    assert.match(html, /저장했습니다\(revision 10\)\. 다음 발령부터 적용, 떠 있는 세션은 그대로/);
+    assert.match(html, /1번 devin \/ swe-2-max/);
+  } finally { await new Promise(r => server.close(r)); }
 });

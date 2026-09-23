@@ -1,20 +1,22 @@
-// 대시보드 '실행 모델' 화면 — 역할별 실행기·모델·강도와 활성 프리셋을 고른다(2026-09-23 [kyle] 2단계).
-// 선택지는 runnerChoices에서만 온다. 저장 검사는 서버의 setRole·setActivePreset이 맡고, 화면 스크립트는 선택지만 좁힌다.
-import {launchFor, readSettings, runnerChoices, PROFILE_ROLES} from './runner-settings.mjs';
+// 대시보드 '실행 모델' 화면 — 역할별 실행기·모델·강도와 활성 프리셋(2단계), 역할별 폴백 순서(3단계)를 고른다(2026-09-23 [kyle]).
+// 선택지는 runnerChoices에서만 온다. 저장 검사는 서버의 setRole·setActivePreset·setFallback이 맡고, 화면 스크립트는 선택지만 좁힌다.
+import {launchFor, launchForFallback, readSettings, runnerChoices, PROFILE_ROLES} from './runner-settings.mjs';
 
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 export const RUNNER_ROLE_LABELS={worker:'작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독'};
-const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델',block:'정책 차단'};
+const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델',block:'정책 차단',fallback:'폴백 순서'};
+export const FALLBACK_WHEN='내려가는 조건: 원인이 확인된 막힘(쿼터·429·로그인 실패·모델 이름 오류)만. 원인을 모르면 멈추고 보고';
 const APPLY_NOTE='다음 발령부터 적용, 떠 있는 세션은 그대로';
 
 const choice=v=>v&&typeof v==='object'&&v.runner?[v.runner,v.model,v.effort].filter(Boolean).join(' / '):null;
+const numbered=list=>Array.isArray(list)&&list.length?list.map((v,i)=>`${i+1}. ${choice(v)}`).join('; '):null;
 // 원장 runner-settings 사건 한 건을 '무엇을'과 '전→후'로 푼다.
 function describe(x){
- const what=x.action==='set'?`${x.preset??''} ${RUNNER_ROLE_LABELS[x.role]??x.role??''}`.trim()
+ const what=x.action==='set'||x.action==='fallback'?`${x.preset??''} ${RUNNER_ROLE_LABELS[x.role]??x.role??''}`.trim()
   :x.action==='runner'?`실행기 ${x.runner??''}`:x.action==='model'?`${x.runner??''} 모델`:'';
- const from=x.action==='set'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
- const to=x.action==='set'?choice(x.after):x.action==='preset'?x.after:x.action==='runner'?x.after?.spawn:x.action==='model'?x.after&&`${x.after.model} (${(x.after.efforts??[]).join(',')})`
+ const from=x.action==='fallback'?numbered(x.before):x.action==='set'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
+ const to=x.action==='fallback'?numbered(x.after)??'비움':x.action==='set'?choice(x.after):x.action==='preset'?x.after:x.action==='runner'?x.after?.spawn:x.action==='model'?x.after&&`${x.after.model} (${(x.after.efforts??[]).join(',')})`
   :x.action==='block'?x.after&&`${x.after.model} 차단 (${x.after.roles?.map(r=>RUNNER_ROLE_LABELS[r]??r).join(',')||'모든 역할'})`:x.action==='init'?`revision ${x.revision}`:null;
  return {what:[actionLabels[x.action]??x.action,what].filter(Boolean).join(' · '),change:`${from??'없음'} → ${to??'모름'}`};
 }
@@ -30,21 +32,38 @@ function catalog(settings,options){
 const blockedFor=(settings,model,role)=>(settings.blocked??[]).find(b=>b.model===model&&(!b.roles||b.roles.includes(role)));
 const option=(value,text,{selected=false,disabled=false}={})=>`<option value="${e(value)}"${selected?' selected':''}${disabled?' disabled':''}>${e(text)}</option>`;
 
-function roleForm(settings,runners,role,token){
- const current=settings.presets[settings.activePreset].roles[role]??null;
+// 실행기 → 모델 → 강도 선택 칸. current가 없으면 첫 실행기에서 모델을 고르게 한다.
+function pickers(settings,runners,role,current){
  const runner=current&&runners[current.runner]?current.runner:Object.keys(runners)[0];
  const spec=runners[runner]??{models:[],needsEffort:false};
  const model=spec.models.find(m=>m.model===current?.model);
- let launch;try{launch=launchFor(settings,role)?.cmd??null}catch(error){launch='모름: '+error.message}
  const models=[option('',current?.model&&!model&&current.runner===runner?`지금 값이 목록에 없음: ${current.model}`:'모델 고르기',{selected:!model,disabled:true}),
   ...(spec.error?[option('',`모델 목록을 읽을 수 없음: ${spec.error}`,{disabled:true})]:[]),
   ...spec.models.map(m=>{const b=blockedFor(settings,m.model,role);return option(m.model,b?`${m.model} — 차단: ${b.reason}`:m.model,{selected:m===model,disabled:Boolean(b)});})].join('');
  const efforts=!spec.needsEffort?option('','해당 없음'):model?.efforts.length?model.efforts.map(v=>option(v,v,{selected:v===current?.effort})).join(''):option('','모델을 먼저 고르세요',{selected:true,disabled:true});
- return `<form method="post" action="/runners/set" class="edit rs-row" data-role="${e(role)}"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="revision" value="${settings.revision}"><input type="hidden" name="role" value="${e(role)}">
+ return `<div class="rs-pick"><label>실행기<select name="runner">${Object.keys(runners).map(r=>option(r,r,{selected:r===runner})).join('')}</select></label><label>모델<select name="model">${models}</select></label><label>추론 강도<select name="effort"${spec.needsEffort?'':' disabled'}>${efforts}</select></label></div>`;
+}
+const hiddenFields=(settings,role,token)=>`<input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="revision" value="${settings.revision}"><input type="hidden" name="role" value="${e(role)}">`;
+
+function roleForm(settings,runners,role,token){
+ const current=settings.presets[settings.activePreset].roles[role]??null;
+ let launch;try{launch=launchFor(settings,role)?.cmd??null}catch(error){launch='모름: '+error.message}
+ return `<form method="post" action="/runners/set" class="edit rs-row" data-role="${e(role)}">${hiddenFields(settings,role,token)}
 <h3>${e(RUNNER_ROLE_LABELS[role])} <small class="muted">${e(role)}</small></h3><p>지금: ${e(choice(current)??'비어 있음 — 발령 때 --cmd 필요')}</p>
-<div class="rs-pick"><label>실행기<select name="runner">${Object.keys(runners).map(r=>option(r,r,{selected:r===runner})).join('')}</select></label><label>모델<select name="model">${models}</select></label><label>추론 강도<select name="effort"${spec.needsEffort?'':' disabled'}>${efforts}</select></label></div>
+${pickers(settings,runners,role,current)}
 <label>바꾸는 이유 (필수)<input name="reason" required maxlength="500"></label><button>저장</button>
 <p class="muted">지금 채워질 실행 명령: <code>${e(launch??'없음')}</code></p></form>`;
+}
+
+// 역할별 폴백 순서(3단계). 버튼 한 번이 서버 저장 한 번이다: 추가·삭제·위로·아래로. 판정은 서버가 한다.
+function fallbackForm(settings,runners,role,token){
+ const list=settings.presets[settings.activePreset].fallback?.[role]??[];
+ const cmd=i=>{try{return launchForFallback(settings,role,i).cmd}catch(error){return '모름: '+error.message}};
+ const rows=list.map((item,i)=>`<li><span>${i+1}번 ${e(choice(item))}</span> <code>${e(cmd(i+1))}</code> <span class="rs-ops"><button name="op" value="up:${i+1}"${i===0?' disabled':''}>위로</button><button name="op" value="down:${i+1}"${i===list.length-1?' disabled':''}>아래로</button><button name="op" value="remove:${i+1}">삭제</button></span></li>`).join('');
+ return `<form method="post" action="/runners/fallback" class="edit rs-row rs-fallback" data-role="${e(role)}">${hiddenFields(settings,role,token)}
+<h4>${e(RUNNER_ROLE_LABELS[role])} 폴백 순서</h4>${list.length?`<ol>${rows}</ol><p class="muted">발령: <code>kadan start &lt;역할&gt; --profile ${e(role)} --fallback N --reason &lt;이유&gt;</code></p>`:'<p>폴백 없음</p>'}
+${pickers(settings,runners,role,null)}
+<label>바꾸는 이유 (필수)<input name="reason" required maxlength="500"></label><button name="op" value="add">폴백 추가</button></form>`;
 }
 
 function presetForm(settings,token){
@@ -66,7 +85,7 @@ function model(f){const r=data.runners[f.runner.value],s=f.model;s.replaceChildr
  (r?r.models:[]).forEach(m=>{const b=blocked(m.model,f.dataset.role);s.append(opt(m.model,b?m.model+' — 차단: '+b.reason:m.model,false,b));});effort(f);}
 document.querySelectorAll('form.rs-row').forEach(f=>{f.runner.addEventListener('change',()=>model(f));f.model.addEventListener('change',()=>effort(f));});})();`;
 
-export const runnerSettingsStyle='.rs-row{border-top:1px solid #d8ded8;padding-top:12px;margin-top:12px}.rs-pick{display:flex;flex-wrap:wrap;gap:10px}.rs-pick label{flex:1 1 180px}.rs-row code{overflow-wrap:anywhere}';
+export const runnerSettingsStyle='.rs-fallback ol{padding-left:20px}.rs-fallback li{margin:6px 0}.rs-ops button{margin-left:6px}.rs-row{border-top:1px solid #d8ded8;padding-top:12px;margin-top:12px}.rs-pick{display:flex;flex-wrap:wrap;gap:10px}.rs-pick label{flex:1 1 180px}.rs-row code{overflow-wrap:anywhere}';
 
 export function renderRunnerSettings({home,entries=[],token='',saved=null,readCodexModels}={}){
  const head='<section class="panel" id="runner-settings" data-view="runner-settings"><h2>실행 모델</h2><p class="muted">역할별 실행기·모델·추론 강도입니다. '+APPLY_NOTE+'입니다.</p>';
@@ -82,5 +101,6 @@ export function renderRunnerSettings({home,entries=[],token='',saved=null,readCo
  return head+notice+`<p class="muted">화면을 읽은 설정 revision ${settings.revision} · 그사이 다른 곳에서 바뀌면 저장을 거부합니다. 저장은 사람 명의로 원장에 남습니다.</p>
 <h3>프리셋</h3>${presetForm(settings,token)}
 <h3>역할별 값 (프리셋 ${e(settings.activePreset)})</h3>${Object.keys(PROFILE_ROLES).map(role=>roleForm(settings,runners,role,token)).join('')}
+<h3>역할별 폴백 순서 (프리셋 ${e(settings.activePreset)})</h3><p role="note"><strong>${FALLBACK_WHEN}.</strong> 자동 전환은 없습니다. 사람이나 감독이 번호를 골라 발령합니다.</p>${Object.keys(PROFILE_ROLES).map(role=>fallbackForm(settings,runners,role,token)).join('')}
 <script type="application/json" id="rs-data">${data}</script><script>${script}</script>${history}</section>`;
 }

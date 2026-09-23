@@ -18,7 +18,7 @@ import {renderDecisions,renderActivity} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
 import { CardStore } from './card-store.mjs';
 import {appendLedger} from './ledger.mjs';
-import {setActivePreset,setRole} from './runner-settings.mjs';
+import {editFallback,readSettings,setActivePreset,setFallback,setRole} from './runner-settings.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
@@ -81,7 +81,7 @@ ${dashboardWorkspaceStyle}
 export function createCenterHandler(home, {notify}={}) {
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`){fail(403,'다른 사이트에서 저장할 수 없습니다');return true;}
   if(req.headers['content-type']?.split(';')[0]!=='application/x-www-form-urlencoded'){fail(415,'폼 입력만 지원합니다');return true;}
@@ -96,7 +96,16 @@ export function createCenterHandler(home, {notify}={}) {
    }
    if(url.pathname.startsWith('/runners/')){
     const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};
-    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):setActivePreset(home,{preset:f.preset,...meta});
+    const fallback=()=>{
+     // 버튼 값은 add 또는 remove:N·up:N·down:N. 목록은 저장 직전 설정에서 읽고, revision 대조는 공통 경로가 한다.
+     const [op,index]=String(f.op??'').split(':');
+     if(op==='add'&&!f.model)throw new Error('추가할 모델을 고르세요');
+     const current=readSettings(home);
+     if(!current)throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
+     const items=editFallback(current.presets[current.activePreset].fallback?.[f.role]??[],{op,index,item:{runner:f.runner,model:f.model,effort:f.effort||undefined}});
+     return setFallback(home,{role:f.role,items,...meta});
+    };
+    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():setActivePreset(home,{preset:f.preset,...meta});
     res.writeHead(303,{location:'/?runnersSaved='+next.revision+'#runner-settings','cache-control':'no-store'});res.end();return true;
    }
    if(url.pathname.startsWith('/works/')){

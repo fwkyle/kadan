@@ -16,7 +16,7 @@ import {PROFILE_FILE} from "./watch-cycle.mjs";
 import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
 import {decisionCommand} from "./decisions.mjs";
 import {runnersCommand} from "./runners-command.mjs";
-import {launchFor, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
+import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand } from "./card-command.mjs";
 import { registerStartedRole } from "./hierarchy-register.mjs";
@@ -1322,7 +1322,7 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
 
 function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유]] [--profile secretary|super|conductor|worker|reviewer]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer]");
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
   const preflight = inspectRottieStartPreflight({
     floorName: floor.name,
@@ -1343,9 +1343,22 @@ function cmdStart(argv, flags) {
     if (typeof flags.reason !== "string" || !flags.reason.trim())
       die(`실행 모델 설정과 다른 명령이다 — --reason <이유>를 함께 줘라. 설정값: ${launch.cmd}`, 2);
   }
-  const useSettings = launch && !(typeof flags.cmd === "string" && flags.cmd.trim());
+  // 폴백은 사람이나 감독이 번호로 고른다. 자동 전환은 없다(2026-09-23 [kyle] 승인 3단계).
+  let fallback = null;
+  if (flags.fallback !== undefined) {
+    if (typeof flags.fallback !== "string" || !/^[1-9][0-9]*$/.test(flags.fallback)) die("--fallback에는 1부터 시작하는 번호가 필요하다", 2);
+    if (typeof flags.reason !== "string" || !flags.reason.trim()) die("폴백 발령에는 --reason <이유>가 필요하다", 2);
+    if (typeof flags.cmd === "string" || flags.cmd === true) die("--fallback과 --cmd는 함께 쓸 수 없다", 2);
+    if (reusing) die(`이미 살아 있음: ${session} — 폴백은 새로 띄울 때만 쓴다`, 2);
+    if (!Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) die("폴백 발령에는 --profile worker|reviewer|conductor|super가 필요하다", 2);
+    try { fallback = launchForFallback(readSettings(ledgerHome()), roleProfile, flags.fallback); } catch (error) { die(error.message, 2); }
+    flags.cmd = fallback.cmd;
+  }
+  const useSettings = !fallback && launch && !(typeof flags.cmd === "string" && flags.cmd.trim());
   if (useSettings) flags.cmd = launch.cmd;
-  const launchRecord = !launch ? {} : useSettings || flags.cmd.trim() === launch.cmd
+  const launchRecord = fallback
+    ? {launchSource:"fallback", fallbackIndex:fallback.fallbackIndex, fallbackReason:flags.reason.trim(), settingsRevision:fallback.revision, settingsPreset:fallback.preset, ...(launch ? {settingsCmd:launch.cmd} : {})}
+    : !launch ? {} : useSettings || flags.cmd.trim() === launch.cmd
     ? {launchSource:"settings", settingsRevision:launch.revision, settingsPreset:launch.preset}
     : {launchSource:"override", overrideReason:flags.reason.trim(), settingsRevision:launch.revision, settingsCmd:launch.cmd};
   // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
