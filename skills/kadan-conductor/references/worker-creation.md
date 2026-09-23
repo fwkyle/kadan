@@ -29,7 +29,7 @@
 
    ```bash
    cd <작업공간>
-   kadan start <판>-작업자 --profile worker --cmd "<agent-runners.json의 command>"
+   kadan start <판>-작업자 --profile worker   # 실행 모델 설정이 명령을 채운다
    ```
 
 4. Rottie 패널 또는 열린 터미널에서 TUI 프롬프트와 실제 실행 명령을 확인한 뒤
@@ -38,14 +38,14 @@
 ## 새 역할의 프로필
 
 담당을 정해 **새 세션을 만들 때** 해당 프로필을 함께 지정한다. 아래 명령은 필요한 역할의 것만 골라 사용한다.
-실행 명령은 위 실행기 설정에서 확인한 역할별 값을 넣는다.
+실행 명령은 실행 모델 설정이 채운다. 실행 모델 설정(`kadan runners show`)이 있으면 `--cmd`를 빼고 역할 프로필만 준다. 설정과 다른 명령은 `--cmd "<명령>" --reason "<이유>"`로만 쓴다([실행 모델 설정](../../../docs/runner-settings.md)).
 
 | 새 역할 | 생성 명령 |
 |---|---|
-| 작업자 | `kadan start <판>-작업자 --profile worker --cmd "<작업자 실행 명령>"` |
-| 검수자 | `kadan start <판>-검수자 --profile reviewer --cmd "<검수자 실행 명령>"` |
-| 일반감독 | `kadan start <판>-감독 --profile conductor --cmd "<감독 실행 명령>"` |
-| 슈퍼감독 | `kadan start <슈퍼 역할> --profile super --cmd "<슈퍼 실행 명령>"` |
+| 작업자 | `kadan start <판>-작업자 --profile worker` |
+| 검수자 | `kadan start <판>-검수자 --profile reviewer` |
+| 일반감독 | `kadan start <판>-감독 --profile conductor` |
+| 슈퍼감독 | `kadan start <슈퍼 역할> --profile super` |
 
 기존 세션은 현재 역할과 작업을 보존한다. 프로필을 넣으려고 재시작하거나 `start --profile`로 소급 변경하지 않는다.
 이름만으로 프로필을 추측하지 않는다. 프로필 없는 기존 세션에 안내가 필요하면 확인된 업무·실행·관계 또는

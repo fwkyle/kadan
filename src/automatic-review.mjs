@@ -8,6 +8,7 @@ import {WorkStore} from './work-store.mjs';
 import {CardStore} from './card-store.mjs';
 import {readLedger,appendLedger} from './ledger.mjs';
 import {effectiveCardRole} from './handover-state.mjs';
+import {checkFamilies,readSettings} from './runner-settings.mjs';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const workStamp=w=>hash(JSON.stringify([w.goal,w.scope,w.acceptance,w.owner,w.board,w.repoPath]));
@@ -47,6 +48,9 @@ export class AutomaticReview {
    if(!old&&nextBlock)throw new Error('이전 블록 없음');
    const identities={worker:this.identity(worker),reviewer:this.identity(reviewer),notify:this.identity(notify||w.owner)};
    if(new Set(Object.values(identities).map(x=>x.role)).size!==3||identities.worker.pid===identities.reviewer.pid)throw new Error('작업자·독립검수자·감독은 서로 다른 세션이어야 합니다');
+   // 실제로 띄운 모델의 계열이 같으면 자기 검수다. 모르는 계열끼리는 막지 않는다.
+   const startedModel=role=>this.entries().filter(e=>e.kind==='start'&&e.role===role).at(-1)?.model;
+   checkFamilies({worker:{model:startedModel(worker)},reviewer:{model:startedModel(reviewer)}},readSettings(this.home)?.families);
    if(old){
     if(workStamp(w)!==old.workStamp||JSON.stringify(w.executions)!==JSON.stringify(old.links))throw new Error('업무 범위 또는 실행 연결 변경');
     const history=readStream(this.home,this.stream(key));
