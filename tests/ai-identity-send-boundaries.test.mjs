@@ -80,6 +80,9 @@ for (const [name, config, code] of [
   // 2026-09-23 실측 화면 모양(폭 40으로 축소). 빈 입력 판별이 실제 TUI에서 풀려도 아래는 계속 거부한다.
   ['claude 입력창에 미제출 입력', {state:'11|0|2|12',screen:realClaude('❯ 업무는 내가 완료 처리할게')}, 'KADAN_PANE_INPUT_PENDING'],
   ['Try 예시 뒤에 이어 쓴 입력', {state:'11|0|2|2',screen:realClaude('❯ Try "x" 그리고 이것도')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['흐리지 않은 같은 문장은 사람이 친 글', {state:'11|0|2|2',screen:realClaude('\x1b[39m❯\u00a0\x1b[0m3단계 진행해')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['흐린 추천 뒤에 사람이 이어 친 글', {state:'11|0|2|2',screen:realClaude('❯ \x1b[2m3단계 진행해\x1b[0m 지금')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['흐림을 22로 끈 뒤의 글', {state:'11|0|2|2',screen:realClaude('❯ \x1b[2m추천\x1b[22m사람')}, 'KADAN_PANE_INPUT_PENDING'],
   ['claude 입력 상자 안 둘째 줄 미제출 입력', {state:'11|0|2|2',screen:'out\n'+rule()+'\n❯ \n  SECOND_PENDING\n'+rule()+'\n  status'}, 'KADAN_PANE_INPUT_PENDING'],
   ['devin 작업 중 자리표시자', {state:'11|0|3|2',screen:realDevin('❭ Guide Devin while it works')}, 'KADAN_PANE_INPUT_PENDING'],
   ['pane 폭보다 짧은 가로줄은 입력 상자가 아니다', {state:'11|0|1|2',screen:'─'.repeat(30)+'\n❯ \n'+'─'.repeat(30)}, 'KADAN_PANE_INPUT_PENDING'],
@@ -116,6 +119,7 @@ test('실제 대기 화면(devin·claude·codex)의 빈 입력창에는 카드�
     ['devin', '11|0|3|2', realDevin()],
     ['claude', '11|0|2|2', realClaude()],
     ['새 claude 창의 흐린 예시 문구', '11|0|2|2', realClaude('❯ Try "write a test for watch-runner.mjs"')],
+    ['작업 뒤 흐린 다음 입력 추천(실측 모양)', '11|0|2|2', realClaude('\x1b[39m❯\u00a0\x1b[2m3단계 진행해\x1b[0m')],
     ['codex 시작 화면(배너의 >_ 포함)', '11|0|4|2', '╭──────────╮\n│ >_ OpenAI Codex (v0.155.0) │\n╰──────────╯\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x\n\n'],
     ['codex 하단 입력창(과거 프롬프트 포함)', '11|0|5|2', 'old\n› earlier message\n\n• answer\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x'],
   ]) {
