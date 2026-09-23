@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { activeHierarchyPath, registerStartedRole } from "../src/hierarchy-register.mjs";
+import { activeHierarchyPath, isKadanToolCommand, registerStartedRole } from "../src/hierarchy-register.mjs";
 
 function makeHome(table) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-register-"));
@@ -85,4 +85,25 @@ test("마지막으로 읽힌 관계표를 현재 경로로 본다", () => {
     ]),
     "/새/표.json"
   );
+});
+
+test("카단 감시기·대시보드 세션은 관계표에 넣지 않는다(2026-09-23 실제 명령)", () => {
+  for (const cmd of [
+    "env -u KADAN_ROLE /opt/node/bin/kadan watch --profile /opt/kadan/watch-profile.json",
+    "/usr/local/bin/node /opt/kadan/src/cli.mjs dashboard --port 8790",
+    "kadan wall --port 8800",
+    "KADAN_HOME=/tmp/x kadan watch",
+  ]) {
+    assert.equal(isKadanToolCommand(cmd), true, cmd);
+    const { home, hierarchyPath, entries } = makeHome(기본표);
+    const result = registerStartedRole({ role: "watch", creator: "판-감독", cmd, home, entries });
+    assert.equal(result.registered, false, cmd);
+    assert.equal(result.reason, "카단 운영 도구 세션");
+    assert.deepEqual(JSON.parse(fs.readFileSync(hierarchyPath, "utf8")), 기본표);
+  }
+  for (const cmd of ["codex -p lite --model gpt-6-sol", "claude --model claude-opus-5-5", "kadan send 판-감독 hi", "node /x/other.mjs watch", undefined, "echo watch; kadan watch"]) {
+    assert.equal(isKadanToolCommand(cmd), false, String(cmd));
+  }
+  const { home, entries } = makeHome(기본표);
+  assert.equal(registerStartedRole({ role: "판-작업자", creator: "판-감독", cmd: "codex --model x", home, entries }).registered, true);
 });
