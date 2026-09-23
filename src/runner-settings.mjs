@@ -65,15 +65,69 @@ export function checkFamilies(roles, families = DEFAULT_FAMILIES) {
   if (worker && worker === reviewer) throw new Error(`작업자와 검수자가 같은 계열(${worker})이다 — 자기 검수가 된다`);
 }
 
+// 프리셋 하나의 계열 확인: 1순위끼리, 그리고 검수자 폴백↔작업자 1순위·작업자 폴백↔검수자 1순위(3단계).
+// 1순위를 바꿀 때도 같은 확인을 거치므로 기존 폴백과 충돌하는 저장은 거부된다.
+function checkPresetFamilies(preset, families = DEFAULT_FAMILIES) {
+  checkFamilies(preset.roles, families);
+  const pairs = [['reviewer', 'worker', '검수자', '작업자'], ['worker', 'reviewer', '작업자', '검수자']];
+  for (const [role, other, label, otherLabel] of pairs) {
+    const primary = modelFamily(preset.roles?.[other]?.model, families);
+    if (!primary) continue;
+    (preset.fallback?.[role] ?? []).forEach((item, i) => {
+      if (modelFamily(item.model, families) === primary)
+        throw new Error(`${label} 폴백 ${i + 1}번(${item.model})이 ${otherLabel} 1순위와 같은 계열(${primary})이다 — 자기 검수가 된다`);
+    });
+  }
+}
+
 // 현재 설정으로 역할의 실행 명령을 만든다. 설정이 없거나 역할 값이 없으면 null.
 export function launchFor(settings, profile) {
   const role = PROFILE_ROLES[profile];
   const value = role && settings?.presets[settings.activePreset].roles[role];
   if (!value) return null;
+  return {cmd: fill(settings, value), role, preset: settings.activePreset, revision: settings.revision, ...value};
+}
+
+function fill(settings, value) {
   const spawn = settings.runners[value.runner]?.spawn;
   if (!spawn) throw new Error(`실행 모델 설정의 실행기 틀 없음: ${value.runner}`);
-  const cmd = spawn.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? '');
-  return {cmd, role, preset: settings.activePreset, revision: settings.revision, ...value};
+  return spawn.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? '');
+}
+
+// 활성 프리셋 역할의 N번째(1부터) 폴백으로 실행 명령을 만든다. 자동으로 고르지 않고 번호를 받은 경우에만 쓴다.
+export function launchForFallback(settings, profile, n) {
+  const role = PROFILE_ROLES[profile];
+  if (!role || !settings) throw new Error('폴백 발령에는 실행 모델 설정과 역할 프로필이 필요하다');
+  const list = settings.presets[settings.activePreset].fallback?.[role] ?? [];
+  const index = Number(n);
+  if (!Number.isInteger(index) || index < 1 || index > list.length)
+    throw new Error(`없는 폴백 번호: ${n} — 가능: ${list.length ? `1..${list.length}` : '없음(폴백 목록이 비어 있다)'}`);
+  const value = list[index - 1];
+  return {cmd: fill(settings, value), role, preset: settings.activePreset, revision: settings.revision, fallbackIndex: index, ...value};
+}
+
+// 'runner:model[:effort],…' → 폴백 항목 목록. 값에는 ':'·','가 들어갈 수 없다(VALUE). 빈 글은 빈 목록.
+export function parseFallbackSpec(text) {
+  return String(text ?? '').split(',').map(v => v.trim()).filter(Boolean).map(part => {
+    const [runner, model, effort, ...extra] = part.split(':');
+    if (!runner || !model || extra.length) throw new Error(`폴백 항목 형식은 실행기:모델[:강도]: ${part}`);
+    return {runner, model, ...(effort ? {effort} : {})};
+  });
+}
+
+// 대시보드의 한 번 조작(추가·삭제·위로·아래로). 번호는 1부터.
+export function editFallback(list, {op, index, item}) {
+  const next = [...(list ?? [])];
+  if (op === 'add') return [...next, item];
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 1 || i > next.length) throw new Error(`없는 폴백 번호: ${index} — 가능: ${next.length ? `1..${next.length}` : '없음'}`);
+  if (op === 'remove') next.splice(i - 1, 1);
+  else if (op === 'up' || op === 'down') {
+    const j = op === 'up' ? i - 2 : i;
+    if (j < 0 || j >= next.length) throw new Error(`${i}번은 더 ${op === 'up' ? '위로' : '아래로'} 옮길 수 없다`);
+    [next[i - 1], next[j]] = [next[j], next[i - 1]];
+  } else throw new Error(`알 수 없는 폴백 조작: ${op}`);
+  return next;
 }
 
 function write(home, value) {
@@ -109,7 +163,7 @@ function change(home, {revision, by, reason, record, action}, apply) {
   if (Number(revision) !== current.revision) throw new Error(`설정이 바뀌었다(현재 revision ${current.revision}) — 다시 읽고 저장`);
   const next = structuredClone(current);
   const detail = apply(next);
-  for (const preset of Object.values(next.presets)) checkFamilies(preset.roles, next.families);
+  for (const preset of Object.values(next.presets)) checkPresetFamilies(preset, next.families);
   next.revision = current.revision + 1;
   write(home, next);
   record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision, ...detail});
@@ -177,5 +231,28 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
     const before = next.presets[name].roles[role] ?? null;
     next.presets[name].roles[role] = value;
     return {preset: name, role, before, after: value};
+  });
+}
+
+// 역할의 폴백 순서 목록 전체를 바꾼다(3단계). 항목마다 1순위와 같은 선택지·강도·정책 검사를 하고, 계열 확인은 공통 경로가 맡는다.
+export function setFallback(home, {role, items, preset, ...meta}) {
+  if (!Object.values(PROFILE_ROLES).includes(role)) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+  if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
+  const {readCodexModels, ...rest} = meta;
+  return change(home, {...rest, action: 'fallback'}, next => {
+    const name = preset ?? next.activePreset;
+    if (!next.presets[name]) throw new Error(`없는 프리셋: ${name}`);
+    const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
+    list.forEach((item, i) => {
+      try { checkChoice(next, role, item, readCodexModels ? {readCodexModels} : {}); }
+      catch (error) { throw new Error(`폴백 ${i + 1}번: ${error.message}`); }
+    });
+    const seen = new Set(list.map(item => JSON.stringify(item)));
+    if (seen.size !== list.length) throw new Error('같은 폴백 항목이 두 번 있다');
+    const before = next.presets[name].fallback?.[role] ?? [];
+    if (JSON.stringify(before) === JSON.stringify(list)) throw new Error('바뀐 것이 없다');
+    next.presets[name].fallback = {...(next.presets[name].fallback ?? {}), [role]: list};
+    if (!list.length) delete next.presets[name].fallback[role];
+    return {preset: name, role, before, after: list};
   });
 }
