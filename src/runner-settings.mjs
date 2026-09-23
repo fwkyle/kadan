@@ -88,8 +88,11 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
   if (fs.existsSync(settingsPath(home))) throw new Error(`이미 있다: ${settingsPath(home)}`);
   const source = JSON.parse(fs.readFileSync(runnersFile, 'utf8'));
   const runners = {};
-  for (const r of source.runners ?? []) if (r?.name && typeof r.spawn === 'string') {
-    runners[r.name === 'claude-code' ? 'claude' : r.name] = {spawn: r.spawn, ...(r.name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
+  // 실행기 이름은 agent-runners.json의 `id`에 있다(예전 예시는 `name`).
+  for (const r of source.runners ?? []) {
+    const name = r?.id ?? r?.name;
+    if (typeof name !== 'string' || typeof r.spawn !== 'string') continue;
+    runners[name === 'claude-code' ? 'claude' : name] = {spawn: r.spawn, ...(name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
   }
   if (!runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
   const value = {version: 1, revision: 1, activePreset: 'B', presets: {B: {label: '값싼 병렬판', roles: {}}}, runners, families: DEFAULT_FAMILIES, blocked: []};
