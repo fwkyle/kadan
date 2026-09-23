@@ -29,13 +29,17 @@ test('프로세스 실행 파일/스크립트 자리만 실행기 이름으로 �
   }
 });
 
-function fixture({state='11|0|0|0', screen='› ', ps='11 1 11 11 /opt/bin/codex --model test-model', afterLoad, psStatus=0} = {}) {
+const rule = (label='') => label ? '─'.repeat(40-label.length-3)+' '+label+' ─' : '─'.repeat(40);
+const realDevin = (input='❭ Ask Devin to build features, fix bugs, or work on your code') => ` Devin CLI\n\n${rule('(bypass permissions on)')}\n${input}\n${rule()}\nSWE-2 Max        ctrl+v to paste image\n\n`;
+const realClaude = (input='❯ ') => `⏺ 이전 답변\n${rule()}\n${input}\n${rule()}\n  ~/Dev/x[main]\n  Opus 5.5 | ctx:26%\n  ⏵⏵ bypass permissions on\n`;
+
+function fixture({state='11|0|0|0', width=40, screen='› ', ps='11 1 11 11 /opt/bin/codex --model test-model', afterLoad, psStatus=0} = {}) {
   const calls=[]; let loaded=false;
   return {calls, options:{cardIdentity:identity, pid:1, hrtime:()=>1n,
     run(args) {
       calls.push(args);
       if(args.includes('#{pane_in_mode}')) return '0';
-      if(args.includes('#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}')) return loaded && afterLoad?.state || state;
+      if(args.includes('#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}|#{pane_width}')) return `${loaded && afterLoad?.state || state}|${width}`;
       if(args[0]==='capture-pane') return loaded && afterLoad?.screen !== undefined ? afterLoad.screen : screen;
       if(args[0]==='load-buffer') loaded=true;
       return '';
@@ -62,6 +66,14 @@ for (const [name, config, code] of [
   ['본문 속 가짜 구분선', {screen:'› \n──────\nUSER_BELOW_BORDER'}, 'KADAN_PANE_INPUT_PENDING'],
   ['본문 끝의 구분선도 빈 입력이 아니다', {screen:'› \n──────'}, 'KADAN_PANE_INPUT_PENDING'],
   ['테두리 안 커서 아래 미제출 입력', {state:'11|0|1|2',screen:'╭────╮\n│ ›  │\n│ SECOND_PENDING │\n╰────╯\nstatus'}, 'KADAN_PANE_INPUT_PENDING'],
+  // 2026-09-23 실측 화면 모양(폭 40으로 축소). 빈 입력 판별이 실제 TUI에서 풀려도 아래는 계속 거부한다.
+  ['claude 입력창에 미제출 입력', {state:'11|0|2|12',screen:realClaude('❯ 업무는 내가 완료 처리할게')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['claude 입력 상자 안 둘째 줄 미제출 입력', {state:'11|0|2|2',screen:'out\n'+rule()+'\n❯ \n  SECOND_PENDING\n'+rule()+'\n  status'}, 'KADAN_PANE_INPUT_PENDING'],
+  ['devin 작업 중 자리표시자', {state:'11|0|3|2',screen:realDevin('❭ Guide Devin while it works')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['pane 폭보다 짧은 가로줄은 입력 상자가 아니다', {state:'11|0|1|2',screen:'─'.repeat(30)+'\n❯ \n'+'─'.repeat(30)}, 'KADAN_PANE_INPUT_PENDING'],
+  ['빈 줄 건너 위쪽 프롬프트에 미제출 입력', {state:'11|0|2|2',screen:'› USER_UNSUBMITTED\n\n› '}, 'KADAN_PANE_INPUT_UNKNOWN'],
+  ['codex 상태줄 위 미제출 둘째 줄', {state:'11|0|1|2',screen:'\n› \n  SECOND_PENDING\n\n  gpt-6-astra medium · ~/Dev/x'}, 'KADAN_PANE_INPUT_PENDING'],
+  ['codex 상태줄 뒤 추가 줄', {state:'11|0|1|2',screen:'\n› \n\n  gpt-6-astra medium · ~/Dev/x\n  EXTRA'}, 'KADAN_PANE_INPUT_PENDING'],
   ['프롬프트 없는 빈 화면', {screen:''}, 'KADAN_PANE_INPUT_UNKNOWN'],
   ['실제 모델 불일치', {ps:'11 1 11 11 codex --model other'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
   ['실제 모델 미확인', {ps:'11 1 11 11 codex'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
@@ -87,9 +99,22 @@ test('빈 프롬프트·현재 pane 자식 AI는 허용하고 일반 우편은 �
   assert.equal(mail.calls.filter(a=>a[0]==='paste-buffer').length,1);
 });
 
+test('실제 대기 화면(devin·claude·codex)의 빈 입력창에는 카드를 붙여넣는다', () => {
+  for (const [name, state, screen] of [
+    ['devin', '11|0|3|2', realDevin()],
+    ['claude', '11|0|2|2', realClaude()],
+    ['codex 시작 화면(배너의 >_ 포함)', '11|0|4|2', '╭──────────╮\n│ >_ OpenAI Codex (v0.155.0) │\n╰──────────╯\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x\n\n'],
+    ['codex 하단 입력창(과거 프롬프트 포함)', '11|0|5|2', 'old\n› earlier message\n\n• answer\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x'],
+  ]) {
+    const f=fixture({state, screen});
+    sendTmux('kadan-r','CARD',f.options);
+    assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,1,name);
+  }
+});
+
 test('과거 출력과 본문의 프롬프트·상태 줄을 구별할 수 없으면 거부한다', () => {
   const f=fixture({state:'11|0|3|4',screen:'old output\n› OLD_PROMPT\n╭────╮\n│ ›  │\n│    │\n╰────╯\nstatus'});
-  assert.throws(()=>sendTmux('kadan-r','CARD',f.options), e=>e.code==='KADAN_PANE_INPUT_UNKNOWN');
+  assert.throws(()=>sendTmux('kadan-r','CARD',f.options), e=>e.code==='KADAN_PANE_INPUT_PENDING');
   assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,0);
 });
 
