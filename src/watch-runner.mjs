@@ -344,6 +344,7 @@ export async function runWatch({
   sendAlert,
   resume429 = null,
   sendMailReminder = null,
+  mailHold = null,
   mailUnreadGraceMs = 300_000,
   sendQueueEnter = null,
   record = () => {},
@@ -382,7 +383,7 @@ export async function runWatch({
   };
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429});
   const mailDelivered = new Set();
-  const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,send:(role,message,pid)=>{
+  const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,hold:mailHold,send:(role,message,pid)=>{
     try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
     catch (error) {
       if (error.delivery === 'sent') mailDelivered.add(role);

@@ -275,3 +275,25 @@ test('실제 guardedSend 알림 전달 뒤 저장 실패: sent·실패사유·�
     f.tick();assert.equal(f.sent.length,1,mode);
   }
 });
+
+test('사람 입력·대화 중이면 예약 전에 보류하고, 같은 보류는 한 번만 기록한 뒤 풀리면 한 번 보낸다',()=>{
+  const f=fixture();let hold={code:'KADAN_HUMAN_ACTIVE',message:'알림 보류: 사람이 이 창에서 최근 입력함'};
+  const watch=new MailWatch({record:e=>f.record(e),send:(...args)=>f.send(...args),hold:()=>hold});
+  f.tick(watch);f.tick(watch);
+  assert.equal(f.sent.length,0);
+  assert.equal(f.records.filter(e=>e.kind==='watch-mail-held').length,1);
+  assert.equal(f.records.filter(e=>e.kind==='watch-mail-reminder').length,0);
+  hold=null;f.tick(watch);f.tick(watch);
+  assert.equal(f.sent.length,1);
+});
+
+test('확인 뒤 붙여넣기 전에 사람 입력이 생기면 예약을 풀고 재시작 뒤에도 다시 시도한다',()=>{
+  const f=fixture();
+  f.send=()=>{const error=new Error('알림 보류: 미제출 입력이 있음');error.code='KADAN_PANE_INPUT_PENDING';error.delivery='not-sent';throw error;};
+  f.tick();
+  assert.equal(f.records.filter(e=>e.action==='result'&&e.held===true).length,1);
+  f.send=(...args)=>f.sent.push(args);
+  f.tick();
+  assert.equal(f.sent.length,1);
+  f.tick();assert.equal(f.sent.length,1);
+});

@@ -655,6 +655,7 @@ export function guardedSend({
   roleProfile,
   raw = false,
   notificationOnly = false,
+  notificationGuard,
   source,
   env = process.env,
   recordedPid: expectedPid,
@@ -750,7 +751,7 @@ export function guardedSend({
 
   let receipt;
   try {
-    receipt = selectedFloor.send(session, message, {cardIdentity}) || {};
+    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     throw error;
@@ -1559,6 +1560,10 @@ function sendWatchMessage(role,message) {
   guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session))});
 }
 
+// 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.
+// 2026-09-23 [kyle]: 10분은 계속 대화하는 창의 질문 알림을 너무 늦춰 30초로 줄였다. 입력창 글 검사는 그대로다.
+export const WATCH_MAIL_HUMAN_IDLE_MS = 30_000;
+
 export function sendWatchMailReminder(role,message,expectedPid,{
   selectedFloor=floor,readStart=lastStartFor,send=guardedSend,
 }={}) {
@@ -1568,7 +1573,13 @@ export function sendWatchMailReminder(role,message,expectedPid,{
     error.delivery='not-sent';
     throw error;
   }
-  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,notificationOnly:true});
+  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,notificationOnly:true,
+    notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
+}
+
+// 바닥이 보류 조회를 지원하지 않으면(rottie) 기존처럼 보류 없이 진행한다.
+export function watchMailHold(role,{selectedFloor=floor}={}) {
+  return selectedFloor.notificationHold?.(sessionName(role),{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}) ?? null;
 }
 
 function cmdWatch(argv, flags) {
@@ -1690,6 +1701,7 @@ function cmdWatch(argv, flags) {
     record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
     sendAlert: sendWatchMessage,
     sendMailReminder: sendWatchMailReminder,
+    mailHold: watchMailHold,
     resume429: (role,message,expectedPid) => {
       const session=sessionName(role);
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');

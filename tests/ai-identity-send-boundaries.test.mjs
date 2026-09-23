@@ -136,3 +136,30 @@ test('현재 프로세스의 명시 모델은 실행기 자리와 함께 일치�
     assert.equal(matchesAiProcess(args,harness,'y'),false,args);
   }
 });
+
+test('감시기 알림은 사람이 최근 입력했거나 입력창에 글이 있으면 붙여넣지 않는다', () => {
+  const notify = ({screen='› ', clients='', now=1_000_000_000}) => {
+    const calls=[];
+    const run=args=>{calls.push(args);
+      if(args.includes('#{pane_in_mode}')) return '0';
+      if(args.includes('#{cursor_y}|#{pane_width}')) return '0|40';
+      if(args[0]==='list-clients') return clients;
+      if(args[0]==='capture-pane') return screen;
+      return '';};
+    return {calls, options:{run, pid:1, hrtime:()=>1n, spawn:()=>({status:0}), notificationGuard:{humanIdleMs:600_000, now}}};
+  };
+  for (const [name, config, code] of [
+    ['10분 안 키 입력', {clients:String(1_000_000 - 60)}, 'KADAN_HUMAN_ACTIVE'],
+    ['사람 입력 시각 미확인', {clients:'x'}, 'KADAN_HUMAN_ACTIVITY_UNKNOWN'],
+    ['입력 중 문장', {screen:'› 298 ->이건 굳굳. 근데', clients:String(1_000_000 - 3600)}, 'KADAN_PANE_INPUT_PENDING'],
+  ]) {
+    const f=notify(config);
+    assert.throws(()=>sendTmux('kadan-r','MAIL',f.options), e=>e.code===code && e.delivery==='not-sent', name);
+    assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,0,name);
+  }
+  for (const clients of ['', String(1_000_000 - 3600)]) {
+    const f=notify({clients});
+    sendTmux('kadan-r','MAIL',f.options);
+    assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,1);
+  }
+});
