@@ -48,11 +48,11 @@ const hiddenFields=(settings,role,token)=>`<input type="hidden" name="token" val
 function roleForm(settings,runners,role,token){
  const current=settings.presets[settings.activePreset].roles[role]??null;
  let launch;try{launch=launchFor(settings,role)?.cmd??null}catch(error){launch='모름: '+error.message}
- return `<form method="post" action="/runners/set" class="edit rs-row" data-role="${e(role)}">${hiddenFields(settings,role,token)}
+ return `<form method="post" action="/runners/set" class="edit rs-row" data-role="${e(role)}" data-launch="${e(launch??'')}">${hiddenFields(settings,role,token)}
 <h3>${e(RUNNER_ROLE_LABELS[role])} <small class="muted">${e(role)}</small></h3><p>지금: ${e(choice(current)??'비어 있음 — 발령 때 --cmd 필요')}</p>
 ${pickers(settings,runners,role,current)}
 <label>바꾸는 이유 (필수)<input name="reason" required maxlength="500"></label><button>저장</button>
-<p class="muted">지금 채워질 실행 명령: <code>${e(launch??'없음')}</code></p></form>`;
+<p class="muted">지금 채워질 실행 명령: <code>${e(launch??'없음')}</code></p><p class="rs-preview" hidden>바뀔 명령: <code class="rs-before">${e(launch??'없음')}</code> → <code class="rs-after"></code></p></form>`;
 }
 
 // 역할별 폴백 순서(3단계). 버튼 한 번이 서버 저장 한 번이다: 추가·삭제·위로·아래로. 판정은 서버가 한다.
@@ -63,7 +63,7 @@ function fallbackForm(settings,runners,role,token){
  return `<form method="post" action="/runners/fallback" class="edit rs-row rs-fallback" data-role="${e(role)}">${hiddenFields(settings,role,token)}
 <h4>${e(RUNNER_ROLE_LABELS[role])} 폴백 순서</h4>${list.length?`<ol>${rows}</ol><p class="muted">발령: <code>kadan start &lt;역할&gt; --profile ${e(role)} --fallback N --reason &lt;이유&gt;</code></p>`:'<p>폴백 없음</p>'}
 ${pickers(settings,runners,role,null)}
-<label>바꾸는 이유 (필수)<input name="reason" required maxlength="500"></label><button name="op" value="add">폴백 추가</button></form>`;
+<p class="rs-preview" hidden>추가될 명령: <code class="rs-after"></code></p><label>바꾸는 이유 (필수)<input name="reason" required maxlength="500"></label><button name="op" value="add">폴백 추가</button></form>`;
 }
 
 function presetForm(settings,token){
@@ -83,9 +83,13 @@ function effort(f){const r=data.runners[f.runner.value],m=r&&r.models.find(x=>x.
 function model(f){const r=data.runners[f.runner.value],s=f.model;s.replaceChildren(opt('','모델 고르기',true,true));
  if(r&&r.error)s.append(opt('','모델 목록을 읽을 수 없음: '+r.error,false,true));
  (r?r.models:[]).forEach(m=>{const b=blocked(m.model,f.dataset.role);s.append(opt(m.model,b?m.model+' — 차단: '+b.reason:m.model,false,b));});effort(f);}
-document.querySelectorAll('form.rs-row').forEach(f=>{f.runner.addEventListener('change',()=>model(f));f.model.addEventListener('change',()=>effort(f));});})();`;
+// 고르는 즉시 바뀔 명령을 보인다. 서버와 같은 규칙: 실행기 틀의 {model}·{effort}를 바꿔 끼운다.
+function preview(f){const box=f.querySelector&&f.querySelector('.rs-preview');if(!box)return;const tpl=data.spawns[f.runner.value];
+ if(!tpl||!f.model.value){box.hidden=true;return;}const cmd=tpl.split('{model}').join(f.model.value).split('{effort}').join(f.effort.disabled?'':(f.effort.value||''));
+ box.querySelector('.rs-after').textContent=cmd;box.hidden=cmd===(f.dataset.launch||null);}
+document.querySelectorAll('form.rs-row').forEach(f=>{f.runner.addEventListener('change',()=>{model(f);preview(f);});f.model.addEventListener('change',()=>{effort(f);preview(f);});f.effort.addEventListener('change',()=>preview(f));});})();`;
 
-export const runnerSettingsStyle='.rs-fallback ol{padding-left:20px}.rs-fallback li{margin:6px 0}.rs-ops button{margin-left:6px}.rs-row{border-top:1px solid #d8ded8;padding-top:12px;margin-top:12px}.rs-pick{display:flex;flex-wrap:wrap;gap:10px}.rs-pick label{flex:1 1 180px}.rs-row code{overflow-wrap:anywhere}';
+export const runnerSettingsStyle='.rs-summary th[scope=row]{white-space:nowrap}.rs-summary code{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.rs-edit{border:1px solid #d8ded8;border-radius:8px;padding:8px 14px;margin:8px 0}.rs-edit>summary{cursor:pointer;font-weight:600}.rs-edit .rs-row:first-of-type{border-top:0;margin-top:6px}.rs-preview{font-size:12.5px;background:#fff6e3;border-radius:6px;padding:6px 10px}.rs-preview code{overflow-wrap:anywhere}.rs-fallback ol{padding-left:20px}.rs-fallback li{margin:6px 0}.rs-ops button{margin-left:6px}.rs-row{border-top:1px solid #d8ded8;padding-top:12px;margin-top:12px}.rs-pick{display:flex;flex-wrap:wrap;gap:10px}.rs-pick label{flex:1 1 180px}.rs-row code{overflow-wrap:anywhere}';
 
 export function renderRunnerSettings({home,entries=[],token='',saved=null,readCodexModels}={}){
  const head='<section class="panel" id="runner-settings" data-view="runner-settings"><h2>실행 모델</h2><p class="muted">역할별 실행기·모델·추론 강도입니다. '+APPLY_NOTE+'입니다.</p>';
@@ -96,11 +100,17 @@ export function renderRunnerSettings({home,entries=[],token='',saved=null,readCo
  if(error)return head+`<p role="alert">모름: ${e(error)}</p>${history}</section>`;
  if(!settings)return head+`<p role="alert">실행 모델 설정 파일이 없습니다. <code>kadan runners init --reason 이유</code>를 먼저 실행하세요.</p>${history}</section>`;
  const runners=catalog(settings,readCodexModels?{readCodexModels}:{});
- const data=JSON.stringify({runners,blocked:settings.blocked??[]}).replaceAll('<','\\u003c');
+ const data=JSON.stringify({runners,blocked:settings.blocked??[],spawns:Object.fromEntries(Object.entries(settings.runners||{}).map(([k,v])=>[k,v.spawn]))}).replaceAll('<','\\u003c');
+ // 기본은 읽기 전용 요약표. 편집 틀은 역할별 '변경'을 펼쳐야 보인다(2026-09-24 UX 검토: 들어가자마자 입력 틀 8개가 열려 실수로 바꾸기 쉬웠다).
+ const summaryRow=role=>{const current=settings.presets[settings.activePreset].roles[role]??null;let launch;try{launch=launchFor(settings,role)?.cmd??null}catch(error){launch='모름: '+error.message}
+  const fallbacks=(settings.presets[settings.activePreset].fallback?.[role]??[]).length;
+  return `<tr><th scope="row">${e(RUNNER_ROLE_LABELS[role])}<br><small class="muted">${e(role)}</small></th><td>${e(choice(current)??'비어 있음')}</td><td><code>${e(launch??'없음')}</code></td><td>${fallbacks}개</td></tr>`;};
+ const summaryTable=`<div class="scroll"><table class="rs-summary"><thead><tr><th>역할</th><th>지금 값</th><th>발령 때 채워질 명령</th><th>폴백</th></tr></thead><tbody>${Object.keys(PROFILE_ROLES).map(summaryRow).join('')}</tbody></table></div>`;
+ const editors=Object.keys(PROFILE_ROLES).map(role=>`<details class="rs-edit"><summary>${e(RUNNER_ROLE_LABELS[role])} 값·폴백 변경</summary>${roleForm(settings,runners,role,token)}${fallbackForm(settings,runners,role,token)}</details>`).join('');
  const notice=saved!=null&&Number(saved)===settings.revision?`<p role="status"><strong>저장했습니다(revision ${settings.revision}). ${APPLY_NOTE}.</strong></p>`:'';
  return head+notice+`<p class="muted">화면을 읽은 설정 revision ${settings.revision} · 그사이 다른 곳에서 바뀌면 저장을 거부합니다. 저장은 사람 명의로 원장에 남습니다.</p>
+<h3>지금 설정 (프리셋 ${e(settings.activePreset)})</h3>${summaryTable}${history}
 <h3>프리셋</h3>${presetForm(settings,token)}
-<h3>역할별 값 (프리셋 ${e(settings.activePreset)})</h3>${Object.keys(PROFILE_ROLES).map(role=>roleForm(settings,runners,role,token)).join('')}
-<h3>역할별 폴백 순서 (프리셋 ${e(settings.activePreset)})</h3><p role="note"><strong>${FALLBACK_WHEN}.</strong> 자동 전환은 없습니다. 사람이나 감독이 번호를 골라 발령합니다.</p>${Object.keys(PROFILE_ROLES).map(role=>fallbackForm(settings,runners,role,token)).join('')}
-<script type="application/json" id="rs-data">${data}</script><script>${script}</script>${history}</section>`;
+<h3>바꾸기</h3><p role="note"><strong>${FALLBACK_WHEN}.</strong> 자동 전환은 없습니다. 사람이나 감독이 번호를 골라 발령합니다. 고르는 즉시 바뀔 명령을 보여 주고, 저장은 이유를 적어야 됩니다.</p>${editors}
+<script type="application/json" id="rs-data">${data}</script><script>${script}</script></section>`;
 }
