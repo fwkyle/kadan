@@ -42,8 +42,11 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   const location=answered.headers.get('location');assert.equal(location,'/?decisionAnswered='+encodeURIComponent(a.id)+'#decisions');
   assert.doesNotMatch(location,/#decision-/);
   const after=await(await fetch(base+location.split('#')[0])).text();
-  assert.match(after,/role="status" class="decision-answered"><strong>답변을 전달했습니다 — /);
-  assert.ok(after.indexOf('decision-answered')<after.indexOf('이전 결정'));
+  assert.match(after,/class="decision-toast"><span>답변을 전달했습니다 — /);
+  assert.match(after,/\.decision-toast\{position:fixed;/);
+  // 토스트는 한 번만: 화면 스크립트가 주소에서 decisionAnswered를 지운다.
+  assert.match(after,/searchParams\.delete\('decisionAnswered'\)/);
+  assert.doesNotMatch(await(await fetch(base)).text(),/class="decision-toast/);
   assert.match(after,/action==='\/decisions\/answer'\)\{if\(form\.dataset\.sending\)/);
   assert.equal(decisionCommand(['show',a.id],{},{home:f.home,by:'사람'}).answer.text,'분리합니다');assert.equal(f.sent.length,1);
   assert.match(await(await fetch(base)).text(),/내 결정 필요 0건/);
@@ -111,10 +114,14 @@ test('09-24 확인 경로 검사 전에 저장된 요청도 조회·답변·취�
 test('09-24 방금 답한 결정은 저장된 전달 결과대로 맨 위에 알리고, 열린 결정이나 모르는 ID에는 알리지 않는다', async () => {
   const {renderDecisions} = await import('../src/decision-wall.mjs');
   const base = {card:'r/c', requestedBy:'슈퍼', recommendation:'승인', options:['승인'], question:'합칠까요?', reason:'r', answer:{by:'사람', text:'네', at:'2026-09-24T00:00:00Z'}};
-  const notice = (d, id='d1') => renderDecisions([{id:'d1', ...base, ...d}], null, 't', id).match(/class="decision-answered"><strong>([^<]*)/)?.[1];
+  const toast = (d, id='d1') => renderDecisions([{id:'d1', ...base, ...d}], null, 't', id).match(/class="(decision-toast[^"]*)"><span>([^<]*)/);
+  const notice = (d, id) => toast(d, id)?.[2];
   assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}), '답변을 전달했습니다 — 슈퍼에게 알렸습니다: 합칠까요?');
   assert.equal(notice({status:'answered', delivery:{status:'failed', error:'세션 없음'}}), '답변은 저장했지만 알림 전달에 실패했습니다(세션 없음): 합칠까요?');
   assert.equal(notice({status:'answered', delivery:{status:'pending'}}), '답변을 저장했습니다. 알림 전달은 확인 중입니다: 합칠까요?');
+  // 성공은 저절로 사라지고, 알림 실패는 닫을 때까지 남는다.
+  assert.equal(toast({status:'answered', delivery:{status:'sent', role:'슈퍼'}})[1], 'decision-toast');
+  assert.equal(toast({status:'answered', delivery:{status:'failed', error:'x'}})[1], 'decision-toast decision-toast-failed');
   assert.equal(notice({status:'open', revision:1}), undefined);
   assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}, 'other'), undefined);
 });

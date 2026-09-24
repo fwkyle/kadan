@@ -180,13 +180,17 @@ test('사람 CLI는 상한 뒤 기존 비서 우편 1건을 보관하고 가상 
  } finally {f.cleanup();}
 });
 
-test('CLI 수신자 세대 변경과 명시 notify: 새 PID로 자동 우회 없이 통지 실패 보관', {skip:!hasTmux,timeout:15000},async t=>{
+test('CLI 수신자 세대 변경과 명시 notify: 새 PID로 자동 우회 없이 통지 실패 보관', {skip:!hasTmux,timeout:30000},async t=>{
  const f=backgroundFixture();
  try {
   for(const role of f.roles)f.run(['start',role,'--cmd','cat']);
-  const previous=f.pid('qa-상위');f.begin(['--wait-timeout','3','--notify','qa-상위']);
+  // 알림 시한 전에 상위 재시작을 끝내야 '세대 변경'을 시험한다. 시한이 3초면 느린 CI에서 stop→start 사이
+  // (세션이 없는 순간)에 알림이 가 KADAN_SESSION_MISSING이 났다(2026-09-24 macOS CI, 재시작 사이 4초 지연으로 재현).
+  const previous=f.pid('qa-상위');f.begin(['--wait-timeout','10','--notify','qa-상위']);
   f.run(['stop','qa-상위']);f.run(['start','qa-상위','--cmd','cat']);assert.notEqual(f.pid('qa-상위'),previous);
-  await until(()=>f.result().notification?.status==='failed');
+  const deadline=Date.parse(await until(()=>{try{return f.result().deadlineAt;}catch{return null;}}));
+  assert.ok(Date.now()<deadline,'상위 재시작이 알림 시한 뒤에 끝났다 — 시험 전제(시한 전 세대 변경)가 깨졌다');
+  await until(()=>f.result().notification?.status==='failed',20000);
   const result=f.result();assert.equal(result.notification.pid,previous);assert.equal(result.notification.delivery,'not-sent');
   assert.equal(result.notification.error.code,'KADAN_PID_MISMATCH');
   assert.equal(readLedger(f.home).filter(e=>e.kind==='send'&&e.role==='qa-상위').length,0);

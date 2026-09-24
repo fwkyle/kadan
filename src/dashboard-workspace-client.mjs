@@ -140,6 +140,8 @@ function workspaceClient() {
   if(!state.opened)state.expanded=false;
   // 새로 읽기 표시는 한 번만 쓴다. 주소를 깨끗이 해야 다음 자동 갱신이 캐시를 쓴다.
   if(location.search.includes('fresh=')){const clean=new URL(location.href);clean.searchParams.delete('fresh');try{history.replaceState(history.state,'',clean);}catch{}}
+  // 결정 답변 토스트도 한 번만 보인다. 새로 읽기·자동 갱신에서 다시 뜨지 않게 주소에서 뺀다.
+  if(location.search.includes('decisionAnswered=')){const clean=new URL(location.href);clean.searchParams.delete('decisionAnswered');try{history.replaceState(history.state,'',clean);}catch{}}
  }
  async function restoreHistory(){
   const generation=++navigation;
@@ -157,6 +159,7 @@ function workspaceClient() {
  function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'운영 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());}
  document.addEventListener('click',event=>{
   lastActivity=Date.now();
+  const toastClose=event.target.closest?.('[data-toast-close]');if(toastClose){toastClose.closest('.decision-toast')?.remove();return;}
   if(detailView.click(event))return;
   const link=event.target.closest('a');
   const href=link?.getAttribute('href')?.trim()||'';
