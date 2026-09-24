@@ -44,7 +44,13 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   const after=await(await fetch(base+location.split('#')[0])).text();
   assert.match(after,/class="decision-toast"><span>답변을 전달했습니다 — /);
   assert.match(after,/\.decision-toast\{position:fixed;right:24px;top:72px;/);
-  assert.doesNotMatch(after,/decision-toast-out|animation:decision-toast/);
+  // 성공은 15초 뒤 사라지고(마우스를 올리면 멈춤), 실패는 남는다. 토스트에서 바로 내역 드로어를 연다.
+  assert.match(after,/animation:decision-toast-out \.3s ease 15s forwards/);
+  assert.match(after,/\.decision-toast:hover\{animation-play-state:paused\}/);
+  assert.match(after,/\.decision-toast-failed\{background:#8a1f1f;animation:none\}/);
+  assert.match(after,/class="decision-toast-link" data-decision-history-open>내역 보기</);
+  assert.match(after,/<dialog id="decision-history" class="decision-drawer"/);
+  assert.match(after,/document\.getElementById\('decision-history'\)/);
   // 토스트는 한 번만: 화면 스크립트가 주소에서 decisionAnswered를 지운다.
   assert.match(after,/searchParams\.delete\('decisionAnswered'\)/);
   assert.doesNotMatch(await(await fetch(base)).text(),/class="decision-toast/);
@@ -120,9 +126,35 @@ test('09-24 방금 답한 결정은 저장된 전달 결과대로 맨 위에 알
   assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}), '답변을 전달했습니다 — 슈퍼에게 알렸습니다: 합칠까요?');
   assert.equal(notice({status:'answered', delivery:{status:'failed', error:'세션 없음'}}), '답변은 저장했지만 알림 전달에 실패했습니다(세션 없음): 합칠까요?');
   assert.equal(notice({status:'answered', delivery:{status:'pending'}}), '답변을 저장했습니다. 알림 전달은 확인 중입니다: 합칠까요?');
-  // 둘 다 닫을 때까지 남고(저절로 사라지는 애니메이션 없음), 알림 실패는 색으로 구분한다.
+  // 알림 실패만 따로 표시한다(실패는 저절로 사라지지 않는 스타일).
   assert.equal(toast({status:'answered', delivery:{status:'sent', role:'슈퍼'}})[1], 'decision-toast');
   assert.equal(toast({status:'answered', delivery:{status:'failed', error:'x'}})[1], 'decision-toast decision-toast-failed');
   assert.equal(notice({status:'open', revision:1}), undefined);
   assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}, 'other'), undefined);
+});
+
+test('09-24 지난 결정은 접힘 목록 대신 오른쪽 드로어 — 최근 순으로 상태·내 답변·알림 결과를 먼저 보인다', async () => {
+  const {renderDecisions} = await import('../src/decision-wall.mjs');
+  const base = {card:'r/c', requestedBy:'슈퍼', recommendation:'승인', options:['승인','보류'], reason:'근거 https://x.y/z'};
+  const html = renderDecisions([
+    {id:'open1', status:'open', revision:1, question:'열린 결정?', at:'2026-09-24T09:00:00Z', ...base},
+    {id:'old', status:'answered', question:'예전 결정?\n- 본문', at:'2026-09-23T01:00:00Z', answer:{by:'사람', text:'승인', choice:'승인', at:'2026-09-23T02:00:00Z'}, delivery:{status:'sent', role:'슈퍼'}, ...base},
+    {id:'new', status:'answered', question:'최근 결정?', at:'2026-09-24T01:00:00Z', answer:{by:'사람', text:'조건부로 진행', choice:'보류', at:'2026-09-24T02:00:00Z'}, delivery:{status:'failed', error:'세션 없음'}, ...base},
+    {id:'gone', status:'cancelled', question:'취소된 결정?', at:'2026-09-23T05:00:00Z', cancelReason:'중복 요청', cancelledBy:'슈퍼', ...base},
+  ], null, 't');
+  assert.doesNotMatch(html, /<details><summary>이전 결정/);
+  assert.match(html, /<button type="button" class="decision-history-open" data-decision-history-open>이전 결정 3건 보기<\/button><\/section><dialog id="decision-history"/);
+  const drawer = html.slice(html.indexOf('<dialog id="decision-history"'));
+  assert.match(drawer, /<h2 id="decision-history-title">이전 결정 3건<\/h2><form method="dialog">/);
+  // 최근 답변·요청 순: 최근(9/24 02시) → 취소(9/23 05시) → 예전(9/23 02시). 열린 결정은 드로어에 없다.
+  const order = [...drawer.matchAll(/<article class="dh-item" id="decision-([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(order, ['new', 'gone', 'old']);
+  assert.match(drawer, /dh-failed">알림 실패<\/span>.*<h3>최근 결정\?<\/h3><p><strong>내 답변<\/strong> 선택 보류 · 조건부로 진행<\/p><p>알림 실패: 세션 없음<\/p>/s);
+  assert.match(drawer, /dh-answered">답변함<\/span>.*<h3>예전 결정\?<\/h3><p><strong>내 답변<\/strong> 선택 승인<\/p><p>알림 전달함 → 슈퍼<\/p>/s);
+  assert.match(drawer, /dh-cancelled">취소됨<\/span>.*<p>취소 이유: 중복 요청 \(슈퍼\)<\/p>/s);
+  // 취소에는 시각이 저장되지 않으므로 배지 옆에 요청 시각을 취소 시각처럼 보이지 않는다.
+  assert.match(drawer, /<div class="dh-meta"><span class="dh-badge dh-cancelled">취소됨<\/span><\/div>/);
+  assert.match(drawer, /<details><summary>원문 보기<\/summary><p style="white-space:pre-line">- 본문<\/p>/);
+  const empty = renderDecisions([{id:'open1', status:'open', revision:1, question:'열린 결정?', ...base}], null, 't');
+  assert.match(empty, /이전 결정 0건 보기/);assert.match(empty, /<p class="dh-empty">지난 결정이 없습니다\.<\/p>/);
 });

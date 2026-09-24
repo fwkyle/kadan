@@ -14,7 +14,7 @@ import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
 import {decisionCommand} from './decisions.mjs';
-import {renderDecisions,renderActivity,decisionStyle} from './decision-wall.mjs';
+import {renderDecisions,renderActivity,decisionStyle,decisionHistoryScript} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
 import { CardStore } from './card-store.mjs';
 import {appendLedger} from './ledger.mjs';
@@ -77,6 +77,7 @@ ${dashboardWorkspaceStyle}
  </main><footer><span>실행 코드 ${e(runtime?.commit||'모름')}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''} · 시작 ${e(stamp(runtime?.startedAt))}</span><span>수집 ${e(stamp(collectedAt))}</span><span id="dw-refresh-status" role="status">갱신 상태 확인 중</span><button type="button" data-refresh>새로 읽기</button></footer><script>
  ${dashboardWorkspaceScript}
  ${operationsFlowScript}
+ ${decisionHistoryScript}
  </script></div></body></html>`;
 }
 
