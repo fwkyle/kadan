@@ -227,15 +227,18 @@ test('완료 신호 파일만으로 성공하지 않고 원장의 보고·전달
 test('감시 종료 신호는 해당 AI만 취소하고 늦은 보고를 허용하지 않는다',async()=>{
  const f=fixture(),helper=path.join(f.home,'cancel-hang.mjs');
  fs.writeFileSync(helper,"import fs from 'node:fs';fs.writeFileSync(process.env.KADAN_HOME+'/cancel.pid',String(process.pid));setInterval(()=>{},1000);\n");
- const controller=new AbortController();
- const timer=setTimeout(()=>controller.abort(),200);
+ // 가짜 AI가 떠서 PID를 쓴 뒤에 취소해야 '실행 중인 AI 취소'를 시험한다. 200ms 고정 취소는 느린 CI에서
+ // node가 뜨기 전에 걸려 cancel.pid가 없었다(2026-09-24 PR #32, 400ms 늦게 쓰는 가짜 AI로 재현).
+ const pidFile=path.join(f.home,'cancel.pid'),controller=new AbortController(),startedAt=Date.now();
+ const timer=setInterval(()=>{if(fs.existsSync(pidFile)||Date.now()-startedAt>4000)controller.abort();},20);
  try{
   const result=await new WatchAI(f.options).run({judgeCmd:`'${process.execPath}' '${helper}'`,source:'stall',role:'p-작업자',parents,input:{},signal:controller.signal,timeoutMs:5000});
   assert.equal(result.reason,'cancelled');assert.equal(f.sent.length,0);
   assert.equal(f.r.submit(result.requestId,'정체','취소 뒤 늦은 보고').accepted,false);
-  const pid=Number(fs.readFileSync(path.join(f.home,'cancel.pid'),'utf8'));
+  assert.ok(fs.existsSync(pidFile),'가짜 AI가 4초 안에 PID를 쓰지 않았다 — 시험 전제(실행 중 취소)가 깨졌다');
+  const pid=Number(fs.readFileSync(pidFile,'utf8'));
   assert.throws(()=>process.kill(pid,0),e=>e.code==='ESRCH');
- }finally{clearTimeout(timer);}
+ }finally{clearInterval(timer);}
 });
 
 test('진행 중인 카드의 작업자가 아무것도 묻지 않은 채 입력 대기면 감독에게 알린다',()=>{
