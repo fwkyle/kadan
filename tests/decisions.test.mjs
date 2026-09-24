@@ -36,7 +36,15 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   for(const id of ['mailbox','runs','ledger'])assert.ok(html.includes(`id="${id}"`));
   const token=html.match(/name="token" value="([a-f0-9]+)"/)[1];
   const post=(revision,tokenValue=token)=>fetch(base+'/decisions/answer',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',origin:base},body:new URLSearchParams({token:tokenValue,id:a.id,revision,text:'분리합니다',choice:'분리'}),redirect:'manual'});
-  assert.equal((await post('1','bad')).status,403);assert.equal((await post('99')).status,409);assert.equal((await post('1')).status,303);
+  assert.equal((await post('1','bad')).status,403);assert.equal((await post('99')).status,409);
+  // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 돌아가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.
+  const answered=await post('1');assert.equal(answered.status,303);
+  const location=answered.headers.get('location');assert.equal(location,'/?decisionAnswered='+encodeURIComponent(a.id)+'#decisions');
+  assert.doesNotMatch(location,/#decision-/);
+  const after=await(await fetch(base+location.split('#')[0])).text();
+  assert.match(after,/role="status" class="decision-answered"><strong>답변을 전달했습니다 — /);
+  assert.ok(after.indexOf('decision-answered')<after.indexOf('이전 결정'));
+  assert.match(after,/action==='\/decisions\/answer'\)\{if\(form\.dataset\.sending\)/);
   assert.equal(decisionCommand(['show',a.id],{},{home:f.home,by:'사람'}).answer.text,'분리합니다');assert.equal(f.sent.length,1);
   assert.match(await(await fetch(base)).text(),/내 결정 필요 0건/);
   const legacy=await(await fetch(base+'/?legacy=1')).text();assert.match(legacy,/참고용 옛 화면/);
@@ -99,4 +107,14 @@ test('09-24 확인 경로 검사 전에 저장된 요청도 조회·답변·취�
  assert.equal(f.store.get(a.id).status,'open');
  assert.equal(f.store.answer(a.id,{revision:1,choice:'분리'},'사람').status,'answered');
  assert.equal(f.store.cancel(b.id,{revision:1,reason:'주소 확인 뒤 다시 요청'},'p-슈퍼감독').status,'cancelled');
+});
+test('09-24 방금 답한 결정은 저장된 전달 결과대로 맨 위에 알리고, 열린 결정이나 모르는 ID에는 알리지 않는다', async () => {
+  const {renderDecisions} = await import('../src/decision-wall.mjs');
+  const base = {card:'r/c', requestedBy:'슈퍼', recommendation:'승인', options:['승인'], question:'합칠까요?', reason:'r', answer:{by:'사람', text:'네', at:'2026-09-24T00:00:00Z'}};
+  const notice = (d, id='d1') => renderDecisions([{id:'d1', ...base, ...d}], null, 't', id).match(/class="decision-answered"><strong>([^<]*)/)?.[1];
+  assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}), '답변을 전달했습니다 — 슈퍼에게 알렸습니다: 합칠까요?');
+  assert.equal(notice({status:'answered', delivery:{status:'failed', error:'세션 없음'}}), '답변은 저장했지만 알림 전달에 실패했습니다(세션 없음): 합칠까요?');
+  assert.equal(notice({status:'answered', delivery:{status:'pending'}}), '답변을 저장했습니다. 알림 전달은 확인 중입니다: 합칠까요?');
+  assert.equal(notice({status:'open', revision:1}), undefined);
+  assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}, 'other'), undefined);
 });

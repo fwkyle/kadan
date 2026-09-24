@@ -66,7 +66,7 @@ ${dashboardWorkspaceStyle}
  ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail,hierarchy})}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}
- ${renderDecisions(decisions,decisionError,token)}
+ ${renderDecisions(decisions,decisionError,token,url.searchParams.get('decisionAnswered'))}
  ${renderRunnerSettings({home,entries,token,saved:url.searchParams.get('runnersSaved')})}
  <section class="panel" id="create" data-view="create"><h2>새 카드 만들기</h2><form method="post" action="/cards/create" class="edit"><input type="hidden" name="token" value="${e(token)}"><label>저장소 이름<input name="repo" required placeholder="my-repo"></label><label>저장소 절대경로<input name="repoPath" required></label><label>카드 ID<input name="id" required placeholder="card-product-search"></label><label>제목<input name="title" required></label><label>작업 내용<textarea name="body" rows="5" required></textarea></label><button>초안으로 저장</button></form></section>
  <section class="panel" id="sessions" data-view="sessions"><h2>담당자 세션</h2>${activityGuide('sessions')}${center&&!center.runtimeKnown?'<p role="alert">현재 세션 상태 모름</p>':''}<p class="muted">생존 여부와 카드 완료 여부는 별개입니다.</p><div class="scroll"><table><thead><tr><th>역할</th><th>생존</th><th>실행 도구 / 모델</th></tr></thead><tbody>${(center?.roles??[]).filter(r=>r.life.state==='alive').map(r=>`<tr><td>${e(r.role)}</td><td>${!center.runtimeKnown?'모름':r.life.pidState==='match'?'열려 있음':'PID 변경 — 확인 필요'}</td><td>${e([r.harness,r.model].filter(Boolean).join(' / ')||'모름')}</td></tr>`).join('')}</tbody></table></div></section>
@@ -92,7 +92,8 @@ export function createCenterHandler(home, {notify}={}) {
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/decisions/answer') {
      decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
-     res.writeHead(303,{location:'/#decision-'+encodeURIComponent(f.id),'cache-control':'no-store'});res.end();return true;
+     // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.
+     res.writeHead(303,{location:'/?decisionAnswered='+encodeURIComponent(f.id)+'#decisions','cache-control':'no-store'});res.end();return true;
    }
    if(url.pathname.startsWith('/runners/')){
     const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};
