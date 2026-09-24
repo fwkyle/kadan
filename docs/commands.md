@@ -37,7 +37,7 @@
 | `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden` |
 | `kadan send <역할> <메시지>` | 생존 확인 뒤 입력창에 넣는다. 원장에 영수증을 남긴다 | `--task <카드id>`(작업 발령), `--work`·`--execution`(우편 연결), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--raw` |
 | `kadan wait <역할>` | 완료 마커(DONE)나 조용함을 보고한다. 판정하지 않는다 | `--timeout 초`, `--quiet 초`, `--interval 초` |
-| `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다 | — |
+| `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다. 한 번 발령으로 끝나는 카드는 `--close-card`로 카드도 함께 닫는다([카드 닫기](card-center.md#실행-완료와-카드-닫기)) | `--close-card`(ok 확정 뒤 카드 `done`, 실패해도 실행 완료 유지), `--note <이유>`(카드 기록 이유) |
 | `kadan read <역할>` | 화면 끝부분을 읽는다 | `--lines N` |
 | `kadan status` | 살아 있는 세션, 창 붙음 여부, PID 일치, 실행기·모델 | — |
 | `kadan attach <역할>` | 살아 있는 세션에 창을 하나 더 연다 | — |
