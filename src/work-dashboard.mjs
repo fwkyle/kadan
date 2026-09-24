@@ -20,6 +20,8 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   const ended=executions.filter(x=>x.card&&endedExecution(x.card));
   const active=executions.filter(x=>!x.card||!endedExecution(x.card));
   const round=Math.max(0,...w.executions.map(x=>x.round));
+  // 라운드를 병렬 실행 번호표로 쓴 업무(최대 라운드 > 실행 수)는 '999라운드' 대신 실행 수로 보인다(2026-09-24 실측: 117건·1~999).
+  const roundLabel=round>w.executions.length?`병렬 실행 ${w.executions.length}건`:`${round}라운드`;
   const closed=['done','cancelled'].includes(w.status);
   const lastChild=Math.max(0,...executions.flatMap(x=>[Date.parse(x.card?.at)||0,...(x.card?.runs||[]).map(r=>Date.parse(r.at)||0)]));
   const explicit=w.turnOwner&&Number.isFinite(Date.parse(w.turnAt))&&Date.parse(w.turnAt)>=lastChild;
@@ -32,7 +34,7 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   const letters=workLetters(w,entries,cards);
   const summary=summaries.get(w.key),followup=summary?.followup;
   return {...w,...workHealth(w,executions),...summary,key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
-   purpose:w.goal,flowLabel:round?`${round}라운드 · ${followup?.label||stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
+   purpose:w.goal,flowLabel:round?`${roundLabel} · ${followup?.label||stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
    turnLabel:followup?.owner==='@user'?'사용자':followup?.owner||turn,turnReason:followup?followup.next:explicit?'업무에 명시한 현재 차례':active.length?'각 실행의 차례 기록·전달·진행 보고 기준':'책임 감독이 결과를 확인할 차례',turnSource:followup?'실행·후속 근거':closed?'업무 종료':explicit?'차례 기록':!active.length?'책임 감독':owners.length>1?'병렬 진행':'실행별 근거',
    next:followup?.next||w.nextAction||(!active.length&&executions.length?'약속한 결과와 완료 조건을 감독이 확인':'다음 행동 미기록'),summary:w.progress,reportAt:w.at,reportLabel:short(w.at),
    executions,active,ended,letters,round,at:new Date(Math.max(Date.parse(w.at)||0,lastChild,...letters.map(x=>Date.parse(x.t)||0))).toISOString()};

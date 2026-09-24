@@ -106,3 +106,10 @@ test('09-24 실행 상세: 실패·완료 미확인·세션 없음이면 결과�
   assert.equal(open(renderWorkspaceDetail({...base,state:'failed',displayState:'failed'})),true);
   assert.equal(open(renderWorkspaceDetail({...base,state:'running',displayState:'running'})),false);
 });
+
+test('09-24 라운드를 병렬 번호표로 쓴 업무는 999라운드 대신 병렬 실행 수로 보인다', async () => {
+  const {workDashboardModel}=await import('../src/work-dashboard.mjs');
+  const work=(rounds)=>({key:'r/w',workKey:'r/w',title:'업무',owner:'감독',status:'open',history:[],executions:rounds.map((round,i)=>({key:'r/e'+i,phase:'implementation',round}))});
+  assert.match(workDashboardModel([work([1,2,999])],{cards:[]},[])[0].flowLabel,/^병렬 실행 3건 · /);
+  assert.match(workDashboardModel([work([1,2,2])],{cards:[]},[])[0].flowLabel,/^2라운드 · /);
+});
