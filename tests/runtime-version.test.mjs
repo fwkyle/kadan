@@ -31,8 +31,8 @@ test('대시보드·감시 주기는 기록된 실행 버전을 표시하고 옛
  const status=cycleStatus([{...cycle,t}],worker,Date.now());
  assert.deepEqual(status.settings.runtime,runtime);
  const verdict=watchVerdict({process:{state:'running'},configuration:{state:'matched'},cycle:status});
- assert.match(verdict.text,/실행 코드 a{40}/);
+ assert.match(verdict.text,/감시기 코드 a{7}(?!a)/);
  const old=cycleStatus([{...buildCycleEntry({pid:42}),t}],worker,Date.now());
  assert.equal(old.settings.runtime,undefined);
- assert.match(watchVerdict({process:{state:'running'},configuration:{state:'unknown'},cycle:old}).text,/실행 코드 모름/);
+ assert.match(watchVerdict({process:{state:'running'},configuration:{state:'unknown'},cycle:old}).text,/감시기 코드 모름/);
 });

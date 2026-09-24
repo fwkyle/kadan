@@ -20,6 +20,9 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   const ended=executions.filter(x=>x.card&&endedExecution(x.card));
   const active=executions.filter(x=>!x.card||!endedExecution(x.card));
   const round=Math.max(0,...w.executions.map(x=>x.round));
+  // 라운드를 병렬 실행 번호표로 쓴 업무는 '999라운드' 대신 실행 수로 보인다(2026-09-24 실측: 117건·101~999를 번호로 씀).
+  // 정상 왕복이 100라운드에 이르는 일은 없다고 보고 100 이상만 번호표로 읽는다(앞 라운드 실행이 빠진 2라운드 업무는 그대로).
+  const roundLabel=round>=100?`병렬 실행 ${w.executions.length}건`:`${round}라운드`;
   const closed=['done','cancelled'].includes(w.status);
   const lastChild=Math.max(0,...executions.flatMap(x=>[Date.parse(x.card?.at)||0,...(x.card?.runs||[]).map(r=>Date.parse(r.at)||0)]));
   const explicit=w.turnOwner&&Number.isFinite(Date.parse(w.turnAt))&&Date.parse(w.turnAt)>=lastChild;
@@ -32,7 +35,7 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   const letters=workLetters(w,entries,cards);
   const summary=summaries.get(w.key),followup=summary?.followup;
   return {...w,...workHealth(w,executions),...summary,key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
-   purpose:w.goal,flowLabel:round?`${round}라운드 · ${followup?.label||stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
+   purpose:w.goal,flowLabel:round?`${roundLabel} · ${followup?.label||stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
    turnLabel:followup?.owner==='@user'?'사용자':followup?.owner||turn,turnReason:followup?followup.next:explicit?'업무에 명시한 현재 차례':active.length?'각 실행의 차례 기록·전달·진행 보고 기준':'책임 감독이 결과를 확인할 차례',turnSource:followup?'실행·후속 근거':closed?'업무 종료':explicit?'차례 기록':!active.length?'책임 감독':owners.length>1?'병렬 진행':'실행별 근거',
    next:followup?.next||w.nextAction||(!active.length&&executions.length?'약속한 결과와 완료 조건을 감독이 확인':'다음 행동 미기록'),summary:w.progress,reportAt:w.at,reportLabel:short(w.at),
    executions,active,ended,letters,round,at:new Date(Math.max(Date.parse(w.at)||0,lastChild,...letters.map(x=>Date.parse(x.t)||0))).toISOString()};
@@ -58,7 +61,7 @@ export function renderWorkDetail(w,{token,center,models,home,url}){
  const update=closed?form('reopen',note+'<button>업무 다시 열기</button>'):form('update',area('progress','진척 · 처리 수 / 남은 대상 / 재개 위치',w.progress)+input('turnOwner','현재 차례 (여럿이면 함께 기재)',w.turnOwner)+area('nextAction','다음 행동 · 대기 이유',w.nextAction)+note+`<details><summary>업무 약속 · 책임 · 보류 변경</summary>${input('title','업무 제목',w.title,true)}${area('goal','약속한 결과',w.goal,true)}${area('scope','전체 대상 범위',w.scope,true)}${area('acceptance','완료 조건',w.acceptance,true)}${input('owner','책임 감독',w.owner,true)}${input('board','판',w.board)}<label>업무 상태<select name="status">${option('open','진행 중',w.status)}${option('hold','보류',w.status)}</select></label></details><button>업무 기록 저장</button>`);
  const complete=closed?'':`<details><summary>업무 최종 완료 · 취소</summary><p class="muted">실행 종료 ${w.ended.length}/${w.executions.length}건. 책임 감독이 약속한 결과를 확인한 뒤 업무를 끝냅니다.</p>${form('complete',area('result','확인한 최종 결과 · 검수 근거','',true)+note+`<button${w.active.length?' disabled':''}>업무 최종 완료 확인</button>${w.active.length?'<p>미종료 실행을 먼저 마치거나 취소하세요.</p>':''}`)}${form('cancel',area('result','취소 근거 · 남은 내용','',true)+note+`<button class="ds-button--quiet"${w.active.length?' disabled':''}>업무 취소 기록</button>`)}</details>`;
  const panels={
-  summary:facts([['약속한 결과',w.goal],['지금',w.followup?.label||w.flowLabel],['실행 흐름',w.healthLabel+' · '+w.healthReason],['최근 실행 신호',w.signalLabel+' · '+short(w.signalAt)],['현재 차례',w.turnLabel],['다음 행동',w.next],...(w.progress?[['진척',w.progress]]:[])])+renderInbox(w,home,url),
+  summary:facts([['약속한 결과',w.goal],['지금',w.followup?[w.followup.owner?`${w.followup.owner} 차례`:'',w.followup.label].filter(Boolean).join(' — '):w.flowLabel],['실행 흐름',w.healthLabel+' · '+w.healthReason],['최근 실행 신호',w.signalLabel+' · '+short(w.signalAt)],['현재 차례',w.turnLabel],['다음 행동',w.next],...(w.progress?[['진척',w.progress]]:[])])+renderInbox(w,home,url,{limit:5}),
   instructions:facts([['전체 대상',w.scope],['완료 조건',w.acceptance],...(w.result?[['최종 결과·근거',w.result]]:[])]),
   manage:update+complete,
   technical:facts([['업무 ID',w.workKey],['책임 감독',w.owner],['차례 근거',w.turnReason],['실행 종료',w.flowPhase]])+renderDetailSections('',[

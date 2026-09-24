@@ -15,6 +15,16 @@ const kinds={dispatch:'작업 발령','mail-cancel':'질문 취소',start:'세�
  'watch-cycle':'감시 순회','watch-mail-reminder':'우편 재알림','queue-resume':'입력 대기 재개','watch-judgment':'감시 판정','runner-settings':'실행 모델 변경',window:'창 다시 붙임','watch-mail-held':'우편 전달 보류','rate-limit-retry':'한도 재시도'};
 // 감시가 주기적으로 남기는 일상 기록. 기록 화면은 기본으로 숨기고 체크로 다시 본다(알림·AI 호출은 계속 보인다).
 const watchRoutineKinds=new Set(['watch-cycle','watch-scope','hierarchy-loaded','watch-mail-reminder']);
+// 사고: 실패한 실행, 해소 전 감시 알림, 사유에 실패·오류·거절이 있는 기록.
+export const isIncident=entry=>entry?.kind==='done'&&entry.result==='failed'||entry?.kind==='alert'&&entry.resolved!==true||entry?.replyFinalRejected===true||/fail|error|reject|실패|오류|거부/i.test(String(entry?.reason??''));
+// 사건순 기록 거르기: 종류(사고만)·카드·역할·날짜(서울 기준 하루).
+export function filterLedgerRows(rows,{kind='',card='',role='',date=''}={}){
+ const id=card.split('/').at(-1);
+ const cardOk=e=>!card||[e.taskId,e.executionKey,e.completionTaskId,e.workKey,e.key,...(Array.isArray(e.taskIds)?e.taskIds:[])].some(x=>typeof x==='string'&&(x===card||x===id||!card.includes('/')&&x.split('/').at(-1)===id));
+ const roleOk=e=>!role||[e.role,e.by,e.to,e.from,e.recipient].includes(role);
+ const dateOk=e=>!date||typeof e.t==='string'&&Number.isFinite(Date.parse(e.t))&&new Date(Date.parse(e.t)+9*3600_000).toISOString().slice(0,10)===date;
+ return rows.filter(e=>(kind!=='incident'||isIncident(e))&&cardOk(e)&&roleOk(e)&&dateOk(e));
+}
 export const isWatchRoutine=entry=>entry?.by==='watch'&&watchRoutineKinds.has(entry.kind);
 const text=value=>typeof value==='string'?value:'';
 function eventLabel(entry){
@@ -43,10 +53,15 @@ function stamp(value,short=false){
  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).map(p=>[p.type,p.value]));
  return `${parts.month}.${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
-export function renderLedgerTable(entries){
+// 내용 칸 첫머리의 카드 ID는 카드 상세 링크로 만든다(찾을 수 있을 때만).
+function summaryCell(entry,summary,cardHref){
+ const id=text(entry.completion?entry.executionKey||entry.completionTaskId:entry.taskId),href=id?cardHref(entry):null;
+ return href&&summary.startsWith(id)?`<a href="${e(href)}">${e(id)}</a>${e(summary.slice(id.length))}`:e(summary);
+}
+export function renderLedgerTable(entries,{cardHref=()=>null}={}){
  return `<div class="lg-scroll" id="lg-scroll" tabindex="0" aria-label="사건 기록 표 · 좌우로 스크롤 가능"><table class="lg-table"><caption class="dw-sr">사건별 시각, 종류, 기록하거나 보낸 사람, 대상과 원문</caption><colgroup><col><col><col><col><col><col></colgroup><thead><tr><th scope="col">시각</th><th scope="col">사건</th><th scope="col">기록자·보낸 사람</th><th scope="col">대상</th><th scope="col">카드·내용</th><th scope="col">원문</th></tr></thead><tbody>${entries.map((entry,i)=>{
   const id='lg-original-'+i,label=eventLabel(entry),by=text(entry.by)||'모름',target=text(entry.role)||text(entry.to)||text(entry.board)||(entry.by==='watch'?'감시 전체':'모름'),summary=eventSummary(entry);
-  return `<tr data-ledger-row="${id}"><td title="${e(stamp(entry.t))}">${e(stamp(entry.t,true))}</td><td title="${e(entry.kind)}">${e(label)}</td><td title="${e(by)}">${e(by)}</td><td title="${e(target)}">${e(target)}</td><td title="${e(summary)}">${e(summary)}</td><td><button type="button" data-ledger-toggle aria-expanded="false" aria-controls="${id}" aria-label="${e(stamp(entry.t,true)+' '+label+' 원문')}" title="기록 원문 펼치기">펼치기</button></td></tr><tr class="lg-original-row" id="${id}" hidden><td colspan="6"><div class="lg-original"><div class="lg-original-heading"><strong>${e(label)} · 기록 원문</strong><button type="button" data-ledger-close="${id}">접기</button></div><pre>${e(JSON.stringify(entry,null,2))}</pre></div></td></tr>`;
+  return `<tr data-ledger-row="${id}"><td title="${e(stamp(entry.t))}">${e(stamp(entry.t,true))}</td><td title="${e(entry.kind)}">${e(label)}</td><td title="${e(by)}">${e(by)}</td><td title="${e(target)}">${e(target)}</td><td title="${e(summary)}">${summaryCell(entry,summary,cardHref)}</td><td><button type="button" data-ledger-toggle aria-expanded="false" aria-controls="${id}" aria-label="${e(stamp(entry.t,true)+' '+label+' 원문')}" title="기록 원문 펼치기">펼치기</button></td></tr><tr class="lg-original-row" id="${id}" hidden><td colspan="6"><div class="lg-original"><div class="lg-original-heading"><strong>${e(label)} · 기록 원문</strong><button type="button" data-ledger-close="${id}">접기</button></div><pre>${e(JSON.stringify(entry,null,2))}</pre></div></td></tr>`;
  }).join('')||'<tr><td colspan="6" class="lg-empty">아직 기록된 사건이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
 

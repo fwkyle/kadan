@@ -169,12 +169,15 @@ test('화면 스크립트는 실행기를 바꾸면 모델을, 모델을 바꾸�
   const select = value => ({value, disabled:false, options:[], handlers:{},
     replaceChildren(){ this.options = []; }, append(o){ this.options.push(o); if (o.selected) this.value = o.value; },
     addEventListener(type, fn){ this.handlers[type] = fn; }});
-  const form = {dataset:{role:'reviewer'}, runner:select('codex'), model:select('gpt-6-sol'), effort:select('medium')};
+  const after = {textContent:''}, box = {hidden:true, querySelector:() => after};
+  const form = {dataset:{role:'reviewer', launch:'옛 명령'}, runner:select('codex'), model:select('gpt-6-sol'), effort:select('medium'), querySelector:() => box};
   const document = {getElementById:() => ({textContent:json}), querySelectorAll:() => [form], createElement:() => ({})};
   new Function('document', client)(document);
   form.model.value = 'gpt-6-astra'; form.model.handlers.change();
   assert.deepEqual(form.effort.options.map(o => o.value), ['low', 'medium']);
   assert.equal(form.effort.value, 'medium');
+  // 고르는 즉시 바뀔 명령을 보인다(2026-09-24 UX 3차): 실행기 틀의 {model}·{effort}를 바꿔 끼운 값.
+  assert.equal(box.hidden, false);assert.match(after.textContent, /gpt-6-astra/);
   form.runner.value = 'devin'; form.runner.handlers.change();
   assert.deepEqual(form.model.options.filter(o => !o.disabled).map(o => o.value), ['swe-2-max']);
   assert.equal(form.effort.disabled, true);
@@ -247,4 +250,17 @@ test('폴백 쓰기 경로: 추가·순서·삭제는 사람 명의로 저장하
     assert.match(html, /저장했습니다\(revision 10\)\. 다음 발령부터 적용, 떠 있는 세션은 그대로/);
     assert.match(html, /1번 devin \/ swe-2-max/);
   } finally { await new Promise(r => server.close(r)); }
+});
+
+test('09-24 실행 모델: 기본은 읽기 전용 요약표와 최근 변경, 편집 틀은 역할별 접힌 칸 안에', () => {
+  const f = fixture();
+  const html = renderRunnerSettings({home:f.home, token:'t'});
+  const at = s => html.indexOf(s);
+  assert.match(html, /<table class="rs-summary"><thead><tr><th>역할<\/th><th>지금 값<\/th><th>발령 때 채워질 명령<\/th><th>폴백<\/th>/);
+  assert.ok(at('rs-summary') < at('최근 변경') && at('최근 변경') < at('<h3>바꾸기</h3>'));
+  // 모든 편집 폼은 접힌 칸 안에 있다.
+  const forms = [...html.matchAll(/<form method="post" action="\/runners\/(set|fallback)"/g)].length;
+  const inside = [...html.matchAll(/<details class="rs-edit"><summary>[^<]+ 값·폴백 변경<\/summary><form method="post" action="\/runners\/set"[\s\S]*?<form method="post" action="\/runners\/fallback"[\s\S]*?<\/form><\/details>/g)].length;
+  assert.ok(forms > 0);assert.equal(inside * 2, forms);
+  assert.doesNotMatch(html, /<details class="rs-edit" open/);
 });

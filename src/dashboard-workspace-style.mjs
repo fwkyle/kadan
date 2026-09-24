@@ -19,7 +19,7 @@ ${executionHealthStyle}
 .dw-evidence-help{font-size:12px;color:#606b65;margin:0 0 8px}
 .dw-presets{display:flex;gap:4px;align-items:center;margin:0 0 10px;flex-wrap:wrap}
 .dw-presets button[aria-pressed=true]{background:#e6f1ea;color:#155e43;border-color:#9fbfac}
-.dw-presets .dw-preset-count{margin-left:6px;font-size:11px;color:#606b65;font-variant-numeric:tabular-nums}
+.dw-presets .dw-preset-count{margin-left:6px;font-size:11px;color:#606b65;font-variant-numeric:tabular-nums}.dw-layout .dw-layout-link{display:inline-flex;align-items:center;font-size:12px;padding:4px 9px;border-radius:999px;text-decoration:none;color:#5d6762;white-space:nowrap}.dw-layout .dw-layout-link:hover{color:#21684e;background:#eef5f1}.dw-presets .dw-stuck-chip{display:inline-flex;align-items:center;text-decoration:none;font-size:12px;font-weight:600;padding:5px 10px;border:1px solid #d9b46a;border-radius:999px;background:#fff6e3;color:#794e00;margin-left:6px}.dw-presets .dw-stuck-chip[aria-current=true]{background:#f8e2b3;border-color:#b68625}
 .dw-presets button[aria-pressed=true] .dw-preset-count{color:#155e43}
 ${dashboardDetailStyle}
 ${cardFlowStyle}
@@ -27,3 +27,24 @@ ${ledgerTableStyle}
 
 ${dashboardCanvasStyle}
 `;
+
+// 좁은 화면(휴대폰) 정리. 2026-09-24 UX 검토 실측(390px): 위 메뉴줄 144px(3줄), 아래 상태줄 80px(2줄),
+// 우편함은 거르기 칸 6개가 세로로 쌓여 첫 화면에 편지가 한 통도 보이지 않았고 표 내용 칸은 옆으로 밀렸다.
+export const dashboardMobileStyle=`@media (max-width:640px){
+.dw-shell>.dw-top{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;row-gap:6px}
+.dw-shell>.dw-top>nav{grid-column:1/-1;grid-row:2;display:flex;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -14px;padding:0 14px}
+.dw-shell>.dw-top>nav::-webkit-scrollbar{display:none}
+.dw-shell>.dw-top>nav a{flex:none}
+.dw-shell>.dw-top .dw-theme{margin-left:0}
+.dw-shell>footer{flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+.dw-shell>footer>span:first-child{display:none}
+.toolbar{display:grid!important;grid-template-columns:1fr 1fr;gap:8px}
+.toolbar>button,.toolbar>input[type=hidden]+button{grid-column:1/-1}
+#mailbox .scroll table,#mailbox .scroll tbody,#mailbox .scroll tr,#mailbox .scroll td{display:block;width:auto;min-width:0}
+#mailbox .scroll thead{display:none}
+#mailbox .scroll tr{padding:10px 0;border-bottom:1px solid #dce2de}
+#mailbox .scroll td{padding:0;border:0}
+#mailbox .scroll td:nth-child(-n+3){display:inline;font-size:12px;color:#5d6762;margin-right:4px}
+#mailbox .scroll td:nth-child(2)::after{content:" →"}
+#mailbox .scroll td:nth-child(4){margin-top:4px}
+}`;

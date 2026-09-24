@@ -40,6 +40,7 @@ test('완료한 카드도 없는 검수와 다음 행동을 추정하지 않는�
 });
 test('표형 기본과 문서형 버튼을 제공하면서 관리 폼은 한 번만 포함한다',()=>{
  const html=renderWorkspaceDetail({key:'r/c',id:'c',repo:'r',body:'## Why\n목적',status:'draft',displayState:'draft',history:[],runs:[]},{form:'<form method="post">보존할 폼</form>'});
+ assert.match(html,/<p class="dd-jump"><a href="\?mailCard=r%2Fc#mailbox">이 카드의 우편<\/a><a href="\?ledgerCard=r%2Fc&amp;ledgerRoutine=1#ledger">이 카드의 사건<\/a><\/p>/);
  assert.match(html,/data-detail-view="table" data-key=/);assert.match(html,/data-detail-view="document" aria-pressed="false"/);assert.equal(html.split('보존할 폼').length-1,1);assert.match(html,/data-detail-section="work"/);
 });
 test('승인한 설명은 원문·상태·버전이 일치할 때만 재사용하고 변경되면 원문으로 돌아간다',()=>{
