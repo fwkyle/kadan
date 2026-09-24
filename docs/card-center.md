@@ -65,6 +65,16 @@ kadan card report repo/exec-id --revision 3 --outcome implemented
 
 이전 카드는 새 경로를 강제하거나 파일을 옮기지 않는다. `resultPath`가 없는 카드는 기존 지정 경로를 유지하며, 결과를 등록하려면 `--result-file /기존/절대경로`를 명시한다. 새 카드의 외부 경로 지정은 거부한다. 결과 원문과 `evidence/`는 DB 밖 파일이므로 **DB와 `cards/`를 함께 백업**한다.
 
+## 실행 완료와 카드 닫기
+
+실행 완료 확정(`kadan done`)과 카드 상태 `done`은 별개다. 한 카드에 실행이 여러 번 붙을 수 있어 카드를 자동으로 닫지 않고 감독이 판단한다. 한 번 발령으로 끝나는 카드는 `kadan done <역할> <카드id> ok --close-card [--note <이유>]`로 두 가지를 한 번에 기록한다.
+
+- 실행 완료를 먼저 저장한 뒤, 최신 revision을 읽어 `card update --status done`과 같은 경로로 카드를 닫는다. note가 없으면 "실행 완료 확정과 함께 카드 닫음"을 쓴다. 권한은 기존 `done`·`card update`와 같다.
+- `failed`와 함께 쓰면 아무것도 기록하지 않고 거부한다. 이미 `done`인 카드는 이력을 늘리지 않고 알린다. `hold`·`cancelled`·`superseded`·`archived` 카드와 중앙 카드 없는 실행은 닫지 않고 이유를 보인다.
+- 카드 닫기가 실패해도 저장한 실행 완료는 되돌리지 않는다. 두 결과를 따로 출력하고 종료 코드 1로 알린다.
+
+대시보드 작업 화면의 **실행 끝·카드 열림** 절은 가장 최근 실행이 `ok`로 확정됐는데 카드가 `assigned`·`ready`로 남은 카드를 모은다. 카드 키·역할·완료 확정 시각·확정한 사람과 복사용 `kadan card update <키> --revision N --status done --note …` 명령을 보인다. 읽기 전용이며 화면에서 닫지 않는다. 이전 실행만 ok이고 최근 실행이 미완료·실패이면 넣지 않는다. 완료 확정 뒤 감독이 카드 상태나 담당을 바꿨으면 다시 연 카드로 보고 넣지 않는다.
+
 ## 진행 보고
 
 여기서 진행 보고는 카드의 상태 기록이며, 상대 AI에게 보내는 편지(`send`)와 다르다. 상태 기록 뒤 상위에 같은 내용을 별도 발송하지 않는다. 편지가 필요한 경우는 [진행 기록과 상위 통지](../skills/kadan-conductor/references/operating-contract.md#진행-기록과-상위-통지)를 따른다.

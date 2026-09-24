@@ -65,6 +65,7 @@ ${dashboardWorkspaceStyle}
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
  ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
  ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail,hierarchy})}
+ ${renderDoneButOpen(center)}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}
  ${renderDecisions(decisions,decisionError,token,url.searchParams.get('decisionAnswered'))}
@@ -78,6 +79,13 @@ ${dashboardWorkspaceStyle}
  ${operationsFlowScript}
  ${decisionHistoryScript}
  </script></div></body></html>`;
+}
+
+// 실행 끝·카드 열림: 읽기 전용. 닫기는 감독이 명령으로 한다(한 카드에 실행이 여러 번 붙을 수 있어서).
+export function renderDoneButOpen(center) {
+ const rows=center?.doneButOpen;
+ const command=c=>`kadan card update ${c.key} --revision ${c.revision} --status done --note "실행 완료 확정 뒤 카드 닫음"`;
+ return `<details class="panel" id="done-but-open" data-view="dashboard"><summary>실행 끝·카드 열림 ${rows?rows.length+'장':'모름'}</summary><p class="muted">가장 최근 실행이 ok로 완료 확정됐는데 카드가 아직 배정·발령 가능 상태입니다. 더 할 실행이 없으면 감독이 아래 명령으로 닫습니다. 다음에는 <code>kadan done &lt;역할&gt; &lt;카드id&gt; ok --close-card</code>로 한 번에 닫을 수 있습니다.</p><span class="copy-feedback muted" role="status"></span>${rows?rows.length?`<div class="scroll"><table><thead><tr><th>카드</th><th>역할</th><th>완료 확정</th><th>확정한 사람</th><th>닫는 명령</th></tr></thead><tbody>${rows.map(c=>`<tr><td><a data-card-key="${e(c.key)}" href="?card=${encodeURIComponent(c.key)}#detail">${e(c.key)}</a><small class="row-title">${e(c.title)} · ${e(label(c.status))}</small></td><td>${e(c.role)}</td><td>${e(stamp(c.doneAt))}</td><td>${e(c.doneBy)}</td><td><code>${e(command(c))}</code> <button type="button" class="copy-question" data-copy-label="명령" data-question="${e(command(c))}">복사</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="empty">없음</p>':'<p role="alert">카드 상태 모름</p>'}</details>`;
 }
 
 export function createCenterHandler(home, {notify}={}) {

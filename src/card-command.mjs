@@ -34,3 +34,14 @@ export function cardCommand(args,flags,{home,by}) {
   }
   throw new Error('알 수 없는 card 명령');
 }
+// Why: 한 번 발령으로 끝나는 카드는 실행 완료 확정 뒤 card update를 한 번 더 치다가 자주 빠뜨린다(2026-09-24 열린 카드 10장).
+// 실행 완료는 이미 저장된 뒤라 여기서 실패해도 되돌리지 않는다. 카드 변경은 card update와 같은 경로로 한다.
+export const CLOSE_CARD_NOTE='실행 완료 확정과 함께 카드 닫음';
+export function closeCardAfterDone(key,{home,by,note}) {
+  if(!key)throw new Error('중앙 카드에 연결되지 않은 실행이라 닫을 카드가 없다');
+  const card=new CardStore(home).get(key,{body:false});
+  if(card.status==='done')return {state:'already',key,revision:card.revision};
+  if(!['draft','ready','assigned'].includes(card.status))throw new Error(`${card.status} 상태 카드는 닫지 않는다 — 감독이 카드 상태를 먼저 판단한다`);
+  const closed=cardCommand(['update',key],{revision:card.revision,status:'done',note:note||CLOSE_CARD_NOTE},{home,by});
+  return {state:'closed',key,revision:closed.revision};
+}
