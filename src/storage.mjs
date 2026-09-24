@@ -45,7 +45,8 @@ export function openDatabase(home,{readOnly=false}={}){
  if(!fs.existsSync(file)||fs.lstatSync(file).isSymbolicLink())throw new Error('SQLite 원본 없음 또는 심볼릭 링크: 자동 생성하지 않습니다');
  const DB=driver(),db=new DB(file,{readOnly});
  try{
-  db.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+  // 쓰기 대기 한도. 부하가 높으면 짧은 쓰기도 CPU를 기다리느라 늦어진다(2026-09-24 부하 110~217에서 5초 초과 실패).
+  db.exec('PRAGMA busy_timeout=15000; PRAGMA foreign_keys=ON;');
   if(db.prepare('PRAGMA application_id').get().application_id!==1262767153||db.prepare('PRAGMA user_version').get().user_version!==1)throw new Error('지원하지 않는 SQLite 원본/버전');
   if(!readOnly){db.exec('PRAGMA synchronous=FULL;');if(db.prepare('PRAGMA journal_mode').get().journal_mode!=='wal')throw new Error('SQLite WAL 설정 확인 필요');}
   return db;
@@ -62,6 +63,23 @@ export function transaction(home,fn,{readOnly=false}={}){
  finally{connections.delete(key);db.close()}
 }
 export function storageTransaction(home,fn){return storageMode(home)==='sqlite'?transaction(home,fn):fn();}
+// 원장 전체의 마지막 사건 번호. 사건은 지우지 못하므로(삭제 금지 트리거) 무엇이든 추가되면 커진다.
+// 잠금 밖에서 미리 계산한 결과가 잠금 안에서도 유효한지 확인하는 데 쓴다. JSONL은 null(미리 계산하지 않음).
+export function storageVersion(home){return storageMode(home)==='sqlite'?transaction(home,db=>db.prepare('SELECT max(rowid) AS v FROM events').get().v??0,{readOnly:true}):null;}
+// 무거운 계산은 쓰기 잠금 밖에서 먼저 하고, 잠금 안에서는 그 사이 원장이 바뀌지 않았는지만 확인한다.
+// 바뀌었거나 미리 계산이 실패했으면 잠금 안에서 다시 계산한다(예전과 같은 결과). 2026-09-24 실측: 우편 ack가
+// 잠금을 2.6초, send가 1.5초 쥐어 부하가 높을 때 다른 쓰기(감시 포함)가 busy_timeout을 넘겨 실패했다.
+export function prepareOutsideLock(home,compute){
+ const version=storageVersion(home);
+ let early=null;
+ if(version!==null){try{early={value:compute()};}catch{early=null;}}
+ // 잠금 안에서 부른다: 그 사이 바뀐 게 없으면 미리 계산한 값, 아니면 다시 계산.
+ return ()=>early&&storageVersion(home)===version?early.value:compute();
+}
+export function preparedTransaction(home,compute,apply){
+ const current=prepareOutsideLock(home,compute);
+ return storageTransaction(home,()=>apply(current()));
+}
 export function storageSnapshot(home,fn){return storageMode(home)==='sqlite'?transaction(home,fn,{readOnly:true}):fn();}
 export function readStream(home,stream,{optional=false}={}){
  if(storageMode(home)==='jsonl'){

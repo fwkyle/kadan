@@ -329,6 +329,8 @@ export function deliverResolution({
   return recipient;
 }
 
+export const isDatabaseBusy=error=>error?.errcode===5||/database is locked|SQLITE_BUSY/i.test(String(error?.message??''));
+
 export async function runWatch({
   runtime = null,
   measure = () => performance.now(),
@@ -412,8 +414,12 @@ export async function runWatch({
   const queuedAI = new Map();
   const completedAI = [];
   let activeAI = null;
+  let lockFailures = 0;
 
   try { while (!signal?.aborted) {
+    // 원장 잠금(SQLITE_BUSY)은 원인이 식별된 실패다. 이번 주기만 건너뛰고 다음 주기에 다시 본다. 같은 오류가
+    // 3주기 연속이면 멈추고 보고한다(잠긴 규칙 3). 2026-09-24 22:55: 잠금 오류 한 번에 감시가 종료됐다.
+    try {
     const cycleAt = now(),began=measure();
     let entries = [], mailEntries = [];
     let ledgerError = null;
@@ -814,6 +820,13 @@ export async function runWatch({
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
     }
     lastCycleAt = cycleAt;
+    lockFailures = 0;
+    } catch (error) {
+      if (!isDatabaseBusy(error)) throw error;
+      lockFailures++;
+      print(`[watch] 원장 잠금으로 이번 주기를 건너뜀 (${lockFailures}/3): ${error.message}`);
+      if (lockFailures >= 3) throw error;
+    }
     try {await sleep(intervalMs,signal);}
     catch(error) {if(!signal?.aborted)throw error;}
   }} finally {
