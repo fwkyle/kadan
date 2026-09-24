@@ -176,3 +176,22 @@ test('답장은 원본 업무와 실행 연결을 바꿀 수 없으며 잘못된
  appendLedger({kind:'send',mailId:'broken-parent',role:'receiver',expectReply:true},home);
  assert.throws(()=>sender.send({by:'receiver',message:'잘못된 부모',replyTo:'broken-parent',replyFinal:true}),/참가자 정보 손상/);
 });
+
+test('09-24 같은 원장으로 여러 번 불러도 투영은 한 번 — 결과는 매번 새 배열·새 객체, 원장이 늘면 다시 계산', () => {
+  const entries=[
+    {kind:'send',by:'감독',role:'작업자',mailId:'m1',digest:'d1',expectReply:true,t:'2026-09-24T00:00:00Z'},
+    {kind:'send',by:'작업자',role:'감독',mailId:'m2',digest:'d2',t:'2026-09-24T00:01:00Z'},
+  ];
+  const first=mailboxLetters(entries),second=mailboxLetters(entries);
+  assert.deepEqual(second,first);
+  assert.notEqual(second,first);assert.notEqual(second[0],first[0]);assert.notEqual(second[0].replyRecipients,first[0].replyRecipients);
+  // 부르는 쪽의 뒤집기·수정이 다음 호출에 번지지 않는다(wall.mjs는 결과를 reverse한다).
+  first.reverse();first[0].read='바뀜';first[0].replyRecipients.push('누군가');
+  assert.deepEqual(mailboxLetters(entries).map(x=>x.mailId),['m1','m2']);
+  assert.equal(mailboxLetters(entries)[1].read,false);
+  assert.deepEqual(mailboxLetters(entries,'작업자').map(x=>x.mailId),['m1']);
+  assert.deepEqual(mailboxLetters(entries,'감독',{view:'waiting'}).map(x=>x.mailId),['m1']);
+  // 원장이 늘면 다시 계산한다.
+  entries.push({kind:'mail-read',by:'작업자',role:'작업자',mailId:'m1'});
+  assert.equal(mailboxLetters(entries).find(x=>x.mailId==='m1').read,true);
+});
