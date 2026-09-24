@@ -6,7 +6,8 @@ test('09-07 실제 decision CLI 답변은 격리된 슈퍼 세션에 한번 통�
  const cli=new URL('../src/cli.mjs',import.meta.url).pathname,env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:'사람'};
  const run=(args,by='사람')=>{const r=spawnSync(process.execPath,[cli,...args],{env:{...env,KADAN_ROLE:by},encoding:'utf8'});assert.equal(r.status,0,r.stderr+r.stdout);return r.stdout};
  try{
- run(['start','qa-슈퍼감독','--cmd','cat']);
+ // 화면을 읽어 검사하므로 터미널 에코를 끈다. 에코와 cat 출력이 섞이면 한글이 깨진다(handover-cli 시험과 같은 원인).
+ run(['start','qa-슈퍼감독','--cmd','stty -echo; exec cat']);
  const d=JSON.parse(run(['decision','request','qa/card-a','--question','분리할까요?','--option','분리','--option','유지','--recommend','분리','--reason','확인 필요'],'qa-슈퍼감독'));
  const a=JSON.parse(run(['decision','answer',d.id,'--revision','1','--text','분리하세요','--choice','분리']));assert.equal(a.delivery.status,'sent');
  assert.match(run(['read','qa-슈퍼감독','--lines','30']),/결정 답변/);
