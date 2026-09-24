@@ -54,7 +54,10 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   // 토스트는 한 번만: 화면 스크립트가 주소에서 decisionAnswered를 지운다.
   assert.match(after,/searchParams\.delete\('decisionAnswered'\)/);
   assert.doesNotMatch(await(await fetch(base)).text(),/class="decision-toast/);
-  assert.match(after,/action==='\/decisions\/answer'\)\{if\(form\.dataset\.sending\)/);
+  // 답변은 페이지를 다시 불러오지 않고 보내며, 결정 영역·드로어·상단 숫자만 바꾸고 스크롤을 되돌린다.
+  assert.match(after,/form\.matches\('form\[action="\/decisions\/answer"\]'\)\)return;\n  event\.preventDefault\(\);\n  if\(form\.dataset\.sending\)return;/);
+  assert.match(after,/document\.getElementById\('decisions'\)\.replaceWith/);
+  assert.match(after,/if\(main\)main\.scrollTop=top;/);
   assert.equal(decisionCommand(['show',a.id],{},{home:f.home,by:'사람'}).answer.text,'분리합니다');assert.equal(f.sent.length,1);
   assert.match(await(await fetch(base)).text(),/내 결정 필요 0건/);
   const legacy=await(await fetch(base+'/?legacy=1')).text();assert.match(legacy,/참고용 옛 화면/);

@@ -40,18 +40,51 @@ export const decisionStyle=`.decision-toast{position:fixed;right:24px;top:72px;z
 .decision-drawer .dh-cancelled{background:#eef0ef;color:#5d6b63}
 .decision-drawer .dh-failed{background:#fbe9e9;color:#8a1f1f}
 .decision-drawer .dh-item details{margin-top:6px;font-size:13px}
-.decision-drawer .dh-empty{padding:18px;color:#5d6b63}`;
-// 드로어 열기·닫기. 닫기 버튼은 <form method="dialog">라 스크립트 없이 닫히고, Esc도 기본으로 닫힌다.
-export const decisionHistoryScript=`
- const decisionHistory=document.getElementById('decision-history');
- if(decisionHistory){
-  document.addEventListener('click',event=>{
-   if(event.target.closest&&event.target.closest('[data-decision-history-open]')){event.preventDefault();if(!decisionHistory.open)decisionHistory.showModal();return;}
-   if(event.target!==decisionHistory)return;
-   const r=decisionHistory.getBoundingClientRect();
-   if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)decisionHistory.close();
-  });
- }
+.decision-drawer .dh-empty{padding:18px;color:#5d6b63}
+.decision-send-error{margin:8px 0 0;color:#8a1f1f;font-size:13px;white-space:pre-wrap}`;
+// 드로어 열기·닫기와 답변 전송. 닫기 버튼은 <form method="dialog">라 스크립트 없이 닫히고, Esc도 기본으로 닫힌다.
+// 답변은 페이지를 다시 불러오지 않고 보낸 뒤 결정 영역·드로어·상단 숫자만 바꿔 끼운다 — 스크롤이 맨 위로 튀지 않게
+// (2026-09-24 [kyle]). 스크립트가 없으면 폼이 그대로 제출되어 결정 영역으로 돌아간다.
+export const decisionScript=`
+ document.addEventListener('click',event=>{
+  const history=document.getElementById('decision-history');
+  if(!history)return;
+  if(event.target.closest&&event.target.closest('[data-decision-history-open]')){event.preventDefault();if(!history.open)history.showModal();return;}
+  if(event.target!==history)return;
+  const r=history.getBoundingClientRect();
+  if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)history.close();
+ });
+ document.addEventListener('submit',async event=>{
+  const form=event.target;
+  if(!form.matches||!form.matches('form[action="/decisions/answer"]'))return;
+  event.preventDefault();
+  if(form.dataset.sending)return;
+  form.dataset.sending='1';
+  const button=form.querySelector('button'),label=button?button.textContent:'';
+  form.querySelector('.decision-send-error')?.remove();
+  if(button){button.disabled=true;button.textContent='전송 중…';}
+  try{
+   const response=await fetch(form.action,{method:'POST',credentials:'same-origin',body:new URLSearchParams(new FormData(form))});
+   const html=await response.text();
+   if(!response.ok)throw new Error(html||'전달 실패. HTTP '+response.status);
+   const parsed=new DOMParser().parseFromString(html,'text/html'),section=parsed.getElementById('decisions');
+   if(!section)throw new Error('답변은 저장됐을 수 있지만 화면을 새로 읽지 못했습니다. 새로고침해서 확인하세요.');
+   // 이 화면은 창이 아니라 <main>이 스크롤된다. 둘 다 기억했다가 되돌린다.
+   const main=document.querySelector('main'),top=main?main.scrollTop:0,y=window.scrollY,x=window.scrollX;
+   document.getElementById('decisions').replaceWith(document.importNode(section,true));
+   const drawer=parsed.getElementById('decision-history'),oldDrawer=document.getElementById('decision-history');
+   if(drawer&&oldDrawer&&!oldDrawer.open)oldDrawer.replaceWith(document.importNode(drawer,true));
+   const count=parsed.querySelector('.dw-decision-count'),oldCount=document.querySelector('.dw-decision-count');
+   if(count&&oldCount)oldCount.replaceWith(document.importNode(count,true));
+   if(main)main.scrollTop=top;
+   window.scrollTo(x,y);
+  }catch(error){
+   delete form.dataset.sending;
+   if(button){button.disabled=false;button.textContent=label;}
+   const alert=document.createElement('p');alert.className='decision-send-error';alert.setAttribute('role','alert');alert.textContent=error.message;
+   (button||form).after(alert);
+  }
+ });
 `;
 const answeredNotice=d=>{
  if(!d||d.status==='open')return '';
