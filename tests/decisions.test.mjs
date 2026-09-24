@@ -96,7 +96,8 @@ test('결정 화면: 첫 질문만 제목으로, 나머지는 줄바꿈을 살�
     question:'PR #1을 합류할까요?\n- 노션: https://app.notion.com/p/abc\n- PR: https://github.com/o/r/pull/1.',
     reason:'<b>근거</b> https://x.y/z'}], null, 't');
   assert.match(html, /<h3>PR #1을 합류할까요\?<\/h3>/);
-  assert.match(html, /white-space:pre-line">- 노션: <a href="https:\/\/app\.notion\.com\/p\/abc" target="_blank" rel="noopener noreferrer">/);
+  // "- 이름: 내용" 줄은 이름표 표로 보인다(2026-09-24 선택판 모양).
+  assert.match(html, /<dl class="dc-fields"><dt>노션<\/dt><dd><a href="https:\/\/app\.notion\.com\/p\/abc" target="_blank" rel="noopener noreferrer">[^<]+<\/a><\/dd><dt>PR<\/dt>/);
   assert.match(html, /<a href="https:\/\/github\.com\/o\/r\/pull\/1" [^>]+>https:\/\/github\.com\/o\/r\/pull\/1<\/a>\./);
   assert.match(html, /&lt;b&gt;근거&lt;\/b&gt; <a href="https:\/\/x\.y\/z"/);
   assert.doesNotMatch(html, /<b>근거/);
@@ -186,4 +187,25 @@ test('09-24 요약 없는 공식 우편은 본문 앞 120자를 한 줄 미리�
  assert.match(row,/<p>완료 통지: card-a ok 결과 파일 \/x\/result\.md 에 판정과 근거를 적었다\. 가+…<\/p>/);
  assert.doesNotMatch(row.slice(0,row.indexOf('</tr>')),/본문을 펼쳐 확인/);
  const shown=row.match(/<p>([^<]*)…<\/p>/)[1];assert.equal(shown.length,120);
+});
+
+test('09-24 결정 카드: 선택지는 카드 모양 단추로 모두 보이고 추천 배지, 기본은 선택지 없음, 누를 때만 보내는 버튼과 진행 막대', async () => {
+  const {renderDecisions} = await import('../src/decision-wall.mjs');
+  const now = new Date().toISOString();
+  const html = renderDecisions([
+    {id:'d1', status:'open', revision:3, card:'r/c', requestedBy:'p-슈퍼감독', recommendation:'보류', options:['승인','보류'], question:'합칠까요?', reason:'이유', at:now},
+    {id:'d0', status:'answered', card:'r/c', requestedBy:'p-슈퍼감독', recommendation:'승인', options:['승인'], question:'예전?', reason:'r', answer:{by:'사람', text:'승인', choice:'승인', at:now}, delivery:{status:'sent', role:'p-슈퍼감독'}},
+  ], null, 'tok');
+  const card = html.slice(html.indexOf('<article class="dc-card" id="decision-d1">'), html.indexOf('</article>', html.indexOf('id="decision-d1"')));
+  assert.match(card, /<div class="dc-top"><span class="dc-chip">요청 p-슈퍼감독<\/span><a class="dc-key" href="\?card=r%2Fc#detail">r\/c<\/a>/);
+  assert.match(card, /<dl class="dc-fields"><dt>추천 이유<\/dt><dd class="dc-pre">이유<\/dd><\/dl>/);
+  const opts = [...card.matchAll(/<label class="dc-opt[^"]*"><input type="radio" name="choice" value="([^"]*)"( checked)?>/g)].map(m => [m[1], Boolean(m[2])]);
+  assert.deepEqual(opts, [['승인', false], ['보류', false], ['', true]]);
+  assert.match(card, /value="보류"><span class="dc-dot" aria-hidden="true"><\/span><span class="dc-opt-text">보류<span class="dc-rec">추천<\/span>/);
+  assert.doesNotMatch(card, /value="승인">[^]*?승인<span class="dc-rec">/);
+  assert.match(card, /<input type="hidden" name="revision" value="3">/);
+  assert.match(card, /<textarea name="text"[^>]*placeholder="메모 \(선택\)/);
+  assert.match(card, /<button>답변 전달<\/button><small>누를 때만 보냅니다/);
+  assert.doesNotMatch(card, /<select/);
+  assert.match(html, /<div class="dc-meter"><span>대기 1건 · 오늘 답함 1건<\/span><div class="dc-bar" aria-hidden="true"><i style="width:50%"><\/i>/);
 });

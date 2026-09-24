@@ -41,7 +41,34 @@ export const decisionStyle=`.decision-toast{position:fixed;right:24px;top:72px;z
 .decision-drawer .dh-failed{background:#fbe9e9;color:#8a1f1f}
 .decision-drawer .dh-item details{margin-top:6px;font-size:13px}
 .decision-drawer .dh-empty{padding:18px;color:#5d6b63}
-.decision-send-error{margin:8px 0 0;color:#8a1f1f;font-size:13px;white-space:pre-wrap}`;
+.decision-send-error{margin:8px 0 0;color:#8a1f1f;font-size:13px;white-space:pre-wrap}
+.dc-meter{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:#5d6762;margin:4px 0 14px}
+.dc-bar{flex:1 1 200px;min-width:120px;height:6px;background:#eaede8;border-radius:3px;overflow:hidden}.dc-bar i{display:block;height:100%;background:#1f6f5c}
+.dc-list{display:flex;flex-direction:column;gap:12px}
+/* 결정 화면 공통 규칙(#decisions form·article, label 세로 쌓기)보다 우선하도록 #decisions를 붙인다. */
+#decisions .dc-card{background:#fff;border:1px solid #d9ddd8;border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.dc-card:has(.dc-opt:not(.dc-opt-free) input:checked){border-color:#1f6f5c}
+.dc-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.dc-chip{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:#dcefe8;color:#1f6f5c}
+.dc-key{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5d6762;word-break:break-all}
+.dc-age{font-size:12px;color:#5d6762;margin-left:auto}
+.dc-card h3{font-size:17px;font-weight:650;margin:0;line-height:1.45;text-wrap:balance}
+.dc-fields{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:14px;line-height:1.55}
+.dc-fields dt{color:#5d6762;white-space:nowrap}.dc-fields dd{margin:0;overflow-wrap:anywhere}
+.dc-pre{white-space:pre-wrap;margin:0;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
+#decisions .dc-form{display:flex;flex-direction:column;gap:8px;margin:2px 0 0;max-width:none}
+.dc-opts{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+#decisions .dc-opt{display:flex;flex-direction:row;gap:8px;align-items:flex-start;border:1px solid #d9ddd8;background:#fff;border-radius:8px;padding:9px 12px;cursor:pointer;font-size:14px;line-height:1.45}
+.dc-opt:hover{border-color:#1f6f5c}
+.dc-opt input{position:absolute;opacity:0;width:1px;height:1px}
+.dc-opt .dc-dot{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid #b9c1bb;margin-top:3px}
+.dc-opt:has(input:checked){background:#dcefe8;border-color:#1f6f5c}
+.dc-opt:has(input:checked) .dc-dot{border-color:#1f6f5c;background:#1f6f5c}
+.dc-opt:has(input:focus-visible){outline:3px solid #21684e;outline-offset:2px}
+.dc-opt-free{color:#5d6762;font-size:13px}
+.dc-rec{font-size:11px;font-weight:700;color:#1f6f5c;border:1px solid #1f6f5c;border-radius:3px;padding:0 5px;margin-left:6px;white-space:nowrap}
+.dc-form textarea{width:100%;min-height:44px;resize:vertical;font:inherit;font-size:14px}
+.dc-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.dc-actions small{color:#5d6762;font-size:12px}`;
 // 드로어 열기·닫기와 답변 전송. 닫기 버튼은 <form method="dialog">라 스크립트 없이 닫히고, Esc도 기본으로 닫힌다.
 // 답변은 페이지를 다시 불러오지 않고 보낸 뒤 결정 영역·드로어·상단 숫자만 바꿔 끼운다 — 스크롤이 맨 위로 튀지 않게
 // (2026-09-24 [kyle]). 스크립트가 없으면 폼이 그대로 제출되어 결정 영역으로 돌아간다.
@@ -95,6 +122,20 @@ const answeredNotice=d=>{
  const failed=d.delivery?.status==='failed';
  return `<div role="status" aria-live="polite" class="decision-toast${failed?' decision-toast-failed':''}"><span>${text}</span><button type="button" class="decision-toast-link" data-decision-history-open>내역 보기</button><button type="button" class="decision-toast-close" data-toast-close aria-label="알림 닫기">×</button></div>`;
 };
+// 질문 본문: 슈퍼감독이 쓰는 "- 이름: 내용" 줄은 이름표 표로, 나머지는 문단으로(2026-09-24 선택판 모양).
+// 주소로 시작하는 줄(- https://…)의 "https"를 이름표로 읽지 않는다.
+const fieldLine=/^\s*[-•*]\s*([^:：/\n]{1,24}?)\s*[:：]\s*(.+)$/;
+export function questionBody(body){
+ const out=[];let dl=[],para=[];
+ const flush=()=>{if(dl.length){out.push(`<dl class="dc-fields">${dl.join('')}</dl>`);dl=[];}if(para.length){out.push(`<p class="dc-pre">${linked(para.join('\n'))}</p>`);para=[];}};
+ for(const line of String(body??'').split('\n')){
+  const m=line.match(fieldLine);
+  if(m&&!/^https?$/i.test(m[1].trim())&&!m[2].startsWith('//')){if(para.length)flush();dl.push(`<dt>${e(m[1].trim())}</dt><dd>${linked(m[2])}</dd>`);}
+  else if(line.trim()){if(dl.length)flush();para.push(line);}
+ }
+ flush();
+ return out.join('');
+}
 // 지난 결정 한 건: 상태·시각·내 답변·알림 결과를 먼저, 질문 원문·추천·이유는 접어서.
 const historyItem=d=>{
  const [title,body]=splitQuestion(d.question);
@@ -117,8 +158,15 @@ const renderDecisionHistory=past=>{
 export function renderDecisions(items,error,token,answered=null){
  if(error)return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요</h2><p role="alert">모름: ${e(error)}</p></section>`;
  const open=items.filter(d=>d.status==='open');
- const one=d=>{const [title,body]=splitQuestion(d.question);return `<article id="decision-${e(d.id)}"><h3>${e(title)}</h3>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a> · 요청자 ${e(d.requestedBy)}</p><p><strong>추천: ${e(d.recommendation)}</strong></p><p style="white-space:pre-wrap">${linked(d.reason)}</p>${d.status==='open'?`<form method="post" action="/decisions/answer"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><label>선택 (선택 사항)<select name="choice"><option value="">직접 답변</option>${d.options.map(o=>`<option value="${e(o)}">${e(o)}</option>`).join('')}</select></label><label>결정 내용<textarea name="text" rows="3"></textarea></label><button>답변 전달</button><p class="muted">선택지만 골라도 답할 수 있습니다. 답변을 저장하고 요청한 슈퍼감독에게 한 번 알립니다.</p></form>`:d.status==='answered'?`<p><strong>답변:</strong> ${e(d.answer.text)}</p><p>통지: ${e(d.delivery?.status==='sent'?'전달됨':d.delivery?.status==='failed'?'실패 — 답변은 저장됨':'확인 필요 — 답변은 저장됨')}</p>`:`<p>취소: ${e(d.cancelReason)}</p>`}</article>`;};
- return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${open.map(one).join('<hr>')||'<p>결정을 기다리는 요청이 없습니다.</p>'}<button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button></section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
+ const one=d=>{const [title,body]=splitQuestion(d.question);
+  const options=d.options.map(o=>`<label class="dc-opt"><input type="radio" name="choice" value="${e(o)}"><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">${e(o)}${o===d.recommendation?'<span class="dc-rec">추천</span>':''}</span></label>`).join('');
+  return `<article class="dc-card" id="decision-${e(d.id)}"><div class="dc-top"><span class="dc-chip">요청 ${e(d.requestedBy)}</span><a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>${d.at?`<span class="dc-age">${e(time(d.at))}</span>`:''}</div><h3>${e(title)}</h3>${body?questionBody(body):''}<dl class="dc-fields"><dt>추천 이유</dt><dd class="dc-pre">${linked(d.reason)}</dd></dl>`+
+   `<form method="post" action="/decisions/answer" class="dc-form"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><fieldset class="dc-opts"><legend class="dw-sr">선택지</legend>${options}<label class="dc-opt dc-opt-free"><input type="radio" name="choice" value="" checked><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">선택지 없이 메모로 답변</span></label></fieldset><textarea name="text" rows="2" placeholder="메모 (선택) · 선택지 없이 보내려면 여기에 답을 적으세요"></textarea><div class="dc-actions"><button>답변 전달</button><small>누를 때만 보냅니다. 요청한 슈퍼감독에게 한 번 알립니다.</small></div></form></article>`;};
+ // 오늘(서울) 답한 수와 남은 수로 진행 막대를 그린다.
+ const today=new Date(Date.now()+9*3600_000).toISOString().slice(0,10);
+ const answeredToday=items.filter(d=>d.status==='answered'&&typeof d.answer?.at==='string'&&new Date(Date.parse(d.answer.at)+9*3600_000).toISOString().slice(0,10)===today).length;
+ const meter=`<div class="dc-meter"><span>대기 ${open.length}건 · 오늘 답함 ${answeredToday}건</span><div class="dc-bar" aria-hidden="true"><i style="width:${open.length+answeredToday?Math.round(answeredToday/(open.length+answeredToday)*100):0}%"></i></div></div>`;
+ return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${meter}<div class="dc-list">${open.map(one).join('')||'<p>결정을 기다리는 요청이 없습니다.</p>'}</div><button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button></section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
 }
 // 요약이 없는 편지(공식 보고 등)는 이미 읽은 본문 앞부분을 한 줄로 보인다(2026-09-24 UX 검토: 하나씩 펼쳐야 했음).
 const mailExcerpt=body=>{const text=String(body??'').replace(/\s+/g,' ').trim();return text.length>120?text.slice(0,120)+'…':text;};
