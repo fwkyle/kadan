@@ -20,8 +20,9 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   const ended=executions.filter(x=>x.card&&endedExecution(x.card));
   const active=executions.filter(x=>!x.card||!endedExecution(x.card));
   const round=Math.max(0,...w.executions.map(x=>x.round));
-  // 라운드를 병렬 실행 번호표로 쓴 업무(최대 라운드 > 실행 수)는 '999라운드' 대신 실행 수로 보인다(2026-09-24 실측: 117건·1~999).
-  const roundLabel=round>w.executions.length?`병렬 실행 ${w.executions.length}건`:`${round}라운드`;
+  // 라운드를 병렬 실행 번호표로 쓴 업무는 '999라운드' 대신 실행 수로 보인다(2026-09-24 실측: 117건·101~999를 번호로 씀).
+  // 정상 왕복이 100라운드에 이르는 일은 없다고 보고 100 이상만 번호표로 읽는다(앞 라운드 실행이 빠진 2라운드 업무는 그대로).
+  const roundLabel=round>=100?`병렬 실행 ${w.executions.length}건`:`${round}라운드`;
   const closed=['done','cancelled'].includes(w.status);
   const lastChild=Math.max(0,...executions.flatMap(x=>[Date.parse(x.card?.at)||0,...(x.card?.runs||[]).map(r=>Date.parse(r.at)||0)]));
   const explicit=w.turnOwner&&Number.isFinite(Date.parse(w.turnAt))&&Date.parse(w.turnAt)>=lastChild;

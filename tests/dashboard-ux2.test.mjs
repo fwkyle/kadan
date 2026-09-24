@@ -112,6 +112,8 @@ test('09-24 라운드를 병렬 번호표로 쓴 업무는 999라운드 대신 �
   const work=(rounds)=>({key:'r/w',workKey:'r/w',title:'업무',owner:'감독',status:'open',history:[],executions:rounds.map((round,i)=>({key:'r/e'+i,phase:'implementation',round}))});
   assert.match(workDashboardModel([work([1,2,999])],{cards:[]},[])[0].flowLabel,/^병렬 실행 3건 · /);
   assert.match(workDashboardModel([work([1,2,2])],{cards:[]},[])[0].flowLabel,/^2라운드 · /);
+  // 실행 1건이 2라운드인 정상 업무(앞 라운드 실행 미연결)는 그대로 2라운드.
+  assert.match(workDashboardModel([work([2])],{cards:[]},[])[0].flowLabel,/^2라운드 · /);
 });
 
 test('09-24 감시기와 대시보드 코드가 다르면 감시 재시작이 필요하다고 알린다', async () => {
