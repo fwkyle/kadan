@@ -24,7 +24,9 @@ for (const profileSource of ['start','roles']) test(`09-07 실제 CLI 인계: ${
   // 이미 시작한 legacy 선임에 정확한 role 매핑만 추가된 경우도 승계한다.
   fs.writeFileSync(path.join(home,'role-instructions.json'),JSON.stringify({version:1,roles:{'qa-감독':profileSource==='start'?'worker':'conductor','qa-감독-2':'reviewer'}}));
   assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role==='qa-감독').at(-1).roleProfile,profileSource==='start'?'conductor':undefined);
-  const s=JSON.parse(run(['handover','qa-감독','--manual','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',home,'--cmd','cat']));
+  // 후임 화면을 읽어 검사하므로 터미널 에코를 끈다. 에코와 cat 출력이 한 화면에 섞이면 한글 바이트가
+  // 쪼개져 문구가 깨진다(2026-09-24 macOS CI 실패, 격리 tmux 8/8 재현 → 에코 끄면 0/8).
+  const s=JSON.parse(run(['handover','qa-감독','--manual','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',home,'--cmd','stty -echo; exec cat']));
   assert.equal(s.runner,null);
   assert.equal(s.roleProfile,'conductor');
   assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role===s.to).at(-1).roleProfile,'conductor');
