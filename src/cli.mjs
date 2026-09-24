@@ -1516,8 +1516,24 @@ function cmdSend(argv, flags) {
     die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
   }
   console.log(
-    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${receipt.session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
+    `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${receipt.session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""} — 받는 쪽에 붙인 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
   );
+  // 보낸 쪽이 카단 역할이고 열린 카드가 있으면, 응답을 끝내기 직전 읽는 이 출력에 완료 표시 형식을 알린다.
+  // 질문(--expect-reply)은 작업 중이므로 알리지 않는다. 조회 실패는 전송 결과를 바꾸지 않고 안내만 생략한다.
+  const sender=process.env.KADAN_ROLE;
+  if(sender&&sessionName(sender)!==receipt.session&&flags['expect-reply']!==true){
+    let pending=[];
+    try{pending=pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).listSummaries()).project(readLedger()),sender);}catch{}
+    const hint=doneHintFor(pending);
+    if(hint)console.log(hint);
+  }
+}
+
+// 완료 통지를 보낸 작업자가 화면 DONE을 빠뜨리는 일이 잦다(2026-09-23 밤 작업자 10명 중 5명, 2026-09-24 kimi 검수자).
+// 완성된 마커는 쓰지 않는다 — 보낸 쪽 화면에 찍혀 입력 에코처럼 완료로 오판된다(잠긴 규칙 6).
+export function doneHintFor(pending) {
+  if (!pending?.length) return null;
+  return `이 작업을 끝냈다면 응답 마지막 줄에 완료 표시를 출력하라 — 형식 KADAN:DONE <카드id> <ok|failed>, 열린 카드 id: ${pending.join(", ")}`;
 }
 
 function cmdPlan(argv, flags = {}) {
