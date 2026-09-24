@@ -10,9 +10,26 @@ export function mailStatus(m){
  const responsibility=sender!==m.by||recipient!==m.role?`현재 책임: ${sender||'모름'} → ${recipient||'모름'}`:'';
  return [m.completion?'실행 결과 통지':'',m.notificationOnly===true||m.systemGenerated==='task-completion'?'기록용 · 추가 알림 없음':'',m.replyFinalRejected?'전달됨 · 답변종결 반영 안됨':'',read,reply,m.replyFinal?'최종 답장':m.replyTo?'답장':'',responsibility].filter(Boolean).join(' · ');
 }
-export function filterMail(letters,url){
+// 카드로 거르기: 카드 키(저장소/ID)나 ID가 편지의 작업·실행·완료·업무 번호와 맞으면 남긴다.
+export function mailMatchesCard(m,card){
+ if(!card)return true;
+ const id=card.split('/').at(-1),fields=[m.taskId,m.executionKey,m.completionTaskId,m.workKey].filter(x=>typeof x==='string');
+ return fields.some(x=>x===card||x===id||x.split('/').at(-1)===id&&(!card.includes('/')||x===card||!x.includes('/')));
+}
+// 글자로 거르기: 보낸이·받는이·번호·미리보기, 본문을 읽을 수 있으면 본문까지(대소문자 무시).
+export function mailMatchesText(m,q,bodyOf){
+ if(!q)return true;
+ const needle=q.toLowerCase();
+ const hay=[m.by,m.role,m.currentSender,m.currentRecipient,m.taskId,m.executionKey,m.completionTaskId,m.workKey,m.mailId,m.preview].filter(Boolean).join(' ').toLowerCase();
+ if(hay.includes(needle))return true;
+ let body=null;try{body=bodyOf?.(m)??null;}catch{body=null;}
+ return typeof body==='string'&&body.toLowerCase().includes(needle);
+}
+export function filterMail(letters,url,{bodyOf}={}){
  const role=url.searchParams.get('mailRole')||'',view=url.searchParams.get('mailView')||'all',reply=url.searchParams.get('mailReply')||'';
+ const card=(url.searchParams.get('mailCard')||'').trim(),q=(url.searchParams.get('mailQ')||'').trim();
  return letters.filter(m=>{
+  if(!mailMatchesCard(m,card)||!mailMatchesText(m,q,bodyOf))return false;
   const recipient=m.currentRecipient||m.role,sender=m.currentSender||m.by;
   if(role&&(view==='received'||view==='to-reply'?recipient!==role:view==='sent'||view==='waiting'?sender!==role:recipient!==role&&sender!==role))return false;
   if(['to-reply','waiting'].includes(view)&&m.replyStatus!=='waiting')return false;
