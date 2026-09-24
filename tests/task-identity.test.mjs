@@ -149,7 +149,7 @@ test('유일한 카드의 경보 ID/책임 지문/해소 기록은 주소를 바
 
 test('사용자 결정 답변은 무관한 인계를 따르지 않고 실제 카드의 인계만 따른다',()=>{
  const f=fixture(),notices=[],store=new DecisionStore(f.home,{notify:role=>notices.push(role)});
- const request=store.request('r/c',{question:'choose',options:['a','b'],recommendation:'a',reason:'needed'},'p-슈퍼감독');
+ const request=store.request('r/c',{question:'choose',options:['a','b'],recommendation:'a',reason:'needed /r/c/result.md'},'p-슈퍼감독');
  appendLedger({kind:'handover',phase:'transferred',from:'p-슈퍼감독',to:'wrong',taskIds:['unrelated'],t:'2099-01-01T00:00:00Z'},f.home);
  store.answer(request.id,{revision:1,choice:'a'},'사람');assert.deepEqual(notices,['p-슈퍼감독']);
 });

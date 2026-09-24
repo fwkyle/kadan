@@ -27,11 +27,11 @@ test('SQLite: 카드 revision/이력과 설명, 다른 단계 조치는 원자�
 test('SQLite: 결정 통지는 트랜잭션 밖이며 같은 답변은 다시 알리지 않는다',()=>{
  const home=setup();new CardStore(home).create({repo:'r',id:'a',repoPath:home,body:'# a'});let count=0;
  const d=new DecisionStore(home,{notify:()=>{count++;const db=openDatabase(home);try{db.exec('BEGIN IMMEDIATE; ROLLBACK')}finally{db.close()}}});
- const q=d.request('r/a',{question:'질문',options:['a','b'],recommendation:'a',reason:'이유'},'p-슈퍼감독');
+ const q=d.request('r/a',{question:'질문',options:['a','b'],recommendation:'a',reason:'이유 https://example.com/pr/1'},'p-슈퍼감독');
  const answer=d.answer(q.id,{revision:1,choice:'b'},'사람');assert.equal(answer.delivery.status,'sent');
  d.answer(q.id,{revision:1,choice:'b'},'사람');assert.equal(count,1);
  // 통지 직전 중단된 pending을 재호출해도 자동 재전송하지 않는다.
- const q2=d.request('r/a',{question:'질문2',options:['a','b'],recommendation:'a',reason:'이유'},'p-슈퍼감독');
+ const q2=d.request('r/a',{question:'질문2',options:['a','b'],recommendation:'a',reason:'이유 https://example.com/pr/1'},'p-슈퍼감독');
  d.locked(()=>d.write({...q2,revision:2,status:'answered',answer:{by:'사람',text:'a',choice:'a'},delivery:{status:'pending'}}));
  assert.equal(d.answer(q2.id,{revision:1,choice:'a'},'사람').delivery.status,'pending');assert.equal(count,1);
 });

@@ -55,7 +55,7 @@ test('구현 완료 뒤 새 검수 연결을 우선하고 검수 합격을 후�
 test('결정 요청만으로 진행 실행을 완료·보류로 바꾸지 않고 병렬 담당을 보존한다',()=>{
  const f=fixture(),other=f.add('implementation');f.send(other,'implementation');
  const c=f.cards.get(other);f.cards.update(other,{activity:'running'},{revision:c.revision,by:'implementation',noteKind:'progress',note:'진행'});
- const d=f.decisions.request(f.execution,{question:'범위 확대?',options:['유지','확대'],recommendation:'유지',reason:'범위 판단'},'슈퍼감독');
+ const d=f.decisions.request(f.execution,{question:'범위 확대?',options:['유지','확대'],recommendation:'유지',reason:'범위 판단\n- 확인 경로 없음: 순수 방침 질문'},'슈퍼감독');
  let view=f.detail();assert.equal(view.followup.state,'parallel');
  assert.equal(view.followup.executions.find(x=>x.key===other).state,'running');
  assert.match(view.followup.executions.find(x=>x.key===f.execution).next,/보류·대기 연결 확인/);
