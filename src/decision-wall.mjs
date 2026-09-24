@@ -1,4 +1,4 @@
-import {renderLedgerTable,ledgerView,ledgerViews} from './ledger-table.mjs';
+import {renderLedgerTable,ledgerView,ledgerViews,isWatchRoutine} from './ledger-table.mjs';
 import {mailboxLetters} from './mailbox.mjs';
 import {filterMail,mailStatus,mailViews,replyStates} from './dashboard-inbox.mjs';
 import {activityGuide} from './activity-guide.mjs';
@@ -10,7 +10,7 @@ const linked=value=>{const text=String(value??'');let html='',last=0;
  for(const m of text.matchAll(/https?:\/\/[^\s<>"')\]]+/g)){const url=m[0].replace(/[.,;:]+$/,'');html+=e(text.slice(last,m.index))+documentLink(url,url);last=m.index+url.length;}
  return html+e(text.slice(last));};
 // 첫 줄의 첫 물음표까지를 제목으로, 나머지는 줄바꿈을 살린 본문으로 보인다(2026-09-23 [kyle]: 한 문단 굵은 글씨라 읽기 어려움).
-const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
+export const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 // 방금 답한 결정의 전달 결과를 오른쪽 위 토스트로 알린다. 성공·확인 중은 15초 뒤 사라지고(마우스를 올리면 멈춤),
 // 알림 전달 실패는 닫을 때까지 남긴다. 지난 결정은 오른쪽 드로어에서 본다(2026-09-24 [kyle]).
@@ -40,18 +40,78 @@ export const decisionStyle=`.decision-toast{position:fixed;right:24px;top:72px;z
 .decision-drawer .dh-cancelled{background:#eef0ef;color:#5d6b63}
 .decision-drawer .dh-failed{background:#fbe9e9;color:#8a1f1f}
 .decision-drawer .dh-item details{margin-top:6px;font-size:13px}
-.decision-drawer .dh-empty{padding:18px;color:#5d6b63}`;
-// 드로어 열기·닫기. 닫기 버튼은 <form method="dialog">라 스크립트 없이 닫히고, Esc도 기본으로 닫힌다.
-export const decisionHistoryScript=`
- const decisionHistory=document.getElementById('decision-history');
- if(decisionHistory){
-  document.addEventListener('click',event=>{
-   if(event.target.closest&&event.target.closest('[data-decision-history-open]')){event.preventDefault();if(!decisionHistory.open)decisionHistory.showModal();return;}
-   if(event.target!==decisionHistory)return;
-   const r=decisionHistory.getBoundingClientRect();
-   if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)decisionHistory.close();
-  });
- }
+.decision-drawer .dh-empty{padding:18px;color:#5d6b63}
+.decision-send-error{margin:8px 0 0;color:#8a1f1f;font-size:13px;white-space:pre-wrap}
+.dc-meter{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:#5d6762;margin:4px 0 14px}
+.dc-bar{flex:1 1 200px;min-width:120px;height:6px;background:#eaede8;border-radius:3px;overflow:hidden}.dc-bar i{display:block;height:100%;background:#1f6f5c}
+.dc-list{display:flex;flex-direction:column;gap:12px}
+/* 결정 화면 공통 규칙(#decisions form·article, label 세로 쌓기)보다 우선하도록 #decisions를 붙인다. */
+#decisions .dc-card{background:#fff;border:1px solid #d9ddd8;border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.dc-card:has(.dc-opt:not(.dc-opt-free) input:checked){border-color:#1f6f5c}
+.dc-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.dc-chip{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:#dcefe8;color:#1f6f5c}
+.dc-key{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5d6762;word-break:break-all}
+.dc-age{font-size:12px;color:#5d6762;margin-left:auto}
+.dc-card h3{font-size:17px;font-weight:650;margin:0;line-height:1.45;text-wrap:balance}
+.dc-fields{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:14px;line-height:1.55}
+.dc-fields dt{color:#5d6762;white-space:nowrap}.dc-fields dd{margin:0;overflow-wrap:anywhere}
+.dc-pre{white-space:pre-wrap;margin:0;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
+#decisions .dc-form{display:flex;flex-direction:column;gap:8px;margin:2px 0 0;max-width:none}
+.dc-opts{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+#decisions .dc-opt{display:flex;flex-direction:row;gap:8px;align-items:flex-start;border:1px solid #d9ddd8;background:#fff;border-radius:8px;padding:9px 12px;cursor:pointer;font-size:14px;line-height:1.45}
+.dc-opt:hover{border-color:#1f6f5c}
+.dc-opt input{position:absolute;opacity:0;width:1px;height:1px}
+.dc-opt .dc-dot{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid #b9c1bb;margin-top:3px}
+.dc-opt:has(input:checked){background:#dcefe8;border-color:#1f6f5c}
+.dc-opt:has(input:checked) .dc-dot{border-color:#1f6f5c;background:#1f6f5c}
+.dc-opt:has(input:focus-visible){outline:3px solid #21684e;outline-offset:2px}
+.dc-opt-free{color:#5d6762;font-size:13px}
+.dc-rec{font-size:11px;font-weight:700;color:#1f6f5c;border:1px solid #1f6f5c;border-radius:3px;padding:0 5px;margin-left:6px;white-space:nowrap}
+.dc-form textarea{width:100%;min-height:44px;resize:vertical;font:inherit;font-size:14px}
+.dc-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.dc-actions small{color:#5d6762;font-size:12px}`;
+// 드로어 열기·닫기와 답변 전송. 닫기 버튼은 <form method="dialog">라 스크립트 없이 닫히고, Esc도 기본으로 닫힌다.
+// 답변은 페이지를 다시 불러오지 않고 보낸 뒤 결정 영역·드로어·상단 숫자만 바꿔 끼운다 — 스크롤이 맨 위로 튀지 않게
+// (2026-09-24 [kyle]). 스크립트가 없으면 폼이 그대로 제출되어 결정 영역으로 돌아간다.
+export const decisionScript=`
+ document.addEventListener('click',event=>{
+  const history=document.getElementById('decision-history');
+  if(!history)return;
+  if(event.target.closest&&event.target.closest('[data-decision-history-open]')){event.preventDefault();if(!history.open)history.showModal();return;}
+  if(event.target!==history)return;
+  const r=history.getBoundingClientRect();
+  if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)history.close();
+ });
+ document.addEventListener('submit',async event=>{
+  const form=event.target;
+  if(!form.matches||!form.matches('form[action="/decisions/answer"]'))return;
+  event.preventDefault();
+  if(form.dataset.sending)return;
+  form.dataset.sending='1';
+  const button=form.querySelector('button'),label=button?button.textContent:'';
+  form.querySelector('.decision-send-error')?.remove();
+  if(button){button.disabled=true;button.textContent='전송 중…';}
+  try{
+   const response=await fetch(form.action,{method:'POST',credentials:'same-origin',body:new URLSearchParams(new FormData(form))});
+   const html=await response.text();
+   if(!response.ok)throw new Error(html||'전달 실패. HTTP '+response.status);
+   const parsed=new DOMParser().parseFromString(html,'text/html'),section=parsed.getElementById('decisions');
+   if(!section)throw new Error('답변은 저장됐을 수 있지만 화면을 새로 읽지 못했습니다. 새로고침해서 확인하세요.');
+   // 이 화면은 창이 아니라 <main>이 스크롤된다. 둘 다 기억했다가 되돌린다.
+   const main=document.querySelector('main'),top=main?main.scrollTop:0,y=window.scrollY,x=window.scrollX;
+   document.getElementById('decisions').replaceWith(document.importNode(section,true));
+   const drawer=parsed.getElementById('decision-history'),oldDrawer=document.getElementById('decision-history');
+   if(drawer&&oldDrawer&&!oldDrawer.open)oldDrawer.replaceWith(document.importNode(drawer,true));
+   const count=parsed.querySelector('.dw-decision-count'),oldCount=document.querySelector('.dw-decision-count');
+   if(count&&oldCount)oldCount.replaceWith(document.importNode(count,true));
+   if(main)main.scrollTop=top;
+   window.scrollTo(x,y);
+  }catch(error){
+   delete form.dataset.sending;
+   if(button){button.disabled=false;button.textContent=label;}
+   const alert=document.createElement('p');alert.className='decision-send-error';alert.setAttribute('role','alert');alert.textContent=error.message;
+   (button||form).after(alert);
+  }
+ });
 `;
 const answeredNotice=d=>{
  if(!d||d.status==='open')return '';
@@ -62,6 +122,20 @@ const answeredNotice=d=>{
  const failed=d.delivery?.status==='failed';
  return `<div role="status" aria-live="polite" class="decision-toast${failed?' decision-toast-failed':''}"><span>${text}</span><button type="button" class="decision-toast-link" data-decision-history-open>내역 보기</button><button type="button" class="decision-toast-close" data-toast-close aria-label="알림 닫기">×</button></div>`;
 };
+// 질문 본문: 슈퍼감독이 쓰는 "- 이름: 내용" 줄은 이름표 표로, 나머지는 문단으로(2026-09-24 선택판 모양).
+// 주소로 시작하는 줄(- https://…)의 "https"를 이름표로 읽지 않는다.
+const fieldLine=/^\s*[-•*]\s*([^:：/\n]{1,24}?)\s*[:：]\s*(.+)$/;
+export function questionBody(body){
+ const out=[];let dl=[],para=[];
+ const flush=()=>{if(dl.length){out.push(`<dl class="dc-fields">${dl.join('')}</dl>`);dl=[];}if(para.length){out.push(`<p class="dc-pre">${linked(para.join('\n'))}</p>`);para=[];}};
+ for(const line of String(body??'').split('\n')){
+  const m=line.match(fieldLine);
+  if(m&&!/^https?$/i.test(m[1].trim())&&!m[2].startsWith('//')){if(para.length)flush();dl.push(`<dt>${e(m[1].trim())}</dt><dd>${linked(m[2])}</dd>`);}
+  else if(line.trim()){if(dl.length)flush();para.push(line);}
+ }
+ flush();
+ return out.join('');
+}
 // 지난 결정 한 건: 상태·시각·내 답변·알림 결과를 먼저, 질문 원문·추천·이유는 접어서.
 const historyItem=d=>{
  const [title,body]=splitQuestion(d.question);
@@ -84,9 +158,18 @@ const renderDecisionHistory=past=>{
 export function renderDecisions(items,error,token,answered=null){
  if(error)return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요</h2><p role="alert">모름: ${e(error)}</p></section>`;
  const open=items.filter(d=>d.status==='open');
- const one=d=>{const [title,body]=splitQuestion(d.question);return `<article id="decision-${e(d.id)}"><h3>${e(title)}</h3>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a> · 요청자 ${e(d.requestedBy)}</p><p><strong>추천: ${e(d.recommendation)}</strong></p><p style="white-space:pre-wrap">${linked(d.reason)}</p>${d.status==='open'?`<form method="post" action="/decisions/answer"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><label>선택 (선택 사항)<select name="choice"><option value="">직접 답변</option>${d.options.map(o=>`<option value="${e(o)}">${e(o)}</option>`).join('')}</select></label><label>결정 내용<textarea name="text" rows="3"></textarea></label><button>답변 전달</button><p class="muted">선택지만 골라도 답할 수 있습니다. 답변을 저장하고 요청한 슈퍼감독에게 한 번 알립니다.</p></form>`:d.status==='answered'?`<p><strong>답변:</strong> ${e(d.answer.text)}</p><p>통지: ${e(d.delivery?.status==='sent'?'전달됨':d.delivery?.status==='failed'?'실패 — 답변은 저장됨':'확인 필요 — 답변은 저장됨')}</p>`:`<p>취소: ${e(d.cancelReason)}</p>`}</article>`;};
- return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${open.map(one).join('<hr>')||'<p>결정을 기다리는 요청이 없습니다.</p>'}<button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button></section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
+ const one=d=>{const [title,body]=splitQuestion(d.question);
+  const options=d.options.map(o=>`<label class="dc-opt"><input type="radio" name="choice" value="${e(o)}"><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">${e(o)}${o===d.recommendation?'<span class="dc-rec">추천</span>':''}</span></label>`).join('');
+  return `<article class="dc-card" id="decision-${e(d.id)}"><div class="dc-top"><span class="dc-chip">요청 ${e(d.requestedBy)}</span><a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>${d.at?`<span class="dc-age">${e(time(d.at))}</span>`:''}</div><h3>${e(title)}</h3>${body?questionBody(body):''}<dl class="dc-fields"><dt>추천 이유</dt><dd class="dc-pre">${linked(d.reason)}</dd></dl>`+
+   `<form method="post" action="/decisions/answer" class="dc-form"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><fieldset class="dc-opts"><legend class="dw-sr">선택지</legend>${options}<label class="dc-opt dc-opt-free"><input type="radio" name="choice" value="" checked><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">선택지 없이 메모로 답변</span></label></fieldset><textarea name="text" rows="2" placeholder="메모 (선택) · 선택지 없이 보내려면 여기에 답을 적으세요"></textarea><div class="dc-actions"><button>답변 전달</button><small>누를 때만 보냅니다. 요청한 슈퍼감독에게 한 번 알립니다.</small></div></form></article>`;};
+ // 오늘(서울) 답한 수와 남은 수로 진행 막대를 그린다.
+ const today=new Date(Date.now()+9*3600_000).toISOString().slice(0,10);
+ const answeredToday=items.filter(d=>d.status==='answered'&&typeof d.answer?.at==='string'&&new Date(Date.parse(d.answer.at)+9*3600_000).toISOString().slice(0,10)===today).length;
+ const meter=`<div class="dc-meter"><span>대기 ${open.length}건 · 오늘 답함 ${answeredToday}건</span><div class="dc-bar" aria-hidden="true"><i style="width:${open.length+answeredToday?Math.round(answeredToday/(open.length+answeredToday)*100):0}%"></i></div></div>`;
+ return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${meter}<div class="dc-list">${open.map(one).join('')||'<p>결정을 기다리는 요청이 없습니다.</p>'}</div><button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button></section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
 }
+// 요약이 없는 편지(공식 보고 등)는 이미 읽은 본문 앞부분을 한 줄로 보인다(2026-09-24 UX 검토: 하나씩 펼쳐야 했음).
+const mailExcerpt=body=>{const text=String(body??'').replace(/\s+/g,' ').trim();return text.length>120?text.slice(0,120)+'…':text;};
 const recordTabs=active=>`<nav class="record-tabs" aria-label="시스템 기록 보기"><a href="#runs" ${active==='runs'?'aria-current="page"':''}>작업별 보기</a><a href="#ledger" ${active==='ledger'?'aria-current="page"':''}>사건순 보기</a></nav>`;
 export function renderActivity({center,entries=[],ledgerLines,error,home},url){
  const known=ledgerLines!==null&&!entries.some(e=>e?.broken);
@@ -99,13 +182,15 @@ export function renderActivity({center,entries=[],ledgerLines,error,home},url){
  const options=(values,current)=>values.map(([value,label])=>`<option value="${e(value)}"${value===current?' selected':''}>${e(label)}</option>`).join('');
  const all=filterMail(letters,url).slice().reverse();
  let ledgerRows=[],ledgerError=null;
- try{ledgerRows=ledgerView(entries,home,domain);if(ledgerRows.some(row=>row?.broken))throw new Error('원장 손상');}catch(error){ledgerError=error.message;}
+ const showRoutine=url.searchParams.get('ledgerRoutine')==='1';
+ let routineHidden=0;
+ try{ledgerRows=ledgerView(entries,home,domain);if(ledgerRows.some(row=>row?.broken))throw new Error('원장 손상');if(!showRoutine){const before=ledgerRows.length;ledgerRows=ledgerRows.filter(row=>!isWatchRoutine(row));routineHidden=before-ledgerRows.length;}}catch(error){ledgerError=error.message;}
  const hidden=excluded=>[...url.searchParams].filter(([key])=>!excluded.includes(key)).map(([key,value])=>`<input type="hidden" name="${e(key)}" value="${e(value)}">`).join('');
  const paginate=(items,param)=>{const n=Math.max(1,Math.min(Math.ceil(items.length/25)||1,Math.floor(Number(url.searchParams.get(param)))||1));const link=k=>{const q=new URLSearchParams(url.searchParams);q.set(param,k);return '?'+q+'#'+(param==='mailPage'?'mailbox':param==='runPage'?'runs':'ledger')};return{items:items.slice((n-1)*25,n*25),nav:`<nav>${n>1?`<a href="${e(link(n-1))}">이전</a>`:''}<span>${n} / ${Math.ceil(items.length/25)||1}</span>${n*25<items.length?`<a href="${e(link(n+1))}">다음</a>`:''}</nav>`}};
  const mails=paginate(all,'mailPage'),logs=paginate(ledgerRows.slice().reverse(),'logPage');
  const runs=[...(center?.cards??[]).flatMap(c=>c.runs.map(r=>({...r,card:c.key,board:c.board}))),...(center?.unregistered??[])];
  const executions=paginate(runs,'runPage');
- return `<section class="panel" id="mailbox" data-view="mailbox"><h2>우편함</h2>${activityGuide('mailbox')}<p>전체 역할 미확인 우편 · 미확인 ${unread}건</p><p class="muted">조회는 읽음 처리하지 않습니다. 읽음 확인과 중간 답장은 질문을 끝내지 않습니다. 지정 수신자의 최종 답장 또는 발신자의 취소로 답변 대기가 끝납니다.</p><p class="muted">저장·전달은 상대의 처리 완료나 터미널 깨움을 뜻하지 않습니다.</p><form class="toolbar" method="get" action="/#mailbox">${hidden(['mailRole','mailView','mailReply','mailUnread','hideWatch','mailPage'])}<label>기준 역할<input name="mailRole" value="${e(role)}" placeholder="비우면 모든 역할"></label><label>보기<select name="mailView">${options(mailViews,view)}</select></label><label>답변 상태<select name="mailReply">${options(replyStates,reply)}</select></label><label><input type="checkbox" name="mailUnread" value="1"${url.searchParams.get('mailUnread')==='1'?' checked':''}>읽음 미확인만</label><label><input type="checkbox" name="hideWatch" value="1"${hideWatch?' checked':''}>감시 우편 숨기기</label><button>우편 조회</button></form>${!role&&['to-reply','waiting'].includes(view)?'<p class="muted">기준 역할이 없어 모든 역할의 답변 대기 질문을 표시합니다.</p>':''}<div class="scroll"><table><thead><tr><th>시각</th><th>보낸이</th><th>받는이</th><th>내용</th></tr></thead><tbody>${mails.items.map(m=>{let body;try{body=home&&m.digest?readMailBody(m.digest,home):null}catch{body=null}return `<tr><td>${e(time(m.t))}</td><td>${e(m.by||'모름')}</td><td>${e(m.role||'모름')}</td><td>${e(m.completion?m.executionKey||m.completionTaskId||'':m.taskId||'')}<span class="state">${e(mailStatus(m))}${m.transport==='mailbox'?' · 저장됨':''}</span><small> ${e(({request:'작업 요청',decision:'결정',report:'공식 보고'})[m.mailKind]||m.mailKind||'')}</small><p>${e(m.preview||(m.transport==='mailbox'?'공식 우편 · 본문을 펼쳐 확인':'미리보기 없음'))}</p><details><summary>본문</summary><pre>${e(body??'본문 없음 또는 읽기 불가 — 원장 기록은 보존됨')}</pre></details></td></tr>`}).join('')||'<tr><td colspan="4">조건에 맞는 편지가 없습니다.</td></tr>'}</tbody></table></div>${mails.nav}</section>
+ return `<section class="panel" id="mailbox" data-view="mailbox"><h2>우편함</h2>${activityGuide('mailbox')}<p>전체 역할 미확인 우편 · 미확인 ${unread}건</p><p class="muted">조회는 읽음 처리하지 않습니다. 읽음 확인과 중간 답장은 질문을 끝내지 않습니다. 지정 수신자의 최종 답장 또는 발신자의 취소로 답변 대기가 끝납니다.</p><p class="muted">저장·전달은 상대의 처리 완료나 터미널 깨움을 뜻하지 않습니다.</p><form class="toolbar" method="get" action="/#mailbox">${hidden(['mailRole','mailView','mailReply','mailUnread','hideWatch','mailPage'])}<label>기준 역할<input name="mailRole" value="${e(role)}" placeholder="비우면 모든 역할"></label><label>보기<select name="mailView">${options(mailViews,view)}</select></label><label>답변 상태<select name="mailReply">${options(replyStates,reply)}</select></label><label><input type="checkbox" name="mailUnread" value="1"${url.searchParams.get('mailUnread')==='1'?' checked':''}>읽음 미확인만</label><label><input type="checkbox" name="hideWatch" value="1"${hideWatch?' checked':''}>감시 우편 숨기기</label><button>우편 조회</button></form>${!role&&['to-reply','waiting'].includes(view)?'<p class="muted">기준 역할이 없어 모든 역할의 답변 대기 질문을 표시합니다.</p>':''}<div class="scroll"><table><thead><tr><th>시각</th><th>보낸이</th><th>받는이</th><th>내용</th></tr></thead><tbody>${mails.items.map(m=>{let body;try{body=home&&m.digest?readMailBody(m.digest,home):null}catch{body=null}return `<tr><td>${e(time(m.t))}</td><td>${e(m.by||'모름')}</td><td>${e(m.role||'모름')}</td><td>${e(m.completion?m.executionKey||m.completionTaskId||'':m.taskId||'')}<span class="state">${e(mailStatus(m))}${m.transport==='mailbox'?' · 저장됨':''}</span><small> ${e(({request:'작업 요청',decision:'결정',report:'공식 보고'})[m.mailKind]||m.mailKind||'')}</small><p>${e(m.preview||mailExcerpt(body)||(m.transport==='mailbox'?'공식 우편 · 본문을 펼쳐 확인':'미리보기 없음'))}</p><details><summary>본문</summary><pre>${e(body??'본문 없음 또는 읽기 불가 — 원장 기록은 보존됨')}</pre></details></td></tr>`}).join('')||'<tr><td colspan="4">조건에 맞는 편지가 없습니다.</td></tr>'}</tbody></table></div>${mails.nav}</section>
  <section class="panel" id="runs" data-view="runs"><h2>시스템 기록</h2>${recordTabs('runs')}<h3>작업별 보기</h3>${activityGuide('runs')}<p class="muted">중앙 카드와 같은 계산을 사용합니다. 세션 생존만으로 진행이라고 표시하지 않습니다.</p><div class="scroll"><table><thead><tr><th>카드</th><th>역할 · 판</th><th>실행 기록</th></tr></thead><tbody>${executions.items.map(r=>`<tr><td>${r.card?`<a href="?card=${encodeURIComponent(r.card)}#detail">${e(r.card)}</a>`:e(r.taskId)}</td><td>${e(r.role)}<br>${e(r.board||'판 미지정')}</td><td>${e(({done:'완료 기록',failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료'})[r.state]||r.state)}<br>${e(time(r.at))}</td></tr>`).join('')}</tbody></table></div>${executions.nav}</section>
- <section class="panel lg-panel" id="ledger" data-view="ledger"><div class="lg-top"><h2>시스템 기록</h2>${recordTabs('ledger')}</div><div class="lg-heading"><h3>사건순 보기</h3><span>${ledgerError?'모름':ledgerRows.length+'건'} · 최신순</span><details class="lg-help"><summary>기록 안내</summary>${activityGuide('ledger')}</details></div><form class="toolbar" method="get" action="/#ledger">${hidden(['ledgerDomain','logPage'])}<label>원장 구분<select name="ledgerDomain">${options(ledgerViews,domain)}</select></label><button>기록 조회</button></form><p class="lg-caption">같은 저장소의 작업·우편·시스템 사건을 구분합니다. 과거 이력은 수정 없이 읽기용으로 분류하며 전체는 기존 호출자용 호환 조회입니다. 작업 발령은 우편 send와 작업 dispatch로 연결되어 원장별 건수를 더한 값과 전체 건수가 다를 수 있습니다.</p>${ledgerError?`<p role="alert">모름 — 원장을 읽을 수 없습니다: ${e(ledgerError)}</p>`:renderLedgerTable(logs.items)}<div class="lg-pagination">${logs.nav}</div></section>`;
+ <section class="panel lg-panel" id="ledger" data-view="ledger"><div class="lg-top"><h2>시스템 기록</h2>${recordTabs('ledger')}</div><div class="lg-heading"><h3>사건순 보기</h3><span>${ledgerError?'모름':ledgerRows.length+'건'} · 최신순${routineHidden?` · 감시 일상 기록 ${routineHidden}건 숨김`:''}</span><details class="lg-help"><summary>기록 안내</summary>${activityGuide('ledger')}</details></div><form class="toolbar" method="get" action="/#ledger">${hidden(['ledgerDomain','logPage','ledgerRoutine'])}<label>원장 구분<select name="ledgerDomain">${options(ledgerViews,domain)}</select></label><label><input type="checkbox" name="ledgerRoutine" value="1"${showRoutine?' checked':''}> 감시 일상 기록 보기</label><button>기록 조회</button></form><p class="lg-caption">같은 저장소의 작업·우편·시스템 사건을 구분합니다. 과거 이력은 수정 없이 읽기용으로 분류하며 전체는 기존 호출자용 호환 조회입니다. 작업 발령은 우편 send와 작업 dispatch로 연결되어 원장별 건수를 더한 값과 전체 건수가 다를 수 있습니다.</p>${ledgerError?`<p role="alert">모름 — 원장을 읽을 수 없습니다: ${e(ledgerError)}</p>`:renderLedgerTable(logs.items)}<div class="lg-pagination">${logs.nav}</div></section>`;
 }

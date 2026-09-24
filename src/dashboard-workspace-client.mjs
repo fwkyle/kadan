@@ -1,7 +1,7 @@
 import {renderExecutionHealth} from './dashboard-execution.mjs';
 import {installLedgerTable} from './ledger-table.mjs';
 import {workspaceColumnSets,workspaceColumns,workspaceColumnsFor,workspaceVisibleColumns,workspaceStatePresets,workspacePresetCounts,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
-import {workspaceWallHtml,workspaceMapHtml} from './dashboard-canvas.mjs';
+import {workspaceWallHtml,workspaceMapHtml,canvasScriptHelpers} from './dashboard-canvas.mjs';
 import {escapeHtml,stateText} from './dashboard-workspace-client-support.mjs';
 import {installWorkspaceDetail} from './dashboard-detail-client.mjs';
 import {installWorkspaceResize} from './dashboard-workspace-resize.mjs';
@@ -130,6 +130,8 @@ function workspaceClient() {
  function route(){
   const view=activeView();$$('[data-view]').forEach(el=>el.hidden=el.dataset.view!==view);
   $$('[data-route]').forEach(el=>{const selected=el.dataset.route===(view==='runs'?'ledger':view);if(selected)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');});
+  // 운영 메뉴 안 화면이면 접힌 '운영 메뉴' 글자에도 현재 위치를 표시한다(2026-09-24 UX 검토).
+  $('.dw-more')?.classList.toggle('dw-more-current',['sessions','runner-settings','work-create','create'].includes(view));
   $('#page-title').textContent=views[view]||'작업';
   if(location.hash.startsWith('#decision-')){const target=document.getElementById(decodeURIComponent(location.hash.slice(1)));target?.closest('details')?.setAttribute('open','');target?.scrollIntoView({block:'start'});}
   refreshStatus();
@@ -209,8 +211,6 @@ function workspaceClient() {
   const form=event.target;
   if(!form.matches('form[method="post"]'))return;
   const action=new URL(form.action,location.href).pathname;
-  // 결정 답변은 한 번만 보낸다. 입력칸은 잠그지 않는다(잠그면 값이 빠진다). 버튼만 잠그고 그대로 제출한다.
-  if(action==='/decisions/answer'){if(form.dataset.sending){event.preventDefault();return;}form.dataset.sending='1';const button=form.querySelector('button');if(button){button.disabled=true;button.textContent='전송 중…';}dirty=false;return;}
   if(action!=='/cards/update'&&!action.startsWith('/works/')){dirty=false;return;}
   event.preventDefault();if(saving)return;
   const fields=new FormData(form),creating=action==='/works/create',key=(creating?'work:':'')+String(fields.get('key')),revision=creating?0:Number(fields.get('revision'));
@@ -249,4 +249,4 @@ function workspaceClient() {
  requestAnimationFrame(restore);
  if(!refreshOff)setInterval(()=>{refreshStatus();if(!paused()){saveCurrent();location.reload();}},15000);
 }
-export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
+export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};${canvasScriptHelpers}const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;

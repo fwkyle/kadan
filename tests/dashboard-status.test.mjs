@@ -37,8 +37,9 @@ test('현황 화면은 지금 막힌 것·진행 업무·끝난 업무를 구분
 });
 
 test('카드 기록을 읽지 못하면 수치를 꾸미지 않고 모름으로 표시한다',()=>{
- const html=renderDashboardStatus({center:null,works:null});
+ const html=renderDashboardStatus({center:null,works:null,decisionError:'결정 기록 손상'});
  assert.match(html,/카드 기록을 읽지 못해 확인 필요 수를 계산하지 않았습니다/);
+ assert.match(html,/>모름<\/span><span class="st-lbl">내 결정 대기/);assert.match(html,/결정 기록을 읽지 못했습니다: 결정 기록 손상/);
  assert.match(html,/업무 기록을 읽을 수 없습니다/);
  assert.match(html,/>모름<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/>모름<\/span><span class="st-lbl">오래된 미정리/);
  assert.ok(!html.includes('0건'));
@@ -87,4 +88,20 @@ test('card create --supersedes는 새 카드를 만든 뒤 옛 카드를 대체�
  assert.throws(()=>cardCommand(['create','r/card-third'],{'repo-path':home,'body-file':path.join(home,'cards','r','card-old','card.md'),supersedes:'r/card-old'},{home,by:'감독'}),/이미 종료 상태/);
  assert.ok(!fs.existsSync(path.join(home,'cards','r','card-third')),'옛 카드 검사에 실패하면 새 카드를 만들지 않는다');
  assert.throws(()=>cardCommand(['create','r/card-x'],{'repo-path':home,'body-file':path.join(home,'cards','r','card-old','card.md'),supersedes:'nokey'},{home,by:'감독'}),/저장소\/옛카드/);
+});
+
+test('09-24 현황 첫머리는 사용자 차례 둘(내 결정 대기·지금 막힌 것)을 크게, 결정 목록을 막힌 것보다 먼저, 최근 24시간은 접어 아래로',()=>{
+ const html=renderDashboardStatus({center:centerWith([]),works:[],decisions:[
+  {id:'d-1',status:'open',question:'PR #1을 합칠까요?\n- 본문',requestedBy:'p-슈퍼감독',recommendation:'합류'},
+  {id:'d-2',status:'answered',question:'끝난 결정?',requestedBy:'p-슈퍼감독',recommendation:'x'}]});
+ const band=html.slice(html.indexOf('<div class="st-band"'),html.indexOf('</div>',html.indexOf('<div class="st-band"')));
+ assert.deepEqual([...band.matchAll(/st-lbl">([^<]+)/g)].map(m=>m[1]),['내 결정 대기','지금 막힌 것']);
+ assert.match(html,/<a class="st-mini" href="#status-executing"><span class="st-num">0<\/span><span class="st-lbl">작업 중/);
+ assert.match(html,/<li class="st-dec-row"><span class="st-dec-title">PR #1을 합칠까요\?<\/span><small>p-슈퍼감독 · 추천 합류<\/small><a class="st-dec-answer" href="#decision-d-1">답하기<\/a><\/li>/);
+ assert.doesNotMatch(html,/끝난 결정/);
+ const at=id=>html.indexOf(`id="${id}"`);
+ assert.ok(at('status-decisions')<at('status-attention'));
+ assert.ok(at('status-attention')<at('status-running'));
+ assert.ok(at('status-running')<at('status-recent'));
+ assert.match(html,/<details id="status-recent" class="st-fold st-recent-fold"><summary class="st-sec-head"><h2>최근 24시간에 일어난 일<\/h2>/);
 });

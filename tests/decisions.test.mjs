@@ -47,14 +47,18 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   // 성공은 15초 뒤 사라지고(마우스를 올리면 멈춤), 실패는 남는다. 토스트에서 바로 내역 드로어를 연다.
   assert.match(after,/animation:decision-toast-out \.3s ease 15s forwards/);
   assert.match(after,/\.decision-toast:hover\{animation-play-state:paused\}/);
-  assert.match(after,/\.decision-toast-failed\{background:#8a1f1f;animation:none\}/);
+  // 색은 다크 모드용 변수로 바뀌어 나간다(원래 색 #8a1f1f).
+  assert.match(after,/\.decision-toast-failed\{background:var\(--kc-8a1f1f\);animation:none\}/);
   assert.match(after,/class="decision-toast-link" data-decision-history-open>내역 보기</);
   assert.match(after,/<dialog id="decision-history" class="decision-drawer"/);
   assert.match(after,/document\.getElementById\('decision-history'\)/);
   // 토스트는 한 번만: 화면 스크립트가 주소에서 decisionAnswered를 지운다.
   assert.match(after,/searchParams\.delete\('decisionAnswered'\)/);
   assert.doesNotMatch(await(await fetch(base)).text(),/class="decision-toast/);
-  assert.match(after,/action==='\/decisions\/answer'\)\{if\(form\.dataset\.sending\)/);
+  // 답변은 페이지를 다시 불러오지 않고 보내며, 결정 영역·드로어·상단 숫자만 바꾸고 스크롤을 되돌린다.
+  assert.match(after,/form\.matches\('form\[action="\/decisions\/answer"\]'\)\)return;\n  event\.preventDefault\(\);\n  if\(form\.dataset\.sending\)return;/);
+  assert.match(after,/document\.getElementById\('decisions'\)\.replaceWith/);
+  assert.match(after,/if\(main\)main\.scrollTop=top;/);
   assert.equal(decisionCommand(['show',a.id],{},{home:f.home,by:'사람'}).answer.text,'분리합니다');assert.equal(f.sent.length,1);
   assert.match(await(await fetch(base)).text(),/내 결정 필요 0건/);
   const legacy=await(await fetch(base+'/?legacy=1')).text();assert.match(legacy,/참고용 옛 화면/);
@@ -93,7 +97,8 @@ test('결정 화면: 첫 질문만 제목으로, 나머지는 줄바꿈을 살�
     question:'PR #1을 합류할까요?\n- 노션: https://app.notion.com/p/abc\n- PR: https://github.com/o/r/pull/1.',
     reason:'<b>근거</b> https://x.y/z'}], null, 't');
   assert.match(html, /<h3>PR #1을 합류할까요\?<\/h3>/);
-  assert.match(html, /white-space:pre-line">- 노션: <a href="https:\/\/app\.notion\.com\/p\/abc" target="_blank" rel="noopener noreferrer">/);
+  // "- 이름: 내용" 줄은 이름표 표로 보인다(2026-09-24 선택판 모양).
+  assert.match(html, /<dl class="dc-fields"><dt>노션<\/dt><dd><a href="https:\/\/app\.notion\.com\/p\/abc" target="_blank" rel="noopener noreferrer">[^<]+<\/a><\/dd><dt>PR<\/dt>/);
   assert.match(html, /<a href="https:\/\/github\.com\/o\/r\/pull\/1" [^>]+>https:\/\/github\.com\/o\/r\/pull\/1<\/a>\./);
   assert.match(html, /&lt;b&gt;근거&lt;\/b&gt; <a href="https:\/\/x\.y\/z"/);
   assert.doesNotMatch(html, /<b>근거/);
@@ -157,4 +162,51 @@ test('09-24 지난 결정은 접힘 목록 대신 오른쪽 드로어 — 최근
   assert.match(drawer, /<details><summary>원문 보기<\/summary><p style="white-space:pre-line">- 본문<\/p>/);
   const empty = renderDecisions([{id:'open1', status:'open', revision:1, question:'열린 결정?', ...base}], null, 't');
   assert.match(empty, /이전 결정 0건 보기/);assert.match(empty, /<p class="dh-empty">지난 결정이 없습니다\.<\/p>/);
+});
+test('09-24 위 메뉴: 우편함을 올리고 답을 기다리는 질문 수를 배지로, 실행 모델은 운영 메뉴로(작업별 실행 중복 제거)',()=>{
+ const entries=[
+  {kind:'send',by:'작업자',role:'감독',mailId:'q1',digest:'dq1',expectReply:true,t:'2026-09-24T00:00:00Z'},
+  {kind:'send',by:'감독',role:'작업자',mailId:'m2',digest:'dm2',t:'2026-09-24T00:01:00Z'},
+ ];
+ const html=renderCenterWall({center:null,entries,ledgerLines:entries.length});
+ const top=html.slice(html.indexOf('<nav aria-label="주 메뉴">'),html.indexOf('</nav>',html.indexOf('<nav aria-label="주 메뉴">')));
+ assert.deepEqual([...top.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['status','dashboard','decisions','mailbox','ledger','operations-flow']);
+ assert.match(top,/<a href="#mailbox" data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 1건" title="답을 기다리는 질문">1<\/span><\/a>/);
+ const more=html.slice(html.indexOf('<nav aria-label="운영 메뉴">'),html.indexOf('</nav>',html.indexOf('<nav aria-label="운영 메뉴">')));
+ assert.deepEqual([...more.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['sessions','runner-settings','work-create','create']);
+ assert.match(html,/classList\.toggle\('dw-more-current',\['sessions','runner-settings','work-create','create'\]\.includes\(view\)\)/);
+ // 원장을 못 읽으면 0이 아니라 모름.
+ const unknown=renderCenterWall({center:null,entries:[],ledgerLines:null});
+ assert.match(unknown,/data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 모름"[^>]*>모름</);
+});
+test('09-24 요약 없는 공식 우편은 본문 앞 120자를 한 줄 미리보기로 보인다',()=>{
+ const f=fixture();fs.mkdirSync(path.join(f.home,'mail'),{recursive:true});
+ const long='완료 통지: card-a ok\n\n결과 파일 /x/result.md 에 판정과 근거를 적었다. '+'가'.repeat(200);
+ fs.writeFileSync(path.join(f.home,'mail/d1.txt'),long);
+ const html=renderCenterWall({center:null,home:f.home,entries:[{kind:'send',by:'작업자',role:'감독',digest:'d1',mailId:'m1',transport:'mailbox',mailKind:'report'}],ledgerLines:1});
+ const row=html.slice(html.indexOf('<td>작업자</td>'));
+ assert.match(row,/<p>완료 통지: card-a ok 결과 파일 \/x\/result\.md 에 판정과 근거를 적었다\. 가+…<\/p>/);
+ assert.doesNotMatch(row.slice(0,row.indexOf('</tr>')),/본문을 펼쳐 확인/);
+ const shown=row.match(/<p>([^<]*)…<\/p>/)[1];assert.equal(shown.length,120);
+});
+
+test('09-24 결정 카드: 선택지는 카드 모양 단추로 모두 보이고 추천 배지, 기본은 선택지 없음, 누를 때만 보내는 버튼과 진행 막대', async () => {
+  const {renderDecisions} = await import('../src/decision-wall.mjs');
+  const now = new Date().toISOString();
+  const html = renderDecisions([
+    {id:'d1', status:'open', revision:3, card:'r/c', requestedBy:'p-슈퍼감독', recommendation:'보류', options:['승인','보류'], question:'합칠까요?', reason:'이유', at:now},
+    {id:'d0', status:'answered', card:'r/c', requestedBy:'p-슈퍼감독', recommendation:'승인', options:['승인'], question:'예전?', reason:'r', answer:{by:'사람', text:'승인', choice:'승인', at:now}, delivery:{status:'sent', role:'p-슈퍼감독'}},
+  ], null, 'tok');
+  const card = html.slice(html.indexOf('<article class="dc-card" id="decision-d1">'), html.indexOf('</article>', html.indexOf('id="decision-d1"')));
+  assert.match(card, /<div class="dc-top"><span class="dc-chip">요청 p-슈퍼감독<\/span><a class="dc-key" href="\?card=r%2Fc#detail">r\/c<\/a>/);
+  assert.match(card, /<dl class="dc-fields"><dt>추천 이유<\/dt><dd class="dc-pre">이유<\/dd><\/dl>/);
+  const opts = [...card.matchAll(/<label class="dc-opt[^"]*"><input type="radio" name="choice" value="([^"]*)"( checked)?>/g)].map(m => [m[1], Boolean(m[2])]);
+  assert.deepEqual(opts, [['승인', false], ['보류', false], ['', true]]);
+  assert.match(card, /value="보류"><span class="dc-dot" aria-hidden="true"><\/span><span class="dc-opt-text">보류<span class="dc-rec">추천<\/span>/);
+  assert.doesNotMatch(card, /value="승인">[^]*?승인<span class="dc-rec">/);
+  assert.match(card, /<input type="hidden" name="revision" value="3">/);
+  assert.match(card, /<textarea name="text"[^>]*placeholder="메모 \(선택\)/);
+  assert.match(card, /<button>답변 전달<\/button><small>누를 때만 보냅니다/);
+  assert.doesNotMatch(card, /<select/);
+  assert.match(html, /<div class="dc-meter"><span>대기 1건 · 오늘 답함 1건<\/span><div class="dc-bar" aria-hidden="true"><i style="width:50%"><\/i>/);
 });

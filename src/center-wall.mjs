@@ -14,7 +14,9 @@ import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
 import {decisionCommand} from './decisions.mjs';
-import {renderDecisions,renderActivity,decisionStyle,decisionHistoryScript} from './decision-wall.mjs';
+import {mailboxLetters} from './mailbox-state.mjs';
+import {applyTheme,themeToggleHtml,themeToggleStyle,themeToggleScript} from './theme.mjs';
+import {renderDecisions,renderActivity,decisionStyle,decisionScript} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
 import { CardStore } from './card-store.mjs';
 import {appendLedger} from './ledger.mjs';
@@ -29,6 +31,9 @@ const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;
 export function renderCenterWall({center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,ledgerState,registeredWorks,runtime}, {token='',url=new URL('http://localhost')}={}) {
  if(centerError)center=null;
  const briefs=buildHumanBrief(center,home);
+ // 위 메뉴의 우편함 배지: 답을 기다리는 질문 수(모든 역할). 원장을 못 읽으면 0이 아니라 모름.
+ let waitingQuestions=null;
+ try{if(ledgerLines!==null)waitingQuestions=mailboxLetters(entries).filter(m=>m.replyStatus==='waiting').length;}catch{waitingQuestions=null;}
  let works=home?[]:null,workError=null;
  if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
@@ -43,7 +48,7 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
   const html=renderWorkspaceDetail(c,{brief:briefs?.get(c.key),center,decisions,decisionError,form:management(c),collectedAt,entries,home,url});
   return parent?html.replace('<header>',`<p class="bw-parent-link">업무 ${`<a data-card-key="${e(parent.key)}" href="?card=${encodeURIComponent(parent.key)}#detail">${e(parent.title)}</a>`} · 이 화면은 업무 안의 실행입니다.</p><header>`):html;
  };
- return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>카단 · 카드와 작업</title><style>
+ return applyTheme(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>카단 · 카드와 작업</title><style>
  *{box-sizing:border-box}body{margin:0}a{color:#176849;text-underline-offset:3px}a:hover{text-decoration-thickness:2px}input,select,textarea{border:1px solid #acb7af;border-radius:5px;padding:8px;background:white;color:#202824}textarea{resize:vertical;width:100%}:focus-visible{outline:3px solid #b07712;outline-offset:3px}header.top{background:#fff;border-bottom:1px solid #d8ded8;padding:22px 32px;display:flex;gap:16px;align-items:center;justify-content:space-between}h1{margin:0;font-size:23px}h2{font-size:18px;margin:0 0 15px}h3{font-size:15px;margin:22px 0 10px}p{margin:8px 0}.muted,small,dt{color:#5e6b62}nav{display:flex;gap:18px;flex-wrap:wrap}main{max-width:1480px;margin:24px auto;padding:0 28px}.stats{display:flex;gap:25px;flex-wrap:wrap;padding:16px 0 24px}.stats strong{font-size:24px;display:block}.panel,.card-detail{background:white;border:1px solid #d8ded8;border-radius:9px;padding:22px;margin-bottom:20px}.toolbar{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:18px}label{display:flex;flex-direction:column;gap:5px}input[name=q]{min-width:230px}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;text-align:left}th{color:#5e6b62;font-weight:500;font-size:12px;border-bottom:1px solid #bfc8c1;white-space:nowrap}th,td{padding:12px 10px;vertical-align:top}td{border-bottom:1px solid #e6eae5}td:first-child{min-width:220px}.state{display:inline-block;padding:2px 7px;border-radius:4px;background:#edf0ed;white-space:normal;overflow-wrap:anywhere;font-size:12px}.cols{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(340px,1fr);gap:22px}.cols>*{min-width:0}details{margin:12px 0}summary{cursor:pointer;color:#245c44}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:500px;overflow:auto;background:#f6f7f5;padding:16px;font-size:12px}dd{margin:0 0 9px;overflow-wrap:anywhere}.history{padding-left:22px}.history li{margin-bottom:18px}.history p{white-space:pre-wrap;overflow-wrap:anywhere}.history span{font-size:12px;color:#5e6b62}.edit{border-top:1px solid #d8ded8}.edit label{margin:10px 0}.error{background:#fff0d0;padding:18px;border:1px solid #b07712;border-radius:7px;margin-bottom:20px}.empty{padding:25px 0;color:#5e6b62}.row-title{font-weight:600;display:block}footer{color:#5e6b62;padding:12px 0 30px}@media(max-width:800px){header.top{padding:18px;display:block}nav{margin-top:12px}main{padding:0 14px;margin-top:14px}.panel,.card-detail{padding:16px}.cols{display:flex;flex-direction:column}.cols>.card-detail{order:-1}.toolbar label{flex:1;min-width:110px}.toolbar input{min-width:0;width:100%}.stats{gap:20px}.stats strong{font-size:21px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
 
  [hidden]{display:none!important}.sidebar{position:fixed;inset:0 auto 0 0;width:218px;background:#fff;border-right:1px solid #d8ded8;padding:28px 18px;display:flex;flex-direction:column;z-index:5}.brand{font-size:27px;font-weight:750;text-decoration:none;color:#1b3025}.sidebar p{color:#667469;margin:0 0 30px}.sidebar nav{display:flex;flex-direction:column;gap:5px}.sidebar nav a{padding:11px 13px;border-radius:7px;color:#526359;text-decoration:none}.sidebar nav a.active{background:#e5f1e9;color:#155d42;font-weight:650}.sidebar small{margin-top:auto;padding:18px 12px;color:#6c7a70}.badge{background:#236e50;color:#fff;border-radius:10px;padding:0 6px;font-size:11px}.app-shell{margin-left:218px}.app-shell main{max-width:1440px}.board-progress{padding:22px 0;border-bottom:1px solid #e2e7e3}.board-progress:last-child{border-bottom:0}.board-heading{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:12px}.board-heading strong{font-size:16px}.board-heading>span:last-child{margin-left:auto;font-size:12px}.progress-track{height:12px;border-radius:9px;overflow:hidden;display:flex;background:#edf0ed}.progress-track span{height:100%}.progress-legend{display:flex;gap:13px;flex-wrap:wrap;color:#5e6b62;font-size:12px;margin-top:9px}.progress-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}#decisions form{display:grid;gap:12px;max-width:720px}#decisions article{padding:12px 0 24px}@media(max-width:800px){.sidebar{width:138px;padding:20px 9px}.sidebar .brand{font-size:22px}.sidebar nav a{padding:10px 8px;font-size:13px}.sidebar small{padding:8px}.app-shell{margin-left:138px}.board-heading>span:last-child{margin-left:0}.board-heading .muted{overflow-wrap:anywhere}.stats{gap:16px}.app-shell main{padding:0 10px}.panel,.card-detail{padding:12px}header.top{padding:16px 12px}h1{font-size:21px}.toolbar label{min-width:100%;}.scroll{max-width:100%}}
@@ -54,13 +59,14 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
 ${statusPaletteCss}
 ${dashboardStyle}
  ${decisionStyle}
+ ${themeToggleStyle}
  ${dashboardStatusStyle}
 ${dashboardWorkspaceStyle}
  ${workDashboardStyle}
  ${uiFoundationStyle}
  ${runnerSettingsStyle}
  ${operationsFlowStyle}
- </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a><a href="#runner-settings" data-route="runner-settings">실행 모델</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
+ </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#mailbox" data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 ${waitingQuestions===null?'모름':waitingQuestions+'건'}" title="답을 기다리는 질문">${waitingQuestions===null?'모름':waitingQuestions}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav>${themeToggleHtml}<details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['runner-settings','실행 모델'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
  ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
@@ -77,8 +83,9 @@ ${dashboardWorkspaceStyle}
  </main><footer><span>실행 코드 ${e(runtime?.commit||'모름')}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''} · 시작 ${e(stamp(runtime?.startedAt))}</span><span>수집 ${e(stamp(collectedAt))}</span><span id="dw-refresh-status" role="status">갱신 상태 확인 중</span><button type="button" data-refresh>새로 읽기</button></footer><script>
  ${dashboardWorkspaceScript}
  ${operationsFlowScript}
- ${decisionHistoryScript}
- </script></div></body></html>`;
+ ${decisionScript}
+ ${themeToggleScript}
+ </script></div></body></html>`);
 }
 
 // 실행 끝·카드 열림: 읽기 전용. 닫기는 감독이 명령으로 한다(한 카드에 실행이 여러 번 붙을 수 있어서).
