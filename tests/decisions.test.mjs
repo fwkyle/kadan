@@ -177,3 +177,13 @@ test('09-24 위 메뉴: 우편함을 올리고 답을 기다리는 질문 수를
  const unknown=renderCenterWall({center:null,entries:[],ledgerLines:null});
  assert.match(unknown,/data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 모름"[^>]*>모름</);
 });
+test('09-24 요약 없는 공식 우편은 본문 앞 120자를 한 줄 미리보기로 보인다',()=>{
+ const f=fixture();fs.mkdirSync(path.join(f.home,'mail'),{recursive:true});
+ const long='완료 통지: card-a ok\n\n결과 파일 /x/result.md 에 판정과 근거를 적었다. '+'가'.repeat(200);
+ fs.writeFileSync(path.join(f.home,'mail/d1.txt'),long);
+ const html=renderCenterWall({center:null,home:f.home,entries:[{kind:'send',by:'작업자',role:'감독',digest:'d1',mailId:'m1',transport:'mailbox',mailKind:'report'}],ledgerLines:1});
+ const row=html.slice(html.indexOf('<td>작업자</td>'));
+ assert.match(row,/<p>완료 통지: card-a ok 결과 파일 \/x\/result\.md 에 판정과 근거를 적었다\. 가+…<\/p>/);
+ assert.doesNotMatch(row.slice(0,row.indexOf('</tr>')),/본문을 펼쳐 확인/);
+ const shown=row.match(/<p>([^<]*)…<\/p>/)[1];assert.equal(shown.length,120);
+});
