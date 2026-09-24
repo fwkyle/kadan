@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import {runWatch} from './helpers/watch-runner.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -209,4 +210,38 @@ test("guardedSend 오류는 delivery를 밝힌다(card-52)", () => {
     });
   }
   assert.throws(() => guardedSend({ ...options, taskId: "bad id" }), e => e.delivery === undefined);
+});
+
+test("09-24 원장 잠금 오류는 그 주기만 건너뛰고 계속, 3주기 연속이면 멈추고 보고한다", async () => {
+  assert.equal(runner.isDatabaseBusy(Object.assign(new Error("database is locked"), {errcode: 5})), true);
+  assert.equal(runner.isDatabaseBusy(new Error("다른 오류")), false);
+  const busy = () => Object.assign(new Error("database is locked"), {code: "ERR_SQLITE_ERROR", errcode: 5});
+  const run = async plan => {
+    const printed = [];let cycle = 0, calls = 0;
+    const stop = new Error("test cycle boundary");
+    const floor = floorWith(() => "healthy");floor.alive = () => true;
+    const result = await runWatch({
+      floor, readEntries: () => [entry], sendAlert: () => {},
+      intervalMs: 1000, stallN: 100, routes: {}, superRole: null,
+      // 첫 호출은 반복 전 초기화(lastCycleAt)라 건너뛴다. 이후 각 주기 첫머리에서 잠금 오류를 낸다.
+      now: () => { if (calls++ > 0 && plan[cycle] === "busy") throw busy(); return Date.parse(entry.t) + cycle * 1000; },
+      print: line => printed.push(line),
+      spawn: command => {
+        if (command === "sleep") { if (++cycle === plan.length) throw stop; }
+        if (command === "memory_pressure") return { status: 0, stdout: "System-wide memory free percentage: 80%" };
+        if (command === "sysctl") return { status: 0, stdout: "total = 0.00M used = 0.00M free = 0.00M" };
+        return { status: 0, stdout: "" };
+      },
+    }).then(() => "done", error => error === stop ? "stopped-by-test" : error);
+    return {result, printed, cycle};
+  };
+  // 잠금 오류 두 번(연속 아님 포함)은 건너뛰고 끝까지 돈다.
+  const ok = await run(["busy", "ok", "busy", "busy", "ok"]);
+  assert.equal(ok.result, "stopped-by-test");
+  assert.equal(ok.printed.filter(line => line.includes("원장 잠금으로 이번 주기를 건너뜀")).length, 3);
+  assert.ok(ok.printed.some(line => line.includes("(2/3)")));
+  // 세 번 연속이면 멈추고 그 오류를 올린다.
+  const stopped = await run(["busy", "busy", "busy", "ok"]);
+  assert.match(String(stopped.result?.message), /database is locked/);
+  assert.ok(stopped.printed.some(line => line.includes("(3/3)")));
 });

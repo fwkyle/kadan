@@ -1,5 +1,5 @@
 import {taskIdentity} from './task-identity.mjs';
-import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams} from './storage.mjs';
+import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams,prepareOutsideLock} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -92,10 +92,14 @@ export class CardStore {
       return this.get(key);
     });
   }
+  // 담당 역할 계산(원장 전체 + 카드 목록)은 쓰기 잠금 밖에서 먼저 한다. 키·ID만 쓰므로 본문 없는 요약 목록이면 된다
+  // (2026-09-24 실측: 잠금 안에서 모든 카드 본문까지 읽어 카드 기록이 잠금을 0.7~1초 쥐었다).
+  #roleOf(key){return prepareOutsideLock(this.home,()=>effectiveCardRole(this.get(key),readLedger(this.home),this.listSummaries()));}
   update(key,patch,{revision,by='사람',noteKind='decision',note,manual=false}={}) {
+    const role=this.#roleOf(key);
     return this.locked(()=>{
       const current=this.get(key);
-      current.role=effectiveCardRole(current,readLedger(this.home),this.list());
+      current.role=role();
       if(Number(revision)!==current.revision)throw new Error('카드가 변경됨: 새로 읽고 다시 저장');
       if(!note?.trim())throw new Error('변경 이유/질문/답변을 적어야 한다');
       if(!['decision','question','answer','progress'].includes(noteKind))throw new Error('잘못된 기록 종류');
@@ -153,9 +157,10 @@ export class CardStore {
   // Why: 감독이 등록 뒤 원본 카드 파일을 고쳤을 때(예: '읽고 시작할 것' 보완) 아직 발령 전(draft·담당 없음)이면
   // 중앙 사본만 다시 읽는다. link는 원본을 심볼릭 링크로 바꿔 문서 저장소를 더럽히므로 여기서는 쓰지 않는다.
   refresh(key,{by='사람'}={}) {
+    const role=this.#roleOf(key);
     return this.locked(()=>{
       const card=this.get(key),source=card.sourcePath;
-      card.role=effectiveCardRole(card,readLedger(this.home),this.list());
+      card.role=role();
       if(!source)throw new Error('다시 읽을 원본 경로 없음');
       if(card.status!=='draft'||card.role)throw new Error(`발령 전 초안만 다시 읽을 수 있다: ${card.status}, 담당 ${card.role??'없음'}`);
       const text=fs.readFileSync(source,'utf8');

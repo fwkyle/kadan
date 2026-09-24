@@ -1,4 +1,5 @@
 // 작업자와 검수자가 같은 계열이면 경고·원장만 남기고 send는 막지 않는다.
+import './helpers/isolated-home.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import {

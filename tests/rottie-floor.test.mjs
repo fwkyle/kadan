@@ -1,4 +1,5 @@
 // 로티 바닥 회귀 — 2026-08-30 card-18 사고 조건을 가짜 바닥으로 잠근다.
+import './helpers/isolated-home.mjs';
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

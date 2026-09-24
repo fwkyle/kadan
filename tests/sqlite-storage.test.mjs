@@ -69,19 +69,19 @@ test('SQLite: 프로세스가 트랜잭션 도중 죽으면 상태·이력이 �
  const result=await child(`import {transaction} from './src/storage.mjs';import {CardStore} from './src/card-store.mjs';transaction(process.argv[1],()=>{new CardStore(process.argv[1]).update('r/a',{status:'hold'},{revision:1,note:'강제 중단'});process.kill(process.pid,'SIGKILL')})`,[home]);
  assert.notEqual(result.status,0);assert.equal(new CardStore(home).get('r/a').revision,1);assert.equal(verifyStorage(home).integrity,'ok');
 });
-test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:35000},async()=>{
+test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:60000},async()=>{
  const home=setup(),db=openDatabase(home);db.exec('BEGIN IMMEDIATE');
  let result;
  try{
-  assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout,5000);
+  assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout,15000);
   // Measure inside the child after imports, excluding process startup and module loading.
-  result=await child(`import {appendLedger} from './src/ledger.mjs';const start=performance.now();try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){console.log(JSON.stringify({message:e.message,elapsedMs:performance.now()-start}));process.exitCode=2}`,[home],{timeout:30000,killSignal:'SIGKILL'});
+  result=await child(`import {appendLedger} from './src/ledger.mjs';const start=performance.now();try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){console.log(JSON.stringify({message:e.message,elapsedMs:performance.now()-start}));process.exitCode=2}`,[home],{timeout:45000,killSignal:'SIGKILL'});
  }finally{db.exec('ROLLBACK');db.close()}
  assert.equal(result.status,2,result.stderr);
  const {message,elapsedMs}=JSON.parse(result.stdout);
  assert.match(message,/locked|busy/i);
- assert.ok(elapsedMs>=4500,`잠금 대기 없이 너무 빨리 실패함: ${elapsedMs}ms`);
- assert.ok(elapsedMs<15000,`잠금 작업이 제한 시간을 넘김: ${elapsedMs}ms`);
+ assert.ok(elapsedMs>=14000,`잠금 대기 없이 너무 빨리 실패함: ${elapsedMs}ms`);
+ assert.ok(elapsedMs<30000,`잠금 작업이 제한 시간을 넘김: ${elapsedMs}ms`);
  assert.equal(readLedger(home).length,0);
 });
 test('SQLite: 전환 중 send는 실제 터미널 전송 전에 거절한다',async()=>{
@@ -117,4 +117,16 @@ test('SQLite: 비서 우편과 읽음도 같은 원장에 저장되고 감시 �
  const {SecretaryMailbox}=await import('../src/secretary-mailbox.mjs');const {buildTree}=await import('../src/cli.mjs');
  const h=setup(),m=new SecretaryMailbox(h),r=m.send({by:'p-슈퍼감독',message:'전환 준비 완료'});
  assert.equal(m.list().length,1);m.acknowledge(r.mailId,'비서');assert.equal(m.list().length,0);assert.equal(readLedger(h).length,2);assert.equal(buildTree(readLedger(h)).length,0);assert.equal(verifyStorage(h).integrity,'ok');
+});
+
+test('09-24 잠금 밖 미리 계산: 그 사이 바뀐 게 없으면 한 번만, 사건이 추가됐으면 잠금 안에서 다시 계산한다',async()=>{
+ const {prepareOutsideLock,preparedTransaction,storageVersion,appendStream}=await import('../src/storage.mjs');
+ const home=setup();let calls=0;const compute=()=>++calls;
+ const v0=storageVersion(home);assert.equal(typeof v0,'number');
+ assert.equal(preparedTransaction(home,compute,value=>value),1);assert.equal(calls,1);
+ calls=0;const current=prepareOutsideLock(home,compute);appendStream(home,'probe/events.jsonl',{kind:'probe'});
+ assert.ok(storageVersion(home)>v0);
+ assert.equal(current(),2);assert.equal(calls,2);
+ // 미리 계산이 실패하면 잠금 안에서 다시 계산한다(예전과 같은 결과·오류).
+ let first=true;assert.equal(preparedTransaction(home,()=>{if(first){first=false;throw new Error('일시 실패');}return 'ok';},value=>value),'ok');
 });
