@@ -140,6 +140,8 @@ function workspaceClient() {
   if(!state.opened)state.expanded=false;
   // 새로 읽기 표시는 한 번만 쓴다. 주소를 깨끗이 해야 다음 자동 갱신이 캐시를 쓴다.
   if(location.search.includes('fresh=')){const clean=new URL(location.href);clean.searchParams.delete('fresh');try{history.replaceState(history.state,'',clean);}catch{}}
+  // 결정 답변 토스트도 한 번만 보인다. 새로 읽기·자동 갱신에서 다시 뜨지 않게 주소에서 뺀다.
+  if(location.search.includes('decisionAnswered=')){const clean=new URL(location.href);clean.searchParams.delete('decisionAnswered');try{history.replaceState(history.state,'',clean);}catch{}}
  }
  async function restoreHistory(){
   const generation=++navigation;
@@ -202,6 +204,7 @@ function workspaceClient() {
  $('#dw-state').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();$('#dw-state').open=false;$('#dw-state summary').focus({preventScroll:true});}});
  document.addEventListener('input',e=>{detailView.input(e);if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
  document.addEventListener('change',e=>{if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
+ document.addEventListener('click',event=>{const close=event.target.closest('[data-toast-close]');if(close)close.closest('.decision-toast')?.remove();});
  document.addEventListener('submit',async event=>{
   const form=event.target;
   if(!form.matches('form[method="post"]'))return;

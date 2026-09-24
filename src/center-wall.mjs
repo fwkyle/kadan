@@ -14,7 +14,7 @@ import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
 import {decisionCommand} from './decisions.mjs';
-import {renderDecisions,renderActivity} from './decision-wall.mjs';
+import {renderDecisions,renderActivity,decisionStyle} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
 import { CardStore } from './card-store.mjs';
 import {appendLedger} from './ledger.mjs';
@@ -53,6 +53,7 @@ export function renderCenterWall({center,centerError,collectedAt,error,resources
  ${watchOverviewStyle}
 ${statusPaletteCss}
 ${dashboardStyle}
+ ${decisionStyle}
  ${dashboardStatusStyle}
 ${dashboardWorkspaceStyle}
  ${workDashboardStyle}
