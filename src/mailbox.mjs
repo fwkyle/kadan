@@ -3,7 +3,7 @@ import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {isUserActor} from './actors.mjs';
 import * as ledger from './ledger.mjs';
-import {assertWritable,storageTransaction} from './storage.mjs';
+import {assertWritable,preparedTransaction} from './storage.mjs';
 import {resolveWorkMail} from './work-mail.mjs';
 import {composeRoleInstructions,readRoleInstructionsConfig} from './role-instructions.mjs';
 import {composeMailInstructions} from './mail-instructions.mjs';
@@ -22,16 +22,24 @@ export class Mailbox {
   if(typeof role!=='string'||!role.trim()||/\s/.test(role))throw new Error('올바른 수신 역할 필요');
   this.home=home;this.role=role;
  }
- send(options){return storageTransaction(this.home,()=>this.#store(options));}
- #store({by,message,category='report',replyTo,workKey,executionKey,expectReply=false,replyFinal=false}){
+ send(options){
+  const {by,message,category='report',replyTo,workKey,executionKey,expectReply=false,replyFinal=false}=options;
   assertWritable(this.home);
   if(!categories.has(category))throw new Error('공식 우편 종류는 request/decision/report만 지원합니다');
   if(typeof by!=='string'||!by.trim())throw new Error('보낸 역할 필요');
   if(typeof message!=='string'||!message.trim())throw new Error('우편 내용 필요');
   if(Buffer.byteLength(message)>64*1024)throw new Error('우편은 64KiB 이내로 작성하세요');
-  const entries=readMailboxEntries(this.home);mailboxLetters(entries,this.role);
-  const context=resolveWorkMail(this.home,{workKey,executionKey,replyTo,by,role:this.role,expectReply,replyFinal});
-  readRoleInstructionsConfig(this.home);
+  // 원장 읽기·연결 확인은 잠금 밖에서 먼저 하고, 잠금 안에서는 기록만 한다.
+  const prepare=()=>{
+   const entries=readMailboxEntries(this.home);mailboxLetters(entries,this.role);
+   const context=resolveWorkMail(this.home,{workKey,executionKey,replyTo,by,role:this.role,expectReply,replyFinal});
+   readRoleInstructionsConfig(this.home);
+   return context;
+  };
+  return preparedTransaction(this.home,prepare,context=>this.#store(options,context));
+ }
+ #store({by,message,category='report'},context){
+  assertWritable(this.home);
   const digest=createHash('sha256').update(message).digest('hex'),mailId=randomUUID(),dir=path.join(this.home,'mail');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const file=path.join(dir,`${digest}.txt`);
@@ -57,17 +65,25 @@ export class Mailbox {
   return {...letter,body,receiverInstructions,receiverInstructionsProfile:receiver.metadata.profile,
    receiverInstructionsDigest:createHash('sha256').update(receiverInstructions).digest('hex'),roleInstructions:receiver.metadata};
  }
- acknowledge(id,by){return storageTransaction(this.home,()=>this.#recordRead(id,by));}
- #recordRead(id,by){
+ // 읽음·취소에는 편지 상태만 필요하다. 역할 안내문 조립(read)은 하지 않고, 원장은 한 번만 읽는다.
+ #letter(id){
+  if(!idPattern.test(id))throw new Error('올바른 우편 ID 필요');
+  const letter=mailboxLetters(readMailboxEntries(this.home)).find(e=>e.mailId===id&&(e.currentRecipient===this.role||e.currentSender===this.role));
+  if(!letter)throw new Error(`${this.role} 우편 없음`);
+  if(ledger.readMailBody(letter.digest,this.home)===null)throw new Error('본문 없음 또는 읽기 실패: 읽음 처리하지 않습니다');
+  return letter;
+ }
+ acknowledge(id,by){
   if(!canAct(by,this.role))throw new Error(`${this.role} 또는 사용자만 읽음 기록 가능`);
-  const letter=this.read(id);
+  return preparedTransaction(this.home,()=>this.#letter(id),letter=>this.#recordRead(id,by,letter));
+ }
+ #recordRead(id,by,letter){
   if(letter.currentRecipient!==this.role)throw new Error('수신한 우편만 읽음 기록 가능');
   if(!letter.read)ledger.appendLedger({kind:'mail-read',role:this.role,transport:letter.transport,mailId:id,by},this.home);
   return {mailId:id,read:true};
  }
- cancel(id,by){return storageTransaction(this.home,()=>this.#recordCancel(id,by));}
- #recordCancel(id,by){
-  const letter=this.read(id);
+ cancel(id,by){return preparedTransaction(this.home,()=>this.#letter(id),letter=>this.#recordCancel(id,by,letter));}
+ #recordCancel(id,by,letter){
   if(letter.currentSender!==this.role||!canAct(by,letter.currentSender))throw new Error('보낸 역할 또는 사용자만 답변 대기 취소 가능');
   if(letter.expectReply!==true)throw new Error('답변을 요청한 우편이 아닙니다');
   if(letter.replyStatus==='answered')throw new Error('이미 최종 답변이 도착한 우편입니다');
