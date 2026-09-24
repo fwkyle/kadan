@@ -159,6 +159,7 @@ function workspaceClient() {
  function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'운영 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());}
  document.addEventListener('click',event=>{
   lastActivity=Date.now();
+  const toastClose=event.target.closest?.('[data-toast-close]');if(toastClose){toastClose.closest('.decision-toast')?.remove();return;}
   if(detailView.click(event))return;
   const link=event.target.closest('a');
   const href=link?.getAttribute('href')?.trim()||'';
@@ -204,7 +205,6 @@ function workspaceClient() {
  $('#dw-state').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();$('#dw-state').open=false;$('#dw-state summary').focus({preventScroll:true});}});
  document.addEventListener('input',e=>{detailView.input(e);if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
  document.addEventListener('change',e=>{if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
- document.addEventListener('click',event=>{const close=event.target.closest('[data-toast-close]');if(close)close.closest('.decision-toast')?.remove();});
  document.addEventListener('submit',async event=>{
   const form=event.target;
   if(!form.matches('form[method="post"]'))return;
