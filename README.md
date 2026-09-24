@@ -67,6 +67,7 @@ Data lives in `~/.kadan` (override with `KADAN_HOME`). The ledger is append-only
 
 ## More
 
+- `docs/commands.md` — every `kadan` command with its main options (Korean).
 - `kadan watch` — background monitor that reports stalls, disconnects and DONE candidates to a supervisor role.
 - `kadan wall` / `kadan dashboard` — local HTML views of boards, cards, ledger and mail.
 - `kadan card` / `kadan work` — central card store and result-oriented work items.
