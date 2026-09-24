@@ -21,7 +21,7 @@ function workspaceClient() {
  const resizing=installWorkspaceResize(()=>{lastActivity=Date.now();},data.columns);
  const columns=installWorkspaceColumns(()=>{lastActivity=Date.now();},()=>resizing.resetColumns());
  // 옛 관제 요약(#overview)·판 현황(#boards)은 현황 안의 접힘 구역이 됐다(2026-09-12). 옛 주소는 현황으로 보낸다.
- const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'운영 흐름','runner-settings':'실행 모델',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
+ const views={status:'현황',dashboard:'작업',cards:'작업',detail:'작업','card-list':'작업',decisions:'내 결정',overview:'현황','operations-flow':'업무 흐름','runner-settings':'실행 모델',boards:'현황',sessions:'담당자 세션',mailbox:'우편함',runs:'기록',ledger:'기록',create:'별도 실행 등록','work-create':'새 업무 만들기'};
  const activeView=()=>{const hash=location.hash.slice(1);return hash.startsWith('decision-')?'decisions':views[hash]?(hash==='cards'||hash==='detail'||hash==='card-list'?'dashboard':hash==='overview'||hash==='boards'?'status':hash):'status';};
  const filtered=()=>sortWorkspaceRows(filterWorkspaceRows(rows,state),state.sort,state.dir);
  function remember(){const el=$('#dw-scroll');if(el.getClientRects().length)scroll[state.layout]={top:el.scrollTop,left:el.scrollLeft};}
@@ -129,7 +129,8 @@ function workspaceClient() {
  }
  function route(){
   const view=activeView();$$('[data-view]').forEach(el=>el.hidden=el.dataset.view!==view);
-  $$('[data-route]').forEach(el=>{const selected=el.dataset.route===(view==='runs'?'ledger':view);if(selected)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');});
+  // 기록의 작업별 보기는 '기록', 업무 흐름은 작업 화면의 보기 하나라 '작업'에 위치를 표시한다.
+  $$('[data-route]').forEach(el=>{const selected=el.dataset.route===(view==='runs'?'ledger':view==='operations-flow'?'dashboard':view);if(selected)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');});
   // 운영 메뉴 안 화면이면 접힌 '운영 메뉴' 글자에도 현재 위치를 표시한다(2026-09-24 UX 검토).
   $('.dw-more')?.classList.toggle('dw-more-current',['sessions','runner-settings','work-create','create'].includes(view));
   $('#page-title').textContent=views[view]||'작업';
@@ -158,7 +159,7 @@ function workspaceClient() {
  }
  const refreshOff=new URLSearchParams(location.search).get('refresh')==='0';
  function paused(){return activeView()==='operations-flow'||resizing.active()||columns.active()||ledgerView.paused()||dirty||pending||saving||document.hidden||Boolean(document.querySelector('details[open]'))||state.opened||Boolean(document.querySelector('.dw-management[open]'))||Boolean(document.activeElement?.matches('input,textarea,select,[contenteditable="true"]'))||Boolean(window.getSelection()?.toString())||activeView()==='decisions'||(activeView()==='dashboard'&&state.layout==='split'&&Boolean(loadedKey))||$('main').scrollTop>0||$('#dw-detail').scrollTop>0||$('#dw-scroll').scrollTop>0||$('#dw-scroll').scrollLeft>0||Date.now()-lastActivity<15000;}
- function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'운영 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());}
+ function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'업무 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());}
  document.addEventListener('click',event=>{
   lastActivity=Date.now();
   const toastClose=event.target.closest?.('[data-toast-close]');if(toastClose){toastClose.closest('.decision-toast')?.remove();return;}

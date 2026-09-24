@@ -140,7 +140,9 @@ test('전용 GET은 전체 관제 수집·쓰기·통지를 호출하지 않으�
   assert.equal(snapshots,0);assert.equal(notifications,0);assert.deepEqual(streams.map(name=>readStream(f.home,name,{optional:true})),before);
  }finally{await new Promise(resolve=>server.close(resolve));}
  const html=renderCenterWall({center:{cards:[],roles:[],boards:[],unregistered:[]},entries:[],collectedAt:new Date()});
- for(const route of ['dashboard','decisions','ledger','operations-flow'])assert.ok(html.includes(`data-route="${route}"`));
+ for(const route of ['dashboard','decisions','ledger'])assert.ok(html.includes(`data-route="${route}"`));
+ // 업무 흐름은 위 메뉴가 아니라 작업 화면의 보기 전환에서 연다(2026-09-24 UX 3차).
+ assert.ok(!html.includes('data-route="operations-flow"'));assert.match(html,/<a class="dw-layout-link" href="#operations-flow"[^>]*>업무 흐름<\/a>/);
  for(const view of ['status','dashboard','decisions','ledger','sessions','mailbox','runs','operations-flow'])assert.ok(html.includes(`data-view="${view}"`));
  const flow=html.match(/<section id="operations-flow"[\s\S]*?<\/section>/)[0];assert.ok(!flow.includes('<form'));assert.match(flow,/ hidden/);
 });

@@ -170,7 +170,7 @@ test('09-24 위 메뉴: 우편함을 올리고 답을 기다리는 질문 수를
  ];
  const html=renderCenterWall({center:null,entries,ledgerLines:entries.length});
  const top=html.slice(html.indexOf('<nav aria-label="주 메뉴">'),html.indexOf('</nav>',html.indexOf('<nav aria-label="주 메뉴">')));
- assert.deepEqual([...top.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['status','dashboard','decisions','mailbox','ledger','operations-flow']);
+ assert.deepEqual([...top.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['status','dashboard','decisions','mailbox','ledger']);
  assert.match(top,/<a href="#mailbox" data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 1건" title="답을 기다리는 질문">1<\/span><\/a>/);
  const more=html.slice(html.indexOf('<nav aria-label="운영 메뉴">'),html.indexOf('</nav>',html.indexOf('<nav aria-label="운영 메뉴">')));
  assert.deepEqual([...more.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['sessions','runner-settings','work-create','create']);
