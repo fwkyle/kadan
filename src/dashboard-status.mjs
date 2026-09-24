@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {escapeHtml as e} from './card-content.mjs';
 import {executionHealth,renderExecutionHealth,executionBucket,STALE_MS,RECENT_MS} from './dashboard-execution.mjs';
 import {renderWatchVerdict} from './watch-overview-wall.mjs';
@@ -8,8 +9,23 @@ import {splitQuestion} from './decision-wall.mjs';
 const stamp=x=>Number.isFinite(Date.parse(x))?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'모름';
 const ago=(x,now)=>{const t=Date.parse(x);if(!Number.isFinite(t))return '시각 모름';const m=Math.max(0,Math.round((now-t)/60_000));return m<60?m+'분 전':m<48*60?Math.floor(m/60)+'시간 전':Math.floor(m/1440)+'일 전';};
 const link=c=>`<a data-card-key="${e(c.key)}" href="?card=${encodeURIComponent(c.key)}#detail">${e(c.title||c.id)}</a>`;
+// 막힌 실행의 이유 한 줄: 결과 파일의 '한 줄 요약' → '원인' → 실패·오류 말이 든 첫 줄, 없으면 카드 마지막 메모.
+// 2026-09-24 UX 검토: 막힌 카드 6장이 모두 같은 문장이라 무엇이 막혔는지 알 수 없었다.
+const plainLine=line=>line.replace(/^\s*(?:[-*]\s+|\|)/,'').replace(/\|\s*$/,'').replace(/\*\*|`/g,'').replace(/\s*\|\s*/g,' · ').replace(/\s+/g,' ').trim();
+export function failureReason(c){
+ let text='';
+ try{if(c.resultPath&&fs.existsSync(c.resultPath))text=fs.readFileSync(c.resultPath,'utf8');}catch{text='';}
+ const lines=text.split('\n').filter(line=>line.trim()&&!/^\s*#/.test(line));
+ const pick=lines.map(line=>line.match(/한 줄 요약\s*[:：]\s*(.+)/)?.[1]).find(Boolean)
+  ||lines.map(line=>line.match(/원인\s*[:：]\s*(.+)/)?.[1]).find(Boolean)
+  ||lines.find(line=>/실패|failed|막힘|막힌|중단|오류|error|blocked/i.test(line));
+ const reason=plainLine(pick||c.history?.at?.(-1)?.note||c.statusReason||'');
+ return reason.length>150?reason.slice(0,150)+'…':reason;
+}
+const askSupervisor=(c,reason)=>`[대시보드 확인 요청] 카드 ${c.key} 실행이 '${c.healthLabel||'확인 필요'}'로 멈춰 있고 카드는 아직 ${c.status||'열린'} 상태입니다.${reason?` 이유(결과 파일): ${reason}`:''} 다시 시도·후속 카드로 대체·취소·보류 중 어떻게 정리할지 정해 주세요.`;
 function executionCard(c){
- return `<article class="${c.healthKind==='attention'?'st-attn-card':'st-work'}"><div class="st-attn-head">${renderExecutionHealth(c)}<strong>${link(c)}</strong></div><p>${e(c.healthReason)}</p><p class="st-attn-meta">담당 ${e(c.role||'미배정')} · ${e(c.board||'판 미지정')} · ${e(c.signalLabel)} ${e(c.signalAt?stamp(c.signalAt):'')}</p>${c.nextAction?`<p>다음 행동: ${e(c.nextAction)}</p>`:''}</article>`;
+ const attention=c.healthKind==='attention',reason=attention?failureReason(c):'';
+ return `<article class="${attention?'st-attn-card':'st-work'}"><div class="st-attn-head">${renderExecutionHealth(c)}<strong>${link(c)}</strong></div><p>${e(c.healthReason)}</p>${reason?`<p class="st-attn-reason"><strong>이유</strong> ${e(reason)}</p>`:''}<p class="st-attn-meta">담당 ${e(c.role||'미배정')} · ${e(c.board||'판 미지정')} · ${e(c.signalLabel)} ${e(c.signalAt?stamp(c.signalAt):'')}</p>${c.replacedBy?`<p>후속 카드: <a href="?card=${encodeURIComponent(c.replacedBy)}#detail">${e(c.replacedBy)}</a></p>`:''}${c.nextAction?`<p>다음 행동: ${e(c.nextAction)}</p>`:''}${attention?`<p><button type="button" class="copy-question" data-copy-label="확인 요청" data-question="${e(askSupervisor(c,reason))}">감독에게 물어볼 문장 복사</button></p>`:''}</article>`;
 }
 function workCard(w){
  return `<article class="st-work"><div class="st-work-top">${renderExecutionHealth(w)}<span class="st-work-board">${e(w.board||w.repo)} · ${e(w.flowLabel)}</span><span class="st-work-prog">${e(w.flowPhase)}</span></div><h3 class="st-work-title">${link(w)}</h3>${w.purpose?`<p class="st-work-purpose">${e(w.purpose)}</p>`:''}<p>${e(w.healthReason)}</p><dl class="st-work-grid"><dt>지금 차례</dt><dd class="st-turn">${e(w.turnLabel)}</dd><dt>다음 행동</dt><dd>${e(w.next)}</dd></dl><div class="st-work-foot"><span>최근 실행 신호 ${e(w.signalLabel||'없음')} ${e(w.signalAt?stamp(w.signalAt):'')}</span><span class="st-when">업무 기록 ${e(w.reportLabel)}</span>${w.summary?`<span class="st-sum">${e(w.summary)}</span>`:''}</div></article>`;
@@ -62,7 +78,7 @@ export function renderDashboardStatus({center,works,workError=null,decisions=[],
  <div class="st-band" role="group" aria-label="지금 내가 볼 것">${chip('decision','#status-decisions',openDecisions===null?'모름':openDecisions.length,'내 결정 대기')}${chip('attn','#status-attention',center?stuck.length:'모름','지금 막힌 것')}</div>
  <p class="st-band-more" role="group" aria-label="나머지 요약">${mini('#status-executing',center?running.length:'모름','작업 중')}${mini('#status-waiting',center?waiting.length:'모름','결과 대기')}${mini('#status-stale',center?stale.length:'모름','오래된 미정리')}${mini('#status-running',works===null?'모름':open.length,'열린 업무')}${mini('?mailUnread=1#mailbox',unread===null?'모름':unread,'전체 역할 미확인 우편')}${mini('?collection=executions&state=all#dashboard',center?executions.length:'모름','전체 실행 카드')}</p>
  ${decisionSection}
- ${section('status-attention','지금 막힌 것',stuck,'담당 세션이 살아 있거나 신호가 최근인데 시작 보고·실패·PID 근거를 확인할 실행입니다. 오래된 미정리는 아래에 따로 묶습니다.')}
+ ${section('status-attention','지금 막힌 것',stuck,'담당 세션이 살아 있거나 신호가 최근인데 시작 보고·실패·PID 근거를 확인할 실행입니다. 오래된 미정리는 아래에 따로 묶습니다. <a href="?collection=executions&amp;state=all&amp;health=stuck#dashboard">작업 표에서 보기</a>')}
  ${section('status-executing','작업 중인 실행',running,'현재 담당의 진행 보고와 같은 세션이 확인됩니다. 업무 연결 여부와 관계없이 표시합니다.')}
  ${section('status-waiting','결과를 기다리는 실행',waiting,'담당자가 결과 대기를 보고했습니다. 보고가 오래됐다는 이유만으로 중단으로 보지 않습니다.')}
  <p class="st-hint">${center?`실행 전 ${byBucket('planned').length}건 · 보류 ${byBucket('hold').length}건`:'실행 전·보류 모름'} · 보고 시각은 실시간 작업 감지가 아닙니다.</p>
@@ -81,6 +97,7 @@ export function renderDashboardStatus({center,works,workError=null,decisions=[],
 export const dashboardStatusStyle=[
 '.st-view{padding:4px 0 0}.st-band{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 26px}.st-chip{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #dfe6e0;border-radius:9px;padding:10px 16px;text-decoration:none;color:#202724;min-width:118px}.st-chip:hover{border-color:#9bb5a6;background:#fbfdfc}.st-chip .st-num{font-size:22px;font-weight:750;line-height:1.1}.st-chip .st-lbl{font-size:12px;color:#536159}.st-chip::before{content:"";width:8px;height:8px;border-radius:50%;background:#cbd2cd;flex-shrink:0}.st-c-attn{background:#fff0d0;border-color:#b68625}.st-c-attn::before{background:#b68625}.st-c-attn .st-num{color:#794e00}.st-c-run::before{background:#e68a27}.st-c-decision::before{background:#158064}',
 '.st-section{margin-bottom:28px}.st-sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px;flex-wrap:wrap}.st-sec-head h2{font-size:16px;margin:0;font-weight:750}.st-cnt{font-size:13px;font-weight:700}.st-cnt-attn{color:#794e00}.st-cnt-run{color:#814600}.st-hint{font-size:12px;color:#536159;margin-left:auto}',
+'.st-attn-reason{font-size:13px;margin:4px 0 0;overflow-wrap:anywhere}.st-attn-reason strong{color:#794e00;margin-right:6px}',
 '.st-attn-card{background:#fff;border:1px solid #dfe6e0;border-left:4px solid #b68625;border-radius:8px;padding:12px 18px;margin-bottom:10px}.st-attn-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.st-attn-title{font-weight:700;font-size:14px}.st-attn-meta{font-size:12.5px;color:#536159;margin:4px 0 0}',
 '.st-work{background:#fff;border:1px solid #dfe6e0;border-radius:10px;padding:18px 22px;margin-bottom:14px}.st-work-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px}.st-work-board{color:#536159}.st-work-prog{margin-left:auto;font-weight:700;font-size:12.5px}.st-work-title{margin:8px 0 2px;font-size:16.5px;font-weight:750;line-height:1.35}.st-work-title a{color:#202724;text-decoration:none}.st-work-title a:hover{text-decoration:underline}.st-work-purpose{font-size:13px;color:#536159;margin:0 0 12px}.st-work-grid{display:grid;grid-template-columns:120px minmax(0,1fr);gap:4px 18px;border-top:1px solid #dfe6e0;padding-top:12px;margin:0}.st-work-grid dt{font-size:11px;font-weight:700;letter-spacing:.04em;color:#536159;padding-top:2px}.st-work-grid dd{font-size:13.5px;margin:0;overflow-wrap:anywhere}.st-work-grid dd.st-turn{font-weight:700}.st-work-foot{margin-top:12px;padding-top:10px;border-top:1px solid #dfe6e0;font-size:12.5px;color:#536159;display:flex;gap:14px;flex-wrap:wrap}.st-work-foot .st-when{font-weight:700;color:#202724;white-space:nowrap}.st-work-foot .st-sum{overflow-wrap:anywhere}',
 '.st-fold{border:1px solid #dfe6e0;border-radius:8px;background:#fff;padding:12px 18px;margin-bottom:10px;font-size:13.5px}.st-fold>summary{cursor:pointer;font-weight:600;color:#245c44}.st-hold-row{margin:8px 0;overflow-wrap:anywhere}.st-hold-row small{color:#536159}.st-empty{color:#536159}.st-error{color:#8f251e}.st-footnote{font-size:12px;color:#536159}',

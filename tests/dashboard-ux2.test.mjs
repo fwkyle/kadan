@@ -59,3 +59,31 @@ test('09-24 작업별 실행: 최근 시각 순, 상태로 거르기와 건수, 
   assert.match(all,/<a href="\?card=r%2Fa#detail">카드 가<\/a><br><small class="run-key">r\/a<\/small>/);
   assert.deepEqual([...section('?runState=failed').matchAll(/run-state run-([a-z]+)/g)].map(m=>m[1]),['failed']);
 });
+
+test('09-24 막힌 실행: 결과 파일의 한 줄 요약 → 원인 → 실패 말이 든 줄 순으로 이유를 뽑고, 감독에게 물어볼 문장 복사', async () => {
+  const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');
+  const {failureReason,renderDashboardStatus}=await import('../src/dashboard-status.mjs');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-ux2-'));
+  const file=name=>path.join(dir,name);
+  fs.writeFileSync(file('a.md'),'# 결과\n## 1\n- 판정: exception\n- 한 줄 요약: **#311** Preview가 `404`로 실패했다.\n- 원인: 다른 것\n');
+  fs.writeFileSync(file('b.md'),'# 결과\n- 진행 기록\n- 원인: 결제 한도로 job 미시작\n');
+  fs.writeFileSync(file('c.md'),'# 결과\n| 단계 | **실패** | run 1 |\n');
+  assert.equal(failureReason({resultPath:file('a.md')}),'#311 Preview가 404로 실패했다.');
+  assert.equal(failureReason({resultPath:file('b.md')}),'결제 한도로 job 미시작');
+  assert.equal(failureReason({resultPath:file('c.md')}),'단계 · 실패 · run 1');
+  assert.equal(failureReason({resultPath:file('none.md'),history:[{note:'마지막 메모'}]}),'마지막 메모');
+  const card={key:'r/a',id:'a',title:'카드 가',status:'assigned',role:'w',board:'p',workType:'execution',displayState:'failed',state:'failed',resultPath:file('a.md'),
+    runs:[{role:'w',state:'failed',sessionState:'alive',at:new Date().toISOString()}],history:[{note:'x'}]};
+  const html=renderDashboardStatus({center:{cards:[card],boards:[]},works:[],decisions:[]});
+  const section=html.slice(html.indexOf('id="status-attention"'),html.indexOf('id="status-executing"'));
+  assert.match(section,/<p class="st-attn-reason"><strong>이유<\/strong> #311 Preview가 404로 실패했다\.<\/p>/);
+  assert.match(section,/class="copy-question" data-copy-label="확인 요청" data-question="\[대시보드 확인 요청\] 카드 r\/a 실행이/);
+  assert.match(section,/작업 표에서 보기/);
+});
+
+test('09-24 작업 화면: health=stuck은 현황의 지금 막힌 것과 같은 분류(bucket)로 거른다', async () => {
+  const {filterWorkspaceRows}=await import('../src/dashboard-workspace.mjs');
+  const rows=[{key:'r/a',kind:'execution',state:'failed',bucket:'stuck',healthLabel:'실패 확인 필요'},{key:'r/b',kind:'execution',state:'failed',bucket:'stale',healthLabel:'실패 확인 필요'},{key:'r/c',kind:'execution',state:'running',bucket:'running',healthLabel:'작업 중'}];
+  assert.deepEqual(filterWorkspaceRows(rows,{state:'all',health:'stuck'}).map(r=>r.key),['r/a']);
+  assert.deepEqual(filterWorkspaceRows(rows,{state:'all',health:'실패 확인 필요'}).map(r=>r.key),['r/a','r/b']);
+});

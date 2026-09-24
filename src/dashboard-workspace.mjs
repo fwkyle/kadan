@@ -1,4 +1,4 @@
-import {executionHealth,renderExecutionHealth} from './dashboard-execution.mjs';
+import {executionHealth,renderExecutionHealth,executionBucket} from './dashboard-execution.mjs';
 import {cardTurn} from './card-turn.mjs';
 import {renderCardInbox} from './dashboard-inbox.mjs';
 import {approvedDetailGuide} from './dashboard-detail-guides.mjs';
@@ -79,7 +79,7 @@ export function workspacePresetCounts(rows,state){
 export function filterWorkspaceRows(rows,state) {
  const words=String(state.q||'').trim().toLocaleLowerCase('ko').split(/\s+/).filter(Boolean);
  const terminal=['done','cancelled','superseded','archived'];
- return (rows||[]).filter(c=>(!state.collection||(state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)))&&(!state.repo||c.repo===state.repo)&&(!state.board||c.board===state.board)&&(!state.health||c.healthLabel===state.health)&&(!state.rally||c.flowTitle===state.rally)&&
+ return (rows||[]).filter(c=>(!state.collection||(state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)))&&(!state.repo||c.repo===state.repo)&&(!state.board||c.board===state.board)&&(!state.health||(state.health==='stuck'?c.bucket==='stuck':c.healthLabel===state.health))&&(!state.rally||c.flowTitle===state.rally)&&
   (!state.state?!terminal.includes(c.state):state.state==='all'||(state.state!=='none'&&String(state.state).split(',').includes(c.state)))&&
   words.every(word=>[c.title,c.purpose,c.key,c.board,c.owner,c.model,c.turnLabel,c.turnReason,c.flowLabel,c.flowPhase,c.flowTitle,c.summary,c.scope,c.next,c.nextOwner].join(' ').toLocaleLowerCase('ko').includes(word)));
 }
@@ -134,6 +134,9 @@ export function workspaceRowsHtml(rows,layout,selected,columns=workspaceColumns)
 const json=value=>JSON.stringify(value).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
 export function renderDashboardWorkspace({center,briefs,centerError,url,detail,works=null,workError=null,workDetail,hierarchy=null}) {
  const params=url.searchParams,baseRows=workspaceModel(center,briefs);
+ // 현황의 '지금 막힌 것'과 같은 분류(executionBucket)를 실행 줄에 싣는다. health=stuck 필터와 칩이 쓴다(2026-09-24 UX 2차).
+ const centerByKey=new Map((center?.cards||[]).map(c=>[c.key,c]));
+ if(baseRows)for(const r of baseRows)if(r.kind!=='work'){const card=centerByKey.get(r.key);if(card)r.bucket=executionBucket({...card,...r});}
  const parent=new Map((works||[]).flatMap(w=>w.executions.map(x=>[x.key,w.workKey])));
  const fields=['rallyStep','healthKind','healthLabel','healthReason','signalAt','signalLabel','key','workKey','id','repo','title','kind','workType','originalTitle','state','stateLabel','stored','purpose','flowLabel','flowPhase','flowTitle','turnLabel','turnReason','turnSource','next','summary','scope','board','owner','model','modelTitle','reportAt','reportLabel','at','revision'];
  const rows=baseRows===null?null:works===null?baseRows:[...works.map(w=>{const row=Object.fromEntries(fields.map(k=>[k,['purpose','summary','scope','next'].includes(k)?String(w[k]||'').slice(0,220):w[k]]));const running=roleModel(center,w.owner,w.state);row.model=running.short;row.effort=running.effort;row.modelTitle=running.title;return row;}),...baseRows.map(c=>({...c,kind:'execution',parentWorkKey:parent.get(c.key)||''}))];
@@ -150,13 +153,14 @@ export function renderDashboardWorkspace({center,briefs,centerError,url,detail,w
  const options=(values,current)=>values.map(([value,label])=>`<option value="${e(value)}"${value===current?' selected':''}>${e(label)}</option>`).join('');
  const healthCounts=new Map();
  for(const c of rows||[])if(c.healthLabel)healthCounts.set(c.healthLabel,(healthCounts.get(c.healthLabel)||0)+1);
- const healthValues=[...healthCounts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ko')).map(([value,count])=>[value,`${value} (${count})`]);
+ const stuckCount=(rows||[]).filter(c=>c.bucket==='stuck').length;
+ const healthValues=[['stuck',`지금 막힌 것 (${stuckCount})`],...[...healthCounts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ko')).map(([value,count])=>[value,`${value} (${count})`])];
  const rallyCounts=new Map();
  for(const c of rows||[])if(c.flowTitle)rallyCounts.set(c.flowTitle,(rallyCounts.get(c.flowTitle)||0)+1);
  const rallyValues=[...rallyCounts.entries()].sort((a,b)=>a[0].localeCompare(b[0],'ko')).map(([value,count])=>[value,`${value} (${count})`]);
  const presetCounts=rows===null?null:workspacePresetCounts(rows,state);
  // 자주 쓰는 상태 묶음은 칩으로 바로 고른다. 값은 상태 필터와 같아 같은 주소로 이어진다.
- const presetRow=presetCounts===null?'':`<div class="dw-presets" id="dw-presets" role="group" aria-label="상태 빠른 선택">${workspaceStatePresets.map(([value,label])=>`<button type="button" data-state-preset="${e(value)}" aria-pressed="${state.state===value}" title="${e(label)} 상태만 보기"><span>${e(label)}</span><span class="dw-preset-count" data-preset-count="${e(value)}">${presetCounts[value]}</span></button>`).join('')}</div>`;
+ const presetRow=presetCounts===null?'':`<div class="dw-presets" id="dw-presets" role="group" aria-label="상태 빠른 선택">${workspaceStatePresets.map(([value,label])=>`<button type="button" data-state-preset="${e(value)}" aria-pressed="${state.state===value}" title="${e(label)} 상태만 보기"><span>${e(label)}</span><span class="dw-preset-count" data-preset-count="${e(value)}">${presetCounts[value]}</span></button>`).join('')}<a class="dw-stuck-chip" href="?collection=executions&amp;state=all&amp;health=stuck#dashboard" aria-current="${state.health==='stuck'}" title="현황의 '지금 막힌 것'과 같은 실행"><span>지금 막힌 것</span><span class="dw-preset-count">${stuckCount}</span></a></div>`;
  return `<section class="dw-workspace" id="dashboard-workspace" data-view="dashboard">
  ${works!==null?`<div class="bw-collections" role="group" aria-label="업무와 실행 전환">${[['work','업무 카드'],['executions','모든 실행'],['unlinked','연결 전 실행']].map(([k,label])=>`<button type="button" data-collection="${k}" aria-pressed="${collection===k}">${label} <span>${k==='work'?(workError?'모름':works.length):k==='executions'?(baseRows?.length??'모름'):(baseRows?.filter(c=>!parent.has(c.key)).length??'모름')}</span></button>`).join('')}<small>업무 하나 안에 실행·검수·인박스가 이어집니다.</small></div>${workError?`<p role="alert" class="error">업무 상태 모름: ${e(workError)}</p>`:''}<p id="dw-work-help" class="bw-empty-help"${collection==='work'?'':' hidden'}>업무는 약속한 결과를 확인한 뒤 완료합니다. 기존 카드는 ‘연결 전 실행’에서 찾을 수 있습니다.</p>`:''}
  <div class="dw-controls"><label>판<select id="dw-board" aria-label="작업판">${options([['','모든 판'],...[...new Set((rows||[]).map(c=>c.board).filter(Boolean))].sort().map(b=>[b,b])],state.board)}</select></label><label>저장소<select id="dw-repo">${options([['','전체'],...[...new Set((rows||[]).map(c=>c.repo))].sort().map(r=>[r,r])],state.repo)}</select></label><label>실행 흐름<select id="dw-health" aria-label="실행 흐름">${options([['','모든 실행 흐름'],...healthValues],state.health)}</select></label><label>묶음<select id="dw-rally" aria-label="티키타카 묶음">${options([['','모든 묶음'],...rallyValues],state.rally)}</select></label><label class="dw-search">검색<input id="dw-search" value="${e(state.q)}" placeholder="제목 · 카드 ID · 현재 차례 · 담당"></label><div class="dw-state-filter"><span id="dw-state-label">상태</span><details id="dw-state"><summary aria-labelledby="dw-state-label dw-state-summary"><span id="dw-state-summary">${e(filterName)}</span></summary><div class="dw-state-menu"><div class="dw-state-actions"><button type="button" data-state-preset="all">모두 선택</button><button type="button" data-state-preset="none">모두 제외</button><button type="button" data-state-preset="">미완료만</button></div><div class="dw-state-options" role="group" aria-label="표시할 상태">${Object.entries(stateText).map(([key,label])=>`<label><input type="checkbox" data-state-option value="${key}"${workspaceSelectedStates(state.state).includes(key)?' checked':''}>${e(label)}</label>`).join('')}</div></div></details></div><div class="dw-layout" role="group" aria-label="보기 전환"><button type="button" data-layout="table" aria-pressed="${state.layout==='table'}">표 보기</button><button type="button" data-layout="split" aria-pressed="${state.layout==='split'}">목록·상세</button><button type="button" data-layout="wall" aria-pressed="${state.layout==='wall'}">카드 월</button><button type="button" data-layout="map" aria-pressed="${state.layout==='map'}">관계도</button></div></div>
