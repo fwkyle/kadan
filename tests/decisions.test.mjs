@@ -43,7 +43,8 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   assert.doesNotMatch(location,/#decision-/);
   const after=await(await fetch(base+location.split('#')[0])).text();
   assert.match(after,/class="decision-toast"><span>답변을 전달했습니다 — /);
-  assert.match(after,/\.decision-toast\{position:fixed;/);
+  assert.match(after,/\.decision-toast\{position:fixed;right:24px;top:72px;/);
+  assert.doesNotMatch(after,/decision-toast-out|animation:decision-toast/);
   // 토스트는 한 번만: 화면 스크립트가 주소에서 decisionAnswered를 지운다.
   assert.match(after,/searchParams\.delete\('decisionAnswered'\)/);
   assert.doesNotMatch(await(await fetch(base)).text(),/class="decision-toast/);
@@ -119,7 +120,7 @@ test('09-24 방금 답한 결정은 저장된 전달 결과대로 맨 위에 알
   assert.equal(notice({status:'answered', delivery:{status:'sent', role:'슈퍼'}}), '답변을 전달했습니다 — 슈퍼에게 알렸습니다: 합칠까요?');
   assert.equal(notice({status:'answered', delivery:{status:'failed', error:'세션 없음'}}), '답변은 저장했지만 알림 전달에 실패했습니다(세션 없음): 합칠까요?');
   assert.equal(notice({status:'answered', delivery:{status:'pending'}}), '답변을 저장했습니다. 알림 전달은 확인 중입니다: 합칠까요?');
-  // 성공은 저절로 사라지고, 알림 실패는 닫을 때까지 남는다.
+  // 둘 다 닫을 때까지 남고(저절로 사라지는 애니메이션 없음), 알림 실패는 색으로 구분한다.
   assert.equal(toast({status:'answered', delivery:{status:'sent', role:'슈퍼'}})[1], 'decision-toast');
   assert.equal(toast({status:'answered', delivery:{status:'failed', error:'x'}})[1], 'decision-toast decision-toast-failed');
   assert.equal(notice({status:'open', revision:1}), undefined);
