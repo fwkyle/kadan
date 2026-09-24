@@ -132,3 +132,15 @@ test('09-24 좁은 화면 스타일: 640px 이하에서만 위 메뉴 2줄·상�
   assert.match(block,/\.toolbar\{display:grid!important;grid-template-columns:1fr 1fr;/);
   assert.match(block,/#mailbox \.scroll thead\{display:none\}/);
 });
+
+test('09-24 partial=detail이면 페이지 나머지 없이 선택한 카드의 상세 article만 돌려준다', async () => {
+  const {renderCenterWall}=await import('../src/center-wall.mjs');
+  const card={key:'r/c',id:'c',repo:'r',title:'카드 다',body:'## Why\n목적',status:'draft',displayState:'draft',history:[],runs:[]};
+  const center={cards:[card],boards:[],unregistered:[],summary:{cards:1}};
+  const part=renderCenterWall({center,entries:[],ledgerLines:0},{url:new URL('http://localhost/?card=r%2Fc&detail=1&partial=detail')});
+  assert.match(part,/^<article class="card-detail dw-reader" id="detail"[^>]*data-key="r\/c"/);
+  assert.doesNotMatch(part,/<!doctype|<nav aria-label="주 메뉴"|id="mailbox"/);
+  assert.match(renderCenterWall({center,entries:[],ledgerLines:0},{url:new URL('http://localhost/?card=r%2Fnone&partial=detail')}),/카드를 찾을 수 없습니다: r\/none/);
+  const full=renderCenterWall({center,entries:[],ledgerLines:0},{url:new URL('http://localhost/?card=r%2Fc&detail=1')});
+  assert.match(full,/^<!doctype html>/);
+});

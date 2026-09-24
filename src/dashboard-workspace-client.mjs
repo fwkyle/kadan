@@ -98,7 +98,7 @@ function workspaceClient() {
   const controller=new AbortController();request=controller;pending=true;loadedKey='';
   $('#dw-detail-content').innerHTML='<h2>카드를 읽는 중입니다.</h2><p>조회가 끝나면 선택한 카드의 내용과 관리 폼을 표시합니다.</p>';status('카드를 읽는 중입니다.');
   const current=()=>request===controller&&!controller.signal.aborted&&state.card===key;
-  const url=new URL(location.href);url.searchParams.set('card',key);url.searchParams.set('detail','1');url.hash='detail';
+  const url=new URL(location.href);url.searchParams.set('card',key);url.searchParams.set('detail','1');url.searchParams.set('partial','detail');url.hash='detail';
   try {
    const response=await fetch(url,{signal:controller.signal,credentials:'same-origin'});
    if(!response.ok)throw new Error('카드를 읽지 못했습니다. HTTP '+response.status);
