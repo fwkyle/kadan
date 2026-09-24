@@ -47,7 +47,8 @@ test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 C
   // 성공은 15초 뒤 사라지고(마우스를 올리면 멈춤), 실패는 남는다. 토스트에서 바로 내역 드로어를 연다.
   assert.match(after,/animation:decision-toast-out \.3s ease 15s forwards/);
   assert.match(after,/\.decision-toast:hover\{animation-play-state:paused\}/);
-  assert.match(after,/\.decision-toast-failed\{background:#8a1f1f;animation:none\}/);
+  // 색은 다크 모드용 변수로 바뀌어 나간다(원래 색 #8a1f1f).
+  assert.match(after,/\.decision-toast-failed\{background:var\(--kc-8a1f1f\);animation:none\}/);
   assert.match(after,/class="decision-toast-link" data-decision-history-open>내역 보기</);
   assert.match(after,/<dialog id="decision-history" class="decision-drawer"/);
   assert.match(after,/document\.getElementById\('decision-history'\)/);
