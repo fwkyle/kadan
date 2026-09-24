@@ -2214,7 +2214,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|work|card|decision|storage|inbox> [대상] [옵션]"
+      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|work|card|decision|runners|storage|inbox> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
