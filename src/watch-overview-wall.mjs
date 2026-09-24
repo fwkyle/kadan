@@ -5,12 +5,18 @@ const routeText=r=>!r?'경로 근거 모름':({hierarchy:'명시한 직속 관�
 const timingText=t=>!t?'소요 시간 기록 없음':`순회 ${Math.round(t.totalMs)}ms · 원장 ${Math.round(t.ledgerMs)}ms · 준비 ${Math.round(t.prepareMs)}ms · 화면 ${Math.round(t.screenMs)}ms · 후속 ${Math.round(t.otherMs)}ms · 화면 조회 대상 ${t.observedSessions}개`;
 const cycleLabel=c=>!c?'모름':({ok:'정상',stale:'지연',error:'마지막 주기 관측 오류',starting:'첫 주기 대기',absent:'감시기 없음',unknown:'기록 없음'})[c.state]||c.state;
 // 감시기는 기계당 하나다. 전역 상태 한 줄은 이 함수로 한 번만 그리고, 판 안에는 그 판의 대상·경로만 둔다.
-export function renderWatchVerdict(center){
+// 감시기와 대시보드가 다른 코드로 돌면 새 코드가 감시에 반영되지 않았다는 뜻이다(2026-09-24: 번호가 서로 달라 헷갈렸다).
+function codeDrift(m,runtime){
+ const watchCommit=m?.cycle?.settings?.runtime?.commit,dashboard=runtime?.commit;
+ if(!watchCommit||!dashboard||watchCommit===dashboard)return '';
+ return `<p class="watch-hint watch-drift">감시기(${e(watchCommit.slice(0,7))})는 대시보드(${e(dashboard.slice(0,7))})와 다른 코드로 돌고 있습니다. 새 코드를 감시에 반영하려면 감시를 다시 켜세요.</p>`;
+}
+export function renderWatchVerdict(center,{runtime}={}){
  const m=center?.monitoring;
  if(!m)return '<aside class="watch-overview watch-unknown"><div class="watch-summary"><strong>감시 정보 미수집</strong><span>감시가 없다는 뜻은 아닙니다. 같은 시점의 조회 근거가 필요합니다.</span></div></aside>';
  const v=m.verdict||{level:'unknown',text:'감시 상태 모름',hints:[]},c=m.cycle||{};
  const s=c.settings;
- return `<aside class="watch-overview watch-${e(v.level)}" data-watch-level="${e(v.level)}"><div class="watch-summary"><strong class="watch-headline">${e(v.text)}</strong></div>${(v.hints||[]).map(h=>`<p class="watch-hint"><code>${e(h)}</code></p>`).join('')}
+ return `<aside class="watch-overview watch-${e(v.level)}" data-watch-level="${e(v.level)}"><div class="watch-summary"><strong class="watch-headline">${e(v.text)}</strong></div>${(v.hints||[]).map(h=>`<p class="watch-hint"><code>${e(h)}</code></p>`).join('')}${codeDrift(m,runtime)}
  <details><summary>감시기 상세</summary><dl><dt>확인 시각</dt><dd>${e(time(m.checkedAt))}</dd><dt>감시기</dt><dd>${m.process.instances.map(p=>`PID ${p.pid} · 시작 ${e(time(p.startedAt))}`).join('<br>')||e(m.process.error||'확인된 프로세스 없음')}</dd><dt>마지막 주기</dt><dd>${e(cycleLabel(c))}${c.lastAt?' · '+e(time(c.lastAt)):''}${c.reason?' · '+e(c.reason):''}</dd><dt>마지막 기록 순회 시간</dt><dd>${e(timingText(s?.timing))}</dd><dt>감시기 설정</dt><dd>${s?`관계 파일 ${s.hierarchy?e(s.hierarchy):'없음'} · AI 판정 ${s.judge?'켜짐':'꺼짐'}${s.profile?' · 프로필 '+e(s.profile):''}`:'주기 기록이 없어 모름'}</dd><dt>관계 파일 반영</dt><dd>${e(m.configuration.path||'현재 감시기와 연결된 기록 없음')} · ${e(m.configuration.reason)}${m.configuration.loadedAt?' · '+e(time(m.configuration.loadedAt)):''}</dd><dt>최근 24시간 공백</dt><dd>${c.gaps===null||c.gaps===undefined?'주기 기록이 없어 계산하지 않음':c.gaps.length?c.gaps.map(g=>`${e(time(g.from))} ~ ${e(time(g.to))} (${g.minutes}분)`).join('<br>'):'없음'}</dd>${m.profilePath?`<dt>정식 프로필</dt><dd><code>kadan watch --profile ${e(m.profilePath)}</code></dd>`:''}</dl><p class="muted">같은 근거: <code>kadan tree</code>의 <code>monitoring</code> · <code>/api/cards</code>의 <code>center.monitoring</code>. 주기 기록은 감시기가 5분마다 남기는 <code>watch-cycle</code> 원장입니다.</p></details></aside>`;
 }
 // 판 안의 두 줄: 이 판의 감시 대상과 상신 경로. 전역 프로세스 상태는 renderWatchVerdict가 맡는다.

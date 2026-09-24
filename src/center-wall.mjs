@@ -69,7 +69,7 @@ ${dashboardWorkspaceStyle}
  </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#mailbox" data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 ${waitingQuestions===null?'모름':waitingQuestions+'건'}" title="답을 기다리는 질문">${waitingQuestions===null?'모름':waitingQuestions}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav>${themeToggleHtml}<details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['runner-settings','실행 모델'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
- ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
+ ${renderDashboardStatus({runtime,center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
  ${renderDashboardWorkspace({center,briefs,centerError,url,detail,works,workError,workDetail,hierarchy})}
  ${renderDoneButOpen(center)}
  ${renderOperationsFlow()}

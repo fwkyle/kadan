@@ -88,7 +88,8 @@ export function watchVerdict({process: proc, configuration, cycle, profilePath =
  }
  if (gap) parts.push(gap);
  const runtime=cycle?.settings?.runtime;
- parts.push(`실행 코드 ${runtime?.commit||'모름'}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''}`);
+ // 40자리 대신 7자리로. 대시보드 코드와 다른지는 화면 쪽(renderWatchVerdict)이 비교해 알린다.
+ parts.push(`감시기 코드 ${runtime?.commit?.slice(0,7)||'모름'}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''}`);
  const text = [headline, ...parts.filter(Boolean)].join(' · ');
  return {level, headline, text, hints};
 }

@@ -46,7 +46,7 @@ export function staleCleanupRequest(stale,now=Date.now()){
  const rows=stale.map(c=>`- ${c.key} (담당 ${c.role||'미배정'} · 마지막 신호 ${c.signalAt?stamp(c.signalAt)+' · '+ago(c.signalAt,now):'없음'}) → kadan card update ${c.key} --revision ${c.revision} --status superseded --replaced-by <저장소/후속카드> --note "<이유>"`);
  return [head,...rows].join('\n');
 }
-export function renderDashboardStatus({center,works,workError=null,decisions=[],decisionError=null,collectedAt=null,briefs=null,entries=[],ledgerLines=0,now=Date.now()}){
+export function renderDashboardStatus({runtime=null,center,works,workError=null,decisions=[],decisionError=null,collectedAt=null,briefs=null,entries=[],ledgerLines=0,now=Date.now()}){
  const executions=(center?.cards||[]).filter(c=>c.workType!=='coordination').map(c=>({...c,...executionHealth(c,now),bucket:null})).map(c=>({...c,bucket:executionBucket(c,now)}));
  const byBucket=bucket=>executions.filter(c=>c.bucket===bucket);
  const stuck=byBucket('stuck'),stale=byBucket('stale'),running=byBucket('running'),waiting=byBucket('waiting');
@@ -74,7 +74,7 @@ export function renderDashboardStatus({center,works,workError=null,decisions=[],
  const historySection=!center||(!closedBoards.length&&!closed.length)?'':`<details id="overview" class="st-fold" data-view-anchor="overview"><summary>끝난 판 ${closedBoards.length}개 · 끝난 업무 ${closed.length}장</summary>${closed.map(w=>`<p>${link(w)} · ${e(w.stateLabel)}</p>`).join('')}${closedBoards.length?renderBoardProgress({...center,boards:closedBoards},{briefs,showWatch:false,buckets:true,now}):''}</details>`;
  return `<div data-view="status" class="st-view">
  <header class="st-lead"><h1>지금 작업이 어떻게 진행되고 있나요?</h1><p>발령·진행 보고·결과와 담당 세션을 함께 봅니다. 카드 수정 시각은 실행 신호가 아닙니다.</p><small>수집 ${e(stamp(collectedAt))}</small></header>
- ${renderWatchVerdict(center)}
+ ${renderWatchVerdict(center,{runtime})}
  <div class="st-band" role="group" aria-label="지금 내가 볼 것">${chip('decision','#status-decisions',openDecisions===null?'모름':openDecisions.length,'내 결정 대기')}${chip('attn','#status-attention',center?stuck.length:'모름','지금 막힌 것')}</div>
  <p class="st-band-more" role="group" aria-label="나머지 요약">${mini('#status-executing',center?running.length:'모름','작업 중')}${mini('#status-waiting',center?waiting.length:'모름','결과 대기')}${mini('#status-stale',center?stale.length:'모름','오래된 미정리')}${mini('#status-running',works===null?'모름':open.length,'열린 업무')}${mini('?mailUnread=1#mailbox',unread===null?'모름':unread,'전체 역할 미확인 우편')}${mini('?collection=executions&state=all#dashboard',center?executions.length:'모름','전체 실행 카드')}</p>
  ${decisionSection}

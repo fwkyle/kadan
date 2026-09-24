@@ -113,3 +113,10 @@ test('09-24 라운드를 병렬 번호표로 쓴 업무는 999라운드 대신 �
   assert.match(workDashboardModel([work([1,2,999])],{cards:[]},[])[0].flowLabel,/^병렬 실행 3건 · /);
   assert.match(workDashboardModel([work([1,2,2])],{cards:[]},[])[0].flowLabel,/^2라운드 · /);
 });
+
+test('09-24 감시기와 대시보드 코드가 다르면 감시 재시작이 필요하다고 알린다', async () => {
+  const {renderWatchVerdict}=await import('../src/watch-overview-wall.mjs');
+  const center={monitoring:{verdict:{level:'ok',text:'감시 정상',hints:[]},process:{instances:[]},configuration:{},cycle:{settings:{runtime:{commit:'a'.repeat(40)}}}}};
+  assert.match(renderWatchVerdict(center,{runtime:{commit:'b'.repeat(40)}}),/감시기\(aaaaaaa\)는 대시보드\(bbbbbbb\)와 다른 코드로 돌고 있습니다/);
+  assert.doesNotMatch(renderWatchVerdict(center,{runtime:{commit:'a'.repeat(40)}}),/다른 코드/);
+});
