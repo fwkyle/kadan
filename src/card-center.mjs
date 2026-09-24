@@ -19,7 +19,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const key=`${e.role}\0${taskEventKey(e)}`;
     const old=runs.get(key);
     if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
-    else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
+    else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result,doneBy:e.by??'모름',executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
   }
   // 역할별 가장 최근 시작 기록의 실행기·모델. 카단은 판단에 쓰지 않고 화면 답변용으로만 옮긴다(2026-09-06 결정).
   const models={};
@@ -71,9 +71,18 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const states=[...b.cards.map(c=>c.displayState),...b.runs.map(r=>r.state)];
     b.state=states.includes('running')?'running':states.includes('waiting')&&!states.some(s=>['unconfirmed','orphaned','failed'].includes(s))?'waiting':states.every(s=>['done','cancelled','superseded','archived'].includes(s))?'done':states.some(s=>['unconfirmed','orphaned','failed'].includes(s))?'needs-check':states.every(s=>['done','cancelled','superseded','archived','hold'].includes(s))?'hold':'planned';
   }
+  // 실행은 ok로 확정됐는데 카드가 열린 채 남은 것. 카드 완료는 감독 판단이라 목록만 보인다(2026-09-24).
+  // 실행이 여럿이면 가장 최근에 발령한 실행만 본다. 완료 확정 뒤 감독이 상태·담당을 바꿨으면 다시 연 것으로 보고 뺀다.
+  const doneButOpen=result.filter(c=>['assigned','ready'].includes(c.status)).flatMap(c=>{
+    const last=[...c.runs].sort((a,b)=>(Date.parse(a.sentAt??a.at)||0)-(Date.parse(b.sentAt??b.at)||0)).at(-1);
+    if(last?.state!=='done')return [];
+    const doneAt=Date.parse(last.at)||0;
+    if(c.history.some((h,i)=>i>0&&(Date.parse(h.at)||0)>doneAt&&(h.status!==c.history[i-1].status||h.role!==c.history[i-1].role)))return [];
+    return [{key:c.key,title:c.title,status:c.status,role:last.role,doneAt:last.at,doneBy:last.doneBy??'모름',revision:c.revision}];
+  });
   const execution=result.filter(c=>c.workType!=='coordination');
   const executionSummary={cards:execution.length,remaining:execution.filter(c=>!['done','cancelled','superseded','archived'].includes(c.displayState)).length,running:execution.filter(c=>c.displayState==='running').length,coordinationCards:result.length-execution.length};
-  return {rallies:buildRallies(result),executionSummary,cards:result,boards:[...boards.values()],unregistered,roles:[...roles.values()],runtimeKnown,models,
+  return {rallies:buildRallies(result),executionSummary,cards:result,doneButOpen,boards:[...boards.values()],unregistered,roles:[...roles.values()],runtimeKnown,models,
     summary:{cards:result.length,running:result.filter(c=>c.displayState==='running').length,ready:result.filter(c=>c.displayState==='ready').length,
       attention:result.filter(c=>['unconfirmed','orphaned','failed'].includes(c.displayState)).length,
       openBoards:[...boards.values()].filter(b=>b.state!=='done').length}};

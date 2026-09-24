@@ -18,7 +18,7 @@ import {decisionCommand} from "./decisions.mjs";
 import {runnersCommand} from "./runners-command.mjs";
 import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
 import { CardStore } from "./card-store.mjs";
-import { cardCommand } from "./card-command.mjs";
+import { cardCommand, closeCardAfterDone } from "./card-command.mjs";
 import { registerStartedRole } from "./hierarchy-register.mjs";
 import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
@@ -1550,10 +1550,14 @@ function cmdPlan(argv, flags = {}) {
   console.log(`계획됨: 판=${board}${about ? ` 설명=${about}` : ""} 카드=${shown}`);
 }
 
-function cmdDone(argv) {
+function cmdDone(argv, flags = {}) {
   const [role, taskId, result, ...extra] = argv;
-  if (!role || !taskId || !result || extra.length > 0) {
-    die("사용법: kadan done <역할> <카드id> <ok|failed>", 2);
+  const closeCard = flags["close-card"] === true;
+  if (!role || !taskId || !result || extra.length > 0 || (flags.note !== undefined && (!closeCard || typeof flags.note !== "string"))) {
+    die("사용법: kadan done <역할> <카드id> <ok|failed> [--close-card [--note <이유>]]", 2);
+  }
+  if (closeCard && result !== "ok") {
+    die("--close-card는 ok 완료에만 쓴다 — failed 실행은 카드를 닫지 않는다", 2);
   }
   const entry = confirmDone({
     entries: readLedger(),
@@ -1564,6 +1568,16 @@ function cmdDone(argv) {
   console.log(
     `완료 확정: 역할=${entry.role} 카드=${entry.taskId} 결과=${entry.result} 확인=${entry.by}`
   );
+  if (!closeCard) return;
+  try {
+    const closed = closeCardAfterDone(entry.executionKey, { home: ledgerHome(), by: entry.by, note: flags.note });
+    console.log(closed.state === "already"
+      ? `카드 닫기: 이미 완료 상태라 기록하지 않음 — 카드=${closed.key} revision=${closed.revision}`
+      : `카드 닫기: 카드=${closed.key} 상태=done revision=${closed.revision}`);
+  } catch (error) {
+    console.error(`카드 닫기 실패: ${error.message} — 실행 완료 확정은 그대로 저장됨`);
+    process.exitCode = 1;
+  }
 }
 
 function cmdWait(argv, flags) {
@@ -2098,7 +2112,7 @@ export function parseFlags(argv) {
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox" || arg === "--dry-run") {
+    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card") {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
