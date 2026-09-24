@@ -51,3 +51,26 @@ test('페이지 이동은 카드 선택·기존 조건을 보존하고 빈 기�
   assert.match(failed,/모름 — 원장을 읽을 수 없습니다/);assert.doesNotMatch(failed,/lg-table|0건/);
  }
 });
+
+test('09-24 감시 일상 기록은 기본으로 숨기고 체크로 다시 보며, 이름 없던 종류는 한국어로·감시 대상은 감시 전체로', () => {
+  const entries = [
+    {kind:'watch-cycle', by:'watch', t:'2026-09-24T00:00:00Z'},
+    {kind:'watch-scope', by:'watch', t:'2026-09-24T00:00:01Z'},
+    {kind:'alert', by:'watch', role:'감독', alertKind:'stall', level:'warn', t:'2026-09-24T00:00:02Z'},
+    {kind:'rate-limit-retry', by:'watch', t:'2026-09-24T00:00:03Z'},
+    {kind:'runner-settings', by:'슈퍼감독', t:'2026-09-24T00:00:04Z'},
+  ];
+  const hidden = ledger(entries);
+  assert.match(hidden, /3건 · 최신순 · 감시 일상 기록 2건 숨김/);
+  assert.doesNotMatch(hidden, /감시 순회|감시 대상 설정/);
+  assert.match(hidden, /감시 알림/);
+  assert.match(hidden, /<td title="rate-limit-retry">한도 재시도<\/td>/);
+  assert.match(hidden, /<td title="runner-settings">실행 모델 변경<\/td>/);
+  // 대상이 없는 감시 기록은 '모름'이 아니라 '감시 전체'.
+  assert.match(hidden, /<td title="watch">watch<\/td><td title="감시 전체">감시 전체<\/td>/);
+  assert.match(hidden, /<input type="checkbox" name="ledgerRoutine" value="1"> 감시 일상 기록 보기/);
+  const shown = ledger(entries, '?ledgerRoutine=1');
+  assert.match(shown, /5건 · 최신순<\/span>/);
+  assert.match(shown, /<td title="watch-cycle">감시 순회<\/td>/);
+  assert.match(shown, /name="ledgerRoutine" value="1" checked/);
+});

@@ -10,7 +10,12 @@ export function ledgerView(entries,home,domain='all'){
  // 저장소 없는 렌더 fixture도 코어의 과거 호환 분류 규칙을 재사용한다.
  return projectLedger({legacy:entries,ordered:[]},domain);
 }
-const kinds={dispatch:'작업 발령','mail-cancel':'질문 취소',start:'세션 시작',send:'메시지 전달',done:'실행 결과',stop:'세션 종료',plan:'카드 계획',alert:'감시 알림',handover:'담당 인계','mail-read':'우편 확인','hierarchy-loaded':'책임 관계 읽음','progress-judgment':'진행 판단','watch-scope':'감시 대상 설정'};
+const kinds={dispatch:'작업 발령','mail-cancel':'질문 취소',start:'세션 시작',send:'메시지 전달',done:'실행 결과',stop:'세션 종료',plan:'카드 계획',alert:'감시 알림',handover:'담당 인계','mail-read':'우편 확인','hierarchy-loaded':'책임 관계 읽음','progress-judgment':'진행 판단','watch-scope':'감시 대상 설정',
+ // 2026-09-24 실측: 이름이 없어 원문(watch-cycle 등)으로 보이던 종류.
+ 'watch-cycle':'감시 순회','watch-mail-reminder':'우편 재알림','queue-resume':'입력 대기 재개','watch-judgment':'감시 판정','runner-settings':'실행 모델 변경',window:'창 다시 붙임','watch-mail-held':'우편 전달 보류','rate-limit-retry':'한도 재시도'};
+// 감시가 주기적으로 남기는 일상 기록. 기록 화면은 기본으로 숨기고 체크로 다시 본다(알림·AI 호출은 계속 보인다).
+const watchRoutineKinds=new Set(['watch-cycle','watch-scope','hierarchy-loaded','watch-mail-reminder']);
+export const isWatchRoutine=entry=>entry?.by==='watch'&&watchRoutineKinds.has(entry.kind);
 const text=value=>typeof value==='string'?value:'';
 function eventLabel(entry){
  if(entry.completion)return '실행 결과 통지';
@@ -40,7 +45,7 @@ function stamp(value,short=false){
 }
 export function renderLedgerTable(entries){
  return `<div class="lg-scroll" id="lg-scroll" tabindex="0" aria-label="사건 기록 표 · 좌우로 스크롤 가능"><table class="lg-table"><caption class="dw-sr">사건별 시각, 종류, 기록하거나 보낸 사람, 대상과 원문</caption><colgroup><col><col><col><col><col><col></colgroup><thead><tr><th scope="col">시각</th><th scope="col">사건</th><th scope="col">기록자·보낸 사람</th><th scope="col">대상</th><th scope="col">카드·내용</th><th scope="col">원문</th></tr></thead><tbody>${entries.map((entry,i)=>{
-  const id='lg-original-'+i,label=eventLabel(entry),by=text(entry.by)||'모름',target=text(entry.role)||text(entry.to)||text(entry.board)||'모름',summary=eventSummary(entry);
+  const id='lg-original-'+i,label=eventLabel(entry),by=text(entry.by)||'모름',target=text(entry.role)||text(entry.to)||text(entry.board)||(entry.by==='watch'?'감시 전체':'모름'),summary=eventSummary(entry);
   return `<tr data-ledger-row="${id}"><td title="${e(stamp(entry.t))}">${e(stamp(entry.t,true))}</td><td title="${e(entry.kind)}">${e(label)}</td><td title="${e(by)}">${e(by)}</td><td title="${e(target)}">${e(target)}</td><td title="${e(summary)}">${e(summary)}</td><td><button type="button" data-ledger-toggle aria-expanded="false" aria-controls="${id}" aria-label="${e(stamp(entry.t,true)+' '+label+' 원문')}" title="기록 원문 펼치기">펼치기</button></td></tr><tr class="lg-original-row" id="${id}" hidden><td colspan="6"><div class="lg-original"><div class="lg-original-heading"><strong>${e(label)} · 기록 원문</strong><button type="button" data-ledger-close="${id}">접기</button></div><pre>${e(JSON.stringify(entry,null,2))}</pre></div></td></tr>`;
  }).join('')||'<tr><td colspan="6" class="lg-empty">아직 기록된 사건이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
