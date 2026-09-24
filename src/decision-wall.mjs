@@ -12,11 +12,20 @@ const linked=value=>{const text=String(value??'');let html='',last=0;
 // 첫 줄의 첫 물음표까지를 제목으로, 나머지는 줄바꿈을 살린 본문으로 보인다(2026-09-23 [kyle]: 한 문단 굵은 글씨라 읽기 어려움).
 const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
-export function renderDecisions(items,error,token){
+// 방금 답한 결정의 저장된 전달 결과를 결정 영역 맨 위에 알린다.
+const answeredNotice=d=>{
+ if(!d||d.status==='open')return '';
+ const title=e(splitQuestion(d.question)[0]);
+ const text=d.delivery?.status==='sent'?`답변을 전달했습니다 — ${e(d.delivery.role)}에게 알렸습니다: ${title}`
+  :d.delivery?.status==='failed'?`답변은 저장했지만 알림 전달에 실패했습니다(${e(d.delivery.error)}): ${title}`
+  :`답변을 저장했습니다. 알림 전달은 확인 중입니다: ${title}`;
+ return `<p role="status" class="decision-answered"><strong>${text}</strong></p>`;
+};
+export function renderDecisions(items,error,token,answered=null){
  if(error)return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요</h2><p role="alert">모름: ${e(error)}</p></section>`;
  const open=items.filter(d=>d.status==='open');
  const one=d=>{const [title,body]=splitQuestion(d.question);return `<article id="decision-${e(d.id)}"><h3>${e(title)}</h3>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a> · 요청자 ${e(d.requestedBy)}</p><p><strong>추천: ${e(d.recommendation)}</strong></p><p style="white-space:pre-wrap">${linked(d.reason)}</p>${d.status==='open'?`<form method="post" action="/decisions/answer"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><label>선택 (선택 사항)<select name="choice"><option value="">직접 답변</option>${d.options.map(o=>`<option value="${e(o)}">${e(o)}</option>`).join('')}</select></label><label>결정 내용<textarea name="text" rows="3"></textarea></label><button>답변 전달</button><p class="muted">선택지만 골라도 답할 수 있습니다. 답변을 저장하고 요청한 슈퍼감독에게 한 번 알립니다.</p></form>`:d.status==='answered'?`<p><strong>답변:</strong> ${e(d.answer.text)}</p><p>통지: ${e(d.delivery?.status==='sent'?'전달됨':d.delivery?.status==='failed'?'실패 — 답변은 저장됨':'확인 필요 — 답변은 저장됨')}</p>`:`<p>취소: ${e(d.cancelReason)}</p>`}</article>`;};
- return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2><p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${open.map(one).join('<hr>')||'<p>결정을 기다리는 요청이 없습니다.</p>'}<details><summary>이전 결정 ${items.length-open.length}건</summary>${items.filter(d=>d.status!=='open').slice().reverse().map(one).join('<hr>')}</details></section>`;
+ return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${open.map(one).join('<hr>')||'<p>결정을 기다리는 요청이 없습니다.</p>'}<details><summary>이전 결정 ${items.length-open.length}건</summary>${items.filter(d=>d.status!=='open').slice().reverse().map(one).join('<hr>')}</details></section>`;
 }
 const recordTabs=active=>`<nav class="record-tabs" aria-label="시스템 기록 보기"><a href="#runs" ${active==='runs'?'aria-current="page"':''}>작업별 보기</a><a href="#ledger" ${active==='ledger'?'aria-current="page"':''}>사건순 보기</a></nav>`;
 export function renderActivity({center,entries=[],ledgerLines,error,home},url){

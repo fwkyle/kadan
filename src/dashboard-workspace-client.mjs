@@ -206,6 +206,8 @@ function workspaceClient() {
   const form=event.target;
   if(!form.matches('form[method="post"]'))return;
   const action=new URL(form.action,location.href).pathname;
+  // 결정 답변은 한 번만 보낸다. 입력칸은 잠그지 않는다(잠그면 값이 빠진다). 버튼만 잠그고 그대로 제출한다.
+  if(action==='/decisions/answer'){if(form.dataset.sending){event.preventDefault();return;}form.dataset.sending='1';const button=form.querySelector('button');if(button){button.disabled=true;button.textContent='전송 중…';}dirty=false;return;}
   if(action!=='/cards/update'&&!action.startsWith('/works/')){dirty=false;return;}
   event.preventDefault();if(saving)return;
   const fields=new FormData(form),creating=action==='/works/create',key=(creating?'work:':'')+String(fields.get('key')),revision=creating?0:Number(fields.get('revision'));
