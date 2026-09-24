@@ -122,3 +122,13 @@ test('09-24 감시기와 대시보드 코드가 다르면 감시 재시작이 �
   assert.match(renderWatchVerdict(center,{runtime:{commit:'b'.repeat(40)}}),/감시기\(aaaaaaa\)는 대시보드\(bbbbbbb\)와 다른 코드로 돌고 있습니다/);
   assert.doesNotMatch(renderWatchVerdict(center,{runtime:{commit:'a'.repeat(40)}}),/다른 코드/);
 });
+
+test('09-24 좁은 화면 스타일: 640px 이하에서만 위 메뉴 2줄·상태줄 1줄·거르기 2칸·우편 카드 모양', async () => {
+  const {renderCenterWall}=await import('../src/center-wall.mjs');
+  const html=renderCenterWall({center:null,entries:[],ledgerLines:0});
+  const block=html.match(/@media \(max-width:640px\)\{[\s\S]*?\n\}/)?.[0]||'';
+  assert.match(block,/\.dw-shell>\.dw-top\{display:grid;/);
+  assert.match(block,/\.dw-shell>footer>span:first-child\{display:none\}/);
+  assert.match(block,/\.toolbar\{display:grid!important;grid-template-columns:1fr 1fr;/);
+  assert.match(block,/#mailbox \.scroll thead\{display:none\}/);
+});

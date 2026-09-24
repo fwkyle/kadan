@@ -8,7 +8,7 @@ import {watchOverviewStyle} from './watch-overview-wall.mjs';
 import {buildHumanBrief} from './human-brief.mjs';
 import {renderDashboardWorkspace,renderWorkspaceDetail} from './dashboard-workspace.mjs';
 import {readActiveHierarchy} from './hierarchy-register.mjs';
-import {dashboardWorkspaceStyle} from './dashboard-workspace-style.mjs';
+import {dashboardWorkspaceStyle,dashboardMobileStyle} from './dashboard-workspace-style.mjs';
 import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
 import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
@@ -60,6 +60,7 @@ ${statusPaletteCss}
 ${dashboardStyle}
  ${decisionStyle}
  ${themeToggleStyle}
+ ${dashboardMobileStyle}
  ${dashboardStatusStyle}
 ${dashboardWorkspaceStyle}
  ${workDashboardStyle}
