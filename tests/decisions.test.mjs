@@ -161,3 +161,19 @@ test('09-24 지난 결정은 접힘 목록 대신 오른쪽 드로어 — 최근
   const empty = renderDecisions([{id:'open1', status:'open', revision:1, question:'열린 결정?', ...base}], null, 't');
   assert.match(empty, /이전 결정 0건 보기/);assert.match(empty, /<p class="dh-empty">지난 결정이 없습니다\.<\/p>/);
 });
+test('09-24 위 메뉴: 우편함을 올리고 답을 기다리는 질문 수를 배지로, 실행 모델은 운영 메뉴로(작업별 실행 중복 제거)',()=>{
+ const entries=[
+  {kind:'send',by:'작업자',role:'감독',mailId:'q1',digest:'dq1',expectReply:true,t:'2026-09-24T00:00:00Z'},
+  {kind:'send',by:'감독',role:'작업자',mailId:'m2',digest:'dm2',t:'2026-09-24T00:01:00Z'},
+ ];
+ const html=renderCenterWall({center:null,entries,ledgerLines:entries.length});
+ const top=html.slice(html.indexOf('<nav aria-label="주 메뉴">'),html.indexOf('</nav>',html.indexOf('<nav aria-label="주 메뉴">')));
+ assert.deepEqual([...top.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['status','dashboard','decisions','mailbox','ledger','operations-flow']);
+ assert.match(top,/<a href="#mailbox" data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 1건" title="답을 기다리는 질문">1<\/span><\/a>/);
+ const more=html.slice(html.indexOf('<nav aria-label="운영 메뉴">'),html.indexOf('</nav>',html.indexOf('<nav aria-label="운영 메뉴">')));
+ assert.deepEqual([...more.matchAll(/data-route="([^"]+)"/g)].map(m=>m[1]),['sessions','runner-settings','work-create','create']);
+ assert.match(html,/classList\.toggle\('dw-more-current',\['sessions','runner-settings','work-create','create'\]\.includes\(view\)\)/);
+ // 원장을 못 읽으면 0이 아니라 모름.
+ const unknown=renderCenterWall({center:null,entries:[],ledgerLines:null});
+ assert.match(unknown,/data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 모름"[^>]*>모름</);
+});

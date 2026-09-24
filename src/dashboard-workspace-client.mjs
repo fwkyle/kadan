@@ -130,6 +130,8 @@ function workspaceClient() {
  function route(){
   const view=activeView();$$('[data-view]').forEach(el=>el.hidden=el.dataset.view!==view);
   $$('[data-route]').forEach(el=>{const selected=el.dataset.route===(view==='runs'?'ledger':view);if(selected)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current');});
+  // 운영 메뉴 안 화면이면 접힌 '운영 메뉴' 글자에도 현재 위치를 표시한다(2026-09-24 UX 검토).
+  $('.dw-more')?.classList.toggle('dw-more-current',['sessions','runner-settings','work-create','create'].includes(view));
   $('#page-title').textContent=views[view]||'작업';
   if(location.hash.startsWith('#decision-')){const target=document.getElementById(decodeURIComponent(location.hash.slice(1)));target?.closest('details')?.setAttribute('open','');target?.scrollIntoView({block:'start'});}
   refreshStatus();

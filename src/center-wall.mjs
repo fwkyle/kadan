@@ -14,6 +14,7 @@ import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
 import {decisionCommand} from './decisions.mjs';
+import {mailboxLetters} from './mailbox-state.mjs';
 import {renderDecisions,renderActivity,decisionStyle,decisionScript} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
 import { CardStore } from './card-store.mjs';
@@ -29,6 +30,9 @@ const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;
 export function renderCenterWall({center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,ledgerState,registeredWorks,runtime}, {token='',url=new URL('http://localhost')}={}) {
  if(centerError)center=null;
  const briefs=buildHumanBrief(center,home);
+ // 위 메뉴의 우편함 배지: 답을 기다리는 질문 수(모든 역할). 원장을 못 읽으면 0이 아니라 모름.
+ let waitingQuestions=null;
+ try{if(ledgerLines!==null)waitingQuestions=mailboxLetters(entries).filter(m=>m.replyStatus==='waiting').length;}catch{waitingQuestions=null;}
  let works=home?[]:null,workError=null;
  if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
@@ -60,7 +64,7 @@ ${dashboardWorkspaceStyle}
  ${uiFoundationStyle}
  ${runnerSettingsStyle}
  ${operationsFlowStyle}
- </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a><a href="#runner-settings" data-route="runner-settings">실행 모델</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['mailbox','우편함'],['runs','작업별 실행'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
+ </style></head><body><div class="dw-shell"><header class="dw-top"><a class="dw-brand" href="#status">카단 라이트</a><span class="dw-sr" id="page-title">현황</span><nav aria-label="주 메뉴"><a href="#status" data-route="status">현황</a><a href="#dashboard" data-route="dashboard">작업</a><a href="#decisions" data-route="decisions">내 결정 <span class="dw-decision-count" aria-label="열린 사용자 결정 ${decisionError?'모름':decisions.filter(d=>d.status==='open').length+'건'}">${decisionError?'모름':decisions.filter(d=>d.status==='open').length}</span></a><a href="#mailbox" data-route="mailbox">우편함 <span class="dw-decision-count" aria-label="답을 기다리는 질문 ${waitingQuestions===null?'모름':waitingQuestions+'건'}" title="답을 기다리는 질문">${waitingQuestions===null?'모름':waitingQuestions}</span></a><a href="#ledger" data-route="ledger">기록</a><a href="#operations-flow" data-route="operations-flow">운영 흐름</a></nav><details class="dw-more"><summary>운영 메뉴</summary><nav aria-label="운영 메뉴">${[['sessions','담당자 세션'],['runner-settings','실행 모델'],['work-create','새 업무 만들기'],['create','별도 실행 등록']].map(([id,title])=>`<a href="#${id}" data-route="${id}">${title}</a>`).join('')}</nav></details></header><main>
 
  ${centerError||error?`<div class="error" role="alert">상태 모름: ${e(centerError||error)}</div>`:''}
  ${renderDashboardStatus({center,works,workError,decisions,decisionError,collectedAt,briefs,entries,ledgerLines})}
