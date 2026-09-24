@@ -10,6 +10,13 @@ import {isUserActor} from './actors.mjs';
 const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
 const human=by=>isUserActor(by);
 const required=(v,name)=>{if(typeof v!=='string'||!v.trim())throw new Error(`${name} 필요`);return v.trim()};
+// 새 결정 요청은 사용자가 답하기 전에 열어 볼 주소·절대경로, 또는 '확인 경로 없음: 이유' 줄이 있어야 한다.
+export function assertVerifyPath(...texts){
+ const text=texts.filter(t=>typeof t==='string').join('\n');
+ if(/https?:\/\/\S/.test(text)||/(^|[\s(\[<"'`])\/[^\s\/]+\/\S/.test(text)||/^[ \t]*[-*]?[ \t]*확인 경로 없음:[ \t]*\S/m.test(text))return;
+ const blank=/확인 경로 없음:/.test(text)?'"확인 경로 없음:" 뒤에 이유가 비어 있습니다. ':'';
+ throw new Error(`확인 경로 필요: ${blank}질문이나 이유에 답하기 전에 열어 볼 주소나 절대경로를 한 줄에 하나씩 넣으세요. 예: "- PR: https://github.com/<조직>/<레포>/pull/<번호>", "- Preview: <배포 기록에서 확인한 실제 접속 주소>", "- 노션: https://www.notion.so/<페이지>", "- 결과 파일: /home/<이름>/.kadan/cards/<저장소>/<카드>/result.md". 열어 볼 대상이 없는 순수 방침 질문이면 "- 확인 경로 없음: <이유>" 줄을 넣으세요.`);
+}
 export class DecisionStore {
  constructor(home,{notify}={}){this.home=home;this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'send',role,message],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'사람'},encoding:'utf8',timeout:15000});
@@ -27,6 +34,7 @@ export class DecisionStore {
   if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독만 작성');
   new CardStore(this.home).get(card);this.list();
   question=required(question,'질문');reason=required(reason,'추천 이유/사용자 판단 필요 이유');
+  assertVerifyPath(question,reason);
   if(!Array.isArray(options)||options.length<2||options.length>4)throw new Error('선택지 2~4개 필요');
   options=options.map(x=>required(x,'선택지'));if(new Set(options).size!==options.length||!options.includes(recommendation))throw new Error('중복 없는 선택지와 일치하는 추천 필요');
   const existing=this.list().find(d=>d.status==='open'&&d.card===card&&d.requestedBy===by&&d.question===question);

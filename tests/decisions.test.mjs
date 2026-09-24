@@ -7,7 +7,7 @@ import {CardStore} from '../src/card-store.mjs';
 import {DecisionStore,decisionCommand} from '../src/decisions.mjs';
 import {createWallServer} from '../src/wall.mjs';
 import {renderCenterWall} from '../src/center-wall.mjs';
-const input={question:'서비스를 제품과 분리할까요?',options:['분리','유지'],recommendation:'분리',reason:'기존 결정으로 해결할 수 없는 표시 정책'};
+const input={question:'서비스를 제품과 분리할까요?',options:['분리','유지'],recommendation:'분리',reason:'기존 결정으로 해결할 수 없는 표시 정책\n- 결과 파일: /repo/card-a/result.md'};
 function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-'));const cards=new CardStore(home);cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});const sent=[];const notify=(...x)=>sent.push(x);const store=new DecisionStore(home,{notify});return{home,cards,store,sent,notify};}
 test('09-07 슈퍼의 명시 결정만 생성, 질문 단위로 답변, 같은 답변은 중복 통지 없음',()=>{
  const f=fixture();assert.throws(()=>f.store.request('repo/card-a',input,'작업자'),/슈퍼감독/);
@@ -79,4 +79,24 @@ test('결정 화면: 첫 질문만 제목으로, 나머지는 줄바꿈을 살�
   assert.match(html, /<a href="https:\/\/github\.com\/o\/r\/pull\/1" [^>]+>https:\/\/github\.com\/o\/r\/pull\/1<\/a>\./);
   assert.match(html, /&lt;b&gt;근거&lt;\/b&gt; <a href="https:\/\/x\.y\/z"/);
   assert.doesNotMatch(html, /<b>근거/);
+});
+test('09-24 새 결정 요청은 확인 주소·절대경로·확인 경로 없음 이유 중 하나가 있어야 저장한다',()=>{
+ const f=fixture(),ask=(question,reason)=>f.store.request('repo/card-a',{...input,question,reason},'p-슈퍼감독');
+ assert.equal(ask('PR을 합칠까요?\n- PR: https://github.com/o/r/pull/1','검토 끝').status,'open');
+ assert.equal(ask('결과를 받을까요?','- 결과 파일: /home/me/.kadan/cards/r/c/result.md').status,'open');
+ assert.equal(ask('이름 규칙을 바꿀까요?','- 확인 경로 없음: 열어 볼 대상이 없는 순수 방침 질문').status,'open');
+ const before=f.store.list().length;
+ for(const [q,r,message] of [
+  ['Preview를 볼까요?\n- 확인 경로 없음:','이유 없음',/이유가 비어/],
+  ['Preview-1에 올라가 있음. 합칠까요?','확인 부탁',/확인 경로 필요.*PR.*Preview.*노션.*결과 파일.*확인 경로 없음: <이유>/],
+  ['상대 경로만 있나요?','docs/result.md 와 a/b',/확인 경로 필요/],
+ ])assert.throws(()=>ask(q,r),message);
+ assert.equal(f.store.list().length,before);assert.equal(f.sent.length,0);
+});
+test('09-24 확인 경로 검사 전에 저장된 요청도 조회·답변·취소할 수 있다',()=>{
+ const f=fixture(),old={revision:1,card:'repo/card-a',to:'@user',requestedBy:'p-슈퍼감독',options:['분리','유지'],recommendation:'분리',reason:'옛 요청',status:'open',at:new Date().toISOString()};
+ const a=f.store.write({...old,id:'old-a',question:'옛 질문 A?'}),b=f.store.write({...old,id:'old-b',question:'옛 질문 B?'});
+ assert.equal(f.store.get(a.id).status,'open');
+ assert.equal(f.store.answer(a.id,{revision:1,choice:'분리'},'사람').status,'answered');
+ assert.equal(f.store.cancel(b.id,{revision:1,reason:'주소 확인 뒤 다시 요청'},'p-슈퍼감독').status,'cancelled');
 });
