@@ -17,6 +17,10 @@ export function wallColumnOf(row,axis){
 // 다음 행동자가 정해지지 않은 카드는 이름을 비운다. 표와 같은 규칙을 쓴다.
 const turnText=c=>{const turn=c.turnLabel||'';return turn&&!['종료','차례 확인 필요'].includes(turn)?turn:'';};
 
+// 브라우저 스크립트는 함수 본문만 옮긴다. 카드 월·관계도가 쓰는 목록과 도우미도 여기서 함께 내보낸다 —
+// 빠지면 두 보기가 ReferenceError로 멈추고 작업 화면 스크립트 전체가 먹통이 된다(2026-09-24 UX 검토에서 발견).
+export const canvasScriptHelpers=`const wallStatusColumns=${JSON.stringify(wallStatusColumns)};const wallStepColumns=${JSON.stringify(wallStepColumns)};const wallAxes=${JSON.stringify(wallAxes)};const stepKeys=wallStepColumns.map(([key])=>key);const wallColumnOf=${wallColumnOf.toString()};const turnText=${turnText.toString()};`;
+
 export function workspaceWallHtml(rows,selected,axis='status'){
  const modelBadge=c=>c.model?`<span class="dw-badge" title="${e(c.modelTitle||c.model)}">${e(c.model)}${c.effort?' · '+e(c.effort):''}</span>`:'';
  const stamp=at=>Number.isFinite(Date.parse(at))?new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(at)):'시각 미기록';

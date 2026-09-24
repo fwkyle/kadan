@@ -395,3 +395,24 @@ test('브라우저 전체 선택·제외·미완료와 개별 선택은 URL·목
  h.preset('');assert.equal(count(),2);assert.equal(new URL(h.snapshot().url).searchParams.has('state'),false);assert.equal(h.options.find(el=>el.value==='done').checked,false);
  h.selectStates([]);assert.equal(count(),0);assert.equal(new URL(h.snapshot().url).searchParams.get('state'),'none');
 });
+
+test('09-24 브라우저로 보내는 스크립트만으로 카드 월·관계도를 모든 기준으로 그릴 수 있다(빠진 도우미 없음)', async () => {
+  const vm = await import('node:vm');
+  const {dashboardWorkspaceScript} = await import('../src/dashboard-workspace-client.mjs');
+  // 마지막 줄(화면 스크립트 실행)을 빼고 정의만 실행한다 — 실제로 보내는 문자열 그대로다.
+  const cut = dashboardWorkspaceScript.lastIndexOf('(function workspaceClient');
+  assert.ok(cut > 0);
+  const rows = [
+    {key:'work:r/w', kind:'work', workKey:'r/w', title:'업무', flowPhase:'구현', owner:'감독'},
+    {key:'r/a', id:'a', kind:'execution', title:'실행 A', parentWorkKey:'r/w', healthKind:'running', rallyStep:'implementation', owner:'작업자', turnLabel:'작업자 차례', model:'m'},
+    {key:'r/b', id:'b', kind:'execution', title:'실행 B', healthKind:'mystery', owner:'검수자'},
+  ];
+  const context = vm.createContext({rows, Intl, Date, encodeURIComponent, Number, Map, Set, JSON});
+  vm.runInContext(dashboardWorkspaceScript.slice(0, cut), context);
+  const html = vm.runInContext(`[workspaceWallHtml(rows,'r/a','status'),workspaceWallHtml(rows,'r/a','step'),workspaceMapHtml(rows,'r/a','work',null,rows),workspaceMapHtml(rows,'r/a','role',{'작업자':'감독','검수자':'감독','감독':'@user'},rows)]`, context);
+  assert.match(html[0], /data-wall-column="running"[\s\S]*실행 A/);
+  assert.match(html[0], /data-wall-column="attention"[\s\S]*실행 B/);
+  assert.match(html[1], /data-wall-column="implementation"[\s\S]*실행 A/);
+  assert.match(html[2], /업무[\s\S]*실행 A/);
+  assert.match(html[3], /감독[\s\S]*작업자[\s\S]*실행 A/);
+});
