@@ -149,9 +149,11 @@ function selectProfile({role,entries,context}) {
   return {profile:null,source:'unknown-role'};
 }
 function referencePaths(profile) {
+  // 작업자·검수자는 자기 카드 양식만 본다. 발령·대기, 감독 결정 범위, 슈퍼감독 교대 문서는 감독용이라
+  // 읽으면 자기 역할을 넘는 판단을 부를 수 있다. 완료 절차는 역할 틀에 이미 있다(2026-09-24 [kyle]).
+  if (['worker','reviewer'].includes(profile)) return [path.join(root,'skills/kadan-conductor/references/card-template.md')].filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
   const skill=profile==='secretary'?'kadan-secretary':profile==='super'?'kadan-super':'kadan-conductor';
-  const entry=['worker','reviewer'].includes(profile)?'skills/kadan-conductor/references/card-template.md':`skills/${skill}/SKILL.md`;
-  return [path.join(root,entry),path.join(root,'skills/kadan-conductor/references/dispatch-wait.md'),
+  return [path.join(root,`skills/${skill}/SKILL.md`),path.join(root,'skills/kadan-conductor/references/dispatch-wait.md'),
     path.join(root,'skills/kadan-conductor/references/operating-contract.md'),path.join(root,'skills/kadan-super/references/handover.md')]
     .filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
 }

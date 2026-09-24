@@ -195,3 +195,20 @@ test('관계 없는 카드 본문 유실·hierarchy 실패·원장 오류의 통
   const mailbox=new SecretaryMailbox(f.home),stored=mailbox.send({by:'sender',message:'카드 유실 보고'});
   assert.equal(mailbox.read(stored.mailId).body,'카드 유실 보고');
 });
+
+test('09-24 작업자·검수자 안내에는 카드 양식만 붙고 감독용 발령·결정 범위·교대 문서는 붙지 않는다', () => {
+  const {compose} = fixture();
+  const supervisorDocs = /dispatch-wait\.md|operating-contract\.md|kadan-super\/references\/handover\.md/;
+  for (const profile of ['worker', 'reviewer']) {
+    const {instructions, metadata} = compose({profile});
+    assert.equal(metadata.profile, profile);
+    assert.match(instructions, /skills\/kadan-conductor\/references\/card-template\.md/);
+    assert.doesNotMatch(instructions, supervisorDocs);
+  }
+  for (const profile of ['conductor', 'super', 'secretary']) {
+    const {instructions} = compose({profile});
+    assert.match(instructions, /operating-contract\.md/);
+    assert.match(instructions, /dispatch-wait\.md/);
+    assert.match(instructions, /kadan-super\/references\/handover\.md/);
+  }
+});
