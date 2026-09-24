@@ -12,14 +12,13 @@ const linked=value=>{const text=String(value??'');let html='',last=0;
 // 첫 줄의 첫 물음표까지를 제목으로, 나머지는 줄바꿈을 살린 본문으로 보인다(2026-09-23 [kyle]: 한 문단 굵은 글씨라 읽기 어려움).
 const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
-// 방금 답한 결정의 저장된 전달 결과를 토스트로 알린다(2026-09-24 [kyle]). 성공은 5초 뒤 사라지고,
-// 알림 전달 실패는 닫을 때까지 남긴다.
-export const decisionStyle=`.decision-toast{position:fixed;right:24px;bottom:56px;z-index:50;display:flex;gap:12px;align-items:flex-start;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border-radius:10px;background:#1f2a24;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);font-size:14px;line-height:1.5;animation:decision-toast-out .3s ease 5s forwards}
-.decision-toast-failed{background:#8a1f1f;animation:none}
-.decision-toast-close{flex:none;border:0;background:transparent;color:inherit;font-size:18px;line-height:1;cursor:pointer;padding:0 2px}
-@keyframes decision-toast-out{to{opacity:0;visibility:hidden}}
-@media (max-width:640px){.decision-toast{right:16px;left:16px;max-width:none}}
-@media (prefers-reduced-motion:reduce){.decision-toast{animation-duration:0s}}`;
+// 방금 답한 결정의 저장된 전달 결과를 오른쪽 위 토스트로 알린다. 읽기 전에 사라지지 않게 ×로 닫을 때까지 남기고,
+// 알림 전달 실패는 빨간색으로 구분한다(2026-09-24 [kyle]: 하단은 보기 어렵고 5초는 너무 빠름).
+export const decisionStyle=`.decision-toast{position:fixed;right:24px;top:72px;z-index:50;display:flex;gap:12px;align-items:flex-start;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border-radius:10px;background:#1f2a24;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);font-size:14px;line-height:1.5}
+.decision-toast-failed{background:#8a1f1f}
+.decision-toast .decision-toast-close{flex:none;border:0;background:transparent;box-shadow:none;min-height:0;color:inherit;font-size:18px;line-height:1;cursor:pointer;padding:0 2px}
+.decision-toast .decision-toast-close:hover{background:transparent;opacity:.75}
+@media (max-width:640px){.decision-toast{right:16px;left:16px;top:12px;max-width:none}}`;
 const answeredNotice=d=>{
  if(!d||d.status==='open')return '';
  const title=e(splitQuestion(d.question)[0]);
