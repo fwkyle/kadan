@@ -87,3 +87,22 @@ test('09-24 작업 화면: health=stuck은 현황의 지금 막힌 것과 같은
   assert.deepEqual(filterWorkspaceRows(rows,{state:'all',health:'stuck'}).map(r=>r.key),['r/a']);
   assert.deepEqual(filterWorkspaceRows(rows,{state:'all',health:'실패 확인 필요'}).map(r=>r.key),['r/a','r/b']);
 });
+
+test('09-24 상세 인박스: 기본은 최신 5통 간단 보기와 모두 보기 링크, 거르기 값이 있으면 처음부터 전체', async () => {
+  const {renderInbox}=await import('../src/dashboard-inbox.mjs');
+  const letters=Array.from({length:8},(_,i)=>({kind:'send',by:'감독',role:'작업자',mailId:'m'+i,preview:'편지 '+i,t:`2026-09-24T0${i}:00:00Z`}));
+  const compact=renderInbox({key:'work:r/w',letters},null,new URL('http://localhost/?card=work%3Ar%2Fw'),{limit:5});
+  assert.equal((compact.match(/<li>/g)||[]).length,5);
+  assert.match(compact,/편지 8통 모두 보기 · 거르기/);assert.match(compact,/mailAll=1/);
+  assert.doesNotMatch(compact,/<form class="toolbar"/);
+  const filtered=renderInbox({key:'work:r/w',letters},null,new URL('http://localhost/?mailQ=편지'),{limit:5});
+  assert.match(filtered,/<form class="toolbar"/);
+});
+
+test('09-24 실행 상세: 실패·완료 미확인·세션 없음이면 결과·검수를 처음부터 펼친다', async () => {
+  const {renderWorkspaceDetail}=await import('../src/dashboard-workspace.mjs');
+  const base={key:'r/c',id:'c',repo:'r',body:'## Why\n목적',status:'assigned',history:[],runs:[]};
+  const open=html=>/<details class="dw-detail-fold" data-detail-section="evidence" open>/.test(html);
+  assert.equal(open(renderWorkspaceDetail({...base,state:'failed',displayState:'failed'})),true);
+  assert.equal(open(renderWorkspaceDetail({...base,state:'running',displayState:'running'})),false);
+});

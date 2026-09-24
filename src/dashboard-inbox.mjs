@@ -38,8 +38,17 @@ export function filterMail(letters,url,{bodyOf}={}){
 }
 const short=at=>Number.isFinite(Date.parse(at))?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(at)):'시각 모름';
 
-export function renderInbox(w,home,url=new URL('http://localhost')){
+// 상세의 인박스는 기본으로 최근 몇 통만(거르기 양식 없이) 보이고 '모두 보기'로 전체·거르기로 바꾼다.
+// 2026-09-24 UX 검토: 업무 상세에서 편지 100통이 업무 내용보다 먼저 화면을 차지했다.
+const mailFilterKeys=['mailRole','mailView','mailReply','mailUnread','hideWatch','mailCard','mailQ','mailPage'];
+export function renderInbox(w,home,url=new URL('http://localhost'),{limit=null}={}){
  const letters=filterMail(w.letters,url);
+ const full=!limit||url.searchParams.get('mailAll')==='1'||mailFilterKeys.some(key=>url.searchParams.has(key));
+ if(!full){
+  const all=new URL(url);all.searchParams.set('mailAll','1');all.searchParams.set('card',w.key);all.searchParams.set('detail','1');all.searchParams.set('tab','summary');all.hash='detail';
+  const head=`<div class="dd-history-heading"><h3>인박스 <span>${letters.length}통</span></h3><span class="muted">최신 ${Math.min(limit,letters.length)}통${letters.length>limit?` · <a data-work-page href="${e(all.pathname+all.search+all.hash)}">편지 ${letters.length}통 모두 보기 · 거르기</a>`:''}</span></div>`;
+  return head+(letters.length?compactMail(letters.slice(0,limit),home):'<p class="muted">연결된 편지가 없습니다.</p>');
+ }
  const pages=Math.max(1,Math.ceil(letters.length/100)),page=Math.min(pages,Math.max(1,Number.parseInt(url.searchParams.get('mailPage'),10)||1));
  const options=(values,current)=>values.map(([value,label])=>`<option value="${e(value)}"${value===current?' selected':''}>${e(label)}</option>`).join('');
  const hidden=[...url.searchParams].filter(([key])=>!['mailRole','mailView','mailReply','mailPage','card','detail','tab'].includes(key)).map(([key,value])=>`<input type="hidden" name="${e(key)}" value="${e(value)}">`).join('');
@@ -53,10 +62,14 @@ export function renderInbox(w,home,url=new URL('http://localhost')){
  }).join('')}</tbody></table></div>`}${pages>1?`<p class="bw-mail-pages">${page>1?`<a data-work-page href="${e(nav(page-1))}">이전 100통</a>`:''} ${page<pages?`<a data-work-page href="${e(nav(page+1))}">다음 100통</a>`:''}</p>`:''}`;
 }
 
+function compactMail(items,home){
+ return `<ul class="bw-mail-compact">${items.map(m=>{let body=null;try{body=m.digest&&home?readMailBody(m.digest,home):null;}catch{body=null;}const text=String(body??m.preview??'').replace(/\s+/g,' ').trim();
+  return `<li><span class="dd-time">${e(short(m.t))}</span><span class="di-people">${e(m.by||'모름')} → ${e(m.role||'모름')}</span><span class="muted">${e(mailStatus(m))}</span><span class="bw-mail-text">${e(text.length>140?text.slice(0,140)+'…':text)}</span></li>`;}).join('')}</ul>`;
+}
 export function renderCardInbox(card,{entries=[],cards=[card],home,url}={}) {
  try {
   // 실행 주소와 고유한 카드 ID만 따른다. 상위 업무의 다른 실행 편지는 섞지 않는다.
   const letters=workLetters({key:'execution:'+card.key,executions:[{key:card.key}],mailRefs:[]},entries,cards);
-  return renderInbox({key:card.key,letters},home,url);
+  return renderInbox({key:card.key,letters},home,url,{limit:5});
  } catch { return '<h3>인박스</h3><p role="alert">인박스 확인 불가 · 원장을 읽을 수 없습니다.</p>'; }
 }

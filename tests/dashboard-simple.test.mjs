@@ -9,7 +9,10 @@ test('실행 인박스는 주소와 고유 카드 ID 및 답장만 연결하며 
  const entries=[send(),send({mailId:'m2',taskId:null,replyTo:'m1',by:'작업자',role:'감독',preview:'답장 본문'}),send({mailId:'m3',taskId:'other',preview:'다른 카드 제외'}),send({mailId:'m4',taskId:'c',workKey:'other/work',preview:'다른 업무 제외'})];
  const html=renderCardInbox(card,{entries});
  assert.match(html,/2통/);assert.match(html,/답장 본문/);assert.doesNotMatch(html,/다른 카드 제외|다른 업무 제외/);
- assert.match(html,/보낸 사람 → 받는 사람/);assert.equal((html.match(/id="bw-mail-/g)||[]).length,2);
+ // 기본은 최근 몇 통만 간단히(2026-09-24 UX 2차), '모두 보기'(mailAll=1)면 거르기와 표.
+ assert.equal((html.match(/<li>/g)||[]).length,2);assert.doesNotMatch(html,/<form class="toolbar"/);
+ const full=renderCardInbox(card,{entries,url:new URL('http://localhost/?mailAll=1')});
+ assert.match(full,/보낸 사람 → 받는 사람/);assert.equal((full.match(/id="bw-mail-/g)||[]).length,2);
  const duplicate={...card,key:'another/c'};
  assert.doesNotMatch(renderCardInbox(card,{entries,cards:[card,duplicate]}),/연결한 편지|답장 본문/);
  assert.match(renderCardInbox(card,{entries:[send({executionKey:card.key})],cards:[card,duplicate]}),/연결한 편지/);

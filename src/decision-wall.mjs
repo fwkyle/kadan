@@ -47,6 +47,9 @@ export const decisionStyle=`.decision-toast{position:fixed;right:24px;top:72px;z
 .run-state{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;background:#eef0ef;color:#5d6762}
 .run-failed{background:#fbe1de;color:#a1231b}.run-unconfirmed{background:#f8ead7;color:#8a4b0f}.run-orphaned{background:#ebe5f8;color:#5b3fa0}.run-done{background:#dcf1e2;color:#1c6b38}
 .run-key{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#5d6762}
+.bw-mail-compact{list-style:none;margin:6px 0 12px;padding:0;display:flex;flex-direction:column;gap:6px}
+.bw-mail-compact li{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:2px 10px;align-items:baseline;font-size:12.5px;padding:6px 0;border-bottom:1px solid #edf1ee}
+.bw-mail-compact .bw-mail-text{grid-column:1/-1;overflow-wrap:anywhere}
 .lg-incidents{font-size:12.5px;font-weight:700;color:#8a1f1f;margin-right:auto}
 .dc-meter{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:#5d6762;margin:4px 0 14px}
 .dc-bar{flex:1 1 200px;min-width:120px;height:6px;background:#eaede8;border-radius:3px;overflow:hidden}.dc-bar i{display:block;height:100%;background:#1f6f5c}

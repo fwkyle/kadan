@@ -10,7 +10,7 @@ const labels={'Why':'작업 목적','이번에 확인할 결과':'목표·기한
 
 // 요약과 인박스는 바로 보이고, 나머지는 기존 주소로도 펼칠 수 있다.
 export function renderDetailSections(summary,sections) {
- return (summary?`<section id="dw-panel-summary" class="dw-tab-panel" aria-label="한눈에">${summary}</section>`:'')+sections.map(([key,label,html])=>`<details class="dw-detail-fold" data-detail-section="${key}"><summary id="dw-tab-${key}">${e(label)}</summary><section id="dw-panel-${key}" class="dw-tab-panel" aria-labelledby="dw-tab-${key}">${html}</section></details>`).join('');
+ return (summary?`<section id="dw-panel-summary" class="dw-tab-panel" aria-label="한눈에">${summary}</section>`:'')+sections.map(([key,label,html,open])=>`<details class="dw-detail-fold" data-detail-section="${key}"${open?' open':''}><summary id="dw-tab-${key}">${e(label)}</summary><section id="dw-panel-${key}" class="dw-tab-panel" aria-labelledby="dw-tab-${key}">${html}</section></details>`).join('');
 }
 
 // 본문은 바꾸지 않고 제목의 위치만 찾는다. 코드 블록 안의 #은 제목이 아니다.
