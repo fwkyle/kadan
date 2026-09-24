@@ -47,3 +47,15 @@ test('09-24 우편·기록의 작업 ID는 카드 상세 링크, 기록 위에�
   const table=renderLedgerTable([{kind:'send',by:'감독',role:'검수자',taskId:'card-b',preview:'요청'}],{cardHref:()=>'?card=r%2Fcard-b#detail'});
   assert.match(table,/<a href="\?card=r%2Fcard-b#detail">card-b<\/a> · 요청/);
 });
+
+test('09-24 작업별 실행: 최근 시각 순, 상태로 거르기와 건수, 상태 색, 카드 제목 먼저', () => {
+  const center={cards:[
+    {key:'r/a',id:'a',title:'카드 가',board:'p',runs:[{state:'failed',role:'w',at:'2026-09-24T01:00:00Z'},{state:'done',role:'w',at:'2026-09-24T05:00:00Z'}]},
+    {key:'r/b',id:'b',title:'카드 나',board:'p',runs:[{state:'unconfirmed',role:'w',at:'2026-09-24T03:00:00Z'}]}]};
+  const section=q=>{const h=renderActivity({center,entries:[],ledgerLines:0},url(q));return h.slice(h.indexOf('id="runs"'),h.indexOf('</section>',h.indexOf('id="runs"')));};
+  const all=section('');
+  assert.deepEqual([...all.matchAll(/run-state run-([a-z]+)/g)].map(m=>m[1]),['done','unconfirmed','failed']);
+  assert.match(all,/<option value="" selected>전체 3<\/option><option value="failed">실패 기록 1<\/option><option value="unconfirmed">완료 미확인 1<\/option>/);
+  assert.match(all,/<a href="\?card=r%2Fa#detail">카드 가<\/a><br><small class="run-key">r\/a<\/small>/);
+  assert.deepEqual([...section('?runState=failed').matchAll(/run-state run-([a-z]+)/g)].map(m=>m[1]),['failed']);
+});
