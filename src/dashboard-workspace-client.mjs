@@ -64,7 +64,7 @@ function workspaceClient() {
   $('#dw-panes').classList.toggle('dw-table-layout',!split);$('#dw-panes').classList.toggle('dw-detail-open',state.opened);$('#dw-panes').classList.toggle('dw-expanded',state.expanded);
   const totalInCollection=(rows||[]).filter(c=>state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)).length;
   const filterName=workspaceStateLabel(state.state);
-  $('#dw-count').textContent=rows===null||state.collection==='work'&&data.workError?'모름':visible.length===totalInCollection?('전체 '+totalInCollection+'장'):((state.q||state.repo||state.board)?'조건':filterName)+' '+visible.length+'장 · 전체 '+totalInCollection+'장';
+  $('#dw-count').textContent=rows===null||state.collection==='work'&&data.workError?'모름':visible.length===totalInCollection?('전체 '+totalInCollection+'장'):((state.q||state.repo||state.board||state.health||state.rally)?'조건':filterName)+' '+visible.length+'장 · 전체 '+totalInCollection+'장';
   $$('[data-collection]').forEach(el=>{
    el.setAttribute('aria-pressed',String(el.dataset.collection===state.collection));
    const count=el.querySelector('span');if(count)count.textContent=rows===null||data.workError?'모름':(rows||[]).filter(c=>el.dataset.collection==='work'?c.kind==='work':c.kind!=='work'&&(el.dataset.collection!=='unlinked'||!c.parentWorkKey)).length;
@@ -74,7 +74,9 @@ function workspaceClient() {
   $('#dw-column-tools').hidden=!table;
   $('#dw-list').hidden=!split||rows===null;$('#dw-table').hidden=!table||rows===null;$('#dw-wall').hidden=!wall||rows===null;$('#dw-map').hidden=!map||rows===null;
   $('#dw-list').innerHTML=split&&rows!==null?workspaceRowsHtml(visible,'split',state.card,cols):'';
-  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',state.card,cols):'';if(wall&&rows!==null)$('#dw-wall').innerHTML=workspaceWallHtml(visible,state.card,state.axis);if(map&&rows!==null)$('#dw-map').innerHTML=workspaceMapHtml(visible,state.card,state.root,data.hierarchy||null,rows);
+  // 사용자가 연 카드만 칠한다. 고르지 않은 첫 줄을 선택된 것처럼 보이지 않게(2026-09-25 UX). 목록·상세는 오른쪽에 보이는 카드를 칠한다.
+  const marked=state.opened?state.card:'';
+  $('#dw-table-body').innerHTML=table&&rows!==null?workspaceRowsHtml(visible,'table',marked,cols):'';if(wall&&rows!==null)$('#dw-wall').innerHTML=workspaceWallHtml(visible,marked,state.axis);if(map&&rows!==null)$('#dw-map').innerHTML=workspaceMapHtml(visible,marked,state.root,data.hierarchy||null,rows);
   $('#dw-empty').hidden=rows!==null&&visible.length>0;
   const emptyTitle=$('#dw-empty-title');if(emptyTitle)emptyTitle.textContent=state.collection==='work'&&data.workError?'업무 상태 모름':state.collection==='work'&&!(rows||[]).some(c=>c.kind==='work')?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.';
   $$('[data-layout]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.layout===state.layout)));
@@ -194,7 +196,8 @@ function workspaceClient() {
   else if(button.hasAttribute('data-detail-expand'))change({expanded:!state.expanded,opened:true},{focus:'[data-detail-expand]'});
   else if(button.hasAttribute('data-detail-retry'))loadCard(state.card);
   else if(button.dataset.tab||button.dataset.readTab){showTab(button.dataset.tab||button.dataset.readTab,true);write(true);}
-  else if(button.hasAttribute('data-workspace-reset'))change({q:'',repo:'',board:'',health:'',rally:'',state:'all'},{reset:true,focus:'#dw-search'});
+  // 초기화는 처음 화면과 같은 '미완료'로 돌아간다('전체'가 아니라).
+  else if(button.hasAttribute('data-workspace-reset'))change({q:'',repo:'',board:'',health:'',rally:'',state:''},{reset:true,focus:'#dw-search'});
   else if(button.hasAttribute('data-refresh')){if(activeView()==='operations-flow'){window.dispatchEvent(new CustomEvent('operations-flow-refresh'));return;}if(!saving&&(!dirty||confirm('작성 중인 기록을 저장하지 않고 새로 읽을까요?'))){dirty=false;saveCurrent();const fresh=new URL(location.href);fresh.searchParams.set('fresh',String(Date.now()));location.replace(fresh);}}
  });
  for(const [id,key,event] of [['dw-search','q','input'],['dw-board','board','change'],['dw-repo','repo','change'],['dw-health','health','change'],['dw-rally','rally','change']])$('#'+id).addEventListener(event,e=>{lastActivity=Date.now();change({[key]:e.target.value,opened:false,expanded:false},{replace:event==='input',reset:true});});
