@@ -62,3 +62,14 @@ test('작은 UX: 작업 화면의 상태 이름 설명은 접어 두고, 펼치�
  for(const name of ['상태','실행 흐름','업무 상태'])assert.match(help,new RegExp('<b>'+name+'</b>'));
  assert.doesNotMatch(html,/<p class="dw-evidence-help">/);
 });
+
+test('작은 UX: 표는 열 너비 합보다 화면이 넓으면 화면 폭까지 늘어난다',async()=>{
+ const {dashboardWorkspaceStyle}=await import('../src/dashboard-workspace-style.mjs');
+ assert.match(dashboardWorkspaceStyle,/\.dw-table\{width:max\(100%,var\(--table-width,1500px\)\);table-layout:fixed/);
+});
+
+test('작은 UX: 실행 모델 고르기 칸은 긴 모델 이름이 있어도 칸 폭을 넘지 않는다',async()=>{
+ const {runnerSettingsStyle}=await import('../src/runner-settings-wall.mjs');
+ assert.match(runnerSettingsStyle,/\.rs-pick label\{flex:1 1 180px;min-width:0\}/);
+ assert.match(runnerSettingsStyle,/\.rs-pick select\{display:block;width:100%;max-width:100%;min-width:0\}/);
+});

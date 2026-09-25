@@ -11,6 +11,7 @@ import {workspaceWallHtml,workspaceMapHtml} from './dashboard-canvas.mjs';
 // 열 키 · 화면 이름 · 기본 너비 · 최소 너비. 저장된 배치는 키로 연결한다.
 export const workspaceColumns=[['title','카드 · 목적',290,180],['healthLabel','실행 흐름',145,130],['signalAt','최근 실행 신호',135,120],['flowLabel','티키타카',170,110],['turnLabel','현재 차례',140,110],['model','실행 모델',110,90],['stateLabel','카드 상태',105,90],['next','다음 행동',200,100],['board','판',110,80],['reportAt','마지막 보고',110,100],['at','카드 수정',110,100]];
 // 기본 표는 여섯 열만 그린다(실행 990px · 업무 960px). 다음 행동·판·마지막 보고·카드 수정은 상세에서 확인한다(2026-09-18).
+// 화면이 열 너비 합보다 넓으면 표를 화면 폭까지 늘리고 남는 폭은 열 비율대로 나눈다(2026-09-25 UX: 넓은 화면에서 2/3만 썼다).
 // 실행 표에는 카드 상태를 두지 않는다. 실행 흐름이 같은 값을 근거와 함께 보여준다.
 const columnByKey=new Map(workspaceColumns.map(column=>[column[0],column]));
 const pickColumns=keys=>keys.map(key=>columnByKey.get(key));
