@@ -428,11 +428,12 @@ test('자동 갱신은 작업 화면에서 페이지를 다시 불러오지 않�
  assert.equal(h.nodes.get('#dw-scroll').scrollTop,300);
  assert.equal(h.nodes.get('#dw-refresh-status').textContent,'목록을 15초마다 이어서 받습니다.');
 });
-test('자동 갱신은 작성 중이면 받지 않고, 표 열 구성이 바뀐 자료는 그리지 않는다',async()=>{
+test('자동 갱신은 작성 중이면 받지 않고, 표 열 구성이 바뀐 자료는 그리지 않고 페이지를 다시 불러온다',async()=>{
  const h=browserHarness({refresh:initial=>({rows:initial.rows.map(c=>({...c,title:'그리면 안 됨'})),columns:initial.columns.slice(1),workError:null,hierarchy:null})});
  h.input('작성 중');
  let r=await h.tick();assert.equal(r.gets,0);
  assert.match(h.nodes.get('#dw-refresh-status').textContent,/갱신 보류/);
  const fresh=browserHarness({refresh:initial=>({rows:initial.rows.map(c=>({...c,title:'그리면 안 됨'})),columns:initial.columns.slice(1),workError:null,hierarchy:null})});
- r=await fresh.tick();assert.equal(r.gets,1);assert.ok(!r.body.includes('그리면 안 됨'));
+ fresh.nodes.get('#dw-scroll').scrollTop=300;
+ r=await fresh.tick();assert.equal(r.gets,1);assert.ok(!r.body.includes('그리면 안 됨'));assert.equal(r.reloads,1);
 });

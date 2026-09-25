@@ -172,8 +172,8 @@ function workspaceClient() {
    const parsed=new DOMParser().parseFromString(await response.text(),'text/html'),next=JSON.parse(parsed.querySelector('#dw-data')?.textContent||'null');
    if(!next)throw new Error('목록 자료 없음');
    if(blocked()||activeView()!=='dashboard')return;
-   // 표 머리글은 서버가 그린다. 보이는 열이 바뀌면 예전처럼 페이지를 다시 불러온다.
-   if((next.columns||[]).map(c=>c[0]).join()!==(data.columns||[]).map(c=>c[0]).join()){if(!paused()){saveCurrent();location.reload();}return;}
+   // 표 머리글은 서버가 그린다. 보이는 열이 바뀌면 페이지를 다시 불러온다. 입력·저장 중이 아님은 위에서 확인했고 스크롤·연 카드는 방문 기록으로 되살린다.
+   if((next.columns||[]).map(c=>c[0]).join()!==(data.columns||[]).map(c=>c[0]).join()){saveCurrent();location.reload();return;}
    const focusedKey=document.activeElement?.dataset?.cardKey||'';
    remember();rows=data.rows=next.rows;data.workError=next.workError;data.hierarchy=next.hierarchy;
    for(const id of ['dw-board','dw-repo','dw-health','dw-rally']){const fresh=parsed.querySelector('#'+id);if(fresh&&$('#'+id))$('#'+id).innerHTML=fresh.innerHTML;}
