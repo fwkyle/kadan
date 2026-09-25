@@ -441,7 +441,7 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 </script></body></html>`;
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now} = {}) {
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  const cache=new Map();
@@ -461,8 +461,18 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
   cache.delete(key);cache.set(key,{at,body,type});
   while(cache.size>50)cache.delete(cache.keys().next().value);
  };
-  return http.createServer(async (request, response) => {
+ // 화면은 15초마다 자료를 받는데 공통 수집은 10초만 유지돼 매번 2초 넘는 수집을 기다렸다(2026-09-25 실측: 수집 약 2.2초,
+ // 그리기·전송 약 0.5초). 요청 뒤 12초에 한 번 미리 수집해 다음 요청이 새 수집을 바로 쓰게 한다. 수집은 멈춤 없이 돌아
+ // 그 사이 온 요청은 기다리므로, 요청 직전에 끝나는 시점을 고른다. 요청이 끊기면 더 수집하지 않는다.
+ let warming=null;
+ const warm=()=>{
+  warming=null;
+  const load=()=>{const value=loadSnapshot();if(!value.error&&!value.centerError)sharedSnapshot={at:now(),value};};
+  try{if(home)storageSnapshot(home,load);else load();}catch{}
+ };
+  const server=http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
+    if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
     if (centerHandler && !/^(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(request.headers.host??"")) { response.writeHead(403); response.end("local host required"); return; }
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(url);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
@@ -513,6 +523,8 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     };
     try{if(home)storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(503,{'content-type':'text/plain; charset=utf-8'});response.end('저장소 확인 불가: '+error.message);}
   });
+  server.on('close',()=>{clearTimeout(warming);warming=null;});
+  return server;
 }
 
 export function withWaitSnapshots(tree, home) {

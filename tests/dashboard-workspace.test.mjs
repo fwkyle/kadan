@@ -73,14 +73,15 @@ test('기록 탭은 변경 이유를 한 번 표시하고 실행 사건을 같�
  assert.equal((html.match(/class="dd-history-note">고유 변경 이유</g)||[]).length,1);assert.match(html,/초안 → 배정됨/);assert.match(html,/지시 전달/);
 });
 
-function browserHarness({conflict=false,deferred=false,filterCards=null}={}) {
+function browserHarness({conflict=false,deferred=false,filterCards=null,refresh=null}={}) {
  const cards=filterCards||['a','b','c'].map(id=>card({key:'repo/card-'+id,id:'card-'+id}));
- const initial=readData(render(cards,'?card=repo%2Fcard-a&layout=table&state=all&refresh=0'));
+ const search=refresh?'?card=repo%2Fcard-a&layout=table&state=all':'?card=repo%2Fcard-a&layout=table&state=all&refresh=0';
+ const initial=readData(render(cards,search));let tick=null,gets=0;
  const nodes=new Map(),events=new Map(),windowEvents=new Map(),requests=[];let posts=0,reloads=0,intervals=0,renderedArticle=null,focused='';
  const make=key=>{if(!nodes.has(key))nodes.set(key,{textContent:'',innerHTML:'',hidden:false,value:'',scrollTop:0,scrollLeft:0,dataset:{},classList:{toggle(){}},getClientRects(){return this.hidden?[]:[{}]},setAttribute(){},focus(){focused=key;},matches(){return false},querySelectorAll(){return []},addEventListener(type,fn){events.set(key+':'+type,fn);}});return nodes.get(key);};
  const options=['running','waiting','unconfirmed','orphaned','failed','hold','draft','ready','assigned','done','cancelled','superseded','archived'].map(value=>({value,checked:true}));
  make('#dw-data').textContent=JSON.stringify(initial);
- const location=Object.assign(new URL('http://localhost/?card=repo%2Fcard-a&layout=table&state=all&refresh=0#detail'),{reload(){reloads++}});
+ const location=Object.assign(new URL('http://localhost/'+search+'#detail'),{reload(){reloads++}});
  const views=['dashboard','decisions','status','ledger'].map(view=>Object.assign(make('#view-'+view),{dataset:{view}}));
  const history={state:null,replaceState(data,title,url){this.state=data;if(url)location.href=String(url)},pushState(data,title,url){this.state=data;if(url)location.href=String(url)}};
  const makeForm=(key,revision)=>({action:'http://localhost/cards/update',fields:{token:'fixture-token',key,revision:String(revision),note:'보존할 작성 내용'},matches:s=>s==='form[method="post"]',controls:[{disabled:false}],querySelectorAll(){return this.controls;}});
@@ -92,9 +93,9 @@ function browserHarness({conflict=false,deferred=false,filterCards=null}={}) {
  const response=(key='repo/card-a',revision=3,title='저장한 제목')=>({ok:true,status:200,text:async()=>JSON.stringify({key,revision,title})});
  const context={URL,URLSearchParams,AbortController,structuredClone,Date,Promise,FormData:class extends Map {constructor(f){super(Object.entries(f.fields))}},
   document:{hidden:false,activeElement:null,querySelector:s=>s==='article#detail'?currentArticle:s==='details[open]'||s==='.dw-management[open]'||s==='#dw-card-heading'&&!currentArticle?null:make(s),querySelectorAll:s=>s==='[data-view]'?views:s==='[data-state-option]'?options:[],addEventListener:(type,fn)=>events.set(type,fn),importNode:x=>x},
-  window:{getSelection:()=>null,addEventListener:(type,fn)=>windowEvents.set(type,fn)},matchMedia:()=>({matches:false}),requestAnimationFrame:fn=>fn(),setInterval:()=>intervals++,confirm:()=>true,location,history,
-  fetch:async(url,opts)=>{if(opts.method==='POST')posts++;if(deferred)return new Promise((resolve,reject)=>requests.push({url:String(url),...opts,resolve,reject}));return conflict?{ok:false,status:409,text:async()=>'카드가 변경됨: 새로 읽고 다시 저장'}:response();},
-  DOMParser:class{parseFromString(html){const {key,revision,title}=JSON.parse(html);return {querySelector:s=>s==='article#detail'?{dataset:{key,revision:String(revision)}}:s==='#dw-data'?{textContent:JSON.stringify({rows:[{...initial.rows.find(c=>c.key===key),revision,title}]})}:null};}}
+  window:{getSelection:()=>null,addEventListener:(type,fn)=>windowEvents.set(type,fn)},matchMedia:()=>({matches:false}),requestAnimationFrame:fn=>fn(),setInterval:fn=>{intervals++;tick=fn;},confirm:()=>true,location,history,
+  fetch:async(url,opts)=>{if(opts.method==='POST')posts++;if(refresh&&opts.method!=='POST'&&!String(url).includes('partial=detail')){gets++;return {ok:true,status:200,text:async()=>JSON.stringify({refresh:true,...refresh(initial)})};}if(deferred)return new Promise((resolve,reject)=>requests.push({url:String(url),...opts,resolve,reject}));return conflict?{ok:false,status:409,text:async()=>'카드가 변경됨: 새로 읽고 다시 저장'}:response();},
+  DOMParser:class{parseFromString(html){const parsed=JSON.parse(html);if(parsed.refresh)return {querySelector:s=>s==='#dw-data'?{textContent:JSON.stringify(parsed)}:null};const {key,revision,title}=parsed;return {querySelector:s=>s==='article#detail'?{dataset:{key,revision:String(revision)}}:s==='#dw-data'?{textContent:JSON.stringify({rows:[{...initial.rows.find(c=>c.key===key),revision,title}]})}:null};}}
  };
  runInNewContext(dashboardWorkspaceScript,context);
  const snapshot=()=>({posts,reloads,intervals,renderedArticle,currentKey:currentArticle?.dataset.key,status:make('#dw-detail-status').textContent,body:make('#dw-table-body').innerHTML,url:location.href,note:currentForm?.fields.note,detailHTML,focused,visible:views.filter(el=>!el.hidden).map(el=>el.dataset.view),title:make('#page-title').textContent});
@@ -116,7 +117,7 @@ function browserHarness({conflict=false,deferred=false,filterCards=null}={}) {
   async submit(target=currentForm||form){let prevented=false;await events.get('submit')({target,preventDefault(){prevented=true}});return {prevented,...snapshot()};},
   async respond(index,key,revision=2){requests[index].resolve(response(key,revision));await flush();},
   async reject(index){requests[index].reject(new Error('늦은 조회 실패'));await flush();},
-  requests,snapshot,flush,nodes,form
+  requests,snapshot,flush,nodes,form,tick:async()=>{tick();await flush();await flush();return {gets,...snapshot()};}
  };
 }
 for(const [view,title,shown] of [['decisions','내 결정'],['overview','현황','status'],['boards','현황','status'],['ledger','기록']])test('선택한 카드 URL에서도 #'+view+' 메뉴로 이동한다',()=>{
@@ -415,4 +416,23 @@ test('09-24 브라우저로 보내는 스크립트만으로 카드 월·관계�
   assert.match(html[1], /data-wall-column="implementation"[\s\S]*실행 A/);
   assert.match(html[2], /업무[\s\S]*실행 A/);
   assert.match(html[3], /감독[\s\S]*작업자[\s\S]*실행 A/);
+});
+
+test('자동 갱신은 작업 화면에서 페이지를 다시 불러오지 않고 목록만 바꿔 그리며, 내려 둔 스크롤을 그대로 둔다',async()=>{
+ const h=browserHarness({refresh:initial=>({rows:initial.rows.map(c=>c.key==='repo/card-b'?{...c,title:'새로 받은 제목'}:c),columns:initial.columns,workError:null,hierarchy:null})});
+ h.nodes.get('#dw-scroll').scrollTop=300;
+ assert.ok(!h.snapshot().body.includes('새로 받은 제목'));
+ const after=await h.tick();
+ assert.equal(after.gets,1);assert.equal(after.reloads,0);
+ assert.ok(after.body.includes('새로 받은 제목'));
+ assert.equal(h.nodes.get('#dw-scroll').scrollTop,300);
+ assert.equal(h.nodes.get('#dw-refresh-status').textContent,'목록을 15초마다 이어서 받습니다.');
+});
+test('자동 갱신은 작성 중이면 받지 않고, 표 열 구성이 바뀐 자료는 그리지 않는다',async()=>{
+ const h=browserHarness({refresh:initial=>({rows:initial.rows.map(c=>({...c,title:'그리면 안 됨'})),columns:initial.columns.slice(1),workError:null,hierarchy:null})});
+ h.input('작성 중');
+ let r=await h.tick();assert.equal(r.gets,0);
+ assert.match(h.nodes.get('#dw-refresh-status').textContent,/갱신 보류/);
+ const fresh=browserHarness({refresh:initial=>({rows:initial.rows.map(c=>({...c,title:'그리면 안 됨'})),columns:initial.columns.slice(1),workError:null,hierarchy:null})});
+ r=await fresh.tick();assert.equal(r.gets,1);assert.ok(!r.body.includes('그리면 안 됨'));
 });

@@ -10,10 +10,10 @@ import {installWorkspaceColumns} from './dashboard-workspace-columns.mjs';
 // 아래 함수는 직렬화되어 같은 페이지에서 실행된다. 카드와 업무 폼은 같은 저장·충돌 처리 경로를 쓴다.
 function workspaceClient() {
  const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
- const data=JSON.parse($('#dw-data').textContent),rows=data.rows;
+ const data=JSON.parse($('#dw-data').textContent);let rows=data.rows;
  let state={...data.state,card:data.selected,opened:data.opened,tab:'summary',detailView:'table',expanded:false};
  let loadedKey=data.loadedKey,request=null,dirty=false,pending=false,saving=false,lastActivity=Date.now();
- const loadedAt=Date.now();
+ let loadedAt=Date.now(),refreshing=false,refreshError='';
  let scroll={table:{top:0,left:0},split:{top:0,left:0}},navigation=0;
  const mobile=matchMedia('(max-width:799px)');
  const detailView=installWorkspaceDetail();
@@ -162,9 +162,36 @@ function workspaceClient() {
  }
  const refreshOff=new URLSearchParams(location.search).get('refresh')==='0';
  function paused(){return activeView()==='operations-flow'||resizing.active()||columns.active()||ledgerView.paused()||dirty||pending||saving||document.hidden||Boolean(document.querySelector('details[open]'))||state.opened||Boolean(document.querySelector('.dw-management[open]'))||Boolean(document.activeElement?.matches('input,textarea,select,[contenteditable="true"]'))||Boolean(window.getSelection()?.toString())||activeView()==='decisions'||(activeView()==='dashboard'&&state.layout==='split'&&Boolean(loadedKey))||$('main').scrollTop>0||$('#dw-detail').scrollTop>0||$('#dw-scroll').scrollTop>0||$('#dw-scroll').scrollLeft>0||Date.now()-lastActivity<15000;}
- function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'업무 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());
-  // 갱신이 1분 넘게 멈추면 상태줄 앞쪽에 자료 나이를 눈에 띄게 적는다(2026-09-25 UX). 화면 위에 띄우면 좁은 화면에서 메뉴를 가렸다.
-  const stale=$('#dw-stale');if(stale){const age=Math.floor((Date.now()-loadedAt)/60000),show=!refreshOff&&activeView()!=='operations-flow'&&paused()&&age>=1;stale.hidden=!show;el.hidden=show;if(show)stale.textContent=age+'분 전 자료 · 자동 갱신 멈춤';}}
+ // 작업 화면은 페이지를 다시 불러오지 않고 받은 자료로 목록만 다시 그린다. 스크롤·연 카드·펼친 칸이 남으므로 입력·저장·끌기 중에만 기다린다(2026-09-25).
+ function blocked(){return resizing.active()||columns.active()||dirty||pending||saving||document.hidden||Boolean(document.activeElement?.matches('input,textarea,select,[contenteditable="true"]'))||Boolean(window.getSelection()?.toString());}
+ async function refreshData(){
+  refreshing=true;
+  try{
+   const response=await fetch(location.href,{credentials:'same-origin',cache:'no-store'});
+   if(!response.ok)throw new Error('HTTP '+response.status);
+   const parsed=new DOMParser().parseFromString(await response.text(),'text/html'),next=JSON.parse(parsed.querySelector('#dw-data')?.textContent||'null');
+   if(!next)throw new Error('목록 자료 없음');
+   if(blocked()||activeView()!=='dashboard')return;
+   // 표 머리글은 서버가 그린다. 보이는 열이 바뀌면 예전처럼 페이지를 다시 불러온다.
+   if((next.columns||[]).map(c=>c[0]).join()!==(data.columns||[]).map(c=>c[0]).join()){if(!paused()){saveCurrent();location.reload();}return;}
+   const focusedKey=document.activeElement?.dataset?.cardKey||'';
+   remember();rows=data.rows=next.rows;data.workError=next.workError;data.hierarchy=next.hierarchy;
+   for(const id of ['dw-board','dw-repo','dw-health','dw-rally']){const fresh=parsed.querySelector('#'+id);if(fresh&&$('#'+id))$('#'+id).innerHTML=fresh.innerHTML;}
+   render();restore();
+   if(focusedKey)$$('[data-card-key]').find(a=>a.dataset.cardKey===focusedKey&&a.getClientRects().length)?.focus({preventScroll:true});
+   for(const selector of ['[data-route="decisions"] .dw-decision-count','[data-route="mailbox"] .dw-decision-count','#dw-collected']){const fresh=parsed.querySelector(selector),el=$(selector);if(fresh&&el){el.textContent=fresh.textContent;const label=fresh.getAttribute('aria-label');if(label)el.setAttribute('aria-label',label);}}
+   // 보이지 않는 현황은 통째로 바꾸되 펼쳐 둔 칸은 다시 펼친다.
+   const view=$('[data-view="status"]'),freshView=parsed.querySelector('[data-view="status"]');
+   if(view&&freshView&&view.hidden){const open=$$('[data-view="status"] details[open][id]').map(el=>el.id);view.innerHTML=freshView.innerHTML;for(const id of open){const el=document.getElementById(id);if(el)el.open=true;}}
+   const loaded=(rows||[]).find(c=>c.key===loadedKey),article=$('article#detail');
+   if(loaded&&article&&loaded.revision!=null&&String(loaded.revision)!==article.dataset.revision)status('이 카드 내용이 바뀌었습니다. 카드를 다시 열면 새 내용을 봅니다.');
+   loadedAt=Date.now();refreshError='';
+  }catch(error){refreshError=error.message||'알 수 없음';}
+  finally{refreshing=false;refreshStatus();}
+ }
+ function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;const dash=activeView()==='dashboard',hold=dash?blocked():paused();el.textContent=activeView()==='operations-flow'?'업무 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':refreshError?'목록을 받지 못했습니다 · 다음 주기에 다시 받습니다.':hold?(dash?'갱신 보류 · 입력·저장이 끝나면 이어서 받습니다.':'갱신 보류 · 읽기·작성 위치를 유지합니다.'):dash?'목록을 15초마다 이어서 받습니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&(hold||Boolean(refreshError)));
+  // 자료가 1분 넘게 새로 오지 않으면 상태줄 앞쪽에 자료 나이를 눈에 띄게 적는다(2026-09-25 UX). 화면 위에 띄우면 좁은 화면에서 메뉴를 가렸다.
+  const stale=$('#dw-stale');if(stale){const age=Math.floor((Date.now()-loadedAt)/60000),show=!refreshOff&&activeView()!=='operations-flow'&&age>=1;stale.hidden=!show;el.hidden=show;if(show)stale.textContent=age+'분 전 자료 · 자동 갱신 멈춤';}}
  document.addEventListener('click',event=>{
   lastActivity=Date.now();
   const toastClose=event.target.closest?.('[data-toast-close]');if(toastClose){toastClose.closest('.decision-toast')?.remove();return;}
@@ -254,6 +281,6 @@ function workspaceClient() {
  readLocation();render();route();
  if(history.state?.scroll)scroll=structuredClone(history.state.scroll);
  requestAnimationFrame(restore);
- if(!refreshOff)setInterval(()=>{refreshStatus();if(!paused()){saveCurrent();location.reload();}},15000);
+ if(!refreshOff)setInterval(()=>{refreshStatus();if(activeView()==='dashboard'){if(!refreshing&&!blocked())refreshData();}else if(!paused()){saveCurrent();location.reload();}},15000);
 }
 export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};${canvasScriptHelpers}const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;

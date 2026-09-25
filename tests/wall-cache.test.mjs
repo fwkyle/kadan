@@ -78,3 +78,21 @@ test('업무 조회 캐시는 권한 검사 뒤에만 쓰고 원문·오류는 �
   }
  }finally{server.close();}
 });
+
+test('요청 뒤 한 번 미리 수집해 다음 요청이 수집을 기다리지 않고, 요청이 끊기면 더 수집하지 않는다',async()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-cache-warm-'));
+ let loads=0,clock=Date.now();
+ const server=createWallServer(()=>{loads++;return snapshot();},{home,cacheSec:10,now:()=>clock,warmAfterMs:200});
+ const base=await start(server);
+ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ try{
+  await fetch(base+'/');assert.equal(loads,1);
+  clock+=12_000;
+  await wait(400);assert.equal(loads,2,'요청 뒤 정한 시간에 한 번 미리 수집한다');
+  clock+=3_000;
+  const next=await fetch(base+'/?layout=wall');
+  assert.equal(next.status,200);assert.equal(loads,2,'다음 요청은 미리 만든 수집을 쓴다');
+  await wait(400);assert.equal(loads,3,'요청마다 다음 수집을 한 번 예약한다');
+  await wait(400);assert.equal(loads,3,'새 요청이 없으면 더 수집하지 않는다');
+ }finally{server.close();}
+});
