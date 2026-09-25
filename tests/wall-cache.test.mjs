@@ -96,3 +96,15 @@ test('요청 뒤 한 번 미리 수집해 다음 요청이 수집을 기다리�
   await wait(400);assert.equal(loads,3,'새 요청이 없으면 더 수집하지 않는다');
  }finally{server.close();}
 });
+
+test('같은 공통 수집으로 여러 번 그려도 업무 목록은 한 번만 계산하고, 새 수집이면 다시 계산한다',async()=>{
+ const {renderCenterWall,prepareCenterWall}=await import('../src/center-wall.mjs');
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-works-once-'));
+ let reads=0;
+ const make=()=>{const value={...snapshot(),center:{cards:[],roles:[],boards:[],unregistered:[],runtimeKnown:true},home};Object.defineProperty(value,'registeredWorks',{get(){reads++;return [];},enumerable:true});return value;};
+ const first=make();
+ prepareCenterWall(first);renderCenterWall(first,{url:new URL('http://localhost/')});renderCenterWall(first,{url:new URL('http://localhost/?layout=wall')});
+ assert.equal(reads,1,'미리 계산한 업무 목록을 그리기에서 다시 쓴다');
+ renderCenterWall(make(),{url:new URL('http://localhost/')});
+ assert.equal(reads,2,'새 수집은 새로 계산한다');
+});

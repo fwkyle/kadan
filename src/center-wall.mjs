@@ -28,14 +28,25 @@ const labels={archived:'과거 자료·미분류',running:'작업 중',waiting:'
 const label=x=>labels[x]??x;
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;
-export function renderCenterWall({center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,ledgerState,registeredWorks,runtime}, {token='',url=new URL('http://localhost')}={}) {
+// 업무 목록 계산은 원장 조회를 포함해 약 1초 걸린다(2026-09-25 실측). 같은 공통 수집으로 여러 번 그릴 때는 한 번만 계산하고,
+// 수집이 바뀌면(새 객체) 새로 계산한다. 감시 서버는 미리 수집할 때 이것까지 해 둔다.
+const worksBySnapshot=new WeakMap();
+export function prepareCenterWall(snapshot){
+ if(!snapshot||typeof snapshot!=='object')return {works:null,workError:null};
+ const hit=worksBySnapshot.get(snapshot);if(hit)return hit;
+ const {centerError,entries=[],home,ledgerState,registeredWorks}=snapshot,center=centerError?null:snapshot.center;
+ let works=home?[]:null,workError=null;
+ if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
+ const value={works,workError};worksBySnapshot.set(snapshot,value);return value;
+}
+export function renderCenterWall(snapshot, {token='',url=new URL('http://localhost')}={}) {
+ let {center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,runtime}=snapshot;
  if(centerError)center=null;
  const briefs=buildHumanBrief(center,home);
  // 위 메뉴의 우편함 배지: 답을 기다리는 질문 수(모든 역할). 원장을 못 읽으면 0이 아니라 모름.
  let waitingQuestions=null;
  try{if(ledgerLines!==null)waitingQuestions=mailboxLetters(entries).filter(m=>m.replyStatus==='waiting').length;}catch{waitingQuestions=null;}
- let works=home?[]:null,workError=null;
- if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
+ const {works,workError}=prepareCenterWall(snapshot);
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
  // 관계도에 쓰는 직속 상위. 읽기 실패는 모름(null)으로 두고 화면이 담당별 묶음으로 내려간다.
  const hierarchy=home?readActiveHierarchy(entries):null;

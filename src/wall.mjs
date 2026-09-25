@@ -4,7 +4,7 @@ import {filterMail,mailStatus,mailViews,replyStates} from './dashboard-inbox.mjs
 import {storageSnapshot} from './storage.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
-import { renderCenterWall, createCenterHandler } from "./center-wall.mjs";
+import { renderCenterWall, createCenterHandler, prepareCenterWall } from "./center-wall.mjs";
 import fs from "node:fs";
 import { dutyHead, renderRound } from "./cli.mjs";
 import http from "node:http";
@@ -467,7 +467,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  let warming=null;
  const warm=()=>{
   warming=null;
-  const load=()=>{const value=loadSnapshot();if(!value.error&&!value.centerError)sharedSnapshot={at:now(),value};};
+  const load=()=>{const value=loadSnapshot();if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value};};
   try{if(home)storageSnapshot(home,load);else load();}catch{}
  };
   const server=http.createServer(async (request, response) => {
