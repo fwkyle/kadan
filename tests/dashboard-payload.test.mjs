@@ -18,3 +18,15 @@ test('자료 크기: 고르지 않은 카드의 상세는 페이지에 싣지 �
  const split=view('?collection=executions&state=all&layout=split');
  assert.match(split,/<article id="detail" data-key="repo\/card-a">/);assert.equal(data(split).loadedKey,'repo/card-a');
 });
+
+test('자료 크기: 목록 자료는 이름표를 묶어 보내고, 풀면 JSON으로 주고받은 원래 줄과 같다',async()=>{
+ const {packRows,unpackRows}=await import('../src/dashboard-workspace.mjs');
+ const rows=[{key:'a',title:'가',next:'',model:null,list:[1,{x:2}],flag:false},{key:'b',title:'나',next:'다음',model:'m',list:[],flag:true},{key:'w',kind:'work',skipped:undefined}];
+ const packed=packRows(rows);
+ assert.equal(packed.shapes.length,2);
+ assert.deepEqual(unpackRows(JSON.parse(JSON.stringify(packed))),JSON.parse(JSON.stringify(rows)));
+ assert.equal(packRows(null),null);assert.deepEqual(unpackRows(rows),rows);
+ const sent=data(view('?collection=executions&state=all'));
+ assert.ok(Array.isArray(sent.rows.shapes));
+ assert.deepEqual(unpackRows(sent.rows).map(r=>r.key),['repo/card-a','repo/card-b']);
+});

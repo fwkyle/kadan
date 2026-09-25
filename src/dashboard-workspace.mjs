@@ -133,6 +133,17 @@ export function workspaceRowsHtml(rows,layout,selected,columns=workspaceColumns)
  }).join('');
 }
 const json=value=>JSON.stringify(value).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+// 목록 자료는 줄마다 같은 이름표("purpose": 등)가 되풀이돼 이름표만 약 470KB였다(2026-09-25 실측, 1,053줄 1.6MB).
+// 같은 이름 묶음을 쓰는 줄끼리 이름표를 한 번만 적는다. 풀면 JSON으로 주고받은 원래 객체와 같다.
+export function packRows(rows){
+ if(!Array.isArray(rows))return rows;
+ const shapes=[],index=new Map();
+ return {shapes,rows:rows.map(row=>{const keys=Object.keys(row).filter(key=>row[key]!==undefined),id=keys.join('\u0000');let n=index.get(id);if(n===undefined){n=shapes.length;index.set(id,n);shapes.push(keys);}return [n,...keys.map(key=>row[key])];})};
+}
+export function unpackRows(packed){
+ if(!packed||!Array.isArray(packed.shapes))return packed;
+ return packed.rows.map(([n,...values])=>Object.fromEntries(packed.shapes[n].map((key,i)=>[key,values[i]])));
+}
 export function renderDashboardWorkspace({center,briefs,centerError,url,detail,works=null,workError=null,workDetail,hierarchy=null}) {
  const params=url.searchParams,baseRows=workspaceModel(center,briefs);
  // 현황의 '지금 막힌 것'과 같은 분류(executionBucket)를 실행 줄에 싣는다. health=stuck 필터와 칩이 쓴다(2026-09-24 UX 2차).
@@ -172,7 +183,7 @@ export function renderDashboardWorkspace({center,briefs,centerError,url,detail,w
  <div class="dw-panes ${state.layout==='split'?'':'dw-table-layout'} ${opened?'dw-detail-open':''}" id="dw-panes"><section class="dw-master" id="dw-master" aria-label="작업 목록"><div class="dw-scroll" id="dw-scroll" tabindex="0" aria-label="카드 목록 · 표는 좌우로 스크롤 가능"><ul id="dw-list"${state.layout==='table'?' hidden':''}>${state.layout==='split'?workspaceRowsHtml(filtered,'split',selected,columns):''}</ul><table class="dw-table" id="dw-table"${state.layout!=='table'?' hidden':''}><caption class="dw-sr">열 제목을 클릭하면 정렬, 드래그하면 순서 변경. 열 경계로 너비 조절. 카드 제목으로 상세를 엽니다.</caption><colgroup>${columns.map(([key,,width])=>`<col data-column="${key}" style="width:var(--column-${key},${width}px)">`).join('')}</colgroup><thead><tr>${columns.map(([key,label])=>`<th scope="col" data-column="${key}" data-sort-column="${key}" aria-sort="${state.sort===key?(state.dir==='asc'?'ascending':'descending'):'none'}"><button type="button" data-sort="${key}" aria-describedby="dw-column-help" aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Alt+Home Alt+End" title="클릭: 정렬 · 드래그: 열 순서 이동 · Alt+방향키: 순서 이동">${`<span data-column-label>${collection==='work'?({stateLabel:'업무 상태',reportAt:'업무 기록',at:'관련 기록 갱신'})[key]||label:label}</span>`}<span data-sort-arrow aria-hidden="true">${state.sort===key?(state.dir==='asc'?' ↑':' ↓'):' ↕'}</span></button><span class="dw-column-resize" data-workspace-resize="${key}" role="separator" aria-orientation="vertical" aria-label="${label} 열 너비" aria-controls="dw-table" aria-describedby="dw-column-help" tabindex="0" title="드래그로 ${label} 너비 조절 · 두 번 클릭하면 기본 너비"></span></th>`).join('')}</tr></thead><tbody id="dw-table-body">${state.layout==='table'?workspaceRowsHtml(filtered,'table',explicit||'',columns):''}</tbody></table><div id="dw-wall"${state.layout==='wall'?'':' hidden'}>${state.layout==='wall'?workspaceWallHtml(filtered,explicit||'',state.axis):''}</div><div id="dw-map"${state.layout==='map'?'':' hidden'}>${state.layout==='map'?workspaceMapHtml(filtered,explicit||'',state.root,hierarchy,rows):''}</div><div id="dw-empty"${rows!==null&&filtered.length?' hidden':''}>${rows===null?`<h2>카드 상태 모름</h2><p>${e(centerError||'카드 기록을 읽지 못했습니다.')}</p>`:`<h2 id="dw-empty-title">${collection==='work'&&workError?'업무 상태 모름':works!==null&&collection==='work'&&!works.length?'아직 업무 카드가 없습니다.':'조건에 맞는 카드가 없습니다.'}</h2>${works!==null?'<p><a href="#work-create">새 업무 만들기</a> · <button type="button" data-collection="unlinked">기존 실행 확인</button></p>':''}<button type="button" data-workspace-reset>검색·필터 초기화</button>`}</div></div></section>
  <div class="dw-pane-resize" data-workspace-resize="panes" role="separator" aria-orientation="vertical" aria-label="목록과 상세 너비" aria-controls="dw-master dw-detail" tabindex="0" title="드래그로 목록과 상세 너비 조절 · 두 번 클릭하면 기본 너비"></div>
  <section id="dw-detail" class="dw-detail" aria-label="선택한 카드 상세"><div class="dw-detail-tools"><button type="button" data-detail-close>목록으로</button><span id="dw-detail-status" role="status"></span><button type="button" data-detail-expand>상세 확대</button></div><div id="dw-detail-content">${shownWork?workDetail(shownWork):shownCard?detail(shownCard):`<h2>카드 ${explicit?'확인 필요':'선택'}</h2><p>${explicit?'요청한 카드를 읽을 수 없습니다.':'카드를 선택하면 여기에서 내용을 읽을 수 있습니다.'}</p>`}</div></section></div>
- <script type="application/json" id="dw-data">${json({rows,selected,opened,loadedKey:shownWork?.key||shownCard?.key||'',state,workError,columns,hierarchy})}</script></section>`;
+ <script type="application/json" id="dw-data">${json({rows:packRows(rows),selected,opened,loadedKey:shownWork?.key||shownCard?.key||'',state,workError,columns,hierarchy})}</script></section>`;
 }
 export function renderWorkspaceDetail(c,{brief,center,decisions=[],decisionError=false,form='',collectedAt,entries=[],home,url}={}) {
  const report=currentProgressReport(c);

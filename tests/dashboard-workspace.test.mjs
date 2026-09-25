@@ -1,3 +1,4 @@
+import {unpackRows} from '../src/dashboard-workspace.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Script,runInNewContext} from 'node:vm';
@@ -11,7 +12,7 @@ const at='2020-09-08T01:00:00Z',sent='2020-09-08T00:00:00Z';
 const card=(patch={})=>({key:'repo/card-a',repo:'repo',id:'card-a',title:'제품 조건 확인',body:'# 작업\n\n본문',status:'assigned',displayState:'unconfirmed',role:'작업자',board:'판-a',revision:2,at,scope:'로컬 확인',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at:sent}],history:[],path:'/central/repo/card-a/card.md',sourcePath:'/repo/docs/task.md',repoPath:'/repo',...patch});
 const center=cards=>({cards,roles:[],boards:[],unregistered:[],runtimeKnown:true});
 const render=(cards,query='',other={})=>renderCenterWall({center:center(cards),collectedAt:at,entries:[],ledgerLines:0,...other},{token:'fixture-token',url:new URL('http://localhost/'+query)});
-const readData=html=>JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]);
+const readData=html=>{const data=JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]);data.rows=unpackRows(data.rows);return data;};
 
 test('보고는 Halley 현재 보고 값만 사용하고 없음과 미확인을 구분한다',()=>{
  const c=card({at:'2020-09-09T00:00:00Z',history:[{at,by:'작업자',noteKind:'progress',note:'현재 보고'}]});
