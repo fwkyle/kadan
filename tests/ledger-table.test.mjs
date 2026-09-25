@@ -20,11 +20,11 @@ test('감시 기록은 두 AI의 이름과 보고 완료·시간 초과를 구�
  assert.doesNotMatch(renderLogEntry(entries[2]),/작업 감시AI|감독 관찰AI/);
 });
 
-test('원문 값과 배열 순서를 보존하고 최신 기록부터 25개씩 표시한다',()=>{
+test('원문 값과 배열 순서를 보존하고 최신 기록부터 50개씩 표시한다',()=>{
  const entries=Array.from({length:53},(_,i)=>Object.freeze({kind:'send',t:'2020-09-08T06:00:01Z',by:'sender',role:'recipient',taskId:'card-'+i,preview:'줄 '+i,extra:{keep:[i,null,false]}}));
- const before=JSON.stringify(entries),first=ledger(entries),last=ledger(entries,'?logPage=3');
- assert.equal((first.match(/data-ledger-row=/g)||[]).length,25);
- assert.deepEqual(originals(first),entries.slice(-25).reverse());assert.deepEqual(originals(last),entries.slice(0,3).reverse());assert.equal(JSON.stringify(entries),before);
+ const before=JSON.stringify(entries),first=ledger(entries),last=ledger(entries,'?logPage=2');
+ assert.equal((first.match(/data-ledger-row=/g)||[]).length,50);
+ assert.deepEqual(originals(first),entries.slice(-50).reverse());assert.deepEqual(originals(last),entries.slice(0,3).reverse());assert.equal(JSON.stringify(entries),before);
  assert.match(first,/53건 · 최신순/);assert.match(first,/09\.08 15:00:01/);assert.match(first,/기록 안내/);
  assert.doesNotMatch(first,/<details open/);
 });
@@ -41,7 +41,7 @@ test('위험한 HTML과 알 수 없는 종류·시각도 원문을 잃지 않고
  assert.match(renderLedgerTable([{kind:'done',result:'failed'}]),/실행 실패/);
 });
 test('페이지 이동은 카드 선택·기존 조건을 보존하고 빈 기록과 조회 실패를 구분한다',()=>{
- const entries=Array.from({length:26},(_,i)=>({kind:'start',t:'2020-01-01',role:'worker-'+i}));
+ const entries=Array.from({length:51},(_,i)=>({kind:'start',t:'2020-01-01',role:'worker-'+i}));
  const html=ledger(entries,'?card=repo%2Fcard-a&layout=table&logPage=1');
  const next=decode(html.match(/href="([^"]+logPage=2[^"]*)"/)[1]),url=new URL(next,'http://localhost');
  assert.equal(url.searchParams.get('card'),'repo/card-a');assert.equal(url.searchParams.get('layout'),'table');assert.equal(url.hash,'#ledger');

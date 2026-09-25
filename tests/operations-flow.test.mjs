@@ -107,10 +107,10 @@ test('인수 파일을 못 읽으면 마지막 원장 상태와 미확인을 함
  const h=operationsFlowDetail(f.home,f.work.key).handovers[0];assert.equal(h.accepted,true);assert.equal(h.phase,'accepted');assert.match(h.error,/미확인/);
 });
 
-test('우편 100통 페이지를 제공하고 본문을 응답에 선적재하지 않는다',()=>{
+test('우편 50통 페이지를 제공하고 본문을 응답에 선적재하지 않는다',()=>{
  const f=fixture();for(let i=0;i<103;i++)f.record({kind:'send',workKey:f.work.key,by:'작업자',role:'감독',mailId:randomUUID(),digest:'a'.repeat(12)});
- const a=operationsFlowDetail(f.home,f.work.key),b=operationsFlowDetail(f.home,f.work.key,{page:2});
- assert.equal(a.mail.items.length,100);assert.equal(a.mail.total,106);assert.equal(b.mail.items.length,6);assert.equal(b.mail.page,2);
+ const a=operationsFlowDetail(f.home,f.work.key),b=operationsFlowDetail(f.home,f.work.key,{page:3});
+ assert.equal(a.mail.items.length,50);assert.equal(a.mail.total,106);assert.equal(b.mail.items.length,6);assert.equal(b.mail.page,3);
  assert.ok(a.mail.items.every(m=>!('body'in m)&&!('preview'in m)));
 });
 

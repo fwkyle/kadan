@@ -1,7 +1,7 @@
 import {taskIdentity} from './task-identity.mjs';
 import {renderLedgerTable,ledgerView,ledgerViews,isWatchRoutine,filterLedgerRows} from './ledger-table.mjs';
 import {mailboxLetters} from './mailbox.mjs';
-import {filterMail,mailStatus,mailViews,replyStates} from './dashboard-inbox.mjs';
+import {filterMail,mailStatus,mailViews,replyStates,listPageSize} from './dashboard-inbox.mjs';
 import {activityGuide} from './activity-guide.mjs';
 import {readMailBody} from './ledger.mjs';
 import {documentLink} from './card-content.mjs';
@@ -203,7 +203,7 @@ export function renderActivity({center,entries=[],ledgerLines,error,home},url){
  let routineHidden=0;
  try{ledgerRows=ledgerView(entries,home,domain);if(ledgerRows.some(row=>row?.broken))throw new Error('원장 손상');if(!showRoutine){const before=ledgerRows.length;ledgerRows=ledgerRows.filter(row=>!isWatchRoutine(row));routineHidden=before-ledgerRows.length;}ledgerRows=filterLedgerRows(ledgerRows,ledgerFilter);}catch(error){ledgerError=error.message;}
  const hidden=excluded=>[...url.searchParams].filter(([key])=>!excluded.includes(key)).map(([key,value])=>`<input type="hidden" name="${e(key)}" value="${e(value)}">`).join('');
- const paginate=(items,param)=>{const n=Math.max(1,Math.min(Math.ceil(items.length/25)||1,Math.floor(Number(url.searchParams.get(param)))||1));const link=k=>{const q=new URLSearchParams(url.searchParams);q.set(param,k);return '?'+q+'#'+(param==='mailPage'?'mailbox':param==='runPage'?'runs':'ledger')};return{items:items.slice((n-1)*25,n*25),nav:`<nav>${n>1?`<a href="${e(link(n-1))}">이전</a>`:''}<span>${n} / ${Math.ceil(items.length/25)||1}</span>${n*25<items.length?`<a href="${e(link(n+1))}">다음</a>`:''}</nav>`}};
+ const paginate=(items,param)=>{const n=Math.max(1,Math.min(Math.ceil(items.length/listPageSize)||1,Math.floor(Number(url.searchParams.get(param)))||1));const link=k=>{const q=new URLSearchParams(url.searchParams);q.set(param,k);return '?'+q+'#'+(param==='mailPage'?'mailbox':param==='runPage'?'runs':'ledger')};return{items:items.slice((n-1)*listPageSize,n*listPageSize),nav:`<nav>${n>1?`<a href="${e(link(n-1))}">이전</a>`:''}<span>${n} / ${Math.ceil(items.length/listPageSize)||1}</span>${n*listPageSize<items.length?`<a href="${e(link(n+1))}">다음</a>`:''}</nav>`}};
  const mails=paginate(all,'mailPage'),logs=paginate(ledgerRows.slice().reverse(),'logPage');
  // 작업별 실행: 최근 시각 순, 상태로 거르기, 카드 제목을 먼저(2026-09-24 UX 검토: 시각이 뒤섞이고 모두 같은 회색이었다).
  const runLabels={failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료',done:'완료 기록'};

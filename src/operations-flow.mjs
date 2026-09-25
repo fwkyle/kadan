@@ -10,6 +10,7 @@ import path from 'node:path';
 import {storageMode,storageSnapshot,transaction,readStream} from './storage.mjs';
 import {WorkStore} from './work-store.mjs';
 import {workLetters} from './work-mail.mjs';
+import {listPageSize} from './dashboard-inbox.mjs';
 import {isMailTransfer} from './mail-routing.mjs';
 import {Handover} from './handover.mjs';
 
@@ -183,14 +184,14 @@ export function operationsFlowDetail(home,key,{page=1}={}){
   let cards=[],records=null;
   try{cards=heads(home,'cards');records=linkedRecords(home,work,cards);}catch{errors.push('연결 기록 조회 실패 · 실행 보고·우편·인수 상태는 모름입니다.');}
   const executions=work.executions.map(link=>executionModel(home,link,cards,records));
-  const total=records?records.letters.length:null,pages=total===null?null:Math.max(1,Math.ceil(total/100));
+  const total=records?records.letters.length:null,pages=total===null?null:Math.max(1,Math.ceil(total/listPageSize));
   const selectedPage=Math.min(pages||1,Math.max(1,Number.parseInt(page,10)||1));
   const context={cards,watchCalls:records?.watchCalls,decisions:[],error:records?null:'연결 기록 조회 실패'};
   try{context.decisions=new DecisionStore(home).list();}catch{context.error='결정 기록 조회 실패';}
   const followup=followupFor(home,work,executions,context);
   return {collectedAt:stamp(),...followup,work:fields(work,['key','title','goal','scope','acceptance','owner','status','progress','nextAction','result','revision','at','by']),executions,
    handovers:records?handoverModels(home,records.handovers,executions,cards):null,
-   mail:{total,page:selectedPage,pages,items:records?records.letters.slice((selectedPage-1)*100,selectedPage*100).map(mailModel):[]},errors,
+   mail:{total,page:selectedPage,pages,items:records?records.letters.slice((selectedPage-1)*listPageSize,selectedPage*listPageSize).map(mailModel):[]},errors,
    history:work.history.slice(-30).reverse().map(h=>fields(h,['revision','at','by','action','status','note']))};
  });
 }
