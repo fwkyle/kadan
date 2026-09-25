@@ -30,3 +30,18 @@ test('자료 크기: 목록 자료는 이름표를 묶어 보내고, 풀면 JSON
  assert.ok(Array.isArray(sent.rows.shapes));
  assert.deepEqual(unpackRows(sent.rows).map(r=>r.key),['repo/card-a','repo/card-b']);
 });
+
+test('자료 크기: 기록 원문 보기는 4,000자 넘는 값만 길이로 바꾸고 나머지 값과 순서는 그대로 둔다',async()=>{
+ const {renderLedgerTable,ledgerOriginal}=await import('../src/ledger-table.mjs');
+ const entry={t:'2020-09-08T00:00:00Z',kind:'watch-ai-request',by:'watch',role:'작업자',parents:Object.fromEntries(Array.from({length:600},(_,i)=>['역할-'+i,'상위-'+i])),note:'짧은 값'};
+ const {text,omitted}=ledgerOriginal(entry);
+ assert.equal(omitted,1);
+ const shown=JSON.parse(text);
+ assert.deepEqual(Object.keys(shown),Object.keys(entry));
+ assert.equal(shown.note,'짧은 값');assert.equal(shown.kind,'watch-ai-request');
+ assert.match(shown.parents,/^〔긴 값 생략: [\d,]+자〕$/);
+ const html=renderLedgerTable([entry]);
+ assert.match(html,/기록 원문 · 긴 값 1개 생략\(4,000자 넘음\)/);
+ assert.ok(html.length<6000,'관계표 전체를 싣지 않는다');
+ assert.equal(ledgerOriginal({kind:'send',preview:'a'}).omitted,0);
+});
