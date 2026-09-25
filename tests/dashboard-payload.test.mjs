@@ -45,3 +45,9 @@ test('자료 크기: 기록 원문 보기는 4,000자 넘는 값만 길이로 �
  assert.ok(html.length<6000,'관계표 전체를 싣지 않는다');
  assert.equal(ledgerOriginal({kind:'send',preview:'a'}).omitted,0);
 });
+
+test('자료 크기: 표 줄은 서버가 싣지 않고 화면 스크립트가 목록 자료로 그린다',()=>{
+ const html=view('?collection=executions&state=all');
+ assert.match(html,/<tbody id="dw-table-body"><\/tbody>/);
+ assert.equal(data(html).rows.rows.length,2);
+});

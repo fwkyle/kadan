@@ -1,4 +1,4 @@
-import {unpackRows} from '../src/dashboard-workspace.mjs';
+import {unpackRows,workspaceVisibleColumns} from '../src/dashboard-workspace.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Script,runInNewContext} from 'node:vm';
@@ -13,6 +13,8 @@ const card=(patch={})=>({key:'repo/card-a',repo:'repo',id:'card-a',title:'제품
 const center=cards=>({cards,roles:[],boards:[],unregistered:[],runtimeKnown:true});
 const render=(cards,query='',other={})=>renderCenterWall({center:center(cards),collectedAt:at,entries:[],ledgerLines:0,...other},{token:'fixture-token',url:new URL('http://localhost/'+query)});
 const readData=html=>{const data=JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]);data.rows=unpackRows(data.rows);return data;};
+// 표 줄은 화면 스크립트가 그린다(2026-09-25부터 서버는 싣지 않음). 스크립트 render()와 같은 순서로 표 몸통을 만든다.
+const tableBody=html=>{const d=readData(html),state=d.state;return workspaceRowsHtml(sortWorkspaceRows(filterWorkspaceRows(d.rows,state),state.sort,state.dir),'table',d.opened?d.selected:'',workspaceVisibleColumns(state.collection,d.rows));};
 
 test('보고는 Halley 현재 보고 값만 사용하고 없음과 미확인을 구분한다',()=>{
  const c=card({at:'2020-09-09T00:00:00Z',history:[{at,by:'작업자',noteKind:'progress',note:'현재 보고'}]});
@@ -27,7 +29,7 @@ test('403장 목록 모델에 원본 본문과 이력을 일괄 복사하지 않
  const html=render(cards,'?card=repo%2Fcard-19&state=all');const data=readData(html);
  assert.equal(data.rows.length,403);assert.equal(data.state.layout,'table');assert.equal((html.match(/<article class="card-detail dw-reader"/g)||[]).length,1);
  assert.ok(html.includes('독점본문-19'));assert.ok(!html.includes('독점본문-402'));assert.ok(!JSON.stringify(data).includes('독점보고-'));
- assert.ok(data.rows.every(c=>!('body'in c)&&!('history'in c)));assert.equal((html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1].match(/<tr data-card-row=/g)||[]).length,403);
+ assert.ok(data.rows.every(c=>!('body'in c)&&!('history'in c)));assert.equal((tableBody(html).match(/<tr data-card-row=/g)||[]).length,403);
 });
 test('센터 오류는 모름이며 기존 운영 메뉴와 폼 토큰·revision을 보존한다',()=>{
  const c=card();const html=render([c],'?card=repo%2Fcard-a&refresh=0');
@@ -141,7 +143,7 @@ test('저장 성공은 현재 URL을 유지하면서 새 revision 상세와 해�
 test('표는 제목 원문과 전체 시각을 보존하면서 짧은 상태·시각을 보여준다',()=>{
  const c=card({displayState:'waiting',title:'card-a — 전체 원본 제목',history:[{at,by:'작업자',noteKind:'progress',note:'보고'}]});
  const html=render([c],'?state=all');
- const table=html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ const table=tableBody(html);
  assert.match(table,/title="card-a — 전체 원본 제목"/);assert.match(table,/결과 대기/);assert.match(table,/09\.08 10:00/);assert.match(table,/title="2020\. 9\. 8\. 10(?:시 0분 0초|:00:00)"/);
 });
 test('내 결정 뱃지는 별도 경로로 보존하고 결정 조회 실패는 모름이다',()=>{
@@ -240,7 +242,7 @@ test('표는 미연결 빈 문구를 비우고 확인 필요 우선 정렬과 �
  const html=render([free,attn,fail,coord]);
  assert.equal(readData(html).state.sort,'attention');
  assert.match(html,/미완료 3장 · 전체 4장/);
- const table=html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ const table=tableBody(html);
  assert.ok(!table.includes('라운드 미기록'));assert.ok(!table.includes('연결 정보 없음'));
  assert.equal(table.match(/<tr data-card-row="([^"]+)"/)[1],'repo/attn');
  const allHtml=render([free,attn,fail,coord],'?state=all');
@@ -274,7 +276,7 @@ test('상세는 진행 중 카드의 실행 도구·강도를 보여주고 종�
  const doneHtml=renderWorkspaceDetail(done,{center:{...center([done]),models}});
  assert.doesNotMatch(doneHtml,/실행 도구/);
 });
- const allTable=allHtml.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ const allTable=tableBody(allHtml);
  assert.match(allTable,/관리·조율/);
  assert.ok(!allTable.includes('라운드 미기록'));
 });
@@ -295,13 +297,13 @@ test('실행 표는 카드 상태 열을 중복해 두지 않고 업무 표에�
 test('종료 카드는 실행 흐름 설명·중복 신호 문구·현재 차례를 표에서 반복하지 않는다',()=>{
  const cells=(html,key)=>{const m=html.match(new RegExp('<td data-column="'+key+'"[^>]*>([^]*?)</td>'));return m?m[1]:'';};
  const done=card({status:'done',displayState:'done',runs:[]});
- const table=render([done],'?state=all').match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ const table=tableBody(render([done],'?state=all'));
  assert.equal(cells(table,'healthLabel'),'<span class="execution-health eh-closed" title="실행을 마친 카드입니다.">완료</span>');
  assert.equal(cells(table,'signalAt'),'<strong>신호 없음</strong>');
  assert.equal(cells(table,'turnLabel'),'');
  assert.doesNotMatch(workspaceRowsHtml([done],'split',''),/현재 차례/);
  const live=card({displayState:'running',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at:sent}],history:[{by:'작업자',role:'작업자',noteKind:'progress',note:'배포 확인 중',at}]});
- const liveTable=render([live],'?state=all').match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+ const liveTable=tableBody(render([live],'?state=all'));
  assert.match(cells(liveTable,'healthLabel'),/작업 중/);
  assert.match(cells(liveTable,'healthLabel'),/<small>배포 확인 중<\/small>/);
  assert.match(cells(liveTable,'signalAt'),/<strong>09\.08 10:00<\/strong><small>진행 보고<\/small>/);
@@ -311,7 +313,7 @@ test('실행 모델 열은 원장 문자열의 인용부호를 걷어내고 값�
  const active=card();
  const view=models=>renderDashboardWorkspace({center:{...center([active]),...(models?{models}:{})},briefs:null,centerError:null,url:new URL('http://localhost/?state=all'),detail:()=>'',works:null,workError:null,workDetail:()=>''});
  const withModel=view({'작업자':{harness:'codex',model:"kimi/k3[1m]'",effort:'max',at:sent}});
- assert.match(withModel,/data-column="model"[^>]*><strong>k3\[1m\]<\/strong><small>강도 max<\/small>/);
+ assert.match(tableBody(withModel),/data-column="model"[^>]*><strong>k3\[1m\]<\/strong><small>강도 max<\/small>/);
  const headers=html=>{const m=html.match(/<thead><tr>([\s\S]*?)<\/tr><\/thead>/);return m?[...m[1].matchAll(/data-column="([^"]+)"/g)].map(x=>x[1]):[];};
  assert.ok(headers(withModel).includes('model'));
  assert.deepEqual(headers(view()).includes('model'),false);
@@ -380,7 +382,7 @@ test('서버 렌더는 다중 상태·선택 없음 URL의 목록과 체크 표�
  const cards=['running','waiting','done'].map(state=>card({key:'repo/'+state,id:state,displayState:state}));
  for(const [value,expected] of [['running,waiting',['running','waiting']],['none',[]],['done',['done']]]){
   const html=render(cards,'?state='+encodeURIComponent(value));
-  const body=html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+  const body=tableBody(html);
   assert.equal((body.match(/<tr data-card-row=/g)||[]).length,expected.length);
   assert.deepEqual([...html.matchAll(/data-state-option value="([^"]+)" checked/g)].map(m=>m[1]),expected);
   assert.equal(readData(html).state.state,value);

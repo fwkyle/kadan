@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {renderDashboardWorkspace} from '../src/dashboard-workspace.mjs';
+import {renderDashboardWorkspace,unpackRows,workspaceRowsHtml,sortWorkspaceRows,filterWorkspaceRows,workspaceVisibleColumns} from '../src/dashboard-workspace.mjs';
 import {dashboardWorkspaceScript} from '../src/dashboard-workspace-client.mjs';
 import {renderDashboardStatus} from '../src/dashboard-status.mjs';
 import {renderActivity} from '../src/decision-wall.mjs';
@@ -10,7 +10,8 @@ const at='2020-09-08T01:00:00Z';
 const card=(id)=>({key:'repo/'+id,repo:'repo',id,title:'제목 '+id,body:'본문',status:'assigned',displayState:'unconfirmed',role:'작업자',board:'판-a',revision:1,at,runs:[{role:'작업자',state:'unconfirmed',sentAt:at}],history:[]});
 const center=cards=>({cards,roles:[],boards:[],unregistered:[],runtimeKnown:true});
 const view=query=>renderDashboardWorkspace({center:center([card('card-a'),card('card-b')]),briefs:null,centerError:null,url:new URL('http://localhost/'+query),detail:()=>'',works:[],workError:null,workDetail:()=>''});
-const tableBody=html=>html.match(/<tbody id="dw-table-body">([\s\S]*?)<\/tbody>/)[1];
+// 표 줄은 화면 스크립트가 그린다(서버는 싣지 않음). 스크립트 render()와 같은 순서로 만든다.
+const tableBody=html=>{const d=JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]),rows=unpackRows(d.rows),state=d.state;return workspaceRowsHtml(sortWorkspaceRows(filterWorkspaceRows(rows,state),state.sort,state.dir),'table',d.opened?d.selected:'',workspaceVisibleColumns(state.collection,rows));};
 
 test('작은 UX: 고르지 않은 첫 줄을 표에서 선택된 것처럼 칠하지 않고, 연 카드만 칠한다',()=>{
  assert.doesNotMatch(tableBody(view('?state=all')),/class="selected"/);
