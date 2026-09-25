@@ -1,3 +1,4 @@
+import {unpackRows} from '../src/dashboard-workspace.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,7 +12,7 @@ const at='2020-09-08T01:00:00Z',sent='2020-09-08T00:00:00Z';
 const card=(patch={})=>({key:'repo/card-a',repo:'repo',id:'card-a',title:'제품 조건 확인',body:'# 작업',status:'assigned',displayState:'unconfirmed',role:'작업자',board:'판-a',revision:2,at,scope:'로컬 확인',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at:sent}],history:[],path:'/central/repo/card-a/card.md',sourcePath:'/repo/docs/task.md',repoPath:'/repo',...patch});
 const center=cards=>({cards,roles:[],boards:[],unregistered:[],runtimeKnown:true});
 const render=(cards,query='')=>renderCenterWall({center:center(cards),collectedAt:at,entries:[],ledgerLines:0},{token:'fixture-token',url:new URL('http://localhost/'+query)});
-const readData=html=>JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]);
+const readData=html=>{const data=JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]);data.rows=unpackRows(data.rows);return data;};
 // 카드 월·관계도가 읽는 필드만 가진 행을 직접 만든다.
 const row=(patch={})=>({key:'repo/a',id:'a',title:'카드 가',kind:'execution',owner:'작업자',rallyStep:'implementation',healthKind:'running',healthLabel:'작업 중',healthReason:'진행 보고가 있습니다.',signalAt:sent,signalLabel:'진행 보고',flowLabel:'1라운드 · 구현',flowPhase:'구현 중',turnLabel:'작업자',stateLabel:'작업 중',model:'gpt-6-astra',effort:'max',modelTitle:'codex · gpt-6-astra · 강도 max',purpose:'목적 한 줄',parentWorkKey:'',...patch});
 

@@ -1,3 +1,4 @@
+import {unpackRows} from '../src/dashboard-workspace.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -101,7 +102,7 @@ test('업무 표 기본값·내부 실행 링크·완료 대기·가벼운 목�
  const models=workDashboardModel(store.list(),snapshot.center,[]);
  assert.equal(models[0].turnLabel,'감독');assert.match(models[0].flowLabel,/2라운드 · 감독 최종 확인/);assert.equal(models[0].stateLabel,'진행 중');
  const html=renderCenterWall(snapshot,{url:new URL('http://localhost/?card=work:repo/photos')});
- const data=JSON.parse(html.match(/id="dw-data">([^<]+)</)[1]);
+ const data=JSON.parse(html.match(/id="dw-data">([^<]+)</)[1]);data.rows=unpackRows(data.rows);
  assert.equal(data.state.collection,'work');assert.equal(data.rows.length,2);assert.ok(data.rows.every(x=>!x.executions&&!x.history&&!x.body&&!x.letters));assert.ok(data.rows.filter(x=>x.kind==='work').every(x=>x.workKey),'업무 행은 관계도 연결에 쓸 workKey를 남긴다');
  assert.equal(filterWorkspaceRows(data.rows,{collection:'work',state:'all'}).length,1);
  assert.equal(filterWorkspaceRows(data.rows,{collection:'unlinked',state:'all'}).length,0);

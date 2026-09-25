@@ -1,6 +1,6 @@
 import {renderExecutionHealth} from './dashboard-execution.mjs';
 import {installLedgerTable} from './ledger-table.mjs';
-import {workspaceColumnSets,workspaceColumns,workspaceColumnsFor,workspaceVisibleColumns,workspaceStatePresets,workspacePresetCounts,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel} from './dashboard-workspace.mjs';
+import {workspaceColumnSets,workspaceColumns,workspaceColumnsFor,workspaceVisibleColumns,workspaceStatePresets,workspacePresetCounts,workspaceSelectedStates,workspaceStateLabel,workspaceRowsHtml,filterWorkspaceRows,sortWorkspaceRows,timeLabel,shortTimeLabel,unpackRows} from './dashboard-workspace.mjs';
 import {workspaceWallHtml,workspaceMapHtml,canvasScriptHelpers} from './dashboard-canvas.mjs';
 import {escapeHtml,stateText} from './dashboard-workspace-client-support.mjs';
 import {installWorkspaceDetail} from './dashboard-detail-client.mjs';
@@ -10,7 +10,7 @@ import {installWorkspaceColumns} from './dashboard-workspace-columns.mjs';
 // 아래 함수는 직렬화되어 같은 페이지에서 실행된다. 카드와 업무 폼은 같은 저장·충돌 처리 경로를 쓴다.
 function workspaceClient() {
  const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
- const data=JSON.parse($('#dw-data').textContent);let rows=data.rows;
+ const data=JSON.parse($('#dw-data').textContent);let rows=data.rows=unpackRows(data.rows);
  let state={...data.state,card:data.selected,opened:data.opened,tab:'summary',detailView:'table',expanded:false};
  let loadedKey=data.loadedKey,request=null,dirty=false,pending=false,saving=false,lastActivity=Date.now();
  let loadedAt=Date.now(),refreshing=false,refreshError='';
@@ -175,7 +175,7 @@ function workspaceClient() {
    // 표 머리글은 서버가 그린다. 보이는 열이 바뀌면 페이지를 다시 불러온다. 입력·저장 중이 아님은 위에서 확인했고 스크롤·연 카드는 방문 기록으로 되살린다.
    if((next.columns||[]).map(c=>c[0]).join()!==(data.columns||[]).map(c=>c[0]).join()){saveCurrent();location.reload();return;}
    const focusedKey=document.activeElement?.dataset?.cardKey||'';
-   remember();rows=data.rows=next.rows;data.workError=next.workError;data.hierarchy=next.hierarchy;
+   remember();rows=data.rows=unpackRows(next.rows);data.workError=next.workError;data.hierarchy=next.hierarchy;
    for(const id of ['dw-board','dw-repo','dw-health','dw-rally']){const fresh=parsed.querySelector('#'+id);if(fresh&&$('#'+id))$('#'+id).innerHTML=fresh.innerHTML;}
    render();restore();
    if(focusedKey)$$('[data-card-key]').find(a=>a.dataset.cardKey===focusedKey&&a.getClientRects().length)?.focus({preventScroll:true});
@@ -256,7 +256,7 @@ function workspaceClient() {
    if(!response.ok)throw new Error(html||'저장 실패. HTTP '+response.status);
    const parsed=new DOMParser().parseFromString(html,'text/html'),article=parsed.querySelector('article#detail');
    const updatedData=parsed.querySelector('#dw-data');
-   const freshRows=updatedData?JSON.parse(updatedData.textContent).rows:null;
+   const freshRows=updatedData?unpackRows(JSON.parse(updatedData.textContent).rows):null;
    const updated=freshRows?.find(c=>c.key===key);
    if(!article||article.dataset.key!==key||Number(article.dataset.revision)!==revision+1||!updated||updated.revision!==revision+1)throw new Error('저장 응답을 확인할 수 없습니다. 작성 내용은 유지했습니다. 다시 저장하기 전에 최신 기록을 확인하세요.');
    if(action.startsWith('/works/'))rows.splice(0,rows.length,...freshRows);
@@ -283,4 +283,4 @@ function workspaceClient() {
  requestAnimationFrame(restore);
  if(!refreshOff)setInterval(()=>{refreshStatus();if(activeView()==='dashboard'){if(!refreshing&&!blocked())refreshData();}else if(!paused()){saveCurrent();location.reload();}},15000);
 }
-export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};${canvasScriptHelpers}const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;
+export const dashboardWorkspaceScript=`const renderExecutionHealth=${renderExecutionHealth.toString()};const installLedgerTable=${installLedgerTable.toString()};const installWorkspaceDetail=${installWorkspaceDetail.toString()};const installWorkspaceResize=${installWorkspaceResize.toString()};const installWorkspaceColumns=${installWorkspaceColumns.toString()};const e=${escapeHtml.toString()};const escapeHtml=e;const stateText=${JSON.stringify(stateText)};const statePill=c=>\`<span class="state \${e(c.state||c.displayState)}">\${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>\`;const timeLabel=${timeLabel.toString()};const shortTimeLabel=${shortTimeLabel.toString()};const workspaceColumnSets=${JSON.stringify(workspaceColumnSets)};const workspaceColumns=${JSON.stringify(workspaceColumns)};const workspaceColumnsFor=${workspaceColumnsFor.toString()};const workspaceVisibleColumns=${workspaceVisibleColumns.toString()};const workspaceStatePresets=${JSON.stringify(workspaceStatePresets)};const workspacePresetCounts=${workspacePresetCounts.toString()};const workspaceSelectedStates=${workspaceSelectedStates.toString()};const workspaceStateLabel=${workspaceStateLabel.toString()};const workspaceRowsHtml=${workspaceRowsHtml.toString()};const unpackRows=${unpackRows.toString()};${canvasScriptHelpers}const workspaceWallHtml=${workspaceWallHtml.toString()};const workspaceMapHtml=${workspaceMapHtml.toString()};const filterWorkspaceRows=${filterWorkspaceRows.toString()};const sortWorkspaceRows=${sortWorkspaceRows.toString()};(${workspaceClient.toString()})();`;

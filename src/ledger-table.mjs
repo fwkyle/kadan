@@ -58,10 +58,18 @@ function summaryCell(entry,summary,cardHref){
  const id=text(entry.completion?entry.executionKey||entry.completionTaskId:entry.taskId),href=id?cardHref(entry):null;
  return href&&summary.startsWith(id)?`<a href="${e(href)}">${e(id)}</a>${e(summary.slice(id.length))}`:e(summary);
 }
+// 원문 보기에서 값 하나가 4,000자를 넘으면 길이만 적는다. 감시 AI 요청마다 관계표(parents) 약 1.8만 자가 실려
+// 기록 화면 50줄이 약 480KB였다(2026-09-25 실측). 관계표는 관계도에서 본다. 원장 원본은 그대로다.
+const LONG_VALUE=4000;
+export function ledgerOriginal(entry){
+ let omitted=0;
+ const shown=Object.fromEntries(Object.entries(entry).map(([key,value])=>{const size=JSON.stringify(value)?.length??0;if(size<=LONG_VALUE)return [key,value];omitted++;return [key,`〔긴 값 생략: ${size.toLocaleString('ko-KR')}자〕`];}));
+ return {text:JSON.stringify(shown,null,2),omitted};
+}
 export function renderLedgerTable(entries,{cardHref=()=>null}={}){
  return `<div class="lg-scroll" id="lg-scroll" tabindex="0" aria-label="사건 기록 표 · 좌우로 스크롤 가능"><table class="lg-table"><caption class="dw-sr">사건별 시각, 종류, 기록하거나 보낸 사람, 대상과 원문</caption><colgroup><col><col><col><col><col><col></colgroup><thead><tr><th scope="col">시각</th><th scope="col">사건</th><th scope="col">기록자·보낸 사람</th><th scope="col">대상</th><th scope="col">카드·내용</th><th scope="col">원문</th></tr></thead><tbody>${entries.map((entry,i)=>{
-  const id='lg-original-'+i,label=eventLabel(entry),by=text(entry.by)||'모름',target=text(entry.role)||text(entry.to)||text(entry.board)||(entry.by==='watch'?'감시 전체':'모름'),summary=eventSummary(entry);
-  return `<tr data-ledger-row="${id}"><td title="${e(stamp(entry.t))}">${e(stamp(entry.t,true))}</td><td title="${e(entry.kind)}">${e(label)}</td><td title="${e(by)}">${e(by)}</td><td title="${e(target)}">${e(target)}</td><td title="${e(summary)}">${summaryCell(entry,summary,cardHref)}</td><td><button type="button" data-ledger-toggle aria-expanded="false" aria-controls="${id}" aria-label="${e(stamp(entry.t,true)+' '+label+' 원문')}" title="기록 원문 펼치기">펼치기</button></td></tr><tr class="lg-original-row" id="${id}" hidden><td colspan="6"><div class="lg-original"><div class="lg-original-heading"><strong>${e(label)} · 기록 원문</strong><button type="button" data-ledger-close="${id}">접기</button></div><pre>${e(JSON.stringify(entry,null,2))}</pre></div></td></tr>`;
+  const id='lg-original-'+i,label=eventLabel(entry),by=text(entry.by)||'모름',target=text(entry.role)||text(entry.to)||text(entry.board)||(entry.by==='watch'?'감시 전체':'모름'),summary=eventSummary(entry),original=ledgerOriginal(entry);
+  return `<tr data-ledger-row="${id}"><td title="${e(stamp(entry.t))}">${e(stamp(entry.t,true))}</td><td title="${e(entry.kind)}">${e(label)}</td><td title="${e(by)}">${e(by)}</td><td title="${e(target)}">${e(target)}</td><td title="${e(summary)}">${summaryCell(entry,summary,cardHref)}</td><td><button type="button" data-ledger-toggle aria-expanded="false" aria-controls="${id}" aria-label="${e(stamp(entry.t,true)+' '+label+' 원문')}" title="기록 원문 펼치기">펼치기</button></td></tr><tr class="lg-original-row" id="${id}" hidden><td colspan="6"><div class="lg-original"><div class="lg-original-heading"><strong>${e(label)} · 기록 원문${original.omitted?` · 긴 값 ${original.omitted}개 생략(${LONG_VALUE.toLocaleString('ko-KR')}자 넘음)`:''}</strong><button type="button" data-ledger-close="${id}">접기</button></div><pre>${e(original.text)}</pre></div></td></tr>`;
  }).join('')||'<tr><td colspan="6" class="lg-empty">아직 기록된 사건이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
 
