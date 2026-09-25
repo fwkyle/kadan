@@ -28,14 +28,25 @@ const labels={archived:'과거 자료·미분류',running:'작업 중',waiting:'
 const label=x=>labels[x]??x;
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;
-export function renderCenterWall({center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,ledgerState,registeredWorks,runtime}, {token='',url=new URL('http://localhost')}={}) {
+// 업무 목록 계산은 원장 조회를 포함해 약 1초 걸린다(2026-09-25 실측). 같은 공통 수집으로 여러 번 그릴 때는 한 번만 계산하고,
+// 수집이 바뀌면(새 객체) 새로 계산한다. 감시 서버는 미리 수집할 때 이것까지 해 둔다.
+const worksBySnapshot=new WeakMap();
+export function prepareCenterWall(snapshot){
+ if(!snapshot||typeof snapshot!=='object')return {works:null,workError:null};
+ const hit=worksBySnapshot.get(snapshot);if(hit)return hit;
+ const {centerError,entries=[],home,ledgerState,registeredWorks}=snapshot,center=centerError?null:snapshot.center;
+ let works=home?[]:null,workError=null;
+ if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
+ const value={works,workError};worksBySnapshot.set(snapshot,value);return value;
+}
+export function renderCenterWall(snapshot, {token='',url=new URL('http://localhost')}={}) {
+ let {center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,runtime}=snapshot;
  if(centerError)center=null;
  const briefs=buildHumanBrief(center,home);
  // 위 메뉴의 우편함 배지: 답을 기다리는 질문 수(모든 역할). 원장을 못 읽으면 0이 아니라 모름.
  let waitingQuestions=null;
  try{if(ledgerLines!==null)waitingQuestions=mailboxLetters(entries).filter(m=>m.replyStatus==='waiting').length;}catch{waitingQuestions=null;}
- let works=home?[]:null,workError=null;
- if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
+ const {works,workError}=prepareCenterWall(snapshot);
  const workDetail=w=>renderWorkDetail(w,{token,center,models:works||[],home,url});
  // 관계도에 쓰는 직속 상위. 읽기 실패는 모름(null)으로 두고 화면이 담당별 묶음으로 내려간다.
  const hierarchy=home?readActiveHierarchy(entries):null;
@@ -89,7 +100,7 @@ ${dashboardWorkspaceStyle}
  <section class="panel" id="sessions" data-view="sessions"><h2>담당자 세션</h2>${activityGuide('sessions')}${center&&!center.runtimeKnown?'<p role="alert">현재 세션 상태 모름</p>':''}<p class="muted">생존 여부와 카드 완료 여부는 별개입니다.</p><div class="scroll"><table><thead><tr><th>역할</th><th>생존</th><th>실행 도구 / 모델</th></tr></thead><tbody>${(center?.roles??[]).filter(r=>r.life.state==='alive').map(r=>`<tr><td>${e(r.role)}</td><td>${!center.runtimeKnown?'모름':r.life.pidState==='match'?'열려 있음':'PID 변경 — 확인 필요'}</td><td>${e([r.harness,r.model].filter(Boolean).join(' / ')||'모름')}</td></tr>`).join('')}</tbody></table></div></section>
  ${renderActivity({center,entries,ledgerLines,error,home},url)}
  <details class="panel" data-view="runs"><summary>중앙 카드에 연결되지 않은 실행 ${center?(center.unregistered??[]).length+'건':'모름'}</summary><p>등록 전의 과거 실행도 보존합니다. 같은 카드 ID가 여러 저장소에 있으면 자동 연결하지 않습니다.</p><div class="scroll"><table><thead><tr><th>카드 ID</th><th>역할</th><th>상태</th><th>기록 연결</th><th>판</th></tr></thead><tbody>${(center?.unregistered??[]).map(r=>`<tr><td>${e(r.taskId)}</td><td>${e(r.role)}</td><td>${pill(r.state)}</td><td title="${e(r.connectionReason||'')}">${e(r.connectionLabel||'중앙 카드 미등록')}</td><td>${e(r.board||'미분류')}</td></tr>`).join('')}</tbody></table></div></details>
- </main><footer><span>실행 코드 ${e(runtime?.commit||'모름')}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''} · 시작 ${e(stamp(runtime?.startedAt))}</span><strong class="dw-stale" id="dw-stale" hidden></strong><span>수집 ${e(stamp(collectedAt))}</span><span id="dw-refresh-status" role="status">갱신 상태 확인 중</span><button type="button" data-refresh>새로 읽기</button></footer><script>
+ </main><footer><span>실행 코드 ${e(runtime?.commit||'모름')}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''} · 시작 ${e(stamp(runtime?.startedAt))}</span><strong class="dw-stale" id="dw-stale" hidden></strong><span id="dw-collected">수집 ${e(stamp(collectedAt))}</span><span id="dw-refresh-status" role="status">갱신 상태 확인 중</span><button type="button" data-refresh>새로 읽기</button></footer><script>
  ${dashboardWorkspaceScript}
  ${operationsFlowScript}
  ${decisionScript}

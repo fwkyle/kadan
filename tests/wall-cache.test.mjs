@@ -78,3 +78,33 @@ test('업무 조회 캐시는 권한 검사 뒤에만 쓰고 원문·오류는 �
   }
  }finally{server.close();}
 });
+
+test('요청 뒤 한 번 미리 수집해 다음 요청이 수집을 기다리지 않고, 요청이 끊기면 더 수집하지 않는다',async()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-cache-warm-'));
+ let loads=0,clock=Date.now();
+ const server=createWallServer(()=>{loads++;return snapshot();},{home,cacheSec:10,now:()=>clock,warmAfterMs:200});
+ const base=await start(server);
+ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ try{
+  await fetch(base+'/');assert.equal(loads,1);
+  clock+=12_000;
+  for(let i=0;i<50&&loads<2;i++)await wait(50);assert.equal(loads,2,'요청 뒤 정한 시간에 한 번 미리 수집한다');
+  clock+=3_000;
+  const next=await fetch(base+'/?layout=wall');
+  assert.equal(next.status,200);assert.equal(loads,2,'다음 요청은 미리 만든 수집을 쓴다');
+  for(let i=0;i<50&&loads<3;i++)await wait(50);assert.equal(loads,3,'요청마다 다음 수집을 한 번 예약한다');
+  await wait(400);assert.equal(loads,3,'새 요청이 없으면 더 수집하지 않는다');
+ }finally{server.close();}
+});
+
+test('같은 공통 수집으로 여러 번 그려도 업무 목록은 한 번만 계산하고, 새 수집이면 다시 계산한다',async()=>{
+ const {renderCenterWall,prepareCenterWall}=await import('../src/center-wall.mjs');
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-works-once-'));
+ let reads=0;
+ const make=()=>{const value={...snapshot(),center:{cards:[],roles:[],boards:[],unregistered:[],runtimeKnown:true},home};Object.defineProperty(value,'registeredWorks',{get(){reads++;return [];},enumerable:true});return value;};
+ const first=make();
+ prepareCenterWall(first);renderCenterWall(first,{url:new URL('http://localhost/')});renderCenterWall(first,{url:new URL('http://localhost/?layout=wall')});
+ assert.equal(reads,1,'미리 계산한 업무 목록을 그리기에서 다시 쓴다');
+ renderCenterWall(make(),{url:new URL('http://localhost/')});
+ assert.equal(reads,2,'새 수집은 새로 계산한다');
+});

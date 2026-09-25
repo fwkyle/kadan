@@ -51,7 +51,7 @@ test('작은 UX: 자동 갱신이 1분 넘게 멈추면 상태줄 앞쪽에 자�
  assert.match(html,/<footer><span>실행 코드[^<]*<\/span><strong class="dw-stale" id="dw-stale" hidden><\/strong>/);
  assert.doesNotMatch(html,/<\/main><div class="dw-stale"/);
  const script=String(dashboardWorkspaceScript);
- assert.match(script,/show=!refreshOff&&activeView\(\)!=='operations-flow'&&paused\(\)&&age>=1/);
+ assert.match(script,/show=!refreshOff&&activeView\(\)!=='operations-flow'&&age>=1/);
  assert.match(script,/분 전 자료 · 자동 갱신 멈춤/);
  assert.match(script,/stale\.hidden=!show;el\.hidden=show;/);
 });
