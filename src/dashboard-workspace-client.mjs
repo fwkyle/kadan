@@ -163,8 +163,8 @@ function workspaceClient() {
  const refreshOff=new URLSearchParams(location.search).get('refresh')==='0';
  function paused(){return activeView()==='operations-flow'||resizing.active()||columns.active()||ledgerView.paused()||dirty||pending||saving||document.hidden||Boolean(document.querySelector('details[open]'))||state.opened||Boolean(document.querySelector('.dw-management[open]'))||Boolean(document.activeElement?.matches('input,textarea,select,[contenteditable="true"]'))||Boolean(window.getSelection()?.toString())||activeView()==='decisions'||(activeView()==='dashboard'&&state.layout==='split'&&Boolean(loadedKey))||$('main').scrollTop>0||$('#dw-detail').scrollTop>0||$('#dw-scroll').scrollTop>0||$('#dw-scroll').scrollLeft>0||Date.now()-lastActivity<15000;}
  function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'업무 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());
-  // 아래 상태줄은 잘 안 보인다. 갱신이 1분 넘게 멈추면 위에 자료 나이를 띄운다(2026-09-25 UX).
-  const stale=$('#dw-stale');if(stale){const age=Math.floor((Date.now()-loadedAt)/60000),show=!refreshOff&&activeView()!=='operations-flow'&&paused()&&age>=1;stale.hidden=!show;if(show)stale.querySelector('span').textContent=age+'분 전 자료 · 읽는 중이라 자동 갱신을 멈췄습니다';}}
+  // 갱신이 1분 넘게 멈추면 상태줄 앞쪽에 자료 나이를 눈에 띄게 적는다(2026-09-25 UX). 화면 위에 띄우면 좁은 화면에서 메뉴를 가렸다.
+  const stale=$('#dw-stale');if(stale){const age=Math.floor((Date.now()-loadedAt)/60000),show=!refreshOff&&activeView()!=='operations-flow'&&paused()&&age>=1;stale.hidden=!show;el.hidden=show;if(show)stale.textContent=age+'분 전 자료 · 자동 갱신 멈춤';}}
  document.addEventListener('click',event=>{
   lastActivity=Date.now();
   const toastClose=event.target.closest?.('[data-toast-close]');if(toastClose){toastClose.closest('.decision-toast')?.remove();return;}

@@ -45,13 +45,15 @@ test('작은 UX: 현황 설명은 PID·세션 같은 내부 말을 앞세우지 
  for(const word of ['PID 근거','실행 신호가 아닙니다','실시간 작업 감지','같은 카드 집합'])assert.ok(!status.includes(word),word);
 });
 
-test('작은 UX: 자동 갱신이 1분 넘게 멈추면 위에 자료 나이와 새로 읽기 단추를 띄운다',async()=>{
+test('작은 UX: 자동 갱신이 1분 넘게 멈추면 상태줄 앞쪽에 자료 나이를 눈에 띄게 적는다',async()=>{
  const {renderCenterWall}=await import('../src/center-wall.mjs');
  const html=renderCenterWall({center:center([card('card-a')]),collectedAt:at,entries:[],ledgerLines:0},{token:'t',url:new URL('http://localhost/')});
- assert.match(html,/<div class="dw-stale" id="dw-stale" role="status" hidden><span><\/span><button type="button" data-refresh>지금 새로 읽기<\/button><\/div>/);
+ assert.match(html,/<footer><span>실행 코드[^<]*<\/span><strong class="dw-stale" id="dw-stale" hidden><\/strong>/);
+ assert.doesNotMatch(html,/<\/main><div class="dw-stale"/);
  const script=String(dashboardWorkspaceScript);
  assert.match(script,/show=!refreshOff&&activeView\(\)!=='operations-flow'&&paused\(\)&&age>=1/);
- assert.match(script,/분 전 자료/);
+ assert.match(script,/분 전 자료 · 자동 갱신 멈춤/);
+ assert.match(script,/stale\.hidden=!show;el\.hidden=show;/);
 });
 
 test('작은 UX: 작업 화면의 상태 이름 설명은 접어 두고, 펼치면 이름마다 한 줄씩 설명한다',()=>{
