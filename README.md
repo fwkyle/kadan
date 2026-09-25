@@ -28,7 +28,7 @@ Interface language is currently Korean (role names, CLI output, dashboards). Con
 ## Install
 
 ```bash
-git clone https://github.com/ChickenBreast-ky/kadan.git
+git clone https://github.com/fwkyle/kadan.git
 cd kadan
 npm link          # puts the `kadan` command on your PATH (no dependencies are installed)
 kadan --help
