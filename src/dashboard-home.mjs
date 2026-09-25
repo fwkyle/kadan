@@ -13,6 +13,11 @@ export function mailboxUnread(entries=[],ledgerLines=0){
  if(ledgerLines===null||!Array.isArray(entries)||entries.some(e=>e?.broken))return null;
  return mailboxLetters(entries).filter(e=>e.read===false).length;
 }
+// 답을 기다리는 질문 수(모든 역할). 읽음 확인은 에이전트가 잘 하지 않아 미확인 수는 행동 근거가 약하다(2026-09-25 UX).
+export function mailboxAwaitingReply(entries=[],ledgerLines=0){
+ if(ledgerLines===null||!Array.isArray(entries)||entries.some(e=>e?.broken))return null;
+ return mailboxLetters(entries).filter(e=>e.replyStatus==='waiting').length;
+}
 const taskTableFor=(briefs)=>{
  const explain=c=>briefs?.get(c.key)||{title:c.title||c.id,workstream:'',summary:''};
  return cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">실행 흐름</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream||'')}</small></td><td>${renderExecutionHealth(executionHealth(c))}</td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(h.evidenceAt!==undefined?reportTime(h):'')}</small></td></tr>`;}).join('')}</tbody></table></div>`;

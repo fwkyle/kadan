@@ -20,9 +20,9 @@ test('실행 인박스는 주소와 고유 카드 ID 및 답장만 연결하며 
 });
 test('인박스 페이지는 카드·검색 조건을 보존하고 표시용 본문은 HTML로 실행하지 않는다',()=>{
  const letters=Array.from({length:101},(_,i)=>send({preview:i===100?'<script>끝 편지</script>':'앞 편지'}));
- const url=new URL('http://localhost/?q=사진&layout=table&mailPage=2&tab=mail');
+ const url=new URL('http://localhost/?q=사진&layout=table&mailPage=3&tab=mail');
  const html=renderInbox({key:'work:repo/w',letters},null,url);
- assert.match(html,/2\/2쪽/);assert.match(html,/&lt;script&gt;끝 편지/);assert.doesNotMatch(html,/<script>|앞 편지/);
+ assert.match(html,/3\/3쪽 · 50통씩/);assert.match(html,/&lt;script&gt;끝 편지/);assert.doesNotMatch(html,/<script>|앞 편지/);
  assert.match(html,/tab=summary/);assert.match(html,/layout=table/);assert.match(html,/card=work%3Arepo%2Fw/);
 });
 test('목록은 현재 차례를 남기고 고정 실행 담당 열과 반복 담당 줄을 제거한다',()=>{
