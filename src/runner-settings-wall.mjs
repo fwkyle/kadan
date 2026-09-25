@@ -87,7 +87,12 @@ function model(f){const r=data.runners[f.runner.value],s=f.model;s.replaceChildr
 function preview(f){const box=f.querySelector&&f.querySelector('.rs-preview');if(!box)return;const tpl=data.spawns[f.runner.value];
  if(!tpl||!f.model.value){box.hidden=true;return;}const cmd=tpl.split('{model}').join(f.model.value).split('{effort}').join(f.effort.disabled?'':(f.effort.value||''));
  box.querySelector('.rs-after').textContent=cmd;box.hidden=cmd===(f.dataset.launch||null);}
-document.querySelectorAll('form.rs-row').forEach(f=>{f.runner.addEventListener('change',()=>{model(f);preview(f);});f.model.addEventListener('change',()=>{effort(f);preview(f);});f.effort.addEventListener('change',()=>preview(f));});})();`;
+document.querySelectorAll('form.rs-row').forEach(f=>{f.runner.addEventListener('change',()=>{model(f);preview(f);});f.model.addEventListener('change',()=>{effort(f);preview(f);});f.effort.addEventListener('change',()=>preview(f));});
+// 요약표의 바꾸기는 그 역할의 변경 칸을 펼쳐 보여 준다. 펼친 칸은 새로 읽어도 다시 펼친다(2026-09-25: 새로고침하면 고르기 칸이 접혀 사라진 것처럼 보였다).
+const openKey='kadan.runners.open',edits=[...document.querySelectorAll('details.rs-edit')];
+let opened=[];try{opened=JSON.parse(sessionStorage.getItem(openKey)||'[]');}catch{}
+edits.forEach(d=>{if(opened.includes(d.id))d.open=true;d.addEventListener('toggle',()=>{try{sessionStorage.setItem(openKey,JSON.stringify(edits.filter(x=>x.open).map(x=>x.id)));}catch{}});});
+document.querySelectorAll('[data-rs-open]').forEach(b=>b.addEventListener('click',()=>{const d=document.getElementById('rs-edit-'+b.dataset.rsOpen);if(!d)return;d.open=true;d.scrollIntoView({block:'start'});d.querySelector('select')?.focus({preventScroll:true});}));})();`;
 
 export const runnerSettingsStyle='.rs-summary th[scope=row]{white-space:nowrap}.rs-summary code{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.rs-edit{border:1px solid #d8ded8;border-radius:8px;padding:8px 14px;margin:8px 0}.rs-edit>summary{cursor:pointer;font-weight:600}.rs-edit .rs-row:first-of-type{border-top:0;margin-top:6px}.rs-preview{font-size:12.5px;background:#fff6e3;border-radius:6px;padding:6px 10px}.rs-preview code{overflow-wrap:anywhere}.rs-fallback ol{padding-left:20px}.rs-fallback li{margin:6px 0}.rs-ops button{margin-left:6px}.rs-row{border-top:1px solid #d8ded8;padding-top:12px;margin-top:12px}.rs-pick{display:flex;flex-wrap:wrap;gap:10px}.rs-pick label{flex:1 1 180px;min-width:0}.rs-pick select{display:block;width:100%;max-width:100%;min-width:0}.rs-row code{overflow-wrap:anywhere}';
 
@@ -104,13 +109,13 @@ export function renderRunnerSettings({home,entries=[],token='',saved=null,readCo
  // 기본은 읽기 전용 요약표. 편집 틀은 역할별 '변경'을 펼쳐야 보인다(2026-09-24 UX 검토: 들어가자마자 입력 틀 8개가 열려 실수로 바꾸기 쉬웠다).
  const summaryRow=role=>{const current=settings.presets[settings.activePreset].roles[role]??null;let launch;try{launch=launchFor(settings,role)?.cmd??null}catch(error){launch='모름: '+error.message}
   const fallbacks=(settings.presets[settings.activePreset].fallback?.[role]??[]).length;
-  return `<tr><th scope="row">${e(RUNNER_ROLE_LABELS[role])}<br><small class="muted">${e(role)}</small></th><td>${e(choice(current)??'비어 있음')}</td><td><code>${e(launch??'없음')}</code></td><td>${fallbacks}개</td></tr>`;};
- const summaryTable=`<div class="scroll"><table class="rs-summary"><thead><tr><th>역할</th><th>지금 값</th><th>발령 때 채워질 명령</th><th>폴백</th></tr></thead><tbody>${Object.keys(PROFILE_ROLES).map(summaryRow).join('')}</tbody></table></div>`;
- const editors=Object.keys(PROFILE_ROLES).map(role=>`<details class="rs-edit"><summary>${e(RUNNER_ROLE_LABELS[role])} 값·폴백 변경</summary>${roleForm(settings,runners,role,token)}${fallbackForm(settings,runners,role,token)}</details>`).join('');
+  return `<tr><th scope="row">${e(RUNNER_ROLE_LABELS[role])}<br><small class="muted">${e(role)}</small></th><td>${e(choice(current)??'비어 있음')}</td><td><code>${e(launch??'없음')}</code></td><td>${fallbacks}개</td><td><button type="button" data-rs-open="${e(role)}">바꾸기</button></td></tr>`;};
+ const summaryTable=`<div class="scroll"><table class="rs-summary"><thead><tr><th>역할</th><th>지금 값</th><th>발령 때 채워질 명령</th><th>폴백</th><th><span class="dw-sr">바꾸기</span></th></tr></thead><tbody>${Object.keys(PROFILE_ROLES).map(summaryRow).join('')}</tbody></table></div>`;
+ const editors=Object.keys(PROFILE_ROLES).map(role=>`<details class="rs-edit" id="rs-edit-${e(role)}"><summary>${e(RUNNER_ROLE_LABELS[role])} 값·폴백 변경</summary>${roleForm(settings,runners,role,token)}${fallbackForm(settings,runners,role,token)}</details>`).join('');
  const notice=saved!=null&&Number(saved)===settings.revision?`<p role="status"><strong>저장했습니다(revision ${settings.revision}). ${APPLY_NOTE}.</strong></p>`:'';
  return head+notice+`<p class="muted">화면을 읽은 설정 revision ${settings.revision} · 그사이 다른 곳에서 바뀌면 저장을 거부합니다. 저장은 사람 명의로 원장에 남습니다.</p>
-<h3>지금 설정 (프리셋 ${e(settings.activePreset)})</h3>${summaryTable}${history}
-<h3>프리셋</h3>${presetForm(settings,token)}
+<h3>지금 설정 (프리셋 ${e(settings.activePreset)})</h3>${summaryTable}
 <h3>바꾸기</h3><p role="note"><strong>${FALLBACK_WHEN}.</strong> 자동 전환은 없습니다. 사람이나 감독이 번호를 골라 발령합니다. 고르는 즉시 바뀔 명령을 보여 주고, 저장은 이유를 적어야 됩니다.</p>${editors}
+<h3>프리셋</h3>${presetForm(settings,token)}${history}
 <script type="application/json" id="rs-data">${data}</script><script>${script}</script></section>`;
 }
