@@ -53,3 +53,12 @@ test('작은 UX: 자동 갱신이 1분 넘게 멈추면 위에 자료 나이와 
  assert.match(script,/show=!refreshOff&&activeView\(\)!=='operations-flow'&&paused\(\)&&age>=1/);
  assert.match(script,/분 전 자료/);
 });
+
+test('작은 UX: 작업 화면의 상태 이름 설명은 접어 두고, 펼치면 이름마다 한 줄씩 설명한다',()=>{
+ const html=view('?state=all');
+ const help=html.match(/<details class="dw-evidence-help">([\s\S]*?)<\/details>/)?.[1];
+ assert.ok(help);
+ assert.match(help,/<summary>상태 이름이 여러 개인 이유<\/summary>/);
+ for(const name of ['상태','실행 흐름','업무 상태'])assert.match(help,new RegExp('<b>'+name+'</b>'));
+ assert.doesNotMatch(html,/<p class="dw-evidence-help">/);
+});
