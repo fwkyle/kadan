@@ -26,6 +26,8 @@ ${cardFlowStyle}
 ${ledgerTableStyle}
 
 ${dashboardCanvasStyle}
+.dw-stale{position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:45;display:flex;gap:10px;align-items:center;max-width:calc(100vw - 32px);padding:6px 6px 6px 14px;border:1px solid #d9b25c;border-radius:999px;background:#fff4d6;color:#5c3d00;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.dw-stale button{border-radius:999px;padding:4px 12px;font-size:12px;white-space:nowrap}
 `;
 
 // 좁은 화면(휴대폰) 정리. 2026-09-24 UX 검토 실측(390px): 위 메뉴줄 144px(3줄), 아래 상태줄 80px(2줄),

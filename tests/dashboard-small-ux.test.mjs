@@ -44,3 +44,12 @@ test('작은 UX: 현황 설명은 PID·세션 같은 내부 말을 앞세우지 
  assert.match(status,/맡긴 일이 어디까지 왔는지/);
  for(const word of ['PID 근거','실행 신호가 아닙니다','실시간 작업 감지','같은 카드 집합'])assert.ok(!status.includes(word),word);
 });
+
+test('작은 UX: 자동 갱신이 1분 넘게 멈추면 위에 자료 나이와 새로 읽기 단추를 띄운다',async()=>{
+ const {renderCenterWall}=await import('../src/center-wall.mjs');
+ const html=renderCenterWall({center:center([card('card-a')]),collectedAt:at,entries:[],ledgerLines:0},{token:'t',url:new URL('http://localhost/')});
+ assert.match(html,/<div class="dw-stale" id="dw-stale" role="status" hidden><span><\/span><button type="button" data-refresh>지금 새로 읽기<\/button><\/div>/);
+ const script=String(dashboardWorkspaceScript);
+ assert.match(script,/show=!refreshOff&&activeView\(\)!=='operations-flow'&&paused\(\)&&age>=1/);
+ assert.match(script,/분 전 자료/);
+});

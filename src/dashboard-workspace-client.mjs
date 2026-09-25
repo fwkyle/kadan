@@ -13,6 +13,7 @@ function workspaceClient() {
  const data=JSON.parse($('#dw-data').textContent),rows=data.rows;
  let state={...data.state,card:data.selected,opened:data.opened,tab:'summary',detailView:'table',expanded:false};
  let loadedKey=data.loadedKey,request=null,dirty=false,pending=false,saving=false,lastActivity=Date.now();
+ const loadedAt=Date.now();
  let scroll={table:{top:0,left:0},split:{top:0,left:0}},navigation=0;
  const mobile=matchMedia('(max-width:799px)');
  const detailView=installWorkspaceDetail();
@@ -161,7 +162,9 @@ function workspaceClient() {
  }
  const refreshOff=new URLSearchParams(location.search).get('refresh')==='0';
  function paused(){return activeView()==='operations-flow'||resizing.active()||columns.active()||ledgerView.paused()||dirty||pending||saving||document.hidden||Boolean(document.querySelector('details[open]'))||state.opened||Boolean(document.querySelector('.dw-management[open]'))||Boolean(document.activeElement?.matches('input,textarea,select,[contenteditable="true"]'))||Boolean(window.getSelection()?.toString())||activeView()==='decisions'||(activeView()==='dashboard'&&state.layout==='split'&&Boolean(loadedKey))||$('main').scrollTop>0||$('#dw-detail').scrollTop>0||$('#dw-scroll').scrollTop>0||$('#dw-scroll').scrollLeft>0||Date.now()-lastActivity<15000;}
- function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'업무 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());}
+ function refreshStatus(){const el=$('#dw-refresh-status');if(!el)return;el.textContent=activeView()==='operations-flow'?'업무 흐름은 새로 읽기로 갱신합니다.':refreshOff?'자동 갱신 꺼짐':paused()?'갱신 보류 · 읽기·작성 위치를 유지합니다.':'목록을 15초마다 갱신합니다.';el.classList.toggle('dw-refresh-warning',!refreshOff&&paused());
+  // 아래 상태줄은 잘 안 보인다. 갱신이 1분 넘게 멈추면 위에 자료 나이를 띄운다(2026-09-25 UX).
+  const stale=$('#dw-stale');if(stale){const age=Math.floor((Date.now()-loadedAt)/60000),show=!refreshOff&&activeView()!=='operations-flow'&&paused()&&age>=1;stale.hidden=!show;if(show)stale.querySelector('span').textContent=age+'분 전 자료 · 읽는 중이라 자동 갱신을 멈췄습니다';}}
  document.addEventListener('click',event=>{
   lastActivity=Date.now();
   const toastClose=event.target.closest?.('[data-toast-close]');if(toastClose){toastClose.closest('.decision-toast')?.remove();return;}
