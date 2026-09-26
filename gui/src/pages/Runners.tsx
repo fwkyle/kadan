@@ -44,7 +44,8 @@ export default function Runners() {
   return (
     <section>
       <h1>실행 모델</h1>
-      <p>변경은 다음 발령부터 적용됩니다. 떠 있는 세션은 유지됩니다.</p>
+      <p>다음 작업에 사용할 AI 도구·모델·강도를 역할별로 설정합니다. 변경은 다음 발령부터 적용됩니다.</p>
+      <p className="muted">현재 열린 AI 창은 유지됩니다. 현재 실행 중인 모델은 <a href="#sessions">담당자 상태</a>에서 확인하세요.</p>
       <ErrorMessage error={resource.error} />
       <Freshness collectedAt={data?.collectedAt} {...resource} />
       {!data ? (
@@ -94,9 +95,9 @@ export default function Runners() {
               </tbody>
             </table>
           </div>
-          <h2>값·폴백 변경</h2>
+          <h2>모델·대체 후보 변경</h2>
           <p className="muted">
-            폴백은 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
+            대체 후보(폴백)는 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
             전환은 없습니다.
           </p>
           {Object.entries(data.roles).map(([role, label]) => (
@@ -235,7 +236,7 @@ function RunnerForm({
         }
       }}
     >
-      <h3>{fallback ? "폴백 순서" : "기본 실행 모델"}</h3>
+      <h3>{fallback ? "대체 후보 순서" : "기본 실행 모델"}</h3>
       {dirty && revision !== settings.revision && (
         <p className="warning">
           작성 중 설정이 변경됐습니다. 입력을 유지하며 이전 버전으로의 저장은
@@ -358,7 +359,7 @@ function RunnerForm({
           />
         </label>
         <button className="primary" value="add">
-          {busy ? "저장 중…" : fallback ? "폴백 추가" : "실행 모델 저장"}
+          {busy ? "저장 중…" : fallback ? "대체 후보 추가" : "실행 모델 저장"}
         </button>
       </fieldset>
       <ErrorMessage error={error} />

@@ -81,11 +81,13 @@ export function patchLocation(
 }
 export function cardUrl(key: string) {
   const url = new URL(location.href);
+  const executionCollection = viewOf(url) === "dashboard" && url.searchParams.get("collection") === "unlinked"
+    ? "unlinked" : "executions";
   url.searchParams.set("card", key);
   url.searchParams.set("detail", "1");
   url.searchParams.set(
     "collection",
-    key.startsWith("work:") ? "work" : "executions",
+    key.startsWith("work:") ? "work" : executionCollection,
   );
   url.hash = "detail";
   return url.pathname + url.search + url.hash;

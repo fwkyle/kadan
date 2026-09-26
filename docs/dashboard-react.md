@@ -14,7 +14,16 @@
 
 The structure follows OpenCodex's separation of a built GUI, JSON management endpoints and shared client resources. Its provider-specific code and application-wide abstractions are not copied.
 
-The visual reference is the Kadan dashboard before the React migration: top navigation, the operations menu, footer freshness, compact workspace rows, status sections and inline decision replies. `gui/styles.mjs` reuses its shared CSS at build time; `src/theme.mjs` supplies the same automatic/light/dark palette and the browser keeps the existing `kadan-theme` preference. Architecture changes do not authorize a redesign. Check the rendered reference alongside the React screen when changing presentation; `?legacy=1` is an older ledger view, not this visual reference.
+The visual reference is the Kadan dashboard before the React migration: top navigation, footer freshness, compact workspace rows, status sections and inline decision replies. `gui/styles.mjs` reuses its shared CSS at build time; `src/theme.mjs` supplies the same automatic/light/dark palette and the browser keeps the existing `kadan-theme` preference. Architecture changes do not authorize a redesign. Check the rendered reference alongside the React screen when changing presentation; `?legacy=1` is an older ledger view, not this visual reference.
+
+## Navigation
+
+- Keep six destinations visible: 전체 현황, 업무, 내 결정, 실행 모델, 우편함, 기록. Mobile uses two rows so model settings remain visible.
+- 전체 현황 prioritizes decisions and blocked work, links to 담당자 상태, and previews up to three decisions with a link to the full list. Session status describes currently opened AI windows; execution model settings apply to future dispatches.
+- 업무 defaults to work cards. Individual executions are its second collection; 업무 미연결 is a filter inside that collection. Creation actions belong to their corresponding lists. Mobile keeps search and state shortcuts visible and expands secondary filters and view choices through 필터·보기.
+- 진행 이력 is reached from a work detail (or a linked execution), retains the 업무 navigation selection, and links back to that work. Existing operations-flow and collection=unlinked URLs remain valid.
+- Only 내 결정 carries a personal action count in the top navigation. The mailbox labels the count of questions awaiting replies between roles within its own page.
+- 기록 contains 활동 기록 and 실행 이력. Creation, session and flow pages retain the selection of their parent destination and a visible return link.
 
 ## Completion checks
 
