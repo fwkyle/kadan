@@ -69,9 +69,10 @@ export const decisionStyle=`#decisions.panel{max-width:880px;margin-left:auto;ma
 .dc-pre{white-space:pre-wrap;margin:0;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
 #decisions .dc-form{display:flex;flex-direction:column;gap:8px;margin:2px 0 0;max-width:none}
 .dc-opts{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
-#decisions .dc-opt{display:flex;flex-direction:row;gap:8px;align-items:flex-start;border:1px solid #d9ddd8;background:#fff;border-radius:8px;padding:9px 12px;cursor:pointer;font-size:14px;line-height:1.45}
+#decisions .dc-opt{position:relative;display:flex;flex-direction:row;gap:8px;align-items:flex-start;border:1px solid #d9ddd8;background:#fff;border-radius:8px;padding:9px 12px;cursor:pointer;font-size:14px;line-height:1.45}
 .dc-opt:hover{border-color:#1f6f5c}
 .dc-opt input{position:absolute;opacity:0;width:1px;height:1px}
+/* 숨긴 선택 단추는 칸 안에 묶는다. 기준이 없으면 문서 아래쪽에 놓여, 실제 클릭으로 포커스가 가면 창 전체가 그쪽으로 내려가 흰 화면이 됐다(2026-09-26). */
 .dc-opt .dc-dot{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid #b9c1bb;margin-top:3px}
 .dc-opt:has(input:checked){background:#dcefe8;border-color:#1f6f5c}
 .dc-opt:has(input:checked) .dc-dot{border-color:#1f6f5c;background:#1f6f5c}
