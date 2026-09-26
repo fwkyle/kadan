@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {blockModel, editFallback, initSettings, launchForFallback, parseFallbackSpec, readSettings, setFallback, setRole, setRunnerModel} from '../src/runner-settings.mjs';
+import {blockModel, editFallback, initSettings, launchForFallback, parseFallbackSpec, readSettings, setFallback, setFavorites, setRole, setRunnerModel} from '../src/runner-settings.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
@@ -157,4 +157,36 @@ test('CLI: runners fallback·show와 start --fallback N (이유 필수, --cmd �
   } finally {
     spawnSync('tmux', ['-L', socket, 'kill-server']);
   }
+});
+
+test('즐겨찾기: 역할과 무관한 조합 목록 — 선택지·강도는 검사하고 차단은 보지 않으며, 중복·변화 없음·이유·revision을 거부한다', () => {
+  const f = fixture();
+  const set = (items, revision = 6, extra = {}) => setFavorites(f.home, {items, ...f.meta(revision), ...extra});
+  assert.throws(() => set([{runner:'codex', model:'gpt-9-nowhere', effort:'low'}]), /즐겨찾기 1번: codex에서 고를 수 없는 모델/);
+  assert.throws(() => set([{runner:'codex', model:'gpt-6-sol', effort:'xhigh'}]), /지원하지 않는 강도/);
+  assert.throws(() => set([{runner:'devin', model:'swe-2-max', effort:'high'}]), /강도를 받지 않는다/);
+  assert.throws(() => set([{runner:'devin', model:'swe-2-max'}], 5), /현재 revision 6/);
+  assert.throws(() => set([{runner:'devin', model:'swe-2-max'}], 6, {reason:' '}), /이유/);
+  assert.throws(() => set([{runner:'devin', model:'swe-2-max'}, {runner:'devin', model:'swe-2-max'}]), /이미 즐겨찾기에 있다/);
+  assert.throws(() => set([]), /바뀐 것이 없다/);
+  // 검수자에게 막힌 astra도 즐겨찾기에는 넣을 수 있다 — 역할에 저장할 때 다시 막힌다.
+  const next = set([{runner:'codex', model:'gpt-6-astra', effort:'low'}, {runner:'devin', model:'swe-2-max', effort:''}]);
+  assert.deepEqual(next.favorites, [{runner:'codex', model:'gpt-6-astra', effort:'low'}, {runner:'devin', model:'swe-2-max'}]);
+  assert.equal(next.revision, 7);
+  const event = f.records.at(-1);
+  assert.deepEqual([event.kind, event.action, event.revision, event.before, event.after.length], ['runner-settings', 'favorite', 7, [], 2]);
+  assert.throws(() => setRole(f.home, {role:'reviewer', runner:'codex', model:'gpt-6-astra', effort:'low', ...f.meta(7)}), /정책으로 막은 모델/);
+  assert.equal(set([], 7).favorites, undefined);
+});
+
+test('즐겨찾기 명령: runners favorite --set 저장, show에 보이고 빈 글이면 비운다', () => {
+  const f = fixture();
+  const env = {...process.env, KADAN_HOME:f.home, KADAN_CODEX_MODELS_CACHE:f.cache, KADAN_ROLE:''};
+  const run = (...args) => spawnSync(process.execPath, [cli, 'runners', ...args], {env, encoding:'utf8'});
+  const added = run('favorite', '--set', 'devin:swe-2-max,codex:zai/glm-5.3:high', '--revision', '6', '--reason', '자주 씀');
+  assert.equal(added.status, 0, added.stderr);
+  assert.deepEqual(JSON.parse(run('show').stdout).favorites, [{runner:'devin', model:'swe-2-max'}, {runner:'codex', model:'zai/glm-5.3', effort:'high'}]);
+  assert.equal(run('favorite', '--revision', '7', '--reason', '비움').status, 1);
+  assert.equal(run('favorite', '--set', '', '--revision', '7', '--reason', '비움').status, 0);
+  assert.deepEqual(JSON.parse(run('show').stdout).favorites, []);
 });

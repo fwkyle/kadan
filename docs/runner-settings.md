@@ -7,6 +7,7 @@
 - 1단계(2026-09-23 [kyle] 승인): 설정 파일, `kadan start --profile` 자동 채움, 다른 명령의 이유 기록, 같은 계열 거부, 원장 기록.
 - 2단계(2026-09-23): 대시보드 '실행 모델' 화면에서 역할 값과 활성 프리셋을 바꾼다. 아래 [대시보드 화면](#대시보드-화면)을 본다.
 - 3단계(2026-09-23): 역할별 폴백 순서를 명령·대시보드에서 편집하고, `kadan start ... --fallback N --reason`으로 N번째 폴백을 골라 띄운다. 아래 [폴백 순서](#폴백-순서)를 본다.
+- 즐겨찾기(2026-09-27 [kyle]): 자주 고르는 실행기·모델·강도 조합을 저장해 두고, 대시보드에서 한 번 눌러 세 칸을 채운다. 아래 [즐겨찾기](#즐겨찾기)를 본다.
 
 ## 파일
 
@@ -22,6 +23,7 @@
 | `runners.<그 밖>.models` | 목록 파일이 없는 실행기는 실측한 `{model, efforts}`만 적는다 |
 | `families` | 모델 이름 앞머리로 계열을 읽는 규칙 |
 | `blocked` | 정책으로 막은 모델과 적용 역할 |
+| `favorites` | 화면에서 한 번에 고르는 조합 목록 `[{runner, model, effort}]`. 발령은 읽지 않는다 |
 
 ## 명령
 
@@ -34,6 +36,7 @@ kadan runners model claude claude-opus-5-5 --efforts low,medium,high,xhigh,max -
 kadan runners block gpt-6-astra --roles reviewer --revision N --reason <이유>      # 정책 차단(역할 생략 시 모든 역할)
 kadan runners preset A --revision N --reason <이유>          # 활성 프리셋 전환(있는 프리셋만)
 kadan runners fallback worker --set 'devin:swe-2-max,codex:zai/glm-5.3:high' --revision N --reason <이유>  # 폴백 순서 전체(빈 글이면 비움)
+kadan runners favorite --set 'claude:claude-opus-5-5:high,codex:kimi/k3[1m]:max' --revision N --reason <이유>  # 즐겨찾기 전체(빈 글이면 비움)
 kadan start <역할> --profile worker          # --cmd 없이: 설정의 명령으로 띄운다
 kadan start <역할> --profile worker --cmd '<명령>' --reason <이유>   # 설정과 다른 명령
 kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 폴백으로 띄운다
@@ -96,3 +99,14 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 순서 바꾸기·삭제: 항목의 **위로**·**아래로**·**삭제**.
 - 버튼 한 번이 저장 한 번이다. 매번 이유가 필요하고 원장 사건이 하나씩 남는다.
 - 쓰기 주소는 `POST /runners/fallback`(`token`·`revision`·`role`·`reason`·`op`=`add`|`remove:N`|`up:N`|`down:N`, 추가면 `runner`·`model`·`effort`). 서버가 저장 직전 목록에 조작을 적용한 뒤 위 검사를 모두 거친다. 토큰·출처가 틀리면 403, 틀린 revision·빈 이유·목록 밖 값·강도·차단·계열 충돌·없는 번호는 409.
+
+## 즐겨찾기
+
+자주 고르는 실행기·모델·강도 조합을 목록으로 둔다. 역할·프리셋과 무관한 한 목록(`favorites`)이고, 발령은 이 목록을 읽지 않는다. 화면에서 세 칸을 매번 고르는 수고만 줄인다.
+
+- 대시보드 '실행 모델'의 역할 바꾸기 칸(기본 실행 모델·대체 후보) 위에 즐겨찾기 버튼이 뜬다. 누르면 실행기·모델·강도를 채우고, 이유 칸이 비어 있으면 `즐겨찾기: <조합>`을 채운다. 저장은 여전히 **실행 모델 저장**(또는 **대체 후보 추가**)을 눌러야 되고, 그때 그 역할 기준 검사(차단·계열 등)를 모두 거친다.
+- 추가: 기본 실행 모델 칸에서 조합을 고르고 **이 조합 즐겨찾기**. 삭제: **즐겨찾기 관리**의 **삭제**. 버튼 한 번이 저장 한 번이며, 이유는 화면이 `즐겨찾기 추가`·`즐겨찾기 삭제`로 채워 보낸다.
+- 저장 검사: 목록 안의 실행기·모델, 모델이 지원하는 강도, 중복·변화 없음. 역할이 없으므로 정책 차단은 보지 않는다. 막힌 모델의 즐겨찾기 버튼은 그 역할 칸에서 눌리지 않는다.
+- 다른 설정과 같은 공통 경로(revision 대조·이유 필수·원장 `runner-settings` 사건, `action: favorite`, `before`·`after`는 목록 전체)다. revision이 오르므로, 다른 역할 칸을 작성하던 중이면 "설정이 변경됐습니다" 안내가 뜬다. 즐겨찾기를 추가한 그 칸은 새 revision으로 이어서 저장할 수 있다. 다른 칸은 화면을 새로 읽어야 저장된다.
+- 쓰기 주소는 `POST /runners/favorite`(`token`·`revision`·`reason`·`op`=`add`|`remove:N`, 추가면 `runner`·`model`·`effort`). 토큰·출처가 틀리면 403, 틀린 revision·빈 이유·목록 밖 값·강도·중복·없는 번호는 409.
+- 예전 HTML 벽 화면(`runner-settings-wall`)에는 버튼이 없고, 최근 변경 표에 `즐겨찾기` 사건만 보인다.

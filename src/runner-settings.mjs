@@ -47,7 +47,7 @@ export function runnerChoices(settings, runner, {readCodexModels = () => JSON.pa
   return new Map((spec.models ?? []).map(m => [m.model, m.efforts ?? []]));
 }
 
-function checkChoice(settings, role, {runner, model, effort}, options) {
+function checkChoice(settings, role, {runner, model, effort}, options, {checkBlocked = true} = {}) {
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
   const choices = runnerChoices(settings, runner, options);
@@ -56,7 +56,7 @@ function checkChoice(settings, role, {runner, model, effort}, options) {
   const needsEffort = settings.runners[runner].spawn.includes('{effort}');
   if (needsEffort && !efforts.includes(effort)) throw new Error(`${model}이 지원하지 않는 강도: ${effort ?? '(없음)'} — 가능: ${efforts.join('/') || '없음'}`);
   if (!needsEffort && effort != null) throw new Error(`${runner}은 강도를 받지 않는다`);
-  const blocked = (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+  const blocked = checkBlocked && (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
   if (blocked) throw new Error(`정책으로 막은 모델: ${model} — ${blocked.reason}`);
 }
 
@@ -254,5 +254,25 @@ export function setFallback(home, {role, items, preset, ...meta}) {
     next.presets[name].fallback = {...(next.presets[name].fallback ?? {}), [role]: list};
     if (!list.length) delete next.presets[name].fallback[role];
     return {preset: name, role, before, after: list};
+  });
+}
+
+// 즐겨찾기: 자주 고르는 실행기·모델·강도 조합 목록(2026-09-27 [kyle]). 발령에는 쓰지 않고, 화면에서 세 칸을 한 번에 채우는 데만 쓴다.
+// 역할과 무관한 목록이라 정책 차단은 여기서 보지 않는다 — 역할 값·폴백으로 저장할 때 그 역할 기준으로 다시 검사한다.
+export function setFavorites(home, {items, ...meta}) {
+  if (!Array.isArray(items)) throw new Error('즐겨찾기 목록 필요');
+  const {readCodexModels, ...rest} = meta;
+  return change(home, {...rest, action: 'favorite'}, next => {
+    const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
+    list.forEach((item, i) => {
+      try { checkChoice(next, null, item, readCodexModels ? {readCodexModels} : {}, {checkBlocked: false}); }
+      catch (error) { throw new Error(`즐겨찾기 ${i + 1}번: ${error.message}`); }
+    });
+    if (new Set(list.map(item => JSON.stringify(item))).size !== list.length) throw new Error('이미 즐겨찾기에 있다');
+    const before = next.favorites ?? [];
+    if (JSON.stringify(before) === JSON.stringify(list)) throw new Error('바뀐 것이 없다');
+    next.favorites = list;
+    if (!list.length) delete next.favorites;
+    return {before, after: list};
   });
 }

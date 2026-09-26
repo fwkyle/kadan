@@ -40,6 +40,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .toolbar .search { flex: 1; }
 .toolbar .search input { width: 100%; min-width: 160px; }
 .toolbar select { max-width: 190px; }
+.favorites { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .mobile-filter-toggle { display: none; }
 .segmented { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .segmented button[aria-pressed=true] { background: #e6f1ea; color: #155e43; border-color: #9fbfac; }

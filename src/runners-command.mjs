@@ -1,6 +1,6 @@
-import {blockModel, initSettings, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setRunner, setRunnerModel, settingsPath, PROFILE_ROLES} from './runner-settings.mjs';
+import {blockModel, initSettings, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setFavorites, setRunner, setRunnerModel, settingsPath, PROFILE_ROLES} from './runner-settings.mjs';
 
-export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] | runner <실행기> --spawn 명령틀 --revision N --reason 이유 | model <실행기> <모델> --efforts a,b --revision N --reason 이유 | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움). 상세: docs/runner-settings.md';
+export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] | runner <실행기> --spawn 명령틀 --revision N --reason 이유 | model <실행기> <모델> --efforts a,b --revision N --reason 이유 | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
 
 export function runnersCommand([action, role, model], flags, {home, by, record}) {
   flags = {...flags, _model: model};
@@ -13,7 +13,7 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
     const fallback = Object.fromEntries(Object.entries(fallbacks).map(([r, list]) =>
       [r, list.map((item, i) => ({...item, cmd: launchForFallback(settings, r, i + 1).cmd}))]));
     return {path: settingsPath(home), exists: true, revision: settings.revision, activePreset: settings.activePreset,
-      roles: settings.presets[settings.activePreset].roles, launch, fallback};
+      roles: settings.presets[settings.activePreset].roles, launch, fallback, favorites: settings.favorites ?? []};
   }
   if (action === 'init') return initSettings(home, {by, reason: flags.reason, record});
   if (action === 'set') {
@@ -28,6 +28,10 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
   if (action === 'fallback') {
     if (typeof flags.set !== 'string') throw new Error("폴백 목록 필요: --set '실행기:모델[:강도],…' (비우려면 --set '')");
     return setFallback(home, {role, items: parseFallbackSpec(flags.set), preset: flags.preset, ...meta});
+  }
+  if (action === 'favorite') {
+    if (typeof flags.set !== 'string') throw new Error("즐겨찾기 목록 필요: --set '실행기:모델[:강도],…' (비우려면 --set '')");
+    return setFavorites(home, {items: parseFallbackSpec(flags.set), ...meta});
   }
   throw new Error(RUNNERS_USAGE);
 }

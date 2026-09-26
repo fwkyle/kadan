@@ -274,3 +274,30 @@ test('09-25 실행 모델: 요약표 역할마다 바꾸기 단추가 그 역할
   assert.match(html, /sessionStorage\.getItem\(openKey\)/);
   assert.match(html, /d\.open=true;d\.scrollIntoView/);
 });
+
+test('즐겨찾기 쓰기 경로: 추가·삭제는 사람 명의로 저장하고 토큰·조작·모델 없음·중복·없는 번호를 거부한다', async () => {
+  const f = fixture();
+  const server = createWallServer(() => ({center:null, entries:readLedger(f.home), tree:[], ledgerLines:0, collectedAt:new Date()}), {home:f.home, cacheSec:0});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    let revision = 6;
+    const post = fields => fetch(base + '/runners/favorite', {method:'POST', redirect:'manual',
+      headers:{'content-type':'application/x-www-form-urlencoded', origin:base}, body:new URLSearchParams({token, revision:String(revision), reason:'즐겨찾기 추가', ...fields})});
+    const refused = async (response, status, pattern) => { assert.equal(response.status, status); assert.match(await response.text(), pattern); };
+    const saved = async response => { assert.equal(response.status, 303); revision++; };
+    await refused(await post({op:'add', runner:'devin', model:'swe-2-max', token:''}), 403, /새로 읽은 뒤/);
+    await refused(await post({op:'up:1'}), 409, /알 수 없는 즐겨찾기 조작/);
+    await refused(await post({op:'add', runner:'codex'}), 409, /즐겨찾기에 넣을 모델을 고르세요/);
+    await refused(await post({op:'remove:1'}), 409, /없는 즐겨찾기 번호: 1/);
+    await saved(await post({op:'add', runner:'devin', model:'swe-2-max'}));
+    await refused(await post({op:'add', runner:'devin', model:'swe-2-max'}), 409, /이미 즐겨찾기에 있다/);
+    await saved(await post({op:'add', runner:'codex', model:'gpt-6-astra', effort:'low'}));
+    await saved(await post({op:'remove:1', reason:'즐겨찾기 삭제'}));
+    assert.deepEqual(readSettings(f.home).favorites, [{runner:'codex', model:'gpt-6-astra', effort:'low'}]);
+    const events = readLedger(f.home).filter(e => e.kind === 'runner-settings' && e.action === 'favorite');
+    assert.deepEqual(events.map(e => [e.by, e.revision, e.after.length]), [['사람', 7, 1], ['사람', 8, 2], ['사람', 9, 1]]);
+    assert.match(await (await fetch(base)).text(), /즐겨찾기<\/td><td>1\. devin \/ swe-2-max; 2\. codex \/ gpt-6-astra \/ low → 1\. codex \/ gpt-6-astra \/ low/);
+  } finally { await new Promise(r => server.close(r)); }
+});

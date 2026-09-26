@@ -22,7 +22,10 @@ type Settings = {
     }
   >;
   blocked?: { model: string; roles?: string[]; reason: string }[];
+  favorites?: Choice[];
 };
+const label = (c: Choice) =>
+  [c.runner, c.model, c.effort].filter(Boolean).join(" / ");
 type RunnersData = Stamp & {
   settings: Settings | null;
   roles: Record<string, string>;
@@ -112,6 +115,7 @@ export default function Runners() {
               />
             </details>
           ))}
+          <Favorites settings={data.settings} />
           <details>
             <summary>프리셋 전환</summary>
             <ActionForm
@@ -197,6 +201,54 @@ function RunnerForm({
     setDirty(true);
   };
   const list = settings.presets[settings.activePreset].fallback?.[role] || [];
+  const favorites = settings.favorites || [];
+  const blockedFor = (model: string) =>
+    settings.blocked?.find(
+      (b) => b.model === model && (!b.roles || b.roles.includes(role)),
+    );
+  // 즐겨찾기 한 번 누르면 세 칸을 채우고, 이유가 비어 있으면 이유도 채운다(2026-09-27 [kyle]: 매번 세 칸 고르기가 번거로웠다).
+  const pick = (fav: Choice) => {
+    change({
+      runner: fav.runner,
+      model: fav.model,
+      effort: data.catalog[fav.runner]?.needsEffort ? fav.effort || "" : "",
+    });
+    if (!reason.trim()) setReason("즐겨찾기: " + label(fav));
+  };
+  const usable = (fav: Choice) =>
+    Boolean(
+      data.catalog[fav.runner]?.models.some((m) => m.model === fav.model),
+    ) && !blockedFor(fav.model);
+  const isFavorite = favorites.some(
+    (f) =>
+      f.runner === choice.runner &&
+      f.model === choice.model &&
+      (f.effort || "") === (choice.effort || ""),
+  );
+  const addFavorite = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await save(
+        "/runners/favorite",
+        {
+          op: "add",
+          ...choice,
+          effort: choice.effort || "",
+          reason: "즐겨찾기 추가",
+          revision: String(settings.revision),
+        },
+        context.token,
+      );
+      // 즐겨찾기만 바뀌었으므로, 작성 중인 이 칸은 새 버전 기준으로 이어서 저장할 수 있다.
+      if (saved.result.revision) setRevision(saved.result.revision);
+      context.notice("즐겨찾기에 넣었습니다: " + label(choice));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "저장 실패");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <form
       className="action-form"
@@ -267,6 +319,31 @@ function RunnerForm({
               </li>
             ))}
           </ol>
+        )}
+        {favorites.length > 0 && (
+          <div className="favorites" aria-label="즐겨찾기">
+            <span className="muted">즐겨찾기</span>
+            {favorites.map((fav, i) => {
+              const blocked = blockedFor(fav.model);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => pick(fav)}
+                  disabled={!usable(fav)}
+                  title={
+                    blocked
+                      ? "차단: " + blocked.reason
+                      : usable(fav)
+                        ? undefined
+                        : "지금 목록에 없는 모델"
+                  }
+                >
+                  ★ {label(fav)}
+                </button>
+              );
+            })}
+          </div>
         )}
         <div className="toolbar">
           <label>
@@ -361,8 +438,68 @@ function RunnerForm({
         <button className="primary" value="add">
           {busy ? "저장 중…" : fallback ? "대체 후보 추가" : "실행 모델 저장"}
         </button>
+        {!fallback && (
+          <button
+            type="button"
+            onClick={addFavorite}
+            disabled={!choice.model || isFavorite}
+          >
+            {isFavorite ? "★ 즐겨찾기에 있음" : "☆ 이 조합 즐겨찾기"}
+          </button>
+        )}
       </fieldset>
       <ErrorMessage error={error} />
     </form>
+  );
+}
+
+// 즐겨찾기 관리: 목록 보기와 삭제. 추가는 각 역할의 '이 조합 즐겨찾기' 버튼으로 한다.
+function Favorites({ settings }: { settings: Settings }) {
+  const context = useContext(AppContext),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState<string | null>(null);
+  const list = settings.favorites || [];
+  const remove = async (i: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await save(
+        "/runners/favorite",
+        {
+          op: "remove:" + (i + 1),
+          reason: "즐겨찾기 삭제",
+          revision: String(settings.revision),
+        },
+        context.token,
+      );
+      context.notice("즐겨찾기에서 뺐습니다: " + label(list[i]));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "저장 실패");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details>
+      <summary>즐겨찾기 관리 ({list.length}개)</summary>
+      {list.length ? (
+        <ul>
+          {list.map((fav, i) => (
+            <li key={i}>
+              {label(fav)}{" "}
+              <button type="button" disabled={busy} onClick={() => remove(i)}>
+                삭제
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">
+          아직 없습니다. 역할 바꾸기 칸에서 조합을 고르고 '이 조합 즐겨찾기'를
+          누르세요.
+        </p>
+      )}
+      <ErrorMessage error={error} />
+    </details>
   );
 }
