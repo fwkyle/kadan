@@ -126,6 +126,9 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
           <p>{data.row.healthReason}</p>
           <Freshness collectedAt={data.collectedAt} {...resource} footer={false} />
           <nav className="inline-nav">
+            {(data.kind === "work" || data.row.parentWorkKey) && <a href={"/?flowWork=" + encodeURIComponent(data.kind === "work" ? data.key.replace(/^work:/, "") : data.row.parentWorkKey!) + "#operations-flow"}>
+              {data.kind === "work" ? "진행 이력" : "연결된 업무의 진행 이력"}
+            </a>}
             <a href={"/?mailCard=" + encodeURIComponent(data.key) + "#mailbox"}>
               이 카드의 우편 {data.mailTotal}건
             </a>
@@ -136,7 +139,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
                 "&ledgerRoutine=1#ledger"
               }
             >
-              이 카드의 사건
+              이 카드의 활동 기록
             </a>
           </nav>
           <Facts

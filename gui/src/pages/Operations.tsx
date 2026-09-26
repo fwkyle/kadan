@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useResource } from "../resource";
-import { patchLocation } from "../navigation";
+import { cardUrl, patchLocation } from "../navigation";
 import type { Stamp } from "../types";
 import {
   CardLink,
@@ -75,7 +75,10 @@ export default function Operations({ url }: { url: URL }) {
       data?.works[0]?.key;
   return (
     <section>
-      <h1>업무 흐름</h1>
+      <nav className="inline-nav" aria-label="상위 화면">
+        <a href={key ? cardUrl("work:" + key) : "/?collection=work#dashboard"}>{key ? "업무 상세로" : "업무 목록으로"}</a>
+      </nav>
+      <h1>업무 진행 이력</h1>
       <p>업무의 약속부터 실행·검수·인계·우편까지 연결해서 봅니다.</p>
       <ErrorMessage error={resource.error} />
       <Freshness collectedAt={data?.collectedAt} {...resource} />

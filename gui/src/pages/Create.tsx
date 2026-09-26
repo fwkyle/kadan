@@ -7,14 +7,15 @@ export default function Create({ kind }: { kind: string }) {
   });
   return (
     <section>
-      <h1>{kind === "work" ? "새 업무" : "새 실행 초안"}</h1>
+      <nav className="inline-nav" aria-label="상위 화면"><a href={"/?collection=" + (kind === "work" ? "work" : "executions") + "#dashboard"}>{kind === "work" ? "업무 목록으로" : "실행 목록으로"}</a></nav>
+      <h1>{kind === "work" ? "새 업무" : "실행 추가"}</h1>
       <p>
         목표와 완료 조건을 기록합니다. 등록 후 담당 배정과 발령은 별도로
         진행합니다.
       </p>
       <nav className="inline-nav">
-        <a href="#work-create">업무 카드</a>
-        <a href="#card-create">실행 초안</a>
+        <a href="#work-create">새 업무</a>
+        <a href="#card-create">실행 추가</a>
       </nav>
       <ErrorMessage error={resource.error} />
       {resource.data ? (

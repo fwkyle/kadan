@@ -62,10 +62,10 @@ export default function Status({url}: {url: URL}) {
     <div className="st-work-foot"><span>최근 실행 신호 {row.signalLabel || "없음"} {row.signalAt && time(row.signalAt)}</span><span className="st-when">업무 기록 {row.reportLabel}</span>{row.summary && <span className="st-sum">{row.summary}</span>}</div>
   </article>;
   return <section className="st-view">
-    <header className="st-lead"><h1>지금 작업이 어떻게 진행되고 있나요?</h1><p>맡긴 일이 어디까지 왔는지, 막힌 곳이 있는지 봅니다.</p><small>수집 {time(data?.collectedAt)}</small></header>
+    <header className="st-lead"><h1>전체 현황</h1><p>내가 답할 요청과 막힌 일을 먼저 확인합니다. 맡긴 일의 자세한 진행 상황은 <a href="/?collection=work#dashboard">업무</a>에서 봅니다.</p><small>수집 {time(data?.collectedAt)}</small></header>
+    <nav className="inline-nav" aria-label="현황 상세"><a href="#sessions">담당자 상태</a></nav>
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
     {!data ? <Loading/> : <>
-      <DocumentContent html={data.watchHtml}/>
       <div className="st-band" role="group" aria-label="지금 내가 볼 것">
         <a className="st-chip st-c-decision" href="#status-decisions"><span className="st-num">{data.decisions?.length ?? "모름"}</span><span className="st-lbl">내 결정 대기</span></a>
         <a className="st-chip st-c-attn" href="#status-attention"><span className="st-num">{bucket("stuck").length}</span><span className="st-lbl">지금 막힌 것</span></a>
@@ -75,9 +75,10 @@ export default function Status({url}: {url: URL}) {
       </p>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>
-        {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <ul className="st-decisions">{data.decisions.map(d => <li className="st-dec-row" key={d.id}><span className="st-dec-title">{d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
+        {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
       </section>
       {section("status-attention","지금 막힌 것","stuck","담당 창은 살아 있는데 시작 보고가 없거나 실패한 실행입니다. 감독에게 확인을 부탁하세요. 오래 멈춘 것은 아래 오래된 미정리에 따로 모읍니다.")}
+      <DocumentContent html={data.watchHtml}/>
       {section("status-executing","작업 중인 실행","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다.")}
       {section("status-waiting","결과를 기다리는 실행","waiting","담당이 검수·답변 같은 다른 결과를 기다린다고 보고했습니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}
       <p className="st-hint">실행 전 {bucket("planned").length}건 · 보류 {bucket("hold").length}건 · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>

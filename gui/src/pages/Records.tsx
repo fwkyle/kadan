@@ -100,7 +100,8 @@ export function Mailbox({ url }: { url: URL }) {
   return (
     <section>
       <h1>우편함</h1>
-      <p>질문·답변과 전달 기록을 확인합니다.</p>
+      <p>담당자 사이의 질문·답변과 전달 기록입니다. 내가 답할 요청은 <a href="#decisions">내 결정</a>에서 확인하세요.</p>
+      <p className="muted">담당자 간 답변 대기 {data?.waiting ?? "모름"}건</p>
       <Filters
         url={url}
         pageKey="mailPage"
@@ -192,8 +193,8 @@ export function Ledger({ url }: { url: URL }) {
     data = resource.data;
   return (
     <section>
-      <h1>사건 기록</h1>
-      <a href="#runs">실행 기록 보기</a>
+      <h1>활동 기록</h1>
+      <p>누가 언제 지시·답변·상태 변경을 남겼는지 확인합니다.</p>
       <Filters
         url={url}
         pageKey="logPage"
@@ -271,7 +272,8 @@ export function Runs({ url }: { url: URL }) {
     data = resource.data;
   return (
     <section>
-      <h1>실행 기록</h1>
+      <h1>실행 이력</h1>
+      <p>실행별 완료·실패 기록과 완료가 확인되지 않은 실행을 찾습니다.</p>
       {data && <Filters
         url={url}
         pageKey="runPage"
@@ -344,8 +346,9 @@ export function Sessions() {
     data = resource.data;
   return (
     <section>
-      <h1>담당자 세션</h1>
-      <p>세션 생존 여부와 카드 완료 여부는 별개입니다.</p>
+      <h1>담당자 상태</h1>
+      <p>현재 열린 AI 창과 시작할 때 기록한 모델을 확인합니다. 작업의 진행·완료는 <a href="/?collection=work#dashboard">업무</a>에서 확인하세요.</p>
+      <p className="muted">다음 발령에 사용할 모델은 <a href="#runner-settings">실행 모델</a>에서 설정합니다.</p>
       <ErrorMessage
         error={
           resource.error || (data && !data.known ? "현재 세션 상태 모름" : null)

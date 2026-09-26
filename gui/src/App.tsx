@@ -39,27 +39,25 @@ const Mailbox = lazy(() =>
     import("./pages/Records").then((m) => ({ default: m.Sessions })),
   );
 const links = [
-  ["status", "현황"],
-  ["dashboard", "작업"],
+  ["status", "전체 현황"],
+  ["dashboard", "업무"],
   ["decisions", "내 결정"],
-  ["mailbox", "우편함"],
-  ["ledger", "사건 기록"],
-  ["runs", "실행 기록"],
-  ["operations-flow", "업무 흐름"],
-  ["sessions", "담당자 세션"],
   ["runner-settings", "실행 모델"],
+  ["mailbox", "우편함"],
+  ["ledger", "기록"],
+  ["runs", "실행 이력"],
+  ["operations-flow", "업무 진행 이력"],
+  ["sessions", "담당자 상태"],
+  ["work-create", "새 업무"],
+  ["card-create", "실행 추가"],
 ];
-const primaryLinks = links.slice(0, 5).map(([key, label]) =>
-  [key, key === "ledger" ? "기록" : label],
-);
-const operationLinks = [
-  ["sessions", "담당자 세션"], ["runner-settings", "실행 모델"],
-  ["work-create", "새 업무 만들기"], ["card-create", "별도 실행 등록"],
-];
+const primaryLinks = links.slice(0, 6);
 export default function App() {
   const href = useLocation(),
     url = useMemo(() => new URL(href), [href]),
     view = viewOf(url),
+    section = ["dashboard", "operations-flow", "work-create", "card-create"].includes(view)
+      ? "dashboard" : view === "sessions" ? "status" : view === "runs" ? "ledger" : view,
     session = useResource<{ token: string }>("session", {
       pollMs: 0,
       staleMs: 300_000,
@@ -68,7 +66,6 @@ export default function App() {
   const drafts = useRef(new Set<string>()),
     [notice, setNotice] = useState(""),
     [theme, setTheme] = useState(readTheme);
-  const menu = useRef<HTMLDetailsElement>(null);
   const mainScroll = usePaneScroll("page:" + view);
   const draft = useCallback((key: string, dirty: boolean) => {
     if (dirty) drafts.current.add(key);
@@ -98,7 +95,6 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    menu.current?.removeAttribute("open");
     document.title =
       (links.find(([key]) => key === view)?.[1] || "작업") + " · 카단";
   }, [view]);
@@ -180,12 +176,11 @@ export default function App() {
             {primaryLinks.map(([key, label]) => (
               <a
                 key={key}
-                href={"#" + key}
-                aria-current={view === key || (key === "ledger" && view === "runs") ? "page" : undefined}
+                href={key === "dashboard" ? "/?collection=work#dashboard" : "#" + key}
+                aria-current={section === key ? "page" : undefined}
               >
                 <span>{label}</span>
                 {key === "decisions" && <span className="dw-decision-count">{summary.data?.decisions ?? "?"}</span>}
-                {key === "mailbox" && <span className="dw-decision-count">{summary.data?.waiting ?? "?"}</span>}
               </a>
             ))}
           </nav>
@@ -195,18 +190,13 @@ export default function App() {
             saveTheme(next);
             setTheme(next);
           }}>테마: {{auto:"자동",dark:"어둡게",light:"밝게"}[theme]}</button>
-          <details ref={menu} className={"dw-more" + (operationLinks.some(([key]) => key === view) ? " dw-more-current" : "")}>
-            <summary>운영 메뉴</summary>
-            <nav aria-label="운영 메뉴">
-              {operationLinks.map(([key,label]) => <a key={key} href={"#"+key} aria-current={view === key ? "page" : undefined}>{label}</a>)}
-            </nav>
-          </details>
         </header>
         <main id="main-content" tabIndex={-1} {...mainScroll}>
           {(view === "ledger" || view === "runs") && <nav className="record-tabs" aria-label="기록 종류">
-            <a href="#ledger" aria-current={view === "ledger" ? "page" : undefined}>사건 기록</a>
-            <a href="#runs" aria-current={view === "runs" ? "page" : undefined}>실행 기록</a>
+            <a href="#ledger" aria-current={view === "ledger" ? "page" : undefined}>활동 기록</a>
+            <a href="#runs" aria-current={view === "runs" ? "page" : undefined}>실행 이력</a>
           </nav>}
+          {view === "sessions" && <nav className="inline-nav" aria-label="상위 화면"><a href="#status">전체 현황으로</a></nav>}
           <ErrorMessage
             error={session.error}
             retry={() => void session.refresh(true)}

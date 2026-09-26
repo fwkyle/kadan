@@ -124,6 +124,7 @@ export default function Workspace({ url }: { url: URL }) {
     ),
     data = resource.data;
   const [query, setQuery] = useState(params.get("q") || ""),
+    [filtersOpen, setFiltersOpen] = useState(false),
     [columns, setColumns] = useState(readColumns),
     [splitWidth, setSplitWidth] = useState(45);
   const resizing = useRef<{ key: string; x: number; width: number } | null>(
@@ -202,25 +203,24 @@ export default function Workspace({ url }: { url: URL }) {
           : "asc",
     });
   return (
-    <section className="workspace" data-detail-open={Boolean(detailKey)}>
+    <section className="workspace" data-detail-open={Boolean(detailKey)} data-filters-open={filtersOpen}>
       <div className="page-heading">
         <div>
-          <h1>{collection === "work" ? "업무 카드" : collection === "unlinked" ? "연결 전 실행" : "실행"}</h1>
-          <p>업무의 약속과 실행의 현재 상태를 함께 확인합니다.</p>
+          <h1>{collection === "work" ? "업무" : "실행"}</h1>
+          <p>{collection === "work" ? "맡긴 일의 목표·진행 상황·다음 행동을 확인합니다." : "업무를 수행하는 개별 실행을 확인합니다. 업무 미연결은 상위 업무가 없는 실행입니다."}</p>
         </div>
-        <a href="#work-create" className="button">
-          새 업무
+        <a href={collection === "work" ? "#work-create" : "#card-create"} className="button">
+          {collection === "work" ? "새 업무" : "실행 추가"}
         </a>
       </div>
       <div className="segmented" aria-label="작업 종류">
         {[
-          ["work", "업무 카드"],
-          ["executions", "모든 실행"],
-          ["unlinked", "연결 전 실행"],
+          ["work", "업무"],
+          ["executions", "실행"],
         ].map(([key, label]) => (
           <button
             key={key}
-            aria-pressed={collection === key}
+            aria-pressed={key === "work" ? collection === "work" : collection !== "work"}
             onClick={() =>
               patch({
                 collection: key,
@@ -229,14 +229,25 @@ export default function Workspace({ url }: { url: URL }) {
                 q: null,
                 board: null,
                 repo: null,
+                state: null,
               })
             }
           >
-            {label} <span className="count">{summary.data?.counts[key === "executions" ? "executions" : key === "unlinked" ? "unlinked" : "work"] ?? "?"}</span>
+            {label} <span className="count">{summary.data?.counts[key === "executions" ? "executions" : "work"] ?? "?"}</span>
           </button>
         ))}
       </div>
       <div className="toolbar">
+        {collection !== "work" && <label data-filter="connection">
+          업무 연결
+          <select value={collection} onChange={(e) => patch({collection: e.target.value, card: null, detail: "0"})}>
+            <option value="executions">모든 실행</option>
+            <option value="unlinked">업무 미연결 ({summary.data?.counts.unlinked ?? "?"})</option>
+          </select>
+        </label>}
+        <button className="mobile-filter-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>
+          {filtersOpen ? "필터·보기 접기" : "필터·보기"}{["board", "repo", "health", "rally"].some(key => params.get(key)) && " · 필터 적용 중"}
+        </button>
         <label className="search">
           검색
           <input
@@ -325,7 +336,6 @@ export default function Workspace({ url }: { url: URL }) {
               {label}
             </button>
           ))}
-          <a href="#operations-flow">업무 흐름</a>
         </div>
       </div>
       <div className="workspace-tools">
