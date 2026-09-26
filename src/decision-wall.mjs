@@ -164,6 +164,11 @@ export function questionBody(body){
  flush();
  return out.join('');
 }
+// React 화면도 기존 결정 화면과 같은 제목 분리·줄바꿈·안전한 링크를 사용한다.
+export function decisionContent(decision){
+ const [questionTitle,body]=splitQuestion(decision.question);
+ return {questionTitle,questionHtml:questionBody(body),reasonHtml:`<p class="dc-pre">${linked(decision.reason)}</p>`};
+}
 // 지난 결정 한 건: 상태·시각·내 답변·알림 결과를 먼저, 질문 원문·추천·이유는 접어서.
 const historyItem=d=>{
  const [title,body]=splitQuestion(d.question);

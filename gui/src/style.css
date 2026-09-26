@@ -143,6 +143,10 @@ td small { display: block; margin-top: 2px; }
 .decision-meta time { margin-left: auto; }
 .decision-meta .requester { background: #e6f1ea; color: #21684e; border-radius: 3px; padding: 1px 7px; font-weight: 700; }
 .decision-list h2 { font-size: 17px; margin: 12px 0; }
+.decision-question { margin: 8px 0 16px; font-size: 14px; line-height: 1.65; }
+.decision-question .dc-fields { grid-template-columns: minmax(0,140px) minmax(0,1fr); gap: 8px 14px; }
+.decision-question .dc-fields dt { white-space: normal; }
+.decision-question .dc-pre + .dc-fields, .decision-question .dc-fields + .dc-pre { margin-top: 12px; }
 .decision-list .reason { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 10px; }
 .decision-list .reason > span { color: var(--ds-color-muted); }
 .decision-list .reason p { margin-top: 0; }
@@ -196,6 +200,8 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
   .decision-progress .track { min-width: 60px; }
   .decision-list article { padding: 14px; }
   .decision-list .reason { display: block; }
+  .decision-question .dc-fields { grid-template-columns: minmax(0,1fr); gap: 3px; }
+  .decision-question .dc-fields dd { margin-bottom: 10px; }
   .decision-meta time { width: 100%; margin-left: 0; }
   .panel { padding: 16px; }
   .board-column { max-width: 270px; }

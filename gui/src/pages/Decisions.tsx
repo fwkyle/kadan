@@ -38,7 +38,7 @@ export default function Decisions({ url }: { url: URL }) {
     {!data ? <Loading/> : <>
       <div className="decision-list">{items.filter(d=>d.status === "open" || drafts.has(d.id)).map(d=><DecisionRequest key={d.id} decision={d} draft={draft}/>)}</div>
       {!open.length && <p className="empty">기다리는 결정이 없습니다.</p>}
-      <details className="st-fold" open={previous} onToggle={e=>setPrevious(e.currentTarget.open)}><summary>이전 결정 {items.filter(d=>d.status!=="open").length}건</summary>{previous && items.filter(d=>d.status!=="open").map(d=><article className="work-tile" key={d.id}><h3>{d.question}</h3><p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}<CardLink row={{key:d.card,title:"관련 카드"}}/></article>)}</details>
+      <details className="st-fold" open={previous} onToggle={e=>setPrevious(e.currentTarget.open)}><summary>이전 결정 {items.filter(d=>d.status!=="open").length}건</summary>{previous && items.filter(d=>d.status!=="open").map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}<CardLink row={{key:d.card,title:"관련 카드"}}/></article>)}</details>
     </>}
   </section>;
 }
@@ -46,7 +46,8 @@ function DecisionRequest({decision, draft}: {decision: Decision; draft: (id: str
   const onDirtyChange = useCallback((dirty: boolean)=>draft(decision.id,dirty), [draft,decision.id]);
   return <article id={"decision-"+decision.id}>
     <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time></div>
-    <h2>{decision.question}</h2>
+    <h2>{decision.questionTitle ?? decision.question}</h2>
+    {decision.questionHtml && <div className="decision-question"><DocumentContent html={decision.questionHtml}/></div>}
     <div className="reason"><span>추천 이유</span>{decision.reasonHtml ? <DocumentContent html={decision.reasonHtml}/> : <p>{decision.reason}</p>}</div>
     <ActionForm revision={decision.revision} onDirtyChange={onDirtyChange} spec={{
       action:"/decisions/answer", title:"답변 전달", disabled:decision.status!=="open",
