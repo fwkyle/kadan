@@ -7,3 +7,8 @@ and distributed under the Apache License, Version 2.0.
 Design references (no code copied):
 - Orca (MIT) — GUI tab opening and worktree terminal ideas
 - Paseo, Herdr (Apache-2.0) — attach and session state detection references
+- OpenCodex — separate GUI build, JSON resources and polling architecture
+
+The browser dashboard bundles React, React DOM and Scheduler under the MIT
+License. Their license is included at gui/dist/licenses/react.txt in packages
+(source: gui/public/licenses/react.txt).

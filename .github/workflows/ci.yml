@@ -32,6 +32,9 @@ jobs:
       - name: install tmux (macos)
         if: runner.os == 'macOS'
         run: brew install tmux
+      - run: npm --prefix gui ci
+      - run: npm run test:gui
+      - run: npm run build:gui
       - run: node --test tests/*.test.mjs
         env:
           KADAN_HOME: ${{ runner.temp }}/kadan-home

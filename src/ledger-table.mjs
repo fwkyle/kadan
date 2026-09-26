@@ -27,14 +27,14 @@ export function filterLedgerRows(rows,{kind='',card='',role='',date=''}={}){
 }
 export const isWatchRoutine=entry=>entry?.by==='watch'&&watchRoutineKinds.has(entry.kind);
 const text=value=>typeof value==='string'?value:'';
-function eventLabel(entry){
+export function eventLabel(entry){
  if(entry.completion)return '실행 결과 통지';
  if(entry.kind==='send'&&classifyLedgerEntry(entry).dispatch)return classifyLedgerEntry(entry).dispatch==='legacy'?'작업 지시 · 과거 겸용':'작업 지시 · 우편 연결';
  if(entry.kind==='done')return entry.result==='ok'?'실행 완료':entry.result==='failed'?'실행 실패':'실행 결과';
  if(entry.kind?.startsWith('watch-ai-'))return watchAILabel(entry.source);
  return kinds[entry.kind]||text(entry.kind)||'종류 모름';
 }
-function eventSummary(entry){
+export function eventSummary(entry){
  const parts=[text(entry.completion?entry.executionKey||entry.completionTaskId:entry.taskId)];
  if(entry.kind?.startsWith('watch-ai-')){
   const step={'watch-ai-request':'호출 시작','watch-ai-report':'판정 기록','watch-ai-delivery':'보고 전달','watch-ai-call':'호출 종료','watch-ai-retired':'감시 제외'}[entry.kind]||entry.kind;

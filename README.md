@@ -30,7 +30,9 @@ Interface language is currently Korean (role names, CLI output, dashboards). Con
 ```bash
 git clone https://github.com/fwkyle/kadan.git
 cd kadan
-npm link          # puts the `kadan` command on your PATH (no dependencies are installed)
+npm --prefix gui ci  # browser build dependencies only
+npm run build:gui    # static dashboard assets
+npm link            # puts the `kadan` command on your PATH
 kadan --help
 ```
 
@@ -69,7 +71,7 @@ Data lives in `~/.kadan` (override with `KADAN_HOME`). The ledger is append-only
 
 - `docs/commands.md` — every `kadan` command with its main options (Korean).
 - `kadan watch` — background monitor that reports stalls, disconnects and DONE candidates to a supervisor role.
-- `kadan wall` / `kadan dashboard` — local HTML views of boards, cards, ledger and mail.
+- `kadan wall` / `kadan dashboard` — local React dashboard of boards, cards, ledger and mail. The existing Node server serves both JSON data and the built GUI; no separate production frontend server is needed. See [dashboard architecture and development](docs/dashboard-react.md).
 - `kadan card` / `kadan work` — central card store and result-oriented work items.
 - `docs/` — design principles and locked rules (`design.md`), watch criteria, hierarchy, handover, SQLite storage.
 - `CONTRIBUTING.md` — how to contribute; the same rules apply if you use an AI coding agent.
@@ -79,6 +81,8 @@ Data lives in `~/.kadan` (override with `KADAN_HOME`). The ledger is append-only
 
 ```bash
 npm test          # node --test tests/*.test.mjs
+npm run test:gui   # shared request, cancellation and timeout contracts
+npm run build:gui  # TypeScript check + production bundle
 npm run check:public   # fails if personal paths or workspace records leak into the repo
 ```
 
