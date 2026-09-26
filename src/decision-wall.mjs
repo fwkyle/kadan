@@ -54,6 +54,7 @@ export const decisionStyle=`#decisions.panel{max-width:880px;margin-left:auto;ma
 .bw-mail-compact .bw-mail-text{grid-column:1/-1;overflow-wrap:anywhere}
 .lg-incidents{font-size:12.5px;font-weight:700;color:#8a1f1f;margin-right:auto}
 .dc-meter{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:#5d6762;margin:4px 0 14px}
+.dc-sort{font-size:12px;padding:3px 10px;border-radius:999px;white-space:nowrap}
 .dc-bar{flex:1 1 200px;min-width:120px;height:6px;background:#eaede8;border-radius:3px;overflow:hidden}.dc-bar i{display:block;height:100%;background:#1f6f5c}
 .dc-list{display:flex;flex-direction:column;gap:12px}
 /* 결정 화면 공통 규칙(#decisions form·article, label 세로 쌓기)보다 우선하도록 #decisions를 붙인다. */
@@ -85,6 +86,21 @@ export const decisionStyle=`#decisions.panel{max-width:880px;margin-left:auto;ma
 // 답변은 페이지를 다시 불러오지 않고 보낸 뒤 결정 영역·드로어·상단 숫자만 바꿔 끼운다 — 스크롤이 맨 위로 튀지 않게
 // (2026-09-24 [kyle]). 스크립트가 없으면 폼이 그대로 제출되어 결정 영역으로 돌아간다.
 export const decisionScript=`
+ // 결정 정렬: 기본은 오래된 순(요청 시각). 바꾼 순서는 이 브라우저에 기억한다(2026-09-26 kyle).
+ const decisionOrderKey='kadan.decisions.order';
+ const decisionOrder=()=>{try{return localStorage.getItem(decisionOrderKey)==='new'?'new':'old';}catch{return 'old';}};
+ function applyDecisionOrder(){
+  const order=decisionOrder(),button=document.querySelector('[data-decision-sort]'),list=document.querySelector('#decisions .dc-list');
+  if(button){button.textContent=order==='new'?'정렬: 최신 순':'정렬: 오래된 순';button.setAttribute('aria-pressed',String(order==='new'));}
+  if(!list)return;
+  [...list.querySelectorAll('.dc-card')].sort((a,b)=>order==='new'?Number(b.dataset.at)-Number(a.dataset.at):Number(a.dataset.at)-Number(b.dataset.at)).forEach(card=>list.append(card));
+ }
+ document.addEventListener('click',event=>{
+  if(!(event.target.closest&&event.target.closest('[data-decision-sort]')))return;
+  try{localStorage.setItem(decisionOrderKey,decisionOrder()==='new'?'old':'new');}catch{}
+  applyDecisionOrder();
+ });
+ applyDecisionOrder();
  document.addEventListener('click',event=>{
   const history=document.getElementById('decision-history');
   if(!history)return;
@@ -110,7 +126,7 @@ export const decisionScript=`
    if(!section)throw new Error('답변은 저장됐을 수 있지만 화면을 새로 읽지 못했습니다. 새로고침해서 확인하세요.');
    // 이 화면은 창이 아니라 <main>이 스크롤된다. 둘 다 기억했다가 되돌린다.
    const main=document.querySelector('main'),top=main?main.scrollTop:0,y=window.scrollY,x=window.scrollX;
-   document.getElementById('decisions').replaceWith(document.importNode(section,true));
+   document.getElementById('decisions').replaceWith(document.importNode(section,true));applyDecisionOrder();
    const drawer=parsed.getElementById('decision-history'),oldDrawer=document.getElementById('decision-history');
    if(drawer&&oldDrawer&&!oldDrawer.open)oldDrawer.replaceWith(document.importNode(drawer,true));
    const count=parsed.querySelector('.dw-decision-count'),oldCount=document.querySelector('.dw-decision-count');
@@ -169,15 +185,16 @@ const renderDecisionHistory=past=>{
 };
 export function renderDecisions(items,error,token,answered=null){
  if(error)return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요</h2><p role="alert">모름: ${e(error)}</p></section>`;
- const open=items.filter(d=>d.status==='open');
+ // 기본은 오래된 요청부터(요청 시각 순, 같으면 들어온 순). 화면에서 최신 순으로 바꿀 수 있다(2026-09-26 kyle).
+ const open=items.map((d,i)=>[d,i]).filter(([d])=>d.status==='open').sort(([a,i],[b,j])=>(Date.parse(a.at)||0)-(Date.parse(b.at)||0)||i-j).map(([d])=>d);
  const one=d=>{const [title,body]=splitQuestion(d.question);
   const options=d.options.map(o=>`<label class="dc-opt"><input type="radio" name="choice" value="${e(o)}"><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">${e(o)}${o===d.recommendation?'<span class="dc-rec">추천</span>':''}</span></label>`).join('');
-  return `<article class="dc-card" id="decision-${e(d.id)}"><div class="dc-top"><span class="dc-chip">요청 ${e(d.requestedBy)}</span><a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>${d.at?`<span class="dc-age">${e(time(d.at))}</span>`:''}</div><h3>${e(title)}</h3>${body?questionBody(body):''}<dl class="dc-fields"><dt>추천 이유</dt><dd class="dc-pre">${linked(d.reason)}</dd></dl>`+
+  return `<article class="dc-card" id="decision-${e(d.id)}" data-at="${Date.parse(d.at)||0}"><div class="dc-top"><span class="dc-chip">요청 ${e(d.requestedBy)}</span><a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>${d.at?`<span class="dc-age">${e(time(d.at))}</span>`:''}</div><h3>${e(title)}</h3>${body?questionBody(body):''}<dl class="dc-fields"><dt>추천 이유</dt><dd class="dc-pre">${linked(d.reason)}</dd></dl>`+
    `<form method="post" action="/decisions/answer" class="dc-form"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><fieldset class="dc-opts"><legend class="dw-sr">선택지</legend>${options}<label class="dc-opt dc-opt-free"><input type="radio" name="choice" value="" checked><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">선택지 없이 메모로 답변</span></label></fieldset><textarea name="text" rows="2" placeholder="메모 (선택) · 선택지 없이 보내려면 여기에 답을 적으세요"></textarea><div class="dc-actions"><button>답변 전달</button><small>누를 때만 보냅니다. 요청한 슈퍼감독에게 한 번 알립니다.</small></div></form></article>`;};
  // 오늘(서울) 답한 수와 남은 수로 진행 막대를 그린다.
  const today=new Date(Date.now()+9*3600_000).toISOString().slice(0,10);
  const answeredToday=items.filter(d=>d.status==='answered'&&typeof d.answer?.at==='string'&&new Date(Date.parse(d.answer.at)+9*3600_000).toISOString().slice(0,10)===today).length;
- const meter=`<div class="dc-meter"><span>대기 ${open.length}건 · 오늘 답함 ${answeredToday}건</span><div class="dc-bar" aria-hidden="true"><i style="width:${open.length+answeredToday?Math.round(answeredToday/(open.length+answeredToday)*100):0}%"></i></div></div>`;
+ const meter=`<div class="dc-meter"><span>대기 ${open.length}건 · 오늘 답함 ${answeredToday}건</span><div class="dc-bar" aria-hidden="true"><i style="width:${open.length+answeredToday?Math.round(answeredToday/(open.length+answeredToday)*100):0}%"></i></div>${open.length>1?'<button type="button" class="dc-sort" data-decision-sort aria-pressed="false" title="누르면 오래된 순과 최신 순을 바꿉니다">정렬: 오래된 순</button>':''}</div>`;
  return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${meter}<div class="dc-list">${open.map(one).join('')||'<p>결정을 기다리는 요청이 없습니다.</p>'}</div><button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button></section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
 }
 // 요약이 없는 편지(공식 보고 등)는 이미 읽은 본문 앞부분을 한 줄로 보인다(2026-09-24 UX 검토: 하나씩 펼쳐야 했음).
