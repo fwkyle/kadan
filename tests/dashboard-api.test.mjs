@@ -174,6 +174,23 @@ for (const mode of ["jsonl", "sqlite"])
       "application/json; charset=utf-8",
     );
   });
+test("결정 API는 제목과 본문을 나누고 기존 줄바꿈·항목·안전한 주소 링크를 보존한다", () => {
+  const f = dashboardFixture({ count: 2 });
+  const snapshot = f.snapshot();
+  const question = '사진 표시를 적용할까요? — 검토 대기\n- PR: https://example.com/pull/325\n- 결과 파일: /tmp/review/result.md\n- 바뀌는 것: 사진을 먼저 표시합니다.\n첫 번째 설명\n두 번째 설명 <img src=x onerror=bad()>';
+  snapshot.decisions[0] = {...snapshot.decisions[0], question,
+    reason: '검수 통과\n확인: https://example.com/preview\n<script>bad()</script> javascript:bad()'};
+  const item = dashboardData(snapshot, new URL('http://local/api/dashboard/decisions')).items[0];
+  assert.equal(item.question, question, '저장된 원문은 보존한다');
+  assert.equal(item.questionTitle, '사진 표시를 적용할까요?');
+  assert.match(item.questionHtml, /<p class="dc-pre">— 검토 대기<\/p>/);
+  assert.match(item.questionHtml, /<dt>PR<\/dt><dd><a href="https:\/\/example.com\/pull\/325" target="_blank" rel="noopener noreferrer">/);
+  assert.match(item.questionHtml, /<dt>결과 파일<\/dt><dd>\/tmp\/review\/result.md<\/dd>/);
+  assert.match(item.questionHtml, /첫 번째 설명\n두 번째 설명 &lt;img/);
+  assert.match(item.reasonHtml, /검수 통과\n확인: <a href="https:\/\/example.com\/preview"/);
+  assert.match(item.reasonHtml, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(item.questionHtml + item.reasonHtml, /<img|<script|href="(?:javascript:|file:|\/tmp)/);
+});
 test("현황의 최근 사건 집계는 표시 한도 50개 밖의 사건도 포함한다", () => {
   const f = dashboardFixture({ count: 55 });
   const snapshot = f.snapshot(), at = new Date().toISOString();

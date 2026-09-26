@@ -76,6 +76,8 @@ export type Decision = {
   card: string;
   revision: number;
   question: string;
+  questionTitle?: string;
+  questionHtml?: string;
   reason: string;
   reasonHtml?: string;
   recommendation: string;

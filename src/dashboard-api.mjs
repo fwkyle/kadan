@@ -19,6 +19,7 @@ import {
 import { executionBucket } from "./dashboard-execution.mjs";
 import { readActiveHierarchy } from "./hierarchy-register.mjs";
 import { renderCardDocument } from "./card-content.mjs";
+import { decisionContent } from "./decision-wall.mjs";
 import {
   detailEvents,
   instructionSections,
@@ -176,7 +177,7 @@ export function dashboardData(snapshot, url) {
       ...stamp,
       items: (snapshot.decisions || []).map((d) => ({
         ...d,
-        reasonHtml: renderCardDocument(d.reason),
+        ...decisionContent(d),
       })),
     };
   }
