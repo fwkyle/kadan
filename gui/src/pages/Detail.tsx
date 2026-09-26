@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePaneScroll } from "../scroll";
 import { useResource } from "../resource";
 import type { DetailData, Mail } from "../types";
@@ -13,7 +13,7 @@ import {
   Loading,
   time,
 } from "../ui";
-import { patchLocation } from "../navigation";
+import { navigate, patchLocation } from "../navigation";
 
 export function MailBody({ mail }: { mail: Mail }) {
   const resource = useResource<{ body: string | null; error?: string }>(
@@ -31,19 +31,39 @@ export function MailBody({ mail }: { mail: Mail }) {
     </>
   );
 }
-export default function Detail({ card }: { card: string }) {
-  const params = new URL(location.href).searchParams,
+export default function Detail({ card, url }: { card: string; url: URL }) {
+  const params = url.searchParams,
     tab = params.get("tab");
   const scroll = usePaneScroll("detail:" + card),
     panel = useRef<HTMLElement | null>(null);
   const resource = useResource<DetailData>(
     "detail?card=" + encodeURIComponent(card),
   );
-  const [query, setQuery] = useState(""),
-    [documentView, setDocumentView] = useState(
-      params.get("detailView") === "document",
-    ),
-    [expanded, setExpanded] = useState(params.get("expanded") === "1");
+  const [query, setQuery] = useState("");
+  const documentView = params.get("detailView") === "document",
+    expanded = params.get("expanded") === "1";
+  const updateView = useCallback((key: string, value: string | null) => {
+    const next = new URL(location.href);
+    if (value === null) next.searchParams.delete(key);
+    else next.searchParams.set(key, value);
+    // 같은 카드와 작성 폼을 유지하는 보기 변경은 이탈이 아니다.
+    navigate(next, true, true);
+  }, []);
+  const close = useCallback(() => patchLocation({
+    detail: "0", expanded: null, card: null,
+    ...(new URL(location.href).searchParams.get("layout") === "split" ? {layout: "table"} : {}),
+  }, "dashboard"), []);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.repeat) return;
+      if (event.target instanceof Element && event.target.closest('select,[role="combobox"],dialog[open]')) return;
+      event.preventDefault();
+      if (expanded) updateView("expanded", null);
+      else close();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [expanded, close, updateView]);
   const data = resource.data;
   useEffect(() => {
     if (!data || !tab) return;
@@ -76,29 +96,15 @@ export default function Detail({ card }: { card: string }) {
       }}
     >
       <div className="detail-actions">
-        <button
-          onClick={() =>
-            patchLocation(
-              {
-                detail: "0",
-                expanded: null,
-                card: null,
-                ...(params.get("layout") === "split"
-                  ? { layout: "table" }
-                  : {}),
-              },
-              "dashboard",
-            )
-          }
-        >
+        <button onClick={close}>
           목록으로
         </button>
-        <button onClick={() => setExpanded((x) => !x)}>
+        <button onClick={() => updateView("expanded", expanded ? null : "1")}>
           {expanded ? "나란히 보기" : "상세 확대"}
         </button>
         <button
           aria-pressed={documentView}
-          onClick={() => setDocumentView((x) => !x)}
+          onClick={() => updateView("detailView", documentView ? "table" : "document")}
         >
           {documentView ? "표형으로 보기" : "문서형으로 보기"}
         </button>
@@ -306,9 +312,10 @@ function DetailMail({ mail }: { mail: Mail }) {
     <details onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         {time(mail.t)} · {mail.by} → {mail.role}
+        <span className="mail-status">{mail.status}</span>
         <span className="muted">{mail.preview}</span>
+        {mail.card && <span className="mail-card"><CardLink row={mail.card} /></span>}
       </summary>
-      <p>{mail.status}</p>
       {open && <MailBody mail={mail} />}
     </details>
   );

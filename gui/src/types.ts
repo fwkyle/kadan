@@ -57,6 +57,7 @@ export type FormSpec = {
   disabled?: boolean;
 };
 export type Mail = {
+  card?: { key: string; title: string } | null;
   mailId?: string;
   digest?: string;
   t: string;

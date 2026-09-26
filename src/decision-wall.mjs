@@ -17,6 +17,7 @@ const linked=value=>{const text=String(value??'');let html='',last=0;
 // 첫 줄의 첫 물음표까지를 제목으로, 나머지는 줄바꿈을 살린 본문으로 보인다(2026-09-23 [kyle]: 한 문단 굵은 글씨라 읽기 어려움).
 export const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
+export const RUN_STATE_LABELS={failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료',done:'완료 기록'};
 // 방금 답한 결정의 전달 결과를 오른쪽 위 토스트로 알린다. 성공·확인 중은 15초 뒤 사라지고(마우스를 올리면 멈춤),
 // 알림 전달 실패는 닫을 때까지 남긴다. 지난 결정은 오른쪽 드로어에서 본다(2026-09-24 [kyle]).
 // 결정은 읽고 답하는 글이라 넓은 화면에서 가운데 한 줄 폭으로 모은다(2026-09-26 kyle: 좌우 여백).
@@ -236,7 +237,7 @@ export function renderActivity({center,entries=[],ledgerLines,error,home},url){
  const paginate=(items,param)=>{const n=Math.max(1,Math.min(Math.ceil(items.length/listPageSize)||1,Math.floor(Number(url.searchParams.get(param)))||1));const link=k=>{const q=new URLSearchParams(url.searchParams);q.set(param,k);return '?'+q+'#'+(param==='mailPage'?'mailbox':param==='runPage'?'runs':'ledger')};return{items:items.slice((n-1)*listPageSize,n*listPageSize),nav:`<nav>${n>1?`<a href="${e(link(n-1))}">이전</a>`:''}<span>${n} / ${Math.ceil(items.length/listPageSize)||1}</span>${n*listPageSize<items.length?`<a href="${e(link(n+1))}">다음</a>`:''}</nav>`}};
  const mails=paginate(all,'mailPage'),logs=paginate(ledgerRows.slice().reverse(),'logPage');
  // 작업별 실행: 최근 시각 순, 상태로 거르기, 카드 제목을 먼저(2026-09-24 UX 검토: 시각이 뒤섞이고 모두 같은 회색이었다).
- const runLabels={failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료',done:'완료 기록'};
+ const runLabels=RUN_STATE_LABELS;
  const allRuns=[...(center?.cards??[]).flatMap(c=>c.runs.map(r=>({...r,card:c.key,title:c.title,board:c.board}))),...(center?.unregistered??[])]
   .sort((a,b)=>(Date.parse(b.at)||0)-(Date.parse(a.at)||0));
  const runState=Object.hasOwn(runLabels,url.searchParams.get('runState')||'')?url.searchParams.get('runState'):'';

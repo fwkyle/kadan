@@ -20,12 +20,10 @@ export function MailItem({ mail }: { mail: Mail }) {
       <summary>
         <time>{time(mail.t)}</time> · {mail.by || "모름"} →{" "}
         {mail.role || "모름"}
-        <span className="preview">{mail.preview || mail.status}</span>
+        <span className="mail-status">{mail.status}</span>
+        <span className="preview">{mail.preview}</span>
+        {mail.card && <span className="mail-card"><CardLink row={mail.card} /></span>}
       </summary>
-      <p>{mail.status}</p>
-      {mail.executionKey && (
-        <CardLink row={{ key: mail.executionKey, title: "연결된 실행" }} />
-      )}
       {open && <MailBody mail={mail} />}
       <small>
         {mail.mailId || mail.digest}
@@ -39,6 +37,7 @@ function Filters({
   url,
   fields,
   pageKey,
+  resetKeys = [],
 }: {
   url: URL;
   fields: {
@@ -48,6 +47,7 @@ function Filters({
     type?: string;
   }[];
   pageKey: string;
+  resetKeys?: string[];
 }) {
   return (
     <form
@@ -57,6 +57,7 @@ function Filters({
         e.preventDefault();
         const form = new FormData(e.currentTarget);
         patchLocation({
+          ...Object.fromEntries(resetKeys.map((key) => [key, null])),
           ...Object.fromEntries(
             fields.map((f) => [f.name, String(form.get(f.name) || "")]),
           ),
@@ -256,6 +257,7 @@ export function Ledger({ url }: { url: URL }) {
   );
 }
 type Run = {
+  stateLabel: string;
   key?: string;
   title?: string;
   role?: string;
@@ -265,16 +267,23 @@ type Run = {
   sentAt?: string;
 };
 export function Runs({ url }: { url: URL }) {
-  const resource = useResource<Paged<Run>>("runs?" + url.searchParams),
+  const resource = useResource<Paged<Run> & { all: number; states: {value: string; label: string; count: number}[] }>("runs?" + url.searchParams),
     data = resource.data;
   return (
     <section>
       <h1>실행 기록</h1>
-      <Filters
+      {data && <Filters
         url={url}
-        pageKey="page"
-        fields={[{ name: "q", label: "검색" }]}
-      />
+        pageKey="runPage"
+        resetKeys={["page"]}
+        fields={[
+          { name: "runState", label: "상태", options: [
+            ["", `전체 ${data.all}`],
+            ...data.states.map(({value,label,count}) => [value, `${label} ${count}`] as [string,string]),
+          ] },
+          { name: "q", label: "검색" },
+        ]}
+      />}
       <ErrorMessage error={resource.error} />
       <Freshness collectedAt={data?.collectedAt} {...resource} />
       {!data ? (
@@ -305,7 +314,7 @@ export function Runs({ url }: { url: URL }) {
                       )}
                     </td>
                     <td>{r.role}</td>
-                    <td>{r.state || r.result || "모름"}</td>
+                    <td><span className={"run-state run-" + r.state}>{r.stateLabel}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -313,7 +322,7 @@ export function Runs({ url }: { url: URL }) {
           </div>
           <Pages
             {...data}
-            onPage={(page) => patchLocation({ page: String(page) })}
+            onPage={(page) => patchLocation({ runPage: String(page), page: null })}
           />
         </>
       )}
