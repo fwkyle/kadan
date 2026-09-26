@@ -19,7 +19,8 @@ import {
 import { executionBucket } from "./dashboard-execution.mjs";
 import { readActiveHierarchy } from "./hierarchy-register.mjs";
 import { renderCardDocument } from "./card-content.mjs";
-import { decisionContent } from "./decision-wall.mjs";
+import { decisionContent, RUN_STATE_LABELS } from "./decision-wall.mjs";
+import { taskIdentity } from "./task-identity.mjs";
 import {
   detailEvents,
   instructionSections,
@@ -94,6 +95,7 @@ function model(snapshot) {
     briefs,
     cards,
     byKey,
+    identity: taskIdentity(cards),
     hierarchy: readActiveHierarchy(snapshot.entries || []),
   };
   modelCache.set(snapshot, result);
@@ -131,7 +133,11 @@ function letters(snapshot) {
     throw new Error("원장 확인 불가 · 우편 상태 모름");
   return mailboxLetters(snapshot.entries || []);
 }
-function mailRow(m) {
+function mailRow(m, identity) {
+  const target = identity.resolve(
+    m.completion ? m.completionTaskId || m.executionKey : m.taskId || m.executionKey,
+    m.executionKey,
+  );
   return {
     ...pick(m, [
       "mailId",
@@ -151,6 +157,9 @@ function mailRow(m) {
       "completionTaskId",
     ]),
     status: mailStatus(m),
+    card: target.state === "resolved"
+      ? { key: target.key, title: target.card.title || target.key }
+      : null,
   };
 }
 function bodyOf(snapshot, m) {
@@ -192,7 +201,7 @@ export function dashboardData(snapshot, url) {
     const body = bodyOf(snapshot, m);
     return {
       ...stamp,
-      mail: mailRow(m),
+      mail: mailRow(m, taskIdentity(snapshot.center?.cards || [])),
       body,
       error: body === null ? "본문 없음 또는 읽기 불가" : null,
     };
@@ -202,12 +211,13 @@ export function dashboardData(snapshot, url) {
       filtered = filterMail(all, url, { bodyOf: (m) => bodyOf(snapshot, m) })
         .slice()
         .reverse();
-    const selected = page(filtered, url, "mailPage");
+    const selected = page(filtered, url, "mailPage"),
+      identity = taskIdentity(snapshot.center?.cards || []);
     return {
       ...stamp,
       ...selected,
       items: selected.items.map((m) => ({
-        ...mailRow(m),
+        ...mailRow(m, identity),
         preview:
           m.preview ||
           String(bodyOf(snapshot, m) || "")
@@ -465,12 +475,23 @@ export function dashboardData(snapshot, url) {
           (Date.parse(b.at || b.sentAt) || 0) -
           (Date.parse(a.at || a.sentAt) || 0),
       );
-    const q = (url.searchParams.get("q") || "").toLowerCase();
+    const q = (url.searchParams.get("q") || "").toLowerCase(),
+      state = url.searchParams.get("runState") || "",
+      runState = Object.hasOwn(RUN_STATE_LABELS, state) ? state : "",
+      searched = rows.map((r) => ({
+        ...r,
+        stateLabel: Object.hasOwn(RUN_STATE_LABELS, r.state) ? RUN_STATE_LABELS[r.state] : r.state || r.result || "모름",
+      })).filter((r) => !q || JSON.stringify(r).toLowerCase().includes(q));
     return {
       ...stamp,
+      states: Object.entries(RUN_STATE_LABELS).map(([value, label]) => ({
+        value, label, count: searched.filter((r) => r.state === value).length,
+      })),
+      all: searched.length,
       ...page(
-        rows.filter((r) => !q || JSON.stringify(r).toLowerCase().includes(q)),
+        searched.filter((r) => !runState || r.state === runState),
         url,
+        url.searchParams.has("runPage") ? "runPage" : "page",
       ),
     };
   }
@@ -507,7 +528,7 @@ export function dashboardData(snapshot, url) {
           row: m.rows.find((r) => r.key === e.key) || null,
         })),
         history: [...w.history].reverse(),
-        mail: w.letters.slice(0, 5).map(mailRow),
+        mail: w.letters.slice(0, 5).map((letter) => mailRow(letter, m.identity)),
         mailTotal: w.letters.length,
       };
     const row = m.rows.find((r) => r.key === key),
@@ -575,7 +596,7 @@ export function dashboardData(snapshot, url) {
       related: related.map((c) =>
         pick(c, ["key", "title", "rallyRound", "rallyStep", "displayState"]),
       ),
-      mail: mail.slice(0, 5).map(mailRow),
+      mail: mail.slice(0, 5).map((letter) => mailRow(letter, m.identity)),
       mailTotal: mail.length,
     };
   }

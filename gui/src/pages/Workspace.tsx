@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useResource } from "../resource";
-import { cardUrl, patchLocation } from "../navigation";
+import { cardUrl, navigate, patchLocation } from "../navigation";
 import type { Row, Paged, Stamp, Summary } from "../types";
 import {
   CardLink,
@@ -202,7 +202,7 @@ export default function Workspace({ url }: { url: URL }) {
           : "asc",
     });
   return (
-    <section className="workspace">
+    <section className="workspace" data-detail-open={Boolean(detailKey)}>
       <div className="page-heading">
         <div>
           <h1>{collection === "work" ? "업무 카드" : collection === "unlinked" ? "연결 전 실행" : "실행"}</h1>
@@ -582,6 +582,11 @@ export default function Workspace({ url }: { url: URL }) {
                           <tr
                             key={row.key}
                             className={detailKey === row.key ? "selected" : ""}
+                            onClick={(event) => {
+                              if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                              if ((event.target as Element).closest('a,button,input,select,textarea,summary,[contenteditable="true"]') || window.getSelection()?.toString()) return;
+                              navigate(cardUrl(row.key));
+                            }}
                           >
                             {visible.map((c) => (
                               <td key={c.key}>{c.render(row)}</td>
@@ -643,7 +648,7 @@ export default function Workspace({ url }: { url: URL }) {
             </div>
             {detailKey && (
               <Suspense fallback={<Loading />}>
-                <Detail key={detailKey} card={detailKey} />
+                <Detail key={detailKey} card={detailKey} url={url} />
               </Suspense>
             )}
           </div>
