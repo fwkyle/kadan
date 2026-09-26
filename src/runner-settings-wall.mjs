@@ -5,7 +5,7 @@ import {launchFor, launchForFallback, readSettings, runnerChoices, PROFILE_ROLES
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 export const RUNNER_ROLE_LABELS={worker:'작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독'};
-const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델',block:'정책 차단',fallback:'폴백 순서'};
+const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델',block:'정책 차단',fallback:'폴백 순서',favorite:'즐겨찾기'};
 export const FALLBACK_WHEN='내려가는 조건: 원인이 확인된 막힘(쿼터·429·로그인 실패·모델 이름 오류)만. 원인을 모르면 멈추고 보고';
 const APPLY_NOTE='다음 발령부터 적용, 떠 있는 세션은 그대로';
 
@@ -15,8 +15,8 @@ const numbered=list=>Array.isArray(list)&&list.length?list.map((v,i)=>`${i+1}. $
 function describe(x){
  const what=x.action==='set'||x.action==='fallback'?`${x.preset??''} ${RUNNER_ROLE_LABELS[x.role]??x.role??''}`.trim()
   :x.action==='runner'?`실행기 ${x.runner??''}`:x.action==='model'?`${x.runner??''} 모델`:'';
- const from=x.action==='fallback'?numbered(x.before):x.action==='set'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
- const to=x.action==='fallback'?numbered(x.after)??'비움':x.action==='set'?choice(x.after):x.action==='preset'?x.after:x.action==='runner'?x.after?.spawn:x.action==='model'?x.after&&`${x.after.model} (${(x.after.efforts??[]).join(',')})`
+ const from=x.action==='fallback'||x.action==='favorite'?numbered(x.before):x.action==='set'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
+ const to=x.action==='fallback'||x.action==='favorite'?numbered(x.after)??'비움':x.action==='set'?choice(x.after):x.action==='preset'?x.after:x.action==='runner'?x.after?.spawn:x.action==='model'?x.after&&`${x.after.model} (${(x.after.efforts??[]).join(',')})`
   :x.action==='block'?x.after&&`${x.after.model} 차단 (${x.after.roles?.map(r=>RUNNER_ROLE_LABELS[r]??r).join(',')||'모든 역할'})`:x.action==='init'?`revision ${x.revision}`:null;
  return {what:[actionLabels[x.action]??x.action,what].filter(Boolean).join(' · '),change:`${from??'없음'} → ${to??'모름'}`};
 }
