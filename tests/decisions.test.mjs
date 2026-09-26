@@ -197,7 +197,7 @@ test('09-24 결정 카드: 선택지는 카드 모양 단추로 모두 보이고
     {id:'d1', status:'open', revision:3, card:'r/c', requestedBy:'p-슈퍼감독', recommendation:'보류', options:['승인','보류'], question:'합칠까요?', reason:'이유', at:now},
     {id:'d0', status:'answered', card:'r/c', requestedBy:'p-슈퍼감독', recommendation:'승인', options:['승인'], question:'예전?', reason:'r', answer:{by:'사람', text:'승인', choice:'승인', at:now}, delivery:{status:'sent', role:'p-슈퍼감독'}},
   ], null, 'tok');
-  const card = html.slice(html.indexOf('<article class="dc-card" id="decision-d1">'), html.indexOf('</article>', html.indexOf('id="decision-d1"')));
+  const card = html.slice(html.indexOf('<article class="dc-card" id="decision-d1"'), html.indexOf('</article>', html.indexOf('id="decision-d1"')));
   assert.match(card, /<div class="dc-top"><span class="dc-chip">요청 p-슈퍼감독<\/span><a class="dc-key" href="\?card=r%2Fc#detail">r\/c<\/a>/);
   assert.match(card, /<dl class="dc-fields"><dt>추천 이유<\/dt><dd class="dc-pre">이유<\/dd><\/dl>/);
   const opts = [...card.matchAll(/<label class="dc-opt[^"]*"><input type="radio" name="choice" value="([^"]*)"( checked)?>/g)].map(m => [m[1], Boolean(m[2])]);
@@ -221,4 +221,29 @@ test('09-26 결정 선택지의 숨긴 선택 단추는 선택지 칸 안에 묶
   // 기준 위치가 없으면 숨긴 단추가 문서 아래쪽에 놓여, 실제 클릭으로 포커스가 가면 창이 그쪽으로 스크롤돼 흰 화면이 됐다.
   assert.match(decisionStyle, /#decisions \.dc-opt\{position:relative;/);
   assert.match(decisionStyle, /\.dc-opt input\{position:absolute;/);
+});
+
+test('09-26 결정은 기본으로 오래된 요청부터 보이고, 정렬 단추로 최신 순과 바꾸며 그 선택을 기억한다', async () => {
+  const {renderDecisions, decisionScript} = await import('../src/decision-wall.mjs');
+  const d = (id, at) => ({id, at, status:'open', revision:1, card:'repo/c-'+id, requestedBy:'슈퍼감독', question:'질문 '+id, options:['예','아니오'], recommendation:'예', reason:'이유'});
+  const html = renderDecisions([d('b','2026-09-25T00:00:00Z'), d('a','2026-09-24T00:00:00Z'), d('c','2026-09-26T00:00:00Z')], null, 't');
+  assert.deepEqual([...html.matchAll(/id="decision-([a-z])" data-at="(\d+)"/g)].map(m => m[1]), ['a','b','c']);
+  assert.match(html, /<button type="button" class="dc-sort" data-decision-sort aria-pressed="false"[^>]*>정렬: 오래된 순<\/button>/);
+  // 화면 스크립트: 누르면 최신 순으로 다시 늘어놓고 기억한다. 새로 읽어도 기억한 순서를 쓴다.
+  const run = (store) => {
+    const cards = [['a',1],['b',2],['c',3]].map(([id,at]) => ({id, dataset:{at:String(at)}}));
+    const list = {items:cards.slice(), querySelectorAll(){return this.items.slice();}, append(card){this.items=this.items.filter(x=>x!==card);this.items.push(card);}};
+    const button = {textContent:'', attrs:{}, setAttribute(k,v){this.attrs[k]=v;}};
+    const handlers = {};
+    const document = {querySelector:s=>s==='[data-decision-sort]'?button:s==='#decisions .dc-list'?list:null, getElementById:()=>null, addEventListener:(t,fn)=>{(handlers[t]??=[]).push(fn);}};
+    const localStorage = {getItem:k=>store[k]??null, setItem:(k,v)=>{store[k]=v;}};
+    new Function('document','localStorage', decisionScript)(document, localStorage);
+    return {order:()=>list.items.map(c=>c.id), button, click:()=>handlers.click.forEach(fn=>fn({target:{closest:s=>s==='[data-decision-sort]'?button:null}}))};
+  };
+  const store = {};
+  const first = run(store);
+  assert.deepEqual(first.order(), ['a','b','c']);assert.equal(first.button.textContent, '정렬: 오래된 순');
+  first.click();
+  assert.deepEqual(first.order(), ['c','b','a']);assert.equal(first.button.textContent, '정렬: 최신 순');assert.equal(first.button.attrs['aria-pressed'], 'true');
+  assert.deepEqual(run(store).order(), ['c','b','a'], '새로 읽어도 고른 순서를 쓴다');
 });
