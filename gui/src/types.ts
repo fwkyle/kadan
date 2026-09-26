@@ -47,6 +47,7 @@ export type Field = {
   value: string | number;
   type: "text" | "textarea" | "select" | "radio" | "number" | "hidden";
   options: [string, string][] | null;
+  recommendedValue?: string;
   required: boolean;
 };
 export type FormSpec = {

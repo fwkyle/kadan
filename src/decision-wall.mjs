@@ -6,10 +6,14 @@ import {activityGuide} from './activity-guide.mjs';
 import {readMailBody} from './ledger.mjs';
 import {documentLink} from './card-content.mjs';
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
+// 한 줄로 작성된 설명도 문장별로 읽는다. 주소는 linked에서 분리해 원형을 보존한다.
+const sentences=new Intl.Segmenter('ko',{granularity:'sentence'});
+const readable=value=>{const parts=[...sentences.segment(value)];return parts.map(({segment},i)=>
+ i<parts.length-1&&!/^\s*(?:[-*•]\s*)?\d+\.\s*$/.test(segment)?segment.replace(/[ \t]+$/,'\n'):segment).join('');};
 // 결정 글의 맨 주소를 누를 수 있는 링크로 바꾼다. 나머지 글은 그대로 이스케이프한다.
 const linked=value=>{const text=String(value??'');let html='',last=0;
- for(const m of text.matchAll(/https?:\/\/[^\s<>"')\]]+/g)){const url=m[0].replace(/[.,;:]+$/,'');html+=e(text.slice(last,m.index))+documentLink(url,url);last=m.index+url.length;}
- return html+e(text.slice(last));};
+ for(const m of text.matchAll(/https?:\/\/[^\s<>"')\]]+/g)){const url=m[0].replace(/[.,;:]+$/,'');html+=e(readable(text.slice(last,m.index)))+documentLink(url,url);last=m.index+url.length;}
+ return html+e(readable(text.slice(last)));};
 // 첫 줄의 첫 물음표까지를 제목으로, 나머지는 줄바꿈을 살린 본문으로 보인다(2026-09-23 [kyle]: 한 문단 굵은 글씨라 읽기 어려움).
 export const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
@@ -66,7 +70,7 @@ export const decisionStyle=`#decisions.panel{max-width:880px;margin-left:auto;ma
 .dc-age{font-size:12px;color:#5d6762;margin-left:auto}
 .dc-card h3{font-size:17px;font-weight:650;margin:0;line-height:1.45;text-wrap:balance}
 .dc-fields{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:14px;line-height:1.55}
-.dc-fields dt{color:#5d6762;white-space:nowrap}.dc-fields dd{margin:0;overflow-wrap:anywhere}
+.dc-fields dt{color:#5d6762;white-space:nowrap}.dc-fields dd{margin:0;overflow-wrap:anywhere;white-space:pre-line}
 .dc-pre{white-space:pre-wrap;margin:0;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
 #decisions .dc-form{display:flex;flex-direction:column;gap:8px;margin:2px 0 0;max-width:none}
 .dc-opts{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -160,6 +164,7 @@ export function questionBody(body){
   const m=line.match(fieldLine);
   if(m&&!/^https?$/i.test(m[1].trim())&&!m[2].startsWith('//')){if(para.length)flush();dl.push(`<dt>${e(m[1].trim())}</dt><dd>${linked(m[2])}</dd>`);}
   else if(line.trim()){if(dl.length)flush();para.push(line);}
+  else flush();
  }
  flush();
  return out.join('');

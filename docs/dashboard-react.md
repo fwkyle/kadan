@@ -21,6 +21,7 @@ The visual reference is the Kadan dashboard before the React migration: top navi
 - The default dashboard is the built React application. It does not fetch or parse full dashboard HTML to refresh.
 - Status, workspace, card/work detail and edits, decisions, mailbox, event/run records, sessions, runner settings, creation and operations flow remain accessible.
 - Existing URLs, collection filters, layouts, sort order and browser navigation work. Decisions initially show oldest requests first.
+- Decision descriptions preserve source line breaks and display one-line prose by sentence without changing stored text or links. Recommended choices have a named summary and a badge; emphasis never preselects an answer. Work facts and document text retain their line breaks.
 - Detail refresh follows both card changes and execution changes; dirty drafts survive reads and failed saves.
 - Each screen shows its own freshness and error state. An unanswered request cannot permanently block polling.
 - Long tables have a bounded DOM; documents/mail bodies are loaded only when needed.
