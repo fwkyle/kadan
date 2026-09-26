@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { cardUrl, navigate } from "./navigation";
 import { save } from "./resource";
@@ -68,13 +69,19 @@ export function Freshness({
   refreshing,
   error,
   refresh,
+  footer = true,
 }: {
   collectedAt?: string;
   refreshing: boolean;
   error: string | null;
   refresh: (force?: boolean) => void;
+  footer?: boolean;
 }) {
   const [, tick] = useState(0);
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (footer) setTarget(document.getElementById("dashboard-freshness"));
+  }, [footer]);
   useEffect(() => {
     const timer = setInterval(() => tick((x) => x + 1), 15000);
     return () => clearInterval(timer);
@@ -82,7 +89,7 @@ export function Freshness({
   const age = collectedAt
     ? Math.max(0, Math.floor((Date.now() - Date.parse(collectedAt)) / 60000))
     : null;
-  return (
+  const content = (
     <div className="freshness" role="status">
       <span>
         {refreshing
@@ -99,6 +106,7 @@ export function Freshness({
       </button>
     </div>
   );
+  return footer && target ? createPortal(content, target) : content;
 }
 export function Facts({
   items,
@@ -154,11 +162,13 @@ export function ActionForm({
   entityKey,
   revision,
   onSaved,
+  onDirtyChange,
 }: {
   spec: FormSpec;
   entityKey?: string;
   revision?: number;
   onSaved?: (result: SaveResult) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const context = useContext(AppContext),
     id = useId();
@@ -173,6 +183,10 @@ export function ActionForm({
     context.draft(id, dirty || busy);
     return () => context.draft(id, false);
   }, [context.draft, id, dirty, busy]);
+  useEffect(() => {
+    onDirtyChange?.(dirty || busy);
+    return () => onDirtyChange?.(false);
+  }, [onDirtyChange, dirty, busy]);
   useEffect(() => {
     if (
       !dirty &&
@@ -204,6 +218,15 @@ export function ActionForm({
         value={values[field.name] || ""}
         readOnly
       />
+    ) : field.type === "radio" ? (
+      <fieldset className="radio-options" key={field.name}>
+        <legend>{field.label}</legend>
+        {field.options?.map(([value, label]) => <label key={value}>
+          <input type="radio" name={field.name} value={value} checked={(values[field.name] || "") === value}
+            onChange={() => { setValues({ ...values, [field.name]: value }); setDirty(true); }}/>
+          {label}
+        </label>)}
+      </fieldset>
     ) : (
       <label key={field.name} htmlFor={id + field.name}>
         {field.label}

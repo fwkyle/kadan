@@ -14,6 +14,8 @@
 
 The structure follows OpenCodex's separation of a built GUI, JSON management endpoints and shared client resources. Its provider-specific code and application-wide abstractions are not copied.
 
+The visual reference is the Kadan dashboard before the React migration: top navigation, the operations menu, footer freshness, compact workspace rows, status sections and inline decision replies. `gui/styles.mjs` reuses its shared CSS at build time; `src/theme.mjs` supplies the same automatic/light/dark palette and the browser keeps the existing `kadan-theme` preference. Architecture changes do not authorize a redesign. Check the rendered reference alongside the React screen when changing presentation; `?legacy=1` is an older ledger view, not this visual reference.
+
 ## Completion checks
 
 - The default dashboard is the built React application. It does not fetch or parse full dashboard HTML to refresh.

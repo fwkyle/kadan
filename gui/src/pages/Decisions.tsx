@@ -1,220 +1,64 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useResource } from "../resource";
-import { patchLocation } from "../navigation";
+import { navigate } from "../navigation";
 import type { Decision, Stamp } from "../types";
-import {
-  ActionForm,
-  CardLink,
-  DocumentContent,
-  ErrorMessage,
-  Freshness,
-  Loading,
-  time,
-} from "../ui";
+import { ActionForm, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
 
 export default function Decisions({ url }: { url: URL }) {
-  const resource = useResource<Stamp & { items: Decision[] }>("decisions"),
-    data = resource.data;
-  const [selected, setSelected] = useState<string | null>(null),
-    [previous, setPrevious] = useState(false);
+  const resource = useResource<Stamp & {items: Decision[]}>("decisions"), data = resource.data;
+  const [previous, setPrevious] = useState(false), [drafts, setDrafts] = useState(new Set<string>());
   const newest = url.searchParams.get("decisionSort") === "newest";
-  const items = [...(data?.items || [])].sort(
-    (a, b) => (Date.parse(a.at) - Date.parse(b.at)) * (newest ? -1 : 1),
-  );
-  const current = items.find((d) => d.id === selected);
-  return (
-    <section>
-      <div className="page-heading">
-        <div>
-          <h1>내 결정</h1>
-          <p>오래 기다린 요청부터 확인합니다. 답변은 요청자에게 전달됩니다.</p>
-        </div>
-        <label>
-          정렬
-          <select
-            value={newest ? "newest" : "oldest"}
-            onChange={(e) => patchLocation({ decisionSort: e.target.value })}
-          >
-            <option value="oldest">오래된 요청부터</option>
-            <option value="newest">최신 요청부터</option>
-          </select>
-        </label>
-      </div>
-      <ErrorMessage error={resource.error} />
-      <Freshness collectedAt={data?.collectedAt} {...resource} />
-      {!data ? (
-        <Loading />
-      ) : (
-        <>
-          <div className="decision-list">
-            {items
-              .filter((d) => d.status === "open")
-              .map((d) => (
-                <article key={d.id}>
-                  <div>
-                    <small>
-                      {time(d.at)} · {d.requestedBy}
-                    </small>
-                    <h2>
-                      <button
-                        className="text-button"
-                        onClick={() => setSelected(d.id)}
-                      >
-                        {d.question}
-                      </button>
-                    </h2>
-                    <p>{d.reason}</p>
-                    <CardLink row={{ key: d.card, title: "관련 카드" }} />
-                  </div>
-                  <button onClick={() => setSelected(d.id)}>결정하기</button>
-                </article>
-              ))}
-          </div>
-          {!items.some((d) => d.status === "open") && (
-            <p className="empty">기다리는 결정이 없습니다.</p>
-          )}
-          <details
-            open={previous}
-            onToggle={(e) => setPrevious(e.currentTarget.open)}
-          >
-            <summary>
-              이전 결정 {items.filter((d) => d.status !== "open").length}건
-            </summary>
-            {previous &&
-              items
-                .filter((d) => d.status !== "open")
-                .map((d) => (
-                  <article className="work-tile" key={d.id}>
-                    <h3>{d.question}</h3>
-                    <p>{d.answer?.text || d.cancelReason}</p>
-                    <p>
-                      {time(d.answer?.at || d.at)} ·{" "}
-                      {d.status === "answered" ? "답변 완료" : "취소"} · 전달{" "}
-                      {d.delivery?.status || "미기록"}
-                    </p>
-                    {d.delivery?.error && (
-                      <p className="error">{d.delivery.error}</p>
-                    )}
-                    <CardLink row={{ key: d.card, title: "관련 카드" }} />
-                  </article>
-                ))}
-          </details>
-        </>
-      )}
-      {current && (
-        <DecisionDialog
-          key={current.id}
-          decision={current}
-          close={() => setSelected(null)}
-        />
-      )}
-    </section>
-  );
-}
-function DecisionDialog({
-  decision,
-  close,
-}: {
-  decision: Decision;
-  close: () => void;
-}) {
-  const ref = useRef<HTMLDialogElement>(null),
-    [dirty, setDirty] = useState(false);
-  const closeGuarded = () => {
-    if (!dirty || confirm("작성 중인 답변을 버리고 닫을까요?")) close();
-  };
+  const items = [...(data?.items || [])].sort((a,b)=>(Date.parse(a.at)-Date.parse(b.at))*(newest?-1:1));
+  const open = items.filter(d=>d.status === "open");
+  const target = url.hash.startsWith("#decision-") ? decodeURIComponent(url.hash.slice(10)) : "";
+  const scrolled = useRef("");
   useEffect(() => {
-    const dialog = ref.current!;
-    const focused = document.activeElement;
-    dialog.showModal();
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      dialog.close();
-      document.body.style.overflow = overflow;
-      if (focused instanceof HTMLElement)
-        focused.focus({ preventScroll: true });
-    };
-  }, []);
-  return (
-    <dialog
-      ref={ref}
-      className="decision-dialog"
-      onCancel={(e) => {
-        e.preventDefault();
-        closeGuarded();
-      }}
-      onChange={() => setDirty(true)}
-    >
-      <button className="dialog-close" onClick={closeGuarded}>
-        닫기
-      </button>
-      <small>
-        {time(decision.at)} · {decision.requestedBy}
-      </small>
-      <h2>{decision.question}</h2>
-      {decision.reasonHtml ? (
-        <DocumentContent html={decision.reasonHtml} />
-      ) : (
-        <p>{decision.reason}</p>
-      )}
-      <p>
-        <strong>추천</strong> {decision.recommendation}
-      </p>
-      <CardLink row={{ key: decision.card, title: "관련 카드 보기" }} />
-      <ActionForm
-        entityKey={undefined}
-        revision={decision.revision}
-        spec={{
-          action: "/decisions/answer",
-          title: "답변 저장·전달",
-          disabled: decision.status !== "open",
-          fields: [
-            {
-              name: "id",
-              label: "요청 ID",
-              value: decision.id,
-              type: "hidden",
-              options: null,
-              required: true,
-            },
-            {
-              name: "choice",
-              label: "선택",
-              value: "",
-              type: "select",
-              options: [
-                ["", "직접 답변"],
-                ...decision.options.map((x) => [x, x] as [string, string]),
-              ],
-              required: false,
-            },
-            {
-              name: "text",
-              label: "답변·추가 설명",
-              value: "",
-              type: "textarea",
-              options: null,
-              required: false,
-            },
-          ],
-        }}
-        onSaved={(result) => {
-          const delivery = result.result.delivery;
-          if (delivery?.status !== "sent")
-            alert(
-              "답변은 저장됐지만 전달 상태를 확인해야 합니다: " +
-                (delivery?.error || delivery?.status || "모름"),
-            );
-          close();
-        }}
-      />
-      {decision.status !== "open" && (
-        <p className="warning">
-          이 요청은 다른 곳에서 처리됐습니다. 작성 중인 답변을 확인한 뒤
-          닫으세요.
-        </p>
-      )}
-    </dialog>
-  );
+    const element = target && document.getElementById("decision-"+target);
+    if (element && scrolled.current !== target) { element.scrollIntoView({block:"start"}); scrolled.current=target; }
+  }, [target, data]);
+  const draft = useCallback((id: string, dirty: boolean) => setDrafts(previous => {
+    if (previous.has(id) === dirty) return previous;
+    const next = new Set(previous);
+    if (dirty) next.add(id); else next.delete(id);
+    return next;
+  }), []);
+  const answered = items.filter(d=>d.status === "answered").length;
+  const toggleSort = () => {
+    const next = new URL(url);
+    if (newest) next.searchParams.delete("decisionSort");
+    else next.searchParams.set("decisionSort", "newest");
+    // 같은 폼을 유지한 채 순서만 바꾸므로 작성 내용을 버리는 이동이 아니다.
+    navigate(next, false, true);
+  };
+  return <section className="decision-page">
+    <h1>내 결정 필요 {data ? open.length+"건" : "모름"}</h1>
+    <p>슈퍼감독이 사용자에게 명시적으로 요청한 결정만 표시합니다.</p>
+    <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
+    <div className="decision-progress"><span>대기 {open.length}건 · 답한 결정 {answered}건</span><div className="track"><span style={{width:(answered+open.length ? answered/(answered+open.length)*100 : 0)+"%"}}/></div><button onClick={toggleSort}>정렬: {newest?"최신 순":"오래된 순"}</button></div>
+    {!data ? <Loading/> : <>
+      <div className="decision-list">{items.filter(d=>d.status === "open" || drafts.has(d.id)).map(d=><DecisionRequest key={d.id} decision={d} draft={draft}/>)}</div>
+      {!open.length && <p className="empty">기다리는 결정이 없습니다.</p>}
+      <details className="st-fold" open={previous} onToggle={e=>setPrevious(e.currentTarget.open)}><summary>이전 결정 {items.filter(d=>d.status!=="open").length}건</summary>{previous && items.filter(d=>d.status!=="open").map(d=><article className="work-tile" key={d.id}><h3>{d.question}</h3><p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}<CardLink row={{key:d.card,title:"관련 카드"}}/></article>)}</details>
+    </>}
+  </section>;
+}
+function DecisionRequest({decision, draft}: {decision: Decision; draft: (id: string, dirty: boolean)=>void}) {
+  const onDirtyChange = useCallback((dirty: boolean)=>draft(decision.id,dirty), [draft,decision.id]);
+  return <article id={"decision-"+decision.id}>
+    <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time></div>
+    <h2>{decision.question}</h2>
+    <div className="reason"><span>추천 이유</span>{decision.reasonHtml ? <DocumentContent html={decision.reasonHtml}/> : <p>{decision.reason}</p>}</div>
+    <ActionForm revision={decision.revision} onDirtyChange={onDirtyChange} spec={{
+      action:"/decisions/answer", title:"답변 전달", disabled:decision.status!=="open",
+      fields:[
+        {name:"id",label:"요청 ID",value:decision.id,type:"hidden",options:null,required:true},
+        {name:"choice",label:"선택",value:"",type:"radio",options:[...decision.options.map(option=>[option,option+(option===decision.recommendation?" · 추천":"")] as [string,string]),["","선택지 없이 메모로 답변"]],required:false},
+        {name:"text",label:"메모 (선택) · 선택지 없이 보내려면 여기에 답을 적으세요.",value:"",type:"textarea",options:null,required:false},
+      ],
+    }} onSaved={result=>{
+      const delivery=result.result.delivery;
+      if(delivery?.status!=="sent") alert("답변은 저장됐지만 전달 상태를 확인해야 합니다: "+(delivery?.error || delivery?.status || "모름"));
+    }}/>
+    <p className="decision-note">답변 전달을 누를 때만 보냅니다. 요청한 {decision.requestedBy}에게 한 번 알립니다.</p>
+  </article>;
 }

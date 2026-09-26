@@ -392,7 +392,8 @@ export function dashboardData(snapshot, url) {
       ),
     };
   }
-  if (route === "status")
+  if (route === "status") {
+    const recent = recentExecutionEvents(m.cards);
     return {
       ...stamp,
       works: m.rows.filter((r) => r.kind === "work").map(compact),
@@ -415,8 +416,14 @@ export function dashboardData(snapshot, url) {
       resources: snapshot.resources,
       resourceError: snapshot.resourceError,
       workError: m.workError,
+      executionCount: m.cards.filter(isExecution).length,
+      waitingQuestions: (() => {
+        try { return letters(snapshot).filter(letter => letter.replyStatus === "waiting").length; }
+        catch { return null; }
+      })(),
       boards: snapshot.center.boards.map((b) => ({
         name: b.name,
+        state: b.state,
         ...boardProgressCounts(b, { buckets: true }),
         watchHtml: renderWatchOverview(snapshot.center, b),
       })),
@@ -426,13 +433,15 @@ export function dashboardData(snapshot, url) {
       decisions: snapshot.decisionError
         ? null
         : (snapshot.decisions || []).filter((d) => d.status === "open"),
-      recent: recentExecutionEvents(m.cards)
+      recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),
+      recent: recent
         .slice(0, 50)
         .map((e) => ({
           ...pick(e, ["at", "kind", "label", "role"]),
           card: pick(e.card, ["key", "title"]),
         })),
     };
+  }
   if (route === "sessions")
     return {
       ...stamp,

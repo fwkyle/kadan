@@ -17,7 +17,9 @@ import {
   viewOf,
 } from "./navigation";
 import type { Summary } from "./types";
-import { AppContext, ErrorMessage, Loading } from "./ui";
+import { AppContext, ErrorMessage, Loading, time } from "./ui";
+import { usePaneScroll } from "./scroll";
+import { readTheme, saveTheme, type Theme } from "./theme";
 const Status = lazy(() => import("./pages/Status")),
   Workspace = lazy(() => import("./pages/Workspace")),
   Decisions = lazy(() => import("./pages/Decisions")),
@@ -47,6 +49,13 @@ const links = [
   ["sessions", "담당자 세션"],
   ["runner-settings", "실행 모델"],
 ];
+const primaryLinks = links.slice(0, 5).map(([key, label]) =>
+  [key, key === "ledger" ? "기록" : label],
+);
+const operationLinks = [
+  ["sessions", "담당자 세션"], ["runner-settings", "실행 모델"],
+  ["work-create", "새 업무 만들기"], ["card-create", "별도 실행 등록"],
+];
 export default function App() {
   const href = useLocation(),
     url = useMemo(() => new URL(href), [href]),
@@ -58,7 +67,9 @@ export default function App() {
     summary = useResource<Summary>("summary");
   const drafts = useRef(new Set<string>()),
     [notice, setNotice] = useState(""),
-    [mobile, setMobile] = useState(false);
+    [theme, setTheme] = useState(readTheme);
+  const menu = useRef<HTMLDetailsElement>(null);
+  const mainScroll = usePaneScroll("page:" + view);
   const draft = useCallback((key: string, dirty: boolean) => {
     if (dirty) drafts.current.add(key);
     else drafts.current.delete(key);
@@ -87,7 +98,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    setMobile(false);
+    menu.current?.removeAttribute("open");
     document.title =
       (links.find(([key]) => key === view)?.[1] || "작업") + " · 카단";
   }, [view]);
@@ -98,7 +109,7 @@ export default function App() {
   }, [notice]);
   const content =
     view === "status" ? (
-      <Status />
+      <Status url={url} />
     ) : view === "dashboard" ? (
       <Workspace url={url} />
     ) : view === "decisions" ? (
@@ -126,7 +137,8 @@ export default function App() {
   return (
     <AppContext value={context}>
       <div
-        className="app-shell"
+        className="dw-shell"
+        data-view={view}
         onClick={(event) => {
           if (
             event.defaultPrevented ||
@@ -162,44 +174,39 @@ export default function App() {
         >
           본문으로 건너뛰기
         </a>
-        <header className="mobile-header">
-          <strong>카단</strong>
-          <button
-            aria-expanded={mobile}
-            aria-controls="app-nav"
-            onClick={() => setMobile((x) => !x)}
-          >
-            메뉴
-          </button>
-        </header>
-        <aside className={"sidebar" + (mobile ? " mobile-open" : "")}>
-          <a className="brand" href="#status">
-            카단 <small>작업 관제</small>
-          </a>
+        <header className="dw-top">
+          <a className="dw-brand" href="#status">카단 라이트</a>
           <nav id="app-nav" aria-label="주 메뉴">
-            {links.map(([key, label]) => (
+            {primaryLinks.map(([key, label]) => (
               <a
                 key={key}
                 href={"#" + key}
-                aria-current={view === key ? "page" : undefined}
+                aria-current={view === key || (key === "ledger" && view === "runs") ? "page" : undefined}
               >
                 <span>{label}</span>
-                {key === "decisions" && <b>{summary.data?.decisions ?? "?"}</b>}
-                {key === "mailbox" && <b>{summary.data?.waiting ?? "?"}</b>}
+                {key === "decisions" && <span className="dw-decision-count">{summary.data?.decisions ?? "?"}</span>}
+                {key === "mailbox" && <span className="dw-decision-count">{summary.data?.waiting ?? "?"}</span>}
               </a>
             ))}
           </nav>
-          <div className="sidebar-foot">
-            <span className="connection-dot" />
-            로컬 대시보드
-            <br />
-            <small>화면별 15초 갱신</small>
-            {summary.data?.runtime?.commit && (
-              <small>{summary.data.runtime.commit.slice(0, 8)}</small>
-            )}
-          </div>
-        </aside>
-        <main id="main-content" tabIndex={-1}>
+          <button type="button" className="dw-theme" aria-label="화면 테마 바꾸기" onClick={() => {
+            const order: Theme[] = ["auto", "dark", "light"];
+            const next = order[(order.indexOf(theme) + 1) % order.length];
+            saveTheme(next);
+            setTheme(next);
+          }}>테마: {{auto:"자동",dark:"어둡게",light:"밝게"}[theme]}</button>
+          <details ref={menu} className={"dw-more" + (operationLinks.some(([key]) => key === view) ? " dw-more-current" : "")}>
+            <summary>운영 메뉴</summary>
+            <nav aria-label="운영 메뉴">
+              {operationLinks.map(([key,label]) => <a key={key} href={"#"+key} aria-current={view === key ? "page" : undefined}>{label}</a>)}
+            </nav>
+          </details>
+        </header>
+        <main id="main-content" tabIndex={-1} {...mainScroll}>
+          {(view === "ledger" || view === "runs") && <nav className="record-tabs" aria-label="기록 종류">
+            <a href="#ledger" aria-current={view === "ledger" ? "page" : undefined}>사건 기록</a>
+            <a href="#runs" aria-current={view === "runs" ? "page" : undefined}>실행 기록</a>
+          </nav>}
           <ErrorMessage
             error={session.error}
             retry={() => void session.refresh(true)}
@@ -218,6 +225,10 @@ export default function App() {
             </Boundary>
           )}
         </main>
+        <footer>
+          <span>실행 코드 {summary.data?.runtime?.commit?.slice(0, 7) || "모름"} · 시작 {time(summary.data?.runtime?.startedAt)}</span>
+          <div id="dashboard-freshness" />
+        </footer>
       </div>
     </AppContext>
   );

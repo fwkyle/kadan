@@ -45,7 +45,7 @@ export type Field = {
   name: string;
   label: string;
   value: string | number;
-  type: "text" | "textarea" | "select" | "number" | "hidden";
+  type: "text" | "textarea" | "select" | "radio" | "number" | "hidden";
   options: [string, string][] | null;
   required: boolean;
 };

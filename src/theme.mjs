@@ -62,15 +62,25 @@ function themeCss(css,used){
  return out;
 }
 
+function themeVariables(used){
+ const colors=[...used].sort();
+ const light=colors.map(c=>`${varName(c)}:${c}`).join(';');
+ const dark=colors.map(c=>`${varName(c)}:${darkColor(c)}`).join(';');
+ return `:root{color-scheme:light;${light}}@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;${dark}}}:root[data-theme="dark"]{color-scheme:dark;${dark}}`;
+}
+
+// React 번들도 기존 화면과 같은 색·자동/밝게/어둡게 규칙으로 빌드한다.
+export function themeStyleSheet(css){
+ const used=new Set(),themed=themeCss(css,used);
+ return themeVariables(used)+'\n'+themed;
+}
+
 // 페이지 HTML의 <style> 블록과 style="" 속성의 색을 변수로 바꾸고, 밝은·어두운 값 정의를 앞에 붙인다.
 export function applyTheme(html){
  const used=new Set();
  let out=html.replace(/<style>([\s\S]*?)<\/style>/g,(m,css)=>`<style>${themeCss(css,used)}</style>`)
   .replace(/ style="([^"]*)"/g,(m,css)=>` style="${themeDeclarations(css,used)}"`);
- const colors=[...used].sort();
- const light=colors.map(c=>`${varName(c)}:${c}`).join(';');
- const dark=colors.map(c=>`${varName(c)}:${darkColor(c)}`).join(';');
- const defs=`<style>:root{color-scheme:light;${light}}@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;${dark}}}:root[data-theme="dark"]{color-scheme:dark;${dark}}</style>`;
+ const defs=`<style>${themeVariables(used)}</style>`;
  return out.replace('<style>',`${themeHeadScript}${defs}<style>`);
 }
 
