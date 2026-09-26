@@ -118,7 +118,7 @@ export default function Detail({ card }: { card: string }) {
           <h2>{data.title}</h2>
           <Health row={data.row} />
           <p>{data.row.healthReason}</p>
-          <Freshness collectedAt={data.collectedAt} {...resource} />
+          <Freshness collectedAt={data.collectedAt} {...resource} footer={false} />
           <nav className="inline-nav">
             <a href={"/?mailCard=" + encodeURIComponent(data.key) + "#mailbox"}>
               이 카드의 우편 {data.mailTotal}건

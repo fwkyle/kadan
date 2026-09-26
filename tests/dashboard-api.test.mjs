@@ -36,6 +36,10 @@ for (const mode of ["jsonl", "sqlite"])
       "detail?card=demo/card-1",
     ])
       await get(route);
+    const status = await get("status");
+    assert.equal(status.executionCount, 55);
+    assert.equal(status.waitingQuestions, 1);
+    assert.equal(status.decisions.length, 2);
     const list = await get("workspace?collection=executions&state=all");
     assert.equal(list.rows.length, 50);
     assert.equal(list.total, 55);
@@ -170,6 +174,15 @@ for (const mode of ["jsonl", "sqlite"])
       "application/json; charset=utf-8",
     );
   });
+test("현황의 최근 사건 집계는 표시 한도 50개 밖의 사건도 포함한다", () => {
+  const f = dashboardFixture({ count: 55 });
+  const snapshot = f.snapshot(), at = new Date().toISOString();
+  for (const card of snapshot.center.cards)
+    card.runs = [{ state: "done", sentAt: at, at, role: "작업자" }];
+  const status = dashboardData(snapshot, new URL("http://local/api/dashboard/status"));
+  assert.equal(status.recent.length, 50);
+  assert.deepEqual(status.recentCounts, {done: 55, failed: 0, send: 55});
+});
 test("읽기 실패는 비어 있는 성공 자료로 바꾸지 않는다", () => {
   const f = dashboardFixture({ count: 2 });
   assert.throws(

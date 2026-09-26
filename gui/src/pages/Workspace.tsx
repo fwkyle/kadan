@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useResource } from "../resource";
 import { cardUrl, patchLocation } from "../navigation";
-import type { Row, Paged, Stamp } from "../types";
+import type { Row, Paged, Stamp, Summary } from "../types";
 import {
   CardLink,
   ErrorMessage,
@@ -50,7 +50,7 @@ const baseColumns: Column[] = [
     render: (row) => (
       <>
         <CardLink row={row} />
-        <small>{row.purpose || row.summary}</small>
+        <small title={row.purpose || row.summary}>{row.id || row.key}</small>
       </>
     ),
   },
@@ -98,6 +98,7 @@ function readColumns(): ColumnPrefs {
 }
 
 export default function Workspace({ url }: { url: URL }) {
+  const summary = useResource<Summary>("summary");
   const params = url.searchParams,
     collection =
       params.get("collection") ||
@@ -174,14 +175,14 @@ export default function Workspace({ url }: { url: URL }) {
       (columns.order.indexOf(b.key) < 0 ? 99 : columns.order.indexOf(b.key)),
   );
   const visible = ordered.filter(
-    (c) => c.key === "title" || !columns.hidden.includes(c.key),
+    (c) => (c.key === "title" || !columns.hidden.includes(c.key)) && (c.key !== "model" || data?.rows.some(row => row.model)),
   );
   const width = (key: string) =>
     Math.max(
       120,
       Math.min(
         900,
-        Number(columns.widths[key]) || (key === "title" ? 330 : 160),
+        Number(columns.widths[key]) || ({title:290,healthLabel:145,signalAt:135,flowLabel:170,turnLabel:140,model:110,stateLabel:105}[key] ?? 140),
       ),
     );
   const move = (key: string, to: number) => {
@@ -204,7 +205,7 @@ export default function Workspace({ url }: { url: URL }) {
     <section className="workspace">
       <div className="page-heading">
         <div>
-          <h1>작업</h1>
+          <h1>{collection === "work" ? "업무 카드" : collection === "unlinked" ? "연결 전 실행" : "실행"}</h1>
           <p>업무의 약속과 실행의 현재 상태를 함께 확인합니다.</p>
         </div>
         <a href="#work-create" className="button">
@@ -214,7 +215,7 @@ export default function Workspace({ url }: { url: URL }) {
       <div className="segmented" aria-label="작업 종류">
         {[
           ["work", "업무 카드"],
-          ["executions", "실행"],
+          ["executions", "모든 실행"],
           ["unlinked", "연결 전 실행"],
         ].map(([key, label]) => (
           <button
@@ -231,7 +232,7 @@ export default function Workspace({ url }: { url: URL }) {
               })
             }
           >
-            {label}
+            {label} <span className="count">{summary.data?.counts[key === "executions" ? "executions" : key === "unlinked" ? "unlinked" : "work"] ?? "?"}</span>
           </button>
         ))}
       </div>
@@ -246,12 +247,12 @@ export default function Workspace({ url }: { url: URL }) {
           />
         </label>
         {[
-          ["repo", "저장소", "repo"],
           ["board", "판", "board"],
+          ["repo", "저장소", "repo"],
           ["health", "실행 흐름", "healthLabel"],
-          ["rally", "티키타카", "flowTitle"],
+          ["rally", "묶음", "flowTitle"],
         ].map(([key, label, facet]) => (
-          <label key={key}>
+          <label key={key} data-filter={key}>
             {label}
             <select
               value={params.get(key) || ""}
@@ -279,25 +280,7 @@ export default function Workspace({ url }: { url: URL }) {
         >
           초기화
         </button>
-      </div>
-      <div className="workspace-tools">
-        <div className="segmented" aria-label="상태">
-          {[
-            ["", "미완료"],
-            ["all", "전체"],
-            ["running", "작업 중"],
-            ["waiting", "결과 대기"],
-            ["done", "완료"],
-          ].map(([state, label]) => (
-            <button
-              key={state}
-              aria-pressed={(params.get("state") || "") === state}
-              onClick={() => patch({ state })}
-            >
-              {label}
-            </button>
-          ))}
-          <details>
+          <details className="state-filter">
             <summary>상태 선택</summary>
             {Object.entries(stateLabels).map(([value, label]) => {
               const selectedStates =
@@ -327,12 +310,11 @@ export default function Workspace({ url }: { url: URL }) {
               );
             })}
           </details>
-        </div>
-        <div className="segmented" aria-label="보기">
+        <div className="segmented dw-layout" aria-label="보기">
           {[
-            ["table", "표"],
+            ["table", "표 보기"],
             ["split", "목록·상세"],
-            ["wall", "벽"],
+            ["wall", "카드 월"],
             ["map", "관계도"],
           ].map(([value, label]) => (
             <button
@@ -345,6 +327,28 @@ export default function Workspace({ url }: { url: URL }) {
           ))}
           <a href="#operations-flow">업무 흐름</a>
         </div>
+      </div>
+      <div className="workspace-tools">
+        <div className="segmented" aria-label="상태">
+          {[
+            ["", "미완료"],
+            ["running,waiting", "진행 중·대기"],
+            ["draft,ready", "발령 전"],
+            ["assigned,unconfirmed,orphaned,failed", "확인 필요"],
+            ["done", "완료"],
+            ["all", "전체"],
+          ].map(([state, label]) => (
+            <button
+              key={state}
+              aria-pressed={(params.get("state") || "") === state}
+              onClick={() => patch({ state })}
+            >
+              {label} <span className="count">{data?.presets[state] ?? "?"}</span>
+            </button>
+          ))}
+
+        </div>
+
       </div>
       <ErrorMessage
         error={resource.error}
@@ -434,6 +438,7 @@ export default function Workspace({ url }: { url: URL }) {
                       className="workspace-table"
                       style={{
                         tableLayout: "fixed",
+                        minWidth: "100%",
                         width: visible.reduce(
                           (sum, c) => sum + width(c.key),
                           0,

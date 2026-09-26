@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {applyTheme,darkColor} from '../src/theme.mjs';
+import {applyTheme,darkColor,themeStyleSheet} from '../src/theme.mjs';
 import {renderCenterWall} from '../src/center-wall.mjs';
+
+test('React 정적 CSS는 기존 HTML 테마와 같은 밝은·어두운 값을 사용한다', () => {
+  const css = ':root{--surface:#f5f6f7}.panel{background:white;color:#202724}@media(max-width:799px){#abc-panel{border-color:#21684e}}';
+  const expected = [...applyTheme(`<style>${css}</style>`).matchAll(/<style>([\s\S]*?)<\/style>/g)].map(match => match[1]).join('\n');
+  assert.equal(themeStyleSheet(css), expected);
+  assert.match(themeStyleSheet(css), /#abc-panel\{border-color:var\(--kc-21684e\)\}/);
+  assert.ok(!themeStyleSheet(css).includes('<script>'));
+});
 
 test('09-24 다크 모드: 선언 안의 색만 변수로 바꾸고 선택자·white-space는 건드리지 않는다', () => {
   const html = applyTheme('<html><head><style>#abc-panel{color:#202724;background:white}.x #fed,.y{border:1px solid #dce2de}@media (max-width:800px){.a{background:#fff0d0}}@keyframes k{to{color:#21684e}}.w{white-space:nowrap}</style></head><body><i style="width:5%;background:#158064"></i></body></html>');
