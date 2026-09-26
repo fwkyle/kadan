@@ -120,6 +120,7 @@ function browserHarness({conflict=false,deferred=false,filterCards=null,refresh=
   async submit(target=currentForm||form){let prevented=false;await events.get('submit')({target,preventDefault(){prevented=true}});return {prevented,...snapshot()};},
   async respond(index,key,revision=2){requests[index].resolve(response(key,revision));await flush();},
   async reject(index){requests[index].reject(new Error('늦은 조회 실패'));await flush();},
+  fire:(type,event)=>events.get(type)(event),leave:()=>{let prevented=false;windowEvents.get('beforeunload')({preventDefault(){prevented=true;}});return prevented;},
   requests,snapshot,flush,nodes,form,tick:async()=>{tick();await flush();await flush();return {gets,...snapshot()};}
  };
 }
@@ -439,4 +440,15 @@ test('자동 갱신은 작성 중이면 받지 않고, 표 열 구성이 바뀐 
  const fresh=browserHarness({refresh:initial=>({rows:initial.rows.map(c=>({...c,title:'그리면 안 됨'})),columns:initial.columns.slice(1),workError:null,hierarchy:null})});
  fresh.nodes.get('#dw-scroll').scrollTop=300;
  r=await fresh.tick();assert.equal(r.gets,1);assert.ok(!r.body.includes('그리면 안 됨'));assert.equal(r.reloads,1);
+});
+
+test('결정 선택지만 고르면 떠날 때 확인 창을 띄우지 않고, 메모를 쓰거나 카드 기록을 쓰면 띄운다',()=>{
+ const decision={matches:s=>s==='form[method="post"]'||s==='form[action="/decisions/answer"]'};
+ const h=browserHarness();
+ h.fire('change',{target:{type:'radio',closest:()=>decision}});h.fire('input',{target:{type:'radio',closest:()=>decision}});
+ assert.equal(h.leave(),false,'선택지만 고른 것은 작성이 아니다');
+ h.fire('input',{target:{type:'textarea',closest:()=>decision}});
+ assert.equal(h.leave(),true,'메모 입력은 지킨다');
+ const card=browserHarness();card.input('카드 기록');
+ assert.equal(card.leave(),true);
 });
