@@ -221,10 +221,11 @@ export function ActionForm({
     ) : field.type === "radio" ? (
       <fieldset className="radio-options" key={field.name}>
         <legend>{field.label}</legend>
-        {field.options?.map(([value, label]) => <label key={value}>
+        {field.options?.map(([value, label]) => <label key={value} className={value === field.recommendedValue ? "recommended" : undefined}>
           <input type="radio" name={field.name} value={value} checked={(values[field.name] || "") === value}
             onChange={() => { setValues({ ...values, [field.name]: value }); setDirty(true); }}/>
-          {label}
+          <span className="radio-label">{label}</span>
+          {value === field.recommendedValue && <span className="recommendation-badge">추천</span>}
         </label>)}
       </fieldset>
     ) : (

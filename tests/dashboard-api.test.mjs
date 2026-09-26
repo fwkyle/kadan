@@ -191,6 +191,21 @@ test("결정 API는 제목과 본문을 나누고 기존 줄바꿈·항목·안�
   assert.match(item.reasonHtml, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(item.questionHtml + item.reasonHtml, /<img|<script|href="(?:javascript:|file:|\/tmp)/);
 });
+test("한 줄 결정 설명은 문장별로 나누되 원문과 URL·소수·파일명은 바꾸지 않는다", () => {
+  const f = dashboardFixture({ count: 2 }), snapshot = f.snapshot();
+  const reason = '검수 통과. 사진은 2.5MB이고 result.md에 기록했습니다. 확인: https://example.com/v1.2/photo.png?q=1.5. 다음 확인.\n기존 줄바꿈\n<script>bad()</script>';
+  const question = '적용할까요?\n- 바뀌는 것: 첫 문장. 다음 문장.\n\n첫 문단\n\n다음 문단';
+  snapshot.decisions[0] = {...snapshot.decisions[0], question, reason};
+  const item = dashboardData(snapshot, new URL('http://local/api/dashboard/decisions')).items[0];
+  assert.equal(item.reason, reason);
+  assert.equal(item.question, question);
+  assert.match(item.reasonHtml, /검수 통과\.\n사진은 2\.5MB이고 result\.md에 기록했습니다\.\n확인:/);
+  assert.match(item.reasonHtml, /href="https:\/\/example.com\/v1.2\/photo.png\?q=1.5"/);
+  assert.match(item.reasonHtml, /<\/a>\.\n다음 확인\.\n기존 줄바꿈\n&lt;script&gt;/);
+  assert.match(item.questionHtml, /<dd>첫 문장\.\n다음 문장\.<\/dd>/);
+  assert.match(item.questionHtml, /<p class="dc-pre">첫 문단<\/p><p class="dc-pre">다음 문단<\/p>/);
+  assert.doesNotMatch(item.reasonHtml, /<script>/);
+});
 test("현황의 최근 사건 집계는 표시 한도 50개 밖의 사건도 포함한다", () => {
   const f = dashboardFixture({ count: 55 });
   const snapshot = f.snapshot(), at = new Date().toISOString();

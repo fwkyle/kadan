@@ -102,8 +102,9 @@ td small { display: block; margin-top: 2px; }
 .eyebrow { color: var(--ds-color-muted); font-size: 12px; }
 .facts { display: grid; gap: 8px; margin: 14px 0; }
 .facts > div { display: grid; grid-template-columns: 110px minmax(0,1fr); gap: 12px; font-size: 12px; }
-.facts dd { margin: 0; overflow-wrap: anywhere; }
+.facts dd { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
 .prose { overflow-wrap: anywhere; }
+.prose p, .prose li { white-space: pre-line; }
 .prose h3 { font-size: 15px; }
 .prose .dw-sr, .prose .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .prose dl { font-size: 12px; }
@@ -147,7 +148,13 @@ td small { display: block; margin-top: 2px; }
 .decision-question .dc-fields { grid-template-columns: minmax(0,140px) minmax(0,1fr); gap: 8px 14px; }
 .decision-question .dc-fields dt { white-space: normal; }
 .decision-question .dc-pre + .dc-fields, .decision-question .dc-fields + .dc-pre { margin-top: 12px; }
+.decision-page .dc-pre, .decision-question .dc-fields { line-height: 1.8; }
+.decision-page .work-tile > p { white-space: pre-line; }
+.decision-recommendation { margin: 18px 0; padding: 14px 16px; border: 1px solid #9fbfac; border-left: 3px solid #21684e; border-radius: 8px; background: #f0f6f2; }
+.decision-recommendation .recommendation-heading { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; color: var(--ds-color-action); font-size: 14px; }
+.recommendation-badge { flex: none; display: inline-block; border-radius: 4px; padding: 2px 7px; background: #21684e; color: #fff; font-size: 11px; font-weight: 700; line-height: 1.5; }
 .decision-list .reason { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 10px; }
+.decision-list .reason > p { white-space: pre-line; }
 .decision-list .reason > span { color: var(--ds-color-muted); }
 .decision-list .reason p { margin-top: 0; }
 .decision-list .reason ul { margin: 0; padding-left: 18px; }
@@ -156,6 +163,10 @@ td small { display: block; margin-top: 2px; }
 .radio-options legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .radio-options label { display: flex; align-items: center; flex-direction: row; gap: 8px; border: 1px solid #d8ded8; border-radius: 8px; padding: 10px 12px; margin: 0; font-size: 13px; color: var(--ds-color-text); cursor: pointer; }
 .radio-options input { flex: none; }
+.radio-options .radio-label { flex: 1; min-width: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.radio-options label.recommended { border-color: #9fbfac; background: #e6f1ea; }
+.radio-options label.recommended .radio-label { font-weight: 600; }
+.radio-options label:has(input:checked) { outline: 2px solid var(--ds-color-action); outline-offset: -2px; }
 .decision-list .action-form label[for] { font-size: 12px; }
 .decision-list .action-form label[for] textarea { min-height: 58px; }
 .decision-list .action-form button[type=submit] { margin-top: 0; }

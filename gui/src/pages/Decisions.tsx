@@ -48,12 +48,15 @@ function DecisionRequest({decision, draft}: {decision: Decision; draft: (id: str
     <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time></div>
     <h2>{decision.questionTitle ?? decision.question}</h2>
     {decision.questionHtml && <div className="decision-question"><DocumentContent html={decision.questionHtml}/></div>}
-    <div className="reason"><span>추천 이유</span>{decision.reasonHtml ? <DocumentContent html={decision.reasonHtml}/> : <p>{decision.reason}</p>}</div>
+    <div className="decision-recommendation">
+      <p className="recommendation-heading"><span className="recommendation-badge">추천안</span><strong>{decision.recommendation}</strong></p>
+      <div className="reason"><span>추천 이유</span>{decision.reasonHtml ? <DocumentContent html={decision.reasonHtml}/> : <p>{decision.reason}</p>}</div>
+    </div>
     <ActionForm revision={decision.revision} onDirtyChange={onDirtyChange} spec={{
       action:"/decisions/answer", title:"답변 전달", disabled:decision.status!=="open",
       fields:[
         {name:"id",label:"요청 ID",value:decision.id,type:"hidden",options:null,required:true},
-        {name:"choice",label:"선택",value:"",type:"radio",options:[...decision.options.map(option=>[option,option+(option===decision.recommendation?" · 추천":"")] as [string,string]),["","선택지 없이 메모로 답변"]],required:false},
+        {name:"choice",label:"선택",value:"",type:"radio",recommendedValue:decision.recommendation,options:[...decision.options.map(option=>[option,option] as [string,string]),["","선택지 없이 메모로 답변"]],required:false},
         {name:"text",label:"메모 (선택) · 선택지 없이 보내려면 여기에 답을 적으세요.",value:"",type:"textarea",options:null,required:false},
       ],
     }} onSaved={result=>{
