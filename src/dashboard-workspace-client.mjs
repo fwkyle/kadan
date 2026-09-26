@@ -239,8 +239,10 @@ function workspaceClient() {
  });
  document.addEventListener('pointerdown',event=>{if(!event.target.closest('#dw-state'))$('#dw-state').open=false;});
  $('#dw-state').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();$('#dw-state').open=false;$('#dw-state summary').focus({preventScroll:true});}});
- document.addEventListener('input',e=>{detailView.input(e);if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
- document.addEventListener('change',e=>{if(e.target.closest('form[method="post"]')){dirty=true;refreshStatus();}});
+ // 결정 선택지만 고른 것은 작성으로 치지 않는다. 고르기만 해도 떠날 때 '사이트에서 나가시겠습니까?' 창이 떠 크롬이 그 답을 기다렸다(2026-09-26). 메모 입력은 지킨다.
+ const editing=target=>{const form=target.closest?.('form[method="post"]');return Boolean(form)&&!(form.matches('form[action="/decisions/answer"]')&&target.type==='radio');};
+ document.addEventListener('input',e=>{detailView.input(e);if(editing(e.target)){dirty=true;refreshStatus();}});
+ document.addEventListener('change',e=>{if(editing(e.target)){dirty=true;refreshStatus();}});
  document.addEventListener('submit',async event=>{
   const form=event.target;
   if(!form.matches('form[method="post"]'))return;

@@ -215,3 +215,10 @@ test('09-26 내 결정 화면은 넓은 화면에서 가운데 880px 폭으로 �
   const {decisionStyle} = await import('../src/decision-wall.mjs');
   assert.match(decisionStyle, /#decisions\.panel\{max-width:880px;margin-left:auto;margin-right:auto\}/);
 });
+
+test('09-26 결정 선택지의 숨긴 선택 단추는 선택지 칸 안에 묶여 클릭해도 창 전체가 내려가지 않는다', async () => {
+  const {decisionStyle} = await import('../src/decision-wall.mjs');
+  // 기준 위치가 없으면 숨긴 단추가 문서 아래쪽에 놓여, 실제 클릭으로 포커스가 가면 창이 그쪽으로 스크롤돼 흰 화면이 됐다.
+  assert.match(decisionStyle, /#decisions \.dc-opt\{position:relative;/);
+  assert.match(decisionStyle, /\.dc-opt input\{position:absolute;/);
+});
