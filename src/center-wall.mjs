@@ -120,6 +120,10 @@ export function createCenterHandler(home, {notify}={}) {
  return {token,async handle(req,res,url) {
   if(req.method!=='POST'||!['/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
+  const saved=(location,result)=>{
+   if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
+   else {res.writeHead(303,{location,'cache-control':'no-store'});res.end();}
+  };
   if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`){fail(403,'다른 사이트에서 저장할 수 없습니다');return true;}
   if(req.headers['content-type']?.split(';')[0]!=='application/x-www-form-urlencoded'){fail(415,'폼 입력만 지원합니다');return true;}
   let bytes=0;const chunks=[];
@@ -128,9 +132,9 @@ export function createCenterHandler(home, {notify}={}) {
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/decisions/answer') {
-     decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
+     const result=decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.
-     res.writeHead(303,{location:'/?decisionAnswered='+encodeURIComponent(f.id)+'#decisions','cache-control':'no-store'});res.end();return true;
+     saved('/?decisionAnswered='+encodeURIComponent(f.id)+'#decisions',result);return true;
    }
    if(url.pathname.startsWith('/runners/')){
     const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};
@@ -144,7 +148,7 @@ export function createCenterHandler(home, {notify}={}) {
      return setFallback(home,{role:f.role,items,...meta});
     };
     const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():setActivePreset(home,{preset:f.preset,...meta});
-    res.writeHead(303,{location:'/?runnersSaved='+next.revision+'#runner-settings','cache-control':'no-store'});res.end();return true;
+    saved('/?runnersSaved='+next.revision+'#runner-settings',{revision:next.revision});return true;
    }
    if(url.pathname.startsWith('/works/')){
     const action=url.pathname.slice(7);let work;
@@ -156,10 +160,10 @@ export function createCenterHandler(home, {notify}={}) {
      if(action==='update'&&fields.turnOwner===works.get(f.key.slice(5)).turnOwner)delete fields.turnOwner;
      work=works.change(f.key.slice(5),action,fields,{revision:f.revision,by:'사람',note:f.note});
     }
-    res.writeHead(303,{location:`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1#detail`,'cache-control':'no-store'});res.end();return true;
+    saved(`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1#detail`,{key:'work:'+work.key,revision:work.revision});return true;
    }
    const card=url.pathname.endsWith('create')?store.create({...f,by:'사람'}):store.update(f.key,{...(f.turnOwner?.trim()?{turnOwner:f.turnOwner.trim()}:{}),...(f.replacedBy?{replacedBy:f.replacedBy}:{}),...(f.rallyId!==undefined?{rallyId:f.rallyId,rallyTitle:f.rallyTitle,rallyRound:f.rallyRound,rallyStep:f.rallyStep}:{}),title:f.title,status:f.status,scope:f.scope,...(f.statusReason?{statusReason:f.statusReason}:{}),...(f.resolutionOwner!==undefined?{resolutionOwner:f.resolutionOwner||null}:{}),...(f.nextAction!==undefined?{nextAction:f.nextAction||null}:{}),...(f.workType?{workType:f.workType}:{}),board:f.board||null,role:f.role||null},{revision:f.revision,by:'사람',noteKind:f.noteKind,note:f.note});
-   res.writeHead(303,{location:`/?card=${encodeURIComponent(card.key)}#detail`,'cache-control':'no-store'});res.end();
+   saved(`/?card=${encodeURIComponent(card.key)}#detail`,{key:card.key,revision:card.revision});
   }catch(error){fail(409,error.message)}
   return true;
  }};

@@ -4,7 +4,7 @@ Thanks for helping. A few rules keep this project small and safe.
 
 ## Ground rules
 
-1. **Zero dependencies.** Node built-ins, tmux and standard OS commands only. New dependencies need a maintainer decision before code.
+1. **Zero runtime dependencies in the core.** The Node CLI/server, ledger, watch and floors use Node built-ins, tmux and standard OS commands only. The browser dashboard has a maintainer-approved React/TypeScript/Vite build under `gui/`; it ships compiled static assets. Other dependencies still need a maintainer decision before code.
 2. **The ledger is append-only.** Never add code that edits, deletes or reorders ledger events. Storage changes go through `src/storage.mjs`.
 3. **No provider adapters.** Kadan does not special-case any AI CLI. If something needs a per-CLI branch, open an issue first.
 4. **Fail closed.** Before sending, the session must exist and its pane PID must match. Unknown failures are reported, not retried.

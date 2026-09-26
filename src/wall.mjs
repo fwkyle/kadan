@@ -2,6 +2,8 @@ import {ledgerView,ledgerViews} from './ledger-table.mjs';
 import {mailboxLetters} from './mailbox.mjs';
 import {filterMail,mailStatus,mailViews,replyStates} from './dashboard-inbox.mjs';
 import {storageSnapshot} from './storage.mjs';
+import {sendDashboardData} from './dashboard-api.mjs';
+import {serveDashboard} from './dashboard-static.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
 import { renderCenterWall, createCenterHandler, prepareCenterWall } from "./center-wall.mjs";
@@ -441,13 +443,13 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 </script></body></html>`;
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000} = {}) {
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  const cache=new Map();
  let sharedSnapshot=null;
  const clear=()=>{cache.clear();sharedSnapshot=null;};
- const cacheKey=url=>{const query=[...url.searchParams].filter(([key])=>key!=='fresh').sort((a,b)=>a[0].localeCompare(b[0])).map(([key,value])=>key+'='+value).join('&');return url.pathname+(query?'?'+query:'');};
+ const cacheKey=url=>{const query=new URLSearchParams(url.searchParams);query.delete('fresh');query.sort();return url.pathname+'?'+query.toString();};
  const cached=url=>{
   if(!cacheSec||url.searchParams.has('fresh'))return null;
   const key=cacheKey(url),hit=cache.get(key);
@@ -472,8 +474,15 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  };
   const server=http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
     if (centerHandler && !/^(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(request.headers.host??"")) { response.writeHead(403); response.end("local host required"); return; }
+    if(url.pathname.startsWith('/api/dashboard/')){
+      if(!centerHandler){response.writeHead(503);response.end('대시보드 저장소 없음');return;}
+      if(request.method!=='GET'){response.writeHead(405,{allow:'GET'});response.end('조회만 지원합니다');return;}
+      if(request.headers['sec-fetch-site']==='cross-site'||request.headers.origin&&request.headers.origin!==`http://${request.headers.host}`){response.writeHead(403);response.end('다른 사이트에서 조회할 수 없습니다');return;}
+      if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify({token:centerHandler.token}));return;}
+    }
+    if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
+    if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(url);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
     if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(url),remember:(body,type)=>remember(url,body,type)})) return;
@@ -492,6 +501,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       response.writeHead(snapshot.centerError?503:200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});
       response.end(body); return;
     }
+    if(centerHandler&&url.pathname.startsWith('/api/dashboard/')){sendDashboardData(snapshot,url,response);return;}
     if (centerHandler && url.searchParams.get('legacy')!=='1') {
       const html=renderCenterWall(snapshot,{token:centerHandler.token,url});
       remember(url,html,'text/html; charset=utf-8',sharedSnapshot?.at);
@@ -521,7 +531,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     });
     response.end(html);
     };
-    try{if(home)storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(503,{'content-type':'text/plain; charset=utf-8'});response.end('저장소 확인 불가: '+error.message);}
+    try{if(home)storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(error.status||503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});response.end('저장소 확인 불가: '+error.message);}
   });
   server.on('close',()=>{clearTimeout(warming);warming=null;});
   return server;
