@@ -210,3 +210,8 @@ test('09-24 결정 카드: 선택지는 카드 모양 단추로 모두 보이고
   assert.doesNotMatch(card, /<select/);
   assert.match(html, /<div class="dc-meter"><span>대기 1건 · 오늘 답함 1건<\/span><div class="dc-bar" aria-hidden="true"><i style="width:50%"><\/i>/);
 });
+
+test('09-26 내 결정 화면은 넓은 화면에서 가운데 880px 폭으로 모은다', async () => {
+  const {decisionStyle} = await import('../src/decision-wall.mjs');
+  assert.match(decisionStyle, /#decisions\.panel\{max-width:880px;margin-left:auto;margin-right:auto\}/);
+});

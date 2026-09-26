@@ -15,7 +15,9 @@ export const splitQuestion=value=>{const text=String(value??'').trim(),line=text
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 // 방금 답한 결정의 전달 결과를 오른쪽 위 토스트로 알린다. 성공·확인 중은 15초 뒤 사라지고(마우스를 올리면 멈춤),
 // 알림 전달 실패는 닫을 때까지 남긴다. 지난 결정은 오른쪽 드로어에서 본다(2026-09-24 [kyle]).
-export const decisionStyle=`.decision-toast{position:fixed;right:24px;top:72px;z-index:50;display:flex;gap:12px;align-items:flex-start;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border-radius:10px;background:#1f2a24;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);font-size:14px;line-height:1.5;animation:decision-toast-out .3s ease 15s forwards}
+// 결정은 읽고 답하는 글이라 넓은 화면에서 가운데 한 줄 폭으로 모은다(2026-09-26 kyle: 좌우 여백).
+export const decisionStyle=`#decisions.panel{max-width:880px;margin-left:auto;margin-right:auto}
+.decision-toast{position:fixed;right:24px;top:72px;z-index:50;display:flex;gap:12px;align-items:flex-start;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border-radius:10px;background:#1f2a24;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);font-size:14px;line-height:1.5;animation:decision-toast-out .3s ease 15s forwards}
 .decision-toast:hover{animation-play-state:paused}
 .decision-toast-failed{background:#8a1f1f;animation:none}
 .decision-toast .decision-toast-close,.decision-toast .decision-toast-link{flex:none;border:0;background:transparent;box-shadow:none;min-height:0;color:inherit;cursor:pointer;padding:0 2px}
