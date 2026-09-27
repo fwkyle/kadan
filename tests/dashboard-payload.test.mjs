@@ -51,3 +51,8 @@ test('자료 크기: 표 줄은 서버가 싣지 않고 화면 스크립트가 �
  assert.match(html,/<tbody id="dw-table-body"><\/tbody>/);
  assert.equal(data(html).rows.rows.length,2);
 });
+
+test('화면 틀: 가운데 내용 영역(main)이 숨긴 요소의 기준 위치라 창 전체가 스크롤되지 않는다',async()=>{
+ const {dashboardWorkspaceStyle}=await import('../src/dashboard-workspace-style.mjs');
+ assert.match(dashboardWorkspaceStyle,/\.dw-shell>main\{position:relative;[^}]*overflow:auto/);
+});
