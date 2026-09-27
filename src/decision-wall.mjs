@@ -1,6 +1,7 @@
 import {taskIdentity} from './task-identity.mjs';
 import {renderLedgerTable,ledgerView,ledgerViews,isWatchRoutine,filterLedgerRows} from './ledger-table.mjs';
 import {mailboxLetters} from './mailbox.mjs';
+import {isUnreadLetter} from './mailbox-state.mjs';
 import {filterMail,mailStatus,mailViews,replyStates,listPageSize} from './dashboard-inbox.mjs';
 import {activityGuide} from './activity-guide.mjs';
 import {readMailBody} from './ledger.mjs';
@@ -215,7 +216,7 @@ export function renderActivity({center,entries=[],ledgerLines,error,home},url){
  const known=ledgerLines!==null&&!entries.some(e=>e?.broken);
  if(!known)return [['mailbox','우편함'],['runs','작업 실행 기록'],['ledger','시스템 기록']].map(([id,title])=>`<section class="panel" id="${id}" data-view="${id}"><h2>${id==='mailbox'?title:'시스템 기록'}</h2>${id==='mailbox'?'':recordTabs(id)}${activityGuide(id)}<p role="alert">모름 — 원장을 읽을 수 없습니다.</p></section>`).join('');
  const letters=mailboxLetters(entries);
- const unread=letters.filter(m=>m.read===false).length;
+ const unread=letters.filter(isUnreadLetter).length;
  const awaiting=letters.filter(m=>m.replyStatus==='waiting').length;
  const role=url.searchParams.get('mailRole')||'',hideWatch=url.searchParams.get('hideWatch')==='1';
  const view=url.searchParams.get('mailView')||'all',reply=url.searchParams.get('mailReply')||'';

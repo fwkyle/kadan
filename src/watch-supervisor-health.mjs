@@ -20,7 +20,7 @@ export function observationContext(role, observation, entries, cards, tasks) {
         currentRecipient:e.currentRecipient || e.role,currentSender:e.currentSender || e.by,
         taskId:e.taskId,executionKey:e.executionKey,workKey:e.workKey,replyTo:e.replyTo,
         transport:e.transport,completion:e.completion,systemGenerated:e.systemGenerated,notificationOnly:e.notificationOnly,
-        read:e.read,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,
+        read:e.read,readKind:e.readKind,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,
         preview:e.preview?.slice(0,400)})),
   };
 }
