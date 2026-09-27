@@ -1,3 +1,4 @@
+import {doneMarkerOf} from './done-marker.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {workEntries,effectiveCardRole} from './handover-state.mjs';
 // 같은 발령(카드·담당·전달 시각)의 시작보고누락 경보가 한 번 울리고 해소(또는 감시제외)됐으면 다시 만들지 않는다.
@@ -22,7 +23,7 @@ export function assessMissingStartReports(cards,entries,observations,now,graceMs
   if(['running','waiting'].includes(c.activity)&&c.activityRole===c.role&&Date.parse(c.activityAt)>=at&&Date.parse(c.activityAt)<=now)continue;
   const seen=observations.get('kadan-'+c.role);
   if(!seen?.alive||seen.digest==null||seen.expectedPid!=null&&String(seen.pid)!==String(seen.expectedPid))continue;
-  const done=(seen.screen||'').trimEnd().split('\n').slice(-6).some(line=>{const m=line.trim().match(/^KADAN:DONE (\S+) (ok|failed)$/);return m&&identity.resolve(m[1]).key===c.key;});if(done)continue;
+  const done=(seen.screen||'').trimEnd().split('\n').slice(-6).some(line=>{const m=doneMarkerOf(line);return m&&identity.resolve(m.taskId).key===c.key;});if(done)continue;
   const id=`start-report:${c.key}:${c.role}:${sent.t}`;
   if(!active?.has(id)){
    if(states&&(states.get('kadan-'+c.role)?.unchangedMs??0)<graceMs)continue;

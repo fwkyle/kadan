@@ -15,6 +15,9 @@ test('시작 보고 누락은 유예 이후에만 해당 역할·발령에 알�
  assert.equal(check([{...c,status:'hold'}]).length,0);assert.equal(check([c,{...c,key:'r2/c'}]).length,0);
  assert.equal(assessMissingStartReports([c],[send],new Map(),now,grace).length,0);
  assert.equal(assessMissingStartReports([c],[send],new Map([['kadan-worker',{...seen.get('kadan-worker'),screen:'KADAN:DONE c ok'}]]),now,grace).length,0);
+ // 응답 머리표가 붙은 정식 주소 마커도 완료다. 입력 되풀이('›')는 완료가 아니다(2026-09-27).
+ const screen=text=>assessMissingStartReports([c],[send],new Map([['kadan-worker',{...seen.get('kadan-worker'),screen:text}]]),now,grace).length;
+ assert.equal(screen('• KADAN:DONE r/c ok'),0);assert.equal(screen('⏺ KADAN:DONE c failed'),0);assert.equal(screen('› KADAN:DONE c ok 만 출력하라'),1);
 });
 test('새 시작보고누락은 화면이 유예 시간만큼 멈춘 뒤에만 만들고, 복원된 경보는 화면 관찰과 무관하게 유지한다',()=>{
  const id=`start-report:r/c:worker:${at}`;

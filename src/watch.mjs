@@ -1,3 +1,4 @@
+import {doneMarkerOf} from './done-marker.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -38,7 +39,6 @@ export function disconnectKind(line) {
   }
   return "끊김";
 }
-const DONE_MARKER = /^\s*KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/u;
 
 // 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 표시.
 // 판단은 '입력줄 자리'의 구조로 한다 — 본문에 같은 글자가 있어도 걸리지 않게
@@ -116,8 +116,8 @@ function screenDisconnects(screenText) {
 
 function screenDoneMarker(screenText) {
   for (const line of lastScreenLines(screenText)) {
-    const match = line.match(DONE_MARKER);
-    if (match) return { taskId: match[1], result: match[2] };
+    const marker = doneMarkerOf(line);
+    if (marker) return marker;
   }
   return null;
 }

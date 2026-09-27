@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
+import {DONE_LINE} from './done-marker.mjs';
 
 // 실행기 입력 큐의 명시 배너만 감지한다. 일반 프롬프트·승인 질문·진행 중·완료 마커 뒤 화면은 대상이 아니다.
 export const QUEUE_BANNER = 'Press Enter to send queued messages now';
-const doneMarker = /^\s*KADAN:DONE\s+\S+\s+(?:ok|failed)\s*$/mu;
 const progressMark = /Thinking|Working|esc to interrupt|Running tool|Executing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/u;
 const approvalPrompt = /\[Y\/n\]|\[y\/N\]|\(y\/n\)|\(Y\/n\)|\bAllow\b|\bApprove\b|Do you want to|승인|허용하시겠|계속할까요/iu;
 const placeholder = /Ask (Devin|Codex|Claude|me)|Ask anything|무엇이든/iu;
@@ -16,7 +16,7 @@ export function queuedInputBanner(screen) {
   const tail = lines.slice(index + 1).join('\n');
   // 지문은 화면 전체를 해시한다. 같은 화면의 반복 전송만 막고, 위쪽 내용이 바뀐 새 배너는 새 사건으로 본다.
   const fingerprint = createHash('sha256').update(screen.trim()).digest('hex');
-  if (doneMarker.test(tail) || progressMark.test(tail)) return null;
+  if (tail.split('\n').some(line => DONE_LINE.test(line)) || progressMark.test(tail)) return null;
   if (approvalPrompt.test(tail)) return {fingerprint, unsafe: '승인 질문이 함께 표시됨'};
   const partial = lines.slice(index + 1).find(line => /^\s*[›>❯]\s*\S/u.test(line) && !placeholder.test(line));
   if (partial) return {fingerprint, unsafe: '입력창에 미완성 텍스트가 있음'};

@@ -108,3 +108,8 @@ test('새 경보는 선택 당시 경로를 보존하고 해소 경로를 현재
  const stdout=await exercise({stdout:true});
  assert.deepEqual(stdout.records[0].route,{recipient:null,basis:'none',skipped:[]});
 });
+
+test("완료후보는 codex 응답 머리표('• ')가 붙은 마커도 알아본다(2026-09-27)", async () => {
+  const result = await exercise({ screen: "• KADAN:DONE card-64 ok" });
+  assert.ok(result.records.some(e => e.alertKind === "완료후보" && e.taskId === "card-64"));
+});

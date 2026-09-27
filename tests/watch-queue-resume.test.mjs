@@ -34,6 +34,7 @@ test('정확한 큐 배너만 감지한다 — 일반 프롬프트·진행 중·
   assert.equal(queuedInputBanner(`${QUEUE_BANNER}\nThinking…`),null);
   assert.equal(queuedInputBanner(`${QUEUE_BANNER}\nWorking (2s • esc to interrupt)`),null);
   assert.equal(queuedInputBanner(`${QUEUE_BANNER}\nKADAN:DONE task ok`),null);
+  assert.equal(queuedInputBanner(`${QUEUE_BANNER}\n• KADAN:DONE task ok`),null);
   assert.equal(queuedInputBanner(`queued messages now`),null); // 부분 문구는 아니다
   const hit=queuedInputBanner(bannerScreen);
   assert.ok(hit); assert.equal(hit.unsafe,null); assert.match(hit.fingerprint,/^[0-9a-f]{64}$/);

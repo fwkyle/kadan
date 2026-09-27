@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {doneMarkerOf} from './done-marker.mjs';
 import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs';
 import {readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {captureRuntimeVersion} from './runtime-version.mjs';
@@ -250,9 +251,8 @@ function writeWaitSnapshot({
 export function findDoneMarkers(text) {
   const found = [];
   for (const line of text.split("\n")) {
-    // codex는 '• ', claude는 '⏺ '를 응답 첫 줄 앞에 붙인다. 입력 되풀이는 '›'·'❯'로 시작해 여기 걸리지 않는다.
-    const match = line.match(/^\s*(?:[•⏺]\s+)?KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/u);
-    if (match) found.push({ taskId: match[1], result: match[2] });
+    const marker = doneMarkerOf(line);
+    if (marker) found.push(marker);
   }
   return found;
 }

@@ -1,5 +1,6 @@
 import {MailWatch} from './watch-mail.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
+import {doneMarkerOf} from './done-marker.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
 import {QueueResume,queuedInputBanner} from './watch-queue-resume.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
@@ -604,7 +605,9 @@ export async function runWatch({
       if(candidate.source!=='supervisor-health'&&!workerCheck(candidate,seen).due)return;
       const previous=latestWatchReports(entries).find(e=>e.role===candidate.role&&e.source===candidate.source&&e.taskId===(candidate.taskId??null));
       const assigned=scope?.entries.filter(e=>e.role===candidate.role)??[];
-      const completed=assigned.length===1 && seen?.screen?.split('\n').some(line=>line.match(/^\s*KADAN:DONE\s+(\S+)\s+(?:ok|failed)\s*$/u)?.[1]===assigned[0].taskId);
+      // 짧은 카드id·정식 주소 어느 쪽으로 찍어도 같은 카드다(2026-09-27).
+      const identity=taskIdentity(cards??[]),cardOf=(id,key)=>{const found=identity.resolve(id,key);return found.state==='resolved'?found.key:id;};
+      const completed=assigned.length===1 && seen?.screen?.split('\n').some(line=>{const m=doneMarkerOf(line);return m&&cardOf(m.taskId)===cardOf(assigned[0].taskId,assigned[0].executionKey);});
       if(candidate.source!=='supervisor-health' && completed && previous?.verdict==='실행완료' && previous.observationDigest===seen?.digest &&
         previous.responsibility===watchResponsibility(candidate.role,cards,entries,parents,candidate.source,works))return;
       const key=`${candidate.source}:${candidate.role}:${candidate.taskId||''}`;
