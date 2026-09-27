@@ -64,7 +64,7 @@ export default function Runners() {
             활성 프리셋 <strong>{data.settings.activePreset}</strong> · 버전{" "}
             {data.settings.revision}
           </p>
-          <div className="table-scroll">
+          <div className="table-scroll runners-summary">
             <table>
               <thead>
                 <tr>
@@ -255,7 +255,8 @@ function RunnerForm({
       onSubmit={async (event) => {
         event.preventDefault();
         if (busy) return;
-        const submitter = (event.nativeEvent as SubmitEvent).submitter;
+        const submitter = (event.nativeEvent as SubmitEvent).submitter,
+          details = event.currentTarget.closest("details");
         const op =
           submitter instanceof HTMLButtonElement ? submitter.value : "add";
         if ((!fallback || op === "add") && !choice.model) {
@@ -280,7 +281,18 @@ function RunnerForm({
           setDirty(false);
           setReason("");
           context.draft(id, false);
-          context.notice("저장했습니다. 다음 발령부터 적용됩니다.");
+          if (fallback || op !== "add")
+            context.notice("저장했습니다. 다음 발령부터 적용됩니다.");
+          else {
+            // 저장한 값이 위 요약표에 바로 보이도록 바꾸기 칸을 접고 표로 올린다(2026-09-27 [kyle]: 칸이 펼쳐진 채라 바뀐 게 안 보였다).
+            context.notice(
+              `${data.roles[role]} 실행 모델을 ${label(choice)}(으)로 저장했습니다. 다음 발령부터 적용됩니다.`,
+            );
+            if (details) details.open = false;
+            document
+              .querySelector(".runners-summary")
+              ?.scrollIntoView({ block: "nearest" });
+          }
         } catch (e) {
           setError(e instanceof Error ? e.message : "저장 실패");
         } finally {
@@ -319,31 +331,6 @@ function RunnerForm({
               </li>
             ))}
           </ol>
-        )}
-        {favorites.length > 0 && (
-          <div className="favorites" aria-label="즐겨찾기">
-            <span className="muted">즐겨찾기</span>
-            {favorites.map((fav, i) => {
-              const blocked = blockedFor(fav.model);
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => pick(fav)}
-                  disabled={!usable(fav)}
-                  title={
-                    blocked
-                      ? "차단: " + blocked.reason
-                      : usable(fav)
-                        ? undefined
-                        : "지금 목록에 없는 모델"
-                  }
-                >
-                  ★ {label(fav)}
-                </button>
-              );
-            })}
-          </div>
         )}
         <div className="toolbar">
           <label>
@@ -411,6 +398,33 @@ function RunnerForm({
               ))}
             </select>
           </label>
+          {favorites.length > 0 && (
+            <div className="favorites" role="group" aria-label="즐겨찾기">
+              <span>즐겨찾기</span>
+              <div>
+                {favorites.map((fav, i) => {
+                  const blocked = blockedFor(fav.model);
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => pick(fav)}
+                      disabled={!usable(fav)}
+                      title={
+                        blocked
+                          ? "차단: " + blocked.reason
+                          : usable(fav)
+                            ? undefined
+                            : "지금 목록에 없는 모델"
+                      }
+                    >
+                      ★ {label(fav)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
         <ErrorMessage error={spec?.error || null} />
         {choice.model && (
