@@ -176,7 +176,7 @@ function handoverModels(home,events,executions,cards){
  });
 }
 
-const mailModel=e=>({ref:ref(e),mailId:e.mailId||null,at:e.t||null,by:e.by||null,to:e.role||null,currentSender:e.currentSender||e.by||null,currentRecipient:e.currentRecipient||e.role||null,executionKey:e.executionKey||null,replyTo:e.replyTo||null,kind:e.mailKind||null,read:e.read,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,replyFinalRejected:e.replyFinalRejected===true,completion:e.completion===true,notificationOnly:e.notificationOnly===true,systemGenerated:e.systemGenerated||null,completionTaskId:e.completionTaskId||null,hasBodyRef:Boolean(e.digest)});
+const mailModel=e=>({ref:ref(e),mailId:e.mailId||null,at:e.t||null,by:e.by||null,to:e.role||null,currentSender:e.currentSender||e.by||null,currentRecipient:e.currentRecipient||e.role||null,executionKey:e.executionKey||null,replyTo:e.replyTo||null,kind:e.mailKind||null,read:e.read,readKind:e.readKind||null,expectReply:e.expectReply,replyStatus:e.replyStatus,replyFinal:e.replyFinal,replyFinalRejected:e.replyFinalRejected===true,completion:e.completion===true,notificationOnly:e.notificationOnly===true,systemGenerated:e.systemGenerated||null,completionTaskId:e.completionTaskId||null,hasBodyRef:Boolean(e.digest)});
 
 export function operationsFlowDetail(home,key,{page=1}={}){
  return storageSnapshot(home,()=>{

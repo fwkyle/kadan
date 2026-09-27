@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {instructionSections,renderInstructionTable,detailEvents,renderDetailSummary} from '../src/dashboard-detail.mjs';

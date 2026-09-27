@@ -35,6 +35,7 @@ import { cardForms, workForms, createForm } from "./dashboard-forms.mjs";
 import { workLetters } from "./work-mail.mjs";
 import { readMailBody } from "./ledger.mjs";
 import { mailboxLetters } from "./mailbox.mjs";
+import { isUnreadLetter } from "./mailbox-state.mjs";
 import { filterMail, mailStatus, listPageSize } from "./dashboard-inbox.mjs";
 import {
   ledgerView,
@@ -235,7 +236,7 @@ export function dashboardData(snapshot, url) {
         ),
       ].sort(),
       waiting: all.filter((m) => m.replyStatus === "waiting").length,
-      unread: all.filter((m) => m.read === false).length,
+      unread: all.filter(isUnreadLetter).length,
     };
   }
   if (route === "ledger") {

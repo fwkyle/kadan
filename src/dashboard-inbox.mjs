@@ -1,13 +1,14 @@
 import {escapeHtml as e} from './card-content.mjs';
 import {readMailBody} from './ledger.mjs';
 import {workLetters} from './work-mail.mjs';
+import {isUnreadLetter} from './mailbox-state.mjs';
 
 // 대시보드 목록의 한 쪽 크기. 우편함·기록은 25, 인박스·업무 흐름은 100으로 달랐다(2026-09-25 UX에서 하나로 맞춤).
 export const listPageSize=50;
 export const mailViews=[['all','전체'],['received','받은 편지'],['sent','보낸 편지'],['to-reply','내가 답할 질문'],['waiting','답변 대기']];
 export const replyStates=[['','모든 답변 상태'],['waiting','답변 대기'],['answered','답변 완료'],['cancelled','질문 취소']];
 export function mailStatus(m){
- const read=m.read===true?'받는 사람 읽음 확인':m.read===false?'읽음 미확인':'전달 기록 · 읽음 모름';
+ const read=m.readKind==='delivered-read'?'창 전달 읽음 · 수신자 확인 아님':m.read===true?'받는 사람 읽음 확인':m.read===false?'읽음 미확인':'전달 기록 · 읽음 모름';
  const reply=replyStates.find(([value])=>value&&value===m.replyStatus)?.[1];
  const sender=m.currentSender||m.by,recipient=m.currentRecipient||m.role;
  const responsibility=sender!==m.by||recipient!==m.role?`현재 책임: ${sender||'모름'} → ${recipient||'모름'}`:'';
@@ -36,7 +37,7 @@ export function filterMail(letters,url,{bodyOf}={}){
   const recipient=m.currentRecipient||m.role,sender=m.currentSender||m.by;
   if(role&&(view==='received'||view==='to-reply'?recipient!==role:view==='sent'||view==='waiting'?sender!==role:recipient!==role&&sender!==role))return false;
   if(['to-reply','waiting'].includes(view)&&m.replyStatus!=='waiting')return false;
-  return (!reply||m.replyStatus===reply)&&(url.searchParams.get('mailUnread')!=='1'||m.read===false)&&(url.searchParams.get('hideWatch')!=='1'||m.by!=='watch');
+  return (!reply||m.replyStatus===reply)&&(url.searchParams.get('mailUnread')!=='1'||isUnreadLetter(m))&&(url.searchParams.get('hideWatch')!=='1'||m.by!=='watch');
  });
 }
 const short=at=>Number.isFinite(Date.parse(at))?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(at)):'시각 모름';

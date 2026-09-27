@@ -760,10 +760,14 @@ export function guardedSend({
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     throw error;
   }
+  // --raw는 우편 ID·ack 안내를 붙이지 않고 본문 전체를 창에 넣는다. 창 전달이 성공했으면 수신자 직접 ack와
+  // 구분되는 전달 읽음으로 남겨 감시기 재알림 대상에서 뺀다(2026-09-27 [kyle]). 전달 불명확은 안 읽음 그대로다.
+  const deliveredRead = raw && !notificationOnly && receipt.keyDelivery === "sent";
   const entry = {
     kind: "send",
     mailId,
     ...(notificationOnly?{notificationOnly:true}:{}),
+    ...(deliveredRead?{deliveredRead:true}:{}),
     ...(mailContext?.expectReply?{expectReply:true}:{}),
     ...(mailContext?.replyFinal?{replyFinal:true}:{}),
     ...(mailContext?.workKey?{workKey:mailContext.workKey}:{}),

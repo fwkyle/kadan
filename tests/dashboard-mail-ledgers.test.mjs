@@ -50,13 +50,14 @@ test('현재 책임자 필드가 없거나 비어도 옛 역할을 사용하고 
  assert.doesNotMatch(html,/<script>|<img src=x>/);
 });
 
-test('기록용 자동 결과와 확인 알림은 추가 알림 제외 표시만 붙이고 미확인 집계를 유지한다',()=>{
+test('기록용 자동 결과와 확인 알림은 추가 알림 제외 표시를 붙이고 미확인 집계·필터에서 빠진다',()=>{
  const entries=[send({notificationOnly:true}),send({mailId:'old-result',systemGenerated:'task-completion',completion:true,expectReply:false})];
  const letters=mailboxLetters(entries),before=structuredClone(letters);
- assert.equal(mailboxUnread(entries,entries.length),2);
- const html=renderInbox({key:'c',letters},null,url('?mailUnread=1'));
+ assert.equal(mailboxUnread(entries,entries.length),0);
+ const html=renderInbox({key:'c',letters},null,url(''));
  assert.match(html,/기록용 · 추가 알림 없음/);
  assert.match(html,/2통/);assert.match(html,/읽음 미확인/);
+ assert.doesNotMatch(renderInbox({key:'c',letters},null,url('?mailUnread=1')),/기록용 · 추가 알림 없음/);
  assert.deepEqual(letters,before);
 });
 

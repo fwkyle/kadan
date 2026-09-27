@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import {unpackRows} from '../src/dashboard-workspace.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';

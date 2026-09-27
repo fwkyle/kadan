@@ -1,4 +1,6 @@
 // 우편을 확인한 수신자가 읽음 사건만 남긴다. 조회·회신·완료에서 읽음을 추정하지 않는다.
+// 예외: --raw는 이 안내를 붙이지 않으므로 창 전달 성공(keyDelivery=sent)을 전달 읽음(deliveredRead)으로 남긴다.
+// 전달 읽음은 수신자 직접 ack와 구분해 표시한다(2026-09-27 [kyle]).
 import {isUserActor} from './actors.mjs';
 
 export function shellQuote(value) {
