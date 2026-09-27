@@ -250,7 +250,8 @@ function writeWaitSnapshot({
 export function findDoneMarkers(text) {
   const found = [];
   for (const line of text.split("\n")) {
-    const match = line.match(/^\s*KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/);
+    // codex는 '• ', claude는 '⏺ '를 응답 첫 줄 앞에 붙인다. 입력 되풀이는 '›'·'❯'로 시작해 여기 걸리지 않는다.
+    const match = line.match(/^\s*(?:[•⏺]\s+)?KADAN:DONE\s+(\S+)\s+(ok|failed)\s*$/u);
     if (match) found.push({ taskId: match[1], result: match[2] });
   }
   return found;
@@ -977,6 +978,23 @@ export function confirmDone({
   return entry;
 }
 
+// 완료 통지 뒤 감독이 작업자 화면의 DONE을 대조해 확정한다(2026-09-27 [kyle]: 감독이 만든 확인 스크립트가
+// 짧은 카드id 마커를 못 알아봐 재출력 요청을 반복했다). 그 카드를 그 역할에 보낸 마지막 발령 때 화면에 있던 마커는 빼고,
+// 짧은 id·정식 주소 어느 쪽이든 같은 카드로 읽는다. 여러 줄이면 마지막 줄의 결과를 쓴다. 없으면 null이다.
+export function screenDoneResult({ text, entries = [], role, taskId, cards = [] }) {
+  const identity = taskIdentity(cards);
+  const target = (id, executionKey) => {
+    const found = identity.resolve(id, executionKey);
+    return found.state === "resolved" ? found.key : String(id ?? "").split("/").pop();
+  };
+  const want = target(taskId);
+  const session = sessionName(role);
+  const dispatch = entries.filter((e) => e?.kind === "send" && e.session === session && e.taskId && target(e.taskId, e.executionKey) === want).at(-1);
+  const markers = diffDoneMarkers(dispatch?.baselineMarkers ?? [], findDoneMarkers(stripAnsi(text)))
+    .filter((m) => target(m.taskId) === want);
+  return { result: markers.at(-1)?.result ?? null, dispatch: dispatch ?? null, count: markers.length };
+}
+
 export function runWaitLoop({
   floor: selectedFloor,
   session,
@@ -1555,10 +1573,21 @@ function cmdPlan(argv, flags = {}) {
 }
 
 function cmdDone(argv, flags = {}) {
-  const [role, taskId, result, ...extra] = argv;
-  const closeCard = flags["close-card"] === true;
-  if (!role || !taskId || !result || extra.length > 0 || (flags.note !== undefined && (!closeCard || typeof flags.note !== "string"))) {
-    die("사용법: kadan done <역할> <카드id> <ok|failed> [--close-card [--note <이유>]]", 2);
+  const [role, taskId, given, ...extra] = argv;
+  const closeCard = flags["close-card"] === true, fromScreen = flags["from-screen"] === true;
+  if (!role || !taskId || (fromScreen ? given : !given) || extra.length > 0 || (flags.note !== undefined && (!closeCard || typeof flags.note !== "string"))) {
+    die("사용법: kadan done <역할> <카드id> <ok|failed> | --from-screen [--close-card [--note <이유>]]", 2);
+  }
+  let result = given;
+  if (fromScreen) {
+    // 기록·전송 없이 화면만 읽는다. 표시가 없으면 실패로 닫고, 재출력 요청은 부르는 쪽이 판단한다.
+    const session = sessionName(role);
+    if (!floor.alive(session)) die(`세션 없음: ${session}`, 2);
+    const entries = readLedger();
+    const read = normalizeFloorRead(floor.read(session));
+    const found = screenDoneResult({ text: read.text, entries, role, taskId, cards: new CardStore(ledgerHome()).listSummaries() });
+    if (!found.result) die(`화면 완료 표시 없음: 역할=${role} 카드=${taskId}${found.dispatch ? "" : " (발령 기록 없음 — 화면 전체를 봄)"}`, 3);
+    result = found.result;
   }
   if (closeCard && result !== "ok") {
     die("--close-card는 ok 완료에만 쓴다 — failed 실행은 카드를 닫지 않는다", 2);
