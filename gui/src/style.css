@@ -161,6 +161,9 @@ td small { display: block; margin-top: 2px; }
 .decision-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ds-color-muted); flex-wrap: wrap; }
 .decision-meta time { margin-left: auto; }
 .decision-meta .requester { background: #e6f1ea; color: #21684e; border-radius: 3px; padding: 1px 7px; font-weight: 700; }
+.decision-fold { font-size: 12px; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+.decision-list article.folded h2 { margin-bottom: 4px; }
+.decision-folded-note { margin: 0; font-size: 12px; color: var(--ds-color-muted); }
 .decision-list h2 { font-size: 17px; margin: 12px 0; }
 .decision-question { margin: 8px 0 16px; font-size: 14px; line-height: 1.65; }
 .decision-question .dc-fields { grid-template-columns: minmax(0,140px) minmax(0,1fr); gap: 8px 14px; }

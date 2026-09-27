@@ -3,6 +3,9 @@ import { useResource } from "../resource";
 import { navigate } from "../navigation";
 import type { Decision, Stamp } from "../types";
 import { ActionForm, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
+import { readFolded, saveFolded, toggleFolded } from "../decision-fold";
+
+const storage = (() => { try { return window.localStorage; } catch { return null; } })();
 
 export default function Decisions({ url }: { url: URL }) {
   const resource = useResource<Stamp & {items: Decision[]}>("decisions"), data = resource.data;
@@ -22,6 +25,14 @@ export default function Decisions({ url }: { url: URL }) {
     if (dirty) next.add(id); else next.delete(id);
     return next;
   }), []);
+  const [folded, setFolded] = useState(() => readFolded(storage));
+  const openIds = data ? open.map(d=>d.id) : null;
+  const toggleFold = useCallback((id: string) => setFolded(previous => {
+    const next = toggleFolded(previous, id);
+    saveFolded(storage, next, openIds);
+    return next;
+  }), [openIds?.join("\n")]);
+  const foldedCount = open.filter(d=>folded.has(d.id)).length;
   const answered = items.filter(d=>d.status === "answered").length;
   const toggleSort = () => {
     const next = new URL(url);
@@ -34,19 +45,22 @@ export default function Decisions({ url }: { url: URL }) {
     <h1>내 결정 필요 {data ? open.length+"건" : "모름"}</h1>
     <p>슈퍼감독이 사용자에게 명시적으로 요청한 결정만 표시합니다.</p>
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
-    <div className="decision-progress"><span>대기 {open.length}건 · 답한 결정 {answered}건</span><div className="track"><span style={{width:(answered+open.length ? answered/(answered+open.length)*100 : 0)+"%"}}/></div><button onClick={toggleSort}>정렬: {newest?"최신 순":"오래된 순"}</button></div>
+    <div className="decision-progress"><span>대기 {open.length}건{foldedCount ? ` · 접어 둔 결정 ${foldedCount}건` : ""} · 답한 결정 {answered}건</span><div className="track"><span style={{width:(answered+open.length ? answered/(answered+open.length)*100 : 0)+"%"}}/></div><button onClick={toggleSort}>정렬: {newest?"최신 순":"오래된 순"}</button></div>
     {!data ? <Loading/> : <>
-      <div className="decision-list">{items.filter(d=>d.status === "open" || drafts.has(d.id)).map(d=><DecisionRequest key={d.id} decision={d} draft={draft}/>)}</div>
+      <div className="decision-list">{items.filter(d=>d.status === "open" || drafts.has(d.id)).map(d=><DecisionRequest key={d.id} decision={d} draft={draft} folded={folded.has(d.id)} onToggleFold={toggleFold}/>)}</div>
       {!open.length && <p className="empty">기다리는 결정이 없습니다.</p>}
       <details className="st-fold" open={previous} onToggle={e=>setPrevious(e.currentTarget.open)}><summary>이전 결정 {items.filter(d=>d.status!=="open").length}건</summary>{previous && items.filter(d=>d.status!=="open").map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}<CardLink row={{key:d.card,title:"관련 카드"}}/></article>)}</details>
     </>}
   </section>;
 }
-function DecisionRequest({decision, draft}: {decision: Decision; draft: (id: string, dirty: boolean)=>void}) {
+function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Decision; draft: (id: string, dirty: boolean)=>void; folded: boolean; onToggleFold: (id: string)=>void}) {
   const onDirtyChange = useCallback((dirty: boolean)=>draft(decision.id,dirty), [draft,decision.id]);
-  return <article id={"decision-"+decision.id}>
-    <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time></div>
+  // 접어도 본문은 숨기기만 한다. 쓰던 메모와 고른 선택지가 남는다.
+  return <article id={"decision-"+decision.id} className={folded ? "folded" : undefined}>
+    <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time><button type="button" className="decision-fold" aria-expanded={!folded} aria-controls={"decision-body-"+decision.id} onClick={()=>onToggleFold(decision.id)}>{folded ? "펼치기" : "접기"}</button></div>
     <h2>{decision.questionTitle ?? decision.question}</h2>
+    {folded && <p className="decision-folded-note">접어 둔 결정 · 추천안: {decision.recommendation}</p>}
+    <div className="decision-body" id={"decision-body-"+decision.id} hidden={folded}>
     {decision.questionHtml && <div className="decision-question"><DocumentContent html={decision.questionHtml}/></div>}
     <div className="decision-recommendation">
       <p className="recommendation-heading"><span className="recommendation-badge">추천안</span><strong>{decision.recommendation}</strong></p>
@@ -64,5 +78,6 @@ function DecisionRequest({decision, draft}: {decision: Decision; draft: (id: str
       if(delivery?.status!=="sent") alert("답변은 저장됐지만 전달 상태를 확인해야 합니다: "+(delivery?.error || delivery?.status || "모름"));
     }}/>
     <p className="decision-note">답변 전달을 누를 때만 보냅니다. 요청한 {decision.requestedBy}에게 한 번 알립니다.</p>
+    </div>
   </article>;
 }
