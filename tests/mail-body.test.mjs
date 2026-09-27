@@ -1,5 +1,6 @@
 // 편지 본문은 원장이 아니라 옆 파일에 둔다 — 2026-09-06 [kyle] 승인.
 // 원장은 append-only라 줄을 못 지운다. 본문에 비밀이 섞였을 때 지울 수 있어야 한다.
+import "./helpers/isolated-home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

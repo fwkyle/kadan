@@ -1,5 +1,6 @@
 // 판 설명과 카드 제목 — "mp가 도대체 뭐냐"를 없앤다 (2026-09-06 [kyle] 신고).
 // 원장은 append-only이므로 옛 줄에는 설명이 없다. 그 경우 예전처럼 id만 보여야 한다.
+import "./helpers/isolated-home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildTree, planCards, parsePlanCard, renderTree } from "../src/cli.mjs";

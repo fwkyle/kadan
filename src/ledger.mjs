@@ -1,5 +1,6 @@
 import {storageMode,storagePath} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
+import {assertTestHome} from './test-home-guard.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
 // 원장 — 바닥과 무관한 append-only 사건. 저장 backend는 공통 저장 경계가 선택한다.
 import fs from "node:fs";
@@ -7,7 +8,9 @@ import os from "node:os";
 import path from "node:path";
 
 export function ledgerHome() {
-  return process.env.KADAN_HOME || process.env.KADAN_LITE_HOME || path.join(os.homedir(), ".kadan");
+  const home = process.env.KADAN_HOME || process.env.KADAN_LITE_HOME;
+  assertTestHome(home); // 시험 중에는 미지정·실사용 경로를 거부한다.
+  return home || path.join(os.homedir(), ".kadan");
 }
 
 export function ledgerPath() {
@@ -37,6 +40,7 @@ export function mailDir(home = ledgerHome()) {
 // 보낸 본문을 지문 이름의 파일로 남긴다. 같은 지문이면 같은 본문이라 덮어써도 같다.
 export function saveMailBody(digestValue, message, home = ledgerHome()) {
   if (!digestValue || typeof message !== "string") return null;
+  assertTestHome(home);
   const dir = mailDir(home);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${digestValue}.txt`);

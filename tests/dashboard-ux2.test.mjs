@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {filterMail,mailMatchesCard} from '../src/dashboard-inbox.mjs';

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
+import {assertTestHome} from './test-home-guard.mjs';
 const require=createRequire(import.meta.url);
 const connections=new Map();
 export const storagePath=home=>path.join(home,'kadan.sqlite');
@@ -14,6 +15,7 @@ export function storageMode(home){
  return value.backend;
 }
 export function assertWritable(home){
+ assertTestHome(home);
  if(fs.existsSync(path.join(home,'storage-paused.json')))throw new Error('저장 전환 중: 쓰기와 외부 실행이 중지되었습니다');
 }
 function driver(){
