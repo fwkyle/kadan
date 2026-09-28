@@ -14,6 +14,7 @@ import {
   time,
 } from "../ui";
 import { navigate, patchLocation } from "../navigation";
+import { ReviewFlow } from "../ReviewFlow";
 
 export function MailBody({ mail }: { mail: Mail }) {
   const resource = useResource<{ body: string | null; error?: string }>(
@@ -125,6 +126,12 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
           <Health row={data.row} />
           <p>{data.row.healthReason}</p>
           <Freshness collectedAt={data.collectedAt} {...resource} footer={false} />
+          {data.reviewFlow && <ReviewFlow key={data.reviewFlow.id} flow={data.reviewFlow} selected={data.key} />}
+          {data.kind === "execution" && data.row.workType !== "coordination" && !data.reviewFlow && <p className="muted">티키타카 연결 전 · 다른 구현·검수 카드와의 연결이 없어 전체 왕복 횟수는 알 수 없습니다.</p>}
+          {data.reviewFlows && data.reviewFlows.length > 0 && <details>
+            <summary>작업별 티키타카 · {data.reviewFlows.length}묶음</summary>
+            {data.reviewFlows.map(flow => <ReviewFlow key={flow.id} flow={flow} compact />)}
+          </details>}
           <nav className="inline-nav">
             {(data.kind === "work" || data.row.parentWorkKey) && <a href={"/?flowWork=" + encodeURIComponent(data.kind === "work" ? data.key.replace(/^work:/, "") : data.row.parentWorkKey!) + "#operations-flow"}>
               {data.kind === "work" ? "진행 이력" : "연결된 업무의 진행 이력"}
@@ -277,7 +284,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
           <details data-section="history">
             <summary>기술 정보·변경 이력</summary>
             <Facts items={data.facts} />
-            {data.related && (
+            {data.related && !data.reviewFlow && (
               <details>
                 <summary>티키타카 연결 기록</summary>
                 {data.related.map((c) => (

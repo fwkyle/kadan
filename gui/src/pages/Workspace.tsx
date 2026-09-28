@@ -65,7 +65,7 @@ const baseColumns: Column[] = [
     label: "최근 실행 신호",
     render: (row) => <span title={row.signalLabel}>{time(row.signalAt)}</span>,
   },
-  { key: "flowLabel", label: "티키타카", render: (row) => row.flowLabel },
+  { key: "flowLabel", label: "티키타카", render: (row) => <span title={row.flowTitle}>{row.reviewLabel || row.flowLabel}{row.reviewLabel && <small>{row.flowLabel}</small>}</span> },
   {
     key: "turnLabel",
     label: "현재 차례",
@@ -719,7 +719,7 @@ function Grouped({
                 <a href={cardUrl(row.key)}>{row.title}</a>
               </h3>
               <p>{row.turnLabel}</p>
-              <small>{row.flowLabel}</small>
+              <small>{row.reviewLabel || row.flowLabel}</small>
             </article>
           ))}
         </section>

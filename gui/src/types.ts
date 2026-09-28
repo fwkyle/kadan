@@ -6,6 +6,7 @@ export type Row = {
   key: string;
   kind: "work" | "execution";
   workKey?: string;
+  workType?: string;
   title: string;
   originalTitle?: string;
   id?: string;
@@ -33,6 +34,7 @@ export type Row = {
   modelTitle?: string;
   effort?: string;
   flowLabel?: string;
+  reviewLabel?: string;
   flowTitle?: string;
   flowPhase?: string;
   rallyStep?: string;
@@ -111,6 +113,8 @@ export type DetailData = Stamp & {
   title: string;
   row: Row;
   forms: FormSpec[];
+  reviewFlow?: ReviewFlow | null;
+  reviewFlows?: ReviewFlow[];
   summaryHtml?: string;
   facts: [string, string | null][];
   history: HistoryEntry[];
@@ -131,6 +135,33 @@ export type DetailData = Stamp & {
     displayState: string;
   }[];
   executions?: { key: string; phase: string; round: number; row: Row | null }[];
+};
+export type ReviewStage = {
+  key: string;
+  title: string;
+  role?: string;
+  step: string;
+  state: string;
+  stateLabel: string;
+  outcome: string | null;
+  outcomeLabel: string;
+  resultAt: string | null;
+  resultBy: string | null;
+  hasResult: boolean;
+  stale: boolean;
+};
+export type ReviewFlow = {
+  id: string;
+  title: string;
+  cardKeys: string[];
+  reviewCount: number;
+  fixCount: number;
+  verdict: string;
+  label: string;
+  summary: string;
+  rounds: {number: number; work: ReviewStage[]; review: ReviewStage[]}[];
+  warnings: string[];
+  pendingResults: number;
 };
 export type Paged<T> = Stamp & {
   items: T[];

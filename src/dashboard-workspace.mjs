@@ -83,7 +83,7 @@ export function filterWorkspaceRows(rows,state) {
  const terminal=['done','cancelled','superseded','archived'];
  return (rows||[]).filter(c=>(!state.collection||(state.collection==='work'?c.kind==='work':c.kind!=='work'&&(state.collection!=='unlinked'||!c.parentWorkKey)))&&(!state.repo||c.repo===state.repo)&&(!state.board||c.board===state.board)&&(!state.health||(state.health==='stuck'?c.bucket==='stuck':c.healthLabel===state.health))&&(!state.rally||c.flowTitle===state.rally)&&
   (!state.state?!terminal.includes(c.state):state.state==='all'||(state.state!=='none'&&String(state.state).split(',').includes(c.state)))&&
-  words.every(word=>[c.title,c.purpose,c.key,c.board,c.owner,c.model,c.turnLabel,c.turnReason,c.flowLabel,c.flowPhase,c.flowTitle,c.summary,c.scope,c.next,c.nextOwner].join(' ').toLocaleLowerCase('ko').includes(word)));
+  words.every(word=>[c.title,c.purpose,c.key,c.board,c.owner,c.model,c.turnLabel,c.turnReason,c.flowLabel,c.reviewLabel,c.flowPhase,c.flowTitle,c.summary,c.scope,c.next,c.nextOwner].join(' ').toLocaleLowerCase('ko').includes(word)));
 }
 export function sortWorkspaceRows(rows,key='at',direction='desc') {
  if(key==='attention')return [...rows].sort((a,b)=>{
