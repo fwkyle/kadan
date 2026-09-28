@@ -38,7 +38,81 @@ test('다른 카드·다른 저장소·모호한 주소·입력 되풀이는 완
 });
 
 test('세션 재시작 이전의 발령은 새 세대의 완료 근거가 아니다',()=>{
-  assert.deepEqual(check(screen(),[start,dispatch,{...start,t:'2026-09-28T00:02:00Z'}]),[]);
+  const entries=[start,dispatch,{...start,panePid:2,t:'2026-09-28T00:02:00Z'}];
+  const seen=collectRoles({list:()=>[{session,pid:2}],read:()=>screen()},entries,null,cards).observations.get(session);
+  assert.equal(seen.alive,true);assert.equal(seen.doneMarker,null);
+  assert.equal(seen.completionDispatches.size,0);
+});
+
+test('같은 PID의 start 재사용은 발령과 발령 전 마커 기준·세대 시각을 유지한다',()=>{
+  const reused={...start,panePid:'1',t:'2026-09-28T00:02:00Z'};
+  const entries=[start,dispatch,reused];
+  assert.equal(check(screen(),entries).length,1);
+  const seen=collectRoles({list:()=>[{session,pid:1}],read:()=>screen()},entries,null,cards).observations.get(session);
+  assert.equal(seen.startedAt,start.t);
+  assert.deepEqual(check(screen(),[start,{...dispatch,baselineMarkers:[{taskId:'repo/a',result:'ok'}]},reused]),[]);
+});
+
+test('종료 뒤 같은 PID가 다시 나오거나 PID를 모르면 재사용으로 추측하지 않는다',()=>{
+  assert.deepEqual(check(screen(),[start,dispatch,{kind:'stop',session,role},{...start,t:'2026-09-28T00:02:00Z'}]),[]);
+  assert.deepEqual(check(screen(),[start,dispatch,{...start,panePid:null,t:'2026-09-28T00:02:00Z'}]),[]);
+});
+
+const nextRole='p-next',nextSession=`kadan-${nextRole}`;
+const successor={...start,role:nextRole,session:nextSession,panePid:2,t:'2026-09-28T00:02:00Z'};
+const transfer={kind:'handover',phase:'transferred',handoverId:'h1',from:role,to:nextRole,taskIds:['repo/a'],t:'2026-09-28T00:03:00Z'};
+function successorObservation(entries,{text=screen(),pid=2,allCards=cards,target=nextSession}={}) {
+  return collectRoles({list:()=>[{session:target,pid}],read:()=>text},entries,null,allCards).observations.get(target);
+}
+
+test('확정 인계는 짧은·정식 카드 주소와 종료된 선임의 발령을 후임에게 연결한다',()=>{
+  for(const taskId of ['a','repo/a'])for(const ended of [false,true]) {
+    const entries=[start,dispatch,...(ended?[{kind:'stop',session,role}]:[]),successor,{...transfer,taskIds:[taskId]}];
+    const seen=successorObservation(entries);
+    assert.equal(seen.doneMarker?.taskId,'a');
+    assert.equal(seen.completionDispatches.get('repo/a')?.role,nextRole);
+    assert.equal(collectRoles({list:()=>[],read:()=>''},entries,null,cards).observations.get(session).completionDispatches.has('repo/a'),false);
+  }
+});
+
+test('미확정 인계·목록 밖 카드·시작 안 한 후임·모호한 카드 주소는 이어받지 않는다',()=>{
+  for(const phase of ['prepared','accepted','routes-pending','aborted']) {
+    assert.equal(successorObservation([start,dispatch,successor,{...transfer,phase}]).doneMarker,null);
+  }
+  assert.equal(successorObservation([start,dispatch,successor,{...transfer,taskIds:['b']}]).doneMarker,null);
+  assert.equal(successorObservation([start,dispatch,transfer,successor]).doneMarker,null);
+  assert.equal(successorObservation([start,dispatch,successor,{...transfer,taskIds:['a']}],{allCards:[...cards,{key:'other/a',id:'a'}]}).doneMarker,null);
+});
+
+test('후임도 기존 마커 제외·재발령 기준을 유지하고 재시작하면 이전 인계를 버린다',()=>{
+  const baseline=[{taskId:'repo/a',result:'ok'}];
+  assert.equal(successorObservation([start,{...dispatch,baselineMarkers:baseline},successor,transfer]).doneMarker,null);
+  const entries=[start,dispatch,successor,transfer];
+  assert.equal(successorObservation([...entries,{...dispatch,role:nextRole,session:nextSession,baselineMarkers:baseline,t:'2026-09-28T00:04:00Z'}]).doneMarker,null);
+  assert.equal(successorObservation([...entries,{...successor,panePid:3,t:'2026-09-28T00:04:00Z'}],{pid:3}).doneMarker,null);
+  const last={...successor,role:'p-last',session:'kadan-p-last',panePid:3,t:'2026-09-28T00:04:00Z'};
+  const twice=[...entries,last,{...transfer,from:nextRole,to:'p-last',handoverId:'h2',t:'2026-09-28T00:05:00Z'}];
+  assert.equal(successorObservation(twice,{target:last.session,pid:3}).doneMarker?.taskId,'a');
+});
+
+test('감시 루프는 재사용 중 유예를 유지하고 인계 후임의 후보를 감독에게 전달한다',async()=>{
+  for(const inherited of [false,true]) {
+    let cycle=0;const records=[],messages=[],end=new Error('end');
+    const currentRole=inherited?nextRole:role,currentSession=`kadan-${currentRole}`;
+    const reused={...start,t:'2026-09-28T00:02:00Z'};
+    await assert.rejects(()=>runWatch({
+      floor:{list:()=>[{session:currentSession,pid:inherited?2:1}],read:()=>cycle===0?screen():'working'},
+      readEntries:()=>inherited?[start,dispatch,successor,transfer]:[start,dispatch,...(cycle?[reused]:[])],
+      readCards:()=>[{...cards[0],role,status:'assigned',at:start.t,activity:'running',activityRole:role,activityAt:dispatch.t}],readWorks:()=>[],
+      record:e=>records.push({...e,cycle}),sendAlert:(role,message)=>messages.push({role,message,cycle}),
+      routes:new Map([['p','p-boss']]),superRole:'p-boss',intervalMs:60000,completionGraceMs:120000,stallN:100,
+      now:()=>Date.parse('2026-09-28T00:04:00Z')+60000*cycle,print:()=>{},
+      spawn:command=>{if(command==='sleep'&&++cycle===4)throw end;return {status:0,stdout:''};},
+    }),error=>error===end);
+    const alerts=records.filter(e=>e.alertKind==='완료후보'&&!e.resolved);
+    assert.equal(alerts.length,1);assert.equal(alerts[0].role,currentRole);assert.equal(alerts[0].cycle,2);
+    assert.equal(alerts[0].delivered,true);assert(messages.some(m=>m.role==='p-boss'&&m.cycle===2));
+  }
 });
 
 test('카드 목록 없는 기존 호출만 발령 없는 후보를 유지하고 빈 등록 목록은 추측하지 않는다',()=>{
