@@ -2,10 +2,10 @@
 // 사람이 기억해서 한 줄 넣는 습관에 기대지 않기 위한 것이다 (2026-09-11 [kyle] 지시).
 // 추가만 하고 기존 줄은 고치거나 지우지 않는다. 조금이라도 불확실하면 건너뛴다.
 import fs from "node:fs";
-import path from "node:path";
 import { ledgerHome, readLedger } from "./ledger.mjs";
 import { parseHierarchy } from "./hierarchy.mjs";
 import { commandWords } from "./ai-identity.mjs";
+import { withHierarchyLock } from './hierarchy-lock.mjs';
 
 // 감시기가 실제로 읽고 있는 관계표 경로. 원장의 마지막 hierarchy-loaded가 원본이다.
 export function activeHierarchyPath(entries) {
@@ -35,18 +35,10 @@ function readTable(hierarchyPath) {
 
 // 같은 순간 두 곳이 고치면 한쪽이 사라지므로 자기 잠금으로 막는다. 남의 잠금은 지우지 않는다.
 function withLock(hierarchyPath, run) {
-  const lockPath = path.join(path.dirname(hierarchyPath), "hierarchy-register.lock");
-  let handle;
-  try {
-    handle = fs.openSync(lockPath, "wx");
-  } catch {
+  try { return withHierarchyLock(hierarchyPath, run); }
+  catch (error) {
+    if (error.code !== 'HIERARCHY_LOCKED') throw error;
     return { registered: false, reason: "다른 등록이 진행 중" };
-  }
-  try {
-    return run();
-  } finally {
-    try { fs.closeSync(handle); } catch {}
-    try { fs.unlinkSync(lockPath); } catch {}
   }
 }
 

@@ -1,4 +1,5 @@
 import { prepareCenterWall } from "./center-wall.mjs";
+import { buildReviewFlows, readReviewResult } from "./review-flow.mjs";
 import {
   buildHumanBrief,
   currentProgressReport,
@@ -89,6 +90,9 @@ function model(snapshot) {
     ),
   ];
 
+  const reviewFlows = buildReviewFlows(cards);
+  const reviewByCard = new Map(reviewFlows.flatMap(flow => flow.cardKeys.map(key => [key, flow])));
+  for (const row of rows) row.reviewLabel = reviewByCard.get(row.key)?.summary || "";
   const result = {
     rows,
     works,
@@ -96,6 +100,8 @@ function model(snapshot) {
     briefs,
     cards,
     byKey,
+    reviewFlows,
+    reviewByCard,
     identity: taskIdentity(cards),
     hierarchy: readActiveHierarchy(snapshot.entries || []),
   };
@@ -332,6 +338,12 @@ export function dashboardData(snapshot, url) {
     };
   }
   const m = model(snapshot);
+  if (route === "review-result") {
+    const card = m.byKey.get(url.searchParams.get("card") || "");
+    if (!card) throw Object.assign(new Error("카드를 찾을 수 없습니다"), {status: 404});
+    const result = readReviewResult(card);
+    return {...stamp, ...result, html: result.body ? renderCardDocument(result.body, card) : null};
+  }
   if (route === "summary") {
     let waiting = null;
     try {
@@ -528,6 +540,7 @@ export function dashboardData(snapshot, url) {
           ...pick(e, ["key", "phase", "round"]),
           row: m.rows.find((r) => r.key === e.key) || null,
         })),
+        reviewFlows: m.reviewFlows.filter(flow => flow.cardKeys.some(key => w.executions.some(e => e.key === key))),
         history: [...w.history].reverse(),
         mail: w.letters.slice(0, 5).map((letter) => mailRow(letter, m.identity)),
         mailTotal: w.letters.length,
@@ -561,6 +574,7 @@ export function dashboardData(snapshot, url) {
       revision: c.revision,
       title: brief?.title || c.title,
       row,
+      reviewFlow: m.reviewByCard.get(key) || null,
       forms: cardForms(c),
       summaryHtml: renderDetailSummary(c, {
         brief,

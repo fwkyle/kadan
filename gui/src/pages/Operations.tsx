@@ -52,6 +52,7 @@ type Flow = Stamp & {
     role: string;
     status: string;
     reportState: string;
+    quality: string | null;
     signals: unknown[];
   }[];
   handovers: unknown[] | null;
@@ -160,6 +161,7 @@ function FlowDetail({ workKey, page }: { workKey: string; page: string }) {
                 <p>
                   카드 {e.status || "모름"} · 실행 결과 {e.reportState}
                 </p>
+                <p>품질 판정 {e.quality === "pass" ? "통과" : e.quality === "changes" ? "수정 필요" : e.quality === "implemented" ? "구현 결과 등록" : e.quality === "exception" ? "검수 중단" : "미기록"}</p>
                 <details>
                   <summary>완료 신호</summary>
                   <JsonValue value={e.signals} />

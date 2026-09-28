@@ -561,13 +561,16 @@ function stop(session) {
   }
 }
 
-function list() {
+function list({ strict = false } = {}) {
   const result = tmux([
     "list-sessions",
     "-F",
     "#{session_name}\t#{session_attached}\t#{session_created}",
   ]);
-  if (result.status !== 0) return [];
+  if (result.status !== 0) {
+    if (strict) throw new Error('tmux 세션 목록 조회 실패: 생존 상태 모름');
+    return [];
+  }
   return result.stdout
     .trim()
     .split("\n")
