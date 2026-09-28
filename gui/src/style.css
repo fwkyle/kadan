@@ -137,6 +137,19 @@ td small { display: block; margin-top: 2px; }
 .st-work-grid dd { margin: 0; }
 .st-mini { gap: 4px; }
 .st-dec-answer { scroll-margin-top: 12px; }
+.st-stop-group { border: 1px solid #d8ded8; border-radius: 10px; padding: 12px 16px; margin: 10px 0; background: #fff; }
+.st-stop-failed { border-color: #e4b8b8; }
+.st-stop-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.st-stop-head h3 { margin: 0; font-size: 14px; }
+.st-stop-head small { color: var(--ds-color-muted); }
+.st-stop-desc { font-size: 12px; color: var(--ds-color-muted); margin: 6px 0 0; }
+.st-stop-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.st-stop-row { padding: 7px 0; border-top: 1px solid #eef2ef; }
+.st-stop-row small { display: block; color: var(--ds-color-muted); font-size: 12px; margin-top: 1px; }
+.st-stop-reason { font-size: 12px; color: var(--ds-color-muted); margin: 4px 0 0; }
+.st-reason-fold { margin: 4px 0 0; font-size: 12px; }
+.st-reason-fold summary { color: #8a4b0f; }
+.st-reason-fold p { margin: 6px 0 0; white-space: pre-line; color: var(--ds-color-text); }
 .decision-page { max-width: 880px; margin: 0 auto; padding: 22px; background: white; border: 1px solid #d8ded8; border-radius: 9px; }
 .dw-shell[data-view=decisions] > main { padding-top: 0; }
 .decision-page h1 { font-size: 18px; margin: 0 0 18px; }

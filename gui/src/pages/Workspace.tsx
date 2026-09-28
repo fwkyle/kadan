@@ -13,6 +13,7 @@ import {
 } from "../ui";
 import RelationMap from "./RelationMap";
 import { usePaneScroll } from "../scroll";
+import { shortenTurn } from "../stopped";
 const Detail = lazy(() => import("./Detail"));
 const stateLabels: Record<string, string> = {
   running: "작업 중",
@@ -68,7 +69,20 @@ const baseColumns: Column[] = [
   {
     key: "turnLabel",
     label: "현재 차례",
-    render: (row) => <span title={row.turnReason}>{row.turnLabel}</span>,
+    render: (row) => {
+      const short = shortenTurn(row.turnLabel);
+      return (
+        <span
+          title={
+            short.rest
+              ? [row.turnLabel, row.turnReason].filter(Boolean).join("\n")
+              : row.turnReason
+          }
+        >
+          {short.text}
+        </span>
+      );
+    },
   },
   {
     key: "model",

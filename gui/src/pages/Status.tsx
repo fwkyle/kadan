@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef } from "react";
 import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time } from "../ui";
+import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
 
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
@@ -35,6 +36,8 @@ export default function Status({url}: {url: URL}) {
     catch { context.notice("복사하지 못했습니다. 카드에서 내용을 확인하세요."); }
   };
   const bucket = (key: string) => data?.rows.filter(row => row.bucket === key) || [];
+  const stoppedGroups = groupStopped([...bucket("stuck"), ...bucket("stale")]);
+  const stoppedCount = bucket("stuck").length + bucket("stale").length;
   const open = data?.works.filter(row => row.state === "running") || [];
   const held = data?.works.filter(row => row.state === "hold") || [];
   const closed = data?.works.filter(row => ["done","cancelled"].includes(row.state)) || [];
@@ -46,6 +49,28 @@ export default function Status({url}: {url: URL}) {
     {row.next && <p>다음 행동: {row.next}</p>}
     {row.healthKind === "attention" && <p><button className="copy-question" onClick={() => void copy(`[대시보드 확인 요청] ${row.key}: ${row.healthLabel}. ${row.failureReason || row.healthReason} 후속 처리 방향과 근거를 확인해주세요.`)}>감독에게 물어볼 문장 복사</button></p>}
   </article>;
+  const stopRow = (row: Row, showReason: boolean) => <li className="st-stop-row" key={row.key}>
+    <span className="st-stop-main"><CardLink row={row}/></span>
+    <small>담당 {row.owner || "미배정"} · {row.board || "판 미지정"} · 마지막 신호 {row.signalAt ? time(row.signalAt) : "없음"}</small>
+    {showReason && row.failureReason
+      ? <details className="st-reason-fold"><summary>{firstLine(row.failureReason)}</summary><p>{row.failureReason}</p></details>
+      : showReason && row.healthReason ? <p className="st-stop-reason">{row.healthReason}</p> : null}
+  </li>;
+  const stopGroup = (group: StopGroup) => {
+    const many = group.rows.length > 3;
+    const rows = group.rows.map(row => stopRow(row, !many));
+    const stale = group.key === "stale";
+    return <section key={group.key} id={stale ? "status-stale" : undefined} className={"st-stop-group st-stop-" + group.key.split(":")[0]}>
+      <header className="st-stop-head">
+        <h3>{group.label} <span className="st-cnt">{group.rows.length}건</span></h3>
+        {group.firstAt && <small>신호 {time(group.firstAt)}{group.lastAt && group.lastAt !== group.firstAt ? " ~ " + time(group.lastAt) : ""}</small>}
+      </header>
+      {group.desc && <p className="st-stop-desc">{group.desc} <button className="copy-question" onClick={() => void copy(stale ? (data?.cleanupRequest || "") : groupAskText(group))}>{stale ? "정리 요청 복사" : "감독에게 물어볼 문장 복사"}</button></p>}
+      {many
+        ? <details className="st-fold"><summary>목록 {group.rows.length}장</summary><ul className="st-stop-list">{rows}</ul></details>
+        : <ul className="st-stop-list">{rows}</ul>}
+    </section>;
+  };
   const section = (id: string, title: string, key: string, hint: string) => {
     const rows = bucket(key);
     return <section id={id} className="st-section">
@@ -58,7 +83,7 @@ export default function Status({url}: {url: URL}) {
     <h3 className="st-work-title"><CardLink row={row}/></h3>
     {row.purpose && <p className="st-work-purpose">{row.purpose}</p>}
     <p>{row.healthReason}</p>
-    <dl className="st-work-grid"><dt>지금 차례</dt><dd className="st-turn">{row.turnLabel}</dd><dt>다음 행동</dt><dd>{row.next}</dd></dl>
+    <dl className="st-work-grid"><dt>지금 차례</dt><dd className="st-turn" title={shortenTurn(row.turnLabel).rest ? row.turnLabel : undefined}>{shortenTurn(row.turnLabel).text}</dd><dt>다음 행동</dt><dd>{row.next}</dd></dl>
     <div className="st-work-foot"><span>최근 실행 신호 {row.signalLabel || "없음"} {row.signalAt && time(row.signalAt)}</span><span className="st-when">업무 기록 {row.reportLabel}</span>{row.summary && <span className="st-sum">{row.summary}</span>}</div>
   </article>;
   return <section className="st-view">
@@ -68,23 +93,26 @@ export default function Status({url}: {url: URL}) {
     {!data ? <Loading/> : <>
       <div className="st-band" role="group" aria-label="지금 내가 볼 것">
         <a className="st-chip st-c-decision" href="#status-decisions"><span className="st-num">{data.decisions?.length ?? "모름"}</span><span className="st-lbl">내 결정 대기</span></a>
-        <a className="st-chip st-c-attn" href="#status-attention"><span className="st-num">{bucket("stuck").length}</span><span className="st-lbl">지금 막힌 것</span></a>
+        <a className="st-chip st-c-attn" href="#status-attention"><span className="st-num">{stoppedCount}</span><span className="st-lbl">멈춘 것</span></a>
+        <a className="st-chip st-c-run" href="#status-executing"><span className="st-num">{bucket("running").length}</span><span className="st-lbl">작업 중</span></a>
       </div>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
-        {[["#status-executing",bucket("running").length,"작업 중"],["#status-waiting",bucket("waiting").length,"결과 대기"],["#status-stale",bucket("stale").length,"오래된 미정리"],["#status-running",data.workError ? "모름" : open.length,"열린 업무"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"],["?collection=executions&state=all#dashboard",data.executionCount,"전체 실행 카드"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
+        {[["#status-waiting",bucket("waiting").length,"결과 대기"],["#status-running",data.workError ? "모름" : open.length,"열린 업무"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
       </p>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>
         {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
       </section>
-      {section("status-attention","지금 막힌 것","stuck","담당 창은 살아 있는데 시작 보고가 없거나 실패한 실행입니다. 감독에게 확인을 부탁하세요. 오래 멈춘 것은 아래 오래된 미정리에 따로 모읍니다.")}
+      <section id="status-attention" className="st-section">
+        <header className="st-sec-head"><h2>멈춘 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 실행을 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미정리는 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
+        {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">멈춘 실행이 없습니다.</p>}
+      </section>
       <DocumentContent html={data.watchHtml}/>
       {section("status-executing","작업 중인 실행","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다.")}
       {section("status-waiting","결과를 기다리는 실행","waiting","담당이 검수·답변 같은 다른 결과를 기다린다고 보고했습니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}
       <p className="st-hint">실행 전 {bucket("planned").length}건 · 보류 {bucket("hold").length}건 · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
       <section id="status-running" className="st-section"><header className="st-sec-head"><h2>열린 업무</h2><span className="st-cnt">{data.workError ? "모름" : open.length+"장"}</span><span className="st-hint">열린 업무도 실행 준비·결과 대기·감독 확인 단계일 수 있습니다.</span></header><ErrorMessage error={data.workError}/>{open.length ? open.map(work) : !data.workError && <p className="st-empty">열린 업무가 없습니다. 위의 실행 목록에서 개별 작업을 확인하세요.</p>}</section>
       {held.length>0 && <section className="st-section"><h2>보류 중인 업무</h2>{held.map(work)}</section>}
-      {bucket("stale").length>0 && <details id="status-stale" className="st-fold st-stale"><summary>오래된 미정리 {bucket("stale").length}장 · 24시간 이상 신호 없음 · 정리 대상</summary><p className="st-hint">담당 세션이 없고 신호가 오래된 실행입니다. 지금 막힌 것과 구분하며, 감독이 대체·취소·보류로 정리해야 목록에서 빠집니다. <button className="copy-question" onClick={() => void copy(data.cleanupRequest)}>정리 요청 복사</button></p><ul className="st-stale-list">{bucket("stale").map(row => <li className="st-stale-row" key={row.key}><CardLink row={row}/><small>담당 {row.owner || "미배정"} · {row.board || "판 미지정"} · {row.healthLabel} · 마지막 신호 {time(row.signalAt)} · 저장 상태 {row.stored}</small></li>)}</ul></details>}
       <details className="st-fold st-recent-fold"><summary className="st-sec-head"><h2>최근 24시간에 일어난 일</h2><span className="st-cnt">완료 {data.recentCounts.done} · 실패 {data.recentCounts.failed} · 발령 {data.recentCounts.send}</span><span className="st-hint">일을 맡기고, 끝나고, 실패한 시각입니다. 카드 내용을 고친 것은 세지 않습니다.</span></summary>{data.recent.length ? <ul className="st-recent">{data.recent.map((event,i)=><li className={"st-recent-row st-recent-"+event.kind} key={i}><span className="st-recent-time">{time(event.at)}</span><span className="st-recent-kind">{event.label}</span><CardLink row={event.card}/><small>{event.role}</small></li>)}</ul> : <p className="st-empty">최근 24시간에 기록된 발령·완료·실패가 없습니다.</p>}</details>
       <details className="st-fold"><summary>판별 진행 막대 {data.boards.filter(b=>b.state!=="done").length}개 판</summary><p className="st-hint">실제 일을 하는 카드만 한 번씩 셉니다(관리·조율 카드 제외). 위 숫자와 같은 기준입니다.</p>{data.boards.filter(b=>b.state!=="done").map(board=><section className="board-progress" key={board.name}><h3><a href={"/?board="+encodeURIComponent(board.name)+"&collection=executions&state=all#dashboard"}>{board.name}</a></h3><div className="progress-track">{groups.map(([key,label])=><span key={key} className={"progress-"+key} style={{flex:board.counts[key] || 0}} title={label+" "+(board.counts[key] || 0)}/>)}</div><div className="progress-legend">{groups.filter(([key])=>board.counts[key]).map(([key,label])=><span key={key}>{label} {board.counts[key]}</span>)}</div><DocumentContent html={board.watchHtml}/></section>)}</details>
       <details className="st-fold"><summary>발령 전 실행 {bucket("planned").length}건</summary>{bucket("planned").map(row=><p key={row.key}><CardLink row={row}/> · {row.owner || "미배정"}</p>)}</details>
