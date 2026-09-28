@@ -74,6 +74,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .segmented { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .segmented button[aria-pressed=true] { background: #e6f1ea; color: #155e43; border-color: #9fbfac; }
 .segmented .count { margin-left: 6px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.segmented-hint { margin-left: 6px; font-size: 12px; color: var(--ds-color-muted); }
 .workspace { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .workspace > .page-heading { order: 0; margin: 0 0 10px; flex: none; }
 .workspace > .page-heading h1 { font-size: 19px; }
