@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as cli from "../src/cli.mjs";
@@ -9,6 +10,7 @@ import { floor } from "../src/floor.mjs";
 
 const base = { kind: "stop", role: "c57-작업자", session: "kadan-c57-작업자", by: "사람" };
 const entry = () => cli.buildStopLedgerEntry({ role: base.role, session: base.session, env: {} });
+const reachable = {existsFn:()=>true, listBinsFn:()=>[], connectFn:()=>({ok:true}), showFn:()=>({ok:true,state:'closed'})};
 test("baseline: stop entry retains its existing shape and pending cards", () => {
   assert.deepEqual(entry(), base);
   assert.deepEqual(cli.pendingCardsFor([{ kind: "send", role: base.role, taskId: "pending" }], base.role), ["pending"]);
@@ -19,6 +21,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
   test("stop은 start가 연 로티 탭을 한 번 닫고 한 번 제거한다 — close만으로는 탭이 '종료됨'으로 남았다(2026-09-05 card-57, 2026-09-13)", () => {
     const calls = [];
     const fields = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+      ...reachable,
       env: { KADAN_ROTTIE_BIN: "/fake/rottie" }, print() {},
       closeFn: (options) => tmux.closeRottieWindow({ ...options, spawnFn: spawnOk(calls) }),
       removeFn: (options) => tmux.removeRottieWindow({ ...options, spawnFn: spawnOk(calls) }),
@@ -32,6 +35,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
   test("close failure is recorded without throw, retry, or remove", () => {
     let calls = 0;
     const fields = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+      ...reachable,
       env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
       closeFn: (options) => tmux.closeRottieWindow({ ...options, spawnFn: () => { calls++; return { status: 1, stdout: JSON.stringify({ error: { code: "ROTTIE_INTERNAL", message: "failed" } }) }; } }),
       removeFn() { assert.fail("unexpected remove"); },
@@ -43,6 +47,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
     let removes = 0;
     const lines = [];
     const fields = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+      ...reachable,
       env: { KADAN_ROTTIE_BIN: "/fake" }, print: line => lines.push(line),
       closeFn: () => ({ closed: true }),
       removeFn: (options) => tmux.removeRottieWindow({ ...options, spawnFn: () => { removes++; return { status: 5, stdout: JSON.stringify({ ok: false, error: { code: "ROTTIE_TERMINAL_RUNNING", message: "먼저 terminal close로 종료하세요." } }) }; } }),
@@ -58,7 +63,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
   });
   test("unset binary records skipped close", () => {
     const lines = [];
-    const fields = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, { env: {}, print: line => lines.push(line), closeFn() { assert.fail("unexpected close"); }, removeFn() { assert.fail("unexpected remove"); } });
+    const fields = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, { env: {}, listBinsFn:()=>[], print: line => lines.push(line), closeFn() { assert.fail("unexpected close"); }, removeFn() { assert.fail("unexpected remove"); } });
     assert.equal(lines.length, 1);
     assert.deepEqual(fields, { rottieTerminalId: "owned-tab", rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" });
   });
@@ -85,13 +90,19 @@ test("cmdStop wires last start after floor stop and appends the close receipt", 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-c57-wiring-"));
   const previous = process.env.KADAN_HOME;
   const bin = process.env.KADAN_ROTTIE_BIN;
+  const autoAttach = process.env.KADAN_ROTTIE_AUTO_ATTACH;
+  const exitCode = process.exitCode;
   process.env.KADAN_HOME = home;
+  process.env.KADAN_ROTTIE_AUTO_ATTACH = 'off';
   delete process.env.KADAN_ROTTIE_BIN;
   t.after(() => {
     if (previous === undefined) delete process.env.KADAN_HOME;
     else process.env.KADAN_HOME = previous;
     if (bin === undefined) delete process.env.KADAN_ROTTIE_BIN;
     else process.env.KADAN_ROTTIE_BIN = bin;
+    if (autoAttach === undefined) delete process.env.KADAN_ROTTIE_AUTO_ATTACH;
+    else process.env.KADAN_ROTTIE_AUTO_ATTACH = autoAttach;
+    process.exitCode = exitCode;
   });
   cli.appendLedger({ kind: "start", role: base.role, session: base.session, rottieTerminalId: "stale" });
   cli.appendLedger({ kind: "start", role: base.role, session: base.session, rottieTerminalId: "latest" });
@@ -99,7 +110,9 @@ test("cmdStop wires last start after floor stop and appends the close receipt", 
   t.mock.method(floor, "alive", () => true);
   t.mock.method(floor, "stop", session => { assert.equal(session, base.session); stopped = true; });
   t.mock.method(console, "log", () => { assert.equal(stopped, true); });
+  t.mock.method(console, "error", () => { assert.equal(stopped, true); });
   cli.main(["stop", base.role]);
+  assert.equal(process.exitCode,1);
   const rows = cli.readLedger();
   assert.equal(rows.length, 3);
   assert.equal(rows.at(-1).kind, "stop");
