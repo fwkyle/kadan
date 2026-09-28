@@ -194,3 +194,16 @@ test('CLI 기본 미리 보기와 잘못된 옵션, tmux 조회 실패를 확인
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),table);
   assert.throws(()=>hierarchyCommand(['prune'],{apply:'false'},{home:f.home,floor:{list:()=>[]}}),/사용법/);
 });
+
+test('CLI add는 자동 등록이 빠진 역할을 표에 더하고 잘못된 인자를 거부한다', () => {
+  const f=fixture();
+  fs.writeFileSync(path.join(f.home,'ledger.jsonl'),f.snapshot.entries.map(e=>JSON.stringify(e)).join('\n')+'\n');
+  const added=hierarchyCommand(['add','사람이-띄운-역할','boss'],{},{home:f.home,floor:{list:()=>[]}});
+  assert.equal(added.registered,true);
+  assert.equal(added.parent,'boss');
+  assert.equal(JSON.parse(fs.readFileSync(f.file,'utf8'))['사람이-띄운-역할'],'boss');
+  assert.equal(hierarchyCommand(['add','사람이-띄운-역할','leaf'],{},{home:f.home,floor:{list:()=>[]}}).registered,false);
+  assert.throws(()=>hierarchyCommand(['add','역할만'],{},{home:f.home,floor:{list:()=>[]}}),/사용법/);
+  assert.throws(()=>hierarchyCommand(['add','역할','상위'],{apply:true},{home:f.home,floor:{list:()=>[]}}),/사용법/);
+  assert.throws(()=>hierarchyCommand(['add'],{},{home:f.home,floor:{list:()=>[]}}),/사용법/);
+});

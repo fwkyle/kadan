@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { parseHierarchy } from './hierarchy.mjs';
-import { activeHierarchyPath } from './hierarchy-register.mjs';
+import { activeHierarchyPath, registerRoleManually } from './hierarchy-register.mjs';
 import { withHierarchyLock } from './hierarchy-lock.mjs';
 import { Handover } from './handover.mjs';
 import { CardStore } from './card-store.mjs';
@@ -165,10 +165,17 @@ export function pruneHierarchy({home, floor, file, apply = false, now = Date.now
 }
 
 export function hierarchyCommand(args, flags, {home, floor}) {
-  if (flags.help) return {usage:'kadan hierarchy prune [--file /절대경로/관계표.json] [--apply] — 기본은 미리 보기'};
+  if (flags.help) return {usage:'kadan hierarchy prune [--file /절대경로/관계표.json] [--apply] | kadan hierarchy add <역할> <상위|@user> — prune 기본은 미리 보기'};
+  // 사람이 직접 띄워 자동 등록이 빠진 역할을 표에 더한다. 기존 줄은 덮어쓰지 않는다.
+  if (args[0] === 'add') {
+    if (args.length !== 3 || Object.keys(flags).length) {
+      throw new Error('사용법: kadan hierarchy add <역할> <상위|@user>');
+    }
+    return registerRoleManually({ role: args[1], parent: args[2], home });
+  }
   if (args.length !== 1 || args[0] !== 'prune' || Object.keys(flags).some(k => !['file', 'apply'].includes(k)) ||
       (flags.apply !== undefined && flags.apply !== true) || (flags.file !== undefined && typeof flags.file !== 'string')) {
-    throw new Error('사용법: kadan hierarchy prune [--file /절대경로/관계표.json] [--apply]');
+    throw new Error('사용법: kadan hierarchy prune [--file /절대경로/관계표.json] [--apply] | kadan hierarchy add <역할> <상위|@user>');
   }
   return pruneHierarchy({home, floor, file:flags.file, apply:flags.apply === true});
 }
