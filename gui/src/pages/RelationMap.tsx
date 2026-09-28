@@ -53,7 +53,7 @@ export default function RelationMap({
       free = cards.filter((c) => !known.has(c.parentWorkKey || ""));
     return (
       <div className="relation-map">
-        <p className="muted">업무 아래에 조건에 맞는 실행을 표시합니다.</p>
+        <p className="muted">워크 아래에 조건에 맞는 카드를 표시합니다.</p>
         {works
           .filter((w) => visible.has(w.key) || linked.has(w.key))
           .map((w) => (
@@ -66,7 +66,7 @@ export default function RelationMap({
           ))}
         {!!free.length && (
           <details open>
-            <summary>연결 전 실행 · {free.length}장</summary>
+            <summary>워크 미연결 카드 · {free.length}장</summary>
             <Cards rows={free} />
           </details>
         )}
