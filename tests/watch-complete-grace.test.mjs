@@ -22,7 +22,7 @@ async function exercise(mode, doneCycle, graceMinutes) {
   const load=os.loadavg;os.loadavg=()=>[0,0,0];
   try {
     await assert.rejects(()=>runWatch({
-      floor:{list:()=>[{session,pid:1}],read:()=>cycle===0?'KADAN:DONE repo/a ok':'working'},
+      floor:{list:()=>[{session,pid:1}],read:()=>cycle===0?'⏺ KADAN:DONE repo/a ok\n\n✻ Finished\n\n────────\n❯\n────────\nworkspace\nmodel\npermissions':'working'},
       readEntries:()=>readLedger(home),
       readCards:()=>['a','other'].map(id=>({key:`repo/${id}`,id,role,status:'assigned',workType:'execution',activity:'running',activityRole:role,activityAt:at(0)})),
       ...(graceMinutes===undefined?{}:{completionGraceMs:graceMinutes*60_000}),

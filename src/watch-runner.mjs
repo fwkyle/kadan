@@ -1,6 +1,6 @@
 import {MailWatch} from './watch-mail.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
-import {doneMarkerOf} from './done-marker.mjs';
+import {doneMarkerOf,findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
 import {QueueResume,queuedInputBanner} from './watch-queue-resume.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
@@ -58,7 +58,7 @@ function startTimeMs(entry) {
   return Number.isFinite(at) ? at : 0;
 }
 
-export function collectRoles(selectedFloor, entries, monitoredSessions = null) {
+export function collectRoles(selectedFloor, entries, monitoredSessions = null, cards = null) {
   const liveItems = selectedFloor.list();
   const liveBySession = new Map(
     liveItems
@@ -66,6 +66,51 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null) {
       .map((item) => [item.session, item])
   );
   const starts = latestStarts(entries);
+  const identity = taskIdentity(cards ?? []);
+  const taskKey = (id, key) => {
+    const found = identity.resolve(id, key);
+    if (found.state === 'resolved') return found.key;
+    if (cards == null) return key || id;
+    return found.state === 'unregistered' ? id : null;
+  };
+  // 6줄 제한을 없애되, 현재 세대에 실제 발령한 카드와 발령 전 화면을 함께 대조한다.
+  const dispatches = new Map(), generations = new Map();
+  for (const entry of entries) {
+    if (entry?.kind === 'start') {
+      const previous = generations.get(entry.session);
+      const pid = entry.panePid ?? entry.rottiePid;
+      // start는 살아 있는 세션을 다시 열 때도 기록된다. 창의 reused 값과 프로세스 세대는 별개다.
+      const reused = previous && pid != null && String(pid).trim() !== '' &&
+        String(pid) === String(previous.panePid ?? previous.rottiePid) && previous.role === entry.role &&
+        (previous.floor ?? 'tmux') === (entry.floor ?? 'tmux') &&
+        (entry.floor !== 'rottie' || previous.rottieTerminalId === entry.rottieTerminalId);
+      if (!reused) {
+        generations.set(entry.session, entry);
+        dispatches.set(entry.session, new Map());
+      }
+      continue;
+    }
+    if (entry?.kind === 'stop') {
+      generations.delete(entry.session);
+      // 종료된 선임도 확정 인계할 수 있다. 발령은 인계에만 남기고 다음 start에서는 비운다.
+      continue;
+    }
+    if (entry?.kind === 'handover' && entry.phase === 'transferred') {
+      const from = `kadan-${entry.from}`, to = `kadan-${entry.to}`;
+      const source = dispatches.get(from), target = dispatches.get(to);
+      if (from === to || !source || !target || !generations.has(to)) continue;
+      for (const id of entry.taskIds ?? []) {
+        const key = taskKey(id), sent = source.get(key);
+        if (!key || !sent) continue;
+        target.set(key, {...sent, role:entry.to, session:to, handoverId:entry.handoverId, handoverAt:entry.t});
+        source.delete(key);
+      }
+      continue;
+    }
+    if (entry?.kind !== 'send' || !entry.taskId || entry.transport === 'mailbox' || entry.notificationOnly || taskConnectionError(entry)) continue;
+    const key = taskKey(entry.taskId, entry.executionKey);
+    if (key && entry.role === generations.get(entry.session)?.role) dispatches.get(entry.session)?.set(key, entry);
+  }
   const observations = new Map();
   const screenAlerts = [];
   for (const [session, start] of starts) {
@@ -96,6 +141,17 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null) {
         }
       }
     }
+    const completionDispatches = dispatches.get(session) ?? new Map();
+    const markers = findDoneMarkers(screen ?? ''), fresh = new Set();
+    for (const [key, dispatch] of completionDispatches) {
+      const newer = diffDoneMarkers(dispatch.baselineMarkers ?? [], markers,
+        marker => JSON.stringify([taskKey(marker.taskId), marker.result]));
+      for (const marker of newer) if (taskKey(marker.taskId) === key) fresh.add(marker);
+    }
+    // 중앙 카드 조회를 쓰지 않는 기존 호출은 발령 없는 화면 후보도 보고한다.
+    // 실제 CLI는 카드 목록(빈 목록 포함)을 넘기므로 등록 카드 감시는 위 대조를 반드시 거친다.
+    const doneMarker = cards == null && completionDispatches.size === 0
+      ? markers.at(-1) : markers.findLast(marker => fresh.has(marker));
     observations.set(session, {
       role,
       alive: Boolean(live),
@@ -104,7 +160,9 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null) {
       digest: screen == null ? null : shortDigest(screen),
       screen,
       screenError,
-      startedAt: start.t,
+      startedAt: generations.get(session)?.t ?? start.t,
+      doneMarker: doneMarker ?? null,
+      completionDispatches,
     });
   }
   const liveSessions = new Set(
@@ -504,7 +562,7 @@ export async function runWatch({
     const preparedAt=measure();
     const roles = observationError
       ? { observations: new Map(), liveSessions: new Set(), screenAlerts: [] }
-      : collectRoles(floor, entries, observedSessions);
+      : collectRoles(floor, entries, observedSessions, cards);
     const observedAt=measure();
     const workerObservations = scope ? new Map([...roles.observations].filter(([s])=>scope.sessions.has(s))) : roles.observations;
     const retrySessions = observationError || !scope ? new Set() : rateLimitRetry.tick({
@@ -551,9 +609,19 @@ export async function runWatch({
     roleStates = roleAssessment.states;
     // 완료후보는 정상 완료 처리에 시간을 준다. 화면에서 사라져도 done을 재확인한다.
     if (!observationError) {
+      const identity = taskIdentity(cards ?? []);
+      const dispatchVersion = alert => {
+        const key = identity.resolve(alert.taskId).key ?? alert.taskId;
+        const sent = roles.observations.get(alert.session)?.completionDispatches.get(key);
+        return sent ? JSON.stringify([sent.mailId, sent.t, sent.baselineMarkers, sent.handoverId, sent.handoverAt]) : null;
+      };
+      // 유예 중 같은 카드가 재발령되면 이전 실행의 후보도 폐기한다.
+      for (const [id, pending] of pendingCompletions) {
+        if (pending.dispatch !== dispatchVersion(pending.alert)) pendingCompletions.delete(id);
+      }
       for (const alert of roleAssessment.alerts) {
         if (alert.kind !== '완료후보' || pendingCompletions.has(alert.id)) continue;
-        pendingCompletions.set(alert.id, {alert, at:cycleAt,
+        pendingCompletions.set(alert.id, {alert, at:cycleAt, dispatch:dispatchVersion(alert),
           startedAt:roles.observations.get(alert.session)?.startedAt});
       }
       const visible = new Set(roleAssessment.alerts.map(a => a.id));

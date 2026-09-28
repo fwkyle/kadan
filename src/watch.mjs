@@ -1,4 +1,4 @@
-import {doneMarkerOf} from './done-marker.mjs';
+import {findDoneMarkers} from './done-marker.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -115,11 +115,7 @@ function screenDisconnects(screenText) {
 }
 
 function screenDoneMarker(screenText) {
-  for (const line of lastScreenLines(screenText)) {
-    const marker = doneMarkerOf(line);
-    if (marker) return marker;
-  }
-  return null;
+  return findDoneMarkers(screenText ?? '').at(-1) ?? null;
 }
 
 export function buildJudgeInput(screenText) {
@@ -206,7 +202,7 @@ export function assessRoles(
       previousActiveDisconnect && disconnects.has(previousActiveDisconnect)
         ? previousActiveDisconnect
         : freshDisconnectKeys[0] ?? null;
-    const doneMarker = alive ? screenDoneMarker(current.screen) : null;
+    const doneMarker = alive ? (Object.hasOwn(current, 'doneMarker') ? current.doneMarker : screenDoneMarker(current.screen)) : null;
     const doneMarkerKey = doneMarker
       ? `${doneMarker.taskId}|${doneMarker.result}`
       : null;
