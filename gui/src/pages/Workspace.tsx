@@ -14,6 +14,7 @@ import {
 import RelationMap from "./RelationMap";
 import { usePaneScroll } from "../scroll";
 import { shortenTurn } from "../stopped";
+import { collectionHint, columnLabel, showDoneButOpen } from "../workspace-labels";
 const Detail = lazy(() => import("./Detail"));
 const stateLabels: Record<string, string> = {
   running: "작업 중",
@@ -181,7 +182,7 @@ export default function Workspace({ url }: { url: URL }) {
                 label: "업무 상태",
                 render: (r: Row) => r.stateLabel,
               }
-            : c,
+            : { ...c, label: columnLabel(c.key, c.label, collection) },
         )
       : baseColumns;
   const ordered = [...available].sort(
@@ -250,6 +251,7 @@ export default function Workspace({ url }: { url: URL }) {
             {label} <span className="count">{summary.data?.counts[key === "executions" ? "executions" : "work"] ?? "?"}</span>
           </button>
         ))}
+        <small className="segmented-hint">{collectionHint(summary.data?.counts)}</small>
       </div>
       <div className="toolbar">
         {collection !== "work" && <label data-filter="connection">
@@ -278,7 +280,7 @@ export default function Workspace({ url }: { url: URL }) {
           ["rally", "묶음", "flowTitle"],
         ].map(([key, label, facet]) => (
           <label key={key} data-filter={key}>
-            {label}
+            {columnLabel(facet, label, collection)}
             <select
               value={params.get(key) || ""}
               onChange={(e) => patch({ [key]: e.target.value })}
@@ -676,9 +678,9 @@ export default function Workspace({ url }: { url: URL }) {
               </Suspense>
             )}
           </div>
-          {!!data.doneButOpen.length && (
+          {showDoneButOpen(collection, data.doneButOpen.length) && (
             <details>
-              <summary>실행 끝·카드 열림 {data.doneButOpen.length}장</summary>
+              <summary>닫을 실행 카드 {data.doneButOpen.length}장 (실행 끝·카드 열림)</summary>
               <p>후속 실행이 없는지 감독이 확인한 뒤 닫습니다.</p>
               {data.doneButOpen.map((c) => (
                 <p key={c.key}>
