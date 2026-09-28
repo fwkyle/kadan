@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import {doneMarkerOf} from './done-marker.mjs';
+import {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
+export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs';
 import {readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {captureRuntimeVersion} from './runtime-version.mjs';
@@ -246,31 +247,6 @@ function writeWaitSnapshot({
     console.error(`경고: 마지막 화면 저장 실패: ${error.message}`);
     return null;
   }
-}
-
-export function findDoneMarkers(text) {
-  const found = [];
-  for (const line of text.split("\n")) {
-    const marker = doneMarkerOf(line);
-    if (marker) found.push(marker);
-  }
-  return found;
-}
-
-export function diffDoneMarkers(baselineMarkers, currentMarkers) {
-  const counts = new Map();
-  for (const marker of baselineMarkers) {
-    const key = JSON.stringify(marker);
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  const fresh = [];
-  for (const marker of currentMarkers) {
-    const key = JSON.stringify(marker);
-    const count = counts.get(key) || 0;
-    if (count > 0) counts.set(key, count - 1);
-    else fresh.push(marker);
-  }
-  return fresh;
 }
 
 export function digest(text) {

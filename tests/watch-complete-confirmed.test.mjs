@@ -91,15 +91,16 @@ test("다른 실행으로 감시가 유지돼도 짧은/전체 주소로 확정�
 test("미확정 전체 주소 완료후보는 화면의 taskId와 기존 경보 ID를 보존한다", async () => {
   const cards=['card-x','other'].map(id=>({key:`repo/${id}`,id,status:'assigned',workType:'execution',role:start.role}));
   const entries=[start,send,{...send,taskId:'other'}],screen='KADAN:DONE repo/card-x ok\n› 입력 대기';
-  const baseline=await exercise({entries,screen});
+  const baseline=await exercise({entries:[start,{...send,taskId:'repo/card-x'},{...send,taskId:'other'}],screen});
   const result=await exercise({cards,entries,screen});
   const before=baseline.records.find(e=>e.alertKind==='완료후보');
   const after=result.records.find(e=>e.alertKind==='완료후보');
   assert.ok(before&&after);
   assert.equal(after.taskId,'repo/card-x');assert.equal(after.id,before.id);
-  // 없는 저장소나 다른 결과의 완료를 카드에 붙여 경보를 숨기지 않는다.
+  // 발령하지 않은 저장소의 마커는 넓어진 화면 검색에서도 후보로 쓰지 않는다.
   const wrong=await exercise({cards,entries:[...entries,done],screen:'KADAN:DONE wrong/card-x ok\n› 입력 대기'});
-  assert.ok(wrong.records.some(e=>e.alertKind==='완료후보'));
+  assert.equal(wrong.records.filter(e=>e.alertKind==='완료후보').length,0);
+  // 현재 카드라도 결과가 다른 done으로 경보를 숨기지 않는다.
   const failed=await exercise({cards,entries:[...entries,{...done,result:'failed'}],screen});
   assert.ok(failed.records.some(e=>e.alertKind==='완료후보'));
 });

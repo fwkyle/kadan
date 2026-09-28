@@ -6,3 +6,28 @@ export function doneMarkerOf(line) {
   const match = String(line ?? '').match(DONE_LINE);
   return match ? {taskId: match[1], result: match[2]} : null;
 }
+
+export function findDoneMarkers(text) {
+  const found = [];
+  for (const line of text.split("\n")) {
+    const marker = doneMarkerOf(line);
+    if (marker) found.push(marker);
+  }
+  return found;
+}
+
+export function diffDoneMarkers(baselineMarkers, currentMarkers, keyOf = JSON.stringify) {
+  const counts = new Map();
+  for (const marker of baselineMarkers) {
+    const key = keyOf(marker);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const fresh = [];
+  for (const marker of currentMarkers) {
+    const key = keyOf(marker);
+    const count = counts.get(key) || 0;
+    if (count > 0) counts.set(key, count - 1);
+    else fresh.push(marker);
+  }
+  return fresh;
+}
