@@ -10,6 +10,11 @@ kadan-conductor·kadan-super·kadan-secretary가 같이 쓴다. 코드로 잠긴
 원문: 카단 이전 시절의 사고 기록은 관리자 개인 스킬 저장소에, 카단 시절은
 작업장 기록 레포 `docs/daily/<날짜>/`에 있다.
 
+당시 대화 원문(codex): `~/.codex/sessions/<연>/<월>/<일>/rollout-*.jsonl`. 이전 오케스트레이터
+시절에 그 앱 안에서만 이어 쓴 대화 61개는 `~/.codex/orca-kyle-extra-sessions/`에 같은 날짜
+구조로 따로 보관했다(2026-09-24, 앱 정리 전 보존). 두 곳을 같이 찾는다. 대화 id로 역할을
+맞추는 법은 [작업자 만들기](../../kadan-conductor/references/worker-creation.md)의 복구 원리를 따른다.
+
 ## 목록
 
 | 날짜 | 사고 한 줄 | 생긴 규칙 |

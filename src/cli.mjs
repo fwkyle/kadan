@@ -21,6 +21,7 @@ import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runne
 import { CardStore } from "./card-store.mjs";
 import { cardCommand, closeCardAfterDone } from "./card-command.mjs";
 import { registerStartedRole } from "./hierarchy-register.mjs";
+import { hierarchyCommand } from './hierarchy-prune.mjs';
 import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
 import {WorkStore} from './work-store.mjs';
@@ -1333,26 +1334,41 @@ export function openStartedWindow(session, platform = process.platform, deps = {
   return { ...(openWindow(session, platform, deps) ?? { method: "manual" }), ...fields };
 }
 
-export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, removeFn = removeRottieWindow, connectFn = rottieConnectivity, print = console.log } = {}) {
+export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, removeFn = removeRottieWindow,
+  connectFn = rottieConnectivity, showFn = showRottieWindow, existsFn = fs.existsSync,
+  listBinsFn = listRunningRottieBins, print = console.log } = {}) {
   const terminalId = lastStart?.rottieTerminalId;
   if (!terminalId) return {};
-  if (!env.KADAN_ROTTIE_BIN) {
-    print("창 닫기 건너뜀: KADAN_ROTTIE_BIN 없음");
-    return { rottieTerminalId: terminalId, rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" };
+  // start의 자식 프로세스가 교정한 환경은 감독에게 돌아가지 않는다. 종료할 때도 다시 확인한다.
+  // 현재 KADAN_WINDOW와 무관하게, 실제로 열었던 로티 탭 기록을 기준으로 한다.
+  const preflight = inspectRottieStartPreflight({env, floorName:"rottie", existsFn, connectFn, listBinsFn});
+  const fields = {rottieTerminalId:terminalId, ...(preflight.switched ? {rottieBinSwitched:preflight.switched} : {})};
+  const failed = code => ({...fields, rottieWindowClosed:false, rottieWindowError:String(code)});
+  if (!preflight.ok) {
+    const code = preflight.connection?.code || (env.KADAN_ROTTIE_BIN ? "ENOENT" : "KADAN_ROTTIE_BIN 없음");
+    print(`창 닫기 실패: ${terminalId} ${code} — ${preflight.message}`);
+    return failed(code);
   }
-  const result = closeFn({ bin: env.KADAN_ROTTIE_BIN, terminalId });
+  const bin = env.KADAN_ROTTIE_BIN;
+  if (preflight.switched) print(`로티 경로 자동 교정: ${preflight.switched.from ?? "(없음)"} → ${bin}`);
+  // 켜진 앱을 찾은 것만으로 다른 탭을 닫지 않는다. 원장에 있는 정확한 ID를 먼저 조회한다.
+  const shown = showFn({bin, terminalId});
+  if (!shown.ok) {
+    print(`창 닫기 실패: ${terminalId} ${shown.code} — 대상 탭 조회 실패, 닫기·제거하지 않음`);
+    return failed(shown.code);
+  }
+  const result = closeFn({ bin, terminalId });
   if (!result.closed) {
-    const connection = connectFn({ bin: env.KADAN_ROTTIE_BIN });
-    print(`창 닫기 실패: ${terminalId} ${result.code} (번들 ${connection.bundleId ?? "모름"})`);
-    return { rottieTerminalId: terminalId, rottieWindowClosed: false, rottieWindowError: String(result.code) };
+    print(`창 닫기 실패: ${terminalId} ${result.code} (번들 ${preflight.connection?.bundleId ?? "모름"})`);
+    return failed(result.code);
   }
   print(`창 닫힘: ${terminalId}`);
   // 닫힌 탭은 목록에 '종료됨'으로 남으므로 한 번 더 제거한다. 제거 실패는 기록만 하고 재시도하지 않는다.
-  const removal = removeFn({ bin: env.KADAN_ROTTIE_BIN, terminalId });
+  const removal = removeFn({ bin, terminalId });
   if (removal.removed) print(`탭 제거됨: ${terminalId}`);
   else print(`탭 제거 실패: ${terminalId} ${removal.code} — 탭이 '종료됨'으로 남는다`);
   return {
-    rottieTerminalId: terminalId,
+    ...fields,
     rottieWindowClosed: true,
     rottieWindowRemoved: removal.removed,
     ...(!removal.removed ? { rottieRemoveError: String(removal.code) } : {}),
@@ -1861,8 +1877,13 @@ function cmdStop(argv) {
   } catch (error) {
     die(error.message);
   }
-  const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(), session)) : {};
+  const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(), session), {print:console.error}) : {};
   appendLedger({ ...buildStopLedgerEntry({ role, session }), ...windowFields });
+  if (windowFields.rottieWindowClosed === false || windowFields.rottieWindowRemoved === false) {
+    console.error(`세션은 종료됨: ${session} · 로티 탭 정리 미완료: ${windowFields.rottieTerminalId} — ${windowFields.rottieWindowError ?? windowFields.rottieRemoveError}`);
+    process.exitCode = 1;
+    return;
+  }
   console.log(`종료됨: ${session}`);
 }
 
@@ -2228,6 +2249,7 @@ function cmdHandover(argv, flags) {
 }
 
 const COMMANDS = {
+  hierarchy:(args,flags)=>console.log(JSON.stringify(hierarchyCommand(args,flags,{home:ledgerHome(),floor}),null,2)),
   work:async(args,flags)=>console.log(JSON.stringify(await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
     send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
@@ -2277,7 +2299,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|work|card|decision|runners|storage|inbox> [대상] [옵션]"
+      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|runners|storage|inbox> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
