@@ -21,6 +21,7 @@ import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runne
 import { CardStore } from "./card-store.mjs";
 import { cardCommand, closeCardAfterDone } from "./card-command.mjs";
 import { registerStartedRole } from "./hierarchy-register.mjs";
+import { hierarchyCommand } from './hierarchy-prune.mjs';
 import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
 import {WorkStore} from './work-store.mjs';
@@ -2228,6 +2229,7 @@ function cmdHandover(argv, flags) {
 }
 
 const COMMANDS = {
+  hierarchy:(args,flags)=>console.log(JSON.stringify(hierarchyCommand(args,flags,{home:ledgerHome(),floor}),null,2)),
   work:async(args,flags)=>console.log(JSON.stringify(await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
     send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
@@ -2277,7 +2279,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|work|card|decision|runners|storage|inbox> [대상] [옵션]"
+      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|runners|storage|inbox> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }

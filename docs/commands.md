@@ -7,7 +7,7 @@
 
 ## 읽는 법
 
-- 모든 옵션은 명령이 직접 알려 준다. 묶음 명령(`work`, `card`, `decision`, `inbox`, `runners`, `storage`, `watch-report`)은 `kadan <명령> --help`, 나머지는 대상 없이 실행하면 사용법이 나온다.
+- 모든 옵션은 명령이 직접 알려 준다. 묶음 명령(`work`, `card`, `decision`, `inbox`, `runners`, `storage`, `hierarchy`, `watch-report`)은 `kadan <명령> --help`, 나머지는 대상 없이 실행하면 사용법이 나온다.
 - `<역할>`은 세션 이름에서 `kadan-`을 뺀 부분이다(`kadan-비서` → `비서`).
 - 명령이 PATH에 없으면 `node <저장소>/src/cli.mjs <명령>`으로 같은 일을 한다.
 - 새 명령을 추가하면 이 표와 `src/cli.mjs`의 전체 사용법 줄을 같은 커밋에서 고친다.
@@ -43,6 +43,7 @@
 | `kadan attach <역할>` | 살아 있는 세션에 창을 하나 더 연다 | — |
 | `kadan restore [역할...]` | 로티 데몬 재시작 뒤, 기록된 로티 탭이 죽은 살아 있는 세션에 새 탭을 붙인다 | `--dry-run` |
 | `kadan stop <역할>` | 카단이 만든 세션만 끝내고 연결된 로티 탭을 닫는다. 미확정 카드가 있으면 알린다 | — |
+| `kadan hierarchy prune` | 끝난 역할의 관계를 정리할 후보와 보존 이유를 표시한다. [정리 기준](hierarchy.md#끝난-역할-정리) | `--apply`(백업 후 적용), `--file <절대경로>`(복사본 등 대상 지정) |
 
 ### `kadan restore` 자세히
 
