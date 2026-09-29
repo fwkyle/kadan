@@ -11,7 +11,7 @@ import {storageCommand} from './storage-migration.mjs';
 import {assertWritable,storageTransaction} from './storage.mjs';
 import {SecretaryMailbox} from './secretary-mailbox.mjs';
 import {Mailbox,inboxCommand} from './mailbox.mjs';
-import {composeRoleInstructions,startRoleProfile} from './role-instructions.mjs';
+import {composeRoleInstructions,inferDispatchProfile,startRoleProfile} from './role-instructions.mjs';
 import {composeMailInstructions} from './mail-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
@@ -731,8 +731,10 @@ export function guardedSend({
     }
     cardIdentity = {...identity, currentPid};
     // 작업자·검수자 기본값이 바뀐 뒤에도 떠 있는 옛 실행기·모델 세션에는 카드를 보내지 않는다(2026-09-29 [kyle]).
-    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity,
-      profile: identity.launch.roleProfile ?? roleProfile ?? composed.metadata.profile, allowOldRunner });
+    // --raw는 역할 지침만 뺀다 — 지침 없이도 프로필은 같은 규칙으로 정해, 프로필이 빈 옛 시작 기록이 raw로 검사를 피하지 못하게 한다.
+    const guardProfile = identity.launch.roleProfile ?? roleProfile ?? composed.metadata.profile
+      ?? (raw ? inferDispatchProfile({ home, role, taskId, mailContext, entries, cards }).profile : undefined);
+    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, allowOldRunner });
     if (runnerGuard.result === "reject") {
       const error = new Error(runnerGuard.message);
       error.code = "KADAN_STALE_RUNNER";

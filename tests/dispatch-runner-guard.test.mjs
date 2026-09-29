@@ -31,12 +31,14 @@ const OLD_OPUS_CMD='claude --model claude-opus-5-5 --effort high --dangerously-s
 const settingsDoc=(roles={worker:WORKER,reviewer:REVIEWER},revision=7)=>
  ({version:1,revision,activePreset:'B',presets:{B:{roles}},runners:RUNNERS});
 
-function rig({settings=settingsDoc(),cmd=WORKER_CMD,roleProfile='worker'}={}){
+function rig({settings=settingsDoc(),cmd=WORKER_CMD,roleProfile='worker',step='implementation',roles=null}={}){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-'));
  if(settings!==null)fs.writeFileSync(path.join(home,'runner-settings.json'),typeof settings==='string'?settings:JSON.stringify(settings));
+ // 역할 이름으로 프로필을 정하는 설정(role-instructions.json) — 시작 기록에 프로필이 없는 옛 세션을 알아보는 근거 중 하나
+ if(roles)fs.writeFileSync(path.join(home,'role-instructions.json'),JSON.stringify({version:1,roles}));
  const store=new CardStore(home);
  const card=store.create({repo:'r',id:'card-1',repoPath:home,body:'# 지시'});
- store.update(card.key,{status:'assigned',role:'r',board:'r',scope:'시험 범위',...rally},{revision:1,note:'배정'});
+ store.update(card.key,{status:'assigned',role:'r',board:'r',scope:'시험 범위',...rally,rallyStep:step},{revision:1,note:'배정'});
  const r={home,card,sent:0,records:[],entries:[]};
  const floor={name:'fake',alive:()=>true,pid:()=>'111',send:()=>{r.sent++;return {};}};
  r.start=(extra={})=>({kind:'start',role:'r',session:'kadan-r',panePid:'111',...(roleProfile?{roleProfile}:{}),...extra});
@@ -116,17 +118,44 @@ test('--allow-old-runner "<이유>"로만 예외 통과한다 — 이유는 send
  assert.equal(same.sends()[0].runnerGuard,undefined);
 });
 
-test('작업자·검수자가 아닌 역할과 프로필을 모르는 역할에는 적용하지 않는다',()=>{
- for(const profile of ['conductor','super']){
-  const r=rig({cmd:OLD_OPUS_CMD,roleProfile:profile});
-  r.call();assert.equal(r.sent,1,profile);assert.equal(r.sends()[0].runnerGuard,undefined);
+test('빈 예외 이유는 세션이 기본값과 같아도, --raw여도, 받는 역할이 무엇이든 항상 거절한다',()=>{
+ const blankRejected=(r,extra={})=>{
+  for(const blank of ['',' ',true,['a','b']]){
+   assert.throws(()=>r.call({allowOldRunner:blank,...extra}),e=>{assert.ok(stale(e));assert.match(e.message,/이유가 필요하다/);assert.equal(e.message.split('\n').length,2);return true;},String(blank));
+  }
+  assert.equal(r.sent,0);assert.equal(r.sends().length,0);
+ };
+ blankRejected(rig());                                  // 기본값과 같은 새 세션
+ blankRejected(rig(),{raw:true});                       // --raw
+ blankRejected(rig({roleProfile:'reviewer',cmd:REVIEWER_CMD}));
+ blankRejected(rig({roleProfile:'conductor'}));         // 검사 대상이 아닌 역할도 규칙은 하나
+ // 이유가 있으면 옛 세션이 아닌 경우 옵션은 그냥 무시된다(기존 동작 유지)
+ const fresh=rig();fresh.call({allowOldRunner:'필요 없음',raw:true});
+ assert.equal(fresh.sent,1);assert.equal(fresh.sends()[0].runnerGuard,undefined);
+});
+
+test('작업자·검수자가 아닌 역할과 프로필을 모르는 역할에는 적용하지 않는다 — --raw여도 같다',()=>{
+ for(const profile of ['conductor','super','secretary']){
+  for(const raw of [false,true]){
+   const r=rig({cmd:OLD_OPUS_CMD,roleProfile:profile});
+   r.call({raw});assert.equal(r.sent,1,`${profile} raw=${raw}`);assert.equal(r.sends()[0].runnerGuard,undefined);
+  }
  }
- // --raw는 역할 지침을 붙이지 않아 프로필을 추론하지 못한다 — 시작 기록에도 프로필이 없으면 적용 대상이 아니다
- const raw=rig({cmd:OLD_OPUS_CMD,roleProfile:null});
- raw.call({raw:true});assert.equal(raw.sent,1);
  // 시작 기록의 프로필이 우선한다 — 발령 쪽 프로필 인자보다
  const conductor=rig({cmd:OLD_OPUS_CMD,roleProfile:'conductor'});
  conductor.call({roleProfile:'worker'});assert.equal(conductor.sent,1);
+ // 시작 기록에 프로필이 없어도 역할 이름 설정(role-instructions.json)이 감독이면 카드 단계(implementation)보다 우선해 raw도 적용하지 않는다
+ for(const profile of ['conductor','super']){
+  const named=rig({cmd:OLD_OPUS_CMD,roleProfile:null,roles:{r:profile}});
+  named.call({raw:true});assert.equal(named.sent,1,`역할 이름 ${profile}`);
+ }
+ // 프로필을 끝내 알 수 없으면 대조하지 않는다 — 검사 함수는 프로필이 없으면 skip
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-noprofile-'));
+ fs.writeFileSync(path.join(home,'runner-settings.json'),JSON.stringify(settingsDoc()));
+ for(const profile of [undefined,null,'',  'unknown']){
+  assert.deepEqual(inspectDispatchRunnerGuard({home,role:'r',session:'kadan-r',profile,identity:{harness:'claude',model:'claude-opus-5-5',launch:{cmd:OLD_OPUS_CMD}}}),
+   {result:'skip',reason:'not-worker-reviewer'},String(profile));
+ }
 });
 
 test('프로필은 시작 기록 → 발령 인자(자동 발령) → 카드 단계 추론 순서로 정한다 — 옛 세션이면 모두 거절',()=>{
@@ -135,6 +164,37 @@ test('프로필은 시작 기록 → 발령 인자(자동 발령) → 카드 단
  assert.throws(()=>noProfile.call(),stale,'카드 단계(implementation) 추론');
  const rawExplicit=rig({cmd:OLD_OPUS_CMD});
  assert.throws(()=>rawExplicit.call({raw:true}),stale,'--raw여도 시작 기록의 프로필이 있으면 우회할 수 없다');
+});
+
+test('--raw 발령도 옛 작업자·검수자 세션에는 가지 않는다 — 시작 기록에 프로필이 없는 옛 세션이 검수 재현 조건이다',()=>{
+ // 검수 재현: 옛 오퍼스·프로필 없음·지금 소넷·카드 단계 implementation·raw 발령. 고치기 전에는 sent=1, runnerGuard=null이었다
+ for(const raw of [false,true]){
+  const r=rig({cmd:OLD_OPUS_CMD,roleProfile:null});
+  assert.throws(()=>r.call({raw}),e=>{assert.ok(stale(e));assert.match(e.message.split('\n')[0],/worker 기본값 = claude · claude-sonnet-5-5/);return true;},`raw=${raw}`);
+  assert.equal(r.sent,0);assert.equal(r.sends().length,0);
+ }
+ // 판정 근거 하나씩: 카드 단계 implementation·fix·research → worker, review → reviewer(검수자 기본값과 대조)
+ for(const step of ['implementation','fix']){
+  const r=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step});
+  assert.throws(()=>r.call({raw:true}),e=>{assert.ok(stale(e));assert.match(e.message,/worker 기본값/);return true;},step);
+ }
+ const review=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step:'review'});
+ assert.throws(()=>review.call({raw:true}),e=>{assert.ok(stale(e));assert.match(e.message,/reviewer 기본값 = codex · gpt-6-sol/);return true;});
+ // 역할 이름 설정(role-instructions.json)이 작업자면 카드 단계(review)보다 우선한다 — worker 기본값과 대조
+ const named=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step:'review',roles:{r:'worker'}});
+ assert.throws(()=>named.call({raw:true}),e=>{assert.ok(stale(e));assert.match(e.message,/worker 기본값/);return true;});
+ // 발령 쪽 프로필 인자(자동 발령)도 raw와 상관없이 근거이고 카드 단계보다 우선한다
+ const arg=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step:'review'});
+ assert.throws(()=>arg.call({raw:true,roleProfile:'worker'}),e=>{assert.ok(stale(e));assert.match(e.message,/worker 기본값/);return true;});
+ assert.equal(review.sent+named.sent+arg.sent,0);
+ // 이유가 있는 예외는 raw여도 통과하고 send 기록에 남는다
+ const allowed=rig({cmd:OLD_OPUS_CMD,roleProfile:null});
+ allowed.call({raw:true,allowOldRunner:'raw 예외 시험'});
+ assert.equal(allowed.sent,1);assert.deepEqual(allowed.sends()[0].runnerGuard,{result:'allowed',code:'runner-or-model',reason:'raw 예외 시험',settingsRevision:7});
+ // 기본값과 같은 세션은 raw도 그대로 통과 — 기록에 경계 필드가 없고 raw는 역할 지침을 붙이지 않는다
+ const fresh=rig({cmd:WORKER_CMD,roleProfile:null});
+ assert.deepEqual(fresh.call({raw:true}),[]);
+ assert.equal(fresh.sent,1);assert.equal(fresh.sends()[0].runnerGuard,undefined);assert.equal(fresh.sends()[0].roleInstructions.reason,'explicit-raw');
 });
 
 test('검수자는 검수자 기본값과 대조한다',()=>{
@@ -201,6 +261,18 @@ test('inspectDispatchRunnerGuard: 시작 때 설정 revision이 있으면 세션
  assert.match(verdict.message.split('\n')[1],/\(시작 때 설정 revision 3\)/);
 });
 
+test('inspectDispatchRunnerGuard: 시작 기록·모델을 모르면 이 검사는 경고만 한다(거절은 기존 신원 검사 몫)',()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-unknown-'));
+ fs.writeFileSync(path.join(home,'runner-settings.json'),JSON.stringify(settingsDoc()));
+ for(const identity of [{},{harness:'claude'},{harness:'claude',model:'claude-opus-5-5'},{harness:'claude',model:'claude-opus-5-5',launch:{}}]){
+  const verdict=inspectDispatchRunnerGuard({home,role:'r',session:'kadan-r',profile:'worker',identity});
+  assert.equal(verdict.result,'warn',JSON.stringify(identity));assert.equal(verdict.code,'session-unknown');
+  assert.match(verdict.warning,/시작 기록·실행 모델을 몰라/);assert.equal(verdict.ledger.settingsRevision,7);
+ }
+ // 예외 이유가 빈 채로 오면 이 경우에도 규칙은 하나 — 거절
+ assert.equal(inspectDispatchRunnerGuard({home,role:'r',session:'kadan-r',profile:'worker',identity:{},allowOldRunner:''}).result,'reject');
+});
+
 test('실제 CLI+격리 tmux: 살아 있는 옛 세션에 start를 다시 불러도 카드 발령은 거절된다',{skip:!hasTmux},()=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-cli-'));
  const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
@@ -249,6 +321,24 @@ test('실제 CLI+격리 tmux: 살아 있는 옛 세션에 start를 다시 불러
   const ok=call('send','rg-new','--task','card-new','카드 지시를 수행하라');
   assert.equal(ok.status,0,ok.stderr);assert.match(ok.stderr,/강도·실행 인자가 지금 worker 기본값과 다르다/);
   assert.equal(sends().at(-1).runnerGuard.result,'warn');
+  // (6) 검수 재현: --profile 없이 옛 모델로 띄운 세션(시작 기록에 프로필 없음)에 --raw로 카드 발령 — 거절된다
+  const before=sends().length;
+  run('start','rg-legacy','--hidden','--cmd',`${harness} --model old-model`,'--reason','시험: 프로필 없는 옛 세션');started.push('kadan-rg-legacy');
+  assert.equal(ledger().find(e=>e.kind==='start'&&e.session==='kadan-rg-legacy').roleProfile,undefined);
+  assign('card-legacy','rg-legacy');
+  for(const extra of [[],['--raw']]){
+   const rawDenied=call('send','rg-legacy','--task','card-legacy',...extra,'카드 지시 RAW본문');
+   assert.notEqual(rawDenied.status,0,`${extra}: ${rawDenied.stdout}`);
+   assert.match(rawDenied.stderr,/옛 실행기·모델 세션이다/);assert.match(rawDenied.stderr,/old-model/);
+  }
+  assert.equal(sends().length,before);
+  pause(300);assert.doesNotMatch(paneText('kadan-rg-legacy'),/RAW본문/,'--raw 발령이 옛 세션 pane에 붙여넣어졌다');
+  // 빈 이유는 --raw여도 거절, 이유가 있으면 예외 통과
+  const rawBlank=call('send','rg-legacy','--task','card-legacy','--raw','--allow-old-runner','','카드 지시 RAW본문');
+  assert.notEqual(rawBlank.status,0);assert.match(rawBlank.stderr,/이유가 필요하다/);assert.equal(sends().length,before);
+  const rawAllowed=call('send','rg-legacy','--task','card-legacy','--raw','--allow-old-runner','시험 raw 예외','카드 지시를 수행하라');
+  assert.equal(rawAllowed.status,0,rawAllowed.stderr);
+  assert.equal(sends().length,before+1);assert.equal(sends().at(-1).runnerGuard.reason,'시험 raw 예외');
  }finally{
   for(const s of started)tmux('kill-session','-t',s);
  }
