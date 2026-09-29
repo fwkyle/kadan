@@ -117,9 +117,7 @@ export default function Workspace({ url }: { url: URL }) {
   const params = url.searchParams,
     collection =
       params.get("collection") ||
-      (params.get("card") && !params.get("card")!.startsWith("work:")
-        ? "executions"
-        : "work"),
+      (params.get("card")?.startsWith("work:") ? "work" : "executions"),
     layout = params.get("layout") || "table";
   const request = new URLSearchParams(params);
   request.set("collection", collection);
@@ -179,7 +177,7 @@ export default function Workspace({ url }: { url: URL }) {
           c.key === "signalAt"
             ? {
                 key: "stateLabel",
-                label: "업무 상태",
+                label: "워크 상태",
                 render: (r: Row) => r.stateLabel,
               }
             : { ...c, label: columnLabel(c.key, c.label, collection) },
@@ -221,17 +219,17 @@ export default function Workspace({ url }: { url: URL }) {
     <section className="workspace" data-detail-open={Boolean(detailKey)} data-filters-open={filtersOpen}>
       <div className="page-heading">
         <div>
-          <h1>{collection === "work" ? "업무" : "실행"}</h1>
-          <p>{collection === "work" ? "맡긴 일의 목표·진행 상황·다음 행동을 확인합니다." : "업무를 수행하는 개별 실행을 확인합니다. 업무 미연결은 상위 업무가 없는 실행입니다."}</p>
+          <h1>{collection === "work" ? "워크" : "카드"}</h1>
+          <p>{collection === "work" ? "맡긴 일의 목표·진행 상황·다음 행동을 확인합니다." : "AI 담당에게 맡긴 카드를 한 장씩 확인합니다. 워크 미연결은 상위 워크가 없는 카드입니다."}</p>
         </div>
         <a href={collection === "work" ? "#work-create" : "#card-create"} className="button">
-          {collection === "work" ? "새 업무" : "실행 추가"}
+          {collection === "work" ? "새 워크" : "카드 추가"}
         </a>
       </div>
       <div className="segmented" aria-label="작업 종류">
         {[
-          ["work", "업무"],
-          ["executions", "실행"],
+          ["executions", "카드"],
+          ["work", "워크"],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -255,10 +253,10 @@ export default function Workspace({ url }: { url: URL }) {
       </div>
       <div className="toolbar">
         {collection !== "work" && <label data-filter="connection">
-          업무 연결
+          워크 연결
           <select value={collection} onChange={(e) => patch({collection: e.target.value, card: null, detail: "0"})}>
-            <option value="executions">모든 실행</option>
-            <option value="unlinked">업무 미연결 ({summary.data?.counts.unlinked ?? "?"})</option>
+            <option value="executions">모든 카드</option>
+            <option value="unlinked">워크 미연결 ({summary.data?.counts.unlinked ?? "?"})</option>
           </select>
         </label>}
         <button className="mobile-filter-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>
@@ -656,7 +654,7 @@ export default function Workspace({ url }: { url: URL }) {
                       value={params.get("root") || "work"}
                       onChange={(e) => patch({ root: e.target.value })}
                     >
-                      <option value="work">업무별</option>
+                      <option value="work">워크별</option>
                       <option value="role">담당별</option>
                     </select>
                   </label>
@@ -680,7 +678,7 @@ export default function Workspace({ url }: { url: URL }) {
           </div>
           {showDoneButOpen(collection, data.doneButOpen.length) && (
             <details>
-              <summary>닫을 실행 카드 {data.doneButOpen.length}장 (실행 끝·카드 열림)</summary>
+              <summary>닫을 카드 {data.doneButOpen.length}장 (실행 끝·카드 열림)</summary>
               <p>후속 실행이 없는지 감독이 확인한 뒤 닫습니다.</p>
               {data.doneButOpen.map((c) => (
                 <p key={c.key}>

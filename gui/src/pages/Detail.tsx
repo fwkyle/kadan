@@ -119,7 +119,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
       ) : (
         <article className={documentView ? "document-view" : ""}>
           <div className="eyebrow">
-            {data.kind === "work" ? "업무" : "실행"} ·{" "}
+            {data.kind === "work" ? "워크" : "카드"} ·{" "}
             {data.row.board || data.row.repo} · 버전 {data.revision}
           </div>
           <h2>{data.title}</h2>
@@ -134,7 +134,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
           </details>}
           <nav className="inline-nav">
             {(data.kind === "work" || data.row.parentWorkKey) && <a href={"/?flowWork=" + encodeURIComponent(data.kind === "work" ? data.key.replace(/^work:/, "") : data.row.parentWorkKey!) + "#operations-flow"}>
-              {data.kind === "work" ? "진행 이력" : "연결된 업무의 진행 이력"}
+              {data.kind === "work" ? "진행 이력" : "연결된 워크의 진행 이력"}
             </a>}
             <a href={"/?mailCard=" + encodeURIComponent(data.key) + "#mailbox"}>
               이 카드의 우편 {data.mailTotal}건
@@ -234,14 +234,14 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
           )}
           {data.executions && (
             <details>
-              <summary>업무 안의 실행 {data.executions.length}건</summary>
+              <summary>워크 안의 카드 {data.executions.length}장</summary>
               <div className="table-scroll">
                 <table>
                   <thead>
                     <tr>
                       <th>라운드</th>
                       <th>단계</th>
-                      <th>실행</th>
+                      <th>카드</th>
                       <th>상태</th>
                     </tr>
                   </thead>
