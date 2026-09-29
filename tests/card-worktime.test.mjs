@@ -132,6 +132,46 @@ test('창 안에서 다른 모델로 다시 시작(중간 stop 기록 없음)되
   assert.equal(modelAt(same,'worker-a',T0+30*MIN).state,'known');
 });
 
+const omoOpus='omo --model claude-opus-5-5 --effort high';
+const opusMax='claude --model claude-opus-5-5 --effort max --dangerously-skip-permissions';
+const sonnetHigh='claude --model claude-sonnet-5-5 --effort high --dangerously-skip-permissions';
+
+test('실행 도구 이름만 다르고 모델·강도가 같으면 재시작이 아니라 알려진 모델이다(card-p2-tag-audit 사례)',()=>{
+  const entries=[launch('worker-a',0,omoOpus,{panePid:'100'}),launch('worker-a',10,opus,{panePid:'200'}),stop('worker-a',60)];
+  const m=modelAt(index(entries),'worker-a',T0+15*MIN);
+  assert.deepEqual([m.state,m.model,m.effort],['known','claude-opus-5-5','high']);
+  // 아직 살아 있는 창도 같다(PID가 같은 두 기록: 실행 도구만 다름)
+  const live=index([launch('worker-a',0,omoOpus),launch('worker-a',10,opus)]);
+  assert.deepEqual([modelAt(live,'worker-a',T0+15*MIN).state,modelAt(live,'worker-a',T0+15*MIN).alive],['known',true]);
+});
+
+test('화면에 보일 실행 도구는 카드 첫 시작 직전에 띄운 실행 명령 기록의 것이다',()=>{
+  const idx=index([launch('worker-a',0,omoOpus,{panePid:'100'}),launch('worker-a',10,opus,{panePid:'200'}),stop('worker-a',60)]);
+  // 두 번째 실행 명령(claude, 10분)이 카드 시작(15분) 직전 → claude
+  assert.equal(modelAt(idx,'worker-a',T0+15*MIN).harness,'claude');
+  // 카드 시작(5분)이 두 번째 실행 명령보다 앞서면 그때 떠 있던 첫 기록(omo)
+  const early=modelAt(idx,'worker-a',T0+5*MIN);
+  assert.deepEqual([early.state,early.harness,early.launchAt],['known','omo',T0]);
+  // 같은 시각이면 그 시각의 기록이 직전으로 잡힌다
+  assert.equal(modelAt(idx,'worker-a',T0+10*MIN).harness,'claude');
+  // 카드 계산 값에도 그대로 실린다
+  const w=cardWorktime(card({assigned:11,start:15,result:30}),idx);
+  assert.deepEqual([w.model.state,w.model.harness],['known','claude']);
+});
+
+test('같은 실행 도구여도 모델만 다르면 모름(restarted)이다',()=>{
+  const idx=index([launch('worker-a',0,sonnetHigh,{panePid:'100'}),launch('worker-a',10,opus,{panePid:'200'}),stop('worker-a',60)]);
+  assert.deepEqual(modelAt(idx,'worker-a',T0+15*MIN),{state:'unknown',reason:'restarted'});
+});
+
+test('같은 실행 도구·모델이어도 강도만 다르면 모름(restarted)이다',()=>{
+  const idx=index([launch('worker-a',0,opus,{panePid:'100'}),launch('worker-a',10,opusMax,{panePid:'200'}),stop('worker-a',60)]);
+  assert.deepEqual(modelAt(idx,'worker-a',T0+15*MIN),{state:'unknown',reason:'restarted'});
+  // 실행 도구도 함께 다르면 당연히 모름이다
+  const both=index([launch('worker-a',0,omoOpus,{panePid:'100'}),launch('worker-a',10,sonnetHigh,{panePid:'200'}),stop('worker-a',60)]);
+  assert.equal(modelAt(both,'worker-a',T0+15*MIN).reason,'restarted');
+});
+
 test('아직 살아 있는 창은 지금 PID(가장 나중 실행 명령 기록의 PID)와 같은 start만 본다',()=>{
   const live=index([launch('worker-a',0,opus,{panePid:'100'}),launch('worker-a',20,sonnet,{panePid:'200'})]);
   const m=modelAt(live,'worker-a',T0+30*MIN);

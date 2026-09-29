@@ -25,7 +25,7 @@ export const unknownReasonLabel = (reason: string): string =>
   ({
     "no-anchor": "시작·배정 기록 없음",
     "no-launch": "실행 명령 기록 없음",
-    restarted: "다른 모델로 재시작",
+    restarted: "다른 모델·강도로 재시작",
     "no-model": "명령에서 모델 못 읽음",
   })[reason] ?? reason;
 

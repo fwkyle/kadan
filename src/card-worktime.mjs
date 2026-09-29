@@ -50,7 +50,7 @@ export function buildLaunchIndex(entries) {
 // 시각 at에 그 역할이 어떤 모델이었나. 판정할 수 없으면 이유를 붙여 '모름'이다.
 //   no-anchor : 카드에 시작·배정 시각이 없다
 //   no-launch : 그 시각을 품는 실행 세대가 없다(실행 명령 기록이 없는 옛 세션 포함)
-//   restarted : 같은 세대 안에서 다른 모델·강도로 다시 시작됐다(어느 쪽인지 시각만으로 단정하지 않는다)
+//   restarted : 같은 세대 안에서 다른 모델·강도로 다시 시작됐다(어느 쪽인지 시각만으로 단정하지 않는다). 실행 도구 이름만 다른 것은 아니다
 //   no-model  : 실행 명령은 있으나 모델을 읽을 수 없다
 // 원장이 아는 것은 '띄울 때 명령'뿐이라 세션 안에서 나중에 모델을 바꾼 것(/model 등)은 알 수 없다.
 export function modelAt(index, role, at) {
@@ -62,9 +62,11 @@ export function modelAt(index, role, at) {
   const launches = generation.to == null
     ? generation.launches.filter((l) => l.panePid === generation.launches.at(-1).panePid)
     : generation.launches;
-  const kinds = new Set(launches.map((l) => `${l.harness}\0${l.model}\0${l.effort}`));
+  // 같은 세대 안의 재시작 여부는 모델·강도만 본다. 실행 도구 이름(omo·codex 등)만 다른 것은 같은 모델이라 재시작으로 보지 않는다.
+  const kinds = new Set(launches.map((l) => `${l.model}\0${l.effort}`));
   if (kinds.size !== 1) return {state: 'unknown', reason: 'restarted'};
-  const launch = launches[0];
+  // 화면에 보일 실행 도구·프로필·시작 시각은 카드 첫 시작 직전(같은 시각 포함)에 띄운 실행 명령 기록이다. 직전 기록이 없으면 첫 기록.
+  const launch = launches.findLast((l) => l.at != null && l.at <= at) ?? launches[0];
   if (!launch.model) return {state: 'unknown', reason: 'no-model'};
   return {state: 'known', harness: launch.harness, model: launch.model, effort: launch.effort, profile: launch.profile, launchAt: launch.at, alive: generation.to == null};
 }
