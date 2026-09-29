@@ -1,5 +1,6 @@
 import { useContext, useEffect, useId, useState } from "react";
 import { save, useResource } from "../resource";
+import { ownPart } from "../runner-draft";
 import type { Stamp } from "../types";
 import {
   ActionForm,
@@ -180,6 +181,7 @@ function RunnerForm({
         };
   const [choice, setChoice] = useState<Choice>(initial),
     [revision, setRevision] = useState(settings.revision),
+    [base, setBase] = useState(() => ownPart(settings, role, fallback)),
     [reason, setReason] = useState(""),
     [dirty, setDirty] = useState(false),
     [busy, setBusy] = useState(false),
@@ -189,11 +191,14 @@ function RunnerForm({
     return () => context.draft(id, false);
   }, [id, context.draft, dirty, busy]);
   useEffect(() => {
-    if (!dirty && !busy) {
+    if (busy) return;
+    const part = ownPart(settings, role, fallback);
+    if (!dirty) {
       setChoice(initial());
       setRevision(settings.revision);
-    }
-  }, [settings, dirty, busy]);
+      setBase(part);
+    } else if (part === base) setRevision(settings.revision);
+  }, [settings, dirty, busy, base]);
   const spec = data.catalog[choice.runner],
     efforts = spec?.models.find((m) => m.model === choice.model)?.efforts || [];
   const change = (next: Choice) => {
@@ -219,12 +224,13 @@ function RunnerForm({
     Boolean(
       data.catalog[fav.runner]?.models.some((m) => m.model === fav.model),
     ) && !blockedFor(fav.model);
-  const isFavorite = favorites.some(
-    (f) =>
-      f.runner === choice.runner &&
-      f.model === choice.model &&
-      (f.effort || "") === (choice.effort || ""),
-  );
+  const favoriteIndex = favorites.findIndex(
+      (f) =>
+        f.runner === choice.runner &&
+        f.model === choice.model &&
+        (f.effort || "") === (choice.effort || ""),
+    ),
+    isFavorite = favoriteIndex >= 0;
   const addFavorite = async () => {
     setBusy(true);
     setError(null);
@@ -240,8 +246,9 @@ function RunnerForm({
         },
         context.token,
       );
-      // 즐겨찾기만 바뀌었으므로, 작성 중인 이 칸은 새 버전 기준으로 이어서 저장할 수 있다.
-      if (saved.result.revision) setRevision(saved.result.revision);
+      // 즐겨찾기만 바뀌었으므로, 최신 기준으로 작성 중이던 칸은 새 버전으로 이어서 저장할 수 있다.
+      if (saved.result.revision && revision === settings.revision)
+        setRevision(saved.result.revision);
       context.notice("즐겨찾기에 넣었습니다: " + label(choice));
     } catch (e) {
       setError(e instanceof Error ? e.message : "저장 실패");
@@ -303,8 +310,25 @@ function RunnerForm({
       <h3>{fallback ? "대체 후보 순서" : "기본 실행 모델"}</h3>
       {dirty && revision !== settings.revision && (
         <p className="warning">
-          작성 중 설정이 변경됐습니다. 입력을 유지하며 이전 버전으로의 저장은
-          거부합니다.
+          작성하는 사이 다른 곳에서 이 {fallback ? "대체 후보 목록" : "역할의 값"}이
+          바뀌었습니다
+          {!fallback &&
+            `(지금 값: ${
+              settings.presets[settings.activePreset].roles[role]
+                ? label(settings.presets[settings.activePreset].roles[role])
+                : "미설정"
+            })`}
+          . 이대로는 저장되지 않습니다.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setDirty(false);
+              setReason("");
+              setError(null);
+            }}
+          >
+            지금 값 불러오기
+          </button>
         </p>
       )}
       <fieldset disabled={busy}>
@@ -399,31 +423,31 @@ function RunnerForm({
             </select>
           </label>
           {favorites.length > 0 && (
-            <div className="favorites" role="group" aria-label="즐겨찾기">
-              <span>즐겨찾기</span>
-              <div>
+            <label className="favorite-pick">
+              즐겨찾기
+              <select
+                value={String(favoriteIndex)}
+                onChange={(e) => {
+                  const fav = favorites[Number(e.target.value)];
+                  if (fav) pick(fav);
+                }}
+              >
+                <option value="-1">즐겨찾기에서 고르기</option>
                 {favorites.map((fav, i) => {
                   const blocked = blockedFor(fav.model);
                   return (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => pick(fav)}
-                      disabled={!usable(fav)}
-                      title={
-                        blocked
-                          ? "차단: " + blocked.reason
-                          : usable(fav)
-                            ? undefined
-                            : "지금 목록에 없는 모델"
-                      }
-                    >
+                    <option key={i} value={i} disabled={!usable(fav)}>
                       ★ {label(fav)}
-                    </button>
+                      {blocked
+                        ? " · 차단: " + blocked.reason
+                        : usable(fav)
+                          ? ""
+                          : " · 지금 목록에 없는 모델"}
+                    </option>
                   );
                 })}
-              </div>
-            </div>
+              </select>
+            </label>
           )}
         </div>
         <ErrorMessage error={spec?.error || null} />
