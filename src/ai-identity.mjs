@@ -111,34 +111,44 @@ export function inspectCardSendIdentity({ entries, session, currentPid } = {}) {
         `빈 셸이나 기록 없는 pane에는 카드를 보내지 않는다`,
     };
   }
-  const words = commandWords(launch.cmd);
-  if (!words) return {ok:false, reason:"unsafe-command", message:"카드 전송 불가: 단일 AI 실행 명령만 허용한다 (셸 결합·주석·확장 불가)"};
+  const parsed = launchIdentityOf(launch.cmd);
+  if (parsed.reason === "unsafe-command") return {ok:false, reason:"unsafe-command", message:"카드 전송 불가: 단일 AI 실행 명령만 허용한다 (셸 결합·주석·확장 불가)"};
+  if (parsed.reason === "not-ai") {
+    return {
+      ok: false,
+      reason: "not-ai",
+      harness: parsed.harness,
+      message:
+        `카드 전송 불가: ${session}의 시작 명령은 등록 AI 실행기(codex·omo·claude·devin)가 ` +
+        `아니다: ${launch.cmd.slice(0, 80)}`,
+    };
+  }
+  if (parsed.reason === "no-model") {
+    return {
+      ok: false,
+      reason: "no-model",
+      harness: parsed.harness,
+      message:
+        `카드 전송 불가: ${session}의 시작 명령에 모델이 없다(--model/-m) — ` +
+        `모델을 확인할 수 없는 AI 세션에는 카드를 보내지 않는다`,
+    };
+  }
+  return { ok: true, harness: parsed.harness, model: parsed.model, launch };
+}
+
+// 실행 명령 하나에서 등록 실행기와 모델을 읽는다. 실패하면 사유만 돌려주고 문장은 호출자가 만든다.
+// 카드 발령 신원(inspectCardSendIdentity)과 옛 세션 대조(dispatch-runner-guard)가 같은 판독을 쓴다.
+export function launchIdentityOf(cmd) {
+  const words = commandWords(cmd);
+  if (!words) return {ok:false, reason:"unsafe-command"};
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
   const executable = words.shift()?.split("/").pop() ?? "";
   // `kadan-<실행기>` 래퍼(예: ~/.kadan/bin/kadan-claude)는 인증 환경만 준비하고 실행기로 exec한다.
   // 붙여넣기 직전 실제 전경 프로세스가 그 실행기·모델인지 matchesAiProcess로 다시 확인한다.
   const wrapped = executable.startsWith("kadan-") ? executable.slice(6) : "";
   const harness = AI_HARNESS_NAMES.has(wrapped) ? wrapped : executable;
-  if (!AI_HARNESS_NAMES.has(harness)) {
-    return {
-      ok: false,
-      reason: "not-ai",
-      harness,
-      message:
-        `카드 전송 불가: ${session}의 시작 명령은 등록 AI 실행기(codex·omo·claude·devin)가 ` +
-        `아니다: ${launch.cmd.slice(0, 80)}`,
-    };
-  }
+  if (!AI_HARNESS_NAMES.has(harness)) return {ok:false, reason:"not-ai", harness};
   const model = modelOf(words);
-  if (!model) {
-    return {
-      ok: false,
-      reason: "no-model",
-      harness,
-      message:
-        `카드 전송 불가: ${session}의 시작 명령에 모델이 없다(--model/-m) — ` +
-        `모델을 확인할 수 없는 AI 세션에는 카드를 보내지 않는다`,
-    };
-  }
-  return { ok: true, harness, model, launch };
+  if (!model) return {ok:false, reason:"no-model", harness};
+  return {ok:true, harness, model};
 }
