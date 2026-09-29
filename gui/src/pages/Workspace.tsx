@@ -12,6 +12,8 @@ import {
   time,
 } from "../ui";
 import RelationMap from "./RelationMap";
+import WorktimeSummary from "./WorktimeSummary";
+import { durationLabel, workTitle } from "../worktime";
 import { usePaneScroll } from "../scroll";
 import { shortenTurn } from "../stopped";
 import { collectionHint, columnLabel, showDoneButOpen } from "../workspace-labels";
@@ -87,8 +89,24 @@ const baseColumns: Column[] = [
   },
   {
     key: "model",
-    label: "실행 모델",
-    render: (row) => <span title={row.modelTitle}>{row.model || "—"}</span>,
+    label: "모델(강도)",
+    render: (row) => (
+      <span className="cell-stack" title={row.modelTitle}>
+        {row.model || (row.modelState === "unknown" ? "모름" : "—")}
+        {row.effort && <small>강도 {row.effort}</small>}
+      </span>
+    ),
+  },
+  {
+    key: "workMs",
+    label: "작업 시간",
+    render: (row) => (
+      <span className="cell-stack" title={workTitle(row)}>
+        {durationLabel(row.workMs)}
+        {row.workMs != null && row.workBasis === "assigned" && <small>배정 기준</small>}
+        {row.workMs != null && row.reworks ? <small>재작업 {row.reworks}회</small> : null}
+      </span>
+    ),
   },
 ];
 type ColumnPrefs = {
@@ -173,7 +191,7 @@ export default function Workspace({ url }: { url: URL }) {
         : "";
   const available =
     collection === "work"
-      ? baseColumns.map((c) =>
+      ? baseColumns.filter((c) => c.key !== "workMs").map((c) =>
           c.key === "signalAt"
             ? {
                 key: "stateLabel",
@@ -189,14 +207,15 @@ export default function Workspace({ url }: { url: URL }) {
       (columns.order.indexOf(b.key) < 0 ? 99 : columns.order.indexOf(b.key)),
   );
   const visible = ordered.filter(
-    (c) => (c.key === "title" || !columns.hidden.includes(c.key)) && (c.key !== "model" || data?.rows.some(row => row.model)),
+    (c) => (c.key === "title" || !columns.hidden.includes(c.key)) && (c.key !== "model" || data?.rows.some(row => row.model || row.modelState === "unknown")) &&
+      (c.key !== "workMs" || data?.rows.some(row => row.workMs != null)),
   );
   const width = (key: string) =>
     Math.max(
       120,
       Math.min(
         900,
-        Number(columns.widths[key]) || ({title:290,healthLabel:145,signalAt:135,flowLabel:170,turnLabel:140,model:110,stateLabel:105}[key] ?? 140),
+        Number(columns.widths[key]) || ({title:290,healthLabel:145,signalAt:135,flowLabel:170,turnLabel:140,model:110,workMs:110,stateLabel:105}[key] ?? 140),
       ),
     );
   const move = (key: string, to: number) => {
@@ -379,6 +398,7 @@ export default function Workspace({ url }: { url: URL }) {
         retry={() => void resource.refresh(true)}
       />
       <Freshness collectedAt={data?.collectedAt} {...resource} />
+      {collection !== "work" && <WorktimeSummary />}
       {!data ? (
         <Loading />
       ) : (
