@@ -48,7 +48,34 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - `start`의 start 기록에는 `launchSource`(`settings`/`override`/`fallback`), `settingsRevision`을 남긴다. `override`면 `overrideReason`과 그때의 설정 명령(`settingsCmd`)도 남긴다. `fallback`이면 `fallbackIndex`·`fallbackReason`·`settingsPreset`과 1순위 명령(`settingsCmd`, 있으면)을 남긴다.
 - 설정 파일이 없으면 `start`는 예전처럼 `--cmd`가 필요하다. 인계 후임 생성은 선임 명령을 이유("인계: 선임 실행 명령 유지")와 함께 그대로 쓴다.
 - `work auto-configure`는 작업자·검수자 세션을 실제로 띄운 모델의 계열이 같으면 거부한다.
-- 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 자동 라우팅·자동 폴백은 만들지 않는다.
+- 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 자동 라우팅·자동 폴백은 만들지 않는다. 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.
+
+## 옛 세션 발령 막기
+
+작업자·검수자 기본값이 바뀐 뒤에도 옛 실행기·모델로 떠 있던 세션에 새 카드가 가는 일이 반복됐다(2026-09-23 grok→opus, 09-29 opus→sonnet). 기억에 기댄 규칙은 놓치므로 카드를 보내는 순간 세션과 지금 기본값을 대조한다(2026-09-29 [kyle] 승인).
+
+- **적용 범위**: 카드 발령만이다 — `kadan send --task`, `--execution`으로 발령 카드가 추론되는 경우, `work` 자동 발령. 모두 `guardedSend`의 `taskId` 경로 한 곳을 지난다. **`--raw` 발령도 같다** — `--raw`는 받는 쪽에 붙이는 역할 지침만 빼고 이 검사는 그대로 거친다. 일반 우편·질문·답장·감시 알림·인계·`kadan up` 첫 지문은 대상이 아니다. `card update --status assigned`, `kadan plan`, 대시보드는 세션에 아무것도 보내지 않으므로 이 경계와 무관하다.
+- **받는 역할이 작업자(`worker`)·검수자(`reviewer`) 프로필일 때만** 본다. 프로필은 세션 시작 기록의 `roleProfile` → 발령 쪽 프로필 인자(자동 발령) → 역할 지침 설정(`role-instructions.json`)·업무 owner·카드 단계(`implementation`·`fix`·`research`는 작업자, `review`는 검수자) 추론 순서로 정한다. 감독·슈퍼감독·비서 등은 대상이 아니다.
+  - 시작 기록에 프로필이 없는 옛 세션도 그 뒤 근거(역할 지침 설정·업무 owner·카드 단계)로 알아본다. **`--raw`여도 같은 규칙으로 추론한다** — 프로필이 빈 옛 시작 기록이라는 이유만으로 `--raw` 발령이 검사에서 빠지지 않는다(2026-09-29 검수에서 발견·수정).
+  - 프로필을 끝내 알 수 없으면(위 근거가 모두 없음) 일반 발령이든 `--raw`든 대조하지 않는다. 카드 발령의 실행 카드는 배정 때 단계가 필수라 실제로는 드물다.
+- **세션 값**은 "마지막 `stop` 이후, 지금 pane PID와 같은 start 기록 중 실행 명령(`cmd`)이 있는 것"에서 읽는다(`inspectCardSendIdentity`가 고른 기록). 이미 살아 있는 세션에 `kadan start`를 다시 부르면 같은 PID에 `cmd`·`harness`·`model`·`launchSource`가 빈 새 start 기록이 붙으므로 "가장 최근 start"는 기준으로 쓰지 않는다.
+- **기본값**은 발령 순간 `runner-settings.json`을 새로 읽고 그 프로필의 실행 명령으로 만든다.
+
+| 상황 | 결과 |
+| --- | --- |
+| 실행기 또는 모델이 다르다 | **거절**(종료 코드 ≠ 0, 전달·send 기록 없음, `KADAN_STALE_RUNNER`). 안내 3줄: 지금 기본값 / 세션 값 / 조치 |
+| 실행기·모델은 같고 강도·실행 인자만 다르다 | 통과 + 경고 한 줄(stderr), send 기록에 `runnerGuard: {result: "warn", code: "effort-or-args", settingsRevision}` |
+| `--allow-old-runner "<이유>"` | 거절을 예외 통과. stderr에 경고, send 기록에 `runnerGuard: {result: "allowed", code, reason, settingsRevision}`. **이유가 비었거나 값이 없으면 예외가 아니라서 항상 거절**한다 — 세션이 기본값과 같아도, `--raw`여도, 받는 역할이 무엇이든 같다(`KADAN_STALE_RUNNER`, 안내 2줄). 이유가 있는데 옛 세션이 아니면 옵션은 무시된다 |
+| 설정 파일이 없다 · 그 역할 값이 없다 | 대조하지 않음 |
+| 기본값 명령에서 실행기·모델을 못 읽는다 | 통과 + 경고(`expected-unreadable`) |
+| 설정 파일이 깨졌다 | 거절(`settings-unreadable`). 예외 이유로만 통과 |
+| 시작 기록이 없다·명령이 없다·모델을 모른다 | **기존 AI 신원 경계(`KADAN_AI_IDENTITY_UNVERIFIED`)가 먼저 거절한다.** 새 경계가 기존 경계를 약하게 만들지 않는다(2026-09-29 감독 결정). 이 검사 자체는 그 자리에서 경고만 한다(`session-unknown`, 대조할 세션 값이 없음) — 실제로는 위 신원 경계에 막혀 여기까지 오지 않는다 |
+
+- 옛 세션을 새로 띄워 보내려면 `kadan stop <역할>` 뒤 `kadan start <역할> --profile worker|reviewer`. 살아 있는 세션에 `start`만 다시 부르면 재사용일 뿐이라 옛 명령이 그대로다.
+- 강도는 start 기록에 따로 없고 명령 안에 있다. 실행기별 어댑터를 만들지 않으려고 "기본값 명령과 세션 명령의 문자열이 다른가"로만 본다. 그래서 강도 말고 다른 실행 인자·경로 접두·`kadan-<실행기>` 래퍼가 달라도 같은 경고가 나온다(막지는 않는다).
+- 모델 이름은 문자열로 비교한다. 별명(`--model opus`)으로 띄운 세션은 설정의 `claude-opus-5-5`와 다르게 보여 거절된다 — 의도한 세션이면 예외 이유로 보낸다.
+- `--fallback N`·`--cmd … --reason`으로 띄운 세션도 지금 기본값과 다르면 같은 규칙으로 거절된다.
+- `work` 자동 발령에는 예외 옵션이 없다. 거절되면 그 자동 실행이 멈추고 이유가 남는다.
 
 ## 대시보드 화면
 
