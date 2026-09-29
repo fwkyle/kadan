@@ -11,6 +11,7 @@
 - Existing form actions remain authoritative for writes, including revisions, CSRF tokens, origin validation and append-only storage. JSON responses avoid redirecting the browser after a save.
 - A shared client resource owns request cancellation, deadlines, deduplication, visibility suspension and freshness. Each screen subscribes to its own resource.
 - Menu counts use registered work links directly. Execution lists build work progress and inbox models only when a work collection or relationship map needs them; full work views retain those models.
+- Card work time and the model that ran each card are computed once per collection from the ledger start records and card history (`src/card-worktime.mjs`, cached with the row model) and served on card rows and `GET /api/dashboard/worktime`. See `docs/card-worktime.md`.
 - Completion-mail checks index records by short task ID within each read. They retain every matching full address and all handovers, and only inspect events preceding the completion, preserving ambiguity and duplicate-handover checks without rescanning unrelated history for every mail.
 - The CLI, storage, watch and floor retain zero package dependencies. The maintainer-approved exception is the browser build under `gui/`.
 

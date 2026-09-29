@@ -2,6 +2,11 @@ import {taskIdentity,taskEventKey} from './task-identity.mjs';
 import {buildRallies} from './rallies.mjs';
 import { workEntries, effectiveCardRole } from './handover-state.mjs';
 
+// 실행 명령에서 추론 강도를 읽는다. 실행기마다 강도 플래그가 다르다: codex는 model_reasoning_effort, claude는 --effort, omo는 --thinking.
+// 하나만 읽으면 다른 실행기의 강도가 화면에서 빈칸이 된다(2026-09-12 fable 발령에서 실제로 빔).
+// 따옴표는 셸을 거치며 '"max"' 처럼 겹쳐 들어온다. 한 겹만 벗기면 강도가 빈칸이 된다(2026-09-12 kimi 발령에서 실제로 빔).
+export const effortOfCmd=cmd=>typeof cmd==='string'?(cmd.match(/model_reasoning_effort\s*=\s*["']*([A-Za-z]+)["']*|--(?:effort|thinking)[=\s]+["']*([A-Za-z]+)["']*/)?.slice(1).find(Boolean)||''):'';
+
 // 카드 한 장과 그 카드에 대한 여러 역할의 실행을 분리한다.
 export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now()}) {
   if(entries.some(e=>e?.broken))throw new Error('원장 손상: 카드 실행 상태 모름');
@@ -26,10 +31,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
   for(const e of entries) {
     if(e?.kind!=='start'||!e.role||!e.model)continue;
     const stamp=Date.parse(e.t)||0;
-    // 실행기마다 강도 플래그가 다르다: codex는 model_reasoning_effort, claude는 --effort, omo는 --thinking.
-    // 하나만 읽으면 다른 실행기의 강도가 화면에서 빈칸이 된다(2026-09-12 fable 발령에서 실제로 빔).
-    // 따옴표는 셸을 거치며 '"max"' 처럼 겹쳐 들어온다. 한 겹만 벗기면 강도가 빈칸이 된다(2026-09-12 kimi 발령에서 실제로 빔).
-    const effort=typeof e.cmd==='string'?(e.cmd.match(/model_reasoning_effort\s*=\s*["']*([A-Za-z]+)["']*|--(?:effort|thinking)[=\s]+["']*([A-Za-z]+)["']*/)?.slice(1).find(Boolean)||''):'';
+    const effort=effortOfCmd(e.cmd);
     if(!models[e.role]||stamp>=(Date.parse(models[e.role].at)||0))models[e.role]={harness:e.harness||'',model:String(e.model),at:e.t||'',effort};
   }
   const classify=run=>{
