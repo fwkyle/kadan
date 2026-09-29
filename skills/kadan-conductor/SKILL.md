@@ -19,6 +19,8 @@ description: Kadan conductor harness. Coordinate workers and reviewers with card
 
 자동 전달은 명시 설정한 업무에만 작동한다. 설정하지 않은 일을 자동이라고 보고하거나 진행 중 업무를 임의 전환하지 않는다. 구체적인 선택 기준은 [가벼운 실행이 기본](references/operating-contract.md#가벼운-실행이-기본-2026-09-10-사용자-정정), 자동 설정은 [자동 전달 안내](../../docs/automatic-review.md)를 따른다.
 
+작업 흐름(flow)을 지정하지 않으면 개발용 [표준 흐름](references/standard-flow.md)과 [티키타카](references/tiki-taka.md)를 쓴다. 사용자가 흐름을 지정하면 `references/*-flow.md`의 해당 문서를 따른다. 현재 추가 흐름: [레드팀100](references/redteam-100-flow.md)(AI 페르소나 패널 + 실제 사용 관찰로 서비스 시장성·이탈 지점 점검).
+
 ## 업무와 카드는 한 번 구체화한다
 
 - 위임할 결과 중심 작업은 업무 한 장에 목표·전체 대상·완료 조건·책임 감독을 둔다. 구현·검수·수정은 그 업무의 실행으로 연결한다.
@@ -69,6 +71,7 @@ description: Kadan conductor harness. Coordinate workers and reviewers with card
 | 전달·대기·완료·외부 실행 | [발령과 대기](references/dispatch-wait.md) |
 | 왕복 상한·검수 범위·배틀·진행 조정 | [티키타카](references/tiki-taka.md) |
 | 대량 반복·독립 병렬 | [표준 흐름](references/standard-flow.md) |
+| 페르소나 패널 레드팀·시장성 점검 | [레드팀100 흐름](references/redteam-100-flow.md) |
 | 역할 생성·실행기·유실 복구 | [작업자 생성](references/worker-creation.md) |
 | 감독 임명·교대 | [임명장](references/appointment-template.md) |
 | 세션 수명·판 종료 | [종료·정리](references/cleanup.md) |
