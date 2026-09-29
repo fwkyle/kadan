@@ -3,7 +3,7 @@
 // 추가만 하고 기존 줄은 고치거나 지우지 않는다. 조금이라도 불확실하면 건너뛴다.
 import fs from "node:fs";
 import { ledgerHome, readLedger } from "./ledger.mjs";
-import { parseHierarchy } from "./hierarchy.mjs";
+import { parseHierarchy, USER_RECIPIENT } from "./hierarchy.mjs";
 import { commandWords } from "./ai-identity.mjs";
 import { withHierarchyLock } from './hierarchy-lock.mjs';
 
@@ -34,11 +34,26 @@ function readTable(hierarchyPath) {
 }
 
 // 같은 순간 두 곳이 고치면 한쪽이 사라지므로 자기 잠금으로 막는다. 남의 잠금은 지우지 않는다.
-function withLock(hierarchyPath, run) {
-  try { return withHierarchyLock(hierarchyPath, run); }
-  catch (error) {
-    if (error.code !== 'HIERARCHY_LOCKED') throw error;
-    return { registered: false, reason: "다른 등록이 진행 중" };
+// 감독이 작업자를 여러 개 동시에 띄우면 등록 잠금이 짧게 겹친다. 즉시 포기하면 그 역할은
+// 다시 시작하기 전까지 관계표에 빠진 채로 남으므로, 잠깐 기다렸다가 다시 얻는다(2026-09-28).
+// 인계·정리처럼 오래 잡는 잠금이면 예산 안에 얻지 못하고 기존처럼 건너뛴다.
+const LOCK_WAIT_MS = 2000;
+const LOCK_POLL_MS = 100;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withLock(hierarchyPath, run, waitMs = LOCK_WAIT_MS) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try { return withHierarchyLock(hierarchyPath, run); }
+    catch (error) {
+      if (error.code !== 'HIERARCHY_LOCKED') throw error;
+      const left = deadline - Date.now();
+      if (left <= 0) return { registered: false, reason: "다른 등록이 진행 중" };
+      sleepSync(Math.min(LOCK_POLL_MS, left));
+    }
   }
 }
 
@@ -63,20 +78,20 @@ export function isKadanToolCommand(cmd) {
   return TOOL_SUBCOMMANDS.has(words[i]);
 }
 
-export function registerStartedRole({ role, creator, cmd, home = ledgerHome(), entries = null } = {}) {
-  if (!role) return { registered: false, reason: "역할 없음" };
-  if (isKadanToolCommand(cmd)) return { registered: false, reason: "카단 운영 도구 세션" };
-  if (!creator || creator === "사람" || creator === "watch") {
-    return { registered: false, reason: "만든 사람의 역할을 모름" };
-  }
-  if (creator === role) return { registered: false, reason: "자기 자신은 상위가 될 수 없음" };
+// 감시기가 실제로 읽는 관계표 경로를 찾는다. 모르면 등록 자체를 건너뛴다.
+function hierarchyPathFor(home, entries) {
   let hierarchyPath;
   try {
     hierarchyPath = activeHierarchyPath(entries ?? readLedger(home));
   } catch {
-    return { registered: false, reason: "원장을 읽지 못함" };
+    return { error: "원장을 읽지 못함" };
   }
-  if (!hierarchyPath) return { registered: false, reason: "감시기가 읽는 관계표를 모름" };
+  if (!hierarchyPath) return { error: "감시기가 읽는 관계표를 모름" };
+  return { hierarchyPath };
+}
+
+// 표에 한 줄을 더한다. 기존 줄은 고치거나 지우지 않는다(추가만).
+function addLine(hierarchyPath, role, parent, waitMs) {
   return withLock(hierarchyPath, () => {
     let table;
     try {
@@ -88,10 +103,10 @@ export function registerStartedRole({ role, creator, cmd, home = ledgerHome(), e
       return { registered: false, reason: "이미 등록됨", parent: table[role], hierarchyPath };
     }
     // 상위가 표에 없으면 위로 올라가는 길이 끊긴다. 그때는 사람이 정하게 둔다.
-    if (!Object.hasOwn(table, creator)) {
-      return { registered: false, reason: `상위 ${creator}가 관계표에 없음`, hierarchyPath };
+    if (parent !== USER_RECIPIENT && !Object.hasOwn(table, parent)) {
+      return { registered: false, reason: `상위 ${parent}가 관계표에 없음`, hierarchyPath };
     }
-    const next = { ...table, [role]: creator };
+    const next = { ...table, [role]: parent };
     try {
       parseHierarchy(next);
     } catch (error) {
@@ -105,6 +120,32 @@ export function registerStartedRole({ role, creator, cmd, home = ledgerHome(), e
       try { fs.unlinkSync(temporaryPath); } catch {}
       return { registered: false, reason: `관계표를 쓰지 못함: ${error.message}`, hierarchyPath };
     }
-    return { registered: true, parent: creator, hierarchyPath };
-  });
+    return { registered: true, parent, hierarchyPath };
+  }, waitMs);
+}
+
+export function registerStartedRole({ role, creator, cmd, home = ledgerHome(), entries = null, lockWaitMs } = {}) {
+  if (!role) return { registered: false, reason: "역할 없음" };
+  if (isKadanToolCommand(cmd)) return { registered: false, reason: "카단 운영 도구 세션" };
+  if (!creator || creator === "사람" || creator === "watch") {
+    return { registered: false, reason: "만든 사람의 역할을 모름" };
+  }
+  if (creator === role) return { registered: false, reason: "자기 자신은 상위가 될 수 없음" };
+  const found = hierarchyPathFor(home, entries);
+  if (found.error) return { registered: false, reason: found.error };
+  return addLine(found.hierarchyPath, role, creator, lockWaitMs);
+}
+
+// 사람이 직접 띄웠거나 자동 등록이 빠진 역할을 표에 더한다(kadan hierarchy add).
+// 자동 등록과 같은 검증·잠금을 거치며, 기존 줄은 덮어쓰지 않는다.
+export function registerRoleManually({ role, parent, home = ledgerHome(), entries = null, lockWaitMs } = {}) {
+  if (typeof role !== "string" || !role || /\s/.test(role) || role === USER_RECIPIENT) {
+    return { registered: false, reason: "역할 이름이 올바르지 않음" };
+  }
+  if (typeof parent !== "string" || !parent || /\s/.test(parent)) {
+    return { registered: false, reason: "상위 이름이 올바르지 않음" };
+  }
+  const found = hierarchyPathFor(home, entries);
+  if (found.error) return { registered: false, reason: found.error };
+  return addLine(found.hierarchyPath, role, parent, lockWaitMs);
 }
