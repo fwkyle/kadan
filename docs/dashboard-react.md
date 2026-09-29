@@ -10,6 +10,8 @@
 - `src/dashboard-api.mjs`: bounded JSON reads using the existing card, work, mail, decision and runner models.
 - Existing form actions remain authoritative for writes, including revisions, CSRF tokens, origin validation and append-only storage. JSON responses avoid redirecting the browser after a save.
 - A shared client resource owns request cancellation, deadlines, deduplication, visibility suspension and freshness. Each screen subscribes to its own resource.
+- Menu counts use registered work links directly. Execution lists build work progress and inbox models only when a work collection or relationship map needs them; full work views retain those models.
+- Completion-mail checks index records by short task ID within each read. They retain every matching full address and all handovers, and only inspect events preceding the completion, preserving ambiguity and duplicate-handover checks without rescanning unrelated history for every mail.
 - The CLI, storage, watch and floor retain zero package dependencies. The maintainer-approved exception is the browser build under `gui/`.
 
 The structure follows OpenCodex's separation of a built GUI, JSON management endpoints and shared client resources. Its provider-specific code and application-wide abstractions are not copied.

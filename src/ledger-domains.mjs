@@ -76,11 +76,12 @@ export function validateDomainStreams(streams,legacy = []) {
   const history=[...legacy,...result];
   const mails = new Map(history.filter(row=>row?.kind==='send' && row.mailId).map(row=>[row.mailId,row]));
   const completions = new Map();
+  const lookup = completionHistory(history);
   for (const done of result.filter(row=>row.kind==='done' && row.completionMailId)) {
     const mail=mails.get(done.completionMailId),request=mail && mails.get(mail.replyTo);
     if (!mail || mail.systemGenerated!=='task-completion' || !mail.completion || !mail.replyFinal || mail.transport!=='mailbox' || own(mail,'taskId') ||
         mail._ledgerOrder!==done._ledgerOrder+1 || mail.by!==done.role || mail.completionTaskId!==done.taskId || mail.result!==done.result ||
-        !request || request!==completionRequest(done,history.slice(0,history.indexOf(done))) || request.by!==mail.role || !request.by || request.by==='모름')
+        !request || request!==completionRequest(done,lookup.before(done)) || request.by!==mail.role || !request.by || request.by==='모름')
       throw new Error('도메인 원장 완료 우편 연결 손상');
     if (completions.has(mail.mailId)) throw new Error('도메인 원장 완료 우편 중복');
     completions.set(mail.mailId,done);
@@ -119,6 +120,27 @@ const validTask = value => typeof value.taskId === 'string' && value.taskId &&
   (!value.executionKey || (typeof value.executionKey === 'string' &&
     (value.taskId === value.executionKey || value.taskId === value.executionKey.split('/').at(-1))));
 const explicitTaskKey = value => value.executionKey || (value.taskId?.includes('/') ? value.taskId : null);
+// 완료마다 전체 감시·우편 이력을 다시 훑지 않는다. 같은 짧은 ID의 다른 정식 주소도 함께
+// 보존해야 별칭 충돌을 판정할 수 있다. 인계는 다른 카드의 사건도 보존한다(중복 인계 ID).
+// 조회마다 새로 만들고 완료 이전 행만 넘기므로 미래 주소나 인계가 과거 판정을 바꾸지 않는다.
+function completionHistory(history) {
+  const positions=new Map(),tasks=new Map(),transfers=[],doneByMail=new Map();
+  history.forEach((entry,index)=>{
+    if(!positions.has(entry))positions.set(entry,index);
+    if(entry?.kind==='done'&&!doneByMail.has(entry.completionMailId))doneByMail.set(entry.completionMailId,entry);
+    if(isMailTransfer(entry)&&Array.isArray(entry.taskIds))transfers.push({entry,index});
+    else if(validTask(entry||{})){
+      const id=entry.taskId.split('/').at(-1);
+      if(!tasks.has(id))tasks.set(id,[]);
+      tasks.get(id).push({entry,index});
+    }
+  });
+  return {positions,doneByMail,before(done){
+    const end=positions.get(done),id=typeof done.taskId==='string'?done.taskId.split('/').at(-1):null;
+    return [...(tasks.get(id)||[]),...transfers].filter(row=>row.index<end)
+      .sort((a,b)=>a.index-b.index).map(row=>row.entry);
+  }};
+}
 function completionRequest(done,history) {
   // 우편 책임과 달리 작업은 확정 인계의 taskIds에 적힌 실행만 옮긴다.
   // 원장 안의 정식 주소로 같은 taskIdentity 별칭 규칙을 적용하며 모호하면 통지하지 않는다.
@@ -153,15 +175,20 @@ function completionRequest(done,history) {
 
 // 일반 답장의 연결 검사를 완화하지 않는다. 저장된 done과 원발령을 확인한 결과 우편만 예외다.
 export function isTaskCompletionReply(entries,mail,request) {
-  if(!request||!taskSend(request)||mail.systemGenerated!=='task-completion'||mail.completion!==true||
-    mail.replyFinal!==true||mail.transport!=='mailbox'||own(mail,'taskId')||mail.replyTo!==request.mailId)return false;
-  const mailIndex=entries.indexOf(mail);
-  const doneIndex=entries.findIndex(entry=>entry?.kind==='done'&&entry.completionMailId===mail.mailId);
-  if(doneIndex<0||doneIndex>=mailIndex)return false;
-  const done=entries[doneIndex];
-  return validTask(done)&&['ok','failed'].includes(done.result)&&done.role===mail.by&&done.taskId===mail.completionTaskId&&
-    done.result===mail.result&&mail.role===request.by&&mail.workKey===request.workKey&&
-    mail.executionKey===(done.executionKey??request.executionKey)&&completionRequest(done,entries.slice(0,doneIndex))===request;
+  return createTaskCompletionChecker(entries)(mail,request);
+}
+export function createTaskCompletionChecker(entries) {
+  let lookup;
+  return (mail,request)=>{
+    if(!request||!taskSend(request)||mail.systemGenerated!=='task-completion'||mail.completion!==true||
+      mail.replyFinal!==true||mail.transport!=='mailbox'||own(mail,'taskId')||mail.replyTo!==request.mailId)return false;
+    lookup??=completionHistory(entries);
+    const done=lookup.doneByMail.get(mail.mailId),mailIndex=lookup.positions.get(mail),doneIndex=lookup.positions.get(done);
+    if(!done||mailIndex===undefined||doneIndex>=mailIndex)return false;
+    return validTask(done)&&['ok','failed'].includes(done.result)&&done.role===mail.by&&done.taskId===mail.completionTaskId&&
+      done.result===mail.result&&mail.role===request.by&&mail.workKey===request.workKey&&
+      mail.executionKey===(done.executionKey??request.executionKey)&&completionRequest(done,lookup.before(done))===request;
+  };
 }
 function completionFor(done,state,home) {
   if (done.kind !== 'done' || !done.role || !validTask(done) || !['ok','failed'].includes(done.result)) return null;

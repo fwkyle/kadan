@@ -31,12 +31,19 @@ const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;
 // 업무 목록 계산은 원장 조회를 포함해 약 1초 걸린다(2026-09-25 실측). 같은 공통 수집으로 여러 번 그릴 때는 한 번만 계산하고,
 // 수집이 바뀌면(새 객체) 새로 계산한다. 감시 서버는 미리 수집할 때 이것까지 해 둔다.
 const worksBySnapshot=new WeakMap();
+const registeredBySnapshot=new WeakMap();
+export function registeredCenterWorks(snapshot){
+ const hit=registeredBySnapshot.get(snapshot);if(hit)return hit;
+ let works=snapshot.home?[]:null,workError=null;
+ if(snapshot.home)try{works=snapshot.registeredWorks??new WorkStore(snapshot.home).list();}catch(error){works=null;workError=error.message;}
+ const value={works,workError};registeredBySnapshot.set(snapshot,value);return value;
+}
 export function prepareCenterWall(snapshot){
  if(!snapshot||typeof snapshot!=='object')return {works:null,workError:null};
  const hit=worksBySnapshot.get(snapshot);if(hit)return hit;
- const {centerError,entries=[],home,ledgerState,registeredWorks}=snapshot,center=centerError?null:snapshot.center;
- let works=home?[]:null,workError=null;
- if(home)try{const registered=registeredWorks??new WorkStore(home).list();works=workDashboardModel(registered,center,entries,operationsFlowSummaries(home,registered,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
+ const {centerError,entries=[],home,ledgerState}=snapshot,center=centerError?null:snapshot.center;
+ let {works,workError}=registeredCenterWorks(snapshot);
+ if(works)try{works=workDashboardModel(works,center,entries,operationsFlowSummaries(home,works,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
  const value={works,workError};worksBySnapshot.set(snapshot,value);return value;
 }
 export function renderCenterWall(snapshot, {token='',url=new URL('http://localhost')}={}) {
