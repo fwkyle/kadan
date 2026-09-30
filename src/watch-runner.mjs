@@ -919,9 +919,10 @@ export async function runWatch({
           observedSessions:[...roles.observations.values()].filter(r=>r.alive).length,
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
           memoryMb:roundAll({rss:memory.rss/2**20,heapUsed:memory.heapUsed/2**20}),window:timingWindow};
-        timingWindow=null;
         record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
+        // 기록에 성공한 뒤에만 비운다. 잠금으로 실패하면 모은 주기를 다음 기록에 이어 싣는다.
+        timingWindow=null;
         lastCycleRecordedAt = cycleAt;
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
     }
