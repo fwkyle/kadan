@@ -5,10 +5,11 @@ import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs
 import {readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {captureRuntimeVersion} from './runtime-version.mjs';
 import {WatchAI} from './watch-ai.mjs';
+import {cycleReads} from './watch-reads.mjs';
 import {watchReportCommand,watchAILabel} from './watch-report.mjs';
 import {notifyUser} from './watch-system.mjs';
 import {storageCommand} from './storage-migration.mjs';
-import {assertWritable,storageTransaction} from './storage.mjs';
+import {assertWritable,storageTransaction,storageVersion} from './storage.mjs';
 import {SecretaryMailbox} from './secretary-mailbox.mjs';
 import {Mailbox,inboxCommand} from './mailbox.mjs';
 import {composeRoleInstructions,inferDispatchProfile,startRoleProfile} from './role-instructions.mjs';
@@ -1808,12 +1809,16 @@ function cmdWatch(argv, flags) {
   const watchController=new AbortController();
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
+  // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
+  const reads=cycleReads({readEntries:()=>readLedger(),readCards:()=>new CardStore(ledgerHome()).list(),
+    readWorks:()=>new WorkStore(ledgerHome()).list(),version:()=>storageVersion(ledgerHome())});
   return runWatch({
     runtime:captureRuntimeVersion(),
     floor,
-    readEntries: readLedger,
-    readCards: () => new CardStore(ledgerHome()).list(),
-    readWorks: () => new WorkStore(ledgerHome()).list(),
+    readEntries: reads.readEntries,
+    readCards: reads.readCards,
+    readWorks: reads.readWorks,
+    reads,
     startReportGraceMs: startReportMinutes*60_000,
     completionGraceMs: completionGraceMinutes*60_000,
     stallAfterMs: stallAfterMinutes*60_000,
@@ -1831,7 +1836,7 @@ function cmdWatch(argv, flags) {
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('입력 큐 재개 세대 변경');
       return floor.sendEnter(session);
     } : null,
-    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage}) : null,
+    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage,readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,
     intervalMs: intervalSeconds * 1000,

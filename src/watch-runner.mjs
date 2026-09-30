@@ -8,7 +8,7 @@ import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {SupervisorHealth,observationContext} from './watch-supervisor-health.mjs';
 import {ProgressWatch,WORKER_RECHECK_MS} from './watch-progress.mjs';
 import {assessMissingStartReports,alertedStartReports} from './watch-start-report.mjs';
-import {buildCycleEntry,cycleRecordDue} from './watch-cycle.mjs';
+import {buildCycleEntry,cycleRecordDue,ioCounter,timedCall,roundAll,accumulateTiming} from './watch-cycle.mjs';
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -429,9 +429,18 @@ export async function runWatch({
   signal = null,
   sleep = (ms,signal) => delay(ms,undefined,signal?{signal}:{}),
   print = console.log,
+  // cycleReads()가 감싼 읽기의 주기 시작·횟수 통계. 없으면 읽기 횟수를 기록하지 않는다.
+  reads = null,
+  cpuUsage = previous => process.cpuUsage(previous),
+  memoryUsage = () => process.memoryUsage(),
 }) {
   if (judgeCmd && !ai) throw new Error("감시AI 보고 실행기가 필요합니다");
   assertSingleWatch(spawn);
+  // 기록 쓰기·알림 전송은 여러 단계에서 불리고 원장 잠금이나 바닥 전송을 기다릴 수 있다.
+  // 단계 구간과 별도로 호출 수·총시간·최대시간을 모은다.
+  const io = {record:ioCounter(), send:ioCounter()};
+  record = timedCall(io.record, record, measure);
+  sendAlert = timedCall(io.send, sendAlert, measure);
   const sendToRole = sendAlert;
   sendAlert = (role, message) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
@@ -474,12 +483,16 @@ export async function runWatch({
   const completedAI = [];
   let activeAI = null;
   let lockFailures = 0;
+  // 주기 기록은 5분에 한 번이라, 그 사이 주기들의 시간을 합계·최대로 모아 함께 남긴다.
+  let timingWindow = null;
 
   try { while (!signal?.aborted) {
     // 원장 잠금(SQLITE_BUSY)은 원인이 식별된 실패다. 이번 주기만 건너뛰고 다음 주기에 다시 본다. 같은 오류가
     // 3주기 연속이면 멈추고 보고한다(잠긴 규칙 3). 2026-09-24 22:55: 잠금 오류 한 번에 감시가 종료됐다.
     try {
-    const cycleAt = now(),began=measure();
+    const cycleAt = now(),began=measure(),cpuAtStart=cpuUsage();
+    reads?.begin();
+    io.record.reset(); io.send.reset();
     let entries = [], mailEntries = [];
     let ledgerError = null;
     try {
@@ -564,6 +577,10 @@ export async function runWatch({
       ? { observations: new Map(), liveSessions: new Set(), screenAlerts: [] }
       : collectRoles(floor, entries, observedSessions, cards);
     const observedAt=measure();
+    // otherMs를 단계별로 나눈다. 감시AI 응답은 주기가 기다리지 않으므로 여기 들어가지 않는다
+    // (응답 시간은 watch-ai-call의 durationMs에 따로 남는다).
+    const stages={};let lapAt=observedAt;
+    const lap=name=>{const at=measure();stages[name]=at-lapAt;lapAt=at;};
     const workerObservations = scope ? new Map([...roles.observations].filter(([s])=>scope.sessions.has(s))) : roles.observations;
     const retrySessions = observationError || !scope ? new Set() : rateLimitRetry.tick({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
@@ -582,6 +599,7 @@ export async function runWatch({
         } catch { return false; }
       },
     });
+    lap('rateLimit');
     // 명시 큐 배너는 AI 판정 없이 결정식으로 먼저 처리한다. Enter를 보낸 세션은 이번 주기의 정체·AI 판정에서 뺀다.
     const queueHandled = observationError || !scope ? new Set() : await queueResume.tick({
       observations:workerObservations, tasks:scope.entries, cards:cards??[], entries, now:cycleAt,
@@ -597,6 +615,7 @@ export async function runWatch({
         } catch { return false; }
       },
     });
+    lap('queueResume');
     const roleAssessment = observationError
       ? { states: roleStates, alerts: [] }
       : assessRoles(
@@ -655,6 +674,7 @@ export async function runWatch({
           queuedAfterMs
         );
     queuedStates = queuedAssessment.states;
+    lap('assess');
 
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueHandled.has(a.session));
     let reportAlerts=[];
@@ -733,6 +753,7 @@ export async function runWatch({
       });
       break;
     }
+    lap('ai');
     const roleAlerts=judgeCmd?stallAlerts.filter(a=>!a.id.startsWith('stall:')):stallAlerts;
     const stallSessions=new Set(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>a.session));
     const nextAlerts = [
@@ -858,6 +879,7 @@ export async function runWatch({
         lastWakeAt = cycleAt;
       }
     }
+    lap('alerts');
     let mailError = false;
     if (mailWatch && !observationError) {
       try {
@@ -874,17 +896,30 @@ export async function runWatch({
       for (const role of mailDelivered) deliveredRecipients.add(role);
       mailDelivered.clear();
     }
+    lap('mail');
     const absorbed = observationError ? {states:roleStates,screenAlerts:[]} : absorbDeliveredScreens(floor, roleStates, deliveredRecipients);
     roleStates = absorbed.states;
     // Absorption belongs to this cycle's baseline, not a second delivery pass.
     activeAlerts = [...new Map(
       [...changes.active, ...deliveryFailures.values(), ...absorbed.screenAlerts].map(alert => [alert.id, alert])
     ).values()];
+    lap('absorb');
+    const finished=measure();
+    const cpu=cpuUsage(cpuAtStart);
+    // 주기 사건 자신의 기록 쓰기는 이 시간에 들어가지 않는다(쓰기 전에 계산한다).
+    const sample={totalMs:finished-began,ledgerMs:ledgerReadAt-began,prepareMs:preparedAt-ledgerReadAt,screenMs:observedAt-preparedAt,otherMs:finished-observedAt,
+      stages:roundAll(stages),cpuMs:roundAll({user:cpu.user/1000,system:cpu.system/1000}),
+      ...(reads?{reads:reads.stats()}:{}),record:io.record.stats(),send:io.send.stats()};
+    timingWindow=accumulateTiming(timingWindow,sample);
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
-        const finished=measure();
-        const timing={totalMs:finished-began,ledgerMs:ledgerReadAt-began,prepareMs:preparedAt-ledgerReadAt,screenMs:observedAt-preparedAt,otherMs:finished-observedAt,observedSessions:[...roles.observations.values()].filter(r=>r.alive).length};
+        const memory=memoryUsage();
+        const timing={totalMs:sample.totalMs,ledgerMs:sample.ledgerMs,prepareMs:sample.prepareMs,screenMs:sample.screenMs,otherMs:sample.otherMs,
+          observedSessions:[...roles.observations.values()].filter(r=>r.alive).length,
+          stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
+          memoryMb:roundAll({rss:memory.rss/2**20,heapUsed:memory.heapUsed/2**20}),window:timingWindow};
+        timingWindow=null;
         record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
         lastCycleRecordedAt = cycleAt;

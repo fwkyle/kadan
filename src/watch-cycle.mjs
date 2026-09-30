@@ -15,6 +15,38 @@ export function buildCycleEntry({runtime = null,timing = null,pid, hierarchyPath
   intervalMs, sessions: sessions == null ? null : sessions.length, supervisorSessions: supervisorSessions == null ? null : supervisorSessions.length, ok};
 }
 
+// 순회 시간 분해(2026-09-30 계획 0단계). 주기 기록이 5분에 한 번이라 그 사이 주기는 합계·최대로 모은다.
+const round1 = value => Math.round(value * 10) / 10;
+export const roundAll = values => Object.fromEntries(Object.entries(values).map(([key, value]) => [key, round1(value)]));
+export function ioCounter() {
+ let count = 0, total = 0, max = 0;
+ return {
+  add(ms) { count++; total += ms; max = Math.max(max, ms); },
+  reset() { count = 0; total = 0; max = 0; },
+  stats: () => ({count, ms: round1(total), maxMs: round1(max)}),
+ };
+}
+export const timedCall = (counter, fn, measure) => (...args) => {
+ const at = measure();
+ try { return fn(...args); } finally { counter.add(measure() - at); }
+};
+// 숫자는 {sum,max}로, maxMs는 최대값만 모은다. cycles는 모은 주기 수다.
+export function accumulateTiming(window, sample) {
+ const add = (target, values) => {
+  for (const [key, value] of Object.entries(values)) {
+   if (key === 'maxMs') target.maxMs = round1(Math.max(target.maxMs ?? 0, value));
+   else if (typeof value === 'number') {
+    const slot = target[key] ?? (target[key] = {sum: 0, max: 0});
+    slot.sum = round1(slot.sum + value); slot.max = round1(Math.max(slot.max, value));
+   } else if (value && typeof value === 'object') add(target[key] ?? (target[key] = {}), value);
+  }
+  return target;
+ };
+ const next = window ?? {cycles: 0};
+ next.cycles++;
+ return add(next, sample);
+}
+
 const ms = value => {const t = Date.parse(value); return Number.isFinite(t) ? t : null;};
 
 // 현재 감시기(worker) 기준 마지막 주기와 최근 24시간 공백. 기록이 하나도 없으면 unknown이며 0으로 꾸미지 않는다.
