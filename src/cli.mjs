@@ -11,7 +11,7 @@ import {storageCommand} from './storage-migration.mjs';
 import {assertWritable,storageTransaction} from './storage.mjs';
 import {SecretaryMailbox} from './secretary-mailbox.mjs';
 import {Mailbox,inboxCommand} from './mailbox.mjs';
-import {composeRoleInstructions,startRoleProfile} from './role-instructions.mjs';
+import {composeRoleInstructions,inferDispatchProfile,startRoleProfile} from './role-instructions.mjs';
 import {composeMailInstructions} from './mail-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
@@ -32,6 +32,7 @@ import { Handover } from "./handover.mjs";
 import { HandoverRunner } from "./handover-runner.mjs";
 import { workEntries, openTaskIds } from "./handover-state.mjs";
 import { inspectStartCmdPolicy, inspectCardSendIdentity } from "./ai-identity.mjs";
+import { inspectDispatchRunnerGuard } from "./dispatch-runner-guard.mjs";
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
 
 import { parseHierarchy } from "./hierarchy.mjs";
@@ -639,6 +640,7 @@ export function guardedSend({
   notificationOnly = false,
   notificationGuard,
   source,
+  allowOldRunner,
   env = process.env,
   recordedPid: expectedPid,
   record = appendLedger,
@@ -718,7 +720,7 @@ export function guardedSend({
   }
   // 카드 연결 전송은 현재 세대의 AI 신원(등록 실행기+모델)이 확인될 때만 전달한다.
   // 일반 우편·질문·답장은 taskId가 없으므로 이 경계를 거치지 않는다.
-  let cardIdentity;
+  let cardIdentity, runnerGuard;
   if (taskId != null) {
     const identity = inspectCardSendIdentity({ entries, session, currentPid });
     if (!identity.ok) {
@@ -728,6 +730,18 @@ export function guardedSend({
       throw error;
     }
     cardIdentity = {...identity, currentPid};
+    // 작업자·검수자 기본값이 바뀐 뒤에도 떠 있는 옛 실행기·모델 세션에는 카드를 보내지 않는다(2026-09-29 [kyle]).
+    // --raw는 역할 지침만 뺀다 — 지침 없이도 프로필은 같은 규칙으로 정해, 프로필이 빈 옛 시작 기록이 raw로 검사를 피하지 못하게 한다.
+    const guardProfile = identity.launch.roleProfile ?? roleProfile ?? composed.metadata.profile
+      ?? (raw ? inferDispatchProfile({ home, role, taskId, mailContext, entries, cards }).profile : undefined);
+    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, allowOldRunner });
+    if (runnerGuard.result === "reject") {
+      const error = new Error(runnerGuard.message);
+      error.code = "KADAN_STALE_RUNNER";
+      error.delivery = "not-sent";
+      throw error;
+    }
+    if (runnerGuard.warning) console.error(runnerGuard.warning);
   }
   if (mailContext?.replyTo) resolveReplyContext();
 
@@ -758,6 +772,7 @@ export function guardedSend({
     roleInstructions: composed.metadata,
     originalCardPath,
     ...(composed.metadata.profile ? {roleProfile:composed.metadata.profile} : {}),
+    ...(runnerGuard?.ledger ? {runnerGuard:runnerGuard.ledger} : {}),
     by: resolveLedgerBy({ source, env }),
     ...(taskId != null ? { taskId } : {}),
     ...(originalTaskId!==taskId?{rawTaskId:originalTaskId}:{}),
@@ -1487,7 +1502,7 @@ function cmdStart(argv, flags) {
 function cmdSend(argv, flags) {
   const role = argv[0];
   if (!role) {
-    die("사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] [--execution <실행키>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). --task는 작업 발령이고 --work·--execution은 우편의 연결 주소다");
+    die("사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] [--execution <실행키>] [--allow-old-runner <이유>] [--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). --task는 작업 발령이고 --work·--execution은 우편의 연결 주소다");
   }
   if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
   const argText = argv.slice(1).join(" ");
@@ -1524,6 +1539,7 @@ function cmdSend(argv, flags) {
       taskId,
       mailContext,
       raw:flags.raw===true,
+      allowOldRunner:flags["allow-old-runner"],
       recordedPid: expectedPid,
     });
   } catch (error) {

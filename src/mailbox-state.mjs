@@ -1,6 +1,6 @@
 import {isUserActor} from './actors.mjs';
 import {createMailRouting} from './mail-routing.mjs';
-import {isTaskCompletionReply} from './ledger-domains.mjs';
+import {createTaskCompletionChecker} from './ledger-domains.mjs';
 const views=new Set(['received','sent','to-reply','waiting']);
 const canAct=(by,role)=>by===role||isUserActor(by);
 const sameContext=(a,b)=>a.workKey===b.workKey&&a.executionKey===b.executionKey;
@@ -25,6 +25,7 @@ export function mailboxLetters(entries,role,{view='received',all=true,unread=fal
 function projectLetters(entries){
  const sends=entries.filter(e=>e.kind==='send'),refs=new Map(),byId=new Map(),read=new Set(),claims=new Map();
  const routing=createMailRouting();
+ const completionReply=createTaskCompletionChecker(entries);
  for(const e of sends){
   if(e.mailId){if(byId.has(e.mailId))throw new Error('우편 원장 중복 mailId');byId.set(e.mailId,e);}
  }
@@ -45,7 +46,7 @@ function projectLetters(entries){
   }else if(e.kind==='send'&&e.replyFinal===true){
    const parent=refs.get(e.replyTo);
    const owner=routing.get(parent);
-   const validReply=e.systemGenerated==='task-completion'?isTaskCompletionReply(entries,e,parent):parent&&sameContext(e,parent);
+   const validReply=e.systemGenerated==='task-completion'?completionReply(e,parent):parent&&sameContext(e,parent);
    if(owner&&parent!==e&&parent.expectReply===true&&routing.get(e).currentRecipient===owner.currentSender&&canAct(e.by,owner.currentRecipient)&&validReply&&!claims.has(parent))claims.set(parent,{replyStatus:'answered',cancelled:false,finalReplyId:e.mailId});
   }
  }

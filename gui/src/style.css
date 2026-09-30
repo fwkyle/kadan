@@ -83,6 +83,19 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .workspace > .error { order: 4; }
 .workspace > .workspace-panes { order: 5; }
 .workspace > details, .workspace > .empty { order: 6; }
+.workspace > .worktime { order: 4; margin: 0 0 8px; }
+.worktime details { margin: 0; }
+.worktime-body { margin-top: 8px; max-height: 46vh; overflow: auto; }
+.worktime[data-open=true] ~ .workspace-panes { min-height: 300px; }
+.worktime-scroll { display: inline-block; max-width: 100%; }
+.worktime-body .segmented { margin: 0 0 8px; }
+.worktime-table { border-collapse: collapse; min-width: 620px; font-size: 12px; }
+.worktime-table th, .worktime-table td { padding: 4px 12px; text-align: left; white-space: nowrap; }
+.worktime-table th { background: #f1f4f1; color: var(--ds-color-muted); font-weight: 500; }
+.worktime-table td:nth-child(n+4):nth-child(-n+6), .worktime-table th:nth-child(n+4):nth-child(-n+6) { text-align: right; font-variant-numeric: tabular-nums; }
+.worktime-table tr.worktime-total td { font-weight: 600; border-top: 1px solid #dce2de; }
+.worktime-table tr:not(.worktime-total) td:nth-child(3) { padding-left: 24px; }
+.cell-stack small { display: block; }
 .workspace-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .workspace-tools details, .column-tools details { position: relative; margin: 0; }
 .workspace-tools details[open], .column-tools details[open] { z-index: 8; }
@@ -253,7 +266,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
   .workspace-panes { min-height: 360px; }
   .workspace-panes[data-detail-open=true] { grid-template-columns: minmax(0,1fr) !important; }
   .workspace-panes[data-detail-open=true] > .workspace-list { display: none; }
-  .workspace[data-detail-open=true] > :is(.page-heading,.segmented,.toolbar,.workspace-tools,details) { display: none; }
+  .workspace[data-detail-open=true] > :is(.page-heading,.segmented,.toolbar,.workspace-tools,details,.worktime) { display: none; }
   .workspace[data-detail-open=true] > .workspace-panes { min-height: 0; }
   .workspace > .page-heading h1 { font-size: 18px; }
   .detail-panel { --detail-pad-y: 19px; --detail-pad-x: 19px; }

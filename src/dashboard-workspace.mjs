@@ -92,7 +92,8 @@ export function sortWorkspaceRows(rows,key='at',direction='desc') {
   const at=Date.parse(a.signalAt||a.at)||0,bt=Date.parse(b.signalAt||b.at)||0;if(at!==bt)return bt-at;
   return a.key.localeCompare(b.key);
  });
- const field=workspaceColumns.some(([name])=>name===key)?key:'at';
+ // 작업 시간(workMs)은 대시보드 API 행에만 있는 숫자 칸이라 옛 표 열 목록에 없지만 정렬은 허용한다(숫자 순서로 비교한다).
+ const field=workspaceColumns.some(([name])=>name===key)||key==='workMs'?key:'at';
  return [...rows].sort((a,b)=>{
   const av=a[field],bv=b[field];if(av==null||av===''||bv==null||bv==='')return (av==null||av==='')?(bv==null||bv===''?a.key.localeCompare(b.key):1):-1;
   return (String(av).localeCompare(String(bv),'ko',{numeric:true})*(direction==='asc'?1:-1))||a.key.localeCompare(b.key);

@@ -158,6 +158,19 @@ function referencePaths(profile) {
     .filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
 }
 
+// --raw는 역할 지침을 붙이지 않을 뿐 받는 역할의 프로필까지 없애지 않는다. 옛 세션 발령 막기(dispatch-runner-guard)가
+// raw 발령에서도 작업자·검수자를 알아보도록, 지침 없이 프로필 판정만 composeRoleInstructions와 같은 규칙으로 한다.
+export function inferDispatchProfile({home,role,profile,taskId,mailContext,entries=readLedger(home),cards}) {
+  try {
+    const explicit=explicitProfile({role,profile,entries,config:readRoleInstructionsConfig(home)});
+    const context=facts(home,entries,{taskId,mailContext,infer:!explicit,cards});
+    return explicit||selectProfile({role,entries,context});
+  } catch (error) {
+    if (!error.delivery) error.delivery='not-sent';
+    throw error;
+  }
+}
+
 export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home),cards}) {
   try {
     const config=readRoleInstructionsConfig(home);

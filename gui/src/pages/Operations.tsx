@@ -77,10 +77,10 @@ export default function Operations({ url }: { url: URL }) {
   return (
     <section>
       <nav className="inline-nav" aria-label="상위 화면">
-        <a href={key ? cardUrl("work:" + key) : "/?collection=work#dashboard"}>{key ? "업무 상세로" : "업무 목록으로"}</a>
+        <a href={key ? cardUrl("work:" + key) : "/?collection=work#dashboard"}>{key ? "워크 상세로" : "워크 목록으로"}</a>
       </nav>
-      <h1>업무 진행 이력</h1>
-      <p>업무의 약속부터 실행·검수·인계·우편까지 연결해서 봅니다.</p>
+      <h1>워크 진행 이력</h1>
+      <p>워크의 약속부터 카드(구현·검수)·인계·우편까지 연결해서 봅니다.</p>
       <ErrorMessage error={resource.error} />
       <Freshness collectedAt={data?.collectedAt} {...resource} />
       {!data ? (
@@ -88,7 +88,7 @@ export default function Operations({ url }: { url: URL }) {
       ) : (
         <>
           <label>
-            업무
+            워크
             <select
               value={key || ""}
               onChange={(e) =>
@@ -109,7 +109,7 @@ export default function Operations({ url }: { url: URL }) {
               page={url.searchParams.get("flowPage") || "1"}
             />
           ) : (
-            <p>등록된 업무가 없습니다.</p>
+            <p>등록된 워크가 없습니다.</p>
           )}
         </>
       )}
@@ -148,7 +148,7 @@ function FlowDetail({ workKey, page }: { workKey: string; page: string }) {
               상태: data.followup?.label || data.work.status,
             })}
           />
-          <h3>실행·검수</h3>
+          <h3>구현·검수 카드</h3>
           <ol className="flow-timeline">
             {data.executions.map((e, i) => (
               <li key={e.key + i}>
@@ -196,7 +196,7 @@ function FlowDetail({ workKey, page }: { workKey: string; page: string }) {
             />
           )}
           <details>
-            <summary>업무 변경 이력</summary>
+            <summary>워크 변경 이력</summary>
             {data.history.map((h, i) => (
               <JsonValue key={i} value={h} />
             ))}

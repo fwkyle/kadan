@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { activeHierarchyPath, isKadanToolCommand, registerStartedRole } from "../src/hierarchy-register.mjs";
+import { spawn } from "node:child_process";
+import { activeHierarchyPath, isKadanToolCommand, registerRoleManually, registerStartedRole } from "../src/hierarchy-register.mjs";
 
 function makeHome(table) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-register-"));
@@ -67,12 +68,51 @@ test("다른 등록이 진행 중이면 건드리지 않는다", () => {
   const { home, hierarchyPath, entries } = makeHome(기본표);
   const lockPath = path.join(home, "hierarchy-register.lock");
   fs.writeFileSync(lockPath, "");
-  const result = registerStartedRole({ role: "판-작업자", creator: "판-감독", home, entries });
+  const result = registerStartedRole({ role: "판-작업자", creator: "판-감독", home, entries, lockWaitMs: 200 });
   assert.equal(result.registered, false);
   assert.equal(result.reason, "다른 등록이 진행 중");
   assert.deepEqual(JSON.parse(fs.readFileSync(hierarchyPath, "utf8")), 기본표);
   fs.unlinkSync(lockPath);
   assert.equal(registerStartedRole({ role: "판-작업자", creator: "판-감독", home, entries }).registered, true);
+});
+
+test("동시 시작으로 잠금이 짧게 겹치면 기다렸다가 등록한다", async () => {
+  const { home, hierarchyPath, entries } = makeHome(기본표);
+  const lockPath = path.join(home, "hierarchy-register.lock");
+  fs.writeFileSync(lockPath, "");
+  // 300ms 뒤 잠금을 푸는 별도 프로세스 — 등록은 그동안 잠금을 다시 시도한다.
+  const releaser = spawn(process.execPath, [
+    "-e",
+    `setTimeout(() => { try { require("node:fs").unlinkSync(${JSON.stringify(lockPath)}); } catch {} }, 300)`,
+  ]);
+  const startedAt = Date.now();
+  const result = registerStartedRole({ role: "판-작업자", creator: "판-감독", home, entries, lockWaitMs: 2000 });
+  await new Promise((resolve) => releaser.once("exit", resolve));
+  assert.equal(result.registered, true);
+  assert.equal(result.parent, "판-감독");
+  assert.ok(Date.now() - startedAt >= 250, "잠금이 풀릴 때까지 기다렸어야 한다");
+  assert.equal(JSON.parse(fs.readFileSync(hierarchyPath, "utf8"))["판-작업자"], "판-감독");
+});
+
+test("사람이 직접 띄운 역할을 수동으로 등록한다", () => {
+  const { home, hierarchyPath, entries } = makeHome(기본표);
+  const top = registerRoleManually({ role: "비서", parent: "@user", home, entries });
+  assert.equal(top.registered, true);
+  assert.equal(top.parent, "@user");
+  const under = registerRoleManually({ role: "판-임시작업자", parent: "판-감독", home, entries });
+  assert.equal(under.registered, true);
+  const saved = JSON.parse(fs.readFileSync(hierarchyPath, "utf8"));
+  assert.equal(saved["비서"], "@user");
+  assert.equal(saved["판-임시작업자"], "판-감독");
+  // 같은 줄을 다시 넣거나 기존 줄을 고치지는 않는다.
+  assert.equal(registerRoleManually({ role: "비서", parent: "판-감독", home, entries }).registered, false);
+  assert.equal(JSON.parse(fs.readFileSync(hierarchyPath, "utf8"))["비서"], "@user");
+  // 표에 없는 상위나 잘못된 이름은 거부한다.
+  assert.equal(registerRoleManually({ role: "판-작업자", parent: "모르는-감독", home, entries }).registered, false);
+  for (const [role, parent] of [["띄 어", "판-감독"], ["@user", "판-감독"], ["", "판-감독"], ["판-작업자", ""]]) {
+    assert.equal(registerRoleManually({ role, parent, home, entries }).registered, false, JSON.stringify([role, parent]));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(hierarchyPath, "utf8"))["판-작업자"], undefined);
 });
 
 test("마지막으로 읽힌 관계표를 현재 경로로 본다", () => {

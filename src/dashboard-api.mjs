@@ -1,4 +1,4 @@
-import { prepareCenterWall } from "./center-wall.mjs";
+import { prepareCenterWall, registeredCenterWorks } from "./center-wall.mjs";
 import { buildReviewFlows, readReviewResult } from "./review-flow.mjs";
 import {
   buildHumanBrief,
@@ -53,28 +53,54 @@ import {
   PROFILE_ROLES,
 } from "./runner-settings.mjs";
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
+import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
 
 const modelCache = new WeakMap();
+const executionModelCache = new WeakMap();
 const pick = (value, keys) =>
   Object.fromEntries(keys.map((key) => [key, value[key] ?? null]));
 const rowFields =
-  "key workKey workType id kind repo title originalTitle state stateLabel stored board owner at reportAt reportLabel model modelTitle effort purpose scope summary next turnLabel turnReason turnSource flowLabel flowTitle flowPhase rallyStep healthKind healthLabel healthReason signalAt signalLabel revision parentWorkKey bucket".split(
+  "key workKey workType id kind repo title originalTitle state stateLabel stored board owner at reportAt reportLabel model modelTitle effort purpose scope summary next turnLabel turnReason turnSource flowLabel flowTitle flowPhase rallyStep healthKind healthLabel healthReason signalAt signalLabel revision parentWorkKey bucket workMs workBasis waitMs closeMs reworks profile modelState".split(
     " ",
   );
-function model(snapshot) {
-  const cached = modelCache.get(snapshot);
+// 카드별 작업 시간·실제 모델. 원장 색인을 수집당 한 번만 만든다(요청·화면마다 다시 계산하지 않는다).
+const worktimeCache = new WeakMap();
+function worktimes(snapshot) {
+  let value = worktimeCache.get(snapshot);
+  if (!value) {
+    value = buildCardWorktimes(snapshot.center.cards, snapshot.entries || []);
+    worktimeCache.set(snapshot, value);
+  }
+  return value;
+}
+// 목록 칸에 싣는 값. 모델은 그 카드를 시작한 세션의 실행 명령으로 판정한 값이고, 끝난 카드도 말한다.
+// 시작·결과가 아직 없는 카드는 판정하지 않고 기존 값(진행 중 역할의 현재 모델)을 그대로 둔다.
+function runFields(w) {
+  if (!w) return {};
+  const fields = { workMs: w.workMs, workBasis: w.basis, waitMs: w.waitMs, closeMs: w.closeMs, reworks: w.reworks, profile: w.profile };
+  const m = w.model;
+  if (m.state === "known")
+    return { ...fields, modelState: "known", model: m.model.split("/").at(-1), effort: m.effort,
+      modelTitle: [m.harness, m.model, m.effort ? "강도 " + m.effort : "", "시작 명령 기준"].filter(Boolean).join(" · ") };
+  if (w.startAt == null && w.resultAt == null) return fields;
+  return { ...fields, modelState: "unknown", model: "", effort: "", modelTitle: modelUnknownLabel(m.reason) };
+}
+function model(snapshot, includeWorks = true) {
+  const cache = includeWorks ? modelCache : executionModelCache;
+  const cached = modelCache.get(snapshot) || cache.get(snapshot);
   if (cached) return cached;
   if (snapshot.centerError || !snapshot.center)
     throw new Error(snapshot.centerError || "카드 상태를 읽을 수 없습니다");
-  const { works, workError } = prepareCenterWall(snapshot),
+  const { works, workError } = includeWorks ? prepareCenterWall(snapshot) : registeredCenterWorks(snapshot),
     briefs = buildHumanBrief(snapshot.center, snapshot.home);
   const cards = snapshot.center.cards,
-    byKey = new Map(cards.map((c) => [c.key, c]));
+    byKey = new Map(cards.map((c) => [c.key, c])),
+    times = worktimes(snapshot);
   const parent = new Map(
-    (works || []).flatMap((w) => w.executions.map((e) => [e.key, w.key])),
+    (works || []).flatMap((w) => w.executions.map((e) => [e.key, includeWorks ? w.key : "work:" + w.key])),
   );
   const rows = [
-    ...(works || []).map((w) => pick(w, rowFields)),
+    ...(includeWorks ? works || [] : []).map((w) => pick(w, rowFields)),
     ...workspaceModel(snapshot.center, briefs).map((r) =>
       pick(
         {
@@ -84,6 +110,7 @@ function model(snapshot) {
           parentWorkKey: parent.get(r.key) || "",
           revision: byKey.get(r.key).revision,
           bucket: executionBucket({ ...byKey.get(r.key), ...r }),
+          ...runFields(times.get(r.key)),
         },
         rowFields,
       ),
@@ -105,7 +132,7 @@ function model(snapshot) {
     identity: taskIdentity(cards),
     hierarchy: readActiveHierarchy(snapshot.entries || []),
   };
-  modelCache.set(snapshot, result);
+  cache.set(snapshot, result);
   return result;
 }
 const compact = (row) =>
@@ -337,14 +364,18 @@ export function dashboardData(snapshot, url) {
         .reverse(),
     };
   }
-  const m = model(snapshot);
-  if (route === "review-result") {
-    const card = m.byKey.get(url.searchParams.get("card") || "");
-    if (!card) throw Object.assign(new Error("카드를 찾을 수 없습니다"), {status: 404});
-    const result = readReviewResult(card);
-    return {...stamp, ...result, html: result.body ? renderCardDocument(result.body, card) : null};
+  if (snapshot.centerError || !snapshot.center)
+    throw new Error(snapshot.centerError || "카드 상태를 읽을 수 없습니다");
+  if (route === "worktime") {
+    const period = url.searchParams.get("period") || "today";
+    if (!WORKTIME_PERIODS.includes(period))
+      throw Object.assign(new Error("기간은 today·7d·all 중 하나입니다"), {status: 400});
+    return { ...stamp, ...summarizeWorktimes(worktimes(snapshot).values(), { period }) };
   }
   if (route === "summary") {
+    const { works, workError } = registeredCenterWorks(snapshot),
+      cards = snapshot.center.cards,
+      linked = new Set((works || []).flatMap((work) => work.executions.map((e) => e.key)));
     let waiting = null;
     try {
       waiting = letters(snapshot).filter(
@@ -358,21 +389,27 @@ export function dashboardData(snapshot, url) {
         : (snapshot.decisions || []).filter((d) => d.status === "open").length,
       waiting,
       counts: {
-        work:
-          m.works === null
-            ? null
-            : m.rows.filter((r) => r.kind === "work").length,
-        executions: m.rows.filter((r) => r.kind !== "work").length,
-        unlinked: m.rows.filter((r) => r.kind !== "work" && !r.parentWorkKey)
-          .length,
+        work: works === null ? null : works.length,
+        executions: cards.length,
+        unlinked: cards.filter((card) => !linked.has(card.key)).length,
       },
       errors: [
         snapshot.error,
         snapshot.resourceError,
-        m.workError,
+        workError,
         snapshot.decisionError,
       ].filter(Boolean),
     };
+  }
+  const includeWorks = route !== "workspace" ||
+    (url.searchParams.get("collection") || "work") === "work" ||
+    url.searchParams.get("layout") === "map";
+  const m = model(snapshot, includeWorks);
+  if (route === "review-result") {
+    const card = m.byKey.get(url.searchParams.get("card") || "");
+    if (!card) throw Object.assign(new Error("카드를 찾을 수 없습니다"), {status: 404});
+    const result = readReviewResult(card);
+    return {...stamp, ...result, html: result.body ? renderCardDocument(result.body, card) : null};
   }
   if (route === "workspace") {
     const collection = url.searchParams.get("collection") || "work";

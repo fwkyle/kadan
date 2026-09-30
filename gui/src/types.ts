@@ -42,6 +42,14 @@ export type Row = {
   turnReason?: string;
   parentWorkKey?: string;
   failureReason?: string;
+  // 카드별 작업 시간(ms)과 실제 모델 판정. 서버 card-worktime.mjs가 계산한다.
+  workMs?: number | null;
+  workBasis?: "start" | "assigned" | null;
+  waitMs?: number | null;
+  closeMs?: number | null;
+  reworks?: number | null;
+  profile?: string | null;
+  modelState?: "known" | "unknown" | null;
 };
 export type Field = {
   name: string;
@@ -175,4 +183,23 @@ export type Summary = Stamp & {
   waiting: number | null;
   counts: { work: number | null; executions: number; unlinked: number };
   errors: string[];
+};
+export type WorktimeRow = {
+  profile: string;
+  model: string | null;
+  effort: string;
+  step: string;
+  count: number;
+  medianMs: number;
+  meanMs: number;
+  assignedBasis: number;
+  reworkCards: number;
+};
+export type WorktimeData = Stamp & {
+  period: "today" | "7d" | "all";
+  since: string | null;
+  count: number;
+  noDuration: number;
+  unknownReasons: Record<string, number>;
+  rows: WorktimeRow[];
 };

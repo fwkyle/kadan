@@ -40,16 +40,16 @@ const Mailbox = lazy(() =>
   );
 const links = [
   ["status", "전체 현황"],
-  ["dashboard", "업무"],
+  ["dashboard", "워크·카드"],
   ["decisions", "내 결정"],
   ["runner-settings", "실행 모델"],
   ["mailbox", "우편함"],
   ["ledger", "기록"],
   ["runs", "실행 이력"],
-  ["operations-flow", "업무 진행 이력"],
+  ["operations-flow", "워크 진행 이력"],
   ["sessions", "담당자 상태"],
-  ["work-create", "새 업무"],
-  ["card-create", "실행 추가"],
+  ["work-create", "새 워크"],
+  ["card-create", "카드 추가"],
 ];
 const primaryLinks = links.slice(0, 6);
 export default function App() {
