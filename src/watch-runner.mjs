@@ -934,6 +934,8 @@ export async function runWatch({
       print(`[watch] 원장 잠금으로 이번 주기를 건너뜀 (${lockFailures}/3): ${error.message}`);
       if (lockFailures >= 3) throw error;
     }
+    // 재사용 자료를 대기 동안 붙잡아 두지 않는다(기존처럼 주기가 끝나면 버릴 수 있게).
+    reads?.begin();
     try {await sleep(intervalMs,signal);}
     catch(error) {if(!signal?.aborted)throw error;}
   }} finally {

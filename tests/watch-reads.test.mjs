@@ -62,3 +62,13 @@ test('관측 뒤 사용자가 입력을 시작하면 재사용 중에도 Enter�
   const run=await runQueueCycles({cached:true,screenFor:(cycle,n)=>cycle<1?'› ':n===0?bannerScreen:'› 사용자가 입력 중'});
   assert.equal(run.enters.length,0);
 });
+
+test('주기가 끝나 대기하는 동안에는 재사용 자료를 붙잡아 두지 않는다',async()=>{
+  const {runWatch}=await import('../src/watch-runner.mjs');
+  let raw=0,cachedDuringSleep=null;const stop=new Error('stop');
+  const reads=cycleReads({readEntries:()=>{raw++;return [];},readCards:()=>[],readWorks:()=>[],version:()=>1});
+  await assert.rejects(()=>runWatch({floor:{list:()=>[],read:()=>''},readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks,reads,
+    record:()=>{},sendAlert:()=>{},intervalMs:1000,stallN:1,routes:new Map(),superRole:null,print:()=>{},spawn:()=>({status:0,stdout:''}),
+    sleep:async()=>{const before=raw;reads.readEntries();cachedDuringSleep=raw===before;throw stop;}}),e=>e===stop);
+  assert.equal(cachedDuringSleep,false,'대기 중 읽기는 원장을 다시 읽어야 한다');
+});
