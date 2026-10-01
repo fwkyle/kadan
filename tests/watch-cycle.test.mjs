@@ -92,7 +92,24 @@ test('순회 계측은 기존 주기 사건에만 기록하며 잠든 시간과 
  await assert.rejects(()=>runWatch({floor:{list:()=>[{session:'kadan-worker',pid:'1'}],read:()=> 'working'},
   readEntries:()=>[{kind:'start',role:'worker',session:'kadan-worker',panePid:'1'}],record:e=>records.push(e),
   measure:()=>{clock+=10;return clock;},now:()=>1700000000000,print:()=>{},spawn:()=>({status:0,stdout:''}),
+  cpuUsage:previous=>previous?{user:2500,system:1500}:{user:0,system:0},memoryUsage:()=>({rss:100*2**20,heapUsed:25*2**20}),
   sleep:async()=>{throw stop;},sendAlert:()=>{},intervalMs:60000}),e=>e===stop);
  const cycles=records.filter(e=>e.kind==='watch-cycle');assert.equal(cycles.length,1);
- assert.deepEqual(cycles[0].timing,{totalMs:40,ledgerMs:10,prepareMs:10,screenMs:10,otherMs:10,observedSessions:1});
+ const {stages,window,...timing}=cycles[0].timing;
+ // 기존 네 구간은 그대로 남고, 나머지(otherMs)는 단계별 합과 같다.
+ assert.deepEqual(timing,{totalMs:110,ledgerMs:10,prepareMs:10,screenMs:10,otherMs:80,observedSessions:1,
+  cpuMs:{user:2.5,system:1.5},record:{count:0,ms:0,maxMs:0},send:{count:0,ms:0,maxMs:0},memoryMb:{rss:100,heapUsed:25}});
+ assert.deepEqual(Object.keys(stages),['rateLimit','queueResume','assess','ai','alerts','mail','absorb']);
+ assert.equal(Object.values(stages).reduce((a,b)=>a+b,0)+10,timing.otherMs); // 마지막 10은 absorb 뒤 종료 측정
+ assert.equal(window.cycles,1);assert.deepEqual(window.otherMs,{sum:80,max:80});
+});
+
+test('주기 기록 사이의 주기들은 합계·최대로 모으고 기록·전송 시간은 호출 단위 최대를 남긴다',async()=>{
+ const {accumulateTiming,ioCounter,timedCall}=await import('../src/watch-cycle.mjs');
+ let w=accumulateTiming(null,{totalMs:30,stages:{ai:5},record:{count:1,ms:4,maxMs:4}});
+ w=accumulateTiming(w,{totalMs:10,stages:{ai:7},record:{count:2,ms:9,maxMs:8}});
+ assert.deepEqual(w,{cycles:2,totalMs:{sum:40,max:30},stages:{ai:{sum:12,max:7}},record:{count:{sum:3,max:2},ms:{sum:13,max:9},maxMs:8}});
+ let clock=0;const counter=ioCounter(),boom=timedCall(counter,()=>{clock+=7;throw new Error('busy');},()=>clock);
+ assert.throws(()=>boom(),/busy/);assert.deepEqual(counter.stats(),{count:1,ms:7,maxMs:7});
+ counter.reset();assert.deepEqual(counter.stats(),{count:0,ms:0,maxMs:0});
 });
