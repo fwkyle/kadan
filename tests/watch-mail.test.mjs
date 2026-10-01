@@ -297,3 +297,18 @@ test('확인 뒤 붙여넣기 전에 사람 입력이 생기면 예약을 풀고
   assert.equal(f.sent.length,1);
   f.tick();assert.equal(f.sent.length,1);
 });
+
+test('살아 있지 않은 수신자가 많아도 세션 목록은 주기당 한 번만 읽는다',()=>{
+  const f=fixture(['a','b','c'].map(r=>question(`q-${r}`,{role:r})));
+  let lists=0;const list=f.floor.list;f.floor.list=()=>{lists++;return list();};
+  f.tick();
+  assert.equal(lists,1);assert.equal(f.sent.length,0);assert.equal(f.records.length,0);
+});
+
+test('대상은 한 번 읽은 목록으로 고르고, 전송 직전에는 목록을 새로 읽어 세션이 사라졌으면 보내지 않는다',()=>{
+  {const f=fixture();let lists=0;const list=f.floor.list;f.floor.list=()=>{lists++;return list();};
+   f.tick();assert.equal(lists,2);assert.equal(f.sent.length,1);}
+  {const f=fixture();let lists=0;f.floor.list=()=>++lists===1?f.live:[];
+   f.tick();assert.equal(f.sent.length,0);
+   assert.deepEqual(f.records.filter(e=>e.action==='result').map(e=>[e.delivery,e.reason]),[['not-sent','state-changed']]);}
+});

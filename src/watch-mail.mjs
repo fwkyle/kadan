@@ -57,9 +57,12 @@ export class MailWatch {
       groups.get(role).push(mail.mailId);
     }
     const delivered = new Set();
+    // 대상 고르기용 세션 목록은 주기당 한 번만 읽는다. 2026-10-01 실측: 미확인 우편이 남은 수신자 128명(살아 있는
+    // 세션 0명)마다 tmux 목록을 다시 읽어 우편 단계가 4~6초 걸렸다. 전송 직전 확인은 아래에서 계속 새로 읽는다.
+    const live = groups.size ? floor.list() : [];
     for (const [role, ids] of groups) {
       if (signal?.aborted) break;
-      const expectedPid = currentPid(role,entries,floor.list());
+      const expectedPid = currentPid(role,entries,live);
       if (expectedPid == null) continue;
       // 예약 기록 전에 사람 입력·대화 여부를 본다. 같은 보류는 한 번만 기록한다.
       const held = this.hold?.(role);
