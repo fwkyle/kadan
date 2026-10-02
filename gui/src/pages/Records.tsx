@@ -335,6 +335,7 @@ export function Sessions() {
   const resource = useResource<
       Stamp & {
         known: boolean;
+        hidden: number;
         roles: {
           role: string;
           harness: string;
@@ -347,8 +348,11 @@ export function Sessions() {
   return (
     <section>
       <h1>담당자 상태</h1>
-      <p>현재 열린 AI 창과 시작할 때 기록한 모델을 확인합니다. 작업의 진행·완료는 <a href="/?collection=work#dashboard">워크</a>에서 확인하세요.</p>
+      <p>열린 AI 창과 아직 안 닫힌 카드를 맡은 담당, 시작할 때 기록한 모델을 확인합니다. 작업의 진행·완료는 <a href="/?collection=work#dashboard">워크</a>에서 확인하세요.</p>
       <p className="muted">다음 발령에 사용할 모델은 <a href="#runner-settings">실행 모델</a>에서 설정합니다.</p>
+      {data && data.hidden > 0 && (
+        <p className="muted">창이 닫혔고 맡은 카드도 끝난 담당 {data.hidden}명은 숨겼습니다.</p>
+      )}
       <ErrorMessage
         error={
           resource.error || (data && !data.known ? "현재 세션 상태 모름" : null)
