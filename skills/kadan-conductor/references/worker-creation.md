@@ -47,6 +47,8 @@
 | 일반감독 | `kadan start <판>-감독 --profile conductor` |
 | 슈퍼감독 | `kadan start <슈퍼 역할> --profile super` |
 
+검수 카드(review)는 `--profile reviewer` 세션에만, 구현·수정 카드는 `--profile worker` 세션에만 발령된다 — 다르면 `kadan send --task`가 거절한다(2026-10-02). 설정된 폴백(`--fallback N`)으로 띄운 세션은 경고와 함께 통과한다.
+
 기존 세션은 현재 역할과 작업을 보존한다. 프로필을 넣으려고 재시작하거나 `start --profile`로 소급 변경하지 않는다.
 이름만으로 프로필을 추측하지 않는다. 프로필 없는 기존 세션에 안내가 필요하면 확인된 업무·실행·관계 또는
 [정확한 역할 매핑](../../../docs/role-instructions.md#로컬-설정과-템플릿-교체)을 사용한다.

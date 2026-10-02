@@ -12,7 +12,7 @@ import {storageCommand} from './storage-migration.mjs';
 import {assertWritable,storageTransaction,storageVersion} from './storage.mjs';
 import {SecretaryMailbox} from './secretary-mailbox.mjs';
 import {Mailbox,inboxCommand} from './mailbox.mjs';
-import {composeRoleInstructions,inferDispatchProfile,startRoleProfile} from './role-instructions.mjs';
+import {composeRoleInstructions,inferCardPhaseProfile,inferDispatchProfile,startRoleProfile} from './role-instructions.mjs';
 import {composeMailInstructions} from './mail-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
@@ -737,7 +737,10 @@ export function guardedSend({
     // --raw는 역할 지침만 뺀다 — 지침 없이도 프로필은 같은 규칙으로 정해, 프로필이 빈 옛 시작 기록이 raw로 검사를 피하지 못하게 한다.
     const guardProfile = identity.launch.roleProfile ?? roleProfile ?? composed.metadata.profile
       ?? (raw ? inferDispatchProfile({ home, role, taskId, mailContext, entries, cards }).profile : undefined);
-    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, allowOldRunner });
+    // 카드 단계가 요구하는 프로필도 함께 넘긴다 — 작업자로 띄운 세션에 검수 카드를 보내지 못하게(2026-10-02 [kyle]).
+    const phase = inferCardPhaseProfile({ home, role, taskId, mailContext, entries, cards });
+    const phaseProfile = phase?.source === "execution-phase" ? phase.profile : undefined;
+    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, phaseProfile, allowOldRunner });
     if (runnerGuard.result === "reject") {
       const error = new Error(runnerGuard.message);
       error.code = "KADAN_STALE_RUNNER";
