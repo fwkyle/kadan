@@ -25,6 +25,8 @@
 | 역할 멈춰 | 완료 근거·남은 책임 확인 후 `kadan stop <정확한 소유 역할>` |
 | 죽은 역할 다시 세워 | [복구 절차](worker-creation.md). 기존 역할 확인·정리 후 새 이름으로 시작 |
 | 결정이 필요해 | 직속 감독이 승인 안 판단. 사용자 판단은 [중앙 결정 경로](central-cards.md#사용자-결정-요청-전용-경로) |
+| 검수할 체크아웃 줘 | `kadan slot acquire <저장소> --for <카드id> --ref <SHA>` → 검수 → `kadan slot release <자리경로>`. 새 worktree를 만들지 않는다([검수 자리](../../../docs/review-slots.md)) |
+| 설치·빌드가 몰려 느려 | `kadan limit run <install\|build\|rust> -- <명령>`. `kadan limit status`로 쥔 쪽 확인 |
 | 병렬 충돌을 막아 | 구체적 충돌 사유와 승인 범위 확인 후 필요한 worktree만 생성 |
 
 ## 카드와 마커
