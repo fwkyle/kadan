@@ -290,3 +290,30 @@ test("정적 GUI는 원장을 읽지 않고 배포 파일·경로 제한·HEAD·
   });
   assert.equal(res.status, 503);
 });
+
+test("담당자 상태: 창이 닫히고 카드도 끝난 담당은 숨긴다", async () => {
+  const { visibleSessionRoles } = await import("../src/dashboard-api.mjs");
+  const role = (name, state) => ({ role: name, life: { state } });
+  const center = {
+    runtimeKnown: true,
+    roles: [
+      role("열린창", "alive"),
+      role("닫힌창-열린카드", "dead"),
+      role("닫힌창-끝난카드", "dead"),
+      role("닫힌창-카드없음", "dead"),
+    ],
+    cards: [
+      { role: "닫힌창-열린카드", displayState: "failed" },
+      { role: "닫힌창-끝난카드", displayState: "done" },
+      { role: "닫힌창-끝난카드", displayState: "cancelled" },
+    ],
+  };
+  assert.deepEqual(
+    visibleSessionRoles(center).map((r) => r.role),
+    ["열린창", "닫힌창-열린카드"],
+  );
+  assert.equal(
+    visibleSessionRoles({ ...center, runtimeKnown: false }).length,
+    4,
+  );
+});

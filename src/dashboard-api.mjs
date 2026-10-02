@@ -206,6 +206,20 @@ function bodyOf(snapshot, m) {
   }
 }
 
+// 담당자 상태에는 창이 열려 있거나 아직 안 닫힌 카드를 맡은 담당만 보인다(2026-10-02 [kyle]).
+// 창도 닫히고 맡은 카드도 끝난 담당은 숨긴다. 세션 상태를 모르면 거르지 않는다.
+const CLOSED_CARD_STATES = ["done", "cancelled", "superseded", "archived"];
+export function visibleSessionRoles(center) {
+  if (!center.runtimeKnown) return center.roles;
+  const owners = new Set(
+    center.cards
+      .filter((c) => c.role && !CLOSED_CARD_STATES.includes(c.displayState))
+      .map((c) => c.role),
+  );
+  return center.roles.filter(
+    (r) => r.life?.state === "alive" || owners.has(r.role),
+  );
+}
 export function dashboardData(snapshot, url) {
   const route = url.pathname.slice("/api/dashboard/".length),
     stamp = {
@@ -503,17 +517,20 @@ export function dashboardData(snapshot, url) {
         })),
     };
   }
-  if (route === "sessions")
+  if (route === "sessions") {
+    const roles = visibleSessionRoles(snapshot.center);
     return {
       ...stamp,
       known: snapshot.center.runtimeKnown,
-      roles: snapshot.center.roles.map((r) => ({
+      hidden: snapshot.center.roles.length - roles.length,
+      roles: roles.map((r) => ({
         role: r.role,
         harness: r.harness || null,
         model: r.model || null,
         life: pick(r.life || {}, ["state", "pidState"]),
       })),
     };
+  }
   if (route === "runs") {
     const rows = m.cards
       .flatMap((c) =>
