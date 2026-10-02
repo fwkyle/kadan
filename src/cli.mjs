@@ -34,6 +34,8 @@ import { HandoverRunner } from "./handover-runner.mjs";
 import { workEntries, openTaskIds } from "./handover-state.mjs";
 import { inspectStartCmdPolicy, inspectCardSendIdentity } from "./ai-identity.mjs";
 import { inspectDispatchRunnerGuard } from "./dispatch-runner-guard.mjs";
+import { slotCommand } from "./review-slots.mjs";
+import { limitCommand } from "./heavy-limit.mjs";
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
 
 import { parseHierarchy } from "./hierarchy.mjs";
@@ -2163,6 +2165,8 @@ export function parseFlags(argv) {
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
+    // `--` 뒤는 다른 명령의 인자라 해석하지 않고 그대로 넘긴다(kadan limit run, 2026-10-02 [kyle]).
+    if (arg === "--") { rest.push(...argv.slice(index)); break; }
     if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card") {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
@@ -2272,6 +2276,8 @@ const COMMANDS = {
     record:entry=>appendLedger({...entry,t:new Date().toISOString()})}),null,2)),
   card: (argv,flags) => console.log(JSON.stringify(cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   handover: cmdHandover,
+  slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
+  limit: async (argv,flags) => { const result = flags.help ? await limitCommand([],{home:ledgerHome()}) : await limitCommand(argv,{home:ledgerHome()}); if (result != null) console.log(JSON.stringify(result,null,2)); },
   plan: cmdPlan,
   init: cmdInit,
   up: cmdUp,
@@ -2296,7 +2302,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|runners|storage|inbox> [대상] [옵션]"
+      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }

@@ -7,7 +7,7 @@
 
 ## 읽는 법
 
-- 모든 옵션은 명령이 직접 알려 준다. 묶음 명령(`work`, `card`, `decision`, `inbox`, `runners`, `storage`, `hierarchy`, `watch-report`)은 `kadan <명령> --help`, 나머지는 대상 없이 실행하면 사용법이 나온다.
+- 모든 옵션은 명령이 직접 알려 준다. 묶음 명령(`work`, `card`, `decision`, `inbox`, `runners`, `storage`, `hierarchy`, `watch-report`, `slot`, `limit`)은 `kadan <명령> --help`, 나머지는 대상 없이 실행하면 사용법이 나온다.
 - `<역할>`은 세션 이름에서 `kadan-`을 뺀 부분이다(`kadan-비서` → `비서`).
 - 명령이 PATH에 없으면 `node <저장소>/src/cli.mjs <명령>`으로 같은 일을 한다.
 - 새 명령을 추가하면 이 표와 `src/cli.mjs`의 전체 사용법 줄을 같은 커밋에서 고친다.
@@ -105,3 +105,10 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | `kadan runners` | 역할별 실행기·모델·폴백 순서 설정. `show`·`init`·`set`·`runner`·`model`·`block`·`preset`·`fallback` | [실행 모델 설정](runner-settings.md) |
 | `kadan handover <선임> --to <후임> …` | 담당 인계. `accept`·`finish`·`status`·`abort` | [인계 안내](handover.md) |
 | `kadan storage` | 원장 저장소 점검·전환. `inspect`·`verify`·`activate`·`import`·`export`·`pause`·`resume` | [SQLite 저장](sqlite-storage.md) |
+
+## 자원 아끼기
+
+| 명령 | 하는 일 | 자세히 |
+|---|---|---|
+| `kadan slot` | 저장소마다 다시 쓰는 검수용 worktree(기본 4자리). `acquire <저장소> --for <카드> [--ref <SHA>]`·`deps <자리경로>`·`release <자리경로>\|--for <카드>`·`status` | [검수 자리](review-slots.md) |
+| `kadan limit` | 무거운 명령의 기계 전체 동시 개수 제한. `run <rust\|install\|build> -- <명령...>`·`status`. rust는 `CARGO_BUILD_JOBS=2` | [무거운 명령 제한](review-slots.md#무거운-명령-제한-kadan-limit) |
