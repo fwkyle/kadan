@@ -122,9 +122,9 @@ function explicitProfile({role,profile,entries,config}) {
   if (role==='비서') return {profile:'secretary',source:'mailbox-role'};
   return null;
 }
-function selectProfile({role,entries,context}) {
+// 카드 단계(card.rallyStep, 업무 실행 연결의 phase)로 정하는 프로필. 단계가 엇갈리면 ambiguous-executions, 단계 정보가 없으면 null.
+function phaseProfile({role,entries,context}) {
   const {identity}=context;
-  if (context.works.some(w=>w.owner===role&&['open','hold'].includes(w.status))) return {profile:'conductor',source:'work-owner'};
   const phases=new Set();
   const addPhase=phase=>{
     if (phase==='review') phases.add('reviewer');
@@ -144,6 +144,12 @@ function selectProfile({role,entries,context}) {
   }
   if (phases.size===1) return {profile:[...phases][0],source:'execution-phase'};
   if (phases.size>1) return {profile:null,source:'ambiguous-executions'};
+  return null;
+}
+function selectProfile({role,entries,context}) {
+  if (context.works.some(w=>w.owner===role&&['open','hold'].includes(w.status))) return {profile:'conductor',source:'work-owner'};
+  const byPhase=phaseProfile({role,entries,context});
+  if (byPhase) return byPhase;
   const children=[...context.parents].filter(([,parent])=>parent===role).map(([child])=>child);
   if (children.length) return {profile:children.some(c=>[...context.parents.values()].includes(c))?'super':'conductor',source:'hierarchy'};
   return {profile:null,source:'unknown-role'};
@@ -169,6 +175,17 @@ export function inferDispatchProfile({home,role,profile,taskId,mailContext,entri
     if (!error.delivery) error.delivery='not-sent';
     throw error;
   }
+}
+
+// 발령하는 카드 자체가 요구하는 프로필(review→reviewer, 구현·수정 등→worker). 세션 시작 프로필과 상관없이
+// 카드 단계만 본다 — 작업자로 띄운 세션에 검수 카드가 가는 일을 발령 막기가 알아보게 한다(2026-10-02 [kyle]).
+// 판정이 안 되거나 자료가 어긋나면 null — 호출부는 기존 동작을 그대로 둔다.
+export function inferCardPhaseProfile({home,role,taskId,mailContext,entries=readLedger(home),cards}) {
+  try {
+    const context=facts(home,entries,{taskId,mailContext,infer:true,cards});
+    // 이 카드를 못 찾으면 그 역할의 다른 카드 단계로 대신 정하지 않는다
+    return context.card ? phaseProfile({role,entries,context}) : null;
+  } catch { return null; }
 }
 
 export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home),cards}) {

@@ -7,6 +7,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {readLedger} from '../src/ledger.mjs';
 import {CardStore} from '../src/card-store.mjs';
+import {WorkStore} from '../src/work-store.mjs';
 import {guardedSend} from '../src/cli.mjs';
 import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
 
@@ -127,7 +128,7 @@ test('빈 예외 이유는 세션이 기본값과 같아도, --raw여도, 받는
  };
  blankRejected(rig());                                  // 기본값과 같은 새 세션
  blankRejected(rig(),{raw:true});                       // --raw
- blankRejected(rig({roleProfile:'reviewer',cmd:REVIEWER_CMD}));
+ blankRejected(rig({roleProfile:'reviewer',cmd:REVIEWER_CMD,step:'review'}));
  blankRejected(rig({roleProfile:'conductor'}));         // 검사 대상이 아닌 역할도 규칙은 하나
  // 이유가 있으면 옛 세션이 아닌 경우 옵션은 그냥 무시된다(기존 동작 유지)
  const fresh=rig();fresh.call({allowOldRunner:'필요 없음',raw:true});
@@ -180,12 +181,12 @@ test('--raw 발령도 옛 작업자·검수자 세션에는 가지 않는다 —
  }
  const review=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step:'review'});
  assert.throws(()=>review.call({raw:true}),e=>{assert.ok(stale(e));assert.match(e.message,/reviewer 기본값 = codex · gpt-6-sol/);return true;});
- // 역할 이름 설정(role-instructions.json)이 작업자면 카드 단계(review)보다 우선한다 — worker 기본값과 대조
+ // 역할 이름 설정(role-instructions.json)이나 발령 쪽 프로필 인자가 작업자인데 카드 단계가 review면
+ // 프로필·단계 불일치로 거절한다(2026-10-02 — 전에는 worker 기본값과 대조했다). 조치는 reviewer로 새로 띄우기
  const named=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step:'review',roles:{r:'worker'}});
- assert.throws(()=>named.call({raw:true}),e=>{assert.ok(stale(e));assert.match(e.message,/worker 기본값/);return true;});
- // 발령 쪽 프로필 인자(자동 발령)도 raw와 상관없이 근거이고 카드 단계보다 우선한다
+ assert.throws(()=>named.call({raw:true}),e=>{assert.ok(stale(e));assert.match(e.message,/검수 카드\(review\)를 작업자\(worker\) 프로필 세션에/);assert.match(e.message,/--profile reviewer/);return true;});
  const arg=rig({cmd:OLD_OPUS_CMD,roleProfile:null,step:'review'});
- assert.throws(()=>arg.call({raw:true,roleProfile:'worker'}),e=>{assert.ok(stale(e));assert.match(e.message,/worker 기본값/);return true;});
+ assert.throws(()=>arg.call({raw:true,roleProfile:'worker'}),e=>{assert.ok(stale(e));assert.match(e.message,/검수 카드\(review\)를 작업자\(worker\) 프로필 세션에/);return true;});
  assert.equal(review.sent+named.sent+arg.sent,0);
  // 이유가 있는 예외는 raw여도 통과하고 send 기록에 남는다
  const allowed=rig({cmd:OLD_OPUS_CMD,roleProfile:null});
@@ -198,11 +199,114 @@ test('--raw 발령도 옛 작업자·검수자 세션에는 가지 않는다 —
 });
 
 test('검수자는 검수자 기본값과 대조한다',()=>{
- const same=rig({cmd:REVIEWER_CMD,roleProfile:'reviewer'});
+ const same=rig({cmd:REVIEWER_CMD,roleProfile:'reviewer',step:'review'});
  assert.deepEqual(same.call(),[]);assert.equal(same.sent,1);
- const old=rig({cmd:'codex -p lite --model "gpt-6-astra" -c model_reasoning_effort="high"',roleProfile:'reviewer'});
+ const old=rig({cmd:'codex -p lite --model "gpt-6-astra" -c model_reasoning_effort="high"',roleProfile:'reviewer',step:'review'});
  assert.throws(()=>old.call(),e=>{assert.ok(stale(e));assert.match(e.message,/reviewer 기본값 = codex · gpt-6-sol · high/);return true;});
  assert.equal(old.sent,0);
+});
+
+// 2026-10-02: 10/1부터 검수 카드 18건이 `--profile worker`로 띄운 세션(작업자와 같은 소넷)에 갔다. 세션 시작 프로필만
+// 대조해 통과했다 — 발령 카드의 단계가 요구하는 프로필(review→reviewer)과 세션 프로필이 다르면 거절한다.
+const mismatchLine=/^카드 발령 거절: 검수 카드\(review\)를 작업자\(worker\) 프로필 세션에 보낸다 — 검수 카드\(review\)는 reviewer 프로필\(지금 기본값 codex · gpt-6-sol · high\)이어야 한다$/;
+test('검수 카드를 작업자 프로필 세션에 보내면 거절한다 — 세션이 작업자 기본값과 같아도',()=>{
+ const r=rig({cmd:WORKER_CMD,roleProfile:'worker',step:'review'});
+ for(const raw of [false,true]){
+  assert.throws(()=>r.call({raw}),e=>{
+   assert.ok(stale(e),`${e.code}/${e.delivery}`);
+   const lines=e.message.split('\n');
+   assert.equal(lines.length,3);
+   assert.match(lines[0],mismatchLine);
+   assert.match(lines[1],/이 세션\(kadan-r\) 값 = claude · claude-sonnet-5-5 — 세션 프로필 worker/);
+   assert.match(lines[2],/kadan stop r 뒤 kadan start r --profile reviewer로 새로 띄워 보내라/);
+   assert.match(lines[2],/--allow-old-runner/);
+   return true;
+  },`raw=${raw}`);
+ }
+ assert.equal(r.sent,0);assert.equal(r.sends().length,0);
+ // 반대 방향: 작업 카드를 검수자 프로필 세션에 보내도 거절
+ const back=rig({cmd:REVIEWER_CMD,roleProfile:'reviewer',step:'fix'});
+ assert.throws(()=>back.call(),e=>{assert.ok(stale(e));assert.match(e.message,/작업 카드\(구현·수정 등\)를 검수자\(reviewer\) 프로필 세션에/);assert.match(e.message,/--profile worker/);return true;});
+ assert.equal(back.sent,0);
+ // 검사 함수가 돌려주는 코드
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-phase-'));
+ fs.writeFileSync(path.join(home,'runner-settings.json'),JSON.stringify(settingsDoc()));
+ const verdict=inspectDispatchRunnerGuard({home,role:'r',session:'kadan-r',profile:'worker',phaseProfile:'reviewer',
+  identity:{harness:'claude',model:'claude-sonnet-5-5',launch:{cmd:WORKER_CMD}}});
+ assert.equal(verdict.result,'reject');assert.equal(verdict.code,'profile-phase-mismatch');
+});
+
+test('검수 카드를 검수자 프로필 세션(검수자 기본값)에 보내면 통과, 작업 카드를 작업자 세션에 보내도 그대로 통과',()=>{
+ const review=rig({cmd:REVIEWER_CMD,roleProfile:'reviewer',step:'review'});
+ assert.deepEqual(review.call(),[]);
+ assert.equal(review.sent,1);assert.equal(review.sends()[0].runnerGuard,undefined);
+ for(const step of ['implementation','fix']){
+  const work=rig({cmd:WORKER_CMD,roleProfile:'worker',step});
+  assert.deepEqual(work.call(),[],step);
+  assert.equal(work.sent,1);assert.equal(work.sends()[0].runnerGuard,undefined);
+ }
+ // 단계 프로필이 같으면 기존 대조는 그대로다 — 검수자 세션이 옛 모델이면 여전히 옛 세션으로 거절
+ const stalereviewer=rig({cmd:'codex -p lite --model "gpt-6-astra" -c model_reasoning_effort="high"',roleProfile:'reviewer',step:'review'});
+ assert.throws(()=>stalereviewer.call(),e=>{assert.ok(stale(e));assert.match(e.message,/옛 실행기·모델 세션이다 — 지금 reviewer 기본값/);return true;});
+});
+
+test('검수 카드→작업자 세션도 --allow-old-runner "<이유>"면 예외 통과하고 이유가 send 기록에 남는다',()=>{
+ const r=rig({cmd:WORKER_CMD,roleProfile:'worker',step:'review'});
+ const lines=r.call({allowOldRunner:'검수자 세션 없음, 같은 모델 검수 감수'});
+ assert.equal(r.sent,1);
+ assert.equal(lines.length,1);
+ assert.match(lines[0],/^경고: kadan-r 옛 세션 예외 통과\(--allow-old-runner\) — 검수 카드\(review\)를 작업자\(worker\) 프로필 세션에 보낸다.* — 이유: 검수자 세션 없음, 같은 모델 검수 감수$/);
+ assert.deepEqual(r.sends()[0].runnerGuard,{result:'allowed',code:'profile-phase-mismatch',reason:'검수자 세션 없음, 같은 모델 검수 감수',settingsRevision:7});
+ // 빈 이유는 여전히 거절
+ const blank=rig({cmd:WORKER_CMD,roleProfile:'worker',step:'review'});
+ assert.throws(()=>blank.call({allowOldRunner:' '}),e=>{assert.ok(stale(e));assert.match(e.message,/이유가 필요하다/);return true;});
+});
+
+test('카드 단계를 하나로 정할 수 없으면(묶음 단계 review·업무 연결 단계 implementation) 세션 시작 프로필로만 대조한다 — 기존 동작 그대로',()=>{
+ // 실제 발령에서는 카드에 묶음 단계가 늘 있다. 업무 실행 연결의 단계와 엇갈리면 단계 판정이 ambiguous가 된다
+ const ambiguous=extra=>{
+  const r=rig({step:'review',...extra});
+  const works=new WorkStore(r.home);
+  const work=works.create({key:'r/work',title:'업무',goal:'목표',scope:'범위',acceptance:'조건',owner:'boss',repoPath:r.home});
+  works.change(work.key,'link',{execution:r.card.key,phase:'implementation',round:1},{revision:work.revision,note:'연결'});
+  return r;
+ };
+ for(const [roleProfile,cmd] of [['worker',WORKER_CMD],['reviewer',REVIEWER_CMD]]){
+  const r=ambiguous({cmd,roleProfile});
+  assert.deepEqual(r.call(),[],roleProfile);
+  assert.equal(r.sent,1);assert.equal(r.sends()[0].runnerGuard,undefined);
+ }
+ const old=ambiguous({cmd:OLD_OPUS_CMD,roleProfile:'worker'});
+ assert.throws(()=>old.call(),e=>{assert.ok(stale(e));assert.match(e.message,/옛 실행기·모델 세션이다 — 지금 worker 기본값/);return true;});
+ // 단계 인자를 안 넘기면 검사 함수도 예전과 같다
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-nophase-'));
+ fs.writeFileSync(path.join(home,'runner-settings.json'),JSON.stringify(settingsDoc()));
+ for(const phaseProfile of [undefined,null,'conductor']){
+  assert.deepEqual(inspectDispatchRunnerGuard({home,role:'r',session:'kadan-r',profile:'worker',phaseProfile,
+   identity:{harness:'claude',model:'claude-sonnet-5-5',launch:{cmd:WORKER_CMD}}}),{result:'pass'},String(phaseProfile));
+ }
+});
+
+// 2026-10-02: `kadan start --profile reviewer --fallback N`으로 정식으로 띄운 폴백 세션은 옛 세션이 아니다.
+test('지금 설정의 폴백 목록과 같은 세션은 통과 + 폴백 번호 경고, 어느 것과도 다르면 거절',()=>{
+ const FALLBACK={runner:'codex',model:'gpt-6-astra',effort:'high'};
+ const settings={...settingsDoc(),presets:{B:{roles:{worker:WORKER,reviewer:REVIEWER},fallback:{reviewer:[{runner:'codex',model:'gpt-5-x',effort:'high'},FALLBACK]}}}};
+ const fb=rig({settings,cmd:'codex -p lite --model "gpt-6-astra" -c model_reasoning_effort="high"',roleProfile:'reviewer',step:'review'});
+ const lines=fb.call();
+ assert.equal(fb.sent,1);
+ assert.equal(lines.length,1);
+ assert.equal(lines[0],'경고: kadan-r은(는) reviewer 폴백 2번(codex · gpt-6-astra · high)으로 떠 있다 — 기본값(codex · gpt-6-sol · high)이 아니다');
+ assert.deepEqual(fb.sends()[0].runnerGuard,{result:'warn',code:'fallback',fallbackIndex:2,settingsRevision:7});
+ // 폴백에도 없는 모델은 기존처럼 옛 세션 거절
+ const none=rig({settings,cmd:'codex -p lite --model "gpt-4-old" -c model_reasoning_effort="high"',roleProfile:'reviewer',step:'review'});
+ assert.throws(()=>none.call(),e=>{assert.ok(stale(e));assert.match(e.message,/옛 실행기·모델 세션이다/);return true;});
+ assert.equal(none.sent,0);
+ // 검수자 폴백과 같은 모델이어도 작업자 프로필 세션이면 검수 카드는 프로필 불일치로 거절
+ const wrongProfile=rig({settings,cmd:'codex -p lite --model "gpt-6-astra" -c model_reasoning_effort="high"',roleProfile:'worker',step:'review'});
+ assert.throws(()=>wrongProfile.call(),e=>{assert.ok(stale(e));assert.match(e.message.split('\n')[0],mismatchLine);return true;});
+ // 폴백 목록이 없는 설정은 예전과 같다
+ const plain=rig({cmd:'codex -p lite --model "gpt-6-astra" -c model_reasoning_effort="high"',roleProfile:'reviewer',step:'review'});
+ assert.throws(()=>plain.call(),stale);
 });
 
 test('설정이 없거나 그 역할 값이 없으면 대조하지 않는다 — 설정 파일이 깨졌으면 닫고, 예외 이유가 있으면 통과',()=>{

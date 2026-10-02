@@ -63,6 +63,8 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 
 | 상황 | 결과 |
 | --- | --- |
+| 세션 프로필(worker/reviewer)과 발령 카드 단계가 요구하는 프로필이 다르다(예: 검수 카드를 `--profile worker` 세션에) | **거절**(`profile-phase-mismatch`, `KADAN_STALE_RUNNER`). 조치: `kadan stop` 뒤 카드 단계 프로필로 새로 띄우기. 예외 이유로만 통과. 카드 단계가 하나로 정해지지 않으면(엇갈림·모름) 또는 설정 파일이 없으면 이 줄은 건너뛴다(2026-10-02 [kyle] — 10/1 검수 카드 18건이 작업자와 같은 모델 세션에 간 사고) |
+| 실행기 또는 모델이 기본값과 다르지만 지금 설정의 그 프로필 폴백 목록 중 하나와 같다 | 통과 + 경고 한 줄(폴백 번호), send 기록에 `runnerGuard: {result: "warn", code: "fallback", fallbackIndex, settingsRevision}` (2026-10-02 [kyle]) |
 | 실행기 또는 모델이 다르다 | **거절**(종료 코드 ≠ 0, 전달·send 기록 없음, `KADAN_STALE_RUNNER`). 안내 3줄: 지금 기본값 / 세션 값 / 조치 |
 | 실행기·모델은 같고 강도·실행 인자만 다르다 | 통과 + 경고 한 줄(stderr), send 기록에 `runnerGuard: {result: "warn", code: "effort-or-args", settingsRevision}` |
 | `--allow-old-runner "<이유>"` | 거절을 예외 통과. stderr에 경고, send 기록에 `runnerGuard: {result: "allowed", code, reason, settingsRevision}`. **이유가 비었거나 값이 없으면 예외가 아니라서 항상 거절**한다 — 세션이 기본값과 같아도, `--raw`여도, 받는 역할이 무엇이든 같다(`KADAN_STALE_RUNNER`, 안내 2줄). 이유가 있는데 옛 세션이 아니면 옵션은 무시된다 |
