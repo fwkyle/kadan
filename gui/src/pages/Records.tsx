@@ -331,7 +331,7 @@ export function Runs({ url }: { url: URL }) {
     </section>
   );
 }
-export function Sessions() {
+export function Sessions({ url }: { url: URL }) {
   const resource = useResource<
       Stamp & {
         known: boolean;
@@ -344,12 +344,25 @@ export function Sessions() {
         }[];
       }
     >("sessions"),
-    data = resource.data;
+    data = resource.data,
+    aliveOnly = url.searchParams.get("alive") === "1",
+    alive = data?.roles.filter((r) => r.life.state === "alive") ?? [],
+    rows = data && aliveOnly && data.known ? alive : (data?.roles ?? []);
   return (
     <section>
       <h1>담당자 상태</h1>
       <p>열린 AI 창과 아직 안 닫힌 카드를 맡은 담당, 시작할 때 기록한 모델을 확인합니다. 작업의 진행·완료는 <a href="/?collection=work#dashboard">워크</a>에서 확인하세요.</p>
       <p className="muted">다음 발령에 사용할 모델은 <a href="#runner-settings">실행 모델</a>에서 설정합니다.</p>
+      {data && (
+        <div className="segmented" aria-label="담당 보기">
+          <button aria-pressed={!aliveOnly} onClick={() => patchLocation({ alive: null }, undefined, true)}>
+            전체 {data.roles.length}
+          </button>
+          <button aria-pressed={aliveOnly} onClick={() => patchLocation({ alive: "1" }, undefined, true)}>
+            생존만 {data.known ? alive.length : "모름"}
+          </button>
+        </div>
+      )}
       {data && data.hidden > 0 && (
         <p className="muted">창이 닫혔고 맡은 카드도 끝난 담당 {data.hidden}명은 숨겼습니다.</p>
       )}
@@ -372,7 +385,7 @@ export function Sessions() {
               </tr>
             </thead>
             <tbody>
-              {data.roles.map((r) => (
+              {rows.map((r) => (
                 <tr key={r.role}>
                   <td>{r.role}</td>
                   <td>

@@ -117,7 +117,7 @@ export default function App() {
     ) : view === "runs" ? (
       <Runs url={url} />
     ) : view === "sessions" ? (
-      <Sessions />
+      <Sessions url={url} />
     ) : view === "runner-settings" ? (
       <Runners />
     ) : view === "operations-flow" ? (
