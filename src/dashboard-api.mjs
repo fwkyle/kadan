@@ -50,7 +50,10 @@ import {
   readSettings,
   runnerChoices,
   launchFor,
+  watchJudgeCommand,
   PROFILE_ROLES,
+  WATCH_RUNNER,
+  WATCH_MAX_ATTEMPTS,
 } from "./runner-settings.mjs";
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
@@ -366,11 +369,16 @@ export function dashboardData(snapshot, url) {
         }
       }),
     );
+    commands.watch =
+      watchJudgeCommand(settings.presets[settings.activePreset].roles.watch) ||
+      "미설정 — 감시 프로필의 KADAN_JUDGE_MODEL 사용";
     return {
       ...stamp,
       settings,
       catalog,
       commands,
+      // 감시 AI는 codex만 고를 수 있고, 1순위 포함 최대 N개를 자동으로 차례로 시도한다.
+      watch: { runner: WATCH_RUNNER, maxAttempts: WATCH_MAX_ATTEMPTS },
       roles: RUNNER_ROLE_LABELS,
       history: (snapshot.entries || [])
         .filter((e) => e.kind === "runner-settings")

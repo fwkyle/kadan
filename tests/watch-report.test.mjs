@@ -290,3 +290,38 @@ test('progress submit은 과거 taskId-only 질문과 최종답장의 원문 답
  assert.equal(report.idleWithoutAsk,true);
  assert.equal(f.sent.length,1);
 });
+
+// 감시 AI 자동 폴백(2026-10-03 [kyle]): 실행 모델 설정의 watch 1순위가 응답하지 못하면 폴백으로 내려간다.
+const watchSettings=fallback=>()=>({version:1,revision:9,activePreset:'B',runners:{codex:{spawn:'x'}},
+ presets:{B:{roles:{watch:{runner:'codex',model:'m-1',effort:'max'}},fallback:{watch:fallback}}}});
+test('감시 AI 폴백: 1순위가 시간 초과·호출 실패면 다음 모델이 새 호출로 보고한다',async()=>{
+ for(const failure of [{status:null,error:{code:'ETIMEDOUT'}},{status:1,stdout:''}]){
+  const f=fixture(),models=[];
+  const ai=new WatchAI({...f.options,readSettings:watchSettings([{runner:'codex',model:'m-2',effort:'high'}]),spawn:(_cmd,options)=>{
+   models.push([options.env.KADAN_JUDGE_MODEL,options.env.KADAN_JUDGE_EFFORT]);
+   if(models.length===1)return failure;
+   f.r.submit(options.env.KADAN_JUDGE_REQUEST,'진행중','도구 실행 중');return {status:0,stdout:''};
+  }});
+  const result=await ai.run({judgeCmd:'fake',source:'stall',role:'p-작업자',parents,input:{screen:'s'}});
+  assert.equal(result.reason,'reported');assert.deepEqual(models,[['m-1','max'],['m-2','high']]);
+  const calls=f.rows().filter(e=>e.kind==='watch-ai-call');
+  assert.equal(f.rows().filter(e=>e.kind==='watch-ai-request').length,2,'시도마다 새 호출 기록');
+  assert.deepEqual(calls.map(c=>[c.fallbackIndex,c.judgeSource,c.settingsRevision]),[[0,'settings',9],[1,'settings',9]]);
+  assert.equal(calls[1].previousRequestId,calls[0].requestId);assert.equal(calls[1].previousReason,calls[0].reason);
+ }
+});
+test('감시 AI 폴백: 보고 누락·취소는 내려가지 않고, 설정이 없으면 프로필 모델로 한 번만 부른다',async()=>{
+ const f=fixture();let calls=0;
+ let r=await new WatchAI({...f.options,readSettings:watchSettings([{runner:'codex',model:'m-2',effort:'high'}]),spawn:()=>{calls++;return {status:0,stdout:'진행중'};}})
+  .run({judgeCmd:'fake',source:'stall',role:'p-작업자',parents,input:{}});
+ assert.equal(r.reason,'report-missing');assert.equal(calls,1);
+ const controller=new AbortController();calls=0;
+ r=await new WatchAI({...f.options,readSettings:watchSettings([{runner:'codex',model:'m-2',effort:'high'}]),spawn:()=>{calls++;controller.abort();return {status:null,error:{code:'ETIMEDOUT'}};}})
+  .run({judgeCmd:'fake',source:'stall',role:'p-작업자',parents,input:{},signal:controller.signal});
+ assert.equal(calls,1,'감시 종료로 취소되면 다음 모델을 부르지 않는다');
+ const g=fixture(),envs=[];
+ r=await new WatchAI({...g.options,spawn:(_cmd,options)=>{envs.push(options.env.KADAN_JUDGE_MODEL);return {status:1,stdout:''};}})
+  .run({judgeCmd:'fake',source:'stall',role:'p-작업자',parents,input:{}});
+ assert.equal(r.reason,'call-failed');assert.deepEqual(envs,[process.env.KADAN_JUDGE_MODEL]);
+ assert.equal(g.rows().find(e=>e.kind==='watch-ai-call').judgeSource,'profile');
+});

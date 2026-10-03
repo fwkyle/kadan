@@ -8,6 +8,7 @@
 - 2단계(2026-09-23): 대시보드 '실행 모델' 화면에서 역할 값과 활성 프리셋을 바꾼다. 아래 [대시보드 화면](#대시보드-화면)을 본다.
 - 3단계(2026-09-23): 역할별 폴백 순서를 명령·대시보드에서 편집하고, `kadan start ... --fallback N --reason`으로 N번째 폴백을 골라 띄운다. 아래 [폴백 순서](#폴백-순서)를 본다.
 - 즐겨찾기(2026-09-27 [kyle]): 자주 고르는 실행기·모델·강도 조합을 저장해 두고, 대시보드에서 한 번 눌러 세 칸을 채운다. 아래 [즐겨찾기](#즐겨찾기)를 본다.
+- 감시 AI(2026-10-03 [kyle]): 감시 AI의 모델·강도·폴백 순서를 같은 화면에서 정하고, 1순위가 응답하지 못하면 감시기가 폴백으로 자동으로 내려간다. 아래 [감시 AI](#감시-ai)를 본다.
 
 ## 파일
 
@@ -16,7 +17,7 @@
 | 필드 | 뜻 |
 | --- | --- |
 | `revision` | 저장할 때마다 1씩 오른다. 읽은 revision과 다르면 저장을 거부한다 |
-| `activePreset`, `presets.<이름>.roles` | 역할(`worker`·`reviewer`·`conductor`·`super`)별 `{runner, model, effort}` |
+| `activePreset`, `presets.<이름>.roles` | 역할(`worker`·`reviewer`·`conductor`·`super`·`watch`)별 `{runner, model, effort}`. `watch`는 감시 AI다 |
 | `presets.<이름>.fallback.<역할>` | 1순위가 막혔을 때 내려갈 순서 목록 `[{runner, model, effort}]`. 1번부터 센다 |
 | `runners.<실행기>.spawn` | 실행 명령 틀. `{model}`·`{effort}`를 채운다 |
 | `runners.codex.catalog` | `codex-models-cache`면 `~/.codex/models_cache.json`의 모델과 `supported_reasoning_levels`만 고를 수 있다 |
@@ -48,7 +49,7 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - `start`의 start 기록에는 `launchSource`(`settings`/`override`/`fallback`), `settingsRevision`을 남긴다. `override`면 `overrideReason`과 그때의 설정 명령(`settingsCmd`)도 남긴다. `fallback`이면 `fallbackIndex`·`fallbackReason`·`settingsPreset`과 1순위 명령(`settingsCmd`, 있으면)을 남긴다.
 - 설정 파일이 없으면 `start`는 예전처럼 `--cmd`가 필요하다. 인계 후임 생성은 선임 명령을 이유("인계: 선임 실행 명령 유지")와 함께 그대로 쓴다.
 - `work auto-configure`는 작업자·검수자 세션을 실제로 띄운 모델의 계열이 같으면 거부한다.
-- 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 자동 라우팅·자동 폴백은 만들지 않는다. 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.
+- 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 발령에는 자동 라우팅·자동 폴백을 만들지 않는다(감시 AI만 예외, 아래 [감시 AI](#감시-ai)). 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.
 
 ## 옛 세션 발령 막기
 
@@ -83,7 +84,7 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 
 대시보드 위 메뉴의 **실행 모델**(`#runner-settings`)에서 명령어 없이 바꾼다.
 
-- 활성 프리셋의 역할 4개(작업자·검수자·일반감독·슈퍼감독)마다 실행기 → 모델 → 추론 강도를 고른다. 선택지는 `set`과 같은 목록(codex는 모델 목록 파일, 그 밖은 실측 목록)에서만 온다. 실행기를 바꾸면 그 실행기의 모델만, 모델을 바꾸면 그 모델이 지원하는 강도만 남는다. 강도를 받지 않는 실행기는 "해당 없음"이다.
+- 활성 프리셋의 역할 5개(작업자·검수자·일반감독·슈퍼감독·감시 AI)마다 실행기 → 모델 → 추론 강도를 고른다. 감시 AI 줄은 실행기로 codex만 보여 준다. 선택지는 `set`과 같은 목록(codex는 모델 목록 파일, 그 밖은 실측 목록)에서만 온다. 실행기를 바꾸면 그 실행기의 모델만, 모델을 바꾸면 그 모델이 지원하는 강도만 남는다. 강도를 받지 않는 실행기는 "해당 없음"이다.
 - 정책으로 막은 모델은 목록에 "차단: 이유"로 보이지만 그 역할에서는 고를 수 없다.
 - 각 행 아래에 지금 설정으로 채워질 실행 명령을 보여 준다.
 - 프리셋이 둘 이상이면 활성 프리셋을 바꿀 수 있다. 전환도 `runner-settings` 사건(`action: preset`, `before`·`after`는 프리셋 이름)으로 남는다.
@@ -128,6 +129,19 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 순서 바꾸기·삭제: 항목의 **위로**·**아래로**·**삭제**.
 - 버튼 한 번이 저장 한 번이다. 매번 이유가 필요하고 원장 사건이 하나씩 남는다.
 - 쓰기 주소는 `POST /runners/fallback`(`token`·`revision`·`role`·`reason`·`op`=`add`|`remove:N`|`up:N`|`down:N`, 추가면 `runner`·`model`·`effort`). 서버가 저장 직전 목록에 조작을 적용한 뒤 위 검사를 모두 거친다. 토큰·출처가 틀리면 403, 틀린 revision·빈 이유·목록 밖 값·강도·차단·계열 충돌·없는 번호는 409.
+
+## 감시 AI
+
+감시 AI(작업 감시AI·감독 관찰AI)는 사람이 띄우는 세션이 아니라 감시기(`kadan watch`)가 `scripts/watch-judge.sh`로 부르는 일회성 호출이다. 번호를 골라 줄 사람이 없으므로, 감시 AI의 폴백은 감시기가 스스로 내려간다(2026-10-03 [kyle] 결정 — 9/20 이후 실패가 모두 공급자 접속 장애·연결 끊김이었다).
+
+- 설정: 활성 프리셋의 `roles.watch`가 1순위, `fallback.watch`가 폴백 순서다. 명령은 `kadan runners set watch …`·`kadan runners fallback watch --set …`, 대시보드는 '실행 모델'의 **감시 AI** 줄이다. 프리셋을 바꾸면 감시 AI 값도 그 프리셋 것으로 바뀐다.
+- 실행기는 `codex`만 받는다. `watch-judge.sh`가 `codex exec`로 부르기 때문이다. 다른 실행기용 비대화 명령(어댑터)은 만들지 않는다. 작업자↔검수자 계열 규칙은 감시 AI에 적용하지 않는다. 정책 차단(`block --roles watch`)은 적용한다.
+- 호출 순서: 감시기는 AI를 부를 때마다 설정 파일을 새로 읽어 `[1순위, 폴백…]`을 만들고, 1순위부터 `KADAN_JUDGE_MODEL`·`KADAN_JUDGE_EFFORT`를 채워 부른다. 1순위 포함 **최대 3개**까지만 시도한다.
+- **내려가는 조건: 그 모델이 응답하지 못한 경우만** — 호출 결과가 시간 초과(`timeout`) 또는 호출 실패(`call-failed`, 종료 코드 ≠ 0). 보고 누락·불완전(`report-missing`·`report-incomplete`)은 모델이 돌았는데 지시를 어긴 것이라 내려가지 않는다. 감시 종료·대상 제외로 취소되면(`cancelled`) 멈춘다. 오류 문구를 해석하지 않는다.
+- 시도마다 새 호출 기록(`watch-ai-request`)과 증거 폴더를 만든다. 앞 시도의 만료·종료 기록이 뒤 시도의 보고를 막지 않게 하기 위해서다. 시도마다 5분 상한이므로 최악이면 감시AI 한 자리를 15분 잡는다. 그동안 감시sh 순회는 계속한다.
+- 호출 종료 기록(`watch-ai-call`)에 `judgeSource`(`settings`/`profile`), `fallbackIndex`(0이 1순위), `settingsRevision`·`settingsPreset`, 두 번째 시도부터 `previousRequestId`·`previousReason`을 남긴다. 실제 모델은 기존처럼 `model`(스크립트가 쓴 `model.txt`)이다.
+- 설정 파일이 없거나 `watch` 값이 없으면 예전과 같다: 감시 프로필의 `KADAN_JUDGE_MODEL`로 한 번만 부르고 강도는 max다. 설정 파일이 깨졌으면 프로필 값으로 부르고 `settingsError`를 남긴다.
+- 설정을 바꾸면 감시기를 다시 띄우지 않아도 다음 감시 호출부터 적용된다.
 
 ## 즐겨찾기
 
