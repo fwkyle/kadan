@@ -78,7 +78,7 @@ function conversationMetas() {
 }
 
 function aliveSessions() {
-  const res = spawnSync('tmux', ['-L', 'kadan', 'ls', '-F', '#{session_name}'], { encoding: 'utf8' });
+  const res = spawnSync('tmux', ['-u', '-L', 'kadan', 'ls', '-F', '#{session_name}'], { encoding: 'utf8' });
   if (res.status !== 0) return new Set();
   return new Set((res.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean));
 }

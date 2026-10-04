@@ -38,7 +38,8 @@ export function ensureTmuxConf(home = ledgerHome()) {
 export function tmux(args, input = undefined) {
   const conf = tmuxConfPath();
   const prefixArgs = fs.existsSync(conf) ? ["-f", conf] : [];
-  return spawnSync("tmux", ["-L", currentSocket(), ...prefixArgs, ...args], {
+  // -u: LANG 없는 서버·컨테이너에서도 한글 세션 이름과 탭 구분자를 '_'로 바꾸지 않게 한다.
+  return spawnSync("tmux", ["-u", "-L", currentSocket(), ...prefixArgs, ...args], {
     input,
     encoding: "utf8",
   });
