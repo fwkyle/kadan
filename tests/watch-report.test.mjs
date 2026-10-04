@@ -13,6 +13,12 @@ import {WatchReports} from '../src/watch-report.mjs';
 import {WatchAI} from '../src/watch-ai.mjs';
 
 const cli=fileURLToPath(new URL('../src/cli.mjs',import.meta.url));
+// 종료된 프로세스: 사라졌거나, 거둬 줄 init이 없는 컨테이너(PID 1이 좀비를 거두지 않음)에서 좀비로 남은 경우.
+function assertProcessGone(pid){
+ try{process.kill(pid,0);}catch(e){assert.equal(e.code,'ESRCH');return;}
+ let state=null;try{state=fs.readFileSync(`/proc/${pid}/stat`,'utf8').replace(/^.*\) /s,'')[0];}catch{}
+ assert.equal(state,'Z',`프로세스 ${pid}가 아직 살아 있다`);
+}
 const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],['p-슈퍼감독','@user']]);
 function fixture({sqlite=true}={}) {
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-watch-report-'));
@@ -178,7 +184,7 @@ test('실제 자식 프로세스의 무응답은 제한시간 안에 종료하�
  const result=await ai.run({judgeCmd:`'${process.execPath}' '${helper}'`,source:'stall',role:'p-작업자',parents,input:{},timeoutMs:250});
  assert.equal(result.reason,'timeout');assert(Date.now()-started<2500);
  const pid=Number(fs.readFileSync(path.join(f.home,'hang.pid'),'utf8'));
- assert.throws(()=>process.kill(pid,0),e=>e.code==='ESRCH');
+ assertProcessGone(pid);
  assert.equal(f.r.submit(result.requestId,'정체','늦은 응답').accepted,false);
 });
 
@@ -214,7 +220,7 @@ setInterval(()=>{},1000);
  assert.equal(f.rows().filter(e=>e.kind==='watch-ai-call').length,1);
  assert.equal(f.rows().find(e=>e.kind==='watch-ai-call').exitCode,0);
  const pids=JSON.parse(fs.readFileSync(path.join(f.home,'report.pids'),'utf8'));
- for(const pid of pids)assert.throws(()=>process.kill(pid,0),e=>e.code==='ESRCH');
+ for(const pid of pids)assertProcessGone(pid);
 });
 
 test('완료 신호 파일만으로 성공하지 않고 원장의 보고·전달 접수를 대조한다',async()=>{
@@ -237,7 +243,7 @@ test('감시 종료 신호는 해당 AI만 취소하고 늦은 보고를 허용�
   assert.equal(f.r.submit(result.requestId,'정체','취소 뒤 늦은 보고').accepted,false);
   assert.ok(fs.existsSync(pidFile),'가짜 AI가 4초 안에 PID를 쓰지 않았다 — 시험 전제(실행 중 취소)가 깨졌다');
   const pid=Number(fs.readFileSync(pidFile,'utf8'));
-  assert.throws(()=>process.kill(pid,0),e=>e.code==='ESRCH');
+  assertProcessGone(pid);
  }finally{clearInterval(timer);}
 });
 

@@ -113,7 +113,7 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
   const up = spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden'], { env, encoding: 'utf8', timeout: 60000 });
   assert.equal(up.status, 0, up.stdout + up.stderr);
   assert.match(up.stdout, /시작됨: kadan-비서/); assert.match(up.stdout, /시작됨: kadan-대시보드/); assert.match(up.stdout, /첫 지문 전송됨/);
-  const list = spawnSync('tmux', ['-L', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).stdout;
+  const list = spawnSync('tmux', ['-u', '-L', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).stdout;
   assert.match(list, /kadan-비서/); assert.match(list, /kadan-대시보드/);
   let status = null;
   for (let i = 0; i < 40 && status !== 200; i++) { try { status = (await fetch(`http://127.0.0.1:${port}/`)).status; } catch { await new Promise((r) => setTimeout(r, 250)); } }
@@ -125,6 +125,23 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
   assert.deepEqual(starts.map(e=>e.role),[SECRETARY_ROLE,DASHBOARD_ROLE]);
   const sends=readMailLedger(home).filter(e=>e.kind==='send');assert.equal(sends.length,1,'재실행은 첫 지문을 중복 전달하지 않는다');
   assert.equal(sends[0].role,SECRETARY_ROLE);assert.equal(sends[0].floor,'tmux');assert.notEqual(sends[0].transport,'mailbox');
+ } finally {
+  spawnSync('tmux', ['-L', socket, 'kill-server']);
+ }
+});
+
+test('격리 tmux: LANG 없는 환경에서도 한글 역할 세션을 그대로 읽는다', async (t) => {
+ if (spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux 없음');
+ const home = tmp('kadan-qs-locale-'); const socket = `kadan-qs-locale-${process.pid}`;
+ const env = { ...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux', KADAN_WINDOW: 'none' };
+ for (const k of Object.keys(env)) if (k === 'LANG' || k.startsWith('LC_')) delete env[k];
+ const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+ try {
+  const started = spawnSync(process.execPath, [cli, 'start', '작업자', '--cmd', 'sh', '--hidden'], { env, encoding: 'utf8', timeout: 30000 });
+  assert.equal(started.status, 0, started.stdout + started.stderr);
+  const status = spawnSync(process.execPath, [cli, 'status'], { env, encoding: 'utf8', timeout: 30000 });
+  assert.equal(status.status, 0, status.stdout + status.stderr);
+  assert.match(status.stdout, /kadan-작업자\s.*PID일치/);
  } finally {
   spawnSync('tmux', ['-L', socket, 'kill-server']);
  }
