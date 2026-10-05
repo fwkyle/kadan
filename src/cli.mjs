@@ -1722,6 +1722,14 @@ export function sendWatchMailReminder(role,message,expectedPid,{
     notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
 }
 
+// 자가점검 깨우기(--wake)는 감독 창에 붙여넣는 우편이라, 사람이 그 창에서 대화 중이면 미룬다.
+// 사용자가 슈퍼감독과 직접 대화하는 창에 반쯤 쓴 문장 뒤에 붙지 않게 한다(2026-10-05). 읽음 재알림도 만들지 않는다.
+export function sendWatchWake(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend}={}) {
+  const session=sessionName(role);
+  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,
+    notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
+}
+
 // 바닥이 보류 조회를 지원하지 않으면(rottie) 기존처럼 보류 없이 진행한다.
 export function watchMailHold(role,{selectedFloor=floor}={}) {
   return selectedFloor.notificationHold?.(sessionName(role),{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}) ?? null;
@@ -1849,6 +1857,7 @@ function cmdWatch(argv, flags) {
     stallAfterMs: stallAfterMinutes*60_000,
     record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
     sendAlert: sendWatchMessage,
+    sendWake: sendWatchWake,
     sendMailReminder: sendWatchMailReminder,
     mailHold: watchMailHold,
     resume429: (role,message,expectedPid) => {

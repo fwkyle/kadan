@@ -37,14 +37,16 @@ export function buildWatchScope(cards, entries, parents = new Map(), works = [])
 export function buildSupervisorScope(cards, entries, parents = new Map(), works = []) {
   const active = activeExecutions(cards, entries, parents, works, false);
   const tasks = [];
+  // 사슬의 끝(상위가 @user인 최상위 감독)까지 포함한다. 최상위를 빼면 그 세션의 죽음·정체는 누구도
+  // 알리지 않는 사각이 된다(2026-10-05 점검). 활성 실행이 아래에 있을 때만 대상인 규칙은 다른 감독과 같다.
   const add = (role, entry) => {
     const visited = new Set();
     while (role && role !== '@user' && !visited.has(role)) {
       visited.add(role);
       const parent = parents.get(role);
-      if (parent === '@user') break;
       if (!parent) break; // 관계를 모르면 옛 전역 슈퍼감독을 임의로 붙이지 않는다.
       tasks.push({...entry, subject:entry.role, role});
+      if (parent === '@user') break;
       role = parent;
     }
   };

@@ -9,8 +9,9 @@ const send={kind:'send',role:'worker',taskId:'c',t:'2026-09-07T01:01:00Z'};
 const base={center,entries:[{kind:'hierarchy-loaded',pid:42,path:'/test/hierarchy.json',hash,t:'2026-09-07T01:00:00Z'},send],processes:[{pid:42,startedAt:'2026-09-07T00:00:00Z'}],readFile:()=>text,now};
 test('화면은 작업자 감시와 일반감독의 1시간 점검을 함께 표시한다',()=>{
  const m=watchOverview(base);assert.equal(m.process.state,'running');assert.equal(m.configuration.state,'matched');assert.equal(m.cycle.state,'unknown');
- assert.equal(m.boards[0].state,'configured');assert.equal(m.boards[0].totalRoles,2);assert.equal(m.boards[0].roles[1].recipient,'super');assert.deepEqual(m.boards[0].roles.map(r=>r.role),['supervisor','worker']);
- const html=renderWatchOverview({...center,monitoring:m},center.boards[0]);assert.match(html,/이 판의 감시 대상 2명 · 작업자 1 · 감독 1/);assert.match(html,/상신 경로: supervisor → super · worker → super/);assert.doesNotMatch(html,/감시기 실행 중/);assert.equal((html.match(/data-hierarchy-depth=/g)||[]).length,2);
+ // 최상위 super도 감독 점검 대상이라 역할 목록에 들어가고 상신 경로는 사용자다(2026-10-05).
+ assert.equal(m.boards[0].state,'configured');assert.equal(m.boards[0].totalRoles,3);assert.equal(m.boards[0].roles[2].recipient,'super');assert.equal(m.boards[0].roles[0].recipient,'@user');assert.deepEqual(m.boards[0].roles.map(r=>r.role),['super','supervisor','worker']);
+ const html=renderWatchOverview({...center,monitoring:m},center.boards[0]);assert.match(html,/이 판의 감시 대상 3명 · 작업자 1 · 감독 2/);assert.match(html,/상신 경로: super → 사용자 · OS 알림 · supervisor → super · worker → super/);assert.doesNotMatch(html,/감시기 실행 중/);assert.equal((html.match(/data-hierarchy-depth=/g)||[]).length,3);
  // 전역 상태는 한 줄 판정으로 한 번만 그린다. 주기 기록이 없는 감시기는 정상으로 올리지 않는다.
  const global=renderWatchVerdict({...center,monitoring:m});assert.match(global,/data-watch-level="warn"/);assert.match(global,/감시기 설정 확인 불가 · 주기 기록 없음/);assert.match(global,/마지막 주기<\/dt><dd>기록 없음/);
  const cycled=watchOverview({...base,entries:[...base.entries,{kind:'watch-cycle',pid:42,t:new Date(now-60_000).toISOString(),hierarchy:'/test/hierarchy.json',judge:true,ok:true}],profilePath:'/home/watch-profile.json'});
