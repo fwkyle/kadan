@@ -1,6 +1,7 @@
 // 실행 모델 설정 — 역할별 실행기·모델·강도의 기계용 기준(2026-09-23 [kyle] 승인 1단계).
 // 사람용 설명은 agent-runners.json에 두고, 발령이 읽는 값은 이 파일 한 곳만 본다.
-// 자동 라우팅·자동 폴백은 만들지 않는다. 실행기별 어댑터 대신 spawn 문자열 틀만 채운다.
+// 발령은 자동 라우팅·자동 폴백을 만들지 않는다. 실행기별 어댑터 대신 spawn 문자열 틀만 채운다.
+// 예외: 감시 AI(watch)는 감시기가 스스로 부르므로 폴백 목록으로 자동으로 내려간다(2026-10-03 [kyle]). watch-ai.mjs 참고.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,12 @@ import path from 'node:path';
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
 export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'conductor', super:'super'};
+// 설정에 값을 둘 수 있는 역할. watch는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
+export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch'];
+// 감시 AI는 scripts/watch-judge.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
+export const WATCH_RUNNER = 'codex';
+// 감시 호출 한 번에 시도하는 모델 수 상한(1순위 포함). 시도마다 5분 상한이라 감시AI 한 자리를 오래 잡지 않게 한다.
+export const WATCH_MAX_ATTEMPTS = 3;
 // agent-runners.json `_계열`의 이름 앞머리 규칙. 모르는 계열끼리는 "다르다"고 보지 않는다.
 export const DEFAULT_FAMILIES = {
   gpt:['gpt-','openai-codex/gpt-'], claude:['claude-','anthropic/claude-'], grok:['xai/grok-'], glm:['zai/glm-'],
@@ -51,6 +58,7 @@ function checkChoice(settings, role, {runner, model, effort}, options, {checkBlo
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
   const choices = runnerChoices(settings, runner, options);
+  if (role === 'watch' && runner !== WATCH_RUNNER) throw new Error(`감시 AI는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — watch-judge.sh가 codex exec로 부른다`);
   if (!choices.has(model)) throw new Error(`${runner}에서 고를 수 없는 모델: ${model}`);
   const efforts = choices.get(model);
   const needsEffort = settings.runners[runner].spawn.includes('{effort}');
@@ -105,6 +113,18 @@ export function launchForFallback(settings, profile, n) {
   const value = list[index - 1];
   return {cmd: fill(settings, value), role, preset: settings.activePreset, revision: settings.revision, fallbackIndex: index, ...value};
 }
+
+// 감시 AI 호출 순서: 1순위 뒤에 폴백 목록, 최대 WATCH_MAX_ATTEMPTS개. 설정 파일이나 watch 값이 없으면 null(감시 프로필의 KADAN_JUDGE_MODEL을 쓴다).
+export function watchJudgeChain(settings) {
+  const preset = settings?.presets?.[settings.activePreset];
+  const primary = preset?.roles?.watch;
+  if (!primary) return null;
+  return [primary, ...(preset.fallback?.watch ?? [])].slice(0, WATCH_MAX_ATTEMPTS)
+    .map((value, i) => ({model: value.model, effort: value.effort ?? null, fallbackIndex: i, revision: settings.revision, preset: settings.activePreset}));
+}
+
+// 감시 AI가 채울 호출 값. 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
+export const watchJudgeCommand = value => value ? `KADAN_JUDGE_MODEL=${value.model} KADAN_JUDGE_EFFORT=${value.effort ?? 'max'} watch-judge.sh (codex exec)` : null;
 
 // 'runner:model[:effort],…' → 폴백 항목 목록. 값에는 ':'·','가 들어갈 수 없다(VALUE). 빈 글은 빈 목록.
 export function parseFallbackSpec(text) {
@@ -200,7 +220,7 @@ export function setRunnerModel(home, {runner, model, efforts, ...meta}) {
 export function blockModel(home, {model, roles, ...meta}) {
   if (typeof model !== 'string' || !VALUE.test(model)) throw new Error('모델 이름 필요');
   const list = String(roles ?? '').split(',').map(v => v.trim()).filter(Boolean);
-  if (list.some(r => !Object.values(PROFILE_ROLES).includes(r))) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+  if (list.some(r => !SETTINGS_ROLES.includes(r))) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   return change(home, {...meta, action: 'block'}, next => {
     const entry = {model, ...(list.length ? {roles: list} : {}), reason: meta.reason.trim()};
     next.blocked = [...(next.blocked ?? []).filter(b => b.model !== model), entry];
@@ -221,7 +241,7 @@ export function setActivePreset(home, {preset, ...meta}) {
 
 // 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
 export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
-  if (!Object.values(PROFILE_ROLES).includes(role)) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+  if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
@@ -236,7 +256,7 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
 
 // 역할의 폴백 순서 목록 전체를 바꾼다(3단계). 항목마다 1순위와 같은 선택지·강도·정책 검사를 하고, 계열 확인은 공통 경로가 맡는다.
 export function setFallback(home, {role, items, preset, ...meta}) {
-  if (!Object.values(PROFILE_ROLES).includes(role)) throw new Error(`역할은 ${Object.values(PROFILE_ROLES).join('|')}`);
+  if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {

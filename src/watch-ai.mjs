@@ -5,16 +5,35 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {WatchReports,WATCH_AI_TIMEOUT_MS,watchAILabel} from './watch-report.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
+import {readSettings,watchJudgeChain} from './runner-settings.mjs';
 
 const quote = value => `'${String(value).replace(/'/g,"'\\''")}'`;
 const digest = text => createHash('sha256').update(text).digest('hex');
+// 다음 모델로 내려가는 결과: 모델이 응답하지 못한 경우만. 보고 누락·불완전은 모델이 돌았는데 지시를 어긴 것이라 내려가지 않는다.
+const UNAVAILABLE = new Set(['timeout','call-failed']);
 export class WatchAI {
   constructor(options) {
     this.reports=new WatchReports(options);
     this.spawn=options.spawn??runJudgeProcess;
     this.cli=options.cli??fileURLToPath(new URL('./cli.mjs',import.meta.url));
+    this.readSettings=options.readSettings??(()=>readSettings(this.reports.home));
   }
-  async run({judgeCmd,input,signal,...context}) {
+  // 감시 AI 모델 순서는 호출마다 실행 모델 설정을 새로 읽는다. 설정·watch 값이 없으면 감시 프로필의 KADAN_JUDGE_MODEL 한 번만 부른다.
+  // 시도마다 새 호출 기록을 만든다: 앞 시도의 만료·종료 기록이 뒤 시도의 보고를 막지 않고, 시도별 증거 폴더가 따로 남는다.
+  async run(options) {
+    let chain=null,settingsError=null;
+    try { chain=watchJudgeChain(this.readSettings()); } catch(error) { settingsError=error.message; }
+    let result;
+    for (const [i,judge] of (chain??[null]).entries()) {
+      if (i>0&&options.signal?.aborted) break;
+      const attempt=await this.attempt(options,judge,{settingsError,previous:result});
+      if (attempt.skipped&&result) break;
+      result=attempt;
+      if (!UNAVAILABLE.has(result.reason)) break;
+    }
+    return result;
+  }
+  async attempt({judgeCmd,input,signal,...context},judge,{settingsError,previous}) {
     const request=this.reports.request(context);
     if (!request) return {ok:true,skipped:true,deliveredRecipients:[]};
     const command=`KADAN_HOME=${quote(this.reports.home)} KADAN_FLOOR=${quote(process.env.KADAN_FLOOR||'tmux')} KADAN_SOCKET=${quote(process.env.KADAN_SOCKET||process.env.KADAN_LITE_SOCKET||'kadan')} ${quote(process.execPath)} ${quote(this.cli)} watch-report ${quote(request.requestId)}`;
@@ -44,7 +63,8 @@ export class WatchAI {
     let result;
     try { result=await this.spawn(judgeCmd,{input:prompt,timeout:context.timeoutMs??WATCH_AI_TIMEOUT_MS,signal,
       reportComplete:()=>fs.existsSync(file('report-complete'))&&this.reports.receipt(request.requestId)?.complete,
-      env:{...process.env,KADAN_HOME:this.reports.home,KADAN_JUDGE_DIR:request.evidencePath,KADAN_JUDGE_REQUEST:request.requestId}}); }
+      env:{...process.env,KADAN_HOME:this.reports.home,KADAN_JUDGE_DIR:request.evidencePath,KADAN_JUDGE_REQUEST:request.requestId,
+        ...(judge?{KADAN_JUDGE_MODEL:judge.model,KADAN_JUDGE_EFFORT:judge.effort??'max'}:{})}}); }
     catch(error) { result={error}; }
     const stdout=String(result.stdout??''),stderr=String(result.stderr??'');
     fs.writeFileSync(file('stdout.txt'),stdout,{mode:0o600});
@@ -56,7 +76,10 @@ export class WatchAI {
     const call={kind:'watch-ai-call',by:'watch',requestId:request.requestId,role:request.role,session:request.session,
       source:request.source,taskId:request.taskId,reason,exitCode:result.status??null,signal:result.signal??null,
       durationMs:Date.now()-started,inputDigest:digest(prompt),outputDigest:digest(stdout),outputBytes:Buffer.byteLength(stdout),
-      model:fs.existsSync(file('model.txt'))?fs.readFileSync(file('model.txt'),'utf8').trim():null,evidencePath:request.evidencePath};
+      model:fs.existsSync(file('model.txt'))?fs.readFileSync(file('model.txt'),'utf8').trim():null,evidencePath:request.evidencePath,
+      judgeSource:judge?'settings':'profile',
+      ...(judge?{fallbackIndex:judge.fallbackIndex,settingsRevision:judge.revision,settingsPreset:judge.preset}:{}),
+      ...(settingsError?{settingsError}:{}),...(previous?{previousRequestId:previous.requestId,previousReason:previous.reason}:{})};
     this.reports.record(call);
     const d=receipt?.delivery;
     return {ok:reason==='reported',reason,requestId:request.requestId,

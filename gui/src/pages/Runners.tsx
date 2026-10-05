@@ -41,6 +41,8 @@ type RunnersData = Stamp & {
     }
   >;
   history: unknown[];
+  // 감시 AI는 이 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 자동으로 차례로 시도한다.
+  watch?: { runner: string; maxAttempts: number };
 };
 export default function Runners() {
   const resource = useResource<RunnersData>("runners"),
@@ -103,6 +105,12 @@ export default function Runners() {
           <p className="muted">
             대체 후보(폴백)는 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
             전환은 없습니다.
+          </p>
+          <p className="muted">
+            감시 AI만 예외입니다. 감시기가 스스로 부르므로, 1순위가 시간 초과·호출
+            실패로 응답하지 못하면 대체 후보를 차례로 자동 시도합니다(1순위 포함 최대{" "}
+            {data.watch?.maxAttempts ?? 3}개, 시도마다 5분 상한). 비워 두면 감시 프로필의
+            KADAN_JUDGE_MODEL을 씁니다.
           </p>
           {Object.entries(data.roles).map(([role, label]) => (
             <details key={role}>
@@ -171,11 +179,18 @@ function RunnerForm({
 }) {
   const context = useContext(AppContext),
     id = useId();
+  // 감시 AI는 watch-judge.sh가 codex exec로 부르므로 그 실행기만 보여 준다. 판정은 서버가 다시 한다.
+  const runners =
+    role === "watch" && data.watch
+      ? [data.watch.runner]
+      : Object.keys(data.catalog);
+  const applyNote =
+    role === "watch" ? "다음 감시 호출부터 적용됩니다." : "다음 발령부터 적용됩니다.";
   const initial = () =>
     fallback
-      ? { runner: Object.keys(data.catalog)[0] || "", model: "", effort: "" }
+      ? { runner: runners[0] || "", model: "", effort: "" }
       : settings.presets[settings.activePreset].roles[role] || {
-          runner: Object.keys(data.catalog)[0] || "",
+          runner: runners[0] || "",
           model: "",
           effort: "",
         };
@@ -221,6 +236,7 @@ function RunnerForm({
     if (!reason.trim()) setReason("즐겨찾기: " + label(fav));
   };
   const usable = (fav: Choice) =>
+    runners.includes(fav.runner) &&
     Boolean(
       data.catalog[fav.runner]?.models.some((m) => m.model === fav.model),
     ) && !blockedFor(fav.model);
@@ -289,11 +305,11 @@ function RunnerForm({
           setReason("");
           context.draft(id, false);
           if (fallback || op !== "add")
-            context.notice("저장했습니다. 다음 발령부터 적용됩니다.");
+            context.notice("저장했습니다. " + applyNote);
           else {
             // 저장한 값이 위 요약표에 바로 보이도록 바꾸기 칸을 접고 표로 올린다(2026-09-27 [kyle]: 칸이 펼쳐진 채라 바뀐 게 안 보였다).
             context.notice(
-              `${data.roles[role]} 실행 모델을 ${label(choice)}(으)로 저장했습니다. 다음 발령부터 적용됩니다.`,
+              `${data.roles[role]} 실행 모델을 ${label(choice)}(으)로 저장했습니다. ${applyNote}`,
             );
             if (details) details.open = false;
             document
@@ -365,7 +381,7 @@ function RunnerForm({
                 change({ runner: e.target.value, model: "", effort: "" })
               }
             >
-              {Object.keys(data.catalog).map((r) => (
+              {runners.map((r) => (
                 <option key={r}>{r}</option>
               ))}
             </select>
@@ -442,7 +458,9 @@ function RunnerForm({
                         ? " · 차단: " + blocked.reason
                         : usable(fav)
                           ? ""
-                          : " · 지금 목록에 없는 모델"}
+                          : runners.includes(fav.runner)
+                            ? " · 지금 목록에 없는 모델"
+                            : " · 이 역할에서 못 쓰는 실행기"}
                     </option>
                   );
                 })}
@@ -455,9 +473,11 @@ function RunnerForm({
           <p>
             바뀔 명령:{" "}
             <code>
-              {spec?.spawn
-                .replaceAll("{model}", choice.model)
-                .replaceAll("{effort}", choice.effort || "")}
+              {role === "watch"
+                ? `KADAN_JUDGE_MODEL=${choice.model} KADAN_JUDGE_EFFORT=${choice.effort || "max"} watch-judge.sh (codex exec)`
+                : spec?.spawn
+                    .replaceAll("{model}", choice.model)
+                    .replaceAll("{effort}", choice.effort || "")}
             </code>
           </p>
         )}

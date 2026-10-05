@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {blockModel, editFallback, initSettings, launchForFallback, parseFallbackSpec, readSettings, setFallback, setFavorites, setRole, setRunnerModel} from '../src/runner-settings.mjs';
+import {blockModel, editFallback, initSettings, launchForFallback, parseFallbackSpec, readSettings, setFallback, setFavorites, setRole, setRunnerModel, watchJudgeChain, WATCH_MAX_ATTEMPTS} from '../src/runner-settings.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
@@ -189,4 +189,25 @@ test('즐겨찾기 명령: runners favorite --set 저장, show에 보이고 빈 
   assert.equal(run('favorite', '--revision', '7', '--reason', '비움').status, 1);
   assert.equal(run('favorite', '--set', '', '--revision', '7', '--reason', '비움').status, 0);
   assert.deepEqual(JSON.parse(run('show').stdout).favorites, []);
+});
+
+test('감시 AI(watch): codex만 고르고, 1순위+폴백을 상한까지 호출 순서로 만든다', () => {
+  const f = fixture();
+  assert.equal(watchJudgeChain(readSettings(f.home)), null, 'watch 값이 없으면 감시 프로필 값을 쓴다');
+  assert.throws(() => setRole(f.home, {role:'watch', runner:'devin', model:'swe-2-max', ...f.meta(6)}), /감시 AI는 codex/);
+  setRole(f.home, {role:'watch', runner:'codex', model:'zai/glm-5.3', effort:'high', ...f.meta(6)});
+  assert.throws(() => setFallback(f.home, {role:'watch', items:[{runner:'devin', model:'swe-2-max'}], ...f.meta(7)}), /폴백 1번: 감시 AI는 codex/);
+  // 감시 AI는 자기 검수와 무관하다: 작업자와 같은 계열(grok)도 막지 않는다.
+  setFallback(f.home, {role:'watch', items:parseFallbackSpec('codex:xai/grok-4.7-build-fast:low,codex:gpt-6-sol:high,codex:mystery-model:medium'), ...f.meta(7)});
+  const chain = watchJudgeChain(readSettings(f.home));
+  assert.equal(chain.length, WATCH_MAX_ATTEMPTS);
+  assert.deepEqual(chain.map(c => [c.model, c.effort, c.fallbackIndex]), [['zai/glm-5.3', 'high', 0], ['xai/grok-4.7-build-fast', 'low', 1], ['gpt-6-sol', 'high', 2]]);
+  assert.equal(chain[0].revision, 8);
+  // 세션으로 띄우는 역할이 아니므로 start --fallback 대상이 아니다.
+  assert.throws(() => launchForFallback(readSettings(f.home), 'watch', 1), /역할 프로필/);
+  const out = spawnSync(process.execPath, [cli, 'runners', 'show'], {env:{...process.env, KADAN_HOME:f.home, KADAN_CODEX_MODELS_CACHE:f.cache}, encoding:'utf8'});
+  assert.equal(out.status, 0, out.stderr);
+  const shown = JSON.parse(out.stdout);
+  assert.match(shown.launch.watch, /KADAN_JUDGE_MODEL=zai\/glm-5.3 KADAN_JUDGE_EFFORT=high/);
+  assert.match(shown.fallback.watch[0].cmd, /KADAN_JUDGE_MODEL=xai\/grok-4.7-build-fast/);
 });
