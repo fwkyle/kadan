@@ -50,7 +50,7 @@ test('발령 사실과 마지막 보고 경과 시간은 큐 여부와 분리하
  const c={role:'worker',displayState:'unconfirmed',at:'2026-09-07T02:00:00Z',runs:[{role:'worker',sentAt:'2026-09-07T00:00:00Z'}],history:[{by:'worker',noteKind:'progress',at:'2026-09-07T00:10:00Z'}]};
  assert.equal(progressLabel(c,Date.parse('2026-09-07T00:42:00Z')),'발령됨 · 마지막 보고 32분 전');
  assert.equal(progressLabel(c,Date.parse('2026-09-07T00:43:00Z')),'발령됨 · 마지막 보고 33분 전');
- assert.equal(queueLabel(c),'순서 대기 여부: 기록 없음');assert.equal(queueLabel({displayState:'ready'}),'발령 후보 · 순서 미정');
+ assert.equal(queueLabel(c),'순서 대기 여부: 기록 없음');assert.equal(queueLabel({displayState:'ready'}),'설계완료 · 순서 미정');
  assert.equal(progressLabel({...c,history:[]}), '발령됨 · 진행 보고 없음');
  assert.equal(progressLabel({...c,runs:[{role:'worker',sentAt:'2026-09-07T01:00:00Z'}]}),'발령됨 · 재발령 후 보고 없음');
  assert.match(progressLabel(c,Date.parse('2026-09-07T00:05:00Z')),/시각 확인 필요/);

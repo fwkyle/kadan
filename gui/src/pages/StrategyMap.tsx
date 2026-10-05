@@ -39,19 +39,19 @@ function Crate({ x, y, kind }: { x: number; y: number; kind: string }) {
 }
 function crateKinds(unit: Unit) {
   const kinds: string[] = [];
-  for (const k of ["stuck", "running", "waiting", "stale", "planned", "hold"] as const)
+  for (const k of ["stuck", "running", "stale", "planned", "hold"] as const)
     for (let i = 0; i < unit.crates[k]; i++) kinds.push(k === "hold" ? "planned" : k);
   return kinds;
 }
 function unitLabel(unit: Unit) {
-  const work = unit.crates.running + unit.crates.waiting + unit.crates.stuck + unit.crates.stale;
+  const work = unit.crates.running + unit.crates.stuck + unit.crates.stale;
   return `${unit.role} · ${KIND_LABEL[unit.kind]} · ${STATE_LABEL[unit.state]}${work ? ` · 진행 카드 ${work}장` : ""}${unit.alerts ? ` · 경보 ${unit.alerts}건` : ""}`;
 }
 function UnitFigure({ unit, x, y, base, selected, onSelect }: { unit: Unit; x: number; y: number; base: Base; selected: boolean; onSelect: () => void }) {
   const scale = unit.kind === "super" ? 1.3 : unit.kind === "director" ? 1.12 : 1;
   const key = (e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } };
   const crates = crateKinds(unit), shown = crates.slice(0, 4), name = shortName(unit.role, base.super);
-  const badge = unit.state === "dead" ? "✕" : unit.state === "stuck" || unit.alerts ? "!" : unit.state === "waiting" ? "…" : null;
+  const badge = unit.state === "dead" ? "✕" : unit.state === "stuck" || unit.alerts ? "!" : null;
   return <g className={`sm-unit sm-k-${unit.kind} sm-s-${unit.state}${selected ? " sm-selected" : ""}`} transform={`translate(${x} ${y})`}
     role="button" tabIndex={0} aria-label={unitLabel(unit)} aria-pressed={selected} onClick={onSelect} onKeyDown={key}>
     <title>{unitLabel(unit)}</title>
@@ -119,7 +119,7 @@ export default function StrategyMap() {
     {!data || !map ? <Loading /> : <>
       <p className="sm-totals" role="group" aria-label="지도 요약">
         <span><b>{map.totals.units - (showResting ? 0 : resting)}</b> 유닛{!showResting && resting > 0 ? ` · 쉬는 ${resting} 숨김` : ""}</span>
-        <span className={tone(map.totals.running, "sm-t-running")}><b>{map.totals.running}</b> 작업 중 상자</span>
+        <span className={tone(map.totals.running, "sm-t-running")}><b>{map.totals.running}</b> 작업중 상자</span>
         <span className={tone(map.totals.stuck, "sm-t-stuck")}><b>{map.totals.stuck}</b> 막힌 상자</span>
         <span><b>{map.totals.stale}</b> 오래된 미정리 상자</span>
         <span className={tone(map.totals.dead, "sm-t-dead")}><b>{map.totals.dead}</b> 창 없음</span>
@@ -128,7 +128,7 @@ export default function StrategyMap() {
         {!data.hierarchy && <span>관계표가 없어 모든 역할을 한 기지에 모았습니다.</span>}
       </p>
       <ul className="sm-legend" aria-label="색 안내">
-        {(["running", "waiting", "stuck", "stale", "dead", "idle", "off"] as const).map((s) => <li key={s}><i className={"sm-dot sm-s-" + s} />{STATE_LABEL[s]}</li>)}
+        {(["running", "stuck", "stale", "dead", "idle", "off"] as const).map((s) => <li key={s}><i className={"sm-dot sm-s-" + s} />{STATE_LABEL[s]}</li>)}
         <li><i className="sm-dot sm-k-super-dot" />왕관 = 슈퍼감독 · 깃발 = 감독</li>
         {resting > 0 && <li><label className="sm-toggle"><input type="checkbox" checked={showResting} onChange={(e) => setShowResting(e.target.checked)} />쉬는 역할도 보기({resting})</label></li>}
       </ul>

@@ -55,7 +55,7 @@ export function workHealth(work,executions,now=Date.now()) {
   if(all.some(h=>h.healthKind!=='closed'))return result('attention','종료 후 실행 확인','업무는 닫혔지만 미종료 또는 미확인 실행이 남아 있습니다.');
   return result('closed',work.status==='done'?'업무 완료':'취소','업무 종료 기록 기준입니다.');
  }
- if(work.status==='hold')return result('hold','업무 보류',work.nextAction||'업무가 보류되어 있습니다.');
+ if(work.status==='hold')return result('hold','업무 일시정지',work.nextAction||'업무가 일시정지되어 있습니다.');
  const round=Math.max(0,...executions.map(x=>x.round||0));
  const relevant=all.filter((h,i)=>h.healthKind!=='closed'&&(executions[i].round===round||!executions[i].card||!['done','failed'].includes(executions[i].card.displayState)));
  const counts=kind=>relevant.filter(h=>h.healthKind===kind).length;

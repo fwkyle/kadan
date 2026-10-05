@@ -36,11 +36,11 @@ function groupFlow(g) {
  else if(working.length){
   const c=working[0],step=steps[c.rallyStep];
   phase=step+' · '+(stateText[c.displayState]||'상태 확인 필요');tone=c.displayState;
-  next=c.displayState==='hold'?'보류 이유와 재개 조건 확인':c.displayState==='failed'?'실패 내용과 수정 범위 확인':c.displayState==='waiting'?'담당자가 기다리는 결과와 다음 차례 확인':review.length?'구현 결과가 나온 뒤 독립검수 카드 확인':'구현 결과가 나온 뒤 독립검수 연결 확인';
+  next=c.displayState==='hold'?'일시정지 이유와 재개 조건 확인':c.displayState==='failed'?'실패 내용과 수정 범위 확인':c.displayState==='waiting'?'담당자가 기다리는 결과와 다음 차례 확인':review.length?'구현 결과가 나온 뒤 독립검수 카드 확인':'구현 결과가 나온 뒤 독립검수 연결 확인';
  }
  else if(reviewing.length&&work.length===1&&work[0].displayState==='done'){
   const c=reviewing[0];phase='독립검수 · '+(stateText[c.displayState]||'상태 확인 필요');tone=c.displayState;
-  next=c.displayState==='failed'?'검수 지적을 확인하고 다음 수정 라운드 연결':c.displayState==='hold'?'검수 보류 이유와 재개 조건 확인':'검수 결과와 수정 필요 여부 확인';
+  next=c.displayState==='failed'?'검수 지적을 확인하고 다음 수정 라운드 연결':c.displayState==='hold'?'검수 일시정지 이유와 재개 조건 확인':'검수 결과와 수정 필요 여부 확인';
  }
  else if(work.length===1&&work[0].displayState==='done'&&!review.length){phase='구현 완료 · 검수 미연결';next='독립검수 카드 연결 확인';tone='waiting';}
  if(g.round&&!review.length)warnings.push('독립검수 카드가 연결되지 않았습니다.');

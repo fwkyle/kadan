@@ -497,13 +497,13 @@ function checkCardPane(session, identity, run, spawn) {
 function checkNotificationPane(session, guard, run) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const state = run(["display-message", "-p", "-t", `=${session}:`, "#{cursor_y}|#{pane_width}"]).trim();
-  if (!/^\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "알림 보류: pane 상태 미확인");
+  if (!/^\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "알림 미룸: pane 상태 미확인");
   const [y, w] = state.split("|");
   const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_activity}"]).split("\n").filter(Boolean);
-  if (clients.some(value => !/^\d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "알림 보류: 사람 입력 시각 미확인");
+  if (clients.some(value => !/^\d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "알림 미룸: 사람 입력 시각 미확인");
   const now = guard.now ?? Date.now();
-  if (clients.some(value => now - Number(value) * 1000 < guard.humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "알림 보류: 사람이 이 창에서 최근 입력함");
-  checkEmptyInput(session, run, Number(y), Number(w), "알림 보류");
+  if (clients.some(value => now - Number(value) * 1000 < guard.humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "알림 미룸: 사람이 이 창에서 최근 입력함");
+  checkEmptyInput(session, run, Number(y), Number(w), "알림 미룸");
 }
 
 // 붙여넣지 않고 알림 보류 사유만 돌려준다. 감시기가 예약 기록 전에 확인해 순회마다 기록이 쌓이지 않게 한다.
