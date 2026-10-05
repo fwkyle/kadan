@@ -622,6 +622,9 @@ export async function runWatch({
       },
     });
     lap('queueResume');
+    // 명시 큐 배너가 결정식으로 처리 중인 세션(Enter를 보냈거나 '입력큐' 경보를 낸 세션)은 같은 화면을 두고
+    // 정체 AI 판정·'큐대기'를 겹쳐 올리지 않는다. 한 배너에 경보 셋(입력큐·큐대기·정체)이 나가던 중복(2026-10-05).
+    const queueSessions = new Set([...queueHandled, ...(queueResume.alerts ?? []).map(a => a.session)]);
     const roleAssessment = observationError
       ? { states: roleStates, alerts: [] }
       : assessRoles(
@@ -688,7 +691,7 @@ export async function runWatch({
     queuedStates = queuedAssessment.states;
     lap('assess');
 
-    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueHandled.has(a.session));
+    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
@@ -700,7 +703,7 @@ export async function runWatch({
       return {responsibility,evidenceDigest,due:!same||cycleAt-previous.at>=interval};
     };
     const invokeAI=candidate=>{
-      if(retrySessions.has(candidate.session)||queueHandled.has(candidate.session))return;
+      if(retrySessions.has(candidate.session)||queueSessions.has(candidate.session))return;
       const seen=roles.observations.get(candidate.session);
       if(candidate.source!=='supervisor-health'&&!workerCheck(candidate,seen).due)return;
       const previous=latestWatchReports(entries).find(e=>e.role===candidate.role&&e.source===candidate.source&&e.taskId===(candidate.taskId??null));
@@ -775,7 +778,8 @@ export async function runWatch({
       // 통지 없이 그대로 이월한다 — 숨기면 dedup이 해소로 보고 '한도 → 해소됨'이 깜빡였다(2026-10-05 점검 보고서 2-M2).
       ...roleAlerts.filter(a=>!(a.kind==='한도'&&(retrySessions.has(a.session)||rateLimitRetry.alerts?.some(r=>r.session===a.session)))),
       ...activeAlerts.filter(a=>a.kind==='한도'&&retrySessions.has(a.session)&&roleAssessment.alerts.some(r=>r.id===a.id)),
-      ...queuedAssessment.alerts,
+      // 큐대기 상태 추적은 그대로 두고 경보만 거른다 — 배너 경로가 조용해지면 쌓인 시간으로 큐대기가 이어받는다.
+      ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       ...reportAlerts,

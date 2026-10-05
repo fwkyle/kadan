@@ -694,7 +694,7 @@ export function guardedSend({
     role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards});
   message = composed.message;
   if (!raw) {
-    const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,expectReply:mailContext?.expectReply===true,sender:by,env});
+    const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,dispatch:taskId!=null,expectReply:mailContext?.expectReply===true,sender:by,env});
     if (instructions) message+=`\n\n${instructions}`;
   }
   const conflicts = familyConflictAlerts({role,session,entries,source,env});
@@ -1702,7 +1702,9 @@ function sendWatchMessage(role,message) {
     return;
   }
   const session=sessionName(role);
-  guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session))});
+  // 감시 경보 우편은 기록용이다: 경보는 상태 변화로 닫히지 수신자 ack로 닫히지 않으므로 읽음 확인 안내를 붙이지 않고
+  // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기).
+  guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session)),notificationOnly:true});
 }
 
 // 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.

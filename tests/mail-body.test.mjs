@@ -43,11 +43,10 @@ test("보낸 본문은 지문 이름의 옆 파일로 남고 원장 줄에는 �
   assert.equal(entry.preview.includes("card-66.md"), true);
   assert.equal(JSON.stringify(entry).includes(message), false);
 
-  // 본문은 옆 파일에 그대로 있다.
+  // 본문은 옆 파일에 그대로 있다. 발령 우편(--task)이라 읽음 확인 안내는 붙지 않는다(2026-10-05).
   const saved = readMailBody(entry.digest, home);
-  assert.ok(saved.startsWith(message+'\n\n'));
-  assert.ok(saved.includes(`우편 ID: ${entry.mailId}`));
-  assert.equal(saved, message+'\n\n'+composeMailInstructions({mailId:entry.mailId,recipient:'b-작업자'}));
+  assert.equal(saved, message);
+  assert.equal(composeMailInstructions({mailId:entry.mailId,recipient:'b-작업자',dispatch:true}),'');
   assert.equal(fs.existsSync(path.join(mailDir(home), `${entry.digest}.txt`)), true);
 
   // 본문을 보관 위치로 옮겨도 원장은 그대로다.
@@ -120,7 +119,21 @@ test('미확인 알림은 최신 start와 실제 PID를 검사하고 notificatio
   assert.throws(()=>f.send({notificationOnly:'true'}),/boolean/);
 });
 
-test('CLI watch 연결: 미확인 callback만 notificationOnly이며 기존 watch 알림은 ack 대상이다',()=>{
+test('발령 우편(--task)은 읽음 확인 안내 없이 질문 안내만 붙고, 발령 아닌 우편은 그대로다',()=>{
+  const f=mailFixture();
+  appendLedger({kind:'start',role:'recipient',session:'kadan-recipient',panePid:'111',cmd:'codex --model test-model'},f.home);
+  const dispatch=f.send({taskId:'legacy-run'}),body=f.sent.at(-1).message;
+  assert.equal(body,'본문');assert.doesNotMatch(body,/inbox ack|우편 ID:/);
+  assert.equal(dispatch.notificationOnly,undefined,'발령은 기록용 알림이 아니다 — 발령 추적은 taskId로 계속한다');
+  assert.equal(new Mailbox(f.home,'recipient').read(dispatch.mailId).read,false);
+  assert.doesNotMatch(new Mailbox(f.home,'recipient').read(dispatch.mailId).receiverInstructions,/inbox ack/);
+  // 답을 기다리는 발령은 질문이다: 읽음 안내와 질문 안내가 둘 다 붙고 미확인 재알림 대상이다.
+  const asked=f.send({taskId:'legacy-run',mailContext:{expectReply:true}}),askedBody=f.sent.at(-1).message;
+  assert.match(askedBody,/inbox ack/);assert.match(askedBody,new RegExp(`질문ID: ${asked.mailId}`));
+  f.send({});assert.match(f.sent.at(-1).message,/inbox ack/);
+});
+
+test('CLI watch 연결: 미확인 callback과 watch 경보 우편 모두 notificationOnly이며 ack 안내가 없다',()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-watch-mail-cli-'));
   const moduleUrl=name=>JSON.stringify(new URL(`../src/${name}.mjs`,import.meta.url).href);
   const script=`
@@ -135,8 +148,9 @@ mock.module(${moduleUrl('watch-runner')},{namedExports:{deliverResolution:()=>{}
   options.sendMailReminder('recipient','미확인 우편 확인','111');
   options.sendAlert('recipient','기존 완료후보 알림');
   const mail=readMailLedger();
-  assert.equal(mail.length,2);assert.equal(mail[0].notificationOnly,true);assert.equal(mail[1].notificationOnly,undefined);
-  assert.doesNotMatch(sent[0],/inbox ack/);assert.match(sent[1],/inbox ack/);
+  // 감시 경보는 상태 변화로 닫히므로 ack 안내를 붙이지 않고 미확인 재알림 대상도 아니다(2026-10-05).
+  assert.equal(mail.length,2);assert.equal(mail[0].notificationOnly,true);assert.equal(mail[1].notificationOnly,true);
+  assert.doesNotMatch(sent[0],/inbox ack/);assert.doesNotMatch(sent[1],/inbox ack/);assert.match(sent[1],/기존 완료후보 알림/);
   appendLedger({kind:'start',role:'recipient',session:'kadan-recipient',panePid:'222'});
   assert.throws(()=>options.sendMailReminder('recipient','늦은 알림','111'),e=>e.delivery==='not-sent');
   assert.equal(sent.length,2);
