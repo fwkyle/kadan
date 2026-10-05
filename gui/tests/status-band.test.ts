@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandChips, liveLabel } from "../src/status-band.ts";
+import { bandChips, liveLabel, supervisorLife, supervisorLine } from "../src/status-band.ts";
 
 const base = { decisions: 0, stopped: 0, running: 0, alerts: { count: 0, items: [] }, flow: { total: 0, unconfirmed: [] }, live: [] };
 
@@ -33,6 +33,16 @@ test("모르는 값은 '모름'으로 두고 켜지지 않는다", () => {
   assert.match(chips[1].title, /모릅니다/);
   assert.equal(chips[4].num, "모름");
   assert.equal(chips[4].label, "살아 있는 담당");
+});
+
+test("슈퍼감독 한 줄: 숫자 칸 순서와 모름, 생존 칸", () => {
+  const s = { super: "a-슈퍼감독", repos: ["repoA", "repoB"], running: 2, waiting: 1, stuck: 0, openWorks: 3, decisions: 1, alerts: 0, lastSignal: null, alive: true, model: "gpt-5-mini" };
+  assert.equal(supervisorLine(s), "저장소 repoA, repoB · 열린 워크 3 · 작업 중 2 · 결과 대기 1 · 막힘 0 · 내 결정 1 · 경보 0");
+  assert.equal(supervisorLine({ ...s, repos: [], decisions: null, alerts: null }), "저장소 없음 · 열린 워크 3 · 작업 중 2 · 결과 대기 1 · 막힘 0 · 내 결정 모름 · 경보 모름");
+  assert.equal(supervisorLife(s), "살아 있음 · gpt-5-mini");
+  assert.equal(supervisorLife({ ...s, model: null }), "살아 있음");
+  assert.equal(supervisorLife({ ...s, alive: false }), "창 없음");
+  assert.equal(supervisorLife({ ...s, alive: null }), "세션 모름");
 });
 
 test("담당 한 줄 라벨", () => {

@@ -3,12 +3,12 @@ import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time } from "../ui";
 import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
-import { bandChips, liveLabel, type FlowSummary, type LiveSession, type OpenAlerts } from "../status-band";
+import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
-  live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null;
+  live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml: string}[];
   watchHtml: string;
   resources: {current: {memory: string; freePercent: number | null; swapUsed: number | null; load5: number | null}; ncpu: number | null} | null;
@@ -106,6 +106,17 @@ export default function Status({url}: {url: URL}) {
           : data.live.map(s => <li key={s.role} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small></li>)}
         <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
       </ul>
+      <section id="status-supers" className="st-section">
+        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">내가 일을 맡긴 슈퍼감독(관계표에서 바로 내 아래)마다 한 줄입니다. 그 아래 감독·담당의 실행을 모두 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
+        {data.supervisors === null ? <p className="st-error" role="alert">관계표를 읽지 못해 슈퍼감독별로 묶지 못했습니다. 감시기가 읽는 관계표 파일(원장의 마지막 hierarchy-loaded 기록이 가리키는 경로)을 확인하세요.</p>
+          : data.supervisors.items.length === 0 ? <p className="st-empty">관계표에 사용자 바로 아래 역할이 없습니다.</p>
+          : <ul className="st-sup-list">{data.supervisors.items.map(s => <li key={s.super} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
+              <strong>{s.super}</strong>
+              <span className="st-sup-life">{supervisorLife(s)}</span>
+              <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
+            </li>)}</ul>}
+        {data.supervisors && data.supervisors.unassigned > 0 && <p className="st-hint">관계표에 없는 담당의 실행 {data.supervisors.unassigned}건은 어느 슈퍼감독에도 묶이지 않았습니다.</p>}
+      </section>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>
         {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
