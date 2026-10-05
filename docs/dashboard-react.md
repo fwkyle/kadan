@@ -21,7 +21,7 @@ The visual reference is the Kadan dashboard before the React migration: top navi
 
 ## Navigation
 
-- Keep six destinations visible: 전체 현황, 워크·카드, 내 결정, 실행 모델, 우편함, 기록. Mobile uses two rows so model settings remain visible. The screen map (address and section names per screen) is in [dashboard-status-guide.md](dashboard-status-guide.md#화면-지도).
+- Keep seven destinations visible: 전체 현황, 전략 맵, 워크·카드, 내 결정, 실행 모델, 우편함, 기록. Mobile uses two rows so model settings remain visible. The screen map (address and section names per screen) is in [dashboard-status-guide.md](dashboard-status-guide.md#화면-지도).
 - 전체 현황 prioritizes decisions and blocked work, links to 담당자 상태 inside 실행 모델, and previews up to three decisions with a link to the full list. 실행 모델 answers one question, "which model", in two halves: 담당자 상태 (currently opened AI windows and the model each was started with) first, then the settings that apply to future dispatches.
 - 워크·카드 defaults to the 카드 collection; 워크 is the second collection, and 워크 미연결 is a filter inside the 카드 collection. Creation actions belong to their corresponding lists. Mobile keeps search and state shortcuts visible and expands secondary filters and view choices through 필터·보기.
 - 워크 진행 이력 is reached from a work detail (or a linked execution), retains the 워크·카드 navigation selection, and links back to that work. Existing operations-flow and collection=unlinked URLs remain valid.

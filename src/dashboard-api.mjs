@@ -555,6 +555,8 @@ export function dashboardData(snapshot, url) {
       alerts,
       // 슈퍼감독마다 한 줄(관계표 기준). 관계표를 모르면 null.
       supervisors,
+      // 전략 맵이 역할을 슈퍼감독 기지로 묶는 데 쓴다(2026-10-05). 관계표를 모르면 null.
+      hierarchy: m.hierarchy ?? null,
       recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),
       recent: recent
         .slice(0, 50)
