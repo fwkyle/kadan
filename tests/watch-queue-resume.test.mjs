@@ -109,7 +109,7 @@ test('안전 조건 불충족은 이유별 경보 1회이고 Enter는 0회다',a
 test('watch 순회에서 큐 배너는 AI 판정 없이 Enter를 보내고 timeout 문구는 분리된다',async()=>{
   const {runWatch}=await import('../src/watch-runner.mjs');
   const controller=new AbortController(); let now=0,cycle=0;
-  const role='worker',session='kadan-worker',records=[],enters=[],alerts=[],aiCalls=[];
+  const role='worker',session='kadan-worker',records=[],enters=[],alerts=[],aiCalls=[],prints=[];
   let screen=bannerScreen;
   const card={id:'task',key:'repo/task',role,status:'assigned',workType:'execution',activity:'running'};
   const entries=[{kind:'start',role,session,panePid:1,t:'1970-01-01T00:00:00Z'},
@@ -121,14 +121,17 @@ test('watch 순회에서 큐 배너는 AI 판정 없이 Enter를 보내고 timeo
    sendAlert:(...args)=>alerts.push(args),
    judgeCmd:'fake-judge',ai:{run:async(...a)=>{aiCalls.push(a);return {ok:false,reason:'timeout'};},reports:{retire:()=>{}}},
    intervalMs:1000,stallN:1,routes:new Map(),superRole:'boss',now:()=>now,
-   spawn:()=>({status:0,stdout:String(process.pid)}),signal:controller.signal,print:()=>{},
+   spawn:()=>({status:0,stdout:String(process.pid)}),signal:controller.signal,print:m=>prints.push(String(m)),
    sleep:async()=>{cycle++;now+=1000;if(cycle>=8)controller.abort();}});
   assert.equal(enters.length,1);
   assert.ok(records.some(e=>e.kind==='queue-resume'&&e.action==='sent'&&e.keyDelivery==='sent'&&e.inputAcceptance==='unconfirmed'));
   assert.ok(records.some(e=>e.kind==='queue-resume'&&e.action==='transition'));
-  // 판정 AI timeout은 작업자 응답 장애가 아니라 감시AI 오류로 분리된다
-  const timeoutAlerts=alerts.filter(([,m])=>typeof m==='string'&&m.includes('시간 초과'));
-  assert.ok(timeoutAlerts.some(([,m])=>m.includes('감시 판정 AI 시간 초과 — 작업 상태 미판정')),alerts.map(a=>a[1]).join('\n'));
+  // 판정 AI timeout은 작업자 응답 장애가 아니라 감시AI 오류로 분리된다.
+  // 수신자는 작업자의 감독이 아니라 @user(OS 알림 + watch 출력)다(2026-10-05) — 감독 우편(sendAlert)으로는 가지 않는다.
+  const timeoutPrints=prints.filter(m=>m.includes('시간 초과'));
+  assert.ok(timeoutPrints.some(m=>m.includes('감시 판정 AI 시간 초과 — 작업 상태 미판정')),prints.join('\n'));
+  assert.ok(records.some(e=>e.kind==='alert'&&e.alertKind==='감시AI오류'&&e.recipient==='@user'&&e.delivered===true));
+  assert.ok(!alerts.some(([,m])=>typeof m==='string'&&m.includes('시간 초과')));
   assert.ok(!alerts.some(([,m])=>typeof m==='string'&&m.includes('대답을 못 함')));
 });
 
