@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { supervisorSummary } from "../src/dashboard-band.mjs";
+import { supervisorSummary, supervisorOf } from "../src/dashboard-band.mjs";
 
 // 사용자가 여러 슈퍼감독에게 위임해도 묻지 않고 진행을 보게, 슈퍼감독(상위가 @user)마다 한 줄로 묶는다(2026-10-05 [kyle]).
 const hierarchy = {
@@ -42,6 +42,16 @@ test("관계표를 모르면 null, 결정·경보·세션을 모르면 그 칸�
   const unknown = supervisorSummary({ hierarchy, rows, works, decisions: null, alerts: null, live: null });
   assert.deepEqual(unknown.items.map((s) => [s.decisions, s.alerts, s.alive, s.model]), [[null, null, null, null], [null, null, null, null]]);
   assert.deepEqual(supervisorSummary({ hierarchy: { "w": "boss" }, rows }), { items: [], unassigned: rows.length - 1, unowned: 1 });
+});
+
+test("supervisorOf: 사슬 끝의 슈퍼감독, 없거나 끊기거나 순환이면 null (?super= 거름망이 쓴다)", () => {
+  assert.equal(supervisorOf(hierarchy, "a-작업자"), "a-슈퍼감독");
+  assert.equal(supervisorOf(hierarchy, "a-슈퍼감독"), "a-슈퍼감독");
+  assert.equal(supervisorOf(new Map(Object.entries(hierarchy)), "b-작업자"), "b-슈퍼감독");
+  assert.equal(supervisorOf(hierarchy, "고아-작업자"), null);
+  assert.equal(supervisorOf(hierarchy, "없는역할"), null);
+  assert.equal(supervisorOf({ a: "b", b: "a" }, "a"), null);
+  assert.equal(supervisorOf(null, "a"), null);
 });
 
 test("관계표의 순환은 묶지 않고 멈춘다", () => {

@@ -60,6 +60,9 @@ test('감시 프로필은 빈 옵션만 채우고 직접 준 옵션·환경을 �
  assert.throws(()=>readWatchProfile('/x.json',()=>'{'),/읽기 실패/);
  assert.throws(()=>readWatchProfile('/x.json',()=>'[]'),/형식 오류/);
  assert.throws(()=>readWatchProfile('/x.json',()=>JSON.stringify({flags:{port:1}})),/모르는 옵션: --port/);
+ // 없어진 --wake가 저장된 프로필에 남아 있어도 감시기는 뜬다: 무시하고 안내만 남긴다(2026-10-05).
+ const retired=readWatchProfile('/x.json',()=>JSON.stringify({flags:{wake:'p-슈퍼감독','wake-every':30,idle:20}}));
+ assert.deepEqual(retired.flags,{idle:'20'});assert.equal(retired.retired.length,2);assert.match(retired.retired[0],/--wake: 2026-10-05/);
  assert.throws(()=>readWatchProfile('/x.json',()=>JSON.stringify({flags:{'user-notify':'yes'}})),/true만 허용/);
  assert.throws(()=>readWatchProfile('/x.json',()=>JSON.stringify({env:{A:1}})),/문자열이어야/);
 });

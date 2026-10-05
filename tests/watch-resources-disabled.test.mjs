@@ -81,16 +81,16 @@ test('자원 AMBER→RED→모름→정상과 과거 raw 경고·해소가 있�
  }
 });
 
-test('같은 자원 상황에서 실제 죽음·전달 실패·해제는 기존 수신자와 사용자에게 알린다',async ctx=>{
+test('같은 자원 상황에서 실제 죽음·전달 실패는 기존 수신자와 사용자에게 알리고, 해소는 기록만 남긴다',async ctx=>{
  const r=await exercise(ctx,{death:true});
  assert.deepEqual(r.measurements,[]);
- assert.deepEqual(r.messages.map(m=>m.role),['p-감독','p-슈퍼감독','p-슈퍼감독']);
+ // 해소 우편은 없다(2026-10-05 [kyle]). 원장에 resolved 기록만 남는다.
+ assert.deepEqual(r.messages.map(m=>m.role),['p-감독','p-슈퍼감독']);
  assert.match(r.messages[0].message,/세션 종료 의심 kadan-p-작업자/);
  assert.match(r.messages[1].message,/전달실패/);
- assert.match(r.messages[2].message,/세션 종료 의심 - 해소됨/);
  assert.equal(r.notifications.length,1);
  assert.deepEqual(r.records.filter(e=>e.kind==='alert').map(e=>[e.alertKind,e.delivered,e.resolved??false]),
-  [['전달실패',true,false],['죽음',false,false],['죽음',true,true]]);
+  [['전달실패',true,false],['죽음',false,false],['죽음',false,true]]);
 });
 
 test('대시보드는 자원 수집의 메모리·스왑·CPU 원측정과 선택 평가를 계속 사용한다',()=>{

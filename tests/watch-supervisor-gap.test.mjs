@@ -3,29 +3,31 @@ import assert from 'node:assert/strict';
 // 가짜 시계 시뮬레이션: sleep이 분을 올리고 끝에서 중단한다(helpers/watch-runner는 sleep을 덮어써 쓰지 않는다).
 import {runWatch} from '../src/watch-runner.mjs';
 
-// 점검 보고서(2026-10-05) 시뮬레이션에서 셋 다 0회였다: 최상위 감독의 죽음, 등록된 감독의 놀고 있음,
-// --wake 자가점검. 최상위는 어느 감시 범위에도 없었고, 유휴·깨우기는 작업 감시 범위로만 걸렀다.
+// 점검 보고서(2026-10-05) 시뮬레이션에서 둘 다 0회였다: 최상위 감독의 죽음, 등록된 감독의 놀고 있음.
+// 같은 날 결정: 감독 멈춤은 2단이다 — 15분이면 본인에게, 15분 더면 상위에게. 움직이면 둘 다 닫히고 해소 우편은 없다.
+// --wake(30분 타이머 고정 점검)는 없앴다.
 const epoch=Date.parse('2026-09-09T00:00:00Z');
 const stamp=m=>new Date(epoch+m*60_000).toISOString();
 const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],['p-슈퍼감독','@user']]);
 const starts=[...parents.keys()].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0)}));
 const card={id:'t1',key:'repo/t1',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'};
 
-async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),wake=false,sendWake=null}){
-  const records=[],sent=[],printed=[],wakes=[];let minute=0;const controller=new AbortController();
-  const entries=[...starts,{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}];
-  await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,idleMs:30*60_000,
-    wakeRole:wake?'p-슈퍼감독':null,wakeEveryMs:30*60_000,parents,routes:new Map(),superRole:'p-슈퍼감독',
+async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),sendNudge=null,read=()=>'frozen screen',
+  cards=[card],works=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
+  const records=[],sent=[],printed=[],nudges=[];let minute=0;const controller=new AbortController();
+  const entries=[...starts,...extra];
+  await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,idleMs:15*60_000,
+    parents,routes:new Map(),superRole:'p-슈퍼감독',
     now:()=>epoch+minute*60_000,
-    floor:{list,read:()=>'frozen screen',alive},
-    readEntries:()=>entries,readCards:()=>[card],readWorks:()=>[],
+    floor:{list,read:s=>read(s,minute),alive},
+    readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,
     sendAlert:(role,msg)=>sent.push([minute,role,msg]),
-    sendWake:sendWake?(role,msg)=>{wakes.push([minute,role]);return sendWake(role,msg);}:null,
-    record:e=>{records.push(e);entries.push({...e,t:stamp(minute)});},
+    sendNudge:(role,msg)=>{nudges.push([minute,role,msg]);return sendNudge?.(role,msg);},
+    record:e=>{records.push({...e,minute});entries.push({...e,t:stamp(minute)});},
     print:l=>printed.push(l),spawn:()=>({status:0,stdout:''}),
     sleep:async()=>{if(++minute>=minutes)controller.abort();}});
   const alerts=records.filter(e=>e.kind==='alert'&&!e.resolved);
-  return {alerts,sent,printed,wakes,records};
+  return {alerts,sent,printed,nudges,records};
 }
 
 test('최상위 감독의 세션이 없으면 죽음 경보가 @user에게 간다',async()=>{
@@ -36,19 +38,52 @@ test('최상위 감독의 세션이 없으면 죽음 경보가 @user에게 간�
   assert.equal(death[0].alertKind,'죽음');assert.equal(death[0].level,'RED');assert.equal(death[0].recipient,'@user');
 });
 
-test('모든 화면이 30분 멈추면 등록된 감독과 최상위 감독에게도 놀고 있음이 가고 작업자 정체도 그대로 울린다',async()=>{
-  const {alerts}=await simulate({minutes:40});
+test('감독 멈춤 2단: 15분에 본인, 30분에 상위(감독→슈퍼감독, 슈퍼감독→@user). 작업자 정체는 그대로, 작업자에게 본인 알림은 없다',async()=>{
+  const {alerts,sent,nudges}=await simulate({minutes:40});
+  assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
+  assert.match(nudges[0][2],/놀고 있음 kadan-p-감독 \(할 일 1건, 15분간 화면 변화 없음\) — 판을 확인하고 다음 행동을 정하라\. 이대로 15분 더 멈추면 상위에게 알린다\./);
   const idle=alerts.filter(a=>a.alertKind==='놀고 있음');
-  assert.deepEqual([...new Set(idle.map(a=>`${a.role}→${a.recipient}`))].sort(),['p-감독→p-슈퍼감독','p-슈퍼감독→@user']);
+  assert.deepEqual(idle.map(a=>[a.minute,a.role,a.recipient]),[[15,'p-감독','p-감독'],[15,'p-슈퍼감독','p-슈퍼감독'],[30,'p-감독','p-슈퍼감독'],[30,'p-슈퍼감독','@user']]);
+  const escalated=sent.filter(([,,m])=>m.includes('놀고 있음'));
+  assert.deepEqual(escalated.map(([m,r])=>[m,r]),[[30,'p-슈퍼감독']]);
+  assert.match(escalated[0][2],/30분간 화면 변화 없음; 15분 전에 본인에게 알렸으나 그대로/);
   assert.ok(alerts.some(a=>a.alertKind==='정체'&&a.role==='p-작업자'),'작업자 정체 경보가 사라짐');
-  assert.ok(!alerts.some(a=>a.alertKind==='죽음'),'살아 있는 감독에게 죽음 경보가 나가면 안 된다');
+  assert.ok(!nudges.some(([,r])=>r==='p-작업자'));
+  assert.ok(!alerts.some(a=>a.alertKind==='죽음'));
 });
 
-test('--wake 자가점검은 등록된 슈퍼감독에게 가고, 사람이 입력 중이면 미뤘다가 다음 주기에 다시 보낸다',async()=>{
+test('본인에게 넣은 알림 글은 화면 변화로 세지 않는다 — 알림이 경보를 닫고 15분마다 다시 울리는 타이머가 되면 안 된다',async()=>{
+  const delivered=new Map();
+  const {nudges,records}=await simulate({minutes:70,
+    sendNudge:(role,msg)=>{delivered.set('kadan-'+role,(delivered.get('kadan-'+role)??'')+'\n'+msg);},
+    read:s=>'frozen screen'+(delivered.get(s)??'')});
+  assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'70분 동안 본인 알림은 역할마다 한 번');
+  assert.ok(!records.some(e=>e.kind==='alert'&&e.alertKind==='놀고 있음'&&e.resolved&&e.minute<30),'알림 글 때문에 닫힌 경보가 없다');
+});
+
+test('사람이 그 창에서 입력 중이면 본인 알림을 미루고 다음 주기에 다시 보낸다. 움직이면 아무도 깨우지 않는다',async()=>{
   let holds=1;
-  const {wakes,printed}=await simulate({minutes:35,wake:true,sendWake:()=>{
-    if(holds-->0){const e=new Error('알림 보류: 사람이 이 창에서 최근 입력함');e.code='KADAN_HUMAN_ACTIVE';throw e;}
+  const {nudges,printed}=await simulate({minutes:20,sendNudge:(role)=>{
+    if(role==='p-슈퍼감독'&&holds-->0){const e=new Error('알림 보류: 사람이 이 창에서 최근 입력함');e.code='KADAN_HUMAN_ACTIVE';throw e;}
   }});
-  assert.deepEqual(wakes.map(([m,r])=>[m,r]),[[0,'p-슈퍼감독'],[1,'p-슈퍼감독'],[31,'p-슈퍼감독']]);
-  assert.ok(printed.some(l=>l.includes('자가점검 깨우기')&&l.includes('보류')));
+  assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독'],[16,'p-슈퍼감독']]);
+  assert.ok(printed.some(l=>l.includes('놀고 있음 kadan-p-슈퍼감독')&&l.includes('보류')));
+  const moving=await simulate({minutes:40,read:(s,m)=>`screen ${m}`});
+  assert.deepEqual(moving.nudges,[]);assert.ok(!moving.sent.some(([,,m])=>m.includes('놀고 있음')));
+});
+
+test('작업자가 다 끝냈는데 감독이 다음 발령을 안 하면 열린 워크가 할 일이다: 15분에 본인, 30분에 슈퍼감독',async()=>{
+  const doneCard={...card,status:'done',activity:'done'};
+  const work={key:'repo/w1',status:'open',owner:'p-감독',executions:[{key:'repo/t1'}],at:stamp(0)};
+  const base={cards:[doneCard],works:[work],entries:[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)}]};
+  const {nudges,sent}=await simulate({minutes:40,...base});
+  // 슈퍼감독도 그 아래 전부가 멈춘 것이라 같이 받는다(기존 규칙: 하위가 움직이면 상위의 조용한 대기는 이상이 아니다).
+  assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
+  assert.match(nudges[0][2],/할 일 1건/);
+  assert.deepEqual(sent.filter(([,,m])=>m.includes('놀고 있음')).map(([m,r])=>[m,r]),[[30,'p-슈퍼감독']]);
+  // 진행 중 실행(assigned)이 있으면 그 워크는 할 일이 아니다. 감독이 10분에 움직이면 아무것도 없다.
+  const busy=await simulate({minutes:40,...base,cards:[card]});
+  assert.deepEqual(busy.nudges,[],'실행이 진행 중이면 워크는 할 일이 아니다');
+  const moved=await simulate({minutes:40,...base,read:(s,m)=>s==='kadan-p-감독'&&m>=10?'moved '+Math.floor(m/10):'frozen screen'});
+  assert.deepEqual(moved.nudges.filter(([,r])=>r==='p-감독'),[]);
 });

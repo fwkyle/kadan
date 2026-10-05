@@ -81,10 +81,14 @@ test("흡수 오류는 다음 주기 비교에 보존되고 재배달하지 않�
     return "healthy";
   });
   floor.alive = () => true;
+  // 작업자에게 무언가가 배달돼야 그 화면을 흡수한다. 예전에는 --wake 메시지가 그 역할이었고(2026-10-05 제거),
+  // 지금은 5분 넘게 안 읽은 질문 우편의 재알림이 같은 자리를 맡는다.
+  const unread = { kind: "send", mailId: "q1", role: entry.role, by: "boss", expectReply: true, t: "2026-09-04T23:50:00.000Z" };
+  const records = [];
   await assert.rejects(() => runWatch({
-    floor, readEntries: () => [entry], sendAlert: (...args) => sent.push(args),
+    floor, readEntries: () => [entry, unread, ...records], sendAlert: (...args) => sent.push(args),
+    sendMailReminder: (...args) => sent.push(args), record: e => records.push(e),
     intervalMs: 1000, stallN: 100, routes: {}, superRole: null,
-    wakeRole: entry.role, wakeEveryMs: 100_000,
     now: () => Date.parse(entry.t) + cycle * 1000,
     print: line => printed.push(line),
     spawn: (command) => {
@@ -94,6 +98,7 @@ test("흡수 오류는 다음 주기 비교에 보존되고 재배달하지 않�
       return { status: 0, stdout: "" };
     },
   }), error => error === stop);
+  // 배달은 우편 재알림 1건뿐이다. 모름 경보는 수신 경로가 없어 stdout에만 남는다.
   assert.equal(sent.length, 1);
   assert.equal(printed.filter(line => line.includes(`상태 확인 필요 - 해소됨 ${session}`)).length, 1);
   assert.equal(printed.filter(line => line.includes("화면 읽기 실패")).length, 0);
@@ -155,9 +160,9 @@ test("기준선: 모호한 실패는 stdout에 남고 원 수신자는 재시도
 
 test("죽은 수신자 전달 실패는 슈퍼 한 명에게 한 번만 올린다 — 실패가 감시 터미널에만 남았다(2026-09-05)(card-52)", async () => {
   const { sent, printed } = await deliveryRun({ delivery: "not-sent" });
-  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[1, "p-감독"], [1, "qa-슈퍼감독"], [4, "qa-슈퍼감독"]]);
+  // 해소 우편은 없다(2026-10-05). 상신 받은 슈퍼감독도 해소는 출력·원장으로만 안다.
+  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[1, "p-감독"], [1, "qa-슈퍼감독"]]);
   assert.match(sent[1].message, /전달실패.*세션 종료 의심.*수신자 p-감독 없음/);
-  assert.match(sent[2].message, /세션 종료 의심 - 해소됨 kadan-p-작업자/);
   assert.equal(printed.filter(s => s.includes("세션 종료 의심 - 해소됨")).length, 1);
 });
 
@@ -170,9 +175,9 @@ test("모호한 전달 실패는 상신하지 않는다 — 수신자 2명 금�
   }
 });
 
-test("원장 실패는 이미 받은 수신자에게 해소하고 슈퍼 부재·실패는 재상신하지 않는다(card-52)", async () => {
+test("원장 실패는 이미 받은 수신자에게 재전송하지 않고 슈퍼 부재·실패는 재상신하지 않는다(card-52)", async () => {
   const delivered = await deliveryRun({ delivery: "sent" });
-  assert.deepEqual(delivered.sent.map(s => [s.cycle, s.role]), [[1, "p-감독"], [4, "p-감독"]]);
+  assert.deepEqual(delivered.sent.map(s => [s.cycle, s.role]), [[1, "p-감독"]]);
   const noSuper = await deliveryRun({ delivery: "not-sent", superRole: null });
   assert.deepEqual(noSuper.sent.map(s => s.role), ["p-감독"]);
   const failedSuper = await deliveryRun({ delivery: "not-sent", superFails: true });
@@ -184,8 +189,8 @@ test("원장 실패는 이미 받은 수신자에게 해소하고 슈퍼 부재�
 
 test("해소 뒤 다시 죽으면 새 수명으로 한 번 상신한다(card-52)", async () => {
   const { sent } = await deliveryRun({ delivery: "not-sent", deaths: [false, true, true, true, false, true, true, false] });
-  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[1, "p-감독"], [1, "qa-슈퍼감독"], [4, "qa-슈퍼감독"],
-    [5, "p-감독"], [5, "qa-슈퍼감독"], [7, "qa-슈퍼감독"]]);
+  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[1, "p-감독"], [1, "qa-슈퍼감독"],
+    [5, "p-감독"], [5, "qa-슈퍼감독"]]);
 });
 
 test("guardedSend 오류는 delivery를 밝힌다(card-52)", () => {

@@ -7,13 +7,31 @@ function startedAtMs(state) {
   return Number.isFinite(at) ? at : 0;
 }
 
+// 감독 멈춤은 두 단계다(2026-10-05 [kyle] 결정): idleMs 동안 멈추면 본인에게(1단), 그 두 배가 되면 상위에게(2단).
+// 두 단계는 다른 id라 1단은 2단이 뜨면 조용히 닫히고, 상위는 2단에서 처음 받는다. 움직이면 둘 다 닫힌다.
+function idleAlert(baseId, role, session, openCards, idleFor, idleMs) {
+  const stage = idleFor >= idleMs * 2 ? 2 : 1;
+  return { id: stage === 2 ? `${baseId}:상위` : baseId, kind: "놀고 있음", level: "AMBER", role, session,
+    openCards, idleMinutes: Math.floor(idleFor / 60_000), stage };
+}
+
+// 실행이 다 끝났거나 아직 없는 열린 워크는 책임 감독의 할 일이다(2026-10-05 [kyle]: "매번 내가 말해 줘야 다음 걸 한다").
+// 진행 중 실행 = 카드가 assigned·hold인 것. draft·ready는 아직 발령 전이라 할 일로 본다.
+export function idleWorkEntries(works, cards, parents) {
+  const byKey = new Map((cards ?? []).map(c => [c.key, c]));
+  return (works ?? []).filter(w => w?.status === "open" && parents.has(w.owner)
+      && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
+    .map(w => ({ kind: "send", role: w.owner, taskId: `work:${w.key}`, t: w.at }));
+}
+
 export function assessSupervisorIdle(
   entries,
   roleStates,
   now,
   idleMs,
   ledgerError = null,
-  parents = new Map()
+  parents = new Map(),
+  { works = [], cards = [] } = {}
 ) {
   if (ledgerError) {
     return [
@@ -82,26 +100,16 @@ export function assessSupervisorIdle(
     const openedAt = Math.min(...cards.values());
     const idleFor = Math.min(now - openedAt, state.unchangedMs ?? 0);
     if (idleFor < idleMs) continue;
-    alerts.push({
-      id: `idle:${board}`,
-      kind: "놀고 있음",
-      level: "AMBER",
-      role,
-      session,
-      openCards: cards.size,
-      idleMinutes: Math.floor(idleFor / 60_000),
-    });
+    alerts.push(idleAlert(`idle:${board}`, role, session, cards.size, idleFor, idleMs));
   }
-  alerts.push(...assessHierarchyIdle(entries, roleStates, now, idleMs, parents));
+  alerts.push(...assessHierarchyIdle([...entries, ...idleWorkEntries(works, cards, parents)], roleStates, now, idleMs, parents));
   return alerts;
 }
 
-export function wakeDue(role, lastWakeAt, now, wakeEveryMs) {
-  return Boolean(role) && (lastWakeAt == null || now - lastWakeAt >= wakeEveryMs);
-}
-
-export function buildWakeMessage() {
-  return "[자가점검 깨우기] 도구로 판을 직접 확인하라: 검수 짝 / 발령 상한 / 로스터 생존 / 표본 재검. 이상 없으면 보고하지 말고 계속하라.";
+// 1단: 감독 본인에게. 예전 --wake(30분 타이머에 고정 점검 목록)를 대신한다 — 근거(할 일 수·멈춘 시간)가 있는
+// 문구만 보내고, 멈추지 않았으면 아무것도 보내지 않는다. 15분 더 멈추면 2단으로 상위에게 간다고 미리 알린다.
+export function buildIdleNudge(alert) {
+  return `놀고 있음 ${alert.session} (할 일 ${alert.openCards}건, ${alert.idleMinutes}분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
 }
 
 export function assessHierarchyIdle(entries, states, now, idleMs, parents) {
@@ -139,8 +147,7 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents) {
     const openedAt = Math.min(...cards.map(entry => Date.parse(entry.t)).filter(Number.isFinite));
     const idleFor = Math.min(now - openedAt, ...active.map(item => item.unchangedMs ?? 0));
     if (idleFor < idleMs) continue;
-    alerts.push({ id: `idle:hierarchy:${role}`, kind: "놀고 있음", level: "AMBER",
-      role, session, openCards: cards.length, idleMinutes: Math.floor(idleFor / 60000) });
+    alerts.push(idleAlert(`idle:hierarchy:${role}`, role, session, cards.length, idleFor, idleMs));
   }
   return alerts;
 }

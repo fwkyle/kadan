@@ -51,9 +51,9 @@ async function exercise({ failure, superFails = false, stdout = false, recordFai
 
 test("watch의 알림은 원장에도 남는다 — 화면에만 있어 관제 화면이 못 보였다(2026-09-05)(card-64)", async () => {
   const result = await exercise();
-  assert.deepEqual(result.records.map(withoutRoute), [death, { ...death, resolved: true }]);
-  assert.deepEqual(result.events, [["send", "p-감독", false], ["record", "p-감독", false],
-    ["send", "p-감독", true], ["record", "p-감독", true]]);
+  // 해소는 우편 없이 기록만 남는다(2026-10-05 [kyle]): recipient는 받았던 사람, delivered는 false.
+  assert.deepEqual(result.records.map(withoutRoute), [death, { ...death, delivered: false, resolved: true }]);
+  assert.deepEqual(result.events, [["send", "p-감독", false], ["record", "p-감독", false], ["record", "p-감독", true]]);
   assert.equal(result.lines.length, result.records.length);
 });
 
@@ -63,14 +63,14 @@ test("전달 실패 알림도 원장에 남는다 — 실패는 delivered:false�
     const escalation = { kind: "alert", id: `delivery-failed:death:${session}:p-감독`, alertKind: "전달실패", level: "RED", role: undefined,
       session: undefined, taskId: undefined, recipient: "qa-슈퍼감독", delivered: !superFails, by: "watch" };
     assert.deepEqual(result.records.map(withoutRoute), [escalation, { ...death, delivered: false },
-      { ...death, recipient: superFails ? null : "qa-슈퍼감독", delivered: !superFails, resolved: true }]);
-    assert.equal(result.sent.length, superFails ? 2 : 3);
+      { ...death, recipient: superFails ? null : "qa-슈퍼감독", delivered: false, resolved: true }]);
+    assert.equal(result.sent.length, 2);
     assert.equal(result.lines.length, result.records.length);
   }
   for (const failure of ["unknown", "sent"]) {
     const result = await exercise({ failure });
     assert.deepEqual(result.records.map(withoutRoute), [{ ...death, delivered: false },
-      { ...death, recipient: failure === "sent" ? "p-감독" : null, delivered: failure === "sent", resolved: true }]);
+      { ...death, recipient: failure === "sent" ? "p-감독" : null, delivered: false, resolved: true }]);
   }
 });
 
@@ -80,7 +80,7 @@ test("원장 쓰기 실패가 watch를 죽이지 않는다 — 기록이 감시�
     assert.ok(result.records.length >= 2);
     assert.deepEqual(result.errors, result.records.map(() => "원장 기록 실패: controlled append failure"));
     assert.equal(result.lines.length, result.records.length);
-    assert.equal(result.sent.length, options.stdout ? 0 : options.failure ? 3 : 2);
+    assert.equal(result.sent.length, options.stdout ? 0 : options.failure ? 2 : 1);
   }
 });
 
@@ -88,6 +88,7 @@ test("해소는 resolved:true로 남는다 — 같은 규칙의 다른 줄이다
   const stdout = await exercise({ stdout: true });
   assert.deepEqual(stdout.records.map(withoutRoute), [{ ...death, recipient: null, delivered: false },
     { ...death, recipient: null, delivered: false, resolved: true }]);
+  // 해소 우편이 없으니 해소 전달 실패도 없다. 기록은 같다.
   const failed = await exercise({ resolutionFails: true });
   assert.deepEqual(failed.records.map(withoutRoute), [death, { ...death, delivered: false, resolved: true }]);
 });
