@@ -32,7 +32,8 @@ export function flowSummary(reviewFlows) {
 
 // 슈퍼감독(관계표에서 상위가 @user인 역할)마다 한 줄. 사용자가 여러 슈퍼감독에게 위임해도 묻지 않고 진행을 보게
 // (2026-10-05 [kyle]). 실행·워크·결정·경보를 담당 역할의 사슬 끝(최상위)으로 묶는다. 관계표를 모르면 null.
-// 관계표에 없는 담당의 실행은 unassigned로 세어 사각을 드러낸다.
+// 관계표에 없는 담당의 실행은 unassigned로 세어 사각을 드러낸다. 담당이 아직 없는 실행(초안·보류)은 관계표 문제가
+// 아니므로 unowned로 따로 센다(2026-10-05 실측: 운영 73건 중 72건이 담당 없는 초안이라 등록하라는 안내가 헛걸음이었다).
 export function supervisorSummary({ hierarchy, rows = [], works = [], decisions = null, alerts = null, live = null }) {
   if (!hierarchy || typeof hierarchy !== "object") return null;
   const parents = new Map(Object.entries(hierarchy));
@@ -49,8 +50,9 @@ export function supervisorSummary({ hierarchy, rows = [], works = [], decisions 
   const supers = [...parents.entries()].filter(([, p]) => p === "@user").map(([r]) => r).sort((a, b) => a.localeCompare(b, "ko"));
   const bySuper = new Map(supers.map((s) => [s, { super: s, repos: new Set(), running: 0, waiting: 0, stuck: 0, openWorks: 0,
     decisions: Array.isArray(decisions) ? 0 : null, alerts: alerts ? 0 : null, lastSignal: null }]));
-  let unassigned = 0;
+  let unassigned = 0, unowned = 0;
   for (const row of rows) {
+    if (!row.owner) { unowned++; continue; }
     const s = bySuper.get(topOf(row.owner));
     if (!s) { unassigned++; continue; }
     if (row.repo) s.repos.add(row.repo);
@@ -67,7 +69,7 @@ export function supervisorSummary({ hierarchy, rows = [], works = [], decisions 
     const session = live === null ? null : live.find((l) => l.role === s.super) ?? null;
     return { ...s, repos: [...s.repos].sort(), alive: live === null ? null : Boolean(session), model: session?.model ?? null };
   });
-  return { items, unassigned };
+  return { items, unassigned, unowned };
 }
 
 // 해소 전 감시 경보. 같은 id의 마지막 기록이 resolved가 아니면 열린 경보다(watch-runner seedAlertState와 같은 규칙).
