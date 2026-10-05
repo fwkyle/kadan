@@ -1,0 +1,890 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>카단 안내서 — AI 일꾼 관제 도구를 그림으로 이해하기</title>
+<style>
+/* 테마: 라이트·다크 둘 다 지원한다. 색은 전부 이 토큰만 쓴다. */
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --ink:#1d2733; --muted:#5a6673; --line:#d7dde5;
+  --accent:#2563eb; --accent-soft:#dfe9ff;
+  --ok:#15803d; --ok-soft:#ddf2e4; --bad:#c22828; --bad-soft:#fbe4e4; --warn:#b45309; --warn-soft:#fdf0dc;
+  --c-secr:#0f766e; --c-worker:#2563eb; --c-rev:#7c3aed; --c-super:#b45309; --c-ledger:#475569;
+  --shadow:0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#10151c; --panel:#18202a; --ink:#e6ebf2; --muted:#96a2b0; --line:#2c3744;
+    --accent:#6ea8ff; --accent-soft:#1d2c4a;
+    --ok:#4cc07a; --ok-soft:#14301f; --bad:#f06a6a; --bad-soft:#3d1c1c; --warn:#e8a04c; --warn-soft:#3a2a14;
+    --c-secr:#2dd4bf; --c-worker:#6ea8ff; --c-rev:#b18cff; --c-super:#e8a04c; --c-ledger:#94a3b8;
+    --shadow:0 1px 3px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151c; --panel:#18202a; --ink:#e6ebf2; --muted:#96a2b0; --line:#2c3744;
+  --accent:#6ea8ff; --accent-soft:#1d2c4a;
+  --ok:#4cc07a; --ok-soft:#14301f; --bad:#f06a6a; --bad-soft:#3d1c1c; --warn:#e8a04c; --warn-soft:#3a2a14;
+  --c-secr:#2dd4bf; --c-worker:#6ea8ff; --c-rev:#b18cff; --c-super:#e8a04c; --c-ledger:#94a3b8;
+  --shadow:0 1px 3px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.wrap{max-width:980px;margin:0 auto;padding:0 16px 64px}
+header.top{padding:28px 0 14px}
+header.top h1{margin:0 0 6px;font-size:24px;line-height:1.3}
+header.top .why{margin:0;color:var(--muted);font-size:14px}
+nav.tabs{position:sticky;top:0;z-index:10;background:var(--bg);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;padding:10px 0}
+nav.tabs button{font:inherit;font-weight:700;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 18px;cursor:pointer}
+nav.tabs button.on{color:#fff;background:var(--accent);border-color:var(--accent)}
+.view{display:none;padding-top:22px}
+.view.on{display:block}
+.scene{margin:0 0 40px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 20px 14px;box-shadow:var(--shadow)}
+.scene .num{display:inline-block;font-weight:800;font-size:13px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 12px;margin-bottom:8px}
+.scene h2{margin:4px 0 8px;font-size:20px;line-height:1.4}
+.scene p.claim{margin:0 0 14px;font-size:15.5px}
+figure{margin:0}
+figure svg{display:block;width:100%;height:auto;border-radius:10px}
+figcaption{margin-top:10px;color:var(--muted);font-size:13.5px;border-top:1px dashed var(--line);padding-top:8px}
+svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+svg .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.f-panel{fill:var(--panel)} .f-bg{fill:var(--bg)} .f-soft{fill:var(--accent-soft)}
+.f-ok{fill:var(--ok-soft)} .f-bad{fill:var(--bad-soft)} .f-warnf{fill:var(--warn-soft)} .f-none{fill:none}
+.t-ink{fill:var(--ink)} .t-muted{fill:var(--muted)} .t-accent{fill:var(--accent)} .t-ok{fill:var(--ok)} .t-bad{fill:var(--bad)} .t-warn{fill:var(--warn)} .t-white{fill:#fff} .t-super{fill:var(--c-super)}
+.st-line{stroke:var(--line)} .st-ink{stroke:var(--ink)} .st-accent{stroke:var(--accent)} .st-ok{stroke:var(--ok)} .st-bad{stroke:var(--bad)} .st-muted{stroke:var(--muted)} .st-warn{stroke:var(--warn)}
+.chip-secr{fill:var(--c-secr)} .chip-worker{fill:var(--c-worker)} .chip-rev{fill:var(--c-rev)} .chip-super{fill:var(--c-super)} .chip-ledger{fill:var(--c-ledger)}
+.next-card{display:block;background:var(--accent-soft);border:2px solid var(--accent);border-radius:16px;padding:26px 22px;text-align:center;cursor:pointer;margin:0 0 40px}
+.next-card h2{margin:0 0 8px;font-size:20px}
+.next-card p{margin:0 0 14px;color:var(--muted)}
+.next-card .go{display:inline-block;font-weight:800;color:#fff;background:var(--accent);border-radius:999px;padding:10px 26px;border:0;font-size:16px;cursor:pointer}
+section.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;margin:0 0 26px;box-shadow:var(--shadow)}
+section.panel h2{margin:0 0 6px;font-size:19px}
+section.panel h3{margin:18px 0 8px;font-size:16px}
+section.panel p.note{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+.kind-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:12px}
+.kind{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg)}
+.kind .code{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;font-weight:700;border-radius:6px;padding:2px 8px;margin-bottom:6px}
+.kind .code.ok{background:var(--ok-soft);color:var(--ok)} .kind .code.bad{background:var(--bad-soft);color:var(--bad)}
+.kind p{margin:0;font-size:14px}
+.kind p.src{color:var(--muted);font-size:12px;margin-top:4px}
+.controls{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0}
+.ctrl{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--bg);min-width:200px}
+.ctrl .lab{font-size:12.5px;color:var(--muted);margin-bottom:6px;font-weight:700}
+.ctrl button{font:inherit;font-size:13.5px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:5px 10px;margin:2px 4px 2px 0;cursor:pointer}
+.ctrl button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.presets{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.presets button{font:inherit;font-size:13px;border:1px dashed var(--accent);color:var(--accent);background:transparent;border-radius:999px;padding:5px 14px;cursor:pointer}
+button.run{display:block;width:100%;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;background:var(--ink);color:var(--bg);border:0;border-radius:12px;padding:14px 16px;cursor:pointer;margin:8px 0 16px}
+.sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:700px){.sim-grid{grid-template-columns:1fr}}
+ol#sim-log{margin:0;padding-left:20px;font-size:13.5px}
+ol#sim-log li{margin-bottom:8px}
+ol#sim-log .pass{color:var(--ok);font-weight:700}
+ol#sim-log .fail{color:var(--bad);font-weight:700}
+ol#sim-log .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+#sim-rail{display:flex;flex-wrap:wrap;gap:6px}
+#sim-rail .st{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted)}
+#sim-rail .st.cur{border-color:var(--accent);color:var(--accent);font-weight:800;background:var(--accent-soft)}
+#sim-rail .st.okgo::after{content:" · 검문 통과";color:var(--ok);font-weight:700}
+#sim-rail .grp{flex-basis:100%;font-size:12px;font-weight:700;color:var(--ink);margin-top:4px}
+#sim-rail .grp:first-child{margin-top:0}
+pre#sim-ledger{margin:0;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;min-height:120px;white-space:pre-wrap;word-break:break-all;color:var(--ink)}
+#sim-stamps .stamp{border:2px solid var(--bad);color:var(--bad);border-radius:10px;padding:8px 12px;margin-bottom:8px;font-size:13px;transform:rotate(-1.2deg);background:var(--bad-soft)}
+#sim-stamps .stamp b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.scroll-x{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-top:10px}
+table.rules{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px}
+table.rules th,table.rules td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+table.rules th{background:var(--bg);font-size:12.5px;color:var(--muted)}
+table.rules td code{font-size:12px}
+.link-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:12px}
+.link-card{display:block;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--bg);text-decoration:none;color:var(--ink)}
+.link-card b{display:block;font-size:15px;margin-bottom:4px}
+.link-card span{color:var(--muted);font-size:13px}
+.link-card:hover{border-color:var(--accent)}
+.src-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.src-chips span{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted)}
+footer{margin-top:34px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:12.5px}
+footer h2{font-size:14px;margin:0 0 8px;color:var(--ink)}
+footer table{border-collapse:collapse;width:100%;font-size:12px}
+footer th,footer td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+footer td code{font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <h1>카단(kadan) 안내서 — 그림으로 이해하기</h1>
+  <p class="why">Why — 새로 온 사람이 5분 안에 "카단이 뭘 하는 도구인지" 알게 하려고. 아래로 갈수록 자세해진다. 지금 이해한 만큼만 보고 멈춰도 된다.</p>
+</header>
+<nav class="tabs" aria-label="난이도">
+  <button data-view="easy" class="on">아주 쉬움</button>
+  <button data-view="normal">보통 — 직접 만져 보기</button>
+  <button data-view="detail">상세 — 원본 문서</button>
+</nav>
+
+<!-- ===================== 아주 쉬움 ===================== -->
+<div id="view-easy" class="view on">
+
+<section class="scene" id="s1">
+  <span class="num">장면 1 · 문제</span>
+  <h2>AI 일꾼이 많으면 뭐가 힘들까요?</h2>
+  <p class="claim">코덱스·클로드 같은 AI 일꾼을 여러 명 띄우면 누가 뭘 하는지, 멈췄는지 알 수 없어요. 카단은 AI마다 <b>이름표(역할)</b>를 붙이고 <b>창(tmux 세션)</b>을 열어 줘서, 사람이 한눈에 보고 직접 말을 걸 수 있어요.</p>
+  <figure>
+  <svg viewBox="0 0 960 400" role="img" aria-label="사람이 kadan start 명령을 입력하면 역할 이름이 붙은 창이 열리고, 사람은 attach로 언제든 그 창에 들어가 본다">
+    <defs>
+      <marker id="m-ink-1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-ink"/></marker>
+      <marker id="m-mut-1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-muted"/></marker>
+    </defs>
+    <circle cx="120" cy="118" r="24" class="f-panel st-line" stroke-width="2"/>
+    <rect x="84" y="150" width="72" height="84" rx="16" class="f-panel st-line" stroke-width="2"/>
+    <text x="120" y="262" text-anchor="middle" font-size="14" font-weight="700" class="t-ink">사람</text>
+    <rect x="300" y="90" width="320" height="120" rx="14" class="f-panel st-accent" stroke-width="2"/>
+    <text x="320" y="126" font-size="15" class="t-ink mono">kadan start 작업자-가</text>
+    <text x="320" y="150" font-size="14" class="t-muted mono">--cmd codex</text>
+    <text x="320" y="182" font-size="13" class="t-muted">역할 이름으로 창을 연다</text>
+    <g>
+      <rect x="700" y="50" width="220" height="86" rx="10" class="f-panel st-line" stroke-width="2"/>
+      <rect x="700" y="50" width="220" height="26" rx="10" class="f-bg"/>
+      <text x="712" y="68" font-size="12.5" class="t-ink mono">kadan-비서</text>
+      <circle cx="716" cy="102" r="7" class="chip-secr"/>
+      <text x="732" y="107" font-size="13" class="t-muted">AI CLI가 사는 창</text>
+      <rect x="700" y="150" width="220" height="86" rx="10" class="f-panel st-line" stroke-width="2"/>
+      <rect x="700" y="150" width="220" height="26" rx="10" class="f-bg"/>
+      <text x="712" y="168" font-size="12.5" class="t-ink mono">kadan-작업자-가</text>
+      <circle cx="716" cy="202" r="7" class="chip-worker"/>
+      <text x="732" y="207" font-size="13" class="t-muted">AI CLI가 사는 창</text>
+      <rect x="700" y="250" width="220" height="86" rx="10" class="f-panel st-line" stroke-width="2"/>
+      <rect x="700" y="250" width="220" height="26" rx="10" class="f-bg"/>
+      <text x="712" y="268" font-size="12.5" class="t-ink mono">kadan-검수-나</text>
+      <circle cx="716" cy="302" r="7" class="chip-rev"/>
+      <text x="732" y="307" font-size="13" class="t-muted">AI CLI가 사는 창</text>
+    </g>
+    <line x1="208" y1="150" x2="294" y2="150" class="st-ink" stroke-width="2" marker-end="url(#m-ink-1)"/>
+    <text x="251" y="138" text-anchor="middle" font-size="13" class="t-ink">입력한다</text>
+    <line x1="620" y1="150" x2="650" y2="150" class="st-ink" stroke-width="2"/>
+    <line x1="656" y1="93" x2="656" y2="293" class="st-ink" stroke-width="2"/>
+    <line x1="656" y1="93" x2="692" y2="93" class="st-ink" stroke-width="2" marker-end="url(#m-ink-1)"/>
+    <line x1="656" y1="193" x2="692" y2="193" class="st-ink" stroke-width="2" marker-end="url(#m-ink-1)"/>
+    <line x1="656" y1="293" x2="692" y2="293" class="st-ink" stroke-width="2" marker-end="url(#m-ink-1)"/>
+    <text x="655" y="38" text-anchor="middle" font-size="13" class="t-muted">창을 연다 — 이름 규칙 kadan-&lt;역할&gt;</text>
+    <path d="M700,312 C520,362 280,352 138,290" class="st-muted f-none" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#m-mut-1)"/>
+    <text x="430" y="352" text-anchor="middle" font-size="13" class="t-muted">attach로 언제든 들어가 본다</text>
+  </svg>
+  <figcaption>사람이 kadan start를 입력하면 역할 이름이 붙은 창이 열리고, 사람은 attach로 언제든 그 창에 들어가 본다. (출처: README.md, src/cli.mjs:176)</figcaption>
+  </figure>
+</section>
+
+<section class="scene" id="s2">
+  <span class="num">장면 2 · 원리</span>
+  <h2>무슨 일이 있었는지 어떻게 기억할까요?</h2>
+  <p class="claim">카단은 모든 사건을 <b>공책(원장, ledger)</b> 맨 끝에 한 줄씩만 적어요. 쓴 줄은 절대 지우지 않고, 중간에 끼우지도, 순서를 바꾸지도 않아요 — 그래서 나중에 다시 읽어도 그날 그대로예요.</p>
+  <figure>
+  <svg viewBox="0 0 960 420" role="img" aria-label="사건이 원장 맨 끝에만 덧붙고, 지우기·중간 삽입·순서 바꾸기는 금지다">
+    <defs>
+      <marker id="m-warn-2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-warn"/></marker>
+    </defs>
+    <rect x="60" y="50" width="460" height="330" rx="10" class="f-panel st-line" stroke-width="2"/>
+    <text x="80" y="86" font-size="15" font-weight="700" class="t-ink">원장 — kadan.sqlite의 events</text>
+    <text x="80" y="108" font-size="12.5" class="t-muted">storage.json이 저장 방식을 고른다 (지금은 SQLite, 옛 JSONL은 동결 보존)</text>
+    <g font-size="12.5">
+      <rect x="80" y="126" width="420" height="30" rx="6" class="f-bg"/>
+      <rect x="88" y="131" width="52" height="20" rx="10" class="chip-ledger"/><text x="114" y="146" text-anchor="middle" font-size="11.5" class="t-white mono">plan</text>
+      <text x="150" y="146" class="t-muted">판에 카드 목록을 적었다</text>
+      <rect x="80" y="166" width="420" height="30" rx="6" class="f-bg"/>
+      <rect x="88" y="171" width="52" height="20" rx="10" class="chip-ledger"/><text x="114" y="186" text-anchor="middle" font-size="11.5" class="t-white mono">start</text>
+      <text x="150" y="186" class="t-muted">작업자-가 창을 열었다 (pane PID 51234)</text>
+      <rect x="80" y="206" width="420" height="30" rx="6" class="f-bg"/>
+      <rect x="88" y="211" width="52" height="20" rx="10" class="chip-ledger"/><text x="114" y="226" text-anchor="middle" font-size="11.5" class="t-white mono">send</text>
+      <text x="150" y="226" class="t-muted">카드 card-1을 작업자-가에게 보냈다</text>
+      <rect x="80" y="246" width="420" height="30" rx="6" class="f-bg"/>
+      <rect x="88" y="251" width="52" height="20" rx="10" class="chip-ledger"/><text x="114" y="266" text-anchor="middle" font-size="11.5" class="t-white mono">done</text>
+      <text x="150" y="266" class="t-muted">card-1이 ok로 끝났다</text>
+      <rect x="80" y="286" width="420" height="30" rx="6" class="f-bg"/>
+      <rect x="88" y="291" width="52" height="20" rx="10" class="chip-ledger"/><text x="114" y="306" text-anchor="middle" font-size="11.5" class="t-white mono">stop</text>
+      <text x="150" y="306" class="t-muted">검수-나 창을 닫았다</text>
+      <rect x="80" y="326" width="420" height="30" rx="6" class="f-ok st-ok" stroke-width="2"/>
+      <rect x="88" y="331" width="52" height="20" rx="10" class="chip-ledger"/><text x="114" y="346" text-anchor="middle" font-size="11.5" class="t-white mono">alert</text>
+      <text x="150" y="346" class="t-muted">조용한 창을 보고했다 — 방금 붙은 줄</text>
+    </g>
+    <polygon points="560,322 546,330 560,338" class="f-warnf st-warn" stroke-width="2"/>
+    <rect x="560" y="322" width="66" height="16" rx="8" class="f-warnf st-warn" stroke-width="2"/>
+    <line x1="546" y1="330" x2="524" y2="330" class="st-warn" stroke-width="2" marker-end="url(#m-warn-2)"/>
+    <text x="594" y="308" text-anchor="middle" font-size="13" font-weight="700" class="t-warn">뒤에만 덧붙인다</text>
+    <g>
+      <rect x="660" y="60" width="260" height="80" rx="12" class="f-panel st-bad" stroke-width="1.5"/>
+      <circle cx="690" cy="100" r="15" class="f-none st-bad" stroke-width="2.5"/><line x1="680" y1="110" x2="700" y2="90" class="st-bad" stroke-width="2.5"/>
+      <text x="716" y="94" font-size="14" font-weight="700" class="t-ink">지우기 금지</text>
+      <text x="716" y="116" font-size="12.5" class="t-muted">쓴 줄은 지우지 않는다</text>
+      <rect x="660" y="160" width="260" height="80" rx="12" class="f-panel st-bad" stroke-width="1.5"/>
+      <circle cx="690" cy="200" r="15" class="f-none st-bad" stroke-width="2.5"/><line x1="680" y1="210" x2="700" y2="190" class="st-bad" stroke-width="2.5"/>
+      <text x="716" y="194" font-size="14" font-weight="700" class="t-ink">중간에 끼우기 금지</text>
+      <text x="716" y="216" font-size="12.5" class="t-muted">새 줄은 항상 맨 끝에</text>
+      <rect x="660" y="260" width="260" height="80" rx="12" class="f-panel st-bad" stroke-width="1.5"/>
+      <circle cx="690" cy="300" r="15" class="f-none st-bad" stroke-width="2.5"/><line x1="680" y1="310" x2="700" y2="290" class="st-bad" stroke-width="2.5"/>
+      <text x="716" y="294" font-size="14" font-weight="700" class="t-ink">순서 바꾸기 금지</text>
+      <text x="716" y="316" font-size="12.5" class="t-muted">적힌 순서가 곧 시간 순서</text>
+    </g>
+  </svg>
+  <figcaption>사건은 원장 맨 끝에만 덧붙고(append-only), 지우기·중간 삽입·순서 바꾸기는 금지다. (출처: docs/design.md 규칙 1, src/ledger.mjs:29)</figcaption>
+  </figure>
+</section>
+
+<section class="scene" id="s3">
+  <span class="num">장면 3 · 원리</span>
+  <h2>편지를 넣기 전에 뭘 확인할까요?</h2>
+  <p class="claim">죽은 창이나 엉뚱한 프로세스에 편지를 넣으면 큰일이에요. 그래서 send는 <b>검문소(guardedSend)</b> 네 칸을 순서대로 통과해야만 상대 창에 닿아요. 하나라도 걸리면 보내지 않고 이유를 알려요.</p>
+  <figure>
+  <svg viewBox="0 0 1060 600" role="img" aria-label="편지는 카드 검사, 세션 생존, PID 대조, AI 신원 네 관문을 순서대로 통과해야 창에 닿고, 각 관문에서 걸리면 거부 코드와 함께 되돌아온다">
+    <defs>
+      <marker id="m-ink-3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-ink"/></marker>
+      <marker id="m-bad-3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-bad"/></marker>
+    </defs>
+    <rect x="380" y="14" width="300" height="64" rx="12" class="f-panel st-accent" stroke-width="2"/>
+    <text x="530" y="42" text-anchor="middle" font-size="15" font-weight="700" class="t-ink">편지 (kadan send)</text>
+    <text x="530" y="64" text-anchor="middle" font-size="11.5" class="t-muted mono">작업자-가 --task card-1</text>
+    <line x1="530" y1="78" x2="530" y2="106" class="st-ink" stroke-width="2" marker-end="url(#m-ink-3)"/>
+    <rect x="360" y="110" width="340" height="70" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="388" cy="145" r="14" class="f-soft"/><text x="388" y="150" text-anchor="middle" font-size="13" font-weight="800" class="t-accent">(1)</text>
+    <text x="412" y="138" font-size="15" font-weight="700" class="t-ink">카드 검사</text>
+    <text x="412" y="162" font-size="12.5" class="t-muted">작업대기 상태 · 담당이 맞나? (card-store.mjs:223)</text>
+    <line x1="700" y1="145" x2="764" y2="145" class="st-bad" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#m-bad-3)"/>
+    <text x="722" y="136" font-size="10.5" font-weight="700" class="t-bad">거부</text>
+    <rect x="770" y="118" width="272" height="54" rx="10" class="f-bad"/>
+    <text x="782" y="140" font-size="12.5" font-weight="700" class="t-bad mono">중앙 카드 발령 불가</text>
+    <text x="782" y="160" font-size="11.5" class="t-bad">작업대기(assigned)가 아니거나 담당이 다름</text>
+    <line x1="530" y1="180" x2="530" y2="206" class="st-ink" stroke-width="2" marker-end="url(#m-ink-3)"/>
+    <rect x="360" y="210" width="340" height="70" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="388" cy="245" r="14" class="f-soft"/><text x="388" y="250" text-anchor="middle" font-size="13" font-weight="800" class="t-accent">(2)</text>
+    <text x="412" y="238" font-size="15" font-weight="700" class="t-ink">세션 생존</text>
+    <text x="412" y="262" font-size="12.5" class="t-muted">창이 살아 있나? (cli.mjs:705)</text>
+    <line x1="700" y1="245" x2="764" y2="245" class="st-bad" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#m-bad-3)"/>
+    <text x="722" y="236" font-size="10.5" font-weight="700" class="t-bad">거부</text>
+    <rect x="770" y="218" width="272" height="54" rx="10" class="f-bad"/>
+    <text x="782" y="240" font-size="12.5" font-weight="700" class="t-bad mono">KADAN_SESSION_MISSING</text>
+    <text x="782" y="260" font-size="11.5" class="t-bad">먼저 kadan start</text>
+    <line x1="530" y1="280" x2="530" y2="306" class="st-ink" stroke-width="2" marker-end="url(#m-ink-3)"/>
+    <rect x="360" y="310" width="340" height="70" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="388" cy="345" r="14" class="f-soft"/><text x="388" y="350" text-anchor="middle" font-size="13" font-weight="800" class="t-accent">(3)</text>
+    <text x="412" y="338" font-size="15" font-weight="700" class="t-ink">PID 대조</text>
+    <text x="412" y="362" font-size="12.5" class="t-muted">시작 때 그 프로세스인가? (cli.mjs:712)</text>
+    <line x1="700" y1="345" x2="764" y2="345" class="st-bad" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#m-bad-3)"/>
+    <text x="722" y="336" font-size="10.5" font-weight="700" class="t-bad">거부</text>
+    <rect x="770" y="318" width="272" height="54" rx="10" class="f-bad"/>
+    <text x="782" y="340" font-size="12.5" font-weight="700" class="t-bad mono">KADAN_PID_MISMATCH</text>
+    <text x="782" y="360" font-size="11.5" class="t-bad">이름만 같고 다른 프로세스 — 사람 확인</text>
+    <line x1="530" y1="380" x2="530" y2="406" class="st-ink" stroke-width="2" marker-end="url(#m-ink-3)"/>
+    <text x="548" y="398" font-size="12.5" font-weight="700" class="t-ok">통과하면 아래로</text>
+    <rect x="360" y="410" width="340" height="70" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="388" cy="445" r="14" class="f-soft"/><text x="388" y="450" text-anchor="middle" font-size="13" font-weight="800" class="t-accent">(4)</text>
+    <text x="412" y="438" font-size="15" font-weight="700" class="t-ink">AI 신원</text>
+    <text x="412" y="462" font-size="12.5" class="t-muted">등록 실행기·모델인가? (cli.mjs:727) — 카드 발령만</text>
+    <line x1="700" y1="445" x2="764" y2="445" class="st-bad" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#m-bad-3)"/>
+    <text x="722" y="436" font-size="10.5" font-weight="700" class="t-bad">거부</text>
+    <rect x="770" y="412" width="272" height="66" rx="10" class="f-bad"/>
+    <text x="782" y="433" font-size="11" font-weight="700" class="t-bad mono">KADAN_AI_IDENTITY_UNVERIFIED</text>
+    <text x="782" y="451" font-size="11" font-weight="700" class="t-bad mono">KADAN_STALE_RUNNER</text>
+    <text x="782" y="469" font-size="11.5" class="t-bad">AI 확인 실패 · 옛 실행기 세션</text>
+    <line x1="530" y1="480" x2="530" y2="506" class="st-ink" stroke-width="2" marker-end="url(#m-ink-3)"/>
+    <rect x="390" y="510" width="280" height="66" rx="12" class="f-ok st-ok" stroke-width="2"/>
+    <text x="530" y="538" text-anchor="middle" font-size="15" font-weight="700" class="t-ink">작업자-가의 창에 전달</text>
+    <text x="530" y="560" text-anchor="middle" font-size="12.5" class="t-muted">원장에 send 사건이 붙는다</text>
+    <text x="530" y="594" text-anchor="middle" font-size="12" class="t-muted">일반 우편·질문·답장은 (4)를 거치지 않는다 (cli.mjs:724)</text>
+  </svg>
+  <figcaption>편지는 네 관문 — 카드 검사, 세션 생존, PID 대조, AI 신원 — 을 순서대로 통과해야 창에 닿고, 걸리면 거부 코드와 함께 되돌아온다. (출처: src/cli.mjs:633)</figcaption>
+  </figure>
+</section>
+
+<section class="scene" id="s4">
+  <span class="num">장면 4 · 비교</span>
+  <h2>"다 했어요"를 어떻게 믿을까요?</h2>
+  <p class="claim">완료 신호는 AI가 화면에 출력하는 <b>마커 한 줄(KADAN:DONE)</b>이에요. 완성된 마커를 지문에 쓰면 입력 에코까지 마커로 보여 완료를 오판해요. 그래서 지문에는 <b>형식과 카드 id만</b> 알려 주고, 조립은 AI가 해요.</p>
+  <figure>
+  <svg viewBox="0 0 960 470" role="img" aria-label="같은 구도 비교 — 완성 마커를 지문에 쓰면 입력 에코를 완료로 오판하고, 형식만 알려 주면 AI의 출력 줄만 진짜 완료 신호가 된다">
+    <defs>
+      <marker id="m-bad-4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-bad"/></marker>
+      <marker id="m-ok-4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-ok"/></marker>
+      <marker id="m-mut-4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-muted"/></marker>
+    </defs>
+    <rect x="20" y="16" width="440" height="416" rx="14" class="f-panel st-bad" stroke-width="2"/>
+    <text x="40" y="46" font-size="15" font-weight="800" class="t-bad">나쁜 예 — 완성 마커를 지문에 씀</text>
+    <path d="M60,210 L60,336" class="st-bad f-none" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#m-bad-4)"/>
+    <rect x="40" y="60" width="400" height="86" rx="10" class="f-bg st-line"/>
+    <text x="52" y="82" font-size="12" class="t-muted">감독이 보낸 지문</text>
+    <text x="52" y="106" font-size="12.5" class="t-ink">…끝나면 이 줄을 출력해:</text>
+    <text x="52" y="128" font-size="12.5" font-weight="700" class="t-bad mono">KADAN:DONE card-1 ok</text>
+    <line x1="240" y1="146" x2="240" y2="164" class="st-muted" stroke-width="2" marker-end="url(#m-mut-4)"/>
+    <text x="252" y="160" font-size="11" class="t-muted">되풀이된다(에코)</text>
+    <rect x="40" y="166" width="400" height="44" rx="8" class="f-bad st-bad" stroke-width="2.5"/>
+    <text x="52" y="193" font-size="12.5" class="t-bad mono">› … KADAN:DONE card-1 ok</text>
+    <rect x="40" y="250" width="400" height="44" rx="8" class="f-bg st-line"/>
+    <text x="52" y="277" font-size="12.5" class="t-muted">AI 출력: (아직 일하는 중) …</text>
+    <text x="74" y="240" font-size="11.5" font-weight="700" class="t-bad">에코를 마커로 오독</text>
+    <rect x="40" y="340" width="400" height="76" rx="10" class="f-bad st-bad" stroke-width="2"/>
+    <text x="52" y="368" font-size="14" font-weight="800" class="t-bad">wait의 판정: 완료?</text>
+    <text x="52" y="392" font-size="12.5" class="t-bad">입력 에코를 보고 끝난 줄로 오판한다</text>
+    <rect x="500" y="16" width="440" height="416" rx="14" class="f-panel st-ok" stroke-width="2"/>
+    <text x="520" y="46" font-size="15" font-weight="800" class="t-ok">좋은 예 — 형식과 id만 알려 줌</text>
+    <path d="M540,210 L540,336" class="st-muted f-none" stroke-width="2" stroke-dasharray="6 4"/>
+    <rect x="520" y="60" width="400" height="86" rx="10" class="f-bg st-line"/>
+    <text x="532" y="82" font-size="12" class="t-muted">감독이 보낸 지문</text>
+    <text x="532" y="106" font-size="12.5" class="t-ink mono">형식 KADAN:DONE &lt;카드id&gt; &lt;ok|failed&gt;</text>
+    <text x="532" y="128" font-size="12.5" class="t-ink">카드 id: card-1 — 조립은 네가 해</text>
+    <line x1="720" y1="146" x2="720" y2="164" class="st-muted" stroke-width="2" marker-end="url(#m-mut-4)"/>
+    <text x="732" y="160" font-size="11" class="t-muted">되풀이된다(에코)</text>
+    <rect x="520" y="166" width="400" height="44" rx="8" class="f-bg st-line"/>
+    <text x="532" y="193" font-size="12.5" class="t-muted mono">› 형식 KADAN:DONE &lt;카드id&gt;…</text>
+    <rect x="520" y="250" width="400" height="44" rx="8" class="f-ok st-ok" stroke-width="2.5"/>
+    <text x="532" y="277" font-size="12.5" font-weight="700" class="t-ok mono">AI 출력: KADAN:DONE card-1 ok</text>
+    <circle cx="540" cy="230" r="11" class="f-panel st-muted" stroke-width="2"/>
+    <line x1="533" y1="237" x2="547" y2="223" class="st-muted" stroke-width="2"/>
+    <text x="558" y="234" font-size="11.5" class="t-muted">에코는 ›로 시작해 정규식이 걸러냄</text>
+    <line x1="720" y1="294" x2="720" y2="336" class="st-ok" stroke-width="2" marker-end="url(#m-ok-4)"/>
+    <text x="732" y="320" font-size="11.5" font-weight="700" class="t-ok">출력 줄을 읽는다</text>
+    <rect x="520" y="340" width="400" height="76" rx="10" class="f-ok st-ok" stroke-width="2"/>
+    <text x="532" y="368" font-size="14" font-weight="800" class="t-ok">wait의 판정: 완료 확인</text>
+    <text x="532" y="392" font-size="12.5" class="t-muted">출력 줄만 마커로 인식한다</text>
+    <text x="480" y="456" text-anchor="middle" font-size="12" class="t-muted mono">판정 규칙 한 줄: DONE_LINE — src/done-marker.mjs:3</text>
+  </svg>
+  <figcaption>같은 구도 두 번 — 완성 마커를 지문에 쓰면 에코를 오판(왼쪽), 형식만 주면 AI 출력 줄만 진짜 신호(오른쪽). 달라지는 칸만 색으로 강조했다. (출처: docs/design.md 규칙 6, src/done-marker.mjs:3)</figcaption>
+  </figure>
+</section>
+
+<section class="scene" id="s5">
+  <span class="num">장면 5 · 비교</span>
+  <h2>바닥이 바뀌면 카단도 바뀔까요?</h2>
+  <p class="claim">AI가 사는 곳(바닥)은 tmux에서 로티(rottie) 같은 다른 곳으로 바뀔 수 있어요. 하지만 원장·검문소·DONE 마커·명령(<b>코어</b>)은 그대로 두고 <b>바닥 조각만 갈아끼워요</b>.</p>
+  <figure>
+  <svg viewBox="0 0 960 430" role="img" aria-label="같은 코어 상자가 두 번 있고 아래 바닥 조각만 tmux에서 rottie로 바뀐다 — 코어는 그대로다">
+    <defs>
+      <marker id="m-warn-5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-warn"/></marker>
+    </defs>
+    <rect x="40" y="56" width="340" height="224" rx="14" class="f-panel st-accent" stroke-width="2"/>
+    <text x="60" y="88" font-size="15" font-weight="800" class="t-ink">코어 — 바뀌지 않는 것</text>
+    <rect x="60" y="104" width="146" height="44" rx="8" class="f-soft"/><text x="133" y="131" text-anchor="middle" font-size="13" class="t-accent">원장(ledger)</text>
+    <rect x="214" y="104" width="146" height="44" rx="8" class="f-soft"/><text x="287" y="131" text-anchor="middle" font-size="13" class="t-accent">검문소(send)</text>
+    <rect x="60" y="158" width="146" height="44" rx="8" class="f-soft"/><text x="133" y="185" text-anchor="middle" font-size="13" class="t-accent">DONE 마커</text>
+    <rect x="214" y="158" width="146" height="44" rx="8" class="f-soft"/><text x="287" y="185" text-anchor="middle" font-size="13" class="t-accent">명령 9개</text>
+    <text x="60" y="238" font-size="12" class="t-muted">start · send · done · wait · read ·</text>
+    <text x="60" y="258" font-size="12" class="t-muted">status · log · attach · stop</text>
+    <rect x="40" y="300" width="340" height="64" rx="10" class="f-warnf st-warn" stroke-width="2"/>
+    <text x="210" y="328" text-anchor="middle" font-size="14" font-weight="800" class="t-warn">바닥 조각: tmux</text>
+    <text x="210" y="350" text-anchor="middle" font-size="12" class="t-muted mono">소켓 -L kadan (floor-tmux.mjs:8)</text>
+    <line x1="392" y1="332" x2="566" y2="332" class="st-warn" stroke-width="2.5" marker-end="url(#m-warn-5)"/>
+    <line x1="566" y1="344" x2="392" y2="344" class="st-warn" stroke-width="2.5" marker-end="url(#m-warn-5)"/>
+    <text x="479" y="316" text-anchor="middle" font-size="13" font-weight="700" class="t-warn">바닥만 갈아끼운다</text>
+    <text x="479" y="376" text-anchor="middle" font-size="11.5" class="t-muted mono">KADAN_FLOOR=tmux | rottie (floor.mjs:4)</text>
+    <rect x="580" y="56" width="340" height="224" rx="14" class="f-panel st-accent" stroke-width="2"/>
+    <text x="600" y="88" font-size="15" font-weight="800" class="t-ink">코어 — 바뀌지 않는 것</text>
+    <rect x="600" y="104" width="146" height="44" rx="8" class="f-soft"/><text x="673" y="131" text-anchor="middle" font-size="13" class="t-accent">원장(ledger)</text>
+    <rect x="754" y="104" width="146" height="44" rx="8" class="f-soft"/><text x="827" y="131" text-anchor="middle" font-size="13" class="t-accent">검문소(send)</text>
+    <rect x="600" y="158" width="146" height="44" rx="8" class="f-soft"/><text x="673" y="185" text-anchor="middle" font-size="13" class="t-accent">DONE 마커</text>
+    <rect x="754" y="158" width="146" height="44" rx="8" class="f-soft"/><text x="827" y="185" text-anchor="middle" font-size="13" class="t-accent">명령 9개</text>
+    <text x="600" y="238" font-size="12" class="t-muted">start · send · done · wait · read ·</text>
+    <text x="600" y="258" font-size="12" class="t-muted">status · log · attach · stop</text>
+    <rect x="580" y="300" width="340" height="64" rx="10" class="f-warnf st-warn" stroke-width="2"/>
+    <text x="750" y="328" text-anchor="middle" font-size="14" font-weight="800" class="t-warn">바닥 조각: rottie</text>
+    <text x="750" y="350" text-anchor="middle" font-size="12" class="t-muted">제품 창 — 앱이 떠 있어야 한다</text>
+    <text x="480" y="408" text-anchor="middle" font-size="12.5" class="t-muted">바닥이 해 주는 일은 같다: 만들기·살아있나·PID·밀어넣기·읽기·종료·목록 (+변화 대기) — floor-tmux.mjs:596</text>
+  </svg>
+  <figcaption>코어(원장·검문소·DONE 마커·명령)는 같은 색 그대로, 바닥 조각만 tmux에서 rottie로 바뀐다. (출처: src/floor.mjs:4, src/floor-tmux.mjs:596)</figcaption>
+  </figure>
+</section>
+
+<section class="scene" id="s6">
+  <span class="num">장면 6 · 경계</span>
+  <h2>남의 창을 만지면 안 되는 이유가 뭘까요?</h2>
+  <p class="claim">카단은 <b>전용 울타리(tmux -L kadan 구획)</b> 안에서만 놀아요. 사람의 개인 창과 절대 섞지 않고, 카단이 만든 창만 닫을 수 있어요. 창 주소는 번호(%3)가 아니라 <b>이름(kadan-&lt;역할&gt;)</b>이에요.</p>
+  <figure>
+  <svg viewBox="0 0 960 440" role="img" aria-label="카단 전용 구획 안의 창만 stop이 닿고, 울타리 밖 개인 세션에는 닿지 않는다">
+    <defs>
+      <marker id="m-ok-6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-ok"/></marker>
+    </defs>
+    <rect x="50" y="50" width="540" height="300" rx="16" class="f-bg st-accent" stroke-width="2" stroke-dasharray="8 6"/>
+    <text x="70" y="84" font-size="14" font-weight="800" class="t-accent">카단 전용 구획 — tmux -L kadan (floor-tmux.mjs:8)</text>
+    <rect x="80" y="110" width="220" height="80" rx="10" class="f-panel st-line" stroke-width="2"/>
+    <rect x="80" y="110" width="220" height="24" rx="10" class="f-soft"/>
+    <text x="92" y="127" font-size="12.5" class="t-ink mono">kadan-작업자-가</text>
+    <text x="96" y="166" font-size="13" class="t-muted">AI CLI가 사는 창</text>
+    <rect x="330" y="110" width="220" height="80" rx="10" class="f-panel st-line" stroke-width="2"/>
+    <rect x="330" y="110" width="220" height="24" rx="10" class="f-soft"/>
+    <text x="342" y="127" font-size="12.5" class="t-ink mono">kadan-검수-나</text>
+    <text x="346" y="166" font-size="13" class="t-muted">AI CLI가 사는 창</text>
+    <circle cx="190" cy="276" r="30" class="f-panel st-ink" stroke-width="2.5"/>
+    <text x="190" y="282" text-anchor="middle" font-size="14" font-weight="800" class="t-ink">stop</text>
+    <line x1="190" y1="246" x2="190" y2="196" class="st-ok" stroke-width="2.5" marker-end="url(#m-ok-6)"/>
+    <text x="204" y="226" font-size="12.5" font-weight="700" class="t-ok">자기 것만 종료할 수 있다</text>
+    <rect x="680" y="110" width="230" height="90" rx="10" class="f-panel st-line" stroke-width="2"/>
+    <rect x="680" y="110" width="230" height="24" rx="10" class="f-bg"/>
+    <text x="692" y="127" font-size="12.5" class="t-ink mono">kyle 개인 세션</text>
+    <text x="696" y="166" font-size="13" class="t-muted">카단이 만들지 않은 창</text>
+    <path d="M222,270 C400,268 480,160 672,158" class="st-bad f-none" stroke-width="2" stroke-dasharray="6 5"/>
+    <circle cx="470" cy="214" r="13" class="f-panel st-bad" stroke-width="2.5"/>
+    <line x1="462" y1="222" x2="478" y2="206" class="st-bad" stroke-width="2.5"/>
+    <text x="420" y="252" font-size="12.5" font-weight="700" class="t-bad">닿지 않는다</text>
+    <rect x="50" y="376" width="430" height="46" rx="10" class="f-ok st-ok" stroke-width="1.5"/>
+    <text x="265" y="404" text-anchor="middle" font-size="13" font-weight="700" class="t-ok">주소는 이름 — kadan-&lt;역할&gt;</text>
+    <rect x="500" y="376" width="430" height="46" rx="10" class="f-bad st-bad" stroke-width="1.5"/>
+    <text x="715" y="404" text-anchor="middle" font-size="13" font-weight="700" class="t-bad">자동 번호 %3, @1은 주소로 쓰지 않는다</text>
+  </svg>
+  <figcaption>울타리(-L kadan 구획) 안의 창만 stop이 닿고, 밖의 개인 세션에는 닿지 않는다. 주소는 이름 규칙이다. (출처: docs/design.md 규칙 4·5, src/floor-tmux.mjs:8)</figcaption>
+  </figure>
+</section>
+
+<section class="scene" id="s7">
+  <span class="num">장면 7 · 관계</span>
+  <h2>누가 누구에게 묻나요?</h2>
+  <p class="claim">모르는 게 생기면 <b>바로 위 한 칸</b>에게 물어요. 작업자는 일반감독에게, 일반감독은 슈퍼감독에게요. 사용자에게 "결정해 주세요"(<b>사용자 결정</b>, decision request)를 올릴 수 있는 건 <b>슈퍼감독뿐</b>이에요. 감독이 답을 기다리는 동안 그 카드는 <b>묻는 쪽의 할 일</b>에서 잠깐 빠지지만, <b>답할 쪽</b>에게는 할 일로 남아요.</p>
+  <figure>
+  <svg viewBox="0 0 960 620" role="img" aria-label="작업자, 일반감독, 슈퍼감독, 사용자가 계단처럼 놓여 있고 질문 우편은 한 칸씩 위로, 답장은 아래로 온다. 사용자 결정은 슈퍼감독만 올린다. 아래 두 장부는 답을 기다리는 카드가 묻는 감독의 할 일에서는 빠지고 답할 쪽에는 남는 것, 사용자 결정 카드는 모두의 할 일에서 빠지는 것을 보여 준다">
+    <defs>
+      <marker id="m-ink-7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-ink"/></marker>
+      <marker id="m-warn-7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-warn"/></marker>
+      <marker id="m-mut-7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-muted"/></marker>
+    </defs>
+    <text x="20" y="36" font-size="14" font-weight="800" class="t-ink">질문 사다리 — 한 칸씩 위로</text>
+    <text x="20" y="58" font-size="12.5" class="t-muted">관계표의 직속 상위에게 묻는다</text>
+    <!-- 계단: 사용자(맨 위) · 슈퍼감독 · 일반감독 · 작업자(맨 아래) -->
+    <rect x="740" y="40" width="200" height="76" rx="12" class="f-soft st-accent" stroke-width="2"/>
+    <text x="840" y="72" text-anchor="middle" font-size="16" font-weight="800" class="t-accent">사용자</text>
+    <text x="840" y="96" text-anchor="middle" font-size="12" class="t-muted">승인·결정 (대시보드 '내 결정')</text>
+    <rect x="500" y="150" width="200" height="76" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="524" cy="188" r="7" class="chip-super"/>
+    <text x="610" y="182" text-anchor="middle" font-size="16" font-weight="800" class="t-super">슈퍼감독</text>
+    <text x="610" y="206" text-anchor="middle" font-size="12" class="t-muted">판 사이 조정</text>
+    <rect x="260" y="260" width="200" height="76" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="284" cy="298" r="7" class="chip-super"/>
+    <text x="370" y="292" text-anchor="middle" font-size="16" font-weight="800" class="t-ink">일반감독</text>
+    <text x="370" y="316" text-anchor="middle" font-size="12" class="t-muted">발령·검수</text>
+    <rect x="20" y="370" width="200" height="76" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <circle cx="44" cy="408" r="7" class="chip-worker"/>
+    <text x="130" y="402" text-anchor="middle" font-size="16" font-weight="800" class="t-ink">작업자</text>
+    <text x="130" y="426" text-anchor="middle" font-size="12" class="t-muted">구현</text>
+    <!-- 올라가는 질문 -->
+    <path d="M120,370 L120,298 L252,298" class="st-ink f-none" stroke-width="2" marker-end="url(#m-ink-7)"/>
+    <text x="132" y="332" font-size="13" font-weight="700" class="t-ink">질문 우편</text>
+    <path d="M360,260 L360,188 L492,188" class="st-ink f-none" stroke-width="2" marker-end="url(#m-ink-7)"/>
+    <text x="372" y="222" font-size="13" font-weight="700" class="t-ink">질문 우편 · 답 대기</text>
+    <text x="372" y="242" font-size="11.5" class="t-muted mono">send --expect-reply</text>
+    <path d="M600,150 L600,78 L732,78" class="st-warn f-none" stroke-width="2.5" marker-end="url(#m-warn-7)"/>
+    <text x="612" y="110" font-size="13" font-weight="800" class="t-warn">사용자 결정</text>
+    <text x="612" y="130" font-size="11.5" class="t-muted mono">decision request</text>
+    <!-- 내려오는 답 -->
+    <path d="M660,226 L660,298 L468,298" class="st-muted f-none" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#m-mut-7)"/>
+    <text x="672" y="262" font-size="12.5" class="t-muted">답장</text>
+    <text x="672" y="280" font-size="11.5" class="t-muted mono">--reply-to &lt;우편ID&gt;</text>
+    <!-- 명령 메모 -->
+    <rect x="500" y="350" width="440" height="100" rx="10" class="f-bg st-line"/>
+    <text x="516" y="374" font-size="12" font-weight="700" class="t-muted">명령으로 쓰면</text>
+    <text x="516" y="396" font-size="11.5" class="t-ink mono">묻기: kadan send &lt;상위&gt; --expect-reply "…"</text>
+    <text x="516" y="416" font-size="11.5" class="t-ink mono">답하기: kadan send &lt;묻는 쪽&gt; --reply-to &lt;ID&gt; --reply-final "…"</text>
+    <text x="516" y="436" font-size="11.5" class="t-ink mono">결정 요청: kadan decision request …</text>
+    <!-- 할 일 장부 두 장 -->
+    <rect x="20" y="472" width="450" height="132" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <text x="36" y="498" font-size="13.5" font-weight="800" class="t-ink">일반감독이 슈퍼감독에게 물었을 때</text>
+    <rect x="36" y="514" width="70" height="26" rx="6" class="f-bg st-line"/>
+    <text x="71" y="532" text-anchor="middle" font-size="12" class="t-muted mono">card-3</text>
+    <line x1="40" y1="527" x2="102" y2="527" class="st-muted" stroke-width="2"/>
+    <text x="118" y="532" font-size="12.5" class="t-ink">묻는 일반감독의 할 일 — 답 기다리는 동안 빼고 센다</text>
+    <rect x="36" y="556" width="70" height="26" rx="6" class="f-warnf st-warn" stroke-width="1.5"/>
+    <text x="71" y="574" text-anchor="middle" font-size="12" font-weight="700" class="t-warn mono">card-3</text>
+    <text x="118" y="574" font-size="12.5" class="t-ink">답할 슈퍼감독의 할 일 — 그대로 남는다</text>
+    <rect x="490" y="472" width="450" height="132" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <text x="506" y="498" font-size="13.5" font-weight="800" class="t-ink">슈퍼감독이 사용자 결정을 올렸을 때</text>
+    <rect x="506" y="514" width="70" height="26" rx="6" class="f-bg st-line"/>
+    <text x="541" y="532" text-anchor="middle" font-size="12" class="t-muted mono">card-5</text>
+    <line x1="510" y1="527" x2="572" y2="527" class="st-muted" stroke-width="2"/>
+    <text x="588" y="532" font-size="12.5" class="t-ink">모두의 할 일에서 빠진다 (그 워크까지)</text>
+    <text x="506" y="574" font-size="12.5" class="t-muted">사용자가 답하면 요청자에게 알린다.</text>
+    <text x="506" y="594" font-size="12.5" class="t-muted">결정·질문이 닫히면 다음 순회부터 다시 센다.</text>
+  </svg>
+  <figcaption>질문은 우편으로 한 칸 위에 묻고(답 대기), 사용자 결정은 슈퍼감독만 올린다. 감독이 답을 기다리는 카드는 묻는 쪽 할 일에서만 빠지고, 사용자 결정이 열린 카드는 모두의 할 일에서 빠진다. 이 "할 일"은 장면 8의 감독 멈춤 경보가 세는 것이다. (출처: docs/flows.md 1·3절, docs/watch-overview.md 멈춤 규칙)</figcaption>
+  </figure>
+  <div class="kind-grid">
+    <div class="kind"><span class="code ok">시니어 (kadan senior)</span><p>작업 결과에 결정할 부분이 있을 때, 감독이 고급 모델에게 의견을 <b>한 번</b> 묻는 카단 기능. 답은 기록이지 결정이 아니고, 카드 상태도 우편도 건드리지 않는다.</p><p class="src">docs/senior.md, docs/flows.md 1절</p></div>
+    <div class="kind"><span class="code ok">Claude Code 어드바이저</span><p>카단 기능이 아니다. Claude Code로 띄운 감독이 카드를 완수하려고 쓰는 Claude Code 안의 도구로, 판단이 무거운 카드를 <b>쓰기 전에</b> 묻는다. 시니어와 서로 대신하지 않는다.</p><p class="src">docs/senior.md, docs/flows.md 1·3절</p></div>
+  </div>
+</section>
+
+<section class="scene" id="s8">
+  <span class="num">장면 8 · 경계</span>
+  <h2>조용해진 일꾼을 카단이 혼자 판단할까요?</h2>
+  <p class="claim">아니요, 카단은 <b>알리기만</b> 해요. 작업자 화면이 <b>5분</b> 동안 그대로면 감시 AI가 살펴보고 그 감독에게 알려요. 감독이 할 일을 두고 <b>15분</b> 동안 그대로면 먼저 <b>본인</b>에게, 그래도 그대로면(두 배 시간) <b>윗사람</b>에게 알려요. 답을 기다리는 일은 할 일로 세지 않아요. 풀리면 따로 편지하지 않고 기록만 남겨요.</p>
+  <figure>
+  <svg viewBox="0 0 960 520" role="img" aria-label="위 줄: 작업자 화면이 5분 안 바뀌면 감시sh가 보고 작업 감시AI가 판정해 직속 감독에게 알린다. 아래 줄: 감독이 할 일이 있는데 15분 안 바뀌면 1단으로 본인에게, 두 배 시간이면 2단으로 상위에게, 최상위면 사용자 OS 알림. 답을 기다리는 일은 빼고, 감시는 완료 확정·자동 재시작·해소 우편을 하지 않는다">
+    <defs>
+      <marker id="m-ink-8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-ink"/></marker>
+      <marker id="m-warn-8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="t-warn"/></marker>
+    </defs>
+    <!-- 줄 1: 작업자 멈춤 -->
+    <circle cx="28" cy="30" r="7" class="chip-worker"/>
+    <text x="42" y="35" font-size="14.5" font-weight="800" class="t-ink">작업자 멈춤 (정체)</text>
+    <rect x="20" y="52" width="200" height="90" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <text x="120" y="84" text-anchor="middle" font-size="13" class="t-ink mono">kadan-작업자-가</text>
+    <text x="120" y="110" text-anchor="middle" font-size="12.5" class="t-muted">카드를 받고</text>
+    <text x="120" y="128" text-anchor="middle" font-size="12.5" class="t-muted">화면이 5분째 그대로</text>
+    <line x1="220" y1="97" x2="264" y2="97" class="st-ink" stroke-width="2" marker-end="url(#m-ink-8)"/>
+    <rect x="270" y="52" width="190" height="90" rx="12" class="f-panel st-accent" stroke-width="2"/>
+    <text x="365" y="86" text-anchor="middle" font-size="15" font-weight="800" class="t-ink">감시sh</text>
+    <text x="365" y="112" text-anchor="middle" font-size="12.5" class="t-muted">화면이 안 바뀐 걸 본다</text>
+    <line x1="460" y1="97" x2="504" y2="97" class="st-ink" stroke-width="2" marker-end="url(#m-ink-8)"/>
+    <rect x="510" y="52" width="190" height="90" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <text x="605" y="86" text-anchor="middle" font-size="15" font-weight="800" class="t-ink">작업 감시AI</text>
+    <text x="605" y="112" text-anchor="middle" font-size="12.5" class="t-muted">정말 멈췄나 판정</text>
+    <line x1="700" y1="97" x2="744" y2="97" class="st-ink" stroke-width="2" marker-end="url(#m-ink-8)"/>
+    <rect x="750" y="52" width="190" height="90" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <text x="845" y="86" text-anchor="middle" font-size="15" font-weight="800" class="t-super">직속 감독</text>
+    <text x="845" y="112" text-anchor="middle" font-size="12.5" class="t-muted">알림을 받고 결정</text>
+    <!-- 줄 2: 감독 멈춤 -->
+    <circle cx="28" cy="190" r="7" class="chip-super"/>
+    <text x="42" y="195" font-size="14.5" font-weight="800" class="t-ink">감독 멈춤 (놀고 있음)</text>
+    <rect x="20" y="212" width="200" height="90" rx="12" class="f-panel st-line" stroke-width="2"/>
+    <text x="120" y="244" text-anchor="middle" font-size="14" font-weight="700" class="t-super">감독</text>
+    <text x="120" y="268" text-anchor="middle" font-size="12.5" class="t-muted">할 일이 있는데 감독과</text>
+    <text x="120" y="286" text-anchor="middle" font-size="12.5" class="t-muted">그 아래 화면이 15분째 그대로</text>
+    <line x1="220" y1="257" x2="264" y2="257" class="st-warn" stroke-width="2" marker-end="url(#m-warn-8)"/>
+    <rect x="270" y="212" width="300" height="90" rx="12" class="f-warnf st-warn" stroke-width="2"/>
+    <text x="290" y="244" font-size="15" font-weight="800" class="t-warn">1단 · 본인에게</text>
+    <text x="290" y="268" font-size="12.5" class="t-ink">15분(기본) — 감독 자기 창에 알림</text>
+    <text x="290" y="288" font-size="12" class="t-muted">사람이 그 창에 입력 중이면 미룬다</text>
+    <line x1="570" y1="257" x2="614" y2="257" class="st-warn" stroke-width="2" marker-end="url(#m-warn-8)"/>
+    <rect x="620" y="212" width="320" height="90" rx="12" class="f-bad st-bad" stroke-width="2"/>
+    <text x="640" y="244" font-size="15" font-weight="800" class="t-bad">2단 · 상위에게</text>
+    <text x="640" y="268" font-size="12.5" class="t-ink">두 배 시간(기본 30분) — 그래도 그대로</text>
+    <text x="640" y="288" font-size="12" class="t-muted">최상위 슈퍼감독이면 사용자 OS 알림</text>
+    <rect x="20" y="324" width="920" height="64" rx="12" class="f-ok st-ok" stroke-width="1.5"/>
+    <text x="40" y="351" font-size="14" font-weight="800" class="t-ok">답을 기다리는 일은 할 일에서 뺀다</text>
+    <text x="40" y="373" font-size="12.5" class="t-ink">사용자 결정 카드는 모두에게서, 상위에게 물은 질문의 카드는 묻는 쪽에게서만 빠진다 (장면 7)</text>
+    <!-- 하지 않는 것 -->
+    <rect x="20" y="406" width="920" height="80" rx="14" class="f-warnf st-warn" stroke-width="1.5"/>
+    <text x="40" y="436" font-size="14.5" font-weight="800" class="t-warn">감시가 하지 않는 것들</text>
+    <text x="40" y="462" font-size="13" class="t-ink">완료 확정 · 자동 재시작 · 해소 우편 — 결정은 감독이 하고, 풀리면 원장에 기록만 남긴다</text>
+    <text x="480" y="510" text-anchor="middle" font-size="12" class="t-muted">마커 없는 조용한 정지는 quiet로 보고만 — 판정은 DONE 마커가 있을 때만 (docs/design.md 규칙 3·6)</text>
+  </svg>
+  <figcaption>작업자 멈춤은 감시sh → 작업 감시AI → 직속 감독으로, 감독 멈춤은 1단 본인 → 2단 상위로 간다. 시간은 기본값이며 감시 프로필이 바꿀 수 있다. 감시는 알리기만 하고 결정은 감독과 사람이 한다. (출처: docs/flows.md 4절, docs/watch-overview.md 멈춤 규칙, docs/glossary.md)</figcaption>
+  </figure>
+</section>
+
+<div class="next-card" role="button" tabindex="0" data-goto="normal">
+  <h2>장면 9 · 규칙을 직접 만져 볼까요?</h2>
+  <p>보통 탭에서는 방금 본 발령 검문소를 직접 눌러 볼 수 있어요. 세션을 죽여 보거나, PID를 바꿔 보거나, 초안 카드에 발령해 볼까요?</p>
+  <button class="go" data-goto="normal">보통 탭으로 — 발령 검문소 만져 보기</button>
+</div>
+
+</div>
+
+<!-- ===================== 보통 ===================== -->
+<div id="view-normal" class="view">
+
+<section class="panel">
+  <h2>발령 한 번에 일어나는 일 — 결과 종류부터</h2>
+  <p class="note"><code>kadan send 작업자-가 --task card-1 …</code>을 치면 검문소(guardedSend)가 네 관문을 순서대로 검사한다. 결과는 아래 여섯 가지 중 하나다.</p>
+  <div class="kind-grid">
+    <div class="kind"><span class="code ok">전달됨</span><p>네 관문 통과. 창에 붙여넣고 원장에 send 사건이 붙는다. tmux는 "키 전송됨 — 입력 접수·AI 실행 미확인"까지가 확인 범위다.</p><p class="src">src/cli.mjs:1541·1556</p></div>
+    <div class="kind"><span class="code bad">중앙 카드 발령 불가</span><p>카드가 작업대기(assigned)가 아니거나, 담당 역할이 다르거나, 범위(scope)가 비어 있다.</p><p class="src">src/card-store.mjs:223</p></div>
+    <div class="kind"><span class="code bad">KADAN_SESSION_MISSING</span><p>세션이 없다. 먼저 kadan start로 창을 열어야 한다.</p><p class="src">src/cli.mjs:707</p></div>
+    <div class="kind"><span class="code bad">KADAN_PID_MISMATCH</span><p>이름은 같은데 시작 기록의 PID와 현재 PID가 다르다 = 다른 프로세스. 사람 확인이 필요하다.</p><p class="src">src/cli.mjs:716</p></div>
+    <div class="kind"><span class="code bad">KADAN_AI_IDENTITY_UNVERIFIED</span><p>카드 발령인데 현재 세대의 AI 실행기·모델을 확인하지 못했다.</p><p class="src">src/cli.mjs:730</p></div>
+    <div class="kind"><span class="code bad">KADAN_STALE_RUNNER</span><p>떠 있는 세션이 옛 실행기·옛 모델이라 카드를 보내지 않는다. 카드 단계 프로필도 함께 본다.</p><p class="src">src/cli.mjs:745</p></div>
+  </div>
+</section>
+
+<section class="panel" id="sim">
+  <h2>발령 검문소 — 직접 눌러 보기</h2>
+  <p class="note">상황을 고르고 send를 눌러 보세요. 통과한 사건만 원장에 붙고, 거부는 도장으로 남아요. 이 로직은 guardedSend·checkSend의 <b>축소 복사</b>이고, 실제 검사는 더 많은 화면 규칙(빈 입력창 모양·복사모드 등)을 본다.</p>
+  <h3>미리 만든 장면</h3>
+  <div class="presets" id="sim-presets">
+    <button data-preset="ok">정상 발령</button>
+    <button data-preset="dead">세션이 죽었을 때</button>
+    <button data-preset="pid">창을 다시 띄웠을 때 (PID 바뀜)</button>
+    <button data-preset="draft">초안 카드에 발령</button>
+    <button data-preset="stale">옛 모델 세션에 발령</button>
+  </div>
+  <h3>상황 고르기</h3>
+  <div class="controls">
+    <div class="ctrl" data-key="card"><div class="lab">카드 상태</div>
+      <button data-v="draft">초안</button><button data-v="ready">설계완료</button><button data-v="assigned" class="on">작업대기</button><button data-v="hold">일시정지</button><button data-v="done">완료</button>
+    </div>
+    <div class="ctrl" data-key="session"><div class="lab">세션</div>
+      <button data-v="alive" class="on">살아있음</button><button data-v="dead">죽음</button>
+    </div>
+    <div class="ctrl" data-key="pid"><div class="lab">PID</div>
+      <button data-v="same" class="on">시작 기록과 같음</button><button data-v="diff">다름</button>
+    </div>
+    <div class="ctrl" data-key="identity"><div class="lab">AI 신원 (카드 발령만)</div>
+      <button data-v="ok" class="on">등록 실행기·모델 확인됨</button><button data-v="stale">옛 실행기·모델</button>
+    </div>
+  </div>
+  <button class="run" id="sim-send">$ kadan send 작업자-가 --task card-1 "card-1을 해줘"</button>
+  <div class="sim-grid">
+    <div>
+      <h3>판정 로그</h3>
+      <ol id="sim-log"></ol>
+    </div>
+    <div>
+      <h3>카드 상태 레일 — 세 묶음 중 지금 고른 상태</h3>
+      <div id="sim-rail"></div>
+      <p class="note">관문 (1)을 통과하는 저장 값은 <code>assigned</code> 하나다. 화면에서는 시작 보고 전엔 작업대기, 착수 보고(running·waiting) 뒤엔 작업중으로 보이고, 둘 다 통과한다. (card-store.mjs:223)</p>
+    </div>
+  </div>
+  <div class="sim-grid" style="margin-top:16px">
+    <div>
+      <h3>원장 — 통과한 사건만 뒤에 붙는다</h3>
+      <pre id="sim-ledger"></pre>
+    </div>
+    <div>
+      <h3>거부 도장 — 원장과 별도</h3>
+      <div id="sim-stamps"></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>규칙표 1 — 카드 상태 세 묶음</h2>
+  <p class="note">화면 이름은 한 곳(src/status-labels.mjs)에서 정하고, 저장 값(draft·ready…)은 그대로 둔다. 저장 값은 여덟 가지이고, 작업중은 작업대기(assigned) 카드에 착수 보고가 붙은 모습이다. 목표 상태마다 필요 조건이 붙는다. (src/card-store.mjs:138-145)</p>
+  <div class="scroll-x"><table class="rules">
+    <tr><th>묶음</th><th>화면 이름 (저장 값)</th><th>뜻</th><th>이 상태로 가려면</th></tr>
+    <tr><td rowspan="3" style="white-space:nowrap"><b>진행 전</b></td><td>초안 (<code>draft</code>)</td><td>중앙 등록 직후. 아직 판·담당이 없다</td><td>— (등록하면 draft)</td></tr>
+    <tr><td>설계완료 (<code>ready</code>)</td><td>범위 승인까지 끝나 맡길 수 있음. 옛 이름 발령 가능</td><td>발령 가능한 범위(scope)를 먼저 적어야 한다 · 판·담당은 비워 둔다</td></tr>
+    <tr><td>보류 (<code>archived</code>)</td><td>시작 전, 지금은 안 하지만 나중에 할 수도 있음. 끝이 아니다. 옛 이름 보관</td><td>—</td></tr>
+    <tr><td rowspan="3" style="white-space:nowrap"><b>진행 중</b></td><td>작업대기 (<code>assigned</code>)</td><td>역할에게 맡겼고 시작 보고 전. 감시는 여기서부터</td><td>판+담당 역할 필요 · 실행 카드 수동 발령은 티키타카 묶음(rally) 정보와 '읽고 시작할 것' 문서 필요</td></tr>
+    <tr><td>작업중 (<code>running</code>, <code>waiting</code>도 작업중으로 셈)</td><td>맡은 역할이 착수를 보고함. 결과 대기(waiting)는 상세에서만 '기다림'을 붙인다</td><td>저장 값은 assigned 그대로 · 진행 보고(activity)는 배정된 역할만 올린다</td></tr>
+    <tr><td>일시정지 (<code>hold</code>)</td><td>시작 뒤 잠시 멈춤. 옛 이름 보류. 워크(업무)도 같은 이름</td><td>—</td></tr>
+    <tr><td rowspan="3" style="white-space:nowrap"><b>끝</b></td><td>완료 (<code>done</code>)</td><td>이 카드로 해냄. 감독이 근거를 확인하고 확정</td><td>결과 등록과 별개로 감독의 kadan done</td></tr>
+    <tr><td>취소 (<code>cancelled</code>)</td><td>하지 않기로 함</td><td>—</td></tr>
+    <tr><td>대체 (<code>superseded</code>)</td><td>다른 카드나 업무가 이어받아 끝냄. 완료 실적으로 세지 않는다</td><td>replacedBy(후속 카드) 또는 replacedByText(업무 키·짧은 설명) 중 하나 이상</td></tr>
+  </table></div>
+  <p class="note">실행 기록으로 계산한 신호(발령됨·실패·확인 필요)는 세 묶음과 따로 본다. 옛 이름 '보류'는 이제 일시정지(hold)이고, 지금의 보류는 시작 전 미뤄 둔 archived다 — 헷갈리기 쉬운 자리. (src/status-labels.mjs, docs/glossary.md 카드 상태 세 묶음)</p>
+</section>
+
+<section class="panel">
+  <h2>규칙표 2 — 발령 검문소 순서</h2>
+  <p class="note">검사는 이 순서대로 일어나고, 처음 걸린 곳에서 멈춘다. 앞 관문을 통과해야 뒤 관문에 간다.</p>
+  <div class="scroll-x"><table class="rules">
+    <tr><th>순서</th><th>검사</th><th>묻는 것</th><th>실패 코드</th><th>출처</th></tr>
+    <tr><td>(1)</td><td>카드 검사</td><td>카드가 assigned이고 담당이 이 역할이며 범위가 있나?</td><td><code>중앙 카드 발령 불가</code></td><td><code>card-store.mjs:223</code></td></tr>
+    <tr><td>(2)</td><td>세션 생존</td><td>kadan-&lt;역할&gt; 창이 살아 있나?</td><td><code>KADAN_SESSION_MISSING</code></td><td><code>cli.mjs:705</code></td></tr>
+    <tr><td>(3)</td><td>PID 대조</td><td>시작 기록의 PID와 지금 PID가 같나?</td><td><code>KADAN_PID_MISMATCH</code></td><td><code>cli.mjs:712</code></td></tr>
+    <tr><td>(4)</td><td>AI 신원</td><td>현재 세대가 등록 실행기·모델인가? 카드 단계 프로필과 맞나?</td><td><code>KADAN_AI_IDENTITY_UNVERIFIED</code><br><code>KADAN_STALE_RUNNER</code></td><td><code>cli.mjs:727·745</code></td></tr>
+  </table></div>
+  <p class="note">일반 우편·질문·답장은 taskId가 없으므로 (1)(4)를 거치지 않는다. tmux는 여기에 더해 빈 입력창 모양·전경 프로세스·복사모드까지 화면으로 확인한다. (cli.mjs:724, docs/design.md 규칙 2)</p>
+</section>
+
+<section class="panel">
+  <h2>명령 아홉 개 — 코어 인터페이스</h2>
+  <div class="scroll-x"><table class="rules">
+    <tr><th>명령</th><th>하는 일</th></tr>
+    <tr><td><code>kadan start &lt;역할&gt; --cmd codex</code></td><td>역할 이름의 창을 열고 start 사건을 원장에 적는다</td></tr>
+    <tr><td><code>kadan send &lt;역할&gt; [--task &lt;카드&gt;] 메시지</code></td><td>검문소를 통과하면 창에 붙여넣고 send 사건을 적는다</td></tr>
+    <tr><td><code>kadan done &lt;역할&gt; &lt;카드&gt; ok|failed</code></td><td>확인한 사람·감독이 완료를 원장에 확정한다</td></tr>
+    <tr><td><code>kadan wait &lt;역할&gt;</code></td><td>화면에서 DONE 마커를 찾아 보고한다. 대신 판정하지 않는다</td></tr>
+    <tr><td><code>kadan read &lt;역할&gt;</code></td><td>창 화면을 읽는다</td></tr>
+    <tr><td><code>kadan status</code></td><td>창·카드·원장을 읽어 지금 상태를 보여 준다</td></tr>
+    <tr><td><code>kadan log</code></td><td>원장 사건을 보여 준다</td></tr>
+    <tr><td><code>kadan attach &lt;역할&gt;</code></td><td>살아 있는 창에 사람이 들어간다</td></tr>
+    <tr><td><code>kadan stop &lt;역할&gt;</code></td><td>카단이 만든 창만 닫는다</td></tr>
+  </table></div>
+</section>
+
+<div class="next-card" role="button" tabindex="0" data-goto="detail">
+  <h2>더 깊이 들어가 볼까요?</h2>
+  <p>상세 탭은 원본 문서로 가는 문이다. 먼저 흐름 지도 한 장(역할·소통·감시)을 읽고, 설계 원칙·용어·명령 전체로 들어간다.</p>
+  <button class="go" data-goto="detail">상세 탭으로 — 원본 문서</button>
+</div>
+
+</div>
+
+<!-- ===================== 상세 ===================== -->
+<div id="view-detail" class="view">
+<section class="panel">
+  <h2>상세 — 원본 문서가 곧 이 층이다</h2>
+  <p class="note">이 안내서는 원본의 압축 요약이지 복사본이 아니다. 세세한 예외와 근거는 원본에 있다. 원본이 바뀌면 이 화면도 갱신한다.</p>
+  <a class="link-card" href="./flows.md" style="margin-top:14px;border:2px solid var(--accent);background:var(--accent-soft)"><b>먼저 읽기 — docs/flows.md · 흐름 지도 — 역할·소통·감시를 한 장에</b><span>누가 무엇을 하고, 누구에게 묻고, 감시가 무엇을 잡아 누구에게 알리는지 한 장에 모았다. 지금 규칙만 적고, 표의 각 줄이 아래 상세 문서로 이어진다.</span></a>
+  <div class="link-grid">
+    <a class="link-card" href="./design.md"><b>docs/design.md</b><span>설계 원칙과 잠긴 규칙 — 왜 이렇게 생겼고 무엇을 바꾸지 않는지</span></a>
+    <a class="link-card" href="./architecture.md"><b>docs/architecture.md</b><span>구성요소와 원장의 관계 — 작업·우편·시스템 세 스트림</span></a>
+    <a class="link-card" href="./glossary.md"><b>docs/glossary.md</b><span>용어 정의 — 감시sh·작업 감시AI·감독 관찰AI 구분</span></a>
+    <a class="link-card" href="./commands.md"><b>docs/commands.md</b><span>kadan 명령 전체와 주요 옵션</span></a>
+    <a class="link-card" href="./watch-overview.md"><b>docs/watch-overview.md</b><span>감시 대상 선정과 판정 기준 — 멈춤 규칙(작업자 멈춤·감독 멈춤)</span></a>
+    <a class="link-card" href="./senior.md"><b>docs/senior.md</b><span>시니어 — 감독이 결과를 두고 고급 모델에게 한 번 묻는 기능, 어드바이저와의 차이</span></a>
+    <a class="link-card" href="./mail-task-ledgers.md"><b>docs/mail-task-ledgers.md</b><span>작업·우편 원장 계약 — 새 사건의 저장과 연결</span></a>
+    <a class="link-card" href="../README.md"><b>README.md</b><span>설치·빠른 시작 (kadan init → kadan up → kadan attach 비서)</span></a>
+    <a class="link-card" href="../CONTRIBUTING.md"><b>CONTRIBUTING.md</b><span>기여 규칙 — AI 코딩 에이전트도 같은 규칙</span></a>
+  </div>
+</section>
+<section class="panel">
+  <h2>코드로 바로 가기</h2>
+  <p class="note">그림 속 주장의 출처가 된 자리다.</p>
+  <div class="src-chips">
+    <span>src/cli.mjs:633 — guardedSend (검문소)</span>
+    <span>src/cli.mjs:705 — 세션 생존</span>
+    <span>src/cli.mjs:712 — PID 대조</span>
+    <span>src/cli.mjs:727 — AI 신원</span>
+    <span>src/cli.mjs:176 — sessionName (이름 규칙)</span>
+    <span>src/ledger.mjs:29 — appendLedger</span>
+    <span>src/ledger-domains.mjs:9 — 세 스트림</span>
+    <span>src/done-marker.mjs:3 — DONE_LINE</span>
+    <span>src/floor-tmux.mjs:8 — 소켓 -L kadan</span>
+    <span>src/floor-tmux.mjs:596 — 바닥 함수 7+1</span>
+    <span>src/floor.mjs:4 — 바닥 선택</span>
+    <span>src/card-store.mjs:138 — 카드 상태</span>
+    <span>src/card-store.mjs:223 — checkSend</span>
+    <span>src/status-labels.mjs — 카드 상태 이름·세 묶음</span>
+    <span>src/watch-cycle.mjs:4 — 감시 주기 5분</span>
+  </div>
+</section>
+</div>
+
+<footer>
+  <h2>출처 — 이 안내서의 사실 장부</h2>
+  <div class="scroll-x">
+  <table>
+    <tr><th>주장 (쉬운 말)</th><th>코드 이름</th><th>출처</th></tr>
+    <tr><td>역할 이름으로 창을 연다</td><td><code>sessionName → kadan-&lt;역할&gt;</code></td><td><code>src/cli.mjs:176</code>, docs/design.md 규칙 5</td></tr>
+    <tr><td>사건은 공책 끝에만 붙인다</td><td><code>appendLedger</code>, 작업·우편·시스템 스트림</td><td><code>src/ledger.mjs:29</code>, <code>src/ledger-domains.mjs:9</code>, docs/design.md 규칙 1</td></tr>
+    <tr><td>send는 네 관문을 순서대로 통과한다</td><td><code>guardedSend</code></td><td><code>src/cli.mjs:633·705·712·727</code></td></tr>
+    <tr><td>카드 발령은 assigned·담당·범위가 맞을 때만</td><td><code>checkSend</code></td><td><code>src/card-store.mjs:223</code></td></tr>
+    <tr><td>완료 신호는 화면의 마커 한 줄</td><td><code>DONE_LINE</code></td><td><code>src/done-marker.mjs:3</code>, docs/design.md 규칙 6</td></tr>
+    <tr><td>지문에는 완성된 마커를 쓰지 않는다</td><td><code>doneHintFor</code></td><td><code>src/cli.mjs:1571</code>, docs/design.md 규칙 6</td></tr>
+    <tr><td>코어는 그대로, 바닥만 교체한다</td><td><code>tmuxFloor</code> (함수 7+1), <code>selectFloorName</code></td><td><code>src/floor-tmux.mjs:596</code>, <code>src/floor.mjs:4</code></td></tr>
+    <tr><td>전용 구획만 쓰고 자기 것만 종료한다</td><td><code>SOCKET = "kadan"</code></td><td><code>src/floor-tmux.mjs:8</code>, docs/design.md 규칙 4</td></tr>
+    <tr><td>조용한 정지는 보고만, 모호하면 판정하지 않는다</td><td>quiet, DONE 마커</td><td>docs/design.md 규칙 3·6</td></tr>
+    <tr><td>저장 값 여덟 가지와 목표 상태별 필요 조건</td><td><code>status</code>, scope·board·role·rally·activity</td><td><code>src/card-store.mjs:138-145</code></td></tr>
+    <tr><td>카드 상태는 진행 전·진행 중·끝 세 묶음으로 읽는다 (작업중은 waiting도 셈)</td><td><code>STATUS_LABELS</code>, <code>statusBucket</code></td><td><code>src/status-labels.mjs</code>, docs/glossary.md 카드 상태 세 묶음, docs/flows.md 2절</td></tr>
+    <tr><td>질문은 한 칸 위에 우편으로 묻고 답을 기다린다</td><td><code>send --expect-reply</code>, <code>--reply-to</code></td><td>docs/flows.md 3절</td></tr>
+    <tr><td>사용자 결정은 슈퍼감독만 올린다</td><td><code>decision request</code></td><td>docs/flows.md 1·3절</td></tr>
+    <tr><td>답을 기다리는 카드는 묻는 쪽 할 일에서 빠지고 답할 쪽에 남는다 · 사용자 결정 카드는 모두에게서 빠진다</td><td>감독 멈춤의 할 일</td><td>docs/watch-overview.md 멈춤 규칙, docs/flows.md 3·4절</td></tr>
+    <tr><td>작업자 멈춤 — 화면 5분 그대로면 감시 AI 판정 뒤 직속 감독에게</td><td><code>정체</code>, <code>--stall-after</code></td><td>docs/flows.md 4절, docs/watch-overview.md 멈춤 규칙</td></tr>
+    <tr><td>감독 멈춤 — 할 일이 있는데 15분이면 본인, 두 배면 상위(최상위는 사용자)</td><td><code>놀고 있음</code>, <code>--idle</code></td><td>docs/flows.md 4절, docs/watch-overview.md 멈춤 규칙, docs/glossary.md</td></tr>
+    <tr><td>해소 우편은 없다 — 풀리면 원장 기록만</td><td><code>resolved</code></td><td>docs/watch-overview.md 멈춤 규칙, docs/flows.md 3절</td></tr>
+    <tr><td>시니어는 결과를 두고 한 번 묻는 의견이지 결정이 아니고, Claude Code 어드바이저와 다른 기능이다</td><td><code>kadan senior</code></td><td>docs/senior.md, docs/flows.md 1절, docs/glossary.md</td></tr>
+  </table>
+  </div>
+  <p style="margin-top:10px">만든 날: 2026-10-04 · 고친 날: 2026-10-05 (카드 상태 이름, 질문 사다리, 멈춤 규칙) · 도구: eli5-ladder 스킬 · 원본이 바뀌면 이 파일도 갱신한다.</p>
+</footer>
+</div>
+
+<script>
+(function(){
+  var IDS=['easy','normal','detail'];
+  var btns=[].slice.call(document.querySelectorAll('nav.tabs button'));
+  function show(id){
+    if(IDS.indexOf(id)<0)id='easy';
+    btns.forEach(function(b){b.classList.toggle('on',b.getAttribute('data-view')===id);});
+    IDS.forEach(function(v){document.getElementById('view-'+v).classList.toggle('on',v===id);});
+    try{history.replaceState(null,'','#'+id);}catch(e){location.hash=id;}
+    window.scrollTo(0,0);
+  }
+  btns.forEach(function(b){b.addEventListener('click',function(){show(b.getAttribute('data-view'));});});
+  [].slice.call(document.querySelectorAll('[data-goto]')).forEach(function(el){
+    el.addEventListener('click',function(ev){ev.stopPropagation();show(el.getAttribute('data-goto'));});
+    el.addEventListener('keydown',function(ev){if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();show(el.getAttribute('data-goto'));}});
+  });
+  show((location.hash||'').replace('#',''));
+
+  var sim={card:'assigned',session:'alive',pid:'same',identity:'ok'};
+  var LABEL={draft:'초안',ready:'설계완료',archived:'보류',assigned:'작업대기',running:'작업중',hold:'일시정지',done:'완료',cancelled:'취소',superseded:'대체'};
+  var RAIL=[['진행 전',['draft','ready','archived']],['진행 중',['assigned','running','hold']],['끝',['done','cancelled','superseded']]];
+  function lab(st){return (LABEL[st]||st)+'('+st+')';}
+  var ledgerLines=[];
+  function hex(n){var s='';var c='0123456789abcdef';for(var i=0;i<n;i++){s+=c.charAt(Math.floor(Math.random()*16));}return s;}
+  function railRender(){
+    var el=document.getElementById('sim-rail');if(!el)return;
+    el.innerHTML='';
+    RAIL.forEach(function(g){
+      var h=document.createElement('span');h.className='grp';h.textContent=g[0];el.appendChild(h);
+      g[1].forEach(function(st){
+        var s=document.createElement('span');
+        s.className='st'+(sim.card===st?' cur':'')+(st==='assigned'||st==='running'?' okgo':'');
+        s.textContent=lab(st);
+        el.appendChild(s);
+      });
+    });
+  }
+  function ctrlRender(){
+    [].slice.call(document.querySelectorAll('.ctrl')).forEach(function(c){
+      var key=c.getAttribute('data-key');
+      [].slice.call(c.querySelectorAll('button')).forEach(function(b){
+        b.classList.toggle('on',sim[key]===b.getAttribute('data-v'));
+      });
+    });
+  }
+  function evaluate(){
+    var steps=[];
+    function step(n,name,pass,detail,code,fix){steps.push({n:n,name:name,pass:pass,detail:detail,code:code||null,fix:fix||null});}
+    if(sim.card!=='assigned'){
+      step(1,'카드 검사',false,'card-1 상태 '+lab(sim.card)+' — 작업대기(assigned)가 아니면 발령할 수 없다','중앙 카드 발령 불가','작업대기(assigned) 상태 · 이 역할 담당 · 범위(scope) 있는 카드만 발령 가능 (card-store.mjs:223)');
+      return steps;
+    }
+    step(1,'카드 검사',true,'card-1 — 작업대기(assigned) · 담당 작업자-가 · 범위 있음');
+    if(sim.session!=='alive'){
+      step(2,'세션 생존',false,'kadan-작업자-가 세션이 없다','KADAN_SESSION_MISSING','먼저 kadan start 작업자-가 (cli.mjs:707)');
+      return steps;
+    }
+    step(2,'세션 생존',true,'kadan-작업자-가 살아 있음');
+    if(sim.pid!=='same'){
+      step(3,'PID 대조',false,'기록 51234 / 현재 51987 — 이름은 같은데 다른 프로세스','KADAN_PID_MISMATCH','사람 확인 필요 (cli.mjs:716)');
+      return steps;
+    }
+    step(3,'PID 대조',true,'기록 51234 / 현재 51234 — 같은 프로세스');
+    if(sim.identity!=='ok'){
+      step(4,'AI 신원',false,'떠 있는 세션이 옛 실행기·옛 모델','KADAN_STALE_RUNNER','옛 실행기·모델 세션에는 카드를 보내지 않는다 (cli.mjs:745)');
+      return steps;
+    }
+    step(4,'AI 신원',true,'codex · 모델 지정됨 · 카드 단계 프로필 일치');
+    return steps;
+  }
+  function run(){
+    var log=document.getElementById('sim-log');if(!log)return;
+    log.innerHTML='';
+    var steps=evaluate();
+    var failed=null;
+    steps.forEach(function(s){
+      var li=document.createElement('li');
+      var tag=s.pass?'<span class="pass">통과</span>':'<span class="fail">거부</span>';
+      li.innerHTML='('+s.n+') '+s.name+' — '+tag+' <span class="code">'+s.detail+'</span>'+(s.code?' <span class="code">['+s.code+']</span>':'')+(s.fix?'<br><span class="code" style="color:var(--muted)">'+s.fix+'</span>':'');
+      log.appendChild(li);
+      if(!s.pass)failed=s;
+    });
+    if(failed){
+      var st=document.getElementById('sim-stamps');
+      var d=document.createElement('div');d.className='stamp';
+      d.innerHTML='<b>'+failed.code+'</b><br>'+failed.detail+'<br><span style="font-size:12px">'+failed.fix+'</span>';
+      st.insertBefore(d,st.firstChild);
+    }else{
+      ledgerLines.push("{kind:'send', role:'작업자-가', taskId:'card-1', bytes:38, digest:'"+hex(6)+"…', mailId:'"+hex(8)+"…'}");
+      document.getElementById('sim-ledger').textContent=ledgerLines.join('\n');
+      var ok=document.createElement('li');
+      ok.innerHTML='<span class="pass">전달됨</span> — 원장에 send 사건이 붙었다';
+      log.appendChild(ok);
+    }
+  }
+  [].slice.call(document.querySelectorAll('.ctrl button')).forEach(function(b){
+    b.addEventListener('click',function(){
+      sim[b.parentNode.getAttribute('data-key')]=b.getAttribute('data-v');
+      ctrlRender();railRender();
+    });
+  });
+  var PRESETS={
+    ok:{card:'assigned',session:'alive',pid:'same',identity:'ok'},
+    dead:{card:'assigned',session:'dead',pid:'same',identity:'ok'},
+    pid:{card:'assigned',session:'alive',pid:'diff',identity:'ok'},
+    draft:{card:'draft',session:'alive',pid:'same',identity:'ok'},
+    stale:{card:'assigned',session:'alive',pid:'same',identity:'stale'}
+  };
+  [].slice.call(document.querySelectorAll('#sim-presets button')).forEach(function(b){
+    b.addEventListener('click',function(){
+      var p=PRESETS[b.getAttribute('data-preset')];if(!p)return;
+      sim={card:p.card,session:p.session,pid:p.pid,identity:p.identity};
+      ctrlRender();railRender();run();
+    });
+  });
+  var sendBtn=document.getElementById('sim-send');
+  if(sendBtn)sendBtn.addEventListener('click',run);
+  ctrlRender();railRender();run();
+})();
+</script>
+</body>
+</html>
