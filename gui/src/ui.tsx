@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { cardUrl, navigate } from "./navigation";
 import { save } from "./resource";
+import { radioChecked } from "./form-state";
 import type { SaveResult } from "./resource";
 import type { Field, FormSpec, Row } from "./types";
 
@@ -175,6 +176,7 @@ export function ActionForm({
   const initial = () =>
     Object.fromEntries(spec.fields.map((f) => [f.name, String(f.value ?? "")]));
   const [values, setValues] = useState(initial),
+    [touched, setTouched] = useState<Record<string, boolean>>({}),
     [baseRevision, setRevision] = useState(revision),
     [dirty, setDirty] = useState(false),
     [busy, setBusy] = useState(false),
@@ -222,8 +224,8 @@ export function ActionForm({
       <fieldset className="radio-options" key={field.name}>
         <legend>{field.label}</legend>
         {field.options?.map(([value, label]) => <label key={value} className={value === field.recommendedValue ? "recommended" : undefined}>
-          <input type="radio" name={field.name} value={value} checked={(values[field.name] || "") === value}
-            onChange={() => { setValues({ ...values, [field.name]: value }); setDirty(true); }}/>
+          <input type="radio" name={field.name} value={value} checked={radioChecked(values, touched, field.name, value)}
+            onChange={() => { setValues({ ...values, [field.name]: value }); setTouched({ ...touched, [field.name]: true }); setDirty(true); }}/>
           <span className="radio-label">{label}</span>
           {value === field.recommendedValue && <span className="recommendation-badge">추천</span>}
         </label>)}

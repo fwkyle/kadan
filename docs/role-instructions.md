@@ -91,7 +91,7 @@ kadan start custom-role --profile conductor --cmd "<실행 명령>"
 시작 기록은 `kadan card progress <키> --revision <현재revision> --activity running --note "시작: <현재 작업>"`으로 한 번 남긴다.
 외부 결과 대기로 전환할 때는 현재 revision으로 같은 명령의 `--activity waiting`과 대기 근거를 기록한다.
 근거 메모용 `card note --kind progress`만으로는 작업 중 상태가 기록되지 않는다. 정상 ACK 편지는 추가하지 않는다.
-수동 완료는 지정 결과 → 지정 직속 감독에게 send 1회 → 자기 화면의 현재 실행 DONE이다.
+수동 완료는 지정 결과 → `card report` → 지정 직속 감독에게 send 1회 → 자기 화면의 현재 실행 DONE이다([실행 공통 계약](../skills/kadan-conductor/references/card-template.md#결과-등록과-완료)이 원본).
 명시된 자동 완료는 지정 결과 → `work auto-report` → 현재 실행 DONE이며 수동 편지를 중복하지 않는다.
 수동 원장 확정은 결과·마커를 확인한 감독, 자동 경로는 마커를 확인한 프로그램이 처리한다.
 품질 판정과 실행 종료는 별개이며 업무 전체의 `work complete`는 owner가 전체 완료조건을 대조해 판단한다.
