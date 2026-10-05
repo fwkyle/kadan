@@ -28,6 +28,7 @@ import {
   buildIdleNudge,
 } from "./watch-supervisor.mjs";
 import { assertSingleWatch, notifyUser } from "./watch-system.mjs";
+import { effectiveWorkOwner } from "./handover-state.mjs";
 
 function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -322,6 +323,7 @@ function recordAlert(record, alert, recipient, delivered, resolved = false) {
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
       recipient,
       ...(alert.route?{route:alert.route}:{}),
+      ...(alert.escalatedTo ? {escalatedTo:alert.escalatedTo} : {}),
       delivered,
       by: "watch",
       ...(resolved ? { resolved: true } : {}),
@@ -505,7 +507,9 @@ export async function runWatch({
     let works = [], supervisorScope = null;
     if (readCards && !ledgerError) {
       try {
-        cards = readCards(); works = readWorks();
+        // 워크 owner는 확정된 역할 인계를 따라 지금 책임 감독으로 바꿔 쓴다. 옛 감독 이름 그대로면 감독 점검 범위와
+        // 할 일 판정에서 이어 맡은 감독이 빠졌다(PR #99 검수 2). 원장의 owner 원문은 바꾸지 않는다.
+        cards = readCards(); works = readWorks().map(w => ({ ...w, owner: effectiveWorkOwner(w, entries) }));
         entries = taskIdentity(cards).project(entries).filter(e=>!taskConnectionError(e));
         scope = buildWatchScope(cards, entries, parents, works);
         supervisorScope = buildSupervisorScope(cards, entries, parents, works);
@@ -575,7 +579,7 @@ export async function runWatch({
         try {
           const currentCards=readCards();
           const currentEntries=taskIdentity(currentCards).project(readEntries()).filter(e=>!taskConnectionError(e));
-          const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks());
+          const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks().map(w=>({...w,owner:effectiveWorkOwner(w,currentEntries)})));
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
           const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.transport!=='mailbox'&&e.role===seen.role);
@@ -593,7 +597,7 @@ export async function runWatch({
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
           const currentEntries=readEntries();
-          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks());
+          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks().map(w=>({...w,owner:effectiveWorkOwner(w,currentEntries)})));
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
           const current=collectRoles(floor,currentEntries,new Set([session])).observations.get(session);
@@ -879,6 +883,9 @@ export async function runWatch({
       alertRecipients.delete(alert.id);
       deliveryFailures.delete(alert.id);
       pendingNudges.delete(alert.id);
+      // 감독 멈춤 1단이 2단으로 올라간 것: 풀린 게 아니므로 '해소됨'을 찍지 않는다. 다만 열린 경보로 남지 않게
+      // escalatedTo를 붙여 닫힘 기록만 남긴다(대시보드는 마지막 기록이 resolved면 닫힌 것으로 센다).
+      if (alert.kind === "놀고 있음" && sourceIds.has(`${alert.id}:상위`)) recordAlert(record, {...alert, escalatedTo:`${alert.id}:상위`}, null, false, true);
     }
     for (const alert of changes.resolved) {
       if (alert.kind === "전달실패") continue;

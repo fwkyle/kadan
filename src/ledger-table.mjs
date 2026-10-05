@@ -42,7 +42,7 @@ export function eventSummary(entry){
   return [step,entry.verdict,reason,entry.delivery,entry.taskId].filter(Boolean).join(' · ');
  }
  if(entry.preview)parts.push(text(entry.preview));
- else if(entry.kind==='alert')parts.push([entry.alertKind,entry.level,entry.resolved===true?'해소 기록':'',entry.recipient?'알림 대상 '+entry.recipient:''].filter(Boolean).join(' · '));
+ else if(entry.kind==='alert')parts.push([entry.alertKind,entry.level,entry.escalatedTo?'상위로 올라가 닫힘':entry.resolved===true?'해소 기록':'',entry.recipient?'알림 대상 '+entry.recipient:''].filter(Boolean).join(' · '));
  else if(entry.kind==='handover')parts.push([entry.from&&entry.to?`${entry.from} → ${entry.to}`:'',entry.phase].filter(Boolean).join(' · '));
  else parts.push(text(entry.note)||text(entry.reason)||text(entry.result)||[entry.harness,entry.model].filter(Boolean).join(' · '));
  return parts.filter(Boolean).join(' · ')||'상세 내용은 원문에서 확인';

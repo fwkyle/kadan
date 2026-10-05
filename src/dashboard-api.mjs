@@ -59,6 +59,7 @@ import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
 import { seniorCommandLabel } from "./senior.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
 import { liveSessions, flowSummary, openAlerts, supervisorSummary, supervisorOf } from "./dashboard-band.mjs";
+import { effectiveWorkOwner } from "./handover-state.mjs";
 
 const modelCache = new WeakMap();
 const executionModelCache = new WeakMap();
@@ -484,7 +485,9 @@ export function dashboardData(snapshot, url) {
   }
   if (route === "status") {
     const recent = recentExecutionEvents(m.cards);
-    const statusWorks = m.rows.filter((r) => r.kind === "work").map(compact);
+    // 워크 owner는 확정된 역할 인계를 따라 지금 책임 감독으로 센다(옛 감독 이름이면 슈퍼감독별 현황·?super=에서 빠졌다, PR #99 검수 2).
+    const currentOwner = new Map((registeredCenterWorks(snapshot).works ?? []).map((w) => [`work:${w.key}`, effectiveWorkOwner(w, snapshot.entries ?? [])]));
+    const statusWorks = m.rows.filter((r) => r.kind === "work").map(compact).map((w) => (currentOwner.has(w.key) ? { ...w, owner: currentOwner.get(w.key) } : w));
     const openDecisions = snapshot.decisionError ? null : (snapshot.decisions || []).filter((d) => d.status === "open");
     // 상단 띠의 나머지 세 질문. 세션 상태·원장을 모르면 null이다(dashboard-band.mjs).
     const live = liveSessions(snapshot.center);
@@ -518,8 +521,13 @@ export function dashboardData(snapshot, url) {
         ...stamp,
         super: superFilter,
         supervisor: item,
-        rows: statusRows.filter((r) => mine(r.owner)),
-        works: statusWorks.filter((w) => mine(w.owner)),
+        // 감독 AI가 경보마다 읽으므로 작게 준다(PR #99 검수 3: 거른 뒤에도 행 32 × 칸 47로 약 81KB였다).
+        // 지금 손댈 실행(작업 중·결과 대기·막힘)만 판단에 필요한 칸으로, 나머지(오래된 미정리·발령 전·보류)는 수만.
+        counts: Object.fromEntries(["running", "waiting", "stuck", "stale", "planned", "hold"].map((b) => [b, statusRows.filter((r) => mine(r.owner) && r.bucket === b).length])),
+        rows: statusRows.filter((r) => mine(r.owner) && ["running", "waiting", "stuck"].includes(r.bucket))
+          .map((r) => pick(r, ["key", "title", "owner", "bucket", "healthLabel", "signalAt", "failureReason", "next"])),
+        works: statusWorks.filter((w) => mine(w.owner) && ["running", "hold"].includes(w.state))
+          .map((w) => pick(w, ["key", "title", "owner", "state", "turnLabel", "next"])),
         decisions: openDecisions === null ? null : openDecisions.filter((d) => mine(d.requestedBy)),
         alerts: allAlerts === null ? null : { count: myAlerts.length, items: myAlerts.slice(0, 20) },
         recent: recent.filter((e) => mine(e.role)).slice(0, 20).map((e) => ({ ...pick(e, ["at", "kind", "label", "role"]), card: pick(e.card, ["key", "title"]) })),

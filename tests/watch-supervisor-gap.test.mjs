@@ -39,8 +39,12 @@ test('최상위 감독의 세션이 없으면 죽음 경보가 @user에게 간�
 });
 
 test('감독 멈춤 2단: 15분에 본인, 30분에 상위(감독→슈퍼감독, 슈퍼감독→@user). 작업자 정체는 그대로, 작업자에게 본인 알림은 없다',async()=>{
-  const {alerts,sent,nudges}=await simulate({minutes:40});
+  const {alerts,sent,nudges,records,printed}=await simulate({minutes:40});
   assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
+  // 2단으로 올라가는 순간 1단은 '해소됨'이 아니다(PR #99 검수 1): 출력에 해소가 없고, 원장에는 escalatedTo를 단 닫힘만 남는다.
+  assert.ok(!printed.some(l=>l.includes('놀고 있음 - 해소됨')),'승격을 해소로 찍으면 안 된다');
+  assert.deepEqual(records.filter(e=>e.kind==='alert'&&e.resolved&&e.alertKind==='놀고 있음').map(e=>[e.minute,e.id,e.escalatedTo]),
+    [[30,'idle:hierarchy:p-감독','idle:hierarchy:p-감독:상위'],[30,'idle:hierarchy:p-슈퍼감독','idle:hierarchy:p-슈퍼감독:상위']]);
   assert.match(nudges[0][2],/놀고 있음 kadan-p-감독 \(할 일 1건, 15분간 화면 변화 없음\) — 판을 확인하고 다음 행동을 정하라\. 이대로 15분 더 멈추면 상위에게 알린다\./);
   const idle=alerts.filter(a=>a.alertKind==='놀고 있음');
   assert.deepEqual(idle.map(a=>[a.minute,a.role,a.recipient]),[[15,'p-감독','p-감독'],[15,'p-슈퍼감독','p-슈퍼감독'],[30,'p-감독','p-슈퍼감독'],[30,'p-슈퍼감독','@user']]);
@@ -86,4 +90,16 @@ test('작업자가 다 끝냈는데 감독이 다음 발령을 안 하면 열린
   assert.deepEqual(busy.nudges,[],'실행이 진행 중이면 워크는 할 일이 아니다');
   const moved=await simulate({minutes:40,...base,read:(s,m)=>s==='kadan-p-감독'&&m>=10?'moved '+Math.floor(m/10):'frozen screen'});
   assert.deepEqual(moved.nudges.filter(([,r])=>r==='p-감독'),[]);
+});
+
+test('워크 owner가 인계된 옛 감독 이름이면 확정 인계를 따라 지금 책임 감독이 할 일 알림을 받는다(PR #99 검수 2)',async()=>{
+  const doneCard={...card,status:'done',activity:'done'};
+  const work={key:'repo/w1',status:'open',owner:'p-옛감독',executions:[{key:'repo/t1'}],at:stamp(0),history:[{owner:'p-옛감독',at:stamp(0)}]};
+  const handover={kind:'handover',phase:'transferred',handoverId:'h1',from:'p-옛감독',to:'p-감독',taskIds:[],t:stamp(0)};
+  const {nudges}=await simulate({minutes:20,cards:[doneCard],works:[work],
+    entries:[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)},handover]});
+  assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
+  const none=await simulate({minutes:20,cards:[doneCard],works:[work],
+    entries:[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)}]});
+  assert.deepEqual(none.nudges,[],'인계 기록이 없고 관계표에 없는 owner면 할 일로 세지 않는다');
 });
