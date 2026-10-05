@@ -41,9 +41,9 @@ test('예약 중 새 입력으로 재개가 취소·재설정돼도 한도 경�
  assert.equal(sent.filter(([,,m])=>/한도/.test(m)&&!/해소/.test(m)).length,1,'한도 경보는 한 번만 보낸다');
 });
 
-test('화면에서 429가 사라지면 그때 한 번 해소된다',async()=>{
+test('화면에서 429가 사라지면 그때 한 번 해소 기록을 남긴다(우편 없음, 2026-10-05)',async()=>{
  const {records,sent}=await run({clearAt:8,stopAt:12});
  const resolved=records.filter(e=>e.kind==='alert'&&e.alertKind==='한도'&&e.resolved);
  assert.equal(resolved.length,1);
- assert.equal(sent.filter(([m,,x])=>/한도/.test(x)&&/해소/.test(x)&&m>=8).length,1);
+ assert.equal(sent.filter(([,,x])=>/해소/.test(x)).length,0);
 });

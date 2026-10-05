@@ -45,6 +45,19 @@ for (const mode of ["jsonl", "sqlite"])
     assert.deepEqual(status.live, [], "세션 상태를 아는데 열린 창이 없으면 빈 목록");
     assert.deepEqual(status.flow, { total: 0, unconfirmed: [] });
     assert.deepEqual(status.alerts, { count: 0, items: [] });
+    // ?super= 거름망: 관계표가 없으면 400, 있으면 그 슈퍼감독 몫만(감독 AI가 경보 받고 행동 전에 읽는 용도, 2026-10-05).
+    assert.equal(status.supervisors, null, "관계표를 모르면 null");
+    assert.equal((await fetch(base + "/api/dashboard/status?super=qa-슈퍼감독")).status, 400);
+    const hierarchyFile = path.join(f.home, "hierarchy.json");
+    fs.writeFileSync(hierarchyFile, JSON.stringify({ "작업자": "qa-슈퍼감독", "qa-슈퍼감독": "@user" }));
+    appendLedger({ kind: "hierarchy-loaded", path: hierarchyFile, by: "watch", t: new Date().toISOString() }, f.home);
+    assert.equal((await fetch(base + "/api/dashboard/status?super=없는역할")).status, 400);
+    const mine = await get("status?super=qa-슈퍼감독");
+    assert.equal(mine.super, "qa-슈퍼감독");
+    assert.equal(mine.supervisor.super, "qa-슈퍼감독");
+    for (const key of ["rows", "works", "decisions", "recent"]) assert.ok(Array.isArray(mine[key]), key);
+    assert.deepEqual(mine.alerts, { count: 0, items: [] });
+    assert.ok(!("boards" in mine) && !("watchHtml" in mine), "슈퍼감독 몫만 돌려준다");
     const detailFacts = (await get("detail?card=demo/card-1")).facts.map((f) => f[0]);
     assert.ok(detailFacts.includes("실행 모델"), "실행 상세에 모델 줄");
     const list = await get("workspace?collection=executions&state=all");

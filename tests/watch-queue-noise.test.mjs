@@ -30,7 +30,7 @@ async function simulate({minutes,screen,cards=[card],entries:extra=[{kind:'send'
   return {alerts,kinds,sent,enters,aiCalls};
 }
 
-test('승인 질문이 겹친 큐 배너는 입력큐 경보 하나만 열고, 큐대기·정체·AI 판정을 겹치지 않으며 배너가 사라질 때 한 번 해소한다',async()=>{
+test('승인 질문이 겹친 큐 배너는 입력큐 경보 하나만 열고, 큐대기·정체·AI 판정을 겹치지 않으며 배너가 사라질 때 한 번 해소 기록을 남긴다',async()=>{
   const {alerts,sent,enters,aiCalls}=await simulate({minutes:12,judge:true,screen:m=>m<8?unsafeScreen:'이전 출력\n❭ Ask Devin to build features'});
   assert.deepEqual(enters,[],'승인 질문이 보이면 Enter를 보내지 않는다');
   const queue=alerts.filter(a=>a.alertKind==='입력큐');
@@ -39,9 +39,11 @@ test('승인 질문이 겹친 큐 배너는 입력큐 경보 하나만 열고, �
   assert.ok(!alerts.some(a=>a.alertKind==='큐대기'),'같은 배너에 큐대기를 겹치지 않는다');
   assert.ok(!alerts.some(a=>a.alertKind==='정체'),'같은 배너에 정체를 겹치지 않는다');
   assert.ok(!aiCalls.some(([,source])=>source==='stall'),'원인이 분명한 화면에 정체 AI를 부르지 않는다');
+  // 해소는 원장 기록뿐이고 우편은 없다(2026-10-05 [kyle]). 감독은 행동 전에 지금 상태를 스스로 확인한다.
   const queueMails=sent.filter(([,,m])=>m.includes('입력 큐 대기'));
-  assert.deepEqual(queueMails.map(([m,r])=>[m,r]),[[0,'p-감독'],[8,'p-감독']]);
-  assert.match(queueMails[0][2],/승인 질문이 함께 표시됨/);assert.match(queueMails[1][2],/해소됨/);
+  assert.deepEqual(queueMails.map(([m,r])=>[m,r]),[[0,'p-감독']]);
+  assert.match(queueMails[0][2],/승인 질문이 함께 표시됨/);
+  assert.ok(!sent.some(([,,m])=>m.includes('해소됨')),'해소 우편은 보내지 않는다');
   // 시작 보고 누락은 다른 사실(착수 보고 없음)이라 그대로 울린다.
   assert.ok(alerts.some(a=>a.alertKind==='시작보고누락'));
 });

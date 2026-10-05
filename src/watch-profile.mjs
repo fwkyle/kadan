@@ -5,7 +5,12 @@ import {PROFILE_FILE} from './watch-cycle.mjs';
 // 감시기 정식 명령을 한 파일에 둔다. 맨 `kadan watch`로 다시 띄우다가 관계 파일·AI 판정을
 // 잃어버린 사고(2026-09-12)를 막기 위한 진입점이며, 새 옵션이나 권한을 만들지 않는다.
 // 형식: {"flags":{"route":["판=역할"],"super":"역할","hierarchy":"경로","judge-cmd":"명령",...},"env":{"KADAN_JUDGE_MODEL":"..."}}
-export const PROFILE_FLAGS = new Set(['interval','stall','stall-after','start-report-after','completion-grace','idle','route','super','hierarchy','wake','wake-every','user-notify','judge-cmd','judge-cooldown']);
+export const PROFILE_FLAGS = new Set(['interval','stall','stall-after','start-report-after','completion-grace','idle','route','super','hierarchy','user-notify','judge-cmd','judge-cooldown']);
+// 없어진 옵션. 저장된 프로필에 남아 있어도 감시기가 못 뜨면 안 되므로 무시하고 안내만 남긴다.
+export const RETIRED_FLAGS = new Map([
+ ['wake', '2026-10-05에 없어짐 — 놀고 있음 판정을 감독 본인에게도 보내는 것으로 대체'],
+ ['wake-every', '2026-10-05에 없어짐 — --wake와 함께'],
+]);
 const PATH_FLAGS = new Set(['hierarchy']);
 
 export function defaultProfilePath(home) { return path.join(home, PROFILE_FILE); }
@@ -17,11 +22,12 @@ export function readWatchProfile(file, readFile = f => fs.readFileSync(f, 'utf8'
  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`감시 프로필 형식 오류: ${file}`);
  const flags = parsed.flags ?? {}, env = parsed.env ?? {};
  if (typeof flags !== 'object' || Array.isArray(flags) || typeof env !== 'object' || Array.isArray(env)) throw new Error(`감시 프로필 형식 오류: flags·env는 객체여야 합니다 (${file})`);
- const unknown = Object.keys(flags).find(name => !PROFILE_FLAGS.has(name));
+ const unknown = Object.keys(flags).find(name => !PROFILE_FLAGS.has(name) && !RETIRED_FLAGS.has(name));
  if (unknown) throw new Error(`감시 프로필이 모르는 옵션: --${unknown} (${file})`);
+ const retired = Object.keys(flags).filter(name => RETIRED_FLAGS.has(name)).map(name => `--${name}: ${RETIRED_FLAGS.get(name)}`);
  const base = path.dirname(path.resolve(file)), resolved = {};
  for (const [name, value] of Object.entries(flags)) {
-  if (value === null || value === undefined) continue;
+  if (value === null || value === undefined || RETIRED_FLAGS.has(name)) continue;
   if (name === 'user-notify') { if (value !== true) throw new Error(`감시 프로필 user-notify는 true만 허용 (${file})`); resolved[name] = true; continue; }
   const list = Array.isArray(value) ? value : [value];
   if (list.some(v => typeof v !== 'string' && typeof v !== 'number')) throw new Error(`감시 프로필 옵션 값은 문자열·숫자여야 합니다: --${name} (${file})`);
@@ -29,7 +35,7 @@ export function readWatchProfile(file, readFile = f => fs.readFileSync(f, 'utf8'
   resolved[name] = Array.isArray(value) ? values : values[0];
  }
  for (const [key, value] of Object.entries(env)) if (typeof value !== 'string') throw new Error(`감시 프로필 env 값은 문자열이어야 합니다: ${key} (${file})`);
- return {file: path.resolve(file), flags: resolved, env};
+ return {file: path.resolve(file), flags: resolved, env, retired};
 }
 
 // CLI에서 직접 준 옵션이 우선이고, 프로필은 빈 자리만 채운다. 적용한 옵션 이름을 돌려준다.

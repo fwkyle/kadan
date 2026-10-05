@@ -53,8 +53,6 @@ const {
   applyJudgeVerdict,
   judgeDue,
   assessSupervisorIdle,
-  wakeDue,
-  buildWakeMessage,
   formatAlertBody,
   deliverResolution,
   executeJudge,
@@ -723,7 +721,7 @@ test("감독이 놀면 슈퍼에게 올린다 — 2026-08-07 감독 1시간 30�
   assert.equal(alerts[0].idleMinutes, 32);
   assert.equal(
     formatAlertBody(alerts[0], {}),
-    "놀고 있음 kadan-p-감독 (안 끝난 카드 2장, 32분간 화면 변화 없음)"
+    "놀고 있음 kadan-p-감독 (할 일 2건, 32분간 화면 변화 없음)"
   );
   assert.equal(
     routeAlert(
@@ -948,27 +946,6 @@ test("상신은 감독 자신에게 가지 않는다 — card-26 감독 자기 �
   assert.notEqual(recipient, "p-감독");
 });
 
-test("깨움은 이상할 때만 하지 않는다, 기본 30분 — 2026-08-09 감독 11시간 정지(card-27)", () => {
-  // Given: 기본 30분 주기와 정상·이상 두 상태가 있다.
-  const everyMs = 30 * 60 * 1_000;
-  const dueAt = Date.parse("2026-08-31T12:30:00.000Z");
-  const lastWakeAt = Date.parse("2026-08-31T12:00:00.000Z");
-
-  // When: 상태와 무관하게 주기만 판정한다.
-  const normalDue = wakeDue("p-감독", lastWakeAt, dueAt, everyMs);
-  const abnormalDue = wakeDue("p-감독", lastWakeAt, dueAt, everyMs);
-  const disabled = wakeDue(null, lastWakeAt, dueAt, everyMs);
-
-  // Then: 정상·이상 모두 깨우고 --wake가 없으면 0건이며 정상은 침묵하라는 문구로 끝난다.
-  assert.equal(normalDue, true);
-  assert.equal(abnormalDue, true);
-  assert.equal(disabled, false);
-  assert.equal(wakeDue("p-감독", lastWakeAt, dueAt - 1, everyMs), false);
-  assert.ok(
-    buildWakeMessage().endsWith("이상 없으면 보고하지 말고 계속하라.")
-  );
-});
-
 test("판정과 알림은 별개 고리 — 같은 이상은 해소 전 재전송하지 않는다(2026-08-07)(card-23)", () => {
   const stall = {
     id: "stall:kadan-w1-작업자",
@@ -1012,8 +989,8 @@ test("과거 자원 경고는 해소 우편·알림 기록을 새로 만들지 �
  }
 });
 
-test("해소는 이상을 받은 그 역할에게만 간다 — 두 사람이 다른 그림을 갖지 않는다(2026-07-23)(card-34)", () => {
-  const sent = [];
+test("해소는 우편 없이 기록만 남기고 수신자 기억을 지운다 — 받은 쪽에 할 일이 없는 우편은 소음이다(2026-10-05 [kyle])", () => {
+  const sent = [], records = [];
   const recipients = new Map([["stall:kadan-p-작업자", "p-감독"]]);
 
   deliverResolution({
@@ -1025,11 +1002,13 @@ test("해소는 이상을 받은 그 역할에게만 간다 — 두 사람이 �
     recipients,
     cycleAt: Date.parse("2026-09-01T05:31:00.000Z"),
     sendAlert: (role) => sent.push(role),
+    record: (e) => records.push(e),
     print: () => null,
   });
 
-  assert.deepEqual(sent, ["p-감독"]);
+  assert.deepEqual(sent, []);
   assert.equal(recipients.size, 0);
+  assert.deepEqual(records.map((r) => [r.alertKind, r.recipient, r.delivered, r.resolved]), [["정체", "p-감독", false, true]]);
 });
 
 test("자원 이상은 연속 3주기 정상이어야 해소한다 — 경계 깜빡임 차단(card-34)", () => {
@@ -1059,8 +1038,8 @@ test("자원 이상은 연속 3주기 정상이어야 해소한다 — 경계 �
   assert.deepEqual(assessment.alerts, []);
 });
 
-test("해소는 이상당 한 번만 보낸다 — 해소 폭주 금지(card-34)", () => {
-  const sent = [];
+test("해소는 거듭 불려도 우편을 보내지 않고 수신자 기억을 지운다(card-34, 우편 없음 2026-10-05)", () => {
+  const sent = [], records = [];
   const id = "stall:kadan-p-작업자";
   const recipients = new Map([[id, "슈퍼감독"]]);
   const input = {
@@ -1068,29 +1047,17 @@ test("해소는 이상당 한 번만 보낸다 — 해소 폭주 금지(card-34)
     recipients,
     cycleAt: Date.parse("2026-09-01T05:32:00.000Z"),
     sendAlert: (role) => sent.push(role),
+    record: (e) => records.push(e),
     print: () => null,
   };
 
   deliverResolution(input);
   deliverResolution(input);
 
-  assert.deepEqual(sent, ["슈퍼감독"]);
+  assert.deepEqual(sent, []);
   assert.equal(recipients.size, 0);
-
-  const failedRecipients = new Map([[id, "죽은-감독"]]);
-  let failedAttempts = 0;
-  const failedInput = {
-    ...input,
-    recipients: failedRecipients,
-    sendAlert: () => {
-      failedAttempts += 1;
-      throw new Error("세션 없음");
-    },
-  };
-  deliverResolution(failedInput);
-  deliverResolution(failedInput);
-  assert.equal(failedAttempts, 1);
-  assert.equal(failedRecipients.size, 0);
+  // 첫 호출은 기억한 수신자를 적고, 둘째 호출은 기억이 없어 null로 적는다 — 어느 쪽도 우편은 없다.
+  assert.deepEqual(records.map((r) => [r.recipient, r.delivered, r.resolved]), [["슈퍼감독", false, true], [null, false, true]]);
 });
 
 test("죽음은 살았다가 없어진 것 — 처음부터 없던 세션은 이상이 아니다(card-23)", () => {

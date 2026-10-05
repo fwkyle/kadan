@@ -25,8 +25,7 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import {
   assessSupervisorIdle,
-  buildWakeMessage,
-  wakeDue,
+  buildIdleNudge,
 } from "./watch-supervisor.mjs";
 import { assertSingleWatch, notifyUser } from "./watch-system.mjs";
 
@@ -251,7 +250,9 @@ export function formatAlertBody(alert) {
   if (alert.kind === "진행조정") return `${alert.verdict==='모름'?'진행 판단 불가':'진행 조정 필요'} ${alert.role} / ${alert.taskId} (${alert.verdict==='모름'?'감시ai 근거 부족 또는 호출 실패. 감독이 실제 진전 확인 필요':alert.consecutive>=2?'반복 조정 판정. 직속 감독은 상위 감독에게 범위·담당 조정 요청':'반복 실패·범위 확장 후보. 감독이 근거 확인 후 조정'}; 자동 중지 아님)`;
   if (alert.kind === "시작보고누락") return `시작 보고 누락 ${alert.role} / ${alert.taskId} (발령 ${alert.waitMinutes}분 경과, 실제 착수 여부 확인 후 보고 보완 필요)`;
   if (alert.kind === "놀고 있음") {
-    return `놀고 있음 ${alert.session} (안 끝난 카드 ${alert.openCards}장, ${alert.idleMinutes}분간 화면 변화 없음)`;
+    // 상위가 받는 건 2단이다: 본인에게 먼저 알렸는데도 그대로였다.
+    const self = alert.stage === 2 ? `; ${Math.floor(alert.idleMinutes / 2)}분 전에 본인에게 알렸으나 그대로` : "";
+    return `놀고 있음 ${alert.session} (할 일 ${alert.openCards}건, ${alert.idleMinutes}분간 화면 변화 없음${self})`;
   }
   if (alert.kind === "모름" && alert.screenError) {
     return `상태 확인 필요 ${alert.session} (화면 읽기 실패: ${alert.screenError})`;
@@ -360,32 +361,13 @@ export function deliverResolution({
     recipients.delete(alert.id);
     return null;
   }
-  // 큐 대기가 풀린 소식도 소음이다(2026-09-15 [kyle]). 우편 없이 경보 줄만 닫는다.
-  if (alert.kind === "큐대기") {
-    recipients.delete(alert.id);
-    recordAlert(record, alert, null, false, true);
-    return null;
-  }
-  const message = `[watch ${clockTime(cycleAt)}] ${resolvedBody(alert)}`;
+  // 해소는 원장 기록과 감시 출력으로만 남긴다(2026-10-05 [kyle]). 받은 쪽에 우편을 보내면 할 일이 없는데도 모델이 읽고
+  // 응답한다. 대신 경보 우편이 "행동 전 지금 상태를 확인하라"고 말한다(sendWatchMessage). 큐대기는 전부터 이랬다(2026-09-15).
   const recipient = recipients.get(alert.id) ?? null;
   recipients.delete(alert.id);
-  if (!recipient) {
-    recordAlert(record, alert, null, false, true);
-    print(message);
-    return null;
-  }
-  let target = recipient;
-  try {
-    sendAlert(recipient, message);
-  } catch (error) {
-    target = `${recipient} 전달 실패(${error.message})`;
-    recordAlert(record, alert, recipient, false, true);
-    print(`${message} → ${target}`);
-    return null;
-  }
-  recordAlert(record, alert, recipient, true, true);
-  print(`${message} → ${target}`);
-  return recipient;
+  recordAlert(record, alert, recipient, false, true);
+  print(`[watch ${clockTime(cycleAt)}] ${resolvedBody(alert)}${recipient ? ` (${recipient}에게 우편 없음)` : ""}`);
+  return null;
 }
 
 export const isDatabaseBusy=error=>error?.errcode===5||/database is locked|SQLITE_BUSY/i.test(String(error?.message??''));
@@ -403,8 +385,8 @@ export async function runWatch({
   // 큐 대기의 경보 기준은 정체와 같다 — 입력이 닿지 않은 채 같은 시간을 견딘 것이다.
   queuedAfterMs = stallAfterMs,
   sendAlert,
-  // 자가점검 깨우기 전용 전송. 사람이 그 창에서 입력 중이면 미루는 보류 검사를 붙인다(없으면 sendAlert).
-  sendWake = null,
+  // 놀고 있음 본인 알림 전용 전송. 사람이 그 창에서 입력 중이면 미루는 보류 검사를 붙인다(없으면 sendAlert).
+  sendNudge = null,
   resume429 = null,
   sendMailReminder = null,
   mailHold = null,
@@ -417,9 +399,7 @@ export async function runWatch({
   superRole,
   parents = new Map(),
   loadHierarchy = null,
-  idleMs = 30 * 60 * 1_000,
-  wakeRole = null,
-  wakeEveryMs = 30 * 60 * 1_000,
+  idleMs = 15 * 60 * 1_000,
   userNotify = false,
   judgeCmd = null,
   ai = null,
@@ -481,7 +461,8 @@ export async function runWatch({
   const supervisorHealth = new SupervisorHealth();
   let lastCycleAt = now();
   let lastCycleRecordedAt = null;
-  let lastWakeAt = null;
+  // 감독 본인에게 보낼 놀고 있음 1단 알림 중 사람이 그 창에서 입력 중이라 미룬 것. 경보가 열려 있는 동안 다음 주기에 다시 시도한다.
+  const pendingNudges = new Map();
   let hierarchyHash = null;
   let scopeSignature = null;
   const queuedAI = new Map();
@@ -794,7 +775,8 @@ export async function runWatch({
         cycleAt,
         idleMs,
         ledgerError,
-        parents
+        parents,
+        { works, cards: cards ?? [] }
       ).filter(a=>(!observedSessions || !a.session || observedSessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))
         // 감독의 세션 부재·화면 없음은 감독 점검이 이미 알린다. 같은 세션에 '모름'을 겹쳐 올리지 않는다.
         && !supervisorCheck.alerts.some(s=>s.session===a.session)),
@@ -804,8 +786,32 @@ export async function runWatch({
     nextAlerts.push(...[...deliveryFailures.values()].filter(alert => sourceIds.has(alert.sourceAlertId)));
     const changes = dedupAlerts(activeAlerts, nextAlerts);
     const deliveredRecipients = aiRecipients;
+    // 놀고 있음 1단은 상위가 아니라 감독 본인에게 간다(2026-10-05 [kyle]). 사람이 그 창에서 입력 중이면 미루고 다음 주기에 다시.
+    const sendIdleNudge = (alert) => {
+      const message = `[watch ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
+      let target = alert.role, held = false, delivered = false;
+      try {
+        (sendNudge ?? sendAlert)(alert.role, message);
+        delivered = true;
+        deliveredRecipients.add(alert.role);
+      } catch (error) {
+        held = typeof error.code === 'string' && (error.code === 'KADAN_HUMAN_ACTIVE' || error.code === 'KADAN_PANE_INPUT_PENDING');
+        target = `${alert.role} ${held ? '보류' : '전달 실패'}(${error.message})`;
+      }
+      if (held) pendingNudges.set(alert.id, alert); else pendingNudges.delete(alert.id);
+      print(`${message} → ${target}`);
+      return delivered;
+    };
+    // 이전 주기에 보류된 1단 알림. 이번 주기의 새 보류는 다음 주기에 다시 본다.
+    const heldNudges = new Map(pendingNudges);
     for (const alert of changes.notify) {
       if (deliveryFailures.has(alert.id)) continue;
+      if (alert.kind === "놀고 있음" && alert.stage !== 2) {
+        const delivered = sendIdleNudge(alert);
+        if (delivered) alertRecipients.set(alert.id, alert.role);
+        recordAlert(record, {...alert, route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
+        continue;
+      }
       const message = `[watch ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
       const route = explainAlertRoute(
         alert,
@@ -872,10 +878,12 @@ export async function runWatch({
     for (const alert of changes.absorbed) {
       alertRecipients.delete(alert.id);
       deliveryFailures.delete(alert.id);
+      pendingNudges.delete(alert.id);
     }
     for (const alert of changes.resolved) {
       if (alert.kind === "전달실패") continue;
       deliveryFailures.delete(alert.id);
+      pendingNudges.delete(alert.id);
       if (alert.kind === "감시AI오류") { recordAlert(record,alert,null,false,true); continue; }
       const recipient = deliverResolution({
         alert,
@@ -887,23 +895,10 @@ export async function runWatch({
       });
       if (recipient) deliveredRecipients.add(recipient);
     }
-    // 깨우기는 작업 감시 범위뿐 아니라 감독 점검 범위의 세션에도 간다(등록된 감독은 전자에서 늘 빠진다).
-    if (!observationError && (!observedSessions || observedSessions.has(`kadan-${wakeRole}`)) && wakeDue(wakeRole, lastWakeAt, cycleAt, wakeEveryMs)) {
-      const session = `kadan-${wakeRole}`;
-      if (floor.alive(session)) {
-        const message = buildWakeMessage();
-        let target = wakeRole, held = false;
-        try {
-          (sendWake ?? sendAlert)(wakeRole, message);
-          deliveredRecipients.add(wakeRole);
-        } catch (error) {
-          // 사람이 그 창에서 입력 중이라 미룬 것은 실패가 아니다. 다음 주기에 다시 시도한다.
-          held = typeof error.code === 'string' && (error.code === 'KADAN_HUMAN_ACTIVE' || error.code === 'KADAN_PANE_INPUT_PENDING');
-          target = `${wakeRole} ${held ? '보류' : '전달 실패'}(${error.message})`;
-        }
-        print(`[watch ${clockTime(cycleAt)}] ${message} → ${target}`);
-        if (!held) lastWakeAt = cycleAt;
-      }
+    // 보류됐던 1단 알림 재시도: 경보가 아직 열려 있는 동안만. 전달되면 그때 기록한다.
+    for (const [id, alert] of heldNudges) {
+      if (observationError || !sourceIds.has(id)) { pendingNudges.delete(id); continue; }
+      if (sendIdleNudge(alert)) { alertRecipients.set(id, alert.role); recordAlert(record, {...alert, route:{recipient:alert.role, basis:'본인'}}, alert.role, true); }
     }
     lap('alerts');
     let mailError = false;
@@ -925,6 +920,9 @@ export async function runWatch({
     lap('mail');
     const absorbed = observationError ? {states:roleStates,screenAlerts:[]} : absorbDeliveredScreens(floor, roleStates, deliveredRecipients);
     roleStates = absorbed.states;
+    // 감독 창에 넣은 글(놀고 있음 1단 등)도 그 감독의 화면 변화로 세지 않는다. 안 그러면 알림 자체가 경보를 닫고
+    // idleMs 뒤 다시 울리는 타이머가 된다(없앤 --wake와 같은 모양).
+    if (!observationError) supervisorStates = absorbDeliveredScreens(floor, supervisorStates, deliveredRecipients).states;
     // Absorption belongs to this cycle's baseline, not a second delivery pass.
     activeAlerts = [...new Map(
       [...changes.active, ...deliveryFailures.values(), ...absorbed.screenAlerts].map(alert => [alert.id, alert])

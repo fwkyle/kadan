@@ -43,12 +43,12 @@ async function run(cycles, { failFirst = false } = {}) {
   return { sent, printed, memories };
 }
 
-test("기준선: 살아 있는 세션의 이상 소멸은 기억한 수신자에게 해소한다(card-34/card-56)", async () => {
+test("기준선: 살아 있는 세션의 이상 소멸은 기록·출력으로만 해소한다 — 우편은 없다(card-34/card-56, 2026-10-05)", async () => {
   assert.deepEqual(dedupAlerts([anomaly], []).resolved, [anomaly]);
   const { sent, printed } = await run(["KADAN:DONE a-1 ok", "healthy", "healthy"]);
-  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[0, "a-감독"], [1, "a-감독"]]);
-  assert.equal(sent.filter(s => s.message.includes("끝난 것 같음 - 해소됨")).length, 1);
-  assert.equal(printed.filter(s => s.includes("해소")).length, 1);
+  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[0, "a-감독"]]);
+  assert.equal(sent.filter(s => s.message.includes("해소됨")).length, 0);
+  assert.equal(printed.filter(s => s.includes("끝난 것 같음 - 해소됨")).length, 1);
 });
 
 test("죽은 세션의 이상은 해소가 아니라 죽음에 흡수한다 — 죽었는데 해소로 읽혔다(2026-09-05 card-54 리허설)(card-56)", () => {
@@ -70,10 +70,10 @@ test("죽음 흡수는 해소 배달과 stdout 없이 수신자 기억을 지운
   assert.equal(memories[0].has(anomaly.id), false);
 });
 
-test("살아 돌아온 세션의 죽음은 기억한 수신자에게 한 번 해소한다(card-56)", async () => {
+test("살아 돌아온 세션의 죽음은 한 번 해소 기록을 남기고 우편은 보내지 않는다(card-56)", async () => {
   const { sent, printed } = await run(["healthy", null, null, "healthy", "healthy"]);
-  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[1, "a-감독"], [3, "a-감독"]]);
-  assert.equal(sent.filter(s => s.message.includes("세션 종료 의심 - 해소됨")).length, 1);
+  assert.deepEqual(sent.map(s => [s.cycle, s.role]), [[1, "a-감독"]]);
+  assert.equal(sent.filter(s => s.message.includes("해소됨")).length, 0);
   assert.equal(printed.filter(s => s.includes("세션 종료 의심 - 해소됨")).length, 1);
 });
 
@@ -89,10 +89,9 @@ test("다른 세션의 죽음과 session 없는 이상은 흡수하지 않는다
 
 test("흡수된 전달실패 기억도 지워 재등장한 이상을 새로 전달한다(card-56)", async () => {
   const { sent, printed, memories } = await run(["KADAN:DONE a-1 ok", null, "KADAN:DONE a-1 ok", "healthy"], { failFirst: true });
-  assert.equal(sent.filter(s => s.cycle === 1 && s.message.includes("해소")).length, 0);
+  assert.equal(sent.filter(s => s.message.includes("해소")).length, 0, "해소 우편은 없다");
   assert.equal(printed.filter(s => s.includes("끝난 것 같음 - 해소됨")).length, 1);
   assert.equal(sent.filter(s => s.cycle === 2 && s.role === "a-감독" && s.message.includes("끝난 것 같음")).length, 1);
-  assert.equal(sent.filter(s => s.cycle === 3 && s.role === "a-감독" && s.message.includes("끝난 것 같음 - 해소됨")).length, 1);
   assert.ok(memories.length >= 1);
   assert.equal(memories[0].has(anomaly.id), false);
 });
