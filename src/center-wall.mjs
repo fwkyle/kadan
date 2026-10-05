@@ -24,7 +24,7 @@ import {editFallback,readSettings,setActivePreset,setFallback,setFavorites,setRo
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
-const labels={archived:'과거 자료·미분류',running:'작업 중',waiting:'결과 대기',draft:'초안',ready:'발령 가능',assigned:'배정',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',unconfirmed:'발령됨',orphaned:'세션 없음·미완료',failed:'실패',planned:'계획', 'needs-check':'확인 필요'};
+const labels={archived:'과거 자료·미분류',running:'작업 중',waiting:'결과 대기',draft:'초안',ready:'발령 가능',assigned:'배정됨',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',unconfirmed:'발령됨',orphaned:'세션 없음·미완료',failed:'실패',planned:'계획', 'needs-check':'확인 필요'};
 const label=x=>labels[x]??x;
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 const pill=x=>`<span class="state ${e(x)}">${e(label(x))}</span>`;

@@ -41,6 +41,12 @@ for (const mode of ["jsonl", "sqlite"])
     assert.equal(status.executionCount, 55);
     assert.equal(status.waitingQuestions, 1);
     assert.equal(status.decisions.length, 2);
+    // 상단 띠의 나머지 질문: 고정 자료에는 열린 창·묶음·경보가 없고 원장은 읽혔다.
+    assert.deepEqual(status.live, [], "세션 상태를 아는데 열린 창이 없으면 빈 목록");
+    assert.deepEqual(status.flow, { total: 0, unconfirmed: [] });
+    assert.deepEqual(status.alerts, { count: 0, items: [] });
+    const detailFacts = (await get("detail?card=demo/card-1")).facts.map((f) => f[0]);
+    assert.ok(detailFacts.includes("실행 모델"), "실행 상세에 모델 줄");
     const list = await get("workspace?collection=executions&state=all");
     assert.equal(list.rows.length, 50);
     assert.equal(list.total, 55);

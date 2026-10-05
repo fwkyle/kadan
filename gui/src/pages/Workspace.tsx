@@ -27,7 +27,7 @@ const stateLabels: Record<string, string> = {
   hold: "보류",
   draft: "초안",
   ready: "발령 가능",
-  assigned: "배정",
+  assigned: "배정됨",
   done: "완료",
   cancelled: "취소",
   superseded: "대체됨",
@@ -740,6 +740,7 @@ function Grouped({
               </h3>
               <p>{row.turnLabel}</p>
               <small>{row.reviewLabel || row.flowLabel}</small>
+              {row.model && <small className="tile-model" title={row.modelTitle}>{row.owner ? row.owner + " · " : ""}{row.model}{row.effort ? " · " + row.effort : ""}</small>}
             </article>
           ))}
         </section>

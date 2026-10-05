@@ -35,7 +35,7 @@ export function cardForms(c) {
       select("status", "카드 상태", c.status, [
         ["draft", "초안"],
         ["ready", "발령 가능"],
-        ["assigned", "배정"],
+        ["assigned", "배정됨"],
         ["hold", "보류"],
         ["done", "완료"],
         ["cancelled", "취소"],

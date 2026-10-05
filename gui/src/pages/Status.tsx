@@ -3,10 +3,12 @@ import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time } from "../ui";
 import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
+import { bandChips, liveLabel, type FlowSummary, type LiveSession, type OpenAlerts } from "../status-band";
 
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
+  live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml: string}[];
   watchHtml: string;
   resources: {current: {memory: string; freePercent: number | null; swapUsed: number | null; load5: number | null}; ncpu: number | null} | null;
@@ -91,21 +93,32 @@ export default function Status({url}: {url: URL}) {
     <nav className="inline-nav" aria-label="현황 상세"><a href="#sessions">담당자 상태</a></nav>
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
     {!data ? <Loading/> : <>
-      <div className="st-band" role="group" aria-label="지금 내가 볼 것">
-        <a className="st-chip st-c-decision" href="#status-decisions"><span className="st-num">{data.decisions?.length ?? "모름"}</span><span className="st-lbl">내 결정 대기</span></a>
-        <a className="st-chip st-c-attn" href="#status-attention"><span className="st-num">{stoppedCount}</span><span className="st-lbl">멈춘 것</span></a>
-        <a className="st-chip st-c-run" href="#status-executing"><span className="st-num">{bucket("running").length}</span><span className="st-lbl">작업 중</span></a>
+      <div className="st-band" role="group" aria-label="지금 내가 볼 것 · 다섯 질문">
+        {bandChips({decisions: data.decisions?.length ?? null, stopped: stoppedCount, running: bucket("running").length, alerts: data.alerts, flow: data.flow, live: data.live}).map(chip =>
+          <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
         {[["#status-waiting",bucket("waiting").length,"결과 대기"],["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
       </p>
+      <ul id="status-live" className="st-live" aria-label="살아 있는 담당과 모델">
+        {data.live === null ? <li className="st-live-row"><small>세션 상태 모름</small></li>
+          : data.live.length === 0 ? <li className="st-live-row"><small>열린 담당 창이 없습니다.</small></li>
+          : data.live.map(s => <li key={s.role} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small></li>)}
+        <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
+      </ul>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>
         {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
       </section>
       <section id="status-attention" className="st-section">
-        <header className="st-sec-head"><h2>멈춘 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미정리는 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
+        <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미정리는 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
         {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">멈춘 카드가 없습니다.</p>}
+        {data.alerts === null ? <p className="st-error" role="alert">감시 경보를 읽지 못했습니다(원장 확인 불가).</p>
+          : data.alerts.count > 0 && <details className="st-fold" open={data.alerts.count <= 5}><summary>해소 전 감시 경보 {data.alerts.count}건</summary><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.map(a => <li key={a.id} className="st-alert-row"><strong>{a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>)}</ul></details>}
+      </section>
+      <section id="status-flow" className="st-section">
+        <header className="st-sec-head"><h2>흐름 확인</h2><span className={"st-cnt" + (data.flow.unconfirmed.length ? " st-cnt-attn" : "")}>{data.flow.unconfirmed.length}건</span><span className="st-hint">티키타카 묶음 {data.flow.total}개 중 라운드·구현·검수 연결이 깨져 집계되지 않는 묶음입니다. 감독이 카드의 묶음 번호·단계를 고치면 빠집니다.</span></header>
+        {data.flow.unconfirmed.length ? <ul className="st-flow-list">{data.flow.unconfirmed.map(f => <li key={f.id} className="st-flow-row"><strong>{f.title}</strong> · {f.label}{f.warnings.length > 0 && <small>{f.warnings.join(" ")}</small>}</li>)}</ul> : <p className="st-empty">{data.flow.total ? "모든 묶음이 흐름대로 연결돼 있습니다." : "티키타카 묶음이 없습니다."}</p>}
       </section>
       <DocumentContent html={data.watchHtml}/>
       {section("status-executing","작업 중인 카드","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다.")}
