@@ -1588,11 +1588,27 @@ function cmdPlan(argv, flags = {}) {
   console.log(`계획됨: 판=${board}${about ? ` 설명=${about}` : ""} 카드=${shown}`);
 }
 
+// --from-screen --wait <초>: 완료 편지가 화면 마커보다 먼저 도착하는 구조(응답 중간의 send, 응답 마지막 줄의 마커)라
+// 감독이 바로 확정하면 종료코드 3이 나고 15분 뒤 완료후보로 다시 깨어난다(2026-10-05 점검 보고서 1-H1).
+// 프로그램이 짧은 간격으로 화면만 다시 읽는 유한 대기다. 시간이 다 되면 종료코드 3은 그대로이며 완료후보 감시도 그대로다.
+export function waitScreenDone({ readScreen, entries, role, taskId, cards, waitMs = 0, intervalMs = 2000, sleep = (ms) => sleepMs(ms), now = Date.now }) {
+  const deadline = now() + Math.max(0, waitMs);
+  let found = screenDoneResult({ text: readScreen(), entries, role, taskId, cards }), reads = 1;
+  while (!found.result && now() < deadline) {
+    sleep(Math.min(intervalMs, Math.max(0, deadline - now())));
+    found = screenDoneResult({ text: readScreen(), entries, role, taskId, cards }); reads++;
+  }
+  return { ...found, reads };
+}
+function sleepMs(ms) { if (ms > 0) spawnSync("sleep", [String(ms / 1000)]); }
+
 function cmdDone(argv, flags = {}) {
   const [role, taskId, given, ...extra] = argv;
   const closeCard = flags["close-card"] === true, fromScreen = flags["from-screen"] === true;
-  if (!role || !taskId || (fromScreen ? given : !given) || extra.length > 0 || (flags.note !== undefined && (!closeCard || typeof flags.note !== "string"))) {
-    die("사용법: kadan done <역할> <카드id> <ok|failed> | --from-screen [--close-card [--note <이유>]]", 2);
+  const waitSec = flags.wait === undefined ? 0 : Number(flags.wait);
+  if (!role || !taskId || (fromScreen ? given : !given) || extra.length > 0 || (flags.note !== undefined && (!closeCard || typeof flags.note !== "string"))
+    || (flags.wait !== undefined && (!fromScreen || !Number.isFinite(waitSec) || waitSec < 0 || waitSec > 600))) {
+    die("사용법: kadan done <역할> <카드id> <ok|failed> | --from-screen [--wait <초, 최대 600>] [--close-card [--note <이유>]]", 2);
   }
   let result = given;
   if (fromScreen) {
@@ -1600,9 +1616,11 @@ function cmdDone(argv, flags = {}) {
     const session = sessionName(role);
     if (!floor.alive(session)) die(`세션 없음: ${session}`, 2);
     const entries = readLedger();
-    const read = normalizeFloorRead(floor.read(session));
-    const found = screenDoneResult({ text: read.text, entries, role, taskId, cards: new CardStore(ledgerHome()).listSummaries() });
-    if (!found.result) die(`화면 완료 표시 없음: 역할=${role} 카드=${taskId}${found.dispatch ? "" : " (발령 기록 없음 — 화면 전체를 봄)"}`, 3);
+    const found = waitScreenDone({
+      readScreen: () => normalizeFloorRead(floor.read(session)).text,
+      entries, role, taskId, cards: new CardStore(ledgerHome()).listSummaries(), waitMs: waitSec * 1000,
+    });
+    if (!found.result) die(`화면 완료 표시 없음: 역할=${role} 카드=${taskId}${found.dispatch ? "" : " (발령 기록 없음 — 화면 전체를 봄)"}${waitSec ? ` (${waitSec}초 대기, 화면 ${found.reads}회 확인)` : ""}`, 3);
     result = found.result;
   }
   if (closeCard && result !== "ok") {
