@@ -1,5 +1,5 @@
 import {currentProgressReport} from './human-brief.mjs';
-const labels={draft:'초안',ready:'발령 가능',assigned:'배정',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',archived:'보관',running:'작업 중',waiting:'결과 대기',unknown:'진행 확인 필요'};
+const labels={draft:'초안',ready:'발령 가능',assigned:'배정됨',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',archived:'보관',running:'작업 중',waiting:'결과 대기',unknown:'진행 확인 필요'};
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const state=h=>h.status==='assigned'&&h.noteKind==='progress'&&h.activity?h.activity:h.status;
 export function statusChanges(card){

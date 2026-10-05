@@ -12,8 +12,8 @@
 | watch 생존 | `pgrep -x kadan-watch` | PID 0개 또는 2개 이상 |
 | 전체 계층 | `kadan tree` | 죽음, PID 변경, 완료 없는 오래된 카드 |
 | 역할 생존 | `kadan status` | 세션 소실, `PID변경`, 예상 밖 역할 |
-| 자원 | `memory_pressure -Q` | watch가 보고한 warning·critical과 원문 불일치 |
-| 자원 | `sysctl vm.swapusage` | watch가 보고한 스왑 연속 증가 |
+| 자원 | `memory_pressure -Q` | warning·critical. watch는 자원을 보고하지 않으므로 대시보드 자원 수치와 대조 |
+| 자원 | `sysctl vm.swapusage` | 스왑 연속 증가 (대시보드 자원 구역과 대조) |
 | 자원 | `sysctl -n vm.loadavg`와 `sysctl -n hw.ncpu` | 5분 평균이 CPU 수보다 큼 |
 | 미해결 이상 | `kadan read <수신자> --lines 30` | 알림은 있으나 조치·회복 증거 없음 |
 | 이력 | `kadan log` | 완료 통지와 현재 실행·결과·완료 기록의 불일치 |

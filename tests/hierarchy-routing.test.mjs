@@ -17,6 +17,9 @@ test('09-07 다른 접두사도 직속 감독, 감독은 슈퍼, 슈퍼는 사�
   assert.equal(routeAlert(alert('other-prefix-작업자'),{},['kadan-prod-슈퍼감독'],'옛-슈퍼',parents),'prod-슈퍼감독');
   assert.equal(routeAlert(alert('other-prefix-작업자'),{},[],'옛-슈퍼',parents),'@user');
   assert.equal(routeAlert({id:'stall:x',role:'legacy-작업자'},{legacy:'legacy-감독'},live,'옛-슈퍼',parents),'legacy-감독');
+  // 감시AI 호출 장애는 판정 도구의 문제라 작업자의 감독이 아니라 운영자(@user)에게 간다(2026-10-05 점검 보고서 2-M5).
+  assert.equal(routeAlert({id:'ai-call:prod-작업자:stall',kind:'감시AI오류',role:'prod-작업자'},{prod:'prod-감독'},live,'옛-슈퍼',parents),'@user');
+  assert.equal(routeAlert({id:'watch-ai:store',kind:'감시AI오류',role:'감시 보고 저장소'},{},live,'옛-슈퍼',parents),'@user');
 });
 test('09-07 순환과 누락된 상위를 잘못된 설정으로 거부한다', () => {
   for(const value of [null, [], {a:'a'}, {a:'b'}, {a:'b',b:'a'}, {a:42}, {'@user':'@user'}])

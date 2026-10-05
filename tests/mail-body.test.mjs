@@ -228,6 +228,10 @@ test("미리보기는 줄바꿈을 눕히고 한 줄로 자른다", () => {
   assert.equal(long.length, 101);
   assert.equal(long.endsWith("…"), true);
   assert.equal(mailPreview(undefined), "");
+  // 자동 첨부 지침 블록은 미리보기에서 빠진다 — 대시보드에 마크업이 그대로 보였다(2026-10-05)
+  const withBlock = "<!-- kadan:receiver-instructions -->\n\n## Why\n지침 본문\n\n<!-- /kadan:receiver-instructions -->\n\n실제 지시: card-1을 수행";
+  assert.equal(mailPreview(withBlock), "실제 지시: card-1을 수행");
+  assert.equal(mailPreview("앞 지시\n<!-- kadan:receiver-instructions -->\n닫히지 않은 블록"), "앞 지시");
 });
 
 test("우편함은 미리보기를 함께 넘긴다 — 본문이 없으면 본문 칸도 없다", () => {

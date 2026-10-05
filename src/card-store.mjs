@@ -95,12 +95,23 @@ export class CardStore {
   // 담당 역할 계산(원장 전체 + 카드 목록)은 쓰기 잠금 밖에서 먼저 한다. 키·ID만 쓰므로 본문 없는 요약 목록이면 된다
   // (2026-09-24 실측: 잠금 안에서 모든 카드 본문까지 읽어 카드 기록이 잠금을 0.7~1초 쥐었다).
   #roleOf(key){return prepareOutsideLock(this.home,()=>effectiveCardRole(this.get(key),readLedger(this.home),this.listSummaries()));}
+  // 진행 보고(activity)와 결과 등록은 뒤에 붙는 사건이라 revision 자체보다 "발령 조건"이 그대로인지가 중요하다.
+  // 감독이 메모 한 줄만 남겨도 작업자의 시작 기록이 막히던 것(2026-10-05 점검)을 풀되, 범위·담당·상태·묶음이
+  // 바뀐 뒤의 옛 보고는 지금처럼 거절한다(옛 범위의 결과가 지문까지 고정돼 붙는 것을 막는다).
+  #dispatchFingerprint(e){return JSON.stringify(['status','scope','board','role','workType','rallyId','rallyRound','rallyStep'].map(k=>e?.[k]??null));}
+  #assertRevision(current,revision,{appendOnly=false}={}){
+    if(Number(revision)===current.revision)return;
+    const seen=appendOnly?current.history.find(e=>e.revision===Number(revision)):null;
+    if(seen&&this.#dispatchFingerprint(seen)===this.#dispatchFingerprint(current))return;
+    throw new Error(seen?'카드가 변경됨: 범위·담당·상태·묶음이 바뀌었다. 새로 읽고 다시 저장':'카드가 변경됨: 새로 읽고 다시 저장');
+  }
   update(key,patch,{revision,by='사람',noteKind='decision',note,manual=false}={}) {
     const role=this.#roleOf(key);
     return this.locked(()=>{
       const current=this.get(key);
       current.role=role();
-      if(Number(revision)!==current.revision)throw new Error('카드가 변경됨: 새로 읽고 다시 저장');
+      const activityOnly=Object.keys(patch).length===1&&Object.hasOwn(patch,'activity');
+      this.#assertRevision(current,revision,{appendOnly:activityOnly});
       if(!note?.trim())throw new Error('변경 이유/질문/답변을 적어야 한다');
       if(!['decision','question','answer','progress'].includes(noteKind))throw new Error('잘못된 기록 종류');
       const allowed=new Set(['title','status','scope','board','role','activity','workType','resolutionOwner','nextAction','statusReason','rallyId','rallyTitle','rallyRound','rallyStep','replacedBy','turnOwner']);
@@ -182,7 +193,7 @@ export class CardStore {
   report(key,{revision,resultFile,outcome,by='사람'}={}) {
     return this.locked(()=>{
       const card=this.get(key);
-      if(Number(revision)!==card.revision)throw new Error('카드가 변경됨: 새로 읽고 다시 저장');
+      this.#assertRevision(card,revision,{appendOnly:true});
       if(!['implemented','pass','changes','exception','ok','failed'].includes(outcome))throw new Error('결과 판정은 implemented|pass|changes|exception|ok|failed');
       const file=this.resultLocation(key,resultFile);
       if(!(card.resultPath?fs.lstatSync(file):fs.statSync(file)).isFile())throw new Error('결과 경로는 일반 파일이어야 합니다');

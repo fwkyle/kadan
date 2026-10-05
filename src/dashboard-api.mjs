@@ -57,6 +57,7 @@ import {
 } from "./runner-settings.mjs";
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
+import { liveSessions, flowSummary, openAlerts } from "./dashboard-band.mjs";
 
 const modelCache = new WeakMap();
 const executionModelCache = new WeakMap();
@@ -516,6 +517,10 @@ export function dashboardData(snapshot, url) {
       decisions: snapshot.decisionError
         ? null
         : (snapshot.decisions || []).filter((d) => d.status === "open"),
+      // 상단 띠의 나머지 세 질문. 세션 상태·원장을 모르면 null이다(dashboard-band.mjs).
+      live: liveSessions(snapshot.center),
+      flow: flowSummary(m.reviewFlows),
+      alerts: snapshot.ledgerLines === null ? null : openAlerts(snapshot.entries || []),
       recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),
       recent: recent
         .slice(0, 50)
@@ -652,6 +657,7 @@ export function dashboardData(snapshot, url) {
         ["카드 상태", stateText[c.status] || c.status],
         ["실행 상태", row.healthLabel],
         ["담당", c.role],
+        ["실행 모델", row.modelTitle || null],
         ["마지막 보고", row.reportLabel],
         ["카드 ID", c.key],
         ["원본 제목", c.title],

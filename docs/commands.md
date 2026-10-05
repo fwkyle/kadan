@@ -37,7 +37,7 @@
 | `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden` |
 | `kadan send <역할> <메시지>` | 생존 확인 뒤 입력창에 넣는다. 원장에 영수증을 남긴다 | `--task <카드id>`(작업 발령), `--work`·`--execution`(우편 연결), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--raw` |
 | `kadan wait <역할>` | 완료 마커(DONE)나 조용함을 보고한다. 판정하지 않는다 | `--timeout 초`, `--quiet 초`, `--interval 초` |
-| `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다. 한 번 발령으로 끝나는 카드는 `--close-card`로 카드도 함께 닫는다([카드 닫기](card-center.md#실행-완료와-카드-닫기)) | `--from-screen`(결과 대신 작업자 화면의 DONE을 읽어 확정. 짧은 카드id·정식 주소·응답 머리표 `•`/`⏺` 모두 인정, 그 카드 마지막 발령 전부터 있던 마커는 제외. 없으면 기록·전송 없이 종료 코드 3), `--close-card`(ok 확정 뒤 카드 `done`, 실패해도 실행 완료 유지), `--note <이유>`(카드 기록 이유) |
+| `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다. 한 번 발령으로 끝나는 카드는 `--close-card`로 카드도 함께 닫는다([카드 닫기](card-center.md#실행-완료와-카드-닫기)) | `--from-screen`(결과 대신 작업자 화면의 DONE을 읽어 확정. 짧은 카드id·정식 주소·응답 머리표 `•`/`⏺` 모두 인정, 그 카드 마지막 발령 전부터 있던 마커는 제외. 없으면 기록·전송 없이 종료 코드 3), `--wait <초>`(`--from-screen`과 함께. 마커가 없으면 2초 간격으로 화면만 다시 읽는 유한 대기, 최대 600. 완료 편지가 마커보다 먼저 오는 경합용이며 시간이 다 되면 종료 코드 3 그대로), `--close-card`(ok 확정 뒤 카드 `done`, 실패해도 실행 완료 유지), `--note <이유>`(카드 기록 이유) |
 | `kadan read <역할>` | 화면 끝부분을 읽는다 | `--lines N` |
 | `kadan status` | 살아 있는 세션, 창 붙음 여부, PID 일치, 실행기·모델 | — |
 | `kadan attach <역할>` | 살아 있는 세션에 창을 하나 더 연다 | — |
@@ -79,13 +79,13 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
 | `kadan watch` | 정체·끊김·완료 후보를 감독에게 알리는 감시를 돌린다 | [감시 기준](watch-overview.md), [제한 재개](rate-limit-retry.md), [책임 관계](hierarchy.md) |
-| `kadan watch-report <호출ID>` | 감시 AI가 판정 결과를 돌려준다 | `--verdict 진행중\|입력대기\|실행완료\|응답장애\|정체\|모름\|조정 --reason <이유>` |
+| `kadan watch-report <호출ID>` | 감시 AI가 판정 결과를 돌려준다 | `--verdict 진행중\|입력대기\|실행완료\|응답장애\|정체\|모름\|조정 --reason <이유>` (`죽음`은 옛 규약 호환으로 받되 새 보고에서는 거절) |
 
 ## 업무·카드·결정
 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
-| `kadan work` | 결과 중심 업무 한 장과 그 안의 실행. `create`·`list`·`show`·`update`·`execute`·`link`/`unlink`·`mail`·`complete`/`cancel`·`reopen` | [업무 카드와 실행](business-work.md) |
+| `kadan work` | 결과 중심 업무 한 장과 그 안의 실행. `create`·`list`·`show`·`update`·`execute`(`--assign <역할> [--dispatch "<지시>"]`로 생성·배정·묶음·plan·전송을 한 번에)·`link`/`unlink`·`mail`·`complete`/`cancel`·`reopen` | [업무 카드와 실행](business-work.md) |
 | `kadan work auto-*` | 구현·검수 자동 전달. `auto-configure`·`auto-show`·`auto-run`·`auto-report` 등 | [자동 전달](automatic-review.md) |
 | `kadan card` | 중앙 카드. `list`·`show`·`create`·`update`·`note`·`brief`·`progress`·`report`·`link` 등 | [중앙 카드](card-center.md) |
 | `kadan decision` | 사용자 결정 요청. `request`·`list`·`show`·`answer`·`cancel` | [결정 기록](decisions.md) |

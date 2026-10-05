@@ -132,7 +132,7 @@ td small { display: block; margin-top: 2px; }
 .health::before { content: ""; display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #a0aba4; }
 .health.attention { color: #794e00; }
 .health.attention::before { background: #b68625; }
-.health.running::before { background: #22694d; }
+.health.running::before { background: #e68a27; }
 .health.waiting::before { background: #246a99; }
 .health.closed::before { background: #158064; }
 .health.hold::before { background: #a58a5c; }
@@ -162,6 +162,7 @@ td small { display: block; margin-top: 2px; }
 .work-tile { background: white; border: 1px solid #dfe6e0; border-radius: 8px; padding: 16px; margin-bottom: 10px; }
 .work-tile h3 { margin: 8px 0; }
 .work-tile p { color: var(--ds-color-muted); font-size: 13px; }
+.work-tile .tile-model { display: block; margin-top: 4px; color: var(--ds-color-muted); font-size: 11.5px; }
 .board-columns { display: flex; align-items: start; gap: 12px; overflow: auto; min-height: 0; }
 .board-column { flex: 1 0 245px; max-width: 350px; background: #eef3ef; padding: 12px; border-radius: 8px; }
 .board-column h2 { margin-top: 0; font-size: 13px; }
