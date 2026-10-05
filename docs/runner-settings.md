@@ -145,7 +145,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 ## 시니어
 
-시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 `scripts/senior.sh`가 `codex exec`로 한 번 돌린다(2026-10-05 [kyle] 승인). 슈퍼감독은 값싼 모델로 두고, 판단이 무거운 카드만 여기로 보낸다. 자세한 규칙은 [시니어](senior.md).
+시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 `scripts/senior.sh`가 `codex exec`로 한 번 돌린다(2026-10-05 [kyle] 승인). 슈퍼감독은 값싼 모델로 두고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 자세한 규칙은 [시니어](senior.md).
 
 - 설정: 활성 프리셋의 `roles.senior`. 명령은 `kadan runners set senior --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **시니어** 줄이다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음).
 - 실행기는 `codex`만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 적용한다.

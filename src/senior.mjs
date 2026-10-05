@@ -1,5 +1,5 @@
 // 시니어 — 감독이 카드 하나를 두고 고급 모델에게 한 번 묻는 일회성 호출(2026-10-05 [kyle] 승인).
-// 슈퍼감독은 값싼 모델로 돌리고, DB·데이터 변경·운영 영향·설계·방향 결정처럼 판단이 무거운 카드만 여기로 보낸다.
+// 슈퍼감독은 값싼 모델로 돌리고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 카드 완수를 위한 Claude Code 어드바이저와는 다른 기능이다.
 // 자문은 기록이지 결정이 아니다: 감독이 읽고 판단하거나 decision request로 사용자에게 올린다. 카드를 고치지 않는다.
 // 호출 방식은 감시 AI와 같다(scripts/senior.sh가 codex exec). 폴백은 없다 — 한 번 실패하면 실패로 끝낸다(fail closed).
 import fs from 'node:fs';
@@ -13,7 +13,7 @@ import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 
-export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] — 감독이 카드 하나를 두고 시니어(실행 모델 설정의 senior)에게 한 번 묻는다. 상세: docs/senior.md';
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
@@ -36,7 +36,7 @@ function readAttachment(file) {
 
 export function composeAdvicePrompt({question, card, attachments}) {
   return [
-    '당신은 시니어가다. 감독이 카드 하나를 두고 판단이 무거운 질문을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
+    '당신은 시니어다. 감독이 카드 하나의 작업 결과를 두고 결정할 부분을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
     '현재 작업 폴더가 그 카드의 저장소다(읽기 전용). 필요한 파일·이력은 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.',
     '답은 한국어로, 아래 네 칸을 이 순서로 짧게 쓴다.',
     '결론: 한 줄 — 권장안과 그 이유의 핵심.',

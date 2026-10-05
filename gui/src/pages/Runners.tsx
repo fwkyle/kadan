@@ -125,8 +125,8 @@ export default function Runners({ url }: { url: URL }) {
             KADAN_JUDGE_MODEL을 씁니다.
           </p>
           <p className="muted">
-            시니어는 감독이 <code>kadan senior</code>로 카드 하나를 두고 한 번 묻는 고급
-            모델입니다. 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
+            시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
+            의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
           </p>
           {Object.entries(data.roles).map(([role, label]) => (
             <details key={role}>
