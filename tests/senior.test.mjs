@@ -190,3 +190,18 @@ test('옛 설정 키 roles.advisor는 senior로 읽고, 그 값으로 시니어�
   const result = await f.run(['qa/card-a'], {question:'바꿀까?'}, {spawn:f.spawn()});
   assert.equal(result.model, 'gpt-old');
 });
+
+test('--effort는 이번 호출만 강도를 바꾸고(설정 그대로) 원장에 바꾼 사실을 남긴다, 모델이 지원하지 않는 강도·형식 오류는 호출 전에 거절', async () => {
+  const f = fixture();
+  const r = await f.run(['qa/card-a'], {question:'시험', effort:'low'}, {spawn:f.spawn(), readCodexModels});
+  assert.equal(r.effort, 'low');
+  assert.equal(f.calls[0].settings.env.KADAN_SENIOR_EFFORT, 'low');
+  const [entry] = f.advices();
+  assert.deepEqual([entry.effort, entry.effortOverride, entry.settingsEffort], ['low', true, 'high']);
+  assert.equal(readSettings(f.home).presets[readSettings(f.home).activePreset].roles.senior.effort, 'high', '설정은 바뀌지 않는다');
+  await assert.rejects(f.run(['qa/card-a'], {question:'시험', effort:'ultra'}, {spawn:f.spawn(), readCodexModels}), /지원하지 않는 강도: ultra/);
+  await assert.rejects(f.run(['qa/card-a'], {question:'시험', effort:'LOW;rm'}, {spawn:f.spawn(), readCodexModels}), /--effort 형식 오류/);
+  assert.equal(f.calls.length, 1); assert.equal(f.advices().length, 1);
+  const plain = await f.run(['qa/card-a'], {question:'시험'}, {spawn:f.spawn(), readCodexModels});
+  assert.equal(plain.effort, 'high'); assert.equal(f.advices().at(-1).effortOverride, undefined);
+});

@@ -7,13 +7,13 @@ import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {CardStore} from './card-store.mjs';
-import {readSettings} from './runner-settings.mjs';
+import {readSettings, runnerChoices} from './runner-settings.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 
-export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
@@ -26,6 +26,15 @@ const digest = text => createHash('sha256').update(text).digest('hex');
 
 // 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
 export const seniorCommandLabel = value => value ? `KADAN_SENIOR_MODEL=${value.model} KADAN_SENIOR_EFFORT=${value.effort ?? 'max'} senior.sh (codex exec, 저장소 읽기 전용)` : null;
+
+// 이번 호출의 강도. 형식이 맞아야 하고, 그 모델이 지원하는 강도 목록을 읽을 수 있으면 그 안이어야 한다.
+function checkEffort(settings, value, effort, readCodexModels) {
+  if (typeof effort !== 'string' || !/^[a-z]+$/.test(effort)) throw new Error(`--effort 형식 오류: ${effort}`);
+  let supported = null;
+  try { supported = runnerChoices(settings, value.runner, readCodexModels ? {readCodexModels} : undefined).get(value.model) ?? null; } catch { supported = null; }
+  if (supported && supported.length && !supported.includes(effort)) throw new Error(`${value.model}이 지원하지 않는 강도: ${effort} (가능: ${supported.join(', ')})`);
+  return effort;
+}
 
 function readAttachment(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error(`첨부는 절대경로여야 한다: ${file}`);
@@ -52,7 +61,7 @@ export function composeAdvicePrompt({question, card, attachments}) {
 }
 
 export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
-  script = DEFAULT_SCRIPT, now = Date.now, record = entry => appendLedger(entry, home), env = process.env}) {
+  script = DEFAULT_SCRIPT, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels}) {
   if (flags.help || !argv[0]) return SENIOR_USAGE;
   if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
@@ -64,8 +73,10 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   if (files.length > FILE_COUNT) throw new Error(`첨부는 ${FILE_COUNT}개까지`);
   assertWritable(home);
   const settings = read();
-  const value = settings?.presets?.[settings.activePreset]?.roles?.senior;
-  if (!value) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
+  const configured = settings?.presets?.[settings.activePreset]?.roles?.senior;
+  if (!configured) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
+  // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 비싼 모델을 시험할 때 low로 부르는 용도(2026-10-05 [kyle]).
+  const value = flags.effort == null ? configured : {...configured, effort: checkEffort(settings, configured, flags.effort, readCodexModels)};
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
   const attachments = files.map(file => ({file, text: readAttachment(file)}));
@@ -89,7 +100,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const reason = result.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1') ? 'timeout'
     : result.error || result.status !== 0 ? 'call-failed' : answer.trim() ? 'ok' : 'empty';
   const entry = {kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
-    model: value.model, effort: value.effort ?? 'max', settingsRevision: settings.revision, settingsPreset: settings.activePreset,
+    model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
     reason, exitCode: result.status ?? null, durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer),
     files: attachments.map(a => a.file), evidencePath: dir, t: new Date(started).toISOString()};
   record(entry);

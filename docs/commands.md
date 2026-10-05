@@ -89,7 +89,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | `kadan work auto-*` | 구현·검수 자동 전달. `auto-configure`·`auto-show`·`auto-run`·`auto-report` 등 | [자동 전달](automatic-review.md) |
 | `kadan card` | 중앙 카드. `list`·`show`·`create`·`update`·`note`·`brief`·`progress`·`report`·`link` 등 | [중앙 카드](card-center.md) |
 | `kadan decision` | 사용자 결정 요청. `request`·`list`·`show`·`answer`·`cancel` | [결정 기록](decisions.md) |
-| `kadan senior <카드키> --question <질문>` | 작업 결과에 결정할 부분이 있을 때 감독이 시니어(고급 모델)에게 의견을 한 번 묻는다. `--file <절대경로>`(5개·64KB까지), `--timeout <초>`(기본 1800) | [시니어](senior.md) |
+| `kadan senior <카드키> --question <질문>` | 작업 결과에 결정할 부분이 있을 때 감독이 시니어(고급 모델)에게 의견을 한 번 묻는다. `--file <절대경로>`(5개·64KB까지), `--timeout <초>`(기본 1800), `--effort <강도>`(이번 호출만, 실측 시험은 low) | [시니어](senior.md) |
 
 ## 우편
 
