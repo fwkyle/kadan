@@ -13,14 +13,14 @@ const starts=[...parents.keys()].map((role,i)=>({kind:'start',role,session:'kada
 const card={id:'t1',key:'repo/t1',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'};
 
 async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),sendNudge=null,read=()=>'frozen screen',
-  cards=[card],works=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
+  cards=[card],works=[],decisions=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
   const records=[],sent=[],printed=[],nudges=[];let minute=0;const controller=new AbortController();
   const entries=[...starts,...extra];
   await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,idleMs:15*60_000,
     parents,routes:new Map(),superRole:'p-슈퍼감독',
     now:()=>epoch+minute*60_000,
     floor:{list,read:s=>read(s,minute),alive},
-    readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,
+    readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,readDecisions:()=>decisions,
     sendAlert:(role,msg)=>sent.push([minute,role,msg]),
     sendNudge:(role,msg)=>{nudges.push([minute,role,msg]);return sendNudge?.(role,msg);},
     record:e=>{records.push({...e,minute});entries.push({...e,t:stamp(minute)});},
@@ -102,4 +102,19 @@ test('워크 owner가 인계된 옛 감독 이름이면 확정 인계를 따라 
   const none=await simulate({minutes:20,cards:[doneCard],works:[work],
     entries:[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)}]});
   assert.deepEqual(none.nudges,[],'인계 기록이 없고 관계표에 없는 owner면 할 일로 세지 않는다');
+});
+
+test('사용자 결정을 기다리는 감독은 놀고 있음에서 뺀다: 결정이 열려 있으면 그 감독은 깨우지도 올리지도 않고, 닫히면 다시 판정한다',async()=>{
+  const open={id:'d1',card:'repo/t1',requestedBy:'p-슈퍼감독',status:'open',at:stamp(0)};
+  const waiting=await simulate({minutes:40,decisions:[open]});
+  assert.deepEqual(waiting.nudges.map(([m,r])=>[m,r]),[[15,'p-감독']],'결정을 기다리는 슈퍼감독은 본인 알림이 없다');
+  const idle=waiting.alerts.filter(a=>a.alertKind==='놀고 있음');
+  assert.ok(!idle.some(a=>a.role==='p-슈퍼감독'),'슈퍼감독 놀고 있음 경보 없음');
+  assert.ok(!idle.some(a=>a.recipient==='@user'),'사용자 OS 알림도 없다');
+  // 아래 감독은 그대로 판정된다(자기 할 일이 있으면 본인 → 상위).
+  assert.deepEqual(idle.filter(a=>a.role==='p-감독').map(a=>[a.minute,a.recipient]),[[15,'p-감독'],[30,'p-슈퍼감독']]);
+  const answered=await simulate({minutes:40,decisions:[{...open,status:'answered'}]});
+  assert.deepEqual(answered.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'답한 결정은 대기가 아니다');
+  const broken=await simulate({minutes:20,decisions:null});
+  assert.deepEqual(broken.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정 목록을 못 읽으면 아무도 빼지 않는다');
 });

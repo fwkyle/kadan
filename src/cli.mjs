@@ -17,7 +17,7 @@ import {composeMailInstructions} from './mail-instructions.mjs';
 import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
 import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
-import {decisionCommand} from "./decisions.mjs";
+import {decisionCommand, DecisionStore} from "./decisions.mjs";
 import {seniorCommand} from "./senior.mjs";
 import {runnersCommand} from "./runners-command.mjs";
 import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
@@ -1847,6 +1847,7 @@ function cmdWatch(argv, flags) {
     readEntries: reads.readEntries,
     readCards: reads.readCards,
     readWorks: reads.readWorks,
+    readDecisions: () => new DecisionStore(ledgerHome()).list(),
     reads,
     startReportGraceMs: startReportMinutes*60_000,
     completionGraceMs: completionGraceMinutes*60_000,
