@@ -96,7 +96,7 @@ export default function StrategyMap() {
     <ErrorMessage error={resource.error} /><Freshness collectedAt={data?.collectedAt} {...resource} />
     {!data || !map ? <Loading /> : <>
       <p className="sm-totals" role="group" aria-label="지도 요약">
-        <span><b>{map.totals.units}</b> 유닛</span>
+        <span><b>{map.totals.units - (showResting ? 0 : resting)}</b> 유닛{!showResting && resting > 0 ? ` · 쉬는 ${resting} 숨김` : ""}</span>
         <span className={tone(map.totals.running, "sm-t-running")}><b>{map.totals.running}</b> 작업 중 상자</span>
         <span className={tone(map.totals.stuck, "sm-t-stuck")}><b>{map.totals.stuck}</b> 막힌 상자</span>
         <span><b>{map.totals.stale}</b> 오래된 미정리 상자</span>
