@@ -59,8 +59,8 @@ test('발령 사실과 마지막 보고 경과 시간은 큐 여부와 분리하
 test('작업 중과 결과 대기는 마지막 보고 시각을 함께 표시한다',async()=>{
  const {progressLabel}=await import('../src/human-brief.mjs');
  const card={role:'worker',activity:'running',displayState:'running',activityAt:'2026-09-07T00:00:00Z',activityRole:'worker',runs:[{role:'worker',sentAt:'2026-09-06T23:00:00Z'}],history:[]};
- assert.equal(progressLabel(card,Date.parse('2026-09-07T00:32:00Z')),'작업 중 · 마지막 보고 32분 전');
- assert.equal(progressLabel({...card,displayState:'waiting'},Date.parse('2026-09-08T00:00:00Z')),'결과 대기 · 마지막 보고 1일 전');
+ assert.equal(progressLabel(card,Date.parse('2026-09-07T00:32:00Z')),'작업중 · 마지막 보고 32분 전');
+ assert.equal(progressLabel({...card,displayState:'waiting'},Date.parse('2026-09-08T00:00:00Z')),'작업중 · 마지막 보고 1일 전');
 });
 test('감독 조율은 막대와 남은 일에서 제외하지만 관리 기록은 보존하며 감독 독립 작업은 센다',async()=>{
  const {boardProgressCounts}=await import('../src/board-progress.mjs');
@@ -75,7 +75,7 @@ test('감독 조율은 막대와 남은 일에서 제외하지만 관리 기록�
  const html=renderDashboardHome({center:snapshot,briefs});assert.match(html,/남은 실행 작업 2개/);assert.match(html,/관리 기록 1장/);
  const current=html.slice(html.indexOf('class="current-work"'),html.indexOf('<h3>남은 실행'));
  assert.ok(!current.includes('사진 검수 조율'));assert.ok(current.includes('사진 기능 검수'));assert.ok(current.includes('정책 설계'));assert.match(current,/현재 담당: reviewer/);
- const {total,counts}=boardProgressCounts(b);assert.equal(total,2);assert.equal(counts.waiting,0);assert.equal(counts.running,2);
+ const {total,counts}=boardProgressCounts(b);assert.equal(total,2);assert.equal(counts.waiting,undefined);assert.equal(counts.running,2);
 });
 test('카드 종류 저장은 담당이나 실행 상태를 바꾸지 않고 잘못된 값은 거부한다',()=>{
  const {home,store,card}=setup();const updated=cardCommand(['update',card.key],{revision:card.revision,'work-type':'coordination',note:'감독 조율 기록 분리'},{home,by:'비서'});
@@ -176,7 +176,9 @@ test('F1: 발령 후 중앙 이관·배정된 카드의 유효한 결과 대기 
  const card=buildCardCenter({cards:[source],entries:[{kind:'send',role:'worker',taskId:source.id,t:sent}],tree:[{roles:[{role:'worker',life:{state:'alive',pidState:'match'}}]}],now}).cards[0];
  assert.equal(card.displayState,'waiting');assert.equal(currentProgressReport(card,now).at,reportedAt);
  assert.equal(new Scribe().summarize(card,null,now).evidenceAt,reportedAt);assert.equal(statusContext(card).displayEvidence.at,reportedAt);
- assert.equal(progressLabel(card,now),'결과 대기 · 마지막 보고 1시간 0분 전');
+ assert.equal(progressLabel(card,now),'작업중 · 마지막 보고 1시간 0분 전');
+ // 상세에서만 결과 대기 보고의 이유를 붙인다(2026-10-05 [kyle]).
+ assert.equal(progressLabel(card,now,{detail:true}),'작업중 · 결과 대기 보고 기다림 · 마지막 보고 1시간 0분 전');
  const beforeAssignment={...card,activityAt:'2026-09-06T16:00:00Z',history:[assigned,report({at:'2026-09-06T16:00:00Z'})]};
  assert.equal(currentProgressReport(beforeAssignment,now).at,null);assert.equal(currentProgressReport(beforeAssignment,now).reason,'before-assignment');
  const atAssignment={...card,activityAt:assignedAt,history:[assigned,report({at:assignedAt})]};

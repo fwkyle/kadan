@@ -19,7 +19,7 @@ test('상태 이유는 일반 메모로 덮이지 않고 다음 전환에서 후
  c=store.update(c.key,{status:'cancelled'},{revision:c.revision,note:'새 카드로 인계 완료'});
  assert.equal(c.nextAction,null);assert.equal(c.resolutionOwner,null);
  assert.deepEqual(statusChanges(c).map(x=>x.to),['draft','hold','cancelled']);
- assert.match(renderStatusHistory(c),/보류 → 취소/);
+ assert.match(renderStatusHistory(c),/일시정지 → 취소/);
 });
 test('보류 누락은 감독 확인이며 실제 열린 결정만 사용자 답변 대상으로 표시한다',()=>{
  const c={key:'test/a',status:'hold',history:[]};

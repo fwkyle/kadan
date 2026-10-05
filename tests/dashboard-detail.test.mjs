@@ -33,7 +33,7 @@ test('실제 카드 내용으로 항목을 만들고 다른 카드 시안의 숫
 });
 test('최근 기록은 시각순이며 완료 기록자의 모름과 원문 및 상태 전환을 보존한다',()=>{
  const events=detailEvents({history:[{revision:1,at:'2020-01-01',status:'draft',note:'생성'},{revision:2,at:'2020-01-03',status:'hold',by:'감독',note:'원본\n이유'}],runs:[{sentAt:'2020-01-02',at:'2020-01-04',state:'done',role:'작업자',by:'발령자',result:'ok'}]});
- assert.deepEqual(events.map(x=>x.at),['2020-01-04','2020-01-03','2020-01-02','2020-01-01']);assert.equal(events[0].by,null);assert.equal(events[2].byLabel,'발령자');assert.equal(events[1].note,'원본\n이유');assert.match(events[1].transition,/초안 → 보류/);
+ assert.deepEqual(events.map(x=>x.at),['2020-01-04','2020-01-03','2020-01-02','2020-01-01']);assert.equal(events[0].by,null);assert.equal(events[2].byLabel,'발령자');assert.equal(events[1].note,'원본\n이유');assert.match(events[1].transition,/초안 → 일시정지/);
 });
 test('완료한 카드도 없는 검수와 다음 행동을 추정하지 않는다',()=>{
  const html=renderDetailSummary({status:'done',displayState:'done',scope:'실측 1개만',history:[]},{report:{state:'unknown'}});

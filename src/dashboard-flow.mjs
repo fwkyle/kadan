@@ -29,7 +29,7 @@ function groupFlow(g) {
  let phase='흐름 확인 필요',next='연결된 카드의 상태를 확인하세요.',tone='unknown';
  if(warnings.length){next=warnings.join(' · ');}
  else if(g.done){phase='구현·검수 완료 기록';next='결과·검수 탭에서 실제 완료 범위를 확인하세요.';tone='done';}
- else if(g.closed){phase='묶음 종료';next='취소·대체·보관된 카드의 기록을 확인하세요.';}
+ else if(g.closed){phase='묶음 종료';next='취소·대체·보류된 카드의 기록을 확인하세요.';}
  else if(!g.round){phase='관련 조사';next='구현·독립검수 라운드는 아직 연결되지 않았습니다.';}
  else if(work.length===1&&review.length===1&&current.every(c=>c.displayState==='done')){phase='구현·검수 끝 · 관련 조사 남음';next='함께 연결된 조사 카드의 결과 확인';tone='waiting';}
  else if(working.some(c=>c.displayState==='running')&&reviewing.some(c=>c.displayState==='running')){phase='구현·검수 병행';next='각 카드의 현재 차례를 확인하세요.';tone='running';}

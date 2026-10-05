@@ -14,7 +14,8 @@ type StatusData = Stamp & {
 const KIND_LABEL = { super: "슈퍼감독", director: "감독", worker: "작업자·검수자" } as const;
 const SLAB = 10, HEAD_ROOM = 86, FOOT_ROOM = 44, GAP = 56, COLS = 4;
 const DEPOT = "\u0000창고"; // 선택 상태에서 창고를 역할 이름과 구분하는 키
-const BUCKET_LABEL: Record<string, string> = { planned: "발령 전", hold: "보류" };
+// 묶음 이름은 서버 bucketGroups와 같다(2026-10-05 [kyle]).
+const BUCKET_LABEL: Record<string, string> = { planned: "진행 전", hold: "일시정지" };
 
 function platform(width: number, depth: number) {
   const c = (x: number, y: number) => { const p = iso(x, y); return `${p.x},${p.y}`; };
@@ -72,7 +73,7 @@ function UnitFigure({ unit, x, y, base, selected, onSelect }: { unit: Unit; x: n
   </g>;
 }
 
-// 발령 전 창고: 담당이 아직 없는 실행. 발령 전·보류로 나눠 보이고, 많으면 40장씩 더 본다.
+// 발령 전 창고: 담당이 아직 없는 실행. 진행 전·일시정지로 나눠 보이고, 많으면 40장씩 더 본다.
 function Depot({ rows, close }: { rows: Row[]; close: () => void }) {
   const [limit, setLimit] = useState(40);
   const groups = ["planned", "hold"].map((b) => [b, rows.filter((r) => r.bucket === b)] as const)
@@ -146,10 +147,10 @@ export default function StrategyMap() {
                 <text className="sm-base-label" x={(box.left + box.right) / 2} y={box.bottom + 24}>{base.label} · 유닛 {placement.placed.length}{placement.placed.length < base.units.length ? ` (쉬는 ${base.units.length - placement.placed.length})` : ""}</text>
               </g>)}
               {map.depot > 0 && <g className={"sm-depot" + (selected === DEPOT ? " sm-selected" : "")} transform={`translate(${depotX} ${HEAD_ROOM + TILE_H})`}
-                role="button" tabIndex={0} aria-pressed={selected === DEPOT} aria-label={`발령 전 창고 · 담당이 아직 없는 실행(초안·보류) ${map.depot}건`}
+                role="button" tabIndex={0} aria-pressed={selected === DEPOT} aria-label={`발령 전 창고 · 담당이 아직 없는 실행(진행 전·일시정지) ${map.depot}건`}
                 onClick={() => setSelected(selected === DEPOT ? null : DEPOT)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(selected === DEPOT ? null : DEPOT); } }}>
-                <title>{`담당이 아직 없는 실행(초안·보류) ${map.depot}건`}</title>
+                <title>{`담당이 아직 없는 실행(진행 전·일시정지) ${map.depot}건`}</title>
                 <ellipse className="sm-hit" cx={0} cy={6} rx={44} ry={34} />
                 {selected === DEPOT && <ellipse className="sm-ring" cx={0} cy={10} rx={30} ry={13} />}
                 {[0, 1, 2, 3, 4].map((i) => <Crate key={i} x={(i % 3) * 13 - 13} y={-Math.floor(i / 3) * 11 + (i % 3) * 5} kind="planned" />)}

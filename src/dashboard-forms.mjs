@@ -1,5 +1,6 @@
 // Forms describe existing commands. Validation and writes stay in createCenterHandler.
 import { workPhases } from "./work-store.mjs";
+import { statusLabel } from "./status-labels.mjs";
 const field = (
   name,
   label,
@@ -32,16 +33,13 @@ export function cardForms(c) {
       field("turnOwner", "현재 차례 (바꿀 때 입력)"),
       note(),
       field("title", "제목", c.title, "text", null, true),
-      select("status", "카드 상태", c.status, [
-        ["draft", "초안"],
-        ["ready", "발령 가능"],
-        ["assigned", "배정됨"],
-        ["hold", "보류"],
-        ["done", "완료"],
-        ["cancelled", "취소"],
-        ["superseded", "대체됨"],
-        ["archived", "보관"],
-      ]),
+      // 상태 이름은 status-labels 한 곳에서 가져온다(2026-10-05 [kyle]).
+      select(
+        "status",
+        "카드 상태",
+        c.status,
+        ["draft", "ready", "archived", "assigned", "hold", "done", "cancelled", "superseded"].map((s) => [s, statusLabel(s)]),
+      ),
       text("statusReason", "현재 상태 이유"),
       field("replacedBy", "대체된 후속 카드", c.replacedBy),
       field("resolutionOwner", "후속 담당", c.resolutionOwner),

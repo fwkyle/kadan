@@ -5,6 +5,7 @@ import {
   currentProgressReport,
   stateText,
   isExecution,
+  waitingText,
 } from "./human-brief.mjs";
 import {
   workspaceModel,
@@ -691,7 +692,8 @@ export function dashboardData(snapshot, url) {
       }),
       facts: [
         ["카드 상태", stateText[c.status] || c.status],
-        ["실행 상태", row.healthLabel],
+        // 결과 대기는 상세에서만 기다리는 이유를 붙인다(2026-10-05 [kyle]).
+        ["실행 상태", row.healthKind === "waiting" ? waitingText(c) : row.healthLabel],
         ["담당", c.role],
         ["실행 모델", row.modelTitle || null],
         ["마지막 보고", row.reportLabel],

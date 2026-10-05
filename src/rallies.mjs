@@ -1,8 +1,10 @@
 import {progressGroup,progressGroups} from './board-progress.mjs';
+import {statusLabel} from './status-labels.mjs';
 const end=c=>['done','cancelled','superseded','archived'].includes(c.displayState);
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const steps={implementation:'구현',fix:'수정',review:'검수',research:'관련 조사'};
-const stateName={done:'완료',running:'작업 중',waiting:'결과 대기',hold:'보류',failed:'실패',check:'확인 필요',planned:'발령 전',closed:'취소·보관'};
+// 막대 묶음 이름은 진행 막대(progressGroups)와 같다. 결과 대기 묶음은 작업중으로 센다(2026-10-05 [kyle]).
+const stateName={...Object.fromEntries(progressGroups.map(([key,label])=>[key,label])),waiting:statusLabel('waiting')};
 export function buildRallies(cards){
  const map=new Map();
  for(const c of cards){if(!c.rallyId||c.workType==='coordination')continue;const key=JSON.stringify([c.repo,c.board,c.rallyId]);if(!map.has(key))map.set(key,{key,id:c.rallyId,title:c.rallyTitle,cards:[]});map.get(key).cards.push(c);}
@@ -27,7 +29,7 @@ export function buildRallies(cards){
 }
 export function renderRallies(cards,{now=Date.now()}={}){
  const groups=buildRallies(cards);if(!groups.length)return '';
- const counts={};for(const g of groups)counts[g.state]=(counts[g.state]||0)+1;
+ const counts={};for(const g of groups){const key=g.state==='waiting'?'running':g.state;counts[key]=(counts[key]||0)+1;}
  const timeline=g=>g.rounds.map(n=>`<li><strong>${n}라운드</strong> ${g.cards.filter(c=>Number(c.rallyRound)===n&&c.rallyStep!=='research').sort((a,b)=>Number(a.rallyStep==='review')-Number(b.rallyStep==='review')).map(c=>cardLink(c)).join(' → ')}</li>`).join('');
  const cardLink=c=>`<a href="?card=${encodeURIComponent(c.key)}#detail">${e(steps[c.rallyStep])}: ${e(stateName[progressGroup(c.displayState)])}</a>`;
  return `<section class="rally-section"><h3>작업별 티키타카 · ${groups.filter(g=>!g.closed).length}개 남음</h3><p class="muted">완료 ${counts.done||0}/${groups.length}묶음 · 연결 카드 ${groups.reduce((n,g)=>n+g.cards.length,0)}장. 구현·검수 각각이 한 턴이며, 1라운드는 두 턴의 왕복입니다.</p><div class="progress-track" role="img" aria-label="티키타카 ${groups.length}묶음 중 ${counts.done||0}개 완료">${progressGroups.filter(([k])=>counts[k]).map(([k,label,color])=>`<span style="width:${counts[k]/groups.length*100}%;background:${color}" title="${label} ${counts[k]}묶음"></span>`).join('')}</div><div class="rally-table-wrap"><table class="rally-table"><thead><tr><th scope="col">작업 · 카드 이력</th><th scope="col">라운드</th><th scope="col">상태</th><th scope="col">현재 담당 · 진행</th></tr></thead><tbody>${groups.sort((a,b)=>Number(a.done)-Number(b.done)||a.title.localeCompare(b.title)).map(g=>{

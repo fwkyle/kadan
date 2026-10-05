@@ -22,7 +22,7 @@ export function failureReason(c){
  const reason=plainLine(pick||c.history?.at?.(-1)?.note||c.statusReason||'');
  return reason.length>150?reason.slice(0,150)+'…':reason;
 }
-const askSupervisor=(c,reason)=>`[대시보드 확인 요청] 카드 ${c.key} 실행이 '${c.healthLabel||'확인 필요'}'로 멈춰 있고 카드는 아직 ${c.status||'열린'} 상태입니다.${reason?` 이유(결과 파일): ${reason}`:''} 다시 시도·후속 카드로 대체·취소·보류 중 어떻게 정리할지 정해 주세요.`;
+const askSupervisor=(c,reason)=>`[대시보드 확인 요청] 카드 ${c.key} 실행이 '${c.healthLabel||'확인 필요'}'로 멈춰 있고 카드는 아직 ${c.status||'열린'} 상태입니다.${reason?` 이유(결과 파일): ${reason}`:''} 다시 시도·후속 카드로 대체·취소·일시정지 중 어떻게 정리할지 정해 주세요.`;
 function executionCard(c){
  const attention=c.healthKind==='attention',reason=attention?failureReason(c):'';
  return `<article class="${attention?'st-attn-card':'st-work'}"><div class="st-attn-head">${renderExecutionHealth(c)}<strong>${link(c)}</strong></div><p>${e(c.healthReason)}</p>${reason?`<p class="st-attn-reason"><strong>이유</strong> ${e(reason)}</p>`:''}<p class="st-attn-meta">담당 ${e(c.role||'미배정')} · ${e(c.board||'판 미지정')} · ${e(c.signalLabel)} ${e(c.signalAt?stamp(c.signalAt):'')}</p>${c.replacedBy?`<p>후속 카드: <a href="?card=${encodeURIComponent(c.replacedBy)}#detail">${e(c.replacedBy)}</a></p>`:''}${c.nextAction?`<p>다음 행동: ${e(c.nextAction)}</p>`:''}${attention?`<p><button type="button" class="copy-question" data-copy-label="확인 요청" data-question="${e(askSupervisor(c,reason))}">감독에게 물어볼 문장 복사</button></p>`:''}</article>`;
@@ -40,16 +40,17 @@ export function recentExecutionEvents(executions,now=Date.now(),windowMs=RECENT_
  }
  return events.sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
 }
-// 감독에게 붙여 넣을 정리 요청. 카드마다 대체·취소·보류 중 하나를 고르게 하고 명령 뼈대를 준다.
+// 감독에게 붙여 넣을 정리 요청. 카드마다 대체·취소·일시정지 중 하나를 고르게 하고 명령 뼈대를 준다.
 export function staleCleanupRequest(stale,now=Date.now()){
- const head=`[대시보드 정리 요청 ${stamp(new Date(now).toISOString())}] 오래된 미정리 실행 ${stale.length}장 — 담당 세션이 없고 마지막 신호가 ${Math.round(STALE_MS/3600_000)}시간 이상 지났습니다. 각 카드를 대체(superseded · --replaced-by 후속카드), 취소(cancelled), 보류(hold) 중 하나로 정리해 주세요. 후속 카드를 새로 만들 때는 kadan card create ... --supersedes <옛카드>로 옛 카드를 함께 정리할 수 있습니다.`;
+ const head=`[대시보드 정리 요청 ${stamp(new Date(now).toISOString())}] 오래된 미정리 실행 ${stale.length}장 — 담당 세션이 없고 마지막 신호가 ${Math.round(STALE_MS/3600_000)}시간 이상 지났습니다. 각 카드를 대체(superseded · --replaced-by 후속카드), 취소(cancelled), 일시정지(hold) 중 하나로 정리해 주세요. 후속 카드를 새로 만들 때는 kadan card create ... --supersedes <옛카드>로 옛 카드를 함께 정리할 수 있습니다.`;
  const rows=stale.map(c=>`- ${c.key} (담당 ${c.role||'미배정'} · 마지막 신호 ${c.signalAt?stamp(c.signalAt)+' · '+ago(c.signalAt,now):'없음'}) → kadan card update ${c.key} --revision ${c.revision} --status superseded --replaced-by <저장소/후속카드> --note "<이유>"`);
  return [head,...rows].join('\n');
 }
 export function renderDashboardStatus({runtime=null,center,works,workError=null,decisions=[],decisionError=null,collectedAt=null,briefs=null,entries=[],ledgerLines=0,now=Date.now()}){
  const executions=(center?.cards||[]).filter(c=>c.workType!=='coordination').map(c=>({...c,...executionHealth(c,now),bucket:null})).map(c=>({...c,bucket:executionBucket(c,now)}));
  const byBucket=bucket=>executions.filter(c=>c.bucket===bucket);
- const stuck=byBucket('stuck'),stale=byBucket('stale'),running=byBucket('running'),waiting=byBucket('waiting');
+ // 결과 대기 실행은 executionBucket이 작업중(running)으로 묶어 보낸다(2026-10-05 [kyle]).
+ const stuck=byBucket('stuck'),stale=byBucket('stale'),running=byBucket('running');
  const attention=[...stuck,...stale];
  const recent=center?recentExecutionEvents(executions,now):[];
  const recentCount=kind=>recent.filter(x=>x.kind===kind).length;
@@ -76,13 +77,12 @@ export function renderDashboardStatus({runtime=null,center,works,workError=null,
  <header class="st-lead"><h1>지금 작업이 어떻게 진행되고 있나요?</h1><p>맡긴 일이 어디까지 왔는지, 막힌 곳이 있는지 봅니다.</p><small>수집 ${e(stamp(collectedAt))}</small></header>
  ${renderWatchVerdict(center,{runtime})}
  <div class="st-band" role="group" aria-label="지금 내가 볼 것">${chip('decision','#status-decisions',openDecisions===null?'모름':openDecisions.length,'내 결정 대기')}${chip('attn','#status-attention',center?stuck.length:'모름','지금 막힌 것')}</div>
- <p class="st-band-more" role="group" aria-label="나머지 요약">${mini('#status-executing',center?running.length:'모름','작업 중')}${mini('#status-waiting',center?waiting.length:'모름','결과 대기')}${mini('#status-stale',center?stale.length:'모름','오래된 미정리')}${mini('#status-running',works===null?'모름':open.length,'열린 업무')}${mini('?mailView=to-reply#mailbox',awaiting===null?'모름':awaiting,'답을 기다리는 질문')}${mini('?collection=executions&state=all#dashboard',center?executions.length:'모름','전체 실행 카드')}</p>
+ <p class="st-band-more" role="group" aria-label="나머지 요약">${mini('#status-executing',center?running.length:'모름','작업중')}${mini('#status-stale',center?stale.length:'모름','오래된 미정리')}${mini('#status-running',works===null?'모름':open.length,'열린 업무')}${mini('?mailView=to-reply#mailbox',awaiting===null?'모름':awaiting,'답을 기다리는 질문')}${mini('?collection=executions&state=all#dashboard',center?executions.length:'모름','전체 실행 카드')}</p>
  ${decisionSection}
  ${section('status-attention','지금 막힌 것',stuck,'담당 창은 살아 있는데 시작 보고가 없거나 실패한 실행입니다. 감독에게 확인을 부탁하세요. 오래 멈춘 것은 아래 오래된 미정리에 따로 모읍니다. <a href="?collection=executions&amp;state=all&amp;health=stuck#dashboard">작업 표에서 보기</a>')}
- ${section('status-executing','작업 중인 실행',running,'담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다.')}
- ${section('status-waiting','결과를 기다리는 실행',waiting,'담당이 검수·답변 같은 다른 결과를 기다린다고 보고했습니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.')}
- <p class="st-hint">${center?`실행 전 ${byBucket('planned').length}건 · 보류 ${byBucket('hold').length}건`:'실행 전·보류 모름'} · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
- <section id="status-running" class="st-section"><header class="st-sec-head"><h2>열린 업무</h2><span class="st-cnt">${works===null?'모름':open.length+'장'}</span><span class="st-hint">열린 업무도 실행 준비·결과 대기·감독 확인 단계일 수 있습니다.</span></header>${works===null?`<p class="st-error" role="alert">업무 기록을 읽을 수 없습니다${workError?': '+e(workError):'.'}</p>`:open.length?open.map(workCard).join(''):'<p class="st-empty">열린 업무가 없습니다. 위의 실행 목록에서 개별 작업을 확인하세요.</p>'}</section>
+ ${section('status-executing','작업중인 실행',running,'담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다. 검수·답변 같은 다른 결과를 기다린다고 보고한 실행도 여기 셉니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.')}
+ <p class="st-hint">${center?`진행 전 ${byBucket('planned').length}건 · 일시정지 ${byBucket('hold').length}건`:'진행 전·일시정지 모름'} · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
+ <section id="status-running" class="st-section"><header class="st-sec-head"><h2>열린 업무</h2><span class="st-cnt">${works===null?'모름':open.length+'장'}</span><span class="st-hint">열린 업무도 실행 준비·작업중·감독 확인 단계일 수 있습니다.</span></header>${works===null?`<p class="st-error" role="alert">업무 기록을 읽을 수 없습니다${workError?': '+e(workError):'.'}</p>`:open.length?open.map(workCard).join(''):'<p class="st-empty">열린 업무가 없습니다. 위의 실행 목록에서 개별 작업을 확인하세요.</p>'}</section>
  ${held.length?`<section class="st-section"><h2>보류 중인 업무</h2>${held.map(workCard).join('')}</section>`:''}
  ${staleSection}
  ${recentSection}

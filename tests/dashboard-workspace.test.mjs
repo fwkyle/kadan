@@ -74,7 +74,7 @@ test('결과 탭은 재발령 전 보고를 현재 결과로 쓰지 않고 명�
 test('기록 탭은 변경 이유를 한 번 표시하고 실행 사건을 같은 이력에 넣는다',()=>{
  const c=card({history:[{at:sent,status:'draft',note:'초안 생성'},{at,status:'assigned',by:'감독',noteKind:'decision',note:'고유 변경 이유'}]});
  const html=renderWorkspaceDetail(c,{center:center([c])}).match(/id="dw-panel-history"[\s\S]*?<\/section>/)[0];
- assert.equal((html.match(/class="dd-history-note">고유 변경 이유</g)||[]).length,1);assert.match(html,/초안 → 배정됨/);assert.match(html,/지시 전달/);
+ assert.equal((html.match(/class="dd-history-note">고유 변경 이유</g)||[]).length,1);assert.match(html,/초안 → 작업대기/);assert.match(html,/지시 전달/);
 });
 
 function browserHarness({conflict=false,deferred=false,filterCards=null,refresh=null}={}) {
@@ -146,7 +146,7 @@ test('표는 제목 원문과 전체 시각을 보존하면서 짧은 상태·�
  const c=card({displayState:'waiting',title:'card-a — 전체 원본 제목',history:[{at,by:'작업자',noteKind:'progress',note:'보고'}]});
  const html=render([c],'?state=all');
  const table=tableBody(html);
- assert.match(table,/title="card-a — 전체 원본 제목"/);assert.match(table,/결과 대기/);assert.match(table,/09\.08 10:00/);assert.match(table,/title="2020\. 9\. 8\. 10(?:시 0분 0초|:00:00)"/);
+ assert.match(table,/title="card-a — 전체 원본 제목"/);assert.match(table,/eh-waiting[^>]*>작업중</);assert.match(table,/09\.08 10:00/);assert.match(table,/title="2020\. 9\. 8\. 10(?:시 0분 0초|:00:00)"/);
 });
 test('내 결정 뱃지는 별도 경로로 보존하고 결정 조회 실패는 모름이다',()=>{
  const html=render([card()],'',{decisionError:'결정 읽기 실패'});
@@ -213,9 +213,9 @@ test('기록 탭에서 revision별 활동 변경과 이유는 단일 이력에 �
  const waiting={...started,revision:3,at:'2020-09-08T02:00:00Z',activity:'waiting',activityAt:'2020-09-08T02:00:00Z',note:'고유 대기 보고'};
  const memo={...waiting,revision:4,at:'2020-09-08T03:00:00Z',noteKind:'question',note:'고유 질문'};
  const html=renderWorkspaceDetail(card({history:[first,started,waiting,memo]})).match(/id="dw-panel-history"[\s\S]*?<\/section>/)[0];
- assert.match(html,/작업 중 → 결과 대기/);
+ assert.match(html,/작업중 → 작업중 · 기다림/);
  for(const note of ['고유 착수 보고','고유 대기 보고','고유 질문'])assert.equal(html.split('class="dd-history-note">'+note+'<').length-1,1);
- assert.equal(html.split('작업 중 → 결과 대기').length-1,1);
+ assert.equal(html.split('작업중 → 작업중 · 기다림').length-1,1);
 });
 test('기록 탭의 네 기록 종류를 한국어로 표시한다',()=>{
  const history=['decision','question','answer','progress'].map((noteKind,i)=>({revision:i+1,at,status:'assigned',noteKind}));
@@ -306,7 +306,7 @@ test('종료 카드는 실행 흐름 설명·중복 신호 문구·현재 차례
  assert.doesNotMatch(workspaceRowsHtml([done],'split',''),/현재 차례/);
  const live=card({displayState:'running',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at:sent}],history:[{by:'작업자',role:'작업자',noteKind:'progress',note:'배포 확인 중',at}]});
  const liveTable=tableBody(render([live],'?state=all'));
- assert.match(cells(liveTable,'healthLabel'),/작업 중/);
+ assert.match(cells(liveTable,'healthLabel'),/작업중/);
  assert.match(cells(liveTable,'healthLabel'),/<small>배포 확인 중<\/small>/);
  assert.match(cells(liveTable,'signalAt'),/<strong>09\.08 10:00<\/strong><small>진행 보고<\/small>/);
  assert.match(cells(liveTable,'turnLabel'),/<strong>작업자<\/strong>/);
@@ -339,8 +339,9 @@ test('상태 필터 요약은 고른 개수가 아니라 뜻으로 표시한다'
  assert.equal(workspaceStateLabel(keys.join(',')),'전체');
  assert.equal(workspaceStateLabel(keys.filter(key=>key!=='done').join(',')),'완료 제외');
  assert.equal(workspaceStateLabel(keys.filter(key=>!['done','cancelled'].includes(key)).join(',')),'완료·취소 제외');
- assert.equal(workspaceStateLabel('running'),'작업 중');
- assert.equal(workspaceStateLabel('running,waiting'),'작업 중·결과 대기');
+ assert.equal(workspaceStateLabel('running'),'작업중');
+ // 결과 대기도 작업중이라 같은 이름을 두 번 적지 않는다(2026-10-05 [kyle]).
+ assert.equal(workspaceStateLabel('running,waiting'),'작업중');
  assert.equal(workspaceStateLabel('none'),'선택 없음');
  assert.equal(workspaceStateLabel(['draft','ready','hold','failed'].join(',')),'상태 4개');
 });
@@ -351,10 +352,10 @@ test('상태 빠른 선택 칩은 뜻과 개수를 보여주고 주소의 상태
   card({key:'repo/done',id:'done',displayState:'done',status:'done',runs:[]})
  ];
  const model=workspaceModel(center(cards));
- assert.deepEqual(workspacePresetCounts(model,{collection:''}),{'':2,'running,waiting':1,'draft,ready':1,'assigned,unconfirmed,orphaned,failed':0,done:1,all:3});
+ assert.deepEqual(workspacePresetCounts(model,{collection:''}),{'':2,'running,waiting':1,'draft,ready,archived':1,'assigned,unconfirmed,orphaned,failed':0,done:1,all:3});
  const chips=html=>[...html.matchAll(/data-state-preset="([^"]*)" aria-pressed="([^"]*)" title="[^"]*"><span>([^<]*)<\/span><span class="dw-preset-count" data-preset-count="[^"]*">([0-9]+)</g)].map(m=>({value:m[1],pressed:m[2],label:m[3],count:Number(m[4])}));
  const all=chips(render(cards,'?state=all'));
- assert.deepEqual(all.map(c=>c.label),['미완료','진행 중·대기','발령 전','확인 필요','완료','전체']);
+ assert.deepEqual(all.map(c=>c.label),['미완료','작업중','진행 전','확인 필요','완료','전체']);
  assert.deepEqual(all.map(c=>c.count),[2,1,1,0,1,3]);
  assert.deepEqual(all.filter(c=>c.pressed==='true').map(c=>c.label),['전체']);
  assert.deepEqual(chips(render(cards,'')).filter(c=>c.pressed==='true').map(c=>c.label),['미완료']);
@@ -367,7 +368,7 @@ test('실행 흐름·묶음 빠른 필터는 그 값만 남기고 선택지에 �
  const live=card({displayState:'running',runs:[{role:'작업자',state:'unconfirmed',sessionState:'alive',sentAt:sent,at}],history:[{by:'작업자',role:'작업자',noteKind:'progress',note:'진행 중',at}]});
  const html=render([live],'?state=all&board='+encodeURIComponent('판-a'));
  assert.match(html,/id="dw-health"/);assert.match(html,/id="dw-rally"/);
- assert.match(html,/>작업 중 \(1\)<\/option>/);
+ assert.match(html,/>작업중 \(1\)<\/option>/);
  assert.match(html,/선택한 판|판-a/);
 });
 
