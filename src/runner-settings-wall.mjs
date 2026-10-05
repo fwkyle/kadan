@@ -4,7 +4,7 @@ import {launchFor, launchForFallback, readSettings, runnerChoices, PROFILE_ROLES
 
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
-export const RUNNER_ROLE_LABELS={worker:'작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독',watch:'감시 AI',advisor:'자문위원'};
+export const RUNNER_ROLE_LABELS={worker:'작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독',watch:'감시 AI',senior:'시니어'};
 const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델',block:'정책 차단',fallback:'폴백 순서',favorite:'즐겨찾기'};
 export const FALLBACK_WHEN='내려가는 조건: 원인이 확인된 막힘(쿼터·429·로그인 실패·모델 이름 오류)만. 원인을 모르면 멈추고 보고';
 const APPLY_NOTE='다음 발령부터 적용, 떠 있는 세션은 그대로';

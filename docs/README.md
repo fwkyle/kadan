@@ -24,7 +24,7 @@
 | 책임과 보고 경로 | [책임 관계](hierarchy.md) | — |
 | 담당 인계 | [인계 안내](handover.md) | — |
 | 사용자 결정 | [결정 기록](decisions.md) | — |
-| 감독의 자문(고급 모델 한 번 호출) | [자문위원](advisor.md) | — |
+| 감독의 자문(고급 모델 한 번 호출) | [시니어](senior.md) | — |
 | 역할별 실행 모델 | [실행 모델 설정](runner-settings.md) | — |
 | 카드 작업 시간·모델별 요약 | [카드 작업 시간](card-worktime.md) | — |
 | 저장과 복구 | [SQLite 저장](sqlite-storage.md) | — |

@@ -143,13 +143,13 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 설정 파일이 없거나 `watch` 값이 없으면 예전과 같다: 감시 프로필의 `KADAN_JUDGE_MODEL`로 한 번만 부르고 강도는 max다. 설정 파일이 깨졌으면 프로필 값으로 부르고 `settingsError`를 남긴다.
 - 설정을 바꾸면 감시기를 다시 띄우지 않아도 다음 감시 호출부터 적용된다.
 
-## 자문위원
+## 시니어
 
-자문위원(advisor)도 세션이 아니라 일회성 호출이다. 감독이 `kadan advise <카드키> --question …`으로 부르면 `scripts/advise.sh`가 `codex exec`로 한 번 돌린다(2026-10-05 [kyle] 승인). 슈퍼감독은 값싼 모델로 두고, 판단이 무거운 카드만 여기로 보낸다. 자세한 규칙은 [자문위원](advisor.md).
+시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 `scripts/senior.sh`가 `codex exec`로 한 번 돌린다(2026-10-05 [kyle] 승인). 슈퍼감독은 값싼 모델로 두고, 판단이 무거운 카드만 여기로 보낸다. 자세한 규칙은 [시니어](senior.md).
 
-- 설정: 활성 프리셋의 `roles.advisor`. 명령은 `kadan runners set advisor --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **자문위원** 줄이다. 값이 없으면 `kadan advise`가 거절한다(기본 모델 없음).
-- 실행기는 `codex`만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles advisor`)은 적용한다.
-- **폴백이 없다.** `runners fallback advisor`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
+- 설정: 활성 프리셋의 `roles.senior`. 명령은 `kadan runners set senior --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **시니어** 줄이다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음).
+- 실행기는 `codex`만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 적용한다.
+- **폴백이 없다.** `runners fallback senior`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
 - 상한은 호출마다 기본 30분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽고 시험까지 돌려 볼 수 있는 호출이라 감시 AI(5분)보다 훨씬 길다. 횟수 제한은 없다 — 필요할 때만 부른다.
 
 ## 즐겨찾기

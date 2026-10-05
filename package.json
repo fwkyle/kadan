@@ -10,7 +10,7 @@
     "src",
     "gui/dist",
     "scripts/watch-judge.sh",
-    "scripts/advise.sh",
+    "scripts/senior.sh",
     "scripts/recover-sessions.mjs",
     "skills",
     "docs",
