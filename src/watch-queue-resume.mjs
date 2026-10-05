@@ -52,7 +52,10 @@ export class QueueResume {
       if (last?.action === 'sent' && last.fingerprint !== banner.fingerprint) emit('transition', {fingerprint:last.fingerprint, transition:'screen-changed'});
       const handledFingerprint = history.findLast(e => e.fingerprint === banner.fingerprint && ['sent','not-sent','delivery-failed'].includes(e.action));
       if (handledFingerprint) {
-        if (handledFingerprint.action === 'sent') alertOnce('Enter 전달 뒤 큐 배너 유지 — 자동 재시도하지 않음');
+        // 같은 배너가 떠 있는 동안은 같은 id의 경보를 계속 올린다(dedup이 중복 발송을 막는다). 보내지 않은 경우만 빼면
+        // 다음 주기에 경보가 사라져 '입력 큐 대기 - 해소됨'이 1분 만에 헛되이 나갔다(2026-10-05 점검 보고서 시뮬레이션 2).
+        alertOnce(handledFingerprint.action === 'sent' ? 'Enter 전달 뒤 큐 배너 유지 — 자동 재시도하지 않음'
+          : `${handledFingerprint.reason ?? '보내지 않음'} — 자동 재시도하지 않음`);
         continue;
       }
       if (banner.unsafe) { emit('not-sent', {reason:banner.unsafe, fingerprint:banner.fingerprint}); alertOnce(banner.unsafe); continue; }

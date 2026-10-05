@@ -43,10 +43,12 @@ test('ack만 미확인 제외: read-final과 질문 취소는 읽음으로 추�
   assert.deepEqual(f.records.filter(e=>e.action==='reserved').map(e=>e.mailId),['answer','cancel']);
 });
 
-test('알림 자체와 자동 완료 우편 제외, 일반 최종 터미널 통지 유지',()=>{
+test('알림 자체와 자동 완료 우편·발령 우편 제외, 일반 최종 터미널 통지 유지',()=>{
+  // 발령 우편(taskId)은 ack 안내가 없어 재알림하지 않는다 — 미착수는 시작보고누락이 잡는다(2026-10-05).
   const f=fixture([question('notification',{notificationOnly:true}),
     question('completion',{systemGenerated:'task-completion'}),
     question('reminder',{systemGenerated:'watch-mail-reminder'}),
+    question('dispatch',{expectReply:false,taskId:'task'}),
     question('final',{replyFinal:true})]);
   f.tick();assert.deepEqual(f.records.filter(e=>e.action==='reserved').map(e=>e.mailId),['final']);
 });

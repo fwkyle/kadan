@@ -59,7 +59,7 @@ export class Mailbox {
   const body=ledger.readMailBody(letter.digest,this.home);if(body===null)throw new Error('본문 없음 또는 읽기 실패: 읽음 처리하지 않습니다');
   const recipient=letter.currentRecipient||letter.role;
   const receiver=composeRoleInstructions({home:this.home,role:recipient,...(recipient===SECRETARY?{profile:'secretary'}:{}),mailContext:letter});
-  const instructions=composeMailInstructions({mailId:letter.mailId,recipient,sender:letter.currentSender||letter.by,
+  const instructions=composeMailInstructions({mailId:letter.mailId,recipient,sender:letter.currentSender||letter.by,dispatch:letter.taskId!=null,
    expectReply:letter.replyStatus==='waiting',notificationOnly:letter.notificationOnly===true||letter.systemGenerated==='task-completion'});
   const receiverInstructions=[receiver.instructions,instructions].filter(Boolean).join('\n\n');
   return {...letter,body,receiverInstructions,receiverInstructionsProfile:receiver.metadata.profile,

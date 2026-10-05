@@ -46,6 +46,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     assert.equal(r.bytes,Buffer.byteLength(body));assert.equal(r.digest,digest(body));assert.ok(out.includes(`${r.bytes}B, 지문 ${r.digest}, 우편ID ${r.mailId}`));
     assertReceived(role,before,body);
     if(extra.includes('--raw'))assert.equal(body,message);
+    else if(extra.includes('--task'))assert.ok(!body.includes('inbox ack'),'발령 우편에는 읽음 확인 안내가 없다(2026-10-05)');
     else assert.equal(body.slice(-(ack(r.mailId,role).length+2)),'\n\n'+ack(r.mailId,role));
     assert.ok(body.startsWith(message));assert.deepEqual(findDoneMarkers(body),[]);return {r,body,out};
   };
