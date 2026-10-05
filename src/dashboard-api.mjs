@@ -58,7 +58,7 @@ import {
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
 import { adviseCommandLabel } from "./advise.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
-import { liveSessions, flowSummary, openAlerts } from "./dashboard-band.mjs";
+import { liveSessions, flowSummary, openAlerts, supervisorSummary } from "./dashboard-band.mjs";
 
 const modelCache = new WeakMap();
 const executionModelCache = new WeakMap();
@@ -484,25 +484,33 @@ export function dashboardData(snapshot, url) {
   }
   if (route === "status") {
     const recent = recentExecutionEvents(m.cards);
+    const statusWorks = m.rows.filter((r) => r.kind === "work").map(compact);
+    const openDecisions = snapshot.decisionError ? null : (snapshot.decisions || []).filter((d) => d.status === "open");
+    // 상단 띠의 나머지 세 질문. 세션 상태·원장을 모르면 null이다(dashboard-band.mjs).
+    const live = liveSessions(snapshot.center);
+    // 화면에는 최근 20건만 보이지만 슈퍼감독별 묶기는 열린 경보 전부로 센다.
+    const allAlerts = snapshot.ledgerLines === null ? null : openAlerts(snapshot.entries || [], { limit: Infinity });
+    const alerts = allAlerts && { count: allAlerts.count, items: allAlerts.items.slice(0, 20) };
+    const statusRows = m.rows
+      .filter(
+        (r) =>
+          r.kind !== "work" &&
+          isExecution(r) &&
+          !["done", "cancelled", "superseded", "archived"].includes(r.state),
+      )
+      .map((r) =>
+        r.bucket === "stuck" || r.bucket === "stale"
+          ? { ...r, failureReason: failureReason(m.byKey.get(r.key) || {}) }
+          : r,
+      )
+      .map(compact);
     return {
       ...stamp,
-      works: m.rows.filter((r) => r.kind === "work").map(compact),
+      works: statusWorks,
       cleanupRequest: staleCleanupRequest(
         m.cards.filter((c) => isExecution(c) && executionBucket(c) === "stale"),
       ),
-      rows: m.rows
-        .filter(
-          (r) =>
-            r.kind !== "work" &&
-            isExecution(r) &&
-            !["done", "cancelled", "superseded", "archived"].includes(r.state),
-        )
-        .map((r) =>
-          r.bucket === "stuck" || r.bucket === "stale"
-            ? { ...r, failureReason: failureReason(m.byKey.get(r.key) || {}) }
-            : r,
-        )
-        .map(compact),
+      rows: statusRows,
       resources: snapshot.resources,
       resourceError: snapshot.resourceError,
       workError: m.workError,
@@ -520,13 +528,12 @@ export function dashboardData(snapshot, url) {
       watchHtml: renderWatchVerdict(snapshot.center, {
         runtime: snapshot.runtime,
       }),
-      decisions: snapshot.decisionError
-        ? null
-        : (snapshot.decisions || []).filter((d) => d.status === "open"),
-      // 상단 띠의 나머지 세 질문. 세션 상태·원장을 모르면 null이다(dashboard-band.mjs).
-      live: liveSessions(snapshot.center),
+      decisions: openDecisions,
+      live,
       flow: flowSummary(m.reviewFlows),
-      alerts: snapshot.ledgerLines === null ? null : openAlerts(snapshot.entries || []),
+      alerts,
+      // 슈퍼감독마다 한 줄(관계표 기준). 관계표를 모르면 null.
+      supervisors: supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live }),
       recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),
       recent: recent
         .slice(0, 50)

@@ -33,6 +33,29 @@ export function bandChips(input: BandInput): Chip[] {
   ];
 }
 
+// 슈퍼감독 한 줄(관계표에서 상위가 @user인 역할). 서버(dashboard-band.mjs supervisorSummary)가 센 값을 그대로 적는다.
+export type SupervisorSummary = {
+  super: string; repos: string[]; running: number; waiting: number; stuck: number; openWorks: number;
+  decisions: number | null; alerts: number | null; lastSignal: string | null; alive: boolean | null; model: string | null;
+};
+export type Supervisors = { items: SupervisorSummary[]; unassigned: number };
+
+// 숫자 칸 순서: 저장소 · 열린 워크 · 작업 중 · 결과 대기 · 막힘 · 내 결정 · 경보. 마지막 신호·생존은 화면이 시각 형식으로 붙인다.
+export function supervisorLine(s: SupervisorSummary): string {
+  return [
+    `저장소 ${s.repos.length ? s.repos.join(", ") : "없음"}`,
+    `열린 워크 ${s.openWorks}`, `작업 중 ${s.running}`, `결과 대기 ${s.waiting}`, `막힘 ${s.stuck}`,
+    `내 결정 ${s.decisions ?? "모름"}`, `경보 ${s.alerts ?? "모름"}`,
+  ].join(" · ");
+}
+
+// 생존 칸: 창이 열려 있으면 모델까지, 없으면 '창 없음', 세션 상태를 모르면 '세션 모름'.
+export function supervisorLife(s: SupervisorSummary): string {
+  if (s.alive === null) return "세션 모름";
+  if (!s.alive) return "창 없음";
+  return s.model ? `살아 있음 · ${s.model}` : "살아 있음";
+}
+
 // 담당 한 줄: 역할 · 실행기/모델/강도. 모델을 모르면 '모델 기록 없음'.
 export function liveLabel(s: LiveSession): string {
   const parts = [s.harness, s.model, s.effort].filter((x): x is string => !!x);

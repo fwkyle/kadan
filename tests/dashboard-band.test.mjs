@@ -54,6 +54,9 @@ test("열린 경보: 같은 id의 마지막 기록이 해소가 아니면 센다
   assert.deepEqual(open.items.map((a) => [a.id, a.kind]), [["a3", "한도"], ["a2", "정지"]], "최근 것이 먼저");
   assert.equal(open.items[0].recipient, "p-감독");
   assert.equal(openAlerts([...entries, { broken: true }]), null);
+  // 화면용 상한은 20건이고 count는 전체다. 슈퍼감독별 묶기는 상한 없이 받는다.
+  const many = Array.from({ length: 25 }, (_, i) => alert("m" + i, "2026-10-05T01:" + String(i).padStart(2, "0") + ":00Z"));
+  assert.deepEqual([openAlerts(many).count, openAlerts(many).items.length, openAlerts(many, { limit: Infinity }).items.length, openAlerts(many, { limit: 3 }).items.length], [25, 20, 25, 3]);
   assert.equal(openAlerts(null), null);
   assert.deepEqual(openAlerts([]), { count: 0, items: [] });
 });
