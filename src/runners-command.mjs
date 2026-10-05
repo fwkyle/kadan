@@ -1,6 +1,7 @@
 import {blockModel, initSettings, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setFavorites, setRunner, setRunnerModel, settingsPath, watchJudgeCommand, PROFILE_ROLES} from './runner-settings.mjs';
+import {adviseCommandLabel} from './advise.mjs';
 
-export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] | runner <실행기> --spawn 명령틀 --revision N --reason 이유 | model <실행기> <모델> --efforts a,b --revision N --reason 이유 | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super|watch> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
+export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch|advisor> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] | runner <실행기> --spawn 명령틀 --revision N --reason 이유 | model <실행기> <모델> --efforts a,b --revision N --reason 이유 | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super|watch> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움, advisor는 폴백 없음) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
 
 export function runnersCommand([action, role, model], flags, {home, by, record}) {
   flags = {...flags, _model: model};
@@ -10,6 +11,7 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
     if (!settings) return {path: settingsPath(home), exists: false};
     const launch = Object.fromEntries(Object.keys(PROFILE_ROLES).map(profile => [profile, launchFor(settings, profile)?.cmd ?? null]));
     launch.watch = watchJudgeCommand(settings.presets[settings.activePreset].roles.watch);
+    launch.advisor = adviseCommandLabel(settings.presets[settings.activePreset].roles.advisor);
     const fallbacks = settings.presets[settings.activePreset].fallback ?? {};
     const fallback = Object.fromEntries(Object.entries(fallbacks).map(([r, list]) =>
       [r, list.map((item, i) => ({...item, cmd: r === 'watch' ? watchJudgeCommand(item) : launchForFallback(settings, r, i + 1).cmd}))]));

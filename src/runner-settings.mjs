@@ -2,6 +2,7 @@
 // 사람용 설명은 agent-runners.json에 두고, 발령이 읽는 값은 이 파일 한 곳만 본다.
 // 발령은 자동 라우팅·자동 폴백을 만들지 않는다. 실행기별 어댑터 대신 spawn 문자열 틀만 채운다.
 // 예외: 감시 AI(watch)는 감시기가 스스로 부르므로 폴백 목록으로 자동으로 내려간다(2026-10-03 [kyle]). watch-ai.mjs 참고.
+// 자문위원(advisor)도 일회성 호출이지만 폴백이 없다 — 감독이 명령으로 부르고 실패를 그 자리에서 본다(2026-10-05). advise.mjs 참고.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,10 +10,11 @@ import path from 'node:path';
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
 export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'conductor', super:'super'};
-// 설정에 값을 둘 수 있는 역할. watch는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
-export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch'];
-// 감시 AI는 scripts/watch-judge.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
+// 설정에 값을 둘 수 있는 역할. watch·advisor는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
+export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'advisor'];
+// 감시 AI는 scripts/watch-judge.sh가, 자문위원은 scripts/advise.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
+export const ONE_SHOT_ROLES = {watch: '감시 AI', advisor: '자문위원'};
 // 감시 호출 한 번에 시도하는 모델 수 상한(1순위 포함). 시도마다 5분 상한이라 감시AI 한 자리를 오래 잡지 않게 한다.
 export const WATCH_MAX_ATTEMPTS = 3;
 // agent-runners.json `_계열`의 이름 앞머리 규칙. 모르는 계열끼리는 "다르다"고 보지 않는다.
@@ -58,7 +60,7 @@ function checkChoice(settings, role, {runner, model, effort}, options, {checkBlo
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
   const choices = runnerChoices(settings, runner, options);
-  if (role === 'watch' && runner !== WATCH_RUNNER) throw new Error(`감시 AI는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — watch-judge.sh가 codex exec로 부른다`);
+  if (ONE_SHOT_ROLES[role] && runner !== WATCH_RUNNER) throw new Error(`${ONE_SHOT_ROLES[role]}${role === 'watch' ? '는' : '은'} ${WATCH_RUNNER} 실행기만 고를 수 있다 — ${role === 'watch' ? 'watch-judge.sh' : 'advise.sh'}가 codex exec로 부른다`);
   if (!choices.has(model)) throw new Error(`${runner}에서 고를 수 없는 모델: ${model}`);
   const efforts = choices.get(model);
   const needsEffort = settings.runners[runner].spawn.includes('{effort}');
@@ -257,6 +259,8 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
 // 역할의 폴백 순서 목록 전체를 바꾼다(3단계). 항목마다 1순위와 같은 선택지·강도·정책 검사를 하고, 계열 확인은 공통 경로가 맡는다.
 export function setFallback(home, {role, items, preset, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
+  // 자문위원은 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
+  if (role === 'advisor') throw new Error('자문위원은 폴백이 없다 — 한 번 호출이고 실패는 실패로 남긴다(docs/advisor.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {
