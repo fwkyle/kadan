@@ -104,17 +104,25 @@ test('워크 owner가 인계된 옛 감독 이름이면 확정 인계를 따라 
   assert.deepEqual(none.nudges,[],'인계 기록이 없고 관계표에 없는 owner면 할 일로 세지 않는다');
 });
 
-test('사용자 결정을 기다리는 감독은 놀고 있음에서 뺀다: 결정이 열려 있으면 그 감독은 깨우지도 올리지도 않고, 닫히면 다시 판정한다',async()=>{
-  const open={id:'d1',card:'repo/t1',requestedBy:'p-슈퍼감독',status:'open',at:stamp(0)};
-  const waiting=await simulate({minutes:40,decisions:[open]});
-  assert.deepEqual(waiting.nudges.map(([m,r])=>[m,r]),[[15,'p-감독']],'결정을 기다리는 슈퍼감독은 본인 알림이 없다');
-  const idle=waiting.alerts.filter(a=>a.alertKind==='놀고 있음');
-  assert.ok(!idle.some(a=>a.role==='p-슈퍼감독'),'슈퍼감독 놀고 있음 경보 없음');
-  assert.ok(!idle.some(a=>a.recipient==='@user'),'사용자 OS 알림도 없다');
-  // 아래 감독은 그대로 판정된다(자기 할 일이 있으면 본인 → 상위).
-  assert.deepEqual(idle.filter(a=>a.role==='p-감독').map(a=>[a.minute,a.recipient]),[[15,'p-감독'],[30,'p-슈퍼감독']]);
-  const answered=await simulate({minutes:40,decisions:[{...open,status:'answered'}]});
-  assert.deepEqual(answered.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'답한 결정은 대기가 아니다');
+test('답을 기다리는 일은 할 일에서 뺀다 — 감독을 통째로 빼지 않고 그 일만. 사용자 결정은 모두에게서, 감독→슈퍼감독 질문은 묻는 감독에게서만',async()=>{
+  const send={kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},plan={kind:'plan',board:'p',taskId:'t1',t:stamp(0)};
+  const decision={id:'d1',card:'repo/t1',requestedBy:'p-슈퍼감독',status:'open',at:stamp(0)};
+  // A. 유일한 할 일이 사용자 결정을 기다린다: 감독·슈퍼감독 모두 놀고 있음이 아니다.
+  const onlyWaiting=await simulate({minutes:40,decisions:[decision]});
+  assert.deepEqual(onlyWaiting.nudges,[]);
+  assert.ok(!onlyWaiting.alerts.some(a=>a.alertKind==='놀고 있음'));
+  // B. 다른 할 일(t2)이 있으면 그대로 판정한다 — 결정이 열려 있다고 감독이 빠지지 않는다.
+  const card2={...card,id:'t2',key:'repo/t2'};
+  const other=await simulate({minutes:20,decisions:[decision],cards:[card,card2],
+    entries:[send,plan,{kind:'send',role:'p-작업자',taskId:'t2',t:stamp(0)},{kind:'plan',board:'p',taskId:'t2',t:stamp(0)}]});
+  assert.deepEqual(other.nudges.map(([m,r,msg])=>[m,r,/할 일 1건/.test(msg)]),[[15,'p-감독',true],[15,'p-슈퍼감독',true]],'남은 할 일 1건으로 판정');
+  // C. 감독이 슈퍼감독에게 t1을 물었다(답 대기): 묻는 감독에게는 할 일이 아니고, 답할 슈퍼감독에게는 할 일이다.
+  const question={kind:'send',mailId:'q1',by:'p-감독',role:'p-슈퍼감독',session:'kadan-p-슈퍼감독',expectReply:true,executionKey:'repo/t1',t:stamp(0)};
+  const asked=await simulate({minutes:20,entries:[send,plan,question]});
+  assert.deepEqual(asked.nudges.map(([m,r])=>[m,r]),[[15,'p-슈퍼감독']],'답할 슈퍼감독만 깨운다');
+  // D. 결정이 닫혔거나 목록을 못 읽으면 평소대로.
+  const answered=await simulate({minutes:20,decisions:[{...decision,status:'answered'}]});
+  assert.deepEqual(answered.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
   const broken=await simulate({minutes:20,decisions:null});
-  assert.deepEqual(broken.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정 목록을 못 읽으면 아무도 빼지 않는다');
+  assert.deepEqual(broken.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정 목록을 못 읽으면 아무것도 빼지 않는다');
 });

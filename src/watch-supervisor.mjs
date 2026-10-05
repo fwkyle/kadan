@@ -15,6 +15,15 @@ function idleAlert(baseId, role, session, openCards, idleFor, idleMs) {
     openCards, idleMinutes: Math.floor(idleFor / 60_000), stage };
 }
 
+// 답을 기다리는 일은 묻는 쪽의 할 일이 아니다(2026-10-05 [kyle]). waits: [{ids, answerer}] — ids는 그 일의 실행 ID·카드 주소·
+// 소속 워크(work:<키>), answerer는 답할 역할(사용자 결정이면 @user). 감독 role에게서 빼는 조건: 답할 쪽이 role 자신이나
+// role 아래가 아니다. 즉 사용자 결정은 모두에게서 빠지고, 감독→슈퍼감독 질문은 묻는 감독에게서만 빠진다(답할 슈퍼감독에게는 할 일).
+export function waitingExcluder(waits, parents) {
+  const byId = new Map();
+  for (const w of waits ?? []) for (const id of w.ids ?? []) byId.set(id, [...(byId.get(id) ?? []), w.answerer]);
+  return (taskId, role) => (byId.get(taskId) ?? []).some(a => a !== role && !(parents.has(a) && isDescendant(a, role, parents)));
+}
+
 // 실행이 다 끝났거나 아직 없는 열린 워크는 책임 감독의 할 일이다(2026-10-05 [kyle]: "매번 내가 말해 줘야 다음 걸 한다").
 // 진행 중 실행 = 카드가 assigned·hold인 것. draft·ready는 아직 발령 전이라 할 일로 본다.
 export function idleWorkEntries(works, cards, parents) {
@@ -31,8 +40,9 @@ export function assessSupervisorIdle(
   idleMs,
   ledgerError = null,
   parents = new Map(),
-  { works = [], cards = [] } = {}
+  { works = [], cards = [], waits = [] } = {}
 ) {
+  const excluded = waitingExcluder(waits, parents);
   if (ledgerError) {
     return [
       {
@@ -80,8 +90,10 @@ export function assessSupervisorIdle(
     .filter(([, state]) => state?.alive)
     .sort((left, right) => startedAtMs(right[1]) - startedAtMs(left[1]))
     .map(([session]) => session);
-  for (const [board, cards] of openByBoard) {
+  for (const [board, allCards] of openByBoard) {
     const role = supervisorForBoard(board, liveSessions) ?? `${board}-감독`;
+    const cards = new Map([...allCards].filter(([taskId]) => !excluded(taskId, role)));
+    if (!cards.size) continue;
     const session = `kadan-${role}`;
     const state = roleStates.get(session);
     if (state?.deathActive) continue;
@@ -102,7 +114,7 @@ export function assessSupervisorIdle(
     if (idleFor < idleMs) continue;
     alerts.push(idleAlert(`idle:${board}`, role, session, cards.size, idleFor, idleMs));
   }
-  alerts.push(...assessHierarchyIdle([...entries, ...idleWorkEntries(works, cards, parents)], roleStates, now, idleMs, parents));
+  alerts.push(...assessHierarchyIdle([...entries, ...idleWorkEntries(works, cards, parents)], roleStates, now, idleMs, parents, excluded));
   return alerts;
 }
 
@@ -112,7 +124,7 @@ export function buildIdleNudge(alert) {
   return `놀고 있음 ${alert.session} (할 일 ${alert.openCards}건, ${alert.idleMinutes}분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
 }
 
-export function assessHierarchyIdle(entries, states, now, idleMs, parents) {
+export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false) {
   const pending = new Map();
   for (const entry of entries) {
     if (!parents.has(entry?.role) || !entry.taskId) continue;
@@ -131,7 +143,7 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents) {
   }
   const alerts = [];
   for (const role of supervisors) {
-    const cards = [...pending.values()].filter(entry => isDescendant(entry.role, role, parents));
+    const cards = [...pending.values()].filter(entry => isDescendant(entry.role, role, parents) && !excluded(entry.taskId, role));
     if (!cards.length) continue;
     const session = `kadan-${role}`;
     const state = states.get(session);
