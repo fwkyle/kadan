@@ -182,3 +182,32 @@ for(const mode of ['jsonl','sqlite'])test(`${mode}: 업무 owner는 owner를 정
  assert.equal(done.status,'done');assert.equal(done.owner,'감독');
  assert.equal(store.get(done.key).history.at(-1).by,'감독-3');
 });
+
+// 수동 발령 1명령화(2026-10-05 점검 보고서 1-H2): execute --assign [--dispatch]가 실행 생성·배정·묶음·plan·전송을 한 번에 한다.
+test('execute --assign은 실행 생성·배정·묶음·plan을 한 번에 하고, --dispatch는 기존 send 검사로 보낸다',()=>{
+ const {home,store,cards,work}=fixture();
+ const sent=[];
+ const context={home,by:'감독',send:args=>{sent.push(args);return {session:'kadan-'+args.role,mailId:'m1',bytes:1,digest:'d'};}};
+ appendLedger({kind:'start',role:'p-작업자',session:'kadan-p-작업자',panePid:4242,t:'2020-09-07T00:00:00Z'},home);
+ const body='# 사진 생성\n\n## 읽고 시작할 것\n- /abs/AGENTS.md — 규칙\n\n허용한 작업만 수행';
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-body-'));fs.writeFileSync(path.join(dir,'body.md'),body);
+ const out=workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'implementation',round:'1',title:'사진 생성','body-file':path.join(dir,'body.md'),note:'1라운드 구현',assign:'p-작업자',dispatch:'카드를 읽고 수행하라. 마커 형식은 KADAN:DONE <카드id> <ok|failed>'},context);
+ assert.equal(out.card.status,'assigned');assert.equal(out.card.role,'p-작업자');assert.equal(out.card.board,work.board);assert.equal(out.card.scope,work.scope);
+ assert.deepEqual([out.card.rallyId,out.card.rallyTitle,out.card.rallyRound,out.card.rallyStep],[work.id,work.title,'1','implementation']);
+ assert.ok(readLedger(home).some(e=>e.kind==='plan'&&e.board===work.board&&e.by==='감독'));
+ assert.equal(sent.length,1);
+ assert.deepEqual([sent[0].role,sent[0].pid,sent[0].roleProfile,sent[0].workKey,sent[0].executionKey],['p-작업자',4242,'worker',work.key,out.card.key]);
+ assert.equal(sent[0].taskId,out.plan.taskId);
+ assert.equal(out.dispatch.mailId,'m1');
+ // 조사 실행은 묶음 0라운드, 검수는 reviewer 프로필.
+ const research=workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'research',round:'1',title:'조사','body-file':path.join(dir,'body.md'),note:'조사',assign:'p-조사자'},context);
+ assert.deepEqual([research.card.rallyRound,research.card.rallyStep,research.dispatch],['0','research',null]);
+ const review=workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'review',round:'1',title:'검수','body-file':path.join(dir,'body.md'),note:'검수',assign:'p-검수자',dispatch:'검수하라'},context);
+ assert.equal(sent.at(-1).roleProfile,'reviewer');assert.equal(review.card.rallyStep,'review');
+ // 묶음에 못 들어가는 단계, assign 없는 dispatch, 읽고 시작할 것이 없는 본문은 거절한다.
+ assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'release',round:'2',title:'배포','body-file':path.join(dir,'body.md'),note:'배포',assign:'p-작업자'},context),/묶음에 들어가지 않는다/);
+ assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'fix',round:'2',title:'수정','body-file':path.join(dir,'body.md'),note:'수정',dispatch:'하라'},context),/--assign/);
+ fs.writeFileSync(path.join(dir,'bare.md'),'# 읽을 문서 없는 지시');
+ assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'fix',round:'2',title:'수정','body-file':path.join(dir,'bare.md'),note:'수정',assign:'p-작업자'},context),/읽고 시작할 것/);
+ assert.equal(cards.list().filter(c=>c.status==='assigned').length,3);
+});
