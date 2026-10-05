@@ -25,7 +25,8 @@ const Status = lazy(() => import("./pages/Status")),
   Decisions = lazy(() => import("./pages/Decisions")),
   Runners = lazy(() => import("./pages/Runners")),
   Operations = lazy(() => import("./pages/Operations")),
-  Create = lazy(() => import("./pages/Create"));
+  Create = lazy(() => import("./pages/Create")),
+  StrategyMap = lazy(() => import("./pages/StrategyMap"));
 const Mailbox = lazy(() =>
     import("./pages/Records").then((m) => ({ default: m.Mailbox })),
   ),
@@ -37,6 +38,7 @@ const Mailbox = lazy(() =>
   );
 const links = [
   ["status", "전체 현황"],
+  ["strategy-map", "전략 맵"],
   ["dashboard", "워크·카드"],
   ["decisions", "내 결정"],
   ["runner-settings", "실행 모델"],
@@ -47,7 +49,7 @@ const links = [
   ["work-create", "새 워크"],
   ["card-create", "카드 추가"],
 ];
-const primaryLinks = links.slice(0, 6);
+const primaryLinks = links.slice(0, 7);
 export default function App() {
   const href = useLocation(),
     url = useMemo(() => new URL(href), [href]),
@@ -102,6 +104,8 @@ export default function App() {
   const content =
     view === "status" ? (
       <Status url={url} />
+    ) : view === "strategy-map" ? (
+      <StrategyMap />
     ) : view === "dashboard" ? (
       <Workspace url={url} />
     ) : view === "decisions" ? (
