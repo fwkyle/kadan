@@ -79,7 +79,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
 | `kadan watch` | 정체·끊김·완료 후보를 감독에게 알리는 감시를 돌린다 | [감시 기준](watch-overview.md), [제한 재개](rate-limit-retry.md), [책임 관계](hierarchy.md) |
-| `kadan watch-report <호출ID>` | 감시 AI가 판정 결과를 돌려준다 | `--verdict 진행중\|입력대기\|실행완료\|응답장애\|정체\|모름\|조정 --reason <이유>` |
+| `kadan watch-report <호출ID>` | 감시 AI가 판정 결과를 돌려준다 | `--verdict 진행중\|입력대기\|실행완료\|응답장애\|정체\|모름\|조정 --reason <이유>` (`죽음`은 옛 규약 호환으로 받되 새 보고에서는 거절) |
 
 ## 업무·카드·결정
 

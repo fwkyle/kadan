@@ -877,9 +877,11 @@ export function collectCardFiles(entries, deps = {}) {
   return files;
 }
 
+// 자동 첨부된 역할 지침 블록은 미리보기에서 뺀다. 대시보드 우편 미리보기가 마크업으로 시작해 본문이 안 보였다(2026-10-05).
+const RECEIVER_INSTRUCTIONS_BLOCK = /<!--\s*kadan:receiver-instructions\s*-->[\s\S]*?(?:<!--\s*\/kadan:receiver-instructions\s*-->|$)/gu;
 export function mailPreview(message, limit = 100) {
   if (typeof message !== "string") return "";
-  const flat = message.replace(/\s+/gu, " ").trim();
+  const flat = message.replace(RECEIVER_INSTRUCTIONS_BLOCK, " ").replace(/\s+/gu, " ").trim();
   return flat.length <= limit ? flat : `${flat.slice(0, limit)}…`;
 }
 
