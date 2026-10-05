@@ -89,14 +89,13 @@
 
 | 화면 | 가는 길(주소) | 주요 칸 이름 | 볼 때 | 데이터 |
 |---|---|---|---|---|
-| 전체 현황 | 메뉴 · `#status` (옛 `#overview`·`#boards`·`#status-*`도 여기로 온다) | 위쪽 숫자 칩(내 결정·멈춘 것·작업 중), 내 결정 대기, 멈춘 것, 열린 워크, 보류 중인 워크, 최근 24시간에 일어난 일. 접힘: 판별 진행 막대, 발령 전 카드, 끝난 판, 자원 사용 | 지금 무엇이 중요한가 | `/api/dashboard/status` |
-| 담당자 상태 | 전체 현황의 링크 · `#sessions` (`alive=1`이면 생존만) | 담당 보기(전체·생존만), 숨긴 담당 안내 | 누가 켜져 있나 | `/api/dashboard/sessions` |
+| 전체 현황 | 메뉴 · `#status` (옛 `#overview`·`#boards`·`#status-*`도 여기로 온다) | 다섯 칩(내 결정 대기·지금 막힌 것·작업 중·흐름 확인·살아 있는 담당), 담당별 모델 줄, 내 결정 대기, 지금 막힌 것(해소 전 감시 경보 포함), 흐름 확인, 열린 워크, 보류 중인 워크, 최근 24시간에 일어난 일. 접힘: 판별 진행 막대, 발령 전 카드, 끝난 판, 자원 사용 | 지금 무엇이 중요한가 | `/api/dashboard/status` |
 | 워크·카드 | 메뉴 · `#dashboard` (옛 `#cards`·`#card-list`) | 작업 종류(카드·워크, 기본 카드, `collection=work`), 연결(모든 카드·워크 미연결, `collection=unlinked`), 상태 선택, 보기(표 보기·목록·상세·카드 월·관계도, `layout=table·split·wall·map`), 표 열, 닫을 카드, 모델별 작업 시간(카드 쪽에만) | 무엇을 맡겼고 어디까지 왔나 | `/api/dashboard/workspace`·`summary`·`worktime` |
 | 카드·워크 상세 | 목록에서 행 선택 · `?card=<키>&detail=1&collection=…#detail` | 작업별 티키타카, 작업 내용·완료 조건, 지시문 원문, 기록 남기기, 결과·검수, 작업자 보고, 역할별 실행 결과, 워크 안의 카드, 인박스·최근, 기술 정보·변경 이력, 티키타카 연결 기록 | 한 장의 지시·결과·검수가 어떻게 됐나 | `/api/dashboard/detail`·`review-result`·`mail-body` |
 | 워크 진행 이력 | 상세의 `진행 이력`(카드는 `연결된 워크의 진행 이력`) 링크 · `?flowWork=<워크키>#operations-flow` | 구현·검수 카드, 완료 신호, 자동 연결·후속 근거, 인계 기록, 연결된 우편, 워크 변경 이력 | 워크 하나가 어떤 순서로 흘렀나 | `/api/operations-flow` |
 | 새 워크 · 카드 추가 | 워크·카드 목록의 버튼 · `#work-create`·`#card-create` (옛 `#create`) | 입력 양식 | 새로 맡길 때 | `/api/dashboard/create` |
 | 내 결정 | 메뉴 · `#decisions` (`#decision-*`) | 내 결정 필요, 이전 결정 | 내가 답해야 할 것 | `/api/dashboard/decisions` |
-| 실행 모델 | 메뉴 · `#runner-settings` | 모델·대체 후보 변경, 프리셋 전환, 최근 변경, 즐겨찾기 관리 | 다음 발령과 다음 감시 AI 호출에 쓸 실행기·모델·대체 후보 | `/api/dashboard/runners` |
+| 실행 모델 | 메뉴 · `#runner-settings` (옛 `#sessions`는 이 화면의 담당자 상태 절로 온다, `alive=1`이면 생존만) | 담당자 상태 · 지금 열린 창(담당 보기 전체·생존만, 숨긴 담당 안내), 다음 발령의 실행 모델(모델·대체 후보 변경, 프리셋 전환, 최근 변경, 즐겨찾기 관리) | 지금 열린 창이 어느 모델인가, 다음 발령과 다음 감시 AI 호출에 쓸 실행기·모델·대체 후보 | `/api/dashboard/sessions`·`runners` |
 | 우편함 | 메뉴 · `#mailbox` | 역할 간 편지 목록, 답장 대기·안 읽음 수 | 무엇을 주고받았나 | `/api/dashboard/mail`·`mail-body` |
 | 기록 · 활동 기록 | 메뉴 · `#ledger` | 기록 종류(활동 기록·실행 이력) | 왜 이런 상태가 됐나(사건 원문) | `/api/dashboard/ledger` |
 | 기록 · 실행 이력 | 기록의 탭 · `#runs` | 실행 상태별 목록 | 누가 맡았고 끝났나 | `/api/dashboard/runs` |

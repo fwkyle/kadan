@@ -1,7 +1,8 @@
-import { useContext, useEffect, useId, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
 import { save, useResource } from "../resource";
 import { ownPart } from "../runner-draft";
 import type { Stamp } from "../types";
+import { Sessions } from "./Records";
 import {
   ActionForm,
   AppContext,
@@ -44,14 +45,23 @@ type RunnersData = Stamp & {
   // 감시 AI는 이 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 자동으로 차례로 시도한다.
   watch?: { runner: string; maxAttempts: number };
 };
-export default function Runners() {
+// 담당자 상태(지금 열린 창의 모델)와 실행 모델 설정(다음 발령의 모델)은 같은 질문 "어느 모델인가"의 지금·다음이라
+// 한 화면에 둔다(2026-10-05 점검 보고서 3부). 옛 주소 #sessions는 아래 절로 내려온다.
+export default function Runners({ url }: { url: URL }) {
   const resource = useResource<RunnersData>("runners"),
-    data = resource.data;
+    data = resource.data,
+    scrolled = useRef("");
+  useEffect(() => {
+    if (url.hash !== "#sessions" || scrolled.current === url.href) return;
+    document.getElementById("sessions")?.scrollIntoView({ block: "start" });
+    scrolled.current = url.href;
+  }, [url.href, url.hash]);
   return (
     <section>
       <h1>실행 모델</h1>
-      <p>다음 작업에 사용할 AI 도구·모델·강도를 역할별로 설정합니다. 변경은 다음 발령부터 적용됩니다.</p>
-      <p className="muted">현재 열린 AI 창은 유지됩니다. 현재 실행 중인 모델은 <a href="#sessions">담당자 상태</a>에서 확인하세요.</p>
+      <p>지금 열린 담당 창이 어떤 모델로 돌고 있는지 보고, 다음 발령에 쓸 AI 도구·모델·강도를 역할별로 설정합니다. 설정 변경은 다음 발령부터 적용되며 열린 창은 그대로입니다.</p>
+      <Sessions url={url} />
+      <h2>다음 발령의 실행 모델</h2>
       <ErrorMessage error={resource.error} />
       <Freshness collectedAt={data?.collectedAt} {...resource} />
       {!data ? (
