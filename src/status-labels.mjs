@@ -21,3 +21,9 @@ export const statusBucket=state=>bucketOf[state]??'check';
 export const isEnded=state=>statusBucket(state)==='end';
 // 상태 필터·상태 변경 이력처럼 저장 코드를 하나씩 구분해야 하는 곳에서만 쓴다. 작업중 두 칸이 같은 글자로 보이지 않게 한다.
 export const exactStatusLabel=state=>state==='waiting'?'작업중 · 기다림':statusLabel(state);
+// 카드에 저장된 상태를 상세에 적는다. 대체는 무엇이 이어받았는지 붙인다: 업무·설명이 있으면 그것, 없으면 후속 카드(2026-10-05 [kyle]).
+export const storedStatusText=card=>{
+ const label=card?.status?statusLabel(card.status):'모름';
+ const by=card?.status==='superseded'?card.replacedByText||card.replacedBy:'';
+ return by?`${label} · ${by}`:label;
+};

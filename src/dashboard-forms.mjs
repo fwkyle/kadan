@@ -42,6 +42,8 @@ export function cardForms(c) {
       ),
       text("statusReason", "현재 상태 이유"),
       field("replacedBy", "대체된 후속 카드", c.replacedBy),
+      // 후속 카드 하나가 아니라 업무·여러 PR이 이어받아 끝냈을 때 적는다(2026-10-05 [kyle]).
+      field("replacedByText", "이어받은 업무·설명 (후속 카드가 하나가 아닐 때)", c.replacedByText),
       field("resolutionOwner", "후속 담당", c.resolutionOwner),
       text("nextAction", "다음 행동·해소 조건", c.nextAction),
       text("scope", "허용한 작업 범위", c.scope),

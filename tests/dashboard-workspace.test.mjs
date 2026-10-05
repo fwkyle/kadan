@@ -199,6 +199,11 @@ test('요약에서 대체된 후속 카드의 명시적 링크를 제공한다',
  const html=renderWorkspaceDetail(card({replacedBy:'repo/card-next'})).match(/id="dw-panel-summary"[\s\S]*?<\/section>/)[0];
  assert.match(html,/후속 카드/);assert.match(html,/data-card-key="repo\/card-next"/);assert.match(html,/href="\?card=repo%2Fcard-next#detail"/);
 });
+test('요약과 기술 정보에 대체한 업무·설명을 함께 보인다',()=>{
+ const c=card({status:'superseded',displayState:'superseded',replacedByText:'9월 개편으로 끝남'});
+ const html=renderWorkspaceDetail(c);
+ assert.match(html,/이어받은 일: 9월 개편으로 끝남/);assert.match(html,/<dt>카드 상태<\/dt><dd>대체 · 9월 개편으로 끝남<\/dd>/);
+});
 test('현재 세션은 현재 담당과 현재 조회로만 표시하고 과거 담당 실행과 합치지 않는다',()=>{
  const c=card({role:'새 담당',runs:[{role:'옛 담당',sessionState:'alive'}]});
  const session=ctx=>renderWorkspaceDetail(c,{center:ctx}).match(/<dt>세션 상태<\/dt><dd>(.*?)<\/dd>/)[1];

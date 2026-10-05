@@ -3,7 +3,6 @@ import { buildReviewFlows, readReviewResult } from "./review-flow.mjs";
 import {
   buildHumanBrief,
   currentProgressReport,
-  stateText,
   isExecution,
   waitingText,
 } from "./human-brief.mjs";
@@ -19,7 +18,7 @@ import {
   renderWatchOverview,
 } from "./watch-overview-wall.mjs";
 import { executionBucket } from "./dashboard-execution.mjs";
-import { isEnded } from "./status-labels.mjs";
+import { isEnded, storedStatusText } from "./status-labels.mjs";
 import { readActiveHierarchy } from "./hierarchy-register.mjs";
 import { renderCardDocument } from "./card-content.mjs";
 import { decisionContent, RUN_STATE_LABELS } from "./decision-wall.mjs";
@@ -693,7 +692,7 @@ export function dashboardData(snapshot, url) {
         showRecent: false,
       }),
       facts: [
-        ["카드 상태", stateText[c.status] || c.status],
+        ["카드 상태", storedStatusText(c)],
         // 결과 대기는 상세에서만 기다리는 이유를 붙인다(2026-10-05 [kyle]).
         ["실행 상태", row.healthKind === "waiting" ? waitingText(c) : row.healthLabel],
         ["담당", c.role],

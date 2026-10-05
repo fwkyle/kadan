@@ -4,7 +4,7 @@ import {renderCardInbox} from './dashboard-inbox.mjs';
 import {approvedDetailGuide} from './dashboard-detail-guides.mjs';
 import {escapeHtml as e,renderCardDocument} from './card-content.mjs';
 import {stateText,progressLabel,currentProgressReport} from './human-brief.mjs';
-import {exactStatusLabel} from './status-labels.mjs';
+import {exactStatusLabel,storedStatusText} from './status-labels.mjs';
 import {renderDetailSummary,renderInstructionTable,renderDetailHistory,detailEvents,renderDetailSections} from './dashboard-detail.mjs';
 import {buildCardFlows,cardPurpose,renderCardFlow,renderRallyFlow} from './dashboard-flow.mjs';
 import {workspaceWallHtml,workspaceMapHtml} from './dashboard-canvas.mjs';
@@ -205,7 +205,7 @@ export function renderWorkspaceDetail(c,{brief,center,decisions=[],decisionError
  const runHtml=runs.length?`<table><thead><tr><th>담당</th><th>실행 기록</th><th>시각</th></tr></thead><tbody>${runs.map(r=>`<tr><td>${e(r.role)}</td><td>${e(({done:'완료 기록',failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료'})[r.state]||r.state||'모름')}</td><td>${e(timeLabel(r.at))}</td></tr>`).join('')}</tbody></table>`:'<p>연결된 실행 기록이 없습니다.</p>';
  const panels={
   summary:`<div class="execution-evidence">${renderExecutionHealth(model)}<p>${e(model.healthReason)}</p><small>${e(model.signalLabel)} · ${e(model.signalAt?timeLabel(model.signalAt):'기록 없음')} · 카드 수정 ${e(timeLabel(c.at))}</small></div>`+renderDetailSummary(c,{brief,report,reviews,reviewLinks:cardLinks(reviews),decisions:links,decisionError,events,compact:true,showRecent:false}),
-  technical:`<dl><dt>카드 상태</dt><dd>${e(stateText[c.status]||c.status||'모름')}</dd><dt>실행 상태</dt><dd>${e(progressLabel(c,Date.now(),{detail:true}))}</dd><dt>세션 상태</dt><dd>${e(sessions)}</dd><dt>마지막 보고</dt><dd>${e(model.reportLabel)}</dd><dt>상세 수집</dt><dd>${e(timeLabel(collectedAt))}</dd><dt>카드 ID</dt><dd>${e(c.id)}</dd><dt>원본 제목</dt><dd>${e(c.title||c.id)}</dd></dl>${brief?.stale?'<p>이전 설명의 진행 서술은 사용하지 않습니다.</p>':''}${brief?.error?`<p>${e(brief.error)}</p>`:''}`, 
+  technical:`<dl><dt>카드 상태</dt><dd>${e(storedStatusText(c))}</dd><dt>실행 상태</dt><dd>${e(progressLabel(c,Date.now(),{detail:true}))}</dd><dt>세션 상태</dt><dd>${e(sessions)}</dd><dt>마지막 보고</dt><dd>${e(model.reportLabel)}</dd><dt>상세 수집</dt><dd>${e(timeLabel(collectedAt))}</dd><dt>카드 ID</dt><dd>${e(c.id)}</dd><dt>원본 제목</dt><dd>${e(c.title||c.id)}</dd></dl>${brief?.stale?'<p>이전 설명의 진행 서술은 사용하지 않습니다.</p>':''}${brief?.error?`<p>${e(brief.error)}</p>`:''}`, 
   work:renderInstructionTable(c),
   evidence:`<h3>역할별 실행 결과</h3>${runHtml}<h3>작업자가 남긴 보고</h3>${report.state==='reported'?`<p class="muted">${e(report.by||'모름')} · ${e(timeLabel(report.at))}</p><div class="dw-prose">${renderCardDocument(report.note||'',c)}</div>`:`<p>${report.state==='unknown'?'보고 확인 불가':'보고 없음'} · ${report.state==='unknown'?'현재 담당과 보고 시각의 근거를 확인하세요.':'현재 배정·발령 이후의 유효한 보고가 없습니다.'}</p>`}<h3>명시적으로 연결된 검수 카드</h3>${reviews.length?`<ul>${cardLinks(reviews)}</ul>`:'<p>현재 라운드에 연결된 검수 카드가 없습니다.</p>'}<p class="muted">실행 완료 기록은 검수 통과나 배포 완료를 뜻하지 않습니다. 결과 문서와 검수 범위는 각 카드의 작업 내용과 기록에서 확인하세요.</p>`,
   group:renderRallyFlow(c,flow),
