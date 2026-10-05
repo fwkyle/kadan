@@ -1,7 +1,7 @@
 import {operationsFlowSummaries} from './operations-flow.mjs';
 import fs from 'node:fs';
 import {WorkStore} from './work-store.mjs';
-import {CardStore} from './card-store.mjs';
+import {CardStore,readFirstPaths} from './card-store.mjs';
 import {appendLedger,readLedger} from './ledger.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {automaticReviewCommand} from './automatic-review-command.mjs';
@@ -49,9 +49,21 @@ export function workCommand(args,flags,context){
  if(action==='execute'&&(flags.assign!=null||flags.dispatch!=null)){
   if(flags.assign==null)throw new Error('--dispatch는 --assign <역할>과 함께 쓴다');
   if(!RALLY_STEPS.has(flags.phase))throw new Error(`--assign은 implementation|fix|review|research 실행에만 쓴다 (${flags.phase}는 묶음에 들어가지 않는다)`);
+  // 배정에서 거절될 본문이면 실행을 만들기 전에 막는다. 만든 뒤 실패하면 초안이 남고, 같은 명령을 고쳐 다시 치면
+  // 초안이 하나 더 생겼다(2026-10-05 실측).
+  if(readFirstPaths(fields.body).length===0)throw new Error("--assign 발령에는 지시문 본문 '읽고 시작할 것'에 읽을 문서를 절대경로로 최소 1개 적어야 한다(실행은 만들지 않았다). 예: '## 읽고 시작할 것' 아래에 '- /절대경로/저장소/AGENTS.md — 저장소 공통 규칙'.");
   const before=new Set(store.get(key).executions.map(x=>x.key));
   const work=store.change(key,action,fields,{revision:flags.revision,by,note:flags.note});
-  return assignAndDispatch(store,work,before,flags,context);
+  try{return assignAndDispatch(store,work,before,flags,context);}
+  catch(error){
+   // 실행은 이미 등록됐다. 주소와 현재 상태를 알려 같은 명령의 재실행(실행 중복) 대신 이어서 처리하게 한다.
+   const created=work.executions.find(x=>!before.has(x.key));
+   if(created){
+    const card=new CardStore(home).get(created.key);
+    error.message+=` — 새 실행 ${created.key}는 이미 등록됐다(상태 ${card?.status??'모름'}). 같은 명령을 다시 치면 실행이 하나 더 생긴다. 이 실행을 card update/send --task로 이어가거나 card update --status cancelled로 정리하라.`;
+   }
+   throw error;
+  }
  }
  return store.change(key,action,fields,{revision:flags.revision,by,note:flags.note});
 }

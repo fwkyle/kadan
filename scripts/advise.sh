@@ -17,7 +17,9 @@ cat >"$advice_dir/input.txt"
 printf '%s\n' "$advice_model" >"$advice_dir/model.txt"
 advice_status=0
 # 저장소는 읽기만 한다. 감시 AI와 달리 project_doc_max_bytes를 0으로 두지 않아 저장소의 에이전트 안내를 읽는다.
-codex -a never exec --model "$advice_model" -c "model_reasoning_effort=\"$advice_effort\"" -C "$advice_repo" --sandbox read-only --skip-git-repo-check -o "$advice_dir/result.txt" <"$advice_dir/input.txt" >"$advice_dir/diagnostic.log" 2>&1 &
+# AGENTS.md가 없고 CLAUDE.md만 있는 저장소도 안내를 읽게 대체 이름을 명시한다. 사용자 codex 설정에 기대지 않는다
+# (2026-10-05 실측: 이 설정으로 AGENTS.md 없는 시험 저장소의 CLAUDE.md 내용을 답했다).
+codex -a never exec --model "$advice_model" -c "model_reasoning_effort=\"$advice_effort\"" -c 'project_doc_fallback_filenames=["CLAUDE.md",".agents.md"]' -C "$advice_repo" --sandbox read-only --skip-git-repo-check -o "$advice_dir/result.txt" <"$advice_dir/input.txt" >"$advice_dir/diagnostic.log" 2>&1 &
 advice_pid=$!
 trap 'kill -TERM "$advice_pid" 2>/dev/null || true; exit 143' TERM INT
 wait "$advice_pid" || advice_status=$?

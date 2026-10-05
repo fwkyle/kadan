@@ -63,10 +63,17 @@ test('같은 지문이 여러 주기 유지돼도 Enter는 총 1회다',async()=
   assert.equal(f.entries.filter(e=>e.action==='sent').length,1);
 });
 
-test('화면 지문이 바뀌면 새 사건이다',async()=>{
+test('Enter 뒤 배너가 남은 채 화면만 바뀌면 다시 보내지 않고, 배너가 사라졌다 다시 뜨면 새 사건이다',async()=>{
   const f=fixture();
-  await f.tick(); assert.equal(f.sent.length,1);
-  f.seen.screen=`다른 출력\n\n  ${QUEUE_BANNER}\n\n› \n`;
+  const a1=await f.tick(); assert.equal(f.sent.length,1);
+  // 2026-10-05 실측: Enter에 대한 출력 한 줄로 지문이 바뀌어 Enter·경보·해소가 약 13초마다 반복됐다.
+  f.seen.screen=`다른 출력\n\n  ${QUEUE_BANNER}\n\n› \n받음(0자)\n› \n`;
+  const a2=await f.tick(); assert.equal(f.sent.length,1);
+  assert.equal(a2.length,1); assert.equal(a2[0].id,a1[0].id,'배너가 떠 있는 동안 경보는 하나');
+  f.seen.screen=idle; // 배너가 사라짐
+  const a3=await f.tick(); assert.equal(a3.length,0);
+  assert.equal(f.entries.at(-1).transition,'cleared');
+  f.seen.screen=`새 출력\n\n  ${QUEUE_BANNER}\n\n› \n`;
   await f.tick(); assert.equal(f.sent.length,2);
 });
 

@@ -116,6 +116,7 @@ export default function Status({url}: {url: URL}) {
               <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
             </li>)}</ul>}
         {data.supervisors && data.supervisors.unassigned > 0 && <p className="st-hint">관계표에 없는 담당의 실행 {data.supervisors.unassigned}건은 어느 슈퍼감독에도 묶이지 않았습니다.</p>}
+        {data.supervisors && (data.supervisors.unowned ?? 0) > 0 && <p className="st-hint">담당이 아직 정해지지 않은 실행(초안·보류) {data.supervisors.unowned}건은 세지 않았습니다.</p>}
       </section>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>

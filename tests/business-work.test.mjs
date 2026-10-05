@@ -208,6 +208,15 @@ test('execute --assign은 실행 생성·배정·묶음·plan을 한 번에 하�
  assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'release',round:'2',title:'배포','body-file':path.join(dir,'body.md'),note:'배포',assign:'p-작업자'},context),/묶음에 들어가지 않는다/);
  assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'fix',round:'2',title:'수정','body-file':path.join(dir,'body.md'),note:'수정',dispatch:'하라'},context),/--assign/);
  fs.writeFileSync(path.join(dir,'bare.md'),'# 읽을 문서 없는 지시');
- assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'fix',round:'2',title:'수정','body-file':path.join(dir,'bare.md'),note:'수정',assign:'p-작업자'},context),/읽고 시작할 것/);
+ const executionsBefore=store.get(work.key).executions.length;
+ assert.throws(()=>workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'fix',round:'2',title:'수정','body-file':path.join(dir,'bare.md'),note:'수정',assign:'p-작업자'},context),/읽고 시작할 것.*만들지 않았다/);
+ assert.equal(store.get(work.key).executions.length,executionsBefore,'거절될 본문은 실행을 만들기 전에 막는다');
  assert.equal(cards.list().filter(c=>c.status==='assigned').length,3);
+ // 실행을 만든 뒤 전송에서 실패하면 그 실행 주소와 상태를 오류에 알려 재실행 중복을 막는다.
+ const failing={...context,send:()=>{throw new Error('세션 없음');}};
+ let failure;
+ try{workCommand(['execute',work.key],{revision:store.get(work.key).revision,phase:'fix',round:'2',title:'수정','body-file':path.join(dir,'body.md'),note:'수정',assign:'p-작업자',dispatch:'하라'},failing);}catch(error){failure=error;}
+ const leftover=store.get(work.key).executions.at(-1).key;
+ assert.match(failure?.message??'',/세션 없음/);
+ assert.ok(failure.message.includes(leftover)&&/상태 assigned/.test(failure.message),failure.message);
 });

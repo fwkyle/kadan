@@ -43,13 +43,25 @@ export class QueueResume {
       const history = entries.filter(e => e.kind === 'queue-resume' && e.key === key);
       const last = history.at(-1);
       const emit = (action, more = {}) => this.record({kind:'queue-resume', by:'watch', key, role:seen.role, session, pid:seen.pid, at:now, action, ...more});
-      const alertOnce = reason => this.alerts.push({id:`queue-resume:${key}:${banner?.fingerprint ?? 'none'}`, kind:'입력큐', level:'AMBER', role:seen.role, session, line:reason});
+      // 배너가 떠 있는 동안은 경보 하나다. 지문을 id에 넣으면 배너가 남은 채 화면만 바뀌어도 새 경보 + 옛 경보 해소가
+      // 주기마다 나갔다(2026-10-05 실측: 40초에 경보·해소 4쌍). 배너가 실제로 사라질 때 한 번 해소된다.
+      const alertOnce = reason => this.alerts.push({id:`queue-resume:${key}`, kind:'입력큐', level:'AMBER', role:seen.role, session, line:reason});
+      // Enter를 보낸 뒤 배너가 사라지거나 진행으로 바뀐 적이 없으면 그 Enter는 아직 해소되지 않았다.
+      const lastSent = history.findLastIndex(e => e.action === 'sent');
+      const pendingSent = lastSent >= 0 && !history.slice(lastSent + 1).some(e => e.action === 'transition' && ['cleared', 'progress'].includes(e.transition))
+        ? history[lastSent] : null;
       if (!banner) {
-        // 직전 Enter로 배너가 사라졌으면 관찰 전환을 별도로 남긴다.
-        if (last?.action === 'sent') emit('transition', {fingerprint:last.fingerprint, transition:'cleared'});
+        // 직전 Enter 뒤 배너가 사라졌으면 관찰 전환을 별도로 남긴다. 이후 새로 뜬 배너는 새 사건이다.
+        if (pendingSent) emit('transition', {fingerprint:pendingSent.fingerprint, transition:'cleared'});
         continue;
       }
       if (last?.action === 'sent' && last.fingerprint !== banner.fingerprint) emit('transition', {fingerprint:last.fingerprint, transition:'screen-changed'});
+      if (pendingSent) {
+        // Enter 뒤 배너가 그대로면 화면 다른 곳이 바뀌어도(Enter에 대한 출력 등) 다시 보내지 않는다. 지문마다 다시 보내면
+        // 같은 배너에 Enter가 약 13초마다 반복됐다(2026-10-05 실측).
+        alertOnce('Enter 전달 뒤 큐 배너 유지 — 자동 재시도하지 않음');
+        continue;
+      }
       const handledFingerprint = history.findLast(e => e.fingerprint === banner.fingerprint && ['sent','not-sent','delivery-failed'].includes(e.action));
       if (handledFingerprint) {
         // 같은 배너가 떠 있는 동안은 같은 id의 경보를 계속 올린다(dedup이 중복 발송을 막는다). 보내지 않은 경우만 빼면

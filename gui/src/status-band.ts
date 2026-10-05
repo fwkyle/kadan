@@ -38,7 +38,7 @@ export type SupervisorSummary = {
   super: string; repos: string[]; running: number; waiting: number; stuck: number; openWorks: number;
   decisions: number | null; alerts: number | null; lastSignal: string | null; alive: boolean | null; model: string | null;
 };
-export type Supervisors = { items: SupervisorSummary[]; unassigned: number };
+export type Supervisors = { items: SupervisorSummary[]; unassigned: number; unowned?: number };
 
 // 숫자 칸 순서: 저장소 · 열린 워크 · 작업 중 · 결과 대기 · 막힘 · 내 결정 · 경보. 마지막 신호·생존은 화면이 시각 형식으로 붙인다.
 export function supervisorLine(s: SupervisorSummary): string {

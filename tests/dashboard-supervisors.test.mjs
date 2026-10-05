@@ -27,7 +27,8 @@ const live = [{ role: "a-슈퍼감독", harness: "codex", model: "gpt-5-mini", e
 
 test("슈퍼감독마다 실행·워크·결정·경보를 사슬 끝으로 묶고, 관계표에 없는 담당은 따로 센다", () => {
   const result = supervisorSummary({ hierarchy, rows, works, decisions, alerts, live });
-  assert.equal(result.unassigned, 2, "관계표에 없는 담당·빈 담당");
+  assert.equal(result.unassigned, 1, "관계표에 없는 담당");
+  assert.equal(result.unowned, 1, "담당이 아직 없는 실행은 관계표 사각이 아니라 따로 센다");
   assert.deepEqual(result.items, [
     { super: "a-슈퍼감독", repos: ["repoA", "repoA2"], running: 1, waiting: 1, stuck: 1, openWorks: 2, decisions: 2, alerts: 1,
       lastSignal: "2026-10-05T02:00:00Z", alive: true, model: "gpt-5-mini" },
@@ -40,7 +41,7 @@ test("관계표를 모르면 null, 결정·경보·세션을 모르면 그 칸�
   assert.equal(supervisorSummary({ hierarchy: null, rows }), null);
   const unknown = supervisorSummary({ hierarchy, rows, works, decisions: null, alerts: null, live: null });
   assert.deepEqual(unknown.items.map((s) => [s.decisions, s.alerts, s.alive, s.model]), [[null, null, null, null], [null, null, null, null]]);
-  assert.deepEqual(supervisorSummary({ hierarchy: { "w": "boss" }, rows }), { items: [], unassigned: rows.length });
+  assert.deepEqual(supervisorSummary({ hierarchy: { "w": "boss" }, rows }), { items: [], unassigned: rows.length - 1, unowned: 1 });
 });
 
 test("관계표의 순환은 묶지 않고 멈춘다", () => {
