@@ -403,6 +403,8 @@ export async function runWatch({
   // 큐 대기의 경보 기준은 정체와 같다 — 입력이 닿지 않은 채 같은 시간을 견딘 것이다.
   queuedAfterMs = stallAfterMs,
   sendAlert,
+  // 자가점검 깨우기 전용 전송. 사람이 그 창에서 입력 중이면 미루는 보류 검사를 붙인다(없으면 sendAlert).
+  sendWake = null,
   resume429 = null,
   sendMailReminder = null,
   mailHold = null,
@@ -463,6 +465,9 @@ export async function runWatch({
   const queueResume = new QueueResume({record, sendEnter:sendQueueEnter, sleep,
     readScreen: session => { try { return readText(floor.read(session)); } catch { return null; } }});
   let roleStates = new Map();
+  // 감독 세션의 화면 지문·생존 추적. 작업자 상태와 분리해 둔다 — 같은 맵에 넣으면 감독이 정체 AI·완료후보
+  // 경로로 흘러든다. 유휴 판정(놀고 있음)과 죽은 감독 건너뛰기에만 쓴다.
+  let supervisorStates = new Map();
   let queuedStates = new Map();
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
@@ -555,6 +560,7 @@ export async function runWatch({
       for (const [key,failure] of judgeFailures) if (!observedSessions.has(failure.session)) judgeFailures.delete(key);
       // 대상 제외는 사망/회복이 아니다. 이전 비교·AI 결과와 알림을 조용히 퇴역시킨다.
       for (const session of roleStates.keys()) if (!scope.sessions.has(session)) roleStates.delete(session);
+      for (const session of supervisorStates.keys()) if (!supervisorScope.sessions.has(session)) supervisorStates.delete(session);
       // 재시작 뒤에도 실제 호출 시각을 재사용한다. 예전 지문 없는 기록은 추측하지 않는다.
       for(const request of entries)if(request.kind==='watch-ai-request'&&request.source!=='supervisor-health'&&request.evidenceDigest){
         const at=Date.parse(request.t),previous=workerChecks.get(request.session);
@@ -626,6 +632,12 @@ export async function runWatch({
           stallN
         );
     roleStates = roleAssessment.states;
+    // 감독 세션은 지문·생존만 추적한다. 여기서 나온 경보(죽음 등)는 쓰지 않는다 — 감독의 죽음·PID는
+    // supervisorHealth가, 유휴는 assessSupervisorIdle이 이 상태로 판단한다.
+    if (!observationError && supervisorScope) {
+      const supervisorObservations = new Map([...roles.observations].filter(([s]) => supervisorScope.sessions.has(s) && !scope.sessions.has(s)));
+      supervisorStates = assessRoles(supervisorStates, supervisorObservations, cycleAt - lastCycleAt, intervalMs, stallN).states;
+    }
     // 완료후보는 정상 완료 처리에 시간을 준다. 화면에서 사라져도 done을 재확인한다.
     if (!observationError) {
       const identity = taskIdentity(cards ?? []);
@@ -770,14 +782,18 @@ export async function runWatch({
       ...judgeFailures.values(),
       ...roles.screenAlerts.filter(a=>!supervisorScope?.sessions.has(a.session)),
       ...supervisorCheck.alerts,
+      // 유휴 판정은 작업자뿐 아니라 감독 세션(상위가 있는 감독·최상위 감독)에도 닿는다.
+      // 이전에는 작업 감시 범위로만 걸러 등록된 감독에게는 영원히 가지 않았다(2026-10-05, hierarchy.md 2-H1).
       ...assessSupervisorIdle(
         scope?.entries ?? entries,
-        roleStates,
+        new Map([...roleStates, ...supervisorStates]),
         cycleAt,
         idleMs,
         ledgerError,
         parents
-      ).filter(a=>(!scope || !a.session || scope.sessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))),
+      ).filter(a=>(!observedSessions || !a.session || observedSessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))
+        // 감독의 세션 부재·화면 없음은 감독 점검이 이미 알린다. 같은 세션에 '모름'을 겹쳐 올리지 않는다.
+        && !supervisorCheck.alerts.some(s=>s.session===a.session)),
       ...(observationError ? activeAlerts.filter(a=>a.session) : []),
     ];
     const sourceIds = new Set(nextAlerts.map(alert => alert.id));
@@ -867,19 +883,22 @@ export async function runWatch({
       });
       if (recipient) deliveredRecipients.add(recipient);
     }
-    if (!observationError && (!scope || scope.sessions.has(`kadan-${wakeRole}`)) && wakeDue(wakeRole, lastWakeAt, cycleAt, wakeEveryMs)) {
+    // 깨우기는 작업 감시 범위뿐 아니라 감독 점검 범위의 세션에도 간다(등록된 감독은 전자에서 늘 빠진다).
+    if (!observationError && (!observedSessions || observedSessions.has(`kadan-${wakeRole}`)) && wakeDue(wakeRole, lastWakeAt, cycleAt, wakeEveryMs)) {
       const session = `kadan-${wakeRole}`;
       if (floor.alive(session)) {
         const message = buildWakeMessage();
-        let target = wakeRole;
+        let target = wakeRole, held = false;
         try {
-          sendAlert(wakeRole, message);
+          (sendWake ?? sendAlert)(wakeRole, message);
           deliveredRecipients.add(wakeRole);
         } catch (error) {
-          target = `${wakeRole} 전달 실패(${error.message})`;
+          // 사람이 그 창에서 입력 중이라 미룬 것은 실패가 아니다. 다음 주기에 다시 시도한다.
+          held = typeof error.code === 'string' && (error.code === 'KADAN_HUMAN_ACTIVE' || error.code === 'KADAN_PANE_INPUT_PENDING');
+          target = `${wakeRole} ${held ? '보류' : '전달 실패'}(${error.message})`;
         }
         print(`[watch ${clockTime(cycleAt)}] ${message} → ${target}`);
-        lastWakeAt = cycleAt;
+        if (!held) lastWakeAt = cycleAt;
       }
     }
     lap('alerts');

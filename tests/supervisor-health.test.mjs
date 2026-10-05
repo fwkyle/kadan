@@ -21,18 +21,20 @@ function health(){
  return {h,scope,check:(now,screen='하위 결과를 기다리는 중',extra={})=>h.select({scope,observations:seen(screen),entries,cards:[card],now:epoch+now,enabled:true,...extra})};
 }
 
-test('실제 활성 실행의 일반감독만 점검하고 옛 슈퍼감독·관리 카드만 남은 판은 제외한다',()=>{
+test('실제 활성 실행의 감독 사슬(최상위 포함)을 점검하고 옛 슈퍼감독·관리 카드만 남은 판은 제외한다',()=>{
  const scope=buildSupervisorScope([card],entries,parents);
- assert.deepEqual([...scope.sessions],['kadan-boss']);
+ // 최상위(top, 상위 @user)도 들어간다. 사슬 밖의 old(상위 @user)는 활성 실행이 없어 들어가지 않는다(2026-10-05).
+ assert.deepEqual([...scope.sessions],['kadan-boss','kadan-top']);
+ assert.deepEqual(scope.entries.map(e=>[e.role,e.subject]),[['boss','worker'],['top','worker']]);
  for(const status of ['done','hold','ready','cancelled'])assert.equal(buildSupervisorScope([{...card,status}],entries,parents).sessions.size,0);
  assert.equal(buildSupervisorScope([{...card,role:'boss',workType:'coordination'}],[...entries,{...send,role:'boss'}],parents).sessions.size,0);
 });
 test('작업자 결과 대기와 실행 종료 후 업무 최종 확인은 감독 점검을 유지한다',()=>{
  const waiting={...card,activity:'waiting',activityRole:'worker',activityAt:t};
  assert.equal(buildWatchScope([waiting],entries,parents).sessions.size,0);
- assert.equal(buildSupervisorScope([waiting],entries,parents).sessions.size,1);
+ assert.equal(buildSupervisorScope([waiting],entries,parents).sessions.size,2);
  const done=[...entries,{...send,kind:'done'}];
- assert.equal(buildSupervisorScope([{...card,status:'done'}],done,parents,[work]).sessions.size,1);
+ assert.equal(buildSupervisorScope([{...card,status:'done'}],done,parents,[work]).sessions.size,2);
  for(const status of ['hold','done','cancelled']){
   assert.equal(buildSupervisorScope([card],entries,parents,[{...work,status}]).sessions.size,0);
   assert.equal(buildWatchScope([card],entries,parents,[{...work,status}]).sessions.size,0);
@@ -63,8 +65,10 @@ test('연결·압축 오류는 5분 지속 뒤 1회 먼저 확인하고 옛 오�
 });
 test('감독 부재·PID 불일치·화면 읽기 실패는 정상 대기나 AI 성공으로 만들지 않는다',()=>{
  for(const observation of [{alive:false},{alive:true,pid:99,expectedPid:2,screen:'x'},{alive:true,pid:2,expectedPid:2,screen:null,screenError:'read failed'}]){
-  const f=health(),r=f.check(0,'',{observations:new Map([['kadan-boss',observation]])});
-  assert.equal(r.alerts.length,1);assert.equal(r.candidate,undefined);
+  // 최상위 top도 점검 대상이라 정상 관측을 함께 준다. boss의 이상만 경보여야 한다.
+  const top={role:'top',alive:true,pid:3,expectedPid:3,screen:'대기',digest:'대기',startedAt:t};
+  const f=health(),r=f.check(0,'',{observations:new Map([['kadan-boss',observation],['kadan-top',top]])});
+  assert.equal(r.alerts.length,1);assert.equal(r.alerts[0].role,'boss');assert.equal(r.candidate,undefined);
  }
 });
 test('감독 AI는 정상 무발송·동일 장애 1회·비활성 전환 뒤 늦은 보고 거절',()=>{
@@ -101,7 +105,8 @@ test('실제 감시 루프가 감독을 1시간마다 호출하고 자원 경고
    if(cmd==='memory_pressure')return {status:0,stdout:`System-wide memory free percentage: ${minute<63?10:80}%`};
    if(cmd==='sysctl')return {status:0,stdout:'used = 0M'};return {status:0,stdout:''};},
  }),e=>e===stop);}finally{os.loadavg=oldLoad;}
- assert.deepEqual(calls.map(([m,c])=>[m,c.role,c.source]),[[60,'boss','supervisor-health']]);
+ // 최상위 top도 1시간 점검을 받는다(2026-10-05). 한 주기에 한 명씩이라 boss 다음 주기에 온다.
+ assert.deepEqual(calls.map(([m,c])=>[m,c.role,c.source]),[[60,'boss','supervisor-health'],[61,'top','supervisor-health']]);
  assert.deepEqual(messages,[]);
  assert(!records.some(e=>e.alertKind==='자원'));
 });

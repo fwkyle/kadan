@@ -71,9 +71,13 @@ test('자원 AMBER→RED→모름→정상과 과거 raw 경고·해소가 있�
   const r=await exercise(ctx,{scope,topAlive});
   assert.deepEqual(r.measurements,[]);
   assert.deepEqual(r.messages,[]);
-  assert.deepEqual(r.notifications,[]);
   assert.deepEqual(r.judges,[]);
-  assert(!r.records.some(e=>e.kind==='alert'));
+  // 최상위 슈퍼감독이 없는 활성 판은 2026-10-05부터 그 부재를 @user에게 알린다(자원 경보가 아니다). 그 밖에는 알림 0.
+  const supervisorAbsent=scope==='active'&&!topAlive;
+  assert.deepEqual(r.notifications.length>0,supervisorAbsent);
+  assert(r.notifications.every(args=>args[1].includes('kadan-p-슈퍼감독')));
+  assert(!r.records.some(e=>e.kind==='alert'&&e.alertKind!=='죽음'));
+  assert.equal(r.records.some(e=>e.kind==='alert'),supervisorAbsent);
  }
 });
 

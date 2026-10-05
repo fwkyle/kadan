@@ -34,7 +34,8 @@ async function simulate({from=0,until=66,workers=1,rows=null,screen=()=> '실행
 
 test('같은 실행·같은 근거는 5분 뒤 최초 호출하고 30분마다 재확인하며 진행 검사와 중복하지 않는다',async()=>{
  const {calls}=await simulate();
- assert.deepEqual(calls.map(c=>[c.minute,c.role,c.source]),[[5,'w1','stall'],[35,'w1','stall'],[60,'boss','supervisor-health'],[65,'w1','stall']]);
+ // 최상위 top도 감독 점검 대상(2026-10-05). 한 주기 한 명이라 boss 다음 주기에 온다.
+ assert.deepEqual(calls.map(c=>[c.minute,c.role,c.source]),[[5,'w1','stall'],[35,'w1','stall'],[60,'boss','supervisor-health'],[61,'top','supervisor-health'],[65,'w1','stall']]);
 });
 test('새 우편 근거는 기존 5분 간격 뒤 확인하고 같은 우편으로 다시 5분마다 호출하지 않는다',async()=>{
  const {calls}=await simulate({until:45,onRead:(rows,minute)=>{
@@ -50,7 +51,8 @@ test('감시기를 재시작해도 원장에 남긴 같은 근거의 실제 호�
 });
 test('움직이는 실행도 30분 진행 검사를 받고 같은 시각 감독 관찰을 먼저 처리한다',async()=>{
  const {calls}=await simulate({until:63,screen:(session,minute)=>session==='kadan-w1'?'출력 '+minute:'정당한 대기'});
- assert.deepEqual(calls.map(c=>[c.minute,c.source]),[[30,'progress'],[60,'supervisor-health'],[61,'progress']]);
+ // 감독 관찰(boss 60분, top 61분)이 진행 검사보다 먼저다.
+ assert.deepEqual(calls.map(c=>[c.minute,c.source]),[[30,'progress'],[60,'supervisor-health'],[61,'supervisor-health'],[62,'progress']]);
 });
 test('대기 중 감독 관찰을 작업자보다 먼저 시작하고 다음 1시간은 실제 시작부터 센다',async()=>{
  const {calls,peak}=await simulate({until:123,workers:2,
@@ -58,8 +60,9 @@ test('대기 중 감독 관찰을 작업자보다 먼저 시작하고 다음 1�
   hold:(args,minute)=>args.role==='w1'&&minute===58,releaseAt:61,
  });
  assert.equal(peak,1);
- assert.deepEqual(calls.filter(c=>c.minute>=58&&c.minute<=63).map(c=>[c.minute,c.role]),[[58,'w1'],[62,'boss'],[63,'w2']]);
- const supervisors=calls.filter(c=>c.source==='supervisor-health');
+ // 감독 관찰이 작업자보다 먼저다: boss(62) → top(63) → w2(64). top은 2026-10-05부터 점검 대상이다.
+ assert.deepEqual(calls.filter(c=>c.minute>=58&&c.minute<=64).map(c=>[c.minute,c.role]),[[58,'w1'],[62,'boss'],[63,'top'],[64,'w2']]);
+ const supervisors=calls.filter(c=>c.source==='supervisor-health'&&c.role==='boss');
  assert.deepEqual(supervisors.map(c=>c.minute),[62,122]);
  assert.equal(supervisors[0].screen,'감독 화면 62');
 });
