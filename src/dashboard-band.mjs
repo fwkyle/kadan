@@ -34,19 +34,23 @@ export function flowSummary(reviewFlows) {
 // (2026-10-05 [kyle]). 실행·워크·결정·경보를 담당 역할의 사슬 끝(최상위)으로 묶는다. 관계표를 모르면 null.
 // 관계표에 없는 담당의 실행은 unassigned로 세어 사각을 드러낸다. 담당이 아직 없는 실행(초안·보류)은 관계표 문제가
 // 아니므로 unowned로 따로 센다(2026-10-05 실측: 운영 73건 중 72건이 담당 없는 초안이라 등록하라는 안내가 헛걸음이었다).
+// 역할의 사슬 끝(상위가 @user인 역할). 관계표에 없거나 끊기거나 순환이면 null.
+export function supervisorOf(hierarchy, role) {
+  const parents = hierarchy instanceof Map ? hierarchy : new Map(Object.entries(hierarchy ?? {}));
+  let r = role;
+  for (let i = 0; i < 64 && typeof r === "string"; i++) {
+    const p = parents.get(r);
+    if (p === "@user") return r;
+    if (p == null) return null;
+    r = p;
+  }
+  return null;
+}
+
 export function supervisorSummary({ hierarchy, rows = [], works = [], decisions = null, alerts = null, live = null }) {
   if (!hierarchy || typeof hierarchy !== "object") return null;
   const parents = new Map(Object.entries(hierarchy));
-  const topOf = (role) => {
-    let r = role;
-    for (let i = 0; i < 64 && typeof r === "string"; i++) {
-      const p = parents.get(r);
-      if (p === "@user") return r;
-      if (p == null) return null;
-      r = p;
-    }
-    return null;
-  };
+  const topOf = (role) => supervisorOf(parents, role);
   const supers = [...parents.entries()].filter(([, p]) => p === "@user").map(([r]) => r).sort((a, b) => a.localeCompare(b, "ko"));
   const bySuper = new Map(supers.map((s) => [s, { super: s, repos: new Set(), running: 0, waiting: 0, stuck: 0, openWorks: 0,
     decisions: Array.isArray(decisions) ? 0 : null, alerts: alerts ? 0 : null, lastSignal: null }]));

@@ -58,7 +58,7 @@ import {
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
 import { seniorCommandLabel } from "./senior.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
-import { liveSessions, flowSummary, openAlerts, supervisorSummary } from "./dashboard-band.mjs";
+import { liveSessions, flowSummary, openAlerts, supervisorSummary, supervisorOf } from "./dashboard-band.mjs";
 
 const modelCache = new WeakMap();
 const executionModelCache = new WeakMap();
@@ -504,6 +504,27 @@ export function dashboardData(snapshot, url) {
           : r,
       )
       .map(compact);
+    const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live });
+    // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
+    // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
+    const superFilter = url.searchParams.get("super");
+    if (superFilter) {
+      if (!supervisors) throw Object.assign(new Error("관계표를 읽지 못해 슈퍼감독별로 거를 수 없습니다"), { status: 400 });
+      const item = supervisors.items.find((s) => s.super === superFilter);
+      if (!item) throw Object.assign(new Error(`관계표에서 사용자 바로 아래가 아닌 역할: ${superFilter}`), { status: 400 });
+      const mine = (role) => supervisorOf(m.hierarchy, role) === superFilter;
+      const myAlerts = (allAlerts?.items ?? []).filter((a) => mine(a.recipient));
+      return {
+        ...stamp,
+        super: superFilter,
+        supervisor: item,
+        rows: statusRows.filter((r) => mine(r.owner)),
+        works: statusWorks.filter((w) => mine(w.owner)),
+        decisions: openDecisions === null ? null : openDecisions.filter((d) => mine(d.requestedBy)),
+        alerts: allAlerts === null ? null : { count: myAlerts.length, items: myAlerts.slice(0, 20) },
+        recent: recent.filter((e) => mine(e.role)).slice(0, 20).map((e) => ({ ...pick(e, ["at", "kind", "label", "role"]), card: pick(e.card, ["key", "title"]) })),
+      };
+    }
     return {
       ...stamp,
       works: statusWorks,
@@ -533,7 +554,7 @@ export function dashboardData(snapshot, url) {
       flow: flowSummary(m.reviewFlows),
       alerts,
       // 슈퍼감독마다 한 줄(관계표 기준). 관계표를 모르면 null.
-      supervisors: supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live }),
+      supervisors,
       // 전략 맵이 역할을 슈퍼감독 기지로 묶는 데 쓴다(2026-10-05). 관계표를 모르면 null.
       hierarchy: m.hierarchy ?? null,
       recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),

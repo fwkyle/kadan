@@ -36,14 +36,13 @@ test('재시작이라도 이미 배달된 같은 경보는 다시 보내지 않�
  assert.equal(records.filter(r=>r.alertKind==='시작보고누락').length,0);
 });
 
-test('복원된 경보의 조건이 풀렸으면 기억한 수신자에게 해소를 한 번 보낸다',async()=>{
+test('복원된 경보의 조건이 풀렸으면 기억한 수신자를 적어 해소 기록을 한 번 남긴다(우편 없음, 2026-10-05)',async()=>{
  const seeded={kind:'alert',id:alertId,alertKind:'시작보고누락',level:'AMBER',role:'worker',session:'kadan-worker',taskId:'c',recipient:'boss',delivered:true,by:'watch'};
  const cards=cycle=>[{...c,...(cycle>=2?{activity:'running',activityRole:'worker',activityAt:new Date(now).toISOString()}:{})}];
  const {messages,records}=await fixture([seeded],cards);
- assert.equal(messages.filter(m=>m.text.includes('시작 보고 누락')&&!m.text.includes('해소됨')).length,0);
- assert.equal(messages.filter(m=>m.text.includes('시작 보고 누락 - 해소됨')).length,1);
- assert.equal(messages.find(m=>m.text.includes('해소됨'))?.role,'boss');
- assert.equal(records.filter(r=>r.resolved===true&&r.alertKind==='시작보고누락').length,1);
+ assert.equal(messages.filter(m=>m.text.includes('시작 보고 누락')).length,0);
+ const resolved=records.filter(r=>r.resolved===true&&r.alertKind==='시작보고누락');
+ assert.equal(resolved.length,1);assert.equal(resolved[0].recipient,'boss');assert.equal(resolved[0].delivered,false);
 });
 
 test('시드가 없는 새 경보는 정상으로 울리고 기록에는 복원용 id가 남는다',async()=>{

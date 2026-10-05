@@ -32,10 +32,11 @@ test('실제 호출마다 역할·종료코드·모델·증거경로를 기록�
  const old=console.error;console.error=()=>{};
  try{assert.equal(judgeStallAlerts({...args,judgeStates:new Map(),now:3,record:()=>{throw Error('write');}})[0].judgeReason,'invalid-output');}finally{console.error=old;}
 });
-test('경보 해제는 정상 또는 완료로 단정하지 않는 쉬운 문구로 같은 수신자에게 한 번 보낸다',()=>{
- const sent=[],records=[];
- deliverResolution({alert:{...alert,kind:'모름'},recipients:new Map([[alert.id,'상위']]),cycleAt:0,sendAlert:(role,text)=>sent.push({role,text}),record:e=>records.push(e),print:()=>{}});
- assert.equal(sent[0].role,'상위');assert.match(sent[0].text,/상태 확인 필요 - 해소됨/);assert.match(sent[0].text,/작업 완료를 뜻하지 않음/);assert(!sent[0].text.includes('해소 모름'));assert.equal(records[0].resolved,true);
+test('경보 해제는 정상 또는 완료로 단정하지 않는 쉬운 문구로 감시 출력에만 남기고 우편은 보내지 않는다(2026-10-05)',()=>{
+ const sent=[],records=[],printed=[];
+ deliverResolution({alert:{...alert,kind:'모름'},recipients:new Map([[alert.id,'상위']]),cycleAt:0,sendAlert:(role,text)=>sent.push({role,text}),record:e=>records.push(e),print:l=>printed.push(l)});
+ assert.deepEqual(sent,[]);assert.match(printed[0],/상태 확인 필요 - 해소됨/);assert.match(printed[0],/작업 완료를 뜻하지 않음/);assert(!printed[0].includes('해소 모름'));
+ assert.equal(records[0].resolved,true);assert.equal(records[0].recipient,'상위');assert.equal(records[0].delivered,false);
 });
 test('모름 원인이 바뀐 경우만 새 설명을 알린다',()=>{
  const a={...alert,kind:'모름',judgeVerdict:'모름',judgeReason:'invalid-output'};

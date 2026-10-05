@@ -101,8 +101,7 @@ import { executeJudge } from "./watch-judge.mjs";
 import { collectResources } from "./watch-resource.mjs";
 import {
   assessSupervisorIdle,
-  wakeDue,
-  buildWakeMessage,
+  buildIdleNudge,
 } from "./watch-supervisor.mjs";
 import { boardFromRole } from "./board.mjs";
 
@@ -133,8 +132,7 @@ export {
   applyJudgeVerdict,
   judgeDue,
   assessSupervisorIdle,
-  wakeDue,
-  buildWakeMessage,
+  buildIdleNudge,
   assessRoles,
   assessResources,
   routeAlert,
@@ -1696,6 +1694,8 @@ function cmdWait(argv, flags) {
   process.exit(result.code);
 }
 
+// 해소 우편이 없으므로(2026-10-05 [kyle]) 경보를 받은 감독은 행동 전에 지금 상태를 스스로 확인한다.
+export const WATCH_ALERT_FOOTER='행동 전 지금 상태를 확인하라(감독 템플릿의 현황 확인 절차). 풀렸으면 따로 알리지 않는다.';
 function sendWatchMessage(role,message) {
   if (role==='@user') {
     const failure=notifyUser(message,spawnSync);
@@ -1704,8 +1704,9 @@ function sendWatchMessage(role,message) {
   }
   const session=sessionName(role);
   // 감시 경보 우편은 기록용이다: 경보는 상태 변화로 닫히지 수신자 ack로 닫히지 않으므로 읽음 확인 안내를 붙이지 않고
-  // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기).
-  guardedSend({floor,session,role,message,source:'watch',recordedPid:recordedPid(lastStartFor(session)),notificationOnly:true});
+  // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기). 해소 우편도 없으므로 받는 쪽이 행동 전에
+  // 지금 상태를 확인한다(감독 템플릿의 현황 확인 절차).
+  guardedSend({floor,session,role,message:`${message}\n${WATCH_ALERT_FOOTER}`,source:'watch',recordedPid:recordedPid(lastStartFor(session)),notificationOnly:true});
 }
 
 // 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.
@@ -1725,9 +1726,9 @@ export function sendWatchMailReminder(role,message,expectedPid,{
     notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
 }
 
-// 자가점검 깨우기(--wake)는 감독 창에 붙여넣는 우편이라, 사람이 그 창에서 대화 중이면 미룬다.
+// 놀고 있음 본인 알림은 감독 창에 붙여넣는 우편이라, 사람이 그 창에서 대화 중이면 미룬다.
 // 사용자가 슈퍼감독과 직접 대화하는 창에 반쯤 쓴 문장 뒤에 붙지 않게 한다(2026-10-05). 읽음 재알림도 만들지 않는다.
-export function sendWatchWake(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend}={}) {
+export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend}={}) {
   const session=sessionName(role);
   return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,
     notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
@@ -1740,7 +1741,7 @@ export function watchMailHold(role,{selectedFloor=floor}={}) {
 
 function cmdWatch(argv, flags) {
   const usage =
-    "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--completion-grace 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--wake <역할>] [--wake-every 분] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. 옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
+    "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] [--completion-grace 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--user-notify] [--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. 옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
   if (flags.help) {
     console.log(usage);
     return;
@@ -1757,8 +1758,6 @@ function cmdWatch(argv, flags) {
     "route",
     "super",
     "hierarchy",
-    "wake",
-    "wake-every",
     "user-notify",
     "judge-cmd",
     "judge-cooldown",
@@ -1774,6 +1773,7 @@ function cmdWatch(argv, flags) {
     delete flags.profile;
     const applied = applyWatchProfile(flags, profile);
     console.log(`감시 프로필 적용: ${profileFile}${applied.length ? " (" + applied.join(", ") + ")" : " (적용한 옵션 없음)"}`);
+    for (const line of profile.retired ?? []) console.error(`안내: 감시 프로필의 없어진 옵션을 무시한다 — ${line}. 프로필에서 지워도 된다.`);
   }
   for (const line of watchStartupWarnings(flags, {profileFile, defaultProfile, exists: fs.existsSync})) console.error(line);
 
@@ -1788,7 +1788,8 @@ function cmdWatch(argv, flags) {
     die("watch --completion-grace는 0 이상의 분이어야 한다", 2);
   }
   const stallN = flags.stall == null ? 2 : Number(flags.stall);
-  const idleMinutes = flags.idle == null ? 30 : Number(flags.idle);
+  // 감독 멈춤: --idle 분 뒤 본인에게, 그 두 배가 되면 상위에게(2026-10-05 [kyle] 결정으로 30분 → 15분).
+  const idleMinutes = flags.idle == null ? 15 : Number(flags.idle);
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     die("watch --interval은 0보다 큰 초여야 한다", 2);
   }
@@ -1801,9 +1802,6 @@ function cmdWatch(argv, flags) {
   if (flags.super === true || Array.isArray(flags.super)) {
     die("watch --super에는 역할 하나가 필요하다", 2);
   }
-  if (flags.wake === true || Array.isArray(flags.wake)) {
-    die("watch --wake에는 역할 하나가 필요하다", 2);
-  }
   if (flags["judge-cmd"] === true || Array.isArray(flags["judge-cmd"])) {
     die("watch --judge-cmd에는 셸 명령 하나가 필요하다", 2);
   }
@@ -1811,11 +1809,6 @@ function cmdWatch(argv, flags) {
     flags["judge-cooldown"] == null ? 5 : Number(flags["judge-cooldown"]);
   if (!Number.isFinite(judgeCooldownMinutes) || judgeCooldownMinutes <= 0) {
     die("watch --judge-cooldown은 0보다 큰 분이어야 한다", 2);
-  }
-  const wakeEveryMinutes =
-    flags["wake-every"] == null ? 30 : Number(flags["wake-every"]);
-  if (!Number.isFinite(wakeEveryMinutes) || wakeEveryMinutes <= 0) {
-    die("watch --wake-every는 0보다 큰 분이어야 한다", 2);
   }
 
   const routeValues =
@@ -1860,7 +1853,7 @@ function cmdWatch(argv, flags) {
     stallAfterMs: stallAfterMinutes*60_000,
     record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
     sendAlert: sendWatchMessage,
-    sendWake: sendWatchWake,
+    sendNudge: sendWatchNudge,
     sendMailReminder: sendWatchMailReminder,
     mailHold: watchMailHold,
     resume429: (role,message,expectedPid) => {
@@ -1886,8 +1879,6 @@ function cmdWatch(argv, flags) {
       return { parents: parseHierarchy(JSON.parse(text)), path: path.resolve(flags.hierarchy), hash: createHash("sha256").update(text).digest("hex") };
     } : null,
     idleMs: idleMinutes * 60 * 1_000,
-    wakeRole: flags.wake || null,
-    wakeEveryMs: wakeEveryMinutes * 60 * 1_000,
     userNotify: flags["user-notify"] === true,
     judgeCmd: flags["judge-cmd"] || null,
     judgeCooldownMs: judgeCooldownMinutes * 60 * 1_000,
