@@ -23,6 +23,7 @@ test("슈퍼감독마다 기지 하나, 사슬이 끊긴 역할은 '관계표 �
   const map = buildMap({ hierarchy, rows, live, alerts: null });
   assert.deepEqual(map.bases.map((b) => b.id), ["m-슈퍼감독", "비서", "관계표 밖"]);
   assert.equal(map.depot, 2);
+  assert.deepEqual(map.depotRows.map((r) => r.key), ["r/4", "r/5"], "창고를 누르면 볼 실행");
   const m = map.bases[0];
   assert.deepEqual(m.units.map((u) => [u.role, u.kind]), [
     ["m-슈퍼감독", "super"], ["m-감독", "director"], ["m-검수자", "worker"], ["m-작업자", "worker"],

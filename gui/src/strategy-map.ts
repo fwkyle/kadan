@@ -19,6 +19,7 @@ export type Base = { id: string; label: string; super: string | null; units: Uni
 export type MapModel = {
   bases: Base[];
   depot: number; // 담당이 아직 없는 실행(초안·보류). 어느 유닛에도 못 붙인다.
+  depotRows: Row[]; // 창고를 눌렀을 때 옆 칸에 보일 그 실행들
   totals: { units: number; running: number; stuck: number; stale: number; dead: number; alerts: number };
 };
 export type MapInput = {
@@ -60,9 +61,9 @@ export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel 
   };
   const liveByRole = new Map((live ?? []).filter((s) => !SYSTEM_ROLES.has(s.role)).map((s) => [s.role, s]));
   const rowsByRole = new Map<string, Row[]>();
-  let depot = 0;
+  const depotRows: Row[] = [];
   for (const row of rows) {
-    if (!row.owner) { depot++; continue; }
+    if (!row.owner) { depotRows.push(row); continue; }
     rowsByRole.set(row.owner, [...(rowsByRole.get(row.owner) ?? []), row]);
   }
   const alertsByRole = new Map<string, number>();
@@ -120,7 +121,7 @@ export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel 
     }));
   const all = bases.flatMap((b) => b.units);
   return {
-    bases, depot,
+    bases, depot: depotRows.length, depotRows,
     totals: {
       units: all.length,
       running: all.reduce((n, u) => n + u.crates.running, 0),
