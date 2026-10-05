@@ -24,6 +24,13 @@ KADAN_ROLE=<감독> kadan senior <카드키> --question "<질문>" [--file <절�
 - 결과: 영수증(JSON)과 답변 본문을 출력한다. 답변은 네 칸이다 — **결론** 한 줄, **근거**(저장소·카드에서 확인한 사실과 경로), **위험**(따를 때·안 따를 때, 되돌리기 어려운 것 먼저), **확인할 것**(감독이 결정 전에 열어 볼 경로·되물을 질문).
 - 실패: 시간 초과(`timeout`), 호출 실패(`call-failed`, 종료 코드 ≠ 0), 빈 답(`empty`)은 종료 코드 1이고 답을 쓰지 않는다(fail closed). 재시도는 감독이 명령을 다시 부르는 것이다.
 
+## 실측 시험
+
+시니어는 비싼 모델이라 실제로 부르는 시험은 강도를 낮춰 돌린다(2026-10-05 [kyle]).
+
+- `kadan senior … --effort low`: 이번 호출만 강도를 바꾼다. 실행 모델 설정은 그대로이고, 원장에는 `effort`(쓴 값)·`effortOverride: true`·`settingsEffort`(설정 값)가 남는다. 모델이 지원하지 않는 강도는 호출 전에 거절한다.
+- `npm run smoke:senior [-- --effort low --timeout 600]`: 임시 `KADAN_HOME`에 실행 모델 설정만 복사하고 가상 카드 하나로 실제 모델을 한 번 부른다. 답에 결론·근거·위험·확인할 것 네 칸이 있으면 통과. 비용이 들어 `npm test`에는 넣지 않는다. 운영 원장은 건드리지 않는다.
+
 ## 원장 기록
 
 호출마다 `advice` 사건 하나를 남긴다(성공·실패 모두). `by`(부른 감독), `card`, `adviceId`, 질문 앞 200자와 지문, `model`·`effort`·`settingsRevision`·`settingsPreset`, `reason`(`ok`·`timeout`·`call-failed`·`empty`), `exitCode`, `durationMs`, 답변 `bytes`·`digest`, 첨부 `files`, `evidencePath`. 답변 본문은 원장에 넣지 않고 증거 폴더의 `result.txt`에만 둔다. 기록 화면에서는 **자문**으로 보인다. 사건은 호출이 끝난 뒤 쓰므로, 호출 도중 명령이 죽으면 증거 폴더만 있고 사건이 없을 수 있다. 손상이 아니라 끝나지 못한 호출이다.

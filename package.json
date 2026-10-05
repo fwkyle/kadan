@@ -25,7 +25,8 @@
     "test:gui": "npm --prefix gui test",
     "prepack": "npm run build:gui",
     "check:public": "node scripts/check-public-strings.mjs",
-    "setup:hooks": "node scripts/install-git-hooks.mjs"
+    "setup:hooks": "node scripts/install-git-hooks.mjs",
+    "smoke:senior": "node scripts/senior-smoke.mjs"
   },
   "engines": {
     "node": ">=24"
