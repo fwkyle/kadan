@@ -315,7 +315,6 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .sm-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #cbd2cd; flex-shrink: 0; margin-right: 6px; vertical-align: middle; }
 .sm-dot.sm-s-running, .sm-dot.sm-c-running { background: #e68a27; }
-.sm-dot.sm-s-waiting, .sm-dot.sm-c-waiting { background: #246a99; }
 .sm-dot.sm-s-stuck, .sm-dot.sm-c-stuck { background: #b68625; }
 .sm-dot.sm-s-stale, .sm-dot.sm-c-stale { background: #a58a5c; }
 .sm-dot.sm-s-dead { background: #b3261e; }
@@ -340,7 +339,6 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-body, .sm-head { fill: #cbd2cd; }
 .sm-body { fill-opacity: .88; }
 .sm-s-running .sm-body, .sm-s-running .sm-head { fill: #e68a27; }
-.sm-s-waiting .sm-body, .sm-s-waiting .sm-head { fill: #246a99; }
 .sm-s-stuck .sm-body, .sm-s-stuck .sm-head { fill: #b68625; }
 .sm-s-stale .sm-body, .sm-s-stale .sm-head { fill: #a58a5c; }
 .sm-s-dead .sm-body, .sm-s-dead .sm-head { fill: #b3261e; }
@@ -361,7 +359,6 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-more { font-size: 10px; fill: #536159; font-weight: 700; }
 .sm-base-label { font-size: 12.5px; font-weight: 750; text-anchor: middle; fill: #536159; }
 .sm-c-running .sm-crate-top { fill: #f2b46a; } .sm-c-running .sm-crate-left { fill: #e68a27; } .sm-c-running .sm-crate-right { fill: #c06d14; }
-.sm-c-waiting .sm-crate-top { fill: #6aa3c8; } .sm-c-waiting .sm-crate-left { fill: #246a99; } .sm-c-waiting .sm-crate-right { fill: #18506f; }
 .sm-c-stuck .sm-crate-top { fill: #d9b25e; } .sm-c-stuck .sm-crate-left { fill: #b68625; } .sm-c-stuck .sm-crate-right { fill: #8c6516; }
 .sm-c-stale .sm-crate-top { fill: #cdb994; } .sm-c-stale .sm-crate-left { fill: #a58a5c; } .sm-c-stale .sm-crate-right { fill: #7e6843; }
 .sm-c-planned .sm-crate-top { fill: #e6eae7; } .sm-c-planned .sm-crate-left { fill: #cbd2cd; } .sm-c-planned .sm-crate-right { fill: #aab3ad; }

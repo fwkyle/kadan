@@ -21,9 +21,9 @@ test('상태 이유는 일반 메모로 덮이지 않고 다음 전환에서 후
  assert.deepEqual(statusChanges(c).map(x=>x.to),['draft','hold','cancelled']);
  assert.match(renderStatusHistory(c),/일시정지 → 취소/);
 });
-test('보류 누락은 감독 확인이며 실제 열린 결정만 사용자 답변 대상으로 표시한다',()=>{
+test('일시정지 이유 누락은 감독 확인이며 실제 열린 결정만 사용자 답변 대상으로 표시한다',()=>{
  const c={key:'test/a',status:'hold',history:[]};
- assert.match(renderStatusContext(c),/보류 이유 미기록 · 감독 확인 필요/);
+ assert.match(renderStatusContext(c),/일시정지 이유 미기록 · 감독 확인 필요/);
  assert.match(renderStatusContext(c),/요청된 사용자 결정 없음/);
  assert.match(renderStatusContext(c,{decisions:[{card:c.key,status:'open'}]}),/사용자 결정 필요/);
  assert.match(renderStatusContext(c,{decisionError:true}),/확인 불가/);

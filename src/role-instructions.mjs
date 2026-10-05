@@ -159,7 +159,8 @@ function referencePaths(profile) {
   // 읽으면 자기 역할을 넘는 판단을 부를 수 있다. 완료 절차는 역할 틀에 이미 있다(2026-09-24 [kyle]).
   if (['worker','reviewer'].includes(profile)) return [path.join(root,'skills/kadan-conductor/references/card-template.md')].filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
   const skill=profile==='secretary'?'kadan-secretary':profile==='super'?'kadan-super':'kadan-conductor';
-  return [path.join(root,`skills/${skill}/SKILL.md`),path.join(root,'skills/kadan-conductor/references/dispatch-wait.md'),
+  // 감독·슈퍼감독·비서는 역할·소통·감시 흐름 한 장(docs/flows.md)을 먼저 본다(2026-10-05 [kyle]: 흩어진 흐름을 일부만 읽고 틀린 판단).
+  return [path.join(root,'docs/flows.md'),path.join(root,`skills/${skill}/SKILL.md`),path.join(root,'skills/kadan-conductor/references/dispatch-wait.md'),
     path.join(root,'skills/kadan-conductor/references/operating-contract.md'),path.join(root,'skills/kadan-super/references/handover.md')]
     .filter(file=>fs.existsSync(file)&&fs.statSync(file).isFile());
 }

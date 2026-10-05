@@ -816,7 +816,7 @@ export async function runWatch({
         deliveredRecipients.add(alert.role);
       } catch (error) {
         held = typeof error.code === 'string' && (error.code === 'KADAN_HUMAN_ACTIVE' || error.code === 'KADAN_PANE_INPUT_PENDING');
-        target = `${alert.role} ${held ? '보류' : '전달 실패'}(${error.message})`;
+        target = `${alert.role} ${held ? '미룸' : '전달 실패'}(${error.message})`;
       }
       if (held) pendingNudges.set(alert.id, alert); else pendingNudges.delete(alert.id);
       print(`${message} → ${target}`);

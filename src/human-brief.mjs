@@ -124,5 +124,5 @@ export function progressLabel(card,now=Date.now(),{detail=false}={}){
  return `${prefix} · 마지막 보고 ${age}`;
 }
 export function queueLabel(card){
- return ({unconfirmed:'순서 대기 여부: 기록 없음',ready:'발령 후보 · 순서 미정',assigned:'담당 배정 · 순서 미정',draft:'발령 전 초안',waiting:'결과 대기 보고 있음'})[card.displayState]||'';
+ return ({unconfirmed:'순서 대기 여부: 기록 없음',ready:'설계완료 · 순서 미정',assigned:'작업대기 · 순서 미정',draft:'초안',waiting:'기다림 보고 있음'})[card.displayState]||'';
 }

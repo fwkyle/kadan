@@ -83,7 +83,7 @@ export function renderDashboardStatus({runtime=null,center,works,workError=null,
  ${section('status-executing','작업중인 실행',running,'담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다. 검수·답변 같은 다른 결과를 기다린다고 보고한 실행도 여기 셉니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.')}
  <p class="st-hint">${center?`진행 전 ${byBucket('planned').length}건 · 일시정지 ${byBucket('hold').length}건`:'진행 전·일시정지 모름'} · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
  <section id="status-running" class="st-section"><header class="st-sec-head"><h2>열린 업무</h2><span class="st-cnt">${works===null?'모름':open.length+'장'}</span><span class="st-hint">열린 업무도 실행 준비·작업중·감독 확인 단계일 수 있습니다.</span></header>${works===null?`<p class="st-error" role="alert">업무 기록을 읽을 수 없습니다${workError?': '+e(workError):'.'}</p>`:open.length?open.map(workCard).join(''):'<p class="st-empty">열린 업무가 없습니다. 위의 실행 목록에서 개별 작업을 확인하세요.</p>'}</section>
- ${held.length?`<section class="st-section"><h2>보류 중인 업무</h2>${held.map(workCard).join('')}</section>`:''}
+ ${held.length?`<section class="st-section"><h2>일시정지 중인 업무</h2>${held.map(workCard).join('')}</section>`:''}
  ${staleSection}
  ${recentSection}
  ${boardsSection}

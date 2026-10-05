@@ -6,11 +6,11 @@ import type { Row } from "./types";
 import type { LiveSession, OpenAlerts } from "./status-band";
 
 export type UnitKind = "super" | "director" | "worker";
-// 우선순위 순서: 창 없음 > 막힘 > 작업 중 > 결과 대기 > 오래된 미정리 > 대기(창만 있음). 세션 상태를 모르면 unknown,
+// 우선순위 순서: 창 없음 > 막힘 > 작업중 > 오래된 미정리 > 대기(창만 있음). 결과 대기는 #102부터 작업중에 합쳐 센다. 세션 상태를 모르면 unknown,
 // 창도 일도 없으면 off. 오래된 미정리(stale)는 현황판처럼 막힘과 따로 둔다 — 2026-10-05 실데이터에서 막힘 16건이 전부
 // 오래된 미정리였고, 막힘으로 세면 창이 닫힌 옛 작업자 11명이 '창 없음' 빨강으로 떠 과장됐다.
-export type UnitState = "dead" | "stuck" | "running" | "waiting" | "stale" | "idle" | "unknown" | "off";
-export type Crates = { running: number; waiting: number; stuck: number; stale: number; planned: number; hold: number };
+export type UnitState = "dead" | "stuck" | "running" | "stale" | "idle" | "unknown" | "off";
+export type Crates = { running: number; stuck: number; stale: number; planned: number; hold: number };
 export type Unit = {
   role: string; kind: UnitKind; parent: string | null; state: UnitState; alive: boolean | null;
   model: string | null; crates: Crates; alerts: number; rows: Row[];
@@ -18,7 +18,7 @@ export type Unit = {
 export type Base = { id: string; label: string; super: string | null; units: Unit[] };
 export type MapModel = {
   bases: Base[];
-  depot: number; // 담당이 아직 없는 실행(초안·보류). 어느 유닛에도 못 붙인다.
+  depot: number; // 담당이 아직 없는 실행(진행 전·일시정지). 어느 유닛에도 못 붙인다.
   depotRows: Row[]; // 창고를 눌렀을 때 옆 칸에 보일 그 실행들
   totals: { units: number; running: number; stuck: number; stale: number; dead: number; alerts: number };
 };
@@ -30,7 +30,7 @@ export type MapInput = {
 };
 
 export const STATE_LABEL: Record<UnitState, string> = {
-  dead: "창 없음", stuck: "막힘", running: "작업 중", waiting: "결과 대기", stale: "오래된 미정리", idle: "대기", unknown: "세션 모름", off: "쉬는 중",
+  dead: "창 없음", stuck: "막힘", running: "작업중", stale: "오래된 미정리", idle: "대기", unknown: "세션 모름", off: "쉬는 중",
 };
 // 카단 자체 세션(감시기·대시보드)은 역할 유닛이 아니다.
 const SYSTEM_ROLES = new Set(["watch", "대시보드"]);
@@ -38,7 +38,7 @@ const OUTSIDE = "관계표 밖";
 const USER = "@user";
 
 function emptyCrates(): Crates {
-  return { running: 0, waiting: 0, stuck: 0, stale: 0, planned: 0, hold: 0 };
+  return { running: 0, stuck: 0, stale: 0, planned: 0, hold: 0 };
 }
 
 export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel {
@@ -90,20 +90,19 @@ export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel 
     const own = rowsByRole.get(role) ?? [];
     const crates = emptyCrates();
     for (const row of own) if (row.bucket && row.bucket in crates) crates[row.bucket as keyof Crates]++;
-    const active = crates.running + crates.waiting + crates.stuck;
+    const active = crates.running + crates.stuck;
     const alive = live === null ? null : liveByRole.has(role);
     const state: UnitState =
       alive === false && (active > 0 || kind === "super") ? "dead"
       : crates.stuck > 0 ? "stuck"
       : crates.running > 0 ? "running"
-      : crates.waiting > 0 ? "waiting"
       : crates.stale > 0 ? "stale"
       : alive === null ? "unknown"
       : alive ? "idle" : "off";
     return {
       role, kind, parent: parent && parent !== USER ? parent : null, state, alive,
       model: liveByRole.get(role)?.model ?? null, crates, alerts: alertsByRole.get(role) ?? 0,
-      rows: own.filter((r) => r.bucket === "running" || r.bucket === "waiting" || r.bucket === "stuck" || r.bucket === "stale"),
+      rows: own.filter((r) => r.bucket === "running" || r.bucket === "stuck" || r.bucket === "stale"),
     };
   };
   const order: Record<UnitKind, number> = { super: 0, director: 1, worker: 2 };
@@ -156,7 +155,7 @@ export function shortName(role: string, base: string | null) {
   return prefix && role.startsWith(prefix) && role.length > prefix.length ? role.slice(prefix.length) : role;
 }
 
-// 쉬는 역할(창도 진행 카드도 없이 발령 전·보류 카드만 든 작업자)을 뺀 유닛. 슈퍼감독·감독은 기지의 뼈대라 늘 남긴다.
+// 쉬는 역할(창도 진행 카드도 없이 진행 전·일시정지 카드만 든 작업자)을 뺀 유닛. 슈퍼감독·감독은 기지의 뼈대라 늘 남긴다.
 export function visibleUnits(units: Unit[], showResting: boolean) {
   return showResting ? units : units.filter((u) => u.kind !== "worker" || u.state !== "off");
 }

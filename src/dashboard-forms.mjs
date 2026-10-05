@@ -98,7 +98,7 @@ export function workForms(w, allCards, works) {
       field("board", "판", w.board),
       select("status", "워크 상태", w.status, [
         ["open", "진행 중"],
-        ["hold", "보류"],
+        ["hold", "일시정지"],
       ]),
     ]),
     form("/works/execute", "새 카드 등록", [
