@@ -21,8 +21,8 @@ test('검수 실패 이후 수정 라운드와 이전 카드의 위치를 구분
  assert.match(flow([first,review],'review1').next,/검수 지적.*수정 라운드/);
  const closedReview={...review,status:'superseded',displayState:'superseded'},fix=card('fix2',{rallyRound:'2',rallyStep:'fix'}),review2=card('review2',{rallyRound:'2',rallyStep:'review',status:'ready',displayState:'ready'});
  const cards=[first,closedReview,fix,review2],f=flow(cards,'work1');
- assert.equal(f.label,'1라운드 · 구현');assert.equal(f.older,true);assert.equal(f.group.round,2);assert.equal(f.phase,'수정 · 작업 중');
- const html=renderRallyFlow(first,f);assert.match(html,/수정 · 작업 중/);assert.match(html,/독립검수 · 대체됨/);assert.match(html,/보고 있는 카드/);
+ assert.equal(f.label,'1라운드 · 구현');assert.equal(f.older,true);assert.equal(f.group.round,2);assert.equal(f.phase,'수정 · 작업중');
+ const html=renderRallyFlow(first,f);assert.match(html,/수정 · 작업중/);assert.match(html,/독립검수 · 대체/);assert.match(html,/보고 있는 카드/);
  const detail=renderWorkspaceDetail(first,{center:{cards}});assert.match(detail,/보고 있는 카드는 1라운드 · 구현/);assert.match(detail,/연결 카드/);
 });
 test('이전 미완료와 중복 연결은 한 사람의 다음 차례로 단정하지 않는다',()=>{
@@ -33,12 +33,12 @@ test('이전 미완료와 중복 연결은 한 사람의 다음 차례로 단정
 test('과거 검수 실패는 남기되 다음 수정과 검수의 완료 기록을 가리지 않는다',()=>{
  const cards=[card('work1',{displayState:'done'}),card('review1',{rallyStep:'review',displayState:'failed'}),card('fix2',{rallyRound:'2',rallyStep:'fix',displayState:'done'}),card('review2',{rallyRound:'2',rallyStep:'review',displayState:'done'})];
  const f=flow(cards,'work1');assert.equal(f.phase,'구현·검수 완료 기록');assert.equal(f.older,true);assert.equal(cards[1].displayState,'failed');
- assert.match(renderRallyFlow(cards[0],f),/독립검수 · 실패 기록 있음/);
+ assert.match(renderRallyFlow(cards[0],f),/독립검수 · 실패/);
 });
 test('동시 진행, 보류, 완료와 관련 조사는 각각의 기록을 따른다',()=>{
  const work=card('work'),review=card('review',{rallyStep:'review',role:'검수자'});
  assert.equal(flow([work,review],'work').phase,'구현·검수 병행');assert.equal(flow([work,review],'work').actors.length,2);
- assert.equal(flow([{...work,displayState:'hold'}],'work').phase,'구현 · 보류');
+ assert.equal(flow([{...work,displayState:'hold'}],'work').phase,'구현 · 일시정지');
  const done=[work,review].map(c=>({...c,status:'done',displayState:'done'}));assert.equal(flow(done,'work').phase,'구현·검수 완료 기록');
  const research=card('research',{rallyStep:'research',rallyRound:'15',displayState:'running'}),f=flow([...done,research],'research');
  assert.equal(f.label,'관련 조사');assert.equal(f.group.round,1);assert.equal(f.group.done,false);

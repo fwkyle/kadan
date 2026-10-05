@@ -114,7 +114,7 @@ export class CardStore {
       this.#assertRevision(current,revision,{appendOnly:activityOnly});
       if(!note?.trim())throw new Error('변경 이유/질문/답변을 적어야 한다');
       if(!['decision','question','answer','progress'].includes(noteKind))throw new Error('잘못된 기록 종류');
-      const allowed=new Set(['title','status','scope','board','role','activity','workType','resolutionOwner','nextAction','statusReason','rallyId','rallyTitle','rallyRound','rallyStep','replacedBy','turnOwner']);
+      const allowed=new Set(['title','status','scope','board','role','activity','workType','resolutionOwner','nextAction','statusReason','rallyId','rallyTitle','rallyRound','rallyStep','replacedBy','replacedByText','turnOwner']);
       for(const k of Object.keys(patch))if(!allowed.has(k)||!(typeof patch[k]==='string'||patch[k]===null))throw new Error('잘못된 수정 항목');
       const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=current;
       const next={...previous,...patch,revision:current.revision+1,by,at:new Date().toISOString(),noteKind,note};
@@ -125,11 +125,15 @@ export class CardStore {
         if(['rallyId','rallyTitle','rallyRound','rallyStep'].every(k=>Object.hasOwn(patch,k)&&!patch[k])){for(const k of ['rallyId','rallyTitle','rallyRound','rallyStep'])next[k]=null;}
         else if(!slug(next.rallyId)||!next.rallyTitle?.trim()||next.rallyTitle.length>160||!['implementation','fix','review','research'].includes(next.rallyStep)||!/^([1-9]\d*|0)$/.test(next.rallyRound??'')||Number(next.rallyRound)>999||((next.rallyStep==='research')!==(next.rallyRound==='0')))throw new Error('묶음 ID·제목·라운드·단계를 함께 확인하세요. 조사는 0라운드입니다.');
       }
+      // 대체는 후속 카드 하나(replacedBy) 또는 이어받은 업무·설명(replacedByText)으로 남긴다. 여러 카드·PR이 함께 끝낸
+      // 옛 카드를 취소로 적던 것을 바로잡는다(2026-10-05 [kyle] 대체 넓히기).
+      if(next.replacedByText!=null){next.replacedByText=next.replacedByText.trim()||null;if(next.replacedByText?.length>300)throw new Error('이어받은 일 설명은 300자 이내');}
       if(next.status==='superseded'){
-        if(!next.replacedBy||next.replacedBy===key)throw new Error('대체할 후속 카드가 필요합니다');
+        if(!next.replacedBy&&!next.replacedByText)throw new Error('대체할 후속 카드(--replaced-by) 또는 이어받은 업무·설명(--replaced-by-text)이 필요합니다');
+        if(next.replacedBy===key)throw new Error('대체할 후속 카드는 자기 자신일 수 없습니다');
         const seen=new Set([key]);let target=next.replacedBy;
         while(target){if(seen.has(target))throw new Error('대체 카드 순환 연결');seen.add(target);target=this.get(target).replacedBy;}
-      }else if(next.replacedBy){if(patch.replacedBy)throw new Error('후속 연결은 대체됨 상태에서만 가능합니다');next.replacedBy=null;}
+      }else if(next.replacedBy||next.replacedByText){if(patch.replacedBy||patch.replacedByText)throw new Error('후속 연결은 대체 상태에서만 가능합니다');next.replacedBy=null;next.replacedByText=null;}
       if(next.workType!==undefined&&!['execution','coordination'].includes(next.workType))throw new Error('잘못된 카드 종류');
       if(!['draft','ready','assigned','hold','done','cancelled','superseded','archived'].includes(next.status))throw new Error('잘못된 카드 상태');
       if(['ready','assigned'].includes(next.status)&&!next.scope?.trim())throw new Error('발령 가능한 범위를 먼저 적어야 한다');

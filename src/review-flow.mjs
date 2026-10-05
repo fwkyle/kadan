@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import {buildRallies} from './rallies.mjs';
+import {statusLabel} from './status-labels.mjs';
 
 const outcomes={implemented:'구현 결과 등록',pass:'통과',changes:'수정 필요',exception:'검수 중단',ok:'실행 완료',failed:'실행 실패'};
-const states={draft:'초안',ready:'실행 전',assigned:'배정됨',running:'작업 중',waiting:'결과 대기',unconfirmed:'시작 확인 전',orphaned:'연결 끊김',hold:'보류',done:'실행 완료',failed:'실행 실패',cancelled:'취소',superseded:'대체됨',archived:'보관'};
 const ended=new Set(['cancelled','superseded']);
 const date=value=>Date.parse(value)||0;
 
@@ -16,7 +16,7 @@ function stage(card){
  const stale=!!result&&(!date(result.at)||latestSend>date(result.at)||changed||reopened);
  const current=!!result&&!stale&&!ended.has(card.displayState);
  return {key:card.key,title:card.title,role:card.role,step:card.rallyStep,
-  state:card.displayState,stateLabel:states[card.displayState]||'상태 모름',
+  state:card.displayState,stateLabel:card.displayState?statusLabel(card.displayState):'상태 모름',
   recordedOutcome:result?.outcome||null,
   outcome:current?result.outcome:null,outcomeLabel:current?(outcomes[result.outcome]||'판정 모름'):result?'이전 판정 · '+(outcomes[result.outcome]||'모름'):'결과 미등록',
   resultAt:result?.at||null,resultBy:result?.by||null,hasResult:!!result,stale};

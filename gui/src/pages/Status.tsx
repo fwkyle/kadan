@@ -16,10 +16,11 @@ type StatusData = Stamp & {
   recent: {at: string; kind: string; label: string; role: string; card: {key: string; title: string}}[];
   recentCounts: Record<string, number>;
 };
+// 서버 bucketGroups와 같은 묶음. 결과 대기는 작업중에, 보류(archived)는 진행 전에 센다(2026-10-05 [kyle]).
 const groups = [
-  ["running", "작업 중"], ["waiting", "결과 대기"], ["stuck", "지금 막힌 것"],
-  ["stale", "오래된 미정리"], ["planned", "발령 전"], ["hold", "보류"],
-  ["done", "완료"], ["closed", "취소·대체·보관"],
+  ["running", "작업중"], ["stuck", "지금 막힌 것"],
+  ["stale", "오래된 미정리"], ["planned", "진행 전"], ["hold", "일시정지"],
+  ["done", "완료"], ["closed", "취소·대체"],
 ];
 export default function Status({url}: {url: URL}) {
   const resource = useResource<StatusData>("status"), data = resource.data;
@@ -98,7 +99,7 @@ export default function Status({url}: {url: URL}) {
           <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
-        {[["#status-waiting",bucket("waiting").length,"결과 대기"],["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
+        {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
       </p>
       <ul id="status-live" className="st-live" aria-label="살아 있는 담당과 모델">
         {data.live === null ? <li className="st-live-row"><small>세션 상태 모름</small></li>
@@ -133,14 +134,13 @@ export default function Status({url}: {url: URL}) {
         {data.flow.unconfirmed.length ? <ul className="st-flow-list">{data.flow.unconfirmed.map(f => <li key={f.id} className="st-flow-row"><strong>{f.title}</strong> · {f.label}{f.warnings.length > 0 && <small>{f.warnings.join(" ")}</small>}</li>)}</ul> : <p className="st-empty">{data.flow.total ? "모든 묶음이 흐름대로 연결돼 있습니다." : "티키타카 묶음이 없습니다."}</p>}
       </section>
       <DocumentContent html={data.watchHtml}/>
-      {section("status-executing","작업 중인 카드","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다.")}
-      {section("status-waiting","결과를 기다리는 카드","waiting","담당이 검수·답변 같은 다른 결과를 기다린다고 보고했습니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}
-      <p className="st-hint">실행 전 {bucket("planned").length}건 · 보류 {bucket("hold").length}건 · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
-      <section id="status-running" className="st-section"><header className="st-sec-head"><h2>열린 워크</h2><span className="st-cnt">{data.workError ? "모름" : open.length+"장"}</span><span className="st-hint">열린 워크도 실행 준비·결과 대기·감독 확인 단계일 수 있습니다.</span></header><ErrorMessage error={data.workError}/>{open.length ? open.map(work) : !data.workError && <p className="st-empty">열린 워크가 없습니다. 위의 카드 목록에서 개별 작업을 확인하세요.</p>}</section>
+      {section("status-executing","작업중인 카드","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다. 검수·답변 같은 다른 결과를 기다린다고 보고한 카드도 여기 셉니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}
+      <p className="st-hint">진행 전 {bucket("planned").length}건 · 일시정지 {bucket("hold").length}건 · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
+      <section id="status-running" className="st-section"><header className="st-sec-head"><h2>열린 워크</h2><span className="st-cnt">{data.workError ? "모름" : open.length+"장"}</span><span className="st-hint">열린 워크도 실행 준비·작업중·감독 확인 단계일 수 있습니다.</span></header><ErrorMessage error={data.workError}/>{open.length ? open.map(work) : !data.workError && <p className="st-empty">열린 워크가 없습니다. 위의 카드 목록에서 개별 작업을 확인하세요.</p>}</section>
       {held.length>0 && <section className="st-section"><h2>보류 중인 워크</h2>{held.map(work)}</section>}
       <details className="st-fold st-recent-fold"><summary className="st-sec-head"><h2>최근 24시간에 일어난 일</h2><span className="st-cnt">완료 {data.recentCounts.done} · 실패 {data.recentCounts.failed} · 발령 {data.recentCounts.send}</span><span className="st-hint">일을 맡기고, 끝나고, 실패한 시각입니다. 카드 내용을 고친 것은 세지 않습니다.</span></summary>{data.recent.length ? <ul className="st-recent">{data.recent.map((event,i)=><li className={"st-recent-row st-recent-"+event.kind} key={i}><span className="st-recent-time">{time(event.at)}</span><span className="st-recent-kind">{event.label}</span><CardLink row={event.card}/><small>{event.role}</small></li>)}</ul> : <p className="st-empty">최근 24시간에 기록된 발령·완료·실패가 없습니다.</p>}</details>
       <details className="st-fold"><summary>판별 진행 막대 {data.boards.filter(b=>b.state!=="done").length}개 판</summary><p className="st-hint">실제 일을 하는 카드만 한 번씩 셉니다(관리·조율 카드 제외). 위 숫자와 같은 기준입니다.</p>{data.boards.filter(b=>b.state!=="done").map(board=><section className="board-progress" key={board.name}><h3><a href={"/?board="+encodeURIComponent(board.name)+"&collection=executions&state=all#dashboard"}>{board.name}</a></h3><div className="progress-track">{groups.map(([key,label])=><span key={key} className={"progress-"+key} style={{flex:board.counts[key] || 0}} title={label+" "+(board.counts[key] || 0)}/>)}</div><div className="progress-legend">{groups.filter(([key])=>board.counts[key]).map(([key,label])=><span key={key}>{label} {board.counts[key]}</span>)}</div><DocumentContent html={board.watchHtml}/></section>)}</details>
-      <details className="st-fold"><summary>발령 전 카드 {bucket("planned").length}건</summary>{bucket("planned").map(row=><p key={row.key}><CardLink row={row}/> · {row.owner || "미배정"}</p>)}</details>
+      <details className="st-fold"><summary>진행 전 카드 {bucket("planned").length}건</summary>{bucket("planned").map(row=><p key={row.key}><CardLink row={row}/> · {row.owner || "미배정"}</p>)}</details>
       <details className="st-fold"><summary>끝난 판 {data.boards.filter(b=>b.state==="done").length}개 · 끝난 워크 {closed.length}장</summary>{closed.map(row=><p key={row.key}><CardLink row={row}/> · {row.stateLabel}</p>)}{data.boards.filter(b=>b.state==="done").map(board=><p key={board.name}>{board.name} · 실행 {board.total}장</p>)}</details>
       <details className="st-fold"><summary>자원 사용</summary><ErrorMessage error={data.resourceError}/>{data.resources ? <Facts items={[["메모리 여유",data.resources.current.freePercent===null ? "모름" : data.resources.current.freePercent+"%"],["스왑 사용",data.resources.current.swapUsed===null ? "모름" : data.resources.current.swapUsed.toFixed(1)+" MB"],["CPU 5분 부하",data.resources.current.load5===null ? "모름" : data.resources.current.load5.toFixed(2)+" / "+(data.resources.ncpu ?? "모름")]]}/> : <p>자원 상태 모름</p>}</details>
       <p className="st-footnote">모든 수치는 카드 한 장을 한 번씩 센 값이며 관리·조율 카드는 제외합니다. 제품 완성률이 아닙니다. 상세 비교·정렬은 <a href="?collection=executions#dashboard">작업 표</a>에서 확인하세요.</p>

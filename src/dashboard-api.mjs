@@ -3,8 +3,8 @@ import { buildReviewFlows, readReviewResult } from "./review-flow.mjs";
 import {
   buildHumanBrief,
   currentProgressReport,
-  stateText,
   isExecution,
+  waitingText,
 } from "./human-brief.mjs";
 import {
   workspaceModel,
@@ -18,6 +18,7 @@ import {
   renderWatchOverview,
 } from "./watch-overview-wall.mjs";
 import { executionBucket } from "./dashboard-execution.mjs";
+import { isEnded, storedStatusText } from "./status-labels.mjs";
 import { readActiveHierarchy } from "./hierarchy-register.mjs";
 import { renderCardDocument } from "./card-content.mjs";
 import { decisionContent, RUN_STATE_LABELS } from "./decision-wall.mjs";
@@ -499,7 +500,8 @@ export function dashboardData(snapshot, url) {
         (r) =>
           r.kind !== "work" &&
           isExecution(r) &&
-          !["done", "cancelled", "superseded", "archived"].includes(r.state),
+          // 보류(archived)는 진행 전으로 남긴다. HTML 현황·판 막대와 같은 기준(2026-10-05 [kyle]).
+          !isEnded(r.state),
       )
       .map((r) =>
         r.bucket === "stuck" || r.bucket === "stale"
@@ -698,8 +700,9 @@ export function dashboardData(snapshot, url) {
         showRecent: false,
       }),
       facts: [
-        ["카드 상태", stateText[c.status] || c.status],
-        ["실행 상태", row.healthLabel],
+        ["카드 상태", storedStatusText(c)],
+        // 결과 대기는 상세에서만 기다리는 이유를 붙인다(2026-10-05 [kyle]).
+        ["실행 상태", row.healthKind === "waiting" ? waitingText(c) : row.healthLabel],
         ["담당", c.role],
         ["실행 모델", row.modelTitle || null],
         ["마지막 보고", row.reportLabel],
