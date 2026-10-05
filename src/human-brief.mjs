@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {CardStore} from './card-store.mjs';
+import {statusLabel,isEnded} from './status-labels.mjs';
 
 export const isExecution=c=>c.workType!=='coordination';
-export const finished=c=>['done','cancelled','superseded','archived'].includes(c.displayState);
+// 보류(archived)는 시작 전에 미뤄 둔 카드라 남은 일로 센다. 끝은 완료·취소·대체뿐이다(2026-10-05 [kyle]).
+export const finished=c=>isEnded(c.displayState);
 export const executionUnknown=c=>['unconfirmed','orphaned','failed'].includes(c.displayState);
-// 같은 상태는 화면마다 같은 낱말을 쓴다. 결과 대기·세션 확인 필요는 실행 흐름·현황·그래프와 한 낱말로 맞췄다(2026-09-18).
-export const stateText={running:'작업 중',waiting:'결과 대기',unconfirmed:'발령됨',orphaned:'세션 확인 필요',failed:'실패 기록 있음',hold:'보류',draft:'초안',ready:'발령 가능',assigned:'배정됨 · 시작 확인 전',done:'완료',cancelled:'취소',superseded:'대체됨',archived:'보관'};
+// 같은 상태는 화면마다 같은 낱말을 쓴다. 이름은 status-labels 한 곳에서 가져오고, 카드 상태 필터가 이 열쇠 목록을 쓰므로 열쇠는 그대로 둔다(2026-10-05 [kyle]).
+export const stateText=Object.fromEntries(['running','waiting','unconfirmed','orphaned','failed','hold','draft','ready','assigned','done','cancelled','superseded','archived'].map(key=>[key,statusLabel(key)]));
 export function cleanTitle(card){
  const title=String(card.title||card.id||'제목 없음').replace(/^#+\s*/,'').replace(/\*\*/g,'');
  const stripped=title.startsWith(card.id)?title.slice(card.id.length).replace(/^\s*[—–:·-]\s*/,''):title;
@@ -99,10 +101,18 @@ export function buildHumanBrief(center,home){
  scribe.retain(cards.keys());return cards;
 }
 
-// 경과 시간은 캐시된 요약이 아니라 화면을 그리는 시각에 계산한다.
-export function progressLabel(card,now=Date.now()){
+// 작업중 · <이유> 기다림. 결과 대기 보고(card progress --activity waiting --note)에 남긴 이유를 상세에서만 붙인다.
+// 지금 활동을 만든 보고 한 줄만 읽는다. 뒤에 붙은 일반 메모를 기다리는 이유로 쓰지 않는다(2026-10-05 [kyle]).
+export function waitingText(card){
+ if(card.displayState!=='waiting')return stateText[card.displayState]||'상태 모름';
+ const report=(card.history??[]).filter(h=>h.noteKind==='progress'&&h.activity==='waiting'&&h.activityAt===h.at&&h.at===card.activityAt).at(-1);
+ const reason=String(report?.note||'').replace(/\s+/g,' ').trim();
+ return reason?`${stateText.waiting} · ${reason.length>120?reason.slice(0,120)+'…':reason} 기다림`:stateText.waiting;
+}
+// 경과 시간은 캐시된 요약이 아니라 화면을 그리는 시각에 계산한다. detail이면 결과 대기의 이유를 붙인다.
+export function progressLabel(card,now=Date.now(),{detail=false}={}){
  if(!['unconfirmed','running','waiting'].includes(card.displayState))return stateText[card.displayState]||'상태 모름';
- const prefix=stateText[card.displayState];
+ const prefix=detail?waitingText(card):stateText[card.displayState];
  const report=currentProgressReport(card,now);
  if(report.state!=='reported')return prefix+' · '+(report.state==='unknown'?
   ({'role-unknown':'보고 담당 모름','author-unknown':'보고자 모름','dispatch-time':'발령 시각 모름','assignment-time':'배정 시각 모름','future-time':'보고 시각 확인 필요'}[report.reason]||'보고 시각 모름'):

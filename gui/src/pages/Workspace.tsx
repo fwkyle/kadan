@@ -18,20 +18,22 @@ import { usePaneScroll } from "../scroll";
 import { shortenTurn } from "../stopped";
 import { collectionHint, columnLabel, showDoneButOpen } from "../workspace-labels";
 const Detail = lazy(() => import("./Detail"));
+// 상태 필터 이름. 서버 status-labels.mjs의 exactStatusLabel과 같게 둔다(2026-10-05 [kyle]).
+// 결과 대기는 요약에서 작업중이지만, 필터에서는 칸 두 개가 같은 글자로 보이지 않게 '작업중 · 기다림'으로 적는다.
 const stateLabels: Record<string, string> = {
-  running: "작업 중",
-  waiting: "결과 대기",
+  running: "작업중",
+  waiting: "작업중 · 기다림",
   unconfirmed: "발령됨",
   orphaned: "세션 확인 필요",
-  failed: "실패 기록",
-  hold: "보류",
+  failed: "실패",
+  hold: "일시정지",
   draft: "초안",
-  ready: "발령 가능",
-  assigned: "배정됨",
+  ready: "설계완료",
+  assigned: "작업대기",
   done: "완료",
   cancelled: "취소",
-  superseded: "대체됨",
-  archived: "보관",
+  superseded: "대체",
+  archived: "보류",
 };
 type WorkspaceData = Stamp &
   Omit<Paged<Row>, "items"> & {
@@ -375,8 +377,8 @@ export default function Workspace({ url }: { url: URL }) {
         <div className="segmented" aria-label="상태">
           {[
             ["", "미완료"],
-            ["running,waiting", "진행 중·대기"],
-            ["draft,ready", "발령 전"],
+            ["running,waiting", "작업중"],
+            ["draft,ready,archived", "진행 전"],
             ["assigned,unconfirmed,orphaned,failed", "확인 필요"],
             ["done", "완료"],
             ["all", "전체"],

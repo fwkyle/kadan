@@ -7,6 +7,7 @@ import { dashboardFixture } from "./helpers/dashboard-fixture.mjs";
 import { dashboardData } from "../src/dashboard-api.mjs";
 import { serveDashboard } from "../src/dashboard-static.mjs";
 import { appendLedger } from "../src/ledger.mjs";
+import { CardStore } from "../src/card-store.mjs";
 
 for (const mode of ["jsonl", "sqlite"])
   test(`React JSON API: ${mode} 목록·상세·수정·충돌·결정·우편`, async (t) => {
@@ -335,4 +336,19 @@ test("담당자 상태: 창이 닫히고 카드도 끝난 담당은 숨긴다", 
     visibleSessionRoles({ ...center, runtimeKnown: false }).length,
     4,
   );
+});
+
+// 보류(archived)는 끝이 아니라 진행 전이다. React 현황 줄도 HTML 현황·판 막대와 같이 보류 카드를 남긴다(2026-10-05 [kyle]).
+test("React 현황 줄은 보류 카드를 진행 전으로 남기고 끝난 카드는 뺀다", async (t) => {
+  const f = dashboardFixture({ mode: "jsonl", count: 3 });
+  t.after(() => f.server.close());
+  const store = new CardStore(f.home);
+  const close = (key, status) => store.update(key, { status }, { revision: store.get(key).revision, by: "사람", note: "시험" });
+  close("demo/card-2", "archived");
+  close("demo/card-3", "cancelled");
+  await new Promise((resolve) => f.server.listen(0, "127.0.0.1", resolve));
+  const status = await (await fetch("http://127.0.0.1:" + f.server.address().port + "/api/dashboard/status")).json();
+  const row = status.rows.find((r) => r.key === "demo/card-2");
+  assert.equal(row?.bucket, "planned");
+  assert.ok(!status.rows.some((r) => r.key === "demo/card-3"));
 });

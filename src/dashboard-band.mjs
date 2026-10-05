@@ -52,7 +52,7 @@ export function supervisorSummary({ hierarchy, rows = [], works = [], decisions 
   const parents = new Map(Object.entries(hierarchy));
   const topOf = (role) => supervisorOf(parents, role);
   const supers = [...parents.entries()].filter(([, p]) => p === "@user").map(([r]) => r).sort((a, b) => a.localeCompare(b, "ko"));
-  const bySuper = new Map(supers.map((s) => [s, { super: s, repos: new Set(), running: 0, waiting: 0, stuck: 0, openWorks: 0,
+  const bySuper = new Map(supers.map((s) => [s, { super: s, repos: new Set(), running: 0, stuck: 0, openWorks: 0,
     decisions: Array.isArray(decisions) ? 0 : null, alerts: alerts ? 0 : null, lastSignal: null }]));
   let unassigned = 0, unowned = 0;
   for (const row of rows) {
@@ -60,8 +60,8 @@ export function supervisorSummary({ hierarchy, rows = [], works = [], decisions 
     const s = bySuper.get(topOf(row.owner));
     if (!s) { unassigned++; continue; }
     if (row.repo) s.repos.add(row.repo);
+    // 결과 대기 실행은 실행 묶음(bucket)에서 이미 작업중(running)으로 온다(2026-10-05 [kyle]).
     if (row.bucket === "running") s.running++;
-    else if (row.bucket === "waiting") s.waiting++;
     else if (row.bucket === "stuck" || row.bucket === "stale") s.stuck++;
     const at = Date.parse(row.signalAt);
     if (Number.isFinite(at) && (!s.lastSignal || at > Date.parse(s.lastSignal))) s.lastSignal = row.signalAt;

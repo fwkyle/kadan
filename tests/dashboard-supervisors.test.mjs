@@ -10,7 +10,7 @@ const hierarchy = {
 };
 const rows = [
   { key: "repoA/1", owner: "a-작업자", repo: "repoA", bucket: "running", signalAt: "2026-10-05T01:00:00Z" },
-  { key: "repoA/2", owner: "a-검수자", repo: "repoA", bucket: "waiting", signalAt: "2026-10-05T02:00:00Z" },
+  { key: "repoA/2", owner: "a-검수자", repo: "repoA", bucket: "running", signalAt: "2026-10-05T02:00:00Z" },
   { key: "repoA2/3", owner: "a-감독", repo: "repoA2", bucket: "stuck", signalAt: "2026-10-05T00:30:00Z" },
   { key: "repoB/4", owner: "b-작업자", repo: "repoB", bucket: "stale", signalAt: "bad-date" },
   { key: "repoB/5", owner: "b-작업자", repo: "repoB", bucket: "planned" },
@@ -30,9 +30,9 @@ test("슈퍼감독마다 실행·워크·결정·경보를 사슬 끝으로 묶�
   assert.equal(result.unassigned, 1, "관계표에 없는 담당");
   assert.equal(result.unowned, 1, "담당이 아직 없는 실행은 관계표 사각이 아니라 따로 센다");
   assert.deepEqual(result.items, [
-    { super: "a-슈퍼감독", repos: ["repoA", "repoA2"], running: 1, waiting: 1, stuck: 1, openWorks: 2, decisions: 2, alerts: 1,
+    { super: "a-슈퍼감독", repos: ["repoA", "repoA2"], running: 2, stuck: 1, openWorks: 2, decisions: 2, alerts: 1,
       lastSignal: "2026-10-05T02:00:00Z", alive: true, model: "gpt-5-mini" },
-    { super: "b-슈퍼감독", repos: ["repoB"], running: 0, waiting: 0, stuck: 1, openWorks: 1, decisions: 1, alerts: 1,
+    { super: "b-슈퍼감독", repos: ["repoB"], running: 0, stuck: 1, openWorks: 1, decisions: 1, alerts: 1,
       lastSignal: null, alive: false, model: null },
   ]);
 });

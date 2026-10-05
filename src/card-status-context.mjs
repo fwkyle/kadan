@@ -1,5 +1,5 @@
 import {currentProgressReport} from './human-brief.mjs';
-const labels={draft:'초안',ready:'발령 가능',assigned:'배정됨',hold:'보류',done:'완료',cancelled:'취소',superseded:'대체됨',archived:'보관',running:'작업 중',waiting:'결과 대기',unknown:'진행 확인 필요'};
+import {statusLabel,exactStatusLabel} from './status-labels.mjs';
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const state=h=>h.status==='assigned'&&h.noteKind==='progress'&&h.activity?h.activity:h.status;
 export function statusChanges(card){
@@ -52,7 +52,7 @@ function displayEvidence(card){
   return evidence(done?'실행 원장에 완료 결과 기록':'완료 표시의 실행 근거 미확인',done?'ledger':null,done?.at);
  }
  const changed=(card.history??[]).filter((h,i)=>h.status===card.status&&(!i||h.status!==card.history[i-1].status)).at(-1);
- return evidence('카드 저장 상태: '+(labels[card.status]||card.status||'모름'),changed?'card-history':'card-state',changed?.at,changed?.by);
+ return evidence('카드 저장 상태: '+(card.status?statusLabel(card.status):'모름'),changed?'card-history':'card-state',changed?.at,changed?.by);
 }
 const reasonHtml=text=>text.length>180?`${e(text.slice(0,180))}…<details><summary>이유 전체 보기</summary><p>${e(text)}</p></details>`:e(text);
 const evidenceMeta=proof=>`<small>출처: ${e(({'card-history':'카드 변경 이력','card-state':'카드 저장 상태',ledger:'실행 원장',session:'세션 조회',progress:'진행 보고 이력',activity:'활동 보고 기록'})[proof.source]||'근거 미확인')} · ${e(proof.by||'기록자 모름')} · ${e(proof.at?new Date(proof.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):proof.source==='session'?'조회 시각 미기록':'시각 미기록')}</small>`;
@@ -62,5 +62,5 @@ export function renderStatusContext(card,{decisions=[],decisionError=false}={}){
  return `<div class="status-context"><p><strong>현재 표시 근거:</strong> ${e(c.displayEvidence.text)}</p>${evidenceMeta(c.displayEvidence)}<p><strong>사람이 남긴 상태 이유:</strong> ${reasonHtml(c.reason||(hold?'보류 이유 미기록 · 감독 확인 필요':'변경 이유 미기록'))}</p>${evidenceMeta(c.reasonEvidence)}${c.resolutionOwner||hold?`<p>후속 담당: ${e(c.resolutionOwner||'미기록 · 감독 확인 필요')}</p>`:''}${c.nextAction||hold?`<p>다음 행동·해소 조건: ${e(c.nextAction||'미기록 · 감독 확인 필요')}</p>`:''}${hold||open?`<small>${decisionError?'사용자 결정 요청 확인 불가':open?'사용자 결정 필요 · 내 결정 필요에서 확인':'요청된 사용자 결정 없음'}</small>`:''}</div>`;
 }
 export function renderStatusHistory(card){
- return `<h3>상태 변경 · 진행 보고 이력</h3><ol class="history status-history">${statusChanges(card).map(h=>`<li><strong>${e(h.from?labels[h.from]||h.from:'등록')} → ${e(labels[h.to]||h.to)}</strong><small> ${e(h.by)} · ${e(h.at?new Date(h.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'시각 미기록')}</small><p>${e(h.reason||'변경 이유 미기록')}</p></li>`).join('')}</ol>`;
+ return `<h3>상태 변경 · 진행 보고 이력</h3><ol class="history status-history">${statusChanges(card).map(h=>`<li><strong>${e(h.from?exactStatusLabel(h.from):'등록')} → ${e(exactStatusLabel(h.to))}</strong><small> ${e(h.by)} · ${e(h.at?new Date(h.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'시각 미기록')}</small><p>${e(h.reason||'변경 이유 미기록')}</p></li>`).join('')}</ol>`;
 }

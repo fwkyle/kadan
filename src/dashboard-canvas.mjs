@@ -3,14 +3,15 @@ import {escapeHtml as e} from './card-content.mjs';
 import {renderExecutionHealth} from './dashboard-execution.mjs';
 
 // 화면과 시험이 같은 정의를 쓰도록 열/축을 한 곳에 둔다.
-export const wallStatusColumns=[['planned','발령 전'],['running','작업 중'],['waiting','결과 대기'],['hold','보류'],['attention','확인 필요'],['closed','완료·종료']];
+// 세 묶음 이름에 맞춘다. 결과 대기는 작업중 열에 넣는다(2026-10-05 [kyle]).
+export const wallStatusColumns=[['planned','진행 전'],['running','작업중'],['hold','일시정지'],['attention','확인 필요'],['closed','끝']];
 export const wallStepColumns=[['implementation','구현'],['fix','수정'],['review','독립검수'],['research','관련 조사'],['','연결 전·업무']];
 export const wallAxes=[['status','상태'],['step','티키타카 단계']];
 const stepKeys=wallStepColumns.map(([key])=>key);
 
 export function wallColumnOf(row,axis){
  if(axis==='step')return stepKeys.includes(row.rallyStep)?row.rallyStep:'';
- const kind=row.healthKind||'attention';
+ const kind=row.healthKind==='waiting'?'running':row.healthKind||'attention';
  return wallStatusColumns.some(([key])=>key===kind)?kind:'attention';
 }
 

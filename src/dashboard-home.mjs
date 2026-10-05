@@ -23,12 +23,12 @@ const taskTableFor=(briefs)=>{
  const explain=c=>briefs?.get(c.key)||{title:c.title||c.id,workstream:'',summary:''};
  return cards=>`<div class="task-table-wrap"><table class="task-table"><thead><tr><th scope="col">작업</th><th scope="col">실행 흐름</th><th scope="col">담당</th><th scope="col">현재 상황</th><th scope="col">마지막 보고</th></tr></thead><tbody>${cards.map(c=>{const h=explain(c),reason=c.statusReason||h.summary||c.nextAction||'상세에서 확인';return `<tr><td>${link(c,h.title)}<small>${e(h.workstream==='분류할 작업'?'':h.workstream||'')}</small></td><td>${renderExecutionHealth(executionHealth(c))}</td><td aria-label="현재 담당: ${e(c.role||'미배정')}">${e(c.role||'미배정')}</td><td><span class="task-reason" title="${e(reason)}">${e(reason.length>100?reason.slice(0,100)+'…':reason)}</span></td><td><small>${e(h.evidenceAt!==undefined?reportTime(h):'')}</small></td></tr>`;}).join('')}</tbody></table></div>`;
 };
-// 다음으로 시작할 일: 판에 붙지 않은 발령 가능 실행 카드. 현황 화면의 접힘 구역으로 쓴다.
+// 다음으로 시작할 일: 판에 붙지 않은 설계완료(ready) 실행 카드. 현황 화면의 접힘 구역으로 쓴다.
 export function renderUpcoming(center,briefs,{fold=false}={}){
  const upcoming=(center?.cards||[]).filter(c=>!c.board&&c.displayState==='ready'&&isExecution(c));
  if(!upcoming.length)return '';
  const body=taskTableFor(briefs)(upcoming);
- return fold?`<details class="st-fold" id="status-upcoming"><summary>다음으로 시작할 일 · 발령 가능 ${upcoming.length}장</summary><p class="st-hint">맡길 준비가 된 후보이며 순서가 정해졌다는 뜻은 아닙니다.</p>${body}</details>`:`<section class="panel"><h2>다음으로 시작할 일 · 발령 가능 ${upcoming.length}장</h2>${body}</section>`;
+ return fold?`<details class="st-fold" id="status-upcoming"><summary>다음으로 시작할 일 · 설계완료 ${upcoming.length}장</summary><p class="st-hint">맡길 준비가 된 후보이며 순서가 정해졌다는 뜻은 아닙니다.</p>${body}</details>`:`<section class="panel"><h2>다음으로 시작할 일 · 설계완료 ${upcoming.length}장</h2>${body}</section>`;
 }
 // 비서에게 확인할 질문. 사용자 결정 요청이 아니다.
 export function renderSecretaryQuestions(center,briefs,{fold=false}={}){
@@ -85,7 +85,7 @@ export function renderDashboardHome({center,decisions=[],decisionError,briefs,en
  return `<div data-view="dashboard" class="human-dashboard"><section class="home-lead"><div><p class="eyebrow">오늘의 작업</p><h2>${open.length?`${rallyGroups.length?open.length+'개 판 · 남은 티키타카 '+rallyGroups.filter(g=>!g.closed).length+'묶음 · 미연결 '+unlinked.length+'장':open.length+'개 판에 남은 실행 작업 '+activeCards.length+'개'}`:'현재 열린 판이 없습니다'}</h2><p>${rallyGroups.length?'카드 기준 · ':''}작업 중 ${running.length}개 · 보류 ${hold.length}개 · 보고·실행 확인 ${unknown.length}개</p></div><div class="attention-shortcuts"><a class="decision-shortcut" href="#decisions"><span>내가 결정할 일</span><strong>${decisionError?'모름':decisionsOpen.length+'건'}</strong></a>${secretaryShortcut}</div></section>
  ${decisionError?'<section class="panel"><h2>내 결정 필요</h2><p>결정 기록을 읽지 못했습니다.</p></section>':decisionsOpen.length?`<section class="panel decision-priority"><h2>내가 결정하면 진행할 수 있어요</h2><ul>${decisionsOpen.map(d=>`<li><a href="#decision-${e(d.id)}">${e(d.question)}</a><p>추천: ${e(d.recommendation)}</p></li>`).join('')}</ul></section>`:'<p class="decision-clear">지금 요청된 사용자 결정은 없습니다. 감독이 확인할 기록은 아래에 따로 모았습니다.</p>'}
  ${open.map(board).join('')}
- ${upcoming.length?`<section class="panel"><h2>다음으로 시작할 일 · 발령 가능 ${upcoming.length}장</h2>${taskTable(upcoming)}</section>`:''}
+ ${upcoming.length?`<section class="panel"><h2>다음으로 시작할 일 · 설계완료 ${upcoming.length}장</h2>${taskTable(upcoming)}</section>`:''}
  <section class="panel secretary-questions"><h2>비서에게 확인할 일</h2><p class="muted">사용자 결정 요청이 아닙니다. 아래 질문을 복사해 비서에게 물어볼 수 있습니다.</p>${unknown.length||hold.length?`<ul class="question-list">${primaryQuestions.map(askItem).join('')}</ul>${moreQuestions.length?`<details><summary>나머지 ${moreQuestions.length}장 확인 질문</summary><ul class="question-list">${moreQuestions.map(askItem).join('')}</ul></details>`:''}`:'<p>현재 판에서 별도로 확인할 항목이 없습니다.</p>'}<p class="copy-feedback" role="status" aria-live="polite"></p></section>
  <details class="panel history-drawer"><summary>끝난 판 ${closed.length}개 · 옛 실행 기록 확인 ${loose.length}장</summary>${renderBoardProgress({...center,boards:closed},{briefs})}${loose.length?`<h3>판 미지정 · 실행 기록 확인 ${loose.length}장</h3><p>옛 발령과 저장 상태를 대조할 항목입니다. 사용자 결정 대기가 아닙니다.</p><ul class="work-list">${loose.map(c=>`<li>${link(c,explain(c).title)} · 저장 상태 ${e(c.status==='draft'?'초안':c.status)} · ${e(progressLabel(c))}</li>`).join('')}</ul>`:''}</details>
  <p class="muted home-footnote">티키타카 막대는 작업 묶음, 미연결 카드 막대는 카드 수 기준입니다. 감독 조율 카드는 제외합니다. 제품 완성률·배포 완료를 뜻하지 않습니다. <a href="?state=all#cards">전체 카드 ${center.cards.length}장 보기</a></p></div>`;

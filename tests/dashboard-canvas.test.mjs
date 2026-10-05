@@ -17,9 +17,11 @@ const readData=html=>{const data=JSON.parse(html.match(/<script type="applicatio
 const row=(patch={})=>({key:'repo/a',id:'a',title:'카드 가',kind:'execution',owner:'작업자',rallyStep:'implementation',healthKind:'running',healthLabel:'작업 중',healthReason:'진행 보고가 있습니다.',signalAt:sent,signalLabel:'진행 보고',flowLabel:'1라운드 · 구현',flowPhase:'구현 중',turnLabel:'작업자',stateLabel:'작업 중',model:'gpt-6-astra',effort:'max',modelTitle:'codex · gpt-6-astra · 강도 max',purpose:'목적 한 줄',parentWorkKey:'',...patch});
 
 test('카드 월 열은 상태와 티키타카 단계 두 축으로 정해진다',()=>{
- assert.deepEqual(wallStatusColumns.map(([key])=>key),['planned','running','waiting','hold','attention','closed']);
+ assert.deepEqual(wallStatusColumns.map(([key])=>key),['planned','running','hold','attention','closed']);
  assert.deepEqual(wallStepColumns.map(([key])=>key),['implementation','fix','review','research','']);
- for(const kind of ['planned','running','waiting','hold','closed'])assert.equal(wallColumnOf(row({healthKind:kind}),'status'),kind);
+ for(const kind of ['planned','running','hold','closed'])assert.equal(wallColumnOf(row({healthKind:kind}),'status'),kind);
+ // 결과 대기는 작업중 열에 넣는다(2026-10-05 [kyle]).
+ assert.equal(wallColumnOf(row({healthKind:'waiting'}),'status'),'running');
  assert.equal(wallColumnOf(row({healthKind:'unknown-kind'}),'status'),'attention');
  assert.equal(wallColumnOf(row({rallyStep:'review'}),'step'),'review');
  assert.equal(wallColumnOf(row({rallyStep:undefined}),'step'),'');
@@ -28,14 +30,14 @@ test('카드 월 열은 상태와 티키타카 단계 두 축으로 정해진다
 
 test('카드 월은 열마다 장수와 타일을 보여주고 종료·미기록 문구를 반복하지 않는다',()=>{
  const rows=[
-  row({key:'repo/run',id:'run',title:'돌아가는 카드',healthKind:'running',healthLabel:'작업 중'}),
-  row({key:'repo/wait',id:'wait',title:'기다리는 카드',healthKind:'waiting',healthLabel:'결과 대기',turnLabel:'종료',model:'',effort:'',modelTitle:''}),
+  row({key:'repo/run',id:'run',title:'돌아가는 카드',healthKind:'running',healthLabel:'작업중'}),
+  row({key:'repo/wait',id:'wait',title:'기다리는 카드',healthKind:'waiting',healthLabel:'작업중',turnLabel:'종료',model:'',effort:'',modelTitle:''}),
   row({key:'repo/done',id:'done',title:'끝난 카드',healthKind:'closed',healthLabel:'완료',signalAt:null,signalLabel:'실행 신호 없음',model:''})
  ];
  const html=workspaceWallHtml(rows,'repo/run','status');
  const columns=[...html.matchAll(/<section class="dw-wall-col" data-wall-column="([^"]*)"><header><h3>([^<]*)<\/h3><span>([0-9]+)<\/span>/g)].map(m=>({key:m[1],label:m[2],count:Number(m[3])}));
- assert.deepEqual(columns.map(c=>c.key),['planned','running','waiting','hold','attention','closed']);
- assert.deepEqual(columns.map(c=>c.count),[0,1,1,0,0,1]);
+ assert.deepEqual(columns.map(c=>c.key),['planned','running','hold','attention','closed']);
+ assert.deepEqual(columns.map(c=>c.count),[0,2,0,0,1]);
  assert.match(html,/돌아가는 카드/);assert.match(html,/gpt-6-astra · max/);
  assert.match(html,/data-card-key="repo\/run" href="\?card=repo%2Frun#detail" aria-current="true"/);
  const done=html.split('data-card-key="repo/done"')[1];

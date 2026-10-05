@@ -32,8 +32,9 @@ test('열린 업무는 실제 실행 기준으로 준비·대기·확인·최종
 });
 test('첫 화면은 업무 연결 없는 실행과 결과 대기를 표시하고 관리 카드는 실행 집계에서 제외한다',()=>{
  const html=renderDashboardStatus({center:{cards:[card(),card({key:'r/w',title:'대기 예제',displayState:'waiting'}),card({key:'r/m',title:'관리 예제',workType:'coordination'})],boards:[]},works:[],collectedAt:edited});
- assert.match(html,/st-num">1<\/span><span class="st-lbl">작업 중/);
- assert.match(html,/st-num">1<\/span><span class="st-lbl">결과 대기/);
+ // 결과 대기는 작업중에 함께 센다. 따로 칩을 두지 않는다(2026-10-05 [kyle]).
+ assert.match(html,/st-num">2<\/span><span class="st-lbl">작업중/);
+ assert.ok(!html.includes('결과 대기'));
  assert.match(html,/st-num">2<\/span><span class="st-lbl">전체 실행 카드/);
  assert.match(html,/예제 실행/);assert.match(html,/대기 예제/);assert.ok(!html.includes('관리 예제'));
  assert.match(html,/열린 업무가 없습니다/);assert.match(html,/감시 정보 미수집/);

@@ -18,7 +18,7 @@ test("다섯 칩의 순서와 숫자: 결정·막힘(+경보)·작업 중·흐�
   assert.deepEqual(chips.map((c) => [c.kind, c.num, c.label, c.on]), [
     ["decision", 2, "내 결정 대기", true],
     ["attn", 3, "지금 막힌 것 · 경보 2", true],
-    ["run", 3, "작업 중", true],
+    ["run", 3, "작업중", true],
     ["flow", 1, "흐름 확인", true],
     ["live", 3, "살아 있는 담당 · 모델 2종", true],
   ]);
@@ -36,9 +36,9 @@ test("모르는 값은 '모름'으로 두고 켜지지 않는다", () => {
 });
 
 test("슈퍼감독 한 줄: 숫자 칸 순서와 모름, 생존 칸", () => {
-  const s = { super: "a-슈퍼감독", repos: ["repoA", "repoB"], running: 2, waiting: 1, stuck: 0, openWorks: 3, decisions: 1, alerts: 0, lastSignal: null, alive: true, model: "gpt-5-mini" };
-  assert.equal(supervisorLine(s), "저장소 repoA, repoB · 열린 워크 3 · 작업 중 2 · 결과 대기 1 · 막힘 0 · 내 결정 1 · 경보 0");
-  assert.equal(supervisorLine({ ...s, repos: [], decisions: null, alerts: null }), "저장소 없음 · 열린 워크 3 · 작업 중 2 · 결과 대기 1 · 막힘 0 · 내 결정 모름 · 경보 모름");
+  const s = { super: "a-슈퍼감독", repos: ["repoA", "repoB"], running: 2, stuck: 0, openWorks: 3, decisions: 1, alerts: 0, lastSignal: null, alive: true, model: "gpt-5-mini" };
+  assert.equal(supervisorLine(s), "저장소 repoA, repoB · 열린 워크 3 · 작업중 2 · 막힘 0 · 내 결정 1 · 경보 0");
+  assert.equal(supervisorLine({ ...s, repos: [], decisions: null, alerts: null }), "저장소 없음 · 열린 워크 3 · 작업중 2 · 막힘 0 · 내 결정 모름 · 경보 모름");
   assert.equal(supervisorLife(s), "살아 있음 · gpt-5-mini");
   assert.equal(supervisorLife({ ...s, model: null }), "살아 있음");
   assert.equal(supervisorLife({ ...s, alive: false }), "창 없음");

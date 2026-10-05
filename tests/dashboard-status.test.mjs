@@ -96,7 +96,7 @@ test('09-24 현황 첫머리는 사용자 차례 둘(내 결정 대기·지금 �
   {id:'d-2',status:'answered',question:'끝난 결정?',requestedBy:'p-슈퍼감독',recommendation:'x'}]});
  const band=html.slice(html.indexOf('<div class="st-band"'),html.indexOf('</div>',html.indexOf('<div class="st-band"')));
  assert.deepEqual([...band.matchAll(/st-lbl">([^<]+)/g)].map(m=>m[1]),['내 결정 대기','지금 막힌 것']);
- assert.match(html,/<a class="st-mini" href="#status-executing"><span class="st-num">0<\/span><span class="st-lbl">작업 중/);
+ assert.match(html,/<a class="st-mini" href="#status-executing"><span class="st-num">0<\/span><span class="st-lbl">작업중/);
  assert.match(html,/<li class="st-dec-row"><span class="st-dec-title">PR #1을 합칠까요\?<\/span><small>p-슈퍼감독 · 추천 합류<\/small><a class="st-dec-answer" href="#decision-d-1">답하기<\/a><\/li>/);
  assert.doesNotMatch(html,/끝난 결정/);
  const at=id=>html.indexOf(`id="${id}"`);

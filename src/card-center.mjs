@@ -1,6 +1,7 @@
 import {taskIdentity,taskEventKey} from './task-identity.mjs';
 import {buildRallies} from './rallies.mjs';
 import { workEntries, effectiveCardRole } from './handover-state.mjs';
+import {isEnded} from './status-labels.mjs';
 
 // 실행 명령에서 추론 강도를 읽는다. 실행기마다 강도 플래그가 다르다: codex는 model_reasoning_effort, claude는 --effort, omo는 --thinking.
 // 하나만 읽으면 다른 실행기의 강도가 화면에서 빈칸이 된다(2026-09-12 fable 발령에서 실제로 빔).
@@ -69,9 +70,10 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
   const ensure=name=>{if(!boards.has(name))boards.set(name,{name,cards:[],runs:[],state:'done'});return boards.get(name);};
   for(const c of result)if(c.board)ensure(c.board).cards.push(c);
   for(const r of unregistered)if(r.board)ensure(r.board).runs.push(r);
+  // 보류(archived)는 시작 전 카드라 판을 끝난 것으로 만들지 않는다. 완료·취소·대체만 끝이다(2026-10-05 [kyle]).
   for(const b of boards.values()) {
     const states=[...b.cards.map(c=>c.displayState),...b.runs.map(r=>r.state)];
-    b.state=states.includes('running')?'running':states.includes('waiting')&&!states.some(s=>['unconfirmed','orphaned','failed'].includes(s))?'waiting':states.every(s=>['done','cancelled','superseded','archived'].includes(s))?'done':states.some(s=>['unconfirmed','orphaned','failed'].includes(s))?'needs-check':states.every(s=>['done','cancelled','superseded','archived','hold'].includes(s))?'hold':'planned';
+    b.state=states.includes('running')?'running':states.includes('waiting')&&!states.some(s=>['unconfirmed','orphaned','failed'].includes(s))?'waiting':states.every(isEnded)?'done':states.some(s=>['unconfirmed','orphaned','failed'].includes(s))?'needs-check':states.every(s=>isEnded(s)||s==='hold')?'hold':'planned';
   }
   // 실행은 ok로 확정됐는데 카드가 열린 채 남은 것. 카드 완료는 감독 판단이라 목록만 보인다(2026-09-24).
   // 실행이 여럿이면 가장 최근에 발령한 실행만 본다. 완료 확정 뒤 감독이 상태·담당을 바꿨으면 다시 연 것으로 보고 뺀다.
@@ -83,7 +85,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     return [{key:c.key,title:c.title,status:c.status,role:last.role,doneAt:last.at,doneBy:last.doneBy??'모름',revision:c.revision}];
   });
   const execution=result.filter(c=>c.workType!=='coordination');
-  const executionSummary={cards:execution.length,remaining:execution.filter(c=>!['done','cancelled','superseded','archived'].includes(c.displayState)).length,running:execution.filter(c=>c.displayState==='running').length,coordinationCards:result.length-execution.length};
+  const executionSummary={cards:execution.length,remaining:execution.filter(c=>!isEnded(c.displayState)).length,running:execution.filter(c=>c.displayState==='running').length,coordinationCards:result.length-execution.length};
   return {rallies:buildRallies(result),executionSummary,cards:result,doneButOpen,boards:[...boards.values()],unregistered,roles:[...roles.values()],runtimeKnown,models,
     summary:{cards:result.length,running:result.filter(c=>c.displayState==='running').length,ready:result.filter(c=>c.displayState==='ready').length,
       attention:result.filter(c=>['unconfirmed','orphaned','failed'].includes(c.displayState)).length,
