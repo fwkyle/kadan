@@ -34,9 +34,6 @@ const Mailbox = lazy(() =>
   ),
   Runs = lazy(() =>
     import("./pages/Records").then((m) => ({ default: m.Runs })),
-  ),
-  Sessions = lazy(() =>
-    import("./pages/Records").then((m) => ({ default: m.Sessions })),
   );
 const links = [
   ["status", "전체 현황"],
@@ -47,7 +44,6 @@ const links = [
   ["ledger", "기록"],
   ["runs", "실행 이력"],
   ["operations-flow", "워크 진행 이력"],
-  ["sessions", "담당자 상태"],
   ["work-create", "새 워크"],
   ["card-create", "카드 추가"],
 ];
@@ -57,7 +53,7 @@ export default function App() {
     url = useMemo(() => new URL(href), [href]),
     view = viewOf(url),
     section = ["dashboard", "operations-flow", "work-create", "card-create"].includes(view)
-      ? "dashboard" : view === "sessions" ? "status" : view === "runs" ? "ledger" : view,
+      ? "dashboard" : view === "runs" ? "ledger" : view,
     session = useResource<{ token: string }>("session", {
       pollMs: 0,
       staleMs: 300_000,
@@ -116,10 +112,8 @@ export default function App() {
       <Ledger url={url} />
     ) : view === "runs" ? (
       <Runs url={url} />
-    ) : view === "sessions" ? (
-      <Sessions url={url} />
     ) : view === "runner-settings" ? (
-      <Runners />
+      <Runners url={url} />
     ) : view === "operations-flow" ? (
       <Operations url={url} />
     ) : view === "work-create" || view === "card-create" ? (
@@ -196,7 +190,6 @@ export default function App() {
             <a href="#ledger" aria-current={view === "ledger" ? "page" : undefined}>활동 기록</a>
             <a href="#runs" aria-current={view === "runs" ? "page" : undefined}>실행 이력</a>
           </nav>}
-          {view === "sessions" && <nav className="inline-nav" aria-label="상위 화면"><a href="#status">전체 현황으로</a></nav>}
           <ErrorMessage
             error={session.error}
             retry={() => void session.refresh(true)}

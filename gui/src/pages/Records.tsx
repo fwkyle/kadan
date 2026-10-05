@@ -349,10 +349,9 @@ export function Sessions({ url }: { url: URL }) {
     alive = data?.roles.filter((r) => r.life.state === "alive") ?? [],
     rows = data && aliveOnly && data.known ? alive : (data?.roles ?? []);
   return (
-    <section>
-      <h1>담당자 상태</h1>
-      <p>열린 AI 창과 아직 안 닫힌 카드를 맡은 담당, 시작할 때 기록한 모델을 확인합니다. 작업의 진행·완료는 <a href="/?collection=work#dashboard">워크</a>에서 확인하세요.</p>
-      <p className="muted">다음 발령에 사용할 모델은 <a href="#runner-settings">실행 모델</a>에서 설정합니다.</p>
+    <section id="sessions" className="sessions-section">
+      <h2>담당자 상태 · 지금 열린 창</h2>
+      <p className="muted">열린 AI 창과 아직 안 닫힌 카드를 맡은 담당, 시작할 때 기록한 실행 도구·모델입니다. 작업의 진행·완료는 <a href="/?collection=work#dashboard">워크</a>에서 확인하세요.</p>
       {data && (
         <div className="segmented" aria-label="담당 보기">
           <button aria-pressed={!aliveOnly} onClick={() => patchLocation({ alive: null }, undefined, true)}>
@@ -371,7 +370,7 @@ export function Sessions({ url }: { url: URL }) {
           resource.error || (data && !data.known ? "현재 세션 상태 모름" : null)
         }
       />
-      <Freshness collectedAt={data?.collectedAt} {...resource} />
+      {/* 수집 시각·새로 읽기 줄은 실행 모델 화면이 한 번만 그린다(절마다 그리면 바닥에 두 줄). */}
       {!data ? (
         <Loading />
       ) : (
