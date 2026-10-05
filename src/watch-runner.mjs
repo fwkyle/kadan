@@ -759,7 +759,10 @@ export async function runWatch({
     const nextAlerts = [
       ...(hierarchyError ? [hierarchyError] : []),
       ...(aiStoreError ? [aiStoreError] : []),
-      ...roleAlerts.filter(a=>!rateLimitRetry.alerts?.some(r=>r.session===a.session&&a.kind==='한도')),
+      // 429 재개가 예약된 세션의 '한도' 경보는 새로 알리지 않는다. 다만 이미 알린 경보는 화면에 429가 남아 있는 동안
+      // 통지 없이 그대로 이월한다 — 숨기면 dedup이 해소로 보고 '한도 → 해소됨'이 깜빡였다(2026-10-05 점검 보고서 2-M2).
+      ...roleAlerts.filter(a=>!(a.kind==='한도'&&(retrySessions.has(a.session)||rateLimitRetry.alerts?.some(r=>r.session===a.session)))),
+      ...activeAlerts.filter(a=>a.kind==='한도'&&retrySessions.has(a.session)&&roleAssessment.alerts.some(r=>r.id===a.id)),
       ...queuedAssessment.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
