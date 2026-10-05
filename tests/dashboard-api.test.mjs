@@ -59,6 +59,8 @@ for (const mode of ["jsonl", "sqlite"])
     for (const key of ["rows", "works", "decisions", "recent"]) assert.ok(Array.isArray(mine[key]), key);
     assert.deepEqual(mine.alerts, { count: 0, items: [] });
     assert.ok(!("boards" in mine) && !("watchHtml" in mine), "슈퍼감독 몫만 돌려준다");
+    assert.deepEqual(Object.keys(mine.counts), ["running", "waiting", "stuck", "stale", "planned", "hold"], "나머지 실행은 수만");
+    for (const row of mine.rows) assert.ok(Object.keys(row).length <= 8 && ["running", "waiting", "stuck"].includes(row.bucket), "판단에 필요한 칸·지금 손댈 실행만");
     const detailFacts = (await get("detail?card=demo/card-1")).facts.map((f) => f[0]);
     assert.ok(detailFacts.includes("실행 모델"), "실행 상세에 모델 줄");
     const list = await get("workspace?collection=executions&state=all");

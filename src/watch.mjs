@@ -464,7 +464,9 @@ export function dedupAlerts(previousAlerts, nextAlerts) {
   for (const alert of previousAlerts) {
     if (nextIds.has(alert.id)) continue;
     const deathId = `death:${alert.session}`;
-    if (alert.session != null && alert.id !== deathId && nextIds.has(deathId)) {
+    // 감독 멈춤 1단(본인)은 2단(상위)이 뜨면 풀린 게 아니라 올라간 것이다. 해소로 기록하지 않고 흡수로 닫는다(2026-10-05 PR #99 검수 1).
+    const escalated = alert.kind === "놀고 있음" && nextIds.has(`${alert.id}:상위`);
+    if (escalated || (alert.session != null && alert.id !== deathId && nextIds.has(deathId))) {
       absorbed.push(alert);
     } else {
       resolved.push(alert);
