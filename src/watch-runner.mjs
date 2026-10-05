@@ -29,6 +29,7 @@ import {
 } from "./watch-supervisor.mjs";
 import { assertSingleWatch, notifyUser } from "./watch-system.mjs";
 import { effectiveWorkOwner } from "./handover-state.mjs";
+import { mailboxLetters } from "./mailbox-state.mjs";
 
 function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -381,6 +382,8 @@ export async function runWatch({
   readEntries,
   readCards = null,
   readWorks = () => [],
+  // 사용자 결정 요청 목록. 열린 결정을 올린 감독은 노는 게 아니라 답을 기다리는 것이다(2026-10-05 [kyle]).
+  readDecisions = () => [],
   startReportGraceMs = 5 * 60_000,
   completionGraceMs = 15 * 60_000,
   stallAfterMs = 0,
@@ -756,6 +759,18 @@ export async function runWatch({
     lap('ai');
     const roleAlerts=judgeCmd?stallAlerts.filter(a=>!a.id.startsWith('stall:')):stallAlerts;
     const stallSessions=new Set(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>a.session));
+    // 답을 기다리는 일(2026-10-05 [kyle]): 사용자 결정을 기다리는 카드는 모두에게, 감독이 상위에게 물은 질문 우편(답 대기)이
+    // 걸린 카드·워크는 묻는 쪽에게 할 일이 아니다. 답할 쪽에게는 그대로 할 일이다. 감독을 통째로 빼지 않는다 — 다른 일은 그대로 판정한다.
+    // 목록을 못 읽으면 아무것도 빼지 않는다(판정을 숨기지 않는다).
+    let waits = [];
+    try {
+      const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
+      const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
+      const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
+      for (const d of readDecisions() ?? []) if (d?.status === "open" && typeof d.card === "string") waits.push(item(d.card, null, null, "@user"));
+      for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
+        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push(item(l.executionKey, l.taskId, l.workKey, l.currentRecipient));
+    } catch { waits = []; }
     const nextAlerts = [
       ...(hierarchyError ? [hierarchyError] : []),
       ...(aiStoreError ? [aiStoreError] : []),
@@ -780,8 +795,9 @@ export async function runWatch({
         idleMs,
         ledgerError,
         parents,
-        { works, cards: cards ?? [] }
+        { works, cards: cards ?? [], waits }
       ).filter(a=>(!observedSessions || !a.session || observedSessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))
+
         // 감독의 세션 부재·화면 없음은 감독 점검이 이미 알린다. 같은 세션에 '모름'을 겹쳐 올리지 않는다.
         && !supervisorCheck.alerts.some(s=>s.session===a.session)),
       ...(observationError ? activeAlerts.filter(a=>a.session) : []),

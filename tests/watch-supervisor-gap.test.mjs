@@ -13,14 +13,14 @@ const starts=[...parents.keys()].map((role,i)=>({kind:'start',role,session:'kada
 const card={id:'t1',key:'repo/t1',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'};
 
 async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),sendNudge=null,read=()=>'frozen screen',
-  cards=[card],works=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
+  cards=[card],works=[],decisions=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
   const records=[],sent=[],printed=[],nudges=[];let minute=0;const controller=new AbortController();
   const entries=[...starts,...extra];
   await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,idleMs:15*60_000,
     parents,routes:new Map(),superRole:'p-슈퍼감독',
     now:()=>epoch+minute*60_000,
     floor:{list,read:s=>read(s,minute),alive},
-    readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,
+    readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,readDecisions:()=>decisions,
     sendAlert:(role,msg)=>sent.push([minute,role,msg]),
     sendNudge:(role,msg)=>{nudges.push([minute,role,msg]);return sendNudge?.(role,msg);},
     record:e=>{records.push({...e,minute});entries.push({...e,t:stamp(minute)});},
@@ -102,4 +102,27 @@ test('워크 owner가 인계된 옛 감독 이름이면 확정 인계를 따라 
   const none=await simulate({minutes:20,cards:[doneCard],works:[work],
     entries:[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)}]});
   assert.deepEqual(none.nudges,[],'인계 기록이 없고 관계표에 없는 owner면 할 일로 세지 않는다');
+});
+
+test('답을 기다리는 일은 할 일에서 뺀다 — 감독을 통째로 빼지 않고 그 일만. 사용자 결정은 모두에게서, 감독→슈퍼감독 질문은 묻는 감독에게서만',async()=>{
+  const send={kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},plan={kind:'plan',board:'p',taskId:'t1',t:stamp(0)};
+  const decision={id:'d1',card:'repo/t1',requestedBy:'p-슈퍼감독',status:'open',at:stamp(0)};
+  // A. 유일한 할 일이 사용자 결정을 기다린다: 감독·슈퍼감독 모두 놀고 있음이 아니다.
+  const onlyWaiting=await simulate({minutes:40,decisions:[decision]});
+  assert.deepEqual(onlyWaiting.nudges,[]);
+  assert.ok(!onlyWaiting.alerts.some(a=>a.alertKind==='놀고 있음'));
+  // B. 다른 할 일(t2)이 있으면 그대로 판정한다 — 결정이 열려 있다고 감독이 빠지지 않는다.
+  const card2={...card,id:'t2',key:'repo/t2'};
+  const other=await simulate({minutes:20,decisions:[decision],cards:[card,card2],
+    entries:[send,plan,{kind:'send',role:'p-작업자',taskId:'t2',t:stamp(0)},{kind:'plan',board:'p',taskId:'t2',t:stamp(0)}]});
+  assert.deepEqual(other.nudges.map(([m,r,msg])=>[m,r,/할 일 1건/.test(msg)]),[[15,'p-감독',true],[15,'p-슈퍼감독',true]],'남은 할 일 1건으로 판정');
+  // C. 감독이 슈퍼감독에게 t1을 물었다(답 대기): 묻는 감독에게는 할 일이 아니고, 답할 슈퍼감독에게는 할 일이다.
+  const question={kind:'send',mailId:'q1',by:'p-감독',role:'p-슈퍼감독',session:'kadan-p-슈퍼감독',expectReply:true,executionKey:'repo/t1',t:stamp(0)};
+  const asked=await simulate({minutes:20,entries:[send,plan,question]});
+  assert.deepEqual(asked.nudges.map(([m,r])=>[m,r]),[[15,'p-슈퍼감독']],'답할 슈퍼감독만 깨운다');
+  // D. 결정이 닫혔거나 목록을 못 읽으면 평소대로.
+  const answered=await simulate({minutes:20,decisions:[{...decision,status:'answered'}]});
+  assert.deepEqual(answered.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
+  const broken=await simulate({minutes:20,decisions:null});
+  assert.deepEqual(broken.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정 목록을 못 읽으면 아무것도 빼지 않는다');
 });
