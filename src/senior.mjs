@@ -1,7 +1,7 @@
-// 자문위원 — 감독이 카드 하나를 두고 고급 모델에게 한 번 묻는 일회성 호출(2026-10-05 [kyle] 승인).
-// 슈퍼감독은 값싼 모델로 돌리고, DB·데이터 변경·운영 영향·설계·방향 결정처럼 판단이 무거운 카드만 여기로 보낸다.
+// 시니어 — 감독이 카드 하나를 두고 고급 모델에게 한 번 묻는 일회성 호출(2026-10-05 [kyle] 승인).
+// 슈퍼감독은 값싼 모델로 돌리고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 카드 완수를 위한 Claude Code 어드바이저와는 다른 기능이다.
 // 자문은 기록이지 결정이 아니다: 감독이 읽고 판단하거나 decision request로 사용자에게 올린다. 카드를 고치지 않는다.
-// 호출 방식은 감시 AI와 같다(scripts/advise.sh가 codex exec). 폴백은 없다 — 한 번 실패하면 실패로 끝낸다(fail closed).
+// 호출 방식은 감시 AI와 같다(scripts/senior.sh가 codex exec). 폴백은 없다 — 한 번 실패하면 실패로 끝낸다(fail closed).
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
@@ -13,19 +13,19 @@ import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 
-export const ADVISE_USAGE = 'kadan advise <카드키> --question <질문> [--file <경로>]... [--timeout <초>] — 감독이 카드 하나를 두고 자문위원(실행 모델 설정의 advisor)에게 한 번 묻는다. 상세: docs/advisor.md';
-// 자문위원은 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
+// 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
-export const ADVISE_TIMEOUT_MS = 1_800_000;
+export const SENIOR_TIMEOUT_MS = 1_800_000;
 const TIMEOUT_MAX_S = 3600, FILE_LIMIT = 64 * 1024, FILE_COUNT = 5, QUESTION_PREVIEW = 200;
-const DEFAULT_SCRIPT = fileURLToPath(new URL('../scripts/advise.sh', import.meta.url));
+const DEFAULT_SCRIPT = fileURLToPath(new URL('../scripts/senior.sh', import.meta.url));
 // 감독(일반감독·슈퍼감독)과 사람만 부른다. 작업자·검수자는 자기 카드의 판단을 감독에게 묻는다.
 const supervisor = by => typeof by === 'string' && /(^|-)(슈퍼)?감독(?:-\d+)?$/.test(by);
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
 const digest = text => createHash('sha256').update(text).digest('hex');
 
 // 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
-export const adviseCommandLabel = value => value ? `KADAN_ADVICE_MODEL=${value.model} KADAN_ADVICE_EFFORT=${value.effort ?? 'max'} advise.sh (codex exec, 저장소 읽기 전용)` : null;
+export const seniorCommandLabel = value => value ? `KADAN_SENIOR_MODEL=${value.model} KADAN_SENIOR_EFFORT=${value.effort ?? 'max'} senior.sh (codex exec, 저장소 읽기 전용)` : null;
 
 function readAttachment(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error(`첨부는 절대경로여야 한다: ${file}`);
@@ -36,7 +36,7 @@ function readAttachment(file) {
 
 export function composeAdvicePrompt({question, card, attachments}) {
   return [
-    '당신은 자문위원이다. 감독이 카드 하나를 두고 판단이 무거운 질문을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
+    '당신은 시니어다. 감독이 카드 하나의 작업 결과를 두고 결정할 부분을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
     '현재 작업 폴더가 그 카드의 저장소다(읽기 전용). 필요한 파일·이력은 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.',
     '답은 한국어로, 아래 네 칸을 이 순서로 짧게 쓴다.',
     '결론: 한 줄 — 권장안과 그 이유의 핵심.',
@@ -51,21 +51,21 @@ export function composeAdvicePrompt({question, card, attachments}) {
   ].join('\n');
 }
 
-export async function adviseCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
+export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
   script = DEFAULT_SCRIPT, now = Date.now, record = entry => appendLedger(entry, home), env = process.env}) {
-  if (flags.help || !argv[0]) return ADVISE_USAGE;
-  if (argv.length !== 1) throw new Error(ADVISE_USAGE);
+  if (flags.help || !argv[0]) return SENIOR_USAGE;
+  if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
   const question = flags.question;
   if (typeof question !== 'string' || !question.trim()) throw new Error('질문 필요 (--question)');
-  const timeoutS = flags.timeout == null ? ADVISE_TIMEOUT_MS / 1000 : Number(flags.timeout);
+  const timeoutS = flags.timeout == null ? SENIOR_TIMEOUT_MS / 1000 : Number(flags.timeout);
   if (!Number.isFinite(timeoutS) || timeoutS <= 0 || timeoutS > TIMEOUT_MAX_S) throw new Error(`--timeout은 1..${TIMEOUT_MAX_S}초`);
   const files = [].concat(flags.file ?? []).filter(f => f !== true);
   if (files.length > FILE_COUNT) throw new Error(`첨부는 ${FILE_COUNT}개까지`);
   assertWritable(home);
   const settings = read();
-  const value = settings?.presets?.[settings.activePreset]?.roles?.advisor;
-  if (!value) throw new Error('자문위원 모델 설정 없음 — kadan runners set advisor --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
+  const value = settings?.presets?.[settings.activePreset]?.roles?.senior;
+  if (!value) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
   const attachments = files.map(file => ({file, text: readAttachment(file)}));
@@ -78,7 +78,7 @@ export async function adviseCommand(argv, flags, {home, by, spawn = runJudgeProc
   let result;
   try {
     result = await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
-      env: {...env, KADAN_HOME: home, KADAN_ADVICE_DIR: dir, KADAN_ADVICE_REPO: card.repoPath, KADAN_ADVICE_MODEL: value.model, KADAN_ADVICE_EFFORT: value.effort ?? 'max'}});
+      env: {...env, KADAN_HOME: home, KADAN_SENIOR_DIR: dir, KADAN_SENIOR_REPO: card.repoPath, KADAN_SENIOR_MODEL: value.model, KADAN_SENIOR_EFFORT: value.effort ?? 'max'}});
   } catch (error) { result = {error}; }
   const stderr = String(result.stderr ?? '');
   fs.writeFileSync(path.join(dir, 'stderr.txt'), stderr, {mode: 0o600});

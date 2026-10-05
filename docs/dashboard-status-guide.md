@@ -96,7 +96,7 @@
 | 워크 진행 이력 | 상세의 `진행 이력`(카드는 `연결된 워크의 진행 이력`) 링크 · `?flowWork=<워크키>#operations-flow` | 구현·검수 카드, 완료 신호, 자동 연결·후속 근거, 인계 기록, 연결된 우편, 워크 변경 이력 | 워크 하나가 어떤 순서로 흘렀나 | `/api/operations-flow` |
 | 새 워크 · 카드 추가 | 워크·카드 목록의 버튼 · `#work-create`·`#card-create` (옛 `#create`) | 입력 양식 | 새로 맡길 때 | `/api/dashboard/create` |
 | 내 결정 | 메뉴 · `#decisions` (`#decision-*`) | 내 결정 필요, 이전 결정 | 내가 답해야 할 것 | `/api/dashboard/decisions` |
-| 실행 모델 | 메뉴 · `#runner-settings` (옛 `#sessions`는 이 화면의 담당자 상태 절로 온다, `alive=1`이면 생존만) | 담당자 상태 · 지금 열린 창(담당 보기 전체·생존만, 숨긴 담당 안내), 다음 발령의 실행 모델(모델·대체 후보 변경, 프리셋 전환, 최근 변경, 즐겨찾기 관리) | 지금 열린 창이 어느 모델인가, 다음 발령과 다음 감시 AI·자문위원(`kadan advise`) 호출에 쓸 실행기·모델·대체 후보 | `/api/dashboard/sessions`·`runners` |
+| 실행 모델 | 메뉴 · `#runner-settings` (옛 `#sessions`는 이 화면의 담당자 상태 절로 온다, `alive=1`이면 생존만) | 담당자 상태 · 지금 열린 창(담당 보기 전체·생존만, 숨긴 담당 안내), 다음 발령의 실행 모델(모델·대체 후보 변경, 프리셋 전환, 최근 변경, 즐겨찾기 관리) | 지금 열린 창이 어느 모델인가, 다음 발령과 다음 감시 AI·시니어(`kadan senior`) 호출에 쓸 실행기·모델·대체 후보 | `/api/dashboard/sessions`·`runners` |
 | 우편함 | 메뉴 · `#mailbox` | 역할 간 편지 목록, 답장 대기·안 읽음 수 | 무엇을 주고받았나 | `/api/dashboard/mail`·`mail-body` |
 | 기록 · 활동 기록 | 메뉴 · `#ledger` | 기록 종류(활동 기록·실행 이력) | 왜 이런 상태가 됐나(사건 원문) | `/api/dashboard/ledger` |
 | 기록 · 실행 이력 | 기록의 탭 · `#runs` | 실행 상태별 목록 | 누가 맡았고 끝났나 | `/api/dashboard/runs` |

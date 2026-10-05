@@ -18,7 +18,7 @@ import {attachWatchOverview} from "./watch-overview.mjs";
 import {PROFILE_FILE} from "./watch-cycle.mjs";
 import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
 import {decisionCommand} from "./decisions.mjs";
-import {adviseCommand} from "./advise.mjs";
+import {seniorCommand} from "./senior.mjs";
 import {runnersCommand} from "./runners-command.mjs";
 import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
 import { CardStore } from "./card-store.mjs";
@@ -2298,13 +2298,15 @@ const COMMANDS = {
   storage:(args,flags)=>console.log(JSON.stringify(storageCommand(args,flags,{home:ledgerHome()}),null,2)),
   inbox:(args,flags)=>console.log(JSON.stringify(inboxCommand(args,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   decision: (argv,flags) => console.log(JSON.stringify(decisionCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
-  advise: async (argv,flags) => {
-    const result=await adviseCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
+  senior: async (argv,flags) => {
+    const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     if (typeof result==='string') { console.log(result); return; }
     const {answer,...receipt}=result;
     console.log(JSON.stringify(receipt,null,2));
     console.log(`\n--- 자문 답변 (${receipt.model}) ---\n${answer}`);
   },
+  // 옛 이름(2026-10-05 advisor→senior 개명). 이미 떠 있는 감독이 옛 지침대로 불러도 같은 명령이 돈다.
+  advise: (argv,flags) => COMMANDS.senior(argv,flags),
   runners: (argv,flags) => console.log(JSON.stringify(runnersCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),
     record:entry=>appendLedger({...entry,t:new Date().toISOString()})}),null,2)),
   card: (argv,flags) => console.log(JSON.stringify(cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
@@ -2335,7 +2337,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|advise|runners|storage|inbox|slot|limit> [대상] [옵션]"
+      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }

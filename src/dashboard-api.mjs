@@ -56,7 +56,7 @@ import {
   WATCH_MAX_ATTEMPTS,
 } from "./runner-settings.mjs";
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
-import { adviseCommandLabel } from "./advise.mjs";
+import { seniorCommandLabel } from "./senior.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
 import { liveSessions, flowSummary, openAlerts, supervisorSummary, supervisorOf } from "./dashboard-band.mjs";
 
@@ -374,9 +374,9 @@ export function dashboardData(snapshot, url) {
     commands.watch =
       watchJudgeCommand(settings.presets[settings.activePreset].roles.watch) ||
       "미설정 — 감시 프로필의 KADAN_JUDGE_MODEL 사용";
-    commands.advisor =
-      adviseCommandLabel(settings.presets[settings.activePreset].roles.advisor) ||
-      "미설정 — kadan advise가 거절한다";
+    commands.senior =
+      seniorCommandLabel(settings.presets[settings.activePreset].roles.senior) ||
+      "미설정 — kadan senior가 거절한다";
     return {
       ...stamp,
       settings,
@@ -384,8 +384,8 @@ export function dashboardData(snapshot, url) {
       commands,
       // 감시 AI는 codex만 고를 수 있고, 1순위 포함 최대 N개를 자동으로 차례로 시도한다.
       watch: { runner: WATCH_RUNNER, maxAttempts: WATCH_MAX_ATTEMPTS },
-      // 자문위원도 codex만 고르고(advise.sh), 폴백 없이 한 번 부른다.
-      advisor: { runner: WATCH_RUNNER },
+      // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
+      senior: { runner: WATCH_RUNNER },
       roles: RUNNER_ROLE_LABELS,
       history: (snapshot.entries || [])
         .filter((e) => e.kind === "runner-settings")

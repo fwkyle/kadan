@@ -44,8 +44,8 @@ type RunnersData = Stamp & {
   history: unknown[];
   // 감시 AI는 이 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 자동으로 차례로 시도한다.
   watch?: { runner: string; maxAttempts: number };
-  // 자문위원도 codex만 고르고(advise.sh), 폴백 없이 한 번 부른다.
-  advisor?: { runner: string };
+  // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
+  senior?: { runner: string };
 };
 // 담당자 상태(지금 열린 창의 모델)와 실행 모델 설정(다음 발령의 모델)은 같은 질문 "어느 모델인가"의 지금·다음이라
 // 한 화면에 둔다(2026-10-05 점검 보고서 3부). 옛 주소 #sessions는 아래 절로 내려온다.
@@ -125,14 +125,14 @@ export default function Runners({ url }: { url: URL }) {
             KADAN_JUDGE_MODEL을 씁니다.
           </p>
           <p className="muted">
-            자문위원은 감독이 <code>kadan advise</code>로 카드 하나를 두고 한 번 묻는 고급
-            모델입니다. 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
+            시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
+            의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
           </p>
           {Object.entries(data.roles).map(([role, label]) => (
             <details key={role}>
               <summary>{label} 바꾸기</summary>
               <RunnerForm data={data} settings={data.settings!} role={role} />
-              {role !== "advisor" && (
+              {role !== "senior" && (
                 <RunnerForm
                   data={data}
                   settings={data.settings!}
@@ -197,18 +197,18 @@ function RunnerForm({
 }) {
   const context = useContext(AppContext),
     id = useId();
-  // 감시 AI는 watch-judge.sh가, 자문위원은 advise.sh가 codex exec로 부르므로 그 실행기만 보여 준다. 판정은 서버가 다시 한다.
+  // 감시 AI는 watch-judge.sh가, 시니어는 senior.sh가 codex exec로 부르므로 그 실행기만 보여 준다. 판정은 서버가 다시 한다.
   const runners =
     role === "watch" && data.watch
       ? [data.watch.runner]
-      : role === "advisor" && data.advisor
-        ? [data.advisor.runner]
+      : role === "senior" && data.senior
+        ? [data.senior.runner]
         : Object.keys(data.catalog);
   const applyNote =
     role === "watch"
       ? "다음 감시 호출부터 적용됩니다."
-      : role === "advisor"
-        ? "다음 kadan advise 호출부터 적용됩니다."
+      : role === "senior"
+        ? "다음 kadan senior 호출부터 적용됩니다."
         : "다음 발령부터 적용됩니다.";
   const initial = () =>
     fallback
@@ -499,8 +499,8 @@ function RunnerForm({
             <code>
               {role === "watch"
                 ? `KADAN_JUDGE_MODEL=${choice.model} KADAN_JUDGE_EFFORT=${choice.effort || "max"} watch-judge.sh (codex exec)`
-                : role === "advisor"
-                  ? `KADAN_ADVICE_MODEL=${choice.model} KADAN_ADVICE_EFFORT=${choice.effort || "max"} advise.sh (codex exec, 저장소 읽기 전용)`
+                : role === "senior"
+                  ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (codex exec, 저장소 읽기 전용)`
                   : spec?.spawn
                     .replaceAll("{model}", choice.model)
                     .replaceAll("{effort}", choice.effort || "")}
