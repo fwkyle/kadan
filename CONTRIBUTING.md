@@ -16,6 +16,7 @@ This repository intentionally ships no `AGENTS.md` / `CLAUDE.md`. If you work wi
 ## Workflow
 
 - Behaviour changes ship with tests in the same commit: `npm test`.
+- `npm test` never calls a real model. Live checks of the senior (`kadan senior`, a costly model) use `npm run smoke:senior`, which runs at low effort by default (or `kadan senior … --effort low`); do not test at the configured effort. Details: [docs/senior.md](docs/senior.md#실측-시험).
 - Run `npm run setup:hooks` once per clone. The commit hook checks the exact staged contents; the push hook checks the entire outgoing tip and every changed file version in commits not already on the destination, including files removed in later commits. Existing custom hook configurations are preserved.
 - Run `npm run check:public` while editing. It checks tracked and non-ignored new files throughout the repository, including hidden configuration files. Keep private notes in the ignored local workspace.
 - These checks detect known private paths and identifiers, not every possible secret. Review the staged diff before committing; CI runs after upload and cannot undo publication.
