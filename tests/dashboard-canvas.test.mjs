@@ -30,8 +30,8 @@ test('카드 월 열은 상태와 티키타카 단계 두 축으로 정해진다
 
 test('카드 월은 열마다 장수와 타일을 보여주고 종료·미기록 문구를 반복하지 않는다',()=>{
  const rows=[
-  row({key:'repo/run',id:'run',title:'돌아가는 카드',healthKind:'running',healthLabel:'작업 중'}),
-  row({key:'repo/wait',id:'wait',title:'기다리는 카드',healthKind:'waiting',healthLabel:'결과 대기',turnLabel:'종료',model:'',effort:'',modelTitle:''}),
+  row({key:'repo/run',id:'run',title:'돌아가는 카드',healthKind:'running',healthLabel:'작업중'}),
+  row({key:'repo/wait',id:'wait',title:'기다리는 카드',healthKind:'waiting',healthLabel:'작업중',turnLabel:'종료',model:'',effort:'',modelTitle:''}),
   row({key:'repo/done',id:'done',title:'끝난 카드',healthKind:'closed',healthLabel:'완료',signalAt:null,signalLabel:'실행 신호 없음',model:''})
  ];
  const html=workspaceWallHtml(rows,'repo/run','status');

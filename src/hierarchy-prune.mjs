@@ -13,10 +13,13 @@ import { readLedger } from './ledger.mjs';
 import { storageSnapshot, storageTransaction, storageVersion } from './storage.mjs';
 import { taskIdentity, taskConnectionError, taskEventKey } from './task-identity.mjs';
 import { effectiveWorkOwner, workEntries } from './handover-state.mjs';
-import { finished } from './human-brief.mjs';
+import { isEnded } from './status-labels.mjs';
 
 // 죽음 알림 처리 시간으로 입증된 값은 없다. 보수적인 기본 유예 시간이다.
 export const PRUNE_GRACE_MS = 24 * 60 * 60_000;
+// 보류(archived)는 화면에서 진행 전으로 세지만, 관계표 정리는 예전처럼 끝난 카드로 본다.
+// 상태 이름 정리(2026-10-05 [kyle])는 화면 묶음만 바꾸고 역할 정리 판단은 바꾸지 않는다.
+const closedForPrune = state => isEnded(state) || state === 'archived';
 const hash = text => createHash('sha256').update(text).digest('hex');
 const pidOf = entry => entry?.panePid ?? entry?.rottiePid;
 
@@ -42,7 +45,7 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
   const displayed = buildCardCenter({cards:cards.map(c => ({...c, history:c.history ?? []})), entries,
     tree:[], runtimeKnown:false, now}).cards;
   for (const card of displayed) {
-    if (!finished({displayState:card.status}) || !finished(card)) {
+    if (!closedForPrune(card.status) || !closedForPrune(card.displayState)) {
       keep(card.role, '미완료 카드');
       keep(card.resolutionOwner, '미완료 카드');
     }

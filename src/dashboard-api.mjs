@@ -19,6 +19,7 @@ import {
   renderWatchOverview,
 } from "./watch-overview-wall.mjs";
 import { executionBucket } from "./dashboard-execution.mjs";
+import { isEnded } from "./status-labels.mjs";
 import { readActiveHierarchy } from "./hierarchy-register.mjs";
 import { renderCardDocument } from "./card-content.mjs";
 import { decisionContent, RUN_STATE_LABELS } from "./decision-wall.mjs";
@@ -497,7 +498,8 @@ export function dashboardData(snapshot, url) {
         (r) =>
           r.kind !== "work" &&
           isExecution(r) &&
-          !["done", "cancelled", "superseded", "archived"].includes(r.state),
+          // 보류(archived)는 진행 전으로 남긴다. HTML 현황·판 막대와 같은 기준(2026-10-05 [kyle]).
+          !isEnded(r.state),
       )
       .map((r) =>
         r.bucket === "stuck" || r.bucket === "stale"
