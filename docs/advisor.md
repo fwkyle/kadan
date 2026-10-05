@@ -17,7 +17,7 @@ KADAN_ROLE=<감독> kadan advise <카드키> --question "<질문>" [--file <절�
 - 부를 수 있는 명의: 감독(이름이 `감독`·`슈퍼감독`으로 끝나는 역할)과 사람. 작업자·검수자는 거절된다 — 자기 카드의 판단은 감독에게 묻는다.
 - 입력: 질문, 카드 본문(`card.md`), 첨부 파일(절대경로, 5개·각 64KB까지). 더 큰 자료는 필요한 부분만 잘라 넣는다.
 - 모델: 실행 모델 설정의 `advisor` 값([실행 모델 설정](runner-settings.md#자문위원)). 없으면 거절한다. 폴백은 없다.
-- 상한: 기본 600초, `--timeout`으로 1..3600초.
+- 상한: 기본 1800초(30분), `--timeout`으로 1..3600초. 고급 모델이 저장소를 읽고 시험까지 돌려 보며 오래 고민할 수 있게 넉넉히 둔다(2026-10-05 [kyle]).
 - 결과: 영수증(JSON)과 답변 본문을 출력한다. 답변은 네 칸이다 — **결론** 한 줄, **근거**(저장소·카드에서 확인한 사실과 경로), **위험**(따를 때·안 따를 때, 되돌리기 어려운 것 먼저), **확인할 것**(감독이 결정 전에 열어 볼 경로·되물을 질문).
 - 실패: 시간 초과(`timeout`), 호출 실패(`call-failed`, 종료 코드 ≠ 0), 빈 답(`empty`)은 종료 코드 1이고 답을 쓰지 않는다(fail closed). 재시도는 감독이 명령을 다시 부르는 것이다.
 
@@ -25,8 +25,8 @@ KADAN_ROLE=<감독> kadan advise <카드키> --question "<질문>" [--file <절�
 
 호출마다 `advice` 사건 하나를 남긴다(성공·실패 모두). `by`(부른 감독), `card`, `adviceId`, 질문 앞 200자와 지문, `model`·`effort`·`settingsRevision`·`settingsPreset`, `reason`(`ok`·`timeout`·`call-failed`·`empty`), `exitCode`, `durationMs`, 답변 `bytes`·`digest`, 첨부 `files`, `evidencePath`. 답변 본문은 원장에 넣지 않고 증거 폴더의 `result.txt`에만 둔다. 기록 화면에서는 **자문**으로 보인다. 사건은 호출이 끝난 뒤 쓰므로, 호출 도중 명령이 죽으면 증거 폴더만 있고 사건이 없을 수 있다. 손상이 아니라 끝나지 못한 호출이다.
 
-"카드당 1회"는 감독 템플릿의 규칙이지 명령이 막는 것은 아니다. 같은 카드로 다시 부르면 다시 돈다(비용이 든다).
+횟수 제한은 일부러 두지 않는다(2026-10-05 [kyle] 결정): 감독이 필요할 때만 부르는 것이 전제이고, 같은 카드로 다시 부르면 다시 돈다(비용이 든다). "카드당 1회"는 템플릿의 기본 습관이지 명령이 막는 규칙이 아니다.
 
 ## 언제 묻는가
 
-[슈퍼감독](../skills/kadan-conductor/references/role-templates/super.md)·[일반감독](../skills/kadan-conductor/references/role-templates/conductor.md) 템플릿의 규칙 그대로다: 카드에 DB·데이터 변경 / 운영 영향 / 설계·방향 결정 / 사용자 지시의 해석·변경 중 하나가 들어가면 카드를 쓰기 전에 한 번 묻는다. 검수·단순 실행 카드에는 쓰지 않고, 카드당 1회로 끝낸다. 취향·제품 방향처럼 사용자만 답할 수 있는 질문은 자문으로 대신하지 않는다 — [질문 사다리](../skills/kadan-conductor/references/tiki-taka.md)대로 우편과 결정 요청으로 올린다.
+[슈퍼감독](../skills/kadan-conductor/references/role-templates/super.md)·[일반감독](../skills/kadan-conductor/references/role-templates/conductor.md) 템플릿의 규칙 그대로다: 카드에 DB·데이터 변경 / 운영 영향 / 설계·방향 결정 / 사용자 지시의 해석·변경 중 하나가 들어가면 카드를 쓰기 전에 한 번 묻는다. 검수·단순 실행 카드에는 쓰지 않고, 보통 카드당 1회로 끝낸다(필요하면 더 불러도 막지 않는다). 취향·제품 방향처럼 사용자만 답할 수 있는 질문은 자문으로 대신하지 않는다 — [질문 사다리](../skills/kadan-conductor/references/tiki-taka.md)대로 우편과 결정 요청으로 올린다.

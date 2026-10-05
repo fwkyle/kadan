@@ -14,8 +14,9 @@ import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 
 export const ADVISE_USAGE = 'kadan advise <카드키> --question <질문> [--file <경로>]... [--timeout <초>] — 감독이 카드 하나를 두고 자문위원(실행 모델 설정의 advisor)에게 한 번 묻는다. 상세: docs/advisor.md';
-// 자문위원은 고급·느린 모델이고 저장소를 직접 읽으므로 감시 AI(5분)보다 길게 둔다. --timeout으로 바꾼다.
-export const ADVISE_TIMEOUT_MS = 600_000;
+// 자문위원은 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
+// (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
+export const ADVISE_TIMEOUT_MS = 1_800_000;
 const TIMEOUT_MAX_S = 3600, FILE_LIMIT = 64 * 1024, FILE_COUNT = 5, QUESTION_PREVIEW = 200;
 const DEFAULT_SCRIPT = fileURLToPath(new URL('../scripts/advise.sh', import.meta.url));
 // 감독(일반감독·슈퍼감독)과 사람만 부른다. 작업자·검수자는 자기 카드의 판단을 감독에게 묻는다.

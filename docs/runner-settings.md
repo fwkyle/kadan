@@ -150,7 +150,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 설정: 활성 프리셋의 `roles.advisor`. 명령은 `kadan runners set advisor --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **자문위원** 줄이다. 값이 없으면 `kadan advise`가 거절한다(기본 모델 없음).
 - 실행기는 `codex`만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles advisor`)은 적용한다.
 - **폴백이 없다.** `runners fallback advisor`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
-- 상한은 호출마다 기본 10분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽는 호출이라 감시 AI(5분)보다 길다.
+- 상한은 호출마다 기본 30분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽고 시험까지 돌려 볼 수 있는 호출이라 감시 AI(5분)보다 훨씬 길다. 횟수 제한은 없다 — 필요할 때만 부른다.
 
 ## 즐겨찾기
 
