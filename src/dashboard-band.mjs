@@ -1,0 +1,50 @@
+// 현황 상단 띠의 재료. 다섯 질문(지금 도는가·막혔는가·내 결정이 있는가·흐름대로 가는가·어느 모델인가) 중
+// 기존 집계(실행 묶음·결정)가 답하지 못하던 세 가지를 계산한다: 살아 있는 담당과 모델, 흐름 연결 확인, 해소 전 감시 경보.
+// 판단에 쓰지 않고 화면 답변용으로만 옮긴다. 모르는 것은 null로 둔다(세션 상태 모름·원장 손상).
+
+// 살아 있는 담당 창과 그 창을 시작할 때 기록한 실행기·모델·강도. center.models는 역할별 최근 start 기록이다.
+export function liveSessions(center) {
+  if (!center || !center.runtimeKnown) return null;
+  const models = center.models || {};
+  return (center.roles || [])
+    .filter((r) => r.life?.state === "alive")
+    .map((r) => {
+      const m = models[r.role] || {};
+      return {
+        role: r.role,
+        harness: m.harness || null,
+        model: m.model || null,
+        effort: m.effort || null,
+        pidState: r.life?.pidState || null,
+      };
+    })
+    .sort((a, b) => a.role.localeCompare(b.role, "ko"));
+}
+
+// 검수 흐름 중 연결이 깨진 묶음(라운드 누락·구현/검수 카드 미연결·같은 단계 중복). 집계가 unconfirmed인 묶음이다.
+export function flowSummary(reviewFlows) {
+  const flows = Array.isArray(reviewFlows) ? reviewFlows : [];
+  const unconfirmed = flows
+    .filter((flow) => flow.verdict === "unconfirmed")
+    .map((flow) => ({ id: flow.id, title: flow.title, label: flow.label, warnings: flow.warnings || [] }));
+  return { total: flows.length, unconfirmed };
+}
+
+// 해소 전 감시 경보. 같은 id의 마지막 기록이 resolved가 아니면 열린 경보다(watch-runner seedAlertState와 같은 규칙).
+// id가 없는 옛 기록은 복원 재료가 없어 세지 않는다.
+// 자원·전달실패 경보는 감시기가 해소 기록을 남기지 않고 조용히 닫는다(deliverResolution의 자원 분기, 해소 루프의
+// 전달실패 continue). 원장만 보면 영원히 열린 것으로 보이므로 세지 않는다.
+const SILENTLY_CLOSED = new Set(["자원", "전달실패"]);
+export function openAlerts(entries) {
+  if (!Array.isArray(entries) || entries.some((e) => e?.broken)) return null;
+  const latest = new Map();
+  for (const e of entries) {
+    if (e?.kind !== "alert" || typeof e.id !== "string" || !e.id) continue;
+    latest.set(e.id, e);
+  }
+  const items = [...latest.values()]
+    .filter((e) => e.resolved !== true && !SILENTLY_CLOSED.has(e.alertKind))
+    .map((e) => ({ id: e.id, kind: e.alertKind || "", level: e.level || "", role: e.role || "", session: e.session || "", recipient: e.recipient || "", at: e.t || "" }))
+    .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
+  return { count: items.length, items: items.slice(0, 20) };
+}
