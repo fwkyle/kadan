@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {findDoneMarkers, screenDoneResult} from '../src/cli.mjs';
+import {findDoneMarkers, screenDoneResult, waitScreenDone} from '../src/cli.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
@@ -35,6 +35,23 @@ test('화면 DONE 대조: 되풀이된 지시문, 이름이 비슷한 다른 카
   // 발령 기록이 없으면 화면 전체를 본다.
   const found = check('KADAN:DONE card-a ok', []);
   assert.deepEqual([found.result, found.dispatch], ['ok', null]);
+});
+
+test('--wait: 마커가 늦게 찍히면 유한 대기 안에서 다시 읽어 확정하고, 시간이 다 되면 마커 없음 그대로다 — 완료 편지가 마커보다 먼저 오는 경합(1-H1)', () => {
+  let clock = 0; const sleeps = [];
+  const sleep = ms => { sleeps.push(ms); clock += ms; };
+  const screens = ['작업 중…', '작업 중…', '끝\nKADAN:DONE card-a ok\n'];
+  let i = 0;
+  const found = waitScreenDone({ readScreen: () => screens[Math.min(i++, screens.length - 1)], entries: [dispatch()], role: 'p-검수자', taskId: 'repo/card-a', cards, waitMs: 10_000, intervalMs: 2_000, sleep, now: () => clock });
+  assert.deepEqual([found.result, found.reads, sleeps], ['ok', 3, [2000, 2000]]);
+  // 시간 초과: 마지막 sleep은 남은 시간만큼만, 결과는 null(종료코드 3은 부르는 쪽이 유지).
+  clock = 0; sleeps.length = 0;
+  const none = waitScreenDone({ readScreen: () => '아직', entries: [dispatch()], role: 'p-검수자', taskId: 'repo/card-a', cards, waitMs: 5_000, intervalMs: 2_000, sleep, now: () => clock });
+  assert.deepEqual([none.result, none.reads, sleeps], [null, 4, [2000, 2000, 1000]]);
+  // --wait 없음(기본 0): 한 번만 읽고 기다리지 않는다.
+  clock = 0; sleeps.length = 0;
+  const once = waitScreenDone({ readScreen: () => '아직', entries: [dispatch()], role: 'p-검수자', taskId: 'repo/card-a', cards, sleep, now: () => clock });
+  assert.deepEqual([once.result, once.reads, sleeps], [null, 1, []]);
 });
 
 test('완료 마커 읽기는 응답 머리표를 허용하고 입력 되풀이 머리표는 거부한다', () => {

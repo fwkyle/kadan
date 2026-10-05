@@ -34,7 +34,8 @@ for(const backend of ['jsonl','sqlite']) {
   assert.equal(saved.result.path,card.resultPath);assert.equal(saved.result.by,'worker');
   assert.deepEqual(saved.history.slice(0,-1),card.history);
   assert.equal(report(saved.revision).revision,saved.revision);
-  assert.throws(()=>report(card.revision),/변경됨/);
+  // 발령 조건(범위·담당·상태·묶음)이 그대로면 옛 revision의 같은 등록은 그대로 돌려주고, 조건이 바뀐 뒤의 옛 revision은 거절한다(2026-10-05).
+  assert.equal(report(card.revision).revision,saved.revision);
   assert.deepEqual(fs.readdirSync(f.repoPath),[]);
   fs.renameSync(f.repoPath,path.join(f.root,'moved-repo'));
   assert.equal(fs.readFileSync(cards.get(card.key).result.path,'utf8'),'검증 결과 원문');
