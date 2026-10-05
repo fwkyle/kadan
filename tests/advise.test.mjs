@@ -87,9 +87,10 @@ test('성공: 질문·카드 본문·첨부를 한 입력으로 넘기고 저장
   assert.deepEqual([entry.reason, entry.exitCode, entry.durationMs, entry.bytes], ['ok', 0, 1500, Buffer.byteLength(r.answer)]);
   assert.deepEqual(entry.files, [note]); assert.equal(entry.evidencePath, r.evidencePath); assert.equal(entry.t, '2026-10-05T00:00:00.000Z');
   assert.ok(!('answer' in entry), '답변 본문은 원장에 넣지 않는다');
-  // 기본 상한은 감시 AI(5분)보다 긴 10분이다.
+  // 기본 상한은 감시 AI(5분)보다 긴 30분이다(2026-10-05 [kyle]). 같은 카드로 다시 불러도 막지 않는다.
   await f.run(['qa/card-a'], {question:'다시'}, {spawn:f.spawn()});
-  assert.equal(f.calls.at(-1).settings.timeout, ADVISE_TIMEOUT_MS); assert.equal(ADVISE_TIMEOUT_MS, 600_000);
+  assert.equal(f.calls.at(-1).settings.timeout, ADVISE_TIMEOUT_MS); assert.equal(ADVISE_TIMEOUT_MS, 1_800_000);
+  assert.equal(f.advices().length, 2);
 });
 
 test('시간 초과·호출 실패·빈 답은 실패로 기록하고 답을 쓰지 않는다(fail closed)', async () => {
