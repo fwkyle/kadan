@@ -69,7 +69,7 @@ kadan attach 비서   # 비서 터미널에 들어가 대화 시작
 | **우편** | 역할 사이의 메시지. 읽음 확인·답장 대기를 따로 추적 |
 | **감시(watch)** | 멈춤·끊김·완료 후보·오래 안 읽은 우편을 위 담당에게 알리는 백그라운드 프로그램 |
 
-자세한 정의는 [용어사전](docs/glossary.md), 전체 구조는 [구조 기준](docs/architecture.md)에 있습니다.
+누가 무엇을 어떻게 주고받고 감시가 무엇을 잡는지는 [흐름 지도](docs/flows.md) 한 장에 있습니다. 자세한 정의는 [용어사전](docs/glossary.md), 원장 구조는 [구조 기준](docs/architecture.md)에 있습니다.
 
 ## 직접 다뤄 보기
 
@@ -125,6 +125,7 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 
 | 알고 싶은 것 | 문서 |
 |---|---|
+| 처음 볼 전체 흐름(역할·소통·감시) | [흐름 지도](docs/flows.md) |
 | 문서 전체 안내 | [docs/README.md](docs/README.md) |
 | 왜 이렇게 만들었나, 바꾸지 않는 규칙 | [설계 원칙](docs/design.md) |
 | 작업·우편 원장이 어떻게 연결되나 | [구조 기준](docs/architecture.md), [원장 계약](docs/mail-task-ledgers.md) |
