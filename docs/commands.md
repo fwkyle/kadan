@@ -29,7 +29,7 @@
 |---|---|---|
 | `kadan init` | 환경 확인, 스킬 링크, 실행기 선택. 처음 한 번 | `--runner codex\|claude`, `--no-skills` |
 | `kadan up` | 비서 세션과 대시보드 세션을 띄운다. 이미 있으면 그대로 쓴다 | `--cmd <실행기 명령>`, `--port 8790`, `--hidden`, `--no-prompt` |
-| `kadan autostart show\|status\|install\|remove` | macOS에서 로그인할 때 `kadan up --hidden`을 한 번 실행하는 LaunchAgent(`~/Library/LaunchAgents/dev.kadan.up.plist`)를 관리한다. 죽었다고 되살리지 않는다(KeepAlive 없음). `show`는 만들 파일만 보여 주고, `install`은 없을 때만 쓰며, `remove`는 지우지 않고 `<데이터 폴더>/.trash/`로 옮긴다. 설치 때의 PATH·`KADAN_*` 환경과 현재 폴더를 적어 둔다 | — |
+| `kadan autostart show\|status\|install\|remove` | macOS에서 로그인할 때 `kadan up --hidden`을 창 없이(`KADAN_WINDOW=none`, 로그인 직후엔 로티가 없으므로) 한 번 실행하는 LaunchAgent(`~/Library/LaunchAgents/dev.kadan.up.plist`)를 관리한다. 죽었다고 되살리지 않는다(KeepAlive 없음). `show`는 만들 파일만 보여 주고, `install`은 없을 때만 쓰며, `remove`는 지우지 않고 `<데이터 폴더>/.trash/`로 옮긴다. 설치 때의 PATH·`KADAN_*` 환경과 현재 폴더를 적어 둔다 | — |
 
 ## 역할(세션) 다루기
 

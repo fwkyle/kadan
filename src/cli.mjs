@@ -2122,7 +2122,7 @@ function cmdUp(_argv, flags) {
   });
 }
 
-// 로그인할 때 `kadan up --hidden`을 한 번 실행하는 macOS LaunchAgent(2026-10-06 [kyle]). 되살리기(KeepAlive)는 없다.
+// 로그인할 때 `kadan up --hidden`을 창 없이 한 번 실행하는 macOS LaunchAgent(2026-10-06 [kyle]). 되살리기(KeepAlive)는 없다.
 function cmdAutostart(argv) {
   if (process.platform !== "darwin") die("autostart는 macOS LaunchAgent용이다");
   try {

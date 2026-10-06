@@ -39,10 +39,10 @@ test('비서 켜기: 화면 표·같은 사이트일 때만, 정해진 한 명�
   } finally { server.close(); }
 });
 
-test('기본 켜기는 kadan up --hidden을 사람 명의(KADAN_ROLE 비움)로 실행하고 실패를 숨기지 않는다', () => {
+test('기본 켜기는 kadan up을 창 설정대로, 사람 명의(KADAN_ROLE 비움)로 실행하고 실패를 숨기지 않는다', () => {
   const seen = [];
   const spawn = (cmd, args, opts) => { seen.push({cmd, args, role:opts.env.KADAN_ROLE}); return {status:0, stdout:'비서 이미 살아 있음\n대시보드 이미 살아 있음'}; };
   assert.equal(startSecretaryDefault({cli:'/repo/src/cli.mjs', env:{KADAN_ROLE:'대시보드', KADAN_WINDOW:'none'}, spawn}).output, '비서 이미 살아 있음\n대시보드 이미 살아 있음');
-  assert.deepEqual(seen, [{cmd:process.execPath, args:['/repo/src/cli.mjs', 'up', '--hidden'], role:''}]);
+  assert.deepEqual(seen, [{cmd:process.execPath, args:['/repo/src/cli.mjs', 'up'], role:''}]);
   assert.throws(() => startSecretaryDefault({cli:'/x', env:{}, spawn:() => ({status:1, stderr:'tmux 없음'})}), /비서를 켜지 못했다: tmux 없음/);
 });

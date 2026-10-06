@@ -18,6 +18,7 @@ test('로그인 때 kadan up --hidden을 한 번만 — 되살리기 없음, 필
   assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/);
   assert.doesNotMatch(plist, /KeepAlive/, '죽었다고 되살리지 않는다(잠긴 규칙)');
   assert.match(plist, /<key>PATH<\/key>\s*<string>\/opt\/bin:\/usr\/bin<\/string>/);
+  assert.match(plist, /<key>KADAN_WINDOW<\/key>\s*<string>none<\/string>/, '로그인 때는 로티가 없으니 창 없이 숨김(로티 설정이어도)');
   assert.match(plist, /<key>KADAN_ROTTIE_BIN<\/key>\s*<string>\/apps\/r&amp;d\/rottie<\/string>/, 'XML 특수문자를 바꾼다');
   assert.doesNotMatch(plist, /SECRET_TOKEN|nope/, '카단과 무관한 환경 변수는 옮기지 않는다');
 });

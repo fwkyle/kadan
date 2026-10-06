@@ -15,7 +15,10 @@ export function autostartPath(userHome = os.homedir()) {
 
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-export function autostartPlist({ node, cli, cwd, env, logPath }) {
+export function autostartPlist({ node, cli, cwd, env: given, logPath }) {
+  // 로그인 직후엔 로티가 아직 없다. 카단은 로티 창 설정에서 역할을 숨김으로 띄우는 것을 막고(KADAN_HIDDEN_FORBIDDEN),
+  // "로티를 쓸 수 없을 때만 KADAN_WINDOW=none --hidden"을 허용한다. 로그인 시작이 바로 그 경우다.
+  const env = { ...given, KADAN_WINDOW: 'none' };
   const vars = CARRIED_ENV.filter((k) => typeof env[k] === 'string' && env[k]).map((k) => `\t\t<key>${k}</key>\n\t\t<string>${xml(env[k])}</string>`);
   const args = [node, cli, 'up', '--hidden'].map((a) => `\t\t<string>${xml(a)}</string>`);
   return `<?xml version="1.0" encoding="UTF-8"?>
