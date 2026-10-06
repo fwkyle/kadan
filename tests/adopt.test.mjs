@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adoptCommand, adoptPrompt, detectConversation, runAdopt } from '../src/adopt.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { adoptCommand, adoptPrompt, detectConversation, findClaudeTranscript, runAdopt } from '../src/adopt.mjs';
 import { inspectCardSendIdentity } from '../src/ai-identity.mjs';
 
 test('실행기별 복제 이어 열기 명령: 모델은 필수이고 카드 전송 신원 확인을 통과한다', () => {
@@ -40,6 +43,7 @@ function fakes({ alive = false, screen = '› ' } = {}) {
       send: (m) => calls.send.push(m),
       log: (line) => calls.log.push(line),
       sleep: () => {},
+      findTranscript: () => ({ ok: true }),
     },
   };
 }
@@ -65,6 +69,24 @@ test('adopt: 직접 준 대화 ID·실행기·상위·슈퍼감독 프로필, �
   assert.equal(calls.start[0].flags.hidden, true);
   assert.equal(out.prompt, 'skipped');
   assert.equal(calls.send.length, 0);
+  assert.match(adoptPrompt('shop-슈퍼', '@user', 'super'), /슈퍼감독 'shop-슈퍼'.*kadan-super 스킬/);
+  assert.match(adoptPrompt('감독', '@user'), /kadan-conductor 스킬/);
+});
+
+test('Claude 대화 기록은 시작 폴더 이름으로 찾고, 다른 폴더면 어디서 시작했는지 알려 주며 거부한다', () => {
+  const userHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-adopt-home-'));
+  const dir = path.join(userHome, '.claude', 'projects', '-home-someone-dev-my-app');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'abc-1.jsonl'), '');
+  assert.deepEqual(findClaudeTranscript({ id: 'abc-1', cwd: '/home/someone/dev/my_app', userHome }), { ok: true }, "'_'도 '-'로 바뀐다");
+  assert.deepEqual(findClaudeTranscript({ id: 'abc-1', cwd: '/home/someone/dev/other', userHome }), { ok: false, elsewhere: '-home-someone-dev-my-app' });
+  assert.deepEqual(findClaudeTranscript({ id: 'zzz', cwd: '/home/someone/dev/my_app', userHome }), { ok: false, elsewhere: null });
+  for (const [found, pattern] of [[{ ok: false, elsewhere: '-home-x' }, /이 폴더에서 시작한 대화가 아니다\(기록 폴더 -home-x\)/], [{ ok: false, elsewhere: null }, /대화 기록을 찾지 못했다/]]) {
+    const { calls, deps } = fakes();
+    deps.findTranscript = () => found;
+    assert.throws(() => runAdopt({ role: 'a', flags: { model: 'm' }, env: { CLAUDE_CODE_SESSION_ID: 'x' }, ...deps }), pattern);
+    assert.equal(calls.start.length, 0, '기록이 없으면 창도 관계표도 건드리지 않는다');
+  }
 });
 
 test('adopt 거부: 대화를 모름·이미 살아 있는 이름·작업자 프로필·모델 없음 — 아무것도 띄우지 않는다', () => {
