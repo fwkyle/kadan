@@ -2,7 +2,7 @@ import { useContext, useState } from "react";
 import { save } from "./resource";
 import { AppContext } from "./ui";
 
-// 비서 항상 1개(2026-10-06 [kyle]): 비서가 꺼져 있으면 알리고, '켜기'로 kadan up을 부른다(창 설정대로 연다).
+// 비서 항상 1개(2026-10-06 [kyle]): 비서가 꺼져 있으면 알리고, '켜기'로 kadan up --hidden을 부른다(창 없이 켠다).
 // 세션 상태를 모르면(null) 아무것도 보이지 않는다 — 모르는 것을 꺼짐으로 꾸미지 않는다.
 export default function SecretaryNotice({ on }: { on: boolean | null | undefined }) {
   const { token, notice } = useContext(AppContext);
@@ -17,7 +17,7 @@ export default function SecretaryNotice({ on }: { on: boolean | null | undefined
         setError("");
         try {
           await save("/secretary/start", {}, token);
-          notice("비서를 켰습니다. 창 설정대로 열렸고, 다시 열려면 kadan attach 비서.");
+          notice("비서를 켰습니다(창 없이). 창은 터미널에서 kadan attach 비서로 엽니다.");
         } catch (e) {
           setError((e as Error).message);
         } finally {

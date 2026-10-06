@@ -18,7 +18,8 @@ import {mailboxLetters} from './mailbox-state.mjs';
 import {applyTheme,themeToggleHtml,themeToggleStyle,themeToggleScript} from './theme.mjs';
 import {renderDecisions,renderActivity,decisionStyle,decisionScript} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger} from './ledger.mjs';
@@ -124,13 +125,18 @@ export function renderDoneButOpen(center) {
  return `<details class="panel" id="done-but-open" data-view="dashboard"><summary>실행 끝·카드 열림 ${rows?rows.length+'장':'모름'}</summary><p class="muted">가장 최근 실행이 ok로 완료 확정됐는데 카드가 아직 작업대기·설계완료 상태입니다. 더 할 실행이 없으면 감독이 아래 명령으로 닫습니다. 다음에는 <code>kadan done &lt;역할&gt; &lt;카드id&gt; ok --close-card</code>로 한 번에 닫을 수 있습니다.</p><span class="copy-feedback muted" role="status"></span>${rows?rows.length?`<div class="scroll"><table><thead><tr><th>카드</th><th>역할</th><th>완료 확정</th><th>확정한 사람</th><th>닫는 명령</th></tr></thead><tbody>${rows.map(c=>`<tr><td><a data-card-key="${e(c.key)}" href="?card=${encodeURIComponent(c.key)}#detail">${e(c.key)}</a><small class="row-title">${e(c.title)} · ${e(label(c.status))}</small></td><td>${e(c.role)}</td><td>${e(stamp(c.doneAt))}</td><td>${e(c.doneBy)}</td><td><code>${e(command(c))}</code> <button type="button" class="copy-question" data-copy-label="명령" data-question="${e(command(c))}">복사</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="empty">없음</p>':'<p role="alert">카드 상태 모름</p>'}</details>`;
 }
 
-// 대시보드의 '비서 켜기'(2026-10-06 [kyle]). 정해진 한 명령(kadan up)만 실행하고 요청에서 아무 값도 받지 않는다.
-// 사람이 누른 것이므로 창 설정대로 띄운다 — 로티 창 설정에서 숨김 시작은 카단이 막는다(KADAN_HIDDEN_FORBIDDEN).
-// 대시보드 세션의 KADAN_ROLE을 비워 원장에 '사람'으로 남긴다.
-export function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,spawn=spawnSync}={}) {
- const r=spawn(process.execPath,[cli,'up'],{env:{...env,KADAN_ROLE:''},encoding:'utf8',timeout:90_000});
- if(r.error||r.status!==0)throw new Error('비서를 켜지 못했다: '+String(r.stderr||r.error?.message||'').trim().slice(-300));
- return {output:String(r.stdout||'').trim().split('\n').slice(0,6).join('\n')};
+// 대시보드의 '비서 켜기'(2026-10-06 [kyle]). 정해진 한 명령(kadan up --hidden)만 실행하고 요청에서 아무 값도 받지 않는다.
+// 늘 창 없이(KADAN_WINDOW=none) 띄운다 — 로그인 자동 시작과 같은 방식이라 누가 띄운 대시보드든 결과가 같고, 로티를 앞으로
+// 끌어오지 않는다. 카단의 숨김 금지는 로티 창 설정에서 감독이 무심코 숨기는 것을 막는 규칙이고, 이것은 사람이 누른 명시적 선택이다.
+// 서버가 기다리는 동안 다른 화면을 계속 응답하도록 비동기로 실행하고, 화면 저장 대기(30초)보다 먼저 끝낸다.
+// 사람이 누른 것이므로 대시보드 세션의 KADAN_ROLE을 비워 원장에 '사람'으로 남긴다.
+export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile)}={}) {
+ try {
+  const {stdout}=await run(process.execPath,[cli,'up','--hidden'],{env:{...env,KADAN_ROLE:'',KADAN_WINDOW:'none'},encoding:'utf8',timeout:28_000});
+  return {output:String(stdout||'').trim().split('\n').slice(0,6).join('\n')};
+ } catch(error) {
+  throw new Error('비서를 켜지 못했다: '+String(error.stderr||error.message||'').trim().slice(-300));
+ }
 }
 
 export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault}={}) {
@@ -149,7 +155,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    for await(const chunk of req){bytes+=chunk.length;if(bytes>1024*1024)throw new Error('입력이 너무 큽니다');chunks.push(chunk);}
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
-   if(url.pathname==='/secretary/start'){saved('/#status',startSecretary());return true;}
+   if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
    if(url.pathname==='/decisions/answer') {
      const result=decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.
