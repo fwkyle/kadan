@@ -27,6 +27,7 @@ import { registerStartedRole } from "./hierarchy-register.mjs";
 import { hierarchyCommand } from './hierarchy-prune.mjs';
 import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
+import { autostartCommand } from "./autostart.mjs";
 import {WorkStore} from './work-store.mjs';
 import {resolveWorkMail,inferDispatchTask} from './work-mail.mjs';
 import { buildCardCenter } from "./card-center.mjs";
@@ -2121,6 +2122,16 @@ function cmdUp(_argv, flags) {
   });
 }
 
+// 로그인할 때 `kadan up --hidden`을 한 번 실행하는 macOS LaunchAgent(2026-10-06 [kyle]). 되살리기(KeepAlive)는 없다.
+function cmdAutostart(argv) {
+  if (process.platform !== "darwin") die("autostart는 macOS LaunchAgent용이다");
+  try {
+    const result = autostartCommand(argv[0], { home: ledgerHome(), cli: new URL(import.meta.url).pathname });
+    if (argv[0] === "show") { console.log(`# ${result.file} (${result.installed ? "설치돼 있음" : "아직 없음"})`); console.log(result.content); return; }
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) { die(error.message, 2); }
+}
+
 function cmdRead(argv, flags) {
   const role = argv[0];
   if (!role) die("사용법: kadan read <역할> [--lines N]");
@@ -2317,6 +2328,7 @@ const COMMANDS = {
   plan: cmdPlan,
   init: cmdInit,
   up: cmdUp,
+  autostart: cmdAutostart,
   start: cmdStart,
   send: cmdSend,
   done: cmdDone,
@@ -2338,7 +2350,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
+      "사용법: kadan <init|up|autostart|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }

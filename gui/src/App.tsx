@@ -18,6 +18,7 @@ import {
 } from "./navigation";
 import type { Summary } from "./types";
 import { AppContext, ErrorMessage, Loading, time } from "./ui";
+import SecretaryNotice from "./SecretaryNotice";
 import { usePaneScroll } from "./scroll";
 import { readTheme, saveTheme, type Theme } from "./theme";
 const Status = lazy(() => import("./pages/Status")),
@@ -204,6 +205,7 @@ export default function App() {
               <button onClick={() => setNotice("")}>닫기</button>
             </div>
           )}
+          <SecretaryNotice on={summary.data?.secretary} />
           {!session.data ? (
             <Loading />
           ) : (

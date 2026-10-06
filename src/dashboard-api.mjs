@@ -413,8 +413,11 @@ export function dashboardData(snapshot, url) {
         (m) => m.replyStatus === "waiting",
       ).length;
     } catch {}
+    // 비서가 살아 있는지(2026-10-06 [kyle] 비서 항상 1개). 세션 상태를 모르면 null — 꺼짐으로 꾸미지 않는다.
+    const live = liveSessions(snapshot.center);
     return {
       ...stamp,
+      secretary: live === null ? null : live.some((s) => s.role === "비서"),
       decisions: snapshot.decisionError
         ? null
         : (snapshot.decisions || []).filter((d) => d.status === "open").length,

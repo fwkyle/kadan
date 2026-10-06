@@ -18,6 +18,7 @@ import {mailboxLetters} from './mailbox-state.mjs';
 import {applyTheme,themeToggleHtml,themeToggleStyle,themeToggleScript} from './theme.mjs';
 import {renderDecisions,renderActivity,decisionStyle,decisionScript} from './decision-wall.mjs';
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger} from './ledger.mjs';
@@ -123,10 +124,18 @@ export function renderDoneButOpen(center) {
  return `<details class="panel" id="done-but-open" data-view="dashboard"><summary>실행 끝·카드 열림 ${rows?rows.length+'장':'모름'}</summary><p class="muted">가장 최근 실행이 ok로 완료 확정됐는데 카드가 아직 작업대기·설계완료 상태입니다. 더 할 실행이 없으면 감독이 아래 명령으로 닫습니다. 다음에는 <code>kadan done &lt;역할&gt; &lt;카드id&gt; ok --close-card</code>로 한 번에 닫을 수 있습니다.</p><span class="copy-feedback muted" role="status"></span>${rows?rows.length?`<div class="scroll"><table><thead><tr><th>카드</th><th>역할</th><th>완료 확정</th><th>확정한 사람</th><th>닫는 명령</th></tr></thead><tbody>${rows.map(c=>`<tr><td><a data-card-key="${e(c.key)}" href="?card=${encodeURIComponent(c.key)}#detail">${e(c.key)}</a><small class="row-title">${e(c.title)} · ${e(label(c.status))}</small></td><td>${e(c.role)}</td><td>${e(stamp(c.doneAt))}</td><td>${e(c.doneBy)}</td><td><code>${e(command(c))}</code> <button type="button" class="copy-question" data-copy-label="명령" data-question="${e(command(c))}">복사</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="empty">없음</p>':'<p role="alert">카드 상태 모름</p>'}</details>`;
 }
 
-export function createCenterHandler(home, {notify}={}) {
+// 대시보드의 '비서 켜기'(2026-10-06 [kyle]). 정해진 한 명령(kadan up --hidden)만 실행하고 요청에서 아무 값도 받지 않는다.
+// 사람이 누른 것이므로 대시보드 세션의 KADAN_ROLE을 비워 원장에 '사람'으로 남긴다.
+export function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,spawn=spawnSync}={}) {
+ const r=spawn(process.execPath,[cli,'up','--hidden'],{env:{...env,KADAN_ROLE:''},encoding:'utf8',timeout:90_000});
+ if(r.error||r.status!==0)throw new Error('비서를 켜지 못했다: '+String(r.stderr||r.error?.message||'').trim().slice(-300));
+ return {output:String(r.stdout||'').trim().split('\n').slice(0,6).join('\n')};
+}
+
+export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault}={}) {
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -139,6 +148,7 @@ export function createCenterHandler(home, {notify}={}) {
    for await(const chunk of req){bytes+=chunk.length;if(bytes>1024*1024)throw new Error('입력이 너무 큽니다');chunks.push(chunk);}
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
+   if(url.pathname==='/secretary/start'){saved('/#status',startSecretary());return true;}
    if(url.pathname==='/decisions/answer') {
      const result=decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.

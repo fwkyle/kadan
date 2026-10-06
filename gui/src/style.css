@@ -394,3 +394,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-3d-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 6px; font-size: 12px; color: #536159; }
 .sm-3d-hint button { font-size: 12px; padding: 2px 10px; }
 .sm-canvas { width: 100%; touch-action: none; }
+/* 비서 꺼짐 알림(2026-10-06). */
+.dw-secretary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #e5c98a; background: #fdf6e6; border-radius: 10px; font-size: 13.5px; color: #5c4510; }
+.dw-secretary button { font-size: 13px; padding: 4px 14px; }
+.dw-secretary small { flex-basis: 100%; color: #b3261e; }
