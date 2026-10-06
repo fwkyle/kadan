@@ -34,8 +34,9 @@
 
 | 명령 | 하는 일 | 자주 쓰는 옵션 |
 |---|---|---|
-| `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden` |
+| `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden`, `--parent <상위\|@user>`(만든 역할 대신 이 상위로 관계표에 등록) |
 | `kadan send <역할> <메시지>` | 생존 확인 뒤 입력창에 넣는다. 원장에 영수증을 남긴다 | `--task <카드id>`(작업 발령), `--work`·`--execution`(우편 연결), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--raw` |
+| `kadan adopt <감독이름>` | 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(Claude Code는 `--resume <ID> --fork-session`, Codex는 `fork`). 대화 ID·생각 강도는 Claude Code에서 자동으로 읽고, 상위는 기본 사용자. 옮긴 뒤 원래 대화는 더 지시하지 않는다 | `--model <모델>`(필수), `--resume <대화ID> --harness claude\|codex`, `--effort`, `--parent @user\|<역할>`, `--profile conductor\|super`, `--hidden`, `--no-prompt` |
 | `kadan wait <역할>` | 완료 마커(DONE)나 조용함을 보고한다. 판정하지 않는다 | `--timeout 초`, `--quiet 초`, `--interval 초` |
 | `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다. 한 번 발령으로 끝나는 카드는 `--close-card`로 카드도 함께 닫는다([카드 닫기](card-center.md#실행-완료와-카드-닫기)) | `--from-screen`(결과 대신 작업자 화면의 DONE을 읽어 확정. 짧은 카드id·정식 주소·응답 머리표 `•`/`⏺` 모두 인정, 그 카드 마지막 발령 전부터 있던 마커는 제외. 없으면 기록·전송 없이 종료 코드 3), `--wait <초>`(`--from-screen`과 함께. 마커가 없으면 2초 간격으로 화면만 다시 읽는 유한 대기, 최대 600. 완료 편지가 마커보다 먼저 오는 경합용이며 시간이 다 되면 종료 코드 3 그대로), `--close-card`(ok 확정 뒤 카드 `done`, 실패해도 실행 완료 유지), `--note <이유>`(카드 기록 이유) |
 | `kadan read <역할>` | 화면 끝부분을 읽는다 | `--lines N` |
