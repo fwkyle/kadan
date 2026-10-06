@@ -159,3 +159,23 @@ export function shortName(role: string, base: string | null) {
 export function visibleUnits(units: Unit[], showResting: boolean) {
   return showResting ? units : units.filter((u) => u.kind !== "worker" || u.state !== "off");
 }
+
+// 3D 배치(2026-10-06 [kyle] 2단계). 2D와 같은 칸(placeUnits)을 바닥 좌표로 옮긴다. x는 기지가 늘어선 방향, z는 앞뒤
+// (gy=0 슈퍼감독 줄이 가장 안쪽). 단위는 three.js 장면 단위다. 창고는 마지막 기지 오른쪽에 둔다.
+export const CELL = 1.7, BASE_GAP = 1.6;
+export type WorldBase = { base: Base; units: { unit: Unit; x: number; z: number }[]; x0: number; x1: number; depth: number; resting: number };
+export function worldLayout(bases: Base[], depot: number, showResting: boolean, cols = 4) {
+  let cursor = 0;
+  const out: WorldBase[] = [];
+  for (const base of bases) {
+    const shown = visibleUnits(base.units, showResting);
+    if (!shown.length) continue; // 2D와 같이, 보이는 유닛이 없는 기지는 숨긴다
+    const { placed, width, depth } = placeUnits(shown, cols);
+    out.push({ base, x0: cursor, x1: cursor + width * CELL, depth: depth * CELL, resting: base.units.length - shown.length,
+      units: placed.map(({ unit, gx, gy }) => ({ unit, x: cursor + (gx + 0.5) * CELL, z: (gy + 0.5) * CELL })) });
+    cursor += width * CELL + BASE_GAP;
+  }
+  const depotAt = depot > 0 ? { x: cursor + CELL / 2, z: CELL / 2 } : null;
+  const x1 = depotAt ? depotAt.x + CELL / 2 : Math.max(0, cursor - BASE_GAP);
+  return { bases: out, depot: depotAt, size: { x: x1, z: Math.max(CELL, ...out.map((b) => b.depth)) } };
+}

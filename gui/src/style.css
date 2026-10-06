@@ -383,3 +383,14 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-depot { cursor: pointer; outline: none; }
 .sm-depot:focus-visible .sm-hit { stroke: #2b47a8; stroke-width: 2; }
 .sm-depot-note { font-size: 12.5px; color: #536159; margin: 8px 0 4px; }
+/* 전략 맵 3D 보기(2026-10-06). 색은 위 2D 규칙을 숨긴 표본(.sm-probe)으로 읽어 쓴다. 바탕은 비워 두어 .sm-stage 색이 비친다. */
+.sm-viewswitch { gap: 0 !important; }
+.sm-viewswitch button { font-size: 12px; padding: 3px 12px; border-radius: 0; }
+.sm-viewswitch button:first-child { border-radius: 999px 0 0 999px; }
+.sm-viewswitch button:last-child { border-radius: 0 999px 999px 0; margin-left: -1px; }
+.sm-viewswitch button[aria-pressed="true"] { background: #21684e; border-color: #21684e; color: #fff; }
+.sm-probe { position: absolute; width: 0; height: 0; overflow: hidden; }
+.sm-3d { position: relative; container-type: inline-size; }
+.sm-3d-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 6px; font-size: 12px; color: #536159; }
+.sm-3d-hint button { font-size: 12px; padding: 2px 10px; }
+.sm-canvas { width: 100%; touch-action: none; }

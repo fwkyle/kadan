@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, placeUnits, shortName, iso, visibleUnits, TILE_W, TILE_H } from "../src/strategy-map.ts";
+import { buildMap, placeUnits, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -90,4 +90,20 @@ test("쉬는 작업자만 숨기고 슈퍼감독·감독은 쉬어도 남긴다"
   assert.deepEqual(units.map((u) => [u.role, u.state]), [["m-슈퍼감독", "dead"], ["m-감독", "off"], ["m-작업자", "off"]]);
   assert.deepEqual(visibleUnits(units, false).map((u) => u.role), ["m-슈퍼감독", "m-감독"]);
   assert.equal(visibleUnits(units, true).length, 3);
+});
+
+test("3D 배치: 2D와 같은 칸을 바닥 좌표로, 기지는 x로 늘어서고 창고는 맨 오른쪽", () => {
+  const map = buildMap({ hierarchy, rows, live, alerts: null });
+  const world = worldLayout(map.bases, map.depot, false);
+  assert.deepEqual(world.bases.map((b) => b.base.id), ["m-슈퍼감독", "비서", "관계표 밖"]);
+  const [m, , outside] = world.bases;
+  assert.equal(m.x0, 0);
+  assert.equal(world.bases[1].x0, m.x1 + BASE_GAP, "기지 사이 간격");
+  const at = (role: string) => m.units.find((u) => u.unit.role === role)!;
+  assert.deepEqual([at("m-슈퍼감독").x, at("m-슈퍼감독").z], [CELL / 2, CELL / 2], "슈퍼감독은 맨 안쪽 첫 칸");
+  assert.ok(at("m-감독").z > at("m-슈퍼감독").z && at("m-작업자").z > at("m-감독").z, "감독·작업자 줄은 앞으로");
+  assert.ok(world.depot && world.depot.x > outside.x1, "창고는 마지막 기지 오른쪽");
+  assert.equal(world.size.x, world.depot!.x + CELL / 2);
+  assert.equal(worldLayout(map.bases, 0, false).depot, null, "담당 없는 실행이 없으면 창고도 없다");
+  assert.ok(worldLayout(map.bases, map.depot, true).bases.length >= world.bases.length, "쉬는 역할도 보기를 켜면 기지가 줄지 않는다");
 });

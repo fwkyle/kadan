@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
@@ -14,6 +14,12 @@ type StatusData = Stamp & {
 const KIND_LABEL = { super: "슈퍼감독", director: "감독", worker: "작업자·검수자" } as const;
 const SLAB = 10, HEAD_ROOM = 86, FOOT_ROOM = 44, GAP = 56, COLS = 4;
 const DEPOT = "\u0000창고"; // 선택 상태에서 창고를 역할 이름과 구분하는 키
+// 3D 보기는 누를 때만 불러온다(three.js는 따로 나뉜 파일). 고른 보기는 이 브라우저에만 기억한다(2026-10-06 [kyle]).
+const StrategyMap3D = lazy(() => import("./StrategyMap3D"));
+type View = "2d" | "3d";
+const VIEW_KEY = "kadan-strategy-view";
+function readView(): View { try { return localStorage.getItem(VIEW_KEY) === "3d" ? "3d" : "2d"; } catch { return "2d"; } }
+function saveView(view: View) { try { localStorage.setItem(VIEW_KEY, view); } catch {} }
 // 묶음 이름은 서버 bucketGroups와 같다(2026-10-05 [kyle]).
 const BUCKET_LABEL: Record<string, string> = { planned: "진행 전", hold: "일시정지" };
 
@@ -96,6 +102,8 @@ export default function StrategyMap() {
   const resource = useResource<StatusData>("status"), data = resource.data;
   const [selected, setSelected] = useState<string | null>(null);
   const [showResting, setShowResting] = useState(false);
+  const [view, setView] = useState<View>(readView);
+  const pick = (key: string) => setSelected((now) => (now === key ? null : key));
   const map = data ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts }) : null;
   // 기지를 가로로 늘어놓는다. 기지마다 자기 배치의 경계로 너비를 잡는다.
   let cursor = 0, height = 0;
@@ -130,11 +138,15 @@ export default function StrategyMap() {
       <ul className="sm-legend" aria-label="색 안내">
         {(["running", "stuck", "stale", "dead", "idle", "off"] as const).map((s) => <li key={s}><i className={"sm-dot sm-s-" + s} />{STATE_LABEL[s]}</li>)}
         <li><i className="sm-dot sm-k-super-dot" />왕관 = 슈퍼감독 · 깃발 = 감독</li>
+        <li className="sm-viewswitch" role="group" aria-label="지도 보기">{(["2d", "3d"] as const).map((v) =>
+          <button key={v} type="button" aria-pressed={view === v} onClick={() => { setView(v); saveView(v); }}>{v.toUpperCase()}</button>)}</li>
         {resting > 0 && <li><label className="sm-toggle"><input type="checkbox" checked={showResting} onChange={(e) => setShowResting(e.target.checked)} />쉬는 역할도 보기({resting})</label></li>}
       </ul>
       <div className="sm-layout">
         <div className="sm-stage">
-          {map.bases.length === 0 && !map.depot ? <p className="st-empty">지도에 올릴 역할이 없습니다.</p> :
+          {map.bases.length === 0 && !map.depot ? <p className="st-empty">지도에 올릴 역할이 없습니다.</p> : view === "3d" ?
+            <Suspense fallback={<Loading />}><StrategyMap3D bases={map.bases} depot={map.depot} showResting={showResting}
+              selected={selected} depotKey={DEPOT} onSelect={pick} /></Suspense> :
             <svg className="sm-svg" width={width} height={Math.max(height, 200)} viewBox={`0 0 ${width} ${Math.max(height, 200)}`}
               role="group" aria-label="기지와 유닛 지도">
               {layouts.map(({ base, placement, box, ox, oy, slab }) => <g key={base.id} transform={`translate(${ox} ${oy})`} className="sm-base">
