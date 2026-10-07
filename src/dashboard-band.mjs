@@ -95,3 +95,18 @@ export function openAlerts(entries, { limit = 20 } = {}) {
     .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
   return { count: items.length, items: items.slice(0, limit) };
 }
+
+// 담당별 최근 활동(2026-10-07 [kyle] 활동 그래프). 최근 1시간을 5분 칸 12개로 나눠 그 역할이 받거나(role) 한(by) 사건 수를 센다.
+// 감시기의 정기 기록은 활동이 아니므로 뺀다. 화면의 작은 선 그래프 재료일 뿐 판단에 쓰지 않는다.
+export function roleActivity(entries, { now = Date.now(), buckets = 12, bucketMs = 5 * 60_000, skip = () => false } = {}) {
+  const start = now - buckets * bucketMs, out = {};
+  const add = (role, slot) => { if (!role || role === 'watch' || role === '사람' || role === '모름') return; (out[role] ??= Array(buckets).fill(0))[slot]++; };
+  for (const e of entries ?? []) {
+    const t = Date.parse(e?.t);
+    if (!Number.isFinite(t) || t < start || t > now || skip(e)) continue;
+    const slot = Math.min(buckets - 1, Math.floor((t - start) / bucketMs));
+    add(e.role, slot);
+    if (e.by !== e.role) add(e.by, slot);
+  }
+  return out;
+}

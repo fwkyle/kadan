@@ -59,7 +59,7 @@ import {
 import { RUNNER_ROLE_LABELS } from "./runner-settings-wall.mjs";
 import { seniorCommandLabel } from "./senior.mjs";
 import { buildCardWorktimes, summarizeWorktimes, modelUnknownLabel, WORKTIME_PERIODS } from "./card-worktime.mjs";
-import { liveSessions, flowSummary, openAlerts, supervisorSummary, supervisorOf } from "./dashboard-band.mjs";
+import { liveSessions, flowSummary, openAlerts, supervisorSummary, supervisorOf, roleActivity } from "./dashboard-band.mjs";
 import { effectiveWorkOwner } from "./handover-state.mjs";
 
 const modelCache = new WeakMap();
@@ -570,6 +570,8 @@ export function dashboardData(snapshot, url) {
       supervisors,
       // 전략 맵이 역할을 슈퍼감독 기지로 묶는 데 쓴다(2026-10-05). 관계표를 모르면 null.
       hierarchy: m.hierarchy ?? null,
+      // 담당별 최근 1시간 활동(5분 칸 12개). 활동 그래프 재료(2026-10-07).
+      activity: roleActivity(snapshot.entries, { skip: isWatchRoutine }),
       recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),
       recent: recent
         .slice(0, 50)
