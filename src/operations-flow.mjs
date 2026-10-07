@@ -64,7 +64,7 @@ function followupFor(home,work,executions,context,now=stamp()){
  let automatic=null,error=context.error,terminalAt=null;
  try{const rows=readStream(home,`automatic-review/${work.key}/events.jsonl`,{optional:true});automatic=rows.at(-1)||null;terminalAt=rows.find(e=>e.current?.key===automatic?.current?.key&&['pass','boundary','limit','exception'].includes(e.status))?.at||null;}
  catch{error='자동 왕복 기록 조회 실패';}
- const decisions=context.decisions.filter(d=>work.executions.some(c=>c.key===d.card));
+ const decisions=context.decisions.filter(d=>d.work===work.key||work.executions.some(c=>c.key===d.card));
  const followup=workFollowup(work,executions,{automatic,decisions,error});
  const identity=taskIdentity(context.cards||[]),keys=new Set(work.executions.map(x=>x.key));
  const linkedWatchCalls=context.watchCalls?context.watchCalls.filter(e=>e.taskId&&keys.has(identity.resolve(e.taskId,e.executionKey).key)).length:null;

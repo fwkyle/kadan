@@ -51,6 +51,9 @@ export function workFollowup(work,executions,{automatic=null,decisions=[],error=
   const [state,label,action]=reasons[autoState];
   next=item(state,label,work.owner,action+(automatic.notification?.status==='unknown'?' · 최종 통지 전달 미확인':''),automatic.at);
  }
+ // 업무에 직접 연결된 결정(카드가 이 업무의 실행이 아닌 것)도 사용자 결정 대기다.
+ const linked=decisions.find(d=>d.work===work.key&&d.status==='open'&&!executions.some(c=>c.key===d.card));
+ if(linked&&next?.state!=='decision')next=item('decision','사용자 결정 대기','@user',linked.question,linked.at);
  next||=item('unspecified','다음 행동 미지정',work.owner,'다음 실행과 담당자를 기록하세요.');
  // 기존 업무 입력이 새 결과보다 앞서면 옛 다음 행동으로 덮지 않는다.
  const changed=(work.history||[]).filter((h,i,a)=>h.nextAction&&(!i||h.nextAction!==a[i-1].nextAction||h.turnOwner!==a[i-1].turnOwner)).at(-1);
