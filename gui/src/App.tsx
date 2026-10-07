@@ -170,7 +170,7 @@ export default function App() {
           본문으로 건너뛰기
         </a>
         <header className="dw-top">
-          <a className="dw-brand" href="#status">카단 라이트</a>
+          <a className="dw-brand" href="#status">카단</a>
           <nav id="app-nav" aria-label="주 메뉴">
             {primaryLinks.map(([key, label]) => (
               <a
