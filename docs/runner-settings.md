@@ -137,7 +137,11 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 설정: 활성 프리셋의 `roles.watch`가 1순위, `fallback.watch`가 폴백 순서다. 명령은 `kadan runners set watch …`·`kadan runners fallback watch --set …`, 대시보드는 '실행 모델'의 **감시 AI** 줄이다. 프리셋을 바꾸면 감시 AI 값도 그 프리셋 것으로 바뀐다.
 - 실행기는 `codex`만 받는다. `watch-judge.sh`가 `codex exec`로 부르기 때문이다. 다른 실행기용 비대화 명령(어댑터)은 만들지 않는다. 작업자↔검수자 계열 규칙은 감시 AI에 적용하지 않는다. 정책 차단(`block --roles watch`)은 적용한다.
 - 호출 순서: 감시기는 AI를 부를 때마다 설정 파일을 새로 읽어 `[1순위, 폴백…]`을 만들고, 1순위부터 `KADAN_JUDGE_MODEL`·`KADAN_JUDGE_EFFORT`를 채워 부른다. 1순위 포함 **최대 3개**까지만 시도한다.
-- **내려가는 조건: 그 모델이 응답하지 못한 경우만** — 호출 결과가 시간 초과(`timeout`) 또는 호출 실패(`call-failed`, 종료 코드 ≠ 0). 보고 누락·불완전(`report-missing`·`report-incomplete`)은 모델이 돌았는데 지시를 어긴 것이라 내려가지 않는다. 감시 종료·대상 제외로 취소되면(`cancelled`) 멈춘다. 오류 문구를 해석하지 않는다.
+- **내려가는 조건: 그 모델이 응답하지 못한 경우만** — 호출 결과가 시간 초과(`timeout`) 또는 호출 실패(`call-failed`, 종료 코드 ≠ 0). 보고 누락·불완전(`report-missing`·`report-incomplete`)은 모델이 돌았는데 지시를 어긴 것이라 내려가지 않는다. 감시 종료·대상 제외로 취소되면(`cancelled`) 멈춘다. 오류 문구는 아래 인터넷 없음 한 가지만 본다.
+- **인터넷 없음·잠자기는 내려가지 않는다**(2026-10-07 [kyle]). 모든 모델이 같은 연결로 나가므로 다음 모델도 똑같이 실패한다.
+  - 인터넷 없음(`network`): `watch-judge.sh`가 실패한 호출의 진단 기록에서 공급자 주소를 못 찾은 문구(`getaddrinfo ENOTFOUND` 등)를 보면 표시한다.
+  - 잠자기(`slept`): 시간 초과는 깨어 있던 시간으로 잰다. 맥북을 덮어 호출이 30초 넘게 멈췄다 깨면 이미 끊긴 호출로 보고 끝낸다.
+  - 둘 다 사용자 알림 없이 다음 정기 점검에 다시 부른다. 인터넷 없음이 깨어 있는 동안 같은 대상에서 3번 이어지면 그때 알린다(감시 순회 사이가 크게 벌어지면 잠든 것으로 보고 횟수를 버린다).
 - 시도마다 새 호출 기록(`watch-ai-request`)과 증거 폴더를 만든다. 앞 시도의 만료·종료 기록이 뒤 시도의 보고를 막지 않게 하기 위해서다. 시도마다 5분 상한이므로 최악이면 감시AI 한 자리를 15분 잡는다. 그동안 감시sh 순회는 계속한다.
 - 호출 종료 기록(`watch-ai-call`)에 `judgeSource`(`settings`/`profile`), `fallbackIndex`(0이 1순위), `settingsRevision`·`settingsPreset`, 두 번째 시도부터 `previousRequestId`·`previousReason`을 남긴다. 실제 모델은 기존처럼 `model`(스크립트가 쓴 `model.txt`)이다.
 - 설정 파일이 없거나 `watch` 값이 없으면 예전과 같다: 감시 프로필의 `KADAN_JUDGE_MODEL`로 한 번만 부르고 강도는 max다. 설정 파일이 깨졌으면 프로필 값으로 부르고 `settingsError`를 남긴다.

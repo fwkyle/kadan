@@ -63,7 +63,8 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   const count=fn=>events?events.filter(fn).length:null;
   return {source,label:watchAILabel(source),requests:count(e=>e.kind==='watch-ai-request'),
    reported:count(e=>e.kind==='watch-ai-call'&&e.reason==='reported'),timeouts:count(e=>e.kind==='watch-ai-call'&&e.reason==='timeout'),
-   failed:count(e=>e.kind==='watch-ai-call'&&['call-failed','report-missing','report-incomplete','report-error'].includes(e.reason))};
+   failed:count(e=>e.kind==='watch-ai-call'&&['call-failed','report-missing','report-incomplete','report-error'].includes(e.reason)),
+   offline:count(e=>e.kind==='watch-ai-call'&&['network','slept'].includes(e.reason))};
  });
  const cardList=center.cards??center.boards.flatMap(b=>b.cards);
  const identity=taskIdentity(Array.isArray(cardList)?cardList:[]);
@@ -81,7 +82,7 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   const missing=roles.filter(r=>r.registered===false).map(r=>r.role);
   const state=!ledgerKnown?'unknown':result.process.state==='absent'?'absent':result.process.state==='duplicate'?'duplicate':!scope?'unknown':!roles.length?'not-required':missing.length?'incomplete':'configured';
   result.boards.push({name:board.name,state,roles:orderWatchRoles(roles),missingRoles:missing,registeredRoles:scope?roles.filter(r=>r.registered).length:null,totalRoles:scope?roles.length:null,
-   aiActivity:scope?aiActivity(names):aiActivity(new Set()).map(a=>({...a,requests:null,reported:null,timeouts:null,failed:null})),
+   aiActivity:scope?aiActivity(names):aiActivity(new Set()).map(a=>({...a,requests:null,reported:null,timeouts:null,failed:null,offline:null})),
   recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,route:e.route??null,delivered:e.delivered??null,resolved:e.resolved===true})):null});
  }
  result.verdict=watchVerdict(result,now);
