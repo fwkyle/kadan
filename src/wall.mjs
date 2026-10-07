@@ -443,8 +443,8 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 </script></body></html>`;
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot} = {}) {
-  const centerHandler=home?createCenterHandler(home,{notify}):null;
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot,startSecretary} = {}) {
+  const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  const cache=new Map();
  let sharedSnapshot=null;
