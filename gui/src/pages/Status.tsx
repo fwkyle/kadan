@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
 import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
-import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time } from "../ui";
+import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll } from "../ui";
 import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 
@@ -52,7 +52,7 @@ export default function Status({url}: {url: URL}) {
     {row.next && <p>다음 행동: {row.next}</p>}
     {row.healthKind === "attention" && <p><button className="copy-question" onClick={() => void copy(`[대시보드 확인 요청] ${row.key}: ${row.healthLabel}. ${row.failureReason || row.healthReason} 후속 처리 방향과 근거를 확인해주세요.`)}>감독에게 물어볼 문장 복사</button></p>}
   </article>;
-  const stopRow = (row: Row, showReason: boolean) => <li className="st-stop-row" key={row.key}>
+  const stopRow = (row: Row, showReason: boolean) => <li className="st-stop-row" key={row.key} data-fresh={`stop:${row.key}:${row.healthKind ?? ""}`}>
     <span className="st-stop-main"><CardLink row={row}/></span>
     <small>담당 {row.owner || "미배정"} · {row.board || "판 미지정"} · 마지막 신호 {row.signalAt ? time(row.signalAt) : "없음"}</small>
     {showReason && row.failureReason
@@ -96,7 +96,7 @@ export default function Status({url}: {url: URL}) {
     {!data ? <Loading/> : <>
       <div className="st-band" role="group" aria-label="지금 내가 볼 것 · 다섯 질문">
         {bandChips({decisions: data.decisions?.length ?? null, stopped: stoppedCount, running: bucket("running").length, alerts: data.alerts, flow: data.flow, live: data.live}).map(chip =>
-          <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
+          <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{typeof chip.num === "number" ? <Roll value={chip.num}/> : chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
         {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
@@ -104,14 +104,14 @@ export default function Status({url}: {url: URL}) {
       <ul id="status-live" className="st-live" aria-label="살아 있는 담당과 모델">
         {data.live === null ? <li className="st-live-row"><small>세션 상태 모름</small></li>
           : data.live.length === 0 ? <li className="st-live-row"><small>열린 담당 창이 없습니다.</small></li>
-          : data.live.map(s => <li key={s.role} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small></li>)}
+          : data.live.map(s => <li key={s.role} data-fresh={`live:${s.role}:${s.pidState}`} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small></li>)}
         <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
       </ul>
       <section id="status-supers" className="st-section">
         <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">내가 일을 맡긴 슈퍼감독(관계표에서 바로 내 아래)마다 한 줄입니다. 그 아래 감독·담당의 실행을 모두 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
         {data.supervisors === null ? <p className="st-error" role="alert">관계표를 읽지 못해 슈퍼감독별로 묶지 못했습니다. 감시기가 읽는 관계표 파일(원장의 마지막 hierarchy-loaded 기록이 가리키는 경로)을 확인하세요.</p>
           : data.supervisors.items.length === 0 ? <p className="st-empty">관계표에 사용자 바로 아래 역할이 없습니다.</p>
-          : <ul className="st-sup-list">{data.supervisors.items.map(s => <li key={s.super} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
+          : <ul className="st-sup-list">{data.supervisors.items.map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
               <strong>{s.super}</strong>
               <span className="st-sup-life">{supervisorLife(s)}</span>
               <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
@@ -121,17 +121,17 @@ export default function Status({url}: {url: URL}) {
       </section>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>
-        {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
+        {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id} data-fresh={`decision:${d.id}`}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
       </section>
       <section id="status-attention" className="st-section">
         <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미정리는 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
         {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">멈춘 카드가 없습니다.</p>}
         {data.alerts === null ? <p className="st-error" role="alert">감시 경보를 읽지 못했습니다(원장 확인 불가).</p>
-          : data.alerts.count > 0 && <details className="st-fold" open={data.alerts.count <= 5}><summary>해소 전 감시 경보 {data.alerts.count}건</summary><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.map(a => <li key={a.id} className="st-alert-row"><strong>{a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>)}</ul></details>}
+          : data.alerts.count > 0 && <details className="st-fold" open={data.alerts.count <= 5}><summary>해소 전 감시 경보 {data.alerts.count}건</summary><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.map(a => <li key={a.id} data-fresh={`alert:${a.id}`} className="st-alert-row"><strong>{a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>)}</ul></details>}
       </section>
       <section id="status-flow" className="st-section">
         <header className="st-sec-head"><h2>흐름 확인</h2><span className={"st-cnt" + (data.flow.unconfirmed.length ? " st-cnt-attn" : "")}>{data.flow.unconfirmed.length}건</span><span className="st-hint">티키타카 묶음 {data.flow.total}개 중 라운드·구현·검수 연결이 깨져 집계되지 않는 묶음입니다. 감독이 카드의 묶음 번호·단계를 고치면 빠집니다.</span></header>
-        {data.flow.unconfirmed.length ? <ul className="st-flow-list">{data.flow.unconfirmed.map(f => <li key={f.id} className="st-flow-row"><strong>{f.title}</strong> · {f.label}{f.warnings.length > 0 && <small>{f.warnings.join(" ")}</small>}</li>)}</ul> : <p className="st-empty">{data.flow.total ? "모든 묶음이 흐름대로 연결돼 있습니다." : "티키타카 묶음이 없습니다."}</p>}
+        {data.flow.unconfirmed.length ? <ul className="st-flow-list">{data.flow.unconfirmed.map(f => <li key={f.id} data-fresh={`flow:${f.id}`} className="st-flow-row"><strong>{f.title}</strong> · {f.label}{f.warnings.length > 0 && <small>{f.warnings.join(" ")}</small>}</li>)}</ul> : <p className="st-empty">{data.flow.total ? "모든 묶음이 흐름대로 연결돼 있습니다." : "티키타카 묶음이 없습니다."}</p>}
       </section>
       <DocumentContent html={data.watchHtml}/>
       {section("status-executing","작업중인 카드","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다. 검수·답변 같은 다른 결과를 기다린다고 보고한 카드도 여기 셉니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}

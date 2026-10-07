@@ -16,7 +16,7 @@ import { MailBody } from "./Detail";
 export function MailItem({ mail }: { mail: Mail }) {
   const [open, setOpen] = useState(false);
   return (
-    <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details data-fresh={`mail:${mail.mailId ?? mail.digest}:${mail.replyStatus ?? ""}:${mail.status ?? ""}`} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <time>{time(mail.t)}</time> · {mail.by || "모름"} →{" "}
         {mail.role || "모름"}

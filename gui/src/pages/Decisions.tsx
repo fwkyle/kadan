@@ -56,7 +56,7 @@ export default function Decisions({ url }: { url: URL }) {
 function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Decision; draft: (id: string, dirty: boolean)=>void; folded: boolean; onToggleFold: (id: string)=>void}) {
   const onDirtyChange = useCallback((dirty: boolean)=>draft(decision.id,dirty), [draft,decision.id]);
   // 접어도 본문은 숨기기만 한다. 쓰던 메모와 고른 선택지가 남는다.
-  return <article id={"decision-"+decision.id} className={folded ? "folded" : undefined}>
+  return <article id={"decision-"+decision.id} data-fresh={`decision:${decision.id}:${decision.status}`} className={folded ? "folded" : undefined}>
     <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time><button type="button" className="decision-fold" aria-expanded={!folded} aria-controls={"decision-body-"+decision.id} onClick={()=>onToggleFold(decision.id)}>{folded ? "펼치기" : "접기"}</button></div>
     <h2>{decision.questionTitle ?? decision.question}</h2>
     {folded && <p className="decision-folded-note">접어 둔 결정 · 추천안: {decision.recommendation}</p>}

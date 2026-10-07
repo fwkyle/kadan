@@ -434,5 +434,21 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 @keyframes sm-pulse { 0% { transform: scale(.6); opacity: .95; } 100% { transform: scale(2.3); opacity: 0; } }
 .sm-p-running { stroke: #e68a27; } .sm-p-stuck { stroke: #b68625; } .sm-p-stale { stroke: #a58a5c; } .sm-p-dead { stroke: #b3261e; }
 .sm-p-idle { stroke: #536159; } .sm-p-unknown { stroke: #8a948e; } .sm-p-off { stroke: #aab3ad; }
-.sm-view .sm-totals b.sm-rolling { color: #2b47a8; }
+.sm-view .sm-totals b.rolling, b.rolling { color: #2b47a8; }
 @media (prefers-reduced-motion: reduce) { .sm-motion { display: none; } }
+/* 화면 모션(2026-10-07). 바뀐 줄만 한 번 깜빡이고(data-fresh), 다른 화면으로 옮길 때 본문이 살짝 겹쳐 넘어간다. */
+.st-num b, .dw-decision-count b { font-weight: inherit; }
+.is-fresh, tr.is-fresh > td { animation: fresh-flash 1.8s ease-out; }
+@keyframes fresh-flash {
+  0%, 18% { background-color: #fff1bf; box-shadow: inset 3px 0 0 #e6a817; }
+  100% { background-color: transparent; box-shadow: inset 3px 0 0 transparent; }
+}
+#main-content { view-transition-name: page; }
+::view-transition-old(page) { animation: page-out 120ms ease-in both; }
+::view-transition-new(page) { animation: page-in 200ms ease-out both; }
+@keyframes page-out { to { opacity: 0; transform: translateY(-4px); } }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) {
+  .is-fresh, tr.is-fresh > td { animation: none; }
+  ::view-transition-old(page), ::view-transition-new(page) { animation: none; }
+}

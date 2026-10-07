@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
-import { CardLink, ErrorMessage, Freshness, Loading, time } from "../ui";
+import { CardLink, ErrorMessage, Freshness, Loading, Roll, time } from "../ui";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
 import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
@@ -78,26 +78,6 @@ function UnitFigure({ unit, x, y, base, selected, onSelect }: { unit: Unit; x: n
     {crates.length > shown.length && <text className="sm-more" x={38} y={-14}>+{crates.length - shown.length}</text>}
     <text className="sm-label" y={20}>{name.length > 11 ? name.slice(0, 10) + "…" : name}</text>
   </g>;
-}
-
-// 숫자가 바뀌면 0.6초 동안 굴러가듯 바꾼다(2026-10-07 모션). 움직임 줄이기 설정이면 바로 바꾼다.
-function Roll({ value }: { value: number }) {
-  const [shown, setShown] = useState(value), from = useRef(value);
-  useEffect(() => {
-    const start = from.current;
-    from.current = value;
-    if (start === value || matchMedia("(prefers-reduced-motion: reduce)").matches) { setShown(value); return; }
-    let raf = 0;
-    const t0 = performance.now();
-    const step = (t: number) => {
-      const k = Math.min(1, (t - t0) / 600);
-      setShown(Math.round(start + (value - start) * (1 - (1 - k) ** 3)));
-      if (k < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [value]);
-  return <b className={shown !== value ? "sm-rolling" : undefined}>{shown}</b>;
 }
 
 // 바뀐 것만 움직인다(2026-10-07 [kyle]): 카드가 날아가고(창고·다른 유닛 → 유닛), 빠진 카드는 ✓와 함께 떠오르고,

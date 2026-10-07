@@ -627,6 +627,7 @@ export default function Workspace({ url }: { url: URL }) {
                         {data.rows.map((row) => (
                           <tr
                             key={row.key}
+                            data-fresh={`row:${row.key}:${row.state}:${row.healthKind ?? ""}`}
                             className={detailKey === row.key ? "selected" : ""}
                             onClick={(event) => {
                               if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -735,7 +736,7 @@ function Grouped({
             {key} <small>{group.length}</small>
           </h2>
           {group.map((row) => (
-            <article className="work-tile" key={row.key}>
+            <article className="work-tile" key={row.key} data-fresh={`tile:${row.key}:${row.state}:${row.healthKind ?? ""}`}>
               <Health row={row} />
               <h3>
                 <a href={cardUrl(row.key)}>{row.title}</a>
