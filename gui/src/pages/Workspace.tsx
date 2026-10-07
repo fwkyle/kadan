@@ -10,6 +10,7 @@ import {
   Loading,
   Pages,
   time,
+  Pulse,
 } from "../ui";
 import RelationMap from "./RelationMap";
 import WorktimeSummary from "./WorktimeSummary";
@@ -68,7 +69,7 @@ const baseColumns: Column[] = [
   {
     key: "signalAt",
     label: "최근 실행 신호",
-    render: (row) => <span title={row.signalLabel}>{time(row.signalAt)}</span>,
+    render: (row) => <span title={row.signalLabel}><Pulse at={row.signalAt} />{time(row.signalAt)}</span>,
   },
   { key: "flowLabel", label: "티키타카", render: (row) => <span title={row.flowTitle}>{row.reviewLabel || row.flowLabel}{row.reviewLabel && <small>{row.flowLabel}</small>}</span> },
   {

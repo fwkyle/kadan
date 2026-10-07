@@ -85,7 +85,7 @@ export function applyTheme(html){
 }
 
 // 기억한 테마를 그리기 전에 먼저 붙여 밝은 화면이 번쩍이지 않게 한다.
-export const themeHeadScript=`<script>try{const t=localStorage.getItem('kadan-theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch{}</script>`;
+export const themeHeadScript=`<script>try{const t=localStorage.getItem('kadan-theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;else if(t==='space')document.documentElement.dataset.theme='dark';}catch{}</script>`;
 export const themeToggleHtml=`<button type="button" class="dw-theme" data-theme-toggle aria-label="화면 테마 바꾸기">테마: 자동</button>`;
 export const themeToggleStyle=`.dw-theme{font-size:12px;padding:4px 10px;border-radius:999px;white-space:nowrap;margin-left:auto}.dw-theme+.dw-more{margin-left:8px}`;
 export const themeToggleScript=`
