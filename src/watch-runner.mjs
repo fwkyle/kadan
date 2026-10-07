@@ -560,6 +560,7 @@ export async function runWatch({
       try { ai?.reports.retire(entries,cards,parents,works); }
       catch { aiStoreError={id:'watch-ai:store',kind:'감시AI오류',level:'AMBER',role:'감시 보고 저장소',reason:'report-error'}; }
       for (const [key,failure] of judgeFailures) if (!observedSessions.has(failure.session)) judgeFailures.delete(key);
+      for (const key of offlineFailures.keys()) if (!observedSessions.has(`kadan-${key.split(':')[1]}`)) offlineFailures.delete(key);
       // 대상 제외는 사망/회복이 아니다. 이전 비교·AI 결과와 알림을 조용히 퇴역시킨다.
       for (const session of roleStates.keys()) if (!scope.sessions.has(session)) roleStates.delete(session);
       for (const session of supervisorStates.keys()) if (!supervisorScope.sessions.has(session)) supervisorStates.delete(session);
