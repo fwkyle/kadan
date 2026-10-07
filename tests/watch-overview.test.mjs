@@ -79,8 +79,8 @@ test('최근 24시간 호출 수를 작업 감시와 감독 관찰로 나누고 
   event('supervisor','supervisor-health','watch-ai-request'),event('supervisor','supervisor-health','watch-ai-call',{reason:'call-failed'}),
   event('worker','stall','watch-ai-request',{t:new Date(now-25*60*60_000).toISOString()}),event('unrelated','stall','watch-ai-request')];
  const m=watchOverview({...base,entries});
- assert.deepEqual(m.boards[0].aiActivity,[{source:'worker',label:'작업 감시AI',requests:2,reported:1,timeouts:1,failed:0},
-  {source:'supervisor-health',label:'감독 관찰AI',requests:1,reported:0,timeouts:0,failed:1}]);
+ assert.deepEqual(m.boards[0].aiActivity,[{source:'worker',label:'작업 감시AI',requests:2,reported:1,timeouts:1,failed:0,offline:0},
+  {source:'supervisor-health',label:'감독 관찰AI',requests:1,reported:0,timeouts:0,failed:1,offline:0}]);
  const html=renderWatchOverview({...center,monitoring:m},center.boards[0]);
  assert.match(html,/작업 감시AI/);assert.match(html,/감독 관찰AI/);
  for(const overrides of [{entries:null},{readFile:()=>{throw Error('unreadable');}}]){
