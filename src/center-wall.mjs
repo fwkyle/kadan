@@ -22,7 +22,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
-import {appendLedger} from './ledger.mjs';
+import {appendLedger,readLedger} from './ledger.mjs';
 import {editFallback,readSettings,setActivePreset,setFallback,setFavorites,setRole} from './runner-settings.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
@@ -139,10 +139,34 @@ export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta
  }
 }
 
-export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault}={}) {
+// 대시보드 '슈퍼감독에게 묻기'(2026-10-07 [kyle]). 받는 사람은 서버가 관계표에서 정한다 — 유닛에서 직속 상위를 따라
+// 올라가 사용자(@user) 바로 아래 역할(슈퍼감독). 사슬이 없으면(관계표 밖) 비서. 요청이 받는 사람을 고르게 두면
+// "아무 창에나 글을 붙이는" 통로가 되므로 받지 않는다. 관계표를 못 읽으면 추측하지 않고 거부한다.
+export function askRecipient(unit, table) {
+ if(!table)throw new Error('관계표를 읽을 수 없어 받는 사람을 확인하지 못했다');
+ let role=unit;
+ for(let i=0;i<64&&role;i++){const parent=table[role];if(parent==='@user')return role;if(parent==null)break;role=parent;}
+ return '비서';
+}
+// 질문은 사용자 명의(KADAN_ROLE 비움)로 보낸다. 그래야 편지에 붙는 안내가 "사람 우편함으로 최종 답변" 명령을 적어 준다.
+// --raw를 쓰지 않는다 — 그 안내가 답이 돌아오는 길이다.
+export async function askDefault({to,message,cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile)}={}) {
+ try {
+  const {stdout}=await run(process.execPath,[cli,'send',to,'--expect-reply',message],{env:{...env,KADAN_ROLE:''},encoding:'utf8',timeout:28_000});
+  const out=String(stdout||'');
+  return {to,mailId:out.match(/우편ID ([0-9a-f-]{8,})/)?.[1]??out.match(/"mailId":"([0-9a-f-]{8,})"/)?.[1]??null};
+ } catch(error) {
+  throw new Error('질문을 보내지 못했다: '+String(error.stderr||error.message||'').trim().slice(-300));
+ }
+}
+export function askMessage({unit,text,context}) {
+ return `[대시보드 질문 · ${unit}]\n${text}${context?`\n\n${context}`:''}\n\n이 편지는 사용자의 질문이다. 새 발령·승인이 아니다.`;
+}
+
+export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -156,6 +180,14 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
+   if(url.pathname==='/ask'){
+    const unit=String(f.unit||''),text=String(f.text||'').trim(),context=String(f.context||'').trim();
+    if(!/^[\p{L}\p{N}_-]+$/u.test(unit))throw new Error('물을 유닛 이름이 올바르지 않다');
+    if(!text)throw new Error('물어볼 내용을 적어 주세요');
+    if(text.length>4000||context.length>2000)throw new Error('질문이 너무 길다(본문 4000자·유닛 정보 2000자 이하)');
+    const to=askRecipient(unit,hierarchy());
+    saved('/#strategy-map',await ask({to,message:askMessage({unit,text,context})}));return true;
+   }
    if(url.pathname==='/decisions/answer') {
      const result=decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.

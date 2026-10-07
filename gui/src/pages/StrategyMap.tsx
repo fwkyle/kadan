@@ -4,6 +4,7 @@ import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
 import { CardLink, ErrorMessage, Freshness, Loading, time } from "../ui";
 import type { LiveSession, OpenAlerts } from "../status-band";
+import AskSuper from "../AskSuper";
 import { buildMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type Unit } from "../strategy-map";
 
 // 전략 맵(2026-10-05 [kyle]): 현황판과 같은 자료(status)를 슈퍼감독 기지·역할 유닛으로 그린다. 1단계는 SVG 2D 등각.
@@ -117,6 +118,7 @@ export default function StrategyMap() {
   });
   const depotX = cursor + 60, width = Math.max(map?.depot ? depotX + 70 : cursor - GAP + 8, 320);
   const unit = map?.bases.flatMap((b) => b.units).find((u) => u.role === selected) ?? null;
+  const unitBase = unit ? map?.bases.find((b) => b.units.includes(unit)) ?? null : null;
   const resting = map ? map.bases.reduce((n, b) => n + b.units.length - visibleUnits(b.units, false).length, 0) : 0;
   const tone = (n: number, cls: string) => (n > 0 ? cls : undefined);
   return <section className="sm-view">
@@ -186,6 +188,7 @@ export default function StrategyMap() {
               <span className={"sm-dot sm-c-" + row.bucket} /><CardLink row={row} />
               <small>{row.healthLabel}{row.signalAt ? ` · 마지막 신호 ${time(row.signalAt)}` : ""}</small></li>)}</ul>
               : <p className="st-empty">진행 중인 카드가 없습니다.</p>}
+            {unitBase && <AskSuper key={unit.role} unit={unit} base={unitBase} />}
           </>}
         </aside>
       </div>

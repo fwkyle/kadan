@@ -8,6 +8,7 @@ import {WatchAI} from './watch-ai.mjs';
 import {cycleReads} from './watch-reads.mjs';
 import {watchReportCommand,watchAILabel} from './watch-report.mjs';
 import {notifyUser} from './watch-system.mjs';
+import {isUserActor} from './actors.mjs';
 import {storageCommand} from './storage-migration.mjs';
 import {assertWritable,storageTransaction,storageVersion} from './storage.mjs';
 import {SecretaryMailbox} from './secretary-mailbox.mjs';
@@ -1521,7 +1522,11 @@ function cmdSend(argv, flags) {
   if (!message) die("보낼 메시지가 비어 있다");
   if(role==='비서'||flags.mailbox===true){
     if (flags.raw) throw new Error('저장 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
-    const receipt=new Mailbox(ledgerHome(),role).send({by:resolveLedgerBy({env:process.env}),message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
+    const by=resolveLedgerBy({env:process.env});
+    const receipt=new Mailbox(ledgerHome(),role).send({by,message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,executionKey:flags.execution,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true});
+    // 사용자 우편함에 온 편지(대시보드 질문의 답 등)는 OS 알림으로도 알린다(2026-10-07 [kyle]). 알림 실패는 저장을 막지 않는다.
+    // 시험은 KADAN_NOTIFY=off로 끈다(시험을 돌릴 때마다 진짜 알림이 뜨지 않게).
+    if(isUserActor(role)&&!isUserActor(by)&&process.env.KADAN_NOTIFY!=='off')notifyUser(`카단 · ${by}의 ${flags['reply-final']?'답':'편지'}: ${message.split('\n').find(line=>line.trim())?.trim().slice(0,120)??''}`,spawnSync);
     console.log(JSON.stringify(receipt));return;
   }
 

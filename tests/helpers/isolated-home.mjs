@@ -6,3 +6,5 @@ import os from 'node:os';
 import path from 'node:path';
 process.env.KADAN_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-test-home-'));
 delete process.env.KADAN_LITE_HOME;
+// 사용자 우편함 편지의 OS 알림을 시험 중에는 끈다(2026-10-07).
+process.env.KADAN_NOTIFY = 'off';

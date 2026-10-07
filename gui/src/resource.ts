@@ -56,6 +56,8 @@ export type SaveResult = {
     key?: string;
     revision?: number;
     delivery?: { status: string; error?: string; role?: string };
+    to?: string; // 질문을 받은 역할(/ask)
+    mailId?: string | null;
   };
 };
 export async function save(

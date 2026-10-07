@@ -154,7 +154,7 @@ test('raw 질문은 전송 전 거절하고 저장-only CLI는 모든 역할과 
  assert.throws(()=>guardedSend({floor,role:'receiver',session:'kadan-receiver',message:'원문',raw:true,mailContext:{expectReply:true},env:{KADAN_HOME:home}}),/--raw/);
  assert.equal(delivered,0);
  const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
- const call=(by,...args)=>spawnSync(process.execPath,[cli,...args],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:by,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none'},encoding:'utf8',timeout:3000});
+ const call=(by,...args)=>spawnSync(process.execPath,[cli,...args],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:by,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_NOTIFY:'off'},encoding:'utf8',timeout:3000});
  const question=call('사람','send','receiver','--mailbox','--expect-reply','질문');
  assert.equal(question.status,0,question.stderr);const q=JSON.parse(question.stdout);
  const wrong=call('receiver','send','other','--mailbox','--reply-to',q.mailId,'--reply-final','답변');assert.notEqual(wrong.status,0);assert.match(wrong.stderr,/받는 역할/);
