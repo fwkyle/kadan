@@ -38,7 +38,7 @@ export function eventSummary(entry){
  const parts=[text(entry.completion?entry.executionKey||entry.completionTaskId:entry.taskId)];
  if(entry.kind?.startsWith('watch-ai-')){
   const step={'watch-ai-request':'호출 시작','watch-ai-report':'판정 기록','watch-ai-delivery':'보고 전달','watch-ai-call':'호출 종료','watch-ai-retired':'감시 제외'}[entry.kind]||entry.kind;
-  const reason={reported:'보고 완료',timeout:'시간 초과',cancelled:'호출 취소','call-failed':'호출 실패','report-missing':'보고 누락','report-incomplete':'전달 기록 미완료','report-error':'보고 경로 오류'}[entry.reason]||entry.reason;
+  const reason={reported:'보고 완료',timeout:'시간 초과',cancelled:'호출 취소','call-failed':'호출 실패','report-missing':'보고 누락','report-incomplete':'전달 기록 미완료','report-error':'보고 경로 오류',network:'인터넷 없음',slept:'잠자기로 중단'}[entry.reason]||entry.reason;
   return [step,entry.verdict,reason,entry.delivery,entry.taskId].filter(Boolean).join(' · ');
  }
  if(entry.preview)parts.push(text(entry.preview));

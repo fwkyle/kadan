@@ -4,6 +4,7 @@ import {doneMarkerOf,findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 import {RateLimitRetry,terminal429} from './watch-rate-limit.mjs';
 import {QueueResume,queuedInputBanner} from './watch-queue-resume.mjs';
 import {latestWatchReports,normalWatchVerdict,watchResponsibility,watchAILabel} from './watch-report.mjs';
+import {OFFLINE_REASONS} from './watch-ai.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {SupervisorHealth,observationContext} from './watch-supervisor-health.mjs';
 import {ProgressWatch,WORKER_RECHECK_MS} from './watch-progress.mjs';
@@ -236,7 +237,7 @@ export function formatAlertBody(alert) {
   if (alert.kind === "감시AI오류") {
     // 판정 AI 자체의 시간 초과는 작업자 응답 장애가 아니다 — 작업 상태는 미판정으로 둔다.
     if (alert.reason === "timeout") return `${alert.source?watchAILabel(alert.source):'감시AI'} 점검 필요 · ${alert.role} (감시 판정 AI 시간 초과 — 작업 상태 미판정)`;
-    const reason={ "call-failed":"호출 실패", "report-missing":"보고 명령 미실행", "report-incomplete":"보고 전달 기록 미완료", "report-error":"보고 실행·기록 오류"}[alert.reason] || "호출 상태 확인 필요";
+    const reason={ network:"인터넷 연결 없음 3회 연속", "call-failed":"호출 실패", "report-missing":"보고 명령 미실행", "report-incomplete":"보고 전달 기록 미완료", "report-error":"보고 실행·기록 오류"}[alert.reason] || "호출 상태 확인 필요";
     return `${alert.source?watchAILabel(alert.source):'감시AI'} 점검 필요 · ${alert.role} (${reason}; 작업 상태 판정과 별개)`;
   }
   if (alert.kind === "입력큐") {
@@ -462,6 +463,8 @@ export async function runWatch({
   const deliveryFailures = new Map();
   const workerChecks = new Map();
   const judgeFailures = new Map();
+  // 감시 AI가 인터넷 없음으로 실패한 연속 횟수(호출 대상별). 깨어 있는 동안 3번 이어질 때만 알린다(잠긴 규칙 3, 2026-10-07).
+  const offlineFailures = new Map();
   const progressWatch = new ProgressWatch();
   const supervisorHealth = new SupervisorHealth();
   let lastCycleAt = now();
@@ -482,6 +485,8 @@ export async function runWatch({
     // 3주기 연속이면 멈추고 보고한다(잠긴 규칙 3). 2026-09-24 22:55: 잠금 오류 한 번에 감시가 종료됐다.
     try {
     const cycleAt = now(),began=measure(),cpuAtStart=cpuUsage();
+    // 순회 사이가 크게 벌어졌으면 맥북이 잠들었던 것이다. 잠들기 전후의 인터넷 없음은 이어진 실패로 세지 않는다.
+    if (cycleAt - lastCycleAt > Math.max(60_000, intervalMs * 3)) offlineFailures.clear();
     reads?.begin();
     io.record.reset(); io.send.reset();
     let entries = [], mailEntries = [];
@@ -528,9 +533,18 @@ export async function runWatch({
       if(!currentAI(job)||result.reason==='cancelled')continue;
       for(const recipient of result.deliveredRecipients||[])aiRecipients.add(recipient);
       if(result.deliveredRecipients?.length)print(`[${watchAILabel(job.candidate.source)}] ${job.candidate.role} 보고 전달 → ${result.deliveredRecipients.join(', ')} (호출 ${result.requestId})`);
+      const failure=reason=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
+        session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason});
+      // 인터넷 없음·잠자기는 알리지 않고 다음 정기 점검에 다시 부른다. 이전 알림은 그대로 둔다(성공해야 풀린다).
+      if(OFFLINE_REASONS.has(result.reason)){
+        const count=result.reason==='network'?(offlineFailures.get(job.key)??0)+1:0;
+        offlineFailures.set(job.key,count);
+        if(count>=3)failure('network');
+        continue;
+      }
+      offlineFailures.delete(job.key);
       if(result.ok)judgeFailures.delete(job.key);
-      else judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
-        session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason:result.reason});
+      else failure(result.reason);
     }
     if(!observationError) {
       for(const [role,job] of queuedAI)if(!currentAI(job))queuedAI.delete(role);
