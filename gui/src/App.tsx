@@ -21,7 +21,8 @@ import { AppContext, ErrorMessage, Loading, Roll, time } from "./ui";
 import SecretaryNotice from "./SecretaryNotice";
 import { useFreshMarks } from "./fresh";
 import { usePaneScroll } from "./scroll";
-import { readTheme, saveTheme, type Theme } from "./theme";
+import { readTheme, saveTheme, THEME_LABEL, THEME_ORDER } from "./theme";
+import Comms from "./Comms";
 const Status = lazy(() => import("./pages/Status")),
   Workspace = lazy(() => import("./pages/Workspace")),
   Decisions = lazy(() => import("./pages/Decisions")),
@@ -186,11 +187,10 @@ export default function App() {
             ))}
           </nav>
           <button type="button" className="dw-theme" aria-label="화면 테마 바꾸기" onClick={() => {
-            const order: Theme[] = ["auto", "dark", "light"];
-            const next = order[(order.indexOf(theme) + 1) % order.length];
+            const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
             saveTheme(next);
             setTheme(next);
-          }}>테마: {{auto:"자동",dark:"어둡게",light:"밝게"}[theme]}</button>
+          }}>테마: {THEME_LABEL[theme]}</button>
         </header>
         <main id="main-content" tabIndex={-1} {...mainScroll}>
           {(view === "ledger" || view === "runs") && <nav className="record-tabs" aria-label="기록 종류">
@@ -216,6 +216,7 @@ export default function App() {
             </Boundary>
           )}
         </main>
+        {theme === "space" && <Comms />}
         <footer>
           <span>실행 코드 {summary.data?.runtime?.commit?.slice(0, 7) || "모름"} · 시작 {time(summary.data?.runtime?.startedAt)}</span>
           <div id="dashboard-freshness" />

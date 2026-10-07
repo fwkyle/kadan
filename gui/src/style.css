@@ -452,3 +452,103 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
   .is-fresh, tr.is-fresh > td { animation: none; }
   ::view-transition-old(page), ::view-transition-new(page) { animation: none; }
 }
+/* 신호 맥박(2026-10-07). 모든 테마. 크기·투명도만 움직인다. */
+.pulse { position: relative; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: #22694d; }
+.pulse::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: pulse-beat 1.6s ease-out infinite; }
+.pulse-fast::after { animation-duration: .8s; }
+.pulse-slow::after { animation-duration: 3.2s; }
+.pulse-slow { background: #5f8f7a; }
+.pulse-still { background: #aab3ad; }
+.pulse-still::after { animation: none; }
+@keyframes pulse-beat { 0% { transform: scale(1); opacity: .65; } 100% { transform: scale(2.8); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pulse::after { animation: none; } }
+
+/* 우주 테마(2026-10-07 [kyle]). 어둡게 색 위에 얹는다. 색은 rgb()로 써서 테마 색 변환을 거치지 않게 한다.
+   흰 바탕 변수(--kc-ffffff)를 반투명 남색으로 바꿔 패널 바탕을 한 번에 바꾸고, 흰색을 글자로 쓰는 곳만 따로 지정한다. */
+:root[data-theme="dark"][data-skin="space"] {
+  --kc-ffffff: rgba(12, 20, 44, .82); --kc-f5f6f7: rgba(0, 0, 0, 0); --kc-f6f8f6: rgba(10, 18, 40, .6);
+  --kc-fbfcfb: rgba(16, 26, 56, .7); --kc-eef5f1: rgba(70, 140, 255, .16); --kc-edf0ed: rgba(70, 140, 255, .12);
+  --ds-color-on-action: rgb(255, 255, 255); --hud: rgba(120, 200, 255, .6);
+}
+:root[data-skin="space"] body {
+  background: radial-gradient(1100px 700px at 85% -10%, rgba(92, 60, 190, .35), rgba(0, 0, 0, 0) 60%),
+    radial-gradient(900px 640px at -5% 105%, rgba(20, 130, 190, .28), rgba(0, 0, 0, 0) 60%), rgb(4, 7, 18);
+}
+:root[data-skin="space"] body::before, :root[data-skin="space"] body::after {
+  content: ""; position: fixed; left: 0; right: 0; top: -480px; height: calc(100vh + 960px); pointer-events: none; z-index: 0;
+}
+:root[data-skin="space"] body::before {
+  background-image: radial-gradient(1px 1px at 22px 34px, rgba(255, 255, 255, .85), rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 141px 82px, rgba(190, 215, 255, .75), rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 87px 170px, rgba(255, 255, 255, .6), rgba(0, 0, 0, 0)),
+    radial-gradient(1.5px 1.5px at 205px 128px, rgba(255, 240, 210, .8), rgba(0, 0, 0, 0)),
+    radial-gradient(1px 1px at 60px 215px, rgba(200, 225, 255, .55), rgba(0, 0, 0, 0));
+  background-size: 240px 240px; animation: space-drift-a 240s linear infinite;
+}
+:root[data-skin="space"] body::after {
+  background-image: radial-gradient(2px 2px at 70px 90px, rgba(170, 210, 255, .7), rgba(0, 0, 0, 0)),
+    radial-gradient(1.5px 1.5px at 330px 260px, rgba(255, 255, 255, .6), rgba(0, 0, 0, 0)),
+    radial-gradient(2px 2px at 250px 400px, rgba(255, 210, 230, .45), rgba(0, 0, 0, 0));
+  background-size: 480px 480px; animation: space-drift-b 360s linear infinite; opacity: .8;
+}
+@keyframes space-drift-a { to { transform: translateY(240px); } }
+@keyframes space-drift-b { to { transform: translateY(480px); } }
+:root[data-skin="space"] .dw-shell { position: relative; z-index: 1; }
+:root[data-skin="space"] .dw-top { border-bottom-color: rgba(120, 200, 255, .25); box-shadow: 0 1px 18px rgba(60, 140, 255, .12); }
+:root[data-skin="space"] .dw-brand { letter-spacing: .12em; color: rgb(160, 220, 255); text-shadow: 0 0 10px rgba(120, 200, 255, .7); }
+:root[data-skin="space"] :is(.st-num, .sm-totals b, .dw-decision-count, .st-cnt) {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; text-shadow: 0 0 8px rgba(120, 200, 255, .55);
+}
+/* 관제 패널: 모서리 꺾쇠와 은은한 빛 테두리. */
+:root[data-skin="space"] :is(.st-chip, .sm-stage, .sm-side, .work-tile, .st-sup-row, .decision-list > article, .dw-reader) {
+  border-color: rgba(120, 200, 255, .28);
+  box-shadow: 0 0 0 1px rgba(120, 200, 255, .06), 0 0 22px rgba(60, 140, 255, .08);
+  background-image: linear-gradient(var(--hud), var(--hud)), linear-gradient(var(--hud), var(--hud)), linear-gradient(var(--hud), var(--hud)), linear-gradient(var(--hud), var(--hud)),
+    linear-gradient(var(--hud), var(--hud)), linear-gradient(var(--hud), var(--hud)), linear-gradient(var(--hud), var(--hud)), linear-gradient(var(--hud), var(--hud));
+  background-size: 12px 1.5px, 1.5px 12px, 12px 1.5px, 1.5px 12px, 12px 1.5px, 1.5px 12px, 12px 1.5px, 1.5px 12px;
+  background-position: left top, left top, right top, right top, left bottom, left bottom, right bottom, right bottom;
+  background-repeat: no-repeat;
+}
+:root[data-skin="space"] :is(.toast, .decision-toast, .recommendation-badge, .sm-viewswitch button[aria-pressed="true"]) { color: rgb(240, 246, 255); }
+:root[data-skin="space"] .sm-badge circle { fill: rgb(225, 235, 255); }
+:root[data-skin="space"] :is(.sm-s-dead, .sm-s-stuck) .sm-badge text { fill: rgb(255, 255, 255); }
+:root[data-skin="space"] .pulse { background: rgb(90, 230, 190); }
+:root[data-skin="space"] .pulse-slow { background: rgb(90, 170, 210); }
+:root[data-skin="space"] .pulse-still { background: rgb(110, 125, 150); }
+/* 교신 로그. */
+.comms { display: flex; align-items: center; gap: 10px; height: 26px; padding: 0 26px; border-top: 1px solid rgba(120, 200, 255, .22); background: rgba(6, 12, 30, .85);
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: rgb(150, 205, 255); overflow: hidden; }
+.comms-tag { flex: none; padding: 1px 6px; border: 1px solid rgba(120, 200, 255, .5); border-radius: 3px; font-size: 10.5px; letter-spacing: .1em; color: rgb(120, 220, 200); }
+.comms-window { flex: 1; overflow: hidden; mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0), rgb(0, 0, 0) 4%, rgb(0, 0, 0) 96%, rgba(0, 0, 0, 0)); }
+.comms-track { display: inline-flex; white-space: nowrap; animation: comms-scroll 60s linear infinite; }
+.comms-track:hover { animation-play-state: paused; }
+.comms-item { padding-right: 42px; }
+.comms-item::before { content: "▸ "; color: rgb(120, 220, 200); }
+@keyframes comms-scroll { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-skin="space"] body::before, :root[data-skin="space"] body::after, .comms-track { animation: none; }
+}
+/* 우주 테마: 의미 없는 회녹색 바탕(밝기 3단계)을 남색 반투명으로. 노랑·빨강 같은 상태 색은 그대로 둔다. */
+:root[data-theme="dark"][data-skin="space"] {
+  --kc-eef5f1: rgba(120, 170, 255, .05); --kc-e6f1ea: rgba(110, 170, 255, .1); --kc-f5f8f6: rgba(120, 170, 255, .05);
+  --kc-f0f5f2: rgba(120, 170, 255, .05); --kc-f1f4f2: rgba(120, 170, 255, .05); --kc-f7f9f7: rgba(120, 170, 255, .05);
+  --kc-fbfcfb: rgba(120, 170, 255, .05); --kc-eaf3ed: rgba(110, 170, 255, .1); --kc-f1f6f3: rgba(120, 170, 255, .05);
+  --kc-f0f6f2: rgba(120, 170, 255, .05); --kc-f6f8f6: rgba(120, 170, 255, .05); --kc-eef0ef: rgba(110, 170, 255, .1);
+  --kc-dcefe8: rgba(110, 170, 255, .1); --kc-f1f4f1: rgba(120, 170, 255, .05); --kc-edf0ed: rgba(110, 170, 255, .1);
+  --kc-e9eeeb: rgba(110, 170, 255, .1); --kc-f4f7f5: rgba(120, 170, 255, .05); --kc-e2eee7: rgba(110, 170, 255, .1);
+  --kc-d9e9df: rgba(110, 170, 255, .16); --kc-edf1ee: rgba(110, 170, 255, .1); --kc-f3f6f4: rgba(120, 170, 255, .05);
+  --kc-f0f4f1: rgba(120, 170, 255, .05); --kc-f8faf8: rgba(120, 170, 255, .05); --kc-e9f3ed: rgba(110, 170, 255, .1);
+  --kc-eff4f0: rgba(120, 170, 255, .05); --kc-f5f9f6: rgba(120, 170, 255, .05); --kc-f8faf9: rgba(120, 170, 255, .05);
+  --kc-eef3f0: rgba(120, 170, 255, .05); --kc-fbfdfc: rgba(120, 170, 255, .05); --kc-f7faf8: rgba(120, 170, 255, .05);
+  --kc-f2faf5: rgba(120, 170, 255, .05); --kc-eaede8: rgba(110, 170, 255, .1); --kc-f6f7f5: rgba(120, 170, 255, .05);
+  --kc-f9fbf9: rgba(120, 170, 255, .05); --kc-eef3ef: rgba(120, 170, 255, .05); --kc-e5ebe4: rgba(110, 170, 255, .1);
+  --kc-dcefe5: rgba(110, 170, 255, .1); --kc-dcf1e2: rgba(110, 170, 255, .1);
+}
+/* 우주 테마의 전략 맵: 기지 판을 남색 정거장 판으로. */
+:root[data-skin="space"] .sm-plat-top { fill: rgb(22, 36, 72); stroke: rgba(120, 200, 255, .35); stroke-width: 1; }
+:root[data-skin="space"] .sm-plat-top.sm-plat-outside { fill: rgb(36, 30, 62); }
+:root[data-skin="space"] .sm-plat-left { fill: rgb(14, 24, 52); }
+:root[data-skin="space"] .sm-plat-right { fill: rgb(9, 17, 40); }
+:root[data-skin="space"] .sm-tile { fill: rgba(110, 170, 255, .13); }
+:root[data-skin="space"] .sm-shadow { fill: rgba(0, 0, 0, .45); }
+:root[data-skin="space"] .sm-stage { background-color: rgba(6, 12, 30, .55); }

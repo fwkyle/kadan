@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
-import { CardLink, ErrorMessage, Freshness, Loading, Roll, time } from "../ui";
+import { CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, time } from "../ui";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
 import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
@@ -226,7 +226,7 @@ export default function StrategyMap() {
             <h3>진행 카드 {unit.rows.length}장</h3>
             {unit.rows.length ? <ul className="sm-cards">{unit.rows.map((row) => <li key={row.key}>
               <span className={"sm-dot sm-c-" + row.bucket} /><CardLink row={row} />
-              <small>{row.healthLabel}{row.signalAt ? ` · 마지막 신호 ${time(row.signalAt)}` : ""}</small></li>)}</ul>
+              <small><Pulse at={row.signalAt} />{row.healthLabel}{row.signalAt ? ` · 마지막 신호 ${time(row.signalAt)}` : ""}</small></li>)}</ul>
               : <p className="st-empty">진행 중인 카드가 없습니다.</p>}
             {unitBase && <AskSuper key={unit.role} unit={unit} base={unitBase} />}
           </>}

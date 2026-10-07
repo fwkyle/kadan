@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
 import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
-import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll } from "../ui";
+import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse } from "../ui";
 import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 
@@ -54,7 +54,7 @@ export default function Status({url}: {url: URL}) {
   </article>;
   const stopRow = (row: Row, showReason: boolean) => <li className="st-stop-row" key={row.key} data-fresh={`stop:${row.key}:${row.healthKind ?? ""}`}>
     <span className="st-stop-main"><CardLink row={row}/></span>
-    <small>담당 {row.owner || "미배정"} · {row.board || "판 미지정"} · 마지막 신호 {row.signalAt ? time(row.signalAt) : "없음"}</small>
+    <small><Pulse at={row.signalAt}/>담당 {row.owner || "미배정"} · {row.board || "판 미지정"} · 마지막 신호 {row.signalAt ? time(row.signalAt) : "없음"}</small>
     {showReason && row.failureReason
       ? <details className="st-reason-fold"><summary>{firstLine(row.failureReason)}</summary><p>{row.failureReason}</p></details>
       : showReason && row.healthReason ? <p className="st-stop-reason">{row.healthReason}</p> : null}

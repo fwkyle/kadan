@@ -33,6 +33,14 @@ export function CardLink({
 }) {
   return <a href={cardUrl(row.key)}>{children || row.title}</a>;
 }
+// 신호 맥박(2026-10-07): 마지막 신호가 최근일수록 빨리 뛴다. 2분 안 빠름, 15분 안 보통, 1시간 안 느림, 그보다 오래면 멈춤.
+// 줄을 훑기만 해도 어디가 살아 있는지 보인다. 움직임은 화면 합성만 쓰는 크기·투명도(::after)라 상시 켜 두어도 가볍다.
+export function Pulse({ at }: { at?: string | null }) {
+  const age = at && Number.isFinite(Date.parse(at)) ? Date.now() - Date.parse(at) : Infinity;
+  if (!Number.isFinite(age)) return null;
+  const tier = age < 2 * 60_000 ? "fast" : age < 15 * 60_000 ? "mid" : age < 60 * 60_000 ? "slow" : "still";
+  return <i className={"pulse pulse-" + tier} aria-hidden="true" />;
+}
 export function Health({
   row,
 }: {
