@@ -1,11 +1,11 @@
-import { lazy, Suspense, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
 import { CardLink, ErrorMessage, Freshness, Loading, time } from "../ui";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
-import { buildMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type Unit } from "../strategy-map";
+import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
 
 // 전략 맵(2026-10-05 [kyle]): 현황판과 같은 자료(status)를 슈퍼감독 기지·역할 유닛으로 그린다. 1단계는 SVG 2D 등각.
 // 색은 전부 style.css의 클래스로만 준다 — SVG 속성에 색을 적으면 다크 모드 변환(theme.mjs)을 거치지 않는다.
@@ -80,6 +80,50 @@ function UnitFigure({ unit, x, y, base, selected, onSelect }: { unit: Unit; x: n
   </g>;
 }
 
+// 숫자가 바뀌면 0.6초 동안 굴러가듯 바꾼다(2026-10-07 모션). 움직임 줄이기 설정이면 바로 바꾼다.
+function Roll({ value }: { value: number }) {
+  const [shown, setShown] = useState(value), from = useRef(value);
+  useEffect(() => {
+    const start = from.current;
+    from.current = value;
+    if (start === value || matchMedia("(prefers-reduced-motion: reduce)").matches) { setShown(value); return; }
+    let raf = 0;
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / 600);
+      setShown(Math.round(start + (value - start) * (1 - (1 - k) ** 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <b className={shown !== value ? "sm-rolling" : undefined}>{shown}</b>;
+}
+
+// 바뀐 것만 움직인다(2026-10-07 [kyle]): 카드가 날아가고(창고·다른 유닛 → 유닛), 빠진 카드는 ✓와 함께 떠오르고,
+// 상태가 바뀐 유닛엔 새 상태 색 고리가 한 번 퍼진다. 정적인 그림 위에 잠깐 겹쳐 그리고 사라진다.
+type Spot = { x: number; y: number };
+function Motion({ events, spots, depot }: { events: MapEvent[]; spots: Map<string, Spot>; depot: Spot }) {
+  return <g className="sm-motion" aria-hidden="true">
+    {events.map((e, i) => {
+      const delay = { animationDelay: `${i * 90}ms` };
+      if (e.kind === "fly") {
+        const to = spots.get(e.to), from = e.from ? spots.get(e.from) : depot;
+        if (!to || !from) return null;
+        const style = { ...delay, "--dx": `${from.x - to.x}px`, "--dy": `${from.y - to.y}px` } as CSSProperties;
+        return <g key={i} transform={`translate(${to.x + 26} ${to.y - 6})`}><g className="sm-fly" style={style}><Crate x={0} y={0} kind="running" /></g></g>;
+      }
+      if (e.kind === "leave") {
+        const at = spots.get(e.from);
+        if (!at) return null;
+        return <g key={i} transform={`translate(${at.x + 26} ${at.y - 6})`}><g className="sm-leave" style={delay}><Crate x={0} y={0} kind="planned" /><text className="sm-leave-check" y={-12}>✓</text></g></g>;
+      }
+      const at = spots.get(e.role);
+      return at ? <ellipse key={i} className={"sm-pulse sm-p-" + e.to} cx={at.x} cy={at.y} rx={26} ry={12} style={delay} /> : null;
+    })}
+  </g>;
+}
+
 // 발령 전 창고: 담당이 아직 없는 실행. 진행 전·일시정지로 나눠 보이고, 많으면 40장씩 더 본다.
 function Depot({ rows, close }: { rows: Row[]; close: () => void }) {
   const [limit, setLimit] = useState(40);
@@ -106,6 +150,19 @@ export default function StrategyMap() {
   const [view, setView] = useState<View>(readView);
   const pick = (key: string) => setSelected((now) => (now === key ? null : key));
   const map = data ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts }) : null;
+  // 새 자료가 들어올 때마다(15초) 직전 지도와 비교해 바뀐 것만 2초 동안 움직인다. 처음 열 때는 움직이지 않는다.
+  const prevMap = useRef<MapModel | null>(null);
+  const [motion, setMotion] = useState<{ id: number; events: MapEvent[] } | null>(null);
+  useEffect(() => {
+    if (!map) return;
+    const events = diffMap(prevMap.current, map);
+    prevMap.current = map;
+    if (!events.length) return;
+    const id = Date.now();
+    setMotion({ id, events });
+    const timer = setTimeout(() => setMotion((m) => (m?.id === id ? null : m)), 2200);
+    return () => clearTimeout(timer);
+  }, [data?.collectedAt]);
   // 기지를 가로로 늘어놓는다. 기지마다 자기 배치의 경계로 너비를 잡는다.
   let cursor = 0, height = 0;
   // 보이는 유닛이 하나도 없는 기지(쉬는 역할만 있는 기지)는 숨긴다. '쉬는 역할도 보기'를 켜면 다시 보인다.
@@ -117,6 +174,8 @@ export default function StrategyMap() {
     return { base, placement, box, ox, oy, slab: platform(placement.width, placement.depth) };
   });
   const depotX = cursor + 60, width = Math.max(map?.depot ? depotX + 70 : cursor - GAP + 8, 320);
+  const spots = new Map<string, Spot>();
+  for (const { placement, ox, oy } of layouts) for (const { unit: u, gx, gy } of placement.placed) { const p = iso(gx, gy); spots.set(u.role, { x: ox + p.x, y: oy + p.y }); }
   const unit = map?.bases.flatMap((b) => b.units).find((u) => u.role === selected) ?? null;
   const unitBase = unit ? map?.bases.find((b) => b.units.includes(unit)) ?? null : null;
   const resting = map ? map.bases.reduce((n, b) => n + b.units.length - visibleUnits(b.units, false).length, 0) : 0;
@@ -128,12 +187,12 @@ export default function StrategyMap() {
     <ErrorMessage error={resource.error} /><Freshness collectedAt={data?.collectedAt} {...resource} />
     {!data || !map ? <Loading /> : <>
       <p className="sm-totals" role="group" aria-label="지도 요약">
-        <span><b>{map.totals.units - (showResting ? 0 : resting)}</b> 유닛{!showResting && resting > 0 ? ` · 쉬는 ${resting} 숨김` : ""}</span>
-        <span className={tone(map.totals.running, "sm-t-running")}><b>{map.totals.running}</b> 작업중 상자</span>
-        <span className={tone(map.totals.stuck, "sm-t-stuck")}><b>{map.totals.stuck}</b> 막힌 상자</span>
-        <span><b>{map.totals.stale}</b> 오래된 미정리 상자</span>
-        <span className={tone(map.totals.dead, "sm-t-dead")}><b>{map.totals.dead}</b> 창 없음</span>
-        <span><b>{map.totals.alerts}</b> 열린 경보</span>
+        <span><Roll value={map.totals.units - (showResting ? 0 : resting)} /> 유닛{!showResting && resting > 0 ? ` · 쉬는 ${resting} 숨김` : ""}</span>
+        <span className={tone(map.totals.running, "sm-t-running")}><Roll value={map.totals.running} /> 작업중 상자</span>
+        <span className={tone(map.totals.stuck, "sm-t-stuck")}><Roll value={map.totals.stuck} /> 막힌 상자</span>
+        <span><Roll value={map.totals.stale} /> 오래된 미정리 상자</span>
+        <span className={tone(map.totals.dead, "sm-t-dead")}><Roll value={map.totals.dead} /> 창 없음</span>
+        <span><Roll value={map.totals.alerts} /> 열린 경보</span>
         {data.live === null && <span>세션 상태를 지금 알 수 없습니다.</span>}
         {!data.hierarchy && <span>관계표가 없어 모든 역할을 한 기지에 모았습니다.</span>}
       </p>
@@ -170,6 +229,7 @@ export default function StrategyMap() {
                 {[0, 1, 2, 3, 4].map((i) => <Crate key={i} x={(i % 3) * 13 - 13} y={-Math.floor(i / 3) * 11 + (i % 3) * 5} kind="planned" />)}
                 <text className="sm-base-label" y={36}>발령 전 창고 {map.depot}</text>
               </g>}
+              {motion && <Motion key={motion.id} events={motion.events} spots={spots} depot={{ x: depotX, y: HEAD_ROOM + TILE_H }} />}
             </svg>}
         </div>
         <aside className="sm-side" aria-live="polite">
