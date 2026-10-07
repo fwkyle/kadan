@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 const listeners = new Set<() => void>();
 const notify = () => {
   for (const listener of listeners) listener();
@@ -57,13 +58,18 @@ export function navigate(
   if (url.origin !== location.origin || url.pathname !== "/") return false;
   if (!bypassGuard && !mayLeave()) return false;
   if (!replace) index++;
+  // 다른 화면으로 옮길 때만 본문이 살짝 겹쳐 넘어간다(2026-10-07 모션). 같은 화면의 필터·페이지 변경은 그대로.
+  const changesView = new URL(accepted).hash !== url.hash;
   history[replace ? "replaceState" : "pushState"](
     { ...history.state, kadanIndex: index },
     "",
     url,
   );
   accepted = location.href;
-  notify();
+  const doc = typeof document === "undefined" ? null : document as Document & { startViewTransition?: (update: () => void) => unknown };
+  if (changesView && doc?.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches)
+    doc.startViewTransition(() => flushSync(notify));
+  else notify();
   return true;
 }
 export function patchLocation(

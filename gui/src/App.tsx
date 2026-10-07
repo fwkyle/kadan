@@ -17,8 +17,9 @@ import {
   viewOf,
 } from "./navigation";
 import type { Summary } from "./types";
-import { AppContext, ErrorMessage, Loading, time } from "./ui";
+import { AppContext, ErrorMessage, Loading, Roll, time } from "./ui";
 import SecretaryNotice from "./SecretaryNotice";
+import { useFreshMarks } from "./fresh";
 import { usePaneScroll } from "./scroll";
 import { readTheme, saveTheme, type Theme } from "./theme";
 const Status = lazy(() => import("./pages/Status")),
@@ -66,6 +67,7 @@ export default function App() {
     [notice, setNotice] = useState(""),
     [theme, setTheme] = useState(readTheme);
   const mainScroll = usePaneScroll("page:" + view);
+  useFreshMarks(view);
   const draft = useCallback((key: string, dirty: boolean) => {
     if (dirty) drafts.current.add(key);
     else drafts.current.delete(key);
@@ -179,7 +181,7 @@ export default function App() {
                 aria-current={section === key ? "page" : undefined}
               >
                 <span>{label}</span>
-                {key === "decisions" && <span className="dw-decision-count">{summary.data?.decisions ?? "?"}</span>}
+                {key === "decisions" && <span className="dw-decision-count">{typeof summary.data?.decisions === "number" ? <Roll value={summary.data.decisions} /> : "?"}</span>}
               </a>
             ))}
           </nav>

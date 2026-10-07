@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useState } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { cardUrl, navigate } from "./navigation";
@@ -356,4 +356,24 @@ export function ActionForm({
       )}
     </form>
   );
+}
+
+// 숫자가 바뀌면 0.6초 동안 굴러가듯 바꾼다(2026-10-07 모션). 움직임 줄이기 설정이면 바로 바꾼다.
+export function Roll({ value }: { value: number }) {
+  const [shown, setShown] = useState(value), from = useRef(value);
+  useEffect(() => {
+    const start = from.current;
+    from.current = value;
+    if (start === value || matchMedia("(prefers-reduced-motion: reduce)").matches) { setShown(value); return; }
+    let raf = 0;
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / 600);
+      setShown(Math.round(start + (value - start) * (1 - (1 - k) ** 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <b className={shown !== value ? "rolling" : undefined}>{shown}</b>;
 }
