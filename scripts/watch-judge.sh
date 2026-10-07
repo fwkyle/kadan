@@ -22,6 +22,11 @@ judge_pid=$!
 trap 'kill -TERM "$judge_pid" 2>/dev/null || true; exit 143' TERM INT
 wait "$judge_pid" || judge_status=$?
 printf '%s\n' "$judge_status" >"$judge_dir/exit-code.txt"
+# 인터넷이 없어 공급자 주소를 못 찾은 실패는 따로 표시한다(2026-10-07: 맥북 잠자기 중 잠깐 깨어 부른 호출). 감시기는 알림 없이
+# 다음 정기 점검에 다시 부른다. 아래 문구가 분명할 때만 표시하고, 그 밖의 실패는 호출 실패 그대로 둔다.
+if [[ "$judge_status" != 0 ]] && grep -qE 'getaddrinfo (ENOTFOUND|EAI_AGAIN)|Provider unreachable|ENETUNREACH|ENETDOWN|EHOSTUNREACH' "$judge_dir/diagnostic.log"; then
+  echo 'KADAN_JUDGE_NETWORK=1' >&2
+fi
 if [[ -f "$judge_dir/result.txt" ]]; then cat "$judge_dir/result.txt"; fi
 # 결과와 진단은 임시 증거로 보존한다. 자동 삭제하지 않는다.
 exit "$judge_status"

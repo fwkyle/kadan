@@ -325,3 +325,14 @@ test('감시 AI 폴백: 보고 누락·취소는 내려가지 않고, 설정이 
  assert.equal(r.reason,'call-failed');assert.deepEqual(envs,[process.env.KADAN_JUDGE_MODEL]);
  assert.equal(g.rows().find(e=>e.kind==='watch-ai-call').judgeSource,'profile');
 });
+
+test('감시 AI 폴백: 인터넷 없음·잠자기는 모델 탓이 아니라 다음 모델로 내려가지 않는다(2026-10-07)',async()=>{
+ for(const [marker,reason] of [['KADAN_JUDGE_NETWORK=1','network'],['KADAN_JUDGE_SLEPT=1','slept']]){
+  const f=fixture();let calls=0;
+  const r=await new WatchAI({...f.options,readSettings:watchSettings([{runner:'codex',model:'m-2',effort:'high'}]),
+   spawn:()=>{calls++;return {status:1,stdout:'',stderr:`${marker}\n`};}})
+   .run({judgeCmd:'fake',source:'stall',role:'p-작업자',parents,input:{}});
+  assert.equal(r.reason,reason);assert.equal(calls,1);
+  assert.equal(f.rows().find(e=>e.kind==='watch-ai-call').reason,reason);
+ }
+});

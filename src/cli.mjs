@@ -23,7 +23,8 @@ import {runnersCommand} from "./runners-command.mjs";
 import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand, closeCardAfterDone } from "./card-command.mjs";
-import { registerStartedRole } from "./hierarchy-register.mjs";
+import { registerRoleManually, registerStartedRole } from "./hierarchy-register.mjs";
+import { runAdopt } from "./adopt.mjs";
 import { hierarchyCommand } from './hierarchy-prune.mjs';
 import {workCommand} from './work-command.mjs';
 import { runInit, runUp } from './quickstart.mjs';
@@ -1493,7 +1494,8 @@ function cmdStart(argv, flags) {
     })`
   );
   // 감시 알림이 갈 곳을 사람이 따로 적지 않아도 되게 한다. 실패는 알리기만 하고 시작을 막지 않는다.
-  const registration = registerStartedRole({
+  // --parent가 있으면 만든 역할 대신 그 상위로 적는다(대화 옮기기: 비서가 대신 실행해도 상위는 사용자).
+  const registration = typeof flags.parent === "string" ? registerRoleManually({ role, parent: flags.parent, home: ledgerHome() }) : registerStartedRole({
     role,
     cmd: startedCmd,
     creator: resolveLedgerBy({ env: process.env }),
@@ -2122,6 +2124,21 @@ function cmdUp(_argv, flags) {
   });
 }
 
+// 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(2026-10-06 [kyle]).
+function cmdAdopt(argv, flags) {
+  if (floor.name === "tmux" && !flags.hidden) requireWindowChoice();
+  try {
+    runAdopt({
+      role: argv[0], flags, floor, sessionName,
+      start: (startArgv, startFlags) => cmdStart(startArgv, startFlags),
+      send: ({ role, session, message, roleProfile }) => {
+        const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
+        console.log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
+      },
+    });
+  } catch (error) { die(error.message, 2); }
+}
+
 // 로그인할 때 `kadan up --hidden`을 창 없이 한 번 실행하는 macOS LaunchAgent(2026-10-06 [kyle]). 되살리기(KeepAlive)는 없다.
 function cmdAutostart(argv) {
   if (process.platform !== "darwin") die("autostart는 macOS LaunchAgent용이다");
@@ -2328,6 +2345,7 @@ const COMMANDS = {
   plan: cmdPlan,
   init: cmdInit,
   up: cmdUp,
+  adopt: cmdAdopt,
   autostart: cmdAutostart,
   start: cmdStart,
   send: cmdSend,
@@ -2350,7 +2368,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|autostart|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
+      "사용법: kadan <init|up|adopt|autostart|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }

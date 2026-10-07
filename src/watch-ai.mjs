@@ -11,6 +11,8 @@ const quote = value => `'${String(value).replace(/'/g,"'\\''")}'`;
 const digest = text => createHash('sha256').update(text).digest('hex');
 // 다음 모델로 내려가는 결과: 모델이 응답하지 못한 경우만. 보고 누락·불완전은 모델이 돌았는데 지시를 어긴 것이라 내려가지 않는다.
 const UNAVAILABLE = new Set(['timeout','call-failed']);
+// 인터넷 없음·잠자기는 모델 탓이 아니다. 모든 모델이 같은 연결을 쓰므로 다음 모델로 내려가지 않고 멈춘다(2026-10-07).
+export const OFFLINE_REASONS = new Set(['network','slept']);
 export class WatchAI {
   constructor(options) {
     this.reports=new WatchReports(options);
@@ -71,6 +73,7 @@ export class WatchAI {
     fs.writeFileSync(file('stderr.txt'),stderr,{mode:0o600});
     const receipt=this.reports.receipt(request.requestId);
     const reason=receipt?.complete?'reported':signal?.aborted||stderr.includes('KADAN_JUDGE_CANCELLED=1')?'cancelled'
+      :stderr.includes('KADAN_JUDGE_SLEPT=1')?'slept':stderr.includes('KADAN_JUDGE_NETWORK=1')?'network'
       :result.error?.code==='ETIMEDOUT'||stderr.includes('KADAN_JUDGE_TIMEOUT=1')?'timeout'
       :result.error||result.status!==0?'call-failed':receipt?'report-incomplete':'report-missing';
     const call={kind:'watch-ai-call',by:'watch',requestId:request.requestId,role:request.role,session:request.session,
