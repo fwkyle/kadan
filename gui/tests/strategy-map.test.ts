@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, placeUnits, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
+import { buildMap, diffMap, placeUnits, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -106,4 +106,26 @@ test("3D 배치: 2D와 같은 칸을 바닥 좌표로, 기지는 x로 늘어서�
   assert.equal(world.size.x, world.depot!.x + CELL / 2);
   assert.equal(worldLayout(map.bases, 0, false).depot, null, "담당 없는 실행이 없으면 창고도 없다");
   assert.ok(worldLayout(map.bases, map.depot, true).bases.length >= world.bases.length, "쉬는 역할도 보기를 켜면 기지가 줄지 않는다");
+});
+
+test("모션: 직전 지도와 비교해 창고→유닛·유닛→유닛 이동, 빠진 카드, 상태 변화만 뽑는다", () => {
+  const before = buildMap({ hierarchy, rows, live, alerts: null });
+  assert.deepEqual(diffMap(null, before), [], "처음 그릴 때는 움직이지 않는다");
+  assert.deepEqual(diffMap(before, before), [], "바뀐 게 없으면 움직이지 않는다");
+  const moved = rows.map((r) =>
+    r.key === "r/4" ? row("r/4", "m-작업자", "running") // 창고 → 작업자(발령)
+    : r.key === "r/3" ? row("r/3", "m-작업자", "running") // 검수자 → 작업자(담당 바뀜)
+    : r);
+  const after = buildMap({ hierarchy, rows: [...moved.filter((r) => r.key !== "r/1"), row("r/9", "m-검수자", "running")], live, alerts: null });
+  const events = diffMap(before, after);
+  const flies = events.filter((e) => e.kind === "fly").sort((a, b) => (a.kind === "fly" && b.kind === "fly" ? a.key.localeCompare(b.key) : 0));
+  assert.deepEqual(flies, [
+    { kind: "fly", key: "r/3", from: "m-검수자", to: "m-작업자" },
+    { kind: "fly", key: "r/4", from: null, to: "m-작업자" },
+    { kind: "fly", key: "r/9", from: null, to: "m-검수자" },
+  ], "창고→유닛(발령), 유닛→유닛(담당 바뀜), 새 카드도 창고에서 온 것으로 그린다. 그대로인 카드는 움직이지 않는다");
+  assert.deepEqual(events.filter((e) => e.kind === "leave"), [{ kind: "leave", key: "r/1", from: "m-작업자" }]);
+  const stuck = buildMap({ hierarchy, rows: rows.map((r) => (r.key === "r/3" ? row("r/3", "m-검수자", "stuck") : r)), live, alerts: null });
+  assert.deepEqual(diffMap(before, stuck).filter((e) => e.kind === "state"), [{ kind: "state", role: "m-검수자", from: "running", to: "stuck" }]);
+  assert.equal(diffMap(before, after, 2).length, 2, "한 번에 limit개까지만");
 });

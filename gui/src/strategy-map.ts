@@ -179,3 +179,35 @@ export function worldLayout(bases: Base[], depot: number, showResting: boolean, 
   const x1 = depotAt ? depotAt.x + CELL / 2 : Math.max(0, cursor - BASE_GAP);
   return { bases: out, depot: depotAt, size: { x: x1, z: Math.max(CELL, ...out.map((b) => b.depth)) } };
 }
+
+// 모션(2026-10-07 [kyle]): 직전 지도와 새 지도를 비교해 "바뀐 것"만 뽑는다. 장식이 아니라 변화를 알리는 움직임이다.
+// 처음 그릴 때(직전 없음)는 아무것도 움직이지 않는다. 한 번에 너무 많이 움직이지 않게 limit개까지만.
+// fly: 카드가 창고(from=null)나 다른 유닛에서 이 유닛으로 왔다. 새로 생긴 카드도 창고에서 온 것으로 그린다.
+// leave: 유닛이 들고 있던 카드가 지도에서 빠졌다(완료·취소·대체 등 — 이유는 구분하지 않는다).
+// state: 유닛 상태가 바뀌었다.
+export type MapEvent =
+  | { kind: "fly"; key: string; from: string | null; to: string }
+  | { kind: "leave"; key: string; from: string }
+  | { kind: "state"; role: string; from: UnitState; to: UnitState };
+function cardPlaces(model: MapModel) {
+  const at = new Map<string, string | null>();
+  for (const row of model.depotRows) at.set(row.key, null);
+  for (const base of model.bases) for (const unit of base.units) for (const row of unit.rows) at.set(row.key, unit.role);
+  return at;
+}
+export function diffMap(prev: MapModel | null, next: MapModel, limit = 8): MapEvent[] {
+  if (!prev) return [];
+  const before = cardPlaces(prev), after = cardPlaces(next), events: MapEvent[] = [];
+  for (const [key, to] of after) {
+    if (to === null) continue;
+    const from = before.has(key) ? before.get(key)! : null;
+    if (!before.has(key) || from !== to) events.push({ kind: "fly", key, from, to });
+  }
+  for (const [key, from] of before) if (from !== null && !after.has(key)) events.push({ kind: "leave", key, from });
+  const states = new Map(prev.bases.flatMap((b) => b.units).map((u) => [u.role, u.state] as const));
+  for (const unit of next.bases.flatMap((b) => b.units)) {
+    const was = states.get(unit.role);
+    if (was && was !== unit.state) events.push({ kind: "state", role: unit.role, from: was, to: unit.state });
+  }
+  return events.slice(0, limit);
+}
