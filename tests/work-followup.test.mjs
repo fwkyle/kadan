@@ -79,6 +79,21 @@ test('업무에 직접 연결한 결정은 카드가 그 업무의 실행이 아
  assert.equal(f.detail().followup.state,before,'결정이 닫히면 평소대로');
 });
 
+test('같은 판에 열린 업무가 있으면 업무 밖 카드의 결정은 --work 없이 저장하지 않는다(2026-10-08)',()=>{
+ const f=fixture('sqlite','implementation');
+ f.works.change(f.key,'update',{board:'test'},{revision:f.works.get(f.key).revision,by:'감독',note:'판 지정'});
+ const study=f.cards.create({repo:'test',id:'study',repoPath:f.home,body:'# 업무 밖 조사 카드'});
+ f.cards.update('test/study',{board:'test'},{revision:study.revision,note:'판 지정'});
+ const ask={question:'합칠까요?',options:['합침','보류'],recommendation:'합침',reason:'합류 판단\n- 확인 경로 없음: 시험'};
+ assert.throws(()=>f.decisions.request('test/study',ask,'슈퍼감독'),e=>/업무 연결 필요/.test(e.message)&&e.message.includes(f.key));
+ assert.deepEqual(f.decisions.list(),[],'거부한 요청은 저장하지 않는다');
+ const none=f.decisions.request('test/study',{...ask,work:'없음'},'슈퍼감독');assert.equal(none.work,undefined);
+ assert.equal(f.decisions.request(f.execution,{...ask,question:'실행 카드 질문'},'슈퍼감독').work,undefined,'업무의 실행 카드는 지금처럼 연결 없이 된다');
+ const other=f.cards.create({repo:'test',id:'other-board',repoPath:f.home,body:'# 다른 판'});
+ f.cards.update('test/other-board',{board:'elsewhere'},{revision:other.revision,note:'판 지정'});
+ assert.ok(f.decisions.request('test/other-board',{...ask,question:'다른 판 질문'},'슈퍼감독').id,'같은 판에 열린 업무가 없으면 그대로 된다');
+});
+
 test('현재 보류·외부 대기와 종료를 구분하고 옛 결과는 새 발령의 합격이 아니다',()=>{
  const f=fixture();let c=f.cards.get(f.execution);
  f.cards.update(c.key,{activity:'waiting'},{revision:c.revision,by:c.role,noteKind:'progress',note:'외부 결과 대기'});
