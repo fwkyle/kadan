@@ -34,8 +34,15 @@ export class DecisionStore {
  // work: 결정이 막고 있는 업무. 카드가 그 업무의 실행이 아니어도(조사 카드 등) 감시·후속 표시가 업무를 답 대기로 알아보게 한다(2026-10-07 [kyle]).
  request(card,{question,options,recommendation,reason,work},by){return this.locked(()=>{
   if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독만 작성');
-  new CardStore(this.home).get(card);this.list();
-  if(work!==undefined){work=required(work,'업무 주소').replace(/^work:/,'');if(new WorkStore(this.home).get(work).status!=='open')throw new Error('열린 업무만 연결');}
+  const c=new CardStore(this.home).get(card);this.list();
+  if(work!==undefined&&String(work).trim()==='없음')work=undefined;
+  else if(work!==undefined){work=required(work,'업무 주소').replace(/^work:/,'');if(new WorkStore(this.home).get(work).status!=='open')throw new Error('열린 업무만 연결');}
+  else{
+   // 업무 밖 카드의 결정은 막는 업무를 밝혀야 저장한다(2026-10-08 [kyle]: 지침만으로는 --work 누락이 반복돼 감독이 15분마다 깨워졌다).
+   const open=new WorkStore(this.home).list().filter(w=>w.status==='open');
+   const candidates=open.some(w=>w.executions.some(x=>x.key===card))?[]:open.filter(w=>c.board&&w.board===c.board).map(w=>w.key);
+   if(candidates.length)throw new Error(`업무 연결 필요: 이 카드는 업무의 실행이 아닙니다. 이 결정이 막는 업무를 --work로 적으세요: ${candidates.join(', ')}. 막는 업무가 없으면 --work 없음`);
+  }
   question=required(question,'질문');reason=required(reason,'추천 이유/사용자 판단 필요 이유');
   assertVerifyPath(question,reason);
   if(!Array.isArray(options)||options.length<2||options.length>4)throw new Error('선택지 2~4개 필요');
@@ -67,7 +74,7 @@ export class DecisionStore {
 }
 export function decisionCommand(args,flags,{home,by,notify}){
  const s=new DecisionStore(home,{notify}),[cmd,key]=args;
- if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
+ if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
  if(cmd==='request')return s.request(key,{question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,work:flags.work},by);
  if(cmd==='list')return s.list().filter(d=>!flags.status||d.status===flags.status);
  if(cmd==='show')return s.get(key);
