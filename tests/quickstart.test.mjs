@@ -115,9 +115,12 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
   assert.match(up.stdout, /시작됨: kadan-비서/); assert.match(up.stdout, /시작됨: kadan-대시보드/); assert.match(up.stdout, /첫 지문 전송됨/);
   const list = spawnSync('tmux', ['-u', '-L', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).stdout;
   assert.match(list, /kadan-비서/); assert.match(list, /kadan-대시보드/);
+  // 서버가 떴는지는 화면 빌드와 무관한 주소로 본다. 화면(/)은 빌드가 있을 때만 200이다(없으면 의도대로 503 안내) — CI는 빌드 뒤 시험한다.
   let status = null;
-  for (let i = 0; i < 40 && status !== 200; i++) { try { status = (await fetch(`http://127.0.0.1:${port}/`)).status; } catch { await new Promise((r) => setTimeout(r, 250)); } }
+  for (let i = 0; i < 40 && status !== 200; i++) { try { status = (await fetch(`http://127.0.0.1:${port}/api/dashboard/session`)).status; } catch { await new Promise((r) => setTimeout(r, 250)); } }
   assert.equal(status, 200);
+  const built = fs.existsSync(new URL('../gui/dist/index.html', import.meta.url));
+  assert.equal((await fetch(`http://127.0.0.1:${port}/`)).status, built ? 200 : 503);
   const again = spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden'], { env, encoding: 'utf8', timeout: 60000 });
   assert.match(again.stdout, /비서 이미 살아 있음/); assert.match(again.stdout, /대시보드 이미 살아 있음/);
   const starts = readSystemLedger(home).filter(e=>e.kind==='start');

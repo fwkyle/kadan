@@ -126,3 +126,18 @@ test('답을 기다리는 일은 할 일에서 뺀다 — 감독을 통째로 �
   const broken=await simulate({minutes:20,decisions:null});
   assert.deepEqual(broken.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정 목록을 못 읽으면 아무것도 빼지 않는다');
 });
+
+test('사용자 결정이 업무 밖 카드에 걸려 있어도 결정의 work로 그 업무를 할 일에서 뺀다(2026-10-07 운영 감독 반복 깨움)',async()=>{
+  const doneCard={...card,status:'done',activity:'done'};
+  const work={key:'repo/w1',status:'open',owner:'p-감독',executions:[{key:'repo/t1'}],at:stamp(0)};
+  const entries=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)}];
+  const decision={id:'d1',card:'repo/study',requestedBy:'p-슈퍼감독',status:'open',at:stamp(0)};
+  // 실제 사고 모양: 결정 카드(repo/study)가 업무의 실행이 아니고 업무 연결도 없으면 업무는 계속 할 일로 남는다.
+  const unlinked=await simulate({minutes:20,cards:[doneCard],works:[work],entries,decisions:[decision]});
+  assert.deepEqual(unlinked.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']]);
+  const linked=await simulate({minutes:40,cards:[doneCard],works:[work],entries,decisions:[{...decision,work:'repo/w1'}]});
+  assert.deepEqual(linked.nudges,[]);
+  assert.ok(!linked.alerts.some(a=>a.alertKind==='놀고 있음'));
+  const cancelled=await simulate({minutes:20,cards:[doneCard],works:[work],entries,decisions:[{...decision,work:'repo/w1',status:'cancelled'}]});
+  assert.deepEqual(cancelled.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정이 닫히면 다시 할 일');
+});
