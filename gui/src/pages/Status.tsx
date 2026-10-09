@@ -1,10 +1,18 @@
 import { useContext, useEffect, useRef } from "react";
 import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
-import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse } from "../ui";
+import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse, Spark, useSkin } from "../ui";
+import Radar from "../Radar";
+import { radarBlips } from "../radar-blips";
 import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 
+// 일을 들고 있는데 창이 없는 담당(레이더의 창 없음 점). 세션 상태를 모르면 비워 둔다.
+function deadRoles(data: { live: { role: string }[] | null; rows: Row[] }) {
+  if (!data.live) return [];
+  const alive = new Set(data.live.map((s) => s.role));
+  return [...new Set(data.rows.flatMap((r) => (r.owner && (r.bucket === "running" || r.bucket === "stuck") && !alive.has(r.owner) ? [r.owner] : [])))];
+}
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
@@ -15,6 +23,7 @@ type StatusData = Stamp & {
   resourceError: string | null; workError: string | null; decisions: Decision[] | null;
   recent: {at: string; kind: string; label: string; role: string; card: {key: string; title: string}}[];
   recentCounts: Record<string, number>;
+  activity?: Record<string, number[]>;
 };
 // 서버 bucketGroups와 같은 묶음. 결과 대기는 작업중에, 보류(archived)는 진행 전에 센다(2026-10-05 [kyle]).
 const groups = [
@@ -24,6 +33,7 @@ const groups = [
 ];
 export default function Status({url}: {url: URL}) {
   const resource = useResource<StatusData>("status"), data = resource.data;
+  const skin = useSkin();
   const context = useContext(AppContext), scrolled = useRef("");
   useEffect(() => {
     if (!data || !url.hash.startsWith("#status-") || scrolled.current === url.hash) return;
@@ -95,6 +105,7 @@ export default function Status({url}: {url: URL}) {
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
     {!data ? <Loading/> : <>
       <div className="st-band" role="group" aria-label="지금 내가 볼 것 · 다섯 질문">
+        {skin === "space" && <Radar blips={radarBlips({ alerts: data.alerts, rows: data.rows, deadRoles: deadRoles(data) })} />}
         {bandChips({decisions: data.decisions?.length ?? null, stopped: stoppedCount, running: bucket("running").length, alerts: data.alerts, flow: data.flow, live: data.live}).map(chip =>
           <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{typeof chip.num === "number" ? <Roll value={chip.num}/> : chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
@@ -104,7 +115,7 @@ export default function Status({url}: {url: URL}) {
       <ul id="status-live" className="st-live" aria-label="살아 있는 담당과 모델">
         {data.live === null ? <li className="st-live-row"><small>세션 상태 모름</small></li>
           : data.live.length === 0 ? <li className="st-live-row"><small>열린 담당 창이 없습니다.</small></li>
-          : data.live.map(s => <li key={s.role} data-fresh={`live:${s.role}:${s.pidState}`} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small></li>)}
+          : data.live.map(s => <li key={s.role} data-fresh={`live:${s.role}:${s.pidState}`} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small><Spark values={data.activity?.[s.role]} /></li>)}
         <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
       </ul>
       <section id="status-supers" className="st-section">

@@ -483,16 +483,17 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
     radial-gradient(1px 1px at 87px 170px, rgba(255, 255, 255, .6), rgba(0, 0, 0, 0)),
     radial-gradient(1.5px 1.5px at 205px 128px, rgba(255, 240, 210, .8), rgba(0, 0, 0, 0)),
     radial-gradient(1px 1px at 60px 215px, rgba(200, 225, 255, .55), rgba(0, 0, 0, 0));
-  background-size: 240px 240px; animation: space-drift-a 240s linear infinite;
+  background-size: 240px 240px; animation: space-drift-a 40s linear infinite;
 }
 :root[data-skin="space"] body::after {
   background-image: radial-gradient(2px 2px at 70px 90px, rgba(170, 210, 255, .7), rgba(0, 0, 0, 0)),
     radial-gradient(1.5px 1.5px at 330px 260px, rgba(255, 255, 255, .6), rgba(0, 0, 0, 0)),
     radial-gradient(2px 2px at 250px 400px, rgba(255, 210, 230, .45), rgba(0, 0, 0, 0));
-  background-size: 480px 480px; animation: space-drift-b 360s linear infinite; opacity: .8;
+  background-size: 480px 480px; animation: space-drift-b 110s linear infinite, space-twinkle 5s ease-in-out infinite alternate; opacity: .8;
 }
 @keyframes space-drift-a { to { transform: translateY(240px); } }
 @keyframes space-drift-b { to { transform: translateY(480px); } }
+@keyframes space-twinkle { from { opacity: .35; } to { opacity: .95; } }
 :root[data-skin="space"] .dw-shell { position: relative; z-index: 1; }
 :root[data-skin="space"] .dw-top { border-bottom-color: rgba(120, 200, 255, .25); box-shadow: 0 1px 18px rgba(60, 140, 255, .12); }
 :root[data-skin="space"] .dw-brand { letter-spacing: .12em; color: rgb(160, 220, 255); text-shadow: 0 0 10px rgba(120, 200, 255, .7); }
@@ -511,6 +512,9 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 }
 :root[data-skin="space"] :is(.toast, .decision-toast, .recommendation-badge, .sm-viewswitch button[aria-pressed="true"]) { color: rgb(240, 246, 255); }
 :root[data-skin="space"] .sm-badge circle { fill: rgb(225, 235, 255); }
+:root[data-skin="space"] .sm-badge text { fill: rgb(20, 30, 50); }
+:root[data-skin="space"] .sm-s-dead .sm-badge circle { fill: rgb(220, 60, 50); }
+:root[data-skin="space"] .sm-s-stuck .sm-badge circle { fill: rgb(225, 160, 40); }
 :root[data-skin="space"] :is(.sm-s-dead, .sm-s-stuck) .sm-badge text { fill: rgb(255, 255, 255); }
 :root[data-skin="space"] .pulse { background: rgb(90, 230, 190); }
 :root[data-skin="space"] .pulse-slow { background: rgb(90, 170, 210); }
@@ -552,3 +556,34 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 :root[data-skin="space"] .sm-tile { fill: rgba(110, 170, 255, .13); }
 :root[data-skin="space"] .sm-shadow { fill: rgba(0, 0, 0, .45); }
 :root[data-skin="space"] .sm-stage { background-color: rgba(6, 12, 30, .55); }
+/* 활동 선 그래프(2026-10-07, 모든 테마). */
+.spark { display: inline-block; vertical-align: middle; margin-left: 6px; overflow: visible; }
+.spark polyline { fill: none; stroke: #22694d; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+.spark-idle polyline { stroke: #aab3ad; }
+.sm-activity { display: flex; align-items: center; gap: 6px; }
+.sm-activity .spark { margin-left: 0; }
+:root[data-skin="space"] .spark polyline { stroke: rgb(110, 225, 200); filter: drop-shadow(0 0 2px rgba(110, 225, 200, .6)); }
+:root[data-skin="space"] .spark-idle polyline { stroke: rgb(90, 105, 135); filter: none; }
+/* 레이더(우주 테마). 쓸고 지나가는 빛은 회전만, 점은 크기·투명도만 움직인다. */
+.radar { position: relative; flex: none; width: 74px; height: 74px; align-self: center; border-radius: 50%; overflow: hidden; text-decoration: none;
+  border: 1px solid rgba(120, 200, 255, .45); box-shadow: 0 0 18px rgba(60, 160, 255, .25), inset 0 0 14px rgba(60, 160, 255, .2);
+  background: radial-gradient(circle, rgba(0, 0, 0, 0) 0 22%, rgba(120, 200, 255, .22) 22.5% 23.5%, rgba(0, 0, 0, 0) 24% 46%, rgba(120, 200, 255, .22) 46.5% 47.5%, rgba(0, 0, 0, 0) 48%),
+    linear-gradient(rgba(0, 0, 0, 0) 49.5%, rgba(120, 200, 255, .2) 49.5% 50.5%, rgba(0, 0, 0, 0) 50.5%),
+    linear-gradient(90deg, rgba(0, 0, 0, 0) 49.5%, rgba(120, 200, 255, .2) 49.5% 50.5%, rgba(0, 0, 0, 0) 50.5%), rgba(4, 16, 30, .9); }
+.radar-sweep { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, rgba(90, 230, 190, .55), rgba(90, 230, 190, 0) 70deg, rgba(0, 0, 0, 0) 360deg); animation: radar-spin 4s linear infinite; }
+@keyframes radar-spin { to { transform: rotate(360deg); } }
+.radar-blip { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgb(255, 210, 90); animation: radar-blip 1.6s ease-in-out infinite; }
+.radar-alert, .radar-dead { background: rgb(255, 90, 80); box-shadow: 0 0 6px rgba(255, 90, 80, .9); }
+.radar-stuck { background: rgb(255, 190, 70); box-shadow: 0 0 6px rgba(255, 190, 70, .8); }
+.radar-stale { background: rgb(170, 150, 120); }
+@keyframes radar-blip { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.7); } }
+.radar-count { position: absolute; right: 6px; bottom: 3px; font: 10px ui-monospace, Menlo, monospace; color: rgb(150, 205, 255); }
+/* 우주 지도의 우주선. */
+.sm-ship .sm-window { fill: rgb(200, 235, 255); }
+.sm-ship .sm-wing { fill: rgb(70, 90, 130); }
+.sm-engine { fill: rgba(120, 210, 255, .85); transform-box: fill-box; transform-origin: center top; animation: sm-engine .35s ease-in-out infinite alternate; }
+@keyframes sm-engine { from { transform: scaleY(.7); opacity: .6; } to { transform: scaleY(1.25); opacity: 1; } }
+.sm-debris { transform-box: fill-box; transform-origin: center; animation: sm-debris 18s linear infinite; }
+.sm-s-dead .sm-debris .sm-body { fill: rgb(110, 120, 140); }
+@keyframes sm-debris { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .radar-sweep, .radar-blip, .sm-engine, .sm-debris { animation: none; } }

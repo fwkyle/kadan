@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
-import { CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, time } from "../ui";
+import { CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, Spark, time, useSkin } from "../ui";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
 import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
@@ -11,6 +11,7 @@ import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TIL
 // 색은 전부 style.css의 클래스로만 준다 — SVG 속성에 색을 적으면 다크 모드 변환(theme.mjs)을 거치지 않는다.
 type StatusData = Stamp & {
   rows: Row[]; live: LiveSession[] | null; alerts: OpenAlerts | null; hierarchy: Record<string, string> | null;
+  activity?: Record<string, number[]>;
 };
 const KIND_LABEL = { super: "슈퍼감독", director: "감독", worker: "작업자·검수자" } as const;
 const SLAB = 10, HEAD_ROOM = 86, FOOT_ROOM = 44, GAP = 56, COLS = 4;
@@ -54,7 +55,20 @@ function unitLabel(unit: Unit) {
   const work = unit.crates.running + unit.crates.stuck + unit.crates.stale;
   return `${unit.role} · ${KIND_LABEL[unit.kind]} · ${STATE_LABEL[unit.state]}${work ? ` · 진행 카드 ${work}장` : ""}${unit.alerts ? ` · 경보 ${unit.alerts}건` : ""}`;
 }
-function UnitFigure({ unit, x, y, base, selected, onSelect }: { unit: Unit; x: number; y: number; base: Base; selected: boolean; onSelect: () => void }) {
+// 우주 테마의 유닛(2026-10-07 [kyle]): 우주선. 몸통은 사람 모양과 같은 sm-body라 상태 색을 그대로 받는다.
+// 작업중이면 엔진 불꽃, 창 없음이면 회색 잔해로 천천히 돈다(CSS). 왕관(슈퍼감독)·안테나 깃발(감독)은 그대로.
+function Ship({ unit }: { unit: Unit }) {
+  return <g className={"sm-figure sm-ship" + (unit.state === "dead" ? " sm-debris" : "")}>
+    {unit.state === "running" && <ellipse className="sm-engine" cx={0} cy={3} rx={4.5} ry={7} />}
+    <path className="sm-wing" d="M-9,-10 L-15,-1 L-9,-2 Z M9,-10 L15,-1 L9,-2 Z" />
+    <path className="sm-body" d="M0,-42 C7,-34 9,-22 9,-8 L9,0 L-9,0 L-9,-8 C-9,-22 -7,-34 0,-42 Z" />
+    <circle className="sm-window" cx={0} cy={-25} r={3.6} />
+    {unit.kind === "super" && <path className="sm-crown" d="M-7,-47 L-7,-52 L-3.5,-49 L0,-54 L3.5,-49 L7,-52 L7,-47 Z" />}
+    {unit.kind === "director" && <g className="sm-flag"><line x1={0} y1={-42} x2={0} y2={-56} /><path d="M0,-56 L11,-52.5 L0,-49 Z" /></g>}
+  </g>;
+}
+
+function UnitFigure({ unit, x, y, base, selected, onSelect, ship }: { unit: Unit; x: number; y: number; base: Base; selected: boolean; onSelect: () => void; ship: boolean }) {
   const scale = unit.kind === "super" ? 1.3 : unit.kind === "director" ? 1.12 : 1;
   const key = (e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } };
   const crates = crateKinds(unit), shown = crates.slice(0, 4), name = shortName(unit.role, base.super);
@@ -66,12 +80,12 @@ function UnitFigure({ unit, x, y, base, selected, onSelect }: { unit: Unit; x: n
     {selected && <ellipse className="sm-ring" cx={0} cy={0} rx={22} ry={10} />}
     <ellipse className="sm-shadow" cx={0} cy={0} rx={15} ry={6} />
     <g transform={`scale(${scale})`}>
-      <g className="sm-figure">
+      {ship ? <Ship unit={unit} /> : <g className="sm-figure">
         <path className="sm-body" d="M-10,-2 Q-11,-24 0,-26 Q11,-24 10,-2 Q0,3 -10,-2 Z" />
         <circle className="sm-head" cx={0} cy={-32} r={7.5} />
         {unit.kind === "super" && <path className="sm-crown" d="M-7,-40 L-7,-45 L-3.5,-42 L0,-47 L3.5,-42 L7,-45 L7,-40 Z" />}
         {unit.kind === "director" && <g className="sm-flag"><line x1={9} y1={-14} x2={9} y2={-44} /><path d="M9,-44 L21,-40 L9,-36 Z" /></g>}
-      </g>
+      </g>}
     </g>
     {badge && <g className="sm-badge" transform={`translate(${12 * scale} ${-50 * scale})`}><circle r={8} /><text y={3.5}>{badge}</text></g>}
     {shown.map((kind, i) => <Crate key={i} x={20 + (i % 2) * 11} y={-2 - Math.floor(i / 2) * 9 + (i % 2) * 5} kind={kind} />)}
@@ -125,6 +139,7 @@ function Depot({ rows, close }: { rows: Row[]; close: () => void }) {
 
 export default function StrategyMap() {
   const resource = useResource<StatusData>("status"), data = resource.data;
+  const ship = useSkin() === "space";
   const [selected, setSelected] = useState<string | null>(null);
   const [showResting, setShowResting] = useState(false);
   const [view, setView] = useState<View>(readView);
@@ -195,7 +210,7 @@ export default function StrategyMap() {
                 <polygon className="sm-plat-right" points={slab.right} />
                 <polygon className={"sm-plat-top" + (base.super ? "" : " sm-plat-outside")} points={slab.top} />
                 {placement.placed.map(({ gx, gy }) => { const p = iso(gx, gy); return <ellipse key={`${gx}-${gy}`} className="sm-tile" cx={p.x} cy={p.y} rx={TILE_W / 2 - 8} ry={TILE_H / 2 - 4} />; })}
-                {placement.placed.map(({ unit: u, gx, gy }) => { const p = iso(gx, gy); return <UnitFigure key={u.role} unit={u} base={base} x={p.x} y={p.y}
+                {placement.placed.map(({ unit: u, gx, gy }) => { const p = iso(gx, gy); return <UnitFigure key={u.role} unit={u} base={base} x={p.x} y={p.y} ship={ship}
                   selected={selected === u.role} onSelect={() => setSelected(selected === u.role ? null : u.role)} />; })}
                 <text className="sm-base-label" x={(box.left + box.right) / 2} y={box.bottom + 24}>{base.label} · 유닛 {placement.placed.length}{placement.placed.length < base.units.length ? ` (쉬는 ${base.units.length - placement.placed.length})` : ""}</text>
               </g>)}
@@ -222,6 +237,7 @@ export default function StrategyMap() {
               <dt>직속 상위</dt><dd>{unit.parent ?? (unit.kind === "super" ? "사용자" : "관계표에 없음")}</dd>
               <dt>모델</dt><dd>{unit.model ?? (unit.alive === false ? "창 없음" : "모름")}</dd>
               <dt>경보</dt><dd>{unit.alerts ? `${unit.alerts}건` : "없음"}</dd>
+              <dt>최근 1시간</dt><dd className="sm-activity">{data.activity?.[unit.role] ? <><Spark values={data.activity[unit.role]} width={140} height={22} /><small>{data.activity[unit.role].reduce((a, b) => a + b, 0)}건</small></> : "활동 없음"}</dd>
             </dl>
             <h3>진행 카드 {unit.rows.length}장</h3>
             {unit.rows.length ? <ul className="sm-cards">{unit.rows.map((row) => <li key={row.key}>

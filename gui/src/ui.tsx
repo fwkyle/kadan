@@ -385,3 +385,26 @@ export function Roll({ value }: { value: number }) {
   }, [value]);
   return <b className={shown !== value ? "rolling" : undefined}>{shown}</b>;
 }
+
+// 작은 활동 선 그래프(2026-10-07): 최근 1시간을 5분 칸으로 센 사건 수. 다 0이면 흐린 평평한 선.
+export function Spark({ values, width = 48, height = 14 }: { values?: number[] | null; width?: number; height?: number }) {
+  if (!values?.length) return null;
+  const max = Math.max(1, ...values), step = width / Math.max(1, values.length - 1);
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(height - 1 - (v / max) * (height - 3)).toFixed(1)}`).join(" ");
+  const total = values.reduce((a, b) => a + b, 0);
+  return <svg className={"spark" + (total ? "" : " spark-idle")} width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`최근 1시간 활동 ${total}건`}>
+    <polyline points={points} />
+  </svg>;
+}
+
+// 지금 테마의 꾸밈(우주 등). 테마 버튼이 html의 data-skin을 바꾸면 따라 바뀐다.
+export function useSkin() {
+  const read = () => (typeof document === "undefined" ? undefined : document.documentElement.dataset.skin);
+  const [skin, setSkin] = useState(read);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setSkin(read()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-skin"] });
+    return () => observer.disconnect();
+  }, []);
+  return skin;
+}
