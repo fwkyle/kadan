@@ -1477,18 +1477,27 @@ function cmdStart(argv, flags) {
     }
   }
 
-  appendLedger({ ...buildStartLedgerEntry({
-    floorName: floor.name,
-    role,
-    session,
-    evidence,
-    window: method,
-    rottieTerminalId,
-    orcaTerminalHandle,
-    reused,
-    cmd: startedCmd,
-    cwd: process.cwd(),
-  }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
+  try {
+    appendLedger({ ...buildStartLedgerEntry({
+      floorName: floor.name,
+      role,
+      session,
+      evidence,
+      window: method,
+      rottieTerminalId,
+      orcaTerminalHandle,
+      reused,
+      cmd: startedCmd,
+      cwd: process.cwd(),
+    }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
+  } catch (error) {
+    // 시작 기록이 없는 세션은 다음 start에서 재사용으로 읽혀 막히고 감시에도 잡히지 않는다(2026-10-08).
+    // 방금 만든 세션만 닫는다. 재사용한 세션은 남의 세대라 건드리지 않는다.
+    if (reusing) throw error;
+    let closed = true;
+    try { floor.stop(session); } catch { closed = false; }
+    die(`시작 기록 실패 — ${closed ? `방금 만든 ${session}을 닫았다` : `방금 만든 ${session}을 닫지 못했다(직접 확인)`}: ${error.message}`);
+  }
   console.log(
     `시작됨: ${session} (${floor.name === "rottie" ? "Rottie PID" : "pane PID"} ${pid ?? "?"}, 창: ${method}${
       method === "manual" ? ` — 직접: ${floor.attach(session)}` : ""

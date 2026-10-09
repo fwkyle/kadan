@@ -1,4 +1,5 @@
 // Why: 전달 사실과 작업 발령을 따로 보존하면서 기존 조회의 순서를 유지한다.
+import {acquireDirLock,waitDirUnlocked,LOCK_WAIT_MS} from './dir-lock.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
@@ -103,16 +104,16 @@ function legacyRows(home) {
 
 export function readLedgerState(home,{locked=false}={}) {
   return storageSnapshot(home,() => {
-    const checkLock = () => {
-      if (!locked && storageMode(home) === 'jsonl' && fs.existsSync(lockPath(home)))
-        throw new Error('도메인 원장 저장 중 또는 미완료 잠금: 상태 확인 필요');
-    };
-    checkLock();
-    const legacy = legacyRows(home);
-    const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true})]));
-    const ordered = validateDomainStreams(streams,legacy);
-    checkLock();
-    return {legacy,streams,ordered};
+    // 쓰는 중이면 끝나기를 기다렸다가 읽고, 읽는 사이 새 쓰기가 끼면 다시 읽는다. 예산을 넘기면 기존처럼 실패한다.
+    const guarded = !locked && storageMode(home) === 'jsonl', lock = lockPath(home), deadline = Date.now() + LOCK_WAIT_MS;
+    const busy = () => new Error(`도메인 원장 저장 중 또는 미완료 잠금: 상태 확인 필요 (${lock})`);
+    for (;;) {
+      if (guarded && !waitDirUnlocked(lock, {waitMs: Math.max(0, deadline - Date.now())})) throw busy();
+      const legacy = legacyRows(home);
+      const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true})]));
+      const ordered = validateDomainStreams(streams,legacy);
+      if (!guarded || !fs.existsSync(lock)) return {legacy,streams,ordered};
+    }
   });
 }
 
@@ -263,12 +264,9 @@ export function appendDomainLedger(entry,home) {
   };
   if (storageMode(home) === 'sqlite') return storageTransaction(home,write);
   // JSONL은 파일 두 개의 원자적 쓰기를 지원하지 않는다. 잠금 + 연결 검증으로
-  // 중간 실패를 성공한 발령으로 읽지 않는다. 중단한 잠금/원문은 자동 삭제하지 않는다.
+  // 중간 실패를 성공한 발령으로 읽지 않는다. 남이 쓰는 중이면 잠깐 기다리고(dir-lock), 중단한 잠금/원문은 자동 삭제하지 않는다.
   const lock = lockPath(home);
-  try { fs.mkdirSync(lock); } catch (error) {
-    if (error.code === 'EEXIST') throw new Error('도메인 원장 저장 중 또는 미완료 잠금: 상태 확인 필요');
-    throw error;
-  }
+  if (!acquireDirLock(lock)) throw new Error(`도메인 원장 저장 중 또는 미완료 잠금: 상태 확인 필요 (${lock})`);
   try { return write(); } finally { fs.renameSync(lock,path.join(home,`.released-ledger-${randomUUID()}`)); }
 }
 

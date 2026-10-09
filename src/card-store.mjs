@@ -1,3 +1,4 @@
+import {acquireDirLock} from './dir-lock.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams,prepareOutsideLock} from './storage.mjs';
 import fs from 'node:fs';
@@ -69,7 +70,7 @@ export class CardStore {
     if(storageMode(this.home)==='sqlite')return transaction(this.home,fn);
     fs.mkdirSync(this.root,{recursive:true,mode:0o700});
     const lock=path.join(this.root,'.lock');
-    try{fs.mkdirSync(lock)}catch{throw new Error('카드 저장 중: 잠시 뒤 상태를 다시 확인');}
+    if(!acquireDirLock(lock))throw new Error('카드 저장 중: 잠시 뒤 상태를 다시 확인');
     try{return fn()}finally{fs.renameSync(lock,path.join(this.root,`.released-${randomUUID()}`))}
   }
   create({repo,id,repoPath,sourcePath,title,body,workType='execution',by='사람'}) {
