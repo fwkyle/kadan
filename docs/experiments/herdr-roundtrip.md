@@ -4,7 +4,7 @@
 
 # herdr 왕복 실험 — 2026-10-11
 
-이 브랜치의 실험 선택값만 `KADAN_FLOOR=herdr`를 허용한다. 정식 바닥 등록·기계 기본값 변경·Rottie 상태창 연동은 포함하지 않는다. 기본값은 여전히 tmux다.
+2026-10-11 사용자 승인으로 `KADAN_FLOOR=herdr`를 선택하는 시험 기능을 제공한다. 정식 바닥 등록·기계 기본값 변경·Rottie 상태창 연동은 포함하지 않는다. 기본값은 여전히 tmux다.
 
 ## 실행 경계
 
@@ -25,18 +25,20 @@
 herdr --session kadan-herdr-test status server
 herdr --session kadan-herdr-test server
 
-# 다른 셸. HOME은 시험 전용 폴더이며 CLI는 이 브랜치의 절대경로다.
+# 다른 셸. KADAN_HOME은 기존 tmux 원장과 분리한 시험 전용 폴더다.
 export KADAN_HOME=/absolute/test/home
 export KADAN_FLOOR=herdr KADAN_WINDOW=none
 export KADAN_HERDR_SOCKET="$HOME/.config/herdr/sessions/kadan-herdr-test/herdr.sock"
 cd /absolute/test/project
-node /absolute/experiment/src/cli.mjs start 판-작업자 --profile worker
-node /absolute/experiment/src/cli.mjs attach 판-작업자
+kadan start 판-작업자 --profile worker
+kadan attach 판-작업자
 ```
 
 시험 HOME에 실행 모델 설정을 별도로 준비한다. 기존 설정/인증을 그대로 사용할지 격리할지는 실행 전에 정하며, 이 바닥이 자동으로 복사하지 않는다.
 
-AI 도구가 실행하는 로그인 셸은 `PATH`를 다시 만들 수 있다. 설치된 `kadan` 대신 생성 환경에 들어 있는 `KADAN_CLI`의 절대경로를 사용한다: `node "$KADAN_CLI" send ...`. CLI 위치를 검증하지 않은 일반 `kadan` 호출은 이 실험의 증거로 인정하지 않는다.
+설치된 `kadan`에 이 시험 기능이 포함되어 있어야 한다. 다른 버전이 설치되어 있다면 시험 기능이 있는 `src/cli.mjs`의 절대경로로 실행한다. AI 도구가 실행하는 로그인 셸은 `PATH`를 다시 만들 수 있으므로, 역할 안에서는 생성 환경에 들어 있는 `KADAN_CLI`의 절대경로를 사용한다: `node "$KADAN_CLI" send ...`.
+
+`kadan attach`는 역할별 `herdr --session ... terminal attach ...` 명령을 출력한다. 출력된 명령을 터미널에서 실행하면 그 역할에 접속한다. `start`가 herdr 서버나 GUI 창을 자동으로 열지는 않는다. 현재 시험 바닥의 자동 알림·감시 운영은 미검증이며, 감독이 직접 결과와 실행 완료를 확인하는 작은 시험에 사용한다.
 
 ## 실측 결과
 
@@ -58,6 +60,8 @@ AI 도구가 실행하는 로그인 셸은 `PATH`를 다시 만들 수 있다. �
 | 두 실제 역할의 질문 → 최종 답장 → 발신자의 읽기 | 카단 우편 ID와 회신 연결 확인 |
 
 추가로 PTY에 실제 635KiB·493KiB·306KiB 길이의 세 줄을 출력했다. herdr 조회는 약 117KiB만 반환했고 `truncated=true`였다. 마지막 DONE이 보이더라도 wait는 `code=2, reason=gap`으로 중단했다. 긴 기록의 완전한 회수는 해결된 것으로 보지 않는다.
+
+이 제한은 화면에서 완료 근거를 읽는 경로에 해당한다. `kadan done <역할> <실행ID> ok|failed`로 직접 기록하는 경로는 출력을 읽지 않는다. 자동 왕복은 결과 보고·파일과 화면 DONE 또는 발령 뒤 공식 done 기록을 확인하므로, 출력 누락과 복구 절차를 따로 검증해야 한다. herdr의 입력 대기 상태만으로 카드 성공이나 업무 최종 완료를 확정하지 않는다.
 
 ## Rottie 개별 접속
 
