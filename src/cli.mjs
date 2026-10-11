@@ -97,13 +97,7 @@ import {
 import { startDisplay } from "./cli-family.mjs";
 import { buildTree, renderTree } from "./cli-tree.mjs";
 import { guardedSend, collectCardFiles } from "./cli-guarded-send.mjs";
-import {
-  parsePlanCard,
-  planCards,
-  confirmDone,
-  runWaitLoop,
-  waitScreenDone,
-} from "./cli-wait-done.mjs";
+import { confirmDone, runWaitLoop, waitScreenDone } from "./cli-wait-done.mjs";
 import {
   requireWindowChoice,
   inspectRottieStartPreflight,
@@ -113,6 +107,7 @@ import {
 } from "./cli-start-support.mjs";
 import { cmdStart } from "./commands/start.mjs";
 import { cmdSend } from "./commands/send.mjs";
+import { cmdPlan } from "./commands/plan.mjs";
 
 export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
@@ -198,20 +193,6 @@ export {
   executeJudge,
 };
 
-
-function cmdPlan(argv, flags = {}) {
-  const [board, ...taskIds] = argv;
-  if (!board || taskIds.length === 0) {
-    die('사용법: kadan plan <판> [--about "<판 설명>"] <카드id[:제목]>...', 2);
-  }
-  const about = typeof flags.about === "string" ? flags.about : null;
-  planCards({ board, taskIds, about });
-  const shown = taskIds
-    .map(parsePlanCard)
-    .map(card => (card.title ? `${card.taskId}(${card.title})` : card.taskId))
-    .join(", ");
-  console.log(`계획됨: 판=${board}${about ? ` 설명=${about}` : ""} 카드=${shown}`);
-}
 
 function cmdDone(argv, flags = {}) {
   const [role, taskId, given, ...extra] = argv;
