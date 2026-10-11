@@ -1,37 +1,46 @@
 #!/usr/bin/env node
-import {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
-export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
-import {taskIdentity,taskEventKey,taskConnectionError} from './task-identity.mjs';
-import {readLedgerState,projectLedger} from './ledger-domains.mjs';
-import {captureRuntimeVersion} from './runtime-version.mjs';
-import {WatchAI} from './watch-ai.mjs';
-import {cycleReads} from './watch-reads.mjs';
-import {watchReportCommand,watchAILabel} from './watch-report.mjs';
-import {notifyUser} from './watch-system.mjs';
-import {isUserActor} from './actors.mjs';
-import {storageCommand} from './storage-migration.mjs';
-import {assertWritable,storageTransaction,storageVersion} from './storage.mjs';
-import {SecretaryMailbox} from './secretary-mailbox.mjs';
-import {Mailbox,inboxCommand} from './mailbox.mjs';
-import {composeRoleInstructions,inferCardPhaseProfile,inferDispatchProfile,startRoleProfile} from './role-instructions.mjs';
-import {composeMailInstructions} from './mail-instructions.mjs';
-import {attachWatchOverview} from "./watch-overview.mjs";
-import {PROFILE_FILE} from "./watch-cycle.mjs";
-import {defaultProfilePath,readWatchProfile,applyWatchProfile,watchStartupWarnings} from "./watch-profile.mjs";
-import {decisionCommand, DecisionStore} from "./decisions.mjs";
-import {seniorCommand} from "./senior.mjs";
-import {runnersCommand} from "./runners-command.mjs";
-import {launchFor, launchForFallback, readSettings, PROFILE_ROLES} from "./runner-settings.mjs";
+import { findDoneMarkers, diffDoneMarkers } from "./done-marker.mjs";
+import { taskIdentity, taskEventKey, taskConnectionError } from "./task-identity.mjs";
+import { readLedgerState, projectLedger } from "./ledger-domains.mjs";
+import { captureRuntimeVersion } from "./runtime-version.mjs";
+import { WatchAI } from "./watch-ai.mjs";
+import { cycleReads } from "./watch-reads.mjs";
+import { watchReportCommand, watchAILabel } from "./watch-report.mjs";
+import { notifyUser } from "./watch-system.mjs";
+import { isUserActor } from "./actors.mjs";
+import { storageCommand } from "./storage-migration.mjs";
+import { assertWritable, storageTransaction, storageVersion } from "./storage.mjs";
+import { SecretaryMailbox } from "./secretary-mailbox.mjs";
+import { Mailbox, inboxCommand } from "./mailbox.mjs";
+import {
+  composeRoleInstructions,
+  inferCardPhaseProfile,
+  inferDispatchProfile,
+  startRoleProfile,
+} from "./role-instructions.mjs";
+import { composeMailInstructions } from "./mail-instructions.mjs";
+import { attachWatchOverview } from "./watch-overview.mjs";
+import { PROFILE_FILE } from "./watch-cycle.mjs";
+import {
+  defaultProfilePath,
+  readWatchProfile,
+  applyWatchProfile,
+  watchStartupWarnings,
+} from "./watch-profile.mjs";
+import { decisionCommand, DecisionStore } from "./decisions.mjs";
+import { seniorCommand } from "./senior.mjs";
+import { runnersCommand } from "./runners-command.mjs";
+import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "./runner-settings.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand, closeCardAfterDone } from "./card-command.mjs";
 import { registerRoleManually, registerStartedRole } from "./hierarchy-register.mjs";
 import { runAdopt } from "./adopt.mjs";
-import { hierarchyCommand } from './hierarchy-prune.mjs';
-import {workCommand} from './work-command.mjs';
-import { runInit, runUp } from './quickstart.mjs';
+import { hierarchyCommand } from "./hierarchy-prune.mjs";
+import { workCommand } from "./work-command.mjs";
+import { runInit, runUp } from "./quickstart.mjs";
 import { autostartCommand } from "./autostart.mjs";
-import {WorkStore} from './work-store.mjs';
-import {resolveWorkMail,inferDispatchTask} from './work-mail.mjs';
+import { WorkStore } from "./work-store.mjs";
+import { resolveWorkMail, inferDispatchTask } from "./work-mail.mjs";
 import { buildCardCenter } from "./card-center.mjs";
 import { Handover } from "./handover.mjs";
 import { HandoverRunner } from "./handover-runner.mjs";
@@ -40,10 +49,8 @@ import { inspectStartCmdPolicy, inspectCardSendIdentity } from "./ai-identity.mj
 import { inspectDispatchRunnerGuard } from "./dispatch-runner-guard.mjs";
 import { slotCommand } from "./review-slots.mjs";
 import { limitCommand } from "./heavy-limit.mjs";
-// kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
-
 import { parseHierarchy } from "./hierarchy.mjs";
-import { createHash,randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -78,12 +85,7 @@ import {
 } from "./floor-tmux.mjs";
 import { buildRottieFloorCreateArgv } from "./floor-rottie.mjs";
 import { currentRottieWindow, planRestore, runRestore } from "./restore.mjs";
-import {
-  buildWallSnapshot,
-  createWallServer,
-  renderWallHtml,
-  withWaitSnapshots,
-} from "./wall.mjs";
+import { buildWallSnapshot, createWallServer, renderWallHtml, withWaitSnapshots } from "./wall.mjs";
 import {
   buildJudgeInput,
   parseJudgeVerdict,
@@ -95,18 +97,37 @@ import {
   dedupAlerts,
   disconnectKind,
 } from "./watch.mjs";
-import {
-  deliverResolution,
-  formatAlertBody,
-  runWatch,
-} from "./watch-runner.mjs";
+import { deliverResolution, formatAlertBody, runWatch } from "./watch-runner.mjs";
 import { executeJudge } from "./watch-judge.mjs";
 import { collectResources } from "./watch-resource.mjs";
-import {
-  assessSupervisorIdle,
-  buildIdleNudge,
-} from "./watch-supervisor.mjs";
+import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { boardFromRole } from "./board.mjs";
+import {
+  recentSends,
+  die,
+  sessionName,
+  stripAnsi,
+  tailLines,
+  digest,
+  lastStartFor,
+  recordedPid,
+  normalizeFloorRead,
+  sleepMs,
+  parseFlags,
+} from "./cli-basics.mjs";
+
+export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
+// kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
+
+
+export {
+  recentSends,
+  sessionName,
+  stripAnsi,
+  tailLines,
+  digest,
+  parseFlags,
+} from "./cli-basics.mjs";
 
 export {
   appendLedger,
@@ -148,58 +169,6 @@ export {
   executeJudge,
 };
 
-export function recentSends(entries) {
-  // 카드 제목은 plan 줄에만 있다. 우편함에서 id만 보면 무슨 카드인지 모른다 (2026-09-06).
-  const titles = new Map();
-  for (const entry of entries) {
-    if (entry?.kind === "plan" && entry.taskId && entry.title) titles.set(entry.taskId, entry.title);
-  }
-  return entries
-    .filter((entry) => entry?.kind === "send")
-    .slice(-20)
-    .reverse()
-    .map((entry) => ({
-      at: entry.t,
-      by: ledgerBy(entry),
-      role: entry.role ?? "모름",
-      taskId: entry.taskId ?? "-",
-      ...(entry.taskId && titles.has(entry.taskId) ? { title: titles.get(entry.taskId) } : {}),
-      ...(entry.preview ? { preview: entry.preview } : {}),
-      ...(entry.digest ? { digest: entry.digest } : {}),
-      ...(entry.digest && readMailBody(entry.digest) ? { body: readMailBody(entry.digest) } : {}),
-      bytes: entry.bytes ?? null,
-    }));
-}
-
-const die = (message, code = 1) => {
-  console.error(`오류: ${message}`);
-  process.exit(code);
-};
-
-export function sessionName(role) {
-  const safe = role
-    .trim()
-    .replace(/[^\p{L}\p{N}\p{Extended_Pictographic}_-]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!safe) die("역할 이름이 비어 있거나 부적합하다");
-  return `kadan-${safe}`;
-}
-
-export function stripAnsi(text) {
-  return text
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "")
-    // Rottie는 렌더된 화면이 아니라 원시 TUI 스트림을 준다. 절대 커서 이동을 그냥
-    // 지우면 완료 줄과 다음 입력 프롬프트가 붙으므로 줄 경계로 보존한다(2026-08-30).
-    .replace(/\x1b\[[0-9;?]*[Hf]/g, "\n")
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-Z\\-_]/g, "");
-}
-
-export function tailLines(text, count) {
-  const lines = text.split("\n");
-  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
-  return lines.slice(-count).join("\n");
-}
 
 function waitSnapshotIso(at) {
   return (at instanceof Date ? at : new Date(at)).toISOString();
@@ -254,21 +223,6 @@ function writeWaitSnapshot({
     console.error(`경고: 마지막 화면 저장 실패: ${error.message}`);
     return null;
   }
-}
-
-export function digest(text) {
-  return createHash("sha256").update(text).digest("hex").slice(0, 12);
-}
-
-function lastStartFor(session) {
-  const starts = readLedger().filter(
-    (entry) => entry.kind === "start" && entry.session === session
-  );
-  return starts[starts.length - 1] || null;
-}
-
-function recordedPid(entry) {
-  return entry?.panePid ?? entry?.rottiePid ?? null;
 }
 
 export function dutyHead(role) {
@@ -614,23 +568,6 @@ export function renderTree(tree) {
     }
   }
   return lines.join("\n");
-}
-
-function normalizeFloorRead(value) {
-  if (typeof value === "string") {
-    return {
-      text: value,
-      cursor: null,
-      gap: null,
-      incremental: false,
-    };
-  }
-  return {
-    text: value?.text ?? "",
-    cursor: value?.cursor ?? null,
-    gap: value?.gap ?? null,
-    incremental: value?.incremental === true,
-  };
 }
 
 export function guardedSend({
@@ -1619,7 +1556,6 @@ export function waitScreenDone({ readScreen, entries, role, taskId, cards, waitM
   }
   return { ...found, reads };
 }
-function sleepMs(ms) { if (ms > 0) spawnSync("sleep", [String(ms / 1000)]); }
 
 function cmdDone(argv, flags = {}) {
   const [role, taskId, given, ...extra] = argv;
@@ -2230,37 +2166,6 @@ function cmdAttach(argv) {
   const name = window ? window.method : null;
   if (!name) console.log(`창 열기 실패 — 직접: ${floor.attach(session)}`);
   else console.log(`창 열림(${name}): ${session}`);
-}
-
-export function parseFlags(argv) {
-  const flags = {};
-  const rest = [];
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index];
-    // `--` 뒤는 다른 명령의 인자라 해석하지 않고 그대로 넘긴다(kadan limit run, 2026-10-02 [kyle]).
-    if (arg === "--") { rest.push(...argv.slice(index)); break; }
-    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card") {
-      flags[arg.slice(2)] = true;
-    } else if (arg.startsWith("--")) {
-      const name = arg.slice(2);
-      let value;
-      if (index + 1 < argv.length && !argv[index + 1].startsWith("--")) {
-        value = argv[++index];
-      } else {
-        value = true;
-      }
-      if (Object.hasOwn(flags, name)) {
-        flags[name] = Array.isArray(flags[name])
-          ? [...flags[name], value]
-          : [flags[name], value];
-      } else {
-        flags[name] = value;
-      }
-    } else {
-      rest.push(arg);
-    }
-  }
-  return { flags, rest };
 }
 
 export function createHandoverRunner() {
