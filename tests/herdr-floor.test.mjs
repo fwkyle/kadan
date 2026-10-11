@@ -6,7 +6,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { makeHerdrFloor, herdrRpc, herdrInputFrame } from "../src/floor-herdr.mjs";
-import { buildStartLedgerEntry } from "../src/cli.mjs";
+import { buildStartLedgerEntry, guardedSend } from "../src/cli.mjs";
 import { selectFloorName } from "../src/floor.mjs";
 
 function fixture() {
@@ -196,17 +196,49 @@ test("신뢰 화면이 아닌 blocked는 기존처럼 입력 대기 실패다", 
   assert.throws(() => f.floor.send(f.start.session, "왕복"), { code: "KADAN_HERDR_NOT_READY" });
 });
 
-test("응답 중인 실행기에도 우편은 들어가 실행기 대기열에서 처리된다 (LBR-1 결함 2)", () => {
+const busy = { busyMail: true };
+const prompts = f => f.state.calls.filter(call => call.method === "agent.prompt").length;
+
+test("응답 중 사람·역할 우편(busyMail 표시)은 입력 검사를 통과하면 전달된다 (LBR-1 결함 2)", () => {
   const f = fixture(); f.state.status = "working";
-  assert.equal(f.floor.send(f.start.session, "완료 통지").keyDelivery, "sent");
-  assert.equal(f.state.calls.filter(call => call.method === "agent.prompt").length, 1);
+  assert.equal(f.floor.send(f.start.session, "완료 통지", busy).keyDelivery, "sent");
+  assert.equal(prompts(f), 1);
 });
 
-test("카드 발령은 일하는 역할에 얹지 않고, 응답 중이어도 미제출 입력 보호는 같다", () => {
+test("응답 중 자동 경보·표시 없는 호출·busyMail 아닌 값은 거절하고 요청이 없다", () => {
+  for (const options of [undefined, {}, { busyMail: false }, { busyMail: "yes" }, { busyMail: 1 }]) {
+    const f = fixture(); f.state.status = "working";
+    assert.throws(() => f.floor.send(f.start.session, "감시 경보", options), { code: "KADAN_HERDR_NOT_READY" });
+    assert.equal(prompts(f), 0);
+  }
   const f = fixture(); f.state.status = "working";
-  const identity = { currentPid: 123, harness: "codex", model: "fixture-model" };
-  assert.throws(() => f.floor.send(f.start.session, "카드", { cardIdentity: identity }), { code: "KADAN_HERDR_NOT_READY" });
-  f.state.output = "\n› 사람이 쓰던 글\n\nstatus";
-  assert.throws(() => f.floor.send(f.start.session, "우편"), { code: "KADAN_PANE_INPUT_PENDING" });
-  assert.equal(f.state.calls.some(call => call.method === "agent.prompt"), false);
+  assert.throws(() => f.floor.send(f.start.session, "알림", { busyMail: true, notificationGuard: { humanIdleMs: 1 } }),
+    { code: "KADAN_HERDR_NOTIFY_UNVERIFIED" });
+  assert.equal(prompts(f), 0);
+});
+
+test("카드 발령은 busyMail이어도 응답 중이면 거절한다", () => {
+  const f = fixture(); f.state.status = "working";
+  const cardIdentity = { currentPid: 123, harness: "codex", model: "fixture-model" };
+  assert.throws(() => f.floor.send(f.start.session, "카드", { cardIdentity, busyMail: true }), { code: "KADAN_HERDR_NOT_READY" });
+  assert.equal(prompts(f), 0);
+});
+
+test("미제출 입력이 있으면 응답 중 여부와 무관하게 거절한다", () => {
+  for (const status of ["working", "idle"]) {
+    const f = fixture(); f.state.status = status; f.state.output = "\n› 사람이 쓰던 글\n\nstatus";
+    assert.throws(() => f.floor.send(f.start.session, "우편", busy), { code: "KADAN_PANE_INPUT_PENDING" });
+    assert.equal(prompts(f), 0);
+  }
+});
+
+test("실제 감시 경보 경로(guardedSend source=watch, notificationOnly)는 응답 중 herdr에서 거절된다", () => {
+  const f = fixture(); f.state.status = "working";
+  const events = [], entries = [f.start];
+  assert.throws(() => guardedSend({ floor: f.floor, session: f.start.session, role: "판-작업자",
+    message: "감시 경보: 시험", source: "watch", recordedPid: "123", notificationOnly: true, env: f.env,
+    readEntries: () => entries, record: event => events.push(event), saveBody: () => {} }),
+  { code: "KADAN_HERDR_NOT_READY" });
+  assert.equal(prompts(f), 0);
+  assert.equal(events.some(e => e.kind === "send"), false);
 });

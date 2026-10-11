@@ -644,6 +644,7 @@ export function guardedSend({
   raw = false,
   notificationOnly = false,
   notificationGuard,
+  busyMail = false,
   source,
   allowOldRunner,
   env = process.env,
@@ -755,7 +756,7 @@ export function guardedSend({
 
   let receipt;
   try {
-    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard}) || {};
+    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard, busyMail}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     throw error;
@@ -1568,6 +1569,7 @@ function cmdSend(argv, flags) {
       raw:flags.raw===true,
       allowOldRunner:flags["allow-old-runner"],
       recordedPid: expectedPid,
+      busyMail: true,
     });
   } catch (error) {
     die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);

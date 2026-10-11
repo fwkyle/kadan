@@ -156,7 +156,8 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
       gap: read.truncated ? "Herdr 출력 일부만 조회됨" : null };
   };
   // 응답 중인 실행기는 Claude·Codex 모두 들어온 입력을 자기 대기열에 쌓았다가 현재 작업 뒤에 처리한다(2026-10-12 실측).
-  // 카드 발령은 일하는 역할에 새 일을 얹지 않도록 입력 대기만 허용하고, 우편(완료 편지 등)만 working을 허용한다.
+  // 기본은 거절, 명시 허용: 호출부가 사람·역할 우편(send 명령)임을 busyMail로 표시할 때만 working을 허용한다.
+  // 카드 발령·자동 경보·표시 없는 호출은 입력 대기(idle/done)만 허용한다.
   const checkAgent = (session, identity, { allowWorking = false } = {}) => {
     const { record, pane } = requirePane(session);
     const info = processInfo(pane);
@@ -240,9 +241,9 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     pid(session) { const record = address(session); const pane = record && paneFor(record);
       const pid = pane && processInfo(pane)?.shell_pid; return pid ? String(pid) : null; },
     read(session) { return readPane(requirePane(session).pane); },
-    send(session, text, { cardIdentity, notificationGuard } = {}) {
+    send(session, text, { cardIdentity, notificationGuard, busyMail } = {}) {
       if (notificationGuard) deny("KADAN_HERDR_NOTIFY_UNVERIFIED", "사람의 미제출 입력 보호 검증 전에는 자동 알림을 보내지 않는다");
-      const allowWorking = !cardIdentity;
+      const allowWorking = busyMail === true && !cardIdentity;
       const pane = checkAgent(session, cardIdentity, { allowWorking });
       const baseline = readPane(pane);
       if (baseline.gap) deny("KADAN_HERDR_OUTPUT_GAP", baseline.gap);
