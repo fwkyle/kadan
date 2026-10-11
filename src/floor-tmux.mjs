@@ -443,7 +443,7 @@ function allDimAfterPrompt(raw = "") {
 const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
 
 // 화면에 보이는 입력창이 비었는지 확인한다. 카드 전송과 감시기 알림이 같은 기준을 쓴다.
-function checkEmptyInput(session, run, row, width, label) {
+export function checkEmptyInput(session, run, row, width, label) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   // 글자 모양(-e)까지 읽어 흐린 추천 문구와 사람이 친 글을 가른다. 판단은 모양을 뺀 글로 한다.
   const raw = run(["capture-pane", "-e", "-p", "-t", `=${session}:`]).split("\n");
