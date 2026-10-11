@@ -103,6 +103,7 @@ description: "카단 판·역할에 대한 질문, 현황 확인, 지시 전달�
    사용자가 그 대화 안에서 "감독으로 올려"라고 말하면 그 대화가 [kadan-go](../kadan-go/SKILL.md)로 직접 처리하므로 비서를 거칠 필요가 없다고 안내한다.
 2. 그 폴더에서 `KADAN_ROLE=비서 kadan adopt <감독이름> --model <모델> --resume <대화ID> --harness claude|codex`.
    상위는 기본이 사용자(`@user`)다. 비서가 실행해도 비서가 상위로 적히지 않는다.
+   herdr 바닥은 사용자가 `KADAN_FLOOR=herdr KADAN_HOME=… KADAN_HERDR_SOCKET=…`를 명시한 환경에서만 쓰며, 없으면 tmux다(자동 폴백·서버 자동 기동 없음).
 3. "무엇을 어디에 옮겼고, 원래 대화에서는 더 지시하지 말라"를 보고한다.
 
 사용자가 쓰는 쉬운 말과 길: "카단으로 해 줘·검수만·맡기고 갈래·어떻게 됐어"는 [kadan-go](../kadan-go/SKILL.md)의 길 고르기 표를 따른다.

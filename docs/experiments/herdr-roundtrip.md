@@ -99,3 +99,11 @@ Rottie의 각 프로젝트에 `terminal create --workspace <그 프로젝트> --
 병렬 전체 실행 중 기존 잠금 타이밍 시험과 tmux 자동 발령의 거절 문구 대조 시험이 각각 한 번 실패했다. 단독 재실행은 통과했고, 자동 발령 시험은 기준 코드에서도 별도로 통과했다. 직접 원인은 확정하지 않았으며 실패 로그를 보존했다. 관련 없는 잠금·자동 발령 코드는 수정하지 않았다.
 
 공식 참고: [agent automation](https://herdr.dev/docs/agent-automation/), [socket API](https://herdr.dev/docs/socket-api/), [agent prompt 구현](https://github.com/herdrdev/herdr/blob/2563803dca97c040beaf3dc3acdcb5a3221b4238/src/app/api/agents.rs).
+
+## adopt(대화 옮기기)를 herdr 바닥에서 쓰기 (HW-4)
+
+- 코드 변경 없음. `kadan adopt`는 `start`(`cmdStart`)를 그대로 불러 `floor.create`로 가므로 cwd 지정, `KADAN_HOME`·`KADAN_FLOOR`·`KADAN_HERDR_SOCKET`·`KADAN_CLI` 주입, 신뢰 화면 감지가 같다. `KADAN_FLOOR`가 없으면 tmux(단위 시험 `tests/adopt.test.mjs`), 자동 폴백·서버 자동 기동 없음.
+- 사용: 대화를 시작한 폴더에서 `KADAN_FLOOR=herdr KADAN_HOME=… KADAN_HERDR_SOCKET=… kadan adopt <이름> --model <모델> [--resume <ID> --harness claude|codex] [--profile conductor|super]`. 새 폴더면 신뢰 화면이 `blocked`로 보이니 안내된 `pane send-keys … down enter`(Claude) 또는 `enter`(Codex)로 사람이 넘긴다.
+- 실측(시험 서버 `kadan-herdr-adopt-test`, 시험 HOME `~/.kadan-herdr/adopt-test/live`, 시험 폴더에서 새로 만든 버리는 대화만 복제): (A) Claude 대화 → 감독 → 카드 AT-A2 → 화면 DONE → `done --from-screen`. (B) Codex 대화(`codex fork`) → 감독 → AT-B 같은 흐름. (C) Claude 대화 → `--profile super` → 슈퍼감독이 `node "$KADAN_CLI" start 판C-감독 --profile conductor`로 판 감독을 세우고 AT-C 발령 → DONE. start 줄에 `cmd`·`harness`·`model`과 `herdrSocket`·`herdrWorkspaceId`·`herdrPaneId`·`herdrTerminalId`·`panePid`가 남는다. 슈퍼감독과 판 감독 프로세스 모두 같은 `KADAN_HOME`·`KADAN_FLOOR=herdr`·`KADAN_HERDR_SOCKET`·`KADAN_CLI`를 가졌다(`ps eww`로 확인).
+- 관찰: 슈퍼감독 화면에서 `env | rg ^KADAN_`를 다시 시키자 Claude 자동 모드 판정기가 "자격증명 탐색"으로 거부했다(첫 실행은 통과). 환경 상속 근거는 운영자가 `ps eww`로 대신 확인했다. 또 슈퍼감독이 카단 스킬(작업 폴더 밖 파일)을 읽을 때 "작업 폴더 밖 읽기 허용" 확인 창이 한 번 떴다(사람이 "이번만 허용"으로 통과, 사용자 설정은 바꾸지 않음).
+- 설계 메모(할 일 3, 코드 없음): 지금 herdr 바닥은 역할 하나당 workspace 하나를 만든다. 판=space(workspace), 역할=pane으로 바꾸려면 (1) 원장 start 줄의 `herdrWorkspaceId`를 판 단위로 공유하고 `herdrPaneId`로 역할을 가르며, (2) stop은 pane만 닫고 마지막 pane일 때 workspace를 정리하고, (3) `create`가 판 이름으로 기존 workspace를 찾아 `pane.split`하는 경로와 그 경쟁 조건(두 역할 동시 시작) 시험이 필요하다. 이 변경은 `terminal` 주소를 기준으로 하는 현 입력 검사·읽기 경로에는 영향이 없을 것으로 보이나 실측하지 않았다.
