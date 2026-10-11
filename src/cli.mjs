@@ -55,7 +55,7 @@ import {
   hasSession,
 } from "./floor-tmux.mjs";
 import { buildRottieFloorCreateArgv } from "./floor-rottie.mjs";
-import { currentRottieWindow, planRestore, runRestore } from "./restore.mjs";
+import { planRestore, runRestore } from "./restore.mjs";
 import { buildWallSnapshot, createWallServer, renderWallHtml, withWaitSnapshots } from "./wall.mjs";
 import {
   buildJudgeInput,
@@ -89,8 +89,6 @@ import { guardedSend, collectCardFiles } from "./cli-guarded-send.mjs";
 import {
   requireWindowChoice,
   inspectRottieStartPreflight,
-  pendingCardsFor,
-  buildStopLedgerEntry,
   closeStartedWindow,
 } from "./cli-start-support.mjs";
 import { cmdStart } from "./commands/start.mjs";
@@ -99,6 +97,7 @@ import { cmdPlan } from "./commands/plan.mjs";
 import { cmdDone } from "./commands/done.mjs";
 import { cmdWait } from "./commands/wait.mjs";
 import { sendWatchMessage, cmdWatch } from "./commands/watch.mjs";
+import { cmdStop } from "./commands/stop.mjs";
 
 export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
@@ -191,32 +190,6 @@ export {
   executeJudge,
 };
 
-
-function cmdStop(argv) {
-  const role = argv[0];
-  if (!role) die("사용법: kadan stop <역할>");
-  const session = sessionName(role);
-  if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  const pending = pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).listSummaries()).project(readLedger()), role);
-  if (pending.length > 0) {
-    console.log(
-      `미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`
-    );
-  }
-  try {
-    floor.stop(session);
-  } catch (error) {
-    die(error.message);
-  }
-  const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(), session), {print:console.error}) : {};
-  appendLedger({ ...buildStopLedgerEntry({ role, session }), ...windowFields });
-  if (windowFields.rottieWindowClosed === false || windowFields.rottieWindowRemoved === false) {
-    console.error(`세션은 종료됨: ${session} · 로티 탭 정리 미완료: ${windowFields.rottieTerminalId} — ${windowFields.rottieWindowError ?? windowFields.rottieRemoveError}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`종료됨: ${session}`);
-}
 
 function cmdRestore(argv, flags) {
   if (floor.name !== "tmux") die("restore는 tmux 바닥에서만 쓴다 — 로티 바닥은 데몬과 함께 에이전트도 끝난다", 2);
