@@ -404,7 +404,9 @@ export async function runWatch({
         responsibility:watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works)});
     };
     if(cards&&!observationError){
-      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))});
+      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{
+        states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))
+      });
       const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
         enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session))});
       if(progress) invokeAI(progress);
@@ -445,7 +447,12 @@ export async function runWatch({
         progressWatch.started(candidate.session,seen.screen,cycleAt);
       }else supervisorHealth.started(candidate.session,seen.screen,cycleAt);
       let result;
-      try {result=ai.run({...candidate,input,observationDigest:seen.digest,evidenceDigest:check?.evidenceDigest??null,judgeCmd,parents,routes,superRole,hierarchyPath,userNotify,signal:job.controller.signal});}
+      try {
+        result=ai.run({
+          ...candidate,input,observationDigest:seen.digest,evidenceDigest:check?.evidenceDigest??null,
+          judgeCmd,parents,routes,superRole,hierarchyPath,userNotify,signal:job.controller.signal
+        });
+      }
       catch {result={ok:false,reason:'report-error'};}
       job.promise=Promise.resolve(result).catch(()=>({ok:false,reason:'report-error'})).then(result=>{
         completedAI.push({job,result});

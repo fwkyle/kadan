@@ -110,7 +110,9 @@ export function inspectHiddenStartPolicy({
   if (!forbidden) return { ok: true };
   return {
     ok: false,
-    message: `KADAN_HIDDEN_FORBIDDEN: KADAN_WINDOW=rottie에서 역할 프로필(${roleProfile}) 세션은 --hidden으로 시작할 수 없다 — 로티 창이 기본이다. 로티가 없거나 연결 불가를 확인했을 때만 KADAN_WINDOW=none --hidden으로 백그라운드 시작한다 (worker-creation.md 92~94행).`,
+    message:
+      `KADAN_HIDDEN_FORBIDDEN: KADAN_WINDOW=rottie에서 역할 프로필(${roleProfile}) 세션은 --hidden으로 시작할 수 없다 — 로티 창이 기본이다. ` +
+      `로티가 없거나 연결 불가를 확인했을 때만 KADAN_WINDOW=none --hidden으로 백그라운드 시작한다 (worker-creation.md 92~94행).`,
   };
 }
 

@@ -16,7 +16,10 @@ export function createHandoverRunner() {
     start: (role, command, cwd, roleProfile) => {
       let window = process.env.KADAN_WINDOW;
       if (!window) window = process.env.KADAN_ROTTIE_BIN ? "rottie" : "none";
-      const result = spawnSync(process.execPath, [new URL("../cli.mjs", import.meta.url).pathname, "start", role, "--cmd", command,...(roleProfile?['--profile',roleProfile]:[]),"--reason","인계: 선임 실행 명령 유지"],
+      const result = spawnSync(process.execPath, [
+        new URL("../cli.mjs", import.meta.url).pathname, "start", role, "--cmd", command,
+        ...(roleProfile?['--profile',roleProfile]:[]),"--reason","인계: 선임 실행 명령 유지"
+      ],
         {cwd, env:{...process.env,KADAN_WINDOW:window},encoding:"utf8"});
       if (result.status !== 0) throw new Error(`후임 생성 실패: ${result.stderr || result.stdout}`);
     },
@@ -39,7 +42,8 @@ export function createHandoverRunner() {
 }
 
 export function cmdHandover(argv, flags) {
-  const usage = "kadan handover <선임> --to <후임> --at-boundary --hierarchy <절대JSON> --context <절대문서> [--source-ended] [--cmd 명령] [--cwd 절대경로] [--manual | --wait-timeout 1800 --notify 수신자] | accept <id> --receipt <절대JSON> | finish <id> [--timeout 90] | status <id> | abort <id>";
+  const usage = "kadan handover <선임> --to <후임> --at-boundary --hierarchy <절대JSON> --context <절대문서> [--source-ended] [--cmd 명령] [--cwd 절대경로] " +
+    "[--manual | --wait-timeout 1800 --notify 수신자] | accept <id> --receipt <절대JSON> | finish <id> [--timeout 90] | status <id> | abort <id>";
   // 공용 옵션 해석기는 건드리지 않고 --manual의 위치만 여기서 처리한다.
   if (typeof flags.manual === "string") { argv = [flags.manual,...argv]; flags = {...flags,manual:true}; }
   if (flags.help || !argv.length) { console.log(usage); return; }

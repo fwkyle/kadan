@@ -27,7 +27,8 @@ export function renderRound(group) {
     const review = group.reviewCards.filter(card => card.round === round).map(label).join("/");
     return "r" + round + " " + work + (review ? (work ? "·검수 " : "검수 ") + review : "");
   }).join(", ");
-  return "라운드 " + group.family + ": " + group.latestRound + "/18 (블록 " + Math.ceil(group.latestRound / 3) + "/6) — " + detail + (group.latestRound >= 9 ? " · 정체 확인" : "") + (group.latestRound >= 18 ? " · 상한 — 사용자 결정" : "");
+  return "라운드 " + group.family + ": " + group.latestRound + "/18 (블록 " + Math.ceil(group.latestRound / 3) + "/6) — " +
+    detail + (group.latestRound >= 9 ? " · 정체 확인" : "") + (group.latestRound >= 18 ? " · 상한 — 사용자 결정" : "");
 }
 
 export function buildTree(entries, aliveBySession = {}, cards = null) {

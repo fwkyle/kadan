@@ -40,7 +40,14 @@ export function formatAlertBody(alert) {
   if (alert.id === "ledger:unreadable") {
     return `모름 원장 (읽기 실패: ${alert.ledgerError})`;
   }
-  if (alert.kind === "진행조정") return `${alert.verdict==='모름'?'진행 판단 불가':'진행 조정 필요'} ${alert.role} / ${alert.taskId} (${alert.verdict==='모름'?'감시ai 근거 부족 또는 호출 실패. 감독이 실제 진전 확인 필요':alert.consecutive>=2?'반복 조정 판정. 직속 감독은 상위 감독에게 범위·담당 조정 요청':'반복 실패·범위 확장 후보. 감독이 근거 확인 후 조정'}; 자동 중지 아님)`;
+  if (alert.kind === "진행조정") {
+    const adjust = alert.verdict==='모름'
+      ? '감시ai 근거 부족 또는 호출 실패. 감독이 실제 진전 확인 필요'
+      : alert.consecutive>=2
+        ? '반복 조정 판정. 직속 감독은 상위 감독에게 범위·담당 조정 요청'
+        : '반복 실패·범위 확장 후보. 감독이 근거 확인 후 조정';
+    return `${alert.verdict==='모름'?'진행 판단 불가':'진행 조정 필요'} ${alert.role} / ${alert.taskId} (${adjust}; 자동 중지 아님)`;
+  }
   if (alert.kind === "시작보고누락") return `시작 보고 누락 ${alert.role} / ${alert.taskId} (발령 ${alert.waitMinutes}분 경과, 실제 착수 여부 확인 후 보고 보완 필요)`;
   if (alert.kind === "놀고 있음") {
     // 상위가 받는 건 2단이다: 본인에게 먼저 알렸는데도 그대로였다.
@@ -136,7 +143,10 @@ export function seedAlertState(entries) {
   const active = [], recipients = new Map();
   for (const e of latest.values()) {
     if (e.resolved) continue;
-    active.push({ id: e.id, kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId, verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason });
+    active.push({
+      id: e.id, kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
+      verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
+    });
     if (e.delivered && e.recipient) recipients.set(e.id, e.recipient);
   }
   return { active, recipients };

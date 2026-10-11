@@ -23,7 +23,9 @@ export function cmdTree(_argv, flags = {}) {
     const c=snapshot.center;
     console.log(JSON.stringify({summary:c.summary,executionSummary:c.executionSummary,monitoring:c.monitoring,
       boards:c.boards.map(b=>({name:b.name,state:b.state,cards:b.cards.length,unregisteredRuns:b.runs.length,monitoring:b.monitoring})),
-      pendingCards:c.cards.filter(card=>!['done','cancelled','superseded','archived'].includes(card.displayState)).map(card=>({key:card.key,state:card.displayState,workType:card.workType||'execution',board:card.board,role:card.role})),
+      pendingCards:c.cards
+        .filter(card=>!['done','cancelled','superseded','archived'].includes(card.displayState))
+        .map(card=>({key:card.key,state:card.displayState,workType:card.workType||'execution',board:card.board,role:card.role})),
       liveRoles:c.roles.filter(r=>r.life.state==='alive').map(r=>({role:r.role,life:r.life})),
       unregisteredRuns:c.unregistered.length},null,2)); return;
   }

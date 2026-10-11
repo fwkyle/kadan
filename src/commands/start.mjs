@@ -53,7 +53,10 @@ export function cmdStart(argv, flags) {
   const useSettings = !fallback && launch && !(typeof flags.cmd === "string" && flags.cmd.trim());
   if (useSettings) flags.cmd = launch.cmd;
   const launchRecord = fallback
-    ? {launchSource:"fallback", fallbackIndex:fallback.fallbackIndex, fallbackReason:flags.reason.trim(), settingsRevision:fallback.revision, settingsPreset:fallback.preset, ...(launch ? {settingsCmd:launch.cmd} : {})}
+    ? {
+      launchSource:"fallback", fallbackIndex:fallback.fallbackIndex, fallbackReason:flags.reason.trim(),
+      settingsRevision:fallback.revision, settingsPreset:fallback.preset, ...(launch ? {settingsCmd:launch.cmd} : {})
+    }
     : !launch ? {} : useSettings || flags.cmd.trim() === launch.cmd
     ? {launchSource:"settings", settingsRevision:launch.revision, settingsPreset:launch.preset}
     : {launchSource:"override", overrideReason:flags.reason.trim(), settingsRevision:launch.revision, settingsCmd:launch.cmd};

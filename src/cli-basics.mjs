@@ -96,7 +96,12 @@ export function parseFlags(argv) {
     const arg = argv[index];
     // `--` 뒤는 다른 명령의 인자라 해석하지 않고 그대로 넘긴다(kadan limit run, 2026-10-02 [kyle]).
     if (arg === "--") { rest.push(...argv.slice(index)); break; }
-    if (arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" || arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" || arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" || arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card") {
+    if (
+      arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" ||
+      arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" ||
+      arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" ||
+      arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card"
+    ) {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);

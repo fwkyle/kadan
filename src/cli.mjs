@@ -208,7 +208,10 @@ const COMMANDS = {
   card: (argv,flags) => console.log(JSON.stringify(cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
-  limit: async (argv,flags) => { const result = flags.help ? await limitCommand([],{home:ledgerHome()}) : await limitCommand(argv,{home:ledgerHome()}); if (result != null) console.log(JSON.stringify(result,null,2)); },
+  limit: async (argv,flags) => {
+    const result = flags.help ? await limitCommand([],{home:ledgerHome()}) : await limitCommand(argv,{home:ledgerHome()});
+    if (result != null) console.log(JSON.stringify(result,null,2));
+  },
   plan: cmdPlan,
   init: cmdInit,
   up: cmdUp,
@@ -235,13 +238,19 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|adopt|autostart|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
+      "사용법: kadan <init|up|adopt|autostart|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|" +
+        "read|log|attach|restore|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
   const { flags, rest: args } = parseFlags(rest);
   try {
-    if(['init','up','start','send','stop','done','plan','watch-report','restore'].includes(command)||command==='handover'&&!['show','list'].includes(args[0])||command==='card'&&!['list','show'].includes(args[0])||command==='decision'&&!['list','show'].includes(args[0]))assertWritable(ledgerHome());
+    if(
+      ['init','up','start','send','stop','done','plan','watch-report','restore'].includes(command)||
+      command==='handover'&&!['show','list'].includes(args[0])||
+      command==='card'&&!['list','show'].includes(args[0])||
+      command==='decision'&&!['list','show'].includes(args[0])
+    )assertWritable(ledgerHome());
     const result=fn(args, flags);
     if(result?.catch)return result.catch(error=>{
       console.error(`오류: ${error.message}`);
