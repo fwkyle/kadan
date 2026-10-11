@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { findDoneMarkers, diffDoneMarkers } from "./done-marker.mjs";
 import { taskIdentity } from "./task-identity.mjs";
-import { watchReportCommand, watchAILabel } from "./watch-report.mjs";
+import { watchReportCommand } from "./watch-report.mjs";
 import { notifyUser } from "./watch-system.mjs";
 import { storageCommand } from "./storage-migration.mjs";
 import { assertWritable } from "./storage.mjs";
@@ -61,17 +61,15 @@ import { executeJudge } from "./watch-judge.mjs";
 import { collectResources } from "./watch-resource.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import {
-  die,
   sessionName,
   stripAnsi,
-  tailLines,
   lastStartFor,
   recordedPid,
   normalizeFloorRead,
   parseFlags,
 } from "./cli-basics.mjs";
 import { guardedSend } from "./cli-guarded-send.mjs";
-import { requireWindowChoice, closeStartedWindow } from "./cli-start-support.mjs";
+import { closeStartedWindow } from "./cli-start-support.mjs";
 import { cmdStart } from "./commands/start.mjs";
 import { cmdSend } from "./commands/send.mjs";
 import { cmdPlan } from "./commands/plan.mjs";
@@ -83,6 +81,7 @@ import { cmdRestore } from "./commands/restore.mjs";
 import { cmdStatus } from "./commands/status.mjs";
 import { cmdTree, cmdWall } from "./commands/tree-wall.mjs";
 import { cmdInit, cmdUp, cmdAdopt, cmdAutostart } from "./commands/quickstart.mjs";
+import { cmdRead, cmdLog, cmdAttach } from "./commands/inspect.mjs";
 
 export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
@@ -134,6 +133,7 @@ export {
   sendWatchNudge,
   watchMailHold,
 } from "./commands/watch.mjs";
+export { renderLogEntry } from "./commands/inspect.mjs";
 
 export {
   appendLedger,
@@ -175,72 +175,6 @@ export {
   executeJudge,
 };
 
-
-function cmdRead(argv, flags) {
-  const role = argv[0];
-  if (!role) die("사용법: kadan read <역할> [--lines N]");
-  const session = sessionName(role);
-  if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  const lines = Number(flags.lines ?? 30);
-  if (!Number.isInteger(lines) || lines < 1) {
-    die("--lines는 1 이상의 정수여야 한다");
-  }
-  const output = tailLines(
-    stripAnsi(normalizeFloorRead(floor.read(session)).text),
-    lines
-  );
-  process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
-}
-
-export function renderLogEntry(entry) {
-  const subject =
-    entry.kind === "done"
-      ? entry.role ?? entry.session ?? entry.broken ?? ""
-      : `${ledgerBy(entry)} → ${entry.role ?? entry.session ?? entry.broken ?? ""}`;
-  const extra =
-    entry.kind === "send"
-      ? `${entry.taskId ?? "(카드 없음)"}  지문=${entry.digest} ${entry.bytes}B`
-      : entry.kind === "done"
-        ? `taskId=${entry.taskId} ${entry.result}`
-        : entry.kind === "start"
-          ? `PID=${entry.panePid ?? entry.rottiePid ?? "?"} 창=${entry.window}`
-          : entry.kind === "window"
-            ? `탭=${entry.rottieTerminalId} (옛 탭 ${entry.restoredFrom} ${entry.oldState})`
-          : entry.kind.startsWith('watch-ai-')
-            ? `${watchAILabel(entry.source)} ${entry.verdict ?? entry.reason ?? entry.delivery ?? ''}`
-            : "";
-  return `${entry.t ?? "???"}  ${entry.kind.padEnd(5)}  ${subject}  ${extra}`;
-}
-
-function cmdLog() {
-  for (const entry of readLedger().slice(-30)) {
-    console.log(renderLogEntry(entry));
-  }
-}
-
-function cmdAttach(argv) {
-  const role = argv[0];
-  if (!role) die("사용법: kadan attach <역할>");
-  const session = sessionName(role);
-  if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  if (["rottie", "herdr"].includes(floor.name)) {
-    console.log(floor.attach(session));
-    return;
-  }
-  const windowChoice = requireWindowChoice();
-  if (process.platform !== "darwin") {
-    console.log(`macOS가 아니어서 창을 열지 않는다 — 직접: ${floor.attach(session)}`);
-    return;
-  }
-  const window = openWindow(session, process.platform, {
-    choice: windowChoice,
-    role,
-    panePid: floor.pid(session),
-  });
-  const name = window ? window.method : null;
-  if (!name) console.log(`창 열기 실패 — 직접: ${floor.attach(session)}`);
-  else console.log(`창 열림(${name}): ${session}`);
-}
 
 export function createHandoverRunner() {
   const operation = new Handover({ home: ledgerHome(), floor, readEntries: readLedger,
