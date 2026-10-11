@@ -80,7 +80,8 @@ export function herdrInputFrame(socket, terminal) {
   }
   const ansi = Buffer.from(frame.bytes, "base64").toString("utf8");
   const cursor = [...ansi.matchAll(/\x1b\[(\d+);(\d+)H/g)].at(-1);
-  if (!cursor || !Number.isInteger(frame.width)) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 커서 미확인");
+  if (!cursor) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 커서 미확인");
+  // frame.width는 접속 창 크기와 어긋난 값이 올 수 있어(120 대 실제 212) 입력창 판정에 쓰지 않는다.
   return { row: Number(cursor[1]) - 1, width: frame.width };
 }
 
@@ -150,7 +151,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     const frame = inputFrame(socket(), pane.terminal_id);
     const visible = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "ansi", strip_ansi: false }).read;
     if (typeof visible?.text !== "string" || visible.truncated) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 화면 미확인");
-    checkEmptyInput(session, () => visible.text.replaceAll("\r\n", "\n"), frame.row, frame.width, "herdr 전송 보류");
+    checkEmptyInput(session, () => visible.text.replaceAll("\r\n", "\n"), frame.row, null, "herdr 전송 보류");
     return pane;
   };
   return {
