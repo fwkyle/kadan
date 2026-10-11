@@ -80,7 +80,6 @@ import {
   normalizeFloorRead,
   parseFlags,
 } from "./cli-basics.mjs";
-import { startDisplay } from "./cli-family.mjs";
 import { buildTree, renderTree } from "./cli-tree.mjs";
 import { guardedSend, collectCardFiles } from "./cli-guarded-send.mjs";
 import { requireWindowChoice, closeStartedWindow } from "./cli-start-support.mjs";
@@ -92,6 +91,7 @@ import { cmdWait } from "./commands/wait.mjs";
 import { sendWatchMessage, cmdWatch } from "./commands/watch.mjs";
 import { cmdStop } from "./commands/stop.mjs";
 import { cmdRestore } from "./commands/restore.mjs";
+import { cmdStatus } from "./commands/status.mjs";
 
 export {findDoneMarkers,diffDoneMarkers} from './done-marker.mjs';
 // kadan 코어 — 원장 + DONE 마커 감시. 바닥 호출은 floor 객체만 통한다.
@@ -184,40 +184,6 @@ export {
   executeJudge,
 };
 
-
-function cmdStatus() {
-  let sessions;
-  try {
-    sessions = floor.list();
-  } catch (error) {
-    die(error.message, error.exitCode || 1);
-  }
-  if (sessions.length === 0) {
-    console.log(`카단 구획(${SOCKET})에 세션 없음`);
-    return;
-  }
-  for (const item of sessions) {
-    const recorded = recordedPid(lastStartFor(item.session));
-    const pidState = !recorded
-      ? "기록없음"
-      : recorded === item.pid
-        ? "PID일치"
-        : `PID변경(${recorded}→${item.pid})`;
-    const shown = startDisplay(lastStartFor(item.session));
-    const modelBit = `  ${shown.harness} · ${shown.model} · ${shown.family}`;
-    if (["rottie", "herdr"].includes(floor.name)) {
-      console.log(
-        `${item.session}  ${floor.name === "rottie" ? "Rottie" : "herdr"}=${item.terminalId}  상태=${item.state}  ${pidState}${modelBit}`
-      );
-    } else {
-      console.log(
-        `${item.session}  ${Number(item.attached) ? "창붙음" : "백그라운드"}  시작=${new Date(
-          item.created * 1000
-        ).toISOString()}  ${pidState}${modelBit}`
-      );
-    }
-  }
-}
 
 function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
