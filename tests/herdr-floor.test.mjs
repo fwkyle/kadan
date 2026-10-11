@@ -61,7 +61,6 @@ for (const [name, change, code] of [
   ["명시 모델 변경", f => { f.state.argv[2] = "other-model"; }, "KADAN_AI_PROCESS_UNVERIFIED"],
   ["승인 대기", f => { f.state.status = "blocked"; }, "KADAN_HERDR_NOT_READY"],
   ["상태 미확인", f => { f.state.status = "unknown"; }, "KADAN_HERDR_NOT_READY"],
-  ["작업 중", f => { f.state.status = "working"; }, "KADAN_HERDR_NOT_READY"],
   ["미제출 입력", f => { f.state.output = "\n› 남아 있는 글\n\nstatus"; }, "KADAN_PANE_INPUT_PENDING"],
   ["기록보기 중", f => { f.pane.scroll.offset_from_bottom = 4; }, "KADAN_HERDR_SCROLLED"],
   ["출력 유실", f => { f.state.truncated = true; }, "KADAN_HERDR_INPUT_UNKNOWN"],
@@ -195,4 +194,19 @@ for (const [runner, screen, keys] of [
 test("신뢰 화면이 아닌 blocked는 기존처럼 입력 대기 실패다", () => {
   const f = fixture(); f.state.status = "blocked"; f.state.output = "권한을 허용할까요?";
   assert.throws(() => f.floor.send(f.start.session, "왕복"), { code: "KADAN_HERDR_NOT_READY" });
+});
+
+test("응답 중인 실행기에도 우편은 들어가 실행기 대기열에서 처리된다 (LBR-1 결함 2)", () => {
+  const f = fixture(); f.state.status = "working";
+  assert.equal(f.floor.send(f.start.session, "완료 통지").keyDelivery, "sent");
+  assert.equal(f.state.calls.filter(call => call.method === "agent.prompt").length, 1);
+});
+
+test("카드 발령은 일하는 역할에 얹지 않고, 응답 중이어도 미제출 입력 보호는 같다", () => {
+  const f = fixture(); f.state.status = "working";
+  const identity = { currentPid: 123, harness: "codex", model: "fixture-model" };
+  assert.throws(() => f.floor.send(f.start.session, "카드", { cardIdentity: identity }), { code: "KADAN_HERDR_NOT_READY" });
+  f.state.output = "\n› 사람이 쓰던 글\n\nstatus";
+  assert.throws(() => f.floor.send(f.start.session, "우편"), { code: "KADAN_PANE_INPUT_PENDING" });
+  assert.equal(f.state.calls.some(call => call.method === "agent.prompt"), false);
 });

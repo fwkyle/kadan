@@ -155,7 +155,9 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     return { text: read.text, cursor: String(read.revision), incremental: false,
       gap: read.truncated ? "Herdr 출력 일부만 조회됨" : null };
   };
-  const checkAgent = (session, identity) => {
+  // 응답 중인 실행기는 Claude·Codex 모두 들어온 입력을 자기 대기열에 쌓았다가 현재 작업 뒤에 처리한다(2026-10-12 실측).
+  // 카드 발령은 일하는 역할에 새 일을 얹지 않도록 입력 대기만 허용하고, 우편(완료 편지 등)만 working을 허용한다.
+  const checkAgent = (session, identity, { allowWorking = false } = {}) => {
     const { record, pane } = requirePane(session);
     const info = processInfo(pane);
     if (String(info?.shell_pid) !== String(identity?.currentPid ?? record.panePid)) deny("KADAN_PID_MISMATCH", "현재 프로세스 세대가 시작 기록과 다르다");
@@ -172,7 +174,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
       if (help) deny("KADAN_HERDR_TRUST_PROMPT", help);
     }
     if (agent?.terminal_id !== pane.terminal_id || agent.launch_pending ||
-      !["idle", "done"].includes(agent.agent_status)) {
+      !["idle", "done", ...(allowWorking ? ["working"] : [])].includes(agent.agent_status)) {
       deny("KADAN_HERDR_NOT_READY", `입력 대기 확인 실패: ${agent?.agent_status ?? "unknown"}`);
     }
     if (pane.scroll?.offset_from_bottom > 0) deny("KADAN_HERDR_SCROLLED", "과거 기록 조회 중이라 전송을 보류한다");
@@ -240,10 +242,11 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     read(session) { return readPane(requirePane(session).pane); },
     send(session, text, { cardIdentity, notificationGuard } = {}) {
       if (notificationGuard) deny("KADAN_HERDR_NOTIFY_UNVERIFIED", "사람의 미제출 입력 보호 검증 전에는 자동 알림을 보내지 않는다");
-      const pane = checkAgent(session, cardIdentity);
+      const allowWorking = !cardIdentity;
+      const pane = checkAgent(session, cardIdentity, { allowWorking });
       const baseline = readPane(pane);
       if (baseline.gap) deny("KADAN_HERDR_OUTPUT_GAP", baseline.gap);
-      checkAgent(session, cardIdentity);
+      checkAgent(session, cardIdentity, { allowWorking });
       try { call("agent.prompt", { target: pane.pane_id, text }); }
       catch (error) { if (error.delivery === "unknown") error.message += " — 본문/Enter 자동 재전송 금지"; throw error; }
       return { keyDelivery: "sent", inputAcceptance: "unconfirmed", baselineText: baseline.text,

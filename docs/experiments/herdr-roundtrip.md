@@ -70,6 +70,15 @@ kadan attach 판-작업자
 - 실측(실제 Claude Sonnet 5.5, 시험 서버·시험 HOME): 212칸 상태에서 수정 전 거절, 수정 후 통과, 이어서 실제 카드 발령 성공 → 화면 `KADAN:DONE WT-1 ok` → `done --from-screen`으로 시험 원장 기록.
 - 남은 경계: 화면 전체가 테두리보다 긴 줄을 담고 있으면(예: 아주 긴 본문 줄) 보수적으로 거절한다. 줄 길이는 코드 포인트 수로 센다(전각 글자 폭은 반영하지 않음).
 
+## 실전 판(LBR-1)에서 나온 결함 수정 (HW-6-impl, 2026-10-12)
+
+- 입력 커서 행(결함 1): `terminal session observe`는 기본으로 120x40 창을 만든다. 터미널이 58행이면 프레임은 위쪽 40행만 담고 실제 커서(55행)는 프레임 밖(숨김)이라, 프레임의 마지막 `\x1b[r;cH`는 커서가 아니라 그리기 위치(40행)였다. 줄을 세는 방식이 아니라 **행 좌표계(관찰 창 세로 ≠ 터미널 세로)** 가 어긋난 것이다. 이제 `--rows <터미널 세로>`로 관찰하고, 프레임 높이가 터미널과 다르거나 세로 줄 수를 모르면 거절한다(`herdrInputFrame`). 입력창 판정(`checkEmptyInput`)은 바꾸지 않아 미제출 입력 보호가 그대로다. 실측: 58행 Codex 빈 입력창 거절 → 통과, 미제출 한 줄·여러 줄은 계속 거절.
+- 신뢰 확인 화면(결함 4): 새 폴더 첫 실행은 Claude(`Quick safety check: Is this a project you created or one you trust`)·Codex(`Do you trust the contents of this directory?`)가 사람의 답을 기다리며 `blocked`가 된다. **자동 수락하지 않는다.** `start`는 시작 직후 최대 약 6초 동안 보고 막힘을 알리며, `send`는 `KADAN_HERDR_TRUST_PROMPT`로 거절하면서 정확한 통과 명령을 보여 준다. Claude 기본 선택은 `No, exit`라 Enter만 보내면 종료되므로 안내 명령은 `send-keys … down enter`다(Codex는 `enter`).
+- 우편 중 응답 중(결함 2의 (c)): Claude·Codex 모두 작업 중에 들어온 입력을 자기 대기열에 쌓았다가 현재 작업 뒤에 처리한다(실측: Codex `sleep 25; echo A1`·`sleep 5; echo A2`가 끊기지 않고 끝난 뒤 대기열 문장 처리). 그래서 **우편(완료 편지)** 은 `working`에서도 입력창이 비어 있으면 보낸다. **카드 발령**은 일하는 역할에 새 일을 얹지 않도록 기존처럼 입력 대기(`idle`/`done`)만 허용한다. `blocked`·`unknown`은 둘 다 거절한다.
+- 감독-작업자 왕복(결함 2): LBR-1의 "완료 편지 전부 실패"는 결함 1이 원인이었다(212x58 Claude 감독에게 설치본 CLI로 보낸 같은 편지는 `현재 입력 영역의 프롬프트 미확인`, 시험 브랜치 CLI로는 전달). 우회 없이 Codex 작업자→Claude 감독, Claude 작업자→Claude 감독, 감독 응답 중 도착 편지가 모두 `done --from-screen`으로 확정됐다. 증거는 HW-6-impl 카드 evidenceDir.
+- 지침(결함 3): 완료 통지 발송 실패는 작업 실패가 아니다. 카드 메모에 남기고 실행 `ok|failed`는 결과 파일·`card report`로 정한다(`card-template.md`, `role-templates/common.md`·`worker.md`, `docs/role-instructions.md`).
+- 남은 경계: 감독의 `kadan` 명령이 PATH의 설치본이면 시험 브랜치 코드가 아니다. 시험 중에는 역할 환경의 `KADAN_CLI`를 쓴다. 신뢰 화면 문구는 Claude v2.1.296·Codex(2026-10-12 화면) 기준이며, 문구가 바뀌면 `blocked` 거절(`KADAN_HERDR_NOT_READY`)로 떨어진다.
+
 ## Rottie 개별 접속
 
 Rottie의 각 프로젝트에 `terminal create --workspace <그 프로젝트> --command "herdr --session <시험서버> terminal attach <그 역할의 terminal ID>"`를 사용했다. 두 서로 다른 Rottie terminal ID와 프로젝트 소유 경로, 각 역할의 출력, gap 없음이 확인됐다. 전체 herdr TUI를 반복해서 여는 방식이 아니다.
