@@ -69,6 +69,7 @@ export function cmdSend(argv, flags) {
       raw:flags.raw===true,
       allowOldRunner:flags["allow-old-runner"],
       recordedPid: expectedPid,
+      busyMail: true,
     });
   } catch (error) {
     die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
