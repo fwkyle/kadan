@@ -105,9 +105,7 @@ export async function runWatch({
   memoryUsage = () => process.memoryUsage(),
 }) {
   if (judgeCmd && !ai) throw new Error("감시AI 보고 실행기가 필요합니다");
-  const processName = watchProcessName(process.env.KADAN_HOME || process.env.KADAN_LITE_HOME);
-  assertSingleWatch(spawn, processName);
-  if (processName !== "kadan-watch") print(`감시 프로세스 이름: ${processName}`);
+  assertSingleWatch(spawn, watchProcessName(process.env.KADAN_HOME || process.env.KADAN_LITE_HOME));
   // 기록 쓰기·알림 전송은 여러 단계에서 불리고 원장 잠금이나 바닥 전송을 기다릴 수 있다.
   // 단계 구간과 별도로 호출 수·총시간·최대시간을 모은다.
   const io = {record:ioCounter(), send:ioCounter()};
