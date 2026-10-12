@@ -16,6 +16,7 @@ import { DecisionStore } from "../decisions.mjs";
 import { CardStore } from "../card-store.mjs";
 import { WorkStore } from "../work-store.mjs";
 import { parseHierarchy } from "../hierarchy.mjs";
+import { pruneHierarchy } from "../hierarchy-prune.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -74,7 +75,7 @@ export function watchMailHold(role,{selectedFloor=floor}={}) {
 export function cmdWatch(argv, flags) {
   const usage =
     "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] " +
-    "[--completion-grace 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--user-notify] " +
+    "[--completion-grace 분] [--idle 분] [--route <판>=<역할>]... [--super <역할>] [--hierarchy <JSON파일>] [--hierarchy-prune off] [--user-notify] " +
     "[--judge-cmd <셸 명령>] [--judge-cooldown 분]\n  --profile: 정식 명령을 담은 JSON({flags,env}). 직접 준 옵션이 우선. " +
     "옵션이 하나도 없고 $KADAN_HOME/" + PROFILE_FILE + "이 있으면 자동 적용.";
   if (flags.help) {
@@ -93,6 +94,7 @@ export function cmdWatch(argv, flags) {
     "route",
     "super",
     "hierarchy",
+    "hierarchy-prune",
     "user-notify",
     "judge-cmd",
     "judge-cooldown",
@@ -161,6 +163,8 @@ export function cmdWatch(argv, flags) {
     routes.set(board, role);
   }
 
+  const prune = flags["hierarchy-prune"];
+  if (prune != null && prune !== "off") die("watch --hierarchy-prune은 off만 쓸 수 있다(기본은 켬)", 2);
   let parents = new Map();
   if (flags.hierarchy != null) {
     try {
@@ -220,6 +224,9 @@ export function cmdWatch(argv, flags) {
       const text = fs.readFileSync(flags.hierarchy, "utf8");
       return { parents: parseHierarchy(JSON.parse(text)), path: path.resolve(flags.hierarchy), hash: createHash("sha256").update(text).digest("hex") };
     } : null,
+    pruneHierarchy: flags.hierarchy && prune !== "off"
+      ? ({file, now}) => pruneHierarchy({home: ledgerHome(), floor, file, apply: true, now: () => now})
+      : null,
     idleMs: idleMinutes * 60 * 1_000,
     userNotify: flags["user-notify"] === true,
     judgeCmd: flags["judge-cmd"] || null,
