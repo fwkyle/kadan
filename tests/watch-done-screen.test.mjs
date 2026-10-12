@@ -105,7 +105,7 @@ test('감시 루프는 재사용 중 유예를 유지하고 인계 후임의 후
       readEntries:()=>inherited?[start,dispatch,successor,transfer]:[start,dispatch,...(cycle?[reused]:[])],
       readCards:()=>[{...cards[0],role,status:'assigned',at:start.t,activity:'running',activityRole:role,activityAt:dispatch.t}],readWorks:()=>[],
       record:e=>records.push({...e,cycle}),sendAlert:(role,message)=>messages.push({role,message,cycle}),
-      routes:new Map([['p','p-boss']]),superRole:'p-boss',intervalMs:60000,completionGraceMs:120000,stallN:100,
+      routes:new Map([['p','p-boss']]),superRole:'p-boss',liveRecipients:['p-boss'],intervalMs:60000,completionGraceMs:120000,stallN:100,
       now:()=>Date.parse('2026-09-28T00:04:00Z')+60000*cycle,print:()=>{},
       spawn:command=>{if(command==='sleep'&&++cycle===4)throw end;return {status:0,stdout:''};},
     }),error=>error===end);

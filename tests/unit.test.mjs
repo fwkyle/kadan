@@ -899,7 +899,7 @@ test("원장을 못 읽으면 모름으로 올린다 — 조회 실패를 0장�
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].kind, "모름");
   assert.equal(alerts[0].ledgerError, "EACCES");
-  assert.equal(routeAlert(alerts[0], new Map(), new Set(), "슈퍼"), "슈퍼");
+  assert.equal(routeAlert(alerts[0], new Map(), new Set(["kadan-슈퍼"]), "슈퍼"), "슈퍼");
 
   const screenAlerts = assessSupervisorIdle(
     [
@@ -919,7 +919,7 @@ test("원장을 못 읽으면 모름으로 올린다 — 조회 실패를 0장�
   assert.equal(screenAlerts[0].kind, "모름");
   assert.match(formatAlertBody(screenAlerts[0], {}), /화면 읽기 실패/u);
   assert.equal(
-    routeAlert(screenAlerts[0], new Map(), new Set(), "슈퍼"),
+    routeAlert(screenAlerts[0], new Map(), new Set(["kadan-슈퍼"]), "슈퍼"),
     "슈퍼"
   );
 });
@@ -1115,7 +1115,7 @@ test("이상 1건은 수신자 정확히 1명 — 두 지휘자 이중 개입 �
     role: "w1-작업자",
     session: "kadan-w1-작업자",
   };
-  const live = new Set(["kadan-w1-감독", "kadan-슈퍼"]);
+  const live = new Set(["kadan-w1-감독", "kadan-w1-지휘자", "kadan-슈퍼"]);
 
   assert.equal(
     routeAlert(alert, new Map([["w1", "w1-지휘자"]]), live, "슈퍼"),

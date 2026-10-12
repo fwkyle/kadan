@@ -27,7 +27,7 @@ async function exercise(mode, doneCycle, graceMinutes) {
       readCards:()=>['a','other'].map(id=>({key:`repo/${id}`,id,role,status:'assigned',workType:'execution',activity:'running',activityRole:role,activityAt:at(0)})),
       ...(graceMinutes===undefined?{}:{completionGraceMs:graceMinutes*60_000}),
       record:entry=>records.push({...entry,cycle}),sendAlert:(role,message)=>messages.push({role,message,cycle}),
-      intervalMs:60_000,stallN:100,routes:new Map([['p','p-boss']]),superRole:'p-boss',
+      intervalMs:60_000,stallN:100,routes:new Map([['p','p-boss']]),superRole:'p-boss',liveRecipients:['p-boss'],
       now:()=>epoch+cycle*60_000,print:()=>{},
       spawn:cmd=>{
         if(cmd==='sleep'){

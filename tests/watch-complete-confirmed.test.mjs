@@ -17,7 +17,7 @@ async function exercise({ entries, cards, screen = "KADAN:DONE card-x ok\n› �
   const oldLoad = os.loadavg;
   os.loadavg = () => [0, 0, 0];
   try {
-    await assert.rejects(() => runWatch({completionGraceMs:0,
+    await assert.rejects(() => runWatch({completionGraceMs:0, liveRecipients: ["p-감독", "qa-슈퍼감독"],
       floor: { list: () => [{ session, pid: 1 }], read: () => screen },
       readEntries: () => entries,
       ...(cards?{readCards:()=>cards,readWorks:()=>[]}:{}),

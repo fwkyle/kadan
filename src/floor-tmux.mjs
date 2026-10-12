@@ -301,7 +301,7 @@ export function openWindow(session, platform = process.platform, deps = {}) {
   const spawnFn = deps.spawnFn ?? spawnSync;
   const waitForClient = deps.waitForClient ?? waitForClientDefault;
   if (choice?.kind === "rottie") {
-    const result = rottieCreate(
+    const create = (idempotencyKey) => rottieCreate(
       deps.rottieBin ?? process.env.KADAN_ROTTIE_BIN,
       buildRottieCreateArgv({
         role: deps.role ?? session,
@@ -309,10 +309,15 @@ export function openWindow(session, platform = process.platform, deps = {}) {
         cwd: deps.cwd ?? process.cwd(),
         socket: deps.socket ?? SOCKET,
         panePid: deps.panePid ?? "unknown",
-        idempotencyKey: deps.idempotencyKey,
+        idempotencyKey,
       }),
       spawnFn
     );
+    let result = create(deps.idempotencyKey);
+    // 로티는 지운 탭의 키도 기억한다. 같은 세션을 다른 인자로 다시 열면 키 충돌이라 새 키로 한 번만 다시 연다.
+    if (!result.ok && result.code === "ROTTIE_IDEMPOTENCY_CONFLICT" && deps.conflictKeySuffix) {
+      result = create(`kadan-${session}-${deps.panePid ?? "unknown"}-${deps.conflictKeySuffix}`);
+    }
     if (!result.ok) {
       console.error(`창 rottie 실패: ${result.code}`);
       return null;

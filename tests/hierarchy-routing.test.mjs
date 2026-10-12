@@ -16,7 +16,7 @@ test('09-07 다른 접두사도 직속 감독, 감독은 슈퍼, 슈퍼는 사�
   }
   assert.equal(routeAlert(alert('other-prefix-작업자'),{},['kadan-prod-슈퍼감독'],'옛-슈퍼',parents),'prod-슈퍼감독');
   assert.equal(routeAlert(alert('other-prefix-작업자'),{},[],'옛-슈퍼',parents),'@user');
-  assert.equal(routeAlert({id:'stall:x',role:'legacy-작업자'},{legacy:'legacy-감독'},live,'옛-슈퍼',parents),'legacy-감독');
+  assert.equal(routeAlert({id:'stall:x',role:'legacy-작업자'},{legacy:'legacy-감독'},[...live,'kadan-legacy-감독'],'옛-슈퍼',parents),'legacy-감독');
   // 감시AI 호출 장애는 판정 도구의 문제라 작업자의 감독이 아니라 운영자(@user)에게 간다(2026-10-05 점검 보고서 2-M5).
   assert.equal(routeAlert({id:'ai-call:prod-작업자:stall',kind:'감시AI오류',role:'prod-작업자'},{prod:'prod-감독'},live,'옛-슈퍼',parents),'@user');
   assert.equal(routeAlert({id:'watch-ai:store',kind:'감시AI오류',role:'감시 보고 저장소'},{},live,'옛-슈퍼',parents),'@user');
@@ -117,6 +117,6 @@ test('수신자 선택 근거와 건너뛴 상위 역할을 실제 선택과 함
  assert.deepEqual(route,{recipient:'super',basis:'hierarchy',skipped:['lead']});
  assert.equal(routeAlert({id:'death:worker',role:'worker'},new Map(),live,'fallback',chain),route.recipient);
  assert.deepEqual(explainAlertRoute({id:'death:worker',role:'worker'},new Map(),new Set(),'fallback',chain),{recipient:'@user',basis:'hierarchy',skipped:['lead','super']});
- assert.equal(explainAlertRoute({id:'death:prod-worker',role:'prod-worker'},{prod:'explicit'},new Set(),'fallback').basis,'board-route');
+ assert.equal(explainAlertRoute({id:'death:prod-worker',role:'prod-worker'},{prod:'explicit'},new Set(['kadan-explicit']),'fallback').basis,'board-route');
  assert.equal(explainAlertRoute({id:'ledger:unreadable'},{},new Set(),null).recipient,null);
 });

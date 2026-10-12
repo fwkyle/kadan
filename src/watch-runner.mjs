@@ -30,8 +30,8 @@ import {
   assessRoles,
   dedupAlerts,
   filterConfirmedCompletions,
-  routeAlert,
   explainAlertRoute,
+  failureEscalation,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
@@ -540,15 +540,14 @@ export async function runWatch({
       const route = explainAlertRoute(
         alert,
         routes,
-        roles.liveSessions,
+        // 조회 실패(observationError)는 사망이 아니라 모름이다 — 생존 검사를 건너뛴다.
+        observationError ? null : roles.liveSessions,
         superRole,
         parents
       );
       const recipient=route.recipient;
       let target = "stdout";
-      const failureRecipient = parents.has(recipient)
-        ? routeAlert({ id: "delivery", role: recipient }, routes, roles.liveSessions, superRole, parents)
-        : superRole;
+      const failureRecipient = failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
       let delivered = false;
       if (recipient) {
         try {
@@ -670,7 +669,7 @@ export async function runWatch({
           observedSessions:[...roles.observations.values()].filter(r=>r.alive).length,
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
           memoryMb:roundAll({rss:memory.rss/2**20,heapUsed:memory.heapUsed/2**20}),window:timingWindow};
-        record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs,
+        record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs, routes, superRole,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
         // 기록에 성공한 뒤에만 비운다. 잠금으로 실패하면 모은 주기를 다음 기록에 이어 싣는다.
         timingWindow=null;

@@ -128,6 +128,8 @@ async function deliveryRun({ delivery, superRole = "qa-슈퍼감독", superFails
     await assert.rejects(() => runWatch({
       floor: { list: () => deaths[cycle] ? [] : [{ session, pid: 1 }], read: () => "healthy" },
       readEntries: () => [entry],
+      // 수신자 세션은 살아 있고 전달만 실패하는 상황이다(죽은 이름 건너뛰기는 tests/watch-alert-route.test.mjs).
+      liveRecipients: [...new Set(["p-감독", ...(superRole ? [superRole] : [])])],
       sendAlert: (role, message) => {
         sent.push({ cycle, role, message });
         if ((role === "p-감독" && !message.includes("세션 종료 의심 - 해소됨")) || superFails) {

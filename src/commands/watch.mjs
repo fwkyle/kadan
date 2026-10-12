@@ -10,6 +10,7 @@ import {
   readWatchProfile,
   applyWatchProfile,
   watchStartupWarnings,
+  watchRouteNameWarnings,
 } from "../watch-profile.mjs";
 import { DecisionStore } from "../decisions.mjs";
 import { CardStore } from "../card-store.mjs";
@@ -169,6 +170,10 @@ export function cmdWatch(argv, flags) {
       die(`watch hierarchy 읽기 실패: ${error.message}`, 2);
     }
   }
+  try {
+    const liveNow = floor.list().filter((item) => item.alive !== false).map((item) => item.session);
+    for (const line of watchRouteNameWarnings(routes, flags.super || null, liveNow)) console.error(line);
+  } catch { /* 살아 있는 세션을 못 읽으면 경고만 건너뛴다 */ }
   const watchController=new AbortController();
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
