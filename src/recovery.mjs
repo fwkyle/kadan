@@ -9,6 +9,7 @@ import {tmuxFloor, tmux, buildRottieCreateArgv, parseRottieCreateResult} from '.
 import {currentRottieWindow} from './restore.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {commandWords, launchIdentityOf} from './ai-identity.mjs';
+import {reportRecovery} from './recovery-report.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -225,9 +226,10 @@ export function restoreRecovery(flags, deps = {}) {
 
 export function recoveryCommand(argv, flags) {
   try {
-    if (process.env.KADAN_FLOOR && process.env.KADAN_FLOOR !== 'tmux') fail('역할 복원은 tmux에서만 지원합니다.');
+    if (argv[0] !== 'report' && process.env.KADAN_FLOOR && process.env.KADAN_FLOOR !== 'tmux') fail('역할 복원은 tmux에서만 지원합니다.');
     const result = argv[0] === 'inspect' ? inspectRecovery(flags)
-      : argv[0] === 'restore' ? restoreRecovery(flags) : fail('recovery inspect|restore가 필요합니다.');
+      : argv[0] === 'restore' ? restoreRecovery(flags)
+      : argv[0] === 'report' ? reportRecovery(flags) : fail('recovery inspect|restore|report가 필요합니다.');
     console.log(JSON.stringify({schemaVersion: 1, ok: true, result}));
   } catch (error) {
     console.log(JSON.stringify({schemaVersion: 1, ok: false, error: {message: error.message}}));
