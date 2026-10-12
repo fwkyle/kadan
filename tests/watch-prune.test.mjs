@@ -94,6 +94,7 @@ test('24시간 경계: 정확히 24시간은 대상, 그 전은 아니다; 시�
   assert.equal(hierarchyPruneDue(at(HIERARCHY_PRUNE_EVERY_MS - 1), t0), false);
   assert.equal(hierarchyPruneDue(at(HIERARCHY_PRUNE_EVERY_MS), t0), true);
   assert.equal(hierarchyPruneDue([{kind: 'hierarchy-prune', t: 'bad'}], t0), true);
+  assert.equal(hierarchyPruneDue([{kind: 'hierarchy-prune', t: stamp(t0 + 1)}], t0), true);
   assert.equal(hierarchyPruneDue([], t0), true);
 });
 
@@ -145,4 +146,13 @@ test('프로필 플래그에 hierarchy-prune이 있고 off 값을 읽는다', ()
   const f = path.join(dir, 'watch-profile.json');
   fs.writeFileSync(f, JSON.stringify({flags: {hierarchy: 'h.json', 'hierarchy-prune': 'off'}}));
   assert.equal(readWatchProfile(f).flags['hierarchy-prune'], 'off');
+});
+
+test('미래 시각 기록은 근거가 아니다: 한 번 정리하고 새 기록이 생기면 같은 날 다시 돌지 않는다', async () => {
+  const future = {kind: 'hierarchy-prune', by: 'watch', t: stamp(t0 + 7 * 24 * HOUR)};
+  const result = await drive({times: [t0, t0 + HOUR, t0 + 2 * HOUR], ledger: [future], prune: ok});
+  assert.equal(result.calls.length, 1);
+  assert.equal(result.records.length, 2);
+  assert.equal(result.records[1].t, stamp(t0));
+  assert.equal(result.ledger[0], future, '옛 기록은 그대로 둔다');
 });

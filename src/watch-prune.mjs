@@ -5,7 +5,8 @@ export const HIERARCHY_PRUNE_EVERY_MS = 24 * 60 * 60_000;
 export function hierarchyPruneDue(entries, now) {
   const last = entries.findLast(entry => entry?.kind === 'hierarchy-prune');
   const at = Date.parse(last?.t);
-  return !Number.isFinite(at) || now - at >= HIERARCHY_PRUNE_EVERY_MS;
+  // 현재보다 미래인 기록은 시계가 앞으로 틀렸던 흔적이라 경과 판단 근거로 쓰지 않는다(원장은 고치지 않는다).
+  return !Number.isFinite(at) || at > now || now - at >= HIERARCHY_PRUNE_EVERY_MS;
 }
 
 // 정리 규칙은 pruneHierarchy 그대로다. 거절·오류도 기록으로 남겨 24시간 시계를 시작하고, 감시는 멈추지 않는다.
