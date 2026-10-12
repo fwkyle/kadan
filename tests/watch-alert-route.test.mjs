@@ -66,3 +66,74 @@ test('3. 긴 역할 이름(<판>-신규-작업자)도 route 키가 접두사면 
  assert.equal(routeAlert(alert('w1-신규-작업자'),{w1:'w1-지휘자'},l,'슈퍼'),'w1-지휘자');
  assert.equal(routeAlert(alert('w10-작업자'),new Map([['w1','w1-지휘자']]),live('w1-지휘자','슈퍼'),'슈퍼'),'슈퍼');
 });
+
+// ---- HW-7-impl2: 검수(HW-7-review) 중요 4건 회귀 시험. 검수자 independent-boundaries.test.mjs 의 실패 6건을 옮겼다. ----
+const worker={id:'death:worker',kind:'죽음',role:'p-작업자'};
+const liveBoard=new Set(['kadan-p-감독','kadan-super']);
+
+test('중요 1. 명시한 @user route는 생존 검사 없이 그대로 사용자에게 간다',()=>{
+ assert.deepEqual(explainAlertRoute(worker,{p:'@user'},liveBoard,'super'),{recipient:'@user',basis:'board-route',skipped:[]});
+});
+test('중요 1. @user super는 basis supervisor로 남고 가짜 죽은 세션 skipped가 없다',()=>{
+ assert.deepEqual(explainAlertRoute({...worker,role:'other-worker'},{},liveBoard,'@user'),{recipient:'@user',basis:'supervisor',skipped:[]});
+ assert.equal(failureEscalation('dead',{},liveBoard,'@user'),'@user');
+});
+test('중요 1. 프로필 경고는 @user를 죽은 세션으로 말하지 않는다',()=>{
+ assert.deepEqual(watchRouteNameWarnings({p:'@user'},'@user',[]),[]);
+});
+test('중요 2. 긴 역할 이름의 죽은 route는 같은 판 살아 있는 감독으로 대체한다',()=>{
+ const actual=explainAlertRoute({...worker,role:'p-신규-작업자'},{p:'dead-route'},liveBoard,'super');
+ assert.equal(actual.recipient,'p-감독');
+ assert.deepEqual(actual.skipped,['dead-route(route 세션 없음)']);
+});
+test('중요 2. 가장 긴 접두사 키가 boardFromRole과 일치하는 짧은 키보다 우선한다',()=>{
+ const actual=explainAlertRoute({...worker,role:'p-작업자-extra'},{p:'short','p-작업자':'long'},['kadan-short','kadan-long'],'super');
+ assert.equal(actual.recipient,'long');
+});
+// 순회 중 원장 EACCES 시험용 모의. 바닥·OS 알림·전송은 모두 주입 모의다.
+async function mockCycles({brokenLedger=false}={}) {
+ const {runWatch}=await import('../src/watch-runner.mjs');
+ const controller=new AbortController(),sent=[],notifications=[];
+ let cycle=0,entryReads=0;
+ const entries=[{kind:'start',role:'p-작업자',session:'kadan-p-작업자',panePid:1,t:'2026-10-01T00:00:00Z'},
+  {kind:'start',role:'super',session:'kadan-super',panePid:2,t:'2026-10-01T00:00:00Z'}];
+ await runWatch({floor:{list:()=>[{session:'kadan-super',pid:2},{session:'kadan-p-작업자',pid:1}],read:()=>'healthy'},
+  readEntries:()=>{if(brokenLedger&&entryReads++>0)throw Error('EACCES mocked');return entries;},
+  record:()=>{},sendAlert:(role,message)=>sent.push({role,message}),
+  routes:{p:'dead-route'},superRole:'super',intervalMs:1000,stallN:100,signal:controller.signal,
+  print:()=>{},now:()=>Date.parse('2026-10-12T00:00:00Z')+cycle*1000,
+  sleep:async()=>{if(++cycle===3)controller.abort();},
+  spawn:(cmd,args)=>{if(cmd==='osascript')notifications.push(args);return {status:0,stdout:''};}});
+ return {sent:sent.map(x=>x.role),notifications:notifications.length};
+}
+test('중요 3. 원장 읽기 오류는 살아 있는 super를 @user로 바꾸지 않는다 — 조회 실패는 모름',async()=>{
+ const after=await mockCycles({brokenLedger:true});
+ assert.equal(after.notifications,0);
+ assert.deepEqual(after.sent,['super']);
+});
+test('중요 3. 생존을 모르면(null) 적힌 이름 그대로 가고, 프로필 경고는 건너뛴다',()=>{
+ assert.deepEqual(explainAlertRoute(worker,{p:'dead-route'},null,'super'),{recipient:'dead-route',basis:'board-route',skipped:[]});
+ assert.equal(explainAlertRoute({id:'ledger:unreadable'},{},null,'super').recipient,'super');
+ assert.equal(failureEscalation('p-감독',{},null,'super',new Map()),'super');
+ assert.deepEqual(watchRouteNameWarnings({p:'dead'},'dead-super',null),[]);
+});
+test('중요 4. 점검 화면 판정(watchVerdict)에 이름 경고가 warn으로 나온다',async()=>{
+ const {watchVerdict}=await import('../src/watch-cycle.mjs');
+ const base={process:{state:'running',instances:[{pid:1}]},configuration:{state:'matched'},
+  cycle:{state:'ok',ageMs:1000,settings:{hierarchy:'/h.json',judge:true}}};
+ assert.equal(watchVerdict(base).level,'ok');
+ const warned=watchVerdict({...base,routeNames:watchRouteNameWarnings({p:'dead'},null,[])});
+ assert.equal(warned.level,'warn');assert.match(warned.text,/--route p=dead/u);
+});
+test('중요 4. watchOverview가 주기 기록의 route/super 이름과 살아 있는 역할로 경고를 만든다',async()=>{
+ const {watchOverview}=await import('../src/watch-overview.mjs');
+ const now=Date.parse('2026-10-12T00:10:00Z'),t=ms=>new Date(now-ms).toISOString();
+ const proc={pid:7,startedAt:t(600_000)};
+ const entries=[{kind:'watch-cycle',by:'watch',pid:7,t:t(1000),hierarchy:'/h.json',judge:true,routes:{p:'dead-route'},superRole:'super',ok:true}];
+ const center={runtimeKnown:true,cards:[],boards:[],roles:[{role:'super',life:{state:'alive',pidState:'match'}}]};
+ const result=watchOverview({center,entries,processes:[proc],now});
+ assert.equal(result.routeNames.length,1);assert.match(result.routeNames[0],/dead-route/u);
+ assert.match(result.verdict.text,/--route p=dead-route/u);
+ const unknown=watchOverview({center:{...center,runtimeKnown:false},entries,processes:[proc],now});
+ assert.deepEqual(unknown.routeNames,[]);
+});

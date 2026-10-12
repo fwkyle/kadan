@@ -10,9 +10,10 @@ export function cycleRecordDue(lastRecordedAt, now) {
  return lastRecordedAt == null || now - lastRecordedAt >= CYCLE_RECORD_MS;
 }
 
-export function buildCycleEntry({runtime = null,timing = null,pid, hierarchyPath = null, hierarchyHash = null, judge = false, profile = null, intervalMs = null, sessions = null, supervisorSessions = null, ok = true}) {
+export function buildCycleEntry({runtime = null,timing = null,pid, hierarchyPath = null, hierarchyHash = null, judge = false, profile = null, intervalMs = null, sessions = null, supervisorSessions = null, ok = true, routes = null, superRole = null}) {
  return {kind: 'watch-cycle', by: 'watch', pid,...(runtime?{runtime}:{}),...(timing?{timing}:{}), hierarchy: hierarchyPath, hierarchyHash, judge: Boolean(judge), profile,
-  intervalMs, sessions: sessions == null ? null : sessions.length, supervisorSessions: supervisorSessions == null ? null : supervisorSessions.length, ok};
+  intervalMs, sessions: sessions == null ? null : sessions.length, supervisorSessions: supervisorSessions == null ? null : supervisorSessions.length, ok,
+  ...(routes && (routes instanceof Map ? routes.size : Object.keys(routes).length) ? {routes: routes instanceof Map ? Object.fromEntries(routes) : routes} : {}), ...(superRole ? {superRole} : {})};
 }
 
 // 순회 시간 분해(2026-09-30 계획 0단계). 주기 기록이 5분에 한 번이라 그 사이 주기는 합계·최대로 모은다.
@@ -56,7 +57,7 @@ export function cycleStatus(entries, worker, now, {windowMs = 24 * 60 * 60_000} 
  const cycles = entries.filter(e => e?.kind === 'watch-cycle' && ms(e.t) != null && ms(e.t) <= now);
  const mine = worker ? cycles.filter(e => Number(e.pid) === worker.pid && ms(e.t) >= (ms(worker.startedAt) ?? 0)) : [];
  const last = mine.at(-1) ?? null;
- const settings = last ? {...(last.timing?{timing:last.timing}:{}),...(last.runtime?{runtime:last.runtime}:{}),hierarchy: last.hierarchy ?? null, judge: last.judge === true, profile: last.profile ?? null, intervalMs: last.intervalMs ?? null} : null;
+ const settings = last ? {...(last.timing?{timing:last.timing}:{}),...(last.runtime?{runtime:last.runtime}:{}),hierarchy: last.hierarchy ?? null, judge: last.judge === true, profile: last.profile ?? null, intervalMs: last.intervalMs ?? null, ...(last.routes?{routes:last.routes}:{}), ...(last.superRole?{superRole:last.superRole}:{})} : null;
  const gaps = [];
  const first = cycles[0];
  let gapMinutes = null;
@@ -84,7 +85,7 @@ const fmtMinutes = m => m < 60 ? m + '분' : Math.floor(m / 60) + '시간 ' + (m
 const clock = iso => new Date(iso).toLocaleTimeString('ko-KR', {timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false});
 
 // 사람이 첫 화면에서 읽을 한 줄. level: ok | warn | bad | unknown
-export function watchVerdict({process: proc, configuration, cycle, profilePath = null}, now = Date.now()) {
+export function watchVerdict({process: proc, configuration, cycle, profilePath = null, routeNames = []}, now = Date.now()) {
  const parts = [], hints = [];
  let level = 'unknown', headline = '감시기 생존 모름';
  const gap = cycle?.gapMinutes >= Math.round(CYCLE_STALE_MS / 60_000) && cycle.gaps?.length
@@ -119,6 +120,10 @@ export function watchVerdict({process: proc, configuration, cycle, profilePath =
   parts.push(proc.error || '프로세스 목록 조회 실패');
  }
  if (gap) parts.push(gap);
+ if (routeNames?.length) {
+  if (level === 'ok') { level = 'warn'; headline = '알림 수신자 이름 확인 필요'; }
+  parts.push(...routeNames);
+ }
  const runtime=cycle?.settings?.runtime;
  // 40자리 대신 7자리로. 대시보드 코드와 다른지는 화면 쪽(renderWatchVerdict)이 비교해 알린다.
  parts.push(`감시기 코드 ${runtime?.commit?.slice(0,7)||'모름'}${runtime?.dirty?' · 시작 시 미커밋 변경 있음':''}`);

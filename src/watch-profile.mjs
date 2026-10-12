@@ -62,11 +62,13 @@ export function watchStartupWarnings(flags, {profileFile = null, defaultProfile 
 }
 
 // route·--super에 적힌 이름이 지금 살아 있는 세션이 아니면 알림이 건너뛰어 @user로 간다. 시작을 막지는 않는다.
+// `@user` 같은 `@` 주소는 세션이 아니라 경고하지 않는다. 생존을 모르면(null) 경고하지 않는다.
 export function watchRouteNameWarnings(routes, superRole, liveSessions) {
- const live = new Set(liveSessions), lines = [];
+ if (liveSessions == null) return [];
+ const live = new Set(liveSessions), lines = [], dead = role => typeof role === 'string' && !role.startsWith('@') && !live.has(`kadan-${role}`);
  for (const [board, role] of routes instanceof Map ? routes : Object.entries(routes ?? {})) {
-  if (!live.has(`kadan-${role}`)) lines.push(`경고: --route ${board}=${role} — '${role}' 세션이 살아 있지 않습니다. 이 판 알림은 같은 판 감독·super로 건너뛰고 끝내 없으면 @user로 갑니다.`);
+  if (dead(role)) lines.push(`경고: --route ${board}=${role} — '${role}' 세션이 살아 있지 않습니다. 이 판 알림은 같은 판 감독·super로 건너뛰고 끝내 없으면 @user로 갑니다.`);
  }
- if (superRole && !live.has(`kadan-${superRole}`)) lines.push(`경고: --super ${superRole} — '${superRole}' 세션이 살아 있지 않습니다. super로 갈 알림은 @user로 갑니다.`);
+ if (superRole && dead(superRole)) lines.push(`경고: --super ${superRole} — '${superRole}' 세션이 살아 있지 않습니다. super로 갈 알림은 @user로 갑니다.`);
  return lines;
 }

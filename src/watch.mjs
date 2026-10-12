@@ -431,20 +431,21 @@ export function filterConfirmedCompletions(alerts, entries, cards = null) {
   });
 }
 
-// route 키가 역할 이름의 접두사(`<키>-`)이면 걸린다. 여러 키가 걸리면 가장 긴 접두사.
+// route 키가 역할 이름과 같거나 `<키>-`로 시작하면 걸린다. 여러 키가 걸리면 가장 긴 것.
 // boardFromRole은 `<판>-신규-작업자`에서 `<판>-신규`를 뽑아 route `<판>`을 놓친다. board.mjs는 건드리지 않는다.
 function routeKeyFor(role, routes) {
   const keys = routes instanceof Map ? [...routes.keys()] : Object.keys(routes ?? {});
-  const board = boardFromRole(role);
-  if (board && keys.includes(board)) return board;
   let best = null;
   for (const key of keys) {
-    if (typeof key !== 'string' || !key || !role.startsWith(`${key}-`)) continue;
+    if (typeof key !== 'string' || !key || (role !== key && !role.startsWith(`${key}-`))) continue;
     if (best === null || key.length > best.length) best = key;
   }
   return best;
 }
+// `@user` 같은 `@` 주소는 세션이 아니라 사용자 주소라 생존 검사를 하지 않는다.
+const isUserAddress = recipient => typeof recipient === 'string' && recipient.startsWith('@');
 
+// liveSessions가 null이면 생존을 '모름'으로 본다(바닥·원장 조회 실패). 생존 검사를 건너뛰고 적힌 이름으로 보낸다.
 export function explainAlertRoute(alert, routes, liveSessions, superRole, parents = new Map()) {
   const skipped=[];
   const chosen=(recipient,basis)=>({recipient:recipient||null,basis,skipped});
@@ -453,11 +454,13 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
   // 감시AI 호출 장애(timeout·call-failed·report-missing…)는 판정 CLI·모델의 문제라 운영자 몫이다.
   // 작업자의 감독에게 보내면 받아도 할 수 있는 일이 없다(2026-10-05 점검 보고서 2-M5).
   if (alert.kind === '감시AI오류') return chosen('@user','judge-failure');
-  const hierarchy=hierarchyRoute(alert.role,parents,liveSessions);
+  const known = liveSessions != null;
+  const sessions = liveSessions ?? [];
+  const hierarchy=hierarchyRoute(alert.role,parents,sessions);
   if(hierarchy)return hierarchy;
   // 죽은 후보에게 보내면 알림이 조용히 사라진다. 살아 있지 않으면 건너뛰고 이유를 남긴다.
-  const live=new Set(liveSessions);
-  const alive=role=>live.has(`kadan-${role}`);
+  const live=new Set(sessions);
+  const alive=role=>!known||isUserAddress(role)||live.has(`kadan-${role}`);
   const toSuper=basis=>{
     if(!superRole)return chosen(null,'none');
     if(alive(superRole))return chosen(superRole,basis);
@@ -474,9 +477,10 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
         skipped.push(`${explicit}(route 세션 없음)`);
       }
     }
-    const board=boardFromRole(alert.role);
+    // 찾은 키를 같은 판 감독 대체에도 쓴다. 맞는 키가 없을 때만 boardFromRole.
+    const board=key??boardFromRole(alert.role);
     if(board){
-      const supervisor=supervisorForBoard(board,liveSessions);
+      const supervisor=supervisorForBoard(board,sessions);
       if(supervisor)return chosen(supervisor,'role-name');
     }
   }
@@ -487,6 +491,7 @@ export function routeAlert(...args) {return explainAlertRoute(...args).recipient
 export function failureEscalation(recipient, routes, liveSessions, superRole, parents = new Map()) {
   if (parents.has(recipient)) return routeAlert({id:'delivery',role:recipient},routes,liveSessions,superRole,parents);
   if (!superRole) return null;
+  if (liveSessions == null || superRole.startsWith('@')) return superRole;
   return new Set(liveSessions).has(`kadan-${superRole}`) ? superRole : '@user';
 }
 
