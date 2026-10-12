@@ -55,6 +55,7 @@ async function exercise({ entries, screens, cycles = 5, queuedAfterMs = 2000, ca
           intervalMs: 1000,
           stallN: 100,
           queuedAfterMs,
+          liveRecipients: ["p-감독", "qa-슈퍼감독"],
           routes: { p: "p-감독" },
           superRole: "qa-슈퍼감독",
           now: () => Date.parse(start.t) + cycle * 1000,

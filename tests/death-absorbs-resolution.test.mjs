@@ -6,6 +6,8 @@ import { runWatch } from "./helpers/watch-runner.mjs";
 
 const session = "kadan-a-작업자";
 const anomaly = { id: `complete-candidate:${session}:a-1|ok`, kind: "완료후보", level: "AMBER", session };
+// 수신자 세션이 살아 있어야 알림이 간다(HW-7-impl: 죽은 이름은 건너뛴다).
+const recipients = ["kadan-a-감독", "kadan-qa-슈퍼감독"];
 const death = (session) => ({ id: `death:${session}`, kind: "죽음", level: "RED", session });
 async function run(cycles, { failFirst = false } = {}) {
   let cycle = 0;
@@ -21,8 +23,10 @@ async function run(cycles, { failFirst = false } = {}) {
   os.loadavg = () => [0, 0, 0];
   try {
     await assert.rejects(() => runWatch({completionGraceMs:0,
-      floor: { list: () => cycles[cycle] === null ? [] : [{ session, pid: 1 }], read: () => cycles[cycle] },
-      readEntries: () => [{ kind: "start", role: "a-작업자", session, panePid: 1, t: "2026-09-05T00:00:00Z" }],
+      floor: { list: () => [...recipients.map(session => ({ session, pid: 1 })), ...(cycles[cycle] === null ? [] : [{ session, pid: 1 }])],
+        read: name => recipients.includes(name) ? "healthy" : cycles[cycle] },
+      readEntries: () => [{ kind: "start", role: "a-작업자", session, panePid: 1, t: "2026-09-05T00:00:00Z" },
+        ...recipients.map(name => ({ kind: "start", role: name.slice(6), session: name, panePid: 1, t: "2026-09-05T00:00:00Z" }))],
       sendAlert: (role, message) => {
         sent.push({ cycle, role, message });
         if (failFirst && cycle === 0 && role === "a-감독") {

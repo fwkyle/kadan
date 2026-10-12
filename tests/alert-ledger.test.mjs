@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import { runWatch } from "./helpers/watch-runner.mjs";
 
+// 수신자(감독·슈퍼) 세션은 살아 있어야 알림이 간다(HW-7-impl: 죽은 이름은 건너뛴다).
+const recipients = ["kadan-p-감독", "kadan-qa-슈퍼감독"].map((session) => ({ session, pid: 1 }));
 const withoutRoute=({route,...entry})=>entry;
 const session = "kadan-p-작업자";
 const start = { kind: "start", role: "p-작업자", session, panePid: 1, t: "2026-09-05T00:00:00.000Z" };
@@ -18,8 +20,8 @@ async function exercise({ failure, superFails = false, stdout = false, recordFai
   console.error = line => errors.push(line);
   try {
     await assert.rejects(() => runWatch({completionGraceMs:0,
-      floor: { list: () => cycle === 1 || cycle === 2 ? [] : [{ session, pid: 1 }], read: () => screen },
-      readEntries: () => [start],
+      floor: { list: () => [...(stdout ? [] : recipients), ...(cycle === 1 || cycle === 2 ? [] : [{ session, pid: 1 }])], read: name => recipients.some(r => r.session === name) ? "healthy" : screen },
+      readEntries: () => [start, ...(stdout ? [] : recipients).map(({ session: s }) => ({ kind: "start", role: s.slice(6), session: s, panePid: 1, t: start.t }))],
       record: entry => {
         if (entry.kind === "watch-cycle") return; // 주기 기록은 경보 원장 규칙과 별개다(watch-cycle.test.mjs)
         records.push(entry); events.push(["record", entry.recipient, entry.resolved ?? false]);

@@ -30,8 +30,8 @@ import {
   assessRoles,
   dedupAlerts,
   filterConfirmedCompletions,
-  routeAlert,
   explainAlertRoute,
+  failureEscalation,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
@@ -546,9 +546,7 @@ export async function runWatch({
       );
       const recipient=route.recipient;
       let target = "stdout";
-      const failureRecipient = parents.has(recipient)
-        ? routeAlert({ id: "delivery", role: recipient }, routes, roles.liveSessions, superRole, parents)
-        : superRole;
+      const failureRecipient = failureEscalation(recipient, routes, roles.liveSessions, superRole, parents);
       let delivered = false;
       if (recipient) {
         try {

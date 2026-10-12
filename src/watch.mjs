@@ -431,8 +431,23 @@ export function filterConfirmedCompletions(alerts, entries, cards = null) {
   });
 }
 
+// route 키가 역할 이름의 접두사(`<키>-`)이면 걸린다. 여러 키가 걸리면 가장 긴 접두사.
+// boardFromRole은 `<판>-신규-작업자`에서 `<판>-신규`를 뽑아 route `<판>`을 놓친다. board.mjs는 건드리지 않는다.
+function routeKeyFor(role, routes) {
+  const keys = routes instanceof Map ? [...routes.keys()] : Object.keys(routes ?? {});
+  const board = boardFromRole(role);
+  if (board && keys.includes(board)) return board;
+  let best = null;
+  for (const key of keys) {
+    if (typeof key !== 'string' || !key || !role.startsWith(`${key}-`)) continue;
+    if (best === null || key.length > best.length) best = key;
+  }
+  return best;
+}
+
 export function explainAlertRoute(alert, routes, liveSessions, superRole, parents = new Map()) {
-  const chosen=(recipient,basis)=>({recipient:recipient||null,basis,skipped:[]});
+  const skipped=[];
+  const chosen=(recipient,basis)=>({recipient:recipient||null,basis,skipped});
   if (alert.kind === '자원' && Object.hasOwn(alert,'recipient')) return chosen(alert.recipient,'explicit');
   if (alert.id === 'hierarchy:unreadable') return chosen('@user','hierarchy-unreadable');
   // 감시AI 호출 장애(timeout·call-failed·report-missing…)는 판정 CLI·모델의 문제라 운영자 몫이다.
@@ -440,19 +455,40 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
   if (alert.kind === '감시AI오류') return chosen('@user','judge-failure');
   const hierarchy=hierarchyRoute(alert.role,parents,liveSessions);
   if(hierarchy)return hierarchy;
-  if(alert.id.startsWith('idle:')||alert.id==='ledger:unreadable')return chosen(superRole,'supervisor');
+  // 죽은 후보에게 보내면 알림이 조용히 사라진다. 살아 있지 않으면 건너뛰고 이유를 남긴다.
+  const live=new Set(liveSessions);
+  const alive=role=>live.has(`kadan-${role}`);
+  const toSuper=basis=>{
+    if(!superRole)return chosen(null,'none');
+    if(alive(superRole))return chosen(superRole,basis);
+    skipped.push(`${superRole}(super 세션 없음)`);
+    return chosen('@user','user-fallback');
+  };
+  if(alert.id.startsWith('idle:')||alert.id==='ledger:unreadable')return toSuper('supervisor');
   if(alert.role){
+    const key=routeKeyFor(alert.role,routes);
+    if(key){
+      const explicit=routes instanceof Map?routes.get(key):routes?.[key];
+      if(explicit){
+        if(alive(explicit))return chosen(explicit,'board-route');
+        skipped.push(`${explicit}(route 세션 없음)`);
+      }
+    }
     const board=boardFromRole(alert.role);
     if(board){
-      const explicit=routes instanceof Map?routes.get(board):routes?.[board];
-      if(explicit)return chosen(explicit,'board-route');
       const supervisor=supervisorForBoard(board,liveSessions);
       if(supervisor)return chosen(supervisor,'role-name');
     }
   }
-  return chosen(superRole,superRole?'supervisor':'none');
+  return toSuper(superRole?'supervisor':'none');
 }
 export function routeAlert(...args) {return explainAlertRoute(...args).recipient;}
+// 전달 실패 승격 대상. 관계표 안이면 다음 살아 있는 상위, 밖이면 super(죽었으면 @user).
+export function failureEscalation(recipient, routes, liveSessions, superRole, parents = new Map()) {
+  if (parents.has(recipient)) return routeAlert({id:'delivery',role:recipient},routes,liveSessions,superRole,parents);
+  if (!superRole) return null;
+  return new Set(liveSessions).has(`kadan-${superRole}`) ? superRole : '@user';
+}
 
 export function dedupAlerts(previousAlerts, nextAlerts) {
   const previousById = new Map(
