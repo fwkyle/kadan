@@ -6,14 +6,20 @@ const ALIVE_STATES = new Set(["running", "created"]);
 // window 기록이 탭 번호를 갈아 끼운다. 마지막 start에 탭이 없으면 숨김이거나 로티 밖에서 띄운 세션이다.
 export function currentRottieWindow(entries, session) {
   let window = null;
+  let hiddenStart = null;
   for (const entry of entries ?? []) {
     if (entry?.session !== session) continue;
     if (entry.kind === "start") {
+      hiddenStart = entry.rottieTerminalId ? null : entry;
       window = entry.rottieTerminalId
         ? { role: entry.role, cwd: entry.cwd, rottieTerminalId: entry.rottieTerminalId }
         : null;
-    } else if (entry.kind === "window" && window && entry.rottieTerminalId) {
-      window = { ...window, rottieTerminalId: entry.rottieTerminalId };
+    } else if (entry.kind === "window" && entry.rottieTerminalId) {
+      if (window) window = { ...window, rottieTerminalId: entry.rottieTerminalId };
+      else if (hiddenStart && entry.panePid
+        && String(entry.panePid) === String(hiddenStart.panePid)) {
+        window = {role: hiddenStart.role, cwd: hiddenStart.cwd, rottieTerminalId: entry.rottieTerminalId};
+      }
     }
   }
   return window;

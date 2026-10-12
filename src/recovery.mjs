@@ -10,6 +10,8 @@ import {currentRottieWindow} from './restore.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {commandWords, launchIdentityOf} from './ai-identity.mjs';
 import {reportRecovery} from './recovery-report.mjs';
+import {resumedSecretaryStart, withRecoveryLock, advanceSecretaryCheckpoint,
+  liveSecretaryTranscript, transcriptIdentity, savedSecretaryCommand} from './secretary-resume.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -117,7 +119,7 @@ export function inspectRecovery(flags, deps = {}) {
   };
 }
 
-function validateContext(context, home, entries) {
+function validateContext(context, home, entries, command) {
   if (!context || context.version !== 1 || !absolute(context.home) || !absolute(context.tmuxTmpdir)) {
     fail('카단 복원 정보 형식이 잘못됐습니다.');
   }
@@ -126,11 +128,13 @@ function validateContext(context, home, entries) {
     fail('카단 복원 저장소 또는 서버가 다릅니다.');
   }
   const start = latest(entries, context.session);
-  if (digest(start) !== context.startDigest || start.role !== context.role || start.cwd !== context.cwd
+  const resumed = resumedSecretaryStart(context, entries, command);
+  if ((!resumed && digest(start) !== context.startDigest) || start.role !== context.role || start.cwd !== context.cwd
     || currentRottieWindow(entries, context.session)?.rottieTerminalId !== context.terminalId) {
     fail('카단 역할이 교체되거나 연결 정보가 바뀌었습니다. 옛 역할은 복원하지 않습니다.');
   }
-  const originalIdentity = launchIdentityOf(start.cmd);
+  const original = resumed ? entries.find(e => e.kind === 'start' && digest(e) === context.startDigest) : start;
+  const originalIdentity = launchIdentityOf(original.cmd);
   if ((originalIdentity.ok ? originalIdentity.model : undefined) !== context.model) {
     fail('카단 역할의 원본 모델 정보가 다릅니다.');
   }
@@ -143,9 +147,17 @@ function validateContext(context, home, entries) {
 export function restoreRecovery(flags, deps = {}) {
   const home = deps.home || ledgerHome();
   const context = JSON.parse(flags.context || 'null');
+  if (!context?.session) fail('카단 복원 역할 주소가 필요합니다.');
+  return withRecoveryLock(home, context.session, () => restoreLocked(flags, deps));
+}
+
+function restoreLocked(flags, deps) {
+  const home = deps.home || ledgerHome();
+  const context = JSON.parse(flags.context || 'null');
   // Rottie uses exec for standalone PTYs. The stored Kadan command starts at the executable
   // so existing AI identity/card checks continue to recognize the restored role.
-  const command = typeof flags.command === 'string' ? flags.command.replace(/^exec /, '') : flags.command;
+  const requested = typeof flags.command === 'string' ? flags.command.replace(/^exec /, '') : flags.command;
+  const command = savedSecretaryCommand(home, context, requested);
   const bin = flags['rottie-bin'];
   if (typeof command !== 'string' || !command.trim() || !absolute(bin)) {
     fail('정확한 대화 복원 명령과 Rottie 실행 파일이 필요합니다.');
@@ -153,10 +165,11 @@ export function restoreRecovery(flags, deps = {}) {
   assertWritable(home);
   const read = deps.read || (() => readSystemLedger(home));
   const entries = read();
-  const start = validateContext(context, home, entries);
+  const start = validateContext(context, home, entries, command);
+  const autostart = resumedSecretaryStart(context, entries, command);
   const resumedIdentity = launchIdentityOf(command);
   const originalIdentity = launchIdentityOf(start.cmd);
-  if (originalIdentity.ok && (!resumedIdentity.ok || resumedIdentity.harness !== originalIdentity.harness
+  if (!autostart && originalIdentity.ok && (!resumedIdentity.ok || resumedIdentity.harness !== originalIdentity.harness
     || resumedIdentity.model !== originalIdentity.model)) {
     fail('복원 명령의 실행기 또는 모델이 원본 역할과 다릅니다.');
   }
@@ -166,8 +179,14 @@ export function restoreRecovery(flags, deps = {}) {
   }
   if (!fs.statSync(context.cwd).isDirectory()) fail('카단 작업 폴더를 찾을 수 없습니다.');
   const pane = (deps.livePane || livePane)(context.session);
-  if (pane && (pane.dead || flags['allow-reuse'] !== 'true'
-    || pane.pid !== context.panePid || pane.created !== context.sessionCreated)) {
+  if (autostart && pane && (deps.secretaryConversation || (pid =>
+    transcriptIdentity(liveSecretaryTranscript(pid)).id))(pane.pid) !== start.secretaryConversation) {
+    fail('자동 복원된 비서의 실제 대화가 다릅니다. 새 비서를 만들지 않습니다.');
+  }
+  if (pane && (pane.dead || (autostart
+    ? pane.pid !== String(start.panePid)
+    : flags['allow-reuse'] !== 'true' || pane.pid !== context.panePid
+      || pane.created !== context.sessionCreated))) {
     fail('같은 이름의 카단 역할이 이미 있습니다. 새 역할이나 빈 pane에 옛 대화를 넣지 않습니다.');
   }
   const dir = path.join(home, 'recovery');
@@ -182,7 +201,7 @@ export function restoreRecovery(flags, deps = {}) {
   try { fs.writeFileSync(fd, JSON.stringify({state: 'claimed', context})); fs.fsyncSync(fd); }
   finally { fs.closeSync(fd); }
   // Recheck after claiming. A concurrent new-session also fails atomically on name collision.
-  validateContext(context, home, read());
+  validateContext(context, home, read(), command);
   const evidence = pane ? {panePid: pane.pid} : (deps.create || tmuxFloor.create)({
     session: context.session, role: context.role, cwd: context.cwd, cmd: command,
   });
@@ -191,7 +210,7 @@ export function restoreRecovery(flags, deps = {}) {
     || (pane && attachedPane.created !== pane.created)) {
     fail('카단 pane이 연결 전에 바뀌었습니다. 자동 재시도하지 않습니다.');
   }
-  validateContext(context, home, read());
+  validateContext(context, home, read(), command);
   const recordStart = terminalId => (deps.record || (entry => appendLedger(entry, home)))({
     ...buildStartLedgerEntry({floorName: 'tmux', role: context.role, session: context.session,
       evidence, window: terminalId ? 'rottie' : 'hidden', rottieTerminalId: terminalId,
@@ -212,7 +231,10 @@ export function restoreRecovery(flags, deps = {}) {
     if (!pane) recordStart(undefined);
     fail('역할은 시작됐을 수 있으나 Rottie 탭 연결을 확인하지 못했습니다. 자동 재시도하지 않습니다.');
   }
-  if (!pane) recordStart(terminal.id);
+  if (!pane) {
+    recordStart(terminal.id);
+    advanceSecretaryCheckpoint(home, context.startDigest, latest(read(), context.session), command);
+  }
   (deps.record || (entry => appendLedger(entry, home)))({kind: 'window', role: context.role,
     session: context.session, panePid: evidence.panePid, rottieTerminalId: terminal.id,
     restoredFrom: context.terminalId, by: '사람'});

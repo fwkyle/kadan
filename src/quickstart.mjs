@@ -98,7 +98,8 @@ export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs =
 }
 function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
-export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath = process.execPath, log = console.log, sessionName, sleep } = {}) {
+export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath = process.execPath,
+ log = console.log, sessionName, sleep, restoreSecretary } = {}) {
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');
@@ -108,7 +109,18 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
 
  const secretarySession = sessionName(SECRETARY_ROLE);
  if (floor.alive(secretarySession)) { out.secretary = 'reused'; log(`비서 이미 살아 있음: ${secretarySession}`); }
- else { start([SECRETARY_ROLE], { cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary' }); out.secretary = 'started'; }
+ else {
+  const startNew = () => start([SECRETARY_ROLE], {
+   cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary',
+  });
+  try {
+   out.secretary = restoreSecretary ? restoreSecretary(startNew) : (startNew(), 'started');
+  } catch (error) {
+   out.secretary = 'blocked'; out.secretaryError = error.message;
+   log(`비서 복원 확인 필요: ${error.message}`);
+  }
+  if (out.secretary === 'restored') log(`이전 비서 대화 복원됨: ${secretarySession}`);
+ }
 
  const dashboardSession = sessionName(DASHBOARD_ROLE);
  if (floor.alive(dashboardSession)) { out.dashboard = 'reused'; log(`대시보드 이미 살아 있음: ${dashboardSession}`); }
