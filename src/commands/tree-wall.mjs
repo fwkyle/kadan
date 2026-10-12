@@ -2,6 +2,7 @@
 import { readLedgerState, projectLedger } from "../ledger-domains.mjs";
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { attachWatchOverview } from "../watch-overview.mjs";
+import { watchProcessName } from "../watch-system.mjs";
 import { defaultProfilePath } from "../watch-profile.mjs";
 import { CardStore } from "../card-store.mjs";
 import { WorkStore } from "../work-store.mjs";
@@ -78,7 +79,7 @@ function loadWallSnapshot(runtime=null) {
     if(cardError)throw cardError;
     center=buildCardCenter({cards,entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
     registeredWorks=new WorkStore(ledgerHome()).list();
-    center=attachWatchOverview(center,entries,{works:registeredWorks,profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
+    center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(ledgerHome()),profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
   } catch(error) { centerError=error.message; }
   return {
     center,centerError,tree,ledgerState,registeredWorks,runtime,

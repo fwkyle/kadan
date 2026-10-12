@@ -18,13 +18,13 @@ export function orderWatchRoles(roles){
  for(const r of roles.slice().sort(byName))visit(r,0);
  return ordered;
 }
-export function readWatchProcesses(spawn=spawnSync){
+export function readWatchProcesses(spawn=spawnSync,name='kadan-watch'){
  const result=spawn('ps',['-Ao','pid=,lstart=,command='],{encoding:'utf8',env:{...process.env,LC_ALL:'C',TZ:'UTC'}});
  if(result.status!==0||typeof result.stdout!=='string')throw new Error('프로세스 목록 조회 실패');
  const processes=[];
  for(const line of result.stdout.split('\n')){
-  const m=line.trim().match(/^(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+kadan-watch\s*$/);
-  if(m){const started=Date.parse(m[2]+' UTC');processes.push({pid:Number(m[1]),startedAt:Number.isFinite(started)?new Date(started).toISOString():null});}
+  const m=line.trim().match(/^(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/);
+  if(m&&m[3]===name){const started=Date.parse(m[2]+' UTC');processes.push({pid:Number(m[1]),startedAt:Number.isFinite(started)?new Date(started).toISOString():null});}
  }
  return processes;
 }
@@ -90,7 +90,7 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
 }
 export function attachWatchOverview(center,entries,options={}){
  let processes=[],processError=null;
- try{processes=(options.readProcesses??readWatchProcesses)();}catch{processError='프로세스 목록을 읽을 수 없습니다';}
+ try{processes=(options.readProcesses??(()=>readWatchProcesses(spawnSync,options.watchName)))();}catch{processError='프로세스 목록을 읽을 수 없습니다';}
  const monitoring=watchOverview({center,entries,works:options.works,processes,processError,readFile:options.readFile,now:options.now,profilePath:options.profilePath??null});
  return {...center,monitoring,boards:center.boards.map(b=>({...b,monitoring:monitoring.boards.find(x=>x.name===b.name)}))};
 }

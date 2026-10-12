@@ -10,6 +10,10 @@
 pgrep -x kadan-watch
 ```
 
+기본 홈(`~/.kadan`) 감시기는 이름이 정확히 `kadan-watch`다. 다른 `KADAN_HOME`의 감시기는
+`kadan-watch:<폴더>-<해시6>`라 위 명령에 잡히지 않고, 홈마다 하나씩 따로 뜬다
+(`pgrep -f '^kadan-watch:'`로 본다).
+
 - PID 1개: 현재 watch를 유지한다.
 - PID 0개: 감시 공백이다. 원인 조사 전에 현재 승인 명령으로 재가동한다.
 - PID 2개 이상: RED 후보다. broad kill하지 말고 각 소유 터미널을 확인한다.
