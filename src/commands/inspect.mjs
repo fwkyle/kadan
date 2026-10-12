@@ -3,7 +3,8 @@ import { watchAILabel } from "../watch-report.mjs";
 import { floor } from "../floor.mjs";
 import { ledgerBy, readLedger } from "../ledger.mjs";
 import { openWindow } from "../floor-tmux.mjs";
-import { die, sessionName, stripAnsi, tailLines, normalizeFloorRead } from "../cli-basics.mjs";
+import path from "node:path";
+import { die, digest, lastStartFor, sessionName, stripAnsi, tailLines, normalizeFloorRead } from "../cli-basics.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 
 export function cmdRead(argv, flags) {
@@ -62,12 +63,21 @@ export function cmdAttach(argv) {
     console.log(`macOS가 아니어서 창을 열지 않는다 — 직접: ${floor.attach(session)}`);
     return;
   }
+  const cwd = attachWindowCwd(lastStartFor(session));
   const window = openWindow(session, process.platform, {
     choice: windowChoice,
     role,
+    cwd,
     panePid: floor.pid(session),
+    conflictKeySuffix: `attach-${digest(cwd)}`,
   });
   const name = window ? window.method : null;
   if (!name) console.log(`창 열기 실패 — 직접: ${floor.attach(session)}`);
   else console.log(`창 열림(${name}): ${session}`);
+}
+
+// 창(로티 탭)은 역할이 시작한 폴더로 연다. 붙이는 사람의 현재 폴더로 열면 다른 프로젝트 밑에 묶인다.
+export function attachWindowCwd(start, fallback = process.cwd()) {
+  const cwd = start?.cwd;
+  return typeof cwd === "string" && path.isAbsolute(cwd) ? cwd : fallback;
 }
