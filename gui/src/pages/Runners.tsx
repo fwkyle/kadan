@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import { save, useResource } from "../resource";
-import { ownPart } from "../runner-draft";
+import { fallbackLabels, ownPart } from "../runner-draft";
 import type { Stamp } from "../types";
 import { Sessions } from "./Records";
 import {
@@ -85,6 +85,7 @@ export default function Runners({ url }: { url: URL }) {
                 <tr>
                   <th>역할</th>
                   <th>지금 값</th>
+                  <th>대체 후보 (순서대로)</th>
                   <th>발령 때 채워질 명령</th>
                 </tr>
               </thead>
@@ -103,6 +104,21 @@ export default function Runners({ url }: { url: URL }) {
                               .filter(Boolean)
                               .join(" / ")
                           : "미설정"}
+                      </td>
+                      <td>
+                        {role === "senior" ? (
+                          "없음 (시니어는 대체 후보가 없습니다)"
+                        ) : fallbackLabels(data.settings!, role).length ? (
+                          <ol>
+                            {fallbackLabels(data.settings!, role).map(
+                              (text, i) => (
+                                <li key={i}>{text}</li>
+                              ),
+                            )}
+                          </ol>
+                        ) : (
+                          "없음"
+                        )}
                       </td>
                       <td>
                         <code>{data.commands[role]}</code>
@@ -130,7 +146,11 @@ export default function Runners({ url }: { url: URL }) {
           </p>
           {Object.entries(data.roles).map(([role, label]) => (
             <details key={role}>
-              <summary>{label} 바꾸기</summary>
+              <summary>
+                {label} 바꾸기
+                {role !== "senior" &&
+                  ` · 대체 후보 ${fallbackLabels(data.settings!, role).length}개`}
+              </summary>
               <RunnerForm data={data} settings={data.settings!} role={role} />
               {role !== "senior" && (
                 <RunnerForm

@@ -5,8 +5,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { makeHerdrFloor, herdrRpc } from "../src/floor-herdr.mjs";
-import { buildStartLedgerEntry } from "../src/cli.mjs";
+import { makeHerdrFloor, herdrRpc, herdrInputFrame } from "../src/floor-herdr.mjs";
+import { buildStartLedgerEntry, guardedSend } from "../src/cli.mjs";
 import { selectFloorName } from "../src/floor.mjs";
 
 function fixture() {
@@ -15,7 +15,7 @@ function fixture() {
     harness: "codex", model: "fixture-model", herdrSocket: env.KADAN_HERDR_SOCKET,
     herdrWorkspaceId: "opaque-workspace", herdrPaneId: "old-pane", herdrTerminalId: "opaque-terminal" };
   const pane = { pane_id: "moved-pane", workspace_id: start.herdrWorkspaceId,
-    terminal_id: start.herdrTerminalId, scroll: { offset_from_bottom: 0 } };
+    terminal_id: start.herdrTerminalId, scroll: { offset_from_bottom: 0, viewport_rows: 58 } };
   const state = { panes: [pane], pid: 123, argv: ["codex", "--model", "fixture-model"],
     status: "idle", output: "\n› Ask Codex to do anything\n\nstatus", truncated: false, calls: [] };
   const rpc = (_socket, method, params) => {
@@ -30,7 +30,8 @@ function fixture() {
     throw new Error(`Unexpected request ${method}`);
   };
   const floor = makeHerdrFloor({ env, entries: () => [start], rpc,
-    inputFrame: () => ({ row: 1, width: 120 }), argsForPid: () => state.localArgs || "" });
+    inputFrame: (...args) => { state.frameArgs = args; return { row: 1, width: 120 }; },
+    argsForPid: () => state.localArgs || "" });
   return { floor, state, env, start, pane };
 }
 
@@ -60,7 +61,6 @@ for (const [name, change, code] of [
   ["명시 모델 변경", f => { f.state.argv[2] = "other-model"; }, "KADAN_AI_PROCESS_UNVERIFIED"],
   ["승인 대기", f => { f.state.status = "blocked"; }, "KADAN_HERDR_NOT_READY"],
   ["상태 미확인", f => { f.state.status = "unknown"; }, "KADAN_HERDR_NOT_READY"],
-  ["작업 중", f => { f.state.status = "working"; }, "KADAN_HERDR_NOT_READY"],
   ["미제출 입력", f => { f.state.output = "\n› 남아 있는 글\n\nstatus"; }, "KADAN_PANE_INPUT_PENDING"],
   ["기록보기 중", f => { f.pane.scroll.offset_from_bottom = 4; }, "KADAN_HERDR_SCROLLED"],
   ["출력 유실", f => { f.state.truncated = true; }, "KADAN_HERDR_INPUT_UNKNOWN"],
@@ -164,4 +164,81 @@ test("소켓 응답의 한글 글자가 패킷 경계에서 나뉘어도 보존�
     await once(server.stdout, "data");
     assert.equal(herdrRpc(socket, "session.snapshot").text, "작업자 왕복");
   } finally { server.kill(); await once(server, "exit"); }
+});
+
+test("입력 커서는 터미널의 실제 세로 줄 수로 관찰한다 (LBR-1 결함 1)", () => {
+  const f = fixture(); f.floor.send(f.start.session, "왕복 질문");
+  assert.equal(f.state.frameArgs[1], "opaque-terminal");
+  assert.equal(f.state.frameArgs[2], 58);
+  // 세로 줄 수를 모르면 기본 관찰 창(120x40)으로 추측하지 않고 거절한다.
+  assert.throws(() => herdrInputFrame(f.env.KADAN_HERDR_SOCKET, "opaque-terminal", undefined),
+    { code: "KADAN_HERDR_INPUT_UNKNOWN" });
+});
+
+for (const [runner, screen, keys] of [
+  ["claude", " Quick safety check: Is this a project you created or one you trust? (Like your own code)\n\n ❯ No, exit\n   Yes, I trust this folder", "down enter"],
+  ["codex", "> You are in /tmp/p\n\n  Do you trust the contents of this directory? Working with untrusted contents\n\n› 1. Yes, continue", "enter"],
+]) {
+  test(`${runner} 신뢰 확인 화면은 자동 수락 없이 정확한 해결 명령과 함께 거절한다 (LBR-1 결함 4)`, () => {
+    const f = fixture(); f.state.status = "blocked"; f.state.output = screen;
+    assert.throws(() => f.floor.send(f.start.session, "왕복"), error => {
+      assert.equal(error.code, "KADAN_HERDR_TRUST_PROMPT");
+      assert.match(error.message, new RegExp(`pane send-keys 'moved-pane' ${keys}$`));
+      assert.match(error.message, /terminal attach 'opaque-terminal'/);
+      return true;
+    });
+    assert.equal(f.state.calls.some(call => ["agent.prompt", "pane.send_keys", "pane.send_text"].includes(call.method)), false);
+  });
+}
+
+test("신뢰 화면이 아닌 blocked는 기존처럼 입력 대기 실패다", () => {
+  const f = fixture(); f.state.status = "blocked"; f.state.output = "권한을 허용할까요?";
+  assert.throws(() => f.floor.send(f.start.session, "왕복"), { code: "KADAN_HERDR_NOT_READY" });
+});
+
+const busy = { busyMail: true };
+const prompts = f => f.state.calls.filter(call => call.method === "agent.prompt").length;
+
+test("응답 중 사람·역할 우편(busyMail 표시)은 입력 검사를 통과하면 전달된다 (LBR-1 결함 2)", () => {
+  const f = fixture(); f.state.status = "working";
+  assert.equal(f.floor.send(f.start.session, "완료 통지", busy).keyDelivery, "sent");
+  assert.equal(prompts(f), 1);
+});
+
+test("응답 중 자동 경보·표시 없는 호출·busyMail 아닌 값은 거절하고 요청이 없다", () => {
+  for (const options of [undefined, {}, { busyMail: false }, { busyMail: "yes" }, { busyMail: 1 }]) {
+    const f = fixture(); f.state.status = "working";
+    assert.throws(() => f.floor.send(f.start.session, "감시 경보", options), { code: "KADAN_HERDR_NOT_READY" });
+    assert.equal(prompts(f), 0);
+  }
+  const f = fixture(); f.state.status = "working";
+  assert.throws(() => f.floor.send(f.start.session, "알림", { busyMail: true, notificationGuard: { humanIdleMs: 1 } }),
+    { code: "KADAN_HERDR_NOTIFY_UNVERIFIED" });
+  assert.equal(prompts(f), 0);
+});
+
+test("카드 발령은 busyMail이어도 응답 중이면 거절한다", () => {
+  const f = fixture(); f.state.status = "working";
+  const cardIdentity = { currentPid: 123, harness: "codex", model: "fixture-model" };
+  assert.throws(() => f.floor.send(f.start.session, "카드", { cardIdentity, busyMail: true }), { code: "KADAN_HERDR_NOT_READY" });
+  assert.equal(prompts(f), 0);
+});
+
+test("미제출 입력이 있으면 응답 중 여부와 무관하게 거절한다", () => {
+  for (const status of ["working", "idle"]) {
+    const f = fixture(); f.state.status = status; f.state.output = "\n› 사람이 쓰던 글\n\nstatus";
+    assert.throws(() => f.floor.send(f.start.session, "우편", busy), { code: "KADAN_PANE_INPUT_PENDING" });
+    assert.equal(prompts(f), 0);
+  }
+});
+
+test("실제 감시 경보 경로(guardedSend source=watch, notificationOnly)는 응답 중 herdr에서 거절된다", () => {
+  const f = fixture(); f.state.status = "working";
+  const events = [], entries = [f.start];
+  assert.throws(() => guardedSend({ floor: f.floor, session: f.start.session, role: "판-작업자",
+    message: "감시 경보: 시험", source: "watch", recordedPid: "123", notificationOnly: true, env: f.env,
+    readEntries: () => entries, record: event => events.push(event), saveBody: () => {} }),
+  { code: "KADAN_HERDR_NOT_READY" });
+  assert.equal(prompts(f), 0);
+  assert.equal(events.some(e => e.kind === "send"), false);
 });

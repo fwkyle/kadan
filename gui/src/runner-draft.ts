@@ -14,3 +14,14 @@ export const ownPart = (settings: Part, role: string, fallback: boolean) => {
     fallback ? (preset?.fallback?.[role] ?? []) : (preset?.roles[role] ?? null),
   );
 };
+
+// 늘 보이는 요약표·접힌 칸 제목에 쓰는, 역할별 저장된 대체 후보 목록(순서대로 "실행기 / 모델 / 강도").
+export const fallbackLabels = (settings: Part, role: string) =>
+  (settings.presets[settings.activePreset]?.fallback?.[role] ?? []).map((c) => {
+    const { runner, model, effort } = c as {
+      runner?: string;
+      model?: string;
+      effort?: string;
+    };
+    return [runner, model, effort].filter(Boolean).join(" / ");
+  });

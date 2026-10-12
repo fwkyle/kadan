@@ -443,6 +443,9 @@ function allDimAfterPrompt(raw = "") {
 const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
 
 // 화면에 보이는 입력창이 비었는지 확인한다. 카드 전송과 감시기 알림이 같은 기준을 쓴다.
+// width가 숫자면 바닥이 준 폭과 테두리 길이가 정확히 같아야 한다(tmux·Rottie).
+// width가 null이면 바닥의 폭 숫자를 믿지 않고, 위·아래 테두리가 같은 길이이면서
+// 가져온 화면에서 가장 긴 줄과 같을 때만 입력창 테두리로 본다(herdr: 접속 창 크기와 폭 숫자가 어긋난다).
 export function checkEmptyInput(session, run, row, width, label) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   // 글자 모양(-e)까지 읽어 흐린 추천 문구와 사람이 친 글을 가른다. 판단은 모양을 뺀 글로 한다.
@@ -458,13 +461,14 @@ export function checkEmptyInput(session, run, row, width, label) {
   }
   // 위쪽 가장 가까운 글 줄도 프롬프트 모양이면 여러 줄 입력의 이어지는 줄인지 구별할 수 없다.
   if (PROMPT_LINE.test(lines.slice(0, row).findLast(line => line.trim()) ?? "")) deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 프롬프트 위 입력 경계 미확인`);
-  const boxed = row > 0 && isInputRule(lines[row - 1], width, true);
+  const ruleWidth = width ?? Math.max(...lines.map(line => [...line].length));
+  const boxed = row > 0 && isInputRule(lines[row - 1], ruleWidth, true);
   const rest = prompt[1].trim();
   if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest) && !CLAUDE_PLACEHOLDER.test(rest) && !allDimAfterPrompt(raw[row])) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
   // 상자형(devin·claude)은 바로 아래 닫는 줄 밑을 상태줄로 본다. 상자 없음(codex)은 빈 줄 뒤 상태줄 한 줄만 허용한다.
   const below = lines.slice(row + 1);
   const footer = below.findIndex(line => line.trim());
-  const closed = boxed ? isInputRule(below[0] ?? "", width, false)
+  const closed = boxed ? isInputRule(below[0] ?? "", ruleWidth, false)
     : footer < 0 || (footer > 0 && below.slice(footer + 1).every(line => !line.trim()));
   if (!closed) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면`);
 }
