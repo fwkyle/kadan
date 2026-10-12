@@ -28,15 +28,21 @@ console.log(JSON.stringify({ok:true,result:{terminal:{id:'terminal-'+process.pid
   const cwd = path.join(home, 'workspace'); fs.mkdirSync(cwd);
   const hierarchy = path.join(home, 'hierarchy.txt');
   fs.writeFileSync(hierarchy, 'director -> supervisor\n');
+  const claude = path.join(home, 'claude');
+  fs.writeFileSync(claude, `#!/usr/bin/env node
+setInterval(() => {}, 1000);
+`, {mode: 0o700});
+  const originalCommand = `'${claude}' --model fixture-model --effort high`;
+  const resumeCommand = `'${claude}' --resume exact-conversation --model fixture-model --effort high`;
   const original = tmuxFloor.create({session: 'kadan-director', role: 'director', cwd,
-    cmd: 'sleep 120'});
+    cmd: originalCommand});
   appendLedger({kind: 'start', floor: 'tmux', role: 'director', session: 'kadan-director',
-    cwd, cmd: 'sleep 120', roleProfile: 'conductor', by: 'supervisor', ...original,
+    cwd, cmd: originalCommand, roleProfile: 'conductor', by: 'supervisor', ...original,
     rottieTerminalId: 'original'});
   let context = inspectRecovery({terminal: 'original', 'pane-pid': original.panePid});
   for (let reboot = 0; reboot < 2; reboot++) {
     assert.equal(tmux(['kill-server']).status, 0);
-    const receipt = restoreRecovery({context: JSON.stringify(context), command: 'sleep 120',
+    const receipt = restoreRecovery({context: JSON.stringify(context), command: resumeCommand,
       'rottie-bin': bin, 'allow-reuse': 'false'});
     assert.equal(receipt.role, 'director');
     assert.equal(receipt.context.cwd, cwd);
@@ -46,9 +52,11 @@ console.log(JSON.stringify({ok:true,result:{terminal:{id:'terminal-'+process.pid
     const start = readSystemLedger().filter(e => e.kind === 'start').at(-1);
     assert.equal(start.roleProfile, 'conductor');
     assert.equal(start.by, 'supervisor');
-    assert.equal(start.cmd, 'sleep 120');
+    assert.equal(start.cmd, resumeCommand);
+    assert.equal(receipt.context.effort, 'high');
+    assert.equal(receipt.context.model, 'fixture-model');
     assert.equal(fs.readFileSync(hierarchy, 'utf8'), 'director -> supervisor\n');
-    assert.throws(() => restoreRecovery({context: JSON.stringify(context), command: 'sleep 120',
+    assert.throws(() => restoreRecovery({context: JSON.stringify(context), command: resumeCommand,
       'rottie-bin': bin, 'allow-reuse': 'false'}), /교체되거나/);
     context = receipt.context;
   }
