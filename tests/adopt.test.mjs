@@ -114,3 +114,23 @@ test('adopt: 화면이 끝내 안 뜨면 첫 안내를 보내지 않고 알린�
   assert.equal(calls.send.length, 0);
   assert.ok(calls.log.some((l) => l.includes('첫 안내를 보내지 않았습니다')));
 });
+
+test('HW-4: KADAN_FLOOR가 없으면 바닥은 tmux이고 herdr·rottie는 명시했을 때만 고른다(자동 폴백 없음)', async () => {
+  const { selectFloorName } = await import('../src/floor.mjs');
+  assert.equal(selectFloorName().name, 'tmux');
+  assert.equal(selectFloorName('herdr').name, 'herdr');
+  assert.equal(selectFloorName('rottie').name, 'rottie');
+  assert.throws(() => selectFloorName('herdr2'), /KADAN_FLOOR_INVALID/);
+});
+
+test('HW-4: herdr 바닥에서도 adopt는 같은 start 경로로 복제 명령·프로필·상위를 넘긴다', () => {
+  const { calls, deps } = fakes();
+  deps.floor.name = 'herdr';
+  const out = runAdopt({ role: 'h', flags: { model: 'm', resume: 'abc-1', harness: 'codex', profile: 'super' }, env: {}, ...deps });
+  assert.equal(calls.start.length, 1);
+  assert.deepEqual(calls.start[0].argv, ['h']);
+  assert.equal(calls.start[0].flags.cmd, 'codex fork abc-1 --model m');
+  assert.equal(calls.start[0].flags.profile, 'super');
+  assert.equal(calls.start[0].flags.parent, '@user');
+  assert.equal(out.session, 'kadan-h');
+});

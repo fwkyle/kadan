@@ -38,6 +38,7 @@ export function guardedSend({
   raw = false,
   notificationOnly = false,
   notificationGuard,
+  busyMail = false,
   source,
   allowOldRunner,
   env = process.env,
@@ -149,7 +150,7 @@ export function guardedSend({
 
   let receipt;
   try {
-    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard}) || {};
+    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard, busyMail}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     throw error;
