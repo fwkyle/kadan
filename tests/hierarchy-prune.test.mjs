@@ -138,6 +138,16 @@ test('적용은 먼저 원본을 백업하고 유효한 관계표만 남긴다; 
   assert(!fs.existsSync(path.join(f.home,'handovers','.lock')));
 });
 
+test('인계 폴더의 인수 근거 파일은 열린 인계로 보지 않는다', () => {
+  const f=fixture();
+  fs.mkdirSync(path.join(f.home,'handovers'));
+  fs.writeFileSync(path.join(f.home,'handovers','x.receipt.json'),JSON.stringify({taskIds:[],evidencePaths:[],nextAction:'n'}));
+  fs.writeFileSync(path.join(f.home,'handovers','y.json'),JSON.stringify({id:'y',phase:'complete',hierarchy:f.file}));
+  assert.equal(pruneHierarchy({...f.options,apply:true}).applied,true);
+  fs.writeFileSync(path.join(f.home,'handovers','z.json'),JSON.stringify({id:'z',phase:'preparing'}));
+  assert.throws(()=>pruneHierarchy({...f.options,apply:true}),/인계 관계표 모름/);
+});
+
 test('열린 인계와 기존 등록·인계 잠금은 적용을 막고 남의 잠금을 보존한다', () => {
   for (const blocker of ['handover','register','open']) {
     const f=fixture(),original=fs.readFileSync(f.file,'utf8');

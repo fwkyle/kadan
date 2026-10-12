@@ -111,6 +111,8 @@ function assertNoOpenHandover(home, file) {
   if (!fs.existsSync(dir)) return;
   for (const name of fs.readdirSync(dir).filter(n => n.endsWith('.json'))) {
     const state = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+    // 인수 근거(receipt) 파일도 같은 폴더에 .json으로 놓인다. id·phase가 모두 없으면 인계 상태가 아니다.
+    if (!('id' in state) && !('phase' in state)) continue;
     if (['complete', 'aborted'].includes(state.phase)) continue;
     if (typeof state.hierarchy !== 'string') throw new Error('인계 관계표 모름: 정리하지 않음');
     if (fs.realpathSync(state.hierarchy) === file) throw new Error(`열린 인계가 있어 정리 불가: ${state.id}`);
