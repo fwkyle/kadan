@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ownPart } from "../src/runner-draft.ts";
+import { fallbackLabels, ownPart } from "../src/runner-draft.ts";
 
 const settings = (over: Record<string, unknown> = {}) => ({
   activePreset: "A",
@@ -46,4 +46,11 @@ test("프리셋이 바뀌어도 값이 같으면 같은 몫이고, 대체 후보
   );
   assert.equal(ownPart(settings({ activePreset: "B" }), "worker", true), "[]");
   assert.equal(ownPart(settings(), "super", false), "null");
+});
+
+test("저장된 대체 후보는 역할별로 순서대로 보이고, 없으면 빈 목록이다", () => {
+  const s = settings();
+  assert.deepEqual(fallbackLabels(s, "worker"), ["codex / gpt-6-sol"]);
+  assert.deepEqual(fallbackLabels(s, "reviewer"), []);
+  assert.deepEqual(fallbackLabels({ ...s, activePreset: "B" }, "worker"), []);
 });
