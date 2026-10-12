@@ -15,6 +15,7 @@
 - 전송 전 현재 PID·foreground 실행기·명시 모델·입력 대기·미제출 입력·스크롤 상태를 확인한다. 명령 인자가 생략된 경우 해당 로컬 foreground PID만 `ps`로 조회한다.
 - `agent.prompt`로 괄호 붙여넣기와 Enter를 제출한다. 전달 성공은 `keyDelivery=sent`, `inputAcceptance=unconfirmed`이며 실행 완료를 뜻하지 않는다.
 - 입력창 검사는 읽기 전용 terminal observer와 visible snapshot을 사용한다. `takeover`는 사용하지 않는다.
+- 화면 확인에 `terminal session control`·`terminal attach`를 쓰지 않는다. 실제 창 크기를 흉내 내려고 백그라운드로 띄우는 것도 금지다. 2026-10-12 시험(HW-6) 중 뒤에 남은 control 클라이언트 3개가 각각 68~130GB(압축 포함)까지 불어나 맥 전체가 메모리 부족에 걸렸다(01:36~07:53, 8회). 격리 재현 8가지 조건에서는 재현되지 않아 원인은 미확정이며 herdr에 보고했다(herdrdev/herdr#5175). 행 수가 필요하면 `observe --rows <pane.scroll.viewport_rows>`를 쓴다.
 - 응답 유실은 전달 불명확으로 끝낸다. 본문/Enter 자동 재전송은 없다. 자동 알림과 Enter 단독 재전송은 보호 검증 전까지 거절한다.
 - 출력은 ANSI recent snapshot을 읽는다. `truncated`이면 기존 wait가 gap으로 중단한다. 완전한 출력 로그나 스트림 재생 기능을 제공하지 않는다.
 
