@@ -8,7 +8,7 @@ import {assertWritable} from './storage.mjs';
 import {tmuxFloor, tmux, buildRottieCreateArgv, parseRottieCreateResult} from './floor-tmux.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
-import {launchIdentityOf} from './ai-identity.mjs';
+import {commandWords, launchIdentityOf} from './ai-identity.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -27,6 +27,33 @@ function latest(entries, session) {
     fail('tmux 역할 시작 기록이 불완전합니다.');
   }
   return start;
+}
+
+// Follow only the exact prior Rottie tab of this same role. Early recovery versions
+// omitted --effort from the new start; the original start still owns that option.
+function effortOf(start, entries, seen = new Set()) {
+  if (seen.has(start) || seen.size >= 16) fail('추론 강도 복원 기록이 순환합니다.');
+  seen.add(start);
+  const words = commandWords(start.cmd);
+  if (!words) return undefined;
+  const executable = words.find(word => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))?.split('/').pop();
+  if (!['claude', 'kadan-claude'].includes(executable)) return undefined;
+  let effort;
+  for (let i = 1; i < words.length; i++) {
+    if (words[i] === '--') break;
+    if (words[i] === '--effort') effort = words[++i];
+    else if (words[i].startsWith('--effort=')) effort = words[i].slice(9);
+    else continue;
+    if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
+      fail('저장된 Claude 추론 강도를 확인하지 못했습니다.');
+    }
+  }
+  if (effort) return effort;
+  if (!start.restoredFrom) return undefined;
+  const previous = entries.filter(e => e.kind === 'start' && e.session === start.session
+    && e.role === start.role && e.cwd === start.cwd && e.rottieTerminalId === start.restoredFrom);
+  if (previous.length !== 1) fail('추론 강도의 원본 역할 기록을 확인하지 못했습니다.');
+  return effortOf(previous[0], entries, seen);
 }
 
 function socketContext(socketPath, home) {
@@ -76,6 +103,7 @@ export function inspectRecovery(flags, deps = {}) {
   const server = socketContext(flags['socket-path'], home);
   const pane = (deps.livePane || livePane)(session);
   const launch = launchIdentityOf(start.cmd);
+  const effort = effortOf(start, entries);
   if (flags['pane-pid'] && (!pane || pane.dead || pane.pid !== String(start.panePid))) {
     fail('관찰한 카단 pane과 시작 기록이 다릅니다.');
   }
@@ -83,6 +111,7 @@ export function inspectRecovery(flags, deps = {}) {
     version: 1, ...server, role: start.role, session, cwd: start.cwd, terminalId,
     startDigest: digest(start), panePid: String(start.panePid),
     ...(launch.ok ? {model: launch.model} : {}),
+    ...(effort ? {effort} : {}),
     sessionCreated: pane && !pane.dead && pane.pid === String(start.panePid) ? pane.created : null,
   };
 }
@@ -104,6 +133,9 @@ function validateContext(context, home, entries) {
   if ((originalIdentity.ok ? originalIdentity.model : undefined) !== context.model) {
     fail('카단 역할의 원본 모델 정보가 다릅니다.');
   }
+  if (context.effort !== undefined && context.effort !== effortOf(start, entries)) {
+    fail('카단 역할의 원본 추론 강도가 다릅니다.');
+  }
   return start;
 }
 
@@ -119,12 +151,17 @@ export function restoreRecovery(flags, deps = {}) {
   }
   assertWritable(home);
   const read = deps.read || (() => readSystemLedger(home));
-  const start = validateContext(context, home, read());
+  const entries = read();
+  const start = validateContext(context, home, entries);
   const resumedIdentity = launchIdentityOf(command);
   const originalIdentity = launchIdentityOf(start.cmd);
   if (originalIdentity.ok && (!resumedIdentity.ok || resumedIdentity.harness !== originalIdentity.harness
     || resumedIdentity.model !== originalIdentity.model)) {
     fail('복원 명령의 실행기 또는 모델이 원본 역할과 다릅니다.');
+  }
+  const effort = effortOf(start, entries);
+  if (effort && effortOf({cmd: command}, []) !== effort) {
+    fail('복원 명령의 추론 강도가 원본 역할과 다릅니다.');
   }
   if (!fs.statSync(context.cwd).isDirectory()) fail('카단 작업 폴더를 찾을 수 없습니다.');
   const pane = (deps.livePane || livePane)(context.session);

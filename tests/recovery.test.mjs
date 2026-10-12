@@ -117,3 +117,41 @@ test('a model change in the saved context or resume command never launches a rol
     context:JSON.stringify({...context, model:'wrong-model'})}, f.deps), /원본 모델 정보/);
   assert.equal(f.calls.length, 0);
 });
+
+function claudeFixture(command = 'claude --model opus --effort high') {
+  const f = fixture(); f.entries[0].cmd = command; f.setPane(null);
+  f.flags.context = JSON.stringify(inspectRecovery({terminal: 'old'}, f.deps));
+  f.flags.command = 'claude --resume exact --model opus --effort high';
+  return f;
+}
+
+test('Claude effort survives role recovery and the next recovery generation', () => {
+  const f = claudeFixture();
+  assert.equal(JSON.parse(f.flags.context).effort, 'high');
+  const result = restoreRecovery(f.flags, f.deps);
+  assert.equal(result.context.effort, 'high');
+  assert.match(f.calls[0].cmd, /--effort high/);
+});
+
+test('legacy recovery reads effort only from the exact previous role tab', () => {
+  const f = claudeFixture('/tools/kadan-claude --model opus --effort=high');
+  f.entries.push({...f.entries[0], rottieTerminalId: 'intermediate', panePid: '21',
+    cmd: 'claude --resume exact --model opus', restoredFrom: 'old'});
+  assert.equal(inspectRecovery({terminal: 'intermediate'}, f.deps).effort, 'high');
+  f.entries[0].role = 'other';
+  assert.throws(() => inspectRecovery({terminal: 'intermediate'}, f.deps), /원본 역할 기록/);
+});
+
+test('missing, changed or malformed effort never creates the role', () => {
+  for (const command of ['claude --resume exact --model opus',
+    'claude --resume exact --model opus --effort medium']) {
+    const f = claudeFixture();
+    assert.throws(() => restoreRecovery({...f.flags, command}, f.deps), /추론 강도가 원본/);
+    assert.equal(f.calls.length, 0);
+  }
+  const f = claudeFixture();
+  assert.throws(() => restoreRecovery({...f.flags,
+    context: JSON.stringify({...JSON.parse(f.flags.context), effort: 'max'})}, f.deps), /원본 추론 강도/);
+  f.entries[0].cmd = 'claude --model opus --effort=invalid';
+  assert.throws(() => inspectRecovery({terminal: 'old'}, f.deps), /저장된 Claude/);
+});
