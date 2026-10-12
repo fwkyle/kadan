@@ -23,6 +23,7 @@ import {
   accumulateTiming,
 } from "./watch-cycle.mjs";
 import { USER_RECIPIENT } from "./hierarchy.mjs";
+import { runDailyHierarchyPrune } from "./watch-prune.mjs";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -87,6 +88,8 @@ export async function runWatch({
   superRole,
   parents = new Map(),
   loadHierarchy = null,
+  // 하루 한 번 관계표 정리. ({file, now}) => 정리 결과. 없으면(--hierarchy 없음·끔) 정리도 기록도 하지 않는다.
+  pruneHierarchy = null,
   idleMs = 15 * 60 * 1_000,
   userNotify = false,
   judgeCmd = null,
@@ -181,6 +184,10 @@ export async function runWatch({
     }
     const ledgerReadAt=measure();
     let hierarchyError = null;
+    // 정리를 읽기 앞에 둬서, 줄이 바뀌면 같은 주기의 hierarchy-loaded가 새 표를 읽는다.
+    if (pruneHierarchy && hierarchyPath && !ledgerError) {
+      runDailyHierarchyPrune({entries, now:cycleAt, file:hierarchyPath, prune:pruneHierarchy, record});
+    }
     if (loadHierarchy) {
       try {
         const loaded = loadHierarchy();
