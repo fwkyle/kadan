@@ -11,7 +11,7 @@ import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
-import {routeAlert,explainAlertRoute} from './watch.mjs';
+import {explainAlertRoute,failureEscalation} from './watch.mjs';
 
 export const WATCH_VERDICTS = ['진행중','입력대기','실행완료','응답장애','정체','죽음','모름','조정'];
 export const WATCH_AI_TIMEOUT_MS = 300_000;
@@ -170,7 +170,7 @@ export class WatchReports {
       try { this.send(recipient,message); delivery='sent'; }
       catch(error) {
         delivery=error.delivery??'unknown';
-        const upper=parents.has(recipient)?routeAlert({id:'delivery',role:recipient},routes,live,request.superRole,parents):request.superRole;
+        const upper=failureEscalation(recipient,routes,live,request.superRole,parents);
         if (delivery==='not-sent'&&upper&&upper!==recipient&&recipient!=='@user') {
           try { this.send(upper,`[${watchAILabel(request.source)}] 보고 전달 실패 · ${recipient}에게 전달하지 못했습니다. ${message}`); escalation={recipient:upper,delivery:'sent'}; }
           catch(e) { escalation={recipient:upper,delivery:e.delivery??'unknown'}; }

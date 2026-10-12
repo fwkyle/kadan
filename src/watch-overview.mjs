@@ -6,6 +6,7 @@ import {parseHierarchy,hierarchyRecipient,hierarchyRoute} from './hierarchy.mjs'
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {watchAILabel} from './watch-report.mjs';
 import {cycleStatus,watchVerdict} from './watch-cycle.mjs';
+import {watchRouteNameWarnings} from './watch-profile.mjs';
 
 // 이름의 접두사가 아니라 실제 직속 관계를 따라 부모 다음에 소속 역할을 놓는다.
 export function orderWatchRoles(roles){
@@ -85,6 +86,9 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
    aiActivity:scope?aiActivity(names):aiActivity(new Set()).map(a=>({...a,requests:null,reported:null,timeouts:null,failed:null,offline:null})),
   recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,route:e.route??null,delivered:e.delivered??null,resolved:e.resolved===true})):null});
  }
+ // 감시기가 쓰는 route/--super 이름이 살아 있는 세션인지(주기 기록의 설정 + 지금 살아 있는 역할). 모르면 경고하지 않는다.
+ const cs=result.cycle?.settings;
+ result.routeNames=worker&&center.runtimeKnown&&cs&&(cs.routes||cs.superRole)?watchRouteNameWarnings(cs.routes??{},cs.superRole??null,live):[];
  result.verdict=watchVerdict(result,now);
  return result;
 }
