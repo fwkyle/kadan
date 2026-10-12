@@ -1,7 +1,8 @@
 // kadan read·log·attach (HW-3-impl: cli.mjs에서 옮김)
 import { watchAILabel } from "../watch-report.mjs";
 import { floor } from "../floor.mjs";
-import { ledgerBy, readLedger } from "../ledger.mjs";
+import { ledgerBy, readLedger, appendLedger, ledgerHome } from "../ledger.mjs";
+import {withRecoveryLock} from "../secretary-resume.mjs";
 import { openWindow } from "../floor-tmux.mjs";
 import path from "node:path";
 import { die, digest, lastStartFor, sessionName, stripAnsi, tailLines, normalizeFloorRead } from "../cli-basics.mjs";
@@ -64,12 +65,18 @@ export function cmdAttach(argv) {
     return;
   }
   const cwd = attachWindowCwd(lastStartFor(session));
-  const window = openWindow(session, process.platform, {
-    choice: windowChoice,
-    role,
-    cwd,
-    panePid: floor.pid(session),
-    conflictKeySuffix: `attach-${digest(cwd)}`,
+  const window = withRecoveryLock(ledgerHome(), session, () => {
+    const pid = floor.pid(session);
+    const result = openWindow(session, process.platform, {
+      choice: windowChoice, role, cwd, panePid: pid,
+      conflictKeySuffix: `attach-${digest(cwd)}`,
+    });
+    if (result?.rottieTerminalId && String(lastStartFor(session)?.panePid) === String(pid)
+      && String(floor.pid(session)) === String(pid)) {
+      appendLedger({kind: 'window', role, session, cwd, panePid: pid,
+        rottieTerminalId: result.rottieTerminalId});
+    }
+    return result;
   });
   const name = window ? window.method : null;
   if (!name) console.log(`창 열기 실패 — 직접: ${floor.attach(session)}`);

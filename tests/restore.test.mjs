@@ -140,3 +140,12 @@ test("로티 탭 상태 조회: 상태·없는 탭·JSON 아닌 실패를 구분
   const broken = showRottieWindow({ bin: "/r", terminalId: "t", spawnFn: reply("boom", 4) });
   assert.deepEqual(broken, { ok: false, code: 4 });
 });
+
+test('숨김 역할에 붙인 Rottie 탭은 같은 pane 세대의 window 기록만 받는다', () => {
+  const entries = [start('kadan-a', {window: 'hidden', panePid: '20'})];
+  assert.equal(currentRottieWindow(entries, 'kadan-a'), null);
+  entries.push({kind: 'window', session: 'kadan-a', panePid: '99', rottieTerminalId: 'wrong'});
+  assert.equal(currentRottieWindow(entries, 'kadan-a'), null);
+  entries.push({kind: 'window', session: 'kadan-a', panePid: '20', rottieTerminalId: 'attached'});
+  assert.equal(currentRottieWindow(entries, 'kadan-a').rottieTerminalId, 'attached');
+});
