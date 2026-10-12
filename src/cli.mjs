@@ -1299,6 +1299,8 @@ export function buildStartLedgerEntry({
       ? { rottieWorkspaceId: evidence.rottieWorkspaceId }
       : {}),
     ...(evidence.rottieBuild ? { rottieBuild: evidence.rottieBuild } : {}),
+    ...Object.fromEntries(["herdrSocket", "herdrWorkspaceId", "herdrPaneId", "herdrTerminalId"]
+      .filter(key => evidence[key]).map(key => [key, evidence[key]])),
     window,
     ...(rottieTerminalId ? { rottieTerminalId } : {}),
     ...(orcaTerminalHandle ? { orcaTerminalHandle } : {}),
@@ -1434,6 +1436,7 @@ function cmdStart(argv, flags) {
             rottieWorkspaceId: lastStartFor(session)?.rottieWorkspaceId,
             rottieBuild: lastStartFor(session)?.rottieBuild,
           }
+        : floor.name === "herdr" ? { ...lastStartFor(session), panePid: existingPid }
         : { panePid: existingPid };
   } else {
     try {
@@ -1450,7 +1453,7 @@ function cmdStart(argv, flags) {
   }
 
   const pid = evidence.panePid ?? evidence.rottiePid;
-  let method = floor.name === "rottie" ? "rottie" : "hidden";
+  let method = floor.name === "rottie" ? "rottie" : floor.name === "herdr" ? "manual" : "hidden";
   let rottieTerminalId;
   let orcaTerminalHandle;
   let reused;
@@ -1985,9 +1988,9 @@ function cmdStatus() {
         : `PID변경(${recorded}→${item.pid})`;
     const shown = startDisplay(lastStartFor(item.session));
     const modelBit = `  ${shown.harness} · ${shown.model} · ${shown.family}`;
-    if (floor.name === "rottie") {
+    if (["rottie", "herdr"].includes(floor.name)) {
       console.log(
-        `${item.session}  Rottie=${item.terminalId}  상태=${item.state}  ${pidState}${modelBit}`
+        `${item.session}  ${floor.name === "rottie" ? "Rottie" : "herdr"}=${item.terminalId}  상태=${item.state}  ${pidState}${modelBit}`
       );
     } else {
       console.log(
@@ -2210,7 +2213,7 @@ function cmdAttach(argv) {
   if (!role) die("사용법: kadan attach <역할>");
   const session = sessionName(role);
   if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  if (floor.name === "rottie") {
+  if (["rottie", "herdr"].includes(floor.name)) {
     console.log(floor.attach(session));
     return;
   }

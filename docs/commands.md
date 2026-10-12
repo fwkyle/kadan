@@ -17,7 +17,8 @@
 | 변수 | 뜻 |
 |---|---|
 | `KADAN_HOME` | 원장·카드·설정이 사는 폴더. 기본 `~/.kadan` (옛 이름 `KADAN_LITE_HOME`도 읽음) |
-| `KADAN_FLOOR` | 에이전트가 사는 바닥. `tmux`(기본) 또는 `rottie`. 기계당 하나 |
+| `KADAN_FLOOR` | 에이전트가 사는 바닥. `tmux`(기본) 또는 `rottie`. 시험 기능 `herdr`는 별도 `KADAN_HOME`으로 명시 선택하며, 실행 중 전환·자동 폴백 없음 |
+| `KADAN_HERDR_SOCKET` | herdr 시험 기능의 named server 절대 소켓 경로. `KADAN_HOME`과 함께 필수. 서버 자동 기동·훅 설치 없음. [실행 방법](experiments/herdr-roundtrip.md) |
 | `KADAN_WINDOW` | tmux 바닥에서 시작할 때 여는 창. `none`(기본) · `rottie` · `orca` |
 | `KADAN_ROTTIE_BIN` | `KADAN_WINDOW=rottie`일 때 말 걸 로티 CLI의 절대경로 |
 | `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`) |
