@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { assertSingleWatch, watchProcessName } from '../src/watch-system.mjs';
@@ -29,8 +30,8 @@ test('링크로 가리킨 기본 홈도 기본으로 판정한다', () => {
 
 test('폴더 이름이 같은 두 홈은 서로 다른 이름이다', () => {
   const a = name(otherA), b = name(otherB);
-  assert.match(a, /^kadan-watch:test-[0-9a-f]{6}$/);
-  assert.match(b, /^kadan-watch:test-[0-9a-f]{6}$/);
+  assert.match(a, /^kadan-watch:test-[0-9a-f]{16}$/);
+  assert.match(b, /^kadan-watch:test-[0-9a-f]{16}$/);
   assert.notEqual(a, b);
   assert.equal(name(otherA), a);
 });
@@ -69,4 +70,20 @@ test('상태 표시는 다른 홈에서 자기 홈 감시기만 찾는다', () =
   ].join('\n');
   const spawn = () => ({ status: 0, stdout: out });
   assert.deepEqual(readWatchProcesses(spawn, a).map((p) => p.pid), [44]);
+});
+
+// HW-7-home-review 중요 1: 폴더 이름이 같고 옛 6자 해시가 겹치는 두 경로가 같은 이름을 받았다.
+const COLLIDE_A = '/private/var/folders/3l/x49b4bqd7nsbm9yrv4975_980000gn/T/hw7-independent-MfF2gN/collision-1989/test';
+const COLLIDE_B = '/private/var/folders/3l/x49b4bqd7nsbm9yrv4975_980000gn/T/hw7-independent-MfF2gN/collision-2405/test';
+const sha6 = (p) => createHash('sha256').update(p).digest('hex').slice(0, 6);
+
+test('옛 6자 해시가 겹치던 두 홈이 서로 다른 이름을 받는다', () => {
+  assert.equal(sha6(COLLIDE_A), 'f5d263');
+  assert.equal(sha6(COLLIDE_B), 'f5d263');
+  const a = name(COLLIDE_A), b = name(COLLIDE_B);
+  assert.notEqual(a, b);
+  assert.throws(() => assertSingleWatch(ps(`999999 ${a}`), a), /PID 999999/);
+  assert.doesNotThrow(() => assertSingleWatch(ps(`999999 ${a}`), b));
+  const out = `44 Mon Sep  7 00:00:00 2026 ${a}\n45 Mon Sep  7 00:00:00 2026 ${b}`;
+  assert.deepEqual(readWatchProcesses(() => ({ status: 0, stdout: out }), a).map((p) => p.pid), [44]);
 });
