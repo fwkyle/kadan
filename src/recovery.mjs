@@ -11,7 +11,7 @@ import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {commandWords, launchIdentityOf} from './ai-identity.mjs';
 import {reportRecovery} from './recovery-report.mjs';
 import {resumedSecretaryStart, withRecoveryLock, advanceSecretaryCheckpoint,
-  liveSecretaryTranscript, transcriptIdentity} from './secretary-resume.mjs';
+  liveSecretaryTranscript, transcriptIdentity, savedSecretaryCommand} from './secretary-resume.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -156,7 +156,8 @@ function restoreLocked(flags, deps) {
   const context = JSON.parse(flags.context || 'null');
   // Rottie uses exec for standalone PTYs. The stored Kadan command starts at the executable
   // so existing AI identity/card checks continue to recognize the restored role.
-  const command = typeof flags.command === 'string' ? flags.command.replace(/^exec /, '') : flags.command;
+  const requested = typeof flags.command === 'string' ? flags.command.replace(/^exec /, '') : flags.command;
+  const command = savedSecretaryCommand(home, context, requested);
   const bin = flags['rottie-bin'];
   if (typeof command !== 'string' || !command.trim() || !absolute(bin)) {
     fail('정확한 대화 복원 명령과 Rottie 실행 파일이 필요합니다.');

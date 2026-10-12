@@ -212,3 +212,18 @@ test('isolated real tmux/process/file: reboot resume and Rottie attachment prese
     else process.env.KADAN_SOCKET = priorSocket;
   }
 });
+
+test('Rottie first also keeps implicit high effort and bypass from the exact checkpoint', () => {
+  const f = fixture(); f.entries[0].cmd = 'codex';
+  fs.appendFileSync(f.transcript, JSON.stringify({type: 'turn_context', payload: {
+    model: 'test-model', effort: 'high', approval_policy: 'never',
+    sandbox_policy: {type: 'danger-full-access'},
+  }}) + '\n');
+  const context = inspectRecovery({terminal: 'old'}, f.recoveryDeps);
+  checkpointSecretary(f.deps); f.setPane(null);
+  restoreRecovery({context: JSON.stringify(context), command: 'codex resume exact-conversation',
+    'rottie-bin': '/fixture/rottie'}, f.recoveryDeps);
+  assert.match(f.calls[0].cmd, /model_reasoning_effort="high"/);
+  assert.match(f.calls[0].cmd, /sandbox_mode="danger-full-access"/);
+  assert.match(f.calls[0].cmd, /'--model' 'test-model'/);
+});

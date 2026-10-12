@@ -179,6 +179,23 @@ export function advanceSecretaryCheckpoint(home, previous, current, command) {
   fs.renameSync(file + '.tmp', file);
 }
 
+// Rottie may start before login; its older plan need not contain implicit Codex settings.
+export function savedSecretaryCommand(home, context, command) {
+  if (context.role !== '비서' || !fs.existsSync(checkpointPath(home))) return command;
+  const saved = JSON.parse(fs.readFileSync(checkpointPath(home), 'utf8'));
+  if (saved.startDigest !== context.startDigest) return command;
+  const words = commandWords(command);
+  const savedWords = commandWords(saved.command);
+  const identity = transcriptIdentity(saved.transcript);
+  if (words?.[0]?.split('/').pop() !== 'codex' || words[1] !== 'resume'
+    || words[2] !== saved.conversation || savedWords?.[1] !== 'resume'
+    || savedWords[2] !== identity.id || identity.id !== saved.conversation
+    || identity.cwd !== context.cwd || saved.cwd !== context.cwd) {
+    throw new Error('비서 복원 요청과 저장된 대화가 다릅니다.');
+  }
+  return [words[0], ...savedWords.slice(1)].map(quote).join(' ');
+}
+
 // An autostart may precede Rottie. Only a continuous exact-conversation lineage may attach.
 export function resumedSecretaryStart(context, entries, command) {
   if (context.role !== '비서') return null;
