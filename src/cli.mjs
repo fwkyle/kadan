@@ -64,7 +64,7 @@ import {
 } from "./cli-basics.mjs";
 import { guardedSend } from "./cli-guarded-send.mjs";
 import { cmdStart } from "./commands/start.mjs";
-import { cmdSend } from "./commands/send.mjs";
+import { cmdSend, cmdMail, cmdDispatch } from "./commands/send.mjs";
 import { cmdPlan } from "./commands/plan.mjs";
 import { cmdDone } from "./commands/done.mjs";
 import { cmdWait } from "./commands/wait.mjs";
@@ -220,6 +220,8 @@ const COMMANDS = {
   autostart: cmdAutostart,
   start: cmdStart,
   send: cmdSend,
+  mail: cmdMail,
+  dispatch: cmdDispatch,
   done: cmdDone,
   wait: cmdWait,
   watch: cmdWatch,
@@ -240,7 +242,8 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|adopt|autostart|plan|start|send|done|wait|watch|watch-report|stop|status|tree|wall|dashboard|" +
+      "사용법: kadan <init|up|adopt|autostart|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
+        "stop|status|tree|wall|dashboard|" +
         "read|log|attach|restore|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
@@ -248,7 +251,7 @@ export function main(argv) {
   const { flags, rest: args } = parseFlags(rest);
   try {
     if(
-      ['init','up','start','send','stop','done','plan','watch-report','restore'].includes(command)||
+      ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])

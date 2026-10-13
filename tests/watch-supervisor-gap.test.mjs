@@ -12,7 +12,8 @@ const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],
 const starts=[...parents.keys()].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0)}));
 const card={id:'t1',key:'repo/t1',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'};
 
-async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),sendNudge=null,read=()=>'frozen screen',
+async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),
+  sendNudge=null,sendAlert=null,read=()=>'frozen screen',
   cards=[card],works=[],decisions=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
   const records=[],sent=[],printed=[],nudges=[];let minute=0;const controller=new AbortController();
   const entries=[...starts,...extra];
@@ -21,7 +22,7 @@ async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session
     now:()=>epoch+minute*60_000,
     floor:{list,read:s=>read(s,minute),alive},
     readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,readDecisions:()=>decisions,
-    sendAlert:(role,msg)=>sent.push([minute,role,msg]),
+    sendAlert:(role,msg)=>{sent.push([minute,role,msg]);return sendAlert?.(role,msg,minute);},
     sendNudge:(role,msg)=>{nudges.push([minute,role,msg]);return sendNudge?.(role,msg);},
     record:e=>{records.push({...e,minute});entries.push({...e,t:stamp(minute)});},
     print:l=>printed.push(l),spawn:()=>({status:0,stdout:''}),
@@ -68,7 +69,7 @@ test('본인에게 넣은 알림 글은 화면 변화로 세지 않는다 — �
 test('사람이 그 창에서 입력 중이면 본인 알림을 미루고 다음 주기에 다시 보낸다. 움직이면 아무도 깨우지 않는다',async()=>{
   let holds=1;
   const {nudges,printed}=await simulate({minutes:20,sendNudge:(role)=>{
-    if(role==='p-슈퍼감독'&&holds-->0){const e=new Error('알림 보류: 사람이 이 창에서 최근 입력함');e.code='KADAN_HUMAN_ACTIVE';throw e;}
+    if(role==='p-슈퍼감독'&&holds-->0){const e=new Error('알림 보류: 사람이 이 창에서 최근 입력함');e.code='KADAN_HUMAN_ACTIVE';e.delivery='not-sent';throw e;}
   }});
   assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독'],[16,'p-슈퍼감독']]);
   assert.ok(printed.some(l=>l.includes('놀고 있음 kadan-p-슈퍼감독')&&l.includes('보류')));
@@ -140,4 +141,17 @@ test('사용자 결정이 업무 밖 카드에 걸려 있어도 결정의 work�
   assert.ok(!linked.alerts.some(a=>a.alertKind==='놀고 있음'));
   const cancelled=await simulate({minutes:20,cards:[doneCard],works:[work],entries,decisions:[{...decision,work:'repo/w1',status:'cancelled'}]});
   assert.deepEqual(cancelled.nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[15,'p-슈퍼감독']],'결정이 닫히면 다시 할 일');
+});
+
+
+test('상위 경보도 입력 보호 중에는 상신 없이 보류하고 풀린 뒤 한 번 보낸다',async()=>{
+ const delivered=[];
+ const f=await simulate({minutes:35,sendAlert:(role,msg,minute)=>{
+  if(role==='p-슈퍼감독'&&minute<32)throw Object.assign(new Error('입력 중'),{
+   code:'KADAN_HERDR_NOT_READY',delivery:'not-sent'});
+  delivered.push([minute,role,msg]);
+ }});
+ assert.equal(delivered.filter(([,role,msg])=>role==='p-슈퍼감독'&&msg.includes('놀고 있음')).length,1);
+ assert.ok(f.records.some(e=>e.kind==='alert'&&e.held===true));
+ assert.ok(!f.records.some(e=>e.alertKind==='전달실패'));
 });

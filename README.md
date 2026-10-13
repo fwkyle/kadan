@@ -77,7 +77,7 @@ kadan attach 비서   # 비서 터미널에 들어가 대화 시작
 
 ```bash
 kadan start worker-a --cmd 'codex'      # tmux 세션 kadan-worker-a를 만들고 원장에 기록
-kadan send worker-a --task card-1 \
+kadan dispatch worker-a --task card-1 \
   "card-1을 해 주세요. 끝나면 마지막 줄에 KADAN:DONE <카드id> <ok|failed> 형식으로 출력하세요. 카드id는 card-1입니다."
 kadan wait worker-a                      # 완료 마커나 조용함을 알려 줌 (대신 판정하지 않음)
 kadan attach worker-a                    # 실제 터미널에 들어가기
@@ -93,7 +93,9 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 |---|---|
 | `kadan init` / `kadan up` | 처음 준비 / 비서·대시보드 띄우기 |
 | `kadan start <역할>` | 역할 세션 만들기 |
-| `kadan send <역할> <메시지>` | 살아 있는지 확인한 뒤 메시지 넣기 (`--task`로 카드 발령) |
+| `kadan mail <역할> <메시지>` | 일반 우편. `--execution`을 연결해도 발령하지 않음 |
+| `kadan dispatch <역할> --task <카드ID> <지시>` | 명시한 실행 카드 발령 |
+| `kadan send <역할> <메시지>` | 기존 호출 호환. 새 우편은 `mail`, 새 발령은 `dispatch` |
 | `kadan wait <역할>` | 완료 마커나 조용함 기다리기 |
 | `kadan read <역할>` | 화면 끝부분 읽기 |
 | `kadan status` | 살아 있는 세션과 PID 일치 여부 |

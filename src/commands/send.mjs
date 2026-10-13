@@ -13,13 +13,57 @@ import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
+import { readActiveHierarchy } from "../hierarchy-register.mjs";
+import { isPeerSuperMail } from "../peer-mail.mjs";
 
 export function cmdSend(argv, flags) {
+  return deliverMessage(argv, flags, 'send');
+}
+
+export function cmdMail(argv, flags) {
+  return deliverMessage(argv, flags, 'mail');
+}
+
+export function cmdDispatch(argv, flags) {
+  return deliverMessage(argv, flags, 'dispatch');
+}
+
+function usage(command) {
+  if (command === 'mail') {
+    return '사용법: kadan mail <역할> [--work <업무키>] [--execution <실행키>] ' +
+      '[--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] [--raw] <메시지...> ' +
+      '(메시지 생략 시 표준 입력). 우편 전용이며 --task는 금지, --execution으로 발령하지 않습니다.';
+  }
+  if (command === 'dispatch') {
+    return '사용법: kadan dispatch <역할> --task <카드ID> [--work <업무키>] ' +
+      '[--execution <실행키>] [--allow-old-runner <이유>] [--raw] <지시...> ' +
+      '(지시 생략 시 표준 입력). 카드 발령 전용이며 질문·답장·저장 우편은 mail을 사용하세요.';
+  }
+  return '사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] ' +
+    '[--execution <실행키>] [--allow-old-runner <이유>] [--raw] [--mailbox] ' +
+    '[--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). ' +
+    '기존 호환 명령입니다. --execution도 조건에 따라 발령으로 추론합니다. ' +
+    '새 우편은 mail, 명시 발령은 dispatch --task를 사용하세요.';
+}
+
+function deliverMessage(argv, flags, command) {
+  if (command !== 'send' && flags.help) {
+    console.log(usage(command));
+    return;
+  }
   const role = argv[0];
-  if (!role) {
-    die("사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] [--execution <실행키>] [--allow-old-runner <이유>] " +
-      "[--raw] [--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). " +
-      "--task는 작업 발령이고 --work·--execution은 우편의 연결 주소다");
+  if (!role) die(usage(command));
+  // 의도 검사는 본문 읽기·우편 저장·전송보다 먼저 한다. 기존 send의 해석은 그대로 둔다.
+  if (command === 'mail' && Object.hasOwn(flags, 'task')) {
+    throw new Error('mail은 --task를 받지 않습니다. 작업 발령은 dispatch --task를 사용하세요');
+  }
+  if (command === 'dispatch') {
+    if (typeof flags.task !== 'string' || !/^\S+$/.test(flags.task)) {
+      throw new Error('dispatch는 --task <카드ID> 한 개가 필요합니다');
+    }
+    if (['expect-reply', 'reply-to', 'reply-final'].some(flag => Object.hasOwn(flags, flag))) {
+      throw new Error('dispatch는 질문·답장을 받지 않습니다. mail을 사용하세요');
+    }
   }
   if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
   const argText = argv.slice(1).join(" ");
@@ -42,10 +86,10 @@ export function cmdSend(argv, flags) {
 
   let receipt;
   try {
-    // --execution만 쓴 발령은 taskId 없이 기록되어 감시에서 빠진다. 수신 역할의 발령 카드로
-    // 확인될 때만 taskId를 추론해 채운다. 답장·다른 담당의 실행 연결은 그대로 둔다.
+    // 기존 send만 --execution의 발령 추론을 유지한다. mail은 연결 주소로만 사용하며,
+    // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
     let taskId=flags.task;
-    if(taskId==null){
+    if(command === 'send' && taskId==null){
       const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true});
       if(inferred){taskId=inferred;new CardStore(ledgerHome()).checkSend(taskId,role);console.error(`실행 연결 ${flags.execution}은(는) ${role}의 발령 카드입니다 — taskId로 기록합니다. 명시 발령은 --task <카드id>를 사용하세요`);}
     }
@@ -54,6 +98,17 @@ export function cmdSend(argv, flags) {
       by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true
     });
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
+    const by = resolveLedgerBy({env:process.env});
+    const entries = readLedger();
+    if (taskId == null && isPeerSuperMail(entries, readActiveHierarchy(entries), by, recipient)) {
+      if (flags.raw) throw new Error('슈퍼 간 우편은 보관 후 안전하게 알립니다. --raw 없이 보내세요');
+      const stored = new Mailbox(ledgerHome(), recipient).send({
+        by, message, category:flags['mail-kind'] || 'report', ...mailContext,
+      });
+      console.log(JSON.stringify({...stored, wake:'watch-required',
+        note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
+      return;
+    }
     const expectedPid=recordedPid(lastStartFor(session));
     if (recipient!==role && !expectedPid) {
       const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);

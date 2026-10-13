@@ -24,7 +24,11 @@ function fixture() {
     if (method === "pane.process_info") return { process_info: { shell_pid: state.pid,
       foreground_processes: [{ pid: state.pid, argv: state.argv }] } };
     if (method === "agent.get") return { agent: { terminal_id: pane.terminal_id, agent_status: state.status } };
-    if (method === "pane.read") return { read: { text: state.output, revision: 7, truncated: state.truncated } };
+    if (method === "pane.read") {
+      state.beforeRead?.(params);
+      return { read: { text: state.output, revision: state.revision ?? 7,
+        truncated: Boolean(state.truncated || (params.source === 'recent_unwrapped' && state.historyTruncated)) } };
+    }
     if (method === "agent.prompt") { if (state.promptError) throw state.promptError; return { type: "ok" }; }
     if (method === "workspace.close") return { type: "ok" };
     throw new Error(`Unexpected request ${method}`);
@@ -95,11 +99,48 @@ test("시작 장부가 서버와 세 개의 불투명 주소를 보존한다", (
   for (const key of ["herdrSocket", "herdrWorkspaceId", "herdrPaneId", "herdrTerminalId", "panePid"]) assert.equal(e[key], f.start[key]);
 });
 
-test("확인되지 않은 자동 알림과 Enter 경로는 비활성이다", () => {
+test("자동 알림은 빈 대기 화면의 안정 시간을 기다리며 Enter만 재전송하지 않는다", () => {
   const f = fixture();
-  assert.throws(() => f.floor.send(f.start.session, "알림", { notificationGuard: {} }), { code: "KADAN_HERDR_NOTIFY_UNVERIFIED" });
+  assert.throws(() => f.floor.send(f.start.session, "알림", { notificationGuard: { now: 0 } }),
+    { code: "KADAN_HUMAN_ACTIVE", delivery: 'not-sent' });
+  assert.equal(prompts(f), 0);
+  assert.equal(f.floor.notificationHold(f.start.session, { now: 29_999 }).code, 'KADAN_HUMAN_ACTIVE');
+  assert.equal(f.floor.send(f.start.session, '알림', { notificationGuard: { now: 30_000 } }).keyDelivery, 'sent');
   assert.throws(() => f.floor.sendEnter(f.start.session), { code: "KADAN_HERDR_ENTER_UNVERIFIED" });
-  assert.equal(f.state.calls.length, 0);
+});
+
+test('자동 알림은 기록 잘림과 무관하게 현재 빈 입력창을 사용한다', () => {
+  const f = fixture(); f.state.historyTruncated = true;
+  f.floor.notificationHold(f.start.session, { now: 0 });
+  assert.equal(f.floor.send(f.start.session, '우편 확인', { notificationGuard: { now: 30_000 } }).keyDelivery, 'sent');
+  assert.equal(f.state.calls.some(c => c.method === 'pane.read' && c.params.source === 'recent_unwrapped'), false);
+  assert.throws(() => f.floor.send(f.start.session, '일반 입력'), { code: 'KADAN_HERDR_OUTPUT_GAP' });
+});
+
+test('알림 유예 중 입력·화면 변화와 working 뒤에는 새로 30초를 확인한다', () => {
+  const f = fixture(), hold = now => f.floor.notificationHold(f.start.session, { now });
+  hold(0);
+  f.state.revision = 8;
+  assert.equal(hold(30_000).code, 'KADAN_HUMAN_ACTIVE');
+  f.state.output = '\n› 아직 쓰는 문장\n\nstatus';
+  assert.equal(hold(60_000).code, 'KADAN_PANE_INPUT_PENDING');
+  f.state.output = '\n› Ask Codex to do anything\n\nstatus';
+  assert.equal(hold(90_000).code, 'KADAN_HUMAN_ACTIVE');
+  f.state.status = 'working';
+  assert.equal(hold(120_000).code, 'KADAN_HERDR_NOT_READY');
+  f.state.status = 'idle';
+  assert.equal(hold(150_000).code, 'KADAN_HUMAN_ACTIVE');
+  assert.equal(hold(180_000), null);
+  assert.equal(prompts(f), 0);
+});
+
+test('알림 전송 직전 입력이 생기면 본문을 한 번도 보내지 않는다', () => {
+  const f = fixture(); f.floor.notificationHold(f.start.session, { now: 0 });
+  let reads = 0;
+  f.state.beforeRead = () => { if (++reads === 2) f.state.output = '\n› 입력 시작\n\nstatus'; };
+  assert.throws(() => f.floor.send(f.start.session, '알림', { notificationGuard: { now: 30_000 } }),
+    { code: 'KADAN_PANE_INPUT_PENDING', delivery: 'not-sent' });
+  assert.equal(prompts(f), 0);
 });
 
 test("생성 응답의 교체된 tab/pane ID를 사용하고 자식에게 시험 CLI 절대경로를 준다", () => {
@@ -213,7 +254,7 @@ test("응답 중 자동 경보·표시 없는 호출·busyMail 아닌 값은 거
   }
   const f = fixture(); f.state.status = "working";
   assert.throws(() => f.floor.send(f.start.session, "알림", { busyMail: true, notificationGuard: { humanIdleMs: 1 } }),
-    { code: "KADAN_HERDR_NOTIFY_UNVERIFIED" });
+    { code: "KADAN_HERDR_NOT_READY" });
   assert.equal(prompts(f), 0);
 });
 

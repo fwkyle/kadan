@@ -1,3 +1,4 @@
+import { isNotificationHold } from './notification-guard.mjs';
 import {taskIdentity} from './task-identity.mjs';
 // 감시AI가 호출하는 보고 경계. 판단은 AI, 저장·중복 방지·상신은 이 명령의 책임이다.
 import fs from 'node:fs';
@@ -112,7 +113,7 @@ export class WatchReports {
     const entries=this.entries();
     const report=entries.find(e=>e.kind==='watch-ai-report'&&e.requestId===requestId);
     if (!report) return null;
-    const delivery=entries.find(e=>e.kind==='watch-ai-delivery'&&e.requestId===requestId);
+    const delivery=entries.findLast(e=>e.kind==='watch-ai-delivery'&&e.requestId===requestId);
     return {report,delivery,complete:!report.notify||Boolean(delivery)};
   }
   completed(request,result) {
@@ -162,31 +163,68 @@ export class WatchReports {
     const label=report.idleWithoutAsk?'카드 미완인데 입력 대기'
       :{'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
     const message=`[${watchAILabel(request.source)}] ${label} · ${request.role}${request.taskId?` / ${request.taskId}`:''}: ${reason}${report.consecutive>=2?' 반복 조정 판정입니다. 상위 감독과 범위·담당 조정을 검토하세요.':''} 감독이 확인 후 후속 조치를 결정하세요.`;
+    return this.deliver(request,report,message,parents);
+  }
+  deliver(request,report,message,parents) {
+    const {requestId} = request, {verdict} = report;
     const live=new Set(this.floor.list().filter(x=>x.alive!==false).map(x=>x.session));
     const routes=new Map(request.routes);
     const route=explainAlertRoute({id:request.key,role:request.role},routes,live,request.superRole,parents),recipient=route.recipient;
-    let delivery='no-recipient',escalation=null;
+    let delivery='no-recipient',escalation=null,held=false;
     if (recipient) {
       try { this.send(recipient,message); delivery='sent'; }
       catch(error) {
         delivery=error.delivery??'unknown';
+        held=isNotificationHold(error);
         const upper=failureEscalation(recipient,routes,live,request.superRole,parents);
-        if (delivery==='not-sent'&&upper&&upper!==recipient&&recipient!=='@user') {
+        if (!held&&delivery==='not-sent'&&upper&&upper!==recipient&&recipient!=='@user') {
           try { this.send(upper,`[${watchAILabel(request.source)}] 보고 전달 실패 · ${recipient}에게 전달하지 못했습니다. ${message}`); escalation={recipient:upper,delivery:'sent'}; }
           catch(e) { escalation={recipient:upper,delivery:e.delivery??'unknown'}; }
         }
       }
     }
     let userNotification=null;
-    if(request.userNotify&&report.level==='RED'&&recipient!=='@user'&&escalation?.recipient!=='@user') {
+    if(!held&&request.userNotify&&report.level==='RED'&&recipient!=='@user'&&escalation?.recipient!=='@user') {
       try { this.send('@user',message); userNotification='sent'; } catch { userNotification='failed'; }
     }
-    this.record({kind:'watch-ai-delivery',by:'watch-ai',requestId,source:request.source,role:request.role,recipient,route,delivery,escalation,userNotification});
+    if(held)fs.writeFileSync(path.join(request.evidencePath,'notification.txt'),message,{mode:0o600});
+    this.record({kind:'watch-ai-delivery',by:'watch-ai',requestId,source:request.source,
+      role:request.role,recipient,route,delivery,escalation,userNotification,
+      ...(held?{held:true}: {})});
     this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
       taskId:request.taskId,alertKind:verdict,level:report.level,recipient,route,delivered:delivery==='sent'});
     if(escalation) this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
       taskId:request.taskId,alertKind:'전달실패',level:report.level,recipient:escalation.recipient,delivered:escalation.delivery==='sent'});
     return this.completed(request,{...report,recipient,delivery,escalation});
+  }
+  retryHeld(entries,parents) {
+    const deliveries=new Map(entries.filter(e=>e.kind==='watch-ai-delivery').map(e=>[e.requestId,e]));
+    for(const pending of deliveries.values()) {
+      if(!pending.held)continue;
+      let request,report;
+      this.locked(()=>{
+        const fresh=this.entries();
+        if(!fresh.findLast(e=>e.kind==='watch-ai-delivery'&&e.requestId===pending.requestId)?.held)return;
+        request=fresh.find(e=>e.kind==='watch-ai-request'&&e.requestId===pending.requestId);
+        report=fresh.find(e=>e.kind==='watch-ai-report'&&e.requestId===pending.requestId);
+        const current=report&&latestWatchReports(fresh).find(e=>e.key===report.key);
+        // 회복 뒤 재발한 새 알림이 옛 보류 알림을 대체한다. 같은 문제의 notify:false 재확인은 제외한다.
+        const latestNotification=report&&fresh.findLast(e=>e.kind==='watch-ai-report'
+          &&e.accepted&&e.notify&&e.key===report.key);
+        const valid=request&&current&&current.verdict===report.verdict&&current.level===report.level
+          &&latestNotification?.requestId===report.requestId
+          &&Boolean(current.idleWithoutAsk)===Boolean(report.idleWithoutAsk)
+          &&currentRequest(request,this.readCards(),fresh,parents,this.readWorks());
+        // 전송 전 예약: 여기서 중단되면 전달 불명확이며 다음 순회에 자동 재전송하지 않는다.
+        this.record({...pending,by:'watch',held:false,delivery:valid?'unknown':'cancelled',
+          t:new Date(this.now()).toISOString()});
+        if(!valid)request=null;
+      });
+      if(request){
+        const message=fs.readFileSync(path.join(request.evidencePath,'notification.txt'),'utf8');
+        this.deliver(request,report,message,parents);
+      }
+    }
   }
   retire(entries,cards,parents,works=this.readWorks()) {
     for (const report of latestWatchReports(entries)) {

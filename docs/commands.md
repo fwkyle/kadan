@@ -37,7 +37,9 @@
 | 명령 | 하는 일 | 자주 쓰는 옵션 |
 |---|---|---|
 | `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden`, `--parent <상위\|@user>`(만든 역할 대신 이 상위로 관계표에 등록) |
-| `kadan send <역할> <메시지>` | 생존 확인 뒤 입력창에 넣는다. 원장에 영수증을 남긴다 | `--task <카드id>`(작업 발령), `--work`·`--execution`(우편 연결), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--raw` |
+| `kadan mail <역할> <메시지>` | 우편 전용. 실행 주소를 연결해도 발령으로 바뀌지 않는다. `--task`는 거절 | `--work`·`--execution`(연결 주소), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--reply-final`, `--raw` |
+| `kadan dispatch <역할> --task <카드ID> <지시>` | 카드 발령 전용. 카드 필수, 기존 배정·범위·수신자·실행기 검사 유지. 질문·답장·저장 우편은 거절 | `--work`, `--execution`(같은 카드 확인), `--allow-old-runner <이유>`, `--raw` |
+| `kadan send <역할> <메시지>` | 기존 호환 명령. `--task` 또는 수신자의 배정 카드를 가리키는 `--execution`으로 발령 가능 | 기존 옵션 유지. 새 호출은 우편 `mail`, 발령 `dispatch` 권장 |
 | `kadan adopt <감독이름>` | 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(Claude Code는 `--resume <ID> --fork-session`, Codex는 `fork`). 대화 ID·생각 강도는 Claude Code에서 자동으로 읽고, 상위는 기본 사용자. 옮긴 뒤 원래 대화는 더 지시하지 않는다 | `--model <모델>`(필수), `--resume <대화ID> --harness claude\|codex`, `--effort`, `--parent @user\|<역할>`, `--profile conductor\|super`, `--hidden`, `--no-prompt` |
 | `kadan wait <역할>` | 완료 마커(DONE)나 조용함을 보고한다. 판정하지 않는다 | `--timeout 초`, `--quiet 초`, `--interval 초` |
 | `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다. 한 번 발령으로 끝나는 카드는 `--close-card`로 카드도 함께 닫는다([카드 닫기](card-center.md#실행-완료와-카드-닫기)) | `--from-screen`(결과 대신 작업자 화면의 DONE을 읽어 확정. 짧은 카드id·정식 주소·응답 머리표 `•`/`⏺` 모두 인정, 그 카드 마지막 발령 전부터 있던 마커는 제외. 없으면 기록·전송 없이 종료 코드 3), `--wait <초>`(`--from-screen`과 함께. 마커가 없으면 2초 간격으로 화면만 다시 읽는 유한 대기, 최대 600. 완료 편지가 마커보다 먼저 오는 경합용이며 시간이 다 되면 종료 코드 3 그대로), `--close-card`(ok 확정 뒤 카드 `done`, 실패해도 실행 완료 유지), `--note <이유>`(카드 기록 이유) |
@@ -47,6 +49,17 @@
 | `kadan restore [역할...]` | 로티 데몬 재시작 뒤, 기록된 로티 탭이 죽은 살아 있는 세션에 새 탭을 붙인다 | `--dry-run` |
 | `kadan stop <역할>` | 카단이 만든 세션만 끝내고 연결된 로티 탭을 닫는다. 미확정 카드가 있으면 알린다 | — |
 | `kadan hierarchy prune` | 끝난 역할의 관계를 정리할 후보와 보존 이유를 표시한다. [정리 기준](hierarchy.md#끝난-역할-정리) | `--apply`(백업 후 적용), `--file <절대경로>`(복사본 등 대상 지정) |
+
+### 우편과 발령 선택
+
+- 맥락·질문·답장·보고는 `mail`, 실행 카드 발령은 `dispatch --task`를 쓴다.
+- 두 명령은 인자에 본문이 없으면 표준 입력을 읽고, `--help`로 사용법을 보여 준다.
+- `mail --execution`은 우편에 실행 주소만 연결한다. `--task`는 빈 값이나 값 없는 옵션도 거절한다.
+- `dispatch`는 카드 ID 한 개를 요구하며 `--execution`만으로 추론하지 않는다.
+  `--mailbox`, 비서 우편함 대상, `--expect-reply`, `--reply-to`, `--reply-final`은 거절한다.
+- 기존 `send`는 동작을 바꾸지 않는다. 터미널로 보내는 `send --execution`은 연결 카드가 수신자에게
+  배정되어 있고 `--reply-to`·`--expect-reply`가 없으면 발령으로 추론한다. 새 우편에 이 명령을 쓰지 않는다.
+- 전송·원장·읽음 확인·발령 감시는 기존 경로를 재사용한다. 원장의 `send` 사건 이름은 바뀌지 않는다.
 
 ### `kadan stop`의 로티 탭 정리
 
@@ -100,7 +113,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 |---|---|---|
 | `kadan inbox` | 역할 우편함 조회. `list`·`received`·`sent`·`to-reply`·`waiting`·`read`·`ack`·`cancel` | [우편함 명령](secretary-mailbox.md), [원장 계약](mail-task-ledgers.md) |
 
-보내기는 `kadan send <역할> --mailbox …`다. 조회는 읽음 처리하지 않고, `ack`가 읽음만 표시한다.
+보내기는 `kadan mail <역할> --mailbox …`다. 기존 `send --mailbox`도 유지한다. 조회는 읽음 처리하지 않고, `ack`가 읽음만 표시한다.
 
 ## 운영 설정·저장
 
