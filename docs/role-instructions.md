@@ -33,9 +33,9 @@ kadan start custom-role --profile conductor --cmd "<실행 명령>"
 | 프로필 | 기본 책임 | 자동 리마인더 원본 |
 |---|---|---|
 | 공통 | 최신 지시·승인·보류·교대 조건 우선, 정상 ACK·반복 조회 금지, 미확인 구분 | [common.md](../skills/kadan-conductor/references/role-templates/common.md) |
-| `secretary` | 사용자 의도 전달, 공식 보고 근거 확인·설명, 우편 read 후 필요한 ack | [secretary.md](../skills/kadan-conductor/references/role-templates/secretary.md) |
-| `super` | 담당 감독·충돌·우선순위 조정, 하위 실행 미확정 해소, 공식회신 1회 | [super.md](../skills/kadan-conductor/references/role-templates/super.md) |
-| `conductor` | 실행 근거·DONE 대조, 독립검수와 후속 연결, owner의 최종 업무 마감 | [conductor.md](../skills/kadan-conductor/references/role-templates/conductor.md) |
+| `secretary` | 사용자 의도를 맥락 우편으로 전달, 공식 보고 근거 확인·설명, 우편 read 후 필요한 ack | [secretary.md](../skills/kadan-conductor/references/role-templates/secretary.md) |
+| `super` | 맥락 우편 전달·담당 감독 연결·충돌·우선순위 조정, 하위 실행 미확정 해소, 공식회신 1회 | [super.md](../skills/kadan-conductor/references/role-templates/super.md) |
+| `conductor` | 설계·카드 작성·작업자 발령, 실행 근거·DONE 대조, 독립검수와 후속 연결, owner의 최종 업무 마감 | [conductor.md](../skills/kadan-conductor/references/role-templates/conductor.md) |
 | `worker` | 현재 실행의 시작 기록, 소유 범위 구현·검증, 지정 결과와 완료 보고 | [worker.md](../skills/kadan-conductor/references/role-templates/worker.md) |
 | `reviewer` | 현재 실행의 시작 기록, 독립 근거 검수, 직접 수정 없이 판정·완료 보고 | [reviewer.md](../skills/kadan-conductor/references/role-templates/reviewer.md) |
 
@@ -80,6 +80,10 @@ kadan start custom-role --profile conductor --cmd "<실행 명령>"
 `worker.md`, 실행 공통 계약은 `card-template.md`의 '결과 등록과 완료'에 있다.
 
 ## 역할 안내와 카드 계약의 차이
+
+일반적인 요청에서 비서·슈퍼감독은 맥락 우편을 전하고, 담당 일반감독이 카드 작성·작업자 발령을 맡는다.
+자동 안내도 이 책임을 유지한다. 슈퍼감독에게 카드 작성 전 자문을 기본으로 요구하지 않는다.
+예외와 승인 경계는 [맥락 우편과 실행 카드](../skills/kadan-conductor/references/operating-contract.md#맥락-우편과-실행-카드-2026-10-13-사용자-정정)를 따른다.
 
 역할 지침은 기본 책임 안내다. **카드 작성자가 시작·완료 통지를 생략해도 기본 책임 문구는 전달되지만,
 개별 수신자·승인값을 없는 근거로 채우지는 않는다.** 프로필을 확인하지 못했거나 `--raw`로 보낸 경우에는 자동 첨부도 없다.
