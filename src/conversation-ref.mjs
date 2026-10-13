@@ -10,6 +10,13 @@ const CODEX_VALUE_OPTIONS = new Set(['-c', '--config', '--enable', '--disable', 
   '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval']);
 const CODEX_FLAG_OPTIONS = new Set(['--strict-config', '--oss', '--approve-for-me', '--dangerously-bypass-approvals-and-sandbox',
   '--dangerously-bypass-hook-trust', '--worktree', '--search', '--no-alt-screen']);
+// claude 2.1.296 `claude --help`에서 값이 꼭 있는 옵션(<값>)이다(2026-10-13 실측). 값은 건너뛰어 그 낱말을 옵션으로 읽지 않는다.
+// 값이 선택인 옵션([값]: --resume·--debug·--worktree 등)과 목록 밖 옵션은 값 없는 옵션으로 본다.
+const CLAUDE_VALUE_OPTIONS = new Set(['--add-dir', '--agent', '--agents', '--allowedTools', '--allowed-tools', '--append-system-prompt',
+  '--autocompact', '--betas', '--debug-file', '--disallowedTools', '--disallowed-tools', '--effort', '--environment', '--fallback-model',
+  '--file', '--input-format', '--json-schema', '--max-budget-usd', '--mcp-config', '--model', '-n', '--name', '--output-format',
+  '--permission-mode', '--permission-prompts', '--plugin-dir', '--plugin-url', '--remote-control-session-name-prefix', '--session-id',
+  '--setting-sources', '--settings', '--system-prompt', '--system-prompt-snapshot', '--tools']);
 const NEW = {conversationMode: 'new'};
 
 function claudeConversation(args) {
@@ -20,7 +27,9 @@ function claudeConversation(args) {
     const inline = token.match(/^(?:--resume|-r)=(.+)$/);
     if (inline) ref = inline[1];
     else if ((token === '--resume' || token === '-r') && args[i + 1] && !args[i + 1].startsWith('-')) ref = args[++i];
-    else if (token === '--fork-session') fork = true;
+    else if (CLAUDE_VALUE_OPTIONS.has(token.split('=')[0]) && token.startsWith('--') || CLAUDE_VALUE_OPTIONS.has(token)) {
+      if (!token.includes('=')) i += 1; // --opt=값은 한 낱말, --opt 값은 다음 낱말까지 건너뛴다.
+    } else if (token === '--fork-session') fork = true;
     else if (token === '--continue' || token === '-c') cont = true; // 이 폴더의 가장 최근 대화를 이어 연다(대화 ID 없음)
   }
   if (!ref && !cont) return NEW;

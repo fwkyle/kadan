@@ -94,6 +94,11 @@ test('conversationOf: 셸 인자 경계와 옵션 자리를 지켜 방식과 대
     ['claude --continue --model claude-opus-5-5', 'resume'],
     ['claude --continue --fork-session --model claude-opus-5-5', 'fork'],
     ["FOO=1 /usr/bin/claude -r abc --model 'x[1m]'", 'resume', 'abc'],
+    ["claude --append-system-prompt '--continue'", 'new'],
+    ["claude --resume old-id --model claude-opus-5-5 --append-system-prompt '--fork-session'", 'resume', 'old-id'],
+    ["claude --system-prompt '--resume=old-id'", 'new'],
+    ["claude --system-prompt=--resume=old-id --model opus", 'new'],
+    ["claude --model opus --effort high --resume old-id", 'resume', 'old-id'],
     ['claude --model opus', 'new'],
     ['codex resume', 'new'],
     ['codex --unknown-flag resume old-id', 'new'], // 값을 받는지 모르는 옵션은 판단하지 않는다
