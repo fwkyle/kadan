@@ -48,7 +48,7 @@ kadan --help
 
 ```bash
 kadan init          # 처음 한 번: node·tmux 확인, 스킬 연결, 비서용 AI CLI 선택
-kadan up            # 매일: 비서 세션 + 대시보드 세션을 띄움 (이미 있으면 그대로 사용)
+kadan up            # 매일: 비서 세션 + 대시보드 세션을 띄움 (이미 있으면 그대로 사용, 감시 프로필이 있으면 감시기도)
 kadan attach 비서   # 비서 터미널에 들어가 대화 시작
 ```
 
