@@ -12,6 +12,7 @@ import {MailWatch} from '../src/watch-mail.mjs';
 import {filterMail,mailStatus} from '../src/dashboard-inbox.mjs';
 import {repoNameFor,roleNameWarning} from '../src/role-name.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
+import {adoptCommand} from '../src/adopt.mjs';
 
 const at = n => new Date(n).toISOString();
 const start = (pid, more = {}) => ({kind:'start',role:'R',session:'kadan-R',panePid:pid,t:at(0),...more});
@@ -72,12 +73,45 @@ test('codex resume/fork 문법과 옛 start(cmd만 있음)도 같은 판정을 �
   assert.deepEqual(unreadFor([start(1), letter('a'), stop, start(2, {cmd: 'x', conversationMode: 'resume'})]), ['a']);
 });
 
-test('conversationOf: claude/codex 명령에서 방식과 대화 ID를 읽는다', () => {
-  assert.deepEqual(conversationOf(claudeFork), {conversationMode: 'fork', conversationRef: '6eb95e6b'});
-  assert.deepEqual(conversationOf("FOO=1 /usr/bin/claude -r=abc --model 'x[1m]'"), {conversationMode: 'resume', conversationRef: 'abc'});
-  assert.deepEqual(conversationOf('claude --model opus'), {conversationMode: 'new'});
-  assert.deepEqual(conversationOf('codex resume'), {conversationMode: 'new'});
-  assert.deepEqual(conversationOf(undefined), {conversationMode: 'new'});
+test('conversationOf: 셸 인자 경계와 옵션 자리를 지켜 방식과 대화 ID를 읽는다(재검수 parser-checks 사례)', () => {
+  const cases = [
+    ['claude --resume=old-id --model claude-opus-5-5', 'resume', 'old-id'],
+    ['claude -r old-id --model claude-opus-5-5', 'resume', 'old-id'],
+    ["claude --resume 'old-id' --model claude-opus-5-5", 'resume', 'old-id'],
+    ['claude --resume old-id --fork-session --model claude-opus-5-5', 'fork', 'old-id'],
+    ['claude -r old-id --fork-session', 'fork', 'old-id'],
+    ['codex resume old-id --model gpt-6.1-sol', 'resume', 'old-id'],
+    ['codex -p lite resume old-id --model gpt-6.1-sol', 'resume', 'old-id'],
+    ['codex --model gpt-6.1-sol resume old-id', 'resume', 'old-id'],
+    ['codex --model=gpt-6.1-sol resume old-id', 'resume', 'old-id'],
+    ['codex -c model_reasoning_effort=high resume old-id', 'resume', 'old-id'],
+    ['codex -p lite fork old-id', 'fork', 'old-id'],
+    ['codex fork old-id --model gpt-6.1-sol', 'fork', 'old-id'],
+    ['codex resume old-id -p lite --model gpt-6.1-sol -c model_reasoning_effort=high', 'resume', 'old-id'],
+    ["claude --model claude-opus-5-5 'Explain --resume old-id syntax'", 'new'],
+    ["claude --model 'alias --resume old-id'", 'new'],
+    ["claude --resume old-id --model claude-opus-5-5 'Explain --fork-session syntax'", 'resume', 'old-id'],
+    ['claude --continue --model claude-opus-5-5', 'resume'],
+    ['claude --continue --fork-session --model claude-opus-5-5', 'fork'],
+    ["FOO=1 /usr/bin/claude -r abc --model 'x[1m]'", 'resume', 'abc'],
+    ['claude --model opus', 'new'],
+    ['codex resume', 'new'],
+    ['codex --unknown-flag resume old-id', 'new'], // 값을 받는지 모르는 옵션은 판단하지 않는다
+    ['codex -i a.png resume old-id', 'new'],
+    ['claude --resume old-id; echo x', 'new'], // 셸 연산은 판단하지 않는다
+    [undefined, 'new'],
+  ];
+  for (const [cmd, mode, ref] of cases) {
+    assert.deepEqual(conversationOf(cmd), {conversationMode: mode, ...(ref ? {conversationRef: ref} : {})}, String(cmd));
+  }
+});
+
+test('adopt가 만드는 명령과 실행 모델 설정의 launch 명령 모양', () => {
+  assert.equal(conversationOf(adoptCommand({harness: 'claude', id: 'abc', model: 'claude-opus-5-5[1m]', effort: 'high'})).conversationMode, 'fork');
+  assert.equal(conversationOf(adoptCommand({harness: 'codex', id: 'abc', model: 'gpt-6-astra', effort: 'high'})).conversationMode, 'fork');
+  for (const cmd of ['codex -p lite --model "kimi/k3[1m]" -c model_reasoning_effort="max"', 'claude --model opus --effort high',
+    'KADAN_JUDGE_MODEL=zai/glm-5.3-flash KADAN_JUDGE_EFFORT=max watch-judge.sh (codex exec)'])
+    assert.equal(conversationOf(cmd).conversationMode, 'new', cmd);
 });
 
 test('같은 정체로 이어가는 start(복원·살아 있는 세션 재사용·비서 복원)는 우편을 유지한다', () => {
