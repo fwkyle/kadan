@@ -1,5 +1,10 @@
 // kadan init·up·adopt·autostart (HW-3-impl: cli.mjs에서 옮김)
 import { runAdopt } from "../adopt.mjs";
+import {conversationFile, readConversationPermissions} from '../adopt-permissions.mjs';
+import {captureSource, sourceAgent, checkLaunchPermissions} from '../adopt-process.mjs';
+import {prepareTransfer, acceptTransfer, transferStatus} from '../adopt-transfer.mjs';
+import {notifyAdoption} from '../adopt-notice.mjs';
+import {startAdoptMonitor} from '../adopt-monitor.mjs';
 import { runInit, runUp, ensureWatch } from "../quickstart.mjs";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -88,17 +93,62 @@ function startWatchSession(home) {
 
 // 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(2026-10-06 [kyle]).
 export function cmdAdopt(argv, flags) {
-  if (floor.name === "tmux" && !flags.hidden) requireWindowChoice();
+  if (flags.help) {
+    console.log('kadan adopt <감독> --model <모델> [--resume <대화ID> --harness claude|codex]');
+    console.log('kadan adopt accept <인수ID> --summary <이어받은 목표·승인 범위와 다음 행동>');
+    console.log('kadan adopt status <인수ID>');
+    return;
+  }
+  const home = ledgerHome();
+  const notice = details => {
+    try {
+      const receipt = notifyAdoption(home, details);
+      console.log(`비서 우편함에 확인 요청 저장: ${receipt.mailId}`);
+    } catch { console.error('비서 확인 요청 저장 실패. 원본 탭을 보존하고 직접 상태를 확인하세요.'); }
+  };
   try {
+    if (argv[0] === 'status') {
+      console.log(JSON.stringify(transferStatus(home, argv[1]), null, 2));
+      return;
+    }
+    if (argv[0] === 'accept') {
+      const result = acceptTransfer({home, id: argv[1], flags, floor});
+      console.log(JSON.stringify(result, null, 2));
+      if (['close-failed', 'remove-failed'].includes(result.source)) process.exitCode = 1;
+      return;
+    }
+    if (floor.name === "tmux" && !flags.hidden) requireWindowChoice();
     runAdopt({
       role: argv[0], flags, floor, sessionName,
+      inherit: conversation => {
+        const cwd = process.cwd();
+        const file = conversationFile({...conversation, cwd});
+        const sourceConversation = {...conversation, cwd, file};
+        const permissions = readConversationPermissions(file, conversation.harness);
+        if (conversation.harness === 'claude' && permissions.sessionId !== conversation.id) {
+          throw new Error('원본 대화의 현재 권한 기록을 확인하지 못했습니다.');
+        }
+        if (conversation.harness === 'claude') checkLaunchPermissions(sourceAgent({conversation: sourceConversation}));
+        let source = null, sourceWarning;
+        try { source = captureSource({conversation: sourceConversation}); }
+        catch (error) { sourceWarning = error.message; }
+        return {conversation: {...conversation, cwd, file}, permissions, source, sourceWarning};
+      },
+      prepare: options => prepareTransfer({home, floor, ...options}),
+      notice,
+      monitor: id => startAdoptMonitor(home, id),
       start: (startArgv, startFlags) => cmdStart(startArgv, startFlags),
       send: ({ role, session, message, roleProfile }) => {
-        const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
-        console.log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
+        const receipt = guardedSend({floor, session, role, message, roleProfile,
+          recordedPid: recordedPid(lastStartFor(session))});
+        console.log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 우편ID ${receipt.mailId}) — 인수 확인 대기`);
       },
     });
-  } catch (error) { die(error.message, 2); }
+  } catch (error) {
+    if (argv[0] !== 'status') notice({id: error.adoptionId || (argv[0] === 'accept' ? argv[1] : undefined),
+      role: process.env.KADAN_ROLE || argv[0], reason: error.message});
+    die(error.message, 2);
+  }
 }
 
 // 로그인할 때 `kadan up --hidden`을 창 없이 한 번 실행하는 macOS LaunchAgent(2026-10-06 [kyle]). 되살리기(KeepAlive)는 없다.

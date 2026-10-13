@@ -134,3 +134,19 @@ test('HW-4: herdr 바닥에서도 adopt는 같은 start 경로로 복제 명령�
   assert.equal(calls.start[0].flags.parent, '@user');
   assert.equal(out.session, 'kadan-h');
 });
+
+test('2026-10-13: inherited permissions reach start and a static onboarding dialog cannot receive acceptance prompt', () => {
+  const {calls, deps} = fakes({screen: 'Teach auto mode about your environment?\n1. Yes / 2. Not now'});
+  const notices = [], monitors = [];
+  const out = runAdopt({role: 'new', flags: {model: 'opus'}, env: {CLAUDE_CODE_SESSION_ID: 'original'},
+    ...deps,
+    inherit: () => ({permissions: {args: ['--permission-mode', 'bypassPermissions']}}),
+    prepare: () => ({id: 'transfer', instruction: 'receiving agent must acknowledge'}),
+    notice: note => notices.push(note), monitor: id => monitors.push(id)});
+  assert.match(calls.start[0].flags.cmd, /'--permission-mode' 'bypassPermissions'/);
+  assert.equal(out.status, 'awaiting-acceptance');
+  assert.equal(out.prompt, 'not-ready');
+  assert.equal(calls.send.length, 0);
+  assert.equal(notices[0].id, 'transfer');
+  assert.deepEqual(monitors, ['transfer']);
+});

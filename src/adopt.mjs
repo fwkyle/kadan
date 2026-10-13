@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { waitForSettled } from './quickstart.mjs';
+import { shellArg } from './adopt-permissions.mjs';
 
 export const ADOPT_PROFILES = ['conductor', 'super'];
 const SAFE = /^[\w.:/@-]+$/;
@@ -14,12 +15,13 @@ const SAFE_MODEL = /^[\w.:/@[\]-]+$/;
 const shellModel = (model) => (/[[\]]/.test(model) ? `'${model}'` : model);
 
 // 실행기마다 "복제해서 이어 열기" 명령이 다르다. 모델은 꼭 적는다 — 모델이 안 적힌 창에는 카드 전송이 거부된다.
-export function adoptCommand({ harness, id, model, effort } = {}) {
+export function adoptCommand({ harness, id, model, effort, permissionArgs = [] } = {}) {
   if (!id || !SAFE.test(id)) throw new Error('대화 ID가 비었거나 쓸 수 없는 글자가 있다');
   if (!model || !SAFE_MODEL.test(model)) throw new Error('--model이 필요하다 — 옮긴 감독 창에 모델이 적혀 있어야 카드 전송이 된다');
   if (effort !== undefined && !/^[a-z]+$/.test(effort)) throw new Error('--effort는 영문 소문자 한 낱말이다(예: high)');
-  if (harness === 'claude') return `claude --resume ${id} --fork-session --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}`;
-  if (harness === 'codex') return `codex fork ${id} --model ${shellModel(model)}${effort ? ` -c model_reasoning_effort=${effort}` : ''}`;
+  const permissions = permissionArgs.map(arg => ` ${shellArg(arg)}`).join('');
+  if (harness === 'claude') return `claude --resume ${id} --fork-session --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}${permissions}`;
+  if (harness === 'codex') return `codex fork ${id} --model ${shellModel(model)}${effort ? ` -c model_reasoning_effort=${effort}` : ''}${permissions}`;
   throw new Error('--harness는 claude 또는 codex다');
 }
 
@@ -48,7 +50,9 @@ export function adoptPrompt(role, parent, profile = 'conductor') {
     '감독은 직접 구현하지 않고 작업자·검수자에게 맡깁니다. 결정이 필요하면 사용자에게 묻습니다.';
 }
 
-export function runAdopt({ role, flags = {}, env = process.env, floor, sessionName, start, send, log = console.log, sleep, findTranscript = findClaudeTranscript } = {}) {
+export function runAdopt({role, flags = {}, env = process.env, floor, sessionName, start, send,
+  log = console.log, sleep, findTranscript = findClaudeTranscript, inherit, prepare,
+  notice = () => {}, monitor = () => {}} = {}) {
   if (!role || /\s/.test(role)) throw new Error('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt]');
   const conversation = typeof flags.resume === 'string'
     ? { harness: typeof flags.harness === 'string' ? flags.harness : 'claude', id: flags.resume }
@@ -57,7 +61,8 @@ export function runAdopt({ role, flags = {}, env = process.env, floor, sessionNa
   const profile = typeof flags.profile === 'string' ? flags.profile : 'conductor';
   if (!ADOPT_PROFILES.includes(profile)) throw new Error('--profile은 conductor(감독) 또는 super(슈퍼감독)다');
   const parent = typeof flags.parent === 'string' ? flags.parent : '@user';
-  const cmd = adoptCommand({ ...conversation, model: flags.model, effort: typeof flags.effort === 'string' ? flags.effort : conversation.effort });
+  // Validate basic arguments before reading private conversation state.
+  adoptCommand({...conversation, model: flags.model});
   const session = sessionName(role);
   // 살아 있는 세션을 재사용하면 대화가 옮겨지지 않은 채 "옮겼다"고 보고하게 된다.
   if (floor.alive(session)) throw new Error(`이미 살아 있음: ${session} — 다른 이름을 써라`);
@@ -68,16 +73,46 @@ export function runAdopt({ role, flags = {}, env = process.env, floor, sessionNa
       : `대화 기록을 찾지 못했다: ${conversation.id}`);
   }
 
-  start([role], { cmd, profile, parent, hidden: Boolean(flags.hidden), reason: `대화 옮기기(adopt): ${conversation.harness} ${conversation.id}` });
-  const out = { role, session, cmd, parent, profile, prompt: 'skipped' };
+  const inherited = inherit ? inherit(conversation) : null;
+  const cmd = adoptCommand({...conversation, model: flags.model,
+    effort: typeof flags.effort === 'string' ? flags.effort : conversation.effort,
+    permissionArgs: inherited?.permissions.args || []});
+  start([role], {cmd, profile, parent, hidden: Boolean(flags.hidden),
+    reason: `대화 옮기기(adopt): ${conversation.harness} ${conversation.id}`});
+  const transfer = prepare?.({role, session, conversation, ...inherited});
+  const out = { role, session, cmd, parent, profile, prompt: 'skipped',
+    ...(transfer ? {adoptionId: transfer.id, status: 'awaiting-acceptance'} : {}) };
+  if (transfer && !flags['no-prompt']) monitor(transfer.id);
+  const firstMessage = adoptPrompt(role, parent, profile)
+    + (transfer ? `\n\n${transfer.instruction}` : '');
   if (!flags['no-prompt']) {
     const settled = waitForSettled({ read: () => floor.read(session), ...(sleep ? { sleep } : {}) });
-    if (settled) { send({ role, session, message: adoptPrompt(role, parent, profile), roleProfile: profile }); out.prompt = 'sent'; }
-    else { out.prompt = 'not-ready'; log('감독 화면이 아직 준비되지 않아 첫 안내를 보내지 않았습니다. 창에서 직접 이어서 말하세요.'); }
+    const screen = settled ? floor.read(session) : '';
+    const text = typeof screen === 'string' ? screen : screen?.text || '';
+    const blocked = /Teach auto mode|trust this (folder|workspace)|Yes.*No.*Enter to confirm/i.test(text);
+    if (settled && !blocked) {
+      try {
+        send({role, session, message: firstMessage, roleProfile: profile}); out.prompt = 'sent';
+      } catch (error) {
+        if (transfer) error.adoptionId = transfer.id;
+        throw error;
+      }
+    }
+    else {
+      out.prompt = 'not-ready';
+      log('감독 화면이 아직 준비되지 않아 첫 안내를 보내지 않았습니다. 비서에게 확인을 맡깁니다.');
+    }
+  }
+  if (transfer) {
+    if (out.prompt !== 'sent' && !flags['no-prompt']) {
+      notice({id: transfer.id, role, reason: '새 감독의 첫 안내 입력 대기. 원본 탭을 보존했습니다.'});
+    }
+    if (inherited?.sourceWarning) notice({id: transfer.id, role, reason: inherited.sourceWarning});
   }
   log('');
-  log(`옮김: ${conversation.harness} 대화 ${conversation.id} → ${session}`);
+  log(`복제 창 생성: ${conversation.harness} 대화 ${conversation.id} → ${session}`);
   log('원래 대화에서는 이제 지시하지 마세요(같은 일을 두 번 맡기게 됩니다). 이어서 말하려면 감독 창에서 하세요.');
+  if (transfer) log(`인수 확인 대기: ${transfer.id} — 새 감독의 확인 전에는 원본 탭을 닫지 않습니다.`);
   log(`감독 창: kadan attach ${role}`);
   return out;
 }

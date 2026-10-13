@@ -40,7 +40,9 @@
 | `kadan mail <역할> <메시지>` | 우편 전용. 실행 주소를 연결해도 발령으로 바뀌지 않는다. `--task`는 거절 | `--work`·`--execution`(연결 주소), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--reply-final`, `--raw` |
 | `kadan dispatch <역할> --task <카드ID> <지시>` | 카드 발령 전용. 카드 필수, 기존 배정·범위·수신자·실행기 검사 유지. 질문·답장·저장 우편은 거절 | `--work`, `--execution`(같은 카드 확인), `--allow-old-runner <이유>`, `--raw` |
 | `kadan send <역할> <메시지>` | 기존 호환 명령. `--task` 또는 수신자의 배정 카드를 가리키는 `--execution`으로 발령 가능 | 기존 옵션 유지. 새 호출은 우편 `mail`, 발령 `dispatch` 권장 |
-| `kadan adopt <감독이름>` | 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(Claude Code는 `--resume <ID> --fork-session`, Codex는 `fork`). 대화 ID·생각 강도는 Claude Code에서 자동으로 읽고, 상위는 기본 사용자. 옮긴 뒤 원래 대화는 더 지시하지 않는다 | `--model <모델>`(필수), `--resume <대화ID> --harness claude\|codex`, `--effort`, `--parent @user\|<역할>`, `--profile conductor\|super`, `--hidden`, `--no-prompt` |
+| `kadan adopt <감독이름>` | 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(Claude Code는 `--resume <ID> --fork-session`, Codex는 `fork`). 대화 ID·생각 강도는 Claude Code에서 자동으로 읽고, 현재 권한도 이어받는다. 상위는 기본 사용자. 새 감독의 인수 확인 뒤 정확히 식별한 원본 Rottie 탭을 닫는다([인수 절차](adopt.md)) | `--model <모델>`(필수), `--resume <대화ID> --harness claude\|codex`, `--effort`, `--parent @user\|<역할>`, `--profile conductor\|super`, `--hidden`, `--no-prompt` |
+| `kadan adopt accept <인수ID>` | 새 감독이 이어받은 목표·승인 범위와 다음 행동을 확인한다. 새 감독 프로세스·실제 권한과 원본 탭을 대조한 뒤 원본 탭을 닫고 목록에서 제거한다 | `--summary "<한 문장>"` |
+| `kadan adopt status <인수ID>` | 인수 대기·확인·원본 탭 정리 결과를 읽는다. 비서도 같은 기록으로 확인한다 | — |
 | `kadan wait <역할>` | 완료 마커(DONE)나 조용함을 보고한다. 판정하지 않는다 | `--timeout 초`, `--quiet 초`, `--interval 초` |
 | `kadan done <역할> <카드id> <ok\|failed>` | 사람·감독이 확인한 완료를 원장에 적는다. 한 번 발령으로 끝나는 카드는 `--close-card`로 카드도 함께 닫는다([카드 닫기](card-center.md#실행-완료와-카드-닫기)) | `--from-screen`(결과 대신 작업자 화면의 DONE을 읽어 확정. 짧은 카드id·정식 주소·응답 머리표 `•`/`⏺` 모두 인정, 그 카드 마지막 발령 전부터 있던 마커는 제외. 없으면 기록·전송 없이 종료 코드 3), `--wait <초>`(`--from-screen`과 함께. 마커가 없으면 2초 간격으로 화면만 다시 읽는 유한 대기, 최대 600. 완료 편지가 마커보다 먼저 오는 경합용이며 시간이 다 되면 종료 코드 3 그대로), `--close-card`(ok 확정 뒤 카드 `done`, 실패해도 실행 완료 유지), `--note <이유>`(카드 기록 이유) |
 | `kadan read <역할>` | 화면 끝부분을 읽는다 | `--lines N` |
