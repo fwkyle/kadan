@@ -16,8 +16,19 @@ printf 'KADAN_JUDGE_LOG_DIR=%s\nKADAN_JUDGE_MODEL=%s\nKADAN_JUDGE_EFFORT=%s\n' "
 cat >"$judge_dir/input.txt"
 printf '%s\n' "$judge_model" >"$judge_dir/model.txt"
 judge_status=0
+# Codex는 쓰기 가능한 미등록 작업 폴더를 전역 설정에 자동 신뢰 등록한다.
+# 감시 폴더의 프로젝트 설정은 필요 없으므로 이번 실행에서만 untrusted로 지정한다.
+# 쓰기 범위는 아래 sandbox/add-dir 그대로이며, 기존 신뢰 등록은 수정하지 않는다.
+judge_trust=$(node -e '
+  process.stdout.write(`projects={${JSON.stringify(process.argv[1])}={trust_level="untrusted"}}`);
+' "$judge_dir")
 # 보고 명령의 원장 쓰기·로컬 tmux 통신을 허용한다. 제품 작업 폴더는 쓰기 범위에 넣지 않는다.
-codex -a never exec --model "$judge_model" -c "model_reasoning_effort=\"$judge_effort\"" -c project_doc_max_bytes=0 -c sandbox_workspace_write.network_access=true -C "$judge_dir" --sandbox workspace-write --add-dir "$judge_home" --skip-git-repo-check -o "$judge_dir/result.txt" <"$judge_dir/input.txt" >"$judge_dir/diagnostic.log" 2>&1 &
+codex -a never exec --model "$judge_model" \
+  -c "model_reasoning_effort=\"$judge_effort\"" -c "$judge_trust" \
+  -c project_doc_max_bytes=0 -c sandbox_workspace_write.network_access=true \
+  -C "$judge_dir" --sandbox workspace-write --add-dir "$judge_home" \
+  --skip-git-repo-check -o "$judge_dir/result.txt" \
+  <"$judge_dir/input.txt" >"$judge_dir/diagnostic.log" 2>&1 &
 judge_pid=$!
 trap 'kill -TERM "$judge_pid" 2>/dev/null || true; exit 143' TERM INT
 wait "$judge_pid" || judge_status=$?
