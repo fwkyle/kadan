@@ -89,7 +89,8 @@ export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastS
 export function watchMailHold(role,{selectedFloor=floor,tracker=null}={}) {
   if (tracker?.forced(role)) return null;
   const held=selectedFloor.notificationHold?.(sessionName(role),{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}) ?? null;
-  if (held) tracker?.held(role,held);
+  // 입력 보호 코드만 미룸으로 센다(herdr의 프로세스 신원 미확인 같은 다른 오류는 세지 않는다).
+  if (held) tracker?.heldIfGuard(role,{...held,delivery:'not-sent'});
   return held;
 }
 

@@ -51,7 +51,7 @@ export function formatAlertBody(alert) {
     }; 자동 중지 아님)`;
   }
   if (alert.kind === "알림밀림") {
-    return `알림이 ${alert.role} 창에 ${alert.holdCount}번 연속 밀림 (사유 ${alert.holdCode}, ${alert.heldSince}부터. 5번째부터는 입력 보호 없이 넣음)`;
+    return `알림이 ${alert.role} 창에 ${alert.holdCount}번 연속 밀림 (사유 ${alert.holdCode}, ${alert.heldSince}부터. 5번 밀린 다음 시도에 입력 보호 없이 넣음)`;
   }
   if (alert.kind === "시작보고누락") return `시작 보고 누락 ${alert.role} / ${alert.taskId} (발령 ${alert.waitMinutes}분 경과, 실제 착수 여부 확인 후 보고 보완 필요)`;
   if (alert.kind === "놀고 있음") {

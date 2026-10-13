@@ -12,6 +12,8 @@ import {sendWatchMailReminder, sendWatchMessage, watchMailHold} from '../src/com
 import {NotifyHoldTracker, NOTIFY_FORCE_AT, NOTIFY_WARN_AT, notifyHeldAlertId} from '../src/watch-notify-hold.mjs';
 import {explainAlertRoute} from '../src/watch.mjs';
 import {sendTmux} from '../src/floor-tmux.mjs';
+import {openAlerts} from '../src/dashboard-band.mjs';
+import {formatAlertBody} from '../src/watch-alert-body.mjs';
 
 const hold = (code = 'KADAN_PANE_INPUT_PENDING') =>
   Object.assign(new Error('알림 미룸: 미제출 입력이 있음'), {code, delivery: 'not-sent'});
@@ -236,4 +238,38 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
   } finally {
     if (started) call('q-super', 'stop', 'q-super');
   }
+});
+
+test('열린 알림밀림 경보는 대시보드 응답에 횟수·사유·처음 밀린 시각이 실리고 해소되면 빠진다', async () => {
+  const {records} = await watchRun({cycles: 9});
+  const open = openAlerts(records.filter(e => e.kind === 'alert'));
+  assert.equal(open.count, 0, '해소 뒤에는 목록에서 빠진다');
+  const upto = records.findIndex(e => e.alertKind === '알림밀림' && e.resolved);
+  const during = openAlerts(records.slice(0, upto).filter(e => e.kind === 'alert'));
+  const [item] = during.items;
+  assert.deepEqual([item.kind, item.role, item.holdCount, item.holdCode, item.holdReason],
+    ['알림밀림', 'worker', 3, 'KADAN_PANE_INPUT_PENDING', '입력창에 쓰다 만 글이 있음']);
+  assert.ok(Date.parse(item.heldSince) > 0);
+  // 다른 경보 종류의 항목 모양은 그대로다.
+  const other = openAlerts([{kind: 'alert', id: 'x', alertKind: '정지', t: '2026-10-05T00:00:00Z'}]).items[0];
+  assert.equal('holdCount' in other, false);
+});
+
+test('입력 보호 코드가 아닌 사전 조회 오류는 미룸으로 세지 않는다', () => {
+  const tracker = new NotifyHoldTracker();
+  const floor = code => ({notificationHold: () => ({code, message: 'x'})});
+  tracker.beginCycle();
+  assert.equal(watchMailHold('w', {selectedFloor: floor('KADAN_AI_PROCESS_UNVERIFIED'), tracker}).code, 'KADAN_AI_PROCESS_UNVERIFIED');
+  tracker.endCycle(0);
+  assert.equal(tracker.streaks.size, 0);
+  tracker.beginCycle();
+  watchMailHold('w', {selectedFloor: floor('KADAN_PANE_INPUT_PENDING'), tracker});
+  tracker.endCycle(0);
+  assert.equal(tracker.streaks.get('w').count, 1);
+});
+
+test('알림밀림 문구는 5번 밀린 다음 시도에 넣는다고 말한다', () => {
+  const text = formatAlertBody({kind: '알림밀림', role: 'w', holdCount: 3, holdCode: 'C', heldSince: 'T'});
+  assert.match(text, /5번 밀린 다음 시도에 입력 보호 없이 넣음/);
+  assert.doesNotMatch(text, /5번째부터/);
 });
