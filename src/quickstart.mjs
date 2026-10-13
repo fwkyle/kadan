@@ -99,7 +99,7 @@ export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs =
 function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
 export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath = process.execPath,
- log = console.log, sessionName, sleep, restoreSecretary } = {}) {
+ log = console.log, sessionName, sleep, restoreSecretary, startWatch } = {}) {
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');
@@ -126,6 +126,13 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
  if (floor.alive(dashboardSession)) { out.dashboard = 'reused'; log(`대시보드 이미 살아 있음: ${dashboardSession}`); }
  else { start([DASHBOARD_ROLE], { cmd: `${quote(nodePath)} ${quote(cliPath)} dashboard --port ${port}`, hidden: true }); out.dashboard = 'started'; }
 
+ if (startWatch) {
+  try { out.watch = startWatch(); } catch (error) { out.watch = 'failed'; log(`감시기 시작 실패: ${error.message}`); }
+  if (out.watch === 'started') log('감시기 시작됨: 기본 감시 프로필(watch-profile.json)');
+  else if (out.watch === 'reused') log('감시기 이미 살아 있음');
+  else if (out.watch === 'blocked') log('감시기 확인 필요: 감시기 세션은 있는데 감시 프로세스가 없습니다');
+ }
+
  if (out.secretary === 'started' && !flags['no-prompt']) {
   const settled = waitForSettled({ read: () => floor.read(secretarySession), ...(sleep ? { sleep } : {}) });
   if (settled) { send({ role: SECRETARY_ROLE, session: secretarySession, message: FIRST_PROMPT, roleProfile:'secretary' }); out.prompt = 'sent'; }
@@ -138,3 +145,14 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
  return out;
 }
 function quote(s) { return /^[\w./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`; }
+
+// 재부팅 뒤 로그인 자동 시작(`kadan up --hidden`)이 감시기도 되살린다(2026-10-13 [kyle]).
+// 2026-10-12 재부팅 뒤 감시기만 안 떠서 약 16시간 감시가 비었고, 로티 위계 표시도 꺼졌다.
+// 기본 감시 프로필이 있는 홈만 켠다. 이미 도는 감시 프로세스가 있으면 새로 띄우지 않는다.
+export function ensureWatch({ profileExists, running, alive, create }) {
+ if (!profileExists()) return 'no-profile';
+ if (running().length) return 'reused';
+ if (alive()) return 'blocked';
+ create();
+ return 'started';
+}

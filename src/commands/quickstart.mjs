@@ -1,6 +1,11 @@
 // kadan init·up·adopt·autostart (HW-3-impl: cli.mjs에서 옮김)
 import { runAdopt } from "../adopt.mjs";
-import { runInit, runUp } from "../quickstart.mjs";
+import { runInit, runUp, ensureWatch } from "../quickstart.mjs";
+import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { defaultProfilePath } from "../watch-profile.mjs";
+import { readWatchProcesses } from "../watch-overview.mjs";
+import { watchProcessName } from "../watch-system.mjs";
 import { autostartCommand } from "../autostart.mjs";
 import { floor } from "../floor.mjs";
 import { ledgerHome } from "../ledger.mjs";
@@ -26,7 +31,7 @@ export function cmdInit(_argv, flags) {
 
 export function cmdUp(_argv, flags) {
   if (flags.help) {
-    console.log("사용법: kadan up [--cmd <실행기 명령>] [--port 8790] [--hidden] [--no-prompt]  (비서 세션 + 대시보드 세션)");
+    console.log("사용법: kadan up [--cmd <실행기 명령>] [--port 8790] [--hidden] [--no-prompt]  (비서 세션 + 대시보드 세션, 기본 감시 프로필이 있으면 감시기)");
     return;
   }
   if (floor.name === "tmux") requireWindowChoice();
@@ -39,6 +44,7 @@ export function cmdUp(_argv, flags) {
     start: (argv, startFlags) => cmdStart(argv, startFlags),
     ...(floor.name === 'tmux' ? {
       restoreSecretary: startNew => resumeSecretary({home: ledgerHome(), floor, startNew}),
+      startWatch: () => startWatchSession(ledgerHome()),
     } : {}),
     send: ({ role, session, message, roleProfile }) => {
       const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
@@ -62,6 +68,22 @@ export function cmdUp(_argv, flags) {
       process.exitCode = 1;
     }
   }
+}
+
+// 감시기는 역할이 아니라 원장 기록 없이 tmux 세션 kadan-watch에서 돈다(사람이 띄우던 방식 그대로).
+function startWatchSession(home) {
+  const session = sessionName("watch");
+  const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
+  const env = ["-e", `KADAN_HOME=${home}`, ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
+  return ensureWatch({
+    profileExists: () => fs.existsSync(defaultProfilePath(home)),
+    running: () => readWatchProcesses(spawnSync, watchProcessName(home)),
+    alive: () => floor.alive(session),
+    create: () => {
+      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, `'${node}' '${cli}' watch`]);
+      if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
+    },
+  });
 }
 
 // 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(2026-10-06 [kyle]).

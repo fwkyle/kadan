@@ -6,7 +6,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawnSync } from 'node:child_process';
 import {readSystemLedger,readMailLedger} from '../src/ledger.mjs';
-import { linkSkills, runInit, runUp, waitForSettled, readConfig, FIRST_PROMPT, SECRETARY_ROLE, DASHBOARD_ROLE } from '../src/quickstart.mjs';
+import { linkSkills, runInit, runUp, ensureWatch, waitForSettled, readConfig, FIRST_PROMPT, SECRETARY_ROLE, DASHBOARD_ROLE } from '../src/quickstart.mjs';
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const quiet = () => {};
@@ -94,6 +94,27 @@ test('runUp은 살아 있는 세션을 다시 만들지 않고, 재사용·--no-
  const o3 = runUp({ home, flags: { cmd: 'codex' }, floor: w3.floor, start: w3.start, send: w3.send, cliPath: '/c', sessionName, log: quiet, sleep: () => {} });
  assert.equal(w3.sent.length, 0); assert.equal(o3.prompt, 'not-ready');
  assert.throws(() => runUp({ home, flags: { cmd: 'codex', port: '99999' }, floor: w2.floor, start: w2.start, send: w2.send, cliPath: '/c', sessionName, log: quiet }), /--port/);
+});
+
+test('ensureWatch는 기본 프로필이 있고 감시 프로세스·세션이 없을 때만 감시기를 띄운다', () => {
+ const run = (o) => { let created = 0; const r = ensureWatch({ profileExists: () => true, running: () => [], alive: () => false, create: () => { created++; }, ...o }); return [r, created]; };
+ assert.deepEqual(run({}), ['started', 1]);
+ assert.deepEqual(run({ profileExists: () => false }), ['no-profile', 0]);
+ assert.deepEqual(run({ running: () => [{ pid: 1 }] }), ['reused', 0]);
+ assert.deepEqual(run({ alive: () => true }), ['blocked', 0]);
+});
+
+test('runUp은 감시기 시작 결과를 남기고, 감시기 실패가 비서·대시보드를 막지 않는다', () => {
+ const home = tmp('kadan-qs-watch-'); const lines = [];
+ const w1 = fakeWorld();
+ const o1 = runUp({ home, flags: { cmd: 'codex', 'no-prompt': true }, floor: w1.floor, start: w1.start, send: w1.send, cliPath: '/c', sessionName, log: (l) => lines.push(l), startWatch: () => 'started' });
+ assert.equal(o1.watch, 'started'); assert.ok(lines.some((l) => l.startsWith('감시기 시작됨')));
+ const w2 = fakeWorld();
+ const o2 = runUp({ home, flags: { cmd: 'codex', 'no-prompt': true }, floor: w2.floor, start: w2.start, send: w2.send, cliPath: '/c', sessionName, log: quiet, startWatch: () => { throw new Error('x'); } });
+ assert.equal(o2.watch, 'failed'); assert.deepEqual([o2.secretary, o2.dashboard], ['started', 'started']);
+ const w3 = fakeWorld();
+ const o3 = runUp({ home, flags: { cmd: 'codex', 'no-prompt': true }, floor: w3.floor, start: w3.start, send: w3.send, cliPath: '/c', sessionName, log: quiet });
+ assert.equal(o3.watch, undefined);
 });
 
 test('runUp은 실행기가 없으면 init을 안내하며 멈추고, init이 고른 실행기를 기본으로 쓴다', () => {
