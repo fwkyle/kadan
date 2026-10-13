@@ -1,5 +1,6 @@
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {effectiveCardRole, workEntries} from './handover-state.mjs';
+import {peerResponsibilities} from './peer-mail.mjs';
 
 function activeExecutions(cards, entries, parents, works, excludeWaiting) {
   if (entries.some(entry => entry?.broken)) throw new Error('감시 대상 원장 읽기 실패');
@@ -51,6 +52,7 @@ export function buildSupervisorScope(cards, entries, parents = new Map(), works 
     }
   };
   for (const entry of active) add(parents.get(entry.role), entry);
+  for (const request of peerResponsibilities(entries, parents, works, cards)) add(request.role, request);
   const sent = new Set(workEntries(entries,cards).filter(e => e.kind === 'send' && e.taskId && e.transport !== 'mailbox' && !taskConnectionError(e)).map(e => e.executionKey || e.taskId));
   for (const work of works) {
     if (work.status !== 'open' || !work.executions.some(e => sent.has(e.key))) continue;

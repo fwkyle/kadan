@@ -16,7 +16,7 @@
 - `agent.prompt`로 괄호 붙여넣기와 Enter를 제출한다. 전달 성공은 `keyDelivery=sent`, `inputAcceptance=unconfirmed`이며 실행 완료를 뜻하지 않는다.
 - 입력창 검사는 읽기 전용 terminal observer와 visible snapshot을 사용한다. `takeover`는 사용하지 않는다.
 - 화면 확인에 `terminal session control`·`terminal attach`를 쓰지 않는다. 실제 창 크기를 흉내 내려고 백그라운드로 띄우는 것도 금지다. 2026-10-12 시험(HW-6) 중 뒤에 남은 control 클라이언트 3개가 각각 68~130GB(압축 포함)까지 불어나 맥 전체가 메모리 부족에 걸렸다(01:36~07:53, 8회). 격리 재현 8가지 조건에서는 재현되지 않아 원인은 미확정이며 herdr에 보고했다(herdrdev/herdr#5175). 행 수가 필요하면 `observe --rows <pane.scroll.viewport_rows>`를 쓴다.
-- 응답 유실은 전달 불명확으로 끝낸다. 본문/Enter 자동 재전송은 없다. 자동 알림과 Enter 단독 재전송은 보호 검증 전까지 거절한다.
+- 응답 유실은 전달 불명확으로 끝낸다. 본문/Enter 자동 재전송은 없다. 자동 알림은 빈 입력창·에이전트 대기·동일 화면이 30초 이상 관측된 뒤 전송 직전 재검사한다. 작업 중·승인 대기·스크롤·입력 미확인은 보류한다. Enter 단독 재전송은 계속 거절한다.
 - 출력은 ANSI recent snapshot을 읽는다. `truncated`이면 기존 wait가 gap으로 중단한다. 완전한 출력 로그나 스트림 재생 기능을 제공하지 않는다.
 
 ## 시험 환경에서 사용하는 법
@@ -39,7 +39,7 @@ kadan attach 판-작업자
 
 설치된 `kadan`에 이 시험 기능이 포함되어 있어야 한다. 다른 버전이 설치되어 있다면 시험 기능이 있는 `src/cli.mjs`의 절대경로로 실행한다. AI 도구가 실행하는 로그인 셸은 `PATH`를 다시 만들 수 있으므로, 역할 안에서는 생성 환경에 들어 있는 `KADAN_CLI`의 절대경로를 사용한다: `node "$KADAN_CLI" send ...`.
 
-`kadan attach`는 역할별 `herdr --session ... terminal attach ...` 명령을 출력한다. 출력된 명령을 터미널에서 실행하면 그 역할에 접속한다. `start`가 herdr 서버나 GUI 창을 자동으로 열지는 않는다. 현재 시험 바닥의 자동 알림·감시 운영은 미검증이며, 감독이 직접 결과와 실행 완료를 확인하는 작은 시험에 사용한다.
+`kadan attach`는 역할별 `herdr --session ... terminal attach ...` 명령을 출력한다. 출력된 명령을 터미널에서 실행하면 그 역할에 접속한다. `start`가 herdr 서버나 GUI 창을 자동으로 열지는 않는다. 자동 알림은 아래 2026-10-13 격리 시험까지 확인했다. 장시간 무인 감시 운영은 미검증이며, 감독이 직접 결과와 실행 완료를 확인하는 작은 시험에 사용한다.
 
 ## 실측 결과
 
@@ -108,3 +108,16 @@ Rottie의 각 프로젝트에 `terminal create --workspace <그 프로젝트> --
 - 실측(시험 서버 `kadan-herdr-adopt-test`, 시험 HOME `~/.kadan-herdr/adopt-test/live`, 시험 폴더에서 새로 만든 버리는 대화만 복제): (A) Claude 대화 → 감독 → 카드 AT-A2 → 화면 DONE → `done --from-screen`. (B) Codex 대화(`codex fork`) → 감독 → AT-B 같은 흐름. (C) Claude 대화 → `--profile super` → 슈퍼감독이 `node "$KADAN_CLI" start 판C-감독 --profile conductor`로 판 감독을 세우고 AT-C 발령 → DONE. start 줄에 `cmd`·`harness`·`model`과 `herdrSocket`·`herdrWorkspaceId`·`herdrPaneId`·`herdrTerminalId`·`panePid`가 남는다. 슈퍼감독과 판 감독 프로세스 모두 같은 `KADAN_HOME`·`KADAN_FLOOR=herdr`·`KADAN_HERDR_SOCKET`·`KADAN_CLI`를 가졌다(`ps eww`로 확인).
 - 관찰: 슈퍼감독 화면에서 `env | rg ^KADAN_`를 다시 시키자 Claude 자동 모드 판정기가 "자격증명 탐색"으로 거부했다(첫 실행은 통과). 환경 상속 근거는 운영자가 `ps eww`로 대신 확인했다. 또 슈퍼감독이 카단 스킬(작업 폴더 밖 파일)을 읽을 때 "작업 폴더 밖 읽기 허용" 확인 창이 한 번 떴다(사람이 "이번만 허용"으로 통과, 사용자 설정은 바꾸지 않음).
 - 설계 메모(할 일 3, 코드 없음): 지금 herdr 바닥은 역할 하나당 workspace 하나를 만든다. 판=space(workspace), 역할=pane으로 바꾸려면 (1) 원장 start 줄의 `herdrWorkspaceId`를 판 단위로 공유하고 `herdrPaneId`로 역할을 가르며, (2) stop은 pane만 닫고 마지막 pane일 때 workspace를 정리하고, (3) `create`가 판 이름으로 기존 workspace를 찾아 `pane.split`하는 경로와 그 경쟁 조건(두 역할 동시 시작) 시험이 필요하다. 이 변경은 `terminal` 주소를 기준으로 하는 현 입력 검사·읽기 경로에는 영향이 없을 것으로 보이나 실측하지 않았다.
+
+
+## 자동 알림 보호 보완 — 2026-10-13
+
+일반 경보·감시 AI 보고·미확인 우편·유휴 알림이 같은 입력 보호를 쓴다.
+herdr에는 최근 사람 입력 시각 API가 없어 화면 revision과 입력 줄·PID·terminal ID의 안정성을
+함께 확인한다. 감시기 재시작이나 관측 실패 뒤에는 30초를 새로 센다.
+보호로 확실히 미전송된 경우만 나중에 재확인하며, 이미 해소된 경보는 보내지 않는다.
+응답 유실이나 발송 도중 중단은 자동 재전송하지 않는다.
+
+화면 관측과 `agent.prompt` 사이를 서버가 원자적으로 잠그지는 못한다. 마지막 검사 이후에
+사람이 키를 누르는 짧은 경합 구간까지 완전히 없앤 보장은 아니다. 2026-10-13 실제 Codex 두 세션으로 입력 문장 보존, 30초 유예, 요청→자동 깨움→최종 답장→
+요청자의 읽음과 양쪽 한 번씩 알림을 확인했다. 운영 세션에 적용한 증거는 아니다. 레포 간 흐름은 [슈퍼 우편](../peer-super-mail.md)을 따른다.

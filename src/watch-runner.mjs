@@ -1,3 +1,4 @@
+import { isNotificationHold } from './notification-guard.mjs';
 import { MailWatch } from "./watch-mail.mjs";
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
 import { doneMarkerOf } from "./done-marker.mjs";
@@ -146,6 +147,7 @@ export async function runWatch({
   let activeAlerts = seeded.active;
   const alertRecipients = seeded.recipients;
   const deliveryFailures = new Map();
+  const pendingAlerts = new Map(seeded.active.filter(a => a.held).map(a => [a.id, a]));
   const workerChecks = new Map();
   const judgeFailures = new Map();
   // 감시 AI가 인터넷 없음으로 실패한 연속 횟수(호출 대상별). 깨어 있는 동안 3번 이어질 때만 알린다(잠긴 규칙 3, 2026-10-07).
@@ -246,7 +248,10 @@ export async function runWatch({
         record({kind:'watch-scope',by:'watch',pid:process.pid,sessions:[...scope.sessions].sort(),supervisorSessions:[...supervisorScope.sessions].sort()});
         scopeSignature = signature;
       }
-      try { ai?.reports.retire(entries,cards,parents,works); }
+      try {
+        ai?.reports.retire(entries,cards,parents,works);
+        ai?.reports.retryHeld?.(entries,parents);
+      }
       catch { aiStoreError={id:'watch-ai:store',kind:'감시AI오류',level:'AMBER',role:'감시 보고 저장소',reason:'report-error'}; }
       for (const [key,failure] of judgeFailures) if (!observedSessions.has(failure.session)) judgeFailures.delete(key);
       for (const key of offlineFailures.keys()) if (!observedSessions.has(`kadan-${key.split(':')[1]}`)) offlineFailures.delete(key);
@@ -506,7 +511,7 @@ export async function runWatch({
         idleMs,
         ledgerError,
         parents,
-        { works, cards: cards ?? [], waits }
+        { works, cards: cards ?? [], waits, peerEntries: observationError ? [] : mailEntries }
       ).filter(a=>(!observedSessions || !a.session || observedSessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))
 
         // 감독의 세션 부재·화면 없음은 감독 점검이 이미 알린다. 같은 세션에 '모름'을 겹쳐 올리지 않는다.
@@ -518,7 +523,13 @@ export async function runWatch({
     const changes = dedupAlerts(activeAlerts, nextAlerts);
     const deliveredRecipients = aiRecipients;
     // 놀고 있음 1단은 상위가 아니라 감독 본인에게 간다(2026-10-05 [kyle]). 사람이 그 창에서 입력 중이면 미루고 다음 주기에 다시.
-    const sendIdleNudge = (alert) => {
+    const sendIdleNudge = (alert, retry = false) => {
+      if (retry || pendingNudges.has(alert.id)) {
+        if (!recordAlert(record, {...alert, held:false}, alert.role, false)) {
+          pendingNudges.set(alert.id, alert);
+          return false;
+        }
+      }
       const message = `[watch ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
       let target = alert.role, held = false, delivered = false;
       try {
@@ -526,7 +537,7 @@ export async function runWatch({
         delivered = true;
         deliveredRecipients.add(alert.role);
       } catch (error) {
-        held = typeof error.code === 'string' && (error.code === 'KADAN_HUMAN_ACTIVE' || error.code === 'KADAN_PANE_INPUT_PENDING');
+        held = isNotificationHold(error);
         target = `${alert.role} ${held ? '미룸' : '전달 실패'}(${error.message})`;
       }
       if (held) pendingNudges.set(alert.id, alert); else pendingNudges.delete(alert.id);
@@ -535,12 +546,15 @@ export async function runWatch({
     };
     // 이전 주기에 보류된 1단 알림. 이번 주기의 새 보류는 다음 주기에 다시 본다.
     const heldNudges = new Map(pendingNudges);
-    for (const alert of changes.notify) {
+    const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)
+      && !changes.notify.some(n => n.id === a.id)).map(a => nextAlerts.find(n => n.id === a.id));
+    for (const alert of [...changes.notify, ...retryAlerts]) {
+      const retry = pendingAlerts.delete(alert.id);
       if (deliveryFailures.has(alert.id)) continue;
       if (alert.kind === "놀고 있음" && alert.stage !== 2) {
-        const delivered = sendIdleNudge(alert);
+        const delivered = sendIdleNudge(alert, retry);
         if (delivered) alertRecipients.set(alert.id, alert.role);
-        recordAlert(record, {...alert, route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
+        recordAlert(record, {...alert, held:pendingNudges.has(alert.id), route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
         continue;
       }
       const message = `[watch ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
@@ -555,8 +569,12 @@ export async function runWatch({
       const recipient=route.recipient;
       let target = "stdout";
       const failureRecipient = failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
-      let delivered = false;
+      let delivered = false, held = false;
       if (recipient) {
+        if (retry && !recordAlert(record, {...alert,route,held:false}, recipient, false)) {
+          pendingAlerts.set(alert.id, alert);
+          continue;
+        }
         try {
           sendAlert(recipient, message);
           delivered = true;
@@ -567,7 +585,11 @@ export async function runWatch({
           deliveredRecipients.add(recipient);
         } catch (error) {
           target = `${recipient} 전달 실패(${error.message})`;
-          if (error.delivery === "sent") {
+          if (isNotificationHold(error)) {
+            held = true;
+            pendingAlerts.set(alert.id, alert);
+            target = `${recipient} 알림 미룸(${error.message})`;
+          } else if (error.delivery === "sent") {
             alertRecipients.set(alert.id, recipient);
             deliveredRecipients.add(recipient);
           } else if (error.delivery === "not-sent" && failureRecipient && recipient !== failureRecipient && recipient !== USER_RECIPIENT) {
@@ -598,8 +620,8 @@ export async function runWatch({
           }
         }
       }
-      recordAlert(record, {...alert,route}, recipient ?? null, delivered);
-      if (recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
+      recordAlert(record, {...alert,route,held}, recipient ?? null, delivered);
+      if (!held && recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
         const notifyError = notifyUser(message, spawn);
         if (notifyError) target += `; 사용자 알림 실패(${notifyError})`;
       }
@@ -609,6 +631,7 @@ export async function runWatch({
       alertRecipients.delete(alert.id);
       deliveryFailures.delete(alert.id);
       pendingNudges.delete(alert.id);
+      pendingAlerts.delete(alert.id);
       // 감독 멈춤 1단이 2단으로 올라간 것: 풀린 게 아니므로 '해소됨'을 찍지 않는다. 다만 열린 경보로 남지 않게
       // escalatedTo를 붙여 닫힘 기록만 남긴다(대시보드는 마지막 기록이 resolved면 닫힌 것으로 센다).
       if (alert.kind === "놀고 있음" && sourceIds.has(`${alert.id}:상위`)) recordAlert(record, {...alert, escalatedTo:`${alert.id}:상위`}, null, false, true);
@@ -617,6 +640,7 @@ export async function runWatch({
       if (alert.kind === "전달실패") continue;
       deliveryFailures.delete(alert.id);
       pendingNudges.delete(alert.id);
+      pendingAlerts.delete(alert.id);
       if (alert.kind === "감시AI오류") { recordAlert(record,alert,null,false,true); continue; }
       const recipient = deliverResolution({
         alert,
@@ -631,14 +655,17 @@ export async function runWatch({
     // 보류됐던 1단 알림 재시도: 경보가 아직 열려 있는 동안만. 전달되면 그때 기록한다.
     for (const [id, alert] of heldNudges) {
       if (observationError || !sourceIds.has(id)) { pendingNudges.delete(id); continue; }
-      if (sendIdleNudge(alert)) { alertRecipients.set(id, alert.role); recordAlert(record, {...alert, route:{recipient:alert.role, basis:'본인'}}, alert.role, true); }
+      const delivered = sendIdleNudge(alert);
+      if (delivered) alertRecipients.set(id, alert.role);
+      recordAlert(record, {...alert, held:pendingNudges.has(id),
+        route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
     }
     lap('alerts');
     let mailError = false;
     if (mailWatch && !observationError) {
       try {
         mailWatch.tick({entries:mailEntries,cards:cards??[],works,now:cycleAt,
-          floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal});
+          floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal,parents});
         mailError = mailWatch.failed;
       } catch (error) {
         mailError = true;

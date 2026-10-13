@@ -26,10 +26,11 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { runWatch } from "../watch-runner.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
+import { HUMAN_IDLE_MS } from "../notification-guard.mjs";
 
 // 해소 우편이 없으므로(2026-10-05 [kyle]) 경보를 받은 감독은 행동 전에 지금 상태를 스스로 확인한다.
 export const WATCH_ALERT_FOOTER='행동 전 지금 상태를 확인하라(감독 템플릿의 현황 확인 절차). 풀렸으면 따로 알리지 않는다.';
-export function sendWatchMessage(role,message) {
+export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend}={}) {
   if (role==='@user') {
     const failure=notifyUser(message,spawnSync);
     if (failure) { const error=new Error('사용자 알림 실패'); error.delivery='not-sent'; throw error; }
@@ -39,12 +40,14 @@ export function sendWatchMessage(role,message) {
   // 감시 경보 우편은 기록용이다: 경보는 상태 변화로 닫히지 수신자 ack로 닫히지 않으므로 읽음 확인 안내를 붙이지 않고
   // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기). 해소 우편도 없으므로 받는 쪽이 행동 전에
   // 지금 상태를 확인한다(감독 템플릿의 현황 확인 절차).
-  guardedSend({floor,session,role,message:`${message}\n${WATCH_ALERT_FOOTER}`,source:'watch',recordedPid:recordedPid(lastStartFor(session)),notificationOnly:true});
+  return send({floor:selectedFloor,session,role,message:`${message}\n${WATCH_ALERT_FOOTER}`,
+    source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,
+    notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}});
 }
 
 // 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.
 // 2026-09-23 [kyle]: 10분은 계속 대화하는 창의 질문 알림을 너무 늦춰 30초로 줄였다. 입력창 글 검사는 그대로다.
-export const WATCH_MAIL_HUMAN_IDLE_MS = 30_000;
+export const WATCH_MAIL_HUMAN_IDLE_MS = HUMAN_IDLE_MS;
 
 export function sendWatchMailReminder(role,message,expectedPid,{
   selectedFloor=floor,readStart=lastStartFor,send=guardedSend,

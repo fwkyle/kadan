@@ -336,3 +336,50 @@ test('감시 AI 폴백: 인터넷 없음·잠자기는 모델 탓이 아니라 �
   assert.equal(f.rows().find(e=>e.kind==='watch-ai-call').reason,reason);
  }
 });
+
+test('입력 보호로 보류한 보고는 상신하지 않고 다음 순회에 한 번만 보낸다',()=>{
+ const f=fixture();let held=true;
+ f.r.send=(role,message)=>{
+  if(held)throw Object.assign(new Error('입력 중'),{code:'KADAN_HERDR_NOT_READY',delivery:'not-sent'});
+  f.sent.push({role,message});
+ };
+ const job=f.request();f.r.submit(job.requestId,'정체','진행 멈춤');
+ assert.equal(f.sent.length,0);
+ assert.equal(f.r.receipt(job.requestId).complete,true);
+ assert.equal(f.rows().findLast(e=>e.kind==='watch-ai-delivery').held,true);
+ f.r.retryHeld(f.rows(),parents);
+ held=false;
+ f.r=new WatchReports({...f.options,send:f.r.send});
+ f.r.retryHeld(f.rows(),parents);
+ f.r.retryHeld(f.rows(),parents);
+ assert.equal(f.sent.length,1);
+ assert.equal(f.sent[0].role,'p-감독');
+ assert.equal(f.r.receipt(job.requestId).delivery.delivery,'sent');
+});
+
+test('보류한 보고는 정상 회복·책임 변경 뒤 취소하고 전달 불명확은 재전송하지 않는다',()=>{
+ for(const mode of ['normal','done','unknown']){
+  const f=fixture();let calls=0;
+  f.r.send=()=>{calls++;throw Object.assign(new Error('보류'),{
+   code:'KADAN_HERDR_NOT_READY',delivery:mode==='unknown'?'unknown':'not-sent'});};
+  f.r.submit(f.request().requestId,'정체','진행 멈춤');
+  if(mode==='normal')f.r.submit(f.request().requestId,'진행중','다시 진행');
+  if(mode==='done')appendLedger({kind:'done',role:'p-작업자',taskId:'a'},f.home);
+  f.r.retryHeld(f.rows(),parents);
+  assert.equal(calls,1,mode);
+ }
+});
+
+
+test('보류 중 같은 입력대기 판정이 정상 답변 대기로 바뀌면 알림을 취소한다',()=>{
+ const f=fixture();let calls=0;
+ f.cards[0].activity='running';
+ f.r.send=()=>{calls++;throw Object.assign(new Error('보류'),{
+  code:'KADAN_HERDR_NOT_READY',delivery:'not-sent'});};
+ const request=()=>f.request({source:'progress',taskId:'a'});
+ f.r.submit(request().requestId,'입력대기','질문 없이 멈춤');
+ appendLedger({kind:'send',mailId:'asked',by:'p-작업자',role:'p-감독',taskId:'a',expectReply:true},f.home);
+ f.r.submit(request().requestId,'입력대기','필수 질문 답변 대기');
+ f.r.retryHeld(f.rows(),parents);
+ assert.equal(calls,1);
+});

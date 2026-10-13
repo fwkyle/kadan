@@ -1,6 +1,7 @@
 import { workEntries } from "./handover-state.mjs";
 import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
+import { peerResponsibilities } from "./peer-mail.mjs";
 
 function startedAtMs(state) {
   const at = Date.parse(state?.startedAt);
@@ -40,7 +41,7 @@ export function assessSupervisorIdle(
   idleMs,
   ledgerError = null,
   parents = new Map(),
-  { works = [], cards = [], waits = [] } = {}
+  { works = [], cards = [], waits = [], peerEntries = entries } = {}
 ) {
   const excluded = waitingExcluder(waits, parents);
   if (ledgerError) {
@@ -114,7 +115,13 @@ export function assessSupervisorIdle(
     if (idleFor < idleMs) continue;
     alerts.push(idleAlert(`idle:${board}`, role, session, cards.size, idleFor, idleMs));
   }
-  alerts.push(...assessHierarchyIdle([...entries, ...idleWorkEntries(works, cards, parents)], roleStates, now, idleMs, parents, excluded));
+  const requests = peerResponsibilities(peerEntries, parents, works, cards);
+  const waiting = (id, role) => excluded(id, role)
+    || requests.find(r => r.taskId === id)?.linkedWorkIds.some(key => excluded(key, role));
+  alerts.push(...assessHierarchyIdle(
+    [...entries, ...idleWorkEntries(works, cards, parents), ...requests],
+    roleStates, now, idleMs, parents, waiting,
+  ));
   return alerts;
 }
 
@@ -133,6 +140,7 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents, exclu
     if (entry.kind === "done") pending.delete(key);
   }
   const supervisors = new Set([...parents.values()].filter(role => parents.has(role)));
+  for (const entry of entries) if (entry.peerRequest) supervisors.add(entry.role);
   // 아직 미발령인 plan은 같은 판의 직속 감독 한 명에게만 귀속한다.
   const assigned = new Set(entries.filter(entry => parents.has(entry?.role) && entry.taskId && entry.kind === "send").map(entry => entry.taskId));
   for (const entry of entries) {
@@ -154,7 +162,8 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents, exclu
       continue;
     }
     // 하위 담당자가 실제로 진행하면 상위의 조용한 대기는 이상이 아니다.
-    const active = [state, ...cards.map(entry => states.get(`kadan-${entry.role}`))]
+    const active = [state, ...cards.flatMap(entry => [entry.role, ...(entry.activityRoles ?? [])]
+      .map(role => states.get(`kadan-${role}`)))]
       .filter(item => item?.alive && item.digest != null);
     const openedAt = Math.min(...cards.map(entry => Date.parse(entry.t)).filter(Number.isFinite));
     const idleFor = Math.min(now - openedAt, ...active.map(item => item.unchangedMs ?? 0));

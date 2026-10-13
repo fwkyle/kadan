@@ -116,3 +116,35 @@ test("완료후보는 codex 응답 머리표('• ')가 붙은 마커도 알아�
   const result = await exercise({ screen: "• KADAN:DONE card-64 ok" });
   assert.ok(result.records.some(e => e.alertKind === "완료후보" && e.taskId === "card-64"));
 });
+
+test('재시작 후 보류 경보는 재시도하지만 발송 도중 응답 유실 뒤에는 반복하지 않는다',async()=>{
+ const rows=[start,...recipients.map(r=>({kind:'start',role:r.session.slice(6),session:r.session,panePid:1,t:start.t}))];
+ rows.push({kind:'send',role:start.role,taskId:'t1',t:start.t});
+ const alertId='supervisor-health:kadan-p-감독';
+ const parents=new Map([['p-작업자','p-감독'],['p-감독','qa-슈퍼감독'],['qa-슈퍼감독','@user']]);
+ let attempts=0,phase=0;
+ const stop=new Error('one cycle');
+ const oldLoad=os.loadavg;os.loadavg=()=>[0,0,0];
+ try{
+  const cycle=()=>assert.rejects(()=>runWatch({
+   floor:{list:()=>[{session,pid:1},recipients[1]],read:()=> 'healthy'},readEntries:()=>rows,
+   parents,readCards:()=>[{id:'t1',key:'repo/t1',role:start.role,status:'assigned',workType:'execution'}],
+   record:e=>{
+    if(phase===1&&e.id===alertId&&!e.held)throw new Error('예약 기록 실패');
+    rows.push(e);
+   },print:()=>{},now:()=>Date.parse(start.t),
+   routes:{p:'p-감독'},superRole:'qa-슈퍼감독',stallN:100,
+   sendAlert:()=>{
+    attempts++;
+    if(phase===0)throw Object.assign(new Error('작성 중'),{code:'KADAN_PANE_INPUT_PENDING',delivery:'not-sent'});
+    assert.notEqual(rows.findLast(e=>e.id===alertId)?.held,true,'전송 전에 이전 보류 예약을 닫는다');
+    throw Object.assign(new Error('응답 유실'),{delivery:'unknown'});
+   },
+   spawn:command=>{if(command==='sleep')throw stop;return {status:0,stdout:''};},
+  }),e=>e===stop);
+  await cycle();assert.equal(attempts,1);assert.equal(rows.findLast(e=>e.id===alertId).held,true);
+  phase=1;await cycle();assert.equal(attempts,1,'예약 기록 실패 때는 보내지 않는다');
+  phase=2;await cycle();assert.equal(attempts,2);
+  await cycle();assert.equal(attempts,2,'전달 불명확을 자동 재전송하지 않는다');
+ }finally{os.loadavg=oldLoad;}
+});

@@ -2,14 +2,15 @@ import {mailboxLetters} from './mailbox-state.mjs';
 import {isUserActor} from './actors.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {shellQuote} from './mail-instructions.mjs';
+import {isNotificationHold} from './notification-guard.mjs';
+import {isPeerSuperMail} from './peer-mail.mjs';
 
 const recipient = mail => mail.currentRecipient || mail.role;
 // 사람 입력·대화 중이라 붙여넣기 전에 멈춘 알림. 전달하지 않았으므로 다음 순회에 다시 시도한다.
-const HOLD_CODES = new Set(['KADAN_HUMAN_ACTIVE','KADAN_HUMAN_ACTIVITY_UNKNOWN','KADAN_PANE_INPUT_PENDING','KADAN_PANE_INPUT_UNKNOWN','KADAN_PANE_STATE_UNKNOWN']);
 const reminderKey = (mailId, role) => JSON.stringify([mailId, role]);
 
 // 판의 독립적인 활성 상태는 없다. 명시적으로 연결된 업무의 보류/종료만 따른다.
-function eligibleLetters(entries, cards, works, now, graceMs) {
+function eligibleLetters(entries, cards, works, now, graceMs, parents) {
   const identity = taskIdentity(cards);
   return mailboxLetters(entries).filter(mail => {
     // 발령 우편(taskId, 질문 아님)은 읽음 확인 안내가 없으니 재알림하지 않는다 — 미착수는 시작보고누락 경보가 잡는다(2026-10-05).
@@ -17,7 +18,9 @@ function eligibleLetters(entries, cards, works, now, graceMs) {
       || ['task-completion','watch-mail-reminder'].includes(mail.systemGenerated)
       || !recipient(mail) || isUserActor(recipient(mail))) return false;
     const at = Date.parse(mail.t);
-    if (!Number.isFinite(at) || now - at < graceMs) return false;
+    const deferredPeer = mail.transport === 'mailbox'
+      && isPeerSuperMail(entries, parents, mail.currentSender, recipient(mail));
+    if (!Number.isFinite(at) || now - at < (deferredPeer ? 0 : graceMs)) return false;
     const execution = identity.resolve(mail.taskId, mail.executionKey);
     const executionKey = execution.key || mail.executionKey;
     const related = works.filter(work => (mail.workKey && work.key === mail.workKey)
@@ -44,14 +47,14 @@ export class MailWatch {
     this.heldLogged = new Map();
   }
 
-  tick({entries, cards, works, now, floor, readEntries, readCards, readWorks, signal}) {
+  tick({entries, cards, works, now, floor, readEntries, readCards, readWorks, signal, parents}) {
     this.failed = false;
     for (const e of entries) if (e.kind === 'watch-mail-reminder' && e.mailId && e.role) {
       if (e.action === 'result' && e.held === true) this.reserved.delete(reminderKey(e.mailId, e.role));
       else this.reserved.add(reminderKey(e.mailId, e.role));
     }
     const groups = new Map();
-    for (const mail of eligibleLetters(entries,cards,works,now,this.graceMs)) {
+    for (const mail of eligibleLetters(entries,cards,works,now,this.graceMs,parents)) {
       const role = recipient(mail);
       if (this.reserved.has(reminderKey(mail.mailId,role))) continue;
       if (!groups.has(role)) groups.set(role, []);
@@ -89,7 +92,7 @@ export class MailWatch {
         const currentCards = readCards(), currentWorks = readWorks(), live = floor.list();
         // 마지막 전달 직전 원장을 다시 읽는다. 예약 중 들어온 ack도 여기서 제외한다.
         const fresh = readEntries();
-        const unread = new Set(eligibleLetters(fresh,currentCards,currentWorks,now,this.graceMs)
+        const unread = new Set(eligibleLetters(fresh,currentCards,currentWorks,now,this.graceMs,parents)
           .filter(mail => recipient(mail) === role).map(mail => mail.mailId));
         pending = ids.filter(id => unread.has(id));
         if (!signal?.aborted && String(currentPid(role,fresh,live)) === String(expectedPid) && pending.length) {
@@ -99,7 +102,7 @@ export class MailWatch {
         }
       } catch (error) {
         // 확인과 붙여넣기 사이에 사람이 입력을 시작한 경우. 붙여넣기 전 멈췄으므로 예약을 풀고 다음 순회에 다시 본다.
-        if (error.delivery === 'not-sent' && HOLD_CODES.has(error.code)) {
+        if (isNotificationHold(error)) {
           for (const id of ids) {
             this.reserved.delete(reminderKey(id,role));
             emit(id,'result',{delivery:'not-sent',reason:error.message,held:true});

@@ -125,11 +125,14 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.route?{route:alert.route}:{}),
       ...(alert.escalatedTo ? {escalatedTo:alert.escalatedTo} : {}),
       delivered,
+      ...(alert.held ? {held:true} : {}),
       by: "watch",
       ...(resolved ? { resolved: true } : {}),
     });
+    return true;
   } catch (error) {
     console.error(`원장 기록 실패: ${error.message}`);
+    return false;
   }
 }
 
@@ -145,7 +148,7 @@ export function seedAlertState(entries) {
   for (const e of latest.values()) {
     if (e.resolved) continue;
     active.push({
-      id: e.id, kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
+      id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
     });
     if (e.delivered && e.recipient) recipients.set(e.id, e.recipient);

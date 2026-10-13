@@ -13,6 +13,8 @@ import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
+import { readActiveHierarchy } from "../hierarchy-register.mjs";
+import { isPeerSuperMail } from "../peer-mail.mjs";
 
 export function cmdSend(argv, flags) {
   const role = argv[0];
@@ -54,6 +56,17 @@ export function cmdSend(argv, flags) {
       by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true
     });
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
+    const by = resolveLedgerBy({env:process.env});
+    const entries = readLedger();
+    if (taskId == null && isPeerSuperMail(entries, readActiveHierarchy(entries), by, recipient)) {
+      if (flags.raw) throw new Error('슈퍼 간 우편은 보관 후 안전하게 알립니다. --raw 없이 보내세요');
+      const stored = new Mailbox(ledgerHome(), recipient).send({
+        by, message, category:flags['mail-kind'] || 'report', ...mailContext,
+      });
+      console.log(JSON.stringify({...stored, wake:'watch-required',
+        note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
+      return;
+    }
     const expectedPid=recordedPid(lastStartFor(session));
     if (recipient!==role && !expectedPid) {
       const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);

@@ -1,3 +1,4 @@
+import {sendWatchMessage,sendWatchNudge} from '../src/commands/watch.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -313,4 +314,18 @@ test('대상은 한 번 읽은 목록으로 고르고, 전송 직전에는 목�
   {const f=fixture();let lists=0;f.floor.list=()=>++lists===1?f.live:[];
    f.tick();assert.equal(f.sent.length,0);
    assert.deepEqual(f.records.filter(e=>e.action==='result').map(e=>[e.delivery,e.reason]),[['not-sent','state-changed']]);}
+});
+
+
+test('일반 경보·감시 보고·유휴 알림·우편 깨움 모두 같은 입력 보호를 요청한다',()=>{
+ const calls=[];
+ const options={selectedFloor:{name:'herdr'},readStart:()=>({panePid:7}),send:e=>calls.push(e)};
+ sendWatchMessage('super','경보',options);
+ sendWatchNudge('super','유휴',options);
+ sendWatchMailReminder('super','우편',7,options);
+ assert.equal(calls.length,3);
+ for(const call of calls){
+  assert.equal(call.notificationOnly,true);
+  assert.deepEqual(call.notificationGuard,{humanIdleMs:30_000});
+ }
 });

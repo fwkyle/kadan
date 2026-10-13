@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { commandWords, matchesAiProcess } from "./ai-identity.mjs";
 import { readLedger } from "./ledger.mjs";
 import { checkEmptyInput } from "./floor-tmux.mjs";
+import { herdrNotificationGuard } from "./herdr-notification.mjs";
 
 function deny(code, message, delivery = "not-sent") {
   const error = new Error(`${code}: ${message}`);
@@ -182,9 +183,12 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     const frame = inputFrame(socket(), pane.terminal_id, pane.scroll?.viewport_rows);
     const visible = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "ansi", strip_ansi: false }).read;
     if (typeof visible?.text !== "string" || visible.truncated) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 화면 미확인");
-    checkEmptyInput(session, () => visible.text.replaceAll("\r\n", "\n"), frame.row, null, "herdr 전송 보류");
-    return pane;
+    try {
+      checkEmptyInput(session, () => visible.text.replaceAll("\r\n", "\n"), frame.row, null, "herdr 전송 보류");
+    } catch (error) { error.delivery = 'not-sent'; throw error; }
+    return { record, pane, visible, frame };
   };
+  const checkNotification = herdrNotificationGuard(session => checkAgent(session));
   // 시작 직후 몇 초 동안만 본다. 신뢰 화면이면 사람에게 알리고, 입력 대기가 되거나 시간이 지나면 조용히 끝낸다.
   // 실행기가 식별되기 전에는 agent.get이 agent_not_found를 주므로 그동안은 기다린다. 어떤 실패도 시작을 막지 않는다.
   const warnIfTrustPrompt = pane => {
@@ -242,18 +246,23 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
       const pid = pane && processInfo(pane)?.shell_pid; return pid ? String(pid) : null; },
     read(session) { return readPane(requirePane(session).pane); },
     send(session, text, { cardIdentity, notificationGuard, busyMail } = {}) {
-      if (notificationGuard) deny("KADAN_HERDR_NOTIFY_UNVERIFIED", "사람의 미제출 입력 보호 검증 전에는 자동 알림을 보내지 않는다");
       const allowWorking = busyMail === true && !cardIdentity;
-      const pane = checkAgent(session, cardIdentity, { allowWorking });
-      const baseline = readPane(pane);
+      const check = () => notificationGuard
+        ? checkNotification(session, notificationGuard) : checkAgent(session, cardIdentity, { allowWorking });
+      const { pane, visible } = check();
+      // 알림에는 완료 마커 기준점이 필요 없다. 긴 과거 출력 때문에 깨움까지 막지 않는다.
+      const baseline = notificationGuard ? { text: visible.text } : readPane(pane);
       if (baseline.gap) deny("KADAN_HERDR_OUTPUT_GAP", baseline.gap);
-      checkAgent(session, cardIdentity, { allowWorking });
+      check();
       try { call("agent.prompt", { target: pane.pane_id, text }); }
       catch (error) { if (error.delivery === "unknown") error.message += " — 본문/Enter 자동 재전송 금지"; throw error; }
       return { keyDelivery: "sent", inputAcceptance: "unconfirmed", baselineText: baseline.text,
         herdrTerminalId: pane.terminal_id };
     },
-    notificationHold() { return { code: "KADAN_HERDR_NOTIFY_UNVERIFIED", message: "실험 바닥의 자동 알림 보호 미검증" }; },
+    notificationHold(session, guard) {
+      try { checkNotification(session, guard); return null; }
+      catch (error) { return { code: error.code, message: error.message }; }
+    },
     sendEnter() { deny("KADAN_HERDR_ENTER_UNVERIFIED", "실험 바닥에서는 Enter만 따로 재전송하지 않는다"); },
     stop(session) {
       const { record } = requirePane(session);
