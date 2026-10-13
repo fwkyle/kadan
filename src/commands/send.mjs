@@ -1,3 +1,4 @@
+import { userMailRequired } from "../user-notification-policy.mjs";
 // kadan send (HW-3-impl: cli.mjs에서 옮김)
 import { taskIdentity } from "../task-identity.mjs";
 import { notifyUser } from "../watch-system.mjs";
@@ -79,7 +80,9 @@ function deliverMessage(argv, flags, command) {
     });
     // 사용자 우편함에 온 편지(대시보드 질문의 답 등)는 OS 알림으로도 알린다(2026-10-07 [kyle]). 알림 실패는 저장을 막지 않는다.
     // 시험은 KADAN_NOTIFY=off로 끈다(시험을 돌릴 때마다 진짜 알림이 뜨지 않게).
-    if(isUserActor(role)&&!isUserActor(by)&&process.env.KADAN_NOTIFY!=='off')
+    if(isUserActor(role)&&!isUserActor(by)&&process.env.KADAN_NOTIFY!=='off'&&
+      userMailRequired({by,category:flags['mail-kind']||'report',
+        expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true}))
       notifyUser(`카단 · ${by}의 ${flags['reply-final']?'답':'편지'}: ${message.split('\n').find(line=>line.trim())?.trim().slice(0,120)??''}`,spawnSync);
     console.log(JSON.stringify(receipt));return;
   }

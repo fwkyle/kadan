@@ -62,13 +62,14 @@ async function watchExercise({role='prod-슈퍼감독', notificationFails=false,
   }),e=>e===sentinel)}finally{os.loadavg=oldLoad}
   return {sent,notifications,records,lines};
 }
-test('09-07 슈퍼 완료후보는 사용자 알림 한번, 자기 세션 주입 없음', async () =>{
-  const x=await watchExercise();assert.equal(x.notifications.length,1);assert.equal(x.sent.length,0);
-  assert.equal(x.records[0].recipient,'@user');assert.equal(x.records[0].delivered,true);
+test('슈퍼 완료후보는 기록만 남기고 사용자 알림과 자기 세션 주입은 없다', async () =>{
+  const x=await watchExercise();assert.equal(x.notifications.length,0);assert.equal(x.sent.length,0);
+  assert.equal(x.records[0].recipient,'@user');assert.equal(x.records[0].delivered,false);
+  assert.equal(x.records[0].userSuppressed,true);
 });
-test('09-07 사용자 알림 실패는 실패로 기록하고 반복하지 않는다', async () =>{
-  const x=await watchExercise({notificationFails:true});assert.equal(x.notifications.length,1);
-  assert.equal(x.records[0].delivered,false);assert.match(x.lines.join('\n'),/사용자 알림 실패/);
+test('일상 알림은 OS 알림이 실패하는 환경에서도 호출하거나 재시도하지 않는다', async () =>{
+  const x=await watchExercise({notificationFails:true});assert.equal(x.notifications.length,0);
+  assert.equal(x.records[0].delivered,false);assert.equal(x.records[0].userSuppressed,true);
 });
 test('09-07 직속 전달 경합 실패는 해당 슈퍼로 한 번 상신한다', async () =>{
   const x=await watchExercise({role:'other-prefix-작업자',sendFails:true});

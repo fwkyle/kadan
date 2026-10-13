@@ -1,3 +1,4 @@
+import { userAlertRequired } from "./user-notification-policy.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
 import {taskIdentity} from './task-identity.mjs';
 // 감시AI가 호출하는 보고 경계. 판단은 AI, 저장·중복 방지·상신은 이 명령의 책임이다.
@@ -171,30 +172,31 @@ export class WatchReports {
     const routes=new Map(request.routes);
     const route=explainAlertRoute({id:request.key,role:request.role},routes,live,request.superRole,parents),recipient=route.recipient;
     let delivery='no-recipient',escalation=null,held=false;
-    if (recipient) {
+    const userSuppressed = recipient === '@user' && !userAlertRequired({kind:verdict});
+    if (userSuppressed) delivery = 'suppressed';
+    if (recipient && !userSuppressed) {
       try { this.send(recipient,message); delivery='sent'; }
       catch(error) {
         delivery=error.delivery??'unknown';
         held=isNotificationHold(error);
         const upper=failureEscalation(recipient,routes,live,request.superRole,parents);
-        if (!held&&delivery==='not-sent'&&upper&&upper!==recipient&&recipient!=='@user') {
+        if (!held&&delivery==='not-sent'&&upper&&upper!==recipient&&recipient!=='@user'
+          &&(upper!=='@user'||userAlertRequired({kind:verdict}))) {
           try { this.send(upper,`[${watchAILabel(request.source)}] 보고 전달 실패 · ${recipient}에게 전달하지 못했습니다. ${message}`); escalation={recipient:upper,delivery:'sent'}; }
           catch(e) { escalation={recipient:upper,delivery:e.delivery??'unknown'}; }
         }
       }
     }
-    let userNotification=null;
-    if(!held&&request.userNotify&&report.level==='RED'&&recipient!=='@user'&&escalation?.recipient!=='@user') {
-      try { this.send('@user',message); userNotification='sent'; } catch { userNotification='failed'; }
-    }
+    // 담당 감독에게 간 알림을 사용자에게 중복 전송하지 않는다.
+    const userNotification=null;
     if(held)fs.writeFileSync(path.join(request.evidencePath,'notification.txt'),message,{mode:0o600});
     this.record({kind:'watch-ai-delivery',by:'watch-ai',requestId,source:request.source,
       role:request.role,recipient,route,delivery,escalation,userNotification,
       ...(held?{held:true}: {})});
     this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
-      taskId:request.taskId,alertKind:verdict,level:report.level,recipient,route,delivered:delivery==='sent'});
+      taskId:request.taskId,alertKind:verdict,level:report.level,recipient,route,userSuppressed,delivered:delivery==='sent'});
     if(escalation) this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
-      taskId:request.taskId,alertKind:'전달실패',level:report.level,recipient:escalation.recipient,delivered:escalation.delivery==='sent'});
+      taskId:request.taskId,alertKind:'전달실패',sourceKind:verdict,level:report.level,recipient:escalation.recipient,delivered:escalation.delivery==='sent'});
     return this.completed(request,{...report,recipient,delivery,escalation});
   }
   retryHeld(entries,parents) {

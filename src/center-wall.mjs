@@ -1,3 +1,5 @@
+import { renderUserAttention } from "./user-attention-wall.mjs";
+import { actOnUserMail } from "./user-attention.mjs";
 import {operationsFlowSummaries} from './operations-flow.mjs';
 import {WorkStore} from './work-store.mjs';
 import {renderOperationsFlow,operationsFlowStyle,operationsFlowScript} from './operations-flow-view.mjs';
@@ -104,7 +106,7 @@ ${dashboardWorkspaceStyle}
  ${renderDoneButOpen(center)}
  ${renderOperationsFlow()}
  ${renderWorkCreate(token)}
- ${renderDecisions(decisions,decisionError,token,url.searchParams.get('decisionAnswered'))}
+ ${renderDecisions(decisions,decisionError,token,url.searchParams.get('decisionAnswered'),renderUserAttention(snapshot,token))}
  ${renderRunnerSettings({home,entries,token,saved:url.searchParams.get('runnersSaved')})}
  <section class="panel" id="create" data-view="create"><h2>새 카드 만들기</h2><form method="post" action="/cards/create" class="edit"><input type="hidden" name="token" value="${e(token)}"><label>저장소 이름<input name="repo" required placeholder="my-repo"></label><label>저장소 절대경로<input name="repoPath" required></label><label>카드 ID<input name="id" required placeholder="card-product-search"></label><label>제목<input name="title" required></label><label>작업 내용<textarea name="body" rows="5" required></textarea></label><button>초안으로 저장</button></form></section>
  <section class="panel" id="sessions" data-view="sessions"><h2>담당자 세션</h2>${activityGuide('sessions')}${center&&!center.runtimeKnown?'<p role="alert">현재 세션 상태 모름</p>':''}<p class="muted">생존 여부와 카드 완료 여부는 별개입니다.</p><div class="scroll"><table><thead><tr><th>역할</th><th>생존</th><th>실행 도구 / 모델</th></tr></thead><tbody>${(center?.roles??[]).filter(r=>r.life.state==='alive').map(r=>`<tr><td>${e(r.role)}</td><td>${!center.runtimeKnown?'모름':r.life.pidState==='match'?'열려 있음':'PID 변경 — 확인 필요'}</td><td>${e([r.harness,r.model].filter(Boolean).join(' / ')||'모름')}</td></tr>`).join('')}</tbody></table></div></section>
@@ -166,7 +168,7 @@ export function askMessage({unit,text,context}) {
 export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/attention/ack','/attention/reply','/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -187,6 +189,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     if(text.length>4000||context.length>2000)throw new Error('질문이 너무 길다(본문 4000자·유닛 정보 2000자 이하)');
     const to=askRecipient(unit,hierarchy());
     saved('/#strategy-map',await ask({to,message:askMessage({unit,text,context})}));return true;
+   }
+   if(url.pathname==='/attention/ack'||url.pathname==='/attention/reply') {
+     const result=actOnUserMail(home,f.id,{text:f.text,reply:url.pathname==='/attention/reply'});
+     saved('/#decisions',result);return true;
    }
    if(url.pathname==='/decisions/answer') {
      const result=decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});

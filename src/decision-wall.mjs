@@ -195,7 +195,7 @@ const renderDecisionHistory=past=>{
  return `<dialog id="decision-history" class="decision-drawer" aria-labelledby="decision-history-title"><header class="dh-top"><h2 id="decision-history-title">이전 결정 ${past.length}건</h2><form method="dialog"><button type="submit" value="close">닫기</button></form></header>`+
   (sorted.length?`<div class="dh-list">${sorted.map(historyItem).join('')}</div>`:'<p class="dh-empty">지난 결정이 없습니다.</p>')+'</dialog>';
 };
-export function renderDecisions(items,error,token,answered=null){
+export function renderDecisions(items,error,token,answered=null,attention=''){
  if(error)return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요</h2><p role="alert">모름: ${e(error)}</p></section>`;
  // 기본은 오래된 요청부터(요청 시각 순, 같으면 들어온 순). 화면에서 최신 순으로 바꿀 수 있다(2026-09-26 kyle).
  const open=items.map((d,i)=>[d,i]).filter(([d])=>d.status==='open').sort(([a,i],[b,j])=>(Date.parse(a.at)||0)-(Date.parse(b.at)||0)||i-j).map(([d])=>d);
@@ -207,7 +207,7 @@ export function renderDecisions(items,error,token,answered=null){
  const today=new Date(Date.now()+9*3600_000).toISOString().slice(0,10);
  const answeredToday=items.filter(d=>d.status==='answered'&&typeof d.answer?.at==='string'&&new Date(Date.parse(d.answer.at)+9*3600_000).toISOString().slice(0,10)===today).length;
  const meter=`<div class="dc-meter"><span>대기 ${open.length}건 · 오늘 답함 ${answeredToday}건</span><div class="dc-bar" aria-hidden="true"><i style="width:${open.length+answeredToday?Math.round(answeredToday/(open.length+answeredToday)*100):0}%"></i></div>${open.length>1?'<button type="button" class="dc-sort" data-decision-sort aria-pressed="false" title="누르면 오래된 순과 최신 순을 바꿉니다">정렬: 오래된 순</button>':''}</div>`;
- return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독이 [kyle]에게 명시적으로 요청한 결정만 표시합니다.</p>${meter}<div class="dc-list">${open.map(one).join('')||'<p>결정을 기다리는 요청이 없습니다.</p>'}</div><button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button></section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
+ return `<section class="panel" id="decisions" data-view="decisions"><h2>내 결정 필요 ${open.length}건</h2>${answeredNotice(answered&&items.find(d=>d.id===answered))}<p class="muted">슈퍼감독·임시 총괄 비서의 결정 요청과 사용자 확인 항목을 표시합니다.</p>${meter}<div class="dc-list">${open.map(one).join('')||'<p>결정을 기다리는 요청이 없습니다.</p>'}</div><button type="button" class="decision-history-open" data-decision-history-open>이전 결정 ${items.length-open.length}건 보기</button>${attention}</section>${renderDecisionHistory(items.filter(d=>d.status!=='open'))}`;
 }
 // 요약이 없는 편지(공식 보고 등)는 이미 읽은 본문 앞부분을 한 줄로 보인다(2026-09-24 UX 검토: 하나씩 펼쳐야 했음).
 const mailExcerpt=body=>{const text=String(body??'').replace(/\s+/g,' ').trim();return text.length>120?text.slice(0,120)+'…':text;};

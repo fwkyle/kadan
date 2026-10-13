@@ -62,7 +62,7 @@ test("watch의 알림은 원장에도 남는다 — 화면에만 있어 관제 �
 test("전달 실패 알림도 원장에 남는다 — 실패는 delivered:false다(card-64)", async () => {
   for (const superFails of [false, true]) {
     const result = await exercise({ failure: "not-sent", superFails });
-    const escalation = { kind: "alert", id: `delivery-failed:death:${session}:p-감독`, alertKind: "전달실패", level: "RED", role: undefined,
+    const escalation = { kind: "alert", id: `delivery-failed:death:${session}:p-감독`, alertKind: "전달실패", sourceKind: "죽음", level: "RED", role: undefined,
       session: undefined, taskId: undefined, recipient: "qa-슈퍼감독", delivered: !superFails, by: "watch" };
     assert.deepEqual(result.records.map(withoutRoute), [escalation, { ...death, delivered: false },
       { ...death, recipient: superFails ? null : "qa-슈퍼감독", delivered: false, resolved: true }]);
