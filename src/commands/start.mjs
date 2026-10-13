@@ -8,6 +8,7 @@ import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger
 import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
 import { roleNameWarning } from "../role-name.mjs";
+import { conversationOf } from "../conversation-ref.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor } from "../cli-basics.mjs";
 import {
@@ -77,10 +78,14 @@ export function cmdStart(argv, flags) {
       if (previous) previousUnread = unreadForRole(mailboxLetters(entries), role);
     } catch { /* 원장을 못 읽으면 판단하지 않는다 */ }
     if (previous) {
-      nameCheck = { nameReuse: { previousStartAt: previous.t ?? null, previousUnread, inherited: flags["inherit-mail"] === true } };
-      console.error(`이름 재사용: '${role}'은 ${previous.t ?? "예전"}에 쓴 이름이다. ${flags["inherit-mail"] === true
-        ? `이전 세대 미확인 ${previousUnread ?? "?"}건을 이어받는다(--inherit-mail).`
-        : `이전 세대 미확인 ${previousUnread ?? "?"}건은 넘겨받지 않았다(원장에는 그대로 있고 inbox --previous-generations로 본다). 이어받으려면 --inherit-mail.`}`);
+      // 같은 대화를 resume으로 다시 열거나 --inherit-mail이면 바로 앞 세대를 이어간다. new·fork는 새 대화라 끊는다.
+      const resumed = conversationOf(flags.cmd).conversationMode === "resume";
+      const inherited = flags["inherit-mail"] === true || resumed;
+      const kept = inherited ? unreadForRole(mailboxLetters(readLedger(ledgerHome())), role, { current: true }) : null;
+      nameCheck = { nameReuse: { previousStartAt: previous.t ?? null, previousUnread: inherited ? kept : previousUnread, inherited } };
+      console.error(`이름 재사용: '${role}'은 ${previous.t ?? "예전"}에 쓴 이름이다. ${inherited
+        ? `이전 세대 ${kept ?? "?"}건 이어감(${resumed ? "같은 대화 resume" : "--inherit-mail, 바로 앞 세대만"}).`
+        : `이전 세대 미확인 ${previousUnread ?? "?"}건은 넘겨받지 않았다(원장에는 그대로 있고 inbox --previous-generations로 본다). 바로 앞 세대를 이어받으려면 --inherit-mail.`}`);
     } else {
       const warning = roleNameWarning({ role, profile: roleProfile, cwd: process.cwd() });
       if (warning) { nameCheck = { nameWarning: warning }; console.error(warning); }

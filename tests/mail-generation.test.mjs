@@ -11,6 +11,7 @@ import {appendLedger} from '../src/ledger.mjs';
 import {MailWatch} from '../src/watch-mail.mjs';
 import {filterMail,mailStatus} from '../src/dashboard-inbox.mjs';
 import {repoNameFor,roleNameWarning} from '../src/role-name.mjs';
+import {conversationOf} from '../src/conversation-ref.mjs';
 
 const at = n => new Date(n).toISOString();
 const start = (pid, more = {}) => ({kind:'start',role:'R',session:'kadan-R',panePid:pid,t:at(0),...more});
@@ -38,12 +39,45 @@ test('같은 이름으로 새 세대가 시작되면 이전 세대 미확인은 
   assert.equal(sentBefore.length, 1);
 });
 
-test('--inherit-mail start는 이전 세대 미확인을 이어받고 이전 세대 경계를 지운다', () => {
-  const entries = [...threeLetters(), start(2), stop, start(3, {inheritMail: true, inheritedUnread: 3})];
-  assert.deepEqual(unreadFor(entries), ['a', 'b', 'c']);
-  assert.deepEqual(previousFor(entries), []);
-  // 이어받은 뒤 다시 새 세대가 시작되면 다시 이전 세대가 된다.
+test('--inherit-mail start는 바로 앞 세대 하나만 이어받고 그 앞 세대는 끊긴 채 남는다', () => {
+  const entries = [start(1), letter('old'), stop, start(2), letter('prev'), stop, start(3, {inheritMail: true, inheritedUnread: 1})];
+  assert.deepEqual(unreadFor(entries), ['prev']);
+  assert.deepEqual(previousFor(entries), ['old']);
+  // 이어받은 뒤 새 대화가 시작되면 다시 이전 세대가 된다.
   assert.deepEqual(unreadFor([...entries, stop, start(4)]), []);
+  // 한 세대뿐이면 그 세대를 이어받는다.
+  assert.deepEqual(unreadFor([...threeLetters(), start(2, {inheritMail: true})]), ['a', 'b', 'c']);
+});
+
+const claudeFork = 'claude --resume 6eb95e6b --fork-session --model opus';
+const claudeResume = 'claude --resume 7af9ccdd --dangerously-skip-permissions --model opus';
+
+test('fork(adopt) → stop → resume(같은 이름) 사이 편지는 미확인으로 남고, 그 앞 세대는 끊긴다', () => {
+  const entries = [start(1, {cmd: 'claude --model opus'}), letter('sept'), stop, start(2, {cmd: claudeFork}), letter('human'), stop,
+    start(3, {cmd: claudeResume})];
+  assert.deepEqual(unreadFor(entries), ['human']);
+  assert.deepEqual(previousFor(entries), ['sept']);
+  // 새 대화(fork·new)를 여는 start는 경계다.
+  assert.deepEqual(unreadFor([...entries, stop, start(4, {cmd: claudeFork})]), []);
+  assert.deepEqual(unreadFor([...entries, stop, start(4, {cmd: 'claude --model opus'})]), []);
+});
+
+test('codex resume/fork 문법과 옛 start(cmd만 있음)도 같은 판정을 받는다', () => {
+  const codex = cmd => [start(1, {cmd: 'codex --model x'}), letter('a'), stop, start(2, {cmd})];
+  assert.deepEqual(unreadFor(codex('codex resume 019a-uuid --model gpt-6-astra')), ['a']);
+  assert.deepEqual(unreadFor(codex('codex fork 019a-uuid --model gpt-6-astra -c model_reasoning_effort=high')), []);
+  assert.deepEqual(unreadFor(codex('codex --model x')), []);
+  assert.deepEqual(unreadFor(codex('mystery-cli --resume abc')), [], '판단할 수 없는 명령은 new');
+  // 기록 필드가 있으면 그것을 따른다(원장에 conversationMode를 적어 둔 start).
+  assert.deepEqual(unreadFor([start(1), letter('a'), stop, start(2, {cmd: 'x', conversationMode: 'resume'})]), ['a']);
+});
+
+test('conversationOf: claude/codex 명령에서 방식과 대화 ID를 읽는다', () => {
+  assert.deepEqual(conversationOf(claudeFork), {conversationMode: 'fork', conversationRef: '6eb95e6b'});
+  assert.deepEqual(conversationOf("FOO=1 /usr/bin/claude -r=abc --model 'x[1m]'"), {conversationMode: 'resume', conversationRef: 'abc'});
+  assert.deepEqual(conversationOf('claude --model opus'), {conversationMode: 'new'});
+  assert.deepEqual(conversationOf('codex resume'), {conversationMode: 'new'});
+  assert.deepEqual(conversationOf(undefined), {conversationMode: 'new'});
 });
 
 test('같은 정체로 이어가는 start(복원·살아 있는 세션 재사용·비서 복원)는 우편을 유지한다', () => {
@@ -86,6 +120,7 @@ test('inbox: 기본 목록에서 빠지고 --previous-generations에서 보이�
   assert.deepEqual(list({role: 'R'}), []);
   assert.deepEqual(list({role: 'R', unread: true}), []);
   assert.deepEqual(list({role: 'R', 'previous-generations': true}).sort(), [...ids].sort());
+  assert.deepEqual(list({role: 'R', unread: true, 'previous-generations': true}).sort(), [...ids].sort(), '--unread를 같이 써도 같은 결과');
   assert.equal(list({role: 'R', all: true}).length, 3, '--all 기록 조회에는 남아 있다');
   inboxCommand(['ack', ids[0]], {role: 'R'}, {home, by: 'R'});
   assert.deepEqual(list({role: 'R', 'previous-generations': true}).sort(), ids.slice(1).sort());

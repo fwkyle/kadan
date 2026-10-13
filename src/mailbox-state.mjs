@@ -22,7 +22,7 @@ export function mailboxLetters(entries,role,{view='received',all=true,unread=fal
  if(!cached||cached.length!==entries.length){cached={length:entries.length,letters:projectLetters(entries)};projections.set(entries,cached);}
  return cached.letters.filter(e=>role===undefined||(['sent','waiting'].includes(view)?e.currentSender===role:e.currentRecipient===role))
  .filter(e=>previousGenerations==='only'?e.previousGeneration===true&&e.read===false&&!isNotificationOnly(e):previousGenerations!=='exclude'||!(e.previousGeneration===true&&e.read===false))
- .filter(e=>(!unread||isUnreadLetter(e))&&(['waiting','to-reply'].includes(view)?e.replyStatus==='waiting':all||e.read!==true))
+ .filter(e=>(!unread||(previousGenerations==='only'?e.read===false:isUnreadLetter(e)))&&(['waiting','to-reply'].includes(view)?e.replyStatus==='waiting':all||e.read!==true))
  .map(e=>({...e,replyRecipients:[...e.replyRecipients]}));
 }
 // 저장 순서로 한 번씩 순회한다. 읽음, 답변 종료, 실행 완료를 서로 합치지 않는다.

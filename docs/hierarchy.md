@@ -55,10 +55,10 @@
 
 - 새 세대의 미확인 수, `kadan inbox` 기본 목록, 5분 묶음 재알림, 대시보드 미확인 수에 들어가지 않는다. 우편은 지우지도 읽음으로 바꾸지도 않는다(원장은 추가만 한다. 계산에서만 거른다).
 - `kadan inbox --previous-generations`와 대시보드 우편함의 '읽음 상태: 이전 세대 미확인'에서 따로 보고 `ack`할 수 있다. `--all` 기록 조회에는 그대로 남는다.
-- 같은 정체를 잇는 start는 새 세대가 아니다: 살아 있는 세션을 다시 연 start(같은 pane PID, 사이에 stop 없음), `recovery restore`(`restoredFrom`), 비서 복원(`secretaryResumeSource`). 우편을 그대로 이어받는다. 인계(`handover`)의 승계 규칙은 그대로다. 확정된 인계는 받는 이름의 현재 세대 책임으로 옮기므로 인계 뒤에 새 세대가 시작되면 그때부터 이전 세대다.
+- 같은 정체를 잇는 start는 새 세대가 아니다: 같은 대화를 다시 여는 start(`--resume <id>`만 있고 `--fork-session`이 없는 claude, `codex resume <id>`), 살아 있는 세션을 다시 연 start(같은 pane PID, 사이에 stop 없음), `recovery restore`(`restoredFrom`), 비서 복원(`secretaryResumeSource`). 우편을 그대로 이어받는다. 새 대화를 여는 start(`claude --resume <id> --fork-session`=`adopt`가 쓰는 형태, `codex fork <id>`, 대화 지정이 없는 새 명령, 알아볼 수 없는 명령)는 새 세대다. 방식은 start 사건의 `conversationMode`(new·resume·fork)·`conversationRef`에 남기며, 이 필드가 없는 옛 start는 `cmd` 원문에 같은 파싱을 적용한다(원장은 고치지 않는다). 시간 차·자유 문장(`overrideReason` 등)·대화 파일은 보지 않는다. 한계: `--cmd "claude --resume <무관한 id>"`로 죽은 이름을 다시 쓰면 이어감으로 판정된다. 인계(`handover`)의 승계 규칙은 그대로다. 확정된 인계는 받는 이름의 현재 세대 책임으로 옮기므로 인계 뒤에 새 세대가 시작되면 그때부터 이전 세대다.
 - 세션이 없는 동안 저장된 우편(`wake: not-connected`)은 직전 세대 몫이다. 다음 start가 복원이면 이어받고, 새 세대면 이전 세대 미확인으로 남는다. 한 이름의 첫 start 이전에 쌓인 우편은 첫 세대 몫이다.
-- 이어받기를 원하면 `kadan start <이름> --inherit-mail` 또는 `kadan adopt <이름> --inherit-mail`. start 사건에 `inheritMail`·`inheritedUnread`가 남고, 그 이름의 이전 세대 미확인이 모두 현재로 돌아온다.
-- 과거에 쓴 이름으로 새 세션을 만들면 표준 오류에 한 번 알리고 `nameReuse {previousStartAt, previousUnread, inherited}`를 돌려준다(adopt 결과). `adopt`로 재사용한 이름이 관계표의 옛 상위·하위 줄을 그대로 이어받는 동작은 이번에 바꾸지 않았다.
+- 이어받기를 원하면 `kadan start <이름> --inherit-mail` 또는 `kadan adopt <이름> --inherit-mail`. start 사건에 `inheritMail`·`inheritedUnread`가 남고 **바로 앞 세대 하나만** 이어받는다(그 앞 세대의 우편은 끊긴 채 남는다).
+- 과거에 쓴 이름으로 새 세션을 만들면 표준 오류에 한 번 알린다: 끊은 경우 "이전 세대 미확인 N건은 넘겨받지 않았다", 이어간 경우(resume 또는 `--inherit-mail`) "이전 세대 N건 이어감". 출력은 stdout 한 줄(`시작됨: …`) + 표준 오류 안내이고 JSON은 출력하지 않는다. `adopt`로 재사용한 이름이 관계표의 옛 상위·하위 줄을 그대로 이어받는 동작은 이번에 바꾸지 않았다.
 - 업무·카드 owner의 이름 승계는 이 규칙 밖이다(범위 밖 발견으로만 기록).
 
 ## 시작할 때 자동 등록 (2026-09-11 [kyle] 지시)
