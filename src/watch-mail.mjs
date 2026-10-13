@@ -14,7 +14,8 @@ function eligibleLetters(entries, cards, works, now, graceMs, parents) {
   const identity = taskIdentity(cards);
   return mailboxLetters(entries).filter(mail => {
     // 발령 우편(taskId, 질문 아님)은 읽음 확인 안내가 없으니 재알림하지 않는다 — 미착수는 시작보고누락 경보가 잡는다(2026-10-05).
-    if (!mail.mailId || mail.read !== false || mail.notificationOnly === true || (mail.taskId != null && mail.expectReply !== true)
+    // 이전 세대 앞으로 온 미확인은 같은 이름의 새 세션에게 다시 알리지 않는다(mail-generation.mjs).
+    if (!mail.mailId || mail.read !== false || mail.previousGeneration === true || mail.notificationOnly === true || (mail.taskId != null && mail.expectReply !== true)
       || ['task-completion','watch-mail-reminder'].includes(mail.systemGenerated)
       || !recipient(mail) || isUserActor(recipient(mail))) return false;
     const at = Date.parse(mail.t);

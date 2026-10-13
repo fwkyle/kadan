@@ -4,7 +4,11 @@ import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../ru
 import { registerRoleManually, registerStartedRole } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
-import { appendLedger, ledgerHome, resolveLedgerBy } from "../ledger.mjs";
+import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
+import { mailboxLetters } from "../mailbox-state.mjs";
+import { unreadForRole } from "../mail-generation.mjs";
+import { roleNameWarning } from "../role-name.mjs";
+import { conversationOf } from "../conversation-ref.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor } from "../cli-basics.mjs";
 import {
@@ -63,6 +67,30 @@ export function cmdStart(argv, flags) {
   // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
   const cmdPolicy = inspectStartCmdPolicy({ roleProfile, cmd: flags.cmd, reusing });
   if (!cmdPolicy.ok) die(cmdPolicy.message, 2);
+  // 새 세션을 만들 때만 이름을 본다. 과거에 쓴 이름이면 이전 세대 우편을 넘겨받지 않았다고 알리고,
+  // 처음 쓰는 이름이면 이름 규칙을 안내한다. 둘 다 거절하지 않는다(mail-generation.mjs·role-name.mjs).
+  let nameCheck = null;
+  if (!reusing) {
+    let previous = null, previousUnread = null;
+    try {
+      const entries = readLedger(ledgerHome());
+      previous = entries.findLast(e => e.kind === "start" && (e.role ?? e.session?.replace(/^kadan-/, "")) === role) ?? null;
+      if (previous) previousUnread = unreadForRole(mailboxLetters(entries), role);
+    } catch { /* 원장을 못 읽으면 판단하지 않는다 */ }
+    if (previous) {
+      // 같은 대화를 resume으로 다시 열거나 --inherit-mail이면 바로 앞 세대를 이어간다. new·fork는 새 대화라 끊는다.
+      const resumed = conversationOf(flags.cmd).conversationMode === "resume";
+      const inherited = flags["inherit-mail"] === true || resumed;
+      const kept = inherited ? unreadForRole(mailboxLetters(readLedger(ledgerHome())), role, { current: true }) : null;
+      nameCheck = { nameReuse: { previousStartAt: previous.t ?? null, previousUnread: inherited ? kept : previousUnread, inherited } };
+      console.error(`이름 재사용: '${role}'은 ${previous.t ?? "예전"}에 쓴 이름이다. ${inherited
+        ? `이전 세대 ${kept ?? "?"}건 이어감(${resumed ? "같은 대화 resume" : "--inherit-mail, 바로 앞 세대만"}).`
+        : `이전 세대 미확인 ${previousUnread ?? "?"}건은 넘겨받지 않았다(원장에는 그대로 있고 inbox --previous-generations로 본다). 바로 앞 세대를 이어받으려면 --inherit-mail.`}`);
+    } else {
+      const warning = roleNameWarning({ role, profile: roleProfile, cwd: process.cwd() });
+      if (warning) { nameCheck = { nameWarning: warning }; console.error(warning); }
+    }
+  }
   let evidence;
   let startedCmd;
   if (reusing) {
@@ -132,7 +160,7 @@ export function cmdStart(argv, flags) {
       reused,
       cmd: startedCmd,
       cwd: process.cwd(),
-    }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
+    }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
   } catch (error) {
     // 시작 기록이 없는 세션은 다음 start에서 재사용으로 읽혀 막히고 감시에도 잡히지 않는다(2026-10-08).
     // 방금 만든 세션만 닫는다. 재사용한 세션은 남의 세대라 건드리지 않는다.
@@ -160,4 +188,5 @@ export function cmdStart(argv, flags) {
     // 관계표를 찾았는데도 못 적은 경우만 알린다. 관계표가 없는 환경은 정상이다.
     console.error(`감시 등록 안 됨(${registration.reason}) — 알림 수신자를 직접 확인하라`);
   }
+  return nameCheck;
 }

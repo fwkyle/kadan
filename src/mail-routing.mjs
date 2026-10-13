@@ -3,15 +3,15 @@ export const isMailTransfer = entry => entry?.kind === 'handover' && entry.phase
 
 export function createMailRouting() {
  const letters=new Map(),transfers=new Map();
- const add=(entry,parent)=>{
+ const add=(entry,parent,at=0)=>{
   const source=letters.get(parent);
   // 늦게 저장된 답장은 원본 우편의 발신 책임만 이어받는다. 독립 새 우편은 그대로 둔다.
   const currentRecipient=source?.senderRoles.has(entry.role)?source.currentSender:entry.role;
-  const state={currentRecipient,currentSender:entry.by,senderRoles:new Set([entry.by])};
+  const state={currentRecipient,currentSender:entry.by,senderRoles:new Set([entry.by]),since:at};
   letters.set(entry,state);
   return state;
  };
- const apply=entry=>{
+ const apply=(entry,at=0)=>{
   if(!isMailTransfer(entry))return;
   const {from,to}=entry;
   if(typeof from!=='string'||!from.trim()||typeof to!=='string'||!to.trim()||from===to)
@@ -23,7 +23,7 @@ export function createMailRouting() {
   }
   transfers.set(key,{from,to});
   for(const state of letters.values()){
-   if(state.currentRecipient===from)state.currentRecipient=to;
+   if(state.currentRecipient===from){state.currentRecipient=to;state.since=at;}
    if(state.currentSender===from){state.currentSender=to;state.senderRoles.add(to);}
   }
  };

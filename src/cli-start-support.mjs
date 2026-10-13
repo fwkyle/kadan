@@ -1,4 +1,5 @@
 // start·stop 보조 — 창 선택·로티 사전 점검·시작/종료 기록 (HW-3-impl: cli.mjs에서 옮김)
+import { conversationOf } from "./conversation-ref.mjs";
 import { openTaskIds } from "./handover-state.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -186,6 +187,7 @@ export function describeStartCmd(cmd) {
   return {
     ...(harness ? { harness } : {}),
     ...(model ? { model } : {}),
+    ...conversationOf(text),
     cmd: text,
   };
 }

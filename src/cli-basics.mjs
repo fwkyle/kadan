@@ -100,7 +100,7 @@ export function parseFlags(argv) {
       arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" ||
       arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" ||
       arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" ||
-      arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card"
+      arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card" || arg === "--inherit-mail" || arg === "--previous-generations"
     ) {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
