@@ -11,6 +11,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {sendWatchMailReminder, sendWatchMessage, watchMailHold} from '../src/commands/watch.mjs';
 import {NotifyHoldTracker, NOTIFY_FORCE_AT, NOTIFY_WARN_AT, notifyHeldAlertId} from '../src/watch-notify-hold.mjs';
 import {explainAlertRoute} from '../src/watch.mjs';
+import {sendTmux} from '../src/floor-tmux.mjs';
 
 const hold = (code = 'KADAN_PANE_INPUT_PENDING') =>
   Object.assign(new Error('알림 미룸: 미제출 입력이 있음'), {code, delivery: 'not-sent'});
@@ -68,6 +69,40 @@ test('알림밀림 경보는 밀리는 그 창이 아니라 사용자에게만 �
   assert.deepEqual([route.recipient, route.basis], ['@user', 'notify-held']);
 });
 
+test('강제로 넣으려다 입력 보호 밖의 이유로 실패하면 횟수를 유지하고, 붙여넣기 뒤 기록 실패는 전달로 본다', () => {
+  const tracker = new NotifyHoldTracker({record: () => {}});
+  for (let i = 0; i < NOTIFY_FORCE_AT; i++) cycle(tracker, {held: ['w']});
+  tracker.beginCycle();
+  assert.equal(tracker.guardFor('w', {humanIdleMs: 1}).force, true);
+  tracker.endCycle(0); // 복사 모드처럼 미룸도 전달도 아닌 실패
+  assert.equal(tracker.forced('w'), true);
+  const floor = {name: 'fake', alive: () => true, pid: () => '1', send: () => ({})};
+  const send = options => guardedSend({...options, env: {KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-sent-'))},
+    readEntries: () => [], saveBody: () => {}, record: () => { throw new Error('ledger down'); }});
+  tracker.beginCycle();
+  assert.throws(() => sendWatchMessage('w', '경보', {selectedFloor: floor, readStart: () => ({panePid: 1}), send, tracker}),
+    e => e.delivery === 'sent');
+  tracker.endCycle(0);
+  assert.equal(tracker.forced('w'), false);
+});
+
+test('tmux 강제 알림은 입력 검사만 건너뛰고 기록보기(복사 모드) 확인은 그대로 한다', () => {
+  const calls = [];
+  const fakeRun = mode => (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'display-message') return mode;
+    return '';
+  };
+  const ok = sendTmux('kadan-w', '알림', {run: fakeRun('0'), spawn: () => ({status: 0}), pid: 1, hrtime: () => 1n,
+    notificationGuard: {humanIdleMs: 30_000, force: true}});
+  assert.equal(ok.keyDelivery, 'sent');
+  assert.equal(calls.includes('list-clients'), false, '사람 입력·입력창 검사를 하지 않는다');
+  calls.length = 0;
+  assert.throws(() => sendTmux('kadan-w', '알림', {run: fakeRun('1'), spawn: () => ({status: 0}), pid: 1, hrtime: () => 1n,
+    notificationGuard: {humanIdleMs: 30_000, force: true}}), e => e.code === 'KADAN_PANE_IN_MODE' && e.delivery === 'not-sent');
+  assert.equal(calls.includes('paste-buffer'), false);
+});
+
 // 감시기가 쓰는 실제 전송 함수에 가짜 바닥을 붙여 3·5번 경계를 끝까지 돌린다.
 const at = n => new Date(n).toISOString();
 async function watchRun({cycles, holdUntil = Infinity, floorAlive = true}) {
@@ -80,7 +115,7 @@ async function watchRun({cycles, holdUntil = Infinity, floorAlive = true}) {
     alive: () => floorAlive, pid: () => '1',
     notificationHold: () => n < holdUntil ? {code: 'KADAN_PANE_INPUT_PENDING', message: '알림 미룸: 미제출 입력이 있음'} : null,
     send: (session, text, options) => {
-      if (options.notificationGuard && n < holdUntil) throw hold();
+      if (options.notificationGuard && !options.notificationGuard.force && n < holdUntil) throw hold();
       pastes.push({n, guard: options.notificationGuard});
       return {};
     }};
@@ -113,7 +148,7 @@ test('미룸 3번 → 사용자에게 알림 한 번(4·5번째는 다시 내지
   assert.equal(osNotices.length, 1);
   assert.match(osNotices[0], /worker 창에 3번 연속 밀림/);
   assert.equal(pastes.length, 1);
-  assert.equal(pastes[0].guard, undefined, '5번 밀린 뒤에는 입력 보호만 뺀다');
+  assert.equal(pastes[0].guard?.force, true, '5번 밀린 뒤에는 입력 보호만 뺀다(guard 자체를 빼지 않는다)');
   assert.ok(pastes[0].n >= NOTIFY_FORCE_AT);
   const forced = records.filter(e => e.kind === 'watch-notify-forced');
   assert.deepEqual([forced.length, forced[0].role, forced[0].count, forced[0].code],
@@ -126,7 +161,7 @@ test('2번만 밀리고 풀리면 경보도 강제 전달도 없다', async () =
   assert.equal(records.some(e => e.alertKind === '알림밀림' || e.kind === 'watch-notify-forced'), false);
   assert.equal(osNotices.length, 0);
   assert.equal(pastes.length, 1);
-  assert.notEqual(pastes[0].guard, undefined);
+  assert.notEqual(pastes[0].guard?.force, true);
 });
 
 test('강제 전달도 세션이 없으면 넣지 않는다 — 생존·PID 확인은 그대로', () => {

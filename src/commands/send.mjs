@@ -133,8 +133,9 @@ function deliverMessage(argv, flags, command) {
         ...(peer ? {notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}} : {}),
       });
     } catch (error) {
-      // 아직 아무것도 넣지 않은 실패만 보관으로 돌린다. 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해 그대로 실패다.
-      if (peer && !['sent', 'unknown'].includes(error.delivery) && error.code !== 'KADAN_MAIL_RECIPIENT_CHANGED') return peerStore();
+      // 붙여넣기 전에 멈춘 실패(입력 보호·세션 없음·PID 변경 등 delivery=not-sent)만 보관으로 돌린다.
+      // 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해 그대로 실패다.
+      if (peer && error.delivery === 'not-sent' && error.code !== 'KADAN_MAIL_RECIPIENT_CHANGED') return peerStore();
       throw error;
     }
   } catch (error) {

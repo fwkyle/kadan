@@ -38,7 +38,11 @@ function guardedWatchSend(tracker,args,role,guard) {
     const receipt=send({...rest,notificationGuard:tracker?tracker.guardFor(role,guard):guard});
     tracker?.delivered(role);
     return receipt;
-  } catch (error) { tracker?.heldIfGuard(role,error); throw error; }
+  } catch (error) {
+    // 붙여넣기는 됐고 기록만 실패한 경우도 전달이다.
+    if (error.delivery==='sent') tracker?.delivered(role); else tracker?.heldIfGuard(role,error);
+    throw error;
+  }
 }
 
 export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {

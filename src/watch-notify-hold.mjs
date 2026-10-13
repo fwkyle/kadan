@@ -27,12 +27,13 @@ export class NotifyHoldTracker {
   // 이 창은 이미 5번 연속 밀렸다 — 입력 보호를 건너뛰고 넣을 차례다.
   forced(role) { return (this.streaks.get(role)?.count ?? 0) >= NOTIFY_FORCE_AT; }
 
-  // 붙여넣기 직전 검사에 넘길 값. 강제 차례면 undefined를 돌려 입력 보호만 건너뛴다.
-  // 생존·PID 대조·복사 모드 확인은 guardedSend와 바닥 send가 그대로 한다.
+  // 붙여넣기 직전 검사에 넘길 값. 강제 차례면 force 표시를 달아 바닥이 입력 보호만 건너뛰게 한다.
+  // guard를 아예 빼면 바닥이 카드 전송용 검사로 바뀌므로 빼지 않는다. 생존·PID 대조·복사 모드 확인은
+  // guardedSend와 바닥 send가 그대로 하고, herdr의 승인 대기·기록보기 확인도 남는다.
   guardFor(role, guard) {
     if (!this.forced(role)) return guard;
     this.forcedNow.add(role);
-    return undefined;
+    return {...guard, force: true};
   }
 
   // 입력 보호에 걸려 못 넣었다. 보호 때문이 아닌 오류는 밀림으로 세지 않는다.
@@ -66,7 +67,10 @@ export class NotifyHoldTracker {
       this.streaks.set(role, {count: (previous?.count ?? 0) + 1, code: held.code, message: held.message,
         since: previous?.since ?? new Date(now).toISOString()});
     }
-    for (const role of [...this.streaks.keys()]) if (!this.heldNow.has(role)) this.streaks.delete(role);
+    // 강제로 넣으려다 입력 보호 밖의 이유로 실패했다면 전달도 "보낼 것 없음"도 아니다. 횟수를 유지한다.
+    for (const role of [...this.streaks.keys()]) {
+      if (!this.heldNow.has(role) && !(this.forcedNow.has(role) && !this.sentNow.has(role))) this.streaks.delete(role);
+    }
   }
 
   // 3번 이상 이어진 창의 열린 경보. 사용자에게만 간다. 같은 연속 구간에서는 id가 같아 한 번만 울린다.
