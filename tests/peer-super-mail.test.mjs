@@ -25,13 +25,14 @@ const idle = (entries, works = [work], cards = [], roleStates = states(), waits 
   assessSupervisorIdle([], roleStates, Date.parse(t) + 40 * 60_000, 15 * 60_000, null,
     parents, { works, cards, waits:[{ ids:['work:r/w1'], answerer:'k-super' }, ...waits], peerEntries:entries });
 
-test('실제 send CLI: 슈퍼끼리는 소켓 접속 없이 저장하고 최종 답장으로 질문을 끝낸다', () => {
+for (const command of ['send', 'mail']) {
+test(`실제 ${command} CLI: 슈퍼끼리는 소켓 접속 없이 저장하고 최종 답장으로 질문을 끝낸다`, () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-peer-mail-'));
   const file = path.join(home, 'hierarchy.json');
   fs.writeFileSync(file, JSON.stringify(table));
   appendLedger({ kind:'hierarchy-loaded', path:file }, home);
   const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
-  const send = (by, args) => spawnSync(process.execPath, [cli, 'send', ...args], {
+  const send = (by, args) => spawnSync(process.execPath, [cli, command, ...args], {
     env:{...process.env, KADAN_HOME:home, KADAN_ROLE:by, KADAN_FLOOR:'herdr',
       KADAN_HERDR_SOCKET:path.join(home, 'nonexistent.sock'), KADAN_NOTIFY:'off'}, encoding:'utf8',
   });
@@ -50,6 +51,8 @@ test('실제 send CLI: 슈퍼끼리는 소켓 접속 없이 저장하고 최종 
   assert.ok(readLedger(home).filter(e => e.kind === 'send').every(e => e.transport === 'mailbox'));
   assert.equal(send('r-super', ['k-super', '--raw', '우회']).status, 1);
 });
+
+}
 
 test('읽고 멈춘 동료 요청은 실행 발령 전에도 수신 슈퍼의 감시 대상이다', () => {
   const entries = [q, {kind:'mail-read', mailId:q.mailId, role:'k-super', by:'k-super', t}];
