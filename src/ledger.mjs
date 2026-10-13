@@ -69,6 +69,10 @@ export function readTaskLedger(home = ledgerHome()) {
 export function readMailLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home),'mail');
 }
+// 우편함 계산용: 우편 영역 + 역할 세대(start·stop) 기록. mail-generation.mjs가 같은 이름의 새 세션을 가른다.
+export function readMailboxLedger(home = ledgerHome()) {
+  return projectLedger(readLedgerState(home),'mailbox');
+}
 export function readSystemLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home),'system');
 }
