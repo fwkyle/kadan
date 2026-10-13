@@ -208,7 +208,11 @@ export class WatchReports {
         request=fresh.find(e=>e.kind==='watch-ai-request'&&e.requestId===pending.requestId);
         report=fresh.find(e=>e.kind==='watch-ai-report'&&e.requestId===pending.requestId);
         const current=report&&latestWatchReports(fresh).find(e=>e.key===report.key);
+        // 회복 뒤 재발한 새 알림이 옛 보류 알림을 대체한다. 같은 문제의 notify:false 재확인은 제외한다.
+        const latestNotification=report&&fresh.findLast(e=>e.kind==='watch-ai-report'
+          &&e.accepted&&e.notify&&e.key===report.key);
         const valid=request&&current&&current.verdict===report.verdict&&current.level===report.level
+          &&latestNotification?.requestId===report.requestId
           &&Boolean(current.idleWithoutAsk)===Boolean(report.idleWithoutAsk)
           &&currentRequest(request,this.readCards(),fresh,parents,this.readWorks());
         // 전송 전 예약: 여기서 중단되면 전달 불명확이며 다음 순회에 자동 재전송하지 않는다.
