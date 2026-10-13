@@ -49,7 +49,7 @@ export function adoptPrompt(role, parent, profile = 'conductor') {
 }
 
 export function runAdopt({ role, flags = {}, env = process.env, floor, sessionName, start, send, log = console.log, sleep, findTranscript = findClaudeTranscript } = {}) {
-  if (!role || /\s/.test(role)) throw new Error('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt]');
+  if (!role || /\s/.test(role)) throw new Error('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt] [--inherit-mail]');
   const conversation = typeof flags.resume === 'string'
     ? { harness: typeof flags.harness === 'string' ? flags.harness : 'claude', id: flags.resume }
     : detectConversation(env);
@@ -68,8 +68,8 @@ export function runAdopt({ role, flags = {}, env = process.env, floor, sessionNa
       : `대화 기록을 찾지 못했다: ${conversation.id}`);
   }
 
-  start([role], { cmd, profile, parent, hidden: Boolean(flags.hidden), reason: `대화 옮기기(adopt): ${conversation.harness} ${conversation.id}` });
-  const out = { role, session, cmd, parent, profile, prompt: 'skipped' };
+  const nameCheck = start([role], { cmd, profile, parent, hidden: Boolean(flags.hidden), reason: `대화 옮기기(adopt): ${conversation.harness} ${conversation.id}`, ...(flags['inherit-mail'] === true ? { 'inherit-mail': true } : {}) });
+  const out = { role, session, cmd, parent, profile, prompt: 'skipped', ...(nameCheck ?? {}) };
   if (!flags['no-prompt']) {
     const settled = waitForSettled({ read: () => floor.read(session), ...(sleep ? { sleep } : {}) });
     if (settled) { send({ role, session, message: adoptPrompt(role, parent, profile), roleProfile: profile }); out.prompt = 'sent'; }

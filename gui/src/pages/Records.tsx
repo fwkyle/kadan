@@ -94,14 +94,21 @@ function Filters({
 }
 export function Mailbox({ url }: { url: URL }) {
   const resource = useResource<
-      Paged<Mail> & { roles: string[]; waiting: number; unread: number }
+      Paged<Mail> & {
+        roles: string[];
+        waiting: number;
+        unread: number;
+        previousGenerationUnread: number;
+      }
     >("mail?" + url.searchParams),
     data = resource.data;
   return (
     <section>
       <h1>우편함</h1>
       <p>담당자 사이의 질문·답변과 전달 기록입니다. 내가 답할 요청은 <a href="#decisions">내 결정</a>에서 확인하세요.</p>
-      <p className="muted">담당자 간 답변 대기 {data?.waiting ?? "모름"}건</p>
+      <p className="muted">담당자 간 답변 대기 {data?.waiting ?? "모름"}건 · 이전 세대 미확인{" "}
+        {data?.previousGenerationUnread ?? "모름"}건(같은 이름을 새 세션이 다시 쓰기 전 우편, 현재 미확인 수에 넣지 않음)
+      </p>
       <Filters
         url={url}
         pageKey="mailPage"
@@ -143,6 +150,7 @@ export function Mailbox({ url }: { url: URL }) {
             options: [
               ["", "전체"],
               ["1", "읽음 미확인"],
+              ["previous", "이전 세대 미확인"],
             ],
           },
           {

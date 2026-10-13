@@ -13,7 +13,7 @@ const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 const categories=new Set(['request','decision','report']);
 const views=new Set(['received','sent','to-reply','waiting']);
 const canAct=(by,role)=>by===role||isUserActor(by);
-export const readMailboxEntries=home=>ledger.readMailLedger(home);
+export const readMailboxEntries=home=>ledger.readMailboxLedger(home);
 export {mailboxLetters} from './mailbox-state.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 
@@ -49,8 +49,10 @@ export class Mailbox {
   ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...connection},this.home);
   return {mailId,recipient:currentRecipient||this.role,currentRecipient:currentRecipient||this.role,status:'stored',wake:'not-connected'};
  }
- list({all=false,view='received',unread=false}={}){
-  return mailboxLetters(readMailboxEntries(this.home),this.role,{all:view==='sent'||all,view,unread}).reverse();
+ // 기본 받은 편지 목록은 이전 세대 미확인을 빼고, previousGenerations=true면 그것만 보인다(읽음 기록은 가능).
+ list({all=false,view='received',unread=false,previousGenerations=false}={}){
+  const generation=previousGenerations?'only':view==='received'&&!all?'exclude':undefined;
+  return mailboxLetters(readMailboxEntries(this.home),this.role,{all:view==='sent'||all,view,unread,previousGenerations:generation}).reverse();
  }
  read(id){
   if(!idPattern.test(id))throw new Error('올바른 우편 ID 필요');
@@ -94,8 +96,8 @@ export class Mailbox {
 
 export function inboxCommand(args,flags,{home,by,env=process.env}){
  const [op='list',id]=args,role=flags.role||env.KADAN_ROLE||by||'사람',m=new Mailbox(home,role);
- if(flags.help)return 'kadan inbox [list|received|sent|to-reply|waiting] [--role 역할] [--all] [--view 보기] | read <우편ID> | ack <우편ID> | cancel <우편ID>. 기본 역할은 --role, KADAN_ROLE, 현재 발신자, 사람 순서. 비서는 --role 비서로 조회합니다. 조회는 읽음 처리하지 않습니다. ack는 읽음만, cancel은 자신이 보낸 질문의 답변 대기만 취소합니다.';
- if(op==='list'||views.has(op))return m.list({all:flags.all===true||flags.all==='1',unread:flags.unread===true,view:op==='list'?(flags.view||'received'):op});
+ if(flags.help)return 'kadan inbox [list|received|sent|to-reply|waiting] [--role 역할] [--all] [--view 보기] [--previous-generations] | read <우편ID> | ack <우편ID> | cancel <우편ID>. 기본 역할은 --role, KADAN_ROLE, 현재 발신자, 사람 순서. 비서는 --role 비서로 조회합니다. 조회는 읽음 처리하지 않습니다. 같은 이름을 새 세션이 다시 쓰기 전에 온 미확인은 기본 목록에서 빠지고 --previous-generations로 따로 봅니다. ack는 읽음만, cancel은 자신이 보낸 질문의 답변 대기만 취소합니다.';
+ if(op==='list'||views.has(op))return m.list({all:flags.all===true||flags.all==='1',unread:flags.unread===true,previousGenerations:flags['previous-generations']===true,view:op==='list'?(flags.view||'received'):op});
  if(op==='read')return m.read(id);
  if(op==='ack')return m.acknowledge(id,by);
  if(op==='cancel')return m.cancel(id,by);

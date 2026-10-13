@@ -288,15 +288,18 @@ export function uniqueDone(rows) {
 
 export function projectLedger(state,domain) {
   if (domain && state.legacy.some(row=>!row || typeof row.kind!=='string' || row.broken)) throw new Error('과거 원장 손상: 도메인 조회 불가');
+  // 'mailbox'는 우편 영역에 세대 판정 근거(start·stop)를 원래 순서로 더한 조회다. 우편함 계산용이고 영역 표시는 'mail' 그대로다.
+  const inDomain=kind => domain === 'mailbox' ? ledgerDomain(kind) === 'mail' || kind === 'start' || kind === 'stop' : ledgerDomain(kind) === domain;
+  const mailDomain = domain === 'mail' || domain === 'mailbox';
   const mailEvidence=value=>isMailTransfer(value)||value?.kind==='done'&&value.completionMailId;
   const legacy = state.legacy.flatMap(value => {
     if (!domain) return [value];
     if (domain === 'tasks' && taskSend(value || {})) {
       return [{...value,kind:'dispatch',legacy:true}];
     }
-    return ledgerDomain(value?.kind) === domain || domain === 'mail' && mailEvidence(value) ? [value] : [];
+    return inDomain(value?.kind) || mailDomain && mailEvidence(value) ? [value] : [];
   });
   // 인계와 완료는 자기 영역에 한 번만 저장한다. 우편 조회에는 판정 근거를 원래 순서로 포함한다.
-  const rows = state.ordered.filter(value => domain ? ledgerDomain(value.kind) === domain || domain === 'mail' && mailEvidence(value) : value.kind !== 'dispatch').map(publicEvent);
+  const rows = state.ordered.filter(value => domain ? inDomain(value.kind) || mailDomain && mailEvidence(value) : value.kind !== 'dispatch').map(publicEvent);
   return uniqueDone([...legacy,...rows]);
 }

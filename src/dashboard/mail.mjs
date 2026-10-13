@@ -2,6 +2,7 @@
 import { taskIdentity } from "../task-identity.mjs";
 import { filterMail } from "../dashboard-inbox.mjs";
 import { isUnreadLetter } from "../mailbox-state.mjs";
+import { isPreviousGenerationUnread } from "../mail-generation.mjs";
 import {
   ledgerView,
   filterLedgerRows,
@@ -59,6 +60,7 @@ export function mailData(snapshot, url, stamp) {
     ].sort(),
     waiting: all.filter((m) => m.replyStatus === "waiting").length,
     unread: all.filter(isUnreadLetter).length,
+    previousGenerationUnread: all.filter(isPreviousGenerationUnread).length,
   };
 }
 
