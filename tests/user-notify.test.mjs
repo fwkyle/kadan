@@ -385,7 +385,8 @@ test('kadan notify set은 기본 경로 하나만 고정하고 show는 레포 �
   const envFile = path.join(home, 's.env');
   fs.writeFileSync(envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:1/api/webhooks/1/${TOKEN}\nDISCORD_USER_ID=${USER_ID}\nDISCORD_WEBHOOK_URL_KADAN=http://127.0.0.1:1/api/webhooks/2/${TOKEN}\n`);
   cmdNotify(['set', 'discord'], {'env-file': envFile}, {home, env: {}, print: l => out.push(l)});
-  assert.equal(readNotifySetting(home).discord.envFile, envFile);
+  // 2026-10-14: notify set은 secrets set discord와 같은 설정(secrets-setting.json)을 쓴다. 같은 파일을 찾는지로 확인한다.
+  assert.deepEqual(effectiveNotifyEnvFile({}, home), {envFile, source: 'setting', error: null});
   assert.match(out.join('\n'), /DISCORD_WEBHOOK_URL_KADAN/);
   assert.ok(!out.join('\n').includes(TOKEN) && !out.join('\n').includes(USER_ID));
 });

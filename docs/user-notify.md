@@ -24,21 +24,23 @@
 ## 설정
 
 ```
-kadan notify show
-kadan notify set discord --env-file <비밀 파일 절대경로>
-kadan notify unset
+kadan secrets set discord --file <비밀 파일 절대경로>
+kadan secrets show discord
+kadan secrets unset discord
 ```
 
-- `$KADAN_HOME/notify-setting.json`에 **비밀 파일의 경로만** 저장한다. 웹훅 주소·사용자 ID는 설정에 복사하지 않는다. `show`도 값은 보여 주지 않고 "있음/없음"만 말한다.
-- 읽는 순서: 환경변수 `KADAN_NOTIFY_ENV_FILE` > 기계 설정 > 없음(= 시스템 알림만).
+옛 명령 `kadan notify show | set discord --env-file <절대경로> | unset`은 같은 설정을 쓰는 **별칭**으로 남아 있다. 위치 규칙 전체는 [비밀값 위치 규칙](secrets.md)이다.
+
+- `$KADAN_HOME/secrets-setting.json`에 **비밀 파일의 경로만** 저장한다. 웹훅 주소·사용자 ID는 설정에 복사하지 않는다. `show`도 값은 보여 주지 않고 "있음/없음"과 키 이름만 말한다.
+- 읽는 순서: 환경변수 `KADAN_SECRET_DISCORD_FILE`(옛 이름 `KADAN_NOTIFY_ENV_FILE`도 같은 자리, 둘 다 있으면 앞의 것) > 기계 설정(옛 `notify-setting.json`도 그대로 읽힘) > 기본 위치 `$KADAN_HOME/secrets/discord.env`(파일이 있을 때) > 없음(= 시스템 알림만).
 - 비밀 파일은 **보낼 때마다** 읽고 `KEY=VALUE` 줄만 해석한다(따옴표 한 겹·`export`·`#` 주석). 셸로 실행하거나 `source`하지 않는다. 필요한 값은 `DISCORD_WEBHOOK_URL`(https, 시험용 로컬 주소만 http 허용), `DISCORD_USER_ID`(숫자).
 - 파일 없음·값 빠짐·형식 오류는 "설정 오류"로 시스템 알림으로 내려가고, 사유(주소·ID 없이)가 `notify-log.jsonl`에 남는다.
 - `KADAN_NOTIFY=off`는 디스코드를 보내지 않고, 결정 알림은 시스템 알림도 띄우지 않는다. 시험은 이 값을 켠 채 돈다(`tests/helpers/isolated-home.mjs`).
-- 참고: `kadan notify set discord --env-file <경로>`의 `--env-file`은 카단 플래그이고 Node 옵션이 아니다. Node가 가로채는 것은 `node --env-file <파일> src/cli.mjs …`처럼 옵션을 스크립트 **앞**에 둘 때뿐이다(독립 검수가 실행 파일·`node src/cli.mjs` 두 방식 모두 확인). 설정에는 경로만 저장되고 파일의 변수는 환경에 올라가지 않는다. 비밀 파일이 심볼릭 링크여도 그대로 읽는다.
+- 참고: `kadan notify set discord --env-file <경로>`(별칭)의 `--env-file`과 `kadan secrets set <이름> --file <경로>`의 `--file`은 카단 플래그이고 Node 옵션이 아니다. Node가 가로채는 것은 `node --env-file <파일> src/cli.mjs …`처럼 옵션을 스크립트 **앞**에 둘 때뿐이다(독립 검수가 실행 파일·`node src/cli.mjs` 두 방식 모두 확인). 설정에는 경로만 저장되고 파일의 변수는 환경에 올라가지 않는다. 비밀 파일이 심볼릭 링크여도 그대로 읽는다.
 
 ### 레포별 포럼 채널
 
-비밀 파일은 하나다(`kadan notify set discord --env-file <경로>` 한 번). 레포별 경로 설정(`--repo`)은 없다.
+비밀 파일은 하나다(`kadan secrets set discord --file <경로>` 한 번). 레포별 경로 설정(`--repo`)은 없다.
 
 | 키 | 뜻 |
 |---|---|

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { initSecretsDir } from './secrets.mjs';
 
 export const SECRETARY_ROLE = '비서';
 export const DASHBOARD_ROLE = '대시보드';
@@ -53,7 +54,7 @@ export function linkSkills({ skillsDir, userHome = os.homedir(), homes = SKILL_H
 }
 
 export function runInit({ home, repoRoot, flags = {}, floorName = 'tmux', spawn = spawnSync, which, userHome = os.homedir(), log = console.log } = {}) {
- const report = { node: process.versions.node, tmux: null, home, skills: [], runners: [], runner: null, agentRunners: null };
+ const report = { node: process.versions.node, tmux: null, home, skills: [], runners: [], runner: null, agentRunners: null, secrets: null };
  const major = Number(process.versions.node.split('.')[0]);
  if (major < 24) throw new Error(`Node 24 이상이 필요합니다 (현재 ${process.versions.node})`);
  if (floorName === 'tmux') {
@@ -64,6 +65,7 @@ export function runInit({ home, repoRoot, flags = {}, floorName = 'tmux', spawn 
  report.runners = detectRunners(which ? { which } : {});
  if (flags.runner && !report.runners.includes(flags.runner)) throw new Error(`실행기 ${flags.runner}가 PATH에 없습니다`);
  fs.mkdirSync(home, { recursive: true });
+ report.secrets = initSecretsDir(home);
  if (!flags['no-skills']) report.skills = linkSkills({ skillsDir: path.join(repoRoot, 'skills'), userHome });
  const example = path.join(repoRoot, 'skills', 'kadan-conductor', 'references', 'agent-runners.example.json');
  const dest = path.join(home, 'agent-runners.json');
@@ -77,6 +79,7 @@ export function runInit({ home, repoRoot, flags = {}, floorName = 'tmux', spawn 
   else if (s.state === 'linked') log(`스킬 링크: ${path.join(s.dir, s.name)}`);
   else if (s.state === 'kept') log(`스킬 링크 안 함: ${path.join(s.dir, s.name)} (${s.reason} — 그대로 둠)`);
  }
+ log(`비밀 폴더: ${report.secrets.dir} (${report.secrets.created ? '빈 폴더를 만들었다, 값 파일은 직접 만든다' : '이미 있음'}) · kadan secrets show`);
  log(`실행기 목록: ${dest} (${report.agentRunners === 'copied' ? '예시 복사' : report.agentRunners === 'exists' ? '기존 유지' : '예시 없음'})`);
  if (chosen) log(`비서 실행기: ${chosen} (바꾸려면 kadan init --runner <이름>)`);
  else log('비서 실행기를 찾지 못했습니다 (codex·claude 중 하나를 PATH에 두거나 kadan up --cmd <명령>)');
