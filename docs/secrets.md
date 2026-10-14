@@ -11,7 +11,7 @@
 | 이름 | 기본 파일 | 쓰는 곳 |
 |---|---|---|
 | `discord` | `secrets/discord.env` | 사용자 알림 웹훅. `DISCORD_WEBHOOK_URL`·`DISCORD_USER_ID`·`DISCORD_WEBHOOK_URL_<레포>` → [사용자 알림](user-notify.md) |
-| `discord-bot` | `secrets/discord-bot.env` | 디스코드 3단계(봇). `DISCORD_BOT_TOKEN`·`DISCORD_APPLICATION_ID` |
+| `discord-bot` | `secrets/discord-bot.env` | 디스코드 3단계(봇). `DISCORD_BOT_TOKEN`·`DISCORD_APPLICATION_ID`, 선택 `DISCORD_SECRETARY_CHANNEL_ID` → [디스코드 #비서 대화](discord-chat.md) |
 | `explain-ai` | `secrets/explain-ai.env` | 설명 AI용. 지금은 비어도 된다 |
 
 이름 목록은 코드 한 곳(`src/secrets.mjs`의 `SECRET_NAMES`)에만 있다. 알 수 없는 이름은 거절한다.
