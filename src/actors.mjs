@@ -5,3 +5,6 @@ export function userActorNames(env=process.env){
  return ['사람','사용자','@user',...extra];
 }
 export function isUserActor(by,env=process.env){return userActorNames(env).includes(by);}
+// 디코 다리(kadan discord watch --to-mail)가 저장하는 우편의 보낸이와 받는 역할. 원장의 by/role로만 판별한다(본문 문자열 금지).
+export const DISCORD_BY='디코';
+export const DISCORD_MAIL_TARGET='비서';

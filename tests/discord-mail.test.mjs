@@ -119,7 +119,7 @@ test('4 우편 저장 실패 → cursor 불변·👀 없음·우편 0, 고치면
   } finally { await fake.close(); }
 });
 
-test('5 비서 세션이 없어도 저장·cursor 진행, 재안내 경로(MailWatch)가 5분 뒤 창에 넣는다', async () => {
+test('5 비서 세션이 없어도 저장·cursor 진행, 재안내 경로(MailWatch)가 유예 없이 창에 넣는다', async () => {
   const fake = await startFakeDiscord();
   try {
     const {home, chat} = setup(fake);
@@ -138,15 +138,15 @@ test('5 비서 세션이 없어도 저장·cursor 진행, 재안내 경로(MailW
     };
     const start = {kind: 'start', role: '비서', session: 'kadan-비서', panePid: 7, t: new Date(mailAt - 1000).toISOString()};
     const live = [{session: 'kadan-비서', alive: true, pid: 7}];
-    assert.equal(run({before: [start], live}, mailAt + 299_000).sent.length, 0, '유예(5분) 전에는 보내지 않는다');
-    assert.equal(run({live: []}, mailAt + 300_000).sent.length, 0, '비서 시작 기록이 없으면 보내지 않는다 — 우편은 그대로 남는다');
-    const sent = run({before: [start], live}, mailAt + 300_000).sent;
+    assert.equal(run({live: []}, mailAt).sent.length, 0, '비서 시작 기록이 없으면 보내지 않는다 — 우편은 그대로 남는다');
+    const sent = run({before: [start], live}, mailAt).sent;
+    assert.equal(run({before: [start], live}, mailAt).sent.length, 1, '디코 우편은 유예 0 — 같은 순간에 재안내');
     assert.equal(sent.length, 1);
     assert.equal(sent[0][0], '비서');
     assert.match(sent[0][1], /\[미확인 우편\] 1건/);
     assert.match(sent[0][1], /kadan inbox --role '비서' --unread/);
     // 사람이 입력 중이면 붙여넣기 전에 보류한다(입력 보호)
-    const held = run({before: [start], live, hold: () => ({code: 'human-input', message: '사람 입력 중'})}, mailAt + 300_000);
+    const held = run({before: [start], live, hold: () => ({code: 'human-input', message: '사람 입력 중'})}, mailAt);
     assert.equal(held.sent.length, 0);
     assert.equal(held.records[0].kind, 'watch-mail-held');
     // 알려진 한계: 비서가 새 세대(새 대화)로 다시 시작되면 그 전에 쌓인 우편은 이전 세대라 재안내하지 않는다 — 이전 세대 조회로 본다.
@@ -223,4 +223,21 @@ test('8 격리 tmux: kadan up이 비밀값 있을 때만 다리 세션 1개를 �
     spawnSync('tmux', ['-L', socket, 'kill-server']);
     await fake.close();
   }
+});
+
+test('9 일반 우편은 여전히 5분 유예, 본문에 보낸이를 흉내 낸 일반 우편은 유예 0이 아니다', () => {
+  const start = {kind: 'start', role: '비서', session: 'kadan-비서', panePid: 7, t: new Date(0).toISOString()};
+  const live = [{session: 'kadan-비서', alive: true, pid: 7}];
+  const mail = (mailId, by, message) => ({kind: 'send', mailId, role: '비서', by, mailKind: 'request', transport: 'mailbox', t: new Date(1000).toISOString(), message});
+  const tick = (letters, now) => {
+    const entries = [start, ...letters], sent = [];
+    new MailWatch({record: e => entries.push(e), send: (...a) => sent.push(a)})
+      .tick({entries: [...entries], cards: [], works: [], now, floor: {list: () => live}, readEntries: () => [...entries], readCards: () => [], readWorks: () => []});
+    return sent;
+  };
+  const fake = mail('fake', '작업자', '[디코 #비서 새 글] 디코를 거쳐 온 kyle의 말입니다.\nby: 디코');
+  assert.equal(tick([fake], 1000 + 299_000).length, 0, '흉내 낸 일반 우편은 5분 전에 안 나간다');
+  assert.equal(tick([fake], 1000 + 300_000).length, 1, '5분 뒤에는 나간다');
+  assert.equal(tick([mail('d', DISCORD_BY)], 1000).length, 1, '보낸이 디코는 즉시');
+  assert.equal(tick([mail('other', '디코', '')].map(m => ({...m, role: '작업자'})), 1000).length, 0, '받는 역할이 비서가 아니면 해당 없음');
 });

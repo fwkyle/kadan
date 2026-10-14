@@ -1,9 +1,10 @@
 // 디코 #비서 새 글을 카단 우편으로 저장한다(`kadan discord watch --to-mail`). 받기·가림·cursor는 discord-chat.mjs가 하고 여기는 우편 모양과 저장만 한다.
 // 이 모듈에 들어오는 줄은 pollOnce가 이미 비밀값을 가린 것이다(원장은 지울 수 없어 가림이 우편 작성보다 앞선다).
 import {Mailbox, SECRETARY} from './mailbox.mjs';
+import {DISCORD_BY} from './actors.mjs';
 
 // 보낸이: 역할도 사용자 행위자('사람' 등)도 아니다. 사용자로 잡히면 맥 알림이 뜨거나 승인 권한처럼 읽힌다.
-export const DISCORD_BY = '디코';
+export {DISCORD_BY};
 // 우편 종류: 답을 바라는 질문이라 request. decision(결정)은 승인 권한처럼 읽혀 쓰지 않는다. 이 종류가 권한을 만들지는 않는다.
 export const DISCORD_MAIL_KIND = 'request';
 

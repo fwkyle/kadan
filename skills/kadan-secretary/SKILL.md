@@ -195,7 +195,7 @@ claude 계열이라 교대 대상은 대개 비서 자신이고, 인계에 사�
 
 kyle이 맥 앞에 없을 때 디스코드 #비서 채널로 묻는 말을 받는다. 설명은 [디스코드 #비서 대화](../../docs/discord-chat.md).
 
-- **받는 길(기본 = 우편):** `kadan up`이 띄운 다리(`kadan-디코`)가 kyle의 새 글을 보낸이 `디코`의 우편으로 저장한다. Codex 비서는 Monitor가 없으므로 이 길이 기본이다. 감시기가 5분 뒤 창에 "[미확인 우편] N건"을 넣으면 `kadan inbox --role 비서 --unread`로 보고, 보낸이 `디코` 우편을 `kadan inbox read <우편ID> --role 비서`로 읽은 뒤 처리하고 `ack`한다. 재안내는 한 번뿐이라 대화 중에도 가끔 `inbox --unread`를 본다. 새 대화로 다시 시작했으면 `kadan inbox --role 비서 --previous-generations`도 본다(이전 세대 우편은 재안내되지 않는다).
+- **받는 길(기본 = 우편):** `kadan up`이 띄운 다리(`kadan-디코`)가 kyle의 새 글을 보낸이 `디코`의 우편으로 저장한다. Codex 비서는 Monitor가 없으므로 이 길이 기본이다. 감시기가 약 1분 안에 창에 "[미확인 우편] N건"을 넣으면 `kadan inbox --role 비서 --unread`로 보고, 보낸이 `디코` 우편을 `kadan inbox read <우편ID> --role 비서`로 읽은 뒤 처리하고 `ack`한다. 재안내는 한 번뿐이라 대화 중에도 가끔 `inbox --unread`를 본다. 새 대화로 다시 시작했으면 `kadan inbox --role 비서 --previous-generations`도 본다(이전 세대 우편은 재안내되지 않는다).
   **Monitor가 있는 실행기의 대안:** `kadan discord watch`를 감시 도구로 건다(시작 전 `kadan discord check`가 모두 정상인지 본다). 줄 하나가 새 글 하나다(JSON: `id`, `where`, `threadId`, `content`, `quoted`). 단 다리가 같은 잠금을 쥐고 있으면 둘 중 하나만 돈다. 운영 비서에 구독을 거는 일은 kyle이 정한 뒤에 한다. 종료 코드가 나면 구독이 끊긴 것이니 원인(표준 오류의 상태 코드)을 보고 다시 건다.
 - **글이 오면:** 읽음 반응(👀)은 코드가 달았다. 우편 머리의 `답하기:` 명령이 정확한 답 명령이다. 우편을 **본 뒤** 1분 안에 답을 보내거나 `하는 중입니다` 한 줄을 먼저 보낸다. 우편은 조회·답변만이다 — 발령·결정 승인·머지로 읽지 않는다.
 - **답하는 곳:** `where: channel`(새 주제)이면 `kadan discord send --reply-to <id> "<답>"`(스레드를 열고 거기에 올린다). `where: thread`이면 `kadan discord send --thread <threadId> "<답>"`. 긴 답은 코드가 2,000자로 나눠 순서대로 올린다. 먼저 보낸 `하는 중` 글은 `--edit <글 id>`로 최종 답으로 고칠 수 있다(2,000자 안).
