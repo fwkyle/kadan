@@ -47,7 +47,7 @@ kadan secrets unset discord
 | `DISCORD_WEBHOOK_URL` | 기본 #브리핑 텍스트 채널 |
 | `DISCORD_USER_ID` | 결정 요청 멘션 대상 |
 | `DISCORD_WEBHOOK_URL_<레포>` | 레포 포럼 채널. 레포 이름을 대문자로 바꾸고 영숫자가 아닌 글자는 `_`로 (`kadan` → `_KADAN`, `my-app` → `_MY_APP`) |
-| `DISCORD_WEBHOOK_URL_SECRETARY` | #비서. 1단계에서는 쓰지 않는다 |
+| `DISCORD_WEBHOOK_URL_SECRETARY` | #비서. 알림에는 쓰지 않는다. 3단계 대화가 이 웹훅으로 #비서 채널 ID를 얻는다 → [디스코드 #비서 대화](discord-chat.md) |
 
 어디로 가나: 알림에 **업무 키**가 있고 그 업무 저장소의 레포 키가 있으면 레포 포럼의 업무 글로 간다. 업무 키는 결정의 `work`, 우편의 `--work`(없으면 `--execution`이 속한 업무)에서 얻는다. 감시 경보는 경보의 실행 키가 한 업무에 속하면 그 업무 글로 간다(아래 "경보를 업무 글로"). 역할 단위 경보(실행 키 없음)와 업무를 못 찾은 경보, 인계·`watch` 메시지는 업무를 알 수 없어 기본 #브리핑으로 간다. 레포 키가 없는 레포, 업무 키가 없는 알림도 기본이다.
 
