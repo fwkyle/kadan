@@ -12,6 +12,7 @@ import {
 } from "../runner-settings.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
 import { seniorCommandLabel } from "../senior.mjs";
+import { describeWindowSetting } from "../window-setting.mjs";
 
 export function createData(snapshot, url, stamp) {
   return { ...stamp, form: createForm(url.searchParams.get("kind")) };
@@ -30,9 +31,12 @@ export function decisionsData(snapshot, url, stamp) {
 
 export function runnersData(snapshot, url, stamp) {
   const settings = readSettings(snapshot.home);
+  // 창 선택은 이 프로세스의 환경변수가 아니라 기계 설정(KADAN_HOME/window-setting.json) 값을 보여 준다.
+  const window = describeWindowSetting(snapshot.home);
   if (!settings)
     return {
       ...stamp,
+      window,
       settings: null,
       catalog: {},
       roles: RUNNER_ROLE_LABELS,
@@ -81,6 +85,7 @@ export function runnersData(snapshot, url, stamp) {
     "미설정 — kadan senior가 거절한다";
   return {
     ...stamp,
+    window,
     settings,
     catalog,
     commands,
