@@ -22,6 +22,7 @@ export function readWindowSetting(home) {
 }
 
 function write(home, value) {
+  fs.mkdirSync(home, {recursive: true});
   const file = windowSettingPath(home), tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file);
@@ -41,10 +42,13 @@ export function setWindowSetting(home, {window, rottieBin, env = process.env, no
 }
 
 // 설정을 지운다. 지운 값이 있었으면 돌려준다. 파일이 없으면 null.
+// 손상된 파일도 지울 수 있어야 복구 안내(window unset)가 실제로 동작한다 — 검증과 제거를 분리한다.
 export function unsetWindowSetting(home) {
   const file = windowSettingPath(home);
-  const before = readWindowSetting(home);
-  if (before) fs.rmSync(file);
+  if (!fs.existsSync(file)) return null;
+  let before;
+  try { before = readWindowSetting(home); } catch { before = {window: '(손상된 설정)'}; }
+  fs.rmSync(file);
   return before;
 }
 
@@ -62,10 +66,16 @@ export function effectiveWindow(env, home) {
 // 명령 시작 때 한 번 호출한다. 환경변수에 없는 값만 설정으로 채워, 창을 여는 모든 경로
 // (start·attach·handover·restore·adopt·quickstart와 로티 호출)가 같은 값을 읽게 한다.
 // 설정 파일이 깨졌으면 stderr에 알리고 설정이 없는 것으로 진행한다(send 같은 명령까지 막지 않는다).
+// 창을 여는 행동(start·attach·handover·adopt·restore 등)은 손상 설정에서 windowSettingBlock으로 멈춘다.
+let corruptSetting = null;
+export const RECOVERY_HINT = 'kadan window unset 으로 지우거나 kadan window set rottie --rottie-bin <절대경로> | kadan window set none 으로 다시 고정한다';
+
 export function adoptMachineWindow(env, home, {warn = line => console.error(line)} = {}) {
   let resolved;
+  corruptSetting = null;
   try { resolved = effectiveWindow(env, home); } catch (error) {
-    warn(`경고: ${error.message} — 창 선택 설정 없이 진행한다 (kadan window unset 또는 kadan window set으로 다시 고정)`);
+    corruptSetting = {env, message: error.message};
+    warn(`경고: ${error.message} — 창을 여는 명령(start·attach 등)은 멈춘다. ${RECOVERY_HINT}`);
     return {windowSource: 'default', setting: null, corrupt: true};
   }
   if (resolved.window.source === 'setting') env.KADAN_WINDOW = resolved.window.value;
@@ -84,4 +94,13 @@ export function describeWindowSetting(home) {
   } catch (error) {
     return {kind: 'broken', label: '설정 손상', error: error.message};
   }
+}
+
+// 손상 설정 때문에 창 선택을 정할 수 없으면 이유를 돌려주고, 아니면 null이다.
+// 환경변수 KADAN_WINDOW가 비어 있지 않게 주어지면 그 값이 창을 정하므로 막지 않는다.
+// 다만 KADAN_WINDOW=rottie인데 KADAN_ROTTIE_BIN 환경변수가 없으면 설정의 경로가 필요하므로 막는다.
+export function windowSettingBlock(env = process.env) {
+  if (!corruptSetting || corruptSetting.env !== env) return null;
+  const needsSetting = !env.KADAN_WINDOW || (env.KADAN_WINDOW === 'rottie' && !env.KADAN_ROTTIE_BIN);
+  return needsSetting ? `WINDOW_SETTING_CORRUPT: ${corruptSetting.message} — 창을 만들지 않았다. ${RECOVERY_HINT}` : null;
 }

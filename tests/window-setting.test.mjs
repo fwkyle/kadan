@@ -142,3 +142,92 @@ test('대시보드 API(runners)가 기계 설정 값을 돌려주고, 프로세�
     assert.equal(runnersData({home: h, entries: []}, url, stamp).window.label, '백그라운드');
   } finally { if (keep === undefined) delete process.env.KADAN_WINDOW; else process.env.KADAN_WINDOW = keep; }
 });
+
+// ---- 2라운드: 손상 설정은 창을 여는 행동에서 실패 닫힘 ----
+const CORRUPT = {
+  '깨진 JSON': '{ 깨짐',
+  '잘못된 창 값': JSON.stringify({version: 1, window: 'orca'}),
+  '상대 로티 경로': JSON.stringify({version: 1, window: 'rottie', rottieBin: 'rottie'}),
+};
+const isolated = () => {
+  const h = home(), socket = `kw-${path.basename(h)}`.slice(0, 30);
+  const env = {KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux', KADAN_ROLE: ''};
+  const sessions = () => spawnSync('tmux', ['-L', socket, 'ls'], {encoding: 'utf8'}).stdout ?? '';
+  return {h, env, socket, sessions};
+};
+const corrupt = (h, text) => fs.writeFileSync(windowSettingPath(h), text);
+
+test('손상 설정 3종 × 환경변수 없음: start·attach·adopt·up·restore는 세션을 만들지 않고 종료 코드 2', () => {
+  for (const [name, text] of Object.entries(CORRUPT)) {
+    const t = isolated();
+    // attach가 '세션 없음'에서 먼저 끝나지 않게, 설정이 멀쩡할 때 명시 none으로 세션 하나를 미리 둔다.
+    assert.equal(run(t.h, ['start', 'kadan-pre', '--cmd', 'sleep 60'], {...t.env, KADAN_WINDOW: 'none'}).status, 0);
+    const before = t.sessions();
+    corrupt(t.h, text);
+    try {
+      for (const args of [['start', 'kadan-x', '--cmd', 'sleep 60'], ['attach', 'kadan-pre'], ['adopt', 'kadan-x'],
+        ['up'], ['restore']]) {
+        const r = run(t.h, args, t.env);
+        assert.equal(r.status, 2, `${name} ${args[0]}: ${r.stdout}${r.stderr}`);
+        assert.match(r.stderr, /WINDOW_SETTING_CORRUPT.*window unset/s, `${name} ${args[0]}`);
+      }
+      assert.equal(t.sessions(), before, `${name}: 격리 tmux에 새 세션이 생기면 안 된다`);
+    } finally {
+      run(t.h, ['stop', 'kadan-pre'], {...t.env, KADAN_WINDOW: 'none'});
+      spawnSync('tmux', ['-L', t.socket, 'kill-server']);
+    }
+  }
+});
+
+test('손상 설정 + 명시 환경변수: none·(rottie+BIN 환경변수)는 진행, rottie만이면 멈춘다', () => {
+  const t = isolated();
+  corrupt(t.h, CORRUPT['깨진 JSON']);
+  try {
+    const none = run(t.h, ['start', 'kadan-win-none', '--cmd', 'sleep 60'], {...t.env, KADAN_WINDOW: 'none'});
+    assert.equal(none.status, 0, none.stderr);
+    assert.match(t.sessions(), /kadan-win-none/);
+    const rottieOnly = run(t.h, ['start', 'kadan-win-r', '--cmd', 'sleep 60'], {...t.env, KADAN_WINDOW: 'rottie'});
+    assert.equal(rottieOnly.status, 2);
+    assert.match(rottieOnly.stderr, /WINDOW_SETTING_CORRUPT/);
+    assert.doesNotMatch(t.sessions(), /kadan-win-r/);
+    const empty = run(t.h, ['start', 'kadan-win-e', '--cmd', 'sleep 60'], {...t.env, KADAN_WINDOW: ''});
+    assert.equal(empty.status, 2, '빈 문자열은 미지정으로 본다');
+    // rottie + BIN 환경변수는 설정을 안 쓰므로 막히지 않는다(여기서는 가짜 경로라 사전 점검에서 멈추지만 손상 때문은 아니다).
+    const both = run(t.h, ['start', 'kadan-win-b', '--cmd', 'sleep 60'],
+      {...t.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/nope/rottie'});
+    assert.doesNotMatch(both.stderr, /WINDOW_SETTING_CORRUPT/);
+  } finally {
+    run(t.h, ['stop', 'kadan-win-none'], t.env);
+    spawnSync('tmux', ['-L', t.socket, 'kill-server']);
+  }
+});
+
+test('손상 설정에서도 창과 무관한 명령은 경고만 하고 진행하고, 복구 명령이 실제로 동작한다', () => {
+  const t = isolated();
+  corrupt(t.h, CORRUPT['상대 로티 경로']);
+  const status = run(t.h, ['status'], t.env);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stderr, /경고: 창 선택 설정 손상/);
+  assert.match(run(t.h, ['window', 'show'], t.env).stdout, /설정 손상[\s\S]*window unset/);
+  assert.match(run(t.h, ['window', 'unset'], t.env).stdout, /이전 값: \(손상된 설정\)/);
+  assert.equal(fs.existsSync(windowSettingPath(t.h)), false);
+  corrupt(t.h, CORRUPT['깨진 JSON']);
+  assert.equal(run(t.h, ['window', 'set', 'none'], t.env).status, 0, '손상 설정을 set으로 덮어쓴다');
+  assert.equal(readWindowSetting(t.h).window, 'none');
+});
+
+test('아직 없는 KADAN_HOME에서도 window set none이 저장된다', () => {
+  const fresh = path.join(home(), 'not', 'yet');
+  assert.equal(run(fresh, ['window', 'set', 'none']).status, 0);
+  assert.equal(readWindowSetting(fresh).window, 'none');
+});
+
+test('자동 시작·대시보드 재기동(KADAN_WINDOW=none 명시)은 손상 설정이어도 막히지 않는다', () => {
+  const t = isolated();
+  corrupt(t.h, CORRUPT['깨진 JSON']);
+  const r = run(t.h, ['start', 'kadan-win-auto', '--hidden', '--cmd', 'sleep 60'], {...t.env, KADAN_WINDOW: 'none'});
+  try { assert.equal(r.status, 0, r.stderr); } finally {
+    run(t.h, ['stop', 'kadan-win-auto'], {...t.env, KADAN_WINDOW: 'none'});
+    spawnSync('tmux', ['-L', t.socket, 'kill-server']);
+  }
+});

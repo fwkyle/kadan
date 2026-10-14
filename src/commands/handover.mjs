@@ -9,11 +9,15 @@ import { appendLedger, ledgerHome, readLedger, resolveLedgerBy } from "../ledger
 import { sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { closeStartedWindow } from "../cli-start-support.mjs";
+import { windowSettingBlock } from "../window-setting.mjs";
 
 export function createHandoverRunner() {
   const operation = new Handover({ home: ledgerHome(), floor, readEntries: readLedger,
     record: entry => appendLedger({ ...entry, by: resolveLedgerBy({env:operation.env}) }),
     start: (role, command, cwd, roleProfile) => {
+      // 아래에서 창을 추정해 하위 start에 명시로 넘기므로, 손상 설정은 여기서 먼저 막는다.
+      const blocked = windowSettingBlock();
+      if (blocked) throw new Error(blocked);
       let window = process.env.KADAN_WINDOW;
       if (!window) window = process.env.KADAN_ROTTIE_BIN ? "rottie" : "none";
       const result = spawnSync(process.execPath, [

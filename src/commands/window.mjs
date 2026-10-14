@@ -3,6 +3,7 @@
 import { ledgerHome } from "../ledger.mjs";
 import { die } from "../cli-basics.mjs";
 import {
+  RECOVERY_HINT,
   describeWindowSetting,
   effectiveWindow,
   setWindowSetting,
@@ -15,7 +16,7 @@ const USAGE = "사용법: kadan window show | set rottie [--rottie-bin <절대�
 function showText(home, env) {
   const setting = describeWindowSetting(home);
   const lines = [`기계 설정(${windowSettingPath(home)}): ${setting.label}${setting.rottieBin ? ` ${setting.rottieBin}` : ""}`];
-  if (setting.kind === "broken") return [...lines, setting.error].join("\n");
+  if (setting.kind === "broken") return [...lines, setting.error, RECOVERY_HINT].join("\n");
   const now = effectiveWindow(env, home);
   const sourceName = { env: "환경변수", setting: "기계 설정", default: "기본값" };
   lines.push(`이 셸에서 실제로 쓰는 창: ${now.window.value} (${sourceName[now.window.source]})`);

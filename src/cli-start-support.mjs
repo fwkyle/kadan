@@ -14,6 +14,7 @@ import {
   tmux,
 } from "./floor-tmux.mjs";
 import { die } from "./cli-basics.mjs";
+import { windowSettingBlock } from "./window-setting.mjs";
 
 export function resolveWindowChoice(env = process.env) {
   const value = env.KADAN_WINDOW;
@@ -25,6 +26,8 @@ export function resolveWindowChoice(env = process.env) {
 }
 
 export function requireWindowChoice(env = process.env) {
+  const blocked = windowSettingBlock(env);
+  if (blocked) die(blocked, 2);
   const choice = resolveWindowChoice(env);
   if (choice.error) {
     die(

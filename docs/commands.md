@@ -22,9 +22,10 @@
 | `KADAN_WINDOW` | tmux 바닥에서 시작할 때 여는 창. `none`(기본) · `rottie` · `orca`. 있으면 기계 설정(`kadan window`)보다 먼저다 |
 | `KADAN_ROTTIE_BIN` | `KADAN_WINDOW=rottie`일 때 말 걸 로티 CLI의 절대경로. 있으면 기계 설정의 경로보다 먼저다 |
 
-창 선택의 읽는 순서는 **환경변수 > 기계 설정(`$KADAN_HOME/window-setting.json`) > 기본 `none`** 이다. 값이 하나로 정해지는 우선순위이며 실패하면 다른 창으로 넘어가는 폴백이 아니다. 로그인 자동 시작과 대시보드의 '비서 켜기'는 `KADAN_WINDOW=none`을 명시하므로 설정이 `rottie`여도 창 없이 뜬다.
 | `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`) |
 | `KADAN_ROLE` | 카단 세션 안에서 자동으로 붙는 자기 역할. 원장의 `by`가 된다 |
+
+창 선택의 읽는 순서는 **환경변수 > 기계 설정(`$KADAN_HOME/window-setting.json`) > 기본 `none`** 이다. 값이 하나로 정해지는 우선순위이며 실패하면 다른 창으로 넘어가는 폴백이 아니다. 로그인 자동 시작과 대시보드의 '비서 켜기'는 `KADAN_WINDOW=none`을 명시하므로 설정이 `rottie`여도 창 없이 뜬다. `KADAN_WINDOW=""`처럼 빈 문자열은 미지정으로 보고 설정이 채워진다. **설정 파일이 손상**(깨진 JSON·잘못된 창 값·상대 로티 경로)이면 창을 여는 명령(`start`·`attach`·`handover`·`adopt`·`up`·`restore`)은 역할·창을 만들기 전에 `WINDOW_SETTING_CORRUPT`와 복구 명령을 알리고 종료 코드 2로 멈춘다. 다른 창으로 넘어가지 않는다. 단 `KADAN_WINDOW`가 비어 있지 않게 주어지면 그 값이 창을 정하므로 막지 않는다(`KADAN_WINDOW=rottie`인데 `KADAN_ROTTIE_BIN` 환경변수가 없어 설정의 경로가 필요할 때는 멈춘다). `send`·`status`·`read`·`watch`·대시보드처럼 창과 무관한 명령은 경고만 하고 진행한다. 복구는 `kadan window unset`(손상 파일도 지운다) 또는 `kadan window set ...`.
 
 ## 처음 준비
 
