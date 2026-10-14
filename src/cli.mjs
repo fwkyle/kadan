@@ -74,6 +74,7 @@ import { cmdRestore } from "./commands/restore.mjs";
 import { cmdWindow } from "./commands/window.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
 import { cmdSecrets } from "./commands/secrets.mjs";
+import { cmdDiscord } from "./commands/discord.mjs";
 import { adoptMachineWindow } from "./window-setting.mjs";
 import { recoveryCommand } from "./recovery.mjs";
 import { cmdStatus } from "./commands/status.mjs";
@@ -241,6 +242,7 @@ const COMMANDS = {
   window: cmdWindow,
   notify: cmdNotify,
   secrets: cmdSecrets,
+  discord: cmdDiscord,
   recovery: recoveryCommand,
 };
 
@@ -251,7 +253,7 @@ export function main(argv) {
     console.error(
       "사용법: kadan <init|up|adopt|autostart|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
         "stop|status|tree|wall|dashboard|" +
-        "read|log|attach|restore|window|notify|secrets|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
+        "read|log|attach|restore|window|notify|secrets|discord|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
