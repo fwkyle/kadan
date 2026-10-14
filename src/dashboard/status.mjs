@@ -22,7 +22,14 @@ import { effectiveWorkOwner, withEffectiveOwner } from "../handover-state.mjs";
 import { previousGenerationExecutions, previousGenerationWorks } from "../watch-scope.mjs";
 import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
-import { letters, pick, compact } from "./shared.mjs";
+import { letters, pick, compact, page } from "./shared.mjs";
+
+// 현황·전략 맵 화면이 읽지 않는 행 칸(gui/src/pages/Status.tsx·StrategyMap.tsx·stopped.ts·strategy-map.ts 기준, 2026-10-14 조사).
+// 업무 목록·상세는 자기 주소(workspace·detail)에서 이 칸을 받는다. ?super= 응답은 pick으로 따로 고르므로 영향이 없다.
+const UNUSED_ROW_FIELDS = new Set("workKey workType originalTitle stored reportAt modelTitle scope turnReason turnSource flowTitle rallyStep parentWorkKey workMs workBasis waitMs closeMs reworks modelState reviewLabel".split(" "));
+const slimRow = (row) => Object.fromEntries(Object.entries(row).filter(([key]) => !UNUSED_ROW_FIELDS.has(key)));
+// 흐름 확인 칸은 앞 20건만 싣고 나머지는 flow-unconfirmed 주소에서 페이지로 받는다.
+export const FLOW_PREVIEW = 20;
 
 // 같은 이름을 새 대화가 다시 쓰기 전에 그 이름에 붙은 열린 업무·발령. 놀고 있음 할 일에서는 빠지지만 여기서 건수로 보인다.
 // 관계표나 원장을 모르면 null(모름). 새 세대가 넘겨받으려면 기존 재배정·인계 명령을 쓴다(docs/hierarchy.md).
@@ -97,11 +104,11 @@ export function statusData(snapshot, url, stamp, m) {
   }
   return {
     ...stamp,
-    works: statusWorks,
+    works: statusWorks.map(slimRow),
     cleanupRequest: staleCleanupRequest(
       m.cards.filter((c) => isExecution(c) && executionBucket(c) === "stale"),
     ),
-    rows: statusRows,
+    rows: statusRows.map(slimRow),
     resources: snapshot.resources,
     resourceError: snapshot.resourceError,
     workError: m.workError,
@@ -114,7 +121,8 @@ export function statusData(snapshot, url, stamp, m) {
       name: b.name,
       state: b.state,
       ...boardProgressCounts(b, { buckets: true }),
-      watchHtml: renderWatchOverview(snapshot.center, b),
+      // 끝난 판은 이름과 건수만 보인다(Status.tsx). 감시 영역 HTML은 열린 판에만 싣는다.
+      ...(b.state === "done" ? {} : { watchHtml: renderWatchOverview(snapshot.center, b) }),
     })),
     watchHtml: renderWatchVerdict(snapshot.center, {
       runtime: snapshot.runtime,
@@ -122,7 +130,7 @@ export function statusData(snapshot, url, stamp, m) {
     decisions: openDecisions,
     previousGeneration: previousSummary(previousItems),
     live,
-    flow: flowSummary(m.reviewFlows),
+    flow: (({ total, unconfirmed }) => ({ total, unconfirmedCount: unconfirmed.length, unconfirmed: unconfirmed.slice(0, FLOW_PREVIEW) }))(flowSummary(m.reviewFlows)),
     alerts,
     // 슈퍼감독마다 한 줄(관계표 기준). 관계표를 모르면 null.
     supervisors,
@@ -138,4 +146,9 @@ export function statusData(snapshot, url, stamp, m) {
         card: pick(e.card, ["key", "title"]),
       })),
   };
+}
+
+// 흐름 확인 전체 목록(현황 화면의 "나머지" 펼침). 기존 페이지 방식(page)을 쓴다.
+export function flowUnconfirmedData(snapshot, url, stamp, m) {
+  return { ...stamp, ...page(flowSummary(m.reviewFlows).unconfirmed, url) };
 }

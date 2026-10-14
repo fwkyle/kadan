@@ -1,6 +1,7 @@
 // 새 카드 양식·결정 목록·실행 도구 설정 화면(DS-1-impl: dashboard-api.mjs에서 옮김).
 import { createForm } from "../dashboard-forms.mjs";
 import { decisionContent } from "../decision-wall.mjs";
+import { page } from "./shared.mjs";
 import {
   readSettings,
   runnerChoices,
@@ -18,14 +19,22 @@ export function createData(snapshot, url, stamp) {
   return { ...stamp, form: createForm(url.searchParams.get("kind")) };
 }
 
+// 기본은 열린 결정만, 지난 결정(답변·취소)은 ?past=1&page=N 으로 나눠 받는다(2026-10-14: 140건 441KB를 매번 보냈다).
+// 정렬은 ?sort=newest(기본 오래된 순), 기준은 요청 시각(at)이다. 전에 화면이 하던 정렬과 같다.
 export function decisionsData(snapshot, url, stamp) {
   if (snapshot.decisionError) throw new Error(snapshot.decisionError);
+  const all = snapshot.decisions || [], withContent = (d) => ({ ...d, ...decisionContent(d) });
+  if (url.searchParams.get("past") === "1") {
+    const sign = url.searchParams.get("sort") === "newest" ? -1 : 1, at = (d) => Date.parse(d.at);
+    const past = all.filter((d) => d.status !== "open").sort((x, y) => (at(x) - at(y)) * sign);
+    const selected = page(past, url);
+    return { ...stamp, ...selected, items: selected.items.map(withContent) };
+  }
   return {
     ...stamp,
-    items: (snapshot.decisions || []).map((d) => ({
-      ...d,
-      ...decisionContent(d),
-    })),
+    items: all.filter((d) => d.status === "open").map(withContent),
+    answered: all.filter((d) => d.status === "answered").length,
+    past: all.filter((d) => d.status !== "open").length,
   };
 }
 
