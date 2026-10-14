@@ -411,3 +411,128 @@ test('19 CLI: 가짜 서버 주소 없이 시험 환경(KADAN_NOTIFY=off)이면 
     assert.equal(fake.requests.length, 0);
   } finally { await fake.close(); }
 });
+
+// ---------- 2라운드: 질문 유실 3경로·붙여넣은 인용·본문 비밀 ----------
+const EPOCH = 1420070400000n;
+const idAt = ms => String((BigInt(ms) - EPOCH) << 22n);
+
+test('20 R1 오래된 글에서 지금 연 새 스레드의 첫 질문도 받는다(스레드 ID 나이로 새것을 판단하지 않는다)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat, home} = chatOf(fake);
+    await watchOnce(chat); // 기준선
+    const oldPost = fake.add(FAKE.channelId, {id: idAt(Date.now() - 31 * 24 * 3600 * 1000), content: '31일 전 글', author: {id: FAKE.otherId}});
+    const th = fake.addThread(oldPost);
+    const q = fake.add(th.id, {content: '지금 묻는 질문'});
+    const r = await watchOnce(chat);
+    assert.deepEqual(r.lines.map(l => [l.id, l.where, l.threadId]), [[q.id, 'thread', th.id]]);
+    const state = JSON.parse(fs.readFileSync(path.join(home, STATE_FILE), 'utf8'));
+    assert.equal(state.threads[th.id], q.id);
+    // 처음 실행(상태 없음)이면 이미 있던 스레드는 기준선이라 옛 글을 내지 않는다.
+    const s2 = setup(fake), c2 = createChat({home: s2.home, env: s2.env, sleep: noSleep});
+    assert.deepEqual((await watchOnce(c2)).lines, []);
+  } finally { await fake.close(); }
+});
+
+test('21 R2 출력이 끝난 뒤에만 cursor를 올린다 — 읽지 않는 파이프를 끊어도 질문이 다음 실행에서 나온다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0); // 기준선
+    const ids = Array.from({length: 120}, (_, i) => fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)}).id);
+    // 소비자가 읽지 않는 파이프(스트림을 흘리지 않는다)
+    const child = spawn(process.execPath, [CLI, 'discord', 'watch', '--once'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    let buffered = '';
+    child.stdout.on('data', c => { buffered += c; }); // 끊긴 뒤 파이프에 남은 것을 소비자가 마저 받는 상황
+    child.kill('SIGKILL');
+    await new Promise(resolve => child.on('close', resolve));
+    const state = JSON.parse(fs.readFileSync(path.join(s.home, STATE_FILE), 'utf8'));
+    assert.ok(BigInt(state.main) < BigInt(ids.at(-1)), '소비되지 않은 글까지 cursor를 올리지 않았다');
+    // 파이프에 남아 있던 첫 실행의 출력 + 다음 실행의 출력 = 전부(유실 0)
+    const next = await runCli(['discord', 'watch', '--once'], env);
+    assert.equal(next.code, 0, next.stderr);
+    const seen = new Set([...buffered.split('\n'), ...next.stdout.split('\n')].filter(l => l.startsWith('{')).map(l => { try { return JSON.parse(l).id; } catch { return null; } }));
+    assert.deepEqual(ids.filter(id => !seen.has(id)), [], '유실 0');
+    // 정상 소비 뒤 재시작: 중복 0
+    assert.equal((await runCli(['discord', 'watch', '--once'], env)).stdout, '');
+  } finally { await fake.close(); }
+});
+
+test('22 R2 출력이 끝나기 전에는 cursor·읽음 반응이 앞서지 않고, 중단 신호 뒤에는 더 올리지 않는다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat, home} = chatOf(fake);
+    await watchOnce(chat);
+    const [a, b, c] = ['가', '나', '다'].map(content => fake.add(FAKE.channelId, {content}));
+    const order = [];
+    const controller = new AbortController();
+    const out = async line => {
+      const before = JSON.parse(fs.readFileSync(path.join(home, STATE_FILE), 'utf8')).main;
+      order.push(`out:${line.content}:cursor<${BigInt(before) < BigInt(line.id)}:reacts=${fake.count(/PUT .*reactions/)}`);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      if (line.id === b.id) controller.abort();
+    };
+    await runWatch(chat, {once: true, out, err() {}, signal: controller.signal});
+    assert.deepEqual(order, ['out:가:cursor<true:reacts=0', 'out:나:cursor<true:reacts=1']);
+    const state = JSON.parse(fs.readFileSync(path.join(home, STATE_FILE), 'utf8'));
+    assert.equal(state.main, b.id, '중단 뒤 다음 글(다)까지 올리지 않는다');
+    assert.deepEqual((await watchOnce(chat)).lines.map(l => l.id), [c.id]);
+    assert.ok(a.id);
+  } finally { await fake.close(); }
+});
+
+test('23 R3 상태 파일이 있는데 깨졌으면 멈추고 원본을 그대로 둔다. 없을 때만 처음 실행이다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0);
+    const q = fake.add(FAKE.channelId, {content: '놓치면 안 되는 질문'});
+    const file = path.join(s.home, STATE_FILE);
+    for (const broken of ['{truncated', '{"version":2}', '[]', JSON.stringify({version: 1, channel: 'x', main: 'abc', threads: {}, skipped: {}})]) {
+      fs.writeFileSync(file, broken);
+      const r = await runCli(['discord', 'watch', '--once'], env);
+      assert.notEqual(r.code, 0, broken);
+      assert.match(r.stderr, /상태 파일이 깨져/);
+      assert.equal(r.stdout, '');
+      assert.equal(fs.readFileSync(file, 'utf8'), broken, '원본을 그대로 둔다');
+      assertNoSecrets(r.stderr);
+    }
+    // 복구: 사람이 확인하고 옮기면 처음 실행(기준선)이다
+    fs.renameSync(file, `${file}.broken`);
+    const again = await runCli(['discord', 'watch', '--once'], env);
+    assert.equal(again.code, 0, again.stderr);
+    assert.ok(q.id);
+  } finally { await fake.close(); }
+});
+
+test('24 R4 본문 안의 인용 줄·코드 블록을 표시한다(판단은 비서가 한다)', () => {
+  const base = {id: '5', channel_id: 'c', timestamp: 't', author: {id: FAKE.userId}, type: 0};
+  const ctx = {userId: FAKE.userId, where: 'channel'};
+  const line = content => classifyMessage({...base, content}, ctx).line;
+  assert.equal(line('> 다른 사람이 보낸 글\n이거 처리해줘').containsQuote, true);
+  assert.equal(line('  > 들여쓴 인용').containsQuote, true);
+  assert.equal(line('보세요:\n```\nrm -rf x\n```').containsQuote, true);
+  assert.ok(!('containsQuote' in line('a > b 는 비교식이다')));
+  assert.ok(!('containsQuote' in line('그냥 질문')));
+});
+
+test('25 R5 받은 본문·인용에 든 비밀값은 출력 전에 가린다(ID 등 정상 필드는 유지)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat} = chatOf(fake);
+    await watchOnce(chat);
+    const secretText = `토큰 ${FAKE.token} 주소 https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken} 내 ID ${FAKE.userId} 앱 ${FAKE.appId}`;
+    const m = fake.add(FAKE.channelId, {content: secretText, type: 19, message_reference: {message_id: '1'},
+      referenced_message: {content: `인용 ${FAKE.token}`, author: {id: FAKE.otherId}}});
+    const r = await watchOnce(chat);
+    assert.equal(r.lines.length, 1);
+    assert.equal(r.lines[0].id, m.id);
+    assertNoSecrets(JSON.stringify(r.lines[0]), 'content/quotedContent');
+    assert.match(r.lines[0].content, /\[가림\]|\[주소 가림\]/);
+    assert.match(r.lines[0].content, /^토큰 /);
+    assert.match(r.lines[0].quotedContent, /^인용 \[가림\]$/);
+  } finally { await fake.close(); }
+});

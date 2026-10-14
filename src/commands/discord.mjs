@@ -7,9 +7,11 @@ import {die} from '../cli-basics.mjs';
 import {createChat, runWatch, sendText, editThread, checkChat, DEFAULT_INTERVAL_S} from '../discord-chat.mjs';
 
 const USAGE = 'usage: kadan discord watch [--once] [--interval 초] | send [텍스트…|--stdin] [--reply-to 메시지ID|--thread 스레드ID] [--edit 메시지ID] [--thread-name 이름] | thread <스레드ID> [--rename 이름] [--archive] | check';
+// 쓰기가 실제로 끝나야(역압 포함) 풀린다. 소비자가 안 읽으면 여기서 기다리고, 파이프가 닫히면 거절한다.
+const writeLine = line => new Promise((resolve, reject) => process.stdout.write(line + '\n', error => (error ? reject(error) : resolve())));
 const text = v => (typeof v === 'string' ? v : undefined);
 
-export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = process.env, out = line => process.stdout.write(line + '\n'),
+export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = process.env, out = writeLine,
   err = line => process.stderr.write(line + '\n'), fetchFn, sleep, readStdin = () => fs.readFileSync(0, 'utf8')} = {}) {
   const [action, ...rest] = argv;
   let chat;
