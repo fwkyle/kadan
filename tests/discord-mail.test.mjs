@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import {spawnSync} from 'node:child_process';
+import {performance} from 'node:perf_hooks';
+import {createDatabase, writeStorageMarker, transaction, appendRow} from '../src/storage.mjs';
+import {findMailBySourceKey} from '../src/ledger.mjs';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {createChat, runWatch, STATE_FILE, LOCK_DIR} from '../src/discord-chat.mjs';
 import {createMailOut, composeDiscordMail, DISCORD_BY, DISCORD_MAIL_KIND} from '../src/discord-mail.mjs';
@@ -89,7 +92,7 @@ test('3 최소 한 번: 우편 저장 뒤·cursor 저장 전 종료 → 재시�
     assert.equal(fake.count(/PUT .*reactions/), 0);
     // 재시작(새 객체·같은 홈)
     const restarted = createChat({home, env: setupEnv(home, fake), sleep: noSleep});
-    await watchOnce(restarted, store);
+    await watchOnce(restarted, createMailOut({home})); // 새 프로세스처럼 새 함수(메모리 기록 없음) — 원장 조회로 거른다
     assert.equal(mailsOf(home).length, 1, '재시작해도 우편 중복 0');
     assert.equal(stateOf(home).main, q.id, '유실 0: cursor가 그 글까지 진행');
     assert.equal(fake.count(/PUT .*reactions/), 1, '👀는 우편이 저장된 뒤 한 번');
@@ -159,16 +162,23 @@ test('5 비서 세션이 없어도 저장·cursor 진행, 재안내 경로(MailW
   } finally { await fake.close(); }
 });
 
-test('6 ensureBridge: 비밀값 없음→안 띄움, 설정 틀림→이유만, 잠금 살아 있음→막힘, 없으면 1개만 띄움(재실행은 재사용)', () => {
+test('6 ensureBridge: 비밀값 없음→안 띄움, 설정 틀림→이유만, 잠금 있음→막힘, 우편 모드 받기일 때만 재사용', () => {
   const calls = [];
-  const run = o => ensureBridge({configured: () => 'ok', lockHolder: () => null, alive: () => false, create: () => calls.push('create'), ...o});
+  const mail = {pid: 123, mode: 'mail', to: '비서'};
+  const run = o => ensureBridge({configured: () => 'ok', lockInfo: () => null, alive: () => false, create: () => calls.push('create'), ...o});
   assert.equal(run({configured: () => 'no-secret'}), 'no-secret');
   assert.equal(run({configured: () => 'bad-config: x'}), 'bad-config: x');
   assert.equal(calls.length, 0, '비밀값이 없거나 틀리면 세션을 만들지 않는다');
-  assert.equal(run({lockHolder: () => 123}), 'locked');
+  assert.match(run({lockInfo: () => mail}), /^locked: /);
+  assert.match(run({lockInfo: () => ({pid: 1, mode: 'stdout'})}), /^locked: .*stdout/);
   assert.equal(calls.length, 0, '다른 프로세스가 잠금을 쥐면 띄우지 않는다');
-  assert.equal(run({alive: () => true, lockHolder: () => 123}), 'reused');
-  assert.equal(run({alive: () => true}), 'blocked');
+  const alive = {alive: () => true};
+  assert.equal(run({...alive, lockInfo: () => mail}), 'reused');
+  assert.match(run({...alive}), /^blocked: .*잠금/);
+  assert.match(run({...alive, lockInfo: () => ({pid: 1, mode: 'stdout'})}), /^blocked: .*우편 모드가 아닙니다.*stdout/);
+  assert.match(run({...alive, lockInfo: () => ({pid: 1, mode: 'unknown'})}), /^blocked: .*옛 받기/);
+  assert.match(run({...alive, lockInfo: () => ({...mail, to: '다른역할'})}), /^blocked: .*다른역할/);
+  assert.match(run({...alive, lockInfo: () => mail, owned: () => false}), /^blocked: .*세션 안에 있지 않습니다/);
   assert.equal(run({}), 'started');
   assert.deepEqual(calls, ['create']);
 });
@@ -240,4 +250,58 @@ test('9 일반 우편은 여전히 5분 유예, 본문에 보낸이를 흉내 �
   assert.equal(tick([fake], 1000 + 300_000).length, 1, '5분 뒤에는 나간다');
   assert.equal(tick([mail('d', DISCORD_BY)], 1000).length, 1, '보낸이 디코는 즉시');
   assert.equal(tick([mail('other', '디코', '')].map(m => ({...m, role: '작업자'})), 1000).length, 0, '받는 역할이 비서가 아니면 해당 없음');
+});
+
+test('10 격리 tmux: kadan-디코에 stdout 받기가 살아 있으면 up이 재사용 성공이라 하지 않고 막힘 이유를 알리며, 끄거나 바꾸지 않는다', async (t) => {
+  if (spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux 없음');
+  const fake = await startFakeDiscord();
+  const home = tmp('stdout-home'), socket = `kadan-dmail-so-${process.pid}`;
+  const port = await new Promise(res => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
+  const botFile = path.join(home, 'bot.env'), hookFile = path.join(home, 'hook.env');
+  fs.writeFileSync(botFile, `DISCORD_BOT_TOKEN=${FAKE.token}\n`, {mode: 0o600});
+  fs.writeFileSync(hookFile, `DISCORD_USER_ID=${FAKE.userId}\nDISCORD_WEBHOOK_URL_SECRETARY=https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken}\n`, {mode: 0o600});
+  const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux', KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off',
+    KADAN_DISCORD_API_BASE: fake.base, KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile};
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const tm = (...a) => spawnSync('tmux', ['-u', '-L', socket, ...a], {encoding: 'utf8'});
+  const up = () => spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden', '--no-prompt'], {env, encoding: 'utf8', timeout: 60000});
+  try {
+    const envArgs = ['KADAN_HOME', 'KADAN_SOCKET', 'KADAN_NOTIFY', 'KADAN_DISCORD_API_BASE', 'KADAN_SECRET_DISCORD_BOT_FILE', 'KADAN_SECRET_DISCORD_FILE'].flatMap(k => ['-e', `${k}=${env[k]}`]);
+    const made = tm('new-session', '-d', '-s', 'kadan-디코', ...envArgs, `'${process.execPath}' '${cli}' discord watch`);
+    assert.equal(made.status, 0, made.stderr);
+    for (let i = 0; i < 40 && !fs.existsSync(path.join(home, LOCK_DIR, 'pid')); i++) await new Promise(r => setTimeout(r, 250));
+    const first = up();
+    assert.equal(first.status, 0, first.stdout + first.stderr);
+    assert.match(first.stdout, /디코 다리 확인 필요 — .*우편 모드가 아닙니다/);
+    assert.doesNotMatch(first.stdout, /디코 다리 이미 살아 있음/);
+    assert.doesNotMatch(first.stdout, /kadan stop 디코/, '막힘이면 끄기 안내에 넣지 않는다');
+    assert.ok(tm('has-session', '-t', 'kadan-디코').status === 0, '기존 받기를 끄지 않는다');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, LOCK_DIR, 'mode'), 'utf8')).mode, 'stdout');
+  } finally {
+    spawnSync('tmux', ['-L', socket, 'kill-server']);
+    await fake.close();
+  }
+});
+
+test('11 중복 조회는 좁은 조회라 원장 사건 10만 건에서도 작다(측정값 출력): 방금 저장한 우편은 바로, 없음 확인은 한 번 훑기', () => {
+  const rows = [];
+  for (const count of [1000, 100000]) {
+    const home = tmp(`cost-${count}`);
+    createDatabase(home); writeStorageMarker(home, 'sqlite');
+    const alert = () => ({kind: 'alert', by: 'watch', t: '2026-10-14T00:00:00Z', role: '측정', padding: 'x'.repeat(200)});
+    transaction(home, db => {
+      for (let i = 0; i < count; i++) appendRow(db, 'ledger.jsonl', alert());
+      appendRow(db, 'mail/events.jsonl', {_ledgerOrder: 1, kind: 'send', transport: 'mailbox', role: '비서', by: DISCORD_BY, mailId: 'b971144e-4835-4d50-a4ba-44cbb250b318', sourceKey: 'discord:123', digest: 'a'.repeat(64), t: '2026-10-14T00:00:00Z'});
+      for (let i = 0; i < 50; i++) appendRow(db, 'ledger.jsonl', alert()); // 저장 뒤 쌓인 감시 기록
+    });
+    const median = fn => { const t = []; for (let i = 0; i < 5; i++) { const t0 = performance.now(); fn(); t.push(performance.now() - t0); } return Number(t.sort((a, b) => a - b)[2].toFixed(2)); };
+    const box = new Mailbox(home, '비서');
+    const hitMs = median(() => assert.equal(box.send({by: DISCORD_BY, message: '중복 조회', sourceKey: 'discord:123'}).duplicate, true));
+    const missMs = median(() => assert.equal(findMailBySourceKey(home, '비서', 'discord:999'), null));
+    assert.equal(findMailBySourceKey(home, '다른', 'discord:123'), null, '수신자가 다르면 같은 키도 다른 우편');
+    rows.push({events: count + 51, hitMs, missMs});
+  }
+  console.log('중복 조회 중앙값(ms):', JSON.stringify(rows));
+  assert.ok(rows[1].hitMs < 50, `중복 발견이 10만 건에서 ${rows[1].hitMs}ms`);
+  assert.ok(rows[1].missMs < 250, `없음 확인이 10만 건에서 ${rows[1].missMs}ms`);
 });

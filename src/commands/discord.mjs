@@ -31,7 +31,8 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
       const toMail = flags['to-mail'] === undefined ? null : flags['to-mail'] === true ? SECRETARY : text(flags['to-mail']);
       if (flags['to-mail'] !== undefined && (!toMail || /\s/.test(toMail))) die(USAGE, 2);
       const emit = toMail ? createMailOut({home, to: toMail, log: err}) : line => out(JSON.stringify(line));
-      return await runWatch(chat, {once: flags.once === true, intervalS, out: emit, err, signal: abort.signal, sleep});
+      return await runWatch(chat, {once: flags.once === true, intervalS, out: emit, err, signal: abort.signal, sleep,
+        lockInfo: toMail ? {mode: 'mail', to: toMail} : {mode: 'stdout'}});
     }
     if (action === 'send') {
       if (flags.stdin !== undefined && flags.stdin !== true) die(USAGE, 2);

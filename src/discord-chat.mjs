@@ -103,30 +103,35 @@ export function writeState(home, state) {
   fs.renameSync(tmp, file);
 }
 
-// 잠금을 쥔 살아 있는 받기 프로세스의 pid. 없거나 주인이 죽었으면 null(읽기만 한다 — 치우지 않는다).
-export function watchLockHolder(home) {
+// 잠금을 쥔 살아 있는 받기 프로세스의 {pid, mode, to}. 없거나 주인이 죽었으면 null(읽기만 한다 — 치우지 않는다).
+// mode: 'mail'(우편 모드, to=받는 역할) | 'stdout' | 'unknown'(모드 기록이 없는 옛 잠금 — 우편 모드로 믿지 않는다).
+export function watchLockInfo(home) {
   let pid = NaN;
   try { pid = Number(fs.readFileSync(path.join(home, LOCK_DIR, 'pid'), 'utf8')); } catch { return null; }
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  try { process.kill(pid, 0); return pid; } catch (e) { return e.code === 'ESRCH' ? null : pid; }
+  try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') return null; }
+  let info = {};
+  try { info = JSON.parse(fs.readFileSync(path.join(home, LOCK_DIR, 'mode'), 'utf8')); } catch { /* 옛 잠금 */ }
+  const mode = info.mode === 'mail' && typeof info.to === 'string' ? 'mail' : info.mode === 'stdout' ? 'stdout' : 'unknown';
+  return {pid, mode, ...(mode === 'mail' ? {to: info.to} : {})};
 }
 
 // 받기 프로세스 하나만: mkdir 잠금 + pid. 주인이 죽었으면(ESRCH) 치우고 한 번 더 얻는다. 같은 상태 파일을 두 곳이 쓰면 중복 줄이 나온다.
-export function acquireWatchLock(home) {
-  const lock = path.join(home, LOCK_DIR), pidFile = path.join(lock, 'pid');
+export function acquireWatchLock(home, info = {mode: 'stdout'}) {
+  const lock = path.join(home, LOCK_DIR), pidFile = path.join(lock, 'pid'), modeFile = path.join(lock, 'mode');
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   for (let tries = 0; tries < 2; tries++) {
-    try { fs.mkdirSync(lock); fs.writeFileSync(pidFile, String(process.pid)); break; } catch (error) {
+    try { fs.mkdirSync(lock); fs.writeFileSync(modeFile, JSON.stringify(info)); fs.writeFileSync(pidFile, String(process.pid)); break; } catch (error) { // 모드를 pid보다 먼저 쓴다: pid가 보이면 모드도 있다
       if (error.code !== 'EEXIST') throw error;
       let pid = NaN;
       try { pid = Number(fs.readFileSync(pidFile, 'utf8')); } catch { /* pid 파일이 아직 없음 */ }
       let alive = true;
       if (Number.isInteger(pid) && pid > 0) try { process.kill(pid, 0); } catch (e) { alive = e.code !== 'ESRCH'; }
       if (alive || tries === 1) throw new Error('이미 다른 kadan discord watch가 돌고 있다(같은 상태 파일을 둘이 쓰면 중복 줄이 나온다)');
-      fs.rmSync(pidFile, {force: true}); fs.rmdirSync(lock);
+      fs.rmSync(pidFile, {force: true}); fs.rmSync(modeFile, {force: true}); fs.rmdirSync(lock);
     }
   }
-  const release = () => { try { fs.rmSync(pidFile, {force: true}); fs.rmdirSync(lock); } catch { /* 이미 없음 */ } };
+  const release = () => { try { fs.rmSync(pidFile, {force: true}); fs.rmSync(modeFile, {force: true}); fs.rmdirSync(lock); } catch { /* 이미 없음 */ } };
   process.once('exit', release); // 강제 종료 경로(process.exit)에서도 잠금을 돌려준다
   return () => { process.removeListener('exit', release); release(); };
 }
@@ -246,9 +251,9 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
 }
 
 // 반복 조회. 같은 지점 3회 소진(exhausted)·4xx·설정 오류는 멈추고 던진다. 반환은 종료 사유.
-export async function runWatch(chat, {once = false, intervalS = DEFAULT_INTERVAL_S, out, err = () => {}, signal, sleep}) {
+export async function runWatch(chat, {once = false, intervalS = DEFAULT_INTERVAL_S, out, err = () => {}, signal, sleep, lockInfo}) {
   const hash = channelHash(await chat.channelIdOf());
-  const release = acquireWatchLock(chat.home);
+  const release = acquireWatchLock(chat.home, lockInfo);
   const wait = sleep ?? (ms => new Promise(resolve => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, {once: true}); }));
   try {
     let state = readState(chat.home, hash), initial = false; // 깨진 상태 파일이면 여기서 던진다(복구는 문서 참고)

@@ -2,7 +2,7 @@
 import { runAdopt } from "../adopt.mjs";
 import { runInit, runUp, ensureWatch, ensureBridge, BRIDGE_ROLE } from "../quickstart.mjs";
 import { loadSecret } from "../secrets.mjs";
-import { loadChatConfig, watchLockHolder } from "../discord-chat.mjs";
+import { loadChatConfig, watchLockInfo } from "../discord-chat.mjs";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { defaultProfilePath } from "../watch-profile.mjs";
@@ -101,7 +101,19 @@ function startBridgeSession(home) {
       if (!bot.values && bot.source !== "broken" && !bot.error) return "no-secret";
       try { loadChatConfig(process.env, home); return "ok"; } catch (error) { return `bad-config: ${error.message}`; }
     },
-    lockHolder: () => watchLockHolder(home),
+    lockInfo: () => watchLockInfo(home),
+    owned: (pid) => {
+      const pane = floor.list().find((item) => item.session === session)?.pid;
+      if (pane == null) return false;
+      // 잠금 주인이 세션의 pane 프로세스이거나 그 자손인지(셸이 node를 exec하면 같고, 아니면 자손)
+      let cur = pid;
+      for (let depth = 0; depth < 8 && cur > 1; depth++) {
+        if (String(cur) === String(pane)) return true;
+        const r = spawnSync("ps", ["-o", "ppid=", "-p", String(cur)], { encoding: "utf8" });
+        cur = Number(String(r.stdout).trim());
+      }
+      return false;
+    },
     alive: () => floor.alive(session),
     create: () => {
       const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env,
