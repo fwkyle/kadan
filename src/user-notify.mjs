@@ -34,7 +34,13 @@ function workTitleOf(home, work) {
 export function systemNotify(message, spawn) {
   const script = `display notification ${JSON.stringify(message)} with title "kadan watch"`;
   const result = spawn('osascript', ['-e', script], {encoding: 'utf8', timeout: SYSTEM_TIMEOUT_MS});
-  return result.status === 0 ? null : (result.stderr ?? 'osascript 실패').trim();
+  // 성공은 종료 코드 0이면서 오류·신호가 없을 때만이다. 시간 초과(spawnSync는 status:null, error.code:ETIMEDOUT, signal:SIGTERM)는
+  // stderr가 비어 있어도 실패다 — 빈 문자열을 돌려주면 호출 쪽의 `if (errorText)`가 성공으로 읽는다(3라운드 검수 R4).
+  // 사유에는 명령 원문과 stderr(알림 문구가 섞일 수 있다)를 싣지 않고 짧은 분류만 담는다.
+  if (result.status === 0 && !result.error && !result.signal) return null;
+  if (result.error?.code === 'ETIMEDOUT' || result.signal) return '시스템 알림 시간 초과';
+  if (result.error) return `시스템 알림 실패(${result.error.code ?? '오류'})`;
+  return `시스템 알림 실패(종료 코드 ${result.status ?? '없음'})`;
 }
 
 // 원장·콘솔·화면에 가기 전에 웹훅 주소와 사용자 ID를 가린다. 오류 원문에 섞여 들어올 수 있다.

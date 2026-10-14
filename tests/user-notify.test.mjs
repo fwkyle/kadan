@@ -256,7 +256,7 @@ test('watch @user 전달: 디스코드 실패 + 시스템 성공이면 전달, �
         readEntries: () => starts, record: e => records.push(e), now: () => Date.parse(t) + cycle * 1000, print: l => lines.push(l),
         spawn: cmd => {
           if (cmd === 'sleep' && ++cycle === 3) throw stop;
-          if (cmd === 'osascript') { notes.push(1); return {status: osFails ? 1 : 0, stderr: 'disabled'}; }
+          if (cmd === 'osascript') { notes.push(1); return osFails === 'timeout' ? {status: null, signal: 'SIGTERM', error: {code: 'ETIMEDOUT'}, stderr: ''} : {status: osFails ? 1 : 0, stderr: 'disabled'}; }
           if (cmd === 'memory_pressure') return {status: 0, stdout: 'System-wide memory free percentage: 80%'};
           if (cmd === 'sysctl') return {status: 0, stdout: 'used = 0M'};
           return {status: 0, stdout: ''};
@@ -269,6 +269,9 @@ test('watch @user 전달: 디스코드 실패 + 시스템 성공이면 전달, �
     assert.equal(ok.records[0].recipient, '@user'); assert.equal(ok.records[0].delivered, true); assert.equal(ok.notes.length, 1);
     const bad = await exercise(true);
     assert.equal(bad.records[0].delivered, false); assert.match(bad.lines.join('\n'), /사용자 알림 실패/);
+    // 3초 시간 초과(status:null, 빈 stderr)도 실패다 — 빈 문자열이 성공으로 읽히면 안 된다(3라운드 R4)
+    const slow = await exercise('timeout');
+    assert.equal(slow.records[0].delivered, false); assert.match(slow.lines.join('\n'), /사용자 알림 실패: 시스템 알림 시간 초과/);
     assert.ok(w.requests().length >= 2); // 디스코드는 두 번 다 먼저 시도했다
   } finally {
     for (const [k, v] of [['KADAN_NOTIFY', prev.n], ['KADAN_NOTIFY_ENV_FILE', prev.f]]) v === undefined ? delete process.env[k] : process.env[k] = v;
@@ -522,4 +525,23 @@ test('R1 첫 호출이 잠금을 5초 넘게 쥐고 있어도 다른 업무의 �
     await Promise.all([runChild({...a, work: 'kadan/work-a', key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, work: 'kadan/work-b', key: 'k2'}); })()]);
     assert.deepEqual(Object.keys(w.threads()).sort(), ['kadan/work-a', 'kadan/work-b']);
   } finally { w.stop(); }
+});
+
+test('R4 시스템 알림 판정: 성공은 status 0뿐, 시간 초과·신호·오류·비정상 종료는 안전한 사유가 있는 실패', async () => {
+  const {systemNotify} = await import('../src/user-notify.mjs');
+  assert.equal(systemNotify('a', () => ({status: 0, stderr: ''})), null);
+  assert.equal(systemNotify('a', () => ({status: 1, stderr: '비밀 X 알림 문구'})), '시스템 알림 실패(종료 코드 1)');
+  assert.equal(systemNotify('a', () => ({status: null, signal: 'SIGTERM', stderr: ''})), '시스템 알림 시간 초과');
+  assert.equal(systemNotify('a', () => ({status: null, error: {code: 'ETIMEDOUT'}})), '시스템 알림 시간 초과');
+  assert.equal(systemNotify('a', () => ({status: null, error: {code: 'ENOENT'}})), '시스템 알림 실패(ENOENT)');
+  assert.equal(systemNotify('a', () => ({status: null})), '시스템 알림 실패(종료 코드 없음)');
+  assert.equal(systemNotify('a', () => ({status: 0, error: {code: 'EPIPE'}})), '시스템 알림 실패(EPIPE)');
+});
+
+test('R4 실제 spawnSync가 3초 제한에 걸리면(10초 대기 자식, 빈 stderr) 알림 결과가 실패 사유를 담는다', () => {
+  const t0 = Date.now();
+  const r = notifyUser('a', (cmd, args, options) => spawnSync('sleep', ['10'], options), {home: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-r4-')), env: {KADAN_NOTIFY: ''}});
+  const took = Date.now() - t0;
+  assert.equal(r.via, 'system'); assert.equal(r.error, '시스템 알림 시간 초과');
+  assert.ok(took >= 2900 && took < 6000, `${took}ms`);
 });
