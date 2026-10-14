@@ -5,6 +5,8 @@
 //   - 429: retry_after를 지켜 1회 / 5xx: 1회
 //   - 4xx(400·401·404 등)와 연결된 뒤의 시간 초과·끊김: 재시도 없음 (뒤쪽은 "불확실")
 // wait=true면 응답의 messageId·channelId(포럼 새 글이면 channelId가 글 id)를 돌려준다.
+// messageId를 주면 새로 올리지 않고 그 메시지를 고친다(PATCH .../messages/<id>). 같은 내용을 두 번 고쳐도 결과가 같아
+// 재시도 규칙은 그대로 둔다. 고치는 대상 글은 threadId로 가리킨다.
 // 출력(stdout 한 줄 JSON)에는 주소·토큰·오류 원문을 넣지 않는다 — 오류 코드와 HTTP 상태만 남긴다.
 import http from 'node:http';
 import https from 'node:https';
@@ -14,12 +16,12 @@ export const TOTAL_BUDGET_MS = 12000; // 재시도 포함 한 번 알림이 막�
 const CONNECT_MS = 4000;
 const RESPONSE_MS = 5000;
 
-function attempt(url, body, budgetMs) {
+function attempt(url, body, budgetMs, method = 'POST') {
   return new Promise(resolve => {
     const mod = url.protocol === 'https:' ? https : http;
     let connected = false, done = false, timer;
     const finish = result => { if (done) return; done = true; clearTimeout(timer); req.destroy(); resolve(result); };
-    const req = mod.request(url, {method: 'POST', headers: {'content-type': 'application/json', 'content-length': Buffer.byteLength(body)}}, res => {
+    const req = mod.request(url, {method, headers: {'content-type': 'application/json', 'content-length': Buffer.byteLength(body)}}, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => finish({kind: 'response', status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString('utf8')}));
@@ -42,9 +44,13 @@ function attempt(url, body, budgetMs) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // 반환: {outcome:'sent'|'failed'|'uncertain', attempts, status?, reason?}
-export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS, now = Date.now, threadId, wait} = {}) {
+export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS, now = Date.now, threadId, wait, messageId} = {}) {
   const url = new URL(webhook);
-  if (wait) url.searchParams.set('wait', 'true');
+  const method = messageId ? 'PATCH' : 'POST';
+  if (messageId) {
+    if (!/^[\w-]+$/.test(String(messageId))) return {outcome: 'failed', attempts: 0, reason: '메시지 id 형식 오류'};
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/messages/${messageId}`;
+  } else if (wait) url.searchParams.set('wait', 'true');
   if (threadId) url.searchParams.set('thread_id', String(threadId));
   const body = JSON.stringify(payload), start = now();
   const left = () => budgetMs - (now() - start);
@@ -52,7 +58,7 @@ export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS,
   for (;;) {
     if (left() <= 0) return {outcome: 'failed', attempts, reason: '시간 상한 도달'};
     attempts++;
-    const r = await attempt(url, body, left());
+    const r = await attempt(url, body, left(), method);
     if (r.kind === 'after-connect') return {outcome: 'uncertain', attempts, reason: r.reason};
     if (r.kind === 'connect-fail') {
       if (connectRetries >= 2 || left() < 1500) return {outcome: 'failed', attempts, reason: r.reason};
@@ -85,8 +91,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.stdin.on('end', async () => {
     let result;
     try {
-      const {webhook, payload, budgetMs, threadId, wait} = JSON.parse(input);
-      result = await sendWebhook(webhook, payload, {...(budgetMs ? {budgetMs} : {}), threadId, wait});
+      const {webhook, payload, budgetMs, threadId, wait, messageId} = JSON.parse(input);
+      result = await sendWebhook(webhook, payload, {...(budgetMs ? {budgetMs} : {}), threadId, wait, messageId});
     } catch { result = {outcome: 'failed', attempts: 0, reason: '전송 준비 오류'}; }
     process.stdout.write(JSON.stringify(result) + '\n');
     process.exit(0);

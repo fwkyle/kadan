@@ -1,6 +1,7 @@
 import {operationsFlowSummaries} from './operations-flow.mjs';
 import fs from 'node:fs';
 import {WorkStore} from './work-store.mjs';
+import {refreshWorkStatus} from './user-notify.mjs';
 import {CardStore,readFirstPaths} from './card-store.mjs';
 import {appendLedger,readLedger} from './ledger.mjs';
 import {taskIdentity} from './task-identity.mjs';
@@ -34,7 +35,15 @@ function assignAndDispatch(store,work,before,flags,{home,by,send}){
  return {work:store.get(work.key),card,plan:{board:work.board,taskId:identity.taskIdFor(card)},dispatch};
 }
 
+// 업무 글 상태 메시지를 맞추는 사건: 실행 등록, 진행·차례 수정, 완료·취소·다시 열기. 실패(예: 발령 실패)해도 업무 기록은 이미
+// 바뀌었을 수 있어 finally에서 맞춘다. 맞추기는 실패해도 던지지 않고, 글이 없거나 디코 설정이 없으면 요청 0건이다.
+const STATUS_ACTIONS=new Set(['update','execute','complete','cancel','reopen']);
 export function workCommand(args,flags,context){
+ try{return workCommandInner(args,flags,context);}
+ finally{if(STATUS_ACTIONS.has(args[0])&&args[1]&&!flags.help)refreshWorkStatus(context.home,args[1]);}
+}
+
+function workCommandInner(args,flags,context){
  const {home,by}=context;
  const [action='list',key]=args,store=new WorkStore(home);
  if(flags.help&&action.startsWith('auto-'))return 'kadan work auto-configure <업무키> --revision N --implementation 원본카드키 --review 검수원본키 --worker 작업자 --reviewer 검수자 [--notify 감독 --deadline 기존시한 --next-block] | auto-show <업무키> | auto-report <업무키> --execution 현재실행키 --outcome implemented|pass|changes|exception [--result-file 기존절대경로] | auto-step <업무키> | auto-run <업무키> [--interval 초]. 상세: docs/automatic-review.md';

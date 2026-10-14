@@ -286,8 +286,10 @@ async function forumWorld(known = [], repoKeys = ['kadan'], forumOptions = {}) {
   let extra = '';
   for (const r of repoKeys) extra += `DISCORD_WEBHOOK_URL_${r.toUpperCase().replace(/[^A-Z0-9]/g, '_')}=http://127.0.0.1:${forum.port}/api/webhooks/333/${TOKEN}\n`;
   fs.appendFileSync(base.envFile, extra);
-  const threads = () => { try { return JSON.parse(fs.readFileSync(path.join(base.home, 'notify-threads.json'), 'utf8')).threads; } catch { return null; } };
-  return {base, forum, threads, stop: () => { base.stop(); forum.stop(); }};
+  const rawThreads = () => { try { return JSON.parse(fs.readFileSync(path.join(base.home, 'notify-threads.json'), 'utf8')).threads; } catch { return null; } };
+  // 글 id만 비교하는 옛 시험용(값이 옛 문자열이든 새 {threadId,statusMessageId}든). 새 형식 전체는 rawThreads.
+  const threads = () => { const t = rawThreads(); return t && Object.fromEntries(Object.entries(t).map(([k, v]) => [k, typeof v === 'string' ? v : v.threadId])); };
+  return {base, forum, threads, rawThreads, stop: () => { base.stop(); forum.stop(); }};
 }
 const bodyOf = r => JSON.parse(r.body);
 
@@ -545,4 +547,320 @@ test('R4 실제 spawnSync가 3초 제한에 걸리면(10초 대기 자식, 빈 s
   const took = Date.now() - t0;
   assert.equal(r.via, 'system'); assert.equal(r.error, '시스템 알림 시간 초과');
   assert.ok(took >= 2900 && took < 6000, `${took}ms`);
+});
+
+
+// --- 2단계: 업무 글 상태 메시지(웹훅 메시지 수정)와 경보→업무 연결 ---
+const {WorkStore} = await import('../src/work-store.mjs');
+const {refreshWorkStatus} = await import('../src/user-notify.mjs');
+const {buildWorkStatus} = await import('../src/work-status-message.mjs');
+const {workKeyOfAlert} = await import('../src/watch-runner.mjs');
+
+const mkWork = (home, key = 'kadan/work-x', title = '상태 시험') => {
+  const store = new WorkStore(home);
+  store.create({key, title, goal: '목표', scope: '범위', acceptance: '조건', owner: 'kadan-감독', repoPath: os.tmpdir()});
+  return store;
+};
+const touch = (store, key = 'kadan/work-x') => store.change(key, 'update', {progress: '진행 중'}, {revision: store.get(key).revision, note: '시험 수정'});
+const posts = (w, pred = () => true) => w.forum.requests().filter(r => r.method === 'POST' && pred(r));
+const patches = w => w.forum.requests().filter(r => r.method === 'PATCH');
+const isStatus = r => String(bodyOf(r).content).startsWith('**업무 상태**');
+const o2 = (w, extra = {}) => ({home: w.base.home, env: w.base.env, work: 'kadan/work-x', workTitle: '상태 시험', ...extra});
+
+test('S1 새 업무: 글 만들기 → 상태 메시지 1개 → 사건 뒤 같은 메시지 수정(새 메시지 0개)', async () => {
+  const w = await forumWorld();
+  try {
+    const store = mkWork(w.base.home);
+    assert.equal(notifyUser('알림 a', w.base.fakeSpawn(), {...o2(w), kind: 'mail', key: 'mail:1'}).via, 'discord');
+    const reqs = w.forum.requests();
+    assert.equal(reqs.length, 2);
+    assert.ok(bodyOf(reqs[0]).thread_name);                     // 1) 글 + 알림
+    assert.ok(isStatus(reqs[1]) && /thread_id=T1/.test(reqs[1].url) && /wait=true/.test(reqs[1].url)); // 2) 상태 메시지
+    assert.deepEqual(bodyOf(reqs[1]).allowed_mentions, {parse: []});
+    assert.ok(bodyOf(reqs[1]).content.length <= 2000);
+    assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M2'}});
+    touch(store);
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile};
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'sent');
+    assert.equal(posts(w).length, 2);                            // 새 메시지 0개
+    const [edit] = patches(w);
+    assert.match(edit.url, /\/messages\/M2\?thread_id=T1/);
+    assert.match(bodyOf(edit).content, /revision 2/);
+    assert.match(bodyOf(edit).content, /진행|다음 행동/);
+    assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M2'}});
+    // 두 번째 알림도 상태 메시지를 새로 올리지 않고 고친다
+    notifyUser('알림 b', w.base.fakeSpawn(), {...o2(w), kind: 'mail', key: 'mail:2'});
+    assert.equal(posts(w, isStatus).length, 1); assert.equal(patches(w).length, 2);
+  } finally { w.stop(); }
+});
+
+test('S2 상태 메시지가 지워져 수정이 404면 새 상태 메시지를 한 번 올리고 id를 바꾼다', async () => {
+  const w = await forumWorld(['T1']);
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'T1', statusMessageId: 'GONEMSG'}}}));
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile};
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'sent');
+    assert.equal(patches(w).length, 1); assert.equal(posts(w).length, 1);
+    assert.match(posts(w)[0].url, /thread_id=T1/);
+    assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M1'}});
+  } finally { w.stop(); }
+});
+
+test('S2 글 자체가 404면 새 글(첫 글이 상태 메시지)과 새 상태 메시지 id로 바꾼다', async () => {
+  const w = await forumWorld();
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'GONE', statusMessageId: 'GONEMSG'}}}));
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile};
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'sent');
+    const created = posts(w, r => bodyOf(r).thread_name);
+    assert.equal(created.length, 1); assert.ok(isStatus(created[0]));
+    assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M2'}}); // M1은 404로 거절된 글 요청이 번호를 썼다
+  } finally { w.stop(); }
+});
+
+test('S2 알림 때 기록된 글이 404면 1단계처럼 새 글 + 새 상태 메시지', async () => {
+  const w = await forumWorld();
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'GONE', statusMessageId: 'OLDMSG'}}}));
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), o2(w)).via, 'discord');
+    assert.equal(patches(w).length, 0);                          // 옛 글의 메시지는 고치지 않는다
+    assert.equal(posts(w, isStatus).length, 1);
+    assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M3'}});
+  } finally { w.stop(); }
+});
+
+test('S3 같은 업무 동시 알림 두 건(별도 프로세스)이어도 상태 메시지는 1개, 다른 업무 기록은 보존', async () => {
+  const w = await forumWorld([], ['kadan'], {delayMs: 400});
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-keep': {threadId: 'KEEP', statusMessageId: 'KM'}}}));
+    const a = {home: w.base.home, envFile: w.base.envFile, work: 'kadan/work-x', title: 't'};
+    const [r1, r2] = await Promise.all([runChild({...a, key: 'k1'}), runChild({...a, key: 'k2'})]);
+    assert.equal(r1.via, 'discord'); assert.equal(r2.via, 'discord');
+    assert.equal(posts(w, isStatus).length, 1);
+    assert.equal(patches(w).length, 1);                          // 두 번째 프로세스는 첫 프로세스의 메시지를 고친다
+    const t = w.rawThreads();
+    assert.deepEqual(t['kadan/work-keep'], {threadId: 'KEEP', statusMessageId: 'KM'});
+    assert.equal(t['kadan/work-x'].threadId, 'T1'); assert.ok(t['kadan/work-x'].statusMessageId);
+  } finally { w.stop(); }
+});
+
+test('S4 수정이 404 아닌 4xx면 재시도도 새 메시지도 없다', async () => {
+  const w = await forumWorld(['T1'], ['kadan'], {steps: [{status: 400, body: {}}]});
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M9'}}}));
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile};
+    const r = refreshWorkStatus(w.base.home, 'kadan/work-x', {env});
+    assert.equal(r.outcome, 'failed'); assert.equal(r.status, 400);
+    assert.equal(w.forum.requests().length, 1);
+    resetDiscordBlock(); // 4xx는 장애가 아니라서 막지 않는다
+    assert.notEqual(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'skipped');
+  } finally { w.stop(); }
+});
+
+test('S4 예산 안에 못 들어가는 상태 수정은 버린다(시스템 알림 0, 알림 결과는 그대로 discord)', async () => {
+  const w = await forumWorld(['T1'], ['kadan'], {steps: [{status: 200, body: {id: 'N', channel_id: 'T1'}}, {delayMs: 4000}]});
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M9'}}}));
+    const t0 = Date.now();
+    const r = notifyUser('a', w.base.fakeSpawn(), {...o2(w), totalMs: 3000});
+    assert.equal(r.via, 'discord'); assert.equal(r.error, null);
+    assert.equal(w.base.osCalls.length, 0);
+    assert.ok(Date.now() - t0 <= 3000 + 2000, `${Date.now() - t0}ms`);
+    assert.match(w.base.log(), /"kind":"status"/);
+  } finally { w.stop(); }
+});
+
+test('S4 장애 직후 60초 동안은 상태 수정 요청이 나가지 않는다', async () => {
+  const w = await forumWorld(['T1'], ['kadan'], {steps: [{status: 500, body: {}}, {status: 500, body: {}}]});
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M9'}}}));
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile};
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'failed');
+    const n = w.forum.requests().length;
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'skipped');
+    assert.equal(w.forum.requests().length, n);
+    // 알림도 같은 건너뛰기를 쓴다: 디스코드를 건너뛰고 시스템 알림
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), o2(w)).discord.outcome, 'skipped');
+    resetDiscordBlock();
+  } finally { w.stop(); }
+});
+
+test('S5 옛 형식 상태 파일(문자열 값)을 읽고 다음 저장 때 새 형식으로 바꾼다', async () => {
+  const w = await forumWorld(['T1', 'T9']);
+  try {
+    mkWork(w.base.home);
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': 'T1', 'kadan/work-y': 'T9'}}));
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), o2(w)).via, 'discord');
+    assert.match(w.forum.requests()[0].url, /thread_id=T1/);     // 옛 글 id로 이어 붙였다
+    assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M2'}, 'kadan/work-y': {threadId: 'T9', statusMessageId: null}});
+  } finally { w.stop(); }
+});
+
+test('S6 경보의 실행 키가 한 업무에 속하면 그 업무 키, 아니면 undefined(기본 #브리핑)', () => {
+  const identity = {resolve: id => id === 'card-a' ? {key: 'kadan/exec-a'} : {key: null}};
+  const works = [{key: 'kadan/work-1', executions: [{key: 'kadan/exec-a'}]}, {key: 'kadan/work-2', executions: [{key: 'kadan/exec-b'}]}];
+  assert.equal(workKeyOfAlert({taskId: 'card-a'}, identity, works), 'kadan/work-1');
+  assert.equal(workKeyOfAlert({taskId: 'kadan/exec-b'}, identity, works), 'kadan/work-2');
+  assert.equal(workKeyOfAlert({taskId: 'card-zzz'}, identity, works), undefined);
+  assert.equal(workKeyOfAlert({role: '감독'}, identity, works), undefined);
+  assert.equal(workKeyOfAlert({taskId: 'card-a'}, identity, [...works, {key: 'kadan/work-3', executions: [{key: 'kadan/exec-a'}]}]), undefined);
+});
+
+test('S6 업무 키가 있는 경보는 업무 글로 가고, 중복 키 규칙은 그대로이며 상태 수정은 중복 키를 쓰지 않는다', async () => {
+  const w = await forumWorld();
+  try {
+    mkWork(w.base.home);
+    const o = {...o2(w), kind: 'alert', key: 'alert:a1:RED', dedupWindowMs: 600000};
+    assert.equal(notifyUser('경보', w.base.fakeSpawn(), o).via, 'discord');
+    assert.equal(notifyUser('경보', w.base.fakeSpawn(), o).duplicate, true);
+    assert.equal(w.base.requests().length, 0);                  // #브리핑에는 안 갔다
+    assert.equal(posts(w, r => !isStatus(r)).length, 1);        // 경보는 한 번
+    const keys = w.base.log().split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(e => e.kind === 'status').map(e => e.key);
+    assert.deepEqual(keys, [null]);
+  } finally { w.stop(); }
+});
+
+test('S7 KADAN_NOTIFY=off·설정 없음·레포 키 없음·글 없음이면 요청 0건', async () => {
+  const w = await forumWorld(['T1'], ['other']); // kadan 레포 키 없음
+  try {
+    mkWork(w.base.home);
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile};
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M1'}}}));
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env}).outcome, 'none'); // 레포 키 없음
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env: {KADAN_NOTIFY: 'off', KADAN_NOTIFY_ENV_FILE: w.base.envFile}}).outcome, 'off');
+    assert.equal(refreshWorkStatus(w.base.home, 'kadan/work-x', {env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.base.dir, 'missing.env')}}).outcome, 'none'); // 비밀 파일 없음
+    const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-empty-'));
+    assert.equal(refreshWorkStatus(emptyHome, 'kadan/work-x', {env: {KADAN_NOTIFY: ''}}).outcome, 'none'); // 설정 없음
+    assert.equal(w.forum.requests().length + w.base.requests().length, 0);
+    const w2 = await forumWorld(['T1']); // 레포 키는 있지만 알림이 한 번도 안 나간 업무(글 없음)
+    try {
+      mkWork(w2.base.home);
+      assert.equal(refreshWorkStatus(w2.base.home, 'kadan/work-x', {env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w2.base.envFile}}).outcome, 'none');
+      assert.equal(w2.forum.requests().length, 0);
+    } finally { w2.stop(); }
+  } finally { w.stop(); }
+});
+
+test('S8 상태 파일·알림 기록에 주소·토큰·사용자 ID가 없고, 상태 본문은 WorkStore에서만 만든다', async () => {
+  const w = await forumWorld();
+  try {
+    const store = mkWork(w.base.home);
+    notifyUser('a', w.base.fakeSpawn(), o2(w));
+    touch(store);
+    refreshWorkStatus(w.base.home, 'kadan/work-x', {env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile}});
+    const state = fs.readFileSync(path.join(w.base.home, 'notify-threads.json'), 'utf8');
+    for (const text of [state, w.base.log()]) for (const x of [TOKEN, USER_ID, '/api/webhooks', 'http', '333']) assert.ok(!text.includes(x), x);
+    const s = buildWorkStatus(w.base.home, 'kadan/work-x');
+    assert.match(s.content, /^\*\*업무 상태\*\* · kadan\/work-x\n제목: 상태 시험\n상태: 열림 · revision 2\n열린 실행: 없음/);
+    assert.equal(buildWorkStatus(w.base.home, 'kadan/work-none'), null);
+  } finally { w.stop(); }
+});
+
+test('S9 사건 지점: work update/execute와 실행의 done이 상태 메시지를 고친다', async () => {
+  const w = await forumWorld();
+  const keep = {h: process.env.KADAN_HOME, n: process.env.KADAN_NOTIFY, f: process.env.KADAN_NOTIFY_ENV_FILE};
+  try {
+    const store = mkWork(w.base.home);
+    notifyUser('시작', w.base.fakeSpawn(), o2(w));
+    process.env.KADAN_HOME = w.base.home; process.env.KADAN_NOTIFY = ''; process.env.KADAN_NOTIFY_ENV_FILE = w.base.envFile;
+    const {workCommand} = await import('../src/work-command.mjs');
+    const {refreshWorkOfExecution} = await import('../src/commands/done.mjs');
+    workCommand(['update', 'kadan/work-x'], {revision: 1, note: '진행', progress: '3/10'}, {home: w.base.home, by: '사람'});
+    assert.equal(patches(w).length, 1);
+    assert.match(bodyOf(patches(w)[0]).content, /revision 2/);
+    // 연결된 실행이 있는 업무의 done → 그 업무 글 상태가 고쳐진다. 연결 없는 실행은 요청 0건.
+    const body = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s9-')) + '/b.md';
+    fs.writeFileSync(body, '지시');
+    workCommand(['execute', 'kadan/work-x'], {revision: 2, phase: 'implementation', round: 1, title: '구현', 'body-file': body, note: '실행'}, {home: w.base.home, by: '사람'});
+    assert.equal(patches(w).length, 2);
+    const exec = store.get('kadan/work-x').executions[0].key;
+    assert.match(bodyOf(patches(w)[1]).content, /구현 1라운드/);
+    refreshWorkOfExecution(exec);
+    assert.equal(patches(w).length, 3);
+    refreshWorkOfExecution('kadan/exec-unknown');
+    assert.equal(patches(w).length, 3);
+    assert.equal(posts(w, isStatus).length, 1);
+  } finally {
+    for (const [k, v] of [['KADAN_HOME', keep.h], ['KADAN_NOTIFY', keep.n], ['KADAN_NOTIFY_ENV_FILE', keep.f]]) v === undefined ? delete process.env[k] : process.env[k] = v;
+    w.stop();
+  }
+});
+
+// 2라운드 검수 재현: 실패로 끝난 실행이 "열린 실행"에 남지 않고, 보고만 있는 실행은 '보고 기준'으로 보인다.
+test('S10 실패로 끝난 실행은 열린 실행이 아니고, 업무 완료 뒤 열린 실행 0·상태 완료', async () => {
+  const {CardStore} = await import('../src/card-store.mjs');
+  const {appendLedger} = await import('../src/ledger.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s10-'));
+  const store = mkWork(home), cards = new CardStore(home);
+  const body = '# 지시\n\n## 읽고 시작할 것\n- /tmp/x.md';
+  const exec = (round, role) => {
+    const w = store.change('kadan/work-x', 'execute', {phase: 'implementation', round, title: `실행 ${round}`, body}, {revision: store.get('kadan/work-x').revision, note: '실행'});
+    const key = w.executions.at(-1).key, card = cards.get(key);
+    const ready = cards.update(key, {status: 'ready', scope: '시험'}, {revision: card.revision, note: '승인'});
+    const assigned = cards.update(key, {status: 'assigned', role, board: 'b', rallyId: 'r1', rallyTitle: '묶음', rallyRound: String(round), rallyStep: 'implementation'}, {revision: ready.revision, note: '배정'});
+    appendLedger({kind: 'send', role, taskId: assigned.id, t: new Date().toISOString()}, home);
+    return assigned;
+  };
+  const failedCard = exec(1, 'kadan-작업자-1');
+  appendLedger({kind: 'done', role: 'kadan-작업자-1', taskId: failedCard.id, result: 'failed', t: new Date(Date.now() + 1000).toISOString()}, home);
+  const second = exec(2, 'kadan-작업자-2');
+  cards.update(second.key, {activity: 'running'}, {revision: second.revision, by: 'kadan-작업자-2', note: '시작'});
+  let text = buildWorkStatus(home, 'kadan/work-x').content;
+  assert.match(text, /열린 실행 1건:\n- 구현 2라운드 · kadan-작업자-2 · 시작함\(보고 기준\)/);
+  assert.match(text, /실패로 끝난 실행: 1건/);
+  assert.ok(!text.includes('1라운드'));
+  cards.update(second.key, {activity: 'waiting'}, {revision: cards.get(second.key).revision, by: 'kadan-작업자-2', note: '대기'});
+  assert.match(buildWorkStatus(home, 'kadan/work-x').content, /결과 대기\(보고 기준\)/);
+  // 두 번째도 실패로 끝내고 업무를 완료하면 열린 실행 0, 상태 완료
+  appendLedger({kind: 'done', role: 'kadan-작업자-2', taskId: second.id, result: 'failed', t: new Date(Date.now() + 2000).toISOString()}, home);
+  store.change('kadan/work-x', 'complete', {result: '실패 실행을 정리하고 끝냄'}, {revision: store.get('kadan/work-x').revision, by: '사람', note: '완료'});
+  text = buildWorkStatus(home, 'kadan/work-x').content;
+  assert.match(text, /상태: 완료/); assert.match(text, /열린 실행: 없음/); assert.match(text, /실패로 끝난 실행: 2건/);
+});
+
+// 3라운드 검수 재현: 인계·재발령 뒤 옛 담당의 시작·대기 보고는 지금 담당 상태로 보이지 않는다.
+test('S11 보고 기준 표시는 지금 담당의 최신 발령 이후 보고일 때만 — 인계·재발령 뒤 옛 보고는 발령됨', async () => {
+  const {CardStore} = await import('../src/card-store.mjs');
+  const {appendLedger} = await import('../src/ledger.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s11-'));
+  const store = mkWork(home), cards = new CardStore(home);
+  const w = store.change('kadan/work-x', 'execute', {phase: 'implementation', round: 1, title: '실행', body: '# 지시\n\n## 읽고 시작할 것\n- /tmp/x.md'}, {revision: 1, note: '실행'});
+  const key = w.executions[0].key, id = cards.get(key).id;
+  const send = (role, offsetMs) => appendLedger({kind: 'send', role, taskId: id, t: new Date(Date.now() + offsetMs).toISOString()}, home);
+  const line = () => buildWorkStatus(home, 'kadan/work-x').content.split('\n').find(l => l.startsWith('- 구현'));
+  const ready = cards.update(key, {status: 'ready', scope: '시험'}, {revision: cards.get(key).revision, note: '승인'});
+  let card = cards.update(key, {status: 'assigned', role: 'kadan-갑', board: 'b', rallyId: 'r1', rallyTitle: '묶음', rallyRound: '1', rallyStep: 'implementation'}, {revision: ready.revision, note: '배정'});
+  send('kadan-갑', -2000);
+  assert.match(line(), /발령됨/);                                     // 보고 없음
+  card = cards.update(key, {activity: 'running'}, {revision: card.revision, by: 'kadan-갑', note: '시작'});
+  assert.match(line(), /시작함\(보고 기준\)/);                         // (1) 본인 보고
+  send('kadan-갑', 300);                                               // (3) 같은 역할 재발령 — 옛 보고는 새 발령보다 앞선다
+  assert.match(line(), /발령됨/); assert.ok(!line().includes('보고 기준'));
+  await new Promise(r => setTimeout(r, 400));
+  card = cards.update(key, {activity: 'waiting'}, {revision: card.revision, by: 'kadan-갑', note: '대기'});
+  assert.match(line(), /결과 대기\(보고 기준\)/);                      // (4) 재발령 뒤 새 보고
+  const w2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s11b-'));
+  const store2 = mkWork(w2), cards2 = new CardStore(w2);
+  store2.change('kadan/work-x', 'execute', {phase: 'implementation', round: 1, title: '실행', body: '# 지시\n\n## 읽고 시작할 것\n- /tmp/x.md'}, {revision: 1, note: '실행'});
+  const key2 = store2.get('kadan/work-x').executions[0].key, id2 = cards2.get(key2).id;
+  const line2 = () => buildWorkStatus(w2, 'kadan/work-x').content.split('\n').find(l => l.startsWith('- 구현'));
+  const r2 = cards2.update(key2, {status: 'ready', scope: '시험'}, {revision: cards2.get(key2).revision, note: '승인'});
+  let c2 = cards2.update(key2, {status: 'assigned', role: 'kadan-갑', board: 'b', rallyId: 'r1', rallyTitle: '묶음', rallyRound: '1', rallyStep: 'implementation'}, {revision: r2.revision, note: '배정'});
+  appendLedger({kind: 'send', role: 'kadan-갑', taskId: id2, t: new Date(Date.now() - 4000).toISOString()}, w2);
+  c2 = cards2.update(key2, {activity: 'running'}, {revision: c2.revision, by: 'kadan-갑', note: '시작'});
+  assert.match(line2(), /시작함\(보고 기준\)/);
+  // 인계: 담당이 바뀌고 새 담당에게 발령 — 새 담당 보고 없음 → 발령됨 (옛 activityRole은 지금 담당이 아니다)
+  c2 = cards2.update(key2, {role: 'kadan-을'}, {revision: c2.revision, note: '인계'});
+  appendLedger({kind: 'send', role: 'kadan-을', taskId: id2, t: new Date(Date.now() - 1000).toISOString()}, w2);
+  assert.match(line2(), /발령됨/); assert.ok(!line2().includes('보고 기준'));
+  // (4) 재발령 뒤 새 보고 → 보고 기준
+  cards2.update(key2, {activity: 'waiting'}, {revision: c2.revision, by: 'kadan-을', note: '대기'});
+  assert.match(line2(), /결과 대기\(보고 기준\)/);
 });

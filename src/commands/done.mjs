@@ -5,6 +5,18 @@ import { floor } from "../floor.mjs";
 import { ledgerHome, readLedger } from "../ledger.mjs";
 import { die, sessionName, normalizeFloorRead } from "../cli-basics.mjs";
 import { confirmDone, waitScreenDone } from "../cli-wait-done.mjs";
+import { WorkStore } from "../work-store.mjs";
+import { refreshWorkStatus } from "../user-notify.mjs";
+
+// 이 실행이 속한 업무 글의 상태 메시지를 맞춘다(사건 지점 1곳). 업무가 없거나 디코 설정이 없으면 아무것도 안 한다.
+export function refreshWorkOfExecution(executionKey) {
+  if (typeof executionKey !== "string") return;
+  try {
+    const home = ledgerHome();
+    const work = new WorkStore(home).list().find(w => w.executions.some(x => x.key === executionKey));
+    if (work) refreshWorkStatus(home, work.key);
+  } catch { /* 상태 메시지 맞추기가 완료 확정을 막지 않는다 */ }
+}
 
 export function cmdDone(argv, flags = {}) {
   const [role, taskId, given, ...extra] = argv;
@@ -39,7 +51,7 @@ export function cmdDone(argv, flags = {}) {
   console.log(
     `완료 확정: 역할=${entry.role} 카드=${entry.taskId} 결과=${entry.result} 확인=${entry.by}`
   );
-  if (!closeCard) return;
+  if (!closeCard) return refreshWorkOfExecution(entry.executionKey);
   try {
     const closed = closeCardAfterDone(entry.executionKey, { home: ledgerHome(), by: entry.by, note: flags.note });
     console.log(closed.state === "already"
@@ -49,4 +61,5 @@ export function cmdDone(argv, flags = {}) {
     console.error(`카드 닫기 실패: ${error.message} — 실행 완료 확정은 그대로 저장됨`);
     process.exitCode = 1;
   }
+  refreshWorkOfExecution(entry.executionKey);
 }

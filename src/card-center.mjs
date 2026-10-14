@@ -8,6 +8,15 @@ import {isEnded} from './status-labels.mjs';
 // 따옴표는 셸을 거치며 '"max"' 처럼 겹쳐 들어온다. 한 겹만 벗기면 강도가 빈칸이 된다(2026-09-12 kimi 발령에서 실제로 빔).
 export const effortOfCmd=cmd=>typeof cmd==='string'?(cmd.match(/model_reasoning_effort\s*=\s*["']*([A-Za-z]+)["']*|--(?:effort|thinking)[=\s]+["']*([A-Za-z]+)["']*/)?.slice(1).find(Boolean)||''):'';
 
+// 저장된 시작·대기 보고(card.activity)를 지금 담당의 보고로 인정하는 조건. 보고한 역할이 지금 담당 역할이고, 보고가 그 역할의
+// 최신 발령 이후여야 한다(인계·재발령 뒤 옛 보고는 인정하지 않는다). alive:true면 세션이 살아 있다는 조건도 본다.
+// 상태 메시지처럼 생존을 모르는 곳은 alive:false로 생존 조건만 뺀다. 인정하면 'running'|'waiting', 아니면 null.
+export function reportedActivity(card,own,{now=Date.now(),alive=true}={}) {
+  const activityAt=Date.parse(card.activityAt);
+  if(!['running','waiting'].includes(card.activity)||!Number.isFinite(activityAt)||now<activityAt)return null;
+  return own.some(r=>r.role===card.activityRole&&r.role===card.role&&r.state==='unconfirmed'&&(!alive||r.sessionState==='alive')&&activityAt>=(Date.parse(r.sentAt)||0))?card.activity:null;
+}
+
 // 카드 한 장과 그 카드에 대한 여러 역할의 실행을 분리한다.
 export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now()}) {
   if(entries.some(e=>e?.broken))throw new Error('원장 손상: 카드 실행 상태 모름');
@@ -64,9 +73,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const transition=card.history.filter((h,i)=>i>0&&h.status!==card.history[i-1].status).at(-1);
     if(transition&&Date.parse(transition.at)>lastRun&&['ready','draft'].includes(card.status))state=card.status;
     if(transition&&Date.parse(transition.at)>lastRun&&card.status==='assigned'&&own.every(r=>r.state==='done'))state='assigned';
-    const activityAt=Date.parse(card.activityAt)||0;
-    if(state==='unconfirmed'&&['running','waiting'].includes(card.activity)&&Number.isFinite(Date.parse(card.activityAt))&&now>=activityAt&&
-       own.some(r=>r.role===card.activityRole&&r.role===card.role&&r.state==='unconfirmed'&&r.sessionState==='alive'&&activityAt>=(Date.parse(r.sentAt)||0)))state=card.activity;
+    if(state==='unconfirmed'&&reportedActivity(card,own,{now,alive:true}))state=card.activity;
     const question=card.history.filter(h=>h.noteKind==='question').at(-1);
     const answer=card.history.filter(h=>h.noteKind==='answer').at(-1);
     return {...card,board,runs:own,displayState:state,ambiguous:connectionErrors.length>0,connectionErrors,pendingQuestion:!!question&&(!answer||question.revision>answer.revision)};
