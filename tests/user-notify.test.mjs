@@ -791,3 +791,35 @@ test('S9 사건 지점: work update/execute와 실행의 done이 상태 메시�
     w.stop();
   }
 });
+
+// 2라운드 검수 재현: 실패로 끝난 실행이 "열린 실행"에 남지 않고, 보고만 있는 실행은 '보고 기준'으로 보인다.
+test('S10 실패로 끝난 실행은 열린 실행이 아니고, 업무 완료 뒤 열린 실행 0·상태 완료', async () => {
+  const {CardStore} = await import('../src/card-store.mjs');
+  const {appendLedger} = await import('../src/ledger.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s10-'));
+  const store = mkWork(home), cards = new CardStore(home);
+  const body = '# 지시\n\n## 읽고 시작할 것\n- /tmp/x.md';
+  const exec = (round, role) => {
+    const w = store.change('kadan/work-x', 'execute', {phase: 'implementation', round, title: `실행 ${round}`, body}, {revision: store.get('kadan/work-x').revision, note: '실행'});
+    const key = w.executions.at(-1).key, card = cards.get(key);
+    const ready = cards.update(key, {status: 'ready', scope: '시험'}, {revision: card.revision, note: '승인'});
+    const assigned = cards.update(key, {status: 'assigned', role, board: 'b', rallyId: 'r1', rallyTitle: '묶음', rallyRound: String(round), rallyStep: 'implementation'}, {revision: ready.revision, note: '배정'});
+    appendLedger({kind: 'send', role, taskId: assigned.id, t: new Date().toISOString()}, home);
+    return assigned;
+  };
+  const failedCard = exec(1, 'kadan-작업자-1');
+  appendLedger({kind: 'done', role: 'kadan-작업자-1', taskId: failedCard.id, result: 'failed', t: new Date(Date.now() + 1000).toISOString()}, home);
+  const second = exec(2, 'kadan-작업자-2');
+  cards.update(second.key, {activity: 'running'}, {revision: second.revision, by: 'kadan-작업자-2', note: '시작'});
+  let text = buildWorkStatus(home, 'kadan/work-x').content;
+  assert.match(text, /열린 실행 1건:\n- 구현 2라운드 · kadan-작업자-2 · 시작함\(보고 기준\)/);
+  assert.match(text, /실패로 끝난 실행: 1건/);
+  assert.ok(!text.includes('1라운드'));
+  cards.update(second.key, {activity: 'waiting'}, {revision: cards.get(second.key).revision, by: 'kadan-작업자-2', note: '대기'});
+  assert.match(buildWorkStatus(home, 'kadan/work-x').content, /결과 대기\(보고 기준\)/);
+  // 두 번째도 실패로 끝내고 업무를 완료하면 열린 실행 0, 상태 완료
+  appendLedger({kind: 'done', role: 'kadan-작업자-2', taskId: second.id, result: 'failed', t: new Date(Date.now() + 2000).toISOString()}, home);
+  store.change('kadan/work-x', 'complete', {result: '실패 실행을 정리하고 끝냄'}, {revision: store.get('kadan/work-x').revision, by: '사람', note: '완료'});
+  text = buildWorkStatus(home, 'kadan/work-x').content;
+  assert.match(text, /상태: 완료/); assert.match(text, /열린 실행: 없음/); assert.match(text, /실패로 끝난 실행: 2건/);
+});
