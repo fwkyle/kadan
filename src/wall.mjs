@@ -487,14 +487,15 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(url);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
     if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(url),remember:(body,type)=>remember(url,body,type)})) return;
     if (centerHandler && await centerHandler.handle(request,response,url)) { clear(); return; }
-    // 수집이 오래 걸려 줄이 밀리면 화면은 이미 시간 초과로 연결을 끊은 뒤다. 새 수집을 시작하기 전에 한 번 양보해
+    // 수집이 오래 걸려 줄이 밀리면 화면은 이미 시간 초과로 연결을 끊은 뒤다. 새 수집을 시작하기 전에 양보해
     // 끊긴 연결을 알아채고, 아무도 기다리지 않는 요청은 계산하지 않는다(2026-10-14: 11~41초 응답이 겹쳐 쌓였다).
+    // 응답 쪽 연결이 실제로 닫혔을 때(소켓 파괴·응답 close)만 건너뛴다. 읽기 쪽만 끝난 연결은 응답을 기다릴 수 있어 건너뛰지 않는다.
+    // 한계: 화면이 FIN만 보내고 닫으면 서버는 반쯤 닫힌 연결과 구별하지 못해 계산한다(RST·소켓 오류 때는 건너뛴다).
     if(home&&request.method==='GET'&&!(sharedSnapshot&&cacheSec&&now()-sharedSnapshot.at<cacheSec*1000)){
-      // 요청을 읽은 다음 반복에서야 상대가 닫았는지 알 수 있어 두 번 양보한다.
-      for(let i=0;i<2;i++)await new Promise(resolve=>setImmediate(resolve));
-      // 화면이 연결을 닫으면 서버에는 반쯤 닫힌 연결(읽기 쪽 끝)이나 끊긴 연결로 보인다. 브라우저·curl·fetch는 응답을 기다리는 동안
-      // 닫지 않는다. 요청을 보내고 쓰기 쪽만 먼저 닫는 단순 클라이언트(일부 HTTP/1.0류)의 요청은 이 검사로 버려진다.
-      if(response.destroyed||request.socket.destroyed||request.socket.readableEnded)return;
+      let closed=false;
+      response.once('close',()=>{if(!response.writableFinished)closed=true;});
+      for(let i=0;i<3;i++)await new Promise(resolve=>setImmediate(resolve));
+      if(closed||response.destroyed||request.socket.destroyed)return;
     }
     const serve=()=>{
     const snapshot=sharedSnapshot&&cacheSec&&now()-sharedSnapshot.at<cacheSec*1000
@@ -542,6 +543,8 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     };
     try{if(home)storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(error.status||503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});response.end('저장소 확인 불가: '+error.message);}
   });
+  // 요청을 다 보내고 쓰기 쪽만 닫은 클라이언트도 응답을 받는다(기본값은 상대가 닫으면 이쪽도 닫는다).
+  server.httpAllowHalfOpen=true;
   server.on('close',()=>{clearTimeout(warming);warming=null;});
   return server;
 }

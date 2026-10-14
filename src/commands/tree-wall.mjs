@@ -16,7 +16,7 @@ import { collectResources } from "../watch-resource.mjs";
 import { recentSends, die } from "../cli-basics.mjs";
 import { buildTree, renderTree } from "../cli-tree.mjs";
 import { collectCardFiles } from "../cli-guarded-send.mjs";
-import { dataVersion, wallCache } from "../wall-snapshot-cache.mjs";
+import { dataVersion, nextTimeBoundary, wallCache } from "../wall-snapshot-cache.mjs";
 
 export function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
@@ -87,7 +87,12 @@ export function loadWallSnapshot(runtime=null) {
     const runtimeKnown=!errors.some(x=>x.startsWith("생존"));
     // 카드 상태 계산은 원장·카드 파일과 세션 생존 여부(pid 포함)가 같으면 결과가 같다.
     centerKey = version && JSON.stringify([version, runtimeKnown, Object.keys(aliveBySession).sort().map(name => [name, aliveBySession[name].pid ?? null])]);
-    center=wallCache.memo("center", centerKey, () => buildCardCenter({cards,entries,tree,runtimeKnown}));
+    // 상태 판정이 현재 시각을 본다(card-center의 activityAt 비교). 계산한 시각을 쓰고, 카드에 적힌 다음 시각 경계가 지나면 다시 계산한다.
+    let builtAt = 0;
+    const cached = wallCache.memo("center", centerKey, () => buildCardCenter({cards,entries,tree,runtimeKnown,now:(builtAt=Date.now())}),
+      { boundary: () => nextTimeBoundary(cards, builtAt) });
+    // 대기 출력 꼬리(out/*.wait-*.txt)는 원장 밖 파일이라 재사용한 카드 상태에 낡은 값이 남는다. 역할 목록은 매번 새 tree의 것을 쓴다.
+    center = { ...cached, roles: [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()] };
     registeredWorks=wallCache.memo("works", version, () => new WorkStore(home).list());
     center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
