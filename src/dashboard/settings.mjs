@@ -1,3 +1,4 @@
+import { userAttention } from "../user-attention.mjs";
 // 새 카드 양식·결정 목록·실행 도구 설정 화면(DS-1-impl: dashboard-api.mjs에서 옮김).
 import { createForm } from "../dashboard-forms.mjs";
 import { decisionContent } from "../decision-wall.mjs";
@@ -19,8 +20,14 @@ export function createData(snapshot, url, stamp) {
 
 export function decisionsData(snapshot, url, stamp) {
   if (snapshot.decisionError) throw new Error(snapshot.decisionError);
+  let attention=[], attentionError=null;
+  try {
+    if (snapshot.ledgerLines === null) throw new Error("사용자 확인 기록을 읽을 수 없습니다");
+    attention=userAttention(snapshot.entries ?? [], snapshot.home);
+  } catch (error) { attentionError=error.message; }
   return {
     ...stamp,
+    attention, attentionError,
     items: (snapshot.decisions || []).map((d) => ({
       ...d,
       ...decisionContent(d),

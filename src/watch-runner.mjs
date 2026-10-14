@@ -1,3 +1,4 @@
+import { userAlertRequired } from "./user-notification-policy.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
 import { MailWatch } from "./watch-mail.mjs";
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
@@ -570,7 +571,9 @@ export async function runWatch({
       let target = "stdout";
       const failureRecipient = failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
       let delivered = false, held = false;
-      if (recipient) {
+      const userSuppressed = recipient === USER_RECIPIENT && !userAlertRequired(alert);
+      if (userSuppressed) target = "사용자 일상 알림 제외 · 기록만 유지";
+      if (recipient && !userSuppressed) {
         if (retry && !recordAlert(record, {...alert,route,held:false}, recipient, false)) {
           pendingAlerts.set(alert.id, alert);
           continue;
@@ -607,11 +610,17 @@ export async function runWatch({
             let escalationTarget = failureRecipient;
             let escalationDelivered = false;
             try {
-              sendAlert(failureRecipient, `${escalationMessage} → ${failureRecipient}`);
-              escalationDelivered = true;
-              alertRecipients.set(alert.id, failureRecipient);
-              deliveryFailures.set(alert.id, escalation);
-              deliveredRecipients.add(failureRecipient);
+              if (failureRecipient === USER_RECIPIENT && !userAlertRequired(escalation)) {
+                escalationTarget = "사용자 일상 알림 제외 · 기록만 유지";
+              } else {
+                sendAlert(failureRecipient, `${escalationMessage} → ${failureRecipient}`);
+                escalationDelivered = true;
+              }
+              if (escalationDelivered) {
+                alertRecipients.set(alert.id, failureRecipient);
+                deliveryFailures.set(alert.id, escalation);
+                deliveredRecipients.add(failureRecipient);
+              }
             } catch (escalationError) {
               escalationTarget = `${failureRecipient} 전달 실패(${escalationError.message})`;
             }
@@ -620,11 +629,8 @@ export async function runWatch({
           }
         }
       }
-      recordAlert(record, {...alert,route,held}, recipient ?? null, delivered);
-      if (!held && recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
-        const notifyError = notifyUser(message, spawn);
-        if (notifyError) target += `; 사용자 알림 실패(${notifyError})`;
-      }
+      recordAlert(record, {...alert,route,held,userSuppressed}, recipient ?? null, delivered);
+
       print(`${message} → ${target}`);
     }
     for (const alert of changes.absorbed) {

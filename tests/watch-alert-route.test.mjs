@@ -48,7 +48,7 @@ test('1. 감시AI 보고도 같은 경로: route·super가 죽으면 @user로 �
  const r=new WatchReports({home,now:()=>Date.now(),readCards:()=>[{id:'a',key:'r/a',role:'x-작업자',board:'x',status:'assigned',workType:'execution'}],
   floor:{list:()=>[{session:'kadan-x-작업자',pid:1}]},send:(role,message)=>sent.push({role,message})});
  const job=r.request({source:'stall',role:'x-작업자',parents:new Map(),routes:[['x','x-죽은감독']],superRole:'죽은-슈퍼'});
- r.submit(job.requestId,'정체','입력 대기에서 멈춤');
+ r.submit(job.requestId,'응답장애','입력에 응답하지 못함');
  assert.deepEqual(sent.map(item=>item.role),['@user']);
 });
 test('2. 시작 경고: route·--super 이름이 살아 있지 않으면 알려 주고, 모두 살아 있으면 조용하다',()=>{

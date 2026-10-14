@@ -1,3 +1,4 @@
+import { notifyUser } from "./watch-system.mjs";
 import {assertWritable,storageMode,transaction,readStream,appendStream} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,7 +9,7 @@ import {WorkStore} from './work-store.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveCardRole} from './handover-state.mjs';
 import {isUserActor} from './actors.mjs';
-const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
+const supervisor=by=>by==='비서'||typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
 const human=by=>isUserActor(by);
 const required=(v,name)=>{if(typeof v!=='string'||!v.trim())throw new Error(`${name} 필요`);return v.trim()};
 // 새 결정 요청은 사용자가 답하기 전에 열어 볼 주소·절대경로, 또는 '확인 경로 없음: 이유' 줄이 있어야 한다.
@@ -19,7 +20,13 @@ export function assertVerifyPath(...texts){
  throw new Error(`확인 경로 필요: ${blank}질문이나 이유에 답하기 전에 열어 볼 주소나 절대경로를 한 줄에 하나씩 넣으세요. 예: "- PR: https://github.com/<조직>/<레포>/pull/<번호>", "- Preview: <배포 기록에서 확인한 실제 접속 주소>", "- 노션: https://www.notion.so/<페이지>", "- 결과 파일: /home/<이름>/.kadan/cards/<저장소>/<카드>/result.md". 열어 볼 대상이 없는 순수 방침 질문이면 "- 확인 경로 없음: <이유>" 줄을 넣으세요.`);
 }
 export class DecisionStore {
- constructor(home,{notify}={}){this.home=home;this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
+ constructor(home,{notify,notifyRequest}={}){
+  this.notifyRequest=notifyRequest??(message=>{
+    if(process.env.KADAN_NOTIFY==='off')return;
+    const error=notifyUser(message,spawnSync);
+    if(error)throw new Error(error);
+  });
+  this.home=home;this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'send',role,message],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'사람'},encoding:'utf8',timeout:15000});
   if(r.status!==0)throw new Error('통지 실패/불확실: 요청자 화면과 우편 원장을 확인하세요');
  });}
@@ -32,8 +39,10 @@ export class DecisionStore {
  locked(fn){assertWritable(this.home);if(storageMode(this.home)==='sqlite')return transaction(this.home,fn);fs.mkdirSync(this.dir,{recursive:true,mode:0o700});const lock=path.join(this.dir,'.lock');try{fs.mkdirSync(lock)}catch{throw new Error('결정 저장 중: 새 상태를 확인하세요')}
   try{return fn()}finally{fs.renameSync(lock,path.join(this.dir,`.released-${randomUUID()}`))}}
  // work: 결정이 막고 있는 업무. 카드가 그 업무의 실행이 아니어도(조사 카드 등) 감시·후속 표시가 업무를 답 대기로 알아보게 한다(2026-10-07 [kyle]).
- request(card,{question,options,recommendation,reason,work},by){return this.locked(()=>{
-  if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독만 작성');
+ request(card,{question,options,recommendation,reason,work},by){
+  let created=false;
+  const saved=this.locked(()=>{
+  if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독 또는 임시 총괄 비서만 작성');
   const c=new CardStore(this.home).get(card);this.list();
   if(work!==undefined&&String(work).trim()==='없음')work=undefined;
   else if(work!==undefined){work=required(work,'업무 주소').replace(/^work:/,'');if(new WorkStore(this.home).get(work).status!=='open')throw new Error('열린 업무만 연결');}
@@ -49,8 +58,15 @@ export class DecisionStore {
   options=options.map(x=>required(x,'선택지'));if(new Set(options).size!==options.length||!options.includes(recommendation))throw new Error('중복 없는 선택지와 일치하는 추천 필요');
   const existing=this.list().find(d=>d.status==='open'&&d.card===card&&d.requestedBy===by&&d.question===question);
   if(existing){if(JSON.stringify(existing.options)!==JSON.stringify(options)||existing.reason!==reason||existing.recommendation!==recommendation)throw new Error('같은 질문의 다른 내용: 기존 요청을 취소한 뒤 새 요청');return existing;}
+  created=true;
   return this.write({id:randomUUID(),revision:1,card,...(work?{work}:{}),to:'@user',requestedBy:by,question,options,recommendation,reason,status:'open',at:new Date().toISOString()});
- });}
+ });
+  if(created){
+    try{this.notifyRequest(`카단 · 결정 필요: ${saved.question.split('\n')[0].slice(0,120)} · 대시보드 내 결정`);}
+    catch{console.error('결정은 저장됐지만 시스템 알림을 보내지 못했습니다. 대시보드 내 결정에서 확인하세요.');}
+  }
+  return saved;
+ }
  answer(id,{revision,text,choice},by){let newlyAnswered=false;const saved=this.locked(()=>{
   if(!human(by))throw new Error('사용자 답변은 사람 명의로만 기록');
   const d=this.get(id);choice=choice||null;text=required(typeof text==='string'&&text.trim()?text:choice,'답변 또는 선택');

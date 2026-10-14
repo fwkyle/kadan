@@ -126,6 +126,8 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.escalatedTo ? {escalatedTo:alert.escalatedTo} : {}),
       delivered,
       ...(alert.held ? {held:true} : {}),
+      ...(alert.userSuppressed ? {userSuppressed:true} : {}),
+      ...(alert.sourceKind ? {sourceKind:alert.sourceKind} : {}),
       by: "watch",
       ...(resolved ? { resolved: true } : {}),
     });

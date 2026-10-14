@@ -81,14 +81,14 @@ test('자원 AMBER→RED→모름→정상과 과거 raw 경고·해소가 있�
  }
 });
 
-test('같은 자원 상황에서 실제 죽음·전달 실패는 기존 수신자와 사용자에게 알리고, 해소는 기록만 남긴다',async ctx=>{
+test('같은 자원 상황에서 실제 죽음·전달 실패는 기존 담당자에게 알리고, 해소는 기록만 남긴다',async ctx=>{
  const r=await exercise(ctx,{death:true});
  assert.deepEqual(r.measurements,[]);
  // 해소 우편은 없다(2026-10-05 [kyle]). 원장에 resolved 기록만 남는다.
  assert.deepEqual(r.messages.map(m=>m.role),['p-감독','p-슈퍼감독']);
  assert.match(r.messages[0].message,/세션 종료 의심 kadan-p-작업자/);
  assert.match(r.messages[1].message,/전달실패/);
- assert.equal(r.notifications.length,1);
+ assert.equal(r.notifications.length,0); // 담당 슈퍼감독에게 전달됐으므로 사용자 중복 알림 없음
  assert.deepEqual(r.records.filter(e=>e.kind==='alert').map(e=>[e.alertKind,e.delivered,e.resolved??false]),
   [['전달실패',true,false],['죽음',false,false],['죽음',false,true]]);
 });

@@ -124,9 +124,14 @@ function addLine(hierarchyPath, role, parent, waitMs) {
   }, waitMs);
 }
 
-export function registerStartedRole({ role, creator, cmd, home = ledgerHome(), entries = null, lockWaitMs } = {}) {
+export function registerStartedRole({ role, creator, cmd, profile, home = ledgerHome(), entries = null, lockWaitMs } = {}) {
   if (!role) return { registered: false, reason: "역할 없음" };
   if (isKadanToolCommand(cmd)) return { registered: false, reason: "카단 운영 도구 세션" };
+  if (profile === "super") {
+    const found = hierarchyPathFor(home, entries);
+    if (found.error) return { registered: false, reason: found.error };
+    return addLine(found.hierarchyPath, role, USER_RECIPIENT, lockWaitMs);
+  }
   if (!creator || creator === "사람" || creator === "watch") {
     return { registered: false, reason: "만든 사람의 역할을 모름" };
   }

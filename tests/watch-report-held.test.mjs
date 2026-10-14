@@ -40,10 +40,10 @@ for (const backend of ['jsonl', 'sqlite']) {
   for (const latestHeld of [true, false]) {
     test(`${backend}: 회복 뒤 재발하면 옛 보류 알림은 취소하고 최신 알림만 전달한다 (${latestHeld})`, () => {
       const f = fixture(backend);
-      const old = f.submit('정체', 'OLD_OBSOLETE');
+      const old = f.submit('응답장애', 'OLD_OBSOLETE');
       f.submit('진행중', '정상 회복');
       f.held = latestHeld;
-      const latest = f.submit('정체', 'LATEST');
+      const latest = f.submit('응답장애', 'LATEST');
       assert.equal(latest.notify, true);
       // 감시 재시작과 오래된 순회 스냅샷으로도 취소·전송을 반복하지 않는다.
       const snapshot = f.rows();
@@ -66,8 +66,8 @@ for (const backend of ['jsonl', 'sqlite']) {
 
   test(`${backend}: 같은 문제의 반복 보고는 보류한 최초 알림을 잃지 않고 한 번만 전달한다`, () => {
     const f = fixture(backend);
-    const first = f.submit('정체', '계속된 동일 문제');
-    assert.equal(f.submit('정체', '같은 상태 재확인').notify, false);
+    const first = f.submit('응답장애', '계속된 동일 문제');
+    assert.equal(f.submit('응답장애', '같은 상태 재확인').notify, false);
     f.held = false;
     f.restart();
     f.reports.retryHeld(f.rows(), f.parents);
@@ -80,7 +80,7 @@ for (const backend of ['jsonl', 'sqlite']) {
   for (const ending of ['final', 'cancel']) {
     test(`${backend}: 질문 ${ending} 뒤 보류한 감독 알림은 전송하지 않는다`, () => {
       const f = fixture(backend);
-      const old = f.submit('정체', '종료된 질문의 보류 알림');
+      const old = f.submit('응답장애', '종료된 질문의 보류 알림');
       appendLedger(ending === 'final'
         ? {kind: 'send', by: 'b', role: 'a', mailId: 'answer', replyTo: 'q', replyFinal: true}
         : {kind: 'mail-cancel', by: 'a', role: 'b', mailId: 'q'}, f.home);
@@ -95,7 +95,7 @@ for (const backend of ['jsonl', 'sqlite']) {
   for (const failure of ['unknown', 'reservation']) {
     test(`${backend}: 보류 재전송의 ${failure} 실패는 추가 전송을 만들지 않는다`, () => {
       const f = fixture(backend);
-      const old = f.submit('정체', '보류 알림');
+      const old = f.submit('응답장애', '보류 알림');
       let attempts = 0;
       f.reports.send = () => {
         attempts++;

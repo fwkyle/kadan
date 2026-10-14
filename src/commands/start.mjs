@@ -179,6 +179,7 @@ export function cmdStart(argv, flags) {
   const registration = typeof flags.parent === "string" ? registerRoleManually({ role, parent: flags.parent, home: ledgerHome() }) : registerStartedRole({
     role,
     cmd: startedCmd,
+    profile: roleProfile,
     creator: resolveLedgerBy({ env: process.env }),
     home: ledgerHome(),
   });

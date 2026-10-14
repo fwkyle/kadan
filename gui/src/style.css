@@ -587,3 +587,6 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-s-dead .sm-debris .sm-body { fill: rgb(110, 120, 140); }
 @keyframes sm-debris { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .radar-sweep, .radar-blip, .sm-engine, .sm-debris { animation: none; } }
+
+.user-attention { margin-top: 28px; border-top: 1px solid var(--ds-color-border); padding-top: 18px; }
+.user-attention__body { white-space: pre-wrap; word-break: keep-all; overflow-wrap: break-word; text-wrap: pretty; }
