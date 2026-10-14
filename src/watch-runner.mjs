@@ -61,6 +61,15 @@ export {
 
 
 
+// 경보의 실행 키가 어느 업무 하나에 속하면 그 업무 키를 돌려준다(그 업무 글로 보내려고). 역할 단위 경보(실행 키 없음)나
+// 못 찾은 경우·여러 업무에 걸친 경우는 undefined → 기본 #브리핑.
+export function workKeyOfAlert(alert, identity, works) {
+  if (!alert?.taskId) return undefined;
+  const key = identity.resolve(alert.taskId).key ?? alert.taskId;
+  const owners = (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key));
+  return owners.length === 1 ? owners[0].key : undefined;
+}
+
 export async function runWatch({
   runtime = null,
   measure = () => performance.now(),
@@ -119,9 +128,9 @@ export async function runWatch({
   record = timedCall(io.record, record, measure);
   sendAlert = timedCall(io.send, sendAlert, measure);
   const sendToRole = sendAlert;
-  sendAlert = (role, message, key) => {
+  sendAlert = (role, message, key, work) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
-    const errorText = notifyUser(message, spawn, {kind: "alert", key, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
+    const errorText = notifyUser(message, spawn, {kind: "alert", key, work, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
     if (errorText) {
       const error = new Error(`사용자 알림 실패: ${errorText}`);
       error.delivery = "not-sent";
@@ -554,6 +563,8 @@ export async function runWatch({
     const heldNudges = new Map(pendingNudges);
     const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)
       && !changes.notify.some(n => n.id === a.id)).map(a => nextAlerts.find(n => n.id === a.id));
+    let alertIdentity = null;
+    const workOfAlert = alert => workKeyOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []), works);
     for (const alert of [...changes.notify, ...retryAlerts]) {
       const retry = pendingAlerts.delete(alert.id);
       if (deliveryFailures.has(alert.id)) continue;
@@ -582,7 +593,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`);
+          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`, workOfAlert(alert));
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {
@@ -628,7 +639,7 @@ export async function runWatch({
       }
       recordAlert(record, {...alert,route,held}, recipient ?? null, delivered);
       if (!held && recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
-        const notifyError = notifyUser(message, spawn, {kind: "alert", key: `alert:${alert.id}:${alert.level ?? ""}:겹알림`, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
+        const notifyError = notifyUser(message, spawn, {kind: "alert", key: `alert:${alert.id}:${alert.level ?? ""}:겹알림`, work: workOfAlert(alert), dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
         if (notifyError) target += `; 사용자 알림 실패(${notifyError})`;
       }
       print(`${message} → ${target}`);

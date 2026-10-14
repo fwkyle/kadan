@@ -10,6 +10,7 @@ import {ledgerHome} from './ledger.mjs';
 import {effectiveNotifyEnvFile, readDiscordSecrets} from './notify-setting.mjs';
 import {setThread, withThreadLock} from './notify-threads.mjs';
 import {WorkStore} from './work-store.mjs';
+import {buildWorkStatus} from './work-status-message.mjs';
 
 export const DISCORD_LIMIT = 2000;
 export const NOTIFY_LOG_FILE = 'notify-log.jsonl';
@@ -80,12 +81,12 @@ function alreadySent(home, key, windowMs, nowMs) {
 
 // 디스코드 웹훅 요청이 나가는 유일한 함수.
 //   threadName: 포럼 채널에 새 글을 만든다(100자 안). threadId: 기존 글에 이어 붙인다. wait: 응답의 messageId·channelId를 받는다
-//   (포럼 새 글이면 channelId가 새 글 id). 메시지 수정(PATCH)은 아직 없다.
+//   (포럼 새 글이면 channelId가 새 글 id). messageId: 그 메시지를 새로 올리지 않고 고친다(PATCH, threadId와 함께).
 // 반환: {outcome, attempts, status, reason, messageId?, channelId?}
-export function postDiscordWebhook({webhook, content, allowedMentions, threadName, threadId, wait = false, budgetMs}) {
+export function postDiscordWebhook({webhook, content, allowedMentions, threadName, threadId, wait = false, messageId, budgetMs}) {
   const payload = {content, allowed_mentions: allowedMentions, ...(threadName ? {thread_name: String(threadName).slice(0, 100)} : {})};
   const child = spawnSync(process.execPath, [SENDER], {
-    input: JSON.stringify({webhook, payload, threadId, wait: wait || Boolean(threadName), budgetMs}), encoding: 'utf8',
+    input: JSON.stringify({webhook, payload, threadId, messageId, wait: wait || Boolean(threadName), budgetMs}), encoding: 'utf8',
     timeout: (budgetMs ?? 12000) + 2000, maxBuffer: 1 << 16,
   });
   if (child.error || child.status !== 0) {
@@ -97,25 +98,88 @@ export function postDiscordWebhook({webhook, content, allowedMentions, threadNam
 
 const budgetOut = () => ({outcome: 'failed', attempts: 0, reason: '시간 예산 소진'});
 
+const is4xx = r => r.outcome === 'failed' && r.status >= 400 && r.status < 500 && r.status !== 429;
+const outageOf = r => r.outcome === 'uncertain' || (r.outcome === 'failed' && r.attempts !== 0 && (r.status === undefined || r.status >= 500 || r.status === 429));
+const noteOutage = r => { if (outageOf(r)) blockedUntil = Date.now() + DISCORD_BLOCK_MS; };
+
+// 업무 글의 상태 메시지를 올리거나 고친다. 잠금 안에서 부른다. 예산이 모자라면 버린다(상태는 다음 사건 때 다시 계산된다).
+//   기록된 메시지가 있으면 고친다 → 404(지워짐)면 같은 글에 새 상태 메시지를 올리고 id를 바꾼다
+//   → 글까지 404면 상태 메시지를 첫 글로 새 글을 만든다. 404 아닌 실패(400·403·5xx·불확실)는 더 시도하지 않고 버린다.
+function syncStatus({home, webhook, work, threadId, statusMessageId, deadline}) {
+  const left = () => deadline - Date.now();
+  const status = buildWorkStatus(home, work);
+  if (!status) return {outcome: 'none', attempts: 0};
+  const call = extra => left() < MIN_SEND_MS ? budgetOut()
+    : postDiscordWebhook({webhook, content: status.content, allowedMentions: {parse: []}, budgetMs: left(), ...extra});
+  const gone = r => r.outcome === 'failed' && r.status === 404;
+  let r;
+  if (statusMessageId) {
+    r = call({threadId, messageId: statusMessageId});
+    if (!gone(r)) return r;
+  }
+  r = call({threadId, wait: true});
+  if (r.outcome === 'sent' && r.messageId) { setThread(home, work, {threadId, statusMessageId: r.messageId}); return r; }
+  if (!gone(r)) return r;
+  r = call({threadName: `${work} ${status.title}`.trim().slice(0, 100), wait: true});
+  if (r.outcome === 'sent' && r.channelId) setThread(home, work, {threadId: r.channelId, statusMessageId: r.messageId ?? null});
+  return r;
+}
+
 // 포럼 채널: 업무 키마다 글 하나. 상태 읽기 → (새 글 만들기) → 상태 갱신을 한 잠금 안에서 한다.
 // 기록된 글이 있으면 thread_id로 이어 붙이고, 그 글이 429 아닌 4xx로 거절되면(지워짐 등) thread_name으로 새 글을 한 번 만든다
 // (같은 요청의 재시도가 아니라 다른 요청). 잠금을 종료 시각 안에 못 얻으면 보내지 않는다: 업무 글로 가야 할 내용을
 // 기본 #브리핑에 섞지 않고, 상태 파일을 잠금 없이 건드리지 않으려고 시스템 알림으로 내려간다(잘못된 채널로 새지 않는 쪽).
+// 알림이 나간 뒤에는 같은 잠금 안에서 상태 메시지도 맞춘다(결과는 statusSync에 따로 담고 알림 결과를 바꾸지 않는다).
 function sendForum({home, webhook, work, title, content, allowedMentions, deadline}) {
   const left = () => deadline - Date.now();
   const threadName = `${work} ${title ?? ''}`.trim().slice(0, 100);
   const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content, allowedMentions, budgetMs: left(), ...extra});
   const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads => {
     const known = threads[work];
+    let r, entry = null;
     if (known) {
-      const r = post({threadId: known});
-      if (!(r.outcome === 'failed' && r.status >= 400 && r.status < 500 && r.status !== 429)) return r;
+      r = post({threadId: known.threadId});
+      if (r.outcome === 'sent') entry = known;
     }
-    const r = post({threadName, wait: true});
-    if (r.outcome === 'sent' && r.channelId) setThread(home, work, r.channelId);
+    if (!entry && !(r && !is4xx(r))) {
+      r = post({threadName, wait: true});
+      if (r.outcome === 'sent' && r.channelId) { entry = {threadId: r.channelId, statusMessageId: null}; setThread(home, work, entry); }
+    }
+    if (entry) r = {...r, statusSync: syncStatus({home, webhook, work, ...entry, deadline})};
     return r;
   });
   return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
+}
+
+// 사건 지점(업무 알림·work 변경·실행 done)에서 부르는 함수 하나: 그 업무 글의 상태 메시지를 현재 업무 기록으로 맞춘다.
+// 글이 아직 없으면(알림이 한 번도 안 나간 업무) 아무것도 안 한다 — 글은 알림이 만든다. 디코 설정 없음·레포 웹훅 없음·
+// KADAN_NOTIFY=off·장애 직후 60초면 요청 0건. 실패해도 시스템 알림으로 대신하지 않고 버린다. 반환은 시험·기록용.
+export function refreshWorkStatus(home, work, opts = {}) {
+  const env = opts.env ?? process.env;
+  if (env.KADAN_NOTIFY === 'off' || typeof work !== 'string' || !work.includes('/')) return {outcome: 'off'};
+  let secrets = [];
+  try {
+    const cfg = effectiveNotifyEnvFile(env, home);
+    if (cfg.error || !cfg.envFile) return {outcome: 'none'};
+    const sec = readDiscordSecrets(cfg.envFile, {repo: work.split('/')[0]});
+    if (sec.error || !sec.repoWebhook) return {outcome: 'none'};
+    secrets = [sec.webhook, sec.repoWebhook, sec.userId];
+    if (Date.now() < blockedUntil) return {outcome: 'skipped', reason: '디스코드 장애 직후라 건너뜀(60초)'};
+    const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
+    const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads =>
+      threads[work] ? syncStatus({home, webhook: sec.repoWebhook, work, ...threads[work], deadline}) : {outcome: 'none', attempts: 0});
+    const r = lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
+    noteOutage(r);
+    if (r.outcome !== 'none') logStatus(home, work, r, secrets);
+    return {outcome: r.outcome, status: r.status ?? null};
+  } catch (error) {
+    return {outcome: 'config-error', reason: scrubSecrets(error.message, secrets)};
+  }
+}
+
+function logStatus(home, work, r, secrets) {
+  appendLog(home, {at: new Date().toISOString(), key: null, kind: 'status', work, via: 'discord', outcome: r.outcome,
+    reason: scrubSecrets(r.reason ?? '', secrets) || undefined, attempts: r.attempts ?? undefined, status: r.status ?? undefined});
 }
 
 // 레포별 웹훅이 있고 업무 키가 있으면 포럼 글로, 아니면 기본 웹훅으로 보낸다.
@@ -156,8 +220,8 @@ export function notifyUser(message, spawn, opts = {}) {
             : to.forum
               ? sendForum({home, webhook: to.webhook, work: opts.work, title, content: d.content, allowedMentions, deadline})
               : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions, budgetMs: Math.max(MIN_SEND_MS, deadline - Date.now())});
-          if (sent.outcome === 'uncertain' || (sent.outcome === 'failed' && sent.attempts !== 0 && (sent.status === undefined || sent.status >= 500 || sent.status === 429)))
-            blockedUntil = Date.now() + DISCORD_BLOCK_MS;
+          noteOutage(sent);
+          if (sent.statusSync) { noteOutage(sent.statusSync); if (sent.statusSync.outcome !== 'none') logStatus(home, opts.work, sent.statusSync, secrets); }
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (sent.outcome === 'sent') result.via = 'discord';
         }

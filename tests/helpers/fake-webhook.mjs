@@ -7,7 +7,8 @@ import fs from 'node:fs';
 const [, , logFile, scriptJson = '[{"status":204}]', optionsJson = '{}'] = process.argv;
 // 포럼 모양(옵션 {forum:true, known:[글 id…], delayMs, steps}): thread_name(새 글)도 thread_id(기존 글)도 없으면 400, 모르는 thread_id는 404.
 const options = JSON.parse(optionsJson), known = new Set(options.known ?? []);
-let created = 0;
+let created = 0, sentMessages = 0;
+const messages = new Map(); // 메시지 id → 글 id. PATCH(메시지 수정)는 알려진 글의 알려진 메시지만 200
 const script = JSON.parse(scriptJson);
 let n = 0;
 const sockets = new Set();
@@ -17,7 +18,7 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     if (options.forum) {
       const text = Buffer.concat(chunks).toString('utf8'), index = n++, override = options.steps?.[index];
-      fs.appendFileSync(logFile, JSON.stringify({at: Date.now(), url: req.url, body: text}) + '\n');
+      fs.appendFileSync(logFile, JSON.stringify({at: Date.now(), method: req.method, url: req.url, body: text}) + '\n');
       const query = new URL(req.url, 'http://x').searchParams, body = JSON.parse(text);
       // delayMs(전체)·steps[n]({status, body, delayMs}): 느린 응답과 요청 순서별 고정 응답을 흉내 낸다.
       const reply = (status, json) => setTimeout(() => {
@@ -25,10 +26,17 @@ const server = http.createServer((req, res) => {
         res.writeHead(o.status, {'content-type': 'application/json'}); res.end(JSON.stringify(o.body ?? {}));
       }, override?.delayMs ?? options.delayMs ?? 0);
       if (override?.status) return reply();
-      if (query.get('thread_id')) return known.has(query.get('thread_id')) ? reply(200, {id: 'M', channel_id: query.get('thread_id')}) : reply(404, {code: 10003});
+      const edit = req.method === 'PATCH' && new URL(req.url, 'http://x').pathname.match(/\/messages\/([\w-]+)$/)?.[1];
+      if (req.method === 'PATCH') return known.has(query.get('thread_id')) && messages.get(edit) === query.get('thread_id') ? reply(200, {id: edit, channel_id: query.get('thread_id')}) : reply(404, {code: 10008});
+      const mid = `M${++sentMessages}`;
+      if (query.get('thread_id')) {
+        if (!known.has(query.get('thread_id'))) return reply(404, {code: 10003});
+        messages.set(mid, query.get('thread_id'));
+        return reply(200, {id: mid, channel_id: query.get('thread_id')});
+      }
       if (!body.thread_name) return reply(400, {message: 'thread_name or thread_id required'});
-      const id = `T${++created}`; known.add(id);
-      return reply(200, {id: 'M', channel_id: id});
+      const id = `T${++created}`; known.add(id); messages.set(mid, id);
+      return reply(200, {id: mid, channel_id: id});
     }
     const step = script[Math.min(n++, script.length - 1)];
     fs.appendFileSync(logFile, JSON.stringify({at: Date.now(), url: req.url, body: Buffer.concat(chunks).toString('utf8')}) + '\n');
