@@ -1,7 +1,7 @@
 // kadan start (HW-3-impl: cli.mjs에서 옮김)
 import { startRoleProfile } from "../role-instructions.mjs";
 import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../runner-settings.mjs";
-import { registerRoleManually, registerStartedRole } from "../hierarchy-register.mjs";
+import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
 import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
@@ -181,12 +181,37 @@ export function cmdStart(argv, flags) {
   );
   // 감시 알림이 갈 곳을 사람이 따로 적지 않아도 되게 한다. 실패는 알리기만 하고 시작을 막지 않는다.
   // --parent가 있으면 만든 역할 대신 그 상위로 적는다(대화 옮기기: 비서가 대신 실행해도 상위는 사용자).
-  const registration = typeof flags.parent === "string" ? registerRoleManually({ role, parent: flags.parent, home: ledgerHome() }) : registerStartedRole({
+  // --profile super는 --parent가 없으면 만든 쪽이 아니라 @user가 상위다(슈퍼감독은 사용자 직속 동료, 2026-10-14).
+  const explicitParent = typeof flags.parent === "string" ? flags.parent : roleProfile === "super" ? "@user" : null;
+  const creator = resolveLedgerBy({ env: process.env });
+  const registration = explicitParent !== null ? registerRoleManually({ role, parent: explicitParent, home: ledgerHome() }) : registerStartedRole({
     role,
     cmd: startedCmd,
-    creator: resolveLedgerBy({ env: process.env }),
+    creator,
     home: ledgerHome(),
   });
+  // 같은 이름을 새 대화가 다시 쓰는 start(세대 경계: 이어가기가 아닌 이름 재사용)면 옛 상위 줄을 물려받지 않는다.
+  // 이미 표에 있는 이름이거나 만든 쪽을 몰라 등록이 건너뛴 경우만 다룬다(A2, 2026-10-14).
+  if (nameCheck?.nameReuse && !nameCheck.nameReuse.inherited && !isKadanToolCommand(startedCmd)
+    && ["이미 등록됨", "만든 사람의 역할을 모름"].includes(registration.reason)) {
+    const known = creator && creator !== "사람" && creator !== "watch" && creator !== role;
+    const moved = reparentStartedRole({
+      role,
+      parent: explicitParent ?? (known ? creator : null),
+      home: ledgerHome(),
+      isAlive: child => floor.alive(sessionName(child)),
+    });
+    if (moved.changed) {
+      console.error(`관계표 상위 변경: ${role}: ${moved.from} → ${moved.to} (같은 이름을 새 대화가 다시 써서 옛 상위 줄을 물려받지 않는다)`);
+    } else if (moved.reason === "만든 쪽을 모름") {
+      console.error(`관계표 상위 ${moved.from}를 그대로 둔다 — 만든 쪽을 몰라 바꾸지 않았다. 바꾸려면 --parent를 주고 다시 시작한다.`);
+    } else if (!moved.same && moved.reason && moved.reason !== "관계표에 없음") {
+      console.error(`관계표 상위를 바꾸지 못했다(${moved.reason}) — 옛 상위 ${moved.from ?? "?"}가 남아 있다`);
+    }
+    if (moved.children > 0 && (moved.changed || moved.reason === "만든 쪽을 모름")) {
+      console.error(`옛 하위 ${moved.children}개(살아 있는 것 ${moved.aliveChildren}개)가 이 이름을 상위로 가리킨다. 끝난 역할은 \`kadan hierarchy prune\`.`);
+    }
+  }
   if (registration.registered) {
     console.log(`감시 등록: ${role} → ${registration.parent}`);
   } else if (registration.hierarchyPath && registration.reason !== "이미 등록됨") {

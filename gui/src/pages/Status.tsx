@@ -24,6 +24,7 @@ type StatusData = Stamp & {
   recent: {at: string; kind: string; label: string; role: string; card: {key: string; title: string}}[];
   recentCounts: Record<string, number>;
   activity?: Record<string, number[]>;
+  previousGeneration?: {works: number; executions: number; items: {kind: string; key: string; role: string}[]} | null;
 };
 // 서버 bucketGroups와 같은 묶음. 결과 대기는 작업중에, 보류(archived)는 진행 전에 센다(2026-10-05 [kyle]).
 const groups = [
@@ -119,15 +120,16 @@ export default function Status({url}: {url: URL}) {
         <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
       </ul>
       <section id="status-supers" className="st-section">
-        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">내가 일을 맡긴 슈퍼감독(관계표에서 바로 내 아래)마다 한 줄입니다. 그 아래 감독·담당의 실행을 모두 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
+        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">슈퍼감독(--profile super로 시작한 역할)마다 한 줄입니다. 그 아래 감독·담당의 실행을 가장 가까운 슈퍼감독 한 곳에만 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
         {data.supervisors === null ? <p className="st-error" role="alert">관계표를 읽지 못해 슈퍼감독별로 묶지 못했습니다. 감시기가 읽는 관계표 파일(원장의 마지막 hierarchy-loaded 기록이 가리키는 경로)을 확인하세요.</p>
-          : data.supervisors.items.length === 0 ? <p className="st-empty">관계표에 사용자 바로 아래 역할이 없습니다.</p>
+          : data.supervisors.items.length === 0 ? <p className="st-empty">슈퍼감독(--profile super)으로 시작한 역할이 관계표에 없습니다.</p>
           : <ul className="st-sup-list">{data.supervisors.items.map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
               <strong>{s.super}</strong>
               <span className="st-sup-life">{supervisorLife(s)}</span>
               <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
             </li>)}</ul>}
         {data.supervisors && data.supervisors.unassigned > 0 && <p className="st-hint">관계표에 없는 담당의 실행 {data.supervisors.unassigned}건은 어느 슈퍼감독에도 묶이지 않았습니다.</p>}
+        {data.previousGeneration && data.previousGeneration.works + data.previousGeneration.executions > 0 && <p className="st-hint" id="status-previous-generation">이전 세대 업무 {data.previousGeneration.works + data.previousGeneration.executions}건(업무 {data.previousGeneration.works} · 발령 {data.previousGeneration.executions})은 같은 이름을 새 대화가 다시 쓰기 전에 붙은 책임이라 "놀고 있음" 할 일에서 뺐습니다. 새 대화가 이어받으려면 업무·발령을 다시 맡기거나 인계하세요.</p>}
         {data.supervisors && (data.supervisors.unowned ?? 0) > 0 && <p className="st-hint">담당이 아직 정해지지 않은 실행(진행 전·일시정지) {data.supervisors.unowned}건은 세지 않았습니다.</p>}
       </section>
       <section id="status-decisions" className="st-section">

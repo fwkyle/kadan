@@ -2,6 +2,7 @@ import { workEntries } from "./handover-state.mjs";
 import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
+import { ownerGenerations, isPreviousOwner } from "./owner-generation.mjs";
 
 function startedAtMs(state) {
   const at = Date.parse(state?.startedAt);
@@ -31,7 +32,7 @@ export function idleWorkEntries(works, cards, parents) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
   return (works ?? []).filter(w => w?.status === "open" && parents.has(w.owner)
       && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
-    .map(w => ({ kind: "send", role: w.owner, taskId: `work:${w.key}`, t: w.at }));
+    .map(w => ({ kind: "send", role: w.owner, taskId: `work:${w.key}`, t: w.at, ownedAt: w.ownedAt ?? null }));
 }
 
 export function assessSupervisorIdle(
@@ -118,9 +119,16 @@ export function assessSupervisorIdle(
   const requests = peerResponsibilities(peerEntries, parents, works, cards);
   const waiting = (id, role) => excluded(id, role)
     || requests.find(r => r.taskId === id)?.linkedWorkIds.some(key => excluded(key, role));
+  // 이전 세대 소속의 책임은 할 일에서 뺀다(owner-generation.mjs). 답 대기 요청(peerRequest)은 우편 세대 규칙을 따른다.
+  const generations = ownerGenerations(peerEntries);
+  const current = entry => entry.peerRequest || entry.kind !== "send" || !parents.has(entry.role)
+    || !isPreviousOwner(generations, entry.role, Object.hasOwn(entry, "ownedAt") ? entry.ownedAt : entry.t);
+  // 발령 이력이 있는가는 세대 필터 전 원본 기준이다. 이전 세대 발령을 뺐다고 그 plan을 미발령 할 일로 되살리지 않는다.
+  const all = [...entries, ...idleWorkEntries(works, cards, parents), ...requests];
   alerts.push(...assessHierarchyIdle(
-    [...entries, ...idleWorkEntries(works, cards, parents), ...requests],
+    all.filter(current),
     roleStates, now, idleMs, parents, waiting,
+    new Set(all.filter(e => e.kind === "send" && parents.has(e.role) && e.taskId).map(e => e.taskId)),
   ));
   return alerts;
 }
@@ -131,7 +139,7 @@ export function buildIdleNudge(alert) {
   return `놀고 있음 ${alert.session} (할 일 ${alert.openCards}건, ${alert.idleMinutes}분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
 }
 
-export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false) {
+export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null) {
   const pending = new Map();
   for (const entry of entries) {
     if (!parents.has(entry?.role) || !entry.taskId) continue;
@@ -142,7 +150,7 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents, exclu
   const supervisors = new Set([...parents.values()].filter(role => parents.has(role)));
   for (const entry of entries) if (entry.peerRequest) supervisors.add(entry.role);
   // 아직 미발령인 plan은 같은 판의 직속 감독 한 명에게만 귀속한다.
-  const assigned = new Set(entries.filter(entry => parents.has(entry?.role) && entry.taskId && entry.kind === "send").map(entry => entry.taskId));
+  const assigned = assignedTaskIds ?? new Set(entries.filter(entry => parents.has(entry?.role) && entry.taskId && entry.kind === "send").map(entry => entry.taskId));
   for (const entry of entries) {
     if (entry?.kind !== "plan" || assigned.has(entry.taskId)) continue;
     const candidates = [...supervisors].filter(role => boardFromRole(role) === entry.board);

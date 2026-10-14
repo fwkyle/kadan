@@ -1,3 +1,4 @@
+import { isSuperRole, nearestSuper } from "./super-role.mjs";
 // 현황 상단 띠의 재료. 다섯 질문(지금 도는가·막혔는가·내 결정이 있는가·흐름대로 가는가·어느 모델인가) 중
 // 기존 집계(실행 묶음·결정)가 답하지 못하던 세 가지를 계산한다: 살아 있는 담당과 모델, 흐름 연결 확인, 해소 전 감시 경보.
 // 판단에 쓰지 않고 화면 답변용으로만 옮긴다. 모르는 것은 null로 둔다(세션 상태 모름·원장 손상).
@@ -30,28 +31,21 @@ export function flowSummary(reviewFlows) {
   return { total: flows.length, unconfirmed };
 }
 
-// 슈퍼감독(관계표에서 상위가 @user인 역할)마다 한 줄. 사용자가 여러 슈퍼감독에게 위임해도 묻지 않고 진행을 보게
+// 슈퍼감독(start를 --profile super로 시작한 역할. 프로필 기록이 없는 옛 역할은 상위가 @user인 역할)마다 한 줄. 사용자가 여러 슈퍼감독에게 위임해도 묻지 않고 진행을 보게
 // (2026-10-05 [kyle]). 실행·워크·결정·경보를 담당 역할의 사슬 끝(최상위)으로 묶는다. 관계표를 모르면 null.
 // 관계표에 없는 담당의 실행은 unassigned로 세어 사각을 드러낸다. 담당이 아직 없는 실행(진행 전·일시정지)은 관계표 문제가
 // 아니므로 unowned로 따로 센다(2026-10-05 실측: 운영 73건 중 72건이 담당 없는 초안이라 등록하라는 안내가 헛걸음이었다).
-// 역할의 사슬 끝(상위가 @user인 역할). 관계표에 없거나 끊기거나 순환이면 null.
-export function supervisorOf(hierarchy, role) {
-  const parents = hierarchy instanceof Map ? hierarchy : new Map(Object.entries(hierarchy ?? {}));
-  let r = role;
-  for (let i = 0; i < 64 && typeof r === "string"; i++) {
-    const p = parents.get(r);
-    if (p === "@user") return r;
-    if (p == null) return null;
-    r = p;
-  }
-  return null;
+// 역할에서 가장 가까운 슈퍼감독(자기 자신 포함). 관계표에 없거나 끊기거나 순환이면 null.
+// profiles(superProfiles)를 주면 프로필 기준, 없으면 예전 기준이다. 가장 가까운 슈퍼감독을 돌려준다(super-role.mjs).
+export function supervisorOf(hierarchy, role, profiles = null) {
+  return nearestSuper(role, hierarchy, profiles);
 }
 
-export function supervisorSummary({ hierarchy, rows = [], works = [], decisions = null, alerts = null, live = null }) {
+export function supervisorSummary({ hierarchy, rows = [], works = [], decisions = null, alerts = null, live = null, profiles = null }) {
   if (!hierarchy || typeof hierarchy !== "object") return null;
   const parents = new Map(Object.entries(hierarchy));
-  const topOf = (role) => supervisorOf(parents, role);
-  const supers = [...parents.entries()].filter(([, p]) => p === "@user").map(([r]) => r).sort((a, b) => a.localeCompare(b, "ko"));
+  const topOf = (role) => supervisorOf(parents, role, profiles);
+  const supers = [...parents.keys()].filter((r) => isSuperRole(r, parents, profiles)).sort((a, b) => a.localeCompare(b, "ko"));
   const bySuper = new Map(supers.map((s) => [s, { super: s, repos: new Set(), running: 0, stuck: 0, openWorks: 0,
     decisions: Array.isArray(decisions) ? 0 : null, alerts: alerts ? 0 : null, lastSignal: null }]));
   let unassigned = 0, unowned = 0;

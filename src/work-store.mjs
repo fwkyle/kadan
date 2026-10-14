@@ -54,6 +54,8 @@ export class WorkStore {
      next[field]=value.trim();
     }
     if(Object.hasOwn(fields,'turnOwner')){next.turnAt=next.at;next.turnBy=by;}
+    // 같은 이름으로 다시 지정해도 책임이 이 시각에 다시 붙은 사건이다(세대 판정, handover-state.mjs). 다른 수정은 올리지 않는다.
+    if(Object.hasOwn(fields,'owner'))next.ownerAssignedAt=next.at;
     for(const field of ['title','goal','scope','acceptance','owner'])required(next[field],field,['title','owner'].includes(field)?200:12000);
     if(!['open','hold'].includes(next.status))throw new Error('최종 완료는 업무 완료 확인으로 기록하세요');
    }else if(action==='link'||action==='execute'){
