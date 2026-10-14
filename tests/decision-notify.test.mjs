@@ -48,7 +48,7 @@ async function world({forum = true, repoKeys = ['kadan'], defaultScript = [{stat
     const c = spawn(process.execPath, [childScript, JSON.stringify({home, envFile, kind, d})], {stdio: ['ignore', 'pipe', 'inherit']});
     let out = ''; c.stdout.on('data', x => { out += x; }); c.on('close', () => resolve(JSON.parse(out.trim().split('\n').at(-1))));
   });
-  return {home, envFile, base, fr, osCalls, state, announce, child, log: () => fs.existsSync(path.join(home, NOTIFY_LOG_FILE)) ? fs.readFileSync(path.join(home, NOTIFY_LOG_FILE), 'utf8') : '',
+  return {home, envFile, base, fr, store, osCalls, state, announce, child, log: () => fs.existsSync(path.join(home, NOTIFY_LOG_FILE)) ? fs.readFileSync(path.join(home, NOTIFY_LOG_FILE), 'utf8') : '',
     stop: () => { base.stop(); fr?.stop(); }};
 }
 const dec = (over = {}) => ({id: UUID, card: `kadan/exec-${UUID}`, question: '이 방식으로 합칠까요?\n- PR: https://example.test/pull/1', options: ['합침', '보류'], recommendation: '합침', reason: '이유 한 줄', ...over});
@@ -202,5 +202,90 @@ test('D6 다른 알림의 [레포] 표시: 근거가 있을 때만, 모르면 �
     assert.equal(repoOfAlert({taskId: 'card-a'}, identity), 'kadan');
     assert.equal(repoOfAlert({taskId: 'zzz'}, identity), undefined);
     assert.equal(repoOfAlert({role: '감독'}, identity), undefined);
+  } finally { w.stop(); }
+});
+
+// --- 2라운드: 요청·취소 경합(R1), 업무 상태 갱신(R2), 본문 UUID(R3) ---
+const {CardStore} = await import('../src/card-store.mjs');
+const {WorkStore} = await import('../src/work-store.mjs');
+const realDecision = (w, over = {}) => {
+  new CardStore(w.home).create({repo: 'kadan', id: 'card-a', repoPath: w.home, body: '# 테스트'});
+  return w.store.request('kadan/card-a', {question: '합칠까요?\n- 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '이유', work: '없음', ...over}, '슈퍼감독');
+};
+const visible = reqs => reqs.filter(r => r.method === 'POST' && !bodyOf(r).content.startsWith('**업무 상태**'));
+
+test('R1 취소가 요청 알림보다 먼저 잠금을 잡으면: 해결 메시지 하나만 남고 열린 요청 메시지는 안 올라온다', async () => {
+  const w = await world();
+  try {
+    const d = realDecision(w);
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '[시험] 채팅 승인'}, '슈퍼감독');
+    w.announce('cancel', cancelled);                  // 취소 알림이 먼저(기록 없음 → 해결 모양 새 메시지, '해결 메시지 보냄' 기록)
+    w.announce('request', d);                         // 늦은 요청 알림(저장소는 이미 취소) → 건너뜀
+    const reqs = w.fr.requests();
+    assert.equal(reqs.length, 1);
+    assert.match(bodyOf(reqs[0]).content, /결정 해결됨: 합칠까요\? — 취소: \[시험\] 채팅 승인/);
+    assert.ok(!reqs.some(r => /결정 요청/.test(bodyOf(r).content)) && !reqs.some(r => bodyOf(r).content.includes('<@')));
+    assert.equal(w.state().decisions[d.id].resolved, true);
+  } finally { w.stop(); }
+});
+
+test('R1 요청 알림이 먼저 잠금을 잡았는데 저장소는 이미 취소: 해결 모양으로 보내고, 뒤따르는 취소 알림은 그 메시지를 고친다', async () => {
+  const w = await world();
+  try {
+    const d = realDecision(w);
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '[시험] 채팅 승인'}, '슈퍼감독');
+    w.announce('request', d);                         // 요청 알림 시점에 이미 취소됨
+    w.announce('cancel', cancelled);
+    const reqs = w.fr.requests();
+    assert.deepEqual(reqs.map(r => r.method), ['POST', 'PATCH']);
+    assert.ok(!bodyOf(reqs[0]).content.includes('<@') && /결정 해결됨/.test(bodyOf(reqs[0]).content));
+    assert.deepEqual(bodyOf(reqs[0]).allowed_mentions, {parse: []});
+    assert.match(bodyOf(reqs[1]).content, /^✅ 해결됨 — 취소: \[시험\] 채팅 승인/);
+  } finally { w.stop(); }
+});
+
+test('R1 별도 프로세스로 동시에 요청·취소 알림이 와도 남는 메시지는 해결됨 하나(열린 요청 0)', async () => {
+  const w = await world();
+  try {
+    const d = realDecision(w);
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '슈퍼감독');
+    await Promise.all([w.child('cancel', cancelled), w.child('request', d)]);
+    const reqs = w.fr.requests();
+    const open = reqs.filter(r => r.method === 'POST' && /결정 요청:/.test(bodyOf(r).content));
+    assert.equal(open.length, 0);
+    assert.ok(reqs.some(r => /결정 해결됨|✅ 해결됨/.test(bodyOf(r).content)));
+    assert.equal(visible(reqs).length, 1);
+  } finally { w.stop(); }
+});
+
+test('R2 업무 있는 결정 취소: 원래 메시지 수정 1회 + 업무 상태 메시지 갱신 1회', async () => {
+  const w = await world();
+  try {
+    new WorkStore(w.home).create({key: 'kadan/work-x', title: '상태 시험', goal: '목표', scope: '범위', acceptance: '조건', owner: 'kadan-감독', repoPath: os.tmpdir()});
+    const d = dec({work: 'kadan/work-x'});
+    w.announce('request', d);                          // 글 + 결정 메시지(M1) + 상태 메시지(M2)
+    assert.equal(w.fr.requests().filter(r => r.method === 'PATCH').length, 0);
+    w.announce('cancel', {...d, status: 'cancelled', cancelReason: '채팅 승인'});
+    const patches = w.fr.requests().filter(r => r.method === 'PATCH');
+    assert.equal(patches.length, 2);
+    assert.ok(patches.some(r => /\/messages\/M1\?/.test(r.url) && bodyOf(r).content.startsWith('✅ 해결됨')));
+    assert.ok(patches.some(r => /\/messages\/M2\?/.test(r.url) && bodyOf(r).content.startsWith('**업무 상태**')));
+    assert.equal(w.fr.requests().filter(r => r.method === 'POST').length, 2);   // 새 메시지는 요청 때 둘뿐
+  } finally { w.stop(); }
+});
+
+test('R3 본문의 표시용 UUID는 8자, 경로·주소 안 UUID와 링크 주소는 전체', async () => {
+  const w = await world();
+  try {
+    const other = 'aaaaaaaa-1111-4222-8333-444444444444';
+    const path1 = `/home/tester/.kadan/cards/kadan/exec-${other}/result.md`;
+    w.announce('request', dec({
+      question: `카드 ${other} 와 kadan/exec-${other} 를 합칠까요?\n- 결과 파일: ${path1}\n- PR: https://example.test/${other}`,
+      options: [`합침 ${other}`, '보류'], recommendation: `합침 ${other}`, reason: `이유 ${other}`}));
+    const content = bodyOf(w.fr.requests()[0]).content, body = content.split('\n').slice(0, -1).join('\n');
+    assert.ok(body.includes('카드 aaaaaaaa 와 kadan/exec-aaaaaaaa 를 합칠까요?'));
+    assert.ok(body.includes(`결과 파일: ${path1}`) && body.includes(`https://example.test/${other}`));
+    assert.ok(body.includes('1) 합침 aaaaaaaa') && body.includes('추천: 합침 aaaaaaaa') && body.includes('이유: 이유 aaaaaaaa'));
+    assert.ok(content.endsWith(`/#decision-${UUID}`));
   } finally { w.stop(); }
 });

@@ -133,14 +133,20 @@ function syncStatus({home, webhook, work, threadId, statusMessageId, deadline}) 
 // decision: {id, edit?}. 요청이면 메시지 id를 남기고(wait), 해결(edit 본문 있음)이면 남긴 메시지를 고친다 — 못 찾을 때(기록 없음·404)만 새 메시지.
 function sendForum({home, webhook, work, threadName, content, allowedMentions, deadline, decision}) {
   const left = () => deadline - Date.now();
-  const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content, allowedMentions, budgetMs: left(), ...extra});
   const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads => {
+    const plan = planDecision(home, decision, content, allowedMentions);
+    if (plan.skip) return plan.skip;
+    const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content: plan.content, allowedMentions: plan.allowedMentions, budgetMs: left(), ...extra});
     if (decision?.edit) {
       const done = editDecision({home, decision, post, forum: true});
-      if (done) return done;
+      if (done) {
+        // 메시지를 고쳤어도 그 업무 글의 상태 메시지는 기준대로 맞춘다(결정 전용 글은 업무가 아니라 'none').
+        const known = threads[work];
+        return done.outcome === 'sent' && known ? {...done, statusSync: syncStatus({home, webhook, work, ...known, deadline})} : done;
+      }
     }
     const known = threads[work];
-    const wait = Boolean(decision) && !decision.edit;
+    const wait = Boolean(decision);
     let r, entry = null;
     if (known) {
       r = post({threadId: known.threadId, wait});
@@ -150,7 +156,7 @@ function sendForum({home, webhook, work, threadName, content, allowedMentions, d
       r = post({threadName, wait: true});
       if (r.outcome === 'sent' && r.channelId) { entry = {threadId: r.channelId, statusMessageId: null}; setThread(home, work, entry); }
     }
-    if (entry && wait && r.messageId) setDecision(home, decision.id, {threadId: entry.threadId, messageId: r.messageId, forum: true});
+    if (entry && wait && r.messageId) setDecision(home, decision.id, {threadId: entry.threadId, messageId: r.messageId, forum: true, resolved: plan.resolved});
     if (entry) r = {...r, statusSync: syncStatus({home, webhook, work, ...entry, deadline})};
     return r;
   });
@@ -160,17 +166,32 @@ function sendForum({home, webhook, work, threadName, content, allowedMentions, d
 // 기본 #브리핑 채널로 가는 결정 알림: 요청의 메시지 id를 남기고 해결 때 고친다(포럼과 같은 잠금·규칙).
 function sendDefaultDecision({home, webhook, content, allowedMentions, deadline, decision}) {
   const left = () => deadline - Date.now();
-  const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content, allowedMentions, budgetMs: left(), ...extra});
   const lock = withThreadLock(home, deadline - MIN_SEND_MS, () => {
+    const plan = planDecision(home, decision, content, allowedMentions);
+    if (plan.skip) return plan.skip;
+    const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content: plan.content, allowedMentions: plan.allowedMentions, budgetMs: left(), ...extra});
     if (decision.edit) {
       const done = editDecision({home, decision, post, forum: false});
       if (done) return done;
     }
-    const r = post({wait: !decision.edit});
-    if (r.outcome === 'sent' && !decision.edit && r.messageId) setDecision(home, decision.id, {threadId: null, messageId: r.messageId, forum: false});
+    const r = post({wait: true});
+    if (r.outcome === 'sent' && r.messageId) setDecision(home, decision.id, {threadId: null, messageId: r.messageId, forum: false, resolved: plan.resolved});
     return r;
   });
   return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '알림 상태 잠금을 시간 안에 못 얻음'};
+}
+
+// 잠금 안에서 보내기 직전에 결정의 현재 상태를 다시 읽는다(요청 알림이 취소·답변보다 늦게 잠금을 잡는 경합).
+// 요청인데 이미 해결됐으면 열린 요청 본문 대신 해결된 모양(멘션 없음)으로 보내고, 해결 메시지가 이미 있으면 아무것도 보내지 않는다.
+// 돌려주는 값: {content, allowedMentions, resolved(기록에 남길 '해결 메시지' 표시), skip?}
+function planDecision(home, decision, content, allowedMentions) {
+  const plan = {content, allowedMentions, resolved: Boolean(decision?.edit)};
+  if (!decision || decision.edit || typeof decision.latest !== 'function') return plan;
+  let now = null;
+  try { now = decision.latest(); } catch { /* 읽지 못하면 요청 그대로 */ }
+  if (!now || now.status === 'open') return plan;
+  if (readDecisions(home)[decision.id]?.resolved) return {...plan, skip: {outcome: 'resolved-skip', attempts: 0, reason: '이미 해결 메시지를 보냄'}};
+  return {content: decision.resolvedContent(now), allowedMentions: {parse: []}, resolved: true};
 }
 
 // 남긴 결정 요청 메시지를 고친다. 돌려주는 값: 결과(고침 성공, 또는 404 아닌 실패라 더 시도하지 않음) 또는 null(못 찾음 → 호출 쪽이 새 메시지).
@@ -179,7 +200,9 @@ function editDecision({home, decision, post, forum}) {
   const known = readDecisions(home)[decision.id];
   if (!known || known.forum !== forum) return null;
   const r = post({threadId: known.threadId ?? undefined, messageId: known.messageId, content: decision.edit, allowedMentions: {parse: []}});
-  return r.outcome === 'failed' && r.status === 404 ? null : r;
+  if (r.outcome === 'failed' && r.status === 404) return null;
+  if (r.outcome === 'sent') setDecision(home, decision.id, {...known, resolved: true});
+  return r;
 }
 
 // 사건 지점(업무 알림·work 변경·실행 done)에서 부르는 함수 하나: 그 업무 글의 상태 메시지를 현재 업무 기록으로 맞춘다.
@@ -222,7 +245,7 @@ function route({sec, key}) {
 // opts: {kind, key, work, workTitle, repo, tagRepo, forumKey, forumTitle, decision, dedupWindowMs, home, env, discord}. work: 업무 키(없으면 기본 #브리핑),
 //   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키(또는 forumKey)가 있을 때만 포럼 글로 간다.
 //   tagRepo: 알림 첫머리 `[레포]`에 쓸 이름(생략하면 repo, 그것도 모르면 표시하지 않는다 — 추측 금지). discord 본문을 직접 주면 그쪽이 표시를 책임진다.
-//   forumKey·forumTitle: 업무가 없을 때 쓰는 포럼 글 키와 글 제목(결정의 레포 '결정' 글). decision: {id, edit?} — 요청은 메시지 id를 남기고, edit 본문이 있으면 남긴 메시지를 고친다.
+//   forumKey·forumTitle: 업무가 없을 때 쓰는 포럼 글 키와 글 제목(결정의 레포 '결정' 글). decision: {id, edit?, latest?, resolvedContent?} — 요청은 메시지 id를 남기고(보내기 직전 latest()로 현재 상태를 다시 읽어 이미 해결됐으면 resolvedContent로 대신 보내거나 건너뜀), edit 본문이 있으면 남긴 메시지를 고친다.
 // 반환: {via:'discord'|'system', error, duplicate?, discord:{outcome,reason}|null}
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
@@ -255,7 +278,7 @@ export function notifyUser(message, spawn, opts = {}) {
           const to = route({sec, key: forumKey});
           const threadName = (opts.work ? `${opts.work} ${opts.workTitle ?? workTitleOf(home, opts.work)}`.trim() : opts.forumTitle ?? '').slice(0, 100);
           // 해결 알림(edit)은 원래 메시지를 고치므로 멘션이 없고, 못 찾을 때만 d.content(새 메시지)가 나간다.
-          const decision = opts.decision ? {id: opts.decision.id, edit: opts.decision.edit} : null;
+          const decision = opts.decision ?? null;
           const sent = Date.now() < blockedUntil
             ? {outcome: 'skipped', attempts: 0, reason: '디스코드 장애 직후라 건너뜀(60초)'}
             : to.forum
@@ -267,7 +290,7 @@ export function notifyUser(message, spawn, opts = {}) {
           if (sent.statusSync) { noteOutage(sent.statusSync); if (sent.statusSync.outcome !== 'none') logStatus(home, opts.work, sent.statusSync, secrets); }
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (warnings.length) result.discord.warning = warnings.join(' / ');
-          if (sent.outcome === 'sent') result.via = 'discord';
+          if (sent.outcome === 'sent' || sent.outcome === 'resolved-skip') result.via = 'discord';
         }
       }
     } catch (error) {

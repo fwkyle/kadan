@@ -30,7 +30,7 @@ export function readThreads(home) {
 }
 
 const decisionOf = v => v && typeof v === 'object' && typeof v.messageId === 'string' && v.messageId
-  ? {threadId: typeof v.threadId === 'string' && v.threadId ? v.threadId : null, messageId: v.messageId, forum: v.forum === true} : null;
+  ? {threadId: typeof v.threadId === 'string' && v.threadId ? v.threadId : null, messageId: v.messageId, forum: v.forum === true, ...(v.resolved === true ? {resolved: true} : {})} : null;
 
 export function readDecisions(home) {
   const raw = readState(home).decisions;
