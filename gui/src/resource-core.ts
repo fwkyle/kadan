@@ -3,6 +3,8 @@ export type ResourceState<T> = {
   error: string | null;
   refreshing: boolean;
   updatedAt: number;
+  // 시간 초과로 이번 조회를 중단했지만 이전 자료가 있어 그대로 보여 주는 중. 큰 오류 띠 대신 작은 표시만 쓴다.
+  timedOut: boolean;
 };
 export type ResourceOptions = {
   pollMs?: number;
@@ -10,6 +12,9 @@ export type ResourceOptions = {
   staleMs?: number;
 };
 type Listener = () => void;
+// 2026-10-14 격리 측정(원장 사본, 부하 평균 50): 개선 전 동시 조회 p95 61초, 개선 후 최악 13초.
+// 개선 후 느린 쪽(13초)의 4배 넘게 두어, 부하가 높아도 정상 응답을 시간 초과로 끊지 않는다.
+const DEFAULT_DEADLINE_MS = 60_000;
 
 // One owner per URL. Cancellation and generations prevent an older request replacing a newer one.
 export class Resource<T> {
@@ -17,6 +22,7 @@ export class Resource<T> {
     error: null,
     refreshing: false,
     updatedAt: 0,
+    timedOut: false,
   };
   private listeners = new Set<Listener>();
   private controller: AbortController | null = null;
@@ -109,7 +115,7 @@ export class Resource<T> {
           timedOut = true;
           controller.abort();
           reject(new Error("응답 시간이 초과됐습니다. 다시 읽어주세요."));
-        }, this.options.deadlineMs ?? 20_000);
+        }, this.options.deadlineMs ?? DEFAULT_DEADLINE_MS);
         controller.signal.addEventListener(
           "abort",
           () => {
@@ -128,15 +134,23 @@ export class Resource<T> {
           error: null,
           refreshing: false,
           updatedAt: Date.now(),
+          timedOut: false,
         });
     } catch (error) {
       if (
         generation === this.generation &&
         (!controller.signal.aborted || timedOut)
       )
+        // 시간 초과만 조용히 넘긴다. 연결 거부·서버 오류·깨진 응답은 이전 자료가 있어도 오류로 알린다.
+        // 첫 조회라 보여 줄 자료가 없으면 시간 초과도 오류다.
         this.publish({
           ...this.state,
-          error: error instanceof Error ? error.message : "조회 실패",
+          ...(timedOut && this.state.data !== undefined
+            ? { error: null, timedOut: true }
+            : {
+                error: error instanceof Error ? error.message : "조회 실패",
+                timedOut: false,
+              }),
           refreshing: false,
         });
     } finally {

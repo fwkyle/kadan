@@ -1,5 +1,6 @@
 import {operationsFlowSummaries} from './operations-flow.mjs';
 import {WorkStore} from './work-store.mjs';
+import {wallCache,nextTimeBoundary,TIME_DEPENDENT_MAX_AGE_MS} from './wall-snapshot-cache.mjs';
 import {renderOperationsFlow,operationsFlowStyle,operationsFlowScript} from './operations-flow-view.mjs';
 import {workDashboardModel,renderWorkDetail,renderWorkCreate,workDashboardStyle} from './work-dashboard.mjs';
 import {uiFoundationStyle} from './ui-foundation.mjs';
@@ -47,7 +48,10 @@ export function prepareCenterWall(snapshot){
  const hit=worksBySnapshot.get(snapshot);if(hit)return hit;
  const {centerError,entries=[],home,ledgerState}=snapshot,center=centerError?null:snapshot.center;
  let {works,workError}=registeredCenterWorks(snapshot);
- if(works)try{works=workDashboardModel(works,center,entries,operationsFlowSummaries(home,works,{ledgerState:ledgerState??undefined,cards:center?.cards}))}catch(error){works=null;workError=error.message;}
+ // 카드 상태 키(snapshot.centerKey)가 같으면 업무 목록 계산(약 2.3초)도 같다. 키가 없으면(JSONL·시험) 매번 계산한다.
+ let builtAt=0;
+ const compute=()=>{builtAt=Date.now();return workDashboardModel(works,center,entries,operationsFlowSummaries(home,works,{ledgerState:ledgerState??undefined,cards:center?.cards}));};
+ if(works)try{works=wallCache.memo('works-model',center&&snapshot.centerKey?snapshot.centerKey:null,compute,{maxAge:TIME_DEPENDENT_MAX_AGE_MS,boundary:()=>nextTimeBoundary(center?.cards,builtAt)})}catch(error){works=null;workError=error.message;}
  const value={works,workError};worksBySnapshot.set(snapshot,value);return value;
 }
 export function renderCenterWall(snapshot, {token='',url=new URL('http://localhost')}={}) {
