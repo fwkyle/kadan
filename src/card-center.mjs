@@ -40,10 +40,18 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const life=!runtimeKnown?'unknown':role?.life?.state==='alive'?(role.life.pidState==='match'?'alive':'changed'):'absent';
     return {...run,sessionState:life,state:run.state==='unconfirmed'&&life==='absent'?'orphaned':run.state};
   };
+  // 카드마다 원장·실행 전체를 훑지 않도록 한 번만 추려 둔다. 순서는 원래(원장·runs 삽입 순서) 그대로다.
+  const handovers=entries.filter(e=>e?.kind==='handover'&&e.phase==='transferred');
+  const runsByKey=new Map(),errorsByKey=new Map();
+  const push=(map,key,v)=>{if(!map.has(key))map.set(key,[]);map.get(key).push(v);};
+  for(const r of runs.values()) {
+    if(r.taskConnection?.state==='resolved')push(runsByKey,r.executionKey,r);
+    else if(r.taskConnection?.state==='ambiguous')for(const k of new Set(r.taskConnection.candidates))push(errorsByKey,k,r);
+  }
   const result=cards.map(source=>{
-    const card={...source,role:effectiveCardRole(source,entries,identity)};
-    const own=[...runs.values()].filter(r=>r.taskConnection?.state==='resolved'&&r.executionKey===card.key).map(classify);
-    const connectionErrors=[...runs.values()].filter(r=>r.taskConnection?.state==='ambiguous'&&r.taskConnection.candidates.includes(card.key)).map(r=>({taskId:r.rawTaskId,reason:r.taskConnection.reason}));
+    const card={...source,role:effectiveCardRole(source,handovers,identity)};
+    const own=(runsByKey.get(card.key)??[]).map(classify);
+    const connectionErrors=(errorsByKey.get(card.key)??[]).map(r=>({taskId:r.rawTaskId,reason:r.taskConnection.reason}));
     const possible=plans.get(identity.taskIdFor(card));
     const board=card.board||(possible?.size===1?[...possible][0]:null);
     const lastEdit=Date.parse(card.at)||0;

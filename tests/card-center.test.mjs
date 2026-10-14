@@ -127,3 +127,49 @@ test('겹따옴표로 감싼 강도도 읽는다',()=>{
  const center=buildCardCenter({cards:[],entries,tree});
  assert.equal(center.models['kimi-작업자'].effort,'max');
 });
+// 담당 계산 입력을 확정 인계로 좁히고 카드×실행 반복을 묶은 뒤에도 결과가 같아야 한다(PR-1 성능 변경).
+const T='2026-10-01T00:00:00Z',BEFORE='2026-09-30T00:00:00Z',AFTER='2026-10-02T00:00:00Z',LATER='2026-10-03T00:00:00Z';
+const mk=(key,extra={})=>({key,id:key.split('/').at(-1),role:'a',status:'assigned',board:'b',at:T,history:[],...extra});
+const xfer=(from,to,t,id='r/x',phase='transferred')=>({kind:'handover',from,to,t,taskIds:[id],phase});
+test('PR-1 합성 인계: 원장 전체를 넘기던 이전 방식과 담당 결과가 같다',async()=>{
+ const {effectiveCardRole}=await import('../src/handover-state.mjs');
+ const {taskIdentity}=await import('../src/task-identity.mjs');
+ const cases=[
+  ['연쇄 인계',[xfer('a','b',AFTER),xfer('b','c',LATER)],'c'],
+  ['카드 수정 전 인계',[xfer('a','b',BEFORE)],'a'],
+  ['카드 수정과 같은 시각',[xfer('a','b',T)],'b'],
+  ['인계 시각 없음',[xfer('a','b',undefined)],'b'],
+  ['잘못된 시각',[xfer('a','b','invalid')],'a'],
+  ['시간순이 아닌 입력',[xfer('b','c',LATER),xfer('a','b',AFTER)],'b'],
+  ['미확정 인계',[xfer('a','b',AFTER,'r/x','prepared')],'a'],
+  ['유일한 짧은 별칭',[xfer('a','b',AFTER,'x')],'b']];
+ for(const [name,transfers,expected] of cases){
+  const cards=[mk('r/x')];
+  const entries=[{kind:'send',role:'a',taskId:'x',t:T},...transfers,{kind:'done',role:expected,taskId:'x',t:LATER,result:'ok'}];
+  const identity=taskIdentity(cards),projected=identity.project(entries);
+  const old=effectiveCardRole(cards[0],projected,identity);
+  const center=buildCardCenter({cards,entries,tree:[],now:Date.parse(LATER)});
+  assert.equal(center.cards[0].role,old,name);assert.equal(old,expected,name);
+ }
+ const dup=[mk('r/x'),mk('s/x')],entries=[xfer('a','b',AFTER,'x')];
+ const identity=taskIdentity(dup);
+ const center=buildCardCenter({cards:dup,entries,tree:[],now:Date.parse(LATER)});
+ assert.deepEqual(center.cards.map(c=>c.role),dup.map(c=>effectiveCardRole(c,identity.project(entries),identity)));
+ assert.deepEqual(center.cards.map(c=>c.role),['a','a'],'모호한 짧은 별칭은 인계하지 않는다');
+});
+test('PR-1 카드×실행 묶기: 같은 executionKey 여러 실행과 모호 후보의 내용·순서가 유지된다',()=>{
+ const cards=[mk('r/x'),mk('s/x'),mk('r/y')];
+ const entries=[
+  {kind:'send',role:'a',taskId:'r/x',t:T},{kind:'send',role:'z',taskId:'r/y',t:T},
+  {kind:'send',role:'c',taskId:'r/x',t:AFTER},{kind:'send',role:'b',taskId:'r/x',t:BEFORE},
+  {kind:'send',role:'a2',taskId:'x',t:T},{kind:'send',role:'a3',taskId:'x',t:AFTER},
+  {kind:'done',role:'b',taskId:'r/x',t:LATER,result:'ok'}];
+ const center=buildCardCenter({cards,entries,tree:[],now:Date.parse(LATER)});
+ const by=k=>center.cards.find(c=>c.key===k);
+ assert.deepEqual(by('r/x').runs.map(r=>r.role),['a','c','b'],'runs 삽입 순서');
+ assert.deepEqual(by('r/y').runs.map(r=>r.role),['z']);
+ assert.deepEqual(by('s/x').runs,[]);
+ for(const k of ['r/x','s/x'])assert.deepEqual(by(k).connectionErrors.map(e=>e.taskId),['x','x']);
+ assert.equal(by('r/y').connectionErrors.length,0);assert.equal(by('r/x').ambiguous,true);
+ assert.equal(center.unregistered.length,2);
+});
