@@ -1,13 +1,14 @@
 // 사용자(@user) 알림의 단일 통로. 다섯 호출 지점(감시 전달·겹알림·watch send·인계·사용자 우편)과 결정 알림이 모두 여기를 지난다.
 // 디스코드 설정이 있으면 디스코드로 보내고, 설정 없음·전송 실패·불확실이면 맥 시스템 알림(osascript)으로 내려간다.
 // 호출하는 쪽이 모두 동기라서 동기 API를 유지한다: 디스코드 전송은 자식 프로세스(discord-send.mjs)를 spawnSync로 띄워
-// 강제 시간 제한(부모 14초, 자식 재시도 포함 12초)을 건다. 감시 주기를 막는 최악 시간은 전송 14초 + 시스템 알림이다.
+// 강제 시간 제한을 건다. 한 알림 전체(잠금 대기·재시도·새 글·상태 기록)는 공통 종료 시각 12초 안에서 끝나고,
+// 자식 강제 종료 여유 2초를 더한 약 14초가 상한이다. 시스템 알림은 따로 3초 제한이다.
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {ledgerHome} from './ledger.mjs';
 import {effectiveNotifyEnvFile, readDiscordSecrets} from './notify-setting.mjs';
-import {readThreads, withThreads} from './notify-threads.mjs';
+import {setThread, withThreadLock} from './notify-threads.mjs';
 import {WorkStore} from './work-store.mjs';
 
 export const DISCORD_LIMIT = 2000;
@@ -15,6 +16,15 @@ export const NOTIFY_LOG_FILE = 'notify-log.jsonl';
 const SENDER = new URL('./discord-send.mjs', import.meta.url).pathname;
 // 경보는 같은 id가 해소됐다가 다시 뜰 수 있어 짧은 창 안에서만 중복으로 본다. 결정·우편 id는 한 번뿐이라 창이 없다.
 export const ALERT_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+export const TOTAL_BUDGET_MS = 12000; // 한 알림 전체의 공통 예산
+const MIN_SEND_MS = 1500;             // 이보다 적게 남으면 더 기다리거나 보내지 않는다
+const SYSTEM_TIMEOUT_MS = 3000;
+// 연결 실패·시간 초과·429/5xx 소진으로 끝나면 이 시간 동안 같은 프로세스의 다음 알림은 디스코드를 건너뛰고 바로 시스템 알림으로 간다.
+// 근거: 장애 때 알림 한 건이 최대 12초를 막아 경보 두 건인 감시 주기가 24초 걸렸다(1라운드 검수). 60초면 감시 주기(기본 수 초~수십 초)
+// 당 한 번만 기다리고, 디스코드가 되살아나면 1분 안에 돌아온다. 4xx(설정·요청 문제)는 장애가 아니라서 막지 않는다.
+export const DISCORD_BLOCK_MS = 60000;
+let blockedUntil = 0;
+export const resetDiscordBlock = () => { blockedUntil = 0; };
 
 function workTitleOf(home, work) {
   if (!work) return '';
@@ -23,7 +33,7 @@ function workTitleOf(home, work) {
 
 export function systemNotify(message, spawn) {
   const script = `display notification ${JSON.stringify(message)} with title "kadan watch"`;
-  const result = spawn('osascript', ['-e', script], {encoding: 'utf8'});
+  const result = spawn('osascript', ['-e', script], {encoding: 'utf8', timeout: SYSTEM_TIMEOUT_MS});
   return result.status === 0 ? null : (result.stderr ?? 'osascript 실패').trim();
 }
 
@@ -79,35 +89,27 @@ export function postDiscordWebhook({webhook, content, allowedMentions, threadNam
   try { return JSON.parse(child.stdout.trim().split('\n').at(-1)); } catch { return {outcome: 'uncertain', attempts: null, reason: '전송 결과 해석 실패'}; }
 }
 
-const TOTAL_MS = 12000;
+const budgetOut = () => ({outcome: 'failed', attempts: 0, reason: '시간 예산 소진'});
 
-// 포럼 채널: 업무 키마다 글 하나. 기록된 글이 있으면 thread_id로 이어 붙이고, 없거나 그 글이 4xx로 거절되면(지워짐 등)
-// thread_name으로 새 글을 한 번 만들어 기록한다. 새 글 요청은 같은 요청의 재시도가 아니라 다른 요청이다.
-function sendForum({home, webhook, work, title, content, allowedMentions}) {
-  const start = Date.now(), left = () => Math.max(1000, TOTAL_MS - (Date.now() - start));
+// 포럼 채널: 업무 키마다 글 하나. 상태 읽기 → (새 글 만들기) → 상태 갱신을 한 잠금 안에서 한다.
+// 기록된 글이 있으면 thread_id로 이어 붙이고, 그 글이 429 아닌 4xx로 거절되면(지워짐 등) thread_name으로 새 글을 한 번 만든다
+// (같은 요청의 재시도가 아니라 다른 요청). 잠금을 종료 시각 안에 못 얻으면 보내지 않는다: 업무 글로 가야 할 내용을
+// 기본 #브리핑에 섞지 않고, 상태 파일을 잠금 없이 건드리지 않으려고 시스템 알림으로 내려간다(잘못된 채널로 새지 않는 쪽).
+function sendForum({home, webhook, work, title, content, allowedMentions, deadline}) {
+  const left = () => deadline - Date.now();
   const threadName = `${work} ${title ?? ''}`.trim().slice(0, 100);
-  const create = () => {
-    const r = postDiscordWebhook({webhook, content, allowedMentions, threadName, wait: true, budgetMs: left()});
-    if (r.outcome === 'sent' && r.channelId) withThreads(home, t => ({...t, [work]: r.channelId}));
-    return r;
-  };
-  const known = readThreads(home)[work];
-  if (known) {
-    const r = postDiscordWebhook({webhook, content, allowedMentions, threadId: known, budgetMs: left()});
-    if (!(r.outcome === 'failed' && r.status >= 400 && r.status < 500 && r.status !== 429)) return r;
-    return create();
-  }
-  let out;
-  withThreads(home, t => { // 동시에 같은 업무의 첫 알림이 둘 나가 글이 둘 생기지 않게 잠금 안에서 다시 본다.
-    const again = t[work];
-    out = again ? postDiscordWebhook({webhook, content, allowedMentions, threadId: again, budgetMs: left()}) : null;
-    if (!out) {
-      out = postDiscordWebhook({webhook, content, allowedMentions, threadName, wait: true, budgetMs: left()});
-      if (out.outcome === 'sent' && out.channelId) return {...t, [work]: out.channelId};
+  const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content, allowedMentions, budgetMs: left(), ...extra});
+  const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads => {
+    const known = threads[work];
+    if (known) {
+      const r = post({threadId: known});
+      if (!(r.outcome === 'failed' && r.status >= 400 && r.status < 500 && r.status !== 429)) return r;
     }
-    return null;
+    const r = post({threadName, wait: true});
+    if (r.outcome === 'sent' && r.channelId) setThread(home, work, r.channelId);
+    return r;
   });
-  return out;
+  return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
 }
 
 // 레포별 웹훅이 있고 업무 키가 있으면 포럼 글로, 아니면 기본 웹훅으로 보낸다.
@@ -122,6 +124,7 @@ function route({sec, repo, work}) {
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
   const env = opts.env ?? process.env;
+  const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
   const result = {via: 'system', error: null, discord: null};
   let home = null, secrets = [];
   if (env.KADAN_NOTIFY !== 'off') {
@@ -142,9 +145,13 @@ export function notifyUser(message, spawn, opts = {}) {
           const allowedMentions = d.mention === true ? {users: [sec.userId]} : {parse: []};
           const to = route({sec, repo, work: opts.work});
           const title = opts.workTitle ?? workTitleOf(home, opts.work);
-          const sent = to.forum
-            ? sendForum({home, webhook: to.webhook, work: opts.work, title, content: d.content, allowedMentions})
-            : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions});
+          const sent = Date.now() < blockedUntil
+            ? {outcome: 'skipped', attempts: 0, reason: '디스코드 장애 직후라 건너뜀(60초)'}
+            : to.forum
+              ? sendForum({home, webhook: to.webhook, work: opts.work, title, content: d.content, allowedMentions, deadline})
+              : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions, budgetMs: Math.max(MIN_SEND_MS, deadline - Date.now())});
+          if (sent.outcome === 'uncertain' || (sent.outcome === 'failed' && sent.attempts !== 0 && (sent.status === undefined || sent.status >= 500 || sent.status === 429)))
+            blockedUntil = Date.now() + DISCORD_BLOCK_MS;
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (sent.outcome === 'sent') result.via = 'discord';
         }

@@ -5,7 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 
 const [, , logFile, scriptJson = '[{"status":204}]', optionsJson = '{}'] = process.argv;
-// 포럼 모양(옵션 {forum:true, known:[글 id…]}): thread_name(새 글)도 thread_id(기존 글)도 없으면 400, 모르는 thread_id는 404.
+// 포럼 모양(옵션 {forum:true, known:[글 id…], delayMs, steps}): thread_name(새 글)도 thread_id(기존 글)도 없으면 400, 모르는 thread_id는 404.
 const options = JSON.parse(optionsJson), known = new Set(options.known ?? []);
 let created = 0;
 const script = JSON.parse(scriptJson);
@@ -16,10 +16,15 @@ const server = http.createServer((req, res) => {
   req.on('data', c => chunks.push(c));
   req.on('end', () => {
     if (options.forum) {
-      const text = Buffer.concat(chunks).toString('utf8');
+      const text = Buffer.concat(chunks).toString('utf8'), index = n++, override = options.steps?.[index];
       fs.appendFileSync(logFile, JSON.stringify({at: Date.now(), url: req.url, body: text}) + '\n');
       const query = new URL(req.url, 'http://x').searchParams, body = JSON.parse(text);
-      const reply = (status, json) => { res.writeHead(status, {'content-type': 'application/json'}); res.end(JSON.stringify(json)); };
+      // delayMs(전체)·steps[n]({status, body, delayMs}): 느린 응답과 요청 순서별 고정 응답을 흉내 낸다.
+      const reply = (status, json) => setTimeout(() => {
+        const o = override?.status ? override : {status, body: json};
+        res.writeHead(o.status, {'content-type': 'application/json'}); res.end(JSON.stringify(o.body ?? {}));
+      }, override?.delayMs ?? options.delayMs ?? 0);
+      if (override?.status) return reply();
       if (query.get('thread_id')) return known.has(query.get('thread_id')) ? reply(200, {id: 'M', channel_id: query.get('thread_id')}) : reply(404, {code: 10003});
       if (!body.thread_name) return reply(400, {message: 'thread_name or thread_id required'});
       const id = `T${++created}`; known.add(id);

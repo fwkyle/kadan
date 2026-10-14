@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
-import {notifyUser, fitDiscord, scrubSecrets, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
+import {notifyUser, fitDiscord, scrubSecrets, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {parseEnvText, setNotifySetting, readNotifySetting, effectiveNotifyEnvFile} from '../src/notify-setting.mjs';
 
@@ -15,13 +15,14 @@ const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
 const live = [];
 process.on('exit', () => { for (const c of live) c.kill('SIGKILL'); });
 
-async function world(script = [{status: 204}], {envExtra = '', startServer = true, forumKnown = null} = {}) {
+async function world(script = [{status: 204}], {envExtra = '', startServer = true, forum = null} = {}) {
+  resetDiscordBlock(); // 장애 직후 건너뛰기(60초)가 시험 사이로 번지지 않게
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-test-'));
   const home = path.join(dir, 'home'), logFile = path.join(dir, 'requests.jsonl');
   fs.mkdirSync(home);
   let port = 1, child = null;
   if (startServer) {
-    child = spawn(process.execPath, [helper, logFile, JSON.stringify(script), JSON.stringify(forumKnown ? {forum: true, known: forumKnown} : {})], {stdio: ['ignore', 'pipe', 'inherit']});
+    child = spawn(process.execPath, [helper, logFile, JSON.stringify(script), JSON.stringify(forum ? {forum: true, ...forum} : {})], {stdio: ['ignore', 'pipe', 'inherit']});
     live.push(child);
     port = await new Promise(resolve => child.stdout.once('data', d => resolve(Number(String(d).match(/PORT (\d+)/)[1]))));
   }
@@ -30,7 +31,7 @@ async function world(script = [{status: 204}], {envExtra = '', startServer = tru
   const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: envFile};
   const requests = () => fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
   const osCalls = [];
-  const fakeSpawn = osFails => (cmd, args) => { osCalls.push({cmd, args}); return {status: osFails ? 1 : 0, stderr: 'os-fail'}; };
+  const fakeSpawn = osFails => (cmd, args, options) => { osCalls.push({cmd, args, options}); return {status: osFails ? 1 : 0, stderr: 'os-fail'}; };
   const log = () => fs.existsSync(path.join(home, NOTIFY_LOG_FILE)) ? fs.readFileSync(path.join(home, NOTIFY_LOG_FILE), 'utf8') : '';
   return {dir, home, envFile, env, port, requests, osCalls, fakeSpawn, log, stop: () => child?.kill('SIGTERM')};
 }
@@ -276,9 +277,9 @@ test('watch @user 전달: 디스코드 실패 + 시스템 성공이면 전달, �
 });
 
 // 포럼 모양 가짜 서버를 띄우고, 기본 서버의 비밀 파일에 레포 키를 붙인다.
-async function forumWorld(known = [], repoKeys = ['kadan']) {
+async function forumWorld(known = [], repoKeys = ['kadan'], forumOptions = {}) {
   const base = await world();
-  const forum = await world([{status: 204}], {forumKnown: known});
+  const forum = await world([{status: 204}], {forum: {known, ...forumOptions}});
   let extra = '';
   for (const r of repoKeys) extra += `DISCORD_WEBHOOK_URL_${r.toUpperCase().replace(/[^A-Z0-9]/g, '_')}=http://127.0.0.1:${forum.port}/api/webhooks/333/${TOKEN}\n`;
   fs.appendFileSync(base.envFile, extra);
@@ -384,3 +385,141 @@ test('kadan notify set은 기본 경로 하나만 고정하고 show는 레포 �
   assert.ok(!out.join('\n').includes(TOKEN) && !out.join('\n').includes(USER_ID));
 });
 
+
+// --- 2라운드: 포럼 상태 잠금·총시간 상한·장애 직후 건너뛰기·링크된 비밀 파일 ---
+const childScript = new URL('./helpers/notify-child.mjs', import.meta.url).pathname;
+const runChild = (args, env) => new Promise(resolve => {
+  const c = spawn(process.execPath, [childScript, JSON.stringify(args)], {env: {...process.env, ...env}, stdio: ['ignore', 'pipe', 'inherit']});
+  let out = ''; c.stdout.on('data', d => { out += d; });
+  c.on('close', () => resolve(JSON.parse(out.trim().split('\n').at(-1))));
+});
+const postCount = (w, kind) => w.forum.requests().filter(r => kind === 'new' ? bodyOf(r).thread_name : /thread_id=/.test(r.url)).length;
+
+test('R1 같은 업무의 첫 알림 두 건이 동시에 와도 글은 하나, 두 번째는 그 글에 이어 붙는다', async () => {
+  const w = await forumWorld([], ['kadan'], {delayMs: 800});
+  try {
+    const a = {home: w.base.home, envFile: w.base.envFile, work: 'kadan/work-a', title: 't'};
+    const [r1, r2] = await Promise.all([runChild({...a, key: 'k1'}), runChild({...a, key: 'k2'})]);
+    assert.equal(r1.via, 'discord'); assert.equal(r2.via, 'discord');
+    assert.equal(postCount(w, 'new'), 1); assert.equal(postCount(w, 'old'), 1);
+    assert.deepEqual(w.threads(), {'kadan/work-a': 'T1'});
+  } finally { w.stop(); }
+});
+
+test('R1 다른 업무의 첫 알림 두 건이 동시에 와도 두 업무 기록이 모두 남는다', async () => {
+  const w = await forumWorld([], ['kadan'], {delayMs: 800});
+  try {
+    const a = {home: w.base.home, envFile: w.base.envFile, title: 't'};
+    await Promise.all([runChild({...a, work: 'kadan/work-a', key: 'k1'}), runChild({...a, work: 'kadan/work-b', key: 'k2'})]);
+    assert.equal(postCount(w, 'new'), 2);
+    assert.deepEqual(Object.keys(w.threads()).sort(), ['kadan/work-a', 'kadan/work-b']);
+  } finally { w.stop(); }
+});
+
+test('R1 지워진 글에 동시 알림 두 건이어도 새 글은 하나, 나머지는 그 새 글을 쓴다', async () => {
+  const w = await forumWorld([], ['kadan'], {delayMs: 500});
+  try {
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-a': 'GONE', 'kadan/work-keep': 'KEEP'}}));
+    const a = {home: w.base.home, envFile: w.base.envFile, work: 'kadan/work-a', title: 't'};
+    await Promise.all([runChild({...a, key: 'k1'}), runChild({...a, key: 'k2'})]);
+    assert.equal(postCount(w, 'new'), 1);
+    assert.deepEqual(w.threads(), {'kadan/work-a': 'T1', 'kadan/work-keep': 'KEEP'});
+  } finally { w.stop(); }
+});
+
+test('R1 잠금을 시간 안에 못 얻으면 보내지 않고 시스템 알림으로 내려간다(기본 채널로 새지 않음)', async () => {
+  const w = await forumWorld();
+  try {
+    fs.mkdirSync(path.join(w.base.home, 'notify-threads.json.lock'));
+    const t0 = Date.now();
+    const r = notifyUser('a', w.base.fakeSpawn(), {home: w.base.home, env: w.base.env, work: 'kadan/work-x', workTitle: 't', totalMs: 3000});
+    assert.equal(r.discord.outcome, 'lock-timeout'); assert.equal(r.via, 'system');
+    assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0}ms`);
+    assert.equal(w.forum.requests().length + w.base.requests().length, 0);
+    assert.equal(w.threads(), null);
+  } finally { w.stop(); }
+});
+
+test('R2 429 → 404 → 새 글 → 상태 기록이 겹쳐도 한 알림은 상한(총 예산+강제 종료 여유) 안에 끝난다', async () => {
+  const steps = [{status: 429, body: {retry_after: 1}}, {status: 404, body: {}, delayMs: 1500}, {delayMs: 2500}];
+  const w = await forumWorld([], ['kadan'], {steps});
+  try {
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': 'OLD'}}));
+    const t0 = Date.now();
+    // 예산 4초: 429(1초 대기)+404(1.5초) 뒤 남은 시간이 새 글을 만들기엔 모자라 보내지 않고 시스템 알림으로 내려간다.
+    const r = notifyUser('a', w.base.fakeSpawn(), {home: w.base.home, env: w.base.env, work: 'kadan/work-x', workTitle: 't', totalMs: 4000});
+    const took = Date.now() - t0;
+    assert.ok(took <= 4000 + 2000, `${took}ms`);
+    assert.equal(r.via, 'system');
+    assert.ok(w.forum.requests().length <= 3);
+    assert.deepEqual(w.threads(), {'kadan/work-x': 'OLD'});
+  } finally { w.stop(); }
+});
+
+test('R2 응답이 계속 느려도 알림 한 번은 예산 안에 끝나고 시스템 알림 spawn에는 짧은 timeout이 붙는다', async () => {
+  const w = await world([{hang: true}]);
+  try {
+    const t0 = Date.now();
+    const r = notifyUser('a', w.fakeSpawn(), {home: w.home, env: w.env, totalMs: 3000});
+    assert.ok(Date.now() - t0 <= 3000 + 2000, `${Date.now() - t0}ms`);
+    assert.equal(r.discord.outcome, 'uncertain');
+    assert.equal(w.osCalls[0].options.timeout, 3000);
+  } finally { w.stop(); }
+});
+
+test('연결 실패 뒤 60초는 디스코드를 건너뛰고 바로 시스템 알림 — 첫 건만 디스코드를 시도한다', async () => {
+  const w = await world([{status: 204}], {startServer: false});
+  try {
+    const first = notifyUser('a', w.fakeSpawn(), {home: w.home, env: w.env, key: 'k1'});
+    assert.equal(first.discord.outcome, 'failed');
+    const t0 = Date.now();
+    const second = notifyUser('b', w.fakeSpawn(), {home: w.home, env: w.env, key: 'k2'});
+    const third = notifyUser('c', w.fakeSpawn(), {home: w.home, env: w.env, key: 'k3'});
+    assert.ok(Date.now() - t0 < 500);
+    assert.equal(second.discord.outcome, 'skipped'); assert.equal(third.discord.outcome, 'skipped');
+    assert.equal(w.osCalls.length, 3);
+    assert.match(w.log(), /건너뜀/);
+    resetDiscordBlock();
+  } finally { w.stop(); }
+});
+
+test('4xx는 장애가 아니라서 다음 알림을 막지 않는다', async () => {
+  const w = await world([{status: 400}]);
+  try {
+    notifyUser('a', w.fakeSpawn(), {home: w.home, env: w.env});
+    notifyUser('b', w.fakeSpawn(), {home: w.home, env: w.env});
+    assert.equal(w.requests().length, 2);
+  } finally { w.stop(); }
+});
+
+test('심볼릭 링크인 비밀 파일도 그대로 읽힌다', async () => {
+  const w = await world();
+  try {
+    const link = path.join(w.dir, 'linked.env');
+    fs.symlinkSync(w.envFile, link);
+    const r = notifyUser('a', w.fakeSpawn(), {home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: link}});
+    assert.equal(r.via, 'discord');
+    assert.equal(w.requests().length, 1);
+  } finally { w.stop(); }
+});
+
+test('R1 첫 호출이 잠금을 5초 넘게 쥐고 있어도(500 지연 뒤 재시도) 같은 업무는 글 하나', async () => {
+  const w = await forumWorld([], ['kadan'], {steps: [{status: 500, body: {}, delayMs: 4900}]});
+  try {
+    const a = {home: w.base.home, envFile: w.base.envFile, work: 'kadan/work-a', title: 't'};
+    const [r1, r2] = await Promise.all([runChild({...a, key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, key: 'k2'}); })()]);
+    assert.equal(r1.via, 'discord'); assert.equal(r2.via, 'discord');
+    // thread_name 요청은 첫 호출의 500 + 재시도 성공 = 2건이고, 두 번째 호출은 thread_id로 이어 붙는다
+    assert.equal(postCount(w, 'new'), 2); assert.equal(postCount(w, 'old'), 1);
+    assert.deepEqual(w.threads(), {'kadan/work-a': 'T1'});
+  } finally { w.stop(); }
+});
+
+test('R1 첫 호출이 잠금을 5초 넘게 쥐고 있어도 다른 업무의 기록이 지워지지 않는다', async () => {
+  const w = await forumWorld([], ['kadan'], {steps: [{status: 500, body: {}, delayMs: 4900}]});
+  try {
+    const a = {home: w.base.home, envFile: w.base.envFile, title: 't'};
+    await Promise.all([runChild({...a, work: 'kadan/work-a', key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, work: 'kadan/work-b', key: 'k2'}); })()]);
+    assert.deepEqual(Object.keys(w.threads()).sort(), ['kadan/work-a', 'kadan/work-b']);
+  } finally { w.stop(); }
+});
