@@ -2,7 +2,7 @@
 // 디스코드 포럼 업무 글에 하나만 두고, 바뀔 때마다 이 본문으로 그 메시지를 고쳐 쓴다(user-notify.mjs의 refreshWorkStatus).
 import {WorkStore, workPhases, endedExecution} from './work-store.mjs';
 import {CardStore} from './card-store.mjs';
-import {buildCardCenter} from './card-center.mjs';
+import {buildCardCenter, reportedActivity} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
 import {statusLabel} from './status-labels.mjs';
 
@@ -11,7 +11,12 @@ const MAX_LISTED = 8;
 const WORK_STATE = {open: '열림', hold: '일시정지', done: '완료', cancelled: '취소'};
 // 저장된 시작·대기 보고(card progress)는 그 시점 보고일 뿐 실시간 생존이 아니다. 문구에 '보고 기준'을 붙여 구분한다.
 const REPORTED = {running: '시작함(보고 기준)', waiting: '결과 대기(보고 기준)'};
-const stateText = card => !card ? '카드 없음' : card.displayState === 'unconfirmed' && REPORTED[card.activity] ? REPORTED[card.activity] : statusLabel(card.displayState);
+// 카드 상태 계산(card-center.mjs)과 같은 reportedActivity 판정이다. 생존은 모르므로 alive:false. 조건을 못 채우면 '발령됨'(statusLabel).
+const stateText = card => {
+  if (!card) return '카드 없음';
+  const reported = card.displayState === 'unconfirmed' ? reportedActivity(card, card.runs ?? [], {alive: false}) : null;
+  return reported ? REPORTED[reported] : statusLabel(card.displayState);
+};
 const cut = (text, max) => { const t = String(text ?? '').replace(/\s+/g, ' ').trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
 const minute = iso => (Number.isFinite(Date.parse(iso)) ? new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '모름');
 

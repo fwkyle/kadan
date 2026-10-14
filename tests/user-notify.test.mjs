@@ -823,3 +823,43 @@ test('S10 실패로 끝난 실행은 열린 실행이 아니고, 업무 완료 �
   text = buildWorkStatus(home, 'kadan/work-x').content;
   assert.match(text, /상태: 완료/); assert.match(text, /열린 실행: 없음/); assert.match(text, /실패로 끝난 실행: 2건/);
 });
+
+// 3라운드 검수 재현: 인계·재발령 뒤 옛 담당의 시작·대기 보고는 지금 담당 상태로 보이지 않는다.
+test('S11 보고 기준 표시는 지금 담당의 최신 발령 이후 보고일 때만 — 인계·재발령 뒤 옛 보고는 발령됨', async () => {
+  const {CardStore} = await import('../src/card-store.mjs');
+  const {appendLedger} = await import('../src/ledger.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s11-'));
+  const store = mkWork(home), cards = new CardStore(home);
+  const w = store.change('kadan/work-x', 'execute', {phase: 'implementation', round: 1, title: '실행', body: '# 지시\n\n## 읽고 시작할 것\n- /tmp/x.md'}, {revision: 1, note: '실행'});
+  const key = w.executions[0].key, id = cards.get(key).id;
+  const send = (role, offsetMs) => appendLedger({kind: 'send', role, taskId: id, t: new Date(Date.now() + offsetMs).toISOString()}, home);
+  const line = () => buildWorkStatus(home, 'kadan/work-x').content.split('\n').find(l => l.startsWith('- 구현'));
+  const ready = cards.update(key, {status: 'ready', scope: '시험'}, {revision: cards.get(key).revision, note: '승인'});
+  let card = cards.update(key, {status: 'assigned', role: 'kadan-갑', board: 'b', rallyId: 'r1', rallyTitle: '묶음', rallyRound: '1', rallyStep: 'implementation'}, {revision: ready.revision, note: '배정'});
+  send('kadan-갑', -2000);
+  assert.match(line(), /발령됨/);                                     // 보고 없음
+  card = cards.update(key, {activity: 'running'}, {revision: card.revision, by: 'kadan-갑', note: '시작'});
+  assert.match(line(), /시작함\(보고 기준\)/);                         // (1) 본인 보고
+  send('kadan-갑', 300);                                               // (3) 같은 역할 재발령 — 옛 보고는 새 발령보다 앞선다
+  assert.match(line(), /발령됨/); assert.ok(!line().includes('보고 기준'));
+  await new Promise(r => setTimeout(r, 400));
+  card = cards.update(key, {activity: 'waiting'}, {revision: card.revision, by: 'kadan-갑', note: '대기'});
+  assert.match(line(), /결과 대기\(보고 기준\)/);                      // (4) 재발령 뒤 새 보고
+  const w2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-s11b-'));
+  const store2 = mkWork(w2), cards2 = new CardStore(w2);
+  store2.change('kadan/work-x', 'execute', {phase: 'implementation', round: 1, title: '실행', body: '# 지시\n\n## 읽고 시작할 것\n- /tmp/x.md'}, {revision: 1, note: '실행'});
+  const key2 = store2.get('kadan/work-x').executions[0].key, id2 = cards2.get(key2).id;
+  const line2 = () => buildWorkStatus(w2, 'kadan/work-x').content.split('\n').find(l => l.startsWith('- 구현'));
+  const r2 = cards2.update(key2, {status: 'ready', scope: '시험'}, {revision: cards2.get(key2).revision, note: '승인'});
+  let c2 = cards2.update(key2, {status: 'assigned', role: 'kadan-갑', board: 'b', rallyId: 'r1', rallyTitle: '묶음', rallyRound: '1', rallyStep: 'implementation'}, {revision: r2.revision, note: '배정'});
+  appendLedger({kind: 'send', role: 'kadan-갑', taskId: id2, t: new Date(Date.now() - 4000).toISOString()}, w2);
+  c2 = cards2.update(key2, {activity: 'running'}, {revision: c2.revision, by: 'kadan-갑', note: '시작'});
+  assert.match(line2(), /시작함\(보고 기준\)/);
+  // 인계: 담당이 바뀌고 새 담당에게 발령 — 새 담당 보고 없음 → 발령됨 (옛 activityRole은 지금 담당이 아니다)
+  c2 = cards2.update(key2, {role: 'kadan-을'}, {revision: c2.revision, note: '인계'});
+  appendLedger({kind: 'send', role: 'kadan-을', taskId: id2, t: new Date(Date.now() - 1000).toISOString()}, w2);
+  assert.match(line2(), /발령됨/); assert.ok(!line2().includes('보고 기준'));
+  // (4) 재발령 뒤 새 보고 → 보고 기준
+  cards2.update(key2, {activity: 'waiting'}, {revision: c2.revision, by: 'kadan-을', note: '대기'});
+  assert.match(line2(), /결과 대기\(보고 기준\)/);
+});
