@@ -289,3 +289,84 @@ test('R3 본문의 표시용 UUID는 8자, 경로·주소 안 UUID와 링크 주
     assert.ok(content.endsWith(`/#decision-${UUID}`));
   } finally { w.stop(); }
 });
+
+// --- 3라운드: 해결 기록은 한 방향(F1), 읽기 실패 + 기록 없음은 요청 그대로(F1), 상대경로 보존(F2) ---
+const {setDecision} = await import('../src/notify-threads.mjs');
+const stateFile = w => path.join(w.home, 'notify-threads.json');
+const seedResolved = (w, id, entry) => fs.writeFileSync(stateFile(w), JSON.stringify({version: 1, threads: {}, decisions: {[id]: entry}}));
+const NOT_IN_STORE = dec();   // 저장소에 없는 결정 → announce의 최신 상태 읽기가 실패한다
+
+for (const [name, opts, extra] of [
+  ['업무 글', {}, {work: 'kadan/work-x'}], ['레포 결정 글', {}, {}], ['#브리핑', {repoKeys: []}, {}],
+]) {
+  test(`F1 해결 기록 있음 + 최신 읽기 실패(${name}): HTTP 0, 기록 그대로`, async () => {
+    const w = await world(opts);
+    try {
+      const rec = {threadId: 'T1', messageId: 'M9', forum: !opts.repoKeys, resolved: true};
+      seedResolved(w, UUID, rec);
+      const before = fs.readFileSync(stateFile(w), 'utf8');
+      w.announce('request', {...NOT_IN_STORE, ...extra});
+      assert.equal(w.fr.requests().length + w.base.requests().length, 0);
+      assert.equal(fs.readFileSync(stateFile(w), 'utf8'), before);
+      assert.equal(w.osCalls.length, 0);                                   // 시스템 알림으로도 새지 않는다
+      assert.match(w.log(), /"outcome":"resolved-skip"/);
+    } finally { w.stop(); }
+  });
+}
+
+test('F1 해결 기록 없음 + 최신 읽기 실패: 요청은 그대로 1회 나가고 결과 사유에 확인 실패가 남는다', async () => {
+  const w = await world();
+  try {
+    w.announce('request', NOT_IN_STORE);
+    const reqs = w.fr.requests();
+    assert.equal(reqs.length, 1);
+    assert.match(bodyOf(reqs[0]).content, /^\[kadan\] <@\d+> 결정 요청:/);
+    assert.deepEqual(bodyOf(reqs[0]).allowed_mentions, {users: [USER_ID]});
+    assert.match(w.log(), /"outcome":"sent".*최신 상태 확인 실패/);
+    assert.equal(w.state().decisions[UUID].resolved, undefined);
+  } finally { w.stop(); }
+});
+
+test('F1 시스템 알림도 같은 판단: 해결 기록 있으면 띄우지 않고, 기록 없음 + 읽기 실패면 요청 문구 그대로', async () => {
+  const w = await world();
+  try {
+    const offEnv = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')};   // 디코 설정 없음 → 시스템 알림
+    const sys = [];
+    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, (...a) => { sys.push(a[1][1]); return {status: 0}; }, {...o, home: w.home, env: offEnv})});
+    const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
+    try {
+      store.announce('request', NOT_IN_STORE);
+      assert.equal(sys.length, 1); assert.match(sys[0], /결정 요청/);
+      seedResolved(w, UUID, {threadId: null, messageId: 'M1', forum: false, resolved: true});
+      store.announce('request', NOT_IN_STORE);
+      assert.equal(sys.length, 1);
+    } finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }
+  } finally { w.stop(); }
+});
+
+test('F1 resolved:true 기록은 어떤 쓰기로도 false가 되지 않는다', async () => {
+  const w = await world();
+  try {
+    seedResolved(w, UUID, {threadId: 'T1', messageId: 'M1', forum: true, resolved: true});
+    setDecision(w.home, UUID, {threadId: 'T1', messageId: 'M2', forum: true, resolved: false});
+    setDecision(w.home, UUID, {threadId: 'T1', messageId: 'M3', forum: true});
+    assert.equal(w.state().decisions[UUID].resolved, true);
+    // 실제 흐름: 취소 알림(해결 기록) 뒤 요청 알림이 어떤 읽기 결과로 와도 기록이 그대로
+    const d = realDecision(w);
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '슈퍼감독');
+    w.announce('cancel', cancelled); w.announce('request', d); w.announce('request', {...d, id: d.id});
+    assert.equal(w.state().decisions[d.id].resolved, true);
+    assert.equal(w.fr.requests().filter(r => /결정 요청:/.test(bodyOf(r).content)).length, 0);
+  } finally { w.stop(); }
+});
+
+test('F2 ./·../ 경로의 UUID는 보존하고, 카드 키·일반 문장의 UUID는 8자로 줄인다', async () => {
+  const w = await world();
+  try {
+    const o = 'bbbbbbbb-1111-4222-8333-444444444444';
+    w.announce('request', dec({question: `확인: ./${o}/result.md 그리고 ../${o}\nkadan/exec-${o} 와 A/B 선택 ${o}`}));
+    const body = bodyOf(w.fr.requests()[0]).content;
+    assert.ok(body.includes(`./${o}/result.md`) && body.includes(`../${o}`));
+    assert.ok(body.includes('kadan/exec-bbbbbbbb ') && body.includes('A/B 선택 bbbbbbbb'));
+  } finally { w.stop(); }
+});

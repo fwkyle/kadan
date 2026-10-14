@@ -158,7 +158,7 @@ function sendForum({home, webhook, work, threadName, content, allowedMentions, d
     }
     if (entry && wait && r.messageId) setDecision(home, decision.id, {threadId: entry.threadId, messageId: r.messageId, forum: true, resolved: plan.resolved});
     if (entry) r = {...r, statusSync: syncStatus({home, webhook, work, ...entry, deadline})};
-    return r;
+    return noteRead(r, plan);
   });
   return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
 }
@@ -176,23 +176,29 @@ function sendDefaultDecision({home, webhook, content, allowedMentions, deadline,
     }
     const r = post({wait: true});
     if (r.outcome === 'sent' && r.messageId) setDecision(home, decision.id, {threadId: null, messageId: r.messageId, forum: false, resolved: plan.resolved});
-    return r;
+    return noteRead(r, plan);
   });
   return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '알림 상태 잠금을 시간 안에 못 얻음'};
 }
 
 // 잠금 안에서 보내기 직전에 결정의 현재 상태를 다시 읽는다(요청 알림이 취소·답변보다 늦게 잠금을 잡는 경합).
-// 요청인데 이미 해결됐으면 열린 요청 본문 대신 해결된 모양(멘션 없음)으로 보내고, 해결 메시지가 이미 있으면 아무것도 보내지 않는다.
-// 돌려주는 값: {content, allowedMentions, resolved(기록에 남길 '해결 메시지' 표시), skip?}
+// 해결 기록은 한 방향이다: 기록에 resolved가 있으면 읽기 성공·실패와 관계없이 열린 요청을 보내지 않고 기록을 덮지 않는다(resolved-skip).
+// 기록이 없고 이미 해결된 걸 읽었으면 해결 모양(멘션 없음)으로 보낸다. 기록이 없고 읽기가 실패하면 요청을 버리지 않고 그대로 보내되
+// readFailed로 표시해 결과 사유에 '최신 상태 확인 실패'를 남긴다(요청 유실이 오래된 요청 한 줄보다 나쁘다).
+// 돌려주는 값: {content, allowedMentions, resolved(기록에 남길 '해결 메시지' 표시), readFailed?, skip?}
 function planDecision(home, decision, content, allowedMentions) {
   const plan = {content, allowedMentions, resolved: Boolean(decision?.edit)};
-  if (!decision || decision.edit || typeof decision.latest !== 'function') return plan;
-  let now = null;
-  try { now = decision.latest(); } catch { /* 읽지 못하면 요청 그대로 */ }
-  if (!now || now.status === 'open') return plan;
+  if (!decision || decision.edit) return plan;
   if (readDecisions(home)[decision.id]?.resolved) return {...plan, skip: {outcome: 'resolved-skip', attempts: 0, reason: '이미 해결 메시지를 보냄'}};
+  if (typeof decision.latest !== 'function') return plan;
+  let now = null;
+  try { now = decision.latest(); } catch { return {...plan, readFailed: true}; }
+  if (!now) return {...plan, readFailed: true};
+  if (now.status === 'open') return plan;
   return {content: decision.resolvedContent(now), allowedMentions: {parse: []}, resolved: true};
 }
+const READ_FAILED = '최신 상태 확인 실패(요청 그대로 보냄)';
+const noteRead = (r, plan) => (plan.readFailed && r.outcome === 'sent' ? {...r, reason: READ_FAILED} : r);
 
 // 남긴 결정 요청 메시지를 고친다. 돌려주는 값: 결과(고침 성공, 또는 404 아닌 실패라 더 시도하지 않음) 또는 null(못 찾음 → 호출 쪽이 새 메시지).
 // 기록이 없거나, 기록한 길(포럼/기본)이 지금 길과 다르거나, 수정이 404(지워짐·다른 웹훅)면 못 찾은 것이다.
@@ -239,6 +245,15 @@ function logStatus(home, work, r, secrets) {
 // 레포별 웹훅이 있고 글 키(업무 키, 없으면 결정의 레포 '결정' 글 키)가 있으면 포럼 글로, 아니면 기본 웹훅으로 보낸다.
 function route({sec, key}) {
   return sec.repoWebhook && key ? {forum: true, webhook: sec.repoWebhook} : {forum: false, webhook: sec.webhook};
+}
+
+function decisionSystemMessage(home, decision, message) {
+  if (!decision || decision.edit || typeof decision.latest !== 'function') return message;
+  try { if (home && readDecisions(home)[decision.id]?.resolved) return null; } catch { /* 기록을 못 읽으면 아래 판단으로 */ }
+  try {
+    const now = decision.latest();
+    return now && now.status !== 'open' && decision.resolvedShort ? decision.resolvedShort(now) : message;
+  } catch { return message; }
 }
 
 // message: 시스템 알림에 쓰는 짧은 문구. discord: {content, mention} 또는 (사용자ID)=>{content, mention}을 주면 디스코드에는 그 본문을 쓴다.
@@ -302,6 +317,9 @@ export function notifyUser(message, spawn, opts = {}) {
     }
   }
   if (result.via === 'discord') return result;
-  result.error = systemNotify(message, spawn);
+  // 시스템 알림도 같은 판단이다: 이미 해결 메시지를 보낸 결정의 요청은 다시 띄우지 않고, 해결됐다고 읽히면 해결 문구로 바꾼다.
+  const sysMessage = decisionSystemMessage(home, opts.decision, message);
+  if (sysMessage === null) return {...result, via: 'discord', discord: result.discord ?? {outcome: 'resolved-skip', reason: '이미 해결됨'}};
+  result.error = systemNotify(sysMessage, spawn);
   return result;
 }

@@ -52,7 +52,9 @@ export function setThread(home, work, entry) {
 
 // 결정 요청 메시지의 위치를 남긴다. 잠금 안에서 부른다.
 export function setDecision(home, id, entry) {
-  const next = {...readDecisions(home), [id]: decisionOf(entry)};
+  const all = readDecisions(home);
+  // 해결 기록은 한 방향이다: 한 번 resolved면 어떤 쓰기도 false로 되돌리지 못한다.
+  const next = {...all, [id]: decisionOf({...entry, ...(all[id]?.resolved ? {resolved: true} : {})})};
   const keys = Object.keys(next);
   for (const k of keys.slice(0, Math.max(0, keys.length - MAX_DECISIONS))) delete next[k];
   writeState(home, readThreads(home), next);

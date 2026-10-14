@@ -13,8 +13,8 @@ import {DEFAULT_PORT} from './quickstart.mjs';
 const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
 const human=by=>isUserActor(by);
 const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
-// 보이는 본문의 UUID를 앞 8자로 줄인다. 단 경로·주소 조각(/로 시작, ~로 시작, ://, 슬래시 2개 이상)은 확인 경로가 깨지므로 그대로 둔다.
-const keepWhole=tok=>/^[(\[<"'`]*(?:[/~]|[a-z][a-z0-9+.-]*:\/\/)/i.test(tok)||(tok.match(/\//g)??[]).length>=2;
+// 보이는 본문의 UUID를 앞 8자로 줄인다. 단 경로·주소 조각(/·~·./·../로 시작, ://, 슬래시 2개 이상)은 확인 경로가 깨지므로 그대로 둔다.
+const keepWhole=tok=>/^[(\[<"'`]*(?:[/~]|\.{1,2}\/|[a-z][a-z0-9+.-]*:\/\/)/i.test(tok)||(tok.match(/\//g)??[]).length>=2;
 const shortIds=text=>String(text).split(/(\s+)/).map(tok=>keepWhole(tok)?tok:tok.replace(UUID,m=>m.slice(0,8))).join('');
 const required=(v,name)=>{if(typeof v!=='string'||!v.trim())throw new Error(`${name} 필요`);return v.trim()};
 // 새 결정 요청은 사용자가 답하기 전에 열어 볼 주소·절대경로, 또는 '확인 경로 없음: 이유' 줄이 있어야 한다.
@@ -82,7 +82,7 @@ export class DecisionStore {
    short=`카단 결정 요청: ${cut(q,100)}`;
    build=userId=>({mention:true,content:fitDiscord(head(`<@${userId}>`),`맥에서 답하기: ${link}`)});
    // 보내기 직전에 저장소의 현재 상태를 다시 읽는다: 취소가 먼저 잠금을 잡았으면 열린 요청이 아니라 해결 모양으로 보낸다.
-   extra={decision:{id:d.id,latest:()=>this.get(d.id),resolvedContent}};
+   extra={decision:{id:d.id,latest:()=>this.get(d.id),resolvedContent,resolvedShort:x=>`카단 결정 해결됨 — ${stateOf(x)}`}};
   }else{
    const state=stateOf({...d,status:kind==='answer'?'answered':'cancelled'});
    short=`카단 결정 해결됨 — ${state}`;
