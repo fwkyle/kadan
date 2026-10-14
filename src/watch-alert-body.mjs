@@ -20,6 +20,7 @@ const ALERT_LABELS = {
   "시작보고누락": "시작 보고 누락",
   "큐대기": "입력이 큐에 쌓여 대기",
   "입력큐": "입력 큐 대기",
+  "알림밀림": "알림이 계속 밀림",
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
@@ -48,6 +49,9 @@ export function formatAlertBody(alert) {
           ? '반복 조정 판정. 직속 감독은 상위 감독에게 범위·담당 조정 요청'
           : '반복 실패·범위 확장 후보. 감독이 근거 확인 후 조정'
     }; 자동 중지 아님)`;
+  }
+  if (alert.kind === "알림밀림") {
+    return `알림이 ${alert.role} 창에 ${alert.holdCount}번 연속 밀림 (사유 ${alert.holdCode}, ${alert.heldSince}부터. 5번 밀린 다음 시도에 입력 보호 없이 넣음)`;
   }
   if (alert.kind === "시작보고누락") return `시작 보고 누락 ${alert.role} / ${alert.taskId} (발령 ${alert.waitMinutes}분 경과, 실제 착수 여부 확인 후 보고 보완 필요)`;
   if (alert.kind === "놀고 있음") {
@@ -121,6 +125,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.reason !== undefined ? {reason:alert.reason} : {}),
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
+      ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
       ...(alert.route?{route:alert.route}:{}),
       ...(alert.escalatedTo ? {escalatedTo:alert.escalatedTo} : {}),

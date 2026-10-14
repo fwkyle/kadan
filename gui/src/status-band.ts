@@ -3,7 +3,7 @@
 // (4) 흐름대로 가는가 → 연결 확인이 필요한 묶음, (5) 어느 모델인가 → 살아 있는 담당과 모델.
 export type LiveSession = { role: string; harness: string | null; model: string | null; effort: string | null; pidState: string | null };
 export type FlowSummary = { total: number; unconfirmed: { id: string; title: string; label: string; warnings: string[] }[] };
-export type OpenAlerts = { count: number; items: { id: string; kind: string; level: string; role: string; session: string; recipient: string; at: string }[] };
+export type OpenAlerts = { count: number; items: { id: string; kind: string; level: string; role: string; session: string; recipient: string; at: string; holdCount?: number | null; holdCode?: string; holdReason?: string; heldSince?: string }[] };
 export type BandInput = {
   decisions: number | null;
   stopped: number;

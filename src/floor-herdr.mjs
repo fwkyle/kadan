@@ -159,7 +159,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
   // 응답 중인 실행기는 Claude·Codex 모두 들어온 입력을 자기 대기열에 쌓았다가 현재 작업 뒤에 처리한다(2026-10-12 실측).
   // 기본은 거절, 명시 허용: 호출부가 사람·역할 우편(send 명령)임을 busyMail로 표시할 때만 working을 허용한다.
   // 카드 발령·자동 경보·표시 없는 호출은 입력 대기(idle/done)만 허용한다.
-  const checkAgent = (session, identity, { allowWorking = false } = {}) => {
+  const checkAgent = (session, identity, { allowWorking = false, skipInput = false } = {}) => {
     const { record, pane } = requirePane(session);
     const info = processInfo(pane);
     if (String(info?.shell_pid) !== String(identity?.currentPid ?? record.panePid)) deny("KADAN_PID_MISMATCH", "현재 프로세스 세대가 시작 기록과 다르다");
@@ -180,6 +180,12 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
       deny("KADAN_HERDR_NOT_READY", `입력 대기 확인 실패: ${agent?.agent_status ?? "unknown"}`);
     }
     if (pane.scroll?.offset_from_bottom > 0) deny("KADAN_HERDR_SCROLLED", "과거 기록 조회 중이라 전송을 보류한다");
+    if (skipInput) {
+      // 입력 보호를 건너뛰는 강제 알림. 입력창·안정 시간 확인만 빼고 프로세스·승인 대기·기록보기 확인은 위에서 끝냈다.
+      const view = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "text", strip_ansi: true }).read;
+      if (typeof view?.text !== "string") deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 화면 미확인");
+      return { record, pane, visible: view };
+    }
     const frame = inputFrame(socket(), pane.terminal_id, pane.scroll?.viewport_rows);
     const visible = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "ansi", strip_ansi: false }).read;
     if (typeof visible?.text !== "string" || visible.truncated) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 화면 미확인");
@@ -247,8 +253,9 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     read(session) { return readPane(requirePane(session).pane); },
     send(session, text, { cardIdentity, notificationGuard, busyMail } = {}) {
       const allowWorking = busyMail === true && !cardIdentity;
-      const check = () => notificationGuard
-        ? checkNotification(session, notificationGuard) : checkAgent(session, cardIdentity, { allowWorking });
+      const forced = notificationGuard?.force === true && !cardIdentity;
+      const check = () => forced ? checkAgent(session, undefined, { allowWorking: true, skipInput: true })
+        : notificationGuard ? checkNotification(session, notificationGuard) : checkAgent(session, cardIdentity, { allowWorking });
       const { pane, visible } = check();
       // 알림에는 완료 마커 기준점이 필요 없다. 긴 과거 출력 때문에 깨움까지 막지 않는다.
       const baseline = notificationGuard ? { text: visible.text } : readPane(pane);

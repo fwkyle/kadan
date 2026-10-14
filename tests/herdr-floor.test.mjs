@@ -283,3 +283,24 @@ test("실제 감시 경보 경로(guardedSend source=watch, notificationOnly)는
   assert.equal(prompts(f), 0);
   assert.equal(events.some(e => e.kind === "send"), false);
 });
+
+test('강제 알림(force)은 입력창·안정 시간 확인만 건너뛰고 PID·승인 대기·기록보기 확인은 남긴다', () => {
+  const force = { notificationGuard: { humanIdleMs: 30_000, force: true } };
+  const f = fixture(); f.state.output = '\n› 남아 있는 글\n\nstatus';
+  assert.throws(() => f.floor.send(f.start.session, '알림', { notificationGuard: { now: 0 } }), { delivery: 'not-sent' });
+  assert.equal(prompts(f), 0);
+  assert.equal(f.floor.send(f.start.session, '알림', force).keyDelivery, 'sent');
+  assert.equal(prompts(f), 1);
+  f.state.status = 'working';
+  assert.equal(f.floor.send(f.start.session, '알림', force).keyDelivery, 'sent', '응답 중인 실행기는 자기 대기열에 쌓는다');
+  for (const [name, change, code] of [
+    ['PID 변경', g => { g.state.pid = 456; }, 'KADAN_PID_MISMATCH'],
+    ['승인 대기', g => { g.state.status = 'blocked'; }, 'KADAN_HERDR_NOT_READY'],
+    ['기록보기 중', g => { g.pane.scroll.offset_from_bottom = 4; }, 'KADAN_HERDR_SCROLLED'],
+    ['죽은 pane', g => { g.state.panes = []; }, 'KADAN_SESSION_MISSING'],
+  ]) {
+    const g = fixture(); change(g);
+    assert.throws(() => g.floor.send(g.start.session, '알림', force), { code }, name);
+    assert.equal(prompts(g), 0, name);
+  }
+});

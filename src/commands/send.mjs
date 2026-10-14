@@ -15,6 +15,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { isPeerSuperMail } from "../peer-mail.mjs";
+import { HUMAN_IDLE_MS } from "../notification-guard.mjs";
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -100,32 +101,43 @@ function deliverMessage(argv, flags, command) {
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
     const by = resolveLedgerBy({env:process.env});
     const entries = readLedger();
-    if (taskId == null && isPeerSuperMail(entries, readActiveHierarchy(entries), by, recipient)) {
-      if (flags.raw) throw new Error('슈퍼 간 우편은 보관 후 안전하게 알립니다. --raw 없이 보내세요');
+    const peer = taskId == null && isPeerSuperMail(entries, readActiveHierarchy(entries), by, recipient);
+    if (peer && flags.raw) throw new Error('슈퍼 간 우편은 입력 보호를 거쳐 전달하거나 보관해 안전하게 알립니다. --raw 없이 보내세요');
+    const peerStore = () => {
       const stored = new Mailbox(ledgerHome(), recipient).send({
         by, message, category:flags['mail-kind'] || 'report', ...mailContext,
       });
       console.log(JSON.stringify({...stored, wake:'watch-required',
         note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
-      return;
-    }
+    };
     const expectedPid=recordedPid(lastStartFor(session));
+    // 슈퍼 간 우편도 바로 넣되 감시기와 같은 입력 보호를 붙인다(2026-10-13 [kyle]). 시작 기록이 없거나
+    // 세션이 없거나 보호에 걸리면 넣지 않고 지금처럼 보관해 감시기에 맡긴다.
+    if (peer && !expectedPid) return peerStore();
     if (recipient!==role && !expectedPid) {
       const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
       error.delivery='not-sent';throw error;
     }
-    receipt = guardedSend({
-      floor,
-      session,
-      role:recipient,
-      message,
-      taskId,
-      mailContext,
-      raw:flags.raw===true,
-      allowOldRunner:flags["allow-old-runner"],
-      recordedPid: expectedPid,
-      busyMail: true,
-    });
+    try {
+      receipt = guardedSend({
+        floor,
+        session,
+        role:recipient,
+        message,
+        taskId,
+        mailContext,
+        raw:flags.raw===true,
+        allowOldRunner:flags["allow-old-runner"],
+        recordedPid: expectedPid,
+        busyMail: true,
+        ...(peer ? {notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}} : {}),
+      });
+    } catch (error) {
+      // 붙여넣기 전에 멈춘 실패(입력 보호·세션 없음·PID 변경 등 delivery=not-sent)만 보관으로 돌린다.
+      // 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해 그대로 실패다.
+      if (peer && error.delivery === 'not-sent' && error.code !== 'KADAN_MAIL_RECIPIENT_CHANGED') return peerStore();
+      throw error;
+    }
   } catch (error) {
     die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
   }

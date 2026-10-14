@@ -82,6 +82,14 @@ export function supervisorSummary({ hierarchy, rows = [], works = [], decisions 
 // 전달실패 continue). 원장만 보면 영원히 열린 것으로 보이므로 세지 않는다.
 const SILENTLY_CLOSED = new Set(["자원", "전달실패"]);
 // limit은 화면에 보여 줄 항목 수다(count는 전체). 슈퍼감독별 묶기처럼 전부 필요하면 Infinity를 준다.
+// 알림밀림 사유 코드를 쉬운 말로. 모르는 코드는 원문만 보인다.
+const HOLD_REASONS = {
+  KADAN_HUMAN_ACTIVE: "사람이 방금 입력함", KADAN_HUMAN_ACTIVITY_UNKNOWN: "사람 입력 시각을 알 수 없음",
+  KADAN_PANE_INPUT_PENDING: "입력창에 쓰다 만 글이 있음", KADAN_PANE_INPUT_UNKNOWN: "입력창 상태를 알 수 없음",
+  KADAN_PANE_STATE_UNKNOWN: "창 상태를 알 수 없음", KADAN_HERDR_NOT_READY: "입력 대기 상태가 아님",
+  KADAN_HERDR_INPUT_UNKNOWN: "입력창 상태를 알 수 없음", KADAN_HERDR_SCROLLED: "과거 기록을 보는 중",
+  KADAN_HERDR_TRUST_PROMPT: "승인(신뢰) 확인 화면",
+};
 export function openAlerts(entries, { limit = 20 } = {}) {
   if (!Array.isArray(entries) || entries.some((e) => e?.broken)) return null;
   const latest = new Map();
@@ -91,7 +99,8 @@ export function openAlerts(entries, { limit = 20 } = {}) {
   }
   const items = [...latest.values()]
     .filter((e) => e.resolved !== true && !SILENTLY_CLOSED.has(e.alertKind))
-    .map((e) => ({ id: e.id, kind: e.alertKind || "", level: e.level || "", role: e.role || "", session: e.session || "", recipient: e.recipient || "", at: e.t || "" }))
+    .map((e) => ({ id: e.id, kind: e.alertKind || "", level: e.level || "", role: e.role || "", session: e.session || "", recipient: e.recipient || "", at: e.t || "",
+      ...(e.alertKind === "알림밀림" ? { holdCount: e.holdCount ?? null, holdCode: e.holdCode ?? "", holdReason: HOLD_REASONS[e.holdCode] ?? "", heldSince: e.heldSince ?? "" } : {}) }))
     .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
   return { count: items.length, items: items.slice(0, limit) };
 }

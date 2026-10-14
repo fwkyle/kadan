@@ -27,10 +27,25 @@ import { runWatch } from "../watch-runner.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { HUMAN_IDLE_MS } from "../notification-guard.mjs";
+import { NotifyHoldTracker } from "../watch-notify-hold.mjs";
 
 // 해소 우편이 없으므로(2026-10-05 [kyle]) 경보를 받은 감독은 행동 전에 지금 상태를 스스로 확인한다.
 export const WATCH_ALERT_FOOTER='행동 전 지금 상태를 확인하라(감독 템플릿의 현황 확인 절차). 풀렸으면 따로 알리지 않는다.';
-export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend}={}) {
+// 입력 보호로 밀린 횟수는 tracker가 받는 창 단위로 센다. 5번 연속이면 guardFor가 입력 보호만 뺀다.
+function guardedWatchSend(tracker,args,role,guard) {
+  const {send,...rest}=args;
+  try {
+    const receipt=send({...rest,notificationGuard:tracker?tracker.guardFor(role,guard):guard});
+    tracker?.delivered(role);
+    return receipt;
+  } catch (error) {
+    // 붙여넣기는 됐고 기록만 실패한 경우도 전달이다.
+    if (error.delivery==='sent') tracker?.delivered(role); else tracker?.heldIfGuard(role,error);
+    throw error;
+  }
+}
+
+export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
   if (role==='@user') {
     const failure=notifyUser(message,spawnSync);
     if (failure) { const error=new Error('사용자 알림 실패'); error.delivery='not-sent'; throw error; }
@@ -40,9 +55,8 @@ export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=las
   // 감시 경보 우편은 기록용이다: 경보는 상태 변화로 닫히지 수신자 ack로 닫히지 않으므로 읽음 확인 안내를 붙이지 않고
   // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기). 해소 우편도 없으므로 받는 쪽이 행동 전에
   // 지금 상태를 확인한다(감독 템플릿의 현황 확인 절차).
-  return send({floor:selectedFloor,session,role,message:`${message}\n${WATCH_ALERT_FOOTER}`,
-    source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,
-    notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}});
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:`${message}\n${WATCH_ALERT_FOOTER}`,
+    source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true},role,{humanIdleMs:HUMAN_IDLE_MS});
 }
 
 // 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.
@@ -50,7 +64,7 @@ export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=las
 export const WATCH_MAIL_HUMAN_IDLE_MS = HUMAN_IDLE_MS;
 
 export function sendWatchMailReminder(role,message,expectedPid,{
-  selectedFloor=floor,readStart=lastStartFor,send=guardedSend,
+  selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null,
 }={}) {
   const session=sessionName(role);
   if (expectedPid == null || expectedPid === '' || String(recordedPid(readStart(session))) !== String(expectedPid)) {
@@ -58,21 +72,26 @@ export function sendWatchMailReminder(role,message,expectedPid,{
     error.delivery='not-sent';
     throw error;
   }
-  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,notificationOnly:true,
-    notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,
+    notificationOnly:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 
 // 놀고 있음 본인 알림은 감독 창에 붙여넣는 우편이라, 사람이 그 창에서 대화 중이면 미룬다.
 // 사용자가 슈퍼감독과 직접 대화하는 창에 반쯤 쓴 문장 뒤에 붙지 않게 한다(2026-10-05). 읽음 재알림도 만들지 않는다.
-export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend}={}) {
+export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
   const session=sessionName(role);
-  return send({floor:selectedFloor,session,role,message,source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,
-    notificationGuard:{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}});
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message,source:'watch',
+    recordedPid:recordedPid(readStart(session)),notificationOnly:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 
 // 바닥이 보류 조회를 지원하지 않으면(rottie) 기존처럼 보류 없이 진행한다.
-export function watchMailHold(role,{selectedFloor=floor}={}) {
-  return selectedFloor.notificationHold?.(sessionName(role),{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}) ?? null;
+// 5번 연속 밀린 창은 사전 확인도 건너뛴다. 실제 입력 보호는 전송 쪽 guardFor가 같은 기준으로 뺀다.
+export function watchMailHold(role,{selectedFloor=floor,tracker=null}={}) {
+  if (tracker?.forced(role)) return null;
+  const held=selectedFloor.notificationHold?.(sessionName(role),{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS}) ?? null;
+  // 입력 보호 코드만 미룸으로 센다(herdr의 프로세스 신원 미확인 같은 다른 오류는 세지 않는다).
+  if (held) tracker?.heldIfGuard(role,{...held,delivery:'not-sent'});
+  return held;
 }
 
 export function cmdWatch(argv, flags) {
@@ -187,6 +206,8 @@ export function cmdWatch(argv, flags) {
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
   const reads=cycleReads({readEntries:()=>readLedger(),readCards:()=>new CardStore(ledgerHome()).list(),
     readWorks:()=>new WorkStore(ledgerHome()).list(),version:()=>storageVersion(ledgerHome())});
+  const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
+  const holdTracker=new NotifyHoldTracker({record});
   const processName=watchProcessName(ledgerHome());
   if(processName!=='kadan-watch')console.log(`감시 프로세스 이름: ${processName}`);
   return runWatch({
@@ -200,11 +221,12 @@ export function cmdWatch(argv, flags) {
     startReportGraceMs: startReportMinutes*60_000,
     completionGraceMs: completionGraceMinutes*60_000,
     stallAfterMs: stallAfterMinutes*60_000,
-    record: entry => appendLedger({ ...entry, t: new Date().toISOString() }),
-    sendAlert: sendWatchMessage,
-    sendNudge: sendWatchNudge,
-    sendMailReminder: sendWatchMailReminder,
-    mailHold: watchMailHold,
+    record,
+    holdTracker,
+    sendAlert: (role,message)=>sendWatchMessage(role,message,{tracker:holdTracker}),
+    sendNudge: (role,message)=>sendWatchNudge(role,message,{tracker:holdTracker}),
+    sendMailReminder: (role,message,expectedPid)=>sendWatchMailReminder(role,message,expectedPid,{tracker:holdTracker}),
+    mailHold: role=>watchMailHold(role,{tracker:holdTracker}),
     resume429: (role,message,expectedPid) => {
       const session=sessionName(role);
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');
@@ -215,7 +237,7 @@ export function cmdWatch(argv, flags) {
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('입력 큐 재개 세대 변경');
       return floor.sendEnter(session);
     } : null,
-    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:sendWatchMessage,readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
+    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:(role,message)=>sendWatchMessage(role,message,{tracker:holdTracker}),readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,
     intervalMs: intervalSeconds * 1000,

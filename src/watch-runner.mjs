@@ -80,6 +80,8 @@ export async function runWatch({
   resume429 = null,
   sendMailReminder = null,
   mailHold = null,
+  // 받는 창별 입력 보호 연속 미룸 횟수(watch-notify-hold.mjs). 없으면 세지 않는다.
+  holdTracker = null,
   mailUnreadGraceMs = 300_000,
   sendQueueEnter = null,
   record = () => {},
@@ -175,6 +177,7 @@ export async function runWatch({
     // 순회 사이가 크게 벌어졌으면 맥북이 잠들었던 것이다. 잠들기 전후의 인터넷 없음은 이어진 실패로 세지 않는다.
     if (cycleAt - lastCycleAt > Math.max(60_000, intervalMs * 3)) offlineFailures.clear();
     reads?.begin();
+    holdTracker?.beginCycle();
     io.record.reset(); io.send.reset();
     let entries = [], mailEntries = [];
     let ledgerError = null;
@@ -498,6 +501,8 @@ export async function runWatch({
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
+      // 알림이 3번 이상 연속 밀린 창. 지난 주기까지의 횟수이며 사용자에게만 간다.
+      ...(!observationError && holdTracker ? holdTracker.alerts() : []),
       ...reportAlerts,
       ...judgeFailures.values(),
       ...roles.screenAlerts.filter(a=>!supervisorScope?.sessions.has(a.session)),
@@ -677,6 +682,8 @@ export async function runWatch({
       for (const role of mailDelivered) deliveredRecipients.add(role);
       mailDelivered.clear();
     }
+    // 관찰 실패 주기에는 전송을 시도하지 않았으므로 연속 횟수를 건드리지 않는다.
+    if (!observationError) holdTracker?.endCycle(cycleAt);
     lap('mail');
     const absorbed = observationError ? {states:roleStates,screenAlerts:[]} : absorbDeliveredScreens(floor, roleStates, deliveredRecipients);
     roleStates = absorbed.states;

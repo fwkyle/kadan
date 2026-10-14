@@ -504,6 +504,8 @@ function checkCardPane(session, identity, run, spawn) {
 // 감시기 알림은 사람의 입력을 덮지 않는다(2026-09-23 미확인 우편 알림이 kyle의 입력 중 문장에 붙어 제출된 사고).
 // 창에 붙은 사람이 최근 키를 눌렀거나 입력창에 글이 있으면 보류한다. kadan 붙여넣기는 client 활동에 잡히지 않는다.
 function checkNotificationPane(session, guard, run) {
+  // 감시기가 5번 연속 밀린 알림을 입력 보호 없이 넣는 차례다(2026-10-13). 기록보기 확인은 sendTmux가 따로 한다.
+  if (guard.force === true) return;
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const state = run(["display-message", "-p", "-t", `=${session}:`, "#{cursor_y}|#{pane_width}"]).trim();
   if (!/^\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "알림 미룸: pane 상태 미확인");

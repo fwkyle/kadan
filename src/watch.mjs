@@ -451,6 +451,8 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
   const chosen=(recipient,basis)=>({recipient:recipient||null,basis,skipped});
   if (alert.kind === '자원' && Object.hasOwn(alert,'recipient')) return chosen(alert.recipient,'explicit');
   if (alert.id === 'hierarchy:unreadable') return chosen('@user','hierarchy-unreadable');
+  // 밀리고 있는 그 창이나 상위로 보내면 같은 입력 보호에 또 걸린다. 사용자에게만 간다(2026-10-13 [kyle]).
+  if (alert.kind === '알림밀림') return chosen('@user','notify-held');
   // 감시AI 호출 장애(timeout·call-failed·report-missing…)는 판정 CLI·모델의 문제라 운영자 몫이다.
   // 작업자의 감독에게 보내면 받아도 할 수 있는 일이 없다(2026-10-05 점검 보고서 2-M5).
   if (alert.kind === '감시AI오류') return chosen('@user','judge-failure');
