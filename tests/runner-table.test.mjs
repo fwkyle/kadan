@@ -152,6 +152,9 @@ test('설정: 옛 설정(spawn만)은 그대로 읽히고, 표 칸은 선택이�
   const next = setRunner(home, {runner: 'codex', table: {resume: 'codex --model {model} -c e={effort} resume {conversation}', conversation: TABLE.codex.conversation}, ...meta(1)});
   assert.equal(next.revision, 2);
   assert.equal(readSettings(home).runners.codex.spawn, 'codex --model {model} -c e={effort}');
+  // fork 틀도 저장 전에 같은 검사를 거친다(spawn 뒤에 대화 인자를 붙인 모양, {conversation} 한 번).
+  assert.throws(() => setRunner(home, {runner: 'codex', table: {fork: 'other --model {model} fork {conversation}'}, ...meta(2)}), /fork 틀은 spawn 틀 뒤에/);
+  assert.throws(() => setRunner(home, {runner: 'codex', table: {fork: 'codex --model {model} -c e={effort} fork'}, ...meta(2)}), /\{conversation\}/);
   const cleared = setRunner(home, {runner: 'codex', table: {resume: null}, ...meta(2)});
   assert.equal(cleared.runners.codex.resume, undefined);
   assert.throws(() => resumeTail(readSettings(home), 'codex'), /미지원/);

@@ -8,7 +8,7 @@
 // 순서가 안전의 전부다: 거절할 수 있는 모든 확인(대화 ID·저장 여부·명령 재조립·실행 중 보호)을 기존 세션을 끄기 *전에* 끝낸다.
 import fs from 'node:fs';
 import {startDigest, withRecoveryLock, checkpointSecretary, resumeSecretary} from './secretary-resume.mjs';
-import {launchIdentityOf} from './ai-identity.mjs';
+import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry} from './cli-start-support.mjs';
@@ -77,7 +77,11 @@ function restartLocked({home, role, session, flags, floor, settings, deps}) {
   // 1) 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 끄지 않고 거절한다.
   const pane = deps.paneInfo(session);
   if (String(pane.panePid) !== String(start.panePid)) fail('tmux pane PID가 시작 기록과 다르다');
-  const conversation = findConversation(spec, {pids: deps.pids(start.panePid), openFiles: () => deps.openFiles(deps.pids(start.panePid)),
+  // 실행기 본체 프로세스(마지막 start 명령의 실행기·모델과 args가 맞는 것)가 연 파일·PID 파일만 후보다.
+  // 자식 도구(플러그인·MCP 서버 등)가 연 다른 대화를 집지 않는다. 본체를 못 찾으면 거절한다.
+  const executors = deps.processTree(start.panePid).filter(p => matchesAiProcess(p.args, harness, model)).map(p => p.pid);
+  if (!executors.length) fail(`${harness} 실행기 본체 프로세스를 pane 트리에서 찾지 못했다 — 대화 파일의 주인을 확인할 수 없어 거절한다`);
+  const conversation = findConversation(spec, {pids: executors, openFiles: () => deps.openFiles(executors),
     readJson: deps.readJson, tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
   const command = rebuildResumeCommand(settings, harness, start.cmd, conversation);
@@ -109,15 +113,19 @@ function restartLocked({home, role, session, flags, floor, settings, deps}) {
 // 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
 function restartSecretary({home, role, session, floor, force, deps}) {
   // 확인·체크포인트·끄기는 잠금 안에서, 다시 열기는 resumeSecretary의 잠금 안에서 한다(둘 사이에 kadan up이 끼어들어도 한 번만 열린다).
-  const pending = withRecoveryLock(home, session, () => {
+  const {pending, previous} = withRecoveryLock(home, session, () => {
     const entries = deps.read();
-    ensureReady({role, session, floor, entries, deps});
+    const start = ensureReady({role, session, floor, entries, deps});
     const open = guardRunning({role, entries, force, deps});
-    checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
+    const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
+    // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
+    if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
     stopForRestart({role, session, floor, entries, deps, forced: force ? open : null});
-    return open;
+    return {pending: open, previous: startDigest(start)};
   });
-  const result = resumeSecretary({home, floor, read: deps.read, record: deps.record, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
+  // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
+  const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
+    startExtra: {restartOf: previous, ...(force ? {forced: true, forcedTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
   if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
   const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
   return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,

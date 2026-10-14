@@ -37,7 +37,7 @@ const shellWord = word => /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${wor
 
 // resume(또는 fork) 틀 = spawn 틀 + 뒤에 붙는 대화 인자. 그 꼬리(낱말 목록)를 돌려준다. 이 모양이 아니면 거절.
 export const resumeTail = (settings, runner) => tailOf(settings, runner, 'resume');
-function tailOf(settings, runner, key) {
+export function tailOf(settings, runner, key) {
   const resume = runnerTemplate(settings, runner, key);
   const sentinel = template => commandWords(fillTemplate(template, {model: SENTINEL.model, effort: SENTINEL.effort,
     conversation: SENTINEL.conversation, prompt: 'P', cwd: '/'}));

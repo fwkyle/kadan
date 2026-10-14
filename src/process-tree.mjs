@@ -24,3 +24,18 @@ export function openFilesOf(pids, run = spawnSync) {
   if (result.status !== 0) throw new Error('열린 파일 조회 실패');
   return [...new Set(result.stdout.split('\n').filter(line => line.startsWith('n')).map(line => line.slice(1)))];
 }
+
+// panePid와 자손의 {pid, args}. 어느 프로세스가 실행기 본체인지 args로 가리기 위해 쓴다(대화 파일의 주인 확인).
+export function processTree(panePid, run = spawnSync) {
+  const ps = run('ps', ['-axo', 'pid=,ppid=,args='], {encoding: 'utf8', timeout: 2000});
+  if (ps.status !== 0) throw new Error('프로세스 조회 실패');
+  const rows = ps.stdout.split('\n').map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean)
+    .map(([, pid, ppid, args]) => ({pid, ppid, args}));
+  const wanted = new Set([String(panePid)]);
+  for (let i = 0; i < rows.length; i++) {
+    let changed = false;
+    for (const row of rows) if (wanted.has(row.ppid) && !wanted.has(row.pid)) { wanted.add(row.pid); changed = true; }
+    if (!changed) break;
+  }
+  return rows.filter(row => wanted.has(row.pid)).map(({pid, args}) => ({pid, args}));
+}

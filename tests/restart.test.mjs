@@ -16,7 +16,7 @@ const CLAUDE = 'claude --model claude-haiku-5-5 --effort low --dangerously-skip-
 const CODEX = 'codex -p lite --model gpt-6-sol -c model_reasoning_effort="low"';
 
 // 가짜 바닥·가짜 프로세스로 restart 본체의 순서와 거절을 시험한다. 실제 실행기 왕복은 격리 소켓 시험(결과 문서)에서 한다.
-function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {}, openFiles = [], pending = [], tmux = 'kadan-w:@3.%3'} = {}) {
+function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {}, openFiles = [], held = {150: openFiles}, extraTree = [], pending = [], tmux = 'kadan-w:@3.%3'} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-restart-'));
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-restart-user-'));
   const dir = cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-restart-cwd-'));
@@ -31,7 +31,10 @@ function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {},
     stop: s => log.push(['stop', s]), create: o => { log.push(['create', o]); pid = '200'; return {panePid: '200'}; }};
   const deps = {read: () => entries, record: e => { log.push(['record', e.kind]); entries.push({t: new Date().toISOString(), ...e}); },
     pendingCards: () => pending, closeWindow: () => ({}), openWindow: () => ({method: 'manual'}),
-    paneInfo: () => ({panePid: '100', location: tmux}), pids: p => [p, '150'], openFiles: () => openFiles,
+    paneInfo: () => ({panePid: '100', location: tmux}),
+    // 실행기 본체(150)와 자식 도구(extraTree)를 args로 가른다. 파일은 프로세스별로 든다.
+    processTree: () => [{pid: '100', args: '-zsh'}, {pid: '150', args: entries.findLast(e => e.kind === 'start').cmd}, ...extraTree],
+    openFiles: pids => pids.flatMap(p => held[p] ?? []),
     readJson: f => JSON.parse(fs.readFileSync(f, 'utf8')), homeDir};
   const run = (flags = {}, settings = settingsWith()) => restartRole({home, role, session, flags, floor, settings, deps});
   return {home, dir, entries, log, run, session, role, deps, floor, homeDir};
@@ -171,7 +174,7 @@ test('비서: restart와 kadan up(stop 없이 사라진 뒤 복원)이 같은 �
   const b = secretaryFixture();
   const receipt = restartRole({home: b.home, role: '비서', session: 'kadan-비서', flags: {}, floor: b.floor, settings: null, deps: b.deps});
   assert.equal(receipt.conversation, 'exact-conversation');
-  const shape = e => { const {t, panePid, secretaryResumeSource, ...rest} = e; return rest; };
+  const shape = e => { const {t, panePid, secretaryResumeSource, restartOf, ...rest} = e; return rest; };
   const upStart = a.entries.filter(e => e.kind === 'start').at(-1), restartStart = b.entries.filter(e => e.kind === 'start').at(-1);
   const sameHome = e => JSON.parse(JSON.stringify(e).replaceAll(a.home, '<H>').replaceAll(b.home, '<H>'));
   assert.deepEqual(sameHome(shape(restartStart)), sameHome(shape(upStart)));
@@ -189,4 +192,58 @@ test('비서: 체크포인트를 못 만들면 끄지 않고 거절하고, 끝�
   assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null,
     deps: {...f.deps, pendingCards: () => ['c9']}}), /c9/);
   assert.deepEqual(f.calls, []);
+});
+
+const ROLLOUT = id => `/h/.codex/sessions/2026/10/14/rollout-2026-10-14T16-35-00-${id}.jsonl`;
+const B = '0197bbbb-1111-4222-8333-444455556666';
+const PLUGIN = {pid: '160', args: 'node /h/.codex/plugins/cache/x/mcp/server.mjs --stdio'};
+
+test('대화 파일의 주인: 본체는 A lock만, 자식 도구가 B 저장 대화를 연 경우 끄기 전에 거절한다', () => {
+  const f = fixture({cmd: CODEX, extraTree: [PLUGIN], held: {150: [`/h/.codex/thread-writer-locks/${ID}.lock`], 160: [ROLLOUT(B)]}});
+  assert.throws(() => f.run(), /대화 파일이 없다/);
+  assert.deepEqual(f.log, []);
+  assert.equal(f.entries.length, 1);
+});
+
+test('대화 파일의 주인: 본체가 연 대화는 진행하고, 래퍼 아래 실제 바이너리가 연 경우도 진행한다', () => {
+  const body = fixture({cmd: CODEX, extraTree: [PLUGIN], held: {150: [ROLLOUT(B)], 160: [ROLLOUT(ID)]}});
+  body.run();
+  assert.match(body.entries.at(-1).cmd, new RegExp(`resume ${B}$`));
+  // codex 실제 트리(2026-10-14 실측): node 래퍼(.../bin/codex)가 네이티브 바이너리를 띄우고, 파일은 네이티브가 연다.
+  const wrapped = fixture({cmd: CODEX, extraTree: [{pid: '151', args: '/n/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low'}, PLUGIN],
+    held: {151: [ROLLOUT(B)], 160: []}});
+  wrapped.deps.processTree = () => [{pid: '100', args: `node /n/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low`},
+    {pid: '151', args: '/n/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low'}, PLUGIN];
+  wrapped.run();
+  assert.match(wrapped.entries.at(-1).cmd, new RegExp(`resume ${B}$`));
+});
+
+test('대화 파일의 주인: 본체 프로세스를 못 찾으면(다른 모델·다른 실행기뿐) 거절한다', () => {
+  const f = fixture({cmd: CODEX, held: {150: [ROLLOUT(B)]}});
+  f.deps.processTree = () => [{pid: '100', args: '-zsh'}, {pid: '150', args: 'codex --model other-model'}];
+  assert.throws(() => f.run(), /본체 프로세스를 pane 트리에서 찾지 못했다/);
+  assert.deepEqual(f.log, []);
+});
+
+test('비서: 복원 정보를 못 만들면(codex가 아닌 비서) 끄지 않고 거절한다', () => {
+  const f = secretaryFixture();
+  f.entries[0].cmd = 'claude --model test-model';
+  assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null, deps: f.deps}), /지원하지 않는다/);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.entries.length, 1);
+});
+
+test('비서: restart 뒤에도 감시 발령·우편·책임이 이어지고, --force는 새 start에 forced를 남긴다', () => {
+  const f = secretaryFixture();
+  f.entries.push({kind: 'send', role: '비서', session: 'kadan-비서', taskId: 'sc1', t: '2026-10-14T00:01:00Z'});
+  f.deps.pendingCards = () => ['sc1'];
+  assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null, deps: f.deps}), /sc1/);
+  restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {force: true}, floor: f.floor, settings: null, deps: f.deps});
+  const start = f.entries.filter(e => e.kind === 'start').at(-1);
+  assert.equal(start.restartOf, startDigest(f.entries[0]));
+  assert.equal(start.forced, true); assert.deepEqual(start.forcedTasks, ['sc1']);
+  assert.equal(f.entries.find(e => e.kind === 'stop').forced, true);
+  const live = [{session: 'kadan-비서', pid: '30', alive: true}];
+  const observed = collectRoles({list: () => live, read: () => 'screen'}, f.entries, null, null).observations.get('kadan-비서');
+  assert.deepEqual([...observed.completionDispatches.keys()], ['sc1']);
 });

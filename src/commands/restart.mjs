@@ -8,7 +8,7 @@ import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole } from "../restart.mjs";
-import { descendantPids, openFilesOf } from "../process-tree.mjs";
+import { processTree, openFilesOf } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import { pendingCardsFor, closeStartedWindow, openStartedWindow, requireWindowChoice } from "../cli-start-support.mjs";
 
@@ -36,7 +36,7 @@ export function cmdRestart(argv, flags) {
     openWindow: ({ session: name, role: who, panePid }) =>
       process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
     paneInfo,
-    pids: descendantPids,
+    processTree,
     openFiles: openFilesOf,
     readJson: file => JSON.parse(fs.readFileSync(file, "utf8")),
   };

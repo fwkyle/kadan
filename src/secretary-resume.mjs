@@ -121,7 +121,7 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
 }
 
 export function resumeSecretary({home, floor, startNew, read = () => readSystemLedger(home),
-  record = entry => appendLedger(entry, home)} = {}) {
+  record = entry => appendLedger(entry, home), startExtra = {}} = {}) {
   return withRecoveryLock(home, 'kadan-비서', () => {
     if (floor.alive('kadan-비서')) return 'reused';
     const entries = read();
@@ -145,7 +145,7 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
       evidence, window: 'hidden', cmd: saved.command, cwd: saved.cwd,
       rottieTerminalId: window?.rottieTerminalId}), roleProfile: start.roleProfile || 'secretary',
       by: start.by || '사람', secretaryResumeSource: saved.startDigest,
-      secretaryConversation: saved.conversation});
+      secretaryConversation: saved.conversation, ...startExtra});
     // Same conversation, new pane generation. Preserve the checkpoint if UI startup is later.
     const current = secretaryStart(read());
     if (!current || String(current.panePid) !== String(evidence.panePid)) {

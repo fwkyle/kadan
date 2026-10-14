@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {TABLE_KEYS, checkConversationSpec, resumeTail} from './runner-table.mjs';
+import {TABLE_KEYS, checkConversationSpec, tailOf} from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
@@ -218,7 +218,7 @@ function applyTable(spec, table) {
   }
   if (spec.resume && !spec.resume.includes('{conversation}')) throw new Error('resume 틀에는 {conversation}이 있어야 한다');
   if (spec.fork && !spec.fork.includes('{conversation}')) throw new Error('fork 틀에는 {conversation}이 있어야 한다');
-  for (const key of ['resume', 'fork']) if (spec[key]) resumeTail({runners: {x: spec}}, 'x', key);
+  for (const key of ['resume', 'fork']) if (spec[key]) tailOf({runners: {x: spec}}, 'x', key);
 }
 
 export function setRunner(home, {runner, spawn, table, ...meta}) {
