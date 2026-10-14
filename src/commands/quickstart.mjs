@@ -1,6 +1,8 @@
 // kadan init·up·adopt·autostart (HW-3-impl: cli.mjs에서 옮김)
 import { runAdopt } from "../adopt.mjs";
-import { runInit, runUp, ensureWatch } from "../quickstart.mjs";
+import { runInit, runUp, ensureWatch, ensureBridge, BRIDGE_ROLE } from "../quickstart.mjs";
+import { loadSecret } from "../secrets.mjs";
+import { loadChatConfig, watchLockHolder } from "../discord-chat.mjs";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { defaultProfilePath } from "../watch-profile.mjs";
@@ -45,6 +47,7 @@ export function cmdUp(_argv, flags) {
     ...(floor.name === 'tmux' ? {
       restoreSecretary: startNew => resumeSecretary({home: ledgerHome(), floor, startNew}),
       startWatch: () => startWatchSession(ledgerHome()),
+      startBridge: () => startBridgeSession(ledgerHome()),
     } : {}),
     send: ({ role, session, message, roleProfile }) => {
       const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
@@ -81,6 +84,28 @@ function startWatchSession(home) {
     alive: () => floor.alive(session),
     create: () => {
       const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, `'${node}' '${cli}' watch`]);
+      if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
+    },
+  });
+}
+
+// 디코 다리도 감시기처럼 원장 start 기록 없이 tmux 세션 kadan-디코에서 돈다. 환경은 경로·시험용 값만 넘긴다(비밀값은 파일에서 읽는다).
+const BRIDGE_ENV = ["KADAN_SOCKET", "KADAN_NOTIFY", "KADAN_DISCORD_API_BASE", "KADAN_SECRET_DISCORD_FILE", "KADAN_SECRET_DISCORD_BOT_FILE"];
+function startBridgeSession(home) {
+  const session = sessionName(BRIDGE_ROLE);
+  const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
+  const env = ["-e", `KADAN_HOME=${home}`, ...BRIDGE_ENV.filter((k) => process.env[k]).flatMap((k) => ["-e", `${k}=${process.env[k]}`])];
+  return ensureBridge({
+    configured: () => {
+      const bot = loadSecret(process.env, home, "discord-bot");
+      if (!bot.values && bot.source !== "broken" && !bot.error) return "no-secret";
+      try { loadChatConfig(process.env, home); return "ok"; } catch (error) { return `bad-config: ${error.message}`; }
+    },
+    lockHolder: () => watchLockHolder(home),
+    alive: () => floor.alive(session),
+    create: () => {
+      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env,
+        `'${node}' '${cli}' discord watch --to-mail`]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });

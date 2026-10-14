@@ -23,8 +23,14 @@ export class Mailbox {
   this.home=home;this.role=role;
  }
  send(options){
-  const {by,message,category='report',replyTo,workKey,executionKey,expectReply=false,replyFinal=false}=options;
+  const {by,message,category='report',replyTo,workKey,executionKey,expectReply=false,replyFinal=false,sourceKey}=options;
   assertWritable(this.home);
+  // 같은 sourceKey(예: 디코 글 id)의 우편이 이미 이 수신자에게 있으면 새로 만들지 않고 그 우편을 돌려준다(저장 뒤 죽음→재시작 중복 방지).
+  if(sourceKey!==undefined){
+   if(typeof sourceKey!=='string'||!sourceKey.trim())throw new Error('sourceKey는 비어 있지 않은 문자열이어야 합니다');
+   const hit=readMailboxEntries(this.home).find(e=>e.kind==='send'&&e.role===this.role&&e.sourceKey===sourceKey);
+   if(hit)return {mailId:hit.mailId,recipient:this.role,currentRecipient:this.role,status:'stored',wake:'not-connected',duplicate:true};
+  }
   if(!categories.has(category))throw new Error('공식 우편 종류는 request/decision/report만 지원합니다');
   if(typeof by!=='string'||!by.trim())throw new Error('보낸 역할 필요');
   if(typeof message!=='string'||!message.trim())throw new Error('우편 내용 필요');
@@ -38,7 +44,7 @@ export class Mailbox {
   };
   return preparedTransaction(this.home,prepare,context=>this.#store(options,context));
  }
- #store({by,message,category='report'},context){
+ #store({by,message,category='report',sourceKey},context){
   assertWritable(this.home);
   const digest=createHash('sha256').update(message).digest('hex'),mailId=randomUUID(),dir=path.join(this.home,'mail');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
@@ -46,7 +52,7 @@ export class Mailbox {
   if(fs.existsSync(file)){if(fs.readFileSync(file,'utf8')!==message)throw new Error('우편 본문 지문 충돌');}
   else fs.writeFileSync(file,message,{mode:0o600,flag:'wx'});
   const {currentRecipient,...connection}=context;
-  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...connection},this.home);
+  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...(sourceKey!==undefined?{sourceKey}:{}),...connection},this.home);
   return {mailId,recipient:currentRecipient||this.role,currentRecipient:currentRecipient||this.role,status:'stored',wake:'not-connected'};
  }
  // 기본 받은 편지 목록은 이전 세대 미확인을 빼고, previousGenerations=true면 그것만 보인다(읽음 기록은 가능).

@@ -1,12 +1,14 @@
-// kadan discord watch [--once] [--interval 초] | send [텍스트] [--reply-to 메시지ID | --thread 스레드ID] [--edit 메시지ID] | thread <스레드ID> [--rename 이름] [--archive] | check
+// kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트] [--reply-to 메시지ID | --thread 스레드ID] [--edit 메시지ID] | thread <스레드ID> [--rename 이름] [--archive] | check
 // #비서 채널 대화(3단계). watch는 새 메시지를 JSON 한 줄씩 표준 출력으로 낸다(비서가 감시 도구로 구독). 판단은 비서가 한다.
 // 조회·답변만 한다: 발령·결정 승인·머지는 이 명령이 하지 않는다. 설명은 docs/discord-chat.md.
 import fs from 'node:fs';
 import {ledgerHome} from '../ledger.mjs';
 import {die} from '../cli-basics.mjs';
+import {createMailOut} from '../discord-mail.mjs';
+import {SECRETARY} from '../mailbox.mjs';
 import {createChat, runWatch, sendText, editThread, checkChat, DEFAULT_INTERVAL_S} from '../discord-chat.mjs';
 
-const USAGE = 'usage: kadan discord watch [--once] [--interval 초] | send [텍스트…|--stdin] [--reply-to 메시지ID|--thread 스레드ID] [--edit 메시지ID] [--thread-name 이름] | thread <스레드ID> [--rename 이름] [--archive] | check';
+const USAGE = 'usage: kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트…|--stdin] [--reply-to 메시지ID|--thread 스레드ID] [--edit 메시지ID] [--thread-name 이름] | thread <스레드ID> [--rename 이름] [--archive] | check';
 // 쓰기가 실제로 끝나야(역압 포함) 풀린다. 소비자가 안 읽으면 여기서 기다리고, 파이프가 닫히면 거절한다.
 const writeLine = line => new Promise((resolve, reject) => process.stdout.write(line + '\n', error => (error ? reject(error) : resolve())));
 const text = v => (typeof v === 'string' ? v : undefined);
@@ -23,9 +25,13 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
       if (!Number.isFinite(intervalS) || intervalS < 2 || intervalS > 300) die('--interval은 2~300초여야 한다', 2);
       const abort = new AbortController();
       // 종료 신호: 막힌 출력·진행 중 요청을 기다리지 않는다. 잠금은 exit 훅이 돌려준다. 안 나간 줄은 cursor가 앞에 있어 다음 실행에서 다시 나온다.
-      for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => { abort.abort(); setTimeout(() => process.exit(0), 1500).unref(); });
+      for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { abort.abort(); setTimeout(() => process.exit(0), 1500).unref(); });
       process.stdout.on('error', () => abort.abort()); // 구독자가 사라지면(EPIPE) 조용히 끝낸다
-      return await runWatch(chat, {once: flags.once === true, intervalS, out: line => out(JSON.stringify(line)), err, signal: abort.signal, sleep});
+      // 우편 모드: 줄을 stdout에 내는 대신 우편함에 저장한다(조회·잠금·상태·재시도·가림은 그대로).
+      const toMail = flags['to-mail'] === undefined ? null : flags['to-mail'] === true ? SECRETARY : text(flags['to-mail']);
+      if (flags['to-mail'] !== undefined && (!toMail || /\s/.test(toMail))) die(USAGE, 2);
+      const emit = toMail ? createMailOut({home, to: toMail, log: err}) : line => out(JSON.stringify(line));
+      return await runWatch(chat, {once: flags.once === true, intervalS, out: emit, err, signal: abort.signal, sleep});
     }
     if (action === 'send') {
       if (flags.stdin !== undefined && flags.stdin !== true) die(USAGE, 2);

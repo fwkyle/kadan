@@ -9,6 +9,7 @@ import { initSecretsDir } from './secrets.mjs';
 
 export const SECRETARY_ROLE = '비서';
 export const DASHBOARD_ROLE = '대시보드';
+export const BRIDGE_ROLE = '디코';
 export const DEFAULT_PORT = '8790';
 export const RUNNER_CANDIDATES = ['codex', 'claude'];
 export const FIRST_PROMPT = '당신은 카단 비서입니다. 설치된 kadan-secretary 스킬을 읽고(/kadan-secretary), kadan status와 kadan tree로 현재 판을 확인한 뒤, 사용자에게 지금 무엇을 도울지 한 문장으로 물어보고 기다리세요. 사용자가 시키기 전에는 아무것도 발송하지 마세요.';
@@ -102,7 +103,7 @@ export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs =
 function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
 export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath = process.execPath,
- log = console.log, sessionName, sleep, restoreSecretary, startWatch } = {}) {
+ log = console.log, sessionName, sleep, restoreSecretary, startWatch, startBridge } = {}) {
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');
@@ -136,6 +137,15 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
   else if (out.watch === 'blocked') log('감시기 확인 필요: 감시기 세션은 있는데 감시 프로세스가 없습니다');
  }
 
+ if (startBridge) {
+  try { out.bridge = startBridge(); } catch (error) { out.bridge = 'failed'; log(`디코 다리 시작 실패: ${error.message}`); }
+  if (out.bridge === 'started') log('디코 다리 시작됨: #비서 새 글을 우편으로 비서에게 넣는다(kadan-디코)');
+  else if (out.bridge === 'reused') log('디코 다리 이미 살아 있음');
+  else if (out.bridge === 'locked') log('디코 다리 확인 필요: 다른 kadan discord watch가 잠금을 쥐고 있어 띄우지 않았습니다(같은 상태 파일을 둘이 쓰면 중복 우편이 생긴다)');
+  else if (out.bridge === 'blocked') log('디코 다리 확인 필요: kadan-디코 세션은 있는데 받기 프로세스가 없습니다');
+  else if (typeof out.bridge === 'string' && out.bridge.startsWith('bad-config')) log(`디코 다리 건너뜀: ${out.bridge.slice('bad-config: '.length)}`);
+ }
+
  if (out.secretary === 'started' && !flags['no-prompt']) {
   const settled = waitForSettled({ read: () => floor.read(secretarySession), ...(sleep ? { sleep } : {}) });
   if (settled) { send({ role: SECRETARY_ROLE, session: secretarySession, message: FIRST_PROMPT, roleProfile:'secretary' }); out.prompt = 'sent'; }
@@ -144,7 +154,7 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
  log('');
  log(`대시보드: http://127.0.0.1:${port}`);
  log(`비서 창: kadan attach ${SECRETARY_ROLE}   (또는 ${floor.attach(secretarySession)})`);
- log(`끄기: kadan stop ${SECRETARY_ROLE} · kadan stop ${DASHBOARD_ROLE}`);
+ log(`끄기: kadan stop ${SECRETARY_ROLE} · kadan stop ${DASHBOARD_ROLE}${out.bridge === 'started' || out.bridge === 'reused' ? ` · kadan stop ${BRIDGE_ROLE}` : ''}`);
  return out;
 }
 function quote(s) { return /^[\w./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`; }
@@ -156,6 +166,19 @@ export function ensureWatch({ profileExists, running, alive, create }) {
  if (!profileExists()) return 'no-profile';
  if (running().length) return 'reused';
  if (alive()) return 'blocked';
+ create();
+ return 'started';
+}
+
+// 디코 #비서 새 글을 우편으로 넣는 다리(`kadan discord watch --to-mail`)를 보장한다. 감시기와 같은 모양이다: 역할이 아니라
+// start 기록 없이 tmux 세션 kadan-디코에서 돈다 → 실행 카드가 없어 감시 대상(collectRoles·buildWatchScope)에 오르지 않는다.
+// discord-bot 비밀값이 없으면 조용히 건너뛴다. 설정이 있는데 틀렸으면 세션을 띄우지 않고 이유를 알린다(1초 만에 죽는 세션 방지).
+// 잠금(discord-chat.lock)을 다른 프로세스가 쥐고 있으면 띄우지 않는다.
+export function ensureBridge({ configured, lockHolder, alive, create }) {
+ const state = configured();
+ if (state !== 'ok') return state;
+ if (alive()) return lockHolder() ? 'reused' : 'blocked';
+ if (lockHolder()) return 'locked';
  create();
  return 'started';
 }

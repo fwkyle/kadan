@@ -103,6 +103,14 @@ export function writeState(home, state) {
   fs.renameSync(tmp, file);
 }
 
+// 잠금을 쥔 살아 있는 받기 프로세스의 pid. 없거나 주인이 죽었으면 null(읽기만 한다 — 치우지 않는다).
+export function watchLockHolder(home) {
+  let pid = NaN;
+  try { pid = Number(fs.readFileSync(path.join(home, LOCK_DIR, 'pid'), 'utf8')); } catch { return null; }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try { process.kill(pid, 0); return pid; } catch (e) { return e.code === 'ESRCH' ? null : pid; }
+}
+
 // 받기 프로세스 하나만: mkdir 잠금 + pid. 주인이 죽었으면(ESRCH) 치우고 한 번 더 얻는다. 같은 상태 파일을 두 곳이 쓰면 중복 줄이 나온다.
 export function acquireWatchLock(home) {
   const lock = path.join(home, LOCK_DIR), pidFile = path.join(lock, 'pid');

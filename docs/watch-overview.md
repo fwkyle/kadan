@@ -31,6 +31,7 @@
 - `kadan tree`의 `monitoring`, `GET /api/cards`(요약 응답)의 `center.monitoring`, 판의 감시 영역은 같은 `watch-overview.mjs` 계산을 사용한다.
 - 원본은 중앙 실행·업무 카드, 직속 관계 JSON, 현재 KADAN_HOME의 실행 원장, OS 프로세스다. 실제 감시·AI 보고·대시보드가 `buildWatchScope`와 `buildSupervisorScope`를 함께 사용한다. 대시보드는 읽기 전용 조회 결과이며 별도의 설정 원본이 아니다. `checkedAt`은 조회 시각이다.
 - 카단의 감시기는 전역 프로세스 하나다. 판마다 감시기를 새로 띄우지 않고, 이 감시기의 판별 대상과 상신 경로를 보여준다.
+- 디코 다리 세션 `kadan-디코`(`discord watch --to-mail`)는 `kadan-watch`처럼 역할이 아니라 start 기록과 실행 카드가 없어 판별 대상이 아니다. 죽음·멈춤·놀고 있음 경보가 나지 않는다(`tests/discord-mail.test.mjs` 7번이 대상 선정으로 확인).
 
 ## 확인하는 것
 
