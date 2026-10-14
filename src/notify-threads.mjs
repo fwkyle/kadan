@@ -1,4 +1,5 @@
-// 포럼 채널의 업무 글 기록 — `업무 키 → 글 id`만 $KADAN_HOME/notify-threads.json에 둔다(주소·토큰은 저장하지 않는다).
+// 포럼 채널의 업무 글 기록 — `업무 키 → {threadId, statusMessageId}`만 $KADAN_HOME/notify-threads.json에 둔다(주소·토큰은 저장하지 않는다).
+// 1단계의 옛 형식(`업무 키 → 글 id` 문자열)도 읽는다: 읽을 때 {threadId, statusMessageId:null}로 바꾸고, 다음 저장 때 새 형식으로 쓴다.
 // 감시기와 CLI가 동시에 쓸 수 있어 잠금(mkdir 잠금 + 오래된 잠금 치우기)을 걸고, 쓸 때는 임시 파일 → rename(0600)이다.
 // 상태 읽기 → (새 글 만들기) → 상태 갱신은 한 잠금 안에서 한다.
 import fs from 'node:fs';
@@ -9,18 +10,24 @@ const LOCK_STALE_MS = 20000; // 알림 한 번의 최대 시간(약 14초)보다
 const file = home => path.join(home, THREADS_FILE);
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+const entryOf = v => typeof v === 'string' && v ? {threadId: v, statusMessageId: null}
+  : v && typeof v === 'object' && typeof v.threadId === 'string' && v.threadId
+    ? {threadId: v.threadId, statusMessageId: typeof v.statusMessageId === 'string' && v.statusMessageId ? v.statusMessageId : null} : null;
+
 export function readThreads(home) {
   try {
     const v = JSON.parse(fs.readFileSync(file(home), 'utf8'));
-    return v?.version === 1 && v.threads && typeof v.threads === 'object' ? v.threads : {};
+    if (v?.version !== 1 || !v.threads || typeof v.threads !== 'object') return {};
+    return Object.fromEntries(Object.entries(v.threads).map(([k, e]) => [k, entryOf(e)]).filter(([, e]) => e));
   } catch { return {}; }
 }
 
 // 최신 파일을 다시 읽고 자기 업무 줄만 바꿔 쓴다(다른 업무의 기록을 지우지 않는다). 잠금 안에서 부른다.
-export function setThread(home, work, threadId) {
+// entry: {threadId, statusMessageId}. 글이 바뀌면(새 글) statusMessageId를 null로 넘겨 옛 글의 메시지를 끌고 가지 않는다.
+export function setThread(home, work, entry) {
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   const tmp = `${file(home)}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({version: 1, threads: {...readThreads(home), [work]: threadId}}, null, 2) + '\n', {mode: 0o600});
+  fs.writeFileSync(tmp, JSON.stringify({version: 1, threads: {...readThreads(home), [work]: entryOf(entry)}}, null, 2) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file(home));
 }
 
