@@ -16,10 +16,11 @@ import {
   flowSummary,
   openAlerts,
   supervisorSummary,
-  supervisorOf,
   roleActivity,
 } from "../dashboard-band.mjs";
 import { effectiveWorkOwner } from "../handover-state.mjs";
+import { isDescendant } from "../hierarchy.mjs";
+import { superProfiles } from "../super-role.mjs";
 import { letters, pick, compact } from "./shared.mjs";
 
 export function statusData(snapshot, url, stamp, m) {
@@ -47,15 +48,19 @@ export function statusData(snapshot, url, stamp, m) {
         : r,
     )
     .map(compact);
-  const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live });
+  // 원장을 못 읽으면 프로필을 모르므로 예전 기준(상위가 @user)으로 돌아간다(super-role.mjs).
+  const profiles = snapshot.ledgerLines === null ? null : superProfiles(snapshot.entries || []);
+  const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles });
   // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
   // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
   const superFilter = url.searchParams.get("super");
   if (superFilter) {
     if (!supervisors) throw Object.assign(new Error("관계표를 읽지 못해 슈퍼감독별로 거를 수 없습니다"), { status: 400 });
+    const parents = new Map(Object.entries(m.hierarchy));
     const item = supervisors.items.find((s) => s.super === superFilter);
-    if (!item) throw Object.assign(new Error(`관계표에서 사용자 바로 아래가 아닌 역할: ${superFilter}`), { status: 400 });
-    const mine = (role) => supervisorOf(m.hierarchy, role) === superFilter;
+    if (!item) throw Object.assign(new Error(`슈퍼감독(--profile super)으로 시작한 역할이 아님: ${superFilter}`), { status: 400 });
+    // 요약 목록의 행은 가장 가까운 슈퍼 조상에 한 번만 묶지만, ?super=는 X 자신과 X 아래 전부(하위 슈퍼감독의 몫 포함)를 돌려준다.
+    const mine = (role) => isDescendant(role, superFilter, parents);
     const myAlerts = (allAlerts?.items ?? []).filter((a) => mine(a.recipient));
     return {
       ...stamp,

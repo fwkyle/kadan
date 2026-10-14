@@ -119,9 +119,9 @@ export default function Status({url}: {url: URL}) {
         <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
       </ul>
       <section id="status-supers" className="st-section">
-        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">내가 일을 맡긴 슈퍼감독(관계표에서 바로 내 아래)마다 한 줄입니다. 그 아래 감독·담당의 실행을 모두 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
+        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">슈퍼감독(--profile super로 시작한 역할)마다 한 줄입니다. 그 아래 감독·담당의 실행을 가장 가까운 슈퍼감독 한 곳에만 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
         {data.supervisors === null ? <p className="st-error" role="alert">관계표를 읽지 못해 슈퍼감독별로 묶지 못했습니다. 감시기가 읽는 관계표 파일(원장의 마지막 hierarchy-loaded 기록이 가리키는 경로)을 확인하세요.</p>
-          : data.supervisors.items.length === 0 ? <p className="st-empty">관계표에 사용자 바로 아래 역할이 없습니다.</p>
+          : data.supervisors.items.length === 0 ? <p className="st-empty">슈퍼감독(--profile super)으로 시작한 역할이 관계표에 없습니다.</p>
           : <ul className="st-sup-list">{data.supervisors.items.map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
               <strong>{s.super}</strong>
               <span className="st-sup-life">{supervisorLife(s)}</span>

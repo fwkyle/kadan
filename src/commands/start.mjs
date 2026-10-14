@@ -176,7 +176,9 @@ export function cmdStart(argv, flags) {
   );
   // 감시 알림이 갈 곳을 사람이 따로 적지 않아도 되게 한다. 실패는 알리기만 하고 시작을 막지 않는다.
   // --parent가 있으면 만든 역할 대신 그 상위로 적는다(대화 옮기기: 비서가 대신 실행해도 상위는 사용자).
-  const registration = typeof flags.parent === "string" ? registerRoleManually({ role, parent: flags.parent, home: ledgerHome() }) : registerStartedRole({
+  // --profile super는 --parent가 없으면 만든 쪽이 아니라 @user가 상위다(슈퍼감독은 사용자 직속 동료, 2026-10-14).
+  const explicitParent = typeof flags.parent === "string" ? flags.parent : roleProfile === "super" ? "@user" : null;
+  const registration = explicitParent !== null ? registerRoleManually({ role, parent: explicitParent, home: ledgerHome() }) : registerStartedRole({
     role,
     cmd: startedCmd,
     creator: resolveLedgerBy({ env: process.env }),
