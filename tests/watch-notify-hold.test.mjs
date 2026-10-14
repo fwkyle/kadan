@@ -11,7 +11,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {sendWatchMailReminder, sendWatchMessage, watchMailHold} from '../src/commands/watch.mjs';
 import {NotifyHoldTracker, NOTIFY_FORCE_AT, NOTIFY_WARN_AT, notifyHeldAlertId} from '../src/watch-notify-hold.mjs';
 import {explainAlertRoute} from '../src/watch.mjs';
-import {sendTmux} from '../src/floor-tmux.mjs';
+import {sendTmux, notificationHold} from '../src/floor-tmux.mjs';
 import {openAlerts} from '../src/dashboard-band.mjs';
 import {formatAlertBody} from '../src/watch-alert-body.mjs';
 
@@ -272,4 +272,78 @@ test('알림밀림 문구는 5번 밀린 다음 시도에 넣는다고 말한다
   const text = formatAlertBody({kind: '알림밀림', role: 'w', holdCount: 3, holdCode: 'C', heldSince: 'T'});
   assert.match(text, /5번 밀린 다음 시도에 입력 보호 없이 넣음/);
   assert.doesNotMatch(text, /5번째부터/);
+});
+
+// tmux 복사 모드(2026-10-14): 감시기 알림에서는 실패가 아니라 미룸이고, 5번째 강제 차례에만 해제하고 넣는다.
+const modeRun = (modes, calls) => args => {
+  calls.push(args.join(' '));
+  if (args[0] === 'display-message') return String(modes.length > 1 ? modes.shift() : modes[0]);
+  return '';
+};
+const sendWith = (modes, guard, calls = []) => sendTmux('kadan-w', '알림',
+  {run: modeRun(modes, calls), spawn: () => ({status: 0}), pid: 1, hrtime: () => 1n, notificationGuard: guard});
+
+test('복사 모드·모드 조회 실패는 미룸 코드라 카운터가 센다 (입력 보호와 한 카운터)', () => {
+  const tracker = new NotifyHoldTracker();
+  const inMode = Object.assign(new Error('복사모드'), {code: 'KADAN_PANE_IN_MODE', delivery: 'not-sent'});
+  const unknown = Object.assign(new Error('조회 실패'), {code: 'KADAN_PANE_MODE_UNKNOWN', delivery: 'not-sent'});
+  for (const error of [inMode, hold(), unknown]) {
+    tracker.beginCycle(); tracker.heldIfGuard('w', error); tracker.endCycle(0);
+  }
+  const [alert] = tracker.alerts();
+  assert.deepEqual([alert.holdCount, alert.holdCode], [3, 'KADAN_PANE_MODE_UNKNOWN']);
+  // 전달 안 된 일반 오류는 여전히 세지 않는다.
+  tracker.beginCycle(); tracker.heldIfGuard('x', Object.assign(new Error('x'), {code: 'KADAN_PANE_DEAD', delivery: 'not-sent'}));
+  tracker.endCycle(0);
+  assert.equal(tracker.streaks.has('x'), false);
+});
+
+test('일반 알림은 복사 모드면 붙여넣지 않고 not-sent, 사전 확인도 복사 모드를 미룸으로 돌려준다', () => {
+  const calls = [];
+  assert.throws(() => sendWith([1], {humanIdleMs: 30_000}, calls),
+    e => e.code === 'KADAN_PANE_IN_MODE' && e.delivery === 'not-sent');
+  assert.equal(calls.some(c => c.startsWith('paste-buffer') || c.includes('-X cancel')), false);
+  const held = notificationHoldFor('1');
+  assert.equal(held.code, 'KADAN_PANE_IN_MODE');
+});
+function notificationHoldFor(mode) {
+  return notificationHold('kadan-w', {humanIdleMs: 30_000}, {run: modeRun([mode], [])});
+}
+
+test('강제 차례: 복사 모드를 해제하고 다시 0을 확인한 뒤 넣고, 해제 사실을 영수증에 남긴다', () => {
+  const calls = [];
+  const receipt = sendWith([1, 0], {humanIdleMs: 30_000, force: true}, calls);
+  assert.equal(receipt.copyModeReleased, true);
+  const cancel = calls.findIndex(c => c === 'send-keys -t kadan-w -X cancel');
+  assert.ok(cancel >= 0 && cancel < calls.findIndex(c => c.startsWith('load-buffer')), '붙여넣기 전에 해제');
+  assert.equal(calls.some(c => c.startsWith('paste-buffer')), true);
+  // 복사 모드가 아니면 해제하지 않는다.
+  const quiet = [];
+  assert.equal(sendWith([0], {humanIdleMs: 30_000, force: true}, quiet).copyModeReleased, undefined);
+  assert.equal(quiet.some(c => c.includes('-X cancel')), false);
+});
+
+test('강제 차례라도 해제 뒤에도 모드면 넣지 않고 미룸이며, cancel이 실패해도 마찬가지다', () => {
+  const calls = [];
+  assert.throws(() => sendWith([1], {humanIdleMs: 30_000, force: true}, calls),
+    e => e.code === 'KADAN_PANE_IN_MODE' && e.delivery === 'not-sent');
+  assert.equal(calls.some(c => c.startsWith('load-buffer') || c.startsWith('paste-buffer')), false);
+  const failing = args => { if (args.includes('-X')) throw new Error('not in a mode'); return args[0] === 'display-message' ? '1' : ''; };
+  assert.throws(() => sendTmux('kadan-w', '알림', {run: failing, spawn: () => ({status: 0}), pid: 1, hrtime: () => 1n,
+    notificationGuard: {humanIdleMs: 30_000, force: true}}), e => e.code === 'KADAN_PANE_IN_MODE' && e.delivery === 'not-sent');
+  // 카드 전송은 force가 있어도 해제하지 않는다.
+  const card = [];
+  assert.throws(() => sendTmux('kadan-w', '카드', {run: modeRun([1], card), spawn: () => ({status: 0}), pid: 1, hrtime: () => 1n,
+    cardIdentity: {currentPid: 1}, notificationGuard: {force: true}}), e => e.code === 'KADAN_PANE_IN_MODE');
+  assert.equal(card.some(c => c.includes('-X cancel')), false);
+});
+
+test('강제 전달 기록에 복사 모드 해제 사실이 남는다', () => {
+  const records = [];
+  const tracker = new NotifyHoldTracker({record: e => records.push(e)});
+  for (let i = 0; i < NOTIFY_FORCE_AT; i++) cycle(tracker, {held: ['w']});
+  tracker.beginCycle();
+  tracker.guardFor('w', {humanIdleMs: 1});
+  tracker.delivered('w', {copyModeReleased: true});
+  assert.equal(records[0].copyModeReleased, true);
 });
