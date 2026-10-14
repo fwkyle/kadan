@@ -25,6 +25,13 @@ export const TABLE = {
     version: 'agy --version', update: 'agy update',
     conversation: {kind: 'open-file', pattern: `/antigravity-cli/conversations/(${UUID})\\.db$`},
   },
+  omo: {
+    spawn: 'omo --model {model} --thinking {effort} --no-recommended-models',
+    resume: 'omo --model {model} --thinking {effort} --no-recommended-models --session {conversation}',
+    exec: 'omo -p --mode json --no-tools --no-session --model {model} --thinking {effort} {prompt}',
+    version: 'omo --version', update: 'omo update',
+    // conversation 칸 없음: 대화 ID가 열린 파일 이름이 아니라 session-holders/<ID>/<PID>.json의 폴더 이름이라 두 찾기 방식에 맞지 않는다.
+  },
   devin: {
     spawn: 'devin --model {model} --permission-mode dangerous --respect-workspace-trust false',
     resume: 'devin --model {model} --permission-mode dangerous --respect-workspace-trust false --resume {conversation}',

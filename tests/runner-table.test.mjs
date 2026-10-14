@@ -14,7 +14,7 @@ const settings = settingsWith();
 
 test('틀 채우기: 빈 칸은 미지원으로 거절하고, 값이 없는 자리는 만들지 않는다', () => {
   assert.throws(() => runnerTemplate(settings, 'devin', 'exec'), /devin\)는 exec 미지원/);
-  assert.throws(() => runnerTemplate(settings, 'omo', 'resume'), /omo\)는 resume 미지원/);
+  assert.throws(() => runnerTemplate(settings, 'zzz', 'resume'), /zzz\)는 resume 미지원/);
   assert.equal(fillTemplate('agy --model {model} --print {prompt}', {model: 'm', prompt: 'hi'}), 'agy --model m --print hi');
   assert.throws(() => fillTemplate('x --resume {conversation}', {}), /\{conversation\}/);
   assert.equal(fillTemplate('a {effort}', {}), 'a ');
@@ -60,7 +60,7 @@ test('명령 재조립: 대화를 다른 방식으로 지정했거나 읽을 수
   assert.throws(() => rebuildResumeCommand(settings, 'claude', 'claude --model m --continue', ID), /대화 지정/);
   assert.throws(() => rebuildResumeCommand(settings, 'claude', 'claude --model m && rm x', ID), /읽을 수 없다/);
   assert.throws(() => rebuildResumeCommand(settings, 'claude', 'claude --model m', 'a b; rm'), /안전하지/);
-  assert.throws(() => rebuildResumeCommand(settings, 'omo', 'omo --model m', ID), /미지원|resume/);
+  assert.throws(() => rebuildResumeCommand(settings, 'zzz', 'zzz --model m', ID), /미지원|resume/);
 });
 
 test('conversationOf: agy --conversation·devin --resume은 같은 대화(resume), 지정이 없으면 새 대화', () => {
@@ -129,4 +129,30 @@ test('코드에 실행기 이름으로 갈라지는 분기가 없다(표 모듈�
     const code = fs.readFileSync(new URL(file, import.meta.url), 'utf8').split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
     assert.doesNotMatch(code, /['"`](claude|codex|agy|devin|omo)['"`]/, file);
   }
+});
+
+import {initSettings, readSettings, setRunner} from '../src/runner-settings.mjs';
+
+test('설정: 옛 설정(spawn만)은 그대로 읽히고, 표 칸은 선택이며 검증을 거쳐 저장된다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-table-settings-'));
+  const records = [], record = e => records.push(e);
+  fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [
+    {id: 'codex', spawn: 'codex --model {model} -c e={effort}'},
+    {id: 'claude-code', spawn: TABLE.claude.spawn, resume: TABLE.claude.resume, conversation: TABLE.claude.conversation},
+  ]}));
+  const value = initSettings(home, {by: 'kyle', reason: '표 옮기기', record});
+  assert.equal(value.runners.codex.resume, undefined); // 옛 모양 그대로
+  assert.equal(value.runners.claude.resume, TABLE.claude.resume);
+  assert.deepEqual(value.runners.claude.conversation, TABLE.claude.conversation);
+  const meta = revision => ({by: 'kyle', reason: '칸 채우기', revision, record});
+  assert.throws(() => setRunner(home, {runner: 'codex', table: {resume: 'other --model {model} --resume {conversation}'}, ...meta(1)}), /spawn 틀 뒤에/);
+  assert.throws(() => setRunner(home, {runner: 'codex', table: {resume: 'codex --model {model} -c e={effort} resume'}, ...meta(1)}), /\{conversation\}/);
+  assert.throws(() => setRunner(home, {runner: 'codex', table: {exec: 'codex {bogus}'}, ...meta(1)}), /모르는 자리/);
+  assert.throws(() => setRunner(home, {runner: 'codex', table: {magic: 'x'}, ...meta(1)}), /알 수 없는 칸/);
+  const next = setRunner(home, {runner: 'codex', table: {resume: 'codex --model {model} -c e={effort} resume {conversation}', conversation: TABLE.codex.conversation}, ...meta(1)});
+  assert.equal(next.revision, 2);
+  assert.equal(readSettings(home).runners.codex.spawn, 'codex --model {model} -c e={effort}');
+  const cleared = setRunner(home, {runner: 'codex', table: {resume: null}, ...meta(2)});
+  assert.equal(cleared.runners.codex.resume, undefined);
+  assert.throws(() => resumeTail(readSettings(home), 'codex'), /미지원/);
 });

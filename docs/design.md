@@ -74,7 +74,7 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
 2. **밀어넣기 직전에 생존을 확인한다.** `send` 전에 `has-session`과 pane PID 대조를
    매번 수행한다. 세션이 없거나 PID가 다르면 보내지 않고 보고한다(실패 닫힘).
    카드 연결 전송(`--task`, 발령으로 추론된 `--execution`, 자동 전달)은 여기에 더해
-   현재 세대를 시작한 명령이 등록 실행기(codex·omo·claude·devin)이고 모델이
+   현재 세대를 시작한 명령이 등록 실행기(codex·omo·claude·devin·agy)이고 모델이
    지정됐는지(`--model`/`-m`)를 원장의 start 기록과 현재 pane PID로 확인한다.
    인증 환경만 준비하고 실행기로 exec하는 `kadan-<실행기>` 래퍼(예: `~/.kadan/bin/kadan-claude`)는 그 실행기로 읽는다.
    명령은 인용을 보존해 인자 단위로 읽으며 셸 결합·주석·확장은 거부한다.
