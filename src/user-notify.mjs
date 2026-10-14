@@ -8,7 +8,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {ledgerHome} from './ledger.mjs';
 import {effectiveNotifyEnvFile, readDiscordSecrets} from './notify-setting.mjs';
-import {setThread, withThreadLock} from './notify-threads.mjs';
+import {setThread, setDecision, readDecisions, withThreadLock} from './notify-threads.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWorkStatus} from './work-status-message.mjs';
 
@@ -125,30 +125,61 @@ function syncStatus({home, webhook, work, threadId, statusMessageId, deadline}) 
   return r;
 }
 
-// 포럼 채널: 업무 키마다 글 하나. 상태 읽기 → (새 글 만들기) → 상태 갱신을 한 잠금 안에서 한다.
+// 포럼 채널: 업무 키마다 글 하나(결정은 레포마다 '<레포>/__decisions__' 글 하나). 상태 읽기 → (새 글 만들기) → 상태 갱신을 한 잠금 안에서 한다.
 // 기록된 글이 있으면 thread_id로 이어 붙이고, 그 글이 429 아닌 4xx로 거절되면(지워짐 등) thread_name으로 새 글을 한 번 만든다
 // (같은 요청의 재시도가 아니라 다른 요청). 잠금을 종료 시각 안에 못 얻으면 보내지 않는다: 업무 글로 가야 할 내용을
 // 기본 #브리핑에 섞지 않고, 상태 파일을 잠금 없이 건드리지 않으려고 시스템 알림으로 내려간다(잘못된 채널로 새지 않는 쪽).
 // 알림이 나간 뒤에는 같은 잠금 안에서 상태 메시지도 맞춘다(결과는 statusSync에 따로 담고 알림 결과를 바꾸지 않는다).
-function sendForum({home, webhook, work, title, content, allowedMentions, deadline}) {
+// decision: {id, edit?}. 요청이면 메시지 id를 남기고(wait), 해결(edit 본문 있음)이면 남긴 메시지를 고친다 — 못 찾을 때(기록 없음·404)만 새 메시지.
+function sendForum({home, webhook, work, threadName, content, allowedMentions, deadline, decision}) {
   const left = () => deadline - Date.now();
-  const threadName = `${work} ${title ?? ''}`.trim().slice(0, 100);
   const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content, allowedMentions, budgetMs: left(), ...extra});
   const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads => {
+    if (decision?.edit) {
+      const done = editDecision({home, decision, post, forum: true});
+      if (done) return done;
+    }
     const known = threads[work];
+    const wait = Boolean(decision) && !decision.edit;
     let r, entry = null;
     if (known) {
-      r = post({threadId: known.threadId});
+      r = post({threadId: known.threadId, wait});
       if (r.outcome === 'sent') entry = known;
     }
     if (!entry && !(r && !is4xx(r))) {
       r = post({threadName, wait: true});
       if (r.outcome === 'sent' && r.channelId) { entry = {threadId: r.channelId, statusMessageId: null}; setThread(home, work, entry); }
     }
+    if (entry && wait && r.messageId) setDecision(home, decision.id, {threadId: entry.threadId, messageId: r.messageId, forum: true});
     if (entry) r = {...r, statusSync: syncStatus({home, webhook, work, ...entry, deadline})};
     return r;
   });
   return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
+}
+
+// 기본 #브리핑 채널로 가는 결정 알림: 요청의 메시지 id를 남기고 해결 때 고친다(포럼과 같은 잠금·규칙).
+function sendDefaultDecision({home, webhook, content, allowedMentions, deadline, decision}) {
+  const left = () => deadline - Date.now();
+  const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content, allowedMentions, budgetMs: left(), ...extra});
+  const lock = withThreadLock(home, deadline - MIN_SEND_MS, () => {
+    if (decision.edit) {
+      const done = editDecision({home, decision, post, forum: false});
+      if (done) return done;
+    }
+    const r = post({wait: !decision.edit});
+    if (r.outcome === 'sent' && !decision.edit && r.messageId) setDecision(home, decision.id, {threadId: null, messageId: r.messageId, forum: false});
+    return r;
+  });
+  return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '알림 상태 잠금을 시간 안에 못 얻음'};
+}
+
+// 남긴 결정 요청 메시지를 고친다. 돌려주는 값: 결과(고침 성공, 또는 404 아닌 실패라 더 시도하지 않음) 또는 null(못 찾음 → 호출 쪽이 새 메시지).
+// 기록이 없거나, 기록한 길(포럼/기본)이 지금 길과 다르거나, 수정이 404(지워짐·다른 웹훅)면 못 찾은 것이다.
+function editDecision({home, decision, post, forum}) {
+  const known = readDecisions(home)[decision.id];
+  if (!known || known.forum !== forum) return null;
+  const r = post({threadId: known.threadId ?? undefined, messageId: known.messageId, content: decision.edit, allowedMentions: {parse: []}});
+  return r.outcome === 'failed' && r.status === 404 ? null : r;
 }
 
 // 사건 지점(업무 알림·work 변경·실행 done)에서 부르는 함수 하나: 그 업무 글의 상태 메시지를 현재 업무 기록으로 맞춘다.
@@ -182,14 +213,16 @@ function logStatus(home, work, r, secrets) {
     reason: scrubSecrets(r.reason ?? '', secrets) || undefined, attempts: r.attempts ?? undefined, status: r.status ?? undefined});
 }
 
-// 레포별 웹훅이 있고 업무 키가 있으면 포럼 글로, 아니면 기본 웹훅으로 보낸다.
-function route({sec, repo, work}) {
-  return sec.repoWebhook && work ? {forum: true, webhook: sec.repoWebhook} : {forum: false, webhook: sec.webhook};
+// 레포별 웹훅이 있고 글 키(업무 키, 없으면 결정의 레포 '결정' 글 키)가 있으면 포럼 글로, 아니면 기본 웹훅으로 보낸다.
+function route({sec, key}) {
+  return sec.repoWebhook && key ? {forum: true, webhook: sec.repoWebhook} : {forum: false, webhook: sec.webhook};
 }
 
 // message: 시스템 알림에 쓰는 짧은 문구. discord: {content, mention} 또는 (사용자ID)=>{content, mention}을 주면 디스코드에는 그 본문을 쓴다.
-// opts: {kind, key, work, workTitle, repo, dedupWindowMs, home, env, discord}. work: 업무 키(없으면 기본 #브리핑),
-//   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키가 있을 때만 포럼 글로 간다.
+// opts: {kind, key, work, workTitle, repo, tagRepo, forumKey, forumTitle, decision, dedupWindowMs, home, env, discord}. work: 업무 키(없으면 기본 #브리핑),
+//   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키(또는 forumKey)가 있을 때만 포럼 글로 간다.
+//   tagRepo: 알림 첫머리 `[레포]`에 쓸 이름(생략하면 repo, 그것도 모르면 표시하지 않는다 — 추측 금지). discord 본문을 직접 주면 그쪽이 표시를 책임진다.
+//   forumKey·forumTitle: 업무가 없을 때 쓰는 포럼 글 키와 글 제목(결정의 레포 '결정' 글). decision: {id, edit?} — 요청은 메시지 id를 남기고, edit 본문이 있으면 남긴 메시지를 고친다.
 // 반환: {via:'discord'|'system', error, duplicate?, discord:{outcome,reason}|null}
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
@@ -197,6 +230,10 @@ export function notifyUser(message, spawn, opts = {}) {
   const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
   const result = {via: 'system', error: null, discord: null};
   let home = null, secrets = [], warnings = [];
+  const tagName = opts.tagRepo ?? opts.repo ?? (opts.work?.includes('/') ? opts.work.split('/')[0] : undefined);
+  const tag = tagName ? `[${tagName}] ` : '';
+  const tagged = text => (tag && !String(text).startsWith(tag) ? tag + text : text);
+  message = tagged(message);
   if (env.KADAN_NOTIFY !== 'off') {
     try {
       home = opts.home ?? ledgerHome();
@@ -214,13 +251,18 @@ export function notifyUser(message, spawn, opts = {}) {
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
           const d = (typeof opts.discord === 'function' ? opts.discord(sec.userId) : opts.discord) ?? {content: fitDiscord(message), mention: false};
           const allowedMentions = d.mention === true ? {users: [sec.userId]} : {parse: []};
-          const to = route({sec, repo, work: opts.work});
-          const title = opts.workTitle ?? workTitleOf(home, opts.work);
+          const forumKey = opts.work ?? opts.forumKey;
+          const to = route({sec, key: forumKey});
+          const threadName = (opts.work ? `${opts.work} ${opts.workTitle ?? workTitleOf(home, opts.work)}`.trim() : opts.forumTitle ?? '').slice(0, 100);
+          // 해결 알림(edit)은 원래 메시지를 고치므로 멘션이 없고, 못 찾을 때만 d.content(새 메시지)가 나간다.
+          const decision = opts.decision ? {id: opts.decision.id, edit: opts.decision.edit} : null;
           const sent = Date.now() < blockedUntil
             ? {outcome: 'skipped', attempts: 0, reason: '디스코드 장애 직후라 건너뜀(60초)'}
             : to.forum
-              ? sendForum({home, webhook: to.webhook, work: opts.work, title, content: d.content, allowedMentions, deadline})
-              : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions, budgetMs: Math.max(MIN_SEND_MS, deadline - Date.now())});
+              ? sendForum({home, webhook: to.webhook, work: forumKey, threadName, content: d.content, allowedMentions, deadline, decision})
+              : decision
+                ? sendDefaultDecision({home, webhook: to.webhook, content: d.content, allowedMentions, deadline, decision})
+                : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions, budgetMs: Math.max(MIN_SEND_MS, deadline - Date.now())});
           noteOutage(sent);
           if (sent.statusSync) { noteOutage(sent.statusSync); if (sent.statusSync.outcome !== 'none') logStatus(home, opts.work, sent.statusSync, secrets); }
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
