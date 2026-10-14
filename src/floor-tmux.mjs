@@ -389,7 +389,9 @@ function create({ session, role, cwd, cmd }) {
   };
 }
 
-function checkPaneMode(session, run) {
+// release: 감시기 알림의 5번째 강제 차례만 쓴다. 복사 모드에서 키를 보내면 tmux가 복사 모드 명령으로 읽으므로
+// 먼저 빠져나온 뒤 다시 확인해, 그래도 모드면 넣지 않는다. 해제했으면 true를 돌려준다.
+function checkPaneMode(session, run, {release = false} = {}) {
   let mode;
   try {
     mode = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_in_mode}"]);
@@ -400,6 +402,12 @@ function checkPaneMode(session, run) {
     throw error;
   }
   if (Number(mode.trim()) !== 0) {
+    if (release) {
+      // 모드 종류가 달라 cancel이 실패해도 아래 재확인이 모드를 보고 넣을지 정한다.
+      try { run(["send-keys", "-t", session, "-X", "cancel"]); } catch { /* 재확인에서 판정 */ }
+      checkPaneMode(session, run);
+      return true;
+    }
     const error = new Error("전송 보류: 기록보기(복사모드 등) 중 — 선택·스크롤을 유지합니다");
     error.code = "KADAN_PANE_IN_MODE";
     throw error;
@@ -519,7 +527,7 @@ function checkNotificationPane(session, guard, run) {
 
 // 붙여넣지 않고 알림 보류 사유만 돌려준다. 감시기가 예약 기록 전에 확인해 순회마다 기록이 쌓이지 않게 한다.
 export function notificationHold(session, guard, {run = tmuxOut} = {}) {
-  try { checkNotificationPane(session, guard, run); return null; }
+  try { checkPaneMode(session, run); checkNotificationPane(session, guard, run); return null; }
   catch (error) { return {code: error.code ?? "KADAN_NOTIFY_CHECK_FAILED", message: error.message}; }
 }
 
@@ -528,8 +536,11 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
   let stage = "not-started";
   let loaded = false;
   const checkMode = () => checkPaneMode(session, run);
+  let released = false;
   try {
-    checkMode();
+    // 감시기 알림이 5번 밀린 강제 차례에 한해 복사 모드를 해제하고 넣는다(2026-10-14).
+    if (notificationGuard?.force === true && !cardIdentity) released = checkPaneMode(session, run, {release: true});
+    else checkMode();
     if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
     else if (notificationGuard) checkNotificationPane(session, notificationGuard, run);
     run(["load-buffer", "-b", buffer, "-"], text);
@@ -563,7 +574,7 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     }
     throw error;
   }
-  return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
+  return {keyDelivery:"sent", inputAcceptance:"unconfirmed", ...(released ? {copyModeReleased:true} : {})};
 }
 
 function stop(session) {

@@ -169,6 +169,7 @@ export function guardedSend({
     ...(mailContext?.executionKey?{executionKey:mailContext.executionKey}:{}),
     ...(mailContext?.replyTo?{replyTo:mailContext.replyTo}:{}),
     floor: selectedFloor.name,
+    ...(receipt.copyModeReleased ? {copyModeReleased:true} : {}),
     ...(receipt.keyDelivery ? {keyDelivery:receipt.keyDelivery, inputAcceptance:receipt.inputAcceptance} : {}),
     role,
     session,
