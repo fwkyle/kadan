@@ -132,7 +132,7 @@ export function notifyUser(message, spawn, opts = {}) {
   const env = opts.env ?? process.env;
   const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
   const result = {via: 'system', error: null, discord: null};
-  let home = null, secrets = [];
+  let home = null, secrets = [], warnings = [];
   if (env.KADAN_NOTIFY !== 'off') {
     try {
       home = opts.home ?? ledgerHome();
@@ -140,10 +140,11 @@ export function notifyUser(message, spawn, opts = {}) {
       const repo = opts.repo ?? (opts.work?.includes('/') ? opts.work.split('/')[0] : undefined);
       if (cfg.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(cfg.error)};
       else if (cfg.envFile) {
-        const sec = readDiscordSecrets(cfg.envFile, {repo});
+        const sec = readDiscordSecrets(cfg.envFile, {repo, checkDir: cfg.source === 'default'});
         if (sec.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(sec.error)};
         else {
           secrets = [sec.webhook, sec.repoWebhook, sec.userId];
+          warnings = sec.warnings ?? [];
           const now = (opts.now ?? Date.now)();
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
@@ -159,6 +160,7 @@ export function notifyUser(message, spawn, opts = {}) {
           if (sent.outcome === 'uncertain' || (sent.outcome === 'failed' && sent.attempts !== 0 && (sent.status === undefined || sent.status >= 500 || sent.status === 429)))
             blockedUntil = Date.now() + DISCORD_BLOCK_MS;
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
+          if (warnings.length) result.discord.warning = warnings.join(' / ');
           if (sent.outcome === 'sent') result.via = 'discord';
         }
       }
@@ -167,7 +169,7 @@ export function notifyUser(message, spawn, opts = {}) {
     }
     if (home && result.discord) {
       appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, work: opts.work ?? undefined,
-        via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined, status: result.discord.status ?? undefined});
+        via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined, status: result.discord.status ?? undefined, warning: result.discord.warning});
     }
   }
   if (result.via === 'discord') return result;
