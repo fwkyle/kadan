@@ -36,7 +36,7 @@ function guardedWatchSend(tracker,args,role,guard) {
   const {send,...rest}=args;
   try {
     const receipt=send({...rest,notificationGuard:tracker?tracker.guardFor(role,guard):guard});
-    tracker?.delivered(role);
+    tracker?.delivered(role,receipt);
     return receipt;
   } catch (error) {
     // 붙여넣기는 됐고 기록만 실패한 경우도 전달이다.

@@ -29,6 +29,13 @@ type Settings = {
 const label = (c: Choice) =>
   [c.runner, c.model, c.effort].filter(Boolean).join(" / ");
 type RunnersData = Stamp & {
+  // 이 기계에 고정된 창 선택(KADAN_HOME 설정). 대시보드 프로세스의 환경변수가 아니다.
+  window?: {
+    kind: "rottie" | "none" | "unset" | "broken";
+    label: string;
+    rottieBin?: string;
+    error?: string;
+  };
   settings: Settings | null;
   roles: Record<string, string>;
   commands: Record<string, string>;
@@ -63,6 +70,16 @@ export default function Runners({ url }: { url: URL }) {
       <h1>실행 모델</h1>
       <p>지금 열린 담당 창이 어떤 모델로 돌고 있는지 보고, 다음 발령에 쓸 AI 도구·모델·강도를 역할별로 설정합니다. 설정 변경은 다음 발령부터 적용되며 열린 창은 그대로입니다.</p>
       <Sessions url={url} />
+      {data?.window && (
+        <p id="window-setting">
+          새 담당 창: <strong>{data.window.label}</strong>
+          {data.window.rottieBin && <> · <code>{data.window.rottieBin}</code></>}
+          {data.window.kind === "unset" && (
+            <> — 고정 전에는 셸 환경변수를 따르고, 없으면 백그라운드입니다. <code>kadan window set rottie --rottie-bin 절대경로</code></>
+          )}
+          {data.window.error && <> · {data.window.error}</>}
+        </p>
+      )}
       <h2>다음 발령의 실행 모델</h2>
       <ErrorMessage error={resource.error} />
       <Freshness collectedAt={data?.collectedAt} {...resource} />

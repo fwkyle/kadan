@@ -38,7 +38,7 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
-import { effectiveWorkOwner } from "./handover-state.mjs";
+import { withEffectiveOwner } from "./handover-state.mjs";
 import { mailboxLetters } from "./mailbox-state.mjs";
 import { shortDigest, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
 import {
@@ -211,7 +211,7 @@ export async function runWatch({
       try {
         // 워크 owner는 확정된 역할 인계를 따라 지금 책임 감독으로 바꿔 쓴다. 옛 감독 이름 그대로면 감독 점검 범위와
         // 할 일 판정에서 이어 맡은 감독이 빠졌다(PR #99 검수 2). 원장의 owner 원문은 바꾸지 않는다.
-        cards = readCards(); works = readWorks().map(w => ({ ...w, owner: effectiveWorkOwner(w, entries) }));
+        cards = readCards(); works = readWorks().map(w => withEffectiveOwner(w, entries));
         entries = taskIdentity(cards).project(entries).filter(e=>!taskConnectionError(e));
         scope = buildWatchScope(cards, entries, parents, works);
         supervisorScope = buildSupervisorScope(cards, entries, parents, works);
@@ -294,7 +294,7 @@ export async function runWatch({
         try {
           const currentCards=readCards();
           const currentEntries=taskIdentity(currentCards).project(readEntries()).filter(e=>!taskConnectionError(e));
-          const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks().map(w=>({...w,owner:effectiveWorkOwner(w,currentEntries)})));
+          const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks().map(w=>withEffectiveOwner(w,currentEntries)));
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
           const lastInput=list=>list.findLast(e=>e.kind==='send'&&e.transport!=='mailbox'&&e.role===seen.role);
@@ -312,7 +312,7 @@ export async function runWatch({
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
           const currentEntries=readEntries();
-          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks().map(w=>({...w,owner:effectiveWorkOwner(w,currentEntries)})));
+          const currentScope=buildWatchScope(readCards(),currentEntries,parents,readWorks().map(w=>withEffectiveOwner(w,currentEntries)));
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
           const current=collectRoles(floor,currentEntries,new Set([session])).observations.get(session);

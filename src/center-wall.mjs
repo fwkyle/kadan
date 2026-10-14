@@ -9,6 +9,7 @@ import {watchOverviewStyle} from './watch-overview-wall.mjs';
 import {buildHumanBrief} from './human-brief.mjs';
 import {renderDashboardWorkspace,renderWorkspaceDetail} from './dashboard-workspace.mjs';
 import {readActiveHierarchy} from './hierarchy-register.mjs';
+import {nearestSuper,superProfiles} from './super-role.mjs';
 import {dashboardWorkspaceStyle,dashboardMobileStyle} from './dashboard-workspace-style.mjs';
 import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
 import {dashboardStyle} from './dashboard-home.mjs';
@@ -144,13 +145,11 @@ export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta
 }
 
 // 대시보드 '슈퍼감독에게 묻기'(2026-10-07 [kyle]). 받는 사람은 서버가 관계표에서 정한다 — 유닛에서 직속 상위를 따라
-// 올라가 사용자(@user) 바로 아래 역할(슈퍼감독). 사슬이 없으면(관계표 밖) 비서. 요청이 받는 사람을 고르게 두면
+// 올라가 처음 만나는 슈퍼감독(프로필 기준, super-role.mjs). 사슬이 없으면(관계표 밖) 비서. 요청이 받는 사람을 고르게 두면
 // "아무 창에나 글을 붙이는" 통로가 되므로 받지 않는다. 관계표를 못 읽으면 추측하지 않고 거부한다.
-export function askRecipient(unit, table) {
+export function askRecipient(unit, table, profiles = null) {
  if(!table)throw new Error('관계표를 읽을 수 없어 받는 사람을 확인하지 못했다');
- let role=unit;
- for(let i=0;i<64&&role;i++){const parent=table[role];if(parent==='@user')return role;if(parent==null)break;role=parent;}
- return '비서';
+ return nearestSuper(unit,table,profiles)??'비서';
 }
 // 질문은 사용자 명의(KADAN_ROLE 비움)로 보낸다. 그래야 편지에 붙는 안내가 "사람 우편함으로 최종 답변" 명령을 적어 준다.
 // --raw를 쓰지 않는다 — 그 안내가 답이 돌아오는 길이다.
@@ -189,7 +188,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     if(!/^[\p{L}\p{N}_-]+$/u.test(unit))throw new Error('물을 유닛 이름이 올바르지 않다');
     if(!text)throw new Error('물어볼 내용을 적어 주세요');
     if(text.length>4000||context.length>2000)throw new Error('질문이 너무 길다(본문 4000자·유닛 정보 2000자 이하)');
-    const to=askRecipient(unit,hierarchy());
+    let profiles=null;try{profiles=superProfiles(readLedger(home));}catch{}
+    const to=askRecipient(unit,hierarchy(),profiles);
     saved('/#strategy-map',await ask({to,message:askMessage({unit,text,context})}));return true;
    }
    if(url.pathname==='/decisions/answer') {
@@ -229,6 +229,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      const fields={};
      for(const field of ['title','goal','scope','acceptance','owner','board','progress','nextAction','turnOwner','status','execution','phase','round','body','mail','result'])if(f[field]!==undefined)fields[field]=f[field];
      if(action==='update'&&fields.turnOwner===works.get(f.key.slice(5)).turnOwner)delete fields.turnOwner;
+     // 폼은 책임 감독을 매번 다시 보낸다. 값이 그대로면 명시 재지정이 아니다.
+     if(action==='update'&&fields.owner===works.get(f.key.slice(5)).owner)delete fields.owner;
      work=works.change(f.key.slice(5),action,fields,{revision:f.revision,by:'사람',note:f.note});
     }
     saved(`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1#detail`,{key:'work:'+work.key,revision:work.revision});return true;

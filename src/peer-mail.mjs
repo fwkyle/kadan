@@ -1,14 +1,15 @@
 import { mailboxLetters } from './mailbox-state.mjs';
 import { effectiveCardRole, effectiveWorkOwner } from './handover-state.mjs';
 import { isDescendant } from './hierarchy.mjs';
+import { isSuperRole, superProfiles } from './super-role.mjs';
 
-// 이름 접두사·cwd로 책임을 추측하지 않는다. 명시된 슈퍼 프로필 또는 사용자 직속 관계를 쓴다.
+// 이름 접두사·cwd로 책임을 추측하지 않는다. start에 기록된 슈퍼 프로필을 쓰고, 프로필 기록이 없는 옛 역할만 사용자 직속 관계를 쓴다.
 export function isPeerSuperMail(entries, parents, from, to) {
   if (!from || !to || from === to || ['사람', '@user', 'watch', '비서'].includes(from)
     || ['사람', '@user', 'watch', '비서'].includes(to)) return false;
   const table = parents instanceof Map ? parents : new Map(Object.entries(parents ?? {}));
-  const isSuper = role => table.has(role) ? table.get(role) === '@user'
-    : entries.findLast(e => e.kind === 'start' && e.role === role)?.roleProfile === 'super';
+  const profiles = superProfiles(entries);
+  const isSuper = role => isSuperRole(role, table, profiles);
   return isSuper(from) && isSuper(to);
 }
 

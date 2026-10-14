@@ -149,3 +149,41 @@ export function registerRoleManually({ role, parent, home = ledgerHome(), entrie
   if (found.error) return { registered: false, reason: found.error };
   return addLine(found.hierarchyPath, role, parent, lockWaitMs);
 }
+
+// 같은 이름을 새 대화가 다시 쓰는 start(세대 경계)에서 그 역할 자신의 상위 줄만 이번 start의 상위로 바꾼다.
+// 이전에는 이미 있는 이름이면 옛 상위 줄을 그대로 물려받았다(2026-10-14). 이 이름을 상위로 가리키는 하위 줄은 건드리지 않고
+// 개수만 알린다(끝난 역할은 `kadan hierarchy prune`). 검증·잠금·원자적 쓰기는 addLine과 같다. 표에 없는 이름은 건드리지 않는다.
+// parent가 null이면(만든 쪽을 모름) 바꾸지 않는다. isAlive(role)는 하위 중 살아 있는 수를 세는 데만 쓴다.
+export function reparentStartedRole({ role, parent, home = ledgerHome(), entries = null, isAlive = () => false, lockWaitMs } = {}) {
+  if (!role) return { changed: false, reason: "역할 없음" };
+  const found = hierarchyPathFor(home, entries);
+  if (found.error) return { changed: false, reason: found.error };
+  const { hierarchyPath } = found;
+  return withLock(hierarchyPath, () => {
+    let table;
+    try { table = readTable(hierarchyPath); }
+    catch (error) { return { changed: false, reason: `관계표를 읽지 못함: ${error.message}`, hierarchyPath }; }
+    if (!Object.hasOwn(table, role)) return { changed: false, reason: "관계표에 없음", hierarchyPath };
+    const from = table[role];
+    const children = Object.entries(table).filter(([, value]) => value === role).map(([child]) => child);
+    const kids = { children: children.length, aliveChildren: children.filter(child => isAlive(child)).length };
+    if (parent == null) return { changed: false, reason: "만든 쪽을 모름", from, ...kids, hierarchyPath };
+    if (from === parent) return { changed: false, same: true, from, hierarchyPath };
+    if (parent === role) return { changed: false, reason: "자기 자신은 상위가 될 수 없음", from, hierarchyPath };
+    if (parent !== USER_RECIPIENT && !Object.hasOwn(table, parent)) {
+      return { changed: false, reason: `상위 ${parent}가 관계표에 없음`, from, ...kids, hierarchyPath };
+    }
+    const next = { ...table, [role]: parent };
+    try { parseHierarchy(next); }
+    catch (error) { return { changed: false, reason: `바꾸면 관계가 깨짐: ${error.message}`, from, ...kids, hierarchyPath }; }
+    const temporaryPath = `${hierarchyPath}.register-${process.pid}`;
+    try {
+      fs.writeFileSync(temporaryPath, `${JSON.stringify(next, null, 2)}\n`);
+      fs.renameSync(temporaryPath, hierarchyPath);
+    } catch (error) {
+      try { fs.unlinkSync(temporaryPath); } catch {}
+      return { changed: false, reason: `관계표를 쓰지 못함: ${error.message}`, from, ...kids, hierarchyPath };
+    }
+    return { changed: true, from, to: parent, ...kids, hierarchyPath };
+  }, lockWaitMs);
+}

@@ -19,10 +19,13 @@
 | `KADAN_HOME` | 원장·카드·설정이 사는 폴더. 기본 `~/.kadan` (옛 이름 `KADAN_LITE_HOME`도 읽음) |
 | `KADAN_FLOOR` | 에이전트가 사는 바닥. `tmux`(기본) 또는 `rottie`. 시험 기능 `herdr`는 별도 `KADAN_HOME`으로 명시 선택하며, 실행 중 전환·자동 폴백 없음 |
 | `KADAN_HERDR_SOCKET` | herdr 시험 기능의 named server 절대 소켓 경로. `KADAN_HOME`과 함께 필수. 서버 자동 기동·훅 설치 없음. [실행 방법](experiments/herdr-roundtrip.md) |
-| `KADAN_WINDOW` | tmux 바닥에서 시작할 때 여는 창. `none`(기본) · `rottie` · `orca` |
-| `KADAN_ROTTIE_BIN` | `KADAN_WINDOW=rottie`일 때 말 걸 로티 CLI의 절대경로 |
+| `KADAN_WINDOW` | tmux 바닥에서 시작할 때 여는 창. `none`(기본) · `rottie` · `orca`. 있으면 기계 설정(`kadan window`)보다 먼저다 |
+| `KADAN_ROTTIE_BIN` | `KADAN_WINDOW=rottie`일 때 말 걸 로티 CLI의 절대경로. 있으면 기계 설정의 경로보다 먼저다 |
+
 | `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`) |
 | `KADAN_ROLE` | 카단 세션 안에서 자동으로 붙는 자기 역할. 원장의 `by`가 된다 |
+
+창 선택의 읽는 순서는 **환경변수 > 기계 설정(`$KADAN_HOME/window-setting.json`) > 기본 `none`** 이다. 값이 하나로 정해지는 우선순위이며 실패하면 다른 창으로 넘어가는 폴백이 아니다. 로그인 자동 시작과 대시보드의 '비서 켜기'는 `KADAN_WINDOW=none`을 명시하므로 설정이 `rottie`여도 창 없이 뜬다. `KADAN_WINDOW=""`처럼 빈 문자열은 미지정으로 보고 설정이 채워진다. **설정 파일이 손상**(깨진 JSON·잘못된 창 값·상대 로티 경로)이면 창을 여는 명령(`start`·`attach`·`handover`·`adopt`·`up`·`restore`)은 역할·창을 만들기 전에 `WINDOW_SETTING_CORRUPT`와 복구 명령을 알리고 종료 코드 2로 멈춘다. 다른 창으로 넘어가지 않는다. 단 `KADAN_WINDOW`가 비어 있지 않게 주어지면 그 값이 창을 정하므로 막지 않는다(`KADAN_WINDOW=rottie`인데 `KADAN_ROTTIE_BIN` 환경변수가 없어 설정의 경로가 필요할 때는 멈춘다). `send`·`status`·`read`·`watch`·대시보드처럼 창과 무관한 명령은 경고만 하고 진행한다. 복구는 `kadan window unset`(손상 파일도 지운다) 또는 `kadan window set ...`.
 
 ## 처음 준비
 
@@ -30,13 +33,14 @@
 |---|---|---|
 | `kadan init` | 환경 확인, 스킬 링크, 실행기 선택. 처음 한 번 | `--runner codex\|claude`, `--no-skills` |
 | `kadan up` | 비서 세션과 대시보드 세션을 띄운다. 살아 있으면 그대로 쓰며, 이전 Codex 비서는 저장된 대화로 복원한다. tmux에서는 데이터 폴더에 기본 감시 프로필(`watch-profile.json`)이 있고 감시 프로세스가 없을 때 감시기도 세션 `kadan-watch`에 띄운다(재부팅 뒤 자동 시작에서 감시기가 빠지지 않게, 2026-10-13) | `--cmd <실행기 명령>`, `--port 8790`, `--hidden`, `--no-prompt` |
+| `kadan window show\|set rottie [--rottie-bin <절대경로>]\|set none\|unset` | 창 선택(로티/백그라운드)을 이 기계의 `KADAN_HOME`에 고정한다. 환경변수를 못 물려받은 AI 셸도 같은 값을 읽는다. `rottie`에는 로티 실행 파일의 절대경로가 필요하다(`--rottie-bin` 또는 환경변수 `KADAN_ROTTIE_BIN`). 설정이 없고 켜진 로티가 보이면 `start`가 stderr로 고정 명령을 안내하지만 자동으로 고르지 않고 시작도 막지 않는다. 설정 파일은 자동으로 고쳐 쓰지 않는다 | `--rottie-bin` |
 | `kadan autostart show\|status\|install\|remove` | macOS에서 로그인할 때 `kadan up --hidden`을 창 없이(`KADAN_WINDOW=none`, 로그인 직후엔 로티가 없으므로) 한 번 실행하는 LaunchAgent(`~/Library/LaunchAgents/dev.kadan.up.plist`)를 관리한다. 죽었다고 되살리지 않는다(KeepAlive 없음). `show`는 만들 파일만 보여 주고, `install`은 없을 때만 쓰며, `remove`는 지우지 않고 `<데이터 폴더>/.trash/`로 옮긴다. 설치 때의 PATH·`KADAN_*` 환경과 현재 폴더를 적어 둔다 | — |
 
 ## 역할(세션) 다루기
 
 | 명령 | 하는 일 | 자주 쓰는 옵션 |
 |---|---|---|
-| `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden`, `--parent <상위\|@user>`(만든 역할 대신 이 상위로 관계표에 등록), `--inherit-mail`(예전에 쓴 이름이면 바로 앞 세대 하나의 미확인 우편을 이어받음. 같은 대화를 `--resume`으로 다시 여는 명령이면 자동으로 이어감, `--fork-session`·새 대화는 끊음). 새 이름이 `<레포>-`로 시작하지 않으면 경고, 예전 이름이면 이전 세대 우편을 넘겨받지 않았다고 알림([이름 규칙·세대](hierarchy.md#역할-이름-규칙과-같은-이름-재사용-2026-10-13)) |
+| `kadan start <역할>` | 바닥에 세션을 만들고 창을 연다. 이미 살아 있으면 창만 다시 연다 | `--profile worker\|reviewer\|conductor\|super\|secretary`, `--cmd <명령> --reason <이유>`, `--fallback N --reason <이유>`, `--hidden`, `--parent <상위\|@user>`(만든 역할 대신 이 상위로 관계표에 등록. `--profile super`는 없으면 `@user`. 예전에 쓴 이름을 새 대화로 다시 쓰면 관계표의 자기 상위 줄을 이번 상위로 바꾼다), `--inherit-mail`(예전에 쓴 이름이면 바로 앞 세대 하나의 미확인 우편과 업무·카드 책임을 이어받음. 같은 대화를 `--resume`으로 다시 여는 명령이면 자동으로 이어감, `--fork-session`·새 대화는 끊음). 새 이름이 `<레포>-`로 시작하지 않으면 경고, 예전 이름이면 이전 세대 우편을 넘겨받지 않았다고 알림([이름 규칙·세대](hierarchy.md#역할-이름-규칙과-같은-이름-재사용-2026-10-13)) |
 | `kadan mail <역할> <메시지>` | 우편 전용. 실행 주소를 연결해도 발령으로 바뀌지 않는다. `--task`는 거절 | `--work`·`--execution`(연결 주소), `--mailbox`, `--expect-reply`, `--reply-to <우편ID>`, `--reply-final`, `--raw` |
 | `kadan dispatch <역할> --task <카드ID> <지시>` | 카드 발령 전용. 카드 필수, 기존 배정·범위·수신자·실행기 검사 유지. 질문·답장·저장 우편은 거절 | `--work`, `--execution`(같은 카드 확인), `--allow-old-runner <이유>`, `--raw` |
 | `kadan send <역할> <메시지>` | 기존 호환 명령. `--task` 또는 수신자의 배정 카드를 가리키는 `--execution`으로 발령 가능 | 기존 옵션 유지. 새 호출은 우편 `mail`, 발령 `dispatch` 권장 |

@@ -33,7 +33,7 @@ export function bandChips(input: BandInput): Chip[] {
   ];
 }
 
-// 슈퍼감독 한 줄(관계표에서 상위가 @user인 역할). 서버(dashboard-band.mjs supervisorSummary)가 센 값을 그대로 적는다.
+// 슈퍼감독 한 줄(start를 --profile super로 시작한 역할). 서버(dashboard-band.mjs supervisorSummary)가 센 값을 그대로 적는다.
 export type SupervisorSummary = {
   super: string; repos: string[]; running: number; stuck: number; openWorks: number;
   decisions: number | null; alerts: number | null; lastSignal: string | null; alive: boolean | null; model: string | null;
