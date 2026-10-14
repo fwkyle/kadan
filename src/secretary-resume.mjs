@@ -8,6 +8,7 @@ import {readSystemLedger, appendLedger} from './ledger.mjs';
 import {commandWords} from './ai-identity.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {currentRottieWindow} from './restore.mjs';
+import {descendantPids, openFilesOf} from './process-tree.mjs';
 
 export const startDigest = entry => createHash('sha256').update(JSON.stringify(entry)).digest('hex');
 const quote = word => `'${String(word).replace(/'/g, "'\\''")}'`;
@@ -55,7 +56,8 @@ function secretaryStart(entries) {
   const events = entries.filter(e => e.session === 'kadan-비서');
   const index = events.findLastIndex(e => e.kind === 'start');
   if (index < 0) return null;
-  if (events.slice(index + 1).some(e => e.kind === 'stop')) {
+  // restart가 남긴 stop(restart:true)은 사용자가 직접 끈 것이 아니다 — 바로 이어서 같은 대화를 다시 연다.
+  if (events.slice(index + 1).some(e => e.kind === 'stop' && e.restart !== true)) {
     throw new Error('직접 종료한 비서는 자동으로 복원하지 않습니다.');
   }
   return events[index];
@@ -76,21 +78,10 @@ export function transcriptIdentity(file) {
 
 // Only files held by this exact live pane's process tree are candidates. Never use "latest".
 export function liveSecretaryTranscript(panePid, run = spawnSync) {
-  const ps = run('ps', ['-axo', 'pid=,ppid='], {encoding: 'utf8', timeout: 2000});
-  if (ps.status !== 0) throw new Error('비서 프로세스 조회 실패');
-  const rows = ps.stdout.trim().split('\n').map(line => line.trim().split(/\s+/));
-  const pids = new Set([String(panePid)]);
-  for (let i = 0; i < rows.length; i++) {
-    let changed = false;
-    for (const [pid, parent] of rows) {
-      if (pids.has(parent) && !pids.has(pid)) { pids.add(pid); changed = true; }
-    }
-    if (!changed) break;
-  }
-  const result = run('lsof', ['-p', [...pids].join(','), '-Fn'], {encoding: 'utf8', timeout: 3000});
-  if (result.status !== 0) throw new Error('비서 대화 파일 조회 실패');
-  const files = [...new Set(result.stdout.split('\n')
-    .filter(line => /^n.*\/rollout-[^/]+\.jsonl$/.test(line)).map(line => line.slice(1)))];
+  let files;
+  try { files = openFilesOf(descendantPids(panePid, run), run); }
+  catch (error) { throw new Error(error.message.startsWith('프로세스') ? '비서 프로세스 조회 실패' : '비서 대화 파일 조회 실패'); }
+  files = files.filter(file => /\/rollout-[^/]+\.jsonl$/.test(file));
   if (files.length !== 1) throw new Error('비서 대화 파일을 하나로 확인하지 못했습니다.');
   return files[0];
 }
@@ -204,7 +195,7 @@ export function resumedSecretaryStart(context, entries, command) {
   if (index < 0) return null;
   let previous = events[index], resumed = false;
   for (const event of events.slice(index + 1)) {
-    if (event.kind === 'stop') return null;
+    if (event.kind === 'stop') { if (event.restart === true) continue; return null; }
     if (event.kind !== 'start') continue;
     if (event.secretaryResumeSource !== startDigest(previous) || event.cwd !== context.cwd
       || event.role !== context.role) return null;

@@ -11,8 +11,8 @@
 //    현재 pane PID와 같은 기록의 cmd를 읽는다. 이전 세대의 신원은 소급하지 않는다.
 // 둘 다 실패하면 닫힌다 — 붙여넣기·Enter·send 원장 기록 모두 없다.
 
-// 카드 발령을 받을 수 있는 실행기 — agent-runners.json의 등록 실행기와 같다.
-export const AI_HARNESS_NAMES = new Set(["codex", "omo", "claude", "devin"]);
+// 카드 발령을 받을 수 있는 실행기 — agent-runners.json의 등록 실행기와 같다. agy는 2026-10-14 [kyle]이 정식 등록했다.
+export const AI_HARNESS_NAMES = new Set(["codex", "omo", "claude", "devin", "agy"]);
 
 // 단일 셸 명령만 허용한다. 인용 문자열은 한 인자로 유지하고 셸 연산/확장은 거부한다.
 export function commandWords(command) {
@@ -119,7 +119,7 @@ export function inspectCardSendIdentity({ entries, session, currentPid } = {}) {
       reason: "not-ai",
       harness: parsed.harness,
       message:
-        `카드 전송 불가: ${session}의 시작 명령은 등록 AI 실행기(codex·omo·claude·devin)가 ` +
+        `카드 전송 불가: ${session}의 시작 명령은 등록 AI 실행기(codex·omo·claude·devin·agy)가 ` +
         `아니다: ${launch.cmd.slice(0, 80)}`,
     };
   }

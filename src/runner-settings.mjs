@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {TABLE_KEYS, checkConversationSpec, resumeTail} from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
@@ -173,7 +174,9 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
   for (const r of source.runners ?? []) {
     const name = r?.id ?? r?.name;
     if (typeof name !== 'string' || typeof r.spawn !== 'string') continue;
-    runners[name === 'claude-code' ? 'claude' : name] = {spawn: r.spawn, ...(name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
+    const spec = {spawn: r.spawn, ...(name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
+    applyTable(spec, Object.fromEntries([...TABLE_KEYS, 'conversation'].filter(key => r[key] != null).map(key => [key, r[key]])));
+    runners[name === 'claude-code' ? 'claude' : name] = spec;
   }
   if (!runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
   const value = {version: 1, revision: 1, activePreset: 'B', presets: {B: {label: '값싼 병렬판', roles: {}}}, runners, families: DEFAULT_FAMILIES, blocked: []};
@@ -198,12 +201,34 @@ function change(home, {revision, by, reason, record, action}, apply) {
 }
 
 // 실행기 명령 틀. codex처럼 모델 목록 파일을 쓰는 실행기는 catalog를 유지한다.
-export function setRunner(home, {runner, spawn, ...meta}) {
+// table은 spawn 옆 선택 칸(resume·fork·exec·version·update 틀과 conversation 찾는 법)이다. 값이 null이면 그 칸을 비운다.
+// spawn을 안 주면 이미 있는 실행기의 칸만 고친다. 칸이 없으면 그 기능은 미지원이고 옛 설정은 그대로 읽힌다.
+const TABLE_PLACEHOLDERS = /\{(model|effort|conversation|prompt|cwd)\}/g;
+function applyTable(spec, table) {
+  for (const [key, value] of Object.entries(table ?? {})) {
+    if (key === 'conversation') {
+      if (value === null) delete spec.conversation; else spec.conversation = checkConversationSpec(value);
+    } else if (TABLE_KEYS.includes(key)) {
+      if (value === null) { delete spec[key]; continue; }
+      if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} 틀은 글이어야 한다`);
+      const unknown = value.replace(TABLE_PLACEHOLDERS, '').match(/\{[^}]*\}/);
+      if (unknown) throw new Error(`${key} 틀에 모르는 자리가 있다: ${unknown[0]}`);
+      spec[key] = value;
+    } else throw new Error(`알 수 없는 칸: ${key} — 가능: ${[...TABLE_KEYS, 'conversation'].join('|')}`);
+  }
+  if (spec.resume && !spec.resume.includes('{conversation}')) throw new Error('resume 틀에는 {conversation}이 있어야 한다');
+  if (spec.fork && !spec.fork.includes('{conversation}')) throw new Error('fork 틀에는 {conversation}이 있어야 한다');
+  for (const key of ['resume', 'fork']) if (spec[key]) resumeTail({runners: {x: spec}}, 'x', key);
+}
+
+export function setRunner(home, {runner, spawn, table, ...meta}) {
   if (typeof runner !== 'string' || !VALUE.test(runner)) throw new Error('실행기 이름 필요');
-  if (typeof spawn !== 'string' || !spawn.includes('{model}')) throw new Error('실행기 틀에는 {model}이 있어야 한다 (--spawn)');
   return change(home, {...meta, action: 'runner'}, next => {
     const before = next.runners[runner] ?? null;
-    next.runners[runner] = {...(before ?? {models: []}), spawn};
+    const nextSpawn = spawn ?? before?.spawn;
+    if (typeof nextSpawn !== 'string' || !nextSpawn.includes('{model}')) throw new Error('실행기 틀에는 {model}이 있어야 한다 (--spawn)');
+    next.runners[runner] = {...(before ?? {models: []}), spawn: nextSpawn};
+    applyTable(next.runners[runner], table);
     return {runner, before, after: next.runners[runner]};
   });
 }

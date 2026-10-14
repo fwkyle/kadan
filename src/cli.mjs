@@ -71,6 +71,7 @@ import { cmdWait } from "./commands/wait.mjs";
 import { sendWatchMessage, cmdWatch } from "./commands/watch.mjs";
 import { cmdStop } from "./commands/stop.mjs";
 import { cmdRestore } from "./commands/restore.mjs";
+import { cmdRestart } from "./commands/restart.mjs";
 import { cmdWindow } from "./commands/window.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
 import { adoptMachineWindow } from "./window-setting.mjs";
@@ -237,6 +238,7 @@ const COMMANDS = {
   log: cmdLog,
   attach: cmdAttach,
   restore: cmdRestore,
+  restart: cmdRestart,
   window: cmdWindow,
   notify: cmdNotify,
   recovery: recoveryCommand,
@@ -249,7 +251,7 @@ export function main(argv) {
     console.error(
       "사용법: kadan <init|up|adopt|autostart|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
         "stop|status|tree|wall|dashboard|" +
-        "read|log|attach|restore|window|notify|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
+        "read|log|attach|restore|restart|window|notify|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
@@ -258,7 +260,7 @@ export function main(argv) {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
     if(
-      ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore'].includes(command)||
+      ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])
