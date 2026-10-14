@@ -274,3 +274,59 @@ test('watch @user 전달: 디스코드 실패 + 시스템 성공이면 전달, �
     w.stop();
   }
 });
+
+test('레포별 채널: 설정 있음→그 웹훅, 없음·레포 모름→기본 웹훅, 사용자 ID는 기본 파일 값', async () => {
+  const base = await world(), other = await world();
+  try {
+    fs.writeFileSync(other.envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:${other.port}/api/webhooks/222/${TOKEN}\n`); // 사용자 ID 없음
+    setNotifySetting(base.home, {envFile: base.envFile});
+    setNotifySetting(base.home, {repo: 'other', envFile: other.envFile});
+    assert.ok(!JSON.stringify(readNotifySetting(base.home)).match(/https?:|webhooks|DISCORD_/i));
+    const env = {KADAN_NOTIFY: ''};
+    const send = (opts, text = '경보') => notifyUser(text, base.fakeSpawn(), {home: base.home, env, ...opts});
+    const asDecision = userId => ({content: `<@${userId}> 결정`, mention: true});
+    assert.equal(send({repo: 'other', discord: asDecision}).via, 'discord');
+    assert.equal(other.requests().length, 1); assert.equal(base.requests().length, 0);
+    assert.deepEqual(JSON.parse(other.requests()[0].body).allowed_mentions, {users: [USER_ID]});
+    assert.equal(send({repo: 'kadan'}).via, 'discord'); // 레포별 설정 없는 레포
+    assert.equal(send({}).via, 'discord');              // 레포 모름
+    assert.equal(base.requests().length, 2); assert.equal(other.requests().length, 1);
+    assert.equal(base.osCalls.length, 0);
+  } finally { base.stop(); other.stop(); }
+});
+
+test('레포별 비밀 파일 오류는 기본 웹훅으로 새지 않고 시스템 알림으로 내려간다', async () => {
+  const base = await world();
+  try {
+    setNotifySetting(base.home, {envFile: base.envFile});
+    setNotifySetting(base.home, {repo: 'other', envFile: path.join(base.dir, 'missing.env')});
+    const r = notifyUser('경보', base.fakeSpawn(), {home: base.home, env: {KADAN_NOTIFY: ''}, repo: 'other'});
+    assert.equal(r.via, 'system'); assert.equal(r.discord.outcome, 'config-error');
+    assert.equal(base.requests().length, 0); assert.equal(base.osCalls.length, 1);
+  } finally { base.stop(); }
+});
+
+test('중복 막기 키는 레포·웹훅이 달라도 같은 알림이면 한 번이다', async () => {
+  const base = await world(), other = await world();
+  try {
+    setNotifySetting(base.home, {envFile: base.envFile});
+    setNotifySetting(base.home, {repo: 'other', envFile: other.envFile});
+    const o = {home: base.home, env: {KADAN_NOTIFY: ''}, key: 'decision:x:request'};
+    assert.equal(notifyUser('a', base.fakeSpawn(), {...o, repo: 'other'}).via, 'discord');
+    assert.equal(notifyUser('a', base.fakeSpawn(), o).duplicate, true);
+    assert.equal(base.requests().length + other.requests().length, 1);
+  } finally { base.stop(); other.stop(); }
+});
+
+test('kadan notify --repo 설정·해제는 기본 설정을 건드리지 않는다', async () => {
+  const {cmdNotify} = await import('../src/commands/notify.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-repo-')), out = [];
+  const run = (argv, flags) => cmdNotify(argv, flags, {home, env: {}, print: l => out.push(l)});
+  run(['set', 'discord'], {'env-file': '/abs/a.env'});
+  run(['set', 'discord'], {repo: 'kadan', 'env-file': '/abs/b.env'});
+  assert.equal(readNotifySetting(home).discord.envFile, '/abs/a.env');
+  assert.equal(readNotifySetting(home).repos.kadan.envFile, '/abs/b.env');
+  run(['unset'], {repo: 'kadan'});
+  assert.equal(readNotifySetting(home).discord.envFile, '/abs/a.env');
+  assert.equal(readNotifySetting(home).repos, undefined);
+});

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {ledgerHome} from './ledger.mjs';
-import {effectiveNotifyEnvFile, readDiscordSecrets} from './notify-setting.mjs';
+import {resolveNotifyTarget, readDiscordSecrets} from './notify-setting.mjs';
 
 export const DISCORD_LIMIT = 2000;
 export const NOTIFY_LOG_FILE = 'notify-log.jsonl';
@@ -56,8 +56,12 @@ function alreadySent(home, key, windowMs, nowMs) {
     && (!windowMs || nowMs - Date.parse(e.at) < windowMs));
 }
 
-function sendToDiscord({webhook, userId, content, mention}) {
-  const payload = {content, allowed_mentions: mention ? {users: [userId]} : {parse: []}};
+// 디스코드 웹훅 요청이 나가는 유일한 함수. 이어서 붙일 기능(thread_id로 기존 스레드에 보내기, ?wait=true 응답의
+// 메시지 ID를 받아 PATCH로 수정)을 위해 인자·반환을 열어 둔다. 1단계는 둘 다 만들지 않는다 — 받은 값은 무시하고,
+// 반환은 {outcome, attempts, status, reason}이며 나중에 messageId를 더할 수 있다.
+export function postDiscordWebhook({webhook, content, allowedMentions, ...future}) {
+  void future; // threadId, wait, editMessageId 자리
+  const payload = {content, allowed_mentions: allowedMentions};
   const child = spawnSync(process.execPath, [SENDER], {
     input: JSON.stringify({webhook, payload}), encoding: 'utf8', timeout: CHILD_TIMEOUT_MS, maxBuffer: 1 << 16,
   });
@@ -68,8 +72,18 @@ function sendToDiscord({webhook, userId, content, mention}) {
   try { return JSON.parse(child.stdout.trim().split('\n').at(-1)); } catch { return {outcome: 'uncertain', attempts: null, reason: '전송 결과 해석 실패'}; }
 }
 
+// 레포별 비밀 파일에 사용자 ID가 없으면 기본 비밀 파일의 값을 쓴다.
+function resolveSecrets(target) {
+  if (!target.envFile) return {};
+  const own = readDiscordSecrets(target.envFile, {optionalUser: target.source === 'repo'});
+  if (own.error || own.userId || target.source !== 'repo') return own;
+  if (!target.fallbackEnvFile) return {error: '설정 오류: 레포 비밀 파일에 DISCORD_USER_ID가 없고 기본 비밀 파일도 없다'};
+  const base = readDiscordSecrets(target.fallbackEnvFile);
+  return base.error ? {error: `설정 오류: 레포 비밀 파일에 DISCORD_USER_ID가 없고 기본 비밀 파일을 쓸 수 없다`} : {webhook: own.webhook, userId: base.userId};
+}
+
 // message: 시스템 알림에 쓰는 짧은 문구. discord: {content, mention} 또는 (사용자ID)=>{content, mention}을 주면 디스코드에는 그 본문을 쓴다.
-// opts: {kind, key, dedupWindowMs, home, env, discord:{content,mention}}
+// opts: {kind, key, repo, dedupWindowMs, home, env, discord}. repo는 카드·업무·실행 키의 저장소 앞부분(모르면 생략 → 기본 웹훅).
 // 반환: {via:'discord'|'system', error, duplicate?, discord:{outcome,reason}|null}
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
@@ -79,10 +93,10 @@ export function notifyUser(message, spawn, opts = {}) {
   if (env.KADAN_NOTIFY !== 'off') {
     try {
       home = opts.home ?? ledgerHome();
-      const cfg = effectiveNotifyEnvFile(env, home);
+      const cfg = resolveNotifyTarget(env, home, opts.repo);
       if (cfg.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(cfg.error)};
       else if (cfg.envFile) {
-        const sec = readDiscordSecrets(cfg.envFile);
+        const sec = resolveSecrets(cfg);
         if (sec.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(sec.error)};
         else {
           secrets = [sec.webhook, sec.userId];
@@ -90,7 +104,8 @@ export function notifyUser(message, spawn, opts = {}) {
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
           const d = (typeof opts.discord === 'function' ? opts.discord(sec.userId) : opts.discord) ?? {content: fitDiscord(message), mention: false};
-          const sent = sendToDiscord({webhook: sec.webhook, userId: sec.userId, content: d.content, mention: d.mention === true});
+          const sent = postDiscordWebhook({webhook: sec.webhook, content: d.content,
+            allowedMentions: d.mention === true ? {users: [sec.userId]} : {parse: []}});
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (sent.outcome === 'sent') result.via = 'discord';
         }
@@ -99,7 +114,7 @@ export function notifyUser(message, spawn, opts = {}) {
       result.discord = {outcome: 'config-error', reason: scrubSecrets(error.message, secrets)};
     }
     if (home && result.discord) {
-      appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null,
+      appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, repo: opts.repo ?? undefined,
         via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined, status: result.discord.status ?? undefined});
     }
   }

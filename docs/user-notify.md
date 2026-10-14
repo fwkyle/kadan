@@ -36,6 +36,15 @@ kadan notify unset
 - `KADAN_NOTIFY=off`는 디스코드를 보내지 않고, 결정 알림은 시스템 알림도 띄우지 않는다. 시험은 이 값을 켠 채 돈다(`tests/helpers/isolated-home.mjs`).
 - 참고: Node는 `--env-file` 인자를 스스로 가로채 그 파일을 읽는다(없으면 `node: <경로>: not found`로 멈춘다). `kadan notify set discord --env-file`에서도 같아서, 이 명령이 도는 동안에만 그 파일의 변수가 프로세스 환경에 올라간다. 설정에는 경로만 저장된다.
 
+### 레포별 채널
+
+```
+kadan notify set discord --repo <레포> --env-file <그 채널의 비밀 파일 절대경로>
+kadan notify unset --repo <레포>
+```
+
+알림마다 저장소를 알아낸다(결정은 카드 키, 우편은 `--execution`/`--work` 키, 경보는 카드 주소가 `저장소/카드` 꼴일 때). 설정에 그 저장소가 있으면 그 파일의 웹훅으로 보내고, 없거나 저장소를 모르면 기본 웹훅이다. 지금은 기본 설정만으로 모든 알림이 동작하고 레포별 설정은 비어 있는 것이 정상이다. 레포별 파일의 `DISCORD_USER_ID`가 없으면 기본 파일 값을 쓴다. 레포별 파일이 오류(없음·값 빠짐)이면 기본 웹훅으로 내려가지 않고 시스템 알림으로 간다 — 다른 채널로 새는 것보다 맥 알림이 낫다고 본 작업자 판단이다. 중복 막기 키는 웹훅과 무관하다. 요청이 나가는 곳은 `postDiscordWebhook` 한 함수이며, 이어서 붙일 스레드 보내기(`thread_id`)·메시지 수정(`?wait=true`의 메시지 ID, PATCH)은 아직 없다.
+
 ## 보내는 방식과 시간 상한
 
 호출하는 쪽이 모두 동기라서 동기 API를 유지한다. 전송은 자식 프로세스(`src/discord-send.mjs`)를 `spawnSync`로 띄우고, 부모는 14초에 강제 종료한다.

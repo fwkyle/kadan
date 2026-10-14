@@ -39,6 +39,8 @@ import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
+// 경보의 카드 주소가 저장소/카드 꼴일 때만 레포를 안다. 모르면 기본 웹훅으로 간다.
+const alertRepo = alert => (typeof alert.taskId === "string" && alert.taskId.includes("/") ? alert.taskId.split("/")[0] : undefined);
 import { withEffectiveOwner } from "./handover-state.mjs";
 import { mailboxLetters } from "./mailbox-state.mjs";
 import { shortDigest, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
@@ -119,9 +121,9 @@ export async function runWatch({
   record = timedCall(io.record, record, measure);
   sendAlert = timedCall(io.send, sendAlert, measure);
   const sendToRole = sendAlert;
-  sendAlert = (role, message, key) => {
+  sendAlert = (role, message, key, repo) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
-    const errorText = notifyUser(message, spawn, {kind: "alert", key, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
+    const errorText = notifyUser(message, spawn, {kind: "alert", key, repo, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
     if (errorText) {
       const error = new Error(`사용자 알림 실패: ${errorText}`);
       error.delivery = "not-sent";
@@ -582,7 +584,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`);
+          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`, alertRepo(alert));
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {
@@ -628,7 +630,7 @@ export async function runWatch({
       }
       recordAlert(record, {...alert,route,held}, recipient ?? null, delivered);
       if (!held && recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
-        const notifyError = notifyUser(message, spawn, {kind: "alert", key: `alert:${alert.id}:${alert.level ?? ""}:겹알림`, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
+        const notifyError = notifyUser(message, spawn, {kind: "alert", repo: alertRepo(alert), key: `alert:${alert.id}:${alert.level ?? ""}:겹알림`, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
         if (notifyError) target += `; 사용자 알림 실패(${notifyError})`;
       }
       print(`${message} → ${target}`);
