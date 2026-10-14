@@ -198,7 +198,7 @@ function planDecision(home, decision, content, allowedMentions) {
   return {content: decision.resolvedContent(now), allowedMentions: {parse: []}, resolved: true};
 }
 const READ_FAILED = '최신 상태 확인 실패(요청 그대로 보냄)';
-const noteRead = (r, plan) => (plan.readFailed && r.outcome === 'sent' ? {...r, reason: READ_FAILED} : r);
+const noteRead = (r, plan) => (plan.readFailed ? {...r, readFailed: true} : r);
 
 // 남긴 결정 요청 메시지를 고친다. 돌려주는 값: 결과(고침 성공, 또는 404 아닌 실패라 더 시도하지 않음) 또는 null(못 찾음 → 호출 쪽이 새 메시지).
 // 기록이 없거나, 기록한 길(포럼/기본)이 지금 길과 다르거나, 수정이 404(지워짐·다른 웹훅)면 못 찾은 것이다.
@@ -247,6 +247,13 @@ function route({sec, key}) {
   return sec.repoWebhook && key ? {forum: true, webhook: sec.repoWebhook} : {forum: false, webhook: sec.webhook};
 }
 
+// 디코를 거치지 않은 경로(설정 없음·설정 오류)에서 최신 상태 읽기 실패를 로그에 남기려고 같은 판단(해결 기록 확인 → 읽기)을 한 번 더 한다.
+function decisionReadFailed(home, decision) {
+  if (!decision || decision.edit || typeof decision.latest !== 'function') return false;
+  try { if (home && readDecisions(home)[decision.id]?.resolved) return false; } catch { /* 아래에서 읽기 */ }
+  try { return !decision.latest(); } catch { return true; }
+}
+
 function decisionSystemMessage(home, decision, message) {
   if (!decision || decision.edit || typeof decision.latest !== 'function') return message;
   try { if (home && readDecisions(home)[decision.id]?.resolved) return null; } catch { /* 기록을 못 읽으면 아래 판단으로 */ }
@@ -267,7 +274,7 @@ export function notifyUser(message, spawn, opts = {}) {
   const env = opts.env ?? process.env;
   const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
   const result = {via: 'system', error: null, discord: null};
-  let home = null, secrets = [], warnings = [];
+  let home = null, secrets = [], warnings = [], readFailed = false, judged = false;
   const tagName = opts.tagRepo ?? opts.repo ?? (opts.work?.includes('/') ? opts.work.split('/')[0] : undefined);
   const tag = tagName ? `[${tagName}] ` : '';
   const tagged = text => (tag && !String(text).startsWith(tag) ? tag + text : text);
@@ -301,6 +308,7 @@ export function notifyUser(message, spawn, opts = {}) {
               : decision
                 ? sendDefaultDecision({home, webhook: to.webhook, content: d.content, allowedMentions, deadline, decision})
                 : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions, budgetMs: Math.max(MIN_SEND_MS, deadline - Date.now())});
+          judged = true; readFailed = sent.readFailed === true;
           noteOutage(sent);
           if (sent.statusSync) { noteOutage(sent.statusSync); if (sent.statusSync.outcome !== 'none') logStatus(home, opts.work, sent.statusSync, secrets); }
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
@@ -311,15 +319,17 @@ export function notifyUser(message, spawn, opts = {}) {
     } catch (error) {
       result.discord = {outcome: 'config-error', reason: scrubSecrets(error.message, secrets)};
     }
-    if (home && result.discord) {
+    if (home && !judged) readFailed = decisionReadFailed(home, opts.decision);
+    if (home && (result.discord || readFailed)) {
+      const reason = [result.discord?.reason, readFailed ? READ_FAILED : ''].filter(Boolean).join(' / ');
       appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, work: opts.work ?? undefined,
-        via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined, status: result.discord.status ?? undefined, warning: result.discord.warning});
+        via: result.discord ? 'discord' : 'system', outcome: result.discord?.outcome ?? 'no-discord', reason: reason || undefined, attempts: result.discord?.attempts ?? undefined, status: result.discord?.status ?? undefined, warning: result.discord?.warning});
     }
   }
   if (result.via === 'discord') return result;
   // 시스템 알림도 같은 판단이다: 이미 해결 메시지를 보낸 결정의 요청은 다시 띄우지 않고, 해결됐다고 읽히면 해결 문구로 바꾼다.
   const sysMessage = decisionSystemMessage(home, opts.decision, message);
   if (sysMessage === null) return {...result, via: 'discord', discord: result.discord ?? {outcome: 'resolved-skip', reason: '이미 해결됨'}};
-  result.error = systemNotify(sysMessage, spawn);
+  result.error = systemNotify(tagged(sysMessage), spawn);
   return result;
 }

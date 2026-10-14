@@ -370,3 +370,46 @@ test('F2 ./·../ 경로의 UUID는 보존하고, 카드 키·일반 문장의 UU
     assert.ok(body.includes('kadan/exec-bbbbbbbb ') && body.includes('A/B 선택 bbbbbbbb'));
   } finally { w.stop(); }
 });
+
+// --- 4라운드: 시스템 대체 문구의 [레포], 확인 실패 사유는 디코 결과와 무관하게 로그에 ---
+const sysStore = (w, osText, extraOpts = {}) => new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, (cmd, args) => { osText.push(args[1]); return {status: 0}; },
+  {...o, ...extraOpts, home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')}})});
+const withNotify = fn => { const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY; try { return fn(); } finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; } };
+
+test('S2 시스템 알림이 해결 문구로 바뀌어도 [레포]가 붙고, 근거가 없으면 붙지 않는다', async () => {
+  const w = await world();
+  try {
+    const d = realDecision(w);
+    w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '슈퍼감독');
+    const text = [];
+    withNotify(() => sysStore(w, text).announce('request', d));                       // 카드 키 앞부분 kadan
+    assert.equal(text.length, 1);
+    assert.match(text[0], /\[kadan\] 카단 결정 해결됨 — 취소: 채팅 승인/);
+    // tagRepo 근거가 없는 호출(다른 알림처럼)에서는 해결 문구도 표시 없이
+    const bare = [];
+    withNotify(() => notifyUser('원래 문구', (c, a) => { bare.push(a[1]); return {status: 0}; }, {home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')},
+      decision: {id: d.id, latest: () => w.store.get(d.id), resolvedShort: () => '카단 결정 해결됨 — 취소: x'}}));
+    assert.ok(bare[0].includes('"카단 결정 해결됨') && !bare[0].includes('['));
+  } finally { w.stop(); }
+});
+
+test('S1 최신 상태 확인 실패 사유는 403·설정 오류·시스템 알림 판단에서도 로그에 남는다', async () => {
+  // 403: 디코가 거절해도
+  let w = await world({repoKeys: [], defaultScript: [{status: 403, body: {}}]});
+  try {
+    w.announce('request', NOT_IN_STORE);
+    assert.match(w.log(), /"outcome":"failed".*HTTP 403 \/ 최신 상태 확인 실패/);
+  } finally { w.stop(); }
+  // 설정 오류(비밀 파일 없음) + 시스템 알림 판단
+  w = await world();
+  try {
+    const text = [];
+    withNotify(() => sysStore(w, text).announce('request', NOT_IN_STORE));
+    assert.equal(text.length, 1); assert.match(text[0], /결정 요청/);           // 판단은 그대로: 요청 문구
+    assert.match(w.log(), /config-error.*최신 상태 확인 실패/);
+    // 읽기에 성공하면 사유가 없다
+    const ok = realDecision(w);
+    withNotify(() => sysStore(w, text).announce('request', ok));
+    assert.equal(w.log().split('\n').filter(l => l.includes(`decision:${ok.id}:request`) && l.includes('확인 실패')).length, 0);
+  } finally { w.stop(); }
+});
