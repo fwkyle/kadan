@@ -6,6 +6,7 @@ import {sendDashboardData} from './dashboard-api.mjs';
 import {serveDashboard} from './dashboard-static.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
+import {centerSummary} from './center-summary.mjs';
 import { renderCenterWall, createCenterHandler, prepareCenterWall } from "./center-wall.mjs";
 import fs from "node:fs";
 import { dutyHead, renderRound } from "./cli.mjs";
@@ -443,6 +444,13 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 </script></body></html>`;
 }
 
+// 결정 목록이 필요한 응답: 현황·결정·요약(내 결정 건수)·상세와 서버가 그리는 중앙 화면. 그 밖(/api/cards, 우편·기록·작업 목록 등)은 읽지 않는다.
+const DECISION_ROUTES=new Set(['status','decisions','summary','detail']);
+export function needsDecisions(url){
+  if(url.pathname.startsWith('/api/dashboard/'))return DECISION_ROUTES.has(url.pathname.slice('/api/dashboard/'.length));
+  return !url.pathname.startsWith('/api/')&&url.searchParams.get('legacy')!=='1';
+}
+
 export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot,startSecretary,ask,hierarchy} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
@@ -503,10 +511,11 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshot={at:sharedSnapshot?.value===snapshot?sharedSnapshot.at:now(),value:snapshot};
     if(centerHandler) {
       snapshot.home=home;
-      try{snapshot.decisions=new DecisionStore(home).list()}catch(error){snapshot.decisionError=error.message;snapshot.decisions=[]}
+      // 결정 목록은 쓰는 응답에서만 읽는다(2026-10-14: 모든 요청이 매번 읽고 있었다).
+      if(needsDecisions(url)){try{snapshot.decisions=new DecisionStore(home).list();snapshot.decisionError=null}catch(error){snapshot.decisionError=error.message;snapshot.decisions=[]}}
     }
     if (url.pathname === '/api/cards') {
-      const body=JSON.stringify({center:snapshot.center,error:snapshot.centerError});
+      const body=JSON.stringify({center:snapshot.center&&centerSummary(snapshot.center),error:snapshot.centerError});
       if(!snapshot.centerError)remember(url,body,'application/json; charset=utf-8',sharedSnapshot?.at);
       response.writeHead(snapshot.centerError?503:200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});
       response.end(body); return;

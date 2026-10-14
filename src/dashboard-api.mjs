@@ -11,7 +11,7 @@ import {
   visibleSessionRoles,
 } from "./dashboard/summary.mjs";
 import { reviewResultData, workspaceData, runsData } from "./dashboard/workspace.mjs";
-import { statusData } from "./dashboard/status.mjs";
+import { statusData, flowUnconfirmedData } from "./dashboard/status.mjs";
 import { detailData } from "./dashboard/detail.mjs";
 
 export { visibleSessionRoles };
@@ -35,6 +35,7 @@ const WITH_MODEL = new Map([
   ["review-result", reviewResultData],
   ["workspace", workspaceData],
   ["status", statusData],
+  ["flow-unconfirmed", flowUnconfirmedData],
   ["sessions", sessionsData],
   ["runs", runsData],
   ["detail", detailData],

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse, Spark, useSkin } from "../ui";
@@ -13,11 +13,26 @@ function deadRoles(data: { live: { role: string }[] | null; rows: Row[] }) {
   const alive = new Set(data.live.map((s) => s.role));
   return [...new Set(data.rows.flatMap((r) => (r.owner && (r.bucket === "running" || r.bucket === "stuck") && !alive.has(r.owner) ? [r.owner] : [])))];
 }
+type FlowItem = {id: string; title: string; label: string; warnings: string[]};
+function FlowList({items}: {items: FlowItem[]}) {
+  return <ul className="st-flow-list">{items.map(f => <li key={f.id} data-fresh={`flow:${f.id}`} className="st-flow-row"><strong>{f.title}</strong> · {f.label}{f.warnings.length > 0 && <small>{f.warnings.join(" ")}</small>}</li>)}</ul>;
+}
+// 현황에는 앞 20건만 실린다. 나머지는 펼칠 때 페이지로 받는다(전체 목록의 앞 skip건은 위에 이미 보인다).
+function FlowMore({skip}: {skip: number}) {
+  const [page, setPage] = useState(1);
+  const resource = useResource<Stamp & {items: FlowItem[]; page: number; pages: number; total: number; pageSize: number}>("flow-unconfirmed?page=" + page), data = resource.data;
+  const items = data ? data.items.slice(Math.max(0, skip - (page - 1) * data.pageSize)) : [];
+  return <>
+    <ErrorMessage error={resource.error}/>
+    {!data ? <Loading/> : <FlowList items={items}/>}
+    {data && data.pages > 1 && <p><button disabled={page <= 1} onClick={() => setPage(page - 1)}>이전</button> {data.page}/{data.pages}쪽 <button disabled={page >= data.pages} onClick={() => setPage(page + 1)}>다음</button></p>}
+  </>;
+}
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
   live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
-  boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml: string}[];
+  boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml?: string}[];
   watchHtml: string;
   resources: {current: {memory: string; freePercent: number | null; swapUsed: number | null; load5: number | null}; ncpu: number | null} | null;
   resourceError: string | null; workError: string | null; decisions: Decision[] | null;
@@ -34,7 +49,7 @@ const groups = [
 ];
 export default function Status({url}: {url: URL}) {
   const resource = useResource<StatusData>("status"), data = resource.data;
-  const skin = useSkin();
+  const skin = useSkin(), [flowMore, setFlowMore] = useState(false);
   const context = useContext(AppContext), scrolled = useRef("");
   useEffect(() => {
     if (!data || !url.hash.startsWith("#status-") || scrolled.current === url.hash) return;
@@ -143,8 +158,8 @@ export default function Status({url}: {url: URL}) {
           : data.alerts.count > 0 && <details className="st-fold" open={data.alerts.count <= 5}><summary>해소 전 감시 경보 {data.alerts.count}건</summary><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.map(a => <li key={a.id} data-fresh={`alert:${a.id}`} className="st-alert-row"><strong>{a.kind === "알림밀림" ? "알림이 계속 밀림" : a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.kind === "알림밀림" ? `${a.holdCount ?? "?"}번 · ${a.holdReason || a.holdCode || "사유 모름"}${a.holdReason && a.holdCode ? ` (${a.holdCode})` : ""}${a.heldSince ? " · " + time(a.heldSince) + "부터" : ""} · ` : ""}{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>)}</ul></details>}
       </section>
       <section id="status-flow" className="st-section">
-        <header className="st-sec-head"><h2>흐름 확인</h2><span className={"st-cnt" + (data.flow.unconfirmed.length ? " st-cnt-attn" : "")}>{data.flow.unconfirmed.length}건</span><span className="st-hint">티키타카 묶음 {data.flow.total}개 중 라운드·구현·검수 연결이 깨져 집계되지 않는 묶음입니다. 감독이 카드의 묶음 번호·단계를 고치면 빠집니다.</span></header>
-        {data.flow.unconfirmed.length ? <ul className="st-flow-list">{data.flow.unconfirmed.map(f => <li key={f.id} data-fresh={`flow:${f.id}`} className="st-flow-row"><strong>{f.title}</strong> · {f.label}{f.warnings.length > 0 && <small>{f.warnings.join(" ")}</small>}</li>)}</ul> : <p className="st-empty">{data.flow.total ? "모든 묶음이 흐름대로 연결돼 있습니다." : "티키타카 묶음이 없습니다."}</p>}
+        <header className="st-sec-head"><h2>흐름 확인</h2><span className={"st-cnt" + (data.flow.unconfirmedCount ? " st-cnt-attn" : "")}>{data.flow.unconfirmedCount}건</span><span className="st-hint">티키타카 묶음 {data.flow.total}개 중 라운드·구현·검수 연결이 깨져 집계되지 않는 묶음입니다. 감독이 카드의 묶음 번호·단계를 고치면 빠집니다.</span></header>
+        {data.flow.unconfirmedCount ? <><FlowList items={data.flow.unconfirmed}/>{data.flow.unconfirmedCount > data.flow.unconfirmed.length && <details className="st-fold" onToggle={e => setFlowMore(e.currentTarget.open)}><summary>나머지 {data.flow.unconfirmedCount - data.flow.unconfirmed.length}건</summary>{flowMore && <FlowMore skip={data.flow.unconfirmed.length}/>}</details>}</> : <p className="st-empty">{data.flow.total ? "모든 묶음이 흐름대로 연결돼 있습니다." : "티키타카 묶음이 없습니다."}</p>}
       </section>
       <DocumentContent html={data.watchHtml}/>
       {section("status-executing","작업중인 카드","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다. 검수·답변 같은 다른 결과를 기다린다고 보고한 카드도 여기 셉니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}
@@ -152,7 +167,7 @@ export default function Status({url}: {url: URL}) {
       <section id="status-running" className="st-section"><header className="st-sec-head"><h2>열린 워크</h2><span className="st-cnt">{data.workError ? "모름" : open.length+"장"}</span><span className="st-hint">열린 워크도 실행 준비·작업중·감독 확인 단계일 수 있습니다.</span></header><ErrorMessage error={data.workError}/>{open.length ? open.map(work) : !data.workError && <p className="st-empty">열린 워크가 없습니다. 위의 카드 목록에서 개별 작업을 확인하세요.</p>}</section>
       {held.length>0 && <section className="st-section"><h2>일시정지 중인 워크</h2>{held.map(work)}</section>}
       <details className="st-fold st-recent-fold"><summary className="st-sec-head"><h2>최근 24시간에 일어난 일</h2><span className="st-cnt">완료 {data.recentCounts.done} · 실패 {data.recentCounts.failed} · 발령 {data.recentCounts.send}</span><span className="st-hint">일을 맡기고, 끝나고, 실패한 시각입니다. 카드 내용을 고친 것은 세지 않습니다.</span></summary>{data.recent.length ? <ul className="st-recent">{data.recent.map((event,i)=><li className={"st-recent-row st-recent-"+event.kind} key={i}><span className="st-recent-time">{time(event.at)}</span><span className="st-recent-kind">{event.label}</span><CardLink row={event.card}/><small>{event.role}</small></li>)}</ul> : <p className="st-empty">최근 24시간에 기록된 발령·완료·실패가 없습니다.</p>}</details>
-      <details className="st-fold"><summary>판별 진행 막대 {data.boards.filter(b=>b.state!=="done").length}개 판</summary><p className="st-hint">실제 일을 하는 카드만 한 번씩 셉니다(관리·조율 카드 제외). 위 숫자와 같은 기준입니다.</p>{data.boards.filter(b=>b.state!=="done").map(board=><section className="board-progress" key={board.name}><h3><a href={"/?board="+encodeURIComponent(board.name)+"&collection=executions&state=all#dashboard"}>{board.name}</a></h3><div className="progress-track">{groups.map(([key,label])=><span key={key} className={"progress-"+key} style={{flex:board.counts[key] || 0}} title={label+" "+(board.counts[key] || 0)}/>)}</div><div className="progress-legend">{groups.filter(([key])=>board.counts[key]).map(([key,label])=><span key={key}>{label} {board.counts[key]}</span>)}</div><DocumentContent html={board.watchHtml}/></section>)}</details>
+      <details className="st-fold"><summary>판별 진행 막대 {data.boards.filter(b=>b.state!=="done").length}개 판</summary><p className="st-hint">실제 일을 하는 카드만 한 번씩 셉니다(관리·조율 카드 제외). 위 숫자와 같은 기준입니다.</p>{data.boards.filter(b=>b.state!=="done").map(board=><section className="board-progress" key={board.name}><h3><a href={"/?board="+encodeURIComponent(board.name)+"&collection=executions&state=all#dashboard"}>{board.name}</a></h3><div className="progress-track">{groups.map(([key,label])=><span key={key} className={"progress-"+key} style={{flex:board.counts[key] || 0}} title={label+" "+(board.counts[key] || 0)}/>)}</div><div className="progress-legend">{groups.filter(([key])=>board.counts[key]).map(([key,label])=><span key={key}>{label} {board.counts[key]}</span>)}</div><DocumentContent html={board.watchHtml ?? ""}/></section>)}</details>
       <details className="st-fold"><summary>진행 전 카드 {bucket("planned").length}건</summary>{bucket("planned").map(row=><p key={row.key}><CardLink row={row}/> · {row.owner || "미배정"}</p>)}</details>
       <details className="st-fold"><summary>끝난 판 {data.boards.filter(b=>b.state==="done").length}개 · 끝난 워크 {closed.length}장</summary>{closed.map(row=><p key={row.key}><CardLink row={row}/> · {row.stateLabel}</p>)}{data.boards.filter(b=>b.state==="done").map(board=><p key={board.name}>{board.name} · 실행 {board.total}장</p>)}</details>
       <details className="st-fold"><summary>자원 사용</summary><ErrorMessage error={data.resourceError}/>{data.resources ? <Facts items={[["메모리 여유",data.resources.current.freePercent===null ? "모름" : data.resources.current.freePercent+"%"],["스왑 사용",data.resources.current.swapUsed===null ? "모름" : data.resources.current.swapUsed.toFixed(1)+" MB"],["CPU 5분 부하",data.resources.current.load5===null ? "모름" : data.resources.current.load5.toFixed(2)+" / "+(data.resources.ncpu ?? "모름")]]}/> : <p>자원 상태 모름</p>}</details>
