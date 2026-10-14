@@ -119,7 +119,7 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 | `KADAN_HOME` | 데이터 폴더 | `~/.kadan` |
 | `KADAN_FLOOR` | 실행 바닥 (`tmux` \| `rottie` \| 시험 기능 `herdr`) | `tmux` |
 | `KADAN_HERDR_SOCKET` | herdr 시험 서버의 절대 소켓 경로. 별도 `KADAN_HOME`과 함께 지정 | 없음 |
-| `KADAN_WINDOW` | 시작할 때 열 창 (`none` \| `rottie` \| `orca`) | `none` |
+| `KADAN_WINDOW` | 시작할 때 열 창 (`none` \| `rottie` \| `orca`). 비우면 `kadan window set`으로 고정한 기계 설정을 따른다 | `none` |
 | `KADAN_SOCKET` | tmux 구획 이름 | `kadan` |
 
 전체 목록은 [명령어 사전의 환경 설정](docs/commands.md#환경-설정)을 보세요.

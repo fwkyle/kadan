@@ -17,12 +17,17 @@ import {
   inspectRottieStartPreflight,
   buildStartLedgerEntry,
   openStartedWindow,
+  unpinnedWindowWarning,
 } from "../cli-start-support.mjs";
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
   if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer]");
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
+  if (floor.name === "tmux" && !flags.hidden) {
+    const warning = unpinnedWindowWarning();
+    if (warning) console.error(warning);
+  }
   const preflight = inspectRottieStartPreflight({
     floorName: floor.name,
     hidden: Boolean(flags.hidden),
