@@ -14,6 +14,7 @@ import {
   tmux,
 } from "./floor-tmux.mjs";
 import { die } from "./cli-basics.mjs";
+import { windowSettingBlock } from "./window-setting.mjs";
 
 export function resolveWindowChoice(env = process.env) {
   const value = env.KADAN_WINDOW;
@@ -25,6 +26,8 @@ export function resolveWindowChoice(env = process.env) {
 }
 
 export function requireWindowChoice(env = process.env) {
+  const blocked = windowSettingBlock(env);
+  if (blocked) die(blocked, 2);
   const choice = resolveWindowChoice(env);
   if (choice.error) {
     die(
@@ -39,6 +42,16 @@ export function requireWindowChoice(env = process.env) {
     die("KADAN_ROTTIE_BIN_REQUIRED: KADAN_WINDOW=rottie에는 절대경로가 필요하다", 2);
   }
   return choice;
+}
+
+// 고정값이 없는데(환경변수도 기계 설정도 없음) 로티가 켜져 있으면 한 줄로 알린다. 자동으로 고르지 않고 시작도 막지 않는다.
+// 호출 전에 adoptMachineWindow가 설정을 환경으로 채우므로, KADAN_WINDOW가 비어 있다는 것은 둘 다 없다는 뜻이다.
+export function unpinnedWindowWarning({ env = process.env, listBinsFn } = {}) {
+  if (env.KADAN_WINDOW) return null;
+  const bins = (listBinsFn ?? listRunningRottieBins)();
+  if (!bins.length) return null;
+  return `경고: 창 선택이 고정되지 않았다 — 지금 켜진 로티(${bins[0]}${bins.length > 1 ? ` 외 ${bins.length - 1}개` : ""})가 보이지만 이번 시작은 백그라운드로 진행한다. ` +
+    `로티로 고정: kadan window set rottie --rottie-bin <절대경로> / 백그라운드로 고정: kadan window set none`;
 }
 
 const ROTTIE_BIN_NAME = /(^|[\/])rottie$/i;

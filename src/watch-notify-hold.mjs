@@ -29,7 +29,7 @@ export class NotifyHoldTracker {
 
   // 붙여넣기 직전 검사에 넘길 값. 강제 차례면 force 표시를 달아 바닥이 입력 보호만 건너뛰게 한다.
   // guard를 아예 빼면 바닥이 카드 전송용 검사로 바뀌므로 빼지 않는다. 생존·PID 대조·복사 모드 확인은
-  // guardedSend와 바닥 send가 그대로 하고, herdr의 승인 대기·기록보기 확인도 남는다.
+  // guardedSend가 그대로 한다. tmux 복사 모드는 바닥 send가 강제 차례에 한해 해제·재확인하고, herdr의 승인 대기·기록보기 확인은 남는다.
   guardFor(role, guard) {
     if (!this.forced(role)) return guard;
     this.forcedNow.add(role);
@@ -48,14 +48,14 @@ export class NotifyHoldTracker {
     if (isNotificationHold(error)) this.held(role, error);
   }
 
-  delivered(role) {
+  delivered(role, receipt) {
     if (!role) return;
     this.sentNow.add(role);
     if (this.forcedNow.has(role)) {
       const streak = this.streaks.get(role);
       this.record({kind: 'watch-notify-forced', by: 'watch', role, count: streak?.count ?? NOTIFY_FORCE_AT,
         code: streak?.code ?? null, reason: streak?.message ?? null, since: streak?.since ?? null,
-        t: new Date().toISOString()});
+        ...(receipt?.copyModeReleased ? {copyModeReleased: true} : {}), t: new Date().toISOString()});
     }
   }
 
