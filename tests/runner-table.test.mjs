@@ -82,7 +82,9 @@ test('open-file: 열린 대화 파일이 0개(첫 입력 전 lock만)·여러 �
   assert.throws(() => findConversation(spec, {openFiles: () => [lock, '/x/y']}), /대화 파일이 없다/);
   assert.equal(findConversation(spec, {openFiles: () => [rollout, lock, rollout]}), ID);
   const other = rollout.replace(ID, '0197bbbb-1111-4222-8333-444455556666');
-  assert.throws(() => findConversation(spec, {openFiles: () => [rollout, other]}), /2개라/);
+  assert.throws(() => findConversation(spec, {openFiles: () => [rollout, other]}), /서로 다른 대화 2개/);
+  // 저장된 대화는 하나여도 다른 ID의 lock이 보이면 거절한다.
+  assert.throws(() => findConversation(spec, {openFiles: () => [rollout, lock.replace(ID, '0197bbbb-1111-4222-8333-444455556666')]}), /서로 다른 대화 2개/);
   const agy = TABLE.agy.conversation;
   assert.equal(findConversation(agy, {openFiles: () => [`/h/.gemini/antigravity-cli/conversations/${ID}.db`, `/h/.gemini/antigravity-cli/conversations/${ID}.db-wal`]}), ID);
 });

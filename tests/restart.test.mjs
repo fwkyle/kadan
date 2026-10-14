@@ -33,7 +33,7 @@ function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {},
     pendingCards: () => pending, closeWindow: () => ({}), openWindow: () => ({method: 'manual'}),
     paneInfo: () => ({panePid: '100', location: tmux}),
     // 실행기 본체(150)와 자식 도구(extraTree)를 args로 가른다. 파일은 프로세스별로 든다.
-    processTree: () => [{pid: '100', args: '-zsh'}, {pid: '150', args: entries.findLast(e => e.kind === 'start').cmd}, ...extraTree],
+    processTree: () => [{pid: '100', ppid: '1', args: '-zsh'}, {pid: '150', ppid: '100', args: entries.findLast(e => e.kind === 'start').cmd}, ...extraTree],
     openFiles: pids => pids.flatMap(p => held[p] ?? []),
     readJson: f => JSON.parse(fs.readFileSync(f, 'utf8')), homeDir};
   const run = (flags = {}, settings = settingsWith()) => restartRole({home, role, session, flags, floor, settings, deps});
@@ -196,7 +196,7 @@ test('비서: 체크포인트를 못 만들면 끄지 않고 거절하고, 끝�
 
 const ROLLOUT = id => `/h/.codex/sessions/2026/10/14/rollout-2026-10-14T16-35-00-${id}.jsonl`;
 const B = '0197bbbb-1111-4222-8333-444455556666';
-const PLUGIN = {pid: '160', args: 'node /h/.codex/plugins/cache/x/mcp/server.mjs --stdio'};
+const PLUGIN = {pid: '160', ppid: '150', args: 'node /h/.codex/plugins/cache/x/mcp/server.mjs --stdio'};
 
 test('대화 파일의 주인: 본체는 A lock만, 자식 도구가 B 저장 대화를 연 경우 끄기 전에 거절한다', () => {
   const f = fixture({cmd: CODEX, extraTree: [PLUGIN], held: {150: [`/h/.codex/thread-writer-locks/${ID}.lock`], 160: [ROLLOUT(B)]}});
@@ -210,18 +210,18 @@ test('대화 파일의 주인: 본체가 연 대화는 진행하고, 래퍼 아�
   body.run();
   assert.match(body.entries.at(-1).cmd, new RegExp(`resume ${B}$`));
   // codex 실제 트리(2026-10-14 실측): node 래퍼(.../bin/codex)가 네이티브 바이너리를 띄우고, 파일은 네이티브가 연다.
-  const wrapped = fixture({cmd: CODEX, extraTree: [{pid: '151', args: '/n/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low'}, PLUGIN],
-    held: {151: [ROLLOUT(B)], 160: []}});
-  wrapped.deps.processTree = () => [{pid: '100', args: `node /n/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low`},
-    {pid: '151', args: '/n/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low'}, PLUGIN];
+  const NATIVE = '/n/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low';
+  const wrapped = fixture({cmd: CODEX, held: {151: [ROLLOUT(B), `/h/.codex/thread-writer-locks/${B}.lock`]}});
+  wrapped.deps.processTree = () => [{pid: '100', ppid: '1', args: 'node /n/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low'},
+    {pid: '151', ppid: '100', args: NATIVE}, {pid: '160', ppid: '151', args: 'node /h/.codex/plugins/x/server.mjs'}];
   wrapped.run();
   assert.match(wrapped.entries.at(-1).cmd, new RegExp(`resume ${B}$`));
 });
 
 test('대화 파일의 주인: 본체 프로세스를 못 찾으면(다른 모델·다른 실행기뿐) 거절한다', () => {
   const f = fixture({cmd: CODEX, held: {150: [ROLLOUT(B)]}});
-  f.deps.processTree = () => [{pid: '100', args: '-zsh'}, {pid: '150', args: 'codex --model other-model'}];
-  assert.throws(() => f.run(), /본체 프로세스를 pane 트리에서 찾지 못했다/);
+  f.deps.processTree = () => [{pid: '100', ppid: '1', args: '-zsh'}, {pid: '150', ppid: '100', args: 'codex --model other-model'}];
+  assert.throws(() => f.run(), /하나의 사슬로 정할 수 없다/);
   assert.deepEqual(f.log, []);
 });
 
@@ -246,4 +246,44 @@ test('비서: restart 뒤에도 감시 발령·우편·책임이 이어지고, -
   const live = [{session: 'kadan-비서', pid: '30', alive: true}];
   const observed = collectRoles({list: () => live, read: () => 'screen'}, f.entries, null, null).observations.get('kadan-비서');
   assert.deepEqual([...observed.completionDispatches.keys()], ['sc1']);
+});
+
+const SAME = pid => ({pid, ppid: '150', args: `codex -p lite --model gpt-6-sol -c model_reasoning_effort=low`});
+
+test('같은 실행기 하위 에이전트: 본체는 A lock만, 맞는 자식이 B rollout을 연 경우 거절한다(사슬 갈림 아님: 자식 한 개)', () => {
+  const f = fixture({cmd: CODEX, extraTree: [SAME('160')], held: {150: [`/h/.codex/thread-writer-locks/${ID}.lock`], 160: [ROLLOUT(B)]}});
+  assert.throws(() => f.run(), /서로 다른 대화 2개/);
+  assert.deepEqual(f.log, []);
+});
+
+test('같은 실행기 하위 에이전트: 저장된 대화 하나뿐이어도 다른 ID의 lock이 보이면 거절한다', () => {
+  const f = fixture({cmd: CODEX, held: {150: [ROLLOUT(B), `/h/.codex/thread-writer-locks/${ID}.lock`]}});
+  assert.throws(() => f.run(), /서로 다른 대화 2개/);
+  assert.deepEqual(f.log, []);
+});
+
+test('본체 사슬: 뿌리가 둘이거나 맞는 자식이 둘로 갈리면 거절한다', () => {
+  const split = fixture({cmd: CODEX, extraTree: [SAME('160'), SAME('161')], held: {150: [ROLLOUT(B)]}});
+  assert.throws(() => split.run(), /하나의 사슬로 정할 수 없다/);
+  const twoRoots = fixture({cmd: CODEX, held: {150: [ROLLOUT(B)]}});
+  twoRoots.deps.processTree = () => [{pid: '100', ppid: '1', args: '-zsh'}, {pid: '150', ppid: '100', args: SAME('x').args}, {pid: '170', ppid: '100', args: SAME('x').args}];
+  assert.throws(() => twoRoots.run(), /하나의 사슬로 정할 수 없다/);
+  assert.deepEqual([split.log, twoRoots.log], [[], []]);
+});
+
+test('pid-json: 뿌리 본체의 PID 파일이 없고 자식 PID의 파일만 있으면 거절한다(claude형)', () => {
+  const f = fixture({files: {'.claude/sessions/160.json': {sessionId: ID, tmux: 'kadan-w:@3.%3'}, [`.claude/projects/-x/${ID}.jsonl`]: {}},
+    extraTree: [{pid: '160', ppid: '150', args: CLAUDE}]});
+  assert.throws(() => f.run(), /파일이 없다/);
+  assert.deepEqual(f.log, []);
+});
+
+test('정상 모양: claude·agy 단일 프로세스, codex 래퍼→네이티브(대화 하나)는 진행한다', () => {
+  const agy = fixture({cmd: 'agy --model gemini-3.8-flash-low --dangerously-skip-permissions', held: {150: [`/h/.gemini/antigravity-cli/conversations/${ID}.db`, `/h/.gemini/antigravity-cli/conversations/${ID}.db-wal`]}});
+  const settings = settingsWith();
+  agy.run({}, settings);
+  assert.match(agy.entries.at(-1).cmd, new RegExp(`--conversation ${ID}$`));
+  const claude = fixture({files: claudeFiles});
+  claude.run();
+  assert.match(claude.entries.at(-1).cmd, new RegExp(`--resume ${ID}$`));
 });

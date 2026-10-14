@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import {startDigest, withRecoveryLock, checkpointSecretary, resumeSecretary} from './secretary-resume.mjs';
 import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
+import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry} from './cli-start-support.mjs';
@@ -77,11 +78,12 @@ function restartLocked({home, role, session, flags, floor, settings, deps}) {
   // 1) 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 끄지 않고 거절한다.
   const pane = deps.paneInfo(session);
   if (String(pane.panePid) !== String(start.panePid)) fail('tmux pane PID가 시작 기록과 다르다');
-  // 실행기 본체 프로세스(마지막 start 명령의 실행기·모델과 args가 맞는 것)가 연 파일·PID 파일만 후보다.
-  // 자식 도구(플러그인·MCP 서버 등)가 연 다른 대화를 집지 않는다. 본체를 못 찾으면 거절한다.
-  const executors = deps.processTree(start.panePid).filter(p => matchesAiProcess(p.args, harness, model)).map(p => p.pid);
-  if (!executors.length) fail(`${harness} 실행기 본체 프로세스를 pane 트리에서 찾지 못했다 — 대화 파일의 주인을 확인할 수 없어 거절한다`);
-  const conversation = findConversation(spec, {pids: executors, openFiles: () => deps.openFiles(executors),
+  // 실행기 본체 사슬(뿌리 1개 + 그 아래로 하나씩 이어지는 맞는 프로세스)이 연 파일만 후보다. 자식 도구나 같은 실행기의
+  // 하위 에이전트가 연 대화를 집지 않는다. 뿌리가 둘이거나 사슬이 갈리거나 못 찾으면 거절한다.
+  const chain = executorChain(deps.processTree(start.panePid), args => matchesAiProcess(args, harness, model));
+  if (!chain) fail(`${harness} 실행기 본체 프로세스를 하나의 사슬로 정할 수 없다(없거나 여러 개·갈림) — 대화 파일의 주인을 확인할 수 없어 거절한다`);
+  // pid-json은 뿌리 본체의 PID 파일만, open-file은 사슬 전체가 연 파일을 본다.
+  const conversation = findConversation(spec, {pids: [chain.root], openFiles: () => deps.openFiles(chain.pids),
     readJson: deps.readJson, tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
   const command = rebuildResumeCommand(settings, harness, start.cmd, conversation);

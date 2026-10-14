@@ -90,6 +90,9 @@ export function checkConversationSpec(spec) {
   if (spec.kind === 'open-file') {
     if (typeof spec.pattern !== 'string') throw new Error('conversation.pattern(정규식 글) 필요');
     if (new RegExp(`${spec.pattern}|`).exec('').length !== 2) throw new Error('conversation.pattern에는 캡처 그룹이 정확히 하나 있어야 한다');
+    // evidence: 저장 여부와 무관하게 대화 ID를 드러내는 다른 파일(lock 등)의 정규식들. 서로 다른 ID가 보이면 거절한다.
+    for (const extra of spec.evidence ?? [])
+      if (typeof extra !== 'string' || new RegExp(`${extra}|`).exec('').length !== 2) throw new Error('conversation.evidence 항목에는 캡처 그룹이 정확히 하나 있어야 한다');
   } else {
     if (typeof spec.path !== 'string' || !spec.path.includes('{pid}')) throw new Error('conversation.path에는 {pid}가 있어야 한다');
     if (typeof spec.field !== 'string' || !spec.field) throw new Error('conversation.field 필요');
@@ -131,7 +134,11 @@ export function findConversation(spec, deps) {
   let id;
   if (spec.kind === 'open-file') {
     const re = new RegExp(spec.pattern);
-    const ids = [...new Set(deps.openFiles().map(file => re.exec(file)?.[1]).filter(Boolean))];
+    const files = deps.openFiles();
+    const ids = [...new Set(files.map(file => re.exec(file)?.[1]).filter(Boolean))];
+    const seen = new Set(ids);
+    for (const extra of spec.evidence ?? []) for (const file of files) { const hit = new RegExp(extra).exec(file)?.[1]; if (hit) seen.add(hit); }
+    if (seen.size > 1) throw new Error(`본체 사슬이 서로 다른 대화 ${seen.size}개의 흔적을 열고 있어 하나로 확정할 수 없다`);
     if (ids.length === 0) throw new Error('이 역할이 열어 둔 대화 파일이 없다 — 첫 입력 전이거나 아직 저장되지 않았다');
     if (ids.length > 1) throw new Error(`열린 대화 파일이 ${ids.length}개라 하나로 확정할 수 없다`);
     id = ids[0];

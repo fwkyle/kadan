@@ -7,7 +7,8 @@ export const TABLE = {
     fork: 'codex -p lite --model {model} -c model_reasoning_effort="{effort}" fork {conversation}',
     exec: 'codex exec -m {model} -c model_reasoning_effort={effort} -s read-only --skip-git-repo-check',
     version: 'codex --version', update: 'codex update',
-    conversation: {kind: 'open-file', pattern: `/sessions/.+/rollout-[0-9T-]+-(${UUID})\\.jsonl$`},
+    conversation: {kind: 'open-file', pattern: `/sessions/.+/rollout-[0-9T-]+-(${UUID})\\.jsonl$`,
+      evidence: [`/thread-writer-locks/(${UUID})\\.lock$`]},
   },
   claude: {
     spawn: 'claude --model {model} --effort {effort} --dangerously-skip-permissions',

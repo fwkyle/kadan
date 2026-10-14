@@ -25,7 +25,7 @@ export function openFilesOf(pids, run = spawnSync) {
   return [...new Set(result.stdout.split('\n').filter(line => line.startsWith('n')).map(line => line.slice(1)))];
 }
 
-// panePid와 자손의 {pid, args}. 어느 프로세스가 실행기 본체인지 args로 가리기 위해 쓴다(대화 파일의 주인 확인).
+// panePid와 자손의 {pid, ppid, args}. 어느 프로세스가 실행기 본체인지 args로 가리기 위해 쓴다(대화 파일의 주인 확인).
 export function processTree(panePid, run = spawnSync) {
   const ps = run('ps', ['-axo', 'pid=,ppid=,args='], {encoding: 'utf8', timeout: 2000});
   if (ps.status !== 0) throw new Error('프로세스 조회 실패');
@@ -37,5 +37,20 @@ export function processTree(panePid, run = spawnSync) {
     for (const row of rows) if (wanted.has(row.ppid) && !wanted.has(row.pid)) { wanted.add(row.pid); changed = true; }
     if (!changed) break;
   }
-  return rows.filter(row => wanted.has(row.pid)).map(({pid, args}) => ({pid, args}));
+  return rows.filter(row => wanted.has(row.pid)).map(({pid, ppid, args}) => ({pid, ppid, args}));
+}
+
+// 실행기 본체 사슬: matches(args)가 참인 프로세스 중 조상에 참인 것이 없는 "뿌리"가 정확히 1개이고,
+// 뿌리 아래로 참인 프로세스가 하나씩만 이어져야 한다(래퍼→실제 바이너리). 뿌리가 0·2개 이상이거나 사슬이 갈리면 null.
+// 같은 실행기의 하위 에이전트(자식 프로세스)가 본체와 구분되지 않는 채 섞이는 것을 막는다.
+export function executorChain(tree, matches) {
+  const byPid = new Map(tree.map(p => [p.pid, p]));
+  const hit = new Set(tree.filter(p => matches(p.args)).map(p => p.pid));
+  const nearest = pid => { let at = byPid.get(pid)?.ppid; for (let i = 0; at && byPid.has(at) && i < 64; i++) { if (hit.has(at)) return at; at = byPid.get(at).ppid; } return null; };
+  const roots = [...hit].filter(pid => nearest(pid) === null);
+  if (roots.length !== 1) return null;
+  const children = new Map();
+  for (const pid of hit) { const parent = nearest(pid); if (parent) children.set(parent, [...(children.get(parent) ?? []), pid]); }
+  if ([...children.values()].some(list => list.length > 1)) return null;
+  return {root: roots[0], pids: [...hit]};
 }
