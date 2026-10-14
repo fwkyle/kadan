@@ -89,6 +89,7 @@ const HOLD_REASONS = {
   KADAN_PANE_STATE_UNKNOWN: "창 상태를 알 수 없음", KADAN_HERDR_NOT_READY: "입력 대기 상태가 아님",
   KADAN_HERDR_INPUT_UNKNOWN: "입력창 상태를 알 수 없음", KADAN_HERDR_SCROLLED: "과거 기록을 보는 중",
   KADAN_HERDR_TRUST_PROMPT: "승인(신뢰) 확인 화면",
+  KADAN_PANE_IN_MODE: "복사 모드(스크롤) 중", KADAN_PANE_MODE_UNKNOWN: "복사 모드 여부를 알 수 없음",
 };
 export function openAlerts(entries, { limit = 20 } = {}) {
   if (!Array.isArray(entries) || entries.some((e) => e?.broken)) return null;
