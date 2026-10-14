@@ -35,7 +35,7 @@ export function createHandoverRunner() {
     if (target.transport === "mailbox") return new SecretaryMailbox(ledgerHome()).send({
       by:resolveLedgerBy({env:operation.env}), message, category:"report"});
     if (target.transport === "user") {
-      if (notifyUser(message,spawnSync)) {
+      if (notifyUser(message,spawnSync,{kind:"handover"}).error) {
         const error = new Error("사용자 알림 실패"); error.delivery = "not-sent"; throw error;
       }
       return {status:"sent"};

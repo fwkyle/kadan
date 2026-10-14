@@ -66,7 +66,7 @@ test('사용자 우편함에 온 답은 OS 알림을 띄우고, 사용자가 보
   fs.writeFileSync(path.join(bin, 'osascript'), `#!/bin/sh\necho "$2" >> ${JSON.stringify(log)}\n`, {mode:0o755});
   const question = new Mailbox(home, '슈퍼').send({by:'사람', message:'왜?', expectReply:true});
   const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
-  const send = (by, args, extra = {}) => spawnSync(process.execPath, [cli, 'send', ...args], {env:{...process.env, KADAN_HOME:home, KADAN_ROLE:by, KADAN_SOCKET:path.basename(home), KADAN_WINDOW:'none', PATH:bin + ':' + process.env.PATH, KADAN_NOTIFY:'', ...extra}, encoding:'utf8'});
+  const send = (by, args, extra = {}) => spawnSync(process.execPath, [cli, 'send', ...args], {env:{...process.env, KADAN_HOME:home, KADAN_ROLE:by, KADAN_SOCKET:path.basename(home), KADAN_WINDOW:'none', PATH:bin + ':' + process.env.PATH, KADAN_NOTIFY:'', KADAN_NOTIFY_ENV_FILE:'', ...extra}, encoding:'utf8'});
   const answer = send('슈퍼', ['사람', '--mailbox', '--reply-to', question.mailId, '--reply-final', '창은 일이 끝나서 닫혔다.\n카드는 재검수로 보낸다.']);
   assert.equal(answer.status, 0, answer.stderr);
   const lines = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [];

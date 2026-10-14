@@ -47,7 +47,7 @@ function guardedWatchSend(tracker,args,role,guard) {
 
 export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
   if (role==='@user') {
-    const failure=notifyUser(message,spawnSync);
+    const failure=notifyUser(message,spawnSync,{kind:'alert'}).error;
     if (failure) { const error=new Error('사용자 알림 실패'); error.delivery='not-sent'; throw error; }
     return;
   }

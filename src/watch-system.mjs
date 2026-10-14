@@ -48,12 +48,5 @@ export function assertSingleWatch(spawn, name = BASE_NAME) {
   }
 }
 
-export function notifyUser(message, spawn) {
-  const script = `display notification ${JSON.stringify(
-    message
-  )} with title "kadan watch"`;
-  const result = spawn("osascript", ["-e", script], { encoding: "utf8" });
-  return result.status === 0
-    ? null
-    : (result.stderr ?? "osascript 실패").trim();
-}
+// 사용자 알림은 user-notify.mjs 한 통로를 지난다(디스코드 → 시스템 알림 순). 호출하는 쪽 import 경로를 유지하려고 다시 내보낸다.
+export { notifyUser } from "./user-notify.mjs";
