@@ -477,9 +477,9 @@ test('22 R2 출력이 끝나기 전에는 cursor·읽음 반응이 앞서지 않
     await runWatch(chat, {once: true, out, err() {}, signal: controller.signal});
     assert.deepEqual(order, ['out:가:cursor<true:reacts=0', 'out:나:cursor<true:reacts=1']);
     const state = JSON.parse(fs.readFileSync(path.join(home, STATE_FILE), 'utf8'));
-    assert.equal(state.main, b.id, '중단 뒤 다음 글(다)까지 올리지 않는다');
-    assert.deepEqual((await watchOnce(chat)).lines.map(l => l.id), [c.id]);
-    assert.ok(a.id);
+    assert.equal(state.main, a.id, '중단 신호와 겹친 줄(나)과 그 뒤(다)는 cursor를 올리지 않는다');
+    assert.equal(fake.count(/PUT .*reactions/), 1, '중단 뒤 읽음 반응을 더 달지 않는다');
+    assert.deepEqual((await watchOnce(chat)).lines.map(l => l.id), [b.id, c.id], '중복 쪽으로 다시 나온다');
   } finally { await fake.close(); }
 });
 
@@ -534,5 +534,134 @@ test('25 R5 받은 본문·인용에 든 비밀값은 출력 전에 가린다(ID
     assert.match(r.lines[0].content, /\[가림\]|\[주소 가림\]/);
     assert.match(r.lines[0].content, /^토큰 /);
     assert.match(r.lines[0].quotedContent, /^인용 \[가림\]$/);
+  } finally { await fake.close(); }
+});
+
+test('26 N1 첫 실행: 기준선을 출력 전에 저장하므로 첫 출력이 실패해도 재시작에서 질문이 나온다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    fake.add(FAKE.channelId, {content: '기준선 이전 글'});
+    const s = setup(fake);
+    let injected = null;
+    const fetchFn = async (url, init) => {
+      const res = await fetch(url, init);
+      if (!injected && /\/channels\/\d+$/.test(new URL(url).pathname) && (init?.method ?? 'GET') === 'GET') injected = fake.add(FAKE.channelId, {content: '기준선 직후 질문'});
+      return res;
+    };
+    const chat = createChat({home: s.home, env: s.env, sleep: noSleep, fetchFn});
+    await assert.rejects(runWatch(chat, {once: true, out: async () => { throw new Error('소비자 오류'); }, err() {}}), /소비자 오류/);
+    assert.ok(injected, '기준선을 읽은 직후 질문이 들어왔다');
+    const state = JSON.parse(fs.readFileSync(path.join(s.home, STATE_FILE), 'utf8'));
+    assert.ok(BigInt(state.main) < BigInt(injected.id), '질문 앞의 기준선이 저장돼 있다');
+    const again = await watchOnce(createChat({home: s.home, env: s.env, sleep: noSleep}));
+    assert.deepEqual(again.lines.map(l => l.id), [injected.id]);
+  } finally { await fake.close(); }
+});
+
+test('27 N2 상태 파일 내부 값이 틀리면(스레드 위치 bad-id 등) 출력 0·원본 동일·종료 1 — 직접과 실제 CLI', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0);
+    const file = path.join(s.home, STATE_FILE);
+    const good = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fake.add(FAKE.channelId, {content: '놓치면 안 되는 질문'});
+    const variants = [
+      {...good, threads: {123: 'bad-id'}}, {...good, threads: {abc: '123'}}, {...good, threads: []},
+      {...good, skipped: {others: 'x', bots: 0, system: 0}}, {...good, skipped: {others: -1, bots: 0, system: 0}}, {...good, main: 12},
+    ];
+    for (const v of variants) {
+      const text = JSON.stringify(v);
+      fs.writeFileSync(file, text);
+      const r = await runCli(['discord', 'watch', '--once'], env);
+      assert.equal(r.code, 1, text);
+      assert.equal(r.stdout, '');
+      assert.match(r.stderr, /상태 파일이 깨져/);
+      assert.equal(fs.readFileSync(file, 'utf8'), text, '원본 그대로');
+      const { chat } = chatOf(fake);
+      assert.ok(chat);
+    }
+    fs.writeFileSync(file, JSON.stringify({...good, threads: {123: 'bad-id'}}));
+    const direct = chatOf(fake);
+    fs.copyFileSync(file, path.join(direct.home, STATE_FILE));
+    const lines = [];
+    await assert.rejects(runWatch(direct.chat, {once: true, out: l => lines.push(l), err() {}}), /상태 파일이 깨져/);
+    assert.deepEqual(lines, []);
+  } finally { await fake.close(); }
+});
+
+test('28 N3 중단 신호가 막힌 출력 대기를 끝낸다 — 대기가 풀려도 cursor·반응은 그대로', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat, home} = chatOf(fake);
+    await watchOnce(chat);
+    const [a, b] = ['가', '나'].map(content => fake.add(FAKE.channelId, {content}));
+    const controller = new AbortController();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = Date.now();
+    const running = runWatch(chat, {once: true, out: () => { setTimeout(() => controller.abort(), 20); return gate; }, err() {}, signal: controller.signal});
+    await running;
+    assert.ok(Date.now() - started < 2000, '소비자가 안 읽어도 곧 끝난다');
+    assert.ok(!fs.existsSync(path.join(home, LOCK_DIR)), '잠금을 돌려준다');
+    const snap = fs.readFileSync(path.join(home, STATE_FILE), 'utf8');
+    const reacts = fake.count(/PUT .*reactions/);
+    release(); await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(fs.readFileSync(path.join(home, STATE_FILE), 'utf8'), snap);
+    assert.equal(fake.count(/PUT .*reactions/), reacts);
+    assert.deepEqual((await watchOnce(chat)).lines.map(l => l.id), [a.id, b.id], '다시 나온다(중복 쪽)');
+  } finally { await fake.close(); }
+});
+
+test('29 N3 실제 CLI: 큰 질문 다수 + 파이프 미소비 + SIGTERM → 제한 시간 안에 종료·잠금 반환, 신호 뒤 cursor·반응 불변, 유실 0', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0);
+    const ids = Array.from({length: 200}, (_, i) => fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)}).id);
+    const child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
+    let buffered = '';
+    const closed = new Promise(resolve => child.on('close', (code, signal) => resolve({code, signal})));
+    await new Promise(resolve => setTimeout(resolve, 2500)); // 파이프가 가득 차서 막힘
+    const file = path.join(s.home, STATE_FILE);
+    const snap1 = fs.readFileSync(file, 'utf8'), reacts1 = fake.count(/PUT .*reactions/);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal(fs.readFileSync(file, 'utf8'), snap1, '막힌 동안 cursor는 멈춰 있다');
+    assert.ok(fs.existsSync(path.join(s.home, LOCK_DIR)));
+    const killedAt = Date.now();
+    child.stdout.on('data', c => { buffered += c; }); // 소비자가 신호 직후 남은 바이트를 받는다(종료 대기를 풀어 주는 용도가 아님: 종료는 소비 없이도 일어나야 하므로 신호 뒤에만 연결)
+    child.kill('SIGTERM');
+    const end = await Promise.race([closed, new Promise(resolve => setTimeout(() => resolve('timeout'), 6000))]);
+    assert.notEqual(end, 'timeout', 'SIGTERM 뒤 소비 재개 없이 종료한다');
+    assert.ok(Date.now() - killedAt < 5000);
+    assert.ok(!fs.existsSync(path.join(s.home, LOCK_DIR)), '잠금을 돌려준다');
+    const cursorOf = text => { const v = JSON.parse(text); return JSON.stringify([v.main, v.threads]); };
+    assert.equal(cursorOf(fs.readFileSync(file, 'utf8')), cursorOf(snap1), '신호 뒤 cursor 불변');
+    assert.equal(fake.count(/PUT .*reactions/), reacts1, '신호 뒤 읽음 반응 불변');
+    const next = await runCli(['discord', 'watch', '--once'], env); // 두 번째 watch 시작 가능
+    assert.equal(next.code, 0, next.stderr);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const seen = new Set([...buffered.split('\n'), ...next.stdout.split('\n')].filter(l => l.startsWith('{')).map(l => { try { return JSON.parse(l).id; } catch { return null; } }));
+    assert.deepEqual(ids.filter(id => !seen.has(id)), [], '유실 0');
+  } finally { await fake.close(); }
+});
+
+test('30 N3 실제 CLI: 소비자가 끝까지 안 읽어도 SIGTERM으로 제한 시간 안에 종료하고 잠금을 돌려준다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0);
+    for (let i = 0; i < 100; i++) fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)});
+    const child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
+    const closed = new Promise(resolve => child.on('close', () => resolve('closed')));
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    child.kill('SIGTERM'); // stdout을 끝까지 읽지 않는다
+    const end = await Promise.race([closed, new Promise(resolve => setTimeout(() => resolve('timeout'), 5000))]);
+    child.kill('SIGKILL');
+    assert.equal(end, 'closed');
+    assert.ok(!fs.existsSync(path.join(s.home, LOCK_DIR)));
   } finally { await fake.close(); }
 });

@@ -85,8 +85,12 @@ export function readState(home, hash) {
   }
   let v;
   try { v = JSON.parse(text); } catch { v = null; }
-  const ok = v?.version === 1 && typeof v.channel === 'string' && v.threads && typeof v.threads === 'object' && !Array.isArray(v.threads)
-    && (v.main === null || isId(v.main)) && v.skipped && typeof v.skipped === 'object';
+  // 읽을 때 쓰는 모든 내부 값을 처음에 검사한다(출력·저장 뒤에 늦게 터지는 변환이 남지 않게).
+  const count = n => Number.isInteger(n) && n >= 0;
+  const ok = v?.version === 1 && typeof v.channel === 'string' && (v.main === null || isId(v.main))
+    && v.threads && typeof v.threads === 'object' && !Array.isArray(v.threads)
+    && Object.entries(v.threads).every(([id, last]) => isId(id) && isId(last))
+    && v.skipped && typeof v.skipped === 'object' && ['others', 'bots', 'system'].every(k => count(v.skipped[k]));
   if (!ok) throw new Error(`상태 파일이 깨져 있어 멈춘다(원본은 그대로 둔다). 확인한 뒤 이 파일을 옮기면 처음 실행(기준선)으로 다시 시작한다: ${file}`);
   if (v.channel !== hash) return {mismatch: true};
   return {...emptyState(hash), ...v};
@@ -114,7 +118,9 @@ export function acquireWatchLock(home) {
       fs.rmSync(pidFile, {force: true}); fs.rmdirSync(lock);
     }
   }
-  return () => { try { fs.rmSync(pidFile, {force: true}); fs.rmdirSync(lock); } catch { /* 이미 없음 */ } };
+  const release = () => { try { fs.rmSync(pidFile, {force: true}); fs.rmdirSync(lock); } catch { /* 이미 없음 */ } };
+  process.once('exit', release); // 강제 종료 경로(process.exit)에서도 잠금을 돌려준다
+  return () => { process.removeListener('exit', release); release(); };
 }
 
 // ---------- 메시지 분류 ----------
@@ -157,6 +163,9 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   const result = {emitted: 0, reactFailed: 0, empty: 0};
   const hide = text => scrubSecrets(text, [chat.cfg.token, ...chat.cfg.secrets]);
   const halted = () => signal?.aborted === true;
+  // 출력 대기를 중단 신호로 끝낼 수 있게 한다. 신호가 이기면 그 줄은 출력된 것으로 보지 않는다(다음 실행에서 다시 나옴).
+  const aborted = new Promise(resolve => { if (signal) { if (signal.aborted) resolve('aborted'); else signal.addEventListener('abort', () => resolve('aborted'), {once: true}); } });
+  const emit = async line => (signal ? (await Promise.race([Promise.resolve(out(line)).then(() => 'sent'), aborted])) === 'sent' : (await out(line), true));
   const handle = async (messages, where, threadId) => {
     let last = null;
     for (const msg of sortById(messages)) {
@@ -166,12 +175,13 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
       c.line.content = hide(c.line.content);
       if (c.line.quotedContent) c.line.quotedContent = hide(c.line.quotedContent);
       // 출력이 실제로 나간 뒤(쓰기 완료·역압)에 cursor를 저장하고 그다음 반응을 단다(최소 한 번).
-      await out(c.line);
+      if (!(await emit(c.line)) || halted()) break; // 출력이 안 끝났거나 끝난 뒤 중단됐으면 cursor를 올리지 않는다
       last = maxId(last, msg.id);
       if (threadId) state.threads[threadId] = msg.id; else state.main = msg.id;
       writeState(chat.home, state);
       result.emitted++;
       if (c.line.empty) { result.empty++; err('본문이 빈 메시지를 받았다 — 봇의 Message Content Intent가 꺼져 있을 수 있다(kadan discord check)'); }
+      if (halted()) break;
       if (!(await react(chat, msg.channel_id ?? threadId ?? channelId, msg.id))) result.reactFailed++;
     }
     return last;
@@ -192,30 +202,37 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
     }
   };
 
-  if (initial) { // 처음(상태 없음): 지금까지의 글은 기준선으로 삼고 내지 않는다.
+  let active = null;
+  const loadActive = async () => {
     const info = await chat.channelInfo();
-    state.main = info.last_message_id ?? '0';
+    return active ??= info.guild_id ? (await chat.api('GET', `/guilds/${info.guild_id}/threads/active`)).json?.threads ?? [] : [];
+  };
+  if (initial) {
+    // 처음(상태 없음): 지금까지의 글은 기준선으로 삼고 내지 않는다. 아무것도 출력하기 전에 기준선(본문·스레드)을 먼저 저장한다 —
+    // 안 그러면 첫 출력이 실패한 뒤 재시작이 방금 본 질문까지 기준선으로 삼아 건너뛴다.
+    state.main = (await chat.channelInfo()).last_message_id ?? '0';
+    for (const t of await loadActive()) if (t.parent_id === channelId && THREAD_TYPES.has(t.type) && isId(t.id)) state.threads[t.id] = t.last_message_id ?? t.id;
+    writeState(chat.home, state);
   }
   await drain(channelId, state.main ?? '0', 'channel', null);
 
-  const info = await chat.channelInfo();
-  if (!info.guild_id) return result;
-  const active = (await chat.api('GET', `/guilds/${info.guild_id}/threads/active`)).json?.threads ?? [];
+  if (halted()) return result;
+  const activeList = await loadActive();
   const now = (chat.now ?? Date.now)();
-  for (const t of active) {
+  for (const t of activeList) {
+    if (halted()) return result;
     if (t.parent_id !== channelId || !THREAD_TYPES.has(t.type) || !isId(t.id)) continue;
     if (!state.threads[t.id]) {
       // 모르는 스레드: 처음 실행이면 기준선, 아니면 "처음 본 스레드"라서 첫 글부터 읽는다.
       // (스레드 ID는 시작 글의 ID라서 ID 나이로 새 스레드인지 판단하면 오래된 글에서 연 새 스레드의 첫 질문을 잃는다.)
-      state.threads[t.id] = initial ? t.last_message_id ?? t.id : t.id;
+      state.threads[t.id] = t.id;
       writeState(chat.home, state);
-      if (initial) continue;
     }
     if (t.last_message_id && !idLess(state.threads[t.id], t.last_message_id)) continue;
     await drain(t.id, state.threads[t.id], 'thread', t.id);
   }
   // 활성 목록에 없고 마지막으로 본 글이 180일보다 오래된 스레드 기록은 잊는다(다시 살아나면 첫 글부터 다시 본다).
-  const activeIds = new Set(active.map(t => t.id));
+  const activeIds = new Set(activeList.map(t => t.id));
   for (const [id, lastSeen] of Object.entries(state.threads)) if (!activeIds.has(id) && now - idMs(lastSeen) > THREAD_FORGET_MS) delete state.threads[id];
   return result;
 }

@@ -22,7 +22,8 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
       const intervalS = flags.interval === undefined ? DEFAULT_INTERVAL_S : Number(flags.interval);
       if (!Number.isFinite(intervalS) || intervalS < 2 || intervalS > 300) die('--interval은 2~300초여야 한다', 2);
       const abort = new AbortController();
-      for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => abort.abort());
+      // 종료 신호: 막힌 출력·진행 중 요청을 기다리지 않는다. 잠금은 exit 훅이 돌려준다. 안 나간 줄은 cursor가 앞에 있어 다음 실행에서 다시 나온다.
+      for (const sig of ['SIGINT', 'SIGTERM']) process.once(sig, () => { abort.abort(); setTimeout(() => process.exit(0), 1500).unref(); });
       process.stdout.on('error', () => abort.abort()); // 구독자가 사라지면(EPIPE) 조용히 끝낸다
       return await runWatch(chat, {once: flags.once === true, intervalS, out: line => out(JSON.stringify(line)), err, signal: abort.signal, sleep});
     }
