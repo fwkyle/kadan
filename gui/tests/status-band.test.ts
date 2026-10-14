@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { bandChips, liveLabel, supervisorLife, supervisorLine } from "../src/status-band.ts";
 
-const base = { decisions: 0, stopped: 0, running: 0, alerts: { count: 0, items: [] }, flow: { total: 0, unconfirmed: [] }, live: [] };
+const base = { decisions: 0, stopped: 0, running: 0, alerts: { count: 0, items: [] }, flow: { total: 0, unconfirmedCount: 0, unconfirmed: [] }, live: [] };
 
 test("다섯 칩의 순서와 숫자: 결정·막힘(+경보)·작업 중·흐름 확인·살아 있는 담당", () => {
   const chips = bandChips({
     decisions: 2, stopped: 1, running: 3,
     alerts: { count: 2, items: [] },
-    flow: { total: 4, unconfirmed: [{ id: "a", title: "A", label: "연결 확인 필요", warnings: [] }] },
+    flow: { total: 4, unconfirmedCount: 1, unconfirmed: [{ id: "a", title: "A", label: "연결 확인 필요", warnings: [] }] },
     live: [
       { role: "p-작업자", harness: "claude", model: "sonnet", effort: "high", pidState: "match" },
       { role: "p-검수자", harness: "codex", model: "gpt-5", effort: null, pidState: "match" },

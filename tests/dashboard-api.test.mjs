@@ -44,7 +44,7 @@ for (const mode of ["jsonl", "sqlite"])
     assert.equal(status.decisions.length, 2);
     // 상단 띠의 나머지 질문: 고정 자료에는 열린 창·묶음·경보가 없고 원장은 읽혔다.
     assert.deepEqual(status.live, [], "세션 상태를 아는데 열린 창이 없으면 빈 목록");
-    assert.deepEqual(status.flow, { total: 0, unconfirmed: [] });
+    assert.deepEqual(status.flow, { total: 0, unconfirmedCount: 0, unconfirmed: [] });
     assert.deepEqual(status.alerts, { count: 0, items: [] });
     // ?super= 거름망: 관계표가 없으면 400, 있으면 그 슈퍼감독 몫만(감독 AI가 경보 받고 행동 전에 읽는 용도, 2026-10-05).
     assert.equal(status.supervisors, null, "관계표를 모르면 null");
@@ -169,8 +169,10 @@ for (const mode of ["jsonl", "sqlite"])
     assert.equal(answer.status, 200, await answer.clone().text());
     assert.equal((await answer.json()).result.delivery.status, "sent");
     assert.equal(f.delivered.length, 1);
+    // 답한 결정은 기본 응답(열린 것만)에서 빠지고 지난 결정 페이지로 간다.
+    assert.equal((await get("decisions")).items.some((d) => d.id === f.decision.id), false);
     assert.equal(
-      (await get("decisions")).items.find((d) => d.id === f.decision.id).status,
+      (await get("decisions?past=1")).items.find((d) => d.id === f.decision.id).status,
       "answered",
     );
     const before = f.snapshot().entries.length;
