@@ -225,6 +225,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      const fields={};
      for(const field of ['title','goal','scope','acceptance','owner','board','progress','nextAction','turnOwner','status','execution','phase','round','body','mail','result'])if(f[field]!==undefined)fields[field]=f[field];
      if(action==='update'&&fields.turnOwner===works.get(f.key.slice(5)).turnOwner)delete fields.turnOwner;
+     // 폼은 책임 감독을 매번 다시 보낸다. 값이 그대로면 명시 재지정이 아니다.
+     if(action==='update'&&fields.owner===works.get(f.key.slice(5)).owner)delete fields.owner;
      work=works.change(f.key.slice(5),action,fields,{revision:f.revision,by:'사람',note:f.note});
     }
     saved(`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1#detail`,{key:'work:'+work.key,revision:work.revision});return true;

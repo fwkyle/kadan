@@ -27,9 +27,9 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
     const sent = pending.get(`${role}\0${identity.taskIdFor(card)}`);
     if (!sent || !['resolved','unregistered'].includes(sent.taskConnection?.state)) continue;
     // 새 세대가 시작되기 전에 이 이름에 붙은 책임은 새 세션의 할 일이 아니다. 인계·재배정으로 새 세대 뒤에 붙었으면 현재 세대다.
-    if (isPreviousOwner(generations, role, sent.ownedAt ?? sent.t)) { previous?.push({kind:'execution', key:card.key, role}); continue; }
+    if (isPreviousOwner(generations, role, Object.hasOwn(sent, 'ownedAt') ? sent.ownedAt : sent.t)) { previous?.push({kind:'execution', key:card.key, role}); continue; }
     if (excludeWaiting && card.activity === 'waiting' && card.activityRole === role && Date.parse(card.activityAt) >= Date.parse(sent.t)) continue;
-    tasks.push({kind:'send', role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), t:sent.t});
+    tasks.push({kind:'send', role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), t:sent.t, ...(Object.hasOwn(sent,'ownedAt')?{ownedAt:sent.ownedAt}:{})});
   }
   return tasks;
 }

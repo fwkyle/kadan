@@ -12,7 +12,8 @@ export function workEntries(entries, cards = null) {
         if (!taskConnectionError(e) && e.role === entry.from && tasks.has(e.taskId) && ['send', 'done'].includes(e.kind)) {
           projected[i] = { ...e, role: entry.to, session: `kadan-${entry.to}`,
             inheritedFrom: e.inheritedFrom ?? entry.from, handoverId: entry.handoverId,
-            ...(entry.t ? { ownedAt: entry.t } : {}) };
+            // 인계 시각을 모르면 모름(null)으로 남긴다. 원래 발령 시각으로 돌아가지 않는다(모르면 이전 세대로 보지 않음).
+            ownedAt: entry.t ?? null };
         }
       }
     }
@@ -35,10 +36,13 @@ export function openTaskIds(entries, role, cards = null) {
 // owner를 정한 뒤에 확정된 인계만 이어서 현재 책임 감독을 계산한다(2026-09-23 감독-3→4 사고).
 export function effectiveWorkOwnership(work, entries) {
   const history = work.history ?? [];
-  const since = history.findLast((h, i) => i === 0 || history[i - 1].owner !== h.owner)?.at ?? work.at;
+  const changed = history.findLast((h, i) => i === 0 || history[i - 1].owner !== h.owner)?.at ?? work.at;
+  // owner 값이 같아도 명시 재지정(ownerAssignedAt)이 있었으면 그 시각부터 책임이 다시 붙었다.
+  const assigned = history.findLast(h => h.ownerAssignedAt)?.ownerAssignedAt;
+  const since = assigned && (!changed || Date.parse(assigned) > Date.parse(changed)) ? assigned : changed;
   let owner = work.owner, at = since ?? null;
   for (const e of entries) if (e?.kind === 'handover' && e.phase === 'transferred' && e.from === owner &&
-    (!since || !e.t || Date.parse(e.t) >= Date.parse(since))) { owner = e.to; at = e.t ?? at; }
+    (!since || !e.t || Date.parse(e.t) >= Date.parse(since))) { owner = e.to; at = e.t ?? null; }
   return { owner, at };
 }
 export function effectiveWorkOwner(work, entries) {
