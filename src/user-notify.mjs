@@ -6,14 +6,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {ledgerHome} from './ledger.mjs';
-import {resolveNotifyTarget, readDiscordSecrets} from './notify-setting.mjs';
+import {effectiveNotifyEnvFile, readDiscordSecrets} from './notify-setting.mjs';
+import {readThreads, withThreads} from './notify-threads.mjs';
+import {WorkStore} from './work-store.mjs';
 
 export const DISCORD_LIMIT = 2000;
 export const NOTIFY_LOG_FILE = 'notify-log.jsonl';
-const CHILD_TIMEOUT_MS = 14000;
 const SENDER = new URL('./discord-send.mjs', import.meta.url).pathname;
 // 경보는 같은 id가 해소됐다가 다시 뜰 수 있어 짧은 창 안에서만 중복으로 본다. 결정·우편 id는 한 번뿐이라 창이 없다.
 export const ALERT_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
+function workTitleOf(home, work) {
+  if (!work) return '';
+  try { return new WorkStore(home).get(work).title ?? ''; } catch { return ''; }
+}
 
 export function systemNotify(message, spawn) {
   const script = `display notification ${JSON.stringify(message)} with title "kadan watch"`;
@@ -56,14 +62,15 @@ function alreadySent(home, key, windowMs, nowMs) {
     && (!windowMs || nowMs - Date.parse(e.at) < windowMs));
 }
 
-// 디스코드 웹훅 요청이 나가는 유일한 함수. 이어서 붙일 기능(thread_id로 기존 스레드에 보내기, ?wait=true 응답의
-// 메시지 ID를 받아 PATCH로 수정)을 위해 인자·반환을 열어 둔다. 1단계는 둘 다 만들지 않는다 — 받은 값은 무시하고,
-// 반환은 {outcome, attempts, status, reason}이며 나중에 messageId를 더할 수 있다.
-export function postDiscordWebhook({webhook, content, allowedMentions, ...future}) {
-  void future; // threadId, wait, editMessageId 자리
-  const payload = {content, allowed_mentions: allowedMentions};
+// 디스코드 웹훅 요청이 나가는 유일한 함수.
+//   threadName: 포럼 채널에 새 글을 만든다(100자 안). threadId: 기존 글에 이어 붙인다. wait: 응답의 messageId·channelId를 받는다
+//   (포럼 새 글이면 channelId가 새 글 id). 메시지 수정(PATCH)은 아직 없다.
+// 반환: {outcome, attempts, status, reason, messageId?, channelId?}
+export function postDiscordWebhook({webhook, content, allowedMentions, threadName, threadId, wait = false, budgetMs}) {
+  const payload = {content, allowed_mentions: allowedMentions, ...(threadName ? {thread_name: String(threadName).slice(0, 100)} : {})};
   const child = spawnSync(process.execPath, [SENDER], {
-    input: JSON.stringify({webhook, payload}), encoding: 'utf8', timeout: CHILD_TIMEOUT_MS, maxBuffer: 1 << 16,
+    input: JSON.stringify({webhook, payload, threadId, wait: wait || Boolean(threadName), budgetMs}), encoding: 'utf8',
+    timeout: (budgetMs ?? 12000) + 2000, maxBuffer: 1 << 16,
   });
   if (child.error || child.status !== 0) {
     // 강제 종료되면 요청이 나갔는지 알 수 없다.
@@ -72,18 +79,45 @@ export function postDiscordWebhook({webhook, content, allowedMentions, ...future
   try { return JSON.parse(child.stdout.trim().split('\n').at(-1)); } catch { return {outcome: 'uncertain', attempts: null, reason: '전송 결과 해석 실패'}; }
 }
 
-// 레포별 비밀 파일에 사용자 ID가 없으면 기본 비밀 파일의 값을 쓴다.
-function resolveSecrets(target) {
-  if (!target.envFile) return {};
-  const own = readDiscordSecrets(target.envFile, {optionalUser: target.source === 'repo'});
-  if (own.error || own.userId || target.source !== 'repo') return own;
-  if (!target.fallbackEnvFile) return {error: '설정 오류: 레포 비밀 파일에 DISCORD_USER_ID가 없고 기본 비밀 파일도 없다'};
-  const base = readDiscordSecrets(target.fallbackEnvFile);
-  return base.error ? {error: `설정 오류: 레포 비밀 파일에 DISCORD_USER_ID가 없고 기본 비밀 파일을 쓸 수 없다`} : {webhook: own.webhook, userId: base.userId};
+const TOTAL_MS = 12000;
+
+// 포럼 채널: 업무 키마다 글 하나. 기록된 글이 있으면 thread_id로 이어 붙이고, 없거나 그 글이 4xx로 거절되면(지워짐 등)
+// thread_name으로 새 글을 한 번 만들어 기록한다. 새 글 요청은 같은 요청의 재시도가 아니라 다른 요청이다.
+function sendForum({home, webhook, work, title, content, allowedMentions}) {
+  const start = Date.now(), left = () => Math.max(1000, TOTAL_MS - (Date.now() - start));
+  const threadName = `${work} ${title ?? ''}`.trim().slice(0, 100);
+  const create = () => {
+    const r = postDiscordWebhook({webhook, content, allowedMentions, threadName, wait: true, budgetMs: left()});
+    if (r.outcome === 'sent' && r.channelId) withThreads(home, t => ({...t, [work]: r.channelId}));
+    return r;
+  };
+  const known = readThreads(home)[work];
+  if (known) {
+    const r = postDiscordWebhook({webhook, content, allowedMentions, threadId: known, budgetMs: left()});
+    if (!(r.outcome === 'failed' && r.status >= 400 && r.status < 500 && r.status !== 429)) return r;
+    return create();
+  }
+  let out;
+  withThreads(home, t => { // 동시에 같은 업무의 첫 알림이 둘 나가 글이 둘 생기지 않게 잠금 안에서 다시 본다.
+    const again = t[work];
+    out = again ? postDiscordWebhook({webhook, content, allowedMentions, threadId: again, budgetMs: left()}) : null;
+    if (!out) {
+      out = postDiscordWebhook({webhook, content, allowedMentions, threadName, wait: true, budgetMs: left()});
+      if (out.outcome === 'sent' && out.channelId) return {...t, [work]: out.channelId};
+    }
+    return null;
+  });
+  return out;
+}
+
+// 레포별 웹훅이 있고 업무 키가 있으면 포럼 글로, 아니면 기본 웹훅으로 보낸다.
+function route({sec, repo, work}) {
+  return sec.repoWebhook && work ? {forum: true, webhook: sec.repoWebhook} : {forum: false, webhook: sec.webhook};
 }
 
 // message: 시스템 알림에 쓰는 짧은 문구. discord: {content, mention} 또는 (사용자ID)=>{content, mention}을 주면 디스코드에는 그 본문을 쓴다.
-// opts: {kind, key, repo, dedupWindowMs, home, env, discord}. repo는 카드·업무·실행 키의 저장소 앞부분(모르면 생략 → 기본 웹훅).
+// opts: {kind, key, work, workTitle, repo, dedupWindowMs, home, env, discord}. work: 업무 키(없으면 기본 #브리핑),
+//   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키가 있을 때만 포럼 글로 간다.
 // 반환: {via:'discord'|'system', error, duplicate?, discord:{outcome,reason}|null}
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
@@ -93,19 +127,24 @@ export function notifyUser(message, spawn, opts = {}) {
   if (env.KADAN_NOTIFY !== 'off') {
     try {
       home = opts.home ?? ledgerHome();
-      const cfg = resolveNotifyTarget(env, home, opts.repo);
+      const cfg = effectiveNotifyEnvFile(env, home);
+      const repo = opts.repo ?? (opts.work?.includes('/') ? opts.work.split('/')[0] : undefined);
       if (cfg.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(cfg.error)};
       else if (cfg.envFile) {
-        const sec = resolveSecrets(cfg);
+        const sec = readDiscordSecrets(cfg.envFile, {repo});
         if (sec.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(sec.error)};
         else {
-          secrets = [sec.webhook, sec.userId];
+          secrets = [sec.webhook, sec.repoWebhook, sec.userId];
           const now = (opts.now ?? Date.now)();
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
           const d = (typeof opts.discord === 'function' ? opts.discord(sec.userId) : opts.discord) ?? {content: fitDiscord(message), mention: false};
-          const sent = postDiscordWebhook({webhook: sec.webhook, content: d.content,
-            allowedMentions: d.mention === true ? {users: [sec.userId]} : {parse: []}});
+          const allowedMentions = d.mention === true ? {users: [sec.userId]} : {parse: []};
+          const to = route({sec, repo, work: opts.work});
+          const title = opts.workTitle ?? workTitleOf(home, opts.work);
+          const sent = to.forum
+            ? sendForum({home, webhook: to.webhook, work: opts.work, title, content: d.content, allowedMentions})
+            : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions});
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (sent.outcome === 'sent') result.via = 'discord';
         }
@@ -114,7 +153,7 @@ export function notifyUser(message, spawn, opts = {}) {
       result.discord = {outcome: 'config-error', reason: scrubSecrets(error.message, secrets)};
     }
     if (home && result.discord) {
-      appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, repo: opts.repo ?? undefined,
+      appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, work: opts.work ?? undefined,
         via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined, status: result.discord.status ?? undefined});
     }
   }

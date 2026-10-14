@@ -15,13 +15,13 @@ const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
 const live = [];
 process.on('exit', () => { for (const c of live) c.kill('SIGKILL'); });
 
-async function world(script = [{status: 204}], {envExtra = '', startServer = true} = {}) {
+async function world(script = [{status: 204}], {envExtra = '', startServer = true, forumKnown = null} = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-test-'));
   const home = path.join(dir, 'home'), logFile = path.join(dir, 'requests.jsonl');
   fs.mkdirSync(home);
   let port = 1, child = null;
   if (startServer) {
-    child = spawn(process.execPath, [helper, logFile, JSON.stringify(script)], {stdio: ['ignore', 'pipe', 'inherit']});
+    child = spawn(process.execPath, [helper, logFile, JSON.stringify(script), JSON.stringify(forumKnown ? {forum: true, known: forumKnown} : {})], {stdio: ['ignore', 'pipe', 'inherit']});
     live.push(child);
     port = await new Promise(resolve => child.stdout.once('data', d => resolve(Number(String(d).match(/PORT (\d+)/)[1]))));
   }
@@ -275,58 +275,112 @@ test('watch @user 전달: 디스코드 실패 + 시스템 성공이면 전달, �
   }
 });
 
-test('레포별 채널: 설정 있음→그 웹훅, 없음·레포 모름→기본 웹훅, 사용자 ID는 기본 파일 값', async () => {
-  const base = await world(), other = await world();
-  try {
-    fs.writeFileSync(other.envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:${other.port}/api/webhooks/222/${TOKEN}\n`); // 사용자 ID 없음
-    setNotifySetting(base.home, {envFile: base.envFile});
-    setNotifySetting(base.home, {repo: 'other', envFile: other.envFile});
-    assert.ok(!JSON.stringify(readNotifySetting(base.home)).match(/https?:|webhooks|DISCORD_/i));
-    const env = {KADAN_NOTIFY: ''};
-    const send = (opts, text = '경보') => notifyUser(text, base.fakeSpawn(), {home: base.home, env, ...opts});
-    const asDecision = userId => ({content: `<@${userId}> 결정`, mention: true});
-    assert.equal(send({repo: 'other', discord: asDecision}).via, 'discord');
-    assert.equal(other.requests().length, 1); assert.equal(base.requests().length, 0);
-    assert.deepEqual(JSON.parse(other.requests()[0].body).allowed_mentions, {users: [USER_ID]});
-    assert.equal(send({repo: 'kadan'}).via, 'discord'); // 레포별 설정 없는 레포
-    assert.equal(send({}).via, 'discord');              // 레포 모름
-    assert.equal(base.requests().length, 2); assert.equal(other.requests().length, 1);
-    assert.equal(base.osCalls.length, 0);
-  } finally { base.stop(); other.stop(); }
-});
-
-test('레포별 비밀 파일 오류는 기본 웹훅으로 새지 않고 시스템 알림으로 내려간다', async () => {
+// 포럼 모양 가짜 서버를 띄우고, 기본 서버의 비밀 파일에 레포 키를 붙인다.
+async function forumWorld(known = [], repoKeys = ['kadan']) {
   const base = await world();
+  const forum = await world([{status: 204}], {forumKnown: known});
+  let extra = '';
+  for (const r of repoKeys) extra += `DISCORD_WEBHOOK_URL_${r.toUpperCase().replace(/[^A-Z0-9]/g, '_')}=http://127.0.0.1:${forum.port}/api/webhooks/333/${TOKEN}\n`;
+  fs.appendFileSync(base.envFile, extra);
+  const threads = () => { try { return JSON.parse(fs.readFileSync(path.join(base.home, 'notify-threads.json'), 'utf8')).threads; } catch { return null; } };
+  return {base, forum, threads, stop: () => { base.stop(); forum.stop(); }};
+}
+const bodyOf = r => JSON.parse(r.body);
+
+test('포럼: 업무 있는 알림은 첫 번에 thread_name 새 글, 다음부터 thread_id로 이어 붙인다', async () => {
+  const w = await forumWorld();
   try {
-    setNotifySetting(base.home, {envFile: base.envFile});
-    setNotifySetting(base.home, {repo: 'other', envFile: path.join(base.dir, 'missing.env')});
-    const r = notifyUser('경보', base.fakeSpawn(), {home: base.home, env: {KADAN_NOTIFY: ''}, repo: 'other'});
-    assert.equal(r.via, 'system'); assert.equal(r.discord.outcome, 'config-error');
-    assert.equal(base.requests().length, 0); assert.equal(base.osCalls.length, 1);
-  } finally { base.stop(); }
+    const o = {home: w.base.home, env: w.base.env, work: 'kadan/work-x', workTitle: '알림 만들기'};
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), {...o, kind: 'mail', key: 'mail:1'}).via, 'discord');
+    assert.equal(notifyUser('b', w.base.fakeSpawn(), {...o, kind: 'mail', key: 'mail:2'}).via, 'discord');
+    const [first, second] = w.forum.requests();
+    assert.equal(bodyOf(first).thread_name, 'kadan/work-x 알림 만들기');
+    assert.match(first.url, /wait=true/);
+    assert.match(second.url, /thread_id=T1/);
+    assert.equal(bodyOf(second).thread_name, undefined);
+    assert.deepEqual(w.threads(), {'kadan/work-x': 'T1'});
+    assert.equal(w.base.requests().length, 0);
+    // 상태 파일에는 주소·토큰·사용자 ID가 없다
+    const state = fs.readFileSync(path.join(w.base.home, 'notify-threads.json'), 'utf8');
+    for (const x of [TOKEN, USER_ID, '/api/webhooks', 'http']) assert.ok(!state.includes(x), x);
+  } finally { w.stop(); }
 });
 
-test('중복 막기 키는 레포·웹훅이 달라도 같은 알림이면 한 번이다', async () => {
-  const base = await world(), other = await world();
+test('포럼: 글 제목은 100자 안, 결정 요청은 업무 글로 가며 멘션이 유지된다', async () => {
+  const w = await forumWorld();
   try {
-    setNotifySetting(base.home, {envFile: base.envFile});
-    setNotifySetting(base.home, {repo: 'other', envFile: other.envFile});
-    const o = {home: base.home, env: {KADAN_NOTIFY: ''}, key: 'decision:x:request'};
-    assert.equal(notifyUser('a', base.fakeSpawn(), {...o, repo: 'other'}).via, 'discord');
-    assert.equal(notifyUser('a', base.fakeSpawn(), o).duplicate, true);
-    assert.equal(base.requests().length + other.requests().length, 1);
-  } finally { base.stop(); other.stop(); }
+    const store = new DecisionStore(w.base.home, {userNotify: (m, o) => notifyUser(m, w.base.fakeSpawn(), {...o, home: w.base.home, env: w.base.env, workTitle: '긴 제목 '.repeat(40)})});
+    const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
+    try { store.announce('request', {id: 'd1', card: 'kadan/card-1', work: 'kadan/work-x', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'}); }
+    finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }
+    const req = w.forum.requests()[0], body = bodyOf(req);
+    assert.ok(body.thread_name.length <= 100 && body.thread_name.startsWith('kadan/work-x'));
+    assert.deepEqual(body.allowed_mentions, {users: [USER_ID]});
+    assert.ok(body.content.startsWith(`<@${USER_ID}>`));
+  } finally { w.stop(); }
 });
 
-test('kadan notify --repo 설정·해제는 기본 설정을 건드리지 않는다', async () => {
+test('업무 키 없는 알림, 레포 키 없는 레포, 레포 모름은 기본 웹훅으로 간다', async () => {
+  const w = await forumWorld();
+  try {
+    const o = {home: w.base.home, env: w.base.env};
+    notifyUser('업무 없음', w.base.fakeSpawn(), o);
+    notifyUser('레포 키 없음', w.base.fakeSpawn(), {...o, work: 'zzz/work-1'});
+    assert.equal(w.base.requests().length, 2);
+    assert.equal(w.forum.requests().length, 0);
+    assert.equal(w.threads(), null);
+  } finally { w.stop(); }
+});
+
+test('기록된 글이 404면 새 글을 한 번 만들고 상태를 바꾼다', async () => {
+  const w = await forumWorld();
+  try {
+    fs.writeFileSync(path.join(w.base.home, 'notify-threads.json'), JSON.stringify({version: 1, threads: {'kadan/work-x': 'GONE'}}));
+    const r = notifyUser('a', w.base.fakeSpawn(), {home: w.base.home, env: w.base.env, work: 'kadan/work-x', workTitle: 't'});
+    assert.equal(r.via, 'discord');
+    const reqs = w.forum.requests();
+    assert.equal(reqs.length, 2);
+    assert.match(reqs[0].url, /thread_id=GONE/);
+    assert.equal(bodyOf(reqs[1]).thread_name, 'kadan/work-x t');
+    assert.deepEqual(w.threads(), {'kadan/work-x': 'T1'});
+  } finally { w.stop(); }
+});
+
+test('레포 이름은 키로 바뀐다(소문자·대시) — 레포 키가 틀리면 오류, 기본으로 새지 않는다', async () => {
+  const {repoKeySuffix} = await import('../src/notify-setting.mjs');
+  assert.equal(repoKeySuffix('my-app'), 'MY_APP');
+  assert.equal(repoKeySuffix('youtube-shorts-auto'), 'YOUTUBE_SHORTS_AUTO');
+  assert.equal(repoKeySuffix('kadan'), 'KADAN');
+  const w = await forumWorld([], ['youtube-shorts-auto']);
+  try {
+    const o = {home: w.base.home, env: w.base.env, workTitle: 't'};
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), {...o, work: 'youtube-shorts-auto/work-1'}).via, 'discord');
+    assert.equal(w.forum.requests().length, 1);
+    fs.appendFileSync(w.base.envFile, 'DISCORD_WEBHOOK_URL_ROTTIE=ftp://bad\n');
+    const bad = notifyUser('a', w.base.fakeSpawn(), {...o, work: 'rottie/work-1'});
+    assert.equal(bad.via, 'system'); assert.equal(bad.discord.outcome, 'config-error');
+    assert.equal(w.base.requests().length, 0);
+  } finally { w.stop(); }
+});
+
+test('같은 알림은 업무 글이든 기본 채널이든 중복 키로 한 번이다', async () => {
+  const w = await forumWorld();
+  try {
+    const o = {home: w.base.home, env: w.base.env, key: 'decision:x:request', workTitle: 't'};
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), {...o, work: 'kadan/work-x'}).via, 'discord');
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), o).duplicate, true);
+    assert.equal(w.base.requests().length + w.forum.requests().length, 1);
+  } finally { w.stop(); }
+});
+
+test('kadan notify set은 기본 경로 하나만 고정하고 show는 레포 키 이름만 보여 준다', async () => {
   const {cmdNotify} = await import('../src/commands/notify.mjs');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-repo-')), out = [];
-  const run = (argv, flags) => cmdNotify(argv, flags, {home, env: {}, print: l => out.push(l)});
-  run(['set', 'discord'], {'env-file': '/abs/a.env'});
-  run(['set', 'discord'], {repo: 'kadan', 'env-file': '/abs/b.env'});
-  assert.equal(readNotifySetting(home).discord.envFile, '/abs/a.env');
-  assert.equal(readNotifySetting(home).repos.kadan.envFile, '/abs/b.env');
-  run(['unset'], {repo: 'kadan'});
-  assert.equal(readNotifySetting(home).discord.envFile, '/abs/a.env');
-  assert.equal(readNotifySetting(home).repos, undefined);
+  const envFile = path.join(home, 's.env');
+  fs.writeFileSync(envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:1/api/webhooks/1/${TOKEN}\nDISCORD_USER_ID=${USER_ID}\nDISCORD_WEBHOOK_URL_KADAN=http://127.0.0.1:1/api/webhooks/2/${TOKEN}\n`);
+  cmdNotify(['set', 'discord'], {'env-file': envFile}, {home, env: {}, print: l => out.push(l)});
+  assert.equal(readNotifySetting(home).discord.envFile, envFile);
+  assert.match(out.join('\n'), /DISCORD_WEBHOOK_URL_KADAN/);
+  assert.ok(!out.join('\n').includes(TOKEN) && !out.join('\n').includes(USER_ID));
 });
+

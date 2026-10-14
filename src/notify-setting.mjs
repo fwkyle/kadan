@@ -9,75 +9,46 @@ export const NOTIFY_ENV_VAR = 'KADAN_NOTIFY_ENV_FILE';
 
 export const notifySettingPath = home => path.join(home, NOTIFY_SETTING_FILE);
 
-const REPO_NAME = /^[\w.-]+$/;
-
 export function readNotifySetting(home) {
   const file = notifySettingPath(home);
   if (!fs.existsSync(file)) return null;
   let value;
   try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { value = null; }
-  const repos = value?.repos ?? {};
-  const bad = !value || value.version !== 1 || (value.discord && !path.isAbsolute(value.discord.envFile ?? ''))
-    || typeof repos !== 'object' || Array.isArray(repos)
-    || Object.entries(repos).some(([name, v]) => !REPO_NAME.test(name) || !path.isAbsolute(v?.envFile ?? ''));
-  if (bad) throw new Error(`알림 설정 손상: ${file}`);
+  if (!value || value.version !== 1 || !path.isAbsolute(value.discord?.envFile ?? '')) throw new Error(`알림 설정 손상: ${file}`);
   return value;
 }
 
-function writeSetting(home, value) {
+export function setNotifySetting(home, {envFile, now = () => new Date().toISOString()}) {
+  if (typeof envFile !== 'string' || !path.isAbsolute(envFile)) throw new Error('--env-file에는 비밀 파일의 절대경로가 필요하다');
+  const value = {version: 1, discord: {envFile}, updatedAt: now()};
   fs.mkdirSync(home, {recursive: true});
   const file = notifySettingPath(home), tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file);
-}
-
-// repo가 없으면 기본 비밀 파일, 있으면 그 레포 전용 비밀 파일 경로를 고정한다. 둘 다 경로만 저장한다.
-export function setNotifySetting(home, {envFile, repo, now = () => new Date().toISOString()}) {
-  if (typeof envFile !== 'string' || !path.isAbsolute(envFile)) throw new Error('--env-file에는 비밀 파일의 절대경로가 필요하다');
-  if (repo !== undefined && (typeof repo !== 'string' || !REPO_NAME.test(repo))) throw new Error('--repo에는 레포 이름이 필요하다 (예: kadan)');
-  const old = readNotifySetting(home) ?? {version: 1};
-  const value = {...old, version: 1, updatedAt: now()};
-  if (repo === undefined) value.discord = {envFile};
-  else value.repos = {...(old.repos ?? {}), [repo]: {envFile}};
-  writeSetting(home, value);
   return value;
 }
 
-// 손상된 파일도 지울 수 있어야 복구가 된다 — 검증과 제거를 분리한다. repo를 주면 그 레포 설정만 지운다.
-export function unsetNotifySetting(home, {repo} = {}) {
+// 손상된 파일도 지울 수 있어야 복구가 된다 — 검증과 제거를 분리한다.
+export function unsetNotifySetting(home) {
   const file = notifySettingPath(home);
   if (!fs.existsSync(file)) return null;
   let before;
-  try { before = readNotifySetting(home); } catch { before = null; }
-  if (repo === undefined || !before) { fs.rmSync(file); return before ?? {discord: {envFile: '(손상된 설정)'}}; }
-  if (!before.repos?.[repo]) return null;
-  const {[repo]: gone, ...rest} = before.repos;
-  const next = {...before, repos: rest, updatedAt: new Date().toISOString()};
-  if (!Object.keys(rest).length) delete next.repos;
-  if (!next.discord && !next.repos) fs.rmSync(file); else writeSetting(home, next);
-  return gone;
+  try { before = readNotifySetting(home); } catch { before = {discord: {envFile: '(손상된 설정)'}}; }
+  fs.rmSync(file);
+  return before;
 }
 
-// 기본 비밀 파일 경로: 환경변수 KADAN_NOTIFY_ENV_FILE > 기계 설정 > 없음. 설정이 손상됐으면 던지지 않고 사유를 돌려준다.
+// 비밀 파일 경로: 환경변수 KADAN_NOTIFY_ENV_FILE > 기계 설정 > 없음. 설정이 손상됐으면 던지지 않고 사유를 돌려준다.
 export function effectiveNotifyEnvFile(env, home) {
   if (env[NOTIFY_ENV_VAR]) return {envFile: env[NOTIFY_ENV_VAR], source: 'env', error: null};
   try {
     const setting = readNotifySetting(home);
-    return setting?.discord ? {envFile: setting.discord.envFile, source: 'setting', error: null} : {envFile: null, source: 'default', error: null};
+    return setting ? {envFile: setting.discord.envFile, source: 'setting', error: null} : {envFile: null, source: 'default', error: null};
   } catch (error) { return {envFile: null, source: 'broken', error: error.message}; }
 }
 
-// 이 알림이 쓸 비밀 파일. 레포별 설정이 있으면 그 파일(없는 레포·레포 모름이면 기본 파일).
-// 레포별 파일은 읽기 오류가 나도 기본 웹훅으로 내려가지 않는다 — 다른 채널로 새지 않게 호출 쪽이 시스템 알림으로 내린다.
-export function resolveNotifyTarget(env, home, repo) {
-  const base = effectiveNotifyEnvFile(env, home);
-  if (!repo) return {...base, repo: null, fallbackEnvFile: base.envFile};
-  try {
-    const entry = readNotifySetting(home)?.repos?.[repo];
-    if (entry) return {envFile: entry.envFile, source: 'repo', repo, error: null, fallbackEnvFile: base.envFile};
-  } catch (error) { return {envFile: null, source: 'broken', repo, error: error.message, fallbackEnvFile: null}; }
-  return {...base, repo: null, fallbackEnvFile: base.envFile};
-}
+// 레포 이름 → 비밀 파일 키 접미사. 대문자로 바꾸고 영숫자가 아닌 글자는 `_`로 (my-app → MY_APP).
+export const repoKeySuffix = repo => String(repo).toUpperCase().replace(/[^A-Z0-9]/g, '_');
 
 // KEY=VALUE 줄만 읽는다. 따옴표 한 겹과 앞의 export, # 주석 줄 정도만 다룬다. 치환·명령 실행은 없다.
 export function parseEnvText(text) {
@@ -94,8 +65,22 @@ export function parseEnvText(text) {
   return out;
 }
 
-// 보낼 때 비밀 파일을 읽는다. 반환의 reason에는 주소·ID를 넣지 않는다.
-export function readDiscordSecrets(envFile, {optionalUser = false} = {}) {
+// 레포별 웹훅 키 이름 목록(값은 읽어도 돌려주지 않는다). show용.
+export function listRepoWebhookKeys(envFile) {
+  try { return Object.keys(parseEnvText(fs.readFileSync(envFile, 'utf8'))).filter(k => k.startsWith('DISCORD_WEBHOOK_URL_')).sort(); } catch { return []; }
+}
+
+function checkedUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { return '형식이 잘못됐다'; }
+  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  return url.protocol === 'https:' || (url.protocol === 'http:' && local) ? null : 'https여야 한다';
+}
+
+// 보낼 때 비밀 파일을 읽는다. 반환의 오류 문구에는 주소·ID를 넣지 않는다.
+// 기본 웹훅(DISCORD_WEBHOOK_URL)과 사용자 ID는 필수, 레포별 웹훅(DISCORD_WEBHOOK_URL_<레포>)은 repo를 줄 때 있으면 함께 돌려준다.
+// 레포 키가 있는데 형식이 틀리면 기본 웹훅으로 내려가지 않고 오류다(잘못된 채널로 새지 않게).
+export function readDiscordSecrets(envFile, {repo} = {}) {
   let text;
   try { text = fs.readFileSync(envFile, 'utf8'); } catch (error) {
     return {error: `설정 오류: 비밀 파일을 읽을 수 없다(${error.code ?? 'ERR'})`};
@@ -103,11 +88,18 @@ export function readDiscordSecrets(envFile, {optionalUser = false} = {}) {
   const values = parseEnvText(text);
   const webhook = values.DISCORD_WEBHOOK_URL, userId = values.DISCORD_USER_ID;
   if (!webhook) return {error: '설정 오류: 비밀 파일에 DISCORD_WEBHOOK_URL이 없다'};
-  if (!userId && !optionalUser) return {error: '설정 오류: 비밀 파일에 DISCORD_USER_ID가 없다'};
-  let url;
-  try { url = new URL(webhook); } catch { return {error: '설정 오류: DISCORD_WEBHOOK_URL 형식이 잘못됐다'}; }
-  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) return {error: '설정 오류: DISCORD_WEBHOOK_URL은 https여야 한다'};
-  if (userId && !/^\d{1,25}$/.test(userId)) return {error: '설정 오류: DISCORD_USER_ID는 숫자여야 한다'};
-  return {webhook, userId};
+  if (!userId) return {error: '설정 오류: 비밀 파일에 DISCORD_USER_ID가 없다'};
+  const bad = checkedUrl(webhook);
+  if (bad) return {error: `설정 오류: DISCORD_WEBHOOK_URL ${bad}`};
+  if (!/^\d{1,25}$/.test(userId)) return {error: '설정 오류: DISCORD_USER_ID는 숫자여야 한다'};
+  const out = {webhook, userId};
+  if (repo) {
+    const key = `DISCORD_WEBHOOK_URL_${repoKeySuffix(repo)}`;
+    if (values[key]) {
+      const badRepo = checkedUrl(values[key]);
+      if (badRepo) return {error: `설정 오류: ${key} ${badRepo}`};
+      out.repoWebhook = values[key];
+    }
+  }
+  return out;
 }

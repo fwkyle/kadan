@@ -4,6 +4,7 @@
 //   - 연결 단계 실패(연결 거부·DNS·연결 시간 초과): 최대 2회 재시도
 //   - 429: retry_after를 지켜 1회 / 5xx: 1회
 //   - 4xx(400·401·404 등)와 연결된 뒤의 시간 초과·끊김: 재시도 없음 (뒤쪽은 "불확실")
+// wait=true면 응답의 messageId·channelId(포럼 새 글이면 channelId가 글 id)를 돌려준다.
 // 출력(stdout 한 줄 JSON)에는 주소·토큰·오류 원문을 넣지 않는다 — 오류 코드와 HTTP 상태만 남긴다.
 import http from 'node:http';
 import https from 'node:https';
@@ -41,8 +42,11 @@ function attempt(url, body, budgetMs) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // 반환: {outcome:'sent'|'failed'|'uncertain', attempts, status?, reason?}
-export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS, now = Date.now} = {}) {
-  const url = new URL(webhook), body = JSON.stringify(payload), start = now();
+export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS, now = Date.now, threadId, wait} = {}) {
+  const url = new URL(webhook);
+  if (wait) url.searchParams.set('wait', 'true');
+  if (threadId) url.searchParams.set('thread_id', String(threadId));
+  const body = JSON.stringify(payload), start = now();
   const left = () => budgetMs - (now() - start);
   let attempts = 0, connectRetries = 0, rateRetried = false, serverRetried = false;
   for (;;) {
@@ -55,7 +59,11 @@ export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS,
       await sleep(400 * ++connectRetries);
       continue;
     }
-    if (r.status >= 200 && r.status < 300) return {outcome: 'sent', attempts, status: r.status};
+    if (r.status >= 200 && r.status < 300) {
+      const sent = {outcome: 'sent', attempts, status: r.status};
+      if (wait) try { const j = JSON.parse(r.text); sent.messageId = j.id ?? null; sent.channelId = j.channel_id ?? null; } catch { /* 본문 없음 */ }
+      return sent;
+    }
     if (r.status === 429 && !rateRetried) {
       let wait = Number(r.headers['retry-after']);
       try { const j = JSON.parse(r.text); if (Number.isFinite(Number(j.retry_after))) wait = Number(j.retry_after); } catch { /* 헤더 값을 쓴다 */ }
@@ -77,8 +85,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.stdin.on('end', async () => {
     let result;
     try {
-      const {webhook, payload, budgetMs} = JSON.parse(input);
-      result = await sendWebhook(webhook, payload, budgetMs ? {budgetMs} : {});
+      const {webhook, payload, budgetMs, threadId, wait} = JSON.parse(input);
+      result = await sendWebhook(webhook, payload, {...(budgetMs ? {budgetMs} : {}), threadId, wait});
     } catch { result = {outcome: 'failed', attempts: 0, reason: '전송 준비 오류'}; }
     process.stdout.write(JSON.stringify(result) + '\n');
     process.exit(0);

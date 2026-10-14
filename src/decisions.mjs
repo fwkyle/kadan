@@ -70,7 +70,7 @@ export class DecisionStore {
    short=`카단 결정 ${what}`;
    build=()=>({mention:false,content:fitDiscord(`결정 ${d.id} ${what}`,link)});
   }
-  try{return this.userNotify(short,{kind:`decision-${kind}`,repo:d.card.split('/')[0],key:`decision:${d.id}:${kind}`,discord:build});}catch{return null;}
+  try{return this.userNotify(short,{kind:`decision-${kind}`,work:d.work,workTitle:undefined,key:`decision:${d.id}:${kind}`,discord:build});}catch{return null;}
  }
  answer(id,{revision,text,choice},by){let newlyAnswered=false;const saved=this.locked(()=>{
   if(!human(by))throw new Error('사용자 답변은 사람 명의로만 기록');
