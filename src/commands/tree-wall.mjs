@@ -16,6 +16,7 @@ import { collectResources } from "../watch-resource.mjs";
 import { recentSends, die } from "../cli-basics.mjs";
 import { buildTree, renderTree } from "../cli-tree.mjs";
 import { collectCardFiles } from "../cli-guarded-send.mjs";
+import { dataVersion, wallCache } from "../wall-snapshot-cache.mjs";
 
 export function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
@@ -44,16 +45,22 @@ export function cmdTree(_argv, flags = {}) {
   console.log(renderTree(buildTree(readLedger(), aliveBySession,new CardStore(ledgerHome()).listSummaries())));
 }
 
-function loadWallSnapshot(runtime=null) {
+// 데이터 버전(원장 마지막 사건 번호·카드 파일 지문)이 같으면 원장 읽기·카드 읽기·카드 상태 계산을 다시 하지 않는다.
+// 생존 여부·자원·감시 프로세스는 원장에 없는 값이라 매번 새로 읽는다.
+export function loadWallSnapshot(runtime=null) {
   const collectedAt = new Date();
+  const home = ledgerHome();
+  const version = dataVersion(home);
   const resourceSnapshot = buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   const file = ledgerPath();
   let entries = [];
   let ledgerLines = null,ledgerState=null;
   const errors = [];
   try {
-    ledgerState=readLedgerState(ledgerHome());
-    entries = projectLedger(ledgerState);
+    ({ state: ledgerState, entries } = wallCache.memo("ledger", version, () => {
+      const state = readLedgerState(home);
+      return { state, entries: projectLedger(state) };
+    }));
     ledgerLines = entries.length;
   } catch (error) {
     errors.push(`원장 못 읽음(0개가 아니라 모름): ${error.message}`);
@@ -71,20 +78,24 @@ function loadWallSnapshot(runtime=null) {
       .map((item) => [item.session, item])
   );
   let cards=[],cardError=null;
-  try {cards=new CardStore(ledgerHome()).list();}catch(error){cardError=error;}
-  const tree=withWaitSnapshots(buildTree(entries,aliveBySession,cards),ledgerHome());
-  let center=null, centerError=null,registeredWorks=null;
+  try {cards=wallCache.memo("cards", version, () => new CardStore(home).list());}catch(error){cardError=error;}
+  const tree=withWaitSnapshots(buildTree(entries,aliveBySession,cards),home);
+  let center=null, centerError=null,registeredWorks=null,centerKey=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
     if(cardError)throw cardError;
-    center=buildCardCenter({cards,entries,tree,runtimeKnown:!errors.some(x=>x.startsWith("생존"))});
-    registeredWorks=new WorkStore(ledgerHome()).list();
-    center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(ledgerHome()),profilePath:fs.existsSync(defaultProfilePath(ledgerHome()))?defaultProfilePath(ledgerHome()):null});
+    const runtimeKnown=!errors.some(x=>x.startsWith("생존"));
+    // 카드 상태 계산은 원장·카드 파일과 세션 생존 여부(pid 포함)가 같으면 결과가 같다.
+    centerKey = version && JSON.stringify([version, runtimeKnown, Object.keys(aliveBySession).sort().map(name => [name, aliveBySession[name].pid ?? null])]);
+    center=wallCache.memo("center", centerKey, () => buildCardCenter({cards,entries,tree,runtimeKnown}));
+    registeredWorks=wallCache.memo("works", version, () => new WorkStore(home).list());
+    center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
   return {
     center,centerError,tree,ledgerState,registeredWorks,runtime,
     ...resourceSnapshot,
     entries,
+    centerKey,
     version: fs.existsSync(new URL("../../package.json", import.meta.url)) ? JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version : "",
     mailbox: ledgerLines === null ? null : recentSends(entries),
     cardFiles: ledgerLines === null ? {} : collectCardFiles(entries),

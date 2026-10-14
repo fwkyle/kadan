@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { cardUrl, navigate } from "./navigation";
 import { save } from "./resource";
 import { radioChecked } from "./form-state";
+import { lastReadLabel } from "./freshness-label";
 import type { SaveResult } from "./resource";
 import type { Field, FormSpec, Row } from "./types";
 
@@ -78,12 +79,16 @@ export function Freshness({
   refreshing,
   error,
   refresh,
+  timedOut = false,
+  updatedAt = 0,
   footer = true,
 }: {
   collectedAt?: string;
   refreshing: boolean;
   error: string | null;
   refresh: (force?: boolean) => void;
+  timedOut?: boolean;
+  updatedAt?: number;
   footer?: boolean;
 }) {
   const [, tick] = useState(0);
@@ -101,7 +106,9 @@ export function Freshness({
   const content = (
     <div className="freshness" role="status">
       <span>
-        {refreshing
+        {timedOut && updatedAt
+          ? `마지막 조회: ${lastReadLabel(updatedAt)} · 다시 읽는 중`
+          : refreshing
           ? "갱신 중"
           : error
             ? "갱신 실패 · 이전 자료"

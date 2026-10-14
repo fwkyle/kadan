@@ -30,7 +30,7 @@ test("같은 요청은 공유하고 늦은 옛 응답은 새 상태를 덮지 �
   assert.equal(resource.getSnapshot().data, 2);
   assert.equal(resource.getSnapshot().refreshing, false);
 });
-test("응답이 끝나지 않아도 제한 시간 뒤 다시 읽을 수 있고 이전 자료는 유지한다", async () => {
+test("제한 시간이 지나도 이전 자료가 있으면 화면을 유지하고 큰 오류 없이 작은 표시만 켠다", async () => {
   let count = 0;
   const resource = new Resource(
     () =>
@@ -39,13 +39,79 @@ test("응답이 끝나지 않아도 제한 시간 뒤 다시 읽을 수 있고 �
   );
   await resource.refresh();
   assert.equal(resource.getSnapshot().data, 1);
+  const readAt = resource.getSnapshot().updatedAt;
   await resource.refresh();
-  assert.match(resource.getSnapshot().error!, /초과/);
-  assert.equal(resource.getSnapshot().data, 1);
-  assert.equal(resource.getSnapshot().refreshing, false);
+  const timedOut = resource.getSnapshot();
+  assert.equal(timedOut.error, null);
+  assert.equal(timedOut.timedOut, true);
+  assert.equal(timedOut.data, 1);
+  assert.equal(timedOut.updatedAt, readAt, "마지막 성공 시각은 그대로");
+  assert.equal(timedOut.refreshing, false);
   await resource.refresh();
   assert.equal(resource.getSnapshot().data, 3);
   assert.equal(resource.getSnapshot().error, null);
+  assert.equal(resource.getSnapshot().timedOut, false, "성공하면 표시를 끈다");
+});
+test("첫 조회가 시간 초과면 보여 줄 자료가 없으니 오류 띠를 쓴다", async () => {
+  const resource = new Resource(() => new Promise<number>(() => {}), {
+    deadlineMs: 15,
+  });
+  await resource.refresh();
+  const state = resource.getSnapshot();
+  assert.match(state.error!, /초과/);
+  assert.equal(state.timedOut, false);
+  assert.equal(state.data, undefined);
+});
+test("서버 오류·연결 실패는 이전 자료가 있어도 오류 띠를 쓰고 자료는 유지한다", async () => {
+  for (const failure of [
+    new Error("조회 실패 (503)"),
+    new TypeError("Failed to fetch"),
+    new SyntaxError("Unexpected token < in JSON"),
+  ]) {
+    let count = 0;
+    const resource = new Resource(() =>
+      ++count === 1 ? Promise.resolve(7) : Promise.reject(failure),
+    );
+    await resource.refresh();
+    await resource.refresh();
+    const state = resource.getSnapshot();
+    assert.equal(state.error, failure.message);
+    assert.equal(state.timedOut, false);
+    assert.equal(state.data, 7);
+  }
+});
+test("앞 조회가 끝나기 전에는 자동 조회를 다시 보내지 않는다", async () => {
+  const slow = deferred<number>();
+  let count = 0;
+  const resource = new Resource(
+    () => (++count === 1 ? slow.promise : Promise.resolve(count)),
+    { pollMs: 5, deadlineMs: 1000 },
+  );
+  const stop = resource.subscribe(() => {});
+  await wait(60);
+  assert.equal(count, 1, "느린 조회가 진행 중이면 폴링 시간이 지나도 새 조회 없음");
+  slow.resolve(1);
+  await wait(30);
+  assert.ok(count >= 2, "끝나면 다음 자동 조회가 이어진다");
+  stop();
+});
+test("시간 초과 뒤에도 다음 자동 조회는 앞 조회가 끝난 다음에만 간다", async () => {
+  let count = 0;
+  const resource = new Resource(
+    () =>
+      ++count === 2 ? new Promise<number>(() => {}) : Promise.resolve(count),
+    { pollMs: 20, deadlineMs: 30, staleMs: 0 },
+  );
+  const stop = resource.subscribe(() => {});
+  await wait(10);
+  assert.equal(resource.getSnapshot().data, 1);
+  await wait(30);
+  assert.equal(count, 2, "두 번째 조회가 도는 동안 세 번째는 없음");
+  await wait(60);
+  assert.equal(resource.getSnapshot().timedOut || count >= 3, true);
+  assert.ok(count >= 3);
+  assert.equal(resource.getSnapshot().data !== undefined, true);
+  stop();
 });
 test("숨긴 화면·구독 종료는 취소하고 다시 열면 갱신한다", async () => {
   let count = 0;
