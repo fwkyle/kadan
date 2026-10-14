@@ -9,7 +9,7 @@ const pidOf = e => e.panePid ?? e.rottiePid;
 export const conversationModeOf = e => e.conversationMode ?? conversationOf(e.cmd).conversationMode;
 
 export function createMailGenerations() {
-  const live = new Map(), seen = new Set(), bounds = new Map();
+  const live = new Map(), seen = new Set(), bounds = new Map(), boundTimes = new Map();
   const apply = (e, index) => {
     if (e?.kind === 'stop') { live.delete(e.session); return; }
     if (e?.kind !== 'start') return;
@@ -24,12 +24,19 @@ export function createMailGenerations() {
       || conversationModeOf(e) === 'resume';
     if (!continues && seen.has(role)) {
       bounds.set(role, [...(bounds.get(role) ?? []), index]);
+      boundTimes.set(role, [...(boundTimes.get(role) ?? []), Date.parse(e.t)]);
     }
     seen.add(role);
   };
   // at 이후에 이 역할의 새 세대가 시작됐으면 그 편지는 이전 세대 소속이다.
   const isPrevious = (role, at) => (bounds.get(role) ?? []).some(index => index > at);
-  return {apply, isPrevious, hasStarted: role => seen.has(role)};
+  // 책임(업무·카드 owner)은 원장 순번이 아니라 시각으로 붙는다. 같은 경계를 시각으로 비교한다(owner-generation.mjs).
+  // 시각을 모르면(파싱 불가) 이전 세대로 단정하지 않는다.
+  const isPreviousAt = (role, at) => {
+    const ms = typeof at === 'number' ? at : Date.parse(at);
+    return Number.isFinite(ms) && (boundTimes.get(role) ?? []).some(bound => bound > ms);
+  };
+  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role)};
 }
 
 // 이전 세대 미확인: 읽음 미확인이면서 기록용 알림이 아니고 새 세대가 시작되기 전의 편지.

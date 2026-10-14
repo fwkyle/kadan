@@ -2,6 +2,7 @@ import { workEntries } from "./handover-state.mjs";
 import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
+import { ownerGenerations, isPreviousOwner } from "./owner-generation.mjs";
 
 function startedAtMs(state) {
   const at = Date.parse(state?.startedAt);
@@ -31,7 +32,7 @@ export function idleWorkEntries(works, cards, parents) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
   return (works ?? []).filter(w => w?.status === "open" && parents.has(w.owner)
       && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
-    .map(w => ({ kind: "send", role: w.owner, taskId: `work:${w.key}`, t: w.at }));
+    .map(w => ({ kind: "send", role: w.owner, taskId: `work:${w.key}`, t: w.at, ...(w.ownedAt ? { ownedAt: w.ownedAt } : {}) }));
 }
 
 export function assessSupervisorIdle(
@@ -118,8 +119,12 @@ export function assessSupervisorIdle(
   const requests = peerResponsibilities(peerEntries, parents, works, cards);
   const waiting = (id, role) => excluded(id, role)
     || requests.find(r => r.taskId === id)?.linkedWorkIds.some(key => excluded(key, role));
+  // 이전 세대 소속의 책임은 할 일에서 뺀다(owner-generation.mjs). 답 대기 요청(peerRequest)은 우편 세대 규칙을 따른다.
+  const generations = ownerGenerations(peerEntries);
+  const current = entry => entry.peerRequest || entry.kind !== "send" || !parents.has(entry.role)
+    || !isPreviousOwner(generations, entry.role, entry.ownedAt ?? entry.t);
   alerts.push(...assessHierarchyIdle(
-    [...entries, ...idleWorkEntries(works, cards, parents), ...requests],
+    [...entries, ...idleWorkEntries(works, cards, parents), ...requests].filter(current),
     roleStates, now, idleMs, parents, waiting,
   ));
   return alerts;

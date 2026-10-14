@@ -87,6 +87,9 @@ test("status?super=: 상위가 비서인 super → 200, 프로필 없는 역할 
   const all = await (await get("?super=총괄")).json(), sub = await (await get("?super=레포슈퍼")).json();
   assert.equal(all.supervisor.super, "총괄");
   assert.equal(sub.supervisor.super, "레포슈퍼");
-  const summary = (await (await get("")).json()).supervisors.items.map(s => s.super);
+  const body = await (await get("")).json();
+  assert.deepEqual([body.previousGeneration.works, body.previousGeneration.executions], [0, 0], "이전 세대 업무 건수 칸(관계표를 알면 숫자)");
+  assert.ok("previousGeneration" in sub);
+  const summary = body.supervisors.items.map(s => s.super);
   assert.deepEqual(summary, ["레포슈퍼", "총괄", "kadan-슈퍼감독"], "요약은 프로필 기준 슈퍼감독들");
 });

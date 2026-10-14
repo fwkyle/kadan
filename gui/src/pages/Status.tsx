@@ -24,6 +24,7 @@ type StatusData = Stamp & {
   recent: {at: string; kind: string; label: string; role: string; card: {key: string; title: string}}[];
   recentCounts: Record<string, number>;
   activity?: Record<string, number[]>;
+  previousGeneration?: {works: number; executions: number; items: {kind: string; key: string; role: string}[]} | null;
 };
 // 서버 bucketGroups와 같은 묶음. 결과 대기는 작업중에, 보류(archived)는 진행 전에 센다(2026-10-05 [kyle]).
 const groups = [
@@ -128,6 +129,7 @@ export default function Status({url}: {url: URL}) {
               <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
             </li>)}</ul>}
         {data.supervisors && data.supervisors.unassigned > 0 && <p className="st-hint">관계표에 없는 담당의 실행 {data.supervisors.unassigned}건은 어느 슈퍼감독에도 묶이지 않았습니다.</p>}
+        {data.previousGeneration && data.previousGeneration.works + data.previousGeneration.executions > 0 && <p className="st-hint" id="status-previous-generation">이전 세대 업무 {data.previousGeneration.works + data.previousGeneration.executions}건(업무 {data.previousGeneration.works} · 발령 {data.previousGeneration.executions})은 같은 이름을 새 대화가 다시 쓰기 전에 붙은 책임이라 "놀고 있음" 할 일에서 뺐습니다. 새 대화가 이어받으려면 업무·발령을 다시 맡기거나 인계하세요.</p>}
         {data.supervisors && (data.supervisors.unowned ?? 0) > 0 && <p className="st-hint">담당이 아직 정해지지 않은 실행(진행 전·일시정지) {data.supervisors.unowned}건은 세지 않았습니다.</p>}
       </section>
       <section id="status-decisions" className="st-section">

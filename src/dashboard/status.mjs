@@ -18,10 +18,25 @@ import {
   supervisorSummary,
   roleActivity,
 } from "../dashboard-band.mjs";
-import { effectiveWorkOwner } from "../handover-state.mjs";
+import { effectiveWorkOwner, withEffectiveOwner } from "../handover-state.mjs";
+import { previousGenerationExecutions, previousGenerationWorks } from "../watch-scope.mjs";
 import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
 import { letters, pick, compact } from "./shared.mjs";
+
+// 같은 이름을 새 대화가 다시 쓰기 전에 그 이름에 붙은 열린 업무·발령. 놀고 있음 할 일에서는 빠지지만 여기서 건수로 보인다.
+// 관계표나 원장을 모르면 null(모름). 새 세대가 넘겨받으려면 기존 재배정·인계 명령을 쓴다(docs/hierarchy.md).
+function previousGenerationItems(snapshot, m) {
+  if (!m.hierarchy || snapshot.ledgerLines === null) return null;
+  try {
+    const parents = new Map(Object.entries(m.hierarchy)), entries = snapshot.entries ?? [];
+    const works = (registeredCenterWorks(snapshot).works ?? []).map((w) => withEffectiveOwner(w, entries));
+    return [...previousGenerationWorks(works, entries, parents), ...previousGenerationExecutions(m.cards, entries, parents, works)];
+  } catch { return null; }
+}
+const previousSummary = (items) => items && ({
+  works: items.filter((i) => i.kind === "work").length, executions: items.filter((i) => i.kind === "execution").length, items: items.slice(0, 20),
+});
 
 export function statusData(snapshot, url, stamp, m) {
   const recent = recentExecutionEvents(m.cards);
@@ -53,6 +68,7 @@ export function statusData(snapshot, url, stamp, m) {
   const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles });
   // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
   // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
+  const previousItems = previousGenerationItems(snapshot, m);
   const superFilter = url.searchParams.get("super");
   if (superFilter) {
     if (!supervisors) throw Object.assign(new Error("관계표를 읽지 못해 슈퍼감독별로 거를 수 없습니다"), { status: 400 });
@@ -74,6 +90,7 @@ export function statusData(snapshot, url, stamp, m) {
       works: statusWorks.filter((w) => mine(w.owner) && ["running", "hold"].includes(w.state))
         .map((w) => pick(w, ["key", "title", "owner", "state", "turnLabel", "next"])),
       decisions: openDecisions === null ? null : openDecisions.filter((d) => mine(d.requestedBy)),
+      previousGeneration: previousSummary(previousItems?.filter((i) => mine(i.role)) ?? null),
       alerts: allAlerts === null ? null : { count: myAlerts.length, items: myAlerts.slice(0, 20) },
       recent: recent.filter((e) => mine(e.role)).slice(0, 20).map((e) => ({ ...pick(e, ["at", "kind", "label", "role"]), card: pick(e.card, ["key", "title"]) })),
     };
@@ -103,6 +120,7 @@ export function statusData(snapshot, url, stamp, m) {
       runtime: snapshot.runtime,
     }),
     decisions: openDecisions,
+    previousGeneration: previousSummary(previousItems),
     live,
     flow: flowSummary(m.reviewFlows),
     alerts,
