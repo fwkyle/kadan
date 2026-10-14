@@ -91,7 +91,7 @@ export function notifyUser(message, spawn, opts = {}) {
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
           const d = (typeof opts.discord === 'function' ? opts.discord(sec.userId) : opts.discord) ?? {content: fitDiscord(message), mention: false};
           const sent = sendToDiscord({webhook: sec.webhook, userId: sec.userId, content: d.content, mention: d.mention === true});
-          result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null};
+          result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (sent.outcome === 'sent') result.via = 'discord';
         }
       }
@@ -100,7 +100,7 @@ export function notifyUser(message, spawn, opts = {}) {
     }
     if (home && result.discord) {
       appendLog(home, {at: new Date((opts.now ?? Date.now)()).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null,
-        via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined});
+        via: 'discord', outcome: result.discord.outcome, reason: result.discord.reason || undefined, attempts: result.discord.attempts ?? undefined, status: result.discord.status ?? undefined});
     }
   }
   if (result.via === 'discord') return result;
