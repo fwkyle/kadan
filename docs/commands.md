@@ -22,6 +22,8 @@
 | `KADAN_WINDOW` | tmux 바닥에서 시작할 때 여는 창. `none`(기본) · `rottie` · `orca`. 있으면 기계 설정(`kadan window`)보다 먼저다 |
 | `KADAN_ROTTIE_BIN` | `KADAN_WINDOW=rottie`일 때 말 걸 로티 CLI의 절대경로. 있으면 기계 설정의 경로보다 먼저다 |
 
+| `KADAN_NOTIFY_ENV_FILE` | 사용자 알림(디스코드) 비밀 파일의 절대경로. 있으면 기계 설정(`kadan notify`)보다 먼저다. 없으면 설정, 둘 다 없으면 시스템 알림만 쓴다 → [사용자 알림](user-notify.md) |
+| `KADAN_NOTIFY` | `off`면 디스코드와 결정 알림, 사용자 우편함 알림을 보내지 않는다(시험용) |
 | `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`) |
 | `KADAN_ROLE` | 카단 세션 안에서 자동으로 붙는 자기 역할. 원장의 `by`가 된다 |
 
@@ -34,6 +36,7 @@
 | `kadan init` | 환경 확인, 스킬 링크, 실행기 선택. 처음 한 번 | `--runner codex\|claude`, `--no-skills` |
 | `kadan up` | 비서 세션과 대시보드 세션을 띄운다. 살아 있으면 그대로 쓰며, 이전 Codex 비서는 저장된 대화로 복원한다. tmux에서는 데이터 폴더에 기본 감시 프로필(`watch-profile.json`)이 있고 감시 프로세스가 없을 때 감시기도 세션 `kadan-watch`에 띄운다(재부팅 뒤 자동 시작에서 감시기가 빠지지 않게, 2026-10-13) | `--cmd <실행기 명령>`, `--port 8790`, `--hidden`, `--no-prompt` |
 | `kadan window show\|set rottie [--rottie-bin <절대경로>]\|set none\|unset` | 창 선택(로티/백그라운드)을 이 기계의 `KADAN_HOME`에 고정한다. 환경변수를 못 물려받은 AI 셸도 같은 값을 읽는다. `rottie`에는 로티 실행 파일의 절대경로가 필요하다(`--rottie-bin` 또는 환경변수 `KADAN_ROTTIE_BIN`). 설정이 없고 켜진 로티가 보이면 `start`가 stderr로 고정 명령을 안내하지만 자동으로 고르지 않고 시작도 막지 않는다. 설정 파일은 자동으로 고쳐 쓰지 않는다 | `--rottie-bin` |
+| `kadan notify show\|set discord --env-file <절대경로>\|unset` | 사용자 알림을 디스코드로 보낼 비밀 파일(`DISCORD_WEBHOOK_URL`·`DISCORD_USER_ID`)의 **경로만** 이 기계의 `KADAN_HOME`에 고정한다. 읽는 순서는 환경변수 `KADAN_NOTIFY_ENV_FILE` > 설정 > 없음(시스템 알림). 디스코드가 안 되면 시스템 알림으로 내려간다 → [사용자 알림](user-notify.md) | `--env-file` |
 | `kadan autostart show\|status\|install\|remove` | macOS에서 로그인할 때 `kadan up --hidden`을 창 없이(`KADAN_WINDOW=none`, 로그인 직후엔 로티가 없으므로) 한 번 실행하는 LaunchAgent(`~/Library/LaunchAgents/dev.kadan.up.plist`)를 관리한다. 죽었다고 되살리지 않는다(KeepAlive 없음). `show`는 만들 파일만 보여 주고, `install`은 없을 때만 쓰며, `remove`는 지우지 않고 `<데이터 폴더>/.trash/`로 옮긴다. 설치 때의 PATH·`KADAN_*` 환경과 현재 폴더를 적어 둔다 | — |
 
 ## 역할(세션) 다루기

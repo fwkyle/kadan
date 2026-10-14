@@ -1,0 +1,276 @@
+import './helpers/isolated-home.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawn, spawnSync} from 'node:child_process';
+import {notifyUser, fitDiscord, scrubSecrets, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
+import {DecisionStore} from '../src/decisions.mjs';
+import {parseEnvText, setNotifySetting, readNotifySetting, effectiveNotifyEnvFile} from '../src/notify-setting.mjs';
+
+// 가짜 값만 쓴다. 이 시험 파일의 어떤 값도 실제 주소·ID가 아니다.
+const TOKEN = 'FAKETOKEN-abc123', USER_ID = '424242424242';
+const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
+const live = [];
+process.on('exit', () => { for (const c of live) c.kill('SIGKILL'); });
+
+async function world(script = [{status: 204}], {envExtra = '', startServer = true} = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-test-'));
+  const home = path.join(dir, 'home'), logFile = path.join(dir, 'requests.jsonl');
+  fs.mkdirSync(home);
+  let port = 1, child = null;
+  if (startServer) {
+    child = spawn(process.execPath, [helper, logFile, JSON.stringify(script)], {stdio: ['ignore', 'pipe', 'inherit']});
+    live.push(child);
+    port = await new Promise(resolve => child.stdout.once('data', d => resolve(Number(String(d).match(/PORT (\d+)/)[1]))));
+  }
+  const envFile = path.join(dir, 'secret.env');
+  fs.writeFileSync(envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:${port}/api/webhooks/111/${TOKEN}\nDISCORD_USER_ID="${USER_ID}"\n${envExtra}`);
+  const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: envFile};
+  const requests = () => fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
+  const osCalls = [];
+  const fakeSpawn = osFails => (cmd, args) => { osCalls.push({cmd, args}); return {status: osFails ? 1 : 0, stderr: 'os-fail'}; };
+  const log = () => fs.existsSync(path.join(home, NOTIFY_LOG_FILE)) ? fs.readFileSync(path.join(home, NOTIFY_LOG_FILE), 'utf8') : '';
+  return {dir, home, envFile, env, port, requests, osCalls, fakeSpawn, log, stop: () => child?.kill('SIGTERM')};
+}
+
+test('환경 파일은 KEY=VALUE만 해석한다(따옴표·주석·export, 명령 실행 없음)', () => {
+  assert.deepEqual(parseEnvText('# c\nexport A="1"\nB=\'2\'\nC=$(echo hi)\n bad line\n'), {A: '1', B: '2', C: '$(echo hi)'});
+});
+
+test('본문 2,000자 제한: 줄여도 끝의 링크는 남는다', () => {
+  const out = fitDiscord('가'.repeat(5000), '링크: http://127.0.0.1:8790/#decision-x');
+  assert.ok(out.length <= 2000);
+  assert.ok(out.endsWith('http://127.0.0.1:8790/#decision-x'));
+});
+
+test('결정 요청만 멘션하고, 답변·취소·경보는 allowed_mentions를 비운다', async () => {
+  const w = await world();
+  try {
+    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
+    const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
+    try {
+      const d = {id: 'dec-1', card: 'repo/card-1', work: 'repo/work-1', question: '질문입니다 '.repeat(300), options: ['가', '나'], recommendation: '가', reason: '이유 '.repeat(500)};
+      store.announce('request', d);
+      store.announce('answer', {...d, answer: {text: '가로 가자', choice: '가'}});
+      store.announce('cancel', d);
+    } finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }
+    notifyUser('경보 @everyone <@999>', w.fakeSpawn(), {kind: 'alert', home: w.home, env: w.env});
+    const [req, ans, can, alert] = w.requests().map(r => JSON.parse(r.body));
+    assert.deepEqual(req.allowed_mentions, {users: [USER_ID]});
+    assert.ok(req.content.startsWith(`<@${USER_ID}> [결정 요청]`));
+    for (const part of ['선택지: 1) 가 2) 나', '추천: 가', '결정 dec-1', '카드 repo/card-1', '업무 repo/work-1', 'http://127.0.0.1:8790/#decision-dec-1']) assert.ok(req.content.includes(part), part);
+    assert.ok(req.content.length <= 2000);
+    assert.deepEqual(ans.allowed_mentions, {parse: []});
+    assert.match(ans.content, /^결정 dec-1 답변됨\(가\)/);
+    assert.deepEqual(can.allowed_mentions, {parse: []});
+    assert.deepEqual(alert.allowed_mentions, {parse: []});
+    assert.equal(w.osCalls.length, 0);
+  } finally { w.stop(); }
+});
+
+test('연결 거부: 연결 단계 실패만 2회 재시도하고 시스템 알림으로 내려간다, 주소는 기록에 없다', async () => {
+  const w = await world([{status: 204}], {startServer: false});
+  try {
+    const r = notifyUser('경보', w.fakeSpawn(), {kind: 'alert', key: 'alert:a:RED', home: w.home, env: w.env});
+    assert.equal(r.via, 'system');
+    assert.equal(r.discord.outcome, 'failed');
+    assert.equal(r.discord.attempts, 3);
+    assert.equal(w.osCalls.length, 1);
+    const everything = JSON.stringify(r) + w.log();
+    for (const secret of [TOKEN, USER_ID, '/api/webhooks', '127.0.0.1:1']) assert.ok(!everything.includes(secret), secret);
+  } finally { w.stop(); }
+});
+
+test('400은 재시도하지 않는다', async () => {
+  const w = await world([{status: 400, body: {message: 'bad'}}]);
+  try {
+    const r = notifyUser('경보', w.fakeSpawn(), {home: w.home, env: w.env});
+    assert.equal(r.discord.outcome, 'failed');
+    assert.equal(r.discord.reason, 'HTTP 400');
+    assert.equal(w.requests().length, 1);
+    assert.equal(r.via, 'system');
+  } finally { w.stop(); }
+});
+
+test('429는 retry_after를 지켜 한 번만 다시 보낸다', async () => {
+  const w = await world([{status: 429, body: {retry_after: 0.4}}, {status: 204}]);
+  try {
+    const r = notifyUser('경보', w.fakeSpawn(), {home: w.home, env: w.env});
+    assert.equal(r.via, 'discord');
+    const reqs = w.requests();
+    assert.equal(reqs.length, 2);
+    assert.ok(reqs[1].at - reqs[0].at >= 380, `간격 ${reqs[1].at - reqs[0].at}ms`);
+  } finally { w.stop(); }
+});
+
+test('429가 두 번이면 더 보내지 않는다', async () => {
+  const w = await world([{status: 429, body: {retry_after: 0.1}}]);
+  try {
+    const r = notifyUser('경보', w.fakeSpawn(), {home: w.home, env: w.env});
+    assert.equal(r.via, 'system');
+    assert.equal(w.requests().length, 2);
+  } finally { w.stop(); }
+});
+
+test('5xx는 한 번만 다시 보낸다', async () => {
+  const w = await world([{status: 500}, {status: 204}]);
+  try {
+    assert.equal(notifyUser('경보', w.fakeSpawn(), {home: w.home, env: w.env}).via, 'discord');
+    assert.equal(w.requests().length, 2);
+  } finally { w.stop(); }
+});
+
+test('응답 대기 중 시간 초과는 재시도하지 않고 불확실로 남긴다', async () => {
+  const w = await world([{hang: true}]);
+  try {
+    const t0 = Date.now();
+    const r = notifyUser('경보', w.fakeSpawn(), {kind: 'alert', key: 'alert:slow', home: w.home, env: w.env});
+    assert.equal(r.discord.outcome, 'uncertain');
+    assert.equal(w.requests().length, 1);
+    assert.equal(r.via, 'system');
+    assert.ok(Date.now() - t0 < 14000);
+    // 불확실한 키는 중복으로 본다 — 이미 올라갔을 수 있으므로 다시 보내지 않는다.
+    const again = notifyUser('경보', w.fakeSpawn(), {kind: 'alert', key: 'alert:slow', home: w.home, env: w.env});
+    assert.equal(again.duplicate, true);
+    assert.equal(w.requests().length, 1);
+  } finally { w.stop(); }
+});
+
+test('같은 키는 다른 프로세스에서 불러도 한 번만 보낸다', async () => {
+  const w = await world();
+  try {
+    const first = notifyUser('결정', w.fakeSpawn(), {kind: 'decision-request', key: 'decision:d1:request', home: w.home, env: w.env});
+    assert.equal(first.via, 'discord');
+    const code = `import {notifyUser} from ${JSON.stringify(new URL('../src/user-notify.mjs', import.meta.url).href)};
+      const r = notifyUser('결정', () => ({status: 0}), {key: 'decision:d1:request', home: ${JSON.stringify(w.home)}, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: ${JSON.stringify(w.envFile)}}});
+      console.log(JSON.stringify(r));`;
+    const other = spawnSync(process.execPath, ['--input-type=module', '-e', code], {encoding: 'utf8', env: {...process.env, KADAN_HOME: w.home}});
+    assert.equal(JSON.parse(other.stdout).duplicate, true);
+    assert.equal(w.requests().length, 1);
+    // 종류가 다르면 다른 키다.
+    notifyUser('답변', w.fakeSpawn(), {key: 'decision:d1:answer', home: w.home, env: w.env});
+    assert.equal(w.requests().length, 2);
+  } finally { w.stop(); }
+});
+
+test('경보 키는 짧은 창 안에서만 중복이다', async () => {
+  const w = await world();
+  try {
+    let now = 1_000_000;
+    const o = {key: 'alert:x:RED', dedupWindowMs: 60_000, home: w.home, env: w.env, now: () => now};
+    notifyUser('a', w.fakeSpawn(), o);
+    now += 30_000; assert.equal(notifyUser('a', w.fakeSpawn(), o).duplicate, true);
+    now += 61_000; assert.equal(notifyUser('a', w.fakeSpawn(), o).via, 'discord');
+    assert.equal(w.requests().length, 2);
+  } finally { w.stop(); }
+});
+
+test('설정 없음·비밀 파일 없음·값 빠짐은 시스템 알림으로 내려가고 사유를 남긴다', async () => {
+  const w = await world();
+  try {
+    const none = notifyUser('경보', w.fakeSpawn(), {home: w.home, env: {KADAN_NOTIFY: ''}});
+    assert.equal(none.via, 'system'); assert.equal(none.discord, null); assert.equal(w.osCalls.length, 1);
+    const missing = notifyUser('경보', w.fakeSpawn(), {home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.dir, 'nope.env')}});
+    assert.equal(missing.discord.outcome, 'config-error'); assert.match(missing.discord.reason, /읽을 수 없다/); assert.equal(w.osCalls.length, 2);
+    const noUser = path.join(w.dir, 'nouser.env');
+    fs.writeFileSync(noUser, `DISCORD_WEBHOOK_URL=http://127.0.0.1:${w.port}/api/webhooks/1/${TOKEN}\n`);
+    const r = notifyUser('경보', w.fakeSpawn(), {home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: noUser}});
+    assert.match(r.discord.reason, /DISCORD_USER_ID/); assert.equal(w.osCalls.length, 3);
+    assert.equal(w.requests().length, 0);
+    assert.ok(!w.log().includes(TOKEN));
+  } finally { w.stop(); }
+});
+
+test('KADAN_NOTIFY=off는 디스코드를 보내지 않고, 결정 알림은 시스템 알림도 띄우지 않는다', async () => {
+  const w = await world();
+  try {
+    notifyUser('경보', w.fakeSpawn(), {home: w.home, env: {...w.env, KADAN_NOTIFY: 'off'}});
+    assert.equal(w.requests().length, 0);
+    assert.equal(process.env.KADAN_NOTIFY, 'off'); // 시험 기본값
+    let called = 0;
+    new DecisionStore(w.home, {userNotify: () => { called++; }}).announce('request', {id: 'd', card: 'r/c', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'});
+    assert.equal(called, 0);
+  } finally { w.stop(); }
+});
+
+test('결정 저장은 알림 실패와 무관하다', () => {
+  const store = new DecisionStore(os.tmpdir(), {userNotify: () => { throw new Error('boom'); }});
+  const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
+  try { assert.equal(store.announce('request', {id: 'd', card: 'r/c', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'}), null); }
+  finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }
+});
+
+test('설정은 비밀 파일 경로만 저장하고 환경변수가 설정보다 먼저다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-setting-'));
+  assert.throws(() => setNotifySetting(home, {envFile: 'relative.env'}), /절대경로/);
+  setNotifySetting(home, {envFile: '/abs/secret.env'});
+  assert.equal(readNotifySetting(home).discord.envFile, '/abs/secret.env');
+  assert.ok(!JSON.stringify(readNotifySetting(home)).match(/https?:|webhooks|token|DISCORD_/i));
+  assert.deepEqual(effectiveNotifyEnvFile({}, home), {envFile: '/abs/secret.env', source: 'setting', error: null});
+  assert.equal(effectiveNotifyEnvFile({KADAN_NOTIFY_ENV_FILE: '/e.env'}, home).source, 'env');
+  fs.writeFileSync(path.join(home, 'notify-setting.json'), '{bad');
+  assert.match(effectiveNotifyEnvFile({}, home).error, /손상/);
+});
+
+test('scrubSecrets는 웹훅 주소와 값을 가린다', () => {
+  const out = scrubSecrets(`fail https://example.test/api/${'webhooks'}/1/${TOKEN} and ${USER_ID}`, [USER_ID]);
+  assert.ok(!out.includes(TOKEN) && !out.includes(USER_ID) && !out.includes('example.test'));
+});
+
+test('결정 요청·답변은 알림이 실패해도 저장되고, 요청 알림은 새 요청에만 한 번 나간다', async () => {
+  const {CardStore} = await import('../src/card-store.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-decision-notify-'));
+  new CardStore(home).create({repo: 'repo', id: 'card-a', repoPath: home, body: '# 테스트'});
+  const calls = [];
+  const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
+  try {
+    const store = new DecisionStore(home, {notify: () => {}, userNotify: (m, o) => { calls.push(o.key); throw new Error('boom'); }});
+    const input = {question: '분리할까요?\n- 결과 파일: /repo/card-a/result.md', options: ['분리', '유지'], recommendation: '분리', reason: '이유\n- 결과 파일: /repo/card-a/result.md', work: '없음'};
+    const a = store.request('repo/card-a', input, '슈퍼감독');
+    store.request('repo/card-a', input, '슈퍼감독'); // 같은 요청 → 알림 없음
+    assert.deepEqual(calls, [`decision:${a.id}:request`]);
+    assert.equal(store.get(a.id).status, 'open');
+    store.answer(a.id, {revision: a.revision, choice: '분리'}, '사람');
+    assert.deepEqual(calls, [`decision:${a.id}:request`, `decision:${a.id}:answer`]);
+    assert.equal(store.get(a.id).status, 'answered');
+  } finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }
+});
+
+test('watch @user 전달: 디스코드 실패 + 시스템 성공이면 전달, 둘 다 실패면 not-sent로 기록한다', async () => {
+  const {parseHierarchy} = await import('../src/hierarchy.mjs');
+  const {runWatch} = await import('./helpers/watch-runner.mjs');
+  const w = await world([{status: 400}]);
+  const prev = {n: process.env.KADAN_NOTIFY, f: process.env.KADAN_NOTIFY_ENV_FILE};
+  process.env.KADAN_NOTIFY = ''; process.env.KADAN_NOTIFY_ENV_FILE = w.envFile;
+  const t = '2026-10-14T00:00:00.000Z', parents = parseHierarchy({'prod-슈퍼감독': '@user'});
+  const exercise = async osFails => {
+    let cycle = 0; const records = [], lines = [], notes = [], stop = new Error('done');
+    const oldLoad = os.loadavg; os.loadavg = () => [0, 0, 0];
+    const starts = [{kind: 'start', role: 'prod-슈퍼감독', session: 'kadan-prod-슈퍼감독', panePid: 1, t}];
+    try {
+      await assert.rejects(() => runWatch({completionGraceMs: 0, parents, routes: {}, superRole: '옛-슈퍼', intervalMs: 1000, stallN: 100,
+        floor: {list: () => starts.map(x => ({session: x.session, pid: x.panePid})), read: () => 'KADAN:DONE card-test ok'},
+        readEntries: () => starts, record: e => records.push(e), now: () => Date.parse(t) + cycle * 1000, print: l => lines.push(l),
+        spawn: cmd => {
+          if (cmd === 'sleep' && ++cycle === 3) throw stop;
+          if (cmd === 'osascript') { notes.push(1); return {status: osFails ? 1 : 0, stderr: 'disabled'}; }
+          if (cmd === 'memory_pressure') return {status: 0, stdout: 'System-wide memory free percentage: 80%'};
+          if (cmd === 'sysctl') return {status: 0, stdout: 'used = 0M'};
+          return {status: 0, stdout: ''};
+        }}), e => e === stop);
+    } finally { os.loadavg = oldLoad; }
+    return {records, lines, notes};
+  };
+  try {
+    const ok = await exercise(false);
+    assert.equal(ok.records[0].recipient, '@user'); assert.equal(ok.records[0].delivered, true); assert.equal(ok.notes.length, 1);
+    const bad = await exercise(true);
+    assert.equal(bad.records[0].delivered, false); assert.match(bad.lines.join('\n'), /사용자 알림 실패/);
+    assert.ok(w.requests().length >= 2); // 디스코드는 두 번 다 먼저 시도했다
+  } finally {
+    for (const [k, v] of [['KADAN_NOTIFY', prev.n], ['KADAN_NOTIFY_ENV_FILE', prev.f]]) v === undefined ? delete process.env[k] : process.env[k] = v;
+    w.stop();
+  }
+});
