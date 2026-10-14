@@ -20,12 +20,12 @@ export function createData(snapshot, url, stamp) {
 }
 
 // 기본은 열린 결정만, 지난 결정(답변·취소)은 ?past=1&page=N 으로 나눠 받는다(2026-10-14: 140건 441KB를 매번 보냈다).
-// 정렬은 ?sort=newest(기본 오래된 순), 기준은 화면에 보이는 시각(답변 시각, 없으면 요청 시각)이다.
+// 정렬은 ?sort=newest(기본 오래된 순), 기준은 요청 시각(at)이다. 전에 화면이 하던 정렬과 같다.
 export function decisionsData(snapshot, url, stamp) {
   if (snapshot.decisionError) throw new Error(snapshot.decisionError);
   const all = snapshot.decisions || [], withContent = (d) => ({ ...d, ...decisionContent(d) });
   if (url.searchParams.get("past") === "1") {
-    const sign = url.searchParams.get("sort") === "newest" ? -1 : 1, at = (d) => Date.parse(d.answer?.at || d.at) || 0;
+    const sign = url.searchParams.get("sort") === "newest" ? -1 : 1, at = (d) => Date.parse(d.at);
     const past = all.filter((d) => d.status !== "open").sort((x, y) => (at(x) - at(y)) * sign);
     const selected = page(past, url);
     return { ...stamp, ...selected, items: selected.items.map(withContent) };

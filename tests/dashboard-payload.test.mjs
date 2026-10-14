@@ -1,107 +1,58 @@
-import "./helpers/isolated-home.mjs";
-import test from "node:test";
-import assert from "node:assert/strict";
-import { dashboardFixture } from "./helpers/dashboard-fixture.mjs";
-import { DecisionStore } from "../src/decisions.mjs";
-import { dashboardData } from "../src/dashboard-api.mjs";
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {renderDashboardWorkspace} from '../src/dashboard-workspace.mjs';
 
-// 대시보드 응답 줄이기(2026-10-14): 결정은 열린 것만 기본으로 보내고, 목록을 쓰지 않는 주소는 결정 저장소를 읽지 않는다.
-const listen = async (f) => {
-  await new Promise((resolve) => f.server.listen(0, "127.0.0.1", resolve));
-  return "http://127.0.0.1:" + f.server.address().port;
-};
+const at='2020-09-08T01:00:00Z';
+const card=id=>({key:'repo/'+id,repo:'repo',id,title:'제목 '+id,body:'본문 '+id,status:'assigned',displayState:'unconfirmed',role:'작업자',board:'판-a',revision:1,at,runs:[{role:'작업자',state:'unconfirmed',sentAt:at}],history:[]});
+const center={cards:[card('card-a'),card('card-b')],roles:[],boards:[],unregistered:[],runtimeKnown:true};
+const view=query=>renderDashboardWorkspace({center,briefs:null,centerError:null,url:new URL('http://localhost/'+query),detail:c=>`<article id="detail" data-key="${c.key}">상세 ${c.key}</article>`,works:[],workError:null,workDetail:()=>''});
+const data=html=>JSON.parse(html.match(/<script type="application\/json" id="dw-data">([\s\S]*?)<\/script>/)[1]);
 
-test("결정 기본 응답은 열린 결정과 건수만, 지난 결정은 ?past=1 페이지로 받는다", async (t) => {
-  const f = dashboardFixture({ count: 2 });
-  t.after(() => f.server.close());
-  const [first] = f.decisions.list();
-  f.decisions.answer(first.id, { revision: first.revision, text: "적용", choice: "적용" }, "사람");
-  const base = await listen(f);
-  const get = async (route) => (await fetch(base + "/api/dashboard/" + route)).json();
-
-  const open = await get("decisions");
-  assert.equal(open.items.length, 1);
-  assert.ok(open.items.every((d) => d.status === "open"));
-  assert.equal(open.answered, 1);
-  assert.equal(open.past, 1);
-
-  const past = await get("decisions?past=1");
-  assert.equal(past.total, 1);
-  assert.equal(past.items[0].id, first.id);
-  assert.equal(past.items[0].status, "answered");
-  assert.ok(past.items[0].questionTitle && past.items[0].reasonHtml, "지난 결정도 본문 가공을 거친다");
-  assert.deepEqual([past.page, past.pages], [1, 1]);
+test('자료 크기: 고르지 않은 카드의 상세는 페이지에 싣지 않고, 연 카드나 목록·상세 보기만 싣는다',()=>{
+ const table=view('?collection=executions&state=all');
+ assert.doesNotMatch(table,/<article id="detail"/);assert.equal(data(table).loadedKey,'');
+ const opened=view('?state=all&card=repo%2Fcard-b');
+ assert.match(opened,/<article id="detail" data-key="repo\/card-b">/);assert.equal(data(opened).loadedKey,'repo/card-b');
+ const closed=view('?state=all&card=repo%2Fcard-b&detail=0');
+ assert.doesNotMatch(closed,/<article id="detail"/);
+ const split=view('?collection=executions&state=all&layout=split');
+ assert.match(split,/<article id="detail" data-key="repo\/card-a">/);assert.equal(data(split).loadedKey,'repo/card-a');
 });
 
-test("지난 결정은 50건씩 나뉘고 정렬 순서를 따른다", () => {
-  const f = dashboardFixture({ count: 2 });
-  const snapshot = f.snapshot(), at = (n) => new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
-  snapshot.decisions = Array.from({ length: 120 }, (_, n) => ({
-    ...snapshot.decisions[0], id: "d" + n, status: n % 2 ? "cancelled" : "answered", at: at(n),
-    answer: n % 2 ? undefined : { by: "사람", text: "답", at: at(n) },
-  }));
-  const read = (query) => dashboardData(snapshot, new URL("http://local/api/dashboard/decisions?past=1&" + query));
-  const first = read("page=1");
-  assert.equal(first.items.length, 50);
-  assert.deepEqual([first.total, first.pages], [120, 3]);
-  assert.equal(first.items[0].id, "d0", "기본은 오래된 순");
-  assert.equal(read("page=3").items.length, 20);
-  assert.equal(read("page=1&sort=newest").items[0].id, "d119");
-  assert.equal(dashboardData(snapshot, new URL("http://local/api/dashboard/decisions")).items.length, 0);
+test('자료 크기: 목록 자료는 이름표를 묶어 보내고, 풀면 JSON으로 주고받은 원래 줄과 같다',async()=>{
+ const {packRows,unpackRows}=await import('../src/dashboard-workspace.mjs');
+ const rows=[{key:'a',title:'가',next:'',model:null,list:[1,{x:2}],flag:false},{key:'b',title:'나',next:'다음',model:'m',list:[],flag:true},{key:'w',kind:'work',skipped:undefined}];
+ const packed=packRows(rows);
+ assert.equal(packed.shapes.length,2);
+ assert.deepEqual(unpackRows(JSON.parse(JSON.stringify(packed))),JSON.parse(JSON.stringify(rows)));
+ assert.equal(packRows(null),null);assert.deepEqual(unpackRows(rows),rows);
+ const sent=data(view('?collection=executions&state=all'));
+ assert.ok(Array.isArray(sent.rows.shapes));
+ assert.deepEqual(unpackRows(sent.rows).map(r=>r.key),['repo/card-a','repo/card-b']);
 });
 
-test("결정 목록을 쓰지 않는 주소는 결정 저장소를 읽지 않는다", async (t) => {
-  const f = dashboardFixture({ count: 2 });
-  t.after(() => f.server.close());
-  const base = await listen(f);
-  const original = DecisionStore.prototype.list;
-  let wallReads = 0;
-  DecisionStore.prototype.list = function () {
-    // 호출한 쪽이 wall.mjs일 때만 센다(시험 자료의 loadSnapshot도 목록을 읽는다).
-    if (new Error().stack.split("\n")[2].includes("/src/wall.mjs")) wallReads++;
-    return original.call(this);
-  };
-  t.after(() => { DecisionStore.prototype.list = original; });
-  const reads = async (path) => {
-    wallReads = 0;
-    assert.equal((await fetch(base + path)).status, 200, path);
-    return wallReads;
-  };
-  for (const path of ["/api/cards", "/api/dashboard/workspace", "/api/dashboard/mail", "/api/dashboard/ledger",
-    "/api/dashboard/runs", "/api/dashboard/sessions", "/api/dashboard/runners", "/api/dashboard/worktime",
-    "/api/dashboard/flow-unconfirmed"])
-    assert.equal(await reads(path), 0, path + "는 결정 저장소를 읽지 않는다");
-  for (const path of ["/api/dashboard/status", "/api/dashboard/decisions", "/api/dashboard/summary",
-    "/api/dashboard/detail?card=demo/card-1"])
-    assert.equal(await reads(path), 1, path + "는 결정 저장소를 한 번 읽는다");
+test('자료 크기: 기록 원문 보기는 4,000자 넘는 값만 길이로 바꾸고 나머지 값과 순서는 그대로 둔다',async()=>{
+ const {renderLedgerTable,ledgerOriginal}=await import('../src/ledger-table.mjs');
+ const entry={t:'2020-09-08T00:00:00Z',kind:'watch-ai-request',by:'watch',role:'작업자',parents:Object.fromEntries(Array.from({length:600},(_,i)=>['역할-'+i,'상위-'+i])),note:'짧은 값'};
+ const {text,omitted}=ledgerOriginal(entry);
+ assert.equal(omitted,1);
+ const shown=JSON.parse(text);
+ assert.deepEqual(Object.keys(shown),Object.keys(entry));
+ assert.equal(shown.note,'짧은 값');assert.equal(shown.kind,'watch-ai-request');
+ assert.match(shown.parents,/^〔긴 값 생략: [\d,]+자〕$/);
+ const html=renderLedgerTable([entry]);
+ assert.match(html,/기록 원문 · 긴 값 1개 생략\(4,000자 넘음\)/);
+ assert.ok(html.length<6000,'관계표 전체를 싣지 않는다');
+ assert.equal(ledgerOriginal({kind:'send',preview:'a'}).omitted,0);
 });
 
-test("/api/cards는 카드 전체가 아니라 kadan tree와 같은 요약을 돌려준다", async (t) => {
-  const f = dashboardFixture({ count: 2 });
-  t.after(() => f.server.close());
-  const base = await listen(f);
-  const body = await (await fetch(base + "/api/cards")).json();
-  for (const key of ["summary", "executionSummary", "boards", "pendingCards", "liveRoles", "unregisteredRuns"])
-    assert.ok(key in body.center, key);
-  for (const key of ["cards", "rallies", "roles", "models"])
-    assert.ok(!(key in body.center), key + "는 싣지 않는다");
-  assert.ok(body.center.pendingCards.length > 0);
+test('자료 크기: 표 줄은 서버가 싣지 않고 화면 스크립트가 목록 자료로 그린다',()=>{
+ const html=view('?collection=executions&state=all');
+ assert.match(html,/<tbody id="dw-table-body"><\/tbody>/);
+ assert.equal(data(html).rows.rows.length,2);
 });
 
-test("현황 응답은 화면이 읽지 않는 행 칸을 싣지 않고 화면이 읽는 칸은 남긴다", async (t) => {
-  const f = dashboardFixture({ count: 2 });
-  t.after(() => f.server.close());
-  const base = await listen(f);
-  const status = await (await fetch(base + "/api/dashboard/status")).json();
-  assert.ok(status.rows.length > 0 && status.works.length > 0);
-  for (const row of [...status.rows, ...status.works]) {
-    for (const key of ["workKey", "workType", "scope", "reworks", "workMs", "parentWorkKey", "reviewLabel"])
-      assert.ok(!(key in row), key);
-    for (const key of ["key", "title", "owner", "bucket", "state", "healthLabel", "signalAt", "board"])
-      assert.ok(key in row, key);
-  }
-  assert.deepEqual(status.flow, { total: 0, unconfirmedCount: 0, unconfirmed: [] });
-  assert.equal(status.decisions.length, 2);
-  const flows = await (await fetch(base + "/api/dashboard/flow-unconfirmed")).json();
-  assert.deepEqual([flows.items, flows.total, flows.page], [[], 0, 1]);
+test('화면 틀: 가운데 내용 영역(main)이 숨긴 요소의 기준 위치라 창 전체가 스크롤되지 않는다',async()=>{
+ const {dashboardWorkspaceStyle}=await import('../src/dashboard-workspace-style.mjs');
+ assert.match(dashboardWorkspaceStyle,/\.dw-shell>main\{position:relative;[^}]*overflow:auto/);
 });
