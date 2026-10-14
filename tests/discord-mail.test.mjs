@@ -305,3 +305,25 @@ test('11 중복 조회는 좁은 조회라 원장 사건 10만 건에서도 작�
   assert.ok(rows[1].hitMs < 50, `중복 발견이 10만 건에서 ${rows[1].hitMs}ms`);
   assert.ok(rows[1].missMs < 250, `없음 확인이 10만 건에서 ${rows[1].missMs}ms`);
 });
+
+// 검수자 restart-fourth 모양: 스레드 우편 저장 직후 강제 종료 → 그 사이 본문에 새 글 3개 → 재시작하면 스레드 글이 4번째 줄로 나온다.
+for (const backend of ['jsonl', 'sqlite']) {
+  test(`12 저장 직후 종료한 스레드 글이 재시작 때 4번째 줄로 와도 같은 글 우편은 1통이다(${backend})`, async () => {
+    const fake = await startFakeDiscord();
+    try {
+      const {home, chat} = setup(fake);
+      if (backend === 'sqlite') { createDatabase(home); writeStorageMarker(home, 'sqlite'); }
+      const topic = fake.add(FAKE.channelId, {content: '옛 주제'});
+      const thread = fake.addThread(topic);
+      await watchOnce(chat, createMailOut({home})); // 기준선
+      const t = fake.add(thread.id, {content: '스레드 질문'});
+      const store = createMailOut({home});
+      await assert.rejects(watchOnce(chat, line => { store(line); throw new Error('저장 직후 강제 종료'); }), /강제 종료/);
+      const m = [1, 2, 3].map(i => fake.add(FAKE.channelId, {content: `본문 새 글 ${i}`}));
+      await watchOnce(createChat({home, env: setupEnv(home, fake), sleep: noSleep}), createMailOut({home})); // 새 프로세스
+      const keys = readMailboxEntries(home).filter(e => e.kind === 'send').map(e => e.sourceKey);
+      assert.equal(keys.filter(k => k === `discord:${t.id}`).length, 1, '스레드 글 우편 1통');
+      assert.deepEqual([...keys].sort(), [t.id, ...m.map(x => x.id)].map(id => `discord:${id}`).sort(), '총 4통, 유실·중복 0');
+    } finally { await fake.close(); }
+  });
+}

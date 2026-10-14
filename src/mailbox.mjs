@@ -23,12 +23,12 @@ export class Mailbox {
   this.home=home;this.role=role;
  }
  send(options){
-  const {by,message,category='report',replyTo,workKey,executionKey,expectReply=false,replyFinal=false,sourceKey,skipDuplicateLookup=false}=options;
+  const {by,message,category='report',replyTo,workKey,executionKey,expectReply=false,replyFinal=false,sourceKey}=options;
   assertWritable(this.home);
   // 같은 sourceKey(예: 디코 글 id)의 우편이 이미 이 수신자에게 있으면 새로 만들지 않고 그 우편을 돌려준다(저장 뒤 죽음→재시작 중복 방지).
   if(sourceKey!==undefined){
    if(typeof sourceKey!=='string'||!sourceKey.trim())throw new Error('sourceKey는 비어 있지 않은 문자열이어야 합니다');
-   const hit=skipDuplicateLookup?null:ledger.findMailBySourceKey(this.home,this.role,sourceKey);
+   const hit=ledger.findMailBySourceKey(this.home,this.role,sourceKey);
    if(hit)return {mailId:hit.mailId,recipient:this.role,currentRecipient:this.role,status:'stored',wake:'not-connected',duplicate:true};
   }
   if(!categories.has(category))throw new Error('공식 우편 종류는 request/decision/report만 지원합니다');

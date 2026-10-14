@@ -35,12 +35,10 @@ export function composeDiscordMail(line) {
 // 같은 디코 글 ID로 이미 저장돼 있으면 새로 만들지 않고 정상 반환한다 → cursor가 앞으로 가고 👀가 달린다.
 // 저장 실패는 던진다 → pollOnce가 cursor를 올리지 않는다.
 //
-// 중복 조회 비용: 저장된 채 cursor가 안 올라간 글은 이전 프로세스가 죽기 직전의 글 하나뿐이라 이 프로세스의 첫 몇 줄에서만 원장을 조회한다(LOOKUP_LINES).
-// 그 뒤는 이 프로세스가 저장한 글 ID를 메모리에서 거른다(저장 뒤 cursor 저장이 실패해 같은 프로세스가 다시 시도하는 경우).
-export const LOOKUP_LINES = 3;
+// 중복 조회: 이 프로세스가 이미 저장한 글(메모리)이 아니면 매 우편마다 원장을 확인한다. 본문과 스레드가 각자 cursor를 가져
+// 저장됐지만 cursor가 안 오른 글이 여러 곳에 남을 수 있어 "처음 몇 줄만" 조회하면 새는 길이 생긴다. 디코 글은 분당 몇 개라 비용이 작다.
 export function createMailOut({home, to = SECRETARY, log = () => {}}) {
   const stored = new Map();
-  let lines = 0;
   return line => {
     const sourceKey = `discord:${line.id}`;
     if (stored.has(sourceKey)) {
@@ -48,7 +46,7 @@ export function createMailOut({home, to = SECRETARY, log = () => {}}) {
       return {mailId: stored.get(sourceKey), duplicate: true};
     }
     const {message, category} = composeDiscordMail(line);
-    const receipt = new Mailbox(home, to).send({by: DISCORD_BY, message, category, sourceKey, skipDuplicateLookup: lines++ >= LOOKUP_LINES});
+    const receipt = new Mailbox(home, to).send({by: DISCORD_BY, message, category, sourceKey});
     stored.set(sourceKey, receipt.mailId);
     log(`${receipt.duplicate ? '이미 저장된 우편' : '우편 저장'}: ${receipt.mailId} (디코 글 ${line.id}) → ${to}`);
     return receipt;
