@@ -13,6 +13,7 @@ import {WorkStore} from './work-store.mjs';
 import {buildWorkStatus} from './work-status-message.mjs';
 
 export const DISCORD_LIMIT = 2000;
+export const SUPPRESS_NOTIFICATIONS = 4096;
 export const NOTIFY_LOG_FILE = 'notify-log.jsonl';
 const SENDER = new URL('./discord-send.mjs', import.meta.url).pathname;
 // 경보는 같은 id가 해소됐다가 다시 뜰 수 있어 짧은 창 안에서만 중복으로 본다. 결정·우편 id는 한 번뿐이라 창이 없다.
@@ -82,9 +83,13 @@ function alreadySent(home, key, windowMs, nowMs) {
 // 디스코드 웹훅 요청이 나가는 유일한 함수.
 //   threadName: 포럼 채널에 새 글을 만든다(100자 안). threadId: 기존 글에 이어 붙인다. wait: 응답의 messageId·channelId를 받는다
 //   (포럼 새 글이면 channelId가 새 글 id). messageId: 그 메시지를 새로 올리지 않고 고친다(PATCH, threadId와 함께).
+//   울림 기준: allowedMentions.users가 있는 요청(사용자를 멘션하는 결정 요청·경보)만 알림이 울린다. 나머지는 모두
+//   flags 4096(SUPPRESS_NOTIFICATIONS)을 붙여 글은 남기고 휴대폰은 울리지 않는다 — 기본값이 조용히라서 새 알림 종류도 조용하다.
+//   고치기(PATCH)는 새 알림이 아니므로 flags를 붙이지 않는다.
 // 반환: {outcome, attempts, status, reason, messageId?, channelId?}
 export function postDiscordWebhook({webhook, content, allowedMentions, threadName, threadId, wait = false, messageId, budgetMs}) {
-  const payload = {content, allowed_mentions: allowedMentions, ...(threadName ? {thread_name: String(threadName).slice(0, 100)} : {})};
+  const rings = !messageId && allowedMentions?.users?.length > 0;
+  const payload = {content, allowed_mentions: allowedMentions, ...(rings || messageId ? {} : {flags: SUPPRESS_NOTIFICATIONS}), ...(threadName ? {thread_name: String(threadName).slice(0, 100)} : {})};
   const child = spawnSync(process.execPath, [SENDER], {
     input: JSON.stringify({webhook, payload, threadId, messageId, wait: wait || Boolean(threadName), budgetMs}), encoding: 'utf8',
     timeout: (budgetMs ?? 12000) + 2000, maxBuffer: 1 << 16,
@@ -264,7 +269,7 @@ function decisionSystemMessage(home, decision, message) {
 }
 
 // message: 시스템 알림에 쓰는 짧은 문구. discord: {content, mention} 또는 (사용자ID)=>{content, mention}을 주면 디스코드에는 그 본문을 쓴다.
-// opts: {kind, key, work, workTitle, repo, tagRepo, forumKey, forumTitle, decision, dedupWindowMs, home, env, discord}. work: 업무 키(없으면 기본 #브리핑),
+// opts: {ring, kind, key, work, workTitle, repo, tagRepo, forumKey, forumTitle, decision, dedupWindowMs, home, env, discord}. work: 업무 키(없으면 기본 #브리핑),
 //   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키(또는 forumKey)가 있을 때만 포럼 글로 간다.
 //   tagRepo: 알림 첫머리 `[레포]`에 쓸 이름(생략하면 repo, 그것도 모르면 표시하지 않는다 — 추측 금지). discord 본문을 직접 주면 그쪽이 표시를 책임진다.
 //   forumKey·forumTitle: 업무가 없을 때 쓰는 포럼 글 키와 글 제목(결정의 레포 '결정' 글). decision: {id, edit?, latest?, resolvedContent?} — 요청은 메시지 id를 남기고(보내기 직전 latest()로 현재 상태를 다시 읽어 이미 해결됐으면 resolvedContent로 대신 보내거나 건너뜀), edit 본문이 있으면 남긴 메시지를 고친다.
@@ -294,7 +299,9 @@ export function notifyUser(message, spawn, opts = {}) {
           const now = (opts.now ?? Date.now)();
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
-          const d = (typeof opts.discord === 'function' ? opts.discord(sec.userId) : opts.discord) ?? {content: fitDiscord(message), mention: false};
+          // opts.ring: 사용자에게 올라간 경보 — 결정 요청과 같은 방식으로 멘션을 붙여 울린다. 나머지는 조용히 보낸다.
+          const d = (typeof opts.discord === 'function' ? opts.discord(sec.userId) : opts.discord)
+            ?? (opts.ring === true ? {content: fitDiscord(`<@${sec.userId}> ${message}`), mention: true} : {content: fitDiscord(message), mention: false});
           const allowedMentions = d.mention === true ? {users: [sec.userId]} : {parse: []};
           const forumKey = opts.work ?? opts.forumKey;
           const to = route({sec, key: forumKey});

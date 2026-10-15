@@ -8,16 +8,18 @@
 
 사용자에게 가는 알림은 모두 `src/user-notify.mjs`의 `notifyUser` 한 곳을 지난다.
 
-| 알림 | 부르는 곳 | 중복 막기 키 | 멘션 |
+| 알림 | 부르는 곳 | 중복 막기 키 | 휴대폰 |
 |---|---|---|---|
-| 감시 경보의 `@user` 전달 | `watch-runner.mjs` | `alert:<경보 id>:<단계>` (10분 창) | 없음 |
-| RED·죽음 경보의 사용자 겹알림 | `watch-runner.mjs` | `alert:<경보 id>:<단계>:겹알림` (10분 창) | 없음 |
-| `watch`의 `@user` 메시지 | `commands/watch.mjs` | 없음 | 없음 |
-| 인계 사용자 통지 | `commands/handover.mjs` | 없음 | 없음 |
-| 사용자 우편함에 온 편지 | `commands/send.mjs` | `mail:<우편 id>` | 없음 |
-| **결정 요청** | `decisions.mjs` `request` | `decision:<id>:request` | **있음** |
-| 결정 답변됨 | `decisions.mjs` `answer` | `decision:<id>:answer` | 없음(원래 요청 메시지를 고침) |
-| 결정 취소됨 | `decisions.mjs` `cancel` | `decision:<id>:cancel` | 없음(원래 요청 메시지를 고침) |
+| **감시 경보의 `@user` 전달** | `watch-runner.mjs` | `alert:<경보 id>:<단계>` (10분 창) | **울림**(멘션) |
+| **RED·죽음 경보의 사용자 겹알림** | `watch-runner.mjs` | `alert:<경보 id>:<단계>:겹알림` (10분 창) | **울림**(멘션) |
+| **감시 AI의 사용자 경보**(직행·상신, RED·죽음 겹알림)와 일반 감시기의 `@user` 전달 | `commands/watch.mjs` `sendWatchMessage` (`watch-report.mjs` `WatchReports.deliver`가 부름) | 없음 | **울림**(멘션) |
+| 인계 사용자 통지 | `commands/handover.mjs` | 없음 | 조용히 |
+| 사용자 우편함에 온 편지 | `commands/send.mjs` | `mail:<우편 id>` | 조용히 |
+| **결정 요청** | `decisions.mjs` `request` | `decision:<id>:request` | **울림**(멘션) |
+| 결정 답변됨 | `decisions.mjs` `answer` | `decision:<id>:answer` | 조용히(원래 요청 메시지를 고침) |
+| 결정 취소됨 | `decisions.mjs` `cancel` | `decision:<id>:cancel` | 조용히(원래 요청 메시지를 고침) |
+
+업무 글 생성·상태 메시지·결정 해결 안내도 모두 조용히 나간다. 휴대폰이 울리는 것은 **결정 요청과 사용자에게 올라간 경보** 둘뿐이다(아래 "멘션 통제").
 
 결정 알림은 결정이 저장된 **뒤에** 보낸다. 알림이 실패해도 결정 저장·기존 역할 통지(`kadan send`)는 그대로다. 답변 알림은 요청한 역할에게 가는 기존 통지를 대신하지 않는다.
 
@@ -147,7 +149,13 @@ kadan secrets unset discord
 
 ## 멘션 통제
 
-결정 요청 본문만 `[레포] <@사용자ID>`로 시작하고 `allowed_mentions: {users:[ID]}`를 보낸다. 나머지는 모두 `allowed_mentions: {parse:[]}`라서 본문에 `@everyone`·`<@…>`가 섞여도 아무도 호출되지 않는다. 본문은 2,000자를 넘으면 앞을 줄이고 맨 끝 줄(맥 링크 `http://127.0.0.1:8790/#decision-<ID>`)은 남긴다. 포트는 대시보드 기본값 8790이며, 대시보드 포트를 저장하는 설정은 아직 없다.
+**울리는 기준은 멘션 하나다.** 사용자를 멘션하는 요청(`allowed_mentions: {users:[ID]}`)만 알림이 울린다. 결정 요청은 본문이 `[레포] <@사용자ID>`로 시작하고, 감시 경보의 `@user` 전달과 RED·죽음 겹알림은 호출 쪽이 `ring: true`를 주면 `notifyUser`가 본문 맨 앞에 같은 방식으로 `<@사용자ID>`를 붙인다.
+
+감시 AI 경로(`sendWatchMessage`의 `@user` 분기)도 같다. 이 길로 나가는 `@user` 메시지는 모두 경보라서 구분 없이 울린다(안내성 메시지가 지나는 근거가 없고, 울릴 것을 놓치는 쪽이 더 나쁘다). 나머지는 모두 `postDiscordWebhook`이 웹훅 payload에 `flags: 4096`(SUPPRESS_NOTIFICATIONS)을 넣어 보낸다. 글은 그대로 보이고 알림만 울리지 않는다. 멘션이 없는 요청은 `allowed_mentions: {parse:[]}`라서 본문에 `@everyone`·`<@…>`가 섞여도 아무도 호출되지 않는다. **기본값이 조용히**라서 나중에 새로 생기는 알림 종류도 멘션을 붙이지 않으면 울리지 않는다. 메시지 고치기(PATCH)는 새 알림이 아니라서 `flags`를 붙이지 않는다.
+
+본문은 2,000자를 넘으면 앞을 줄이고 맨 끝 줄(맥 링크 `http://127.0.0.1:8790/#decision-<ID>`)은 남긴다. 포트는 대시보드 기본값 8790이며, 대시보드 포트를 저장하는 설정은 아직 없다.
+
+kyle 안내: 디스코드 서버 알림을 **'@멘션만'**으로 바꾸면 위 멘션 기준이 곧 휴대폰이 울리는 기준이 된다. 디코 봇 답변(`#비서`, `discord-chat.mjs`)은 웹훅이 아니라 이번에 바꾸지 않았다. 멘션이 없어서 '@멘션만'이면 울리지 않는다.
 
 ## 공개 레포 주의
 

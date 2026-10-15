@@ -139,7 +139,7 @@ export async function runWatch({
   const sendToRole = sendAlert;
   sendAlert = (role, message, key, work, repo) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
-    const errorText = notifyUser(message, spawn, {kind: "alert", key, work, tagRepo: repo, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
+    const errorText = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
     if (errorText) {
       const error = new Error(`사용자 알림 실패: ${errorText}`);
       error.delivery = "not-sent";
@@ -654,7 +654,7 @@ export async function runWatch({
       }
       recordAlert(record, {...alert,route,held}, recipient ?? null, delivered);
       if (!held && recipient !== USER_RECIPIENT && userNotify && (alert.level === "RED" || alert.kind === "죽음")) {
-        const notifyError = notifyUser(message, spawn, {kind: "alert", key: `alert:${alert.id}:${alert.level ?? ""}:겹알림`, work: workOfAlert(alert), tagRepo: repoOf(alert), dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
+        const notifyError = notifyUser(message, spawn, {kind: "alert", ring: true, key: `alert:${alert.id}:${alert.level ?? ""}:겹알림`, work: workOfAlert(alert), tagRepo: repoOf(alert), dedupWindowMs: ALERT_DEDUP_WINDOW_MS}).error;
         if (notifyError) target += `; 사용자 알림 실패(${notifyError})`;
       }
       print(`${message} → ${target}`);
