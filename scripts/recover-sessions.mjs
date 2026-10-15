@@ -89,19 +89,19 @@ function aliveSessions() {
 }
 
 export function recoveryLine({role, cwd, cmd, id}) {
+  if (!id) throw new Error('복구할 대화 ID가 확정되지 않음');
   const identity = launchIdentityOf(cmd);
   if (!identity.ok) throw new Error('원래 실행기·명시 모델·안전한 단일 명령을 확인할 수 없음');
   let command = cmd;
-  if (id) {
-    if (identity.harness !== 'codex' || !/^[0-9a-f-]{36}$/i.test(id)) {
-      throw new Error('이 조사 도구에서 확인한 Codex 대화 ID가 아님');
-    }
-    const previous = conversationOf(cmd);
-    if (previous.conversationMode === 'new') command = `${cmd.trim()} resume ${shellQuote(id)}`;
-    const next = conversationOf(command);
-    if (next.conversationMode !== 'resume' || next.conversationRef !== id) {
-      throw new Error('원래 옵션을 보존한 채 같은 대화로 복구할 수 없음');
-    }
+  if (identity.harness !== 'codex' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw new Error('이 조사 도구에서 확인한 Codex 대화 ID가 아님');
+  }
+  const previous = conversationOf(cmd);
+  if (previous.conversationMode === 'new') command = `${cmd.trim()} resume ${shellQuote(id)}`;
+  const next = conversationOf(command);
+  if (next.conversationMode !== 'resume' || next.conversationRef !== id) {
+    throw new Error('원래 옵션을 보존한 채 같은 대화로 복구할 수 없음');
   }
   return `cd ${shellQuote(cwd || '.')} && kadan start ${shellQuote(role)} --cmd ${shellQuote(command)}`;
 }
@@ -148,7 +148,7 @@ function main() {
     console.log('    원래 ' + (r.cmd || '모름'));
     console.log('    대화 ' + (r.id || '모름') + '  [' + r.how + ']');
     for (const o of r.others) console.log('      후보 ' + o.id + ' (' + o.d.toFixed(1) + '초)');
-    if (r.recovery) console.log('    복구> ' + (r.id ? '' : '기억 없이 새로: ') + r.recovery);
+    if (r.recovery) console.log('    복구> ' + r.recovery);
     else console.log('    복구 명령 보류: ' + r.error);
     console.log('');
   }

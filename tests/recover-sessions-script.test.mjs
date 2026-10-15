@@ -73,3 +73,11 @@ test('모델·명령을 모르거나 다른 대화인 경우 실행 가능한 �
     assert.throws(() => recoveryLine({role: 'test', cwd: '.', cmd, id}));
   }
 });
+
+test('대화 ID가 없거나 잘못되면 복구 안내를 보류한다', () => {
+  for (const ref of [undefined, null, '', 'unknown', '------------------------------------']) {
+    assert.throws(() => recoveryLine({
+      role: 'test', cwd: '.', cmd: 'codex --model fixture-model', id: ref,
+    }));
+  }
+});
