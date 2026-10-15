@@ -8,7 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {acquireDirLock} from './dir-lock.mjs';
-import {TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf} from './runner-table.mjs';
+import {
+  NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
+} from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
@@ -28,7 +30,7 @@ export const DEFAULT_FAMILIES = {
   gpt:['gpt-','openai-codex/gpt-'], claude:['claude-','anthropic/claude-'], grok:['xai/grok-'], glm:['zai/glm-'],
   kimi:['kimi/k3'], deepseek:['command-code/deepseek-'], gemini:['google/gemini-'], 'devin-swe':['swe-'],
 };
-const VALUE = /^[A-Za-z0-9._/\-[\]]+$/;
+const VALUE = NAME_PATTERN;
 
 export const settingsPath = home => path.join(home, SETTINGS_FILE);
 export const codexModelsCachePath = () => process.env.KADAN_CODEX_MODELS_CACHE || path.join(os.homedir(), '.codex', 'models_cache.json');
@@ -258,6 +260,7 @@ function applyTable(spec, table) {
       if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} 틀은 글이어야 한다`);
       if (key === 'exec') checkExecTemplate(value);
       if (key === 'execField' && !/^[A-Za-z0-9_.]+$/.test(value)) throw new Error('execField에는 출력 JSON의 필드 이름(영문·숫자·_ .)만 쓴다');
+      if (key === 'listModels' && /\{[^}]*\}/.test(value)) throw new Error('listModels 틀에는 자리({…})를 쓰지 않는다');
       const unknown = value.replace(TABLE_PLACEHOLDERS, '').match(/\{[^}]*\}/);
       if (unknown) throw new Error(`${key} 틀에 모르는 자리가 있다: ${unknown[0]}`);
       spec[key] = value;
@@ -266,6 +269,17 @@ function applyTable(spec, table) {
   if (spec.resume && !spec.resume.includes('{conversation}')) throw new Error('resume 틀에는 {conversation}이 있어야 한다');
   if (spec.fork && !spec.fork.includes('{conversation}')) throw new Error('fork 틀에는 {conversation}이 있어야 한다');
   for (const key of ['resume', 'fork']) if (spec[key]) tailOf({runners: {x: spec}}, 'x', key);
+}
+
+// 화면 폼이 보낸 실행기 틀 중 지금 값과 다른 칸만 남긴다(null은 지금 값이 있을 때만 '지우기'). 바뀐 게 없으면 null.
+// 손대지 않은 칸까지 다시 저장해 원장에 거짓 변경이 남는 일을 막는다.
+export function changedRunnerFields(before, {spawn, table}) {
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const out = {};
+  if (spawn != null && spawn !== before?.spawn) out.spawn = spawn;
+  const kept = Object.entries(table ?? {}).filter(([key, value]) => value === null ? before?.[key] !== undefined : !same(before?.[key], value));
+  if (kept.length) out.table = Object.fromEntries(kept);
+  return Object.keys(out).length ? out : null;
 }
 
 export function setRunner(home, {runner, spawn, table, ...meta}) {
@@ -292,6 +306,34 @@ export function setRunnerModel(home, {runner, model, efforts, ...meta}) {
     const before = spec.models.find(m => m.model === model) ?? null;
     spec.models = [...spec.models.filter(m => m.model !== model), {model, efforts: list}];
     return {runner, before, after: {model, efforts: list}};
+  });
+}
+
+// 등록된 모델을 쓰는 곳: 모든 프리셋의 역할 값·대체 후보와 즐겨찾기.
+function modelUsage(settings, runner, model) {
+  const hit = v => v?.runner === runner && v.model === model;
+  const found = [];
+  for (const [name, preset] of Object.entries(settings.presets)) {
+    for (const [role, value] of Object.entries(preset.roles ?? {})) if (hit(value)) found.push(`프리셋 ${name} ${role} 값`);
+    for (const [role, list] of Object.entries(preset.fallback ?? {}))
+      list.forEach((item, i) => { if (hit(item)) found.push(`프리셋 ${name} ${role} 대체 후보 ${i + 1}번`); });
+  }
+  (settings.favorites ?? []).forEach((item, i) => { if (hit(item)) found.push(`즐겨찾기 ${i + 1}번`); });
+  return found;
+}
+
+// 등록한 모델을 목록에서 뺀다. 어딘가에서 쓰고 있으면 거절한다(고른 칸이 목록에 없는 모델을 가리키지 않게).
+export function removeRunnerModel(home, {runner, model, ...meta}) {
+  return change(home, {...meta, action: 'model-remove'}, next => {
+    const spec = next.runners[runner];
+    if (!spec) throw new Error(`등록되지 않은 실행기: ${runner}`);
+    if (spec.catalog) throw new Error(`${runner}은 모델 목록 파일을 쓴다 — 직접 지우지 않는다`);
+    const before = spec.models.find(m => m.model === model);
+    if (!before) throw new Error(`${runner}에 등록되지 않은 모델: ${model}`);
+    const used = modelUsage(next, runner, model);
+    if (used.length) throw new Error(`${model}은 쓰는 곳이 있어 지울 수 없다 — ${used.join(', ')}. 먼저 바꾸거나 빼라`);
+    spec.models = spec.models.filter(m => m.model !== model);
+    return {runner, before, after: null};
   });
 }
 
