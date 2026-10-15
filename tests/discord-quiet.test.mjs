@@ -7,6 +7,9 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {notifyUser, resetDiscordBlock, postDiscordWebhook, SUPPRESS_NOTIFICATIONS} from '../src/user-notify.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
+import {WatchReports} from '../src/watch-report.mjs';
+import {sendWatchMessage} from '../src/commands/watch.mjs';
+import {appendLedger} from '../src/ledger.mjs';
 
 // 울림 기준 시험: 사용자를 멘션하는 요청(결정 요청·경보)만 flags가 없고, 나머지는 모두 flags 4096이다.
 // 가짜 값과 로컬 가짜 웹훅 서버만 쓴다. 실제 디스코드 전송은 없다.
@@ -54,7 +57,7 @@ test('울리는 것: 결정 요청과 사용자 경보(ring)만 flags 없이 멘
   } finally { w.stop(); }
 });
 
-test('조용히 보내는 것: 결정 답변·취소, watch @user, 인계, 우편은 flags 4096과 빈 allowed_mentions다', async () => {
+test('조용히 보내는 것: 결정 답변·취소, 울림 표시 없는 경보, 인계, 우편은 flags 4096과 빈 allowed_mentions다', async () => {
   const w = await world();
   try {
     const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
@@ -64,7 +67,7 @@ test('조용히 보내는 것: 결정 답변·취소, watch @user, 인계, 우�
       store.announce('cancel', {...d, id: 'dec-3'});
     });
     const send = (message, opts) => notifyUser(message, w.fakeSpawn(), {home: w.home, env: w.env, ...opts});
-    send('watch 메시지 @everyone', {kind: 'alert'});
+    send('표시 없는 경보 @everyone', {kind: 'alert'});
     send('인계 통지', {kind: 'handover'});
     send('우편 알림', {kind: 'mail', key: 'mail:m1'});
     const bodies = w.requests().map(bodyOf);
@@ -111,11 +114,46 @@ test('포럼: 업무 글 생성·이어 붙이기는 조용히, 결정 답변이
   } finally { w.stop(); }
 });
 
-test('감시기는 사용자 경보와 겹알림 두 곳에만 ring을 켠다', () => {
-  const src = fs.readFileSync(new URL('../src/watch-runner.mjs', import.meta.url), 'utf8');
-  assert.equal(src.match(/kind: "alert", ring: true/g)?.length, 2);
-  for (const f of ['commands/watch.mjs', 'commands/handover.mjs', 'commands/send.mjs', 'decisions.mjs'])
-    assert.doesNotMatch(fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8'), /ring:\s*true/, f);
+test('감시 AI 경로: 사용자 직행과 RED 겹알림(WatchReports.deliver → sendWatchMessage)이 멘션으로 울린다', async () => {
+  const w = await world();
+  const prev = {...process.env};
+  Object.assign(process.env, w.env, {KADAN_HOME: w.home});
+  try {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-quiet-ai-'));
+    appendLedger({kind: 'start', role: 'x-작업자', session: 'kadan-x-작업자', panePid: 1}, home);
+    appendLedger({kind: 'send', role: 'x-작업자', taskId: 'a'}, home);
+    appendLedger({kind: 'start', role: 'y-작업자', session: 'kadan-y-작업자', panePid: 3}, home);
+    appendLedger({kind: 'send', role: 'y-작업자', taskId: 'b'}, home);
+    const sent = [];
+    // 사용자 직행만 실제 sendWatchMessage로 보낸다. 역할 전달은 기록만 한다.
+    const send = (role, message) => { sent.push(role); if (role === '@user') sendWatchMessage(role, message); };
+    const mk = live => new WatchReports({home, now: () => Date.now(), readCards: () => [{id: 'a', key: 'r/a', role: 'x-작업자', board: 'x', status: 'assigned', workType: 'execution'}, {id: 'b', key: 'r/b', role: 'y-작업자', board: 'y', status: 'assigned', workType: 'execution'}],
+      floor: {list: () => [{session: 'kadan-x-작업자', pid: 1}, {session: 'kadan-y-작업자', pid: 3}, ...live.map(session => ({session, pid: 2}))]}, send});
+    // (1) 경로가 없어 @user로 직행
+    let r = mk([]), job = r.request({source: 'stall', role: 'y-작업자', parents: new Map(), routes: [['y', 'y-죽은감독']], superRole: '죽은-슈퍼'});
+    r.submit(job.requestId, '정체', '입력 대기에서 멈춤');
+    // (2) 감독에게 전달하다가 같은 문제가 2회 연속(RED) + userNotify → 사용자 겹알림
+    r = mk(['kadan-x-감독']);
+    for (const why of ['첫 보고', '둘째 보고']) {
+      job = r.request({source: 'stall', role: 'x-작업자', parents: new Map(), routes: [['x', 'x-감독']], superRole: null, userNotify: true});
+      r.submit(job.requestId, '조정', why);
+    }
+    assert.deepEqual(sent, ['@user', 'x-감독', 'x-감독', '@user']);
+    const bodies = w.requests().map(bodyOf);
+    assert.equal(bodies.length, 2);
+    for (const b of bodies) assert.ok(rings(b), JSON.stringify(b));
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in prev)) delete process.env[k];
+    Object.assign(process.env, prev);
+    w.stop();
+  }
+});
+
+test('울림 표시(ring: true)는 감시기 두 곳과 watch @user 한 곳에만 있다', () => {
+  const count = f => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8').match(/ring:\s*true/g)?.length ?? 0;
+  assert.equal(count('watch-runner.mjs'), 2);
+  assert.equal(count('commands/watch.mjs'), 1);
+  for (const f of ['commands/handover.mjs', 'commands/send.mjs', 'decisions.mjs']) assert.equal(count(f), 0, f);
 });
 
 test('디스코드가 안 될 때 맥 알림 대체 경로는 그대로다', () => {

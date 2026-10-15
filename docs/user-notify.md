@@ -12,7 +12,7 @@
 |---|---|---|---|
 | **감시 경보의 `@user` 전달** | `watch-runner.mjs` | `alert:<경보 id>:<단계>` (10분 창) | **울림**(멘션) |
 | **RED·죽음 경보의 사용자 겹알림** | `watch-runner.mjs` | `alert:<경보 id>:<단계>:겹알림` (10분 창) | **울림**(멘션) |
-| `watch`의 `@user` 메시지 | `commands/watch.mjs` | 없음 | 조용히 |
+| **감시 AI의 사용자 경보**(직행·상신, RED·죽음 겹알림)와 일반 감시기의 `@user` 전달 | `commands/watch.mjs` `sendWatchMessage` (`watch-report.mjs` `WatchReports.deliver`가 부름) | 없음 | **울림**(멘션) |
 | 인계 사용자 통지 | `commands/handover.mjs` | 없음 | 조용히 |
 | 사용자 우편함에 온 편지 | `commands/send.mjs` | `mail:<우편 id>` | 조용히 |
 | **결정 요청** | `decisions.mjs` `request` | `decision:<id>:request` | **울림**(멘션) |
@@ -151,7 +151,7 @@ kadan secrets unset discord
 
 **울리는 기준은 멘션 하나다.** 사용자를 멘션하는 요청(`allowed_mentions: {users:[ID]}`)만 알림이 울린다. 결정 요청은 본문이 `[레포] <@사용자ID>`로 시작하고, 감시 경보의 `@user` 전달과 RED·죽음 겹알림은 호출 쪽이 `ring: true`를 주면 `notifyUser`가 본문 맨 앞에 같은 방식으로 `<@사용자ID>`를 붙인다.
 
-나머지는 모두 `postDiscordWebhook`이 웹훅 payload에 `flags: 4096`(SUPPRESS_NOTIFICATIONS)을 넣어 보낸다. 글은 그대로 보이고 알림만 울리지 않는다. 멘션이 없는 요청은 `allowed_mentions: {parse:[]}`라서 본문에 `@everyone`·`<@…>`가 섞여도 아무도 호출되지 않는다. **기본값이 조용히**라서 나중에 새로 생기는 알림 종류도 멘션을 붙이지 않으면 울리지 않는다. 메시지 고치기(PATCH)는 새 알림이 아니라서 `flags`를 붙이지 않는다.
+감시 AI 경로(`sendWatchMessage`의 `@user` 분기)도 같다. 이 길로 나가는 `@user` 메시지는 모두 경보라서 구분 없이 울린다(안내성 메시지가 지나는 근거가 없고, 울릴 것을 놓치는 쪽이 더 나쁘다). 나머지는 모두 `postDiscordWebhook`이 웹훅 payload에 `flags: 4096`(SUPPRESS_NOTIFICATIONS)을 넣어 보낸다. 글은 그대로 보이고 알림만 울리지 않는다. 멘션이 없는 요청은 `allowed_mentions: {parse:[]}`라서 본문에 `@everyone`·`<@…>`가 섞여도 아무도 호출되지 않는다. **기본값이 조용히**라서 나중에 새로 생기는 알림 종류도 멘션을 붙이지 않으면 울리지 않는다. 메시지 고치기(PATCH)는 새 알림이 아니라서 `flags`를 붙이지 않는다.
 
 본문은 2,000자를 넘으면 앞을 줄이고 맨 끝 줄(맥 링크 `http://127.0.0.1:8790/#decision-<ID>`)은 남긴다. 포트는 대시보드 기본값 8790이며, 대시보드 포트를 저장하는 설정은 아직 없다.
 

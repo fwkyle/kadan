@@ -48,7 +48,7 @@ function guardedWatchSend(tracker,args,role,guard) {
 
 export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
   if (role==='@user') {
-    const failure=notifyUser(message,spawnSync,{kind:'alert'}).error;
+    const failure=notifyUser(message,spawnSync,{kind:'alert',ring:true}).error;  // 이 길의 @user는 모두 경보(감시 AI 직행·RED 겹알림, 일반 감시기)라서 울린다.
     if (failure) { const error=new Error('사용자 알림 실패'); error.delivery='not-sent'; throw error; }
     return;
   }
