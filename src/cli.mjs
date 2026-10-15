@@ -259,7 +259,7 @@ export function main(argv) {
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
-  const { flags, rest: args } = parseFlags(rest);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && !flags.help) adoptMachineWindow(process.env, ledgerHome());

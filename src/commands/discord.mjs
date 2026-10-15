@@ -1,4 +1,4 @@
-// kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트] [--reply-to 메시지ID | --thread 스레드ID] [--edit 메시지ID] | thread <스레드ID> [--rename 이름] [--archive] | check
+// kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트] [--reply-to 메시지ID | --thread 스레드ID] [--edit 메시지ID] [--quiet] | thread <스레드ID> [--rename 이름] [--archive] | check
 // #비서 채널 대화(3단계). watch는 새 메시지를 JSON 한 줄씩 표준 출력으로 낸다(비서가 감시 도구로 구독). 판단은 비서가 한다.
 // 조회·답변만 한다: 발령·결정 승인·머지는 이 명령이 하지 않는다. 설명은 docs/discord-chat.md.
 import fs from 'node:fs';
@@ -8,7 +8,7 @@ import {createMailOut} from '../discord-mail.mjs';
 import {SECRETARY} from '../mailbox.mjs';
 import {createChat, runWatch, sendText, editThread, checkChat, DEFAULT_INTERVAL_S} from '../discord-chat.mjs';
 
-const USAGE = 'usage: kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트…|--stdin] [--reply-to 메시지ID|--thread 스레드ID] [--edit 메시지ID] [--thread-name 이름] | thread <스레드ID> [--rename 이름] [--archive] | check';
+const USAGE = 'usage: kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트…|--stdin] [--reply-to 메시지ID|--thread 스레드ID] [--edit 메시지ID] [--thread-name 이름] [--quiet] | thread <스레드ID> [--rename 이름] [--archive] | check';
 // 쓰기가 실제로 끝나야(역압 포함) 풀린다. 소비자가 안 읽으면 여기서 기다리고, 파이프가 닫히면 거절한다.
 const writeLine = line => new Promise((resolve, reject) => process.stdout.write(line + '\n', error => (error ? reject(error) : resolve())));
 const text = v => (typeof v === 'string' ? v : undefined);
@@ -36,8 +36,9 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
     }
     if (action === 'send') {
       if (flags.stdin !== undefined && flags.stdin !== true) die(USAGE, 2);
+      if (flags.quiet !== undefined && flags.quiet !== true) die(USAGE, 2);
       const body = flags.stdin === true ? readStdin() : rest[0] === '--' ? rest.slice(1).join(' ') : rest.join(' ');
-      const sent = await sendText(chat, body, {thread: text(flags.thread), replyTo: text(flags['reply-to']), edit: text(flags.edit), threadName: text(flags['thread-name'])});
+      const sent = await sendText(chat, body, {thread: text(flags.thread), replyTo: text(flags['reply-to']), edit: text(flags.edit), threadName: text(flags['thread-name']), quiet: flags.quiet === true});
       for (const s of sent) out(JSON.stringify(s));
       return;
     }

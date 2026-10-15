@@ -219,7 +219,13 @@ test('9 watch는 읽기 실패가 같은 지점에서 3회면 반복하지 않�
   } finally { await fake.close(); }
 });
 
-test('10 보내기: 2,000자 넘는 글은 문단 경계로 나눠 순서대로, 멘션은 막는다', async () => {
+const QUIET = {allowed_mentions: {parse: []}, flags: 4096};
+const RING = {allowed_mentions: {users: [FAKE.userId]}};
+const isRing = b => b.content.startsWith(`<@${FAKE.userId}> `) && b.flags === undefined && JSON.stringify(b.allowed_mentions) === JSON.stringify(RING.allowed_mentions);
+const isQuiet = b => !b.content.includes('<@') && b.flags === 4096 && JSON.stringify(b.allowed_mentions) === JSON.stringify(QUIET.allowed_mentions);
+const posts = fake => fake.requests.filter(r => r.method === 'POST' && /messages$/.test(r.path)).map(r => r.body);
+
+test('10 보내기: 2,000자 넘는 글은 문단 경계로 나눠 순서대로, 첫 조각만 kyle을 멘션하고 나머지는 조용하다', async () => {
   const fake = await startFakeDiscord();
   try {
     const {chat} = chatOf(fake);
@@ -227,13 +233,57 @@ test('10 보내기: 2,000자 넘는 글은 문단 경계로 나눠 순서대로,
     const text = [para(1), para(2), para(3), para(4), para(5)].join('\n\n');
     const sent = await sendText(chat, text);
     assert.equal(sent.length, 3);
-    const posts = fake.requests.filter(r => r.method === 'POST' && /messages$/.test(r.path));
-    assert.deepEqual(posts.map(r => r.body.allowed_mentions), posts.map(() => ({parse: []})));
-    assert.ok(posts.every(r => r.body.content.length <= 2000));
-    assert.deepEqual(posts.map(r => r.body.content).join('\n\n'), text);
-    assert.ok(posts[0].body.content.startsWith('문단1') && posts[1].body.content.startsWith('문단3'));
+    const ps = posts(fake);
+    assert.ok(isRing(ps[0]) && isQuiet(ps[1]) && isQuiet(ps[2]), JSON.stringify(ps.map(b => [b.flags, b.allowed_mentions])));
+    assert.ok(ps.every(b => b.content.length <= 2000));
+    const ringPrefix = `<@${FAKE.userId}> `;
+    assert.deepEqual([ps[0].content.slice(ringPrefix.length), ps[1].content, ps[2].content].join('\n\n'), text);
+    assert.ok(ps[0].content.slice(ringPrefix.length).startsWith('문단1') && ps[1].content.startsWith('문단3'));
     assert.deepEqual(sent.map(s => [s.part, s.parts]), [[1, 3], [2, 3], [3, 3]]);
-    assert.equal(posts[0].auth, `Bot ${FAKE.token}`);
+    assert.equal(fake.requests.find(r => r.method === 'POST' && /messages$/.test(r.path)).auth, `Bot ${FAKE.token}`);
+  } finally { await fake.close(); }
+});
+
+test('10b 보내기: 멘션 몫을 빼고 나눠 정확히 2,000자짜리 첫 조각도 2,000자를 넘지 않는다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat} = chatOf(fake);
+    await sendText(chat, 'ㅋ'.repeat(2000)); // 공백이 없어 강제로 자른다
+    const ps = posts(fake);
+    assert.equal(ps.length, 2);
+    assert.ok(isRing(ps[0]) && isQuiet(ps[1]));
+    assert.ok(ps.every(b => b.content.length <= 2000));
+  } finally { await fake.close(); }
+});
+
+test('10c 보내기: 새 글 기본은 울림(멘션·flags 없음), quiet면 멘션 없이 flags 4096 — 새 주제 스레드(replyTo)와 스레드(thread) 모두', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat} = chatOf(fake);
+    const topic = fake.add(FAKE.channelId, {content: '주제'});
+    await sendText(chat, '최종 답', {replyTo: topic.id});
+    await sendText(chat, '하는 중', {replyTo: topic.id, quiet: true});
+    const th = fake.addThread(fake.add(FAKE.channelId, {content: '또 주제'}));
+    await sendText(chat, '최종 답', {thread: th.id});
+    await sendText(chat, '하는 중', {thread: th.id, quiet: true});
+    await sendText(chat, '채널 최종');
+    await sendText(chat, '채널 하는 중', {quiet: true});
+    const ps = posts(fake);
+    assert.deepEqual(ps.map(b => (isRing(b) ? 'ring' : isQuiet(b) ? 'quiet' : 'other')), ['ring', 'quiet', 'ring', 'quiet', 'ring', 'quiet']);
+  } finally { await fake.close(); }
+});
+
+test('10d 고치기(PATCH)는 quiet 여부와 상관없이 멘션·flags가 없다(디스코드는 고치기로 푸시를 보내지 않는다)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const {chat} = chatOf(fake);
+    const th = fake.addThread(fake.add(FAKE.channelId, {content: '주제'}));
+    const [first] = await sendText(chat, '하는 중', {thread: th.id, quiet: true});
+    await sendText(chat, '고침', {thread: th.id, edit: first.id});
+    await sendText(chat, '또 고침', {thread: th.id, edit: first.id, quiet: true});
+    const patches = fake.requests.filter(r => r.method === 'PATCH' && /messages\//.test(r.path)).map(r => r.body);
+    assert.equal(patches.length, 2);
+    for (const b of patches) assert.deepEqual(b, {content: b.content, allowed_mentions: {parse: []}});
   } finally { await fake.close(); }
 });
 
@@ -376,8 +426,13 @@ test('18 CLI 끝에서 끝: watch --once 줄, send(나눔·스레드·수정), t
     const lines = w.stdout.trim().split('\n').map(l => JSON.parse(l));
     assert.deepEqual(lines.map(l => [l.id, l.where, l.content, l.quoted]), [[topic.id, 'channel', '진행 상황 알려줘', false]]);
 
-    const sent = await runCli(['discord', 'send', '--reply-to', topic.id, '하는 중입니다'], env);
+    const sent = await runCli(['discord', 'send', '--reply-to', topic.id, '--quiet', '하는 중입니다'], env);
     assert.equal(sent.code, 0, sent.stderr);
+    const finalAns = await runCli(['discord', 'send', '--thread', topic.id, '최종 답입니다'], env);
+    assert.equal(finalAns.code, 0, finalAns.stderr);
+    const cliPosts = posts(fake);
+    assert.ok(isQuiet(cliPosts[0]) && cliPosts[0].content === '하는 중입니다', JSON.stringify(cliPosts[0]));
+    assert.ok(isRing(cliPosts[1]) && cliPosts[1].content.endsWith(' 최종 답입니다'), JSON.stringify(cliPosts[1]));
     const one = JSON.parse(sent.stdout.trim());
     assert.equal(one.channelId, topic.id);
     const fromStdin = await runCli(['discord', 'send', '--thread', topic.id, '--stdin'], env, '표준입력 글\n둘째 줄');
@@ -395,8 +450,23 @@ test('18 CLI 끝에서 끝: watch --once 줄, send(나눔·스레드·수정), t
     assert.notEqual(bad.code, 0);
     assert.match(bad.stderr, /스레드가 아니다/);
     assert.equal((await runCli(['discord', 'nothing'], env)).code, 2);
-    for (const r of [w, sent, fromStdin, ed, th, chk, bad]) { assertNoSecrets(r.stdout, 'cli stdout'); assertNoSecrets(r.stderr, 'cli stderr'); }
+    for (const r of [w, sent, finalAns, fromStdin, ed, th, chk, bad]) { assertNoSecrets(r.stdout, 'cli stdout'); assertNoSecrets(r.stderr, 'cli stderr'); }
     assertNoSecrets(allText(s.home), 'state');
+  } finally { await fake.close(); }
+});
+
+test('18b CLI: --quiet이 앞·뒤·--stdin 어디에 있어도 본문 순서를 지키고 조용히 보낸다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    for (const [args, input] of [[['--quiet', '앞에', '둔다'], ''], [['뒤에', '--quiet', '둔다'], ''], [['본문', '끝에', '--quiet'], ''], [['--quiet', '--stdin'], '표준입력 본문']]) {
+      const r = await runCli(['discord', 'send', ...args], env, input);
+      assert.equal(r.code, 0, r.stderr);
+    }
+    const ps = posts(fake);
+    assert.deepEqual(ps.map(b => b.content), ['앞에 둔다', '뒤에 둔다', '본문 끝에', '표준입력 본문']);
+    assert.ok(ps.every(isQuiet));
   } finally { await fake.close(); }
 });
 

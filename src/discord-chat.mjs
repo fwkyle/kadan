@@ -18,6 +18,7 @@ const THREAD_FORGET_MS = 180 * 24 * 3600 * 1000;
 const DISCORD_EPOCH = 1420070400000n;
 const THREAD_TYPES = new Set([10, 11, 12]);
 const NO_MENTION = {parse: []};
+const SUPPRESS_NOTIFICATIONS = 4096; // user-notify.mjs와 같은 값(디스코드 SUPPRESS_NOTIFICATIONS 플래그)
 const isId = v => typeof v === 'string' && /^\d{1,25}$/.test(v);
 const idMs = id => Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
 const idLess = (a, b) => BigInt(a) < BigInt(b);
@@ -302,7 +303,9 @@ export async function openThread(chat, messageId, name) {
 }
 
 // 반환: [{id, channelId, part, parts}] (고친 경우 part 1/1). 2,000자 넘는 새 글은 나눠 순서대로, 하나 실패하면 거기서 멈춘다.
-export async function sendText(chat, text, {thread, replyTo, edit, threadName} = {}) {
+// 울림: 새 글은 기본으로 kyle을 멘션해 휴대폰이 울린다(나눌 때는 첫 조각만). quiet면 멘션 없이 flags 4096으로 조용히 올린다.
+// 고치기(PATCH)는 디스코드가 푸시를 보내지 않으므로 멘션·flags 없이 고친다 — 최종 답은 고치기가 아니라 새 글로 올려야 울린다.
+export async function sendText(chat, text, {thread, replyTo, edit, threadName, quiet = false} = {}) {
   const body = String(text ?? '');
   if (!body.trim()) throw new Error('보낼 글이 비었다');
   if (thread && replyTo) throw new Error('--thread와 --reply-to는 함께 쓰지 않는다');
@@ -318,10 +321,16 @@ export async function sendText(chat, text, {thread, replyTo, edit, threadName} =
     const r = await chat.api('PATCH', `/channels/${target}/messages/${edit}`, {content: body, allowed_mentions: NO_MENTION});
     return [{id: r.json?.id ?? edit, channelId: target, part: 1, parts: 1}];
   }
-  const parts = splitDiscord(body), sent = [];
-  for (const [i, content] of parts.entries()) {
+  const {userId} = chat.cfg, ring = `<@${userId}> `;
+  // 멘션이 첫 조각 앞에 붙어도 2,000자를 넘지 않게, 울릴 때는 모든 조각을 그만큼 짧게 나눈다(조각 길이 차이는 한 줄 이내).
+  const parts = splitDiscord(body, quiet ? DISCORD_LIMIT : DISCORD_LIMIT - ring.length);
+  const sent = [];
+  for (const [i, text] of parts.entries()) {
+    const rings = !quiet && i === 0;
+    const payload = rings ? {content: ring + text, allowed_mentions: {users: [userId]}}
+      : {content: text, allowed_mentions: NO_MENTION, flags: SUPPRESS_NOTIFICATIONS};
     try {
-      const r = await chat.api('POST', `/channels/${target}/messages`, {content, allowed_mentions: NO_MENTION});
+      const r = await chat.api('POST', `/channels/${target}/messages`, payload);
       sent.push({id: r.json?.id ?? null, channelId: target, part: i + 1, parts: parts.length});
     } catch (error) {
       error.sent = sent; // 호출 쪽이 어디까지 올라갔는지 보여 준다

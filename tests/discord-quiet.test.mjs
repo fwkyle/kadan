@@ -156,6 +156,18 @@ test('울림 표시(ring: true)는 감시기 두 곳과 watch @user 한 곳에�
   for (const f of ['commands/handover.mjs', 'commands/send.mjs', 'decisions.mjs']) assert.equal(count(f), 0, f);
 });
 
+// 봇 답변(discord-chat.mjs sendText)은 웹훅이 아니라 봇 API로 나간다. 울리는 곳은 새 글 첫 조각의 `<@사용자>` 멘션 한 군데뿐이다.
+test('울림 위치 고정: #비서 봇 답변은 discord-chat.mjs의 멘션 한 곳만 울리고, 나머지 조각·--quiet·고치기는 조용하다', () => {
+  const src = fs.readFileSync(new URL('../src/discord-chat.mjs', import.meta.url), 'utf8');
+  assert.equal(src.match(/<@\$\{/g)?.length, 1);
+  assert.equal(src.match(/users:\s*\[userId\]/g)?.length, 1);
+  assert.equal(src.match(/flags:\s*SUPPRESS_NOTIFICATIONS/g)?.length, 1);
+  for (const f of ['commands/discord.mjs', 'discord-mail.mjs', 'discord-bot.mjs']) {
+    const t = fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+    assert.equal(/<@\$\{|users:\s*\[/.test(t), false, f);
+  }
+});
+
 test('디스코드가 안 될 때 맥 알림 대체 경로는 그대로다', () => {
   resetDiscordBlock();
   const calls = [];
