@@ -20,7 +20,7 @@
 | `activePreset`, `presets.<이름>.roles` | 역할(`worker`·`reviewer`·`conductor`·`super`·`watch`)별 `{runner, model, effort}`. `watch`는 감시 AI다 |
 | `presets.<이름>.fallback.<역할>` | 1순위가 막혔을 때 내려갈 순서 목록 `[{runner, model, effort}]`. 1번부터 센다 |
 | `runners.<실행기>.spawn` | 실행 명령 틀. `{model}`·`{effort}`를 채운다 |
-| `runners.<실행기>.resume`·`fork`·`exec`·`version`·`update`·`conversation` | 선택 칸. [실행기 명령 표](#실행기-명령-표) |
+| `runners.<실행기>.resume`·`fork`·`exec`·`version`·`update`·`listModels`·`conversation` | 선택 칸. [실행기 명령 표](#실행기-명령-표) |
 | `runners.codex.catalog` | `codex-models-cache`면 `~/.codex/models_cache.json`의 모델과 `supported_reasoning_levels`만 고를 수 있다 |
 | `runners.<그 밖>.models` | 목록 파일이 없는 실행기는 실측한 `{model, efforts}`만 적는다 |
 | `families` | 모델 이름 앞머리로 계열을 읽는 규칙 |
@@ -35,6 +35,7 @@ kadan runners set worker --runner codex --model xai/grok-4.7-build-fast --effort
 kadan runners show                          # 역할별 값과 채워질 실행 명령
 kadan runners runner claude --spawn '<명령 틀>' --revision N --reason <이유>      # 실행기 명령 틀(래퍼 포함)
 kadan runners model claude claude-opus-5-5 --efforts low,medium,high,xhigh,max --revision N --reason <이유>  # 목록 파일이 없는 실행기의 실측 모델
+kadan runners model claude claude-opus-5-5 --remove --revision N --reason <이유>  # 등록 모델 빼기(역할 값·대체 후보·즐겨찾기가 쓰는 모델은 거절하고 쓰는 곳을 모두 적는다. codex는 목록 파일이라 거절)
 kadan runners block gpt-6-astra --roles reviewer --revision N --reason <이유>      # 정책 차단(역할 생략 시 모든 역할)
 kadan runners preset A --revision N --reason <이유>          # 활성 프리셋 전환(있는 프리셋만)
 kadan runners fallback worker --set 'devin:swe-2-max,codex:zai/glm-5.3:high' --revision N --reason <이유>  # 폴백 순서 전체(빈 글이면 비움)
@@ -94,12 +95,18 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - 화면 아래에 최근 `runner-settings` 사건 10건(시각·누가·무엇을·전 → 후·이유)을 보여 준다.
 - 설정 파일이 없으면 `kadan runners init`을 먼저 하라는 안내만 보이고 폼은 없다.
 
+- **실행기 모델·명령 표**(같은 화면 아래, 실행기마다 펼침): codex는 "codex 목록 파일을 따른다"만 보인다. 그 밖의 실행기는 등록 모델 목록(삭제 버튼 — 쓰는 곳이 있으면 서버가 거절 메시지로 쓰는 곳을 적는다), 모델 등록(이름·강도 쉼표), `listModels` 칸이 있으면 **목록 불러오기**(아직 등록 안 된 모델을 골라 등록), 명령 표 편집(spawn·resume·fork·exec·execField·version·update·listModels·conversation JSON)이 있다. 표 저장은 바뀐 칸만 보내고 빈 칸은 그 칸을 지우며, 저장 검사는 CLI `runner --table`과 같은 `setRunner`가 한다. 새 실행기 추가도 같은 폼(spawn에 `{model}` 필수)이다. 실행기 삭제는 화면·CLI 모두 없다.
+
 쓰기 경로는 다른 대시보드 폼과 같다(로컬 주소, 같은 출처, 폼 입력, 화면을 읽을 때 받은 로컬 토큰).
 
 | 주소 | 입력 | 하는 일 |
 | --- | --- | --- |
 | `POST /runners/set` | `token`·`revision`·`role`·`runner`·`model`·`effort`·`reason` | 활성 프리셋의 역할 값을 `set`과 같은 검사로 바꾼다 |
 | `POST /runners/preset` | `token`·`revision`·`preset`·`reason` | 활성 프리셋을 바꾼다 |
+| `POST /runners/model-add` | `token`·`revision`·`runner`·`model`·`efforts`·`reason` | `runners model`과 같은 `setRunnerModel` |
+| `POST /runners/model-remove` | `token`·`revision`·`runner`·`model`·`reason` | `runners model --remove`와 같은 `removeRunnerModel`(원장 `action: model-remove`) |
+| `POST /runners/runner` | `token`·`revision`·`runner`·`spawn`(선택)·`table`(JSON)·`reason` | `runners runner --table`과 같은 `setRunner`. 지금 값과 같은 칸은 버리고 바뀐 칸만 저장 |
+| `POST /runners/models-list` | `token`·`runner` | `listModels` 명령을 한 번 돌려 `{models:[{model,name,registered}]}`를 돌려준다. revision·이유 없음, 아무것도 쓰지 않는다. 동시에 하나만 돈다 |
 
 토큰이 없거나 틀리면 403, 틀린 revision·빈 이유·목록 밖 실행기/모델/강도·차단 모델·작업자와 같은 계열의 검수자·없는 프리셋은 409로 거부하고 설정을 바꾸지 않는다. 화면의 선택지 좁히기는 편의일 뿐이고, 판정은 서버가 한다.
 
@@ -198,6 +205,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 | `exec` | 화면 없이 한 번 호출하는 틀(`{prompt}`가 있으면 인자, 없으면 표준 입력. `{prompt}`는 앞뒤가 공백인 독립 낱말이어야 하고 따옴표·글자에 붙이면 저장 단계에서 거절). **설명 AI가 이 틀로 부른다**([설명 AI](#설명-ai)). 감시 AI·시니어는 그대로 codex만 쓴다 |
 | `execField` | `exec`의 표준 출력이 JSON일 때 답이 든 필드 이름(`response`·`result`, 점으로 안쪽 필드). 비우면 표준 출력 전체가 답이다. 실행기마다 다른 출력 모양을 코드가 알지 않도록 표에 둔다 |
 | `version`·`update` | 버전 확인·업데이트 명령 문자열. 카단은 실행하지 않는다 |
+| `listModels` | 실행기가 자기 모델 목록을 내는 명령 틀(자리 `{…}` 없음, 예: agy는 `agy models`). 줄마다 **첫 낱말**을 모델 id로 읽고 이름 규칙(영문·숫자·`./-[]`)에 안 맞는 줄·중복은 버린다. 대시보드의 **목록 불러오기** 버튼을 누를 때만 한 번 실행한다(POST·토큰, 20초·256KiB 상한, 넘으면 프로세스 묶음 종료). 결과는 저장하지 않고 설정·원장에도 쓰지 않는다 |
 | `conversation` | 지금 떠 있는 pane의 대화 ID를 찾는 법. 아래 두 종류 |
 
 `conversation` 두 종류(코드의 일반 함수 둘):

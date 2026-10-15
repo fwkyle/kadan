@@ -13,6 +13,7 @@ import {
   WATCH_MAX_ATTEMPTS,
   EXPLAIN_MAX_ATTEMPTS,
 } from "../runner-settings.mjs";
+import { TABLE_KEYS } from "../runner-table.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
 import { seniorCommandLabel } from "../senior.mjs";
 import { describeWindowSetting } from "../window-setting.mjs";
@@ -40,6 +41,16 @@ export function decisionsData(snapshot, url, stamp) {
   };
 }
 
+// 화면에 보이는 실행기 명령 표: spawn과 표 칸, conversation(JSON). catalog 실행기는 모델을 직접 등록하지 않는다.
+const tableView = (spec) => ({
+  spawn: spec.spawn,
+  needsEffort: spec.spawn.includes("{effort}"),
+  catalog: Boolean(spec.catalog),
+  table: Object.fromEntries(TABLE_KEYS.map((key) => [key, spec[key] ?? ""])),
+  conversation: spec.conversation ? JSON.stringify(spec.conversation, null, 2) : "",
+  canListModels: !spec.catalog && typeof spec.listModels === "string" && Boolean(spec.listModels.trim()),
+});
+
 export function runnersData(snapshot, url, stamp) {
   const settings = readSettings(snapshot.home);
   // 창 선택은 이 프로세스의 환경변수가 아니라 기계 설정(KADAN_HOME/window-setting.json) 값을 보여 준다.
@@ -59,8 +70,7 @@ export function runnersData(snapshot, url, stamp) {
         return [
           name,
           {
-            spawn: spec.spawn,
-            needsEffort: spec.spawn.includes("{effort}"),
+            ...tableView(spec),
             models: [...runnerChoices(settings, name)].map(
               ([model, efforts]) => ({ model, efforts }),
             ),
@@ -70,8 +80,7 @@ export function runnersData(snapshot, url, stamp) {
         return [
           name,
           {
-            spawn: spec.spawn,
-            needsEffort: spec.spawn.includes("{effort}"),
+            ...tableView(spec),
             models: [],
             error: error.message,
           },
