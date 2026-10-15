@@ -157,3 +157,30 @@ test('화면 경로: 목록 불러오기는 토큰·POST일 때만 실행되고,
     assert.deepEqual(readSettings(f.home).runners.agy.models, []);
   } finally { server.close(); }
 });
+
+test('화면 경로: 빈 spawn은 조용히 무시하지 않고 CLI와 같은 메시지로 거절, 빈 이유는 쓰기 전부 409', async () => {
+  const f = fixture();
+  f.step(m => setRunnerModel(f.home, {runner: 'agy', model: 'm-a', efforts: '', ...m}));
+  const cli = fixture();
+  let expected; try { setRunner(cli.home, {runner: 'agy', spawn: '', ...cli.meta()}); } catch (e) { expected = e.message; }
+  assert.match(expected, /\{model\}/);
+  const {server, post} = await serve(f.home);
+  try {
+    const rev = () => String(readSettings(f.home).revision), n = readLedger(f.home).length, before = fs.readFileSync(path.join(f.home, 'runner-settings.json'), 'utf8');
+    // spawn만 비움
+    let res = await post('/runners/runner', {runner: 'agy', spawn: '', table: '{}', reason: '비움', revision: rev()});
+    assert.equal(res.status, 409); assert.equal(await res.text(), expected);
+    // spawn을 비우고 다른 칸도 바꿈
+    res = await post('/runners/runner', {runner: 'agy', spawn: '', table: JSON.stringify({version: 'agy --version'}), reason: '비움', revision: rev()});
+    assert.equal(res.status, 409); assert.equal(await res.text(), expected);
+    // 빈 이유: 삭제·등록·표 저장·실행기 추가 모두 거절하고 원장·설정 변화 0
+    const empty = {reason: '  ', revision: rev()};
+    for (const [p, body] of [['/runners/model-remove', {runner: 'agy', model: 'm-a'}], ['/runners/model-add', {runner: 'agy', model: 'm-q', efforts: ''}],
+      ['/runners/runner', {runner: 'agy', table: JSON.stringify({version: 'x'})}], ['/runners/runner', {runner: 'new1', spawn: 'x {model}', table: '{}'}]]) {
+      res = await post(p, {...body, ...empty});
+      assert.equal(res.status, 409, p); assert.match(await res.text(), /이유가 필요/);
+    }
+    assert.equal(readLedger(f.home).length, n);
+    assert.equal(fs.readFileSync(path.join(f.home, 'runner-settings.json'), 'utf8'), before);
+  } finally { server.close(); }
+});

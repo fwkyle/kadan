@@ -234,7 +234,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      const current=readSettings(home);
      if(!current)throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
      let table;if(f.table){try{table=JSON.parse(f.table);}catch{throw new Error('--table은 JSON 글이어야 한다');}}
-     const changed=changedRunnerFields(current.runners[f.runner],{spawn:f.spawn||undefined,table});
+     const changed=changedRunnerFields(current.runners[f.runner],{spawn:f.spawn,table});
      if(!changed)throw new Error('바뀐 것이 없다');
      return setRunner(home,{runner:f.runner,...changed,...meta});
     };

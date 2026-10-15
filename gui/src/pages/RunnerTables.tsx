@@ -77,6 +77,7 @@ function Models({ name, spec, revision }: { name: string; spec: RunnerCatalog[st
     [efforts, setEfforts] = useState(""),
     [reason, setReason] = useState(""),
     [listed, setListed] = useState<Listed[] | null>(null);
+  const noReason = !reason.trim();
   const load = async () => {
     setBusy(true);
     setError(null);
@@ -91,6 +92,7 @@ function Models({ name, spec, revision }: { name: string; spec: RunnerCatalog[st
   };
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (noReason) return setError("바꾸는 이유를 적어 주세요.");
     if (await run("/runners/model-add", { runner: name, model, efforts, reason, revision: String(revision) }, `${name} 모델을 등록했습니다: ${model}`)) {
       setModel("");
       setEfforts("");
@@ -98,17 +100,22 @@ function Models({ name, spec, revision }: { name: string; spec: RunnerCatalog[st
       setListed(null);
     }
   };
-  // 삭제 이유는 아래 '바꾸는 이유' 칸에 적은 글을 쓰고, 비어 있으면 기본 문구를 남긴다.
+  // 삭제도 등록처럼 사람이 이유를 적어야 한다. 이유 칸이 비어 있으면 삭제 버튼을 막고 안내한다.
   const remove = (m: string) =>
-    run("/runners/model-remove", { runner: name, model: m, reason: reason.trim() || "모델 삭제(화면)", revision: String(revision) }, `${name} 모델을 뺐습니다: ${m}`);
+    run("/runners/model-remove", { runner: name, model: m, reason, revision: String(revision) }, `${name} 모델을 뺐습니다: ${m}`);
   return (
     <div>
+      <label>
+        바꾸는 이유 (필수 — 등록·삭제가 함께 씁니다)
+        <input required maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+      </label>
+      {noReason && <p className="muted">이유를 적으면 삭제·등록할 수 있습니다.</p>}
       <h3>등록된 모델</h3>
       <ul>
         {spec.models.map((m) => (
           <li key={m.model}>
             {m.model} <small className="muted">({m.efforts.join(", ") || "강도 없음"})</small>{" "}
-            <button type="button" disabled={busy} onClick={() => remove(m.model)}>
+            <button type="button" disabled={busy || noReason} onClick={() => remove(m.model)}>
               삭제
             </button>
           </li>
@@ -147,10 +154,6 @@ function Models({ name, spec, revision }: { name: string; spec: RunnerCatalog[st
           <label>
             강도 목록 (쉼표, 비워도 됨)
             <input value={efforts} onChange={(e) => setEfforts(e.target.value)} placeholder="low,medium,high" />
-          </label>
-          <label>
-            바꾸는 이유 (필수)
-            <input required maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
           </label>
           <button className="primary">모델 등록</button>
         </fieldset>
