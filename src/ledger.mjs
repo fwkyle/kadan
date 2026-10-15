@@ -1,4 +1,4 @@
-import {storageMode,storagePath} from './storage.mjs';
+import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -72,6 +72,17 @@ export function readMailLedger(home = ledgerHome()) {
 // 우편함 계산용: 우편 영역 + 역할 세대(start·stop) 기록. mail-generation.mjs가 같은 이름의 새 세션을 가른다.
 export function readMailboxLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home),'mailbox');
+}
+// 우편 중복 거르기용 좁은 조회: 수신자·sourceKey가 같은 send 사건 하나. 원장 전체를 읽고 검증하지 않는다.
+// SQLite는 우편 영역(과거 원문 포함) 줄만 최신부터 훑고, 글자 포함(instr)으로 먼저 걸러 JSON 해석 없이 첫 일치에서 멈춘다.
+// 그래서 방금 저장한 우편(재시작 중복)은 사건 수와 상관없이 바로 찾는다. 없다고 확인하는 데는 우편 영역 전체를 한 번 훑는다. JSONL은 기존 읽기.
+export function findMailBySourceKey(home,role,sourceKey) {
+  if (storageMode(home) !== 'sqlite') return readMailboxLedger(home).find(e => e.kind === 'send' && e.role === role && e.sourceKey === sourceKey) ?? null;
+  const needle = `"sourceKey":${JSON.stringify(sourceKey)}`;
+  return storageSnapshot(home,db => {
+    const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream IN ('ledger.jsonl','mail/events.jsonl') AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='send' AND json_extract(payload,'$.role')=? ORDER BY rowid DESC LIMIT 1").get(needle, role);
+    return row ? JSON.parse(row.payload) : null;
+  });
 }
 export function readSystemLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home),'system');
