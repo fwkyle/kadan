@@ -36,6 +36,14 @@ test('설명 AI 경로가 흐름 지도에 있고 감시 AI와 다르다고 밝�
   assert.match(read('docs/runner-settings.md'), /## 설명 AI/);
 });
 
+test('기억 유지 재시작 줄에 화면 진입점(다시 띄우기 버튼)이 있다', () => {
+  const talk = section('3\\. 어떻게 주고받나');
+  const row = talk.split(String.fromCharCode(10)).find(line => line.includes('기억 유지 재시작'));
+  assert.ok(row, '3절에 기억 유지 재시작 행 없음');
+  assert.ok(row.includes('다시 띄우기'), '기억 유지 재시작 행에 화면 진입점(다시 띄우기 버튼)을 적으세요');
+  assert.match(read('docs/dashboard-status-guide.md').split(/^## 화면 지도$/m)[1] ?? '', /다시 띄우기/);
+});
+
 test('흐름 지도가 문서 입구와 감독 지침에서 이어진다', () => {
   assert.match(read('README.md'), /\(docs\/flows\.md\)/);
   assert.match(read('docs/README.md'), /\(flows\.md\)/);

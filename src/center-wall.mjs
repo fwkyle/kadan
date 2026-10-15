@@ -28,6 +28,7 @@ import {appendLedger,readLedger} from './ledger.mjs';
 import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,setActivePreset,setFallback,setFavorites,setRole,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
+import {sessionName} from './cli-basics.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
 // 상태 이름은 status-labels 한 곳에서 가져온다(2026-10-05 [kyle]).
@@ -145,6 +146,32 @@ export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta
  }
 }
 
+// 대시보드 '다시 띄우기'(2026-10-15 [kyle]). 화면은 restartRole을 프로세스 안에서 동기로 부르지 않고 CLI를 자식
+// 프로세스로 불러 같은 검사(대화 확정·세대 대조·실행 중 보호)를 그대로 쓴다 — 동기 호출은 대시보드 응답을 멈춘다.
+// --force는 화면에서 보내지 않는다 — 끝나지 않은 카드 거절은 CLI 메시지 그대로 화면에 보이고, 강제는 터미널에서 사람이 한다.
+// 사람이 누른 것이므로 KADAN_ROLE을 비워 원장에 '사람'으로 남긴다. 창 선택(KADAN_WINDOW)은 화면이 바꾸지 않고 기존 규칙을 따른다.
+//
+// 2라운드(2026-10-15 검수):
+// - 화면 값(이유·세대 표시)은 인자가 아니라 환경변수로만 넘긴다. 인자로내면 이유가 '--force'·'--'일 때 공통 파서가
+//   옵션으로 다시 읽어 보호가 풀렸다. parseFlags는 --이름=값 형태를 지원하지 않아(소스 확인) 환경변수를 택했다.
+// - 화면 응답 상한(28초)과 자식 종료를 분리한다. 28초에 자식을 끊으면 stop만 남는 반쯤 끝난 상태가 실측됐다.
+//   화면은 28초에 '진행 중'으로 답하고, 자식은 최종 상한 120초까지 돌게 한다. 120초 근거: 실측 왕복 1-2초의 60배
+//   이상이고 검수가 주입한 60초 지연보다 길다. 이 상한은 영구 정지한 자식의 정리 장치이지 화면 응답이 아니다.
+export async function restartRoleDefault({role,reason,expectPid,cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile),responseTimeout=28_000}={}) {
+ const settled=run(process.execPath,[cli,'restart',role],{env:{...env,KADAN_ROLE:'',KADAN_RESTART_REASON:reason,KADAN_RESTART_EXPECT_PID:String(expectPid)},encoding:'utf8',timeout:120_000}).then(
+  ({stdout})=>({output:String(stdout||'').trim().split('\n').slice(0,6).join('\n')}),
+  error=>{throw error.killed&&!error.stderr
+   ?new Error('최종 상한 120초를 넘겨 자식을 중단했다 — 역할 상태와 회복 잠금을 확인하세요')
+   // 거절 메시지는 CLI가 쓴 것을 그대로 보인다.
+   :new Error(String(error.stderr||error.message||'').trim().slice(-300)||'다시 띄우지 못했다');});
+ const slow=await Promise.race([settled.then(()=>false),new Promise(resolve=>setTimeout(()=>resolve(true),responseTimeout))]);
+ if(slow){
+  settled.catch(()=>{}); // 응답을 보낸 뒤의 성공·실패는 원장과 역할 상태로 확인한다(서버를 죽이지 않는다)
+  return {pending:true,output:'아직 다시 띄우는 중입니다(28초를 넘겼습니다). 자식 프로세스는 계속 진행됩니다(최대 120초). 잠시 뒤 원장과 역할 상태를 확인하세요.'};
+ }
+ return settled;
+}
+
 // 대시보드 '슈퍼감독에게 묻기'(2026-10-07 [kyle]). 받는 사람은 서버가 관계표에서 정한다 — 유닛에서 직속 상위를 따라
 // 올라가 처음 만나는 슈퍼감독(프로필 기준, super-role.mjs). 사슬이 없으면(관계표 밖) 비서. 요청이 받는 사람을 고르게 두면
 // "아무 창에나 글을 붙이는" 통로가 되므로 받지 않는다. 관계표를 못 읽으면 추측하지 않고 거부한다.
@@ -167,11 +194,11 @@ export function askMessage({unit,text,context}) {
  return `[대시보드 질문 · ${unit}]\n${text}${context?`\n\n${context}`:''}\n\n이 편지는 사용자의 질문이다. 새 발령·승인이 아니다.`;
 }
 
-export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
+export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite','/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite','/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -185,6 +212,16 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
+   if(url.pathname==='/roles/restart'){
+    const role=String(f.role||''),reason=String(f.reason||'').trim(),expectPid=String(f.expectPid||'').trim();
+    if(!/^[\p{L}\p{N}_-]+$/u.test(role))throw new Error('다시 띄울 역할 이름이 올바르지 않다');
+    if(!reason)throw new Error('다시 띄우는 이유를 적어 주세요');
+    if(!/^\d+$/.test(expectPid))throw new Error('이 역할의 지금 세대 표시(pane PID 숫자)가 없다 — 화면을 새로 읽은 뒤 다시 시도하세요');
+    // 별칭('-역할'·'역할-' 등)은 같은 세션을 가리켜도 거절한다 — 최근 시작이 기록한 정확한 이름만 받는다(2026-10-15 2라운드).
+    const latest=readLedger(home).findLast(x=>x.kind==='start'&&x.session===sessionName(role));
+    if(!latest||latest.role!==role)throw new Error('역할 이름이 최근 시작 기록과 다르다 — 목록을 새로 읽고 정확한 이름으로 다시 시도하세요');
+    saved('/#runner-settings',await restart({role,reason,expectPid}));return true;
+   }
    if(url.pathname==='/ask'){
     const unit=String(f.unit||''),text=String(f.text||'').trim(),context=String(f.context||'').trim();
     if(!/^[\p{L}\p{N}_-]+$/u.test(unit))throw new Error('물을 유닛 이름이 올바르지 않다');
