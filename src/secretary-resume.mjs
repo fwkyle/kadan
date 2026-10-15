@@ -48,7 +48,8 @@ export function withRecoveryLock(home, session, run) {
   const dir = path.join(home, 'recovery');
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   const lock = path.join(dir, `role-${startDigest(session)}.lock`);
-  if (!acquireDirLock(lock)) throw new Error('역할 복원이 진행 중입니다. 중복 실행하지 않습니다.');
+  // 멈춘 잠금(도중에 죽은 restart 등)을 자동으로 지우지 않는다 — 사람이 확인하고 지우게 경로를 보인다(dir-lock 규칙).
+  if (!acquireDirLock(lock)) throw new Error(`역할 복원이 진행 중입니다. 중복 실행하지 않습니다. 멈춘 잠금이면 확인 뒤 지운다: ${lock}`);
   try { return run(); } finally { fs.rmdirSync(lock); }
 }
 

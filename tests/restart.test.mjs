@@ -114,6 +114,43 @@ test('--force: 끝나지 않은 카드가 있어도 진행하고 stop·start 기
   assert.equal(start.forced, true); assert.deepEqual(start.forcedTasks, ['card-1', 'card-2']);
 });
 
+test('--reason: stop·start 두 사건에 다듬은 이유를 남기고, 없으면 칸 자체가 없다', () => {
+  const f = fixture({files: claudeFiles});
+  f.run({reason: '  모델을 바꿔서  '});
+  const [stop, start] = f.entries.slice(1);
+  assert.equal(stop.reason, '모델을 바꿔서'); assert.equal(start.reason, '모델을 바꿔서');
+  const plain = fixture({files: claudeFiles});
+  plain.run();
+  const [plainStop, plainStart] = plain.entries.slice(1);
+  assert.equal(plainStop.reason, undefined); assert.equal(plainStart.reason, undefined);
+});
+
+test('회복 잠금 디렉터리가 남아 있으면 거절하고, 사람이 지우면 다시 동작한다(자동으로 지우지 않는다)', () => {
+  const f = fixture({files: claudeFiles});
+  const lock = path.join(f.home, 'recovery', `role-${startDigest(f.session)}.lock`);
+  fs.mkdirSync(lock, {recursive: true});
+  assert.throws(() => f.run(), /복원이 진행 중/);
+  assert.deepEqual(f.log, [], '남은 잠금 앞에서 끄지 않는다');
+  assert.equal(f.entries.length, 1);
+  fs.rmdirSync(lock); // 멈춘 잠금은 사람이 확인하고 지우는 것이 기존 규칙(dir-lock.mjs 주석)
+  f.run();
+  assert.equal(f.entries.at(-1).kind, 'start');
+});
+
+test('--expect-pid: 지금 세대와 같으면 진행하고, 다르면 끄기 전에 거절한다 — 같은 요청을 두 번내면 두 번째는 거절', () => {
+  const f = fixture({files: claudeFiles});
+  f.run({'expect-pid': '100'});
+  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
+  // 첫 실행 뒤 원장의 최신 시작은 pane PID 200이다. 옛 화면의 세대 표시(100)로 다시내면 두 번 재시작이 되므로 거절한다.
+  assert.throws(() => f.run({'expect-pid': '100'}), /세대와 다르다/);
+  assert.equal(f.log.filter(([kind]) => kind === 'stop').length, 1, '두 번째 요청은 기존 세션을 끄지 않는다');
+  assert.equal(f.entries.filter(e => e.kind === 'start').length, 2);
+  const g = fixture({files: claudeFiles});
+  assert.throws(() => g.run({'expect-pid': '999'}), /세대와 다르다/);
+  assert.deepEqual(g.log, []);
+  assert.equal(g.entries.length, 1);
+});
+
 test('입력 대기만(끝나지 않은 카드 없음)이면 기본으로 진행하고, 두 번째 restart는 이전 대화 인자를 갈아끼운다', () => {
   const f = fixture({files: claudeFiles});
   f.run();
@@ -231,6 +268,17 @@ test('비서: 복원 정보를 못 만들면(codex가 아닌 비서) 끄지 않�
   assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null, deps: f.deps}), /지원하지 않는다/);
   assert.deepEqual(f.calls, []);
   assert.equal(f.entries.length, 1);
+});
+
+test('비서: --reason은 checkpoint 경로의 stop·start에도 남고, --expect-pid가 다르면 끄기 전에 거절한다', () => {
+  const f = secretaryFixture();
+  restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {reason: '설정 변경'}, floor: f.floor, settings: null, deps: f.deps});
+  assert.equal(f.entries.find(e => e.kind === 'stop').reason, '설정 변경');
+  assert.equal(f.entries.filter(e => e.kind === 'start').at(-1).reason, '설정 변경');
+  const g = secretaryFixture();
+  assert.throws(() => restartRole({home: g.home, role: '비서', session: 'kadan-비서', flags: {'expect-pid': '999'}, floor: g.floor, settings: null, deps: g.deps}), /세대와 다르다/);
+  assert.deepEqual(g.calls, []);
+  assert.equal(g.entries.length, 1);
 });
 
 test('비서: restart 뒤에도 감시 발령·우편·책임이 이어지고, --force는 새 start에 forced를 남긴다', () => {

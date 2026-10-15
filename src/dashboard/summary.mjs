@@ -72,7 +72,8 @@ export function sessionsData(snapshot, url, stamp) {
       role: r.role,
       harness: r.harness || null,
       model: r.model || null,
-      life: pick(r.life || {}, ["state", "pidState"]),
+      // recordedPid는 '다시 띄우기' 버튼의 세대 표시다 — 화면이 본 최근 start의 pane PID를 서버가 restart 직전 원장과 대조한다.
+      life: pick(r.life || {}, ["state", "pidState", "recordedPid"]),
     })),
   };
 }

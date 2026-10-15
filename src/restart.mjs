@@ -26,12 +26,16 @@ function currentStart(entries, session) {
   return events[index];
 }
 
-function ensureReady({role, session, floor, entries, deps}) {
+function ensureReady({role, session, floor, entries, deps, expectPid}) {
   if (floor.name !== 'tmux') fail('restart는 tmux 바닥에서만 쓴다');
   if (process.env.KADAN_ROLE === role) fail('자기 자신은 restart할 수 없다 — 다른 역할이나 사람이 실행한다(끄는 순간 이 명령도 같이 끝난다)');
   if (!floor.alive(session)) fail(`세션 없음: ${session} — 죽은 역할은 restart가 아니라 start/recovery로 되살린다`);
   const start = currentStart(entries, session);
   if ((start.floor && start.floor !== 'tmux') || !start.panePid) fail('tmux 역할 시작 기록이 불완전하다');
+  // 화면(대시보드 '다시 띄우기')이 본 세대와 원장의 최신 시작을 대조한다. 그 사이 다시 띄워졌거나 멈췄으면
+  // 두 번 재시작하지 않도록 거절한다(2026-10-15 [kyle] — 화면과 CLI가 같은 검사를 쓰게 --expect-pid로 둔다).
+  if (expectPid != null && String(start.panePid) !== String(expectPid))
+    fail(`화면이 본 세대와 다르다(받은 pane PID ${expectPid}, 최신 시작의 pane PID ${start.panePid}) — 이미 다시 띄웠거나 멈췄을 수 있다. 화면을 새로 읽고 다시 시도하라`);
   if (String(floor.pid(session)) !== String(start.panePid)) fail('지금 pane과 마지막 시작 기록의 PID가 다르다 — 다른 프로세스일 수 있어 중단한다');
   return start;
 }
@@ -45,23 +49,26 @@ function guardRunning({role, entries, force, deps}) {
 }
 
 // 끄기 → stop 원장. restart가 낸 stop은 표시를 달아 "사용자가 직접 끈 역할"로 읽히지 않게 한다.
-function stopForRestart({role, session, floor, entries, deps, forced}) {
+function stopForRestart({role, session, floor, entries, deps, forced, reason}) {
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
-  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(forced ? {forced: true, forcedTasks: forced} : {}), ...windowFields});
+  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}), ...windowFields});
   return windowFields;
 }
 
 export function restartRole({home, role, session, flags = {}, floor, settings, deps}) {
   // 비서는 resumeSecretary가 같은 잠금을 스스로 잡으므로 겹쳐 잡지 않는다.
-  if (role === SECRETARY) return restartSecretary({home, role, session, floor, force: flags.force === true, deps});
-  return withRecoveryLock(home, session, () => restartLocked({home, role, session, flags, floor, settings, deps}));
+  // 이유(--reason)는 stop·start 두 사건에 같은 값으로 남긴다. 세대 표시(--expect-pid)는 화면의 두 번 재시작 방지다.
+  const reason = typeof flags.reason === 'string' && flags.reason.trim() ? flags.reason.trim() : null;
+  const expectPid = flags['expect-pid'] ?? flags.expectPid ?? null;
+  if (role === SECRETARY) return restartSecretary({home, role, session, floor, force: flags.force === true, reason, expectPid, deps});
+  return withRecoveryLock(home, session, () => restartLocked({home, role, session, flags, floor, settings, deps, reason, expectPid}));
 }
 
-function restartLocked({home, role, session, flags, floor, settings, deps}) {
+function restartLocked({home, role, session, flags, floor, settings, deps, reason, expectPid}) {
   const force = flags.force === true;
   const entries = deps.read();
-  const start = ensureReady({role, session, floor, entries, deps});
+  const start = ensureReady({role, session, floor, entries, deps, expectPid});
   const pending = guardRunning({role, entries, force, deps});
 
   const identity = launchIdentityOf(start.cmd);
@@ -92,7 +99,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps}) {
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
 
   // 3) 여기까지 거절 사유가 없다. 이제 끄고 같은 정체로 다시 띄운다.
-  stopForRestart({role, session, floor, entries, deps, forced: force ? pending : null});
+  stopForRestart({role, session, floor, entries, deps, forced: force ? pending : null, reason});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -106,6 +113,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps}) {
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
     restartOf: startDigest(start), restartConversation: conversation,
+    ...(reason ? {reason} : {}),
     ...(force ? {forced: true, forcedTasks: pending} : {}),
   });
   return {role, session, conversation, command, harness, model, panePid: evidence.panePid ?? null, forced: force, pending,
@@ -113,21 +121,21 @@ function restartLocked({home, role, session, flags, floor, settings, deps}) {
 }
 
 // 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
-function restartSecretary({home, role, session, floor, force, deps}) {
+function restartSecretary({home, role, session, floor, force, reason, expectPid, deps}) {
   // 확인·체크포인트·끄기는 잠금 안에서, 다시 열기는 resumeSecretary의 잠금 안에서 한다(둘 사이에 kadan up이 끼어들어도 한 번만 열린다).
   const {pending, previous} = withRecoveryLock(home, session, () => {
     const entries = deps.read();
-    const start = ensureReady({role, session, floor, entries, deps});
+    const start = ensureReady({role, session, floor, entries, deps, expectPid});
     const open = guardRunning({role, entries, force, deps});
     const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
     // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
     if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
-    stopForRestart({role, session, floor, entries, deps, forced: force ? open : null});
+    stopForRestart({role, session, floor, entries, deps, forced: force ? open : null, reason});
     return {pending: open, previous: startDigest(start)};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
   const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
-    startExtra: {restartOf: previous, ...(force ? {forced: true, forcedTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
+    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
   if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
   const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
   return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,
