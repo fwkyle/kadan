@@ -13,7 +13,7 @@ import {
   Loading,
   time,
 } from "../ui";
-import { navigate, patchLocation } from "../navigation";
+import { navigate, patchLocation, workFlowUrl } from "../navigation";
 import { ReviewFlow } from "../ReviewFlow";
 
 export function MailBody({ mail }: { mail: Mail }) {
@@ -133,7 +133,9 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
             {data.reviewFlows.map(flow => <ReviewFlow key={flow.id} flow={flow} compact />)}
           </details>}
           <nav className="inline-nav">
-            {(data.kind === "work" || data.row.parentWorkKey) && <a href={"/?flowWork=" + encodeURIComponent(data.kind === "work" ? data.key.replace(/^work:/, "") : data.row.parentWorkKey!) + "#operations-flow"}>
+            {(data.kind === "work" || data.row.parentWorkKey) && <a
+              href={workFlowUrl(data.kind === "work" ? data.key : data.row.parentWorkKey!)}
+            >
               {data.kind === "work" ? "진행 이력" : "연결된 워크의 진행 이력"}
             </a>}
             <a href={"/?mailCard=" + encodeURIComponent(data.key) + "#mailbox"}>

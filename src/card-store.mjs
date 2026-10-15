@@ -196,8 +196,10 @@ export class CardStore {
     return path.resolve(file);
   }
   report(key,{revision,resultFile,outcome,by='사람'}={}) {
+    const role=this.#roleOf(key);
     return this.locked(()=>{
       const card=this.get(key);
+      card.role=role();
       this.#assertRevision(card,revision,{appendOnly:true});
       if(!['implemented','pass','changes','exception','ok','failed'].includes(outcome))throw new Error('결과 판정은 implemented|pass|changes|exception|ok|failed');
       const file=this.resultLocation(key,resultFile);

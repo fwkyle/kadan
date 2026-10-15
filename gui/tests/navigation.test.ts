@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import "../../tests/helpers/isolated-home.mjs";
 
 test("업무 미연결 필터에서 상세를 열고 닫아도 조건과 미저장 이동 보호를 유지한다", async () => {
   let current = new URL("http://local/?collection=unlinked&q=검수&state=draft#dashboard");
@@ -39,4 +40,26 @@ test("업무 미연결 필터에서 상세를 열고 닫아도 조건과 미저�
   setNavigationGuard(() => false);
   assert.equal(navigate("#runner-settings"), false);
   assert.equal(viewOf(current), "mailbox");
+});
+
+test("실행 상세와 업무 상세의 진행 이력 링크가 실제 API에서 열린다", async (t) => {
+  const { workFlowUrl } = await import("../src/navigation.ts");
+  const { dashboardFixture } = await import("../../tests/helpers/dashboard-fixture.mjs");
+  const f = dashboardFixture({ count: 2 });
+  t.after(() => f.server.close());
+  await new Promise<void>((resolve) => f.server.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + f.server.address().port;
+  for (const card of ["demo/card-1", "work:demo/dashboard"]) {
+    const response = await fetch(base + "/api/dashboard/detail?card=" + encodeURIComponent(card));
+    assert.equal(response.status, 200);
+    const detail = await response.json();
+    const key = detail.kind === "work" ? detail.key : detail.row.parentWorkKey;
+    assert.equal(key, "work:demo/dashboard", "관계도의 행 주소는 그대로 유지한다");
+    const link = new URL(workFlowUrl(key), base);
+    assert.equal(link.searchParams.get("flowWork"), "demo/dashboard");
+    assert.equal(link.hash, "#operations-flow");
+    const flow = await fetch(base + "/api/operations-flow?work=" + link.searchParams.get("flowWork"));
+    assert.equal(flow.status, 200, await flow.text());
+  }
+  assert.equal(workFlowUrl("demo/dashboard"), "/?flowWork=demo%2Fdashboard#operations-flow");
 });
