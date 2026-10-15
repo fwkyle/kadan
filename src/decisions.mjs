@@ -12,6 +12,10 @@ import {notifyUser,fitDiscord} from './user-notify.mjs';
 import {DEFAULT_PORT} from './quickstart.mjs';
 const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
 const human=by=>isUserActor(by);
+const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
+// 보이는 본문의 UUID를 앞 8자로 줄인다. 단 경로·주소 조각(/·~·./·../로 시작, ://, 슬래시 2개 이상)은 확인 경로가 깨지므로 그대로 둔다.
+const keepWhole=tok=>/^[(\[<"'`]*(?:[/~]|\.{1,2}\/|[a-z][a-z0-9+.-]*:\/\/)/i.test(tok)||(tok.match(/\//g)??[]).length>=2;
+const shortIds=text=>String(text).split(/(\s+)/).map(tok=>keepWhole(tok)?tok:tok.replace(UUID,m=>m.slice(0,8))).join('');
 const required=(v,name)=>{if(typeof v!=='string'||!v.trim())throw new Error(`${name} 필요`);return v.trim()};
 // 새 결정 요청은 사용자가 답하기 전에 열어 볼 주소·절대경로, 또는 '확인 경로 없음: 이유' 줄이 있어야 한다.
 export function assertVerifyPath(...texts){
@@ -55,22 +59,37 @@ export class DecisionStore {
  });
  if(created)this.announce('request',saved);return saved;}
  // 사용자 알림(디스코드 → 시스템 알림). 결정은 이미 저장된 뒤에 부르고, 알림이 실패해도 던지지 않는다(2026-10-14 [kyle]).
- // 요청만 사용자 멘션이고 답변·취소는 멘션 없이 "닫힘"만 알린다. 시험이 실제로 보내지 않도록 KADAN_NOTIFY=off면 아무것도 안 보낸다.
+ // 요청만 사용자 멘션이고 답변·취소는 멘션 없이 "해결됨"만 알린다. 시험이 실제로 보내지 않도록 KADAN_NOTIFY=off면 아무것도 안 보낸다.
+ // 모든 결정 알림은 `[레포]`(카드 키 앞부분)로 시작한다. 요청은 업무 글, 업무가 없으면 그 레포의 '결정' 글로 가고(레포 웹훅이 없을 때만 #브리핑),
+ // 답변·취소는 원래 요청 메시지를 고친다(상태를 맨 위에). 원래 메시지를 못 찾을 때만 질문 앞부분·사유가 든 새 메시지를 보낸다.
  announce(kind,d){
   if(process.env.KADAN_NOTIFY==='off')return null;
   const cut=(t,n)=>{t=String(t).replace(/\s+/g,' ').trim();return t.length>n?t.slice(0,n-1)+'…':t;};
+  const repo=d.card.split('/')[0],tag=`[${repo}]`;
   const link=`http://127.0.0.1:${DEFAULT_PORT}/#decision-${d.id}`;
-  let short,build;
+  const q=shortIds(d.question),summary=cut(q.split('\n').find(l=>l.trim())??q,80),full=cut(q,600);
+  const body=()=>[...(full!==summary?[`질문: ${full}`]:[]),`선택지: ${d.options.map((o,i)=>`${i+1}) ${cut(shortIds(o),100)}`).join(' ')}`,`추천: ${cut(shortIds(d.recommendation),100)}`,`이유: ${cut(shortIds(d.reason),300)}`,
+   `결정 ${d.id.slice(0,8)} · 카드 ${shortIds(d.card)}${d.work?` · 업무 ${shortIds(d.work)}`:''}`].join('\n');
+  const head=mention=>`${tag} ${mention?`${mention} `:''}결정 요청: ${summary}\n${body()}`;
+  const base={kind:`decision-${kind}`,workTitle:undefined,key:`decision:${d.id}:${kind}`,tagRepo:repo,
+   ...(d.work?{work:d.work}:{repo,forumKey:`${repo}/__decisions__`,forumTitle:`${tag} 결정`})};
+  const stateOf=x=>x.status==='answered'
+   ?`답변: ${cut(shortIds(x.answer.choice??x.answer.text),150)}${x.answer.choice&&x.answer.text&&x.answer.text!==x.answer.choice?` — ${cut(shortIds(x.answer.text),200)}`:''}`
+   :`취소: ${cut(shortIds(x.cancelReason??'사유 없음'),200)}`;
+  const resolvedContent=x=>fitDiscord(`${tag} 결정 해결됨: ${cut(summary,60)} — ${stateOf(x)}`,`맥에서 보기: ${link}`);
+  let short,build,extra;
   if(kind==='request'){
-   short=`카단 결정 요청: ${cut(d.question,100)}`;
-   const where=`결정 ${d.id} · 카드 ${d.card}${d.work?` · 업무 ${d.work}`:''}`;
-   build=userId=>({mention:true,content:fitDiscord(`<@${userId}> [결정 요청] ${cut(d.question,600)}\n선택지: ${d.options.map((o,i)=>`${i+1}) ${cut(o,100)}`).join(' ')}\n추천: ${cut(d.recommendation,100)}\n이유: ${cut(d.reason,300)}\n${where}`,`맥에서 답하기: ${link}`)});
+   short=`카단 결정 요청: ${cut(q,100)}`;
+   build=userId=>({mention:true,content:fitDiscord(head(`<@${userId}>`),`맥에서 답하기: ${link}`)});
+   // 보내기 직전에 저장소의 현재 상태를 다시 읽는다: 취소가 먼저 잠금을 잡았으면 열린 요청이 아니라 해결 모양으로 보낸다.
+   extra={decision:{id:d.id,latest:()=>this.get(d.id),resolvedContent,resolvedShort:x=>`카단 결정 해결됨 — ${stateOf(x)}`}};
   }else{
-   const what=kind==='answer'?`답변됨(${cut(d.answer.choice??d.answer.text,150)})`:'취소됨';
-   short=`카단 결정 ${what}`;
-   build=()=>({mention:false,content:fitDiscord(`결정 ${d.id} ${what}`,link)});
+   const state=stateOf({...d,status:kind==='answer'?'answered':'cancelled'});
+   short=`카단 결정 해결됨 — ${state}`;
+   extra={decision:{id:d.id,edit:fitDiscord(`✅ 해결됨 — ${state}\n${head('')}`,`맥에서 보기: ${link}`)}};
+   build=()=>({mention:false,content:resolvedContent({...d,status:kind==='answer'?'answered':'cancelled'})});
   }
-  try{return this.userNotify(short,{kind:`decision-${kind}`,work:d.work,workTitle:undefined,key:`decision:${d.id}:${kind}`,discord:build});}catch{return null;}
+  try{return this.userNotify(short,{...base,...extra,discord:build});}catch{return null;}
  }
  answer(id,{revision,text,choice},by){let newlyAnswered=false;const saved=this.locked(()=>{
   if(!human(by))throw new Error('사용자 답변은 사람 명의로만 기록');
