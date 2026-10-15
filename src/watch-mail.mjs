@@ -1,5 +1,5 @@
 import {mailboxLetters} from './mailbox-state.mjs';
-import {isUserActor} from './actors.mjs';
+import {isUserActor,DISCORD_BY,DISCORD_MAIL_TARGET} from './actors.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {shellQuote} from './mail-instructions.mjs';
 import {isNotificationHold} from './notification-guard.mjs';
@@ -21,7 +21,9 @@ function eligibleLetters(entries, cards, works, now, graceMs, parents) {
     const at = Date.parse(mail.t);
     const deferredPeer = mail.transport === 'mailbox'
       && isPeerSuperMail(entries, parents, mail.currentSender, recipient(mail));
-    if (!Number.isFinite(at) || now - at < (deferredPeer ? 0 : graceMs)) return false;
+    // 디코 우편(보낸이 디코 → 비서)도 유예 0: 사람이 디코로 기다리는 질문이다. 입력 보호·우편당 1회는 그대로.
+    const discordMail = mail.by === DISCORD_BY && recipient(mail) === DISCORD_MAIL_TARGET;
+    if (!Number.isFinite(at) || now - at < (deferredPeer || discordMail ? 0 : graceMs)) return false;
     const execution = identity.resolve(mail.taskId, mail.executionKey);
     const executionKey = execution.key || mail.executionKey;
     const related = works.filter(work => (mail.workKey && work.key === mail.workKey)

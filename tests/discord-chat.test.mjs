@@ -623,7 +623,7 @@ test('29 N3 실제 CLI: 큰 질문 다수 + 파이프 미소비 + SIGTERM → �
     const ids = Array.from({length: 200}, (_, i) => fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)}).id);
     const child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
     let buffered = '';
-    const closed = new Promise(resolve => child.on('close', (code, signal) => resolve({code, signal})));
+    const closed = new Promise(resolve => child.on('exit', (code, signal) => resolve({code, signal}))); // 'close'는 파이프를 비워야 오므로 'exit'
     await new Promise(resolve => setTimeout(resolve, 2500)); // 파이프가 가득 차서 막힘
     const file = path.join(s.home, STATE_FILE);
     const snap1 = fs.readFileSync(file, 'utf8'), reacts1 = fake.count(/PUT .*reactions/);
@@ -631,9 +631,13 @@ test('29 N3 실제 CLI: 큰 질문 다수 + 파이프 미소비 + SIGTERM → �
     assert.equal(fs.readFileSync(file, 'utf8'), snap1, '막힌 동안 cursor는 멈춰 있다');
     assert.ok(fs.existsSync(path.join(s.home, LOCK_DIR)));
     const killedAt = Date.now();
-    child.stdout.on('data', c => { buffered += c; }); // 소비자가 신호 직후 남은 바이트를 받는다(종료 대기를 풀어 주는 용도가 아님: 종료는 소비 없이도 일어나야 하므로 신호 뒤에만 연결)
+    // 소비는 자식이 끝난 뒤에 재개한다. 신호 전에 재개하면 자식이 신호 처리 전에 남은 줄을 내고 cursor를 올려 snap1과 달라진다(시험 경합).
     child.kill('SIGTERM');
     const end = await Promise.race([closed, new Promise(resolve => setTimeout(() => resolve('timeout'), 6000))]);
+    // 끝난 뒤 파이프에 남은 바이트를 소비자가 마저 받는다(파이프가 끝까지 비워질 때까지 기다린다)
+    const drained = new Promise(resolve => { child.on('close', resolve); setTimeout(resolve, 3000); });
+    child.stdout.on('data', c => { buffered += c; });
+    await drained;
     assert.notEqual(end, 'timeout', 'SIGTERM 뒤 소비 재개 없이 종료한다');
     assert.ok(Date.now() - killedAt < 5000);
     assert.ok(!fs.existsSync(path.join(s.home, LOCK_DIR)), '잠금을 돌려준다');
@@ -644,7 +648,10 @@ test('29 N3 실제 CLI: 큰 질문 다수 + 파이프 미소비 + SIGTERM → �
     assert.equal(next.code, 0, next.stderr);
     await new Promise(resolve => setTimeout(resolve, 100));
     const seen = new Set([...buffered.split('\n'), ...next.stdout.split('\n')].filter(l => l.startsWith('{')).map(l => { try { return JSON.parse(l).id; } catch { return null; } }));
-    assert.deepEqual(ids.filter(id => !seen.has(id)), [], '유실 0');
+    // 신호 전에 이미 파이프로 나간 줄(cursor 이하)은 소비자 몫이고, 그 뒤 줄은 다음 실행에서 다시 나와야 한다(유실 0).
+    const emittedUpTo = BigInt(JSON.parse(snap1).main);
+    assert.ok(ids.some(id => BigInt(id) <= emittedUpTo), '신호 전에 일부는 나갔다');
+    assert.deepEqual(ids.filter(id => BigInt(id) > emittedUpTo && !seen.has(id)), [], '유실 0');
   } finally { await fake.close(); }
 });
 
