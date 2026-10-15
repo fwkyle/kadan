@@ -326,6 +326,7 @@ function stop(session) {
 function list() {
   const latestBySession = new Map();
   for (const entry of readLedger()) {
+    if (entry.kind === "stop" || entry.kind === "start") latestBySession.delete(entry.session);
     if (
       entry.kind === "start" &&
       entry.floor === "rottie" &&
@@ -334,15 +335,21 @@ function list() {
       latestBySession.set(entry.session, entry);
     }
   }
-  return [...latestBySession.values()].map((entry) => {
-    const terminal = showTerminal(entry.session);
-    return {
+  return [...latestBySession.values()].flatMap((entry) => {
+    let terminal;
+    try {
+      terminal = runRottie(["terminal", "show", "--terminal", entry.rottieTerminalId, "--json"]).result.terminal;
+    } catch (error) {
+      if (error instanceof RottieFloorError && error.code === "ROTTIE_TERMINAL_NOT_FOUND") return [];
+      throw error;
+    }
+    return [{
       session: entry.session,
       alive: terminal.state === "running",
       pid: terminal.pid == null ? null : String(terminal.pid),
       state: terminal.state,
       terminalId: terminal.id,
-    };
+    }];
   });
 }
 

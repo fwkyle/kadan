@@ -47,6 +47,9 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - 역할은 실행기·모델·추론 강도 세 값으로 정한다. 실행기가 명령 틀을 정하고, 모델·강도가 틀을 채운다.
 - `set`은 목록에 없는 모델, 지원하지 않는 강도, 정책으로 막은 모델, 작업자와 같은 계열의 검수자를 거부한다. 모르는 계열끼리는 막지 않는다.
 - 모든 변경은 원장에 `runner-settings` 사건으로 남는다(`by`·`t`·`revision`·`before`·`after`·`reason`).
+- CLI와 대시보드의 동시 저장은 같은 파일 잠금 안에서 revision을 확인한다. 먼저 저장한 변경을
+  덮어쓰지 않으며, 충돌한 쪽은 최신 설정을 다시 읽고 저장해야 한다. 잠금은 최대 5초 기다리고
+  풀리지 않으면 실패한다. 원인을 모르는 잠금을 자동으로 지우지 않는다.
 - `start`의 start 기록에는 `launchSource`(`settings`/`override`/`fallback`), `settingsRevision`을 남긴다. `override`면 `overrideReason`과 그때의 설정 명령(`settingsCmd`)도 남긴다. `fallback`이면 `fallbackIndex`·`fallbackReason`·`settingsPreset`과 1순위 명령(`settingsCmd`, 있으면)을 남긴다.
 - 설정 파일이 없으면 `start`는 예전처럼 `--cmd`가 필요하다. 인계 후임 생성은 선임 명령을 이유("인계: 선임 실행 명령 유지")와 함께 그대로 쓴다.
 - `work auto-configure`는 작업자·검수자 세션을 실제로 띄운 모델의 계열이 같으면 거부한다.

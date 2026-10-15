@@ -63,7 +63,7 @@ function panePid(session) {
 }
 
 export function capturePane(session) {
-  const result = tmux(["capture-pane", "-p", "-t", session]);
+  const result = tmux(["capture-pane", "-p", "-t", `=${session}:`]);
   return result.status === 0 ? result.stdout : "";
 }
 
@@ -83,7 +83,7 @@ function attachOutputLog(session) {
     return null;
   }
   const quoted = outLog.replace(/'/g, "'\\''");
-  const result = tmux(["pipe-pane", "-t", session, `${compressed?'gzip -1c':'cat'} >> '${quoted}'`]);
+  const result = tmux(["pipe-pane", "-t", `=${session}:`, `${compressed?'gzip -1c':'cat'} >> '${quoted}'`]);
   if (result.status !== 0) {
     console.error(`경고: 출력 로그 설정 실패: ${(result.stderr || "").trim()}`);
     return null;
@@ -404,7 +404,7 @@ function checkPaneMode(session, run, {release = false} = {}) {
   if (Number(mode.trim()) !== 0) {
     if (release) {
       // 모드 종류가 달라 cancel이 실패해도 아래 재확인이 모드를 보고 넣을지 정한다.
-      try { run(["send-keys", "-t", session, "-X", "cancel"]); } catch { /* 재확인에서 판정 */ }
+      try { run(["send-keys", "-t", `=${session}:`, "-X", "cancel"]); } catch { /* 재확인에서 판정 */ }
       checkPaneMode(session, run);
       return true;
     }
@@ -417,7 +417,7 @@ function checkPaneMode(session, run, {release = false} = {}) {
 // 본문 없이 Enter 한 키만 보낸다 — 입력 큐 배너의 대기 메시지 전송에만 쓴다.
 export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
   checkPaneMode(session, run);
-  run(["send-keys", "-t", session, "Enter"]);
+  run(["send-keys", "-t", `=${session}:`, "Enter"]);
   return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
 }
 
@@ -551,13 +551,13 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     stage = "paste-attempted";
     // -p: 괄호 붙여넣기. 없으면 Claude Code가 본문 줄바꿈과 뒤따르는 Enter를 구분하지 못해
     // 짧은 본문에서 Enter가 먹힌다(2026-09-23 실측: 2초 뒤 Enter도 누락, -p면 0.4초도 제출).
-    run(["paste-buffer", "-p", "-d", "-b", buffer, "-t", session]);
+    run(["paste-buffer", "-p", "-d", "-b", buffer, "-t", `=${session}:`]);
     loaded = false;
     stage = "body-pasted";
     spawn("sleep", ["1"]);
     checkMode();
     stage = "enter-attempted";
-    run(["send-keys", "-t", session, "Enter"]);
+    run(["send-keys", "-t", `=${session}:`, "Enter"]);
   } catch (error) {
     error.delivery = stage === "not-started" ? "not-sent" : "unknown";
     error.sendStage = stage;

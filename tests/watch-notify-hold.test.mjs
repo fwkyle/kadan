@@ -314,7 +314,7 @@ test('강제 차례: 복사 모드를 해제하고 다시 0을 확인한 뒤 넣
   const calls = [];
   const receipt = sendWith([1, 0], {humanIdleMs: 30_000, force: true}, calls);
   assert.equal(receipt.copyModeReleased, true);
-  const cancel = calls.findIndex(c => c === 'send-keys -t kadan-w -X cancel');
+  const cancel = calls.findIndex(c => c === 'send-keys -t =kadan-w: -X cancel');
   assert.ok(cancel >= 0 && cancel < calls.findIndex(c => c.startsWith('load-buffer')), '붙여넣기 전에 해제');
   assert.equal(calls.some(c => c.startsWith('paste-buffer')), true);
   // 복사 모드가 아니면 해제하지 않는다.

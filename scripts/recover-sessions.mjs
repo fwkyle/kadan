@@ -6,6 +6,10 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import {pathToFileURL} from 'node:url';
+import {launchIdentityOf} from '../src/ai-identity.mjs';
+import {conversationOf} from '../src/conversation-ref.mjs';
+import {shellQuote} from '../src/mail-instructions.mjs';
 
 const HOME = process.env.KADAN_HOME || path.join(os.homedir(), '.kadan');
 const SESSIONS = path.join(os.homedir(), '.codex', 'sessions');
@@ -40,7 +44,7 @@ function startRecords() {
   return [...last.values()].filter((e) => String(e.t) >= since);
 }
 
-function conversationMetas() {
+export function conversationMetas(root = SESSIONS) {
   const metas = [];
   const walk = (dir) => {
     let names = [];
@@ -69,11 +73,12 @@ function conversationMetas() {
       try {
         const m = JSON.parse(head);
         if (m.type !== 'session_meta') continue;
-        metas.push({ id: m.payload && m.payload.session_id, cwd: m.payload && m.payload.cwd, ts: m.payload && m.payload.timestamp, file: full });
+        metas.push({ id: m.payload?.id ?? m.payload?.session_id, cwd: m.payload?.cwd,
+          ts: m.payload?.timestamp, file: full });
       } catch {}
     }
   };
-  walk(SESSIONS);
+  walk(root);
   return metas;
 }
 
@@ -83,7 +88,23 @@ function aliveSessions() {
   return new Set((res.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean));
 }
 
-const RESUME = /codex\s+resume\s+([0-9a-f-]{36})/i;
+export function recoveryLine({role, cwd, cmd, id}) {
+  const identity = launchIdentityOf(cmd);
+  if (!identity.ok) throw new Error('원래 실행기·명시 모델·안전한 단일 명령을 확인할 수 없음');
+  let command = cmd;
+  if (id) {
+    if (identity.harness !== 'codex' || !/^[0-9a-f-]{36}$/i.test(id)) {
+      throw new Error('이 조사 도구에서 확인한 Codex 대화 ID가 아님');
+    }
+    const previous = conversationOf(cmd);
+    if (previous.conversationMode === 'new') command = `${cmd.trim()} resume ${shellQuote(id)}`;
+    const next = conversationOf(command);
+    if (next.conversationMode !== 'resume' || next.conversationRef !== id) {
+      throw new Error('원래 옵션을 보존한 채 같은 대화로 복구할 수 없음');
+    }
+  }
+  return `cd ${shellQuote(cwd || '.')} && kadan start ${shellQuote(role)} --cmd ${shellQuote(command)}`;
+}
 
 function main() {
   const starts = startRecords();
@@ -93,14 +114,14 @@ function main() {
   console.log('원장 ' + HOME + '  ·  대화 ' + SESSIONS);
   console.log('');
   const lines = [];
-  let ready = 0, ambiguous = 0, missing = 0, skipped = 0;
+  let ready = 0, ambiguous = 0, missing = 0, skipped = 0, blocked = 0;
   for (const e of starts.sort((a, b) => String(a.t).localeCompare(String(b.t)))) {
     const session = e.session || ('kadan-' + e.role);
     if (alive.has(session) && !showAll) { skipped += 1; continue; }
     const live = alive.has(session) ? '살아있음' : '죽음';
-    const direct = RESUME.exec(e.cmd || '');
-    let id = direct ? direct[1] : null;
-    let how = direct ? '명령에 있음' : null;
+    const direct = conversationOf(e.cmd || '');
+    let id = direct.conversationMode === 'resume' ? direct.conversationRef : null;
+    let how = id ? '명령에 있음' : null;
     let others = [];
     if (!id && e.cwd && e.t) {
       const st = Date.parse(e.t);
@@ -113,8 +134,13 @@ function main() {
       else if (near.length > 1) { others = near.slice(0, 3); how = '후보 ' + near.length + '개 — 사람이 골라야 함'; }
       else how = '대화파일 못 찾음';
     }
-    if (id) ready += 1; else if (others.length) ambiguous += 1; else missing += 1;
-    lines.push({ role: e.role, t: e.t, live, cwd: e.cwd, cmd: e.cmd, id, how, others });
+    const row = {role: e.role, t: e.t, live, cwd: e.cwd, cmd: e.cmd, id, how, others};
+    try { row.recovery = recoveryLine(row); }
+    catch (error) { row.error = error.message; blocked += 1; }
+    if (id && row.recovery) ready += 1;
+    else if (others.length) ambiguous += 1;
+    else if (!id) missing += 1;
+    lines.push(row);
   }
   for (const r of lines) {
     console.log('[' + r.live + '] ' + r.role + '  (' + String(r.t).slice(0, 19).replace('T', ' ') + ' UTC)');
@@ -122,17 +148,15 @@ function main() {
     console.log('    원래 ' + (r.cmd || '모름'));
     console.log('    대화 ' + (r.id || '모름') + '  [' + r.how + ']');
     for (const o of r.others) console.log('      후보 ' + o.id + ' (' + o.d.toFixed(1) + '초)');
-    if (r.id) {
-      console.log('    복구> cd ' + (r.cwd || '.') + ' && kadan start ' + JSON.stringify(r.role) + ' --cmd ' + JSON.stringify('codex resume ' + r.id));
-    } else {
-      console.log('    복구> 기억 없이 새로: cd ' + (r.cwd || '.') + ' && kadan start ' + JSON.stringify(r.role) + ' --cmd ' + JSON.stringify(r.cmd || '<실행기>'));
-    }
+    if (r.recovery) console.log('    복구> ' + (r.id ? '' : '기억 없이 새로: ') + r.recovery);
+    else console.log('    복구 명령 보류: ' + r.error);
     console.log('');
   }
-  console.log('되살릴 수 있음 ' + ready + ' / 후보 여럿 ' + ambiguous + ' / 대화 못 찾음 ' + missing + (skipped ? ' / 살아있어 건너뜀 ' + skipped : ''));
+  console.log('되살릴 수 있음 ' + ready + ' / 후보 여럿 ' + ambiguous + ' / 대화 못 찾음 ' + missing +
+    ' / 명령 보류 ' + blocked + (skipped ? ' / 살아있어 건너뜀 ' + skipped : ''));
   console.log('이 도구는 아무것도 실행하지 않는다. 위 복구 줄을 사람이 확인하고 직접 친다.');
   console.log('주의: 같은 폴더에서 몇 초 간격으로 띄운 역할은 구분되지 않는다. 그때는 ' + path.join(HOME, 'out') + ' 의 화면 기록으로 대조하라.');
 }
 
-main();
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) main();
 
