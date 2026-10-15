@@ -29,10 +29,24 @@ const lockCount = home => fs.existsSync(path.join(home, 'limits')) ? fs.readdirS
 
 test('rust는 동시에 하나만: 두 번째는 기다렸다가 첫 번째가 끝난 뒤 시작한다', async () => {
   const home = freshHome(), marks = path.join(home, 'marks.txt');
-  const job = name => node(`const fs=require('fs');fs.appendFileSync(${JSON.stringify(marks)},'${name}-start '+Date.now()+'\\n');setTimeout(()=>fs.appendFileSync(${JSON.stringify(marks)},'${name}-end '+Date.now()+'\\n'),400)`);
+  const release = path.join(home, 'release');
+  const job = name => node(`
+    const fs = require('fs');
+    const mark = phase => fs.appendFileSync(${JSON.stringify(marks)},
+      '${name}-' + phase + ' ' + Date.now() + '\\n');
+    mark('start');
+    if ('${name}' === 'a') {
+      const timer = setInterval(() => {
+        if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); mark('end'); }
+      }, 25);
+    } else mark('end');
+  `);
   const a = start(home, 'rust', job('a'));
   await until(() => fs.existsSync(marks));
   const b = start(home, 'rust', job('b'));
+  // 두 번째 CLI의 기동 속도 대신 실제 잠금 대기를 확인한 뒤 첫 작업을 끝낸다.
+  try { await until(() => /대기: rust/.test(b.out.stderr)); }
+  finally { fs.writeFileSync(release, 'release'); }
   const [ra, rb] = await Promise.all([a.done, b.done]);
   assert.equal(ra.code, 0); assert.equal(rb.code, 0);
   const at = Object.fromEntries(fs.readFileSync(marks, 'utf8').trim().split('\n').map(l => l.split(' ')).map(([k, v]) => [k, Number(v)]));
