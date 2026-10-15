@@ -455,6 +455,21 @@ test('18 CLI 끝에서 끝: watch --once 줄, send(나눔·스레드·수정), t
   } finally { await fake.close(); }
 });
 
+test('18b CLI: --quiet이 앞·뒤·--stdin 어디에 있어도 본문 순서를 지키고 조용히 보낸다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const s = setup(fake);
+    const env = {...s.env, KADAN_HOME: s.home};
+    for (const [args, input] of [[['--quiet', '앞에', '둔다'], ''], [['뒤에', '--quiet', '둔다'], ''], [['본문', '끝에', '--quiet'], ''], [['--quiet', '--stdin'], '표준입력 본문']]) {
+      const r = await runCli(['discord', 'send', ...args], env, input);
+      assert.equal(r.code, 0, r.stderr);
+    }
+    const ps = posts(fake);
+    assert.deepEqual(ps.map(b => b.content), ['앞에 둔다', '뒤에 둔다', '본문 끝에', '표준입력 본문']);
+    assert.ok(ps.every(isQuiet));
+  } finally { await fake.close(); }
+});
+
 test('19 CLI: 가짜 서버 주소 없이 시험 환경(KADAN_NOTIFY=off)이면 네트워크로 나가지 않는다', async () => {
   const fake = await startFakeDiscord();
   try {

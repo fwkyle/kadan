@@ -89,7 +89,8 @@ export function normalizeFloorRead(value) {
 }
 export function sleepMs(ms) { if (ms > 0) spawnSync("sleep", [String(ms / 1000)]); }
 
-export function parseFlags(argv) {
+// booleans: 명령별로만 불리언인 옵션 이름(예: discord send의 quiet). 같은 이름이 다른 명령에서는 값을 받는다(wait --quiet 초).
+export function parseFlags(argv, {booleans = []} = {}) {
   const flags = {};
   const rest = [];
   for (let index = 0; index < argv.length; index++) {
@@ -101,9 +102,10 @@ export function parseFlags(argv) {
       arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" ||
       arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" ||
       arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card" || arg === "--inherit-mail" || arg === "--previous-generations" ||
-      arg === "--once" || arg === "--stdin" || arg === "--archive" || arg === "--quiet" ||
+      arg === "--once" || arg === "--stdin" || arg === "--archive" ||
       arg === "--from-screen" || arg === "--next-block" || arg === "--no-prompt" ||
-      arg === "--apply" || arg === "--manual" || arg === "--force"
+      arg === "--apply" || arg === "--manual" || arg === "--force" ||
+      booleans.some(name => arg === `--${name}`)
     ) {
       flags[arg.slice(2)] = true;
     } else if (arg.startsWith("--")) {
