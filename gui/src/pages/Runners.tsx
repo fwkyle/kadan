@@ -3,6 +3,7 @@ import { save, useResource } from "../resource";
 import { fallbackLabels, ownPart } from "../runner-draft";
 import type { Stamp } from "../types";
 import { Sessions } from "./Records";
+import { RunnerTables } from "./RunnerTables";
 import {
   ActionForm,
   AppContext,
@@ -187,6 +188,7 @@ export default function Runners({ url }: { url: URL }) {
             </details>
           ))}
           <Favorites settings={data.settings} />
+          <RunnerTables catalog={data.catalog} revision={data.settings.revision} />
           <details>
             <summary>프리셋 전환</summary>
             <ActionForm
