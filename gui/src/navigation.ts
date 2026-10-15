@@ -98,6 +98,9 @@ export function cardUrl(key: string) {
   url.hash = "detail";
   return url.pathname + url.search + url.hash;
 }
+export function workFlowUrl(key: string) {
+  return "/?flowWork=" + encodeURIComponent(key.replace(/^work:/, "")) + "#operations-flow";
+}
 export function viewOf(url: URL) {
   const hash = url.hash.slice(1);
   if (hash === "create") return "card-create";

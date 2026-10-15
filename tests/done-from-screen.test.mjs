@@ -78,7 +78,7 @@ test('CLI: done --from-screen은 화면 표시로 확정하고, 없으면 기록
     const missing = run('done', 'p-빈칸', 'repo/card-a', '--from-screen');
     assert.equal(missing.status, 3); assert.match(missing.stderr, /화면 완료 표시 없음: 역할=p-빈칸 카드=repo\/card-a \(발령 기록 없음/);
     assert.match(run('done', 'p-없음', 'card-a', '--from-screen').stderr, /세션 없음/);
-    const ok = run('done', 'p-검수자', 'repo/card-a', '--from-screen');
+    const ok = run('done', '--from-screen', 'p-검수자', 'repo/card-a');
     assert.equal(ok.status, 0, ok.stderr); assert.match(ok.stdout, /^완료 확정: 역할=p-검수자 카드=card-a 결과=ok 확인=p-감독/);
     const done = readLedger(home).filter(e => e.kind === 'done');
     assert.deepEqual(done.map(e => [e.role, e.executionKey, e.result, e.by]), [['p-검수자', 'repo/card-a', 'ok', 'p-감독']]);

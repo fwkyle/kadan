@@ -12,6 +12,7 @@ import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
+import {acquireDirLock} from './dir-lock.mjs';
 import {explainAlertRoute,failureEscalation} from './watch.mjs';
 
 export const WATCH_VERDICTS = ['진행중','입력대기','실행완료','응답장애','정체','죽음','모름','조정'];
@@ -93,7 +94,7 @@ export class WatchReports {
     if (storageMode(this.home)==='sqlite') return transaction(this.home,fn);
     fs.mkdirSync(this.home,{recursive:true,mode:0o700});
     const lock=path.join(this.home,'.watch-report-lock');
-    fs.mkdirSync(lock);
+    if (!acquireDirLock(lock)) throw new Error('감시 보고 저장 중: 잠시 뒤 상태를 다시 확인');
     try { return fn(); } finally { fs.renameSync(lock,`${lock}.released-${randomUUID()}`); }
   }
   request({source,role,taskId=null,parents=new Map(),routes=new Map(),superRole=null,hierarchyPath=null,userNotify=false,timeoutMs=WATCH_AI_TIMEOUT_MS,observationDigest=null,evidenceDigest=null}) {

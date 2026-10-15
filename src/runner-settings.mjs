@@ -6,7 +6,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf} from './runner-table.mjs';
+import {randomUUID} from 'node:crypto';
+import {acquireDirLock} from './dir-lock.mjs';
+import {
+  NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
+} from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
@@ -189,40 +193,58 @@ function write(home, value) {
   fs.renameSync(tmp, file);
 }
 
+function lockedSettings(home, apply) {
+  fs.mkdirSync(home, {recursive: true, mode: 0o700});
+  const lock = path.join(home, '.runner-settings-lock');
+  if (!acquireDirLock(lock)) throw new Error('실행 모델 설정 저장 중: 잠시 뒤 상태를 다시 확인');
+  try { return apply(); }
+  finally { fs.renameSync(lock, `${lock}.released-${randomUUID()}`); }
+}
+
 // 처음 한 번 기존 agent-runners.json의 실행기 틀(runners[].spawn)만 옮겨 만든다. 역할 값은 set으로 채운다.
 export function initSettings(home, {runnersFile = path.join(home, 'agent-runners.json'), by, reason, record}) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
-  if (fs.existsSync(settingsPath(home))) throw new Error(`이미 있다: ${settingsPath(home)}`);
-  const source = JSON.parse(fs.readFileSync(runnersFile, 'utf8'));
-  const runners = {};
-  // 실행기 이름은 agent-runners.json의 `id`에 있다(예전 예시는 `name`).
-  for (const r of source.runners ?? []) {
-    const name = r?.id ?? r?.name;
-    if (typeof name !== 'string' || typeof r.spawn !== 'string') continue;
-    const spec = {spawn: r.spawn, ...(name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
-    applyTable(spec, Object.fromEntries([...TABLE_KEYS, 'conversation'].filter(key => r[key] != null).map(key => [key, r[key]])));
-    runners[name === 'claude-code' ? 'claude' : name] = spec;
-  }
-  if (!runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
-  const value = {version: 1, revision: 1, activePreset: 'B', presets: {B: {label: '값싼 병렬판', roles: {}}}, runners, families: DEFAULT_FAMILIES, blocked: []};
-  write(home, value);
-  record({kind: 'runner-settings', action: 'init', by, reason: reason.trim(), revision: 1, after: value});
-  return value;
+  return lockedSettings(home, () => {
+    if (fs.existsSync(settingsPath(home))) throw new Error(`이미 있다: ${settingsPath(home)}`);
+    const source = JSON.parse(fs.readFileSync(runnersFile, 'utf8'));
+    const runners = {};
+    // 실행기 이름은 agent-runners.json의 `id`에 있다(예전 예시는 `name`).
+    for (const r of source.runners ?? []) {
+      const name = r?.id ?? r?.name;
+      if (typeof name !== 'string' || typeof r.spawn !== 'string') continue;
+      const spec = {spawn: r.spawn, ...(name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
+      const fields = [...TABLE_KEYS, 'conversation'].filter(key => r[key] != null);
+      applyTable(spec, Object.fromEntries(fields.map(key => [key, r[key]])));
+      runners[name === 'claude-code' ? 'claude' : name] = spec;
+    }
+    if (!runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
+    const value = {
+      version: 1, revision: 1, activePreset: 'B', presets: {B: {label: '값싼 병렬판', roles: {}}},
+      runners, families: DEFAULT_FAMILIES, blocked: [],
+    };
+    write(home, value);
+    record({kind: 'runner-settings', action: 'init', by, reason: reason.trim(), revision: 1, after: value});
+    return value;
+  });
 }
 
 // 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 계열 확인 → 저장 → 원장 사건.
 function change(home, {revision, by, reason, record, action}, apply) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
-  const current = readSettings(home);
-  if (!current) throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
-  if (Number(revision) !== current.revision) throw new Error(`설정이 바뀌었다(현재 revision ${current.revision}) — 다시 읽고 저장`);
-  const next = structuredClone(current);
-  const detail = apply(next);
-  for (const preset of Object.values(next.presets)) checkPresetFamilies(preset, next.families);
-  next.revision = current.revision + 1;
-  write(home, next);
-  record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision, ...detail});
-  return next;
+  return lockedSettings(home, () => {
+    const current = readSettings(home);
+    if (!current) throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
+    if (Number(revision) !== current.revision) {
+      throw new Error(`설정이 바뀌었다(현재 revision ${current.revision}) — 다시 읽고 저장`);
+    }
+    const next = structuredClone(current);
+    const detail = apply(next);
+    for (const preset of Object.values(next.presets)) checkPresetFamilies(preset, next.families);
+    next.revision = current.revision + 1;
+    write(home, next);
+    record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision, ...detail});
+    return next;
+  });
 }
 
 // 실행기 명령 틀. codex처럼 모델 목록 파일을 쓰는 실행기는 catalog를 유지한다.
