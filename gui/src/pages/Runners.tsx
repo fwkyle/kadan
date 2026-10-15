@@ -53,6 +53,8 @@ type RunnersData = Stamp & {
   watch?: { runner: string; maxAttempts: number };
   // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
   senior?: { runner: string };
+  // 설명 AI는 실행기 표에 한 번 호출(exec) 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 시도한다.
+  explain?: { runners: string[]; maxAttempts: number };
 };
 // 담당자 상태(지금 열린 창의 모델)와 실행 모델 설정(다음 발령의 모델)은 같은 질문 "어느 모델인가"의 지금·다음이라
 // 한 화면에 둔다(2026-10-05 점검 보고서 3부). 옛 주소 #sessions는 아래 절로 내려온다.
@@ -161,6 +163,11 @@ export default function Runners({ url }: { url: URL }) {
             시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
             의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
           </p>
+          <p className="muted">
+            설명 AI는 감시 AI가 아닙니다. 발령·완료·막힘·결정이 생긴 카드의 요약 칸만 채웁니다(1순위 포함 최대{" "}
+            {data.explain?.maxAttempts ?? 2}개, 시도당 75초 상한). 이 칸이 비어 있거나 고른 실행기에
+            exec 틀이 없으면 아무것도 하지 않고, 칸을 채운 시점 이후의 사건만 다룹니다.
+          </p>
           {Object.entries(data.roles).map(([role, label]) => (
             <details key={role}>
               <summary>
@@ -240,13 +247,17 @@ function RunnerForm({
       ? [data.watch.runner]
       : role === "senior" && data.senior
         ? [data.senior.runner]
-        : Object.keys(data.catalog);
+        : role === "explain" && data.explain
+          ? data.explain.runners
+          : Object.keys(data.catalog);
   const applyNote =
     role === "watch"
       ? "다음 감시 호출부터 적용됩니다."
       : role === "senior"
         ? "다음 kadan senior 호출부터 적용됩니다."
-        : "다음 발령부터 적용됩니다.";
+        : role === "explain"
+          ? "다음 설명 호출부터 적용됩니다."
+          : "다음 발령부터 적용됩니다.";
   const initial = () =>
     fallback
       ? { runner: runners[0] || "", model: "", effort: "" }
@@ -538,7 +549,9 @@ function RunnerForm({
                 ? `KADAN_JUDGE_MODEL=${choice.model} KADAN_JUDGE_EFFORT=${choice.effort || "max"} watch-judge.sh (codex exec)`
                 : role === "senior"
                   ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (codex exec, 저장소 읽기 전용)`
-                  : spec?.spawn
+                  : role === "explain"
+                    ? "실행기 표의 exec 틀로 한 번 호출 (실행기 이름은 코드에 없음)"
+                    : spec?.spawn
                     .replaceAll("{model}", choice.model)
                     .replaceAll("{effort}", choice.effort || "")}
             </code>

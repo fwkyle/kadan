@@ -114,6 +114,8 @@ export async function runWatch({
   userNotify = false,
   judgeCmd = null,
   ai = null,
+  // 설명 AI(explain-ai.mjs). 감시 AI가 아니다: brief 줄만 쓰고 판정·알림을 하지 않으며 감시 순회를 기다리게 하지 않는다. 없으면 하지 않는다.
+  explain = null,
   hierarchyPath = null,
   profilePath = null,
   judgeCooldownMs = 5 * 60 * 1_000,
@@ -407,6 +409,11 @@ export async function runWatch({
         );
     queuedStates = queuedAssessment.states;
     lap('assess');
+    // 설명 AI는 대기열에 넣기까지만 이 순회에서 하고, AI 호출은 뒤에서 따로 돈다. 실패해도 감시를 멈추지 않는다.
+    if (explain && !observationError && cards) {
+      try { explain.tick({cards, entries, readEntries, decisions: readDecisions(), liveSessions: roles.liveSessions, now: cycleAt}); }
+      catch (error) { print(`[watch] 설명 AI 점검 실패: ${error.message}`); }
+    }
 
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session));
     let reportAlerts=[];
@@ -751,6 +758,7 @@ export async function runWatch({
     catch(error) {if(!signal?.aborted)throw error;}
   }} finally {
     queuedAI.clear();
+    await explain?.stop();
     if(activeAI){const job=activeAI;job.controller.abort();await job.promise;}
   }
 }

@@ -8,7 +8,7 @@ import path from 'node:path';
 import {commandWords} from './ai-identity.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 
-export const TABLE_KEYS = ['resume', 'fork', 'exec', 'version', 'update'];
+export const TABLE_KEYS = ['resume', 'fork', 'exec', 'execField', 'version', 'update'];
 export const CONVERSATION_KINDS = ['open-file', 'pid-json'];
 // 셸 문자열에 끼워 넣을 대화 ID는 좁은 글자만 허용한다.
 const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -31,6 +31,16 @@ export function fillTemplate(template, values) {
     out = out.replaceAll(`{${key}}`, values[key]);
   }
   return out;
+}
+
+// 한 번 호출(exec) 틀: {prompt}가 있으면 인자(셸 따옴표 처리), 없으면 표준 입력으로 보낸다. 인자는 ps에 보이므로 표준 입력이 낫다.
+// execField 칸이 있으면 표준 출력 JSON에서 그 필드가 답이고, 없으면 표준 출력 전체가 답이다(실행기마다 다른 출력 모양을 코드가 모르게).
+export function execCommand(settings, runner, {model, effort, prompt, cwd}) {
+  const template = runnerTemplate(settings, runner, 'exec');
+  const inArgs = template.includes('{prompt}');
+  const quote = text => `'${String(text).replace(/'/g, "'\\''")}'`;
+  const command = fillTemplate(template, {model, effort, cwd, prompt: inArgs ? quote(prompt) : undefined});
+  return {command, stdin: inArgs ? '' : prompt, field: settings.runners[runner].execField || null};
 }
 
 const shellWord = word => /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;

@@ -28,6 +28,14 @@ test('역할 프로필과 핵심 소통 명령이 흐름 지도에 있다', () =
     assert.ok(talk.includes(command), `3절에 ${command} 없음`);
 });
 
+test('설명 AI 경로가 흐름 지도에 있고 감시 AI와 다르다고 밝힌다', () => {
+  const talk = section('3\\. 어떻게 주고받나');
+  assert.ok(talk.includes('| 설명 AI |'), '3절 표에 설명 AI 행 없음');
+  assert.ok(talk.includes('감시 AI가 아니다'), '3절에 설명 AI는 감시 AI가 아니라는 문장 없음');
+  assert.match(read('docs/watch-overview.md'), /설명 AI는 감시 AI가 아니다/);
+  assert.match(read('docs/runner-settings.md'), /## 설명 AI/);
+});
+
 test('흐름 지도가 문서 입구와 감독 지침에서 이어진다', () => {
   assert.match(read('README.md'), /\(docs\/flows\.md\)/);
   assert.match(read('docs/README.md'), /\(flows\.md\)/);

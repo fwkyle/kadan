@@ -111,7 +111,7 @@ export class DecisionStore {
   return this.locked(()=>{const current=this.get(id);if(current.revision!==saved.revision)throw new Error('통지 이후 결정 변경: 현재 상태 확인 필요');return this.write({...current,revision:current.revision+1,delivery});});
  }
  cancel(id,{revision,reason},by){const cancelled=this.locked(()=>{const d=this.get(id);if(!human(by)&&by!==d.requestedBy)throw new Error('요청자 또는 사용자만 취소');
-  if(d.status!=='open'||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by});});this.announce('cancel',cancelled);return cancelled;}
+  if(d.status!=='open'||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString()});});this.announce('cancel',cancelled);return cancelled;}
 }
 export function decisionCommand(args,flags,{home,by,notify}){
  const s=new DecisionStore(home,{notify}),[cmd,key]=args;

@@ -6,16 +6,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {TABLE_KEYS, checkConversationSpec, tailOf} from './runner-table.mjs';
+import {TABLE_KEYS, checkConversationSpec, runnerTemplate, tailOf} from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
 export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'conductor', super:'super'};
 // 설정에 값을 둘 수 있는 역할. watch·senior는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
-export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior'];
+export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain'];
 // 감시 AI는 scripts/watch-judge.sh가, 시니어는 scripts/senior.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
+// 설명 AI(explain)는 실행기를 codex로 묶지 않는다: 실행기 표에 exec 틀이 있는 실행기면 고를 수 있고, 호출은 그 틀을 채워서 한다(explain-ai.mjs).
+// 대체 후보 포함 최대 2개를 차례로 시도한다. 칸이 비었거나 고른 실행기에 exec 틀이 없으면 아무것도 하지 않는다.
+export const EXPLAIN_MAX_ATTEMPTS = 2;
 // 감시 호출 한 번에 시도하는 모델 수 상한(1순위 포함). 시도마다 5분 상한이라 감시AI 한 자리를 오래 잡지 않게 한다.
 export const WATCH_MAX_ATTEMPTS = 3;
 // agent-runners.json `_계열`의 이름 앞머리 규칙. 모르는 계열끼리는 "다르다"고 보지 않는다.
@@ -69,7 +72,9 @@ function checkChoice(settings, role, {runner, model, effort}, options, {checkBlo
   if (ONE_SHOT_ROLES[role] && runner !== WATCH_RUNNER) throw new Error(`${ONE_SHOT_ROLES[role]}는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — ${role === 'watch' ? 'watch-judge.sh' : 'senior.sh'}가 codex exec로 부른다`);
   if (!choices.has(model)) throw new Error(`${runner}에서 고를 수 없는 모델: ${model}`);
   const efforts = choices.get(model);
-  const needsEffort = settings.runners[runner].spawn.includes('{effort}');
+  // 설명 AI는 대화형 spawn 틀이 아니라 한 번 호출(exec) 틀로 부른다. 틀이 없으면 이 실행기는 고를 수 없다.
+  if (role === 'explain') runnerTemplate(settings, runner, 'exec');
+  const needsEffort = (role === 'explain' ? settings.runners[runner].exec : settings.runners[runner].spawn).includes('{effort}');
   if (needsEffort && !efforts.includes(effort)) throw new Error(`${model}이 지원하지 않는 강도: ${effort ?? '(없음)'} — 가능: ${efforts.join('/') || '없음'}`);
   if (!needsEffort && effort != null) throw new Error(`${runner}은 강도를 받지 않는다`);
   const blocked = checkBlocked && (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
@@ -129,6 +134,26 @@ export function watchJudgeChain(settings) {
   if (!primary) return null;
   return [primary, ...(preset.fallback?.watch ?? [])].slice(0, WATCH_MAX_ATTEMPTS)
     .map((value, i) => ({model: value.model, effort: value.effort ?? null, fallbackIndex: i, revision: settings.revision, preset: settings.activePreset}));
+}
+
+// 설명 AI 호출 순서: 1순위 뒤에 폴백 목록, 최대 EXPLAIN_MAX_ATTEMPTS개. 칸이 비었거나 1순위 실행기에 exec 틀이 없으면 null(아무것도 안 한다).
+// 폴백 중 exec 틀이 없는 실행기는 건너뛴다(그 칸은 저장 때 막히지만 표를 나중에 비웠을 수 있다).
+export function explainChain(settings) {
+  const preset = settings?.presets?.[settings.activePreset];
+  const primary = preset?.roles?.explain;
+  const hasExec = value => typeof settings.runners?.[value?.runner]?.exec === 'string' && settings.runners[value.runner].exec.trim();
+  if (!primary || !hasExec(primary)) return null;
+  return [primary, ...(preset.fallback?.explain ?? [])].filter(hasExec).slice(0, EXPLAIN_MAX_ATTEMPTS)
+    .map((value, i) => ({runner: value.runner, model: value.model, effort: value.effort ?? null, fallbackIndex: i, revision: settings.revision, preset: settings.activePreset}));
+}
+
+// 설명 AI 한 줄 보기. 화면·show에서 '호출 때 채워질 명령' 자리에 보여 준다.
+export function explainCommand(settings, value) {
+  if (!value) return null;
+  try {
+    const template = runnerTemplate(settings, value.runner, 'exec');
+    return template.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? '');
+  } catch (error) { return `모름: ${error.message}`; }
 }
 
 // 감시 AI가 채울 호출 값. 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
@@ -211,6 +236,7 @@ function applyTable(spec, table) {
     } else if (TABLE_KEYS.includes(key)) {
       if (value === null) { delete spec[key]; continue; }
       if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} 틀은 글이어야 한다`);
+      if (key === 'execField' && !/^[A-Za-z0-9_.]+$/.test(value)) throw new Error('execField에는 출력 JSON의 필드 이름(영문·숫자·_ .)만 쓴다');
       const unknown = value.replace(TABLE_PLACEHOLDERS, '').match(/\{[^}]*\}/);
       if (unknown) throw new Error(`${key} 틀에 모르는 자리가 있다: ${unknown[0]}`);
       spec[key] = value;
@@ -290,6 +316,8 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
 export function setFallback(home, {role, items, preset, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   // 시니어는 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
+  if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
+    throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
   if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 한 번 호출이고 실패는 실패로 남긴다(docs/senior.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;

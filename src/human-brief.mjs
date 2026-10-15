@@ -4,6 +4,8 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {CardStore} from './card-store.mjs';
 import {statusLabel,isEnded} from './status-labels.mjs';
+import {EXPLAIN_BY} from './actors.mjs';
+import {BRIEF_STAGES,buildExplainInput,explainInputHash,decisionsByCard} from './explain-input.mjs';
 
 export const isExecution=c=>c.workType!=='coordination';
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 남은 일로 센다. 끝은 완료·취소·대체뿐이다(2026-10-05 [kyle]).
@@ -22,14 +24,15 @@ export class BriefStore {
  constructor(home){this.cards=new CardStore(home);}
  file(key){return path.join(this.cards.dir(key),'briefs.jsonl');}
  read(key){const rows=readStream(this.cards.home,`cards/${key}/briefs.jsonl`,{optional:true});if(!rows.length)return null;if(rows.some(r=>r.key!==key||!r.sourceHash))throw new Error('설명 기록 손상');return rows.at(-1);}
- write(key,flags,by){return this.cards.locked(()=>{
+ // inputHash는 설명 AI가 줄에 남기는 칸(프롬프트에 넣은 입력의 지문). 손으로 쓰는 card brief 명령에서는 오지 않는다.
+ write(key,flags,by,{inputHash}={}){return this.cards.locked(()=>{
   const card=this.cards.get(key);if(Number(flags.revision)!==card.revision)throw new Error('카드 변경됨: 최신 원본을 읽고 설명을 작성하세요');
   this.read(key);
   const fields=['title','workstream','stage','goal','summary','next','blocker'];const values={};
   for(const k of fields)if(flags[k]!==undefined){if(typeof flags[k]!=='string'||flags[k].length>1000)throw new Error('설명은 항목당 1000자 이내');values[k]=flags[k].trim();}
   if(!values.title||!values.workstream)throw new Error('쉬운 제목과 작업 묶음이 필요합니다');
-  if(values.stage&&!['구현','검수','통합','프리뷰 확인','조율','조사','기타'].includes(values.stage))throw new Error('지원하지 않는 작업 단계');
-  const row={key,sourceRevision:card.revision,sourceHash:sourceHash(card),contentHash:contentHash(card),by,at:new Date().toISOString(),...values};
+  if(values.stage&&!BRIEF_STAGES.includes(values.stage))throw new Error('지원하지 않는 작업 단계');
+  const row={key,sourceRevision:card.revision,sourceHash:sourceHash(card),contentHash:contentHash(card),by,at:new Date().toISOString(),...(inputHash?{inputHash}:{}),...values};
   appendStream(this.cards.home,`cards/${key}/briefs.jsonl`,row);return row;
  });}
 }
@@ -73,14 +76,21 @@ export function currentProgressReport(card,now=Date.now()){
  if(at<since)return empty('none',since>sent?'before-assignment':'before-dispatch');
  return {state:'reported',...selected,reason:null};
 }
+// 설명 AI 입력의 지문. 설명 AI(explain-ai.mjs)가 줄을 쓸 때와 Scribe가 신선도를 볼 때 같은 함수로 만든다.
+export function briefInput(card,decisions=[],now=Date.now()){
+ const report=currentProgressReport(card,now);
+ const input=buildExplainInput(card,{progress:report.state==='reported'?report.note:'',decisions});
+ return {input,hash:explainInputHash(input)};
+}
 // 원본 변경 때만 문장을 다시 만든다. 화면 갱신으로 AI를 실행하지 않는다.
 export class Scribe {
  constructor(){this.cache=new Map();}
- summarize(card,brief,now=Date.now()){
+ summarize(card,brief,now=Date.now(),decisions=[]){
   const report=currentProgressReport(card,now);
-  const fingerprint=createHash('sha256').update(JSON.stringify([sourceHash(card),card.title,card.displayState,card.activityAt,card.runs,report,brief])).digest('hex');
+  const fingerprint=createHash('sha256').update(JSON.stringify([sourceHash(card),card.title,card.displayState,card.activityAt,card.runs,report,brief,decisions])).digest('hex');
   const old=this.cache.get(card.key);if(old?.fingerprint===fingerprint)return old.value;
-  const fresh=!!brief&&brief.sourceHash===sourceHash(card);
+  // 손으로 쓴 줄은 revision·본문이 같을 때만 신선하다. 설명 AI 줄은 입력 지문이 같으면 신선하다(메모·담당 갱신으로 revision만 올라도 유지).
+  const fresh=!!brief&&(brief.sourceHash===sourceHash(card)||(brief.by===EXPLAIN_BY&&!!brief.inputHash&&brief.inputHash===briefInput(card,decisions,now).hash));
   const namesFresh=!!brief&&brief.contentHash===contentHash(card);
   // 이름은 원문 제목/본문이 같을 때 유지하고, 진행 서술은 새 보고마다 무효화한다.
   const value={key:card.key,title:namesFresh?brief.title:cleanTitle(card),workstream:namesFresh?brief.workstream:'분류할 작업',stage:namesFresh?brief.stage||'기타':'기타',goal:namesFresh?brief.goal||'':'',
@@ -97,7 +107,9 @@ export function buildHumanBrief(center,home){
  if(!center)return null;
  const store=home?new BriefStore(home):null;
  const cards=new Map();
- for(const c of center.cards){let brief=null,error=null;try{brief=store?.read(c.key)}catch{error='설명 기록을 읽을 수 없습니다';}cards.set(c.key,{...scribe.summarize(c,brief),error});}
+ // 결정 기록은 설명 AI 줄의 신선도 판단에만 쓴다. 못 읽으면 결정 없는 입력으로 보고, 설명 AI 줄은 낡은 것으로 숨는다.
+ let decisions=new Map();if(home)try{decisions=decisionsByCard(readStream(home,'decisions/events.jsonl',{optional:true}));}catch{}
+ for(const c of center.cards){let brief=null,error=null;try{brief=store?.read(c.key)}catch{error='설명 기록을 읽을 수 없습니다';}cards.set(c.key,{...scribe.summarize(c,brief,Date.now(),decisions.get(c.key)??[]),error});}
  scribe.retain(cards.keys());return cards;
 }
 

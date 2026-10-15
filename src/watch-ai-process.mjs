@@ -6,7 +6,7 @@ export function runJudgeProcess(command, settings) {
   return new Promise(resolve => {
     const child=spawn(process.execPath,
       [fileURLToPath(new URL('./watch-call-process.mjs',import.meta.url)),command,String(settings.timeout)],
-      {env:settings.env,stdio:['pipe','pipe','pipe','ipc']});
+      {env:settings.env,stdio:['pipe','pipe','pipe','ipc'],...(settings.cwd?{cwd:settings.cwd}:{})});
     let stdout='',stderr='',error=null,stopping=false;
     const stop=kind=>{
       if(stopping)return;

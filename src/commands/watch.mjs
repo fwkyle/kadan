@@ -1,6 +1,7 @@
 // kadan watch와 감시 편지 보내기 (HW-3-impl: cli.mjs에서 옮김)
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { WatchAI } from "../watch-ai.mjs";
+import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
 import { notifyUser, watchProcessName } from "../watch-system.mjs";
 import { storageVersion } from "../storage.mjs";
@@ -238,6 +239,7 @@ export function cmdWatch(argv, flags) {
       return floor.sendEnter(session);
     } : null,
     ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:(role,message)=>sendWatchMessage(role,message,{tracker:holdTracker}),readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
+    explain: new ExplainAI({home:ledgerHome(),print:console.log}),
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,
     intervalMs: intervalSeconds * 1000,
