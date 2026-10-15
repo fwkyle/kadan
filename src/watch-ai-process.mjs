@@ -5,8 +5,8 @@ import {fileURLToPath} from 'node:url';
 export function runJudgeProcess(command, settings) {
   return new Promise(resolve => {
     const child=spawn(process.execPath,
-      [fileURLToPath(new URL('./watch-call-process.mjs',import.meta.url)),command,String(settings.timeout)],
-      {env:settings.env,stdio:['pipe','pipe','pipe','ipc']});
+      [fileURLToPath(new URL('./watch-call-process.mjs',import.meta.url)),command,String(settings.timeout),...(settings.maxBytes?[String(settings.maxBytes)]:[])],
+      {env:settings.env,stdio:['pipe','pipe','pipe','ipc'],...(settings.cwd?{cwd:settings.cwd}:{})});
     let stdout='',stderr='',error=null,stopping=false;
     const stop=kind=>{
       if(stopping)return;
@@ -19,8 +19,11 @@ export function runJudgeProcess(command, settings) {
       try {if(settings.reportComplete())stop('reported');}
       catch { /* 조회 실패는 종료 시 원장을 대조해 판정한다. */ }
     },200);
-    child.stdout.on('data',data=>{stdout+=data;});
-    child.stderr.on('data',data=>{stderr+=data;});
+    // maxBytes(설명 AI 경로만)를 넘기면 더 모으지 않는다. 자식이 상한을 보고 스스로 묶음을 끝낸다.
+    let kept=0;
+    const keep=(data,add)=>{if(settings.maxBytes&&kept>=settings.maxBytes+65536)return;kept+=data.length;add(data);};
+    child.stdout.on('data',data=>keep(data,d=>{stdout+=d;}));
+    child.stderr.on('data',data=>keep(data,d=>{stderr+=d;}));
     child.on('error',err=>{error=err;});
     child.stdin.on('error',()=>{});
     child.on('close',(status,signal)=>{

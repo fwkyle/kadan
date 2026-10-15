@@ -7,9 +7,11 @@ import {
   runnerChoices,
   launchFor,
   watchJudgeCommand,
+  explainCommand,
   PROFILE_ROLES,
   WATCH_RUNNER,
   WATCH_MAX_ATTEMPTS,
+  EXPLAIN_MAX_ATTEMPTS,
 } from "../runner-settings.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
 import { seniorCommandLabel } from "../senior.mjs";
@@ -92,6 +94,9 @@ export function runnersData(snapshot, url, stamp) {
   commands.senior =
     seniorCommandLabel(settings.presets[settings.activePreset].roles.senior) ||
     "미설정 — kadan senior가 거절한다";
+  commands.explain =
+    explainCommand(settings, settings.presets[settings.activePreset].roles.explain) ||
+    "미설정 — 설명 AI는 아무것도 하지 않는다";
   return {
     ...stamp,
     window,
@@ -102,6 +107,13 @@ export function runnersData(snapshot, url, stamp) {
     watch: { runner: WATCH_RUNNER, maxAttempts: WATCH_MAX_ATTEMPTS },
     // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
     senior: { runner: WATCH_RUNNER },
+    // 설명 AI는 실행기 표에 exec 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 N개를 차례로 시도한다.
+    explain: {
+      runners: Object.entries(settings.runners)
+        .filter(([, spec]) => typeof spec.exec === "string" && spec.exec.trim())
+        .map(([name]) => name),
+      maxAttempts: EXPLAIN_MAX_ATTEMPTS,
+    },
     roles: RUNNER_ROLE_LABELS,
     history: (snapshot.entries || [])
       .filter((e) => e.kind === "runner-settings")

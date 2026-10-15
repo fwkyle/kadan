@@ -1,17 +1,20 @@
 // 감시AI 한 호출의 프로세스 구획만 종료한다. 다른 역할/감시 프로세스에는 신호를 보내지 않는다.
 import {spawn} from 'node:child_process';
-const [command,limit]=process.argv.slice(2);
+const [command,limit,outputLimit]=process.argv.slice(2);
 const timeout=Number(limit);
+// 출력 바이트 상한(설명 AI 경로만 준다). 없으면 감시 AI처럼 제한 없음.
+const maxBytes=Number(outputLimit)||0;
 if(!command||!Number.isFinite(timeout)||timeout<=0)process.exit(2);
 const child=spawn(command,{shell:true,detached:true,stdio:['pipe','pipe','pipe']});
 let exitCode=null,closing=false,hardStop;
 const signalGroup=signal=>{if(child.pid)try{process.kill(-child.pid,signal)}catch{}};
 const stop=(reason='cancelled')=>{
  if(closing)return;closing=true;
- exitCode=reason==='reported'?0:reason==='timeout'?124:143;
+ exitCode=reason==='reported'?0:reason==='timeout'?124:reason==='toobig'?125:143;
  if(reason==='timeout')process.stderr.write('KADAN_JUDGE_TIMEOUT=1\n');
  if(reason==='slept')process.stderr.write('KADAN_JUDGE_SLEPT=1\n');
  if(reason==='cancelled')process.stderr.write('KADAN_JUDGE_CANCELLED=1\n');
+ if(reason==='toobig')process.stderr.write('KADAN_JUDGE_OUTPUT_LIMIT=1\n');
  signalGroup('SIGTERM');
  hardStop=setTimeout(()=>{signalGroup('SIGKILL');process.exit(exitCode);},1000);
 };
@@ -28,7 +31,17 @@ process.on('SIGTERM',()=>stop());process.on('SIGINT',()=>stop());
 process.on('disconnect',()=>stop());
 process.on('message',message=>{if(['reported','cancelled'].includes(message?.kind))stop(message.kind);});
 process.stdin.pipe(child.stdin);child.stdin.on('error',()=>{});
-child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);
+// 상한이 없으면(감시 AI) 예전처럼 그대로 이어 붙인다. 상한이 있으면(설명 AI) 세면서 넘기고, 넘는 순간 묶음을 끝내고 그 뒤 출력은 흘리지 않는다.
+if(!maxBytes){child.stdout.pipe(process.stdout);child.stderr.pipe(process.stderr);}
+else{
+ let seen=0;
+ const forward=target=>chunk=>{
+  if(closing)return;
+  if((seen+=chunk.length)>maxBytes){stop('toobig');return;}
+  target.write(chunk);
+ };
+ child.stdout.on('data',forward(process.stdout));child.stderr.on('data',forward(process.stderr));
+}
 child.on('error',()=>{clearInterval(timer);clearTimeout(hardStop);process.exit(1)});
 child.on('close',code=>{
  clearInterval(timer);clearTimeout(hardStop);

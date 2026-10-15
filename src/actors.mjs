@@ -8,3 +8,5 @@ export function isUserActor(by,env=process.env){return userActorNames(env).inclu
 // 디코 다리(kadan discord watch --to-mail)가 저장하는 우편의 보낸이와 받는 역할. 원장의 by/role로만 판별한다(본문 문자열 금지).
 export const DISCORD_BY='디코';
 export const DISCORD_MAIL_TARGET='비서';
+// 설명 AI(explain-ai.mjs)가 brief 줄에 남기는 쓴 사람. 사용자 행위자(isUserActor)가 아니므로 알림·사람 판단으로 읽히지 않는다.
+export const EXPLAIN_BY='설명AI';
