@@ -59,7 +59,8 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
         (entry.floor !== 'rottie' || previous.rottieTerminalId === entry.rottieTerminalId);
       if (!reused) {
         generations.set(entry.session, entry);
-        dispatches.set(entry.session, new Map());
+        // restart(같은 대화를 다시 연 새 프로세스)는 같은 정체라 발령한 카드를 이어받는다. 그 밖의 새 세대는 비운다.
+        if (!(entry.restartOf && dispatches.has(entry.session))) dispatches.set(entry.session, new Map());
       }
       continue;
     }

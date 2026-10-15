@@ -53,6 +53,25 @@ function codexConversation(args) {
   return NEW;
 }
 
+// agy 1.3.5 `agy --help`: `--conversation <ID>`(ID로 이어 열기)·`-c/--continue`(가장 최근). fork 옵션은 도움말에 없다(2026-10-14 실측).
+// devin 3000.11.3 `devin --help`: `-r/--resume [<ID>]`·`-c/--continue`. fork는 확인하지 못했다.
+// 두 실행기는 값을 받는 옵션을 건너뛰는 목록이 없다 — 옵션 값이 정확히 `--conversation`/`--resume` 낱말이면 잘못 읽는다(따옴표 안 입력은 한 낱말이라 안전).
+function plainResume(args, {flags, continueFlags}) {
+  let ref = null, cont = false;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === '--') break;
+    const eq = token.indexOf('=');
+    const name = eq > 0 && token.startsWith('--') ? token.slice(0, eq) : token;
+    if (flags.includes(name)) {
+      if (eq > 0 && token.startsWith('--')) ref = token.slice(eq + 1);
+      else if (args[i + 1] && !args[i + 1].startsWith('-')) ref = args[++i];
+    } else if (continueFlags.includes(token)) cont = true;
+  }
+  if (!ref && !cont) return NEW;
+  return {conversationMode: 'resume', ...(ref ? {conversationRef: ref} : {})};
+}
+
 export function conversationOf(cmd) {
   const words = commandWords(typeof cmd === 'string' ? cmd.trim() : cmd);
   if (!words?.length) return NEW;
@@ -61,5 +80,7 @@ export function conversationOf(cmd) {
   const harness = words[index]?.split('/').pop(), args = words.slice(index + 1);
   if (harness === 'claude') return claudeConversation(args);
   if (harness === 'codex') return codexConversation(args);
+  if (harness === 'agy') return plainResume(args, {flags: ['--conversation'], continueFlags: ['--continue', '-c']});
+  if (harness === 'devin') return plainResume(args, {flags: ['--resume', '-r'], continueFlags: ['--continue', '-c']});
   return NEW;
 }

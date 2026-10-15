@@ -20,6 +20,7 @@
 | `activePreset`, `presets.<이름>.roles` | 역할(`worker`·`reviewer`·`conductor`·`super`·`watch`)별 `{runner, model, effort}`. `watch`는 감시 AI다 |
 | `presets.<이름>.fallback.<역할>` | 1순위가 막혔을 때 내려갈 순서 목록 `[{runner, model, effort}]`. 1번부터 센다 |
 | `runners.<실행기>.spawn` | 실행 명령 틀. `{model}`·`{effort}`를 채운다 |
+| `runners.<실행기>.resume`·`fork`·`exec`·`version`·`update`·`conversation` | 선택 칸. [실행기 명령 표](#실행기-명령-표) |
 | `runners.codex.catalog` | `codex-models-cache`면 `~/.codex/models_cache.json`의 모델과 `supported_reasoning_levels`만 고를 수 있다 |
 | `runners.<그 밖>.models` | 목록 파일이 없는 실행기는 실측한 `{model, efforts}`만 적는다 |
 | `families` | 모델 이름 앞머리로 계열을 읽는 규칙 |
@@ -166,3 +167,38 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 다른 설정과 같은 공통 경로(revision 대조·이유 필수·원장 `runner-settings` 사건, `action: favorite`, `before`·`after`는 목록 전체)다. revision이 오르므로, 다른 역할 칸을 작성하던 중이면 "설정이 변경됐습니다" 안내가 뜬다. 즐겨찾기를 추가한 그 칸은 새 revision으로 이어서 저장할 수 있다. 다른 칸은 화면을 새로 읽어야 저장된다.
 - 쓰기 주소는 `POST /runners/favorite`(`token`·`revision`·`reason`·`op`=`add`|`remove:N`, 추가면 `runner`·`model`·`effort`). 토큰·출처가 틀리면 403, 틀린 revision·빈 이유·목록 밖 값·강도·중복·없는 번호는 409.
 - 예전 HTML 벽 화면(`runner-settings-wall`)에는 버튼이 없고, 최근 변경 표에 `즐겨찾기` 사건만 보인다.
+
+## 실행기 명령 표
+
+실행기마다 다른 "같은 대화 다시 열기·갈라 열기·한 번 호출·버전·업데이트·대화 ID 찾기" 지식을 코드에 흩어 두지 않고 `runners.<실행기>`에 **데이터**로 둔다(2026-10-14 [kyle]). 모두 선택이고, 빈 칸이면 그 기능은 "이 실행기는 … 미지원"으로 거절한다. 칸이 없는 옛 설정 파일은 그대로 읽힌다.
+
+| 칸 | 뜻 |
+| --- | --- |
+| `resume` | `spawn` 틀 **뒤에** 대화 인자를 붙인 모양(`… --resume {conversation}`). 자리: `{model}`·`{effort}`·`{conversation}` |
+| `fork` | 같은 모양으로 대화를 갈라 여는 틀(있으면 restart가 갈라 연 명령을 resume으로 바꾼다) |
+| `exec` | 화면 없이 한 번 호출하는 틀(`{prompt}`가 있으면 인자, 없으면 표준 입력). **설명 AI용 틀만 있고 연결은 아직 없다.** 감시 AI·시니어는 그대로 codex만 쓴다 |
+| `version`·`update` | 버전 확인·업데이트 명령 문자열. 카단은 실행하지 않는다 |
+| `conversation` | 지금 떠 있는 pane의 대화 ID를 찾는 법. 아래 두 종류 |
+
+`conversation` 두 종류(코드의 일반 함수 둘):
+
+- `{"kind":"open-file","pattern":"<정규식, 캡처 그룹 1개>"}` — pane 프로세스 트리가 열어 둔 파일 이름에서 ID를 뽑는다(`lsof`). 서로 다른 ID가 0개·2개 이상이면 거절.
+- `{"kind":"pid-json","path":"~/…/{pid}.json","field":"sessionId","match":{"tmux":"{tmux}"}}` — 프로세스 트리의 PID별 JSON 파일에서 필드를 읽는다. `match`는 파일의 값이 이 역할의 tmux 자리(`세션:@창.%자리`)와 같은지 대조한다(다른 세션의 대화를 집지 않게). 파일이 0개·여러 개거나 값이 없으면 거절.
+- 공통 선택 칸 `evidence`(open-file): 저장 여부와 무관하게 대화 ID를 드러내는 다른 파일(lock 등)의 정규식 목록(캡처 그룹 1개). 본체 사슬에서 서로 다른 ID가 둘 이상 보이면 restart가 거절한다. codex는 `thread-writer-locks/<ID>.lock`.
+- 공통 선택 칸 `stored`: 다시 열 대화의 저장 파일(`~/…/*/{conversation}.jsonl`, 한 칸에 `*` 허용). 없으면 "아직 저장되지 않음"으로 거절 — restart가 끄기 전에 막는다.
+
+### 2026-10-14 실측 기준 값(확인일·버전은 조사 결과 참고)
+
+| 실행기 | resume | 대화 ID 출처 | 비고 |
+| --- | --- | --- | --- |
+| codex 0.155 | `… resume {conversation}` | 열린 `sessions/…/rollout-…-<ID>.jsonl` | **lock 파일(`thread-writer-locks`)은 ID를 고르는 데는 쓰지 않고 `evidence`로 다른 ID 흔적을 잡는 데만 쓴다.** 첫 입력 전에는 lock만 열려 있고 그 ID로 resume이 되는지 미실측이라, rollout이 열려야(=저장돼야) 찾아 restart가 첫 입력 전 세션을 끄지 않는다 |
+| claude 2.1.299 | `… --resume {conversation}` | `~/.claude/sessions/<PID>.json`의 `sessionId` + `tmux` 일치 + `~/.claude/projects/*/<ID>.jsonl` 저장 확인 | 문서에 없는 내부 파일이라 버전이 바뀌면 모양이 달라질 수 있다. `/clear` 뒤에는 ID가 바뀌며 이 파일이 현재 값이다. 첫 입력 전에는 기록이 없어 거절 |
+| agy 1.3.5 | `… --conversation {conversation}` | 열린 `antigravity-cli/conversations/<ID>.db` | 모델 이름에 강도가 들어 있어(`gemini-3.8-flash-low`) `{effort}`·`--effort`는 틀에 넣지 않았다(옵션은 존재하므로 필요하면 틀 한 줄로 추가). 이어 열 때 직전 프로세스의 presence 잠금이 남으면 "Conversation already open" 경고가 뜰 수 있으나 대화는 복원됐다 |
+| omo 5.1.32 | `… --session {conversation}` (실측: 같은 대화 복원) | **칸 비움** | ID가 `~/.omo/agent/sessions/<폴더>/session-holders/<ID>/<PID>.json`의 **폴더 이름**이라 두 찾기 방식에 맞지 않는다. 대화 jsonl은 열려 있지 않다. 필요하면 세 번째 방식을 따로 결정 |
+| devin 3000.11.3 | `… --resume {conversation}` | **칸 비움** | 첫 입력 전 resume 가능 여부를 실측하지 못해 비웠다. fork·exec JSON도 비움. `swe-2-max` 등 모델 목록은 건드리지 않았다 |
+
+표 칸은 `kadan runners runner <실행기> --table '<JSON>' --revision N --reason 이유`로 채우고(값이 null이면 비움), `agent-runners.json`의 실행기 항목에 같은 키를 두면 `runners init`이 함께 옮긴다.
+
+### 어댑터 금지와의 경계
+
+`CLAUDE.md`의 "다중 provider 어댑터 금지"는 실행기별 코드 분기와 능력 심사 계층을 막는 규칙이다. 이 표는 `spawn`과 같은 수준의 **명령 문자열 데이터**이고, 코드(`src/runner-table.mjs`·`src/restart.mjs`)에는 실행기 이름으로 갈라지는 분기가 없다(시험이 코드 검색으로 확인). 코드가 아는 것은 틀 채우기와 대화 ID 찾기 일반 함수 둘뿐이고, 실행기 출력 해석은 표에 넣지 않는다. 새 실행기는 JSON 항목 추가로 끝난다. 남는 위험: `pid-json`은 지금 claude 하나만 쓴다 — 경로·필드·일치 조건이 데이터라 다른 실행기가 같은 모양이면 재사용된다. 예외로 `src/conversation-ref.mjs`(`conversationOf`)는 **이미 원장에 쌓인 옛 start를 다시 해석**하므로(append-only) 설정이 아니라 코드에 실행기별 옵션 읽기를 두며(claude·codex·agy·devin), 새 실행기를 표에만 넣으면 그 실행기의 resume start는 "새 대화"로 읽힌다.

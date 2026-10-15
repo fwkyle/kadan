@@ -20,7 +20,7 @@ export function createMailGenerations() {
       && previous.role === e.role;
     // resume은 바로 앞 세대를 이어가고, --inherit-mail은 바로 앞 세대 하나만 이어받는다(둘 다 경계를 새로 만들지 않는다).
     // 그 앞 세대의 경계는 그대로라 두 세대 이전 우편은 끊긴 채 남는다. new·fork는 새 대화라 경계다.
-    const continues = sameProcess || e.inheritMail === true || e.restoredFrom || e.secretaryResumeSource
+    const continues = sameProcess || e.inheritMail === true || e.restoredFrom || e.secretaryResumeSource || e.restartOf
       || conversationModeOf(e) === 'resume';
     if (!continues && seen.has(role)) {
       bounds.set(role, [...(bounds.get(role) ?? []), index]);
