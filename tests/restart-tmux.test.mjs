@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {ledgerHome, appendLedger, readLedger} from '../src/ledger.mjs';
 import {tmuxFloor, tmux} from '../src/floor-tmux.mjs';
 import {settingsWith} from './helpers/runner-table.mjs';
+import {restartRoleDefault} from '../src/center-wall.mjs';
 
 // 실제 tmux·ps·lsof·CLI로 "대화 파일의 주인" 경계를 확인한다. 실행기는 가짜 Node 스크립트이고(실제 AI·신뢰 설정 없음),
 // 격리 홈·격리 tmux 서버만 쓴다. 가짜 codex 본체는 파일을 열고, 자식 Node가 다른 파일을 연다.
@@ -33,6 +34,8 @@ fs.writeFileSync(${JSON.stringify(ready)}+'.child','ok');setInterval(()=>{},1000
   fs.writeFileSync(fake, `#!${process.execPath}
 const fs=require('fs');const cp=require('child_process');
 const fds=(process.env.HOLD||'').split(',').filter(Boolean).map(f=>fs.openSync(f,'r'));
+fs.writeFileSync(${JSON.stringify(path.join(dir, 'env.json'))},JSON.stringify({reason:process.env.KADAN_RESTART_REASON??null,expectPid:process.env.KADAN_RESTART_EXPECT_PID??null}));
+const ri=process.argv.indexOf('resume');if(ri>0&&process.argv[ri+1]){const id=process.argv[ri+1];const base=__dirname;for(const f of [base+'/codex-home/thread-writer-locks/'+id+'.lock',base+'/codex-home/sessions/2026/10/14/rollout-2026-10-14T16-35-00-'+id+'.jsonl'])try{fs.openSync(f,'r')}catch{}}
 const child=process.env.IS_SAME_CHILD==='1';
 if(process.env.SPAWN_SAME)cp.spawn(process.execPath,[__filename,'--model','test-model','-c','e=low'],{env:{...process.env,HOLD:process.env.SAME_HOLD,SPAWN_SAME:'',IS_SAME_CHILD:'1'},stdio:'ignore'});
 if(process.env.CHILD_FILES)cp.spawn(process.execPath,[${JSON.stringify(path.join(dir, 'child.js'))},...process.env.CHILD_FILES.split(',')],{stdio:'ignore'});
@@ -147,6 +150,37 @@ test('실제 CLI: 환경변수로 온 이유는 원문 그대로 원장에 남�
   const start = readLedger().filter(e => e.session === 'kadan-verbcase' && e.kind === 'start').at(-1);
   assert.equal(start.reason, reason, '이유 원문 그대로');
   assert.equal(start.forced, undefined, 'force가 켜지지 않는다');
+});
+
+// 3라운드(2026-10-15, 재검수 중요): 화면 전달용 환경변수는 한 번 쓰고 지워야 한다.
+// 지우지 않으면 마지막 역할 재시작 때 새 tmux 서버·새 역할 환경에 남아 후속 명시 CLI를 덮어쓴다.
+test('실제 CLI: 전달 환경변수는 소비 뒤 지워지고, 명시 옵션이 남은 환경값과 다르면 거절한다', {skip}, async t => {
+  const s = setup(t, 'cut');
+  const created = launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-cutcase', 'cutcase');
+  const env = {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: ''};
+  const latestPid = () => readLedger().findLast(e => e.session === 'kadan-cutcase' && e.kind === 'start').panePid;
+  // (1) 마지막 남은 역할을 화면 경로(restartRoleDefault)로 재시작한다 — 옛 서버가 종료되고 새 서버가 뜨는 조건
+  const first = await restartRoleDefault({role: 'cutcase', reason: '첫 화면 이유', expectPid: String(created.panePid),
+    cli, env, responseTimeout: 25_000});
+  assert.ok(first.output.includes('다시 띄움'), JSON.stringify(first));
+  // 새 tmux 서버의 전역 환경과 새 역할 프로세스 환경에 두 값이 남아 있으면 안 된다
+  for (const key of ['KADAN_RESTART_REASON', 'KADAN_RESTART_EXPECT_PID'])
+    assert.notEqual(tmux(['show-environment', '-g', key]).status, 0, key + '가 tmux 서버 전역에 남았다');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.dir, 'env.json'), 'utf8')), {reason: null, expectPid: null},
+    '새 역할 프로세스 환경에 남지 않는다');
+  // (2) 남은 환경값과 다른 명시 옵션이 만나면 조용히 고르지 않고 거절한다
+  const conflict = spawnSync(process.execPath, [cli, 'restart', 'cutcase', '--reason', '터미널 이유', '--expect-pid', String(latestPid())],
+    {encoding: 'utf8', env: {...env, KADAN_RESTART_REASON: '우연히 남은 옛 이유'}});
+  assert.notEqual(conflict.status, 0);
+  assert.match(conflict.stderr, /다르다/);
+  assert.equal(readLedger().filter(e => e.session === 'kadan-cutcase' && e.kind === 'stop').length, 1, '충돌 거절은 끄지 않는다');
+  // (3) 깨끗한 환경에서 명시 이유·PID로 재시작하면 정상 처리되고 원장 이유는 새 값이다
+  const second = spawnSync(process.execPath, [cli, 'restart', 'cutcase', '--reason', '터미널 이유', '--expect-pid', String(latestPid())],
+    {encoding: 'utf8', env});
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  const start = readLedger().filter(e => e.session === 'kadan-cutcase' && e.kind === 'start').at(-1);
+  assert.equal(start.reason, '터미널 이유');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.dir, 'env.json'), 'utf8')), {reason: null, expectPid: null});
 });
 
 test('실제 CLI: 본체가 직접 연 저장 대화(B)는 같은 대화로 다시 띄운다', {skip}, t => {

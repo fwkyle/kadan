@@ -26,8 +26,22 @@ export function cmdRestart(argv, flags) {
   if (!role) die("사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]");
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
   // 화면(대시보드 '다시 띄우기')에서 온 값은 옵션 재해석을 막기 위해 인자가 아니라 환경변수로 들어온다(2026-10-15 2라운드).
-  if (process.env.KADAN_RESTART_REASON !== undefined) flags = { ...flags, reason: process.env.KADAN_RESTART_REASON };
-  if (process.env.KADAN_RESTART_EXPECT_PID !== undefined) flags = { ...flags, "expect-pid": process.env.KADAN_RESTART_EXPECT_PID };
+  // 읽은 즉시 이 프로세스의 환경에서 지운다(3라운드): 지우지 않으면 마지막 역할 재시작 때 새 tmux 서버·새 역할 환경에
+  // 남아 후속 CLI의 명시 옵션을 덮어쓴다(재검수 실측). 자식(tmux 서버·세션)을 만들기 전에 지워야 한다.
+  const envReason = process.env.KADAN_RESTART_REASON, envExpectPid = process.env.KADAN_RESTART_EXPECT_PID;
+  delete process.env.KADAN_RESTART_REASON;
+  delete process.env.KADAN_RESTART_EXPECT_PID;
+  // 명시 CLI 옵션이 환경 전달값보다 앞선다. 둘 다 있고 다르면 어느 쪽이 맞는지 모르는 채 진행하지 않고 거절한다.
+  if (envReason !== undefined) {
+    if (flags.reason !== undefined && flags.reason !== envReason)
+      die("--reason과 KADAN_RESTART_REASON이 다르다 — 어느 쪽인지 확인하고 하나만 남긴다");
+    flags = { ...flags, reason: envReason };
+  }
+  if (envExpectPid !== undefined) {
+    if (flags["expect-pid"] !== undefined && String(flags["expect-pid"]) !== envExpectPid)
+      die("--expect-pid와 KADAN_RESTART_EXPECT_PID가 다르다 — 어느 쪽인지 확인하고 하나만 남긴다");
+    flags = { ...flags, "expect-pid": envExpectPid };
+  }
   // 앞뒤 하이픈 등 정규화 전후가 다른 별칭은 같은 세션을 가리켜도 거절한다 — sessionName은 앞뒤 하이픈을 지우는데
   // 미해결 카드·원장 기록은 원래 문자열을 써서 보호가 갈라졌다(2026-10-15 검수). 세 곳이 같은 이름을 쓰게 정확한 이름만 받는다.
   const canonical = sessionName(role).slice("kadan-".length);
