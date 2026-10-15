@@ -16,7 +16,7 @@ const TOKEN_SHAPES = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi,
 ];
 export function scrubForAI(text) {
-  let out = scrubSecrets(text);
+  let out = scrubSecrets(text).replaceAll('\0', '');
   for (const shape of TOKEN_SHAPES) out = out.replace(shape, '[가림]');
   return out;
 }
@@ -34,6 +34,16 @@ export function decisionsByCard(rows) {
 // 프롬프트에 실제로 넣는 입력(비밀은 가린 뒤). progress는 현재 담당의 최신 진행 보고 글이다.
 // 결과 파일 본문은 길어서 입력에는 지문(sha256)·판정만 넣고, 프롬프트에 붙이는 발췌는 같은 지문에서 나온다.
 export function buildExplainInput(card, {progress = '', decisions = []} = {}) {
+  return scrubAll(rawInput(card, {progress, decisions}));
+}
+// 프롬프트에 들어가는 모든 글(담당·작성자·결정 문구·메모 포함)을 같은 함수로 가린다. 필드마다 따로 가리면 빠지는 곳이 생긴다.
+function scrubAll(value) {
+  if (typeof value === 'string') return scrubForAI(value);
+  if (Array.isArray(value)) return value.map(scrubAll);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrubAll(v)]));
+  return value;
+}
+function rawInput(card, {progress, decisions}) {
   const notes = (card.history ?? []).filter(h => ['decision', 'question', 'answer'].includes(h.noteKind) && h.note).slice(-NOTES)
     .map(h => ({kind: h.noteKind, by: h.by ?? '모름', note: cut(h.note, NOTE_MAX)}));
   return {
@@ -60,9 +70,11 @@ export const EXPLAIN_RULES = [
   '쉬운 말을 먼저 쓰고 개발 용어는 괄호로 덧붙인다. 원문에 없는 사실·숫자·경로를 만들지 마라. 비밀값은 쓰지 않는다.',
 ].join('\n');
 
-export function buildExplainPrompt(input, resultText = '') {
-  const result = resultText ? `\n--- 결과 파일 발췌 ---\n${cut(resultText, RESULT_MAX)}` : '';
-  return `${EXPLAIN_RULES}\n--- 신뢰하지 않는 카드 원문(JSON) ---\n${JSON.stringify(input)}${result}`;
+// resultNote: 결과 파일 발췌를 뺀 사유(등록 뒤 파일이 바뀜 등). 입력에 적어 요약이 그 사실을 알게 한다.
+export function buildExplainPrompt(input, resultText = '', resultNote = '') {
+  const result = resultText ? `\n--- 결과 파일 발췌 ---\n${cut(resultText, RESULT_MAX)}` : resultNote ? `\n--- 결과 파일 ---\n${resultNote}` : '';
+  // 마지막에 프롬프트 전체를 한 번 더 가린다.
+  return scrubForAI(`${EXPLAIN_RULES}\n--- 신뢰하지 않는 카드 원문(JSON) ---\n${JSON.stringify(input)}${result}`);
 }
 
 // 모델 출력(글)에서 brief 7칸을 꺼내 칸 규칙을 확인한다. 어기면 쓰지 않고 사유 코드만 돌려준다.

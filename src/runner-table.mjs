@@ -22,25 +22,35 @@ export function runnerTemplate(settings, runner, key) {
   return value;
 }
 
-// {model}·{effort}·{conversation}·{prompt}·{cwd} 자리 채우기. 값이 없는 자리는 만들지 않고 거절한다(effort만 빈 글).
+// {model}·{effort}·{conversation}·{prompt}·{cwd} 자리를 한 번에 채운다. 값이 없는 자리는 만들지 않고 거절한다(effort만 빈 글).
+// 함수로 대입하므로 값 안의 `$&`·`$`` 같은 글자가 치환 문법으로 읽히지 않고, 채운 값 안의 `{cwd}` 같은 글자는 다시 채우지 않는다.
 export function fillTemplate(template, values) {
-  let out = template.replaceAll('{effort}', values.effort ?? '');
-  for (const key of ['model', 'conversation', 'prompt', 'cwd']) {
-    if (!out.includes(`{${key}}`)) continue;
+  return template.replace(/\{(effort|model|conversation|prompt|cwd)\}/g, (_, key) => {
+    if (key === 'effort') return values.effort ?? '';
     if (values[key] == null || values[key] === '') throw new Error(`틀의 {${key}} 자리에 넣을 값이 없다`);
-    out = out.replaceAll(`{${key}}`, values[key]);
-  }
-  return out;
+    return values[key];
+  });
 }
 
-// 한 번 호출(exec) 틀: {prompt}가 있으면 인자(셸 따옴표 처리), 없으면 표준 입력으로 보낸다. 인자는 ps에 보이므로 표준 입력이 낫다.
+// 카드 글(prompt)은 명령 문자열에 글자로 끼워 넣지 않는다. 따옴표 처리로 막는 방식은 틀 작성자가 "{prompt}"처럼 쓰면 깨진다.
+// {prompt} 자리에는 셸 변수 참조만 넣고 글 자체는 그 프로세스의 환경변수로 넘긴다. 셸은 변수 값을 다시 해석하지 않는다.
+export const EXEC_PROMPT_ENV = 'KADAN_EXPLAIN_PROMPT';
+// 저장 검사: {prompt}는 앞뒤가 공백(또는 처음·끝)인 독립 낱말일 때만 받는다. 따옴표나 다른 글자에 붙으면 거절한다.
+export function checkExecTemplate(template) {
+  const total = template.split('{prompt}').length - 1;
+  const alone = [...template.matchAll(/(?<=^|\s)\{prompt\}(?=\s|$)/g)].length;
+  if (total !== alone) throw new Error('exec 틀의 {prompt}는 앞뒤가 공백인 독립 낱말이어야 한다(따옴표·다른 글자에 붙이지 않는다) — 글은 환경변수로 넘기므로 틀이 따옴표를 칠 필요가 없다');
+}
+
+// 한 번 호출(exec) 틀: {prompt}가 있으면 "$KADAN_EXPLAIN_PROMPT"로 채우고 글은 env로, 없으면 표준 입력으로 보낸다. 글이 명령줄(ps)에 나오지 않는다(환경변수는 같은 사용자의 `ps eww`에는 보일 수 있다).
 // execField 칸이 있으면 표준 출력 JSON에서 그 필드가 답이고, 없으면 표준 출력 전체가 답이다(실행기마다 다른 출력 모양을 코드가 모르게).
 export function execCommand(settings, runner, {model, effort, prompt, cwd}) {
   const template = runnerTemplate(settings, runner, 'exec');
+  checkExecTemplate(template);
   const inArgs = template.includes('{prompt}');
-  const quote = text => `'${String(text).replace(/'/g, "'\\''")}'`;
-  const command = fillTemplate(template, {model, effort, cwd, prompt: inArgs ? quote(prompt) : undefined});
-  return {command, stdin: inArgs ? '' : prompt, field: settings.runners[runner].execField || null};
+  const text = String(prompt ?? '').replaceAll('\0', '');
+  const command = fillTemplate(template, {model, effort, cwd, prompt: inArgs ? `"$${EXEC_PROMPT_ENV}"` : undefined});
+  return {command, stdin: inArgs ? '' : text, env: inArgs ? {[EXEC_PROMPT_ENV]: text} : {}, field: settings.runners[runner].execField || null};
 }
 
 const shellWord = word => /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;

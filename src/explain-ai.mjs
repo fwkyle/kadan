@@ -6,6 +6,7 @@
 // - 감시 AI와 자리를 나누지 않는 별도 대기열(동시 1개, 시도당 상한)이며, 호출은 감시 순회를 기다리게 하지 않는다.
 // 설명 AI는 감시 AI가 아니다. 판정·보고·알림을 하지 않고 brief 줄만 쓴다.
 import fs from 'node:fs';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {CardStore} from './card-store.mjs';
 import {buildCardCenter} from './card-center.mjs';
@@ -21,8 +22,9 @@ import {answerText, buildExplainPrompt, decisionsByCard, parseBriefOutput} from 
 export const EXPLAIN_FILE = 'explain-ai.jsonl';
 export const EXPLAIN_TIMEOUT_MS = 75_000;
 export const EXPLAIN_MAX_PER_CYCLE = 3;
-// 이 결과만 "그 입력은 이미 시도했다"로 센다. 카드가 바뀌어 쓰지 못한 경우(revision-skip)는 다음 사건에 다시 본다.
-const SETTLED = new Set(['written', 'failed']);
+// 표준 출력·표준 오류를 모으는 바이트 상한. 넘으면 프로세스 묶음을 끝내고 사유만 남긴다(설명 AI 경로만).
+export const EXPLAIN_MAX_OUTPUT_BYTES = 1024 * 1024;
+// AI를 한 번이라도 부른 입력은 결과와 상관없이 "시도했다"로 센다(쓰기 성공 여부와 별개). 같은 입력으로 두 번 부르지 않는다.
 const at = value => { const t = Date.parse(value); return Number.isFinite(t) ? t : 0; };
 const handledKey = (key, id) => `${key}|${id}`;
 
@@ -36,6 +38,7 @@ export class ExplainAI {
     this.attempted = new Set();
     this.queue = [];
     this.running = null;
+    this.active = null;
     this.controller = new AbortController();
     this.context = null;
     this.loaded = false;
@@ -46,7 +49,7 @@ export class ExplainAI {
     if (this.loaded) return;
     for (const row of readStream(this.home, EXPLAIN_FILE, {optional: true})) {
       if (row.kind === 'explain-state') this.enabledAt = row.state === 'enabled' ? at(row.at) : null;
-      else if (row.kind === 'explain-call' && SETTLED.has(row.outcome)) {
+      else if (row.kind === 'explain-call') {
         this.attempted.add(`${row.key}|${row.inputHash}`);
         for (const id of row.eventIds ?? []) this.handled.add(handledKey(row.key, id));
       }
@@ -62,6 +65,8 @@ export class ExplainAI {
     this.load();
     const chain = this.chain();
     if (!chain) {
+      // 칸을 비우면 대기열도 무효로 한다. 다시 켠 뒤 옛 사건이 실행되지 않게.
+      this.queue.length = 0;
       if (this.enabledAt != null) { this.record({kind: 'explain-state', state: 'disabled'}); this.enabledAt = null; }
       return {state: 'off', queued: 0};
     }
@@ -74,19 +79,20 @@ export class ExplainAI {
     for (const d of decisions) if (Math.max(at(d.at), at(d.answer?.at), at(d.cancelledAt)) >= this.enabledAt) keys.add(d.card);
     let queued = 0;
     for (const card of this.center([...keys], now)) {
-      if (queued >= this.maxPerCycle || this.queue.some(j => j.key === card.key)) continue;
+      // 대기열뿐 아니라 지금 호출 중인 카드도 다시 예약하지 않는다.
+      if (queued >= this.maxPerCycle || this.queue.some(j => j.key === card.key) || this.active?.key === card.key) continue;
       const mine = grouped.get(card.key) ?? [];
       const events = cardEvents(card, mine, now).filter(e => e.at >= this.enabledAt && !this.handled.has(handledKey(card.key, e.id)));
       if (!events.length) continue;
       const {input, hash} = briefInput(card, mine, now);
-      const ids = events.map(e => e.id);
+      const ids = events.map(e => ({id: e.id, at: e.at}));
       let brief = null;
       try { brief = new BriefStore(this.home).read(card.key); } catch { /* 손상된 설명 기록은 건드리지 않고 이번엔 지나간다 */ continue; }
       if (this.attempted.has(`${card.key}|${hash}`) || (brief?.by === EXPLAIN_BY && brief.inputHash === hash)) {
-        for (const id of ids) this.handled.add(handledKey(card.key, id));
+        for (const {id} of ids) this.handled.add(handledKey(card.key, id));
         continue;
       }
-      this.queue.push({key: card.key, input, hash, ids, revision: card.revision, resultPath: card.result?.path ?? null});
+      this.queue.push({key: card.key, input, hash, ids, revision: card.revision, resultPath: card.result?.path ?? null, resultSha256: card.result?.sha256 ?? null});
       queued++;
     }
     if (this.queue.length) this.pump();
@@ -110,7 +116,13 @@ export class ExplainAI {
     this.running = (async () => {
       while (this.queue.length && !this.controller.signal.aborted) {
         const job = this.queue.shift();
+        // 꺼낼 때 지금 켜진 시점과 사건 시각을 다시 대조한다(그사이 꺼졌다 켜졌으면 옛 사건은 버린다).
+        if (this.enabledAt == null) continue;
+        job.ids = job.ids.filter(e => e.at >= this.enabledAt);
+        if (!job.ids.length) continue;
+        this.active = job;
         try { await this.run(job); } catch (error) { this.print(`[설명 AI] ${job.key} 처리 실패: ${error.message}`); }
+        finally { this.active = null; }
       }
     })().finally(() => { this.running = null; });
     return this.running;
@@ -122,9 +134,18 @@ export class ExplainAI {
     const settings = this.read();
     const chain = explainChain(settings);
     if (!chain) return;
-    let resultText = '';
-    if (job.resultPath) try { resultText = fs.readFileSync(job.resultPath, 'utf8'); } catch { /* 결과 파일이 없으면 발췌 없이 */ }
-    const prompt = buildExplainPrompt(job.input, resultText);
+    // 호출 직전에 시도 기록을 다시 확인한다.
+    if (this.attempted.has(`${job.key}|${job.hash}`)) return;
+    // 결과 파일은 읽은 바이트의 sha256이 등록값과 같을 때만 발췌한다. 다르면 발췌를 빼고 그 사유를 입력에 적는다.
+    let resultText = '', resultNote = '';
+    if (job.resultPath) {
+      try {
+        const bytes = fs.readFileSync(job.resultPath);
+        if (createHash('sha256').update(bytes).digest('hex') === job.resultSha256) resultText = bytes.toString('utf8');
+        else resultNote = '결과 파일이 등록한 뒤에 바뀌어 발췌를 뺐다(등록 지문과 다름).';
+      } catch { resultNote = '결과 파일을 읽을 수 없어 발췌를 뺐다.'; }
+    }
+    const prompt = buildExplainPrompt(job.input, resultText, resultNote);
     fs.mkdirSync(this.workDir, {recursive: true, mode: 0o700});
     const attempts = [];
     let parsed = null, outcome = 'failed', reason = null;
@@ -133,11 +154,12 @@ export class ExplainAI {
       const started = this.now();
       let attempt = {runner: judge.runner, model: judge.model, fallbackIndex: judge.fallbackIndex, result: 'call-failed'};
       try {
-        const {command, stdin, field} = execCommand(settings, judge.runner, {model: judge.model, effort: judge.effort ?? '', prompt, cwd: this.workDir});
+        const {command, stdin, env, field} = execCommand(settings, judge.runner, {model: judge.model, effort: judge.effort ?? '', prompt, cwd: this.workDir});
         const res = await this.spawn(command, {input: stdin, timeout: this.timeoutMs, cwd: this.workDir, signal: this.controller.signal,
-          reportComplete: () => false, env: {...process.env}});
+          reportComplete: () => false, maxBytes: EXPLAIN_MAX_OUTPUT_BYTES, env: {...process.env, ...env}});
         const stderr = String(res.stderr ?? '');
         if (res.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1')) attempt.result = 'timeout';
+        else if (stderr.includes('KADAN_JUDGE_OUTPUT_LIMIT=1')) attempt.result = 'output-limit';
         else if (res.error || res.status !== 0) attempt.result = 'call-failed';
         else {
           const out = answerText(res.stdout, field);
@@ -154,14 +176,13 @@ export class ExplainAI {
     if (parsed?.ok) {
       ({outcome, reason} = this.write(job, parsed.fields));
     } else reason = attempts.at(-1)?.result ?? 'no-attempt';
-    this.record({kind: 'explain-call', key: job.key, inputHash: job.hash, eventIds: job.ids, outcome, ...(reason ? {reason} : {}), attempts});
-    if (SETTLED.has(outcome)) {
-      this.attempted.add(`${job.key}|${job.hash}`);
-      for (const id of job.ids) this.handled.add(handledKey(job.key, id));
-    }
+    this.record({kind: 'explain-call', key: job.key, inputHash: job.hash, eventIds: job.ids.map(e => e.id), outcome, ...(reason ? {reason} : {}), attempts});
+    this.attempted.add(`${job.key}|${job.hash}`);
+    for (const {id} of job.ids) this.handled.add(handledKey(job.key, id));
   }
 
-  // revision이 어긋나면 오류가 아니라 생략이다. 다만 그사이 입력(지문)이 그대로면 새 revision으로 한 번 더 쓴다(AI를 다시 부르지 않는다).
+  // revision이 어긋나면 오류가 아니라 생략이다. 카드를 다시 읽어 입력 지문이 그대로면 받은 답을 새 revision으로 쓰고(AI를 다시 부르지 않는다),
+  // 달라졌으면 그 답을 버린다(stale). 어느 쪽이든 이 입력은 시도한 것으로 세고, 새 입력은 다음 사건 때 처리한다.
   write(job, fields) {
     const store = new BriefStore(this.home);
     const attempt = revision => store.write(job.key, {...fields, revision}, EXPLAIN_BY, {inputHash: job.hash});
@@ -173,7 +194,7 @@ export class ExplainAI {
       const [card] = this.center([job.key], this.now());
       const decisions = decisionsByCard(readStream(this.home, 'decisions/events.jsonl', {optional: true})).get(job.key) ?? [];
       if (card && briefInput(card, decisions, this.now()).hash === job.hash) { attempt(card.revision); return {outcome: 'written', reason: 'rewrote-at-new-revision'}; }
-    } catch { /* 다시 읽기 실패도 생략으로 둔다 */ }
-    return {outcome: 'revision-skip', reason: 'revision-changed'};
+    } catch { /* 다시 읽기 실패도 버림으로 둔다 */ }
+    return {outcome: 'stale', reason: 'revision-changed'};
   }
 }

@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {TABLE_KEYS, checkConversationSpec, runnerTemplate, tailOf} from './runner-table.mjs';
+import {TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf} from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
@@ -236,6 +236,7 @@ function applyTable(spec, table) {
     } else if (TABLE_KEYS.includes(key)) {
       if (value === null) { delete spec[key]; continue; }
       if (typeof value !== 'string' || !value.trim()) throw new Error(`${key} 틀은 글이어야 한다`);
+      if (key === 'exec') checkExecTemplate(value);
       if (key === 'execField' && !/^[A-Za-z0-9_.]+$/.test(value)) throw new Error('execField에는 출력 JSON의 필드 이름(영문·숫자·_ .)만 쓴다');
       const unknown = value.replace(TABLE_PLACEHOLDERS, '').match(/\{[^}]*\}/);
       if (unknown) throw new Error(`${key} 틀에 모르는 자리가 있다: ${unknown[0]}`);

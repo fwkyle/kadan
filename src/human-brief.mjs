@@ -89,8 +89,8 @@ export class Scribe {
   const report=currentProgressReport(card,now);
   const fingerprint=createHash('sha256').update(JSON.stringify([sourceHash(card),card.title,card.displayState,card.activityAt,card.runs,report,brief,decisions])).digest('hex');
   const old=this.cache.get(card.key);if(old?.fingerprint===fingerprint)return old.value;
-  // 손으로 쓴 줄은 revision·본문이 같을 때만 신선하다. 설명 AI 줄은 입력 지문이 같으면 신선하다(메모·담당 갱신으로 revision만 올라도 유지).
-  const fresh=!!brief&&(brief.sourceHash===sourceHash(card)||(brief.by===EXPLAIN_BY&&!!brief.inputHash&&brief.inputHash===briefInput(card,decisions,now).hash));
+  // 손으로 쓴 줄은 revision·본문이 같을 때만 신선하다. 설명 AI 줄은 입력 지문만으로 판단한다(메모·담당 갱신으로 revision만 올라도 유지, 원장 완료·결정만 바뀌어 revision이 같아도 숨는다).
+  const fresh=!!brief&&(brief.by===EXPLAIN_BY?!!brief.inputHash&&brief.inputHash===briefInput(card,decisions,now).hash:brief.sourceHash===sourceHash(card));
   const namesFresh=!!brief&&brief.contentHash===contentHash(card);
   // 이름은 원문 제목/본문이 같을 때 유지하고, 진행 서술은 새 보고마다 무효화한다.
   const value={key:card.key,title:namesFresh?brief.title:cleanTitle(card),workstream:namesFresh?brief.workstream:'분류할 작업',stage:namesFresh?brief.stage||'기타':'기타',goal:namesFresh?brief.goal||'':'',
