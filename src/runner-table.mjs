@@ -8,7 +8,11 @@ import path from 'node:path';
 import {commandWords} from './ai-identity.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 
-export const TABLE_KEYS = ['resume', 'fork', 'exec', 'execField', 'version', 'update'];
+// listModels: 실행기가 자기 모델 목록을 내는 명령 틀(자리 없음). 화면의 '목록 불러오기'를 누를 때만 실행한다.
+// 이름이 models가 아닌 이유: runners.<실행기>.models는 이미 등록된 모델·강도 목록이다.
+export const TABLE_KEYS = ['resume', 'fork', 'exec', 'execField', 'version', 'update', 'listModels'];
+// 실행기·모델·강도 이름에 쓸 수 있는 글자(영문·숫자·./-[]).
+export const NAME_PATTERN = /^[A-Za-z0-9._/\-[\]]+$/;
 export const CONVERSATION_KINDS = ['open-file', 'pid-json'];
 // 셸 문자열에 끼워 넣을 대화 ID는 좁은 글자만 허용한다.
 const CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -100,6 +104,17 @@ export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   }
   const next = [...base, ...tail.map(word => word.replace(SENTINEL.conversation, conversation))];
   return next.map(shellWord).join(' ');
+}
+
+// 모델 목록 명령의 표준 출력: 줄마다 첫 낱말이 모델 id다. 이름 규칙에 맞지 않는 줄·빈 줄·중복은 버린다.
+// 나머지 글(탭 뒤 표시 이름 등)은 사람이 보는 이름으로만 돌려준다.
+export function parseModelList(stdout) {
+  const seen = new Map();
+  for (const line of String(stdout ?? '').split('\n')) {
+    const [id, ...rest] = line.trim().split(/\s+/);
+    if (id && NAME_PATTERN.test(id) && !seen.has(id)) seen.set(id, rest.join(' '));
+  }
+  return [...seen].map(([model, name]) => ({model, name}));
 }
 
 // ---- 대화 ID 찾기: 일반 함수 둘 ----

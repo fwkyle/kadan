@@ -25,7 +25,8 @@ import { promisify } from 'node:util';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger,readLedger} from './ledger.mjs';
-import {editFallback,readSettings,setActivePreset,setFallback,setFavorites,setRole} from './runner-settings.mjs';
+import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,setActivePreset,setFallback,setFavorites,setRole,setRunner,setRunnerModel} from './runner-settings.mjs';
+import {listRunnerModels} from './runner-model-list.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
@@ -167,9 +168,10 @@ export function askMessage({unit,text,context}) {
 }
 
 export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
+ let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite','/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -199,6 +201,14 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    }
    if(url.pathname.startsWith('/runners/')){
     const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};
+    if(url.pathname==='/runners/models-list'){
+     // 실행기가 주는 모델 목록 불러오기: 설정·원장에 쓰지 않으므로 revision·이유가 없다. 토큰을 통과한 POST만 명령을 돌리고, 동시에 하나만 돈다.
+     if(listing)throw new Error('이미 목록을 불러오는 중이다');
+     listing=true;
+     try{const result=await listRunnerModels(home,f.runner);res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location:'',result}));}
+     finally{listing=false;}
+     return true;
+    }
     const fallback=()=>{
      // 버튼 값은 add 또는 remove:N·up:N·down:N. 목록은 저장 직전 설정에서 읽고, revision 대조는 공통 경로가 한다.
      const [op,index]=String(f.op??'').split(':');
@@ -218,7 +228,17 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      let items;try{items=editFallback(current.favorites??[],{op,index,item:{runner:f.runner,model:f.model,effort:f.effort||undefined}});}catch(error){throw new Error(error.message.replace('폴백','즐겨찾기'));}
      return setFavorites(home,{items,...meta});
     };
-    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():url.pathname==='/runners/favorite'?favorite():setActivePreset(home,{preset:f.preset,...meta});
+    const modelAdd=()=>setRunnerModel(home,{runner:f.runner,model:f.model,efforts:f.efforts,...meta});
+    // 표 편집: 화면이 보낸 칸 중 지금 값과 같은 것은 버리고, 바뀐 칸만 공통 함수(setRunner)로 저장한다.
+    const runnerEdit=()=>{
+     const current=readSettings(home);
+     if(!current)throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
+     let table;if(f.table){try{table=JSON.parse(f.table);}catch{throw new Error('--table은 JSON 글이어야 한다');}}
+     const changed=changedRunnerFields(current.runners[f.runner],{spawn:f.spawn||undefined,table});
+     if(!changed)throw new Error('바뀐 것이 없다');
+     return setRunner(home,{runner:f.runner,...changed,...meta});
+    };
+    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():url.pathname==='/runners/favorite'?favorite():url.pathname==='/runners/runner'?runnerEdit():url.pathname==='/runners/model-add'?modelAdd():url.pathname==='/runners/model-remove'?removeRunnerModel(home,{runner:f.runner,model:f.model,...meta}):setActivePreset(home,{preset:f.preset,...meta});
     saved('/?runnersSaved='+next.revision+'#runner-settings',{revision:next.revision});return true;
    }
    if(url.pathname.startsWith('/works/')){
