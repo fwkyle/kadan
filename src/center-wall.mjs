@@ -144,6 +144,22 @@ export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta
  }
 }
 
+// 대시보드 '다시 띄우기'(2026-10-15 [kyle]). 화면은 restartRole을 프로세스 안에서 동기로 부르지 않고 CLI를 자식
+// 프로세스로 불러 같은 검사(대화 확정·세대 대조·실행 중 보호)를 그대로 쓴다 — 동기 호출은 대시보드 응답을 멈춘다.
+// 상한 28초는 '비서 켜기'와 같은 기준이다: 화면 저장 대기(30초) 안에 끝낸다(실제 왕복 실측은 결과 문서에 적는다).
+// --force는 화면에서 보내지 않는다 — 끝나지 않은 카드 거절은 CLI 메시지 그대로 화면에 보이고, 강제는 터미널에서 사람이 한다.
+// 사람이 누른 것이므로 KADAN_ROLE을 비워 원장에 '사람'으로 남긴다. 창 선택(KADAN_WINDOW)은 화면이 바꾸지 않고 기존 규칙을 따른다.
+export async function restartRoleDefault({role,reason,expectPid,cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile)}={}) {
+ try {
+  const {stdout}=await run(process.execPath,[cli,'restart',role,'--reason',reason,'--expect-pid',String(expectPid)],{env:{...env,KADAN_ROLE:''},encoding:'utf8',timeout:28_000});
+  return {output:String(stdout||'').trim().split('\n').slice(0,6).join('\n')};
+ } catch(error) {
+  if(error.killed&&!error.stderr)throw new Error('28초 안에 끝나지 않아 중단했다 — 역할 상태를 확인한 뒤 화면을 새로 읽고 다시 시도하세요');
+  // 거절 메시지는 CLI가 쓴 것을 그대로 보인다.
+  throw new Error(String(error.stderr||error.message||'').trim().slice(-300)||'다시 띄우지 못했다');
+ }
+}
+
 // 대시보드 '슈퍼감독에게 묻기'(2026-10-07 [kyle]). 받는 사람은 서버가 관계표에서 정한다 — 유닛에서 직속 상위를 따라
 // 올라가 처음 만나는 슈퍼감독(프로필 기준, super-role.mjs). 사슬이 없으면(관계표 밖) 비서. 요청이 받는 사람을 고르게 두면
 // "아무 창에나 글을 붙이는" 통로가 되므로 받지 않는다. 관계표를 못 읽으면 추측하지 않고 거부한다.
@@ -166,10 +182,10 @@ export function askMessage({unit,text,context}) {
  return `[대시보드 질문 · ${unit}]\n${text}${context?`\n\n${context}`:''}\n\n이 편지는 사용자의 질문이다. 새 발령·승인이 아니다.`;
 }
 
-export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
+export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/ask','/secretary/start','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+   if(req.method!=='POST'||!['/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -183,6 +199,13 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
+   if(url.pathname==='/roles/restart'){
+    const role=String(f.role||''),reason=String(f.reason||'').trim(),expectPid=String(f.expectPid||'').trim();
+    if(!/^[\p{L}\p{N}_-]+$/u.test(role))throw new Error('다시 띄울 역할 이름이 올바르지 않다');
+    if(!reason)throw new Error('다시 띄우는 이유를 적어 주세요');
+    if(!expectPid)throw new Error('이 역할의 지금 세대 표시가 없다 — 화면을 새로 읽은 뒤 다시 시도하세요');
+    saved('/#runner-settings',await restart({role,reason,expectPid}));return true;
+   }
    if(url.pathname==='/ask'){
     const unit=String(f.unit||''),text=String(f.text||'').trim(),context=String(f.context||'').trim();
     if(!/^[\p{L}\p{N}_-]+$/u.test(unit))throw new Error('물을 유닛 이름이 올바르지 않다');

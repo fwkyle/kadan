@@ -408,6 +408,13 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-ask .sm-ask-ctx input { width: auto; margin: 0; flex: none; }
 .sm-ask button { justify-self: end; font-size: 13px; padding: 4px 16px; }
 .sm-ask-error { color: #b3261e; }
+
+/* 담당자 상태의 '다시 띄우기' 칸(2026-10-15). 좁은 폭에서는 세로로 쌓는다. */
+.restart-cell .restart-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.restart-cell .restart-form input { flex: 1; min-width: 140px; }
+.restart-cell small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.restart-cell .restart-ok { color: #1b6e42; }
+.restart-cell .restart-fail { color: #b3261e; }
 .sm-ask-list { list-style: none; margin: 10px 0 6px; padding: 0; display: grid; gap: 6px; font-size: 12.5px; }
 .sm-ask-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: baseline; }
 .sm-ask-list li > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

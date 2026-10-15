@@ -58,6 +58,7 @@ export type SaveResult = {
     delivery?: { status: string; error?: string; role?: string };
     to?: string; // 질문을 받은 역할(/ask)
     mailId?: string | null;
+    output?: string; // CLI 출력 요약(/roles/restart — 새 pane PID·대화 id·창)
   };
 };
 export async function save(

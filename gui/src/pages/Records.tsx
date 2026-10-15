@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { useResource } from "../resource";
+import { useContext, useState } from "react";
+import { save, useResource } from "../resource";
 import { patchLocation } from "../navigation";
 import type { Mail, Paged, Stamp } from "../types";
 import {
+  AppContext,
   CardLink,
   ErrorMessage,
   Freshness,
@@ -339,6 +340,110 @@ export function Runs({ url }: { url: URL }) {
     </section>
   );
 }
+// 살아 있는 역할 줄의 '다시 띄우기'(2026-10-15 [kyle]). 이유를 적어야 보낼 수 있고, 화면이 본 세대 표시(최근 시작의
+// pane PID)를 함께 보내 서버가 CLI로 그 사이 다시 띄워졌는지 대조한다. 거절·실패는 CLI 메시지를 그대로 보이고
+// 자동으로 다시 시도하지 않는다. 브라우저 confirm/alert는 쓰지 않는다.
+function RestartCell({
+  role,
+  generation,
+}: {
+  role: string;
+  generation: string | null;
+}) {
+  const { token } = useContext(AppContext),
+    [open, setOpen] = useState(false),
+    [reason, setReason] = useState(""),
+    [busy, setBusy] = useState(false),
+    [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(
+      null,
+    );
+  if (!generation) return <td></td>;
+  const submit = async () => {
+    const text = reason.trim();
+    if (!text) {
+      setOutcome({ ok: false, text: "다시 띄우는 이유를 적어 주세요." });
+      return;
+    }
+    setBusy(true);
+    setOutcome(null);
+    try {
+      const saved = await save(
+        "/roles/restart",
+        { role, reason: text, expectPid: generation },
+        token,
+      );
+      setOutcome({
+        ok: true,
+        text: saved.result.output || "다시 띄웠습니다.",
+      });
+      setOpen(false);
+      setReason("");
+    } catch (error) {
+      setOutcome({
+        ok: false,
+        text: error instanceof Error ? error.message : "다시 띄우기 실패",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <td className="restart-cell">
+      {!open && (
+        <button
+          type="button"
+          disabled={busy || !token}
+          onClick={() => {
+            setOutcome(null);
+            setOpen(true);
+          }}
+        >
+          다시 띄우기
+        </button>
+      )}
+      {open && (
+        <form
+          className="restart-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!busy) void submit();
+          }}
+        >
+          <input
+            name="reason"
+            required
+            placeholder="이유 (필수)"
+            value={reason}
+            disabled={busy}
+            onChange={(e) => setReason(e.currentTarget.value)}
+          />
+          <button type="submit" disabled={busy || !reason.trim()}>
+            {busy ? "다시 띄우는 중…" : "실행"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setOpen(false);
+              setReason("");
+            }}
+          >
+            취소
+          </button>
+        </form>
+      )}
+      {outcome && (
+        <small
+          className={outcome.ok ? "restart-ok" : "restart-fail"}
+          role="status"
+        >
+          {outcome.text}
+        </small>
+      )}
+    </td>
+  );
+}
+
 export function Sessions({ url }: { url: URL }) {
   const resource = useResource<
       Stamp & {
@@ -348,7 +453,7 @@ export function Sessions({ url }: { url: URL }) {
           role: string;
           harness: string;
           model: string;
-          life: { state: string; pidState: string };
+          life: { state: string; pidState: string; recordedPid: string | null };
         }[];
       }
     >("sessions"),
@@ -389,6 +494,7 @@ export function Sessions({ url }: { url: URL }) {
                 <th>역할</th>
                 <th>생존</th>
                 <th>실행 도구 · 모델</th>
+                <th>다시 띄우기</th>
               </tr>
             </thead>
             <tbody>
@@ -407,6 +513,12 @@ export function Sessions({ url }: { url: URL }) {
                   <td>
                     {[r.harness, r.model].filter(Boolean).join(" · ") || "모름"}
                   </td>
+                  <RestartCell
+                    role={r.role}
+                    generation={
+                      r.life.state === "alive" ? r.life.recordedPid : null
+                    }
+                  />
                 </tr>
               ))}
             </tbody>

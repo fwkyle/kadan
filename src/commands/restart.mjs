@@ -23,7 +23,7 @@ function paneInfo(session) {
 
 export function cmdRestart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan restart <역할> [--force]");
+  if (!role) die("사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]");
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
   const home = ledgerHome();
   const session = sessionName(role);
