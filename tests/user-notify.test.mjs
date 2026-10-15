@@ -60,11 +60,12 @@ test('결정 요청만 멘션하고, 답변·취소·경보는 allowed_mentions�
     notifyUser('경보 @everyone <@999>', w.fakeSpawn(), {kind: 'alert', home: w.home, env: w.env});
     const [req, ans, can, alert] = w.requests().map(r => JSON.parse(r.body));
     assert.deepEqual(req.allowed_mentions, {users: [USER_ID]});
-    assert.ok(req.content.startsWith(`<@${USER_ID}> [결정 요청]`));
-    for (const part of ['선택지: 1) 가 2) 나', '추천: 가', '결정 dec-1', '카드 repo/card-1', '업무 repo/work-1', 'http://127.0.0.1:8790/#decision-dec-1']) assert.ok(req.content.includes(part), part);
+    assert.ok(req.content.startsWith(`[repo] <@${USER_ID}> 결정 요청: 질문입니다`));
+    for (const part of ['선택지: 1) 가 2) 나', '추천: 가', '결정 dec-1', '카드 repo/card-1', '업무 repo/work-1']) assert.ok(req.content.includes(part), part);
+    assert.ok(req.content.endsWith('http://127.0.0.1:8790/#decision-dec-1'));
     assert.ok(req.content.length <= 2000);
     assert.deepEqual(ans.allowed_mentions, {parse: []});
-    assert.match(ans.content, /^결정 dec-1 답변됨\(가\)/);
+    assert.match(ans.content, /^\[repo\] 결정 해결됨: .* — 답변: 가 — 가로 가자/);   // 원래 메시지를 못 찾은 대체 새 메시지
     assert.deepEqual(can.allowed_mentions, {parse: []});
     assert.deepEqual(alert.allowed_mentions, {parse: []});
     assert.equal(w.osCalls.length, 0);
@@ -322,7 +323,7 @@ test('포럼: 글 제목은 100자 안, 결정 요청은 업무 글로 가며 �
     const req = w.forum.requests()[0], body = bodyOf(req);
     assert.ok(body.thread_name.length <= 100 && body.thread_name.startsWith('kadan/work-x'));
     assert.deepEqual(body.allowed_mentions, {users: [USER_ID]});
-    assert.ok(body.content.startsWith(`<@${USER_ID}>`));
+    assert.ok(body.content.startsWith(`[kadan] <@${USER_ID}> 결정 요청:`));
   } finally { w.stop(); }
 });
 
