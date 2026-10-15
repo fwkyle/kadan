@@ -59,6 +59,7 @@ export type SaveResult = {
     to?: string; // 질문을 받은 역할(/ask)
     mailId?: string | null;
     output?: string; // CLI 출력 요약(/roles/restart — 새 pane PID·대화 id·창)
+    pending?: boolean; // /roles/restart — 화면 응답 상한(28초)을 넘겨 자식이 계속 진행 중
   };
 };
 export async function save(

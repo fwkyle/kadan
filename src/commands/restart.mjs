@@ -25,6 +25,15 @@ export function cmdRestart(argv, flags) {
   const role = argv[0];
   if (!role) die("사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]");
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
+  // 화면(대시보드 '다시 띄우기')에서 온 값은 옵션 재해석을 막기 위해 인자가 아니라 환경변수로 들어온다(2026-10-15 2라운드).
+  if (process.env.KADAN_RESTART_REASON !== undefined) flags = { ...flags, reason: process.env.KADAN_RESTART_REASON };
+  if (process.env.KADAN_RESTART_EXPECT_PID !== undefined) flags = { ...flags, "expect-pid": process.env.KADAN_RESTART_EXPECT_PID };
+  // 앞뒤 하이픈 등 정규화 전후가 다른 별칭은 같은 세션을 가리켜도 거절한다 — sessionName은 앞뒤 하이픈을 지우는데
+  // 미해결 카드·원장 기록은 원래 문자열을 써서 보호가 갈라졌다(2026-10-15 검수). 세 곳이 같은 이름을 쓰게 정확한 이름만 받는다.
+  const canonical = sessionName(role).slice("kadan-".length);
+  if (canonical !== role) die(`역할 이름이 정확하지 않다('${role}'는 정규화하면 '${canonical}') — 정확한 이름으로 다시 실행한다`);
+  if (flags.reason !== undefined && (typeof flags.reason !== "string" || !flags.reason.trim())) die("--reason에는 이유 글자가 필요하다(화면에서는 필수)");
+  if (flags["expect-pid"] !== undefined && !/^\d+$/.test(String(flags["expect-pid"]))) die("--expect-pid는 pane PID 숫자다");
   const home = ledgerHome();
   const session = sessionName(role);
   const choice = requireWindowChoice();

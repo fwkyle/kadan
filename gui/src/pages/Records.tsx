@@ -354,7 +354,7 @@ function RestartCell({
     [open, setOpen] = useState(false),
     [reason, setReason] = useState(""),
     [busy, setBusy] = useState(false),
-    [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(
+    [outcome, setOutcome] = useState<{ ok: boolean; pending?: boolean; text: string } | null>(
       null,
     );
   if (!generation) return <td></td>;
@@ -373,7 +373,8 @@ function RestartCell({
         token,
       );
       setOutcome({
-        ok: true,
+        ok: !saved.result.pending,
+        pending: !!saved.result.pending,
         text: saved.result.output || "다시 띄웠습니다.",
       });
       setOpen(false);
@@ -434,7 +435,7 @@ function RestartCell({
       )}
       {outcome && (
         <small
-          className={outcome.ok ? "restart-ok" : "restart-fail"}
+          className={outcome.pending ? "restart-pending" : outcome.ok ? "restart-ok" : "restart-fail"}
           role="status"
         >
           {outcome.text}

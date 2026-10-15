@@ -125,6 +125,18 @@ test('--reason: stop·start 두 사건에 다듬은 이유를 남기고, 없으�
   assert.equal(plainStop.reason, undefined); assert.equal(plainStart.reason, undefined);
 });
 
+test('회복 잠금 디렉터리가 남아 있으면 거절하고, 사람이 지우면 다시 동작한다(자동으로 지우지 않는다)', () => {
+  const f = fixture({files: claudeFiles});
+  const lock = path.join(f.home, 'recovery', `role-${startDigest(f.session)}.lock`);
+  fs.mkdirSync(lock, {recursive: true});
+  assert.throws(() => f.run(), /복원이 진행 중/);
+  assert.deepEqual(f.log, [], '남은 잠금 앞에서 끄지 않는다');
+  assert.equal(f.entries.length, 1);
+  fs.rmdirSync(lock); // 멈춘 잠금은 사람이 확인하고 지우는 것이 기존 규칙(dir-lock.mjs 주석)
+  f.run();
+  assert.equal(f.entries.at(-1).kind, 'start');
+});
+
 test('--expect-pid: 지금 세대와 같으면 진행하고, 다르면 끄기 전에 거절한다 — 같은 요청을 두 번내면 두 번째는 거절', () => {
   const f = fixture({files: claudeFiles});
   f.run({'expect-pid': '100'});

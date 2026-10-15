@@ -92,6 +92,63 @@ test('실제 CLI: --reason·--expect-pid로 띄우면 stop·start에 이유·사
   assert.equal(readLedger().filter(e => e.session === 'kadan-gencase' && e.kind === 'stop').length, 1);
 });
 
+// 2라운드(2026-10-15, 검수 중요 1·2): 화면에서 온 값이 CLI 옵션으로 재해석되지 않고, 별칭 역할이 보호를 우회하지 않는다.
+test('실제 CLI: 환경변수로 온 이유 --force·--·줄바꿈은 이유로만 읽히고, 별칭 역할은 거절한다', {skip}, t => {
+  const s = setup(t, 'inj');
+  const created = launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-injcase', 'injcase');
+  appendLedger({kind: 'send', role: 'injcase', session: 'kadan-injcase', taskId: 'inj-1', bytes: 1, digest: 'i', by: 'test'});
+  const env = extra => ({...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: '', ...extra});
+  const stops = () => readLedger().filter(e => e.session === 'kadan-injcase' && e.kind === 'stop').length;
+  // (0) 인자 형태 '--reason --force'는 2라운드 전까지 이유 없는 강제 실행으로 읽혔다 — 거절로 고친다
+  const argvInject = spawnSync(process.execPath, [cli, 'restart', 'injcase', '--reason', '--force'], {encoding: 'utf8', env: env({})});
+  assert.notEqual(argvInject.status, 0, '빈 --reason은 거절');
+  assert.match(argvInject.stderr, /이유/);
+  assert.equal(stops(), 0);
+  // (1) 이유 '--force'는 강제가 아니라 이유다 — 끝나지 않은 카드 보호가 그대로 걸린다
+  const forced = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
+    env: env({KADAN_RESTART_REASON: '--force', KADAN_RESTART_EXPECT_PID: String(created.panePid)})});
+  assert.notEqual(forced.status, 0);
+  assert.match(forced.stderr, /끝나지 않은 카드/);
+  assert.equal(stops(), 0, '강제 재시작 0회');
+  // (2) 이유 '--'는 옵션 끝 표시가 아니다 — 세대 대조가 그대로 걸린다
+  const dashes = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
+    env: env({KADAN_RESTART_REASON: '--', KADAN_RESTART_EXPECT_PID: '999999'})});
+  assert.notEqual(dashes.status, 0);
+  assert.match(dashes.stderr, /세대와 다르다/);
+  assert.equal(stops(), 0, '세대 대조 유지');
+  // (3) 별칭 역할(앞뒤 하이픈)은 거절한다 — 같은 세션을 가리켜도 미해결 카드 보호를 우회할 수 없다
+  for (const alias of ['-injcase', 'injcase-', '--injcase']) {
+    const r = spawnSync(process.execPath, [cli, 'restart', alias], {encoding: 'utf8',
+      env: env({KADAN_RESTART_REASON: '별칭', KADAN_RESTART_EXPECT_PID: String(created.panePid)})});
+    assert.notEqual(r.status, 0, alias);
+    assert.match(r.stderr + r.stdout, /정확한 이름|사용법/, alias);
+  }
+  assert.equal(stops(), 0, '별칭으로는 끄지 않는다');
+  assert.equal(String(tmuxFloor.pid('kadan-injcase')), String(created.panePid));
+  // (4) 숫자가 아닌 세대 표시·빈 이유는 CLI가 거절한다(화면 경로 방어)
+  const badPid = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
+    env: env({KADAN_RESTART_REASON: 'r', KADAN_RESTART_EXPECT_PID: 'abc'})});
+  assert.notEqual(badPid.status, 0);
+  assert.match(badPid.stderr, /숫자/);
+  const emptyReason = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
+    env: env({KADAN_RESTART_REASON: '   ', KADAN_RESTART_EXPECT_PID: String(created.panePid)})});
+  assert.notEqual(emptyReason.status, 0);
+  assert.match(emptyReason.stderr, /이유/);
+});
+
+test('실제 CLI: 환경변수로 온 이유는 원문 그대로 원장에 남는다(줄바꿈 포함)', {skip}, t => {
+  const s = setup(t, 'verb');
+  const created = launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-verbcase', 'verbcase');
+  const reason = '--\n두 번째 줄 --expect-pid=1';
+  const ok = spawnSync(process.execPath, [cli, 'restart', 'verbcase'], {encoding: 'utf8',
+    env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: '',
+      KADAN_RESTART_REASON: reason, KADAN_RESTART_EXPECT_PID: String(created.panePid)}});
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  const start = readLedger().filter(e => e.session === 'kadan-verbcase' && e.kind === 'start').at(-1);
+  assert.equal(start.reason, reason, '이유 원문 그대로');
+  assert.equal(start.forced, undefined, 'force가 켜지지 않는다');
+});
+
 test('실제 CLI: 본체가 직접 연 저장 대화(B)는 같은 대화로 다시 띄운다', {skip}, t => {
   const s = setup(t, 'body');
   const created = launch({HOLD: `${s.lock(B)},${s.rollout(B)}`, CHILD_FILES: s.rollout(A)}, s, 'kadan-bodycase', 'bodycase');

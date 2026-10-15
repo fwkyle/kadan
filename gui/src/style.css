@@ -415,6 +415,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .restart-cell small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
 .restart-cell .restart-ok { color: #1b6e42; }
 .restart-cell .restart-fail { color: #b3261e; }
+.restart-cell .restart-pending { color: #936115; }
 .sm-ask-list { list-style: none; margin: 10px 0 6px; padding: 0; display: grid; gap: 6px; font-size: 12.5px; }
 .sm-ask-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: baseline; }
 .sm-ask-list li > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
