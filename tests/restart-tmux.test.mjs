@@ -68,6 +68,30 @@ test('실제 CLI: 본체는 A lock만, 자식이 B 저장 대화를 연 경우 �
   assert.equal(readLedger().filter(e => e.session === 'kadan-childcase' && e.kind === 'stop').length, 0);
 });
 
+test('실제 CLI: --reason·--expect-pid로 띄우면 stop·start에 이유·사람이 남고, 옛 세대 표시는 거절한다', {skip}, t => {
+  const s = setup(t, 'gen');
+  const created = launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-gencase', 'gencase');
+  const env = {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: ''};
+  const run = args => spawnSync(process.execPath, [cli, 'restart', 'gencase', ...args], {encoding: 'utf8', env});
+  const stale = run(['--reason', '옛 화면에서 누름', '--expect-pid', '999999']);
+  assert.notEqual(stale.status, 0, '세대가 다르면 거절');
+  assert.match(stale.stderr, /세대와 다르다/);
+  assert.equal(String(tmuxFloor.pid('kadan-gencase')), String(created.panePid), '거절은 기존 pane을 끄지 않는다');
+  assert.equal(readLedger().filter(e => e.session === 'kadan-gencase' && e.kind === 'stop').length, 0);
+  const ok = run(['--reason', '화면에서 다시 띄움', '--expect-pid', String(created.panePid)]);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, new RegExp(`다시 띄움: kadan-gencase .*대화 ${A}`));
+  const entries = readLedger().filter(e => e.session === 'kadan-gencase');
+  const stop = entries.find(e => e.kind === 'stop'), start = entries.findLast(e => e.kind === 'start');
+  assert.equal(stop.restart, true); assert.equal(stop.reason, '화면에서 다시 띄움'); assert.equal(stop.by, '사람');
+  assert.ok(start.restartOf); assert.equal(start.reason, '화면에서 다시 띄움'); assert.equal(start.by, '사람');
+  assert.equal(start.restartConversation, A);
+  const twice = run(['--reason', '같은 요청 다시', '--expect-pid', String(created.panePid)]);
+  assert.notEqual(twice.status, 0, '같은 요청을 두 번내면 두 번째는 거절된다');
+  assert.match(twice.stderr, /세대와 다르다/);
+  assert.equal(readLedger().filter(e => e.session === 'kadan-gencase' && e.kind === 'stop').length, 1);
+});
+
 test('실제 CLI: 본체가 직접 연 저장 대화(B)는 같은 대화로 다시 띄운다', {skip}, t => {
   const s = setup(t, 'body');
   const created = launch({HOLD: `${s.lock(B)},${s.rollout(B)}`, CHILD_FILES: s.rollout(A)}, s, 'kadan-bodycase', 'bodycase');
