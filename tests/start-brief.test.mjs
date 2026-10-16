@@ -91,7 +91,7 @@ test('격리 tmux: 새 세션 + --profile은 프로필이 붙은 첫 안내를 �
     assert.equal(added.length, 1, `${profile}: 영수증 1건`);
     assert.equal(added[0].role, role); assert.equal(added[0].roleProfile, profile);
     assert.ok(added[0].roleInstructions, `${profile}: receiver-instructions 메타데이터`);
-    const screen = w.tmux('capture-pane', '-p', '-J', '-t', `=kadan-${role}:`).stdout;
+    const screen = w.tmux('capture-pane', '-p', '-J', '-S', '-2000', '-t', `=kadan-${role}:`).stdout;
     assert.match(screen, new RegExp(needle), `${profile}: 본문/지침에 ${needle}`);
     assert.match(screen, /kadan:receiver-instructions/);
   }
