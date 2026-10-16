@@ -115,7 +115,7 @@ test('격리 tmux: 재사용 세션·--no-prompt·--cmd sh·프로필 없음은 
 test('격리 tmux: 화면이 끝내 안정되지 않으면 start는 종료 코드 0, 한 줄 안내, 세션은 살아 있다', t => {
   if (!hasTmux()) return t.skip('tmux 없음');
   const w = world(t, 't');
-  w.fake('i=0\nwhile true; do i=$((i+1)); echo "frame $i"; sleep 0.05; done');
+  w.fake('i=0\nwhile true; do i=$((i+1)); echo "frame $i"; done');
   const r = w.kadan('start', 'slow', '--hidden', '--profile', 'super', '--cmd', 'claude', '--reason', 't');
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /첫 안내 못 보냄.*\/kadan-super/);
