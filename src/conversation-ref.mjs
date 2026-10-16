@@ -2,7 +2,7 @@
 // harness·model을 cmd에서 읽는 것(cli-start-support.mjs describeStartCmd)과 같은 일반 파싱이다. 실행기 어댑터나 대화 파일 읽기는 없다.
 // 셸 인자 경계는 ai-identity.mjs commandWords가 지킨다(따옴표 안 입력은 한 낱말). 옵션 자리의 낱말만 보고,
 // 판단할 수 없는 명령(셸 연산·모르는 옵션)은 new다 — 그 경우 같은 대화를 resume한 우편이 이전 세대로 숨을 수 있다.
-import {commandWords} from './ai-identity.mjs';
+import {commandWords, normalizeAiCommand} from './ai-identity.mjs';
 
 // codex 0.155.0 `codex --help`·`codex resume --help`의 값을 받는 옵션(2026-10-13 실측). -i/--image는 값을 여러 개 받아
 // 하위 명령 낱말을 삼킬 수 있어 목록에 넣지 않는다(만나면 판단 불가 → new).
@@ -73,14 +73,42 @@ function plainResume(args, {flags, continueFlags}) {
 }
 
 export function conversationOf(cmd) {
-  const words = commandWords(typeof cmd === 'string' ? cmd.trim() : cmd);
-  if (!words?.length) return NEW;
-  let index = 0;
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) index += 1;
-  const harness = words[index]?.split('/').pop(), args = words.slice(index + 1);
+  const normalized = normalizeAiCommand(cmd);
+  if (!normalized) return NEW;
+  const {harness, args} = normalized;
   if (harness === 'claude') return claudeConversation(args);
   if (harness === 'codex') return codexConversation(args);
   if (harness === 'agy') return plainResume(args, {flags: ['--conversation'], continueFlags: ['--continue', '-c']});
   if (harness === 'devin') return plainResume(args, {flags: ['--resume', '-r'], continueFlags: ['--continue', '-c']});
   return NEW;
+}
+
+// 첫 안내(start-brief)용 확신 판정: 'new' | 'fork' | 'resume' | 'unknown'.
+// conversationOf는 판단할 수 없는 명령을 new로 돌려준다(우편 세대 계약). 안내는 그러면 안 된다 — 이미 안내받은 대화에 다시 들어간다.
+// '새 대화로 확실함'은 알려진 실행기이고, 모든 낱말이 이 표의 알려진 무해 옵션(--model·--effort·-c 설정 등과 그 값)뿐일 때다.
+// 모르는 옵션·하위 명령(resume 포함)·첫 프롬프트·`--`가 하나라도 있으면 unknown이라 보내지 않는다.
+const CERTAIN_NEW = {
+  codex: {value: CODEX_VALUE_OPTIONS, flag: CODEX_FLAG_OPTIONS},
+  claude: {value: CLAUDE_VALUE_OPTIONS, flag: new Set(['--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--verbose', '--strict-mcp-config'])},
+  agy: {value: new Set(['--model']), flag: new Set(['--dangerously-skip-permissions'])},
+  devin: {value: new Set(['--model', '--permission-mode', '--respect-workspace-trust']), flag: new Set()},
+};
+
+export function startConversationCertainty(cmd) {
+  const normalized = normalizeAiCommand(cmd);
+  const spec = normalized && CERTAIN_NEW[normalized.harness];
+  if (!spec) return 'unknown';
+  const mode = conversationOf(cmd).conversationMode;
+  if (mode === 'resume' || mode === 'fork') return mode;
+  const args = normalized.args;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (!token.startsWith('-') || token === '--') return 'unknown';
+    const long = token.startsWith('--'), eq = token.indexOf('=');
+    const name = long && eq > 0 ? token.slice(0, eq) : token;
+    if (spec.value.has(name)) { if (!(long && eq > 0)) i += 1; continue; }
+    if (spec.flag.has(name) && !(long && eq > 0)) continue;
+    return 'unknown';
+  }
+  return 'new';
 }

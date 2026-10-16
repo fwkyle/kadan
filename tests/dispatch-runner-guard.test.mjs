@@ -397,7 +397,7 @@ test('실제 CLI+격리 tmux: 살아 있는 옛 세션에 start를 다시 불러
  const started=[];
  try{
   // (1) 기본값(new-model)이 생기기 전에 옛 모델(old-model)로 띄운 작업자 세션
-  run('start','rg-old','--hidden','--profile','worker','--cmd',`${harness} --model old-model`,'--reason','시험: 옛 세션');started.push('kadan-rg-old');
+  run('start','rg-old','--hidden','--profile','worker','--cmd',`${harness} --model old-model`,'--reason','시험: 옛 세션','--no-prompt');started.push('kadan-rg-old');
   // (2) 감독이 그 세션에 start를 다시 부른다 — '시작됨'이 나오지만 새로 띄운 것이 아니다
   const again=run('start','rg-old','--hidden','--profile','worker');
   assert.match(again.stdout,/이미 살아 있음/);assert.match(again.stdout,/시작됨/);
@@ -420,7 +420,7 @@ test('실제 CLI+격리 tmux: 살아 있는 옛 세션에 start를 다시 불러
   assert.equal(allowed.status,0,allowed.stderr);
   assert.equal(sends().length,1);assert.equal(sends()[0].runnerGuard.result,'allowed');assert.equal(sends()[0].runnerGuard.reason,'시험 예외');
   // (5) 기본값 모델·실행기로 띄운 세션은 통과한다 — 명령 문자열만 달라(경로 접두) 경고 한 줄이 붙는다
-  run('start','rg-new','--hidden','--profile','worker','--cmd',`${harness} --model new-model`,'--reason','시험: 새 세션');started.push('kadan-rg-new');
+  run('start','rg-new','--hidden','--profile','worker','--cmd',`${harness} --model new-model`,'--reason','시험: 새 세션','--no-prompt');started.push('kadan-rg-new');
   assign('card-new','rg-new');
   const ok=call('send','rg-new','--task','card-new','카드 지시를 수행하라');
   assert.equal(ok.status,0,ok.stderr);assert.match(ok.stderr,/강도·실행 인자가 지금 worker 기본값과 다르다/);
