@@ -16,9 +16,16 @@ const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
 
 function setup(t, name) {
   const home = ledgerHome();
+  const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR};
   process.env.KADAN_SOCKET = `r${process.pid}${name}`;
   process.env.TMUX_TMPDIR = fs.mkdtempSync('/tmp/kr-'); // 소켓 경로가 길면 tmux가 거절한다
-  t.after(() => { tmux(['kill-server']); delete process.env.KADAN_SOCKET; delete process.env.TMUX_TMPDIR; });
+  // 원래 값으로 되돌린다: 지우면 뒤 시험과 자식이 운영 기본 소켓(kadan)으로 돌아간다(2026-10-16 누수).
+  t.after(() => {
+    tmux(['kill-server']);
+    for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
   const dir = path.join(home, name);
   fs.mkdirSync(path.join(dir, 'codex-home/sessions/2026/10/14'), {recursive: true});
   fs.mkdirSync(path.join(dir, 'codex-home/thread-writer-locks'), {recursive: true});

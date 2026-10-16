@@ -24,9 +24,11 @@ else if (code) {
   process.exitCode = 1;
 } else console.log(JSON.stringify({ok:true,result:{terminal:{id,pid:123,state:'running'}}}));
 `, {mode: 0o700});
-  const before = {KADAN_HOME: process.env.KADAN_HOME, KADAN_ROTTIE_BIN: process.env.KADAN_ROTTIE_BIN};
+  const before = {KADAN_HOME: process.env.KADAN_HOME, KADAN_ROTTIE_BIN: process.env.KADAN_ROTTIE_BIN,
+    KADAN_ALLOW_FAKE_ROTTIE: process.env.KADAN_ALLOW_FAKE_ROTTIE};
   process.env.KADAN_HOME = home;
   process.env.KADAN_ROTTIE_BIN = bin;
+  process.env.KADAN_ALLOW_FAKE_ROTTIE = '1'; // 가짜 로티 실행 파일: 로티 길목 검사만 푼다(tmux 검사는 그대로)
   t.after(() => {
     for (const [key, value] of Object.entries(before)) {
       if (value === undefined) delete process.env[key];

@@ -19,7 +19,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "test": "node tests/run.mjs",
     "dev:gui": "npm --prefix gui run dev --",
     "build:gui": "npm --prefix gui run build",
     "test:gui": "npm --prefix gui test",

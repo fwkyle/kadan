@@ -12,7 +12,7 @@ const input={question:'서비스를 제품과 분리할까요?',options:['분리
 function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-'));const cards=new CardStore(home);cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});const sent=[];const notify=(...x)=>sent.push(x);const store=new DecisionStore(home,{notify});return{home,cards,store,sent,notify};}
 test('09-07 슈퍼의 명시 결정만 생성, 질문 단위로 답변, 같은 답변은 중복 통지 없음',()=>{
  const f=fixture();assert.throws(()=>f.store.request('repo/card-a',input,'작업자'),/슈퍼감독/);
- assert.throws(()=>f.store.request('repo/card-a',{...input,recommendation:'아무거나'},'슈퍼감독'),/추천/);
+ assert.throws(()=>f.store.request('repo/card-a',{...input,recommendation:'아무거나'},'시험-슈퍼감독'),/추천/);
  const a=f.store.request('repo/card-a',input,'p-슈퍼감독');assert.equal(f.store.request('repo/card-a',input,'p-슈퍼감독').id,a.id);
  const b=f.store.request('repo/card-a',{...input,question:'별칭을 연결할까요?'},'p-슈퍼감독');
  assert.throws(()=>f.store.answer(a.id,{revision:1,text:'분리'},'p-감독'),/사람/);
@@ -23,14 +23,14 @@ test('09-07 슈퍼의 명시 결정만 생성, 질문 단위로 답변, 같은 �
  assert.equal(f.cards.get('repo/card-a').status,'draft');
 });
 test('09-07 통지 실패에도 답변 보존, 손상 이력은 성공처럼 읽지 않는다',()=>{
- const f=fixture();const a=f.store.request('repo/card-a',input,'슈퍼감독');const failing=new DecisionStore(f.home,{notify:()=>{throw Error('gone')}});
+ const f=fixture();const a=f.store.request('repo/card-a',input,'시험-슈퍼감독');const failing=new DecisionStore(f.home,{notify:()=>{throw Error('gone')}});
  assert.equal(failing.answer(a.id,{revision:1,text:'분리'},'사람').delivery.status,'failed');
  assert.equal(failing.get(a.id).status,'answered');
- fs.appendFileSync(path.join(f.home,'decisions/events.jsonl'),'bad\n');assert.throws(()=>failing.list());assert.throws(()=>failing.request('repo/card-a',input,'슈퍼감독'));
+ fs.appendFileSync(path.join(f.home,'decisions/events.jsonl'),'bad\n');assert.throws(()=>failing.list());assert.throws(()=>failing.request('repo/card-a',input,'시험-슈퍼감독'));
 });
 test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 CLI 공통 경로를 사용한다',async()=>{
  const f=fixture();f.cards.update('repo/card-a',{}, {revision:1,by:'작업자',noteKind:'question',note:'내부 오류 보고'});
- const a=decisionCommand(['request','repo/card-a'],{question:input.question,option:input.options,recommend:input.recommendation,reason:input.reason},{home:f.home,by:'슈퍼감독',notify:f.notify});
+ const a=decisionCommand(['request','repo/card-a'],{question:input.question,option:input.options,recommend:input.recommendation,reason:input.reason},{home:f.home,by:'시험-슈퍼감독',notify:f.notify});
  const server=createWallServer(()=>({center:null,entries:[],tree:[],ledgerLines:0,collectedAt:new Date()}),{home:f.home,notify:f.notify});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
  try{
   const html=await(await fetch(base)).text();assert.match(html,/내 결정 필요 1건/);assert.ok(!html.includes('답변을 기다리는 카드'));assert.ok(!html.includes('href="?legacy=1"'));
@@ -226,7 +226,7 @@ test('09-26 결정 선택지의 숨긴 선택 단추는 선택지 칸 안에 묶
 
 test('09-26 결정은 기본으로 오래된 요청부터 보이고, 정렬 단추로 최신 순과 바꾸며 그 선택을 기억한다', async () => {
   const {renderDecisions, decisionScript} = await import('../src/decision-wall.mjs');
-  const d = (id, at) => ({id, at, status:'open', revision:1, card:'repo/c-'+id, requestedBy:'슈퍼감독', question:'질문 '+id, options:['예','아니오'], recommendation:'예', reason:'이유'});
+  const d = (id, at) => ({id, at, status:'open', revision:1, card:'repo/c-'+id, requestedBy:'시험-슈퍼감독', question:'질문 '+id, options:['예','아니오'], recommendation:'예', reason:'이유'});
   const html = renderDecisions([d('b','2026-09-25T00:00:00Z'), d('a','2026-09-24T00:00:00Z'), d('c','2026-09-26T00:00:00Z')], null, 't');
   assert.deepEqual([...html.matchAll(/id="decision-([a-z])" data-at="(\d+)"/g)].map(m => m[1]), ['a','b','c']);
   assert.match(html, /<button type="button" class="dc-sort" data-decision-sort aria-pressed="false"[^>]*>정렬: 오래된 순<\/button>/);

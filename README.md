@@ -142,7 +142,7 @@ herdr를 시험할 때는 [실행 방법과 미검증 범위](docs/experiments/h
 ## 테스트
 
 ```bash
-npm test               # 본체 테스트 (node --test tests/*.test.mjs)
+npm test               # 본체 테스트 (격리 환경을 만들어 node --test를 돌린다: tests/run.mjs)
 npm run test:gui       # 대시보드 요청·취소·시간 제한 계약
 npm run build:gui      # 대시보드 타입 검사 + 빌드
 npm run check:public   # 개인 경로나 작업 기록이 레포에 섞이지 않았는지 검사
