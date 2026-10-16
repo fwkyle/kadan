@@ -9,7 +9,7 @@ const pidOf = e => e.panePid ?? e.rottiePid;
 export const conversationModeOf = e => e.conversationMode ?? conversationOf(e.cmd).conversationMode;
 
 export function createMailGenerations() {
-  const live = new Map(), seen = new Set(), bounds = new Map(), boundTimes = new Map();
+  const live = new Map(), seen = new Set(), bounds = new Map(), boundTimes = new Map(), resumes = new Map();
   const apply = (e, index) => {
     if (e?.kind === 'stop') { live.delete(e.session); return; }
     if (e?.kind !== 'start') return;
@@ -22,6 +22,10 @@ export function createMailGenerations() {
     // 그 앞 세대의 경계는 그대로라 두 세대 이전 우편은 끊긴 채 남는다. new·fork는 새 대화라 경계다.
     const continues = sameProcess || e.inheritMail === true || e.restoredFrom || e.secretaryResumeSource || e.restartOf
       || conversationModeOf(e) === 'resume';
+    // 이어 연 start(압축된 대화를 다시 연 경우): 세대 경계는 아니지만 지침 전문을 새로 보내야 할 자리다.
+    // sameProcess(살아 있는 세션 재사용)는 새 프로세스도 대화 재로드도 없으므로 뺀다.
+    if (!sameProcess && (e.inheritMail === true || e.restoredFrom || e.secretaryResumeSource || e.restartOf
+      || conversationModeOf(e) === 'resume')) resumes.set(role, [...(resumes.get(role) ?? []), index]);
     if (!continues && seen.has(role)) {
       bounds.set(role, [...(bounds.get(role) ?? []), index]);
       boundTimes.set(role, [...(boundTimes.get(role) ?? []), Date.parse(e.t)]);
@@ -36,7 +40,7 @@ export function createMailGenerations() {
     const ms = typeof at === 'number' ? at : Date.parse(at);
     return Number.isFinite(ms) && (boundTimes.get(role) ?? []).some(bound => bound > ms);
   };
-  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role), generationOf: role => (bounds.get(role) ?? []).length};
+  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role), resumedAfter: (role, at) => (resumes.get(role) ?? []).some(index => index > at), generationOf: role => (bounds.get(role) ?? []).length};
 }
 
 // 이전 세대 미확인: 읽음 미확인이면서 기록용 알림이 아니고 새 세대가 시작되기 전의 편지.

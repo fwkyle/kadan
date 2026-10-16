@@ -141,6 +141,7 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 | 시험 프로필(conductor)이 아님 | `profile-not-in-trial` |
 | 업무·카드 사실을 못 읽음, 판 판별 근거가 없거나 어긋남 | `facts-unavailable` |
 | 레포 kadan 판이 아님(예: 다른 레포 감독) | `board-not-in-trial` |
+| 이 세대 마지막 전문 시도 뒤에 이어 연 start가 있음(아래 목록) | `resumed-generation` |
 | 현재 발령(`--task`) | `dispatch` |
 | 이 세대에 전문이 없음(첫 안내·새 대화 첫 우편 포함) | `generation-first` |
 | 이 세대 마지막 전문이 `keyDelivery !== 'sent'` | `delivery-unclear` |
@@ -148,6 +149,7 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 | 마지막 전달 성공 전문 뒤 1시간 이상 경과(정확히 60분 포함) | `interval` |
 | 위에 해당 없음 | 요약(`within-interval`) |
 
+- 이어 연 start는 세대 경계가 아니라서(우편 세대 그대로) 압축된 대화가 규칙을 잊었을 수 있는 자리만 따로 센다. 센다: `restartOf`, `conversationMode==='resume'`, `--inherit-mail`(`inheritMail`), `restoredFrom`, `secretaryResumeSource`. 안 센다: `sameProcess`(같은 pane PID로 다시 기록된 살아 있는 세션 재사용, 새 프로세스도 대화 재로드도 없음). new·fork는 이미 새 세대라 `generation-first`다. 전문이 한 번 시도되면(`sent`면 풀리고, 실패면 `delivery-unclear`) `resumed-generation`은 끝난다. 이유 우선순위는 resumed-generation → dispatch → generation-first → 나머지 순이며 어느 쪽이든 전문이다.
 - 판 판별은 이름(`boardFromRole`)과 레포(연결 업무·카드의 `repo`, 없으면 start 사건 cwd의 `~/Dev/<레포>`)가 둘 다 kadan일 때만 인정한다. 둘이 어긋나거나 근거가 없으면 `facts-unavailable`이다.
 - '전달 성공'은 `keyDelivery === 'sent'`만이다. 세대는 `mail-generation.mjs`의 start 경계를 그대로 쓴다. raw 전송은 `instructions`가 없어 건너뛴다.
 - 실제 바닥은 전송 실패를 영수증이 아니라 예외로 던진다. 전문 시도가 던져지면(`not-sent`·`unknown`) 원장에 별도 kind `send-failed`(시스템 영역, `mailId` 없음, `keyDelivery`·`instructions`만)를 남기고 원래 오류를 다시 던진다. `send`가 아니라서 발령·우편함·감시 재안내·디코 중복 방지(`findMailBySourceKeyAny`)가 전달로 보지 않는다. 그 세대의 마지막 전문 시도가 `sent`가 아니면 다음 우편은 `delivery-unclear`이고, 전문이 한 번 `sent`로 가면 풀린다. raw·요약 시도의 실패는 남기지 않으며 기록 실패가 원래 오류를 가리지 않는다. 자동 재전송은 없다.

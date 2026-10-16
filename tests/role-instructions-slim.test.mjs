@@ -8,6 +8,7 @@ import {composeRoleInstructions,FULL_INTERVAL_MS} from '../src/role-instructions
 import {guardedSend} from '../src/cli.mjs';
 import {readLedger,readMailLedger,readTaskLedger,findMailBySourceKeyAny} from '../src/ledger.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
+import {createMailGenerations} from '../src/mail-generation.mjs';
 
 const KADAN_ROLE_NAME = 'kadan-시험판-감독', OTHER_ROLE_NAME = '타레포-시험-감독';
 const NOW = Date.parse('2026-10-16T12:00:00Z');
@@ -229,6 +230,61 @@ test('20 60분 경계: -1ms 요약 / 정확히 60분 전문 / +1ms 전문', () =
     const sent = fullSend(KADAN_ROLE_NAME, s.f, {t: iso(NOW - FULL_INTERVAL_MS - delta)});
     assert.equal(compose(KADAN_ROLE_NAME, {home: s.h, entries: [start(KADAN_ROLE_NAME), sent]}).metadata.instructionsMode, expected, `delta ${delta}`);
   }
+});
+
+// 이어 연 start 종류별 시험(전문 sent 뒤 이어 열기). sameProcess는 pid를 같게 둔 재기록이다.
+const RESUME_KINDS = {restartOf: {restartOf: 'x', panePid: '200'}, resume: {conversationMode: 'resume', panePid: '200'},
+  inheritMail: {inheritMail: true, panePid: '200'}, restoredFrom: {restoredFrom: 'x', panePid: '200'}, secretaryResumeSource: {secretaryResumeSource: 'x', panePid: '200'}};
+const generationOfRole = (entries, role) => { const g = createMailGenerations(); entries.forEach((e, i) => g.apply(e, i)); return g.generationOf(role); };
+
+test('21 이어 연 start 다섯 종류 → 다음 일반 우편 full/resumed-generation, 세대 수 불변', () => {
+  for (const [name, extra] of Object.entries(RESUME_KINDS)) {
+    const s = setup(), entries = [...s.entries, start(KADAN_ROLE_NAME, NOW - 300_000, extra)];
+    assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries})), ['full', 'resumed-generation'], name);
+    assert.equal(generationOfRole(entries, KADAN_ROLE_NAME), generationOfRole(s.entries, KADAN_ROLE_NAME), name);
+  }
+});
+
+test('22 이어 열고 전문이 sent로 간 뒤 → summary/within-interval', () => {
+  for (const [name, extra] of Object.entries(RESUME_KINDS)) {
+    const s = setup(), entries = [...s.entries, start(KADAN_ROLE_NAME, NOW - 300_000, extra), fullSend(KADAN_ROLE_NAME, s.f, {t: iso(NOW - 60_000)})];
+    assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries})), ['summary', 'within-interval'], name);
+  }
+});
+
+test('23 sameProcess 재사용 start → 요약 그대로, 세대 불변', () => {
+  const s = setup(), entries = [...s.entries, start(KADAN_ROLE_NAME, NOW - 300_000)];
+  assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries})), ['summary', 'within-interval']);
+  assert.equal(generationOfRole(entries, KADAN_ROLE_NAME), 0);
+  // sameProcess이면 이어 연 필드가 함께 있어도 세지 않는다
+  const both = [...s.entries, start(KADAN_ROLE_NAME, NOW - 300_000, {restartOf: 'x'})];
+  assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries: both})), ['summary', 'within-interval']);
+});
+
+test('24 new·fork start → generation-first(resumed-generation 아님)', () => {
+  for (const mode of ['new', 'fork']) {
+    const s = setup(), entries = [...s.entries, start(KADAN_ROLE_NAME, NOW - 300_000, {panePid: '200', conversationMode: mode})];
+    const r = compose(KADAN_ROLE_NAME, {home: s.h, entries});
+    assert.deepEqual(meta(r), ['full', 'generation-first'], mode);
+    assert.equal(r.metadata.generation, 1);
+  }
+});
+
+test('25 restart(첫 안내 없음) → 다음 일반 우편 full/resumed-generation, 전문 실패면 delivery-unclear', () => {
+  const t = throwingFixture();
+  assert.equal(t.send().instructions.mode, 'full');
+  assert.equal(t.send().instructions.mode, 'summary');
+  appendLedger(start(t.role, Date.now(), {restartOf: 'x', panePid: '200', cwd: '/x/Dev/kadan'}), t.h);
+  const floorPid = {name: 'fake', alive: () => true, pid: () => '200', send: () => ({keyDelivery: 'sent', inputAcceptance: 'accepted'})};
+  const sendAfter = (extra = {}) => guardedSend({floor: floorPid, session: `kadan-${t.role}`, role: t.role, message: '본문', roleProfile: 'conductor', recordedPid: '200',
+    env: {KADAN_HOME: t.h}, readEntries: () => readLedger(t.h), record: e => appendLedger(e, t.h), saveBody: () => {}, ...extra});
+  const failing = {...floorPid, send: () => { const e = new Error('바닥 전달 실패'); e.delivery = 'unknown'; throw e; }};
+  assert.throws(() => sendAfter({floor: failing}), e => e.delivery === 'unknown');
+  const failed = readLedger(t.h).filter(e => e.kind === 'send-failed').at(-1);
+  assert.equal(failed.instructions.reason, 'resumed-generation');
+  const next = sendAfter();
+  assert.deepEqual([next.instructions.mode, next.instructions.reason], ['full', 'delivery-unclear']);
+  assert.equal(sendAfter().instructions.mode, 'summary');
 });
 
 import {CardStore} from '../src/card-store.mjs';

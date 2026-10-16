@@ -218,9 +218,11 @@ function decideInstructionsMode({role,profile,templateDigest,entries,current,una
   const board=trialBoard(role,repos);
   if (board==='unknown') return full('facts-unavailable');
   if (board==='other') return full('board-not-in-trial');
+  const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>(e.kind==='send'||e.kind==='send-failed')&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i));
+  const lastAt=fulls.at(-1),last=lastAt?.e;
+  // 이어 연 start(restart·resume·inherit 등)가 마지막 전문 시도보다 늦으면 압축 뒤 규칙 기억을 모르므로 전문을 다시 보낸다.
+  if (last&&gens.resumedAfter(role,lastAt.i)) return full('resumed-generation');
   if (current) return full('dispatch');
-  const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>(e.kind==='send'||e.kind==='send-failed')&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i)).map(({e})=>e);
-  const last=fulls.at(-1);
   if (!last) return full('generation-first');
   if (last.keyDelivery!=='sent') return full('delivery-unclear');
   if (last.instructions.profile!==profile) return full('profile-changed');
