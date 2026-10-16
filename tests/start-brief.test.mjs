@@ -149,6 +149,11 @@ test('격리 tmux: 화면이 끝내 안정되지 않으면 start는 종료 코�
   if (!hasTmux()) return t.skip('tmux 없음');
   const w = world(t, 't');
   w.fake('i=0\nwhile true; do i=$((i+1)); echo "frame $i"; done');
+  // 화면이 바뀌는 속도는 기계 부하에 달려 있다(굶은 프로세스는 같은 화면을 두 번 그려 '안정'으로 읽힌다).
+  // 읽을 때마다 읽은 횟수가 화면에 찍히게 tmux 앞에 얇은 래퍼를 두어, 화면이 끝내 안정되지 않는 조건을 부하와 무관하게 만든다.
+  const realTmux = spawnSync('sh', ['-c', 'command -v tmux'], {encoding: 'utf8'}).stdout.trim();
+  const counter = path.join(w.root, 'reads');
+  fs.writeFileSync(path.join(w.bin, 'tmux'), `#!/bin/sh\ncase " $* " in *" capture-pane "*) echo x >> '${counter}'; '${realTmux}' "$@"; s=$?; wc -l < '${counter}'; exit $s;; esac\nexec '${realTmux}' "$@"\n`, {mode: 0o755});
   const r = w.kadan('start', 'slow', '--hidden', '--profile', 'super', '--cmd', 'claude', '--reason', 't');
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /첫 안내 못 보냄.*\/kadan-super/);
@@ -188,8 +193,9 @@ test('격리 tmux: 화면을 기다리는 동안 세션이 다른 세대로 바�
   let stdout = '', stderr = '';
   child.stdout.on('data', d => { stdout += d; }); child.stderr.on('data', d => { stderr += d; });
   const done = new Promise(res => child.on('close', res));
-  for (let i = 0; i < 60 && !stdout.includes('시작됨'); i++) await new Promise(r => setTimeout(r, 50));
-  assert.match(stdout, /시작됨/);
+  // 부하가 큰 기계에서는 자식이 세션을 만들기까지 3초를 넘길 수 있다 → 시계가 아니라 '시작됨' 출력을 기다리고, 상한은 넉넉히 둔다.
+  for (let i = 0; i < 600 && !stdout.includes('시작됨'); i++) await new Promise(r => setTimeout(r, 50));
+  assert.match(stdout, /시작됨/, `30초 안에 start가 시작됨을 출력하지 않음\nstdout: ${stdout}\nstderr: ${stderr}`);
   // 화면 대기 중에 세션을 닫고 같은 이름으로 새 세대를 띄운다(새 세대는 안내 없이).
   assert.equal(w.tmux('kill-session', '-t', '=kadan-swap').status, 0);
   const second = w.kadan('start', 'swap', '--hidden', '--profile', 'worker', '--cmd', 'claude', '--reason', 't', '--no-prompt');
