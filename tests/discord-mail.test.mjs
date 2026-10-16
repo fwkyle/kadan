@@ -249,7 +249,17 @@ test('9 일반 우편은 여전히 5분 유예, 본문에 보낸이를 흉내 �
   assert.equal(tick([fake], 1000 + 299_000).length, 0, '흉내 낸 일반 우편은 5분 전에 안 나간다');
   assert.equal(tick([fake], 1000 + 300_000).length, 1, '5분 뒤에는 나간다');
   assert.equal(tick([mail('d', DISCORD_BY)], 1000).length, 1, '보낸이 디코는 즉시');
-  assert.equal(tick([mail('other', '디코', '')].map(m => ({...m, role: '작업자'})), 1000).length, 0, '받는 역할이 비서가 아니면 해당 없음');
+  // 유예 0은 보낸이(디코) 기준이다: 레포 슈퍼에게 간 디코 우편도 즉시, 보낸이만 다르면 받는이가 슈퍼여도 5분 유예
+  const superStart = {kind: 'start', role: 'zeta-슈퍼감독', session: 'kadan-zeta-슈퍼감독', panePid: 8, t: new Date(0).toISOString()};
+  const toSuper = by => ({...mail('s-' + by, by), role: 'zeta-슈퍼감독'});
+  const tickSuper = (letters, now) => {
+    const entries = [superStart, ...letters], sent = [], liveSuper = [{session: 'kadan-zeta-슈퍼감독', alive: true, pid: 8}];
+    new MailWatch({record: e => entries.push(e), send: (...a) => sent.push(a)})
+      .tick({entries: [...entries], cards: [], works: [], now, floor: {list: () => liveSuper}, readEntries: () => [...entries], readCards: () => [], readWorks: () => []});
+    return sent;
+  };
+  assert.equal(tickSuper([toSuper(DISCORD_BY)], 1000).length, 1, '슈퍼 앞 디코 우편도 즉시');
+  assert.equal(tickSuper([toSuper('작업자')], 1000).length, 0, '보낸이가 디코가 아니면 슈퍼 앞이어도 5분 유예');
 });
 
 test('10 격리 tmux: kadan-디코에 stdout 받기가 살아 있으면 up이 재사용 성공이라 하지 않고 막힘 이유를 알리며, 끄거나 바꾸지 않는다', async (t) => {

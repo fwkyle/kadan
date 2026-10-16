@@ -84,6 +84,15 @@ export function findMailBySourceKey(home,role,sourceKey) {
     return row ? JSON.parse(row.payload) : null;
   });
 }
+// 받는 역할과 상관없이 같은 sourceKey의 우편을 찾는다. 디코 우편은 받는이가 우편마다 달라질 수 있어(비서 또는 레포 슈퍼) 중복 확인에 쓴다.
+export function findMailBySourceKeyAny(home,sourceKey) {
+  if (storageMode(home) !== 'sqlite') return readMailboxLedger(home).find(e => e.kind === 'send' && e.sourceKey === sourceKey) ?? null;
+  const needle = `"sourceKey":${JSON.stringify(sourceKey)}`;
+  return storageSnapshot(home,db => {
+    const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream IN ('ledger.jsonl','mail/events.jsonl') AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='send' ORDER BY rowid DESC LIMIT 1").get(needle);
+    return row ? JSON.parse(row.payload) : null;
+  });
+}
 export function readSystemLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home),'system');
 }
