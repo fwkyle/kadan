@@ -18,6 +18,13 @@ test('기본 아닌 홈 + 기본 소켓 → 거절', () => {
   assert.throws(() => assertNotLiveFloor({KADAN_HOME: other}, liveHome), /KADAN_LIVE_FLOOR_DENIED.*KADAN_SOCKET/);
 });
 
+test('KADAN_SOCKET 없음·빈 값·undefined로 덮어도 기본 아닌 홈이면 거절', () => {
+  for (const env of [{KADAN_HOME: other}, {KADAN_HOME: other, KADAN_SOCKET: ''}, {KADAN_HOME: other, KADAN_SOCKET: undefined},
+    {KADAN_HOME: other, KADAN_LITE_SOCKET: 'kadan'}]) {
+    assert.throws(() => assertNotLiveFloor(env, liveHome), /KADAN_LIVE_FLOOR_DENIED/, JSON.stringify(env));
+  }
+});
+
 test('기본 홈(링크 포함) + 기본 소켓 → 통과', () => {
   assert.equal(liveFloorReason({KADAN_HOME: liveHome}, liveHome), null);
   assert.equal(liveFloorReason({KADAN_HOME: linkHome}, liveHome), null);
