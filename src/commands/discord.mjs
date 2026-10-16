@@ -6,6 +6,7 @@ import {ledgerHome} from '../ledger.mjs';
 import {die} from '../cli-basics.mjs';
 import {createMailOut} from '../discord-mail.mjs';
 import {SECRETARY} from '../mailbox.mjs';
+import {writeBridgeExit} from '../discord-bridge-exit.mjs';
 import {createChat, runWatch, sendText, editThread, checkChat, DEFAULT_INTERVAL_S} from '../discord-chat.mjs';
 
 const USAGE = 'usage: kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트…|--stdin] [--reply-to 메시지ID|--thread 스레드ID] [--edit 메시지ID] [--thread-name 이름] [--quiet] | thread <스레드ID> [--rename 이름] [--archive] | check';
@@ -48,6 +49,7 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
     }
     if (action === 'check' && !rest.length) return (await checkChat(chat)).forEach(l => out(l));
   } catch (error) {
+    if (action === 'watch') writeBridgeExit(home, error, [chat.cfg.token, ...chat.cfg.secrets]); // 감시 경보가 꺼진 이유로 붙인다
     if (error.sent?.length) err(`일부만 올라갔다: ${error.sent.length}개 올라간 뒤 멈춤 — ${JSON.stringify(error.sent.map(s => s.id))}`);
     const e = new Error(error.message); e.exitCode = error.kind === 'http' && error.status >= 400 && error.status < 500 ? 3 : 1;
     throw e;

@@ -62,6 +62,19 @@ function panePid(session) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
+// remain-on-exit로 프로세스는 죽었는데 세션이 남은 창이면 true. 세션이 없거나 조회 실패면 null.
+export function paneDead(session) {
+  const result = tmux(["display-message", "-p", "-t", `=${session}:`, "#{pane_dead}"]);
+  const text = result.status === 0 ? result.stdout.trim() : "";
+  return text === "1" ? true : text === "0" ? false : null;
+}
+
+// 죽은 창의 마지막 화면(스크롤 기록 포함 뒤쪽 lines줄).
+export function captureTail(session, lines = 200) {
+  const result = tmux(["capture-pane", "-p", "-S", `-${lines}`, "-t", `=${session}:`]);
+  return result.status === 0 ? result.stdout : "";
+}
+
 export function capturePane(session) {
   const result = tmux(["capture-pane", "-p", "-t", `=${session}:`]);
   return result.status === 0 ? result.stdout : "";

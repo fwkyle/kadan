@@ -1,11 +1,14 @@
-// 로그인할 때 비서·대시보드 켜기(2026-10-06 [kyle]): macOS LaunchAgent가 로그인 때 `kadan up --hidden`을 한 번 실행한다.
-// 죽었다고 되살리지 않는다(KeepAlive 없음) — "watch는 프로세스를 자동 재시작하지 않는다"는 잠긴 규칙과 같은 선이다.
-// 비서가 죽으면 관계표(비서 → @user)에 따라 감시기가 사용자에게 알리고, 대시보드의 '켜기'로 다시 켠다.
+// 로그인할 때 비서·대시보드 켜기(2026-10-06 [kyle]), 그리고 기반 프로세스 되살리기(2026-10-16 [kyle] 결정 f66a5b60):
+// macOS LaunchAgent가 로그인 때 한 번, 그 뒤 60초마다 `kadan up --hidden --auto`를 실행한다.
+// 대상은 기반 프로세스 4개(비서·대시보드·디코 다리·감시기)뿐이다. 살아 있는 것은 그대로 두고(KeepAlive 없음), 죽은 것만 다시 띄운다.
+// 작업자·검수자·감독 같은 AI 역할은 되살리지 않는다 — "감시기는 AI 역할을 자동 재시작하지 않는다"는 잠긴 규칙 3의 선은 그대로다.
+// 사람이 kadan stop으로 끈 대상과 1시간에 3번 넘게 꺼진 대상은 건너뛴다(src/revive.mjs). 사람이 친 kadan up이 그 멈춤을 푼다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 export const AUTOSTART_LABEL = 'dev.kadan.up';
+export const START_INTERVAL_S = 60;
 // 로그인 직후 launchd에는 PATH가 거의 없다. node·tmux·실행기(claude·codex)를 찾을 수 있게 설치 때의 값을 적어 둔다.
 const CARRIED_ENV = ['PATH', 'KADAN_HOME', 'KADAN_WINDOW', 'KADAN_FLOOR', 'KADAN_ROTTIE_BIN', 'KADAN_SOCKET'];
 
@@ -20,7 +23,7 @@ export function autostartPlist({ node, cli, cwd, env: given, logPath }) {
   // "로티를 쓸 수 없을 때만 KADAN_WINDOW=none --hidden"을 허용한다. 로그인 시작이 바로 그 경우다.
   const env = { ...given, KADAN_WINDOW: 'none' };
   const vars = CARRIED_ENV.filter((k) => typeof env[k] === 'string' && env[k]).map((k) => `\t\t<key>${k}</key>\n\t\t<string>${xml(env[k])}</string>`);
-  const args = [node, cli, 'up', '--hidden'].map((a) => `\t\t<string>${xml(a)}</string>`);
+  const args = [node, cli, 'up', '--hidden', '--auto'].map((a) => `\t\t<string>${xml(a)}</string>`);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -39,6 +42,8 @@ ${vars.join('\n')}
 \t</dict>
 \t<key>RunAtLoad</key>
 \t<true/>
+\t<key>StartInterval</key>
+\t<integer>${START_INTERVAL_S}</integer>
 \t<key>StandardOutPath</key>
 \t<string>${xml(logPath)}</string>
 \t<key>StandardErrorPath</key>
@@ -62,7 +67,7 @@ export function autostartCommand(action, { home, cli, node = process.execPath, c
     }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content);
-    return { file, installed: true, changed: true, note: '다음 로그인부터 비서·대시보드가 숨김으로 켜진다' };
+    return { file, installed: true, changed: true, note: '다음 로그인부터 비서·대시보드가 숨김으로 켜지고, 60초마다 꺼진 기반 프로세스 4개를 다시 띄운다(launchctl 재적재 전에는 새 주기가 적용되지 않는다)' };
   }
   if (action === 'remove') {
     if (!exists) return { file, installed: false, changed: false };

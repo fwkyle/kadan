@@ -11,12 +11,13 @@ const base = () => {
   return { home: path.join(root, 'kadan'), userHome: root, cli: '/repo/src/cli.mjs', node: '/node/bin/node', cwd: '/work', env };
 };
 
-test('로그인 때 kadan up --hidden을 한 번만 — 되살리기 없음, 필요한 환경만 옮김', () => {
+test('로그인 때와 60초마다 kadan up --hidden --auto — KeepAlive 없음, 필요한 환경만 옮김', () => {
   const plist = autostartPlist({ node: '/node/bin/node', cli: '/repo/src/cli.mjs', cwd: '/work', env, logPath: '/k/autostart.log' });
   assert.match(plist, new RegExp(`<string>${AUTOSTART_LABEL}</string>`));
-  assert.match(plist, /<string>\/node\/bin\/node<\/string>\s*<string>\/repo\/src\/cli\.mjs<\/string>\s*<string>up<\/string>\s*<string>--hidden<\/string>/);
+  assert.match(plist, /<string>\/node\/bin\/node<\/string>\s*<string>\/repo\/src\/cli\.mjs<\/string>\s*<string>up<\/string>\s*<string>--hidden<\/string>\s*<string>--auto<\/string>/);
+  assert.match(plist, /<key>StartInterval<\/key>\s*<integer>60<\/integer>/, '1분마다 up --auto');
   assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/);
-  assert.doesNotMatch(plist, /KeepAlive/, '죽었다고 되살리지 않는다(잠긴 규칙)');
+  assert.doesNotMatch(plist, /KeepAlive/, 'KeepAlive 대신 주기 up이 죽은 기반 프로세스만 되살린다');
   assert.match(plist, /<key>PATH<\/key>\s*<string>\/opt\/bin:\/usr\/bin<\/string>/);
   assert.match(plist, /<key>KADAN_WINDOW<\/key>\s*<string>none<\/string>/, '로그인 때는 로티가 없으니 창 없이 숨김(로티 설정이어도)');
   assert.match(plist, /<key>KADAN_ROTTIE_BIN<\/key>\s*<string>\/apps\/r&amp;d\/rottie<\/string>/, 'XML 특수문자를 바꾼다');

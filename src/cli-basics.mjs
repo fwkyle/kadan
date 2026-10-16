@@ -103,7 +103,7 @@ export function parseFlags(argv, {booleans = []} = {}) {
       arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" ||
       arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card" || arg === "--inherit-mail" || arg === "--previous-generations" ||
       arg === "--once" || arg === "--stdin" || arg === "--archive" ||
-      arg === "--from-screen" || arg === "--next-block" || arg === "--no-prompt" ||
+      arg === "--from-screen" || arg === "--next-block" || arg === "--no-prompt" || arg === "--auto" ||
       arg === "--apply" || arg === "--manual" || arg === "--force" ||
       booleans.some(name => arg === `--${name}`)
     ) {

@@ -6,6 +6,7 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
+import { markStopped } from "../revive.mjs";
 import {
   pendingCardsFor,
   buildStopLedgerEntry,
@@ -30,6 +31,8 @@ export function cmdStop(argv) {
   }
   const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(), session), {print:console.error}) : {};
   appendLedger({ ...buildStopLedgerEntry({ role, session }), ...windowFields });
+  // 기반 프로세스 4개를 사람이 끈 것이면 `kadan up --auto`가 되살리지 않게 표시한다(restart의 stop은 이 길이 아니다).
+  try { markStopped(ledgerHome(), role); } catch (error) { console.error(`자동 되살리기 멈춤 표시 실패: ${error.message}`); }
   if (windowFields.rottieWindowClosed === false || windowFields.rottieWindowRemoved === false) {
     console.error(`세션은 종료됨: ${session} · 로티 탭 정리 미완료: ${windowFields.rottieTerminalId} — ${windowFields.rottieWindowError ?? windowFields.rottieRemoveError}`);
     process.exitCode = 1;

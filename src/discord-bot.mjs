@@ -15,7 +15,7 @@ const USER_AGENT = 'DiscordBot (https://github.com/fwkyle/kadan, 0.1.0)';
 const ATTEMPT_MS = 10000;
 const MAX_ATTEMPTS = 3;
 const MAX_RATE_WAIT_MS = 30000;
-const CONNECT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
+export const CONNECT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
 
 export class DiscordError extends Error {
   constructor(message, {kind, status = null, code = null, exhausted = false} = {}) {

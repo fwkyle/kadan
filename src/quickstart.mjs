@@ -102,8 +102,9 @@ export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs =
 }
 function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
+// skip: 건너뛸 대상 역할 이름 집합(`kadan up --auto`가 멈춤 상태·상한에 걸린 대상을 뺀다). 사람이 친 up은 비워 둔다.
 export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath = process.execPath,
- log = console.log, sessionName, sleep, restoreSecretary, startWatch, startBridge } = {}) {
+ log = console.log, sessionName, sleep, restoreSecretary, startWatch, startBridge, skip = new Set() } = {}) {
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');
@@ -112,7 +113,8 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
  const out = { runner, port, secretary: null, dashboard: null, prompt: 'skipped' };
 
  const secretarySession = sessionName(SECRETARY_ROLE);
- if (floor.alive(secretarySession)) { out.secretary = 'reused'; log(`비서 이미 살아 있음: ${secretarySession}`); }
+ if (skip.has(SECRETARY_ROLE)) out.secretary = 'skipped';
+ else if (floor.alive(secretarySession)) { out.secretary = 'reused'; log(`비서 이미 살아 있음: ${secretarySession}`); }
  else {
   const startNew = () => start([SECRETARY_ROLE], {
    cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary',
@@ -127,17 +129,18 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
  }
 
  const dashboardSession = sessionName(DASHBOARD_ROLE);
- if (floor.alive(dashboardSession)) { out.dashboard = 'reused'; log(`대시보드 이미 살아 있음: ${dashboardSession}`); }
+ if (skip.has(DASHBOARD_ROLE)) out.dashboard = 'skipped';
+ else if (floor.alive(dashboardSession)) { out.dashboard = 'reused'; log(`대시보드 이미 살아 있음: ${dashboardSession}`); }
  else { start([DASHBOARD_ROLE], { cmd: `${quote(nodePath)} ${quote(cliPath)} dashboard --port ${port}`, hidden: true }); out.dashboard = 'started'; }
 
- if (startWatch) {
+ if (startWatch && !skip.has('watch')) {
   try { out.watch = startWatch(); } catch (error) { out.watch = 'failed'; log(`감시기 시작 실패: ${error.message}`); }
   if (out.watch === 'started') log('감시기 시작됨: 기본 감시 프로필(watch-profile.json)');
   else if (out.watch === 'reused') log('감시기 이미 살아 있음');
   else if (out.watch === 'blocked') log('감시기 확인 필요: 감시기 세션은 있는데 감시 프로세스가 없습니다');
  }
 
- if (startBridge) {
+ if (startBridge && !skip.has(BRIDGE_ROLE)) {
   try { out.bridge = startBridge(); } catch (error) { out.bridge = 'failed'; log(`디코 다리 시작 실패: ${error.message}`); }
   if (out.bridge === 'started') log('디코 다리 시작됨: #비서 새 글을 우편으로 비서에게 넣는다(kadan-디코)');
   else if (out.bridge === 'reused') log('디코 다리 이미 살아 있음');
@@ -157,6 +160,14 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
  return out;
 }
 function quote(s) { return /^[\w./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`; }
+
+// 다리 상태를 읽기만 하는 함수(2026-10-16). ensureBridge와 같은 판단을 쓰되 create()를 부르지 않는다.
+// 반환: 'ok' | 'dead'(세션 없음) | 'no-secret' | 'bad-config: …' | 'blocked: …' | 'locked: …'.
+// `kadan up --auto`가 '살아 있는 창인데 일을 못 하는 진짜 막힘'을 가릴 때 쓴다(죽은 pane은 먼저 치워서 여기 오지 않는다).
+export function bridgeStatus(deps) {
+ const state = ensureBridge({ ...deps, create: () => {} });
+ return state === 'started' ? 'dead' : state === 'reused' ? 'ok' : state;
+}
 
 // 재부팅 뒤 로그인 자동 시작(`kadan up --hidden`)이 감시기도 되살린다(2026-10-13 [kyle]).
 // 2026-10-12 재부팅 뒤 감시기만 안 떠서 약 16시간 감시가 비었고, 로티 위계 표시도 꺼졌다.
