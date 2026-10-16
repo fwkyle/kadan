@@ -49,7 +49,7 @@ test('본문 2,000자 제한: 줄여도 끝의 링크는 남는다', () => {
 test('결정 요청만 멘션하고, 답변·취소·경보는 allowed_mentions를 비운다', async () => {
   const w = await world();
   try {
-    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
+    const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
     const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
     try {
       const d = {id: 'dec-1', card: 'repo/card-1', work: 'repo/work-1', question: '질문입니다 '.repeat(300), options: ['가', '나'], recommendation: '가', reason: '이유 '.repeat(500)};
@@ -192,13 +192,13 @@ test('KADAN_NOTIFY=off는 디스코드를 보내지 않고, 결정 알림은 시
     assert.equal(w.requests().length, 0);
     assert.equal(process.env.KADAN_NOTIFY, 'off'); // 시험 기본값
     let called = 0;
-    new DecisionStore(w.home, {userNotify: () => { called++; }}).announce('request', {id: 'd', card: 'r/c', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'});
+    new DecisionStore(w.home, {notify: () => {}, userNotify: () => { called++; }}).announce('request', {id: 'd', card: 'r/c', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'});
     assert.equal(called, 0);
   } finally { w.stop(); }
 });
 
 test('결정 저장은 알림 실패와 무관하다', () => {
-  const store = new DecisionStore(os.tmpdir(), {userNotify: () => { throw new Error('boom'); }});
+  const store = new DecisionStore(os.tmpdir(), {notify: () => {}, userNotify: () => { throw new Error('boom'); }});
   const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
   try { assert.equal(store.announce('request', {id: 'd', card: 'r/c', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'}), null); }
   finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }
@@ -230,8 +230,8 @@ test('결정 요청·답변은 알림이 실패해도 저장되고, 요청 알�
   try {
     const store = new DecisionStore(home, {notify: () => {}, userNotify: (m, o) => { calls.push(o.key); throw new Error('boom'); }});
     const input = {question: '분리할까요?\n- 결과 파일: /repo/card-a/result.md', options: ['분리', '유지'], recommendation: '분리', reason: '이유\n- 결과 파일: /repo/card-a/result.md', work: '없음'};
-    const a = store.request('repo/card-a', input, '슈퍼감독');
-    store.request('repo/card-a', input, '슈퍼감독'); // 같은 요청 → 알림 없음
+    const a = store.request('repo/card-a', input, '시험-슈퍼감독');
+    store.request('repo/card-a', input, '시험-슈퍼감독'); // 같은 요청 → 알림 없음
     assert.deepEqual(calls, [`decision:${a.id}:request`]);
     assert.equal(store.get(a.id).status, 'open');
     store.answer(a.id, {revision: a.revision, choice: '분리'}, '사람');
@@ -316,7 +316,7 @@ test('포럼: 업무 있는 알림은 첫 번에 thread_name 새 글, 다음부�
 test('포럼: 글 제목은 100자 안, 결정 요청은 업무 글로 가며 멘션이 유지된다', async () => {
   const w = await forumWorld();
   try {
-    const store = new DecisionStore(w.base.home, {userNotify: (m, o) => notifyUser(m, w.base.fakeSpawn(), {...o, home: w.base.home, env: w.base.env, workTitle: '긴 제목 '.repeat(40)})});
+    const store = new DecisionStore(w.base.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.base.fakeSpawn(), {...o, home: w.base.home, env: w.base.env, workTitle: '긴 제목 '.repeat(40)})});
     const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
     try { store.announce('request', {id: 'd1', card: 'kadan/card-1', work: 'kadan/work-x', question: 'q', options: ['a', 'b'], recommendation: 'a', reason: 'r'}); }
     finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; }

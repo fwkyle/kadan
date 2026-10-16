@@ -25,7 +25,8 @@
 | `KADAN_SECRET_<이름>_FILE` | 이름별 비밀 파일의 절대경로(`KADAN_SECRET_DISCORD_FILE`·`_DISCORD_BOT_FILE`·`_EXPLAIN_AI_FILE`). 있으면 기계 설정(`kadan secrets`)보다 먼저다 → [비밀값 위치 규칙](secrets.md) |
 | `KADAN_NOTIFY_ENV_FILE` | `KADAN_SECRET_DISCORD_FILE`의 옛 이름(별칭). 둘 다 있으면 `KADAN_SECRET_DISCORD_FILE`이 이긴다. 없으면 설정, 그다음 기본 위치(`$KADAN_HOME/secrets/discord.env`), 모두 없으면 시스템 알림만 쓴다 → [사용자 알림](user-notify.md) |
 | `KADAN_NOTIFY` | `off`면 디스코드와 결정 알림, 사용자 우편함 알림을 보내지 않는다(시험용) |
-| `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`) |
+| `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`). `KADAN_HOME`이 기본 홈(`~/.kadan`, 링크면 실제 경로)이 아닌데 이 값이 없거나 `kadan`이면 tmux 호출을 `KADAN_LIVE_FLOOR_DENIED`로 거절한다(시험이 운영 창으로 새는 것을 막는 장치). 기본이 아닌 홈에서는 격리 이름을 주고, `KADAN_WINDOW=rottie`·`orca`도 기본이 아닌 홈에서는 같은 이유로 거절한다 |
+| `KADAN_ALLOW_LIVE_FLOOR` | `1`이면 위 거절을 끈다. 기본이 아닌 홈으로 운영 구획·창을 일부러 다룰 때만 쓴다 |
 | `KADAN_ROLE` | 카단 세션 안에서 자동으로 붙는 자기 역할. 원장의 `by`가 된다 |
 
 창 선택의 읽는 순서는 **환경변수 > 기계 설정(`$KADAN_HOME/window-setting.json`) > 기본 `none`** 이다. 값이 하나로 정해지는 우선순위이며 실패하면 다른 창으로 넘어가는 폴백이 아니다. 로그인 자동 시작과 대시보드의 '비서 켜기'는 `KADAN_WINDOW=none`을 명시하므로 설정이 `rottie`여도 창 없이 뜬다. `KADAN_WINDOW=""`처럼 빈 문자열은 미지정으로 보고 설정이 채워진다. **설정 파일이 손상**(깨진 JSON·잘못된 창 값·상대 로티 경로)이면 창을 여는 명령(`start`·`attach`·`handover`·`adopt`·`up`·`restore`)은 역할·창을 만들기 전에 `WINDOW_SETTING_CORRUPT`와 복구 명령을 알리고 종료 코드 2로 멈춘다. 다른 창으로 넘어가지 않는다. 단 `KADAN_WINDOW`가 비어 있지 않게 주어지면 그 값이 창을 정하므로 막지 않는다(`KADAN_WINDOW=rottie`인데 `KADAN_ROTTIE_BIN` 환경변수가 없어 설정의 경로가 필요할 때는 멈춘다). `send`·`status`·`read`·`watch`·대시보드처럼 창과 무관한 명령은 경고만 하고 진행한다. 복구는 `kadan window unset`(손상 파일도 지운다) 또는 `kadan window set ...`.

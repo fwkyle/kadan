@@ -12,12 +12,15 @@ test('real tmux server loss restores role generations over two restarts', {
   skip: spawnSync('tmux', ['-V']).status !== 0,
 }, t => {
   const home = ledgerHome();
+  const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR};
   process.env.KADAN_SOCKET = `recovery-${process.pid}`;
   process.env.TMUX_TMPDIR = home;
   t.after(() => {
     tmux(['kill-server']); // Only this test-owned named server.
-    delete process.env.KADAN_SOCKET;
-    delete process.env.TMUX_TMPDIR;
+    // Restore, never delete: an unset socket falls back to the live default (kadan).
+    for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   });
   const bin = path.join(home, 'fixture-rottie');
   fs.writeFileSync(bin, `#!/usr/bin/env node

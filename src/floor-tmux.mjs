@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
 import { ledgerHome } from "./ledger.mjs";
+import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -36,6 +37,7 @@ export function ensureTmuxConf(home = ledgerHome()) {
 }
 
 export function tmux(args, input = undefined) {
+  assertNotLiveFloor();
   const conf = tmuxConfPath();
   const prefixArgs = fs.existsSync(conf) ? ["-f", conf] : [];
   // -u: LANG 없는 서버·컨테이너에서도 한글 세션 이름과 탭 구분자를 '_'로 바꾸지 않게 한다.
