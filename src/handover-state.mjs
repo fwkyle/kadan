@@ -54,6 +54,14 @@ export function withEffectiveOwner(work, entries) {
   return { ...work, owner, ownedAt: at };
 }
 
+// 열린 업무가 지금 누구 몫이고 언제부터인가(2026-10-16). 판정(watch-supervisor)과 관찰 범위(watch-scope)가 같은 답을 쓴다.
+// 차례(turnOwner)가 관계표의 역할이면 그 역할과 차례가 넘어간 시각(turnAt) — owner와 같아도 turnAt이다. 아니면 owner와 ownedAt.
+// 시각 값이 없으면 업무 시각(차례) 또는 null(owner)이다.
+export function currentResponsibility(work, parents) {
+  if (parents?.has(work.turnOwner)) return { role: work.turnOwner, since: work.turnAt ?? work.at ?? null };
+  return { role: work.owner, since: work.ownedAt ?? null };
+}
+
 // 중앙 카드의 담당도 과거 인계 기록을 따라간다. 이후 명시 재배정은 우선한다.
 export function effectiveCardRole(card, entries, cards = null) {
   const identity = Array.isArray(cards) ? taskIdentity(cards) : cards;
