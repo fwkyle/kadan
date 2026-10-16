@@ -12,6 +12,8 @@ import {activeHierarchyPath} from './hierarchy-register.mjs';
 import {parseHierarchy} from './hierarchy.mjs';
 import {effectiveCardRole,workEntries} from './handover-state.mjs';
 import {shellQuote} from './mail-instructions.mjs';
+import {createMailGenerations} from './mail-generation.mjs';
+import {boardFromRole} from './board.mjs';
 
 export const ROLE_PROFILES = ['secretary','super','conductor','worker','reviewer'];
 const root = fileURLToPath(new URL('..',import.meta.url));
@@ -19,6 +21,13 @@ const templateRoot = path.join(root,'skills/kadan-conductor/references/role-temp
 const hash = value => createHash('sha256').update(value).digest('hex');
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const roleName = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
+// 시험값(kyle 결정 cc77fcc2, 시니어 자문 452d380f): 요약 우편은 일반감독(conductor)에게만 보내고,
+// 마지막 전달 성공 전문 뒤 1시간이 지나면 전문을 다시 보낸다. 설정·환경변수 스위치는 두지 않는다(되돌리기는 PR 되돌리기).
+export const SUMMARY_PROFILES = new Set(['conductor']);
+export const FULL_INTERVAL_MS = 60*60*1000;
+// 시험 대상 판은 레포 kadan뿐이다(감독 범위 조정, 슈퍼감독 우편 69d524ff). 판 판정은 이름(boardFromRole)과
+// 레포(연결 업무·카드의 repo, 없으면 수신자 start cwd의 ~/Dev/<레포>)가 둘 다 kadan일 때만 인정한다.
+export const SUMMARY_REPO = 'kadan';
 const finishedMarker = /KADAN:DONE\s+\S+\s+(?:ok|failed)(?=\s|$)/u;
 // Markdown의 탭·LF·CRLF만 허용한다. ANSI/C0/C1과 단독 CR은 터미널 표시를 바꿀 수 있다.
 const terminalControl = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]|\r(?!\n)/u;
@@ -189,7 +198,39 @@ export function inferCardPhaseProfile({home,role,taskId,mailContext,entries=read
   } catch { return null; }
 }
 
-export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home),cards}) {
+// 전문(full)을 보낼지 요약(summary)을 보낼지 정한다. 이미 읽은 entries만 거르고 원장을 새로 읽지 않는다.
+// '전달 성공'은 keyDelivery==='sent'만이다. 세대는 mail-generation의 start 경계를 그대로 쓴다.
+function trialBoard(role,repos) {
+  const board=boardFromRole(role),set=new Set(repos.filter(Boolean));
+  if (!board||set.size!==1) return 'unknown';
+  const byName=board===SUMMARY_REPO||board.startsWith(`${SUMMARY_REPO}-`),byRepo=set.has(SUMMARY_REPO);
+  if (byName!==byRepo) return 'unknown';
+  return byRepo?'kadan':'other';
+}
+const cwdRepo=cwd=>{const m=typeof cwd==='string'&&cwd.match(/\/Dev\/([^/]+)/u);return m&&!m[1].startsWith('_')?m[1]:null;};
+function decideInstructionsMode({role,profile,templateDigest,entries,current,unavailable,now,repos=[]}) {
+  const gens=createMailGenerations();
+  entries.forEach((e,i)=>gens.apply(e,i));
+  const generation=gens.generationOf(role);
+  const full=reason=>({mode:'full',reason,generation});
+  if (!SUMMARY_PROFILES.has(profile)) return full('profile-not-in-trial');
+  if (unavailable.length) return full('facts-unavailable');
+  const board=trialBoard(role,repos);
+  if (board==='unknown') return full('facts-unavailable');
+  if (board==='other') return full('board-not-in-trial');
+  if (current) return full('dispatch');
+  const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>(e.kind==='send'||e.kind==='send-failed')&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i)).map(({e})=>e);
+  const last=fulls.at(-1);
+  if (!last) return full('generation-first');
+  if (last.keyDelivery!=='sent') return full('delivery-unclear');
+  if (last.instructions.profile!==profile) return full('profile-changed');
+  if (last.instructions.templateDigest!==templateDigest) return full('template-changed');
+  const elapsed=now-Date.parse(last.t);
+  if (!Number.isFinite(elapsed)||elapsed>=FULL_INTERVAL_MS) return full('interval');
+  return {mode:'summary',reason:'within-interval',generation};
+}
+
+export function composeRoleInstructions({home,role,message='',profile,raw=false,taskId,mailContext,entries=readLedger(home),cards,slim=false,now=Date.now()}) {
   try {
     const config=readRoleInstructionsConfig(home);
     if (raw) return {message,instructions:null,metadata:{status:'not-applied',reason:'explicit-raw',...(config.configDigest?{configDigest:config.configDigest}: {})}};
@@ -228,12 +269,17 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
         lines.push('마커 형식: KADAN:DONE <현재카드id> <ok|failed>. ID와 결과는 완료 시 조립한다.');
       } else lines.push('이 편지만으로 새 실행을 시작하거나 과거 완료 ID의 DONE을 다시 출력하지 않는다. 연결 ID는 조회 근거이며 현재 발령을 뜻하지 않는다.');
       if (['super','conductor'].includes(selected.profile)) lines.push('완료 수신 다음 행동: 근거 확인 → 아직 확정되지 않은 실행만 done 기록 → 빠진 검수·후속 연결. 전체 완료 조건 충족을 확인한 책임 owner만 최신 work show revision으로 work complete한다. PASS만으로 업무를 자동 종료하지 않는다.');
-      const instructions=['<!-- kadan:receiver-instructions -->',...templates.map(t=>t.text),...lines,
+      const templateDigest=hash(JSON.stringify(templates.map(t=>[t.name,t.digest])));
+      const decision=slim?decideInstructionsMode({role,profile:selected.profile,templateDigest,entries,now,unavailable:context.unavailable,
+        current:Boolean(current),repos:[work?.repo,card?.repo,cwdRepo(entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd)]}):{mode:'full',reason:'not-slim',generation:null};
+      // 요약일 때도 템플릿은 위에서 읽었다(지문 비교용). 줄어드는 것은 메시지뿐이다.
+      const body=decision.mode==='summary'?[readFile(path.join(templateRoot,`${selected.profile}-summary.md`),{template:true}).text]:templates.map(t=>t.text);
+      const instructions=['<!-- kadan:receiver-instructions -->',...body,...lines,
         '참고할 실제 파일 (이번 역할과 행동에 필요한 절만 적용):',...templates.map(t=>t.path),...referencePaths(selected.profile),'<!-- /kadan:receiver-instructions -->'].join('\n\n');
       if (finishedMarker.test(instructions)) throw failure('생성된 지침에 완성된 DONE 마커가 있습니다');
       const metadata={status:'applied',profile:selected.profile,source:selected.source,digest:hash(instructions),
         ...(context.unavailable.length?{unavailable:context.unavailable}: {}),
-        templateDigest:hash(JSON.stringify(templates.map(t=>[t.name,t.digest]))),templates:templates.map(({name,path,digest})=>({name,path,digest})),
+        templateDigest,instructionsMode:decision.mode,instructionsReason:decision.reason,generation:decision.generation,templates:templates.map(({name,path,digest})=>({name,path,digest})),
         ...(config.configDigest?{configPath:config.configPath,configDigest:config.configDigest}: {})};
       return {message:message+'\n\n'+instructions,instructions,metadata};
     }
