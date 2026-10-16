@@ -10,6 +10,7 @@ import {effectiveCardRole} from './handover-state.mjs';
 import {isUserActor} from './actors.mjs';
 import {notifyUser,fitDiscord} from './user-notify.mjs';
 import {DEFAULT_PORT} from './quickstart.mjs';
+import {readDecisions} from './notify-threads.mjs';
 const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
 const human=by=>isUserActor(by);
 const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
@@ -24,8 +25,17 @@ export function assertVerifyPath(...texts){
  const blank=/확인 경로 없음:/.test(text)?'"확인 경로 없음:" 뒤에 이유가 비어 있습니다. ':'';
  throw new Error(`확인 경로 필요: ${blank}질문이나 이유에 답하기 전에 열어 볼 주소나 절대경로를 한 줄에 하나씩 넣으세요. 예: "- PR: https://github.com/<조직>/<레포>/pull/<번호>", "- Preview: <배포 기록에서 확인한 실제 접속 주소>", "- 노션: https://www.notion.so/<페이지>", "- 결과 파일: /home/<이름>/.kadan/cards/<저장소>/<카드>/result.md". 열어 볼 대상이 없는 순수 방침 질문이면 "- 확인 경로 없음: <이유>" 줄을 넣으세요.`);
 }
+// 결정 요청 글이 있는 디코 스레드에 조용한 글 하나를 단다. 실패해도 던지지 않는다(취소 기록이 본체). 시험(KADAN_NOTIFY=off)에서는 보내지 않는다.
+function postThreadNote(home,d,text){
+ if(process.env.KADAN_NOTIFY==='off')return false;
+ try{
+  const threadId=readDecisions(home)[d.id]?.threadId;if(!threadId)return false;
+  const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'discord','send','--thread',threadId,'--quiet',text],{env:{...process.env,KADAN_HOME:home},encoding:'utf8',timeout:15000});
+  return r.status===0;
+ }catch{return false;}
+}
 export class DecisionStore {
- constructor(home,{notify,userNotify}={}){this.home=home;this.userNotify=userNotify??((message,opts)=>notifyUser(message,spawnSync,{home,...opts}));this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
+ constructor(home,{notify,userNotify,threadNote}={}){this.home=home;this.threadNote=threadNote??((d,text)=>postThreadNote(home,d,text));this.userNotify=userNotify??((message,opts)=>notifyUser(message,spawnSync,{home,...opts}));this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'send',role,message],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'사람'},encoding:'utf8',timeout:15000});
   if(r.status!==0)throw new Error('통지 실패/불확실: 요청자 화면과 우편 원장을 확인하세요');
  });}
@@ -113,8 +123,12 @@ export class DecisionStore {
   this.announce('answer',d);
   return this.locked(()=>{const current=this.get(id);if(current.revision!==saved.revision)throw new Error('통지 이후 결정 변경: 현재 상태 확인 필요');return this.write({...current,revision:current.revision+1,delivery});});
  }
- cancel(id,{revision,reason},by){const cancelled=this.locked(()=>{const d=this.get(id);if(!human(by)&&by!==d.requestedBy)throw new Error('요청자 또는 사용자만 취소');
-  if(d.status!=='open'||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString()});});this.announce('cancel',cancelled);return cancelled;}
+ // 디코 자유 답(choice 없음)은 관계없는 말이 답으로 굳을 수 있어 그 결정의 요청자만 answered 상태에서도 취소할 수 있다(2026-10-16 PR #173 검수).
+ // 기록은 고치지 않고 취소 사건을 뒤에 쌓는다. 선택지 답과 디코 밖의 답은 지금처럼 취소하지 못한다. 취소하면 그 스레드에 조용한 글을 단다.
+ cancel(id,{revision,reason},by){let freeAnswer=false;const cancelled=this.locked(()=>{const d=this.get(id);if(!human(by)&&by!==d.requestedBy)throw new Error('요청자 또는 사용자만 취소');
+  freeAnswer=d.status==='answered'&&d.answer.source==='discord'&&!d.answer.choice&&by===d.requestedBy;
+  if((d.status!=='open'&&!freeAnswer)||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString(),...(freeAnswer?{cancelledAnswer:true}:{})});});this.announce('cancel',cancelled);
+  if(freeAnswer)this.threadNote(cancelled,'기타 답 기록 취소됨');return cancelled;}
 }
 export function decisionCommand(args,flags,{home,by,notify}){
  const s=new DecisionStore(home,{notify}),[cmd,key]=args;

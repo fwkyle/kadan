@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
-import {createChat, runWatch} from '../src/discord-chat.mjs';
+import {createChat, runWatch, sendText} from '../src/discord-chat.mjs';
 import {createMailOut} from '../src/discord-mail.mjs';
 import {createDecisionAnswerer, matchChoice, writtenAfter, LATE_ANSWER_MS, HANDLED_FILE} from '../src/discord-decision.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
@@ -22,7 +22,7 @@ const noSleep = async () => {};
 const SUPER = 'kadan-슈퍼감독';
 
 // 포럼 하나 + 글 하나, 결정 저장소(알림은 가짜), 다리의 한 바퀴를 돌리는 함수를 만든다.
-async function world(fake, {register = true} = {}) {
+async function world(fake, {register = true, resolve} = {}) {
   const home = tmp('home'), botFile = path.join(home, 'bot.env'), hookFile = path.join(home, 'hook.env');
   const forum = fake.addForum('kadan'), post = fake.addForumPost(forum, {name: '[kadan] 결정'});
   fs.writeFileSync(botFile, `DISCORD_BOT_TOKEN=${FAKE.token}\nDISCORD_APPLICATION_ID=${FAKE.appId}\n`, {mode: 0o600});
@@ -31,12 +31,14 @@ async function world(fake, {register = true} = {}) {
   const env = {KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile, KADAN_DISCORD_API_BASE: fake.base, KADAN_NOTIFY: 'off'};
   let chat = createChat({home, env, sleep: noSleep});
   new CardStore(home).create({repo: 'kadan', id: 'card-a', repoPath: home, body: '# 시험'});
-  const calls = {notify: [], user: []};
-  const store = new DecisionStore(home, {notify: (role, message) => calls.notify.push({role, message}), userNotify: (message, opts) => { calls.user.push({message, opts}); return null; }});
+  const calls = {notify: [], user: [], pending: []};
+  // 취소 글: 실제 CLI(discord send --thread --quiet)와 같은 sendText로 가짜 서버에 올린다
+  const threadNote = (d, text) => calls.pending.push(sendText(chat, text, {thread: readDecisions(home)[d.id].threadId, quiet: true}));
+  const store = new DecisionStore(home, {threadNote, notify: (role, message) => calls.notify.push({role, message}), userNotify: (message, opts) => { calls.user.push({message, opts}); return null; }});
   const errs = [];
   let decide = createDecisionAnswerer({home, chat, env, log: e => errs.push(e), store});
-  const mailOut = createMailOut({home});
-  const emit = async line => ((await decide(line)) ? undefined : mailOut(line));
+  const mailOut = createMailOut({home, ...(resolve ? {resolve} : {})});
+  const emit = async line => { const done = await decide(line); return done === true ? undefined : mailOut(line, done || {}); };
   const w = {home, fake, forum, post, get chat() { return chat; }, store, calls, errs, get decide() { return decide; }, env,
     run: () => runWatch(chat, {once: true, out: emit, err: e => errs.push(e)}),
     // 나중에 포럼 키를 비밀 파일에 더하고 새 프로세스처럼 다시 만든다(옛 모양 상태 파일 위에 새 채널 등록)
@@ -124,43 +126,82 @@ test('5b 답이 기록되면 기존 경로가 그대로 돈다: 요청 감독 �
   } finally { process.env.KADAN_NOTIFY = before; await fake.close(); }
 });
 
-test('6 (가) 답장+맞지 않는 글, 열린 결정 둘 이상+답장 없음 → 기록 0건, 되묻기 울림 글 1개. 맞지 않는 글은 일반 글', async () => {
+test('6 (가) 답장+맞지 않는 글 → 되묻지 않고 자유 답(text)으로 기록: 사람 명의·source discord·글 id, 요청 감독 통지에 본문, 기록됨(기타 답) 조용한 글 1개', async () => {
   const fake = await startFakeDiscord();
   try {
     const w = await world(fake);
     const a = w.decision('A를 합칠까요?', ['합침', '보류']);
-    fake.add(w.post.id, {content: '1번', type: 19, message_reference: {message_id: a.msg.id}});
-    fake.add(w.post.id, {content: '합침 — 이유는 이렇다', type: 19, message_reference: {message_id: a.msg.id}});
-    fake.add(w.post.id, {content: '3', type: 19, message_reference: {message_id: a.msg.id}});
+    const body = '합침 — 이유는 이렇다\n둘째 줄';
+    const mine = fake.add(w.post.id, {content: body, type: 19, message_reference: {message_id: a.msg.id}});
+    fake.add(w.post.id, {content: '또 다른 말', type: 19, message_reference: {message_id: a.msg.id}});   // 이미 답변됨 → 기록 바꾸지 않음
     await w.run();
-    assert.equal(w.answers().length, 0);
-    const asks = w.botPosts().filter(m => /기록하지 않았습니다/.test(m.content));
-    assert.equal(asks.length, 3, '글마다 되묻기 하나');
-    assert.match(asks[0].content, /^<@\d+> 기록하지 않았습니다\. 선택지 번호나 문구 그대로 답해 주세요: 1\) 합침 2\) 보류$/);
-    assert.deepEqual(asks[0]._body.allowed_mentions, {users: [FAKE.userId]}, '울림');
-    assert.equal(asks[0]._body.flags, undefined);
+    const e = w.store.get(a.d.id);
+    assert.equal(e.status, 'answered');
+    assert.deepEqual([e.answer.by, e.answer.choice, e.answer.text, e.answer.source, e.answer.messageId], ['사람', null, body, 'discord', mine.id]);
+    assert.ok(isUserActor(e.answer.by));
+    assert.equal(w.calls.notify.length, 1, '요청 감독에게 통지 한 번');
+    assert.ok(w.calls.notify[0].message.includes(body), '통지에 kyle 글 본문 전체');
+    const logged = w.botPosts().filter(m => m.content.startsWith('기록됨(기타 답)'));
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].content, '기록됨(기타 답): 합침 — 이유는 이렇다 둘째 줄');
+    assert.equal(logged[0]._body.flags, 4096, '조용히');
+    assert.deepEqual(logged[0]._body.allowed_mentions, {parse: []});
+    assert.equal(w.botPosts().filter(m => /기록하지 않았습니다|열린 결정이 여러 개/.test(m.content)).length, 0, '되묻기 0');
     assert.equal(w.mails().length, 0);
+    assert.equal(w.answers().length, 1);
+    // 요청 감독이 이것이 답이 아니었다고 보면 취소할 수 있다(요청자만): 기록은 뒤에 사건을 쌓고, 스레드에 조용한 글 1개
+    const before = readStream(w.home, 'decisions/events.jsonl', {optional: true}).length;
+    const cur = w.store.get(a.d.id);
+    assert.throws(() => w.store.cancel(a.d.id, {revision: cur.revision, reason: '남'}, '다른감독'), /요청자 또는 사용자만 취소/);
+    assert.throws(() => w.store.cancel(a.d.id, {revision: cur.revision, reason: '사람'}, '사람'), /요청 상태\/버전 변경/, '사람 명의로는 answered를 취소하지 못한다');
+    assert.throws(() => w.store.cancel(a.d.id, {revision: cur.revision - 1, reason: '옛 버전'}, SUPER), /요청 상태\/버전 변경/);
+    const cancelled = w.store.cancel(a.d.id, {revision: cur.revision, reason: '답이 아니었다'}, SUPER);
+    await Promise.all(w.calls.pending);
+    assert.deepEqual([cancelled.status, cancelled.cancelledAnswer, cancelled.cancelledBy, cancelled.answer.text], ['cancelled', true, SUPER, body]);
+    assert.equal(readStream(w.home, 'decisions/events.jsonl', {optional: true}).length, before + 1, '기존 기록은 두고 사건 하나만 추가');
+    assert.ok(readStream(w.home, 'decisions/events.jsonl', {optional: true}).some(e => e.id === a.d.id && e.status === 'answered'), '답 기록이 이력에 남아 있다');
+    const notes = w.botPosts().filter(m => m.content === '기타 답 기록 취소됨');
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]._body.flags, 4096, '조용히');
+    assert.equal(w.answers().length, 0);
+    // 같은 질문을 다시 요청할 수 있다
+    assert.equal(w.store.request('kadan/card-a', {question: 'A를 합칠까요?\n- 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '이유', work: '없음'}, SUPER).status, 'open');
+  } finally { await fake.close(); }
+});
 
-    // 둘 이상 열림: 답장 없이 선택지처럼 보이는 글 → 열린 결정 목록으로 되묻기
+test('6b (나) 열린 결정 하나+맞지 않는 글 → 자유 답으로 기록(결정과 무관한 말도 답이 된다 — kyle 해석). 본문 없는 글은 답이 아니라 우편', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?', ['합침', '보류']);
+    const mine = fake.add(w.post.id, {content: '1번이 좋아 보이네'});
+    await w.run();
+    const e = w.store.get(a.d.id);
+    assert.deepEqual([e.status, e.answer.choice, e.answer.text, e.answer.messageId], ['answered', null, '1번이 좋아 보이네', mine.id]);
+    assert.equal(w.botPosts().filter(m => m.content.startsWith('기록됨(기타 답)')).length, 1);
+    assert.equal(w.mails().length, 0);
     const b = w.decision('B를 켤까요?', ['켠다', '끈다']);
-    fake.add(w.post.id, {content: '2'});
+    fake.add(w.post.id, {content: '', attachments: [{id: '1', url: 'x'}]});
     await w.run();
-    assert.equal(w.answers().length, 0);
-    const many = w.botPosts().filter(m => /열린 결정이 여러 개/.test(m.content));
-    assert.equal(many.length, 1);
-    assert.match(many[0].content, /1\) A를 합칠까요\?\n2\) B를 켤까요\?/);
-    assert.deepEqual(many[0]._body.allowed_mentions, {users: [FAKE.userId]});
-    // 선택지처럼 보이지 않는 일반 글은 비서 우편으로
-    fake.add(w.post.id, {content: '지금 어디까지 됐어?'});
-    await w.run();
+    assert.equal(w.store.get(b.d.id).status, 'open', '본문 없는 글은 기록하지 않는다');
     assert.equal(w.mails().length, 1);
-    assert.equal(w.answers().length, 0);
-    // 열린 결정이 하나일 때 (나) 맞지 않는 글도 일반 글
-    w.store.cancel(b.d.id, {revision: w.store.get(b.d.id).revision, reason: '시험'}, SUPER);
-    fake.add(w.post.id, {content: '1번이 좋아 보이네'});
+  } finally { await fake.close(); }
+});
+
+test('6c 열린 결정 둘 이상+답장 없음 → 기록 0건, 되묻기 0, 일반 우편 1통(머리에 열린 결정 N개 — 어느 결정인지 특정 안 됨)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake, {resolve: () => ({to: 'zeta-슈퍼감독', reason: null, workKey: null})});   // 받는이 찾기는 discord-route 시험이 맡는다
+    w.decision('A를 합칠까요?', ['합침', '보류']);
+    w.decision('B를 켤까요?', ['켠다', '끈다']);
+    fake.add(w.post.id, {content: '2'});                             // 선택지처럼 보이는 글
     await w.run();
-    assert.equal(w.mails().length, 2);
     assert.equal(w.answers().length, 0);
+    assert.equal(w.botPosts().filter(m => /기록하지 않았습니다|열린 결정이 여러 개/.test(m.content)).length, 0, '되묻기 0');
+    assert.equal(w.mails().length, 0, '비서 우편 0통');
+    const box = new Mailbox(w.home, 'zeta-슈퍼감독'), mails = box.list({all: true});
+    assert.equal(mails.length, 1, '레포 슈퍼 우편 1통');
+    assert.match(box.read(mails[0].mailId).body, /열린 결정 2개 — 어느 결정인지 특정 안 됨/);
   } finally { await fake.close(); }
 });
 
@@ -649,5 +690,22 @@ test('23 R2 복합 재현(5단계): 다른 포럼이 403인 동안 옛 형식 �
     assert.equal(w.store.get(a.d.id).status, 'open');
     assert.equal(w.mails().length, 0);
     assert.equal(w.botPosts().filter(m => /기록|이미|열린 결정|늦게/.test(m.content)).length, 0);
+  } finally { await fake.close(); }
+});
+
+test('6d 취소할 수 없는 answered: 선택지 답, 디코 밖의 답 → 지금처럼 거절', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?', ['합침', '보류']);
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: a.msg.id}});
+    await w.run();
+    const choice = w.store.get(a.d.id);
+    assert.equal(choice.answer.choice, '합침');
+    assert.throws(() => w.store.cancel(a.d.id, {revision: choice.revision, reason: '선택지 답'}, SUPER), /요청 상태\/버전 변경/);
+    const b = w.decision('B를 켤까요?', ['켠다', '끈다']);
+    w.store.answer(b.d.id, {revision: 1, text: '맥에서 쓴 자유 답'}, '사람');       // source 없음 = 디코 밖
+    assert.throws(() => w.store.cancel(b.d.id, {revision: w.store.get(b.d.id).revision, reason: '디코 밖'}, SUPER), /요청 상태\/버전 변경/);
+    assert.equal(w.botPosts().filter(m => m.content === '기타 답 기록 취소됨').length, 0);
   } finally { await fake.close(); }
 });

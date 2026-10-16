@@ -20,6 +20,14 @@ test('감시 코드가 만드는 경보 종류가 모두 흐름 지도의 경보
   assert.deepEqual(missing, [], '흐름 지도 4절(docs/flows.md)에 경보 종류를 추가하세요');
 });
 
+test('디코 포럼 글 행이 받는이별 경로(레포 슈퍼 / 슈퍼 없으면 비서)를 담는다', () => {
+  const row = section('3\\. 어떻게 주고받나').split('\n').find(l => l.startsWith('| 사용자 질문(디스코드'));
+  assert.ok(row, '3절에 디코 사용자 질문 행이 없음');
+  for (const text of ['가장 가까운 슈퍼감독', '슈퍼 없는 레포', '받는이', '--thread <id>'])
+    assert.ok(row.includes(text), `디코 질문 행에 "${text}" 없음`);
+  assert.ok(!row.includes('→ 비서 |'), '모든 글이 비서로 간다는 옛 표현이 남음');
+});
+
 test('역할 프로필과 핵심 소통 명령이 흐름 지도에 있다', () => {
   for (const profile of ROLE_PROFILES) assert.ok(section('1\\. 누가').includes(`--profile ${profile}`), `1절에 --profile ${profile} 없음`);
   const talk = section('3\\. 어떻게 주고받나');
