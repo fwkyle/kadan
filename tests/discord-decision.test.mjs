@@ -37,7 +37,7 @@ async function world(fake, {register = true} = {}) {
   let decide = createDecisionAnswerer({home, chat, env, log: e => errs.push(e), store});
   const mailOut = createMailOut({home});
   const emit = async line => ((await decide(line)) ? undefined : mailOut(line));
-  const w = {home, fake, forum, post, chat, store, calls, errs, decide, env,
+  const w = {home, fake, forum, post, get chat() { return chat; }, store, calls, errs, get decide() { return decide; }, env,
     run: () => runWatch(chat, {once: true, out: emit, err: e => errs.push(e)}),
     // 나중에 포럼 키를 비밀 파일에 더하고 새 프로세스처럼 다시 만든다(옛 모양 상태 파일 위에 새 채널 등록)
     hookFile,
@@ -433,7 +433,7 @@ test('18 R1 손상된 요청 메시지 id(0x1·+1·-1·공백·소수)나 글 id
   } finally { await fake.close(); }
 });
 
-test('19 R2 이전 버전 상태(forumRepos 없음)에서 등록을 해제했다 다시 넣어도 그 사이 쓴 답은 재생되지 않는다', async () => {
+test('19 R2 중간 형식 상태(forums 있고 forumRepos 없음)에서 등록을 해제했다 다시 넣어도 그 사이 쓴 답은 재생되지 않는다', async () => {
   const fake = await startFakeDiscord();
   try {
     const w = await world(fake);
@@ -460,21 +460,110 @@ test('19 R2 이전 버전 상태(forumRepos 없음)에서 등록을 해제했다
   } finally { await fake.close(); }
 });
 
-test('20 R2 이름표 없는 옛 등록이라도 설정에는 있으나 이번에 못 푼 채널(403)은 해제로 보지 않는다. #비서 cursor는 그대로', async () => {
+test('20 5라운드: 중간 형식(forums 있고 forumRepos 없음)은 읽을 때 포럼 기록을 버리고 기준선부터 다시 시작한다. #비서 cursor는 그대로, 한 줄 알림, 못 풀어도 재생 없음', async () => {
   const fake = await startFakeDiscord();
   try {
     const w = await world(fake);
+    const a = w.decision('A를 합칠까요?');
+    const topic = fake.add(FAKE.channelId, {content: '#비서 주제', author: {id: FAKE.botId, bot: true}});
+    const sec = fake.addThread(topic);
+    await w.run();
     const file = path.join(w.home, 'discord-chat-state.json');
     const st = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(st.threads[sec.id] && st.threads[w.post.id]);
     delete st.forumRepos;
     fs.writeFileSync(file, JSON.stringify(st) + '\n');
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});     // 대기 중인 옛 답
     fake.inject({match: new RegExp(`GET /channels/${w.forum.id}$`), status: 403, body: {code: 50001}, times: 1});
-    w.enableForum();                                                  // 새 프로세스: 못 푼 채널
-    await w.run();
+    w.rebuild();
+    const errs = [];
+    await runWatch(w.chat, {once: true, out: async l => ((await w.decide(l)) ? undefined : createMailOut({home: w.home})(l)), err: e => errs.push(e)});
     const after = JSON.parse(fs.readFileSync(file, 'utf8'));
-    assert.deepEqual(after.forums, st.forums, '못 푼 것은 해제가 아니다');
-    assert.deepEqual(after.threads, st.threads, '포럼 cursor 보존');
+    assert.ok(errs.some(e => /forumRepos 없음.*기준선부터 다시 시작/.test(e)), errs.join('\n'));
+    assert.deepEqual(after.forums, {}, '포럼 기록 버림');
+    assert.equal(after.threads[w.post.id], undefined, '포럼 스레드 cursor 버림');
+    assert.equal(after.threads[sec.id], st.threads[sec.id], '#비서 스레드 cursor 보존');
     assert.equal(after.main, st.main, '#비서 cursor 보존');
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.mails().length, 0);
+  } finally { await fake.close(); }
+});
+
+test('24 5라운드 F5 재현: 중간 형식 + 다른 포럼 웹훅 조회 실패 중에 등록이 빠졌다 돌아와도 옛 답은 기록 0·우편 0·응답 0', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const other = fake.addForum('other-repo');
+    fake.addForumPost(other);
+    const base = fs.readFileSync(w.hookFile, 'utf8').split('\n').filter(l => l && !/^DISCORD_WEBHOOK_URL_(KADAN|OTHER_REPO)=/.test(l)).join('\n') + '\n';
+    const setKeys = ({kadan, otherRepo}) => fs.writeFileSync(w.hookFile, base + (kadan ? `DISCORD_WEBHOOK_URL_KADAN=${w.forum.url}\n` : '') + (otherRepo ? `DISCORD_WEBHOOK_URL_OTHER_REPO=${other.url}\n` : ''), {mode: 0o600});
+    const stateFile = path.join(w.home, 'discord-chat-state.json');
+    setKeys({kadan: true, otherRepo: true}); w.rebuild(); await w.run();
+    const a = w.decision('A를 합칠까요?'); await w.run();
+    const mid = JSON.parse(fs.readFileSync(stateFile, 'utf8')); delete mid.forumRepos;
+    fs.writeFileSync(stateFile, JSON.stringify(mid) + '\n');
+    setKeys({kadan: false, otherRepo: true});
+    fake.inject({match: new RegExp(`GET /webhooks/${other.hookId}/`), status: 403, body: {code: 50001}, times: 40});   // 다른 포럼의 웹훅 조회 실패
+    w.rebuild(); await w.run();
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
+    setKeys({kadan: true, otherRepo: true});
+    w.rebuild(); await w.run();
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
+    assert.equal(w.mails().length, 0);
+    assert.equal(w.botPosts().filter(m => /기록|이미|열린 결정|늦게/.test(m.content)).length, 0);
+  } finally { await fake.close(); }
+});
+
+test('25 5라운드: forumRepos가 깨졌어도(배열) 멈추지 않고 포럼 기록을 버리고 다시 시작한다. 운영 형식(forums 키 없음)은 지금처럼 기준선부터', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?');
+    await w.run();
+    const file = path.join(w.home, 'discord-chat-state.json');
+    const st = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify({...st, forumRepos: []}) + '\n');
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: a.msg.id}});
+    w.rebuild(); await w.run();
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.mails().length, 0);
+    // 운영 형식: forums·forumRepos 키가 모두 없다
+    const prod = JSON.parse(fs.readFileSync(file, 'utf8')); delete prod.forums; delete prod.forumRepos;
+    fs.writeFileSync(file, JSON.stringify(prod) + '\n');
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});     // 올라오기 전에 쓴 답
+    const errs = [];
+    w.rebuild();
+    await runWatch(w.chat, {once: true, out: async l => ((await w.decide(l)) ? undefined : createMailOut({home: w.home})(l)), err: e => errs.push(e)});
+    assert.equal(errs.filter(e => /다시 시작한다/.test(e)).length, 0, '운영 형식은 중간 형식 알림이 없다');
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.mails().length, 0);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).main, prod.main);
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
+    await w.run();
+    assert.equal(w.store.get(a.d.id).answer.choice, '보류', '올라온 뒤 새 답은 받는다');
+  } finally { await fake.close(); }
+});
+
+test('26 5라운드 F6: 늦은 안내는 한 번만 — 안내 직후 우편 저장 전에 죽어 다시 처리해도 안내 1개, 우편은 그때 1통', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const N0 = Date.now();
+    const d = w.decision('늦은 안내?');
+    setDecision(w.home, d.d.id, {threadId: w.post.id, messageId: sf(N0 - 2 * 86400e3), forum: true});
+    const line = {id: sf(N0 - 20 * 60e3), where: 'thread', threadId: w.post.id, channel: 'kadan', content: '1', replyTo: sf(N0 - 2 * 86400e3)};
+    const first = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store, now: () => N0});
+    assert.equal(await first(line), false);                           // 안내를 올렸고 우편은 아직(죽음)
+    assert.equal(w.botPosts().length, 1);
+    const second = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store, now: () => N0});
+    assert.equal(await second(line), false, '재처리: 일반 글로 우편');
+    assert.equal(w.botPosts().length, 1, '안내는 다시 올리지 않는다');
+    createMailOut({home: w.home})(line);
+    assert.equal(w.mails().length, 1);
+    assert.equal(await second(line), true, '우편이 저장된 글은 더 하지 않는다');
+    assert.equal(w.botPosts().length, 1);
+    assert.equal(w.answers().length, 0);
   } finally { await fake.close(); }
 });
 
@@ -518,10 +607,10 @@ test('22 늦게 받은 답은 실제 다리에서도 기록 0, 조용한 안내 
     const a = w.decision('A를 합칠까요?');
     const mine = fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
     const real = Date.now();
-    w.decide = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store, now: () => real + 11 * 60e3});
+    const late = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store, now: () => real + 11 * 60e3});
     // world의 run은 처음 만든 처리기를 쓰므로 같은 방식으로 한 바퀴를 직접 돌린다
     const mailOut = createMailOut({home: w.home});
-    await runWatch(w.chat, {once: true, out: async line => ((await w.decide(line)) ? undefined : mailOut(line)), err: () => {}});
+    await runWatch(w.chat, {once: true, out: async line => ((await late(line)) ? undefined : mailOut(line)), err: () => {}});
     assert.equal(w.answers().length, 0);
     assert.equal(w.store.get(a.d.id).status, 'open');
     assert.equal(w.botPosts().filter(m => /^늦게 받은 답이라/.test(m.content)).length, 1);
@@ -549,7 +638,7 @@ test('23 R2 복합 재현(5단계): 다른 포럼이 403인 동안 옛 형식 �
     fake.inject({match: new RegExp(`GET /channels/${other.id}$`), status: 403, body: {code: 50001}, times: 20});
     w.rebuild(); await w.run();
     const removed = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    assert.equal(Object.keys(removed.forums).length, 1, '다른 포럼 403이어도 kadan 해시는 정리된다(남는 것은 other-repo 하나)');
+    assert.equal(Object.keys(removed.forums).length, 0, '중간 형식은 읽을 때 버린다(다른 포럼 403이어도 kadan 기록이 남지 않는다)');
     assert.equal(removed.threads[w.post.id], undefined, 'kadan 글 cursor 정리');
     // 4. 제외 중에 답을 단다
     fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});

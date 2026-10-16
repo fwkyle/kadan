@@ -27,6 +27,7 @@ const idMs = id => Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
 const idLess = (a, b) => BigInt(a) < BigInt(b);
 const prevId = id => String(BigInt(id) - 1n);
 const idAt = ms => String((BigInt(ms) - DISCORD_EPOCH) << 22n);   // 이 시각 이후에 만들어진 글의 ID는 이것보다 크다
+const FORUM_RESET = Symbol('forumReset');                           // 읽을 때 포럼 기록을 버렸다는 메모리 표시(파일에는 쓰지 않는다)
 const FORUM_TYPES = new Set([15, 16]);                              // 포럼·미디어 채널
 const FORUM_RETRY_MS = 5 * 60 * 1000;                               // 권한이 없어 못 푼 레포 채널은 이 간격으로만 다시 푼다
 export const SECRETARY_LABEL = '#비서';
@@ -142,12 +143,20 @@ export function readState(home, hash) {
     && Object.entries(v.threads).every(([id, last]) => isId(id) && isId(last))
     && (v.forums === undefined || (v.forums && typeof v.forums === 'object' && !Array.isArray(v.forums)
       && Object.entries(v.forums).every(([h, since]) => /^[0-9a-f]{12}$/.test(h) && Number.isFinite(since) && since > 0)))
-    && (v.forumRepos === undefined || (v.forumRepos && typeof v.forumRepos === 'object' && !Array.isArray(v.forumRepos)
-      && Object.values(v.forumRepos).every(h => typeof h === 'string' && /^[0-9a-f]{12}$/.test(h))))
+
     && v.skipped && typeof v.skipped === 'object' && ['others', 'bots', 'system'].every(k => count(v.skipped[k]));
   if (!ok) throw new Error(`상태 파일이 깨져 있어 멈춘다(원본은 그대로 둔다). 확인한 뒤 이 파일을 옮기면 처음 실행(기준선)으로 다시 시작한다: ${file}`);
   if (v.channel !== hash) return {mismatch: true};
-  return {...emptyState(hash), ...v};
+  // 'forums는 있는데 forumRepos가 없거나 깨진' 중간 형식은 이 기능의 첫 시험판만 만들었다. 정교하게 이행하지 않고 포럼 기록(forums·forumRepos)을 버리고
+  // 포럼 스레드 cursor도 pollOnce에서 지운 뒤 새 등록(기준선)으로 다시 시작한다. #비서 cursor·스레드는 그대로다.
+  const reps = v.forumRepos;
+  const repsOk = reps && typeof reps === 'object' && !Array.isArray(reps) && Object.values(reps).every(h => typeof h === 'string' && /^[0-9a-f]{12}$/.test(h));
+  if (v.forums !== undefined && !repsOk) {
+    const {forums: _f, forumRepos: _r, ...rest} = v;
+    return {...emptyState(hash), ...rest, [FORUM_RESET]: true};
+  }
+  const {forumRepos: _drop, ...keep} = v;
+  return {...emptyState(hash), ...(v.forums === undefined ? keep : v)};
 }
 
 export function writeState(home, state) {
@@ -286,6 +295,11 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   // 레포 포럼 채널 등록. 상태에 처음 들어오는 채널은 아무것도 읽기 전에 지금 열려 있는 글(스레드)을 기준선(마지막 글)으로 저장한다 —
   // 옛 kyle 글(결정 요청 글의 옛 "1"·"2" 포함)이 한꺼번에 비서에게 들어가는 것을 막는다. 등록 뒤에 생긴 글만 첫 글부터 읽는다.
   const now = (chat.now ?? Date.now)();
+  if (state[FORUM_RESET]) {
+    delete state[FORUM_RESET];
+    for (const t of await loadActive()) if (t.parent_id !== channelId) delete state.threads[t.id];      // #비서 스레드는 그대로, 포럼 스레드 cursor만 지운다
+    err('이전 시험판 형식의 포럼 기록(forumRepos 없음)을 버리고 기준선부터 다시 시작한다 — #비서 cursor는 그대로');
+  }
   const forums = await chat.forums({err});
   const forumById = new Map(forums.map(f => [f.id, f]));
   state.forums ??= {};

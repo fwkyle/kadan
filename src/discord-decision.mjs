@@ -31,16 +31,24 @@ const looksLikeChoice = (decisions, content) => {
   return /^[1-9]\d*$/.test(t) || decisions.some(d => d.options.includes(t));
 };
 
-function readHandled(home) {
-  try { const v = JSON.parse(fs.readFileSync(path.join(home, HANDLED_FILE), 'utf8')); return Array.isArray(v.ids) ? v.ids.filter(x => typeof x === 'string') : []; } catch { return []; }
+// 처리 기록 $KADAN_HOME/discord-decision-handled.json: ids = 결정 쪽에서 끝난 글(기록·되묻기·안내), late = 늦은 안내를 이미 올린 글(우편은 따로 간다).
+function readFileState(home) {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(home, HANDLED_FILE), 'utf8'));
+    const list = x => (Array.isArray(x) ? x.filter(y => typeof y === 'string') : []);
+    return {ids: list(v.ids), late: list(v.late)};
+  } catch { return {ids: [], late: []}; }
 }
-function markHandled(home, id) {
-  const ids = [...readHandled(home).filter(x => x !== id), id].slice(-MAX_HANDLED);
+function writeFileState(home, state) {
   const file = path.join(home, HANDLED_FILE), tmp = `${file}.${process.pid}.tmp`;
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
-  fs.writeFileSync(tmp, JSON.stringify({ids}) + '\n', {mode: 0o600});
+  fs.writeFileSync(tmp, JSON.stringify({ids: state.ids.slice(-MAX_HANDLED), late: state.late.slice(-MAX_HANDLED)}) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file);
 }
+const readHandled = home => readFileState(home).ids;
+const markHandled = (home, id) => { const st = readFileState(home); writeFileState(home, {...st, ids: [...st.ids.filter(x => x !== id), id]}); };
+const readLate = home => readFileState(home).late;
+const markLate = (home, id) => { const st = readFileState(home); writeFileState(home, {...st, late: [...st.late.filter(x => x !== id), id]}); };
 
 // 디코 글 id는 시간순(snowflake)이다. 결정 요청 메시지보다 먼저(같은 id 포함) 쓰인 글은 그 결정의 답이 될 수 없다.
 // 상태 파일·cursor·재등록이 어떻게 꼬여도 옛 글이 새 결정의 답으로 읽히지 않게 하는 바탕 규칙이다.
@@ -71,8 +79,12 @@ export function createDecisionAnswerer({home, chat, env = process.env, log = () 
   async function record(line, d, choice) {
     const age = now() - messageTimeMs(line.id);
     if (!(age <= lateMs && age >= -FUTURE_LIMIT_MS)) {       // 늦게 받은 답(또는 손상된 미래 id): 기록하지 않고 조용히 알린 뒤 일반 글로 비서 우편에 보낸다
-      log(`늦게 받은 결정 답을 기록하지 않았다: 디코 글 ${line.id} (${Math.round(age / 1000)}초 전)`);
-      await post(line, `늦게 받은 답이라 기록하지 않았습니다. 다시 답해 주세요: ${optionList(d)}`, true);
+      // 순서: 처리 표시 → 안내 → (호출한 쪽이) 우편. 표시가 먼저라서 안내 직후 우편 저장 전에 죽어 다시 처리돼도 안내는 한 번만 간다(우편은 따로 저장된다).
+      if (!readLate(home).includes(line.id)) {
+        log(`늦게 받은 결정 답을 기록하지 않았다: 디코 글 ${line.id} (${Math.round(age / 1000)}초 전)`);
+        markLate(home, line.id);
+        await post(line, `늦게 받은 답이라 기록하지 않았습니다. 다시 답해 주세요: ${optionList(d)}`, true);
+      }
       return false;
     }
     let fresh;
