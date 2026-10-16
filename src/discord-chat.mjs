@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 import {loadSecret} from './secrets.mjs';
 import {DiscordError, createApi, apiBase, splitDiscord, DISCORD_LIMIT, CONNECT_CODES} from './discord-bot.mjs';
 import {scrubSecrets} from './user-notify.mjs';
@@ -104,13 +105,20 @@ export function writeState(home, state) {
   fs.renameSync(tmp, file);
 }
 
+// kill -0은 좀비(죽었지만 부모가 거두지 않은 프로세스)도 살아 있다고 답한다. 컨테이너처럼 거두는 쪽이 없으면 낡은 잠금이 영원히 산 것으로 보인다.
+function pidAlive(pid) {
+  try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') return false; }
+  const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], {encoding: 'utf8'});
+  return !(state.status === 0 && /^\s*Z/.test(state.stdout));
+}
+
 // 잠금을 쥔 살아 있는 받기 프로세스의 {pid, mode, to}. 없거나 주인이 죽었으면 null(읽기만 한다 — 치우지 않는다).
 // mode: 'mail'(우편 모드, to=받는 역할) | 'stdout' | 'unknown'(모드 기록이 없는 옛 잠금 — 우편 모드로 믿지 않는다).
 export function watchLockInfo(home) {
   let pid = NaN;
   try { pid = Number(fs.readFileSync(path.join(home, LOCK_DIR, 'pid'), 'utf8')); } catch { return null; }
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') return null; }
+  if (!pidAlive(pid)) return null;
   let info = {};
   try { info = JSON.parse(fs.readFileSync(path.join(home, LOCK_DIR, 'mode'), 'utf8')); } catch { /* 옛 잠금 */ }
   const mode = info.mode === 'mail' && typeof info.to === 'string' ? 'mail' : info.mode === 'stdout' ? 'stdout' : 'unknown';
@@ -126,8 +134,7 @@ export function acquireWatchLock(home, info = {mode: 'stdout'}) {
       if (error.code !== 'EEXIST') throw error;
       let pid = NaN;
       try { pid = Number(fs.readFileSync(pidFile, 'utf8')); } catch { /* pid 파일이 아직 없음 */ }
-      let alive = true;
-      if (Number.isInteger(pid) && pid > 0) try { process.kill(pid, 0); } catch (e) { alive = e.code !== 'ESRCH'; }
+      const alive = !(Number.isInteger(pid) && pid > 0) || pidAlive(pid);
       if (alive || tries === 1) throw new Error('이미 다른 kadan discord watch가 돌고 있다(같은 상태 파일을 둘이 쓰면 중복 줄이 나온다)');
       fs.rmSync(pidFile, {force: true}); fs.rmSync(modeFile, {force: true}); fs.rmdirSync(lock);
     }
