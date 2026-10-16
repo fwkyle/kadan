@@ -199,6 +199,7 @@ test('실제 CLI: 본체가 직접 연 저장 대화(B)는 같은 대화로 다�
   assert.match(start.cmd, new RegExp(`resume ${B}$`));
   assert.equal(start.restartConversation, B);
   assert.notEqual(String(tmuxFloor.pid('kadan-bodycase')), String(created.panePid));
+  assert.equal(readLedger().filter(e => e.session === 'kadan-bodycase' && e.kind === 'send').length, 0, '같은 대화로 이어 열면 첫 안내를 보내지 않는다');
 });
 
 test('실제 CLI: 본체는 A lock만, 같은 실행기·모델의 하위 프로세스가 B rollout을 연 경우 거절하고 pane을 끄지 않는다', {skip}, t => {

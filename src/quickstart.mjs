@@ -12,7 +12,6 @@ export const DASHBOARD_ROLE = '대시보드';
 export const BRIDGE_ROLE = '디코';
 export const DEFAULT_PORT = '8790';
 export const RUNNER_CANDIDATES = ['codex', 'claude'];
-export const FIRST_PROMPT = '당신은 카단 비서입니다. 설치된 kadan-secretary 스킬을 읽고(/kadan-secretary), kadan status와 kadan tree로 현재 판을 확인한 뒤, 사용자에게 지금 무엇을 도울지 한 문장으로 물어보고 기다리세요. 사용자가 시키기 전에는 아무것도 발송하지 마세요.';
 
 const SKILL_HOMES = ['.codex/skills', '.claude/skills', '.agents/skills'];
 
@@ -103,21 +102,21 @@ export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs =
 function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
 // skip: 건너뛸 대상 역할 이름 집합(`kadan up --auto`가 멈춤 상태·상한에 걸린 대상을 뺀다). 사람이 친 up은 비워 둔다.
-export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath = process.execPath,
- log = console.log, sessionName, sleep, restoreSecretary, startWatch, startBridge, skip = new Set() } = {}) {
+export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = process.execPath,
+ log = console.log, sessionName, restoreSecretary, startWatch, startBridge, skip = new Set() } = {}) {
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');
  const port = String(flags.port ?? config.port ?? DEFAULT_PORT);
  if (!/^\d+$/.test(port) || Number(port) > 65535) throw new Error('--port는 0부터 65535까지의 정수여야 한다');
- const out = { runner, port, secretary: null, dashboard: null, prompt: 'skipped' };
+ const out = { runner, port, secretary: null, dashboard: null };
 
  const secretarySession = sessionName(SECRETARY_ROLE);
  if (skip.has(SECRETARY_ROLE)) out.secretary = 'skipped';
  else if (floor.alive(secretarySession)) { out.secretary = 'reused'; log(`비서 이미 살아 있음: ${secretarySession}`); }
  else {
   const startNew = () => start([SECRETARY_ROLE], {
-   cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary',
+   cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary', 'no-prompt': Boolean(flags['no-prompt']),
   });
   try {
    out.secretary = restoreSecretary ? restoreSecretary(startNew) : (startNew(), 'started');
@@ -148,11 +147,7 @@ export function runUp({ home, flags = {}, floor, start, send, cliPath, nodePath 
   else if (typeof out.bridge === 'string' && out.bridge.startsWith('bad-config')) log(`디코 다리 건너뜀: ${out.bridge.slice('bad-config: '.length)}`);
  }
 
- if (out.secretary === 'started' && !flags['no-prompt']) {
-  const settled = waitForSettled({ read: () => floor.read(secretarySession), ...(sleep ? { sleep } : {}) });
-  if (settled) { send({ role: SECRETARY_ROLE, session: secretarySession, message: FIRST_PROMPT, roleProfile:'secretary' }); out.prompt = 'sent'; }
-  else { out.prompt = 'not-ready'; log('비서 화면이 아직 준비되지 않아 첫 지문을 보내지 않았습니다. 창에서 직접 말을 거세요.'); }
- }
+ // 비서 첫 안내는 start가 보낸다(start-brief.mjs): 새로 띄운 비서만 1건, 복원·재사용·--no-prompt는 0건.
  log('');
  log(`대시보드: http://127.0.0.1:${port}`);
  log(`비서 창: kadan attach ${SECRETARY_ROLE}   (또는 ${floor.attach(secretarySession)})`);

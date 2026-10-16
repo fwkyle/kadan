@@ -116,7 +116,7 @@ test('resume does not repeat the initial role prompt', () => {
     floor: {alive: () => false, attach: () => 'attach'}, sessionName: role => `kadan-${role}`,
     cliPath: '/fixture/cli', start: () => {}, send: m => sent.push(m),
     restoreSecretary: () => 'restored', log: () => {}});
-  assert.equal(out.prompt, 'skipped');
+  assert.equal(out.secretary, 'restored');
   assert.equal(sent.length, 0);
 });
 

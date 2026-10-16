@@ -31,7 +31,7 @@ export class DecisionStore {
  });}
  list(){
   const latest=new Map();for(const e of readStream(this.home,'decisions/events.jsonl',{optional:true})){
-   const old=latest.get(e.id);if(!Array.isArray(e.options)||e.options.length<2||!e.options.every(x=>typeof x==='string')||typeof e.question!=='string'||typeof e.reason!=='string'||typeof e.card!=='string'||(e.work!==undefined&&typeof e.work!=='string')||!supervisor(e.requestedBy)||(e.status==='answered'&&typeof e.answer?.text!=='string')||!e.id||e.to!=='@user'||e.revision!==(old?.revision??0)+1||!['open','answered','cancelled'].includes(e.status))throw new Error('결정 이력 손상');latest.set(e.id,e);
+   const old=latest.get(e.id);if(!Array.isArray(e.options)||e.options.length<2||!e.options.every(x=>typeof x==='string')||typeof e.question!=='string'||typeof e.reason!=='string'||typeof e.card!=='string'||(e.work!==undefined&&typeof e.work!=='string')||!supervisor(e.requestedBy)||(e.status==='answered'&&typeof e.answer?.text!=='string')||(e.answer?.source!==undefined&&e.answer.source!=='discord')||(e.answer?.messageId!==undefined&&typeof e.answer.messageId!=='string')||!e.id||e.to!=='@user'||e.revision!==(old?.revision??0)+1||!['open','answered','cancelled'].includes(e.status))throw new Error('결정 이력 손상');latest.set(e.id,e);
   }return [...latest.values()];}
  get(id){const d=this.list().find(d=>d.id===id);if(!d)throw new Error('결정 요청 없음');return d;}
  write(d){appendStream(this.home,'decisions/events.jsonl',d);return d;}
@@ -91,13 +91,16 @@ export class DecisionStore {
   }
   try{return this.userNotify(short,{...base,...extra,discord:build});}catch{return null;}
  }
- answer(id,{revision,text,choice},by){let newlyAnswered=false;const saved=this.locked(()=>{
+ // source·messageId: 디코 다리가 사람 명의로 기록할 때 남기는 출처('discord')와 그 디코 글 id. 같은 글을 두 번 처리하지 않는 표시이기도 하다.
+ answer(id,{revision,text,choice,source,messageId},by){let newlyAnswered=false;const saved=this.locked(()=>{
   if(!human(by))throw new Error('사용자 답변은 사람 명의로만 기록');
+  if(source!==undefined&&source!=='discord')throw new Error('알 수 없는 답변 출처');
+  if(messageId!==undefined&&(typeof messageId!=='string'||!messageId))throw new Error('디코 글 id 형식 오류');
   const d=this.get(id);choice=choice||null;text=required(typeof text==='string'&&text.trim()?text:choice,'답변 또는 선택');
   if(choice&&!d.options.includes(choice))throw new Error('선택지가 일치하지 않음');
   if(d.status==='answered'&&d.answer.text===text&&d.answer.choice===choice)return d;
   if(d.status!=='open'||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경: 다시 확인');
-  newlyAnswered=true;return this.write({...d,revision:d.revision+1,status:'answered',answer:{by,text,choice,at:new Date().toISOString()},delivery:{status:'pending'}});
+  newlyAnswered=true;return this.write({...d,revision:d.revision+1,status:'answered',answer:{by,text,choice,at:new Date().toISOString(),...(source?{source}:{}),...(messageId?{messageId}:{})},delivery:{status:'pending'}});
  });
  if(!newlyAnswered)return saved;
  const d=saved;
