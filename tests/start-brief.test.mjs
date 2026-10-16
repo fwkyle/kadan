@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {readLedger} from '../src/ledger.mjs';
 import {briefMessage, briefSkipReason, briefStartedRole, isAiRunnerCommand, SECRETARY_BRIEF} from '../src/start-brief.mjs';
 
@@ -27,7 +27,23 @@ test('briefSkipReason: 재사용·프로필 없음·--no-prompt·실행기 아�
   assert.equal(briefSkipReason({...base, noPrompt: true}), 'no-prompt');
   assert.equal(briefSkipReason({...base, cmd: 'sh'}), 'not-ai-runner');
   assert.equal(briefSkipReason({...base, cmd: 'codex resume 0197aaaa-1111-4222-8333-444455556666'}), 'resume');
+  // R2: env 앞붙임·kadan 래퍼·경로 붙은 실행기로 이어 열어도 같은 판정이다. 이어 열기를 알 수 없는 실행기는 보내지 않는다.
+  for (const cmd of ['env A=B codex resume 0197aaaa-1111-4222-8333-444455556666', 'env -u X codex resume 0197aaaa-1111-4222-8333-444455556666',
+    'kadan-codex resume 0197aaaa-1111-4222-8333-444455556666', '/usr/bin/env -u X /opt/bin/claude --resume abc', 'A=B kadan-claude --continue'])
+    assert.equal(briefSkipReason({...base, cmd}), 'resume', cmd);
+  assert.equal(briefSkipReason({...base, cmd: 'env A=B claude --model x'}), null);
+  assert.equal(briefSkipReason({...base, cmd: 'omo --model x'}), 'resume-unknown');
   assert.equal(briefSkipReason({...base, cmd: 'codex fork 0197aaaa-1111-4222-8333-444455556666'}), null);
+});
+
+test('briefStartedRole: 보내기 직전 세대가 바뀌었거나 확인할 수 없으면 건너뛴다', () => {
+  const base = {role: 'r', session: 'kadan-r', roleProfile: 'super', cmd: 'claude', reusing: false, sleep: () => {}, floor: {read: () => 'ready'}};
+  for (const current of [false, null, undefined]) {
+    const warns = [];
+    assert.equal(briefStartedRole({...base, isCurrent: () => current, send: () => assert.fail('보내면 안 됨'), warn: l => warns.push(l)}), 'skipped:generation-changed');
+    assert.match(warns[0], /첫 안내 건너뜀 — 세대가 바뀜/);
+  }
+  assert.equal(briefStartedRole({...base, isCurrent: () => true, send: () => ({bytes: 1, mailId: 'm'}), log: () => {}}), 'sent');
 });
 
 test('briefMessage: 프로필별 스킬 이름이 들어가고 완성된 DONE 마커는 없다', () => {
@@ -145,4 +161,24 @@ test('격리 tmux: kadan up --no-prompt는 새 비서에도 보내지 않는다'
   assert.equal(quiet.status, 0, quiet.stdout + quiet.stderr);
   assert.equal(w.tmux('has-session', '-t', '=kadan-비서').status, 0);
   assert.equal(w.sends().length, 0);
+});
+
+test('격리 tmux: 화면을 기다리는 동안 세션이 다른 세대로 바뀌면 옛 start는 보내지 않고 종료 코드 0', async t => {
+  if (!hasTmux()) return t.skip('tmux 없음');
+  const w = world(t, 'g');
+  w.env.KADAN_START_BRIEF_INTERVAL_MS = '1500';
+  const child = spawn(process.execPath, [CLI, 'start', 'swap', '--hidden', '--profile', 'worker', '--cmd', 'claude', '--reason', 't'], {env: w.env});
+  let stdout = '', stderr = '';
+  child.stdout.on('data', d => { stdout += d; }); child.stderr.on('data', d => { stderr += d; });
+  const done = new Promise(res => child.on('close', res));
+  for (let i = 0; i < 60 && !stdout.includes('시작됨'); i++) await new Promise(r => setTimeout(r, 50));
+  assert.match(stdout, /시작됨/);
+  // 화면 대기 중에 세션을 닫고 같은 이름으로 새 세대를 띄운다(새 세대는 안내 없이).
+  assert.equal(w.tmux('kill-session', '-t', '=kadan-swap').status, 0);
+  const second = w.kadan('start', 'swap', '--hidden', '--profile', 'worker', '--cmd', 'claude', '--reason', 't', '--no-prompt');
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.equal(await done, 0, stdout + stderr);
+  assert.match(stderr, /첫 안내 건너뜀 — 세대가 바뀜/);
+  assert.equal(w.sends().length, 0, '바뀐 세대에 안내가 들어가면 안 된다');
+  assert.equal(w.tmux('has-session', '-t', '=kadan-swap').status, 0);
 });

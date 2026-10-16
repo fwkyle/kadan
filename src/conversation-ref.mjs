@@ -2,7 +2,7 @@
 // harness·model을 cmd에서 읽는 것(cli-start-support.mjs describeStartCmd)과 같은 일반 파싱이다. 실행기 어댑터나 대화 파일 읽기는 없다.
 // 셸 인자 경계는 ai-identity.mjs commandWords가 지킨다(따옴표 안 입력은 한 낱말). 옵션 자리의 낱말만 보고,
 // 판단할 수 없는 명령(셸 연산·모르는 옵션)은 new다 — 그 경우 같은 대화를 resume한 우편이 이전 세대로 숨을 수 있다.
-import {commandWords} from './ai-identity.mjs';
+import {commandWords, normalizeAiCommand} from './ai-identity.mjs';
 
 // codex 0.155.0 `codex --help`·`codex resume --help`의 값을 받는 옵션(2026-10-13 실측). -i/--image는 값을 여러 개 받아
 // 하위 명령 낱말을 삼킬 수 있어 목록에 넣지 않는다(만나면 판단 불가 → new).
@@ -73,11 +73,9 @@ function plainResume(args, {flags, continueFlags}) {
 }
 
 export function conversationOf(cmd) {
-  const words = commandWords(typeof cmd === 'string' ? cmd.trim() : cmd);
-  if (!words?.length) return NEW;
-  let index = 0;
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) index += 1;
-  const harness = words[index]?.split('/').pop(), args = words.slice(index + 1);
+  const normalized = normalizeAiCommand(cmd);
+  if (!normalized) return NEW;
+  const {harness, args} = normalized;
   if (harness === 'claude') return claudeConversation(args);
   if (harness === 'codex') return codexConversation(args);
   if (harness === 'agy') return plainResume(args, {flags: ['--conversation'], continueFlags: ['--continue', '-c']});

@@ -221,12 +221,19 @@ export function cmdStart(argv, flags) {
     console.error(`감시 등록 안 됨(${registration.reason}) — 알림 수신자를 직접 확인하라`);
   }
   // 새로 만든 AI 세션이면 프로필 지침이 붙은 첫 안내를 한 번 보낸다. 못 보내도 start는 성공이다(start-brief.mjs).
+  // 이번 start가 만든 세대(PID·로티 터미널)를 대기 전에 고정하고, 보내기 직전 현재 세대와 비교한다.
   const env = process.env;
+  const pinnedPid = pid == null ? null : String(pid), pinnedTerminal = rottieTerminalId ?? evidence.rottieTerminalId ?? null;
   briefStartedRole({
     role, session, roleProfile, reusing, cmd: startedCmd, noPrompt: flags["no-prompt"] === true, floor,
     tries: Number(env.KADAN_START_BRIEF_TRIES) || undefined, intervalMs: Number(env.KADAN_START_BRIEF_INTERVAL_MS) || undefined,
+    isCurrent: () => {
+      if (pinnedPid === null || !floor.alive(session) || String(floor.pid(session)) !== pinnedPid) return false;
+      const latest = lastStartFor(session);
+      return String(recordedPid(latest)) === pinnedPid && (pinnedTerminal === null || latest?.rottieTerminalId === pinnedTerminal);
+    },
     send: ({ role: to, session: target, message, roleProfile: profile }) =>
-      guardedSend({ floor, session: target, role: to, message, roleProfile: profile, recordedPid: recordedPid(lastStartFor(target)) }),
+      guardedSend({ floor, session: target, role: to, message, roleProfile: profile, recordedPid: pinnedPid }),
   });
   return nameCheck;
 }

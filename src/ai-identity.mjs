@@ -70,6 +70,25 @@ export function matchesAiProcess(args, harness, model) {
   return offset > 0 && (model === undefined || modelOf(words.slice(offset)) === model);
 }
 
+// 실행 명령에서 env 앞붙임(`env A=B`·`env -u X`·`A=B`)을 벗기고, 경로·`kadan-<실행기>` 래퍼를 실행기 이름으로 줄인다.
+// 실행기 판정(start-brief)과 이어 열기 판정(conversation-ref)이 같은 정규화를 본다. 읽을 수 없으면 null.
+export function normalizeAiCommand(cmd) {
+  const words = commandWords(typeof cmd === "string" ? cmd.trim() : cmd);
+  if (!words?.length) return null;
+  let i = 0;
+  if (words[i]?.split("/").pop() === "env") {
+    for (i++; i < words.length; i++) {
+      if (words[i] === "-u" || words[i] === "--unset") i++;
+      else if (!words[i].startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) break;
+    }
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "")) i++;
+  const base = words[i]?.split("/").pop() ?? "";
+  if (!base) return null;
+  const harness = base.startsWith("kadan-") && AI_HARNESS_NAMES.has(base.slice(6)) ? base.slice(6) : base;
+  return { harness, args: words.slice(i + 1) };
+}
+
 // 프로필을 달고 새 pane을 만들 때는 실행 명령이 필수다. 살아있는 세대 재사용에는
 // 새 프로세스가 없으므로 명령을 요구하지 않는다.
 export function inspectStartCmdPolicy({ roleProfile, cmd, reusing = false } = {}) {
