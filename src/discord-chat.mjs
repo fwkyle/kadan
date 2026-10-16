@@ -1,5 +1,6 @@
 // 디스코드 3단계(#비서 대화) — 설정 읽기, 받기(watch), 보내기(send), 스레드. 판단은 비서(AI)가 하고 코드는 받기·보내기만 한다.
 // 받기: REST 주기 조회. #비서 본문 + 그 채널의 활성 스레드를 본다. DISCORD_USER_ID 한 명의 글만 JSON 한 줄씩 낸다.
+// 레포 포럼 채널(비밀 파일의 DISCORD_WEBHOOK_URL_<레포> 키로 등록)은 그 글(스레드) 안의 kyle 글만 받는다. 새로 등록된 채널은 기준선부터 시작해 옛 글을 재생하지 않는다.
 // 상태 파일($KADAN_HOME/discord-chat-state.json)에는 채널 해시·마지막 메시지 ID·건너뜀 건수만 둔다. 토큰·주소·사용자 ID는 적지 않는다.
 // 전달 보장은 "최소 한 번"이다(kyle 질문을 잃는 것이 중복보다 나쁘다): 출력이 실제로 나간 뒤(쓰기 완료·역압 처리) cursor를 저장하고 그다음 읽음 반응을 단다.
 // 재시작하면 마지막 저장 이후 글을 다시 낼 수 있다. 각 줄의 메시지 ID로 받는 쪽(비서)이 이미 본 글을 거른다.
@@ -10,6 +11,7 @@ import {pidAlive} from './pid-alive.mjs';
 import {loadSecret} from './secrets.mjs';
 import {DiscordError, createApi, apiBase, splitDiscord, DISCORD_LIMIT, CONNECT_CODES} from './discord-bot.mjs';
 import {scrubSecrets} from './user-notify.mjs';
+import {readThreads} from './notify-threads.mjs';
 
 export const STATE_FILE = 'discord-chat-state.json';
 export const LOCK_DIR = 'discord-chat.lock';
@@ -23,6 +25,12 @@ const SUPPRESS_NOTIFICATIONS = 4096; // user-notify.mjs와 같은 값(디스코�
 const isId = v => typeof v === 'string' && /^\d{1,25}$/.test(v);
 const idMs = id => Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
 const idLess = (a, b) => BigInt(a) < BigInt(b);
+const prevId = id => String(BigInt(id) - 1n);
+const idAt = ms => String((BigInt(ms) - DISCORD_EPOCH) << 22n);   // 이 시각 이후에 만들어진 글의 ID는 이것보다 크다
+const FORUM_TYPES = new Set([15, 16]);                              // 포럼·미디어 채널
+const FORUM_RETRY_MS = 5 * 60 * 1000;                               // 권한이 없어 못 푼 레포 채널은 이 간격으로만 다시 푼다
+export const SECRETARY_LABEL = '#비서';
+const oneLine = (text, max) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const maxId = (a, b) => (a && b ? (idLess(a, b) ? b : a) : a ?? b);
 
 // ---------- 설정 ----------
@@ -48,6 +56,17 @@ export function loadChatConfig(env, home) {
     const m = /\/webhooks\/(\d+)\/([\w-]+)/.exec(url);
     if (m) { cfg.webhook = {id: m[1], token: m[2]}; cfg.secrets.push(m[1], m[2]); }
   }
+  // 레포 포럼 채널: DISCORD_WEBHOOK_URL_<레포> 키. 레포 이름은 키에서 얻는다(소문자, _는 -). 하드코딩 목록은 없다.
+  cfg.repoWebhooks = [];
+  for (const [key, value] of Object.entries(hook.values)) {
+    const suffix = /^DISCORD_WEBHOOK_URL_(.+)$/.exec(key)?.[1];
+    if (!suffix || suffix === 'SECRETARY') continue;
+    const repo = suffix.toLowerCase().replace(/_/g, '-');
+    const m = /\/webhooks\/(\d+)\/([\w-]+)/.exec(value);
+    if (!m) { cfg.warnings.push(`${key}: 웹훅 주소 모양이 아니라 레포 포럼으로 받지 않는다`); continue; }
+    cfg.secrets.push(value, m[1], m[2]);
+    cfg.repoWebhooks.push({repo, id: m[1], token: m[2]});
+  }
   if (!cfg.channelId && !cfg.webhook) fail('#비서 채널을 알 수 없다 — discord 파일에 DISCORD_WEBHOOK_URL_SECRETARY(웹훅)나 DISCORD_SECRETARY_CHANNEL_ID가 필요하다');
   return cfg;
 }
@@ -56,6 +75,7 @@ export function loadChatConfig(env, home) {
 export function createChat({home, env = process.env, cfg = loadChatConfig(env, home), fetchFn, sleep, now}) {
   const api = createApi({base: apiBase(env), token: cfg.token, secrets: cfg.secrets, fetchFn, sleep, now});
   let channelId = cfg.channelId, via = cfg.channelId ? 'key' : null, channel = null;
+  const forumCache = new Map();
   const chat = {
     cfg, api, home, now,
     get channelVia() { return via; },
@@ -67,6 +87,30 @@ export function createChat({home, env = process.env, cfg = loadChatConfig(env, h
       return (channelId = r.json.channel_id);
     },
     async channelInfo() { return channel ??= (await api('GET', `/channels/${await chat.channelIdOf()}`)).json; },
+    // 받는 레포 포럼 채널 목록 [{name, id, guildId}]. #비서와 같은 서버(guild)의 포럼만 받는다 — 다른 서버면 빼고 경고한다(threads/active를 한 서버만 부른다).
+    // 못 푼 채널(봇 권한 없음 등)은 FORUM_RETRY_MS마다만 다시 풀고, 푼 채널은 프로세스 동안 기억한다.
+    async forums({err = () => {}, force = false} = {}) {
+      const clock = (chat.now ?? Date.now)(), guild = (await chat.channelInfo()).guild_id ?? null;
+      for (const w of cfg.repoWebhooks) {
+        const known = forumCache.get(w.repo);
+        if (known?.ok || (known && !force && clock - known.at < FORUM_RETRY_MS)) continue;
+        try {
+          const hookInfo = (await api('GET', `/webhooks/${w.id}/${w.token}`, undefined, {noAuth: true})).json;
+          if (!isId(hookInfo?.channel_id)) throw new DiscordError('웹훅 응답에 채널 정보가 없다', {kind: 'http'});
+          const info = (await api('GET', `/channels/${hookInfo.channel_id}`)).json;
+          if (!FORUM_TYPES.has(info?.type)) throw new Error('포럼 채널이 아니다');
+          if ((info.guild_id ?? null) !== guild) throw new Error('#비서와 다른 서버라 받지 않는다');
+          forumCache.set(w.repo, {ok: true, name: w.repo, id: info.id, guildId: info.guild_id ?? null});
+        } catch (error) {
+          if (isConnectFailure(error)) throw error; // 연결 문제는 바깥 재시도(runWatch)에 맡긴다
+          const reason = error.message ?? '알 수 없음';
+          if (!known || known.reason !== reason) err(`레포 포럼 ${w.repo}: 받지 않는다 — ${reason}`);
+          forumCache.set(w.repo, {ok: false, at: clock, reason, name: w.repo});
+        }
+      }
+      return cfg.repoWebhooks.map(w => forumCache.get(w.repo)).filter(f => f?.ok);
+    },
+    forumFailures() { return cfg.repoWebhooks.map(w => forumCache.get(w.repo)).filter(f => f && !f.ok); },
   };
   return chat;
 }
@@ -74,7 +118,8 @@ export function createChat({home, env = process.env, cfg = loadChatConfig(env, h
 // ---------- 상태 ----------
 const statePath = home => path.join(home, STATE_FILE);
 const channelHash = id => crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 12);
-const emptyState = hash => ({version: 1, channel: hash, main: null, threads: {}, skipped: {others: 0, bots: 0, system: 0}});
+// forums: 받기에 등록한 레포 포럼 채널 해시 → 등록 시각(ms). 옛 상태 파일에는 없다(없으면 아직 아무것도 등록 안 한 것).
+const emptyState = hash => ({version: 1, channel: hash, main: null, threads: {}, forums: {}, skipped: {others: 0, bots: 0, system: 0}});
 
 // 파일이 없을 때만 null(처음 실행). 있는데 읽기·형식이 깨졌으면 던진다 — 원본은 그대로 두고 cursor를 올리지 않는다.
 // 채널이 바뀐 경우(해시 불일치)는 {mismatch:true}로 알려 새 기준선을 잡게 한다.
@@ -92,6 +137,8 @@ export function readState(home, hash) {
   const ok = v?.version === 1 && typeof v.channel === 'string' && (v.main === null || isId(v.main))
     && v.threads && typeof v.threads === 'object' && !Array.isArray(v.threads)
     && Object.entries(v.threads).every(([id, last]) => isId(id) && isId(last))
+    && (v.forums === undefined || (v.forums && typeof v.forums === 'object' && !Array.isArray(v.forums)
+      && Object.entries(v.forums).every(([h, since]) => /^[0-9a-f]{12}$/.test(h) && Number.isFinite(since) && since > 0)))
     && v.skipped && typeof v.skipped === 'object' && ['others', 'bots', 'system'].every(k => count(v.skipped[k]));
   if (!ok) throw new Error(`상태 파일이 깨져 있어 멈춘다(원본은 그대로 둔다). 확인한 뒤 이 파일을 옮기면 처음 실행(기준선)으로 다시 시작한다: ${file}`);
   if (v.channel !== hash) return {mismatch: true};
@@ -141,13 +188,14 @@ export function acquireWatchLock(home, info = {mode: 'stdout'}) {
 // 반환: {skip:'system'|'bot'|'other'|'handled'} 또는 {line}. 줄 모양(고정): id, channelId, threadId|null, where, at, content, quoted (+선택 필드)
 export function classifyMessage(msg, {userId, where, threadId = null}) {
   if (msg.type !== 0 && msg.type !== 19) return {skip: 'system'};     // 일반·답장만. 스레드 생성·시작 글 같은 시스템 글은 제외
-  if (msg.author?.bot) return {skip: 'bot'};
+  if (msg.author?.bot || msg.webhook_id) return {skip: 'bot'};
   if (msg.author?.id !== userId) return {skip: 'other'};
   if (msg.reactions?.some(r => r.me && r.emoji?.name === READ_EMOJI)) return {skip: 'handled'};
   const content = typeof msg.content === 'string' ? msg.content : '';
   const snapshots = Array.isArray(msg.message_snapshots) ? msg.message_snapshots : [];
   const quoted = Boolean(msg.message_reference) || snapshots.length > 0;
   const line = {id: msg.id, channelId: msg.channel_id, threadId, where, at: msg.timestamp ?? null, content, quoted};
+  if (msg.message_reference?.message_id && !snapshots.length) line.replyTo = msg.message_reference.message_id; // 결정 요청 글에 대한 답장인지 알아보는 데 쓴다
   if (quoted) {
     line.quotedKind = snapshots.length ? 'forward' : 'reply';
     const ref = msg.referenced_message;
@@ -180,11 +228,12 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   // 출력 대기를 중단 신호로 끝낼 수 있게 한다. 신호가 이기면 그 줄은 출력된 것으로 보지 않는다(다음 실행에서 다시 나옴).
   const aborted = new Promise(resolve => { if (signal) { if (signal.aborted) resolve('aborted'); else signal.addEventListener('abort', () => resolve('aborted'), {once: true}); } });
   const emit = async line => (signal ? (await Promise.race([Promise.resolve(out(line)).then(() => 'sent'), aborted])) === 'sent' : (await out(line), true));
-  const handle = async (messages, where, threadId) => {
+  const handle = async (messages, where, threadId, meta = {}) => {
     let last = null;
     for (const msg of sortById(messages)) {
       if (halted()) break; // 중단 신호 뒤에는 더 내지도 cursor를 올리지도 않는다
       const c = classifyMessage(msg, {userId, where, threadId});
+      if (c.line) Object.assign(c.line, meta);
       if (c.skip) { last = maxId(last, msg.id); if (c.skip !== 'handled') state.skipped[{system: 'system', bot: 'bots', other: 'others'}[c.skip]]++; continue; }
       c.line.content = hide(c.line.content);
       if (c.line.quotedContent) c.line.quotedContent = hide(c.line.quotedContent);
@@ -201,12 +250,12 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
     return last;
   };
   // 한 곳의 새 메시지를 100개씩 끝까지 읽는다.
-  const drain = async (source, after, where, threadId) => {
+  const drain = async (source, after, where, threadId, meta) => {
     let cursor = after;
     for (;;) {
       const r = await chat.api('GET', `/channels/${source}/messages?limit=100&after=${cursor}`);
       const list = Array.isArray(r.json) ? r.json : [];
-      const last = await handle(list, where, threadId);
+      const last = await handle(list, where, threadId, meta);
       if (last) {
         cursor = maxId(cursor, last);
         if (threadId) state.threads[threadId] = maxId(state.threads[threadId], cursor); else state.main = maxId(state.main, cursor);
@@ -228,22 +277,39 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
     for (const t of await loadActive()) if (t.parent_id === channelId && THREAD_TYPES.has(t.type) && isId(t.id)) state.threads[t.id] = t.last_message_id ?? t.id;
     writeState(chat.home, state);
   }
+
+  // 레포 포럼 채널 등록. 상태에 처음 들어오는 채널은 아무것도 읽기 전에 지금 열려 있는 글(스레드)을 기준선(마지막 글)으로 저장한다 —
+  // 옛 kyle 글(결정 요청 글의 옛 "1"·"2" 포함)이 한꺼번에 비서에게 들어가는 것을 막는다. 등록 뒤에 생긴 글만 첫 글부터 읽는다.
+  const now = (chat.now ?? Date.now)();
+  const forums = await chat.forums({err});
+  const forumById = new Map(forums.map(f => [f.id, f]));
+  state.forums ??= {};
+  const newForums = forums.filter(f => !state.forums[channelHash(f.id)]);
+  if (newForums.length) {
+    const known = new Set(newForums.map(f => f.id));
+    for (const t of await loadActive()) {
+      if (known.has(t.parent_id) && THREAD_TYPES.has(t.type) && isId(t.id) && !state.threads[t.id]) state.threads[t.id] = t.last_message_id ?? t.id;
+    }
+    for (const f of newForums) state.forums[channelHash(f.id)] = now;
+    writeState(chat.home, state);
+  }
   await drain(channelId, state.main ?? '0', 'channel', null);
 
   if (halted()) return result;
   const activeList = await loadActive();
-  const now = (chat.now ?? Date.now)();
   for (const t of activeList) {
     if (halted()) return result;
-    if (t.parent_id !== channelId || !THREAD_TYPES.has(t.type) || !isId(t.id)) continue;
+    const forum = forumById.get(t.parent_id);
+    if ((t.parent_id !== channelId && !forum) || !THREAD_TYPES.has(t.type) || !isId(t.id)) continue;
     if (!state.threads[t.id]) {
       // 모르는 스레드: 처음 실행이면 기준선, 아니면 "처음 본 스레드"라서 첫 글부터 읽는다.
-      // (스레드 ID는 시작 글의 ID라서 ID 나이로 새 스레드인지 판단하면 오래된 글에서 연 새 스레드의 첫 질문을 잃는다.)
-      state.threads[t.id] = t.id;
+      // (#비서: 스레드 ID는 시작 글의 ID라서 ID 나이로 새 스레드인지 판단하면 오래된 글에서 연 새 스레드의 첫 질문을 잃는다.)
+      // 레포 포럼: 글의 ID는 글을 올린 시각이고 시작 글이 그 안에 있다. 시작 글부터 읽되, 등록 전에 만들어진 글(닫혀 있다 다시 열린 옛 글)은 등록 시각 이후 글만 읽는다.
+      state.threads[t.id] = forum ? maxId(prevId(t.id), idAt(state.forums[channelHash(forum.id)])) : t.id;
       writeState(chat.home, state);
     }
     if (t.last_message_id && !idLess(state.threads[t.id], t.last_message_id)) continue;
-    await drain(t.id, state.threads[t.id], 'thread', t.id);
+    await drain(t.id, state.threads[t.id], 'thread', t.id, {...(forum ? {channel: forum.name} : {}), ...(typeof t.name === 'string' && t.name ? {threadName: oneLine(t.name, 100)} : {})});
   }
   // 활성 목록에 없고 마지막으로 본 글이 180일보다 오래된 스레드 기록은 잊는다(다시 살아나면 첫 글부터 다시 본다).
   const activeIds = new Set(activeList.map(t => t.id));
@@ -301,15 +367,16 @@ export async function runWatch(chat, {once = false, intervalS = DEFAULT_INTERVAL
 }
 
 // ---------- 보내기 ----------
-// 대상이 #비서 채널의 스레드인지 확인한다. 다른 채널로 새는 것을 막는다.
+// 대상이 #비서 채널 또는 등록된 레포 포럼 채널의 스레드인지 확인한다. 다른 채널로 새는 것을 막는다.
+// 채널에 바로 쓰는 새 글(스레드 없이)은 #비서만 간다 — 이 함수는 --thread 대상에만 쓴다.
 async function assertSecretaryThread(chat, id) {
   if (!isId(id)) throw new Error('스레드 ID는 숫자여야 한다');
   const info = (await chat.api('GET', `/channels/${id}`)).json;
-  if (!THREAD_TYPES.has(info?.type) || info.parent_id !== await chat.channelIdOf()) throw new Error('#비서 채널의 스레드가 아니다');
+  const allowed = [await chat.channelIdOf(), ...(await chat.forums()).map(f => f.id)];
+  if (!THREAD_TYPES.has(info?.type) || !allowed.includes(info.parent_id)) throw new Error('#비서나 등록된 레포 포럼 채널의 스레드가 아니다');
   return info;
 }
 
-const oneLine = (text, max) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 // 새 주제(채널 본문의 메시지)에서 스레드를 연다. 이미 있으면(스레드 ID = 그 메시지 ID) 그대로 쓴다. 반환: 스레드 ID
 export async function openThread(chat, messageId, name) {
@@ -383,6 +450,14 @@ export async function checkChat(chat) {
   await step('봇 로그인', async () => { await chat.api('GET', '/users/@me'); return '정상'; });
   await step('#비서 채널 ID', async () => { await chat.channelIdOf(); return `확인됨(얻은 방법: ${chat.channelVia === 'key' ? '설정 키' : '웹훅 조회'})`; });
   await step('채널 읽기', async () => { const info = await chat.channelInfo(); return info.guild_id ? '정상(서버 채널)' : '정상'; });
+  if (chat.cfg.repoWebhooks.length) {
+    await chat.forums({force: true});
+    const ok = new Set((await chat.forums()).map(f => f.name));
+    for (const w of chat.cfg.repoWebhooks) {
+      const bad = chat.forumFailures().find(f => f.name === w.repo);
+      lines.push(`레포 포럼 ${w.repo}: ${ok.has(w.repo) ? '받는 중(채널 읽기 정상)' : `받지 않음 — ${bad?.reason ?? '확인 못 함'}`}`);
+    }
+  }
   await step('Message Content Intent', async () => {
     const app = (await chat.api('GET', '/applications/@me')).json;
     const on = Number(app?.flags ?? 0), full = (on & (1 << 18)) !== 0, limited = (on & (1 << 19)) !== 0;
