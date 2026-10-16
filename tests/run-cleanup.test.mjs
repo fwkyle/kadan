@@ -78,3 +78,24 @@ test('실행기: SIGINT로 중단해도 실행별 폴더와 tmux 서버를 정�
   const pid = assertCleaned(info);
   assert.equal(await waitFor(() => !alive(pid)), true, 'tmux 서버가 끝났다');
 });
+
+test('실행기: 폴더를 만든 직후 시작 단계에서 예외가 나도 만든 폴더를 남기지 않는다', {skip}, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-fault-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const info = path.join(dir, 'info.json'), inject = path.join(dir, 'inject.mjs');
+  // 실행기가 tmux 소켓 폴더를 만드는 순간 EACCES를 던져 시작 단계 실패를 흉내 낸다.
+  fs.writeFileSync(inject, `import fs from 'node:fs';
+const original = fs.mkdirSync;
+fs.mkdirSync = function (p, ...rest) {
+  if (/\\/kadan-run-[^/]+\\/tmux$/.test(String(p))) {
+    fs.writeFileSync(${JSON.stringify(info)}, JSON.stringify({runTmp: String(p).replace(/\\/tmux$/, '')}));
+    throw Object.assign(new Error('주입한 시작 실패'), {code: 'EACCES'});
+  }
+  return original.call(fs, p, ...rest);
+};`);
+  const result = spawnSync(process.execPath, ['--import', inject, runner, import.meta.filename], {encoding: 'utf8', env: nestedEnv()});
+  assert.notEqual(result.status, 0, '시작 실패는 실패로 끝난다');
+  const {runTmp} = JSON.parse(fs.readFileSync(info, 'utf8'));
+  assert.match(path.basename(runTmp), /^kadan-run-/);
+  assert.equal(fs.existsSync(runTmp), false, '시작 단계 예외 뒤에도 실행별 폴더가 지워졌다');
+});
