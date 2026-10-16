@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {liveFloorReason, assertNotLiveFloor} from '../src/live-floor-guard.mjs';
+import {liveFloorReason, assertNotLiveFloor, assertNotLiveRottie} from '../src/live-floor-guard.mjs';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-floor-guard-'));
 const liveHome = path.join(tmp, 'live'); fs.mkdirSync(liveHome);
@@ -71,4 +71,56 @@ test('probe', () => { const k = ['KADAN_SOCKET', 'KADAN_WINDOW', 'KADAN_NOTIFY',
   assert.match(seen.KADAN_SOCKET, /^kadan-test-\d+-/);
   assert.deepEqual([seen.KADAN_WINDOW, seen.KADAN_NOTIFY, seen.KADAN_ROLE, seen.KADAN_ROTTIE_BIN, seen.KADAN_HOME],
     ['none', 'off', null, null, null]);
+});
+
+// R3: 운영 홈의 모든 표기(a~f)는 소켓(없음·kadan) × 창(none·rottie) 어느 조합에서도 막지 않는다. 계정 폴더 대신 격리 폴더와 호환 링크를 쓴다.
+const acct = path.join(tmp, 'acct'); fs.mkdirSync(path.join(acct, '.kadan'), {recursive: true});
+fs.symlinkSync(path.join(acct, '.kadan'), path.join(acct, '.kadan-lite'));
+const defaultHome = path.join(acct, '.kadan');
+const forms = {
+  'a ~/.kadan': {KADAN_HOME: defaultHome},
+  'b ~/.kadan-lite(링크)': {KADAN_HOME: path.join(acct, '.kadan-lite')},
+  'c 끝에 /': {KADAN_HOME: defaultHome + '/'},
+  'd KADAN_LITE_HOME만': {KADAN_LITE_HOME: defaultHome},
+  'e 두 변수 모두': {KADAN_HOME: defaultHome, KADAN_LITE_HOME: path.join(acct, '.kadan-lite')},
+  'f 둘 다 없음': {},
+};
+const caseInsensitive = fs.existsSync(path.join(acct, '.KADAN'));
+if (caseInsensitive) forms['g 대문자 별칭'] = {KADAN_HOME: path.join(acct, '.KADAN')};
+for (const [name, base] of Object.entries(forms)) {
+  test(`운영 홈 표기 ${name}: 소켓·창 조합을 모두 허용`, () => {
+    for (const socket of [undefined, 'kadan'])
+      for (const window of ['none', 'rottie']) {
+        const env = {...base, ...(socket ? {KADAN_SOCKET: socket} : {}), KADAN_WINDOW: window};
+        assert.equal(liveFloorReason(env, defaultHome), null, JSON.stringify(env));
+        assert.doesNotThrow(() => assertNotLiveRottie(env, defaultHome), JSON.stringify(env));
+      }
+  });
+}
+
+test('KADAN_LITE_HOME만 있는 기본 아닌 홈도 거절', () => {
+  assert.throws(() => assertNotLiveFloor({KADAN_LITE_HOME: other}, defaultHome), /KADAN_LIVE_FLOOR_DENIED/);
+});
+
+// R1: 로티 길목. 시험 전용 허용은 로티 검사만 풀고 tmux 검사는 풀지 않는다.
+test('로티 길목: 기본 아닌 홈은 거절, 시험 전용 허용·전체 허용은 통과, tmux 검사는 그대로', () => {
+  assert.throws(() => assertNotLiveRottie({KADAN_HOME: other}, defaultHome), /KADAN_LIVE_FLOOR_DENIED.*로티/);
+  assert.doesNotThrow(() => assertNotLiveRottie({KADAN_HOME: other, KADAN_ALLOW_FAKE_ROTTIE: '1'}, defaultHome));
+  assert.doesNotThrow(() => assertNotLiveRottie({KADAN_HOME: other, KADAN_ALLOW_LIVE_FLOOR: '1'}, defaultHome));
+  assert.match(liveFloorReason({KADAN_HOME: other, KADAN_ALLOW_FAKE_ROTTIE: '1'}, defaultHome) ?? '', /KADAN_SOCKET/);
+});
+
+test('로티 바닥 실행(runRottie)은 기본 아닌 홈이면 로티 실행 파일을 띄우지 않는다', () => {
+  const marker = path.join(tmp, 'rottie-ran.txt');
+  const fake = path.join(tmp, 'fake-rottie');
+  fs.writeFileSync(fake, `#!/bin/sh\necho ran >> ${JSON.stringify(marker)}\necho '{"ok":true,"result":{"terminals":[]}}'\n`, {mode: 0o755});
+  const base = {PATH: process.env.PATH, HOME: process.env.HOME, KADAN_HOME: other, KADAN_SOCKET: 'iso-r', KADAN_FLOOR: 'rottie', KADAN_ROTTIE_BIN: fake, KADAN_NOTIFY: 'off'};
+  const script = `import {rottieFloor} from ${JSON.stringify(new URL('../src/floor-rottie.mjs', import.meta.url).href)};
+    try { rottieFloor.create({session: 'kadan-x', role: 'x', cwd: '/tmp', cmd: 'cat'}); console.log('RAN'); } catch (e) { console.log('ERR ' + e.message); }`;
+  const run = extra => spawnSync(process.execPath, ['--input-type=module', '-e', script], {env: {...base, ...extra}, encoding: 'utf8'});
+  const denied = run({});
+  assert.match(denied.stdout + denied.stderr, /KADAN_LIVE_FLOOR_DENIED/, denied.stdout + denied.stderr);
+  assert.ok(!fs.existsSync(marker), '로티 실행 파일이 불렸다');
+  run({KADAN_ALLOW_FAKE_ROTTIE: '1'});
+  assert.ok(fs.existsSync(marker), '시험 전용 허용에서는 가짜 로티가 불려야 한다');
 });
