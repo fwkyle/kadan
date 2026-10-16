@@ -5,6 +5,7 @@ import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
+import { assertRottieArgv } from "./floor-rottie.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -226,7 +227,7 @@ export function showRottieWindow({ bin, terminalId, spawnFn = spawnSync }) {
 }
 
 function rottieCreate(bin, argv, spawnFn) {
-  const run = (args) => spawnFn(bin, args, { encoding: "utf8" });
+  const run = (args) => { assertRottieArgv(args); return spawnFn(bin, args, { encoding: "utf8" }); };
   let result = run(argv);
   let parsed = parseRottieCreateResult((result.stdout || "").trim());
   if (!parsed.ok && parsed.code === "ROTTIE_WORKSPACE_NOT_OPEN") {

@@ -28,8 +28,21 @@ function rottieBin(env = process.env) {
   return bin;
 }
 
+// 로티 실행 파일은 첫 인자가 아래 넷이 아니면 CLI가 아니라 앱 전체로 다시 떠서 약 3초 뒤 기존 창을 앞으로 가져온다
+// (2026-10-16 로티 쪽 실측 BG-final). 인자 없음·--version·오타가 그 꼴이라 kyle의 포커스를 뺏는다. 실행 전에 막는다.
+export const ROTTIE_CLI_VERBS = ["status", "workspace", "terminal", "recovery"];
+export function assertRottieArgv(argv) {
+  if (Array.isArray(argv) && ROTTIE_CLI_VERBS.includes(argv[0])) return;
+  throw new RottieFloorError(
+    `로티 실행 파일의 첫 인자는 ${ROTTIE_CLI_VERBS.join("|")} 중 하나여야 한다(받은 값: ${JSON.stringify(argv?.[0] ?? null)}) — 앱이 다시 떠 포커스를 뺏을 수 있어 실행하지 않는다`,
+    { code: "ROTTIE_ARGV_REJECTED", effect: "none", exitCode: 2 }
+  );
+}
+
 // env는 기본 process.env다. 시니어 탭처럼 호출자가 정한 환경으로 로티를 부르는 쪽이 같은 길목을 쓰게 한다.
 export function runRottie(argv, spawnFn = spawnSync, env = process.env) {
+  // 주입 spawnFn이어도 항상 적용한다(시험에서도 가드가 보이게).
+  assertRottieArgv(argv);
   // 주입된 spawnFn은 실제 앱에 닿지 않는다. 진짜 spawnSync일 때만 운영 로티 접근을 막는다.
   if (spawnFn === spawnSync) assertNotLiveRottie(env);
   const result = spawnFn(rottieBin(env), argv, {

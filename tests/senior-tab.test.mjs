@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {seniorCommand} from '../src/senior.mjs';
-import {RottieFloorError, rottieFloor} from '../src/floor-rottie.mjs';
+import {RottieFloorError, assertRottieArgv, rottieFloor, runRottie} from '../src/floor-rottie.mjs';
 import {closeSeniorTab} from '../src/senior-tab.mjs';
 import {initSettings, setRole} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
@@ -354,4 +354,31 @@ test('R2: tab.json은 create 전에 creating으로 쓰이고 열림·닫힘으�
   const g = fixture();
   const s = await g.run({spawn: g.spawnFn(), rottie: g.rottieFn({createError: new RottieFloorError('안 됨', {code: 'ROTTIE_APP_NOT_RUNNING', effect: 'none'})})});
   assert.equal(s.tab, 'skipped'); assert.equal(g.advices()[0].tabKey, undefined);
+});
+
+test('R3: 로티 실행 파일 첫 인자 가드 — status|workspace|terminal|recovery가 아니면 spawn 0회와 ROTTIE_ARGV_REJECTED(effect none)', () => {
+  const bin = process.env.KADAN_ROTTIE_BIN, allow = process.env.KADAN_ALLOW_FAKE_ROTTIE;
+  process.env.KADAN_ROTTIE_BIN = '/fake/rottie'; process.env.KADAN_ALLOW_FAKE_ROTTIE = '1';
+  try {
+    let spawns = 0;
+    const fake = () => { spawns++; return {status: 0, stdout: '{"ok":true,"result":{}}', stderr: ''}; };
+    for (const argv of [[], ['--version'], ['statu'], [''], ['Status'], [['terminal']], null, undefined]) {
+      assert.throws(() => runRottie(argv, fake), error => error.code === 'ROTTIE_ARGV_REJECTED' && error.effect === 'none');
+      assert.throws(() => assertRottieArgv(argv), /ROTTIE_ARGV_REJECTED/);
+    }
+    assert.equal(spawns, 0);
+    for (const argv of [['status', '--json'], ['terminal', 'create', '--json'], ['workspace', 'add', '--json'], ['recovery', 'relaunch', '--json']]) runRottie(argv, fake);
+    assert.equal(spawns, 4);
+  } finally {
+    if (bin === undefined) delete process.env.KADAN_ROTTIE_BIN; else process.env.KADAN_ROTTIE_BIN = bin;
+    if (allow === undefined) delete process.env.KADAN_ALLOW_FAKE_ROTTIE; else process.env.KADAN_ALLOW_FAKE_ROTTIE = allow;
+  }
+});
+
+test('R3: 가드를 붙인 다른 호출 곳(adopt rottieQuery)도 잘못된 첫 인자는 실행하지 않는다', async () => {
+  const {rottieQuery} = await import('../src/adopt-process.mjs');
+  let spawns = 0;
+  const run = () => { spawns++; return {status: 0, stdout: '{}'}; };
+  for (const args of [[], ['--version'], ['termnal', 'list']]) assert.throws(() => rottieQuery('/fake/rottie', args, run), /ROTTIE_ARGV_REJECTED/);
+  assert.equal(spawns, 0);
 });
