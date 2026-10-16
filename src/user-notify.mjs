@@ -21,6 +21,12 @@ export const ALERT_DEDUP_WINDOW_MS = 10 * 60 * 1000;
 export const TOTAL_BUDGET_MS = 12000; // 한 알림 전체의 공통 예산
 const MIN_SEND_MS = 1500;             // 이보다 적게 남으면 더 기다리거나 보내지 않는다
 const SYSTEM_TIMEOUT_MS = 3000;
+// 시험 전용: 부하 속에서도 가짜 osascript가 끝나길 기다릴 수 있게 환경변수로만 늘린다. 운영에서는 설정하지 않는다.
+// 정수 1000~120000만 받고 그 밖의 값(빈 값·문자·0·음수·소수·Infinity·너무 큰 값)은 기본 3초다 — spawnSync가 범위 밖 timeout에 던지지 않게.
+export function systemTimeoutMs(env = process.env) {
+  const raw = env.KADAN_TEST_SYSTEM_NOTIFY_TIMEOUT_MS;
+  return typeof raw === 'string' && /^\d+$/.test(raw) && Number(raw) >= 1000 && Number(raw) <= 120000 ? Number(raw) : SYSTEM_TIMEOUT_MS;
+}
 // 연결 실패·시간 초과·429/5xx 소진으로 끝나면 이 시간 동안 같은 프로세스의 다음 알림은 디스코드를 건너뛰고 바로 시스템 알림으로 간다.
 // 근거: 장애 때 알림 한 건이 최대 12초를 막아 경보 두 건인 감시 주기가 24초 걸렸다(1라운드 검수). 60초면 감시 주기(기본 수 초~수십 초)
 // 당 한 번만 기다리고, 디스코드가 되살아나면 1분 안에 돌아온다. 4xx(설정·요청 문제)는 장애가 아니라서 막지 않는다.
@@ -35,7 +41,7 @@ function workTitleOf(home, work) {
 
 export function systemNotify(message, spawn) {
   const script = `display notification ${JSON.stringify(message)} with title "kadan watch"`;
-  const result = spawn('osascript', ['-e', script], {encoding: 'utf8', timeout: SYSTEM_TIMEOUT_MS});
+  const result = spawn('osascript', ['-e', script], {encoding: 'utf8', timeout: systemTimeoutMs()});
   // 성공은 종료 코드 0이면서 오류·신호가 없을 때만이다. 시간 초과(spawnSync는 status:null, error.code:ETIMEDOUT, signal:SIGTERM)는
   // stderr가 비어 있어도 실패다 — 빈 문자열을 돌려주면 호출 쪽의 `if (errorText)`가 성공으로 읽는다(3라운드 검수 R4).
   // 사유에는 명령 원문과 stderr(알림 문구가 섞일 수 있다)를 싣지 않고 짧은 분류만 담는다.
