@@ -27,7 +27,7 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
   fs.writeFileSync(botFile, `DISCORD_BOT_TOKEN=${FAKE.token}\nDISCORD_APPLICATION_ID=${FAKE.appId}\n`, {mode: 0o600});
   fs.writeFileSync(hookFile, `DISCORD_USER_ID=${FAKE.userId}\nDISCORD_WEBHOOK_URL_SECRETARY=https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken}\n`, {mode: 0o600});
   const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux',
-    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_SYSTEM_NOTIFY_TIMEOUT_MS: '30000', KADAN_DISCORD_API_BASE: fake.base,
+    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_TEST_SYSTEM_NOTIFY_TIMEOUT_MS: '30000', KADAN_DISCORD_API_BASE: fake.base,
     KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile};
   const kadan = (...args) => spawnSync(process.execPath, [CLI, ...args], {env, encoding: 'utf8', timeout: 60000});
   const up = (...extra) => kadan('up', '--cmd', 'sh', '--port', String(port), '--hidden', '--no-prompt', ...extra);
