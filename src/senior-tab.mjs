@@ -1,6 +1,8 @@
 // 시니어 따라 보기 탭 — 호출이 도는 동안만 로티에 읽기 전용 탭을 띄워 진행 출력을 보여 준다(2026-10-16 [kyle]).
 // 탭은 꾸밈이다: 어떤 실패도 던지지 않고 건너뜀 사유로 돌려준다. 역할이 아니므로 KADAN_ROLE·kadan-* 이름·start 원장 사건을 쓰지 않는다.
 // 로티 호출은 floor-rottie의 runRottie 길목(운영 로티 보호 포함)을 그대로 쓴다.
+import fs from 'node:fs';
+import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {effectiveWindow} from './window-setting.mjs';
 import {assertNotLiveRottie} from './live-floor-guard.mjs';
@@ -14,6 +16,17 @@ export const SENIOR_TAB_ENV = 'KADAN_SENIOR_TAB';
 export const SENIOR_TAB_DEFAULT_ON = true;
 
 const shellWord = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${String(value).replace(/'/g, "'\\''")}'`;
+// 복구 근거: 호출 폴더의 tab.json. create 전에 키를 먼저 쓰고 결과가 나올 때마다 갱신한다(동기). 쓰기 실패는 삼킨다.
+// 사람은 이 key로 로티에서 그 탭을 직접 닫는다. 제목·키로 목록을 뒤져 자동으로 지우지는 않는다.
+export function writeTabState(dir, state) {
+  try {
+    const file = path.join(dir, 'tab.json');
+    let prev = {};
+    try { prev = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* 처음 쓴다 */ }
+    fs.writeFileSync(file, JSON.stringify({...prev, ...state, at: new Date().toISOString()}), {mode: 0o600});
+  } catch { /* 꾸밈이다 */ }
+}
+
 const reasonOf = error => error?.code || error?.message || String(error);
 
 export function seniorTabEnabled(env) {
@@ -42,15 +55,24 @@ export function openSeniorTab({home, env, card, adviceId, dir, followScript, par
     // workspace가 로티에 열려 있지 않으면(ROTTIE_WORKSPACE_NOT_OPEN) 새로 추가하지 않고 건너뛴다.
     const argv = buildSeniorTabCreateArgv({card, adviceId, command});
     const key = argv[argv.indexOf('--idempotency-key') + 1];
+    writeTabState(dir, {key, state: 'creating'});
     let envelope;
     try { envelope = call(argv); } catch (error) {
-      // 요청이 닿았는지 모르는 오류(effect unknown)는 탭이 생겼을 수 있다. 제목으로 뒤져 지우지 않고 키만 남긴다.
-      if (error?.effect === 'unknown') return {tab: 'unknown', tabReason: reasonOf(error), tabKey: key};
-      throw error;
+      // skipped는 생성이 없었다고 확실할 때만(typed 오류이면서 effect none)이다. JSON 응답 없이 끝난 경우는
+      // 종료 코드·신호와 무관하게 탭이 생겼을 수 있으므로 unknown이다. 제목으로 뒤져 지우지 않고 키만 남긴다.
+      if (error?.effect === 'none' && error?.code !== 'ROTTIE_JSON_PARSE') {
+        writeTabState(dir, {state: 'skipped', reason: reasonOf(error)});
+        return {tab: 'skipped', tabReason: reasonOf(error)};
+      }
+      writeTabState(dir, {state: 'unknown', reason: reasonOf(error)});
+      return {tab: 'unknown', tabReason: reasonOf(error), tabKey: key};
     }
     try {
-      return {tab: 'opened', rottieTerminalId: parseRottieCreateEvidence(envelope).rottieTerminalId, call};
+      const id = parseRottieCreateEvidence(envelope).rottieTerminalId;
+      writeTabState(dir, {state: 'opened', rottieTerminalId: id});
+      return {tab: 'opened', rottieTerminalId: id, call, tabKey: key};
     } catch (error) {
+      writeTabState(dir, {state: 'unknown', reason: reasonOf(error)});
       return {tab: 'unknown', tabReason: reasonOf(error), tabKey: key};
     }
   } catch (error) {
@@ -81,9 +103,15 @@ export function closeSeniorTab(opened) {
   }
 }
 
-// 호출 도중 TERM/INT를 받으면 탭을 닫고 신호 관례 코드로 나간다. 해제 함수를 돌려준다.
-export function closeOnSignal(close, exit = code => process.exit(code)) {
-  const handlers = {SIGTERM: () => { close(); exit(143); }, SIGINT: () => { close(); exit(130); }};
+// 호출 도중(탭 생성 중 포함) TERM/INT를 받으면 탭을 닫고 신호 관례 코드로 나간다. 해제 함수를 돌려준다.
+// onSignal은 닫은 뒤 상태·원장을 남기는 자리다. 어느 쪽이 실패해도 원래 신호 종료 코드는 지킨다.
+export function closeOnSignal(close, exit = code => process.exit(code), onSignal = () => {}) {
+  const handle = (signal, code) => () => {
+    try { close(); } catch { /* 종료 코드를 지킨다 */ }
+    try { onSignal(signal); } catch { /* 종료 코드를 지킨다 */ }
+    exit(code);
+  };
+  const handlers = {SIGTERM: handle('SIGTERM', 143), SIGINT: handle('SIGINT', 130)};
   for (const [signal, handler] of Object.entries(handlers)) process.once(signal, handler);
   return () => { for (const [signal, handler] of Object.entries(handlers)) process.removeListener(signal, handler); };
 }

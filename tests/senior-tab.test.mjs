@@ -290,3 +290,68 @@ await seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home: ${JSON.strin
     assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['create', 'close', 'show', 'remove']);
   });
 }
+
+// 라운드 2: 생성 응답이 유실돼도 키를 잃지 않는다 — 호출 폴더 tab.json과 interrupted 사건이 복구 근거다.
+const tabJson = home => {
+  const [id] = fs.readdirSync(path.join(home, 'advice'));
+  return {id, dir: path.join(home, 'advice', id), state: JSON.parse(fs.readFileSync(path.join(home, 'advice', id, 'tab.json'), 'utf8'))};
+};
+
+test('R2: 터미널 Ctrl-C처럼 프로세스 그룹 전체가 SIGINT를 받아 로티 CLI도 죽어도 tab.json 키·unknown·interrupted 사건이 남고 remove는 0회', async () => {
+  const f = fixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-grp-'));
+  const bin = path.join(dir, 'rottie'), log = path.join(dir, 'calls.log'), ready = path.join(dir, 'creating');
+  fs.writeFileSync(bin, `#!${process.execPath}
+const fs = require('node:fs');
+const argv = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, argv[1] + '\\n');
+if (argv[1] === 'create') { process.on('SIGINT', () => process.exit(130)); fs.writeFileSync(${JSON.stringify(ready)}, '1'); setTimeout(() => {}, 3000); }
+else console.log('{"ok":true,"result":{}}');
+`, {mode: 0o755});
+  const harness = path.join(dir, 'harness.mjs');
+  fs.writeFileSync(harness, `import {seniorCommand} from ${JSON.stringify(new URL('../src/senior.mjs', import.meta.url).href)};
+await seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home: ${JSON.stringify(f.home)}, by: 'qa-감독', env: ${JSON.stringify(envOn({KADAN_ROTTIE_BIN: bin}))},
+  followScript: ${JSON.stringify(followScript)}, spawn: () => new Promise(() => setInterval(() => {}, 1000))});
+`);
+  const child = spawn(process.execPath, [harness], {detached: true, stdio: 'ignore'});
+  const exited = new Promise(resolve => child.on('close', (c, s) => resolve({code: c, signal: s})));
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(ready) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  assert.ok(fs.existsSync(ready), 'create가 시작되지 않았다');
+  process.kill(-child.pid, 'SIGINT');
+  assert.equal((await exited).code, 130);
+  assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['create']);
+  const {id, state} = tabJson(f.home);
+  assert.equal(state.key, `kadan-senior-${id}`); assert.equal(state.state, 'unknown');
+  const [entry] = f.advices();
+  assert.equal(entry.reason, 'interrupted'); assert.equal(entry.tab, 'unknown'); assert.equal(entry.tabKey, state.key);
+  assert.equal(entry.evidencePath, path.join(f.home, 'advice', id)); assert.equal(entry.rottieTerminalId, undefined);
+});
+
+test('R2: 로티 CLI가 JSON 없이 비정상 종료(130·신호)해도 skipped가 아니라 unknown이고 키가 남으며 remove·목록 조회가 없다', async () => {
+  for (const body of ['process.exit(130);', 'process.kill(process.pid, "SIGKILL");', 'console.log("not json"); process.exit(0);']) {
+    const f = fixture();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-nojson-'));
+    const bin = path.join(dir, 'rottie'), log = path.join(dir, 'calls.log');
+    fs.writeFileSync(bin, `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(log)}, process.argv[3] + '\\n');\n${body}\n`, {mode: 0o755});
+    const r = await f.run({spawn: f.spawnFn()}, {env: envOn({KADAN_ROTTIE_BIN: bin})});
+    assert.equal(r.reason, 'ok'); assert.equal(r.tab, 'unknown');
+    const {id, state} = tabJson(f.home);
+    assert.equal(state.state, 'unknown'); assert.equal(f.advices()[0].tabKey, `kadan-senior-${id}`);
+    assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['create']);
+  }
+});
+
+test('R2: tab.json은 create 전에 creating으로 쓰이고 열림·닫힘으로 갱신된다, skipped(생성 없음 확실)는 키 없이 tab: skipped', async () => {
+  const f = fixture();
+  let seenBeforeCreate = null;
+  const r = await f.run({spawn: f.spawnFn(), rottie: argv => {
+    if (argv[1] === 'create') { const t = tabJson(f.home); seenBeforeCreate = t.state; }
+    return f.rottieFn()(argv);
+  }});
+  assert.equal(seenBeforeCreate.state, 'creating'); assert.equal(seenBeforeCreate.key, `kadan-senior-${r.adviceId}`);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(r.evidencePath, 'tab.json'), 'utf8')).state, 'closed');
+  const g = fixture();
+  const s = await g.run({spawn: g.spawnFn(), rottie: g.rottieFn({createError: new RottieFloorError('안 됨', {code: 'ROTTIE_APP_NOT_RUNNING', effect: 'none'})})});
+  assert.equal(s.tab, 'skipped'); assert.equal(g.advices()[0].tabKey, undefined);
+});

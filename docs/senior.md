@@ -61,9 +61,16 @@ Why: kyle이 시니어가 무엇을 읽고 어떻게 고민하는지 화면에�
 | 앱 꺼짐·workspace 없음 등 create 오류 | `skipped` | 로티 오류 코드 | 같음 |
 | 열고 정상 닫음 | `closed` | 없음 | 호출 동안만 탭 |
 | 닫은 뒤 목록에 남아 remove함 | `closed` | `removed-after-close` | 호출 동안만 탭 |
-| 생성 응답이 유실·불확실(탭이 생겼을 수 있음) | `unknown` | 로티 오류 코드 | 탭이 남을 수 있음. 원장 `tabKey`(`kadan-senior-<호출ID>`)로 사람이 찾는다. 제목·키로 목록을 뒤져 지우지 않는다 |
+| 생성 응답이 유실·불확실(탭이 생겼을 수 있음). 로티 CLI가 JSON 없이 끝난 모든 경우(종료 코드·신호 무관), 응답 형식 오류, effect `unknown` 오류 | `unknown` | 로티 오류 코드 | 탭이 남을 수 있음. 원장 `tabKey`(`kadan-senior-<호출ID>`)로 사람이 찾는다. 제목·키로 목록을 뒤져 지우지 않는다 |
+| 신호(TERM/INT)로 호출이 끝남 | 그때의 탭 상태 | — | 원장에 `reason: interrupted` 사건이 남고, 열린 탭은 닫는다 |
 | 닫은 뒤 show가 NOT_FOUND 아닌 오류 → remove 성공 | `closed` | `removed-after-show-error: …` | 호출 동안만 탭 |
 | 닫기·remove 실패 | `close-failed` | 로티 오류 코드 | 탭이 남을 수 있음(`rottieTerminalId`로 직접 닫는다) |
+
+### 알려진 한계
+
+- **어떤 종료에서 탭이 남을 수 있나**: 탭을 만드는 순간에 터미널 Ctrl-C처럼 프로세스 그룹 전체가 SIGINT를 받아 로티 CLI도 함께 죽은 경우, SIGKILL, 전원·강제 종료. 이때는 탭 주소(id)를 받지 못해 닫을 수 없고, 보기 탭 1개가 남을 수 있다. 주소를 모르면 정리하지 않는다(제목·키로 목록을 뒤져 지우면 남의 탭을 지울 수 있다).
+- **남은 탭 찾는 법**: 호출 폴더 `KADAN_HOME/advice/<호출ID>/tab.json`의 `key`(`kadan-senior-<호출ID>`, create 전에 먼저 쓴다) 또는 원장 `advice` 사건의 `tabKey`를 보고, 로티에서 `시니어 · <카드키>` 제목의 탭을 직접 닫는다. 신호로 끝난 호출은 `reason: interrupted`로 원장에 남는다.
+- **영향 없는 것**: 시니어 답·원장 기록·운영 카단. 탭은 꾸밈이라 남아도 읽기 전용 로그 화면 하나일 뿐이고, 따라 보기 스크립트는 부모가 사라지면 스스로 끝난다.
 
 ### 포커스 실측 (2026-10-16, 1회, kyle 허락)
 

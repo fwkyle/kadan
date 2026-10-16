@@ -12,7 +12,7 @@ import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
-import {closeOnSignal, closeSeniorTab, openSeniorTab} from './senior-tab.mjs';
+import {closeOnSignal, closeSeniorTab, openSeniorTab, writeTabState} from './senior-tab.mjs';
 
 export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
@@ -93,10 +93,21 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 닫기는 성공·실패·시간 초과·신호 모두에서 한다.
   // 신호 처리기는 create 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
   let opened = {tab: 'skipped'}, tab = {tab: 'skipped'};
-  const closeTab = () => { if (opened.tab === 'opened') tab = closeSeniorTab(opened); };
-  const detach = closeOnSignal(closeTab);
+  const closeTab = () => {
+    if (opened.tab === 'opened') { tab = closeSeniorTab(opened); writeTabState(dir, {state: tab.tab, reason: tab.tabReason}); }
+  };
+  const makeEntry = fields => ({kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
+    model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
+    files: attachments.map(a => a.file), evidencePath: dir, ...tab, ...(opened.tabKey ? {tabKey: opened.tabKey} : {}),
+    ...(opened.rottieTerminalId ? {rottieTerminalId: opened.rottieTerminalId} : {}), t: new Date(started).toISOString(), ...fields});
+  // 신호로 끝나도 advice 사건 한 줄(reason: interrupted)을 남긴다. 모든 단계가 동기이고 실패해도 신호 종료 코드는 지킨다.
+  const onSignal = () => {
+    if (opened.tab === 'unknown' || opened.tab === 'creating') writeTabState(dir, {state: 'unknown', reason: 'interrupted'});
+    record(makeEntry({reason: 'interrupted', exitCode: null, durationMs: now() - started, bytes: 0, digest: digest('')}));
+  };
+  const detach = closeOnSignal(closeTab, undefined, onSignal);
   opened = openSeniorTab({home, env, card, adviceId, dir, followScript, rottie});
-  tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason, ...(opened.tabKey ? {tabKey: opened.tabKey} : {})};
+  tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason};
   let result;
   try {
     result = await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
@@ -111,10 +122,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   // KADAN_JUDGE_TIMEOUT=1은 감시 AI와 같이 쓰는 watch-call-process.mjs가 상한에 걸렸을 때 stderr에 남기는 표시다.
   const reason = result.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1') ? 'timeout'
     : result.error || result.status !== 0 ? 'call-failed' : answer.trim() ? 'ok' : 'empty';
-  const entry = {kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
-    model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
-    reason, exitCode: result.status ?? null, durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer),
-    files: attachments.map(a => a.file), evidencePath: dir, ...tab, ...(opened.rottieTerminalId ? {rottieTerminalId: opened.rottieTerminalId} : {}), t: new Date(started).toISOString()};
+  const entry = makeEntry({reason, exitCode: result.status ?? null, durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer)});
   record(entry);
   if (reason !== 'ok') {
     const error = new Error(`자문 실패(${reason}) — 답은 쓰지 않는다. 증거: ${dir}`);
