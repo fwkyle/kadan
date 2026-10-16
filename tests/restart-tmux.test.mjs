@@ -14,14 +14,19 @@ import {restartRoleDefault} from '../src/center-wall.mjs';
 const A = '0197aaaa-1111-4222-8333-444455556666', B = '0197bbbb-1111-4222-8333-444455556666';
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
 
+// 가짜 실행기·자식은 부모(창 안 프로세스)가 사라지면 스스로 끝난다. 창을 끄는 쪽이 자식까지 못 끄면 고아로 남았다(2026-10-16).
+const WATCH_PARENT = "const pp=process.ppid;setInterval(()=>{try{process.kill(pp,0)}catch{process.exit(0)}},200);";
+
 function setup(t, name) {
   const home = ledgerHome();
   const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR};
   process.env.KADAN_SOCKET = `r${process.pid}${name}`;
-  process.env.TMUX_TMPDIR = fs.mkdtempSync('/tmp/kr-'); // 소켓 경로가 길면 tmux가 거절한다
+  const sockDir = fs.mkdtempSync('/tmp/kr-'); // 소켓 경로가 길면 tmux가 거절한다
+  process.env.TMUX_TMPDIR = sockDir;
   // 원래 값으로 되돌린다: 지우면 뒤 시험과 자식이 운영 기본 소켓(kadan)으로 돌아간다(2026-10-16 누수).
   t.after(() => {
     tmux(['kill-server']);
+    fs.rmSync(sockDir, {recursive: true, force: true});
     for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
@@ -35,7 +40,7 @@ function setup(t, name) {
   const ready = path.join(dir, 'ready');
   // 자식 Node: 인자로 받은 파일을 열고 유지한다.
   fs.writeFileSync(path.join(dir, 'child.js'), `const fs=require('fs');const fds=process.argv.slice(2).map(f=>fs.openSync(f,'r'));
-fs.writeFileSync(${JSON.stringify(ready)}+'.child','ok');setInterval(()=>{},1000);`);
+fs.writeFileSync(${JSON.stringify(ready)}+'.child','ok');${WATCH_PARENT}`);
   // 가짜 codex 본체: HOLD로 받은 파일을 열고, CHILD_FILES가 있으면 자식에게 열게 한다.
   const fake = path.join(dir, 'codex');
   fs.writeFileSync(fake, `#!${process.execPath}
@@ -46,7 +51,7 @@ const ri=process.argv.indexOf('resume');if(ri>0&&process.argv[ri+1]){const id=pr
 const child=process.env.IS_SAME_CHILD==='1';
 if(process.env.SPAWN_SAME)cp.spawn(process.execPath,[__filename,'--model','test-model','-c','e=low'],{env:{...process.env,HOLD:process.env.SAME_HOLD,SPAWN_SAME:'',IS_SAME_CHILD:'1'},stdio:'ignore'});
 if(process.env.CHILD_FILES)cp.spawn(process.execPath,[${JSON.stringify(path.join(dir, 'child.js'))},...process.env.CHILD_FILES.split(',')],{stdio:'ignore'});
-fs.writeFileSync(${JSON.stringify(ready)}+(child?'.child':''),'ok');setInterval(()=>{},1000);`, {mode: 0o700});
+fs.writeFileSync(${JSON.stringify(ready)}+(child?'.child':''),'ok');${WATCH_PARENT}`, {mode: 0o700});
   const settings = settingsWith({codex: {
     spawn: `${fake} --model {model} -c e={effort}`, resume: `${fake} --model {model} -c e={effort} resume {conversation}`,
     conversation: {kind: 'open-file', pattern: '/sessions/.+/rollout-[0-9T-]+-([0-9a-f-]{36})\\.jsonl$',

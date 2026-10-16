@@ -4,7 +4,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-process.env.KADAN_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-test-home-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-test-home-'));
+process.env.KADAN_HOME = home;
+// 자기가 만든 홈만 시험 프로세스가 끝날 때 지운다(다시 만들 수 있는 임시 폴더, 2026-10-16 누수).
+process.once('exit', () => fs.rmSync(home, {recursive: true, force: true}));
 delete process.env.KADAN_LITE_HOME;
 // 사용자 우편함 편지의 OS 알림을 시험 중에는 끈다(2026-10-07).
 process.env.KADAN_NOTIFY = 'off';

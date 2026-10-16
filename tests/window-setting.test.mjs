@@ -15,8 +15,10 @@ import {runnersData} from '../src/dashboard/settings.mjs';
 const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-window-setting-'));
 const BIN = '/apps/Rottie/Contents/MacOS/rottie';
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
-const run = (h, args, env = {}) => spawnSync(process.execPath, [cli, ...args],
-  {encoding: 'utf8', env: {PATH: process.env.PATH, HOME: process.env.HOME, KADAN_HOME: h, ...env}});
+// TMPDIR·TMUX_TMPDIR도 넘긴다: 빠지면 자식 CLI가 기본 tmux 폴더를 써서 시험의 tmux 조회와 소켓이 갈린다.
+const run = (h, args, env = {}) => spawnSync(process.execPath, [cli, ...args], {encoding: 'utf8',
+  env: {PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
+    TMUX_TMPDIR: process.env.TMUX_TMPDIR, KADAN_HOME: h, ...env}});
 
 test('rottie 고정은 절대경로 없이는 받지 않고, 잘못된 값도 거절한다', () => {
   const h = home();
