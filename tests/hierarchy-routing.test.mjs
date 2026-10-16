@@ -28,19 +28,21 @@ test('09-07 순환과 누락된 상위를 잘못된 설정으로 거부한다', 
 const t = '2026-09-07T00:00:00Z';
 const pending = {kind:'send',role:'other-prefix-작업자',taskId:'card-1',t};
 function states(ms=60000) {return new Map([...parents.keys()].map(role=>[`kadan-${role}`,{role,alive:true,digest:'x',unchangedMs:ms}]))}
-test('09-07 작업 없는 대기는 정상, 미완료 후 무진행은 직속 두 층에서 탐지한다',()=>{
+test('09-07 작업 없는 대기는 정상, 미완료 후 무진행은 직속 감독이 탐지하고 슈퍼는 감독의 2단으로 받는다(2026-10-16)',()=>{
   const now=Date.parse(t)+60000;
   assert.deepEqual(assessSupervisorIdle([],states(),now,30000,null,parents),[]);
   const found=assessSupervisorIdle([pending],states(),now,30000,null,parents);
-  assert.deepEqual(found.map(x=>x.role).sort(),['prod-감독','prod-슈퍼감독'].sort());
+  assert.deepEqual(found.map(x=>x.role),['prod-감독']);
   assert.ok(found.every(x=>x.openCards===1));
+  // 2단(30초 두 배)이 되면 같은 감독 경보가 상위로 올라간다. 슈퍼감독이 직접 세지는 않는다.
+  assert.equal(assessSupervisorIdle([pending],states(120000),Date.parse(t)+120000,30000,null,parents)[0].id,'idle:hierarchy:prod-감독:상위');
   assert.deepEqual(assessSupervisorIdle([pending,{...pending,kind:'done'}],states(),now,30000,null,parents),[]);
   const active=states();active.get('kadan-other-prefix-작업자').unchangedMs=1000;
   assert.deepEqual(assessSupervisorIdle([pending],active,now,30000,null,parents),[]);
 });
 test('09-07 다른 역할의 같은 카드 done은 내 미완료를 지우지 않는다', async () =>{
   const events=[pending,{...pending,kind:'done',role:'other-prefix-검수자'}];
-  assert.equal(assessSupervisorIdle(events,states(),Date.parse(t)+60000,30000,null,parents).length,2);
+  assert.equal(assessSupervisorIdle(events,states(),Date.parse(t)+60000,30000,null,parents).length,1);
 });
 async function watchExercise({role='prod-슈퍼감독', notificationFails=false, sendFails=false}={}) {
   let cycle=0;const sent=[],notifications=[],records=[],lines=[];
@@ -78,9 +80,9 @@ test('09-07 직속 전달 경합 실패는 해당 슈퍼로 한 번 상신한다
 test('09-07 미발령 계획은 직속 감독에게 귀속하고 발령된 별도 판은 가짜 감독을 찾지 않는다',()=>{
  const now=Date.parse(t)+60000;
  const unsent={kind:'plan',board:'prod',taskId:'card-next',t};
- assert.deepEqual(assessSupervisorIdle([unsent],states(),now,30000,null,parents).map(x=>x.role).sort(),['prod-감독','prod-슈퍼감독'].sort());
+ assert.deepEqual(assessSupervisorIdle([unsent],states(),now,30000,null,parents).map(x=>x.role),['prod-감독']);
  const events=[{...unsent,board:'product-integration',taskId:'card-1'},pending];
- assert.equal(assessSupervisorIdle(events,states(),now,30000,null,parents).length,2);
+ assert.equal(assessSupervisorIdle(events,states(),now,30000,null,parents).length,1);
 });
 
 test('09-07 인계 관계표를 재시작 없이 읽고 오류 때 마지막 정상 관계와 사용자 경보를 유지한다', async () =>{

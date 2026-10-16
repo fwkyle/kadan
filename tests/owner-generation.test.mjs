@@ -7,7 +7,7 @@ import { WorkStore } from "../src/work-store.mjs";
 import assert from "node:assert/strict";
 import { assessSupervisorIdle } from "../src/watch-supervisor.mjs";
 import { effectiveWorkOwnership, withEffectiveOwner } from "../src/handover-state.mjs";
-import { previousGenerationWorks, previousGenerationExecutions, buildWatchScope } from "../src/watch-scope.mjs";
+import { previousGenerationWorks, previousGenerationExecutions, buildWatchScope, buildSupervisorScope } from "../src/watch-scope.mjs";
 import { ownerGenerations, isPreviousOwner } from "../src/owner-generation.mjs";
 
 const parents = new Map(Object.entries({ "r-슈퍼": "@user", "r-감독": "r-슈퍼", "r-작업자": "r-감독" }));
@@ -21,15 +21,15 @@ const idle = (entries, works = []) => assessSupervisorIdle(entries, states(), no
 
 test("옛 세대 작업자의 열린 발령은 새 세대 start(new) 뒤 감독의 놀고 있음 할 일에서 빠진다", () => {
   const before = [start("r-작업자", 0), send("r-작업자", 5)];
-  assert.deepEqual(idle(before), ["r-감독", "r-슈퍼"], "새 세대 전에는 할 일");
+  assert.deepEqual(idle(before), ["r-감독"], "새 세대 전에는 할 일(직속 감독의 본인 차례, 슈퍼는 감독의 2단으로 받는다)");
   assert.deepEqual(idle([...before, start("r-작업자", 10)]), [], "new start 뒤에는 옛 세대 소속");
 });
 
 test("resume 이어가기·같은 대화 재사용 뒤에는 그대로 할 일, 새 세대 뒤에 받은 발령은 할 일", () => {
   const base = [start("r-작업자", 0), send("r-작업자", 5)];
-  assert.deepEqual(idle([...base, start("r-작업자", 10, { cmd: "claude --resume abc" })]), ["r-감독", "r-슈퍼"]);
-  assert.deepEqual(idle([...base, start("r-작업자", 10, { inheritMail: true })]), ["r-감독", "r-슈퍼"], "--inherit-mail은 바로 앞 세대를 이어받는다");
-  assert.deepEqual(idle([...base, start("r-작업자", 10), send("r-작업자", 20, { taskId: "task-2" })]), ["r-감독", "r-슈퍼"], "새 세대가 받은 발령");
+  assert.deepEqual(idle([...base, start("r-작업자", 10, { cmd: "claude --resume abc" })]), ["r-감독"]);
+  assert.deepEqual(idle([...base, start("r-작업자", 10, { inheritMail: true })]), ["r-감독"], "--inherit-mail은 바로 앞 세대를 이어받는다");
+  assert.deepEqual(idle([...base, start("r-작업자", 10), send("r-작업자", 20, { taskId: "task-2" })]), ["r-감독"], "새 세대가 받은 발령");
 });
 
 test("감시 범위: 옛 세대 발령은 빠지고 previous로 센다. resume 이어가기·인계로 새 세대 뒤에 받은 발령은 남는다", () => {
@@ -55,7 +55,7 @@ test("업무 책임 시각: 생성·재배정·확정 인계 중 마지막. 이�
   const handed = [{ kind: "handover", phase: "transferred", from: "r-감독", to: "r-감독2", t: at(30), taskIds: [] }];
   assert.deepEqual(effectiveWorkOwnership(work, handed), { owner: "r-감독2", at: at(30) });
   const entries = [start("r-감독", 0), start("r-감독", 20)];
-  const hier = new Map([["r-감독", "r-슈퍼"], ["r-슈퍼", "@user"]]);
+  const hier = new Map([["r-감독"], ["r-슈퍼", "@user"]]);
   assert.deepEqual(previousGenerationWorks([withEffectiveOwner(work, entries)], entries, hier), [{ kind: "work", key: "r/w1", role: "r-감독" }]);
   const reassigned = { ...work, history: [{ owner: "다른", at: at(1) }, { owner: "r-감독", at: at(25) }] };
   assert.deepEqual(previousGenerationWorks([withEffectiveOwner(reassigned, entries)], entries, hier), [], "새 세대 뒤에 재배정받은 업무");
@@ -77,7 +77,7 @@ test("2라운드(1): 같은 이름 명시 재지정은 현재 세대, 진행 기
   const entries = [start("r-감독", -5), start("r-감독", 60_000)]; // 업무 생성 뒤 새 세대
   entries[0].t = new Date(Date.parse(work.at) - 1000).toISOString();
   entries[1].t = new Date(Date.parse(work.at) + 1000).toISOString();
-  const hier = new Map([["r-감독", "r-슈퍼"], ["r-슈퍼", "@user"]]);
+  const hier = new Map([["r-감독"], ["r-슈퍼", "@user"]]);
   const previous = (w) => previousGenerationWorks([withEffectiveOwner(w, entries)], entries, hier).length;
   assert.equal(previous(store.get("r/w1")), 1, "새 세대 전에 붙은 책임");
   const progressed = store.change("r/w1", "update", { progress: "절반" }, { revision: 1, by: "사람", note: "진행" });
@@ -112,4 +112,34 @@ test("2라운드(3): 이전 세대 발령을 빼도 그 plan은 미발령 할 �
   assert.ok(run(base).length > 0, "새 세대 전에는 할 일");
   assert.deepEqual(run([...base, start("r-작업자", 10)]), [], "새 세대 뒤 옛 발령+plan");
   assert.ok(run([start("r-작업자", 0), plan("진짜미발령", 2)]).length > 0, "진짜 미발령 plan은 경보");
+});
+
+test("차례에 귀속한 업무는 차례가 넘어간 시각(turnAt)으로 세대를 가른다 — 새 세대 뒤에 맡긴 일은 할 일, 새 세대 전에 맡긴 일은 이전 세대", () => {
+  const entries = [start("r-감독", 0), start("r-감독", 20)];
+  const work = (turnAt) => ({ key: "r/w1", status: "open", owner: "r-슈퍼", turnOwner: "r-감독", turnAt,
+    ownedAt: at(1), executions: [], at: at(2) });
+  const run = (w) => assessSupervisorIdle(entries, states(), now, idleMs, null, parents,
+    { works: [w], cards: [], waits: [], peerEntries: entries }).filter((a) => a.kind === "놀고 있음").map((a) => a.role);
+  assert.deepEqual(run(work(at(30))), ["r-감독"], "새 세대(20분) 뒤 turnAt(30분)으로 맡긴 일은 owner의 ownedAt(1분)과 무관하게 할 일");
+  assert.deepEqual(run(work(at(10))), [], "새 세대 시작 전 turnAt(10분)에 맡긴 일은 이전 세대");
+});
+
+test("owner와 차례가 같아도 차례가 넘어간 시각(turnAt)으로 세대를 가른다 — 새 세대 뒤 다시 차례를 받은 업무는 할 일", () => {
+  const entries = [start("r-감독", 0), start("r-감독", 20)];
+  const work = (turnAt) => ({ key: "r/w1", status: "open", owner: "r-감독", turnOwner: "r-감독", turnAt,
+    ownedAt: at(1), executions: [], at: at(2) });
+  const run = (w) => assessSupervisorIdle(entries, states(), now, idleMs, null, parents,
+    { works: [w], cards: [], waits: [], peerEntries: entries }).filter((a) => a.kind === "놀고 있음").map((a) => a.role);
+  assert.deepEqual(run(work(at(30))), ["r-감독"], "owner==turnOwner, 새 세대(20분) 뒤 turnAt(30분)");
+  assert.deepEqual(run(work(at(10))), [], "새 세대 전 turnAt(10분)은 이전 세대");
+});
+
+test("감시 범위: owner가 이전 세대여도 현재 차례 역할은 범위에 들어간다. 판정과 같은 currentResponsibility를 쓴다", () => {
+  const entries = [start("r-감독", 0), start("r-감독", 20), start("r-작업자", 0),
+    { kind: "send", role: "r-작업자", taskId: "t1", t: at(0) }, { kind: "done", role: "r-작업자", taskId: "t1", t: at(1) }];
+  const work = (turnOwner, turnAt) => ({ key: "r/w1", status: "open", owner: "r-감독", ownedAt: at(1), turnOwner, turnAt,
+    executions: [{ key: "t1" }], at: at(2) });
+  const card = { id: "t1", key: "t1", role: "r-작업자", board: "r", status: "done", workType: "execution" };
+  const sessions = (w) => [...buildSupervisorScope([card], entries, parents, [w]).sessions];
+  assert.deepEqual(sessions(work("r-슈퍼", at(30))), ["kadan-r-슈퍼"], "owner(감독)는 이전 세대라 빠지고 차례(슈퍼)만");
 });
