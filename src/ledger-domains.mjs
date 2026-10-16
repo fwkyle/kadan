@@ -12,6 +12,14 @@ const taskKinds = new Set(['plan','dispatch','done']);
 const taskFields = ['t','role','taskId','rawTaskId','executionKey','workKey','board','by'];
 const own = (value,key) => Object.hasOwn(value,key);
 const taskSend = value => value.kind === 'send' && value.taskId != null && value.transport !== 'mailbox' && !value.completion && !value.systemGenerated && !value.replyFinal;
+// 감시AI 호출 기록의 관계표(parents)·경로표(routes)는 건당 약 2만 자라 시스템 영역의 2/3를 차지한다(2026-10-16 실측).
+// 상태 판정은 쓰지 않으므로 읽기에서 뺀다. 원장 원본은 그대로이고, 필요한 곳은 readWatchRequest로 단건을 읽는다.
+// 빼도 되는 필드의 허용 목록(이 밖의 필드는 어떤 경우에도 빼지 않는다). 검증기가 읽는 필드와 겹치면 시험이 실패한다.
+export const SLIM_DROPPABLE = Object.freeze(['parents','routes','timing']);
+const slimWatchRequest = [{kind:'watch-ai-request',drop:['parents','routes']}];
+// 작업·우편 영역 조회는 시스템 영역의 감시 사건(watch-*)을 출력하지 않으므로 큰 본문(관계표·경로표·순회 시간표)도 뺀다.
+// 순번·연결 검증과 작업 주소 판정이 읽는 필드는 값과 자료형 그대로 남는다.
+const slimWatchForDomain = [{prefix:'watch-',drop:[...SLIM_DROPPABLE]}];
 const lockPath = home => path.join(home,'.ledger-lock');
 
 export function ledgerDomain(kind) {
@@ -102,7 +110,7 @@ function legacyRows(home) {
   });
 }
 
-export function readLedgerState(home,{locked=false}={}) {
+export function readLedgerState(home,{locked=false,domain=null}={}) {
   return storageSnapshot(home,() => {
     // 쓰는 중이면 끝나기를 기다렸다가 읽고, 읽는 사이 새 쓰기가 끼면 다시 읽는다. 예산을 넘기면 기존처럼 실패한다.
     const guarded = !locked && storageMode(home) === 'jsonl', lock = lockPath(home), deadline = Date.now() + LOCK_WAIT_MS;
@@ -110,7 +118,7 @@ export function readLedgerState(home,{locked=false}={}) {
     for (;;) {
       if (guarded && !waitDirUnlocked(lock, {waitMs: Math.max(0, deadline - Date.now())})) throw busy();
       const legacy = legacyRows(home);
-      const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true})]));
+      const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true,slim:stream!==ledgerStreams.system?null:(domain&&domain!=='system'?slimWatchForDomain:slimWatchRequest)})]));
       const ordered = validateDomainStreams(streams,legacy);
       if (!guarded || !fs.existsSync(lock)) return {legacy,streams,ordered};
     }
