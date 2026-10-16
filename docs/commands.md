@@ -117,7 +117,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | `kadan work` | 결과 중심 업무 한 장과 그 안의 실행. `create`·`list`·`show`·`update`·`execute`(`--assign <역할> [--dispatch "<지시>"]`로 생성·배정·묶음·plan·전송을 한 번에)·`link`/`unlink`·`mail`·`complete`/`cancel`·`reopen` | [업무 카드와 실행](business-work.md) |
 | `kadan work auto-*` | 구현·검수 자동 전달. `auto-configure`·`auto-show`·`auto-run`·`auto-report` 등 | [자동 전달](automatic-review.md) |
 | `kadan card` | 중앙 카드. `list`·`show`·`create`·`update`·`note`·`brief`·`progress`·`report`·`link` 등 | [중앙 카드](card-center.md) |
-| `kadan decision` | 사용자 결정 요청. `request`·`list`·`show`·`answer`·`cancel` | [결정 기록](decisions.md) |
+| `kadan decision` | 사용자 결정 요청. `request`·`list`·`show`·`answer`·`cancel`. 답은 디코 레포 포럼의 요청 글에 번호·정확한 문구로 답해도 다리가 같은 `answer` 경로로 기록한다(답에 `source`·`messageId`가 남는다) → [디코에서 결정 답하기](discord-chat.md#디코에서-결정-답하기) | [결정 기록](decisions.md) |
 | `kadan senior <카드키> --question <질문>` | 작업 결과에 결정할 부분이 있을 때 감독이 시니어(고급 모델)에게 의견을 한 번 묻는다. `--file <절대경로>`(5개·64KB까지), `--timeout <초>`(기본 1800), `--effort <강도>`(이번 호출만, 실측 시험은 low) | [시니어](senior.md) |
 
 ## 우편

@@ -1,10 +1,12 @@
 // kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트] [--reply-to 메시지ID | --thread 스레드ID] [--edit 메시지ID] [--quiet] | thread <스레드ID> [--rename 이름] [--archive] | check
-// #비서 채널 대화(3단계). watch는 새 메시지를 JSON 한 줄씩 표준 출력으로 낸다(비서가 감시 도구로 구독). 판단은 비서가 한다.
+// #비서 채널과 등록한 레포 포럼 스레드의 대화(3단계). watch는 새 메시지를 JSON 한 줄씩 표준 출력으로 낸다(비서가 감시 도구로 구독). 판단은 비서가 한다.
+// 예외: --to-mail(다리)은 레포 포럼 스레드의 결정 요청 답을 정해진 규칙으로 기록한다(discord-decision.mjs). 우편 모드에서만 한다.
 // 조회·답변만 한다: 발령·결정 승인·머지는 이 명령이 하지 않는다. 설명은 docs/discord-chat.md.
 import fs from 'node:fs';
 import {ledgerHome} from '../ledger.mjs';
 import {die} from '../cli-basics.mjs';
 import {createMailOut} from '../discord-mail.mjs';
+import {createDecisionAnswerer} from '../discord-decision.mjs';
 import {SECRETARY} from '../mailbox.mjs';
 import {writeBridgeExit} from '../discord-bridge-exit.mjs';
 import {createChat, runWatch, sendText, editThread, checkChat, DEFAULT_INTERVAL_S} from '../discord-chat.mjs';
@@ -31,7 +33,12 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
       // 우편 모드: 줄을 stdout에 내는 대신 우편함에 저장한다(조회·잠금·상태·재시도·가림은 그대로).
       const toMail = flags['to-mail'] === undefined ? null : flags['to-mail'] === true ? SECRETARY : text(flags['to-mail']);
       if (flags['to-mail'] !== undefined && (!toMail || /\s/.test(toMail))) die(USAGE, 2);
-      const emit = toMail ? createMailOut({home, to: toMail, log: err}) : line => out(JSON.stringify(line));
+      let emit = line => out(JSON.stringify(line));
+      if (toMail) {
+        const mailOut = createMailOut({home, to: toMail, log: err});
+        const decide = createDecisionAnswerer({home, chat, env, log: err});
+        emit = async line => ((await decide(line)) ? undefined : mailOut(line)); // 결정 답으로 끝난 글은 우편으로 보내지 않는다
+      }
       return await runWatch(chat, {once: flags.once === true, intervalS, out: emit, err, signal: abort.signal, sleep,
         lockInfo: toMail ? {mode: 'mail', to: toMail} : {mode: 'stdout'}});
     }
