@@ -36,7 +36,7 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
       let emit = line => out(JSON.stringify(line));
       if (toMail) {
         const mailOut = createMailOut({home, to: toMail, log: err});
-        const decide = createDecisionAnswerer({home, chat, env, log: err});
+        const decide = createDecisionAnswerer({home, chat, env, log: err, mailRole: toMail});
         emit = async line => ((await decide(line)) ? undefined : mailOut(line)); // 결정 답으로 끝난 글은 우편으로 보내지 않는다
       }
       return await runWatch(chat, {once: flags.once === true, intervalS, out: emit, err, signal: abort.signal, sleep,

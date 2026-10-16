@@ -8,7 +8,7 @@ import {spawn} from 'node:child_process';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {createChat, runWatch} from '../src/discord-chat.mjs';
 import {createMailOut} from '../src/discord-mail.mjs';
-import {createDecisionAnswerer, matchChoice, HANDLED_FILE} from '../src/discord-decision.mjs';
+import {createDecisionAnswerer, matchChoice, writtenAfter, HANDLED_FILE} from '../src/discord-decision.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
@@ -26,7 +26,8 @@ async function world(fake, {register = true} = {}) {
   const home = tmp('home'), botFile = path.join(home, 'bot.env'), hookFile = path.join(home, 'hook.env');
   const forum = fake.addForum('kadan'), post = fake.addForumPost(forum, {name: '[kadan] 결정'});
   fs.writeFileSync(botFile, `DISCORD_BOT_TOKEN=${FAKE.token}\nDISCORD_APPLICATION_ID=${FAKE.appId}\n`, {mode: 0o600});
-  fs.writeFileSync(hookFile, `DISCORD_USER_ID=${FAKE.userId}\nDISCORD_WEBHOOK_URL_SECRETARY=https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken}\n${register ? `DISCORD_WEBHOOK_URL_KADAN=${forum.url}\n` : ''}`, {mode: 0o600});
+  const baseHook = `DISCORD_USER_ID=${FAKE.userId}\nDISCORD_WEBHOOK_URL_SECRETARY=https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken}\n${register ? `DISCORD_WEBHOOK_URL_KADAN=${forum.url}\n` : ''}`;
+  fs.writeFileSync(hookFile, baseHook, {mode: 0o600});
   const env = {KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile, KADAN_DISCORD_API_BASE: fake.base, KADAN_NOTIFY: 'off'};
   let chat = createChat({home, env, sleep: noSleep});
   new CardStore(home).create({repo: 'kadan', id: 'card-a', repoPath: home, body: '# 시험'});
@@ -39,7 +40,13 @@ async function world(fake, {register = true} = {}) {
   const w = {home, fake, forum, post, chat, store, calls, errs, decide, env,
     run: () => runWatch(chat, {once: true, out: emit, err: e => errs.push(e)}),
     // 나중에 포럼 키를 비밀 파일에 더하고 새 프로세스처럼 다시 만든다(옛 모양 상태 파일 위에 새 채널 등록)
+    disableForum() {                                                  // 포럼 키를 비밀 파일에서 뺀다(등록 해제)
+      fs.writeFileSync(hookFile, baseHook.split('\n').filter(l => !l.startsWith('DISCORD_WEBHOOK_URL_KADAN=')).join('\n'), {mode: 0o600});
+      chat = createChat({home, env, sleep: noSleep});
+      decide = createDecisionAnswerer({home, chat, env, log: e => errs.push(e), store});
+    },
     enableForum() {
+      fs.writeFileSync(hookFile, baseHook.split('\n').filter(l => !l.startsWith('DISCORD_WEBHOOK_URL_KADAN=')).join('\n'), {mode: 0o600});
       fs.appendFileSync(hookFile, `DISCORD_WEBHOOK_URL_KADAN=${forum.url}\n`);
       chat = createChat({home, env, sleep: noSleep});
       decide = createDecisionAnswerer({home, chat, env, log: e => errs.push(e), store});
@@ -295,5 +302,104 @@ test('12 실제 CLI(watch --once --to-mail): 포럼 스레드의 결정 답은 �
     assert.equal(w.mails().length, 1, '일반 글만 우편');
     assert.equal(w.botPosts().filter(m => m.content === '기록됨: 합침').length, 1);
     for (const v of [FAKE.token, FAKE.hookToken, FAKE.userId]) assert.ok(!(r.stdout + r.stderr).includes(v), '출력에 비밀값 없음');
+  } finally { await fake.close(); }
+});
+
+test('13 F1 결정과 무관한 글에 대한 답장은 결정 답이 아니다(경보 글·다른 스레드 결정·모르는 메시지) → 기록 0, 우편', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const other = fake.addForumPost(w.forum, {name: '다른 글'});
+    const a = w.decision('A를 합칠까요?');                            // 이 스레드의 열린 결정은 하나
+    const b = w.decision('B를 켤까요?', ['켠다', '끈다'], other);     // 다른 스레드의 결정
+    await w.run();
+    const alert = fake.add(w.post.id, {content: '경보', author: {id: FAKE.botId, bot: true}});
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: alert.id}});      // 경보 글에 답장
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: b.msg.id}});      // 다른 스레드 결정의 요청 글을 가리킴
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: '1'}});           // 모르는 메시지
+    await w.run();
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
+    assert.equal(w.store.get(b.d.id).status, 'open');
+    assert.equal(w.mails().length, 3, '일반 글로 우편');
+    assert.equal(w.botPosts().filter(m => /기록됨/.test(m.content)).length, 0);
+  } finally { await fake.close(); }
+});
+
+test('14 0번 규칙: 결정 요청 메시지보다 먼저 쓰인 글은 어떤 상태에서도 그 결정의 답이 아니다', async () => {
+  assert.equal(writtenAfter('6', '5'), true);
+  assert.equal(writtenAfter('5', '5'), false, '같은 id');
+  assert.equal(writtenAfter('4', '5'), false);
+  assert.equal(writtenAfter('abc', '5'), false);
+  assert.equal(writtenAfter('5', undefined), false);
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const old = fake.add(w.post.id, {content: '1'});                  // 요청보다 먼저 쓴 글
+    const a = w.decision('A를 합칠까요?');
+    const line = {id: old.id, where: 'thread', threadId: w.post.id, channel: 'kadan', content: '1'};
+    assert.equal(await w.decide(line), false, '일반 글');
+    assert.equal(w.answers().length, 0);
+    const reply = {...line, replyTo: a.msg.id};                       // 요청에 답장한 척해도 id가 앞서면 아니다
+    assert.equal(await w.decide(reply), false);
+    assert.equal(w.answers().length, 0);
+  } finally { await fake.close(); }
+});
+
+test('15 F4 우편으로 이미 저장된 글은 다시 분류하지 않는다(우편 저장 직후 cursor 저장 전에 죽은 뒤 새 결정이 생겨도 기록 0)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const mine = fake.add(w.post.id, {content: '1'});                 // 열린 결정이 없을 때 받은 글
+    const line = {id: mine.id, where: 'thread', threadId: w.post.id, channel: 'kadan', content: '1'};
+    assert.equal(await w.decide(line), false);
+    createMailOut({home: w.home})(line);                              // 우편 저장까지 됐고 cursor는 아직(죽음)
+    // 요청 메시지 위치만 이 글보다 앞선 것으로 둔 결정(바탕 규칙을 통과하는 경우): 우편으로 저장된 글이라 다시 분류하지 않는다
+    const a = w.store.request('kadan/card-a', {question: 'A?\n- 확인 경로 없음: 시험', options: ['예', '아니오'], recommendation: '예', reason: '이유', work: '없음'}, SUPER);
+    setDecision(w.home, a.id, {threadId: w.post.id, messageId: String(BigInt(mine.id) - 1n), forum: true});
+    const restarted = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store});
+    assert.equal(await restarted(line), true, '이미 처리된 글: 아무것도 하지 않는다');
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.botPosts().length, 0);
+    assert.equal(w.mails().length, 1);
+  } finally { await fake.close(); }
+});
+
+test('16 F2-A 포럼 등록이 풀린 사이에 쓴 kyle 답은 다시 등록해도 재생되지 않는다(우편 0·기록 0·응답 0)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?');
+    w.disableForum();
+    await w.run();                                                    // 등록이 빠진 한 회차
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});   // 제외 중에 쓴 답
+    w.enableForum();
+    await w.run();                                                    // 키 복원 뒤 첫 회차
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
+    assert.equal(w.mails().length, 0);
+    assert.equal(w.botPosts().filter(m => /기록|이미|열린 결정/.test(m.content)).length, 0);
+    // 재등록 뒤 새로 쓴 답은 받는다
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
+    await w.run();
+    assert.equal(w.store.get(a.d.id).answer.choice, '보류');
+  } finally { await fake.close(); }
+});
+
+test('17 F2-B 빈 forums와 옛 스레드 cursor가 함께 남은 상태에서 대기 중인 답은 재생되지 않는다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?');
+    const file = path.join(w.home, 'discord-chat-state.json');
+    const st = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(Object.keys(st.threads).length);
+    fs.writeFileSync(file, JSON.stringify({...st, forums: {}, forumRepos: {}}) + '\n');   // 형식은 정상, 등록만 비었다
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: a.msg.id}});
+    w.enableForum();                                                  // 새 프로세스처럼
+    await w.run();
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.mails().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
   } finally { await fake.close(); }
 });

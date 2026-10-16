@@ -9,6 +9,8 @@ import {DecisionStore} from './decisions.mjs';
 import {readDecisions} from './notify-threads.mjs';
 import {userActorNames} from './actors.mjs';
 import {sendText} from './discord-chat.mjs';
+import {findMailBySourceKey} from './ledger.mjs';
+import {SECRETARY} from './mailbox.mjs';
 
 export const HANDLED_FILE = 'discord-decision-handled.json';
 const MAX_HANDLED = 500;
@@ -40,7 +42,13 @@ function markHandled(home, id) {
   fs.renameSync(tmp, file);
 }
 
-export function createDecisionAnswerer({home, chat, env = process.env, log = () => {}, store = new DecisionStore(home)}) {
+// 디코 글 id는 시간순(snowflake)이다. 결정 요청 메시지보다 먼저(같은 id 포함) 쓰인 글은 그 결정의 답이 될 수 없다.
+// 상태 파일·cursor·재등록이 어떻게 꼬여도 옛 글이 새 결정의 답으로 읽히지 않게 하는 바탕 규칙이다.
+export const writtenAfter = (messageId, requestMessageId) => {
+  try { return BigInt(messageId) > BigInt(requestMessageId); } catch { return false; }
+};
+
+export function createDecisionAnswerer({home, chat, env = process.env, log = () => {}, store = new DecisionStore(home), mailRole = SECRETARY}) {
   const by = userActorNames(env)[0];
   // 같은 스레드에 답 글을 올린다. 실패하면 false(받기를 멈추지 않는다 — 봇에게 스레드 쓰기 권한이 아직 없을 수 있다).
   const post = async (line, text, quiet) => {
@@ -87,14 +95,18 @@ export function createDecisionAnswerer({home, chat, env = process.env, log = () 
   return async function handle(line) {
     if (line.where !== 'thread' || !line.threadId || !line.channel) return false;     // 레포 포럼 스레드 안의 글만
     if (readHandled(home).includes(line.id)) return true;                              // 재시작 뒤 같은 글을 두 번 처리하지 않는다
+    // 이미 우편으로 저장된 글은 다시 분류하지 않는다(저장 직후 cursor 저장 전에 죽은 뒤 재시작해도 그 글이 새 결정의 답이 되지 않는다)
+    try { if (findMailBySourceKey(home, mailRole, `discord:${line.id}`)) return true; } catch { /* 조회 실패면 아래 바탕 규칙이 막는다 */ }
     let all;
     try { all = store.list(); } catch (error) { log(`결정 이력을 읽지 못했다: ${error.message}`); return false; }
     if (all.some(d => d.answer?.messageId === line.id)) return true;                   // 이미 이 글로 기록됐다
     const known = readDecisions(home);
-    const here = all.filter(d => known[d.id]?.messageId && known[d.id].threadId === line.threadId);
+    const here = all.filter(d => known[d.id]?.messageId && known[d.id].threadId === line.threadId && writtenAfter(line.id, known[d.id].messageId));
     if (!here.length) return false;
     // (가) 저장된 결정 요청 메시지에 대한 디코 답장
     const target = line.replyTo ? here.find(d => known[d.id].messageId === line.replyTo) : undefined;
+    // 답장인데 이 스레드의 결정 요청 메시지를 가리키지 않으면(경보·상태 글, 다른 스레드의 결정, 모르는 메시지) 결정 답이 아니다. (나)로 내려가지 않는다.
+    if (line.replyTo && !target) return false;
     if (target) {
       if (target.status !== 'open') return settled(line, target);
       const choice = matchChoice(target.options, line.content);

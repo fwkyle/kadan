@@ -119,7 +119,8 @@ export function createChat({home, env = process.env, cfg = loadChatConfig(env, h
 const statePath = home => path.join(home, STATE_FILE);
 const channelHash = id => crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 12);
 // forums: 받기에 등록한 레포 포럼 채널 해시 → 등록 시각(ms). 옛 상태 파일에는 없다(없으면 아직 아무것도 등록 안 한 것).
-const emptyState = hash => ({version: 1, channel: hash, main: null, threads: {}, forums: {}, skipped: {others: 0, bots: 0, system: 0}});
+// forumRepos: 레포 이름 → 그 채널 해시. 설정에서 키가 빠지거나 다른 채널로 바뀐 것을 알아보고 등록 기록을 지우는 데 쓴다.
+const emptyState = hash => ({version: 1, channel: hash, main: null, threads: {}, forums: {}, forumRepos: {}, skipped: {others: 0, bots: 0, system: 0}});
 
 // 파일이 없을 때만 null(처음 실행). 있는데 읽기·형식이 깨졌으면 던진다 — 원본은 그대로 두고 cursor를 올리지 않는다.
 // 채널이 바뀐 경우(해시 불일치)는 {mismatch:true}로 알려 새 기준선을 잡게 한다.
@@ -139,6 +140,8 @@ export function readState(home, hash) {
     && Object.entries(v.threads).every(([id, last]) => isId(id) && isId(last))
     && (v.forums === undefined || (v.forums && typeof v.forums === 'object' && !Array.isArray(v.forums)
       && Object.entries(v.forums).every(([h, since]) => /^[0-9a-f]{12}$/.test(h) && Number.isFinite(since) && since > 0)))
+    && (v.forumRepos === undefined || (v.forumRepos && typeof v.forumRepos === 'object' && !Array.isArray(v.forumRepos)
+      && Object.values(v.forumRepos).every(h => typeof h === 'string' && /^[0-9a-f]{12}$/.test(h))))
     && v.skipped && typeof v.skipped === 'object' && ['others', 'bots', 'system'].every(k => count(v.skipped[k]));
   if (!ok) throw new Error(`상태 파일이 깨져 있어 멈춘다(원본은 그대로 둔다). 확인한 뒤 이 파일을 옮기면 처음 실행(기준선)으로 다시 시작한다: ${file}`);
   if (v.channel !== hash) return {mismatch: true};
@@ -235,8 +238,8 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
       const c = classifyMessage(msg, {userId, where, threadId});
       if (c.line) Object.assign(c.line, meta);
       if (c.skip) { last = maxId(last, msg.id); if (c.skip !== 'handled') state.skipped[{system: 'system', bot: 'bots', other: 'others'}[c.skip]]++; continue; }
-      c.line.content = hide(c.line.content);
-      if (c.line.quotedContent) c.line.quotedContent = hide(c.line.quotedContent);
+      // 밖에서 온 문자열(본문·인용·스레드 이름·채널 이름 등)은 모두 같은 가림을 거친다. 필드를 하나씩 고르지 않아 새 필드가 빠지지 않는다.
+      for (const [k, v] of Object.entries(c.line)) if (typeof v === 'string') c.line[k] = hide(v);
       // 출력이 실제로 나간 뒤(쓰기 완료·역압)에 cursor를 저장하고 그다음 반응을 단다(최소 한 번).
       if (!(await emit(c.line)) || halted()) break; // 출력이 안 끝났거나 끝난 뒤 중단됐으면 cursor를 올리지 않는다
       last = maxId(last, msg.id);
@@ -284,15 +287,27 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   const forums = await chat.forums({err});
   const forumById = new Map(forums.map(f => [f.id, f]));
   state.forums ??= {};
-  const newForums = forums.filter(f => !state.forums[channelHash(f.id)]);
-  if (newForums.length) {
-    const known = new Set(newForums.map(f => f.id));
-    for (const t of await loadActive()) {
-      if (known.has(t.parent_id) && THREAD_TYPES.has(t.type) && isId(t.id) && !state.threads[t.id]) state.threads[t.id] = t.last_message_id ?? t.id;
-    }
-    for (const f of newForums) state.forums[channelHash(f.id)] = now;
+  state.forumRepos ??= {};
+  // 설정에서 키가 빠졌거나 다른 채널로 바뀐 레포는 등록 기록을 지운다(그 채널의 열린 글 cursor도 함께). 일시적으로 못 푼 채널(권한·네트워크)은 지우지 않는다.
+  const wanted = new Map(forums.map(f => [f.name, channelHash(f.id)]));
+  const configured = new Set(chat.cfg.repoWebhooks.map(w => w.repo));
+  const dropped = new Set();
+  for (const [repo, h] of Object.entries(state.forumRepos)) {
+    if (!configured.has(repo) || (wanted.has(repo) && wanted.get(repo) !== h)) { dropped.add(h); delete state.forumRepos[repo]; }
+  }
+  // 등록 안 된 채널의 해시(forumRepos 이름표가 없는 옛 기록 포함)는 지금 푼 채널 집합에 없고 이름표도 없으면 그대로 둔다 — 빈 forums·옛 cursor는 아래 시각 하한이 막는다.
+  const newForums = forums.filter(f => !state.forums[channelHash(f.id)] || dropped.has(channelHash(f.id)));
+  if (dropped.size || newForums.length) {
+    const activeNow = await loadActive();
+    for (const t of activeNow) if (dropped.has(channelHash(t.parent_id ?? '0')) && isId(t.id)) delete state.threads[t.id];
+    for (const h of dropped) delete state.forums[h];
+    const fresh = new Set(newForums.map(f => f.id));
+    // 새 등록: 그 채널의 열린 글은 옛 cursor가 남아 있어도 지금의 마지막 글로 덮는다(옛 답 재생 금지).
+    for (const t of activeNow) if (fresh.has(t.parent_id) && THREAD_TYPES.has(t.type) && isId(t.id)) state.threads[t.id] = t.last_message_id ?? t.id;
+    for (const f of newForums) { state.forums[channelHash(f.id)] = now; state.forumRepos[f.name] = channelHash(f.id); }
     writeState(chat.home, state);
   }
+  for (const f of forums) state.forumRepos[f.name] ??= channelHash(f.id);
   await drain(channelId, state.main ?? '0', 'channel', null);
 
   if (halted()) return result;
@@ -301,6 +316,11 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
     if (halted()) return result;
     const forum = forumById.get(t.parent_id);
     if ((t.parent_id !== channelId && !forum) || !THREAD_TYPES.has(t.type) || !isId(t.id)) continue;
+    if (forum) {
+      // 레포 포럼 글은 어떤 기록이 남아 있어도 등록 시각 이후 글만 읽는다(등록이 풀렸다 다시 들어오는 사이에 쓴 옛 글 방지).
+      const floor = idAt(state.forums[channelHash(forum.id)]);
+      if (state.threads[t.id] && idLess(state.threads[t.id], floor)) { state.threads[t.id] = floor; writeState(chat.home, state); }
+    }
     if (!state.threads[t.id]) {
       // 모르는 스레드: 처음 실행이면 기준선, 아니면 "처음 본 스레드"라서 첫 글부터 읽는다.
       // (#비서: 스레드 ID는 시작 글의 ID라서 ID 나이로 새 스레드인지 판단하면 오래된 글에서 연 새 스레드의 첫 질문을 잃는다.)

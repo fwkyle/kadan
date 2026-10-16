@@ -225,3 +225,21 @@ test('6 포럼 읽기 권한이 아직 없으면 #비서는 그대로 받고, �
     void top;
   } finally { await fake.close(); }
 });
+
+test('7 F3 스레드 이름 등 밖에서 온 모든 문자열의 비밀값은 우편 저장 전에 가린다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const kadan = fake.addForum('kadan');
+    const { home, chat } = setup(fake, [kadan]);
+    const out = createMailOut({home});
+    await watchOnce(chat, out);                                                   // 기준선
+    const post = fake.addForumPost(kadan, {name: `토큰 ${FAKE.hookToken} 아이디 ${FAKE.userId} 포럼 ${kadan.hookToken}`});
+    fake.add(post.id, {content: '평범한 글'});
+    await watchOnce(chat, out);
+    const [mail] = mailsOf(home);
+    assert.ok(mail, '우편 1통');
+    const text = JSON.stringify(mailsOf(home)) + bodyOf(home, mail);
+    for (const v of [FAKE.hookToken, FAKE.userId, kadan.hookToken, kadan.hookId, FAKE.token]) assert.ok(!text.includes(v), `우편에 비밀값 ${v.slice(0, 6)}…`);
+    assert.match(bodyOf(home, mail), /스레드 이름: 토큰 \[가림\]/);
+  } finally { await fake.close(); }
+});
