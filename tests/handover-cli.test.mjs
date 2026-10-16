@@ -65,7 +65,8 @@ async function until(check, timeout=12000) {
 function backgroundFixture({human=false,sqlite=false}={}) {
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-handover-background-'));
  if(sqlite&&Number(process.versions.node.split('.')[0])>=24){createDatabase(home);writeStorageMarker(home,'sqlite');}
- const env={PATH:process.env.PATH,HOME:process.env.HOME,LANG:'en_US.UTF-8',
+ // TMPDIR·TMUX_TMPDIR도 넘긴다: 빠지면 자식 CLI가 기본 tmux 폴더를 쓰고 시험의 tmux 조회와 소켓이 갈려 멈추고 서버가 남는다.
+ const env={PATH:process.env.PATH,HOME:process.env.HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:process.env.TMUX_TMPDIR,LANG:'en_US.UTF-8',
   KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:human?'':'qa-상위'};
  const graph=path.join(home,'parents.json'),context=path.join(home,'context.md'),receipt=path.join(home,'receipt.json');
  fs.writeFileSync(graph,JSON.stringify({'qa-감독':'qa-상위','qa-작업자':'qa-감독','qa-상위':'@user'}));
@@ -94,6 +95,7 @@ function backgroundFixture({human=false,sqlite=false}={}) {
    if(command.includes(runnerFile)&&command.includes(f.s.id))process.kill(f.s.runner.pid,'SIGTERM');
   }
   for(const role of [...roles,'qa-감독-2'])spawnSync('tmux',['-L',env.KADAN_SOCKET,'kill-session','-t',`=kadan-${role}`],{encoding:'utf8'});
+  spawnSync('tmux',['-L',env.KADAN_SOCKET,'kill-server'],{encoding:'utf8'}); // 이 시험이 띄운 서버만
  };
  return f;
 }
