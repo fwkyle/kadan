@@ -16,8 +16,8 @@ export class RottieFloorError extends Error {
   }
 }
 
-function rottieBin() {
-  const bin = process.env.KADAN_ROTTIE_BIN;
+function rottieBin(env = process.env) {
+  const bin = env.KADAN_ROTTIE_BIN;
   if (!bin || !path.isAbsolute(bin)) {
     throw new RottieFloorError("KADAN_ROTTIE_BIN 절대경로가 필요하다", {
       code: "KADAN_ROTTIE_BIN_REQUIRED",
@@ -28,10 +28,11 @@ function rottieBin() {
   return bin;
 }
 
-function runRottie(argv, spawnFn = spawnSync) {
+// env는 기본 process.env다. 시니어 탭처럼 호출자가 정한 환경으로 로티를 부르는 쪽이 같은 길목을 쓰게 한다.
+export function runRottie(argv, spawnFn = spawnSync, env = process.env) {
   // 주입된 spawnFn은 실제 앱에 닿지 않는다. 진짜 spawnSync일 때만 운영 로티 접근을 막는다.
-  if (spawnFn === spawnSync) assertNotLiveRottie();
-  const result = spawnFn(rottieBin(), argv, {
+  if (spawnFn === spawnSync) assertNotLiveRottie(env);
+  const result = spawnFn(rottieBin(env), argv, {
     encoding: "utf8",
     maxBuffer: 2 * 1024 * 1024,
   });

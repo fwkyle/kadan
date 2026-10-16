@@ -12,6 +12,7 @@ import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
+import {closeOnSignal, closeSeniorTab, openSeniorTab} from './senior-tab.mjs';
 
 export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
@@ -19,6 +20,7 @@ export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--fil
 export const SENIOR_TIMEOUT_MS = 1_800_000;
 const TIMEOUT_MAX_S = 3600, FILE_LIMIT = 64 * 1024, FILE_COUNT = 5, QUESTION_PREVIEW = 200;
 const DEFAULT_SCRIPT = fileURLToPath(new URL('../scripts/senior.sh', import.meta.url));
+const FOLLOW_SCRIPT = fileURLToPath(new URL('../scripts/senior-follow.sh', import.meta.url));
 // 감독(일반감독·슈퍼감독)과 사람만 부른다. 작업자·검수자는 자기 카드의 판단을 감독에게 묻는다.
 const supervisor = by => typeof by === 'string' && /(^|-)(슈퍼)?감독(?:-\d+)?$/.test(by);
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -61,7 +63,7 @@ export function composeAdvicePrompt({question, card, attachments}) {
 }
 
 export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
-  script = DEFAULT_SCRIPT, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels}) {
+  script = DEFAULT_SCRIPT, followScript = FOLLOW_SCRIPT, rottie, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels}) {
   if (flags.help || !argv[0]) return SENIOR_USAGE;
   if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
@@ -85,12 +87,20 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   const prompt = composeAdvicePrompt({question, card, attachments});
   fs.writeFileSync(path.join(dir, 'input.txt'), prompt, {mode: 0o600});
+  // 따라 볼 진행 출력 파일을 미리 만들어 둔다(탭이 먼저 떠도 비어 있는 채로 기다린다). senior.sh가 같은 파일에 쓴다.
+  fs.writeFileSync(path.join(dir, 'diagnostic.log'), '', {mode: 0o600});
   const started = now();
+  // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 닫기는 성공·실패·시간 초과·신호 모두에서 한다.
+  const opened = openSeniorTab({home, env, card, adviceId, dir, followScript, rottie});
+  let tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason};
+  const closeTab = () => { if (opened.tab === 'opened') tab = closeSeniorTab(opened); };
+  const detach = opened.tab === 'opened' ? closeOnSignal(closeTab) : () => {};
   let result;
   try {
     result = await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
       env: {...env, KADAN_HOME: home, KADAN_SENIOR_DIR: dir, KADAN_SENIOR_REPO: card.repoPath, KADAN_SENIOR_MODEL: value.model, KADAN_SENIOR_EFFORT: value.effort ?? 'max'}});
   } catch (error) { result = {error}; }
+  finally { detach(); closeTab(); }
   const stderr = String(result.stderr ?? '');
   fs.writeFileSync(path.join(dir, 'stderr.txt'), stderr, {mode: 0o600});
   const resultFile = path.join(dir, 'result.txt');
@@ -102,12 +112,12 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const entry = {kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
     model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
     reason, exitCode: result.status ?? null, durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer),
-    files: attachments.map(a => a.file), evidencePath: dir, t: new Date(started).toISOString()};
+    files: attachments.map(a => a.file), evidencePath: dir, ...tab, ...(opened.rottieTerminalId ? {rottieTerminalId: opened.rottieTerminalId} : {}), t: new Date(started).toISOString()};
   record(entry);
   if (reason !== 'ok') {
     const error = new Error(`자문 실패(${reason}) — 답은 쓰지 않는다. 증거: ${dir}`);
     error.exitCode = 1;
     throw error;
   }
-  return {adviceId, card: card.key, model: value.model, effort: value.effort ?? 'max', reason, durationMs: entry.durationMs, evidencePath: dir, answer};
+  return {adviceId, card: card.key, model: value.model, effort: value.effort ?? 'max', reason, durationMs: entry.durationMs, evidencePath: dir, ...tab, follow: `tail -F ${path.join(dir, 'diagnostic.log')}`, answer};
 }
