@@ -4,7 +4,7 @@ import {taskIdentity} from './task-identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
-import {appendLedger, readLedger, classifyLedgerEntry} from './ledger.mjs';
+import {appendLedger, readLedger, readWatchRequest, classifyLedgerEntry} from './ledger.mjs';
 import {assertWritable, storageMode, transaction} from './storage.mjs';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
@@ -77,12 +77,17 @@ function currentRequest(request,cards,entries,parents,works=[]) {
 }
 
 export class WatchReports {
-  constructor({home, floor, send, now=Date.now, readEntries, readCards, readWorks, record}) {
+  constructor({home, floor, send, now=Date.now, readEntries, readCards, readWorks, record, readRequest}) {
     Object.assign(this,{home:path.resolve(home),floor,send,now});
     this.readEntries = readEntries ?? (() => readLedger(this.home));
+    // 일반 읽기는 호출 기록의 큰 필드(parents·routes)를 뺀다. 주입된 읽기(시험 등)는 원본을 주므로 그대로 쓴다.
+    this.readRequest = readRequest ?? (readEntries ? null : id => readWatchRequest(this.home,id));
     this.readCards = readCards ?? (() => new CardStore(this.home).list());
     this.readWorks = readWorks ?? (() => new WorkStore(this.home).list());
     this.record = record ?? (e => appendLedger(e,this.home));
+  }
+  fullRequest(request) {
+    return request&&!Array.isArray(request.routes)&&this.readRequest?(this.readRequest(request.requestId)??request):request;
   }
   entries() {
     const entries=this.readEntries();
@@ -132,6 +137,7 @@ export class WatchReports {
       const entries=this.entries();
       request=entries.find(e=>e.kind==='watch-ai-request'&&e.requestId===requestId);
       if (!request) throw new Error('감시AI 호출 기록 없음');
+      request=this.fullRequest(request);
       if (request.protocol === 2 && verdict === '죽음') throw new Error('새 감시AI 보고는 죽음을 쓰지 않습니다. 완료 후 대기는 실행완료, 연결·압축 실패는 응답장애, 근거 부족은 모름으로 보고하세요.');
       const old=entries.find(e=>e.kind==='watch-ai-report'&&e.requestId===requestId);
       if (old) { duplicate=true; report=old; return; }
@@ -206,7 +212,7 @@ export class WatchReports {
       this.locked(()=>{
         const fresh=this.entries();
         if(!fresh.findLast(e=>e.kind==='watch-ai-delivery'&&e.requestId===pending.requestId)?.held)return;
-        request=fresh.find(e=>e.kind==='watch-ai-request'&&e.requestId===pending.requestId);
+        request=this.fullRequest(fresh.find(e=>e.kind==='watch-ai-request'&&e.requestId===pending.requestId));
         report=fresh.find(e=>e.kind==='watch-ai-report'&&e.requestId===pending.requestId);
         const current=report&&latestWatchReports(fresh).find(e=>e.key===report.key);
         // 회복 뒤 재발한 새 알림이 옛 보류 알림을 대체한다. 같은 문제의 notify:false 재확인은 제외한다.

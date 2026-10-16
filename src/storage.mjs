@@ -83,12 +83,36 @@ export function preparedTransaction(home,compute,apply){
  return storageTransaction(home,()=>apply(current()));
 }
 export function storageSnapshot(home,fn){return storageMode(home)==='sqlite'?transaction(home,fn,{readOnly:true}):fn();}
-export function readStream(home,stream,{optional=false}={}){
+// slim: 사건 종류별로 큰 필드를 뺀 채 읽는 규칙 목록. {prefix 또는 kind, drop:[필드]} 는 그 필드만 빼고,
+// {prefix 또는 kind, keep:[필드]} 는 그 필드만 남긴다. SQLite는 SQL 안에서 줄여 큰 문자열이 JS 힙에 오르지 않는다.
+// JSONL은 해석한 뒤 같은 규칙을 적용한다(두 저장소의 읽기 결과를 같게 한다).
+const slimMatch=(rule,kind)=>typeof kind==='string'&&(rule.kind?kind===rule.kind:kind.startsWith(rule.prefix));
+function slimRow(row,rules){
+ const rule=rules.find(r=>slimMatch(r,row?.kind));if(!rule)return row;
+ if(rule.keep)return Object.fromEntries(rule.keep.filter(k=>row[k]!=null).map(k=>[k,row[k]]));
+ for(const key of rule.drop)delete row[key];return row;
+}
+function slimSql(rules){
+ const args=[],kind="json_extract(payload,'$.kind')";
+ const when=rules.map(rule=>{
+  const test=rule.kind?`${kind}=?`:`substr(${kind},1,${rule.prefix.length})=?`;args.push(rule.kind??rule.prefix);
+  if(rule.keep){const pairs=rule.keep.map(k=>{args.push(k,`$.${k}`);return '?,json_extract(payload,?)';}).join(',');return `WHEN ${test} THEN json_patch('{}',json_object(${pairs}))`;}
+  for(const k of rule.drop)args.push(`$.${k}`);return `WHEN ${test} THEN json_remove(payload,${rule.drop.map(()=>'?').join(',')})`;
+ });
+ // 인자 순서: WHEN 안의 ?는 test → 본문 순서로 나타난다.
+ return {expr:`CASE ${when.join(' ')} ELSE payload END`,args};
+}
+export function readStream(home,stream,{optional=false,slim=null}={}){
  if(storageMode(home)==='jsonl'){
   const f=path.join(home,stream);if(optional&&!fs.existsSync(f))return [];
-  return fs.readFileSync(f,'utf8').split('\n').filter(x=>x.trim()).map(JSON.parse);
+  const rows=fs.readFileSync(f,'utf8').split('\n').filter(x=>x.trim()).map(JSON.parse);
+  return slim?rows.map(row=>slimRow(row,slim)):rows;
  }
- return transaction(home,db=>{const rows=db.prepare('SELECT payload FROM events WHERE stream=? ORDER BY seq').all(stream);if(!rows.length&&!optional)throw new Error(`기록 없음: ${stream}`);return rows.map(r=>JSON.parse(r.payload));},{readOnly:true});
+ return transaction(home,db=>{
+  const q=slim?slimSql(slim):null;
+  const rows=db.prepare(q?`SELECT ${q.expr} AS payload FROM events WHERE stream=? ORDER BY seq`:'SELECT payload FROM events WHERE stream=? ORDER BY seq').all(...(q?[...q.args,stream]:[stream]));
+  if(!rows.length&&!optional)throw new Error(`기록 없음: ${stream}`);return rows.map(r=>JSON.parse(r.payload));
+ },{readOnly:true});
 }
 export function appendStream(home,stream,value){
  assertWritable(home);
