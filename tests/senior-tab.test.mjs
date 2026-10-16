@@ -7,6 +7,7 @@ import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {seniorCommand} from '../src/senior.mjs';
 import {RottieFloorError, rottieFloor} from '../src/floor-rottie.mjs';
+import {closeSeniorTab} from '../src/senior-tab.mjs';
 import {initSettings, setRole} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -229,3 +230,63 @@ test('따라 보기: 인자 오류는 거절하고 입력을 받지 않는다', 
   assert.equal(spawnSync('/bin/bash', [followScript, os.tmpdir(), 'abc'], {encoding: 'utf8'}).status, 2);
   assert.equal(spawnSync('/bin/bash', [followScript, '/없는/폴더', '1'], {encoding: 'utf8'}).status, 2);
 });
+
+test('F2: close 뒤 show가 NOT_FOUND면 사라짐(remove 없음), 그 밖의 오류면 자기 id를 remove하고 실패하면 close-failed', async () => {
+  const run = showError => {
+    const calls = [];
+    const out = closeSeniorTab({rottieTerminalId: 'own', call: argv => {
+      calls.push(argv[1]);
+      if (argv[1] === 'show') throw showError;
+      if (argv[1] === 'remove' && showError.removeFails) throw new RottieFloorError('x', {code: 'ROTTIE_INTERNAL'});
+      return {ok: true};
+    }});
+    return {out, calls};
+  };
+  assert.deepEqual(run(new RottieFloorError('없다', {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'})), {out: {tab: 'closed'}, calls: ['close', 'show']});
+  const other = run(new RottieFloorError('내부', {code: 'ROTTIE_INTERNAL'}));
+  assert.deepEqual(other.calls, ['close', 'show', 'remove']);
+  assert.equal(other.out.tab, 'closed'); assert.match(other.out.tabReason, /^removed-after-show-error: ROTTIE_INTERNAL/);
+  const bad = run(Object.assign(new RottieFloorError('내부', {code: 'ROTTIE_INTERNAL'}), {removeFails: true}));
+  assert.deepEqual(bad.calls, ['close', 'show', 'remove']); assert.equal(bad.out.tab, 'close-failed'); assert.match(bad.out.tabReason, /remove/);
+});
+
+test('F1: create 응답이 유실되면(effect unknown·형식 오류) tab: unknown과 키만 남기고 목록을 뒤지지 않는다', async () => {
+  const f = fixture();
+  for (const make of [() => argv => { f.calls.push(argv); throw new RottieFloorError('모름', {code: 'ROTTIE_JSON_PARSE', effect: 'unknown'}); },
+    () => argv => { f.calls.push(argv); return {ok: true, result: {terminal: {id: 'x', state: 'exited'}}}; }]) {
+    const r = await f.run({spawn: f.spawnFn(), rottie: make()});
+    assert.equal(r.reason, 'ok'); assert.equal(r.tab, 'unknown');
+  }
+  const entries = f.advices();
+  assert.ok(entries.every(e => e.tab === 'unknown' && /^kadan-senior-/.test(e.tabKey) && e.tabKey.endsWith(e.adviceId) && e.rottieTerminalId === undefined));
+  assert.deepEqual(verbs(f.calls), ['create', 'create']);
+});
+
+for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130]]) {
+  test(`F1: create 응답을 기다리는 중 ${signal}를 받아도 응답 뒤 자기 탭을 close·show·remove하고 ${code}로 끝난다`, async () => {
+    const f = fixture();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-sig-'));
+    const bin = path.join(dir, 'rottie'), log = path.join(dir, 'calls.log'), ready = path.join(dir, 'creating');
+    // 가짜 로티: create는 표시를 남기고 0.8초 뒤에 답한다. show는 남아 있다고 답해 remove까지 가게 한다.
+    fs.writeFileSync(bin, `#!/bin/bash
+echo "$2" >>"${log}"
+case "$2" in
+  create) touch "${ready}"; sleep 0.8; echo '{"ok":true,"result":{"terminal":{"id":"term-sig","state":"running","pid":7,"workspaceId":"ws"}},"runtime":{"build":"b"}}';;
+  *) echo '{"ok":true,"result":{}}';;
+esac
+`, {mode: 0o755});
+    const harness = path.join(dir, 'harness.mjs');
+    fs.writeFileSync(harness, `import {seniorCommand} from ${JSON.stringify(new URL('../src/senior.mjs', import.meta.url).href)};
+await seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home: ${JSON.stringify(f.home)}, by: 'qa-감독', env: ${JSON.stringify(envOn({KADAN_ROTTIE_BIN: bin}))},
+  followScript: ${JSON.stringify(followScript)}, spawn: () => new Promise(() => setInterval(() => {}, 1000))});
+`);
+    const child = spawn(process.execPath, [harness], {stdio: 'ignore'});
+    const exited = new Promise(resolve => child.on('close', (c, s) => resolve({code: c, signal: s})));
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(ready) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+    assert.ok(fs.existsSync(ready), 'create가 시작되지 않았다');
+    child.kill(signal);
+    assert.equal((await exited).code, code);
+    assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['create', 'close', 'show', 'remove']);
+  });
+}

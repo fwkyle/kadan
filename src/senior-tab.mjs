@@ -40,8 +40,19 @@ export function openSeniorTab({home, env, card, adviceId, dir, followScript, par
     const call = rottie ?? (argv => runRottie(argv, spawnSync, runEnv));
     const command = `/bin/bash ${shellWord(followScript)} ${shellWord(dir)} ${parentPid}`;
     // workspace가 로티에 열려 있지 않으면(ROTTIE_WORKSPACE_NOT_OPEN) 새로 추가하지 않고 건너뛴다.
-    const evidence = parseRottieCreateEvidence(call(buildSeniorTabCreateArgv({card, adviceId, command})));
-    return {tab: 'opened', rottieTerminalId: evidence.rottieTerminalId, call};
+    const argv = buildSeniorTabCreateArgv({card, adviceId, command});
+    const key = argv[argv.indexOf('--idempotency-key') + 1];
+    let envelope;
+    try { envelope = call(argv); } catch (error) {
+      // 요청이 닿았는지 모르는 오류(effect unknown)는 탭이 생겼을 수 있다. 제목으로 뒤져 지우지 않고 키만 남긴다.
+      if (error?.effect === 'unknown') return {tab: 'unknown', tabReason: reasonOf(error), tabKey: key};
+      throw error;
+    }
+    try {
+      return {tab: 'opened', rottieTerminalId: parseRottieCreateEvidence(envelope).rottieTerminalId, call};
+    } catch (error) {
+      return {tab: 'unknown', tabReason: reasonOf(error), tabKey: key};
+    }
   } catch (error) {
     return {tab: 'skipped', tabReason: reasonOf(error)};
   }
@@ -56,12 +67,15 @@ export function closeSeniorTab(opened) {
   } catch (error) {
     return {tab: 'close-failed', tabReason: reasonOf(error)};
   }
-  let lingering = true;
-  try { call(['terminal', 'show', ...target]); } catch { lingering = false; }
-  if (!lingering) return {tab: 'closed'};
+  // show가 NOT_FOUND일 때만 사라진 것이다. 다른 오류는 남았는지 모르므로 자기 id를 remove해 본다(재시도는 없다).
+  let reason = 'removed-after-close';
+  try { call(['terminal', 'show', ...target]); } catch (error) {
+    if (error?.code === 'ROTTIE_TERMINAL_NOT_FOUND') return {tab: 'closed'};
+    reason = `removed-after-show-error: ${reasonOf(error)}`;
+  }
   try {
     call(['terminal', 'remove', ...target]);
-    return {tab: 'closed', tabReason: 'removed-after-close'};
+    return {tab: 'closed', tabReason: reason};
   } catch (error) {
     return {tab: 'close-failed', tabReason: `remove: ${reasonOf(error)}`};
   }

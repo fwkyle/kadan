@@ -49,7 +49,7 @@ Why: kyle이 시니어가 무엇을 읽고 어떻게 고민하는지 화면에�
 - **무엇이 뜨나**: `scripts/senior-follow.sh <호출 폴더> <kadan senior의 PID>`가 도는 탭. `diagnostic.log`를 `tail -F`로 보여 주는 읽기 전용이고 입력을 받지 않는다. `exit-code.txt`가 생기거나 부모 PID가 사라지면 스스로 끝난다(TERM으로 죽은 `kadan senior`는 `exit-code.txt`를 남기지 않아서).
 - **역할이 아니다**: `KADAN_ROLE`·`kadan-*` 이름을 쓰지 않고 제목은 `시니어 · <카드키>`, 멱등 키는 `kadan-senior-<호출ID>`다. `start` 원장 사건을 쓰지 않으므로 `kadan status`·바닥 `list()`·감시기가 잡지 않는다.
 - **탭은 꾸밈이다**: 앱 꺼짐(`ROTTIE_APP_NOT_RUNNING`)·workspace 없음(`ROTTIE_WORKSPACE_NOT_OPEN`)·닫기 실패가 시니어 호출을 실패시키지 않는다. 앱을 띄우거나 workspace를 새로 추가하지 않는다.
-- **닫기**: 성공·실패·시간 초과·TERM/INT 모두 `terminal close`를 부른다. 닫은 뒤에도 목록에 남으면 자기 탭 id만 `terminal remove`한다.
+- **닫기**: 성공·실패·시간 초과·TERM/INT 모두 `terminal close`를 부른다(신호 처리기는 create 전에 설치하고, create가 동기라 신호는 id를 받은 뒤 처리된다). 닫은 뒤 `show`가 NOT_FOUND면 사라진 것이고, 그 밖의 오류거나 남아 있으면 자기 탭 id만 `terminal remove`한다.
 - **탭 없이 보려면**: 영수증의 `follow` 줄(`tail -F <호출 폴더>/diagnostic.log`)을 직접 실행한다.
 
 | 경우 | `tab` | `tabReason` | kyle에게 보이는 것 |
@@ -61,13 +61,15 @@ Why: kyle이 시니어가 무엇을 읽고 어떻게 고민하는지 화면에�
 | 앱 꺼짐·workspace 없음 등 create 오류 | `skipped` | 로티 오류 코드 | 같음 |
 | 열고 정상 닫음 | `closed` | 없음 | 호출 동안만 탭 |
 | 닫은 뒤 목록에 남아 remove함 | `closed` | `removed-after-close` | 호출 동안만 탭 |
+| 생성 응답이 유실·불확실(탭이 생겼을 수 있음) | `unknown` | 로티 오류 코드 | 탭이 남을 수 있음. 원장 `tabKey`(`kadan-senior-<호출ID>`)로 사람이 찾는다. 제목·키로 목록을 뒤져 지우지 않는다 |
+| 닫은 뒤 show가 NOT_FOUND 아닌 오류 → remove 성공 | `closed` | `removed-after-show-error: …` | 호출 동안만 탭 |
 | 닫기·remove 실패 | `close-failed` | 로티 오류 코드 | 탭이 남을 수 있음(`rottieTerminalId`로 직접 닫는다) |
 
 ### 포커스 실측 (2026-10-16, 1회, kyle 허락)
 
 로티 `terminal create`에는 포커스를 끄는 옵션이 없어 실제 로티로 한 번 쟀다. 조건: 격리 `KADAN_HOME`, `KADAN_ALLOW_LIVE_FLOOR=1`, 실제 로티, 가짜 `codex`(약 8초, 비용 0).
 
-- 맨 앞 앱은 `osascript`로 읽기만 했다(포커스를 옮기는 명령 없음). 1초 간격 12번 읽는 동안 로티는 한 번도 맨 앞이 되지 않았다(Notion → Aside 전환은 kyle 쪽 조작으로 보이며 같은 변화가 로티 없는 리허설에도 있었다).
+- 맨 앞 앱은 `osascript`로 읽기만 했다(포커스를 옮기는 명령 없음). 1초 간격으로 표본 10개(실행 전·실행 중 8·실행 후, 약 9초)를 읽었고 관측한 표본에서는 로티가 맨 앞에 없었다(맨 앞 앱이 Notion·Aside로 바뀐 것은 사용자 조작으로 추정되며 확정하지 않는다. 로티 없는 리허설에도 같은 변화가 있었다).
 - 열린 동안 `terminal list`에 `시니어 · smoke/senior-probe` 하나가 `running`으로 보였고(839 → 840), 끝난 뒤 사라졌다(839). `terminal close` 뒤에도 목록에 남아 `terminal remove`가 필요했다 — 그래서 close 뒤 remove를 넣었다.
 - **확인하지 못한 것**: 로티 안에서 새 탭이 선택(전환)되는지는 CLI 출력에 선택 필드가 없어 관찰하지 못했다. 1초 간격이라 순간적인 앞으로 오기도 못 잡았을 수 있다.
 - 결정: 로티가 맨 앞으로 오지 않았으므로 기본은 켬이다(`src/senior-tab.mjs`의 `SENIOR_TAB_DEFAULT_ON`). 맨 앞으로 오는 것이 확인되면 `false`로 바꿔 자동 열기를 끈다(영수증 `follow` 명령만 남는다).

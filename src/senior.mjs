@@ -91,10 +91,12 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   fs.writeFileSync(path.join(dir, 'diagnostic.log'), '', {mode: 0o600});
   const started = now();
   // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 닫기는 성공·실패·시간 초과·신호 모두에서 한다.
-  const opened = openSeniorTab({home, env, card, adviceId, dir, followScript, rottie});
-  let tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason};
+  // 신호 처리기는 create 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
+  let opened = {tab: 'skipped'}, tab = {tab: 'skipped'};
   const closeTab = () => { if (opened.tab === 'opened') tab = closeSeniorTab(opened); };
-  const detach = opened.tab === 'opened' ? closeOnSignal(closeTab) : () => {};
+  const detach = closeOnSignal(closeTab);
+  opened = openSeniorTab({home, env, card, adviceId, dir, followScript, rottie});
+  tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason, ...(opened.tabKey ? {tabKey: opened.tabKey} : {})};
   let result;
   try {
     result = await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
