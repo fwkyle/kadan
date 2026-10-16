@@ -20,6 +20,8 @@ export function cycleReads({readEntries, readCards = null, readWorks = () => [],
     readEntries: wrap('entries', readEntries),
     readCards: readCards ? wrap('cards', readCards) : null,
     readWorks: wrap('works', readWorks),
+    // 주기가 끝나면 재사용 자료를 놓는다. 그렇지 않으면 다음 begin까지 원장 사본이 힙에 남는다.
+    end() { cache.clear(); },
     // 주기 시작에 부른다. 직전 주기의 재사용 자료를 버리고 읽기 횟수를 0으로 되돌린다.
     begin() { cache.clear(); for (const key of Object.keys(counts)) counts[key] = 0; },
     stats() { return {...counts}; },

@@ -721,7 +721,7 @@ test("감독이 놀면 슈퍼에게 올린다 — 2026-08-07 감독 1시간 30�
   assert.equal(alerts[0].idleMinutes, 32);
   assert.equal(
     formatAlertBody(alerts[0], {}),
-    "놀고 있음 kadan-p-감독 (할 일 2건, 32분간 화면 변화 없음)"
+    "놀고 있음 kadan-p-감독 (본인 차례 2건, 32분간 화면 변화 없음)"
   );
   assert.equal(
     routeAlert(

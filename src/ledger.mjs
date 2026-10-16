@@ -1,4 +1,4 @@
-import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
+import {storageMode,storagePath,storageSnapshot,readStream} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -64,14 +64,14 @@ export function readLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home));
 }
 export function readTaskLedger(home = ledgerHome()) {
-  return projectLedger(readLedgerState(home),'tasks');
+  return projectLedger(readLedgerState(home,{domain:'tasks'}),'tasks');
 }
 export function readMailLedger(home = ledgerHome()) {
-  return projectLedger(readLedgerState(home),'mail');
+  return projectLedger(readLedgerState(home,{domain:'mail'}),'mail');
 }
 // 우편함 계산용: 우편 영역 + 역할 세대(start·stop) 기록. mail-generation.mjs가 같은 이름의 새 세션을 가른다.
 export function readMailboxLedger(home = ledgerHome()) {
-  return projectLedger(readLedgerState(home),'mailbox');
+  return projectLedger(readLedgerState(home,{domain:'mailbox'}),'mailbox');
 }
 // 우편 중복 거르기용 좁은 조회: 수신자·sourceKey가 같은 send 사건 하나. 원장 전체를 읽고 검증하지 않는다.
 // SQLite는 우편 영역(과거 원문 포함) 줄만 최신부터 훑고, 글자 포함(instr)으로 먼저 걸러 JSON 해석 없이 첫 일치에서 멈춘다.
@@ -94,5 +94,14 @@ export function findMailBySourceKeyAny(home,sourceKey) {
   });
 }
 export function readSystemLedger(home = ledgerHome()) {
-  return projectLedger(readLedgerState(home),'system');
+  return projectLedger(readLedgerState(home,{domain:'system'}),'system');
+}
+// 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.
+// SQLite는 requestId 글자 포함(instr)으로 먼저 걸러 해당 줄만 해석한다. JSONL은 전체를 읽는다.
+export function readWatchRequest(home,requestId) {
+  if (storageMode(home) !== 'sqlite') return readStream(home,'system/events.jsonl',{optional:true}).find(e => e.kind === 'watch-ai-request' && e.requestId === requestId) ?? null;
+  return storageSnapshot(home,db => {
+    const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream='system/events.jsonl' AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='watch-ai-request' AND json_extract(payload,'$.requestId')=? LIMIT 1").get(requestId,requestId);
+    return row ? JSON.parse(row.payload) : null;
+  });
 }
