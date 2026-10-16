@@ -38,12 +38,29 @@ test('briefSkipReason: 재사용·프로필 없음·--no-prompt·실행기 아�
 
 test('briefStartedRole: 보내기 직전 세대가 바뀌었거나 확인할 수 없으면 건너뛴다', () => {
   const base = {role: 'r', session: 'kadan-r', roleProfile: 'super', cmd: 'claude', reusing: false, sleep: () => {}, floor: {read: () => 'ready'}};
-  for (const current of [false, null, undefined]) {
-    const warns = [];
-    assert.equal(briefStartedRole({...base, isCurrent: () => current, send: () => assert.fail('보내면 안 됨'), warn: l => warns.push(l)}), 'skipped:generation-changed');
-    assert.match(warns[0], /첫 안내 건너뜀 — 세대가 바뀜/);
+  const noSend = () => assert.fail('보내면 안 됨');
+  const warns = [];
+  assert.equal(briefStartedRole({...base, isCurrent: () => false, send: noSend, warn: l => warns.push(l)}), 'skipped:generation-changed');
+  assert.match(warns[0], /첫 안내 건너뜀 — 세대가 바뀜/);
+  // N1: 조회가 던지거나 값을 못 얻어도 던지지 않고 건너뛴다(start 종료 코드 0).
+  for (const isCurrent of [() => null, () => undefined, () => { throw new Error('ROTTIE_INTERNAL: lookup unavailable'); }]) {
+    const w = [];
+    assert.equal(briefStartedRole({...base, isCurrent, send: noSend, warn: l => w.push(l)}), 'skipped:generation-unknown');
+    assert.match(w[0], /첫 안내 건너뜀 — 세대 확인 실패/);
   }
   assert.equal(briefStartedRole({...base, isCurrent: () => true, send: () => ({bytes: 1, mailId: 'm'}), log: () => {}}), 'sent');
+});
+
+test('N2: 알려진 실행기여도 판단 불가·이어 열기 계열 명령은 새 대화로 보지 않고 보내지 않는다', () => {
+  const base = {reusing: false, roleProfile: 'worker', noPrompt: false};
+  for (const cmd of ['codex resume --last', 'codex --image shot.png resume old-id', 'codex --unknown-flag resume old-id', 'codex --unknown-flag',
+    'codex resume', 'codex exec hi', 'codex "첫 프롬프트"', 'claude --resume', 'claude -r', 'claude --continue', 'claude -c', 'claude --unknown-flag',
+    'claude --model x --', 'agy --continue', 'agy --unknown', 'devin --resume', 'devin -c', 'env A=B codex resume --last'])
+    assert.notEqual(briefSkipReason({...base, cmd}), null, `${cmd} → 보내면 안 됨`);
+  // 새 대화로 확실한 것: 실행기 이름만 또는 알려진 무해 옵션(과 값)만.
+  for (const cmd of ['codex', 'claude', 'codex -p lite --model m -c model_reasoning_effort="high"', 'claude --model m --effort high --dangerously-skip-permissions',
+    'agy --model m --dangerously-skip-permissions', 'devin --model m --permission-mode dangerous --respect-workspace-trust false', 'env A=B kadan-claude --model=m'])
+    assert.equal(briefSkipReason({...base, cmd}), null, `${cmd} → 새 대화로 확실`);
 });
 
 test('briefMessage: 프로필별 스킬 이름이 들어가고 완성된 DONE 마커는 없다', () => {

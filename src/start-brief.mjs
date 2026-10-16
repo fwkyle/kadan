@@ -2,7 +2,7 @@
 // 새로 만든 AI 세션에만, 화면이 안정된 뒤 프로필 지침이 붙은 첫 안내를 내부 send로 한 번 보낸다.
 // 지침·참고 파일은 send가 붙이는 receiver-instructions(role-instructions.mjs)가 맡고, 여기 본문은 짧은 두 문장이다.
 import { normalizeAiCommand, AI_HARNESS_NAMES } from "./ai-identity.mjs";
-import { conversationOf } from "./conversation-ref.mjs";
+import { startConversationCertainty } from "./conversation-ref.mjs";
 import { waitForSettled } from "./quickstart.mjs";
 
 // kadan up이 비서에게 쓰던 본문 그대로다(quickstart.mjs에서 옮김).
@@ -29,18 +29,17 @@ export function isAiRunnerCommand(cmd, { known = AI_HARNESS_NAMES } = {}) {
   return Boolean(normalized && known.has(normalized.harness));
 }
 
-// 이어 열기 판독기가 있는 실행기. 그 밖의 실행기(omo 등)는 이어 열기인지 알 수 없다.
-const RESUME_AWARE = new Set(["claude", "codex", "agy", "devin"]);
-
 // 보낼지 말지의 네 조건 + 이어 열기 제외. 이유를 돌려줘 시험과 출력이 같은 판단을 쓴다.
 export function briefSkipReason({ reusing, roleProfile, noPrompt, cmd, known }) {
   if (reusing) return "reusing";
   if (!roleProfile) return "no-profile";
   if (noPrompt) return "no-prompt";
   if (!isAiRunnerCommand(cmd, known ? { known } : undefined)) return "not-ai-runner";
-  // 같은 대화를 resume으로 다시 연 세션은 이미 안내를 받았다. 새 대화(new·fork)만 안내하고, 알 수 없으면 보내지 않는다.
-  if (!RESUME_AWARE.has(normalizeAiCommand(cmd).harness)) return "resume-unknown";
-  if (conversationOf(cmd).conversationMode === "resume") return "resume";
+  // 같은 대화를 resume으로 다시 연 세션은 이미 안내를 받았다. 새 대화로 확실한 것(new·fork)만 안내하고,
+  // 모르는 옵션·하위 명령이 섞여 판단할 수 없으면 보내지 않는다(기준: conversation-ref.mjs startConversationCertainty).
+  const certainty = startConversationCertainty(cmd);
+  if (certainty === "resume") return "resume";
+  if (certainty === "unknown") return "resume-unknown";
   return null;
 }
 
@@ -56,7 +55,13 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
     ...(tries ? { tries } : {}), ...(intervalMs ? { intervalMs } : {}), ...(sleep ? { sleep } : {}) });
   if (!settled) { warn(`첫 안내 못 보냄(화면이 아직 준비되지 않음) — ${hint}`); return "not-ready"; }
   // 화면을 기다리는 동안 이 세대가 닫히고 다른 세대로 바뀌었을 수 있다. 대기 전에 고정한 세대와 같다고 확인될 때만 보낸다.
-  if (isCurrent && isCurrent() !== true) { warn("첫 안내 건너뜀 — 세대가 바뀜"); return "skipped:generation-changed"; }
+  // 조회가 던지거나 값을 못 얻으면 건너뛴다. start는 이미 성공했으므로 확인 실패가 start를 실패시키지 않는다.
+  if (isCurrent) {
+    let current;
+    try { current = isCurrent(); } catch { current = undefined; }
+    if (current === false) { warn("첫 안내 건너뜀 — 세대가 바뀜"); return "skipped:generation-changed"; }
+    if (current !== true) { warn("첫 안내 건너뜀 — 세대 확인 실패"); return "skipped:generation-unknown"; }
+  }
   try {
     const receipt = send({ role, session, message: briefMessage({ role, profile: roleProfile }), roleProfile });
     log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
