@@ -22,6 +22,7 @@ export async function startFakeDiscord({intent = true} = {}) {
     [FAKE.otherChannelId, {id: FAKE.otherChannelId, type: 0, guild_id: FAKE.guildId}],
   ]);
   messages.set(FAKE.otherChannelId, []);
+  const guild = {roles: [{id: FAKE.guildId, permissions: '0'}], memberRoles: []};   // 봇 권한 계산용(checkChat의 Manage Threads 줄)
   const webhooks = new Map([[`${FAKE.hookId}/${FAKE.hookToken}`, FAKE.channelId]]); // 웹훅 id/token → 채널 id
 
   const send = (res, status, json) => { res.writeHead(status, {'content-type': 'application/json'}); res.end(json === undefined ? '' : JSON.stringify(json)); };
@@ -43,6 +44,8 @@ export async function startFakeDiscord({intent = true} = {}) {
       const p = url.pathname.split('/').filter(Boolean);
       const m = req.method;
       if (m === 'GET' && p[0] === 'webhooks' && webhooks.has(`${p[1]}/${p[2]}`)) return send(res, 200, {id: p[1], channel_id: webhooks.get(`${p[1]}/${p[2]}`)});
+      if (m === 'GET' && p[0] === 'guilds' && p[2] === 'members') return send(res, 200, {user: {id: p[3]}, roles: guild.memberRoles});
+      if (m === 'GET' && p[0] === 'guilds' && p[2] === 'roles') return send(res, 200, guild.roles);
       if (m === 'GET' && p[0] === 'users' && p[1] === '@me') return send(res, 200, {id: FAKE.botId, bot: true});
       if (m === 'GET' && p[0] === 'applications' && p[1] === '@me') return send(res, 200, {id: FAKE.appId, flags: intent ? 1 << 18 : 0});
       if (m === 'GET' && p[0] === 'guilds' && p[2] === 'threads') return send(res, 200, {threads: [...threads.values()].filter(t => !t.archived && t.guild_id === p[1]).map(t => ({...t, last_message_id: lastOf(t.id)}))});
@@ -103,7 +106,7 @@ export async function startFakeDiscord({intent = true} = {}) {
   server.on('connection', s => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
   return {
     base: `http://127.0.0.1:${server.address().port}`,
-    requests, threads, messages,
+    requests, threads, messages, guild,
     inject: rule => rules.push({times: 1, status: 500, ...rule}),
     // 채널(또는 스레드)에 메시지를 넣는다. 반환: 메시지
     add(channelId, extra = {}) {
@@ -118,9 +121,9 @@ export async function startFakeDiscord({intent = true} = {}) {
       return t;
     },
     // 레포 포럼 채널(type 15)과 그 웹훅을 만든다. 반환: {id, hookId, hookToken, name}. 비밀 파일에는 DISCORD_WEBHOOK_URL_<이름>으로 넣는다.
-    addForum(name, {guildId = FAKE.guildId, type = 15} = {}) {
+    addForum(name, {guildId = FAKE.guildId, type = 15, overwrites = []} = {}) {
       const id = nextId(), hookId = nextId(), hookToken = `FAKE-HOOK-${name}-${hookId.slice(-4)}`;
-      channels.set(id, {id, type, guild_id: guildId, name}); messages.set(id, []);
+      channels.set(id, {id, type, guild_id: guildId, name, permission_overwrites: overwrites}); messages.set(id, []);
       webhooks.set(`${hookId}/${hookToken}`, id);
       return {id, hookId, hookToken, name, url: `https://discord.com/api/webhooks/${hookId}/${hookToken}`};
     },

@@ -12,9 +12,11 @@ const LOCK_STALE_MS = 20000; // 알림 한 번의 최대 시간(약 14초)보다
 const file = home => path.join(home, THREADS_FILE);
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-const entryOf = v => typeof v === 'string' && v ? {threadId: v, statusMessageId: null}
+// archived: 끝난 업무라 봇이 보관한 글이면 true. 옛 기록(문자열·archived 없음)은 false로 읽고, 파일에는 true일 때만 쓴다.
+const entryOf = v => typeof v === 'string' && v ? {threadId: v, statusMessageId: null, archived: false}
   : v && typeof v === 'object' && typeof v.threadId === 'string' && v.threadId
-    ? {threadId: v.threadId, statusMessageId: typeof v.statusMessageId === 'string' && v.statusMessageId ? v.statusMessageId : null} : null;
+    ? {threadId: v.threadId, statusMessageId: typeof v.statusMessageId === 'string' && v.statusMessageId ? v.statusMessageId : null, archived: v.archived === true} : null;
+const storedEntry = ({archived, ...rest}) => (archived ? {...rest, archived: true} : rest);
 
 const MAX_DECISIONS = 500; // 오래된 결정 기록부터 버린다(해결된 결정은 다시 고칠 일이 거의 없다)
 
@@ -40,7 +42,7 @@ export function readDecisions(home) {
 function writeState(home, threads, decisions) {
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   const tmp = `${file(home)}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({version: 1, threads, ...(Object.keys(decisions).length ? {decisions} : {})}, null, 2) + '\n', {mode: 0o600});
+  fs.writeFileSync(tmp, JSON.stringify({version: 1, threads: Object.fromEntries(Object.entries(threads).map(([k, e]) => [k, storedEntry(e)])), ...(Object.keys(decisions).length ? {decisions} : {})}, null, 2) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file(home));
 }
 
@@ -48,6 +50,12 @@ function writeState(home, threads, decisions) {
 // entry: {threadId, statusMessageId}. 글이 바뀌면(새 글) statusMessageId를 null로 넘겨 옛 글의 메시지를 끌고 가지 않는다.
 export function setThread(home, work, entry) {
   writeState(home, {...readThreads(home), [work]: entryOf(entry)}, readDecisions(home));
+}
+
+// 글의 보관 여부만 바꾼다(기록이 없으면 아무것도 안 한다). 잠금 안에서 부른다.
+export function setArchived(home, work, archived) {
+  const all = readThreads(home);
+  if (all[work]) writeState(home, {...all, [work]: {...all[work], archived: archived === true}}, readDecisions(home));
 }
 
 // 결정 요청 메시지의 위치를 남긴다. 잠금 안에서 부른다.

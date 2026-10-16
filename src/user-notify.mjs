@@ -8,7 +8,8 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {ledgerHome} from './ledger.mjs';
 import {effectiveNotifyEnvFile, readDiscordSecrets} from './notify-setting.mjs';
-import {setThread, setDecision, readDecisions, withThreadLock} from './notify-threads.mjs';
+import {setThread, setArchived, setDecision, readDecisions, readThreads, withThreadLock} from './notify-threads.mjs';
+import {setArchivedSync, botSecrets} from './thread-archive.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWorkStatus} from './work-status-message.mjs';
 
@@ -113,15 +114,84 @@ const is4xx = r => r.outcome === 'failed' && r.status >= 400 && r.status < 500 &
 const outageOf = r => r.outcome === 'uncertain' || (r.outcome === 'failed' && r.attempts !== 0 && (r.status === undefined || r.status >= 500 || r.status === 429));
 const noteOutage = r => { if (outageOf(r)) blockedUntil = Date.now() + DISCORD_BLOCK_MS; };
 
-// 업무 글의 상태 메시지를 올리거나 고친다. 잠금 안에서 부른다. 예산이 모자라면 버린다(상태는 다음 사건 때 다시 계산된다).
+// ---------- 끝난 업무 글 보관·재개 ----------
+// 웹훅은 보관을 못 해서 봇(thread-archive.mjs)이 한다. 보관된 글에 쓰면 디코가 다시 열어 주는지는 실측하지 못했다(실제 전송 금지) —
+// 그래서 두 경우를 모두 처리한다: (1) 기록이 archived인 글에는 쓰기 전에 먼저 재개한다. (2) 기록이 없는데 웹훅이 '보관된 스레드' 오류를
+// 내면(손으로 보관한 글) 재개한 뒤 한 번만 다시 시도한다. 재개가 막히면(403 등) 그 쓰기를 건너뛰고 기록에 사유만 남긴다.
+export const ARCHIVED_THREAD_CODE = 50083; // 디스코드 JSON 오류 코드: 보관된 스레드에 쓰려 함
+const isArchivedError = r => r.outcome === 'failed' && r.status === 400 && r.code === ARCHIVED_THREAD_CODE;
+
+// 한 번의 잠금 안에서 쓰는 묶음. resumed: 이번 사건에서 이미 재개를 시도했는가(재개는 한 번만).
+function workCtx({home, env, webhook, work, deadline, secrets}) {
+  return {home, env, webhook, work, deadline, secrets, resumed: false, left: () => deadline - Date.now()};
+}
+
+// 글을 봇으로 다시 연다. 반환 {ok:true} 또는 {ok:false, result}.
+//   404(글 없음)는 result를 그대로 돌려줘 호출 쪽의 '지워진 글' 경로가 이어받는다.
+//   그 밖의 4xx·봇 설정 없음은 'archived-skip'(쓰기 건너뜀, 시스템 알림으로 대신하지 않음, blockedUntil 없음), 5xx·불확실은 실패 그대로.
+function resumeThread(ctx, threadId) {
+  ctx.resumed = true;
+  const r = ctx.left() < MIN_SEND_MS ? budgetOut() : setArchivedSync({home: ctx.home, env: ctx.env, threadId, archived: false, budgetMs: ctx.left()});
+  if (r.outcome === 'sent') { setArchived(ctx.home, ctx.work, false); return {ok: true}; }
+  if (r.outcome === 'failed' && r.status === 404) return {ok: false, result: r};
+  if (r.skip === true || is4xx(r))
+    return {ok: false, result: {outcome: 'archived-skip', attempts: r.attempts ?? 0, status: r.status, reason: `보관된 글을 다시 열지 못해 쓰기를 건너뜀 — ${r.reason ?? '사유 없음'}`}};
+  return {ok: false, result: r};
+}
+const resumeGone = o => !o.ok && o.result.outcome === 'failed' && o.result.status === 404;
+
+// 웹훅 쓰기 하나를 하되, '보관된 스레드' 오류면 재개 → 한 번만 다시 시도한다.
+function withResume(ctx, threadId, attempt) {
+  const r = attempt();
+  if (!isArchivedError(r) || ctx.resumed) return r;
+  const o = resumeThread(ctx, threadId);
+  return o.ok ? attempt() : o.result;
+}
+
+function logArchive(ctx, a) {
+  appendLog(ctx.home, {at: new Date().toISOString(), key: null, kind: 'archive', work: ctx.work, via: 'discord', outcome: a.outcome,
+    reason: scrubSecrets(a.reason ?? '', ctx.secrets) || undefined, attempts: a.attempts ?? undefined, status: a.status ?? undefined});
+}
+
+// 끝난(완료·취소) 업무의 글을 보관한다. 조건(모두): 상태 메시지 고치기가 sent, 결정 글 아님, 아직 보관 안 됨, 시간 예산 있음.
+// 실패(403 등)는 사유만 기록하고 글은 보관 안 됨으로 둔다. 알림 결과는 바꾸지 않는다. 장애성 실패만 60초 차단에 센다.
+function archiveIfEnded(ctx, status, r) {
+  if (!status.ended || r.outcome !== 'sent' || ctx.work.endsWith('/__decisions__')) return null;
+  const entry = readThreads(ctx.home)[ctx.work];
+  if (!entry || entry.archived) return null;
+  const a = ctx.left() < MIN_SEND_MS ? {outcome: 'skipped', attempts: 0, reason: '시간 예산이 모자라 보관을 건너뜀(다음 사건 때 다시 시도)'}
+    : setArchivedSync({home: ctx.home, env: ctx.env, threadId: entry.threadId, archived: true, budgetMs: ctx.left()});
+  if (a.outcome === 'sent') setArchived(ctx.home, ctx.work, true);
+  noteOutage(a);
+  logArchive(ctx, a);
+  return a;
+}
+
+// 업무 글의 상태 메시지를 올리거나 고친 뒤(끝난 업무면) 글을 보관한다. 잠금 안에서 부른다.
+// entry: 글 기록 {threadId, statusMessageId, archived}.
+//   끝난 업무인데 이미 보관된 글이면 아무것도 안 한다(늦게 온 실행 done이 끝난 글을 다시 열지 않는다).
+//   업무가 열려 있는데 보관된 글이면(reopen) 먼저 재개한다.
+function syncWork(ctx, entry) {
+  const status = buildWorkStatus(ctx.home, ctx.work);
+  if (!status) return {outcome: 'none', attempts: 0};
+  if (entry.archived) {
+    if (status.ended) return {outcome: 'none', attempts: 0};
+    const o = resumeThread(ctx, entry.threadId);
+    if (!o.ok && !resumeGone(o)) return o.result;
+  }
+  const r = syncStatus(ctx, status, entry);
+  const archive = archiveIfEnded(ctx, status, r);
+  return archive ? {...r, archive} : r;
+}
+
+// 상태 메시지를 올리거나 고친다. 예산이 모자라면 버린다(상태는 다음 사건 때 다시 계산된다).
 //   기록된 메시지가 있으면 고친다 → 404(지워짐)면 같은 글에 새 상태 메시지를 올리고 id를 바꾼다
 //   → 글까지 404면 상태 메시지를 첫 글로 새 글을 만든다. 404 아닌 실패(400·403·5xx·불확실)는 더 시도하지 않고 버린다.
-function syncStatus({home, webhook, work, threadId, statusMessageId, deadline}) {
-  const left = () => deadline - Date.now();
-  const status = buildWorkStatus(home, work);
-  if (!status) return {outcome: 'none', attempts: 0};
-  const call = extra => left() < MIN_SEND_MS ? budgetOut()
-    : postDiscordWebhook({webhook, content: status.content, allowedMentions: {parse: []}, budgetMs: left(), ...extra});
+function syncStatus(ctx, status, {threadId, statusMessageId}) {
+  const {home, webhook, work} = ctx;
+  const raw = extra => ctx.left() < MIN_SEND_MS ? budgetOut()
+    : postDiscordWebhook({webhook, content: status.content, allowedMentions: {parse: []}, budgetMs: ctx.left(), ...extra});
+  const call = extra => (extra.threadId ? withResume(ctx, extra.threadId, () => raw(extra)) : raw(extra));
   const gone = r => r.outcome === 'failed' && r.status === 404;
   let r;
   if (statusMessageId) {
@@ -142,8 +212,9 @@ function syncStatus({home, webhook, work, threadId, statusMessageId, deadline}) 
 // 기본 #브리핑에 섞지 않고, 상태 파일을 잠금 없이 건드리지 않으려고 시스템 알림으로 내려간다(잘못된 채널로 새지 않는 쪽).
 // 알림이 나간 뒤에는 같은 잠금 안에서 상태 메시지도 맞춘다(결과는 statusSync에 따로 담고 알림 결과를 바꾸지 않는다).
 // decision: {id, edit?}. 요청이면 메시지 id를 남기고(wait), 해결(edit 본문 있음)이면 남긴 메시지를 고친다 — 못 찾을 때(기록 없음·404)만 새 메시지.
-function sendForum({home, webhook, work, threadName, content, allowedMentions, deadline, decision}) {
+function sendForum({home, env, webhook, work, threadName, content, allowedMentions, deadline, decision, secrets}) {
   const left = () => deadline - Date.now();
+  const ctx = workCtx({home, env, webhook, work, deadline, secrets});
   const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads => {
     const plan = planDecision(home, decision, content, allowedMentions);
     if (plan.skip) return plan.skip;
@@ -153,22 +224,28 @@ function sendForum({home, webhook, work, threadName, content, allowedMentions, d
       if (done) {
         // 메시지를 고쳤어도 그 업무 글의 상태 메시지는 기준대로 맞춘다(결정 전용 글은 업무가 아니라 'none').
         const known = threads[work];
-        return done.outcome === 'sent' && known ? {...done, statusSync: syncStatus({home, webhook, work, ...known, deadline})} : done;
+        return done.outcome === 'sent' && known ? {...done, statusSync: syncWork(ctx, known)} : done;
       }
     }
-    const known = threads[work];
+    let known = threads[work];
     const wait = Boolean(decision);
     let r, entry = null;
+    if (known?.archived) {                       // 보관된 글에는 쓰기 전에 먼저 다시 연다(재개가 막히면 이 쓰기를 건너뛴다)
+      const o = resumeThread(ctx, known.threadId);
+      if (o.ok) known = {...known, archived: false};
+      else if (resumeGone(o)) known = null;
+      else return o.result;
+    }
     if (known) {
-      r = post({threadId: known.threadId, wait});
+      r = withResume(ctx, known.threadId, () => post({threadId: known.threadId, wait}));
       if (r.outcome === 'sent') entry = known;
     }
-    if (!entry && !(r && !is4xx(r))) {
+    if (!entry && !(r && (!is4xx(r) || isArchivedError(r)))) {
       r = post({threadName, wait: true});
       if (r.outcome === 'sent' && r.channelId) { entry = {threadId: r.channelId, statusMessageId: null}; setThread(home, work, entry); }
     }
     if (entry && wait && r.messageId) setDecision(home, decision.id, {threadId: entry.threadId, messageId: r.messageId, forum: true, resolved: plan.resolved});
-    if (entry) r = {...r, statusSync: syncStatus({home, webhook, work, ...entry, deadline})};
+    if (entry) r = {...r, statusSync: syncWork(ctx, entry)};
     return noteRead(r, plan);
   });
   return lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
@@ -234,11 +311,12 @@ export function refreshWorkStatus(home, work, opts = {}) {
     if (cfg.error || !cfg.envFile) return {outcome: 'none'};
     const sec = readDiscordSecrets(cfg.envFile, {repo: work.split('/')[0]});
     if (sec.error || !sec.repoWebhook) return {outcome: 'none'};
-    secrets = [sec.webhook, sec.repoWebhook, sec.userId];
+    secrets = [sec.webhook, sec.repoWebhook, sec.userId, ...botSecrets(home, env)];
     if (Date.now() < blockedUntil) return {outcome: 'skipped', reason: '디스코드 장애 직후라 건너뜀(60초)'};
     const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
+    const ctx = workCtx({home, env, webhook: sec.repoWebhook, work, deadline, secrets});
     const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads =>
-      threads[work] ? syncStatus({home, webhook: sec.repoWebhook, work, ...threads[work], deadline}) : {outcome: 'none', attempts: 0});
+      threads[work] ? syncWork(ctx, threads[work]) : {outcome: 'none', attempts: 0});
     const r = lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
     noteOutage(r);
     if (r.outcome !== 'none') logStatus(home, work, r, secrets);
@@ -300,7 +378,7 @@ export function notifyUser(message, spawn, opts = {}) {
         const sec = readDiscordSecrets(cfg.envFile, {repo, checkDir: cfg.source === 'default'});
         if (sec.error) result.discord = {outcome: 'config-error', reason: scrubSecrets(sec.error)};
         else {
-          secrets = [sec.webhook, sec.repoWebhook, sec.userId];
+          secrets = [sec.webhook, sec.repoWebhook, sec.userId, ...botSecrets(home, env)];
           warnings = sec.warnings ?? [];
           const now = (opts.now ?? Date.now)();
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
@@ -317,7 +395,7 @@ export function notifyUser(message, spawn, opts = {}) {
           const sent = Date.now() < blockedUntil
             ? {outcome: 'skipped', attempts: 0, reason: '디스코드 장애 직후라 건너뜀(60초)'}
             : to.forum
-              ? sendForum({home, webhook: to.webhook, work: forumKey, threadName, content: d.content, allowedMentions, deadline, decision})
+              ? sendForum({home, env, webhook: to.webhook, work: forumKey, threadName, content: d.content, allowedMentions, deadline, decision, secrets})
               : decision
                 ? sendDefaultDecision({home, webhook: to.webhook, content: d.content, allowedMentions, deadline, decision})
                 : postDiscordWebhook({webhook: to.webhook, content: d.content, allowedMentions, budgetMs: Math.max(MIN_SEND_MS, deadline - Date.now())});
@@ -340,6 +418,8 @@ export function notifyUser(message, spawn, opts = {}) {
     }
   }
   if (result.via === 'discord') return result;
+  // 보관된 글을 다시 열지 못해 쓰기를 건너뛴 경우: 잘못된 채널(#브리핑·시스템 알림)로 새지 않게 대신 보내지 않는다. 사유는 notify-log에 있다.
+  if (result.discord?.outcome === 'archived-skip') return {...result, via: 'none', error: null};
   // opts.systemFallback === false: 디코로 못 보내면 맥 시스템 알림으로 대신하지 않는다(조용한 알림 전용 — 놓쳐도 되는 알림이 맥을 울리지 않게).
   if (opts.systemFallback === false) return {...result, via: 'none', error: null};
   // 시스템 알림도 같은 판단이다: 이미 해결 메시지를 보낸 결정의 요청은 다시 띄우지 않고, 해결됐다고 읽히면 해결 문구로 바꾼다.

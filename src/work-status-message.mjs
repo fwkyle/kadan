@@ -20,7 +20,7 @@ const stateText = card => {
 const cut = (text, max) => { const t = String(text ?? '').replace(/\s+/g, ' ').trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
 const minute = iso => (Number.isFinite(Date.parse(iso)) ? new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '모름');
 
-// 반환: {content, title} 또는 업무를 못 읽으면 null(상태 메시지를 만들지 않는다).
+// 반환: {content, title, ended(업무가 완료·취소면 true — 포럼 글 보관 판단)} 또는 업무를 못 읽으면 null(상태 메시지를 만들지 않는다).
 // summary: 나중에 설명 AI 요약 한 줄이 들어갈 자리. 지금은 비워 둔다.
 export function buildWorkStatus(home, workKey, {summary = ''} = {}) {
   let work, running = [], hidden = 0, failed = 0;
@@ -47,5 +47,5 @@ export function buildWorkStatus(home, workKey, {summary = ''} = {}) {
     `책임 감독: ${cut(work.owner, 100)}`,
     `갱신: ${minute(work.at)}`,
   ];
-  return {content: lines.join('\n').slice(0, LIMIT), title: work.title ?? ''};
+  return {content: lines.join('\n').slice(0, LIMIT), title: work.title ?? '', ended: work.status === 'done' || work.status === 'cancelled'};
 }

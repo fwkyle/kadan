@@ -494,6 +494,36 @@ export async function editThread(chat, id, {rename, archive}) {
   return body;
 }
 
+// 업무 글(notify-threads에 기록된 글 id)의 보관·재개. 웹훅은 보관을 못 하고 봇만 한다.
+// editThread와 달리 assertSecretaryThread를 거치지 않는다 — 업무 포럼 글은 #비서 글이 아니다. 그래서 호출 쪽(user-notify)이
+// notify-threads 기록의 글 id만 넘긴다. 같은 값 PATCH라 discord-bot의 재시도 규칙(5xx·끊김 재시도)이 그대로 안전하다.
+export async function setThreadArchived(chat, id, archived) {
+  if (!isId(id)) throw new Error('스레드 ID는 숫자여야 한다');
+  await chat.api('PATCH', `/channels/${id}`, {archived: archived === true});
+}
+
+// 봇이 이 포럼에서 스레드를 보관할 수 있는지(Manage Threads) 읽기만으로 계산한다 — 실제로 보관해 보지 않는다.
+// 서버 기본 권한(@everyone + 봇 역할) → 포럼 채널 덮어쓰기(@everyone → 역할 → 봇 본인) 순서로 디스코드 규칙대로 합친다. 요청 4개.
+const ADMINISTRATOR = 1n << 3n, MANAGE_THREADS = 1n << 34n;
+async function botCanManageThreads(chat, forum) {
+  const botId = (await chat.api('GET', '/users/@me')).json?.id;
+  const member = (await chat.api('GET', `/guilds/${forum.guildId}/members/${botId}`)).json;
+  const roles = (await chat.api('GET', `/guilds/${forum.guildId}/roles`)).json ?? [];
+  const info = (await chat.api('GET', `/channels/${forum.id}`)).json;
+  const mine = new Set(member?.roles ?? []);
+  let perms = roles.filter(r => r.id === forum.guildId || mine.has(r.id)).reduce((all, r) => all | BigInt(r.permissions ?? 0), 0n);
+  if (perms & ADMINISTRATOR) return true;
+  const overwrites = info?.permission_overwrites ?? [];
+  const apply = list => {
+    const deny = list.reduce((all, o) => all | BigInt(o.deny ?? 0), 0n), allow = list.reduce((all, o) => all | BigInt(o.allow ?? 0), 0n);
+    perms = (perms & ~deny) | allow;
+  };
+  apply(overwrites.filter(o => o.type === 0 && o.id === forum.guildId));
+  apply(overwrites.filter(o => o.type === 0 && mine.has(o.id)));
+  apply(overwrites.filter(o => o.type === 1 && o.id === botId));
+  return (perms & MANAGE_THREADS) !== 0n;
+}
+
 // 점검: 토큰·채널·권한·Message Content Intent. 값(ID)은 출력하지 않고 결과만 준다.
 export async function checkChat(chat) {
   const lines = [];
@@ -504,9 +534,13 @@ export async function checkChat(chat) {
   if (chat.cfg.repoWebhooks.length) {
     await chat.forums({force: true});
     const ok = new Set((await chat.forums()).map(f => f.name));
+    const forums = await chat.forums();
     for (const w of chat.cfg.repoWebhooks) {
       const bad = chat.forumFailures().find(f => f.name === w.repo);
       lines.push(`레포 포럼 ${w.repo}: ${ok.has(w.repo) ? '받는 중(채널 읽기 정상)' : `받지 않음 — ${bad?.reason ?? '확인 못 함'}`}`);
+      const forum = forums.find(f => f.name === w.repo);
+      if (forum) await step(`Manage Threads ${w.repo}`, async () => (await botCanManageThreads(chat, forum))
+        ? '있음(끝난 업무 글을 보관할 수 있다)' : '없음 — 끝난 업무 글을 보관하지 못한다(슈퍼감독이 봇에 Manage Threads를 붙인다)');
     }
   }
   await step('Message Content Intent', async () => {
