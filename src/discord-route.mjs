@@ -21,7 +21,8 @@ export function workKeyOf(home, threadId) {
   } catch { return null; }
 }
 
-const defaultLive = () => new Set(floor.list().filter(s => s.alive !== false).map(s => s.session));
+// strict: 목록 조회 실패를 빈 목록으로 삼키지 않고 던져서, 조회 장애와 실제 세션 없음을 가른다(이 경로에서만 쓴다).
+const defaultLive = () => new Set(floor.list({strict: true}).filter(s => s.alive !== false).map(s => s.session));
 
 // 반환: {to, reason, workKey}. reason은 비서로 보낼 때만 있다("담당 슈퍼 없음 → 비서" 같은 이유).
 // 포럼 글이 아니거나(#비서) 못 찾으면 defaultTo(비서). liveSessions: () => Set<세션 이름>, 시험에서 바꾼다.
@@ -48,7 +49,8 @@ export function resolveMailTarget(line, {home, defaultTo = SECRETARY, liveSessio
   } catch { return fallback('업무·카드를 읽지 못함'); }
   const supers = new Set([...owners].map(o => nearestSuper(o, parents, profiles)).filter(Boolean));
   if (!supers.size) return fallback('담당 슈퍼 없음');
-  const alive = [...supers].filter(s => live.has(`kadan-${s}`));
-  if (alive.length === 1) return {to: alive[0], reason: null, workKey};
-  return fallback(alive.length ? `담당 슈퍼 ${alive.length}명이라 한 명으로 정하지 못함` : '담당 슈퍼 세션 없음');
+  // 후보가 둘 이상이면 생존과 상관없이 담당이 모호하다 → 비서. 후보가 하나일 때만 세션 생존을 본다.
+  if (supers.size > 1) return fallback(`슈퍼 후보 ${supers.size}명 — 담당 모호`);
+  const [only] = supers;
+  return live.has(`kadan-${only}`) ? {to: only, reason: null, workKey} : fallback('담당 슈퍼 세션 없음');
 }

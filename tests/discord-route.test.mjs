@@ -96,3 +96,31 @@ test('5 setDecision이 남긴 결정 글 키(__decisions__)는 업무 키로 읽
   const route = resolveMailTarget(forumLine('19', 'T-DEC'), {home, liveSessions: live(SUPER)});
   assert.equal(route.workKey, null);
 });
+
+test('6 슈퍼 후보 둘이면 하나만 살아 있어도 비서(슈퍼 후보 N명 — 담당 모호), 둘 다 살아 있어도 비서', () => {
+  const home = world();
+  const OTHER = 'zeta-다른슈퍼감독';
+  const table = path.join(home, 'hierarchy2.json');
+  fs.writeFileSync(table, JSON.stringify({[SUPER]: '@user', [LEAD]: SUPER, [WORKER]: LEAD, [OTHER]: '@user'}));
+  appendLedger({kind: 'hierarchy-loaded', path: table}, home);
+  appendLedger({kind: 'start', role: OTHER, session: `kadan-${OTHER}`, panePid: 2, roleProfile: 'super'}, home);
+  new WorkStore(home).create({key: 'zeta_app/work-2', title: '다른 업무', goal: 'g', scope: 's', acceptance: 'a', owner: OTHER, repoPath: home});
+  for (const liveRoles of [[SUPER], [OTHER], [SUPER, OTHER]]) {
+    const r = resolveMailTarget(forumLine('20', 'T-OTHER'), {home, liveSessions: live(...liveRoles)});
+    assert.deepEqual([r.to, r.reason], ['비서', '슈퍼 후보 2명 — 담당 모호 → 비서'], liveRoles.join());
+  }
+  // 업무 글은 업무 owner 하나로 정해지므로 영향 없다
+  assert.equal(resolveMailTarget(forumLine('21', 'T-WORK'), {home, liveSessions: live(SUPER)}).to, SUPER);
+});
+
+test('7 세션 조회 자체가 실패하면 담당 슈퍼 세션 없음이 아니라 확인 실패로 표시한다(기본 경로, 가짜 tmux)', () => {
+  const home = world();
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-droute-bin-'));
+  fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\nexit 2\n', {mode: 0o755});
+  const before = process.env.PATH;
+  process.env.PATH = `${bin}:${before}`;
+  try {
+    const r = resolveMailTarget(forumLine('22', 'T-WORK'), {home});
+    assert.deepEqual([r.to, r.reason], ['비서', '살아 있는 세션을 확인하지 못함 → 비서']);
+  } finally { process.env.PATH = before; }
+});

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
-import {createChat, runWatch} from '../src/discord-chat.mjs';
+import {createChat, runWatch, sendText} from '../src/discord-chat.mjs';
 import {createMailOut} from '../src/discord-mail.mjs';
 import {createDecisionAnswerer, matchChoice, writtenAfter, LATE_ANSWER_MS, HANDLED_FILE} from '../src/discord-decision.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
@@ -31,8 +31,10 @@ async function world(fake, {register = true, resolve} = {}) {
   const env = {KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile, KADAN_DISCORD_API_BASE: fake.base, KADAN_NOTIFY: 'off'};
   let chat = createChat({home, env, sleep: noSleep});
   new CardStore(home).create({repo: 'kadan', id: 'card-a', repoPath: home, body: '# 시험'});
-  const calls = {notify: [], user: []};
-  const store = new DecisionStore(home, {notify: (role, message) => calls.notify.push({role, message}), userNotify: (message, opts) => { calls.user.push({message, opts}); return null; }});
+  const calls = {notify: [], user: [], pending: []};
+  // 취소 글: 실제 CLI(discord send --thread --quiet)와 같은 sendText로 가짜 서버에 올린다
+  const threadNote = (d, text) => calls.pending.push(sendText(chat, text, {thread: readDecisions(home)[d.id].threadId, quiet: true}));
+  const store = new DecisionStore(home, {threadNote, notify: (role, message) => calls.notify.push({role, message}), userNotify: (message, opts) => { calls.user.push({message, opts}); return null; }});
   const errs = [];
   let decide = createDecisionAnswerer({home, chat, env, log: e => errs.push(e), store});
   const mailOut = createMailOut({home, ...(resolve ? {resolve} : {})});
@@ -146,8 +148,24 @@ test('6 (가) 답장+맞지 않는 글 → 되묻지 않고 자유 답(text)으�
     assert.deepEqual(logged[0]._body.allowed_mentions, {parse: []});
     assert.equal(w.botPosts().filter(m => /기록하지 않았습니다|열린 결정이 여러 개/.test(m.content)).length, 0, '되묻기 0');
     assert.equal(w.mails().length, 0);
-    // 요청 감독이 이것이 답이 아니었다고 보면 취소할 수 있다 → 같은 질문을 다시 요청
     assert.equal(w.answers().length, 1);
+    // 요청 감독이 이것이 답이 아니었다고 보면 취소할 수 있다(요청자만): 기록은 뒤에 사건을 쌓고, 스레드에 조용한 글 1개
+    const before = readStream(w.home, 'decisions/events.jsonl', {optional: true}).length;
+    const cur = w.store.get(a.d.id);
+    assert.throws(() => w.store.cancel(a.d.id, {revision: cur.revision, reason: '남'}, '다른감독'), /요청자 또는 사용자만 취소/);
+    assert.throws(() => w.store.cancel(a.d.id, {revision: cur.revision, reason: '사람'}, '사람'), /요청 상태\/버전 변경/, '사람 명의로는 answered를 취소하지 못한다');
+    assert.throws(() => w.store.cancel(a.d.id, {revision: cur.revision - 1, reason: '옛 버전'}, SUPER), /요청 상태\/버전 변경/);
+    const cancelled = w.store.cancel(a.d.id, {revision: cur.revision, reason: '답이 아니었다'}, SUPER);
+    await Promise.all(w.calls.pending);
+    assert.deepEqual([cancelled.status, cancelled.cancelledAnswer, cancelled.cancelledBy, cancelled.answer.text], ['cancelled', true, SUPER, body]);
+    assert.equal(readStream(w.home, 'decisions/events.jsonl', {optional: true}).length, before + 1, '기존 기록은 두고 사건 하나만 추가');
+    assert.ok(readStream(w.home, 'decisions/events.jsonl', {optional: true}).some(e => e.id === a.d.id && e.status === 'answered'), '답 기록이 이력에 남아 있다');
+    const notes = w.botPosts().filter(m => m.content === '기타 답 기록 취소됨');
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]._body.flags, 4096, '조용히');
+    assert.equal(w.answers().length, 0);
+    // 같은 질문을 다시 요청할 수 있다
+    assert.equal(w.store.request('kadan/card-a', {question: 'A를 합칠까요?\n- 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '이유', work: '없음'}, SUPER).status, 'open');
   } finally { await fake.close(); }
 });
 
@@ -672,5 +690,22 @@ test('23 R2 복합 재현(5단계): 다른 포럼이 403인 동안 옛 형식 �
     assert.equal(w.store.get(a.d.id).status, 'open');
     assert.equal(w.mails().length, 0);
     assert.equal(w.botPosts().filter(m => /기록|이미|열린 결정|늦게/.test(m.content)).length, 0);
+  } finally { await fake.close(); }
+});
+
+test('6d 취소할 수 없는 answered: 선택지 답, 디코 밖의 답 → 지금처럼 거절', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?', ['합침', '보류']);
+    fake.add(w.post.id, {content: '1', type: 19, message_reference: {message_id: a.msg.id}});
+    await w.run();
+    const choice = w.store.get(a.d.id);
+    assert.equal(choice.answer.choice, '합침');
+    assert.throws(() => w.store.cancel(a.d.id, {revision: choice.revision, reason: '선택지 답'}, SUPER), /요청 상태\/버전 변경/);
+    const b = w.decision('B를 켤까요?', ['켠다', '끈다']);
+    w.store.answer(b.d.id, {revision: 1, text: '맥에서 쓴 자유 답'}, '사람');       // source 없음 = 디코 밖
+    assert.throws(() => w.store.cancel(b.d.id, {revision: w.store.get(b.d.id).revision, reason: '디코 밖'}, SUPER), /요청 상태\/버전 변경/);
+    assert.equal(w.botPosts().filter(m => m.content === '기타 답 기록 취소됨').length, 0);
   } finally { await fake.close(); }
 });
