@@ -36,7 +36,7 @@ export function createMailGenerations() {
     const ms = typeof at === 'number' ? at : Date.parse(at);
     return Number.isFinite(ms) && (boundTimes.get(role) ?? []).some(bound => bound > ms);
   };
-  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role)};
+  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role), generationOf: role => (bounds.get(role) ?? []).length};
 }
 
 // 이전 세대 미확인: 읽음 미확인이면서 기록용 알림이 아니고 새 세대가 시작되기 전의 편지.

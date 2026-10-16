@@ -88,7 +88,7 @@ export function guardedSend({
   const sourceCwd = entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd ?? null;
   const originalCardPath = extractCardPath(message,sourceCwd);
   const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
-    role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards});
+    role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards,slim:true});
   message = composed.message;
   if (!raw) {
     const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,dispatch:taskId!=null,expectReply:mailContext?.expectReply===true,sender:by,env});
@@ -174,6 +174,8 @@ export function guardedSend({
     role,
     session,
     roleInstructions: composed.metadata,
+    ...(composed.metadata.status==='applied'?{instructions:{mode:composed.metadata.instructionsMode,reason:composed.metadata.instructionsReason,
+      profile:composed.metadata.profile,templateDigest:composed.metadata.templateDigest,generation:composed.metadata.generation}}:{}),
     originalCardPath,
     ...(composed.metadata.profile ? {roleProfile:composed.metadata.profile} : {}),
     ...(runnerGuard?.ledger ? {runnerGuard:runnerGuard.ledger} : {}),

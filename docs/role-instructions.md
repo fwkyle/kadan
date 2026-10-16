@@ -123,3 +123,43 @@ send의 바이트 수와 지문은 지침까지 포함한 실제 전달문 기�
 이미 떠 있는 watch·auto-run은 모듈을 메모리에 읽었으므로
 **프로그램을 새로 시작한 뒤 적용된다.** 저장소 업데이트만으로 기존 프로세스에 적용됐다고 보장하지 않는다.
 이 기능은 운영 프로세스를 자동 재시작하지 않는다. 기존 편지·과거 원장·카드를 소급 수정하지 않는다.
+
+## 요약 우편 시험 (kadan 판 conductor 한정)
+
+Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았다. 결정 cc77fcc2, 시니어 자문 452d380f.
+
+`guardedSend`는 우편마다 전문(`full`)과 요약(`summary`) 중 하나를 고른다.
+요약은 템플릿 전문만 빼고, 수신 역할·회신 대상·연결 업무/실행·완료 방식·참고 파일 경로는 그대로 둔다.
+대신 `role-templates/<프로필>-summary.md`(지금은 `conductor-summary.md`)가 붙는다. 전문 경로는 참고 파일 목록에 남는다.
+요약일 때도 템플릿 파일은 읽는다(지문 비교용). 줄어드는 것은 메시지뿐이다.
+`SUMMARY_PROFILES`·`SUMMARY_REPO`·`FULL_INTERVAL_MS`(1시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
+
+전문이 되는 이유와 기록 이름(`instructions.reason`):
+
+| 조건 | 이유 값 |
+|---|---|
+| 시험 프로필(conductor)이 아님 | `profile-not-in-trial` |
+| 업무·카드 사실을 못 읽음, 판 판별 근거가 없거나 어긋남 | `facts-unavailable` |
+| 레포 kadan 판이 아님(예: 다른 레포 감독) | `board-not-in-trial` |
+| 현재 발령(`--task`) | `dispatch` |
+| 이 세대에 전문이 없음(첫 안내·새 대화 첫 우편 포함) | `generation-first` |
+| 이 세대 마지막 전문이 `keyDelivery !== 'sent'` | `delivery-unclear` |
+| 프로필 또는 `templateDigest`가 마지막 전문과 다름 | `profile-changed` · `template-changed` |
+| 마지막 전달 성공 전문 뒤 1시간 경과 | `interval` |
+| 위에 해당 없음 | 요약(`within-interval`) |
+
+- 판 판별은 이름(`boardFromRole`)과 레포(연결 업무·카드의 `repo`, 없으면 start 사건 cwd의 `~/Dev/<레포>`)가 둘 다 kadan일 때만 인정한다. 둘이 어긋나거나 근거가 없으면 `facts-unavailable`이다.
+- '전달 성공'은 `keyDelivery === 'sent'`만이다. 세대는 `mail-generation.mjs`의 start 경계를 그대로 쓴다. raw 전송은 `instructions`가 없어 건너뛴다.
+- 이 기능 전의 send 줄에는 `instructions`가 없다. 그래서 적용 뒤 각 감독의 첫 우편은 전문이다(정상).
+- `mailbox read`가 보여 주는 지침은 요약하지 않고 항상 전문이다.
+
+측정(데이터를 뽑는 방법까지만; 누락·재작업 판단은 사람이 한다). send 원장 줄의 `instructions.mode`와 `bytes`를 쓴다.
+
+```
+node --input-type=module -e "import {readLedger} from './src/ledger.mjs';
+const rows=readLedger().filter(e=>e.kind==='send'&&e.instructions&&e.t>'2026-10-17');
+const by={};for(const e of rows){const k=e.role+' '+e.instructions.mode;by[k]??={n:0,bytes:0};by[k].n++;by[k].bytes+=e.bytes;}
+console.table(by);"
+```
+
+기간은 `e.t` 문자열 비교로 거른다. 이유별 수는 키를 `e.instructions.reason`으로 바꿔 본다. `kadan log`는 최근 30줄만 보여 주므로 집계에는 쓰지 않는다.
