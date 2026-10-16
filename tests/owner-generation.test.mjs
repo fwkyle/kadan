@@ -113,3 +113,13 @@ test("2라운드(3): 이전 세대 발령을 빼도 그 plan은 미발령 할 �
   assert.deepEqual(run([...base, start("r-작업자", 10)]), [], "새 세대 뒤 옛 발령+plan");
   assert.ok(run([start("r-작업자", 0), plan("진짜미발령", 2)]).length > 0, "진짜 미발령 plan은 경보");
 });
+
+test("차례에 귀속한 업무는 차례가 넘어간 시각(turnAt)으로 세대를 가른다 — 새 세대 뒤에 맡긴 일은 할 일, 새 세대 전에 맡긴 일은 이전 세대", () => {
+  const entries = [start("r-감독", 0), start("r-감독", 20)];
+  const work = (turnAt) => ({ key: "r/w1", status: "open", owner: "r-슈퍼", turnOwner: "r-감독", turnAt,
+    ownedAt: at(1), executions: [], at: at(2) });
+  const run = (w) => assessSupervisorIdle(entries, states(), now, idleMs, null, parents,
+    { works: [w], cards: [], waits: [], peerEntries: entries }).filter((a) => a.kind === "놀고 있음").map((a) => a.role);
+  assert.deepEqual(run(work(at(30))), ["r-감독"], "새 세대(20분) 뒤 turnAt(30분)으로 맡긴 일은 owner의 ownedAt(1분)과 무관하게 할 일");
+  assert.deepEqual(run(work(at(10))), [], "새 세대 시작 전 turnAt(10분)에 맡긴 일은 이전 세대");
+});

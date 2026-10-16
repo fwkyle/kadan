@@ -38,7 +38,9 @@ export function idleWorkEntries(works, cards, parents) {
   const holder = w => parents.has(w.turnOwner) ? w.turnOwner : w.owner;
   return (works ?? []).filter(w => w?.status === "open" && parents.has(holder(w))
       && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
-    .map(w => ({ kind: "send", role: holder(w), taskId: `work:${w.key}`, t: w.at, ownedAt: w.ownedAt ?? null }));
+    // 세대 판정 시각도 귀속한 역할에 맞춘다: 차례에 귀속하면 차례가 넘어간 시각, owner면 책임이 붙은 시각.
+    .map(w => ({ kind: "send", role: holder(w), taskId: `work:${w.key}`, t: w.at,
+      ownedAt: holder(w) === w.owner ? (w.ownedAt ?? null) : (w.turnAt ?? w.at ?? null) }));
 }
 
 export function assessSupervisorIdle(
