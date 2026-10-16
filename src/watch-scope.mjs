@@ -66,6 +66,9 @@ export function buildSupervisorScope(cards, entries, parents = new Map(), works 
     // 실행을 모두 끝내도 업무 최종 확인이 남으면 책임 감독은 응답 가능해야 한다.
     const opened = work.history?.findLast(e => e.action === 'reopen' || e.action === 'create');
     add(work.owner, {role:work.owner, taskId:`work:${work.key}`, t:opened?.at ?? null, workKey:work.key});
+    // 차례가 관계표의 다른 역할이면 그 역할의 세션도 점검 범위다(할 일을 차례인 쪽에 세므로 watch-supervisor idleWorkEntries).
+    if (parents.has(work.turnOwner) && work.turnOwner !== work.owner)
+      add(work.turnOwner, {role:work.turnOwner, taskId:`work:${work.key}`, t:opened?.at ?? null, workKey:work.key});
   }
   return {sessions:new Set(tasks.map(e => `kadan-${e.role}`)), entries:tasks};
 }

@@ -21,15 +21,15 @@ const idle = (entries, works = []) => assessSupervisorIdle(entries, states(), no
 
 test("옛 세대 작업자의 열린 발령은 새 세대 start(new) 뒤 감독의 놀고 있음 할 일에서 빠진다", () => {
   const before = [start("r-작업자", 0), send("r-작업자", 5)];
-  assert.deepEqual(idle(before), ["r-감독", "r-슈퍼"], "새 세대 전에는 할 일");
+  assert.deepEqual(idle(before), ["r-감독"], "새 세대 전에는 할 일(직속 감독의 본인 차례, 슈퍼는 감독의 2단으로 받는다)");
   assert.deepEqual(idle([...before, start("r-작업자", 10)]), [], "new start 뒤에는 옛 세대 소속");
 });
 
 test("resume 이어가기·같은 대화 재사용 뒤에는 그대로 할 일, 새 세대 뒤에 받은 발령은 할 일", () => {
   const base = [start("r-작업자", 0), send("r-작업자", 5)];
-  assert.deepEqual(idle([...base, start("r-작업자", 10, { cmd: "claude --resume abc" })]), ["r-감독", "r-슈퍼"]);
-  assert.deepEqual(idle([...base, start("r-작업자", 10, { inheritMail: true })]), ["r-감독", "r-슈퍼"], "--inherit-mail은 바로 앞 세대를 이어받는다");
-  assert.deepEqual(idle([...base, start("r-작업자", 10), send("r-작업자", 20, { taskId: "task-2" })]), ["r-감독", "r-슈퍼"], "새 세대가 받은 발령");
+  assert.deepEqual(idle([...base, start("r-작업자", 10, { cmd: "claude --resume abc" })]), ["r-감독"]);
+  assert.deepEqual(idle([...base, start("r-작업자", 10, { inheritMail: true })]), ["r-감독"], "--inherit-mail은 바로 앞 세대를 이어받는다");
+  assert.deepEqual(idle([...base, start("r-작업자", 10), send("r-작업자", 20, { taskId: "task-2" })]), ["r-감독"], "새 세대가 받은 발령");
 });
 
 test("감시 범위: 옛 세대 발령은 빠지고 previous로 센다. resume 이어가기·인계로 새 세대 뒤에 받은 발령은 남는다", () => {
@@ -55,7 +55,7 @@ test("업무 책임 시각: 생성·재배정·확정 인계 중 마지막. 이�
   const handed = [{ kind: "handover", phase: "transferred", from: "r-감독", to: "r-감독2", t: at(30), taskIds: [] }];
   assert.deepEqual(effectiveWorkOwnership(work, handed), { owner: "r-감독2", at: at(30) });
   const entries = [start("r-감독", 0), start("r-감독", 20)];
-  const hier = new Map([["r-감독", "r-슈퍼"], ["r-슈퍼", "@user"]]);
+  const hier = new Map([["r-감독"], ["r-슈퍼", "@user"]]);
   assert.deepEqual(previousGenerationWorks([withEffectiveOwner(work, entries)], entries, hier), [{ kind: "work", key: "r/w1", role: "r-감독" }]);
   const reassigned = { ...work, history: [{ owner: "다른", at: at(1) }, { owner: "r-감독", at: at(25) }] };
   assert.deepEqual(previousGenerationWorks([withEffectiveOwner(reassigned, entries)], entries, hier), [], "새 세대 뒤에 재배정받은 업무");
@@ -77,7 +77,7 @@ test("2라운드(1): 같은 이름 명시 재지정은 현재 세대, 진행 기
   const entries = [start("r-감독", -5), start("r-감독", 60_000)]; // 업무 생성 뒤 새 세대
   entries[0].t = new Date(Date.parse(work.at) - 1000).toISOString();
   entries[1].t = new Date(Date.parse(work.at) + 1000).toISOString();
-  const hier = new Map([["r-감독", "r-슈퍼"], ["r-슈퍼", "@user"]]);
+  const hier = new Map([["r-감독"], ["r-슈퍼", "@user"]]);
   const previous = (w) => previousGenerationWorks([withEffectiveOwner(w, entries)], entries, hier).length;
   assert.equal(previous(store.get("r/w1")), 1, "새 세대 전에 붙은 책임");
   const progressed = store.change("r/w1", "update", { progress: "절반" }, { revision: 1, by: "사람", note: "진행" });

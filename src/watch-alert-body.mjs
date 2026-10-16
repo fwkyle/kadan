@@ -1,6 +1,7 @@
 // 감시 경보 본문·해소 알림·경보 기록 (HW-3-impl: watch-runner.mjs에서 옮김)
 import { watchAILabel } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
+import { idleCountsText } from "./watch-supervisor.mjs";
 
 export function clockTime(at) {
   const date = new Date(at);
@@ -57,7 +58,7 @@ export function formatAlertBody(alert) {
   if (alert.kind === "놀고 있음") {
     // 상위가 받는 건 2단이다: 본인에게 먼저 알렸는데도 그대로였다.
     const self = alert.stage === 2 ? `; ${Math.floor(alert.idleMinutes / 2)}분 전에 본인에게 알렸으나 그대로` : "";
-    return `놀고 있음 ${alert.session} (할 일 ${alert.openCards}건, ${alert.idleMinutes}분간 화면 변화 없음${self})`;
+    return `놀고 있음 ${alert.session} (${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음${self})`;
   }
   if (alert.kind === "모름" && alert.screenError) {
     return `상태 확인 필요 ${alert.session} (화면 읽기 실패: ${alert.screenError})`;
@@ -128,6 +129,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
       ...(alert.route?{route:alert.route}:{}),
+      ...(alert.idleItems ? {idleItems:alert.idleItems} : {}),
       ...(alert.escalatedTo ? {escalatedTo:alert.escalatedTo} : {}),
       delivered,
       ...(alert.held ? {held:true} : {}),
