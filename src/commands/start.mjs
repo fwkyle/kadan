@@ -10,7 +10,9 @@ import { unreadForRole } from "../mail-generation.mjs";
 import { roleNameWarning } from "../role-name.mjs";
 import { conversationOf } from "../conversation-ref.mjs";
 import { tmux } from "../floor-tmux.mjs";
-import { die, sessionName, lastStartFor } from "../cli-basics.mjs";
+import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
+import { guardedSend } from "../cli-guarded-send.mjs";
+import { briefStartedRole } from "../start-brief.mjs";
 import {
   requireWindowChoice,
   inspectHiddenStartPolicy,
@@ -22,7 +24,7 @@ import {
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--no-prompt]");
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
   if (floor.name === "tmux" && !flags.hidden) {
     const warning = unpinnedWindowWarning();
@@ -218,5 +220,20 @@ export function cmdStart(argv, flags) {
     // 관계표를 찾았는데도 못 적은 경우만 알린다. 관계표가 없는 환경은 정상이다.
     console.error(`감시 등록 안 됨(${registration.reason}) — 알림 수신자를 직접 확인하라`);
   }
+  // 새로 만든 AI 세션이면 프로필 지침이 붙은 첫 안내를 한 번 보낸다. 못 보내도 start는 성공이다(start-brief.mjs).
+  // 이번 start가 만든 세대(PID·로티 터미널)를 대기 전에 고정하고, 보내기 직전 현재 세대와 비교한다.
+  const env = process.env;
+  const pinnedPid = pid == null ? null : String(pid), pinnedTerminal = rottieTerminalId ?? evidence.rottieTerminalId ?? null;
+  briefStartedRole({
+    role, session, roleProfile, reusing, cmd: startedCmd, noPrompt: flags["no-prompt"] === true, floor,
+    tries: Number(env.KADAN_START_BRIEF_TRIES) || undefined, intervalMs: Number(env.KADAN_START_BRIEF_INTERVAL_MS) || undefined,
+    isCurrent: () => {
+      if (pinnedPid === null || !floor.alive(session) || String(floor.pid(session)) !== pinnedPid) return false;
+      const latest = lastStartFor(session);
+      return String(recordedPid(latest)) === pinnedPid && (pinnedTerminal === null || latest?.rottieTerminalId === pinnedTerminal);
+    },
+    send: ({ role: to, session: target, message, roleProfile: profile }) =>
+      guardedSend({ floor, session: target, role: to, message, roleProfile: profile, recordedPid: pinnedPid }),
+  });
   return nameCheck;
 }
