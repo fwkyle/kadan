@@ -17,9 +17,9 @@ import { autostartCommand } from "../autostart.mjs";
 import { floor } from "../floor.mjs";
 import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
-import { acquireReviveLock, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
+import { acquireReviveLock, lockWaitMs, reclaimLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
 import { appendLedger, ledgerHome } from "../ledger.mjs";
-import { tmux, paneDead, captureTail } from "../floor-tmux.mjs";
+import { tmux, paneState, captureTail } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
@@ -50,7 +50,7 @@ export function cmdUp(_argv, flags) {
   if (auto && floor.name !== "tmux") die("--auto는 tmux 바닥에서만 쓴다", 2);
   if (floor.name === "tmux") requireWindowChoice();
   // 자동 실행과 손으로 친 up이 겹치지 않게 한다. 자동은 이번 회차를 건너뛰고, 사람은 잠시 기다린다.
-  const release = floor.name === "tmux" ? acquireReviveLock(home, { waitMs: auto ? 0 : 15000 }) : () => {};
+  const release = floor.name === "tmux" ? acquireReviveLock(home, { waitMs: auto ? 0 : lockWaitMs(), onReclaim: reclaimLog }) : () => {};
   if (!release) {
     if (auto) return;
     die("다른 kadan up이 돌고 있습니다(자동 실행일 수 있음). 잠시 뒤 다시 치세요", 1);
@@ -64,7 +64,7 @@ function reviveOps(home) {
   return {
     sessionOf,
     exists: (session) => floor.alive(session),
-    paneDead: (session) => paneDead(session),
+    paneState: (session) => paneState(session),
     capture: (session, lines) => captureTail(session, lines),
     kill: (session) => floor.stop(session),
     applicable: (target) => {
@@ -81,9 +81,11 @@ function reviveOps(home) {
       }
       return null;
     },
+    // 반환 {via, reason}. 조용한 알림(ring false)은 디코로만 보내고 맥 알림으로 대신하지 않는다. 울림(ring)은 놓치면 안 되므로 대신 보낸다.
     notify: (message, { ring = false, key } = {}) => {
-      const error = notifyUser(message, spawnSync, { kind: "revive", ring, ...(key ? { key, dedupWindowMs: 60 * 60 * 1000 } : {}) }).error;
-      if (error) console.error(`알림 실패: ${error}`);
+      const result = notifyUser(message, spawnSync, { kind: "revive", ring, ...(ring ? {} : { systemFallback: false }), ...(key ? { key, dedupWindowMs: 60 * 60 * 1000 } : {}) });
+      if (result.error) console.error(`알림 실패: ${result.error}`);
+      return { via: result.via, reason: result.discord?.reason ?? (result.via === "none" ? "디코 알림 설정 없음 또는 실패" : "") };
     },
     record: (entry) => { // 다리가 오류로 멈춘 적이 있으면 그 마지막 이유(시각·오류 코드)를 사건에 같이 남긴다.
       const exit = entry.target === BRIDGE_ROLE ? readBridgeExit(home) : null;

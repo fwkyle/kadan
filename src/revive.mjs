@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { scrubSecrets } from './user-notify.mjs';
+import { pidAlive } from './pid-alive.mjs';
 
 export const TARGETS = ['비서', '대시보드', '디코', 'watch'];
 export const REVIVE_LABELS = { 비서: '비서', 대시보드: '대시보드', 디코: '디코 다리', watch: '감시기' };
@@ -16,38 +17,79 @@ const SCREEN_LINES = 200;
 const stateFile = (home) => path.join(home, 'revive-state.json');
 const emptyState = () => ({ targets: {}, history: {}, blocked: {}, lastResult: {}, lastOutput: '' });
 
+// 파일이 없으면 빈 상태. 있는데 깨졌으면 빈 상태에 corrupt:true를 붙인다 — 빈 상태로 읽으면 kyle의 멈춤 표시를 잃고 끈 것을 되살린다.
 export function readReviveState(home) {
+  let text;
+  try { text = fs.readFileSync(stateFile(home), 'utf8'); } catch (error) {
+    if (error.code === 'ENOENT') return emptyState();
+    return { ...emptyState(), corrupt: true };
+  }
   try {
-    const v = JSON.parse(fs.readFileSync(stateFile(home), 'utf8'));
-    return { ...emptyState(), ...(v && typeof v === 'object' ? v : {}) };
-  } catch { return emptyState(); }
+    const v = JSON.parse(text);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not object');
+    return { ...emptyState(), ...v };
+  } catch { return { ...emptyState(), corrupt: true }; }
 }
 export function writeReviveState(home, state) {
+  if (state.corrupt) throw new Error('손상된 revive-state.json 위에 쓰지 않는다');
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const file = stateFile(home), tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 1) + '\n', { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
+// 사람이 친 명령(up·stop)에서만 쓴다: 깨진 상태 파일을 지우지 않고 .trash로 옮기고 새로 시작한다. 옮긴 경로를 돌려준다(없으면 null).
+export function recoverCorruptState(home, now = Date.now()) {
+  if (!readReviveState(home).corrupt) return null;
+  const dir = path.join(home, '.trash');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, `revive-state-${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`);
+  fs.renameSync(stateFile(home), dest);
+  fs.rmSync(path.join(home, 'revive-corrupt.notified'), { force: true });
+  return dest;
+}
+
 // 사람이 `kadan stop <대상>`으로 끈 것. `kadan restart`의 stop은 이 경로를 지나지 않는다(restart.mjs가 직접 기록한다).
+// 반환: 표시 전 상태(unmarkStopped로 되돌릴 때 쓴다) 또는 null(대상 아님).
 export function markStopped(home, role, { by = 'user', now = Date.now() } = {}) {
-  if (!TARGETS.includes(role)) return false;
+  if (!TARGETS.includes(role)) return null;
+  recoverCorruptState(home, now);
   const state = readReviveState(home);
+  const previous = state.targets[role] ?? null;
   state.targets[role] = { state: 'stopped', at: new Date(now).toISOString(), by };
   writeReviveState(home, state);
-  return true;
+  return { previous };
+}
+// 끄기가 실패했을 때: 표시를 이전 상태로 되돌린다(세션은 그대로 살아 있고, 사람은 오류를 본다).
+export function unmarkStopped(home, role, token) {
+  const state = readReviveState(home);
+  if (state.corrupt) return;
+  if (token?.previous) state.targets[role] = token.previous; else delete state.targets[role];
+  writeReviveState(home, state);
 }
 // 사람이 친 `kadan up`: 모든 멈춤을 풀고 상한 집계도 새로 센다(사람이 확인했다는 뜻이다).
 export function clearForUp(home) {
+  const recovered = recoverCorruptState(home);
   const state = readReviveState(home);
-  if (!Object.keys(state.targets).length && !Object.keys(state.history).length && !Object.keys(state.blocked).length) return false;
+  if (!Object.keys(state.targets).length && !Object.keys(state.history).length && !Object.keys(state.blocked).length) return Boolean(recovered);
   state.targets = {}; state.history = {}; state.blocked = {}; state.lastResult = {};
   writeReviveState(home, state);
   return true;
 }
 
-// 동시 실행 잠금: 폴더 + pid. 주인이 죽었으면 넘겨받는다(1분마다 도는 일이라 멈춘 잠금이 영원히 남으면 안 된다).
-export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+// 동시 실행 잠금: 폴더 + pid. 1분마다 도는 일이라 멈춘 잠금이 영원히 남으면 안 되므로 주인이 없는 잠금은 되찾는다.
+//   - pid 주인이 죽었다(좀비 포함)
+//   - pid 파일이 없거나 깨졌는데 잠금이 STALE_LOCK_MS보다 오래됐다
+// 막 만든 잠금(pid 쓰기 직전)과 살아 있는 주인의 잠금은 그대로 둔다. 되찾으면 onReclaim(이유)을 부른다.
+// 사람이 친 명령이 잠금을 기다리는 시간(시험이 줄일 수 있다).
+export const lockWaitMs = (fallback = 15000) => {
+  const v = Number(process.env.KADAN_REVIVE_LOCK_WAIT_MS);
+  return Number.isFinite(v) && v >= 0 && process.env.KADAN_REVIVE_LOCK_WAIT_MS !== undefined ? v : fallback;
+};
+export const reclaimLog = (reason) => console.log(`[${new Date().toISOString()}] 낡은 revive.lock을 되찾음: ${reason}`);
+export const STALE_LOCK_MS = 2 * 60 * 1000;
+export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+  isAlive = pidAlive, now = Date.now, onReclaim = () => {} } = {}) {
   const lock = path.join(home, 'revive.lock'), pidFile = path.join(lock, 'pid');
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const deadline = Date.now() + waitMs;
@@ -58,10 +100,18 @@ export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wa
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       let pid = NaN;
-      try { pid = Number(fs.readFileSync(pidFile, 'utf8')); } catch { /* pid가 아직 없음 — 막 만든 잠금 */ }
-      let alive = true;
-      if (Number.isInteger(pid) && pid > 0) try { process.kill(pid, 0); } catch (e) { alive = e.code !== 'ESRCH'; }
-      if (!alive) { try { fs.rmSync(pidFile, { force: true }); fs.rmdirSync(lock); } catch { /* 다른 쪽이 먼저 치웠다 */ } continue; }
+      try { pid = Number(fs.readFileSync(pidFile, 'utf8')); } catch { /* pid가 아직 없음 */ }
+      let reason = null;
+      if (Number.isInteger(pid) && pid > 0) { if (!isAlive(pid)) reason = `주인(pid ${pid})이 죽었다`; }
+      else {
+        let age = 0;
+        try { age = now() - fs.statSync(lock).mtimeMs; } catch { continue; }
+        if (age > STALE_LOCK_MS) reason = `pid 파일이 없거나 깨진 채 ${Math.round(age / 1000)}초 지났다`;
+      }
+      if (reason) {
+        try { fs.rmSync(pidFile, { force: true }); fs.rmdirSync(lock); onReclaim(reason); } catch { /* 다른 쪽이 먼저 치웠다 */ }
+        continue;
+      }
       if (Date.now() >= deadline) return null;
       sleep(200);
     }
@@ -86,26 +136,46 @@ export function saveScreen(home, target, text, now = Date.now()) {
 const recentCount = (state, target, now) => (state.history[target] ?? []).filter((t) => now - t < REVIVE_WINDOW_MS).length;
 
 // 띄우기 전 단계. 반환 {skip: Set, pending: Map(target → {reason, screenPath, count}), lines: []}.
-// ops: sessionOf(target) · exists(session) · paneDead(session) · capture(session) · kill(session) · applicable(target) ·
+// ops: sessionOf(target) · exists(session) · paneState(session) · capture(session) · kill(session) · applicable(target) ·
+//      (paneState(session) → 'dead'|'live'|'mixed'|'unknown': 세션의 모든 창을 본다)
 //      stuck(target)(살아 있는 pane인데 일을 못 하는 진짜 막힘이면 이유 문구, 아니면 null) · notify(message, {ring, key}) · record(entry)
 // auto가 아니면(사람이 친 up) 죽은 pane 정리만 하고 상한·멈춤·기록은 건드리지 않는다.
 export function prepareRevive({ home, auto, now = Date.now(), ops }) {
+  if (!auto) recoverCorruptState(home, now);
   const state = readReviveState(home);
   const skip = new Set(), pending = new Map(), lines = [];
+  if (state.corrupt) {
+    // 고장 나면 닫는 쪽: 멈춤 표시를 읽을 수 없으니 아무것도 되살리지 않는다. 같은 파일 상태에서는 한 번만 울린다.
+    for (const target of TARGETS) skip.add(target);
+    const file = stateFile(home), marker = path.join(home, 'revive-corrupt.notified');
+    let signature = 'missing';
+    try { const st = fs.statSync(file); signature = `${st.size}:${st.mtimeMs}`; } catch { /* 읽기만 실패했을 수 있다 */ }
+    let seen = null;
+    try { seen = fs.readFileSync(marker, 'utf8'); } catch { /* 처음 */ }
+    if (seen !== signature) {
+      ops.notify(`자동 되살리기 상태 파일(revive-state.json)이 손상돼 기반 프로세스를 되살리지 않습니다. 확인 뒤 kadan up(깨진 파일은 .trash로 옮기고 새로 시작).`, { ring: true, key: 'revive-corrupt' });
+      try { fs.writeFileSync(marker, signature); } catch { /* 표시 실패 시 다음 회차에 다시 알린다 */ }
+      lines.push('자동 되살리기 멈춤: 상태 파일 손상');
+    }
+    return { skip, pending, lines, corrupt: true };
+  }
   for (const target of TARGETS) {
     const label = REVIVE_LABELS[target], session = ops.sessionOf(target);
     if (auto && state.targets[target]) { skip.add(target); continue; }
     if (!ops.applicable(target)) { if (auto) skip.add(target); continue; }
     let reason = null, screenPath = null;
     if (ops.exists(session)) {
-      if (ops.paneDead(session) === true) {
-        // 프로세스가 이미 없는 카단 소유 세션이다. 마지막 화면을 남기고 치운 뒤 새로 만든다.
+      const panes = ops.paneState(session);
+      if (panes === 'dead') {
+        // 모든 창의 프로세스가 이미 없는 카단 소유 세션이다. 마지막 화면을 남기고 치운 뒤 새로 만든다.
         try { screenPath = saveScreen(home, target, ops.capture(session, SCREEN_LINES), now); } catch { /* 화면 저장 실패는 되살리기를 막지 않는다 */ }
         ops.kill(session);
         reason = 'pane 죽음';
         lines.push(`${label}: 프로세스가 죽은 창을 치웠습니다${screenPath ? `(마지막 화면 ${screenPath})` : ''}`);
       } else if (auto) {
-        const stuck = ops.stuck(target);
+        // 살아 있는 화면이 하나라도 있거나 조회에 실패하면 지우지 않는다(사람이 보고 있는 화면일 수 있다).
+        const stuck = panes === 'mixed' ? '세션에 죽은 창과 살아 있는 창이 섞여 있습니다'
+          : panes === 'unknown' ? '창 상태를 조회하지 못했습니다' : ops.stuck(target);
         if (stuck) {
           state.blocked[target] ??= { since: new Date(now).toISOString(), notified: false };
           // 한 번 보고 알리지 않는다: 막 뜨는 중일 수 있어 다음 회차에도 그대로일 때 한 번만 알린다.
@@ -145,8 +215,11 @@ export function finishRevive({ home, pending, results, now = Date.now(), ops }) 
       (state.history[target] ??= []).push(now);
       state.history[target] = state.history[target].filter((t) => now - t < REVIVE_WINDOW_MS);
       delete state.lastResult[target];
-      ops.record({ kind: 'revive', target, reason: info.reason, screenPath: info.screenPath, count: info.count, result: 'started', by: 'autostart' });
-      ops.notify(`${label}가 꺼져 있어 다시 띄웠습니다(이번 1시간 ${info.count}번째).${info.screenPath ? ` 마지막 화면: ${info.screenPath}` : ''}`, { ring: false });
+      // 조용한 알림은 디코로만 보낸다(맥 알림으로 대신하지 않는다). 못 보냈으면 사건에 남긴다.
+      const notice = ops.notify(`${label}가 꺼져 있어 다시 띄웠습니다(이번 1시간 ${info.count}번째).${info.screenPath ? ` 마지막 화면: ${info.screenPath}` : ''}`, { ring: false }) ?? {};
+      ops.record({ kind: 'revive', target, reason: info.reason, screenPath: info.screenPath, count: info.count, result: 'started', by: 'autostart',
+        ...(notice.via && notice.via !== 'discord' ? { notice: notice.via, ...(notice.reason ? { noticeReason: notice.reason } : {}) } : {}) });
+      if (notice.via && notice.via !== 'discord') lines.push(`${label}: 조용한 알림을 디코로 보내지 못했습니다${notice.reason ? `(${notice.reason})` : ''}`);
       lines.push(`${label}: 다시 띄움(이번 1시간 ${info.count}번째)`);
     } else if (state.lastResult[target] !== result) {
       state.lastResult[target] = result;

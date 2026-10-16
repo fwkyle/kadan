@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   TARGETS, REVIVE_CAP, REVIVE_WINDOW_MS, readReviveState, markStopped, clearForUp, acquireReviveLock,
-  prepareRevive, finishRevive, changedOutput, scrubScreen,
+  prepareRevive, finishRevive, changedOutput, scrubScreen, unmarkStopped, recoverCorruptState, STALE_LOCK_MS,
 } from '../src/revive.mjs';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {createChat, runWatch, CONNECT_OUTAGE_MS} from '../src/discord-chat.mjs';
@@ -21,12 +21,12 @@ function fakeOps(sessions = {}, extra = {}) {
   const ops = {
     sessionOf: target => `kadan-${target}`,
     exists: session => session in sessions,
-    paneDead: session => sessions[session]?.dead === true,
+    paneState: session => sessions[session]?.panes ?? (sessions[session]?.dead === true ? 'dead' : 'live'),
     capture: session => { calls.captured.push(session); return sessions[session]?.screen ?? ''; },
     kill: session => { calls.killed.push(session); delete sessions[session]; },
     applicable: () => true,
     stuck: () => null,
-    notify: (message, options) => calls.notices.push({message, ...options}),
+    notify: (message, options) => { calls.notices.push({message, ...options}); return {via: 'discord'}; },
     record: entry => calls.records.push(entry),
     ...extra,
   };
@@ -135,8 +135,8 @@ test('60분이 지난 되살림은 상한에서 빠진다', () => {
 
 test('사람이 끈 대상은 --auto가 건너뛰고, 명시 up(auto 아님)은 멈춤을 풀며 죽은 창만 치운다', () => {
   const home = tmp('stop');
-  assert.equal(markStopped(home, '디코'), true);
-  assert.equal(markStopped(home, '작업자'), false, '4개 밖의 역할은 표시하지 않는다');
+  assert.ok(markStopped(home, '디코'));
+  assert.equal(markStopped(home, '작업자'), null, '4개 밖의 역할은 표시하지 않는다');
   assert.deepEqual(Object.keys(readReviveState(home).targets), ['디코']);
   const {ops, calls} = fakeOps({'kadan-비서': {}, 'kadan-대시보드': {}, 'kadan-watch': {}});
   const prep = prepareRevive({home, auto: true, now: T0, ops});
@@ -304,4 +304,111 @@ test('다리 루프: 4xx·연결 뒤 끊김은 기다리지 않고 지금처럼 
     await assert.rejects(runWatch(chat, {intervalS: 5, out() {}, err() {}, sleep: async ms => { slept += ms; }}), error => error.kind === 'http' && error.status === 401);
     assert.equal(slept, 0, '4xx는 연결 실패가 아니라 기다리지 않는다');
   } finally { await fake.close(); }
+});
+
+// ---------- 2라운드 검수 수정 ----------
+test('F1: 세션에 죽은 창과 살아 있는 창이 섞여 있으면(또는 조회 실패) 지우지 않고 막힘 알림 통로로 한 번 알린다', () => {
+  for (const panes of ['mixed', 'unknown']) {
+    const home = tmp(`f1-${panes}`), {ops, calls} = fakeOps({'kadan-비서': {}, 'kadan-대시보드': {}, 'kadan-watch': {}, 'kadan-디코': {panes}});
+    for (let i = 0; i < 4; i++) prepareRevive({home, auto: true, now: T0 + i * 60_000, ops});
+    assert.deepEqual(calls.killed, [], `${panes}: 세션을 지우지 않는다`);
+    assert.equal(calls.captured.length, 0);
+    assert.equal(calls.notices.filter(n => n.ring === true).length, 1, `${panes}: 알림은 한 번`);
+    assert.equal(calls.records.length, 0);
+  }
+  // 명시 up도 지우지 않는다
+  const home = tmp('f1-manual'), {ops, calls} = fakeOps({'kadan-디코': {panes: 'mixed'}});
+  prepareRevive({home, auto: false, now: T0, ops});
+  assert.deepEqual(calls.killed, []);
+});
+
+test('F3: 잠금 회수 — 주인이 죽었거나(좀비 포함) pid 없는 오래된 잠금은 되찾고, 막 만든 잠금·산 주인은 둔다', () => {
+  const lockOf = home => path.join(home, 'revive.lock');
+  const reasons = [];
+  const make = (home, pid, ageMs) => {
+    fs.mkdirSync(lockOf(home));
+    if (pid !== null) fs.writeFileSync(path.join(lockOf(home), 'pid'), String(pid));
+    const when = new Date(Date.now() - ageMs);
+    fs.utimesSync(lockOf(home), when, when);
+  };
+  // pid 없는 오래된 잠금 → 회수
+  let home = tmp('f3a'); make(home, null, STALE_LOCK_MS + 60_000);
+  assert.equal(typeof acquireReviveLock(home, {onReclaim: r => reasons.push(r)}), 'function');
+  // pid 파일이 깨진 오래된 잠금 → 회수
+  home = tmp('f3b'); make(home, 'abc', STALE_LOCK_MS + 60_000);
+  assert.equal(typeof acquireReviveLock(home, {onReclaim: r => reasons.push(r)}), 'function');
+  // 막 만든 잠금(pid 아직 없음) → 유지
+  home = tmp('f3c'); make(home, null, 1000);
+  assert.equal(acquireReviveLock(home, {onReclaim: r => reasons.push(r)}), null);
+  // 산 주인 → 유지
+  home = tmp('f3d'); make(home, 4242, 10 * STALE_LOCK_MS);
+  assert.equal(acquireReviveLock(home, {isAlive: pid => pid === 4242, onReclaim: r => reasons.push(r)}), null);
+  // 죽은(좀비로 보이는) 주인 → 회수
+  home = tmp('f3e'); make(home, 4243, 1000);
+  assert.equal(typeof acquireReviveLock(home, {isAlive: () => false, onReclaim: r => reasons.push(r)}), 'function');
+  assert.equal(reasons.length, 3);
+  assert.match(reasons[2], /죽었다/);
+});
+
+test('F4: 상태 파일이 깨졌으면 --auto는 모두 건너뛰고 울림 1번(같은 파일이면 다시 안 울림), 파일은 그대로 둔다. 사람이 친 up은 .trash로 옮기고 새로 시작', () => {
+  const home = tmp('f4'), {ops, calls} = fakeOps({});
+  const file = path.join(home, 'revive-state.json');
+  fs.writeFileSync(file, '{"targets": {"디코": {"state": "stopped"');
+  const first = prepareRevive({home, auto: true, now: T0, ops});
+  assert.equal(first.corrupt, true);
+  assert.deepEqual([...first.skip].sort(), [...TARGETS].sort());
+  assert.equal(first.pending.size, 0);
+  assert.equal(calls.notices.filter(n => n.ring === true).length, 1);
+  prepareRevive({home, auto: true, now: T0 + 60_000, ops});
+  assert.equal(calls.notices.length, 1, '같은 손상은 다시 울리지 않는다');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"targets": {"디코": {"state": "stopped"', '자동 실행은 깨진 파일을 건드리지 않는다');
+  assert.equal(calls.records.length + calls.killed.length, 0);
+  // 파일이 다시 다른 모양으로 깨지면 다시 한 번 알린다
+  fs.writeFileSync(file, 'not json at all');
+  prepareRevive({home, auto: true, now: T0 + 120_000, ops});
+  assert.equal(calls.notices.length, 2);
+  // 사람이 친 up
+  assert.equal(clearForUp(home), true);
+  assert.ok(!fs.existsSync(file));
+  assert.equal(fs.readdirSync(path.join(home, '.trash')).filter(f => f.startsWith('revive-state-')).length, 1);
+  assert.equal(readReviveState(home).corrupt, undefined);
+  // 사람이 친 stop도 깨진 파일을 옮기고 새로 표시한다
+  fs.writeFileSync(file, '[1,2');
+  assert.ok(markStopped(home, '디코'));
+  assert.equal(readReviveState(home).targets.디코.state, 'stopped');
+  assert.ok(recoverCorruptState(home) === null);
+});
+
+test('F2: markStopped/unmarkStopped — 끄기 실패 시 이전 표시로 되돌린다', () => {
+  const home = tmp('f2');
+  const token = markStopped(home, '디코');
+  assert.equal(readReviveState(home).targets.디코.state, 'stopped');
+  unmarkStopped(home, '디코', token);
+  assert.equal(readReviveState(home).targets.디코, undefined);
+  markStopped(home, '디코');
+  const again = markStopped(home, '디코');
+  unmarkStopped(home, '디코', again);
+  assert.equal(readReviveState(home).targets.디코.state, 'stopped', '이전에도 멈춤이었으면 그대로 둔다');
+});
+
+test('F5: 조용한 되살림 알림은 디코로 못 보내도 사건·로그에 남기고, 맥 알림으로 넘어가지 않는다(notifyUser systemFallback:false)', async () => {
+  const {notifyUser} = await import('../src/user-notify.mjs');
+  const spawned = [];
+  const spawn = (...args) => { spawned.push(args); return {status: 0, stdout: ''}; };
+  const env = {...process.env, KADAN_NOTIFY: 'off'};
+  const quiet = notifyUser('조용한 알림', spawn, {env, systemFallback: false});
+  assert.equal(spawned.length, 0, '맥 알림 0회');
+  assert.equal(quiet.via, 'none');
+  assert.equal(quiet.error, null);
+  const loud = notifyUser('울림 경보', spawn, {env, ring: true});
+  assert.equal(spawned.length, 1, '기본 동작은 그대로 맥 알림으로 대신한다');
+  assert.equal(loud.via, 'system');
+  // finishRevive: 알림이 디코로 안 갔으면 사건에 notice를 남긴다
+  const home = tmp('f5'), {ops, calls} = fakeOps({'kadan-비서': {}, 'kadan-대시보드': {}, 'kadan-watch': {}},
+    {notify: () => ({via: 'none', reason: '디코 알림 설정 없음 또는 실패'})});
+  const prep = prepareRevive({home, auto: true, now: T0, ops});
+  const lines = finishRevive({home, pending: prep.pending, results: {디코: 'started'}, now: T0, ops});
+  assert.equal(calls.records[0].notice, 'none');
+  assert.match(calls.records[0].noticeReason, /디코/);
+  assert.match(lines.join(), /조용한 알림을 디코로 보내지 못했습니다/);
 });

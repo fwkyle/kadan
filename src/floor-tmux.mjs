@@ -62,11 +62,15 @@ function panePid(session) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
-// remain-on-exit로 프로세스는 죽었는데 세션이 남은 창이면 true. 세션이 없거나 조회 실패면 null.
-export function paneDead(session) {
-  const result = tmux(["display-message", "-p", "-t", `=${session}:`, "#{pane_dead}"]);
-  const text = result.status === 0 ? result.stdout.trim() : "";
-  return text === "1" ? true : text === "0" ? false : null;
+// 세션의 모든 창·화면 상태. 'dead'(전부 프로세스 없음) | 'live'(전부 살아 있음) | 'mixed'(일부만 죽음) | 'unknown'(조회 실패·세션 없음).
+// 살아 있는 화면이 하나라도 있으면 세션을 지우면 안 되므로, 첫 화면만 보지 않고 -s로 세션 전체를 본다.
+export function paneState(session) {
+  const result = tmux(["list-panes", "-s", "-t", `=${session}`, "-F", "#{pane_dead}"]);
+  if (result.status !== 0) return "unknown";
+  const flags = result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!flags.length || flags.some((flag) => flag !== "0" && flag !== "1")) return "unknown";
+  const dead = flags.filter((flag) => flag === "1").length;
+  return dead === flags.length ? "dead" : dead === 0 ? "live" : "mixed";
 }
 
 // 죽은 창의 마지막 화면(스크롤 기록 포함 뒤쪽 lines줄).

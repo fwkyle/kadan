@@ -52,14 +52,14 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
     assert.equal(first.status, 0, first.stdout + first.stderr);
     assert.deepEqual(sessions(), ['kadan-대시보드', 'kadan-디코', 'kadan-비서']);
     assert.match(first.stdout, /디코 다리: 다시 띄움\(이번 1시간 1번째\)/);
-    assert.equal(noticeCount(), 3, '조용한 알림 3건(대상마다 1건)');
+    assert.equal(noticeCount(), 0, '조용한 알림은 디코로만 간다 — 디코 설정이 없는 격리 환경에서도 맥 알림 0건');
     await waitFor(lockAlive, '다리 잠금');
 
     // 2) 다 살아 있으면 아무것도 안 한다(출력·알림·세션 변화 0)
     const idle = up('--auto');
     assert.equal(idle.status, 0);
     assert.equal(idle.stdout.trim(), '', `살아 있으면 로그가 없다: ${idle.stdout}`);
-    assert.equal(noticeCount(), 3);
+    assert.equal(noticeCount(), 0);
 
     // 3) 다리 프로세스가 죽어 창만 남은 경우(remain-on-exit) → 화면 저장 → 정리 → 재생성
     await killBridge();
@@ -69,7 +69,7 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
     assert.ok(fs.readdirSync(path.join(home, 'revive')).some(f => f.startsWith('디코-')));
     assert.ok(sessions().includes('kadan-디코'));
     await waitFor(lockAlive, '다리 잠금(재생성)');
-    assert.equal(noticeCount(), 4);
+    assert.equal(noticeCount(), 0);
 
     // 4) 사람이 kadan stop 디코 → 자동이 건너뛴다. 명시 up은 멈춤을 풀고 다시 띄운다
     assert.equal(kadan('stop', '디코').status, 0);
@@ -85,6 +85,7 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
 
     // 5) revive 사건은 대상마다 남고(by autostart), 다리·감시기는 start 사건으로 기록되지 않는다
     const kinds = revives();
+    assert.ok(kinds.every(e => e.notice === 'none'), '디코로 못 보낸 조용한 알림은 사건에 남는다');
     assert.deepEqual(kinds.map(e => [e.target, e.result, e.by]), [['비서', 'started', 'autostart'], ['대시보드', 'started', 'autostart'], ['디코', 'started', 'autostart'], ['디코', 'started', 'autostart']]);
     assert.equal(kinds.at(-1).reason, 'pane 죽음');
     assert.match(kinds.at(-1).screenPath, /revive\/디코-/);

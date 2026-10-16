@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {spawnSync} from 'node:child_process';
+import {pidAlive} from './pid-alive.mjs';
 import {loadSecret} from './secrets.mjs';
 import {DiscordError, createApi, apiBase, splitDiscord, DISCORD_LIMIT, CONNECT_CODES} from './discord-bot.mjs';
 import {scrubSecrets} from './user-notify.mjs';
@@ -103,13 +103,6 @@ export function writeState(home, state) {
   const file = statePath(home), tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({...state, updatedAt: new Date().toISOString()}) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file);
-}
-
-// kill -0은 좀비(죽었지만 부모가 거두지 않은 프로세스)도 살아 있다고 답한다. 컨테이너처럼 거두는 쪽이 없으면 낡은 잠금이 영원히 산 것으로 보인다.
-function pidAlive(pid) {
-  try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') return false; }
-  const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], {encoding: 'utf8'});
-  return !(state.status === 0 && /^\s*Z/.test(state.stdout));
 }
 
 // 잠금을 쥔 살아 있는 받기 프로세스의 {pid, mode, to}. 없거나 주인이 죽었으면 null(읽기만 한다 — 치우지 않는다).
