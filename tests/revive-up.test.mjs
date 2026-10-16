@@ -8,6 +8,7 @@ import net from 'node:net';
 import {spawnSync} from 'node:child_process';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {readLedger} from '../src/ledger.mjs';
+import {pidAlive} from '../src/pid-alive.mjs';
 
 // 격리 tmux 소켓·격리 KADAN_HOME·가짜 디코 API. 맥 알림은 PATH 앞의 가짜 osascript가 받아 파일에 적는다(실제 알림 0).
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
@@ -72,7 +73,10 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
     assert.equal(noticeCount(), 0);
 
     // 4) 사람이 kadan stop 디코 → 자동이 건너뛴다. 명시 up은 멈춤을 풀고 다시 띄운다
+    const stoppedPid = Number(fs.readFileSync(path.join(home, 'discord-chat.lock', 'pid'), 'utf8'));
     assert.equal(kadan('stop', '디코').status, 0);
+    // kill-session은 SIGHUP을 보낼 뿐이라 다리 프로세스가 잠금을 쥔 채 잠시 더 산다 → 느린 러너에서 곧바로 up하면 '잠금을 쥐고 있어'로 막힌다.
+    await waitFor(() => !pidAlive(stoppedPid), '멈춘 다리 프로세스 종료');
     assert.equal(reviveState().targets.디코.state, 'stopped');
     const skipped = up('--auto');
     assert.equal(skipped.stdout.trim(), '');

@@ -729,6 +729,7 @@ export async function runWatch({
       stages:roundAll(stages),cpuMs:roundAll({user:cpu.user/1000,system:cpu.system/1000}),
       ...(reads?{reads:reads.stats()}:{}),record:io.record.stats(),send:io.send.stats()};
     timingWindow=accumulateTiming(timingWindow,sample);
+    reads?.end?.(); // 다음 주기 시작까지 원장 전체 사본을 쥐지 않는다.
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
