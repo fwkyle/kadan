@@ -412,3 +412,30 @@ test('F5: 조용한 되살림 알림은 디코로 못 보내도 사건·로그�
   assert.match(calls.records[0].noticeReason, /디코/);
   assert.match(lines.join(), /조용한 알림을 디코로 보내지 못했습니다/);
 });
+
+test('R2-F4: 구조가 틀린 상태 파일(최상위 배열, targets가 null·문자열·배열, history 값이 배열 아님)은 손상이고, 필드가 없는 정상 파일은 정상이다', () => {
+  const home = tmp('shape');
+  const file = path.join(home, 'revive-state.json');
+  const read = text => { fs.writeFileSync(file, text); return readReviveState(home); };
+  assert.equal(read('[]').corrupt, true, '최상위가 배열');
+  assert.equal(read('"x"').corrupt, true, '최상위가 문자열');
+  assert.equal(read('null').corrupt, true, '최상위가 null');
+  assert.equal(read('{"targets":null}').corrupt, true, 'targets가 null');
+  assert.equal(read('{"targets":"stopped"}').corrupt, true, 'targets가 문자열');
+  assert.equal(read('{"targets":[]}').corrupt, true, 'targets가 배열');
+  assert.equal(read('{"history":{"디코":"x"}}').corrupt, true, 'history 값이 배열 아님');
+  assert.equal(read('{"history":{"디코":[1,"a"]}}').corrupt, true, 'history 안이 숫자 아님');
+  assert.equal(read('{"blocked":[]}').corrupt, true);
+  assert.equal(read('{"targets":{"디코":"stopped"}}').corrupt, true, 'targets 값이 객체 아님');
+  assert.equal(read('{}').corrupt, undefined, '필드가 없는 정상 파일');
+  assert.equal(read('{"targets":{"디코":{"state":"stopped"}},"history":{"디코":[1,2]}}').corrupt, undefined);
+  // 손상으로 보면 --auto는 전체를 건너뛰고 울림 1번, 사람이 친 stop은 .trash로 옮기고 표시를 저장한다
+  fs.writeFileSync(file, '{"targets":[]}');
+  const {ops, calls} = fakeOps({});
+  const prep = prepareRevive({home, auto: true, now: T0, ops});
+  assert.equal(prep.corrupt, true);
+  assert.equal(calls.notices.filter(n => n.ring === true).length, 1);
+  assert.ok(markStopped(home, '대시보드'));
+  assert.equal(readReviveState(home).targets.대시보드.state, 'stopped');
+  assert.equal(fs.readdirSync(path.join(home, '.trash')).filter(f => f.startsWith('revive-state-')).length, 1);
+});

@@ -6,7 +6,7 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
-import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, markStopped, unmarkStopped } from "../revive.mjs";
+import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, markStopped, unmarkStopped, readReviveState } from "../revive.mjs";
 import {
   pendingCardsFor,
   buildStopLedgerEntry,
@@ -33,7 +33,11 @@ export function cmdStop(argv) {
   // 순서: 멈춤 표시를 먼저 저장하고 그다음 세션을 끈다. 끄기가 실패하면 표시를 이전 상태로 되돌린다
   // (세션이 그대로 살아 있으니 "끈 것"이 아니다. 오류는 사람이 본다).
   let marked = null;
-  try { marked = markStopped(home, role); } catch (error) { fail(`자동 되살리기 멈춤 표시 실패: ${error.message} — 끄지 않았습니다`); }
+  try {
+    marked = markStopped(home, role);
+    // 마지막 안전장치: 저장한 표시를 다시 읽어 이 대상이 실제로 stopped인지 확인한다. 아니면 끄지 않는다(끈 것이 되살아나는 일을 막는다).
+    if (marked && readReviveState(home).targets?.[role]?.state !== "stopped") throw new Error("표시가 저장되지 않았다");
+  } catch (error) { fail(`자동 되살리기 멈춤 표시 실패: ${error.message} — 끄지 않았습니다`); }
   try {
     floor.stop(session);
   } catch (error) {

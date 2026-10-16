@@ -26,9 +26,21 @@ export function readReviveState(home) {
   }
   try {
     const v = JSON.parse(text);
-    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not object');
+    if (!validShape(v)) throw new Error('bad shape');
     return { ...emptyState(), ...v };
   } catch { return { ...emptyState(), corrupt: true }; }
+}
+// 이름으로 찾는 필드는 모두 일반 객체여야 하고, 값은 쓰는 곳이 기대하는 모양이어야 한다. 필드가 아예 없으면 빈 기본값이라 정상이다.
+// 배열 같은 틀린 모양을 통과시키면 멈춤 표시를 저장하지 못해(배열에 이름 키는 직렬화되지 않는다) 끈 것이 되살아난다.
+const isPlain = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+function validShape(v) {
+  if (!isPlain(v)) return false;
+  for (const key of ['targets', 'history', 'blocked', 'lastResult']) if (key in v && !isPlain(v[key])) return false;
+  if ('lastOutput' in v && typeof v.lastOutput !== 'string') return false;
+  if ('targets' in v && !Object.values(v.targets).every((t) => isPlain(t) && typeof t.state === 'string')) return false;
+  if ('history' in v && !Object.values(v.history).every((h) => Array.isArray(h) && h.every(Number.isFinite))) return false;
+  if ('blocked' in v && !Object.values(v.blocked).every(isPlain)) return false;
+  return true;
 }
 export function writeReviveState(home, state) {
   if (state.corrupt) throw new Error('손상된 revive-state.json 위에 쓰지 않는다');

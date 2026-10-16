@@ -117,3 +117,20 @@ test('F3 pid 없는 오래된 잠금은 자동 실행이 되찾아 로그 한 �
     assert.equal(fs.existsSync(lock), false, '일이 끝나면 잠금을 풀었다');
   } finally { await w.close(); }
 });
+
+test('R2-F4 구조가 틀린 상태 파일(targets:[])에서도 stop 대시보드가 멈춤 표시를 남겨 다음 up --auto가 되살리지 않는다', async (t) => {
+  const w = await world(t); if (!w) return;
+  try {
+    assert.equal(w.up('--auto').status, 0);
+    assert.ok(w.sessions().includes('kadan-대시보드'));
+    fs.writeFileSync(path.join(w.home, 'revive-state.json'), '{"targets":[]}');
+    const stopped = w.kadan({}, 'stop', '대시보드');
+    assert.equal(stopped.status, 0, stopped.stdout + stopped.stderr);
+    assert.ok(!w.sessions().includes('kadan-대시보드'));
+    assert.equal(readReviveState(w.home).targets.대시보드.state, 'stopped', '배열이 아닌 객체에 표시가 저장됐다');
+    const auto = w.up('--auto');
+    assert.equal(auto.status, 0, auto.stdout + auto.stderr);
+    assert.ok(!w.sessions().includes('kadan-대시보드'), 'kyle이 끈 대시보드는 되살아나지 않는다');
+    assert.ok(fs.readdirSync(path.join(w.home, '.trash')).some(f => f.startsWith('revive-state-')), '깨진 파일은 .trash로 옮겼다');
+  } finally { await w.close(); }
+});
