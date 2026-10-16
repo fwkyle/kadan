@@ -56,7 +56,7 @@ test('구현 완료 뒤 새 검수 연결을 우선하고 검수 합격을 후�
 test('결정 요청만으로 진행 실행을 완료·보류로 바꾸지 않고 병렬 담당을 보존한다',()=>{
  const f=fixture(),other=f.add('implementation');f.send(other,'implementation');
  const c=f.cards.get(other);f.cards.update(other,{activity:'running'},{revision:c.revision,by:'implementation',noteKind:'progress',note:'진행'});
- const d=f.decisions.request(f.execution,{question:'범위 확대?',options:['유지','확대'],recommendation:'유지',reason:'범위 판단\n- 확인 경로 없음: 순수 방침 질문'},'슈퍼감독');
+ const d=f.decisions.request(f.execution,{question:'범위 확대?',options:['유지','확대'],recommendation:'유지',reason:'범위 판단\n- 확인 경로 없음: 순수 방침 질문'},'시험-슈퍼감독');
  let view=f.detail();assert.equal(view.followup.state,'parallel');
  assert.equal(view.followup.executions.find(x=>x.key===other).state,'running');
  assert.match(view.followup.executions.find(x=>x.key===f.execution).next,/보류·대기 연결 확인/);
@@ -72,11 +72,11 @@ test('업무에 직접 연결한 결정은 카드가 그 업무의 실행이 아
  f.cards.create({repo:'test',id:'study',repoPath:f.home,body:'# 업무 밖 조사 카드'});
  const ask={question:'합칠까요?',options:['합침','보류'],recommendation:'합침',reason:'합류 판단\n- 확인 경로 없음: 시험'};
  assert.equal(f.detail().followup.state,before,'업무 연결 없는 결정은 이 업무와 무관');
- assert.throws(()=>f.decisions.request('test/study',{...ask,work:'test/none'},'슈퍼감독'));
- const d=f.decisions.request('test/study',{...ask,work:'work:'+f.key},'슈퍼감독');
+ assert.throws(()=>f.decisions.request('test/study',{...ask,work:'test/none'},'시험-슈퍼감독'));
+ const d=f.decisions.request('test/study',{...ask,work:'work:'+f.key},'시험-슈퍼감독');
  assert.equal(d.work,f.key);assert.equal(f.decisions.get(d.id).work,f.key);
  const view=f.detail().followup;assert.equal(view.state,'decision');assert.equal(view.owner,'@user');
- f.decisions.cancel(d.id,{revision:d.revision,reason:'개편'},'슈퍼감독');
+ f.decisions.cancel(d.id,{revision:d.revision,reason:'개편'},'시험-슈퍼감독');
  assert.equal(f.detail().followup.state,before,'결정이 닫히면 평소대로');
 });
 
@@ -86,13 +86,13 @@ test('같은 판에 열린 업무가 있으면 업무 밖 카드의 결정은 --
  const study=f.cards.create({repo:'test',id:'study',repoPath:f.home,body:'# 업무 밖 조사 카드'});
  f.cards.update('test/study',{board:'test'},{revision:study.revision,note:'판 지정'});
  const ask={question:'합칠까요?',options:['합침','보류'],recommendation:'합침',reason:'합류 판단\n- 확인 경로 없음: 시험'};
- assert.throws(()=>f.decisions.request('test/study',ask,'슈퍼감독'),e=>/업무 연결 필요/.test(e.message)&&e.message.includes(f.key));
+ assert.throws(()=>f.decisions.request('test/study',ask,'시험-슈퍼감독'),e=>/업무 연결 필요/.test(e.message)&&e.message.includes(f.key));
  assert.deepEqual(f.decisions.list(),[],'거부한 요청은 저장하지 않는다');
- const none=f.decisions.request('test/study',{...ask,work:'없음'},'슈퍼감독');assert.equal(none.work,undefined);
- assert.equal(f.decisions.request(f.execution,{...ask,question:'실행 카드 질문'},'슈퍼감독').work,undefined,'업무의 실행 카드는 지금처럼 연결 없이 된다');
+ const none=f.decisions.request('test/study',{...ask,work:'없음'},'시험-슈퍼감독');assert.equal(none.work,undefined);
+ assert.equal(f.decisions.request(f.execution,{...ask,question:'실행 카드 질문'},'시험-슈퍼감독').work,undefined,'업무의 실행 카드는 지금처럼 연결 없이 된다');
  const other=f.cards.create({repo:'test',id:'other-board',repoPath:f.home,body:'# 다른 판'});
  f.cards.update('test/other-board',{board:'elsewhere'},{revision:other.revision,note:'판 지정'});
- assert.ok(f.decisions.request('test/other-board',{...ask,question:'다른 판 질문'},'슈퍼감독').id,'같은 판에 열린 업무가 없으면 그대로 된다');
+ assert.ok(f.decisions.request('test/other-board',{...ask,question:'다른 판 질문'},'시험-슈퍼감독').id,'같은 판에 열린 업무가 없으면 그대로 된다');
 });
 
 test('현재 보류·외부 대기와 종료를 구분하고 옛 결과는 새 발령의 합격이 아니다',()=>{

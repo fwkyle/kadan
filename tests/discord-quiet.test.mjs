@@ -47,7 +47,7 @@ const rings = b => b.flags === undefined && JSON.stringify(b.allowed_mentions) =
 test('울리는 것: 결정 요청과 사용자 경보(ring)만 flags 없이 멘션이 붙는다', async () => {
   const w = await world();
   try {
-    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
+    const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
     withNotifyOn(() => store.announce('request', {id: 'dec-1', card: 'repo/card-1', work: 'repo/work-1', question: '질문', options: ['가', '나'], recommendation: '가', reason: '이유'}));
     notifyUser('경보 하나', w.fakeSpawn(), {kind: 'alert', ring: true, key: 'alert:a1:RED', tagRepo: 'repo', home: w.home, env: w.env});
     notifyUser('겹알림 하나', w.fakeSpawn(), {kind: 'alert', ring: true, key: 'alert:a1:RED:겹알림', tagRepo: 'repo', home: w.home, env: w.env});
@@ -60,7 +60,7 @@ test('울리는 것: 결정 요청과 사용자 경보(ring)만 flags 없이 멘
 test('조용히 보내는 것: 결정 답변·취소, 울림 표시 없는 경보, 인계, 우편은 flags 4096과 빈 allowed_mentions다', async () => {
   const w = await world();
   try {
-    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
+    const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
     const d = {id: 'dec-2', card: 'repo/card-2', work: 'repo/work-2', question: '질문', options: ['가', '나'], recommendation: '가', reason: '이유'};
     withNotifyOn(() => {
       store.announce('answer', {...d, answer: {text: '가로', choice: '가'}});
@@ -93,7 +93,7 @@ test('표시 없이 부른 새 종류는 기본으로 조용하다(postDiscordWe
 test('포럼: 업무 글 생성·이어 붙이기는 조용히, 결정 답변이 고치는 요청(PATCH)에는 flags가 없다', async () => {
   const w = await world([]);
   try {
-    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
+    const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
     const send = (message, opts) => notifyUser(message, w.fakeSpawn(), {home: w.home, env: w.env, work: 'repo/work-1', workTitle: '제목', ...opts});
     send('첫 알림', {kind: 'mail', key: 'mail:a'});   // 새 글
     send('둘째 알림', {kind: 'mail', key: 'mail:b'}); // 이어 붙임

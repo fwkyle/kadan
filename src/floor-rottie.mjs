@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readLedger } from "./ledger.mjs";
+import { assertNotLiveRottie } from "./live-floor-guard.mjs";
 
 export class RottieFloorError extends Error {
   constructor(message, { code = "ROTTIE_UNKNOWN", effect = "unknown", exitCode = 1 } = {}) {
@@ -28,6 +29,8 @@ function rottieBin() {
 }
 
 function runRottie(argv, spawnFn = spawnSync) {
+  // 주입된 spawnFn은 실제 앱에 닿지 않는다. 진짜 spawnSync일 때만 운영 로티 접근을 막는다.
+  if (spawnFn === spawnSync) assertNotLiveRottie();
   const result = spawnFn(rottieBin(), argv, {
     encoding: "utf8",
     maxBuffer: 2 * 1024 * 1024,

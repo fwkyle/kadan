@@ -95,7 +95,7 @@ test('켜기 전 사건·옛 카드는 호출 0이고, 켠 뒤 발령·완료·�
   await step('결과 등록', 3);
   const decisions = new DecisionStore(w.home, {notify: () => {}, userNotify: () => null});
   const before = w.calls().length;
-  const asked = decisions.request(card.key, {question: '합칠까요? 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '확인 경로 없음: 시험', work: '없음'}, 'kadan-슈퍼감독');
+  const asked = decisions.request(card.key, {question: '합칠까요? 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '확인 경로 없음: 시험', work: '없음'}, '시험-슈퍼감독');
   w.clock.t += 60_000;
   {const {done} = w.run({decisions: decisions.list()}); await done;}
   assert.equal(w.calls().length, before + 1, '결정 요청');

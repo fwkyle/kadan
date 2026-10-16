@@ -41,7 +41,7 @@ async function world({forum = true, repoKeys = ['kadan'], defaultScript = [{stat
   fs.writeFileSync(envFile, text);
   const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: envFile};
   const osCalls = [];
-  const store = new DecisionStore(home, {userNotify: (m, o) => notifyUser(m, (...a) => { osCalls.push(a); return {status: 0}; }, {...o, home, env})});
+  const store = new DecisionStore(home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, (...a) => { osCalls.push(a); return {status: 0}; }, {...o, home, env})});
   const state = () => { try { return JSON.parse(fs.readFileSync(path.join(home, 'notify-threads.json'), 'utf8')); } catch { return null; } };
   const announce = (kind, d) => { const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY; try { return store.announce(kind, d); } finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; } };
   const child = (kind, d) => new Promise(resolve => {
@@ -176,10 +176,10 @@ test('D5 KADAN_NOTIFY=off·설정 없음이면 요청 0건, 상태 파일·기�
     assert.equal(process.env.KADAN_NOTIFY, 'off');
     w.announce('request', dec());                    // 설정이 있는 보통 경우: 1건 나간다
     const before = w.fr.requests().length;
-    new DecisionStore(w.home, {userNotify: () => assert.fail('off인데 알림 호출')}).announce('request', dec());   // 시험 기본값 KADAN_NOTIFY=off
+    new DecisionStore(w.home, {notify: () => {}, userNotify: () => assert.fail('off인데 알림 호출')}).announce('request', dec());   // 시험 기본값 KADAN_NOTIFY=off
     assert.equal(w.fr.requests().length, before);
     for (const text of [w.log(), JSON.stringify(w.state())]) for (const x of [TOKEN, USER_ID, '/api/webhooks', 'http://']) assert.ok(!text.includes(x), x);
-    const nothing = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, () => ({status: 0}), {...o, home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')}})});
+    const nothing = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, () => ({status: 0}), {...o, home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')}})});
     const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
     const n0 = w.fr.requests().length + w.base.requests().length;
     try { nothing.announce('request', dec()); } finally { process.env.KADAN_NOTIFY = prev; }
@@ -210,7 +210,7 @@ const {CardStore} = await import('../src/card-store.mjs');
 const {WorkStore} = await import('../src/work-store.mjs');
 const realDecision = (w, over = {}) => {
   new CardStore(w.home).create({repo: 'kadan', id: 'card-a', repoPath: w.home, body: '# 테스트'});
-  return w.store.request('kadan/card-a', {question: '합칠까요?\n- 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '이유', work: '없음', ...over}, '슈퍼감독');
+  return w.store.request('kadan/card-a', {question: '합칠까요?\n- 확인 경로 없음: 시험', options: ['합침', '보류'], recommendation: '합침', reason: '이유', work: '없음', ...over}, '시험-슈퍼감독');
 };
 const visible = reqs => reqs.filter(r => r.method === 'POST' && !bodyOf(r).content.startsWith('**업무 상태**'));
 
@@ -218,7 +218,7 @@ test('R1 취소가 요청 알림보다 먼저 잠금을 잡으면: 해결 메시
   const w = await world();
   try {
     const d = realDecision(w);
-    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '[시험] 채팅 승인'}, '슈퍼감독');
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '[시험] 채팅 승인'}, '시험-슈퍼감독');
     w.announce('cancel', cancelled);                  // 취소 알림이 먼저(기록 없음 → 해결 모양 새 메시지, '해결 메시지 보냄' 기록)
     w.announce('request', d);                         // 늦은 요청 알림(저장소는 이미 취소) → 건너뜀
     const reqs = w.fr.requests();
@@ -233,7 +233,7 @@ test('R1 요청 알림이 먼저 잠금을 잡았는데 저장소는 이미 취�
   const w = await world();
   try {
     const d = realDecision(w);
-    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '[시험] 채팅 승인'}, '슈퍼감독');
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '[시험] 채팅 승인'}, '시험-슈퍼감독');
     w.announce('request', d);                         // 요청 알림 시점에 이미 취소됨
     w.announce('cancel', cancelled);
     const reqs = w.fr.requests();
@@ -248,7 +248,7 @@ test('R1 별도 프로세스로 동시에 요청·취소 알림이 와도 남는
   const w = await world();
   try {
     const d = realDecision(w);
-    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '슈퍼감독');
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '시험-슈퍼감독');
     await Promise.all([w.child('cancel', cancelled), w.child('request', d)]);
     const reqs = w.fr.requests();
     const open = reqs.filter(r => r.method === 'POST' && /결정 요청:/.test(bodyOf(r).content));
@@ -332,7 +332,7 @@ test('F1 시스템 알림도 같은 판단: 해결 기록 있으면 띄우지 �
   try {
     const offEnv = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')};   // 디코 설정 없음 → 시스템 알림
     const sys = [];
-    const store = new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, (...a) => { sys.push(a[1][1]); return {status: 0}; }, {...o, home: w.home, env: offEnv})});
+    const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, (...a) => { sys.push(a[1][1]); return {status: 0}; }, {...o, home: w.home, env: offEnv})});
     const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY;
     try {
       store.announce('request', NOT_IN_STORE);
@@ -353,7 +353,7 @@ test('F1 resolved:true 기록은 어떤 쓰기로도 false가 되지 않는다',
     assert.equal(w.state().decisions[UUID].resolved, true);
     // 실제 흐름: 취소 알림(해결 기록) 뒤 요청 알림이 어떤 읽기 결과로 와도 기록이 그대로
     const d = realDecision(w);
-    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '슈퍼감독');
+    const cancelled = w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '시험-슈퍼감독');
     w.announce('cancel', cancelled); w.announce('request', d); w.announce('request', {...d, id: d.id});
     assert.equal(w.state().decisions[d.id].resolved, true);
     assert.equal(w.fr.requests().filter(r => /결정 요청:/.test(bodyOf(r).content)).length, 0);
@@ -372,7 +372,7 @@ test('F2 ./·../ 경로의 UUID는 보존하고, 카드 키·일반 문장의 UU
 });
 
 // --- 4라운드: 시스템 대체 문구의 [레포], 확인 실패 사유는 디코 결과와 무관하게 로그에 ---
-const sysStore = (w, osText, extraOpts = {}) => new DecisionStore(w.home, {userNotify: (m, o) => notifyUser(m, (cmd, args) => { osText.push(args[1]); return {status: 0}; },
+const sysStore = (w, osText, extraOpts = {}) => new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, (cmd, args) => { osText.push(args[1]); return {status: 0}; },
   {...o, ...extraOpts, home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')}})});
 const withNotify = fn => { const prev = process.env.KADAN_NOTIFY; delete process.env.KADAN_NOTIFY; try { return fn(); } finally { if (prev !== undefined) process.env.KADAN_NOTIFY = prev; } };
 
@@ -380,7 +380,7 @@ test('S2 시스템 알림이 해결 문구로 바뀌어도 [레포]가 붙고, �
   const w = await world();
   try {
     const d = realDecision(w);
-    w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '슈퍼감독');
+    w.store.cancel(d.id, {revision: d.revision, reason: '채팅 승인'}, '시험-슈퍼감독');
     const text = [];
     withNotify(() => sysStore(w, text).announce('request', d));                       // 카드 키 앞부분 kadan
     assert.equal(text.length, 1);

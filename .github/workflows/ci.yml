@@ -35,7 +35,7 @@ jobs:
       - run: npm --prefix gui ci
       - run: npm run test:gui
       - run: npm run build:gui
-      - run: node --test tests/*.test.mjs
+      - run: npm test
         env:
           KADAN_HOME: ${{ runner.temp }}/kadan-home
   public-strings:
