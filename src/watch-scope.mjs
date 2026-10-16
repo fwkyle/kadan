@@ -1,5 +1,5 @@
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
-import {effectiveCardRole, workEntries} from './handover-state.mjs';
+import {effectiveCardRole, workEntries, currentResponsibility} from './handover-state.mjs';
 import {peerResponsibilities} from './peer-mail.mjs';
 import {ownerGenerations,isPreviousOwner} from './owner-generation.mjs';
 
@@ -62,13 +62,15 @@ export function buildSupervisorScope(cards, entries, parents = new Map(), works 
   const sent = new Set(workEntries(entries,cards).filter(e => e.kind === 'send' && e.taskId && e.transport !== 'mailbox' && !taskConnectionError(e)).map(e => e.executionKey || e.taskId));
   for (const work of works) {
     if (work.status !== 'open' || !work.executions.some(e => sent.has(e.key))) continue;
-    if (work.ownedAt && isPreviousOwner(generations, work.owner, work.ownedAt)) continue;
     // 실행을 모두 끝내도 업무 최종 확인이 남으면 책임 감독은 응답 가능해야 한다.
     const opened = work.history?.findLast(e => e.action === 'reopen' || e.action === 'create');
-    add(work.owner, {role:work.owner, taskId:`work:${work.key}`, t:opened?.at ?? null, workKey:work.key});
-    // 차례가 관계표의 다른 역할이면 그 역할의 세션도 점검 범위다(할 일을 차례인 쪽에 세므로 watch-supervisor idleWorkEntries).
-    if (parents.has(work.turnOwner) && work.turnOwner !== work.owner)
-      add(work.turnOwner, {role:work.turnOwner, taskId:`work:${work.key}`, t:opened?.at ?? null, workKey:work.key});
+    // 지금 몫인 역할은 currentResponsibility(판정과 같은 함수)의 role·since로 세대를 가른다. 차례가 다른 역할이면 owner도 따로 본다.
+    const holder = currentResponsibility(work, parents);
+    const targets = holder.role === work.owner ? [holder] : [{role: work.owner, since: work.ownedAt ?? null}, holder];
+    for (const {role, since} of targets) {
+      if (since && isPreviousOwner(generations, role, since)) continue;
+      add(role, {role, taskId:`work:${work.key}`, t:opened?.at ?? null, workKey:work.key});
+    }
   }
   return {sessions:new Set(tasks.map(e => `kadan-${e.role}`)), entries:tasks};
 }

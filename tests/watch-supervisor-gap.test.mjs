@@ -12,13 +12,13 @@ const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],
 const starts=[...parents.keys()].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0)}));
 const card={id:'t1',key:'repo/t1',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'};
 
-async function simulate({minutes,alive=()=>true,list=()=>starts.map(s=>({session:s.session,pid:s.panePid})),
+async function simulate({minutes,hier=parents,starts:sts=starts,alive=()=>true,list=()=>sts.map(s=>({session:s.session,pid:s.panePid})),
   sendNudge=null,sendAlert=null,read=()=>'frozen screen',
   cards=[card],works=[],decisions=[],entries:extra=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}]}){
   const records=[],sent=[],printed=[],nudges=[];let minute=0;const controller=new AbortController();
-  const entries=[...starts,...extra];
+  const entries=[...sts,...extra];
   await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,idleMs:15*60_000,
-    parents,routes:new Map(),superRole:'p-슈퍼감독',
+    parents:hier,routes:new Map(),superRole:'p-슈퍼감독',
     now:()=>epoch+minute*60_000,
     floor:{list,read:s=>read(s,minute),alive},
     readEntries:()=>entries,readCards:()=>cards,readWorks:()=>works,readDecisions:()=>decisions,
@@ -195,4 +195,17 @@ test('경보 원장에 남기는 항목 목록은 20개로 자른다',async()=>{
   const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-감독'&&!e.resolved);
   assert.equal(rec.idleItems.own.length,20);
   assert.match(r.nudges[0][2],/본인 차례 25건/);
+});
+
+test('owner는 이전 세대, 차례는 현재 다른 감독인 업무도 65주기 동안 15분에 1단·30분에 2단이 간다(관찰 범위가 비지 않는다)',async()=>{
+  const hier=new Map([...parents,['p-다른감독','p-슈퍼감독'],['p-다른작업자','p-다른감독']]);
+  const sts=[...hier.keys()].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0),cmd:'claude --model sonnet'}));
+  const turnAt=stamp(25);
+  const work={key:'repo/w1',status:'open',owner:'p-감독',turnOwner:'p-다른감독',turnAt,executions:[{key:'repo/t1'}],at:turnAt,
+    history:[{owner:'p-감독',at:stamp(1)}]};
+  // p-감독이 20분에 새 세대로 다시 떴다 → owner의 책임 시각(1분)은 이전 세대다. 차례는 25분에 p-다른감독에게 넘어갔다.
+  const entries=[...finished.entries,{kind:'start',role:'p-감독',session:'kadan-p-감독',panePid:99,t:stamp(20),cmd:'claude --model sonnet'}];
+  const r=await simulate({minutes:65,hier,starts:sts,cards:finished.cards,works:[work],entries});
+  assert.deepEqual(r.nudges.filter(([,role])=>role==='p-다른감독').map(([m])=>m),[40],'차례 시각(25분)부터 15분 뒤 1단');
+  assert.ok(r.records.some(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-다른감독:상위'&&e.minute===55&&!e.resolved),'15분 더 멈추면 2단');
 });

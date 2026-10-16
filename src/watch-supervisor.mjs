@@ -1,4 +1,4 @@
-import { workEntries } from "./handover-state.mjs";
+import { workEntries, currentResponsibility } from "./handover-state.mjs";
 import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
@@ -35,12 +35,11 @@ export function waitingExcluder(waits, parents) {
 // owner만 보면 하위 감독 차례인 업무가 상위의 할 일로 세어지고 정작 차례인 쪽에는 가지 않았다.
 export function idleWorkEntries(works, cards, parents) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
-  const holder = w => parents.has(w.turnOwner) ? w.turnOwner : w.owner;
-  return (works ?? []).filter(w => w?.status === "open" && parents.has(holder(w))
+  return (works ?? []).filter(w => w?.status === "open" && parents.has(currentResponsibility(w, parents).role)
       && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
-    // 세대 판정 시각도 귀속한 역할에 맞춘다: 차례에 귀속하면 차례가 넘어간 시각, owner면 책임이 붙은 시각.
-    .map(w => ({ kind: "send", role: holder(w), taskId: `work:${w.key}`, t: w.at,
-      ownedAt: holder(w) === w.owner ? (w.ownedAt ?? null) : (w.turnAt ?? w.at ?? null) }));
+    // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
+    .map(w => { const { role, since } = currentResponsibility(w, parents);
+      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since }; });
 }
 
 export function assessSupervisorIdle(

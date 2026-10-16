@@ -7,7 +7,7 @@ import { WorkStore } from "../src/work-store.mjs";
 import assert from "node:assert/strict";
 import { assessSupervisorIdle } from "../src/watch-supervisor.mjs";
 import { effectiveWorkOwnership, withEffectiveOwner } from "../src/handover-state.mjs";
-import { previousGenerationWorks, previousGenerationExecutions, buildWatchScope } from "../src/watch-scope.mjs";
+import { previousGenerationWorks, previousGenerationExecutions, buildWatchScope, buildSupervisorScope } from "../src/watch-scope.mjs";
 import { ownerGenerations, isPreviousOwner } from "../src/owner-generation.mjs";
 
 const parents = new Map(Object.entries({ "r-슈퍼": "@user", "r-감독": "r-슈퍼", "r-작업자": "r-감독" }));
@@ -122,4 +122,24 @@ test("차례에 귀속한 업무는 차례가 넘어간 시각(turnAt)으로 세
     { works: [w], cards: [], waits: [], peerEntries: entries }).filter((a) => a.kind === "놀고 있음").map((a) => a.role);
   assert.deepEqual(run(work(at(30))), ["r-감독"], "새 세대(20분) 뒤 turnAt(30분)으로 맡긴 일은 owner의 ownedAt(1분)과 무관하게 할 일");
   assert.deepEqual(run(work(at(10))), [], "새 세대 시작 전 turnAt(10분)에 맡긴 일은 이전 세대");
+});
+
+test("owner와 차례가 같아도 차례가 넘어간 시각(turnAt)으로 세대를 가른다 — 새 세대 뒤 다시 차례를 받은 업무는 할 일", () => {
+  const entries = [start("r-감독", 0), start("r-감독", 20)];
+  const work = (turnAt) => ({ key: "r/w1", status: "open", owner: "r-감독", turnOwner: "r-감독", turnAt,
+    ownedAt: at(1), executions: [], at: at(2) });
+  const run = (w) => assessSupervisorIdle(entries, states(), now, idleMs, null, parents,
+    { works: [w], cards: [], waits: [], peerEntries: entries }).filter((a) => a.kind === "놀고 있음").map((a) => a.role);
+  assert.deepEqual(run(work(at(30))), ["r-감독"], "owner==turnOwner, 새 세대(20분) 뒤 turnAt(30분)");
+  assert.deepEqual(run(work(at(10))), [], "새 세대 전 turnAt(10분)은 이전 세대");
+});
+
+test("감시 범위: owner가 이전 세대여도 현재 차례 역할은 범위에 들어간다. 판정과 같은 currentResponsibility를 쓴다", () => {
+  const entries = [start("r-감독", 0), start("r-감독", 20), start("r-작업자", 0),
+    { kind: "send", role: "r-작업자", taskId: "t1", t: at(0) }, { kind: "done", role: "r-작업자", taskId: "t1", t: at(1) }];
+  const work = (turnOwner, turnAt) => ({ key: "r/w1", status: "open", owner: "r-감독", ownedAt: at(1), turnOwner, turnAt,
+    executions: [{ key: "t1" }], at: at(2) });
+  const card = { id: "t1", key: "t1", role: "r-작업자", board: "r", status: "done", workType: "execution" };
+  const sessions = (w) => [...buildSupervisorScope([card], entries, parents, [w]).sessions];
+  assert.deepEqual(sessions(work("r-슈퍼", at(30))), ["kadan-r-슈퍼"], "owner(감독)는 이전 세대라 빠지고 차례(슈퍼)만");
 });
