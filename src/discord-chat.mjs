@@ -6,8 +6,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {pidAlive} from './pid-alive.mjs';
 import {loadSecret} from './secrets.mjs';
-import {DiscordError, createApi, apiBase, splitDiscord, DISCORD_LIMIT} from './discord-bot.mjs';
+import {DiscordError, createApi, apiBase, splitDiscord, DISCORD_LIMIT, CONNECT_CODES} from './discord-bot.mjs';
 import {scrubSecrets} from './user-notify.mjs';
 
 export const STATE_FILE = 'discord-chat-state.json';
@@ -110,7 +111,7 @@ export function watchLockInfo(home) {
   let pid = NaN;
   try { pid = Number(fs.readFileSync(path.join(home, LOCK_DIR, 'pid'), 'utf8')); } catch { return null; }
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') return null; }
+  if (!pidAlive(pid)) return null;
   let info = {};
   try { info = JSON.parse(fs.readFileSync(path.join(home, LOCK_DIR, 'mode'), 'utf8')); } catch { /* 옛 잠금 */ }
   const mode = info.mode === 'mail' && typeof info.to === 'string' ? 'mail' : info.mode === 'stdout' ? 'stdout' : 'unknown';
@@ -126,8 +127,7 @@ export function acquireWatchLock(home, info = {mode: 'stdout'}) {
       if (error.code !== 'EEXIST') throw error;
       let pid = NaN;
       try { pid = Number(fs.readFileSync(pidFile, 'utf8')); } catch { /* pid 파일이 아직 없음 */ }
-      let alive = true;
-      if (Number.isInteger(pid) && pid > 0) try { process.kill(pid, 0); } catch (e) { alive = e.code !== 'ESRCH'; }
+      const alive = !(Number.isInteger(pid) && pid > 0) || pidAlive(pid);
       if (alive || tries === 1) throw new Error('이미 다른 kadan discord watch가 돌고 있다(같은 상태 파일을 둘이 쓰면 중복 줄이 나온다)');
       fs.rmSync(pidFile, {force: true}); fs.rmSync(modeFile, {force: true}); fs.rmdirSync(lock);
     }
@@ -251,19 +251,46 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   return result;
 }
 
+// 연결 단계 실패(연결 거부·DNS 등)는 요청이 서버에 닿지 않았음이 확실하다. 맥이 잠들었다 깬 직후처럼 잠깐 네트워크가 없을 때
+// 나는 실패라서, 오래 도는 받기만 이것으로 죽지 않고 기다렸다 다시 시도한다(2026-10-16). 10/15·10/16 두 번 다리가 약 1.5초 만에 끝난 유력 원인이다.
+export const CONNECT_OUTAGE_MS = 10 * 60 * 1000;
+export const CONNECT_BACKOFF_MAX_S = 60;
+const isConnectFailure = error => error instanceof DiscordError && error.kind === 'network' && CONNECT_CODES.has(error.code);
+
 // 반복 조회. 같은 지점 3회 소진(exhausted)·4xx·설정 오류는 멈추고 던진다. 반환은 종료 사유.
+// 예외: 연결 단계 실패가 이어지는 동안(CONNECT_OUTAGE_MS 안)은 기다렸다(조회 주기부터 최대 60초까지 두 배씩) 다시 시도한다. 한 번 성공하면 다시 센다.
 export async function runWatch(chat, {once = false, intervalS = DEFAULT_INTERVAL_S, out, err = () => {}, signal, sleep, lockInfo}) {
-  const hash = channelHash(await chat.channelIdOf());
-  const release = acquireWatchLock(chat.home, lockInfo);
   const wait = sleep ?? (ms => new Promise(resolve => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, {once: true}); }));
+  const clock = () => (chat.now ?? Date.now)();
+  let outageSince = null, failures = 0;
+  // 반환: {value} 또는 {aborted:true}. once 모드는 기다리지 않고 그대로 던진다(짧게 끝나는 실행의 동작을 바꾸지 않는다).
+  const retrying = async fn => {
+    for (;;) {
+      try { const value = await fn(); outageSince = null; failures = 0; return {value}; } catch (error) {
+        if (once || !isConnectFailure(error)) throw error;
+        outageSince ??= clock();
+        if (clock() - outageSince > CONNECT_OUTAGE_MS) throw error;
+        const delayS = Math.min(CONNECT_BACKOFF_MAX_S, intervalS * 2 ** failures++);
+        err(`연결 실패(${error.code}) — ${delayS}초 뒤 다시 시도한다(이어진 지 ${Math.round((clock() - outageSince) / 1000)}초, ${Math.round(CONNECT_OUTAGE_MS / 60000)}분을 넘기면 멈춘다)`);
+        await wait(delayS * 1000);
+        if (signal?.aborted) return {aborted: true};
+      }
+    }
+  };
+  const first = await retrying(() => chat.channelIdOf());
+  if (first.aborted) return 'done';
+  const hash = channelHash(first.value);
+  const release = acquireWatchLock(chat.home, lockInfo);
   try {
     let state = readState(chat.home, hash), initial = false; // 깨진 상태 파일이면 여기서 던진다(복구는 문서 참고)
     if (state?.mismatch) err('#비서 채널이 이전과 달라 새 기준선부터 시작한다');
     if (!state || state.mismatch) { state = emptyState(hash); initial = true; }
     for (;;) {
-      await pollOnce(chat, state, {out, err, initial, signal});
-      initial = false;
-      writeState(chat.home, state);
+      const polled = await retrying(() => pollOnce(chat, state, {out, err, initial, signal}));
+      if (!polled.aborted) {
+        initial = false;
+        writeState(chat.home, state);
+      }
       if (once || signal?.aborted) break;
       await wait(intervalS * 1000);
       if (signal?.aborted) break;
