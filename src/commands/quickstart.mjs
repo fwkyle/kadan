@@ -118,10 +118,6 @@ function runUpOnce({ home, flags, auto }) {
       startWatch: () => startWatchSession(home),
       startBridge: () => startBridgeSession(home),
     } : {}),
-    send: ({ role, session, message, roleProfile }) => {
-      const receipt=guardedSend({ floor, session, role, message, roleProfile, recordedPid: recordedPid(lastStartFor(session)) });
-      log(`첫 지문 전송됨: ${session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
-    },
   });
   if (auto && prepared.pending.size) {
     lines.push(...finishRevive({ home, pending: prepared.pending, ops, results: {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawnSync } from 'node:child_process';
 import {readSystemLedger,readMailLedger} from '../src/ledger.mjs';
-import { linkSkills, runInit, runUp, ensureWatch, waitForSettled, readConfig, FIRST_PROMPT, SECRETARY_ROLE, DASHBOARD_ROLE } from '../src/quickstart.mjs';
+import { linkSkills, runInit, runUp, ensureWatch, waitForSettled, readConfig, SECRETARY_ROLE, DASHBOARD_ROLE } from '../src/quickstart.mjs';
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const quiet = () => {};
@@ -70,19 +70,24 @@ function fakeWorld({ alive = {}, frames = ['ready', 'ready'] } = {}) {
 }
 const sessionName = (r) => `kadan-${r}`;
 
-test('runUp은 비서(보이게)와 대시보드(숨김)를 띄우고 준비된 비서에게만 첫 지문을 한 번 보낸다', () => {
+test('runUp은 비서(보이게)와 대시보드(숨김)를 띄우고, 첫 안내는 직접 보내지 않고 start에 맡긴다', () => {
  const home = tmp('kadan-qs-up-'); const w = fakeWorld();
  const out = runUp({ home, flags: { cmd: 'codex', port: '8123' }, floor: w.floor, start: w.start, send: w.send, cliPath: '/repo/src/cli.mjs', nodePath: '/usr/bin/node', sessionName, log: quiet, sleep: () => {} });
  assert.deepEqual(w.started.map((s) => s.role), [SECRETARY_ROLE, DASHBOARD_ROLE]);
  assert.equal(w.started[0].cmd, 'codex'); assert.equal(w.started[0].hidden, false);
  assert.equal(w.started[0].profile, 'secretary');
  assert.equal(w.started[1].hidden, true); assert.equal(w.started[1].cmd, '/usr/bin/node /repo/src/cli.mjs dashboard --port 8123');
- assert.equal(w.sent.length, 1); assert.equal(w.sent[0].role, SECRETARY_ROLE); assert.equal(w.sent[0].message, FIRST_PROMPT);
- assert.equal(w.sent[0].roleProfile, 'secretary');
- assert.deepEqual([out.secretary, out.dashboard, out.prompt], ['started', 'started', 'sent']);
+ assert.equal(w.sent.length, 0); assert.equal(w.started[0]['no-prompt'], false);
+ assert.deepEqual([out.secretary, out.dashboard], ['started', 'started']);
 });
 
-test('runUp은 살아 있는 세션을 다시 만들지 않고, 재사용·--no-prompt·미준비에는 지문을 보내지 않는다', () => {
+test('runUp은 복원한 비서에는 start를 부르지 않아 첫 안내가 가지 않는다', () => {
+ const home = tmp('kadan-qs-restored-'); const w = fakeWorld();
+ const out = runUp({ home, flags: { cmd: 'codex' }, floor: w.floor, start: w.start, cliPath: '/c', sessionName, log: quiet, restoreSecretary: () => 'restored' });
+ assert.deepEqual(w.started.map((s) => s.role), [DASHBOARD_ROLE]); assert.equal(out.secretary, 'restored');
+});
+
+test('runUp은 살아 있는 세션을 다시 만들지 않고, --no-prompt는 start에 넘긴다', () => {
  const home = tmp('kadan-qs-up2-');
  const w1 = fakeWorld({ alive: { 'kadan-비서': true } });
  const o1 = runUp({ home, flags: { cmd: 'codex' }, floor: w1.floor, start: w1.start, send: w1.send, cliPath: '/c', sessionName, log: quiet, sleep: () => {} });
@@ -90,9 +95,7 @@ test('runUp은 살아 있는 세션을 다시 만들지 않고, 재사용·--no-
  const w2 = fakeWorld();
  runUp({ home, flags: { cmd: 'codex', 'no-prompt': true }, floor: w2.floor, start: w2.start, send: w2.send, cliPath: '/c', sessionName, log: quiet, sleep: () => {} });
  assert.equal(w2.sent.length, 0);
- const w3 = fakeWorld({ frames: Array.from({ length: 30 }, (_, i) => `frame${i}`) });
- const o3 = runUp({ home, flags: { cmd: 'codex' }, floor: w3.floor, start: w3.start, send: w3.send, cliPath: '/c', sessionName, log: quiet, sleep: () => {} });
- assert.equal(w3.sent.length, 0); assert.equal(o3.prompt, 'not-ready');
+ assert.equal(w2.started[0]['no-prompt'], true);
  assert.throws(() => runUp({ home, flags: { cmd: 'codex', port: '99999' }, floor: w2.floor, start: w2.start, send: w2.send, cliPath: '/c', sessionName, log: quiet }), /--port/);
 });
 
@@ -133,7 +136,7 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
  try {
   const up = spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden'], { env, encoding: 'utf8', timeout: 60000 });
   assert.equal(up.status, 0, up.stdout + up.stderr);
-  assert.match(up.stdout, /시작됨: kadan-비서/); assert.match(up.stdout, /시작됨: kadan-대시보드/); assert.match(up.stdout, /첫 지문 전송됨/);
+  assert.match(up.stdout, /시작됨: kadan-비서/); assert.match(up.stdout, /시작됨: kadan-대시보드/); assert.doesNotMatch(up.stdout, /첫 (지문|안내) 전송됨/, 'sh는 AI 실행기가 아니라 안내를 붙이지 않는다');
   const list = spawnSync('tmux', ['-u', '-L', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).stdout;
   assert.match(list, /kadan-비서/); assert.match(list, /kadan-대시보드/);
   // 서버가 떴는지는 화면 빌드와 무관한 주소로 본다. 화면(/)은 빌드가 있을 때만 200이다(없으면 의도대로 503 안내) — CI는 빌드 뒤 시험한다.
@@ -147,8 +150,7 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
   const starts = readSystemLedger(home).filter(e=>e.kind==='start');
   assert.equal(starts.length, 2, '두 번째 up은 start를 다시 기록하지 않는다');
   assert.deepEqual(starts.map(e=>e.role),[SECRETARY_ROLE,DASHBOARD_ROLE]);
-  const sends=readMailLedger(home).filter(e=>e.kind==='send');assert.equal(sends.length,1,'재실행은 첫 지문을 중복 전달하지 않는다');
-  assert.equal(sends[0].role,SECRETARY_ROLE);assert.equal(sends[0].floor,'tmux');assert.notEqual(sends[0].transport,'mailbox');
+  assert.equal(readMailLedger(home).filter(e=>e.kind==='send').length,0,'sh 비서에는 첫 안내를 보내지 않는다');
  } finally {
   spawnSync('tmux', ['-L', socket, 'kill-server']);
  }

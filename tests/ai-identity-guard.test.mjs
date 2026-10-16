@@ -108,7 +108,7 @@ test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI �
    assert.notEqual(tmux('has-session','-t','kadan-guard-p').status,0,`${backend}: 세션이 만들어졌다`);
    assert.equal(starts().length,0,`${backend}: start 원장이 남았다`);
    // 프로필+AI 명령은 정상 시작되고 harness·model이 기록된다
-   run('start','guard-p','--hidden','--profile','reviewer','--cmd',`${harness} --model test-model`);
+   run('start','guard-p','--hidden','--profile','reviewer','--cmd',`${harness} --model test-model`,"--no-prompt");
    started.push('kadan-guard-p');
    assert.equal(starts().at(-1).harness,'codex');assert.equal(starts().at(-1).model,'test-model');
    const cardA=assign('card-a','guard-p');
@@ -130,7 +130,7 @@ test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI �
    assert.notEqual(nm.status,0);assert.match(nm.stderr,/모델/);
    assert.equal(sends().length,0,`${backend}: 거부된 전송의 send 원장이 남았다`);
    // (5) AI로 시작한 세션이 죽고 --cmd 없이 다시 시작된 pane — 이전 세대 신원 소급 금지
-   run('start','stale-pane','--hidden','--cmd',`${harness} --model test-model`);
+   run('start','stale-pane','--hidden','--cmd',`${harness} --model test-model`,"--no-prompt");
    assert.equal(tmux('kill-session','-t','kadan-stale-pane').status,0);
    run('start','stale-pane','--hidden');started.push('kadan-stale-pane');
    assign('card-e','stale-pane');
