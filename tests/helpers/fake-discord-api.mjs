@@ -12,7 +12,8 @@ const EPOCH = 1420070400000n;
 
 export async function startFakeDiscord({intent = true} = {}) {
   let seq = (BigInt(Date.now()) - EPOCH) << 22n;
-  const nextId = () => String(++seq);
+  // 현재 시각보다 뒤처지지 않게 올린다(실제 스노플레이크처럼 시각 순서가 맞는다). 같은 밀리초 안에서는 1씩 늘린다.
+  const nextId = () => { const t = (BigInt(Date.now()) - EPOCH) << 22n; seq = seq < t ? t : seq + 1n; return String(seq); };
   const requests = [], rules = [];
   const messages = new Map([[FAKE.channelId, []]]);   // 채널·스레드 id → 메시지 배열
   const threads = new Map();                          // 스레드 id → {id, parent_id, type, name, archived, last_message_id}
@@ -21,6 +22,7 @@ export async function startFakeDiscord({intent = true} = {}) {
     [FAKE.otherChannelId, {id: FAKE.otherChannelId, type: 0, guild_id: FAKE.guildId}],
   ]);
   messages.set(FAKE.otherChannelId, []);
+  const webhooks = new Map([[`${FAKE.hookId}/${FAKE.hookToken}`, FAKE.channelId]]); // 웹훅 id/token → 채널 id
 
   const send = (res, status, json) => { res.writeHead(status, {'content-type': 'application/json'}); res.end(json === undefined ? '' : JSON.stringify(json)); };
   const lastOf = id => messages.get(id)?.at(-1)?.id ?? null;
@@ -40,10 +42,10 @@ export async function startFakeDiscord({intent = true} = {}) {
       if (rule) { rule.times--; if (rule.destroy) return req.socket.destroy(); return send(res, rule.status, rule.body); }
       const p = url.pathname.split('/').filter(Boolean);
       const m = req.method;
-      if (m === 'GET' && p[0] === 'webhooks' && p[1] === FAKE.hookId && p[2] === FAKE.hookToken) return send(res, 200, {id: FAKE.hookId, channel_id: FAKE.channelId});
+      if (m === 'GET' && p[0] === 'webhooks' && webhooks.has(`${p[1]}/${p[2]}`)) return send(res, 200, {id: p[1], channel_id: webhooks.get(`${p[1]}/${p[2]}`)});
       if (m === 'GET' && p[0] === 'users' && p[1] === '@me') return send(res, 200, {id: FAKE.botId, bot: true});
       if (m === 'GET' && p[0] === 'applications' && p[1] === '@me') return send(res, 200, {id: FAKE.appId, flags: intent ? 1 << 18 : 0});
-      if (m === 'GET' && p[0] === 'guilds' && p[2] === 'threads') return send(res, 200, {threads: [...threads.values()].filter(t => !t.archived).map(t => ({...t, last_message_id: lastOf(t.id)}))});
+      if (m === 'GET' && p[0] === 'guilds' && p[2] === 'threads') return send(res, 200, {threads: [...threads.values()].filter(t => !t.archived && t.guild_id === p[1]).map(t => ({...t, last_message_id: lastOf(t.id)}))});
       if (p[0] === 'channels') {
         const id = p[1];
         if (p.length === 2 && m === 'GET') return channelView(id) ? send(res, 200, channelView(id)) : send(res, 404, {code: 10003});
@@ -113,6 +115,23 @@ export async function startFakeDiscord({intent = true} = {}) {
     addThread(parentMsg, name = 'topic') {
       const t = {id: parentMsg.id, parent_id: FAKE.channelId, type: 11, guild_id: FAKE.guildId, name};
       threads.set(t.id, t); messages.set(t.id, []);
+      return t;
+    },
+    // 레포 포럼 채널(type 15)과 그 웹훅을 만든다. 반환: {id, hookId, hookToken, name}. 비밀 파일에는 DISCORD_WEBHOOK_URL_<이름>으로 넣는다.
+    addForum(name, {guildId = FAKE.guildId, type = 15} = {}) {
+      const id = nextId(), hookId = nextId(), hookToken = `FAKE-HOOK-${name}-${hookId.slice(-4)}`;
+      channels.set(id, {id, type, guild_id: guildId, name}); messages.set(id, []);
+      webhooks.set(`${hookId}/${hookToken}`, id);
+      return {id, hookId, hookToken, name, url: `https://discord.com/api/webhooks/${hookId}/${hookToken}`};
+    },
+    // 포럼에 새 글(스레드)을 올린다. 포럼 글의 id는 시작 글의 id와 같고 시작 글은 그 스레드 안에 있다. author를 주면 그 사람이 쓴 것으로 한다.
+    // 기본 작성자는 웹훅(봇)이라 kyle 글로 읽히지 않는다.
+    addForumPost(forum, {name = 'post', content = '알림', author, webhook = true, guildId = FAKE.guildId} = {}) {
+      const id = nextId();
+      const t = {id, parent_id: forum.id, type: 11, guild_id: guildId, name};
+      threads.set(id, t);
+      messages.set(id, [{id, channel_id: id, type: 0, content, timestamp: new Date().toISOString(),
+        ...(webhook && !author ? {author: {id: forum.hookId, bot: true}, webhook_id: forum.hookId} : {author: author ?? {id: FAKE.userId}})}]);
       return t;
     },
     count: re => requests.filter(r => re.test(`${r.method} ${r.path}`)).length,
