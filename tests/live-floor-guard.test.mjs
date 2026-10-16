@@ -60,10 +60,10 @@ test('npm test 실행기(tests/run.mjs)가 격리 환경을 만들고 시험 프
   const probe = path.join(tmp, 'probe.test.mjs');
   fs.writeFileSync(probe, `import fs from 'node:fs';
 import test from 'node:test';
-test('probe', () => { const k = ['KADAN_SOCKET', 'KADAN_WINDOW', 'KADAN_NOTIFY', 'KADAN_ROLE', 'KADAN_ROTTIE_BIN', 'KADAN_HOME'];
+test('probe', () => { const k = ['KADAN_SOCKET', 'KADAN_WINDOW', 'KADAN_NOTIFY', 'KADAN_ROLE', 'KADAN_ROTTIE_BIN', 'KADAN_HOME', 'KADAN_ALLOW_LIVE_FLOOR', 'KADAN_ALLOW_FAKE_ROTTIE'];
   fs.writeFileSync(${JSON.stringify(out)}, JSON.stringify(Object.fromEntries(k.map(n => [n, process.env[n] ?? null])))); });\n`);
   const env = {...process.env, KADAN_SOCKET: 'kadan', KADAN_WINDOW: 'rottie', KADAN_ROLE: 'kadan-슈퍼감독',
-    KADAN_ROTTIE_BIN: '/opt/rottie', KADAN_HOME: path.join(os.homedir(), '.kadan')};
+    KADAN_ROTTIE_BIN: '/opt/rottie', KADAN_ALLOW_LIVE_FLOOR: '1', KADAN_ALLOW_FAKE_ROTTIE: '1', KADAN_HOME: path.join(os.homedir(), '.kadan')};
   delete env.NODE_TEST_CONTEXT;
   const r = spawnSync(process.execPath, [new URL('./run.mjs', import.meta.url).pathname, probe], {env, encoding: 'utf8'});
   assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -71,6 +71,8 @@ test('probe', () => { const k = ['KADAN_SOCKET', 'KADAN_WINDOW', 'KADAN_NOTIFY',
   assert.match(seen.KADAN_SOCKET, /^kadan-test-\d+-/);
   assert.deepEqual([seen.KADAN_WINDOW, seen.KADAN_NOTIFY, seen.KADAN_ROLE, seen.KADAN_ROTTIE_BIN, seen.KADAN_HOME],
     ['none', 'off', null, null, null]);
+  // 부모 셸에 허용값이 남아 있어도 시험 자식에는 가지 않는다.
+  assert.deepEqual([seen.KADAN_ALLOW_LIVE_FLOOR, seen.KADAN_ALLOW_FAKE_ROTTIE], [null, null]);
 });
 
 // R3: 운영 홈의 모든 표기(a~f)는 소켓(없음·kadan) × 창(none·rottie) 어느 조합에서도 막지 않는다. 계정 폴더 대신 격리 폴더와 호환 링크를 쓴다.
@@ -81,7 +83,8 @@ const forms = {
   'a ~/.kadan': {KADAN_HOME: defaultHome},
   'b ~/.kadan-lite(링크)': {KADAN_HOME: path.join(acct, '.kadan-lite')},
   'c 끝에 /': {KADAN_HOME: defaultHome + '/'},
-  'd KADAN_LITE_HOME만': {KADAN_LITE_HOME: defaultHome},
+  'c2 호환 링크 끝 /': {KADAN_HOME: path.join(acct, '.kadan-lite') + '/'},
+  'd KADAN_LITE_HOME만(호환 링크)': {KADAN_LITE_HOME: path.join(acct, '.kadan-lite')},
   'e 두 변수 모두': {KADAN_HOME: defaultHome, KADAN_LITE_HOME: path.join(acct, '.kadan-lite')},
   'f 둘 다 없음': {},
 };
