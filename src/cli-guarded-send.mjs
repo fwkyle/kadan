@@ -88,7 +88,7 @@ export function guardedSend({
   const sourceCwd = entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd ?? null;
   const originalCardPath = extractCardPath(message,sourceCwd);
   const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
-    role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards});
+    role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards,slim:true});
   message = composed.message;
   if (!raw) {
     const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,dispatch:taskId!=null,expectReply:mailContext?.expectReply===true,sender:by,env});
@@ -153,6 +153,17 @@ export function guardedSend({
     receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard, busyMail}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
+    // 실제 바닥은 전송 실패를 영수증이 아니라 예외로 던진다. 전문 시도가 실패했다는 사실만 별도 kind로 남겨
+    // 다음 판정이 delivery-unclear를 보게 한다. send가 아니므로 발령·우편함·재안내·중복 방지가 전달로 보지 않는다.
+    // 기록 실패는 원래 오류를 가리지 않는다. 자동 재전송은 없다.
+    const attempted = composed.metadata.status === "applied" && composed.metadata.instructionsMode === "full";
+    if (attempted) {
+      try {
+        record({kind: "send-failed", role, session, keyDelivery: error.delivery, floor: selectedFloor.name,
+          instructions: {mode: "full", reason: composed.metadata.instructionsReason, profile: composed.metadata.profile,
+            templateDigest: composed.metadata.templateDigest, generation: composed.metadata.generation}});
+      } catch { /* 원래 오류를 던진다 */ }
+    }
     throw error;
   }
   // --raw는 우편 ID·ack 안내를 붙이지 않고 본문 전체를 창에 넣는다. 창 전달이 성공했으면 수신자 직접 ack와
@@ -174,6 +185,8 @@ export function guardedSend({
     role,
     session,
     roleInstructions: composed.metadata,
+    ...(composed.metadata.status==='applied'?{instructions:{mode:composed.metadata.instructionsMode,reason:composed.metadata.instructionsReason,
+      profile:composed.metadata.profile,templateDigest:composed.metadata.templateDigest,generation:composed.metadata.generation}}:{}),
     originalCardPath,
     ...(composed.metadata.profile ? {roleProfile:composed.metadata.profile} : {}),
     ...(runnerGuard?.ledger ? {runnerGuard:runnerGuard.ledger} : {}),
