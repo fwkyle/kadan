@@ -219,14 +219,14 @@ function decideInstructionsMode({role,profile,templateDigest,entries,current,una
   if (board==='unknown') return full('facts-unavailable');
   if (board==='other') return full('board-not-in-trial');
   if (current) return full('dispatch');
-  const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>e.kind==='send'&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i)).map(({e})=>e);
+  const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>(e.kind==='send'||e.kind==='send-failed')&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i)).map(({e})=>e);
   const last=fulls.at(-1);
   if (!last) return full('generation-first');
   if (last.keyDelivery!=='sent') return full('delivery-unclear');
   if (last.instructions.profile!==profile) return full('profile-changed');
   if (last.instructions.templateDigest!==templateDigest) return full('template-changed');
   const elapsed=now-Date.parse(last.t);
-  if (!Number.isFinite(elapsed)||elapsed>FULL_INTERVAL_MS) return full('interval');
+  if (!Number.isFinite(elapsed)||elapsed>=FULL_INTERVAL_MS) return full('interval');
   return {mode:'summary',reason:'within-interval',generation};
 }
 
