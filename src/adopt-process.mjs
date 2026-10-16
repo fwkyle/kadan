@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {assertRottieArgv} from './floor-rottie.mjs';
 
 export function processIdentity(pid, run = spawnSync) {
   if (!/^\d+$/.test(String(pid)) || Number(pid) <= 1) throw new Error('프로세스 PID 확인 실패');
@@ -24,6 +25,7 @@ export function ancestors(pid = process.pid, inspect = processIdentity) {
 }
 
 export function rottieQuery(bin, args, run = spawnSync) {
+  assertRottieArgv(args);
   if (!path.isAbsolute(bin || '')) throw new Error('원본 Rottie 실행 파일 경로가 없습니다.');
   const result = run(bin, [...args, '--json'], {encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024});
   let reply;
