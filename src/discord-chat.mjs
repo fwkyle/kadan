@@ -94,9 +94,11 @@ export function createChat({home, env = process.env, cfg = loadChatConfig(env, h
       for (const w of cfg.repoWebhooks) {
         const known = forumCache.get(w.repo);
         if (known?.ok || (known && !force && clock - known.at < FORUM_RETRY_MS)) continue;
+        let hookChannel = null;                                    // 웹훅으로 알아낸 채널(봇 권한이 없어도 알 수 있다) — 못 푼 채널의 등록 해시를 알아보는 데 쓴다
         try {
           const hookInfo = (await api('GET', `/webhooks/${w.id}/${w.token}`, undefined, {noAuth: true})).json;
           if (!isId(hookInfo?.channel_id)) throw new DiscordError('웹훅 응답에 채널 정보가 없다', {kind: 'http'});
+          hookChannel = hookInfo.channel_id;
           const info = (await api('GET', `/channels/${hookInfo.channel_id}`)).json;
           if (!FORUM_TYPES.has(info?.type)) throw new Error('포럼 채널이 아니다');
           if ((info.guild_id ?? null) !== guild) throw new Error('#비서와 다른 서버라 받지 않는다');
@@ -105,7 +107,7 @@ export function createChat({home, env = process.env, cfg = loadChatConfig(env, h
           if (isConnectFailure(error)) throw error; // 연결 문제는 바깥 재시도(runWatch)에 맡긴다
           const reason = error.message ?? '알 수 없음';
           if (!known || known.reason !== reason) err(`레포 포럼 ${w.repo}: 받지 않는다 — ${reason}`);
-          forumCache.set(w.repo, {ok: false, at: clock, reason, name: w.repo});
+          forumCache.set(w.repo, {ok: false, at: clock, reason, name: w.repo, channelId: hookChannel ?? known?.channelId ?? null});
         }
       }
       return cfg.repoWebhooks.map(w => forumCache.get(w.repo)).filter(f => f?.ok);
@@ -300,8 +302,17 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   // 어느 쪽인지 알 수 없으니 지우지 않는다. 그 사이 쓴 글은 아래 시각 하한이 막는다.
   const labelled = new Set(Object.values(state.forumRepos));
   const resolvedHashes = new Set(wanted.values());
-  const allResolved = chat.cfg.repoWebhooks.every(w => wanted.has(w.repo));
-  if (allResolved) for (const h of Object.keys(state.forums)) if (!labelled.has(h) && !resolvedHashes.has(h)) dropped.add(h);
+  // 포럼별로 판정한다: 이번에 못 푼 레포의 채널도 웹훅으로는 알 수 있으면 그 해시는 '설정에 있는 등록'이라 지우지 않고, 어느 레포와도 맞지 않는 이름표 없는 해시만 해제로 본다.
+  // 못 푼 레포 중 채널을 전혀 모르는 것이 있으면 어느 해시가 그 레포 것인지 알 수 없어 지우지 않는다(그 사이 쓴 글은 시각 하한과 결정 처리기의 10분 상한이 막는다).
+  const failures = new Map(chat.forumFailures().map(f => [f.name, f]));
+  const unresolvedHashes = new Set();
+  let unknownChannel = false;
+  for (const w of chat.cfg.repoWebhooks) {
+    if (wanted.has(w.repo)) continue;
+    const id = failures.get(w.repo)?.channelId;
+    if (id) unresolvedHashes.add(channelHash(id)); else unknownChannel = true;
+  }
+  if (!unknownChannel) for (const h of Object.keys(state.forums)) if (!labelled.has(h) && !resolvedHashes.has(h) && !unresolvedHashes.has(h)) dropped.add(h);
   const newForums = forums.filter(f => !state.forums[channelHash(f.id)] || dropped.has(channelHash(f.id)));
   if (dropped.size || newForums.length) {
     const activeNow = await loadActive();

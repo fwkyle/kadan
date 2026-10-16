@@ -50,7 +50,16 @@ export const writtenAfter = (messageId, requestMessageId) =>
   typeof messageId === 'string' && typeof requestMessageId === 'string' && DISCORD_ID.test(messageId) && DISCORD_ID.test(requestMessageId)
   && BigInt(messageId) > BigInt(requestMessageId);
 
-export function createDecisionAnswerer({home, chat, env = process.env, log = () => {}, store = new DecisionStore(home), mailRole = SECRETARY}) {
+// 상태 파일이 어떻게 꼬여도 감시하지 않던 동안 쓴 글이 결정으로 기록되지 않게 하는 상태와 무관한 상한.
+// 다리는 5초마다 조회하고 꺼져도 1분 안에 되살아나므로 정상 답은 몇 초~몇 분 안에 처리된다. 10분 넘게 늦게 받은 글은 결정으로 기록하지 않는다.
+// 미래 시각 id(시계 차이)는 정상으로 보되 1시간 넘게 미래면 손상으로 보고 기록하지 않는다.
+export const LATE_ANSWER_MS = 10 * 60 * 1000;
+export const FUTURE_LIMIT_MS = 60 * 60 * 1000;
+const DISCORD_EPOCH_MS = 1420070400000n;
+export const messageTimeMs = id => Number((BigInt(id) >> 22n) + DISCORD_EPOCH_MS);
+
+export function createDecisionAnswerer({home, chat, env = process.env, log = () => {}, store = new DecisionStore(home), mailRole = SECRETARY,
+  now = () => (chat.now ?? Date.now)(), lateMs = LATE_ANSWER_MS}) {
   const by = userActorNames(env)[0];
   // 같은 스레드에 답 글을 올린다. 실패하면 false(받기를 멈추지 않는다 — 봇에게 스레드 쓰기 권한이 아직 없을 수 있다).
   const post = async (line, text, quiet) => {
@@ -60,6 +69,12 @@ export function createDecisionAnswerer({home, chat, env = process.env, log = () 
   const settled = async (line, d) => { if (!await post(line, `${stateText(d)} (결정 ${d.id.slice(0, 8)}) — 기록을 바꾸지 않았습니다.`, true)) return false; markHandled(home, line.id); return true; };
 
   async function record(line, d, choice) {
+    const age = now() - messageTimeMs(line.id);
+    if (!(age <= lateMs && age >= -FUTURE_LIMIT_MS)) {       // 늦게 받은 답(또는 손상된 미래 id): 기록하지 않고 조용히 알린 뒤 일반 글로 비서 우편에 보낸다
+      log(`늦게 받은 결정 답을 기록하지 않았다: 디코 글 ${line.id} (${Math.round(age / 1000)}초 전)`);
+      await post(line, `늦게 받은 답이라 기록하지 않았습니다. 다시 답해 주세요: ${optionList(d)}`, true);
+      return false;
+    }
     let fresh;
     try { fresh = store.get(d.id); } catch { return false; }
     if (fresh.status !== 'open') return settled(line, fresh);

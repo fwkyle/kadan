@@ -8,7 +8,7 @@ import {spawn} from 'node:child_process';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {createChat, runWatch} from '../src/discord-chat.mjs';
 import {createMailOut} from '../src/discord-mail.mjs';
-import {createDecisionAnswerer, matchChoice, writtenAfter, HANDLED_FILE} from '../src/discord-decision.mjs';
+import {createDecisionAnswerer, matchChoice, writtenAfter, LATE_ANSWER_MS, HANDLED_FILE} from '../src/discord-decision.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
@@ -40,6 +40,11 @@ async function world(fake, {register = true} = {}) {
   const w = {home, fake, forum, post, chat, store, calls, errs, decide, env,
     run: () => runWatch(chat, {once: true, out: emit, err: e => errs.push(e)}),
     // 나중에 포럼 키를 비밀 파일에 더하고 새 프로세스처럼 다시 만든다(옛 모양 상태 파일 위에 새 채널 등록)
+    hookFile,
+    rebuild() {                                                       // 새 프로세스처럼 chat·처리기를 다시 만든다
+      chat = createChat({home, env, sleep: noSleep});
+      decide = createDecisionAnswerer({home, chat, env, log: e => errs.push(e), store});
+    },
     disableForum() {                                                  // 포럼 키를 비밀 파일에서 뺀다(등록 해제)
       fs.writeFileSync(hookFile, baseHook.split('\n').filter(l => !l.startsWith('DISCORD_WEBHOOK_URL_KADAN=')).join('\n'), {mode: 0o600});
       chat = createChat({home, env, sleep: noSleep});
@@ -470,5 +475,90 @@ test('20 R2 이름표 없는 옛 등록이라도 설정에는 있으나 이번�
     assert.deepEqual(after.forums, st.forums, '못 푼 것은 해제가 아니다');
     assert.deepEqual(after.threads, st.threads, '포럼 cursor 보존');
     assert.equal(after.main, st.main, '#비서 cursor 보존');
+  } finally { await fake.close(); }
+});
+
+const sf = ms => String((BigInt(ms) - 1420070400000n) << 22n);     // 시각(ms) → 디코 글 id
+
+test('21 4라운드 바탕 규칙: 10분 넘게 늦게 받은 답은 기록하지 않고 조용히 다시 묻는다. 경계 9분59초/10분1초/미래 1시간 초과', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const N0 = Date.now();
+    const mk = (question, i) => {                                      // 요청 메시지는 이틀 전 id로 둔다(하루 전 답도 0번 규칙은 통과)
+      const d = w.decision(question);
+      setDecision(w.home, d.d.id, {threadId: w.post.id, messageId: sf(N0 - 2 * 86400e3 - i), forum: true});
+      return {d: d.d, req: sf(N0 - 2 * 86400e3 - i)};
+    };
+    const answerer = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store, now: () => N0});
+    const line = (at, req) => ({id: sf(at), where: 'thread', threadId: w.post.id, channel: 'kadan', content: '1', replyTo: req});
+    const ok1 = mk('경계 9:59?', 1), ok2 = mk('미래 1초?', 2), ok3 = mk('미래 59분?', 3);
+    assert.equal(await answerer(line(N0 - (LATE_ANSWER_MS - 1000), ok1.req)), true, '9분 59초는 인정');
+    assert.equal(w.store.get(ok1.d.id).status, 'answered');
+    assert.equal(await answerer(line(N0 + 1000, ok2.req)), true, '미래 1초(시계 차이)는 정상');
+    assert.equal(await answerer(line(N0 + 59 * 60e3, ok3.req)), true, '미래 59분은 정상');
+    for (const [name, at] of [['10분 1초', N0 - (LATE_ANSWER_MS + 1000)], ['미래 1시간 1초', N0 + 3601e3], ['하루 전', N0 - 86400e3]]) {
+      const x = mk(`${name}?`, 10 + at % 7);
+      const before = w.botPosts().length;
+      assert.equal(await answerer(line(at, x.req)), false, `${name}: 일반 글로 우편`);
+      assert.equal(w.store.get(x.d.id).status, 'open', `${name}: 기록 0`);
+      const notes = w.botPosts().slice(before);
+      assert.equal(notes.length, 1);
+      assert.match(notes[0].content, /^늦게 받은 답이라 기록하지 않았습니다\. 다시 답해 주세요: 1\) 합침 2\) 보류$/);
+      assert.equal(notes[0]._body.flags, 4096, '조용히');
+      assert.deepEqual(notes[0]._body.allowed_mentions, {parse: []});
+    }
+  } finally { await fake.close(); }
+});
+
+test('22 늦게 받은 답은 실제 다리에서도 기록 0, 조용한 안내 1개, 비서 우편 1통이다(상태 경로와 무관한 상한)', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?');
+    const mine = fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
+    const real = Date.now();
+    w.decide = createDecisionAnswerer({home: w.home, chat: w.chat, env: w.env, store: w.store, now: () => real + 11 * 60e3});
+    // world의 run은 처음 만든 처리기를 쓰므로 같은 방식으로 한 바퀴를 직접 돌린다
+    const mailOut = createMailOut({home: w.home});
+    await runWatch(w.chat, {once: true, out: async line => ((await w.decide(line)) ? undefined : mailOut(line)), err: () => {}});
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
+    assert.equal(w.botPosts().filter(m => /^늦게 받은 답이라/.test(m.content)).length, 1);
+    assert.deepEqual(w.mails().map(m => m.sourceKey), [`discord:${mine.id}`]);
+  } finally { await fake.close(); }
+});
+
+test('23 R2 복합 재현(5단계): 다른 포럼이 403인 동안 옛 형식 해제 정리가 미뤄져도 제외 중 답은 재생되지 않는다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const other = fake.addForum('other-repo');
+    fake.addForumPost(other);
+    const base = fs.readFileSync(w.hookFile, 'utf8').split('\n').filter(l => l && !/^DISCORD_WEBHOOK_URL_(KADAN|OTHER_REPO)=/.test(l)).join('\n') + '\n';
+    const setKeys = ({kadan, otherRepo}) => fs.writeFileSync(w.hookFile, base + (kadan ? `DISCORD_WEBHOOK_URL_KADAN=${w.forum.url}\n` : '') + (otherRepo ? `DISCORD_WEBHOOK_URL_OTHER_REPO=${other.url}\n` : ''), {mode: 0o600});
+    const stateFile = path.join(w.home, 'discord-chat-state.json');
+    // 1. 두 포럼을 정상 등록하고 kadan 스레드에 열린 결정 요청을 둔다
+    setKeys({kadan: true, otherRepo: true}); w.rebuild(); await w.run();
+    const a = w.decision('A를 합칠까요?'); await w.run();
+    // 2. forumRepos만 빼서 이전 버전 형식으로 만든다
+    const legacy = JSON.parse(fs.readFileSync(stateFile, 'utf8')); delete legacy.forumRepos;
+    fs.writeFileSync(stateFile, JSON.stringify(legacy) + '\n');
+    // 3. kadan 키를 빼고 other-repo 채널 조회는 403으로 만든다
+    setKeys({kadan: false, otherRepo: true});
+    fake.inject({match: new RegExp(`GET /channels/${other.id}$`), status: 403, body: {code: 50001}, times: 20});
+    w.rebuild(); await w.run();
+    const removed = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.equal(Object.keys(removed.forums).length, 1, '다른 포럼 403이어도 kadan 해시는 정리된다(남는 것은 other-repo 하나)');
+    assert.equal(removed.threads[w.post.id], undefined, 'kadan 글 cursor 정리');
+    // 4. 제외 중에 답을 단다
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
+    // 5. other-repo가 아직 403인 채 kadan 키를 복원한다
+    setKeys({kadan: true, otherRepo: true});
+    w.rebuild(); await w.run();
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
+    assert.equal(w.mails().length, 0);
+    assert.equal(w.botPosts().filter(m => /기록|이미|열린 결정|늦게/.test(m.content)).length, 0);
   } finally { await fake.close(); }
 });
