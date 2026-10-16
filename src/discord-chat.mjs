@@ -295,7 +295,13 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
   for (const [repo, h] of Object.entries(state.forumRepos)) {
     if (!configured.has(repo) || (wanted.has(repo) && wanted.get(repo) !== h)) { dropped.add(h); delete state.forumRepos[repo]; }
   }
-  // 등록 안 된 채널의 해시(forumRepos 이름표가 없는 옛 기록 포함)는 지금 푼 채널 집합에 없고 이름표도 없으면 그대로 둔다 — 빈 forums·옛 cursor는 아래 시각 하한이 막는다.
+  // 이름표(forumRepos)가 없는 옛 형식의 해시는 '활성 등록'으로 믿지 않는다. 이번 회차에 푼 채널과 맞으면 이름표를 채우고(아래),
+  // 맞는 채널이 없는데 설정의 모든 레포를 이번에 풀었다면 이미 해제된 것이라 지운다. 설정에는 있으나 이번에 못 푼 채널(403·5분 재해석 대기)이 있으면
+  // 어느 쪽인지 알 수 없으니 지우지 않는다. 그 사이 쓴 글은 아래 시각 하한이 막는다.
+  const labelled = new Set(Object.values(state.forumRepos));
+  const resolvedHashes = new Set(wanted.values());
+  const allResolved = chat.cfg.repoWebhooks.every(w => wanted.has(w.repo));
+  if (allResolved) for (const h of Object.keys(state.forums)) if (!labelled.has(h) && !resolvedHashes.has(h)) dropped.add(h);
   const newForums = forums.filter(f => !state.forums[channelHash(f.id)] || dropped.has(channelHash(f.id)));
   if (dropped.size || newForums.length) {
     const activeNow = await loadActive();

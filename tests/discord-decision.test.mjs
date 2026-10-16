@@ -403,3 +403,72 @@ test('17 F2-B 빈 forums와 옛 스레드 cursor가 함께 남은 상태에서 �
     assert.equal(w.store.get(a.d.id).status, 'open');
   } finally { await fake.close(); }
 });
+
+test('18 R1 손상된 요청 메시지 id(0x1·+1·-1·공백·소수)나 글 id는 결정 답 후보에서 뺀다 → 기록 0, 일반 글', async () => {
+  assert.equal(writtenAfter('6', '5'), true);
+  for (const bad of ['0x1', '+1', '-1', ' 1', '1 ', '1.5', '', '0', '01', 'abc', '1e3', '١', undefined, null, 5]) {
+    assert.equal(writtenAfter('99', bad), false, `요청 id ${JSON.stringify(bad)}`);
+    assert.equal(writtenAfter(bad, '1'), false, `글 id ${JSON.stringify(bad)}`);
+  }
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    for (const bad of ['0x1', '+1', '-1', ' 1', '1.5']) {
+      const d = w.decision(`손상 ${bad}?`);
+      setDecision(w.home, d.d.id, {threadId: w.post.id, messageId: bad, forum: true});
+      const mine = fake.add(w.post.id, {content: '1'});
+      const reply = fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: bad}});
+      await w.run();
+      assert.equal(w.store.get(d.d.id).status, 'open', `요청 id ${bad}`);
+      assert.ok(w.mails().some(m => m.sourceKey === `discord:${mine.id}`) && w.mails().some(m => m.sourceKey === `discord:${reply.id}`));
+      w.store.cancel(d.d.id, {revision: 1, reason: '시험 정리'}, SUPER);
+    }
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.botPosts().filter(m => /기록됨|열린 결정|이미/.test(m.content)).length, 0);
+  } finally { await fake.close(); }
+});
+
+test('19 R2 이전 버전 상태(forumRepos 없음)에서 등록을 해제했다 다시 넣어도 그 사이 쓴 답은 재생되지 않는다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const a = w.decision('A를 합칠까요?');
+    const file = path.join(w.home, 'discord-chat-state.json');
+    const st = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(Object.keys(st.forums).length === 1 && Object.keys(st.threads).length);
+    delete st.forumRepos;                                             // 이전 버전이 쓴 모양: forums 해시와 cursor만 있다
+    fs.writeFileSync(file, JSON.stringify(st) + '\n');
+    w.disableForum();
+    await w.run();                                                    // 키를 뺀 회차: 해제로 보고 기록·cursor를 지운다
+    const mid = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.keys(mid.forums), []);
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});  // 제외 중에 쓴 답
+    w.enableForum();
+    await w.run();
+    assert.equal(w.answers().length, 0);
+    assert.equal(w.store.get(a.d.id).status, 'open');
+    assert.equal(w.mails().length, 0);
+    assert.equal(w.botPosts().filter(m => /기록|이미|열린 결정/.test(m.content)).length, 0);
+    fake.add(w.post.id, {content: '2', type: 19, message_reference: {message_id: a.msg.id}});
+    await w.run();
+    assert.equal(w.store.get(a.d.id).answer.choice, '보류', '재등록 뒤 새 답은 받는다');
+  } finally { await fake.close(); }
+});
+
+test('20 R2 이름표 없는 옛 등록이라도 설정에는 있으나 이번에 못 푼 채널(403)은 해제로 보지 않는다. #비서 cursor는 그대로', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake);
+    const file = path.join(w.home, 'discord-chat-state.json');
+    const st = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete st.forumRepos;
+    fs.writeFileSync(file, JSON.stringify(st) + '\n');
+    fake.inject({match: new RegExp(`GET /channels/${w.forum.id}$`), status: 403, body: {code: 50001}, times: 1});
+    w.enableForum();                                                  // 새 프로세스: 못 푼 채널
+    await w.run();
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(after.forums, st.forums, '못 푼 것은 해제가 아니다');
+    assert.deepEqual(after.threads, st.threads, '포럼 cursor 보존');
+    assert.equal(after.main, st.main, '#비서 cursor 보존');
+  } finally { await fake.close(); }
+});

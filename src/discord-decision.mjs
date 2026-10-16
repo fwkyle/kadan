@@ -44,9 +44,11 @@ function markHandled(home, id) {
 
 // 디코 글 id는 시간순(snowflake)이다. 결정 요청 메시지보다 먼저(같은 id 포함) 쓰인 글은 그 결정의 답이 될 수 없다.
 // 상태 파일·cursor·재등록이 어떻게 꼬여도 옛 글이 새 결정의 답으로 읽히지 않게 하는 바탕 규칙이다.
-export const writtenAfter = (messageId, requestMessageId) => {
-  try { return BigInt(messageId) > BigInt(requestMessageId); } catch { return false; }
-};
+// 양쪽이 십진 숫자열 id 모양이어야 비교한다 — BigInt가 받아들이는 `0x1`·`+1`·`-1`·공백·빈 값 같은 손상 값은 후보에서 뺀다.
+const DISCORD_ID = /^[1-9][0-9]{0,19}$/;
+export const writtenAfter = (messageId, requestMessageId) =>
+  typeof messageId === 'string' && typeof requestMessageId === 'string' && DISCORD_ID.test(messageId) && DISCORD_ID.test(requestMessageId)
+  && BigInt(messageId) > BigInt(requestMessageId);
 
 export function createDecisionAnswerer({home, chat, env = process.env, log = () => {}, store = new DecisionStore(home), mailRole = SECRETARY}) {
   const by = userActorNames(env)[0];
