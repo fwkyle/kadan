@@ -3,23 +3,25 @@
 import {fileURLToPath} from 'node:url';
 import {loadSecret} from './secrets.mjs';
 import {createApi, apiBase, DiscordError} from './discord-bot.mjs';
+import {sanitize} from './thread-archive.mjs';
 import {setThreadArchived} from './discord-chat.mjs';
 
 export async function run({home, env, threadId, archived, budgetMs}) {
   const bot = loadSecret(env, home, 'discord-bot');
   const token = bot.values?.DISCORD_BOT_TOKEN;
   if (!token || /\s/.test(token)) return {outcome: 'failed', attempts: 0, skip: true, reason: '봇 설정 없음(discord-bot 비밀 파일의 DISCORD_BOT_TOKEN)'};
+  const done = r => sanitize(r, [token]);
   try {
     const api = createApi({base: apiBase(env), token, secrets: [token]});
     await setThreadArchived({api: (method, path, body) => api(method, path, body, {budgetMs})}, threadId, archived);
-    return {outcome: 'sent', attempts: 1};
+    return done({outcome: 'sent', attempts: 1});
   } catch (error) {
     if (error instanceof DiscordError) {
-      const base = {attempts: error.kind === 'budget' ? 0 : 1, reason: error.message};
-      if (error.kind === 'uncertain') return {outcome: 'uncertain', ...base};
-      return {outcome: 'failed', ...base, ...(error.status ? {status: error.status} : {}), ...(error.code ? {code: error.code} : {})};
+      const base = {attempts: error.attempts ?? 1, reason: error.message};
+      if (error.kind === 'uncertain') return done({outcome: 'uncertain', ...base});
+      return done({outcome: 'failed', ...base, status: error.status, code: error.code});
     }
-    return {outcome: 'failed', attempts: 0, skip: true, reason: '보관 준비 오류'};
+    return done({outcome: 'failed', attempts: 0, skip: true, reason: '보관 준비 오류'});
   }
 }
 

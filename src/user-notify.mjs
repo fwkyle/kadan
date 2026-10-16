@@ -128,11 +128,15 @@ function workCtx({home, env, webhook, work, deadline, secrets}) {
 
 // 글을 봇으로 다시 연다. 반환 {ok:true} 또는 {ok:false, result}.
 //   404(글 없음)는 result를 그대로 돌려줘 호출 쪽의 '지워진 글' 경로가 이어받는다.
-//   그 밖의 4xx·봇 설정 없음은 'archived-skip'(쓰기 건너뜀, 시스템 알림으로 대신하지 않음, blockedUntil 없음), 5xx·불확실은 실패 그대로.
+//   그 밖의 4xx·봇 설정 없음은 'archived-skip'(그 글 쓰기는 건너뜀, blockedUntil 없음 — 사용자가 알아야 할 알림은 notifyUser가 시스템 알림 대체 전달로 내린다. 대체 전달이 없던 상태 고치기는 로그만), 5xx·불확실은 실패 그대로.
 function resumeThread(ctx, threadId) {
   ctx.resumed = true;
   const r = ctx.left() < MIN_SEND_MS ? budgetOut() : setArchivedSync({home: ctx.home, env: ctx.env, threadId, archived: false, budgetMs: ctx.left()});
-  if (r.outcome === 'sent') { setArchived(ctx.home, ctx.work, false); return {ok: true}; }
+  if (r.outcome === 'sent') {
+    // 이 글 id를 가진 기록(보통 ctx.work, 결정 요청이 다른 업무의 글에 있으면 그 업무)의 보관 표시를 푼다.
+    for (const [work, e] of Object.entries(readThreads(ctx.home))) if (e.threadId === threadId && e.archived) setArchived(ctx.home, work, false);
+    return {ok: true};
+  }
   if (r.outcome === 'failed' && r.status === 404) return {ok: false, result: r};
   if (r.skip === true || is4xx(r))
     return {ok: false, result: {outcome: 'archived-skip', attempts: r.attempts ?? 0, status: r.status, reason: `보관된 글을 다시 열지 못해 쓰기를 건너뜀 — ${r.reason ?? '사유 없음'}`}};
@@ -220,10 +224,17 @@ function sendForum({home, env, webhook, work, threadName, content, allowedMentio
     if (plan.skip) return plan.skip;
     const post = extra => left() < MIN_SEND_MS ? budgetOut() : postDiscordWebhook({webhook, content: plan.content, allowedMentions: plan.allowedMentions, budgetMs: left(), ...extra});
     if (decision?.edit) {
-      const done = editDecision({home, decision, post, forum: true});
+      // 결정 요청이 보관된 글에 있으면 고치기 전에 먼저 다시 열고(재개가 막히면 고치기를 건너뛴다), 50083이면 재개 뒤 한 번만 다시 시도한다.
+      const at = readDecisions(home)[decision.id], cur = threads[work];
+      if (at?.forum && at.threadId && cur?.archived && cur.threadId === at.threadId) {
+        const o = resumeThread(ctx, at.threadId);
+        if (!o.ok && !resumeGone(o)) return o.result;
+      }
+      const done = editDecision({home, decision, post, forum: true, resumeWith: (threadId, attempt) => withResume(ctx, threadId, attempt)});
       if (done) {
         // 메시지를 고쳤어도 그 업무 글의 상태 메시지는 기준대로 맞춘다(결정 전용 글은 업무가 아니라 'none').
-        const known = threads[work];
+        // 재개했으면 기록이 바뀌었으니 최신 기록으로 맞춘다(끝난 업무면 고치기 뒤 다시 보관된다).
+        const known = readThreads(home)[work];
         return done.outcome === 'sent' && known ? {...done, statusSync: syncWork(ctx, known)} : done;
       }
     }
@@ -290,10 +301,10 @@ const noteRead = (r, plan) => (plan.readFailed ? {...r, readFailed: true} : r);
 
 // 남긴 결정 요청 메시지를 고친다. 돌려주는 값: 결과(고침 성공, 또는 404 아닌 실패라 더 시도하지 않음) 또는 null(못 찾음 → 호출 쪽이 새 메시지).
 // 기록이 없거나, 기록한 길(포럼/기본)이 지금 길과 다르거나, 수정이 404(지워짐·다른 웹훅)면 못 찾은 것이다.
-function editDecision({home, decision, post, forum}) {
+function editDecision({home, decision, post, forum, resumeWith = (threadId, attempt) => attempt()}) {
   const known = readDecisions(home)[decision.id];
   if (!known || known.forum !== forum) return null;
-  const r = post({threadId: known.threadId ?? undefined, messageId: known.messageId, content: decision.edit, allowedMentions: {parse: []}});
+  const r = resumeWith(known.threadId, () => post({threadId: known.threadId ?? undefined, messageId: known.messageId, content: decision.edit, allowedMentions: {parse: []}}));
   if (r.outcome === 'failed' && r.status === 404) return null;
   if (r.outcome === 'sent') setDecision(home, decision.id, {...known, resolved: true});
   return r;
@@ -418,8 +429,7 @@ export function notifyUser(message, spawn, opts = {}) {
     }
   }
   if (result.via === 'discord') return result;
-  // 보관된 글을 다시 열지 못해 쓰기를 건너뛴 경우: 잘못된 채널(#브리핑·시스템 알림)로 새지 않게 대신 보내지 않는다. 사유는 notify-log에 있다.
-  if (result.discord?.outcome === 'archived-skip') return {...result, via: 'none', error: null};
+  // 보관된 글을 다시 열지 못해 쓰기를 건너뛴 경우(archived-skip)도 여기로 내려와 다른 디코 채널 없이 기존 대체 전달(시스템 알림)을 받는다.
   // opts.systemFallback === false: 디코로 못 보내면 맥 시스템 알림으로 대신하지 않는다(조용한 알림 전용 — 놓쳐도 되는 알림이 맥을 울리지 않게).
   if (opts.systemFallback === false) return {...result, via: 'none', error: null};
   // 시스템 알림도 같은 판단이다: 이미 해결 메시지를 보낸 결정의 요청은 다시 띄우지 않고, 해결됐다고 읽히면 해결 문구로 바꾼다.

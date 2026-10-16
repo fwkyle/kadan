@@ -18,9 +18,10 @@ const MAX_RATE_WAIT_MS = 30000;
 export const CONNECT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
 
 export class DiscordError extends Error {
-  constructor(message, {kind, status = null, code = null, exhausted = false} = {}) {
+  constructor(message, {kind, status = null, code = null, exhausted = false, attempts = null} = {}) {
     super(message);
     this.kind = kind; this.status = status; this.code = code; this.exhausted = exhausted;
+    this.attempts = attempts; // 실제로 나간 요청 수(알 수 없으면 null)
   }
 }
 
@@ -50,7 +51,7 @@ export async function discordRequest({base, token, method = 'GET', path, body, i
   const headers = {'user-agent': USER_AGENT, ...(token ? {authorization: `Bot ${token}`} : {}),
     ...(body === undefined ? {} : {'content-type': 'application/json'})};
   for (let attempt = 1; ; attempt++) {
-    if (left() <= 0) throw new DiscordError('시간 상한 도달', {kind: 'budget'});
+    if (left() <= 0) throw new DiscordError('시간 상한 도달', {kind: 'budget', attempts: attempt - 1});
     let status, text, headerRetry;
     try {
       const res = await fetchFn(base + path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body),
@@ -61,8 +62,8 @@ export async function discordRequest({base, token, method = 'GET', path, body, i
     } catch (error) {
       const code = error?.cause?.code ?? (['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT' : 'ERR');
       if (!CONNECT_CODES.has(code) && !idempotent)
-        throw new DiscordError(`연결 뒤 응답이 불확실하다(${code}) — 보냈는지 알 수 없어 재시도하지 않는다`, {kind: 'uncertain', code});
-      if (attempt >= MAX_ATTEMPTS) throw new DiscordError(`네트워크 오류(${code}) ${attempt}회 — 멈춘다`, {kind: 'network', code, exhausted: true});
+        throw new DiscordError(`연결 뒤 응답이 불확실하다(${code}) — 보냈는지 알 수 없어 재시도하지 않는다`, {kind: 'uncertain', code, attempts: attempt});
+      if (attempt >= MAX_ATTEMPTS) throw new DiscordError(`네트워크 오류(${code}) ${attempt}회 — 멈춘다`, {kind: 'network', code, exhausted: true, attempts: attempt});
       await sleep(Math.min(backoffMs(attempt), Math.max(0, left())));
       continue;
     }
@@ -72,18 +73,18 @@ export async function discordRequest({base, token, method = 'GET', path, body, i
     if (status === 429) {
       const wait = Number(json?.retry_after ?? headerRetry);
       const ms = Math.ceil((Number.isFinite(wait) && wait >= 0 ? wait : 1) * 1000);
-      if (ms > MAX_RATE_WAIT_MS || ms > left()) throw new DiscordError(`429 대기(${Math.ceil(ms / 1000)}초)가 상한을 넘는다`, {kind: 'rate', status, exhausted: true});
-      if (attempt >= MAX_ATTEMPTS) throw new DiscordError(`429 ${attempt}회 — 멈춘다`, {kind: 'rate', status, exhausted: true});
+      if (ms > MAX_RATE_WAIT_MS || ms > left()) throw new DiscordError(`429 대기(${Math.ceil(ms / 1000)}초)가 상한을 넘는다`, {kind: 'rate', status, exhausted: true, attempts: attempt});
+      if (attempt >= MAX_ATTEMPTS) throw new DiscordError(`429 ${attempt}회 — 멈춘다`, {kind: 'rate', status, exhausted: true, attempts: attempt});
       await sleep(ms);
       continue;
     }
     if (status >= 500) {
-      if (!idempotent) throw new DiscordError(`HTTP ${status} — 보냈는지 알 수 없어 재시도하지 않는다`, {kind: 'uncertain', status});
-      if (attempt >= MAX_ATTEMPTS) throw new DiscordError(`HTTP ${status} ${attempt}회 — 멈춘다`, {kind: 'http', status, exhausted: true});
+      if (!idempotent) throw new DiscordError(`HTTP ${status} — 보냈는지 알 수 없어 재시도하지 않는다`, {kind: 'uncertain', status, attempts: attempt});
+      if (attempt >= MAX_ATTEMPTS) throw new DiscordError(`HTTP ${status} ${attempt}회 — 멈춘다`, {kind: 'http', status, exhausted: true, attempts: attempt});
       await sleep(Math.min(backoffMs(attempt), Math.max(0, left())));
       continue;
     }
-    throw new DiscordError(`HTTP ${status}${json?.code ? ` (디스코드 코드 ${json.code})` : ''}`, {kind: 'http', status, code: json?.code ?? null});
+    throw new DiscordError(`HTTP ${status}${json?.code ? ` (디스코드 코드 ${json.code})` : ''}`, {kind: 'http', status, code: json?.code ?? null, attempts: attempt});
   }
 }
 

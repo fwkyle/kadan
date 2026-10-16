@@ -5,6 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {sanitize, setArchivedSync} from '../src/thread-archive.mjs';
+import {readDecisions} from '../src/notify-threads.mjs';
+import {spawnSync} from 'node:child_process';
 import {notifyUser, refreshWorkStatus, resetDiscordBlock, scrubSecrets, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {readThreads} from '../src/notify-threads.mjs';
 import {botSecrets} from '../src/thread-archive.mjs';
@@ -133,14 +136,14 @@ test('5 기록 없음 + 웹훅이 보관 오류(50083): 재개 → 한 번만 �
     assert.deepEqual(seq.slice(0, 3), ['POST webhook', 'PATCH channel', 'POST webhook'], '쓰기 → 재개 → 한 번만 다시');
     assert.equal(w.requests().slice(before).filter(x => x.method === 'POST').length, 2, '재시도는 한 번');
     assert.equal(w.channelPatches().filter(x => JSON.parse(x.body).archived === false).length, 1);
-    // 재개가 403이면 다시 시도하지 않고 쓰기를 건너뛴다(대신 #브리핑·시스템 알림으로도 보내지 않는다)
+    // 재개가 403이면 다시 시도하지 않고 그 글 쓰기를 건너뛴다(#브리핑 같은 다른 디코 채널로는 보내지 않고, 기존 대체 전달만 받는다)
     const w2 = await world({resumeStatus: 403});
     try {
       w2.open(); await w2.manualArchive(w2.record().threadId);
       const n = w2.requests().length;
       let osCalls = 0;
       const skipped = notifyUser('경보', () => { osCalls++; return {status: 0}; }, {home: w2.home, env: w2.env, work: WORK, workTitle: '보관 시험', kind: 'mail', key: 'mail:s'});
-      assert.equal(skipped.via, 'none'); assert.equal(skipped.discord.outcome, 'archived-skip'); assert.equal(osCalls, 0);
+      assert.equal(skipped.via, 'system'); assert.equal(skipped.discord.outcome, 'archived-skip'); assert.equal(osCalls, 1, '쓰기는 건너뛰되 알림은 기존 대체 전달(시스템 알림)을 받는다');
       assert.equal(w2.requests().slice(n).filter(x => x.method === 'POST').length, 1, '다시 시도 없음');
       assert.match(w2.log(), /archived-skip/);
     } finally { w2.stop(); }
@@ -253,4 +256,118 @@ test('12 checkChat: 봇의 Manage Threads 권한을 읽기만으로 보여 준�
     assert.match(await line(), /있음/);
     assert.ok(!fake.requests.some(r => r.method === 'PATCH' && /^\/channels\//.test(r.path)), '실제 보관 요청은 나가지 않는다');
   } finally { await fake.close(); }
+});
+
+// ---- PR #179 수정 1라운드 ----
+const decisionOpts = (w, id, extra = {}) => ({home: w.home, env: w.env, work: WORK, workTitle: '보관 시험', kind: 'decision-request', decision: {id}, ...extra});
+const archivedAndBlocked = async (options = {resumeStatus: 403}) => {      // 완료·보관된 글 + 열린 업무로 돌아온 상태(재개 403)
+  const w = await world(options);
+  w.open(); w.finish(); w.refresh();
+  assert.equal(w.record().archived, true);
+  w.reopen();
+  return w;
+};
+
+test('13 재개 403 + 결정 요청 → 대체 전달 1건(시스템 알림), 다른 디코 채널로는 보내지 않는다', async () => {
+  const w = await archivedAndBlocked();
+  try {
+    let os = 0;
+    const n = w.requests().length;
+    const r = notifyUser('결정 요청', () => { os++; return {status: 0}; }, {...decisionOpts(w, 'D1'), discord: {content: '결정 요청 본문', mention: true}});
+    assert.equal(r.via, 'system'); assert.equal(r.discord.outcome, 'archived-skip'); assert.equal(os, 1);
+    assert.equal(w.requests().slice(n).filter(x => x.method === 'POST').length, 0, '웹훅 쓰기 0건');
+    assert.ok(w.requests().slice(n).every(x => x.url.startsWith('/channels/')), '재개 요청만 나갔다');
+  } finally { w.stop(); }
+});
+
+test('14 재개 403 + 울림 경보 → 대체 전달 1건, 조용한 알림(systemFallback:false)은 0건', async () => {
+  const w = await archivedAndBlocked();
+  try {
+    let os = 0;
+    const spawn = () => { os++; return {status: 0}; };
+    const ring = notifyUser('막힘 경보', spawn, {home: w.home, env: w.env, work: WORK, kind: 'alert', ring: true});
+    assert.equal(ring.via, 'system'); assert.equal(os, 1);
+    const quiet = notifyUser('조용한 알림', spawn, {home: w.home, env: w.env, work: WORK, kind: 'alert', systemFallback: false});
+    assert.equal(quiet.via, 'none'); assert.equal(os, 1, '조용한 알림은 대체 전달을 받지 않던 그대로');
+  } finally { w.stop(); }
+});
+
+test('15 재개 403 + 상태 고치기 → 대체 0건, 로그 있음', async () => {
+  const w = await archivedAndBlocked();
+  try {
+    const n = w.requests().length;
+    const r = w.refresh();                                          // refreshWorkStatus에는 원래 대체 전달이 없다
+    assert.equal(r.outcome, 'archived-skip');
+    assert.equal(w.requests().slice(n).filter(x => x.method !== 'PATCH' || !x.url.startsWith('/channels/')).length, 0);
+    assert.match(w.log(), /archived-skip/);
+    assert.match(w.logLines().at(-1).reason, /403/);
+  } finally { w.stop(); }
+});
+
+test('16 보관된 글의 결정 해결 고치기 → 재개 → 고치기 → 상태 → 다시 보관, resolved 기록', async () => {
+  const w = await world();
+  try {
+    w.open();
+    assert.equal(notifyUser('요청', () => ({status: 0}), {...decisionOpts(w, 'D1'), discord: {content: '요청 본문', mention: true}}).via, 'discord');
+    w.finish(); w.refresh();
+    assert.equal(w.record().archived, true);
+    const messageId = readDecisions(w.home).D1.messageId;
+    const n = w.requests().length;
+    const r = notifyUser('해결', () => ({status: 0}), {...decisionOpts(w, 'D1', {kind: 'decision-answer'}), decision: {id: 'D1', edit: '✅ 해결됨 — 답변: 가'}});
+    assert.equal(r.via, 'discord');
+    const seq = w.requests().slice(n);
+    assert.deepEqual(JSON.parse(seq[0].body), {archived: false});                                  // 재개
+    assert.ok(seq[1].url.includes(`/messages/${messageId}`) && seq[1].method === 'PATCH');         // 요청 글 고치기
+    assert.match(JSON.parse(seq[1].body).content, /해결됨/);
+    assert.equal(seq[2].method, 'PATCH');                                                          // 상태 메시지
+    assert.deepEqual(JSON.parse(seq[3].body), {archived: true});                                   // 끝난 업무라 다시 보관
+    assert.equal(seq.length, 4);
+    assert.equal(readDecisions(w.home).D1.resolved, true);
+    assert.equal(w.record().archived, true);
+    // 손으로 보관(기록 false)한 결정 글: 50083 → 재개 → 한 번만 다시 시도
+    const w2 = await world();
+    try {
+      w2.open();
+      notifyUser('요청', () => ({status: 0}), {...decisionOpts(w2, 'D2'), discord: {content: '요청 본문', mention: true}});
+      await w2.manualArchive(w2.record().threadId);
+      const m = w2.requests().length;
+      assert.equal(notifyUser('해결', () => ({status: 0}), {...decisionOpts(w2, 'D2', {kind: 'decision-answer'}), decision: {id: 'D2', edit: '✅ 해결됨'}}).via, 'discord');
+      const kinds = w2.requests().slice(m).map(x => (x.url.startsWith('/channels/') ? 'channel' : x.method));
+      assert.deepEqual(kinds.slice(0, 3), ['PATCH', 'channel', 'PATCH'], '고치기(거절) → 재개 → 한 번만 다시');
+      assert.equal(readDecisions(w2.home).D2.resolved, true);
+    } finally { w2.stop(); }
+  } finally { w.stop(); }
+});
+
+test('17 토큰 반사: 비정상 code·message에 실린 토큰이 stdout·stderr·notify-log·반환값 어디에도 없다', async () => {
+  const w = await world({archiveStatus: 403, resumeStatus: 403, reflectToken: true});
+  try {
+    w.open(); w.finish();
+    const threadId = w.record().threadId;
+    const child = spawnSync(process.execPath, [new URL('../src/discord-archive.mjs', import.meta.url).pathname],
+      {input: JSON.stringify({home: w.home, env: w.env, threadId, archived: true, budgetMs: 5000}), encoding: 'utf8'});
+    const out = JSON.parse(child.stdout.trim());
+    assert.ok(!child.stdout.includes(TOKEN) && !child.stderr.includes(TOKEN), '자식 stdout·stderr');
+    assert.ok(!('code' in out), '정수가 아닌 code는 버린다');
+    assert.equal(out.status, 403);
+    const direct = setArchivedSync({home: w.home, env: w.env, threadId, archived: true, budgetMs: 5000});
+    const outs = [direct, w.refresh(), w.refresh()];
+    w.reopen();
+    outs.push(w.alert());                                            // 반사 응답으로 재개가 막히는 경로
+    assert.ok(!JSON.stringify(outs).includes(TOKEN) && !w.log().includes(TOKEN));
+    // 부모의 걸러 받기: 자식이 어떤 값을 내도 정수·고정 단어·가린 문자열만 남는다
+    assert.deepEqual(sanitize({outcome: 'weird', attempts: '3', code: TOKEN, status: 403.5, reason: `x ${TOKEN}`, extra: TOKEN}, [TOKEN]),
+      {outcome: 'failed', attempts: 0, reason: 'x [가림]'});
+  } finally { w.stop(); }
+});
+
+test('18 attempts가 실제 재시도 수와 같다(503 → 요청 3건 → attempts 3)', async () => {
+  const w = await world({archiveStatus: 503});
+  try {
+    w.open(); w.finish();
+    const before = w.channelPatches().length;
+    const r = setArchivedSync({home: w.home, env: w.env, threadId: w.record().threadId, archived: true, budgetMs: 12000});
+    assert.equal(w.channelPatches().length - before, 3);
+    assert.equal(r.outcome, 'failed'); assert.equal(r.status, 503); assert.equal(r.attempts, 3);
+  } finally { w.stop(); }
 });

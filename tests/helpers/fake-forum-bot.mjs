@@ -5,7 +5,7 @@
 // 봇(PATCH /channels/<글 id> {archived}): 헤더 x-fake-manual이 있으면 상태 주입을 건너뛴다(사람이 손으로 보관한 것을 흉내).
 //    Authorization이 "Bot <TOKEN>"이어야 한다. 글 id는 숫자여야 한다(진짜 스노플레이크 모양).
 // 옵션: {token, archiveStatus(보관 요청에 줄 상태, 기본 200), resumeStatus(재개 요청), failEditStatus(메시지 수정에 줄 상태),
-//        editDelayMs(메시지 수정 응답 지연), autoReopen}. 기록 줄: {method, url, auth(토큰 앞 일부만), body}.
+//        editDelayMs(메시지 수정 응답 지연), autoReopen, reflectToken(봇 오류 응답의 code·message에 토큰을 반사 — 비정상 응답 흉내)}. 기록 줄: {method, url, auth(토큰 앞 일부만), body}.
 import http from 'node:http';
 import fs from 'node:fs';
 
@@ -30,7 +30,7 @@ const server = http.createServer((req, res) => {
       if (req.headers.authorization !== `Bot ${token}`) return reply(401, {code: 0});
       if (!threads.has(p[1])) return reply(404, {code: 10003});
       const wanted = body.archived === true, status = wanted ? options.archiveStatus : options.resumeStatus;
-      if (status && status !== 200 && !req.headers['x-fake-manual']) return reply(status, {code: status === 403 ? 50013 : 0, message: `fake ${status}`});
+      if (status && status !== 200 && !req.headers['x-fake-manual']) return reply(status, options.reflectToken ? {code: token, message: `bad ${token}`} : {code: status === 403 ? 50013 : 0, message: `fake ${status}`});
       if (wanted) archived.add(p[1]); else archived.delete(p[1]);
       return reply(200, {id: p[1], thread_metadata: {archived: wanted}});
     }
