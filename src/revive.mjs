@@ -108,7 +108,13 @@ export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wa
   for (;;) {
     try {
       fs.mkdirSync(lock); fs.writeFileSync(pidFile, String(process.pid));
-      return () => { try { fs.rmSync(pidFile, { force: true }); fs.rmdirSync(lock); } catch { /* 이미 없음 */ } };
+      // 해제는 pid 파일이 자기 pid일 때만 한다 — 되찾기로 치워진 뒤 다른 프로세스가 새로 잡은 잠금을 지우지 않는다.
+      return () => {
+        try {
+          if (Number(fs.readFileSync(pidFile, 'utf8')) !== process.pid) return;
+          fs.rmSync(pidFile, { force: true }); fs.rmdirSync(lock);
+        } catch { /* 이미 없음 */ }
+      };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       let pid = NaN;
@@ -121,7 +127,18 @@ export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wa
         if (age > STALE_LOCK_MS) reason = `pid 파일이 없거나 깨진 채 ${Math.round(age / 1000)}초 지났다`;
       }
       if (reason) {
-        try { fs.rmSync(pidFile, { force: true }); fs.rmdirSync(lock); onReclaim(reason); } catch { /* 다른 쪽이 먼저 치웠다 */ }
+        // 되찾기는 rename 하나로 한다: 두 프로세스가 같이 시도해도 한 쪽만 이기고, 진 쪽은 ENOENT를 받아 mkdir부터 다시 한다.
+        // (지우기로 하면 늦은 쪽이 이긴 쪽이 막 만든 새 잠금을 지운다.) 옮긴 폴더는 우리 잠금 내부 폴더라 그 뒤에 지운다.
+        const stale = `${lock}.stale-${process.pid}-${Date.now()}`;
+        let moved = false;
+        try { fs.renameSync(lock, stale); moved = true; } catch { /* 다른 쪽이 먼저 치웠다 */ }
+        if (moved) {
+          let owner = NaN;
+          try { owner = Number(fs.readFileSync(path.join(stale, 'pid'), 'utf8')); } catch { /* pid 없음 */ }
+          // 읽은 뒤 옮기기 전에 다른 쪽이 새로 잡은 잠금을 옮겼다면(주인 pid가 달라졌다) 그대로 돌려놓는다.
+          if (Number.isInteger(owner) && owner > 0 && owner !== pid && isAlive(owner)) { try { fs.renameSync(stale, lock); } catch { /* 이미 다른 잠금이 있다 */ } }
+          else { fs.rmSync(stale, { recursive: true, force: true }); onReclaim(reason); }
+        }
         continue;
       }
       if (Date.now() >= deadline) return null;
