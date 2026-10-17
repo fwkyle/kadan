@@ -128,7 +128,7 @@ export class WatchReports {
       fs.writeFileSync(path.join(request.evidencePath,'report-complete'),request.requestId,{mode:0o600});
     return result;
   }
-  submit(requestId, verdict, reason) {
+  submit(requestId, verdict, reason, meta={}) {
     if (!WATCH_VERDICTS.includes(verdict)) throw new Error(`판정은 ${WATCH_VERDICTS.join(', ')} 중 하나`);
     if (typeof reason!=='string'||!reason.trim()||reason.length>500) throw new Error('판단 이유는 1~500자로 입력하세요');
     reason=reason.replace(/[\x00-\x1f\x7f]/g,' ').trim();
@@ -159,7 +159,7 @@ export class WatchReports {
       fs.writeFileSync(reasonPath,reason,{mode:0o600});
       report={kind:'watch-ai-report',by:'watch-ai',requestId,key:request.key,source:request.source,
         role:request.role,session:request.session,taskId:request.taskId,responsibility:request.responsibility,observationDigest:request.observationDigest,
-        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),t:new Date(this.now()).toISOString()};
+        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),...meta,t:new Date(this.now()).toISOString()};
       // 먼저 기록해 같은 명령/문제의 재전송을 막는다. 외부 발송은 저장 잠금 밖에서 한다.
       this.record(report);
       if (!stale&&normal(verdict)&&!idleWithoutAsk&&previous&&(!normal(previous.verdict)||previous.idleWithoutAsk)) this.record({kind:'alert',by:'watch',source:'watch-ai',
@@ -244,8 +244,32 @@ export class WatchReports {
   }
 }
 
+const REQUEST_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const real=file=>{try{return fs.realpathSync(file);}catch{return path.resolve(file);}};
+// AI가 긴 ID를 옮겨 치다 틀리므로 하네스가 정한 값(환경 → 점검 폴더)을 읽는다. 둘 다 없을 때만 넘긴 값을 쓴다.
+// 점검 폴더는 <home>/watch-ai/<ID> 이고 그 ID의 호출 기록이 원장에 있을 때만 믿는다.
+export function resolveReportRequest(given,{env=process.env,cwd=process.cwd(),home,reports}) {
+  let harness=null;
+  const fromEnv=env.KADAN_JUDGE_REQUEST;
+  if (typeof fromEnv==='string'&&fromEnv) harness={id:fromEnv,source:'env'};
+  else {
+    const root=path.join(real(home),'watch-ai'),here=real(cwd),id=path.basename(here);
+    if (path.dirname(here)===root&&REQUEST_ID.test(id)&&reports.readRequest(id)) harness={id,source:'cwd'};
+  }
+  if (!harness) {
+    if (!given) throw new Error('호출ID를 알 수 없습니다: 감시AI 점검 폴더에서 실행하거나 호출ID를 넘기세요');
+    return {requestId:given,source:'arg'};
+  }
+  if (!given||given===harness.id) return {requestId:harness.id,source:given?'arg':harness.source};
+  return {requestId:harness.id,source:harness.source,mismatch:String(given).slice(0,40)};
+}
+
 export function watchReportCommand(args,flags,options) {
-  if (flags.help||!args.length) return 'kadan watch-report <호출ID> --verdict 진행중|입력대기|실행완료|응답장애|정체|모름|조정 --reason 판단이유';
-  if (args.length!==1||Object.keys(flags).some(k=>!['verdict','reason'].includes(k))) throw new Error('watch-report는 호출ID, --verdict, --reason만 사용합니다');
-  return new WatchReports(options).submit(args[0],flags.verdict,flags.reason);
+  const usage='kadan watch-report [호출ID] --verdict 진행중|입력대기|실행완료|응답장애|정체|모름|조정 --reason 판단이유 (호출ID는 생략하면 자동으로 읽음)';
+  if (flags.help||!args.length&&flags.verdict===undefined&&flags.reason===undefined) return usage;
+  if (args.length>1||Object.keys(flags).some(k=>!['verdict','reason'].includes(k))) throw new Error('watch-report는 호출ID(생략 가능), --verdict, --reason만 사용합니다');
+  const reports=new WatchReports(options);
+  const found=resolveReportRequest(args[0],{env:options.env,cwd:options.cwd,home:reports.home,reports});
+  const meta={requestIdSource:found.source,...(found.mismatch?{idMismatch:true,givenRequestId:found.mismatch}:{})};
+  return {...reports.submit(found.requestId,flags.verdict,flags.reason,meta)};
 }

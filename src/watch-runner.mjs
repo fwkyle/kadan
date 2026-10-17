@@ -247,7 +247,8 @@ export async function runWatch({
       for(const recipient of result.deliveredRecipients||[])aiRecipients.add(recipient);
       if(result.deliveredRecipients?.length)print(`[${watchAILabel(job.candidate.source)}] ${job.candidate.role} 보고 전달 → ${result.deliveredRecipients.join(', ')} (호출 ${result.requestId})`);
       const failure=reason=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
-        session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason});
+        session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason,
+        ...(result.verdict?{judgeVerdict:result.verdict}:{})});
       // 인터넷 없음·잠자기는 알리지 않고 다음 정기 점검에 다시 부른다. 이전 알림은 그대로 둔다(성공해야 풀린다).
       if(OFFLINE_REASONS.has(result.reason)){
         const count=result.reason==='network'?(offlineFailures.get(job.key)??0)+1:0;
