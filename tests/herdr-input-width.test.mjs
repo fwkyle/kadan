@@ -47,6 +47,13 @@ test("상자 없는 Codex 화면은 기존 판정을 유지한다", () => {
   assert.throws(() => check("\n› 남아 있는 글\n\nstatus", 1), { code: "KADAN_PANE_INPUT_PENDING" });
 });
 
+test("codex 0.163 두 줄 바닥글은 폭 없는 경로에서도 빈 입력으로 본다", () => {
+  const status = "  GPT-6-Astra high · ~/Dev/kadan · main · Context 0% used · weekly 36% left";
+  const hint = "  ← for agents · ? for shortcuts" + " ".repeat(100) + "⚠ 1 warning · f2 to view";
+  assert.doesNotThrow(() => check(`\n› Ask Codex to do anything\n\n${status}\n${hint}`, 1));
+  assert.throws(() => check(`\n› Ask Codex to do anything\n\n${status}\n${hint}\n  THIRD`, 1), { code: "KADAN_PANE_INPUT_PENDING" });
+});
+
 test("폭 숫자를 주는 tmux 경로는 기존처럼 정확히 같은 길이만 통과한다", () => {
   const text = screen(...header, '❯ Try "x"', RULE, ...footer);
   assert.doesNotThrow(() => check(text, 3, 212));
