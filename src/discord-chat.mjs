@@ -123,7 +123,7 @@ const statePath = home => path.join(home, STATE_FILE);
 const channelHash = id => crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 12);
 // forums: 받기에 등록한 레포 포럼 채널 해시 → 등록 시각(ms). 옛 상태 파일에는 없다(없으면 아직 아무것도 등록 안 한 것).
 // forumRepos: 레포 이름 → 그 채널 해시. 설정에서 키가 빠지거나 다른 채널로 바뀐 것을 알아보고 등록 기록을 지우는 데 쓴다.
-const emptyState = hash => ({version: 1, channel: hash, main: null, threads: {}, forums: {}, forumRepos: {}, skipped: {others: 0, bots: 0, system: 0}});
+const emptyState = hash => ({version: 1, channel: hash, main: null, threads: {}, forums: {}, forumRepos: {}, active: null, skipped: {others: 0, bots: 0, system: 0}});
 
 // 파일이 없을 때만 null(처음 실행). 있는데 읽기·형식이 깨졌으면 던진다 — 원본은 그대로 두고 cursor를 올리지 않는다.
 // 채널이 바뀐 경우(해시 불일치)는 {mismatch:true}로 알려 새 기준선을 잡게 한다.
@@ -144,6 +144,8 @@ export function readState(home, hash) {
     && (v.forums === undefined || (v.forums && typeof v.forums === 'object' && !Array.isArray(v.forums)
       && Object.entries(v.forums).every(([h, since]) => /^[0-9a-f]{12}$/.test(h) && Number.isFinite(since) && since > 0)))
 
+    && (v.active === undefined || v.active === null || (v.active && typeof v.active === 'object' && !Array.isArray(v.active)
+      && Object.entries(v.active).every(([id, meta]) => isId(id) && meta && typeof meta === 'object' && !Array.isArray(meta))))
     && v.skipped && typeof v.skipped === 'object' && ['others', 'bots', 'system'].every(k => count(v.skipped[k]));
   if (!ok) throw new Error(`상태 파일이 깨져 있어 멈춘다(원본은 그대로 둔다). 확인한 뒤 이 파일을 옮기면 처음 실행(기준선)으로 다시 시작한다: ${file}`);
   if (v.channel !== hash) return {mismatch: true};
@@ -347,6 +349,7 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
 
   if (halted()) return result;
   const activeList = await loadActive();
+  const tracked = {};   // 이번에 활성 목록에서 본 추적 글 → 다시 읽을 때 붙일 이름표
   for (const t of activeList) {
     if (halted()) return result;
     const forum = forumById.get(t.parent_id);
@@ -363,9 +366,26 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
       state.threads[t.id] = forum ? maxId(prevId(t.id), idAt(state.forums[channelHash(forum.id)])) : t.id;
       writeState(chat.home, state);
     }
+    const meta = {...(forum ? {channel: forum.name} : {}), ...(typeof t.name === 'string' && t.name ? {threadName: oneLine(t.name, 100)} : {})};
+    tracked[t.id] = meta;
     if (t.last_message_id && !idLess(state.threads[t.id], t.last_message_id)) continue;
-    await drain(t.id, state.threads[t.id], 'thread', t.id, {...(forum ? {channel: forum.name} : {}), ...(typeof t.name === 'string' && t.name ? {threadName: oneLine(t.name, 100)} : {})});
+    await drain(t.id, state.threads[t.id], 'thread', t.id, meta);
   }
+  // 직전 조회에는 활성이던 글이 이번 목록에서 막 빠졌다면(업무 완료로 자동 보관) 마지막 조회 뒤 달린 댓글이 남아 있을 수 있다.
+  // 빠진 그 순간에만 cursor부터 한 번 읽는다 — 보관된 글을 매 조회 훑으면 글마다 5초마다 호출이 180일 동안 생긴다.
+  // 옛 상태 파일(active 없음)이나 첫 조회는 직전 집합을 몰라 회수하지 않는다. 읽기가 안 되면(403·404) 로그만 남기고 다시 시도하지 않는다.
+  // 디스코드 문서는 보관된 스레드의 메시지 읽기 가능 여부를 밝히지 않는다(쓰기는 다시 열림). 그래서 막히면 그대로 둔다.
+  if (state.active && !halted()) {
+    for (const [id, meta] of Object.entries(state.active)) {
+      if (tracked[id] || !state.threads[id]) continue;
+      try { await drain(id, state.threads[id], 'thread', id, meta); }
+      catch (error) {
+        if (!(error instanceof DiscordError) || error.kind !== 'http' || ![403, 404].includes(error.status)) throw error;
+        err(`보관된 글(${id})의 마지막 댓글을 읽지 못했다(HTTP ${error.status}) — 다시 시도하지 않는다`);
+      }
+    }
+  }
+  if (!halted()) { state.active = tracked; writeState(chat.home, state); }
   // 활성 목록에 없고 마지막으로 본 글이 180일보다 오래된 스레드 기록은 잊는다(다시 살아나면 첫 글부터 다시 본다).
   const activeIds = new Set(activeList.map(t => t.id));
   for (const [id, lastSeen] of Object.entries(state.threads)) if (!activeIds.has(id) && now - idMs(lastSeen) > THREAD_FORGET_MS) delete state.threads[id];
