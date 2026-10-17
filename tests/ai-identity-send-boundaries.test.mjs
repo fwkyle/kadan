@@ -43,6 +43,9 @@ test('프로세스 실행 파일/스크립트 자리만 실행기 이름으로 �
 // 화면 모양(프롬프트·자리표시자·테두리·바닥글)은 보지 않는다(2026-10-17 [kyle]). 사람 보호는 client_activity 하나다.
 // 가짜 run은 kadan 자신의 paste-buffer가 client_activity를 바꾸지 않는다는 전제를 따른다(실제 tmux도 키 입력만 센다).
 const nowSec = () => Math.floor(Date.now() / 1000);
+// list-clients 한 줄: "붙은 시각 마지막 활동". 붙기만 하면 둘이 같고, 키를 눌러야 활동이 뒤로 간다(2026-10-17 격리 소켓 실측).
+const typed = (ago, at = nowSec(), attached = at - 3600) => `${attached} ${at - ago}`;
+const attachedOnly = (ago, at = nowSec()) => `${at - ago} ${at - ago}`;
 function fixture({state='11|0', ps='11 1 11 11 /opt/bin/codex --model test-model', clients='', afterLoad, psStatus=0, screen='› 쓰던 글', card=true} = {}) {
   const calls=[]; let loaded=false;
   return {calls, options:{...(card ? {cardIdentity:identity} : {}), pid:1, hrtime:()=>1n,
@@ -71,7 +74,7 @@ for (const [name, config, code] of [
   ['프로세스 조회 실패', {psStatus:1}, 'KADAN_AI_PROCESS_UNKNOWN'],
   ['버퍼 준비 중 죽음', {afterLoad:{state:'11|1'}}, 'KADAN_PANE_DEAD'],
   ['사람 입력 시각 미확인', {clients:'x'}, 'KADAN_HUMAN_ACTIVITY_UNKNOWN'],
-  ['버퍼 준비 중 사람이 키를 누름', {afterLoad:{clients:String(nowSec() - 1)}}, 'KADAN_HUMAN_ACTIVE'],
+  ['버퍼 준비 중 사람이 키를 누름', {afterLoad:{clients:typed(1)}}, 'KADAN_HUMAN_ACTIVE'],
 ]) test(`붙여넣기 전 거부: ${name}`, () => {
   const f=fixture(config);
   assert.throws(()=>sendTmux('kadan-r','CARD',f.options), e=>e.code===code && e.delivery==='not-sent');
@@ -101,14 +104,14 @@ for (const [path, cfg] of Object.entries(PATHS)) {
   const guard = (extra={}) => cfg.guard ? {humanIdleMs:30_000, ...extra} : undefined;
 
   test(`9/23 사고 재현: kyle이 비서 창에 문장을 치는 중(5초 전 키 입력)이면 ${path}은 붙여넣지 않는다`, () => {
-    const f=fixture({clients:String(nowSec() - 5), card:cfg.card});
+    const f=fixture({clients:typed(5), card:cfg.card});
     assert.throws(()=>send(f, guard()), e=>e.code==='KADAN_HUMAN_ACTIVE' && e.delivery==='not-sent');
     assert.equal(count(f,'paste-buffer'),0);
     assert.equal(count(f,'send-keys'),0);
   });
 
   test(`${path}: 60초 전 키 입력·붙은 client 없음은 통과한다`, () => {
-    for (const clients of [String(nowSec() - 60), '', `${nowSec() - 60}\n${nowSec() - 3600}`]) {
+    for (const clients of [typed(60), '', `${typed(60)}\n${typed(3600)}`]) {
       const f=fixture({clients, card:cfg.card});
       send(f, guard());
       assert.equal(count(f,'paste-buffer'),1, clients);
@@ -116,7 +119,7 @@ for (const [path, cfg] of Object.entries(PATHS)) {
   });
 
   test(`${path}: 붙은 client가 여럿이면 하나라도 최근 입력했을 때 보류한다`, () => {
-    const f=fixture({clients:`${nowSec() - 3600}\n${nowSec() - 2}`, card:cfg.card});
+    const f=fixture({clients:`${typed(3600)}\n${typed(2)}`, card:cfg.card});
     assert.throws(()=>send(f, guard()), e=>e.code==='KADAN_HUMAN_ACTIVE');
     assert.equal(count(f,'paste-buffer'),0);
   });
@@ -135,17 +138,44 @@ for (const [path, cfg] of Object.entries(PATHS)) {
   });
 }
 
+test('방금 붙었지만 키를 누르지 않은 client는 사람 입력이 아니다 — 세 경로 모두 통과', () => {
+  for (const cfg of Object.values(PATHS)) for (const clients of [attachedOnly(0), attachedOnly(1), `${attachedOnly(0)}\n${typed(3600)}`]) {
+    const f=fixture({clients, card:cfg.card});
+    send(f, cfg.guard ? {humanIdleMs:30_000} : undefined);
+    assert.equal(count(f,'paste-buffer'),1, clients);
+  }
+});
+
+test('붙은 뒤 10초에 키를 누르면 보류한다(붙은 시각 기준 1초 넘게 뒤의 활동만 입력)', () => {
+  const at=nowSec();
+  for (const cfg of Object.values(PATHS)) {
+    const f=fixture({clients:`${at - 12} ${at - 2}`, card:cfg.card});
+    assert.throws(()=>send(f, cfg.guard ? {humanIdleMs:30_000} : undefined), e=>e.code==='KADAN_HUMAN_ACTIVE' && e.delivery==='not-sent');
+    assert.equal(count(f,'paste-buffer'),0);
+  }
+  // 경계: 붙은 지 정확히 1초 뒤 활동은 입력으로 세지 않고, 2초 뒤부터 센다.
+  assert.equal(count((()=>{const f=fixture({clients:`${at - 5} ${at - 4}`, card:false}); send(f); return f;})(),'paste-buffer'),1);
+  assert.throws(()=>send(fixture({clients:`${at - 5} ${at - 3}`, card:false})), e=>e.code==='KADAN_HUMAN_ACTIVE');
+});
+
+test('client 값이 한쪽만 있거나 음수·소수면 실패 닫힘', () => {
+  for (const clients of ['1792000000', '-1 5', '1.5 2', 'x y', '1 ']) {
+    const f=fixture({clients, card:false});
+    assert.throws(()=>send(f), e=>e.code==='KADAN_HUMAN_ACTIVITY_UNKNOWN', clients);
+  }
+});
+
 test('감시기 알림: 기준 시간은 호출부가 정한다(10분 기준 600초 안 입력은 보류)', () => {
   const now=1_000_000_000_000;
-  const f=fixture({clients:String(now/1000 - 60), card:false});
+  const f=fixture({clients:typed(60, now/1000), card:false});
   assert.throws(()=>sendTmux('kadan-r','MAIL',{...f.options, notificationGuard:{humanIdleMs:600_000, now}}), e=>e.code==='KADAN_HUMAN_ACTIVE');
-  const g=fixture({clients:String(now/1000 - 3600), card:false});
+  const g=fixture({clients:typed(3600, now/1000), card:false});
   sendTmux('kadan-r','MAIL',{...g.options, notificationGuard:{humanIdleMs:600_000, now}});
   assert.equal(count(g,'paste-buffer'),1);
 });
 
 test('감시기 강제 알림(force)은 사람 입력 검사를 건너뛴다', () => {
-  const f=fixture({clients:String(nowSec() - 1), card:false});
+  const f=fixture({clients:typed(1), card:false});
   sendTmux('kadan-r','MAIL',{...f.options, notificationGuard:{humanIdleMs:30_000, force:true}});
   assert.equal(count(f,'paste-buffer'),1);
   assert.equal(count(f,'list-clients'),0);
@@ -160,8 +190,8 @@ test('붙여넣기 전·후 두 번 사람 입력을 본다', () => {
 test('notificationHold는 붙여넣지 않고 같은 사람 입력 기준으로 보류 사유만 돌려준다', () => {
   const hold = clients => tmuxFloor.notificationHold('kadan-r',{humanIdleMs:30_000},{run:args=>
     args.includes('#{pane_in_mode}') ? '0' : args[0]==='list-clients' ? clients : ''});
-  assert.equal(hold(String(nowSec() - 5)).code,'KADAN_HUMAN_ACTIVE');
-  assert.equal(hold(String(nowSec() - 60)),null);
+  assert.equal(hold(typed(5)).code,'KADAN_HUMAN_ACTIVE');
+  assert.equal(hold(typed(60)),null);
 });
 
 test('현재 프로세스의 명시 모델은 실행기 자리와 함께 일치해야 한다', () => {

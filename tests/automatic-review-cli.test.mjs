@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync,spawn} from 'node:child_process';
+import {attachHuman} from './helpers/human-client.mjs';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
 import {readLedger,readMailLedger,readTaskLedger,readMailBody} from '../src/ledger.mjs';
 import {digest,findDoneMarkers} from '../src/cli.mjs';
@@ -24,12 +25,9 @@ test('자동 발령도 사람이 창에 붙어 최근 입력했으면 paste·Ent
  try{
   for(const role of roles){run('start',role,'--hidden','--cmd',`${quote(harness)} --model test-model`);started.push(role);}
   const target='kadan-auto-worker';
-  // 사람이 붙은 창은 제어 모드 client로 대신한다. 붙은 시각이 client_activity가 되어 30초 안이다.
-  human=spawn('tmux',['-L',env.KADAN_SOCKET,'-C','attach','-t','='+target],{stdio:['pipe','ignore','ignore']});
-  const until=Date.now()+3000;
-  while(tm('list-clients','-t','='+target,'-F','#{client_activity}').stdout.trim()===''){
-   assert.ok(Date.now()<until,'시험 사람 client 준비 시간 초과');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
-  }
+  // 사람이 pty client로 붙어 키를 눌렀다. 붙기만 한 client는 사람 입력이 아니다(2026-10-17).
+  human=attachHuman('tmux',env.KADAN_SOCKET,'='+target);
+  human.type('x');
   run('work','create','input/work','--title','입력 보존','--goal','미제출 입력 보존','--scope','격리 시험','--acceptance','발령 없음','--owner','auto-owner','--board','input','--repo-path',home);
   for(const id of ['implementation','review']){
    const source=path.join(home,id+'.md');fs.writeFileSync(source,'# 격리 카드\n자동 발령 경계 확인');

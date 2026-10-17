@@ -5,6 +5,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
+import {attachHuman} from './helpers/human-client.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger,readTaskLedger} from '../src/ledger.mjs';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
@@ -30,13 +31,13 @@ if(a.includes('load-buffer')&&fs.existsSync(raceFile)) {
  const race=JSON.parse(fs.readFileSync(raceFile,'utf8'));
  if(race.active) {
   fs.writeFileSync(raceFile,JSON.stringify({...race,active:false}));
-  if(race.attach)spawn('sh',['-c',"sleep 6 | '"+${JSON.stringify(realTmux)}+"' -L '"+process.env.KADAN_SOCKET+"' -C attach -t =kadan-"+race.role],{detached:true,stdio:'ignore'}).unref();
+  if(race.attach)spawn('sh',['-c',"(sleep 2.5; printf x; sleep 8) | python3 -c 'import pty,sys;pty.spawn(sys.argv[1:])' '"+${JSON.stringify(realTmux)}+"' -L '"+process.env.KADAN_SOCKET+"' attach -t =kadan-"+race.role],{detached:true,stdio:'ignore'}).unref();
   else spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,'send-keys','-t','kadan-'+race.role,...race.keys]);
-  const end=Date.now()+3000;let observed=false;
+  const end=Date.now()+(race.attach?9000:3000);let observed=false;
   while(Date.now()<end) {
-   const query=race.attach?['list-clients','-t','=kadan-'+race.role,'-F','#{client_activity}']:race.dead?['display-message','-p','-t','kadan-'+race.role,'#{pane_dead}']:['capture-pane','-p','-t','kadan-'+race.role];
+   const query=race.attach?['list-clients','-t','=kadan-'+race.role,'-F','#{client_created} #{client_activity}']:race.dead?['display-message','-p','-t','kadan-'+race.role,'#{pane_dead}']:['capture-pane','-p','-t','kadan-'+race.role];
    const state=spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,...query],{encoding:'utf8'}).stdout;
-   if(race.attach?state.trim()!=='':race.dead?state.trim()==='1':state.includes('RACE_PENDING')){observed=true;break;}
+   if(race.attach?(([c,a])=>a-c>1)(state.trim().split(' ').map(Number)):race.dead?state.trim()==='1':state.includes('RACE_PENDING')){observed=true;break;}
    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
   }
   if(!observed)throw Error('race fixture readiness timeout');
@@ -67,12 +68,15 @@ process.exit(r.status??1);\n`,{mode:0o755});
   tm('copy-mode','-t','kadan-resume');probe('copy-mode','resume',['--task','resume']);tm('send-keys','-t','kadan-resume','-X','cancel');
   // 화면에 쓰다 만 글이 있어도 사람이 붙어 최근 입력하지 않았으면 막지 않는다(화면 모양 판정 제거, 2026-10-17).
   tm('send-keys','-t','kadan-resume','-l','USER_PENDING_');probe('partial-input-no-human','resume',['--execution','r/resume'],'accept fixture');
-  // 사람이 붙은 창(제어 모드 client의 붙은 시각이 client_activity)은 보류한다. 본문은 붙지 않는다.
-  const humanClient=spawn('sh',['-c',"sleep 8 | '"+realTmux+"' -L '"+env.KADAN_SOCKET+"' -C attach -t =kadan-resume"],{detached:true,stdio:'ignore'});humanClient.unref();
-  waitFor(()=>tm('list-clients','-t','=kadan-resume','-F','#{client_activity}').stdout.trim(),v=>v!=='','사람 client');
+  // 사람이 붙기만 하고 키를 누르지 않았으면 막지 않는다(로티 탭이 시작과 동시에 붙는 표준 흐름, 2026-10-17).
+  const human=attachHuman(realTmux,env.KADAN_SOCKET,'=kadan-resume');
+  probe('attached-only','resume',['--execution','r/resume'],'accept fixture');
+  // 사람이 키를 누르면(실제 pty client 입력) 보류한다. 본문은 붙지 않는다.
+  human.type('x');
   const humanProbe=probe('human-active','resume',['--task','resume']);
   assert.match(humanProbe.error,/사람이 이 창에서 최근 입력/);
   assert.doesNotMatch(tm('capture-pane','-p','-t','kadan-resume').stdout,/REVIEW_BODY_human-active/);
+  human.kill();
   start('dead',bin+'/codex --model model-a');tm('set-option','-t','kadan-dead','remain-on-exit','on');tm('send-keys','-t','kadan-dead','C-c');waitFor(()=>tm('display-message','-p','-t','kadan-dead','#{pane_dead}').stdout.trim(),dead=>dead==='1','dead pane');probe('dead-pane','dead',['--task','dead']);
   start('spoof',bin+'/codex --version; exec cat # --model model-a',false);probe('version-then-cat','spoof',['--execution','r/spoof']);
   const replaced=path.join(home,'replaced');fs.mkdirSync(replaced);

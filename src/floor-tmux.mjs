@@ -445,14 +445,19 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
 // 사람 보호는 이것 하나다(2026-10-17 [kyle] 결정). 화면 모양(프롬프트·자리표시자·테두리·바닥글)을 읽어
 // 미제출 글을 판정하던 장치는 실행기 업데이트마다 빈 입력창을 오판해 발령과 알림을 막아 없앴다.
 // 창에 붙은 사람이 humanIdleMs 안에 키를 눌렀으면 보류한다. 붙은 client가 없으면 통과한다.
-// 받아들인 손해: 사람이 글을 치다 그 시간 넘게 손을 떼면 그 글 뒤에 우편이 붙어 제출될 수 있다.
-// kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다(키 입력만 센다).
+// 붙기만 한 client는 사람 입력이 아니다: tmux는 붙는 순간 client_activity를 client_created와 같게 두고
+// (격리 소켓 실측 2026-10-17: 크기 바꾸기·paste-buffer·send-keys로는 안 변하고 그 client의 키 입력으로만 변한다),
+// 제어 모드 client는 명령을 보내도 변하지 않는다. 그래서 활동이 생성 시각보다 1초 넘게 뒤일 때만 입력으로 센다.
+// 받아들인 손해: 사람이 글을 치다 그 시간 넘게 손을 떼면 그 글 뒤에 우편이 붙어 제출될 수 있고,
+// 붙은 지 1초 안에 누른 첫 키는 놓친다. kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다.
+const ATTACH_ONLY_SECONDS = 1;
 function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_activity}"]).split("\n").filter(Boolean);
-  if (clients.some(value => !/^\d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인 — 잠시 뒤 다시 보내라");
+  const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_created} #{client_activity}"]).split("\n").filter(Boolean);
+  if (clients.some(value => !/^\d+ \d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인 — 잠시 뒤 다시 보내라");
   const at = now ?? Date.now();
-  if (clients.some(value => at - Number(value) * 1000 < humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
+  const typed = clients.map(value => value.split(" ").map(Number)).filter(([created, activity]) => activity - created > ATTACH_ONLY_SECONDS);
+  if (typed.some(([, activity]) => at - activity * 1000 < humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
 }
 
 // 카드는 pane 종료·PID·AI 프로세스를 확인하고 사람 입력 시각을 본다. 기존 복사모드 검사는 그대로 둔다.
