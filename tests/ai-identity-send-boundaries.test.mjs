@@ -44,6 +44,15 @@ const rule = (label='') => label ? '─'.repeat(40-label.length-3)+' '+label+' �
 const realDevin = (input='❭ Ask Devin to build features, fix bugs, or work on your code') => ` Devin CLI\n\n${rule('(bypass permissions on)')}\n${input}\n${rule()}\nSWE-2 Max        ctrl+v to paste image\n\n`;
 const realClaude = (input='❯ ') => `⏺ 이전 답변\n${rule()}\n${input}\n${rule()}\n  ~/Dev/x[main]\n  Opus 5.5 | ctx:26%\n  ⏵⏵ bypass permissions on\n`;
 
+// codex-cli 0.163.0 실측 화면(2026-10-17, 160x40): 프롬프트 36행, 37~39행이 빈 줄·상태줄·안내 줄.
+const codex163Status = '  GPT-6-Astra high · ~/Dev/kadan · main · Context 0% used · weekly 36% left';
+const codex163Hint = (warn = true) => {
+  const left = '  ← for agents · ? for shortcuts';
+  const right = '⚠ 1 warning · f2 to view';
+  return warn ? left + ' '.repeat(160 - left.length - right.length) + right : left;
+};
+const codex163 = (...below) => [...Array(36).fill('old output'), '› Ask Codex to do anything', ...below].join('\n');
+
 function fixture({state='11|0|0|0', width=40, screen='› ', ps='11 1 11 11 /opt/bin/codex --model test-model', afterLoad, psStatus=0} = {}) {
   const calls=[]; let loaded=false;
   return {calls, options:{cardIdentity:identity, pid:1, hrtime:()=>1n,
@@ -89,6 +98,10 @@ for (const [name, config, code] of [
   ['빈 줄 건너 위쪽 프롬프트에 미제출 입력', {state:'11|0|2|2',screen:'› USER_UNSUBMITTED\n\n› '}, 'KADAN_PANE_INPUT_UNKNOWN'],
   ['codex 상태줄 위 미제출 둘째 줄', {state:'11|0|1|2',screen:'\n› \n  SECOND_PENDING\n\n  gpt-6-astra medium · ~/Dev/x'}, 'KADAN_PANE_INPUT_PENDING'],
   ['codex 상태줄 뒤 추가 줄', {state:'11|0|1|2',screen:'\n› \n\n  gpt-6-astra medium · ~/Dev/x\n  EXTRA'}, 'KADAN_PANE_INPUT_PENDING'],
+  ['codex 0.163 프롬프트 바로 아래 글(빈 줄 없음)', {state:'11|0|36|2',width:160,screen:codex163(codex163Status, codex163Hint())}, 'KADAN_PANE_INPUT_PENDING'],
+  ['codex 0.163 상태줄 + 안내 문구가 아닌 보통 글', {state:'11|0|36|2',width:160,screen:codex163('', codex163Status, '  SECOND_PENDING')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['codex 0.163 상태줄 + 안내 줄 + 셋째 글 줄', {state:'11|0|36|2',width:160,screen:codex163('', codex163Status, codex163Hint(), '  THIRD_PENDING')}, 'KADAN_PANE_INPUT_PENDING'],
+  ['codex 안내 문구지만 첫 줄에 가운뎃점이 없음', {state:'11|0|36|2',width:160,screen:codex163('', '  사람이 쓴 초안', codex163Hint())}, 'KADAN_PANE_INPUT_PENDING'],
   ['프롬프트 없는 빈 화면', {screen:''}, 'KADAN_PANE_INPUT_UNKNOWN'],
   ['실제 모델 불일치', {ps:'11 1 11 11 codex --model other'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
   ['실제 모델 미확인', {ps:'11 1 11 11 codex'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
@@ -121,6 +134,8 @@ test('실제 대기 화면(devin·claude·codex)의 빈 입력창에는 카드�
     ['새 claude 창의 흐린 예시 문구', '11|0|2|2', realClaude('❯ Try "write a test for watch-runner.mjs"')],
     ['작업 뒤 흐린 다음 입력 추천(실측 모양)', '11|0|2|2', realClaude('\x1b[39m❯\u00a0\x1b[2m3단계 진행해\x1b[0m')],
     ['codex 시작 화면(배너의 >_ 포함)', '11|0|4|2', '╭──────────╮\n│ >_ OpenAI Codex (v0.155.0) │\n╰──────────╯\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x\n\n'],
+    ['codex 0.163 두 줄 바닥글(경고 있음)', '11|0|36|2', codex163('', codex163Status, codex163Hint())],
+    ['codex 0.163 두 줄 바닥글(경고 없음)', '11|0|36|2', codex163('', codex163Status, codex163Hint(false))],
     ['codex 하단 입력창(과거 프롬프트 포함)', '11|0|5|2', 'old\n› earlier message\n\n• answer\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x'],
   ]) {
     const f=fixture({state, screen});

@@ -442,7 +442,7 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
 }
 
 // 카드 입력창 판별. 추측으로 넣지 않고 실제 화면에서 확인한 형태만 둔다(2026-09-23 실측).
-// - 빈 입력 자리표시자: devin v3000.11.1, codex v0.155.0. 작업 중 자리표시자(Guide Devin…)는 빈 입력이 아니다.
+// - 빈 입력 자리표시자: devin v3000.11.1, codex v0.155.0·v0.163.0. 작업 중 자리표시자(Guide Devin…)는 빈 입력이 아니다.
 // - 입력 상자 경계(devin·claude): 0열에서 pane 폭을 꽉 채우는 가로줄. 입력의 이어지는 줄은 들여쓰기되므로
 //   사용자 글이 이 모양이 될 수 없다. 윗줄에는 devin처럼 `(bypass permissions on)` 표지가 섞인다.
 const PROMPT_LINE = /^\s*[│┃]?[ \t]*[›>❯❭](.*)$/u;
@@ -473,6 +473,16 @@ function allDimAfterPrompt(raw = "") {
   }
   return seen;
 }
+// codex-cli 0.163.0부터 빈 입력창 아래 바닥글이 두 줄이다(2026-10-17 격리 소켓 실측, 160x40):
+//   `  GPT-6-Astra high · ~/Dev/kadan · main · Context 0% used · weekly 36% left`
+//   `  ← for agents · ? for shortcuts            ⚠ 1 warning · f2 to view`
+// 둘째 줄은 단축키 안내다. 안정된 부분은 `? for shortcuts`이고 경고 조각은 경고가 있을 때만 붙는다.
+// 글 모양으로만 판단한다. 안내 줄이 흐린 글씨인지는 받은 사본에 없어 기대지 않는다.
+const CODEX_HINT_PART = /^(?:← for agents|\? for shortcuts|⚠ \d+ warnings?|f2 to view)$/u;
+const isCodexHintLine = line => {
+  const parts = line.trim().split(/\s{2,}| · /u).map(part => part.trim()).filter(Boolean);
+  return parts.includes("? for shortcuts") && parts.every(part => CODEX_HINT_PART.test(part));
+};
 const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
 
 // 화면에 보이는 입력창이 비었는지 확인한다. 카드 전송과 감시기 알림이 같은 기준을 쓴다.
@@ -499,10 +509,12 @@ export function checkEmptyInput(session, run, row, width, label) {
   const rest = prompt[1].trim();
   if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest) && !CLAUDE_PLACEHOLDER.test(rest) && !allDimAfterPrompt(raw[row])) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
   // 상자형(devin·claude)은 바로 아래 닫는 줄 밑을 상태줄로 본다. 상자 없음(codex)은 빈 줄 뒤 상태줄 한 줄만 허용한다.
+  // 단 상태줄에 ` · `가 있고 바로 다음 줄이 단축키 안내(0.163.0)이면 그 한 줄까지 허용한다. 그 뒤는 빈 줄뿐이어야 한다.
   const below = lines.slice(row + 1);
   const footer = below.findIndex(line => line.trim());
+  const tail = footer + (below[footer + 1] !== undefined && below[footer]?.includes(" · ") && isCodexHintLine(below[footer + 1]) ? 2 : 1);
   const closed = boxed ? isInputRule(below[0] ?? "", ruleWidth, false)
-    : footer < 0 || (footer > 0 && below.slice(footer + 1).every(line => !line.trim()));
+    : footer < 0 || (footer > 0 && below.slice(tail).every(line => !line.trim()));
   if (!closed) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면`);
 }
 
