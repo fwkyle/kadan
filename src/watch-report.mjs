@@ -128,7 +128,7 @@ export class WatchReports {
       fs.writeFileSync(path.join(request.evidencePath,'report-complete'),request.requestId,{mode:0o600});
     return result;
   }
-  submit(requestId, verdict, reason) {
+  submit(requestId, verdict, reason, meta={}) {
     if (!WATCH_VERDICTS.includes(verdict)) throw new Error(`판정은 ${WATCH_VERDICTS.join(', ')} 중 하나`);
     if (typeof reason!=='string'||!reason.trim()||reason.length>500) throw new Error('판단 이유는 1~500자로 입력하세요');
     reason=reason.replace(/[\x00-\x1f\x7f]/g,' ').trim();
@@ -159,7 +159,7 @@ export class WatchReports {
       fs.writeFileSync(reasonPath,reason,{mode:0o600});
       report={kind:'watch-ai-report',by:'watch-ai',requestId,key:request.key,source:request.source,
         role:request.role,session:request.session,taskId:request.taskId,responsibility:request.responsibility,observationDigest:request.observationDigest,
-        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),t:new Date(this.now()).toISOString()};
+        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),...meta,t:new Date(this.now()).toISOString()};
       // 먼저 기록해 같은 명령/문제의 재전송을 막는다. 외부 발송은 저장 잠금 밖에서 한다.
       this.record(report);
       if (!stale&&normal(verdict)&&!idleWithoutAsk&&previous&&(!normal(previous.verdict)||previous.idleWithoutAsk)) this.record({kind:'alert',by:'watch',source:'watch-ai',
@@ -244,8 +244,41 @@ export class WatchReports {
   }
 }
 
+const REQUEST_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SAFE_ID=/^[A-Za-z0-9-]{8,64}$/;
+const real=file=>{try{return fs.realpathSync(file);}catch{return path.resolve(file);}};
+// 원장에 남기는 불일치 값: ID 모양이면 그대로, 그 밖의 값은 원문 없이 길이와 짧은 지문만(비밀값·자유 글·줄바꿈 방지).
+const idFields=(name,value)=>{
+  const text=String(value);
+  return SAFE_ID.test(text)?{[`${name}Id`]:text}
+    :{[`${name}Length`]:text.length,[`${name}Digest`]:createHash('sha256').update(text).digest('hex').slice(0,12)};
+};
+// AI가 긴 ID를 옮겨 치다 틀리므로 하네스가 정한 값(환경 → 점검 폴더)을 읽는다.
+// 넘긴 인자가 원장에 있는 요청이면 그 인자를 쓰고(실제로 다른 요청을 지목한 것), 없는 값(오타)이면 하네스 값으로 복구한다.
+// 환경과 점검 폴더가 서로 다르면 어느 쪽이 맞는지 알 수 없으므로 기록하지 않는다.
+export function resolveReportRequest(given,{env=process.env,cwd=process.cwd(),home,reports}) {
+  const fromEnv=typeof env.KADAN_JUDGE_REQUEST==='string'&&env.KADAN_JUDGE_REQUEST?env.KADAN_JUDGE_REQUEST:null;
+  let fromCwd=null;
+  const root=path.join(real(home),'watch-ai'),here=real(cwd),folder=path.basename(here);
+  if (path.dirname(here)===root&&REQUEST_ID.test(folder)&&reports.readRequest(folder)) fromCwd=folder;
+  const harness=fromEnv?{id:fromEnv,source:'env'}:fromCwd?{id:fromCwd,source:'cwd'}:null;
+  if (given&&reports.readRequest(given)) {
+    return {requestId:given,source:'arg',...(harness&&harness.id!==given?{mismatch:idFields('harnessRequest',harness.id)}:{})};
+  }
+  if (fromEnv&&fromCwd&&fromEnv!==fromCwd) throw new Error('환경의 호출ID와 점검 폴더의 호출ID가 달라 어느 쪽인지 알 수 없습니다: 기록하지 않음');
+  if (!harness) {
+    if (!given) throw new Error('호출ID를 알 수 없습니다: 감시AI 점검 폴더에서 실행하거나 호출ID를 넘기세요');
+    return {requestId:given,source:'arg'};
+  }
+  return {requestId:harness.id,source:harness.source,...(given?{mismatch:idFields('givenRequest',given)}:{})};
+}
+
 export function watchReportCommand(args,flags,options) {
-  if (flags.help||!args.length) return 'kadan watch-report <호출ID> --verdict 진행중|입력대기|실행완료|응답장애|정체|모름|조정 --reason 판단이유';
-  if (args.length!==1||Object.keys(flags).some(k=>!['verdict','reason'].includes(k))) throw new Error('watch-report는 호출ID, --verdict, --reason만 사용합니다');
-  return new WatchReports(options).submit(args[0],flags.verdict,flags.reason);
+  const usage='kadan watch-report [호출ID] --verdict 진행중|입력대기|실행완료|응답장애|정체|모름|조정 --reason 판단이유 (호출ID는 생략하면 자동으로 읽음)';
+  if (flags.help||!args.length&&flags.verdict===undefined&&flags.reason===undefined) return usage;
+  if (args.length>1||Object.keys(flags).some(k=>!['verdict','reason'].includes(k))) throw new Error('watch-report는 호출ID(생략 가능), --verdict, --reason만 사용합니다');
+  const reports=new WatchReports(options);
+  const found=resolveReportRequest(args[0],{env:options.env,cwd:options.cwd,home:reports.home,reports});
+  const meta={requestIdSource:found.source,...(found.mismatch?{idMismatch:true,...found.mismatch}:{})};
+  return {...reports.submit(found.requestId,flags.verdict,flags.reason,meta)};
 }

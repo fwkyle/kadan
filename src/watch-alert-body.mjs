@@ -1,5 +1,5 @@
 // 감시 경보 본문·해소 알림·경보 기록 (HW-3-impl: watch-runner.mjs에서 옮김)
-import { watchAILabel } from "./watch-report.mjs";
+import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { idleCountsText } from "./watch-supervisor.mjs";
 
@@ -25,13 +25,33 @@ const ALERT_LABELS = {
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
+// 감시AI오류 알림은 누가·무엇을·무슨 일·대상 문제 여부·할 일을 한 줄로 쓴다(2026-10-17 [kyle]). 기계 키는 바꾸지 않는다.
+// 실패한 점검은 정해진 주기에 다시 불린다: 작업 점검은 화면이 바뀌면 5분, 같으면 30분, 감독 응답 점검은 1시간 뒤(watch-runner workerCheck·SUPERVISOR_CHECK_MS).
+const AI_ERROR_REASONS = {
+  timeout: ["시간 안에 답이 없었음", "없음, 정해진 주기에 다시 점검함"],
+  "report-missing": ["결과를 기록하지 못함", "없음, 정해진 주기에 다시 점검함"],
+  "call-failed": ["점검 AI를 부르지 못함", "반복되면 점검 기록 폴더 확인"],
+  network: ["인터넷 연결이 3번 연속 안 돼 점검하지 못함", "인터넷 연결 확인"],
+  "report-incomplete": ["결과는 기록됐지만 알림 전달 기록이 끝나지 않음", "반복되면 점검 기록 폴더 확인"],
+  "report-error": ["결과를 저장하는 중 오류가 남", "반복되면 점검 기록 폴더 확인"],
+};
+
+// 문제 판정을 따로 보고했다는 말은 실제 전달 기록이 있을 때만 쓴다.
+const abnormalDelivery = (to) => Array.isArray(to) && to.length
+  ? `(문제 판정은 ${to.join(", ")}에게 따로 보고됨)`
+  : "(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨)";
+
+function watchAIErrorBody(alert) {
+  const [happened, todo] = AI_ERROR_REASONS[alert.reason] ?? ["점검 상태를 알 수 없음", "반복되면 점검 기록 폴더 확인"];
+  const what = alert.source === "supervisor-health" ? "응답 상태" : alert.source ? "작업 진행" : "상태";
+  const judged = alert.judgeVerdict
+    ? ` · 점검 AI 판단: ${alert.judgeVerdict}${normalWatchVerdict(alert.judgeVerdict) ? "(정상으로 보임)" : abnormalDelivery(alert.judgeDeliveredTo)}`
+    : "";
+  return `감시기의 점검 AI가 ${alert.role} ${what} 점검에 실패 — ${happened} · ${alert.role}에 문제가 있는지는 모름(점검 도구 문제) · 할 일: ${todo}${judged}`;
+}
+
 export function formatAlertBody(alert) {
-  if (alert.kind === "감시AI오류") {
-    // 판정 AI 자체의 시간 초과는 작업자 응답 장애가 아니다 — 작업 상태는 미판정으로 둔다.
-    if (alert.reason === "timeout") return `${alert.source?watchAILabel(alert.source):'감시AI'} 점검 필요 · ${alert.role} (감시 판정 AI 시간 초과 — 작업 상태 미판정)`;
-    const reason={ network:"인터넷 연결 없음 3회 연속", "call-failed":"호출 실패", "report-missing":"보고 명령 미실행", "report-incomplete":"보고 전달 기록 미완료", "report-error":"보고 실행·기록 오류"}[alert.reason] || "호출 상태 확인 필요";
-    return `${alert.source?watchAILabel(alert.source):'감시AI'} 점검 필요 · ${alert.role} (${reason}; 작업 상태 판정과 별개)`;
-  }
+  if (alert.kind === "감시AI오류") return watchAIErrorBody(alert);
   if (alert.kind === "입력큐") {
     return `입력 큐 대기 ${alert.session} (${alert.line})`;
   }
@@ -125,6 +145,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.verdict !== undefined ? {verdict:alert.verdict} : {}),
       ...(alert.reason !== undefined ? {reason:alert.reason} : {}),
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
+      ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
       ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
@@ -157,6 +178,7 @@ export function seedAlertState(entries) {
     active.push({
       id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
+      ...(e.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:e.judgeDeliveredTo} : {}),
     });
     if (e.delivered && e.recipient) recipients.set(e.id, e.recipient);
   }

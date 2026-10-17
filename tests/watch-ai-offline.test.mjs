@@ -70,7 +70,7 @@ test('인터넷 없음은 깨어 있는 동안 3번 이어질 때만 알리고, 
  assert.equal((await watchWith(['network','network','reported','network'])).alerts.length,0,'성공하면 다시 센다');
  const three=await watchWith(['network','network','network']);
  assert.equal(three.alerts.length,1);
- assert.ok(three.prints.some(m=>m.includes('인터넷 연결 없음 3회 연속')),three.prints.join('\n'));
+ assert.ok(three.prints.some(m=>m.includes('인터넷 연결이 3번 연속 안 돼')),three.prints.join('\n'));
  assert.equal((await watchWith(['slept','slept','slept','slept'])).alerts.length,0);
  // 두 번 실패한 뒤 맥북이 잠들었다 깨면 세던 횟수를 버린다 — 깬 뒤 한 번 더 실패해도 알리지 않는다.
  assert.equal((await watchWith(['network','network','network'],{gapAt:2})).alerts.length,0);
