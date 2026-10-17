@@ -524,13 +524,21 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     stage = "body-pasted";
     spawn("sleep", ["1"]);
     checkMode();
+    // 붙여넣기와 Enter 사이 1초에 사람이 치면 그 글과 함께 제출된다. Enter 직전에 같은 사람 입력 검사를 한 번 더 한다.
+    // 거부되면 본문은 이미 붙었으므로 지우지 않고 Enter만 보내지 않는다(stage가 body-pasted라 아래 catch가 delivery=unknown을 붙인다).
+    // 5번째 강제 알림은 앞 검사처럼 건너뛴다.
+    if (!(notificationGuard?.force === true && !cardIdentity)) {
+      try { checkHumanIdle(session, run, cardIdentity ? undefined : notificationGuard); }
+      catch (error) { error.enterWithheld = true; throw error; }
+    }
     stage = "enter-attempted";
     run(["send-keys", "-t", `=${session}:`, "Enter"]);
   } catch (error) {
     error.delivery = stage === "not-started" ? "not-sent" : "unknown";
     error.sendStage = stage;
     error.inputAcceptance = "unconfirmed";
-    if (stage !== "not-started") error.message += " — 본문 전송을 시도했으나 입력 제출 미확인; 본문/Enter 자동 재전송 금지";
+    if (error.enterWithheld) error.message += " — 본문은 붙었고 Enter는 보내지 않음; 본문/Enter 자동 재전송 금지";
+    else if (stage !== "not-started") error.message += " — 본문 전송을 시도했으나 입력 제출 미확인; 본문/Enter 자동 재전송 금지";
     if (loaded) {
       try {
         run(["delete-buffer", "-b", buffer]);

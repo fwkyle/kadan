@@ -187,10 +187,10 @@ test('감시기 강제 알림(force)은 사람 입력 검사를 건너뛴다', (
   assert.equal(count(f,'list-clients'),0);
 });
 
-test('붙여넣기 전·후 두 번 사람 입력을 본다', () => {
+test('붙여넣기 전·후와 Enter 직전, 세 번 사람 입력을 본다', () => {
   const f=fixture({card:false});
   sendTmux('kadan-r','MAIL',f.options);
-  assert.equal(count(f,'list-clients'),2);
+  assert.equal(count(f,'list-clients'),3);
 });
 
 test('notificationHold는 붙여넣지 않고 같은 사람 입력 기준으로 보류 사유만 돌려준다', () => {
