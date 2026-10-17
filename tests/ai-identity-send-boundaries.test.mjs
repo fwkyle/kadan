@@ -139,23 +139,29 @@ for (const [path, cfg] of Object.entries(PATHS)) {
 }
 
 test('방금 붙었지만 키를 누르지 않은 client는 사람 입력이 아니다 — 세 경로 모두 통과', () => {
-  for (const cfg of Object.values(PATHS)) for (const clients of [attachedOnly(0), attachedOnly(1), `${attachedOnly(0)}\n${typed(3600)}`]) {
+  for (const cfg of Object.values(PATHS)) for (const clients of [attachedOnly(0), attachedOnly(3), `${attachedOnly(0)}\n${typed(3600)}`]) {
     const f=fixture({clients, card:cfg.card});
     send(f, cfg.guard ? {humanIdleMs:30_000} : undefined);
     assert.equal(count(f,'paste-buffer'),1, clients);
   }
 });
 
-test('붙은 뒤 10초에 키를 누르면 보류한다(붙은 시각 기준 1초 넘게 뒤의 활동만 입력)', () => {
+test('붙은 뒤 10초에 키를 누르면 보류한다(활동이 붙은 시각보다 뒤일 때만 입력)', () => {
   const at=nowSec();
   for (const cfg of Object.values(PATHS)) {
     const f=fixture({clients:`${at - 12} ${at - 2}`, card:cfg.card});
     assert.throws(()=>send(f, cfg.guard ? {humanIdleMs:30_000} : undefined), e=>e.code==='KADAN_HUMAN_ACTIVE' && e.delivery==='not-sent');
     assert.equal(count(f,'paste-buffer'),0);
   }
-  // 경계: 붙은 지 정확히 1초 뒤 활동은 입력으로 세지 않고, 2초 뒤부터 센다.
-  assert.equal(count((()=>{const f=fixture({clients:`${at - 5} ${at - 4}`, card:false}); send(f); return f;})(),'paste-buffer'),1);
-  assert.throws(()=>send(fixture({clients:`${at - 5} ${at - 3}`, card:false})), e=>e.code==='KADAN_HUMAN_ACTIVE');
+  // 경계: 차이 0이면 통과, 차이 1이면 보류(붙은 뒤 1초대 입력도 입력이다, 검수 P2).
+  for (const cfg of Object.values(PATHS)) {
+    const pass=fixture({clients:`${at - 5} ${at - 5}`, card:cfg.card});
+    send(pass, cfg.guard ? {humanIdleMs:30_000} : undefined);
+    assert.equal(count(pass,'paste-buffer'),1);
+    const held=fixture({clients:`${at - 5} ${at - 4}`, card:cfg.card});
+    assert.throws(()=>send(held, cfg.guard ? {humanIdleMs:30_000} : undefined), e=>e.code==='KADAN_HUMAN_ACTIVE');
+    assert.equal(count(held,'paste-buffer'),0);
+  }
 });
 
 test('client 값이 한쪽만 있거나 음수·소수면 실패 닫힘', () => {

@@ -447,16 +447,15 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
 // 창에 붙은 사람이 humanIdleMs 안에 키를 눌렀으면 보류한다. 붙은 client가 없으면 통과한다.
 // 붙기만 한 client는 사람 입력이 아니다: tmux는 붙는 순간 client_activity를 client_created와 같게 두고
 // (격리 소켓 실측 2026-10-17: 크기 바꾸기·paste-buffer·send-keys로는 안 변하고 그 client의 키 입력으로만 변한다),
-// 제어 모드 client는 명령을 보내도 변하지 않는다. 그래서 활동이 생성 시각보다 1초 넘게 뒤일 때만 입력으로 센다.
+// 제어 모드 client는 명령을 보내도 변하지 않는다. 그래서 활동이 생성 시각보다 뒤일 때(`activity > created`, 초 단위라 차이 1초 이상)만 입력으로 센다.
 // 받아들인 손해: 사람이 글을 치다 그 시간 넘게 손을 떼면 그 글 뒤에 우편이 붙어 제출될 수 있고,
-// 붙은 지 1초 안에 누른 첫 키는 놓친다. kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다.
-const ATTACH_ONLY_SECONDS = 1;
+// 붙은 바로 그 초 안에 누른 키는 놓친다. 반대로 붙은 뒤 터미널 응답 같은 입력이 다음 초에 들어와 활동이 바뀌면 그 창은 30초 보류된다. kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다.
 function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_created} #{client_activity}"]).split("\n").filter(Boolean);
   if (clients.some(value => !/^\d+ \d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인 — 잠시 뒤 다시 보내라");
   const at = now ?? Date.now();
-  const typed = clients.map(value => value.split(" ").map(Number)).filter(([created, activity]) => activity - created > ATTACH_ONLY_SECONDS);
+  const typed = clients.map(value => value.split(" ").map(Number)).filter(([created, activity]) => activity > created);
   if (typed.some(([, activity]) => at - activity * 1000 < humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
 }
 

@@ -14,11 +14,11 @@ export function attachHuman(tmuxBin, socket, target) {
   if (clients() === '') { child.kill(); throw new Error('시험 사람 client가 tmux에 붙지 못했다'); }
   return {
     child, clients,
-    // 붙은 지 2초 넘은 뒤 키를 눌러야 입력으로 센다(초 단위 시각).
-    type(keys = 'x') {
-      sleep(2500); child.stdin.write(keys);
+    // 붙은 뒤 delayMs 지나 키를 누른다. 활동은 초 단위라 붙은 시각보다 1초 이상 뒤여야 값이 달라진다.
+    type(keys = 'x', delayMs = 2500) {
+      sleep(delayMs); child.stdin.write(keys);
       const until = Date.now() + 5000;
-      const moved = () => { const [c, a] = clients().split(' ').map(Number); return a - c > 1; };
+      const moved = () => { const [c, a] = clients().split(' ').map(Number); return a > c; };
       while (!moved() && Date.now() < until) sleep(20);
     },
     kill() { child.kill(); },

@@ -77,6 +77,14 @@ process.exit(r.status??1);\n`,{mode:0o755});
   assert.match(humanProbe.error,/사람이 이 창에서 최근 입력/);
   assert.doesNotMatch(tm('capture-pane','-p','-t','kadan-resume').stdout,/REVIEW_BODY_human-active/);
   human.kill();
+  // 검수 P2 재현: 붙은 뒤 약 1.25초에 친 문장도 카드·일반 우편 모두 보호한다.
+  const quick=attachHuman(realTmux,env.KADAN_SOCKET,'=kadan-resume');
+  quick.type('y',1250);
+  for(const [name,args] of [['quick-card',['--task','resume']],['quick-mail',['--execution','r/resume']]]){
+   const q=probe('human-1.25s-'+name,'resume',args);
+   assert.match(q.error,/사람이 이 창에서 최근 입력/);
+  }
+  quick.kill();
   start('dead',bin+'/codex --model model-a');tm('set-option','-t','kadan-dead','remain-on-exit','on');tm('send-keys','-t','kadan-dead','C-c');waitFor(()=>tm('display-message','-p','-t','kadan-dead','#{pane_dead}').stdout.trim(),dead=>dead==='1','dead pane');probe('dead-pane','dead',['--task','dead']);
   start('spoof',bin+'/codex --version; exec cat # --model model-a',false);probe('version-then-cat','spoof',['--execution','r/spoof']);
   const replaced=path.join(home,'replaced');fs.mkdirSync(replaced);

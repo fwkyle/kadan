@@ -229,8 +229,10 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
     waitFor(() => contents().includes('PEER_ATTACHED_ONLY'));
     assert.match(contents(), /PEER_ATTACHED_ONLY/);
     assert.equal(sends().length, 2);
-    // 사람이 키를 누르면 보류 → 보관, 창은 그대로.
-    human.type('x');
+    // 사람이 붙은 뒤 1.25초에 키를 누르면(검수 P2) 보류 → 보관, 창은 그대로.
+    human.kill();
+    human = attachHuman('tmux', socket, '=kadan-q-super');
+    human.type('x', 1250);
     const before = contents();
     const held = call('p-super', 'mail', 'q-super', 'PEER_HELD');
     assert.equal(held.status, 0, held.stderr);
