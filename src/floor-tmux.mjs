@@ -6,6 +6,7 @@ import { matchesAiProcess } from "./ai-identity.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./floor-rottie.mjs";
+import { HUMAN_IDLE_MS } from "./notification-guard.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -441,89 +442,25 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
   return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
 }
 
-// 카드 입력창 판별. 추측으로 넣지 않고 실제 화면에서 확인한 형태만 둔다(2026-09-23 실측).
-// - 빈 입력 자리표시자: devin v3000.11.1, codex v0.155.0·v0.163.0. 작업 중 자리표시자(Guide Devin…)는 빈 입력이 아니다.
-// - 입력 상자 경계(devin·claude): 0열에서 pane 폭을 꽉 채우는 가로줄. 입력의 이어지는 줄은 들여쓰기되므로
-//   사용자 글이 이 모양이 될 수 없다. 윗줄에는 devin처럼 `(bypass permissions on)` 표지가 섞인다.
-const PROMPT_LINE = /^\s*[│┃]?[ \t]*[›>❯❭](.*)$/u;
-const EMPTY_INPUT_PLACEHOLDERS = new Set(["Ask Devin to build features, fix bugs, or work on your code", "Ask Codex to do anything"]);
-// claude-code v2.1.280: 새 창 입력창에 흐린 글씨(SGR 2)로 `Try "…"` 예시가 뜬다. 문구는 매번 바뀌어 모양으로만 맞춘다(2026-09-23 실측).
-const CLAUDE_PLACEHOLDER = /^Try "[^"\n]+"$/u;
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/gu;
-// 입력칸 글이 모두 흐린 글씨(SGR 2)면 실행기가 띄운 예시·추천 문구다. 사람이 친 글은 흐리지 않다.
-// claude-code는 새 창의 `Try "…"` 예시와 작업 뒤 "다음 입력 추천"을 흐리게 띄운다(2026-09-23 capture -e 실측).
-function allDimAfterPrompt(raw = "") {
-  let dim = false, prompt = false, seen = false;
-  for (let i = 0; i < raw.length;) {
-    const sgr = raw.slice(i).match(/^\x1b\[([0-9;?]*)([A-Za-z])/u);
-    if (sgr) {
-      if (sgr[2] === "m") for (const code of (sgr[1] || "0").split(";")) {
-        if (code === "2") dim = true;
-        else if (code === "" || code === "0" || code === "22") dim = false;
-      }
-      i += sgr[0].length;
-      continue;
-    }
-    const ch = String.fromCodePoint(raw.codePointAt(i));
-    i += ch.length;
-    if (!prompt) { prompt = /[›>❯❭]/u.test(ch); continue; }
-    if (/\s/u.test(ch)) continue;
-    if (!dim) return false;
-    seen = true;
-  }
-  return seen;
-}
-// codex-cli 0.163.0부터 빈 입력창 아래 바닥글이 두 줄이다(2026-10-17 격리 소켓 실측, 160x40):
-//   `  GPT-6-Astra high · ~/Dev/kadan · main · Context 0% used · weekly 36% left`
-//   `  ← for agents · ? for shortcuts            ⚠ 1 warning · f2 to view`
-// 둘째 줄은 단축키 안내다. 안정된 부분은 `? for shortcuts`이고 경고 조각은 경고가 있을 때만 붙는다.
-// 글 모양으로만 판단한다. 안내 줄이 흐린 글씨인지는 받은 사본에 없어 기대지 않는다.
-const CODEX_HINT_PART = /^(?:← for agents|\? for shortcuts|⚠ \d+ warnings?|f2 to view)$/u;
-const isCodexHintLine = line => {
-  const parts = line.trim().split(/\s{2,}| · /u).map(part => part.trim()).filter(Boolean);
-  return parts.includes("? for shortcuts") && parts.every(part => CODEX_HINT_PART.test(part));
-};
-const isInputRule = (line, width, labelled) => [...line].length === width && (labelled ? /^─.*─$/u : /^─+$/u).test(line);
-
-// 화면에 보이는 입력창이 비었는지 확인한다. 카드 전송과 감시기 알림이 같은 기준을 쓴다.
-// width가 숫자면 바닥이 준 폭과 테두리 길이가 정확히 같아야 한다(tmux·Rottie).
-// width가 null이면 바닥의 폭 숫자를 믿지 않고, 위·아래 테두리가 같은 길이이면서
-// 가져온 화면에서 가장 긴 줄과 같을 때만 입력창 테두리로 본다(herdr: 접속 창 크기와 폭 숫자가 어긋난다).
-export function checkEmptyInput(session, run, row, width, label) {
+// 사람 보호는 이것 하나다(2026-10-17 [kyle] 결정). 화면 모양(프롬프트·자리표시자·테두리·바닥글)을 읽어
+// 미제출 글을 판정하던 장치는 실행기 업데이트마다 빈 입력창을 오판해 발령과 알림을 막아 없앴다.
+// 창에 붙은 사람이 humanIdleMs 안에 키를 눌렀으면 보류한다. 붙은 client가 없으면 통과한다.
+// 받아들인 손해: 사람이 글을 치다 그 시간 넘게 손을 떼면 그 글 뒤에 우편이 붙어 제출될 수 있다.
+// kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다(키 입력만 센다).
+function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  // 글자 모양(-e)까지 읽어 흐린 추천 문구와 사람이 친 글을 가른다. 판단은 모양을 뺀 글로 한다.
-  const raw = run(["capture-pane", "-e", "-p", "-t", `=${session}:`]).split("\n");
-  const lines = raw.map(line => line.replace(ANSI, ""));
-  if (row >= lines.length) deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 입력 줄 미확인`);
-  // 입력 줄은 커서가 있는 프롬프트 줄 하나다. 화면 전체를 훑으면 배너(`│ >_ OpenAI Codex`)나
-  // 본문 인용까지 후보가 되어 실제 대기 화면을 거부한다(2026-09-23 devin·claude·codex 실측).
-  const prompt = lines[row].match(PROMPT_LINE);
-  if (!prompt) {
-    if (lines.slice(0, row).some(line => PROMPT_LINE.test(line))) deny("KADAN_PANE_INPUT_PENDING", `${label}: 커서가 프롬프트 줄 밖이라 여러 줄 미제출 입력일 수 있음`);
-    deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 현재 입력 영역의 프롬프트 미확인`);
-  }
-  // 위쪽 가장 가까운 글 줄도 프롬프트 모양이면 여러 줄 입력의 이어지는 줄인지 구별할 수 없다.
-  if (PROMPT_LINE.test(lines.slice(0, row).findLast(line => line.trim()) ?? "")) deny("KADAN_PANE_INPUT_UNKNOWN", `${label}: 프롬프트 위 입력 경계 미확인`);
-  const ruleWidth = width ?? Math.max(...lines.map(line => [...line].length));
-  const boxed = row > 0 && isInputRule(lines[row - 1], ruleWidth, true);
-  const rest = prompt[1].trim();
-  if (rest && !EMPTY_INPUT_PLACEHOLDERS.has(rest) && !CLAUDE_PLACEHOLDER.test(rest) && !allDimAfterPrompt(raw[row])) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력이 있음`);
-  // 상자형(devin·claude)은 바로 아래 닫는 줄 밑을 상태줄로 본다. 상자 없음(codex)은 빈 줄 뒤 상태줄 한 줄만 허용한다.
-  // 단 상태줄에 ` · `가 있고 바로 다음 줄이 단축키 안내(0.163.0)이면 그 한 줄까지 허용한다. 그 뒤는 빈 줄뿐이어야 한다.
-  const below = lines.slice(row + 1);
-  const footer = below.findIndex(line => line.trim());
-  const tail = footer + (below[footer + 1] !== undefined && below[footer]?.includes(" · ") && isCodexHintLine(below[footer + 1]) ? 2 : 1);
-  const closed = boxed ? isInputRule(below[0] ?? "", ruleWidth, false)
-    : footer < 0 || (footer > 0 && below.slice(tail).every(line => !line.trim()));
-  if (!closed) deny("KADAN_PANE_INPUT_PENDING", `${label}: 미제출 입력 또는 빈 입력창으로 확인할 수 없는 화면`);
+  const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_activity}"]).split("\n").filter(Boolean);
+  if (clients.some(value => !/^\d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인 — 잠시 뒤 다시 보내라");
+  const at = now ?? Date.now();
+  if (clients.some(value => at - Number(value) * 1000 < humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
 }
 
-// 카드만 검사한다. 일반 우편/Enter 전용 경로와 기존 복사모드 검사는 그대로 둔다.
+// 카드는 pane 종료·PID·AI 프로세스를 확인하고 사람 입력 시각을 본다. 기존 복사모드 검사는 그대로 둔다.
 function checkCardPane(session, identity, run, spawn) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  const state = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}|#{pane_width}"]).trim();
-  if (!/^\d+\|[01]\|\d+\|\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "카드 전송 불가: pane 상태 미확인");
-  const [pid, dead, y, , w] = state.split("|");
+  const state = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}"]).trim();
+  if (!/^\d+\|[01]$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "카드 전송 불가: pane 상태 미확인");
+  const [pid, dead] = state.split("|");
   if (dead !== "0") deny("KADAN_PANE_DEAD", "카드 전송 불가: 종료된 pane");
   if (pid !== String(identity.currentPid)) deny("KADAN_PID_MISMATCH", "카드 전송 불가: 검사 중 pane 세대 변경");
   const ps = spawn("ps", ["-ww", "-axo", "pid=,ppid=,pgid=,tpgid=,args="], {encoding:"utf8"});
@@ -538,23 +475,14 @@ function checkCardPane(session, identity, run, spawn) {
   if (!(Number(foreground) > 0) || !rows.some(row => descendants.has(row[1]) && row[3] === foreground && matchesAiProcess(row[5], identity.harness, identity.model))) {
     deny("KADAN_AI_PROCESS_UNVERIFIED", "카드 전송 불가: 현재 pane 프로세스의 AI 실행기·명시 모델이 시작 기록과 다르거나 미확인이다");
   }
-  checkEmptyInput(session, run, Number(y), Number(w), "카드 전송 불가");
+  checkHumanIdle(session, run);
 }
 
-// 감시기 알림은 사람의 입력을 덮지 않는다(2026-09-23 미확인 우편 알림이 kyle의 입력 중 문장에 붙어 제출된 사고).
-// 창에 붙은 사람이 최근 키를 눌렀거나 입력창에 글이 있으면 보류한다. kadan 붙여넣기는 client 활동에 잡히지 않는다.
+// 감시기 알림도 사람의 입력을 덮지 않는다(2026-09-23 미확인 우편 알림이 kyle의 입력 중 문장에 붙어 제출된 사고).
 function checkNotificationPane(session, guard, run) {
   // 감시기가 5번 연속 밀린 알림을 입력 보호 없이 넣는 차례다(2026-10-13). 기록보기 확인은 sendTmux가 따로 한다.
   if (guard.force === true) return;
-  const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  const state = run(["display-message", "-p", "-t", `=${session}:`, "#{cursor_y}|#{pane_width}"]).trim();
-  if (!/^\d+\|\d+$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "알림 미룸: pane 상태 미확인");
-  const [y, w] = state.split("|");
-  const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_activity}"]).split("\n").filter(Boolean);
-  if (clients.some(value => !/^\d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "알림 미룸: 사람 입력 시각 미확인");
-  const now = guard.now ?? Date.now();
-  if (clients.some(value => now - Number(value) * 1000 < guard.humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "알림 미룸: 사람이 이 창에서 최근 입력함");
-  checkEmptyInput(session, run, Number(y), Number(w), "알림 미룸");
+  checkHumanIdle(session, run, guard);
 }
 
 // 붙여넣지 않고 알림 보류 사유만 돌려준다. 감시기가 예약 기록 전에 확인해 순회마다 기록이 쌓이지 않게 한다.
@@ -568,18 +496,22 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
   let stage = "not-started";
   let loaded = false;
   const checkMode = () => checkPaneMode(session, run);
+  // 카드·알림·일반 우편이 같은 사람 입력 시각 기준을 쓴다. 일반 우편은 알림 보호 객체가 없으면 기본 30초다.
+  const checkSendPane = () => {
+    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
+    else if (notificationGuard) checkNotificationPane(session, notificationGuard, run);
+    else checkHumanIdle(session, run);
+  };
   let released = false;
   try {
     // 감시기 알림이 5번 밀린 강제 차례에 한해 복사 모드를 해제하고 넣는다(2026-10-14).
     if (notificationGuard?.force === true && !cardIdentity) released = checkPaneMode(session, run, {release: true});
     else checkMode();
-    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
-    else if (notificationGuard) checkNotificationPane(session, notificationGuard, run);
+    checkSendPane();
     run(["load-buffer", "-b", buffer, "-"], text);
     loaded = true;
     checkMode();
-    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
-    else if (notificationGuard) checkNotificationPane(session, notificationGuard, run);
+    checkSendPane();
     stage = "paste-attempted";
     // -p: 괄호 붙여넣기. 없으면 Claude Code가 본문 줄바꿈과 뒤따르는 Enter를 구분하지 못해
     // 짧은 본문에서 Enter가 먹힌다(2026-09-23 실측: 2초 뒤 Enter도 누락, -p면 0.4초도 제출).

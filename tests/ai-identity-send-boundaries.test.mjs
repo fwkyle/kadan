@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {inspectCardSendIdentity, matchesAiProcess} from '../src/ai-identity.mjs';
-import {sendTmux} from '../src/floor-tmux.mjs';
+import {sendTmux, tmuxFloor} from '../src/floor-tmux.mjs';
 
 const identity = {harness:'codex', model:'test-model', currentPid:'11'};
 const inspect = cmd => inspectCardSendIdentity({entries:[{kind:'start', session:'kadan-r', panePid:'11', cmd}], session:'kadan-r', currentPid:'11'});
@@ -40,114 +40,128 @@ test('프로세스 실행 파일/스크립트 자리만 실행기 이름으로 �
   }
 });
 
-const rule = (label='') => label ? '─'.repeat(40-label.length-3)+' '+label+' ─' : '─'.repeat(40);
-const realDevin = (input='❭ Ask Devin to build features, fix bugs, or work on your code') => ` Devin CLI\n\n${rule('(bypass permissions on)')}\n${input}\n${rule()}\nSWE-2 Max        ctrl+v to paste image\n\n`;
-const realClaude = (input='❯ ') => `⏺ 이전 답변\n${rule()}\n${input}\n${rule()}\n  ~/Dev/x[main]\n  Opus 5.5 | ctx:26%\n  ⏵⏵ bypass permissions on\n`;
-
-// codex-cli 0.163.0 실측 화면(2026-10-17, 160x40): 프롬프트 36행, 37~39행이 빈 줄·상태줄·안내 줄.
-const codex163Status = '  GPT-6-Astra high · ~/Dev/kadan · main · Context 0% used · weekly 36% left';
-const codex163Hint = (warn = true) => {
-  const left = '  ← for agents · ? for shortcuts';
-  const right = '⚠ 1 warning · f2 to view';
-  return warn ? left + ' '.repeat(160 - left.length - right.length) + right : left;
-};
-const codex163 = (...below) => [...Array(36).fill('old output'), '› Ask Codex to do anything', ...below].join('\n');
-
-function fixture({state='11|0|0|0', width=40, screen='› ', ps='11 1 11 11 /opt/bin/codex --model test-model', afterLoad, psStatus=0} = {}) {
+// 화면 모양(프롬프트·자리표시자·테두리·바닥글)은 보지 않는다(2026-10-17 [kyle]). 사람 보호는 client_activity 하나다.
+// 가짜 run은 kadan 자신의 paste-buffer가 client_activity를 바꾸지 않는다는 전제를 따른다(실제 tmux도 키 입력만 센다).
+const nowSec = () => Math.floor(Date.now() / 1000);
+function fixture({state='11|0', ps='11 1 11 11 /opt/bin/codex --model test-model', clients='', afterLoad, psStatus=0, screen='› 쓰던 글', card=true} = {}) {
   const calls=[]; let loaded=false;
-  return {calls, options:{cardIdentity:identity, pid:1, hrtime:()=>1n,
+  return {calls, options:{...(card ? {cardIdentity:identity} : {}), pid:1, hrtime:()=>1n,
     run(args) {
       calls.push(args);
       if(args.includes('#{pane_in_mode}')) return '0';
-      if(args.includes('#{pane_pid}|#{pane_dead}|#{cursor_y}|#{cursor_x}|#{pane_width}')) return `${loaded && afterLoad?.state || state}|${width}`;
-      if(args[0]==='capture-pane') return loaded && afterLoad?.screen !== undefined ? afterLoad.screen : screen;
+      if(args.includes('#{pane_pid}|#{pane_dead}')) return loaded && afterLoad?.state || state;
+      if(args[0]==='list-clients') return loaded && afterLoad?.clients !== undefined ? afterLoad.clients : clients;
+      if(args[0]==='capture-pane') return screen;
       if(args[0]==='load-buffer') loaded=true;
       return '';
     },
     spawn(bin) {return bin==='ps' ? {status:psStatus,stdout:ps} : {status:0};},
   }};
 }
+const count = (f, name) => f.calls.filter(a=>a[0]===name).length;
 
 for (const [name, config, code] of [
   ['현재 프로세스가 cat으로 교체됨', {ps:'11 1 11 11 cat\n22 1 22 22 codex --model x'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
   ['AI가 뒤에서만 남고 cat이 입력을 받음', {ps:'11 1 11 11 cat\n12 11 12 11 codex --model x'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
-  ['죽은 pane', {state:'11|1|0|0'}, 'KADAN_PANE_DEAD'],
-  ['미제출 입력', {state:'11|0|0|13',screen:'› USER_PENDING_'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['커서를 맨 앞으로 옮긴 미제출 입력', {screen:'› USER_PENDING_'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['여러 줄 입력', {state:'11|0|2|0',screen:'› first\nsecond\n'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['커서 아래 미제출 입력', {screen:'› \nSECOND_PENDING'}, 'KADAN_PANE_INPUT_PENDING'],
-  ...['│', '┃', '│ │', '┃ ┃', '│┃', ' │ ', ' ┃ '].flatMap(text => [
-    ['첫 줄 세로 문자 '+JSON.stringify(text), {screen:'› '+text}, 'KADAN_PANE_INPUT_PENDING'],
-    ['커서 아래 세로 문자 '+JSON.stringify(text), {screen:'› \n'+text}, 'KADAN_PANE_INPUT_PENDING'],
-  ]),
-  ['테두리인지 입력인지 미확인', {screen:'│ ›  │'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['버퍼 준비 중 세로 문자 입력', {afterLoad:{screen:'› │'}}, 'KADAN_PANE_INPUT_PENDING'],
-  ...['›', '>', '❯'].map(prompt => ['본문 속 가짜 프롬프트 '+prompt, {state:'11|0|1|2',screen:'› USER_UNSUBMITTED\n'+prompt+' '}, 'KADAN_PANE_INPUT_UNKNOWN']),
-  ['본문 속 가짜 구분선', {screen:'› \n──────\nUSER_BELOW_BORDER'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['본문 끝의 구분선도 빈 입력이 아니다', {screen:'› \n──────'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['테두리 안 커서 아래 미제출 입력', {state:'11|0|1|2',screen:'╭────╮\n│ ›  │\n│ SECOND_PENDING │\n╰────╯\nstatus'}, 'KADAN_PANE_INPUT_PENDING'],
-  // 2026-09-23 실측 화면 모양(폭 40으로 축소). 빈 입력 판별이 실제 TUI에서 풀려도 아래는 계속 거부한다.
-  ['claude 입력창에 미제출 입력', {state:'11|0|2|12',screen:realClaude('❯ 업무는 내가 완료 처리할게')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['Try 예시 뒤에 이어 쓴 입력', {state:'11|0|2|2',screen:realClaude('❯ Try "x" 그리고 이것도')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['흐리지 않은 같은 문장은 사람이 친 글', {state:'11|0|2|2',screen:realClaude('\x1b[39m❯\u00a0\x1b[0m3단계 진행해')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['흐린 추천 뒤에 사람이 이어 친 글', {state:'11|0|2|2',screen:realClaude('❯ \x1b[2m3단계 진행해\x1b[0m 지금')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['흐림을 22로 끈 뒤의 글', {state:'11|0|2|2',screen:realClaude('❯ \x1b[2m추천\x1b[22m사람')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['claude 입력 상자 안 둘째 줄 미제출 입력', {state:'11|0|2|2',screen:'out\n'+rule()+'\n❯ \n  SECOND_PENDING\n'+rule()+'\n  status'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['devin 작업 중 자리표시자', {state:'11|0|3|2',screen:realDevin('❭ Guide Devin while it works')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['pane 폭보다 짧은 가로줄은 입력 상자가 아니다', {state:'11|0|1|2',screen:'─'.repeat(30)+'\n❯ \n'+'─'.repeat(30)}, 'KADAN_PANE_INPUT_PENDING'],
-  ['빈 줄 건너 위쪽 프롬프트에 미제출 입력', {state:'11|0|2|2',screen:'› USER_UNSUBMITTED\n\n› '}, 'KADAN_PANE_INPUT_UNKNOWN'],
-  ['codex 상태줄 위 미제출 둘째 줄', {state:'11|0|1|2',screen:'\n› \n  SECOND_PENDING\n\n  gpt-6-astra medium · ~/Dev/x'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['codex 상태줄 뒤 추가 줄', {state:'11|0|1|2',screen:'\n› \n\n  gpt-6-astra medium · ~/Dev/x\n  EXTRA'}, 'KADAN_PANE_INPUT_PENDING'],
-  ['codex 0.163 프롬프트 바로 아래 글(빈 줄 없음)', {state:'11|0|36|2',width:160,screen:codex163(codex163Status, codex163Hint())}, 'KADAN_PANE_INPUT_PENDING'],
-  ['codex 0.163 상태줄 + 안내 문구가 아닌 보통 글', {state:'11|0|36|2',width:160,screen:codex163('', codex163Status, '  SECOND_PENDING')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['codex 0.163 상태줄 + 안내 줄 + 셋째 글 줄', {state:'11|0|36|2',width:160,screen:codex163('', codex163Status, codex163Hint(), '  THIRD_PENDING')}, 'KADAN_PANE_INPUT_PENDING'],
-  ['codex 안내 문구지만 첫 줄에 가운뎃점이 없음', {state:'11|0|36|2',width:160,screen:codex163('', '  사람이 쓴 초안', codex163Hint())}, 'KADAN_PANE_INPUT_PENDING'],
-  ['프롬프트 없는 빈 화면', {screen:''}, 'KADAN_PANE_INPUT_UNKNOWN'],
+  ['죽은 pane', {state:'11|1'}, 'KADAN_PANE_DEAD'],
+  ['pane 세대(PID) 변경', {state:'12|0'}, 'KADAN_PID_MISMATCH'],
+  ['pane 상태 미확인', {state:'?'}, 'KADAN_PANE_STATE_UNKNOWN'],
   ['실제 모델 불일치', {ps:'11 1 11 11 codex --model other'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
   ['실제 모델 미확인', {ps:'11 1 11 11 codex'}, 'KADAN_AI_PROCESS_UNVERIFIED'],
-  ['입력 상태 미확인', {state:'11|0|9|0',screen:''}, 'KADAN_PANE_INPUT_UNKNOWN'],
   ['프로세스 조회 실패', {psStatus:1}, 'KADAN_AI_PROCESS_UNKNOWN'],
-  ['버퍼 준비 중 죽음', {afterLoad:{state:'11|1|0|0'}}, 'KADAN_PANE_DEAD'],
-  ['버퍼 준비 중 사용자 입력', {afterLoad:{screen:'› new input'}}, 'KADAN_PANE_INPUT_PENDING'],
+  ['버퍼 준비 중 죽음', {afterLoad:{state:'11|1'}}, 'KADAN_PANE_DEAD'],
+  ['사람 입력 시각 미확인', {clients:'x'}, 'KADAN_HUMAN_ACTIVITY_UNKNOWN'],
+  ['버퍼 준비 중 사람이 키를 누름', {afterLoad:{clients:String(nowSec() - 1)}}, 'KADAN_HUMAN_ACTIVE'],
 ]) test(`붙여넣기 전 거부: ${name}`, () => {
   const f=fixture(config);
   assert.throws(()=>sendTmux('kadan-r','CARD',f.options), e=>e.code===code && e.delivery==='not-sent');
-  assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,0);
-  assert.equal(f.calls.filter(a=>a[0]==='send-keys').length,0);
+  assert.equal(count(f,'paste-buffer'),0);
+  assert.equal(count(f,'send-keys'),0);
 });
 
-test('빈 프롬프트·현재 pane 자식 AI는 허용하고 일반 우편은 카드 검사를 거치지 않는다', () => {
-  const f=fixture({screen:'› ',state:'11|0|0|2',ps:'11 1 11 12 /bin/sh\n12 11 12 12 /usr/bin/node /opt/bin/codex.js --model test-model'});
+test('현재 pane 자식 AI는 허용하고 일반 우편은 프로세스 검사를 거치지 않는다', () => {
+  const f=fixture({ps:'11 1 11 12 /bin/sh\n12 11 12 12 /usr/bin/node /opt/bin/codex.js --model test-model'});
   sendTmux('kadan-r','CARD',f.options);
-  assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,1);
-  assert.equal(f.calls.filter(a=>a[0]==='send-keys').length,1);
-  const mail=fixture({screen:'› USER_PENDING_',ps:'11 1 11 11 cat'});
-  delete mail.options.cardIdentity;
+  assert.equal(count(f,'paste-buffer'),1);
+  assert.equal(count(f,'send-keys'),1);
+  const mail=fixture({ps:'11 1 11 11 cat',card:false});
   sendTmux('kadan-r','MAIL',mail.options);
-  assert.equal(mail.calls.filter(a=>a[0]==='paste-buffer').length,1);
+  assert.equal(count(mail,'paste-buffer'),1);
 });
 
-test('실제 대기 화면(devin·claude·codex)의 빈 입력창에는 카드를 붙여넣는다', () => {
-  for (const [name, state, screen] of [
-    ['devin', '11|0|3|2', realDevin()],
-    ['claude', '11|0|2|2', realClaude()],
-    ['새 claude 창의 흐린 예시 문구', '11|0|2|2', realClaude('❯ Try "write a test for watch-runner.mjs"')],
-    ['작업 뒤 흐린 다음 입력 추천(실측 모양)', '11|0|2|2', realClaude('\x1b[39m❯\u00a0\x1b[2m3단계 진행해\x1b[0m')],
-    ['codex 시작 화면(배너의 >_ 포함)', '11|0|4|2', '╭──────────╮\n│ >_ OpenAI Codex (v0.155.0) │\n╰──────────╯\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x\n\n'],
-    ['codex 0.163 두 줄 바닥글(경고 있음)', '11|0|36|2', codex163('', codex163Status, codex163Hint())],
-    ['codex 0.163 두 줄 바닥글(경고 없음)', '11|0|36|2', codex163('', codex163Status, codex163Hint(false))],
-    ['codex 하단 입력창(과거 프롬프트 포함)', '11|0|5|2', 'old\n› earlier message\n\n• answer\n\n› Ask Codex to do anything\n\n  gpt-6-astra medium · ~/Dev/x'],
-  ]) {
-    const f=fixture({state, screen});
-    sendTmux('kadan-r','CARD',f.options);
-    assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,1,name);
-  }
+// 경로 이름 → 보내기 옵션 만들기. 알림은 감시기 보호 객체(now 고정)를 쓰고, 카드·일반 우편은 현재 시각을 쓴다.
+const PATHS = {
+  '카드': {card:true},
+  '알림': {card:false, guard:true},
+  '일반 우편': {card:false},
+};
+const send = (f, guard) => sendTmux('kadan-r','MAIL',{...f.options, ...(guard ? {notificationGuard:guard} : {})});
+
+for (const [path, cfg] of Object.entries(PATHS)) {
+  const guard = (extra={}) => cfg.guard ? {humanIdleMs:30_000, ...extra} : undefined;
+
+  test(`9/23 사고 재현: kyle이 비서 창에 문장을 치는 중(5초 전 키 입력)이면 ${path}은 붙여넣지 않는다`, () => {
+    const f=fixture({clients:String(nowSec() - 5), card:cfg.card});
+    assert.throws(()=>send(f, guard()), e=>e.code==='KADAN_HUMAN_ACTIVE' && e.delivery==='not-sent');
+    assert.equal(count(f,'paste-buffer'),0);
+    assert.equal(count(f,'send-keys'),0);
+  });
+
+  test(`${path}: 60초 전 키 입력·붙은 client 없음은 통과한다`, () => {
+    for (const clients of [String(nowSec() - 60), '', `${nowSec() - 60}\n${nowSec() - 3600}`]) {
+      const f=fixture({clients, card:cfg.card});
+      send(f, guard());
+      assert.equal(count(f,'paste-buffer'),1, clients);
+    }
+  });
+
+  test(`${path}: 붙은 client가 여럿이면 하나라도 최근 입력했을 때 보류한다`, () => {
+    const f=fixture({clients:`${nowSec() - 3600}\n${nowSec() - 2}`, card:cfg.card});
+    assert.throws(()=>send(f, guard()), e=>e.code==='KADAN_HUMAN_ACTIVE');
+    assert.equal(count(f,'paste-buffer'),0);
+  });
+
+  test(`${path}: 활동 값이 숫자가 아니면 실패 닫힘`, () => {
+    const f=fixture({clients:'x', card:cfg.card});
+    assert.throws(()=>send(f, guard()), e=>e.code==='KADAN_HUMAN_ACTIVITY_UNKNOWN' && e.delivery==='not-sent');
+    assert.equal(count(f,'paste-buffer'),0);
+  });
+
+  test(`${path}: 화면에 미제출 글처럼 보이는 내용이 있어도 사람 활동이 없으면 보낸다(바뀐 동작)`, () => {
+    const f=fixture({screen:'› USER_PENDING_\nSECOND_PENDING', clients:'', card:cfg.card});
+    send(f, guard());
+    assert.equal(count(f,'paste-buffer'),1);
+    assert.equal(count(f,'capture-pane'),0, '화면 모양은 읽지 않는다');
+  });
+}
+
+test('감시기 알림: 기준 시간은 호출부가 정한다(10분 기준 600초 안 입력은 보류)', () => {
+  const now=1_000_000_000_000;
+  const f=fixture({clients:String(now/1000 - 60), card:false});
+  assert.throws(()=>sendTmux('kadan-r','MAIL',{...f.options, notificationGuard:{humanIdleMs:600_000, now}}), e=>e.code==='KADAN_HUMAN_ACTIVE');
+  const g=fixture({clients:String(now/1000 - 3600), card:false});
+  sendTmux('kadan-r','MAIL',{...g.options, notificationGuard:{humanIdleMs:600_000, now}});
+  assert.equal(count(g,'paste-buffer'),1);
 });
 
-test('과거 출력과 본문의 프롬프트·상태 줄을 구별할 수 없으면 거부한다', () => {
-  const f=fixture({state:'11|0|3|4',screen:'old output\n› OLD_PROMPT\n╭────╮\n│ ›  │\n│    │\n╰────╯\nstatus'});
-  assert.throws(()=>sendTmux('kadan-r','CARD',f.options), e=>e.code==='KADAN_PANE_INPUT_PENDING');
-  assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,0);
+test('감시기 강제 알림(force)은 사람 입력 검사를 건너뛴다', () => {
+  const f=fixture({clients:String(nowSec() - 1), card:false});
+  sendTmux('kadan-r','MAIL',{...f.options, notificationGuard:{humanIdleMs:30_000, force:true}});
+  assert.equal(count(f,'paste-buffer'),1);
+  assert.equal(count(f,'list-clients'),0);
+});
+
+test('붙여넣기 전·후 두 번 사람 입력을 본다', () => {
+  const f=fixture({card:false});
+  sendTmux('kadan-r','MAIL',f.options);
+  assert.equal(count(f,'list-clients'),2);
+});
+
+test('notificationHold는 붙여넣지 않고 같은 사람 입력 기준으로 보류 사유만 돌려준다', () => {
+  const hold = clients => tmuxFloor.notificationHold('kadan-r',{humanIdleMs:30_000},{run:args=>
+    args.includes('#{pane_in_mode}') ? '0' : args[0]==='list-clients' ? clients : ''});
+  assert.equal(hold(String(nowSec() - 5)).code,'KADAN_HUMAN_ACTIVE');
+  assert.equal(hold(String(nowSec() - 60)),null);
 });
 
 test('현재 프로세스의 명시 모델은 실행기 자리와 함께 일치해야 한다', () => {
@@ -155,32 +169,5 @@ test('현재 프로세스의 명시 모델은 실행기 자리와 함께 일치�
     const harness=args.includes('omo')?'omo':args.startsWith('claude')?'claude':args.startsWith('devin')?'devin':'codex';
     assert.equal(matchesAiProcess(args,harness,'x'),true,args);
     assert.equal(matchesAiProcess(args,harness,'y'),false,args);
-  }
-});
-
-test('감시기 알림은 사람이 최근 입력했거나 입력창에 글이 있으면 붙여넣지 않는다', () => {
-  const notify = ({screen='› ', clients='', now=1_000_000_000}) => {
-    const calls=[];
-    const run=args=>{calls.push(args);
-      if(args.includes('#{pane_in_mode}')) return '0';
-      if(args.includes('#{cursor_y}|#{pane_width}')) return '0|40';
-      if(args[0]==='list-clients') return clients;
-      if(args[0]==='capture-pane') return screen;
-      return '';};
-    return {calls, options:{run, pid:1, hrtime:()=>1n, spawn:()=>({status:0}), notificationGuard:{humanIdleMs:600_000, now}}};
-  };
-  for (const [name, config, code] of [
-    ['10분 안 키 입력', {clients:String(1_000_000 - 60)}, 'KADAN_HUMAN_ACTIVE'],
-    ['사람 입력 시각 미확인', {clients:'x'}, 'KADAN_HUMAN_ACTIVITY_UNKNOWN'],
-    ['입력 중 문장', {screen:'› 298 ->이건 굳굳. 근데', clients:String(1_000_000 - 3600)}, 'KADAN_PANE_INPUT_PENDING'],
-  ]) {
-    const f=notify(config);
-    assert.throws(()=>sendTmux('kadan-r','MAIL',f.options), e=>e.code===code && e.delivery==='not-sent', name);
-    assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,0,name);
-  }
-  for (const clients of ['', String(1_000_000 - 3600)]) {
-    const f=notify({clients});
-    sendTmux('kadan-r','MAIL',f.options);
-    assert.equal(f.calls.filter(a=>a[0]==='paste-buffer').length,1);
   }
 });

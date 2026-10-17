@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { makeHerdrFloor, herdrRpc, herdrInputFrame } from "../src/floor-herdr.mjs";
+import { makeHerdrFloor, herdrRpc } from "../src/floor-herdr.mjs";
 import { buildStartLedgerEntry, guardedSend } from "../src/cli.mjs";
 import { selectFloorName } from "../src/floor.mjs";
 
@@ -34,7 +34,6 @@ function fixture() {
     throw new Error(`Unexpected request ${method}`);
   };
   const floor = makeHerdrFloor({ env, entries: () => [start], rpc,
-    inputFrame: (...args) => { state.frameArgs = args; return { row: 1, width: 120 }; },
     argsForPid: () => state.localArgs || "" });
   return { floor, state, env, start, pane };
 }
@@ -65,9 +64,8 @@ for (const [name, change, code] of [
   ["명시 모델 변경", f => { f.state.argv[2] = "other-model"; }, "KADAN_AI_PROCESS_UNVERIFIED"],
   ["승인 대기", f => { f.state.status = "blocked"; }, "KADAN_HERDR_NOT_READY"],
   ["상태 미확인", f => { f.state.status = "unknown"; }, "KADAN_HERDR_NOT_READY"],
-  ["미제출 입력", f => { f.state.output = "\n› 남아 있는 글\n\nstatus"; }, "KADAN_PANE_INPUT_PENDING"],
   ["기록보기 중", f => { f.pane.scroll.offset_from_bottom = 4; }, "KADAN_HERDR_SCROLLED"],
-  ["출력 유실", f => { f.state.truncated = true; }, "KADAN_HERDR_INPUT_UNKNOWN"],
+  ["출력 유실", f => { f.state.truncated = true; }, "KADAN_HERDR_OUTPUT_GAP"],
 ]) test(`${name}이면 본문 요청이 발생하지 않는다`, () => {
   const f = fixture(); change(f);
   assert.throws(() => f.floor.send(f.start.session, "카드 본문"), { code });
@@ -122,8 +120,10 @@ test('알림 유예 중 입력·화면 변화와 working 뒤에는 새로 30초�
   hold(0);
   f.state.revision = 8;
   assert.equal(hold(30_000).code, 'KADAN_HUMAN_ACTIVE');
+  // 화면이 바뀌면(사람이 글을 치기 시작) 모양을 판정하지 않고 30초 유예를 새로 시작한다.
   f.state.output = '\n› 아직 쓰는 문장\n\nstatus';
-  assert.equal(hold(60_000).code, 'KADAN_PANE_INPUT_PENDING');
+  assert.equal(hold(60_000).code, 'KADAN_HUMAN_ACTIVE');
+  assert.equal(hold(89_999).code, 'KADAN_HUMAN_ACTIVE');
   f.state.output = '\n› Ask Codex to do anything\n\nstatus';
   assert.equal(hold(90_000).code, 'KADAN_HUMAN_ACTIVE');
   f.state.status = 'working';
@@ -139,7 +139,7 @@ test('알림 전송 직전 입력이 생기면 본문을 한 번도 보내지 �
   let reads = 0;
   f.state.beforeRead = () => { if (++reads === 2) f.state.output = '\n› 입력 시작\n\nstatus'; };
   assert.throws(() => f.floor.send(f.start.session, '알림', { notificationGuard: { now: 30_000 } }),
-    { code: 'KADAN_PANE_INPUT_PENDING', delivery: 'not-sent' });
+    { code: 'KADAN_HUMAN_ACTIVE', delivery: 'not-sent' });
   assert.equal(prompts(f), 0);
 });
 
@@ -184,7 +184,7 @@ test("재사용 시작은 같은 서버·터미널·PID의 신원만 이어받�
       if (method === "pane.read") return { read: { text: successful.state.output, revision: 1, truncated: false } };
       if (method === "agent.prompt") return { type: "ok" };
       throw new Error(method);
-    }, inputFrame: () => ({ row: 1, width: 120 }) });
+    } });
   assert.equal(reused.send(f.start.session, "왕복").keyDelivery, "sent");
   records = [{ ...launch, panePid: "old-generation" }, f.start];
   assert.throws(() => reused.send(f.start.session, "왕복"), { code: "KADAN_AI_PROCESS_UNVERIFIED" });
@@ -205,15 +205,6 @@ test("소켓 응답의 한글 글자가 패킷 경계에서 나뉘어도 보존�
     await once(server.stdout, "data");
     assert.equal(herdrRpc(socket, "session.snapshot").text, "작업자 왕복");
   } finally { server.kill(); await once(server, "exit"); }
-});
-
-test("입력 커서는 터미널의 실제 세로 줄 수로 관찰한다 (LBR-1 결함 1)", () => {
-  const f = fixture(); f.floor.send(f.start.session, "왕복 질문");
-  assert.equal(f.state.frameArgs[1], "opaque-terminal");
-  assert.equal(f.state.frameArgs[2], 58);
-  // 세로 줄 수를 모르면 기본 관찰 창(120x40)으로 추측하지 않고 거절한다.
-  assert.throws(() => herdrInputFrame(f.env.KADAN_HERDR_SOCKET, "opaque-terminal", undefined),
-    { code: "KADAN_HERDR_INPUT_UNKNOWN" });
 });
 
 for (const [runner, screen, keys] of [
@@ -265,12 +256,17 @@ test("카드 발령은 busyMail이어도 응답 중이면 거절한다", () => {
   assert.equal(prompts(f), 0);
 });
 
-test("미제출 입력이 있으면 응답 중 여부와 무관하게 거절한다", () => {
+// 방침(b): herdr는 사람 입력 시각을 얻을 수 없고 CLI 한 번은 30초 안정을 기억할 수 없어, 카드·일반 우편은
+// 화면 모양으로 막지 않는다. 미제출 글처럼 보이는 화면에도 보낸다(2026-10-17 [kyle] 결정, 받아들인 손해).
+test("카드·일반 우편은 화면에 미제출 글처럼 보이는 내용이 있어도 보낸다(방침 b)", () => {
   for (const status of ["working", "idle"]) {
     const f = fixture(); f.state.status = status; f.state.output = "\n› 사람이 쓰던 글\n\nstatus";
-    assert.throws(() => f.floor.send(f.start.session, "우편", busy), { code: "KADAN_PANE_INPUT_PENDING" });
-    assert.equal(prompts(f), 0);
+    assert.equal(f.floor.send(f.start.session, "우편", busy).keyDelivery, "sent");
+    assert.equal(prompts(f), 1);
   }
+  const f = fixture(); f.state.output = "\n› 사람이 쓰던 글\n\nstatus";
+  const cardIdentity = { currentPid: 123, harness: "codex", model: "fixture-model" };
+  assert.equal(f.floor.send(f.start.session, "카드", { cardIdentity }).keyDelivery, "sent");
 });
 
 test("실제 감시 경보 경로(guardedSend source=watch, notificationOnly)는 응답 중 herdr에서 거절된다", () => {
@@ -284,7 +280,7 @@ test("실제 감시 경보 경로(guardedSend source=watch, notificationOnly)는
   assert.equal(events.some(e => e.kind === "send"), false);
 });
 
-test('강제 알림(force)은 입력창·안정 시간 확인만 건너뛰고 PID·승인 대기·기록보기 확인은 남긴다', () => {
+test('강제 알림(force)은 안정 시간 확인만 건너뛰고 PID·승인 대기·기록보기 확인은 남긴다', () => {
   const force = { notificationGuard: { humanIdleMs: 30_000, force: true } };
   const f = fixture(); f.state.output = '\n› 남아 있는 글\n\nstatus';
   assert.throws(() => f.floor.send(f.start.session, '알림', { notificationGuard: { now: 0 } }), { delivery: 'not-sent' });

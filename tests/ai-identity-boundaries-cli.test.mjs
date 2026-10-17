@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger,readTaskLedger} from '../src/ledger.mjs';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
@@ -24,18 +24,19 @@ for(const backend of ['jsonl','sqlite']){
  if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  const bin=path.join(home,'bin');fs.mkdirSync(bin);
  const trace=path.join(home,'tmux.jsonl');
- fs.writeFileSync(path.join(bin,'tmux'),`#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(a)+'\\n');const r=spawnSync(${JSON.stringify(realTmux)},a,{stdio:'inherit'});
+ fs.writeFileSync(path.join(bin,'tmux'),`#!${process.execPath}\nimport fs from 'node:fs';import {spawn,spawnSync} from 'node:child_process';const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(a)+'\\n');const r=spawnSync(${JSON.stringify(realTmux)},a,{stdio:'inherit'});
 const raceFile=${JSON.stringify(path.join(home,'race.json'))};
 if(a.includes('load-buffer')&&fs.existsSync(raceFile)) {
  const race=JSON.parse(fs.readFileSync(raceFile,'utf8'));
  if(race.active) {
   fs.writeFileSync(raceFile,JSON.stringify({...race,active:false}));
-  spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,'send-keys','-t','kadan-'+race.role,...race.keys]);
+  if(race.attach)spawn('sh',['-c',"sleep 6 | '"+${JSON.stringify(realTmux)}+"' -L '"+process.env.KADAN_SOCKET+"' -C attach -t =kadan-"+race.role],{detached:true,stdio:'ignore'}).unref();
+  else spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,'send-keys','-t','kadan-'+race.role,...race.keys]);
   const end=Date.now()+3000;let observed=false;
   while(Date.now()<end) {
-   const query=race.dead?['display-message','-p','-t','kadan-'+race.role,'#{pane_dead}']:['capture-pane','-p','-t','kadan-'+race.role];
+   const query=race.attach?['list-clients','-t','=kadan-'+race.role,'-F','#{client_activity}']:race.dead?['display-message','-p','-t','kadan-'+race.role,'#{pane_dead}']:['capture-pane','-p','-t','kadan-'+race.role];
    const state=spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,...query],{encoding:'utf8'}).stdout;
-   if(race.dead?state.trim()==='1':state.includes('RACE_PENDING')){observed=true;break;}
+   if(race.attach?state.trim()!=='':race.dead?state.trim()==='1':state.includes('RACE_PENDING')){observed=true;break;}
    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
   }
   if(!observed)throw Error('race fixture readiness timeout');
@@ -64,63 +65,23 @@ process.exit(r.status??1);\n`,{mode:0o755});
   for(const name of ['codex','devin','omo','claude']){start(name,bin+'/'+name+' --model model-a');probe(name+'-shape',name,['--task',name],'accept fixture');}
   start('resume',bin+'/codex resume synthetic -m model-a');must(call(['start','resume','--hidden','--profile','reviewer']));probe('resume-reuse','resume',['--execution','r/resume'],'accept fixture');
   tm('copy-mode','-t','kadan-resume');probe('copy-mode','resume',['--task','resume']);tm('send-keys','-t','kadan-resume','-X','cancel');
-  tm('send-keys','-t','kadan-resume','-l','USER_PENDING_');probe('partial-input','resume',['--task','resume']);
-  assert.match(tm('capture-pane','-p','-t','kadan-resume').stdout,/USER_PENDING_/);
-  assert.doesNotMatch(tm('capture-pane','-p','-t','kadan-resume').stdout,/REVIEW_BODY_partial-input/);
+  // 화면에 쓰다 만 글이 있어도 사람이 붙어 최근 입력하지 않았으면 막지 않는다(화면 모양 판정 제거, 2026-10-17).
+  tm('send-keys','-t','kadan-resume','-l','USER_PENDING_');probe('partial-input-no-human','resume',['--execution','r/resume'],'accept fixture');
+  // 사람이 붙은 창(제어 모드 client의 붙은 시각이 client_activity)은 보류한다. 본문은 붙지 않는다.
+  const humanClient=spawn('sh',['-c',"sleep 8 | '"+realTmux+"' -L '"+env.KADAN_SOCKET+"' -C attach -t =kadan-resume"],{detached:true,stdio:'ignore'});humanClient.unref();
+  waitFor(()=>tm('list-clients','-t','=kadan-resume','-F','#{client_activity}').stdout.trim(),v=>v!=='','사람 client');
+  const humanProbe=probe('human-active','resume',['--task','resume']);
+  assert.match(humanProbe.error,/사람이 이 창에서 최근 입력/);
+  assert.doesNotMatch(tm('capture-pane','-p','-t','kadan-resume').stdout,/REVIEW_BODY_human-active/);
   start('dead',bin+'/codex --model model-a');tm('set-option','-t','kadan-dead','remain-on-exit','on');tm('send-keys','-t','kadan-dead','C-c');waitFor(()=>tm('display-message','-p','-t','kadan-dead','#{pane_dead}').stdout.trim(),dead=>dead==='1','dead pane');probe('dead-pane','dead',['--task','dead']);
   start('spoof',bin+'/codex --version; exec cat # --model model-a',false);probe('version-then-cat','spoof',['--execution','r/spoof']);
   const replaced=path.join(home,'replaced');fs.mkdirSync(replaced);
   fs.writeFileSync(path.join(replaced,'codex'),'#!/bin/sh\nexec cat\n',{mode:0o755});
   start('replaced',replaced+'/codex --model model-a',false);probe('replaced-process','replaced',['--task','replaced']);
-  // 실제 입력 버퍼를 두 줄로 편집하고 커서를 위쪽 빈 줄로 옮긴다.
-  const editorDir=path.join(home,'editor');fs.mkdirSync(editorDir);
-  fs.writeFileSync(path.join(editorDir,'codex'),`#!${process.execPath}
-import fs from 'node:fs';
-const file=process.env.KADAN_HOME+'/editor-state.json';
-let lines=[''],row=0;
-const paint=()=>{process.stdout.write('\\x1b[2J\\x1b[H› '+lines.join('\\r\\n')+'\\x1b['+(row+1)+';'+(row===0?3:1)+'H');fs.writeFileSync(file,JSON.stringify({lines,row}));};
-process.stdin.setRawMode(true);process.stdin.resume();
-process.stdin.on('data',b=>{const data=b.toString();if(data==='\\x1b[A')row=Math.max(0,row-1);else for(const c of data){if(c==='\\n'){lines.splice(row+1,0,'');row++;}else if(c==='\\r'){fs.appendFileSync(file+'.submitted',JSON.stringify(lines)+'\\n');lines=[''];row=0;}else if(c==='\\u0003'){lines=[''];row=0;}else lines[row]+=c;}paint();});paint();
-`,{mode:0o755});
-  const waitState=expected=>{const end=Date.now()+10000;while(Date.now()<end){try{if(fs.readFileSync(path.join(home,'editor-state.json'),'utf8')===JSON.stringify(expected))return;}catch{}pause(20);}assert.fail('editor state timeout '+JSON.stringify(expected));};
-  start('editor',editorDir+'/codex --model model-a');waitState({lines:[''],row:0});
-  tm('send-keys','-t','kadan-editor','C-j');waitState({lines:['',''],row:1});
-  tm('send-keys','-t','kadan-editor','-l','SECOND_PENDING');waitState({lines:['','SECOND_PENDING'],row:1});
-  tm('send-keys','-t','kadan-editor','-l','\x1b[A');waitState({lines:['','SECOND_PENDING'],row:0});
-  probe('pending-below-cursor','editor',['--raw','--task','editor']);
-  assert.equal(fs.existsSync(path.join(home,'editor-state.json.submitted')),false);
-  waitState({lines:['','SECOND_PENDING'],row:0});
-  tm('send-keys','-t','kadan-editor','C-c');waitState({lines:[''],row:0});
-  // 실제 편집 버퍼의 경계처럼 보이는 본문도 raw/일반 전송 모두 보존한다.
-  for(const raw of [true,false])for(const [name,lines,up] of [
-   ...['›','>','❯'].map((prompt,i)=>['fake-prompt-'+i,['USER_UNSUBMITTED',prompt+' '],0]),
-   ['fake-border',['','──────','USER_BELOW_BORDER'],2],
-   ...['│','┃','│ │','┃ ┃','│┃',' │ ',' ┃ '].flatMap((text,i)=>[
-    ['vertical-first-'+i,[text],0],
-    ['vertical-below-'+i,['',text],1],
-   ]),
-  ]) {
-   for(let i=0;i<lines.length;i++) {
-    if(i){tm('send-keys','-t','kadan-editor','C-j');waitState({lines:[...lines.slice(0,i),''],row:i});}
-    if(lines[i]){tm('send-keys','-t','kadan-editor','-l',lines[i]);waitState({lines:lines.slice(0,i+1),row:i});}
-   }
-   for(let i=0;i<up;i++){tm('send-keys','-t','kadan-editor','-l','\x1b[A');waitState({lines,row:lines.length-2-i});}
-   const result=probe(name+(raw?'-raw':'-plain'),'editor',raw?['--raw','--task','editor']:['--execution','r/editor']);
-   result.inputBefore={lines,row:lines.length-1-up};
-   result.inputAfter=JSON.parse(fs.readFileSync(path.join(home,'editor-state.json'),'utf8'));
-   result.submitted=fs.existsSync(path.join(home,'editor-state.json.submitted'));
-   assert.notEqual(result.exit,0,JSON.stringify(result));
-   assert.match(result.error,/입력 경계 미확인|미제출 입력/);
-   for(const key of ['paste','enter','send','dispatch'])assert.equal(result.delta[key],0,JSON.stringify(result));
-   waitState({lines,row:lines.length-1-up});
-   assert.equal(fs.existsSync(path.join(home,'editor-state.json.submitted')),false);
-   tm('send-keys','-t','kadan-editor','C-c');waitState({lines:[''],row:0});
-  }
-  probe('cleared-editor','editor',['--raw','--task','editor'],'accept fixture');
   // 버퍼 준비 뒤 입력/종료가 발생해도 두 번째 검사에서 paste 전에 거부한다.
-  waitState({lines:[''],row:0});
-  fs.writeFileSync(path.join(home,'race.json'),JSON.stringify({active:true,role:'editor',keys:['-l','RACE_PENDING']}));
-  probe('input-during-load','editor',['--raw','--task','editor']);
+  start('race-human',bin+'/codex --model model-a');
+  fs.writeFileSync(path.join(home,'race.json'),JSON.stringify({active:true,role:'race-human',attach:true}));
+  probe('human-during-load','race-human',['--raw','--task','race-human']);
   start('race-dead',bin+'/codex --model model-a');tm('set-option','-t','kadan-race-dead','remain-on-exit','on');
   fs.writeFileSync(path.join(home,'race.json'),JSON.stringify({active:true,role:'race-dead',keys:['C-c'],dead:true}));
   probe('death-during-load','race-dead',['--task','race-dead']);

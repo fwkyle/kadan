@@ -40,7 +40,6 @@ const herdr = makeHerdrFloor({
     if (method === "agent.prompt") return { type: "ok" };
     throw new Error(`Unexpected request ${method}`);
   },
-  inputFrame: () => ({ row: 1, width: 120 }),
 });
 Object.assign(floor, { name: "herdr", alive: () => true, pid: () => "123",
   send: (s, m, options) => { state.seenOptions.push(options); return herdr.send(s, m, options); } });

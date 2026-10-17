@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {runWatch} from '../src/watch-runner.mjs';
 import {guardedSend} from '../src/cli-guarded-send.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
@@ -206,7 +206,7 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
   const target = '=kadan-q-super:';
   const contents = () => fs.existsSync(received) ? fs.readFileSync(received, 'utf8') : '';
   const waitFor = pred => { const end = Date.now() + 4000; while (Date.now() < end && !pred()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); };
-  let started = false;
+  let started = false, human;
   try {
     const start = call('q-super', 'start', 'q-super', '--cmd', `'${process.execPath}' '${receiver}'`);
     assert.equal(start.status, 0, start.stderr);
@@ -221,8 +221,9 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
     const sends = () => readLedger(home).filter(e => e.kind === 'send');
     assert.equal(sends().length, 1);
     assert.notEqual(sends()[0].transport, 'mailbox', '바로 들어간 편지는 보관 우편이 아니라 감시기가 따로 알리지 않는다');
-    // 걸림 → 보관, 창은 그대로
-    tmuxCmd(['send-keys', '-t', target, '-l', 'USER_PENDING_']);
+    // 걸림 → 보관, 창은 그대로. 사람이 붙은 창은 제어 모드 client로 대신한다(붙은 시각이 client_activity가 된다).
+    human = spawn('tmux', ['-L', socket, '-C', 'attach', '-t', target.replace(/:$/, '')], {env, stdio: ['pipe', 'ignore', 'ignore']});
+    waitFor(() => tmuxCmd(['list-clients', '-t', target.replace(/:$/, ''), '-F', '#{client_activity}']).stdout.trim() !== '');
     const before = contents();
     const held = call('p-super', 'mail', 'q-super', 'PEER_HELD');
     assert.equal(held.status, 0, held.stderr);
@@ -236,6 +237,7 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
     // --raw는 여전히 거절
     assert.equal(call('p-super', 'mail', 'q-super', '--raw', 'x').status, 1);
   } finally {
+    human?.kill();
     if (started) call('q-super', 'stop', 'q-super');
   }
 });

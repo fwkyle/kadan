@@ -593,7 +593,7 @@ footer td code{font-size:11px}
 
 <section class="panel" id="sim">
   <h2>발령 검문소 — 직접 눌러 보기</h2>
-  <p class="note">상황을 고르고 send를 눌러 보세요. 통과한 사건만 원장에 붙고, 거부는 도장으로 남아요. 이 로직은 guardedSend·checkSend의 <b>축소 복사</b>이고, 실제 검사는 더 많은 화면 규칙(빈 입력창 모양·복사모드 등)을 본다.</p>
+  <p class="note">상황을 고르고 send를 눌러 보세요. 통과한 사건만 원장에 붙고, 거부는 도장으로 남아요. 이 로직은 guardedSend·checkSend의 <b>축소 복사</b>이고, 실제 검사는 더 많은 규칙(사람 최근 입력·복사모드 등)을 본다.</p>
   <h3>미리 만든 장면</h3>
   <div class="presets" id="sim-presets">
     <button data-preset="ok">정상 발령</button>
@@ -669,7 +669,7 @@ footer td code{font-size:11px}
     <tr><td>(3)</td><td>PID 대조</td><td>시작 기록의 PID와 지금 PID가 같나?</td><td><code>KADAN_PID_MISMATCH</code></td><td><code>cli.mjs:712</code></td></tr>
     <tr><td>(4)</td><td>AI 신원</td><td>현재 세대가 등록 실행기·모델인가? 카드 단계 프로필과 맞나?</td><td><code>KADAN_AI_IDENTITY_UNVERIFIED</code><br><code>KADAN_STALE_RUNNER</code></td><td><code>cli.mjs:727·745</code></td></tr>
   </table></div>
-  <p class="note">일반 우편·질문·답장은 taskId가 없으므로 (1)(4)를 거치지 않는다. tmux는 여기에 더해 빈 입력창 모양·전경 프로세스·복사모드까지 화면으로 확인한다. (cli.mjs:724, docs/design.md 규칙 2)</p>
+  <p class="note">일반 우편·질문·답장은 taskId가 없으므로 (1)(4)를 거치지 않는다. tmux는 여기에 더해 사람 최근 입력(30초)·전경 프로세스·복사모드를 확인한다. (cli.mjs:724, docs/design.md 규칙 2)</p>
 </section>
 
 <section class="panel">
