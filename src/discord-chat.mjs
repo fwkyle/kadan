@@ -284,11 +284,15 @@ export async function pollOnce(chat, state, {out, err = () => {}, initial, signa
     const info = await chat.channelInfo();
     return active ??= info.guild_id ? (await chat.api('GET', `/guilds/${info.guild_id}/threads/active`)).json?.threads ?? [] : [];
   };
-  if (initial) {
+  // 기준선을 이미 저장했는지는 인자가 아니라 상태로 본다: 첫 덩어리가 돌면 state.main이 null이 아니다. 연결 장애로 재시도될 때
+  // 기준선을 '지금'으로 다시 찍으면 장애 중에 올라온 글을 건너뛴다. 본문·스레드를 한꺼번에 정해 반쯤 저장된 기준선이 남지 않게 한다.
+  if (initial && state.main === null) {
     // 처음(상태 없음): 지금까지의 글은 기준선으로 삼고 내지 않는다. 아무것도 출력하기 전에 기준선(본문·스레드)을 먼저 저장한다 —
     // 안 그러면 첫 출력이 실패한 뒤 재시작이 방금 본 질문까지 기준선으로 삼아 건너뛴다.
-    state.main = (await chat.channelInfo()).last_message_id ?? '0';
-    for (const t of await loadActive()) if (t.parent_id === channelId && THREAD_TYPES.has(t.type) && isId(t.id)) state.threads[t.id] = t.last_message_id ?? t.id;
+    const main = (await chat.channelInfo()).last_message_id ?? '0', baseThreads = {};
+    for (const t of await loadActive()) if (t.parent_id === channelId && THREAD_TYPES.has(t.type) && isId(t.id)) baseThreads[t.id] = t.last_message_id ?? t.id;
+    state.main = main;
+    Object.assign(state.threads, baseThreads);
     writeState(chat.home, state);
   }
 
