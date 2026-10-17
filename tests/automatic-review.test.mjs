@@ -195,3 +195,17 @@ test('마커만 먼저 관측해도 결과 없이 검수 발령하지 않음',()
  const f=fixture();f.configure();f.auto.step(f.key);f.observe(()=> 'ok');f.auto.step(f.key);assert.equal(f.sent.length,1);
  assert.equal(readLedger(f.home).filter(e=>e.kind==='done').length,1);f.report();f.auto.step(f.key);assert.equal(f.sent.length,2);
 });
+
+test('exception으로 멈춘 뒤 손으로 다시 발령한 실행의 auto-report 거절은 수동 경로를 안내한다',()=>{
+ const f=fixture();f.configure();f.auto.step(f.key);
+ const current=f.auto.get(f.key).current;
+ const stopped=f.finish('exception');assert.equal(stopped.status,'exception');
+ // 감독이 send --task로 같은 카드를 다시 발령했다고 보고, 카드 본문 지시대로 auto-report를 시도한다.
+ const r=new AutomaticReview({...f.context,by:current.role});
+ assert.throws(()=>r.report(f.key,{execution:current.key,outcome:'implemented'}),e=>{
+  assert.match(e.message,/exception/);
+  assert.match(e.message,/kadan card report/);assert.match(e.message,/done/);assert.match(e.message,/automatic-review\.md/);
+  return true;
+ });
+ assert.equal(f.auto.get(f.key).status,'exception','거절해도 자동 상태는 되살아나지 않는다');
+});
