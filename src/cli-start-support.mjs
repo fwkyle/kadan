@@ -133,13 +133,13 @@ export function inspectHiddenStartPolicy({
 // 임시 장치: 로티 정식 출시로 경로가 고정되면 이 점검은 걷어낸다 (2026-09-06 [kyle] 결정).
 export function inspectRottieStartPreflight({
   env = process.env,
-  floorName,
   hidden = false,
+  forceWindow = false,
   existsFn = fs.existsSync,
   connectFn = rottieConnectivity,
   listBinsFn = listRunningRottieBins,
 } = {}) {
-  const needsWindow = floorName === "rottie" || env.KADAN_WINDOW === "rottie";
+  const needsWindow = forceWindow || env.KADAN_WINDOW === "rottie";
   if (!needsWindow || hidden) return { ok: true, skipped: true };
   const bin = env.KADAN_ROTTIE_BIN;
   const candidates = listBinsFn();
@@ -280,7 +280,7 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
   if (!terminalId) return {};
   // start의 자식 프로세스가 교정한 환경은 감독에게 돌아가지 않는다. 종료할 때도 다시 확인한다.
   // 현재 KADAN_WINDOW와 무관하게, 실제로 열었던 로티 탭 기록을 기준으로 한다.
-  const preflight = inspectRottieStartPreflight({env, floorName:"rottie", existsFn, connectFn, listBinsFn});
+  const preflight = inspectRottieStartPreflight({env, forceWindow:true, existsFn, connectFn, listBinsFn});
   const fields = {rottieTerminalId:terminalId, ...(preflight.switched ? {rottieBinSwitched:preflight.switched} : {})};
   const failed = code => ({...fields, rottieWindowClosed:false, rottieWindowError:String(code)});
   if (!preflight.ok) {

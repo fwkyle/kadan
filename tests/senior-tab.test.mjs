@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {seniorCommand} from '../src/senior.mjs';
-import {RottieFloorError, assertRottieArgv, rottieFloor, runRottie} from '../src/floor-rottie.mjs';
+import {RottieFloorError, assertRottieArgv, runRottie} from '../src/rottie-cli.mjs';
 import {closeSeniorTab} from '../src/senior-tab.mjs';
 import {initSettings, setRole} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
@@ -91,11 +91,6 @@ test('성공: 열고 닫은 뒤 advice 사건에 tab·rottieTerminalId가 남고
   const [entry] = f.advices();
   assert.equal(entry.tab, 'closed'); assert.equal(entry.rottieTerminalId, 'term-1'); assert.equal(entry.reason, 'ok');
   assert.deepEqual(readLedger(f.home).filter(e => ['start', 'stop'].includes(e.kind)), []);
-  // 바닥 list()는 start 사건이 있는 세션만 본다 — 시니어 탭은 start가 없으므로 로티에 묻지도 않는다.
-  const before = {home: process.env.KADAN_HOME, bin: process.env.KADAN_ROTTIE_BIN};
-  process.env.KADAN_HOME = f.home; process.env.KADAN_ROTTIE_BIN = '/nonexistent/rottie';
-  try { assert.deepEqual(rottieFloor.list(), []); }
-  finally { process.env.KADAN_HOME = before.home; if (before.bin === undefined) delete process.env.KADAN_ROTTIE_BIN; else process.env.KADAN_ROTTIE_BIN = before.bin; }
 });
 
 test('닫은 뒤에도 목록에 남아 있으면 자기 탭만 remove한다', async () => {

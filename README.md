@@ -62,7 +62,7 @@ kadan attach 비서   # 비서 터미널에 들어가 대화 시작
 | 개념 | 한 줄 설명 |
 |---|---|
 | **역할** | `kadan-<이름>` tmux 세션 하나. 예: `비서`, `감독`, `작업자-a` |
-| **바닥(floor)** | 역할이 실제로 사는 터미널 층. 기본은 `tmux`, macOS 앱인 `rottie`도 지원. `herdr`는 명시적으로 선택하는 시험 기능 |
+| **바닥(floor)** | 역할이 실제로 사는 터미널 층. 기본은 `tmux`. `herdr`는 명시적으로 선택하는 시험 기능. macOS 앱 `rottie`는 바닥이 아니라 창(`KADAN_WINDOW=rottie`)으로만 쓴다 |
 | **원장(ledger)** | 시작·발령·우편·완료 같은 사건을 뒤에 덧붙이기만 하는 기록. 고치거나 지우지 않음 |
 | **완료 마커** | 에이전트가 직접 출력하는 `KADAN:DONE <카드id> <ok\|failed>` 한 줄. 카단은 출력을 보고 완료를 짐작하지 않음 |
 | **워크 / 카드** | 워크 = 약속한 결과 한 건, 카드 = 그 결과를 위해 한 담당에게 맡긴 일 한 건 |
@@ -117,7 +117,7 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 | 변수 | 뜻 | 기본값 |
 |---|---|---|
 | `KADAN_HOME` | 데이터 폴더 | `~/.kadan` |
-| `KADAN_FLOOR` | 실행 바닥 (`tmux` \| `rottie` \| 시험 기능 `herdr`) | `tmux` |
+| `KADAN_FLOOR` | 실행 바닥 (`tmux` \| 시험 기능 `herdr`) | `tmux` |
 | `KADAN_HERDR_SOCKET` | herdr 시험 서버의 절대 소켓 경로. 별도 `KADAN_HOME`과 함께 지정 | 없음 |
 | `KADAN_WINDOW` | 시작할 때 열 창 (`none` \| `rottie` \| `orca`). 비우면 `kadan window set`으로 고정한 기계 설정을 따른다 | `none` |
 | `KADAN_SOCKET` | tmux 구획 이름 | `kadan` |

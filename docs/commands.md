@@ -17,7 +17,7 @@
 | 변수 | 뜻 |
 |---|---|
 | `KADAN_HOME` | 원장·카드·설정이 사는 폴더. 기본 `~/.kadan` (옛 이름 `KADAN_LITE_HOME`도 읽음) |
-| `KADAN_FLOOR` | 에이전트가 사는 바닥. `tmux`(기본) 또는 `rottie`. 시험 기능 `herdr`는 별도 `KADAN_HOME`으로 명시 선택하며, 실행 중 전환·자동 폴백 없음 |
+| `KADAN_FLOOR` | 에이전트가 사는 바닥. `tmux`(기본). 로티는 바닥이 아니라 창(`KADAN_WINDOW=rottie`)이라 `rottie`를 주면 `KADAN_FLOOR_INVALID`다. 시험 기능 `herdr`는 별도 `KADAN_HOME`으로 명시 선택하며, 실행 중 전환·자동 폴백 없음 |
 | `KADAN_HERDR_SOCKET` | herdr 시험 기능의 named server 절대 소켓 경로. `KADAN_HOME`과 함께 필수. 서버 자동 기동·훅 설치 없음. [실행 방법](experiments/herdr-roundtrip.md) |
 | `KADAN_WINDOW` | tmux 바닥에서 시작할 때 여는 창. `none`(기본) · `rottie` · `orca`. 있으면 기계 설정(`kadan window`)보다 먼저다 |
 | `KADAN_ROTTIE_BIN` | `KADAN_WINDOW=rottie`일 때 말 걸 로티 CLI의 절대경로. 있으면 기계 설정의 경로보다 먼저다 |
@@ -89,7 +89,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 
 로티 데몬을 다시 켜면 tmux 세션(에이전트)은 살고, 그 세션을 보여 주던 로티 탭만 끊긴다. `restore`는 탭만 다시 붙인다.
 
-- 바닥이 tmux이고 `KADAN_WINDOW=rottie`일 때만 쓴다. 로티 바닥은 데몬과 함께 에이전트도 끝나므로 되살릴 것이 없다.
+- 바닥이 tmux이고 `KADAN_WINDOW=rottie`일 때만 쓴다.
 - 세션마다 원장에 적힌 로티 탭 상태를 로티에 묻는다. `running`·`created`면 건너뛰고, `unknown`·`closed`·`exited`이거나 탭이 없으면 새 탭을 붙인다.
 - 마지막 `start`에 로티 탭이 없는 세션(숨김으로 띄운 watch·대시보드)은 건너뛴다.
 - 탭 조회가 하나라도 실패하면 아무것도 하지 않고 이유를 보고한다.

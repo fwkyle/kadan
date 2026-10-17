@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {assertRottieArgv} from './floor-rottie.mjs';
+import {assertRottieArgv} from './rottie-cli.mjs';
 
 export function processIdentity(pid, run = spawnSync) {
   if (!/^\d+$/.test(String(pid)) || Number(pid) <= 1) throw new Error('프로세스 PID 확인 실패');

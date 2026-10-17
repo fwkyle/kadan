@@ -142,7 +142,7 @@ AI가 판단하는 동안에도 감시sh는 설정된 주기로 화면·세션·
 kadan watch-report --verdict <판정> --reason "판단 이유"
 ```
 
-호출ID는 쓰지 않는다(2026-10-17). AI가 긴 ID를 다시 치다 한 글자를 틀려 `report-missing`이 난 사고가 있었다. 명령이 ID를 직접 찾는다. 환경의 `KADAN_JUDGE_REQUEST`, 없으면 작업 폴더(`<KADAN_HOME>/watch-ai/<ID>`이고 그 호출 기록이 원장에 있을 때만)에서 읽고, 둘 다 없을 때만 넘긴 ID를 쓴다. 넘긴 ID가 원장에 있는 요청이면 그 ID를 쓰고(실제로 다른 요청을 지목한 것) 이 값과 다르면 `idMismatch`만 남긴다. 원장에 없는 값(오타)이면 이 값으로 복구하고 `idMismatch`를 남긴다. 환경과 점검 폴더가 둘 다 있는데 서로 다르면 오류로 끝내고 기록하지 않는다. 불일치 값은 ID 모양(영숫자·`-` 8~64자)일 때만 `givenRequestId`로 남고, 그 밖은 원문 없이 `givenRequestLength`·`givenRequestDigest`(sha256 앞 12자)만 남는다. 출력의 `requestIdSource`는 `arg|env|cwd`다. 아무것도 못 찾으면 오류이고 기록하지 않는다.
+호출ID는 쓰지 않는다(2026-10-17). AI가 긴 ID를 다시 치다 한 글자를 틀려 `report-missing`이 난 사고가 있었다. 명령이 ID를 직접 찾는다. 환경의 `KADAN_JUDGE_REQUEST`, 없으면 작업 폴더(`<KADAN_HOME>/watch-ai/<ID>`이고 그 호출 기록이 원장에 있을 때만)에서 읽고, 둘 다 없을 때만 넘긴 ID를 쓴다. 넘긴 ID가 원장에 있는 요청이면 그 ID를 쓰고(실제로 다른 요청을 지목한 것) 이 값과 다르면 `idMismatch`만 남긴다. 원장에 없는 값(오타)이면 이 값으로 복구하고 `idMismatch`를 남긴다. 환경과 점검 폴더가 둘 다 있는데 서로 다르면 오류로 끝내고 기록하지 않는다. 다만 원장에 있는 요청 ID를 명시하면 그 ID가 우선이라 이 거절에 걸리지 않는다. 불일치 값은 ID 모양(영숫자·`-` 8~64자)일 때만 `givenRequestId`로 남고, 그 밖은 원문 없이 `givenRequestLength`·`givenRequestDigest`(sha256 앞 12자)만 남는다. 출력의 `requestIdSource`는 `arg|env|cwd`다. 아무것도 못 찾으면 오류이고 기록하지 않는다.
 
 | 판정 | 기록과 알림 |
 |---|---|

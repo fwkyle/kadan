@@ -104,15 +104,8 @@ export function cmdStart(argv, flags) {
     console.log(`이미 살아 있음: ${session}`);
     const existingPid = floor.pid(session);
     evidence =
-      floor.name === "rottie"
-        ? {
-            rottieTerminalId: lastStartFor(session)?.rottieTerminalId,
-            rottiePid: existingPid,
-            rottieWorkspaceId: lastStartFor(session)?.rottieWorkspaceId,
-            rottieBuild: lastStartFor(session)?.rottieBuild,
-          }
-        : floor.name === "herdr" ? { ...lastStartFor(session), panePid: existingPid }
-        : { panePid: existingPid };
+      floor.name === "herdr" ? { ...lastStartFor(session), panePid: existingPid }
+      : { panePid: existingPid };
   } else {
     try {
       startedCmd = flags.cmd || undefined;
@@ -127,8 +120,8 @@ export function cmdStart(argv, flags) {
     }
   }
 
-  const pid = evidence.panePid ?? evidence.rottiePid;
-  let method = floor.name === "rottie" ? "rottie" : floor.name === "herdr" ? "manual" : "hidden";
+  const pid = evidence.panePid;
+  let method = floor.name === "herdr" ? "manual" : "hidden";
   let rottieTerminalId;
   let orcaTerminalHandle;
   let reused;
@@ -177,7 +170,7 @@ export function cmdStart(argv, flags) {
     die(`시작 기록 실패 — ${closed ? `방금 만든 ${session}을 닫았다` : `방금 만든 ${session}을 닫지 못했다(직접 확인)`}: ${error.message}`);
   }
   console.log(
-    `시작됨: ${session} (${floor.name === "rottie" ? "Rottie PID" : "pane PID"} ${pid ?? "?"}, 창: ${method}${
+    `시작됨: ${session} (pane PID ${pid ?? "?"}, 창: ${method}${
       method === "manual" ? ` — 직접: ${floor.attach(session)}` : ""
     })`
   );

@@ -38,9 +38,9 @@ function fixture() {
   return { floor, state, env, start, pane };
 }
 
-test("herdr는 명시 선택이며 기본 tmux와 기존 rottie를 바꾸지 않는다", () => {
+test("herdr는 명시 선택이며 기본 tmux를 바꾸지 않고 rottie는 바닥으로 고를 수 없다", () => {
   assert.equal(selectFloorName().name, "tmux");
-  assert.equal(selectFloorName("rottie").name, "rottie");
+  assert.throws(() => selectFloorName("rottie"), /KADAN_FLOOR_INVALID/);
   assert.equal(selectFloorName("herdr").name, "herdr");
   assert.throws(() => makeHerdrFloor({ env: {}, entries: () => [] }).list(), /KADAN_HERDR_SCOPE/);
 });

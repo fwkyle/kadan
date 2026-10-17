@@ -113,13 +113,13 @@ test('로티 길목: 기본 아닌 홈은 거절, 시험 전용 허용·전체 �
   assert.match(liveFloorReason({KADAN_HOME: other, KADAN_ALLOW_FAKE_ROTTIE: '1'}, defaultHome) ?? '', /KADAN_SOCKET/);
 });
 
-test('로티 바닥 실행(runRottie)은 기본 아닌 홈이면 로티 실행 파일을 띄우지 않는다', () => {
+test('로티 실행(runRottie)은 기본 아닌 홈이면 로티 실행 파일을 띄우지 않는다', () => {
   const marker = path.join(tmp, 'rottie-ran.txt');
   const fake = path.join(tmp, 'fake-rottie');
   fs.writeFileSync(fake, `#!/bin/sh\necho ran >> ${JSON.stringify(marker)}\necho '{"ok":true,"result":{"terminals":[]}}'\n`, {mode: 0o755});
-  const base = {PATH: process.env.PATH, HOME: process.env.HOME, KADAN_HOME: other, KADAN_SOCKET: 'iso-r', KADAN_FLOOR: 'rottie', KADAN_ROTTIE_BIN: fake, KADAN_NOTIFY: 'off'};
-  const script = `import {rottieFloor} from ${JSON.stringify(new URL('../src/floor-rottie.mjs', import.meta.url).href)};
-    try { rottieFloor.create({session: 'kadan-x', role: 'x', cwd: '/tmp', cmd: 'cat'}); console.log('RAN'); } catch (e) { console.log('ERR ' + e.message); }`;
+  const base = {PATH: process.env.PATH, HOME: process.env.HOME, KADAN_HOME: other, KADAN_SOCKET: 'iso-r', KADAN_ROTTIE_BIN: fake, KADAN_NOTIFY: 'off'};
+  const script = `import {runRottie} from ${JSON.stringify(new URL('../src/rottie-cli.mjs', import.meta.url).href)};
+    try { runRottie(['status', '--json']); console.log('RAN'); } catch (e) { console.log('ERR ' + e.message); }`;
   const run = extra => spawnSync(process.execPath, ['--input-type=module', '-e', script], {env: {...base, ...extra}, encoding: 'utf8'});
   const denied = run({});
   assert.match(denied.stdout + denied.stderr, /KADAN_LIVE_FLOOR_DENIED/, denied.stdout + denied.stderr);

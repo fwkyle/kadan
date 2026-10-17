@@ -34,7 +34,7 @@ test("KADAN_WINDOW=rottie + 역할 프로필 + --hidden은 거부된다", () => 
   assert.match(denied.message, /worker/);
 });
 
-test("프로필 없음·none·비hidden·재사용·rottie 바닥은 허용한다", () => {
+test("프로필 없음·none·비hidden·재사용은 허용한다", () => {
   const base = {
     env: { KADAN_WINDOW: "rottie" },
     floorName: "tmux",
@@ -46,7 +46,6 @@ test("프로필 없음·none·비hidden·재사용·rottie 바닥은 허용한�
   assert.equal(cli.inspectHiddenStartPolicy({ ...base, env: { KADAN_WINDOW: "none" } }).ok, true);
   assert.equal(cli.inspectHiddenStartPolicy({ ...base, hidden: false }).ok, true);
   assert.equal(cli.inspectHiddenStartPolicy({ ...base, reusing: true }).ok, true);
-  assert.equal(cli.inspectHiddenStartPolicy({ ...base, floorName: "rottie" }).ok, true);
 });
 
 test("KADAN_WINDOW=rottie에서 프로필 세션의 --hidden은 세션을 만들기 전에 죽는다", (t) => {
