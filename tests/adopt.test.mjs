@@ -115,11 +115,11 @@ test('adopt: 화면이 끝내 안 뜨면 첫 안내를 보내지 않고 알린�
   assert.ok(calls.log.some((l) => l.includes('첫 안내를 보내지 않았습니다')));
 });
 
-test('HW-4: KADAN_FLOOR가 없으면 바닥은 tmux이고 herdr·rottie는 명시했을 때만 고른다(자동 폴백 없음)', async () => {
+test('HW-4: KADAN_FLOOR가 없으면 바닥은 tmux이고 herdr는 명시했을 때만 고르고 rottie는 고를 수 없다(자동 폴백 없음)', async () => {
   const { selectFloorName } = await import('../src/floor.mjs');
   assert.equal(selectFloorName().name, 'tmux');
   assert.equal(selectFloorName('herdr').name, 'herdr');
-  assert.equal(selectFloorName('rottie').name, 'rottie');
+  assert.throws(() => selectFloorName('rottie'), /KADAN_FLOOR_INVALID/);
   assert.throws(() => selectFloorName('herdr2'), /KADAN_FLOOR_INVALID/);
 });
 

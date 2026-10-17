@@ -68,7 +68,7 @@ Why: kyle이 시니어가 무엇을 읽고 어떻게 고민하는지 화면에�
 
 ### 알려진 한계
 
-- **로티 실행 파일 첫 인자 가드**: 로티 실행 파일을 첫 인자가 `status|workspace|terminal|recovery`가 아닌 꼴(인자 없음·`--version`·오타)로 부르면 CLI가 아니라 앱 전체가 다시 떠서 약 3초 뒤 기존 창을 앞으로 가져온다(2026-10-16 로티 쪽 실측). `terminal create`·`workspace add` 자체는 맨 앞 앱·활성 탭을 바꾸지 않아 포커스 없는 생성 옵션은 필요 없다. 그래서 `runRottie`(`src/floor-rottie.mjs`)는 주입 spawn이어도 첫 인자를 먼저 검사해 `ROTTIE_ARGV_REJECTED`(effect none)로 실행하지 않는다.
+- **로티 실행 파일 첫 인자 가드**: 로티 실행 파일을 첫 인자가 `status|workspace|terminal|recovery`가 아닌 꼴(인자 없음·`--version`·오타)로 부르면 CLI가 아니라 앱 전체가 다시 떠서 약 3초 뒤 기존 창을 앞으로 가져온다(2026-10-16 로티 쪽 실측). `terminal create`·`workspace add` 자체는 맨 앞 앱·활성 탭을 바꾸지 않아 포커스 없는 생성 옵션은 필요 없다. 그래서 `runRottie`(`src/rottie-cli.mjs`)는 주입 spawn이어도 첫 인자를 먼저 검사해 `ROTTIE_ARGV_REJECTED`(effect none)로 실행하지 않는다.
 
 - **어떤 종료에서 탭이 남을 수 있나**: 탭을 만드는 순간에 터미널 Ctrl-C처럼 프로세스 그룹 전체가 SIGINT를 받아 로티 CLI도 함께 죽은 경우, SIGKILL, 전원·강제 종료. 이때는 탭 주소(id)를 받지 못해 닫을 수 없고, 보기 탭 1개가 남을 수 있다. 주소를 모르면 정리하지 않는다(제목·키로 목록을 뒤져 지우면 남의 탭을 지울 수 있다).
 - **남은 탭 찾는 법**: 호출 폴더 `KADAN_HOME/advice/<호출ID>/tab.json`의 `key`(`kadan-senior-<호출ID>`, create 전에 먼저 쓴다) 또는 원장 `advice` 사건의 `tabKey`를 보고, 로티에서 `시니어 · <카드키>` 제목의 탭을 직접 닫는다. 신호 처리기가 돌 수 있고 저장이 성공했을 때만 `reason: interrupted`로 원장에 남는다. 저장 거절·SIGKILL·전원 종료 때는 증거 폴더 `tab.json`만 남는다.

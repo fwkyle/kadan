@@ -1,4 +1,4 @@
-// 로티 바닥 회귀 — 2026-08-30 card-18 사고 조건을 가짜 바닥으로 잠근다.
+// 바닥 공용 회귀 — 2026-08-30 card-18 사고 조건을 가짜 바닥으로 잠근다(로티 바닥은 없앴고, 공용 대기·전송 가드와 로티 생성 응답 해석만 남는다).
 import './helpers/isolated-home.mjs';
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,11 +16,7 @@ import {
   waitSnapshotPath,
 } from "../src/cli.mjs";
 import { selectFloorName } from "../src/floor.mjs";
-import {
-  buildRottieSendArgv,
-  parseRottieCreateEvidence,
-  sendRottieText,
-} from "../src/floor-rottie.mjs";
+import { parseRottieCreateEvidence } from "../src/rottie-cli.mjs";
 
 test("입력 에코에 완성 마커가 있고 새 출력이 없으면 ok가 아니라 사람 확인이다 — 2026-08-30 에코 오판", () => {
   let now = 0;
@@ -113,35 +109,16 @@ test("Rottie 출력 gap은 마커 유실 가능성이라 exit 2로 닫는다 —
   });
 });
 
-test("Rottie send argv는 셸 문자열 없이 body-file 절대경로를 한 요소로 쓴다", () => {
-  const argv = buildRottieSendArgv({
-    terminalId: "term_123",
-    bodyFile: "/tmp/kadan send/본문.txt",
-    idempotencyKey: "kadan-send-kadan-worker-1",
-  });
-
-  assert.deepEqual(argv, [
-    "terminal",
-    "send",
-    "--terminal",
-    "term_123",
-    "--body-file",
-    "/tmp/kadan send/본문.txt",
-    "--idempotency-key",
-    "kadan-send-kadan-worker-1",
-    "--json",
-  ]);
-  assert.equal(argv.some((arg) => arg === "--body"), false);
-});
-
-test("KADAN_FLOOR 오타는 자동 감지나 폴백 없이 typed exit 2 오류다", () => {
-  assert.throws(
-    () => selectFloorName("rotite"),
-    (error) =>
-      error.code === "KADAN_FLOOR_INVALID" &&
-      error.exitCode === 2 &&
-      /tmux\|rottie/.test(error.message)
-  );
+test("KADAN_FLOOR 오타와 rottie는 자동 감지나 폴백 없이 typed exit 2 오류다 — 로티는 창으로만 쓴다", () => {
+  for (const value of ["rotite", "rottie"]) {
+    assert.throws(
+      () => selectFloorName(value),
+      (error) =>
+        error.code === "KADAN_FLOOR_INVALID" &&
+        error.exitCode === 2 &&
+        /tmux\|herdr만 허용/.test(error.message)
+    );
+  }
 });
 
 test("Codex가 마커 뒤 커서를 입력창으로 옮겨도 줄 경계를 보존한다 — 2026-08-30 Rottie 원시 스트림", () => {
@@ -149,98 +126,6 @@ test("Codex가 마커 뒤 커서를 입력창으로 옮겨도 줄 경계를 보�
     "  KADAN:DONE card18-cursor ok\x1b[r\x1b[30;3H› Ask Codex to do anything";
   assert.deepEqual(findDoneMarkers(stripAnsi(raw)), [
     { taskId: "card18-cursor", result: "ok" },
-  ]);
-});
-
-test("Rottie는 붙여넣기 직후 Enter를 삼킨다 — 2026-08-30 card-18 실측", () => {
-  const previousBin = process.env.KADAN_ROTTIE_BIN;
-  process.env.KADAN_ROTTIE_BIN = "/fake/rottie";
-  const calls = [];
-  const spawnFn = (_bin, argv) => {
-    calls.push(argv);
-    if (argv[0] === "terminal" && argv[1] === "wait") {
-      return {
-        status: 0,
-        stdout: JSON.stringify({
-          ok: true,
-          result: { reached: true, reason: "output", cursor: "c:11" },
-        }),
-      };
-    }
-    const sequence = calls.filter(
-      (call) => call[0] === "terminal" && call[1] === "send"
-    ).length;
-    return {
-      status: 0,
-      stdout: JSON.stringify({
-        ok: true,
-        result: {
-          delivery: {
-            id: `delivery-${sequence}`,
-            sequence,
-            bodySha256: `sha-${sequence}`,
-            outputCursor: `c:${sequence * 10}`,
-          },
-        },
-      }),
-    };
-  };
-
-  try {
-    sendRottieText({
-      terminalId: "term-order",
-      session: "kadan-order",
-      text: "본문",
-      baselineText: "",
-      spawnFn,
-      now: () => 123,
-    });
-  } finally {
-    if (previousBin === undefined) delete process.env.KADAN_ROTTIE_BIN;
-    else process.env.KADAN_ROTTIE_BIN = previousBin;
-  }
-
-  assert.equal(calls.length, 3);
-  assert.deepEqual(calls[0].slice(0, 5), [
-    "terminal",
-    "send",
-    "--terminal",
-    "term-order",
-    "--body-file",
-  ]);
-  assert.ok(calls[0][5].endsWith("/body.txt"));
-  assert.deepEqual(calls[0].slice(6), [
-    "--no-enter",
-    "--idempotency-key",
-    "kadan-send-kadan-order-123",
-    "--json",
-  ]);
-  assert.deepEqual(calls[1], [
-    "terminal",
-    "wait",
-    "--terminal",
-    "term-order",
-    "--until",
-    "output",
-    "--since",
-    "c:10",
-    "--timeout-seconds",
-    "2",
-    "--json",
-  ]);
-  assert.deepEqual(calls[2].slice(0, 5), [
-    "terminal",
-    "send",
-    "--terminal",
-    "term-order",
-    "--body-file",
-  ]);
-  assert.ok(calls[2][5].endsWith("/enter.txt"));
-  assert.deepEqual(calls[2].slice(6), [
-    "--no-enter",
-    "--idempotency-key",
-    "kadan-send-kadan-order-123-enter",
-    "--json",
   ]);
 });
 
@@ -258,7 +143,7 @@ test("Rottie create 가짜 응답의 runtime build를 start 원장에 남긴다 
     runtime: { build: "build-from-response" },
   });
   const entry = buildStartLedgerEntry({
-    floorName: "rottie",
+    floorName: "tmux",
     role: "worker",
     session: "kadan-worker",
     evidence,

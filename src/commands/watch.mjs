@@ -85,7 +85,7 @@ export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastS
     recordedPid:recordedPid(readStart(session)),notificationOnly:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 
-// 바닥이 보류 조회를 지원하지 않으면(rottie) 기존처럼 보류 없이 진행한다.
+// 바닥이 보류 조회를 지원하지 않으면 기존처럼 보류 없이 진행한다.
 // 5번 연속 밀린 창은 사전 확인도 건너뛴다. 실제 입력 보호는 전송 쪽 guardFor가 같은 기준으로 뺀다.
 export function watchMailHold(role,{selectedFloor=floor,tracker=null}={}) {
   if (tracker?.forced(role)) return null;

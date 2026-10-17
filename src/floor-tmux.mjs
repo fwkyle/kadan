@@ -5,7 +5,7 @@ import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
-import { assertRottieArgv } from "./floor-rottie.mjs";
+import { assertRottieArgv } from "./rottie-cli.mjs";
 import { HUMAN_IDLE_MS } from "./notification-guard.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";

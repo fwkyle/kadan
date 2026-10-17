@@ -15,7 +15,7 @@ flowchart TB
   USER[사용자와 감독] --> CLI[카단 CLI]
   CLI --> WORK[업무 카드와 실행 카드]
   CLI --> MAIL[우편과 역할별 inbox]
-  CLI --> FLOOR[실행 바닥: tmux 또는 rottie]
+  CLI --> FLOOR[실행 바닥: tmux, 시험용 herdr]
   FLOOR --> ROLE[대화형 AI 역할 세션]
   WORK --> STORE[(같은 SQLite: 사건과 상태 이력)]
   MAIL --> STORE
@@ -43,7 +43,7 @@ flowchart TB
 | 우편 | 누구에게 무슨 말을 했고 읽음·답변은 어떤 상태인가? | `mail/events.jsonl`과 본문 파일 |
 | 역할별 우편함(inbox) | 내가 받은 편지·보낸 편지·답할 질문은 무엇인가? | 우편 원장의 역할별 조회. 역할마다 새 DB를 만들지 않음 |
 | 시스템 사건 원장 | 어떤 세션이 시작·종료됐고 감시가 무엇을 했는가? | `system/events.jsonl` |
-| 실행 바닥 | 어느 터미널에 입력하고 화면을 읽는가? | tmux 또는 rottie의 실제 세션과 PID |
+| 실행 바닥 | 어느 터미널에 입력하고 화면을 읽는가? | tmux(시험용은 herdr)의 실제 세션과 PID |
 
 **공통 실행 원장은 실행 카드에 연결되는 사건 이력이다.** 별도의 업무 관리 체계를 하나 더 만드는 것이 아니다. 카드 상태 이력은 약속과 진행을, 공통 사건은 발령·실행 종료를 맡는다. 카드에 연결된 일반 질문도 새 실행은 아니다.
 

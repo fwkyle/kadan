@@ -55,7 +55,7 @@ export function cmdAttach(argv) {
   if (!role) die("사용법: kadan attach <역할>");
   const session = sessionName(role);
   if (!floor.alive(session)) die(`세션 없음: ${session}`);
-  if (["rottie", "herdr"].includes(floor.name)) {
+  if (floor.name === "herdr") {
     console.log(floor.attach(session));
     return;
   }

@@ -24,9 +24,9 @@ export function cmdStatus() {
         : `PID변경(${recorded}→${item.pid})`;
     const shown = startDisplay(lastStartFor(item.session));
     const modelBit = `  ${shown.harness} · ${shown.model} · ${shown.family}`;
-    if (["rottie", "herdr"].includes(floor.name)) {
+    if (floor.name === "herdr") {
       console.log(
-        `${item.session}  ${floor.name === "rottie" ? "Rottie" : "herdr"}=${item.terminalId}  상태=${item.state}  ${pidState}${modelBit}`
+        `${item.session}  herdr=${item.terminalId}  상태=${item.state}  ${pidState}${modelBit}`
       );
     } else {
       console.log(

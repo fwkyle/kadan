@@ -37,7 +37,6 @@ const {
   buildStopLedgerEntry,
   buildTmuxCreateArgv,
   buildRottieCreateArgv,
-  buildRottieFloorCreateArgv,
   parseRottieCreateResult,
   openWindow,
   tmuxConfText,
@@ -158,7 +157,7 @@ test("옛 기록에 by가 없으면 모름이다 — 사람으로 추측하지 �
   assert.match(oldLog, /모름 → b1-작업자\s+card-old/);
 });
 
-test("kadan start는 세션에 KADAN_ROLE을 심는다 — tmux -e와 Rottie env 감싸기(card-28)", () => {
+test("kadan start는 세션에 KADAN_ROLE을 심는다 — tmux -e(card-28)", () => {
   // Given: 역할·세션·작업 폴더·원래 명령이 각각 한 요소인 시작 입력이다.
   const input = {
     role: "b1-감독",
@@ -167,14 +166,9 @@ test("kadan start는 세션에 KADAN_ROLE을 심는다 — tmux -e와 Rottie env
     cmd: "codex --resume",
   };
 
-  // When: tmux와 Rottie가 실제로 받을 argv를 만든다.
+  // When: tmux가 실제로 받을 argv를 만든다.
   const tmuxArgv = buildTmuxCreateArgv(input);
-  const rottieArgv = buildRottieFloorCreateArgv({
-    ...input,
-    idempotencyKey: "kadan-kadan-b1-감독-123",
-  });
-
-  // Then: tmux는 -e 한 요소, Rottie는 env 명령 인자 배열을 보존한다.
+  // Then: tmux는 -e 한 요소로 보존한다.
   assert.deepEqual(tmuxArgv, [
     "new-session",
     "-d",
@@ -186,23 +180,7 @@ test("kadan start는 세션에 KADAN_ROLE을 심는다 — tmux -e와 Rottie env
     "KADAN_ROLE=b1-감독",
     "codex --resume",
   ]);
-  assert.deepEqual(rottieArgv.slice(6, 9), [
-    "--command",
-    "env KADAN_ROLE=b1-감독 codex --resume",
-    "--idempotency-key",
-  ]);
-  const sanitizedRottieArgv = buildRottieFloorCreateArgv({
-    role: '감독 "위조"',
-    session: "kadan-감독-위조",
-    cwd: input.cwd,
-    cmd: "/bin/zsh",
-    idempotencyKey: "kadan-safe-role",
-  });
-  assert.equal(
-    sanitizedRottieArgv[7],
-    "env KADAN_ROLE=감독-위조 /bin/zsh"
-  );
-  assert.ok([...tmuxArgv, ...rottieArgv].every((arg) => typeof arg === "string"));
+  assert.ok(tmuxArgv.every((arg) => typeof arg === "string"));
 });
 
 test("watch가 보낸 것은 by=watch다 — 감독이 일한 것으로 세지 않는다(2026-08-31 card-27 결함)(card-28)", () => {

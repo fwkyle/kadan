@@ -38,7 +38,6 @@ import {
   tmuxConfText,
   hasSession,
 } from "./floor-tmux.mjs";
-import { buildRottieFloorCreateArgv } from "./floor-rottie.mjs";
 import { createWallServer, renderWallHtml } from "./wall.mjs";
 import {
   buildJudgeInput,
@@ -147,7 +146,6 @@ export {
   SOCKET,
   buildOrcaCreateArgv,
   buildRottieCreateArgv,
-  buildRottieFloorCreateArgv,
   buildTmuxCreateArgv,
   capturePane,
   ensureTmuxConf,

@@ -1,12 +1,12 @@
 // 시니어 따라 보기 탭 — 호출이 도는 동안만 로티에 읽기 전용 탭을 띄워 진행 출력을 보여 준다(2026-10-16 [kyle]).
 // 탭은 꾸밈이다: 어떤 실패도 던지지 않고 건너뜀 사유로 돌려준다. 역할이 아니므로 KADAN_ROLE·kadan-* 이름·start 원장 사건을 쓰지 않는다.
-// 로티 호출은 floor-rottie의 runRottie 길목(운영 로티 보호 포함)을 그대로 쓴다.
+// 로티 호출은 rottie-cli의 runRottie 길목(운영 로티 보호 포함)을 그대로 쓴다.
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {effectiveWindow} from './window-setting.mjs';
 import {assertNotLiveRottie} from './live-floor-guard.mjs';
-import {parseRottieCreateEvidence, runRottie} from './floor-rottie.mjs';
+import {parseRottieCreateEvidence, runRottie} from './rottie-cli.mjs';
 
 // 'on'이면 켜고 'off'면 끈다. 없으면 SENIOR_TAB_DEFAULT_ON을 따른다.
 // 로티 terminal create에는 포커스를 끄는 옵션이 없다. 2026-10-16 실측(docs/senior.md)에서 로티가 맨 앞으로 오지 않아 기본은 켬이다.
