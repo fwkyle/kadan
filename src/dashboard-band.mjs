@@ -79,6 +79,7 @@ const SILENTLY_CLOSED = new Set(["자원", "전달실패"]);
 // 알림밀림 사유 코드를 쉬운 말로. 모르는 코드는 원문만 보인다.
 const HOLD_REASONS = {
   KADAN_HUMAN_ACTIVE: "사람이 방금 입력함", KADAN_HUMAN_ACTIVITY_UNKNOWN: "사람 입력 시각을 알 수 없음",
+  // 옛 기록 표시용: 화면 모양 판정을 없앤 2026-10-17 전 원장에 남은 코드다.
   KADAN_PANE_INPUT_PENDING: "입력창에 쓰다 만 글이 있음", KADAN_PANE_INPUT_UNKNOWN: "입력창 상태를 알 수 없음",
   KADAN_PANE_STATE_UNKNOWN: "창 상태를 알 수 없음", KADAN_HERDR_NOT_READY: "입력 대기 상태가 아님",
   KADAN_HERDR_INPUT_UNKNOWN: "입력창 상태를 알 수 없음", KADAN_HERDR_SCROLLED: "과거 기록을 보는 중",

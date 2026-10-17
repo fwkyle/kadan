@@ -5,7 +5,6 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { commandWords, matchesAiProcess } from "./ai-identity.mjs";
 import { readLedger } from "./ledger.mjs";
-import { checkEmptyInput } from "./floor-tmux.mjs";
 import { herdrNotificationGuard } from "./herdr-notification.mjs";
 
 function deny(code, message, delivery = "not-sent") {
@@ -62,36 +61,6 @@ function localArgs(pid) {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
-const OBSERVE_FRAME = `
-import {spawn} from 'node:child_process';
-const [session,terminal,rows]=process.argv.slice(1); let data='';
-const child=spawn('herdr',['--session',session,'terminal','session','observe',terminal,'--rows',rows],{stdio:['ignore','pipe','ignore']});
-const timer=setTimeout(()=>{child.kill();process.exitCode=1;},3000);
-child.stdout.on('data',chunk=>{data+=chunk;const end=data.indexOf('\\n');
- if(end>=0){process.stdout.write(data.slice(0,end));child.kill();clearTimeout(timer);}});
-child.on('error',()=>{clearTimeout(timer);process.exitCode=1;});
-`;
-
-// 관찰 창은 기본 120x40이라, 세로가 더 큰 터미널이면 실제 커서가 프레임 밖(숨김)으로 밀려 행 좌표가 어긋난다
-// (2026-10-12 LBR-1 결함 1: 58행 Codex 창에서 프레임 마지막 이동이 커서 아닌 그리기 위치 40행이었다).
-// 터미널의 실제 세로 줄 수로 관찰해야 프레임 행 = 화면 행이 된다.
-export function herdrInputFrame(socket, terminal, rows) {
-  if (!Number.isInteger(rows) || rows <= 0) deny("KADAN_HERDR_INPUT_UNKNOWN", "터미널 세로 줄 수 미확인");
-  const result = spawnSync(process.execPath, ["--input-type=module", "-e", OBSERVE_FRAME,
-    serverName(socket), terminal, String(rows)], { encoding: "utf8", timeout: 4000, maxBuffer: 1024 * 1024 });
-  let frame;
-  try { frame = JSON.parse(result.stdout); } catch { deny("KADAN_HERDR_INPUT_UNKNOWN", "입력 커서 조회 실패"); }
-  if (result.status !== 0 || frame.type !== "terminal.frame" || !frame.full || frame.encoding !== "ansi") {
-    deny("KADAN_HERDR_INPUT_UNKNOWN", "전체 터미널 화면이 아닌 응답");
-  }
-  if (frame.height !== rows) deny("KADAN_HERDR_INPUT_UNKNOWN", `관찰 화면 세로(${frame.height})가 터미널(${rows})과 달라 커서 행을 믿을 수 없다`);
-  const ansi = Buffer.from(frame.bytes, "base64").toString("utf8");
-  const cursor = [...ansi.matchAll(/\x1b\[(\d+);(\d+)H/g)].at(-1);
-  if (!cursor) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 커서 미확인");
-  // frame.width는 접속 창 크기와 어긋난 값이 올 수 있어(120 대 실제 212) 입력창 판정에 쓰지 않는다.
-  return { row: Number(cursor[1]) - 1, width: frame.width };
-}
-
 // 새 폴더의 첫 실행은 AI 도구가 "이 폴더를 믿느냐"를 묻고 사람이 답할 때까지 멈춘다(2026-10-12 LBR-1 실측).
 // 자동으로 수락하지 않는다: 폴더를 믿는 일은 사람의 결정이다. 막힘을 알리고 정확한 통과 명령만 보여 준다.
 // Claude 기본 선택은 `No, exit`라 Enter만 보내면 종료된다 → 아래로 한 칸 내린 뒤 Enter. Codex 기본은 `Yes, continue`.
@@ -110,7 +79,7 @@ export function trustPromptHelp(socket, pane, screenText) {
 }
 
 export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = readLedger,
-  argsForPid = localArgs, inputFrame = herdrInputFrame } = {}) {
+  argsForPid = localArgs } = {}) {
   const pending = new Map();
   const socket = () => {
     if (!env.KADAN_HOME || !path.isAbsolute(env.KADAN_HERDR_SOCKET || "")) {
@@ -159,7 +128,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
   // 응답 중인 실행기는 Claude·Codex 모두 들어온 입력을 자기 대기열에 쌓았다가 현재 작업 뒤에 처리한다(2026-10-12 실측).
   // 기본은 거절, 명시 허용: 호출부가 사람·역할 우편(send 명령)임을 busyMail로 표시할 때만 working을 허용한다.
   // 카드 발령·자동 경보·표시 없는 호출은 입력 대기(idle/done)만 허용한다.
-  const checkAgent = (session, identity, { allowWorking = false, skipInput = false } = {}) => {
+  const checkAgent = (session, identity, { allowWorking = false } = {}) => {
     const { record, pane } = requirePane(session);
     const info = processInfo(pane);
     if (String(info?.shell_pid) !== String(identity?.currentPid ?? record.panePid)) deny("KADAN_PID_MISMATCH", "현재 프로세스 세대가 시작 기록과 다르다");
@@ -180,19 +149,10 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
       deny("KADAN_HERDR_NOT_READY", `입력 대기 확인 실패: ${agent?.agent_status ?? "unknown"}`);
     }
     if (pane.scroll?.offset_from_bottom > 0) deny("KADAN_HERDR_SCROLLED", "과거 기록 조회 중이라 전송을 보류한다");
-    if (skipInput) {
-      // 입력 보호를 건너뛰는 강제 알림. 입력창·안정 시간 확인만 빼고 프로세스·승인 대기·기록보기 확인은 위에서 끝냈다.
-      const view = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "text", strip_ansi: true }).read;
-      if (typeof view?.text !== "string") deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 화면 미확인");
-      return { record, pane, visible: view };
-    }
-    const frame = inputFrame(socket(), pane.terminal_id, pane.scroll?.viewport_rows);
-    const visible = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "ansi", strip_ansi: false }).read;
-    if (typeof visible?.text !== "string" || visible.truncated) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 입력 화면 미확인");
-    try {
-      checkEmptyInput(session, () => visible.text.replaceAll("\r\n", "\n"), frame.row, null, "herdr 전송 보류");
-    } catch (error) { error.delivery = 'not-sent'; throw error; }
-    return { record, pane, visible, frame };
+    // 화면 모양으로 미제출 글을 판정하지 않는다(2026-10-17 [kyle]). 읽은 화면은 알림의 30초 안정 검사 지문에만 쓴다.
+    const visible = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "text", strip_ansi: true }).read;
+    if (typeof visible?.text !== "string" || visible.truncated) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 화면 미확인");
+    return { record, pane, visible };
   };
   const checkNotification = herdrNotificationGuard(session => checkAgent(session));
   // 시작 직후 몇 초 동안만 본다. 신뢰 화면이면 사람에게 알리고, 입력 대기가 되거나 시간이 지나면 조용히 끝낸다.
@@ -254,7 +214,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     send(session, text, { cardIdentity, notificationGuard, busyMail } = {}) {
       const allowWorking = busyMail === true && !cardIdentity;
       const forced = notificationGuard?.force === true && !cardIdentity;
-      const check = () => forced ? checkAgent(session, undefined, { allowWorking: true, skipInput: true })
+      const check = () => forced ? checkAgent(session, undefined, { allowWorking: true })
         : notificationGuard ? checkNotification(session, notificationGuard) : checkAgent(session, cardIdentity, { allowWorking });
       const { pane, visible } = check();
       // 알림에는 완료 마커 기준점이 필요 없다. 긴 과거 출력 때문에 깨움까지 막지 않는다.

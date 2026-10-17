@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {attachHuman} from './helpers/human-client.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
 import {guardedSend} from '../src/cli-guarded-send.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
@@ -206,7 +207,7 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
   const target = '=kadan-q-super:';
   const contents = () => fs.existsSync(received) ? fs.readFileSync(received, 'utf8') : '';
   const waitFor = pred => { const end = Date.now() + 4000; while (Date.now() < end && !pred()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); };
-  let started = false;
+  let started = false, human;
   try {
     const start = call('q-super', 'start', 'q-super', '--cmd', `'${process.execPath}' '${receiver}'`);
     assert.equal(start.status, 0, start.stderr);
@@ -221,8 +222,17 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
     const sends = () => readLedger(home).filter(e => e.kind === 'send');
     assert.equal(sends().length, 1);
     assert.notEqual(sends()[0].transport, 'mailbox', '바로 들어간 편지는 보관 우편이 아니라 감시기가 따로 알리지 않는다');
-    // 걸림 → 보관, 창은 그대로
-    tmuxCmd(['send-keys', '-t', target, '-l', 'USER_PENDING_']);
+    // 사람이 방금 붙기만 했고 키는 안 눌렀으면 막지 않는다(로티 탭이 시작과 동시에 붙는 표준 흐름).
+    human = attachHuman('tmux', socket, '=kadan-q-super');
+    const attachedOnly = call('p-super', 'mail', 'q-super', 'PEER_ATTACHED_ONLY');
+    assert.equal(attachedOnly.status, 0, attachedOnly.stderr);
+    waitFor(() => contents().includes('PEER_ATTACHED_ONLY'));
+    assert.match(contents(), /PEER_ATTACHED_ONLY/);
+    assert.equal(sends().length, 2);
+    // 사람이 붙은 뒤 1.25초에 키를 누르면(검수 P2) 보류 → 보관, 창은 그대로.
+    human.kill();
+    human = attachHuman('tmux', socket, '=kadan-q-super');
+    human.type('x', 1250);
     const before = contents();
     const held = call('p-super', 'mail', 'q-super', 'PEER_HELD');
     assert.equal(held.status, 0, held.stderr);
@@ -236,6 +246,7 @@ readline.createInterface({input:process.stdin}).on('line',l=>{fs.appendFileSync(
     // --raw는 여전히 거절
     assert.equal(call('p-super', 'mail', 'q-super', '--raw', 'x').status, 1);
   } finally {
+    human?.kill();
     if (started) call('q-super', 'stop', 'q-super');
   }
 });

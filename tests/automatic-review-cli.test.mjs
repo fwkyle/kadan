@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync,spawn} from 'node:child_process';
+import {attachHuman} from './helpers/human-client.mjs';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
 import {readLedger,readMailLedger,readTaskLedger,readMailBody} from '../src/ledger.mjs';
 import {digest,findDoneMarkers} from '../src/cli.mjs';
@@ -12,7 +13,7 @@ import {digest,findDoneMarkers} from '../src/cli.mjs';
 const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
 
-test('자동 발령도 기존 미제출 입력을 보존하고 paste·Enter·발령을 거부한다',()=>{
+test('자동 발령도 사람이 창에 붙어 최근 입력했으면 paste·Enter·발령을 거부한다',()=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-auto-input-'));
  createDatabase(home);writeStorageMarker(home,'sqlite');
  const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_FLOOR:'tmux',KADAN_WINDOW:'none',KADAN_ROLE:'auto-owner'};
@@ -20,15 +21,13 @@ test('자동 발령도 기존 미제출 입력을 보존하고 paste·Enter·발
  const tm=(...args)=>spawnSync('tmux',['-L',env.KADAN_SOCKET,...args],{encoding:'utf8'});
  const harness=path.join(home,'codex');
  fs.writeFileSync(harness,`#!${process.execPath}\nprocess.stdout.write('› ');process.stdin.on('data',()=>{});\n`,{mode:0o755});
- const roles=['auto-worker','auto-reviewer','auto-owner'],started=[];
+ const roles=['auto-worker','auto-reviewer','auto-owner'],started=[];let human;
  try{
   for(const role of roles){run('start',role,'--hidden','--cmd',`${quote(harness)} --model test-model`);started.push(role);}
   const target='kadan-auto-worker';
-  tm('send-keys','-t',target,'-l','USER_PENDING');
-  const until=Date.now()+3000;
-  while(!tm('capture-pane','-p','-t',target).stdout.includes('USER_PENDING')){
-   assert.ok(Date.now()<until,'시험 입력 준비 시간 초과');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
-  }
+  // 사람이 pty client로 붙어 키를 눌렀다. 붙기만 한 client는 사람 입력이 아니다(2026-10-17).
+  human=attachHuman('tmux',env.KADAN_SOCKET,'='+target);
+  human.type('x');
   run('work','create','input/work','--title','입력 보존','--goal','미제출 입력 보존','--scope','격리 시험','--acceptance','발령 없음','--owner','auto-owner','--board','input','--repo-path',home);
   for(const id of ['implementation','review']){
    const source=path.join(home,id+'.md');fs.writeFileSync(source,'# 격리 카드\n자동 발령 경계 확인');
@@ -39,11 +38,11 @@ test('자동 발령도 기존 미제출 입력을 보존하고 paste·Enter·발
   const before=tm('capture-pane','-p','-t',target).stdout;
   const state=JSON.parse(run('work','auto-step','input/work'));
   assert.equal(state.status,'exception');
-  assert.match(state.reason,/미제출 입력|입력 경계/);
+  assert.match(state.reason,/사람이 이 창에서 최근 입력/);
   assert.equal(tm('capture-pane','-p','-t',target).stdout,before,'paste·Enter 없이 기존 화면 보존');
   assert.equal(readLedger(home).filter(e=>e.kind==='send'&&e.role===roles[0]).length,0);
   assert.equal(readTaskLedger(home).filter(e=>e.kind==='dispatch').length,0);
- }finally{for(const role of started)run('stop',role);}
+ }finally{human?.kill();for(const role of started)run('stop',role);}
 });
 
 test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→수정→PASS·마커·동시 실행',async()=>{

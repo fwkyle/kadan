@@ -27,7 +27,7 @@ test("동시 send는 서로의 tmux 버퍼를 붙여넣거나 지우지 않는�
   const run = (args, input) => {
     const call = { args: [...args], input };
     calls.push(call);
-    if (args[0] === "display-message") return "0\n";
+    if (args[0] === "display-message") return "0\n"; if (args[0] === "list-clients") return "";
     if (!reentered && args[0] === "load-buffer" && bufferOf(call) === "kadan-send-101-1") {
       reentered = true;
       sendTmux("kadan-b", "B-지시", { run, spawn: noopSpawn, pid: 202, hrtime });
@@ -72,7 +72,7 @@ test("동시 send는 서로의 tmux 버퍼를 붙여넣거나 지우지 않는�
 
 test("본문은 괄호 붙여넣기(-p)로 넣고 1초 뒤 Enter를 보낸다 — Claude Code Enter 누락(2026-09-23)", () => {
   const calls = [];
-  const run = (args) => { calls.push(["run", ...args]); if (args[0] === "display-message") return "0\n"; };
+  const run = (args) => { calls.push(["run", ...args]); if (args[0] === "display-message") return "0\n"; if (args[0] === "list-clients") return ""; };
   const spawn = (cmd, args) => { calls.push(["spawn", cmd, ...args]); return {}; };
   sendTmux("kadan-a", "짧은 지시\n", { run, spawn, pid: 1, hrtime: () => 1n });
   const paste = calls.findIndex((c) => c[1] === "paste-buffer");
@@ -94,6 +94,7 @@ for (const sample of [
   const run=args=>{
     calls.push(args);
     if(args[0]==='display-message'){const value=modes.shift();if(value===null)throw new Error('조회 실패');return value;}
+    if(args[0]==='list-clients')return '';
   };
   assert.throws(()=>sendTmux('kadan-test','본문',{run,spawn:noopSpawn}),e=>{
     assert.equal(e.delivery,sample.delivery);assert.equal(e.inputAcceptance,'unconfirmed');assert.match(e.message,/전송 보류/);return true;
@@ -105,14 +106,14 @@ for (const sample of [
 
 test('정상 모드의 키 전달은 입력 접수 확인을 주장하지 않는다',()=>{
   const calls=[];
-  const receipt=sendTmux('kadan-test','본문',{run:a=>{calls.push(a);return a[0]==='display-message'?'0':undefined;},spawn:noopSpawn});
+  const receipt=sendTmux('kadan-test','본문',{run:a=>{calls.push(a);return a[0]==='display-message'?'0':a[0]==='list-clients'?'':undefined;},spawn:noopSpawn});
   assert.deepEqual(receipt,{keyDelivery:'sent',inputAcceptance:'unconfirmed'});
   assert.equal(calls.filter(c=>c[0]==='paste-buffer').length,1);assert.equal(calls.filter(c=>c[0]==='send-keys').length,1);
 });
 
 for(const failure of ['load-buffer','paste-buffer','send-keys'])test(`${failure} 오류의 전송 단계를 보존하고 반복하지 않는다`,()=>{
   const calls=[];const error=new Error('시험 오류');
-  assert.throws(()=>sendTmux('kadan-test','본문',{run:a=>{calls.push(a);if(a[0]===failure)throw error;return a[0]==='display-message'?'0':undefined;},spawn:noopSpawn}),e=>{
+  assert.throws(()=>sendTmux('kadan-test','본문',{run:a=>{calls.push(a);if(a[0]===failure)throw error;return a[0]==='display-message'?'0':a[0]==='list-clients'?'':undefined;},spawn:noopSpawn}),e=>{
     assert.equal(e,error);assert.equal(e.delivery,failure==='load-buffer'?'not-sent':'unknown');return true;
   });
   assert.equal(calls.filter(c=>c[0]===failure).length,1);
@@ -129,7 +130,7 @@ test('미전송·부분전송 오류는 guardedSend에서 덮지 않고 성공 s
 
 test('전송 버퍼 정리 오류도 미전송 판정을 보존한다',()=>{
   let checks=0;
-  assert.throws(()=>sendTmux('kadan-test','본문',{run:a=>{if(a[0]==='display-message')return ++checks===1?'0':'1';if(a[0]==='delete-buffer')throw new Error('정리 실패');},spawn:noopSpawn}),e=>e instanceof AggregateError&&e.delivery==='not-sent');
+  assert.throws(()=>sendTmux('kadan-test','본문',{run:a=>{if(a[0]==='display-message')return ++checks===1?'0':'1';if(a[0]==='list-clients')return '';if(a[0]==='delete-buffer')throw new Error('정리 실패');},spawn:noopSpawn}),e=>e instanceof AggregateError&&e.delivery==='not-sent');
 });
 
 test("paste 실패면 같은 이름 버퍼를 지우고 원래 오류를 던진다(card-48)", () => {
@@ -137,7 +138,7 @@ test("paste 실패면 같은 이름 버퍼를 지우고 원래 오류를 던진�
   const calls = [];
   const run = (args, input) => {
     calls.push({ args: [...args], input });
-    if (args[0] === "display-message") return "0\n";
+    if (args[0] === "display-message") return "0\n"; if (args[0] === "list-clients") return "";
     if (args[0] === "paste-buffer") {
       throw originalError;
     }
