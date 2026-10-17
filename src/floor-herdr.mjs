@@ -151,7 +151,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
     if (pane.scroll?.offset_from_bottom > 0) deny("KADAN_HERDR_SCROLLED", "과거 기록 조회 중이라 전송을 보류한다");
     // 화면 모양으로 미제출 글을 판정하지 않는다(2026-10-17 [kyle]). 읽은 화면은 알림의 30초 안정 검사 지문에만 쓴다.
     const visible = call("pane.read", { pane_id: pane.pane_id, source: "visible", format: "text", strip_ansi: true }).read;
-    if (typeof visible?.text !== "string") deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 화면 미확인");
+    if (typeof visible?.text !== "string" || visible.truncated) deny("KADAN_HERDR_INPUT_UNKNOWN", "현재 화면 미확인");
     return { record, pane, visible };
   };
   const checkNotification = herdrNotificationGuard(session => checkAgent(session));

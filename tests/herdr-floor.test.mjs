@@ -65,7 +65,7 @@ for (const [name, change, code] of [
   ["승인 대기", f => { f.state.status = "blocked"; }, "KADAN_HERDR_NOT_READY"],
   ["상태 미확인", f => { f.state.status = "unknown"; }, "KADAN_HERDR_NOT_READY"],
   ["기록보기 중", f => { f.pane.scroll.offset_from_bottom = 4; }, "KADAN_HERDR_SCROLLED"],
-  ["출력 유실", f => { f.state.truncated = true; }, "KADAN_HERDR_OUTPUT_GAP"],
+  ["출력 유실", f => { f.state.truncated = true; }, "KADAN_HERDR_INPUT_UNKNOWN"],
 ]) test(`${name}이면 본문 요청이 발생하지 않는다`, () => {
   const f = fixture(); change(f);
   assert.throws(() => f.floor.send(f.start.session, "카드 본문"), { code });
@@ -131,6 +131,13 @@ test('알림 유예 중 입력·화면 변화와 working 뒤에는 새로 30초�
   f.state.status = 'idle';
   assert.equal(hold(150_000).code, 'KADAN_HUMAN_ACTIVE');
   assert.equal(hold(180_000), null);
+  assert.equal(prompts(f), 0);
+});
+
+test('알림 경로도 잘린 화면(truncated)은 안정 검사 지문으로 쓰지 않고 거절한다', () => {
+  const f = fixture(); f.state.truncated = true;
+  assert.throws(() => f.floor.send(f.start.session, '알림', { notificationGuard: { now: 30_000 } }),
+    { code: 'KADAN_HERDR_INPUT_UNKNOWN', delivery: 'not-sent' });
   assert.equal(prompts(f), 0);
 });
 
