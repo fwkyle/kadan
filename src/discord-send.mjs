@@ -80,7 +80,9 @@ export async function sendWebhook(webhook, payload, {budgetMs = TOTAL_BUDGET_MS,
       continue;
     }
     if (r.status >= 500 && !serverRetried && left() > 2500) { serverRetried = true; await sleep(1000); continue; }
-    return {outcome: 'failed', attempts, status: r.status, reason: `HTTP ${r.status}`};
+    // 디스코드 오류 코드(숫자)만 담는다 — '보관된 스레드'(50083)를 알아보는 데 쓴다. 오류 본문 원문은 싣지 않는다.
+    let code; try { const c = JSON.parse(r.text)?.code; if (Number.isInteger(c)) code = c; } catch { /* 본문이 JSON이 아님 */ }
+    return {outcome: 'failed', attempts, status: r.status, reason: `HTTP ${r.status}`, ...(code === undefined ? {} : {code})};
   }
 }
 

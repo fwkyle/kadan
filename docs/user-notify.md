@@ -84,7 +84,7 @@ kadan secrets unset discord
 갱신: 2026-10-14 06:55 UTC
 ```
 
-- 상태 파일: `notify-threads.json`은 `업무 키 → {threadId, statusMessageId}`다. 1단계의 옛 형식(`업무 키 → 글 id` 문자열)도 읽고, 다음 저장 때 같은 잠금 안에서 새 형식으로 바꿔 쓴다. 주소·토큰·사용자 ID는 저장하지 않는다.
+- 상태 파일: `notify-threads.json`은 `업무 키 → {threadId, statusMessageId, archived?}`다(`archived`는 봇이 보관한 글일 때만 `true`로 쓰고, 없으면 `false`로 읽는다). 1단계의 옛 형식(`업무 키 → 글 id` 문자열)도 읽고, 다음 저장 때 같은 잠금 안에서 새 형식으로 바꿔 쓴다. 주소·토큰·사용자 ID는 저장하지 않는다.
 - 맞추는 함수는 `refreshWorkStatus(home, work)` 하나다. 새 주기 작업은 없고 이미 있는 사건 지점에서만 부른다.
 
 | 사건 | 부르는 곳 |
@@ -97,6 +97,30 @@ kadan secrets unset discord
 - 수정이 404(메시지 지워짐)이면 같은 글에 새 상태 메시지를 한 번 올리고 id를 바꾼다. 글까지 404이면 상태 메시지를 첫 글로 새 글을 만든다. 404가 아닌 4xx(400·403 등)·5xx·시간 초과는 더 시도하지 않고 **버린다**(상태는 다음 사건 때 다시 계산되므로 시스템 알림으로 대신하지 않는다).
 - 공통 12초 예산과 장애 직후 60초 건너뛰기를 알림과 같이 쓴다. 건너뛰는 동안은 수정 요청도 나가지 않는다. 결과는 `notify-log.jsonl`에 `kind:"status"`로 남는다(중복 키 없음: 경보·우편의 중복 막기와 섞이지 않는다).
 - 요청 0건인 경우: `KADAN_NOTIFY=off`, 디코 설정 없음, 그 레포의 포럼 웹훅 키 없음, 업무 글 없음.
+
+### 끝난 업무 글 보관·재개 (2026-10-16)
+
+업무가 **완료·취소**되면 상태 메시지를 고친 뒤 그 포럼 글을 보관(archived)해, 진행 중인 글만 열려 있게 한다. 보관은 웹훅이 못 하고 **봇**만 한다(`PATCH /channels/<글 id> {archived}`).
+
+- **봇 자격 경로:** `discord-bot` 비밀 파일의 `DISCORD_BOT_TOKEN`(`kadan secrets`로 위치 지정)을 자식 프로세스 `discord-archive.mjs`가 읽는다(알림 경로가 동기라 웹훅 전송처럼 `spawnSync`, `thread-archive.mjs`). 요청 함수는 `discord-chat.mjs` `setThreadArchived(chat, id, archived)`이고 `editThread`의 `assertSecretaryThread`는 거치지 않는다(notify-threads에 기록된 업무 글 id에만 쓴다). 봇 토큰은 `scrubSecrets` 목록에 더해 notify-log·오류 문구에 나가지 않는다.
+- **보관 조건(같은 잠금 안, 모두):** (a) 업무가 완료·취소 (b) 이번 상태 메시지 고치기가 `sent` (c) 키가 `*/__decisions__`가 아님 (d) 기록이 아직 `archived`가 아님 (e) 시간 예산이 `MIN_SEND_MS` 이상 남음. 순서는 **고치기 → 보관**이다(보관된 글에 쓰면 다시 열릴 수 있다).
+
+| 경우 | 요청 순서 | 기록 |
+|---|---|---|
+| 완료·취소 + 고치기 `sent` | 상태 PATCH → 보관 PATCH | `archived:true` |
+| 결정 글 / 고치기 실패 / 예산 부족 | 보관 요청 없음(예산 부족은 notify-log에 사유) | 그대로(다음 사건 때 재시도) |
+| 보관 403(Manage Threads 없음)·실패 | 보관 PATCH 1회 | 그대로, `notify-log` `kind:"archive"`에 사유, 60초 차단 없음, 알림 결과 불변 |
+| `archived:true` 글에 새 알림·reopen(열린 업무) | 재개 PATCH → 쓰기 → 상태 PATCH | `archived` 해제 |
+| 기록 없음인데 웹훅이 `50083` | 쓰기(거절) → 재개 PATCH → 쓰기 **한 번만** 다시 | `archived` 없음 |
+| 재개 403 등 | 재개 PATCH까지만, 그 글 쓰기 건너뜀(`archived-skip`) | 그대로. 알림은 기존 대체 전달(시스템 알림)을 받고 #브리핑 같은 다른 디코 채널로는 보내지 않음. 상태 고치기는 원래 대체 전달이 없어 로그만 |
+| 보관된 글의 결정 해결 고치기 | 재개 PATCH → 요청 글 고치기 → 상태 PATCH → (끝난 업무면) 보관 PATCH | `decisions.<id>.resolved`, `archived:true`. 손으로 보관했으면 50083 → 재개 → 한 번만 다시 |
+| 끝난 업무 + 이미 보관된 글에 늦은 실행 done | 요청 0건 | 그대로 |
+
+- **대체 전달을 받는 알림:** `notifyUser`로 나가는 알림은 모두(결정 요청·답변·취소, 울림 경보, 막힘·겹알림, 우편·인계 알림) 업무 글에 못 쓰면 시스템 알림으로 내려간다. `systemFallback:false`인 조용한 알림(`revive`)과 `refreshWorkStatus`(상태 고치기)는 원래 대체 전달이 없어 건너뛰고 `notify-log`에만 남긴다.
+- 봇 자식의 출력은 정수·고정 단어·가린 문자열만 받는다(반사된 `code`·`message`에 토큰이 실려도 나가지 않는다). `attempts`는 실제로 나간 요청 수다.
+- 디코 자동 재개방 여부는 **실측 미확인**(실제 전송 금지)이다. 그래서 두 경우를 모두 처리한다. 열린 업무로 돌아온 글(reopen)은 재개 뒤 다시 보관하지 않는다. 끝난 업무에 새 알림이 오면 재개 → 쓰기 → 고치기 뒤 다시 보관한다.
+- '보관된 스레드' 오류: 디스코드 JSON 오류 코드 `50083`("Tried to perform an operation on an archived thread, such as editing a message or adding a user to the thread."), 근거 [Discord Docs — JSON Error Codes](https://docs.discord.com/developers/topics/opcodes-and-status-codes). 웹훅 전송 결과에 `code`(숫자)만 담아 알아본다.
+- 권한: 봇에 Manage Threads가 필요하다(서버 설정은 슈퍼감독). `kadan discord check`가 "Manage Threads <레포>: 있음/없음"을 읽기만으로 계산해 보여 준다(서버 기본 권한 + 포럼 덮어쓰기).
 
 ### 경보를 업무 글로 (2단계)
 
