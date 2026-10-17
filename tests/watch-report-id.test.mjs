@@ -53,7 +53,7 @@ test('watch-ai/<id> 모양이어도 원장에 그 요청이 없으면 오류',()
 
 test('실제 사고처럼 틀린 ID 인자는 하네스 값이 이기고 불일치가 남는다',()=>{
  const f=fixture(),job=f.request();
- const typo=job.requestId.replace(/^(.{9})(.{3})/,(_,a,b)=>a+[...b].reverse().join(''));
+ const typo=job.requestId.replace(/^(.{9})(.)/,(_,a,c)=>a+(c==='e'?'f':'e'));
  assert.notEqual(typo,job.requestId);
  const out=run(f,[typo],{env:{KADAN_JUDGE_REQUEST:job.requestId}});
  assert.equal(out.requestId,job.requestId);assert.equal(out.requestIdSource,'env');assert.equal(out.idMismatch,true);
