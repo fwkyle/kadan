@@ -245,23 +245,32 @@ export class WatchReports {
 }
 
 const REQUEST_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SAFE_ID=/^[A-Za-z0-9-]{8,64}$/;
 const real=file=>{try{return fs.realpathSync(file);}catch{return path.resolve(file);}};
-// AI가 긴 ID를 옮겨 치다 틀리므로 하네스가 정한 값(환경 → 점검 폴더)을 읽는다. 둘 다 없을 때만 넘긴 값을 쓴다.
-// 점검 폴더는 <home>/watch-ai/<ID> 이고 그 ID의 호출 기록이 원장에 있을 때만 믿는다.
+// 원장에 남기는 불일치 값: ID 모양이면 그대로, 그 밖의 값은 원문 없이 길이와 짧은 지문만(비밀값·자유 글·줄바꿈 방지).
+const idFields=(name,value)=>{
+  const text=String(value);
+  return SAFE_ID.test(text)?{[`${name}Id`]:text}
+    :{[`${name}Length`]:text.length,[`${name}Digest`]:createHash('sha256').update(text).digest('hex').slice(0,12)};
+};
+// AI가 긴 ID를 옮겨 치다 틀리므로 하네스가 정한 값(환경 → 점검 폴더)을 읽는다.
+// 넘긴 인자가 원장에 있는 요청이면 그 인자를 쓰고(실제로 다른 요청을 지목한 것), 없는 값(오타)이면 하네스 값으로 복구한다.
+// 환경과 점검 폴더가 서로 다르면 어느 쪽이 맞는지 알 수 없으므로 기록하지 않는다.
 export function resolveReportRequest(given,{env=process.env,cwd=process.cwd(),home,reports}) {
-  let harness=null;
-  const fromEnv=env.KADAN_JUDGE_REQUEST;
-  if (typeof fromEnv==='string'&&fromEnv) harness={id:fromEnv,source:'env'};
-  else {
-    const root=path.join(real(home),'watch-ai'),here=real(cwd),id=path.basename(here);
-    if (path.dirname(here)===root&&REQUEST_ID.test(id)&&reports.readRequest(id)) harness={id,source:'cwd'};
+  const fromEnv=typeof env.KADAN_JUDGE_REQUEST==='string'&&env.KADAN_JUDGE_REQUEST?env.KADAN_JUDGE_REQUEST:null;
+  let fromCwd=null;
+  const root=path.join(real(home),'watch-ai'),here=real(cwd),folder=path.basename(here);
+  if (path.dirname(here)===root&&REQUEST_ID.test(folder)&&reports.readRequest(folder)) fromCwd=folder;
+  const harness=fromEnv?{id:fromEnv,source:'env'}:fromCwd?{id:fromCwd,source:'cwd'}:null;
+  if (given&&reports.readRequest(given)) {
+    return {requestId:given,source:'arg',...(harness&&harness.id!==given?{mismatch:idFields('harnessRequest',harness.id)}:{})};
   }
+  if (fromEnv&&fromCwd&&fromEnv!==fromCwd) throw new Error('환경의 호출ID와 점검 폴더의 호출ID가 달라 어느 쪽인지 알 수 없습니다: 기록하지 않음');
   if (!harness) {
     if (!given) throw new Error('호출ID를 알 수 없습니다: 감시AI 점검 폴더에서 실행하거나 호출ID를 넘기세요');
     return {requestId:given,source:'arg'};
   }
-  if (!given||given===harness.id) return {requestId:harness.id,source:given?'arg':harness.source};
-  return {requestId:harness.id,source:harness.source,mismatch:String(given).slice(0,40)};
+  return {requestId:harness.id,source:harness.source,...(given?{mismatch:idFields('givenRequest',given)}:{})};
 }
 
 export function watchReportCommand(args,flags,options) {
@@ -270,6 +279,6 @@ export function watchReportCommand(args,flags,options) {
   if (args.length>1||Object.keys(flags).some(k=>!['verdict','reason'].includes(k))) throw new Error('watch-report는 호출ID(생략 가능), --verdict, --reason만 사용합니다');
   const reports=new WatchReports(options);
   const found=resolveReportRequest(args[0],{env:options.env,cwd:options.cwd,home:reports.home,reports});
-  const meta={requestIdSource:found.source,...(found.mismatch?{idMismatch:true,givenRequestId:found.mismatch}:{})};
+  const meta={requestIdSource:found.source,...(found.mismatch?{idMismatch:true,...found.mismatch}:{})};
   return {...reports.submit(found.requestId,flags.verdict,flags.reason,meta)};
 }

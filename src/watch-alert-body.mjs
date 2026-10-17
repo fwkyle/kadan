@@ -36,11 +36,16 @@ const AI_ERROR_REASONS = {
   "report-error": ["결과를 저장하는 중 오류가 남", "반복되면 점검 기록 폴더 확인"],
 };
 
+// 문제 판정을 따로 보고했다는 말은 실제 전달 기록이 있을 때만 쓴다.
+const abnormalDelivery = (to) => Array.isArray(to) && to.length
+  ? `(문제 판정은 ${to.join(", ")}에게 따로 보고됨)`
+  : "(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨)";
+
 function watchAIErrorBody(alert) {
   const [happened, todo] = AI_ERROR_REASONS[alert.reason] ?? ["점검 상태를 알 수 없음", "반복되면 점검 기록 폴더 확인"];
   const what = alert.source === "supervisor-health" ? "응답 상태" : alert.source ? "작업 진행" : "상태";
   const judged = alert.judgeVerdict
-    ? ` · 점검 AI 판단: ${alert.judgeVerdict}${normalWatchVerdict(alert.judgeVerdict) ? "(정상으로 보임)" : "(문제 판정은 따로 보고됨)"}`
+    ? ` · 점검 AI 판단: ${alert.judgeVerdict}${normalWatchVerdict(alert.judgeVerdict) ? "(정상으로 보임)" : abnormalDelivery(alert.judgeDeliveredTo)}`
     : "";
   return `감시기의 점검 AI가 ${alert.role} ${what} 점검에 실패 — ${happened} · ${alert.role}에 문제가 있는지는 모름(점검 도구 문제) · 할 일: ${todo}${judged}`;
 }
@@ -140,6 +145,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.verdict !== undefined ? {verdict:alert.verdict} : {}),
       ...(alert.reason !== undefined ? {reason:alert.reason} : {}),
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
+      ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
       ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
@@ -172,6 +178,7 @@ export function seedAlertState(entries) {
     active.push({
       id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
+      ...(e.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:e.judgeDeliveredTo} : {}),
     });
     if (e.delivered && e.recipient) recipients.set(e.id, e.recipient);
   }
