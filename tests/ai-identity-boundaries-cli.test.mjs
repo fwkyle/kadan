@@ -31,7 +31,7 @@ if(a.includes('load-buffer')&&fs.existsSync(raceFile)) {
  const race=JSON.parse(fs.readFileSync(raceFile,'utf8'));
  if(race.active) {
   fs.writeFileSync(raceFile,JSON.stringify({...race,active:false}));
-  if(race.attach)spawn('sh',['-c',"(sleep 2.5; printf x; sleep 8) | python3 -c 'import pty,sys;pty.spawn(sys.argv[1:])' '"+${JSON.stringify(realTmux)}+"' -L '"+process.env.KADAN_SOCKET+"' attach -t =kadan-"+race.role],{detached:true,stdio:'ignore'}).unref();
+  if(race.attach)spawn('sh',['-c',"(sleep 2.5; printf x; sleep 8) | TERM=xterm-256color python3 -c 'import pty,sys;pty.spawn(sys.argv[1:])' '"+${JSON.stringify(realTmux)}+"' -u -L '"+process.env.KADAN_SOCKET+"' attach -t =kadan-"+race.role],{detached:true,stdio:'ignore'}).unref();
   else spawnSync(${JSON.stringify(realTmux)},['-L',process.env.KADAN_SOCKET,'send-keys','-t','kadan-'+race.role,...race.keys]);
   const end=Date.now()+(race.attach?9000:3000);let observed=false;
   while(Date.now()<end) {

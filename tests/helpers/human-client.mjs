@@ -3,13 +3,15 @@
 import {spawn, spawnSync} from 'node:child_process';
 
 export function attachHuman(tmuxBin, socket, target) {
-  const child = spawn('python3', ['-c', 'import pty,sys;pty.spawn(sys.argv[1:])', tmuxBin, '-L', socket, 'attach', '-t', target],
-    {stdio: ['pipe', 'ignore', 'ignore']});
+  const child = spawn('python3', ['-c', 'import pty,sys;pty.spawn(sys.argv[1:])', tmuxBin, '-u', '-L', socket, 'attach', '-t', target],
+    {stdio: ['pipe', 'ignore', 'ignore'], env: {...process.env, TERM: 'xterm-256color'}});
+  child.stdin.on('error', () => {});
   const clients = () => spawnSync(tmuxBin, ['-L', socket, 'list-clients', '-t', target, '-F', '#{client_created} #{client_activity}'],
     {encoding: 'utf8'}).stdout.trim();
   const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   const end = Date.now() + 5000;
   while (clients() === '' && Date.now() < end) sleep(20);
+  if (clients() === '') { child.kill(); throw new Error('시험 사람 client가 tmux에 붙지 못했다'); }
   return {
     child, clients,
     // 붙은 지 2초 넘은 뒤 키를 눌러야 입력으로 센다(초 단위 시각).
