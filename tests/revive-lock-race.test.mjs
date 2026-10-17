@@ -25,10 +25,16 @@ test('6 죽은 주인의 잠금을 실제 프로세스 둘이 동시에 되찾�
     const home = tmp(), lock = path.join(home, 'revive.lock');
     fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'pid'), String(deadPid()));
     const startAt = Date.now() + 250;
-    const results = (await Promise.all([run(home, startAt, 150), run(home, startAt, 150)])).sort();
-    const key = results.join('+');
+    const outs = await Promise.all([run(home, startAt, 150), run(home, startAt, 150)]);
+    // 느린 기계에서 한 자식이 늦게 떠 앞 자식이 푼 뒤에 얻을 수 있다. 그 경우도 두 보유 구간이 겹치면 안 된다.
+    const holds = outs.map(out => { const got = /^GOT (\d+)/m.exec(out), rel = /^REL (\d+)/m.exec(out); return got && rel ? [Number(got[1]), Number(rel[1])] : null; });
+    const denied = outs.filter(out => out === 'NO').length;
+    assert.equal(holds.filter(Boolean).length + denied, 2, `${i + 1}번째 회차: 자식이 죽었거나 출력이 이상하다 ${JSON.stringify(outs)}`);
+    assert.ok(holds.some(Boolean), `${i + 1}번째 회차: 아무도 잠금을 못 얻었다`);
+    const [a, b] = holds;
+    if (a && b) assert.ok(a[1] <= b[0] || b[1] <= a[0], `${i + 1}번째 회차: 보유 구간이 겹친다 ${JSON.stringify(holds)}`);
+    const key = denied ? 'GOT+NO' : 'GOT+GOT(겹치지 않음)';
     tally[key] = (tally[key] ?? 0) + 1;
-    assert.equal(key, 'GOT+NO', `${i + 1}번째 회차: ${key}`);
     assert.ok(!fs.existsSync(lock), '둘 다 끝난 뒤 잠금이 남지 않는다');
     assert.deepEqual(fs.readdirSync(home).filter(n => n.startsWith('revive.lock')), [], '되찾으며 옮긴 폴더도 남지 않는다');
   }
