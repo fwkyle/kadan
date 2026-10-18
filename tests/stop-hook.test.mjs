@@ -458,11 +458,18 @@ test('훅 인정 규칙(애매하면 화면으로): 세 검수자의 재현은 �
   // 들여쓴 마커는 훅 아님(2라운드의 '들여쓰기도 훅'을 뒤집었다)
   none('끝\n    KADAN:DONE a ok');
   none('끝\n\tKADAN:DONE a ok');
+  // 4라운드: 개수가 짝수인데 CommonMark상 열린 블록 (정보 문자열이 붙은 줄은 닫는 줄이 될 수 없다)
+  none('```text\n```python\nKADAN:DONE a ok');
+  none('```text\n~~~\nKADAN:DONE a ok');
+  none('```\n```js\nKADAN:DONE a ok');
+  none('```\n``` 계속\nKADAN:DONE a ok');
+  none('```\n``\x60`\n```\nKADAN:DONE a ok'); // 닫힘 뒤에 다시 열림
   // 정상 응답 3종
   assert.equal(lastLineMarker('작업을 마쳤다.\nKADAN:DONE a ok').result, 'ok'); // 맨 끝 줄 마커
   assert.equal(lastLineMarker('```\n코드\n```\n끝\nKADAN:DONE a ok').result, 'ok'); // 앞에 닫힌 코드 블록
   assert.equal(lastLineMarker('쓰기: ```KADAN:DONE a ok``` 라고\nKADAN:DONE a ok').result, 'ok'); // 인라인 울타리(한 줄에 짝)
   assert.equal(lastLineMarker('~~~\n코드\n~~~\nKADAN:DONE a failed').result, 'failed');
+  assert.equal(lastLineMarker('```js\n코드\n```\n```\n또\n```\nKADAN:DONE a ok').result, 'ok'); // 정보 문자열은 여는 줄에만, 닫는 줄은 울타리만
   assert.equal(lastLineMarker('```\r\n코드\r\n```\r\nKADAN:DONE a ok\r\n').result, 'ok'); // CRLF
 });
 

@@ -19,17 +19,34 @@ export function mayBeSameRun(a, b) {
 
 // 훅이 완료로 인정하는 응답 모양 — 아래를 모두 만족할 때만 쓴다. **애매하면 화면 판정으로 넘긴다**(Markdown을 정확히 해석하지 않는다):
 //   1) 마지막 비어 있지 않은 줄이 마커이고 그 줄에 앞 공백이 없다(뒤 공백·CR은 허용). 들여쓴 마커는 목록·인용·코드 안일 수 있다.
-//   2) 코드 울타리 후보(``` · ~~~가 줄 안 어디에 있든, 앞 공백·목록 표식·> 와 상관없이)의 개수가 글자 종류마다 짝수다. 홀수면 열린 블록이 의심된다.
+//   2) 코드 울타리 후보(``` · ~~~가 줄 안 어디에 있든, 앞 공백·목록 표식·> 와 상관없이)를 줄 순서대로 훑어 '닫힘'으로 끝나고 애매함이 없다.
+//      닫힘에서 후보 줄 → 열림. 열림에서 '같은 글자의 울타리(같거나 긴 길이)와 공백만 있는 줄' → 닫힘. 열림에서 그 밖의 후보(정보 문자열이 붙은 줄·다른 글자·더 짧은 울타리) → 애매함.
+//      한 줄 안에서 글자 종류마다 짝이 맞는 인라인(```x```)은 후보에서 뺀다.
 //   3) 같은 실행일 수 있는 다른 결과 마커가 없다(있으면 conflict로 남겨 소비처가 훅을 쓰지 않는다).
 // 정상 응답(맨 끝 줄에 마커만)이 일부 화면 판정으로 넘어가는 것은 받아들인다 — 훅은 빠른 길일 뿐이고 화면 판정이 언제나 대체 경로다.
+function fenceDoubtful(lines) {
+  let open = null, doubtful = false;
+  for (const line of lines) {
+    const runs = line.match(/`{3,}|~{3,}/g);
+    if (!runs) continue;
+    const counts = {'`': 0, '~': 0};
+    for (const run of runs) counts[run[0]] += 1;
+    if (counts['`'] % 2 === 0 && counts['~'] % 2 === 0) continue; // 한 줄 안에서 짝이 맞는 인라인
+    if (!open) { open = runs[0]; if (runs.length > 1) doubtful = true; continue; }
+    const closing = line.trim().match(/^(`{3,}|~{3,})$/);
+    if (closing && closing[1][0] === open[0] && closing[1].length >= open.length) open = null;
+    else doubtful = true;
+  }
+  return open !== null || doubtful;
+}
+
 export function lastLineMarker(message) {
   const lines = message.split('\n').map(line => line.replace(/\r$/, '')).filter(line => line.trim());
   const lastLine = lines.at(-1) ?? '';
   if (!lastLine.startsWith('KADAN:DONE')) return null;
   const last = doneMarkerOf(lastLine);
   if (!last) return null;
-  const runs = message.match(/`{3,}|~{3,}/g) ?? [];
-  if (runs.filter(run => run[0] === '`').length % 2 || runs.filter(run => run[0] === '~').length % 2) return null;
+  if (fenceDoubtful(lines)) return null;
   const conflict = findDoneMarkers(message).some(m => m.result !== last.result && mayBeSameRun(m.taskId, last.taskId));
   return {...last, conflict};
 }
