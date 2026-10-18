@@ -1,8 +1,8 @@
 // 화면 맨 아래 상태 줄로 '일하는 중 / 멈춤 / 애매함'을 가른다 (kadan/work-watch-status-line).
 // 변화 지문(normalizeForChange)은 숫자를 지워 일하는 화면도 '변화 없음'으로 만든다(#187). 그 뜻은 바꾸지 않고,
 // 이 모듈이 정규화 전 원래 화면의 아래쪽만 따로 읽는다.
-// 표본 근거: 감시AI 관찰 자료(codex 0.163 일하는 중·입력 대기·끊김, claude 입력 대기).
-// 표본을 못 찾은 모양(claude 일하는 중)은 카드의 모양 설명대로만 만들었고 시험 이름에 '표본 미확인'을 단다.
+// 표본 근거: 감시AI 관찰 자료(codex 0.163 일하는 중·입력 대기·끊김, claude 입력 대기)와 claude 2.1.302 일하는 중 실제 화면 2장.
+// claude 일하는 중 모양은 감독이 자기 세션에서 뜬 실제 화면 두 장으로 맞췄다.
 import { mailboxLetters } from "./mailbox-state.mjs";
 
 // (b) 멈춤 경보의 코드 기본값. 감시 주기 60초, 정체 기본 5분보다 짧게 둔다. 프로필 키는 더하지 않는다.
@@ -12,9 +12,11 @@ const BOTTOM_LINES = 14;
 const CLOCK_TEXT = /^(?:(\d+)h\s+)?(?:(\d+)m\s+)?(\d+)s$/u;
 // codex 0.163: `• Working (5m 12s • esc to interrupt)` 뒤에 `· 1 background terminal running …`이 붙을 수 있다.
 const CODEX_WORKING = /^\s*•\s*Working\s*\(([^()•]*?)\s*•[^()]*esc to interrupt/iu;
-// claude: `✻ Thinking… (12s · ↑ 1.2k tokens · esc to interrupt)`. 끝난 턴의 `✻ Cogitated for 3m 44s · done`은
-// `esc to interrupt`가 없어 걸리지 않는다. 동사는 여러 가지라 낱말을 고정하지 않는다.
-const CLAUDE_WORKING = /^\s*[✻✶✳✢✽·*⏺]\s+\S+[^()]*\(([^()·]*?)\s*·[^()]*esc to interrupt/iu;
+// claude 2.1.302 일하는 중(실제 표본 2장): `✢ Grooving… (32s · ↓ 1.7k tokens)` — 회전 기호 + 동사 + `…` + `(시계 · …)`.
+// `esc to interrupt`는 없고, 일하는 동안에도 빈 `❯` 입력창이 보인다. 회전 기호는 `✢`에서 `·`로 바뀌며 돈다.
+// 끝난 턴(`✻ Cogitated for 3m 44s`, `Brewed for 11s · done 1:48 AM`)은 `…`과 괄호가 없어 걸리지 않는다.
+// 도구 줄 `⎿  Running… (4s)`는 같은 화면의 근거지만 도구 실행 중에만 있어 쓰지 않는다 — 위 줄이 항상 함께 있다.
+const CLAUDE_WORKING = /^\s*[✻✶✳✢✽·*⏺]\s+\S+(?:…|\.\.\.)\s*\(([^()·]*?)\s*(?:·|\))/u;
 const CODEX_INPUT = /^\s*›\s*(?:Ask Codex to do anything)?\s*$/u;
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 

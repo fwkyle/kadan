@@ -38,12 +38,16 @@ const claudeIdle = [
   '  Opus 5.5 | effort:high | 0h 48m left | ctx:20%',
   '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents',
 ].join('\n');
-// 표본 미확인: claude 일하는 중 모양은 카드의 설명(`✻ … (Ns · … esc to interrupt)`)대로 만든 것이다.
-const claudeWorkingUnconfirmed = (verb, clock) => [
-  `✻ ${verb}… (${clock} · ↑ 1.2k tokens · esc to interrupt)`, '',
+// claude 2.1.302 일하는 중 실제 화면 두 장(감독 세션, 경로·계정은 자리표시로 줄임). `esc to interrupt`가 없고 빈 `❯`가 보인다.
+const claudeWorkingReal = (glyph, clock) => [
+  '  Bash(cd ~/Dev/<repo>; sleep 4; <명령>)', '  ⎿  Running… (4s)', '     (ctrl+b ctrl+b (twice) to run in background)', '',
+  `${glyph} Grooving… (${clock} · ↓ 1.7k tokens)`, '',
   '────────────────────────────────────────', '❯ ', '────────────────────────────────────────',
-  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  '  ~/Dev/<repo>[main]                                          ✔ Update installed',
+  '  Opus 5.5 | effort:high | 2h 33m left | ctx:76%',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents',
 ].join('\n');
+const withoutSpinner = screen => screen.split('\n').filter(l => !/Grooving/.test(l)).join('\n');
 
 test('경과 시계 세 형식을 초로 읽는다', () => {
   assert.equal(parseClock('12s'), 12);
@@ -72,9 +76,16 @@ test('claude 실제 표본: 끝난 턴의 시계 줄은 일하는 중이 아니�
   assert.deepEqual(readStatusLine(claudeIdle), {kind: 'idle', tool: 'claude', clockSec: null});
 });
 
-test('claude 일하는 중(표본 미확인): 동사가 여러 개여도 시계를 읽는다', () => {
-  for (const verb of ['Thinking', 'Cogitating', 'Pondering']) {
-    assert.deepEqual(readStatusLine(claudeWorkingUnconfirmed(verb, '1m 02s')), {kind: 'working', tool: 'claude', clockSec: 62});
+test('claude 실제 표본: 회전 기호가 ✢→·로 돌고 시계가 늘어도 일하는 중이다(빈 ❯가 있어도 idle이 아님)', () => {
+  assert.deepEqual(readStatusLine(claudeWorkingReal('✢', '32s')), {kind: 'working', tool: 'claude', clockSec: 32});
+  assert.deepEqual(readStatusLine(claudeWorkingReal('·', '38s')), {kind: 'working', tool: 'claude', clockSec: 38});
+  for (const verb of ['Thinking', 'Cogitating', 'Pondering'])
+    assert.equal(readStatusLine(claudeWorkingReal('✻', '1m 02s').replace('Grooving', verb)).clockSec, 62);
+});
+
+test('claude 끝난 턴 모양은 일하는 중이 아니다', () => {
+  for (const done of ['✻ Cogitated for 3m 44s', '✻ Brewed for 11s · done 1:48 AM', '✻ Cogitated for 3m 44s · done 1:16 PM']) {
+    assert.equal(readStatusLine(claudeWorkingReal('✻', '1s').replace(/^.*Grooving.*$/mu, done)).kind, 'idle', done);
   }
 });
 
@@ -189,6 +200,20 @@ test('(b) 정당한 대기 제외: DONE 마커·미발령·질문 대기·큐 �
 
 const question = over => ({kind: 'send', transport: 'mailbox', mailId: 'm-q1', by: 'worker', role: 'boss',
   taskId: 'c1', expectReply: true, t: '2026-10-19T00:05:00.000Z', digest: 'd-q1', ...over});
+
+test('(b) claude 실제 일하는 화면 두 장은 4분 넘게 가도 멈춤 0건, 일하는 줄만 지운 화면은 멈춤이다', () => {
+  const screens = Array.from({length: 8}, (_, i) => claudeWorkingReal(i % 2 ? '·' : '✢', `${30 + i * 6}s`));
+  assert.equal(idleRun(screens).flat().length, 0);
+  const stopped = idleRun(Array(IDLE_STOP_AFTER_MS / 60_000 + 1).fill(withoutSpinner(claudeWorkingReal('✢', '32s')))).at(-1);
+  assert.equal(stopped.length, 1);
+  assert.equal(stopped[0].tool, 'claude');
+});
+
+test('(a) claude 실제 일하는 화면은 시계가 늘면 정체를 적립하지 않는다', () => {
+  const {alerts, states} = run(Array.from({length: 6}, (_, i) => claudeWorkingReal(i % 2 ? '·' : '✢', `${30 + i * 6}s`)));
+  assert.equal(anyStalled(alerts), false);
+  assert.equal(states.get('kadan-worker').workingMoving, true);
+});
 
 test('(b) 그 역할이 발령 뒤 보낸 질문에 답이 없으면 정당한 대기라 경보하지 않는다', () => {
   assert.equal(hasOpenQuestion([question()], 'worker', task.t), true);
