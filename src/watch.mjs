@@ -96,7 +96,9 @@ export function queuedInputLine(screenText) {
   return null;
 }
 
-function lastScreenLines(screenText, count = 6) {
+// codex 0.163 429 화면은 `Exceeded retry limit` 줄이 아래에서 8번째라 6줄로는 닿지 않았다
+// (composer·상태줄·안내 줄이 아래에 붙는다). 같은 줄은 키로 한 번만 세므로 넓혀도 중복 경보는 없다.
+function lastScreenLines(screenText, count = 12) {
   if (typeof screenText !== "string") return [];
   const lines = screenText.split("\n");
   while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();

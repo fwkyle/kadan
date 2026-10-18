@@ -7,6 +7,13 @@ export function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
 }
 
+// 변화 판단(정체·시작보고누락·완료 유지) 전용 지문. 경과 시계·토큰 수 같은 숫자와 회전 표시만
+// 바뀐 화면은 같은 화면으로 본다(2026-10-17 codex 0.163 `Reconnecting... (14h 04m 30s)` 14시간 방치 사고).
+// DONE 마커·끊김 낱말·terminal429·AI에게 넘기는 화면·기록에는 원래 화면을 쓴다. 여기에 쓰지 않는다.
+export function changeDigest(text) {
+  return shortDigest(text.replace(/\d+/gu, "#").replace(/[\u2800-\u28ff◐◑◒◓]/gu, "*"));
+}
+
 export function readText(value) {
   if (typeof value === "string") return value;
   return typeof value?.text === "string" ? value.text : null;
@@ -131,7 +138,7 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       alive: Boolean(live),
       pid: live?.pid ?? null,
       expectedPid,
-      digest: screen == null ? null : shortDigest(screen),
+      digest: screen == null ? null : changeDigest(screen),
       screen,
       screenError,
       startedAt: generations.get(session)?.t ?? start.t,
@@ -159,7 +166,7 @@ export function absorbDeliveredScreens(floor, roleStates, deliveredRecipients) {
         if (screen == null) throw new Error("빈 응답");
         roleStates.set(session, {
           ...state,
-          digest: shortDigest(screen),
+          digest: changeDigest(screen),
           screenError: null,
         });
       } catch (error) {

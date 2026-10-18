@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 // 가짜 시계 시뮬레이션: sleep이 분을 올리고 끝에서 중단한다(helpers/watch-runner는 sleep을 덮어써 쓰지 않는다).
 import {runWatch} from '../src/watch-runner.mjs';
+const lt=n=>[...String(n)].map(d=>'ghijklmnop'[d]).join(''); // 숫자만 바뀐 화면은 변화로 치지 않으므로 글자로 바꾼다
 
 // 점검 보고서(2026-10-05) 시뮬레이션에서 둘 다 0회였다: 최상위 감독의 죽음, 등록된 감독의 놀고 있음.
 // 같은 날 결정: 감독 멈춤은 2단이다 — 15분이면 본인에게, 15분 더면 상위에게. 움직이면 둘 다 닫히고 해소 우편은 없다.
@@ -73,7 +74,7 @@ test('사람이 그 창에서 입력 중이면 본인 알림을 미루고 다음
   }});
   assert.deepEqual(nudges.map(([m,r])=>[m,r]),[[15,'p-감독'],[16,'p-감독']]);
   assert.ok(printed.some(l=>l.includes('놀고 있음 kadan-p-감독')&&l.includes('보류')));
-  const moving=await simulate({minutes:40,read:(s,m)=>`screen ${m}`});
+  const moving=await simulate({minutes:40,read:(s,m)=>`screen ${lt(m)}`});
   assert.deepEqual(moving.nudges,[]);assert.ok(!moving.sent.some(([,,m])=>m.includes('놀고 있음')));
 });
 
@@ -89,7 +90,7 @@ test('작업자가 다 끝냈는데 감독이 다음 발령을 안 하면 열린
   // 진행 중 실행(assigned)이 있으면 그 워크는 할 일이 아니다. 감독이 10분에 움직이면 아무것도 없다.
   const busy=await simulate({minutes:40,...base,cards:[card]});
   assert.deepEqual(busy.nudges,[],'실행이 진행 중이면 워크는 할 일이 아니다');
-  const moved=await simulate({minutes:40,...base,read:(s,m)=>s==='kadan-p-감독'&&m>=10?'moved '+Math.floor(m/10):'frozen screen'});
+  const moved=await simulate({minutes:40,...base,read:(s,m)=>s==='kadan-p-감독'&&m>=10?'moved '+lt(Math.floor(m/10)):'frozen screen'});
   assert.deepEqual(moved.nudges.filter(([,r])=>r==='p-감독'),[]);
 });
 

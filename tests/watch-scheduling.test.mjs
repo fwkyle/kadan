@@ -4,6 +4,7 @@ import {setImmediate} from 'node:timers/promises';
 import {runWatch} from '../src/watch-runner.mjs';
 import {watchResponsibility} from '../src/watch-report.mjs';
 
+const lt=n=>[...String(n)].map(d=>'ghijklmnop'[d]).join(''); // 숫자만 바뀐 화면은 변화로 치지 않으므로 글자로 바꾼다
 const epoch=Date.parse('2026-09-09T00:00:00Z');
 const stamp=minute=>new Date(epoch+minute*60_000).toISOString();
 const parents=new Map([['w1','boss'],['w2','boss'],['boss','top'],['top','@user']]);
@@ -50,13 +51,13 @@ test('감시기를 재시작해도 원장에 남긴 같은 근거의 실제 호�
  assert.deepEqual(second.calls.map(c=>c.minute),[35]);
 });
 test('움직이는 실행도 30분 진행 검사를 받고 같은 시각 감독 관찰을 먼저 처리한다',async()=>{
- const {calls}=await simulate({until:63,screen:(session,minute)=>session==='kadan-w1'?'출력 '+minute:'정당한 대기'});
+ const {calls}=await simulate({until:63,screen:(session,minute)=>session==='kadan-w1'?'출력 '+lt(minute):'정당한 대기'});
  // 감독 관찰(boss 60분, top 61분)이 진행 검사보다 먼저다.
  assert.deepEqual(calls.map(c=>[c.minute,c.source]),[[30,'progress'],[60,'supervisor-health'],[61,'supervisor-health'],[62,'progress']]);
 });
 test('대기 중 감독 관찰을 작업자보다 먼저 시작하고 다음 1시간은 실제 시작부터 센다',async()=>{
  const {calls,peak}=await simulate({until:123,workers:2,
-  screen:(session,minute)=>session==='kadan-boss'?'감독 화면 '+minute:minute<53?'실행 출력 '+minute:'고정 화면',
+  screen:(session,minute)=>session==='kadan-boss'?'감독 화면 '+lt(minute):minute<53?'실행 출력 '+lt(minute):'고정 화면',
   hold:(args,minute)=>args.role==='w1'&&minute===58,releaseAt:61,
  });
  assert.equal(peak,1);
@@ -64,5 +65,5 @@ test('대기 중 감독 관찰을 작업자보다 먼저 시작하고 다음 1�
  assert.deepEqual(calls.filter(c=>c.minute>=58&&c.minute<=64).map(c=>[c.minute,c.role]),[[58,'w1'],[62,'boss'],[63,'top'],[64,'w2']]);
  const supervisors=calls.filter(c=>c.source==='supervisor-health'&&c.role==='boss');
  assert.deepEqual(supervisors.map(c=>c.minute),[62,122]);
- assert.equal(supervisors[0].screen,'감독 화면 62');
+ assert.equal(supervisors[0].screen,'감독 화면 '+lt(62));
 });
