@@ -54,12 +54,27 @@ export function withEffectiveOwner(work, entries) {
   return { ...work, owner, ownedAt: at };
 }
 
-// 열린 업무가 지금 누구 몫이고 언제부터인가(2026-10-16). 판정(watch-supervisor)과 관찰 범위(watch-scope)가 같은 답을 쓴다.
-// 차례(turnOwner)가 관계표의 역할이면 그 역할과 차례가 넘어간 시각(turnAt) — owner와 같아도 turnAt이다. 아니면 owner와 ownedAt.
+// 열린 업무가 지금 누구 몫이고 언제부터인가(2026-10-16). 판정(watch-supervisor)과 관찰 범위(watch-scope)와
+// 대시보드 이전 세대 목록(previousGenerationWorks)이 같은 답을 쓴다(2026-10-17 묶음2).
+// 차례(turnOwner)가 감독 역할이면 그 역할이 몫이다. 시각은 차례가 넘어간 시각(turnAt)이고, owner와 같은 이름이면
+// 책임이 마지막으로 붙은 시각이어야 하므로 turnAt과 ownedAt(같은 이름 재배정·인계) 중 늦은 쪽이다.
+// 차례가 작업자면 응답 책임은 owner에게 둔다: 감독 응답 점검은 감독만 보고, 작업자는 작업자 감시가 따로 본다(잠긴 규칙 8).
 // 시각 값이 없으면 업무 시각(차례) 또는 null(owner)이다.
+const laterOf = (a, b) => (!b || (a && Date.parse(a) >= Date.parse(b)) ? a : b) ?? null;
 export function currentResponsibility(work, parents) {
-  if (parents?.has(work.turnOwner)) return { role: work.turnOwner, since: work.turnAt ?? work.at ?? null };
+  const turn = work.turnOwner;
+  if (parents?.has(turn) && (turn === work.owner || [...parents.values()].includes(turn))) {
+    const turned = work.turnAt ?? work.at ?? null;
+    return { role: turn, since: turn === work.owner ? laterOf(turned, work.ownedAt) : turned };
+  }
   return { role: work.owner, since: work.ownedAt ?? null };
+}
+
+// 이 업무의 책임 대상 목록(역할, 시각). 지금 몫인 역할이 owner와 다르면 owner도 따로 본다.
+// 감독 응답 감시 범위와 이전 세대 목록이 같은 목록으로 세대를 가른다.
+export function responsibilityTargets(work, parents) {
+  const holder = currentResponsibility(work, parents);
+  return holder.role === work.owner ? [holder] : [{ role: work.owner, since: work.ownedAt ?? null }, holder];
 }
 
 // 중앙 카드의 담당도 과거 인계 기록을 따라간다. 이후 명시 재배정은 우선한다.
