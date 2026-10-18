@@ -8,6 +8,7 @@ import {spawn, spawnSync} from 'node:child_process';
 import {resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {makeHerdrFloor} from '../src/floor-herdr.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
+import {readDecisions} from '../src/notify-threads.mjs';
 import {NotifyHoldTracker} from '../src/watch-notify-hold.mjs';
 import {sendWatchMailReminder, watchMailHold} from '../src/commands/watch.mjs';
 import {sendTmux, notificationHold} from '../src/floor-tmux.mjs';
@@ -32,7 +33,8 @@ async function world() {
 }
 
 // idleCycles: 앞의 몇 주기는 idle 화면(30초 안정 유예 → 입력 보호 사유)이고 그 뒤 신뢰 승인 화면이 된다.
-async function runHeld(w, paneText, {idleCycles = 0} = {}) {
+// idleWhen(n): 주기 번호별로 idle이어야 하면 true(idleCycles보다 우선). cycles: 돌릴 주기 수. readAt: 이 주기부터 우편을 읽은 것으로 보인다(경보가 풀린다).
+async function runHeld(w, paneText, {idleCycles = 0, idleWhen = null, cycles = 9, readAt = null} = {}) {
   const saved = {KADAN_HOME: process.env.KADAN_HOME, KADAN_NOTIFY: process.env.KADAN_NOTIFY, KADAN_NOTIFY_ENV_FILE: process.env.KADAN_NOTIFY_ENV_FILE};
   try {
     process.env.KADAN_HOME = w.home; process.env.KADAN_NOTIFY = ''; process.env.KADAN_NOTIFY_ENV_FILE = w.secret;
@@ -42,7 +44,7 @@ async function runHeld(w, paneText, {idleCycles = 0} = {}) {
       harness: 'codex', model: 'fixture-model', herdrSocket: socket, herdrWorkspaceId: 'W', herdrTerminalId: 'T'};
     const pane = {pane_id: 'P', workspace_id: 'W', terminal_id: 'T', scroll: {offset_from_bottom: 0}};
     let n = 0;
-    const idle = () => n < idleCycles;
+    const idle = () => (idleWhen ? idleWhen(n) : n < idleCycles);
     const rpc = (sock, method) => {
       if (method === 'session.snapshot') return {snapshot: {panes: [pane]}};
       if (method === 'pane.process_info') return {process_info: {shell_pid: 123, foreground_processes: [{pid: 123, argv: ['codex', '--model', 'fixture-model']}]}};
@@ -52,20 +54,20 @@ async function runHeld(w, paneText, {idleCycles = 0} = {}) {
     };
     const entries = [start, {kind: 'send', mailId: 'qa-trust-question', role, by: 'qa-trust-boss', t: new Date(0).toISOString(), expectReply: true}];
     const floor = makeHerdrFloor({env: {KADAN_HOME: w.home, KADAN_HERDR_SOCKET: socket}, entries: () => entries, rpc, argsForPid: () => ''});
-    if (!idleCycles) assert.throws(() => floor.send(session, '가짜 알림', {notificationGuard: {force: true}}), {code: 'KADAN_HERDR_TRUST_PROMPT'}); // force로도 안 풀린다
+    if (!idleCycles && !idleWhen) assert.throws(() => floor.send(session, '가짜 알림', {notificationGuard: {force: true}}), {code: 'KADAN_HERDR_TRUST_PROMPT'}); // force로도 안 풀린다
     const records = [], system = []; const stop = new AbortController();
     const tracker = new NotifyHoldTracker({record: e => records.push(e)});
-    await runWatch({floor, readEntries: () => [...entries, ...records], readCards: () => [], readWorks: () => [],
+    await runWatch({floor, readEntries: () => [...entries, ...records, ...(readAt !== null && n >= readAt ? [{kind: 'mail-read', mailId: 'qa-trust-question', role, by: role, t: new Date(300000 + readAt * 1000).toISOString()}] : [])], readCards: () => [], readWorks: () => [],
       holdTracker: tracker, record: e => records.push(e), mailUnreadGraceMs: 300000, sendAlert: () => {},
       sendMailReminder: (to, message, pid) => sendWatchMailReminder(to, message, pid, {selectedFloor: floor, readStart: () => start, tracker,
         send: args => floor.send(args.session, args.message, {notificationGuard: args.notificationGuard})}),
       mailHold: to => watchMailHold(to, {selectedFloor: floor, tracker}),
       intervalMs: 1000, stallN: 100, routes: new Map(), now: () => 300000 + n * 1000,
       spawn: cmd => { if (cmd === 'osascript') system.push(cmd); return {status: 0, stdout: ''}; },
-      signal: stop.signal, print: () => {}, sleep: async () => { if (++n >= 9) stop.abort(); }});
+      signal: stop.signal, print: () => {}, sleep: async () => { if (++n >= cycles) stop.abort(); }});
     const notices = fs.existsSync(path.join(w.home, NOTIFY_LOG_FILE))
       ? fs.readFileSync(path.join(w.home, NOTIFY_LOG_FILE), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
-    return {records, system, notices};
+    return {records, system, notices, tracker, role};
   } finally {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
@@ -137,4 +139,25 @@ test('F2(2라운드) 강제 뒤에도 남는 시계 모드 밀림은 사용자�
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     w.stop();
   }
+});
+
+test('F1(3라운드) 조용함 → 신뢰 → 조용함 → 신뢰 → 해소: 글 1건, 해소 때 처음 글에 ✅ 해결됨 고치기 1건', async () => {
+  const w = await world();
+  try {
+    const {records, system, tracker, role} = await runHeld(w, 'Do you trust the contents of this directory?',
+      {idleWhen: n => n < 3 || n === 4, cycles: 12, readAt: 9});
+    const alerts = records.filter(e => e.kind === 'alert' && e.alertKind === '알림밀림');
+    assert.equal(alerts.at(-1).resolved, true);
+    assert.equal(tracker.alerts().length, 0);
+    assert.equal(tracker.forced(role), false);
+    const sent = w.requests();
+    assert.equal(sent.length, 2);                                    // 새 글 1건 + 해소 고치기 1건 (두 번째 신뢰는 중복이라 새 글 없음)
+    assert.match(sent[0].url, /wait=true/);
+    assert.match(sent[1].url, /\/messages\/M1/);                    // 처음 올린 글 M1을 고친다
+    assert.match(JSON.parse(sent[1].body).content, /✅ 해결됨/);
+    assert.deepEqual(system, []);
+    const posts = Object.entries(readDecisions(w.home)).filter(([k]) => k.startsWith('alert:'));
+    assert.equal(posts.length, 1);                                    // 처음 글과의 연결만 남는다
+    assert.equal(posts[0][1].resolved, true);
+  } finally { w.stop(); }
 });

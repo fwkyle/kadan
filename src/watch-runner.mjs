@@ -146,8 +146,10 @@ export async function runWatch({
   sendAlert = (role, message, key, work, repo, alertKind, alertId, holdCode) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
     const post = alertId ? `alert:${alertId}:${now()}` : undefined;
-    const errorText = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, dedupWindowMs: ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})}).error;
-    if (!errorText && post) userPosts.set(alertId, {post, work, repo});
+    const sent = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, dedupWindowMs: ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})});
+    const errorText = sent.error;
+    // 이번에 실제로 올린 메시지만 연결한다. 중복·정책 안 보냄 반환은 기존 연결(처음 올린 글)을 덮어쓰지 않는다.
+    if (!errorText && post && sent.posted === true) userPosts.set(alertId, {post, work, repo});
     if (errorText) {
       const error = new Error(`사용자 알림 실패: ${errorText}`);
       error.delivery = "not-sent";

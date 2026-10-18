@@ -8,6 +8,8 @@ import {spawn} from 'node:child_process';
 import {notifyUser, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {postPolicy, KNOWN_KINDS} from '../src/notify-policy.mjs';
 import {setDecision, readDecisions} from '../src/notify-threads.mjs';
+import {seedAlertState} from '../src/watch-alert-body.mjs';
+import {dedupAlerts} from '../src/watch.mjs';
 
 // 가짜 값만 쓴다. 이 시험 파일의 어떤 값도 실제 주소·ID가 아니다.
 const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
@@ -158,4 +160,17 @@ test('소스의 notifyUser 종류는 모두 정책 목록과 docs/user-notify.md
   const doc = fs.readFileSync(path.join(root, 'docs/user-notify.md'), 'utf8');
   for (const kind of found) assert.ok(KNOWN_KINDS.includes(kind), `정책 목록(KNOWN_KINDS)에 없는 종류: ${kind}`);
   for (const kind of KNOWN_KINDS) assert.ok(doc.includes(`\`${kind}\``), `docs/user-notify.md 표에 없는 종류: ${kind}`);
+});
+
+test('재시작 복원: 원장의 알림밀림 경보는 holdCode까지 복원돼 사유 변화 판정이 재시작 전과 같다', () => {
+  const ledger = holdCode => [{kind: 'alert', id: 'notify-held:w', alertKind: '알림밀림', level: 'AMBER', role: 'w', holdCount: 3, holdCode, delivered: true, recipient: '@user'}];
+  const restore = holdCode => seedAlertState(ledger(holdCode)).active;
+  assert.equal(restore('KADAN_HERDR_TRUST_PROMPT')[0].holdCode, 'KADAN_HERDR_TRUST_PROMPT');
+  assert.equal(seedAlertState([{kind: 'alert', id: 'x', alertKind: '정체', level: 'AMBER'}]).active[0].holdCode, undefined);   // 없던 필드는 만들지 않는다
+  const now = holdCode => [{id: 'notify-held:w', kind: '알림밀림', level: 'AMBER', role: 'w', holdCode}];
+  // 복원된 '사람 조치' 경보가 같은 사유로 이어지면 재시작 직후 다시 알리지 않는다
+  assert.equal(dedupAlerts(restore('KADAN_HERDR_TRUST_PROMPT'), now('KADAN_HERDR_TRUST_PROMPT')).notify.length, 0);
+  // 복원된 '조용한 사유' 경보가 사람 조치 사유로 바뀌면 재시작을 거쳐도 1번 알린다
+  assert.equal(dedupAlerts(restore('KADAN_HUMAN_ACTIVE'), now('KADAN_HERDR_TRUST_PROMPT')).notify.length, 1);
+  assert.equal(dedupAlerts(restore('KADAN_HUMAN_ACTIVE'), now('KADAN_HUMAN_ACTIVE')).notify.length, 0);
 });

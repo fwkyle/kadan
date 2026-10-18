@@ -381,7 +381,7 @@ function decisionSystemMessage(home, decision, message) {
 //   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키(또는 forumKey)가 있을 때만 포럼 글로 간다.
 //   tagRepo: 알림 첫머리 `[레포]`에 쓸 이름(생략하면 repo, 그것도 모르면 표시하지 않는다 — 추측 금지). discord 본문을 직접 주면 그쪽이 표시를 책임진다.
 //   forumKey·forumTitle: 업무가 없을 때 쓰는 포럼 글 키와 글 제목(결정의 레포 '결정' 글). decision: {id, edit?, latest?, resolvedContent?} — 요청은 메시지 id를 남기고(보내기 직전 latest()로 현재 상태를 다시 읽어 이미 해결됐으면 resolvedContent로 대신 보내거나 건너뜀), edit 본문이 있으면 남긴 메시지를 고친다.
-// 반환: {via:'discord'|'system', error, duplicate?, discord:{outcome,reason}|null}
+// 반환: {via:'discord'|'system', error, duplicate?, posted?(디코에 새로 올렸을 때만 true), discord:{outcome,reason}|null}
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
   const env = opts.env ?? process.env;
@@ -438,6 +438,7 @@ export function notifyUser(message, spawn, opts = {}) {
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (warnings.length) result.discord.warning = warnings.join(' / ');
           if (sent.outcome === 'sent' || sent.outcome === 'resolved-skip') result.via = 'discord';
+          if (sent.outcome === 'sent') result.posted = true;   // 이번 호출이 메시지를 실제로 올렸다(중복·정책 안 보냄·해결 건너뜀은 아님)
         }
       }
     } catch (error) {

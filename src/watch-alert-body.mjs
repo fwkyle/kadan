@@ -182,6 +182,7 @@ export function seedAlertState(entries) {
       id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
       ...(e.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:e.judgeDeliveredTo} : {}),
+      ...(e.holdCode !== undefined ? {holdCode:e.holdCode} : {}),   // 알림밀림 사유(재시작 뒤에도 사유 변화 판정이 같도록)
     });
     if (e.delivered && e.recipient) recipients.set(e.id, e.recipient);
   }
