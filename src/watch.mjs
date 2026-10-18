@@ -116,6 +116,23 @@ function screenDisconnects(screenText) {
   return found;
 }
 
+// 화면 전체에서 같은 끊김 줄이 몇 번 나왔는지. 훑는 창(아래 12줄) 밖으로 나갔다가 다시 그리면서
+// 창 안으로 돌아온 옛 줄은 개수가 그대로라 새 끊김이 아니다. 같은 줄이 아래에 새로 찍히면
+// 개수가 늘어 새 끊김이다. 한계: 옛 줄이 화면 밖으로 사라지는 같은 순회에 똑같은 글의 새 줄이
+// 찍히면 개수가 같아 놓친다(2026-10-18 검수: 재진입 헛경보).
+function screenDisconnectCounts(screenText) {
+  const counts = new Map();
+  if (typeof screenText !== "string") return counts;
+  for (const line of screenText.split("\n")) {
+    DISCONNECT_SIGNATURES.lastIndex = 0;
+    for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
+      const key = `${match[0].toLowerCase()}|${line.trim()}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 function screenDoneMarker(screenText) {
   return findDoneMarkers(screenText ?? '').at(-1) ?? null;
 }
@@ -195,9 +212,19 @@ export function assessRoles(
         ? screenDisconnects(current.screen)
         : new Map(previous?.disconnects ?? []);
     const previousDisconnects = new Map(previous?.disconnects ?? []);
+    const disconnectCounts =
+      alive && current.screen != null
+        ? screenDisconnectCounts(current.screen)
+        : new Map(previous?.disconnectCounts ?? []);
+    // 개수 기록이 없는 옛 상태는 창 안 줄을 한 번씩 본 것으로 친다.
+    const previousCounts = new Map(
+      previous?.disconnectCounts ?? [...previousDisconnects.keys()].map((key) => [key, 1])
+    );
     const disconnectBaseline = alive && previous?.alive === true;
     const freshDisconnectKeys = disconnectBaseline
-      ? [...disconnects.keys()].filter((key) => !previousDisconnects.has(key))
+      ? [...disconnects.keys()].filter(
+          (key) => (disconnectCounts.get(key) ?? 0) > (previousCounts.get(key) ?? 0)
+        )
       : [];
     const previousActiveDisconnect = previous?.activeDisconnect ?? null;
     const activeDisconnect =
@@ -245,6 +272,7 @@ export function assessRoles(
       unchangedMs,
       deathActive,
       disconnects: [...disconnects],
+      disconnectCounts: [...disconnectCounts],
       activeDisconnect,
       doneMarkerKey,
       completionDigest,
