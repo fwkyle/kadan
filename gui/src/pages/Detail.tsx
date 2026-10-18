@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { usePaneScroll } from "../scroll";
 import { useResource } from "../resource";
 import type { DetailData, Mail } from "../types";
 import {
   ActionForm,
+  AppContext,
   CardLink,
   DocumentContent,
   ErrorMessage,
@@ -33,6 +34,7 @@ export function MailBody({ mail }: { mail: Mail }) {
   );
 }
 export default function Detail({ card, url }: { card: string; url: URL }) {
+  const { readOnly } = useContext(AppContext);
   const params = url.searchParams,
     tab = params.get("tab");
   const scroll = usePaneScroll("detail:" + card),
@@ -196,7 +198,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
               <Facts items={data.facts} />
             )}
           </details>
-          <details>
+          {!readOnly && <details>
             <summary>기록 남기기</summary>
             {data.forms.map((form) => (
               <details key={form.action}>
@@ -208,7 +210,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
                 />
               </details>
             ))}
-          </details>
+          </details>}
           {data.report && (
             <details data-section="evidence">
               <summary>결과·검수</summary>

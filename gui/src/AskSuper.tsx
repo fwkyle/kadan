@@ -20,7 +20,11 @@ export function unitContext(unit: Unit) {
   ].join("\n");
 }
 
-export default function AskSuper({ unit, base }: { unit: Unit; base: Base }) {
+// 원격 보기(읽기 전용)에서는 질문 보내기를 그리지 않는다.
+export default function AskSuper(props: { unit: Unit; base: Base }) {
+  return useContext(AppContext).readOnly ? null : <AskSuperInner {...props} />;
+}
+function AskSuperInner({ unit, base }: { unit: Unit; base: Base }) {
   const { token, notice } = useContext(AppContext);
   const [text, setText] = useState(""),
     [withContext, setWithContext] = useState(true),

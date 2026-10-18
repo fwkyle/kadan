@@ -595,3 +595,4 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-s-dead .sm-debris .sm-body { fill: rgb(110, 120, 140); }
 @keyframes sm-debris { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .radar-sweep, .radar-blip, .sm-engine, .sm-debris { animation: none; } }
+.decision-linked { border: 1px solid #d8ded8; border-radius: 10px; padding: 14px 18px; margin: 12px 0; scroll-margin-top: 12px; background: #f0f6f2; }

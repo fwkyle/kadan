@@ -137,6 +137,7 @@ herdr를 시험할 때는 [실행 방법과 미검증 범위](docs/experiments/h
 | 우편 보내기·읽음·답장 | [역할 우편함](docs/secretary-mailbox.md) |
 | 감시가 무엇을 언제 알리나 | [감시 기준](docs/watch-overview.md) |
 | 대시보드 구조와 개발 | [대시보드](docs/dashboard-react.md) |
+| 폰·밖에서 대시보드 보기(읽기 전용) | [원격 보기](docs/dashboard-remote.md) |
 | 에이전트용 스킬 | `skills/` (conductor · super · secretary) |
 
 ## 테스트

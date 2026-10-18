@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { useResource } from "./resource";
+import { setReadOnly, useResource } from "./resource";
 import {
   navigate,
   setNavigationGuard,
@@ -59,11 +59,12 @@ export default function App() {
     view = viewOf(url),
     section = ["dashboard", "operations-flow", "work-create", "card-create"].includes(view)
       ? "dashboard" : view === "runs" ? "ledger" : view,
-    session = useResource<{ token: string }>("session", {
+    session = useResource<{ token: string; decisionToken?: string; readOnly?: boolean }>("session", {
       pollMs: 0,
       staleMs: 300_000,
     }),
     summary = useResource<Summary>("summary");
+  const readOnly = session.data?.readOnly === true;
   const drafts = useRef(new Set<string>()),
     [notice, setNotice] = useState(""),
     [theme, setTheme] = useState(readTheme);
@@ -74,9 +75,10 @@ export default function App() {
     else drafts.current.delete(key);
   }, []);
   const context = useMemo(
-    () => ({ token: session.data?.token || "", draft, notice: setNotice }),
-    [session.data?.token, draft],
+    () => ({ token: session.data?.token || "", decisionToken: session.data?.decisionToken, readOnly, draft, notice: setNotice }),
+    [session.data?.token, session.data?.decisionToken, readOnly, draft],
   );
+  useEffect(() => setReadOnly(readOnly), [readOnly]);
   useEffect(() => {
     const guard = () =>
       !drafts.current.size ||
@@ -207,6 +209,7 @@ export default function App() {
               <button onClick={() => setNotice("")}>닫기</button>
             </div>
           )}
+          {readOnly && <div className="dw-secretary" role="status">원격 보기(읽기 전용) — 이 화면에서는 보기만 할 수 있습니다.</div>}
           <SecretaryNotice on={summary.data?.secretary} />
           {!session.data ? (
             <Loading />

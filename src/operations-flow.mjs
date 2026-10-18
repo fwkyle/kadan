@@ -1,4 +1,5 @@
 import {workFollowup,elapsed} from './work-followup.mjs';
+import {sameOrigin} from './remote-access.mjs';
 import {DecisionStore} from './decisions.mjs';
 import {readLedgerState} from './ledger-domains.mjs';
 import {classifyLedgerEntry} from './ledger.mjs';
@@ -222,7 +223,7 @@ export function handleOperationsFlow(home,request,response,url,cache={}){
  const type='application/json; charset=utf-8',canCache=url.pathname==='/api/operations-flow';
  const send=(status,value)=>{const body=JSON.stringify(value);if(status===200&&canCache)cache.remember?.(body,type);response.writeHead(status,{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','x-kadan-cache':'miss'});response.end(body);};
  if(request.method!=='GET'){send(405,{error:'조회 전용입니다.'});return true;}
- if(request.headers.origin&&request.headers.origin!==`http://${request.headers.host}`||request.headers['sec-fetch-site']==='cross-site'){send(403,{error:'같은 대시보드에서만 조회할 수 있습니다.'});return true;}
+ if(request.headers.origin&&!sameOrigin(request)||request.headers['sec-fetch-site']==='cross-site'){send(403,{error:'같은 대시보드에서만 조회할 수 있습니다.'});return true;}
  if(canCache){const hit=cache.cached?.();if(hit){response.writeHead(200,{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff','x-kadan-cache':'hit'});response.end(hit.body);return true;}}
  try{
   const key=url.searchParams.get('work');
