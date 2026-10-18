@@ -25,6 +25,7 @@ import {
 } from "./watch-cycle.mjs";
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { runDailyHierarchyPrune } from "./watch-prune.mjs";
+import { createOcxRefresher, codexBasis } from "./ocx-refresh.mjs";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -147,6 +148,7 @@ export async function runWatch({
     }
   };
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429});
+  const ocxRefresh = createOcxRefresher({record});
   const mailDelivered = new Set();
   const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,hold:mailHold,send:(role,message,pid)=>{
     try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
@@ -515,6 +517,17 @@ export async function runWatch({
       for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push(item(l.executionKey, l.taskId, l.workKey, l.currentRecipient));
     } catch { waits = []; }
+    // 한도 경보가 처음 생길 때만, 그 세션이 codex일 때 ocx 사용량을 새로 받고 결과를 경보에 붙인다(ocx-refresh.mjs).
+    // 순회 안에서 동기로 부른다: 30분에 1번·30초 상한이라 순회를 길게 막지 않고, 같은 순회의 경보 본문에 결과를 바로 실을 수 있다.
+    // 실패·없음이어도 경보 전달과 429 재개 예약은 그대로다.
+    if(!ledgerError){
+      const known=new Set(activeAlerts.map(a=>a.id));
+      for(const a of [...roleAlerts,...(!observationError?rateLimitRetry.alerts??[]:[])]){
+        if(a.kind!=='한도'||known.has(a.id)||a.ocx||retrySessions.has(a.session))continue;
+        if(!codexBasis(entries,a.role))continue;
+        try{a.ocx=ocxRefresh({entries,now:cycleAt,trigger:{role:a.role,session:a.session}});}catch{}
+      }
+    }
     const nextAlerts = [
       ...(hierarchyError ? [hierarchyError] : []),
       ...(aiStoreError ? [aiStoreError] : []),
