@@ -11,6 +11,7 @@ import {isUserActor} from './actors.mjs';
 import {notifyUser,fitDiscord} from './user-notify.mjs';
 import {DEFAULT_PORT} from './quickstart.mjs';
 import {readDecisions} from './notify-threads.mjs';
+import {loadRemoteConfig} from './remote-access.mjs';
 const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
 const human=by=>isUserActor(by);
 const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
@@ -33,6 +34,11 @@ function postThreadNote(home,d,text){
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'discord','send','--thread',threadId,'--quiet',text],{env:{...process.env,KADAN_HOME:home},encoding:'utf8',timeout:15000});
   return r.status===0;
  }catch{return false;}
+}
+// 알림에 붙는 결정 링크. 원격 설정(remote-access.json)에 호스트가 있으면 공개 주소, 없으면 로컬 주소다. 서버 상태가 아니라 설정 파일을 읽는다.
+export function decisionLink(home,id){
+ const host=loadRemoteConfig(home)?.host;
+ return host?`https://${host}/#decision-${id}`:`http://127.0.0.1:${DEFAULT_PORT}/#decision-${id}`;
 }
 export class DecisionStore {
  constructor(home,{notify,userNotify,threadNote}={}){this.home=home;this.threadNote=threadNote??((d,text)=>postThreadNote(home,d,text));this.userNotify=userNotify??((message,opts)=>notifyUser(message,spawnSync,{home,...opts}));this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
@@ -76,7 +82,7 @@ export class DecisionStore {
   if(process.env.KADAN_NOTIFY==='off')return null;
   const cut=(t,n)=>{t=String(t).replace(/\s+/g,' ').trim();return t.length>n?t.slice(0,n-1)+'…':t;};
   const repo=d.card.split('/')[0],tag=`[${repo}]`;
-  const link=`http://127.0.0.1:${DEFAULT_PORT}/#decision-${d.id}`;
+  const link=decisionLink(this.home,d.id);
   const q=shortIds(d.question),summary=cut(q.split('\n').find(l=>l.trim())??q,80),full=cut(q,600);
   const body=()=>[...(full!==summary?[`질문: ${full}`]:[]),`선택지: ${d.options.map((o,i)=>`${i+1}) ${cut(shortIds(o),100)}`).join(' ')}`,`추천: ${cut(shortIds(d.recommendation),100)}`,`이유: ${cut(shortIds(d.reason),300)}`,
    `결정 ${d.id.slice(0,8)} · 카드 ${shortIds(d.card)}${d.work?` · 업무 ${shortIds(d.work)}`:''}`].join('\n');
@@ -102,7 +108,8 @@ export class DecisionStore {
   try{return this.userNotify(short,{...base,...extra,discord:build});}catch{return null;}
  }
  // source·messageId: 디코 다리가 사람 명의로 기록할 때 남기는 출처('discord')와 그 디코 글 id. 같은 글을 두 번 처리하지 않는 표시이기도 하다.
- answer(id,{revision,text,choice,source,messageId},by){let newlyAnswered=false;const saved=this.locked(()=>{
+ // remote: 원격 답변의 감사 필드(Access 이메일·sub·iat·exp·IP). 옛 검증기가 무시하는 선택 필드 answer.remote로만 남기고 source 값은 넓히지 않는다.
+ answer(id,{revision,text,choice,source,messageId,remote},by){let newlyAnswered=false;const saved=this.locked(()=>{
   if(!human(by))throw new Error('사용자 답변은 사람 명의로만 기록');
   if(source!==undefined&&source!=='discord')throw new Error('알 수 없는 답변 출처');
   if(messageId!==undefined&&(typeof messageId!=='string'||!messageId))throw new Error('디코 글 id 형식 오류');
@@ -110,7 +117,7 @@ export class DecisionStore {
   if(choice&&!d.options.includes(choice))throw new Error('선택지가 일치하지 않음');
   if(d.status==='answered'&&d.answer.text===text&&d.answer.choice===choice)return d;
   if(d.status!=='open'||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경: 다시 확인');
-  newlyAnswered=true;return this.write({...d,revision:d.revision+1,status:'answered',answer:{by,text,choice,at:new Date().toISOString(),...(source?{source}:{}),...(messageId?{messageId}:{})},delivery:{status:'pending'}});
+  newlyAnswered=true;return this.write({...d,revision:d.revision+1,status:'answered',answer:{by,text,choice,at:new Date().toISOString(),...(source?{source}:{}),...(messageId?{messageId}:{}),...(remote?{remote}:{})},delivery:{status:'pending'}});
  });
  if(!newlyAnswered)return saved;
  const d=saved;

@@ -2,6 +2,7 @@
 // 설정 파일(KADAN_HOME/remote-access.json)이 없거나 항목이 빠졌거나 손상됐으면 원격 모드는 꺼지고 로컬 동작은 그대로다.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {ACCESS_JWT_HEADER, createAccessJwtVerifier} from './access-jwt.mjs';
 
 export const REMOTE_ACCESS_FILE = 'remote-access.json';
@@ -54,11 +55,31 @@ export async function judgeRequest(request, gate) {
   if (host.toLowerCase().replace(/:[0-9]+$/, '') !== gate.host) return {kind: 'deny', status: 403, message: 'local host required'};
   const header = request.headers[ACCESS_JWT_HEADER];
   const result = await gate.verifier.verify(Array.isArray(header) ? undefined : header);
-  return result.ok ? {kind: 'remote'} : {kind: 'deny', status: 403, message: '원격 인증 확인 실패'};
+  return result.ok ? {kind: 'remote', claims: result.claims} : {kind: 'deny', status: 403, message: '원격 인증 확인 실패'};
 }
 
 // 같은 화면에서 온 요청인지(Origin 비교). 원격 요청이면 https 출처도 같은 출처로 본다(터널 뒤 브라우저는 https로 보낸다).
 export function sameOrigin(request, origin = request.headers.origin) {
   const host = request.headers.host;
   return origin === `http://${host}` || (request.kadanRemote === true && origin === `https://${host}`);
+}
+
+// 결정 전용 token: 서버 시작 때 만든 비밀과 Access 신원(sub)·발급 시각(iat)의 HMAC이다. 상태를 저장하지 않고, 같은 신원의 JWT가 있을 때만
+// 다시 계산되며 JWT가 갱신되면(iat 변경) 함께 바뀐다. 로컬 쓰기 token(무작위 값)과는 만드는 방식이 달라 서로 대신할 수 없다.
+// sub·iat 가 없으면 null이라 답하기는 열리지 않는다(실패 닫힘).
+export function decisionToken(secret, claims) {
+  if (typeof claims?.sub !== 'string' || !claims.sub || !Number.isFinite(claims.iat)) return null;
+  return crypto.createHmac('sha256', secret).update(`decision-answer\n${claims.sub}\n${claims.iat}`).digest('hex');
+}
+
+// 원격 답변 요청의 확인: Origin은 반드시 있어야 하고 https://<허용 호스트>와 정확히 같아야 한다(없음·null·http·다른 호스트는 거부).
+export const remoteOriginOk = (request, host) => request.headers.origin === `https://${host}`;
+
+// 결정 답변 기록에 남기는 원격 감사 필드. JWT 원문은 담지 않는다. Cf-Connecting-IP는 Cloudflare 표시 헤더라 믿을 수 없는 값(ipTrusted:false)이다.
+export function remoteAudit(request, claims) {
+  const ip = request.headers['cf-connecting-ip'];
+  return {
+    email: String(claims.email ?? ''), sub: String(claims.sub ?? ''), iat: claims.iat, exp: claims.exp,
+    ...(typeof ip === 'string' && ip.length <= 64 ? {ip, ipTrusted: false} : {}),
+  };
 }

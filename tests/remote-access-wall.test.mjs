@@ -158,12 +158,18 @@ test('쓰기 경로 목록이 서버의 POST 허용 목록과 같다', () => {
   assert.equal(WRITE_PATHS.length, 23);
 });
 
-test('원격은 쓰기 경로 23개 모두 405이고 어느 것도 처리기까지 가지 않는다', async () => {
+test('원격은 쓰기 경로 22개 모두 405이고(POST /decisions/answer 하나만 예외) 어느 것도 처리기까지 가지 않는다', async () => {
   const certs = await certsServer();
   const app = await start({remote: config, certs});
   try {
     for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
       for (const p of WRITE_PATHS) {
+        // POST /decisions/answer는 2단계에서 열린 유일한 길이다(결정 token 없이는 403). 종단 시험은 tests/decision-remote-answer.test.mjs.
+        if (method === 'POST' && p === '/decisions/answer') {
+          const open = await app.remoteCall(method, p, {headers: {'content-type': 'application/x-www-form-urlencoded', origin: `https://${HOST}`}, body: 'token=x'});
+          assert.equal(open.status, 403, 'token 없이는 거부');
+          continue;
+        }
         const res = await app.remoteCall(method, p, {headers: {'content-type': 'application/x-www-form-urlencoded', origin: `https://${HOST}`}, body: 'token=x'});
         assert.equal(res.status, 405, `${method} ${p}`);
         assert.equal(res.text, '원격은 조회만 지원합니다');

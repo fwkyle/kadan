@@ -9,7 +9,7 @@
 - 기본은 **꺼짐**이다. 설정 파일이 없으면 지금까지와 똑같이 로컬(`127.0.0.1`, `localhost`, `[::1]`)만 받는다.
 - 켜면 두 종류 요청만 받는다.
   - 로컬 Host: 지금과 같다(쓰기 가능).
-  - 설정한 호스트 + 유효한 `Cf-Access-Jwt-Assertion`: 원격이다. **GET·HEAD만** 받고 나머지는 405다.
+  - 설정한 호스트 + 유효한 `Cf-Access-Jwt-Assertion`: 원격이다. **GET·HEAD**와, 결정 token을 든 **`POST /decisions/answer` 하나**만 받고 나머지는 405다.
 - 그 밖(다른 Host, 토큰 없음, 토큰 틀림)은 403이다.
 - 외부 설정(Access 앱, 터널, DNS, 상주 프로세스)은 이 기능 밖이다. 카단은 받은 요청을 검증할 뿐 Cloudflare를 건드리지 않는다.
 
@@ -53,8 +53,8 @@
 
 ## 원격에서 막히는 것
 
-- 모든 쓰기 요청(POST·PUT·DELETE·PATCH 등)은 405 `원격은 조회만 지원합니다`이며 처리기까지 가지 않는다. 막는 경로 23개: `/ask`, `/secretary/start`, `/roles/restart`, `/cards/{update,create}`, `/decisions/answer`, `/runners/{set,preset,fallback,favorite,runner,model-add,model-remove,models-list}`, `/works/{create,update,link,unlink,execute,mail,complete,cancel,reopen}`.
-- `/api/dashboard/session`은 원격에 `{"token":"","readOnly":true}`를 준다(쓰기 token을 주지 않는다).
+- 모든 쓰기 요청(POST·PUT·DELETE·PATCH 등)은 405 `원격은 조회만 지원합니다`이며 처리기까지 가지 않는다. 막는 경로 22개(23개 중 `/decisions/answer`만 아래 절의 한 길로 열린다): `/ask`, `/secretary/start`, `/roles/restart`, `/cards/{update,create}`, `/decisions/answer`, `/runners/{set,preset,fallback,favorite,runner,model-add,model-remove,models-list}`, `/works/{create,update,link,unlink,execute,mail,complete,cancel,reopen}`.
+- `/api/dashboard/session`은 원격에 `{"token":"","readOnly":true,"decisionToken":"…"}`를 준다(쓰기 token은 주지 않고, 결정 전용 token만 준다). 로컬에는 `decisionToken`이 없다.
 - 서버가 그리는 화면(`renderCenterWall`)의 token도 빈 값이다. 응답 캐시는 서버가 판정 결과(로컬/원격)로 나눠 쓴다. 구분은 URL 매개변수와 무관해서 주소에 무엇을 붙여도 섞이지 않는다.
 - `?fresh`(캐시 비우기)는 원격에서 무시한다.
 - `Origin`이 붙은 조회는 `https://<host>`를 같은 출처로 본다(`/api/dashboard/*`, `/api/operations-flow*`). 다른 출처와 `sec-fetch-site: cross-site`는 403이다.
@@ -62,6 +62,36 @@
 ## 화면
 
 세션이 `readOnly:true`이면 대시보드가 쓰기 UI를 그리지 않고 위쪽에 "원격 보기(읽기 전용)" 안내를 보인다. 숨기는 것: 질문 보내기, 비서 켜기, 역할 다시 띄우기, 카드·워크 만들기와 기록 남기기(결정 답변, 업무 버튼 포함 — 모두 공통 쓰기 폼), 실행 모델·실행기 설정. 공통 전송 함수(`gui/src/resource.ts` `save()`)도 읽기 전용이면 보내지 않는다. 메뉴·칸 이름은 바뀌지 않는다.
+
+## 폰에서 결정 답하기 (2단계)
+
+원격에서 열리는 쓰기는 `POST /decisions/answer` **하나뿐**이다. 순서는 `judgeRequest`(Host·Access JWT) → 이 요청이면 Origin 확인 → 결정 token 확인 → 기존 처리기(`DecisionStore.answer`)다. 나머지 쓰기 22개는 결정 token을 붙여도 처리기 앞에서 405다.
+
+- **결정 token**: `HMAC-SHA256(서버 시작 때 만든 비밀, "decision-answer" + JWT sub + JWT iat)`. 상태를 저장하지 않는다(요청마다 JWT로 다시 계산해 대조). 그래서 Access 신원에 묶이고, JWT가 갱신되면(iat 변경) 함께 바뀌며(화면은 403을 받으면 session을 다시 읽는다), 서버를 다시 시작하면 모두 무효다. 로컬 쓰기 token(무작위 값)과 만드는 방식이 달라 서로 대신할 수 없다. `sub`·`iat`가 없는 JWT에는 token을 주지 않는다(실패 닫힘).
+- **Origin**: 원격 POST는 `Origin: https://<허용 호스트>`와 정확히 같아야 한다. 없음·`null`·`http`·포트·뒤 슬래시가 다르면 403이다. 쿠키 SameSite에 기대지 않는다.
+- **거부**: 원격이 낸 로컬 쓰기 token, 로컬이 낸 결정 token, 신원 A의 token + 신원 B의 JWT, 만료 JWT, `?legacy=1` 옛 화면(token이 없다)은 모두 403이다. revision이 틀리면 기존 오류 경로(409)다.
+
+### 위협 모델: 무엇이 무엇을 막나
+
+| 위협 | 막는 것 |
+|---|---|
+| 로그인 없이 요청 | Access JWT 검증(`judgeRequest`) |
+| 다른 사이트의 폼 POST. Cloudflare가 엣지에서 JWT 헤더를 붙이므로 **인증된 채로 도착할 수 있다** | **Origin(https 정확 일치)** 과 **결정 token**. 다른 사이트는 token을 읽을 수 없다(같은 출처 정책) |
+| 결정 답하기 token으로 다른 쓰기 열기 | 한 길 규칙: 그 밖의 원격 쓰기는 token 확인 전에 405 |
+| 로그인 상태가 같은 다른 사람·다른 JWT로 token 재사용 | token이 JWT의 `sub`·`iat`에 묶임 |
+| 옛 화면·로컬에서 새어 나온 token | 로컬 token은 원격에서, 결정 token은 로컬에서 쓸 수 없다 |
+
+### 감사 기록
+
+별도 원장 줄은 없다. 결정 저장소(`decisions/events.jsonl`)의 답변 기록이 감사 기록이다. 원격 답변에는 `answer.remote = {email, sub, iat, exp, ip, ipTrusted:false}`가 붙는다. 시각은 `answer.at`, 결정 id·revision·선택·글은 기록 자체에 있다. `ip`는 `Cf-Connecting-IP` 값이며 위조할 수 있어 믿을 수 없는 값으로 표시한다. **JWT 원문은 담지 않는다.** 화면 응답(`/api/dashboard/decisions`)에는 이 필드를 싣지 않는다.
+
+### 저장 형식 호환
+
+`answer.source`는 `discord`만 허용하는 옛 검증기가 이력을 읽는다. 그래서 `source` 값 목록은 넓히지 않고, 옛 검증기가 무시하는 선택 필드 `answer.remote`로 원격 표시를 더했다. 첫 원격 답변 뒤에 옛 코드로 도는 감시기·디코 다리·재시작 전 대시보드도 이력을 읽는다(시험 `tests/decision-remote-answer.test.mjs`).
+
+### 화면
+
+원격 보기에서도 결정 화면의 답하기 양식만 켜진다(session에 `decisionToken`이 있을 때). 나머지 쓰기 UI는 숨김 그대로다. 알림 링크 `#decision-<id>`는 그 결정으로 바로 가서 양식에 초점을 둔다. 이미 답했거나 취소된 결정은 상태만, 모르는 id는 안내 문구만 보인다. 답한 뒤에는 기존 15초 조회가 해결 상태를 보여 준다. Access 로그인 유지 24시간은 바꾸지 않는다.
 
 ## 끄는 법
 
@@ -71,5 +101,5 @@
 
 - 원격이 켜진 서버는 Host가 로컬이어도 Cloudflare 표시 헤더(`Cf-*` 전부, `CDN-Loop`)가 있으면 로컬로 보지 않고 403으로 거부한다. 터널이 `Host`를 로컬 값으로 바꿔 보내도(`httpHostHeader` 등) 표시가 남아 쓰기가 열리지 않는다. 이 헤더는 위조할 수 있어 원격 인증의 근거로는 쓰지 않고 로컬 판정을 막는 데만 쓴다(원격 인증은 토큰 검증뿐). 거부를 고른 이유: Host가 로컬이면 허용 호스트 검사를 할 수 없어 원격 검증으로 넘길 길이 없고, 정상 로컬 브라우저는 이 헤더를 보내지 않는다. `Host` 헤더가 둘 이상인 요청도 거부한다. 원격이 꺼져 있으면 이 검사는 없고 예전 동작 그대로다.
 - 표시 헤더 없이 진짜 로컬(같은 맥)에서 보낸 요청은 토큰 없이 로컬이다(예전과 같다).
-- 원격 알림 링크(공개 주소)는 이번 범위가 아니다. 알림 링크는 계속 로컬 주소다.
+- 알림 링크는 `remote-access.json`에 `host`가 있을 때만 공개 주소(`https://<host>/#decision-<id>`)로 바뀐다. 설정이 없으면 로컬 주소다. 알림 글의 안내 문구("맥에서 답하기")는 그대로다.
 - Access 세션이 만료되면 15초 조회가 로그인 화면을 받아 오류를 보일 수 있다. 새로고침으로 복구한다(폰 실측은 외부 설정 뒤 확인).

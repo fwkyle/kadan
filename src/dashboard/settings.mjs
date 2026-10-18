@@ -26,7 +26,17 @@ export function createData(snapshot, url, stamp) {
 // 정렬은 ?sort=newest(기본 오래된 순), 기준은 요청 시각(at)이다. 전에 화면이 하던 정렬과 같다.
 export function decisionsData(snapshot, url, stamp) {
   if (snapshot.decisionError) throw new Error(snapshot.decisionError);
-  const all = snapshot.decisions || [], withContent = (d) => ({ ...d, ...decisionContent(d) });
+  const all = snapshot.decisions || [];
+  // 원격 답변의 감사 필드(이메일·sub·IP)는 기록에만 두고 화면 응답에는 싣지 않는다.
+  const withContent = (d) => {
+    const { remote, ...answer } = d.answer ?? {};
+    return { ...d, ...(d.answer ? { answer } : {}), ...decisionContent(d) };
+  };
+  // ?id=<결정 ID>: 알림 링크가 연 결정 하나의 상태. 없으면 item이 null이다.
+  if (url.searchParams.has("id")) {
+    const found = all.find((d) => d.id === url.searchParams.get("id"));
+    return { ...stamp, item: found ? withContent(found) : null };
+  }
   if (url.searchParams.get("past") === "1") {
     const sign = url.searchParams.get("sort") === "newest" ? -1 : 1, at = (d) => Date.parse(d.at);
     const past = all.filter((d) => d.status !== "open").sort((x, y) => (at(x) - at(y)) * sign);

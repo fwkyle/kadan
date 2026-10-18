@@ -15,7 +15,7 @@ import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
 import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
-import {decisionCommand} from './decisions.mjs';
+import {decisionCommand,DecisionStore} from './decisions.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {applyTheme,themeToggleHtml,themeToggleStyle,themeToggleScript} from './theme.mjs';
 import {renderDecisions,renderActivity,decisionStyle,decisionScript} from './decision-wall.mjs';
@@ -204,13 +204,17 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
    else {res.writeHead(303,{location,'cache-control':'no-store'});res.end();}
   };
-  if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`){fail(403,'다른 사이트에서 저장할 수 없습니다');return true;}
+  // 원격 요청은 wall.mjs가 /decisions/answer만 넘기고 https Origin도 이미 확인했다. 여기서 한 번 더 한 길로 좁힌다.
+  if(req.kadanRemote===true&&url.pathname!=='/decisions/answer'){res.writeHead(405,{allow:'GET, HEAD'});res.end('원격은 조회만 지원합니다');return true;}
+  if(req.kadanRemote!==true&&req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`){fail(403,'다른 사이트에서 저장할 수 없습니다');return true;}
   if(req.headers['content-type']?.split(';')[0]!=='application/x-www-form-urlencoded'){fail(415,'폼 입력만 지원합니다');return true;}
   let bytes=0;const chunks=[];
   try {
    for await(const chunk of req){bytes+=chunk.length;if(bytes>1024*1024)throw new Error('입력이 너무 큽니다');chunks.push(chunk);}
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
-   if(f.token!==token){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
+   // 원격은 결정 전용 token(없으면 null이라 항상 거부), 로컬은 쓰기 token. 서로의 token은 통하지 않는다.
+   const expected=req.kadanRemote===true?req.kadanDecisionToken:token;
+   if(!expected||f.token!==expected){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
    if(url.pathname==='/roles/restart'){
     const role=String(f.role||''),reason=String(f.reason||'').trim(),expectPid=String(f.expectPid||'').trim();
@@ -232,7 +236,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     saved('/#strategy-map',await ask({to,message:askMessage({unit,text,context})}));return true;
    }
    if(url.pathname==='/decisions/answer') {
-     const result=decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
+     const result=req.kadanRemote===true?new DecisionStore(home,{notify}).answer(f.id,{revision:f.revision,text:f.text,choice:f.choice,remote:req.kadanAnswerAudit},'사람')
+      :decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.
      saved('/?decisionAnswered='+encodeURIComponent(f.id)+'#decisions',result);return true;
    }
