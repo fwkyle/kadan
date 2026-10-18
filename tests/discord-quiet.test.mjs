@@ -58,7 +58,7 @@ test('울리는 것: 결정 요청과 사용자 경보(ring)만 flags 없이 멘
   } finally { w.stop(); }
 });
 
-test('조용히 보내는 것: 결정 답변·취소, 울림 표시 없는 경보, 인계, 우편은 flags 4096과 빈 allowed_mentions다', async () => {
+test('조용히 보내는 것: 결정 답변·취소와 울림 표시 없는 경보는 flags 4096과 빈 allowed_mentions다', async () => {
   const w = await world();
   try {
     const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
