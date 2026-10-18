@@ -10,7 +10,7 @@ import {createOcxRefresher, ocxAlertLine, parseUsage} from '../src/ocx-refresh.m
 const epoch=Date.parse('2026-10-18T00:00:00Z');
 const stamp=m=>new Date(epoch+m*60_000).toISOString();
 // 2026-10-18 실제 화면(codex 0.163, 14시간 멈춤)의 꼬리. Reconnecting이 남아 있어 terminal429는 null이다.
-// 끊김 낱말을 훑는 범위가 마지막 6줄인 main에서는 429 줄이 범위 밖이라 경보가 나지 않는다(#187이 12줄로 넓힌다). 합친 뒤에는 realScreen으로 바꿔 돌린다.
+// #187(끊김 낱말을 훑는 범위 12줄)이 합쳐진 뒤에는 이 화면에서도 한도 경보가 난다. 아래 시험은 이 실제 화면을 쓴다.
 const realScreen=`
 • Reconnecting... 1/5 (14h 04m 30s • esc to interrupt)
   └ Exceeded retry limit, last status: 429 Too Many Requests
@@ -61,7 +61,7 @@ const everything=r=>JSON.stringify([r.records,r.sent,r.prints]);
 
 test('codex 세션의 첫 한도: 호출 1번, 원장 1줄, 경보에 결과 줄과 감독 할 일',async()=>{
  const ocx=okOcx();
- const r=await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',screenAt:limitFrom(2,limitScreen(1))}]});
+ const r=await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',screenAt:limitFrom(2,realScreen)}]});
  assert.deepEqual(ocx.calls(),['account refresh openai']);
  const lines=r.records.filter(e=>e.kind==='ocx-refresh');
  assert.equal(lines.length,1);
@@ -181,6 +181,16 @@ test('R2: 재시작으로 복원한 한도 경보에 새로고침 기록이 없�
  assert.equal(refreshes(r).length,1);
  assert.equal(ocx.calls().length,1);
  assert.equal(limitMsgs(r.sent).length,0,'복원된 경보를 다시 알리지 않는다');
+});
+
+test('어제 실제 화면(Reconnecting 남은 14시간 정지)에서 한도 경보와 새로고침이 난다',async()=>{
+ const ocx=okOcx();
+ const r=await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',screenAt:limitFrom(2,realScreen)}]});
+ assert.equal(ocx.calls().length,1);
+ assert.equal(refreshes(r).length,1);
+ const msgs=limitMsgs(r.sent);
+ assert.equal(msgs.length,1);
+ assert.match(msgs[0][2],/사용량 새로 받음: 5시간 12% 주간 3% — 가짜 한도였을 가능성/);
 });
 
 test('R2: 화면 끝에 빈 줄이 15개 있어도 복원 경보의 새로고침은 1번',async()=>{
