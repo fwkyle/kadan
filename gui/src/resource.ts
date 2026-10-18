@@ -62,11 +62,17 @@ export type SaveResult = {
     pending?: boolean; // /roles/restart — 화면 응답 상한(28초)을 넘겨 자식이 계속 진행 중
   };
 };
+// 원격 보기(session의 readOnly:true)에서는 쓰기 전송을 아예 보내지 않는다. 서버도 405로 막지만 화면이 먼저 멈춘다.
+let readOnly = false;
+export const setReadOnly = (value: boolean) => {
+  readOnly = value;
+};
 export async function save(
   action: string,
   fields: Record<string, string>,
   token: string,
 ): Promise<SaveResult> {
+  if (readOnly) throw new Error("원격 보기에서는 저장할 수 없습니다.");
   const controller = new AbortController(),
     timer = setTimeout(() => controller.abort(), 30_000);
   try {

@@ -350,14 +350,14 @@ function RestartCell({
   role: string;
   generation: string | null;
 }) {
-  const { token } = useContext(AppContext),
+  const { token, readOnly } = useContext(AppContext),
     [open, setOpen] = useState(false),
     [reason, setReason] = useState(""),
     [busy, setBusy] = useState(false),
     [outcome, setOutcome] = useState<{ ok: boolean; pending?: boolean; text: string } | null>(
       null,
     );
-  if (!generation) return <td></td>;
+  if (!generation || readOnly) return <td></td>;
   const submit = async () => {
     const text = reason.trim();
     if (!text) {
