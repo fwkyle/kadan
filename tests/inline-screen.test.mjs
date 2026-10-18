@@ -13,6 +13,7 @@ import {launchIdentityOf} from '../src/ai-identity.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
 import {describeStartCmd} from '../src/cli-start-support.mjs';
 import {readLedger} from '../src/ledger.mjs';
+import {codexBasis} from '../src/ocx-refresh.mjs';
 
 const F = '--no-alt-screen';
 
@@ -87,6 +88,15 @@ test('restart의 resume 명령 재조립은 붙은 플래그를 떼고 다시 �
   const rebuilt = withInlineScreen(rebuildResumeCommand(settings, 'codex', old, id));
   assert.equal(rebuilt, `codex --model m resume ${id} ${F}`);
   assert.equal(withInlineScreen(rebuildResumeCommand(settings, 'codex', rebuilt, id)), rebuilt);
+});
+
+test('#188 codexBasis는 플래그가 붙은 start 줄에서도 같은 판정이다', () => {
+  const entry = cmd => ({kind: 'start', role: 'r', ...describeStartCmd(cmd)});
+  const plain = 'codex -p lite --model gpt-6-sol -c model_reasoning_effort="high"';
+  assert.deepEqual(codexBasis([entry(withInlineScreen(plain))], 'r'), codexBasis([entry(plain)], 'r'));
+  assert.equal(codexBasis([entry(withInlineScreen(plain))], 'r').target, true);
+  const other = 'codex --model zai/glm-5.3';
+  assert.equal(codexBasis([entry(withInlineScreen(other))], 'r').reason, 'other-provider');
 });
 
 test('옛 세션 명령과 기본값은 플래그만 달라도 같은 명령으로 본다', () => {
