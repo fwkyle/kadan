@@ -302,6 +302,8 @@ function orcaWindowCreate({ bin, role, session, cwd, socket, tmuxBin, spawnFn })
   return { ok: true, handle, reused: false };
 }
 
+// 창을 연 뒤 "탭이 붙었나"만 본다. 제어 모드(`tmux -C`) 연동 client도 일부러 센다: Rottie 연동 탭은 중계(제어 client)만 붙는다.
+// 사람 입력 판정은 이것이 아니라 checkHumanIdle이고, 제어 client는 거기서 입력으로 세지 않는다(tests/control-client-attach.test.mjs).
 export function clientAttached(session) {
   const result = tmux(["list-clients", "-t", session, "-F", "#{client_pid}"]);
   return result.status === 0 && result.stdout.trim().length > 0;
