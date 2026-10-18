@@ -47,7 +47,8 @@ async function start() {
     req.on('error', reject);
     req.end(body);
   });
-  const jwtFor = (claims = {}) => sign(key, {claims: {sub: 'sub-a', ...claims}});
+  // iat는 초 단위라 시험 중 초가 넘어가면 token이 달라진다. 같은 신원의 JWT는 iat를 고정해 같은 token이 나오게 한다.
+  const jwtFor = (claims = {}) => sign(key, {claims: {sub: 'sub-a', iat: 1_700_000_000, ...claims}});
   const remote = (method, url, {jwt = jwtFor(), origin = `https://${HOST}`, body, headers = {}} = {}) =>
     call(method, url, {host: HOST, body, headers: {'cf-access-jwt-assertion': jwt, ...(origin === null ? {} : {origin}), ...(body ? {'content-type': 'application/x-www-form-urlencoded'} : {}), ...headers}});
   const sessionOf = async jwt => JSON.parse((await remote('GET', '/api/dashboard/session', {jwt})).text);
