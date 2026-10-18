@@ -35,6 +35,8 @@ import {
   filterConfirmedCompletions,
   explainAlertRoute,
   failureEscalation,
+  screenDisconnects,
+  disconnectKind,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
@@ -150,7 +152,10 @@ export async function runWatch({
   const ocxRefresh = createOcxRefresher({record});
   // 새로고침을 하고 감시 출력에 한 줄 남긴다. 경보를 보낼지와는 별개다. 대상은 'openai를 쓰는 codex'뿐이다(codexBasis).
   const refreshOcxFor = ({role, session, entries, now}) => {
-    if (!codexBasis(entries, role)) return null;
+    const basis = codexBasis(entries, role);
+    if (basis.reason === "not-codex") return null;
+    // codex지만 openai라는 근거가 없으면 부르지 않고 원장도 쓰지 않는다. 경보에는 그 사실을 한 줄 붙인다.
+    if (!basis.target) return {outcome: "skipped", reason: basis.reason};
     const result = ocxRefresh({entries, now, trigger: {role, session}});
     print(`[watch ${clockTime(now)}] ${session} ocx 사용량 새로고침: ${ocxAlertLine(result)}`);
     return result;
@@ -536,10 +541,11 @@ export async function runWatch({
       const known=new Set(activeAlerts.map(a=>a.id));
       for(const a of activeAlerts){
         if(a.kind!=='한도'||restoredChecked.has(a.id))continue;
-        restoredChecked.add(a.id);
         try{
-          const screen=String(roles.observations.get(a.session)?.screen??'').split('\n').slice(-12).join('\n');
-          if(!/429 Too Many Requests|exceeded retry limit|rate limit/iu.test(screen))continue;
+          // 관찰하지 못했거나 한도 줄을 못 봤으면 '확인함'으로 표시하지 않는다. 한도 탐지와 같은 함수(끝 빈 줄 제거 + 훑는 범위)를 쓴다.
+          const screen=roles.observations.get(a.session)?.screen;
+          if(typeof screen!=='string'||![...screenDisconnects(screen).values()].some(l=>disconnectKind(l)==='한도'))continue;
+          restoredChecked.add(a.id);
           const shownAt=sinceMs(entries.findLast(e=>e?.kind==='alert'&&e.id===a.id));
           if(entries.some(e=>e?.kind==='ocx-refresh'&&sinceMs(e)>=shownAt))continue;
           refreshOcxFor({role:a.role,session:a.session,entries,now:cycleAt});

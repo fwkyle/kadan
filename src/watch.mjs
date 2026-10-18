@@ -103,7 +103,7 @@ function lastScreenLines(screenText, count = 6) {
   return lines.slice(-count);
 }
 
-function screenDisconnects(screenText) {
+export function screenDisconnects(screenText) {
   const found = new Map();
   for (const line of lastScreenLines(screenText)) {
     DISCONNECT_SIGNATURES.lastIndex = 0;

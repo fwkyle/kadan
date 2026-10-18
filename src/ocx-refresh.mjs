@@ -25,19 +25,25 @@ export function parseUsage(text) {
 
 const entryAt = (entry) => (Number.isFinite(entry?.at) ? entry.at : Date.parse(entry?.t));
 
-// 새로고침은 한도 경보의 세션이 'openai를 쓰는 codex'일 때만 부른다. 시작 기록의 harness·model·cmd로 판단하고 근거를 돌려준다.
-// 공급자 접두어가 붙은 모델(`kimi/k3[1m]`, `zai/…`)이거나 `model_provider`가 openai가 아니면 대상이 아니다 — codex로 띄운 대체 실행기의
-// 한도에 openai 새로고침을 부르면 원인과 무관한 외부 호출이고, 30분 상한을 엉뚱한 공급자가 먼저 쓴다(2026-10-18 검수).
+// 새로고침은 한도 경보의 세션이 'openai를 쓴다는 긍정 근거가 있는 codex'일 때만 부른다(모르면 부르지 않는다 — 외부 명령이고,
+// 30분 상한을 엉뚱한 공급자가 먼저 쓰면 안 된다. 2026-10-18 검수). 시작 기록의 harness·model·cmd로 판단한다.
+// openai 모델 이름 꼴(이유): gpt-… (gpt-6-astra·gpt-6.1-sol 등 지금 쓰는 이름 전부), o1·o3·o4… (추론 모델 계열), codex-… (codex 전용 모델).
+// 공급자 접두어(`kimi/…`·`zai/…`·`command-code/…`)는 openai가 아니다. 위 꼴이 아닌 이름(kimi-k2.5 등)은 모르는 이름이라 부르지 않는다.
+export const OPENAI_MODEL_NAME = /^(?:gpt-|o[134](?:-|$)|codex-)/iu;
+
+// 반환: {target:true, basis} | {target:false, reason:'not-codex'} | {target:false, reason:'other-provider'|'unknown-provider', basis}
 export function codexBasis(entries, role) {
   const start = (entries ?? []).findLast((e) => e?.kind === "start" && e.role === role);
-  if (!start) return null;
+  if (!start) return { target: false, reason: "not-codex" };
   const word = String(start.harness ?? "").split("/").pop();
-  if (!/codex/iu.test(word)) return null;
+  if (!/codex/iu.test(word)) return { target: false, reason: "not-codex" };
   const model = String(start.model ?? "").replace(/^["']|["']$/gu, "");
-  if (model.includes("/")) return null;
-  const provider = String(start.cmd ?? "").match(/model_provider\s*=\s*["']?([\w.-]+)/iu)?.[1];
-  if (provider && provider.toLowerCase() !== "openai") return null;
-  return `start 기록 harness=${word}${model ? ` model=${model}` : ""}${provider ? ` model_provider=${provider}` : ""}`;
+  const provider = String(start.cmd ?? "").match(/model_provider\s*=\s*["']?([\w.-]+)/iu)?.[1]?.toLowerCase();
+  const basis = `start 기록 harness=${word}${model ? ` model=${model}` : ""}${provider ? ` model_provider=${provider}` : ""}`;
+  if (provider) return provider === "openai" ? { target: true, basis } : { target: false, reason: "other-provider", basis };
+  if (model.includes("/")) return { target: false, reason: "other-provider", basis };
+  if (OPENAI_MODEL_NAME.test(model)) return { target: true, basis };
+  return { target: false, reason: "unknown-provider", basis };
 }
 
 // 우리가 띄운 묶음(pgid = 그 프로세스 pid)만 끝낸다. pid가 없거나 1 이하면 아무것도 하지 않는다.
@@ -92,6 +98,11 @@ export function ocxAlertLine(result) {
   const { outcome, exitCode, usage = {}, cached, ageMs } = result;
   const ago = cached ? `${Math.max(1, Math.round(ageMs / 60_000))}분 전 ` : "";
   const head = cached ? `ocx 사용량은 ${ago}새로 받음` : "사용량 새로 받음";
+  if (outcome === "skipped") {
+    return result.reason === "other-provider"
+      ? "ocx 새로고침 대상 아님(openai 아님) — 창 확인"
+      : "ocx 새로고침 대상 아님(공급자 확인 못함) — 창 확인";
+  }
   if (outcome === "missing") return "ocx 없음";
   if (outcome === "timeout") return cached ? `ocx 사용량은 ${ago}새로고침 시간 초과` : "ocx 새로고침 시간 초과";
   if (outcome === "failed") {

@@ -38,7 +38,7 @@ async function run({roles,ocxBin,stopAt=6,seed=[]}){
  if(ocxBin===undefined)delete process.env.KADAN_OCX_BIN;else process.env.KADAN_OCX_BIN=ocxBin;
  try{
   const parents=new Map([...roles.map(r=>[r.role,'p-감독']),['p-감독','@user']]);
-  const starts=[...roles.map((r,i)=>({kind:'start',role:r.role,session:'kadan-'+r.role,harness:r.harness,...(r.start??{}),panePid:i+1,t:stamp(0)})),
+  const starts=[...roles.map((r,i)=>({kind:'start',role:r.role,session:'kadan-'+r.role,harness:r.harness,...(r.harness==='codex'?{model:'gpt-6.1-sol'}:{}),...(r.start??{}),panePid:i+1,t:stamp(0)})),
    {kind:'start',role:'p-감독',session:'kadan-p-감독',panePid:99,t:stamp(0)}];
   const cards=roles.map((r,i)=>({id:'t'+i,key:'repo/t'+i,role:r.role,board:'p',status:'assigned',activity:'running',workType:'execution'}));
   const records=[],sent=[],prints=[],resumes=[];let minute=0;const controller=new AbortController();
@@ -183,6 +183,14 @@ test('R2: 재시작으로 복원한 한도 경보에 새로고침 기록이 없�
  assert.equal(limitMsgs(r.sent).length,0,'복원된 경보를 다시 알리지 않는다');
 });
 
+test('R2: 화면 끝에 빈 줄이 15개 있어도 복원 경보의 새로고침은 1번',async()=>{
+ const ocx=okOcx();
+ const r=await run({ocxBin:ocx.bin,stopAt:10,seed:[restoredAlert('p-작업자')],
+  roles:[{role:'p-작업자',harness:'codex',screenAt:m=>limitScreen(1)+'\n'.repeat(15)}]});
+ assert.equal(refreshes(r).length,1);
+ assert.equal(ocx.calls().length,1);
+});
+
 test('R2: 이미 그 경보 뒤 새로고침 기록이 있으면 0번',async()=>{
  const ocx=okOcx();
  const seed=[restoredAlert('p-작업자'),{kind:'ocx-refresh',by:'watch',provider:'openai',at:epoch+10_000,outcome:'ok',exitCode:0,usage:{weekly:3},t:stamp(0.5)}];
@@ -190,18 +198,34 @@ test('R2: 이미 그 경보 뒤 새로고침 기록이 있으면 0번',async()=>
  assert.equal(ocx.calls().length,0);
 });
 
-test('R4: kimi 대체·다른 model_provider 세션은 0번, 기본 gpt 세션은 1번',async()=>{
- for(const [start,expected] of [
-  [{model:'kimi/k3[1m]',cmd:'codex --model kimi/k3[1m]'},0],
-  [{model:'kimi-k2.5',cmd:'codex --model kimi-k2.5 -c model_provider="kimi"'},0],
-  [{model:'gpt-6.1-sol',cmd:'codex --model gpt-6.1-sol -c model_reasoning_effort=high'},1],
-  [{model:'gpt-6.1-sol',cmd:'codex -c model_provider=openai --model gpt-6.1-sol'},1],
-  [{},1],
- ]){
+test('R4: openai라는 긍정 근거가 있을 때만 부른다 — 모르면 0번이고 경보에 대상 아님 한 줄',async()=>{
+ const cases=[
+  [{model:'kimi/k3[1m]',cmd:'codex --model kimi/k3[1m]'},0,/대상 아님\(openai 아님\)/],
+  [{model:'kimi-k2.5',cmd:'codex --model kimi-k2.5 -c model_provider="kimi"'},0,/대상 아님\(openai 아님\)/],
+  [{model:'kimi-k2.5',cmd:'codex --model kimi-k2.5'},0,/대상 아님\(공급자 확인 못함\) — 창 확인/],
+  [{model:'mystery-9',cmd:'codex --model mystery-9'},0,/대상 아님\(공급자 확인 못함\)/],
+  [{model:undefined,cmd:'codex'},0,/대상 아님\(공급자 확인 못함\)/],
+  [{model:'gpt-6.1-sol',cmd:'codex --model gpt-6.1-sol'},1,/사용량 새로 받음/],
+  [{model:'gpt-6-astra',cmd:'codex -p lite --model "gpt-6-astra"'},1,/사용량 새로 받음/],
+  [{model:'o3',cmd:'codex --model o3'},1,/사용량 새로 받음/],
+  [{model:'codex-mini',cmd:'codex --model codex-mini'},1,/사용량 새로 받음/],
+  [{model:'kimi-k2.5',cmd:'codex -c model_provider=openai --model kimi-k2.5'},1,/사용량 새로 받음/],
+ ];
+ for(const [start,expected,line] of cases){
   const ocx=okOcx();
-  await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',start,screenAt:limitFrom(2,limitScreen(1))}]});
+  const r=await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',start,screenAt:limitFrom(2,limitScreen(1))}]});
   assert.equal(ocx.calls().length,expected,JSON.stringify(start));
+  assert.equal(refreshes(r).length,expected,'대상 아님이면 원장 줄도 없다: '+JSON.stringify(start));
+  assert.match(limitMsgs(r.sent)[0][2],line,JSON.stringify(start));
  }
+});
+
+test('R4: 시작 기록이 없으면 0번이고 원장 줄도 없다',async()=>{
+ const ocx=okOcx();
+ // kind를 덮어써 이 역할의 start 기록이 없는 상태를 만든다.
+ const r=await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',start:{kind:'note'},screenAt:limitFrom(2,limitScreen(1))}]});
+ assert.equal(ocx.calls().length,0);
+ assert.equal(refreshes(r).length,0);
 });
 
 test('R3: 시간 초과 뒤 자식 프로세스까지 끝나고 시험이 띄운 것만 끝난다',()=>{
