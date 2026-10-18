@@ -2,6 +2,7 @@
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { idleCountsText } from "./watch-supervisor.mjs";
+import { ocxAlertLine } from "./ocx-refresh.mjs";
 
 export function clockTime(at) {
   const date = new Date(at);
@@ -96,7 +97,9 @@ export function formatAlertBody(alert) {
     return `세션 종료 의심 ${alert.session} (정체 후보, 판정 세션 종료 의심)`;
   }
   if (DISCONNECT_ALERT_KINDS.includes(alert.kind)) {
-    return `${alert.kind} ${alert.session} (${alert.line})`;
+    // 한도 경보에는 감시기가 ocx 사용량을 새로 받은 결과 한 줄을 붙인다(ocx-refresh.mjs).
+    const ocx = alert.kind === "한도" && alert.ocx ? ` · ${ocxAlertLine(alert.ocx)}` : "";
+    return `${alert.kind} ${alert.session} (${alert.line})${ocx}`;
   }
   if (alert.kind === "완료후보") {
     return `끝난 것 같음 ${alert.session} (${alert.taskId} ${alert.result}, 감독 확인 필요)`;
