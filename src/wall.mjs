@@ -6,6 +6,7 @@ import {sendDashboardData} from './dashboard-api.mjs';
 import {serveDashboard} from './dashboard-static.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
+import {loadRemoteConfig, createRemoteGate, judgeRequest, sameOrigin} from './remote-access.mjs';
 import {centerSummary} from './center-summary.mjs';
 import { renderCenterWall, createCenterHandler, prepareCenterWall } from "./center-wall.mjs";
 import fs from "node:fs";
@@ -451,9 +452,12 @@ export function needsDecisions(url){
   return !url.pathname.startsWith('/api/')&&url.searchParams.get('legacy')!=='1';
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot,startSecretary,ask,hierarchy,restart} = {}) {
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
+ // 원격 접속 설정(KADAN_HOME/remote-access.json)이 있을 때만 게이트를 만든다. 없으면 열쇠 조회도 타이머도 없다(2026-10-18).
+ // remote를 직접 넘기면(시험) 파일 대신 그 설정을 쓴다.
+ const remoteGate=centerHandler?createRemoteGate(remote===undefined?loadRemoteConfig(home):remote,remoteOptions):null;
  const cache=new Map();
  let sharedSnapshot=null;
  const clear=()=>{cache.clear();sharedSnapshot=null;};
@@ -482,18 +486,30 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  };
   const server=http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    if (centerHandler && !/^(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(request.headers.host??"")) { response.writeHead(403); response.end("local host required"); return; }
+    // 요청 판정 한 곳: 로컬 / 원격(허용 호스트 + 유효한 Access 토큰) / 거부. 원격은 조회만 한다.
+    if (centerHandler) {
+      const verdict=await judgeRequest(request,remoteGate);
+      if (verdict.kind==='deny') { response.writeHead(verdict.status); response.end(verdict.message); return; }
+      if (verdict.kind==='remote') {
+        request.kadanRemote=true;
+        if (!['GET','HEAD'].includes(request.method)) { response.writeHead(405,{allow:'GET, HEAD'}); response.end('원격은 조회만 지원합니다'); return; }
+        url.searchParams.delete('fresh'); // 캐시 비우기는 원격에서 무시한다
+      }
+    }
+    const remoteView=request.kadanRemote===true;
+    // 원격 응답은 쓰기 토큰이 없는 화면이라 로컬과 캐시를 나눈다. 같은 주소의 로컬 화면(토큰 포함)이 원격에 나가면 안 된다.
+    const cacheUrl=remoteView?(()=>{const copy=new URL(url);copy.searchParams.set('__remote','1');return copy;})():url;
     if(url.pathname.startsWith('/api/dashboard/')){
       if(!centerHandler){response.writeHead(503);response.end('대시보드 저장소 없음');return;}
       if(request.method!=='GET'){response.writeHead(405,{allow:'GET'});response.end('조회만 지원합니다');return;}
-      if(request.headers['sec-fetch-site']==='cross-site'||request.headers.origin&&request.headers.origin!==`http://${request.headers.host}`){response.writeHead(403);response.end('다른 사이트에서 조회할 수 없습니다');return;}
-      if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify({token:centerHandler.token}));return;}
+      if(request.headers['sec-fetch-site']==='cross-site'||request.headers.origin&&!sameOrigin(request)){response.writeHead(403);response.end('다른 사이트에서 조회할 수 없습니다');return;}
+      if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true}:{token:centerHandler.token}));return;}
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
     if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
- if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(url);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
-    if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(url),remember:(body,type)=>remember(url,body,type)})) return;
+ if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(cacheUrl);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
+    if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(cacheUrl),remember:(body,type)=>remember(cacheUrl,body,type)})) return;
     if (centerHandler && await centerHandler.handle(request,response,url)) { clear(); return; }
     // 수집이 오래 걸려 줄이 밀리면 화면은 이미 시간 초과로 연결을 끊은 뒤다. 새 수집을 시작하기 전에 양보해
     // 끊긴 연결을 알아채고, 아무도 기다리지 않는 요청은 계산하지 않는다(2026-10-14: 11~41초 응답이 겹쳐 쌓였다).
@@ -516,14 +532,14 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     }
     if (url.pathname === '/api/cards') {
       const body=JSON.stringify({center:snapshot.center&&centerSummary(snapshot.center),error:snapshot.centerError});
-      if(!snapshot.centerError)remember(url,body,'application/json; charset=utf-8',sharedSnapshot?.at);
+      if(!snapshot.centerError)remember(cacheUrl,body,'application/json; charset=utf-8',sharedSnapshot?.at);
       response.writeHead(snapshot.centerError?503:200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});
       response.end(body); return;
     }
     if(centerHandler&&url.pathname.startsWith('/api/dashboard/')){sendDashboardData(snapshot,url,response);return;}
     if (centerHandler && url.searchParams.get('legacy')!=='1') {
-      const html=renderCenterWall(snapshot,{token:centerHandler.token,url});
-      remember(url,html,'text/html; charset=utf-8',sharedSnapshot?.at);
+      const html=renderCenterWall(snapshot,{token:remoteView?'':centerHandler.token,url});
+      remember(cacheUrl,html,'text/html; charset=utf-8',sharedSnapshot?.at);
       response.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});response.end(html);return;
     }
     let html = renderWallHtml({
@@ -542,7 +558,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       kind: url.searchParams.get("kind") ?? "",
     });
     if(url.searchParams.get("legacy")=== "1") html=html.replace("<body>",'<body><div style="padding:16px;background:#fff0d0">참고용 옛 화면: 진행률은 현재 중앙 상태와 다를 수 있습니다. <a href="/">새 화면으로 돌아가기</a></div>');
-    remember(url,html,'text/html; charset=utf-8',sharedSnapshot?.at);
+    remember(cacheUrl,html,'text/html; charset=utf-8',sharedSnapshot?.at);
     response.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
@@ -554,7 +570,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
   });
   // 요청을 다 보내고 쓰기 쪽만 닫은 클라이언트도 응답을 받는다(기본값은 상대가 닫으면 이쪽도 닫는다).
   server.httpAllowHalfOpen=true;
-  server.on('close',()=>{clearTimeout(warming);warming=null;});
+  server.on('close',()=>{clearTimeout(warming);warming=null;remoteGate?.stop();});
   return server;
 }
 

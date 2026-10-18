@@ -22,9 +22,10 @@ export const time = (value?: string | null) =>
     : "시각 모름";
 export const AppContext = createContext<{
   token: string;
+  readOnly: boolean;
   draft: (key: string, dirty: boolean) => void;
   notice: (text: string) => void;
-}>({ token: "", draft: () => {}, notice: () => {} });
+}>({ token: "", readOnly: false, draft: () => {}, notice: () => {} });
 export function CardLink({
   row,
   children,
@@ -173,7 +174,11 @@ export function Pages({
   );
 }
 
-export function ActionForm({
+// 원격 보기(읽기 전용)에서는 쓰기 폼을 그리지 않는다.
+export function ActionForm(props: Parameters<typeof ActionFormInner>[0]) {
+  return useContext(AppContext).readOnly ? null : <ActionFormInner {...props} />;
+}
+function ActionFormInner({
   spec,
   entityKey,
   revision,

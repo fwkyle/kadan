@@ -60,7 +60,8 @@ type RunnersData = Stamp & {
 // 담당자 상태(지금 열린 창의 모델)와 실행 모델 설정(다음 발령의 모델)은 같은 질문 "어느 모델인가"의 지금·다음이라
 // 한 화면에 둔다(2026-10-05 점검 보고서 3부). 옛 주소 #sessions는 아래 절로 내려온다.
 export default function Runners({ url }: { url: URL }) {
-  const resource = useResource<RunnersData>("runners"),
+  const { readOnly } = useContext(AppContext),
+    resource = useResource<RunnersData>("runners"),
     data = resource.data,
     scrolled = useRef("");
   useEffect(() => {
@@ -149,6 +150,8 @@ export default function Runners({ url }: { url: URL }) {
               </tbody>
             </table>
           </div>
+          {!readOnly && (
+            <>
           <h2>모델·대체 후보 변경</h2>
           <p className="muted">
             대체 후보(폴백)는 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
@@ -219,6 +222,8 @@ export default function Runners({ url }: { url: URL }) {
               }}
             />
           </details>
+            </>
+          )}
           <details>
             <summary>최근 변경</summary>
             {data.history.map((h, i) => (
