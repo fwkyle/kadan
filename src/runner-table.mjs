@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {commandWords} from './ai-identity.mjs';
 import {conversationOf} from './conversation-ref.mjs';
+import {INLINE_FLAG} from './inline-screen.mjs';
 
 // listModels: 실행기가 자기 모델 목록을 내는 명령 틀(자리 없음). 화면의 '목록 불러오기'를 누를 때만 실행한다.
 // 이름이 models가 아닌 이유: runners.<실행기>.models는 이미 등록된 모델·강도 목록이다.
@@ -88,7 +89,8 @@ const slotMatches = (word, templateWord) => templateWord.includes(SENTINEL.conve
 export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   if (!CONVERSATION_ID.test(String(conversation))) throw new Error('대화 ID 형식이 안전하지 않다');
   const tail = resumeTail(settings, runner);
-  const words = commandWords(typeof oldCmd === 'string' ? oldCmd.trim() : oldCmd);
+  // 카단이 붙인 --no-alt-screen은 꼬리 비교 앞에서 떼고, 호출자가 다시 붙인다(inline-screen.mjs).
+  const words = commandWords(typeof oldCmd === 'string' ? oldCmd.trim() : oldCmd)?.filter(word => word !== INLINE_FLAG);
   if (!words?.length) throw new Error('마지막 시작 명령을 읽을 수 없다(셸 결합·주석·확장이 있다)');
   // 이전 restart가 붙인 resume 꼬리, 또는 대화를 갈라 연 fork 꼬리(adopt 등)면 떼고 현재 대화의 resume 꼬리를 붙인다.
   // 갈라 연 역할의 "지금 대화"는 원본이 아니라 살아 있는 대화(conversation)이므로 resume으로 바꾸는 것이 맞다.

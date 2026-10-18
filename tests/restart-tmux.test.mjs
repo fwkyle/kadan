@@ -201,7 +201,7 @@ test('실제 CLI: 본체가 직접 연 저장 대화(B)는 같은 대화로 다�
   const result = restart('bodycase');
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const start = readLedger().filter(e => e.session === 'kadan-bodycase' && e.kind === 'start').at(-1);
-  assert.match(start.cmd, new RegExp(`resume ${B}$`));
+  assert.match(start.cmd, new RegExp(`resume ${B} --no-alt-screen$`));
   assert.equal(start.restartConversation, B);
   assert.notEqual(String(tmuxFloor.pid('kadan-bodycase')), String(created.panePid));
   assert.equal(readLedger().filter(e => e.session === 'kadan-bodycase' && e.kind === 'send').length, 0, '같은 대화로 이어 열면 첫 안내를 보내지 않는다');
@@ -222,5 +222,5 @@ test('실제 CLI: 본체와 하위 프로세스가 같은 대화 하나만 열�
   launch({HOLD: s.rollout(B), SPAWN_SAME: '1', SAME_HOLD: s.rollout(B)}, s, 'kadan-chaincase', 'chaincase');
   const result = restart('chaincase');
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(readLedger().filter(e => e.session === 'kadan-chaincase' && e.kind === 'start').at(-1).cmd, new RegExp(`resume ${B}$`));
+  assert.match(readLedger().filter(e => e.session === 'kadan-chaincase' && e.kind === 'start').at(-1).cmd, new RegExp(`resume ${B} --no-alt-screen$`));
 });

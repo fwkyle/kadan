@@ -80,7 +80,7 @@ test('발령 명령은 활성 프리셋의 역할 값으로 실행기 틀을 채
   const f = fixture(); initialize(f);
   setRole(f.home, {role:'worker', runner:'codex', model:'xai/grok-4.7-build-fast', effort:'xhigh', revision:1, by:'kyle', reason:'시험', record:f.record, ...f.options});
   const launch = launchFor(readSettings(f.home), 'worker');
-  assert.equal(launch.cmd, 'codex -p lite --model xai/grok-4.7-build-fast -c model_reasoning_effort="xhigh"');
+  assert.equal(launch.cmd, 'codex -p lite --model xai/grok-4.7-build-fast -c model_reasoning_effort="xhigh" --no-alt-screen');
   assert.equal(launch.revision, 2);
   assert.equal(launchFor(readSettings(f.home), 'reviewer'), null);
   assert.equal(launchFor(readSettings(f.home), 'secretary'), null);
@@ -98,7 +98,7 @@ test('CLI: runners set/show와 start --profile 자동 채움·다른 명령의 �
     ok('runners', 'init', '--reason', '시험');
     ok('runners', 'set', 'worker', '--runner', 'codex', '--model', 'xai/grok-4.7-build-fast', '--effort', 'xhigh', '--revision', '1', '--reason', '시험');
     const shown = JSON.parse(ok('runners', 'show'));
-    assert.equal(shown.launch.worker, 'codex -p lite --model xai/grok-4.7-build-fast -c model_reasoning_effort="xhigh"');
+    assert.equal(shown.launch.worker, 'codex -p lite --model xai/grok-4.7-build-fast -c model_reasoning_effort="xhigh" --no-alt-screen');
     // 다른 명령은 이유 없이 거부하고 세션을 만들지 않는다.
     const refused = run('start', 'rs-worker-a', '--hidden', '--profile', 'worker', '--cmd', 'cat');
     assert.notEqual(refused.status, 0); assert.match(refused.stderr, /--reason/);

@@ -184,7 +184,7 @@ test('adopt처럼 갈라 연(claude --resume X --fork-session) 역할도 살아 
 test('codex: 첫 입력 뒤(rollout 열림)면 resume 명령으로 다시 띄운다', () => {
   const f = fixture({cmd: CODEX, openFiles: [`/h/.codex/sessions/2026/10/14/rollout-2026-10-14T16-35-00-${ID}.jsonl`, `/h/.codex/thread-writer-locks/${ID}.lock`]});
   f.run();
-  assert.equal(f.entries.at(-1).cmd, `codex -p lite --model gpt-6-sol -c model_reasoning_effort=low resume ${ID}`);
+  assert.equal(f.entries.at(-1).cmd, `codex -p lite --model gpt-6-sol -c model_reasoning_effort=low resume ${ID} --no-alt-screen`);
 });
 
 // ---- 비서: kadan up과 같은 체크포인트 경로 ----
@@ -245,14 +245,14 @@ test('대화 파일의 주인: 본체는 A lock만, 자식 도구가 B 저장 �
 test('대화 파일의 주인: 본체가 연 대화는 진행하고, 래퍼 아래 실제 바이너리가 연 경우도 진행한다', () => {
   const body = fixture({cmd: CODEX, extraTree: [PLUGIN], held: {150: [ROLLOUT(B)], 160: [ROLLOUT(ID)]}});
   body.run();
-  assert.match(body.entries.at(-1).cmd, new RegExp(`resume ${B}$`));
+  assert.match(body.entries.at(-1).cmd, new RegExp(`resume ${B} --no-alt-screen$`));
   // codex 실제 트리(2026-10-14 실측): node 래퍼(.../bin/codex)가 네이티브 바이너리를 띄우고, 파일은 네이티브가 연다.
   const NATIVE = '/n/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low';
   const wrapped = fixture({cmd: CODEX, held: {151: [ROLLOUT(B), `/h/.codex/thread-writer-locks/${B}.lock`]}});
   wrapped.deps.processTree = () => [{pid: '100', ppid: '1', args: 'node /n/bin/codex -p lite --model gpt-6-sol -c model_reasoning_effort=low'},
     {pid: '151', ppid: '100', args: NATIVE}, {pid: '160', ppid: '151', args: 'node /h/.codex/plugins/x/server.mjs'}];
   wrapped.run();
-  assert.match(wrapped.entries.at(-1).cmd, new RegExp(`resume ${B}$`));
+  assert.match(wrapped.entries.at(-1).cmd, new RegExp(`resume ${B} --no-alt-screen$`));
 });
 
 test('대화 파일의 주인: 본체 프로세스를 못 찾으면(다른 모델·다른 실행기뿐) 거절한다', () => {
