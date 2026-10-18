@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useResource } from "../resource";
 import { navigate } from "../navigation";
 import type { Decision, Stamp } from "../types";
-import { ActionForm, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
-import { readFolded, saveFolded, toggleFolded } from "../decision-fold";
+import { ActionForm, AppContext, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
+import { readFolded, saveFolded, toggleFolded, unfoldTarget } from "../decision-fold";
+import { focusLinkedField, linkMode, linkOutcome, linkTarget } from "../decision-link";
 
 const storage = (() => { try { return window.localStorage; } catch { return null; } })();
 
@@ -18,20 +19,38 @@ export default function Decisions({ url }: { url: URL }) {
   for (const d of open) seen.current.set(d.id, d);
   const kept = [...drafts].filter(id => !open.some(d => d.id === id) && seen.current.has(id)).map(id => ({...seen.current.get(id)!, status: "closed"}));
   const items = [...open, ...kept];
-  const target = url.hash.startsWith("#decision-") ? decodeURIComponent(url.hash.slice(10)) : "";
-  const scrolled = useRef("");
+  const target = linkTarget(url.hash);
+  const [folded, setFolded] = useState(() => unfoldTarget(readFolded(storage), target));
+  const { readOnly, decisionToken } = useContext(AppContext);
+  const scrolled = useRef(""), focused = useRef("");
   useEffect(() => {
     const element = target && document.getElementById("decision-"+target);
-    if (element && scrolled.current !== target) { element.scrollIntoView({block:"start"}); scrolled.current=target; }
-  }, [target, data]);
+    if (!element) return;
+    if (scrolled.current !== target) { element.scrollIntoView({block:"start"}); scrolled.current=target; }
+    // 알림 링크로 열리면 답하기 양식(선택된 추천안 또는 첫 칸)에 바로 초점을 둔다. 접힘 해제·session(결정 token) 준비로
+    // 양식이 그려진 뒤에야 찾을 수 있으니, 찾을 때까지 이 효과가 다시 돌게 한다.
+    // 숨겨진(접힌) 양식에는 초점이 가지 않는다. 실제로 초점이 옮겨졌을 때만 '줬다'고 기록해, 펼친 뒤 효과가 다시 돌아 준다.
+    focused.current = focusLinkedField(element, target, focused.current, () => document.activeElement);
+  }, [target, data, folded, readOnly, decisionToken]);
   const draft = useCallback((id: string, dirty: boolean) => setDrafts(previous => {
     if (previous.has(id) === dirty) return previous;
     const next = new Set(previous);
     if (dirty) next.add(id); else next.delete(id);
     return next;
   }), []);
-  const [folded, setFolded] = useState(() => readFolded(storage));
   const openIds = data ? open.map(d=>d.id) : null;
+  // 다른 링크로 옮겨 온 경우(첫 화면 밖)에도 대상이 접혀 있으면 펼치고 저장한다.
+  const unfolded = useRef("");
+  useEffect(() => {
+    // 링크마다 한 번만: 그 뒤 사용자가 직접 접는 것은 막지 않는다.
+    if (!target || unfolded.current === target) return;
+    // 첫 화면은 초기 상태에서 이미 펼쳤으니 저장 목록에 남은 id만 지운다.
+    if (!folded.has(target)) { unfolded.current = target; if (readFolded(storage).has(target)) saveFolded(storage, folded, openIds); return; }
+    unfolded.current = target;
+    const next = unfoldTarget(folded, target);
+    setFolded(next);
+    saveFolded(storage, next, openIds);
+  }, [target, folded, openIds?.join("\n")]);
   const toggleFold = useCallback((id: string) => setFolded(previous => {
     const next = toggleFolded(previous, id);
     saveFolded(storage, next, openIds);
@@ -52,11 +71,22 @@ export default function Decisions({ url }: { url: URL }) {
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
     <div className="decision-progress"><span>대기 {open.length}건{foldedCount ? ` · 접어 둔 결정 ${foldedCount}건` : ""} · 답한 결정 {answered}건</span><div className="track"><span style={{width:(answered+open.length ? answered/(answered+open.length)*100 : 0)+"%"}}/></div><button onClick={toggleSort}>정렬: {newest?"최신 순":"오래된 순"}</button></div>
     {!data ? <Loading/> : <>
+      {data && linkMode(target, open.map(d=>d.id)) === "lookup" && <LinkedDecision id={target}/>}
       <div className="decision-list">{items.map(d=><DecisionRequest key={d.id} decision={d} draft={draft} folded={folded.has(d.id)} onToggleFold={toggleFold}/>)}</div>
       {!open.length && <p className="empty">기다리는 결정이 없습니다.</p>}
       <details className="st-fold" open={previous} onToggle={e=>setPrevious(e.currentTarget.open)}><summary>이전 결정 {past}건</summary>{previous && <PastDecisions newest={newest}/>}</details>
     </>}
   </section>;
+}
+// 알림 링크가 가리킨 결정이 열린 목록에 없을 때: 이미 답했거나 취소됐으면 상태만, 모르는 id면 안내 문구만 보인다(양식 없음).
+function LinkedDecision({id}: {id: string}) {
+  const resource = useResource<Stamp & {item: Decision | null}>(`decisions?id=${encodeURIComponent(id)}`), item = resource.data?.item;
+  const outcome = linkOutcome(resource.data ? item : undefined);
+  if (outcome === "loading" || outcome === "open") return null;
+  return <aside className="decision-linked" id={"decision-"+id} role="status">
+    {outcome === "unknown" ? <p>이 링크의 결정을 찾을 수 없습니다. 이미 정리됐거나 주소가 잘못됐을 수 있습니다.</p>
+      : <><h2>{item!.questionTitle ?? item!.question}</h2><p>{outcome === "answered" ? "이미 답한 결정입니다." : "취소된 결정입니다."} {item!.answer?.text || item!.cancelReason}</p><p>{time(item!.answer?.at || item!.at)}</p></>}
+  </aside>;
 }
 function PastDecisions({newest}: {newest: boolean}) {
   const [page, setPage] = useState(1);
