@@ -741,11 +741,23 @@ test('S7 KADAN_NOTIFY=off·설정 없음·레포 키 없음·글 없음이면 �
     const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-empty-'));
     assert.equal(refreshWorkStatus(emptyHome, 'kadan/work-x', {env: {KADAN_NOTIFY: ''}}).outcome, 'none'); // 설정 없음
     assert.equal(w.forum.requests().length + w.base.requests().length, 0);
-    const w2 = await forumWorld(['T1']); // 레포 키는 있지만 알림이 한 번도 안 나간 업무(글 없음)
+    const w2 = await forumWorld(['T1']); // 레포 키는 있지만 글이 아직 없는 열린 업무: 첫 상태 글을 업무당 한 번 만든다(조용히, 멘션 없음)
     try {
       mkWork(w2.base.home);
-      assert.equal(refreshWorkStatus(w2.base.home, 'kadan/work-x', {env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w2.base.envFile}}).outcome, 'none');
-      assert.equal(w2.forum.requests().length, 0);
+      const e2 = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w2.base.envFile};
+      assert.equal(refreshWorkStatus(w2.base.home, 'kadan/work-x', {env: e2}).outcome, 'sent');
+      const first = w2.forum.requests();
+      assert.equal(first.length, 1);
+      assert.ok(bodyOf(first[0]).thread_name && isStatus(first[0]) && /wait=true/.test(first[0].url));
+      assert.deepEqual(bodyOf(first[0]).allowed_mentions, {parse: []});
+      assert.equal(bodyOf(first[0]).flags, 4096);                   // 조용히
+      assert.ok(w2.rawThreads()['kadan/work-x'].statusMessageId);
+      // 두 번째부터는 새 글 없이 같은 메시지만 고친다
+      refreshWorkStatus(w2.base.home, 'kadan/work-x', {env: e2});
+      const after = w2.forum.requests();
+      assert.equal(after.length, 2);
+      assert.ok(!bodyOf(after[1]).thread_name && /thread_id=/.test(after[1].url));
+      assert.equal(w2.base.requests().length, 0);
     } finally { w2.stop(); }
   } finally { w.stop(); }
 });

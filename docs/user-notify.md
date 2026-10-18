@@ -11,8 +11,8 @@
 | 알림 | 부르는 곳 | 중복 막기 키 | 휴대폰 |
 |---|---|---|---|
 | **감시 경보의 `@user` 전달** | `watch-runner.mjs` | `alert:<경보 id>:<단계>` (10분 창) | **울림**(멘션) |
-| **RED·죽음 경보의 사용자 겹알림** | `watch-runner.mjs` | `alert:<경보 id>:<단계>:겹알림` (10분 창) | **울림**(멘션) |
-| **감시 AI의 사용자 경보**(직행·상신, RED·죽음 겹알림)와 일반 감시기의 `@user` 전달 | `commands/watch.mjs` `sendWatchMessage` (`watch-report.mjs` `WatchReports.deliver`가 부름) | 없음 | **울림**(멘션) |
+| **RED·죽음 경보의 사용자 겹알림** | `watch-runner.mjs` | `alert:<경보 id>:<단계>:겹알림` (10분 창) | 새 글 정책으로 **안 보냄**(옛 동작: 울림) |
+| **감시 AI의 사용자 경보**(직행·상신. RED 사용자 사본은 안 보냄)와 일반 감시기의 `@user` 전달 | `commands/watch.mjs` `sendWatchMessage` (`watch-report.mjs` `WatchReports.deliver`가 부름) | 없음 | **울림**(멘션) |
 | 인계 사용자 통지 | `commands/handover.mjs` | 없음 | 조용히 |
 | 사용자 우편함에 온 편지 | `commands/send.mjs` | `mail:<우편 id>` | 조용히 |
 | **결정 요청** | `decisions.mjs` `request` | `decision:<id>:request` | **울림**(멘션) |
@@ -44,6 +44,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 - 디코에 **새 글**로 가는 것은 둘뿐이다. (a) kyle만 정할 결정. (b) kyle이 조치하지 않으면 풀리지 않는 장애(감독 사슬 맨 위까지 올라간 경보, 자동 되살리기 멈춤).
 - 그 밖의 소식은 새 글을 만들지 않는다. 업무 글이 이미 있으면 **상태 메시지 하나만 고쳐 쓰고**(`refreshWorkStatus`) 상세는 맥 대시보드에서 본다.
 - 억제는 **게시 단계에서만** 한다(`src/notify-policy.mjs`의 `postPolicy`, `notifyUser`가 부른다). 감시 `alert` 원장 줄, 대시보드 열린 경보 목록, `/api/dashboard/status`는 바뀌지 않는다. 안 보낸 알림도 `notify-log.jsonl`에 `outcome: policy-skip`(사유 포함)로 한 줄 남는다. 새 원장 종류는 없다.
+- 업무 글이 아직 없는 열린 업무는 첫 발령·첫 상태 갱신 때 업무 글과 상태 메시지를 **업무당 한 번** 조용히 만든다(`createWorkThread`). 그 뒤 발령·완료·진행은 같은 메시지만 고친다.
 - 종류를 정하지 못한 알림은 **안 보냄**이 기본이다. 새 알림 종류를 만들면 `postPolicy`에 올려야 디코에 나간다.
 - 디코 설정이 없는 기계의 맥 시스템 알림은 정책과 무관하게 그대로다. 디코가 설정돼 있으면 예전에도 디코 성공 때 맥을 울리지 않았으므로, 안 보냄이어도 맥 알림은 내지 않는다.
 - 휴대폰·맥 울림 방식(멘션), 우편→디코 다리(`discord-mail`·`discord-route`), 내 차례 채널, 해결 글 보관은 이번에 바꾸지 않았다. 아래 표의 울림 칸은 다음 단계 자료다.
@@ -51,7 +52,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 ### 해결됨 표시
 
 - 결정: 답변·취소 때 요청 글을 `✅ 해결됨 — …`으로 고쳐 쓴다(기존 그대로, 시험으로 보인다).
-- 강화(이번): (b)로 사용자에게 올라간 경보 글도 그 경보가 풀리면(`changes.resolved`) 같은 방식으로 `✅ 해결됨 — <경보 해소 문구>`로 고쳐 쓴다. 글 id는 결정과 같은 장부(`notify-threads.json`의 `decisions`, 항목 id `alert:<경보 id>:<시각>`)에 둔다. 발생마다 새 항목이라 같은 경보가 다시 떠도 새 글이 막히지 않는다. 장부에 그 글 기록이 없으면 **아무것도 보내지 않는다**(`policy-skip`). 기록은 있는데 메시지가 지워졌으면(404) 결정과 같은 방식으로 해결 문구를 조용한 새 메시지로 올린다. 이 강화는 `watch-runner`의 `@user` 전달(1·3번)에만 붙었다. 전달 실패 승격(`sendAlert(failureRecipient, …)`)과 되살리기 멈춤(10번)은 풀림 사건이 없거나 경보 id가 없어 대상 밖이다. 풀릴 때 맥 알림도 없다. 장부는 결정과 공용인 최근 500건이라, 사용자 경보가 아주 많으면 오래된 결정 요청의 메시지 기록이 밀려나 답변 때 고치기 대신 새 메시지가 나갈 수 있다(빈도는 낮음). 기본 채널로 가던 사용자 경보는 이제 결정 경로(`sendDefaultDecision`, 상태 잠금)를 지나므로 잠금 대기가 생긴다.
+- 강화(이번): (b)로 사용자에게 올라간 경보 글도 그 경보가 풀리면(`changes.resolved`) 같은 방식으로 `✅ 해결됨 — <경보 해소 문구>`로 고쳐 쓴다. 글 id는 결정과 같은 장부(`notify-threads.json`의 `decisions`, 항목 id `alert:<경보 id>:<시각>`)에 둔다. 발생마다 새 항목이라 같은 경보가 다시 떠도 새 글이 막히지 않는다. 장부에 그 글 기록이 없으면 **아무것도 보내지 않는다**(`policy-skip`). 기록은 있는데 메시지가 지워졌으면(404) 결정과 같은 방식으로 해결 문구를 조용한 새 메시지로 올린다. 이 강화는 `watch-runner`의 `@user` 전달(1·3번)에만 붙었다. 전달 실패 승격(`sendAlert(failureRecipient, …)`)과 되살리기 멈춤(10번)은 풀림 사건이 없거나 경보 id가 없어 대상 밖이다. 풀릴 때 맥 알림도 없다. 장부의 보존 한도는 나눠져 있다: 결정 요청 기록은 최근 500건, 경보 글 기록(`alert:` 항목)은 따로 최근 200건이다. 경보가 아무리 많아도 결정 요청 기록은 밀려나지 않는다. 기본 채널로 가던 사용자 경보는 이제 결정 경로(`sendDefaultDecision`, 상태 잠금)를 지나므로 잠금 대기가 생긴다.
 - 한계: 감시 프로세스가 재시작되면 메모리에 둔 경보 id → 글 항목 연결이 사라져 그 글은 고쳐지지 않는다(다음 단계에서 장부에서 되찾기).
 
 ### 전수 표
@@ -64,7 +65,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 2 | `watch-runner.mjs` RED·죽음 겹알림 | `alert` + `overlap` | 새 글 | 울림 | **안 보냄** | 감독에게 이미 간 같은 경보의 사본이다. 감독이 응답하지 않으면 1번으로 올라온다 |
 | 3 | `commands/watch.mjs` `sendWatchMessage('@user')` | `alert` (감시 AI 직행·일반 감시기 전달) | 새 글 | 울림 | **새 글 유지**(b) | 라우팅이 `@user`로 정한 경보다 |
 | 4 | `watch-report.mjs` `deliver` RED 사용자 사본 | `alert` + `overlap` | 새 글 | 울림 | **안 보냄** | 2번과 같은 사본 |
-| 5 | 경보 `알림밀림` (라우팅 `notify-held`) | `alert`, alertKind `알림밀림` | 새 글 | 울림 | **안 보냄** — 판단 필요, 추천=안 보냄 | kyle이 그 창에서 입력 중이라 밀린 것이고 5번 밀리면 입력 보호만 풀려 스스로 풀린다. 대시보드 열린 경보로는 남는다 |
+| 5 | 경보 `알림밀림` (라우팅 `notify-held`) | `alert`, alertKind `알림밀림` + holdCode | 새 글 | 울림 | **사유별**: 입력 보호처럼 스스로 풀리는 사유(`KADAN_HUMAN_ACTIVE`·`KADAN_HUMAN_ACTIVITY_UNKNOWN`·`KADAN_PANE_INPUT_PENDING`·`KADAN_PANE_INPUT_UNKNOWN`·`KADAN_PANE_IN_MODE`)는 **안 보냄**, 신뢰 승인 화면(`KADAN_HERDR_TRUST_PROMPT`)·herdr 준비 안 됨·스크롤·상태 모름·**사유를 모르는 밀림은 새 글 유지**(b) | 사람 입력 보호는 5번 뒤 force로 풀리지만 신뢰 승인 화면은 force로도 안 풀려 kyle이 승인해야 한다(PR #192 검수 F1). 같은 경보는 10분 중복 막기가 그대로 적용된다 |
 | 6 | 경보 `감시AI오류` (`judge-failure`) | `alert`, alertKind `감시AI오류` | 새 글 | 울림 | **새 글 유지**(b) | 감시 AI 호출 설정은 운영자(kyle)만 고친다 |
 | 7 | 경보 `자원`(recipient 명시), `hierarchy:unreadable` | `alert` | 새 글 | 울림 | **새 글 유지**(b) — 판단 필요, 추천=유지 | 관계표를 못 읽으면 감독 사슬이 없다. 자원 경보는 recipient를 감시기가 정한 대로 따른다(현재 `@user`로만 오는 것을 코드에서 확인하지 못함) |
 | 8 | 경보 `훅신뢰` (**PR #191 `kyle/feat/stop-hook`, 아직 합쳐지지 않음**) | `alert`, alertKind `훅신뢰` | (합쳐지면) `@user` 전용 라우팅 → 1번 길로 새 글 | 울림 | **진행 중 PR의 새 종류, 새 글 유지 제안**(b) | 기계의 codex 훅 신뢰는 kyle만 승인한다. 상태가 같으면 한 번만 나간다. 이 PR은 #191을 합치지 않았다. 합쳐질 때 `postPolicy`는 바꿀 필요가 없다(`alert` 기본이 유지) |
@@ -76,7 +77,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 14 | `decisions.mjs:102` 결정 요청 | `decision-request` | 새 글(업무 글 또는 레포 `결정` 글) | 울림 | **새 글 유지**(a) | kyle만 정한다 |
 | 15 | `decisions.mjs` 답변·취소 | `decision-answer`·`decision-cancel` | 요청 글 고쳐 쓰기. 글을 못 찾을 때만 새 메시지 | 조용히 | **고쳐 쓰기 유지**(a의 마감) | 해결됨 표시. 새 메시지는 원래 글이 지워졌을 때뿐이다 |
 | 16 | `decisions.mjs:29` `postThreadNote` (`kadan discord send --thread --quiet`) | 해당 없음(`notifyUser` 우회) | 새 글 | 조용히 | **그대로**(이번 정책 코드 밖) — 판단 필요, 추천=유지 | kyle의 채팅 자유 답을 취소했다는 결정 글 안의 한 줄이다. 결정(a)의 일부라 새 글 목록에 두되, 다음 단계에서 요청 글 고쳐 쓰기로 합칠 수 있다 |
-| 17 | `user-notify.mjs` `refreshWorkStatus` 호출: `work-command.mjs:43`, `commands/done.mjs:17`, 정책 안 보냄 경로 | `status` | 상태 메시지 고쳐 쓰기. 글이 없으면 아무것도 안 함 | 없음 | **고쳐 쓰기** | 발령·완료·검수·진행은 이 한 메시지로 보인다. [실측] 코드에 발령이 업무 글을 처음 만드는 길은 없다. 글은 위 1·3·10·14번 같은 새 글 대상이 처음 올 때 만들어진다(업무당 1번) |
+| 17 | `user-notify.mjs` `refreshWorkStatus` 호출: `work-command.mjs:43`(update·execute·complete·cancel·reopen), `commands/done.mjs:17`, 정책 안 보냄 경로 | `status` | 글이 있으면 상태 메시지 고쳐 쓰기. **글이 없는 열린 업무는 첫 상태 글과 상태 메시지를 업무당 한 번 만든다**(멘션 없이 조용히). 끝난 업무는 만들지 않는다 | 없음 | **고쳐 쓰기 + 업무당 첫 글 1번** | 발령·완료·검수·진행은 이 한 메시지로 보인다. 업무당 1번 새 글은 카드가 허용한 예외다(PR #192 검수 F2) |
 | 18 | `user-notify.mjs` `syncStatus` 복구 | `status` | 상태 메시지가 지워졌으면 같은 글에 새 상태 메시지 1개, 글이 지워졌으면 새 글 1개 | 조용히 | **그대로** | 지워진 것을 되살리는 복구라 업무당 1개다 |
 | 19 | `discord-chat.mjs` `sendText` (`kadan discord send`) | 대화 답 | 새 글(#비서·스레드), `--quiet`는 조용히, `--edit`는 고치기 | 기본 울림 | **범위 밖**(표만) | 비서·슈퍼감독이 kyle과 하는 대화다 |
 | 20 | `discord-chat.mjs` `openThread`·`editThread` | 대화 | 스레드 만들기·이름·보관 | 없음 | **범위 밖** | 메시지가 아니라 스레드 조작이다 |
@@ -84,9 +85,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 22 | `discord-mail.mjs`·`discord-route.mjs` (#184) | 우편 다리 | 디코→우편 방향, 디코에 쓰지 않음 | 해당 없음 | **범위 밖** | 방향이 반대다 |
 | 23 | `thread-archive.mjs` 보관·재개 | 채널 조작 | 메시지 없음 | 없음 | **범위 밖** | 해결 글 보관은 다음 단계 |
 
-**업무 글이 없는 업무**: 결정·사용자 경보가 한 번도 없는 업무는 디코 글이 만들어지지 않아 상태 메시지도 없다(우편·인계가 더 이상 글을 만들지 않기 때문). 다음 단계 제안: 첫 발령 때 업무 글과 상태 메시지를 업무당 1번 만든다(판단 필요, 추천=그렇게 한다).
-
-판단 필요 요약: 5번 알림밀림(안 보냄), 7번 자원·관계표 경보(유지), 13번 사용자 우편(안 보냄), 16번 `postThreadNote`(유지). 코드가 지금 적용한 값은 위 표 그대로이며, 바꾸려면 `notify-policy.mjs` 한 곳만 고친다.
+판단 필요 요약: 7번 자원·관계표 경보(유지), 13번 사용자 우편(안 보냄), 16번 `postThreadNote`(유지). 코드가 지금 적용한 값은 위 표 그대로이며, 바꾸려면 `notify-policy.mjs` 한 곳만 고친다.
 
 ## 설정
 
@@ -171,7 +170,7 @@ kadan secrets unset discord
 | 보관된 글의 결정 해결 고치기 | 재개 PATCH → 요청 글 고치기 → 상태 PATCH → (끝난 업무면) 보관 PATCH | `decisions.<id>.resolved`, `archived:true`. 손으로 보관했으면 50083 → 재개 → 한 번만 다시 |
 | 끝난 업무 + 이미 보관된 글에 늦은 실행 done | 요청 0건 | 그대로 |
 
-- **대체 전달을 받는 알림:** `notifyUser`로 나가는 알림은 모두(결정 요청·답변·취소, 울림 경보, 막힘·겹알림, 우편·인계 알림) 업무 글에 못 쓰면 시스템 알림으로 내려간다. `systemFallback:false`인 조용한 알림(`revive`)과 `refreshWorkStatus`(상태 고치기)는 원래 대체 전달이 없어 건너뛰고 `notify-log`에만 남긴다.
+- **대체 전달을 받는 알림:** `notifyUser`로 나가는 알림은 모두(결정 요청·답변·취소, 울림 경보, 막힘. 새 글 정책으로 안 보내는 겹알림·우편·인계는 디코가 설정돼 있으면 맥 알림도 없다) 업무 글에 못 쓰면 시스템 알림으로 내려간다. `systemFallback:false`인 조용한 알림(`revive`)과 `refreshWorkStatus`(상태 고치기)는 원래 대체 전달이 없어 건너뛰고 `notify-log`에만 남긴다.
 - 봇 자식의 출력은 정수·고정 단어·가린 문자열만 받는다(반사된 `code`·`message`에 토큰이 실려도 나가지 않는다). `attempts`는 실제로 나간 요청 수다.
 - 디코 자동 재개방 여부는 **실측 미확인**(실제 전송 금지)이다. 그래서 두 경우를 모두 처리한다. 열린 업무로 돌아온 글(reopen)은 재개 뒤 다시 보관하지 않는다. 끝난 업무에 새 알림이 오면 재개 → 쓰기 → 고치기 뒤 다시 보관한다.
 - '보관된 스레드' 오류: 디스코드 JSON 오류 코드 `50083`("Tried to perform an operation on an archived thread, such as editing a message or adding a user to the thread."), 근거 [Discord Docs — JSON Error Codes](https://docs.discord.com/developers/topics/opcodes-and-status-codes). 웹훅 전송 결과에 `code`(숫자)만 담아 알아본다.
@@ -179,7 +178,7 @@ kadan secrets unset discord
 
 ### 경보를 업무 글로 (2단계)
 
-감시기가 사용자에게 경보를 보낼 때(`@user` 전달과 RED·죽음 겹알림), 경보의 실행 키(`taskId`)를 `WorkStore`의 실행 목록에서 찾아 **업무가 하나로 정해지면** `work`로 넘긴다(`watch-runner.mjs` `workKeyOfAlert`). 그 업무의 레포 포럼 키가 있으면 업무 글로 가고, 업무를 못 찾거나 여러 업무에 걸치거나 역할 단위 경보(감독 멈춤·관계표 읽기 실패 등)면 지금처럼 #브리핑이다. 경보 원장 기록과 `status?super=` 응답은 바뀌지 않는다.
+감시기가 사용자에게 경보를 보낼 때(`@user` 전달. RED·죽음 겹알림은 새 글 정책으로 안 보낸다), 경보의 실행 키(`taskId`)를 `WorkStore`의 실행 목록에서 찾아 **업무가 하나로 정해지면** `work`로 넘긴다(`watch-runner.mjs` `workKeyOfAlert`). 그 업무의 레포 포럼 키가 있으면 업무 글로 가고, 업무를 못 찾거나 여러 업무에 걸치거나 역할 단위 경보(감독 멈춤·관계표 읽기 실패 등)면 지금처럼 #브리핑이다. 경보 원장 기록과 `status?super=` 응답은 바뀌지 않는다.
 
 ### 포럼 태그 조사 (구현은 3단계)
 
@@ -228,9 +227,9 @@ kadan secrets unset discord
 
 ## 멘션 통제
 
-**울리는 기준은 멘션 하나다.** 사용자를 멘션하는 요청(`allowed_mentions: {users:[ID]}`)만 알림이 울린다. 결정 요청은 본문이 `[레포] <@사용자ID>`로 시작하고, 감시 경보의 `@user` 전달과 RED·죽음 겹알림은 호출 쪽이 `ring: true`를 주면 `notifyUser`가 본문 맨 앞에 같은 방식으로 `<@사용자ID>`를 붙인다.
+**울리는 기준은 멘션 하나다.** 사용자를 멘션하는 요청(`allowed_mentions: {users:[ID]}`)만 알림이 울린다. 결정 요청은 본문이 `[레포] <@사용자ID>`로 시작하고, 감시 경보의 `@user` 전달은 호출 쪽이 `ring: true`를 주면 `notifyUser`가 본문 맨 앞에 같은 방식으로 `<@사용자ID>`를 붙인다.
 
-감시 AI 경로(`sendWatchMessage`의 `@user` 분기)도 같다. 이 길로 나가는 `@user` 메시지는 모두 경보라서 구분 없이 울린다(안내성 메시지가 지나는 근거가 없고, 울릴 것을 놓치는 쪽이 더 나쁘다). 나머지는 모두 `postDiscordWebhook`이 웹훅 payload에 `flags: 4096`(SUPPRESS_NOTIFICATIONS)을 넣어 보낸다. 글은 그대로 보이고 알림만 울리지 않는다. 멘션이 없는 요청은 `allowed_mentions: {parse:[]}`라서 본문에 `@everyone`·`<@…>`가 섞여도 아무도 호출되지 않는다. **기본값이 조용히**라서 나중에 새로 생기는 알림 종류도 멘션을 붙이지 않으면 울리지 않는다. 메시지 고치기(PATCH)는 새 알림이 아니라서 `flags`를 붙이지 않는다.
+감시 AI 경로(`sendWatchMessage`의 `@user` 분기)도 같다. 이 길로 나가는 `@user` 메시지는 경보라서 구분 없이 울린다(단 `overlap` 사본은 새 글 정책에서 걸러져 나가지 않는다)(안내성 메시지가 지나는 근거가 없고, 울릴 것을 놓치는 쪽이 더 나쁘다). 나머지는 모두 `postDiscordWebhook`이 웹훅 payload에 `flags: 4096`(SUPPRESS_NOTIFICATIONS)을 넣어 보낸다. 글은 그대로 보이고 알림만 울리지 않는다. 멘션이 없는 요청은 `allowed_mentions: {parse:[]}`라서 본문에 `@everyone`·`<@…>`가 섞여도 아무도 호출되지 않는다. **기본값이 조용히**라서 나중에 새로 생기는 알림 종류도 멘션을 붙이지 않으면 울리지 않는다. 메시지 고치기(PATCH)는 새 알림이 아니라서 `flags`를 붙이지 않는다.
 
 본문은 2,000자를 넘으면 앞을 줄이고 맨 끝 줄(맥 링크 `http://127.0.0.1:8790/#decision-<ID>`)은 남긴다. 포트는 대시보드 기본값 8790이며, 대시보드 포트를 저장하는 설정은 아직 없다.
 
@@ -238,7 +237,8 @@ kyle 안내: 디스코드 서버 알림을 **'@멘션만'**으로 바꾸면 위 
 
 | 종류 | 휴대폰 |
 |---|---|
-| 결정 요청, 감시 경보의 `@user`·RED 겹알림 | 울림(멘션) |
+| 결정 요청, 감시 경보의 `@user` 전달(사슬 맨 위까지 올라온 경보) | 울림(멘션) |
+| RED·죽음 겹알림(감독에게 간 경보의 사용자 사본) | **새 글로 나가지 않는다**("새 글 정책" 2·4번). 감독이 응답하지 않으면 `@user` 전달이 대신 울린다 |
 | 기반 프로세스 되살리기 상한(1시간 3번 넘게 꺼져 더 띄우지 않음)·살아 있는 창이 막힘(`kadan up --auto`) | 울림(멘션) |
 | 기반 프로세스를 다시 띄웠다는 알림(`kadan up --auto`) | 조용히 |
 | #비서 봇 최종 답(`kadan discord send`의 새 글, 나뉘면 첫 조각) | 울림(멘션) |

@@ -143,10 +143,10 @@ export async function runWatch({
   const sendToRole = sendAlert;
   // 사용자에게 올라간 경보의 디코 글을 해결 때 '✅ 해결됨'으로 고치려고, 경보 id → 글 장부 id(발생마다 새 id)를 둔다.
   const userPosts = new Map();
-  sendAlert = (role, message, key, work, repo, alertKind, alertId) => {
+  sendAlert = (role, message, key, work, repo, alertKind, alertId, holdCode) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
     const post = alertId ? `alert:${alertId}:${now()}` : undefined;
-    const errorText = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, dedupWindowMs: ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})}).error;
+    const errorText = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, dedupWindowMs: ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})}).error;
     if (!errorText && post) userPosts.set(alertId, {post, work, repo});
     if (errorText) {
       const error = new Error(`사용자 알림 실패: ${errorText}`);
@@ -658,7 +658,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id);
+          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {

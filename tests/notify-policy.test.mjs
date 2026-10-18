@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {notifyUser, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
-import {postPolicy} from '../src/notify-policy.mjs';
+import {postPolicy, KNOWN_KINDS} from '../src/notify-policy.mjs';
+import {setDecision, readDecisions} from '../src/notify-threads.mjs';
 
 // 가짜 값만 쓴다. 이 시험 파일의 어떤 값도 실제 주소·ID가 아니다.
 const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
@@ -35,7 +36,11 @@ test('정책 표: 새 글은 결정·최상위 경보·되살리기 멈춤뿐이
   for (const kind of ['decision-request', 'decision-answer', 'decision-cancel']) assert.equal(postPolicy({kind}).post, true, kind);
   assert.equal(postPolicy({kind: 'alert'}).post, true);
   assert.equal(postPolicy({kind: 'alert', overlap: true}).post, false);
-  assert.equal(postPolicy({kind: 'alert', alertKind: '알림밀림'}).post, false);
+  // 알림밀림: 입력 보호처럼 스스로 풀리는 사유만 안 보낸다. 신뢰 승인·모르는 사유·사유 없음은 새 글(PR #192 검수 F1).
+  for (const holdCode of ['KADAN_HUMAN_ACTIVE', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_INPUT_PENDING', 'KADAN_PANE_IN_MODE'])
+    assert.equal(postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode}).post, false, holdCode);
+  for (const holdCode of ['KADAN_HERDR_TRUST_PROMPT', 'KADAN_HERDR_NOT_READY', 'KADAN_HERDR_SCROLLED', 'KADAN_PANE_MODE_UNKNOWN', 'KADAN_NEW_CODE', undefined])
+    assert.equal(postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode}).post, true, String(holdCode));
   assert.equal(postPolicy({kind: 'alert', alertKind: '감시AI오류'}).post, true);
   for (const key of ['revive-corrupt', 'revive-stuck:watch', 'revive-capped:비서']) assert.equal(postPolicy({kind: 'revive', key}).post, true, key);
   assert.equal(postPolicy({kind: 'revive'}).post, false);
@@ -100,4 +105,32 @@ test('경보 글은 풀릴 때 같은 메시지를 ✅ 해결됨으로 고치고
     assert.equal(w.requests().length, 2);
     assert.equal(w.osCalls.length, 0);
   } finally { w.stop(); }
+});
+
+test('경보 글이 아무리 많아도 결정 요청 메시지 기록은 밀려나지 않는다(보존 한도 분리)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-policy-cap-'));
+  setDecision(home, 'decision-open', {threadId: null, messageId: 'M-d', forum: false});
+  for (let i = 0; i < 700; i++) setDecision(home, `alert:a${i}:${i}`, {threadId: null, messageId: `M${i}`, forum: false});
+  const kept = readDecisions(home);
+  assert.ok(kept['decision-open']);
+  assert.equal(Object.keys(kept).filter(k => k.startsWith('alert:')).length, 200);
+  assert.ok(kept['alert:a699:699'] && !kept['alert:a0:0']);                // 경보끼리는 오래된 것부터
+});
+
+// 새 알림 종류를 코드에 쓰면 정책(KNOWN_KINDS)과 문서 표에 올리게 한다. 필수 조치 알림이 조용히 빠지는 것을 막는다.
+test('소스의 notifyUser 종류는 모두 정책 목록과 docs/user-notify.md 표에 있다', () => {
+  const root = new URL('../', import.meta.url).pathname;
+  const files = [];
+  const walk = dir => { for (const e of fs.readdirSync(dir, {withFileTypes: true})) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith('.mjs')) files.push(p); } };
+  walk(path.join(root, 'src'));
+  const found = new Set();
+  for (const f of files) {
+    const text = fs.readFileSync(f, 'utf8');
+    for (const m of text.matchAll(/notifyUser\([^\n]*?kind: ?["']([^"']+)["']/g)) found.add(m[1]);
+    for (const m of text.matchAll(/kind:`(decision-)\$\{kind\}`/g)) for (const k of ['request', 'answer', 'cancel']) found.add(`${m[1]}${k}`);
+  }
+  assert.ok(found.size >= 5, `소스에서 찾은 종류가 너무 적다: ${[...found]}`);
+  const doc = fs.readFileSync(path.join(root, 'docs/user-notify.md'), 'utf8');
+  for (const kind of found) assert.ok(KNOWN_KINDS.includes(kind), `정책 목록(KNOWN_KINDS)에 없는 종류: ${kind}`);
+  for (const kind of KNOWN_KINDS) assert.ok(doc.includes(`\`${kind}\``), `docs/user-notify.md 표에 없는 종류: ${kind}`);
 });
