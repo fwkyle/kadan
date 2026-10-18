@@ -469,8 +469,15 @@ function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
 // 지금보다 60초 넘게 앞선 값(시계 오류)은 무시해 오늘과 같게 동작한다. 읽기는 show-options -qv다(없으면 빈 출력, 오류 아님):
 // 세션 옵션 명령은 `=세션`을 거부하고 `=세션:`만 받는다. display-message는 쓰지 않는다 — 복사모드 시험이 그 호출 횟수를 센다(tmux 3.6a 격리 소켓 실측 2026-10-19).
 const HUMAN_INPUT_FUTURE_SKEW_MS = 60_000;
+let humanInputReadWarned = false; // 경고는 프로세스당 한 줄(감시 순회마다 쌓이지 않게)
 function relayedHumanInputRecent(session, run, at, humanIdleMs) {
-  const raw = String(run(["show-options", "-t", `=${session}:`, "-qv", "@kadan_human_input"]) ?? "").trim();
+  // 부가 표시라 읽기 실패가 전송·알림을 막지 않는다(검수 TP-R P2-3). 표시 없음으로 보고 기존 client_activity 판정만 따른다.
+  let raw;
+  try { raw = String(run(["show-options", "-t", `=${session}:`, "-qv", "@kadan_human_input"]) ?? "").trim(); }
+  catch (error) {
+    if (!humanInputReadWarned) { humanInputReadWarned = true; process.stderr.write(`kadan: @kadan_human_input 읽기 실패 — 표시 없음으로 처리: ${error.message}\n`); }
+    return false;
+  }
   if (!/^\d{1,12}$/.test(raw)) return false;
   const ms = Number(raw) * 1000;
   return ms - at <= HUMAN_INPUT_FUTURE_SKEW_MS && at - ms < humanIdleMs;

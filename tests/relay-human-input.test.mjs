@@ -61,3 +61,27 @@ test('강제 차례(force)는 옵션이 있어도 건너뛴다', {skip: !hasTmux
   f.setOption(f.nowSec());
   assert.equal(notificationHold(f.session, {...GUARD, force: true}, {run: f.run}), null);
 });
+
+// 검수 TP-R P2-3: 부가 표시 읽기(show-options)만 실패해도 전송·알림은 기존 판정대로 간다.
+const failOnlyShowOptions = (f) => (args, input) => {
+  if (args[0] === 'show-options') throw new Error('주입한 show-options 실패');
+  return f.run(args, input);
+};
+
+test('(P2-3) show-options만 실패하면 알림 확인과 전송이 기존 판정대로 통과한다', {skip: !hasTmux}, t => {
+  const f = fixture(t);
+  const run = failOnlyShowOptions(f);
+  assert.equal(notificationHold(f.session, GUARD, {run}), null);
+  const receipt = sendTmux(f.session, '본문', {run, spawn: () => {}});
+  assert.equal(receipt.keyDelivery, 'sent');
+});
+
+test('(P2-3) 기존 활동 검사(list-clients) 실패는 예전처럼 오류로 막는다', {skip: !hasTmux}, t => {
+  const f = fixture(t);
+  const run = (args, input) => {
+    if (args[0] === 'list-clients') throw new Error('주입한 list-clients 실패');
+    return f.run(args, input);
+  };
+  assert.equal(notificationHold(f.session, GUARD, {run})?.code, 'KADAN_NOTIFY_CHECK_FAILED');
+  assert.throws(() => sendTmux(f.session, '본문', {run, spawn: () => {}}), error => error.delivery === 'not-sent');
+});
