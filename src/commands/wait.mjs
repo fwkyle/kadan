@@ -30,6 +30,7 @@ export function cmdWait(argv, flags) {
       since: lastSend?.outputCursor,
       baselineMarkers: lastSend?.baselineMarkers,
       snapshotHome: ledgerHome(),
+      hook: lastSend?.t ? { home: ledgerHome(), since: lastSend.t } : null,
     });
   } catch (error) {
     die(error.message, error.exitCode || 1);

@@ -13,6 +13,7 @@ import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
+import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry} from './cli-start-support.mjs';
 
 const SECRETARY = '비서';
@@ -94,7 +95,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const conversation = findConversation(spec, {pids: [chain.root], openFiles: () => deps.openFiles(chain.pids),
     readJson: deps.readJson, tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
-  const command = withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation));
+  const command = withStopHook(withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation)));
   const again = launchIdentityOf(command), mode = conversationOf(command);
   if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');

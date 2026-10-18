@@ -5,6 +5,7 @@ import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadan
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
 import { withInlineScreen } from "../inline-screen.mjs";
+import { withStopHook } from "../stop-hook-settings.mjs";
 import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
 import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
@@ -63,7 +64,7 @@ export function cmdStart(argv, flags) {
     try { launch = launchFor(readSettings(ledgerHome()), roleProfile); } catch (error) { die(error.message, 2); }
   }
   // 사람이 직접 준 --cmd(adopt·handover 포함)도 대화형 codex면 인라인 화면 플래그를 붙인다. 설정값과의 비교도 같은 꼴로 한다.
-  if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withInlineScreen(flags.cmd.trim());
+  if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withStopHook(withInlineScreen(flags.cmd.trim()));
   if (launch && typeof flags.cmd === "string" && flags.cmd.trim() && flags.cmd.trim() !== launch.cmd) {
     if (typeof flags.reason !== "string" || !flags.reason.trim())
       die(`실행 모델 설정과 다른 명령이다 — --reason <이유>를 함께 줘라. 설정값: ${launch.cmd}`, 2);
