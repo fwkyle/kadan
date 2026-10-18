@@ -107,7 +107,7 @@ export class AutomaticReview {
  report(key,{execution,outcome,resultFile}){
   return this.locked(()=>{
    const s=this.get(key);
-   if(s?.current?.key===execution&&!['sending','waiting'].includes(s.status))throw new Error(`자동 전달이 ${s.status}로 멈춰 있어 auto-report를 받지 않습니다(자동 상태는 되살아나지 않습니다). 손으로 끝까지 가려면: kadan card report ${execution} --revision <최신 revision> --outcome <implemented|pass|changes|exception> → 직속 감독에게 완료 통지 1회 → 감독이 done → 수동 검수 발령. 상세: docs/automatic-review.md '예외 뒤 수동 재발령'`);
+   if(s?.current?.key===execution&&!['sending','waiting'].includes(s.status))throw new Error(`자동 전달이 ${s.status}로 멈춰 있어 auto-report를 받지 않습니다(자동 상태는 되살아나지 않습니다). 손으로 끝까지 가려면: kadan card report ${execution} --revision <최신 revision> --outcome <implemented|pass|changes|exception> → 직속 감독에게 완료 통지 1회 → 감독이 done → kadan work execute <업무> --phase review --assign <검수자> --dispatch(이미 만든 카드면 work link 뒤 dispatch). 상세: docs/automatic-review.md '예외 뒤 수동 재발령'`);
    if(!s||!s.current||s.current.key!==execution||!['sending','waiting'].includes(s.status))throw new Error('현재 자동 실행의 보고가 아닙니다');
    if(this.by!==s.current.role)throw new Error('배정된 담당만 결과를 보고할 수 있습니다');
    const allowed=s.phase==='review'?['pass','changes','exception']:['implemented','exception'];

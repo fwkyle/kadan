@@ -9,6 +9,8 @@ import {CardStore} from '../src/card-store.mjs';
 import {createDatabase,writeStorageMarker,appendStream} from '../src/storage.mjs';
 import {appendLedger,readLedger,readMailLedger,readTaskLedger,readMailBody,saveMailBody} from '../src/ledger.mjs';
 import {guardedSend} from '../src/cli.mjs';
+import {workCommand} from '../src/work-command.mjs';
+import {resolveWorkMail} from '../src/work-mail.mjs';
 
 function fixture(){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-auto-review-'));
@@ -208,4 +210,22 @@ test('exception으로 멈춘 뒤 손으로 다시 발령한 실행의 auto-repor
   return true;
  });
  assert.equal(f.auto.get(f.key).status,'exception','거절해도 자동 상태는 되살아나지 않는다');
+});
+
+test('exception 뒤 수동 경로 끝까지: 보고 → 완료 확정 → 검수 실행 연결·발령 (문서 절의 명령 순서)',()=>{
+ const f=fixture();f.configure();f.auto.step(f.key);
+ f.finish('exception');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-manual-'));
+ fs.writeFileSync(path.join(dir,'body.md'),'# 검수\n\n## 읽고 시작할 것\n- /abs/AGENTS.md — 규칙\n\n허용한 작업만 수행');
+ const sent=[];
+ const ctx={home:f.home,by:'test-super',send:a=>{sent.push(a);return {session:'kadan-'+a.role,mailId:'m1',bytes:1,digest:'d'};}};
+ // (a) work execute --assign --dispatch: 생성·연결·발령을 한 번에.
+ const a=workCommand(['execute',f.key],{revision:f.works.get(f.key).revision,phase:'review',round:'9',title:'수동 검수','body-file':path.join(dir,'body.md'),note:'예외 뒤 수동 검수',assign:'test-reviewer',dispatch:'검수하라'},ctx);
+ assert.equal(sent.length,1);assert.equal(sent[0].workKey,f.key);assert.equal(sent[0].executionKey,a.card.key);
+ assert.ok(f.works.get(f.key).executions.some(x=>x.key===a.card.key));
+ // (b) 카드를 따로 만들었다면 link 없이는 막히고, link 뒤에는 연결 확인을 통과한다.
+ const own=f.cards.create({repo:'test',id:'manual-review',repoPath:f.home,body:'# 수동 검수 카드\n\n## 읽고 시작할 것\n- /abs/AGENTS.md — 규칙'});
+ assert.throws(()=>resolveWorkMail(f.home,{workKey:f.key,executionKey:own.key}),/연결된 실행이 아닙니다/);
+ workCommand(['link',f.key],{revision:f.works.get(f.key).revision,execution:own.key,phase:'review',round:'10',note:'따로 만든 검수 카드 연결'},ctx);
+ assert.deepEqual(resolveWorkMail(f.home,{workKey:f.key,executionKey:own.key}),{workKey:f.key,executionKey:own.key});
 });

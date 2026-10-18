@@ -116,11 +116,24 @@ kadan work auto-report repo/work-id --execution repo/exec-현재UUID \
 `자동 전달이 exception로 멈춰 있어 …`로 거절한다(2026-10-17 시험으로 확인). 이때 손으로 끝까지 가는 길은 아래 순서다.
 
 ```sh
-kadan card report repo/execution-id --revision <최신 revision> --outcome implemented   # 결과 파일 등록
-kadan mail <직속 감독> --execution repo/execution-id '<완료 통지 1회>'                 # 완료 통지
-kadan done <작업자 역할> <카드id> ok                                                  # 감독이 done 확정
-kadan dispatch <검수자> --task <검수 카드id> --work repo/work-id '<지시>'             # 수동 검수 발령
+kadan card report repo/execution-id --revision <최신 revision> --outcome implemented   # 1. 결과 파일 등록
+kadan mail <직속 감독> --execution repo/execution-id '<완료 통지 1회>'                 # 2. 완료 통지
+kadan done <작업자 역할> <카드id> ok                                                  # 3. 감독이 done 확정
+kadan work execute repo/work-id --revision <업무 revision> --phase review --round <N> \
+  --title <제목> --body-file <지시문> --note <이유> --assign <검수자> --dispatch '<지시>'  # 4. 검수 실행 생성·연결·발령
 ```
+
+4단계는 검수 실행을 만들고 업무에 잇고 발령까지 한 번에 하는 감독의 평소 경로다. 이미 검수 카드를 따로 만들어 두었다면
+`dispatch`만으로는 `해당 업무에 연결된 실행이 아닙니다`로 막히므로, 먼저 업무에 이은 뒤 발령한다.
+
+```sh
+kadan work link repo/work-id --execution repo/review-card --revision <업무 revision> --phase review --round <N> --note <이유>
+kadan dispatch <검수자> --task <검수 카드id> --work repo/work-id '<지시>'
+```
+
+따로 만든 카드는 연결 뒤에도 `assigned` 상태와 담당(`card update --status assigned --role <검수자> …`)이 있어야 발령된다(없으면 `중앙 카드 발령 불가 … 담당 미배정`).
+
+3단계 `done`은 그 작업자의 시작 기록(`kadan start`)이 있어야 한다. 실제 흐름에서는 늘 있다.
 
 작업자는 결과 파일 → `card report` → 완료 통지 1회 → 자기 화면 `KADAN:DONE`까지 하고, 감독이 `done`을 확정한 뒤
 검수를 손으로 발령한다. 자동 보고(`auto-report`)와 수동 보고를 한 실행에 섞지 않는다.
