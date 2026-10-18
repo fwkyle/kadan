@@ -6,9 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {handleStopHook} from '../src/stop-hook.mjs';
+import {handleStopHook, lastLineMarker} from '../src/stop-hook.mjs';
 import {appendSpool, readSpool, hookDoneSince, spoolPath} from '../src/stop-hook-spool.mjs';
-import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeSettingsBody, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
+import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
 import {withInlineScreen, withoutInlineScreen} from '../src/inline-screen.mjs';
 import {launchIdentityOf, matchesAiProcess, commandWords} from '../src/ai-identity.mjs';
 import {launchFor} from '../src/runner-settings.mjs';
@@ -17,7 +17,7 @@ import {rebuildResumeCommand} from '../src/runner-table.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
 import {codexStopHookTrust, assessStopHookTrust, codexHookCommand} from '../src/stop-hook-codex-trust.mjs';
 import {collectRoles} from '../src/watch-roles.mjs';
-import {screenDoneResult, runWaitLoop} from '../src/cli-wait-done.mjs';
+import {screenDoneResult, runWaitLoop, hookTaskMatcher} from '../src/cli-wait-done.mjs';
 import {explainAlertRoute} from '../src/watch.mjs';
 import {formatAlertBody} from '../src/watch-alert-body.mjs';
 
@@ -214,12 +214,12 @@ test('kadan wait: 화면이 안 바뀌어도 훅 증거가 발령 뒤에 있으�
   hookRow(home);
   const floor = {name: 'fake', read: () => ({text: '변화 없음', cursor: 'c', incremental: false}), waitForChange() {}};
   const result = runWaitLoop({floor, session, role, intervalMs: 1, timeoutMs: 1000, quietMs: 500, baselineMarkers: [],
-    cards, record: entry => recorded.push(entry), hook: {home, since: dispatch.t}});
+    cards, record: entry => recorded.push(entry), hook: {home, since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}});
   assert.equal(result.code, 0);
   assert.equal(result.via, 'hook');
   assert.deepEqual(recorded.map(e => [e.kind, e.taskId, e.result, e.via]), [['done', 'a', 'ok', 'hook']]);
   const plain = runWaitLoop({floor: {...floor, read: () => ({text: 'KADAN:DONE a ok', cursor: 'c', incremental: false})}, session, role,
-    intervalMs: 1, timeoutMs: 1000, quietMs: 500, baselineMarkers: [], cards, record: () => {}, hook: {home: tmp(), since: dispatch.t}});
+    intervalMs: 1, timeoutMs: 1000, quietMs: 500, baselineMarkers: [], cards, record: () => {}, hook: {home: tmp(), since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}});
   assert.equal(plain.via, 'screen');
 });
 
@@ -286,4 +286,136 @@ test('kadan stop-hook: claude-settings는 홈 안에 파일 하나만 만들고 
   } finally {
     if (before === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = before;
   }
+});
+
+// --- PR #191 검수 수정 1라운드 ---
+test('훅 규칙: 마지막 비어 있지 않은 줄이 마커일 때만 완료 — 응답 중간 인용은 기록하지 않는다', () => {
+  const quoted = '이렇게 끝내라고 했다:\n```\nKADAN:DONE a ok\n```\n아직 작업 중이며 다음 턴에서 계속합니다';
+  assert.equal(lastLineMarker(quoted), null);
+  assert.equal(lastLineMarker('KADAN:DONE a ok\n```'), null); // 코드 블록 닫는 줄은 마지막 줄이 아니다
+  assert.deepEqual(lastLineMarker('끝\n  KADAN:DONE a ok  \n\n \n'), {taskId: 'a', result: 'ok', conflict: false});
+  const home = tmp();
+  assert.equal(handleStopHook(claudeInput(quoted), {KADAN_ROLE: 'r', KADAN_HOME: home}, fixed), 0);
+  assert.equal(fs.existsSync(spoolPath(home)), false);
+});
+
+test('훅 규칙: 같은 실행의 failed·ok 상충은 conflict로 남고 소비처는 훅으로 판정하지 않는다', () => {
+  const since = '2026-10-18T09:00:00.000Z', env = home => ({KADAN_ROLE: p, KADAN_HOME: home});
+  const home = tmp();
+  assert.equal(handleStopHook(claudeInput('KADAN:DONE a failed\n수정함\nKADAN:DONE a ok'), env(home), fixed), 1);
+  assert.equal(readSpool(home)[0].conflict, true);
+  assert.equal(readSpool(home)[0].result, 'ok');
+  assert.deepEqual(hookDoneSince({home, role: p, since, taskMatches: id => id === 'a'}), []);
+  // 같은 카드의 이전 정상 줄이 있어도 가장 최근 응답이 상충이면 쓰지 않는다
+  const earlier = tmp();
+  appendSpool(earlier, {at: '2026-10-18T09:30:00.000Z', role: p, harness: 'claude', sessionId: 's', taskId: 'a', result: 'ok'});
+  handleStopHook(claudeInput('KADAN:DONE a failed\nKADAN:DONE a ok'), env(earlier), fixed);
+  assert.deepEqual(hookDoneSince({home: earlier, role: p, since, taskMatches: id => id === 'a'}), []);
+  // 다른 카드의 마커가 섞인 응답은 상충이 아니다
+  const other = tmp();
+  handleStopHook(claudeInput('KADAN:DONE b failed\nKADAN:DONE a ok'), env(other), fixed);
+  assert.equal(readSpool(other)[0].conflict, undefined);
+});
+const p = 'p-worker';
+
+test('화면 경로의 같은 입력 판정(바꾸지 않은 한계): 인용·상충도 화면은 마지막 마커를 완료로 읽는다', () => {
+  const entries = [start, dispatch];
+  const quoted = screenDoneResult({text: '```\nKADAN:DONE a ok\n```\n아직 작업 중', entries, role, taskId: 'repo/a', cards});
+  assert.equal(quoted.result, 'ok');
+  const both = screenDoneResult({text: 'KADAN:DONE a failed\nKADAN:DONE a ok', entries, role, taskId: 'repo/a', cards});
+  assert.equal(both.result, 'ok');
+  assert.equal(both.count, 2);
+});
+
+test('kadan wait: 같은 역할의 이전 실행 마커만 있으면 끝나지 않고 done도 기록하지 않는다', () => {
+  const home = tmp(), recorded = [];
+  hookRow(home, {taskId: 'b'}); // 현재 발령은 a
+  const floor = {name: 'fake', read: () => ({text: '변화 없음', cursor: 'c', incremental: false}), waitForChange() {}};
+  let clock = 0;
+  const result = runWaitLoop({floor, session, role, intervalMs: 1, timeoutMs: 100, quietMs: 50, baselineMarkers: [], cards,
+    record: entry => recorded.push(entry), now: () => (clock += 10),
+    hook: {home, since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}});
+  assert.notEqual(result.code, 0);
+  assert.deepEqual(recorded, []);
+  // 카드 조건이 없으면(발령에 taskId가 없음) 훅 증거를 쓰지 않는다
+  assert.equal(hookTaskMatcher({cards, dispatch: {t: dispatch.t}}), null);
+  assert.deepEqual(hookDoneSince({home, role, since: dispatch.t}), []);
+  // 정식 실행 주소로 적힌 같은 카드는 맞는다
+  assert.equal(hookTaskMatcher({cards, dispatch})('repo/a'), true);
+  assert.equal(hookTaskMatcher({cards, dispatch})('b'), false);
+});
+
+test('wait가 상충 응답에서 failed·ok를 둘 다 기록하지 않는다: 훅 증거는 마지막 하나, 상충이면 화면 판정', () => {
+  const home = tmp(), recorded = [];
+  hookRow(home, {result: 'failed', at: '2026-10-18T10:05:00.000Z'});
+  hookRow(home, {result: 'ok', at: '2026-10-18T10:06:00.000Z'});
+  const floor = {name: 'fake', read: () => ({text: '변화 없음', cursor: 'c', incremental: false}), waitForChange() {}};
+  const result = runWaitLoop({floor, session, role, intervalMs: 1, timeoutMs: 1000, quietMs: 500, baselineMarkers: [], cards,
+    record: entry => recorded.push(entry), hook: {home, since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}});
+  assert.equal(result.code, 0);
+  assert.deepEqual(recorded.map(e => e.result), ['ok']);
+});
+
+test('셸 인용: 작은따옴표 경로는 큰따옴표로, 인용할 수 없으면 null — 만든 명령이 실제 /bin/sh -c로 종료 0이다', () => {
+  assert.equal(shellQuote('/a b/c'), "'/a b/c'");
+  assert.equal(shellQuote("/q'd dir/x"), '"/q\'d dir/x"');
+  assert.equal(shellQuote(`/a'b"c`), null);
+  assert.equal(shellQuote("/a'b$c"), null);
+  assert.deepEqual(commandWords(`sh ${shellQuote("/q'd dir/x")}`), ['sh', "/q'd dir/x"]);
+  const base = tmp(), dir = path.join(base, "quote'd dir", 'scripts');
+  fs.mkdirSync(dir, {recursive: true});
+  const script = path.join(dir, 'stop-hook.sh');
+  fs.writeFileSync(script, '#!/bin/sh\nexit 0\n');
+  for (const command of [hookCommand(script), JSON.parse(claudeSettingsBody(script)).hooks.Stop[0].hooks[0].command, codexHookCommand(script)]) {
+    assert.equal(spawnSync('/bin/sh', ['-c', command]).status, 0, command);
+  }
+  assert.throws(() => hookCommand(`/a'b"c/x`), /인용/);
+  // codex 신뢰 확인도 같은 명령 문자열로 찾는다
+  const codex = fakeCodexHome({groups: [group(codexHookCommand(script))]});
+  assert.equal(codexStopHookTrust({home: codex, script}).state, 'untrusted');
+});
+
+test('claude 주입: KADAN_HOME에 작은따옴표가 있어도 붙고, 인용할 수 없으면 조용히 빠지지 않고 경고한다', () => {
+  const warnings = [];
+  const quotedHome = path.join(tmp(), "user's home");
+  writeClaudeSettings(quotedHome);
+  const hooked = withStopHook(CLAUDE, quotedHome, m => warnings.push(m));
+  assert.notEqual(hooked, CLAUDE);
+  assert.equal(commandWords(hooked)[2], claudeSettingsPath(quotedHome));
+  assert.deepEqual(launchIdentityOf(hooked), {ok: true, harness: 'claude', model: 'claude-fable-5-1'});
+  assert.equal(withoutInlineScreen(hooked), withoutInlineScreen(CLAUDE));
+  assert.deepEqual(warnings, []);
+  const bad = path.join(tmp(), `a'b"c`);
+  fs.mkdirSync(path.dirname(claudeSettingsPath(bad)), {recursive: true});
+  fs.writeFileSync(claudeSettingsPath(bad), '{}');
+  assert.equal(withStopHook(CLAUDE, bad, m => warnings.push(m)), CLAUDE);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Stop 훅을 붙이지 못했다/);
+  // 파일이 없거나 claude가 아니면 경고하지 않는다(훅을 안 쓰는 기계)
+  assert.equal(withStopHook(CLAUDE, tmp(), m => warnings.push(m)), CLAUDE);
+  assert.equal(withStopHook('codex --model m', bad, m => warnings.push(m)), 'codex --model m');
+  assert.equal(warnings.length, 1);
+});
+
+test('codex 신뢰 표 헤더 변형: 작은따옴표 키·점 주변 공백·주석을 같은 키로 읽고, 읽을 수 없으면 unknown', () => {
+  const script = '/main/scripts/stop-hook.sh';
+  const make = tomlFor => {
+    const home = fakeCodexHome({groups: [group(codexHookCommand(script))]});
+    const key = `${path.join(home, 'hooks.json')}:stop:0:0`;
+    fs.writeFileSync(path.join(home, 'config.toml'), tomlFor(key));
+    return codexStopHookTrust({home, script}).state;
+  };
+  const hash = 'trusted_hash = "sha256:abc123"';
+  assert.equal(make(k => `[hooks.state."${k}"]\n${hash}\n`), 'trusted');
+  assert.equal(make(k => `[hooks.state.'${k}']\n${hash}\n`), 'trusted');
+  assert.equal(make(k => `[ hooks . state . "${k}" ]  # 메모\n${hash}\n`), 'trusted');
+  assert.equal(make(k => `[hooks.state."${k}"]\ntrusted_hash = 'sha256:abc123'\n`), 'trusted');
+  assert.equal(make(() => '[tui]\nx = 1\n'), 'untrusted'); // 읽을 수 있고 항목이 없다
+  assert.equal(make(() => ''), 'untrusted');
+  assert.equal(make(k => `[hooks.state]\n"${k}".trusted_hash = "sha256:abc123"\n`), 'unknown'); // 점으로 이은 키: 해석 불가
+  assert.equal(make(k => `[hooks.state."${k}\\q"]\n${hash}\n`), 'unknown'); // 잘못된 이스케이프
+  const [alert] = assessStopHookTrust({enabled: true, trust: {state: 'unknown'}});
+  assert.equal(alert.id, 'stop-hook:unknown');
+  assert.match(formatAlertBody(alert), /신뢰 확인 불가/);
+  assert.equal(explainAlertRoute(alert, new Map(), [], 'p-super').recipient, '@user');
 });

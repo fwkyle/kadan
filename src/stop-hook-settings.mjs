@@ -13,11 +13,27 @@ export const SETTINGS_SUFFIX = path.join('stop-hook', 'claude-settings.json');
 // 이 저장소의 훅 감싸개. 설치한 체크아웃의 절대 경로가 설정 파일에 들어간다(main 체크아웃에서 만든다).
 export const HOOK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'stop-hook.sh');
 
+// 훅 명령·--settings 값에 쓰는 셸 인용. 두 생성기(claude 설정·codex 명령)와 commandWords가 같은 규칙을 본다.
+// 작은따옴표가 없으면 '…', 있으면 "…"(commandWords가 읽는 꼴). 큰따옴표 안에서 셸이 해석하는 $ ` \\ 가 있거나
+// "와 '가 모두 있으면 안전하게 인용할 수 없어 null이다 — 호출자가 조용히 넘기지 말고 알려야 한다.
+export function shellQuote(value) {
+  const text = String(value);
+  if (/[\n\r]/.test(text)) return null;
+  if (!text.includes("'")) return `'${text}'`;
+  return /[$`\\"]/.test(text) ? null : `"${text}"`;
+}
+
+export function hookCommand(script = HOOK_SCRIPT) {
+  const quoted = shellQuote(script);
+  if (!quoted) throw new Error(`훅 감싸개 경로를 안전하게 인용할 수 없다: ${script}`);
+  return `/bin/sh ${quoted}`;
+}
+
 export const claudeSettingsPath = home => path.join(home, SETTINGS_SUFFIX);
 
 export function claudeSettingsBody(script = HOOK_SCRIPT) {
   return `${JSON.stringify({hooks: {Stop: [{hooks: [{type: 'command',
-    command: `/bin/sh '${script}'`, timeout: 10}]}]}}, null, 2)}\n`;
+    command: hookCommand(script), timeout: 10}]}]}}, null, 2)}\n`;
 }
 
 // 같은 내용이면 다시 쓰지 않는다. 돌려주는 값: {path, changed}.
@@ -56,7 +72,8 @@ function afterExecutable(cmd, head) {
 
 // claude 실행 명령이고, 설정 파일이 있고, 이미 --settings가 없으면 실행 파일 바로 뒤에 `--settings <파일>`을 끼운다.
 // 끝에 붙이지 않는 이유: 끝에는 위치 인자(프롬프트)가 올 수 있다. 판단할 수 없는 명령은 그대로 둔다.
-export function withStopHook(cmd, home = ledgerHome()) {
+// warn(메시지): 설정 파일이 있는데도 훅을 붙이지 못할 때 부른다(조용히 빠지지 않게). 기본은 알리지 않는다.
+export function withStopHook(cmd, home = ledgerHome(), warn = () => {}) {
   if (typeof cmd !== 'string' || launchIdentityOf(cmd).harness !== 'claude') return cmd;
   const words = commandWords(cmd);
   if (!words?.length) return cmd;
@@ -65,11 +82,13 @@ export function withStopHook(cmd, home = ledgerHome()) {
   if (words.some(word => word === SETTINGS_FLAG || word.startsWith(`${SETTINGS_FLAG}=`))) return cmd;
   let head = 0;
   while (head < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[head])) head += 1;
+  const skip = reason => { warn(`경고: Stop 훅을 붙이지 못했다(${reason}) — 이 역할은 화면 판정으로만 완료를 읽는다`); return cmd; };
   const at = afterExecutable(cmd, head);
-  if (at < 0) return cmd;
-  const quoted = `'${file.replaceAll("'", "'\\''")}'`;
+  if (at < 0) return skip('실행 파일 위치를 찾지 못함');
+  const quoted = shellQuote(file);
+  if (!quoted) return skip(`설정 파일 경로를 안전하게 인용할 수 없음: ${file}`);
   const next = `${cmd.slice(0, at)} ${SETTINGS_FLAG} ${quoted}${cmd.slice(at)}`;
   const expected = [...words.slice(0, head + 1), SETTINGS_FLAG, file, ...words.slice(head + 1)];
   const got = commandWords(next);
-  return got && got.length === expected.length && got.every((word, i) => word === expected[i]) ? next : cmd;
+  return got && got.length === expected.length && got.every((word, i) => word === expected[i]) ? next : skip('명령을 다시 읽을 수 없음');
 }

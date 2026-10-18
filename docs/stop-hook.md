@@ -12,8 +12,9 @@
 
 1. 실행기가 턴을 마치면 훅 감싸개 `scripts/stop-hook.sh` → `src/stop-hook.mjs`가 stdin JSON을 받는다.
 2. `KADAN_ROLE`이 없거나 `hook_event_name`이 `Stop`이 아니면 즉시 끝낸다(kyle 개인 claude·codex는 영향 없음). 항상 종료 0이며 턴을 막지 않는다.
-3. 응답 글에서 마커 줄을 찾으면 `$KADAN_HOME/stop-hook-spool.jsonl`에 마커당 한 줄 `{at, role, harness, sessionId, taskId, result}`만 덧붙인다. **응답 본문은 저장하지 않는다.** 원장에는 쓰지 않는다.
-4. 소비처가 spool을 먼저 본다. 증거는 **같은 역할 · 같은 카드 · 그 카드의 마지막 발령(`send`) 뒤 시각**이어야 한다. 없으면 화면 판정으로 넘어간다.
+3. **응답의 마지막 비어 있지 않은 줄**이 마커일 때만 `$KADAN_HOME/stop-hook-spool.jsonl`에 한 줄 `{at, role, harness, sessionId, taskId, result}`를 덧붙인다(앞뒤 공백 허용, 코드 블록 닫는 줄은 마지막 줄이 아니다). 응답 중간에 인용한 마커는 기록하지 않는다. 같은 응답에 같은 실행 ID의 **다른 결과** 마커가 더 있으면 줄에 `conflict: true`를 붙이고, 소비처는 가장 최근 줄이 conflict일 때 훅으로 판정하지 않고 화면 판정으로 넘어간다. **응답 본문은 저장하지 않는다.** 원장에는 쓰지 않는다.
+4. 소비처가 spool을 먼저 본다. 증거는 **같은 역할 · 같은 카드 · 그 카드의 마지막 발령(`send`) 뒤 시각**이어야 한다. 카드 조건 함수는 필수다(없으면 증거를 쓰지 않는다). watch·`done --from-screen`·`wait`가 같은 규칙(짧은 id·정식 주소를 같은 카드로)을 쓰고, 마지막 증거 하나만 본다. 없으면 화면 판정으로 넘어간다.
+   - **화면 경로는 바꾸지 않았다(한계):** 같은 입력(코드 블록 인용 + 아직 작업 중, failed·ok 두 줄)을 화면 판정은 마지막 마커로 완료(ok)로 읽는다. 훅이 판정하지 않는 응답은 화면 경로가 지금 동작 그대로 읽는다.
 
 | 소비처 | 훅 증거를 보는 자리 | 판정 경로 기록 |
 |---|---|---|
@@ -35,9 +36,10 @@ claude 2.1.302에는 설정 경로를 주는 환경 변수가 없다. `CLAUDE_CO
    node <main 체크아웃>/src/cli.mjs stop-hook claude-settings
    ```
 2. 만들어지는 곳: `$KADAN_HOME/stop-hook/claude-settings.json` (기본 `~/.kadan/stop-hook/claude-settings.json`). 사용자 전역 `~/.claude/settings*.json`은 고치지 않는다.
-3. 이 파일이 있을 때만, 새로 띄우는 claude 역할 명령의 실행 파일 바로 뒤에 `--settings '<파일>'`이 붙는다(`kadan start --cmd`, 실행 모델 설정 기본 명령, `kadan restart`). **이미 떠 있는 역할은 다음 start·restart부터** 적용된다. 사람이 이미 `--settings`를 준 명령에는 붙이지 않는다.
-4. 확인: `node <main 체크아웃>/src/cli.mjs stop-hook status`. 역할의 실제 실행 인자는 `ps`에서 `--settings`로 보인다.
-5. 되돌리기: 설정 파일을 `.trash/`로 옮긴다. 이후 새로 띄우는 역할부터 붙지 않는다(이미 떠 있는 역할은 훅이 계속 돌지만 spool만 늘 뿐 해롭지 않다).
+3. 훅 명령과 `--settings` 값은 같은 셸 인용 함수(`shellQuote`)로 만든다: 작은따옴표가 없으면 `'…'`, 있으면 `"…"`, 둘 다 안전하게 못 쓰면(`$`·백틱·`\`·`"`와 `'` 동시) 설정 파일 생성이 거절되고, 이미 만든 뒤 경로가 바뀌어 붙일 수 없으면 `kadan start`가 `경고: Stop 훅을 붙이지 못했다(…)`를 낸다(조용히 빠지지 않는다).
+4. 이 파일이 있을 때만, 새로 띄우는 claude 역할 명령의 실행 파일 바로 뒤에 `--settings '<파일>'`이 붙는다(`kadan start --cmd`, 실행 모델 설정 기본 명령, `kadan restart`). **이미 떠 있는 역할은 다음 start·restart부터** 적용된다. 사람이 이미 `--settings`를 준 명령에는 붙이지 않는다.
+5. 확인: `node <main 체크아웃>/src/cli.mjs stop-hook status`. 역할의 실제 실행 인자는 `ps`에서 `--settings`로 보인다.
+6. 되돌리기: 설정 파일을 `.trash/`로 옮긴다. 이후 새로 띄우는 역할부터 붙지 않는다(이미 떠 있는 역할은 훅이 계속 돌지만 spool만 늘 뿐 해롭지 않다).
 
 신원·재시작 비교(`withoutInlineScreen`)는 카단이 붙인 `--settings <우리 파일>`을 걷어내고 비교한다. 모델 다름은 거절, 강도 다름은 경고 그대로다(시험: `tests/stop-hook.test.mjs`, `tests/dispatch-runner-guard.test.mjs`).
 
@@ -85,7 +87,7 @@ claude 2.1.302에는 설정 경로를 주는 환경 변수가 없다. `CLAUDE_CO
 
 ### 감시기 알림
 
-claude 설정 파일이 있는 기계(= 이 빠른 길을 켠 기계)에서만, codex 훅이 `trusted`가 아니면 감시기가 사용자(`@user`)에게 `훅신뢰` 경보를 낸다(상태가 같으면 한 번). 상태: `no-hooks-file`·`unreadable`·`not-installed`·`other-path`(다른 체크아웃 경로의 훅만 있음)·`untrusted`. 읽기만 하며 `trusted_hash`를 쓰거나 설정 내용을 기록하지 않는다.
+claude 설정 파일이 있는 기계(= 이 빠른 길을 켠 기계)에서만, codex 훅이 `trusted`가 아니면 감시기가 사용자(`@user`)에게 `훅신뢰` 경보를 낸다(상태가 같으면 한 번). 상태: `no-hooks-file`·`unreadable`·`not-installed`·`other-path`(다른 체크아웃 경로의 훅만 있음)·`untrusted`·`unknown`(config.toml 표기를 해석할 수 없거나 명령을 안전하게 인용할 수 없음 — 미신뢰로 단정하지 않고 문구를 구분한다). `[hooks.state]` 헤더는 큰따옴표·작은따옴표 키, 점 주변 공백, 줄 끝 주석을 같은 키로 읽는다. 읽기만 하며 `trusted_hash`를 쓰거나 설정 내용을 기록하지 않는다.
 
 ## 실측 요약과 한계
 

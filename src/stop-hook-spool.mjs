@@ -39,13 +39,15 @@ export function readSpool(home) {
   }
 }
 
-// role이 since(ISO 시각) 뒤에 남긴 훅 DONE 증거. taskMatches(taskId)가 참인 것만 시간순으로 돌려준다.
+// role이 since(ISO 시각) 뒤에 남긴 훅 DONE 증거. taskMatches(taskId)가 참인 것만 시간순으로 돌려준다(필수).
+// conflict(같은 응답에 같은 실행의 다른 결과 마커)가 가장 최근 줄이면 아무것도 돌려주지 않는다.
 // 시각을 못 읽는 줄·기준 시각을 못 읽는 경우는 증거로 치지 않는다(안전하게 화면 판정으로 넘어간다).
-export function hookDoneSince({home, role, since, taskMatches = () => true}) {
+export function hookDoneSince({home, role, since, taskMatches}) {
+  if (typeof taskMatches !== 'function') return []; // 카드 조건이 없으면 증거로 쓰지 않는다(다른 실행의 마커로 끝나는 오판 방지)
   const floor = Date.parse(since);
   if (!Number.isFinite(floor)) return [];
-  return readSpool(home).filter(row => row.role === role && typeof row.taskId === 'string'
-    && (row.result === 'ok' || row.result === 'failed')
-    && Date.parse(row.at) > floor && taskMatches(row.taskId))
-    .map(row => ({taskId: row.taskId, result: row.result, at: row.at, via: 'hook'}));
+  const rows = readSpool(home).filter(row => row.role === role && typeof row.taskId === 'string'
+    && (row.result === 'ok' || row.result === 'failed') && Date.parse(row.at) > floor && taskMatches(row.taskId));
+  if (rows.at(-1)?.conflict === true) return []; // 가장 최근 응답이 상충하면 이전 줄도 쓰지 않는다 — 화면 판정으로 넘긴다
+  return rows.filter(row => row.conflict !== true).map(row => ({taskId: row.taskId, result: row.result, at: row.at, via: 'hook'}));
 }

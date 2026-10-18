@@ -170,6 +170,18 @@ export function confirmDone({
 // 완료 통지 뒤 감독이 작업자 화면의 DONE을 대조해 확정한다(2026-09-27 [kyle]: 감독이 만든 확인 스크립트가
 // 짧은 카드id 마커를 못 알아봐 재출력 요청을 반복했다). 그 카드를 그 역할에 보낸 마지막 발령 때 화면에 있던 마커는 빼고,
 // 짧은 id·정식 주소 어느 쪽이든 같은 카드로 읽는다. 여러 줄이면 마지막 줄의 결과를 쓴다. 없으면 null이다.
+// 훅 증거를 쓸 때의 '같은 카드' 조건 하나. watch·from-screen·wait가 모두 이 규칙(짧은 id·정식 주소 같은 카드)을 쓴다.
+export function hookTaskMatcher({ cards = [], dispatch }) {
+  if (!dispatch?.taskId) return null;
+  const identity = taskIdentity(cards);
+  const target = (id, executionKey) => {
+    const found = identity.resolve(id, executionKey);
+    return found.state === "resolved" ? found.key : String(id ?? "").split("/").pop();
+  };
+  const want = target(dispatch.taskId, dispatch.executionKey);
+  return id => target(id) === want;
+}
+
 // hookHome이 있으면 먼저 Stop 훅 증거(같은 역할·같은 카드·그 발령 뒤)를 본다. 없으면 화면 판정이다. via = 어느 길로 읽었는지.
 export function screenDoneResult({ text, entries = [], role, taskId, cards = [], hookHome = null }) {
   const identity = taskIdentity(cards);
@@ -183,7 +195,7 @@ export function screenDoneResult({ text, entries = [], role, taskId, cards = [],
   const markers = diffDoneMarkers(dispatch?.baselineMarkers ?? [], findDoneMarkers(stripAnsi(text)))
     .filter((m) => target(m.taskId) === want);
   const hooked = hookHome && dispatch?.t
-    ? hookDoneSince({ home: hookHome, role: session.slice("kadan-".length), since: dispatch.t, taskMatches: id => target(id) === want })
+    ? hookDoneSince({ home: hookHome, role: session.slice("kadan-".length), since: dispatch.t, taskMatches: hookTaskMatcher({ cards, dispatch }) })
     : [];
   if (hooked.length) return { result: hooked.at(-1).result, dispatch, count: hooked.length, via: "hook" };
   return { result: markers.at(-1)?.result ?? null, dispatch: dispatch ?? null, count: markers.length };
@@ -202,7 +214,7 @@ export function runWaitLoop({
   record = appendLedger,
   snapshotHome = null,
   cards = null,
-  hook = null, // {home, since}: 이 시각 뒤 같은 역할의 Stop 훅 DONE 증거를 화면보다 먼저 본다
+  hook = null, // {home, since, taskMatches}: 이 시각 뒤 같은 역할·같은 카드의 Stop 훅 DONE 증거를 화면보다 먼저 본다
   snapshotAt = () => new Date(),
 }) {
   const incomplete = (result) => {
@@ -233,7 +245,9 @@ export function runWaitLoop({
   let lastChange = now();
 
   const inspect = () => {
-    const hooked = hook ? hookDoneSince({ home: hook.home, role: session.slice("kadan-".length), since: hook.since }) : [];
+    // 마지막 증거 하나만 쓴다 — 다른 소비처(watch·from-screen)와 같은 최종 의미다. 카드 조건이 없으면 훅 증거를 쓰지 않는다.
+    const hooked = hook ? hookDoneSince({ home: hook.home, role: session.slice("kadan-".length), since: hook.since,
+      taskMatches: hook.taskMatches }).slice(-1) : [];
     const fresh = hooked.length ? hooked.map(({ taskId, result }) => ({ taskId, result })) : diffDoneMarkers(
       baseline,
       findDoneMarkers(stripAnsi(accumulated))
