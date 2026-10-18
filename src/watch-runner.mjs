@@ -448,7 +448,9 @@ export async function runWatch({
     }
 
     // 순서: 죽음 → 끊김·한도 → 완료후보 → 멈춤(상태 줄, AI 없음) → 정체. 앞 단계가 걸린 세션과 재개·큐 배너 처리 중인 세션은 멈춤에서 뺀다.
-    const earlierSessions=new Set([...roleAssessment.alerts.filter(a=>a.kind!=='정체').map(a=>a.session),...retrySessions,...queueSessions]);
+    // 알림이 밀리는 창(입력 보호·복사 모드 등 holdCode 무엇이든)도 정당한 대기라 멈춤에서 뺀다.
+    const heldSessions=new Set([...workerObservations].filter(([,seen])=>holdTracker?.isHeld(seen.role)).map(([session])=>session));
+    const earlierSessions=new Set([...roleAssessment.alerts.filter(a=>a.kind!=='정체').map(a=>a.session),...retrySessions,...queueSessions,...heldSessions]);
     const idleStopAssessment=observationError||!scope
       ? {states:idleStopStates,alerts:[]}
       : assessIdleStop(idleStopStates,workerObservations,{

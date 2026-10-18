@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {assessRoles} from '../src/watch.mjs';
+import {NotifyHoldTracker} from '../src/watch-notify-hold.mjs';
 import {changeDigest} from '../src/watch-roles.mjs';
 import {parseClock, readStatusLine, isWorkingMoving, assessIdleStop, hasOpenQuestion, IDLE_STOP_AFTER_MS}
   from '../src/watch-status-line.mjs';
@@ -47,7 +48,8 @@ const claudeWorkingReal = (glyph, clock) => [
   '  Opus 5.5 | effort:high | 2h 33m left | ctx:76%',
   '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents',
 ].join('\n');
-const withoutSpinner = screen => screen.split('\n').filter(l => !/Grooving/.test(l)).join('\n');
+// 일하는 줄(회전 줄·도구 실행 줄)을 모두 지운 화면 = 진짜 입력 대기
+const withoutSpinner = screen => screen.split('\n').filter(l => !/Grooving|Running…|ctrl\+b|Bash\(/.test(l)).join('\n');
 
 test('경과 시계 세 형식을 초로 읽는다', () => {
   assert.equal(parseClock('12s'), 12);
@@ -85,7 +87,7 @@ test('claude 실제 표본: 회전 기호가 ✢→·로 돌고 시계가 늘어
 
 test('claude 끝난 턴 모양은 일하는 중이 아니다', () => {
   for (const done of ['✻ Cogitated for 3m 44s', '✻ Brewed for 11s · done 1:48 AM', '✻ Cogitated for 3m 44s · done 1:16 PM']) {
-    assert.equal(readStatusLine(claudeWorkingReal('✻', '1s').replace(/^.*Grooving.*$/mu, done)).kind, 'idle', done);
+    assert.equal(readStatusLine(withoutSpinner(claudeWorkingReal('✻', '1s')) + '\n' + done).kind, 'idle', done);
   }
 });
 
@@ -225,4 +227,80 @@ test('(b) 그 역할이 발령 뒤 보낸 질문에 답이 없으면 정당한 �
   assert.equal(hasOpenQuestion(answered, 'worker', task.t), false, '최종 답이 오면 아님');
   assert.equal(idleRun(Array(7).fill(codexIdle), {options: {entries: [question()]}}).flat().length, 0);
   assert.equal(idleRun(Array(7).fill(codexIdle), {options: {entries: answered}}).at(-1).length, 1);
+});
+
+// ---- 검수 F1·F2 (PR #199 수정 2라운드) ----
+// F1: 회전 줄 없이 도구 실행 줄 `⎿  Running… (Ns)`과 빈 ❯만 보이는 화면.
+const toolOnly = clock => [
+  '  Bash(<오래 걸리는 명령>)', `  ⎿  Running… (${clock})`, '     (ctrl+b ctrl+b (twice) to run in background)', '',
+  '────────────────────────────────────────', '❯ ', '────────────────────────────────────────',
+  '  ~/Dev/<repo>[main]', '  Opus 5.5 | effort:high | 2h 33m left | ctx:20%',
+].join('\n');
+
+test('F1: 도구 실행 줄만 있는 화면은 idle이 아니라 working이고 시계를 읽는다', () => {
+  assert.deepEqual(readStatusLine(toolOnly('4s')), {kind: 'working', tool: 'claude', clockSec: 4});
+  assert.equal(readStatusLine(toolOnly('1m 02s')).clockSec, 62);
+});
+
+test('F1: 도구 시계가 늘면 (a) 일하는 중 — 4분·10분에도 멈춤 0건이고 정체도 적립하지 않는다', () => {
+  for (const minutes of [5, 11]) {
+    const screens = Array.from({length: minutes}, (_, i) => toolOnly(`${i * 60 + 1}s`));
+    assert.equal(idleRun(screens).flat().length, 0, `${minutes}주기`);
+    const {alerts, states} = run(screens);
+    assert.equal(anyStalled(alerts), false);
+    assert.equal(states.get('kadan-worker').workingMoving, true);
+  }
+});
+
+test('F1: 도구 줄 시계가 안 늘면 멈춤이 아니라 (c) 기존 정체로 간다', () => {
+  assert.equal(idleRun(Array(12).fill(toolOnly('30s'))).flat().length, 0, '(b)는 0건');
+  const {alerts} = run(Array(6).fill(toolOnly('30s')));
+  assert.equal(stalled(alerts.at(-1)), true, '(c) 정체 경로');
+});
+
+test('F1: 도구 줄을 지운 진짜 빈 입력창은 그대로 멈춤이다', () => {
+  const idleOnly = toolOnly('4s').split('\n').filter(l => !/Running|ctrl\+b|Bash\(/.test(l)).join('\n');
+  assert.equal(readStatusLine(idleOnly).kind, 'idle');
+  assert.equal(idleRun(Array(5).fill(idleOnly)).at(-1).length, 1);
+});
+
+// F2: 입력 보호·알림밀림은 입력창이 비어 있어도 걸린다(복사 모드·최근 사람 입력). 보류 정보를 직접 연결한다.
+test('F2: NotifyHoldTracker.isHeld — 이번 주기에 밀렸거나 이전 주기부터 이어진 역할만 참', () => {
+  const tracker = new NotifyHoldTracker();
+  assert.equal(tracker.isHeld('worker'), false);
+  tracker.beginCycle();
+  tracker.held('worker', {code: 'KADAN_PANE_IN_MODE', message: 'copy mode'});
+  assert.equal(tracker.isHeld('worker'), true, '이번 주기');
+  tracker.endCycle(Date.now());
+  tracker.beginCycle();
+  assert.equal(tracker.isHeld('worker'), true, '이전 주기부터 이어짐');
+  tracker.endCycle(Date.now());
+  tracker.beginCycle();
+  tracker.delivered('worker', {});
+  tracker.endCycle(Date.now());
+  assert.equal(tracker.isHeld('worker'), false);
+  assert.equal(tracker.isHeld('other'), false);
+});
+
+test('F2: 보류 중인 역할(KADAN_PANE_IN_MODE 등 holdCode 무엇이든)은 빈 입력창이어도 멈춤 0건', () => {
+  for (const code of ['KADAN_PANE_IN_MODE', 'KADAN_HUMAN_ACTIVE']) {
+    const tracker = new NotifyHoldTracker();
+    const held = () => tracker.isHeld('worker');
+    let states = new Map();
+    const alerts = [];
+    for (let i = 0; i < 8; i++) {
+      tracker.beginCycle();
+      tracker.held('worker', {code, message: 'hold'});
+      const result = assessIdleStop(states, observe(codexIdle), {
+        elapsedMs: 60_000, intervalMs: 60_000, tasks: [task], entries: [],
+        excludedSessions: new Set(held() ? ['kadan-worker'] : []),
+      });
+      states = result.states;
+      alerts.push(...result.alerts);
+      tracker.endCycle(Date.now());
+    }
+    assert.equal(alerts.length, 0, code);
+  }
+  // 보류가 풀리면 다시 4분을 채워야 경보한다.
+  assert.equal(idleRun(Array(5).fill(codexIdle)).at(-1).length, 1);
 });

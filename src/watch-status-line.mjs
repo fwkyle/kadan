@@ -15,8 +15,10 @@ const CODEX_WORKING = /^\s*•\s*Working\s*\(([^()•]*?)\s*•[^()]*esc to inte
 // claude 2.1.302 일하는 중(실제 표본 2장): `✢ Grooving… (32s · ↓ 1.7k tokens)` — 회전 기호 + 동사 + `…` + `(시계 · …)`.
 // `esc to interrupt`는 없고, 일하는 동안에도 빈 `❯` 입력창이 보인다. 회전 기호는 `✢`에서 `·`로 바뀌며 돈다.
 // 끝난 턴(`✻ Cogitated for 3m 44s`, `Brewed for 11s · done 1:48 AM`)은 `…`과 괄호가 없어 걸리지 않는다.
-// 도구 줄 `⎿  Running… (4s)`는 같은 화면의 근거지만 도구 실행 중에만 있어 쓰지 않는다 — 위 줄이 항상 함께 있다.
 const CLAUDE_WORKING = /^\s*[✻✶✳✢✽·*⏺]\s+\S+(?:…|\.\.\.)\s*\(([^()·]*?)\s*(?:·|\))/u;
+// 도구 실행 줄 `⎿  Running… (4s)`: 도구가 도는 동안 회전 줄 없이 이 줄과 빈 `❯`만 보일 수 있다(검수 F1).
+// 시계가 늘면 (a) 일하는 중, 아니면 (c) 애매함이다. 이 줄이 있으면 빈 입력창만 보고 idle로 확정하지 않는다.
+const CLAUDE_TOOL_RUNNING = /^\s*⎿\s+Running(?:…|\.\.\.)\s*\(([^()·]*?)\s*(?:·|\))/u;
 const CODEX_INPUT = /^\s*›\s*(?:Ask Codex to do anything)?\s*$/u;
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 
@@ -40,7 +42,7 @@ export function readStatusLine(screenText) {
   const lines = bottomLines(screenText);
   for (let i = lines.length - 1; i >= 0; i--) {
     const codex = CODEX_WORKING.exec(lines[i]);
-    const claude = codex ? null : CLAUDE_WORKING.exec(lines[i]);
+    const claude = codex ? null : CLAUDE_WORKING.exec(lines[i]) ?? CLAUDE_TOOL_RUNNING.exec(lines[i]);
     const hit = codex ?? claude;
     if (hit) return { kind: "working", tool: codex ? "codex" : "claude", clockSec: parseClock(hit[1]) };
   }
@@ -82,8 +84,9 @@ export function hasOpenQuestion(entries, role, sinceIso) {
 //  - 완료·일시정지·취소·미발령: tasks(감시 범위 = 발령된 assigned·waiting 아님 실행)에 없는 역할은 보지 않는다.
 //  - 질문 대기: hasOpenQuestion
 //  - 완료후보: doneMarker가 있으면 세지 않는다
-//  - 큐 배너·입력 보호(사람이 입력 중): 입력창이 비어 있지 않거나 큐 줄이 있으면 idle이 아니다
-//  - 알림밀림: 입력 보호로 창에 쓰지 못한 상태. 사람이 입력 중이라 입력창이 비어 있지 않다
+//  - 큐 배너: 큐 줄이 있으면 제외. 사람이 입력창에 쓴 글이 있으면 idle이 아니다
+//  - 입력 보호·알림밀림: 입력창 글자와 무관하게(복사 모드·최근 사람 입력 등) 알림 전달이 밀린 역할은
+//    NotifyHoldTracker.isHeld로 호출한 쪽이 excludedSessions에 넣는다(검수 F2)
 export function assessIdleStop(previousStates, observations, {
   elapsedMs, intervalMs, afterMs = IDLE_STOP_AFTER_MS, tasks = [], entries = [],
   excludedSessions = new Set(), queuedLine = () => null,
