@@ -137,3 +137,49 @@ test('F4: JWK는 use가 sig, alg가 RS256일 때만 받고(둘 다 없으면 허
   assert.equal(await reason(verifier, sign(dupB)), 'kid', '중복 kid');
   assert.equal((await verifier.verify(sign(ok))).ok, true);
 });
+
+test('N1: 이스케이프로 쓴 같은 이름·콜론 앞 긴 공백의 중복 키도 거부한다', async () => {
+  const {key, verifier} = await setup();
+  const body = `"iss":"https://${TEAM}.cloudflareaccess.com","aud":["${AUD}"],"email":"${EMAIL}","exp":${Math.floor(Date.now() / 1000) + 600}`;
+  const good = `{"alg":"RS256","kid":"${key.kid}"}`;
+  assert.equal((await verifier.verify(signRaw(key, good, `{${body}}`))).ok, true);
+  for (const [label, head] of [
+    ['이스케이프 kid', `{"alg":"RS256","kid":"other","\\u006bid":"${key.kid}"}`],
+    ['이스케이프 alg', `{"alg":"none","\\u0061lg":"RS256","kid":"${key.kid}"}`],
+    ['콜론 앞 공백 80개', `{"alg":"RS256","kid"${' '.repeat(80)}:"other","kid":"${key.kid}"}`],
+    ['줄바꿈·탭 공백', `{"alg":"RS256","kid"\n\t\r :"other",\n"kid":"${key.kid}"}`],
+  ]) assert.equal(await reason(verifier, signRaw(key, head, `{${body}}`)), 'format', label);
+  assert.equal(await reason(verifier, signRaw(key, good, `{${body},"em\\u0061il":"other@example.com"}`)), 'format', '본문 이스케이프 중복');
+});
+
+test('N1: 정상 JSON(문자열 안 따옴표·역슬래시·유니코드·중첩·배열·긴 공백)은 잘못 거부하지 않는다', async () => {
+  const {key, verifier} = await setup();
+  const base = `"iss":"https://${TEAM}.cloudflareaccess.com","aud":["${AUD}"],"email":"${EMAIL}","exp":${Math.floor(Date.now() / 1000) + 600}`;
+  const head = `{"alg"${' '.repeat(80)}:"RS256","kid":"${key.kid}"}`;
+  const extras = [
+    {note: '따옴표 "kid": "x" 와 \\ 역슬래시'},
+    {nested: {kid: 'a', alg: 'none', deep: [{kid: 'n'}, {kid: 'o'}]}},
+    {quoted: '"', slashes: '\\\\', unicode: '한글 😀', controls: '\n\t\r'},
+    {list: [null, false, true, 123, '"email":"other"', {email: 'other'}, [{email: 'x'}, {email: 'y'}]]},
+  ];
+  for (const extra of extras) {
+    assert.equal((await verifier.verify(signRaw(key, head, `{${base},${JSON.stringify(extra).slice(1, -1)}}`))).ok, true, JSON.stringify(extra).slice(0, 40));
+  }
+});
+
+test('N2: 부적합 키(use=enc)와 같은 kid가 있으면 정상 키도 그 kid는 쓰지 않는다', async () => {
+  const good = makeKey('same'), bad = makeKey('same');
+  bad.jwk = {...bad.jwk, use: 'enc'};
+  const certs = fakeCerts([good, bad]);
+  const verifier = createAccessJwtVerifier({team: TEAM, aud: AUD, email: EMAIL, fetchImpl: certs.fetchImpl});
+  assert.equal(await verifier.refresh(), false, '쓸 수 있는 키가 없어 받기 실패로 본다');
+  assert.equal(await reason(verifier, sign(good)), 'no-keys');
+  // 이미 믿던 키가 있으면 새 목록이 중복뿐이라 거부될 때 기존 키를 유지한다(갱신 실패 정책).
+  const ok = makeKey('ok');
+  certs.state.keys = [ok];
+  assert.equal(await verifier.refresh(), true);
+  certs.state.keys = [good, bad];
+  assert.equal(await verifier.refresh(), false);
+  assert.equal((await verifier.verify(sign(ok))).ok, true, '기존 키 유지');
+  assert.equal(await reason(verifier, sign(good)), 'kid');
+});

@@ -8,19 +8,27 @@ import crypto from 'node:crypto';
 export const ACCESS_JWT_HEADER = 'cf-access-jwt-assertion';
 const b64 = text => Buffer.from(text, 'base64url');
 const B64URL = /^[A-Za-z0-9_-]+$/; // 패딩(=)·표준 base64 글자(+ /)·공백은 받지 않는다
-// 같은 키가 두 번 나오는 JSON은 어느 값을 쓸지 모호하므로 거부한다. 최상위 키만 훑는다(문자열 안의 따옴표는 건너뛴다).
+// 같은 키가 두 번 나오는 JSON은 어느 값을 쓸지 모호하므로 거부한다. 최상위 객체의 키만 훑고, 이름은 JSON 문자열로 디코딩해
+// 비교한다(\u0069 같은 이스케이프도 같은 이름). 공백 길이에는 제한이 없다. 문자열이 아닌 글자는 구조 기호만 본다.
 const hasDuplicateKey = text => {
-  const seen = new Set();
-  let depth = 0;
+  const seen = new Set(), stack = [];
+  let expectKey = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c === '"') {
       let j = i + 1;
       while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
-      if (depth === 1 && /^\s*:/.test(text.slice(j + 1, j + 40))) { const key = text.slice(i, j + 1); if (seen.has(key)) return true; seen.add(key); }
+      if (expectKey && stack.length === 1 && stack[0] === '{') {
+        const key = JSON.parse(text.slice(i, j + 1));
+        if (seen.has(key)) return true;
+        seen.add(key);
+      }
+      expectKey = false;
       i = j;
-    } else if (c === '{' || c === '[') depth++;
-    else if (c === '}' || c === ']') depth--;
+    } else if (c === '{' || c === '[') { stack.push(c); expectKey = c === '{' && stack.length === 1; }
+    else if (c === '}' || c === ']') { stack.pop(); expectKey = false; }
+    else if (c === ',') expectKey = stack.length === 1 && stack[0] === '{';
+    else if (c === ':') expectKey = false;
   }
   return false;
 };
@@ -42,12 +50,14 @@ export function createAccessJwtVerifier({
     try {
       const response = await fetchImpl(certsUrl, {signal: AbortSignal.timeout(timeoutMs), headers: {accept: 'application/json'}});
       if (!response.ok) return false;
-      const body = await response.json(), next = new Map(), duplicated = new Set();
-      for (const jwk of Array.isArray(body?.keys) ? body.keys : []) {
+      const body = await response.json(), next = new Map(), all = Array.isArray(body?.keys) ? body.keys : [];
+      // 같은 kid가 둘 이상이면 어느 쪽이 맞는지 모호하므로 그 kid는 쓰지 않는다. 부적합한 키(use=enc 등)도 세어 원본 전체에서 센다.
+      const count = new Map();
+      for (const jwk of all) if (typeof jwk?.kid === 'string') count.set(jwk.kid, (count.get(jwk.kid) ?? 0) + 1);
+      for (const jwk of all) {
         // use가 있으면 sig만, alg가 있으면 RS256만 받는다. 문서 응답의 키는 둘 다 적혀 있어(alg RS256, use sig) 없을 때만 느슨하다.
-        if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string' || (jwk.alg !== undefined && jwk.alg !== 'RS256')
+        if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string' || count.get(jwk.kid) > 1 || (jwk.alg !== undefined && jwk.alg !== 'RS256')
           || (jwk.use !== undefined && jwk.use !== 'sig')) continue;
-        if (next.has(jwk.kid) || duplicated.has(jwk.kid)) { next.delete(jwk.kid); duplicated.add(jwk.kid); continue; } // 같은 kid가 둘이면 그 kid는 쓰지 않는다
         try { next.set(jwk.kid, crypto.createPublicKey({key: jwk, format: 'jwk'})); } catch { /* 깨진 열쇠는 건너뛴다 */ }
       }
       if (!next.size) return false;
