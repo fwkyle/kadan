@@ -3,6 +3,7 @@ import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { holdPosts } from "./notify-policy.mjs";
+import { readStatusLine, isWorkingMoving } from "./watch-status-line.mjs";
 
 const JUDGE_INPUT_PREFIX = [
   "너는 터미널 화면 조각을 보고 에이전트 상태를 판정한다.",
@@ -249,12 +250,20 @@ export function assessRoles(
     const completionHeld =
       completionDigest != null && current.digest === completionDigest;
 
-    if (sameDigest) {
+    // (a) 화면 맨 아래 상태 줄의 경과 시계가 주기 사이에 움직이면 일하는 중이다(변화 지문은 숫자를 지워 못 본다).
+    // 같은 아래쪽 영역에 끊김·429가 걸리면 일하는 중이 아니다 — #187의 14시간 Reconnecting이 다시 묻히지 않게.
+    const status = alive && current.screen != null ? readStatusLine(current.screen) : null;
+    const workingMoving =
+      disconnects.size === 0 && isWorkingMoving(status, previous?.workClock ?? null);
+
+    // 일하는 동안 쌓인 '변화 없음' 시간은 정체 시간이 아니다. 일이 끝난 직후 곧바로 정체로 넘어가지 않게 0으로 둔다.
+    if (sameDigest && !workingMoving) {
       unchangedMs = (previous.unchangedMs ?? 0) + elapsedMs;
     }
     if (
       sameDigest &&
       disconnects.size === 0 &&
+      !workingMoving &&
       !completionHeld &&
       !/^슈퍼감독$/u.test(
         current.role.slice((boardFromRole(current.role)?.length ?? -1) + 1).split("-")[0]
@@ -271,6 +280,8 @@ export function assessRoles(
       alive,
       stallCount,
       unchangedMs,
+      workClock: status?.kind === "working" ? status.clockSec : null,
+      workingMoving,
       deathActive,
       disconnects: [...disconnects],
       disconnectCounts: [...disconnectCounts],

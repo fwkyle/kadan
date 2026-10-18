@@ -15,6 +15,7 @@ export function clockTime(at) {
 const ALERT_LABELS = {
   "죽음": "세션 종료 의심",
   "정체": "화면이 멈춤",
+  "멈춤": "일하는 표시 없이 입력을 기다리며 멈춤",
   "완료후보": "끝난 것 같음",
   "응답장애": "대답을 못 함",
   "감시제외": "감시 대상에서 빠짐",
@@ -115,6 +116,10 @@ export function formatAlertBody(alert) {
       ? "해당 창에서 Enter를 눌러 큐를 흘려내면 처리됨"
       : "턴 종료·다음 도구 호출 때 자동 제출 예정 — 계속 쌓여 있으면 해당 창 확인";
     return `입력이 큐에 쌓여 대기 ${alert.session} (${minutes}분째 '${alert.line}' — ${action})`;
+  }
+  if (alert.kind === "멈춤") {
+    const minutes = Math.floor((alert.idleMs ?? 0) / 60_000);
+    return `일하는 표시 없이 멈춤 ${alert.session} (빈 입력창 ${minutes}분째, 미완료 실행 있음·답 기다리는 질문 없음 — 감독 확인 필요)`;
   }
   if (alert.kind === "정체") {
     const judged = alert.judgeVerdict ? `, 판정 ${alertLabel(alert.judgeVerdict)}` : "";
