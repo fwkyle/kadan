@@ -26,9 +26,10 @@ export function withInlineScreen(cmd) {
   if (executable !== 'codex' && executable !== 'kadan-codex') return cmd;
   const args = words.slice(head + 1);
   if (args.includes(INLINE_FLAG)) return cmd;
-  for (let i = 0; i < args.length; i++) {
+  // `--` 뒤는 옵션이 아니라 위치 인자(프롬프트)라, 있으면 그 앞에 넣는다(끝에 덧붙이면 프롬프트 낱말이 된다).
+  const dash = args.indexOf('--');
+  for (let i = 0; i < (dash < 0 ? args.length : dash); i++) {
     const token = args[i];
-    if (token === '--') return cmd; // 끝에 덧붙이면 프롬프트 낱말이 된다
     if (token.startsWith('-')) {
       if (!token.includes('=') && VALUE_OPTIONS.has(token)) i += 1;
       continue;
@@ -36,11 +37,23 @@ export function withInlineScreen(cmd) {
     if (NON_INTERACTIVE.has(token)) return cmd;
     break;
   }
-  return `${cmd.trimEnd()} ${INLINE_FLAG}`;
+  if (dash < 0) return `${cmd.trimEnd()} ${INLINE_FLAG}`;
+  // 원문 인용을 보존하려고 글자 자리에 끼운 뒤, 낱말 분해 결과가 '`--` 바로 앞에 플래그 하나'인지 확인한다. 아니면 그대로 둔다.
+  const at = cmd.search(/(^|\s)--(?=\s|$)/);
+  if (at < 0) return cmd;
+  const cut = at + (/\s/.test(cmd[at]) ? 1 : 0);
+  const next = `${cmd.slice(0, cut)}${INLINE_FLAG} ${cmd.slice(cut)}`;
+  const expected = [...words.slice(0, head + 1 + dash), INLINE_FLAG, ...words.slice(head + 1 + dash)];
+  const got = commandWords(next);
+  return got && got.length === expected.length && got.every((word, i) => word === expected[i]) ? next : cmd;
 }
 
 // 옛 세션(플래그 도입 전에 뜬 명령)과 지금 기본값을 견줄 때 쓴다. 플래그만 다른 것은 다른 명령이 아니다.
-export const withoutInlineScreen = cmd => typeof cmd === 'string' ? cmd.split(/\s+/).filter(word => word !== INLINE_FLAG).join(' ') : cmd;
+// 셸 낱말 단위로 견준다(따옴표 안 공백 차이는 다른 명령). 낱말로 못 나누는 명령은 원문 그대로 견준다.
+export function withoutInlineScreen(cmd) {
+  const words = commandWords(cmd);
+  return words ? JSON.stringify(words.filter(word => word !== INLINE_FLAG)) : cmd;
+}
 
 // claude-code 2.1.302: 풀스크린(alternate screen)은 환경 변수 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN(참이면 끔)·
 // CLAUDE_CODE_NO_FLICKER=0, 또는 설정 tui:"default"로 끈다(설치 묶음의 문자열·판정 코드로 확인, 2026-10-18; 실제 화면 실측은 못 했다).

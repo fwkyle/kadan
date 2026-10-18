@@ -92,7 +92,7 @@ Why: codex 0.157부터 대화형 화면이 풀스크린(alternate screen)이 기
 - **codex**: 대화형 명령 끝에 `--no-alt-screen`을 붙인다(`src/inline-screen.mjs` `withInlineScreen`). 토큰 단위로 보고 이미 있으면 중복하지 않는다. `codex exec`·`review` 같은 비대화형 하위 명령, `--` 뒤, 셸 연산이 든 명령에는 붙이지 않는다. 운영 `runner-settings.json`의 틀은 고치지 않는다.
   - 붙는 곳: `fill()`(`launchFor`·`launchForFallback`, 대시보드 '실행 모델' 표시), `kadan start --cmd`(adopt·handover 포함, 비교 전에 맞춘다), `kadan restart`의 resume 재조립, 비서 복원(`secretary-resume`). 감시·시니어의 `codex exec`와 설명 AI의 `exec` 틀(`explainCommand`)에는 붙이지 않는다.
   - 옛 세션(플래그 없이 뜬 명령)과 기본값은 플래그만 달라도 같은 명령으로 본다(`dispatch-runner-guard`).
-  - **위험**: 이 플래그를 모르는 옛 codex는 시작이 실패할 수 있다. 실행 중 버전 검사는 하지 않는다(단순하게). 설치된 0.163.0은 `codex`·`resume`·`exec` 도움말에 모두 이 플래그가 있다.
+  - **위험**: 이 플래그를 모르는 옛 codex는 시작이 실패할 수 있다. 실행 중 버전 검사는 하지 않는다(단순하게). 설치된 0.163.0은 `codex`·`codex resume`·`codex fork` 도움말에 이 플래그가 있고 `codex exec`에는 없다(그래서 exec에는 붙이지 않는다). 명령에 `--`가 있으면 그 바로 앞에 넣는다(`--` 뒤는 프롬프트라서).
 - **claude**: claude-code 2.1.302는 명령 옵션이 없고 환경 변수 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`(참이면 끔)·`CLAUDE_CODE_NO_FLICKER=0`, 설정 `tui: "default"`로 끈다(설치 묶음에서 확인). 명령 문자열을 바꾸면 신원 대조·재시작 해석이 흔들려, 창을 만들 때 tmux 환경(`new-session -e`)으로만 넣는다. 사용자 전역 설정 파일은 고치지 않는다. 실제 claude 화면으로는 확인하지 못했다.
 - **지키는 장치**: `kadan start`가 창을 띄운 뒤 최대 2초(`KADAN_ALT_CHECK_MS`, 0이면 건너뜀)까지 tmux `#{alternate_on}`을 읽어 `start` 원장 줄에 `alternateOn`(0/1)을 적는다. 1이면 시작 출력에 경고 한 줄을 낸다. `restart`·비서 복원이 만드는 `start` 줄에는 아직 적지 않는다.
 

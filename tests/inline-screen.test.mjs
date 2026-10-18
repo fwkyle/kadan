@@ -32,9 +32,24 @@ test('대화형 codex는 끝에 한 번만 붙고, 이미 있으면 그대로다
 
 test('codex exec·review 같은 비대화형 하위 명령과 codex가 아닌 실행기에는 붙이지 않는다', () => {
   for (const cmd of ['codex exec --model m "작업"', 'codex e -m m', 'codex -c a=b exec x', 'codex review --base main',
-    'codex login', 'codex mcp list', 'claude --model claude-fable-5-1', 'cat', 'omo --model m', 'codex -- exec']) {
+    'codex login', 'codex mcp list', 'claude --model claude-fable-5-1', 'cat', 'omo --model m']) {
     assert.equal(withInlineScreen(cmd), cmd, cmd);
   }
+});
+
+test('`--` 뒤는 프롬프트라 플래그를 그 앞에 넣는다(없으면 끝에, 이미 있으면 그대로)', () => {
+  const id = '0197aaaa-1111-4222-8333-444455556666';
+  assert.equal(withInlineScreen(`codex resume ${id} --`), `codex resume ${id} ${F} --`);
+  assert.equal(withInlineScreen('codex resume existing-conversation --'), `codex resume existing-conversation ${F} --`);
+  assert.equal(withInlineScreen(`codex fork ${id} --`), `codex fork ${id} ${F} --`);
+  assert.equal(withInlineScreen('codex --model m -- "새 프롬프트 --"'), `codex --model m ${F} -- "새 프롬프트 --"`);
+  assert.equal(withInlineScreen('codex -- exec'), `codex ${F} -- exec`); // exec는 프롬프트 낱말이다
+  assert.equal(withInlineScreen('codex exec --model m -- x'), 'codex exec --model m -- x');
+  assert.equal(withInlineScreen(`codex resume ${id} ${F} --`), `codex resume ${id} ${F} --`);
+  assert.equal(withInlineScreen(`codex resume ${id}`), `codex resume ${id} ${F}`);
+  // 붙인 결과를 다시 풀어도 대화 해석이 같고 `--` 뒤 낱말은 그대로다
+  assert.deepEqual(conversationOf(withInlineScreen(`codex resume ${id} --`)), {conversationMode: 'resume', conversationRef: id});
+  assert.equal(withInlineScreen('codex "--"'), 'codex "--"'); // 따옴표 안 "--"는 낱말 분해로 구분되지 않아 안전하게 그대로 둔다
 });
 
 test('토큰 단위로 본다: 모델 이름에 alt-screen이 들어가도 붙고, 값 낱말을 하위 명령으로 읽지 않는다', () => {
@@ -97,6 +112,12 @@ test('#188 codexBasis는 플래그가 붙은 start 줄에서도 같은 판정이
   assert.equal(codexBasis([entry(withInlineScreen(plain))], 'r').target, true);
   const other = 'codex --model zai/glm-5.3';
   assert.equal(codexBasis([entry(withInlineScreen(other))], 'r').reason, 'other-provider');
+});
+
+test('비교는 셸 낱말 단위다: 따옴표 안 공백 차이는 다른 명령', () => {
+  assert.notEqual(withoutInlineScreen('codex -c "a=b  c"'), withoutInlineScreen('codex -c "a=b c"'));
+  assert.equal(withoutInlineScreen(`codex   -c "a=b c" ${F}`), withoutInlineScreen('codex -c "a=b c"'));
+  assert.equal(withoutInlineScreen('codex a && b'), 'codex a && b');
 });
 
 test('옛 세션 명령과 기본값은 플래그만 달라도 같은 명령으로 본다', () => {
