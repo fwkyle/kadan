@@ -7,3 +7,20 @@ export const linkMode = (target: string, openIds: string[]): "none" | "form" | "
   !target ? "none" : openIds.includes(target) ? "form" : "lookup";
 export const linkOutcome = (item: Decision | null | undefined): "loading" | "unknown" | "answered" | "cancelled" | "open" =>
   item === undefined ? "loading" : item === null ? "unknown" : item.status === "answered" ? "answered" : item.status === "cancelled" ? "cancelled" : "open";
+
+// 링크 대상의 답하기 양식에 초점을 준다. 돌려주는 값은 '초점을 준 링크 대상'이다. 숨겨진(접힌) 양식은 focus()가 먹지 않으니
+// activeElement가 실제로 그 칸일 때만 target을 돌려주고, 아니면 이전 값을 그대로 돌려줘 펼쳐진 뒤 다시 시도하게 한다.
+export const linkFieldSelector = "input[type=radio]:checked, textarea";
+type Focusable = { focus: (options?: { preventScroll: boolean }) => void };
+export function focusLinkedField(
+  element: { querySelector: (selector: string) => Focusable | null } | null,
+  target: string,
+  focusedFor: string,
+  active: () => unknown,
+): string {
+  if (!element || !target || focusedFor === target) return focusedFor;
+  const field = element.querySelector(linkFieldSelector);
+  if (!field) return focusedFor;
+  field.focus({ preventScroll: true });
+  return active() === field ? target : focusedFor;
+}

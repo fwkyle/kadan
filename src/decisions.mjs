@@ -87,7 +87,7 @@ export class DecisionStore {
   if(process.env.KADAN_NOTIFY==='off')return null;
   const cut=(t,n)=>{t=String(t).replace(/\s+/g,' ').trim();return t.length>n?t.slice(0,n-1)+'…':t;};
   const repo=d.card.split('/')[0],tag=`[${repo}]`;
-  const link=decisionLink(this.home,d.id);
+  const link=decisionLink(this.home,d.id),where=link.startsWith('https://')?'열어서':'맥에서'; // 공개 주소 링크는 맥 밖(폰)에서 열린다
   const q=shortIds(d.question),summary=cut(q.split('\n').find(l=>l.trim())??q,80),full=cut(q,600);
   const body=()=>[...(full!==summary?[`질문: ${full}`]:[]),`선택지: ${d.options.map((o,i)=>`${i+1}) ${cut(shortIds(o),100)}`).join(' ')}`,`추천: ${cut(shortIds(d.recommendation),100)}`,`이유: ${cut(shortIds(d.reason),300)}`,
    `결정 ${d.id.slice(0,8)} · 카드 ${shortIds(d.card)}${d.work?` · 업무 ${shortIds(d.work)}`:''}`].join('\n');
@@ -97,17 +97,17 @@ export class DecisionStore {
   const stateOf=x=>x.status==='answered'
    ?`답변: ${cut(shortIds(x.answer.choice??x.answer.text),150)}${x.answer.choice&&x.answer.text&&x.answer.text!==x.answer.choice?` — ${cut(shortIds(x.answer.text),200)}`:''}`
    :`취소: ${cut(shortIds(x.cancelReason??'사유 없음'),200)}`;
-  const resolvedContent=x=>fitDiscord(`${tag} 결정 해결됨: ${cut(summary,60)} — ${stateOf(x)}`,`맥에서 보기: ${link}`);
+  const resolvedContent=x=>fitDiscord(`${tag} 결정 해결됨: ${cut(summary,60)} — ${stateOf(x)}`,`${where} 보기: ${link}`);
   let short,build,extra;
   if(kind==='request'){
    short=`카단 결정 요청: ${cut(q,100)}`;
-   build=userId=>({mention:true,content:fitDiscord(head(`<@${userId}>`),`맥에서 답하기: ${link}`)});
+   build=userId=>({mention:true,content:fitDiscord(head(`<@${userId}>`),`${where} 답하기: ${link}`)});
    // 보내기 직전에 저장소의 현재 상태를 다시 읽는다: 취소가 먼저 잠금을 잡았으면 열린 요청이 아니라 해결 모양으로 보낸다.
    extra={decision:{id:d.id,latest:()=>this.get(d.id),resolvedContent,resolvedShort:x=>`카단 결정 해결됨 — ${stateOf(x)}`}};
   }else{
    const state=stateOf({...d,status:kind==='answer'?'answered':'cancelled'});
    short=`카단 결정 해결됨 — ${state}`;
-   extra={decision:{id:d.id,edit:fitDiscord(`✅ 해결됨 — ${state}\n${head('')}`,`맥에서 보기: ${link}`)}};
+   extra={decision:{id:d.id,edit:fitDiscord(`✅ 해결됨 — ${state}\n${head('')}`,`${where} 보기: ${link}`)}};
    build=()=>({mention:false,content:resolvedContent({...d,status:kind==='answer'?'answered':'cancelled'})});
   }
   try{return this.userNotify(short,{...base,...extra,discord:build});}catch{return null;}

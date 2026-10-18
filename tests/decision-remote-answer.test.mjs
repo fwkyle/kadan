@@ -231,3 +231,21 @@ test('tokenEquals: 길이·형식이 다르면 거부, 같으면 일치만 통�
   for (const bad of [undefined, null, 5, '']) assert.equal(tokenEquals(bad, t), false);
   assert.equal(tokenEquals(t, null), false);
 });
+
+// #192 이후 알림 글의 안내 문구: 공개 주소 링크면 "열어서", 로컬 주소면 "맥에서". 링크는 같은 decisionLink가 만든다.
+test('알림 글: 원격 설정이 있으면 공개 링크와 "열어서 답하기", 없으면 로컬 링크와 "맥에서 답하기"', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notice-'));
+  new CardStore(home).create({repo: 'repo', id: 'card-a', repoPath: home, body: '# 테스트'});
+  const bodies = [];
+  const store = new DecisionStore(home, {notify() {}, userNotify: (message, opts) => { bodies.push(opts.discord('123').content); return null; }});
+  const input = {question: '분리할까요?', options: ['분리', '유지'], recommendation: '분리', reason: '이유\n- 결과 파일: /repo/card-a/result.md'};
+  const saved = process.env.KADAN_NOTIFY;
+  process.env.KADAN_NOTIFY = 'on';
+  try {
+    store.request('repo/card-a', input, '시험-슈퍼감독');
+    fs.writeFileSync(path.join(home, REMOTE_ACCESS_FILE), JSON.stringify(config));
+    store.request('repo/card-a', {...input, question: '유지할까요?'}, '시험-슈퍼감독');
+  } finally { if (saved === undefined) delete process.env.KADAN_NOTIFY; else process.env.KADAN_NOTIFY = saved; }
+  assert.match(bodies[0], /맥에서 답하기: http:\/\/127\.0\.0\.1:\d+\/#decision-/);
+  assert.match(bodies[1], new RegExp(`열어서 답하기: https://${HOST.replace(/\./g, '\\.')}/#decision-`));
+});

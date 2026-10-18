@@ -12,6 +12,7 @@ import {setThread, setArchived, setDecision, readDecisions, readThreads, withThr
 import {setArchivedSync, botSecrets} from './thread-archive.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWorkStatus} from './work-status-message.mjs';
+import {postPolicy} from './notify-policy.mjs';
 
 export const DISCORD_LIMIT = 2000;
 export const SUPPRESS_NOTIFICATIONS = 4096;
@@ -210,6 +211,18 @@ function syncStatus(ctx, status, {threadId, statusMessageId}) {
   return r;
 }
 
+// 업무 글이 아직 없는 업무의 첫 상태 글: 글과 상태 메시지를 업무당 한 번 만든다(멘션 없음 → 조용히). 끝난 업무는 만들지 않는다.
+// 이후 발령·완료·진행은 syncWork가 같은 메시지만 고친다. 이미 글이 있으면 부르지 않는다(잠금 안에서 기록을 읽은 뒤에만 부른다).
+function createWorkThread(ctx) {
+  const status = buildWorkStatus(ctx.home, ctx.work);
+  if (!status || status.ended) return {outcome: 'none', attempts: 0};
+  if (ctx.left() < MIN_SEND_MS) return budgetOut();
+  const r = postDiscordWebhook({webhook: ctx.webhook, content: status.content, allowedMentions: {parse: []}, wait: true,
+    threadName: `${ctx.work} ${status.title}`.trim().slice(0, 100), budgetMs: ctx.left()});
+  if (r.outcome === 'sent' && r.channelId) setThread(ctx.home, ctx.work, {threadId: r.channelId, statusMessageId: r.messageId ?? null});
+  return r;
+}
+
 // 포럼 채널: 업무 키마다 글 하나(결정은 레포마다 '<레포>/__decisions__' 글 하나). 상태 읽기 → (새 글 만들기) → 상태 갱신을 한 잠금 안에서 한다.
 // 기록된 글이 있으면 thread_id로 이어 붙이고, 그 글이 429 아닌 4xx로 거절되면(지워짐 등) thread_name으로 새 글을 한 번 만든다
 // (같은 요청의 재시도가 아니라 다른 요청). 잠금을 종료 시각 안에 못 얻으면 보내지 않는다: 업무 글로 가야 할 내용을
@@ -311,7 +324,7 @@ function editDecision({home, decision, post, forum, resumeWith = (threadId, atte
 }
 
 // 사건 지점(업무 알림·work 변경·실행 done)에서 부르는 함수 하나: 그 업무 글의 상태 메시지를 현재 업무 기록으로 맞춘다.
-// 글이 아직 없으면(알림이 한 번도 안 나간 업무) 아무것도 안 한다 — 글은 알림이 만든다. 디코 설정 없음·레포 웹훅 없음·
+// 글이 아직 없는 열린 업무는 첫 상태 글을 업무당 한 번 만든다(createWorkThread). 디코 설정 없음·레포 웹훅 없음·
 // KADAN_NOTIFY=off·장애 직후 60초면 요청 0건. 실패해도 시스템 알림으로 대신하지 않고 버린다. 반환은 시험·기록용.
 export function refreshWorkStatus(home, work, opts = {}) {
   const env = opts.env ?? process.env;
@@ -327,7 +340,7 @@ export function refreshWorkStatus(home, work, opts = {}) {
     const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
     const ctx = workCtx({home, env, webhook: sec.repoWebhook, work, deadline, secrets});
     const lock = withThreadLock(home, deadline - MIN_SEND_MS, threads =>
-      threads[work] ? syncWork(ctx, threads[work]) : {outcome: 'none', attempts: 0});
+      threads[work] ? syncWork(ctx, threads[work]) : createWorkThread(ctx));
     const r = lock.locked ? lock.value : {outcome: 'lock-timeout', attempts: 0, reason: '포럼 상태 잠금을 시간 안에 못 얻음'};
     noteOutage(r);
     if (r.outcome !== 'none') logStatus(home, work, r, secrets);
@@ -368,7 +381,7 @@ function decisionSystemMessage(home, decision, message) {
 //   repo: 생략하면 업무 키의 저장소 앞부분. 레포 웹훅(DISCORD_WEBHOOK_URL_<레포>)이 있고 업무 키(또는 forumKey)가 있을 때만 포럼 글로 간다.
 //   tagRepo: 알림 첫머리 `[레포]`에 쓸 이름(생략하면 repo, 그것도 모르면 표시하지 않는다 — 추측 금지). discord 본문을 직접 주면 그쪽이 표시를 책임진다.
 //   forumKey·forumTitle: 업무가 없을 때 쓰는 포럼 글 키와 글 제목(결정의 레포 '결정' 글). decision: {id, edit?, latest?, resolvedContent?} — 요청은 메시지 id를 남기고(보내기 직전 latest()로 현재 상태를 다시 읽어 이미 해결됐으면 resolvedContent로 대신 보내거나 건너뜀), edit 본문이 있으면 남긴 메시지를 고친다.
-// 반환: {via:'discord'|'system', error, duplicate?, discord:{outcome,reason}|null}
+// 반환: {via:'discord'|'system', error, duplicate?, posted?(디코에 새로 올렸을 때만 true), discord:{outcome,reason}|null}
 //   error는 호출 쪽이 쓰던 "시스템 알림 실패 문구"(성공이면 null)다. 디스코드 성공이면 항상 null.
 export function notifyUser(message, spawn, opts = {}) {
   const env = opts.env ?? process.env;
@@ -392,6 +405,15 @@ export function notifyUser(message, spawn, opts = {}) {
           secrets = [sec.webhook, sec.repoWebhook, sec.userId, ...botSecrets(home, env)];
           warnings = sec.warnings ?? [];
           const now = (opts.now ?? Date.now)();
+          // 게시 단계 정책: 새 글 대상이 아니면 디코 호출을 하지 않는다(원장·경보 목록은 그대로). 업무 글이 이미 있으면 상태 메시지만 고쳐 쓴다.
+          // 맥 시스템 알림도 부르지 않는다 — 디코로 보냈어도 맥은 울리지 않았다. 디코 설정이 없을 때의 맥 알림은 정책과 무관하다.
+          const policy = postPolicy({...opts, hasPost: Boolean(opts.decision && readDecisions(home)[opts.decision.id])});
+          if (!policy.post) {
+            if (opts.work) refreshWorkStatus(home, opts.work, {env});
+            appendLog(home, {at: new Date(now).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, work: opts.work ?? undefined,
+              via: 'discord', outcome: 'policy-skip', reason: policy.reason});
+            return {via: 'discord', error: null, skipped: true, discord: {outcome: 'policy-skip', reason: policy.reason, attempts: 0, status: null}};
+          }
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
           // opts.ring: 사용자에게 올라간 경보 — 결정 요청과 같은 방식으로 멘션을 붙여 울린다. 나머지는 조용히 보낸다.
@@ -416,6 +438,7 @@ export function notifyUser(message, spawn, opts = {}) {
           result.discord = {outcome: sent.outcome, reason: scrubSecrets(sent.reason ?? '', secrets), attempts: sent.attempts ?? null, status: sent.status ?? null};
           if (warnings.length) result.discord.warning = warnings.join(' / ');
           if (sent.outcome === 'sent' || sent.outcome === 'resolved-skip') result.via = 'discord';
+          if (sent.outcome === 'sent') result.posted = true;   // 이번 호출이 메시지를 실제로 올렸다(중복·정책 안 보냄·해결 건너뜀은 아님)
         }
       }
     } catch (error) {

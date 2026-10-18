@@ -46,9 +46,9 @@ function guardedWatchSend(tracker,args,role,guard) {
   }
 }
 
-export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
+export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null,overlap=false}={}) {
   if (role==='@user') {
-    const failure=notifyUser(message,spawnSync,{kind:'alert',ring:true}).error;  // 이 길의 @user는 모두 경보(감시 AI 직행·RED 겹알림, 일반 감시기)라서 울린다.
+    const failure=notifyUser(message,spawnSync,{kind:'alert',ring:true,...(overlap?{overlap:true}:{})}).error;  // 이 길의 @user는 모두 경보(감시 AI 직행·RED 겹알림, 일반 감시기)라서 울린다.
     if (failure) { const error=new Error('사용자 알림 실패'); error.delivery='not-sent'; throw error; }
     return;
   }
@@ -224,7 +224,7 @@ export function cmdWatch(argv, flags) {
     stallAfterMs: stallAfterMinutes*60_000,
     record,
     holdTracker,
-    sendAlert: (role,message)=>sendWatchMessage(role,message,{tracker:holdTracker}),
+    sendAlert: (role,message,extra)=>sendWatchMessage(role,message,{tracker:holdTracker,...extra}),
     sendNudge: (role,message)=>sendWatchNudge(role,message,{tracker:holdTracker}),
     sendMailReminder: (role,message,expectedPid)=>sendWatchMailReminder(role,message,expectedPid,{tracker:holdTracker}),
     mailHold: role=>watchMailHold(role,{tracker:holdTracker}),
@@ -238,7 +238,7 @@ export function cmdWatch(argv, flags) {
       if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('입력 큐 재개 세대 변경');
       return floor.sendEnter(session);
     } : null,
-    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:(role,message)=>sendWatchMessage(role,message,{tracker:holdTracker}),readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
+    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:(role,message,extra)=>sendWatchMessage(role,message,{tracker:holdTracker,...extra}),readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
     explain: new ExplainAI({home:ledgerHome(),print:console.log}),
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,

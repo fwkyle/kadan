@@ -4,7 +4,7 @@ import { navigate } from "../navigation";
 import type { Decision, Stamp } from "../types";
 import { ActionForm, AppContext, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
 import { readFolded, saveFolded, toggleFolded, unfoldTarget } from "../decision-fold";
-import { linkMode, linkOutcome, linkTarget } from "../decision-link";
+import { focusLinkedField, linkMode, linkOutcome, linkTarget } from "../decision-link";
 
 const storage = (() => { try { return window.localStorage; } catch { return null; } })();
 
@@ -29,8 +29,8 @@ export default function Decisions({ url }: { url: URL }) {
     if (scrolled.current !== target) { element.scrollIntoView({block:"start"}); scrolled.current=target; }
     // 알림 링크로 열리면 답하기 양식(선택된 추천안 또는 첫 칸)에 바로 초점을 둔다. 접힘 해제·session(결정 token) 준비로
     // 양식이 그려진 뒤에야 찾을 수 있으니, 찾을 때까지 이 효과가 다시 돌게 한다.
-    const field = focused.current !== target && element.querySelector<HTMLElement>("input[type=radio]:checked, textarea");
-    if (field) { field.focus({preventScroll:true}); focused.current=target; }
+    // 숨겨진(접힌) 양식에는 초점이 가지 않는다. 실제로 초점이 옮겨졌을 때만 '줬다'고 기록해, 펼친 뒤 효과가 다시 돌아 준다.
+    focused.current = focusLinkedField(element, target, focused.current, () => document.activeElement);
   }, [target, data, folded, readOnly, decisionToken]);
   const draft = useCallback((id: string, dirty: boolean) => setDrafts(previous => {
     if (previous.has(id) === dirty) return previous;

@@ -192,7 +192,7 @@ export class WatchReports {
     }
     let userNotification=null;
     if(!held&&request.userNotify&&report.level==='RED'&&recipient!=='@user'&&escalation?.recipient!=='@user') {
-      try { this.send('@user',message); userNotification='sent'; } catch { userNotification='failed'; }
+      try { this.send('@user',message,{overlap:true}); userNotification='sent'; } catch { userNotification='failed'; }
     }
     if(held)fs.writeFileSync(path.join(request.evidencePath,'notification.txt'),message,{mode:0o600});
     this.record({kind:'watch-ai-delivery',by:'watch-ai',requestId,source:request.source,
