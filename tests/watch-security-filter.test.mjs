@@ -42,6 +42,11 @@ test('not by word: quotes, prose, busy, typed input, scrolled-up and wrong shape
     noComposer: `${notice}\n\nsome shell prompt $\n`,
     textBetween: `${notice}\n\nagent kept talking here\n\n› Ask Codex to do anything\n`,
     done: `${notice}\n\nKADAN:DONE exec-1 ok\n\n› Ask Codex to do anything\n`,
+    fenceQuote: `• The following is an example of the security message:\n\n\`\`\`text\n${notice}\n\n› Ask Codex to do anything\n\`\`\`\n\n› Ask Codex to do anything\n`,
+    paragraphQuote: `• Observed notice was:\n\n${notice}\n\n› Ask Codex to do anything\n`,
+    indentedQuote: `• 설명\n\n  ${notice.split('\n').join('\n  ')}\n\n› Ask Codex to do anything\n`,
+    mentionedAbove: `the model said it can’t be shown earlier\n\n${notice}\n\n› Ask Codex to do anything\n`,
+    laterOutput: `${notice}\n\n› Ask Codex to do anything\n\n• more work follows\n`,
     scrolledUp: `${notice}\n\n\n› Ask Codex to do anything\n${Array(20).fill('later output').join('\n')}\n`,
   };
   for (const [name, text] of Object.entries(cases)) assert.equal(securityFilterNotice(text), null, name);
@@ -59,7 +64,7 @@ test('429 machinery stays untouched on a security-filter screen', () => {
   assert.deepEqual(retry.alerts, []);
 });
 
-const obs = (s, digest = 'd') => ({role: 'rv', alive: true, pid: 1, expectedPid: 1, digest, screen: s});
+const obs = (s, digest = 'd', harness = 'codex') => ({role: 'rv', harness, alive: true, pid: 1, expectedPid: 1, digest, screen: s});
 test('alert on the first cycle, one per fingerprint, no stall alert behind it, clears with the screen', () => {
   let states = new Map();
   let r = assessRoles(states, new Map([['kadan-rv', obs(A)]]), 30_000, 30_000, 3);
@@ -83,4 +88,22 @@ test('alert body says the stop reason and the needed action', () => {
   const body = formatAlertBody({kind: '보안필터', role: 'rv', session: 'kadan-rv', id: 'x'});
   assert.match(body, /보안 필터로 멈춤/u);
   assert.match(body, /다른 실행기로 교대/u);
+});
+
+test('harness: only codex runs are checked; claude or unknown never alert', () => {
+  for (const harness of ['claude', null, 'unset', 'devin']) {
+    const o = obs(A, 'd', harness);
+    if (harness === 'unset') delete o.harness;
+    const r = assessRoles(new Map(), new Map([['kadan-rv', o]]), 30_000, 30_000, 3);
+    assert.deepEqual(r.alerts, [], String(harness));
+  }
+  for (const harness of ['codex', 'kadan-codex']) {
+    const r = assessRoles(new Map(), new Map([['kadan-rv', obs(A, 'd', harness)]]), 30_000, 30_000, 3);
+    assert.equal(r.alerts.length, 1, harness);
+  }
+});
+
+test('alert body shows the execution id when linked', () => {
+  const body = formatAlertBody({kind: '보안필터', role: 'rv', session: 'kadan-rv', taskId: 'exec-1', id: 'x'});
+  assert.match(body, /rv \/ exec-1/u);
 });

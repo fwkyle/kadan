@@ -103,7 +103,7 @@ export function formatAlertBody(alert) {
     return `${alert.kind} ${alert.session} (${alert.line})${ocx}`;
   }
   if (alert.kind === "보안필터") {
-    return `보안 필터로 멈춤 ${alert.role ?? alert.session} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;
+    return `보안 필터로 멈춤 ${alert.role ?? alert.session}${alert.taskId ? ` / ${alert.taskId}` : ""} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;
   }
   if (alert.kind === "완료후보") {
     return `끝난 것 같음 ${alert.session} (${alert.taskId} ${alert.result}, 감독 확인 필요)`;

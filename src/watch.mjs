@@ -232,7 +232,10 @@ export function assessRoles(
       previousActiveDisconnect && disconnects.has(previousActiveDisconnect)
         ? previousActiveDisconnect
         : freshDisconnectKeys[0] ?? null;
-    const securityFilter = alive ? securityFilterNotice(current.screen) : null;
+    // 실행기가 codex일 때만 본다(kimi 등을 codex 경유로 띄워도 harness는 codex). 모르거나 claude면 보지 않는다.
+    const securityFilter = alive && /^(?:kadan-)?codex$/iu.test(String(current.harness ?? ""))
+      ? securityFilterNotice(current.screen)
+      : null;
     const doneMarker = alive ? (Object.hasOwn(current, 'doneMarker') ? current.doneMarker : screenDoneMarker(current.screen)) : null;
     const doneMarkerKey = doneMarker
       ? `${doneMarker.taskId}|${doneMarker.result}`
