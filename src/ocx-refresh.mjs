@@ -25,12 +25,25 @@ export function parseUsage(text) {
 
 const entryAt = (entry) => (Number.isFinite(entry?.at) ? entry.at : Date.parse(entry?.t));
 
-// 새로고침은 한도 경보의 세션이 codex 실행기일 때만 부른다. 시작 기록의 harness·cmd로 판단하고 근거를 돌려준다.
+// 새로고침은 한도 경보의 세션이 'openai를 쓰는 codex'일 때만 부른다. 시작 기록의 harness·model·cmd로 판단하고 근거를 돌려준다.
+// 공급자 접두어가 붙은 모델(`kimi/k3[1m]`, `zai/…`)이거나 `model_provider`가 openai가 아니면 대상이 아니다 — codex로 띄운 대체 실행기의
+// 한도에 openai 새로고침을 부르면 원인과 무관한 외부 호출이고, 30분 상한을 엉뚱한 공급자가 먼저 쓴다(2026-10-18 검수).
 export function codexBasis(entries, role) {
   const start = (entries ?? []).findLast((e) => e?.kind === "start" && e.role === role);
   if (!start) return null;
   const word = String(start.harness ?? "").split("/").pop();
-  return /codex/iu.test(word) ? `start 기록 harness=${word}` : null;
+  if (!/codex/iu.test(word)) return null;
+  const model = String(start.model ?? "").replace(/^["']|["']$/gu, "");
+  if (model.includes("/")) return null;
+  const provider = String(start.cmd ?? "").match(/model_provider\s*=\s*["']?([\w.-]+)/iu)?.[1];
+  if (provider && provider.toLowerCase() !== "openai") return null;
+  return `start 기록 harness=${word}${model ? ` model=${model}` : ""}${provider ? ` model_provider=${provider}` : ""}`;
+}
+
+// 우리가 띄운 묶음(pgid = 그 프로세스 pid)만 끝낸다. pid가 없거나 1 이하면 아무것도 하지 않는다.
+function killGroup(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  try { process.kill(-pid, "SIGKILL"); } catch { /* 이미 없음 */ }
 }
 
 export function createOcxRefresher({ record = () => {}, env = process.env, run = spawnSync, timeoutMs = OCX_REFRESH_TIMEOUT_MS } = {}) {
@@ -47,7 +60,10 @@ export function createOcxRefresher({ record = () => {}, env = process.env, run =
     try {
       const r = run(bin, ["account", "refresh", "openai"], {
         encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 1 << 20,
+        // 새 프로세스 묶음(setsid)으로 띄운다. 시간 초과 때 직접 띄운 프로세스만 죽고 그 자식이 남지 않게 우리 묶음 전체를 끝낸다.
+        detached: true,
       });
+      if (r?.error?.code === "ETIMEDOUT") killGroup(r.pid);
       if (r?.error?.code === "ENOENT") outcome = "missing";
       else if (r?.error?.code === "ETIMEDOUT") outcome = "timeout";
       else if (r?.error) outcome = "failed";

@@ -25,7 +25,7 @@ import {
 } from "./watch-cycle.mjs";
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { runDailyHierarchyPrune } from "./watch-prune.mjs";
-import { createOcxRefresher, codexBasis } from "./ocx-refresh.mjs";
+import { createOcxRefresher, codexBasis, ocxAlertLine } from "./ocx-refresh.mjs";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -147,8 +147,16 @@ export async function runWatch({
       throw error;
     }
   };
-  const rateLimitRetry = new RateLimitRetry({record, resume:resume429});
   const ocxRefresh = createOcxRefresher({record});
+  // 새로고침을 하고 감시 출력에 한 줄 남긴다. 경보를 보낼지와는 별개다. 대상은 'openai를 쓰는 codex'뿐이다(codexBasis).
+  const refreshOcxFor = ({role, session, entries, now}) => {
+    if (!codexBasis(entries, role)) return null;
+    const result = ocxRefresh({entries, now, trigger: {role, session}});
+    print(`[watch ${clockTime(now)}] ${session} ocx 사용량 새로고침: ${ocxAlertLine(result)}`);
+    return result;
+  };
+  // 자동 재개가 처음 예약될 때(최종 429 화면)도 사용량을 먼저 새로 받는다. 예약 중인 세션은 한도 경보를 보내지 않으므로 결과는 원장과 감시 출력에 남는다.
+  const rateLimitRetry = new RateLimitRetry({record, resume:resume429, onSchedule:refreshOcxFor});
   const mailDelivered = new Set();
   const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,hold:mailHold,send:(role,message,pid)=>{
     try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
@@ -159,6 +167,7 @@ export async function runWatch({
   }}) : null;
   const queueResume = new QueueResume({record, sendEnter:sendQueueEnter, sleep,
     readScreen: session => { try { return readText(floor.read(session)); } catch { return null; } }});
+  const restoredChecked = new Set();
   let roleStates = new Map();
   // 감독 세션의 화면 지문·생존 추적. 작업자 상태와 분리해 둔다 — 같은 맵에 넣으면 감독이 정체 AI·완료후보
   // 경로로 흘러든다. 유휴 판정(놀고 있음)과 죽은 감독 건너뛰기에만 쓴다.
@@ -517,15 +526,29 @@ export async function runWatch({
       for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push(item(l.executionKey, l.taskId, l.workKey, l.currentRecipient));
     } catch { waits = []; }
-    // 한도 경보가 처음 생길 때만, 그 세션이 codex일 때 ocx 사용량을 새로 받고 결과를 경보에 붙인다(ocx-refresh.mjs).
-    // 순회 안에서 동기로 부른다: 30분에 1번·30초 상한이라 순회를 길게 막지 않고, 같은 순회의 경보 본문에 결과를 바로 실을 수 있다.
-    // 실패·없음이어도 경보 전달과 429 재개 예약은 그대로다.
+    // 한도 경보의 새로고침(ocx-refresh.mjs). 호출 여부는 경보를 보낼지와 따로 판단한다.
+    // 새 경보: 처음 생길 때 부르고 결과를 경보 본문에 붙인다.
+    // 복원된 활성 경보(감시기 재시작): 화면에 한도 줄이 그대로면 경보는 첫 순회에 해소로 닫히고 다시 뜨지 않는다. 그래서 경보가 닫히기 전에
+    // 그 경보 뒤 ocx-refresh 기록이 없으면 한 번만 부른다(경보를 다시 알리지는 않는다).
+    // 순회 안에서 동기로 부른다: 30분에 1번·30초 상한이다. 실패·없음이어도 경보 전달과 429 재개 예약은 그대로다.
     if(!ledgerError){
+      const sinceMs=e=>Number.isFinite(e?.at)?e.at:Date.parse(e?.t);
       const known=new Set(activeAlerts.map(a=>a.id));
+      for(const a of activeAlerts){
+        if(a.kind!=='한도'||restoredChecked.has(a.id))continue;
+        restoredChecked.add(a.id);
+        try{
+          const screen=String(roles.observations.get(a.session)?.screen??'').split('\n').slice(-12).join('\n');
+          if(!/429 Too Many Requests|exceeded retry limit|rate limit/iu.test(screen))continue;
+          const shownAt=sinceMs(entries.findLast(e=>e?.kind==='alert'&&e.id===a.id));
+          if(entries.some(e=>e?.kind==='ocx-refresh'&&sinceMs(e)>=shownAt))continue;
+          refreshOcxFor({role:a.role,session:a.session,entries,now:cycleAt});
+        }catch{}
+      }
       for(const a of [...roleAlerts,...(!observationError?rateLimitRetry.alerts??[]:[])]){
-        if(a.kind!=='한도'||known.has(a.id)||a.ocx||retrySessions.has(a.session))continue;
-        if(!codexBasis(entries,a.role))continue;
-        try{a.ocx=ocxRefresh({entries,now:cycleAt,trigger:{role:a.role,session:a.session}});}catch{}
+        if(a.kind!=='한도'||a.ocx||known.has(a.id)||retrySessions.has(a.session))continue;
+        restoredChecked.add(a.id);
+        try{a.ocx=refreshOcxFor({role:a.role,session:a.session,entries,now:cycleAt});}catch{}
       }
     }
     const nextAlerts = [

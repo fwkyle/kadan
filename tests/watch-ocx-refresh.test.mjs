@@ -33,25 +33,25 @@ function fakeOcx(body){
 const okOcx=()=>fakeOcx(`echo "5h window: 12%"\necho "weekly: 3% token ${SECRET}"\necho "${SECRET}" >&2`);
 
 // roles: [{role, harness, screenAt(minute)}]
-async function run({roles,ocxBin,stopAt=6}){
+async function run({roles,ocxBin,stopAt=6,seed=[]}){
  const prev=process.env.KADAN_OCX_BIN;
  if(ocxBin===undefined)delete process.env.KADAN_OCX_BIN;else process.env.KADAN_OCX_BIN=ocxBin;
  try{
   const parents=new Map([...roles.map(r=>[r.role,'p-감독']),['p-감독','@user']]);
-  const starts=[...roles.map((r,i)=>({kind:'start',role:r.role,session:'kadan-'+r.role,harness:r.harness,panePid:i+1,t:stamp(0)})),
+  const starts=[...roles.map((r,i)=>({kind:'start',role:r.role,session:'kadan-'+r.role,harness:r.harness,...(r.start??{}),panePid:i+1,t:stamp(0)})),
    {kind:'start',role:'p-감독',session:'kadan-p-감독',panePid:99,t:stamp(0)}];
   const cards=roles.map((r,i)=>({id:'t'+i,key:'repo/t'+i,role:r.role,board:'p',status:'assigned',activity:'running',workType:'execution'}));
-  const records=[],sent=[],prints=[];let minute=0;const controller=new AbortController();
-  const entries=[...starts,...roles.map((r,i)=>({kind:'send',role:r.role,taskId:'t'+i,t:stamp(0)}))];
+  const records=[],sent=[],prints=[],resumes=[];let minute=0;const controller=new AbortController();
+  const entries=[...seed,...starts,...roles.map((r,i)=>({kind:'send',role:r.role,taskId:'t'+i,t:stamp(0)}))];
   await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,parents,routes:new Map(),superRole:'p-감독',
    now:()=>epoch+minute*60_000,
    floor:{list:()=>starts.map(s=>({session:s.session,pid:s.panePid})),
     read:s=>roles.find(r=>'kadan-'+r.role===s)?.screenAt(minute)??'감독 화면',alive:()=>true},
-   readEntries:()=>entries,readCards:()=>cards,readWorks:()=>[],resume429:()=>{},
+   readEntries:()=>entries,resume429:(role,msg)=>resumes.push([minute,role]),readCards:()=>cards,readWorks:()=>[],
    sendAlert:(role,msg)=>sent.push([minute,role,msg]),record:e=>{records.push(e);entries.push({...e,t:stamp(minute)});},
    print:l=>prints.push(l),notifyLog:null,spawn:()=>({status:0,stdout:''}),
    sleep:async()=>{if(++minute>=stopAt)controller.abort();}});
-  return {records,sent,prints};
+  return {records,sent,prints,resumes};
  }finally{if(prev===undefined)delete process.env.KADAN_OCX_BIN;else process.env.KADAN_OCX_BIN=prev;}
 }
 const working=m=>'Working... 출력 '+m;
@@ -141,4 +141,84 @@ test('출력 숫자 읽기와 경보 문구',()=>{
  assert.deepEqual(parseUsage('5-hour limit: 40%\nWeekly limit: 91.4%'),{fiveHour:40,weekly:91});
  assert.match(ocxAlertLine({outcome:'ok',usage:{weekly:3},cached:true,ageMs:7*60_000}),/^ocx 사용량은 7분 전 새로 받음: 주간 3% — 가짜 한도였을 가능성/);
  assert.match(ocxAlertLine({outcome:'ok',usage:{weekly:98}}),/^새로 받아도 한도\(주간 98%\) — 대체 실행기 고려$/);
+});
+
+// 검수 1라운드(PR #188) 수정 ------------------------------------------------------------------
+const final429=`■ exceeded retry limit, last status: 429 Too Many Requests\n\n›\n gpt-6.1-sol high`;
+const refreshes=r=>r.records.filter(e=>e.kind==='ocx-refresh');
+
+test('R1: 최종 429 + 빈 입력창이면 예약 1건과 새로고침 1건, 한도 경보는 그대로 보내지 않는다',async()=>{
+ const ocx=okOcx();
+ const r=await run({ocxBin:ocx.bin,stopAt:3,roles:[{role:'p-작업자',harness:'codex',screenAt:limitFrom(1,final429)}]});
+ assert.equal(r.records.filter(e=>e.kind==='rate-limit-retry'&&e.action==='scheduled').length,1);
+ assert.equal(refreshes(r).length,1);
+ assert.equal(ocx.calls().length,1);
+ assert.equal(limitMsgs(r.sent).length,0,'예약 중인 세션의 한도 경보 억제는 그대로');
+ assert.ok(r.prints.some(l=>/ocx 사용량 새로고침: 사용량 새로 받음/.test(l)),'감시 출력에 결과가 남는다');
+ assert.ok(r.resumes.length>=1,'재개는 그대로 보낸다');
+});
+
+test('R1: Retry-After: 3600 대기 중에도 새로고침 1건',async()=>{
+ const ocx=okOcx();
+ const r=await run({ocxBin:ocx.bin,stopAt:8,roles:[{role:'p-작업자',harness:'codex',screenAt:limitFrom(1,final429.replace('\n\n›','\nRetry-After: 3600\n\n›'))}]});
+ assert.equal(refreshes(r).length,1);
+ assert.equal(r.resumes.length,0,'대기 시각 전에는 재개하지 않는다');
+});
+
+test('R1: 최종 429에서 claude·kimi 대체 세션은 부르지 않는다',async()=>{
+ const ocx=okOcx();
+ await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'claude',screenAt:limitFrom(1,final429)}]});
+ assert.equal(ocx.calls().length,0);
+});
+
+const restoredAlert=(role,t=0)=>({kind:'alert',id:`disconnect:kadan-${role}:exceeded retry limit|└ Exceeded retry limit, last status: 429 Too Many Requests`,
+ alertKind:'한도',level:'AMBER',role,session:'kadan-'+role,delivered:true,recipient:'p-감독',by:'watch',t:stamp(t)});
+
+test('R2: 재시작으로 복원한 한도 경보에 새로고침 기록이 없으면 한 번 부르고, 이후 30분 안에는 0번(경보는 다시 알리지 않는다)',async()=>{
+ const ocx=okOcx();
+ const r=await run({ocxBin:ocx.bin,stopAt:20,seed:[restoredAlert('p-작업자')],
+  roles:[{role:'p-작업자',harness:'codex',screenAt:m=>limitScreen(1)}]});
+ assert.equal(refreshes(r).length,1);
+ assert.equal(ocx.calls().length,1);
+ assert.equal(limitMsgs(r.sent).length,0,'복원된 경보를 다시 알리지 않는다');
+});
+
+test('R2: 이미 그 경보 뒤 새로고침 기록이 있으면 0번',async()=>{
+ const ocx=okOcx();
+ const seed=[restoredAlert('p-작업자'),{kind:'ocx-refresh',by:'watch',provider:'openai',at:epoch+10_000,outcome:'ok',exitCode:0,usage:{weekly:3},t:stamp(0.5)}];
+ await run({ocxBin:ocx.bin,stopAt:10,seed,roles:[{role:'p-작업자',harness:'codex',screenAt:m=>limitScreen(1)}]});
+ assert.equal(ocx.calls().length,0);
+});
+
+test('R4: kimi 대체·다른 model_provider 세션은 0번, 기본 gpt 세션은 1번',async()=>{
+ for(const [start,expected] of [
+  [{model:'kimi/k3[1m]',cmd:'codex --model kimi/k3[1m]'},0],
+  [{model:'kimi-k2.5',cmd:'codex --model kimi-k2.5 -c model_provider="kimi"'},0],
+  [{model:'gpt-6.1-sol',cmd:'codex --model gpt-6.1-sol -c model_reasoning_effort=high'},1],
+  [{model:'gpt-6.1-sol',cmd:'codex -c model_provider=openai --model gpt-6.1-sol'},1],
+  [{},1],
+ ]){
+  const ocx=okOcx();
+  await run({ocxBin:ocx.bin,roles:[{role:'p-작업자',harness:'codex',start,screenAt:limitFrom(2,limitScreen(1))}]});
+  assert.equal(ocx.calls().length,expected,JSON.stringify(start));
+ }
+});
+
+test('R3: 시간 초과 뒤 자식 프로세스까지 끝나고 시험이 띄운 것만 끝난다',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-ocx-kid-'));
+ const pidFile=path.join(dir,'kid.pid');
+ const ocx=fakeOcx(`sleep 60 &\necho $! > '${pidFile}'\nwait`);
+ const refresh=createOcxRefresher({record:()=>{},env:{KADAN_OCX_BIN:ocx.bin},timeoutMs:3000});
+ const started=Date.now();
+ const result=refresh({entries:[],now:epoch,trigger:{role:'r',session:'s'}});
+ const kid=Number(fs.readFileSync(pidFile,'utf8').trim());
+ const alive=()=>{try{process.kill(kid,0);return true;}catch{return false;}};
+ try{
+  assert.equal(result.outcome,'timeout');
+  assert.ok(Date.now()-started<10_000);
+  assert.ok(kid>1);
+  // SIGKILL 직후 종료 반영까지 짧게 기다린다.
+  for(let i=0;i<20&&alive();i++)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50);
+  assert.equal(alive(),false,'자식 sleep이 남아 있으면 안 된다');
+ }finally{if(alive())process.kill(kid,'SIGKILL');}
 });

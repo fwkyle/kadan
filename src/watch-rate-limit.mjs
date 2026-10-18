@@ -27,7 +27,7 @@ export function terminal429(screen, now) {
 }
 
 export class RateLimitRetry {
-  constructor({record, resume}) { this.record = record; this.resume = resume; }
+  constructor({record, resume, onSchedule}) { this.record = record; this.resume = resume; this.onSchedule = onSchedule; }
 
   tick({observations, tasks, entries, now, fresh}) {
     const suppressed = new Set();
@@ -86,6 +86,8 @@ export class RateLimitRetry {
       // No new task may reset this session's retry count.
       const dueAt = now + Math.max(RETRY_DELAYS[used], error.afterMs);
       emit('scheduled', {taskId, attempt:used + 1, dueAt, fingerprint:error.fingerprint});
+      // 예약을 만든 바로 이 순간이 첫 한도다. 새로고침 실패는 재개 예약에 영향을 주지 않는다.
+      try { this.onSchedule?.({role:seen.role, session, entries, now}); } catch { /* 재개 계약 불변 */ }
       suppressed.add(session);
     }
     return suppressed;
