@@ -121,7 +121,7 @@ export function formatAlertBody(alert) {
   return `${alertLabel(alert.kind)}${alert.session ? ` ${alert.session}` : ""}`;
 }
 
-function resolvedBody(alert) {
+export function resolvedBody(alert) {
   if (alert.kind === "시작보고누락") {
     return `시작 보고 누락 - 해소됨 ${alert.role} / ${alert.taskId}`;
   }

@@ -12,6 +12,7 @@ import {setThread, setArchived, setDecision, readDecisions, readThreads, withThr
 import {setArchivedSync, botSecrets} from './thread-archive.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWorkStatus} from './work-status-message.mjs';
+import {postPolicy} from './notify-policy.mjs';
 
 export const DISCORD_LIMIT = 2000;
 export const SUPPRESS_NOTIFICATIONS = 4096;
@@ -392,6 +393,15 @@ export function notifyUser(message, spawn, opts = {}) {
           secrets = [sec.webhook, sec.repoWebhook, sec.userId, ...botSecrets(home, env)];
           warnings = sec.warnings ?? [];
           const now = (opts.now ?? Date.now)();
+          // 게시 단계 정책: 새 글 대상이 아니면 디코 호출을 하지 않는다(원장·경보 목록은 그대로). 업무 글이 이미 있으면 상태 메시지만 고쳐 쓴다.
+          // 맥 시스템 알림도 부르지 않는다 — 디코로 보냈어도 맥은 울리지 않았다. 디코 설정이 없을 때의 맥 알림은 정책과 무관하다.
+          const policy = postPolicy({...opts, hasPost: Boolean(opts.decision && readDecisions(home)[opts.decision.id])});
+          if (!policy.post) {
+            if (opts.work) refreshWorkStatus(home, opts.work, {env});
+            appendLog(home, {at: new Date(now).toISOString(), key: opts.key ?? null, kind: opts.kind ?? null, work: opts.work ?? undefined,
+              via: 'discord', outcome: 'policy-skip', reason: policy.reason});
+            return {via: 'discord', error: null, skipped: true, discord: {outcome: 'policy-skip', reason: policy.reason, attempts: 0, status: null}};
+          }
           if (opts.key && alreadySent(home, opts.key, opts.dedupWindowMs, now))
             return {via: 'discord', error: null, duplicate: true, discord: {outcome: 'duplicate', reason: '같은 키로 이미 보냄'}};
           // opts.ring: 사용자에게 올라간 경보 — 결정 요청과 같은 방식으로 멘션을 붙여 울린다. 나머지는 조용히 보낸다.

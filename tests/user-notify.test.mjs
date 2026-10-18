@@ -5,9 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
-import {notifyUser, fitDiscord, scrubSecrets, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
+import {notifyUser as rawNotifyUser, fitDiscord, scrubSecrets, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {parseEnvText, setNotifySetting, readNotifySetting, effectiveNotifyEnvFile} from '../src/notify-setting.mjs';
+const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 
 // 가짜 값만 쓴다. 이 시험 파일의 어떤 값도 실제 주소·ID가 아니다.
 const TOKEN = 'FAKETOKEN-abc123', USER_ID = '424242424242';
@@ -146,7 +147,7 @@ test('같은 키는 다른 프로세스에서 불러도 한 번만 보낸다', a
     const first = notifyUser('결정', w.fakeSpawn(), {kind: 'decision-request', key: 'decision:d1:request', home: w.home, env: w.env});
     assert.equal(first.via, 'discord');
     const code = `import {notifyUser} from ${JSON.stringify(new URL('../src/user-notify.mjs', import.meta.url).href)};
-      const r = notifyUser('결정', () => ({status: 0}), {key: 'decision:d1:request', home: ${JSON.stringify(w.home)}, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: ${JSON.stringify(w.envFile)}}});
+      const r = notifyUser('결정', () => ({status: 0}), {kind: 'decision-request', key: 'decision:d1:request', home: ${JSON.stringify(w.home)}, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: ${JSON.stringify(w.envFile)}}});
       console.log(JSON.stringify(r));`;
     const other = spawnSync(process.execPath, ['--input-type=module', '-e', code], {encoding: 'utf8', env: {...process.env, KADAN_HOME: w.home}});
     assert.equal(JSON.parse(other.stdout).duplicate, true);
@@ -298,8 +299,8 @@ test('포럼: 업무 있는 알림은 첫 번에 thread_name 새 글, 다음부�
   const w = await forumWorld();
   try {
     const o = {home: w.base.home, env: w.base.env, work: 'kadan/work-x', workTitle: '알림 만들기'};
-    assert.equal(notifyUser('a', w.base.fakeSpawn(), {...o, kind: 'mail', key: 'mail:1'}).via, 'discord');
-    assert.equal(notifyUser('b', w.base.fakeSpawn(), {...o, kind: 'mail', key: 'mail:2'}).via, 'discord');
+    assert.equal(notifyUser('a', w.base.fakeSpawn(), {...o, kind: 'alert', key: 'mail:1'}).via, 'discord');
+    assert.equal(notifyUser('b', w.base.fakeSpawn(), {...o, kind: 'alert', key: 'mail:2'}).via, 'discord');
     const [first, second] = w.forum.requests();
     assert.equal(bodyOf(first).thread_name, 'kadan/work-x 알림 만들기');
     assert.match(first.url, /wait=true/);
@@ -572,7 +573,7 @@ test('S1 새 업무: 글 만들기 → 상태 메시지 1개 → 사건 뒤 같�
   const w = await forumWorld();
   try {
     const store = mkWork(w.base.home);
-    assert.equal(notifyUser('알림 a', w.base.fakeSpawn(), {...o2(w), kind: 'mail', key: 'mail:1'}).via, 'discord');
+    assert.equal(notifyUser('알림 a', w.base.fakeSpawn(), {...o2(w), kind: 'alert', key: 'mail:1'}).via, 'discord');
     const reqs = w.forum.requests();
     assert.equal(reqs.length, 2);
     assert.ok(bodyOf(reqs[0]).thread_name);                     // 1) 글 + 알림
@@ -590,7 +591,7 @@ test('S1 새 업무: 글 만들기 → 상태 메시지 1개 → 사건 뒤 같�
     assert.match(bodyOf(edit).content, /진행|다음 행동/);
     assert.deepEqual(w.rawThreads(), {'kadan/work-x': {threadId: 'T1', statusMessageId: 'M2'}});
     // 두 번째 알림도 상태 메시지를 새로 올리지 않고 고친다
-    notifyUser('알림 b', w.base.fakeSpawn(), {...o2(w), kind: 'mail', key: 'mail:2'});
+    notifyUser('알림 b', w.base.fakeSpawn(), {...o2(w), kind: 'alert', key: 'mail:2'});
     assert.equal(posts(w, isStatus).length, 1); assert.equal(patches(w).length, 2);
   } finally { w.stop(); }
 });

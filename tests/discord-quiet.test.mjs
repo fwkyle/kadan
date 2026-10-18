@@ -5,11 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {notifyUser, resetDiscordBlock, postDiscordWebhook, SUPPRESS_NOTIFICATIONS} from '../src/user-notify.mjs';
+import {notifyUser as rawNotifyUser, resetDiscordBlock, postDiscordWebhook, SUPPRESS_NOTIFICATIONS} from '../src/user-notify.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {WatchReports} from '../src/watch-report.mjs';
 import {sendWatchMessage} from '../src/commands/watch.mjs';
 import {appendLedger} from '../src/ledger.mjs';
+const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 
 // 울림 기준 시험: 사용자를 멘션하는 요청(결정 요청·경보)만 flags가 없고, 나머지는 모두 flags 4096이다.
 // 가짜 값과 로컬 가짜 웹훅 서버만 쓴다. 실제 디스코드 전송은 없다.
@@ -68,8 +69,8 @@ test('조용히 보내는 것: 결정 답변·취소, 울림 표시 없는 경�
     });
     const send = (message, opts) => notifyUser(message, w.fakeSpawn(), {home: w.home, env: w.env, ...opts});
     send('표시 없는 경보 @everyone', {kind: 'alert'});
-    send('인계 통지', {kind: 'handover'});
-    send('우편 알림', {kind: 'mail', key: 'mail:m1'});
+    send('인계 통지', {kind: 'alert'}); // 인계 종류는 이제 새 글 대상이 아니다(notify-policy.test.mjs). 전송 모양만 본다
+    send('우편 알림', {kind: 'alert', key: 'mail:m1'});
     const bodies = w.requests().map(bodyOf);
     assert.equal(bodies.length, 5);
     for (const b of bodies) assert.ok(quiet(b), JSON.stringify(b));
@@ -95,8 +96,8 @@ test('포럼: 업무 글 생성·이어 붙이기는 조용히, 결정 답변이
   try {
     const store = new DecisionStore(w.home, {notify: () => {}, userNotify: (m, o) => notifyUser(m, w.fakeSpawn(), {...o, home: w.home, env: w.env})});
     const send = (message, opts) => notifyUser(message, w.fakeSpawn(), {home: w.home, env: w.env, work: 'repo/work-1', workTitle: '제목', ...opts});
-    send('첫 알림', {kind: 'mail', key: 'mail:a'});   // 새 글
-    send('둘째 알림', {kind: 'mail', key: 'mail:b'}); // 이어 붙임
+    send('첫 알림', {kind: 'alert', key: 'mail:a'});   // 새 글
+    send('둘째 알림', {kind: 'alert', key: 'mail:b'}); // 이어 붙임
     const quietPosts = w.requests().filter(r => r.method === 'POST').map(bodyOf);
     assert.equal(quietPosts.length, 2);
     for (const b of quietPosts) assert.ok(quiet(b), JSON.stringify(b));
