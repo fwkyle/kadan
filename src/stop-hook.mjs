@@ -17,26 +17,19 @@ export function mayBeSameRun(a, b) {
   return ta.length === 1 || tb.length === 1 || ta.slice(0, -1).join('/') === tb.slice(0, -1).join('/');
 }
 
-// 응답 전체의 코드 울타리(``` · ~~~)를 세어 마지막 줄이 열린 블록 안인지 본다. 닫는 울타리는 같은 글자, 같거나 긴 길이, 뒤에 다른 글이 없어야 한다.
-function endsInsideFence(lines) {
-  let open = null;
-  for (const line of lines) {
-    const m = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (!m) continue;
-    // 여는 울타리. 백틱 울타리는 같은 줄 뒤에 백틱이 있으면 인라인 코드라 열지 않는다(CommonMark).
-    if (!open) { if (!(m[1][0] === '`' && m[2].includes('`'))) open = m[1]; continue; }
-    if (m[1][0] === open[0] && m[1].length >= open.length && !m[2].trim()) open = null;
-  }
-  return open !== null;
-}
-
-// 완료로 인정하는 것은 응답의 마지막 비어 있지 않은 줄이 마커이고 열린 코드 블록 밖일 때뿐이다(2026-10-18 검수: 인용·열린 블록이 완료로 읽혔다).
-// 같은 응답에 같은 실행일 수 있는 다른 결과 마커가 있으면 conflict로 표시한다 — 소비처는 그 증거를 쓰지 않고 화면 판정으로 넘어간다.
+// 훅이 완료로 인정하는 응답 모양 — 아래를 모두 만족할 때만 쓴다. **애매하면 화면 판정으로 넘긴다**(Markdown을 정확히 해석하지 않는다):
+//   1) 마지막 비어 있지 않은 줄이 마커이고 그 줄에 앞 공백이 없다(뒤 공백·CR은 허용). 들여쓴 마커는 목록·인용·코드 안일 수 있다.
+//   2) 코드 울타리 후보(``` · ~~~가 줄 안 어디에 있든, 앞 공백·목록 표식·> 와 상관없이)의 개수가 글자 종류마다 짝수다. 홀수면 열린 블록이 의심된다.
+//   3) 같은 실행일 수 있는 다른 결과 마커가 없다(있으면 conflict로 남겨 소비처가 훅을 쓰지 않는다).
+// 정상 응답(맨 끝 줄에 마커만)이 일부 화면 판정으로 넘어가는 것은 받아들인다 — 훅은 빠른 길일 뿐이고 화면 판정이 언제나 대체 경로다.
 export function lastLineMarker(message) {
-  const raw = message.split('\n').map(line => line.replace(/\r$/, ''));
-  const lines = raw.filter(line => line.trim());
-  const last = doneMarkerOf(lines.at(-1) ?? '');
-  if (!last || endsInsideFence(lines)) return null;
+  const lines = message.split('\n').map(line => line.replace(/\r$/, '')).filter(line => line.trim());
+  const lastLine = lines.at(-1) ?? '';
+  if (!lastLine.startsWith('KADAN:DONE')) return null;
+  const last = doneMarkerOf(lastLine);
+  if (!last) return null;
+  const runs = message.match(/`{3,}|~{3,}/g) ?? [];
+  if (runs.filter(run => run[0] === '`').length % 2 || runs.filter(run => run[0] === '~').length % 2) return null;
   const conflict = findDoneMarkers(message).some(m => m.result !== last.result && mayBeSameRun(m.taskId, last.taskId));
   return {...last, conflict};
 }

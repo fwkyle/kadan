@@ -42,9 +42,9 @@ test('훅: KADAN_ROLE이 없거나 Stop이 아니거나 마커가 없으면 아�
 test('훅: 마커 줄만 기록하고 응답 본문은 저장하지 않는다. 실행기는 입력 키로 가른다', () => {
   const home = tmp();
   const env = {KADAN_ROLE: 'p-worker', KADAN_HOME: home};
-  const body = '비밀 같은 긴 응답 본문 SECRET-BODY\n⏺ KADAN:DONE card-a ok\n';
+  const body = '비밀 같은 긴 응답 본문 SECRET-BODY\nKADAN:DONE card-a ok\n';
   assert.equal(handleStopHook(claudeInput(body), env, fixed), 1);
-  assert.equal(handleStopHook(codexInput('• KADAN:DONE card-b failed'), env, fixed), 1);
+  assert.equal(handleStopHook(codexInput('KADAN:DONE card-b failed'), env, fixed), 1);
   const rows = readSpool(home);
   assert.deepEqual(rows, [
     {at: '2026-10-18T10:00:00.000Z', role: 'p-worker', harness: 'claude', sessionId: 's1', taskId: 'card-a', result: 'ok'},
@@ -294,7 +294,8 @@ test('훅 규칙: 마지막 비어 있지 않은 줄이 마커일 때만 완료 
   const quoted = '이렇게 끝내라고 했다:\n```\nKADAN:DONE a ok\n```\n아직 작업 중이며 다음 턴에서 계속합니다';
   assert.equal(lastLineMarker(quoted), null);
   assert.equal(lastLineMarker('KADAN:DONE a ok\n```'), null); // 코드 블록 닫는 줄은 마지막 줄이 아니다
-  assert.deepEqual(lastLineMarker('끝\n  KADAN:DONE a ok  \n\n \n'), {taskId: 'a', result: 'ok', conflict: false});
+  assert.deepEqual(lastLineMarker('끝\nKADAN:DONE a ok  \n\n \n'), {taskId: 'a', result: 'ok', conflict: false}); // 뒤 공백은 허용
+  assert.equal(lastLineMarker('끝\n  KADAN:DONE a ok'), null); // 3라운드: 앞 공백(들여쓰기)은 이제 훅이 아니다
   const home = tmp();
   assert.equal(handleStopHook(claudeInput(quoted), {KADAN_ROLE: 'r', KADAN_HOME: home}, fixed), 0);
   assert.equal(fs.existsSync(spoolPath(home)), false);
@@ -438,22 +439,30 @@ test('상충 검사: 짧은 ID와 정식 주소는 같은 실행일 수 있어 �
   assert.deepEqual(hookDoneSince({home, role, since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}), []);
 });
 
-test('코드 울타리: 마지막 줄이 열린 블록 안이면 훅 완료가 아니다. 블록 밖·닫힌 블록 뒤·울타리 길이 다름은 정확히 센다', () => {
-  assert.equal(lastLineMarker('인용:\n```\n설명\nKADAN:DONE a ok'), null); // 닫히지 않음
-  assert.equal(lastLineMarker('~~~\nKADAN:DONE a ok'), null);
-  assert.equal(lastLineMarker('KADAN:DONE a ok').result, 'ok'); // 정상, 블록 밖
-  assert.equal(lastLineMarker('```\n코드\n```\n끝\nKADAN:DONE a ok').result, 'ok'); // 닫힌 블록 뒤
+test('훅 인정 규칙(애매하면 화면으로): 세 검수자의 재현은 모두 훅 완료가 아니고, 정상 응답 3종은 훅 완료다', () => {
+  const none = text => assert.equal(lastLineMarker(text), null, JSON.stringify(text));
+  // 1라운드: 인용 + 아직 작업 중 / 상충
+  none('이렇게 끝내라고 했다:\n```\nKADAN:DONE a ok\n```\n아직 작업 중이며 다음 턴에서 계속합니다');
+  assert.equal(lastLineMarker('KADAN:DONE a failed\n수정함\nKADAN:DONE a ok').conflict, true);
+  // 2라운드: ID 혼합 상충(위 시험), 줄 시작 열린 울타리
+  none('인용:\n```\n설명\nKADAN:DONE a ok');
+  none('~~~\nKADAN:DONE a ok');
+  // 3라운드: 목록 표식과 같은 줄에서 열린 울타리 + 들여쓴 마커
+  none('- ```text\n  KADAN:DONE a ok');
+  none('1. ```text\n   KADAN:DONE a ok');
+  none('- ~~~\n  KADAN:DONE a ok');
+  none('> ```\n> KADAN:DONE a ok');
+  // 글자 종류가 섞여 짝이 안 맞는 경우, 길이가 다른 울타리, 닫는 줄 뒤 글
+  none('```\n~~~\nKADAN:DONE a ok');
+  none('````\n```\n안쪽\n```\nKADAN:DONE a ok');
+  // 들여쓴 마커는 훅 아님(2라운드의 '들여쓰기도 훅'을 뒤집었다)
+  none('끝\n    KADAN:DONE a ok');
+  none('끝\n\tKADAN:DONE a ok');
+  // 정상 응답 3종
+  assert.equal(lastLineMarker('작업을 마쳤다.\nKADAN:DONE a ok').result, 'ok'); // 맨 끝 줄 마커
+  assert.equal(lastLineMarker('```\n코드\n```\n끝\nKADAN:DONE a ok').result, 'ok'); // 앞에 닫힌 코드 블록
+  assert.equal(lastLineMarker('쓰기: ```KADAN:DONE a ok``` 라고\nKADAN:DONE a ok').result, 'ok'); // 인라인 울타리(한 줄에 짝)
   assert.equal(lastLineMarker('~~~\n코드\n~~~\nKADAN:DONE a failed').result, 'failed');
-  // 긴 울타리(````) 안의 짧은 ``` 는 닫는 울타리가 아니다
-  assert.equal(lastLineMarker('````\n```\n안쪽\n```\nKADAN:DONE a ok'), null);
-  assert.equal(lastLineMarker('````\n```\n안쪽\n```\n````\nKADAN:DONE a ok').result, 'ok');
-  // 다른 글자의 울타리는 닫지 못하고, 닫는 줄 뒤에 글이 있으면 닫는 줄이 아니다
-  assert.equal(lastLineMarker('```\n~~~\nKADAN:DONE a ok'), null);
-  assert.equal(lastLineMarker('```\n``` 계속\nKADAN:DONE a ok'), null);
-  // 한 줄 인라인 코드(```x```)는 블록을 열지 않는다
-  assert.equal(lastLineMarker('쓰기: ```KADAN:DONE a ok``` 라고\nKADAN:DONE a ok').result, 'ok');
-  // 들여쓴 울타리(4칸 이상)는 코드 블록 울타리가 아니다
-  assert.equal(lastLineMarker('    ```\nKADAN:DONE a ok').result, 'ok');
   assert.equal(lastLineMarker('```\r\n코드\r\n```\r\nKADAN:DONE a ok\r\n').result, 'ok'); // CRLF
 });
 
