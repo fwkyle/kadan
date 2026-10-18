@@ -40,6 +40,11 @@ export function decisionLink(home,id){
  const host=loadRemoteConfig(home)?.host;
  return host?`https://${host}/#decision-${id}`:`http://127.0.0.1:${DEFAULT_PORT}/#decision-${id}`;
 }
+// 화면에 돌려주는 결정에서 원격 감사 필드(answer.remote: 이메일·sub·IP)를 뺀다. 저장 기록에는 그대로 있다.
+export function withoutAuditFields(d){
+ if(!d?.answer||!('remote' in d.answer))return d;
+ const {remote,...answer}=d.answer;return {...d,answer};
+}
 export class DecisionStore {
  constructor(home,{notify,userNotify,threadNote}={}){this.home=home;this.threadNote=threadNote??((d,text)=>postThreadNote(home,d,text));this.userNotify=userNotify??((message,opts)=>notifyUser(message,spawnSync,{home,...opts}));this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'send',role,message],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'사람'},encoding:'utf8',timeout:15000});

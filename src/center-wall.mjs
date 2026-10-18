@@ -15,7 +15,8 @@ import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
 import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
-import {decisionCommand,DecisionStore} from './decisions.mjs';
+import {decisionCommand,DecisionStore,withoutAuditFields} from './decisions.mjs';
+import {tokenEquals} from './remote-access.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {applyTheme,themeToggleHtml,themeToggleStyle,themeToggleScript} from './theme.mjs';
 import {renderDecisions,renderActivity,decisionStyle,decisionScript} from './decision-wall.mjs';
@@ -214,7 +215,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    const f=Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
    // 원격은 결정 전용 token(없으면 null이라 항상 거부), 로컬은 쓰기 token. 서로의 token은 통하지 않는다.
    const expected=req.kadanRemote===true?req.kadanDecisionToken:token;
-   if(!expected||f.token!==expected){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
+   if(!tokenEquals(f.token,expected)){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
    if(url.pathname==='/roles/restart'){
     const role=String(f.role||''),reason=String(f.reason||'').trim(),expectPid=String(f.expectPid||'').trim();
@@ -239,7 +240,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      const result=req.kadanRemote===true?new DecisionStore(home,{notify}).answer(f.id,{revision:f.revision,text:f.text,choice:f.choice,remote:req.kadanAnswerAudit},'사람')
       :decisionCommand(['answer',f.id],{revision:f.revision,text:f.text,choice:f.choice},{home,by:'사람',notify});
      // 답한 결정은 접힌 '이전 결정' 안으로 옮겨진다. 그 조각 주소로 가면 브라우저가 접힘을 펼치므로 결정 영역 맨 위로 보낸다.
-     saved('/?decisionAnswered='+encodeURIComponent(f.id)+'#decisions',result);return true;
+     saved('/?decisionAnswered='+encodeURIComponent(f.id)+'#decisions',withoutAuditFields(result));return true;
    }
    if(url.pathname.startsWith('/runners/')){
     const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};

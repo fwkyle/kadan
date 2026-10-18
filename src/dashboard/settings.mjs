@@ -1,6 +1,7 @@
 // 새 카드 양식·결정 목록·실행 도구 설정 화면(DS-1-impl: dashboard-api.mjs에서 옮김).
 import { createForm } from "../dashboard-forms.mjs";
 import { decisionContent } from "../decision-wall.mjs";
+import { withoutAuditFields } from "../decisions.mjs";
 import { page } from "./shared.mjs";
 import {
   readSettings,
@@ -29,8 +30,7 @@ export function decisionsData(snapshot, url, stamp) {
   const all = snapshot.decisions || [];
   // 원격 답변의 감사 필드(이메일·sub·IP)는 기록에만 두고 화면 응답에는 싣지 않는다.
   const withContent = (d) => {
-    const { remote, ...answer } = d.answer ?? {};
-    return { ...d, ...(d.answer ? { answer } : {}), ...decisionContent(d) };
+    return { ...withoutAuditFields(d), ...decisionContent(d) };
   };
   // ?id=<결정 ID>: 알림 링크가 연 결정 하나의 상태. 없으면 item이 null이다.
   if (url.searchParams.has("id")) {

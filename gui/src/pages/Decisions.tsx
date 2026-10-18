@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useResource } from "../resource";
 import { navigate } from "../navigation";
 import type { Decision, Stamp } from "../types";
-import { ActionForm, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
-import { readFolded, saveFolded, toggleFolded } from "../decision-fold";
+import { ActionForm, AppContext, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
+import { readFolded, saveFolded, toggleFolded, unfoldTarget } from "../decision-fold";
 import { linkMode, linkOutcome, linkTarget } from "../decision-link";
 
 const storage = (() => { try { return window.localStorage; } catch { return null; } })();
@@ -20,24 +20,37 @@ export default function Decisions({ url }: { url: URL }) {
   const kept = [...drafts].filter(id => !open.some(d => d.id === id) && seen.current.has(id)).map(id => ({...seen.current.get(id)!, status: "closed"}));
   const items = [...open, ...kept];
   const target = linkTarget(url.hash);
-  const scrolled = useRef("");
+  const [folded, setFolded] = useState(() => unfoldTarget(readFolded(storage), target));
+  const { readOnly, decisionToken } = useContext(AppContext);
+  const scrolled = useRef(""), focused = useRef("");
   useEffect(() => {
     const element = target && document.getElementById("decision-"+target);
-    if (element && scrolled.current !== target) {
-      element.scrollIntoView({block:"start"});
-      // 알림 링크로 열리면 답하기 양식(선택된 추천안 또는 첫 칸)에 바로 초점을 둔다.
-      element.querySelector<HTMLElement>("input[type=radio]:checked, textarea")?.focus({preventScroll:true});
-      scrolled.current=target;
-    }
-  }, [target, data]);
+    if (!element) return;
+    if (scrolled.current !== target) { element.scrollIntoView({block:"start"}); scrolled.current=target; }
+    // 알림 링크로 열리면 답하기 양식(선택된 추천안 또는 첫 칸)에 바로 초점을 둔다. 접힘 해제·session(결정 token) 준비로
+    // 양식이 그려진 뒤에야 찾을 수 있으니, 찾을 때까지 이 효과가 다시 돌게 한다.
+    const field = focused.current !== target && element.querySelector<HTMLElement>("input[type=radio]:checked, textarea");
+    if (field) { field.focus({preventScroll:true}); focused.current=target; }
+  }, [target, data, folded, readOnly, decisionToken]);
   const draft = useCallback((id: string, dirty: boolean) => setDrafts(previous => {
     if (previous.has(id) === dirty) return previous;
     const next = new Set(previous);
     if (dirty) next.add(id); else next.delete(id);
     return next;
   }), []);
-  const [folded, setFolded] = useState(() => readFolded(storage));
   const openIds = data ? open.map(d=>d.id) : null;
+  // 다른 링크로 옮겨 온 경우(첫 화면 밖)에도 대상이 접혀 있으면 펼치고 저장한다.
+  const unfolded = useRef("");
+  useEffect(() => {
+    // 링크마다 한 번만: 그 뒤 사용자가 직접 접는 것은 막지 않는다.
+    if (!target || unfolded.current === target) return;
+    // 첫 화면은 초기 상태에서 이미 펼쳤으니 저장 목록에 남은 id만 지운다.
+    if (!folded.has(target)) { unfolded.current = target; if (readFolded(storage).has(target)) saveFolded(storage, folded, openIds); return; }
+    unfolded.current = target;
+    const next = unfoldTarget(folded, target);
+    setFolded(next);
+    saveFolded(storage, next, openIds);
+  }, [target, folded, openIds?.join("\n")]);
   const toggleFold = useCallback((id: string) => setFolded(previous => {
     const next = toggleFolded(previous, id);
     saveFolded(storage, next, openIds);

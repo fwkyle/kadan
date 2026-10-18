@@ -202,3 +202,32 @@ test('알림 링크 도우미: 원격 설정에 호스트가 있으면 공개 �
   fs.writeFileSync(path.join(home, REMOTE_ACCESS_FILE), '{broken');
   assert.match(decisionLink(home, 'abc'), /^http:\/\/127\.0\.0\.1/);
 });
+
+// 검수 F1: POST 응답(JSON·최초 답변·같은 답 반복)에 이메일·sub·IP가 실리지 않는다. 저장 기록에는 그대로 있다.
+test('원격 답변 POST 응답에는 감사 필드가 없다(최초 답변, 다른 신원의 같은 답 반복 모두)', async () => {
+  const app = await start();
+  try {
+    const first = app.jwtFor({sub: 'sub-a'}), tokenA = (await app.sessionOf(first)).decisionToken;
+    const headers = {accept: 'application/json', 'cf-connecting-ip': '203.0.113.7'};
+    const one = await app.remote('POST', '/decisions/answer', {jwt: first, body: app.answerBody(tokenA, {revision: '1'}), headers});
+    assert.equal(one.status, 200);
+    for (const secret of ['sub-a', EMAIL, '203.0.113.7', '"remote"']) assert.ok(!one.text.includes(secret), `최초 응답에 ${secret} 없음`);
+    const other = app.jwtFor({sub: 'sub-b'}), tokenB = (await app.sessionOf(other)).decisionToken;
+    const again = await app.remote('POST', '/decisions/answer', {jwt: other, body: app.answerBody(tokenB, {revision: '1'}), headers: {...headers, 'cf-connecting-ip': '203.0.113.8'}});
+    assert.equal(again.status, 200);
+    for (const secret of ['sub-a', 'sub-b', EMAIL, '203.0.113.7', '203.0.113.8', '"remote"']) assert.ok(!again.text.includes(secret), `반복 응답에 ${secret} 없음`);
+    assert.equal(app.fresh().answer.remote.sub, 'sub-a', '저장 기록에는 최초 감사 필드가 그대로 있다');
+  } finally { app.close(); }
+});
+
+// 검수 F3: token 비교는 길이·형식이 다르면 먼저 거부하고 같은 길이일 때만 timingSafeEqual로 본다.
+test('tokenEquals: 길이·형식이 다르면 거부, 같으면 일치만 통과', async () => {
+  const {tokenEquals} = await import('../src/remote-access.mjs');
+  const t = 'a'.repeat(64);
+  assert.equal(tokenEquals(t, t), true);
+  assert.equal(tokenEquals('a'.repeat(63), t), false);
+  assert.equal(tokenEquals('A'.repeat(64), t), false, '대문자는 형식이 다르다');
+  assert.equal(tokenEquals('b'.repeat(64), t), false);
+  for (const bad of [undefined, null, 5, '']) assert.equal(tokenEquals(bad, t), false);
+  assert.equal(tokenEquals(t, null), false);
+});

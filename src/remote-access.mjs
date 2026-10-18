@@ -83,3 +83,9 @@ export function remoteAudit(request, claims) {
     ...(typeof ip === 'string' && ip.length <= 64 ? {ip, ipTrusted: false} : {}),
   };
 }
+
+// token 비교는 길이·형식(16진수 글자)이 다르면 먼저 거부하고, 같으면 시간이 일정한 비교로 한다.
+export function tokenEquals(given, expected) {
+  if (typeof given !== 'string' || typeof expected !== 'string' || !expected || given.length !== expected.length || !/^[0-9a-f]+$/.test(given)) return false;
+  return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+}
