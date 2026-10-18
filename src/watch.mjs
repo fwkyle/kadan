@@ -2,6 +2,7 @@ import {findDoneMarkers} from './done-marker.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
+import { holdPosts } from "./notify-policy.mjs";
 
 const JUDGE_INPUT_PREFIX = [
   "너는 터미널 화면 조각을 보고 에이전트 상태를 판정한다.",
@@ -548,7 +549,9 @@ export function dedupAlerts(previousAlerts, nextAlerts) {
   return {
     notify: nextAlerts.filter((alert) => {
       const previous = previousById.get(alert.id);
-      return !previous || previous.level !== alert.level || (alert.kind === '진행조정' && previous.verdict !== alert.verdict) || (alert.kind === '감시AI오류' && previous.reason !== alert.reason) || (alert.judgeVerdict === '모름' && previous.judgeReason !== alert.judgeReason);
+      return !previous || previous.level !== alert.level || (alert.kind === '진행조정' && previous.verdict !== alert.verdict) || (alert.kind === '감시AI오류' && previous.reason !== alert.reason) || (alert.judgeVerdict === '모름' && previous.judgeReason !== alert.judgeReason)
+        // 알림밀림의 사유가 '안 보냄'(입력 보호)에서 '새 글'(신뢰 승인 등)로 바뀌면 같은 id여도 한 번 다시 알린다. 같은 사유 반복은 그대로 중복이다(재검수 F1).
+        || (alert.kind === '알림밀림' && holdPosts(alert) && !holdPosts(previous));
     }),
     resolved,
     absorbed,

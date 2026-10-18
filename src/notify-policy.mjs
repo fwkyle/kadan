@@ -8,12 +8,16 @@
 const DECISION = /^decision-(request|answer|cancel)$/;
 // 되살리기(revive)에서 kyle 조치가 필요한 멈춤. 키는 revive.mjs가 붙인다. 조용한 '다시 띄움'(ring false, 키 없음)은 소식이라 뺀다.
 const REVIVE_STOP = /^revive-(corrupt|stuck|capped)(:|$)/;
-// 알림밀림(alertKind) 중 새 글을 만들지 않는 사유(holdCode). 사람이 그 창에서 입력 중이거나 복사 모드라서 밀린 것이고,
+// 알림밀림(alertKind) 중 새 글을 만들지 않는 사유(holdCode). 사람이 그 창에서 입력 중이라 밀린 것이고,
 // 5번 밀리면 입력 보호를 건너뛰어 스스로 풀린다. 그 밖의 사유(신뢰 승인 화면·herdr 준비 안 됨·스크롤·상태 모름)와
 // 사유를 모르는 밀림은 사람 조치가 필요할 수 있어 새 글로 유지한다(PR #192 검수 F1).
+// KADAN_PANE_IN_MODE도 새 글이다: 강제 차례의 cancel이 복사 모드는 풀지만 시계 모드 등은 못 풀고, 정책은 강제 전후를 구분하지 못한다.
+// 모르면 보낸다(PR #192 재검수 F2).
 const SELF_RESOLVING_HOLDS = new Set([
-  'KADAN_HUMAN_ACTIVE', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_INPUT_PENDING', 'KADAN_PANE_INPUT_UNKNOWN', 'KADAN_PANE_IN_MODE',
+  'KADAN_HUMAN_ACTIVE', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_INPUT_PENDING', 'KADAN_PANE_INPUT_UNKNOWN',
 ]);
+// 알림밀림 경보가 새 글 대상인지. 감시기가 사유 변화를 새 경보로 볼지 정할 때도 같은 판단을 쓴다.
+export const holdPosts = alert => postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode: alert?.holdCode}).post;
 
 // notifyUser를 부르는 모든 종류(kind). 새 종류를 쓰면 여기와 docs/user-notify.md 표에 올려야 한다(tests/notify-policy.test.mjs가 소스와 대조한다).
 export const KNOWN_KINDS = ['alert', 'alert-resolved', 'decision-request', 'decision-answer', 'decision-cancel', 'revive', 'mail', 'handover'];

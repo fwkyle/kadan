@@ -37,9 +37,9 @@ test('정책 표: 새 글은 결정·최상위 경보·되살리기 멈춤뿐이
   assert.equal(postPolicy({kind: 'alert'}).post, true);
   assert.equal(postPolicy({kind: 'alert', overlap: true}).post, false);
   // 알림밀림: 입력 보호처럼 스스로 풀리는 사유만 안 보낸다. 신뢰 승인·모르는 사유·사유 없음은 새 글(PR #192 검수 F1).
-  for (const holdCode of ['KADAN_HUMAN_ACTIVE', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_INPUT_PENDING', 'KADAN_PANE_IN_MODE'])
+  for (const holdCode of ['KADAN_HUMAN_ACTIVE', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_INPUT_PENDING', 'KADAN_PANE_INPUT_UNKNOWN'])
     assert.equal(postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode}).post, false, holdCode);
-  for (const holdCode of ['KADAN_HERDR_TRUST_PROMPT', 'KADAN_HERDR_NOT_READY', 'KADAN_HERDR_SCROLLED', 'KADAN_PANE_MODE_UNKNOWN', 'KADAN_NEW_CODE', undefined])
+  for (const holdCode of ['KADAN_HERDR_TRUST_PROMPT', 'KADAN_HERDR_NOT_READY', 'KADAN_HERDR_SCROLLED', 'KADAN_PANE_MODE_UNKNOWN', 'KADAN_PANE_IN_MODE', 'KADAN_NEW_CODE', undefined])
     assert.equal(postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode}).post, true, String(holdCode));
   assert.equal(postPolicy({kind: 'alert', alertKind: '감시AI오류'}).post, true);
   for (const key of ['revive-corrupt', 'revive-stuck:watch', 'revive-capped:비서']) assert.equal(postPolicy({kind: 'revive', key}).post, true, key);
@@ -117,6 +117,31 @@ test('경보 글이 아무리 많아도 결정 요청 메시지 기록은 밀려
   assert.ok(kept['alert:a699:699'] && !kept['alert:a0:0']);                // 경보끼리는 오래된 것부터
 });
 
+
+// notifyUser( 호출의 인자 범위를 괄호 짝으로 찾아(여러 줄 가능) 그 안의 kind 값을 모은다. 문자열 속 괄호는 따옴표 안이면 건너뛴다.
+function callKinds(text) {
+  const kinds = [];
+  for (let at = text.indexOf('notifyUser('); at !== -1; at = text.indexOf('notifyUser(', at + 1)) {
+    let depth = 0, quote = null, i = at + 'notifyUser'.length;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
+      if (c === '"' || c === "'" || c === '`') quote = c;
+      else if (c === '(') depth++;
+      else if (c === ')' && --depth === 0) break;
+    }
+    const k = /kind: ?["']([^"']+)["']/.exec(text.slice(at, i + 1));
+    if (k) kinds.push(k[1]);
+  }
+  return kinds;
+}
+
+test('종류 대조는 여러 줄 notifyUser 호출도 읽는다', () => {
+  const fake = "notifyUser(\n  `경보 ${f(x)}`,\n  spawn,\n  {\n    key: 'k',\n    kind: 'review-unregistered',\n  },\n);\nnotifyUser('a', s, {kind: 'alert'});";
+  assert.deepEqual(callKinds(fake), ['review-unregistered', 'alert']);
+  assert.ok(!KNOWN_KINDS.includes('review-unregistered'));              // 이런 종류가 소스에 생기면 아래 대조 시험이 실패한다
+});
+
 // 새 알림 종류를 코드에 쓰면 정책(KNOWN_KINDS)과 문서 표에 올리게 한다. 필수 조치 알림이 조용히 빠지는 것을 막는다.
 test('소스의 notifyUser 종류는 모두 정책 목록과 docs/user-notify.md 표에 있다', () => {
   const root = new URL('../', import.meta.url).pathname;
@@ -126,7 +151,7 @@ test('소스의 notifyUser 종류는 모두 정책 목록과 docs/user-notify.md
   const found = new Set();
   for (const f of files) {
     const text = fs.readFileSync(f, 'utf8');
-    for (const m of text.matchAll(/notifyUser\([^\n]*?kind: ?["']([^"']+)["']/g)) found.add(m[1]);
+    for (const k of callKinds(text)) found.add(k);
     for (const m of text.matchAll(/kind:`(decision-)\$\{kind\}`/g)) for (const k of ['request', 'answer', 'cancel']) found.add(`${m[1]}${k}`);
   }
   assert.ok(found.size >= 5, `소스에서 찾은 종류가 너무 적다: ${[...found]}`);
