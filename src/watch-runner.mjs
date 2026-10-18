@@ -41,7 +41,7 @@ import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner } from "./handover-state.mjs";
 import { mailboxLetters } from "./mailbox-state.mjs";
-import { shortDigest, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
+import { shortDigest, normalizeForChange, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
 import {
   clockTime,
   formatAlertBody,
@@ -421,7 +421,9 @@ export async function runWatch({
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
       const context=observationContext(candidate.role,seen,mailEntries,cards??[],scope?.entries??[]);
-      const evidenceDigest=shortDigest(JSON.stringify([seen.screen,context.process,context.tasks,context.recentTaskEvents,context.recentMail]));
+      // 재검사 간격용 근거 값이다. 시계만 도는 화면이 매번 '새 근거'가 되어 5분마다 불리지 않게 화면만 정규화한다.
+      // AI에게 가는 화면 원문과 기록은 그대로다.
+      const evidenceDigest=shortDigest(JSON.stringify([normalizeForChange(seen.screen??''),context.process,context.tasks,context.recentTaskEvents,context.recentMail]));
       const previous=workerChecks.get(candidate.session);
       const same=previous?.responsibility===responsibility;
       const interval=same&&previous.evidenceDigest===evidenceDigest?WORKER_RECHECK_MS:judgeCooldownMs;
