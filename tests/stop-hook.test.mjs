@@ -439,7 +439,7 @@ test('상충 검사: 짧은 ID와 정식 주소는 같은 실행일 수 있어 �
   assert.deepEqual(hookDoneSince({home, role, since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}), []);
 });
 
-test('훅 인정 규칙(애매하면 화면으로): 세 검수자의 재현은 모두 훅 완료가 아니고, 정상 응답 3종은 훅 완료다', () => {
+test('훅 인정 규칙(애매하면 화면으로): 다섯 라운드의 검수자 재현은 모두 훅 완료가 아니고, 울타리 없는 정상 응답은 훅 완료다', () => {
   const none = text => assert.equal(lastLineMarker(text), null, JSON.stringify(text));
   // 1라운드: 인용 + 아직 작업 중 / 상충
   none('이렇게 끝내라고 했다:\n```\nKADAN:DONE a ok\n```\n아직 작업 중이며 다음 턴에서 계속합니다');
@@ -458,19 +458,26 @@ test('훅 인정 규칙(애매하면 화면으로): 세 검수자의 재현은 �
   // 들여쓴 마커는 훅 아님(2라운드의 '들여쓰기도 훅'을 뒤집었다)
   none('끝\n    KADAN:DONE a ok');
   none('끝\n\tKADAN:DONE a ok');
-  // 4라운드: 개수가 짝수인데 CommonMark상 열린 블록 (정보 문자열이 붙은 줄은 닫는 줄이 될 수 없다)
+  // 4라운드: 개수가 짝수인데 CommonMark상 열린 블록
   none('```text\n```python\nKADAN:DONE a ok');
   none('```text\n~~~\nKADAN:DONE a ok');
   none('```\n```js\nKADAN:DONE a ok');
   none('```\n``` 계속\nKADAN:DONE a ok');
-  none('```\n``\x60`\n```\nKADAN:DONE a ok'); // 닫힘 뒤에 다시 열림
-  // 정상 응답 3종
+  none('```\n``\x60`\n```\nKADAN:DONE a ok');
+  // 5라운드: 한 줄 ~~~text~~~ 는 인라인이 아니라 정보 문자열 text~~~ 를 가진 여는 줄이다
+  none('~~~text~~~\nKADAN:DONE a ok');
+  none('``\x60text``\x60\nKADAN:DONE a ok');
+  // 5라운드: 울타리가 하나라도 있으면 훅 아님 — 닫힌 블록이 앞에 있어도, 인라인 울타리도, 닫힌 ~~~ 블록도
+  none('```\n코드\n```\n끝\nKADAN:DONE a ok');
+  none('쓰기: ```KADAN:DONE a ok``` 라고\nKADAN:DONE a ok');
+  none('~~~\n코드\n~~~\nKADAN:DONE a failed');
+  none('```js\n코드\n```\n```\n또\n```\nKADAN:DONE a ok');
+  none('```\r\n코드\r\n```\r\nKADAN:DONE a ok\r\n');
+  // 정상 응답: 요약 → 빈 줄 → 마커, CRLF, 단일·이중 백틱 인라인
   assert.equal(lastLineMarker('작업을 마쳤다.\nKADAN:DONE a ok').result, 'ok'); // 맨 끝 줄 마커
-  assert.equal(lastLineMarker('```\n코드\n```\n끝\nKADAN:DONE a ok').result, 'ok'); // 앞에 닫힌 코드 블록
-  assert.equal(lastLineMarker('쓰기: ```KADAN:DONE a ok``` 라고\nKADAN:DONE a ok').result, 'ok'); // 인라인 울타리(한 줄에 짝)
-  assert.equal(lastLineMarker('~~~\n코드\n~~~\nKADAN:DONE a failed').result, 'failed');
-  assert.equal(lastLineMarker('```js\n코드\n```\n```\n또\n```\nKADAN:DONE a ok').result, 'ok'); // 정보 문자열은 여는 줄에만, 닫는 줄은 울타리만
-  assert.equal(lastLineMarker('```\r\n코드\r\n```\r\nKADAN:DONE a ok\r\n').result, 'ok'); // CRLF
+  assert.equal(lastLineMarker('요약 문장이다.\n\nKADAN:DONE a failed').result, 'failed');
+  assert.equal(lastLineMarker('요약 문장이다.\r\n\r\nKADAN:DONE a ok\r\n').result, 'ok');
+  assert.equal(lastLineMarker('`x`를 고쳤고 ``y``도 봤다.\nKADAN:DONE a ok').result, 'ok');
 });
 
 test('훅 경로의 알려진 한계: 마커 뒤에 맺음말이 붙으면 훅 빠른 길이 아니라 화면 판정으로 간다', () => {
