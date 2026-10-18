@@ -9,6 +9,8 @@ import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {SECRETARY} from './mailbox.mjs';
 import {floor} from './floor.mjs';
+import {repoKeySuffix} from './notify-setting.mjs';
+import {effectiveWorkOwner, effectiveCardRole} from './handover-state.mjs';
 
 const DECISION_KEY = /\/__decisions__$/;
 
@@ -41,10 +43,15 @@ export function resolveMailTarget(line, {home, defaultTo = SECRETARY, liveSessio
   try { live = liveSessions(); } catch { return fallback('살아 있는 세션을 확인하지 못함'); }
   const owners = new Set();
   try {
-    if (workKey) owners.add(new WorkStore(home).get(workKey).owner);
+    if (workKey) owners.add(effectiveWorkOwner(new WorkStore(home).get(workKey), entries));
     else {
-      for (const c of new CardStore(home).listSummaries()) if (c.repo === forum && c.role) owners.add(c.role);
-      for (const w of new WorkStore(home).list()) if (w.repo === forum && w.status === 'open' && w.owner) owners.add(w.owner);
+      // 포럼 이름은 설정 키에서 거꾸로 만든 값(sample-vibe)이라 원장 레포(sample_vibe)와 글자가 다르다. 웹훅 키 꼴로 맞춰 대조한다.
+      const cards = new CardStore(home).listSummaries(), works = new WorkStore(home).list().filter(w => w.status === 'open');
+      const key = repoKeySuffix(forum), same = r => r && repoKeySuffix(r) === key;
+      const repos = new Set([...cards.map(c => c.repo), ...works.map(w => w.repo)].filter(same));
+      if (repos.size > 1) return fallback(`레포 이름 충돌 ${repos.size}개`);
+      for (const c of cards) if (same(c.repo) && c.role) owners.add(effectiveCardRole(c, entries, cards));
+      for (const w of works) if (same(w.repo) && w.owner) owners.add(effectiveWorkOwner(w, entries));
     }
   } catch { return fallback('업무·카드를 읽지 못함'); }
   const supers = new Set([...owners].map(o => nearestSuper(o, parents, profiles)).filter(Boolean));
