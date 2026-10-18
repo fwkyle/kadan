@@ -375,7 +375,8 @@ export function openWindow(session, platform = process.platform, deps = {}) {
   };
 }
 
-export function buildTmuxCreateArgv({ session, role, cwd, cmd }) {
+// home: 역할 프로세스가 KADAN_HOME을 물려받게 한다(Stop 훅이 감시기와 같은 spool 폴더를 쓰도록). 없으면 넣지 않는다.
+export function buildTmuxCreateArgv({ session, role, cwd, cmd, home }) {
   const environmentRole = session.startsWith("kadan-")
     ? session.slice("kadan-".length)
     : role;
@@ -388,6 +389,7 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd }) {
     cwd,
     "-e",
     `KADAN_ROLE=${environmentRole}`,
+    ...(home ? ["-e", `KADAN_HOME=${home}`] : []),
     ...inlineScreenEnv(cmd).flatMap(value => ["-e", value]),
     ...(cmd ? [cmd] : []),
   ];
@@ -395,7 +397,7 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd }) {
 
 function create({ session, role, cwd, cmd }) {
   ensureTmuxConf();
-  const result = tmux(buildTmuxCreateArgv({ session, role, cwd, cmd }));
+  const result = tmux(buildTmuxCreateArgv({ session, role, cwd, cmd, home: process.env.KADAN_HOME }));
   if (result.status !== 0) {
     throw new Error(`세션 생성 실패: ${(result.stderr || "").trim()}`);
   }

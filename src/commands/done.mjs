@@ -26,7 +26,7 @@ export function cmdDone(argv, flags = {}) {
     || (flags.wait !== undefined && (!fromScreen || !Number.isFinite(waitSec) || waitSec < 0 || waitSec > 600))) {
     die("사용법: kadan done <역할> <카드id> <ok|failed> | --from-screen [--wait <초, 최대 600>] [--close-card [--note <이유>]]", 2);
   }
-  let result = given;
+  let result = given, via = null;
   if (fromScreen) {
     // 기록·전송 없이 화면만 읽는다. 표시가 없으면 실패로 닫고, 재출력 요청은 부르는 쪽이 판단한다.
     const session = sessionName(role);
@@ -34,10 +34,11 @@ export function cmdDone(argv, flags = {}) {
     const entries = readLedger();
     const found = waitScreenDone({
       readScreen: () => normalizeFloorRead(floor.read(session)).text,
-      entries, role, taskId, cards: new CardStore(ledgerHome()).listSummaries(), waitMs: waitSec * 1000,
+      entries, role, taskId, cards: new CardStore(ledgerHome()).listSummaries(), hookHome: ledgerHome(), waitMs: waitSec * 1000,
     });
     if (!found.result) die(`화면 완료 표시 없음: 역할=${role} 카드=${taskId}${found.dispatch ? "" : " (발령 기록 없음 — 화면 전체를 봄)"}${waitSec ? ` (${waitSec}초 대기, 화면 ${found.reads}회 확인)` : ""}`, 3);
     result = found.result;
+    via = found.via ?? "screen";
   }
   if (closeCard && result !== "ok") {
     die("--close-card는 ok 완료에만 쓴다 — failed 실행은 카드를 닫지 않는다", 2);
@@ -47,6 +48,7 @@ export function cmdDone(argv, flags = {}) {
     role,
     taskId,
     result,
+    via,
   });
   console.log(
     `완료 확정: 역할=${entry.role} 카드=${entry.taskId} 결과=${entry.result} 확인=${entry.by}`

@@ -2,6 +2,8 @@
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
 import { findDoneMarkers, diffDoneMarkers } from "./done-marker.mjs";
 import { createHash } from "node:crypto";
+import { hookDoneSince } from "./stop-hook-spool.mjs";
+import { ledgerHome } from "./ledger.mjs";
 
 export function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -42,7 +44,8 @@ function startTimeMs(entry) {
   return Number.isFinite(at) ? at : 0;
 }
 
-export function collectRoles(selectedFloor, entries, monitoredSessions = null, cards = null) {
+// hookHome: Stop 훅 증거(spool) 폴더. 기본은 원장 홈이다(시험은 가짜 홈을 넘긴다).
+export function collectRoles(selectedFloor, entries, monitoredSessions = null, cards = null, { hookHome = null } = {}) {
   const liveItems = selectedFloor.list();
   const liveBySession = new Map(
     liveItems
@@ -135,8 +138,17 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
     }
     // 중앙 카드 조회를 쓰지 않는 기존 호출은 발령 없는 화면 후보도 보고한다.
     // 실제 CLI는 카드 목록(빈 목록 포함)을 넘기므로 등록 카드 감시는 위 대조를 반드시 거친다.
-    const doneMarker = cards == null && completionDispatches.size === 0
+    // 빠른 길: 실행기가 턴을 마칠 때 훅이 남긴 증거가 발령 뒤에 있으면 화면 대신 그것을 쓴다. 없으면 화면 판정이다.
+    // 증거는 같은 역할(훅이 보는 KADAN_ROLE = 세션 이름에서 kadan- 뗀 것)·같은 카드·그 발령(send) 뒤 시각이어야 한다.
+    let hookMarker = null;
+    for (const [key, dispatch] of completionDispatches) {
+      const found = hookDoneSince({ home: hookHome ?? ledgerHome(), role: session.slice("kadan-".length), since: dispatch.t,
+        taskMatches: id => taskKey(id) === key }).at(-1);
+      if (found && (!hookMarker || Date.parse(found.at) > Date.parse(hookMarker.at))) hookMarker = found;
+    }
+    const screenMarker = cards == null && completionDispatches.size === 0
       ? markers.at(-1) : markers.findLast(marker => fresh.has(marker));
+    const doneMarker = hookMarker ? { taskId: hookMarker.taskId, result: hookMarker.result } : screenMarker;
     observations.set(session, {
       role,
       alive: Boolean(live),
@@ -148,6 +160,7 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       screenError,
       startedAt: generations.get(session)?.t ?? start.t,
       doneMarker: doneMarker ?? null,
+      doneSource: doneMarker ? (hookMarker ? "hook" : "screen") : null,
       completionDispatches,
     });
   }

@@ -2,7 +2,8 @@
 import { floor } from "../floor.mjs";
 import { ledgerHome, readLedger } from "../ledger.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
-import { runWaitLoop } from "../cli-wait-done.mjs";
+import { runWaitLoop, hookTaskMatcher } from "../cli-wait-done.mjs";
+import { CardStore } from "../card-store.mjs";
 
 export function cmdWait(argv, flags) {
   const role = argv[0];
@@ -30,6 +31,10 @@ export function cmdWait(argv, flags) {
       since: lastSend?.outputCursor,
       baselineMarkers: lastSend?.baselineMarkers,
       snapshotHome: ledgerHome(),
+      hook: lastSend?.t && lastSend.taskId
+        ? { home: ledgerHome(), since: lastSend.t,
+            taskMatches: hookTaskMatcher({ cards: new CardStore(ledgerHome()).listSummaries(), dispatch: lastSend }) }
+        : null,
     });
   } catch (error) {
     die(error.message, error.exitCode || 1);

@@ -24,6 +24,7 @@ const ALERT_LABELS = {
   "입력큐": "입력 큐 대기",
   "알림밀림": "알림이 계속 밀림",
   "보안필터": "보안 필터로 멈춤",
+  "훅신뢰": "Stop 훅 신뢰 필요",
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
@@ -75,6 +76,10 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "알림밀림") {
     return `알림이 ${alert.role} 창에 ${alert.holdCount}번 연속 밀림 (사유 ${alert.holdCode}, ${alert.heldSince}부터. 5번 밀린 다음 시도에 입력 보호 없이 넣음)`;
+  }
+  if (alert.kind === "훅신뢰") {
+    if (alert.state === "unknown") return `Stop 훅 신뢰 확인 불가: ${alert.text}. 완료 판정은 화면 읽기로 계속된다 — codex 화면의 훅 검토 요청이 없는지 확인한다`;
+    return `Stop 훅 신뢰 필요: ${alert.text}. 그동안 완료 판정은 화면 읽기로 한다 — codex를 열어 훅 검토 화면에서 신뢰하거나 docs/stop-hook.md 절차를 따른다`;
   }
   if (alert.kind === "시작보고누락") return `시작 보고 누락 ${alert.role} / ${alert.taskId} (발령 ${alert.waitMinutes}분 경과, 실제 착수 여부 확인 후 보고 보완 필요)`;
   if (alert.kind === "놀고 있음") {
@@ -154,6 +159,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
+      ...(alert.kind === "훅신뢰" ? {hookTrustState:alert.state,hookTrustText:alert.text} : {}),
       ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
       ...(alert.route?{route:alert.route}:{}),
