@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { ledgerHome } from "./ledger.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
 import { MailWatch } from "./watch-mail.mjs";
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
@@ -44,6 +46,8 @@ import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner } from "./handover-state.mjs";
 import { mailboxLetters } from "./mailbox-state.mjs";
+import { claudeSettingsPath } from "./stop-hook-settings.mjs";
+import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
 import { shortDigest, normalizeForChange, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
 import {
   clockTime,
@@ -566,7 +570,13 @@ export async function runWatch({
         try{a.ocx=refreshOcxFor({role:a.role,session:a.session,entries,now:cycleAt});}catch{}
       }
     }
+    // Stop 훅 빠른 길을 켠 기계(claude 설정 파일이 있음)에서만 codex 훅 신뢰 상태를 읽어 알린다. 읽기 전용이다.
+    let stopHookAlerts = [];
+    try {
+      stopHookAlerts = assessStopHookTrust({ enabled: fs.existsSync(claudeSettingsPath(ledgerHome())), trust: codexStopHookTrust() });
+    } catch { /* 신뢰 확인 실패가 감시를 멈추지 않는다 */ }
     const nextAlerts = [
+      ...(observationError ? [] : stopHookAlerts),
       ...(hierarchyError ? [hierarchyError] : []),
       ...(aiStoreError ? [aiStoreError] : []),
       // 429 재개가 예약된 세션의 '한도' 경보는 새로 알리지 않는다. 다만 이미 알린 경보는 화면에 429가 남아 있는 동안

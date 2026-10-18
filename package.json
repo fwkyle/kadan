@@ -10,6 +10,7 @@
     "src",
     "gui/dist",
     "scripts/watch-judge.sh",
+    "scripts/stop-hook.sh",
     "scripts/senior.sh",
     "scripts/senior-follow.sh",
     "scripts/recover-sessions.mjs",
