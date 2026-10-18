@@ -6,6 +6,7 @@ import {runWatch} from './helpers/watch-runner.mjs';
 import {collectResources} from '../src/watch-resource.mjs';
 import {assessResources} from '../src/watch.mjs';
 import {buildWallSnapshot,renderWallHtml} from '../src/wall.mjs';
+const lt=n=>[...String(n)].map(d=>'ghijklmnop'[d]).join(''); // 숫자만 바뀐 화면은 변화로 치지 않으므로 글자로 바꾼다
 
 const t='2026-09-09T00:00:00.000Z';
 const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],['p-슈퍼감독','@user']]);
@@ -37,7 +38,7 @@ async function exercise(ctx,{scope='active',topAlive=true,death=false}={}) {
  });
  try {await assert.rejects(()=>runWatch({
   floor:{list:()=>starts.filter(s=>(topAlive||s.role!=='p-슈퍼감독')&&!(death&&[1,2].includes(cycle)&&s.role===card.role))
-   .map(s=>({session:s.session,pid:s.panePid})),read:()=>`정상 작업 ${cycle}`},
+   .map(s=>({session:s.session,pid:s.panePid})),read:()=>`정상 작업 ${lt(cycle)}`},
   readEntries:()=>entries,readCards:scope==='legacy'?null:()=>scope==='empty'?[]:[card],parents,
   intervalMs:1000,stallN:2,routes:{p:'p-감독'},superRole:'p-슈퍼감독',userNotify:true,
   judgeCmd:'fake',ai:{reports:{retire:()=>{}},run:c=>{judges.push(c);return {ok:true};}},
