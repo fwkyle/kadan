@@ -27,3 +27,8 @@ export function saveFolded(store: Store | null, folded: Set<string>, openIds: st
     // 저장소를 못 쓰는 창(사생활 보호 등)에서는 이번 화면에서만 접는다.
   }
 }
+
+// 알림 링크(#decision-<id>)가 가리킨 결정은 접어 두었어도 펼친다. 접힘 목록에서도 빼 두어 다음에도 펼친 채 남긴다(2026-10-18).
+export function unfoldTarget(folded: Set<string>, target: string): Set<string> {
+  return target && folded.has(target) ? toggleFolded(folded, target) : folded;
+}

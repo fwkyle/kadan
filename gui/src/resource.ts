@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { Resource, type ResourceOptions } from "./resource-core.ts";
+import { writeAllowed } from "./write-policy.ts";
 
 const resources = new Map<string, Resource<unknown>>();
 const api = "/api/dashboard/";
@@ -67,12 +68,14 @@ let readOnly = false;
 export const setReadOnly = (value: boolean) => {
   readOnly = value;
 };
+
 export async function save(
   action: string,
   fields: Record<string, string>,
   token: string,
 ): Promise<SaveResult> {
-  if (readOnly) throw new Error("원격 보기에서는 저장할 수 없습니다.");
+  if (!writeAllowed(action, token, readOnly))
+    throw new Error("원격 보기에서는 저장할 수 없습니다.");
   const controller = new AbortController(),
     timer = setTimeout(() => controller.abort(), 30_000);
   try {
@@ -83,11 +86,14 @@ export async function save(
       body: new URLSearchParams({ ...fields, token }),
       signal: controller.signal,
     });
-    if (!response.ok)
+    if (!response.ok) {
+      // 원격 로그인 갱신으로 결정 token이 바뀌었을 수 있다. 다음 시도 전에 session을 새로 읽는다.
+      if (response.status === 403) invalidateResources();
       throw new Error(
         (await response.text()).slice(0, 1000) ||
           `저장 실패 (${response.status})`,
       );
+    }
     const result = (await response.json()) as SaveResult;
     invalidateResources();
     return result;

@@ -6,10 +6,11 @@ import {sendDashboardData} from './dashboard-api.mjs';
 import {serveDashboard} from './dashboard-static.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
-import {loadRemoteConfig, createRemoteGate, judgeRequest, sameOrigin} from './remote-access.mjs';
+import {loadRemoteConfig, createRemoteGate, judgeRequest, sameOrigin, decisionToken, remoteOriginOk, remoteAudit} from './remote-access.mjs';
 import {centerSummary} from './center-summary.mjs';
 import { renderCenterWall, createCenterHandler, prepareCenterWall } from "./center-wall.mjs";
 import fs from "node:fs";
+import {randomBytes} from "node:crypto";
 import { dutyHead, renderRound } from "./cli.mjs";
 import http from "node:http";
 import path from "node:path";
@@ -458,6 +459,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  // 원격 접속 설정(KADAN_HOME/remote-access.json)이 있을 때만 게이트를 만든다. 없으면 열쇠 조회도 타이머도 없다(2026-10-18).
  // remote를 직접 넘기면(시험) 파일 대신 그 설정을 쓴다.
  const remoteGate=centerHandler?createRemoteGate(remote===undefined?loadRemoteConfig(home):remote,remoteOptions):null;
+ const decisionSecret=randomBytes(32); // 결정 전용 token용 비밀. 프로세스 안에만 둔다.
  const cache=new Map();
  let sharedSnapshot=null;
  const clear=()=>{cache.clear();sharedSnapshot=null;};
@@ -493,7 +495,12 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       if (verdict.kind==='deny') { response.writeHead(verdict.status); response.end(verdict.message); return; }
       if (verdict.kind==='remote') {
         request.kadanRemote=true;
-        if (!['GET','HEAD'].includes(request.method)) { response.writeHead(405,{allow:'GET, HEAD'}); response.end('원격은 조회만 지원합니다'); return; }
+        request.kadanDecisionToken=decisionToken(decisionSecret,verdict.claims);
+        // 원격에서 열리는 쓰기는 /decisions/answer 하나뿐이다. 나머지 GET·HEAD 아닌 요청은 결정 token이 있어도 center-wall 전에 405다.
+        if (request.method==='POST'&&url.pathname==='/decisions/answer') {
+          if (!remoteOriginOk(request,remoteGate.host)) { response.writeHead(403); response.end('출처가 허용 호스트와 다릅니다'); return; }
+          request.kadanAnswerAudit=remoteAudit(request,verdict.claims);
+        } else if (!['GET','HEAD'].includes(request.method)) { response.writeHead(405,{allow:'GET, HEAD'}); response.end('원격은 조회만 지원합니다'); return; }
         url.searchParams.delete('fresh'); // 캐시 비우기는 원격에서 무시한다
       }
     }
@@ -504,7 +511,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       if(!centerHandler){response.writeHead(503);response.end('대시보드 저장소 없음');return;}
       if(request.method!=='GET'){response.writeHead(405,{allow:'GET'});response.end('조회만 지원합니다');return;}
       if(request.headers['sec-fetch-site']==='cross-site'||request.headers.origin&&!sameOrigin(request)){response.writeHead(403);response.end('다른 사이트에서 조회할 수 없습니다');return;}
-      if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true}:{token:centerHandler.token}));return;}
+      if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true,...(request.kadanDecisionToken?{decisionToken:request.kadanDecisionToken}:{})}:{token:centerHandler.token}));return;}
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
     if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}

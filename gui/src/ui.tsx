@@ -22,6 +22,7 @@ export const time = (value?: string | null) =>
     : "시각 모름";
 export const AppContext = createContext<{
   token: string;
+  decisionToken?: string; // 원격 보기에서만 있다. /decisions/answer 하나에만 쓴다.
   readOnly: boolean;
   draft: (key: string, dirty: boolean) => void;
   notice: (text: string) => void;
@@ -176,7 +177,9 @@ export function Pages({
 
 // 원격 보기(읽기 전용)에서는 쓰기 폼을 그리지 않는다.
 export function ActionForm(props: Parameters<typeof ActionFormInner>[0]) {
-  return useContext(AppContext).readOnly ? null : <ActionFormInner {...props} />;
+  const { readOnly, decisionToken } = useContext(AppContext);
+  // 원격 보기에서는 결정 답하기 양식만 연다(결정 token이 있을 때).
+  return readOnly && !(props.spec.action === "/decisions/answer" && decisionToken) ? null : <ActionFormInner {...props} />;
 }
 function ActionFormInner({
   spec,
@@ -315,7 +318,7 @@ function ActionFormInner({
                 ? { revision: String(baseRevision) }
                 : {}),
             },
-            context.token,
+            context.readOnly ? context.decisionToken || "" : context.token,
           );
           setDirty(false);
           context.draft(id, false);

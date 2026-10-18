@@ -59,7 +59,7 @@ export default function App() {
     view = viewOf(url),
     section = ["dashboard", "operations-flow", "work-create", "card-create"].includes(view)
       ? "dashboard" : view === "runs" ? "ledger" : view,
-    session = useResource<{ token: string; readOnly?: boolean }>("session", {
+    session = useResource<{ token: string; decisionToken?: string; readOnly?: boolean }>("session", {
       pollMs: 0,
       staleMs: 300_000,
     }),
@@ -75,8 +75,8 @@ export default function App() {
     else drafts.current.delete(key);
   }, []);
   const context = useMemo(
-    () => ({ token: session.data?.token || "", readOnly, draft, notice: setNotice }),
-    [session.data?.token, readOnly, draft],
+    () => ({ token: session.data?.token || "", decisionToken: session.data?.decisionToken, readOnly, draft, notice: setNotice }),
+    [session.data?.token, session.data?.decisionToken, readOnly, draft],
   );
   useEffect(() => setReadOnly(readOnly), [readOnly]);
   useEffect(() => {
