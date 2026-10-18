@@ -19,6 +19,7 @@ const entryOf = v => typeof v === 'string' && v ? {threadId: v, statusMessageId:
 const storedEntry = ({archived, ...rest}) => (archived ? {...rest, archived: true} : rest);
 
 const MAX_DECISIONS = 500; // 오래된 결정 기록부터 버린다(해결된 결정은 다시 고칠 일이 거의 없다)
+const MAX_ALERT_POSTS = 200;
 
 function readState(home) {
   try {
@@ -63,8 +64,10 @@ export function setDecision(home, id, entry) {
   const all = readDecisions(home);
   // 해결 기록은 한 방향이다: 한 번 resolved면 어떤 쓰기도 false로 되돌리지 못한다.
   const next = {...all, [id]: decisionOf({...entry, ...(all[id]?.resolved ? {resolved: true} : {})})};
-  const keys = Object.keys(next);
-  for (const k of keys.slice(0, Math.max(0, keys.length - MAX_DECISIONS))) delete next[k];
+  // 보존 한도는 둘로 나눈다: 경보 글(`alert:` 접두)은 경보끼리만 밀려나고, 결정 요청은 경보 때문에 밀려나지 않는다(PR #192 검수).
+  const keys = Object.keys(next), alerts = keys.filter(k => k.startsWith('alert:')), others = keys.filter(k => !k.startsWith('alert:'));
+  for (const k of alerts.slice(0, Math.max(0, alerts.length - MAX_ALERT_POSTS))) delete next[k];
+  for (const k of others.slice(0, Math.max(0, others.length - MAX_DECISIONS))) delete next[k];
   writeState(home, readThreads(home), next);
 }
 

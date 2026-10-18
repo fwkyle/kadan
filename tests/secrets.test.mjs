@@ -12,11 +12,12 @@ import {
 import {setNotifySetting, effectiveNotifyEnvFile, readDiscordSecrets} from '../src/notify-setting.mjs';
 import {cmdSecrets} from '../src/commands/secrets.mjs';
 import {cmdNotify} from '../src/commands/notify.mjs';
-import {notifyUser} from '../src/user-notify.mjs';
+import {notifyUser as rawNotifyUser} from '../src/user-notify.mjs';
 import {importStorage, exportStorage, activateStorage, storageCommand} from '../src/storage-migration.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {runInit} from '../src/quickstart.mjs';
+const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 
 // 가짜 값만 쓴다. 어떤 값도 실제 주소·토큰·ID가 아니다.
 const FAKE_TOKEN = 'FAKE-TOKEN-zz9981', FAKE_USER = '123456789012', FAKE_BOT = 'FAKE-BOT-qq7731';
