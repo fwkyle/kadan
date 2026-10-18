@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {handleStopHook, lastLineMarker} from '../src/stop-hook.mjs';
+import {handleStopHook, lastLineMarker, mayBeSameRun} from '../src/stop-hook.mjs';
 import {appendSpool, readSpool, hookDoneSince, spoolPath} from '../src/stop-hook-spool.mjs';
 import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
 import {withInlineScreen, withoutInlineScreen} from '../src/inline-screen.mjs';
@@ -19,7 +19,8 @@ import {codexStopHookTrust, assessStopHookTrust, codexHookCommand} from '../src/
 import {collectRoles} from '../src/watch-roles.mjs';
 import {screenDoneResult, runWaitLoop, hookTaskMatcher} from '../src/cli-wait-done.mjs';
 import {explainAlertRoute} from '../src/watch.mjs';
-import {formatAlertBody} from '../src/watch-alert-body.mjs';
+import {formatAlertBody, recordAlert} from '../src/watch-alert-body.mjs';
+import {openAlerts} from '../src/dashboard-band.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-stop-hook-'));
 const input = (message, extra = {}) => JSON.stringify({hook_event_name: 'Stop', session_id: 's1', last_assistant_message: message, ...extra});
@@ -418,4 +419,61 @@ test('codex 신뢰 표 헤더 변형: 작은따옴표 키·점 주변 공백·�
   assert.equal(alert.id, 'stop-hook:unknown');
   assert.match(formatAlertBody(alert), /신뢰 확인 불가/);
   assert.equal(explainAlertRoute(alert, new Map(), [], 'p-super').recipient, '@user');
+});
+
+// --- PR #191 검수 수정 2라운드 ---
+test('상충 검사: 짧은 ID와 정식 주소는 같은 실행일 수 있어 상충이고, 다른 저장소의 같은 조각은 섞지 않는다', () => {
+  assert.equal(mayBeSameRun('current', 'fixture/current'), true);
+  assert.equal(mayBeSameRun('fixture/current', 'fixture/current'), true);
+  assert.equal(mayBeSameRun('a/x', 'b/x'), false);
+  assert.equal(mayBeSameRun('a/x', 'x'), true); // 한쪽에 저장소가 없으면 같은 실행일 수 있다 — 소비처가 최종 판정
+  assert.equal(mayBeSameRun('fixture/current', 'fixture/other'), false);
+  assert.equal(lastLineMarker('KADAN:DONE fixture/current failed\nKADAN:DONE current ok').conflict, true);
+  assert.equal(lastLineMarker('KADAN:DONE current failed\nKADAN:DONE fixture/current ok').conflict, true);
+  assert.equal(lastLineMarker('KADAN:DONE a/x failed\nKADAN:DONE b/x ok').conflict, false);
+  assert.equal(lastLineMarker('KADAN:DONE current ok\nKADAN:DONE fixture/current ok').conflict, false); // 같은 결과는 상충이 아니다
+  // 소비처: 긴 주소로 적힌 상충도 현재 실행이면 훅으로 판정하지 않는다
+  const home = tmp();
+  handleStopHook(claudeInput('KADAN:DONE repo/a failed\nKADAN:DONE a ok'), {KADAN_ROLE: role, KADAN_HOME: home}, () => new Date('2026-10-18T10:05:00Z'));
+  assert.deepEqual(hookDoneSince({home, role, since: dispatch.t, taskMatches: hookTaskMatcher({cards, dispatch})}), []);
+});
+
+test('코드 울타리: 마지막 줄이 열린 블록 안이면 훅 완료가 아니다. 블록 밖·닫힌 블록 뒤·울타리 길이 다름은 정확히 센다', () => {
+  assert.equal(lastLineMarker('인용:\n```\n설명\nKADAN:DONE a ok'), null); // 닫히지 않음
+  assert.equal(lastLineMarker('~~~\nKADAN:DONE a ok'), null);
+  assert.equal(lastLineMarker('KADAN:DONE a ok').result, 'ok'); // 정상, 블록 밖
+  assert.equal(lastLineMarker('```\n코드\n```\n끝\nKADAN:DONE a ok').result, 'ok'); // 닫힌 블록 뒤
+  assert.equal(lastLineMarker('~~~\n코드\n~~~\nKADAN:DONE a failed').result, 'failed');
+  // 긴 울타리(````) 안의 짧은 ``` 는 닫는 울타리가 아니다
+  assert.equal(lastLineMarker('````\n```\n안쪽\n```\nKADAN:DONE a ok'), null);
+  assert.equal(lastLineMarker('````\n```\n안쪽\n```\n````\nKADAN:DONE a ok').result, 'ok');
+  // 다른 글자의 울타리는 닫지 못하고, 닫는 줄 뒤에 글이 있으면 닫는 줄이 아니다
+  assert.equal(lastLineMarker('```\n~~~\nKADAN:DONE a ok'), null);
+  assert.equal(lastLineMarker('```\n``` 계속\nKADAN:DONE a ok'), null);
+  // 한 줄 인라인 코드(```x```)는 블록을 열지 않는다
+  assert.equal(lastLineMarker('쓰기: ```KADAN:DONE a ok``` 라고\nKADAN:DONE a ok').result, 'ok');
+  // 들여쓴 울타리(4칸 이상)는 코드 블록 울타리가 아니다
+  assert.equal(lastLineMarker('    ```\nKADAN:DONE a ok').result, 'ok');
+  assert.equal(lastLineMarker('```\r\n코드\r\n```\r\nKADAN:DONE a ok\r\n').result, 'ok'); // CRLF
+});
+
+test('훅 경로의 알려진 한계: 마커 뒤에 맺음말이 붙으면 훅 빠른 길이 아니라 화면 판정으로 간다', () => {
+  const home = tmp();
+  assert.equal(handleStopHook(claudeInput('KADAN:DONE a ok\n이상입니다.'), {KADAN_ROLE: role, KADAN_HOME: home}, fixed), 0);
+  assert.equal(fs.existsSync(spoolPath(home)), false);
+});
+
+test('신뢰 경보 기록: unknown과 untrusted의 상태 설명이 원장 경보와 열린 경보 목록에 남고 설정 내용은 없다', () => {
+  const entries = [];
+  for (const state of ['unknown', 'untrusted']) {
+    const [alert] = assessStopHookTrust({enabled: true, trust: {state, key: '/secret/config/path'}});
+    recordAlert(e => entries.push({...e, t: '2026-10-18T10:00:00Z'}), alert, '@user', true);
+  }
+  const items = openAlerts(entries).items;
+  const by = Object.fromEntries(items.map(i => [i.id, i]));
+  assert.equal(by['stop-hook:unknown'].trustState, 'unknown');
+  assert.match(by['stop-hook:unknown'].trustText, /읽지 못했다/);
+  assert.equal(by['stop-hook:untrusted'].trustState, 'untrusted');
+  assert.match(by['stop-hook:untrusted'].trustText, /신뢰하지 않았다/);
+  assert.ok(!JSON.stringify(entries).includes('/secret/config/path') && !JSON.stringify(entries).includes('trusted_hash'));
 });

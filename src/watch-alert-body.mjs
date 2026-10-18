@@ -155,6 +155,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
+      ...(alert.kind === "훅신뢰" ? {hookTrustState:alert.state,hookTrustText:alert.text} : {}),
       ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
       ...(alert.route?{route:alert.route}:{}),
