@@ -5,9 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {notifyUser, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
+import {notifyUser as rawNotifyUser, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {repoOfAlert} from '../src/watch-runner.mjs';
+const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 
 // 결정 알림 다듬기(레포 표시·레포 '결정' 글·원래 메시지 수정) 시험. 가짜 값만 쓴다.
 const TOKEN = 'FAKETOKEN-abc123', USER_ID = '424242424242';
@@ -192,8 +193,8 @@ test('D6 다른 알림의 [레포] 표시: 근거가 있을 때만, 모르면 �
   try {
     const o = {home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.envFile}};
     notifyUser('경보 본문', () => ({status: 0}), {...o, kind: 'alert', tagRepo: 'kadan'});
-    notifyUser('업무 편지', () => ({status: 0}), {...o, kind: 'mail', work: 'kadan/work-1'});
-    notifyUser('근거 없음', () => ({status: 0}), {...o, kind: 'handover'});
+    notifyUser('업무 편지', () => ({status: 0}), {...o, kind: 'alert', work: 'kadan/work-1'});
+    notifyUser('근거 없음', () => ({status: 0}), {...o, kind: 'alert'});
     assert.deepEqual(w.base.requests().map(r => bodyOf(r).content), ['[kadan] 경보 본문', '[kadan] 업무 편지', '근거 없음']);
     const sys = [];
     notifyUser('x', (...a) => { sys.push(a[1][1]); return {status: 0}; }, {home: w.home, env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: path.join(w.home, 'none.env')}, tagRepo: 'kadan'});

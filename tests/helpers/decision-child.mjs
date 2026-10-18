@@ -1,6 +1,7 @@
 // 다른 프로세스에서 결정 알림 한 건을 보내는 시험 보조: node decision-child.mjs '{"home","envFile","kind","d"}'. 가짜 값만 쓴다.
 import {DecisionStore} from '../../src/decisions.mjs';
-import {notifyUser} from '../../src/user-notify.mjs';
+import {notifyUser as rawNotifyUser} from '../../src/user-notify.mjs';
+const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 const a = JSON.parse(process.argv[2]);
 const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: a.envFile};
 delete process.env.KADAN_NOTIFY;

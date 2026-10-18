@@ -8,13 +8,14 @@ import {spawn} from 'node:child_process';
 import {sanitize, setArchivedSync} from '../src/thread-archive.mjs';
 import {readDecisions} from '../src/notify-threads.mjs';
 import {spawnSync} from 'node:child_process';
-import {notifyUser, refreshWorkStatus, resetDiscordBlock, scrubSecrets, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
+import {notifyUser as rawNotifyUser, refreshWorkStatus, resetDiscordBlock, scrubSecrets, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import {readThreads} from '../src/notify-threads.mjs';
 import {botSecrets} from '../src/thread-archive.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {workCommand} from '../src/work-command.mjs';
 import {createChat, checkChat} from '../src/discord-chat.mjs';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
+const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 
 // 끝난 업무의 디코 포럼 글 보관·재개. 가짜 서버(웹훅+봇)와 가짜 비밀 파일만 쓴다 — 실제 디코로는 나가지 않는다.
 const helper = new URL('./helpers/fake-forum-bot.mjs', import.meta.url).pathname;
@@ -44,7 +45,7 @@ async function world(options = {}) {
   const finish = (action = 'complete', key = WORK) => store.change(key, action, {result: '끝남'}, {revision: store.get(key).revision, note: '시험'});
   const reopen = (key = WORK) => store.change(key, 'reopen', {}, {revision: store.get(key).revision, note: '다시 엶'});
   const refresh = (opts = {}, key = WORK) => refreshWorkStatus(home, key, {env, ...opts});
-  const alert = (key = WORK) => notifyUser('경보', () => ({status: 0}), {home, env, work: key, workTitle: '보관 시험', kind: 'mail', key: `mail:${Math.random()}`});
+  const alert = (key = WORK) => notifyUser('경보', () => ({status: 0}), {home, env, work: key, workTitle: '보관 시험', kind: 'alert', key: `mail:${Math.random()}`});
   // 글 + 상태 메시지를 먼저 만든다(알림 한 번).
   const open = (key = WORK) => { make(key); assert.equal(alert(key).via, 'discord'); };
   // 봇이 아닌 사람이 손으로 보관한 것처럼 가짜 서버의 글을 보관한다(시험 → 가짜 서버로만 나간다).
@@ -142,7 +143,7 @@ test('5 기록 없음 + 웹훅이 보관 오류(50083): 재개 → 한 번만 �
       w2.open(); await w2.manualArchive(w2.record().threadId);
       const n = w2.requests().length;
       let osCalls = 0;
-      const skipped = notifyUser('경보', () => { osCalls++; return {status: 0}; }, {home: w2.home, env: w2.env, work: WORK, workTitle: '보관 시험', kind: 'mail', key: 'mail:s'});
+      const skipped = notifyUser('경보', () => { osCalls++; return {status: 0}; }, {home: w2.home, env: w2.env, work: WORK, workTitle: '보관 시험', kind: 'alert', key: 'mail:s'});
       assert.equal(skipped.via, 'system'); assert.equal(skipped.discord.outcome, 'archived-skip'); assert.equal(osCalls, 1, '쓰기는 건너뛰되 알림은 기존 대체 전달(시스템 알림)을 받는다');
       assert.equal(w2.requests().slice(n).filter(x => x.method === 'POST').length, 1, '다시 시도 없음');
       assert.match(w2.log(), /archived-skip/);
