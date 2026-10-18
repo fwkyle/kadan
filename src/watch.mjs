@@ -1,4 +1,5 @@
 import {findDoneMarkers} from './done-marker.mjs';
+import {securityFilterNotice} from './watch-security-filter.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -231,6 +232,7 @@ export function assessRoles(
       previousActiveDisconnect && disconnects.has(previousActiveDisconnect)
         ? previousActiveDisconnect
         : freshDisconnectKeys[0] ?? null;
+    const securityFilter = alive ? securityFilterNotice(current.screen) : null;
     const doneMarker = alive ? (Object.hasOwn(current, 'doneMarker') ? current.doneMarker : screenDoneMarker(current.screen)) : null;
     const doneMarkerKey = doneMarker
       ? `${doneMarker.taskId}|${doneMarker.result}`
@@ -295,6 +297,16 @@ export function assessRoles(
         role: current.role,
         session,
         line: disconnects.get(activeDisconnect),
+      });
+    } else if (securityFilter) {
+      // AI 호출·정체 시간 없이 첫 주기에 낸다. 429 재개·ocx 경로와 무관하다(kind가 '한도'가 아니다).
+      alerts.push({
+        id: `security-filter:${session}:${securityFilter.fingerprint}`,
+        kind: "보안필터",
+        level: "AMBER",
+        role: current.role,
+        session,
+        line: securityFilter.line,
       });
     } else if (doneMarker) {
       alerts.push({

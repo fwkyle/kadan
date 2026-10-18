@@ -23,6 +23,7 @@ const ALERT_LABELS = {
   "큐대기": "입력이 큐에 쌓여 대기",
   "입력큐": "입력 큐 대기",
   "알림밀림": "알림이 계속 밀림",
+  "보안필터": "보안 필터로 멈춤",
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
@@ -100,6 +101,9 @@ export function formatAlertBody(alert) {
     // 한도 경보에는 감시기가 ocx 사용량을 새로 받은 결과 한 줄을 붙인다(ocx-refresh.mjs).
     const ocx = alert.kind === "한도" && alert.ocx ? ` · ${ocxAlertLine(alert.ocx)}` : "";
     return `${alert.kind} ${alert.session} (${alert.line})${ocx}`;
+  }
+  if (alert.kind === "보안필터") {
+    return `보안 필터로 멈춤 ${alert.role ?? alert.session} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;
   }
   if (alert.kind === "완료후보") {
     return `끝난 것 같음 ${alert.session} (${alert.taskId} ${alert.result}, 감독 확인 필요)`;

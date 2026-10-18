@@ -10,7 +10,7 @@ description: "카단 여러 판의 부하·충돌·우선순위와 역할 폭주
 `kadan watch`는 감시sh·감시ai로 이상 후보를 판정해 알리며, 작업 조정은 감독이 맡는다. 슈퍼감독은
 그 알림을 받아 전체 비용과 안전을 지키고, 정확한 판 감독에게 다음 행동을 맡긴다.
 
-작업 경로는 [가벼운 실행이 기본](../kadan-conductor/references/operating-contract.md#가벼운-실행이-기본-2026-09-10-사용자-정정)을 따른다. 작은 요청마다 새 감독·판을 만들지 않고, 일반감독의 정상 전달·결과를 슈퍼가 다시 조회하거나 중계하지 않는다.
+작업 경로는 [가벼운 실행이 기본](../kadan-conductor/references/operating-contract.md#가벼운-실행이-기본-2026-09-10-사용자-정정)을 따른다. 같은 주제의 작은 요청마다 새 감독·판을 만들지 않고, 일반감독의 정상 전달·결과를 슈퍼가 다시 조회하거나 중계하지 않는다.
 
 자동 리마인더 원본은 [공통](../kadan-conductor/references/role-templates/common.md)과
 [슈퍼감독](../kadan-conductor/references/role-templates/super.md) 템플릿이다. 역할 지침은 책임 안내이며
@@ -89,7 +89,8 @@ PID 0개면 원인보다 재가동이 먼저다. 2개 이상이면 RED 후보다
 
 1. 판을 더 열기 전 현재 수치와 진행 중인 작업을 보고 규모를 정한다. 자원 알림을 기다리거나
    색상 하나로 발령을 자동 금지하지 않는다. [자원 확인](../kadan-conductor/references/operating-contract.md#자원-확인)을 따른다.
-2. `kadan status`·`kadan tree`로 같은 판이 이미 열려 있는지 먼저 읽는다. 있으면 이어 쓴다.
+2. `kadan status`·`kadan tree`로 같은 판이 이미 열려 있는지 먼저 읽는다. 있으면 이어 쓴다. 이어 쓰기는 같은 주제일 때만 한다. 기존 감독의 판과 목표·완료 조건이 다른
+   새 업무는 새 일반감독(`<레포>-<주제>-감독`)에게 준다.
    프로필을 넣으려고 기존 역할을 재시작하거나 소급 변경하지 않는다.
 3. 창 선택은 `../kadan-conductor/references/worker-creation.md`의 로티 우선·사용 불가 시 백그라운드 규칙을 따른다.
    역할은 `<판>-감독`·`<판>-작업자`·`<판>-검수자`로 일할 레포의 `cwd`에서 세운다.

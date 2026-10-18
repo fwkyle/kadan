@@ -176,9 +176,16 @@ export {
 };
 
 
+// 사람이 읽는 한 줄은 stderr에만 낸다. stdout은 JSON 그대로라 읽는 쪽이 깨지지 않는다.
+function printWorkResult(args,result){
+  if(args[0]==='create'&&Number.isInteger(result?.ownerOpenWorks))
+    console.error(`책임 감독 ${result.owner}의 열린 업무 ${result.ownerOpenWorks}건 (이 업무 포함)`);
+  console.log(JSON.stringify(result,null,2));
+}
+
 const COMMANDS = {
   hierarchy:(args,flags)=>console.log(JSON.stringify(hierarchyCommand(args,flags,{home:ledgerHome(),floor}),null,2)),
-  work:async(args,flags)=>console.log(JSON.stringify(await workCommand(args,flags,{
+  work:async(args,flags)=>printWorkResult(args,await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
     send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
       floor:{...floor,send:(name,text,options)=>transmit(()=>floor.send(name,text,options))},
@@ -194,7 +201,7 @@ const COMMANDS = {
       if(new Set(markers.map(m=>m.result)).size>1)throw new Error('완료 마커 충돌');
       return markers[0]?.result||null;
     },
-  }),null,2)),
+  })),
   'watch-report':(args,flags)=>console.log(JSON.stringify(watchReportCommand(args,flags,{home:ledgerHome(),floor,send:sendWatchMessage}),null,2)),
   storage:(args,flags)=>console.log(JSON.stringify(storageCommand(args,flags,{home:ledgerHome()}),null,2)),
   inbox:(args,flags)=>console.log(JSON.stringify(inboxCommand(args,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),

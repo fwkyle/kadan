@@ -62,6 +62,8 @@ kadan work execute 저장소/work-product-photos \
   --note '전체 업무 안의 생성 실행'
 ```
 
+`create` 응답(JSON)에는 `ownerOpenWorks`가 더해진다. 책임 감독의 열린 업무 수이고 방금 만든 업무를 포함한다. 사람이 읽는 한 줄(`책임 감독 ○○의 열린 업무 N건 (이 업무 포함)`)은 stderr에만 나가 stdout JSON을 읽는 쪽을 깨지 않는다. 숫자가 이미 많이 쌓인 감독에게 목표가 다른 새 업무를 주려는 참이면 새 일반감독을 세운다(슈퍼감독 지침 `판 열기`).
+
 `execute` 응답의 `executions[].key`가 새 실행 주소다. **한 번에 발령하려면** `--assign <역할>`을 붙인다: 업무의 범위·판으로 배정하고 묶음(rallyId=업무 ID, 제목=업무 제목, 라운드=`--round`, 조사는 0)·plan까지 기록한다. `--dispatch "<지시>"`를 더하면 같은 명령이 기존 `send --task` 검사(생존·PID·배정·범위·실행기)를 그대로 거쳐 보낸다. `--assign`은 `implementation|review|fix|research`에만 쓴다(`release`·`other`는 묶음에 들어가지 않는다). 따로 하려면 기존 `card update`에서 허용 범위·판·역할을 배정하고 `send --task`에는 **실행 카드 주소**를 쓴다([정식 주소와 짧은 ID 호환](task-identity.md)). 업무 ID를 발령하지 않는다. 화면의 ‘실행 초안 등록’도 등록만 하며 메시지를 전송하지 않는다. 실행 카드를 `assigned`로 바꿀 때는 티키타카 묶음 정보(`--rally-id --rally-title --rally-round --rally-step`)가 필수다. 업무 안의 실행은 업무와 같은 단계·라운드로 적고, 업무 밖 작은 작업은 1라운드 구현 턴로 시작한다. 관리·조율 카드는 묶음 없이 발령한다(2026-09-11 [kyle] 승인).
 
 ```sh
