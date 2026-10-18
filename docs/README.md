@@ -37,6 +37,7 @@
 | 카드 작업 시간·모델별 요약 | [카드 작업 시간](card-worktime.md) | — |
 | 저장과 복구 | [SQLite 저장](sqlite-storage.md) | — |
 | 검수 자리·무거운 명령 제한 | [검수 자리](review-slots.md) | — |
+| 완료(DONE) 판정 빠른 길·Stop 훅 설치 | [Stop 훅](stop-hook.md) | — |
 | 설계 원칙·잠긴 규칙·원장 형식 | [설계 문서](design.md) | — |
 | 낱말 뜻 | [용어사전](glossary.md) | — |
 

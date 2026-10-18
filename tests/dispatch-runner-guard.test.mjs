@@ -10,6 +10,7 @@ import {CardStore} from '../src/card-store.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {guardedSend} from '../src/cli.mjs';
 import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
+import {withStopHook,writeClaudeSettings} from '../src/stop-hook-settings.mjs';
 
 // 2026-09-29: 작업자·검수자 기본값이 바뀐 뒤에도 옛 실행기·모델로 떠 있던 세션에 새 카드가 갔다(9/23, 9/29).
 // 카드 발령(guardedSend의 taskId 경로)은 세션의 실제 실행 명령과 그 역할 프로필의 지금 기본값을 대조한다.
@@ -445,5 +446,28 @@ test('실제 CLI+격리 tmux: 살아 있는 옛 세션에 start를 다시 불러
   assert.equal(sends().length,before+1);assert.equal(sends().at(-1).runnerGuard.reason,'시험 raw 예외');
  }finally{
   for(const s of started)tmux('kill-session','-t',s);
+ }
+});
+
+// Stop 훅(claude --settings <우리 파일>)은 신원 비교에서 걷어낸다 — 옛 세션과 새 기본값이 이것만 달라도 같은 명령이다.
+test('claude Stop 훅 --settings만 다른 옛 세션은 기본값과 같은 명령으로 통과하고, 모델·강도 다름은 그대로 잡는다',()=>{
+ const r=rig();
+ const previous=process.env.KADAN_HOME;
+ process.env.KADAN_HOME=r.home; // 기본 명령을 만드는 쪽(withStopHook)이 보는 홈
+ try{
+  writeClaudeSettings(r.home);
+  assert.deepEqual(r.call(),[]); // 옛 세션 명령(훅 없음) vs 지금 기본값(훅 있음)
+  assert.equal(r.sent,1);
+  const hooked=withStopHook(WORKER_CMD,r.home);
+  assert.notEqual(hooked,WORKER_CMD);
+  r.entries=[r.start({cmd:hooked})];
+  assert.deepEqual(r.call(),[]); // 반대 방향
+  r.entries=[r.start({cmd:withStopHook(OLD_OPUS_CMD,r.home)})];
+  assert.throws(()=>r.call(),stale); // 모델 다름 = 거절
+  r.entries=[r.start({cmd:hooked.replace('--effort xhigh','--effort low')})];
+  const lines=r.call();
+  assert.equal(lines.length,1);assert.match(lines[0],/강도·실행 인자가/); // 강도 다름 = 경고
+ }finally{
+  if(previous===undefined)delete process.env.KADAN_HOME;else process.env.KADAN_HOME=previous;
  }
 });
