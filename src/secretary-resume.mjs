@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {acquireDirLock} from './dir-lock.mjs';
 import {readSystemLedger, appendLedger} from './ledger.mjs';
 import {commandWords} from './ai-identity.mjs';
+import {withInlineScreen} from './inline-screen.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {descendantPids, openFilesOf} from './process-tree.mjs';
@@ -140,10 +141,11 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
       throw new Error('저장된 비서 대화와 현재 역할 기록이 다릅니다. 자동 복원을 중단합니다.');
     }
     const window = currentRottieWindow(entries, start.session);
+    const command = withInlineScreen(saved.command); // 옛 체크포인트에도 인라인 화면을 붙인다
     const evidence = floor.create({session: start.session, role: start.role,
-      cwd: saved.cwd, cmd: saved.command});
+      cwd: saved.cwd, cmd: command});
     record({...buildStartLedgerEntry({floorName: 'tmux', role: start.role, session: start.session,
-      evidence, window: 'hidden', cmd: saved.command, cwd: saved.cwd,
+      evidence, window: 'hidden', cmd: command, cwd: saved.cwd,
       rottieTerminalId: window?.rottieTerminalId}), roleProfile: start.roleProfile || 'secretary',
       by: start.by || '사람', secretaryResumeSource: saved.startDigest,
       secretaryConversation: saved.conversation, ...startExtra});
@@ -185,7 +187,7 @@ export function savedSecretaryCommand(home, context, command) {
     || identity.cwd !== context.cwd || saved.cwd !== context.cwd) {
     throw new Error('비서 복원 요청과 저장된 대화가 다릅니다.');
   }
-  return [words[0], ...savedWords.slice(1)].map(quote).join(' ');
+  return withInlineScreen([words[0], ...savedWords.slice(1)].map(quote).join(' '));
 }
 
 // An autostart may precede Rottie. Only a continuous exact-conversation lineage may attach.

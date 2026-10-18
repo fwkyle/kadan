@@ -4,6 +4,7 @@ import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../ru
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
+import { withInlineScreen } from "../inline-screen.mjs";
 import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
 import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
@@ -21,6 +22,21 @@ import {
   openStartedWindow,
   unpinnedWindowWarning,
 } from "../cli-start-support.mjs";
+
+// 창을 띄운 뒤 잠깐 기다렸다가 tmux #{alternate_on}(0/1)을 읽는다. 기다림은 KADAN_ALT_CHECK_MS(기본 2000, 0이면 건너뜀).
+// 1이 보이면 바로 끝낸다. 읽지 못하면 null — 시작을 막지 않는다.
+function readAlternateOn(session) {
+  const wait = Number(process.env.KADAN_ALT_CHECK_MS ?? 2000);
+  if (!(wait > 0)) return null;
+  const until = Date.now() + wait;
+  for (;;) {
+    const result = tmux(["display-message", "-p", "-t", `=${session}:`, "#{alternate_on}"]);
+    const value = result.status === 0 ? result.stdout.trim() : "";
+    if (value === "1") return 1;
+    if (Date.now() >= until) return value === "0" ? 0 : null;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+}
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
@@ -46,6 +62,8 @@ export function cmdStart(argv, flags) {
   if (!reusing && Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) {
     try { launch = launchFor(readSettings(ledgerHome()), roleProfile); } catch (error) { die(error.message, 2); }
   }
+  // 사람이 직접 준 --cmd(adopt·handover 포함)도 대화형 codex면 인라인 화면 플래그를 붙인다. 설정값과의 비교도 같은 꼴로 한다.
+  if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withInlineScreen(flags.cmd.trim());
   if (launch && typeof flags.cmd === "string" && flags.cmd.trim() && flags.cmd.trim() !== launch.cmd) {
     if (typeof flags.reason !== "string" || !flags.reason.trim())
       die(`실행 모델 설정과 다른 명령이다 — --reason <이유>를 함께 줘라. 설정값: ${launch.cmd}`, 2);
@@ -148,6 +166,10 @@ export function cmdStart(argv, flags) {
     }
   }
 
+  // 풀스크린(alternate screen)으로 떴는지 한 번 읽어 적는다. 1이면 DONE 마커·마지막 줄 보존이 약해진다.
+  const alternateOn = !reusing && floor.name === "tmux" && startedCmd ? readAlternateOn(session) : null;
+  if (alternateOn === 1) console.error(`경고: ${session}이 풀스크린(alternate screen)으로 떴다 — 스크롤백·출력 기록이 약하다. 실행 명령의 화면 옵션을 확인하라.`);
+
   try {
     appendLedger({ ...buildStartLedgerEntry({
       floorName: floor.name,
@@ -160,7 +182,7 @@ export function cmdStart(argv, flags) {
       reused,
       cmd: startedCmd,
       cwd: process.cwd(),
-    }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
+    }), ...(alternateOn === null ? {} : { alternateOn }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
   } catch (error) {
     // 시작 기록이 없는 세션은 다음 start에서 재사용으로 읽혀 막히고 감시에도 잡히지 않는다(2026-10-08).
     // 방금 만든 세션만 닫는다. 재사용한 세션은 남의 세대라 건드리지 않는다.

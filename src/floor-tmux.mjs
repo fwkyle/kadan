@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
+import { inlineScreenEnv } from "./inline-screen.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
@@ -387,6 +388,7 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd }) {
     cwd,
     "-e",
     `KADAN_ROLE=${environmentRole}`,
+    ...inlineScreenEnv(cmd).flatMap(value => ["-e", value]),
     ...(cmd ? [cmd] : []),
   ];
 }

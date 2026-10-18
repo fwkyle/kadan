@@ -26,6 +26,7 @@
 // 폴백 — 2026-10-02 [kyle]. 기본값과 실행기·모델이 달라도 지금 설정의 그 프로필 폴백 목록 중 하나와 같으면
 // 통과 + 경고 한 줄(폴백 번호), send 기록에 fallbackIndex를 남긴다. 어느 것과도 다르면 기존처럼 거절.
 import { readSettings, launchFor, launchForFallback, PROFILE_ROLES } from "./runner-settings.mjs";
+import { withoutInlineScreen } from "./inline-screen.mjs";
 import { launchIdentityOf } from "./ai-identity.mjs";
 
 export const GUARDED_PROFILES = ["worker", "reviewer"];
@@ -106,7 +107,8 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
       `조치: ${command} (의도한 예외면 --allow-old-runner "<이유>")`,
     ], expected.revision);
   }
-  if (identity.launch.cmd.trim() !== expected.cmd.trim()) {
+  // 카단이 붙이는 --no-alt-screen만 다른 옛 세션은 같은 명령으로 본다(inline-screen.mjs).
+  if (withoutInlineScreen(identity.launch.cmd.trim()) !== withoutInlineScreen(expected.cmd.trim())) {
     return {
       result: "warn", code: "effort-or-args",
       warning: `경고: ${session}의 강도·실행 인자가 지금 ${profile} 기본값과 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,

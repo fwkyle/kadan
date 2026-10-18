@@ -96,7 +96,7 @@ test('N번째 폴백으로 실행 명령을 채우고 없는 번호는 거부한
   setFallback(f.home, {role:'worker', items:[{runner:'devin', model:'swe-2-max'}, {runner:'codex', model:'zai/glm-5.3', effort:'high'}], ...f.meta(6)});
   const settings = readSettings(f.home);
   const second = launchForFallback(settings, 'worker', 2);
-  assert.equal(second.cmd, 'codex -p lite --model zai/glm-5.3 -c model_reasoning_effort="high"');
+  assert.equal(second.cmd, 'codex -p lite --model zai/glm-5.3 -c model_reasoning_effort="high" --no-alt-screen');
   assert.equal(second.fallbackIndex, 2); assert.equal(second.revision, 7); assert.equal(second.preset, 'B');
   assert.equal(launchForFallback(settings, 'worker', '1').cmd, 'devin --model swe-2-max --permission-mode dangerous');
   for (const n of [0, 3, 'x', '1.5']) assert.throws(() => launchForFallback(settings, 'worker', n), /없는 폴백 번호/);
@@ -117,7 +117,7 @@ test('CLI: runners fallback·show와 start --fallback N (이유 필수, --cmd �
     assert.match(run('runners', 'fallback', 'worker', '--revision', '6', '--reason', '시험').stderr, /--set/);
     ok('runners', 'fallback', 'worker', '--set', 'devin:swe-2-max,codex:zai/glm-5.3:high', '--revision', '6', '--reason', '1순위 쿼터 대비');
     const shown = JSON.parse(ok('runners', 'show'));
-    assert.deepEqual(shown.fallback.worker.map(x => x.cmd), ['devin --model swe-2-max --permission-mode dangerous', 'codex -p lite --model zai/glm-5.3 -c model_reasoning_effort="high"']);
+    assert.deepEqual(shown.fallback.worker.map(x => x.cmd), ['devin --model swe-2-max --permission-mode dangerous', 'codex -p lite --model zai/glm-5.3 -c model_reasoning_effort="high" --no-alt-screen']);
     const event = readLedger(f.home).filter(e => e.kind === 'runner-settings').at(-1);
     assert.equal(event.action, 'fallback'); assert.equal(event.by, '시험-슈퍼'); assert.equal(event.reason, '1순위 쿼터 대비');
 

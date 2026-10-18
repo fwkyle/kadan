@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {acquireDirLock} from './dir-lock.mjs';
+import {withInlineScreen} from './inline-screen.mjs';
 import {
   NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
 } from './runner-table.mjs';
@@ -116,7 +117,7 @@ export function launchFor(settings, profile) {
 function fill(settings, value) {
   const spawn = settings.runners[value.runner]?.spawn;
   if (!spawn) throw new Error(`실행 모델 설정의 실행기 틀 없음: ${value.runner}`);
-  return spawn.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? '');
+  return withInlineScreen(spawn.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? ''));
 }
 
 // 활성 프리셋 역할의 N번째(1부터) 폴백으로 실행 명령을 만든다. 자동으로 고르지 않고 번호를 받은 경우에만 쓴다.
