@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {createWallServer} from '../src/wall.mjs';
@@ -189,4 +190,68 @@ test('원격 GET은 https 출처를 같은 출처로 보고, 다른 출처·cros
     const local = await app.call('GET', '/api/dashboard/session', {headers: {origin: `https://127.0.0.1`}});
     assert.equal(local.status, 403);
   } finally { app.close(); certs.server.close(); }
+});
+
+test('F1: 캐시 구분은 URL로 조작할 수 없다 — 로컬→원격, 원격→로컬 양방향 (gui:true, cacheSec>0)', async () => {
+  const certs = await certsServer();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-remote-'));
+  const server = createWallServer(loader, {home, cacheSec: 30, gui: true, warmAfterMs: 3_600_000, remote: config, remoteOptions: {certsUrl: certs.url}});
+  await listen(server);
+  const port = server.address().port;
+  const call = (url, {host = `127.0.0.1:${port}`, jwt} = {}) => new Promise((resolve, reject) => {
+    http.get({host: '127.0.0.1', port, path: url, headers: {host, ...(jwt ? {'cf-access-jwt-assertion': jwt} : {})}}, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    }).on('error', reject);
+  });
+  const remote = url => call(url, {host: HOST, jwt: sign(key)});
+  try {
+    const secret = JSON.parse(await call('/api/dashboard/session')).token;
+    // 로컬 → 원격: 로컬이 `__remote=1`을 붙여 token 든 화면을 캐시에 넣어도 원격 같은 주소는 그걸 받지 않는다.
+    assert.ok((await call('/center?view=a&__remote=1')).includes(secret), '로컬 화면에는 토큰이 있다');
+    assert.ok(!(await remote('/center?view=a')).includes(secret), '로컬→원격 누출 없음');
+    assert.ok(!(await remote('/center?view=a&__remote=1')).includes(secret), '원격이 같은 표시를 붙여도 누출 없음');
+    // 원격 → 로컬: 원격이 먼저 읽은 token 없는 화면을 로컬이 받지 않는다.
+    await remote('/center?view=b');
+    await remote('/center?view=b&__remote=1');
+    assert.ok((await call('/center?view=b&__remote=1')).includes(secret), '원격→로컬 오염 없음');
+    assert.ok((await call('/center?view=b')).includes(secret), '원격→로컬 오염 없음(표시 없음)');
+  } finally { server.close(); certs.server.close(); }
+});
+
+test('F2: 원격이 켜지면 Cloudflare 표시 헤더가 있는 로컬 Host는 거부하고 Host가 둘이어도 거부한다', async () => {
+  const certs = await certsServer();
+  const app = await start({remote: config, certs});
+  try {
+    for (const headers of [{'cf-ray': 'x'}, {'cf-connecting-ip': '203.0.113.1'}, {'cf-access-jwt-assertion': 'fake'}, {'cdn-loop': 'cloudflare'}]) {
+      const res = await app.call('GET', '/api/dashboard/session', {headers});
+      assert.equal(res.status, 403, JSON.stringify(headers));
+      assert.ok(!res.text.includes('token'));
+    }
+    assert.equal((await app.call('GET', '/api/dashboard/session')).status, 200, '표시 없는 로컬은 그대로');
+    // Host가 둘: 어느 순서든 거부.
+    for (const hosts of [['127.0.0.1', HOST], [HOST, '127.0.0.1']]) {
+      const raw = await new Promise((resolve, reject) => {
+        const socket = net.connect(app.server.address().port, '127.0.0.1');
+        let text = '';
+        socket.on('connect', () => socket.end('GET /api/dashboard/session HTTP/1.1\r\n' + hosts.map(h => `Host: ${h}\r\n`).join('')
+          + `cf-access-jwt-assertion: ${sign(key)}\r\nConnection: close\r\n\r\n`));
+        socket.on('data', b => { text += b; });
+        socket.on('end', () => resolve(text));
+        socket.on('error', reject);
+      });
+      assert.doesNotMatch(raw, /"token":"[a-f0-9]{48}"/, hosts.join(','));
+      assert.doesNotMatch(raw.split('\r\n')[0], / 200 /, hosts.join(','));
+    }
+  } finally { app.close(); certs.server.close(); }
+});
+
+test('F2: 원격이 꺼져 있으면 Cloudflare 표시 헤더가 있어도 지금 동작 그대로(로컬 Host는 로컬)', async () => {
+  const app = await start({remote: null});
+  try {
+    const res = await app.call('GET', '/api/dashboard/session', {headers: {'cf-ray': 'x', 'cf-connecting-ip': '203.0.113.1'}});
+    assert.equal(res.status, 200);
+    assert.match(JSON.parse(res.text).token, /^[a-f0-9]{48}$/);
+  } finally { app.close(); }
 });

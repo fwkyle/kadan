@@ -2,7 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createAccessJwtVerifier} from '../src/access-jwt.mjs';
-import {TEAM, AUD, EMAIL, makeKey, sign, fakeCerts} from './helpers/access-jwt-fixture.mjs';
+import {TEAM, AUD, EMAIL, makeKey, sign, signRaw, fakeCerts} from './helpers/access-jwt-fixture.mjs';
 
 async function setup(extra = {}) {
   const key = makeKey(), certs = fakeCerts([key]);
@@ -91,4 +91,49 @@ test('빈 열쇠 응답이나 HTTP 오류는 가진 열쇠를 지우지 않는�
   const bad = createAccessJwtVerifier({team: TEAM, aud: AUD, email: EMAIL, fetchImpl: async () => ({ok: false, json: async () => ({})})});
   assert.equal(await bad.refresh(), false);
   assert.equal(bad.keyCount(), 0);
+});
+
+test('F3: 세 부분은 엄격한 base64url만 받는다(패딩·표준 base64 글자·공백 거부)', async () => {
+  const {key, verifier} = await setup();
+  const [head, body, sig] = sign(key).split('.');
+  assert.equal((await verifier.verify(`${head}.${body}.${sig}`)).ok, true);
+  assert.equal(await reason(verifier, `${head}.${body}.${sig}=`), 'format', '서명 패딩');
+  assert.equal(await reason(verifier, `${head}=.${body}.${sig}`), 'format', '헤더 패딩');
+  assert.equal(await reason(verifier, `${head}.${body}+.${sig}`), 'format', '+ 글자');
+  assert.equal(await reason(verifier, `${head}.${body}/.${sig}`), 'format', '/ 글자');
+  assert.equal(await reason(verifier, `${head}.${body}. ${sig}`), 'format', '공백');
+  assert.equal(await reason(verifier, `${head}.${body}.${sig}\n`), 'format', '줄바꿈');
+});
+
+test('F4: exp·nbf가 유한 숫자가 아니면 거부한다(1e400 → Infinity)', async () => {
+  const {key, verifier} = await setup();
+  const base = `"iss":"https://${TEAM}.cloudflareaccess.com","aud":["${AUD}"],"email":"${EMAIL}"`;
+  const head = `{"alg":"RS256","kid":"${key.kid}"}`;
+  assert.equal(await reason(verifier, signRaw(key, head, `{${base},"exp":1e400}`)), 'expired');
+  assert.equal(await reason(verifier, signRaw(key, head, `{${base},"exp":${Math.floor(Date.now() / 1000) + 600},"nbf":-1e400}`)), 'not-before');
+  assert.equal((await verifier.verify(signRaw(key, head, `{${base},"exp":${Math.floor(Date.now() / 1000) + 600}}`))).ok, true);
+});
+
+test('F4: 헤더·본문 JSON의 중복 키는 거부한다', async () => {
+  const {key, verifier} = await setup();
+  const body = `"iss":"https://${TEAM}.cloudflareaccess.com","aud":["${AUD}"],"email":"${EMAIL}","exp":${Math.floor(Date.now() / 1000) + 600}`;
+  const head = `"alg":"RS256","kid":"${key.kid}"`;
+  assert.equal(await reason(verifier, signRaw(key, `{${head},"alg":"none"}`, `{${body}}`)), 'format', '헤더 중복');
+  assert.equal(await reason(verifier, signRaw(key, `{${head}}`, `{${body},"email":"other@example.com"}`)), 'format', '본문 중복');
+  assert.equal((await verifier.verify(signRaw(key, `{${head}}`, `{${body},"extra":{"email":"x","email2":1}}`))).ok, true, '중첩 객체는 다른 키');
+});
+
+test('F4: JWK는 use가 sig, alg가 RS256일 때만 받고(둘 다 없으면 허용), 같은 kid가 둘이면 그 kid를 쓰지 않는다', async () => {
+  const mk = (kid, patch = {}) => { const k = makeKey(kid); k.jwk = {...k.jwk, ...patch}; for (const [n, v] of Object.entries(patch)) if (v === undefined) delete k.jwk[n]; return k; };
+  const enc = mk('enc', {use: 'enc'}), hs = mk('hs', {alg: 'HS256'}), bare = mk('bare', {use: undefined, alg: undefined});
+  const dupA = makeKey('dup'), dupB = makeKey('dup'), ok = makeKey('ok');
+  const certs = fakeCerts([enc, hs, bare, dupA, dupB, ok]);
+  const verifier = createAccessJwtVerifier({team: TEAM, aud: AUD, email: EMAIL, fetchImpl: certs.fetchImpl, reloadGapMs: 1e12});
+  await verifier.refresh();
+  assert.equal(await reason(verifier, sign(enc)), 'kid', 'use=enc');
+  assert.equal(await reason(verifier, sign(hs)), 'kid', 'alg=HS256');
+  assert.equal((await verifier.verify(sign(bare))).ok, true, 'use·alg 없는 키는 허용');
+  assert.equal(await reason(verifier, sign(dupA)), 'kid', '중복 kid');
+  assert.equal(await reason(verifier, sign(dupB)), 'kid', '중복 kid');
+  assert.equal((await verifier.verify(sign(ok))).ok, true);
 });

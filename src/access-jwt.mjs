@@ -7,7 +7,24 @@ import crypto from 'node:crypto';
 
 export const ACCESS_JWT_HEADER = 'cf-access-jwt-assertion';
 const b64 = text => Buffer.from(text, 'base64url');
-const json = text => { try { const v = JSON.parse(b64(text).toString('utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { return null; } };
+const B64URL = /^[A-Za-z0-9_-]+$/; // 패딩(=)·표준 base64 글자(+ /)·공백은 받지 않는다
+// 같은 키가 두 번 나오는 JSON은 어느 값을 쓸지 모호하므로 거부한다. 최상위 키만 훑는다(문자열 안의 따옴표는 건너뛴다).
+const hasDuplicateKey = text => {
+  const seen = new Set();
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      if (depth === 1 && /^\s*:/.test(text.slice(j + 1, j + 40))) { const key = text.slice(i, j + 1); if (seen.has(key)) return true; seen.add(key); }
+      i = j;
+    } else if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') depth--;
+  }
+  return false;
+};
+const json = text => { try { const raw = b64(text).toString('utf8'); if (hasDuplicateKey(raw)) return null; const v = JSON.parse(raw); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { return null; } };
 
 export const accessIssuer = team => `https://${team}.cloudflareaccess.com`;
 export const accessCertsUrl = team => `${accessIssuer(team)}/cdn-cgi/access/certs`;
@@ -25,9 +42,12 @@ export function createAccessJwtVerifier({
     try {
       const response = await fetchImpl(certsUrl, {signal: AbortSignal.timeout(timeoutMs), headers: {accept: 'application/json'}});
       if (!response.ok) return false;
-      const body = await response.json(), next = new Map();
+      const body = await response.json(), next = new Map(), duplicated = new Set();
       for (const jwk of Array.isArray(body?.keys) ? body.keys : []) {
-        if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string' || (jwk.alg && jwk.alg !== 'RS256')) continue;
+        // use가 있으면 sig만, alg가 있으면 RS256만 받는다. 문서 응답의 키는 둘 다 적혀 있어(alg RS256, use sig) 없을 때만 느슨하다.
+        if (jwk?.kty !== 'RSA' || typeof jwk.kid !== 'string' || (jwk.alg !== undefined && jwk.alg !== 'RS256')
+          || (jwk.use !== undefined && jwk.use !== 'sig')) continue;
+        if (next.has(jwk.kid) || duplicated.has(jwk.kid)) { next.delete(jwk.kid); duplicated.add(jwk.kid); continue; } // 같은 kid가 둘이면 그 kid는 쓰지 않는다
         try { next.set(jwk.kid, crypto.createPublicKey({key: jwk, format: 'jwk'})); } catch { /* 깨진 열쇠는 건너뛴다 */ }
       }
       if (!next.size) return false;
@@ -40,7 +60,7 @@ export function createAccessJwtVerifier({
   async function verify(token) {
     if (typeof token !== 'string') return {ok: false, reason: 'missing'};
     const parts = token.split('.');
-    if (parts.length !== 3 || parts.some(part => !part)) return {ok: false, reason: 'format'};
+    if (parts.length !== 3 || parts.some(part => !B64URL.test(part))) return {ok: false, reason: 'format'};
     const header = json(parts[0]), claims = json(parts[1]);
     if (!header || !claims) return {ok: false, reason: 'format'};
     if (header.alg !== 'RS256') return {ok: false, reason: 'alg'};
@@ -54,8 +74,8 @@ export function createAccessJwtVerifier({
     try { signed = crypto.verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`), key, b64(parts[2])); } catch { signed = false; }
     if (!signed) return {ok: false, reason: 'signature'};
     const seconds = now() / 1000;
-    if (typeof claims.exp !== 'number' || claims.exp <= seconds) return {ok: false, reason: 'expired'};
-    if (claims.nbf !== undefined && (typeof claims.nbf !== 'number' || claims.nbf > seconds)) return {ok: false, reason: 'not-before'};
+    if (!Number.isFinite(claims.exp) || claims.exp <= seconds) return {ok: false, reason: 'expired'};
+    if (claims.nbf !== undefined && (!Number.isFinite(claims.nbf) || claims.nbf > seconds)) return {ok: false, reason: 'not-before'};
     if (claims.iss !== issuer) return {ok: false, reason: 'iss'};
     if (!(Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(aud)) return {ok: false, reason: 'aud'};
     if (typeof claims.email !== 'string' || claims.email.trim().toLowerCase() !== wantedEmail) return {ok: false, reason: 'email'};

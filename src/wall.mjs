@@ -461,7 +461,8 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  const cache=new Map();
  let sharedSnapshot=null;
  const clear=()=>{cache.clear();sharedSnapshot=null;};
- const cacheKey=url=>{const query=new URLSearchParams(url.searchParams);query.delete('fresh');query.sort();return url.pathname+'?'+query.toString();};
+ // 키 앞의 구분(local/remote)은 서버가 판정 결과로 붙인다. URL 매개변수로는 바꿀 수 없다(2026-10-18 검수: 주소에 표시를 넣어 섞던 결함).
+ const cacheKey=url=>{const query=new URLSearchParams(url.searchParams);query.delete('fresh');query.sort();return (url.cacheScope||'local')+'|'+url.pathname+'?'+query.toString();};
  const cached=url=>{
   if(!cacheSec||url.searchParams.has('fresh'))return null;
   const key=cacheKey(url),hit=cache.get(key);
@@ -498,7 +499,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     }
     const remoteView=request.kadanRemote===true;
     // 원격 응답은 쓰기 토큰이 없는 화면이라 로컬과 캐시를 나눈다. 같은 주소의 로컬 화면(토큰 포함)이 원격에 나가면 안 된다.
-    const cacheUrl=remoteView?(()=>{const copy=new URL(url);copy.searchParams.set('__remote','1');return copy;})():url;
+    const cacheUrl=Object.assign(new URL(url),{cacheScope:remoteView?'remote':'local'});
     if(url.pathname.startsWith('/api/dashboard/')){
       if(!centerHandler){response.writeHead(503);response.end('대시보드 저장소 없음');return;}
       if(request.method!=='GET'){response.writeHead(405,{allow:'GET'});response.end('조회만 지원합니다');return;}

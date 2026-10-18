@@ -28,3 +28,9 @@ export function fakeCerts(keys) {
   };
   return {state, fetchImpl};
 }
+
+// JSON 원문을 그대로 서명한다(중복 키·1e400 같은 직렬화로는 못 만드는 모양 시험용).
+export function signRaw(key, headerText, bodyText) {
+  const data = `${enc(headerText)}.${enc(bodyText)}`;
+  return `${data}.${crypto.sign('RSA-SHA256', Buffer.from(data), key.privateKey).toString('base64url')}`;
+}

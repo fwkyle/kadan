@@ -29,11 +29,27 @@ export function createRemoteGate(config, options = {}) {
   return {host: config.host, verifier, stop: () => verifier.stop()};
 }
 
+// Cloudflare를 거쳐 온 요청의 표시 헤더(Cf-Ray·Cf-Connecting-IP·Cf-Access-* 등, CDN-Loop). 위조할 수 있으므로 원격 인증의 근거로는
+// 쓰지 않고, 로컬 판정을 막는 데만 쓴다. 터널이 Host를 로컬 값으로 바꿔 보내도 이 표시는 남아 로컬로 통과하지 못한다.
+const viaCloudflare = request => Object.keys(request.headers).some(name => name.startsWith('cf-') || name === 'cdn-loop');
+const hostHeaderCount = request => {
+  const raw = request.rawHeaders ?? [];
+  let count = 0;
+  for (let i = 0; i < raw.length; i += 2) if (raw[i].toLowerCase() === 'host') count++;
+  return count;
+};
+
 // 판정 결과: {kind:'local'} | {kind:'remote'} | {kind:'deny', status, message}.
 // 게이트가 없으면 예전의 Host 검사와 똑같이 동작한다.
 export async function judgeRequest(request, gate) {
   const host = request.headers.host ?? '';
-  if (LOCAL_HOST.test(host)) return {kind: 'local'};
+  // 원격이 켜진 서버만: Host가 둘 이상이면 어느 쪽을 믿을지 모호하므로 거부하고, 로컬 Host라도 Cloudflare 표시가 있으면 로컬로 보지 않는다.
+  // 꺼져 있으면(gate 없음) 예전 동작 그대로다.
+  if (gate && hostHeaderCount(request) > 1) return {kind: 'deny', status: 403, message: 'local host required'};
+  if (LOCAL_HOST.test(host)) {
+    if (gate && viaCloudflare(request)) return {kind: 'deny', status: 403, message: '원격 경유 요청은 허용 호스트로만 받습니다'};
+    return {kind: 'local'};
+  }
   if (!gate) return {kind: 'deny', status: 403, message: 'local host required'};
   if (host.toLowerCase().replace(/:[0-9]+$/, '') !== gate.host) return {kind: 'deny', status: 403, message: 'local host required'};
   const header = request.headers[ACCESS_JWT_HEADER];
