@@ -34,7 +34,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     if(!['send','done'].includes(e.kind)||!e.role)continue;
     const key=`${e.role}\0${taskEventKey(e)}`;
     const old=runs.get(key);
-    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
+    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,...(Object.hasOwn(e,'ownedAt')?{ownedAt:e.ownedAt}:{}),at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
     else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result,doneBy:e.by??'모름',executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
   }
   // 역할별 가장 최근 시작 기록의 실행기·모델. 카단은 판단에 쓰지 않고 화면 답변용으로만 옮긴다(2026-09-06 결정).

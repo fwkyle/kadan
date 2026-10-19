@@ -65,7 +65,7 @@ test('확인 필요는 세션 생존·신호 시각으로 지금 막힌 것과 �
  assert.equal(counts.total,6);assert.deepEqual({stuck:counts.counts.stuck,stale:counts.counts.stale,done:counts.counts.done,closed:counts.counts.closed},{stuck:2,stale:2,done:1,closed:1});
  const html=renderDashboardStatus({center:centerWith([alive,freshDead,oldDead,noSignal,done,cancelled]),works:[],now});
  assert.match(html,/st-num">2<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/st-num">2<\/span><span class="st-lbl">오래된 미확정/);
- assert.match(html,/오래된 미확정 2장 · 24시간 이상 신호 없음 · 정리 대상/);assert.match(html,/마지막 신호 없음 · 저장 상태 draft/);assert.match(html,/\(2일 전\)/);
+ assert.match(html,/오래된 미확정 2장 · 24시간 이상 신호 없음 · 다음 일을 받음 · 실제 시작된 뒤 라운드 · 정리 대상/);assert.match(html,/마지막 신호 없음 · 저장 상태 draft/);assert.match(html,/\(2일 전\)/);
  assert.match(html,/지금 막힌 것 2장/);assert.match(html,/오래된 미확정 2장/);
  assert.match(html,/data-copy-label="정리 요청"/);
  const request=staleCleanupRequest([{...oldDead,...executionHealth(oldDead,now),revision:4}],now);

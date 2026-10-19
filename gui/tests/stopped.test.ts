@@ -41,7 +41,7 @@ test("같은 이유로 멈춘 실행은 한 그룹으로 묶고 실패·세션·
   assert.equal(session.lastAt, "2026-09-27T10:00:00.000Z");
 });
 
-test("오래된 미확정는 상태 문구가 같아도 세션 그룹과 섞지 않는다", () => {
+test("오래된 미확정은 상태 문구가 같아도 세션 그룹과 섞지 않는다", () => {
   const groups = groupStopped([
     row({ key: "b/a" }),
     row({ key: "b/b", bucket: "stale" }),

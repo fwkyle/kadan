@@ -8,7 +8,7 @@ import type { LiveSession, OpenAlerts } from "./status-band";
 export type UnitKind = "super" | "director" | "worker";
 // 우선순위 순서: 창 없음 > 막힘 > 작업중 > 오래된 미확정 > 대기(창만 있음). 결과 대기는 #102부터 작업중에 합쳐 센다. 세션 상태를 모르면 unknown,
 // 창도 일도 없으면 off. 오래된 미확정(stale)는 현황판처럼 막힘과 따로 둔다 — 2026-10-05 실데이터에서 막힘 16건이 전부
-// 오래된 미확정였고, 막힘으로 세면 창이 닫힌 옛 작업자 11명이 '창 없음' 빨강으로 떠 과장됐다.
+// 오래된 미확정이었고, 막힘으로 세면 창이 닫힌 옛 작업자 11명이 '창 없음' 빨강으로 떠 과장됐다.
 export type UnitState = "dead" | "stuck" | "running" | "stale" | "idle" | "unknown" | "off";
 export type Crates = { running: number; stuck: number; stale: number; planned: number; hold: number };
 export type Unit = {

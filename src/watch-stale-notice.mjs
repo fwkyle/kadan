@@ -12,11 +12,13 @@ export const STALE_NOTICE_EVERY_MS = 10 * 60_000;
 const PENDING = new Set(['unconfirmed', 'orphaned', 'failed']);
 
 // 이미 안내한 실행 키. 원장에 남은 안내 기록이 원본이라 감시기를 다시 켜도 다시 보내지 않는다.
+// 보내기 전에 시도(attempt)를 먼저 남기므로, 전송 뒤 기록이 실패해도 다시 보내지 않는다.
+// 사람 입력 때문에 아예 안 보낸 것만 held 기록으로 시도를 거둬 다음 훑기에 다시 시도한다.
 export function noticedKeys(entries) {
   const keys = new Set();
   for (const e of entries || []) {
     if (e?.kind === 'alert' && e.alertKind === STALE_NOTICE_KIND && Array.isArray(e.executionKeys)) {
-      for (const key of e.executionKeys) keys.add(key);
+      for (const key of e.executionKeys) e.held ? keys.delete(key) : keys.add(key);
     }
   }
   return keys;
@@ -58,7 +60,7 @@ export function noticeMessage(list, now = Date.now()) {
   const shown = list.slice(0, STALE_NOTICE_LIMIT);
   const lines = shown.map(c =>
     `- ${c.key} (담당 ${c.role || '미배정'} · 마지막 발령 ${signalOf(c)} · ${reasonOf(c)})\n` +
-    (c.displayState === 'failed' ? '' : `  결과 확정: kadan done ${c.role || '<역할>'} ${c.id} <ok|failed>\n`) +
+    (c.displayState === 'failed' ? '' : `  결과 확정: kadan done ${c.role || '<역할>'} ${c.key} <ok|failed>\n`) +
     `  대체: kadan card update ${c.key} --revision ${c.revision} --status superseded --replaced-by <저장소/후속카드> --note "<이유>"\n` +
     `  취소: kadan card update ${c.key} --revision ${c.revision} --status cancelled --note "<이유>"`);
   const rest = list.length - shown.length;
@@ -70,24 +72,35 @@ export function noticeMessage(list, now = Date.now()) {
   ].join('\n');
 }
 
-// 한 번 훑는다. 보낸 것·받는 쪽을 몰라 못 보낸 것을 원장에 남겨 다시 안내하지 않는다.
-// 사람이 입력 중이라 미룬 것(알림 보류)은 기록하지 않고 다음 훑기에 다시 보낸다.
+// 한 번 훑는다. 보내기 전에 시도를 원장에 남기고(남기지 못하면 보내지 않는다), 보낸 뒤 결과를 덧붙인다.
+// 사람이 입력 중이라 미룬 것(알림 보류)은 시도를 거두는 held 기록을 남겨 다음 훑기에 다시 보낸다.
+// 보낸 뒤 결과 기록이 실패해도 시도 기록이 있어 다시 보내지 않는다.
 export function runStaleNotices({cards, entries, works, now = Date.now(), send, record}) {
   const result = {sent: 0, unknownRecipient: 0, failed: 0, held: 0};
   for (const plan of planStaleNotices({cards, entries, works, now})) {
-    let delivered = false, reason;
-    if (!plan.recipient) { reason = '받는 쪽 모름'; result.unknownRecipient++; }
-    else {
-      try { send(plan.recipient, plan.message); delivered = true; result.sent++; }
-      catch (error) {
-        if (isNotificationHold(error)) { result.held++; continue; }
-        reason = `전달 실패(${error.message})`; result.failed++;
-      }
-    }
-    record({
+    const base = {
       kind: 'alert', by: 'watch', source: 'stale-notice', alertKind: STALE_NOTICE_KIND, level: 'INFO',
-      recipient: plan.recipient, executionKeys: plan.keys, delivered, ...(reason ? {reason} : {}), resolved: true,
-    });
+      recipient: plan.recipient, executionKeys: plan.keys, resolved: true,
+    };
+    if (!plan.recipient) {
+      result.unknownRecipient++;
+      record({...base, delivered: false, reason: '받는 쪽 모름'});
+      continue;
+    }
+    try { record({...base, delivered: false, attempt: true, reason: '전달 시도'}); }
+    catch { result.failed++; continue; }
+    try { send(plan.recipient, plan.message); result.sent++; }
+    catch (error) {
+      if (isNotificationHold(error)) {
+        result.held++;
+        try { record({...base, delivered: false, held: true, reason: '알림 보류'}); } catch {}
+        continue;
+      }
+      result.failed++;
+      try { record({...base, delivered: false, reason: `전달 실패(${error.message})`}); } catch {}
+      continue;
+    }
+    try { record({...base, delivered: true}); } catch {}
   }
   return result;
 }

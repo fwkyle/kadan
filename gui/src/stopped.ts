@@ -12,7 +12,7 @@ export type StopGroup = {
   lastAt?: string;
 };
 
-// 표시 순서: 실패가 가장 급하고, 오래된 미확정는 정리 대상이라 마지막이다.
+// 표시 순서: 실패가 가장 급하고, 오래된 미확정은 정리 대상이라 마지막이다.
 const ORDER: Record<string, number> = {
   failed: 0,
   session: 1,

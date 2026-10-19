@@ -22,13 +22,14 @@ const mk = () => {
   return {home, store, card};
 };
 const send = (taskId, role, t, by = '감독-A') => ({kind: 'send', taskId, role, by, t, board: 'b'});
+const fail = (taskId, role, t) => ({kind: 'done', taskId, role, by: role, result: 'failed', t, board: 'b'});
 const center = (cards, entries) => buildCardCenter({cards, entries, tree: [], runtimeKnown: false, now: NOW}).cards;
 const bucketOf = (cs, id) => executionBucket(cs.find(c => c.id === id), NOW);
 
-test('분류: 역할이 다음 카드를 받으면 오래된 미확정, 지금 발령은 계속 지금 막힘', () => {
+test('분류: 실패로 끝난 실행의 역할이 다음 카드를 받으면 오래된 미확정, 지금 발령은 계속 지금 막힘', () => {
   const {card} = mk();
   const old = card('old', '작업자-1', {work: 'w1'}), next = card('next', '작업자-1', {work: 'w2'});
-  const entries = [send('old', '작업자-1', '2026-10-18T06:00:00Z'), send('next', '작업자-1', '2026-10-19T05:00:00Z')];
+  const entries = [send('old', '작업자-1', '2026-10-18T06:00:00Z'), fail('old', '작업자-1', '2026-10-18T07:00:00Z'), send('next', '작업자-1', '2026-10-19T05:00:00Z')];
   const cs = center([old, next], entries);
   assert.equal(cs.find(c => c.id === 'old').movedOn, 'role');
   assert.equal(bucketOf(cs, 'old'), 'stale');
@@ -63,7 +64,7 @@ const setup = () => {
   const old1 = card('old1', '작업자-1', {work: 'w1'}), old2 = card('old2', '작업자-2', {work: 'w1', round: '1'});
   const next1 = card('next1', '작업자-1', {work: 'w2'}), later = card('later', '작업자-9', {work: 'w1', round: '2'});
   const entries = [
-    send('old1', '작업자-1', '2026-10-18T06:00:00Z', '감독-A'), send('old2', '작업자-2', '2026-10-18T06:10:00Z', '감독-B'),
+    send('old1', '작업자-1', '2026-10-18T06:00:00Z', '감독-A'), fail('old1', '작업자-1', '2026-10-18T07:00:00Z'), send('old2', '작업자-2', '2026-10-18T06:10:00Z', '감독-B'),
     send('next1', '작업자-1', '2026-10-19T05:00:00Z', '감독-A'), send('later', '작업자-9', '2026-10-19T05:10:00Z', '감독-A'),
   ];
   return {cards: [old1, old2, next1, later], entries, store};
@@ -75,7 +76,8 @@ test('재안내: 감독별로 한 통에 묶고, 판정 명령 뼈대는 있되 
   assert.deepEqual(plans.map(p => p.recipient).sort(), ['감독-A', '감독-B']);
   const a = plans.find(p => p.recipient === '감독-A');
   assert.deepEqual(a.keys, ['repo/old1']);
-  assert.match(a.message, /kadan done 작업자-1 old1 <ok\|failed>/);
+  assert.doesNotMatch(a.message, /kadan done/); // 실패한 실행에는 결과 확정 명령을 주지 않는다
+  assert.match(plans.find(p => p.recipient === '감독-B').message, /kadan done 작업자-2 repo\/old2 <ok\|failed>/);
   assert.match(a.message, /--status superseded --replaced-by/);
   assert.match(a.message, /--status cancelled/);
   assert.doesNotMatch(a.message, /KADAN:DONE/);
@@ -88,28 +90,54 @@ test('재안내: 실행당 평생 1회(원장 기준이라 재시작 뒤에도),
   const first = runStaleNotices({cards, entries, now: NOW, send: (r, m) => sent.push([r, m]), record});
   assert.equal(first.sent, 2);
   assert.equal(sent.length, 2);
-  assert.ok(log.every(e => e.alertKind === STALE_NOTICE_KIND && e.resolved === true && e.delivered === true && !e.id));
+  assert.ok(log.every(e => e.alertKind === STALE_NOTICE_KIND && e.resolved === true && !e.id));
+  assert.equal(log.filter(e => e.delivered === true).length, 2);
+  assert.equal(log.filter(e => e.attempt).length, 2); // 보내기 전에 시도부터 남긴다
   const again = runStaleNotices({cards, entries: [...entries, ...log], now: NOW, send: (r, m) => sent.push([r, m]), record});
   assert.deepEqual(again, {sent: 0, unknownRecipient: 0, failed: 0, held: 0});
   assert.equal(sent.length, 2);
 });
 
-test('재안내: 알림 보류면 기록 없이 미루고 다음에 다시, 판정된 실행은 목록에서 빠진다', () => {
+test('재안내: 알림 보류면 시도를 거두고 다음에 다시, 판정된 실행은 목록에서 빠진다', () => {
   const {cards, entries, store} = setup();
-  const held = Object.assign(new Error('입력 중'), {delivery: 'not-sent', holdCode: 'human-input'});
+  const held = Object.assign(new Error('입력 중'), {delivery: 'not-sent', code: 'KADAN_HUMAN_ACTIVE'});
   const log = [];
   const out = runStaleNotices({cards, entries, now: NOW, record: e => log.push(e), send: () => { throw held; }});
-  // 보류 판정 함수가 이 오류를 보류로 보는지에 따라 held 또는 failed로 센다. 보류면 기록이 없어야 한다.
-  assert.equal(out.held + out.failed, 2);
-  if (out.held) assert.equal(log.length, 0);
+  assert.deepEqual(out, {sent: 0, unknownRecipient: 0, failed: 0, held: 2});
+  assert.ok(planStaleNotices({cards, entries: [...entries, ...log], now: NOW}).length === 2); // 안 보냈으니 다시 시도
   const cancelled = store.update(cards[0].key, {status: 'cancelled'}, {revision: cards[0].revision, note: '판정'});
   assert.ok(!planStaleNotices({cards: [cancelled, ...cards.slice(1)], entries, now: NOW}).some(p => p.keys.includes('repo/old1')));
+});
+
+test('재안내: 보낸 뒤 결과 기록이 실패해도 다시 보내지 않고, 시도 기록이 실패하면 보내지 않는다', () => {
+  const {cards, entries} = setup();
+  const log = [], sent = [];
+  // 시도 기록만 성공하고 뒤 기록은 실패
+  let n = 0;
+  const flaky = e => { if (n++ % 2) throw new Error('잠금'); log.push(e); };
+  runStaleNotices({cards, entries, now: NOW, send: (r, m) => sent.push(r), record: flaky});
+  assert.equal(sent.length, 2);
+  assert.equal(planStaleNotices({cards, entries: [...entries, ...log], now: NOW}).length, 0);
+  // 시도 기록이 실패하면 보내지 않는다
+  const none = [];
+  const out = runStaleNotices({cards, entries, now: NOW, send: r => none.push(r), record: () => { throw new Error('잠금'); }});
+  assert.equal(none.length, 0);
+  assert.equal(out.failed, 2);
+});
+
+test('재안내: 보낸 우편의 전달 실패는 기록하고 다시 보내지 않는다', () => {
+  const {cards, entries} = setup();
+  const log = [];
+  const out = runStaleNotices({cards, entries, now: NOW, record: e => log.push(e),
+    send: () => { throw Object.assign(new Error('세션 없음'), {delivery: 'not-sent'}); }});
+  assert.equal(out.failed, 2);
+  assert.equal(planStaleNotices({cards, entries: [...entries, ...log], now: NOW}).length, 0);
 });
 
 test('재안내: 받는 쪽을 모르면 보내지 않고 기록만 남기며 업무 owner가 있으면 그쪽으로 간다', () => {
   const {card} = mk();
   const old = card('x1', '작업자-1', {work: 'w1'}), next = card('x2', '작업자-1', {work: 'w2'});
-  const entries = [send('x1', '작업자-1', '2026-10-18T06:00:00Z', '모름'), send('x2', '작업자-1', '2026-10-19T05:00:00Z', '모름')];
+  const entries = [send('x1', '작업자-1', '2026-10-18T06:00:00Z', '모름'), fail('x1', '작업자-1', '2026-10-18T07:00:00Z'), send('x2', '작업자-1', '2026-10-19T05:00:00Z', '모름')];
   const log = [], sent = [];
   const out = runStaleNotices({cards: [old, next], entries, now: NOW, send: (r) => sent.push(r), record: e => log.push(e)});
   assert.equal(out.unknownRecipient, 1);
@@ -126,7 +154,7 @@ test('재안내: 한 통은 목록 상한까지만 싣고 나머지는 외 N개�
   const total = STALE_NOTICE_LIMIT + 5;
   for (let i = 0; i < total; i++) {
     cards.push(card('b' + i, '작업자-' + i, {work: 'w' + i}));
-    entries.push(send('b' + i, '작업자-' + i, '2026-10-18T06:00:00Z'));
+    entries.push(send('b' + i, '작업자-' + i, '2026-10-18T06:00:00Z'), fail('b' + i, '작업자-' + i, '2026-10-18T07:00:00Z'));
   }
   cards.push(card('nx', '작업자-0', {work: 'wz'}));
   // 모든 역할이 다음 일을 받게 한다
@@ -135,4 +163,79 @@ test('재안내: 한 통은 목록 상한까지만 싣고 나머지는 외 N개�
   assert.equal(plan.keys.length, total);
   assert.equal((plan.message.match(/^- repo\//gm) || []).length, STALE_NOTICE_LIMIT);
   assert.match(plan.message, /외 5개/);
+});
+
+// 검수 boundary-probe 경계(2026-10-19 1라운드): 숨기면 안 되는 지금 막힘이 stuck으로 남는지 본다.
+const bucketsOf = (specs, entries) => {
+  const {card} = mk();
+  const cards = specs.map(([id, role, opts, patch]) => ({...card(id, role, opts), ...(patch ?? {})}));
+  return {cards, cs: center(cards, entries)};
+};
+
+test('경계: 같은 실행 재발령·발령 시각 같음·시각 없음은 지금 막힘', () => {
+  let {cs} = bucketsOf([['a', 'w']], [send('a', 'w', '2026-10-19T05:00:00Z'), send('a', 'w', '2026-10-19T05:30:00Z')]);
+  assert.equal(bucketOf(cs, 'a'), 'stuck');
+  ({cs} = bucketsOf([['a', 'w', {work: 'x'}], ['b', 'w', {work: 'y'}]], [fail('a', 'w', '2026-10-19T05:10:00Z'),
+    send('a', 'w', '2026-10-19T05:00:00Z'), send('b', 'w', '2026-10-19T05:00:00Z')]));
+  assert.equal(bucketOf(cs, 'a'), 'stuck');
+  ({cs} = bucketsOf([['a', 'w', {work: 'x'}], ['b', 'w', {work: 'y'}]], [{...send('a', 'w'), t: undefined}, fail('a', 'w', '2026-10-19T05:10:00Z'),
+    send('b', 'w', '2026-10-19T05:00:00Z')]));
+  assert.equal(bucketOf(cs, 'a'), 'stuck');
+});
+
+test('경계: 같은 라운드·업무 없음·다른 저장소 같은 업무·같은 ID 다른 저장소는 지금 막힘', () => {
+  const {card} = mk();
+  const a = card('a', 'w', {round: '1'}), b = card('b', 'r', {round: '1'});
+  assert.equal(bucketOf(center([a, b], [send('a', 'w', '2026-10-19T05:00:00Z'), send('b', 'r', '2026-10-19T05:10:00Z')]), 'a'), 'stuck');
+  const noWork = {...a, rallyId: undefined}, later = {...card('c', 'r', {round: '2'}), rallyId: undefined};
+  assert.equal(bucketOf(center([noWork, later], [send('a', 'w', '2026-10-19T05:00:00Z'), send('c', 'r', '2026-10-19T05:10:00Z')]), 'a'), 'stuck');
+  const other = {...card('d', 'r', {round: '2'}), repo: 'other', key: 'other/d'};
+  assert.equal(bucketOf(center([a, other], [send('a', 'w', '2026-10-19T05:00:00Z'), send('other/d', 'r', '2026-10-19T05:10:00Z')]), 'a'), 'stuck');
+  const sameId = {...card('e', 'r'), id: 'a', repo: 'other', key: 'other/a'};
+  assert.equal(bucketOf(center([a, sameId], [send('a', 'w', '2026-10-19T05:00:00Z'), send('other/a', 'r', '2026-10-19T05:10:00Z')]), 'a'), 'stuck');
+});
+
+test('경계(F1): 인계받은 실행은 새 담당의 과거 발령에 밀려나지 않는다', () => {
+  const {card} = mk();
+  const a = {...card('a', 'old', {work: 'x'}), at: '2026-10-19T04:00:00Z'}, b = card('b', 'new', {work: 'y'});
+  const entries = [send('a', 'old', '2026-10-19T05:00:00Z'), fail('a', 'old', '2026-10-19T05:10:00Z'),
+    send('b', 'new', '2026-10-19T05:20:00Z'),
+    {kind: 'handover', phase: 'transferred', from: 'old', to: 'new', taskIds: ['a'], handoverId: 'h1', t: '2026-10-19T05:40:00Z'}];
+  const cs = center([a, b], entries);
+  assert.equal(cs.find(c => c.id === 'a').role, 'new');
+  assert.equal(cs.find(c => c.id === 'a').movedOn, undefined);
+  assert.equal(bucketOf(cs, 'a'), 'stuck');
+});
+
+test('경계(F1): 같은 역할의 동시 발령은 결과 없이 진행 중인 쪽을 넘기지 않고, 실패로 끝난 뒤의 새 발령만 넘긴다', () => {
+  const {card} = mk();
+  const a = card('a', 'w', {work: 'x'}), b = card('b', 'w', {work: 'y'});
+  const concurrent = center([a, b], [send('a', 'w', '2026-10-19T05:00:00Z'), send('b', 'w', '2026-10-19T05:20:00Z')]);
+  assert.equal(bucketOf(concurrent, 'a'), 'stuck');
+  const failed = center([a, b], [send('a', 'w', '2026-10-19T05:00:00Z'), fail('a', 'w', '2026-10-19T05:10:00Z'), send('b', 'w', '2026-10-19T05:20:00Z')]);
+  assert.equal(failed.find(c => c.id === 'a').movedOn, 'role');
+});
+
+test('경계(F2): 발령하지 않은 뒤 라운드(준비·취소·초안·보류)는 근거가 아니다', () => {
+  const {card, store} = mk();
+  for (const status of ['ready', 'cancelled', 'draft', 'hold', 'archived']) {
+    const a = card('a' + status, 'w', {round: '1', work: 'u' + status});
+    const made = card('b' + status, 'r', {round: '2', work: 'u' + status});
+    const b = status === 'ready' || status === 'cancelled' || status === 'hold' || status === 'archived'
+      ? store.update(made.key, {status}, {revision: made.revision, note: status}) : {...made, status};
+    const cs = center([a, b], [send('a' + status, 'w', '2026-10-19T05:00:00Z')]);
+    assert.equal(bucketOf(cs, 'a' + status), 'stuck', status);
+  }
+  // 발령은 됐지만 취소된 뒤 라운드도 근거가 아니다
+  const a = card('ax', 'w', {round: '1', work: 'ux'}), made = card('bx', 'r', {round: '2', work: 'ux'});
+  const b = store.update(made.key, {status: 'cancelled'}, {revision: made.revision, note: '취소'});
+  assert.equal(bucketOf(center([a, b], [send('ax', 'w', '2026-10-19T05:00:00Z'), send('bx', 'r', '2026-10-19T05:10:00Z')]), 'ax'), 'stuck');
+});
+
+test('경계: 10/19 새 발령 직후 현재 실행은 지금 막힘으로 남는다', () => {
+  const {card} = mk();
+  const older = card('older', 'impl-3', {work: 'x'}), cur = card('cur', 'impl-3', {work: 'y'});
+  const cs = center([older, cur], [send('older', 'impl-3', '2026-10-19T03:00:00Z'), fail('older', 'impl-3', '2026-10-19T03:30:00Z'),
+    send('cur', 'impl-3', '2026-10-19T03:58:00Z')]);
+  assert.equal(bucketOf(cs, 'cur'), 'stuck');
 });
