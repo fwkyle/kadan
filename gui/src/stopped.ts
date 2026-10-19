@@ -12,7 +12,7 @@ export type StopGroup = {
   lastAt?: string;
 };
 
-// 표시 순서: 실패가 가장 급하고, 오래된 미정리는 정리 대상이라 마지막이다.
+// 표시 순서: 실패가 가장 급하고, 오래된 미확정은 정리 대상이라 마지막이다.
 const ORDER: Record<string, number> = {
   failed: 0,
   session: 1,
@@ -30,8 +30,8 @@ const META: Record<string, { label: string; desc: string }> = {
     desc: "담당 창이 확인되지 않습니다. 감독에게 일괄 확인을 요청하세요.",
   },
   stale: {
-    label: "오래된 미정리",
-    desc: "담당 세션이 없고 24시간 이상 신호가 없습니다. 감독이 대체·취소·일시정지로 정리해야 목록에서 빠집니다.",
+    label: "오래된 미확정",
+    desc: "담당 세션이 없고 24시간 이상 신호가 없거나, 담당이 다음 일로 넘어갔거나 같은 업무에 더 뒤 라운드가 생겼습니다. 감독이 대체·취소·일시정지로 정리해야 목록에서 빠집니다.",
   },
 };
 

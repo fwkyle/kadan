@@ -44,7 +44,7 @@ type StatusData = Stamp & {
 // 서버 bucketGroups와 같은 묶음. 결과 대기는 작업중에, 보류(archived)는 진행 전에 센다(2026-10-05 [kyle]).
 const groups = [
   ["running", "작업중"], ["stuck", "지금 막힌 것"],
-  ["stale", "오래된 미정리"], ["planned", "진행 전"], ["hold", "일시정지"],
+  ["stale", "오래된 미확정"], ["planned", "진행 전"], ["hold", "일시정지"],
   ["done", "완료"], ["closed", "취소·대체"],
 ];
 export default function Status({url}: {url: URL}) {
@@ -152,7 +152,7 @@ export default function Status({url}: {url: URL}) {
         {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id} data-fresh={`decision:${d.id}`}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
       </section>
       <section id="status-attention" className="st-section">
-        <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미정리는 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
+        <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미확정은 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
         {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">멈춘 카드가 없습니다.</p>}
         {data.alerts === null ? <p className="st-error" role="alert">감시 경보를 읽지 못했습니다(원장 확인 불가).</p>
           : data.alerts.count > 0 && <details className="st-fold" open={data.alerts.count <= 5}><summary>해소 전 감시 경보 {data.alerts.count}건</summary><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.map(a => <li key={a.id} data-fresh={`alert:${a.id}`} className="st-alert-row"><strong>{a.kind === "알림밀림" ? "알림이 계속 밀림" : a.kind === "훅신뢰" ? (a.trustState === "unknown" ? "Stop 훅 신뢰 확인 불가" : "Stop 훅 신뢰 필요") : a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.kind === "훅신뢰" ? `${a.trustText || a.trustState || "상태 모름"} · ` : ""}{a.kind === "알림밀림" ? `${a.holdCount ?? "?"}번 · ${a.holdReason || a.holdCode || "사유 모름"}${a.holdReason && a.holdCode ? ` (${a.holdCode})` : ""}${a.heldSince ? " · " + time(a.heldSince) + "부터" : ""} · ` : ""}{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>)}</ul></details>}

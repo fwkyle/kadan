@@ -83,7 +83,7 @@
  <p class="section-label">05 / 경보를 받으면</p><h2 id="recv-title">풀렸다는 우편은 오지 않습니다</h2>
  <div class="reading">
   <article><h3>해소 우편은 없음</h3><p>조건이 사라지면 원장에 <code>resolved</code> 기록만 남기고 감시 출력에 한 줄 적습니다. 그래서 받은 경보가 지금도 유효한지는 받은 쪽이 확인합니다.</p><p>사람은 대시보드 현황의 ‘지금 막힌 것 · 경보’에서 봅니다.</p></article>
-  <article><h3>행동 전에 지금 상태를 작게 읽기</h3><p>감독은 <code>GET /api/dashboard/status?super=&lt;자기 슈퍼감독&gt;</code>으로 자기 판의 지금 상태를 읽습니다.</p><p>지금 손댈 실행(작업중·막힘)만 판단 칸 8개로 주고, 오래된 미정리·진행 전·일시정지는 <code>counts</code>의 수만 줍니다.</p></article>
+  <article><h3>행동 전에 지금 상태를 작게 읽기</h3><p>감독은 <code>GET /api/dashboard/status?super=&lt;자기 슈퍼감독&gt;</code>으로 자기 판의 지금 상태를 읽습니다.</p><p>지금 손댈 실행(작업중·막힘)만 판단 칸 8개로 주고, 오래된 미확정·진행 전·일시정지는 <code>counts</code>의 수만 줍니다.</p></article>
  </div>
  <p class="footer-quote"><small>모든 경보 우편 끝에 붙는 한 줄</small>행동 전 지금 상태를 확인하라(감독 템플릿의 현황 확인 절차). 풀렸으면 따로 알리지 않는다.</p>
  <p class="note">미확인 우편은 기존 감시가 5분 유예 뒤 현재 수신 역할별로 묶어 한 번 알립니다. 읽음은 수신자가 직접 확인하며 질문의 답변 대기는 별개입니다. <a href="architecture.md#읽음-확인과-미확인-우편-알림">알림·재시작·인계 기준</a></p>

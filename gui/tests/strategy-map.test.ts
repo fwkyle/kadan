@@ -35,13 +35,13 @@ test("유닛 상태 우선순위: 창 없음 > 막힘 > 작업 중 > 결과 대�
   const map = buildMap({ hierarchy, rows, live, alerts: null });
   const unit = (role: string) => map.bases.flatMap((b) => b.units).find((u) => u.role === role)!;
   assert.equal(unit("m-작업자").state, "dead", "창이 없는데 일이 남았다");
-  assert.deepEqual(unit("m-작업자").crates, { running: 1, stuck: 0, stale: 1, planned: 0, hold: 0 }, "오래된 미정리는 막힘과 따로 센다");
+  assert.deepEqual(unit("m-작업자").crates, { running: 1, stuck: 0, stale: 1, planned: 0, hold: 0 }, "오래된 미확정은 막힘과 따로 센다");
   assert.equal(unit("m-검수자").state, "running", "결과 대기는 #102부터 작업중으로 온다");
   assert.equal(unit("m-감독").state, "idle");
   assert.equal(unit("비서").state, "dead");
   assert.equal(unit("고아").state, "dead");
   const alive = buildMap({ hierarchy, rows, live: [...live, { role: "m-작업자", harness: "claude", model: "s", effort: null, pidState: "match" }], alerts: null });
-  assert.equal(alive.bases[0].units.find((u) => u.role === "m-작업자")!.state, "running", "오래된 미정리는 작업 중보다 뒤");
+  assert.equal(alive.bases[0].units.find((u) => u.role === "m-작업자")!.state, "running", "오래된 미확정은 작업 중보다 뒤");
   assert.equal(alive.totals.stuck, 0); assert.equal(alive.totals.stale, 1);
   assert.equal(alive.totals.running, 3, "작업자 1 + 검수자 1 + 관계표 밖 1");
 });
@@ -75,7 +75,7 @@ test("배치: 슈퍼감독 앞줄, 감독 둘째 줄, 작업자는 cols개씩 �
   assert.equal(shortName("떠돌이", null), "떠돌이");
 });
 
-test("오래된 미정리만 든 역할은 창이 없어도 '창 없음'으로 과장하지 않는다, 감시기·대시보드 세션은 유닛이 아니다", () => {
+test("오래된 미확정만 든 역할은 창이 없어도 '창 없음'으로 과장하지 않는다, 감시기·대시보드 세션은 유닛이 아니다", () => {
   const map = buildMap({ hierarchy, rows: [row("r/9", "m-작업자", "stale"), row("r/10", "m-검수자", "stuck")], live: [...live,
     { role: "watch", harness: null, model: null, effort: null, pidState: "match" }, { role: "대시보드", harness: null, model: null, effort: null, pidState: "match" }], alerts: null });
   const units = map.bases.flatMap((b) => b.units);
