@@ -196,7 +196,7 @@ GREEN·AMBER·RED 판정, RED 해제(AMBER로 내려 focused 검증 하나만 �
 ## 교대
 
 문맥이 찼을 때의 기준·순서·무상태 인계는 `references/handover.md` 하나다. 버틸 수
-있으면 압축이 싸고, 한 번 읽은 %는 근거가 아니다.
+있으면 압축이 싸고, 한 번 읽은 %는 근거가 아니다. 대화 용량 %는 교대·작업 보류의 사유가 아니다.
 
 ## 참조 파일 지도
 
@@ -205,7 +205,7 @@ GREEN·AMBER·RED 판정, RED 해제(AMBER로 내려 focused 검증 하나만 �
 | `references/briefing.md` | 시작·전체 브리핑 전 |
 | `references/watch-ops.md` | watch 기동·라우팅·judge·알림 낱말 해석 전 |
 | `references/intervention.md` | 등급 판정, 반복 검증·무진행 판정, 끊김 재개, 제동, 복구 전 |
-| `references/handover.md` | 문맥 80% 부근, 판 경계 |
+| `references/handover.md` | 교대 판단(실제 압축·응답 장애), 판 경계 |
 | `references/scars.md` | 규칙 뒤 `(사고 MM-DD)` 꼬리표의 사연이 궁금할 때 |
 | `../kadan-conductor/references/dispatch-wait.md`, `cleanup.md` | 판 열기·접기 절차 |
 
