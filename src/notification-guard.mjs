@@ -13,3 +13,11 @@ const holdCodes = new Set([
 export function isNotificationHold(error) {
   return error?.delivery === 'not-sent' && holdCodes.has(error.code);
 }
+
+// 슈퍼 간이 아닌 일반 `kadan mail`을 실패 대신 보관할 수 있는 보류: 사람 입력과 복사 모드뿐이다.
+// 그 밖의 보류 코드(상태 미확인 등)는 근거가 생기기 전까지 넓히지 않는다.
+const storableMailCodes = new Set(['KADAN_HUMAN_ACTIVE', 'KADAN_PANE_IN_MODE']);
+
+export function isStorableMailHold(error) {
+  return error?.delivery === 'not-sent' && storableMailCodes.has(error.code);
+}
