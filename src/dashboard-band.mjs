@@ -96,6 +96,7 @@ export function openAlerts(entries, { limit = 20 } = {}) {
   const items = [...latest.values()]
     .filter((e) => e.resolved !== true && !SILENTLY_CLOSED.has(e.alertKind))
     .map((e) => ({ id: e.id, kind: e.alertKind || "", level: e.level || "", role: e.role || "", session: e.session || "", recipient: e.recipient || "", at: e.t || "",
+      ...(e.alertKind === "훅신뢰" ? { trustState: e.hookTrustState ?? "", trustText: e.hookTrustText ?? "" } : {}),
       ...(e.alertKind === "알림밀림" ? { holdCount: e.holdCount ?? null, holdCode: e.holdCode ?? "", holdReason: HOLD_REASONS[e.holdCode] ?? "", heldSince: e.heldSince ?? "" } : {}) }))
     .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
   return { count: items.length, items: items.slice(0, limit) };

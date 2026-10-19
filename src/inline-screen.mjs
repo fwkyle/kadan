@@ -3,6 +3,7 @@
 // 카단이 만드는 대화형 codex 명령에 --no-alt-screen을 붙여 스크롤백(인라인) 화면으로 고정한다.
 // 토큰 단위로만 본다 — 모델 이름에 alt-screen이 들어가도 빠지면 안 된다. 판단할 수 없는 명령(셸 연산·따옴표 깨짐)은 그대로 둔다.
 import {commandWords, launchIdentityOf} from './ai-identity.mjs';
+import {wordsWithoutStopHook} from './stop-hook-settings.mjs';
 
 export const INLINE_FLAG = '--no-alt-screen';
 
@@ -49,10 +50,11 @@ export function withInlineScreen(cmd) {
 }
 
 // 옛 세션(플래그 도입 전에 뜬 명령)과 지금 기본값을 견줄 때 쓴다. 플래그만 다른 것은 다른 명령이 아니다.
+// 카단이 붙이는 claude Stop 훅 `--settings <우리 파일>`(낱말 둘 또는 `=` 하나)도 같은 꼴로 걷어낸다(stop-hook-settings.mjs).
 // 셸 낱말 단위로 견준다(따옴표 안 공백 차이는 다른 명령). 낱말로 못 나누는 명령은 원문 그대로 견준다.
 export function withoutInlineScreen(cmd) {
   const words = commandWords(cmd);
-  return words ? JSON.stringify(words.filter(word => word !== INLINE_FLAG)) : cmd;
+  return words ? JSON.stringify(wordsWithoutStopHook(words.filter(word => word !== INLINE_FLAG))) : cmd;
 }
 
 // claude-code 2.1.302: 풀스크린(alternate screen)은 환경 변수 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN(참이면 끔)·

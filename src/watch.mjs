@@ -484,6 +484,8 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
   if (alert.id === 'hierarchy:unreadable') return chosen('@user','hierarchy-unreadable');
   // 밀리고 있는 그 창이나 상위로 보내면 같은 입력 보호에 또 걸린다. 사용자에게만 간다(2026-10-13 [kyle]).
   if (alert.kind === '알림밀림') return chosen('@user','notify-held');
+  // codex가 카단 Stop 훅을 신뢰하지 않은 상태는 kyle만 풀 수 있다(codex 화면에서 승인). 작업자의 감독에게 보내도 할 일이 없다.
+  if (alert.kind === '훅신뢰') return chosen('@user','stop-hook-trust');
   // 감시AI 호출 장애(timeout·call-failed·report-missing…)는 판정 CLI·모델의 문제라 운영자 몫이다.
   // 작업자의 감독에게 보내면 받아도 할 수 있는 일이 없다(2026-10-05 점검 보고서 2-M5).
   if (alert.kind === '감시AI오류') return chosen('@user','judge-failure');
