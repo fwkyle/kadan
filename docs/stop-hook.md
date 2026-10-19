@@ -109,7 +109,7 @@ Why: 대화가 압축되면 현재 실행 주소가 대체 대화에서 빠져 �
    - 훅 사슬은 `node 훅 → sh 감싸개 → 실행기 → pane`이다. 감싸개 셸(`sh`·`bash`·`zsh`·`dash`·`env`)을 건너뛴 첫 조상이 실행기다. claude는 실행기가 곧 pane(`실행기 PID == panePid`), codex는 실행기(vendor 바이너리)의 부모가 pane이고 pane 명령이 `node`(npm 실행 파일)다.
    - 자식 CLI는 도구 셸이 끼어 부모가 pane이 아니거나, 도구 셸이 exec로 바로 띄운 claude처럼 pane이 `node` 실행 파일이 아닌 경우라서 걸러진다.
    - 확인 못 하면 통과한다: `ps` 실패·시간 초과, 사슬 8단 초과, pane PID 기록 없음, 바닥이 herdr 등.
-7. 원장 조회는 자식 프로세스(`stop-hook-context.mjs lookup <역할>`)에서 **3초** 제한(`LOOKUP_MS`), 잠금 대기는 0.8초(`KADAN_BUSY_TIMEOUT_MS`, 기본 15초)다. 동기 SQLite 호출은 중간에 끊을 수 없어 프로세스째 죽인다. 시간 초과·오류·이상한 출력은 빈 결과로 본다. 자식은 `{keys, panePid}`를 돌려준다.
+7. 원장 조회는 자식 프로세스(`stop-hook-context.mjs lookup <역할>`)에서 **3초** 제한(`LOOKUP_MS`), 잠금 대기는 0.8초(`KADAN_BUSY_TIMEOUT_MS`, 기본 15초)다. 동기 SQLite 호출은 중간에 끊을 수 없어 프로세스째 죽인다. 시간 초과·오류·이상한 출력은 빈 결과로 본다. 자식은 `{keys, panePid}`를 돌려준다. `ps` 조회 상한은 1초다. 시험만 환경값 `KADAN_HOOK_TIMEOUT_MS`로 두 상한을 키운다(높은 부하에서 실제 훅 프로세스 시험이 흔들리지 않게).
 
 마지막 압축 기록은 확실할 때만 쓴다. 꼬리 읽기 범위의 **첫 줄**(잘린 줄)은 건너뛰지만, 읽을 수 없는 **다른 줄**이 경계 낱말(`compacted`·`compact_boundary`)을 담았거나 줄바꿈 없이 끝난 마지막 줄이면 마지막 경계를 확정할 수 없다고 보고 앞 경계로 대신하지 않고 통과한다. 경계 낱말이 없는 손상 줄은 건너뛴다.
 

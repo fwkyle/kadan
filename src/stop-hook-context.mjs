@@ -14,6 +14,8 @@ const FRESH_MS = 30 * 60 * 1000; // 이보다 오래된 경계는 이미 지난 
 // 원장 조회 전체 상한. 넘기면 재안내 없이 통과한다(훅 제한시간은 10초). 카드는 1초를 제안했으나 실제 원장(원장 5.6만 줄)
 // 조회가 부하 20에서 1.9~2.9초라 1초면 거의 항상 포기한다 → 3초로 두고 결과에 실측과 함께 보고한다.
 const LOOKUP_MS = 3000;
+// 시험용: 부하가 높은 맥에서 실제 훅 프로세스 시험이 시간 상한에 걸려 흔들리지 않게 상한을 키운다. 운영에서는 쓰지 않는다.
+const capMs = fallback => Number(process.env.KADAN_HOOK_TIMEOUT_MS) || fallback;
 const DB_WAIT_MS = '800'; // 원장 잠금 대기 상한. 기본 15초는 훅 제한시간을 넘긴다
 
 const BOUNDARY_WORD = /compacted|compact_boundary/;
@@ -83,7 +85,7 @@ export async function currentExecutionsOf(home, role) {
 
 // 훅 안에서 원장 읽기에 시간 상한을 둔다: 동기 SQLite 호출은 중간에 끊을 수 없어 자식 프로세스로 돌려 제한시간에 죽인다.
 // 시간 초과·실패·이상한 출력은 모두 빈 결과다(재안내 없음).
-export function lookupExecutions(home, role, timeoutMs = LOOKUP_MS) {
+export function lookupExecutions(home, role, timeoutMs = capMs(LOOKUP_MS)) {
   const none = {keys: [], panePid: null};
   const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'lookup', role],
     {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 1 << 20});
@@ -106,7 +108,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
 // 자식 CLI는 실행기와 pane 사이에 도구 셸 등이 끼거나 pane이 아닌 실행기가 부모라서 걸러진다. 조회 실패·PID 없음은 거짓(통과)이다.
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'env']);
 export function processTable(run = spawnSync) {
-  const result = run('ps', ['-axo', 'pid=,ppid=,command='], {encoding: 'utf8', timeout: 1000, maxBuffer: 16 << 20});
+  const result = run('ps', ['-axo', 'pid=,ppid=,command='], {encoding: 'utf8', timeout: capMs(1000), maxBuffer: 16 << 20});
   if (result.status !== 0 || typeof result.stdout !== 'string') return null;
   const table = new Map();
   for (const line of result.stdout.split('\n')) {

@@ -14,6 +14,7 @@ import {DecisionStore} from '../src/decisions.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 import {createDatabase, writeStorageMarker, openDatabase} from '../src/storage.mjs';
 
+process.env.KADAN_HOOK_TIMEOUT_MS = '60000'; // 부하가 높아도 훅 시간 상한 때문에 흔들리지 않게(운영 상한은 그대로 3초·1초)
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-compact-hook-'));
 const NOW = Date.parse('2026-10-19T06:00:00.000Z');
 const now = () => NOW;
@@ -133,9 +134,9 @@ const hookInput = (file, session = 'main', extra = {}) => JSON.stringify({hook_e
 function runHook(home, raw, {role = 'r-작업자', shape = 'direct'} = {}) {
   const env = {...process.env, KADAN_HOME: home, HOOK_INPUT: raw, HOOK_SCRIPT: hookScript};
   if (role) env.KADAN_ROLE = role; else delete env.KADAN_ROLE;
-  const run = shape === 'direct' ? spawnSync('/bin/sh', [hookScript], {env, input: raw, encoding: 'utf8', timeout: 20000})
-    : shape === 'launcher' ? spawnSync(process.execPath, [helper], {env, encoding: 'utf8', timeout: 20000})
-      : spawnSync(process.execPath, [helper], {env: {...env, HOOK_NEST: '1'}, encoding: 'utf8', timeout: 20000});
+  const run = shape === 'direct' ? spawnSync('/bin/sh', [hookScript], {env, input: raw, encoding: 'utf8', timeout: 90000})
+    : shape === 'launcher' ? spawnSync(process.execPath, [helper], {env, encoding: 'utf8', timeout: 90000})
+      : spawnSync(process.execPath, [helper], {env: {...env, HOOK_NEST: '1'}, encoding: 'utf8', timeout: 90000});
   assert.equal(run.status, 0);
   return run.stdout;
 }
