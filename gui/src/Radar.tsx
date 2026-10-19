@@ -1,7 +1,7 @@
 import type { Blip } from "./radar-blips";
 
 // 우주 테마의 레이더(2026-10-07 [kyle]). 쓸고 지나가는 빛은 회전(transform)만 써서 가볍다. 점은 관심이 필요한 담당.
-const LABEL = { alert: "경보", dead: "창 없음", stuck: "막힘", stale: "오래된 미정리" } as const;
+const LABEL = { alert: "경보", dead: "창 없음", stuck: "막힘", stale: "오래된 미확정" } as const;
 export default function Radar({ blips }: { blips: Blip[] }) {
   const summary = blips.length ? blips.map((b) => `${b.role} ${LABEL[b.kind]}`).join(", ") : "관심이 필요한 담당 없음";
   return (

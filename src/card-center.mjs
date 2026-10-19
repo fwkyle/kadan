@@ -1,4 +1,5 @@
 import {taskIdentity,taskEventKey} from './task-identity.mjs';
+import {movedOnReasons} from './execution-moved-on.mjs';
 import {buildRallies} from './rallies.mjs';
 import { workEntries, effectiveCardRole } from './handover-state.mjs';
 import {isEnded} from './status-labels.mjs';
@@ -33,7 +34,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     if(!['send','done'].includes(e.kind)||!e.role)continue;
     const key=`${e.role}\0${taskEventKey(e)}`;
     const old=runs.get(key);
-    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
+    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,...(Object.hasOwn(e,'ownedAt')?{ownedAt:e.ownedAt}:{}),at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
     else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result,doneBy:e.by??'모름',executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
   }
   // 역할별 가장 최근 시작 기록의 실행기·모델. 카단은 판단에 쓰지 않고 화면 답변용으로만 옮긴다(2026-09-06 결정).
@@ -78,6 +79,8 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const answer=card.history.filter(h=>h.noteKind==='answer').at(-1);
     return {...card,board,runs:own,displayState:state,ambiguous:connectionErrors.length>0,connectionErrors,pendingQuestion:!!question&&(!answer||question.revision>answer.revision)};
   });
+  const moved=movedOnReasons(result);
+  for(const c of result)if(moved.has(c.key))c.movedOn=moved.get(c.key);
   const order=['running','waiting','unconfirmed','orphaned','failed','ready','assigned','draft','hold','done','cancelled','superseded','archived'];
   result.sort((a,b)=>order.indexOf(a.displayState)-order.indexOf(b.displayState)||(Date.parse(b.at)-Date.parse(a.at))||a.key.localeCompare(b.key));
   const unregistered=[...runs.values()].filter(r=>r.taskConnection?.state!=='resolved').map(r=>({...classify(r),connectionLabel:r.taskConnection?.state==='unregistered'?'중앙 카드 미등록':'기록 연결 실패',connectionReason:r.taskConnection?.reason,board:plans.get(r.taskId)?.size===1?[...plans.get(r.taskId)][0]:null}));

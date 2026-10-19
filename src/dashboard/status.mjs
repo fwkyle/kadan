@@ -90,7 +90,7 @@ export function statusData(snapshot, url, stamp, m) {
       super: superFilter,
       supervisor: item,
       // 감독 AI가 경보마다 읽으므로 작게 준다(PR #99 검수 3: 거른 뒤에도 행 32 × 칸 47로 약 81KB였다).
-      // 지금 손댈 실행(작업중·막힘)만 판단에 필요한 칸으로, 나머지(오래된 미정리·진행 전·일시정지)는 수만. 결과 대기는 작업중에 합쳐 센다(#102).
+      // 지금 손댈 실행(작업중·막힘)만 판단에 필요한 칸으로, 나머지(오래된 미확정·진행 전·일시정지)는 수만. 결과 대기는 작업중에 합쳐 센다(#102).
       counts: Object.fromEntries(["running", "stuck", "stale", "planned", "hold"].map((b) => [b, statusRows.filter((r) => mine(r.owner) && r.bucket === b).length])),
       rows: statusRows.filter((r) => mine(r.owner) && ["running", "stuck"].includes(r.bucket))
         .map((r) => pick(r, ["key", "title", "owner", "bucket", "healthLabel", "signalAt", "failureReason", "next"])),

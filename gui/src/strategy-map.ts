@@ -6,9 +6,9 @@ import type { Row } from "./types";
 import type { LiveSession, OpenAlerts } from "./status-band";
 
 export type UnitKind = "super" | "director" | "worker";
-// 우선순위 순서: 창 없음 > 막힘 > 작업중 > 오래된 미정리 > 대기(창만 있음). 결과 대기는 #102부터 작업중에 합쳐 센다. 세션 상태를 모르면 unknown,
-// 창도 일도 없으면 off. 오래된 미정리(stale)는 현황판처럼 막힘과 따로 둔다 — 2026-10-05 실데이터에서 막힘 16건이 전부
-// 오래된 미정리였고, 막힘으로 세면 창이 닫힌 옛 작업자 11명이 '창 없음' 빨강으로 떠 과장됐다.
+// 우선순위 순서: 창 없음 > 막힘 > 작업중 > 오래된 미확정 > 대기(창만 있음). 결과 대기는 #102부터 작업중에 합쳐 센다. 세션 상태를 모르면 unknown,
+// 창도 일도 없으면 off. 오래된 미확정(stale)는 현황판처럼 막힘과 따로 둔다 — 2026-10-05 실데이터에서 막힘 16건이 전부
+// 오래된 미확정이었고, 막힘으로 세면 창이 닫힌 옛 작업자 11명이 '창 없음' 빨강으로 떠 과장됐다.
 export type UnitState = "dead" | "stuck" | "running" | "stale" | "idle" | "unknown" | "off";
 export type Crates = { running: number; stuck: number; stale: number; planned: number; hold: number };
 export type Unit = {
@@ -30,7 +30,7 @@ export type MapInput = {
 };
 
 export const STATE_LABEL: Record<UnitState, string> = {
-  dead: "창 없음", stuck: "막힘", running: "작업중", stale: "오래된 미정리", idle: "대기", unknown: "세션 모름", off: "쉬는 중",
+  dead: "창 없음", stuck: "막힘", running: "작업중", stale: "오래된 미확정", idle: "대기", unknown: "세션 모름", off: "쉬는 중",
 };
 // 카단 자체 세션(감시기·대시보드)은 역할 유닛이 아니다.
 const SYSTEM_ROLES = new Set(["watch", "대시보드"]);
