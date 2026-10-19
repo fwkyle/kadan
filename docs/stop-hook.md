@@ -93,6 +93,32 @@ claude 2.1.302에는 설정 경로를 주는 환경 변수가 없다. `CLAUDE_CO
 
 claude 설정 파일이 있는 기계(= 이 빠른 길을 켠 기계)에서만, codex 훅이 `trusted`가 아니면 감시기가 사용자(`@user`)에게 `훅신뢰` 경보를 낸다(상태가 같으면 한 번). 상태: `no-hooks-file`·`unreadable`·`not-installed`·`other-path`(다른 체크아웃 경로의 훅만 있음)·`untrusted`·`unknown`(config.toml 표기를 해석할 수 없거나 명령을 안전하게 인용할 수 없음 — 미신뢰로 단정하지 않고 문구를 구분한다). `[hooks.state]` 헤더는 큰따옴표·작은따옴표 키, 점 주변 공백, 줄 끝 주석을 같은 키로 읽는다. 읽기만 하며 `trusted_hash`를 쓰거나 설정 내용을 기록하지 않는다.
 
+## 압축 뒤 현재 카드 재안내 (2026-10-19)
+
+Why: 대화가 압축되면 현재 실행 주소가 대체 대화에서 빠져 작업자가 규칙 수락 답변만 하고 멈춘 사고(retire_ooo, exec-2ef4e2fc 실측). 새 훅 등록 없이 기존 Stop 훅이 압축 직후 첫 응답에서 주소를 한 번 알린다.
+
+`src/stop-hook-context.mjs`의 `compactReminder`가 아래 순서로 판단한다. 재안내(`{"decision":"block","reason":"…`kadan card show <저장소/실행ID>`…"}`, 종료 0)는 **모두** 통과할 때만 나가고, 어느 하나라도 실패·모호하면 출력 없이 통과한다(fail-open).
+
+1. `KADAN_ROLE`이 없으면 아무것도 읽거나 쓰지 않고 끝난다(개인 실행기). `stop_hook_active`가 true이면 끝난다. 이 둘에서는 기회를 소모하지 않는다.
+2. `transcript_path`(절대경로) 끝 256KB에서 마지막 압축 경계를 읽는다 — claude `system/compact_boundary`(uuid), codex `compacted`(window_id). 없거나 모호하면 끝.
+3. **새 경계를 처음 본 Stop에서 결과와 무관하게 기회를 소모한다**: `$KADAN_HOME/stop-hook/compact-reminders/<역할·세션·경계 지문>.json`을 배타적(`wx`)으로 만든다. 이미 있거나 만들 수 없으면 끝. 그래서 압축 한 번에 기회는 한 번이다(마커·답 대기·대상 없음이어도 같다).
+4. 이번 응답에 DONE 마커가 있으면 끝. 경계가 30분보다 오래됐으면 끝(훅을 처음 켠 세션의 옛 압축).
+5. 이 역할의 미완료 실행을 `buildWatchScope`로 구한다(닫힌 업무·이전 세대·`waiting` 활동 제외)에 더해 열린 질문(`hasOpenQuestion`)이 붙은 실행을 뺀다. 실행이 여럿이면 하나의 안내에 모두 적는다. 없으면 끝.
+   - **사용자 결정 답 대기 제외**: 감시기와 같은 `DecisionStore`의 열린(`open`) 결정이 이 역할의 실행 카드 또는 그 실행이 속한 업무에 연결돼 있으면 통과한다(실행이 여럿이면 하나만 걸려도 통째로 통과). 결정 저장소를 못 읽어도 통과한다.
+6. **담당 세션 확인**: 안내할 실행이 있을 때 `ps`를 한 번 불러 훅 프로세스의 부모 사슬을 원장 `start`의 pane PID(`panePid`, 바닥이 tmux일 때만)와 비교한다. 작업자가 띄운 시험용 claude·codex는 `KADAN_ROLE`을 물려받기 때문에 이름만으로는 담당 세션과 가를 수 없다.
+   - 훅 사슬은 `node 훅 → sh 감싸개 → 실행기 → pane`이다. 감싸개 셸(`sh`·`bash`·`zsh`·`dash`·`env`)을 건너뛴 첫 조상이 실행기다. claude는 실행기가 곧 pane(`실행기 PID == panePid`), codex는 실행기(vendor 바이너리)의 부모가 pane이고 pane 명령이 `node`(npm 실행 파일)다.
+   - 자식 CLI는 도구 셸이 끼어 부모가 pane이 아니거나, 도구 셸이 exec로 바로 띄운 claude처럼 pane이 `node` 실행 파일이 아닌 경우라서 걸러진다.
+   - 확인 못 하면 통과한다: `ps` 실패·시간 초과, 사슬 8단 초과, pane PID 기록 없음, 바닥이 herdr 등.
+   - **앱 서버(daemon) 모드 codex는 재안내가 꺼진다(알려진 한계, 2026-10-19 실측)**: 새 `CODEX_HOME`의 codex는 `codex app-server --listen unix:// --managed-daemon`을 첫 세션의 자식으로 띄우고 훅·도구 셸을 그 아래에서 돌린다(사슬 `훅 → sh → 앱 서버 → vendor → pane`). 이 앱 서버는 세션마다가 아니라 **같은 `CODEX_HOME`의 모든 codex가 나눠 쓰는 공용 daemon**이다(두 번째 세션은 앱 서버를 따로 띄우지 않고 소켓으로 붙었고, 그 세션의 도구 셸 부모가 첫 세션의 앱 서버였다. 첫 세션이 끝나도 앱 서버는 남는다). 그래서 부모 작업자가 띄운 자식 codex의 사슬도 똑같아져 프로세스 사슬로는 가를 수 없다. 앱 서버 한 단계를 허용하면 자식 CLI 차단(F1)이 다시 열리므로 **허용하지 않고 통과**한다. 대화 기록(rollout)을 여는 쪽도 pane의 vendor가 아니라 앱 서버라서 pane과 세션을 값싸게 맞출 방법이 없다. 운영 codex pane(`node → vendor`, 앱 서버 자식 없음)은 이 경우가 아니라 그대로 동작한다. 실행 모델 설정(`--no-daemon` 등) 변경은 이 변경의 범위 밖이며 제안만 남긴다.
+   - 확인 못 하면 통과한다: `ps` 실패·시간 초과, 사슬 8단 초과, pane PID 기록 없음, 바닥이 herdr, 앱 서버 daemon 사슬 등.
+7. 원장 조회는 자식 프로세스(`stop-hook-context.mjs lookup <역할>`)에서 **3초** 제한(`LOOKUP_MS`), 잠금 대기는 0.8초(`KADAN_BUSY_TIMEOUT_MS`, 기본 15초)다. 동기 SQLite 호출은 중간에 끊을 수 없어 프로세스째 죽인다. 시간 초과·오류·이상한 출력은 빈 결과로 본다. 자식은 `{keys, panePid}`를 돌려준다. `ps` 조회 상한은 1초다. 시험만 환경값 `KADAN_HOOK_TIMEOUT_MS`로 두 상한을 키운다(높은 부하에서 실제 훅 프로세스 시험이 흔들리지 않게).
+
+마지막 압축 기록은 확실할 때만 쓴다. 꼬리 읽기 범위의 **첫 줄**(잘린 줄)은 건너뛰지만, 읽을 수 없는 **다른 줄**이 경계 낱말(`compacted`·`compact_boundary`)을 담았거나 줄바꿈 없이 끝난 마지막 줄이면 마지막 경계를 확정할 수 없다고 보고 앞 경계로 대신하지 않고 통과한다. 경계 낱말이 없는 손상 줄은 건너뛴다.
+
+**진단 기록**: 기회를 선점한 Stop은 once 파일에 `outcome`을 덧붙인다(원장 쓰기 없음, 출력·종료 코드 그대로). 값: `reminded`(안내함)·`marker`(이번 응답이 완료)·`stale-boundary`(옛 압축)·`no-execution`(맡은 실행 없음)·`decision-open`(열린 결정 대기)·`ledger-broken`·`lookup-failed`(조회 시간 초과·오류)·`chain-unmatched`(담당 세션 미확인: 자식 CLI·daemon 사슬·PID 없음). 나중에 '왜 재안내가 안 났나'는 `$KADAN_HOME/stop-hook/compact-reminders/*.json`으로 본다.
+
+원장에는 쓰지 않는다. 안내 문구에 완성된 DONE 마커는 넣지 않는다. 시간 상한 근거(2026-10-19, 운영 원장 5.6만 줄·부하 약 20, 읽기 전용): 자식 조회 전체 1.9~2.9초(원장 읽기 0.45~0.98초가 대부분, 카드 요약 0.15초). 카드가 제안한 1초로는 거의 항상 포기해 기능이 사실상 꺼지므로 3초로 두었다. 한계: 상위 감독 역할 제외는 하지 않는다(parents 없이 계산). 감시 우편 대비책은 이 변경에 없다. 남은 한계(고치지 않음): 경계 신선도 기준이 30분이라 압축 뒤 첫 장시간 작업이 30분을 넘으면 놓친다, 꼬리 256KB 밖으로 밀린 경계는 못 본다, `compact-reminders/` once 파일은 경계마다 78바이트씩 늘고 정리 코드가 없다(생성 때 7일 넘은 파일을 지우는 정도가 필요하면 별도 변경으로). 실제 압축 뒤 모델이 `card show`를 실행하는 격리 종단 시험은 이 문서 작성 시점에 하지 않았다. 시험: `tests/stop-hook-context.test.mjs`.
+
 ## 실측 요약과 한계
 
 - codex 인증 관문 [실측]: 격리 `CODEX_HOME`에 `config.toml`만 두고(인증 파일 복사 없음) 최상단 `model_provider = "ocxlocal"` + `[model_providers.ocxlocal]`(`base_url`=ocx 로컬 프록시, `wire_api="responses"`, `requires_openai_auth=false`)로 대화형 TUI가 로그인 화면 없이 떴다. `model_provider`를 `[tui]` 아래에 두면 무시된다.
