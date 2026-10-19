@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { splitGhostText } from "../src/ghost-text.mjs";
-import { readStatusLine } from "../src/watch-status-line.mjs";
+import { assessIdleStop, readStatusLine } from "../src/watch-status-line.mjs";
 import { queuedInputBanner } from "../src/watch-queue-resume.mjs";
+import { currentErrorBlock, currentStopPhrases } from "../src/watch-stop-phrases.mjs";
 
 // 2026-10-19 격리 tmux 실측 사본(claude 2.1.303 Haiku, codex): `capture-pane -e` 입력칸 줄.
 // 추천 문구만 `ESC[2m`(흐림). 친 글·빈 칸은 흐림 없음. ❯ 뒤는 U+00A0.
@@ -87,4 +89,57 @@ test("큐 재개: 추천 문구는 미완성 글이 아니고 실제 친 글은 
   const build = (input) => splitGhostText([E + "[0m" + banner, "", input].join("\n")).judge;
   assert.equal(queuedInputBanner(build(CLAUDE_GHOST)).unsafe, null);
   assert.equal(queuedInputBanner(build(CLAUDE_TYPED)).unsafe, "입력창에 미완성 텍스트가 있음");
+});
+
+test("실측 -e/-p 사본 7쌍: 입력칸 외 모든 바이트와 줄 수를 보존한다", () => {
+  const { fixtures } = JSON.parse(fs.readFileSync(
+    new URL("./fixtures/ghost-text-screens.json", import.meta.url), "utf8"));
+  for (const { name, ansi, plain } of fixtures) {
+    const expected = plain.split("\n");
+    const input = expected.findLastIndex(line => /^\s*[❯›>]/u.test(line));
+    const withoutInput = text => text.split("\n").filter((_, i) => i !== input).join("\n");
+    const { judge, view, ghost } = splitGhostText(ansi);
+    for (const text of [judge, view]) {
+      assert.equal(text.split("\n").length, expected.length, name);
+      assert.deepEqual(Buffer.from(withoutInput(text)), Buffer.from(withoutInput(plain)), name);
+    }
+    if (!ghost) assert.equal(judge, plain, name);
+  }
+});
+
+test("#200 현재 오류 판정: 추천 입력칸이면 오류, 실제 입력 중이면 제외", () => {
+  for (const [ghostInput, typedInput] of [[CLAUDE_GHOST, CLAUDE_TYPED], [CODEX_GHOST, CODEX_TYPED]]) {
+    const build = input => splitGhostText(["■ 502 Bad Gateway", "", input].join("\n")).judge;
+    assert.equal(currentErrorBlock(build(ghostInput))?.head, "■ 502 Bad Gateway");
+    assert.equal(currentStopPhrases(build(ghostInput)).size, 1);
+    assert.equal(currentErrorBlock(build(typedInput)), null);
+    assert.equal(currentStopPhrases(build(typedInput)).size, 0);
+  }
+});
+
+test("PR-A (b): 같은 추천 화면이 계속되면 멈춤 경보, 실제 입력이면 경보 없음", () => {
+  for (const input of [CLAUDE_GHOST, CODEX_GHOST, CLAUDE_TYPED, CODEX_TYPED]) {
+    const text = splitGhostText(screen(input)).judge;
+    const observations = new Map([["kadan-ghost-fixture", {
+      role: "ghost-fixture", alive: true, screen: text, digest: text,
+    }]]);
+    const options = { elapsedMs: 1_000, intervalMs: 1_000, afterMs: 1_000,
+      tasks: [{ role: "ghost-fixture", t: "2026-10-19T00:00:00Z" }] };
+    const first = assessIdleStop(new Map(), observations, options);
+    const second = assessIdleStop(first.states, observations, options);
+    assert.equal(second.alerts.length, [CLAUDE_GHOST, CODEX_GHOST].includes(input) ? 1 : 0);
+  }
+});
+
+test("흐린 조각 사이의 실제 입력과 입력 기호는 지우지 않는다", () => {
+  const input = `${E}[2m› hint${E}[22m 실제 입력 ${E}[2mtail${E}[0m`;
+  const { judge, view } = splitGhostText(input);
+  assert.equal(judge, "›  실제 입력");
+  assert.ok(view.includes("실제 입력"));
+  assert.ok(view.startsWith("› "));
+});
+
+test("앞 줄에서 이어진 흐림 상태도 입력칸에서만 제거한다", () => {
+  const { judge } = splitGhostText(`${E}[2m흐린 본문\n› 안내문${E}[0m`);
+  assert.equal(judge, "흐린 본문\n›");
 });
