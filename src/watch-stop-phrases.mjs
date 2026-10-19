@@ -6,8 +6,7 @@
 // scope: worker(작업자 화면) | supervisor(감독 화면). live: 지금 그려진 상태 줄이라 감시기가 처음 본 주기에도 바로 경보한다
 //   (스크롤백 줄은 처음 본 주기를 기준선으로만 삼는다 — 옛 줄 헛경보 방지).
 // sample: 실제 화면 표본이 있는 근거. '없음'은 문구를 사고표·설치본에서만 확인했고 감시AI 입력 기록에서 못 찾았다는 뜻이다.
-// legacy: PR-B 이전부터 낱말로 잡던 항목. '현재 오류 덩어리' 밖에서도 한 줄 낱말로 잡되(처음 본 주기는 기준선), 인용·코드 울타리·도구 실행 줄·입력 줄은 거른다.
-// legacy가 아닌 낱말 항목(auth-token, reconnecting)은 아래 '현재 오류 덩어리'일 때만 읽는다.
+// 모든 낱말은 아래 '현재 오류 덩어리' 안에서만 읽는다(한 줄 낱말 판정 없음, PR #200 수정 2라운드). 덩어리로 확정 못 한 화면은 정체 경로로 간다.
 // 구조로 판정하는 항목(detect)은 마지막 입력창 주변 덩어리만 본다 — 인용·설명·오래된 스크롤 줄을 멈춤으로 읽지 않는다.
 import { terminal429 } from "./watch-rate-limit.mjs";
 import { securityFilterNotice } from "./watch-security-filter.mjs";
@@ -15,25 +14,25 @@ import { securityFilterNotice } from "./watch-security-filter.mjs";
 export const STOP_ACTIONS = ["auto-resume", "alert-supervisor", "replace-runner"];
 
 export const STOP_PHRASES = [
-  { id: "rate-limit-429", legacy: true, kind: "한도", action: "auto-resume", scope: ["worker"],
+  { id: "rate-limit-429", kind: "한도", action: "auto-resume", scope: ["worker"],
     pattern: /429 Too Many Requests|exceeded retry limit/iu,
     sample: "codex 0.163 `Exceeded retry limit, last status: 429` (tests/watch-stall-digits.test.mjs)" },
-  { id: "rate-limit-text", legacy: true, kind: "한도", action: "auto-resume", scope: ["worker", "supervisor"],
+  { id: "rate-limit-text", kind: "한도", action: "auto-resume", scope: ["worker", "supervisor"],
     pattern: /rate limit/iu, sample: "없음(사고표 E1)" },
   // 입력창 바로 위 오류 줄 + 빈 입력창 구조로 자동 재개 대상인지 가른다(watch-rate-limit.mjs).
   { id: "rate-limit-terminal", kind: "한도", action: "auto-resume", scope: ["worker"],
     detect: terminal429, sample: "codex 0.163 429 방치 사고 화면" },
-  { id: "no-api-key", legacy: true, kind: "설정", action: "replace-runner", scope: ["worker", "supervisor"],
+  { id: "no-api-key", kind: "설정", action: "replace-runner", scope: ["worker", "supervisor"],
     pattern: /No API key/iu, sample: "없음(사고표 E5)" },
   { id: "auth-token", kind: "인증", action: "replace-runner", scope: ["worker", "supervisor"],
     pattern: /oauth\/token|authentication (?:failed|required)|401 Unauthorized/iu, sample: "없음(intervention.md 표)" },
   { id: "reconnecting", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"], live: true,
     pattern: /Reconnecting\.\.\./iu, sample: "codex 0.163 `• Reconnecting... 2/5 (9m 34s • esc to interrupt)`" },
-  { id: "stream-error", legacy: true, kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
+  { id: "stream-error", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
     pattern: /stream error|stream disconnected/iu, sample: "codex 0.163 `Stream disconnected before completion`" },
-  { id: "bad-gateway", legacy: true, kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
+  { id: "bad-gateway", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
     pattern: /502 Bad Gateway|Provider unreachable/iu, sample: "없음(사고표 E2)" },
-  { id: "dns", legacy: true, kind: "끊김", action: "alert-supervisor", scope: ["worker"],
+  { id: "dns", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
     pattern: /getaddrinfo ENOTFOUND/iu, sample: "없음(사고표 E2)" },
   { id: "sse-timeout", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
     pattern: /idle timeout waiting for SSE/iu, sample: "없음" },
@@ -69,7 +68,7 @@ export function phraseOfLine(line) {
 //  - 코드 울타리 안이면 아니다. 입력창에 쓰는 중인 글(`› …`)이 마지막이면 아니다.
 // 첫 관찰 주기에도 바로 경보한다(#194 보안필터와 같은 방식).
 const ERROR_HEAD = /^[■✕×ⓘ]/u;
-const RECONNECT_HEAD = /^•\s*Reconnecting\.\.\.\s*(?:\d+\/\d+\s*)?\(.*esc to interrupt/iu;
+const RECONNECT_HEAD = /^•\s*Reconnecting\.\.\.(?:\s+\d+\/\d+)?(?:\s*\([^)]*\))?\s*$/iu; // 줄 전체가 상태 줄 모양일 때만(설명 문장 안의 낱말은 아님)
 const FENCE = /^\s*(```|~~~)/u;
 const EMPTY_COMPOSER = /^\s*(?:›\s*(?:Ask Codex to do anything)?|[❯>])\s*$/u;
 const ANY_COMPOSER = /^\s*[›❯]/u;
@@ -109,6 +108,14 @@ export function currentErrorBlock(screen) {
   while (head > 0 && /^\s+\S/u.test(lines[head])) head--;
   if (!(ERROR_HEAD.test(lines[head]) || RECONNECT_HEAD.test(lines[head]))) return null;
   if (rows.slice(head, end + 1).some((r) => r.inFence)) return null;
+  // 위쪽 소개 문단 제외(#194 보안필터와 같은 규칙): 오류 표시 머리줄 바로 위(빈 줄 하나를 건너)가 응답 머리표 문단이거나 콜론으로 끝나는
+  // 소개 문장이면 설명·예시이지 현재 오류가 아니다. 애매하면 즉시 경보 대신 정체 경로로 간다. 상태 줄 모양의 재연결 머리줄에는 적용하지 않는다.
+  if (ERROR_HEAD.test(lines[head])) {
+    let above = head - 1;
+    if (above >= 0 && lines[above].trim() === "") above--;
+    const intro = above >= 0 ? lines[above] : "";
+    if (/^\s*[•⏺]\s/u.test(intro) || /[:：]\s*$/u.test(intro)) return null;
+  }
   return { head: lines[head], lines: lines.slice(head, end + 1) };
 }
 
@@ -123,7 +130,3 @@ export function currentStopPhrases(screen) {
   }
   return found;
 }
-
-// legacy 낱말 줄 거름: 인용·응답 머리표(`•`/`⏺`)·입력 줄(`›`/`❯`)·도구 결과 줄(`⎿`)은 오류 줄이 아니다. 들여쓴 `└` 줄과 `■` 줄은 남는다.
-export const legacyEligibleLine = (line) => !/^\s*(?:[•⏺›❯⎿>]|```|~~~)/u.test(line);
-export const LEGACY_SIGNATURES = new RegExp(sourceOf(STOP_PHRASES.filter((p) => p.legacy && p.pattern && p.scope.includes("worker"))), "giu");

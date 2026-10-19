@@ -65,8 +65,31 @@ test('F2-B: 입력창이 안 보여 엄격 기준을 통과 못 한 인증 문�
   assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true, '기존 정체 경로로 감');
 });
 
-test('legacy 낱말도 응답 머리표·입력 줄·도구 줄·코드 울타리 안에서는 읽지 않고, 들여쓴 오류 줄은 읽는다', () => {
-  const lines = ['• No API key 설명', '› No API key', '⎿ rg No API key', '```', 'No API key', '```'];
-  assert.equal(screenDisconnects(lines.join('\n')).size, 0);
-  assert.equal(screenDisconnects('  └ Provider unreachable\n').size, 1);
+// 2라운드(재검수 exec-47415105) 재현 4종: 즉시 경보 0건이어야 한다(정체 경로가 받는다).
+const R2 = {
+  codex_tool_no_api_key: `• Ran rg -n "No API key" src\n  └ pattern: /No API key/iu\n  └ src/x.mjs:12: throw new Error("No API key")\n\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  indented_explanation: `• 호출 제한 설명:\n  - 429 Too Many Requests: 호출 제한을 뜻합니다.\n  - stream error: 연결 끊김을 뜻합니다.\n\n${COMPOSER}`,
+  recovered_legacy: `• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n  └ Stream disconnected before completion\n• 연결이 복구되어 작업을 이어갑니다.\n\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  auth_paragraph_quote: `• 다음은 인증 오류 화면의 예시입니다:\n\n■ authentication failed\n\n${COMPOSER}`,
+};
+for (const [name, screen] of Object.entries(R2)) {
+  test(`2라운드 ${name}: 즉시 경보 0건`, () => {
+    assert.equal(screenDisconnects(screen).size, 0);
+    const {alerts} = run([screen, screen, screen]);
+    assert.deepEqual(alerts.flat().filter(a => ['끊김', '설정', '인증', '한도'].includes(a.kind)), []);
+  });
+}
+
+test('2라운드: 일하는 표시가 아래에 계속 보이는 화면과 평범한 도구 결과 줄(들여쓴 └)은 즉시 경보 대신 정체 경로로 간다', () => {
+  const screen = R2.codex_tool_no_api_key.replace('• Working (1m 00s • esc to interrupt)', '• Working (5m 00s • esc to interrupt)');
+  const fixed = Array(4).fill(screen);
+  const {alerts} = run(fixed, 2);
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true, '시계가 같으면 기존 정체 경로');
+  assert.equal(alerts.flat().some(a => ['설정', '한도', '끊김', '인증'].includes(a.kind)), false);
+});
+
+test('위쪽 소개 문단 제외는 오류 표시 머리줄에만 적용하고, 소개 없는 실제 오류와 재연결 상태 줄은 그대로 읽는다', () => {
+  assert.equal(screenDisconnects(R2.auth_paragraph_quote).size, 0);
+  assert.equal(screenDisconnects(`• 앞선 응답입니다.\n\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n  └ Stream disconnected before completion\n\n${COMPOSER}`).size > 0, true);
+  assert.equal(screenDisconnects(`  └ 이전 도구 출력\n\n■ authentication failed\n\n${COMPOSER}`).size, 1);
 });

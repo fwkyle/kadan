@@ -1,6 +1,6 @@
 import {findDoneMarkers} from './done-marker.mjs';
 import {securityFilterNotice} from './watch-security-filter.mjs';
-import { WORKER_PHRASES, phraseKinds, phraseOfLine, lineKey, currentStopPhrases, linesWithFence, legacyEligibleLine, LEGACY_SIGNATURES } from "./watch-stop-phrases.mjs";
+import { WORKER_PHRASES, phraseKinds, phraseOfLine, currentStopPhrases } from "./watch-stop-phrases.mjs";
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -88,34 +88,11 @@ export function queuedInputLine(screenText) {
 
 // codex 0.163 429 화면은 `Exceeded retry limit` 줄이 아래에서 8번째라 6줄로는 닿지 않았다(composer·상태줄·안내 줄이 아래에 붙는다).
 // 같은 줄은 키로 한 번만 세므로 넓혀도 중복 경보는 없다. 아래 12줄을 훑는다.
-// 낱말 줄 두 갈래(watch-stop-phrases.mjs): (1) '현재 오류 덩어리'(마지막 입력창 바로 위 오류 머리줄 덩어리) 안의 목록 낱말 —
-// 첫 관찰 주기에도 경보한다. (2) PR-B 이전부터 있던 낱말(legacy)의 한 줄 판정 — 인용·응답 머리표·입력 줄·도구 줄·코드 울타리는 거르고
-// 아래 12줄 안에서 센다(처음 본 주기는 기준선).
+// 즉시 경보는 '현재 오류 덩어리'(watch-stop-phrases.mjs: 마지막 빈 입력창 바로 위 오류 머리줄 덩어리)에서 나온 것만 낸다.
+// 낱말을 화면 어디서나 한 줄로 찾는 길은 없다(도구 결과·설명·인용 줄의 헛경보 방지). 덩어리로 확정하지 못한 화면은
+// 즉시 경보 대신 기존 정체 경로(상태 줄 판정 + 정체 + 감시AI)로 간다.
 export function screenDisconnects(screenText) {
-  const found = currentStopPhrases(screenText);
-  for (const { line, inFence } of linesWithFence(screenText).slice(-12)) {
-    if (inFence || !legacyEligibleLine(line)) continue;
-    LEGACY_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(LEGACY_SIGNATURES)) found.set(lineKey(match[0], line), line.trim());
-  }
-  return found;
-}
-
-// 화면 전체에서 같은 끊김 줄이 몇 번 나왔는지. 훑는 창(아래 12줄) 밖으로 나갔다가 다시 그리면서
-// 창 안으로 돌아온 옛 줄은 개수가 그대로라 새 끊김이 아니다. 같은 줄이 아래에 새로 찍히면
-// 개수가 늘어 새 끊김이다. 한계: 옛 줄이 화면 밖으로 사라지는 같은 순회에 똑같은 글의 새 줄이
-// 찍히면 개수가 같아 놓친다(2026-10-18 검수: 재진입 헛경보).
-function screenDisconnectCounts(screenText) {
-  const counts = new Map();
-  for (const { line, inFence } of linesWithFence(screenText)) {
-    if (inFence || !legacyEligibleLine(line)) continue;
-    LEGACY_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(LEGACY_SIGNATURES)) {
-      const key = lineKey(match[0], line);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  }
-  return counts;
+  return currentStopPhrases(screenText);
 }
 
 function screenDoneMarker(screenText) {
@@ -196,23 +173,9 @@ export function assessRoles(
       alive && current.screen != null
         ? screenDisconnects(current.screen)
         : new Map(previous?.disconnects ?? []);
-    const previousDisconnects = new Map(previous?.disconnects ?? []);
-    const disconnectCounts =
-      alive && current.screen != null
-        ? screenDisconnectCounts(current.screen)
-        : new Map(previous?.disconnectCounts ?? []);
-    // 개수 기록이 없는 옛 상태는 창 안 줄을 한 번씩 본 것으로 친다.
-    const previousCounts = new Map(
-      previous?.disconnectCounts ?? [...previousDisconnects.keys()].map((key) => [key, 1])
-    );
-    const disconnectBaseline = alive && previous?.alive === true;
-    // 현재 오류 덩어리 안의 낱말은 감시 시작 뒤 첫 주기에도 바로 경보한다.
-    const currentKeys = alive && current.screen != null ? new Set(currentStopPhrases(current.screen).keys()) : new Set();
+    // 현재 오류 덩어리 안의 낱말은 모두 새 경보 후보다(감시 시작 뒤 첫 주기 포함). 같은 줄은 숫자를 지운 키라 하나로 센다.
     const freshDisconnectKeys = alive
       ? [...disconnects.entries()]
-          .filter(([key]) =>
-            currentKeys.has(key) ||
-            (disconnectBaseline && (disconnectCounts.get(key) ?? 0) > (previousCounts.get(key) ?? 0)))
           // 한 화면에 여러 줄이 걸리면 목록 앞쪽(한도·설정·인증)이 먼저다. Reconnecting 줄 아래의 429가 끊김으로 가려지지 않게.
           .sort(([, a], [, b]) => phraseRank(a) - phraseRank(b))
           .map(([key]) => key)
@@ -282,7 +245,6 @@ export function assessRoles(
       workingMoving,
       deathActive,
       disconnects: [...disconnects],
-      disconnectCounts: [...disconnectCounts],
       activeDisconnect,
       doneMarkerKey,
       completionDigest,
