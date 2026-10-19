@@ -57,12 +57,17 @@ const card = id => ({id, key: 'r/' + id, role: 't-작업자', status: 'assigned'
 const sendOf = id => [{kind: 'send', role: 't-작업자', taskId: id, t: stamp(0)}];
 const workerCalls = r => r.aiCalls.filter(c => c.role === 't-작업자').map(c => c.minute);
 
-test('B: 시계만 도는 정상 작업 130분 — 감시 AI는 30분 재검사 간격으로만 불린다', async () => {
+// 상태 줄 읽기(kadan/work-watch-status-line) 뒤: 시계가 늘어나는 '일하는 중' 화면은 정체 후보가 아니라 정체 AI(source stall)를 부르지 않는다.
+// 이전에는 5분에 정체 AI가 처음 불렸다([5, 35, 65, 95, 125]). 이제는 진행 점검(progress)만 30분 간격 이상으로 남는다.
+test('B: 시계만 도는 정상 작업 130분 — 정체 AI는 안 불리고 진행 점검만 30분 간격 이상으로 불린다', async () => {
   const r = await simulate({minutes: 130, cards: [card('t-b')], extraEntries: sendOf('t-b'),
     screen: (s, m) => s === 'kadan-t-작업자'
       ? ['• Working (' + m + 'm ' + (m * 7 % 60) + 's • esc to interrupt)', '', '› Ask Codex to do anything'].join('\n')
       : 'healthy'});
-  assert.deepEqual(workerCalls(r), [5, 35, 65, 95, 125], '고치기 전에는 5분마다 26회');
+  assert.equal(r.aiCalls.filter(c => c.role === 't-작업자' && c.source === 'stall').length, 0, '일하는 중은 정체 AI 대상이 아니다');
+  const calls = workerCalls(r);
+  assert.ok(calls.length >= 1 && calls.length <= 5, '진행 점검만 남는다: ' + calls.join(','));
+  calls.slice(1).forEach((m, i) => assert.ok(m - calls[i] >= 30, '30분 재검사 간격: ' + calls.join(',')));
 });
 
 test('B2: 8분마다 실제 새 출력이 나오면 그때마다 새 근거로 다시 불린다', async () => {

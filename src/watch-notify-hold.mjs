@@ -24,6 +24,9 @@ export class NotifyHoldTracker {
     this.forcedNow = new Set();
   }
 
+  // 이 창에 알림이 밀리는 중인가(이번 주기에 밀렸거나 이전 주기부터 이어짐). 판정 소비자용 읽기 전용이다.
+  isHeld(role) { return this.heldNow.has(role) || this.streaks.has(role); }
+
   // 이 창은 이미 5번 연속 밀렸다 — 입력 보호를 건너뛰고 넣을 차례다.
   forced(role) { return (this.streaks.get(role)?.count ?? 0) >= NOTIFY_FORCE_AT; }
 

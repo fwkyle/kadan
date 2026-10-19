@@ -33,6 +33,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   assessQueuedInput,
   assessRoles,
+  queuedInputLine,
   dedupAlerts,
   filterConfirmedCompletions,
   explainAlertRoute,
@@ -41,6 +42,7 @@ import {
   disconnectKind,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
+import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
@@ -99,6 +101,7 @@ export async function runWatch({
   stallAfterMs = 0,
   // 큐 대기의 경보 기준은 정체와 같다 — 입력이 닿지 않은 채 같은 시간을 견딘 것이다.
   queuedAfterMs = stallAfterMs,
+  idleStopAfterMs = IDLE_STOP_AFTER_MS,
   sendAlert,
   // 놀고 있음 본인 알림 전용 전송. 사람이 그 창에서 입력 중이면 미루는 보류 검사를 붙인다(없으면 sendAlert).
   sendNudge = null,
@@ -189,6 +192,7 @@ export async function runWatch({
   // 경로로 흘러든다. 유휴 판정(놀고 있음)과 죽은 감독 건너뛰기에만 쓴다.
   let supervisorStates = new Map();
   let queuedStates = new Map();
+  let idleStopStates = new Map();
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   const seeded = seedAlertState(readEntries());
@@ -449,7 +453,36 @@ export async function runWatch({
       catch (error) { print(`[watch] 설명 AI 점검 실패: ${error.message}`); }
     }
 
-    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session));
+    // 미확인 우편 감시(알림 전달 시도와 입력 보호 보류 관측)는 멈춤 판정과 모든 경보 전달보다 앞서 한 번 돈다.
+    // 늦게 돌면 처음 보류되는 주기에 isHeld가 비어 있어 감독에게 헛멈춤이 간다(검수 3라운드). 우편 보류 정책·유예 값은 그대로다.
+    let mailError = false;
+    if (mailWatch && !observationError) {
+      try {
+        mailWatch.tick({entries:mailEntries,cards:cards??[],works,now:cycleAt,
+          floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal,parents});
+        mailError = mailWatch.failed;
+      } catch (error) {
+        mailError = true;
+        print(`[watch] 미확인 우편 감시 실패: ${error.message}`);
+        try { record({kind:'watch-mail-reminder',by:'watch',action:'error',phase:'cycle',
+          reason:'mail-reminder-cycle-failed',error:error.message,t:new Date(cycleAt).toISOString()}); }
+        catch (storeError) { print(`[watch] 우편 감시 실패 기록 오류: ${storeError.message}`); }
+      }
+    }
+    // 계측 단계 이름·순서와 측정 호출 횟수는 그대로 둔다(시험이 고정). 앞당긴 우편 감시 시간은 다음 칸('ai')에 잡힌다.
+    // 순서: 죽음 → 끊김·한도 → 완료후보 → 멈춤(상태 줄, AI 없음) → 정체. 앞 단계가 걸린 세션과 재개·큐 배너 처리 중인 세션은 멈춤에서 뺀다.
+    // 알림이 밀리는 창(입력 보호·복사 모드 등 holdCode 무엇이든)도 정당한 대기라 멈춤에서 뺀다.
+    const heldSessions=new Set([...workerObservations].filter(([,seen])=>holdTracker?.isHeld(seen.role)).map(([session])=>session));
+    const earlierSessions=new Set([...roleAssessment.alerts.filter(a=>a.kind!=='정체').map(a=>a.session),...retrySessions,...queueSessions,...heldSessions]);
+    const idleStopAssessment=observationError||!scope
+      ? {states:idleStopStates,alerts:[]}
+      : assessIdleStop(idleStopStates,workerObservations,{
+          elapsedMs:cycleAt-lastCycleAt,intervalMs,afterMs:idleStopAfterMs,tasks:scope.entries,entries:mailEntries,
+          excludedSessions:earlierSessions,queuedLine:queuedInputLine,
+        });
+    idleStopStates=idleStopAssessment.states;
+    const idleStopSessions=new Set(idleStopAssessment.alerts.map(a=>a.session));
+    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
@@ -591,6 +624,7 @@ export async function runWatch({
       ...activeAlerts.filter(a=>a.kind==='한도'&&retrySessions.has(a.session)&&roleAssessment.alerts.some(r=>r.id===a.id)),
       // 큐대기 상태 추적은 그대로 두고 경보만 거른다 — 배너 경로가 조용해지면 쌓인 시간으로 큐대기가 이어받는다.
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
+      ...idleStopAssessment.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       // 알림이 3번 이상 연속 밀린 창. 지난 주기까지의 횟수이며 사용자에게만 간다.
@@ -769,19 +803,7 @@ export async function runWatch({
         route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
     }
     lap('alerts');
-    let mailError = false;
     if (mailWatch && !observationError) {
-      try {
-        mailWatch.tick({entries:mailEntries,cards:cards??[],works,now:cycleAt,
-          floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal,parents});
-        mailError = mailWatch.failed;
-      } catch (error) {
-        mailError = true;
-        print(`[watch] 미확인 우편 감시 실패: ${error.message}`);
-        try { record({kind:'watch-mail-reminder',by:'watch',action:'error',phase:'cycle',
-          reason:'mail-reminder-cycle-failed',error:error.message,t:new Date(cycleAt).toISOString()}); }
-        catch (storeError) { print(`[watch] 우편 감시 실패 기록 오류: ${storeError.message}`); }
-      }
       for (const role of mailDelivered) deliveredRecipients.add(role);
       mailDelivered.clear();
     }
