@@ -22,7 +22,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { isPeerSuperMail } from "../peer-mail.mjs";
-import { HUMAN_IDLE_MS } from "../notification-guard.mjs";
+import { HUMAN_IDLE_MS, isStorableMailHold } from "../notification-guard.mjs";
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -143,6 +143,10 @@ function deliverMessage(argv, flags, command) {
       // 붙여넣기 전에 멈춘 실패(입력 보호·세션 없음·PID 변경 등 delivery=not-sent)만 보관으로 돌린다.
       // 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해 그대로 실패다.
       if (peer && error.delivery === 'not-sent' && error.code !== 'KADAN_MAIL_RECIPIENT_CHANGED') return peerStore();
+      // 슈퍼 간이 아닌 일반 우편도 사람 입력·복사 모드 보류만 보관한다(종료 0). 보낸 AI가 --mailbox로 우회해
+      // 알림이 묻히는 것을 막고, 저장 전용 우편은 감시기가 다음 순회에 알린다. 세션 없음·PID 변경·발령·--raw·sent/unknown은 그대로 실패다.
+      if (!peer && command === 'mail' && taskId == null && flags.raw !== true
+        && isStorableMailHold(error)) return peerStore();
       throw error;
     }
   } catch (error) {
