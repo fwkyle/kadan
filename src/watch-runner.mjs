@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { ledgerHome } from "./ledger.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
+import { runStaleNotices, STALE_NOTICE_EVERY_MS } from './watch-stale-notice.mjs';
 import { MailWatch } from "./watch-mail.mjs";
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
 import { doneMarkerOf } from "./done-marker.mjs";
@@ -210,6 +211,7 @@ export async function runWatch({
   let lastCycleRecordedAt = null;
   // 감독 본인에게 보낼 놀고 있음 1단 알림 중 사람이 그 창에서 입력 중이라 미룬 것. 경보가 열려 있는 동안 다음 주기에 다시 시도한다.
   const pendingNudges = new Map();
+  let lastStaleNoticeAt = 0;
   let hierarchyHash = null;
   let scopeSignature = null;
   const queuedAI = new Map();
@@ -675,6 +677,17 @@ export async function runWatch({
       print(`${message} → ${target}`);
       return delivered;
     };
+    // 오래된 미확정 재안내: 발령 감독에게 실행당 평생 1회. 느리게(10분에 한 번) 훑고, 실패해도 감시를 멈추지 않는다.
+    if (cards && !observationError && !cardError && cycleAt - lastStaleNoticeAt >= STALE_NOTICE_EVERY_MS) {
+      lastStaleNoticeAt = cycleAt;
+      try {
+        const out = runStaleNotices({cards, entries: readEntries(), works, now: cycleAt, record,
+          send: (role, message) => (sendNudge ?? sendAlert)(role, message)});
+        if (out.sent || out.held || out.failed || out.unknownRecipient) {
+          print(`[watch ${clockTime(cycleAt)}] 오래된 미확정 재안내: 보냄 ${out.sent} · 미룸 ${out.held} · 실패 ${out.failed} · 받는 쪽 모름 ${out.unknownRecipient}`);
+        }
+      } catch (error) { print(`[watch ${clockTime(cycleAt)}] 오래된 미확정 재안내 실패: ${error.message}`); }
+    }
     // 이전 주기에 보류된 1단 알림. 이번 주기의 새 보류는 다음 주기에 다시 본다.
     const heldNudges = new Map(pendingNudges);
     const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)

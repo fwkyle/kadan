@@ -78,7 +78,7 @@ test('09-07 진행 막대는 역할 수 대신 중앙 카드 고유키와 실제
  const html=renderBoardProgress({boards:[b]});assert.match(html,/완료 1\/4장/);assert.match(html,/확인 필요 1장/);assert.match(html,/role="img"/);
  assert.match(renderBoardProgress(null),/모름/);
 });
-test('판 미지정 옛 실행 기록은 현황의 오래된 미정리에 저장 상태와 함께 놓이고 새 초안은 섞이지 않는다',()=>{
+test('판 미지정 옛 실행 기록은 현황의 오래된 미확정에 저장 상태와 함께 놓이고 새 초안은 섞이지 않는다',()=>{
  const cards=[
   {key:'r/in',id:'in',repo:'r',title:'판 안',status:'assigned',board:'p',displayState:'unconfirmed',runs:[]},
   {key:'r/old',id:'old',repo:'r',title:'옛 <카드>',status:'draft',board:null,displayState:'orphaned',runs:[]},
@@ -86,7 +86,7 @@ test('판 미지정 옛 실행 기록은 현황의 오래된 미정리에 저장
  ];
  const html=renderCenterWall({center:{cards,boards:[{name:'p',cards:[cards[0]],runs:[]}],summary:{attention:2},roles:[],unregistered:[]},entries:[]});
  const panel=html.match(/<details id="status-stale"[\s\S]*?<\/details>/)[0];
- assert.match(panel,/오래된 미정리 2장/);
+ assert.match(panel,/오래된 미확정 2장/);
  assert.match(panel,/옛 &lt;카드&gt;/);assert.match(panel,/판 미지정 · 세션 확인 필요 · 마지막 신호 없음 · 저장 상태 draft/);
  assert.ok(!panel.includes('새 초안'));assert.match(panel,/card=r%2Fold/);
  assert.ok(!html.includes('unassigned-attention'));

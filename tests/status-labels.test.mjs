@@ -41,7 +41,7 @@ test('진행 막대: 보류는 진행 전, 결과 대기는 작업중, 작업대
  assert.equal(progressGroup('orphaned'),'check');
 });
 
-test('보류 카드는 남은 일로 세고 막힘·오래된 미정리 경보에 넣지 않는다',()=>{
+test('보류 카드는 남은 일로 세고 막힘·오래된 미확정 경보에 넣지 않는다',()=>{
  const old={key:'r/a',displayState:'archived',status:'archived',role:null,runs:[],history:[]};
  assert.equal(finished(old),false);
  const health=executionHealth(old,Date.parse('2030-01-01T00:00:00Z'));

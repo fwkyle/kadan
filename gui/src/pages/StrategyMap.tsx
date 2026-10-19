@@ -185,7 +185,7 @@ export default function StrategyMap() {
         <span><Roll value={map.totals.units - (showResting ? 0 : resting)} /> 유닛{!showResting && resting > 0 ? ` · 쉬는 ${resting} 숨김` : ""}</span>
         <span className={tone(map.totals.running, "sm-t-running")}><Roll value={map.totals.running} /> 작업중 상자</span>
         <span className={tone(map.totals.stuck, "sm-t-stuck")}><Roll value={map.totals.stuck} /> 막힌 상자</span>
-        <span><Roll value={map.totals.stale} /> 오래된 미정리 상자</span>
+        <span><Roll value={map.totals.stale} /> 오래된 미확정 상자</span>
         <span className={tone(map.totals.dead, "sm-t-dead")}><Roll value={map.totals.dead} /> 창 없음</span>
         <span><Roll value={map.totals.alerts} /> 열린 경보</span>
         {data.live === null && <span>세션 상태를 지금 알 수 없습니다.</span>}

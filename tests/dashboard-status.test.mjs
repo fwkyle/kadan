@@ -24,12 +24,12 @@ test('현황 화면은 지금 막힌 것·진행 업무·끝난 업무를 구분
  assert.match(html,/실패 확인 필요/);
  assert.ok(html.includes('&lt;실패 카드&gt;'),'카드 제목은 이스케이프한다');
  assert.match(html,/st-num">3<\/span><span class="st-lbl">전체 실행 카드/);
- assert.match(html,/st-num">2<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/st-num">0<\/span><span class="st-lbl">오래된 미정리/);
+ assert.match(html,/st-num">2<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/st-num">0<\/span><span class="st-lbl">오래된 미확정/);
  assert.match(html,/최근 24시간에 일어난 일<\/h2><span class="st-cnt">완료 0 · 실패 1 · 발령 2/);
  assert.match(html,/DONE 후보 수신 시 결과·마커 대조 후 독립검수 발령/);
  assert.match(html,/지금 차례<\/dt><dd class="st-turn">슈퍼감독/);
  assert.match(html,/업무 기록 09. 10. 11:32/);
- assert.match(html,/<summary>끝난 업무 1장<\/summary>/);assert.ok(!html.includes('오래된 미정리 '),'미정리가 없으면 구역을 그리지 않는다');
+ assert.match(html,/<summary>끝난 업무 1장<\/summary>/);assert.ok(!html.includes('오래된 미확정 '),'미정리가 없으면 구역을 그리지 않는다');
  assert.match(html,/내 결정 대기/);
  assert.match(html,/data-view="status"/);
  assert.match(html,/id="boards"/);assert.match(html,/판별 진행 막대 1개 판/);
@@ -41,7 +41,7 @@ test('카드 기록을 읽지 못하면 수치를 꾸미지 않고 모름으로 
  assert.match(html,/카드 기록을 읽지 못해 확인 필요 수를 계산하지 않았습니다/);
  assert.match(html,/>모름<\/span><span class="st-lbl">내 결정 대기/);assert.match(html,/결정 기록을 읽지 못했습니다: 결정 기록 손상/);
  assert.match(html,/업무 기록을 읽을 수 없습니다/);
- assert.match(html,/>모름<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/>모름<\/span><span class="st-lbl">오래된 미정리/);
+ assert.match(html,/>모름<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/>모름<\/span><span class="st-lbl">오래된 미확정/);
  assert.ok(!html.includes('0건'));
 });
 
@@ -53,7 +53,7 @@ test('업무 기록만 깨져도 확인 필요 목록은 그대로 보여준다'
  assert.match(html,/>1건<\/span>/);
 });
 
-test('확인 필요는 세션 생존·신호 시각으로 지금 막힌 것과 오래된 미정리로 갈라지고 막대와 같은 집합을 센다',()=>{
+test('확인 필요는 세션 생존·신호 시각으로 지금 막힌 것과 오래된 미확정로 갈라지고 막대와 같은 집합을 센다',()=>{
  const alive=card({runs:[{role:'작업자',sessionState:'alive',sentAt:at(30)}]});
  const freshDead=card({key:'r/c2',id:'c2',displayState:'orphaned',runs:[{role:'작업자',sessionState:'absent',sentAt:at(3)}]});
  const oldDead=card({key:'r/c3',id:'c3',displayState:'orphaned',runs:[{role:'작업자',sessionState:'absent',sentAt:at(48)}]});
@@ -64,12 +64,12 @@ test('확인 필요는 세션 생존·신호 시각으로 지금 막힌 것과 �
  const counts=boardProgressCounts({cards:[alive,freshDead,oldDead,noSignal,done,cancelled,{...card({key:'r/m',id:'m'}),workType:'coordination'}]},{buckets:true,now});
  assert.equal(counts.total,6);assert.deepEqual({stuck:counts.counts.stuck,stale:counts.counts.stale,done:counts.counts.done,closed:counts.counts.closed},{stuck:2,stale:2,done:1,closed:1});
  const html=renderDashboardStatus({center:centerWith([alive,freshDead,oldDead,noSignal,done,cancelled]),works:[],now});
- assert.match(html,/st-num">2<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/st-num">2<\/span><span class="st-lbl">오래된 미정리/);
- assert.match(html,/오래된 미정리 2장 · 24시간 이상 신호 없음 · 정리 대상/);assert.match(html,/마지막 신호 없음 · 저장 상태 draft/);assert.match(html,/\(2일 전\)/);
- assert.match(html,/지금 막힌 것 2장/);assert.match(html,/오래된 미정리 2장/);
+ assert.match(html,/st-num">2<\/span><span class="st-lbl">지금 막힌 것/);assert.match(html,/st-num">2<\/span><span class="st-lbl">오래된 미확정/);
+ assert.match(html,/오래된 미확정 2장 · 24시간 이상 신호 없음 · 정리 대상/);assert.match(html,/마지막 신호 없음 · 저장 상태 draft/);assert.match(html,/\(2일 전\)/);
+ assert.match(html,/지금 막힌 것 2장/);assert.match(html,/오래된 미확정 2장/);
  assert.match(html,/data-copy-label="정리 요청"/);
  const request=staleCleanupRequest([{...oldDead,...executionHealth(oldDead,now),revision:4}],now);
- assert.match(request,/오래된 미정리 실행 1장/);assert.match(request,/kadan card update r\/c3 --revision 4 --status superseded --replaced-by <저장소\/후속카드>/);assert.match(request,/--supersedes/);
+ assert.match(request,/오래된 미확정 실행 1장/);assert.match(request,/kadan card update r\/c3 --revision 4 --status superseded --replaced-by <저장소\/후속카드>/);assert.match(request,/--supersedes/);
 });
 
 test('최근 24시간 사건은 실행 원장의 발령·완료·실패만 최신순으로 모으고 카드 편집은 세지 않는다',()=>{
