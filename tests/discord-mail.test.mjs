@@ -238,7 +238,7 @@ test('8 격리 tmux: kadan up이 비밀값 있을 때만 다리 세션 1개를 �
 test('9 일반 우편은 여전히 5분 유예, 본문에 보낸이를 흉내 낸 일반 우편은 유예 0이 아니다', () => {
   const start = {kind: 'start', role: '비서', session: 'kadan-비서', panePid: 7, t: new Date(0).toISOString()};
   const live = [{session: 'kadan-비서', alive: true, pid: 7}];
-  const mail = (mailId, by, message) => ({kind: 'send', mailId, role: '비서', by, mailKind: 'request', transport: 'mailbox', t: new Date(1000).toISOString(), message});
+  const mail = (mailId, by, message) => ({kind: 'send', mailId, role: '비서', by, mailKind: 'request', transport: 'mailbox', keyDelivery: 'sent', t: new Date(1000).toISOString(), message});
   const tick = (letters, now) => {
     const entries = [start, ...letters], sent = [];
     new MailWatch({record: e => entries.push(e), send: (...a) => sent.push(a)})

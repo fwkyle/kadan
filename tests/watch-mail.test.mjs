@@ -329,3 +329,42 @@ test('일반 경보·감시 보고·유휴 알림·우편 깨움 모두 같은 �
   assert.deepEqual(call.notificationGuard,{humanIdleMs:30_000});
  }
 });
+
+const stored = (mailId, more={}) => question(mailId, {transport:'mailbox',...more});
+
+test('저장 전용 우편(키 전달 기록 없음)은 유예 없이 다음 주기에 한 번만 알린다',()=>{
+  const f=fixture([stored('s')]);
+  f.now=60000;f.tick();
+  assert.equal(f.sent.length,1);assert.match(f.sent[0][1],/1건/);
+  f.now=120000;f.tick();assert.equal(f.sent.length,1);
+});
+
+test('키로 전달된 일반 우편은 5분 유예 유지',()=>{
+  const f=fixture([question('k',{keyDelivery:'sent'})]);
+  f.now=299999;f.tick();assert.equal(f.sent.length,0);
+  f.now=300000;f.tick();assert.equal(f.sent.length,1);
+});
+
+test('저장 전용이어도 keyDelivery가 남은 우편은 5분 유예로 돌아간다',()=>{
+  const f=fixture([stored('sk',{keyDelivery:'sent'})]);
+  f.now=60000;f.tick();assert.equal(f.sent.length,0);
+  f.now=300000;f.tick();assert.equal(f.sent.length,1);
+});
+
+test('저장 전용 우편도 비서·사람 수신은 유예 0으로 보지 않는다',()=>{
+  for(const role of ['비서','@user']) {
+    const f=fixture([stored('s',{role})]);
+    f.entries.push({kind:'start',role,session:`kadan-${role}`,panePid:2,t:at(0)});
+    f.live.push({session:`kadan-${role}`,alive:true,pid:2});
+    f.now=60000;f.tick();assert.equal(f.sent.length,0,role);
+  }
+});
+
+test('저장 전용 우편도 사람 입력 중이면 보류하고 받는 세션이 없으면 보내지 않는다',()=>{
+  const f=fixture([stored('s')]);f.now=60000;
+  const watch=new MailWatch({record:e=>f.record(e),send:(...args)=>f.send(...args),hold:()=>({code:'KADAN_HUMAN_ACTIVE',message:'보류'})});
+  f.tick(watch);assert.equal(f.sent.length,0);
+  assert.equal(f.records.filter(e=>e.kind==='watch-mail-held').length,1);
+  const g=fixture([stored('s')]);g.now=60000;g.live.length=0;
+  g.tick();assert.equal(g.sent.length,0);assert.equal(g.records.length,0);
+});

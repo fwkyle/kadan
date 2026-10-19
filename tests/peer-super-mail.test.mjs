@@ -180,3 +180,28 @@ test('보관한 슈퍼 우편은 5분을 더 기다리지 않되 입력 보호�
   assert.equal(sent.length, 1);
   assert.match(sent[0][1], /inbox/);
 });
+
+import { isStorableMailHold } from '../src/notification-guard.mjs';
+
+test('일반 mail 보관 조건: 사람 입력·복사 모드 보류(붙이기 전)만 해당', () => {
+  const hold = (code, delivery = 'not-sent') => Object.assign(new Error('x'), { code, delivery });
+  assert.equal(isStorableMailHold(hold('KADAN_HUMAN_ACTIVE')), true);
+  assert.equal(isStorableMailHold(hold('KADAN_PANE_IN_MODE')), true);
+  for (const code of ['KADAN_MAIL_RECIPIENT_CHANGED', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_STATE_UNKNOWN', undefined])
+    assert.equal(isStorableMailHold(hold(code)), false, String(code));
+  for (const delivery of ['sent', 'unknown', null])
+    assert.equal(isStorableMailHold(hold('KADAN_HUMAN_ACTIVE', delivery)), false, String(delivery));
+});
+
+test('일반 mail은 세션 없음·--raw·발령이면 보관하지 않고 그대로 실패한다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-mail-nostore-'));
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const run = args => spawnSync(process.execPath, [cli, ...args], {
+    env:{...process.env, KADAN_HOME:home, KADAN_ROLE:'r-boss', KADAN_FLOOR:'herdr',
+      KADAN_HERDR_SOCKET:path.join(home, 'nonexistent.sock'), KADAN_NOTIFY:'off'}, encoding:'utf8',
+  });
+  for (const args of [['mail', 'r-worker', '세션 없음'], ['mail', 'r-worker', '--raw', '원문'],
+    ['send', 'r-worker', '세션 없음'], ['dispatch', 'r-worker', '--task', 'x', '발령']])
+    assert.notEqual(run(args).status, 0, args.join(' '));
+  assert.equal(readLedger(home).filter(e => e.kind === 'send').length, 0);
+});

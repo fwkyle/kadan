@@ -25,7 +25,8 @@ async function simulate({minutes = 12, holdStart = 0, releaseAt = Infinity,
     activityRole: role, activityAt: stamp(0)}));
   const tasks = cards.map(c => ({kind: 'send', role: c.role, session: 'kadan-' + c.role,
     taskId: c.id, executionKey: c.key, t: stamp(0)}));
-  const mail = {kind: 'send', transport: 'mailbox', mailId: 'wsh-mail',
+  // keyDelivery: 키로 전달된 일반 우편(저장 전용 우편은 유예 0이라 이 시험의 5분 유예 전제에 맞지 않는다)
+  const mail = {kind: 'send', transport: 'mailbox', keyDelivery: 'sent', mailId: 'wsh-mail',
     by: boss, role: a, digest: 'wsh-message', t: stamp(0)};
   const entries = [...starts, ...tasks, ...(useMail ? [mail] : [])];
   const records = [], held = [], delivered = [], tracker = new NotifyHoldTracker();
