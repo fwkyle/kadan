@@ -170,6 +170,38 @@ test('F1 부모 사슬: claude 모양·codex 모양은 담당 세션이고 자�
   assert.equal(ownsPane(table([hook, [9, 8, 'sh a'], [8, 7, 'sh b'], [7, 6, 'sh c']]), '1', 10), false);
 });
 
+test('F1-R2 공용 daemon 사슬: 앱 서버를 거치면 부모·자식 모두 통과(재안내 꺼짐)여야 한다(2026-10-19 실측 모양)', () => {
+  const table = rows => new Map(rows.map(([pid, ppid, command]) => [String(pid), {ppid: String(ppid), command}]));
+  const server = '/h/packages/app-server-daemon/releases/0.163.0/bin/codex app-server --listen unix:// --managed-daemon';
+  const hook = [10, 9, 'node /repo/src/stop-hook.mjs'], wrapper = [9, 8, '/bin/sh /repo/scripts/stop-hook.sh'];
+  // 담당 codex 자신의 Stop: 훅 → sh → 앱 서버 → vendor → pane(node). 같은 CODEX_HOME의 두 세션이 이 앱 서버 하나를 나눠 쓴다
+  const own = table([hook, wrapper, [8, 7, server], [7, 6, '/x/vendor/bin/codex'], [6, 5, 'node /x/bin/codex'], [5, 1, 'tmux']]);
+  assert.equal(ownsPane(own, '6', 10), false);
+  // 같은 홈의 자식 codex Stop: 도구 셸을 부르는 것도 같은 앱 서버라서 사슬이 위와 똑같다 — 가를 수 없으므로 앱 서버는 인정하지 않는다
+  const child = table([hook, wrapper, [8, 7, server], [7, 6, '/x/vendor/bin/codex'], [6, 5, 'node /x/bin/codex'], [5, 1, 'tmux'], [40, 8, 'node child-tool'], [41, 40, '/x/vendor/bin/codex']]);
+  assert.equal(ownsPane(child, '6', 10), false);
+  // 앱 서버 없이 vendor가 직접 훅을 부르는 운영 pane은 그대로 담당이다
+  const direct = table([hook, wrapper, [8, 7, '/x/vendor/bin/codex'], [7, 5, 'node /x/bin/codex'], [5, 1, 'tmux']]);
+  assert.equal(ownsPane(direct, '7', 10), true);
+});
+
+test('진단 기록: 통과 이유를 once 파일에 남긴다(출력·종료는 그대로)', async () => {
+  const outcomes = async (lookup, owns, extra = {}, rows = [claudeBoundary('b1', NOW - 5000)]) => {
+    const {home, file, env} = setup(rows);
+    const out = await compactReminder(stop(file, extra), env, {lookup, now, owns});
+    const dir = path.join(home, 'stop-hook', 'compact-reminders');
+    return {out, outcome: JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8')).outcome};
+  };
+  assert.equal((await outcomes(found, yes)).outcome, 'reminded');
+  assert.equal((await outcomes(found, () => false)).outcome, 'chain-unmatched');
+  assert.equal((await outcomes(found, yes, {last_assistant_message: 'KADAN:DONE a ok'})).outcome, 'marker');
+  assert.equal((await outcomes(found, yes, {}, [claudeBoundary('b1', NOW - 3 * 3600 * 1000)])).outcome, 'stale-boundary');
+  assert.equal((await outcomes(async () => ({keys: [], why: 'decision-open'}), yes)).outcome, 'decision-open');
+  assert.equal((await outcomes(async () => ({keys: []}), yes)).outcome, 'no-execution');
+  assert.equal((await outcomes(async () => ({keys: [], why: 'lookup-failed'}), yes)).outcome, 'lookup-failed');
+  assert.equal((await outcomes(found, () => false)).out, null);
+});
+
 test('F1 processTable: ps 실패·이상한 출력은 null', () => {
   assert.equal(processTable(() => ({status: 1, stdout: ''})), null);
   assert.equal(processTable(() => ({status: 0, stdout: null})), null);

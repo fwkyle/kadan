@@ -66,7 +66,7 @@ export async function currentExecutionsOf(home, role) {
     import('./ledger.mjs'), import('./card-store.mjs'), import('./work-store.mjs'), import('./watch-scope.mjs'),
     import('./task-identity.mjs'), import('./handover-state.mjs'), import('./watch-status-line.mjs'), import('./decisions.mjs')]);
   let entries = readLedger(home);
-  if (entries.some(entry => entry?.broken)) return {keys: []};
+  if (entries.some(entry => entry?.broken)) return {keys: [], why: 'ledger-broken'};
   const launch = entries.filter(entry => entry?.role === role && (entry.kind === 'start' || entry.kind === 'stop')).at(-1);
   const panePid = launch?.kind === 'start' && launch.floor === 'tmux' && Number.isInteger(Number(launch.panePid)) ? String(launch.panePid) : null;
   const cards = new CardStore(home).listSummaries();
@@ -76,24 +76,24 @@ export async function currentExecutionsOf(home, role) {
   const keys = scope.buildWatchScope(cards, entries, new Map(), works).entries
     .filter(entry => entry.role === role && entry.executionKey && !status.hasOpenQuestion(entries, role, entry.t))
     .map(entry => entry.executionKey);
-  if (!keys.length) return {keys};
+  if (!keys.length) return {keys, why: 'no-execution'};
   const open = new DecisionStore(home).list().filter(d => d?.status === 'open'); // 읽지 못하면 던져 자식이 실패로 끝난다(빈 결과)
   const waiting = key => open.some(d => d.card === key || d.card === key.split('/')[1]
     || (typeof d.work === 'string' && workList.some(work => work.key === d.work && (work.executions ?? []).some(x => x.key === key))));
-  return keys.some(waiting) ? {keys: []} : {keys, panePid};
+  return keys.some(waiting) ? {keys: [], why: 'decision-open'} : {keys, panePid};
 }
 
 // 훅 안에서 원장 읽기에 시간 상한을 둔다: 동기 SQLite 호출은 중간에 끊을 수 없어 자식 프로세스로 돌려 제한시간에 죽인다.
 // 시간 초과·실패·이상한 출력은 모두 빈 결과다(재안내 없음).
 export function lookupExecutions(home, role, timeoutMs = capMs(LOOKUP_MS)) {
-  const none = {keys: [], panePid: null};
+  const none = {keys: [], panePid: null, why: 'lookup-failed'}; // 시간 초과·오류·이상한 출력
   const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'lookup', role],
     {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 1 << 20});
   if (run.status !== 0) return none;
   try {
     const found = JSON.parse(run.stdout);
     const keys = Array.isArray(found?.keys) ? found.keys.filter(k => typeof k === 'string') : [];
-    return {keys, panePid: typeof found?.panePid === 'string' ? found.panePid : null};
+    return {keys, panePid: typeof found?.panePid === 'string' ? found.panePid : null, why: typeof found?.why === 'string' ? found.why : null};
   } catch { return none; }
 }
 
@@ -156,14 +156,22 @@ export async function compactReminder(raw, env = process.env, {lookup = lookupEx
     const dir = path.join(home, 'stop-hook', 'compact-reminders');
     const name = crypto.createHash('sha256').update(`${role}\0${input.session_id ?? ''}\0${boundary.id}`).digest('hex').slice(0, 40);
     fs.mkdirSync(dir, {recursive: true, mode: 0o700});
-    try { fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify({role, boundary: boundary.id, at: new Date(now()).toISOString()}), {flag: 'wx', mode: 0o600}); }
+    const file = path.join(dir, `${name}.json`);
+    const note = {role, boundary: boundary.id, at: new Date(now()).toISOString()};
+    try { fs.writeFileSync(file, JSON.stringify(note), {flag: 'wx', mode: 0o600}); }
     catch { return null; } // 이미 안내했거나 다른 훅이 먼저 선점했다
+    // 선점한 쪽만 이 파일에 안내하지 않은 이유(outcome)를 덧붙인다. 원장 쓰기 없이 '왜 재안내가 안 났나'에 답하려는 진단이다. 실패해도 판정은 그대로다.
+    const finish = (outcome, value) => {
+      try { fs.writeFileSync(file, JSON.stringify({...note, outcome}), {mode: 0o600}); } catch { /* 진단 기록 실패는 무시 */ }
+      return value;
+    };
     const message = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '';
-    if (findDoneMarkers(message).length) return null; // 완료를 낸 응답이다
-    if (now() - boundary.at > FRESH_MS || boundary.at - now() > 60 * 1000) return null; // 훅을 처음 켠 세션의 옛 압축
-    const {keys, panePid} = (await lookup(home, role)) ?? {};
-    if (!Array.isArray(keys) || !keys.length) return null;
-    return owns(panePid) ? reminderText(keys) : null; // 담당 세션임을 확인하지 못하면(자식 CLI·herdr·PID 없음·조회 실패) 통과
+    if (findDoneMarkers(message).length) return finish('marker', null); // 완료를 낸 응답이다
+    if (now() - boundary.at > FRESH_MS || boundary.at - now() > 60 * 1000) return finish('stale-boundary', null); // 훅을 처음 켠 세션의 옛 압축
+    const {keys, panePid, why} = (await lookup(home, role)) ?? {};
+    if (!Array.isArray(keys) || !keys.length) return finish(typeof why === 'string' ? why : 'no-execution', null);
+    // 담당 세션임을 확인하지 못하면(자식 CLI·herdr·PID 없음·조회 실패·앱 서버 daemon 사슬) 통과
+    return owns(panePid) ? finish('reminded', reminderText(keys)) : finish('chain-unmatched', null);
   } catch {
     return null;
   }
