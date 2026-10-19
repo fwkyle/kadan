@@ -4,6 +4,7 @@ import {taskIdentity} from './task-identity.mjs';
 import {shellQuote} from './mail-instructions.mjs';
 import {isNotificationHold} from './notification-guard.mjs';
 import {isPeerSuperMail} from './peer-mail.mjs';
+import {SECRETARY} from './mailbox.mjs';
 
 const recipient = mail => mail.currentRecipient || mail.role;
 // 사람 입력·대화 중이라 붙여넣기 전에 멈춘 알림. 전달하지 않았으므로 다음 순회에 다시 시도한다.
@@ -23,7 +24,9 @@ function eligibleLetters(entries, cards, works, now, graceMs, parents) {
       && isPeerSuperMail(entries, parents, mail.currentSender, recipient(mail));
     // 디코 우편(보낸이 디코, 받는이는 비서 또는 레포 슈퍼)도 유예 0: 사람이 디코로 기다리는 질문이다. 입력 보호·우편당 1회는 그대로.
     const discordMail = mail.by === DISCORD_BY;
-    if (!Number.isFinite(at) || now - at < (deferredPeer || discordMail ? 0 : graceMs)) return false;
+    // 저장만 된 우편(창에 키로 전달된 적 없음, keyDelivery 없음)은 아무도 못 본 채 5분 묻히지 않게 유예 0. 비서는 제외.
+    const storedOnly = mail.transport === 'mailbox' && mail.keyDelivery == null && recipient(mail) !== SECRETARY;
+    if (!Number.isFinite(at) || now - at < (deferredPeer || discordMail || storedOnly ? 0 : graceMs)) return false;
     const execution = identity.resolve(mail.taskId, mail.executionKey);
     const executionKey = execution.key || mail.executionKey;
     const related = works.filter(work => (mail.workKey && work.key === mail.workKey)

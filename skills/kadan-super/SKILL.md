@@ -68,6 +68,7 @@ description: "카단 여러 판의 부하·충돌·우선순위와 역할 폭주
 | 생존·PID / 원장 이력 | `kadan status` / `kadan log` |
 | 역할 화면 | `kadan read <역할> --lines N` |
 | 맥락 우편 | `kadan mail <대상-슈퍼감독 또는 담당-감독> "<맥락>"` (`--task` 없음) |
+| 긴 보고 | `kadan mail <역할> < 파일`(표준 입력). `--mailbox`는 받는 역할 세션이 없을 때만 |
 | 기존 하위 실행 완료 확정 | `kadan done <역할> <카드id> <ok\|failed>` |
 | 정확한 종료 | `kadan stop <역할>` (미확정 카드가 있으면 세어 알린다) |
 | 감시 | `kadan watch --route <판>=<역할> --super <역할> [--judge-cmd '<셸 명령>']` |
