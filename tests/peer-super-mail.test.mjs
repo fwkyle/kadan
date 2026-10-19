@@ -189,7 +189,7 @@ test('일반 mail 보관 조건: 사람 입력·복사 모드 보류(붙이기 �
   assert.equal(isStorableMailHold(hold('KADAN_PANE_IN_MODE')), true);
   for (const code of ['KADAN_MAIL_RECIPIENT_CHANGED', 'KADAN_HUMAN_ACTIVITY_UNKNOWN', 'KADAN_PANE_STATE_UNKNOWN', undefined])
     assert.equal(isStorableMailHold(hold(code)), false, String(code));
-  for (const delivery of ['sent', 'unknown', undefined])
+  for (const delivery of ['sent', 'unknown', null])
     assert.equal(isStorableMailHold(hold('KADAN_HUMAN_ACTIVE', delivery)), false, String(delivery));
 });
 
