@@ -51,7 +51,11 @@ function workCommandInner(args,flags,context){
  if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] | list | show <키> | update <키> --revision N --note 이유 [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete/cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
  if(action==='list'){const works=store.list().filter(w=>(!flags.repo||w.repo===flags.repo)&&(!flags.status||w.status===flags.status)),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions})=>({key,title,owner,status,revision,executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
  if(action==='show'){const work=store.get(key);return {...work,...operationsFlowSummaries(home,[work]).get(key)};}
- if(action==='create')return store.create({key,title:flags.title,goal:flags.goal,scope:flags.scope,acceptance:flags.acceptance,owner:flags.owner,repoPath:flags['repo-path'],board:flags.board,by});
+ if(action==='create'){
+  const work=store.create({key,title:flags.title,goal:flags.goal,scope:flags.scope,acceptance:flags.acceptance,owner:flags.owner,repoPath:flags['repo-path'],board:flags.board,by});
+  // 책임 감독에게 쌓인 열린 업무 수(방금 만든 업무 포함). 새 업무를 이 감독에게 줄지 고를 때 본다. JSON은 필드만 더한다.
+  return {...work,ownerOpenWorks:store.list().filter(w=>w.status==='open'&&w.owner===work.owner).length};
+ }
  const fields={};
  for(const [flag,field] of [['title','title'],['goal','goal'],['scope','scope'],['acceptance','acceptance'],['owner','owner'],['board','board'],['progress','progress'],['next-action','nextAction'],['turn-owner','turnOwner'],['status','status'],['execution','execution'],['phase','phase'],['round','round'],['mail','mail'],['result','result']])if(flags[flag]!==undefined)fields[field]=flags[flag];
  if(flags['body-file'])fields.body=fs.readFileSync(flags['body-file'],'utf8');

@@ -1,4 +1,5 @@
 import {findDoneMarkers} from './done-marker.mjs';
+import {securityFilterNotice} from './watch-security-filter.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -233,6 +234,10 @@ export function assessRoles(
       previousActiveDisconnect && disconnects.has(previousActiveDisconnect)
         ? previousActiveDisconnect
         : freshDisconnectKeys[0] ?? null;
+    // 실행기가 codex일 때만 본다(kimi 등을 codex 경유로 띄워도 harness는 codex). 모르거나 claude면 보지 않는다.
+    const securityFilter = alive && /^(?:kadan-)?codex$/iu.test(String(current.harness ?? ""))
+      ? securityFilterNotice(current.screen)
+      : null;
     const doneMarker = alive ? (Object.hasOwn(current, 'doneMarker') ? current.doneMarker : screenDoneMarker(current.screen)) : null;
     const doneMarkerKey = doneMarker
       ? `${doneMarker.taskId}|${doneMarker.result}`
@@ -307,6 +312,16 @@ export function assessRoles(
         role: current.role,
         session,
         line: disconnects.get(activeDisconnect),
+      });
+    } else if (securityFilter) {
+      // AI 호출·정체 시간 없이 첫 주기에 낸다. 429 재개·ocx 경로와 무관하다(kind가 '한도'가 아니다).
+      alerts.push({
+        id: `security-filter:${session}:${securityFilter.fingerprint}`,
+        kind: "보안필터",
+        level: "AMBER",
+        role: current.role,
+        session,
+        line: securityFilter.line,
       });
     } else if (doneMarker) {
       alerts.push({
