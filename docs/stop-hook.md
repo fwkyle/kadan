@@ -97,17 +97,16 @@ claude 설정 파일이 있는 기계(= 이 빠른 길을 켠 기계)에서만, 
 
 Why: 대화가 압축되면 현재 실행 주소가 대체 대화에서 빠져 작업자가 규칙 수락 답변만 하고 멈춘 사고(retire_ooo, exec-2ef4e2fc 실측). 새 훅 등록 없이 기존 Stop 훅이 압축 직후 첫 응답에서 주소를 한 번 알린다.
 
-`src/stop-hook-context.mjs`의 `compactReminder`가 아래를 **모두** 만족할 때만 `{"decision":"block","reason":"…`kadan card show <저장소/실행ID>`…"}`를 출력한다(종료 0). 어느 하나라도 실패·모호하면 출력 없이 통과한다.
+`src/stop-hook-context.mjs`의 `compactReminder`가 아래 순서로 판단한다. 재안내(`{"decision":"block","reason":"…`kadan card show <저장소/실행ID>`…"}`, 종료 0)는 **모두** 통과할 때만 나가고, 어느 하나라도 실패·모호하면 출력 없이 통과한다(fail-open).
 
-1. `KADAN_ROLE`이 있다(개인 실행기는 여기서 끝). 가장 먼저 본다.
-2. `stop_hook_active`가 true가 아니다.
-3. 이번 응답에 DONE 마커가 없다.
-4. `transcript_path`(절대경로) 끝 256KB에서 마지막 압축 경계를 읽었다 — claude `system/compact_boundary`(uuid), codex `compacted`(window_id) — 그리고 30분 안이다(훅을 처음 켠 세션의 옛 압축 제외).
-5. 그 경계로 아직 안내한 적이 없다: `$KADAN_HOME/stop-hook/compact-reminders/<역할·세션·경계 지문>.json`.
-6. 이 역할의 미완료 실행이 `buildWatchScope` 기준으로 **정확히 하나**다(질문 대기·닫힌 업무·이전 세대는 그 함수가 뺀다). 원장 읽기 대기는 1초(`KADAN_BUSY_TIMEOUT_MS`, 기본 15초)다.
-7. 위 파일을 배타적으로(`wx`) 만들었다. 실패·경합이면 보내지 않는다.
+1. `KADAN_ROLE`이 없으면 아무것도 읽거나 쓰지 않고 끝난다(개인 실행기). `stop_hook_active`가 true이면 끝난다. 이 둘에서는 기회를 소모하지 않는다.
+2. `transcript_path`(절대경로) 끝 256KB에서 마지막 압축 경계를 읽는다 — claude `system/compact_boundary`(uuid), codex `compacted`(window_id). 없거나 모호하면 끝.
+3. **새 경계를 처음 본 Stop에서 결과와 무관하게 기회를 소모한다**: `$KADAN_HOME/stop-hook/compact-reminders/<역할·세션·경계 지문>.json`을 배타적(`wx`)으로 만든다. 이미 있거나 만들 수 없으면 끝. 그래서 압축 한 번에 기회는 한 번이다(마커·답 대기·대상 없음이어도 같다).
+4. 이번 응답에 DONE 마커가 있으면 끝. 경계가 30분보다 오래됐으면 끝(훅을 처음 켠 세션의 옛 압축).
+5. 이 역할의 미완료 실행을 `buildWatchScope`로 구한다(닫힌 업무·이전 세대·`waiting` 활동 제외)에 더해 열린 질문(`hasOpenQuestion`)이 붙은 실행을 뺀다. 실행이 여럿이면 하나의 안내에 모두 적는다. 없으면 끝.
+6. 원장 조회는 자식 프로세스(`stop-hook-context.mjs lookup <역할>`)에서 **3초** 제한(`LOOKUP_MS`), 잠금 대기는 0.8초(`KADAN_BUSY_TIMEOUT_MS`, 기본 15초)다. 동기 SQLite 호출은 중간에 끊을 수 없어 프로세스째 죽인다. 시간 초과·오류·이상한 출력은 빈 결과로 본다.
 
-원장에는 쓰지 않는다. 한계: "압축 직후 첫 턴"은 경계당 1회 선점과 30분 신선도로 근사한다(경계 뒤 첫 Stop 여부를 직접 세지 않는다). 상위 감독 역할 제외는 하지 않는다(parents 없이 계산). 감시 우편 대비책은 이 변경에 없다. 실제 압축 뒤 모델이 `card show`를 실행하는 종단 시험은 하지 않았다. 시험: `tests/stop-hook-context.test.mjs`.
+원장에는 쓰지 않는다. 안내 문구에 완성된 DONE 마커는 넣지 않는다. 시간 상한 근거(2026-10-19, 운영 원장 5.6만 줄·부하 약 20, 읽기 전용): 자식 조회 전체 1.9~2.9초(원장 읽기 0.45~0.98초가 대부분, 카드 요약 0.15초). 카드가 제안한 1초로는 거의 항상 포기해 기능이 사실상 꺼지므로 3초로 두었다. 한계: 상위 감독 역할 제외는 하지 않는다(parents 없이 계산). 감시 우편 대비책은 이 변경에 없다. 실제 압축 뒤 모델이 `card show`를 실행하는 격리 종단 시험은 이 문서 작성 시점에 하지 않았다. 시험: `tests/stop-hook-context.test.mjs`.
 
 ## 실측 요약과 한계
 
