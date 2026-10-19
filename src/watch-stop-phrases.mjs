@@ -95,6 +95,7 @@ export function linesWithFence(screen) {
 }
 
 export function currentErrorBlock(screen) {
+  // tmux는 floor.read에서 추천 문구를 뺀 판정용 화면을 준다. 표시용 readView를 넣지 않는다.
   const rows = linesWithFence(screen);
   const lines = rows.map((r) => r.line);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));

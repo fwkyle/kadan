@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
+import { splitGhostText } from "./ghost-text.mjs";
 import { inlineScreenEnv } from "./inline-screen.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
@@ -84,9 +85,20 @@ export function captureTail(session, lines = 200) {
   return result.status === 0 ? result.stdout : "";
 }
 
+// 화면을 -e(색 포함)로 한 번만 떠서 판정용·표시용 글자를 함께 낸다(ghost-text.mjs). 조회 실패는 null.
+function captureSplit(session) {
+  const result = tmux(["capture-pane", "-e", "-p", "-t", `=${session}:`]);
+  return result.status === 0 ? splitGhostText(result.stdout) : null;
+}
+
+// 판정용: 입력칸의 흐린 추천 문구를 뺀 화면. 감시기·완료 판정은 모두 이것만 읽는다.
 export function capturePane(session) {
-  const result = tmux(["capture-pane", "-p", "-t", `=${session}:`]);
-  return result.status === 0 ? result.stdout : "";
+  return captureSplit(session)?.judge ?? "";
+}
+
+// 표시용(kadan read): 입력칸의 흐린 추천 문구를 `(추천 문구: …)`로 보인다.
+export function capturePaneView(session) {
+  return captureSplit(session)?.view ?? "";
 }
 
 export function outputLogPath(session, home = ledgerHome(), compressed = true) {
@@ -626,6 +638,7 @@ export const tmuxFloor = {
   notificationHold,
   sendEnter: sendTmuxEnter,
   read: capturePane,
+  readView: capturePaneView,
   stop,
   list,
   waitForChange,
