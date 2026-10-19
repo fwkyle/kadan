@@ -1,6 +1,6 @@
 import {findDoneMarkers} from './done-marker.mjs';
 import {securityFilterNotice} from './watch-security-filter.mjs';
-import { WORKER_PHRASES, WORKER_SIGNATURES, phraseKinds, phraseOfLine } from "./watch-stop-phrases.mjs";
+import { WORKER_PHRASES, phraseKinds, phraseOfLine, lineKey, currentStopPhrases, linesWithFence, legacyEligibleLine, LEGACY_SIGNATURES } from "./watch-stop-phrases.mjs";
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -22,7 +22,6 @@ const JUDGE_VERDICTS = new Set([
 ]);
 // 끊김·한도·설정·인증 낱말 판정은 watch-stop-phrases.mjs의 단일 목록이 원본이다(감독 감시와 같은 목록).
 // 최종 429의 제한 재개는 watch-rate-limit.mjs가 2026-09-10 사용자 승인 범위에서 처리하며 나머지는 기존 알림 경로를 유지한다.
-const DISCONNECT_SIGNATURES = WORKER_SIGNATURES;
 export const DISCONNECT_ALERT_KINDS = phraseKinds();
 
 export function disconnectKind(line) {
@@ -30,10 +29,6 @@ export function disconnectKind(line) {
 }
 
 const phraseRank = (line) => WORKER_PHRASES.indexOf(phraseOfLine(line));
-// 줄 키: 시계·횟수 숫자만 바뀌는 줄(`Reconnecting... 2/5 (9m 34s …)`)이 주기마다 새 줄로 보이지 않게 숫자를 지운 모양으로 센다.
-const lineKey = (match, line) => `${match.toLowerCase()}|${line.trim().replace(/\d+/gu, "#")}`;
-// 지금 그려진 상태 줄(live)은 감시기가 처음 본 주기에도 바로 경보한다. 스크롤백 줄은 기준선으로만 삼는다.
-const isLiveLine = (line) => phraseOfLine(line)?.live === true;
 
 // 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 표시.
 // 판단은 '입력줄 자리'의 구조로 한다 — 본문에 같은 글자가 있어도 걸리지 않게
@@ -91,22 +86,17 @@ export function queuedInputLine(screenText) {
   return null;
 }
 
-// codex 0.163 429 화면은 `Exceeded retry limit` 줄이 아래에서 8번째라 6줄로는 닿지 않았다
-// (composer·상태줄·안내 줄이 아래에 붙는다). 같은 줄은 키로 한 번만 세므로 넓혀도 중복 경보는 없다.
-function lastScreenLines(screenText, count = 12) {
-  if (typeof screenText !== "string") return [];
-  const lines = screenText.split("\n");
-  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
-  return lines.slice(-count);
-}
-
+// codex 0.163 429 화면은 `Exceeded retry limit` 줄이 아래에서 8번째라 6줄로는 닿지 않았다(composer·상태줄·안내 줄이 아래에 붙는다).
+// 같은 줄은 키로 한 번만 세므로 넓혀도 중복 경보는 없다. 아래 12줄을 훑는다.
+// 낱말 줄 두 갈래(watch-stop-phrases.mjs): (1) '현재 오류 덩어리'(마지막 입력창 바로 위 오류 머리줄 덩어리) 안의 목록 낱말 —
+// 첫 관찰 주기에도 경보한다. (2) PR-B 이전부터 있던 낱말(legacy)의 한 줄 판정 — 인용·응답 머리표·입력 줄·도구 줄·코드 울타리는 거르고
+// 아래 12줄 안에서 센다(처음 본 주기는 기준선).
 export function screenDisconnects(screenText) {
-  const found = new Map();
-  for (const line of lastScreenLines(screenText)) {
-    DISCONNECT_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
-      found.set(lineKey(match[0], line), line.trim());
-    }
+  const found = currentStopPhrases(screenText);
+  for (const { line, inFence } of linesWithFence(screenText).slice(-12)) {
+    if (inFence || !legacyEligibleLine(line)) continue;
+    LEGACY_SIGNATURES.lastIndex = 0;
+    for (const match of line.matchAll(LEGACY_SIGNATURES)) found.set(lineKey(match[0], line), line.trim());
   }
   return found;
 }
@@ -117,10 +107,10 @@ export function screenDisconnects(screenText) {
 // 찍히면 개수가 같아 놓친다(2026-10-18 검수: 재진입 헛경보).
 function screenDisconnectCounts(screenText) {
   const counts = new Map();
-  if (typeof screenText !== "string") return counts;
-  for (const line of screenText.split("\n")) {
-    DISCONNECT_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
+  for (const { line, inFence } of linesWithFence(screenText)) {
+    if (inFence || !legacyEligibleLine(line)) continue;
+    LEGACY_SIGNATURES.lastIndex = 0;
+    for (const match of line.matchAll(LEGACY_SIGNATURES)) {
       const key = lineKey(match[0], line);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
@@ -216,10 +206,12 @@ export function assessRoles(
       previous?.disconnectCounts ?? [...previousDisconnects.keys()].map((key) => [key, 1])
     );
     const disconnectBaseline = alive && previous?.alive === true;
+    // 현재 오류 덩어리 안의 낱말은 감시 시작 뒤 첫 주기에도 바로 경보한다.
+    const currentKeys = alive && current.screen != null ? new Set(currentStopPhrases(current.screen).keys()) : new Set();
     const freshDisconnectKeys = alive
       ? [...disconnects.entries()]
-          .filter(([key, line]) =>
-            isLiveLine(line) ||
+          .filter(([key]) =>
+            currentKeys.has(key) ||
             (disconnectBaseline && (disconnectCounts.get(key) ?? 0) > (previousCounts.get(key) ?? 0)))
           // 한 화면에 여러 줄이 걸리면 목록 앞쪽(한도·설정·인증)이 먼저다. Reconnecting 줄 아래의 429가 끊김으로 가려지지 않게.
           .sort(([, a], [, b]) => phraseRank(a) - phraseRank(b))

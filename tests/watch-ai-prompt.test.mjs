@@ -26,9 +26,9 @@ for (const source of ['stall', 'progress', 'supervisor-health']) {
   });
 }
 
-test('감독 갈래는 정당한 하위 결과 대기를, 작업 갈래는 완료 마커 에코 규칙을 가진다', () => {
+test('감독 갈래는 정당한 하위 결과 대기를 가지고, 두 갈래 모두 완료 마커 에코 규칙(M1)을 가진다', () => {
   assert.ok(build('supervisor-health').includes('정당한 하위 결과 대기는 정상이다.'));
-  assert.ok(!build('supervisor-health').includes('완료 마커가 지시문·입력 에코 안에'));
+  assert.ok(build('supervisor-health').includes('완료 마커가 지시문·입력 에코 안에 있으면 완료 근거가 아니다.'));
   assert.ok(build('stall').includes('완료 마커가 지시문·입력 에코 안에 있으면 완료 근거가 아니다.'));
   assert.ok(!build('stall').includes('일반감독의 응답 처리'));
 });
