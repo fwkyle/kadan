@@ -526,7 +526,7 @@ test("끊김은 정체가 아니다 — 2026-08-31 502/ENOTFOUND를 정체로 �
   const assessed = assessRoles(
     baseline.states,
     new Map([
-      [session, { role: "c31-작업자", alive: true, pid: "111", expectedPid: "111", digest: "error", screen: `앞 1\n앞 2\n${errorLine}\n뒤 1\n뒤 2\n뒤 3` }],
+      [session, { role: "c31-작업자", alive: true, pid: "111", expectedPid: "111", digest: "error", screen: `앞 1\n앞 2\n\n■ ${errorLine}\n\n› Ask Codex to do anything` }],
     ]),
     1_000,
     1_000,
@@ -535,9 +535,16 @@ test("끊김은 정체가 아니다 — 2026-08-31 502/ENOTFOUND를 정체로 �
 
   assert.deepEqual(
     assessed.alerts.map(({ kind, session: alertSession, line }) => ({ kind, session: alertSession, line })),
-    [{ kind: "끊김", session, line: errorLine }]
+    [{ kind: "끊김", session, line: `■ ${errorLine}` }]
   );
   assert.equal(assessed.alerts.some((alert) => alert.kind === "정체"), false);
+  // PR #200: 오류 표시·빈 입력창 덩어리가 아닌 한 줄 낱말은 즉시 경보하지 않고 기존 정체 경로가 받는다.
+  const plain = assessRoles(
+    baseline.states,
+    new Map([[session, { role: "c31-작업자", alive: true, pid: "111", expectedPid: "111", digest: "error", screen: `앞 1\n앞 2\n${errorLine}\n뒤 1` }]]),
+    1_000, 1_000, 1
+  );
+  assert.deepEqual(plain.alerts.filter((alert) => alert.kind !== "정체"), []);
 });
 
 test("한도·설정은 끊김이 아니다 — 429에 '이어서 해'를 보내 즉사(2026-07-23 ×2, 08-06 5시간)(card-41)", () => {
@@ -560,7 +567,7 @@ test("한도·설정은 끊김이 아니다 — 429에 '이어서 해'를 보내
   const assessed = assessRoles(
     baseline.states,
     new Map([
-      [session, { role: "c41-작업자", alive: true, pid: "111", expectedPid: "111", digest: "error", screen: "앞\n429 Too Many Requests\n뒤" }],
+      [session, { role: "c41-작업자", alive: true, pid: "111", expectedPid: "111", digest: "error", screen: "앞\n\n■ 429 Too Many Requests\n\n› Ask Codex to do anything" }],
     ]),
     1_000,
     1_000,
@@ -570,7 +577,7 @@ test("한도·설정은 끊김이 아니다 — 429에 '이어서 해'를 보내
     assessed.alerts.map(({ kind, level }) => ({ kind, level })),
     [{ kind: "한도", level: "AMBER" }]
   );
-  assert.match(formatAlertBody(assessed.alerts[0], {}), /^한도 kadan-c41-작업자 \(429 Too Many Requests\)/u);
+  assert.match(formatAlertBody(assessed.alerts[0], {}), /^한도 kadan-c41-작업자 \(■ 429 Too Many Requests\)/u);
 });
 
 test("stop은 미확정 카드를 세어 알린다 — 판을 접자 카드 6건이 미아가 됐다(2026-09-01)(card-41)", () => {
@@ -587,32 +594,22 @@ test("stop은 미확정 카드를 세어 알린다 — 판을 접자 카드 6건
   assert.deepEqual(pendingCardsFor(entries, "c41-감독"), []);
 });
 
-test("감시 시작 때 이미 있던 오류엔 울리지 않는다 — baseline(옛 watch-terminals.sh)(card-31)", () => {
+test("감시 시작 때 이미 있던 옛 오류 줄엔 울리지 않고, 지금 떠 있는 오류 덩어리엔 첫 주기에 울린다(card-31, PR #200)", () => {
   const session = "kadan-c31-기준선";
   const errorLine = "stream disconnected: Provider unreachable";
+  // 스크롤백에 남은 한 줄 낱말(오류 덩어리 아님): 처음에도 나중에도 즉시 경보 없음(정체 경로 몫).
   const current = new Map([
     [session, { role: "c31-기준선", alive: true, pid: "222", expectedPid: "222", digest: "same", screen: errorLine }],
   ]);
-
   const first = assessRoles(new Map(), current, 1_000, 1_000, 2);
   const second = assessRoles(first.states, current, 1_000, 1_000, 2);
-  const freshLine = "stream error: 새로 생긴 오류";
-  const fresh = assessRoles(
-    second.states,
-    new Map([
-      [session, { role: "c31-기준선", alive: true, pid: "222", expectedPid: "222", digest: "fresh", screen: `${errorLine}\n${freshLine}` }],
-    ]),
-    1_000,
-    1_000,
-    2
-  );
-
   assert.deepEqual(first.alerts, []);
-  assert.deepEqual(second.alerts, []);
-  assert.deepEqual(
-    fresh.alerts.map(({ kind, line }) => ({ kind, line })),
-    [{ kind: "끊김", line: freshLine }]
-  );
+  assert.deepEqual(second.alerts.filter((alert) => alert.kind !== "정체"), []);
+  // 지금 떠 있는 오류 덩어리(오류 표시 + 빈 입력창)는 감시 시작 뒤 첫 주기에도 바로 경보한다.
+  const block = new Map([
+    [session, { role: "c31-기준선", alive: true, pid: "222", expectedPid: "222", digest: "block", screen: `■ ${errorLine}\n\n› Ask Codex to do anything` }],
+  ]);
+  assert.deepEqual(assessRoles(new Map(), block, 1_000, 1_000, 2).alerts.map(({ kind }) => kind), ["끊김"]);
 });
 
 test("완료 마커는 알림일 뿐 판정이 아니다 — 입력 에코 오판(2026-08-30)(card-31)", () => {

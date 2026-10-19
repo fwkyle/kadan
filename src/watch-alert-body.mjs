@@ -1,6 +1,7 @@
 // 감시 경보 본문·해소 알림·경보 기록 (HW-3-impl: watch-runner.mjs에서 옮김)
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
+import { phraseAction } from "./watch-stop-phrases.mjs";
 import { idleCountsText } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
 
@@ -106,7 +107,9 @@ export function formatAlertBody(alert) {
   if (DISCONNECT_ALERT_KINDS.includes(alert.kind)) {
     // 한도 경보에는 감시기가 ocx 사용량을 새로 받은 결과 한 줄을 붙인다(ocx-refresh.mjs).
     const ocx = alert.kind === "한도" && alert.ocx ? ` · ${ocxAlertLine(alert.ocx)}` : "";
-    return `${alert.kind} ${alert.session} (${alert.line})${ocx}`;
+    // 실행기 교체가 필요한 종류(설정·인증)는 같은 세션을 다시 시도하지 말라고 알린다.
+    const replace = phraseAction(alert.kind) === "replace-runner" ? " · 실행기 교체 필요(같은 세션 재시도 금지)" : "";
+    return `${alert.kind} ${alert.session} (${alert.line})${ocx}${replace}`;
   }
   if (alert.kind === "보안필터") {
     return `보안 필터로 멈춤 ${alert.role ?? alert.session}${alert.taskId ? ` / ${alert.taskId}` : ""} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;

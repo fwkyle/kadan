@@ -1,5 +1,6 @@
 import {findDoneMarkers} from './done-marker.mjs';
 import {securityFilterNotice} from './watch-security-filter.mjs';
+import { WORKER_PHRASES, phraseKinds, phraseOfLine, currentStopPhrases, anyStopWordInBottom } from "./watch-stop-phrases.mjs";
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -19,29 +20,15 @@ const JUDGE_VERDICTS = new Set([
   "죽음",
   "모름",
 ]);
-// 옛 사고표(super-conductor execution-error-cases E1·E2·E5)대로 처방이 다른 세 갈래를
-// 낱말로 오류를 분류한다. 최종 429의 제한 재개는 watch-rate-limit.mjs가
-// 2026-09-10 사용자 승인 범위에서 처리하며 나머지는 기존 알림 경로를 유지한다.
-const DISCONNECT_KINDS = [
-  { kind: "한도", pattern: /429 Too Many Requests|exceeded retry limit|rate limit/iu },
-  { kind: "설정", pattern: /No API key/iu },
-  {
-    kind: "끊김",
-    pattern: /stream error|stream disconnected|502 Bad Gateway|getaddrinfo ENOTFOUND|Provider unreachable/iu,
-  },
-];
-const DISCONNECT_SIGNATURES = new RegExp(
-  DISCONNECT_KINDS.map(({ pattern }) => pattern.source).join("|"),
-  "giu"
-);
-export const DISCONNECT_ALERT_KINDS = DISCONNECT_KINDS.map(({ kind }) => kind);
+// 끊김·한도·설정·인증 낱말 판정은 watch-stop-phrases.mjs의 단일 목록이 원본이다(감독 감시와 같은 목록).
+// 최종 429의 제한 재개는 watch-rate-limit.mjs가 2026-09-10 사용자 승인 범위에서 처리하며 나머지는 기존 알림 경로를 유지한다.
+export const DISCONNECT_ALERT_KINDS = phraseKinds();
 
 export function disconnectKind(line) {
-  for (const { kind, pattern } of DISCONNECT_KINDS) {
-    if (pattern.test(String(line ?? ""))) return kind;
-  }
-  return "끊김";
+  return phraseOfLine(line)?.kind ?? "끊김";
 }
+
+const phraseRank = (line) => WORKER_PHRASES.indexOf(phraseOfLine(line));
 
 // 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 표시.
 // 판단은 '입력줄 자리'의 구조로 한다 — 본문에 같은 글자가 있어도 걸리지 않게
@@ -99,41 +86,13 @@ export function queuedInputLine(screenText) {
   return null;
 }
 
-// codex 0.163 429 화면은 `Exceeded retry limit` 줄이 아래에서 8번째라 6줄로는 닿지 않았다
-// (composer·상태줄·안내 줄이 아래에 붙는다). 같은 줄은 키로 한 번만 세므로 넓혀도 중복 경보는 없다.
-function lastScreenLines(screenText, count = 12) {
-  if (typeof screenText !== "string") return [];
-  const lines = screenText.split("\n");
-  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
-  return lines.slice(-count);
-}
-
+// codex 0.163 429 화면은 `Exceeded retry limit` 줄이 아래에서 8번째라 6줄로는 닿지 않았다(composer·상태줄·안내 줄이 아래에 붙는다).
+// 같은 줄은 키로 한 번만 세므로 넓혀도 중복 경보는 없다. 아래 12줄을 훑는다.
+// 즉시 경보는 '현재 오류 덩어리'(watch-stop-phrases.mjs: 마지막 빈 입력창 바로 위 오류 머리줄 덩어리)에서 나온 것만 낸다.
+// 낱말을 화면 어디서나 한 줄로 찾는 길은 없다(도구 결과·설명·인용 줄의 헛경보 방지). 덩어리로 확정하지 못한 화면은
+// 즉시 경보 대신 기존 정체 경로(상태 줄 판정 + 정체 + 감시AI)로 간다.
 export function screenDisconnects(screenText) {
-  const found = new Map();
-  for (const line of lastScreenLines(screenText)) {
-    DISCONNECT_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
-      found.set(`${match[0].toLowerCase()}|${line.trim()}`, line.trim());
-    }
-  }
-  return found;
-}
-
-// 화면 전체에서 같은 끊김 줄이 몇 번 나왔는지. 훑는 창(아래 12줄) 밖으로 나갔다가 다시 그리면서
-// 창 안으로 돌아온 옛 줄은 개수가 그대로라 새 끊김이 아니다. 같은 줄이 아래에 새로 찍히면
-// 개수가 늘어 새 끊김이다. 한계: 옛 줄이 화면 밖으로 사라지는 같은 순회에 똑같은 글의 새 줄이
-// 찍히면 개수가 같아 놓친다(2026-10-18 검수: 재진입 헛경보).
-function screenDisconnectCounts(screenText) {
-  const counts = new Map();
-  if (typeof screenText !== "string") return counts;
-  for (const line of screenText.split("\n")) {
-    DISCONNECT_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
-      const key = `${match[0].toLowerCase()}|${line.trim()}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  }
-  return counts;
+  return currentStopPhrases(screenText);
 }
 
 function screenDoneMarker(screenText) {
@@ -214,26 +173,23 @@ export function assessRoles(
       alive && current.screen != null
         ? screenDisconnects(current.screen)
         : new Map(previous?.disconnects ?? []);
-    const previousDisconnects = new Map(previous?.disconnects ?? []);
-    const disconnectCounts =
-      alive && current.screen != null
-        ? screenDisconnectCounts(current.screen)
-        : new Map(previous?.disconnectCounts ?? []);
-    // 개수 기록이 없는 옛 상태는 창 안 줄을 한 번씩 본 것으로 친다.
-    const previousCounts = new Map(
-      previous?.disconnectCounts ?? [...previousDisconnects.keys()].map((key) => [key, 1])
-    );
-    const disconnectBaseline = alive && previous?.alive === true;
-    const freshDisconnectKeys = disconnectBaseline
-      ? [...disconnects.keys()].filter(
-          (key) => (disconnectCounts.get(key) ?? 0) > (previousCounts.get(key) ?? 0)
-        )
+    // 현재 오류 덩어리 안의 낱말은 모두 새 경보 후보다(감시 시작 뒤 첫 주기 포함). 같은 줄은 숫자를 지운 키라 하나로 센다.
+    const freshDisconnectKeys = alive
+      ? [...disconnects.entries()]
+          // 한 화면에 여러 줄이 걸리면 목록 앞쪽(한도·설정·인증)이 먼저다. Reconnecting 줄 아래의 429가 끊김으로 가려지지 않게.
+          .sort(([, a], [, b]) => phraseRank(a) - phraseRank(b))
+          .map(([key]) => key)
       : [];
     const previousActiveDisconnect = previous?.activeDisconnect ?? null;
+    // 이미 열린 경보는 유지하되, 목록에서 더 앞선(더 강한) 새 줄이 생기면 그쪽으로 바꾼다(Reconnecting 중 429 등).
+    const strongerFresh = freshDisconnectKeys.find(
+      (key) => !previousActiveDisconnect || !disconnects.has(previousActiveDisconnect) ||
+        phraseRank(disconnects.get(key)) < phraseRank(disconnects.get(previousActiveDisconnect))
+    );
     const activeDisconnect =
-      previousActiveDisconnect && disconnects.has(previousActiveDisconnect)
+      previousActiveDisconnect && disconnects.has(previousActiveDisconnect) && !strongerFresh
         ? previousActiveDisconnect
-        : freshDisconnectKeys[0] ?? null;
+        : strongerFresh ?? null;
     // 실행기가 codex일 때만 본다(kimi 등을 codex 경유로 띄워도 harness는 codex). 모르거나 claude면 보지 않는다.
     const securityFilter = alive && /^(?:kadan-)?codex$/iu.test(String(current.harness ?? ""))
       ? securityFilterNotice(current.screen)
@@ -258,8 +214,10 @@ export function assessRoles(
     // (a) 화면 맨 아래 상태 줄의 경과 시계가 주기 사이에 움직이면 일하는 중이다(변화 지문은 숫자를 지워 못 본다).
     // 같은 아래쪽 영역에 끊김·429가 걸리면 일하는 중이 아니다 — #187의 14시간 Reconnecting이 다시 묻히지 않게.
     const status = alive && current.screen != null ? readStatusLine(current.screen) : null;
+    // 오류 낱말 확인은 넓게(아래 12줄 어디든, 덩어리·인용 무관) — 즉시 경보는 좁게 내지만, 거부는 놓치면 멈춘 화면이 영원히 묻힌다.
     const workingMoving =
-      disconnects.size === 0 && isWorkingMoving(status, previous?.workClock ?? null);
+      !(alive && current.screen != null && anyStopWordInBottom(current.screen)) &&
+      isWorkingMoving(status, previous?.workClock ?? null);
 
     // 일하는 동안 쌓인 '변화 없음' 시간은 정체 시간이 아니다. 일이 끝난 직후 곧바로 정체로 넘어가지 않게 0으로 둔다.
     if (sameDigest && !workingMoving) {
@@ -289,7 +247,6 @@ export function assessRoles(
       workingMoving,
       deathActive,
       disconnects: [...disconnects],
-      disconnectCounts: [...disconnectCounts],
       activeDisconnect,
       doneMarkerKey,
       completionDigest,
