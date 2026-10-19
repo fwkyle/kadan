@@ -20,7 +20,9 @@ const CODEX_TYPED = `${E}[1m›${E}[0m typed text`;
 const HISTORY = `${E}[38;5;246m${E}[48;5;237m❯ ${E}[38;5;231mreply with only the word ok${E}[39m`;
 
 const screen = (input, body = ["⏺ ok", `${E}[2m  도구 출력의 흐린 줄${E}[0m`]) =>
-  [HISTORY, "", ...body, RULE, input, RULE, "  Haiku 5.5 | effort:low"].join("\n");
+  (input.includes("›")
+    ? [HISTORY, "", ...body, input, "", "  GPT-6.1-Sol default · /tmp/example"]
+    : [HISTORY, "", ...body, RULE, input, RULE, "  Haiku 5.5 | effort:low"]).join("\n");
 const plainOf = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
 
 test("추천 문구만 있는 입력칸: 판정용은 빈 입력칸, 표시용은 (추천 문구: …)", () => {
@@ -86,7 +88,7 @@ test("감시 판정: 추천 문구 화면은 빈 입력창(멈춤 판정 대상)
 
 test("큐 재개: 추천 문구는 미완성 글이 아니고 실제 친 글은 불안전", () => {
   const banner = "❭ Press Enter to send queued messages now";
-  const build = (input) => splitGhostText([E + "[0m" + banner, "", input].join("\n")).judge;
+  const build = (input) => splitGhostText(screen(input, [E + "[0m" + banner])).judge;
   assert.equal(queuedInputBanner(build(CLAUDE_GHOST)).unsafe, null);
   assert.equal(queuedInputBanner(build(CLAUDE_TYPED)).unsafe, "입력창에 미완성 텍스트가 있음");
 });
@@ -109,7 +111,7 @@ test("실측 -e/-p 사본 7쌍: 입력칸 외 모든 바이트와 줄 수를 보
 
 test("#200 현재 오류 판정: 추천 입력칸이면 오류, 실제 입력 중이면 제외", () => {
   for (const [ghostInput, typedInput] of [[CLAUDE_GHOST, CLAUDE_TYPED], [CODEX_GHOST, CODEX_TYPED]]) {
-    const build = input => splitGhostText(["■ 502 Bad Gateway", "", input].join("\n")).judge;
+    const build = input => splitGhostText(screen(input, ["■ 502 Bad Gateway", ""])).judge;
     assert.equal(currentErrorBlock(build(ghostInput))?.head, "■ 502 Bad Gateway");
     assert.equal(currentStopPhrases(build(ghostInput)).size, 1);
     assert.equal(currentErrorBlock(build(typedInput)), null);
@@ -133,13 +135,77 @@ test("PR-A (b): 같은 추천 화면이 계속되면 멈춤 경보, 실제 입�
 
 test("흐린 조각 사이의 실제 입력과 입력 기호는 지우지 않는다", () => {
   const input = `${E}[2m› hint${E}[22m 실제 입력 ${E}[2mtail${E}[0m`;
-  const { judge, view } = splitGhostText(input);
-  assert.equal(judge, "›  실제 입력");
+  const { judge, view } = splitGhostText(screen(input));
+  assert.equal(judge.split("\n").at(-3), "›  실제 입력");
   assert.ok(view.includes("실제 입력"));
-  assert.ok(view.startsWith("› "));
+  assert.ok(view.split("\n").at(-3).startsWith("› "));
 });
 
 test("앞 줄에서 이어진 흐림 상태도 입력칸에서만 제거한다", () => {
-  const { judge } = splitGhostText(`${E}[2m흐린 본문\n› 안내문${E}[0m`);
-  assert.equal(judge, "흐린 본문\n›");
+  const { judge } = splitGhostText(screen(`› 안내문${E}[0m`, [`${E}[2m흐린 본문`]));
+  assert.ok(judge.includes("흐린 본문\n›\n"));
+});
+
+test("입력 기호만 있거나 바닥글이 불확실하면 흐린 본문을 보존한다", () => {
+  const quote = `${E}[2m› 본문 인용${E}[0m`;
+  for (const ansi of [quote, `• 답변 출력 중\n${quote}\nREADY-END`,
+    `${quote}\n  사람이 쓴 초안\n  ? for shortcuts`,
+    screen(quote) + "\n  SECOND_PENDING",
+    screen(quote).replace("\n\n  GPT-", "\n  GPT-"),
+    screen(quote).replace("  GPT-6.1-Sol default · /tmp/example", "  알 수 없는 바닥글"),
+    `${RULE}\n${CLAUDE_GHOST}\n${RULE}`,
+    screen(CLAUDE_GHOST).replace(RULE, "본문"),
+    screen(CLAUDE_GHOST).replaceAll("❯", ">")]) {
+    const out = splitGhostText(ansi);
+    assert.equal(out.judge, plainOf(ansi), ansi);
+    assert.equal(out.view, out.judge);
+    assert.equal(out.ghost, "");
+  }
+});
+
+test("잘린 제어 순서와 해석 불명 색 매개변수는 추천 제거를 보류한다", () => {
+  const base = screen(CODEX_GHOST);
+  for (const control of [`${E}[38:2::`, `${E}]8;;https://example.com/`, `${E}Popaque`]) {
+    const out = splitGhostText(base + "\n" + control);
+    assert.equal(out.judge, plainOf(base) + "\n");
+    assert.equal(out.ghost, "");
+  }
+  for (const control of [`${E}[38;3m`, `${E}[38:3:2m`, `${E}[2:9m`]) {
+    const out = splitGhostText(control + base);
+    assert.equal(out.judge, plainOf(base));
+    assert.equal(out.ghost, "");
+  }
+});
+
+test("확장 SGR의 색 채널 2·0·22를 흐림/해제로 오인하지 않는다", () => {
+  for (const color of ["38;2;2;0;22", "48;5;2", "58;2;2;0;22",
+    "38:2::2:0:22", "48:2:0:2:0:22", "58:5:2", "4:3"]) {
+    for (const reset of ["m", "22m", "0m"]) {
+      const input = `› ${E}[2mhint${E}[${color}m tail${E}[${reset}실제 글`;
+      const out = splitGhostText(screen(input));
+      assert.equal(out.judge.split("\n").at(-3), "› 실제 글", `${color}/${reset}`);
+      const typed = screen(`› ${E}[${color}m실제 글${E}[0m`);
+      assert.equal(splitGhostText(typed).ghost, "", color);
+    }
+  }
+});
+
+test("CSI 전체 문법·미지 ESC는 글자로 새지 않고 추천 제거를 보류한다", () => {
+  const base = screen(CODEX_GHOST);
+  for (const control of [`${E}[?25h`, `${E}[>0m`, `${E}[<1;2;3M`, `${E}[=1h`,
+    `${E}[1 q`, `${E}(B`, `${E}Popaque${E}\\`, `${E}^private${E}\\`]) {
+    const out = splitGhostText(control + base);
+    assert.equal(out.judge, plainOf(base), JSON.stringify(control));
+    assert.equal(out.view, out.judge);
+    assert.equal(out.ghost, "");
+  }
+});
+
+test("OSC의 두 종료 형식은 링크 글자와 확인된 추천 판정을 보존한다", () => {
+  for (const end of ["\x07", `${E}\\`]) {
+    const link = `${E}]8;;https://example.com/${end}링크${E}]8;;${end}`;
+    const out = splitGhostText(screen(CODEX_GHOST, [link]));
+    assert.ok(out.judge.includes("링크\n›\n"));
+    assert.equal(out.ghost, "Ask Codex to do anything");
+  }
 });

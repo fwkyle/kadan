@@ -104,7 +104,14 @@
 
 ### 입력칸 추천 문구
 
-Claude Code·codex는 입력칸에 흐린 글씨로 추천 문구를 띄운다(`Try "…"`, `Ask Codex to do anything`). 사람이 친 글이 아니다. tmux 화면 읽기는 색 정보(`capture-pane -e`)로 한 번만 떠서 입력칸 줄의 흐린 구간(`ESC[2m`)만 가른다(`src/ghost-text.mjs`). 감시기·완료 판정이 읽는 화면(`floor.read`)에서는 그 구간을 빼 빈 입력칸으로 보고, `kadan read`(`floor.readView`)에는 `(추천 문구: …)`로 보인다. 입력칸 줄 밖은 색만 벗긴 글자라 `-p`와 같다. herdr 바닥은 이 구분을 하지 않는다(기존 그대로).
+Claude Code·codex는 입력칸에 흐린 글씨로 추천 문구를 띄운다(`Try "…"`, `Ask Codex to do anything`).
+tmux 화면 읽기는 색 정보(`capture-pane -e`)로 한 번만 떠서 입력칸을 확인한다(`src/ghost-text.mjs`).
+Claude는 두 가로줄 사이의 `❯`와 상태 바닥글, codex는 `›` 뒤 빈 줄과 상태 바닥글(단축키 안내 줄 포함)이 기준이다.
+이 모양이 확인될 때만 입력칸의 흐린 구간(`ESC[2m`)을 추천으로 구분한다. 모양이나 제어 코드를 확신할 수 없으면 글자를 보존한다.
+감시기·완료 판정이 읽는 화면(`floor.read`)에서는 확인된 추천을 빼고,
+`kadan read`(`floor.readView`)에는 `(추천 문구: …)`로 보인다. 실제 입력은 남긴다.
+입력칸 밖은 서식 코드와 줄 끝 일반 공백만 제거해 `-p`와 같은 글자를 유지한다(탭·NBSP·넓은 공백 보존).
+여러 줄 추천은 지원 범위 밖이며, herdr 바닥은 이 구분을 하지 않는다(기존 그대로).
 
 ## 이 문서를 고칠 때
 
