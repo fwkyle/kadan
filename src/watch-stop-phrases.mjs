@@ -108,11 +108,11 @@ export function currentErrorBlock(screen) {
   while (head > 0 && /^\s+\S/u.test(lines[head])) head--;
   if (!(ERROR_HEAD.test(lines[head]) || RECONNECT_HEAD.test(lines[head]))) return null;
   if (rows.slice(head, end + 1).some((r) => r.inFence)) return null;
-  // 위쪽 소개 문단 제외(#194 보안필터와 같은 규칙): 오류 표시 머리줄 바로 위(빈 줄 하나를 건너)가 응답 머리표 문단이거나 콜론으로 끝나는
+  // 위쪽 소개 문단 제외(#194 보안필터와 같은 규칙): 오류 표시 머리줄 바로 위(빈 줄·장식 줄을 건너)가 응답 머리표 문단이거나 콜론으로 끝나는
   // 소개 문장이면 설명·예시이지 현재 오류가 아니다. 애매하면 즉시 경보 대신 정체 경로로 간다. 상태 줄 모양의 재연결 머리줄에는 적용하지 않는다.
   if (ERROR_HEAD.test(lines[head])) {
     let above = head - 1;
-    if (above >= 0 && lines[above].trim() === "") above--;
+    while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--; // 빈 줄·가로선 등 장식 줄은 몇 개든 건너뛴다
     const intro = above >= 0 ? lines[above] : "";
     if (/^\s*[•⏺]\s/u.test(intro) || /[:：]\s*$/u.test(intro)) return null;
   }
@@ -129,4 +129,12 @@ export function currentStopPhrases(screen) {
     for (const match of line.matchAll(WORKER_SIGNATURES)) found.set(lineKey(match[0], line), line.trim());
   }
   return found;
+}
+
+// 넓은 검사(일하는 중 거부 전용): 화면 아래 12줄 안에 목록 낱말이 하나라도 있으면 true. 덩어리·인용·코드 울타리 여부는 따지지 않는다.
+// 즉시 경보는 만들지 않는다 — (a) 일하는 중으로 분류하지 않고 (c) 정체 경로로 보내는 데만 쓴다.
+// 거부 쪽은 넓게: 잘못 걸리면 정상 인용이 정체 20분 뒤 감시AI 호출 하나로 가고, 잘못 통과시키면 429를 되풀이하며 멈춘 화면이 영원히 일하는 중으로 묻힌다.
+export function anyStopWordInBottom(screen, count = 12) {
+  const lines = trimmedLines(screen).slice(-count);
+  return lines.some((line) => { WORKER_SIGNATURES.lastIndex = 0; return WORKER_SIGNATURES.test(line); });
 }

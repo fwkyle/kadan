@@ -93,3 +93,44 @@ test('위쪽 소개 문단 제외는 오류 표시 머리줄에만 적용하고,
   assert.equal(screenDisconnects(`• 앞선 응답입니다.\n\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n  └ Stream disconnected before completion\n\n${COMPOSER}`).size > 0, true);
   assert.equal(screenDisconnects(`  └ 이전 도구 출력\n\n■ authentication failed\n\n${COMPOSER}`).size, 1);
 });
+
+// ---- 3라운드: 일하는 중 거부는 넓게(아래 12줄 어디든 낱말), 즉시 경보는 좁게 ----
+const withClock = (n, extra) => [
+  'old output', `  └ Exceeded retry limit, last status: 429 Too Many Requests`, ...(extra ? [extra] : []),
+  `• Working (${n}m 00s • esc to interrupt)`, '', COMPOSER].join('\n');
+
+test('F1: 같은 429 줄이 남은 채 Working 시계만 늘어나는 화면은 (a) 일하는 중이 아니고 정체 후보가 된다(즉시 경보는 0)', () => {
+  const screens = Array.from({length: 8}, (_, i) => withClock(i + 1));
+  const {alerts, states} = run(screens, 2);
+  assert.equal(states.get('kadan-w').workingMoving, false);
+  assert.equal(alerts.flat().filter(a => ['끊김', '설정', '인증', '한도'].includes(a.kind)).length, 0, '넓은 검사는 즉시 경보를 만들지 않는다');
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true, '정체 경로(감시AI)가 받는다');
+});
+
+test('F1: 오류 낱말이 없는 정상 일하는 화면은 계속 (a)이고, 낱말이 아래 12줄 밖이면 영향 없다', () => {
+  const clean = n => `• Working (${n}m 00s • esc to interrupt)\n\n${COMPOSER}`;
+  const {alerts, states} = run(Array.from({length: 8}, (_, i) => clean(i + 1)), 2);
+  assert.equal(states.get('kadan-w').workingMoving, true);
+  assert.equal(alerts.flat().some(a => a.kind === '정체'), false);
+  const far = n => ['429 Too Many Requests', ...Array(14).fill('줄'), clean(n)].join('\n');
+  assert.equal(run(Array.from({length: 4}, (_, i) => far(i + 1)), 2).states.get('kadan-w').workingMoving, true);
+});
+
+test('F1: 원래 C2 모양(크롤 화면의 429 줄 + 맨 아래 Working)도 정체 경로에 남는다', () => {
+  const crawl = n => ['이전 출력', '  └ Exceeded retry limit, last status: 429 Too Many Requests', ...Array(5).fill('진행 줄'), `• Working (${n}m 00s • esc to interrupt)`].join('\n');
+  const {alerts} = run(Array.from({length: 6}, (_, i) => crawl(i + 1)), 2);
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true);
+});
+
+test('F1: #187 하이브리드는 그대로 끊김 경보로 간다', () => {
+  const only = `• Reconnecting... (14h 04m 30s • esc to interrupt)\n\n${COMPOSER}`;
+  assert.equal(run([only, only], 2).alerts[0].some(a => a.kind === '끊김'), true);
+});
+
+test('F2: 소개 문단과 오류 예제 사이 빈 줄이 1·2·3개여도, 장식 줄이 끼어도 예시로 보고 읽지 않는다', () => {
+  for (const gap of ['\n', '\n\n', '\n\n\n', '\n──────────\n\n']) {
+    const screen = `• 다음은 인증 오류 화면의 예시입니다:\n${gap}■ authentication failed\n\n${COMPOSER}`;
+    assert.equal(screenDisconnects(screen).size, 0, JSON.stringify(gap));
+    assert.deepEqual(run([screen, screen]).alerts.flat().filter(a => a.kind === '인증'), []);
+  }
+});

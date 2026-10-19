@@ -102,3 +102,13 @@ test('C2: 같은 글의 새 429가 현재 오류 덩어리로 새로 나타나�
   assert.equal(limitAlerts(r).length, 1);
   assert.equal(limitAlerts(r)[0].minute, 3);
 });
+
+// PR #200 3라운드(검수 F1): 429 줄이 화면에 남은 채 Working 시계만 늘어나는 화면을 130분 돌린다. 예전에는 일하는 중으로 묻혀 오류 경보·정체 AI가 0건이었다.
+test('F1: 429 줄이 남은 채 시계만 늘어나는 화면 130분 — 일하는 중으로 묻히지 않고 정체 AI(source stall)가 불린다', async () => {
+  const r = await simulate({minutes: 130, cards: [card('t-f1')], extraEntries: sendOf('t-f1'),
+    screen: (s, m) => s === 'kadan-t-작업자'
+      ? ['이전 출력', old429, '• Working (' + m + 'm ' + (m * 7 % 60) + 's • esc to interrupt)', '', '› Ask Codex to do anything'].join('\n')
+      : 'healthy'});
+  assert.ok(r.aiCalls.some(c => c.role === 't-작업자' && c.source === 'stall'), '정체 AI가 불려야 한다');
+  assert.equal(limitAlerts(r).length, 0, '넓은 검사는 즉시 한도 경보를 만들지 않는다');
+});
