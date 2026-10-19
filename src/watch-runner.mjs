@@ -382,6 +382,12 @@ export async function runWatch({
           stallN
         );
     roleStates = roleAssessment.states;
+    // 보안필터 경보에 현재 실행 연결을 붙인다: 이 역할의 열린 발령이 하나일 때만(여럿이면 추측하지 않는다).
+    if (scope) roleAssessment.alerts = roleAssessment.alerts.map(a => {
+      if (a.kind !== '보안필터') return a;
+      const tasks = [...new Set(scope.entries.filter(e => e.role === a.role && e.taskId).map(e => e.taskId))];
+      return tasks.length === 1 ? {...a, taskId: tasks[0]} : a;
+    });
     // 감독 세션은 지문·생존만 추적한다. 여기서 나온 경보(죽음 등)는 쓰지 않는다 — 감독의 죽음·PID는
     // supervisorHealth가, 유휴는 assessSupervisorIdle이 이 상태로 판단한다.
     if (!observationError && supervisorScope) {

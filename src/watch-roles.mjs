@@ -154,6 +154,7 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       alive: Boolean(live),
       pid: live?.pid ?? null,
       expectedPid,
+      harness: start.harness ?? null,
       digest: screen == null ? null : changeDigest(screen),
       screen,
       screenError,
