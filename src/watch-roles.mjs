@@ -83,6 +83,16 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       // 종료된 선임도 확정 인계할 수 있다. 발령은 인계에만 남기고 다음 start에서는 비운다.
       continue;
     }
+    // 확정된 결과와 같은 훅·화면 마커는 아래에서 뺀다. 옛 훅이 새 카드의 멈춤·정체를
+    // 막지 않게 하되, 원장과 결과가 다른 마커는 감독이 확인할 완료후보로 남긴다.
+    if (entry?.kind === 'done' && entry.role && !taskConnectionError(entry)) {
+      const key = taskKey(entry.taskId, entry.executionKey);
+      const pending = dispatches.get(`kadan-${entry.role}`), sent = pending?.get(key);
+      if (sent && Date.parse(entry.t) >= Date.parse(sent.t)) {
+        pending.set(key, {...sent, confirmedResult: entry.result});
+      }
+      continue;
+    }
     if (entry?.kind === 'handover' && entry.phase === 'transferred') {
       const from = `kadan-${entry.from}`, to = `kadan-${entry.to}`;
       const source = dispatches.get(from), target = dispatches.get(to);
@@ -134,7 +144,9 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
     for (const [key, dispatch] of completionDispatches) {
       const newer = diffDoneMarkers(dispatch.baselineMarkers ?? [], markers,
         marker => JSON.stringify([taskKey(marker.taskId), marker.result]));
-      for (const marker of newer) if (taskKey(marker.taskId) === key) fresh.add(marker);
+      for (const marker of newer) {
+        if (taskKey(marker.taskId) === key && marker.result !== dispatch.confirmedResult) fresh.add(marker);
+      }
     }
     // 중앙 카드 조회를 쓰지 않는 기존 호출은 발령 없는 화면 후보도 보고한다.
     // 실제 CLI는 카드 목록(빈 목록 포함)을 넘기므로 등록 카드 감시는 위 대조를 반드시 거친다.
@@ -144,7 +156,8 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
     for (const [key, dispatch] of completionDispatches) {
       const found = hookDoneSince({ home: hookHome ?? ledgerHome(), role: session.slice("kadan-".length), since: dispatch.t,
         taskMatches: id => taskKey(id) === key }).at(-1);
-      if (found && (!hookMarker || Date.parse(found.at) > Date.parse(hookMarker.at))) hookMarker = found;
+      if (found && found.result !== dispatch.confirmedResult &&
+          (!hookMarker || Date.parse(found.at) > Date.parse(hookMarker.at))) hookMarker = found;
     }
     const screenMarker = cards == null && completionDispatches.size === 0
       ? markers.at(-1) : markers.findLast(marker => fresh.has(marker));
