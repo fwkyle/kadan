@@ -171,7 +171,8 @@ test('R1: 최종 429에서 claude·kimi 대체 세션은 부르지 않는다',as
  assert.equal(ocx.calls().length,0);
 });
 
-const restoredAlert=(role,t=0)=>({kind:'alert',id:`disconnect:kadan-${role}:exceeded retry limit|└ Exceeded retry limit, last status: 429 Too Many Requests`,
+// 경보 id의 줄 키는 숫자를 지운 모양이다(PR-B부터, 시계·횟수만 바뀌는 줄이 새 경보로 보이지 않게). 업그레이드 뒤 첫 재시작에만 옛 모양 id가 한 번 새로 알려진다.
+const restoredAlert=(role,t=0)=>({kind:'alert',id:`disconnect:kadan-${role}:exceeded retry limit|└ Exceeded retry limit, last status: # Too Many Requests`,
  alertKind:'한도',level:'AMBER',role,session:'kadan-'+role,delivered:true,recipient:'p-감독',by:'watch',t:stamp(t)});
 
 test('R2: 재시작으로 복원한 한도 경보에 새로고침 기록이 없으면 한 번 부르고, 이후 30분 안에는 0번(경보는 다시 알리지 않는다)',async()=>{

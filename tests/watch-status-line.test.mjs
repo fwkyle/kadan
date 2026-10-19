@@ -150,10 +150,10 @@ test('(a) 끊김 줄이 같은 아래쪽에 걸리면 일하는 중이 아니다
   assert.equal(anyStalled(alerts), false);
 });
 
-test('(a) 하이브리드 Reconnecting만 있는 14시간 화면은 일하는 중으로 묻히지 않고 정체로 간다', () => {
+test('(a) 하이브리드 Reconnecting만 있는 14시간 화면은 일하는 중으로 묻히지 않고 끊김 경보로 간다', () => {
   const {alerts, states} = run(['14h 03m 22s', '14h 04m 30s', '14h 05m 40s', '14h 06m 50s'].map(hybridOnly));
   assert.equal(states.get('kadan-worker').workingMoving, false);
-  assert.equal(stalled(alerts.at(-1)), true);
+  assert.equal(alerts[0].some(a => a.kind === '끊김'), true);
 });
 
 // ---- (b) 멈춤 ----

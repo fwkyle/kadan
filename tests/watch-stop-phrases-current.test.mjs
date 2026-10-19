@@ -1,0 +1,136 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {assessRoles, screenDisconnects} from '../src/watch.mjs';
+import {changeDigest} from '../src/watch-roles.mjs';
+import {currentErrorBlock} from '../src/watch-stop-phrases.mjs';
+
+// PR #200 수정 1라운드: 목록 낱말은 '현재 오류 덩어리'(마지막 빈 입력창 바로 위 오류 머리줄 덩어리)일 때만 읽는다.
+// 화면은 독립검수(exec-501990fc)의 재현 화면을 옮긴 것이다.
+const COMPOSER = '› Ask Codex to do anything';
+const F1 = {
+  quoted_reconnect: `• 정상 응답: "Reconnecting..." 문구는 재연결 표시를 뜻합니다.\n\n${COMPOSER}`,
+  fenced_reconnect: `• 화면 예제:\n\`\`\`text\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n\`\`\`\n\n${COMPOSER}`,
+  recovered_reconnect: `• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n• Connection restored; task continues\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  typed_reconnect: '› Reconnecting... 문구를 검색해 주세요',
+  tool_reconnect: `• Running rg -n "Reconnecting..." src/watch.mjs\n  └ Searching source files\n\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  tool_search: `• Running rg -n "screenDisconnects|No API key|reconnect" tests/watch.mjs\n  └ Searching source files\n\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  quoted_auth: `• 정상 응답: 인증 실패 시 "oauth/token" 또는 "401 Unauthorized"가 보일 수 있습니다.\n\n${COMPOSER}`,
+  typed_auth: '› oauth/token 관련 설정을 설명해 주세요',
+};
+const observe = screen => new Map([['kadan-w', {role: 'w', alive: true, pid: 1, expectedPid: 1, screen, digest: changeDigest(screen)}]]);
+const run = (screens, stallN = 20) => {
+  let states = new Map();
+  const alerts = [];
+  for (const screen of screens) {
+    const result = assessRoles(states, observe(screen), 60_000, 60_000, stallN);
+    states = result.states;
+    alerts.push(result.alerts);
+  }
+  return {alerts, states};
+};
+
+for (const [name, screen] of Object.entries(F1)) {
+  test(`F1 ${name}: 오류 경보 0건(첫 주기·여러 주기 모두)`, () => {
+    assert.equal(screenDisconnects(screen).size, 0);
+    const {alerts} = run([screen, screen, screen]);
+    assert.deepEqual(alerts.flat().filter(a => ['끊김', '설정', '인증', '한도'].includes(a.kind)), []);
+  });
+}
+
+test('F1 10:18 운영 헛경보 유형: 검색 명령 줄 속 No API key는 설정 경보가 아니다(작업 중·회복 뒤 화면 모두)', () => {
+  const tool = `• Running rg -n "No API key" src\n  └ Searching source files\n\n${COMPOSER}`;
+  assert.equal(screenDisconnects(tool).size, 0);
+  assert.equal(screenDisconnects(F1.tool_search).size, 0);
+});
+
+test('현재 오류 덩어리 모양: 빈 입력창 위의 오류 머리줄·재연결 상태 줄은 읽고, 그 밖은 읽지 않는다', () => {
+  assert.ok(currentErrorBlock(`■ authentication failed\n\n${COMPOSER}`));
+  assert.ok(currentErrorBlock(`• Reconnecting... (14h 04m 30s • esc to interrupt)\n\n\n${COMPOSER}\n`), '#187 하이브리드');
+  assert.equal(currentErrorBlock(`■ authentication failed\n\n${COMPOSER}\n› 다른 글`), null, '입력창 뒤 다른 입력');
+  assert.equal(currentErrorBlock(`■ authentication failed\n\n새 출력 줄\n\n${COMPOSER}`), null, '덩어리와 입력창 사이에 글');
+  assert.equal(currentErrorBlock('■ authentication failed'), null, '입력창 없음');
+});
+
+test('F2-A: 감시 시작 때 이미 떠 있는 인증 오류(빈 입력창)는 첫 주기에 인증 경보 1건', () => {
+  const screen = `■ authentication failed\n\n${COMPOSER}`;
+  const {alerts} = run([screen, screen, screen]);
+  assert.equal(alerts[0].filter(a => a.kind === '인증').length, 1);
+  assert.equal(new Set(alerts.flat().filter(a => a.kind === '인증').map(a => a.id)).size, 1, '같은 경보 하나');
+});
+
+test('F2-B: 입력창이 안 보여 엄격 기준을 통과 못 한 인증 문구는 정체 경로에 남는다(막지 않는다)', () => {
+  const screen = '■ authentication failed';
+  const {alerts} = run([screen, screen, screen], 2);
+  assert.equal(alerts.flat().some(a => a.kind === '인증'), false, '즉시 경보 아님');
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true, '기존 정체 경로로 감');
+});
+
+// 2라운드(재검수 exec-47415105) 재현 4종: 즉시 경보 0건이어야 한다(정체 경로가 받는다).
+const R2 = {
+  codex_tool_no_api_key: `• Ran rg -n "No API key" src\n  └ pattern: /No API key/iu\n  └ src/x.mjs:12: throw new Error("No API key")\n\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  indented_explanation: `• 호출 제한 설명:\n  - 429 Too Many Requests: 호출 제한을 뜻합니다.\n  - stream error: 연결 끊김을 뜻합니다.\n\n${COMPOSER}`,
+  recovered_legacy: `• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n  └ Stream disconnected before completion\n• 연결이 복구되어 작업을 이어갑니다.\n\n• Working (1m 00s • esc to interrupt)\n\n${COMPOSER}`,
+  auth_paragraph_quote: `• 다음은 인증 오류 화면의 예시입니다:\n\n■ authentication failed\n\n${COMPOSER}`,
+};
+for (const [name, screen] of Object.entries(R2)) {
+  test(`2라운드 ${name}: 즉시 경보 0건`, () => {
+    assert.equal(screenDisconnects(screen).size, 0);
+    const {alerts} = run([screen, screen, screen]);
+    assert.deepEqual(alerts.flat().filter(a => ['끊김', '설정', '인증', '한도'].includes(a.kind)), []);
+  });
+}
+
+test('2라운드: 일하는 표시가 아래에 계속 보이는 화면과 평범한 도구 결과 줄(들여쓴 └)은 즉시 경보 대신 정체 경로로 간다', () => {
+  const screen = R2.codex_tool_no_api_key.replace('• Working (1m 00s • esc to interrupt)', '• Working (5m 00s • esc to interrupt)');
+  const fixed = Array(4).fill(screen);
+  const {alerts} = run(fixed, 2);
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true, '시계가 같으면 기존 정체 경로');
+  assert.equal(alerts.flat().some(a => ['설정', '한도', '끊김', '인증'].includes(a.kind)), false);
+});
+
+test('위쪽 소개 문단 제외는 오류 표시 머리줄에만 적용하고, 소개 없는 실제 오류와 재연결 상태 줄은 그대로 읽는다', () => {
+  assert.equal(screenDisconnects(R2.auth_paragraph_quote).size, 0);
+  assert.equal(screenDisconnects(`• 앞선 응답입니다.\n\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n  └ Stream disconnected before completion\n\n${COMPOSER}`).size > 0, true);
+  assert.equal(screenDisconnects(`  └ 이전 도구 출력\n\n■ authentication failed\n\n${COMPOSER}`).size, 1);
+});
+
+// ---- 3라운드: 일하는 중 거부는 넓게(아래 12줄 어디든 낱말), 즉시 경보는 좁게 ----
+const withClock = (n, extra) => [
+  'old output', `  └ Exceeded retry limit, last status: 429 Too Many Requests`, ...(extra ? [extra] : []),
+  `• Working (${n}m 00s • esc to interrupt)`, '', COMPOSER].join('\n');
+
+test('F1: 같은 429 줄이 남은 채 Working 시계만 늘어나는 화면은 (a) 일하는 중이 아니고 정체 후보가 된다(즉시 경보는 0)', () => {
+  const screens = Array.from({length: 8}, (_, i) => withClock(i + 1));
+  const {alerts, states} = run(screens, 2);
+  assert.equal(states.get('kadan-w').workingMoving, false);
+  assert.equal(alerts.flat().filter(a => ['끊김', '설정', '인증', '한도'].includes(a.kind)).length, 0, '넓은 검사는 즉시 경보를 만들지 않는다');
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true, '정체 경로(감시AI)가 받는다');
+});
+
+test('F1: 오류 낱말이 없는 정상 일하는 화면은 계속 (a)이고, 낱말이 아래 12줄 밖이면 영향 없다', () => {
+  const clean = n => `• Working (${n}m 00s • esc to interrupt)\n\n${COMPOSER}`;
+  const {alerts, states} = run(Array.from({length: 8}, (_, i) => clean(i + 1)), 2);
+  assert.equal(states.get('kadan-w').workingMoving, true);
+  assert.equal(alerts.flat().some(a => a.kind === '정체'), false);
+  const far = n => ['429 Too Many Requests', ...Array(14).fill('줄'), clean(n)].join('\n');
+  assert.equal(run(Array.from({length: 4}, (_, i) => far(i + 1)), 2).states.get('kadan-w').workingMoving, true);
+});
+
+test('F1: 원래 C2 모양(크롤 화면의 429 줄 + 맨 아래 Working)도 정체 경로에 남는다', () => {
+  const crawl = n => ['이전 출력', '  └ Exceeded retry limit, last status: 429 Too Many Requests', ...Array(5).fill('진행 줄'), `• Working (${n}m 00s • esc to interrupt)`].join('\n');
+  const {alerts} = run(Array.from({length: 6}, (_, i) => crawl(i + 1)), 2);
+  assert.equal(alerts.at(-1).some(a => a.kind === '정체'), true);
+});
+
+test('F1: #187 하이브리드는 그대로 끊김 경보로 간다', () => {
+  const only = `• Reconnecting... (14h 04m 30s • esc to interrupt)\n\n${COMPOSER}`;
+  assert.equal(run([only, only], 2).alerts[0].some(a => a.kind === '끊김'), true);
+});
+
+test('F2: 소개 문단과 오류 예제 사이 빈 줄이 1·2·3개여도, 장식 줄이 끼어도 예시로 보고 읽지 않는다', () => {
+  for (const gap of ['\n', '\n\n', '\n\n\n', '\n──────────\n\n']) {
+    const screen = `• 다음은 인증 오류 화면의 예시입니다:\n${gap}■ authentication failed\n\n${COMPOSER}`;
+    assert.equal(screenDisconnects(screen).size, 0, JSON.stringify(gap));
+    assert.deepEqual(run([screen, screen]).alerts.flat().filter(a => a.kind === '인증'), []);
+  }
+});
