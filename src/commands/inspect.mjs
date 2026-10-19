@@ -18,7 +18,7 @@ export function cmdRead(argv, flags) {
     die("--lines는 1 이상의 정수여야 한다");
   }
   const output = tailLines(
-    stripAnsi(normalizeFloorRead(floor.read(session)).text),
+    stripAnsi(normalizeFloorRead((floor.readView ?? floor.read).call(floor, session)).text),
     lines
   );
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
