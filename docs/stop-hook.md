@@ -93,6 +93,22 @@ claude 2.1.302에는 설정 경로를 주는 환경 변수가 없다. `CLAUDE_CO
 
 claude 설정 파일이 있는 기계(= 이 빠른 길을 켠 기계)에서만, codex 훅이 `trusted`가 아니면 감시기가 사용자(`@user`)에게 `훅신뢰` 경보를 낸다(상태가 같으면 한 번). 상태: `no-hooks-file`·`unreadable`·`not-installed`·`other-path`(다른 체크아웃 경로의 훅만 있음)·`untrusted`·`unknown`(config.toml 표기를 해석할 수 없거나 명령을 안전하게 인용할 수 없음 — 미신뢰로 단정하지 않고 문구를 구분한다). `[hooks.state]` 헤더는 큰따옴표·작은따옴표 키, 점 주변 공백, 줄 끝 주석을 같은 키로 읽는다. 읽기만 하며 `trusted_hash`를 쓰거나 설정 내용을 기록하지 않는다.
 
+## 압축 뒤 현재 카드 재안내 (2026-10-19)
+
+Why: 대화가 압축되면 현재 실행 주소가 대체 대화에서 빠져 작업자가 규칙 수락 답변만 하고 멈춘 사고(retire_ooo, exec-2ef4e2fc 실측). 새 훅 등록 없이 기존 Stop 훅이 압축 직후 첫 응답에서 주소를 한 번 알린다.
+
+`src/stop-hook-context.mjs`의 `compactReminder`가 아래를 **모두** 만족할 때만 `{"decision":"block","reason":"…`kadan card show <저장소/실행ID>`…"}`를 출력한다(종료 0). 어느 하나라도 실패·모호하면 출력 없이 통과한다.
+
+1. `KADAN_ROLE`이 있다(개인 실행기는 여기서 끝). 가장 먼저 본다.
+2. `stop_hook_active`가 true가 아니다.
+3. 이번 응답에 DONE 마커가 없다.
+4. `transcript_path`(절대경로) 끝 256KB에서 마지막 압축 경계를 읽었다 — claude `system/compact_boundary`(uuid), codex `compacted`(window_id) — 그리고 30분 안이다(훅을 처음 켠 세션의 옛 압축 제외).
+5. 그 경계로 아직 안내한 적이 없다: `$KADAN_HOME/stop-hook/compact-reminders/<역할·세션·경계 지문>.json`.
+6. 이 역할의 미완료 실행이 `buildWatchScope` 기준으로 **정확히 하나**다(질문 대기·닫힌 업무·이전 세대는 그 함수가 뺀다). 원장 읽기 대기는 1초(`KADAN_BUSY_TIMEOUT_MS`, 기본 15초)다.
+7. 위 파일을 배타적으로(`wx`) 만들었다. 실패·경합이면 보내지 않는다.
+
+원장에는 쓰지 않는다. 한계: "압축 직후 첫 턴"은 경계당 1회 선점과 30분 신선도로 근사한다(경계 뒤 첫 Stop 여부를 직접 세지 않는다). 상위 감독 역할 제외는 하지 않는다(parents 없이 계산). 감시 우편 대비책은 이 변경에 없다. 실제 압축 뒤 모델이 `card show`를 실행하는 종단 시험은 하지 않았다. 시험: `tests/stop-hook-context.test.mjs`.
+
 ## 실측 요약과 한계
 
 - codex 인증 관문 [실측]: 격리 `CODEX_HOME`에 `config.toml`만 두고(인증 파일 복사 없음) 최상단 `model_provider = "ocxlocal"` + `[model_providers.ocxlocal]`(`base_url`=ocx 로컬 프록시, `wire_api="responses"`, `requires_openai_auth=false`)로 대화형 TUI가 로그인 화면 없이 떴다. `model_provider`를 `[tui]` 아래에 두면 무시된다.

@@ -48,7 +48,7 @@ export function openDatabase(home,{readOnly=false}={}){
  const DB=driver(),db=new DB(file,{readOnly});
  try{
   // 쓰기 대기 한도. 부하가 높으면 짧은 쓰기도 CPU를 기다리느라 늦어진다(2026-09-24 부하 110~217에서 5초 초과 실패).
-  db.exec('PRAGMA busy_timeout=15000; PRAGMA foreign_keys=ON;');
+  db.exec(`PRAGMA busy_timeout=${Number(process.env.KADAN_BUSY_TIMEOUT_MS)||15000}; PRAGMA foreign_keys=ON;`); // Stop 훅은 환경값으로 짧게 줄인다
   if(db.prepare('PRAGMA application_id').get().application_id!==1262767153||db.prepare('PRAGMA user_version').get().user_version!==1)throw new Error('지원하지 않는 SQLite 원본/버전');
   if(!readOnly){db.exec('PRAGMA synchronous=FULL;');if(db.prepare('PRAGMA journal_mode').get().journal_mode!=='wal')throw new Error('SQLite WAL 설정 확인 필요');}
   return db;
