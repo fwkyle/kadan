@@ -1,5 +1,6 @@
 import {findDoneMarkers} from './done-marker.mjs';
 import {securityFilterNotice} from './watch-security-filter.mjs';
+import { WORKER_PHRASES, WORKER_SIGNATURES, phraseKinds, phraseOfLine } from "./watch-stop-phrases.mjs";
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -19,29 +20,20 @@ const JUDGE_VERDICTS = new Set([
   "죽음",
   "모름",
 ]);
-// 옛 사고표(super-conductor execution-error-cases E1·E2·E5)대로 처방이 다른 세 갈래를
-// 낱말로 오류를 분류한다. 최종 429의 제한 재개는 watch-rate-limit.mjs가
-// 2026-09-10 사용자 승인 범위에서 처리하며 나머지는 기존 알림 경로를 유지한다.
-const DISCONNECT_KINDS = [
-  { kind: "한도", pattern: /429 Too Many Requests|exceeded retry limit|rate limit/iu },
-  { kind: "설정", pattern: /No API key/iu },
-  {
-    kind: "끊김",
-    pattern: /stream error|stream disconnected|502 Bad Gateway|getaddrinfo ENOTFOUND|Provider unreachable/iu,
-  },
-];
-const DISCONNECT_SIGNATURES = new RegExp(
-  DISCONNECT_KINDS.map(({ pattern }) => pattern.source).join("|"),
-  "giu"
-);
-export const DISCONNECT_ALERT_KINDS = DISCONNECT_KINDS.map(({ kind }) => kind);
+// 끊김·한도·설정·인증 낱말 판정은 watch-stop-phrases.mjs의 단일 목록이 원본이다(감독 감시와 같은 목록).
+// 최종 429의 제한 재개는 watch-rate-limit.mjs가 2026-09-10 사용자 승인 범위에서 처리하며 나머지는 기존 알림 경로를 유지한다.
+const DISCONNECT_SIGNATURES = WORKER_SIGNATURES;
+export const DISCONNECT_ALERT_KINDS = phraseKinds();
 
 export function disconnectKind(line) {
-  for (const { kind, pattern } of DISCONNECT_KINDS) {
-    if (pattern.test(String(line ?? ""))) return kind;
-  }
-  return "끊김";
+  return phraseOfLine(line)?.kind ?? "끊김";
 }
+
+const phraseRank = (line) => WORKER_PHRASES.indexOf(phraseOfLine(line));
+// 줄 키: 시계·횟수 숫자만 바뀌는 줄(`Reconnecting... 2/5 (9m 34s …)`)이 주기마다 새 줄로 보이지 않게 숫자를 지운 모양으로 센다.
+const lineKey = (match, line) => `${match.toLowerCase()}|${line.trim().replace(/\d+/gu, "#")}`;
+// 지금 그려진 상태 줄(live)은 감시기가 처음 본 주기에도 바로 경보한다. 스크롤백 줄은 기준선으로만 삼는다.
+const isLiveLine = (line) => phraseOfLine(line)?.live === true;
 
 // 실행기가 입력을 큐에 쌓아둔 채 처리하지 못할 때 화면에 뜨는 표시.
 // 판단은 '입력줄 자리'의 구조로 한다 — 본문에 같은 글자가 있어도 걸리지 않게
@@ -113,7 +105,7 @@ export function screenDisconnects(screenText) {
   for (const line of lastScreenLines(screenText)) {
     DISCONNECT_SIGNATURES.lastIndex = 0;
     for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
-      found.set(`${match[0].toLowerCase()}|${line.trim()}`, line.trim());
+      found.set(lineKey(match[0], line), line.trim());
     }
   }
   return found;
@@ -129,7 +121,7 @@ function screenDisconnectCounts(screenText) {
   for (const line of screenText.split("\n")) {
     DISCONNECT_SIGNATURES.lastIndex = 0;
     for (const match of line.matchAll(DISCONNECT_SIGNATURES)) {
-      const key = `${match[0].toLowerCase()}|${line.trim()}`;
+      const key = lineKey(match[0], line);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
@@ -224,16 +216,25 @@ export function assessRoles(
       previous?.disconnectCounts ?? [...previousDisconnects.keys()].map((key) => [key, 1])
     );
     const disconnectBaseline = alive && previous?.alive === true;
-    const freshDisconnectKeys = disconnectBaseline
-      ? [...disconnects.keys()].filter(
-          (key) => (disconnectCounts.get(key) ?? 0) > (previousCounts.get(key) ?? 0)
-        )
+    const freshDisconnectKeys = alive
+      ? [...disconnects.entries()]
+          .filter(([key, line]) =>
+            isLiveLine(line) ||
+            (disconnectBaseline && (disconnectCounts.get(key) ?? 0) > (previousCounts.get(key) ?? 0)))
+          // 한 화면에 여러 줄이 걸리면 목록 앞쪽(한도·설정·인증)이 먼저다. Reconnecting 줄 아래의 429가 끊김으로 가려지지 않게.
+          .sort(([, a], [, b]) => phraseRank(a) - phraseRank(b))
+          .map(([key]) => key)
       : [];
     const previousActiveDisconnect = previous?.activeDisconnect ?? null;
+    // 이미 열린 경보는 유지하되, 목록에서 더 앞선(더 강한) 새 줄이 생기면 그쪽으로 바꾼다(Reconnecting 중 429 등).
+    const strongerFresh = freshDisconnectKeys.find(
+      (key) => !previousActiveDisconnect || !disconnects.has(previousActiveDisconnect) ||
+        phraseRank(disconnects.get(key)) < phraseRank(disconnects.get(previousActiveDisconnect))
+    );
     const activeDisconnect =
-      previousActiveDisconnect && disconnects.has(previousActiveDisconnect)
+      previousActiveDisconnect && disconnects.has(previousActiveDisconnect) && !strongerFresh
         ? previousActiveDisconnect
-        : freshDisconnectKeys[0] ?? null;
+        : strongerFresh ?? null;
     // 실행기가 codex일 때만 본다(kimi 등을 codex 경유로 띄워도 harness는 codex). 모르거나 claude면 보지 않는다.
     const securityFilter = alive && /^(?:kadan-)?codex$/iu.test(String(current.harness ?? ""))
       ? securityFilterNotice(current.screen)
