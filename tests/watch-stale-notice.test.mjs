@@ -239,3 +239,36 @@ test('경계: 10/19 새 발령 직후 현재 실행은 지금 막힘으로 남�
     send('cur', 'impl-3', '2026-10-19T03:58:00Z')]);
   assert.equal(bucketOf(cs, 'cur'), 'stuck');
 });
+
+test('재안내(R2-F1): 세션이 사라진 옛 실행도 대시보드와 같은 생존 근거로 재안내 대상이 된다', () => {
+  const {card} = mk();
+  const a = card('orph-a', '작업자-9', {work: 'w1'}), b = card('orph-b', '작업자-9', {work: 'w2'});
+  const entries = [send('orph-a', '작업자-9', '2026-10-19T05:00:00Z'), send('orph-b', '작업자-9', '2026-10-19T05:30:00Z')];
+  const dash = buildCardCenter({cards: [a, b], entries, tree: [{roles: [{role: '작업자-9', life: {state: 'absent'}}]}], runtimeKnown: true, now: NOW}).cards;
+  assert.equal(dash.find(c => c.id === 'orph-a').displayState, 'orphaned');
+  assert.equal(bucketOf(dash, 'orph-a'), 'stale');
+  const plan = planStaleNotices({cards: [a, b], entries, now: NOW, liveSessions: new Set()});
+  assert.deepEqual(plan.flatMap(p => p.keys), ['repo/orph-a']);
+  // 세션이 살아 있으면 둘 다 아니다
+  assert.deepEqual(planStaleNotices({cards: [a, b], entries, now: NOW, liveSessions: new Set(['kadan-작업자-9'])}), []);
+  // 생존을 모르면(관찰 실패) 보내지 않는다
+  assert.deepEqual(planStaleNotices({cards: [a, b], entries, now: NOW}), []);
+});
+
+test('재안내(R2-F2): 보류 기록이 실패하면 held가 아니라 실패로 알리고 다음 훑기에 기록을 다시 쓰며, 불확실 시도는 다시 보내지 않는다', () => {
+  const {cards, entries} = setup();
+  const held = Object.assign(new Error('입력 중'), {delivery: 'not-sent', code: 'KADAN_HUMAN_ACTIVE'});
+  const log = [], sent = [], pending = [];
+  let failHeld = true;
+  const record = e => { if (e.held && failHeld) throw new Error('잠금'); log.push(e); };
+  const first = runStaleNotices({cards, entries, now: NOW, record, pendingHeld: pending, send: () => { throw held; }});
+  assert.deepEqual(first, {sent: 0, unknownRecipient: 0, failed: 2, held: 0});
+  assert.equal(pending.length, 2);
+  failHeld = false;
+  const second = runStaleNotices({cards, entries: [...entries, ...log], now: NOW, record, pendingHeld: pending, send: r => sent.push(r)});
+  assert.equal(second.sent, 2);
+  assert.equal(pending.length, 0);
+  // 재시작(pendingHeld 소실): 시도만 남은 실행은 다시 보내지 않는다(한계)
+  const attemptOnly = log.filter(e => e.attempt);
+  assert.equal(planStaleNotices({cards, entries: [...entries, ...attemptOnly], now: NOW}).length, 0);
+});

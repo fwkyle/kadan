@@ -212,6 +212,7 @@ export async function runWatch({
   // 감독 본인에게 보낼 놀고 있음 1단 알림 중 사람이 그 창에서 입력 중이라 미룬 것. 경보가 열려 있는 동안 다음 주기에 다시 시도한다.
   const pendingNudges = new Map();
   let lastStaleNoticeAt = 0;
+  const pendingStaleHeld = [];
   let hierarchyHash = null;
   let scopeSignature = null;
   const queuedAI = new Map();
@@ -681,7 +682,7 @@ export async function runWatch({
     if (cards && !observationError && !cardError && cycleAt - lastStaleNoticeAt >= STALE_NOTICE_EVERY_MS) {
       lastStaleNoticeAt = cycleAt;
       try {
-        const out = runStaleNotices({cards, entries: readEntries(), works, now: cycleAt, record,
+        const out = runStaleNotices({cards, entries: readEntries(), works, now: cycleAt, record, liveSessions: roles.liveSessions, pendingHeld: pendingStaleHeld,
           send: (role, message) => (sendNudge ?? sendAlert)(role, message)});
         if (out.sent || out.held || out.failed || out.unknownRecipient) {
           print(`[watch ${clockTime(cycleAt)}] 오래된 미확정 재안내: 보냄 ${out.sent} · 미룸 ${out.held} · 실패 ${out.failed} · 받는 쪽 모름 ${out.unknownRecipient}`);

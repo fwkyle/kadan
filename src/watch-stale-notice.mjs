@@ -33,9 +33,15 @@ export function noticeRecipient(card, works) {
   return owner || null;
 }
 
-export function planStaleNotices({cards, entries, works = [], now = Date.now()}) {
+// liveSessions: 감시기가 이번 훑기에 관찰한 살아 있는 역할 세션(kadan-<역할>). 대시보드와 같은 생존 근거다.
+// null이면 생존을 모르는 것으로 보고 세션 소실(orphaned)은 판정하지 않는다(확실하지 않으면 보내지 않는다).
+export function planStaleNotices({cards, entries, works = [], now = Date.now(), liveSessions = null}) {
+  const known = liveSessions != null;
+  const tree = known ? [{roles: [...new Set(cards.map(c => c.role).filter(Boolean))].map(role => ({
+    role, life: {state: liveSessions.has(`kadan-${role}`) ? 'alive' : 'absent', pidState: 'match'},
+  }))}] : [];
   const center = buildCardCenter({
-    cards: cards.map(c => ({...c, history: c.history ?? []})), entries, tree: [], runtimeKnown: false, now,
+    cards: cards.map(c => ({...c, history: c.history ?? []})), entries, tree, runtimeKnown: known, now,
   }).cards;
   const done = noticedKeys(entries);
   const groups = new Map();
@@ -75,9 +81,15 @@ export function noticeMessage(list, now = Date.now()) {
 // 한 번 훑는다. 보내기 전에 시도를 원장에 남기고(남기지 못하면 보내지 않는다), 보낸 뒤 결과를 덧붙인다.
 // 사람이 입력 중이라 미룬 것(알림 보류)은 시도를 거두는 held 기록을 남겨 다음 훑기에 다시 보낸다.
 // 보낸 뒤 결과 기록이 실패해도 시도 기록이 있어 다시 보내지 않는다.
-export function runStaleNotices({cards, entries, works, now = Date.now(), send, record}) {
+// held 기록이 실패하면 실제로는 안 보냈는데 시도만 남는다. 그 기록은 pendingHeld에 쥐고 다음 훑기 첫머리에 다시 쓴다.
+// 감시기를 다시 켜면 pendingHeld가 사라진다(한계). 그 경우 그 실행은 평생 제외로 남는다.
+export function runStaleNotices({cards, entries, works, now = Date.now(), send, record, liveSessions = null, pendingHeld = []}) {
   const result = {sent: 0, unknownRecipient: 0, failed: 0, held: 0};
-  for (const plan of planStaleNotices({cards, entries, works, now})) {
+  let current = entries;
+  for (const rec of pendingHeld.splice(0)) {
+    try { record(rec); current = [...current, rec]; } catch { pendingHeld.push(rec); }
+  }
+  for (const plan of planStaleNotices({cards, entries: current, works, now, liveSessions})) {
     const base = {
       kind: 'alert', by: 'watch', source: 'stale-notice', alertKind: STALE_NOTICE_KIND, level: 'INFO',
       recipient: plan.recipient, executionKeys: plan.keys, resolved: true,
@@ -92,8 +104,9 @@ export function runStaleNotices({cards, entries, works, now = Date.now(), send, 
     try { send(plan.recipient, plan.message); result.sent++; }
     catch (error) {
       if (isNotificationHold(error)) {
-        result.held++;
-        try { record({...base, delivered: false, held: true, reason: '알림 보류'}); } catch {}
+        const rec = {...base, delivered: false, held: true, reason: '알림 보류'};
+        try { record(rec); result.held++; }
+        catch { pendingHeld.push(rec); result.failed++; }
         continue;
       }
       result.failed++;
