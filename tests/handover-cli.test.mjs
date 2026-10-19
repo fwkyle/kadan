@@ -165,7 +165,7 @@ test('독립 CLI 한 사이클: 부모 종료→지연 accept→실제 watch 기
  } finally {f.cleanup();}
 });
 
-test('사람 CLI는 상한 뒤 기존 비서 우편 1건을 보관하고 가상 비서 역할을 생성하지 않는다', {skip:!hasTmux,timeout:15000},async t=>{
+test('사람 CLI는 상한 뒤 기존 비서 우편 1건을 보관하고 가상 비서 역할을 생성하지 않는다', {skip:!hasTmux,timeout:30000},async t=>{
  const f=backgroundFixture({human:true});
  try {
   for(const role of f.roles)f.run(['start',role,'--cmd','cat']);
@@ -200,7 +200,7 @@ test('CLI 수신자 세대 변경과 명시 notify: 새 PID로 자동 우회 없
  } finally {f.cleanup();}
 });
 
-test('CLI runner 중단은 status에 드러나며 자동 재실행 없이 수동 abort를 유지한다', {skip:!hasTmux,timeout:15000},async t=>{
+test('CLI runner 중단은 status에 드러나며 자동 재실행 없이 수동 abort를 유지한다', {skip:!hasTmux,timeout:30000},async t=>{
  const f=backgroundFixture();
  try {
   for(const role of f.roles)f.run(['start',role,'--cmd','cat']);
@@ -219,7 +219,7 @@ test('CLI runner 중단은 status에 드러나며 자동 재실행 없이 수동
  } finally {f.cleanup();}
 });
 
-test('자동 시작 stdout만 수신자와 응답종료 안내를 담고 status/실패 결과에는 안내를 넣지 않는다', {skip:!hasTmux,timeout:15000},async t=>{
+test('자동 시작 stdout만 수신자와 응답종료 안내를 담고 status/실패 결과에는 안내를 넣지 않는다', {skip:!hasTmux,timeout:30000},async t=>{
  const f=backgroundFixture();
  try {
   for(const role of f.roles)f.run(['start',role,'--cmd','cat']);

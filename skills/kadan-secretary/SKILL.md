@@ -166,10 +166,10 @@ description: "카단 판·역할에 대한 질문, 현황 확인, 지시 전달�
 끝낸다. **승인 범위를 넓게 읽지 않는다 — "계속 진행해"는 설계 변경 승인이 아니다**
 (사고 08-31 card-26).
 
-## 내 문맥이 찼을 때
+## 내 대화가 길어졌을 때
 
-기준·순서·무상태 인계는 `../kadan-super/references/handover.md` 하나다. 비서는 보통
-claude 계열이라 교대 대상은 대개 비서 자신이고, 인계에 사용자의 현재 지시를 더한다.
+대화 용량 %만으로 교대하지 않는다. 기준·순서·무상태 인계는 `../kadan-super/references/handover.md` 하나다.
+실제 압축·응답 장애로 교대하게 되면 인계에 사용자의 현재 지시를 더한다.
 
 ## 참조 지도
 
@@ -178,7 +178,7 @@ claude 계열이라 교대 대상은 대개 비서 자신이고, 인계에 사�
 | `references/ask-and-answer.md` | 사용자의 질문에 답하기 전 |
 | `references/relay.md` | 사용자의 요청을 판에 발송하기 전 |
 | `../kadan-conductor/references/card-template.md` | 명시적으로 카드 작성을 맡았을 때 |
-| `../kadan-super/references/handover.md` | 문맥 80% 부근 |
+| `../kadan-super/references/handover.md` | 교대 판단(실제 압축·응답 장애) |
 | `../kadan-super/references/scars.md` | `(사고 MM-DD)` 꼬리표의 사연 |
 
 옛 사고 원문은 관리자 개인 스킬 저장소에 있고 요약은 `../kadan-super/references/scars.md`다. 이 스킬로 복사하지 않는다.
