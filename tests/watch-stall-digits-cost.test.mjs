@@ -92,9 +92,23 @@ test('C: 창 밖으로 나갔던 옛 429 줄이 다시 그리며 창 안(13→12
   assert.deepEqual(limitAlerts(r), []);
 });
 
-test('C2: 같은 글의 새 429 줄이 아래에 새로 찍히면 한도 경보가 난다', async () => {
+// PR #200: 즉시 경보는 '현재 오류 덩어리'(마지막 빈 입력창 위 오류 머리줄 덩어리)에서만 난다. 일하는 표시가 아래에 계속 보이는
+// 크롤 화면의 429 줄은 더 이상 한 줄 낱말로 읽지 않는다(그 화면은 정체 경로가 맡는다). 이 시험의 뜻 — 같은 글의 새 429가 새로 찍히면
+// 경보 — 은 새 오류 덩어리(재연결 머리줄 + 429 줄 + 빈 입력창)가 나타나는 모양으로 옮겼다.
+test('C2: 같은 글의 새 429가 현재 오류 덩어리로 새로 나타나면 한도 경보가 난다', async () => {
+  const withBlock = m => ['이전 출력 ' + lt(m), old429, '• Reconnecting... ' + (m % 5 + 1) + '/5', old429, '', '› Ask Codex to do anything'].join('\n');
   const r = await simulate({minutes: 8, cards: [card('t-c2')], extraEntries: sendOf('t-c2'),
-    screen: (s, m) => s === 'kadan-t-작업자' ? crawl(m, 12, m < 3 ? [] : [old429]) : 'healthy'});
+    screen: (s, m) => s === 'kadan-t-작업자' ? (m < 3 ? crawl(m, 12) : withBlock(m)) : 'healthy'});
   assert.equal(limitAlerts(r).length, 1);
   assert.equal(limitAlerts(r)[0].minute, 3);
+});
+
+// PR #200 3라운드(검수 F1): 429 줄이 화면에 남은 채 Working 시계만 늘어나는 화면을 130분 돌린다. 예전에는 일하는 중으로 묻혀 오류 경보·정체 AI가 0건이었다.
+test('F1: 429 줄이 남은 채 시계만 늘어나는 화면 130분 — 일하는 중으로 묻히지 않고 정체 AI(source stall)가 불린다', async () => {
+  const r = await simulate({minutes: 130, cards: [card('t-f1')], extraEntries: sendOf('t-f1'),
+    screen: (s, m) => s === 'kadan-t-작업자'
+      ? ['이전 출력', old429, '• Working (' + m + 'm ' + (m * 7 % 60) + 's • esc to interrupt)', '', '› Ask Codex to do anything'].join('\n')
+      : 'healthy'});
+  assert.ok(r.aiCalls.some(c => c.role === 't-작업자' && c.source === 'stall'), '정체 AI가 불려야 한다');
+  assert.equal(limitAlerts(r).length, 0, '넓은 검사는 즉시 한도 경보를 만들지 않는다');
 });

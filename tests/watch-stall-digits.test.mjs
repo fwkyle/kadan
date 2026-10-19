@@ -21,7 +21,8 @@ const screenAt = clock => [
   '  ? for shortcuts                                                       ⚠ 2 warnings · f2 to view',
 ].join('\n');
 
-const quiet = screen => screen.replace('Exceeded retry limit, last status: 429 Too Many Requests', 'Working on it');
+// 오류 낱말이 없는 장면: 한도 줄과 Reconnecting 줄 모두 일반 진행 문구로 바꾼다(Reconnecting은 이제 그 자체로 끊김 경보다).
+const quiet = screen => screen.replace('Exceeded retry limit, last status: 429 Too Many Requests', 'Working on it').replace('Reconnecting...', 'Thinking...');
 const observe = (screen, over = {}) => new Map([['kadan-worker', {
   role: 'worker', alive: true, pid: 1, expectedPid: 1, screen, digest: changeDigest(screen), ...over,
 }]]);
@@ -74,4 +75,13 @@ test('(e) DONE 마커는 숫자만 다른 줄에서도 원래 화면으로 찾�
   assert.equal(findDoneMarkers(screen).length, 1);
   assert.equal(changeDigest(screen), changeDigest(screen.replace('0123', '9999')));
   assert.equal(findDoneMarkers(screen.replace('0123', '9999')).length, 1);
+});
+
+test('(f) Reconnecting 줄이 있는 14시간 화면은 정체 20분을 기다리지 않고 첫 주기에 끊김 경보가 난다', () => {
+  const only = clock => screenAt(clock).replace('  └ Exceeded retry limit, last status: 429 Too Many Requests\n', '');
+  const {alerts, states} = run(['14h 03m 22s', '14h 04m 30s', '14h 05m 40s'].map(only));
+  assert.equal(alerts[0].some(a => a.kind === '끊김'), true, '처음 본 주기에도 경보');
+  const ids = new Set(alerts.flat().filter(a => a.kind === '끊김').map(a => a.id));
+  assert.equal(ids.size, 1, '시계만 바뀌어도 같은 경보 하나');
+  assert.equal(states.get('kadan-worker').stallCount, 0);
 });

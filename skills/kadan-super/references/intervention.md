@@ -62,13 +62,17 @@ watch의 AMBER·RED는 작업 이상을 확인할 입력 신호다. 화면·PID�
 3. 둘 다 아니면 **정상 장고**다. 고강도 모델은 도구 실행 없이 수 분간 생각만 한다.
    개입하지 않는다. 섣부른 재주입은 작업을 되돌린다.
 
+> 아래 표의 **화면 신호 낱말은 코드 목록 `src/watch-stop-phrases.mjs`(`STOP_PHRASES`)가 원본**이다. 감시기의 작업자·감독 감시가 같은 목록을 쓰며,
+> 표는 목록의 `id`를 괄호로 참조한다. 낱말을 더하거나 바꿀 때는 목록을 먼저 고치고 이 표의 처방을 맞춘다(`tests/watch-stop-phrases.test.mjs`가 어긋남을 잡는다).
+> 감시기는 목록에 걸리면 `행동`에 따라 움직인다: `auto-resume`(429 자동 재개), `alert-supervisor`(직속 감독 경보), `replace-runner`(실행기 교체 필요 — 같은 세션 재시도 금지).
+
 | 화면 신호 | 뜻 | 처방 | 하면 안 되는 것 |
 |---|---|---|---|
-| `429`, `rate limit`, `exceeded retry limit` | 호출 제한 후보 — 에이전트 실행기와 작업 중 외부 API를 구분 | 일반감독이 해당 호출만 보류·읽기 진단, 새 근거의 제한된 복구는 공통 기준 적용 | 원인 단정, 같은 근거 재호출, 새 ID 순회, 무단 계정·비용 변경 |
-| `502`, `unreachable`, `ENOTFOUND`, `stream error` | 끊김 | 재개 — SKILL.md "끊김을 만나면" 순서 | 새 카드 생성, 무한 재개 |
-| `can't be shown`, `cybersecurity`, `Trusted Access` | 안전 필터 차단 — 품질 실패가 아니라 가용성 사건 | 카드 문구에서 공격·위조·적대 어휘를 빼고 재발령. 그래도 막히면 다른 실행기로 교체를 올림 | 카드 failed 처리, 같은 문구 재시도 |
-| `oauth/token`, `Reconnecting 5/5` | 인증·세션 실패 | 하네스 장애와 실행기 장애를 나눠 확인한 뒤 교체를 올림 | 같은 세션 무한 재연결 대기 |
-| `No API key`, 모델 이름 오류 | 설정 오류 | 즉시 중단, 정확한 이름으로 다시 세우도록 올림 | 재시도 반복 |
+| `429`, `rate limit`, `exceeded retry limit` (`rate-limit-429`·`rate-limit-text`·`rate-limit-terminal`) | 호출 제한 후보 — 에이전트 실행기와 작업 중 외부 API를 구분 | 일반감독이 해당 호출만 보류·읽기 진단, 새 근거의 제한된 복구는 공통 기준 적용 | 원인 단정, 같은 근거 재호출, 새 ID 순회, 무단 계정·비용 변경 |
+| `502`, `unreachable`, `ENOTFOUND`, `stream error`, `Reconnecting...` (`bad-gateway`·`dns`·`stream-error`·`reconnecting`·`sse-timeout`·`compact-error`) | 끊김 | 재개 — SKILL.md "끊김을 만나면" 순서 | 새 카드 생성, 무한 재개 |
+| `can't be shown`, `cybersecurity`, `Trusted Access` (`security-filter`) | 안전 필터 차단 — 품질 실패가 아니라 가용성 사건 | 카드 문구에서 공격·위조·적대 어휘를 빼고 재발령. 그래도 막히면 다른 실행기로 교체를 올림 | 카드 failed 처리, 같은 문구 재시도 |
+| `oauth/token`, `Reconnecting 5/5` (`auth-token`·`reconnecting`) | 인증·세션 실패 | 하네스 장애와 실행기 장애를 나눠 확인한 뒤 교체를 올림 | 같은 세션 무한 재연결 대기 |
+| `No API key`, 모델 이름 오류 (`no-api-key`; 모델 이름 오류는 표본이 없어 목록에 아직 없음) | 설정 오류 | 즉시 중단, 정확한 이름으로 다시 세우도록 올림 | 재시도 반복 |
 | 폴더 신뢰·명령 허용 창 뒤로 출력 정지 | 사람 승인 대기 | 승인 창임을 실측 → 그 판·그 CLI에 사전 신뢰 설정 → 재기동. `dispatch-wait.md` 2단계대로 자동 통과 금지 | 무진행으로 오판, 사람이 대신 눌러주고 원인 기록 안 함 |
 | 오류 없음, 화면은 도는데 카드가 제자리 | 논리 교착 | 판 감독에게 무엇을 기다리는지 한 번 묻고 답을 원장과 대조 | 화면 활동만 보고 정상 판정 |
 | 오류 없음, 도구 실행 줄 없음, 카드 진행 정상 | 정상 장고 | 개입하지 않는다 | 재주입, 정체 상신 |

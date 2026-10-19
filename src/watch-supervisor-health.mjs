@@ -1,10 +1,11 @@
 import {mailboxLetters} from './mailbox-state.mjs';
 import {workEntries} from './handover-state.mjs';
 import {taskIdentity} from './task-identity.mjs';
+import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
-const errorPattern = /stream disconnected|stream error|idle timeout waiting for SSE|Error running remote compact task|Reconnecting\.\.\.|502 Bad Gateway|Provider unreachable|rate limit|No API key/iu;
+const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
 
 export function observationContext(role, observation, entries, cards, tasks) {
   const identity=taskIdentity(cards);
