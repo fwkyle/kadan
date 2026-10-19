@@ -16,6 +16,7 @@ const FRESH_MS = 30 * 60 * 1000; // 이보다 오래된 경계는 이미 지난 
 const LOOKUP_MS = 3000;
 const DB_WAIT_MS = '800'; // 원장 잠금 대기 상한. 기본 15초는 훅 제한시간을 넘긴다
 
+const BOUNDARY_WORD = /compacted|compact_boundary/;
 const jsonLine = line => { try { const row = JSON.parse(line); return row && typeof row === 'object' ? row : null; } catch { return null; } };
 
 // transcript 끝에서 마지막 압축 경계 하나. claude: system/compact_boundary(uuid), codex: compacted(window_id).
@@ -28,18 +29,25 @@ export function lastCompactBoundary(transcriptPath) {
     const size = fs.fstatSync(fd).size, start = Math.max(0, size - TAIL_BYTES);
     const buffer = Buffer.alloc(size - start);
     fs.readSync(fd, buffer, 0, buffer.length, start);
-    const lines = buffer.toString('utf8').split('\n');
+    const text = buffer.toString('utf8');
+    const lines = text.split('\n');
     if (start > 0) lines.shift(); // 잘린 첫 줄
+    const unfinished = !text.endsWith('\n'); // 끝에 줄바꿈이 없으면 마지막 줄은 쓰는 중일 수 있다
     let found = null;
-    for (const line of lines) {
-      const row = line ? jsonLine(line) : null;
-      if (!row) continue;
+    lines.forEach((line, index) => {
+      if (!line) return;
+      const row = jsonLine(line);
+      if (!row) {
+        // 읽을 수 없는 줄이 경계 낱말을 담았거나 쓰다 만 마지막 줄이면 마지막 경계를 확정할 수 없다 → 옛 경계로 대신하지 않는다
+        if (BOUNDARY_WORD.test(line) || (unfinished && index === lines.length - 1)) found = null;
+        return;
+      }
       const claude = row.type === 'system' && row.subtype === 'compact_boundary';
-      if (!claude && row.type !== 'compacted') continue;
+      if (!claude && row.type !== 'compacted') return;
       const id = claude ? row.uuid : (row.window_id ?? row.payload?.window_id ?? row.timestamp);
       const at = Date.parse(row.timestamp ?? row.payload?.timestamp);
       found = typeof id === 'string' && id && Number.isFinite(at) ? {id, at} : null; // 마지막 경계가 모호하면 옛 경계로 대신하지 않는다
-    }
+    });
     return found;
   } catch {
     return null;
@@ -48,29 +56,43 @@ export function lastCompactBoundary(transcriptPath) {
   }
 }
 
-// 이 역할이 지금 맡은 미완료 실행 키 목록(없으면 빈 배열). 닫힌 업무·이전 세대·`waiting` 활동은 buildWatchScope가 이미 뺀다.
+// 이 역할이 지금 맡은 미완료 실행 키 목록과 그 역할 pane의 PID(없으면 {keys: []}). 닫힌 업무·이전 세대·`waiting` 활동은 buildWatchScope가 이미 뺀다.
 // 열린 질문(우편 답 대기)이 붙은 실행도 뺀다. 우편 상태를 못 읽으면 hasOpenQuestion이 true라 빠진다(재안내하지 않는 쪽).
+// 열린 사용자 결정(감시기와 같은 DecisionStore 자료·같은 연결: 카드 또는 소속 업무)이 하나라도 있으면 통째로 비운다. 결정 저장소를 못 읽어도 비운다.
 export async function currentExecutionsOf(home, role) {
-  const [{readLedger}, {CardStore}, {WorkStore}, scope, identity, handover, status] = await Promise.all([
+  const [{readLedger}, {CardStore}, {WorkStore}, scope, identity, handover, status, {DecisionStore}] = await Promise.all([
     import('./ledger.mjs'), import('./card-store.mjs'), import('./work-store.mjs'), import('./watch-scope.mjs'),
-    import('./task-identity.mjs'), import('./handover-state.mjs'), import('./watch-status-line.mjs')]);
+    import('./task-identity.mjs'), import('./handover-state.mjs'), import('./watch-status-line.mjs'), import('./decisions.mjs')]);
   let entries = readLedger(home);
-  if (entries.some(entry => entry?.broken)) return [];
+  if (entries.some(entry => entry?.broken)) return {keys: []};
+  const launch = entries.filter(entry => entry?.role === role && (entry.kind === 'start' || entry.kind === 'stop')).at(-1);
+  const panePid = launch?.kind === 'start' && launch.floor === 'tmux' && Number.isInteger(Number(launch.panePid)) ? String(launch.panePid) : null;
   const cards = new CardStore(home).listSummaries();
-  const works = new WorkStore(home).list().map(work => handover.withEffectiveOwner(work, entries));
+  const workList = new WorkStore(home).list();
+  const works = workList.map(work => handover.withEffectiveOwner(work, entries));
   entries = identity.taskIdentity(cards).project(entries).filter(entry => !identity.taskConnectionError(entry));
-  return scope.buildWatchScope(cards, entries, new Map(), works).entries
+  const keys = scope.buildWatchScope(cards, entries, new Map(), works).entries
     .filter(entry => entry.role === role && entry.executionKey && !status.hasOpenQuestion(entries, role, entry.t))
     .map(entry => entry.executionKey);
+  if (!keys.length) return {keys};
+  const open = new DecisionStore(home).list().filter(d => d?.status === 'open'); // 읽지 못하면 던져 자식이 실패로 끝난다(빈 결과)
+  const waiting = key => open.some(d => d.card === key || d.card === key.split('/')[1]
+    || (typeof d.work === 'string' && workList.some(work => work.key === d.work && (work.executions ?? []).some(x => x.key === key))));
+  return keys.some(waiting) ? {keys: []} : {keys, panePid};
 }
 
 // 훅 안에서 원장 읽기에 시간 상한을 둔다: 동기 SQLite 호출은 중간에 끊을 수 없어 자식 프로세스로 돌려 제한시간에 죽인다.
-// 시간 초과·실패·이상한 출력은 모두 빈 배열이다(재안내 없음).
+// 시간 초과·실패·이상한 출력은 모두 빈 결과다(재안내 없음).
 export function lookupExecutions(home, role, timeoutMs = LOOKUP_MS) {
+  const none = {keys: [], panePid: null};
   const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'lookup', role],
     {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 1 << 20});
-  if (run.status !== 0) return [];
-  try { const keys = JSON.parse(run.stdout); return Array.isArray(keys) ? keys.filter(k => typeof k === 'string') : []; } catch { return []; }
+  if (run.status !== 0) return none;
+  try {
+    const found = JSON.parse(run.stdout);
+    const keys = Array.isArray(found?.keys) ? found.keys.filter(k => typeof k === 'string') : [];
+    return {keys, panePid: typeof found?.panePid === 'string' ? found.panePid : null};
+  } catch { return none; }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href && process.argv[2] === 'lookup') {
@@ -78,16 +100,49 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
   try { process.stdout.write(JSON.stringify(await currentExecutionsOf(spoolHome(), process.argv[3]))); process.exit(0); } catch { process.exit(1); }
 }
 
+// 이 훅을 부른 실행기가 그 역할의 실제 담당 세션인지(F1). 작업자가 띄운 시험용 codex·claude도 KADAN_ROLE을 물려받기 때문에
+// 이름만으로는 가를 수 없다. 원장 start의 pane PID와 훅 프로세스의 부모 사슬을 비교한다.
+// 사슬: 훅 node → (sh 감싸개) → 실행기 → pane. claude는 실행기가 곧 pane이고, codex는 실행기(vendor 바이너리)의 부모가 pane(node 실행 파일)이다.
+// 자식 CLI는 실행기와 pane 사이에 도구 셸 등이 끼거나 pane이 아닌 실행기가 부모라서 걸러진다. 조회 실패·PID 없음은 거짓(통과)이다.
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'env']);
+export function processTable(run = spawnSync) {
+  const result = run('ps', ['-axo', 'pid=,ppid=,command='], {encoding: 'utf8', timeout: 1000, maxBuffer: 16 << 20});
+  if (result.status !== 0 || typeof result.stdout !== 'string') return null;
+  const table = new Map();
+  for (const line of result.stdout.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    if (m) table.set(m[1], {ppid: m[2], command: m[3]});
+  }
+  return table;
+}
+const commandName = command => (command.trim().split(/\s+/)[0] ?? '').split('/').pop();
+export function ownsPane(table, panePid, hookPid = process.pid) {
+  if (!table || !panePid) return false;
+  let at = table.get(String(hookPid))?.ppid;
+  for (let step = 0; at && step < 8; step += 1) { // 훅 감싸개(sh 등)를 건너뛴 첫 조상이 실행기다
+    const row = table.get(at);
+    if (!row) return false;
+    if (!SHELLS.has(commandName(row.command))) {
+      const launcher = table.get(panePid);
+      return at === panePid || (row.ppid === panePid && !!launcher && commandName(launcher.command) === 'node');
+    }
+    at = row.ppid;
+  }
+  return false;
+}
+
+const ownsCurrentSession = panePid => ownsPane(processTable(), panePid); // ps는 안내할 실행이 있을 때만 한 번
+
 export const reminderText = keys => {
   const list = keys.map(key => `\`${key}\``).join(', ');
   const show = keys.map(key => `\`kadan card show ${key}\``).join(', ');
   return `대화가 압축됐다. 현재 맡은 실행은 ${list}다. ${show}로 최신 범위·보류·결과 경로를 다시 읽고 이어 하라. 새 작업을 만들지 말고, 이미 완료했거나 답 대기이면 그 상태를 확인하라.`;
 };
 
-// 재안내할 글을 돌려준다(없으면 null). 순서: 역할 → 훅 재호출 아님 → 압축 경계 → 경계당 1회 선점(결과와 무관) → 마커 없음 → 신선함 → 현재 실행.
+// 재안내할 글을 돌려준다(없으면 null). 순서: 역할 → 훅 재호출 아님 → 압축 경계 → 경계당 1회 선점(결과와 무관) → 마커 없음 → 신선함 → 현재 실행(답 대기 제외) → 담당 세션.
 // 새 경계를 처음 본 Stop에서 결과와 상관없이 기회를 소모한다(감독 결정): 마커·답 대기·대상 없음이어도 같은 압축에 두 번째 기회는 없다.
 // 값싼 확인을 먼저 하고 원장 읽기는 압축 직후에만 한다. lookup은 시험용 주입 자리다.
-export async function compactReminder(raw, env = process.env, {lookup = lookupExecutions, now = () => Date.now()} = {}) {
+export async function compactReminder(raw, env = process.env, {lookup = lookupExecutions, now = () => Date.now(), owns = ownsCurrentSession} = {}) {
   try {
     const role = env.KADAN_ROLE;
     if (!role) return null;
@@ -104,8 +159,9 @@ export async function compactReminder(raw, env = process.env, {lookup = lookupEx
     const message = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '';
     if (findDoneMarkers(message).length) return null; // 완료를 낸 응답이다
     if (now() - boundary.at > FRESH_MS || boundary.at - now() > 60 * 1000) return null; // 훅을 처음 켠 세션의 옛 압축
-    const keys = await lookup(home, role);
-    return Array.isArray(keys) && keys.length ? reminderText(keys) : null;
+    const {keys, panePid} = (await lookup(home, role)) ?? {};
+    if (!Array.isArray(keys) || !keys.length) return null;
+    return owns(panePid) ? reminderText(keys) : null; // 담당 세션임을 확인하지 못하면(자식 CLI·herdr·PID 없음·조회 실패) 통과
   } catch {
     return null;
   }

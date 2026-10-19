@@ -21,10 +21,10 @@ export function scenario(steps) {
   work = works.change("r/w1", "execute", { phase: "implementation", round: 1, title: "실행", body: "본문" },
     { revision: work.revision, by: "사람", note: "발령" });
   const execution = work.executions[0].key;
-  const start = (role) => { sleep(); appendLedger({ kind: "start", role, session: `kadan-${role}`, cmd: "claude --model sonnet" }, home); };
+  const start = (role, fields = {}) => { sleep(); appendLedger({ kind: "start", role, session: `kadan-${role}`, cmd: "claude --model sonnet", ...fields }, home); };
   const update = (fields) => { sleep(); work = works.change("r/w1", "update", fields, { revision: work.revision, by: "사람", note: "변경" }); };
   // 실행 발령(send)은 업무 연결 조건이다. 감독 역할이 받은 발령 하나를 둔다.
-  start("r-작업자");
+  start("r-작업자", steps.startFields); // startFields: pane 증거(floor·panePid)가 필요한 시험용
   appendLedger({ kind: "send", role: "r-작업자", taskId: execution, executionKey: execution }, home);
   steps.run({ start, update });
   const entries = readLedger(home);
