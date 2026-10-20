@@ -25,7 +25,7 @@ KADAN_ROLE=<감독> kadan senior <카드키> --question "<질문>" [--file <절�
   - `--model <모델>`만: 설정의 실행기에 그 모델. `--runner <실행기> --model <모델>`: 둘 다 지정. `--runner`만 주면 오류다.
   - 실행기는 **안전 허용 목록**(`SENIOR_SAFE_RUNNERS`, 지금 `codex`·`agy`)에 있어야 한다. 목록 밖은 호출 전에 거절하고(실행 0회), `kadan runners set senior`로 저장할 때도 같은 검사로 거절한다.
   - **codex**: `scripts/senior.sh`가 읽기 전용 샌드박스로 부른다. 카드의 저장소를 직접 읽는다.
-  - **agy (저장소를 읽지 못한다)**: 실행기 표 `exec` 틀로 부른다(설명 AI 호출과 같은 방식). 틀에 `--agent kadan-noexec`가 없으면 호출 전에 거절한다(실행 0회, 증거 폴더도 없다). 카단이 **이번 호출 폴더**(`<KADAN_HOME>/advice/<id>`)에 도구 없는 에이전트 파일(`.agents/agents/kadan-noexec/agent.md`, `tools: view_file`, `commandExecutionPolicy: off`)을 둔 뒤 그 폴더에서 부른다. 파일을 쓰지 못하면 부르지 않는다.
+  - **agy (저장소를 읽지 못한다)**: 실행기 표 `exec` 틀로 부른다(설명 AI 호출과 같은 방식). 틀에 `--agent kadan-noexec`가 없거나 묶기 문법(단순 명령, 허용 옵션만 — `--add-dir` 등은 거절)을 어기면 호출 전에 거절한다(실행 0회, 증거 폴더도 없다). 카단이 **이번 호출 폴더**(`<KADAN_HOME>/advice/<id>`)에 도구 없는 에이전트 파일(`.agents/agents/kadan-noexec/agent.md`, `tools: view_file`, `commandExecutionPolicy: off`)을 둔 뒤 그 폴더에서 부른다. 파일을 쓰지 못하면 부르지 않는다.
     - 작업 폴더가 호출 폴더라 **저장소를 스스로 읽지 않는다.** 근거는 카드 본문과 `--file` 첨부뿐이고, 프롬프트에 그 사실을 적는다. `--add-dir`는 쓰지 않는다.
     - 프롬프트 200KB 상한과 `scrubForAI` 가림은 그대로다. 상한을 넘으면 부르지 않는다.
     - 시간 상한: 틀 안의 `--print-timeout`을 `--timeout`(기본 1800초) 값으로 바꿔 부른다. 틀의 90초가 그대로면 긴 질문이 90초에 잘린다(Argon 정상 48초). 설명 AI는 틀의 90초와 75초 상한을 그대로 쓴다.

@@ -413,7 +413,7 @@ test('F1 {prompt}는 독립 낱말일 때만 저장된다: 따옴표·글자에 
   initSettings(home, {by: 'kyle', reason: '시험', record: () => {}});
   for (const bad of ['agy --print "{prompt}"', "agy --print '{prompt}'", 'agy --print x{prompt}'])
     assert.throws(() => saveRunner(home, {runner: 'agy', table: {exec: bad}, revision: 1, by: 'kyle', reason: '시험', record: () => {}}), /독립 낱말/, bad);
-  saveRunner(home, {runner: 'agy', table: {exec: 'agy --print {prompt} --model {model}'}, revision: 1, by: 'kyle', reason: '시험', record: () => {}});
+  saveRunner(home, {runner: 'agy', table: {exec: 'agy --agent kadan-noexec --print {prompt} --model {model}'}, revision: 1, by: 'kyle', reason: '시험', record: () => {}});
 });
 
 test('F1 독립 낱말 틀에 명령 치환·백틱·작은따옴표·줄바꿈이 든 카드 글을 넣어도 실행되지 않고 원문이 그대로 전달된다', async () => {
@@ -950,11 +950,11 @@ test('8R 출처 시험: 원장에 기록된 시도 문자열은 허용 상수 �
 
 // ---- agy를 도구 없는 에이전트(kadan-noexec)로 묶기 ----
 const AGY_EXEC = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}';
-function agyWorld(exec) {
+function agyWorld(exec, key = 'agy') {
   const calls = [];
   const spawn = async (command, opts) => { calls.push({command, cwd: opts.cwd}); return {status: 0, stdout: brief, stderr: ''}; };
-  const w = world({chain: [{runner: 'agy', model: 'm'}, {runner: 'fake', model: 'ok'}], spawn,
-    extraRunners: {agy: {spawn: 'agy --model {model}', exec, execField: 'response', models: []}}});
+  const w = world({chain: [{runner: key, model: 'm'}, {runner: 'fake', model: 'ok'}], spawn,
+    extraRunners: {[key]: {spawn: 'agy --model {model}', exec, execField: 'response', models: []}}});
   return {w, calls, agyCalls: () => calls.filter(c => c.command.startsWith('agy'))};
 }
 const agentFile = w => path.join(w.ai.workDir, '.agents', 'agents', 'kadan-noexec', 'agent.md');
@@ -1007,10 +1007,53 @@ test('agy 묶기: 에이전트 파일을 쓸 수 없으면 agy를 부르지 않�
   assert.equal(row.attempts[0].result, 'template-error'); assert.equal(row.outcome, 'written');
 });
 
+test('agy 묶기(F2~F4): 문법을 어기는 틀·별칭은 agy를 0회 부르고 대체 후보로 written이 된다(원장에 틀 글자 없음)', async () => {
+  const bad = [
+    ['agy', 'agy --model {model} --print {prompt} # --agent kadan-noexec'],
+    ['agy', 'agy --model {model} --print {prompt} " x --agent kadan-noexec y "'],
+    ['agy', `${AGY_EXEC} -- --agent kadan-noexec`],
+    ['agy', AGY_EXEC.replace('--agent kadan-noexec', '--agent kadan-noexec --agent kadan-noexec')],
+    ['agy', `${AGY_EXEC} --agent=kadan-noexec`],
+    ['AGY', 'agy --model {model} --print {prompt}'],
+    ['agy', AGY_EXEC.replace('agy ', '/usr/local/bin/agy ').replace('--agent kadan-noexec ', '')],
+    ['agy', `${AGY_EXEC} --add-dir /FAKE/REPOSITORY`],
+    ['agy', 'agy --agent kadan-noexec " x --print-timeout 90s y " --print-timeout 90s --print {prompt}'],
+  ];
+  for (const [key, exec] of bad) {
+    const {w, calls, agyCalls} = agyWorld(exec, key);
+    const card = w.makeCard();
+    await enable(w);
+    w.dispatch(card, 0);
+    {const {done} = w.run(); await done;}
+    assert.equal(agyCalls().length, 0, exec);
+    assert.equal(calls.length, 1, `${exec}: 대체 후보 1회`);
+    const row = w.rows().at(-1);
+    assert.equal(row.attempts[0].result, 'template-error', exec); assert.equal(row.outcome, 'written', exec);
+    assert.ok(!JSON.stringify(row).includes('kadan-noexec y'), '원장에 틀 글자가 없다');
+    assert.equal(fs.existsSync(agentFile(w)), false, '문법에서 막히면 파일도 만들지 않는다');
+  }
+});
+
+test('agy 묶기(F1): 에이전트 경로가 링크이면 던져 agy를 0회 부르고 밖 파일은 그대로, 대체 후보로 written', async () => {
+  const {w, calls, agyCalls} = agyWorld(AGY_EXEC);
+  const card = w.makeCard();
+  await enable(w);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-f1-out-'));
+  fs.writeFileSync(path.join(outside, 'OUTSIDE'), 'OUTSIDE-ORIGINAL');
+  fs.mkdirSync(w.ai.workDir, {recursive: true});
+  fs.symlinkSync(outside, path.join(w.ai.workDir, '.agents'));
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  assert.equal(agyCalls().length, 0); assert.equal(calls.length, 1);
+  assert.equal(fs.readFileSync(path.join(outside, 'OUTSIDE'), 'utf8'), 'OUTSIDE-ORIGINAL');
+  assert.deepEqual(fs.readdirSync(outside), ['OUTSIDE']);
+  assert.equal(w.rows().at(-1).attempts[0].result, 'template-error'); assert.equal(w.rows().at(-1).outcome, 'written');
+});
+
 test('agy 묶기: 묶기 표에 없는 실행기(claude 틀 등)는 검사 없이 지나간다', () => {
   const settings = {runners: {fake: {exec: 'fake {prompt}'}}};
   assert.equal(assertExecBound(settings, 'fake'), null);
   assert.equal(bindExec(settings, 'fake', fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-bind-'))), null);
   assert.equal(assertExecBound({runners: {agy: {exec: 'agy --agent kadan-noexec --print {prompt}'}}}, 'agy').agent, 'kadan-noexec');
-  assert.throws(() => assertExecBound({runners: {agy: {exec: 'agy --agent-x kadan-noexec --print {prompt}'}}}, 'agy'), /--agent kadan-noexec가 없다/);
+  assert.throws(() => assertExecBound({runners: {agy: {exec: 'agy --agent-x kadan-noexec --print {prompt}'}}}, 'agy'), /허용하지 않는 낱말 --agent-x/);
 });

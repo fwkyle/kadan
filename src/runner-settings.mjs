@@ -10,6 +10,7 @@ import {randomUUID} from 'node:crypto';
 import {acquireDirLock} from './dir-lock.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
+import {assertExecBound} from './exec-agent.mjs';
 import {
   NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
 } from './runner-table.mjs';
@@ -303,6 +304,8 @@ export function setRunner(home, {runner, spawn, table, ...meta}) {
     if (typeof nextSpawn !== 'string' || !nextSpawn.includes('{model}')) throw new Error('실행기 틀에는 {model}이 있어야 한다 (--spawn)');
     next.runners[runner] = {...(before ?? {models: []}), spawn: nextSpawn};
     applyTable(next.runners[runner], table);
+    // 묶기 대상 실행기 행은 저장할 때도 같은 문법으로 거절한다. 이번에 쓰는 그 행만 본다(다른 행의 옛 틀 때문에 저장이 막히면 안 된다).
+    if (typeof next.runners[runner].exec === 'string') assertExecBound({runners: {[runner]: next.runners[runner]}}, runner);
     return {runner, before, after: next.runners[runner]};
   });
 }

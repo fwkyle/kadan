@@ -24,8 +24,13 @@ function fixture({body = '# 시험 카드\n\n- 열 이름을 바꾼다\n', store
   const meta = revision => ({revision, by: 'kyle', reason: '시험', record: () => {}, readCodexModels});
   initSettings(home, {by: 'kyle', reason: '시작', record: () => {}});
   setRole(home, {role: 'senior', runner: 'codex', model: 'gpt-6-sol', effort: 'high', ...meta(1)});
-  setRunner(home, {runner: 'agy', spawn: 'agy --model {model}', table: {exec: agyExec, execField: 'response'}, ...meta(2)});
+  setRunner(home, {runner: 'agy', spawn: 'agy --model {model}', table: {execField: 'response'}, ...meta(2)});
   setRunnerModel(home, {runner: 'agy', model: 'argon', efforts: '', ...meta(3)});
+  // exec 틀은 파일에 직접 둔다: 저장 API는 묶기 문법을 어긴 틀을 거절하므로, 반영 전 운영 틀(--agent 없음)은 이렇게 흉내 낸다.
+  const settingsFile = path.join(home, 'runner-settings.json');
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  settings.runners.agy.exec = agyExec;
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
   if (stored.senior2) { // 옛 설정 파일에 남은 senior2를 흉내 낸다
     const file = path.join(home, 'runner-settings.json');
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -93,7 +98,7 @@ test('허용 목록은 codex·agy이고 목록 밖 실행기는 호출 전에 �
 
 test('agy 틀에 --agent kadan-noexec가 없으면 호출 전에 거절한다(실행 0회, 증거 폴더도 없다)', async () => {
   const f = fixture();
-  await assert.rejects(f.run({runner: 'agy', model: 'argon'}), /agy 실행 틀에 --agent kadan-noexec가 없다/);
+  await assert.rejects(f.run({runner: 'agy', model: 'argon'}), /agy 실행 틀이 묶기 문법에 맞지 않는다\(--agent kadan-noexec가 없다\)/);
   assert.equal(f.calls.length, 0); assert.equal(f.advices().length, 0);
   assert.equal(fs.existsSync(path.join(f.home, 'advice')), false);
 });
@@ -123,6 +128,15 @@ test('--runner agy --model: 실행기 표 틀로 호출 폴더에서 부른다(-
   assert.equal(fs.readFileSync(path.join(r.evidencePath, 'result.txt'), 'utf8'), '결론: agy 답');
   const [entry] = f.advices();
   assert.equal(entry.source, 'flag'); assert.equal(entry.runner, 'agy'); assert.equal(entry.settingsRunner, 'codex'); assert.equal(entry.reason, 'ok');
+});
+
+test('agy 틀이 묶기 문법을 어기면(--add-dir·주석·따옴표 속 옵션) 호출 전에 거절한다(실행 0회)', async () => {
+  for (const exec of [`${BOUND} --add-dir /FAKE/REPOSITORY`, `${BOUND} # x`, 'agy --agent kadan-noexec " x --print-timeout 90s y " --print-timeout 90s --print {prompt}']) {
+    const f = fixture({agyExec: exec});
+    await assert.rejects(f.run({runner: 'agy', model: 'argon'}), /묶기 문법에 맞지 않는다/, exec);
+    assert.equal(f.calls.length, 0);
+    assert.equal(fs.existsSync(path.join(f.home, 'advice')), false, '증거 폴더도 없다');
+  }
 });
 
 test('설정의 시니어가 agy여도 지정 표시 없이 같은 exec 경로로 간다', async () => {

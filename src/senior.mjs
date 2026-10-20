@@ -93,6 +93,8 @@ async function callExec({settings, binding, value, dir, prompt, timeoutS, spawn,
   bindExec(settings, value.runner, dir);
   const timed = {...settings, runners: {...settings.runners, [value.runner]: {...settings.runners[value.runner],
     exec: withTimeout(runnerTemplate(settings, value.runner, 'exec'), binding, Math.ceil(timeoutS))}}};
+  // 실제로 돌릴 틀(시간 치환 뒤)도 같은 문법을 통과해야 부른다.
+  assertExecBound(timed, value.runner);
   const {command, stdin, env: execEnv, field} = execCommand(timed, value.runner, {model: value.model, effort: value.effort ?? '', prompt, cwd: dir});
   fs.writeFileSync(path.join(dir, 'model.txt'), `${value.model}\n`, {mode: 0o600});
   const result = await spawn(command, {input: stdin, timeout: timeoutS * 1000, cwd: dir, reportComplete: () => false, env: {...env, ...execEnv}});
