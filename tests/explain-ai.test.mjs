@@ -612,7 +612,7 @@ const wrappers = {
   edge4k: s => `${'z '.repeat(2040)}${'q'.repeat(8)}${s}${' tail'.repeat(500)}`,
   edge300: s => `${'ab '.repeat(97)}${s} tail`,
 };
-function longChunks(text) { return text.split(/\s+/).filter(c => c.length >= 20 && c !== '[가림]' && !c.includes('[가림]')); }
+function longChunks(text) { return text.split(/[\s{}[\]",]+/).filter(c => c.length >= 20 && !c.includes('[가림]')); }
 function ledgerStrings(rows) { return rows.flatMap(r => r.attempts ?? []).flatMap(a => [a.excerpt, a.stderrExcerpt]).filter(v => typeof v === 'string'); }
 
 test(`성질 시험(시드 ${PROP_SEED}, ${PROP_RUNS}회): 어떤 포장이어도 원장에 다시 읽은 발췌에 20자 이상 덩어리·비밀 8자 조각이 없다`, async () => {
@@ -657,12 +657,39 @@ test('고정 사례: 1·2라운드 검수가 낸 인코딩(이중 이스케이�
   }
 });
 
-test('진단 쓸모: 줄바꿈이 있는 봉투의 짧은 키와 오류 문구는 읽히게 남고, 공백 없는 한 줄 봉투는 통째로 가려진다', async () => {
+test('진단 쓸모: 한 줄 JSON 봉투와 줄바꿈 봉투 모두 짧은 키·숫자·오류 문구가 발췌에 읽히게 남는다', async () => {
   const env = {response: '', error: {code: 429, message: 'quota exceeded'}};
-  const {a} = await failedLedger(JSON.stringify(env, null, 1));
-  assert.match(a.excerpt, /"response": ""/);
-  assert.match(a.excerpt, /"message": "quota exceeded"/);
-  // 알려진 한계: 공백 없는 20자 이상 한 줄은 모양을 알 수 없어 통째로 가린다(규칙 그대로).
-  const flat = await failedLedger(JSON.stringify(env));
-  assert.match(flat.a.excerpt, /^\[가림\]/);
+  for (const [name, body] of [['한 줄', JSON.stringify(env)], ['줄바꿈', JSON.stringify(env, null, 1)]]) {
+    const {a} = await failedLedger(body);
+    for (const word of ['response', 'error', 'code', '429', 'message', 'quota', 'exceeded']) assert.ok(a.excerpt.includes(word), `${name}: ${word} / ${a.excerpt}`);
+    assert.doesNotMatch(a.excerpt, /가림/, name);
+  }
+  // 긴 토큰이 든 한 줄 봉투는 토큰만 가려지고 모양은 남는다.
+  const {a} = await failedLedger(JSON.stringify({response: SK, error: {code: 401}}));
+  assert.match(a.excerpt, /response/);
+  assert.match(a.excerpt, /가림/);
+  assert.doesNotMatch(a.excerpt, /sk-abc/);
+});
+
+test(`구분자(: " , {)가 섞인 비밀(시드 ${PROP_SEED + 1}, ${PROP_RUNS}회): 20자 이상 덩어리는 없고, 쪼개져 남은 8자 조각 수를 진단으로 남긴다`, async t => {
+  const rand = rng(PROP_SEED + 1);
+  const alpha = ALNUM + ':",{';
+  const names = Object.keys(wrappers);
+  let leaked = 0, delimiterSecrets = 0;
+  for (let i = 0; i < PROP_RUNS; i++) {
+    const len = 20 + Math.floor(rand() * 61);
+    const secret = Array.from({length: len}, () => alpha[Math.floor(rand() * alpha.length)]).join('');
+    const name = names[Math.floor(rand() * names.length)];
+    const out = wrappers[name](secret);
+    const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => ({status: 0, stdout: out, stderr: ''})});
+    const card = w.makeCard();
+    await enable(w);
+    w.dispatch(card, 0);
+    {const {done} = w.run(); await done;}
+    const strings = ledgerStrings(w.rows());
+    for (const text of strings) assert.deepEqual(longChunks(text), [], `#${i} ${name} ${secret}`);
+    delimiterSecrets++;
+    if (strings.some(text => { for (let k = 0; k + 8 <= secret.length; k++) if (text.includes(secret.slice(k, k + 8))) return true; return false; })) leaked++;
+  }
+  t.diagnostic(`구분자 섞인 비밀 ${delimiterSecrets}건 중 8자 이상 조각이 남은 건수: ${leaked}`);
 });
