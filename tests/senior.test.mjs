@@ -127,7 +127,7 @@ test('입력 조립은 질문·카드·첨부 순서이고 자료 구분선이 �
 
 test('실행 모델 설정: senior는 codex만, 폴백은 거절, 정책 차단은 적용', () => {
   const f = fixture();
-  assert.throws(() => setRole(f.home, {role:'senior', runner:'devin', model:'swe', ...f.meta(2)}), /시니어는 안전하게 묶을 수 있는 실행기\(codex\)만/);
+  assert.throws(() => setRole(f.home, {role:'senior', runner:'devin', model:'swe', ...f.meta(2)}), /시니어는 안전하게 묶을 수 있는 실행기\(codex, agy\)만/);
   assert.throws(() => setFallback(f.home, {role:'senior', items:[{runner:'codex', model:'gpt-6-sol', effort:'low'}], ...f.meta(2)}), /시니어는 폴백이 없다/);
   assert.equal(readSettings(f.home).revision, 2);
   blockModel(f.home, {model:'gpt-6-sol', roles:'senior', ...f.meta(2)});
@@ -211,9 +211,9 @@ test('지정 없는 호출도 설정 직접 편집·옛 advisor 키의 허용 �
     const f = fixture({senior:false});
     const file = path.join(f.home, 'runner-settings.json');
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    raw.presets[raw.activePreset].roles[key] = {runner:'agy', model:'gemini-4-argon-medium'};
+    raw.presets[raw.activePreset].roles[key] = {runner:'devin', model:'swe'};
     fs.writeFileSync(file, JSON.stringify(raw));
-    await assert.rejects(() => f.run(['qa/card-a'], {question:'바꿀까?'}, {spawn:f.spawn()}), /시니어는 안전하게 묶을 수 있는 실행기\(codex\)만/);
+    await assert.rejects(() => f.run(['qa/card-a'], {question:'바꿀까?'}, {spawn:f.spawn()}), /시니어는 안전하게 묶을 수 있는 실행기\(codex, agy\)만/);
     assert.equal(f.calls.length, 0); assert.deepEqual(f.advices(), []);
     assert.ok(!fs.existsSync(path.join(f.home, 'advice')));
   }
