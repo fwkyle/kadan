@@ -227,13 +227,42 @@ test('답 필요 우편이 최종 답 없이 걸린 업무: 슈퍼감독 알림 
   const r=await simulate({minutes:40,cards:[doneCard],works:[ownedBySub(1)],entries:[...finishedEntries,question()]});
   const toSuper=r.nudges.filter(([,role])=>role==='p-슈퍼감독');
   assert.equal(toSuper.length,1);
-  assert.match(toSuper[0][2],/본인 차례: work:repo\/w1 \(답할 질문 49edd535\)\./);
-  assert.match(toSuper[0][2],/kadan send p-감독 --reply-to <우편ID> --reply-final '답' 으로 닫는다/);
+  assert.match(toSuper[0][2],/본인 차례: work:repo\/w1 \(답할 질문 49edd535-0000-4000-8000-000000000001 ← p-감독\)\./);
+  assert.match(toSuper[0][2],/kadan send p-감독 --reply-to 49edd535-0000-4000-8000-000000000001 --reply-final '답'/);
   const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-슈퍼감독'&&!e.resolved);
-  assert.deepEqual(rec.idleItems.ownWhy,[{id:'work:repo/w1',reason:'답할 질문',mailIds:['49edd535'],asker:'p-감독'}]);
+  assert.deepEqual(rec.idleItems.ownWhy,[{id:'work:repo/w1',reason:'답할 질문',questions:[{mailId:MAIL_ID,asker:'p-감독'}]}]);
   assert.deepEqual(rec.idleItems.own,['work:repo/w1']);
   // 같은 슈퍼감독이 다시 멈추면 사용자에게 올라가는 2단 본문에도 같은 항목이 있다.
-  assert.ok(r.printed.some(l=>/30분간 화면 변화 없음.*본인 차례: work:repo\/w1 \(답할 질문 49edd535\).*→ @user/.test(l)));
+  assert.ok(r.printed.some(l=>/30분간 화면 변화 없음.*본인 차례: work:repo\/w1 \(답할 질문 49edd535-0000-4000-8000-000000000001 ← p-감독\).*→ @user/.test(l)));
+});
+
+test('동료 슈퍼감독의 질문(peerRequest)은 내 차례가 아니라 답할 질문이고 전체 우편 ID·질문자가 보인다',async()=>{
+  const hier=new Map([...parents,['q-슈퍼감독','@user']]);
+  const sts=[...hier.keys()].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0)}));
+  const id='abcdef01-0000-4000-8000-000000000001';
+  const peer={kind:'send',transport:'mailbox',mailId:id,by:'q-슈퍼감독',role:'p-슈퍼감독',expectReply:true,preview:'답 필요',t:stamp(0)};
+  const r=await simulate({minutes:20,hier,starts:sts,cards:[doneCard],works:[],entries:[...finishedEntries,peer]});
+  const toSuper=r.nudges.filter(([,role])=>role==='p-슈퍼감독');
+  assert.equal(toSuper.length,1);
+  assert.match(toSuper[0][2],new RegExp(`본인 차례: mail:${id} \\(답할 질문 ${id} ← q-슈퍼감독\\)`));
+  assert.ok(toSuper[0][2].includes(`kadan send q-슈퍼감독 --reply-to ${id} --reply-final '답'`));
+  assert.ok(!/내 차례/.test(toSuper[0][2]));
+  const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-슈퍼감독'&&!e.resolved);
+  assert.deepEqual(rec.idleItems.ownWhy,[{id:`mail:${id}`,reason:'답할 질문',questions:[{mailId:id,asker:'q-슈퍼감독'}]}]);
+});
+
+test('한 업무에 질문자가 둘이면 우편 ID마다 질문자 짝과 닫는 명령이 따로 나온다(앞 8자가 같아도 구분된다)',async()=>{
+  const hier=new Map([...parents,['p-다른감독','p-슈퍼감독']]);
+  const sts=[...hier.keys()].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0)}));
+  const id1='12345678-0000-4000-8000-000000000001',id2='12345678-0000-4000-8000-000000000002';
+  const qs=[question({mailId:id1}),question({mailId:id2,by:'p-다른감독'})];
+  const r=await simulate({minutes:20,hier,starts:sts,cards:[doneCard],works:[ownedBySub(1)],entries:[...finishedEntries,...qs]});
+  const body=r.nudges.find(([,role])=>role==='p-슈퍼감독')[2];
+  assert.ok(body.includes(`${id1} ← p-감독`)&&body.includes(`${id2} ← p-다른감독`));
+  assert.ok(body.includes(`kadan send p-감독 --reply-to ${id1} --reply-final '답'`));
+  assert.ok(body.includes(`kadan send p-다른감독 --reply-to ${id2} --reply-final '답'`));
+  const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-슈퍼감독'&&!e.resolved);
+  assert.deepEqual(rec.idleItems.ownWhy[0].questions,[{mailId:id1,asker:'p-감독'},{mailId:id2,asker:'p-다른감독'}]);
 });
 
 test('같은 상황에서 --reply-final 답장이 있으면 슈퍼감독 알림이 없다',async()=>{

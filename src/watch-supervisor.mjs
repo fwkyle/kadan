@@ -168,11 +168,15 @@ export function idleCountsText(alert) {
 const ITEM_CAP = 20;
 
 // 본인 차례인 이유: 답할 질문(우편이 걸림) > 미발령 계획 > 내 차례. 판정(mine)은 바꾸지 않고 이유만 붙인다.
+// 질문은 전체 우편 ID와 질문자를 짝으로 남긴다(닫는 답장은 우편마다 그 질문자에게 가야 한다).
 function ownReason(entry, role, answers, questions) {
   const id = entry.taskId;
+  if (entry.peerRequest) {
+    return { id, reason: "답할 질문", questions: [{ mailId: entry.mailId, asker: entry.asker ?? null }] };
+  }
   if (answers(id, role)) {
     const asked = questions(id, role).slice(0, 3);
-    return { id, reason: "답할 질문", ...(asked.length ? { mailIds: asked.map(m => m.mailId.slice(0, 8)), asker: asked[0].asker } : {}) };
+    return { id, reason: "답할 질문", ...(asked.length ? { questions: asked.map(m => ({ mailId: m.mailId, asker: m.asker ?? null })) } : {}) };
   }
   return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례" };
 }
@@ -180,14 +184,17 @@ function ownReason(entry, role, answers, questions) {
 const BODY_ITEMS = 5;
 
 // 알림 본문에 붙일 본인 차례 항목과 이유(최대 5개, 넘으면 `외 N건`). 원장에 이유가 없는 옛 기록이면 빈 글자다.
+// 질문마다 `전체 우편ID ← 질문자`와 그 질문자에게 가는 닫는 명령을 적는다.
 export function idleOwnText(alert) {
   const why = alert.idleItems?.ownWhy;
   if (!why?.length) return "";
-  const shown = why.slice(0, BODY_ITEMS).map(w => `${w.id} (${w.reason}${w.mailIds?.length ? ` ${w.mailIds.join("·")}` : ""})`);
+  const shown = why.slice(0, BODY_ITEMS);
+  const names = shown.map(w => `${w.id} (${w.reason}${w.questions?.length ? ` ${w.questions.map(q => `${q.mailId} ← ${q.asker ?? "질문자 미상"}`).join(", ")}` : ""})`);
   const rest = (alert.openCards ?? why.length) - shown.length;
-  const asked = why.find(w => w.mailIds?.length);
-  const hint = asked ? ` 답했으면 kadan send ${asked.asker ?? "<질문자>"} --reply-to <우편ID> --reply-final '답' 으로 닫는다.` : "";
-  return `본인 차례: ${shown.join(", ")}${rest > 0 ? ` 외 ${rest}건` : ""}.${hint}`;
+  const closes = shown.flatMap(w => w.questions ?? [])
+    .map(q => `kadan send ${q.asker ?? "<질문자>"} --reply-to ${q.mailId} --reply-final '답'`);
+  const hint = closes.length ? ` 답했으면 질문마다 닫는다: ${closes.join(" ; ")}` : "";
+  return `본인 차례: ${names.join(", ")}${rest > 0 ? ` 외 ${rest}건` : ""}.${hint}`;
 }
 
 export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null) {

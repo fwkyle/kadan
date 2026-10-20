@@ -33,7 +33,7 @@ export function peerResponsibilities(entries, parents, works = [], cards = []) {
         return role && isDescendant(role, q.currentRecipient, parents) ? [role] : [];
       }));
     return [{ kind: 'send', role: q.currentRecipient, taskId: `mail:${q.mailId}`, t: q.t,
-      peerRequest: true, mailId: q.mailId, activityRoles,
+      peerRequest: true, mailId: q.mailId, asker: q.currentSender, activityRoles,
       linkedWorkIds: linked.map(w => `work:${w.key}`) }];
   });
 }
