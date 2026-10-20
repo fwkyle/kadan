@@ -8,6 +8,24 @@ import {ledgerHome, appendLedger, readSystemLedger} from '../src/ledger.mjs';
 import {tmuxFloor, tmux} from '../src/floor-tmux.mjs';
 import {inspectRecovery, restoreRecovery} from '../src/recovery.mjs';
 
+// kill-server가 돌아와도 리눅스에서는 옛 서버가 소켓을 정리하는 중일 수 있다
+// (CI의 'server exited unexpectedly'). 서버가 정말 없다는 응답이 올 때까지 기다린다.
+// 'server exited unexpectedly'는 아직 사라지는 중이라 없음으로 보지 않는다.
+function killServerAndWait(limitMs = 2000, stepMs = 50) {
+  const killed = tmux(['kill-server']);
+  const deadline = Date.now() + limitMs;
+  let last = '';
+  for (;;) {
+    const probe = tmux(['list-sessions']);
+    last = (probe.stderr || '').trim();
+    if (probe.status !== 0 && /no server running|error connecting/.test(last)) return killed;
+    if (Date.now() > deadline) {
+      assert.fail(`kill-server 뒤 ${limitMs}ms 안에 서버가 안 사라짐: ${last || 'still running'}`);
+    }
+    spawnSync('sleep', [String(stepMs / 1000)]);
+  }
+}
+
 test('real tmux server loss restores role generations over two restarts', {
   skip: spawnSync('tmux', ['-V']).status !== 0,
 }, t => {
@@ -16,7 +34,7 @@ test('real tmux server loss restores role generations over two restarts', {
   process.env.KADAN_SOCKET = `recovery-${process.pid}`;
   process.env.TMUX_TMPDIR = home;
   t.after(() => {
-    tmux(['kill-server']); // Only this test-owned named server.
+    killServerAndWait(); // Only this test-owned named server.
     // Restore, never delete: an unset socket falls back to the live default (kadan).
     for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -44,7 +62,7 @@ setInterval(() => {}, 1000);
     rottieTerminalId: 'original'});
   let context = inspectRecovery({terminal: 'original', 'pane-pid': original.panePid});
   for (let reboot = 0; reboot < 2; reboot++) {
-    assert.equal(tmux(['kill-server']).status, 0);
+    assert.equal(killServerAndWait().status, 0);
     const receipt = restoreRecovery({context: JSON.stringify(context), command: resumeCommand,
       'rottie-bin': bin, 'allow-reuse': 'false'});
     assert.equal(receipt.role, 'director');
