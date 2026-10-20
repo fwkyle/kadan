@@ -4,8 +4,8 @@ import {launchFor, launchForFallback, readSettings, runnerChoices, PROFILE_ROLES
 
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
-export const RUNNER_ROLE_LABELS={worker:'작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독',watch:'감시 AI',senior:'시니어',explain:'설명 AI'};
-const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델','model-remove':'모델 뺌',block:'정책 차단',fallback:'폴백 순서',favorite:'즐겨찾기'};
+export const RUNNER_ROLE_LABELS={worker:'작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독',watch:'감시 AI',senior:'시니어',senior2:'시니어 2번 자리',explain:'설명 AI'};
+const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델','model-remove':'모델 뺌',block:'정책 차단',fallback:'폴백 순서',favorite:'즐겨찾기',clear:'역할 비움'};
 export const FALLBACK_WHEN='내려가는 조건: 원인이 확인된 막힘(쿼터·429·로그인 실패·모델 이름 오류)만. 원인을 모르면 멈추고 보고. 내리기 전에 감시기 ocx 새로고침 결과를 본다';
 const APPLY_NOTE='다음 발령부터 적용, 떠 있는 세션은 그대로';
 
@@ -13,11 +13,11 @@ const choice=v=>v&&typeof v==='object'&&v.runner?[v.runner,v.model,v.effort].fil
 const numbered=list=>Array.isArray(list)&&list.length?list.map((v,i)=>`${i+1}. ${choice(v)}`).join('; '):null;
 // 원장 runner-settings 사건 한 건을 '무엇을'과 '전→후'로 푼다.
 function describe(x){
- const what=x.action==='set'||x.action==='fallback'?`${x.preset??''} ${RUNNER_ROLE_LABELS[x.role]??x.role??''}`.trim()
+ const what=x.action==='set'||x.action==='fallback'||x.action==='clear'?`${x.preset??''} ${RUNNER_ROLE_LABELS[x.role]??x.role??''}`.trim()
   :x.action==='runner'?`실행기 ${x.runner??''}`:x.action==='model'||x.action==='model-remove'?`${x.runner??''} 모델`:'';
- const from=x.action==='fallback'||x.action==='favorite'?numbered(x.before):x.action==='set'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'||x.action==='model-remove'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
+ const from=x.action==='fallback'||x.action==='favorite'?numbered(x.before):x.action==='set'||x.action==='clear'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'||x.action==='model-remove'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
  const to=x.action==='fallback'||x.action==='favorite'?numbered(x.after)??'비움':x.action==='set'?choice(x.after):x.action==='preset'?x.after:x.action==='runner'?x.after?.spawn:x.action==='model'?x.after&&`${x.after.model} (${(x.after.efforts??[]).join(',')})`
-  :x.action==='model-remove'?'목록에서 뺌':x.action==='block'?x.after&&`${x.after.model} 차단 (${x.after.roles?.map(r=>RUNNER_ROLE_LABELS[r]??r).join(',')||'모든 역할'})`:x.action==='init'?`revision ${x.revision}`:null;
+  :x.action==='model-remove'?'목록에서 뺌':x.action==='clear'?'비움':x.action==='block'?x.after&&`${x.after.model} 차단 (${x.after.roles?.map(r=>RUNNER_ROLE_LABELS[r]??r).join(',')||'모든 역할'})`:x.action==='init'?`revision ${x.revision}`:null;
  return {what:[actionLabels[x.action]??x.action,what].filter(Boolean).join(' · '),change:`${from??'없음'} → ${to??'모름'}`};
 }
 

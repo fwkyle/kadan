@@ -210,6 +210,14 @@ const COMMANDS = {
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     if (typeof result==='string') { console.log(result); return; }
+    if (result.slots) {
+      // 두 자리: 답을 영수증 밖으로 빼 자리 순서대로 머리말(번호·실행기·모델)과 함께 낸다. 하나라도 답했으면 종료 코드 0.
+      const receipt={...result,slots:result.slots.map(({answer:_,...slot})=>slot)};
+      console.log(JSON.stringify(receipt,null,2));
+      for (const slot of result.slots) console.log(slot.answer!=null?`\n--- 자문 답변 ${slot.slot}번 자리 (${slot.runner}/${slot.model}) ---\n${slot.answer}`:`\n--- ${slot.slot}번 자리 (${slot.runner}/${slot.model}) 답 없음: ${slot.reason} ---`);
+      if (result.effortNote) console.log(`\n주의: ${result.effortNote}`);
+      return;
+    }
     const {answer,...receipt}=result;
     console.log(JSON.stringify(receipt,null,2));
     console.log(`\n--- 자문 답변 (${receipt.model}) ---\n${answer}`);

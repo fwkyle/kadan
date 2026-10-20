@@ -26,7 +26,7 @@ import { promisify } from 'node:util';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger,readLedger} from './ledger.mjs';
-import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,setActivePreset,setFallback,setFavorites,setRole,setRunner,setRunnerModel} from './runner-settings.mjs';
+import {changedRunnerFields,clearSecondSlot,editFallback,readSettings,removeRunnerModel,setActivePreset,setFallback,setFavorites,setRole,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
@@ -199,7 +199,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite','/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||!['/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/clear','/runners/favorite','/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -281,7 +281,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      if(!changed)throw new Error('바뀐 것이 없다');
      return setRunner(home,{runner:f.runner,...changed,...meta});
     };
-    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():url.pathname==='/runners/favorite'?favorite():url.pathname==='/runners/runner'?runnerEdit():url.pathname==='/runners/model-add'?modelAdd():url.pathname==='/runners/model-remove'?removeRunnerModel(home,{runner:f.runner,model:f.model,...meta}):setActivePreset(home,{preset:f.preset,...meta});
+    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():url.pathname==='/runners/clear'?clearSecondSlot(home,{...meta}):url.pathname==='/runners/favorite'?favorite():url.pathname==='/runners/runner'?runnerEdit():url.pathname==='/runners/model-add'?modelAdd():url.pathname==='/runners/model-remove'?removeRunnerModel(home,{runner:f.runner,model:f.model,...meta}):setActivePreset(home,{preset:f.preset,...meta});
     saved('/?runnersSaved='+next.revision+'#runner-settings',{revision:next.revision});return true;
    }
    if(url.pathname.startsWith('/works/')){

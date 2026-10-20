@@ -155,6 +155,24 @@ for (const mode of ["jsonl", "sqlite"])
       await runnerResponse.clone().text(),
     );
     assert.equal((await get("runners")).settings.revision, 2);
+    // 시니어 2번 자리: 열린 실행기가 없어(agy 실측 막힘) 고를 수 없고, 비울 칸도 없으면 거절한다.
+    const second = (await get("runners")).senior2;
+    assert.deepEqual(second.runners, []);
+    assert.match(second.gate, /agy/);
+    const blocked = await fetch(base + "/runners/set", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: new URLSearchParams({ token, revision: "2", role: "senior2", runner: "demo", model: "demo-b", reason: "막힘 시험" }),
+    });
+    assert.ok(blocked.status >= 400);
+    assert.match(await blocked.text(), /막혀 있다/);
+    const cleared = await fetch(base + "/runners/clear", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: new URLSearchParams({ token, revision: "2", reason: "비움 시험" }),
+    });
+    assert.ok(cleared.status >= 400);
+    assert.match(await cleared.text(), /이미 비어/);
     const answer = await fetch(base + "/decisions/answer", {
       method: "POST",
       headers: { Accept: "application/json", Origin: base },

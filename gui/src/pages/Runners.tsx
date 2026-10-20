@@ -54,6 +54,8 @@ type RunnersData = Stamp & {
   watch?: { runner: string; maxAttempts: number };
   // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
   senior?: { runner: string };
+  // 시니어 2번 자리: 같은 질문에 병렬로 답한다. runners에 든 실행기만 고를 수 있고(읽기 전용 확인분), 비어 있으면 막힘이다.
+  senior2?: { runners: string[]; gate: string };
   // 설명 AI는 실행기 표에 한 번 호출(exec) 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 시도한다.
   explain?: { runners: string[]; maxAttempts: number };
 };
@@ -127,8 +129,8 @@ export default function Runners({ url }: { url: URL }) {
                           : "미설정"}
                       </td>
                       <td>
-                        {role === "senior" ? (
-                          "없음 (시니어는 대체 후보가 없습니다)"
+                        {role === "senior" || role === "senior2" ? (
+                          "없음 (시니어는 대체 후보가 없습니다 — 두 자리는 차례가 아니라 병렬입니다)"
                         ) : fallbackLabels(data.settings!, role).length ? (
                           <ol>
                             {fallbackLabels(data.settings!, role).map(
@@ -166,6 +168,7 @@ export default function Runners({ url }: { url: URL }) {
           <p className="muted">
             시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
             의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
+            2번 자리를 채우면 같은 질문에 두 자리가 병렬로 각각 답하고 둘 다 기록되며, 한쪽이 실패해도 다른 쪽 답은 남습니다.
           </p>
           <p className="muted">
             설명 AI는 감시 AI가 아닙니다. 발령·완료·막힘·결정이 생긴 카드의 요약 칸만 채웁니다(1순위 포함 최대{" "}
@@ -177,10 +180,36 @@ export default function Runners({ url }: { url: URL }) {
               <summary>
                 {label} 바꾸기
                 {role !== "senior" &&
+                  role !== "senior2" &&
                   ` · 대체 후보 ${fallbackLabels(data.settings!, role).length}개`}
               </summary>
-              <RunnerForm data={data} settings={data.settings!} role={role} />
-              {role !== "senior" && (
+              {role === "senior2" && !data.senior2?.runners.length ? (
+                <p className="muted">막힘: {data.senior2?.gate}</p>
+              ) : (
+                <RunnerForm data={data} settings={data.settings!} role={role} />
+              )}
+              {role === "senior2" &&
+                data.settings!.presets[data.settings!.activePreset].roles
+                  .senior2 && (
+                  <ActionForm
+                    revision={data.settings!.revision}
+                    spec={{
+                      action: "/runners/clear",
+                      title: "2번 자리 비우기",
+                      fields: [
+                        {
+                          name: "reason",
+                          label: "비우는 이유",
+                          value: "",
+                          type: "text",
+                          options: null,
+                          required: true,
+                        },
+                      ],
+                    }}
+                  />
+                )}
+              {role !== "senior" && role !== "senior2" && (
                 <RunnerForm
                   data={data}
                   settings={data.settings!}
@@ -254,7 +283,9 @@ function RunnerForm({
       ? [data.watch.runner]
       : role === "senior" && data.senior
         ? [data.senior.runner]
-        : role === "explain" && data.explain
+        : role === "senior2" && data.senior2
+          ? data.senior2.runners
+          : role === "explain" && data.explain
           ? data.explain.runners
           : Object.keys(data.catalog);
   const applyNote =
@@ -262,6 +293,8 @@ function RunnerForm({
       ? "다음 감시 호출부터 적용됩니다."
       : role === "senior"
         ? "다음 kadan senior 호출부터 적용됩니다."
+        : role === "senior2"
+          ? "다음 kadan senior 호출부터 적용됩니다."
         : role === "explain"
           ? "다음 설명 호출부터 적용됩니다."
           : "다음 발령부터 적용됩니다.";
@@ -303,7 +336,11 @@ function RunnerForm({
   const favorites = settings.favorites || [];
   const blockedFor = (model: string) =>
     settings.blocked?.find(
-      (b) => b.model === model && (!b.roles || b.roles.includes(role)),
+      (b) =>
+        b.model === model &&
+        (!b.roles ||
+          b.roles.includes(role) ||
+          (role === "senior2" && b.roles.includes("senior"))),
     );
   // 즐겨찾기 한 번 누르면 세 칸을 채우고, 이유가 비어 있으면 이유도 채운다(2026-09-27 [kyle]: 매번 세 칸 고르기가 번거로웠다).
   const pick = (fav: Choice) => {
@@ -556,7 +593,7 @@ function RunnerForm({
                 ? `KADAN_JUDGE_MODEL=${choice.model} KADAN_JUDGE_EFFORT=${choice.effort || "max"} watch-judge.sh (codex exec)`
                 : role === "senior"
                   ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (codex exec, 저장소 읽기 전용)`
-                  : role === "explain"
+                  : role === "senior2" || role === "explain"
                     ? "실행기 표의 exec 틀로 한 번 호출 (실행기 이름은 코드에 없음)"
                     : spec?.spawn
                     .replaceAll("{model}", choice.model)

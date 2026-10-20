@@ -175,6 +175,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 - 설정: 활성 프리셋의 `roles.senior`. 명령은 `kadan runners set senior --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **시니어** 줄이다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음).
 - 실행기는 `codex`만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 적용한다.
+- **2번 자리(`roles.senior2`, 2026-10-20)**: 같은 질문에 병렬로 각자 답한다. 설명 AI처럼 실행기 표의 `exec` 틀로 빈 호출 폴더에서 부르며, `SENIOR2_ALLOWED_RUNNERS`에 든 실행기만 고를 수 있다. **지금 그 목록은 비어 있다** — agy `--print`가 사용자 허용 규칙으로 파일을 쓸 수 있고 읽기 전용 모드가 없다는 실측 때문이다([시니어](senior.md#두-번째-자리-2026-10-20-kyle-요청-시니어를-최대-2개로)). 명령 `kadan runners set senior2 …`·비우기 `kadan runners clear senior2 …`, 정책 차단 `block --roles senior`가 2번 자리에도 적용된다. 카드 글은 두 자리 모두 `scrubForAI`로 가린 뒤 외부로 보낸다.
 - **폴백이 없다.** `runners fallback senior`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
 - 상한은 호출마다 기본 30분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽고 시험까지 돌려 볼 수 있는 호출이라 감시 AI(5분)보다 훨씬 길다. 횟수 제한은 없다 — 필요할 때만 부른다.
 
