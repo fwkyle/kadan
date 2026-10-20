@@ -166,9 +166,9 @@ export class ExplainAI {
         else {
           const out = answerText(res.stdout, field);
           const envelope = envelopeState(res.stdout, field);
-          if (envelope) attempt.envelope = envelope;
           parsed = parseBriefOutput(out);
           attempt.result = parsed.ok ? 'ok' : parsed.reason;
+          if (envelope && !parsed.ok) attempt.envelope = envelope;
           attempt.outputBytes = Buffer.byteLength(String(res.stdout ?? ''));
         }
       } catch (error) { attempt.result = 'template-error'; attempt.error = error.message; }

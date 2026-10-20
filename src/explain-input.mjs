@@ -115,9 +115,19 @@ export function envelopeState(stdout, field) {
   return value.trim() ? 'ok' : 'field-empty';
 }
 
-// 실패 시도에 남기는 출력 앞부분. 먼저 가리고 나서 자른다(자른 경계에 걸린 비밀 조각이 남지 않게).
+// 실패 시도에 남기는 출력 앞부분. 앞 4KB를 떼어 JSON 이스케이프를 풀고, 가린 뒤에 자른다.
+// 이스케이프가 남은 채 가리면 `\\n` 뒤의 `sk-…`나 `\\/`로 쪼개진 웹훅 주소를 못 잡는다.
+// 잘린 JSON에서도 풀리도록 정규식 치환을 쓴다.
 export const EXCERPT_MAX = 300;
+const EXCERPT_HEAD = 4096;
+const ESCAPES = {n: ' ', r: ' ', t: ' ', '/': '/', '"': '"', '\\': '\\'};
+const unescapeJson = text => text.replace(/\\(?:u([0-9a-fA-F]{4})|([nrt/"\\]))/g,
+  (_, hex, ch) => hex ? String.fromCharCode(parseInt(hex, 16)) : ESCAPES[ch]);
 export function excerptOf(text) {
-  const t = scrubForAI(String(text ?? ''));
+  const raw = String(text ?? '');
+  const clipped = raw.length > EXCERPT_HEAD;
+  let t = scrubForAI(unescapeJson(raw.slice(0, EXCERPT_HEAD)));
+  // 4KB 경계에서 잘린 끝 조각에 비밀 앞부분이 남지 않게 마지막 덩어리를 버린다.
+  if (clipped) t = t.replace(/\S*$/, '');
   return t.length > EXCERPT_MAX ? t.slice(0, EXCERPT_MAX) + '…' : t;
 }

@@ -531,3 +531,64 @@ test('S2 결과 파일이 등록 뒤에 바뀌면 발췌를 빼고 그 사유를
   assert.ok(!call.prompt.includes('SECRET-TAMPER') && !call.prompt.includes('진짜 결과'));
   assert.ok(call.prompt.includes('결과 파일이 등록한 뒤에 바뀌어 발췌를 뺐다'));
 });
+
+// F1: JSON 이스케이프(\n, \/, \uXXXX)가 남은 채 가리면 비밀이 원장에 남는다. 이스케이프를 푼 뒤 가리고 자른다.
+const SK = 'sk-abcdefghijklmnopqrstuvwxyz123456';
+const HOOK = 'https://discord.com/api/webhooks/123456789012345678/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd';
+const BEARER = 'Bearer abcdefghijklmnop1234567890';
+async function failedLedger(stdout, stderr = '', status = 0) {
+  const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => ({status, stdout, stderr})});
+  const card = w.makeCard();
+  await enable(w);
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  return {a: w.rows().at(-1).attempts[0], stored: JSON.stringify(w.rows())};
+}
+
+test('JSON 이스케이프된 비밀(\\n 뒤 sk 키·Bearer·\\/ 웹훅·\\u 이스케이프)은 원장에 저장된 값에도 남지 않는다', async () => {
+  const hookEsc = HOOK.replaceAll('/', '\\/');
+  const uSk = [...SK].map(c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const cases = {
+    newline: JSON.stringify({response: '\n' + SK}),
+    bearer: JSON.stringify({response: 'x\n' + BEARER}),
+    slash: `{"response":"${hookEsc}"}`,
+    unicode: `{"response":"${uSk}"}`,
+  };
+  for (const [name, out] of Object.entries(cases)) {
+    const {a, stored} = await failedLedger(out);
+    assert.equal(a.result, 'not-json', name);
+    assert.doesNotMatch(stored, /sk-abcdef|abcdefghijklmnop1234|AbCdEfGhIjKl|webhooks\\?\/123/, name);
+    assert.match(a.excerpt, /가림/, name);
+  }
+});
+
+test('stderr의 JSON 이스케이프 비밀도 원장에 남지 않는다', async () => {
+  const {a, stored} = await failedLedger('', JSON.stringify({error: '\n' + SK + '\n' + BEARER}), 1);
+  assert.equal(a.result, 'call-failed');
+  assert.doesNotMatch(stored, /sk-abcdef|abcdefghijklmnop1234/);
+  assert.match(a.stderrExcerpt, /가림/);
+});
+
+test('300자·4KB 경계에 걸친 비밀과 평문 출력의 가림이 유지된다', async () => {
+  // 300자 직전에 걸친 키: 가린 뒤에 자르므로 앞 조각이 남지 않는다.
+  const pad = 'a b '.repeat(70).slice(0, 285);
+  const edge = await failedLedger(pad + SK + ' tail');
+  assert.doesNotMatch(edge.stored, /sk-abc/);
+  // 4KB 경계에서 키가 잘리는 경우.
+  const head = 'z '.repeat(2040) + 'ok ' ; // 4083자
+  for (const cutAt of [4, 9, 14]) {
+    const text = head.padEnd(4096 - cutAt, ' ') + SK + ' ' + 'q'.repeat(5000);
+    const r = await failedLedger(JSON.stringify({response: text}));
+    assert.doesNotMatch(r.stored, /sk-abc|sk-a/, `cut ${cutAt}`);
+  }
+  // 평문 출력의 기존 가림
+  const plain = await failedLedger(`oops ${SK} ${BEARER} ${HOOK}`);
+  assert.doesNotMatch(plain.stored, /sk-abcdef|abcdefghijklmnop1234|AbCdEfGhIjKl/);
+});
+
+test('S1: 성공 시도에는 envelope·excerpt·stderrExcerpt가 남지 않는다', async () => {
+  const body = JSON.stringify({response: JSON.stringify({title: '제목', workstream: '묶음', stage: '구현'})});
+  const {a} = await failedLedger(body, 'warn');
+  assert.equal(a.result, 'ok');
+  for (const k of ['envelope', 'excerpt', 'stderrExcerpt']) assert.equal(k in a, false, k);
+});
