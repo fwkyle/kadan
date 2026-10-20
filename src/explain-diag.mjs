@@ -12,8 +12,8 @@ export const KEY_NAMES = ['title', 'workstream', 'stage', 'goal', 'summary', 'ne
   'is_error', 'usage', 'stats', 'models', 'reason'];
 export const SIGNAL_NAMES = Object.keys(constants.signals);
 // 저장 실패(write-failed:<코드>)에 붙일 수 있는 시스템 오류 코드. 이 밖의 코드는 붙이지 않는다.
-export const ERRNO_CODES = ['EACCES', 'EAGAIN', 'EBUSY', 'EDQUOT', 'EEXIST', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE',
-  'ENAMETOOLONG', 'ENFILE', 'ENOENT', 'ENOMEM', 'ENOSPC', 'ENOTDIR', 'ENOTEMPTY', 'EPERM', 'EROFS', 'ETXTBSY'];
+export const ERRNO_CODES = ['ENOSPC', 'EACCES', 'EPERM', 'EROFS', 'EIO', 'EEXIST', 'ENOENT', 'EBUSY', 'EMFILE', 'ENFILE', 'EDQUOT',
+  'EAGAIN', 'ENOTDIR', 'EISDIR'];
 export const VALUE_KINDS = ['string', 'number', 'boolean', 'null', 'object', 'array'];
 export const ENVELOPE_STATES = ['not-json', 'field-missing', 'field-empty', 'ok'];
 export const UNKNOWN_KEY = '?';
