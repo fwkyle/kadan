@@ -9,6 +9,11 @@ import {isSimplifiedMail,deliveredAt,firstReminderSent,reminderKey} from './mail
 
 const recipient = mail => mail.currentRecipient || mail.role;
 
+// 새 규칙 우편의 실패 사유는 원장에 고정 값만 쓴다. 오류 문장에는 tmux 버퍼 이름(PID·시각)·명령 인자처럼 매번 달라지는 말이 섞여
+// 같은 원인이 '사유 변경'으로 보여 압축이 새고 원장이 순회 수만큼 는다(2026-10-21 재검수 R2-F1). 코드가 없으면 'send-failed' 하나다.
+export const FAILURE_FALLBACK = 'send-failed';
+const failureCode = error => /^[A-Z][A-Z0-9_]*$/.test(String(error?.code ?? '')) ? error.code : FAILURE_FALLBACK;
+
 // 새 규칙 우편의 알림 기록: 우편·수신자별로 단계(initial=한 번도 못 넣음, followup=넣은 뒤 5분)의 마지막 사건을 본다.
 // result 없이 reserved만 있으면(재시작 전에 죽음) 예약으로 보지 않고 다시 시도한다. held는 not-sent와 같다.
 function reminderHistory(entries) {
@@ -154,7 +159,7 @@ export class MailWatch {
         this.written.set(stageKey(id,role,stage),{result:null});
       }
       let pending = [], attempted = false;
-      let delivery = 'not-sent', reason = 'state-changed';
+      let delivery = 'not-sent', reason = 'state-changed', code = 'state-changed', heldHit = false;
       try {
         const currentCards = readCards(), currentWorks = readWorks(), live = floor.list();
         // 마지막 전달 직전 원장을 다시 읽는다. 예약 중 들어온 ack도 여기서 제외한다.
@@ -165,41 +170,38 @@ export class MailWatch {
         if (!signal?.aborted && String(currentPid(role,fresh,live)) === String(expectedPid) && pending.length) {
           attempted = true;
           this.send(role,`[미확인 우편] ${pending.length}건이 남아 있습니다. kadan inbox --role ${shellQuote(role)} --unread로 확인하고 내용을 읽은 우편만 직접 ack하세요. 질문의 최종 답변은 읽음 확인과 별개입니다.`,expectedPid);
-          delivery = 'sent'; reason = null; delivered.add(role);
+          delivery = 'sent'; reason = null; code = null; delivered.add(role);
         }
       } catch (error) {
         // 확인과 붙여넣기 사이에 사람이 입력을 시작한 경우. 붙여넣기 전 멈췄으므로 예약을 풀고 다음 순회에 다시 본다.
-        if (isNotificationHold(error)) {
-          for (const id of ids) {
-            this.reserved.delete(reminderKey(id,role));
-            if (stageOf.get(id) !== 'legacy') this.written.set(stageKey(id,role,stageOf.get(id)),{result:'not-sent',reason:error.message,held:true});
-            emit(id,'result',{delivery:'not-sent',reason:error.message,held:true});
-          }
-          continue;
-        }
-        this.failed = true;
-        delivery = !attempted || error.delivery === 'not-sent' ? 'not-sent'
+        // 결과 기록은 아래 공통 압축을 지난다(같은 고정 코드면 다시 쓰지 않는다).
+        heldHit = isNotificationHold(error);
+        if (heldHit) for (const id of ids) this.reserved.delete(reminderKey(id,role));
+        else this.failed = true;
+        delivery = heldHit || !attempted || error.delivery === 'not-sent' ? 'not-sent'
           : error.delivery === 'sent' ? 'sent' : 'unknown';
         if (delivery === 'sent') delivered.add(role);
-        reason = error.message;
-        if (!pending.length) pending = ids;
+        reason = error.message; code = failureCode(error);
+        if (heldHit || !pending.length) pending = ids;
       }
       if (['sent','unknown'].includes(delivery)) for (const id of pending) {
         if (stageOf.get(id) !== 'legacy') this.attempted.add(stageKey(id,role,stageOf.get(id)));
       }
       for (const id of ids) {
-        const outcome = pending.includes(id)
-          ? {delivery,reason,...(delivery === 'unknown' ? {needsCheck:true} : {})} : {delivery:'not-sent',reason:'state-changed'};
         const stage = stageOf.get(id), key = stageKey(id,role,stage);
+        // 옛 규칙 우편의 기록 모양은 그대로(오류 문장), 새 규칙 우편만 고정 코드를 쓴다.
+        const outcome = pending.includes(id)
+          ? {delivery,reason:stage === 'legacy' ? reason : code,...(heldHit ? {held:true} : {}),
+            ...(delivery === 'unknown' ? {needsCheck:true} : {})} : {delivery:'not-sent',reason:'state-changed'};
         if (stage !== 'legacy') {
-          // 같은 우편·역할·단계에서 같은 사유의 not-sent 재시도는 쓰지 않고 센다. 첫 실패·사유 변경·sent·unknown만 쓴다.
+          // 같은 우편·역할·단계에서 같은 고정 사유의 not-sent 재시도는 쓰지 않고 센다(입력 보호 held 포함). 첫 실패·사유 변경·sent·unknown만 쓴다.
           const prior = lastState(id,role,stage);
-          if (outcome.delivery === 'not-sent' && prior?.result === 'not-sent' && prior.held !== true && prior.reason === outcome.reason) {
+          if (outcome.delivery === 'not-sent' && prior?.result === 'not-sent' && prior.reason === outcome.reason && (prior.held === true) === (outcome.held === true)) {
             this.suppressed.set(key,(this.suppressed.get(key) ?? 0) + 1);
             continue;
           }
           if (this.suppressed.has(key)) { outcome.suppressedRetries = this.suppressed.get(key); this.suppressed.delete(key); }
-          this.written.set(key,{result:outcome.delivery,reason:outcome.reason,held:false});
+          this.written.set(key,{result:outcome.delivery,reason:outcome.reason,held:outcome.held === true});
         }
         emit(id,'result',outcome);
       }

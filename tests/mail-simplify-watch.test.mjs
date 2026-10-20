@@ -145,11 +145,11 @@ test('같은 사유 not-sent를 480순회 돌려도 reminder 원장 줄 수는 �
 test('사유가 바뀌면 1줄 늘고(센 횟수 포함), sent·unknown은 그대로 기록하며 unknown은 영구 예약이다', () => {
   const f = fixture([stored('m1')]);
   const watch = f.create();
-  f.failWith = notSent('세션 입력 거절');
+  f.failWith = Object.assign(notSent('세션 입력 거절'), {code: 'KADAN_SESSION_MISSING'});
   f.tick(watch); f.now += MIN; f.tick(watch);
-  f.failWith = notSent('다른 사유'); f.now += MIN; f.tick(watch); f.now += MIN; f.tick(watch);
+  f.failWith = Object.assign(notSent('다른 사유'), {code: 'KADAN_PID_MISMATCH'}); f.now += MIN; f.tick(watch); f.now += MIN; f.tick(watch);
   const results = reminderLines(f).filter(e => e.action === 'result');
-  assert.deepEqual(results.map(e => e.reason), ['세션 입력 거절', '다른 사유']);
+  assert.deepEqual(results.map(e => e.reason), ['KADAN_SESSION_MISSING', 'KADAN_PID_MISMATCH']);
   assert.equal(results[1].suppressedRetries, 1);
   f.failWith = Object.assign(new Error('응답 유실'), {delivery: 'unknown'}); f.now += MIN; f.tick(watch);
   assert.equal(reminderLines(f).filter(e => e.action === 'result').at(-1).delivery, 'unknown');
