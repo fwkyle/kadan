@@ -19,7 +19,7 @@ import {setRunner as saveRunner} from '../src/runner-settings.mjs';
 import {scrubForAI} from '../src/explain-input.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
-import {buildDiag, shapeOf, wordIds, WORD_IDS, KEY_NAMES, SIGNAL_NAMES, ERRNO_CODES, VALUE_KINDS, ENVELOPE_STATES, UNKNOWN_KEY, MAX_KEYS} from '../src/explain-diag.mjs';
+import {buildDiag, shapeOf, wordIds, errnoOf, pick, ATTEMPT_RESULTS, WORD_IDS, KEY_NAMES, SIGNAL_NAMES, ERRNO_CODES, VALUE_KINDS, ENVELOPE_STATES, UNKNOWN_KEY, MAX_KEYS} from '../src/explain-diag.mjs';
 
 const fake = new URL('./helpers/fake-explain.mjs', import.meta.url).pathname;
 const EXEC = `node '${fake}' {model}`;
@@ -844,4 +844,105 @@ test('원장 줄 전체 문자열 허용 집합: 성공·형식 실패·호출 �
   assert.throws(() => assertCallRow({...ok, reason: 'write-failed:FakeSecret'}, 'x'));
   assert.throws(() => assertCallRow({...ok, extra: 'x'}, 'x'));
   assert.throws(() => assertCallRow({...ok, outcome: 'boom'}, 'x'));
+});
+
+// ---- PR #208 8라운드: 원장 문자열은 '입력 값'이 아니라 '허용 목록의 리터럴'로만 기록한다 ----
+test('8R F1: 예외 code 접근 함수·Proxy·던지는 접근 함수는 한 번만 읽고 목록 리터럴만 남긴다', async () => {
+  const original = BriefStore.prototype.write;
+  const reads = {n: 0};
+  const accessor = () => {
+    reads.n = 0;
+    const error = new Error('FakeMessageNeverPersist');
+    Object.defineProperty(error, 'code', {get() { return ++reads.n === 1 ? 'ENOSPC' : 'EORCHIDSECRET'; }});
+    return error;
+  };
+  const throwing = () => {
+    const error = new Error('FakeMessageNeverPersist');
+    Object.defineProperty(error, 'code', {get() { throw new Error('FakeGetterSecret'); }});
+    return error;
+  };
+  const throwingMessage = () => {
+    const error = {};
+    Object.defineProperty(error, 'message', {get() { throw new Error('FakeGetterSecret'); }});
+    return error;
+  };
+  const proxied = () => new Proxy(new Error('x'), {get(target, key) {
+    if (key === 'code') return 'ENOSPC';
+    if (key === 'message') return 'FakeProxySecret';
+    return Reflect.get(target, key);
+  }});
+  const proxyThrows = () => new Proxy({}, {get() { throw new Error('FakeProxySecret'); }});
+  const cases = [
+    ['첫 읽기 ENOSPC 다음 가짜', accessor, 'write-failed:ENOSPC'],
+    ['읽을 때 던지는 code', throwing, 'write-failed'],
+    ['읽을 때 던지는 message', throwingMessage, 'write-failed'],
+    ['Proxy(code만 목록 안)', proxied, 'write-failed:ENOSPC'],
+    ['모든 읽기가 던지는 Proxy', proxyThrows, 'write-failed'],
+    ['숫자 code', () => Object.assign(new Error('x'), {code: 28}), 'write-failed'],
+    ['Symbol code', () => Object.assign(new Error('x'), {code: Symbol('ENOSPC')}), 'write-failed'],
+    ['객체 code(toString이 ENOSPC)', () => Object.assign(new Error('x'), {code: {toString: () => 'ENOSPC'}}), 'write-failed'],
+    ['null을 던짐', () => null, 'write-failed'],
+  ];
+  try {
+    for (const [name, make, expected] of cases) {
+      const w = world({spawn: async () => ({status: 0, stdout: brief, stderr: ''})});
+      const card = w.makeCard();
+      await enable(w);
+      BriefStore.prototype.write = function () { throw make(); };
+      w.dispatch(card, 0);
+      {const {done} = w.run(); await done;}
+      BriefStore.prototype.write = original;
+      const [row] = w.rows().filter(r => r.kind === 'explain-call');
+      assert.equal(row.reason, expected, name);
+      const text = fs.readFileSync(path.join(w.home, EXPLAIN_FILE), 'utf8');
+      for (const bad of ['Fake', 'ORCHID']) assert.ok(!text.includes(bad), `${name}: ${bad}`);
+    }
+  } finally { BriefStore.prototype.write = original; }
+  const probe = accessor();
+  assert.equal(errnoOf(probe), 'ENOSPC');
+  assert.equal(reads.n, 1, 'code는 한 번만 읽는다');
+});
+
+test('8R 출처: pick은 입력 값이 아니라 목록 쪽 리터럴을 돌려주고 문자열 아닌 값은 떨어뜨린다', () => {
+  const live = ['ENOSPC'];
+  const echo = pick(live, 'ENOSPC');
+  assert.equal(echo, 'ENOSPC');
+  assert.ok(live.some(item => Object.is(item, echo)));
+  const sneaky = {toString: () => 'ENOSPC', valueOf: () => 'ENOSPC'};
+  for (const v of [sneaky, 28, Symbol('ENOSPC'), ['ENOSPC'], null, undefined, new String('ENOSPC')]) assert.equal(pick(live, v), undefined, typeof v);
+});
+
+test('8R 출처: 신호·키 이름이 접근 함수 값이어도 목록 리터럴만 남는다', () => {
+  let reads = 0;
+  const flip = {toString() { return ++reads === 1 ? 'SIGTERM' : 'SIGFAKESECRET'; }};
+  assert.equal('signal' in buildDiag({stdout: '', stderr: '', signal: flip}), false);
+  const s = shapeOf({title: 'a', FakeKey: 'b', errors: [1, 2]});
+  assert.deepEqual(s.keys.map(k => k.k), ['title', 'errors']);
+  assert.equal(s.unknown, 1);
+  assert.deepEqual(s.keys[1], {k: 'errors', t: 'array', n: 2});
+});
+
+test('8R 출처 시험: 원장에 기록된 시도 문자열은 허용 상수 배열 안의 같은 값이다', async () => {
+  const outputs = [
+    ['not json {', ''], [JSON.stringify({response: ''}), ''], [JSON.stringify({response: '{"title":1}'}), ''],
+    [JSON.stringify({response: '{"title":"a","workstream":"b","stage":"zzz"}'}), 'quota exceeded'],
+    [JSON.stringify({FakeKey: {errors: [1], code: 7, usage: {x: 1}}}), 'blocked'],
+  ];
+  const walk = node => {
+    assert.ok(VALUE_KINDS.includes(node.t));
+    if ('k' in node) assert.ok(KEY_NAMES.includes(node.k) || node.k === UNKNOWN_KEY);
+    for (const c of node.keys ?? []) walk(c);
+  };
+  for (const [stdout, stderr] of outputs) {
+    const attempts = (await ledgerFor(stdout, stderr)).flatMap(r => r.attempts ?? []);
+    assert.ok(attempts.length > 0);
+    for (const a of attempts) {
+      assert.ok(ATTEMPT_RESULTS.includes(a.result), a.result);
+      if (!a.diag) continue;
+      if ('envelope' in a.diag) assert.ok(ENVELOPE_STATES.includes(a.diag.envelope));
+      for (const id of a.diag.words) assert.ok(WORD_IDS.includes(id));
+      if ('signal' in a.diag) assert.ok(SIGNAL_NAMES.includes(a.diag.signal));
+      for (const k of ['shape', 'answerShape']) if (a.diag[k]) walk(a.diag[k]);
+    }
+  }
 });

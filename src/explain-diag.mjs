@@ -8,7 +8,7 @@ import {STOP_PHRASES} from './watch-stop-phrases.mjs';
 
 // 설명 칸 7개와 실행기 봉투·오류에서 흔한 키. 이 밖의 키는 글자를 남기지 않고 unknown으로 센다.
 export const KEY_NAMES = ['title', 'workstream', 'stage', 'goal', 'summary', 'next', 'blocker',
-  'response', 'result', 'output', 'text', 'content', 'message', 'error', 'code', 'type', 'subtype', 'status',
+  'response', 'result', 'output', 'text', 'content', 'message', 'error', 'errors', 'code', 'type', 'subtype', 'status',
   'is_error', 'usage', 'stats', 'models', 'reason'];
 export const SIGNAL_NAMES = Object.keys(constants.signals);
 // 저장 실패(write-failed:<코드>)에 붙일 수 있는 시스템 오류 코드. 이 밖의 코드는 붙이지 않는다.
@@ -17,6 +17,18 @@ export const ERRNO_CODES = ['ENOSPC', 'EACCES', 'EPERM', 'EROFS', 'EIO', 'EEXIST
 export const VALUE_KINDS = ['string', 'number', 'boolean', 'null', 'object', 'array'];
 export const ENVELOPE_STATES = ['not-json', 'field-missing', 'field-empty', 'ok'];
 export const UNKNOWN_KEY = '?';
+// 시도 결과 칸에 쓸 수 있는 값. field-rule:<칸>은 설명 칸 7개와 required, stage 규칙뿐이다.
+export const ATTEMPT_RESULTS = ['ok', 'timeout', 'output-limit', 'call-failed', 'template-error', 'not-json',
+  'field-rule:title', 'field-rule:workstream', 'field-rule:stage', 'field-rule:goal', 'field-rule:summary',
+  'field-rule:next', 'field-rule:blocker', 'field-rule:required'];
+
+// 입력 값이 목록에 있으면 '목록 쪽의 같은 리터럴'을 돌려준다. 입력 값 자체는 쓰지 않는다.
+// 문자열이 아닌 값은 문자열로 바꾸지 않고(===만 쓴다) 목록 비교에서 떨어진다.
+export const pick = (list, value) => list.find(item => item === value);
+// 예외 객체의 code는 한 번만 읽는다. 읽다가 예외가 나면 코드 없이 undefined.
+export function errnoOf(error) {
+  try { return pick(ERRNO_CODES, error?.code); } catch { return undefined; }
+}
 export const MAX_KEYS = 16;
 const MAX_DEPTH = 2;
 
@@ -42,7 +54,7 @@ export function wordIds(...texts) {
   return WORDS.filter(([, pattern]) => pattern.test(text)).map(([id]) => id);
 }
 
-const kindOf = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+const kindOf = value => pick(VALUE_KINDS, value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value);
 const sizeOf = (value, kind) => kind === 'string' ? [...value].length : kind === 'array' ? value.length : kind === 'object' ? Object.keys(value).length : undefined;
 const smallInt = value => Number.isInteger(value) && value >= 0 && value <= 9999;
 
@@ -57,9 +69,10 @@ export function shapeOf(value, depth = 1) {
     const keys = [];
     let unknown = 0, extra = 0;
     for (const [name, child] of Object.entries(value)) {
-      if (!KEY_NAMES.includes(name)) { unknown++; continue; }
+      const known = pick(KEY_NAMES, name);
+      if (known === undefined) { unknown++; continue; }
       if (keys.length >= MAX_KEYS) { extra++; continue; }
-      keys.push({k: name, ...shapeOf(child, depth + 1)});
+      keys.push({k: known, ...shapeOf(child, depth + 1)});
     }
     out.keys = keys;
     if (unknown) out.unknown = unknown;
@@ -73,11 +86,12 @@ const parse = text => { try { return {value: JSON.parse(String(text ?? ''))}; } 
 // attempt.diag 본문. 성공 시도에는 부르지 않는다.
 export function buildDiag({stdout, stderr, answer, envelope, exitCode, signal}) {
   const diag = {};
-  if (envelope) diag.envelope = envelope;
+  const state = pick(ENVELOPE_STATES, envelope);
+  if (state !== undefined) diag.envelope = state;
   const outer = parse(stdout);
   if (outer) diag.shape = shapeOf(outer.value);
   // 봉투 안 답이 JSON이면 그 구조도 남긴다(봉투 없는 실행기는 stdout이 곧 답이라 shape 하나로 충분하다).
-  if (envelope && envelope !== 'not-json') {
+  if (state !== undefined && state !== 'not-json') {
     const inner = parse(answer);
     if (inner) diag.answerShape = shapeOf(inner.value);
   }
@@ -85,6 +99,7 @@ export function buildDiag({stdout, stderr, answer, envelope, exitCode, signal}) 
   diag.stdoutBytes = Buffer.byteLength(String(stdout ?? ''));
   diag.stderrBytes = Buffer.byteLength(String(stderr ?? ''));
   if (Number.isInteger(exitCode)) diag.exitCode = exitCode;
-  if (SIGNAL_NAMES.includes(signal)) diag.signal = signal;
+  const sig = pick(SIGNAL_NAMES, signal);
+  if (sig !== undefined) diag.signal = sig;
   return diag;
 }

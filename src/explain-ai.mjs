@@ -18,7 +18,7 @@ import {execCommand} from './runner-table.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
 import {answerText, buildExplainPrompt, decisionsByCard, envelopeState, parseBriefOutput} from './explain-input.mjs';
-import {buildDiag, ERRNO_CODES} from './explain-diag.mjs';
+import {ATTEMPT_RESULTS, buildDiag, errnoOf, pick} from './explain-diag.mjs';
 
 export const EXPLAIN_FILE = 'explain-ai.jsonl';
 export const EXPLAIN_TIMEOUT_MS = 75_000;
@@ -174,6 +174,7 @@ export class ExplainAI {
       } catch { attempt.result = 'template-error'; }
       // 실패한 시도에는 출력 글자를 남기지 않고 구조만 남긴다(explain-diag.mjs). 성공 시도에는 아무것도 남기지 않는다.
       if (attempt.result !== 'ok' && seen) attempt.diag = buildDiag(seen);
+      attempt.result = pick(ATTEMPT_RESULTS, attempt.result) ?? 'template-error';
       attempt.durationMs = this.now() - started;
       attempts.push(attempt);
       // 모델이 응답하지 못한 경우(시간 초과·호출 실패)와 형식 실패(not-json·field-rule:*)는 다음 대체 후보로 내려간다.
@@ -197,10 +198,10 @@ export class ExplainAI {
     try { attempt(job.revision); return {outcome: 'written'}; }
     catch (error) {
       // 오류 메시지에는 읽던 글자가 섞일 수 있어 원장에 넣지 않는다. 고정 코드(와 시스템 오류 코드)만 남긴다.
-      if (!String(error.message).startsWith('카드 변경됨')) {
-        const code = ERRNO_CODES.includes(error.code) ? `:${error.code}` : '';
-        return {outcome: 'failed', reason: `write-failed${code}`};
-      }
+      // 예외 객체는 칸마다 한 번씩만 읽고(접근 함수·Proxy가 읽을 때 던지거나 값이 바뀔 수 있다), 기록에는 목록 쪽 리터럴만 쓴다.
+      let changed = false, errno;
+      try { changed = typeof error?.message === 'string' && error.message.startsWith('카드 변경됨'); errno = changed ? undefined : errnoOf(error); } catch { changed = false; errno = undefined; }
+      if (!changed) return {outcome: 'failed', reason: errno === undefined ? 'write-failed' : `write-failed:${errno}`};
     }
     try {
       const [card] = this.center([job.key], this.now());
