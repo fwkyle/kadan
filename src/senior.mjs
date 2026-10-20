@@ -7,14 +7,15 @@ import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {CardStore} from './card-store.mjs';
-import {readSettings, runnerChoices} from './runner-settings.mjs';
+import {assertSeniorRunner, readSettings, runnerChoices} from './runner-settings.mjs';
+import {scrubForAI} from './explain-input.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 import {closeOnSignal, closeSeniorTab, openSeniorTab, writeTabState} from './senior-tab.mjs';
 
-export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. --runner/--model은 이번 호출만 고르고(--model만 주면 설정의 실행기), 실행기는 안전 허용 목록(지금 codex)만 된다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
@@ -28,6 +29,23 @@ const digest = text => createHash('sha256').update(text).digest('hex');
 
 // 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
 export const seniorCommandLabel = value => value ? `KADAN_SENIOR_MODEL=${value.model} KADAN_SENIOR_EFFORT=${value.effort ?? 'max'} senior.sh (codex exec, 저장소 읽기 전용)` : null;
+
+// 이번 호출만 실행기·모델을 고른다(설정은 그대로, 2026-10-20 [kyle]). 지정이 없으면 설정값 그대로 돌려준다.
+// --runner만 주면 오류, --model만 주면 설정의 실행기에 그 모델. 실행기는 안전 허용 목록에 있어야 하고(설정 저장과 같은 검사),
+// 모델은 그 실행기 표에 있어야 하며 정책 차단(block --roles senior)에도 걸린다. 강도는 설정값이 새 모델에서도 가능할 때만 이어 받는다.
+function pickValue(settings, configured, flags, readCodexModels) {
+  const {runner, model} = flags;
+  if (runner == null && model == null) return {value: configured, picked: false};
+  for (const [name, v] of [['--runner', runner], ['--model', model]]) if (v != null && (typeof v !== 'string' || !/^[A-Za-z0-9._\/\-\[\]]+$/.test(v))) throw new Error(`${name} 값 형식 오류: ${v}`);
+  if (runner != null && model == null) throw new Error('--runner만으로는 부를 수 없다 — 모델도 함께 주어라(--runner <실행기> --model <모델>). 설정의 실행기에 모델만 바꾸려면 --model만 준다');
+  const chosen = runner ?? configured.runner;
+  assertSeniorRunner(chosen);
+  const choices = runnerChoices(settings, chosen, readCodexModels ? {readCodexModels} : undefined);
+  if (!choices.has(model)) throw new Error(`${chosen}에서 고를 수 없는 모델: ${model}`);
+  if ((settings.blocked ?? []).some(b => b.model === model && (!b.roles || b.roles.includes('senior')))) throw new Error(`정책으로 막은 모델: ${model} (block --roles senior)`);
+  const keep = configured.effort != null && (choices.get(model) ?? []).includes(configured.effort) ? {effort: configured.effort} : {};
+  return {value: {runner: chosen, model, ...keep}, picked: true};
+}
 
 // 이번 호출의 강도. 형식이 맞아야 하고, 그 모델이 지원하는 강도 목록을 읽을 수 있으면 그 안이어야 한다.
 function checkEffort(settings, value, effort, readCodexModels) {
@@ -78,14 +96,18 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const configured = settings?.presets?.[settings.activePreset]?.roles?.senior;
   if (!configured) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
   // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 비싼 모델을 시험할 때 low로 부르는 용도(2026-10-05 [kyle]).
-  const value = flags.effort == null ? configured : {...configured, effort: checkEffort(settings, configured, flags.effort, readCodexModels)};
+  const {value: base, picked} = pickValue(settings, configured, flags, readCodexModels);
+  // 지정 없는 호출(설정 직접 편집·옛 advisor 이름 포함)도 실행 직전에 같은 허용 목록 검사를 거친다.
+  assertSeniorRunner(base.runner);
+  const value = flags.effort == null ? base : {...base, effort: checkEffort(settings, base, flags.effort, readCodexModels)};
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
   const attachments = files.map(file => ({file, text: readAttachment(file)}));
   const adviceId = randomUUID();
   const dir = path.join(home, 'advice', adviceId);
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
-  const prompt = composeAdvicePrompt({question, card, attachments});
+  // 카드 글은 외부 서비스로 나가므로 웹훅 주소·토큰 모양을 가린 뒤 보낸다(docs/runner-settings.md).
+  const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments}));
   fs.writeFileSync(path.join(dir, 'input.txt'), prompt, {mode: 0o600});
   // 따라 볼 진행 출력 파일을 미리 만들어 둔다(탭이 먼저 떠도 비어 있는 채로 기다린다). senior.sh가 같은 파일에 쓴다.
   fs.writeFileSync(path.join(dir, 'diagnostic.log'), '', {mode: 0o600});
@@ -97,6 +119,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     if (opened.tab === 'opened') { tab = closeSeniorTab(opened); writeTabState(dir, {state: tab.tab, reason: tab.tabReason}); }
   };
   const makeEntry = fields => ({kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
+    ...(picked ? {source: 'flag', runner: value.runner, settingsRunner: configured.runner, settingsModel: configured.model} : {}),
     model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
     files: attachments.map(a => a.file), evidencePath: dir, ...tab, ...(opened.tabKey ? {tabKey: opened.tabKey} : {}),
     ...(opened.rottieTerminalId ? {rottieTerminalId: opened.rottieTerminalId} : {}), t: new Date(started).toISOString(), ...fields});
@@ -129,5 +152,5 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     error.exitCode = 1;
     throw error;
   }
-  return {adviceId, card: card.key, model: value.model, effort: value.effort ?? 'max', reason, durationMs: entry.durationMs, evidencePath: dir, ...tab, follow: `tail -F ${path.join(dir, 'diagnostic.log')}`, answer};
+  return {adviceId, card: card.key, ...(picked ? {source: 'flag', runner: value.runner} : {}), model: value.model, effort: value.effort ?? 'max', reason, durationMs: entry.durationMs, evidencePath: dir, ...tab, follow: `tail -F ${path.join(dir, 'diagnostic.log')}`, answer};
 }

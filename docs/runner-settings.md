@@ -174,7 +174,8 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 `scripts/senior.sh`가 `codex exec`로 한 번 돌린다(2026-10-05 [kyle] 승인). 슈퍼감독은 값싼 모델로 두고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 자세한 규칙은 [시니어](senior.md).
 
 - 설정: 활성 프리셋의 `roles.senior`. 명령은 `kadan runners set senior --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **시니어** 줄이다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음).
-- 실행기는 `codex`만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 적용한다.
+- 실행기는 안전 허용 목록(`SENIOR_SAFE_RUNNERS`, 지금 `codex`만)에 든 것만 받는다. 저장(`runners set senior`)과 호출(`kadan senior --runner`)이 같은 검사로 거절한다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 호출 때 골라 부른 모델에도 적용한다.
+- **호출 때 고르기**: `kadan senior … [--runner <실행기> --model <모델>]`은 이번 호출만 바꾸고 설정은 그대로다([시니어](senior.md)). 카드 글은 외부로 보내기 전에 `scrubForAI`로 웹훅 주소·토큰 모양을 가린다.
 - **폴백이 없다.** `runners fallback senior`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
 - 상한은 호출마다 기본 30분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽고 시험까지 돌려 볼 수 있는 호출이라 감시 AI(5분)보다 훨씬 길다. 횟수 제한은 없다 — 필요할 때만 부른다.
 
