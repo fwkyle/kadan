@@ -169,7 +169,7 @@ test('공통 질문 안내는 인계된 현재 발신자 회신 주소와 사용
   assert.match(instructions,/KADAN_ROLE='new-recipient'/);
   assert.ok(instructions.includes("kadan send 'new-sender'\\''quoted'"));
   assert.ok(instructions.includes(`--reply-to '${id}' --reply-final`));
-  assert.match(composeMailInstructions({mailId:id,recipient:'new-recipient',expectReply:true,sender:'사람'}),/--reply-final --mailbox/);
+  assert.match(composeMailInstructions({mailId:id,recipient:'new-recipient',expectReply:true,sender:'사람'}),/--reply-final <답변>/);
   assert.doesNotMatch(composeMailInstructions({mailId:id,recipient:'new-recipient',expectReply:false,sender:'사람'}),/reply-final/);
   assert.equal(composeMailInstructions({mailId:id,recipient:'new-recipient',notificationOnly:true,expectReply:true,sender:'사람'}),'');
 });
@@ -192,6 +192,13 @@ const floor={name:'fake',alive:s=>{assert.equal(s,'kadan-new-sender');return tru
 mock.module(${moduleUrl('floor')},{namedExports:{floor}});
 const {main}=await import(${moduleUrl('cli')});
 await main(['send','old-sender','--reply-to',question.mailId,'--reply-final',...(mode==='raw'?['--raw']:[]),'늦은 답장']);
+if(mode==='pid-mismatch'){
+  // 후임이 아는 역할인데 PID가 다르면 바로 넣지 않고 후임 앞으로 보관한다(2026-10-21 우편 단순화).
+  assert.equal(sent.length,0);
+  const stored=readMailLedger().filter(e=>e.kind==='send').at(-1);
+  assert.equal(stored.transport,'mailbox');assert.equal(stored.role,'new-sender');assert.equal(stored.replyTo,question.mailId);
+  process.exit(0);
+}
 assert.equal(sent.length,1);assert.equal(sent[0].session,'kadan-new-sender');
 const answer=readMailLedger().filter(e=>e.kind==='send').at(-1);
 assert.equal(answer.role,'new-sender');assert.equal(answer.session,'kadan-new-sender');assert.equal(answer.by,'receiver');
@@ -204,10 +211,13 @@ else assert.match(sent[0].message,/KADAN_ROLE='new-sender' kadan inbox ack/);
 `;
   const result=spawnSync(process.execPath,['--experimental-test-module-mocks','--input-type=module','--eval',script],
     {encoding:'utf8',env:{...process.env,KADAN_HOME:home,KADAN_FLOOR:'tmux',KADAN_ROLE:'receiver',KADAN_WINDOW:'none'},timeout:10000});
-  if (mode==='pid-mismatch'||mode==='missing-start') {
+  if (mode==='missing-start') {
     assert.equal(result.status,1,result.stderr);
-    assert.match(result.stderr,mode==='pid-mismatch'?/기록 222 \/ 현재 999/:/new-sender의 시작 기록\/PID가 없습니다/);
+    assert.match(result.stderr,/new-sender의 시작 기록\/PID가 없습니다/);
     assert.equal(readMailLedger(home).filter(e=>e.kind==='send').length,1);
+  } else if (mode==='pid-mismatch') {
+    assert.equal(result.status,0,result.stderr+result.stdout);
+    assert.match(result.stdout,/"status":"stored"/);
   } else {
     assert.equal(result.status,0,result.stderr+result.stdout);
     assert.match(result.stdout,/전달됨: kadan-new-sender/);assert.doesNotMatch(result.stdout,/전달됨: kadan-old-sender/);

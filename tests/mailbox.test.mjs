@@ -155,10 +155,11 @@ test('raw 질문은 전송 전 거절하고 저장-only CLI는 모든 역할과 
  assert.equal(delivered,0);
  const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
  const call=(by,...args)=>spawnSync(process.execPath,[cli,...args],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:by,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_NOTIFY:'off'},encoding:'utf8',timeout:3000});
+ appendLedger({kind:'start',role:'receiver',session:'kadan-receiver',panePid:42,t:'2026-10-21T00:00:00Z'},home);
  const question=call('사람','send','receiver','--mailbox','--expect-reply','질문');
  assert.equal(question.status,0,question.stderr);const q=JSON.parse(question.stdout);
  const wrong=call('receiver','send','other','--mailbox','--reply-to',q.mailId,'--reply-final','답변');assert.notEqual(wrong.status,0);assert.match(wrong.stderr,/받는 역할/);
- const answer=call('receiver','send','사람','--mailbox','--reply-to',q.mailId,'--reply-final','답변');assert.equal(answer.status,0,answer.stderr);
+ const answer=call('receiver','send','사람','--reply-to',q.mailId,'--reply-final','답변');assert.equal(answer.status,0,answer.stderr);
  const received=call('사람','inbox','received','--all');assert.equal(received.status,0,received.stderr);assert.equal(JSON.parse(received.stdout).length,1);
  assert.equal(readTaskLedger(home).length,0);
 });

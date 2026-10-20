@@ -2,6 +2,7 @@ import {isUserActor} from './actors.mjs';
 import {createMailRouting} from './mail-routing.mjs';
 import {createTaskCompletionChecker} from './ledger-domains.mjs';
 import {createMailGenerations} from './mail-generation.mjs';
+import {isNeverDeliveredMail} from './mail-since.mjs';
 const views=new Set(['received','sent','to-reply','waiting']);
 const canAct=(by,role)=>by===role||isUserActor(by);
 const sameContext=(a,b)=>a.workKey===b.workKey&&a.executionKey===b.executionKey;
@@ -58,7 +59,9 @@ function projectLetters(entries){
   ...e,currentRecipient:routing.get(e).currentRecipient,currentSender:routing.get(e).currentSender,
   replyRecipients:[...routing.get(e).senderRoles],
   // 현재 담당 이름의 새 세대가 편지(또는 마지막 인계) 뒤에 시작됐으면 이전 세대 소속이다.
-  previousGeneration:generations.isPrevious(routing.get(e).currentRecipient,routing.get(e).since),
+  // 단, 받는 쪽이 꺼져 있어 저장만 된 새 우편(키로 한 번도 못 넣음)은 다음 start 앞에 있어도 이전 세대로 보지 않는다(2026-10-21 우편 단순화).
+  previousGeneration:generations.isPrevious(routing.get(e).currentRecipient,routing.get(e).since)
+   &&!isNeverDeliveredMail(e,routing.get(e).currentRecipient,isUserActor),
   // 수신자 직접 ack가 있으면 그것을, 없으면 raw 창 전달 성공의 전달 읽음을 읽음 근거로 표시한다.
   read:read.has(e)||e.mailId&&e.deliveredRead===true?true:e.mailId?false:null,
   readKind:read.has(e)?'recipient-ack':e.mailId&&e.deliveredRead===true?'delivered-read':null,expectReply:e.expectReply===true,replyFinal:e.replyFinal===true,

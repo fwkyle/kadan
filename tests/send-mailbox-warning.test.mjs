@@ -1,21 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {storedMailLiveWarning} from '../src/commands/send.mjs';
+import {mailboxFlagWarning,isKnownRole,isStoreOnlyRecipient} from '../src/commands/send.mjs';
 
-const live = () => true;
-
-test('--mailbox인데 받는 세션이 살아 있으면 경고 문구를 돌려준다',()=>{
-  const text=storedMailLiveWarning('worker',{mailbox:true},live);
-  assert.match(text,/worker/);assert.match(text,/--mailbox 없이/);
+test('--mailbox는 거절하지 않고 무시하며 바로 넣기 후 자동 보관이라고 알린다',()=>{
+  const text=mailboxFlagWarning('worker',{mailbox:true});
+  assert.match(text,/--mailbox는 더 이상 쓰지 않습니다/);assert.match(text,/자동으로 보관/);
 });
 
-test('세션이 없거나 --mailbox가 아니면 경고하지 않는다',()=>{
-  assert.equal(storedMailLiveWarning('worker',{mailbox:true},()=>false),null);
-  assert.equal(storedMailLiveWarning('worker',{},live),null);
+test('--mailbox가 없거나 비서·사람 앞(원래 저장 전용)이면 알리지 않는다',()=>{
+  assert.equal(mailboxFlagWarning('worker',{}),null);
+  assert.equal(mailboxFlagWarning('비서',{mailbox:true}),null);
+  assert.equal(mailboxFlagWarning('사람',{mailbox:true}),null);
+  assert.equal(isStoreOnlyRecipient('비서'),true);assert.equal(isStoreOnlyRecipient('사람'),true);
+  assert.equal(isStoreOnlyRecipient('worker'),false);
 });
 
-test('비서·사람 수신과 세션 조회 실패는 경고하지 않는다',()=>{
-  assert.equal(storedMailLiveWarning('비서',{mailbox:true},live),null);
-  assert.equal(storedMailLiveWarning('사람',{mailbox:true},live),null);
-  assert.equal(storedMailLiveWarning('worker',{mailbox:true},()=>{throw new Error('조회 실패')}),null);
+test('아는 역할은 시작·종료 기록이 한 번이라도 있거나 계층표에 있는 역할이다',()=>{
+  const entries=[{kind:'start',role:'worker',session:'kadan-worker'},{kind:'stop',session:'kadan-gone'}];
+  assert.equal(isKnownRole(entries,null,'worker'),true);
+  assert.equal(isKnownRole(entries,null,'gone'),true);
+  assert.equal(isKnownRole(entries,{boss:'@user',kid:'boss'},'kid'),true);
+  assert.equal(isKnownRole(entries,{boss:'@user',kid:'boss'},'boss'),true);
+  assert.equal(isKnownRole(entries,{boss:'@user'},'오타'),false);
+  assert.equal(isKnownRole(entries,null,'오타'),false);
 });

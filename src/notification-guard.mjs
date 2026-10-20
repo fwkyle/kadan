@@ -14,10 +14,10 @@ export function isNotificationHold(error) {
   return error?.delivery === 'not-sent' && holdCodes.has(error.code);
 }
 
-// 슈퍼 간이 아닌 일반 `kadan mail`을 실패 대신 보관할 수 있는 보류: 사람 입력과 복사 모드뿐이다.
-// 그 밖의 보류 코드(상태 미확인 등)는 근거가 생기기 전까지 넓히지 않는다.
-const storableMailCodes = new Set(['KADAN_HUMAN_ACTIVE', 'KADAN_PANE_IN_MODE']);
+// 바로 넣지 못한 우편을 실패 대신 보관할 수 있는 경우(2026-10-21 우편 단순화): 붙이기 전에 멈춘 입력 보호 보류에
+// 받는 세션 없음·PID 다름을 더한다. 역할 지침 오류·수신자 변경 같은 not-sent는 설정·주소 문제라 보관으로 덮지 않는다.
+const storableMissCodes = new Set(['KADAN_SESSION_MISSING', 'KADAN_PID_MISMATCH']);
 
 export function isStorableMailHold(error) {
-  return error?.delivery === 'not-sent' && storableMailCodes.has(error.code);
+  return isNotificationHold(error) || (error?.delivery === 'not-sent' && storableMissCodes.has(error.code));
 }
