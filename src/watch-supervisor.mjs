@@ -21,11 +21,16 @@ function idleAlert(baseId, role, session, openCards, idleFor, idleMs) {
 // 소속 워크(work:<키>), answerer는 답할 역할(사용자 결정이면 @user). 감독 role에게서 빼는 조건: 답할 쪽이 role 자신이나
 // role 아래가 아니다. 즉 사용자 결정은 모두에게서 빠지고, 감독→슈퍼감독 질문은 묻는 감독에게서만 빠진다(답할 슈퍼감독에게는 할 일).
 export function waitingExcluder(waits, parents) {
-  const byId = new Map();
-  for (const w of waits ?? []) for (const id of w.ids ?? []) byId.set(id, [...(byId.get(id) ?? []), w.answerer]);
+  const byId = new Map(), mails = new Map();
+  for (const w of waits ?? []) for (const id of w.ids ?? []) {
+    byId.set(id, [...(byId.get(id) ?? []), w.answerer]);
+    if (w.mailId) mails.set(id, [...(mails.get(id) ?? []), { mailId: w.mailId, asker: w.asker, answerer: w.answerer }]);
+  }
   const excluded = (taskId, role) => (byId.get(taskId) ?? []).some(a => a !== role && !(parents.has(a) && isDescendant(a, role, parents)));
   excluded.userWait = taskId => (byId.get(taskId) ?? []).includes("@user");
   excluded.answers = (taskId, role) => (byId.get(taskId) ?? []).includes(role);
+  // role이 답할 질문 우편(우편 ID·질문자). 답 대기가 우편이 아닌 것(사용자 결정 등)이면 비어 있다.
+  excluded.questions = (taskId, role) => (mails.get(taskId) ?? []).filter(m => m.answerer === role);
   return excluded;
 }
 
@@ -130,6 +135,8 @@ export function assessSupervisorIdle(
   const linked = (id, check) => check(id) || Boolean(requests.find(r => r.taskId === id)?.linkedWorkIds.some(check));
   waiting.userWait = id => linked(id, excluded.userWait);
   waiting.answers = (id, role) => linked(id, key => excluded.answers(key, role));
+  waiting.questions = (id, role) => [id, ...(requests.find(r => r.taskId === id)?.linkedWorkIds ?? [])]
+    .flatMap(key => excluded.questions(key, role));
   // 이전 세대 소속의 책임은 할 일에서 뺀다(owner-generation.mjs). 답 대기 요청(peerRequest)은 우편 세대 규칙을 따른다.
   const generations = ownerGenerations(peerEntries);
   const current = entry => entry.peerRequest || entry.kind !== "send" || !parents.has(entry.role)
@@ -147,7 +154,7 @@ export function assessSupervisorIdle(
 // 1단: 감독 본인에게. 예전 --wake(30분 타이머에 고정 점검 목록)를 대신한다 — 근거(할 일 수·멈춘 시간)가 있는
 // 문구만 보내고, 멈추지 않았으면 아무것도 보내지 않는다. 15분 더 멈추면 2단으로 상위에게 간다고 미리 알린다.
 export function buildIdleNudge(alert) {
-  return `놀고 있음 ${alert.session} (${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
+  return `놀고 있음 ${alert.session} (${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.${idleOwnText(alert) && ` ${idleOwnText(alert)}`}`;
 }
 
 // 센 항목을 세 가지로 가른다: 본인 차례 / 하위 역할 차례 / 사용자 답 대기. 앞의 하나만 재촉의 근거이고 나머지는 참고다.
@@ -160,8 +167,32 @@ export function idleCountsText(alert) {
 
 const ITEM_CAP = 20;
 
+// 본인 차례인 이유: 답할 질문(우편이 걸림) > 미발령 계획 > 내 차례. 판정(mine)은 바꾸지 않고 이유만 붙인다.
+function ownReason(entry, role, answers, questions) {
+  const id = entry.taskId;
+  if (answers(id, role)) {
+    const asked = questions(id, role).slice(0, 3);
+    return { id, reason: "답할 질문", ...(asked.length ? { mailIds: asked.map(m => m.mailId.slice(0, 8)), asker: asked[0].asker } : {}) };
+  }
+  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례" };
+}
+
+const BODY_ITEMS = 5;
+
+// 알림 본문에 붙일 본인 차례 항목과 이유(최대 5개, 넘으면 `외 N건`). 원장에 이유가 없는 옛 기록이면 빈 글자다.
+export function idleOwnText(alert) {
+  const why = alert.idleItems?.ownWhy;
+  if (!why?.length) return "";
+  const shown = why.slice(0, BODY_ITEMS).map(w => `${w.id} (${w.reason}${w.mailIds?.length ? ` ${w.mailIds.join("·")}` : ""})`);
+  const rest = (alert.openCards ?? why.length) - shown.length;
+  const asked = why.find(w => w.mailIds?.length);
+  const hint = asked ? ` 답했으면 kadan send ${asked.asker ?? "<질문자>"} --reply-to <우편ID> --reply-final '답' 으로 닫는다.` : "";
+  return `본인 차례: ${shown.join(", ")}${rest > 0 ? ` 외 ${rest}건` : ""}.${hint}`;
+}
+
 export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null) {
   const userWaiting = excluded.userWait ?? (() => false), answers = excluded.answers ?? (() => false);
+  const questions = excluded.questions ?? (() => []);
   const pending = new Map();
   for (const entry of entries) {
     if (!parents.has(entry?.role) || !entry.taskId) continue;
@@ -197,6 +228,8 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents, exclu
       own: cards.map(entry => entry.taskId).slice(0, ITEM_CAP),
       lower: open.filter(entry => !mine(entry)).map(entry => entry.taskId).slice(0, ITEM_CAP),
       userWait: waitIds.slice(0, ITEM_CAP),
+      // 본인 차례인 이유(own과 같은 순서·같은 20개 상한). 글자는 키·고정 낱말·ID뿐이다.
+      ownWhy: cards.slice(0, ITEM_CAP).map(entry => ownReason(entry, role, answers, questions)),
     };
     const extra = { lower, userWait: waitIds.length, idleItems: items };
     const session = `kadan-${role}`;

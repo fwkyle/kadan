@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 // 가짜 시계 시뮬레이션: sleep이 분을 올리고 끝에서 중단한다(helpers/watch-runner는 sleep을 덮어써 쓰지 않는다).
 import {runWatch} from '../src/watch-runner.mjs';
+import {assessHierarchyIdle} from '../src/watch-supervisor.mjs';
 const lt=n=>[...String(n)].map(d=>'ghijklmnop'[d]).join(''); // 숫자만 바뀐 화면은 변화로 치지 않으므로 글자로 바꾼다
 
 // 점검 보고서(2026-10-05) 시뮬레이션에서 둘 다 0회였다: 최상위 감독의 죽음, 등록된 감독의 놀고 있음.
@@ -184,7 +185,8 @@ test('본인 차례 업무가 멈춰 있으면 그대로 재촉하고, 문구는
   assert.equal(toSuper.length,1);
   assert.match(toSuper[0][2],/\(본인 차례 2건 \/ 하위 p-감독 차례 2건 \/ 사용자 답 대기 1건, 15분간 화면 변화 없음\)/);
   const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-슈퍼감독'&&!e.resolved);
-  assert.deepEqual(rec.idleItems,{own:['work:repo/w2','work:repo/w3'],lower:['work:repo/w4','work:repo/w5'],userWait:['work:repo/w1']});
+  assert.deepEqual(rec.idleItems,{own:['work:repo/w2','work:repo/w3'],lower:['work:repo/w4','work:repo/w5'],userWait:['work:repo/w1'],
+    ownWhy:[{id:'work:repo/w2',reason:'내 차례'},{id:'work:repo/w3',reason:'내 차례'}]});
   // 본인 차례 일이 있으면 30분에 사용자(@user)에게 올라간다.
   const up=await simulate({minutes:40,...finished,works,decisions});
   assert.ok(up.records.some(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-슈퍼감독:상위'&&e.recipient==='@user'));
@@ -209,4 +211,59 @@ test('owner는 이전 세대, 차례는 현재 다른 감독인 업무도 65주�
   const r=await simulate({minutes:65,hier,starts:sts,cards:finished.cards,works:[work],entries});
   assert.deepEqual(r.nudges.filter(([,role])=>role==='p-다른감독').map(([m])=>m),[40],'차례 시각(25분)부터 15분 뒤 1단');
   assert.ok(r.records.some(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-다른감독:상위'&&e.minute===55&&!e.resolved),'15분 더 멈추면 2단');
+});
+
+// 2026-10-21 외부 제보: 놀고 있음 알림이 건수만 말해 무엇을 왜 하라는지 몰랐다. 본문에 항목 키·이유·질문 우편 ID·닫는 법을 적는다.
+// 판정은 그대로다: 감독이 상위에게 보낸 답 필요 우편이 최종 답 없이 걸린 업무는 답할 상위의 본인 차례다.
+const MAIL_ID='49edd535-0000-4000-8000-000000000001';
+const question=(patch={})=>({kind:'send',transport:'mailbox',mailId:MAIL_ID,by:'p-감독',role:'p-슈퍼감독',expectReply:true,
+  workKey:'repo/w1',preview:'답 필요',t:stamp(0),...patch});
+const ownedBySub=n=>({key:`repo/w${n}`,status:'open',owner:'p-감독',turnOwner:'p-감독',executions:[{key:'repo/t1'}],at:stamp(0)});
+const idleBase=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'plan',board:'p',taskId:'t1',t:stamp(0)}];
+const finishedEntries=[{kind:'send',role:'p-작업자',taskId:'t1',t:stamp(0)},{kind:'done',role:'p-작업자',taskId:'t1',result:'ok',t:stamp(1)}];
+const doneCard={...card,status:'done',activity:'done'};
+
+test('답 필요 우편이 최종 답 없이 걸린 업무: 슈퍼감독 알림 본문에 업무 키·답할 질문·우편 ID 앞 8자·닫는 법이 있다. 2단에도 같다',async()=>{
+  const r=await simulate({minutes:40,cards:[doneCard],works:[ownedBySub(1)],entries:[...finishedEntries,question()]});
+  const toSuper=r.nudges.filter(([,role])=>role==='p-슈퍼감독');
+  assert.equal(toSuper.length,1);
+  assert.match(toSuper[0][2],/본인 차례: work:repo\/w1 \(답할 질문 49edd535\)\./);
+  assert.match(toSuper[0][2],/kadan send p-감독 --reply-to <우편ID> --reply-final '답' 으로 닫는다/);
+  const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-슈퍼감독'&&!e.resolved);
+  assert.deepEqual(rec.idleItems.ownWhy,[{id:'work:repo/w1',reason:'답할 질문',mailIds:['49edd535'],asker:'p-감독'}]);
+  assert.deepEqual(rec.idleItems.own,['work:repo/w1']);
+  // 같은 슈퍼감독이 다시 멈추면 사용자에게 올라가는 2단 본문에도 같은 항목이 있다.
+  assert.ok(r.printed.some(l=>/30분간 화면 변화 없음.*본인 차례: work:repo\/w1 \(답할 질문 49edd535\).*→ @user/.test(l)));
+});
+
+test('같은 상황에서 --reply-final 답장이 있으면 슈퍼감독 알림이 없다',async()=>{
+  const reply={kind:'send',transport:'mailbox',mailId:'r1',by:'p-슈퍼감독',role:'p-감독',replyTo:MAIL_ID,replyFinal:true,workKey:'repo/w1',t:stamp(2)};
+  const r=await simulate({minutes:40,cards:[doneCard],works:[ownedBySub(1)],entries:[...finishedEntries,question(),reply]});
+  assert.ok(!r.nudges.some(([,role])=>role==='p-슈퍼감독'));
+  assert.ok(!r.records.some(e=>e.kind==='alert'&&e.role==='p-슈퍼감독'&&e.alertKind==='놀고 있음'));
+});
+
+test('이유는 내 차례·미발령 계획으로도 가른다. 판정은 그대로다',async()=>{
+  const plan=assessHierarchyIdle([{kind:'plan',board:'p',taskId:'t9',t:stamp(0)}],
+    new Map(['p-작업자','p-감독','p-슈퍼감독'].map(r=>[`kadan-${r}`,{alive:true,digest:'x',unchangedMs:3600e3}])),epoch+3600e3,60e3,parents);
+  assert.deepEqual(plan[0].idleItems.ownWhy,[{id:'t9',reason:'미발령 계획'}]);
+  const mine={...ownedBySub(9)};
+  const r=await simulate({minutes:16,cards:[doneCard],works:[mine],entries:finishedEntries});
+  const rec=r.records.find(e=>e.kind==='alert'&&e.id==='idle:hierarchy:p-감독'&&!e.resolved);
+  assert.deepEqual(rec.idleItems.ownWhy.map(w=>[w.id,w.reason]),[['work:repo/w9','내 차례']]);
+  assert.match(r.nudges[0][2],/본인 차례: .*\(내 차례\)/);
+});
+
+test('사용자 결정만 걸린 업무와 하위 감독 차례 업무뿐이면 슈퍼감독에게 본인 차례 알림이 없다',async()=>{
+  const w1={...ownedBySub(1),turnOwner:'p-슈퍼감독'};
+  const decisions=[{id:'d1',card:'repo/c1',work:'repo/w1',requestedBy:'p-슈퍼감독',status:'open',at:stamp(0)}];
+  const r=await simulate({minutes:40,cards:[doneCard],works:[w1,ownedBySub(2)],decisions,entries:finishedEntries});
+  assert.ok(!r.nudges.some(([,role])=>role==='p-슈퍼감독'));
+  assert.ok(!r.records.some(e=>e.kind==='alert'&&e.role==='p-슈퍼감독'&&e.alertKind==='놀고 있음'));
+});
+
+test('본문 항목은 5개까지, 넘으면 외 N건',async()=>{
+  const works=Array.from({length:7},(_,i)=>ownedBySub(i));
+  const r=await simulate({minutes:16,cards:[doneCard],works,entries:finishedEntries});
+  assert.match(r.nudges[0][2],/본인 차례: (work:repo\/w\d \(내 차례\), ){4}work:repo\/w\d \(내 차례\) 외 2건\./);
 });

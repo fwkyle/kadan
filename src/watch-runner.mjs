@@ -584,7 +584,7 @@ export async function runWatch({
       const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
       for (const d of readDecisions() ?? []) if (d?.status === "open" && typeof d.card === "string") waits.push(item(d.card, null, d.work ?? null, "@user"));
       for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
-        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push(item(l.executionKey, l.taskId, l.workKey, l.currentRecipient));
+        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
     } catch { waits = []; }
     // 한도 경보의 새로고침(ocx-refresh.mjs). 호출 여부는 경보를 보낼지와 따로 판단한다.
     // 새 경보: 처음 생길 때 부르고 결과를 경보 본문에 붙인다.
