@@ -115,19 +115,16 @@ export function envelopeState(stdout, field) {
   return value.trim() ? 'ok' : 'field-empty';
 }
 
-// 실패 시도에 남기는 출력 앞부분. 앞 4KB를 떼어 JSON 이스케이프를 풀고, 가린 뒤에 자른다.
-// 이스케이프가 남은 채 가리면 `\\n` 뒤의 `sk-…`나 `\\/`로 쪼개진 웹훅 주소를 못 잡는다.
-// 잘린 JSON에서도 풀리도록 정규식 치환을 쓴다.
+// 실패 시도에 남기는 출력 앞부분. 비밀은 길고 불투명한 덩어리이고 어떤 인코딩도 덩어리를 더 길게 만들 뿐이므로,
+// 이스케이프를 풀지 않고 공백 없는 20자 이상 덩어리를 통째로 가린다(인코딩과 무관한 규칙 하나).
+// 4KB에서 잘렸다면 잘린 끝 덩어리는 길이와 상관없이 가린다. 그 위에 scrubForAI를 적용하고 300자로 자른다.
 export const EXCERPT_MAX = 300;
 const EXCERPT_HEAD = 4096;
-const ESCAPES = {n: ' ', r: ' ', t: ' ', '/': '/', '"': '"', '\\': '\\'};
-const unescapeJson = text => text.replace(/\\(?:u([0-9a-fA-F]{4})|([nrt/"\\]))/g,
-  (_, hex, ch) => hex ? String.fromCharCode(parseInt(hex, 16)) : ESCAPES[ch]);
+const EXCERPT_CHUNK = 20;
 export function excerptOf(text) {
   const raw = String(text ?? '');
-  const clipped = raw.length > EXCERPT_HEAD;
-  let t = scrubForAI(unescapeJson(raw.slice(0, EXCERPT_HEAD)));
-  // 4KB 경계에서 잘린 끝 조각에 비밀 앞부분이 남지 않게 마지막 덩어리를 버린다.
-  if (clipped) t = t.replace(/\S*$/, '');
+  let t = raw.slice(0, EXCERPT_HEAD).replace(/\S+/g, chunk => chunk.length >= EXCERPT_CHUNK ? '[가림]' : chunk);
+  if (raw.length > EXCERPT_HEAD) t = t.replace(/\S+(\s*)$/, '[가림]$1');
+  t = scrubForAI(t);
   return t.length > EXCERPT_MAX ? t.slice(0, EXCERPT_MAX) + '…' : t;
 }

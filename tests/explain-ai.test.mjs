@@ -223,7 +223,7 @@ test('실패 시도의 excerpt는 비밀 모양을 가린 뒤 300자(+…)로 �
     assert.equal(a.envelope, envelope, model);
     if (model === 'leak') {
       assert.ok(a.excerpt.length <= 301);
-      assert.ok(a.excerpt.endsWith('…'));
+      assert.match(a.excerpt, /가림/);
       assert.doesNotMatch(a.excerpt, /webhooks\/123|sk-abcdef|Bearer abcdef/);
     }
   }
@@ -591,4 +591,78 @@ test('S1: 성공 시도에는 envelope·excerpt·stderrExcerpt가 남지 않는�
   const {a} = await failedLedger(body, 'warn');
   assert.equal(a.result, 'ok');
   for (const k of ['envelope', 'excerpt', 'stderrExcerpt']) assert.equal(k in a, false, k);
+});
+
+// 3라운드(F1 재발): 이스케이프를 풀고 모양을 찾는 방식은 끝이 없어, 공백 없는 20자 이상 덩어리를 통째로 가린다.
+// 합격 기준은 사례 나열이 아니라 '원장을 다시 읽은 저장값에 긴 덩어리·비밀 조각이 없다'는 성질이다.
+const PROP_SEED = 20261020;
+const PROP_RUNS = 300;
+function rng(seed) { // mulberry32
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const ALNUM = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./+=';
+const wrappers = {
+  plain: s => `oops ${s} done`,
+  json1: s => JSON.stringify({response: `x ${s} y`}),
+  json2: s => JSON.stringify({response: JSON.stringify({response: `x\n${s}\ny`})}),
+  percent: s => `{"response":"${encodeURIComponent(s)}"}`,
+  uXXXX: s => `{"response":"${[...s].map(c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('')}"}`,
+  control: s => `{"response":"\\b\\f\\n${s}\\b"}`,
+  edge4k: s => `${'z '.repeat(2040)}${'q'.repeat(8)}${s}${' tail'.repeat(500)}`,
+  edge300: s => `${'ab '.repeat(97)}${s} tail`,
+};
+function longChunks(text) { return text.split(/\s+/).filter(c => c.length >= 20 && c !== '[가림]' && !c.includes('[가림]')); }
+function ledgerStrings(rows) { return rows.flatMap(r => r.attempts ?? []).flatMap(a => [a.excerpt, a.stderrExcerpt]).filter(v => typeof v === 'string'); }
+
+test(`성질 시험(시드 ${PROP_SEED}, ${PROP_RUNS}회): 어떤 포장이어도 원장에 다시 읽은 발췌에 20자 이상 덩어리·비밀 8자 조각이 없다`, async () => {
+  const rand = rng(PROP_SEED);
+  const names = Object.keys(wrappers);
+  for (let i = 0; i < PROP_RUNS; i++) {
+    const len = 20 + Math.floor(rand() * 61);
+    const secret = Array.from({length: len}, () => ALNUM[Math.floor(rand() * ALNUM.length)]).join('');
+    const name = names[Math.floor(rand() * names.length)];
+    const out = wrappers[name](secret);
+    const viaStderr = rand() < 0.5;
+    const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => viaStderr ? {status: 1, stdout: '', stderr: out} : {status: 0, stdout: out, stderr: ''}});
+    const card = w.makeCard();
+    await enable(w);
+    w.dispatch(card, 0);
+    {const {done} = w.run(); await done;}
+    const rows = w.rows(); // 원장을 다시 읽은 값
+    const where = `#${i} ${name} ${viaStderr ? 'stderr' : 'stdout'} secret=${secret}`;
+    const strings = ledgerStrings(rows);
+    assert.ok(strings.length > 0, where);
+    for (const text of strings) {
+      assert.deepEqual(longChunks(text), [], where);
+      for (const form of [secret, encodeURIComponent(secret)]) {
+        for (let k = 0; k + 8 <= form.length; k++) assert.ok(!text.includes(form.slice(k, k + 8)), `${where} @${k}`);
+      }
+    }
+  }
+});
+
+test('고정 사례: 1·2라운드 검수가 낸 인코딩(이중 이스케이프·\\b·\\f·/·퍼센트)에서 비밀이 남지 않는다', async () => {
+  const hook = HOOK.replaceAll('/', '\\/');
+  const cases = {
+    dbl: JSON.stringify(JSON.stringify({response: '\n' + SK})),
+    bf: `{"response":"\\b\\f${SK}"}`,
+    slash: `{"response":"${hook}"}`,
+    pct: `{"response":"${encodeURIComponent(HOOK)}"}`,
+    bearer: JSON.stringify({response: 'x\\n' + BEARER}),
+  };
+  for (const [name, out] of Object.entries(cases)) {
+    const {stored} = await failedLedger(out);
+    assert.doesNotMatch(stored, /sk-abcdef|abcdefghijklmnop1234|AbCdEfGhIjKl|webhooks/, name);
+  }
+});
+
+test('진단 쓸모: 줄바꿈이 있는 봉투의 짧은 키와 오류 문구는 읽히게 남고, 공백 없는 한 줄 봉투는 통째로 가려진다', async () => {
+  const env = {response: '', error: {code: 429, message: 'quota exceeded'}};
+  const {a} = await failedLedger(JSON.stringify(env, null, 1));
+  assert.match(a.excerpt, /"response": ""/);
+  assert.match(a.excerpt, /"message": "quota exceeded"/);
+  // 알려진 한계: 공백 없는 20자 이상 한 줄은 모양을 알 수 없어 통째로 가린다(규칙 그대로).
+  const flat = await failedLedger(JSON.stringify(env));
+  assert.match(flat.a.excerpt, /^\[가림\]/);
 });
