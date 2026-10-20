@@ -13,12 +13,10 @@ import {
   WATCH_RUNNER,
   WATCH_MAX_ATTEMPTS,
   EXPLAIN_MAX_ATTEMPTS,
-  SENIOR2_ALLOWED_RUNNERS,
-  SENIOR2_GATE_NOTE,
 } from "../runner-settings.mjs";
 import { TABLE_KEYS } from "../runner-table.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
-import { seniorCommandLabel, seniorSecondCommandLabel } from "../senior.mjs";
+import { seniorCommandLabel } from "../senior.mjs";
 import { describeWindowSetting } from "../window-setting.mjs";
 
 export function createData(snapshot, url, stamp) {
@@ -115,11 +113,6 @@ export function runnersData(snapshot, url, stamp) {
   commands.senior =
     seniorCommandLabel(settings.presets[settings.activePreset].roles.senior) ||
     "미설정 — kadan senior가 거절한다";
-  commands.senior2 =
-    seniorSecondCommandLabel(
-      settings,
-      settings.presets[settings.activePreset].roles.senior2,
-    ) || "비어 있음 — kadan senior는 1번 자리만 부른다";
   commands.explain =
     explainCommand(settings, settings.presets[settings.activePreset].roles.explain) ||
     "미설정 — 설명 AI는 아무것도 하지 않는다";
@@ -133,8 +126,6 @@ export function runnersData(snapshot, url, stamp) {
     watch: { runner: WATCH_RUNNER, maxAttempts: WATCH_MAX_ATTEMPTS },
     // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
     senior: { runner: WATCH_RUNNER },
-    // 2번 자리는 같은 질문에 병렬로 답한다. 읽기 전용이 확인된 실행기만 열리며, 지금은 열린 실행기가 없다(막힘).
-    senior2: { runners: SENIOR2_ALLOWED_RUNNERS, gate: SENIOR2_GATE_NOTE },
     // 설명 AI는 실행기 표에 exec 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 N개를 차례로 시도한다.
     explain: {
       runners: Object.entries(settings.runners)

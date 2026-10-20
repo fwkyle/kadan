@@ -155,39 +155,6 @@ for (const mode of ["jsonl", "sqlite"])
       await runnerResponse.clone().text(),
     );
     assert.equal((await get("runners")).settings.revision, 2);
-    // 시니어 2번 자리: 열린 실행기가 없어(agy 실측 막힘) 고를 수 없고, 비울 칸도 없으면 거절한다.
-    const second = (await get("runners")).senior2;
-    assert.deepEqual(second.runners, []);
-    assert.match(second.gate, /agy/);
-    const blocked = await fetch(base + "/runners/set", {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      body: new URLSearchParams({ token, revision: "2", role: "senior2", runner: "demo", model: "demo-b", reason: "막힘 시험" }),
-    });
-    assert.ok(blocked.status >= 400);
-    assert.match(await blocked.text(), /막혀 있다/);
-    const cleared = await fetch(base + "/runners/clear", {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      body: new URLSearchParams({ token, revision: "2", reason: "비움 시험" }),
-    });
-    assert.ok(cleared.status >= 400);
-    assert.match(await cleared.text(), /이미 비어/);
-    // 값이 들어 있으면 비우기가 성공한다(설정 파일에 직접 넣은 값 — 저장 경로는 막혀 있으므로). 1번 자리는 그대로다.
-    const settingsFile = path.join(f.home, "runner-settings.json");
-    const raw = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
-    raw.presets[raw.activePreset].roles.senior2 = { runner: "demo", model: "demo-b" };
-    fs.writeFileSync(settingsFile, JSON.stringify(raw));
-    const seniorBefore = raw.presets[raw.activePreset].roles.senior ?? null;
-    const cleared2 = await fetch(base + "/runners/clear", {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      body: new URLSearchParams({ token, revision: String(raw.revision), reason: "비우기 시험" }),
-    });
-    assert.equal(cleared2.status, 200, await cleared2.clone().text());
-    const after = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
-    assert.equal(after.presets[after.activePreset].roles.senior2, undefined);
-    assert.deepEqual(after.presets[after.activePreset].roles.senior ?? null, seniorBefore);
     const answer = await fetch(base + "/decisions/answer", {
       method: "POST",
       headers: { Accept: "application/json", Origin: base },

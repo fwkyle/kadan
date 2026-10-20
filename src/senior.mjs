@@ -7,23 +7,18 @@ import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {CardStore} from './card-store.mjs';
-import {SENIOR2_ALLOWED_RUNNERS, explainCommand, readSettings, runnerChoices} from './runner-settings.mjs';
-import {execCommand} from './runner-table.mjs';
-import {answerText, scrubForAI} from './explain-input.mjs';
+import {assertSeniorRunner, readSettings, runnerChoices} from './runner-settings.mjs';
+import {scrubForAI} from './explain-input.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 import {closeOnSignal, closeSeniorTab, openSeniorTab, writeTabState} from './senior-tab.mjs';
 
-export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior, 2번 자리 senior2가 있으면 함께 병렬로)에게 의견을 한 번 묻는다. 상세: docs/senior.md';
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. --runner/--model은 이번 호출만 고르고(--model만 주면 설정의 실행기), 실행기는 안전 허용 목록(지금 codex)만 된다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
-// 2번 자리는 프롬프트가 명령 인자("$KADAN_EXPLAIN_PROMPT")로 간다. macOS 인자 한계(ARG_MAX 1MiB, 환경변수 사본 포함)에서 2026-10-20 실측으로
-// 400KB는 통과하고 600KB는 실패했다. 여유를 두고 200KB로 막는다. 넘으면 2번 자리만 실패로 기록한다.
-export const SECOND_PROMPT_LIMIT_BYTES = 200_000;
-const SECOND_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const TIMEOUT_MAX_S = 3600, FILE_LIMIT = 64 * 1024, FILE_COUNT = 5, QUESTION_PREVIEW = 200;
 const DEFAULT_SCRIPT = fileURLToPath(new URL('../scripts/senior.sh', import.meta.url));
 const FOLLOW_SCRIPT = fileURLToPath(new URL('../scripts/senior-follow.sh', import.meta.url));
@@ -34,8 +29,23 @@ const digest = text => createHash('sha256').update(text).digest('hex');
 
 // 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
 export const seniorCommandLabel = value => value ? `KADAN_SENIOR_MODEL=${value.model} KADAN_SENIOR_EFFORT=${value.effort ?? 'max'} senior.sh (codex exec, 저장소 읽기 전용)` : null;
-// 2번 자리: 실행기 표의 exec 틀을 채워 호출 폴더에서 한 번 부른다(저장소를 직접 읽지 않는다).
-export const seniorSecondCommandLabel = (settings, value) => value ? `${explainCommand(settings, value)} (2번 자리, exec 틀, 호출 폴더)` : null;
+
+// 이번 호출만 실행기·모델을 고른다(설정은 그대로, 2026-10-20 [kyle]). 지정이 없으면 설정값 그대로 돌려준다.
+// --runner만 주면 오류, --model만 주면 설정의 실행기에 그 모델. 실행기는 안전 허용 목록에 있어야 하고(설정 저장과 같은 검사),
+// 모델은 그 실행기 표에 있어야 하며 정책 차단(block --roles senior)에도 걸린다. 강도는 설정값이 새 모델에서도 가능할 때만 이어 받는다.
+function pickValue(settings, configured, flags, readCodexModels) {
+  const {runner, model} = flags;
+  if (runner == null && model == null) return {value: configured, picked: false};
+  for (const [name, v] of [['--runner', runner], ['--model', model]]) if (v != null && (typeof v !== 'string' || !/^[A-Za-z0-9._\/\-\[\]]+$/.test(v))) throw new Error(`${name} 값 형식 오류: ${v}`);
+  if (runner != null && model == null) throw new Error('--runner만으로는 부를 수 없다 — 모델도 함께 주어라(--runner <실행기> --model <모델>). 설정의 실행기에 모델만 바꾸려면 --model만 준다');
+  const chosen = runner ?? configured.runner;
+  assertSeniorRunner(chosen);
+  const choices = runnerChoices(settings, chosen, readCodexModels ? {readCodexModels} : undefined);
+  if (!choices.has(model)) throw new Error(`${chosen}에서 고를 수 없는 모델: ${model}`);
+  if ((settings.blocked ?? []).some(b => b.model === model && (!b.roles || b.roles.includes('senior')))) throw new Error(`정책으로 막은 모델: ${model} (block --roles senior)`);
+  const keep = configured.effort != null && (choices.get(model) ?? []).includes(configured.effort) ? {effort: configured.effort} : {};
+  return {value: {runner: chosen, model, ...keep}, picked: true};
+}
 
 // 이번 호출의 강도. 형식이 맞아야 하고, 그 모델이 지원하는 강도 목록을 읽을 수 있으면 그 안이어야 한다.
 function checkEffort(settings, value, effort, readCodexModels) {
@@ -53,13 +63,10 @@ function readAttachment(file) {
   return fs.readFileSync(file, 'utf8');
 }
 
-// readsRepo=false(2번 자리): 작업 폴더가 저장소가 아니라 빈 호출 폴더다. 아래 자료만으로 답하게 한다.
-export function composeAdvicePrompt({question, card, attachments, readsRepo = true}) {
+export function composeAdvicePrompt({question, card, attachments}) {
   return [
     '당신은 시니어다. 감독이 카드 하나의 작업 결과를 두고 결정할 부분을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
-    readsRepo
-      ? '현재 작업 폴더가 그 카드의 저장소다(읽기 전용). 필요한 파일·이력은 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.'
-      : '저장소는 읽을 수 없다. 현재 작업 폴더는 빈 호출 폴더다. 아래 자료(질문·카드·첨부)만 근거로 삼고, 파일을 고치거나 명령으로 상태를 바꾸지 마라. 자료에 없어 확인하지 못한 것은 모른다고 쓴다.',
+    '현재 작업 폴더가 그 카드의 저장소다(읽기 전용). 필요한 파일·이력은 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.',
     '답은 한국어로, 아래 네 칸을 이 순서로 짧게 쓴다.',
     '결론: 한 줄 — 권장안과 그 이유의 핵심.',
     '근거: 저장소·카드에서 확인한 사실. 파일 경로나 줄을 함께 적는다.',
@@ -74,8 +81,7 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
 }
 
 export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
-  script = DEFAULT_SCRIPT, followScript = FOLLOW_SCRIPT, rottie, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels,
-  slot2Runners = SENIOR2_ALLOWED_RUNNERS, warn = line => process.stderr.write(`${line}\n`)}) {
+  script = DEFAULT_SCRIPT, followScript = FOLLOW_SCRIPT, rottie, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels}) {
   if (flags.help || !argv[0]) return SENIOR_USAGE;
   if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
@@ -89,120 +95,60 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const settings = read();
   const configured = settings?.presets?.[settings.activePreset]?.roles?.senior;
   if (!configured) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
-  const configuredSecond = settings?.presets?.[settings.activePreset]?.roles?.senior2 ?? null;
-  // 2번 자리는 실행할 수 있을 때만 쓴다(값이 있고, 실행기가 허용 목록에 있고, 모델이 막히지 않았다). 그 밖에는 출력·원장 형식을 바꾸지 않고
-  // main과 같은 1자리로 간다. 막혔다는 사실은 stderr 한 줄로만 알린다(원장 사건은 남기지 않는다 — 1자리 원장이 main과 같아야 한다).
-  const blockedModel = configuredSecond && (settings.blocked ?? []).some(b => b.model === configuredSecond.model && (!b.roles || b.roles.includes('senior2') || b.roles.includes('senior')));
-  const second = configuredSecond && slot2Runners.includes(configuredSecond.runner) && !blockedModel ? configuredSecond : null;
-  if (configuredSecond && !second) warn(`시니어 2번 자리(${configuredSecond.runner}/${configuredSecond.model})는 ${blockedModel ? '정책으로 막은 모델이라' : '열리지 않은 실행기라'} 부르지 않는다 — 1번 자리만 답한다`);
-  // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 비싼 모델을 시험할 때 low로 부르는 용도(2026-10-05 [kyle]). 1번 자리(codex)에만 적용한다.
-  const value = flags.effort == null ? configured : {...configured, effort: checkEffort(settings, configured, flags.effort, readCodexModels)};
+  // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 비싼 모델을 시험할 때 low로 부르는 용도(2026-10-05 [kyle]).
+  const {value: base, picked} = pickValue(settings, configured, flags, readCodexModels);
+  const value = flags.effort == null ? base : {...base, effort: checkEffort(settings, base, flags.effort, readCodexModels)};
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
   const attachments = files.map(file => ({file, text: readAttachment(file)}));
   const adviceId = randomUUID();
-  const firstSlot = async () => {
-    const dir = path.join(home, 'advice', adviceId);
-    fs.mkdirSync(dir, {recursive: true, mode: 0o700});
-    // 카드 글은 외부 서비스(OpenAI·구글 등)로 나가므로 웹훅 주소·토큰 모양을 가린 뒤 보낸다(두 자리 공통, docs/runner-settings.md).
-    const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments}));
-    fs.writeFileSync(path.join(dir, 'input.txt'), prompt, {mode: 0o600});
-    // 따라 볼 진행 출력 파일을 미리 만들어 둔다(탭이 먼저 떠도 비어 있는 채로 기다린다). senior.sh가 같은 파일에 쓴다.
-    fs.writeFileSync(path.join(dir, 'diagnostic.log'), '', {mode: 0o600});
-    const started = now();
-    // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 닫기는 성공·실패·시간 초과·신호 모두에서 한다.
-    // 신호 처리기는 create 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
-    let opened = {tab: 'skipped'}, tab = {tab: 'skipped'};
-    const closeTab = () => {
-      if (opened.tab === 'opened') { tab = closeSeniorTab(opened); writeTabState(dir, {state: tab.tab, reason: tab.tabReason}); }
-    };
-    const makeEntry = fields => ({kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
-      ...(second ? {slot: 1, pairId: adviceId, runner: value.runner} : {}), model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
-      files: attachments.map(a => a.file), evidencePath: dir, ...tab, ...(opened.tabKey ? {tabKey: opened.tabKey} : {}),
-      ...(opened.rottieTerminalId ? {rottieTerminalId: opened.rottieTerminalId} : {}), t: new Date(started).toISOString(), ...fields});
-    // 신호로 끝나도 advice 사건 한 줄(reason: interrupted)을 남긴다. 모든 단계가 동기이고 실패해도 신호 종료 코드는 지킨다.
-    const onSignal = () => {
-      if (opened.tab === 'unknown' || opened.tab === 'creating') writeTabState(dir, {state: 'unknown', reason: 'interrupted'});
-      record(makeEntry({reason: 'interrupted', exitCode: null, durationMs: now() - started, bytes: 0, digest: digest('')}));
-    };
-    const detach = closeOnSignal(closeTab, undefined, onSignal);
-    opened = openSeniorTab({home, env, card, adviceId, dir, followScript, rottie});
-    tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason};
-    let result;
-    try {
-      result = await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
-        env: {...env, KADAN_HOME: home, KADAN_SENIOR_DIR: dir, KADAN_SENIOR_REPO: card.repoPath, KADAN_SENIOR_MODEL: value.model, KADAN_SENIOR_EFFORT: value.effort ?? 'max'}});
-    } catch (error) { result = {error}; }
-    finally { detach(); closeTab(); }
-    const stderr = String(result.stderr ?? '');
-    fs.writeFileSync(path.join(dir, 'stderr.txt'), stderr, {mode: 0o600});
-    const resultFile = path.join(dir, 'result.txt');
-    const answer = fs.existsSync(resultFile) ? fs.readFileSync(resultFile, 'utf8') : '';
-    // ok는 종료 코드 0이면서 답변이 비어 있지 않을 때뿐이다. 빈 답변은 모델이 돌았어도 실패다.
-    // KADAN_JUDGE_TIMEOUT=1은 감시 AI와 같이 쓰는 watch-call-process.mjs가 상한에 걸렸을 때 stderr에 남기는 표시다.
-    const reason = result.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1') ? 'timeout'
-      : result.error || result.status !== 0 ? 'call-failed' : answer.trim() ? 'ok' : 'empty';
-    const entry = makeEntry({reason, exitCode: result.status ?? null, durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer)});
-    record(entry);
-    if (reason !== 'ok') {
-      const error = new Error(`자문 실패(${reason}) — 답은 쓰지 않는다. 증거: ${dir}`);
-      error.exitCode = 1;
-      error.reason = reason;
-      error.evidencePath = dir;
-      throw error;
-    }
-    return {adviceId, card: card.key, model: value.model, effort: value.effort ?? 'max', reason, durationMs: entry.durationMs, evidencePath: dir, ...tab, follow: `tail -F ${path.join(dir, 'diagnostic.log')}`, answer};
+  const dir = path.join(home, 'advice', adviceId);
+  fs.mkdirSync(dir, {recursive: true, mode: 0o700});
+  // 카드 글은 외부 서비스로 나가므로 웹훅 주소·토큰 모양을 가린 뒤 보낸다(docs/runner-settings.md).
+  const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments}));
+  fs.writeFileSync(path.join(dir, 'input.txt'), prompt, {mode: 0o600});
+  // 따라 볼 진행 출력 파일을 미리 만들어 둔다(탭이 먼저 떠도 비어 있는 채로 기다린다). senior.sh가 같은 파일에 쓴다.
+  fs.writeFileSync(path.join(dir, 'diagnostic.log'), '', {mode: 0o600});
+  const started = now();
+  // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 닫기는 성공·실패·시간 초과·신호 모두에서 한다.
+  // 신호 처리기는 create 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
+  let opened = {tab: 'skipped'}, tab = {tab: 'skipped'};
+  const closeTab = () => {
+    if (opened.tab === 'opened') { tab = closeSeniorTab(opened); writeTabState(dir, {state: tab.tab, reason: tab.tabReason}); }
   };
-
-  // 2번 자리: 실행기 표의 exec 틀로 호출 폴더에서 한 번 부른다(설명 AI와 같은 방식). 저장소를 직접 읽지 않으므로 프롬프트에 든 자료만으로 답한다.
-  // 어떤 실패도 던지지 않고 reason으로 돌려준다 — 1번 자리 답을 멈추지 않는다. 폴백은 없다.
-  const secondSlot = async () => {
-    const slotId = randomUUID();
-    const slotDir = path.join(home, 'advice', slotId);
-    fs.mkdirSync(slotDir, {recursive: true, mode: 0o700});
-    const slotPrompt = scrubForAI(composeAdvicePrompt({question, card, attachments, readsRepo: false}));
-    fs.writeFileSync(path.join(slotDir, 'input.txt'), slotPrompt, {mode: 0o600});
-    const started = now();
-    let result = {}, answer = '', reason;
-    if (Buffer.byteLength(slotPrompt) > SECOND_PROMPT_LIMIT_BYTES) reason = 'prompt-too-large';
-    else {
-      let call = null;
-      try { call = execCommand(settings, second.runner, {model: second.model, effort: second.effort ?? '', prompt: slotPrompt, cwd: slotDir}); } catch { reason = 'template-error'; }
-      if (call) {
-        try {
-          result = await spawn(call.command, {input: call.stdin, timeout: timeoutS * 1000, cwd: slotDir, reportComplete: () => false,
-            maxBytes: SECOND_OUTPUT_LIMIT_BYTES, env: {...env, ...call.env}});
-          answer = answerText(result.stdout, call.field);
-        } catch (error) { result = {error}; }
-        const stderr = String(result.stderr ?? '');
-        fs.writeFileSync(path.join(slotDir, 'stderr.txt'), stderr, {mode: 0o600});
-        reason = result.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1') ? 'timeout'
-          : stderr.includes('KADAN_JUDGE_OUTPUT_LIMIT=1') ? 'output-limit'
-          : result.error || result.status !== 0 ? 'call-failed' : answer.trim() ? 'ok' : 'empty';
-      }
-    }
-    if (reason === 'ok') fs.writeFileSync(path.join(slotDir, 'result.txt'), answer, {mode: 0o600});
-    const durationMs = now() - started;
-    record({kind: 'advice', by, role: by, card: card.key, adviceId: slotId, pairId: adviceId, slot: 2, runner: second.runner, question: question.trim().slice(0, QUESTION_PREVIEW),
-      questionDigest: digest(question.trim()), model: second.model, effort: second.effort ?? null, settingsRevision: settings.revision, settingsPreset: settings.activePreset,
-      files: attachments.map(a => a.file), evidencePath: slotDir, reason, exitCode: result.status ?? null, durationMs, bytes: Buffer.byteLength(answer), digest: digest(answer), t: new Date(started).toISOString()});
-    return {slot: 2, runner: second.runner, model: second.model, effort: second.effort ?? null, reason, durationMs, evidencePath: slotDir, ...(reason === 'ok' ? {answer} : {})};
+  const makeEntry = fields => ({kind: 'advice', by, role: by, card: card.key, adviceId, question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()),
+    ...(picked ? {source: 'flag', runner: value.runner, settingsRunner: configured.runner, settingsModel: configured.model} : {}),
+    model: value.model, effort: value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: configured.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
+    files: attachments.map(a => a.file), evidencePath: dir, ...tab, ...(opened.tabKey ? {tabKey: opened.tabKey} : {}),
+    ...(opened.rottieTerminalId ? {rottieTerminalId: opened.rottieTerminalId} : {}), t: new Date(started).toISOString(), ...fields});
+  // 신호로 끝나도 advice 사건 한 줄(reason: interrupted)을 남긴다. 모든 단계가 동기이고 실패해도 신호 종료 코드는 지킨다.
+  const onSignal = () => {
+    if (opened.tab === 'unknown' || opened.tab === 'creating') writeTabState(dir, {state: 'unknown', reason: 'interrupted'});
+    record(makeEntry({reason: 'interrupted', exitCode: null, durationMs: now() - started, bytes: 0, digest: digest('')}));
   };
-
-  if (!second) return firstSlot();
-  const [one, two] = await Promise.allSettled([firstSlot(), secondSlot()]);
-  const slots = [
-    one.status === 'fulfilled' ? {slot: 1, runner: value.runner, ...one.value}
-      : {slot: 1, runner: value.runner, model: value.model, effort: value.effort ?? 'max', reason: one.reason?.reason ?? 'call-failed', evidencePath: one.reason?.evidencePath ?? null, error: one.reason?.message},
-    two.status === 'fulfilled' ? two.value
-      : {slot: 2, runner: second.runner, model: second.model, effort: second.effort ?? null, reason: 'call-failed', error: two.reason?.message},
-  ];
-  const answered = slots.filter(slot => slot.reason === 'ok').length;
-  if (!answered) {
-    const error = new Error(`자문 실패 — 두 자리 모두 답하지 못했다: 1번 ${slots[0].reason}, 2번 ${slots[1].reason}. 증거: ${slots.map(slot => slot.evidencePath).filter(Boolean).join(', ')}`);
+  const detach = closeOnSignal(closeTab, undefined, onSignal);
+  opened = openSeniorTab({home, env, card, adviceId, dir, followScript, rottie});
+  tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason};
+  let result;
+  try {
+    result = await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
+      env: {...env, KADAN_HOME: home, KADAN_SENIOR_DIR: dir, KADAN_SENIOR_REPO: card.repoPath, KADAN_SENIOR_MODEL: value.model, KADAN_SENIOR_EFFORT: value.effort ?? 'max'}});
+  } catch (error) { result = {error}; }
+  finally { detach(); closeTab(); }
+  const stderr = String(result.stderr ?? '');
+  fs.writeFileSync(path.join(dir, 'stderr.txt'), stderr, {mode: 0o600});
+  const resultFile = path.join(dir, 'result.txt');
+  const answer = fs.existsSync(resultFile) ? fs.readFileSync(resultFile, 'utf8') : '';
+  // ok는 종료 코드 0이면서 답변이 비어 있지 않을 때뿐이다. 빈 답변은 모델이 돌았어도 실패다.
+  // KADAN_JUDGE_TIMEOUT=1은 감시 AI와 같이 쓰는 watch-call-process.mjs가 상한에 걸렸을 때 stderr에 남기는 표시다.
+  const reason = result.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1') ? 'timeout'
+    : result.error || result.status !== 0 ? 'call-failed' : answer.trim() ? 'ok' : 'empty';
+  const entry = makeEntry({reason, exitCode: result.status ?? null, durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer)});
+  record(entry);
+  if (reason !== 'ok') {
+    const error = new Error(`자문 실패(${reason}) — 답은 쓰지 않는다. 증거: ${dir}`);
     error.exitCode = 1;
     throw error;
   }
-  return {pairId: adviceId, card: card.key, answered, slots,
-    ...(flags.effort == null ? {} : {effortNote: `--effort는 1번 자리(${value.runner}/${value.model})에만 적용한다. 2번 자리(${second.runner}/${second.model})는 모델 이름에 강도가 들어 있어 무시한다`})};
+  return {adviceId, card: card.key, ...(picked ? {source: 'flag', runner: value.runner} : {}), model: value.model, effort: value.effort ?? 'max', reason, durationMs: entry.durationMs, evidencePath: dir, ...tab, follow: `tail -F ${path.join(dir, 'diagnostic.log')}`, answer};
 }

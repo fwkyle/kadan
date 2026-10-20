@@ -2,7 +2,7 @@
 // 사람용 설명은 agent-runners.json에 두고, 발령이 읽는 값은 이 파일 한 곳만 본다.
 // 발령은 자동 라우팅·자동 폴백을 만들지 않는다. 실행기별 어댑터 대신 spawn 문자열 틀만 채운다.
 // 예외: 감시 AI(watch)는 감시기가 스스로 부르므로 폴백 목록으로 자동으로 내려간다(2026-10-03 [kyle]). watch-ai.mjs 참고.
-// 시니어(senior·senior2)도 일회성 호출이지만 폴백이 없다 — 감독이 명령으로 부르고 실패를 그 자리에서 본다(2026-10-05). senior.mjs 참고.
+// 시니어(senior)도 일회성 호출이지만 폴백이 없다 — 감독이 명령으로 부르고 실패를 그 자리에서 본다(2026-10-05). senior.mjs 참고.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,16 +18,18 @@ export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
 export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'conductor', super:'super'};
 // 설정에 값을 둘 수 있는 역할. watch·senior는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
-export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'senior2', 'explain'];
+export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain'];
 // 감시 AI는 scripts/watch-judge.sh가, 시니어는 scripts/senior.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
-// 시니어 두 번째 자리(senior2, 2026-10-20 [kyle] 요청): 1번 자리(senior)와 같은 질문에 병렬로 답한다. 실행기를 codex로 묶지 않고
-// 설명 AI처럼 실행기 표의 exec 틀로 부르지만, 아래 허용 목록에 있는 실행기만 고를 수 있다. 목록은 지금 비어 있다(막힘):
-// agy `--print`를 2026-10-20에 실측한 결과 헤드리스에서도 사용자 허용 규칙(cp·mkdir·ln·git commit)으로 파일을 쓸 수 있고
-// 읽기 전용 모드가 없다(docs/senior.md). 읽기 전용이 확인된 실행기만 이 목록에 넣는다.
-export const SENIOR2_ALLOWED_RUNNERS = [];
-export const SENIOR2_GATE_NOTE = '시니어 2번 자리는 읽기 전용이 확인된 실행기만 연다 — agy는 2026-10-20 실측에서 헤드리스 쓰기가 가능하고 읽기 전용 모드가 없어 막혀 있다(docs/senior.md)';
+// 시니어가 쓸 수 있는 '안전하게 묶을 수 있는 실행기' 허용 목록(2026-10-20 [kyle]). 읽기 전용으로 가둘 수 있다고 확인된 실행기만 넣는다.
+// 지금은 codex뿐이다(scripts/senior.sh가 읽기 전용 샌드박스로 부른다). agy는 헤드리스에서 파일을 쓸 수 있어 'agy 명령 막기' 조사가 합격한 뒤 별도로 추가한다.
+// 설정 저장(runners set senior)과 호출(kadan senior --runner)이 같은 목록·같은 함수로 거절한다.
+export const SENIOR_SAFE_RUNNERS = ['codex'];
+export function assertSeniorRunner(runner, safeRunners = SENIOR_SAFE_RUNNERS) {
+  if (!safeRunners.includes(runner))
+    throw new Error(`시니어는 안전하게 묶을 수 있는 실행기(${safeRunners.join(', ')})만 고를 수 있다: ${runner} — 목록에 넣으려면 그 실행기가 읽기 전용으로 갇힌다는 실측(쓰기 차단)이 먼저 합격해야 한다`);
+}
 // 설명 AI(explain)는 실행기를 codex로 묶지 않는다: 실행기 표에 exec 틀이 있는 실행기면 고를 수 있고, 호출은 그 틀을 채워서 한다(explain-ai.mjs).
 // 대체 후보 포함 최대 2개를 차례로 시도한다. 칸이 비었거나 고른 실행기에 exec 틀이 없으면 아무것도 하지 않는다.
 export const EXPLAIN_MAX_ATTEMPTS = 2;
@@ -80,18 +82,17 @@ export function runnerChoices(settings, runner, {readCodexModels = () => JSON.pa
 function checkChoice(settings, role, {runner, model, effort}, options, {checkBlocked = true} = {}) {
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
-  if (role === 'senior2' && !(options?.senior2Runners ?? SENIOR2_ALLOWED_RUNNERS).includes(runner)) throw new Error(`${SENIOR2_GATE_NOTE}: ${runner}`);
   const choices = runnerChoices(settings, runner, options);
-  if (ONE_SHOT_ROLES[role] && runner !== WATCH_RUNNER) throw new Error(`${ONE_SHOT_ROLES[role]}는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — ${role === 'watch' ? 'watch-judge.sh' : 'senior.sh'}가 codex exec로 부른다`);
+  if (role === 'senior') assertSeniorRunner(runner);
+  else if (ONE_SHOT_ROLES[role] && runner !== WATCH_RUNNER) throw new Error(`${ONE_SHOT_ROLES[role]}는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — ${role === 'watch' ? 'watch-judge.sh' : 'senior.sh'}가 codex exec로 부른다`);
   if (!choices.has(model)) throw new Error(`${runner}에서 고를 수 없는 모델: ${model}`);
   const efforts = choices.get(model);
   // 설명 AI는 대화형 spawn 틀이 아니라 한 번 호출(exec) 틀로 부른다. 틀이 없으면 이 실행기는 고를 수 없다.
-  const usesExec = role === 'explain' || role === 'senior2';
-  if (usesExec) runnerTemplate(settings, runner, 'exec');
-  const needsEffort = (usesExec ? settings.runners[runner].exec : settings.runners[runner].spawn).includes('{effort}');
+  if (role === 'explain') runnerTemplate(settings, runner, 'exec');
+  const needsEffort = (role === 'explain' ? settings.runners[runner].exec : settings.runners[runner].spawn).includes('{effort}');
   if (needsEffort && !efforts.includes(effort)) throw new Error(`${model}이 지원하지 않는 강도: ${effort ?? '(없음)'} — 가능: ${efforts.join('/') || '없음'}`);
   if (!needsEffort && effort != null) throw new Error(`${runner}은 강도를 받지 않는다`);
-  const blocked = checkBlocked && (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role) || (role === 'senior2' && b.roles.includes('senior'))));
+  const blocked = checkBlocked && (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
   if (blocked) throw new Error(`정책으로 막은 모델: ${model} — ${blocked.reason}`);
 }
 
@@ -373,27 +374,15 @@ export function setActivePreset(home, {preset, ...meta}) {
 // 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
 export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
-  const {readCodexModels, senior2Runners, ...rest} = meta;
+  const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
     next.presets[name] ??= {label: name, roles: {}};
     const value = {runner, model, ...(effort != null ? {effort} : {})};
-    checkChoice(next, role, value, {...(readCodexModels ? {readCodexModels} : {}), ...(senior2Runners ? {senior2Runners} : {})});
+    checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
     const before = next.presets[name].roles[role] ?? null;
     next.presets[name].roles[role] = value;
     return {preset: name, role, before, after: value};
-  });
-}
-
-// 시니어 2번 자리를 비운다. 비우면 kadan senior는 1번 자리만 부른다.
-export function clearSecondSlot(home, {preset, ...meta}) {
-  return change(home, {...meta, action: 'clear'}, next => {
-    const name = preset ?? next.activePreset;
-    if (!next.presets[name]) throw new Error(`없는 프리셋: ${name}`);
-    const before = next.presets[name].roles.senior2 ?? null;
-    if (!before) throw new Error('이미 비어 있다');
-    delete next.presets[name].roles.senior2;
-    return {preset: name, role: 'senior2', before, after: null};
   });
 }
 
@@ -403,7 +392,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
   // 시니어는 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
   if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
     throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
-  if (role === 'senior' || role === 'senior2') throw new Error('시니어는 폴백이 없다 — 두 자리(senior·senior2)가 같은 질문에 병렬로 답하는 것이지 차례로 내려가는 목록이 아니다. 한 번 호출이고 실패는 실패로 남긴다(docs/senior.md)');
+  if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 한 번 호출이고 실패는 실패로 남긴다(docs/senior.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {

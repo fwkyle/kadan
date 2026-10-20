@@ -1,7 +1,7 @@
-import {blockModel, clearSecondSlot, initSettings, removeRunnerModel, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setFavorites, setRunner, setRunnerModel, settingsPath, watchJudgeCommand, explainCommand, PROFILE_ROLES} from './runner-settings.mjs';
-import {seniorCommandLabel, seniorSecondCommandLabel} from './senior.mjs';
+import {blockModel, initSettings, removeRunnerModel, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setFavorites, setRunner, setRunnerModel, settingsPath, watchJudgeCommand, explainCommand, PROFILE_ROLES} from './runner-settings.mjs';
+import {seniorCommandLabel} from './senior.mjs';
 
-export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch|senior|senior2|explain> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] | clear senior2 --revision N --reason 이유 [--preset 이름] (시니어 2번 자리를 비운다. 1번 자리 senior는 비우지 않는다) | runner <실행기> [--spawn 명령틀] [--table JSON(resume·fork·exec·execField·version·update·listModels·conversation 칸. listModels는 모델 목록을 내는 명령, 자리 없음)] --revision N --reason 이유 | model <실행기> <모델> (--efforts a,b | --remove) --revision N --reason 이유 (--remove는 어디서도 안 쓰는 모델만 목록에서 뺀다) | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super|watch|explain> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움, senior·senior2는 폴백 없음, explain은 대체 후보 1개까지) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
+export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch|senior|explain> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] | runner <실행기> [--spawn 명령틀] [--table JSON(resume·fork·exec·execField·version·update·listModels·conversation 칸. listModels는 모델 목록을 내는 명령, 자리 없음)] --revision N --reason 이유 | model <실행기> <모델> (--efforts a,b | --remove) --revision N --reason 이유 (--remove는 어디서도 안 쓰는 모델만 목록에서 뺀다) | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super|watch|explain> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움, senior는 폴백 없음, explain은 대체 후보 1개까지) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
 
 export function runnersCommand([action, role, model], flags, {home, by, record}) {
   flags = {...flags, _model: model};
@@ -12,7 +12,6 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
     const launch = Object.fromEntries(Object.keys(PROFILE_ROLES).map(profile => [profile, launchFor(settings, profile)?.cmd ?? null]));
     launch.watch = watchJudgeCommand(settings.presets[settings.activePreset].roles.watch);
     launch.senior = seniorCommandLabel(settings.presets[settings.activePreset].roles.senior);
-    launch.senior2 = seniorSecondCommandLabel(settings, settings.presets[settings.activePreset].roles.senior2);
     launch.explain = explainCommand(settings, settings.presets[settings.activePreset].roles.explain);
     const fallbacks = settings.presets[settings.activePreset].fallback ?? {};
     const fallback = Object.fromEntries(Object.entries(fallbacks).map(([r, list]) =>
@@ -35,10 +34,6 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
   if (action === 'model' && flags.remove) return removeRunnerModel(home, {runner: role, model: flags._model, ...meta});
   if (action === 'model') return setRunnerModel(home, {runner: role, model: flags._model, efforts: flags.efforts, ...meta});
   if (action === 'block') return blockModel(home, {model: role, roles: flags.roles, ...meta});
-  if (action === 'clear') {
-    if (role !== 'senior2') throw new Error('비울 수 있는 칸은 senior2(시니어 2번 자리)뿐이다');
-    return clearSecondSlot(home, {preset: flags.preset, ...meta});
-  }
   if (action === 'preset') return setActivePreset(home, {preset: role, ...meta});
   if (action === 'fallback') {
     if (typeof flags.set !== 'string') throw new Error("폴백 목록 필요: --set '실행기:모델[:강도],…' (비우려면 --set '')");

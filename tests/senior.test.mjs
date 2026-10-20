@@ -127,7 +127,7 @@ test('입력 조립은 질문·카드·첨부 순서이고 자료 구분선이 �
 
 test('실행 모델 설정: senior는 codex만, 폴백은 거절, 정책 차단은 적용', () => {
   const f = fixture();
-  assert.throws(() => setRole(f.home, {role:'senior', runner:'devin', model:'swe', ...f.meta(2)}), /시니어는 codex 실행기만/);
+  assert.throws(() => setRole(f.home, {role:'senior', runner:'devin', model:'swe', ...f.meta(2)}), /시니어는 안전하게 묶을 수 있는 실행기\(codex\)만/);
   assert.throws(() => setFallback(f.home, {role:'senior', items:[{runner:'codex', model:'gpt-6-sol', effort:'low'}], ...f.meta(2)}), /시니어는 폴백이 없다/);
   assert.equal(readSettings(f.home).revision, 2);
   blockModel(f.home, {model:'gpt-6-sol', roles:'senior', ...f.meta(2)});
