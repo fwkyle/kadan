@@ -1,6 +1,6 @@
 ---
 name: kadan-conductor
-description: Kadan conductor harness. Coordinate workers and reviewers with card files, kadan start/send, DONE markers, gajae review, checkpoint commits, and human decision gates. Use when the user says "카단 지휘", "지휘 시작", "티키타카", "가재 검수", or "/kadan-conductor".
+description: Supervisor (conductor) only — workers and reviewers must not use this skill to carry out their cards. Kadan conductor harness. Coordinate workers and reviewers with card files, kadan start/send, DONE markers, gajae review, checkpoint commits, and human decision gates. Use when the user says "카단 지휘", "지휘 시작", "티키타카", "가재 검수", or "/kadan-conductor".
 ---
 
 # Kadan Conductor — 지휘 하네스
