@@ -755,3 +755,84 @@ test('설명 AI 원장 코드에 발췌·덩어리 가림 코드가 없다(프�
   }
   for (const file of ['explain-ai', 'explain-diag']) assert.ok(!/가림/.test(fs.readFileSync(new URL(`../src/${file}.mjs`, import.meta.url), 'utf8')), file);
 });
+
+// ---- PR #208 6라운드: explain-call 줄 전체의 문자열 값은 허용 집합 안에만 있다(F1 저장 오류 원문 제거). ----
+// 허용: 메타데이터 칸(kind·by·at·key·inputHash·eventIds·시도의 runner·model), 고정 코드(outcome·reason·result), 구조 진단.
+const CALL_KEYS = ['kind', 'by', 'at', 'key', 'inputHash', 'eventIds', 'outcome', 'reason', 'attempts'];
+const OUTCOMES = ['written', 'failed', 'stale'];
+const REASON_RE = /^(rewrote-at-new-revision|revision-changed|no-attempt|write-failed(:E[A-Z]{2,15})?|timeout|output-limit|call-failed|template-error|not-json|field-rule:[a-z]+)$/;
+function assertCallRow(row, where, {runner = 'fake', model = 'ok'} = {}) {
+  for (const k of Object.keys(row)) assert.ok(CALL_KEYS.includes(k), `${where}: 낯선 칸 ${k}`);
+  assert.equal(row.kind, 'explain-call', where);
+  assert.equal(row.by, EXPLAIN_BY, where);
+  assert.ok(!Number.isNaN(Date.parse(row.at)) && new Date(row.at).toISOString() === row.at, `${where}: at`);
+  assert.match(row.key, /^[\w.-]+\/[\w.-]+$/, where);
+  assert.match(row.inputHash, /^[0-9a-f]{8,64}$/, where);
+  assert.ok(Array.isArray(row.eventIds) && row.eventIds.every(id => typeof id === 'string' && /^[\w:.-]+$/.test(id)), `${where}: eventIds`);
+  assert.ok(OUTCOMES.includes(row.outcome), `${where}: outcome ${row.outcome}`);
+  if ('reason' in row) assert.match(row.reason, REASON_RE, `${where}: reason`);
+  for (const a of row.attempts) {
+    assert.equal(a.runner, runner, where);
+    assert.equal(a.model, model, where);
+  }
+  assertLedgerSchema([row], where);
+}
+
+test('F1: write 실패의 오류 메시지 원문은 원장 reason에 남지 않고 고정 코드만 남는다(저장소 손상 주입)', async () => {
+  const fake = `Unexpected token 'F', "FakeSecretAbcXyz789" is not valid JSON`;
+  const original = BriefStore.prototype.write;
+  const cases = [
+    ['일반 오류', () => new Error(fake), 'write-failed'],
+    ['시스템 코드', () => Object.assign(new Error(fake), {code: 'ENOSPC'}), 'write-failed:ENOSPC'],
+    ['모양 밖 코드', () => Object.assign(new Error(fake), {code: 'FakeSecretAbcXyz789'}), 'write-failed'],
+    ['소문자 코드', () => Object.assign(new Error(fake), {code: 'enospc'}), 'write-failed'],
+  ];
+  try {
+    for (const [name, make, expected] of cases) {
+      const w = world({spawn: async () => ({status: 0, stdout: brief, stderr: ''})});
+      const card = w.makeCard();
+      await enable(w);
+      BriefStore.prototype.write = function () { throw make(); };
+      w.dispatch(card, 0);
+      {const {done} = w.run(); await done;}
+      BriefStore.prototype.write = original;
+      const [row] = w.rows().filter(r => r.kind === 'explain-call');
+      assert.equal(row.outcome, 'failed', name);
+      assert.equal(row.reason, expected, name);
+      assertCallRow(row, name);
+      assert.ok(!fs.readFileSync(path.join(w.home, EXPLAIN_FILE), 'utf8').includes('FakeSecret'), name);
+    }
+  } finally { BriefStore.prototype.write = original; }
+});
+
+test('F1: 실제 설명 줄 손상(저장소 쪽 오류)도 고정 코드로만 남는다', async () => {
+  let corrupt = () => {};
+  const w = world({spawn: async () => { corrupt(); return {status: 0, stdout: brief, stderr: ''}; }});
+  const card = w.makeCard();
+  await enable(w);
+  // AI가 답하는 사이 설명 줄이 손상된다(sourceHash 없음 → 저장 단계의 읽기가 실패).
+  corrupt = () => appendStream(w.home, `cards/${card.key}/briefs.jsonl`, {key: card.key, note: 'FakeSecretAbcXyz789'});
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  const [row] = w.rows().filter(r => r.kind === 'explain-call');
+  assert.equal(row.outcome, 'failed');
+  assert.match(row.reason, /^write-failed(:E[A-Z]{2,15})?$/);
+  assertCallRow(row, 'corrupt');
+  assert.ok(!JSON.stringify(w.rows()).includes('FakeSecret'));
+});
+
+test('원장 줄 전체 문자열 허용 집합: 성공·형식 실패·호출 실패·시간 초과 줄의 모든 문자열 값이 허용 안에 있다', async () => {
+  const bodies = [[brief, '', 0], ['plain FakeSecretAbcXyz789', '', 0], ['', 'FakeSecretAbcXyz789', 1], [JSON.stringify({response: '{"title":"FakeSecretAbcXyz789"}'}), '', 0]];
+  for (const [stdout, stderr, status] of bodies) {
+    const rows = (await ledgerFor(stdout, stderr, status)).filter(r => r.kind === 'explain-call');
+    assert.equal(rows.length, 1);
+    for (const row of rows) { assertCallRow(row, stdout.slice(0, 20)); assert.ok(!JSON.stringify(row).includes('FakeSecret')); }
+  }
+  // 허용 집합이 실제로 걸리는지 거꾸로 본다.
+  const ok = {kind: 'explain-call', by: EXPLAIN_BY, at: new Date().toISOString(), key: 'r/c', inputHash: 'abcdef12', eventIds: ['e1'], outcome: 'failed', attempts: []};
+  assertCallRow(ok, 'base');
+  assert.throws(() => assertCallRow({...ok, reason: 'write:Unexpected token'}, 'x'));
+  assert.throws(() => assertCallRow({...ok, reason: 'write-failed:FakeSecret'}, 'x'));
+  assert.throws(() => assertCallRow({...ok, extra: 'x'}, 'x'));
+  assert.throws(() => assertCallRow({...ok, outcome: 'boom'}, 'x'));
+});

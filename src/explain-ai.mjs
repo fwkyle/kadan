@@ -196,7 +196,11 @@ export class ExplainAI {
     const attempt = revision => store.write(job.key, {...fields, revision}, EXPLAIN_BY, {inputHash: job.hash});
     try { attempt(job.revision); return {outcome: 'written'}; }
     catch (error) {
-      if (!String(error.message).startsWith('카드 변경됨')) return {outcome: 'failed', reason: `write:${error.message}`};
+      // 오류 메시지에는 읽던 글자가 섞일 수 있어 원장에 넣지 않는다. 고정 코드(와 시스템 오류 코드)만 남긴다.
+      if (!String(error.message).startsWith('카드 변경됨')) {
+        const code = /^E[A-Z]{2,15}$/.test(error.code) ? `:${error.code}` : '';
+        return {outcome: 'failed', reason: `write-failed${code}`};
+      }
     }
     try {
       const [card] = this.center([job.key], this.now());
