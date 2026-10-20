@@ -127,7 +127,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
-| `kadan inbox` | 역할 우편함 조회. `list`·`received`·`sent`·`to-reply`·`waiting`·`read`·`ack`·`cancel`. 기본 목록은 같은 이름의 새 세션이 시작되기 전 미확인(이전 세대)을 빼고 `--previous-generations`로 따로 본다 | [우편함 명령](secretary-mailbox.md), [원장 계약](mail-task-ledgers.md) |
+| `kadan inbox` | 역할 우편함 조회. `list`·`received`·`sent`·`to-reply`·`waiting`·`read`·`ack`·`cancel`. 기본 목록은 같은 이름의 새 세션이 시작되기 전 미확인(이전 세대)을 빼고 `--previous-generations`로 따로 본다(키로 한 번도 못 넣고 보관된 새 우편은 예외로 새 세션에도 보인다) | [우편함 명령](secretary-mailbox.md), [원장 계약](mail-task-ledgers.md) |
 
 보내기는 `kadan mail <역할> …`다. 받는 세션이 없으면 아는 역할에는 자동 보관한다(`--mailbox`는 더 이상 쓰지 않으며 붙여도 무시). 조회는 읽음 처리하지 않고, `ack`가 읽음만 표시한다.
 
