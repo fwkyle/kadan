@@ -18,7 +18,7 @@ import {execCommand} from './runner-table.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
 import {answerText, buildExplainPrompt, decisionsByCard, envelopeState, parseBriefOutput} from './explain-input.mjs';
-import {buildDiag} from './explain-diag.mjs';
+import {buildDiag, ERRNO_CODES} from './explain-diag.mjs';
 
 export const EXPLAIN_FILE = 'explain-ai.jsonl';
 export const EXPLAIN_TIMEOUT_MS = 75_000;
@@ -198,7 +198,7 @@ export class ExplainAI {
     catch (error) {
       // 오류 메시지에는 읽던 글자가 섞일 수 있어 원장에 넣지 않는다. 고정 코드(와 시스템 오류 코드)만 남긴다.
       if (!String(error.message).startsWith('카드 변경됨')) {
-        const code = /^E[A-Z]{2,15}$/.test(error.code) ? `:${error.code}` : '';
+        const code = ERRNO_CODES.includes(error.code) ? `:${error.code}` : '';
         return {outcome: 'failed', reason: `write-failed${code}`};
       }
     }

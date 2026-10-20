@@ -19,7 +19,7 @@ import {setRunner as saveRunner} from '../src/runner-settings.mjs';
 import {scrubForAI} from '../src/explain-input.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
-import {shapeOf, wordIds, WORD_IDS, KEY_NAME, VALUE_KINDS, ENVELOPE_STATES, UNKNOWN_KEY, MAX_KEYS} from '../src/explain-diag.mjs';
+import {buildDiag, shapeOf, wordIds, WORD_IDS, KEY_NAMES, SIGNAL_NAMES, ERRNO_CODES, VALUE_KINDS, ENVELOPE_STATES, UNKNOWN_KEY, MAX_KEYS} from '../src/explain-diag.mjs';
 
 const fake = new URL('./helpers/fake-explain.mjs', import.meta.url).pathname;
 const EXEC = `node '${fake}' {model}`;
@@ -543,7 +543,7 @@ const count = v => Number.isInteger(v) && v >= 0;
 function assertShape(node, depth, where) {
   for (const k of Object.keys(node)) assert.ok(SHAPE_KEYS.includes(k), `${where}: 낯선 칸 ${k}`);
   assert.ok(VALUE_KINDS.includes(node.t), `${where}: 종류 ${node.t}`);
-  if ('k' in node) assert.ok(KEY_NAME.test(node.k) || node.k === UNKNOWN_KEY, `${where}: 키 ${node.k}`);
+  if ('k' in node) assert.ok(KEY_NAMES.includes(node.k) || node.k === UNKNOWN_KEY, `${where}: 키 ${node.k}`);
   for (const k of ['n', 'unknown', 'extra']) if (k in node) assert.ok(count(node[k]), `${where}: ${k}`);
   if ('v' in node) { assert.equal(node.t, 'number', where); assert.ok(node.v >= 0 && node.v <= 9999 && Number.isInteger(node.v), `${where}: v ${node.v}`); }
   if ('keys' in node) {
@@ -557,7 +557,7 @@ function assertDiagSchema(diag, where = 'diag') {
   assert.ok(Array.isArray(diag.words) && new Set(diag.words).size === diag.words.length, `${where}: words`);
   for (const id of diag.words) assert.ok(WORD_IDS.includes(id), `${where}: 낱말 ${id}`);
   for (const k of ['stdoutBytes', 'stderrBytes', 'exitCode']) if (k in diag) assert.ok(count(diag[k]), `${where}: ${k}`);
-  if ('signal' in diag) assert.match(diag.signal, /^SIG[A-Z0-9]{2,12}$/);
+  if ('signal' in diag) assert.ok(SIGNAL_NAMES.includes(diag.signal), `${where}: 신호 ${diag.signal}`);
   for (const k of ['shape', 'answerShape']) if (k in diag) assertShape(diag[k], 1, `${where}.${k}`);
 }
 function assertLedgerSchema(rows, where) {
@@ -615,18 +615,26 @@ test('도식 시험: 실패 시도 원장은 허용 집합 밖의 문자열·숫
   assert.throws(() => assertDiagSchema({words: [], stdoutBytes: 1, stderrBytes: 0, shape: {t: 'object', keys: [{k: 'a b', t: 'string'}]}}));
 });
 
-test('shapeOf: 키는 두 단계까지, 정규식 밖 키는 unknown으로 세고, 숫자는 0~9999 정수 값만 남긴다', () => {
-  const s = shapeOf({response: '', error: {code: 429, message: 'quota exceeded', deep: {a: 1}}, 'a-b': 1, 'k1': 2, big: 10000, f: 1.5, neg: -1, t: true, nul: null, arr: [1, 2]});
+test('shapeOf: 키는 두 단계까지, 고정 목록 밖 키는 unknown으로 세고, 숫자는 0~9999 정수 값만 남긴다', () => {
+  const s = shapeOf({response: '', error: {code: 429, message: 'quota exceeded', type: {a: 1}}, 'a-b': 1, 'k1': 2, SecretLookingKey: 3,
+    usage: 10000, stats: 1.5, models: -1, status: true, reason: null, output: [1, 2]});
   const by = Object.fromEntries(s.keys.map(k => [k.k, k]));
   assert.deepEqual(by.response, {k: 'response', t: 'string', n: 0});
-  assert.deepEqual(by.error.keys.map(k => [k.k, k.t, k.n, k.v]), [['code', 'number', undefined, 429], ['message', 'string', 14, undefined], ['deep', 'object', 1, undefined]]);
+  assert.deepEqual(by.error.keys.map(k => [k.k, k.t, k.n, k.v]), [['code', 'number', undefined, 429], ['message', 'string', 14, undefined], ['type', 'object', 1, undefined]]);
   assert.equal('keys' in by.error.keys[2], false); // 세 단계째는 펼치지 않는다
-  assert.equal(s.unknown, 2); // 'a-b', 'k1'
-  for (const k of ['big', 'f', 'neg']) assert.equal('v' in by[k], false, k);
-  assert.deepEqual(by.arr, {k: 'arr', t: 'array', n: 2});
-  const wide = shapeOf(Object.fromEntries('abcdefghijklmnopqrst'.split('').map((c, i) => [c, i])));
+  assert.equal(s.unknown, 3); // 'a-b', 'k1', 'SecretLookingKey'(정규식은 넘지만 목록에 없다)
+  assert.ok(!JSON.stringify(s).includes('SecretLookingKey'));
+  for (const k of ['usage', 'stats', 'models']) assert.equal('v' in by[k], false, k);
+  assert.deepEqual(by.output, {k: 'output', t: 'array', n: 2});
+  const wide = shapeOf(Object.fromEntries(KEY_NAMES.slice(0, 20).map((c, i) => [c, i])));
   assert.equal(wide.keys.length, MAX_KEYS);
   assert.equal(wide.extra, 4);
+});
+
+test('고정 목록: 신호·시스템 오류 코드는 목록 안의 것만 남는다', () => {
+  assert.equal(buildDiag({stdout: '', stderr: '', signal: 'SIGTERM'}).signal, 'SIGTERM');
+  for (const fake of ['SIGFAKESECRET', 'SIGXYZ', 'sigterm', '', null]) assert.equal('signal' in buildDiag({stdout: '', stderr: '', signal: fake}), false, String(fake));
+  assert.ok(ERRNO_CODES.includes('ENOSPC') && !ERRNO_CODES.includes('EFAKESECRET'));
 });
 
 test('낱말 id: 고정 목록과 맞은 것만, 중복 없이 남는다', () => {
@@ -760,7 +768,7 @@ test('설명 AI 원장 코드에 발췌·덩어리 가림 코드가 없다(프�
 // 허용: 메타데이터 칸(kind·by·at·key·inputHash·eventIds·시도의 runner·model), 고정 코드(outcome·reason·result), 구조 진단.
 const CALL_KEYS = ['kind', 'by', 'at', 'key', 'inputHash', 'eventIds', 'outcome', 'reason', 'attempts'];
 const OUTCOMES = ['written', 'failed', 'stale'];
-const REASON_RE = /^(rewrote-at-new-revision|revision-changed|no-attempt|write-failed(:E[A-Z]{2,15})?|timeout|output-limit|call-failed|template-error|not-json|field-rule:[a-z]+)$/;
+const REASON_RE = new RegExp(`^(rewrote-at-new-revision|revision-changed|no-attempt|write-failed(:(${ERRNO_CODES.join('|')}))?|timeout|output-limit|call-failed|template-error|not-json|field-rule:[a-z]+)$`);
 function assertCallRow(row, where, {runner = 'fake', model = 'ok'} = {}) {
   for (const k of Object.keys(row)) assert.ok(CALL_KEYS.includes(k), `${where}: 낯선 칸 ${k}`);
   assert.equal(row.kind, 'explain-call', where);
@@ -785,6 +793,7 @@ test('F1: write 실패의 오류 메시지 원문은 원장 reason에 남지 않
     ['일반 오류', () => new Error(fake), 'write-failed'],
     ['시스템 코드', () => Object.assign(new Error(fake), {code: 'ENOSPC'}), 'write-failed:ENOSPC'],
     ['모양 밖 코드', () => Object.assign(new Error(fake), {code: 'FakeSecretAbcXyz789'}), 'write-failed'],
+    ['정규식은 넘지만 목록에 없는 코드', () => Object.assign(new Error(fake), {code: 'EFAKESECRET'}), 'write-failed'],
     ['소문자 코드', () => Object.assign(new Error(fake), {code: 'enospc'}), 'write-failed'],
   ];
   try {
@@ -816,7 +825,7 @@ test('F1: 실제 설명 줄 손상(저장소 쪽 오류)도 고정 코드로만 
   {const {done} = w.run(); await done;}
   const [row] = w.rows().filter(r => r.kind === 'explain-call');
   assert.equal(row.outcome, 'failed');
-  assert.match(row.reason, /^write-failed(:E[A-Z]{2,15})?$/);
+  assert.match(row.reason, new RegExp(`^write-failed(:(${ERRNO_CODES.join('|')}))?$`));
   assertCallRow(row, 'corrupt');
   assert.ok(!JSON.stringify(w.rows()).includes('FakeSecret'));
 });

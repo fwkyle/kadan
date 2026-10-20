@@ -1,11 +1,19 @@
 // 설명 AI 실패 시도의 '구조만 기록' 진단(PR #208 5라운드, kyle 승인 267bbfc9).
-// 출력 글자를 원장에 옮기지 않는다. 원장에 쓰는 문자열은 아래 넷뿐이다.
-//  - 키 이름(KEY_NAME 정규식을 통과한 것만), 값 종류 이름 6개, 봉투 상태 4개, 낱말 id(코드 상수)
-//  - 그 밖에 '?' 표식 하나(정규식을 못 넘은 키를 센다)
+// 출력 글자를 원장에 옮기지 않는다. 원장에 쓰는 문자열은 아래 다섯뿐이고 전부 코드 안의 고정 목록에서만 고른다(정규식 통과는 근거가 아니다).
+//  - 키 이름(KEY_NAMES 목록에 있는 것만), 값 종류 이름 6개, 봉투 상태 4개, 낱말 id, 신호 이름(SIGNAL_NAMES)
+//  - 그 밖에 '?' 표식 하나(목록에 없는 키를 센다)
 // 숫자는 바이트·길이·개수·종료 코드 칸과, 값이 0~9999 정수일 때의 값(v)만 쓴다.
+import {constants} from 'node:os';
 import {STOP_PHRASES} from './watch-stop-phrases.mjs';
 
-export const KEY_NAME = /^[A-Za-z_]{1,24}$/;
+// 설명 칸 7개와 실행기 봉투·오류에서 흔한 키. 이 밖의 키는 글자를 남기지 않고 unknown으로 센다.
+export const KEY_NAMES = ['title', 'workstream', 'stage', 'goal', 'summary', 'next', 'blocker',
+  'response', 'result', 'output', 'text', 'content', 'message', 'error', 'code', 'type', 'subtype', 'status',
+  'is_error', 'usage', 'stats', 'models', 'reason'];
+export const SIGNAL_NAMES = Object.keys(constants.signals);
+// 저장 실패(write-failed:<코드>)에 붙일 수 있는 시스템 오류 코드. 이 밖의 코드는 붙이지 않는다.
+export const ERRNO_CODES = ['EACCES', 'EAGAIN', 'EBUSY', 'EDQUOT', 'EEXIST', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE',
+  'ENAMETOOLONG', 'ENFILE', 'ENOENT', 'ENOMEM', 'ENOSPC', 'ENOTDIR', 'ENOTEMPTY', 'EPERM', 'EROFS', 'ETXTBSY'];
 export const VALUE_KINDS = ['string', 'number', 'boolean', 'null', 'object', 'array'];
 export const ENVELOPE_STATES = ['not-json', 'field-missing', 'field-empty', 'ok'];
 export const UNKNOWN_KEY = '?';
@@ -49,7 +57,7 @@ export function shapeOf(value, depth = 1) {
     const keys = [];
     let unknown = 0, extra = 0;
     for (const [name, child] of Object.entries(value)) {
-      if (!KEY_NAME.test(name)) { unknown++; continue; }
+      if (!KEY_NAMES.includes(name)) { unknown++; continue; }
       if (keys.length >= MAX_KEYS) { extra++; continue; }
       keys.push({k: name, ...shapeOf(child, depth + 1)});
     }
@@ -77,6 +85,6 @@ export function buildDiag({stdout, stderr, answer, envelope, exitCode, signal}) 
   diag.stdoutBytes = Buffer.byteLength(String(stdout ?? ''));
   diag.stderrBytes = Buffer.byteLength(String(stderr ?? ''));
   if (Number.isInteger(exitCode)) diag.exitCode = exitCode;
-  if (typeof signal === 'string' && /^SIG[A-Z0-9]{2,12}$/.test(signal)) diag.signal = signal;
+  if (SIGNAL_NAMES.includes(signal)) diag.signal = signal;
   return diag;
 }
