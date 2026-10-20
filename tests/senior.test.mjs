@@ -205,3 +205,16 @@ test('--effort는 이번 호출만 강도를 바꾸고(설정 그대로) 원장�
   const plain = await f.run(['qa/card-a'], {question:'시험'}, {spawn:f.spawn(), readCodexModels});
   assert.equal(plain.effort, 'high'); assert.equal(f.advices().at(-1).effortOverride, undefined);
 });
+
+test('지정 없는 호출도 설정 직접 편집·옛 advisor 키의 허용 밖 실행기는 실행 전에 거절한다', async () => {
+  for (const key of ['senior', 'advisor']) {
+    const f = fixture({senior:false});
+    const file = path.join(f.home, 'runner-settings.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    raw.presets[raw.activePreset].roles[key] = {runner:'agy', model:'gemini-4-argon-medium'};
+    fs.writeFileSync(file, JSON.stringify(raw));
+    await assert.rejects(() => f.run(['qa/card-a'], {question:'바꿀까?'}, {spawn:f.spawn()}), /시니어는 안전하게 묶을 수 있는 실행기\(codex\)만/);
+    assert.equal(f.calls.length, 0); assert.deepEqual(f.advices(), []);
+    assert.ok(!fs.existsSync(path.join(f.home, 'advice')));
+  }
+});
