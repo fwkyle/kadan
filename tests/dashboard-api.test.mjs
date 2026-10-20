@@ -173,6 +173,21 @@ for (const mode of ["jsonl", "sqlite"])
     });
     assert.ok(cleared.status >= 400);
     assert.match(await cleared.text(), /이미 비어/);
+    // 값이 들어 있으면 비우기가 성공한다(설정 파일에 직접 넣은 값 — 저장 경로는 막혀 있으므로). 1번 자리는 그대로다.
+    const settingsFile = path.join(f.home, "runner-settings.json");
+    const raw = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    raw.presets[raw.activePreset].roles.senior2 = { runner: "demo", model: "demo-b" };
+    fs.writeFileSync(settingsFile, JSON.stringify(raw));
+    const seniorBefore = raw.presets[raw.activePreset].roles.senior ?? null;
+    const cleared2 = await fetch(base + "/runners/clear", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: new URLSearchParams({ token, revision: String(raw.revision), reason: "비우기 시험" }),
+    });
+    assert.equal(cleared2.status, 200, await cleared2.clone().text());
+    const after = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    assert.equal(after.presets[after.activePreset].roles.senior2, undefined);
+    assert.deepEqual(after.presets[after.activePreset].roles.senior ?? null, seniorBefore);
     const answer = await fetch(base + "/decisions/answer", {
       method: "POST",
       headers: { Accept: "application/json", Origin: base },

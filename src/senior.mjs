@@ -75,7 +75,7 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
 
 export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
   script = DEFAULT_SCRIPT, followScript = FOLLOW_SCRIPT, rottie, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels,
-  slot2Runners = SENIOR2_ALLOWED_RUNNERS}) {
+  slot2Runners = SENIOR2_ALLOWED_RUNNERS, warn = line => process.stderr.write(`${line}\n`)}) {
   if (flags.help || !argv[0]) return SENIOR_USAGE;
   if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
@@ -89,7 +89,12 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const settings = read();
   const configured = settings?.presets?.[settings.activePreset]?.roles?.senior;
   if (!configured) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
-  const second = settings?.presets?.[settings.activePreset]?.roles?.senior2 ?? null;
+  const configuredSecond = settings?.presets?.[settings.activePreset]?.roles?.senior2 ?? null;
+  // 2번 자리는 실행할 수 있을 때만 쓴다(값이 있고, 실행기가 허용 목록에 있고, 모델이 막히지 않았다). 그 밖에는 출력·원장 형식을 바꾸지 않고
+  // main과 같은 1자리로 간다. 막혔다는 사실은 stderr 한 줄로만 알린다(원장 사건은 남기지 않는다 — 1자리 원장이 main과 같아야 한다).
+  const blockedModel = configuredSecond && (settings.blocked ?? []).some(b => b.model === configuredSecond.model && (!b.roles || b.roles.includes('senior2') || b.roles.includes('senior')));
+  const second = configuredSecond && slot2Runners.includes(configuredSecond.runner) && !blockedModel ? configuredSecond : null;
+  if (configuredSecond && !second) warn(`시니어 2번 자리(${configuredSecond.runner}/${configuredSecond.model})는 ${blockedModel ? '정책으로 막은 모델이라' : '열리지 않은 실행기라'} 부르지 않는다 — 1번 자리만 답한다`);
   // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 비싼 모델을 시험할 때 low로 부르는 용도(2026-10-05 [kyle]). 1번 자리(codex)에만 적용한다.
   const value = flags.effort == null ? configured : {...configured, effort: checkEffort(settings, configured, flags.effort, readCodexModels)};
   const card = new CardStore(home).get(argv[0]);
@@ -159,8 +164,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     fs.writeFileSync(path.join(slotDir, 'input.txt'), slotPrompt, {mode: 0o600});
     const started = now();
     let result = {}, answer = '', reason;
-    if (!slot2Runners.includes(second.runner)) reason = 'slot-blocked';
-    else if (Buffer.byteLength(slotPrompt) > SECOND_PROMPT_LIMIT_BYTES) reason = 'prompt-too-large';
+    if (Buffer.byteLength(slotPrompt) > SECOND_PROMPT_LIMIT_BYTES) reason = 'prompt-too-large';
     else {
       let call = null;
       try { call = execCommand(settings, second.runner, {model: second.model, effort: second.effort ?? '', prompt: slotPrompt, cwd: slotDir}); } catch { reason = 'template-error'; }

@@ -50,7 +50,7 @@ Why: 감독이 결정할 부분을 한 시니어의 의견만으로 넘기기 �
 - `--effort`는 1번 자리(codex)에만 적용한다. 2번 자리는 모델 이름에 강도가 들어 있어 무시하며, 결과에 `effortNote` 한 줄로 알린다(출력에도 찍는다).
 - 출력: 영수증 JSON(`slots` 배열: 자리·실행기·모델·`reason`·`durationMs`·`evidencePath`)에 이어 자리 순서대로 `--- 자문 답변 N번 자리 (실행기/모델) ---` 머리말과 답을 낸다. 답이 없는 자리는 `답 없음: <reason>`으로 표시한다.
 - **종료 코드**: 하나라도 답했으면 0, 둘 다 못 답했으면 1(메시지에 자리별 `reason`). 2번 자리를 안 쓰면 지금과 같다(답 하나, 실패는 1).
-- 증거·원장: 자리마다 호출 폴더(`input.txt`·`result.txt`·`stderr.txt`)와 `advice` 사건 하나씩이다. 두 자리가 있을 때만 사건에 `slot`(1·2)·`pairId`(같은 호출의 묶음 ID)·`runner`가 붙는다. 2번 자리의 `reason`에는 `slot-blocked`(열린 실행기 아님)·`prompt-too-large`(200KB 초과)·`template-error`·`output-limit`가 더해진다. 탭 따라 보기는 1번 자리에만 뜨고 탭 상태 파일(`tab.json`)도 1번 폴더에만 생긴다.
+- 증거·원장: 자리마다 호출 폴더(`input.txt`·`result.txt`·`stderr.txt`)와 `advice` 사건 하나씩이다. 두 자리가 있을 때만 사건에 `slot`(1·2)·`pairId`(같은 호출의 묶음 ID)·`runner`가 붙는다. 2번 자리의 `reason`에는 `prompt-too-large`(200KB 초과)·`template-error`·`output-limit`가 더해진다. **2번 자리를 실행할 수 없으면(값이 없거나, 실행기가 허용 목록에 없거나, 모델이 정책으로 막힘) 두 자리 형식을 쓰지 않는다.** 영수증·머리말·원장 사건은 1자리 때와 같고(`adviceId`·`answer`·`evidencePath` 최상위, `slot`·`pairId` 없음), 막혔다는 사실은 stderr 한 줄로만 알린다. 탭 따라 보기는 1번 자리에만 뜨고 탭 상태 파일(`tab.json`)도 1번 폴더에만 생긴다.
 - 외부 전송 가림: 두 자리 모두 완성된 프롬프트에서 웹훅 주소와 토큰 모양을 가린 뒤 보낸다(`scrubForAI`).
 
 ### 머지 뒤 운영 설정 (지금은 열 수 없음)

@@ -102,13 +102,40 @@ test('둘 다 실패하면 종료 코드 1로 던지고 원장 줄은 둘 다 �
   assert.equal(f.advices().length, 2);
 });
 
-test('열린 실행기가 없으면 2번 자리는 막힘으로 기록하고 부르지 않는다(1번 자리 답은 그대로)', async () => {
+test('열린 실행기가 없으면 2번 자리는 부르지 않고, 형식은 바꾸지 않고 stderr 한 줄만 낸다', async () => {
   assert.deepEqual(SENIOR2_ALLOWED_RUNNERS, []); // agy 실측 결과로 지금은 어느 실행기도 열지 않았다
   const f = fixture();
-  const r = await f.run({}, {spawn: f.spawn(), slot2Runners: undefined});
-  assert.equal(r.slots[1].reason, 'slot-blocked'); assert.equal(r.answered, 1);
+  const warns = [];
+  const r = await f.run({}, {spawn: f.spawn(), slot2Runners: undefined, warn: line => warns.push(line)});
+  assert.equal(r.slots, undefined); assert.equal(r.answer, '결론: 1번 답');
   assert.equal(f.calls.filter(c => c.slot === 2).length, 0);
-  assert.equal(f.advices().find(e => e.slot === 2).reason, 'slot-blocked');
+  assert.equal(warns.length, 1); assert.match(warns[0], /2번 자리.*열리지 않은 실행기/);
+});
+
+// 1자리 결과는 main과 같다: senior2 없음 기준 영수증 최상위 필드·원장 사건 필드·답이 그대로여야 한다.
+const shape = (r, entries) => ({receipt: Object.keys(r).sort(), entries: entries.map(e => Object.keys(e).sort()), answer: r.answer, reason: r.reason});
+async function baseline() {
+  const f = fixture({second: false});
+  return shape(await f.run({}, {spawn: f.spawn()}), f.advices());
+}
+
+test('1자리 결과가 main과 같다: senior2 없음 / 있음+막힘(허용 목록 밖) / 있음+block — 영수증 필드·원장 필드·답이 동일', async () => {
+  const base = await baseline();
+  assert.ok(!base.receipt.includes('slots') && !base.receipt.includes('pairId') && base.receipt.includes('evidencePath'));
+  const cases = {
+    '허용 목록 밖': async () => { const f = fixture(); return [f, await f.run({}, {spawn: f.spawn(), slot2Runners: [], warn: () => {}})]; },
+    block: async () => {
+      const f = fixture();
+      blockModel(f.home, {model: 'fake-m', roles: 'senior2', ...f.meta(5)});
+      return [f, await f.run({}, {spawn: f.spawn(), warn: () => {}})];
+    },
+  };
+  for (const [name, go] of Object.entries(cases)) {
+    const [f, r] = await go();
+    assert.deepEqual(shape(r, f.advices()), base, name);
+    assert.equal(f.calls.filter(c => c.slot === 2).length, 0, name);
+    assert.equal(f.advices().length, 1, name);
+  }
 });
 
 test('프롬프트가 바이트 상한을 넘으면 2번 자리만 실패로 기록하고 1번 자리는 계속 간다', async () => {
