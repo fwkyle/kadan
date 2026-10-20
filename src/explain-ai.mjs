@@ -17,7 +17,8 @@ import {explainChain, readSettings} from './runner-settings.mjs';
 import {execCommand} from './runner-table.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
-import {answerText, buildExplainPrompt, decisionsByCard, parseBriefOutput} from './explain-input.mjs';
+import {answerText, buildExplainPrompt, decisionsByCard, envelopeState, parseBriefOutput} from './explain-input.mjs';
+import {ATTEMPT_RESULTS, buildDiag, errnoOf, pick} from './explain-diag.mjs';
 
 export const EXPLAIN_FILE = 'explain-ai.jsonl';
 export const EXPLAIN_TIMEOUT_MS = 75_000;
@@ -152,26 +153,34 @@ export class ExplainAI {
     for (const judge of chain) {
       if (this.controller.signal.aborted) return;
       const started = this.now();
+      let seen = null;
       let attempt = {runner: judge.runner, model: judge.model, fallbackIndex: judge.fallbackIndex, result: 'call-failed'};
       try {
         const {command, stdin, env, field} = execCommand(settings, judge.runner, {model: judge.model, effort: judge.effort ?? '', prompt, cwd: this.workDir});
         const res = await this.spawn(command, {input: stdin, timeout: this.timeoutMs, cwd: this.workDir, signal: this.controller.signal,
           reportComplete: () => false, maxBytes: EXPLAIN_MAX_OUTPUT_BYTES, env: {...process.env, ...env}});
         const stderr = String(res.stderr ?? '');
+        seen = {stdout: res.stdout, stderr, exitCode: res.status, signal: res.signal};
         if (res.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1')) attempt.result = 'timeout';
         else if (stderr.includes('KADAN_JUDGE_OUTPUT_LIMIT=1')) attempt.result = 'output-limit';
         else if (res.error || res.status !== 0) attempt.result = 'call-failed';
         else {
           const out = answerText(res.stdout, field);
+          seen.envelope = envelopeState(res.stdout, field);
+          seen.answer = out;
           parsed = parseBriefOutput(out);
           attempt.result = parsed.ok ? 'ok' : parsed.reason;
-          attempt.outputBytes = Buffer.byteLength(String(res.stdout ?? ''));
         }
-      } catch (error) { attempt.result = 'template-error'; attempt.error = error.message; }
+      } catch { attempt.result = 'template-error'; }
+      // 실패한 시도에는 출력 글자를 남기지 않고 구조만 남긴다(explain-diag.mjs). 성공 시도에는 아무것도 남기지 않는다.
+      if (attempt.result !== 'ok' && seen) attempt.diag = buildDiag(seen);
+      attempt.result = pick(ATTEMPT_RESULTS, attempt.result) ?? 'template-error';
       attempt.durationMs = this.now() - started;
       attempts.push(attempt);
-      // 모델이 응답하지 못한 경우(시간 초과·호출 실패)만 대체 후보로 내려간다. 응답이 JSON이 아니거나 규칙을 어기면 거기서 끝이다.
-      if (!['timeout', 'call-failed', 'template-error'].includes(attempt.result)) break;
+      // 모델이 응답하지 못한 경우(시간 초과·호출 실패)와 형식 실패(not-json·field-rule:*)는 다음 대체 후보로 내려간다.
+      // 체인을 한 바퀴만 돌고 같은 후보를 다시 부르지 않는다.
+      const next = ['timeout', 'call-failed', 'template-error', 'not-json'].includes(attempt.result) || attempt.result.startsWith('field-rule:');
+      if (!next) break;
     }
     if (parsed?.ok) {
       ({outcome, reason} = this.write(job, parsed.fields));
@@ -188,7 +197,11 @@ export class ExplainAI {
     const attempt = revision => store.write(job.key, {...fields, revision}, EXPLAIN_BY, {inputHash: job.hash});
     try { attempt(job.revision); return {outcome: 'written'}; }
     catch (error) {
-      if (!String(error.message).startsWith('카드 변경됨')) return {outcome: 'failed', reason: `write:${error.message}`};
+      // 오류 메시지에는 읽던 글자가 섞일 수 있어 원장에 넣지 않는다. 고정 코드(와 시스템 오류 코드)만 남긴다.
+      // 예외 객체는 칸마다 한 번씩만 읽고(접근 함수·Proxy가 읽을 때 던지거나 값이 바뀔 수 있다), 기록에는 목록 쪽 리터럴만 쓴다.
+      let changed = false, errno;
+      try { changed = typeof error?.message === 'string' && error.message.startsWith('카드 변경됨'); errno = changed ? undefined : errnoOf(error); } catch { changed = false; errno = undefined; }
+      if (!changed) return {outcome: 'failed', reason: errno === undefined ? 'write-failed' : `write-failed:${errno}`};
     }
     try {
       const [card] = this.center([job.key], this.now());
