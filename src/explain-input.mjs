@@ -114,20 +114,3 @@ export function envelopeState(stdout, field) {
   if (typeof value !== 'string') return 'field-missing';
   return value.trim() ? 'ok' : 'field-empty';
 }
-
-// 실패 시도에 남기는 출력 앞부분. 비밀은 길고 불투명한 덩어리이고 어떤 인코딩도 덩어리를 더 길게 만들 뿐이므로,
-// 이스케이프를 풀지 않고 20자 이상 덩어리를 통째로 가린다(인코딩과 무관한 규칙 하나).
-// 덩어리는 공백과 JSON 구조 글자 { } [ ] " , 로 나눈다. `:`는 넣지 않는다(https:// 웹훅·user:pass가 쪼개져 빠지지 않게).
-// 4KB에서 잘렸다면 잘린 끝 덩어리는 길이와 상관없이 가린다. 그 위에 scrubForAI를 적용하고 300자로 자른다.
-export const EXCERPT_MAX = 300;
-const EXCERPT_HEAD = 4096;
-const EXCERPT_CHUNK = 20;
-const CHUNK = /[^\s{}[\]",]+/g;
-const LAST_CHUNK = /[^\s{}[\]",]+([\s{}[\]",]*)$/;
-export function excerptOf(text) {
-  const raw = String(text ?? '');
-  let t = raw.slice(0, EXCERPT_HEAD).replace(CHUNK, chunk => chunk.length >= EXCERPT_CHUNK ? '[가림]' : chunk);
-  if (raw.length > EXCERPT_HEAD) t = t.replace(LAST_CHUNK, '[가림]$1');
-  t = scrubForAI(t);
-  return t.length > EXCERPT_MAX ? t.slice(0, EXCERPT_MAX) + '…' : t;
-}

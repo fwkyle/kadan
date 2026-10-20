@@ -19,6 +19,7 @@ import {setRunner as saveRunner} from '../src/runner-settings.mjs';
 import {scrubForAI} from '../src/explain-input.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
+import {shapeOf, wordIds, WORD_IDS, KEY_NAME, VALUE_KINDS, ENVELOPE_STATES, UNKNOWN_KEY, MAX_KEYS} from '../src/explain-diag.mjs';
 
 const fake = new URL('./helpers/fake-explain.mjs', import.meta.url).pathname;
 const EXEC = `node '${fake}' {model}`;
@@ -180,7 +181,7 @@ test('JSON이 아니거나 칸 규칙을 어기면 다음 대체 후보로 한 �
     assert.equal(row.outcome, 'failed');
     assert.equal(row.reason, reason);
     assert.equal(row.attempts.length, 2);
-    for (const a of row.attempts) assert.equal(typeof a.excerpt, 'string', '실패 시도마다 출력 앞부분이 남는다');
+    for (const a of row.attempts) assert.equal(typeof a.diag, 'object', '실패 시도마다 구조 진단이 남는다');
     w.clock.t += 60_000;
     {const {done} = w.run(); await done;}
     assert.equal(w.calls().length, 2, '같은 입력으로 다시 부르지 않는다');
@@ -192,7 +193,7 @@ test('JSON이 아니거나 칸 규칙을 어기면 다음 대체 후보로 한 �
   }
 });
 
-test('형식 실패(not-json·field-rule)는 대체 후보가 성공하면 written이고, 성공 시도에는 excerpt가 없다', async () => {
+test('형식 실패(not-json·field-rule)는 대체 후보가 성공하면 written이고, 성공 시도에는 diag가 없다', async () => {
   for (const [model, result] of [['garbage', 'not-json'], ['rule', 'field-rule:stage']]) {
     const w = world({chain: [{runner: 'fake', model}, {runner: 'fake', model: 'ok'}]});
     const card = w.makeCard();
@@ -204,13 +205,12 @@ test('형식 실패(not-json·field-rule)는 대체 후보가 성공하면 writt
     const row = w.rows().at(-1);
     assert.equal(row.outcome, 'written');
     assert.deepEqual(row.attempts.map(a => a.result), [result, 'ok']);
-    assert.equal(typeof row.attempts[0].excerpt, 'string');
-    assert.equal('excerpt' in row.attempts[1], false);
-    assert.equal('stderrExcerpt' in row.attempts[1], false);
+    assert.equal(typeof row.attempts[0].diag, 'object');
+    assert.equal('diag' in row.attempts[1], false);
   }
 });
 
-test('실패 시도의 excerpt는 비밀 모양을 가린 뒤 300자(+…)로 자르고, 봉투 상태 envelope을 4가지로 가른다', async () => {
+test('실패 시도에는 출력 글자(excerpt)를 남기지 않고, 봉투 상태 envelope을 4가지로 가른다', async () => {
   const cases = [['leak', 'not-json', 'ok'], ['empty', 'not-json', 'field-empty'], ['nofield', 'not-json', 'field-missing'], ['notenv', 'not-json', 'not-json']];
   for (const [model, result, envelope] of cases) {
     const w = world({chain: [{runner: 'fake', model}]});
@@ -220,14 +220,11 @@ test('실패 시도의 excerpt는 비밀 모양을 가린 뒤 300자(+…)로 �
     {const {done} = w.run(); await done;}
     const [a] = w.rows().at(-1).attempts;
     assert.equal(a.result, result);
-    assert.equal(a.envelope, envelope, model);
-    if (model === 'leak') {
-      assert.ok(a.excerpt.length <= 301);
-      assert.match(a.excerpt, /가림/);
-      assert.doesNotMatch(a.excerpt, /webhooks\/123|sk-abcdef|Bearer abcdef/);
-    }
+    assert.equal(a.diag.envelope, envelope, model);
+    for (const k of ['excerpt', 'stderrExcerpt', 'envelope', 'outputBytes', 'error']) assert.equal(k in a, false, k);
+    assertDiagSchema(a.diag);
   }
-  // 호출 실패에는 stderr 앞부분도 남고, 봉투 상태는 붙지 않는다.
+  // 호출 실패는 stderr 글자 대신 바이트 수·종료 코드만 남고, 봉투 상태는 붙지 않는다.
   const w = world({chain: [{runner: 'fake', model: 'fail'}]});
   const card = w.makeCard();
   await enable(w);
@@ -235,8 +232,11 @@ test('실패 시도의 excerpt는 비밀 모양을 가린 뒤 300자(+…)로 �
   {const {done} = w.run(); await done;}
   const [a] = w.rows().at(-1).attempts;
   assert.equal(a.result, 'call-failed');
-  assert.equal(a.stderrExcerpt, 'boom\n');
-  assert.equal('envelope' in a, false);
+  assert.equal(a.diag.stderrBytes, 5);
+  assert.equal(a.diag.exitCode, 1);
+  assert.equal('envelope' in a.diag, false);
+  assert.equal(JSON.stringify(w.rows()).includes('boom'), false);
+  assertDiagSchema(a.diag);
 });
 
 test('호출 중 revision이 바뀌면 입력이 같을 때만 새 revision으로 쓰고, 달라졌으면 답을 버린다. 어느 쪽도 같은 입력으로 다시 부르지 않고 재시작 뒤에도 같다', async () => {
@@ -532,69 +532,44 @@ test('S2 결과 파일이 등록 뒤에 바뀌면 발췌를 빼고 그 사유를
   assert.ok(call.prompt.includes('결과 파일이 등록한 뒤에 바뀌어 발췌를 뺐다'));
 });
 
-// F1: JSON 이스케이프(\n, \/, \uXXXX)가 남은 채 가리면 비밀이 원장에 남는다. 이스케이프를 푼 뒤 가리고 자른다.
-const SK = 'sk-abcdefghijklmnopqrstuvwxyz123456';
-const HOOK = 'https://discord.com/api/webhooks/123456789012345678/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd';
-const BEARER = 'Bearer abcdefghijklmnop1234567890';
-async function failedLedger(stdout, stderr = '', status = 0) {
-  const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => ({status, stdout, stderr})});
-  const card = w.makeCard();
-  await enable(w);
-  w.dispatch(card, 0);
-  {const {done} = w.run(); await done;}
-  return {a: w.rows().at(-1).attempts[0], stored: JSON.stringify(w.rows())};
+// ---- PR #208 5라운드: 실패 진단은 '구조만 기록'(자유 글자 0). 합격 기준은 사례 나열이 아니라 두 성질이다. ----
+// 성질 1(도식): 원장을 다시 읽은 모든 시도의 문자열·숫자가 허용 집합 안에 있다.
+// 성질 2(누출): 어떤 비밀·포장을 넣어도 원장 시도 기록에 비밀의 5자 이상 부분 문자열이 없다.
+//   (숫자로만 된 4자리 이하는 길이·값 칸이 허용하는 값이라 검사에서 뺀다. 5자리 이상 숫자 조각은 검사한다.)
+const ATTEMPT_KEYS = ['runner', 'model', 'fallbackIndex', 'result', 'durationMs', 'diag'];
+const DIAG_KEYS = ['envelope', 'shape', 'answerShape', 'words', 'stdoutBytes', 'stderrBytes', 'exitCode', 'signal'];
+const SHAPE_KEYS = ['t', 'n', 'v', 'keys', 'unknown', 'extra', 'k'];
+const count = v => Number.isInteger(v) && v >= 0;
+function assertShape(node, depth, where) {
+  for (const k of Object.keys(node)) assert.ok(SHAPE_KEYS.includes(k), `${where}: 낯선 칸 ${k}`);
+  assert.ok(VALUE_KINDS.includes(node.t), `${where}: 종류 ${node.t}`);
+  if ('k' in node) assert.ok(KEY_NAME.test(node.k) || node.k === UNKNOWN_KEY, `${where}: 키 ${node.k}`);
+  for (const k of ['n', 'unknown', 'extra']) if (k in node) assert.ok(count(node[k]), `${where}: ${k}`);
+  if ('v' in node) { assert.equal(node.t, 'number', where); assert.ok(node.v >= 0 && node.v <= 9999 && Number.isInteger(node.v), `${where}: v ${node.v}`); }
+  if ('keys' in node) {
+    assert.ok(depth <= 2 && node.t === 'object' && node.keys.length <= MAX_KEYS, `${where}: 키 펼침 한도`);
+    for (const child of node.keys) assertShape(child, depth + 1, where);
+  }
+}
+function assertDiagSchema(diag, where = 'diag') {
+  for (const k of Object.keys(diag)) assert.ok(DIAG_KEYS.includes(k), `${where}: 낯선 칸 ${k}`);
+  if ('envelope' in diag) assert.ok(ENVELOPE_STATES.includes(diag.envelope), where);
+  assert.ok(Array.isArray(diag.words) && new Set(diag.words).size === diag.words.length, `${where}: words`);
+  for (const id of diag.words) assert.ok(WORD_IDS.includes(id), `${where}: 낱말 ${id}`);
+  for (const k of ['stdoutBytes', 'stderrBytes', 'exitCode']) if (k in diag) assert.ok(count(diag[k]), `${where}: ${k}`);
+  if ('signal' in diag) assert.match(diag.signal, /^SIG[A-Z0-9]{2,12}$/);
+  for (const k of ['shape', 'answerShape']) if (k in diag) assertShape(diag[k], 1, `${where}.${k}`);
+}
+function assertLedgerSchema(rows, where) {
+  const attempts = rows.flatMap(r => r.attempts ?? []);
+  for (const a of attempts) {
+    for (const k of Object.keys(a)) assert.ok(ATTEMPT_KEYS.includes(k), `${where}: 시도 칸 ${k}`);
+    assert.match(a.result, /^(ok|timeout|output-limit|call-failed|template-error|not-json|field-rule:[a-z]+)$/, where);
+    if ('diag' in a) assertDiagSchema(a.diag, where);
+  }
+  return attempts;
 }
 
-test('JSON 이스케이프된 비밀(\\n 뒤 sk 키·Bearer·\\/ 웹훅·\\u 이스케이프)은 원장에 저장된 값에도 남지 않는다', async () => {
-  const hookEsc = HOOK.replaceAll('/', '\\/');
-  const uSk = [...SK].map(c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
-  const cases = {
-    newline: JSON.stringify({response: '\n' + SK}),
-    bearer: JSON.stringify({response: 'x\n' + BEARER}),
-    slash: `{"response":"${hookEsc}"}`,
-    unicode: `{"response":"${uSk}"}`,
-  };
-  for (const [name, out] of Object.entries(cases)) {
-    const {a, stored} = await failedLedger(out);
-    assert.equal(a.result, 'not-json', name);
-    assert.doesNotMatch(stored, /sk-abcdef|abcdefghijklmnop1234|AbCdEfGhIjKl|webhooks\\?\/123/, name);
-    assert.match(a.excerpt, /가림/, name);
-  }
-});
-
-test('stderr의 JSON 이스케이프 비밀도 원장에 남지 않는다', async () => {
-  const {a, stored} = await failedLedger('', JSON.stringify({error: '\n' + SK + '\n' + BEARER}), 1);
-  assert.equal(a.result, 'call-failed');
-  assert.doesNotMatch(stored, /sk-abcdef|abcdefghijklmnop1234/);
-  assert.match(a.stderrExcerpt, /가림/);
-});
-
-test('300자·4KB 경계에 걸친 비밀과 평문 출력의 가림이 유지된다', async () => {
-  // 300자 직전에 걸친 키: 가린 뒤에 자르므로 앞 조각이 남지 않는다.
-  const pad = 'a b '.repeat(70).slice(0, 285);
-  const edge = await failedLedger(pad + SK + ' tail');
-  assert.doesNotMatch(edge.stored, /sk-abc/);
-  // 4KB 경계에서 키가 잘리는 경우.
-  const head = 'z '.repeat(2040) + 'ok ' ; // 4083자
-  for (const cutAt of [4, 9, 14]) {
-    const text = head.padEnd(4096 - cutAt, ' ') + SK + ' ' + 'q'.repeat(5000);
-    const r = await failedLedger(JSON.stringify({response: text}));
-    assert.doesNotMatch(r.stored, /sk-abc|sk-a/, `cut ${cutAt}`);
-  }
-  // 평문 출력의 기존 가림
-  const plain = await failedLedger(`oops ${SK} ${BEARER} ${HOOK}`);
-  assert.doesNotMatch(plain.stored, /sk-abcdef|abcdefghijklmnop1234|AbCdEfGhIjKl/);
-});
-
-test('S1: 성공 시도에는 envelope·excerpt·stderrExcerpt가 남지 않는다', async () => {
-  const body = JSON.stringify({response: JSON.stringify({title: '제목', workstream: '묶음', stage: '구현'})});
-  const {a} = await failedLedger(body, 'warn');
-  assert.equal(a.result, 'ok');
-  for (const k of ['envelope', 'excerpt', 'stderrExcerpt']) assert.equal(k in a, false, k);
-});
-
-// 3라운드(F1 재발): 이스케이프를 풀고 모양을 찾는 방식은 끝이 없어, 공백 없는 20자 이상 덩어리를 통째로 가린다.
-// 합격 기준은 사례 나열이 아니라 '원장을 다시 읽은 저장값에 긴 덩어리·비밀 조각이 없다'는 성질이다.
 const PROP_SEED = 20261020;
 const PROP_RUNS = 300;
 function rng(seed) { // mulberry32
@@ -606,90 +581,177 @@ const wrappers = {
   plain: s => `oops ${s} done`,
   json1: s => JSON.stringify({response: `x ${s} y`}),
   json2: s => JSON.stringify({response: JSON.stringify({response: `x\n${s}\ny`})}),
-  percent: s => `{"response":"${encodeURIComponent(s)}"}`,
-  uXXXX: s => `{"response":"${[...s].map(c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('')}"}`,
+  percent: s => JSON.stringify({response: encodeURIComponent(s)}),
+  unicode: s => `{"response":"${[...s].map(c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('')}"}`,
   control: s => `{"response":"\\b\\f\\n${s}\\b"}`,
   edge4k: s => `${'z '.repeat(2040)}${'q'.repeat(8)}${s}${' tail'.repeat(500)}`,
   edge300: s => `${'ab '.repeat(97)}${s} tail`,
+  asKey: s => JSON.stringify({[s]: 1, response: ''}),
+  nested: s => JSON.stringify({error: {message: s, detail: {x: s}}, response: ''}),
 };
-function longChunks(text) { return text.split(/[\s{}[\]",]+/).filter(c => c.length >= 20 && !c.includes('[가림]')); }
-function ledgerStrings(rows) { return rows.flatMap(r => r.attempts ?? []).flatMap(a => [a.excerpt, a.stderrExcerpt]).filter(v => typeof v === 'string'); }
+const sub5 = (text, secret) => { for (let k = 0; k + 5 <= secret.length; k++) { const piece = secret.slice(k, k + 5); if (text.includes(piece)) return piece; } return null; };
+async function ledgerFor(stdout, stderr = '', status = 0) {
+  const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => ({status, stdout, stderr})});
+  const card = w.makeCard();
+  await enable(w);
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  return w.rows();
+}
 
-test(`성질 시험(시드 ${PROP_SEED}, ${PROP_RUNS}회): 어떤 포장이어도 원장에 다시 읽은 발췌에 20자 이상 덩어리·비밀 8자 조각이 없다`, async () => {
+test('도식 시험: 실패 시도 원장은 허용 집합 밖의 문자열·숫자·칸이 없다(원장 재독)', async () => {
+  const bodies = [JSON.stringify({response: '', error: {code: 429, message: 'quota exceeded'}}), 'plain text 12345', '',
+    JSON.stringify({response: 'x', 'bad key!': 1, n: 12345, f: 1.5, neg: -3, ok: true, z: null, arr: [1, 2, 3], deep: {a: {b: {c: 1}}}}),
+    JSON.stringify(Object.fromEntries(Array.from({length: 40}, (_, i) => ['k' + String.fromCharCode(97 + (i % 26)).repeat(1 + (i % 3)) + 'x'.repeat(i % 7), i])))];
+  for (const body of bodies) for (const [stdout, stderr, status] of [[body, '', 0], ['', body, 1]]) {
+    const rows = await ledgerFor(stdout, stderr, status);
+    const attempts = assertLedgerSchema(rows, body.slice(0, 20));
+    assert.ok(attempts.some(a => 'diag' in a));
+  }
+  // 도식 자체가 시험을 통과시키는지(허용 밖 값을 넣으면 실제로 걸리는지) 한 번 거꾸로 본다.
+  assert.throws(() => assertDiagSchema({words: [], stdoutBytes: 1, stderrBytes: 0, shape: {t: 'number', v: 10000}}));
+  assert.throws(() => assertDiagSchema({words: ['not-an-id'], stdoutBytes: 1, stderrBytes: 0}));
+  assert.throws(() => assertDiagSchema({words: [], stdoutBytes: 1, stderrBytes: 0, excerpt: 'x'}));
+  assert.throws(() => assertDiagSchema({words: [], stdoutBytes: 1, stderrBytes: 0, shape: {t: 'object', keys: [{k: 'a b', t: 'string'}]}}));
+});
+
+test('shapeOf: 키는 두 단계까지, 정규식 밖 키는 unknown으로 세고, 숫자는 0~9999 정수 값만 남긴다', () => {
+  const s = shapeOf({response: '', error: {code: 429, message: 'quota exceeded', deep: {a: 1}}, 'a-b': 1, 'k1': 2, big: 10000, f: 1.5, neg: -1, t: true, nul: null, arr: [1, 2]});
+  const by = Object.fromEntries(s.keys.map(k => [k.k, k]));
+  assert.deepEqual(by.response, {k: 'response', t: 'string', n: 0});
+  assert.deepEqual(by.error.keys.map(k => [k.k, k.t, k.n, k.v]), [['code', 'number', undefined, 429], ['message', 'string', 14, undefined], ['deep', 'object', 1, undefined]]);
+  assert.equal('keys' in by.error.keys[2], false); // 세 단계째는 펼치지 않는다
+  assert.equal(s.unknown, 2); // 'a-b', 'k1'
+  for (const k of ['big', 'f', 'neg']) assert.equal('v' in by[k], false, k);
+  assert.deepEqual(by.arr, {k: 'arr', t: 'array', n: 2});
+  const wide = shapeOf(Object.fromEntries('abcdefghijklmnopqrst'.split('').map((c, i) => [c, i])));
+  assert.equal(wide.keys.length, MAX_KEYS);
+  assert.equal(wide.extra, 4);
+});
+
+test('낱말 id: 고정 목록과 맞은 것만, 중복 없이 남는다', () => {
+  assert.deepEqual(wordIds('Quota EXCEEDED', 'quota again'), ['quota']);
+  assert.deepEqual(wordIds('', ''), []);
+  assert.ok(wordIds('429 Too Many Requests').includes('rate-limit-429'));
+  assert.ok(wordIds('Invalid API key provided').includes('invalid_api_key'));
+  assert.ok(WORD_IDS.every(id => /^[a-z0-9_-]+$/.test(id)));
+});
+
+// 3라운드 검수가 만든 실제 형식 표본 24종(전부 지어낸 값). 포장 8종 × 출력 통로 2개로 돌린다.
+const REAL = (() => {
+  const alnum = 'aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY';
+  const password = 'P7f9K2m4Q6r8,T1v3W5x7Y9z2,A4b6C8d0E2f4';
+  const cookie = 'P7f9K2m4Q6r8{T1v3W5x7Y9z2}A4b6C8d0E2f4';
+  const b64 = s => Buffer.from(s).toString('base64url');
+  return [
+    ['openai', 'sk-proj-' + alnum.repeat(3)], ['anthropic', 'sk-ant-api03-' + alnum.repeat(3)],
+    ['github-classic', 'ghp_' + alnum + 'aB3d'], ['github-fine', 'github_pat_' + alnum.repeat(2)],
+    ['slack-bot', 'xoxb-123456789012-123456789012-' + alnum.slice(0, 24)],
+    ['slack-user', 'xoxp-123456789012-123456789012-123456789012-' + alnum],
+    ['discord-bot', alnum.slice(0, 24) + '.' + alnum.slice(0, 6) + '.' + alnum],
+    ['discord-webhook', 'https://discord.com/api/webhooks/123456789012345678/' + alnum.repeat(2)],
+    ['jwt', b64('{"alg":"HS256","typ":"JWT"}') + '.' + b64('{"sub":"fake-review-user","exp":2000000000}') + '.' + alnum],
+    ['google-api', 'AIza' + (alnum + 'aB3').slice(0, 35)], ['google-oauth', 'ya29.' + alnum.repeat(3)],
+    ['aws-access-id', 'AKIA' + 'A1B2C3D4E5F6G7H8'], ['aws-secret', (alnum + '/+=xYz12').slice(0, 40)],
+    ['url-simple', 'postgresql://fake-user:' + alnum + '@db.invalid/test'],
+    ['url-comma-password', 'postgresql://fake-user:' + password + '@db.invalid/test'],
+    ['cookie-base64url', 'sid=' + alnum], ['cookie-braces', 'sid=' + cookie],
+    ['cookie-brackets', 'sid=' + cookie.replace('{', '[').replace('}', ']')],
+    ['session-uuid', 'a1b2c3d4-e5f6-4789-abcd-1234567890ef'], ['session-hex128', 'a1b2c3d4e5f67890aabbccddeeff0011'],
+    ['session-hex64', 'a1b2c3d4e5f67890'], ['basic-auth', 'Basic ' + Buffer.from('user:pass').toString('base64')],
+    ['bearer-long', 'Bearer ' + alnum.repeat(2)], ['bearer-short', 'Bearer a1b2c3d4e5f67890'],
+  ];
+})();
+const REAL_WRAP = {
+  plain: s => `error ${s} end`,
+  json1: s => JSON.stringify({response: s}),
+  json2: s => JSON.stringify({response: JSON.stringify({error: s})}),
+  percent: s => JSON.stringify({response: encodeURIComponent(s)}),
+  unicode: s => '{"response":"' + [...s].map(c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('') + '"}',
+  controls: s => JSON.stringify({response: '\b\f\n' + s + '\t\r'}),
+  slash: s => JSON.stringify({response: s}).replaceAll('/', '\\/'),
+  doubleControl: s => JSON.stringify({response: JSON.stringify({error: '\b\n' + s})}),
+};
+
+test(`누출 성질 시험 A: 실제 형식 ${REAL.length}종 × 포장 ${Object.keys(REAL_WRAP).length}종 × 출력 통로 2개, 원장 재독에 비밀 5자 이상 조각 0`, async () => {
+  assert.equal(REAL.length, 24);
+  let cases = 0;
+  for (const [name, secret] of REAL) for (const [wrap, fn] of Object.entries(REAL_WRAP)) for (const viaStderr of [false, true]) {
+    const out = fn(secret);
+    const rows = await ledgerFor(viaStderr ? '' : out, viaStderr ? out : '', viaStderr ? 1 : 0);
+    const attempts = assertLedgerSchema(rows, `${name}/${wrap}`);
+    const text = JSON.stringify(attempts);
+    for (const form of [secret, encodeURIComponent(secret)]) assert.equal(sub5(text, form), null, `${name}/${wrap}/${viaStderr ? 'stderr' : 'stdout'}`);
+    cases++;
+  }
+  assert.equal(cases, 24 * 8 * 2);
+});
+
+test(`누출 성질 시험 B(시드 ${PROP_SEED}, ${PROP_RUNS}회): 무작위 비밀(구분자·숫자 포함)을 어떤 포장·통로로 넣어도 원장 재독에 5자 이상 조각 0, 도식 통과`, async () => {
   const rand = rng(PROP_SEED);
+  const alpha = ALNUM + ':",{}[] \\';
   const names = Object.keys(wrappers);
   for (let i = 0; i < PROP_RUNS; i++) {
     const len = 20 + Math.floor(rand() * 61);
-    const secret = Array.from({length: len}, () => ALNUM[Math.floor(rand() * ALNUM.length)]).join('');
+    const secret = Array.from({length: len}, () => alpha[Math.floor(rand() * alpha.length)]).join('').trim();
     const name = names[Math.floor(rand() * names.length)];
     const out = wrappers[name](secret);
     const viaStderr = rand() < 0.5;
-    const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => viaStderr ? {status: 1, stdout: '', stderr: out} : {status: 0, stdout: out, stderr: ''}});
-    const card = w.makeCard();
-    await enable(w);
-    w.dispatch(card, 0);
-    {const {done} = w.run(); await done;}
-    const rows = w.rows(); // 원장을 다시 읽은 값
-    const where = `#${i} ${name} ${viaStderr ? 'stderr' : 'stdout'} secret=${secret}`;
-    const strings = ledgerStrings(rows);
-    assert.ok(strings.length > 0, where);
-    for (const text of strings) {
-      assert.deepEqual(longChunks(text), [], where);
-      for (const form of [secret, encodeURIComponent(secret)]) {
-        for (let k = 0; k + 8 <= form.length; k++) assert.ok(!text.includes(form.slice(k, k + 8)), `${where} @${k}`);
-      }
-    }
+    const rows = await ledgerFor(viaStderr ? '' : out, viaStderr ? out : '', viaStderr ? 1 : 0);
+    const where = `#${i} ${name} ${viaStderr ? 'stderr' : 'stdout'} secret=${JSON.stringify(secret)}`;
+    const attempts = assertLedgerSchema(rows, where);
+    assert.ok(attempts.length > 0 && attempts.every(a => 'diag' in a), where);
+    const text = JSON.stringify(attempts);
+    for (const form of [secret, encodeURIComponent(secret)]) assert.equal(sub5(text, form), null, where);
   }
 });
 
-test('고정 사례: 1·2라운드 검수가 낸 인코딩(이중 이스케이프·\\b·\\f·/·퍼센트)에서 비밀이 남지 않는다', async () => {
-  const hook = HOOK.replaceAll('/', '\\/');
-  const cases = {
-    dbl: JSON.stringify(JSON.stringify({response: '\n' + SK})),
-    bf: `{"response":"\\b\\f${SK}"}`,
-    slash: `{"response":"${hook}"}`,
-    pct: `{"response":"${encodeURIComponent(HOOK)}"}`,
-    bearer: JSON.stringify({response: 'x\\n' + BEARER}),
-  };
-  for (const [name, out] of Object.entries(cases)) {
-    const {stored} = await failedLedger(out);
-    assert.doesNotMatch(stored, /sk-abcdef|abcdefghijklmnop1234|AbCdEfGhIjKl|webhooks/, name);
-  }
-});
-
-test('진단 쓸모: 한 줄 JSON 봉투와 줄바꿈 봉투 모두 짧은 키·숫자·오류 문구가 발췌에 읽히게 남는다', async () => {
+test('진단 쓸모: 한 줄 봉투 {response:"",error:{code:429,message:"quota exceeded"}}는 구조·낱말 id로 원인이 읽힌다', async () => {
   const env = {response: '', error: {code: 429, message: 'quota exceeded'}};
   for (const [name, body] of [['한 줄', JSON.stringify(env)], ['줄바꿈', JSON.stringify(env, null, 1)]]) {
-    const {a} = await failedLedger(body);
-    for (const word of ['response', 'error', 'code', '429', 'message', 'quota', 'exceeded']) assert.ok(a.excerpt.includes(word), `${name}: ${word} / ${a.excerpt}`);
-    assert.doesNotMatch(a.excerpt, /가림/, name);
+    const [{diag}] = assertLedgerSchema(await ledgerFor(body), name);
+    assert.equal(diag.envelope, 'field-empty', name);
+    const by = Object.fromEntries(diag.shape.keys.map(k => [k.k, k]));
+    assert.deepEqual([by.response.t, by.response.n], ['string', 0], name);
+    assert.deepEqual([by.error.t, by.error.n], ['object', 2], name);
+    const inner = Object.fromEntries(by.error.keys.map(k => [k.k, k]));
+    assert.equal(inner.code.v, 429, name);
+    assert.deepEqual([inner.message.t, inner.message.n], ['string', 14], name);
+    assert.ok(diag.words.includes('quota'), name);
+    assert.ok(diag.words.includes('rate-limit-429') === false);
+    assert.equal(diag.stdoutBytes, Buffer.byteLength(body));
+    assert.equal('answerShape' in diag, false); // 답이 빈 글이라 안쪽 구조가 없다
   }
-  // 긴 토큰이 든 한 줄 봉투는 토큰만 가려지고 모양은 남는다.
-  const {a} = await failedLedger(JSON.stringify({response: SK, error: {code: 401}}));
-  assert.match(a.excerpt, /response/);
-  assert.match(a.excerpt, /가림/);
-  assert.doesNotMatch(a.excerpt, /sk-abc/);
+  // 봉투 안 답이 JSON이지만 규칙을 어기면 안쪽 구조(answerShape)도 남는다.
+  const inner = JSON.stringify({title: '제목', workstream: '묶음', stage: '없는단계'});
+  const [{diag, result}] = assertLedgerSchema(await ledgerFor(JSON.stringify({response: inner})), 'inner').map(a => ({...a}));
+  assert.equal(result, 'field-rule:stage');
+  assert.deepEqual(diag.answerShape.keys.map(k => [k.k, k.t, k.n]), [['title', 'string', 2], ['workstream', 'string', 2], ['stage', 'string', 4]]);
 });
 
-test(`구분자(: " , {)가 섞인 비밀(시드 ${PROP_SEED + 1}, ${PROP_RUNS}회): 20자 이상 덩어리는 없고, 쪼개져 남은 8자 조각 수를 진단으로 남긴다`, async t => {
-  const rand = rng(PROP_SEED + 1);
-  const alpha = ALNUM + ':",{';
-  const names = Object.keys(wrappers);
-  let leaked = 0, delimiterSecrets = 0;
-  for (let i = 0; i < PROP_RUNS; i++) {
-    const len = 20 + Math.floor(rand() * 61);
-    const secret = Array.from({length: len}, () => alpha[Math.floor(rand() * alpha.length)]).join('');
-    const name = names[Math.floor(rand() * names.length)];
-    const out = wrappers[name](secret);
-    const w = world({chain: [{runner: 'fake', model: 'ok'}], spawn: async () => ({status: 0, stdout: out, stderr: ''})});
-    const card = w.makeCard();
-    await enable(w);
-    w.dispatch(card, 0);
-    {const {done} = w.run(); await done;}
-    const strings = ledgerStrings(w.rows());
-    for (const text of strings) assert.deepEqual(longChunks(text), [], `#${i} ${name} ${secret}`);
-    delimiterSecrets++;
-    if (strings.some(text => { for (let k = 0; k + 8 <= secret.length; k++) if (text.includes(secret.slice(k, k + 8))) return true; return false; })) leaked++;
+test('진단 쓸모: 평문 오류 stderr는 맞는 낱말 id만 남기고 글자는 남기지 않는다', async () => {
+  const stderr = 'Error: 429 Too Many Requests — rate limit reached for model; Unauthorized (401 Unauthorized) context length exceeded';
+  const rows = await ledgerFor('', stderr, 1);
+  const [{diag, result}] = assertLedgerSchema(rows, 'stderr');
+  assert.equal(result, 'call-failed');
+  assert.deepEqual(diag.words.sort(), ['auth-token', 'context_length', 'rate-limit-429', 'rate-limit-text', 'unauthorized']);
+  assert.equal(diag.stderrBytes, Buffer.byteLength(stderr));
+  assert.equal(diag.exitCode, 1);
+  assert.equal('shape' in diag, false);
+  assert.equal(JSON.stringify(rows).includes('Too Many'), false);
+});
+
+test('S1: 성공 시도에는 diag가 남지 않는다(경고만 stderr에 있어도)', async () => {
+  const body = JSON.stringify({response: JSON.stringify({title: '제목', workstream: '묶음', stage: '구현'})});
+  const [a] = assertLedgerSchema(await ledgerFor(body, 'warn: quota'), 'ok');
+  assert.equal(a.result, 'ok');
+  assert.equal('diag' in a, false);
+});
+
+test('설명 AI 원장 코드에 발췌·덩어리 가림 코드가 없다(프롬프트용 scrubForAI는 그대로)', () => {
+  for (const file of ['explain-ai', 'explain-input', 'explain-diag']) {
+    const text = fs.readFileSync(new URL(`../src/${file}.mjs`, import.meta.url), 'utf8');
+    assert.ok(!/excerptOf|stderrExcerpt|EXCERPT_|LAST_CHUNK/.test(text), file);
   }
-  t.diagnostic(`구분자 섞인 비밀 ${delimiterSecrets}건 중 8자 이상 조각이 남은 건수: ${leaked}`);
+  for (const file of ['explain-ai', 'explain-diag']) assert.ok(!/가림/.test(fs.readFileSync(new URL(`../src/${file}.mjs`, import.meta.url), 'utf8')), file);
 });
