@@ -81,6 +81,8 @@ function deliverMessage(argv, flags, command) {
   if(role==='비서'||flags.mailbox===true){
     if (flags.raw) throw new Error('저장 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
     const by=resolveLedgerBy({env:process.env});
+    const liveWarning=storedMailLiveWarning(role,flags);
+    if(liveWarning)console.error(liveWarning);
     const receipt=new Mailbox(ledgerHome(),role).send({
       by,message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,
       executionKey:flags.execution,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true
@@ -166,6 +168,15 @@ function deliverMessage(argv, flags, command) {
     const hint=doneHintFor(pending);
     if(hint)console.log(hint);
   }
+}
+
+// --mailbox는 받는 세션이 없을 때만 쓴다(지침). 세션이 살아 있는데 붙이면 화면에 바로 안 가고 감시기 알림만 기다린다
+// (2026-10-20 retire_ooo 감독→감독 우편 두 통). 경고만 하고 저장은 그대로 한다(종료 0). 비서·사람 수신과 세션 조회 실패는 조용히 넘긴다.
+export function storedMailLiveWarning(role, flags, alive = session => floor.alive(session)) {
+  if (flags.mailbox !== true || role === '비서' || isUserActor(role)) return null;
+  let live = false;
+  try { live = alive(sessionName(role)) === true; } catch { return null; }
+  return live ? `경고: ${role} 세션이 살아 있습니다. --mailbox 없이 보내면 바로 전달됩니다. 이 우편은 저장만 되고 감시기가 다음 순회에 알립니다.` : null;
 }
 
 // 완료 통지를 보낸 작업자가 화면 DONE을 빠뜨리는 일이 잦다(2026-09-23 밤 작업자 10명 중 5명, 2026-09-24 kimi 검수자).
