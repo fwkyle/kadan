@@ -356,7 +356,7 @@ test('설정: explain은 exec 틀이 있는 실행기만 고르고 대체 후보
   assert.match(shown.fallback.explain[0].cmd, /^claude -p --model haiku /);
   // 감시 AI·시니어는 여전히 codex만 고른다.
   assert.throws(() => setRole(home, {role: 'watch', runner: 'agy', model: 'flash', ...meta()}), /codex 실행기만/);
-  assert.throws(() => setRole(home, {role: 'senior', runner: 'agy', model: 'flash', ...meta()}), /codex 실행기만/);
+  assert.throws(() => setRole(home, {role: 'senior', runner: 'agy', model: 'flash', ...meta()}), /안전하게 묶을 수 있는 실행기\(codex\)만/);
   // 틀 채우기: {prompt}가 있으면 인자(따옴표 처리), 없으면 표준 입력.
   const filled = readSettings(home);
   const asArg = execCommand(filled, 'agy', {model: 'flash', prompt: "it's $(x)"});
