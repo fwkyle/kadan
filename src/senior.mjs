@@ -118,6 +118,8 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   if (!configured) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유>');
   // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 비싼 모델을 시험할 때 low로 부르는 용도(2026-10-05 [kyle]).
   const {value: base, picked} = pickValue(settings, configured, flags, readCodexModels);
+  // 지정 없는 호출(설정 직접 편집·옛 advisor 이름 포함)도 실행 직전에 같은 허용 목록 검사를 거친다.
+  assertSeniorRunner(base.runner);
   const value = flags.effort == null ? base : {...base, effort: checkEffort(settings, base, flags.effort, readCodexModels)};
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
