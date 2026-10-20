@@ -6,6 +6,7 @@
 // 코드 상수는 운영 설정이 아직 옛 틀이어도 닫힌다.
 import fs from 'node:fs';
 import path from 'node:path';
+import {randomBytes} from 'node:crypto';
 
 export const NOEXEC_AGENT = 'kadan-noexec';
 
@@ -42,16 +43,14 @@ commandExecutionPolicy: off
 const agentDir = cwd => path.join(cwd, '.agents', 'agents', NOEXEC_AGENT);
 const agentPath = cwd => path.join(agentDir(cwd), 'agent.md');
 
-// 묶기 대상 판별: 등록 키 또는 틀 안의 낱말(셸이 명령으로 읽을 수 있는 자리 모두)이 표의 프로그램 이름이면 대상이다.
-// 이름은 소문자로 비교하고 따옴표·역슬래시 같은 글자는 떼고 본다(파일시스템이 대소문자를 구분하지 않아 AGY도 agy를 부른다).
+// 묶기 대상 판별: 등록 키(소문자) 또는 틀 첫 낱말의 basename(소문자)이 표의 프로그램 이름이면 대상이다. 다른 낱말은 보지 않는다
+// (`claude --model agy ...`는 claude다). 따옴표·역슬래시 같은 글자는 떼고 본다(파일시스템이 대소문자를 구분하지 않아 AGY도 agy를 부른다).
 const programName = word => path.basename(String(word)).replace(/[^A-Za-z0-9._-]/g, '').toLowerCase();
 function findBinding(runner, template) {
-  const programs = Object.values(EXEC_BINDINGS).map(b => b.program);
-  const byKey = Object.values(EXEC_BINDINGS).find(b => b.program === String(runner).toLowerCase());
-  if (byKey) return byKey;
-  const words = String(template ?? '').split(/[\s;&|()<>]+/).filter(Boolean);
-  const hit = words.map(programName).find(name => programs.includes(name));
-  return hit ? Object.values(EXEC_BINDINGS).find(b => b.program === hit) : null;
+  const programs = Object.values(EXEC_BINDINGS);
+  const first = String(template ?? '').trim().split(/[\s;&|()<>]+/)[0] ?? '';
+  const name = programName(first);
+  return programs.find(b => b.program === String(runner).toLowerCase()) ?? programs.find(b => b.program === name) ?? null;
 }
 
 // 묶기 대상 틀 문법: 셸이 공백 분리와 똑같이 읽는 단순 명령만 받는다. 메타문자는 해석하지 않고 거절한다.
@@ -104,24 +103,33 @@ function readNoFollow(file) {
   } finally { fs.closeSync(fd); }
 }
 
-// 부르기 직전에 그 호출의 cwd에 에이전트 파일을 정해진 내용으로 둔다. 없으면 만들고 다르면 고쳐 쓰며, 쓰고 나서 다시 읽어 확인한다.
-// 경로의 모든 단계와 파일이 링크 아닌 진짜 디렉터리·일반 파일이어야 하고, 쓰기도 링크를 따라가지 않는다. 마지막에 실제 경로가 cwd 안인지 본다.
+// 부르기 직전에 그 호출의 cwd에 에이전트 파일을 정해진 내용으로 둔다. 기존 inode에는 절대 쓰지 않는다(하드링크로 밖 파일이 덮이는 것을 막는다).
+// 같은 폴더에 새 임시 파일(O_CREAT|O_EXCL|O_NOFOLLOW)을 만들어 쓰고 fsync한 뒤 rename으로 바꾼다. 그 뒤 일반 파일·nlink 1인지 확인한다.
+// 내용이 같아도 nlink가 2 이상이면 새 파일로 바꾼다(rename은 이 이름만 바꾸고 밖 파일은 건드리지 않는다).
+// 경로의 모든 단계는 링크 아닌 진짜 디렉터리여야 하고, 파일이 링크·일반 파일 아님이면 던진다. 마지막에 실제 경로가 cwd 안인지 본다.
+// 남는 틈: 부모 폴더를 같은 사용자가 경합으로 바꿔치기하는 경우(같은 사용자·0700 폴더 전제, docs/runner-settings.md).
 // 실패하면 던진다 — 호출하는 쪽은 실행기를 부르지 않는다(fail closed).
 export function ensureAgentFile(cwd) {
   const file = agentPath(cwd);
+  let tmp = null;
   try {
     for (const dir of [path.join(cwd, '.agents'), path.join(cwd, '.agents', 'agents'), agentDir(cwd)]) ensureRealDir(dir);
     const st = fs.lstatSync(file, {throwIfNoEntry: false});
     if (st && (st.isSymbolicLink() || !st.isFile())) throw new Error('링크이거나 일반 파일이 아니다');
-    if (readNoFollow(file) !== NOEXEC_AGENT_MD) {
-      const flags = fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW | (st ? fs.constants.O_TRUNC : fs.constants.O_CREAT | fs.constants.O_EXCL);
-      const fd = fs.openSync(file, flags, 0o600);
-      try { fs.writeFileSync(fd, NOEXEC_AGENT_MD); } finally { fs.closeSync(fd); }
-      if (readNoFollow(file) !== NOEXEC_AGENT_MD) throw new Error('쓴 내용이 다시 읽은 내용과 다르다');
+    if (!st || st.nlink !== 1 || readNoFollow(file) !== NOEXEC_AGENT_MD) {
+      tmp = path.join(agentDir(cwd), `.agent.md.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+      const fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+      try { fs.writeFileSync(fd, NOEXEC_AGENT_MD); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(tmp, file);
+      tmp = null;
     }
+    const after = fs.lstatSync(file);
+    if (!after.isFile() || after.nlink !== 1) throw new Error('일반 파일이 아니거나 다른 이름이 같은 파일을 가리킨다');
+    if (readNoFollow(file) !== NOEXEC_AGENT_MD) throw new Error('쓴 내용이 다시 읽은 내용과 다르다');
     const root = fs.realpathSync(cwd);
     if (!fs.realpathSync(file).startsWith(root + path.sep)) throw new Error('작업 폴더 밖을 가리킨다');
   } catch (error) {
+    if (tmp) { try { fs.unlinkSync(tmp); } catch { /* 우리가 만든 임시 파일 정리 실패는 무시 */ } }
     throw new Error(`에이전트 파일을 둘 수 없다(${file}): ${error.code ?? error.message}`);
   }
   return file;

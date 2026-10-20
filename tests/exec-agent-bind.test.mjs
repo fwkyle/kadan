@@ -46,9 +46,18 @@ test('F3 등록 이름이나 대소문자를 바꿔도, 경로로 불러도 같�
   assert.throws(() => bound(noAgent, 'my-agent'), /묶기 문법/, '다른 등록 키여도 프로그램이 agy');
   assert.throws(() => bound('/opt/tools/AGY --model {model} --print {prompt}', 'other'), /묶기 문법/, '경로 + 대문자 프로그램');
   assert.throws(() => bound('"agy" --model {model} --print {prompt}', 'other'), /묶기 문법/, '따옴표로 감싼 프로그램');
-  assert.throws(() => bound('true; agy --model {model} --print {prompt}', 'other'), /묶기 문법/, '뒤에 숨긴 프로그램');
   assert.equal(bound(GOOD, 'AGY'), EXEC_BINDINGS.agy);
   assert.equal(bound('node fake.mjs {model}', 'claude'), null, '묶기 대상이 아닌 실행기는 그대로');
+});
+
+// ---- 3라운드 N3: 판별은 등록 키 또는 첫 낱말뿐 ----
+const CLAUDE_PROD = 'claude -p --model {model} --tools "" --system-prompt "You are a concise assistant." --no-session-persistence --output-format json';
+test('N3 첫 낱말이 agy가 아니면 뒤 낱말에 agy가 있어도 묶기 대상이 아니다(운영 claude 틀도 통과)', () => {
+  assert.equal(bound('claude --model agy --print {prompt}', 'claude'), null);
+  assert.equal(bound('claude --model agy --print {prompt}', 'other'), null);
+  assert.equal(bound(CLAUDE_PROD, 'claude'), null);
+  assert.equal(bound('node fake.mjs agy {prompt}', 'other'), null);
+  assert.throws(() => bound('agy --model agy --print {prompt}', 'other'), /묶기 문법/, '첫 낱말이 agy면 여전히 대상');
 });
 
 test('F5 시간 치환은 시간 옵션 바로 다음 낱말 하나만 바꾼다(문법을 통과한 틀에서)', () => {
@@ -117,6 +126,32 @@ test('F1 파일 자리가 디렉터리이거나 구성요소가 일반 파일이
   const fileCwd = tmp('kadan-f1-file-');
   fs.writeFileSync(path.join(fileCwd, '.agents'), 'x');
   assert.throws(() => ensureAgentFile(fileCwd), /에이전트 파일을 둘 수 없다/);
+});
+
+// ---- 3라운드 N2: 기존 inode에 쓰지 않는다 ----
+test('N2 agent.md가 밖 파일의 하드링크면 밖 파일은 그대로고 agent.md는 새 파일(nlink 1)이 된다', () => {
+  for (const content of ['OUTSIDE-ORIGINAL', NOEXEC_AGENT_MD]) {
+    const root = tmp('kadan-n2-'), cwd = path.join(root, 'work'), outside = path.join(root, 'outside');
+    fs.mkdirSync(path.join(cwd, '.agents/agents/kadan-noexec'), {recursive: true}); fs.mkdirSync(outside);
+    const target = path.join(outside, 'OUTSIDE');
+    fs.writeFileSync(target, content);
+    const file = path.join(cwd, '.agents/agents/kadan-noexec/agent.md');
+    fs.linkSync(target, file);
+    ensureAgentFile(cwd);
+    assert.equal(read(target), content, '밖 파일 불변');
+    assert.equal(fs.lstatSync(target).nlink, 1, '밖 파일의 링크 수도 원래대로');
+    assert.equal(read(file), NOEXEC_AGENT_MD);
+    assert.equal(fs.lstatSync(file).nlink, 1);
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ['agent.md'], '임시 파일이 남지 않는다');
+  }
+});
+
+test('N2 새 임시 파일을 만들 수 없으면(폴더 쓰기 불가) 던진다 — 호출하는 쪽은 agy를 부르지 않는다', () => {
+  const cwd = tmp('kadan-n2-nocall-');
+  fs.mkdirSync(path.join(cwd, '.agents/agents/kadan-noexec'), {recursive: true});
+  fs.chmodSync(path.join(cwd, '.agents/agents/kadan-noexec'), 0o500);
+  try { assert.throws(() => ensureAgentFile(cwd), /에이전트 파일을 둘 수 없다/); }
+  finally { fs.chmodSync(path.join(cwd, '.agents/agents/kadan-noexec'), 0o700); }
 });
 
 // ---- 저장: 그 행만 검사 ----
