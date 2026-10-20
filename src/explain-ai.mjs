@@ -17,7 +17,7 @@ import {explainChain, readSettings} from './runner-settings.mjs';
 import {execCommand} from './runner-table.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
-import {answerText, buildExplainPrompt, decisionsByCard, parseBriefOutput} from './explain-input.mjs';
+import {answerText, buildExplainPrompt, decisionsByCard, envelopeState, excerptOf, parseBriefOutput} from './explain-input.mjs';
 
 export const EXPLAIN_FILE = 'explain-ai.jsonl';
 export const EXPLAIN_TIMEOUT_MS = 75_000;
@@ -152,26 +152,37 @@ export class ExplainAI {
     for (const judge of chain) {
       if (this.controller.signal.aborted) return;
       const started = this.now();
+      let stdoutRaw = '', stderrRaw = '';
       let attempt = {runner: judge.runner, model: judge.model, fallbackIndex: judge.fallbackIndex, result: 'call-failed'};
       try {
         const {command, stdin, env, field} = execCommand(settings, judge.runner, {model: judge.model, effort: judge.effort ?? '', prompt, cwd: this.workDir});
         const res = await this.spawn(command, {input: stdin, timeout: this.timeoutMs, cwd: this.workDir, signal: this.controller.signal,
           reportComplete: () => false, maxBytes: EXPLAIN_MAX_OUTPUT_BYTES, env: {...process.env, ...env}});
         const stderr = String(res.stderr ?? '');
+        stdoutRaw = String(res.stdout ?? ''); stderrRaw = stderr;
         if (res.error?.code === 'ETIMEDOUT' || stderr.includes('KADAN_JUDGE_TIMEOUT=1')) attempt.result = 'timeout';
         else if (stderr.includes('KADAN_JUDGE_OUTPUT_LIMIT=1')) attempt.result = 'output-limit';
         else if (res.error || res.status !== 0) attempt.result = 'call-failed';
         else {
           const out = answerText(res.stdout, field);
+          const envelope = envelopeState(res.stdout, field);
+          if (envelope) attempt.envelope = envelope;
           parsed = parseBriefOutput(out);
           attempt.result = parsed.ok ? 'ok' : parsed.reason;
           attempt.outputBytes = Buffer.byteLength(String(res.stdout ?? ''));
         }
       } catch (error) { attempt.result = 'template-error'; attempt.error = error.message; }
+      // 실패한 시도에는 원래 출력(봉투 포함) 앞부분을 가려서 남긴다. 성공 시도에는 남기지 않는다.
+      if (attempt.result !== 'ok') {
+        if (stdoutRaw) attempt.excerpt = excerptOf(stdoutRaw);
+        if (stderrRaw && attempt.result === 'call-failed') attempt.stderrExcerpt = excerptOf(stderrRaw);
+      }
       attempt.durationMs = this.now() - started;
       attempts.push(attempt);
-      // 모델이 응답하지 못한 경우(시간 초과·호출 실패)만 대체 후보로 내려간다. 응답이 JSON이 아니거나 규칙을 어기면 거기서 끝이다.
-      if (!['timeout', 'call-failed', 'template-error'].includes(attempt.result)) break;
+      // 모델이 응답하지 못한 경우(시간 초과·호출 실패)와 형식 실패(not-json·field-rule:*)는 다음 대체 후보로 내려간다.
+      // 체인을 한 바퀴만 돌고 같은 후보를 다시 부르지 않는다.
+      const next = ['timeout', 'call-failed', 'template-error', 'not-json'].includes(attempt.result) || attempt.result.startsWith('field-rule:');
+      if (!next) break;
     }
     if (parsed?.ok) {
       ({outcome, reason} = this.write(job, parsed.fields));

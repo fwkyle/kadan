@@ -103,3 +103,21 @@ export function answerText(stdout, field) {
   for (const part of field.split('.')) value = value?.[part];
   return typeof value === 'string' ? value : '';
 }
+
+// 봉투를 쓰는 실행기에서 표준 출력이 어디까지 맞는지 한 칸으로 가른다(not-json 원인 구분용).
+// not-json: 봉투 자체가 JSON이 아님, field-missing: 답 필드가 없거나 글이 아님, field-empty: 답이 비었음, ok: 답이 있음.
+export function envelopeState(stdout, field) {
+  if (!field) return undefined;
+  let value;
+  try { value = JSON.parse(String(stdout ?? '')); } catch { return 'not-json'; }
+  for (const part of field.split('.')) value = value?.[part];
+  if (typeof value !== 'string') return 'field-missing';
+  return value.trim() ? 'ok' : 'field-empty';
+}
+
+// 실패 시도에 남기는 출력 앞부분. 먼저 가리고 나서 자른다(자른 경계에 걸린 비밀 조각이 남지 않게).
+export const EXCERPT_MAX = 300;
+export function excerptOf(text) {
+  const t = scrubForAI(String(text ?? ''));
+  return t.length > EXCERPT_MAX ? t.slice(0, EXCERPT_MAX) + '…' : t;
+}

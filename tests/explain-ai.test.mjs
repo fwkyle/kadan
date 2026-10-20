@@ -167,25 +167,76 @@ test('1순위가 시간 초과·실패면 대체 후보를 한 번 부르고, �
   assert.equal(slow.calls().length, 2, '같은 입력은 시도 한 차례만 한다');
 });
 
-test('JSON이 아니거나 칸 규칙을 어기면 설명 줄을 쓰지 않고 사유만 남기며, 대체 후보로 내려가지 않는다', async () => {
+test('JSON이 아니거나 칸 규칙을 어기면 다음 대체 후보로 한 번 내려가고, 대체도 실패하면 쓰지 않으며 같은 입력으로 다시 부르지 않는다', async () => {
   for (const [model, reason] of [['garbage', 'not-json'], ['rule', 'field-rule:stage']]) {
-    const w = world({chain: [{runner: 'fake', model}, {runner: 'fake', model: 'ok'}]});
+    const w = world({chain: [{runner: 'fake', model}, {runner: 'fake', model}]});
     const card = w.makeCard();
     await enable(w);
     w.dispatch(card, 0);
     {const {done} = w.run(); await done;}
     assert.equal(w.brief(card.key), null);
-    assert.equal(w.calls().length, 1);
-    assert.equal(w.rows().at(-1).reason, reason);
+    assert.equal(w.calls().length, 2, '체인 길이 안에서 후보마다 한 번씩만');
+    const row = w.rows().at(-1);
+    assert.equal(row.outcome, 'failed');
+    assert.equal(row.reason, reason);
+    assert.equal(row.attempts.length, 2);
+    for (const a of row.attempts) assert.equal(typeof a.excerpt, 'string', '실패 시도마다 출력 앞부분이 남는다');
     w.clock.t += 60_000;
     {const {done} = w.run(); await done;}
-    assert.equal(w.calls().length, 1, '같은 입력으로 다시 부르지 않는다');
+    assert.equal(w.calls().length, 2, '같은 입력으로 다시 부르지 않는다');
     // 새 프로세스(감시 재시작)도 기록을 읽어 다시 부르지 않는다.
     const again = new ExplainAI({home: w.home, now: () => w.clock.t});
     again.tick({cards: w.store.listSummaries(), entries: taskIdentity(w.store.listSummaries()).project(w.raw), readEntries: () => w.raw});
     await again.drain();
-    assert.equal(w.calls().length, 1);
+    assert.equal(w.calls().length, 2);
   }
+});
+
+test('형식 실패(not-json·field-rule)는 대체 후보가 성공하면 written이고, 성공 시도에는 excerpt가 없다', async () => {
+  for (const [model, result] of [['garbage', 'not-json'], ['rule', 'field-rule:stage']]) {
+    const w = world({chain: [{runner: 'fake', model}, {runner: 'fake', model: 'ok'}]});
+    const card = w.makeCard();
+    await enable(w);
+    w.dispatch(card, 0);
+    {const {done} = w.run(); await done;}
+    assert.deepEqual(w.calls().map(c => c.mode), [model, 'ok']);
+    assert.equal(w.brief(card.key).by, EXPLAIN_BY);
+    const row = w.rows().at(-1);
+    assert.equal(row.outcome, 'written');
+    assert.deepEqual(row.attempts.map(a => a.result), [result, 'ok']);
+    assert.equal(typeof row.attempts[0].excerpt, 'string');
+    assert.equal('excerpt' in row.attempts[1], false);
+    assert.equal('stderrExcerpt' in row.attempts[1], false);
+  }
+});
+
+test('실패 시도의 excerpt는 비밀 모양을 가린 뒤 300자(+…)로 자르고, 봉투 상태 envelope을 4가지로 가른다', async () => {
+  const cases = [['leak', 'not-json', 'ok'], ['empty', 'not-json', 'field-empty'], ['nofield', 'not-json', 'field-missing'], ['notenv', 'not-json', 'not-json']];
+  for (const [model, result, envelope] of cases) {
+    const w = world({chain: [{runner: 'fake', model}]});
+    const card = w.makeCard();
+    await enable(w);
+    w.dispatch(card, 0);
+    {const {done} = w.run(); await done;}
+    const [a] = w.rows().at(-1).attempts;
+    assert.equal(a.result, result);
+    assert.equal(a.envelope, envelope, model);
+    if (model === 'leak') {
+      assert.ok(a.excerpt.length <= 301);
+      assert.ok(a.excerpt.endsWith('…'));
+      assert.doesNotMatch(a.excerpt, /webhooks\/123|sk-abcdef|Bearer abcdef/);
+    }
+  }
+  // 호출 실패에는 stderr 앞부분도 남고, 봉투 상태는 붙지 않는다.
+  const w = world({chain: [{runner: 'fake', model: 'fail'}]});
+  const card = w.makeCard();
+  await enable(w);
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  const [a] = w.rows().at(-1).attempts;
+  assert.equal(a.result, 'call-failed');
+  assert.equal(a.stderrExcerpt, 'boom\n');
+  assert.equal('envelope' in a, false);
 });
 
 test('호출 중 revision이 바뀌면 입력이 같을 때만 새 revision으로 쓰고, 달라졌으면 답을 버린다. 어느 쪽도 같은 입력으로 다시 부르지 않고 재시작 뒤에도 같다', async () => {
