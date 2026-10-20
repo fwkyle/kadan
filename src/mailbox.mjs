@@ -7,6 +7,7 @@ import {assertWritable,preparedTransaction} from './storage.mjs';
 import {resolveWorkMail} from './work-mail.mjs';
 import {composeRoleInstructions,readRoleInstructionsConfig} from './role-instructions.mjs';
 import {composeMailInstructions} from './mail-instructions.mjs';
+import {mailRuleField} from './mail-rule.mjs';
 
 export const SECRETARY='비서';
 const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -52,7 +53,7 @@ export class Mailbox {
   if(fs.existsSync(file)){if(fs.readFileSync(file,'utf8')!==message)throw new Error('우편 본문 지문 충돌');}
   else fs.writeFileSync(file,message,{mode:0o600,flag:'wx'});
   const {currentRecipient,...connection}=context;
-  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...(sourceKey!==undefined?{sourceKey}:{}),...connection},this.home);
+  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(message),...mailRuleField(),...(sourceKey!==undefined?{sourceKey}:{}),...connection},this.home);
   return {mailId,recipient:currentRecipient||this.role,currentRecipient:currentRecipient||this.role,status:'stored',wake:'not-connected'};
  }
  // 기본 받은 편지 목록은 이전 세대 미확인을 빼고, previousGenerations=true면 그것만 보인다(읽음 기록은 가능).

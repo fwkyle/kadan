@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
+import {MailWatch} from '../src/watch-mail.mjs';
+import {MAIL_RULE} from '../src/mail-rule.mjs';
 
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
 const hasTmux = spawnSync('tmux', ['-V']).status === 0;
@@ -114,5 +116,63 @@ fs.writeFileSync(path.join(process.env.KADAN_HOME, 'ready'), 'ready');
     assert.ok(sent.every(e => e.transport !== 'mailbox'));
   } finally {
     spawnSync('tmux', ['-L', f.socket, 'kill-session', '-t', 'kadan-worker'], {env: f.env});
+  }
+});
+
+test('C1: 꺼진 아는 역할에 보낸 우편은 표지가 붙고, 새 start 뒤 하루가 지나도 알림이 1회 나간다', () => {
+  const f = fixture(); knownOffline(f);
+  const result = f.call('mail', 'worker', '안녕');
+  assert.equal(result.status, 0, result.stderr);
+  const [mail] = f.sends();
+  assert.equal(mail.mailRule, MAIL_RULE, '새 코드가 쓴 보관 우편에는 규칙 표지가 붙는다');
+  const sentAt = Date.parse(mail.t);
+  const entries = readLedger(f.home);
+  entries.push({kind: 'start', role: 'worker', session: 'kadan-worker', panePid: 9001, t: new Date(sentAt + 60_000).toISOString()});
+  const sent = [], records = [];
+  const watch = new MailWatch({record: e => { records.push(e); entries.push(e); }, send: (...args) => sent.push(args)});
+  watch.tick({entries: [...entries], cards: [], works: [], now: sentAt + 86_400_000,
+    floor: {list: () => [{session: 'kadan-worker', alive: true, pid: 9001}]},
+    readEntries: () => [...entries], readCards: () => [], readWorks: () => []});
+  assert.equal(sent.length, 1, '보관 성공 → 알림 0회가 되면 안 된다');
+  // 같은 상황에서 표지 없는 옛 우편은 옛 규칙대로 새 세대에게 알리지 않는다.
+  const old = entries.map(e => e.mailId === mail.mailId && e.kind === 'send' ? (({mailRule, ...rest}) => rest)(e) : e).filter(e => e.kind !== 'watch-mail-reminder');
+  const oldSent = [];
+  new MailWatch({record: () => {}, send: (...args) => oldSent.push(args)}).tick({entries: old, cards: [], works: [], now: sentAt + 86_400_000,
+    floor: {list: () => [{session: 'kadan-worker', alive: true, pid: 9001}]},
+    readEntries: () => old, readCards: () => [], readWorks: () => []});
+  assert.equal(oldSent.length, 0);
+});
+
+test('비서·사람 앞 저장 우편에도 표지가 붙는다(감시기는 받는 역할로 비서를 따로 거른다)', () => {
+  const f = fixture();
+  assert.equal(f.call('mail', '비서', '보고').status, 0);
+  assert.equal(f.sends()[0].mailRule, MAIL_RULE);
+});
+
+const hierarchyFor = (f, table) => {
+  const file = path.join(f.home, 'hierarchy.json');
+  fs.writeFileSync(file, JSON.stringify(table));
+  appendLedger({kind: 'hierarchy-loaded', path: file}, f.home);
+};
+const liveBareSession = (f, name) => spawnSync('tmux', ['-L', f.socket, 'new-session', '-d', '-s', name, 'sleep 60'], {env: f.env});
+
+test('F1: 시작 PID 기록이 없는 슈퍼 앞 우편은 같은 이름 세션이 살아 있어도 보관하고 보내지 않는다', { skip: !hasTmux }, () => {
+  const f = fixture();
+  hierarchyFor(f, {'peer-a': '@user', 'peer-b': '@user'});
+  try {
+    assert.equal(liveBareSession(f, 'kadan-peer-b').status, 0);
+    const env = {...f.env, KADAN_ROLE: 'peer-a'};
+    const peer = spawnSync(process.execPath, [cli, 'mail', 'peer-b', 'PID 기록 없는 슈퍼 앞 우편'], {env, cwd: f.home, encoding: 'utf8', input: ''});
+    assert.equal(peer.status, 0, peer.stderr);
+    assert.equal(JSON.parse(peer.stdout).wake, 'watch-required');
+    const peerMail = f.sends().find(e => e.by === 'peer-a');
+    assert.equal(peerMail.transport, 'mailbox'); assert.equal(peerMail.keyDelivery, undefined);
+    assert.doesNotMatch(peer.stderr, /PID 대조 생략/);
+    // 슈퍼가 아닌 발신자(boss)의 일반 우편은 main과 같이 경고하고 PID 대조 없이 바로 보낸다.
+    const plain = f.call('mail', 'peer-b', '일반 우편');
+    assert.match(plain.stderr, /PID 대조 생략/);
+    assert.equal(f.sends().filter(e => e.by === 'boss' && e.keyDelivery === 'sent').length, 1, plain.stdout + plain.stderr);
+  } finally {
+    spawnSync('tmux', ['-L', f.socket, 'kill-session', '-t', 'kadan-peer-b'], {env: f.env});
   }
 });

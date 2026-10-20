@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
+import {createHash,randomUUID} from 'node:crypto';
 import {Mailbox,inboxCommand,mailboxLetters} from '../src/mailbox.mjs';
 import {isUnreadLetter} from '../src/mailbox-state.mjs';
 import {isPreviousGenerationUnread} from '../src/mail-generation.mjs';
@@ -151,8 +152,14 @@ test('확정 인계 이후 현재 담당 이름의 새 세대만 기준이다', 
 test('inbox: 기본 목록에서 빠지고 --previous-generations에서 보이며 ack된다', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-gen-'));
   appendLedger(start(1), home);
-  const mailbox = new Mailbox(home, 'R');
-  const ids = ['a', 'b', 'c'].map(message => mailbox.send({by: 'boss', message}).mailId);
+  // 표지 없는 옛 보관 우편 3통(새 코드의 Mailbox.send는 표지를 붙여 한 번도 못 넣은 동안은 이전 세대로 세지 않는다).
+  const ids = ['a', 'b', 'c'].map(message => {
+    const digest = createHash('sha256').update(message).digest('hex'), mailId = randomUUID();
+    fs.mkdirSync(path.join(home, 'mail'), {recursive: true});
+    fs.writeFileSync(path.join(home, 'mail', `${digest}.txt`), message);
+    appendLedger({kind: 'send', transport: 'mailbox', role: 'R', by: 'boss', mailId, mailKind: 'report', digest, bytes: message.length}, home);
+    return mailId;
+  });
   appendLedger(stop, home);
   appendLedger(start(2), home);
   const list = flags => inboxCommand(['list'], flags, {home, by: 'R'}).map(e => e.mailId);

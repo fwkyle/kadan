@@ -2,7 +2,7 @@ import {isUserActor} from './actors.mjs';
 import {createMailRouting} from './mail-routing.mjs';
 import {createTaskCompletionChecker} from './ledger-domains.mjs';
 import {createMailGenerations} from './mail-generation.mjs';
-import {isNeverDeliveredMail} from './mail-since.mjs';
+import {isGenerationExempt,firstReminderSent} from './mail-rule.mjs';
 const views=new Set(['received','sent','to-reply','waiting']);
 const canAct=(by,role)=>by===role||isUserActor(by);
 const sameContext=(a,b)=>a.workKey===b.workKey&&a.executionKey===b.executionKey;
@@ -30,6 +30,8 @@ export function mailboxLetters(entries,role,{view='received',all=true,unread=fal
 function projectLetters(entries){
  const sends=entries.filter(e=>e.kind==='send'),refs=new Map(),byId=new Map(),read=new Set(),claims=new Map();
  const routing=createMailRouting(),generations=createMailGenerations();
+ // 감시 알림이 처음 sent된 시각. 받은 entries에 이미 들어 있는 사건만 쓰고 원장을 따로 읽지 않는다.
+ const firstSent=firstReminderSent(entries);
  const completionReply=createTaskCompletionChecker(entries);
  for(const e of sends){
   if(e.mailId){if(byId.has(e.mailId))throw new Error('우편 원장 중복 mailId');byId.set(e.mailId,e);}
@@ -59,9 +61,9 @@ function projectLetters(entries){
   ...e,currentRecipient:routing.get(e).currentRecipient,currentSender:routing.get(e).currentSender,
   replyRecipients:[...routing.get(e).senderRoles],
   // 현재 담당 이름의 새 세대가 편지(또는 마지막 인계) 뒤에 시작됐으면 이전 세대 소속이다.
-  // 단, 받는 쪽이 꺼져 있어 저장만 된 새 우편(키로 한 번도 못 넣음)은 다음 start 앞에 있어도 이전 세대로 보지 않는다(2026-10-21 우편 단순화).
+  // 단, 받는 쪽이 꺼져 있어 저장만 된 새 우편(한 번도 못 넣음, 또는 새 대화가 뜬 뒤에 처음 넣음)은 이전 세대로 보지 않는다(2026-10-21 우편 단순화).
   previousGeneration:generations.isPrevious(routing.get(e).currentRecipient,routing.get(e).since)
-   &&!isNeverDeliveredMail(e,routing.get(e).currentRecipient,isUserActor),
+   &&!isGenerationExempt(e,routing.get(e).currentRecipient,isUserActor,firstSent,generations.isPreviousAt),
   // 수신자 직접 ack가 있으면 그것을, 없으면 raw 창 전달 성공의 전달 읽음을 읽음 근거로 표시한다.
   read:read.has(e)||e.mailId&&e.deliveredRead===true?true:e.mailId?false:null,
   readKind:read.has(e)?'recipient-ack':e.mailId&&e.deliveredRead===true?'delivered-read':null,expectReply:e.expectReply===true,replyFinal:e.replyFinal===true,

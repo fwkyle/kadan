@@ -127,7 +127,11 @@ function deliverMessage(argv, flags, command) {
         note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
     };
     const expectedPid=recordedPid(lastStartFor(session));
+    // 슈퍼 간 우편은 시작 PID를 확인하지 못하면 세션이 살아 있어도 보관한다(main과 같은 경계, 2026-10-21 검수 F1).
+    // 같은 이름이지만 원장과 연결되지 않은 프로세스로 바로 넣지 않으려는 것이다. 일반 우편은 아래처럼 경고 후 PID 대조 없이 전송한다.
+    // 일반 우편까지 보관하면 카단이 띄우지 않은 세션으로 보내던 길이 막혀 이번 범위 밖이다.
     if (!expectedPid) {
+      if (peer) return store(`시작 PID 기록 없음: ${session}`);
       if (recipient!==role) {
         const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
         error.delivery='not-sent';throw error;
