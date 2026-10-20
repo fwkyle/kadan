@@ -368,3 +368,52 @@ test('저장 전용 우편도 사람 입력 중이면 보류하고 받는 세션
   const g=fixture([stored('s')]);g.now=60000;g.live.length=0;
   g.tick();assert.equal(g.sent.length,0);assert.equal(g.records.length,0);
 });
+
+test('저장 전용 우편은 보낸 직후 연결 업무가 done/cancelled로 닫혀도 한 번 알린다 (retire_ooo 246c6a15·fefff233)',()=>{
+  for(const status of ['done','cancelled']) {
+    const f=fixture([stored('s',{workKey:'r/w'}),stored('e',{executionKey:'r/e'})]);
+    f.works=[{key:'r/w',status,executions:[{key:'r/e'}]}];
+    f.now=60000;f.tick();
+    assert.equal(f.sent.length,1,status);assert.match(f.sent[0][1],/2건/);
+    f.now=120000;f.tick();assert.equal(f.sent.length,1,status);
+  }
+});
+
+test('저장 전용 우편도 일시정지(hold) 업무·읽음·이전 세대는 계속 제외하고 키로 전달된 우편은 닫힌 업무에서 제외',()=>{
+  const hold=fixture([stored('h',{workKey:'r/w'})]);
+  hold.works=[{key:'r/w',status:'hold',executions:[]}];
+  hold.now=60000;hold.tick();assert.equal(hold.sent.length,0);
+  const read=fixture([stored('r',{workKey:'r/w'})]);
+  read.works=[{key:'r/w',status:'done',executions:[]}];
+  read.entries.push({kind:'mail-read',mailId:'r',role:'worker',by:'worker'});
+  read.now=60000;read.tick();assert.equal(read.sent.length,0);
+  const old=fixture([stored('o',{workKey:'r/w'})]);
+  old.works=[{key:'r/w',status:'done',executions:[]}];
+  old.entries.push({kind:'stop',role:'worker',t:at(10)},{kind:'start',role:'worker',session:'kadan-worker',panePid:2,t:at(20)});
+  old.live[0].pid=2;
+  old.now=60000;old.tick();assert.equal(old.sent.length,0);
+  const keyed=fixture([stored('k',{workKey:'r/w',keyDelivery:'sent'})]);
+  keyed.works=[{key:'r/w',status:'done',executions:[]}];
+  keyed.now=300000;keyed.tick();assert.equal(keyed.sent.length,0);
+});
+
+test('저장 전용 우편이 닫힌 업무에 걸려도 보류 뒤 재시도한다',()=>{
+  const f=fixture([stored('s',{workKey:'r/w'})]);
+  f.works=[{key:'r/w',status:'done',executions:[]}];f.now=60000;
+  let held=true;
+  const watch=new MailWatch({record:e=>f.record(e),send:(...args)=>f.send(...args),
+    hold:()=>held?{code:'KADAN_HUMAN_ACTIVE',message:'보류'}:null});
+  f.tick(watch);assert.equal(f.sent.length,0);
+  held=false;f.tick(watch);assert.equal(f.sent.length,1);
+});
+
+test('닫힌 업무에 걸린 슈퍼끼리 peer 저장 우편은 계속 제외한다 (main 동작 유지)',()=>{
+  const parents=new Map([['worker','@user'],['boss','@user']]);
+  for(const status of ['done','cancelled']) {
+    const f=fixture([stored('p',{workKey:'r/w'})]);
+    f.works=[{key:'r/w',status,executions:[]}];f.now=60000;
+    f.create().tick({entries:[...f.entries],cards:f.cards,works:f.works,now:f.now,floor:f.floor,
+      readEntries:()=>[...f.entries],readCards:()=>f.cards,readWorks:()=>f.works,parents});
+    assert.equal(f.sent.length,0,status);
+  }
+});

@@ -31,7 +31,9 @@ function eligibleLetters(entries, cards, works, now, graceMs, parents) {
     const executionKey = execution.key || mail.executionKey;
     const related = works.filter(work => (mail.workKey && work.key === mail.workKey)
       || (executionKey && work.executions?.some(e => e.key === executionKey)));
-    return !related.some(work => work.status !== 'open');
+    // 저장 전용 우편은 받는 쪽이 아직 못 본 편지다. 보낸 직후 업무가 done/cancelled로 닫혀도(완료 알림이 흔한 경우:
+    // 2026-10-20 retire_ooo 246c6a15·fefff233이 닫힘 7~12초 전에 저장됐다) 알림은 한 번 나가야 한다. 일시정지(hold)와 슈퍼끼리 peer 우편은 기존대로 닫힌 업무를 따른다.
+    return !related.some(work => work.status !== 'open' && !(storedOnly && !deferredPeer && work.status !== 'hold'));
   });
 }
 
