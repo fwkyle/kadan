@@ -22,10 +22,12 @@ export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior
 // 감시 AI는 scripts/watch-judge.sh가, 시니어는 scripts/senior.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
-// 시니어가 쓸 수 있는 '안전하게 묶을 수 있는 실행기' 허용 목록(2026-10-20 [kyle]). 읽기 전용으로 가둘 수 있다고 확인된 실행기만 넣는다.
-// 지금은 codex뿐이다(scripts/senior.sh가 읽기 전용 샌드박스로 부른다). agy는 헤드리스에서 파일을 쓸 수 있어 'agy 명령 막기' 조사가 합격한 뒤 별도로 추가한다.
+// 시니어가 쓸 수 있는 '안전하게 묶을 수 있는 실행기' 허용 목록(2026-10-20 [kyle]). 쓰기·명령 실행이 막힌다고 확인된 실행기만 넣는다.
+// codex는 scripts/senior.sh가 읽기 전용 샌드박스로 부르고, agy는 실행기 표 exec 틀 + 도구 없는 에이전트(--agent kadan-noexec, src/exec-agent.mjs)로 부른다.
 // 설정 저장(runners set senior)과 호출(kadan senior --runner)이 같은 목록·같은 함수로 거절한다.
-export const SENIOR_SAFE_RUNNERS = ['codex'];
+export const SENIOR_SAFE_RUNNERS = ['codex', 'agy'];
+// scripts/senior.sh가 직접 부르는 실행기. 그 밖의 허용 실행기는 실행기 표 exec 틀로 부른다.
+export const SENIOR_SCRIPT_RUNNER = 'codex';
 export function assertSeniorRunner(runner, safeRunners = SENIOR_SAFE_RUNNERS) {
   if (!safeRunners.includes(runner))
     throw new Error(`시니어는 안전하게 묶을 수 있는 실행기(${safeRunners.join(', ')})만 고를 수 있다: ${runner} — 목록에 넣으려면 그 실행기가 읽기 전용으로 갇힌다는 실측(쓰기 차단)이 먼저 합격해야 한다`);

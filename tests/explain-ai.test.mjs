@@ -17,6 +17,7 @@ import {execCommand, fillTemplate, checkExecTemplate} from '../src/runner-table.
 import {buildExplainInput, buildExplainPrompt} from '../src/explain-input.mjs';
 import {setRunner as saveRunner} from '../src/runner-settings.mjs';
 import {scrubForAI} from '../src/explain-input.mjs';
+import {NOEXEC_AGENT_MD, assertExecBound, bindExec} from '../src/exec-agent.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
 import {buildDiag, shapeOf, wordIds, errnoOf, pick, ATTEMPT_RESULTS, WORD_IDS, KEY_NAMES, SIGNAL_NAMES, ERRNO_CODES, VALUE_KINDS, ENVELOPE_STATES, UNKNOWN_KEY, MAX_KEYS} from '../src/explain-diag.mjs';
@@ -25,14 +26,14 @@ const fake = new URL('./helpers/fake-explain.mjs', import.meta.url).pathname;
 const EXEC = `node '${fake}' {model}`;
 
 // 가짜 실행기와 설정이 든 격리 홈. 시계는 시험이 직접 움직인다(켜는 시점 이후 사건만 보는 규칙을 시각으로 시험한다).
-function world({chain = [{runner: 'fake', model: 'ok'}], exec = EXEC, spawn, timeoutMs = 3000} = {}) {
+function world({chain = [{runner: 'fake', model: 'ok'}], exec = EXEC, spawn, timeoutMs = 3000, extraRunners = {}} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-explain-'));
   const log = path.join(home, 'fake-log.jsonl');
   process.env.FAKE_EXPLAIN_LOG = log;
   const writeSettings = roles => fs.writeFileSync(path.join(home, 'runner-settings.json'), JSON.stringify({
     version: 1, revision: 1, activePreset: 'B',
     presets: {B: {roles: roles ?? {}, ...(chain.length > 1 ? {fallback: {explain: chain.slice(1)}} : {})}},
-    runners: {codex: {spawn: 'codex {model}', catalog: 'codex-models-cache'}, fake: {spawn: 'fake {model}', ...(exec ? {exec, execField: 'response'} : {}), models: []}},
+    runners: {codex: {spawn: 'codex {model}', catalog: 'codex-models-cache'}, fake: {spawn: 'fake {model}', ...(exec ? {exec, execField: 'response'} : {}), models: []}, ...extraRunners},
     families: {}, blocked: []}));
   writeSettings(chain.length ? {explain: chain[0]} : {});
   const clock = {t: Date.now()};
@@ -356,7 +357,7 @@ test('설정: explain은 exec 틀이 있는 실행기만 고르고 대체 후보
   assert.match(shown.fallback.explain[0].cmd, /^claude -p --model haiku /);
   // 감시 AI·시니어는 여전히 codex만 고른다.
   assert.throws(() => setRole(home, {role: 'watch', runner: 'agy', model: 'flash', ...meta()}), /codex 실행기만/);
-  assert.throws(() => setRole(home, {role: 'senior', runner: 'agy', model: 'flash', ...meta()}), /안전하게 묶을 수 있는 실행기\(codex\)만/);
+  assert.throws(() => setRole(home, {role: 'senior', runner: 'claude', model: 'haiku', ...meta()}), /안전하게 묶을 수 있는 실행기\(codex, agy\)만/);
   // 틀 채우기: {prompt}가 있으면 인자(따옴표 처리), 없으면 표준 입력.
   const filled = readSettings(home);
   const asArg = execCommand(filled, 'agy', {model: 'flash', prompt: "it's $(x)"});
@@ -945,4 +946,71 @@ test('8R 출처 시험: 원장에 기록된 시도 문자열은 허용 상수 �
       for (const k of ['shape', 'answerShape']) if (a.diag[k]) walk(a.diag[k]);
     }
   }
+});
+
+// ---- agy를 도구 없는 에이전트(kadan-noexec)로 묶기 ----
+const AGY_EXEC = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}';
+function agyWorld(exec) {
+  const calls = [];
+  const spawn = async (command, opts) => { calls.push({command, cwd: opts.cwd}); return {status: 0, stdout: brief, stderr: ''}; };
+  const w = world({chain: [{runner: 'agy', model: 'm'}, {runner: 'fake', model: 'ok'}], spawn,
+    extraRunners: {agy: {spawn: 'agy --model {model}', exec, execField: 'response', models: []}}});
+  return {w, calls, agyCalls: () => calls.filter(c => c.command.startsWith('agy'))};
+}
+const agentFile = w => path.join(w.ai.workDir, '.agents', 'agents', 'kadan-noexec', 'agent.md');
+
+test('agy 묶기: 파일이 없으면 만들고 다르면 고쳐 쓴 뒤 agy를 부른다(cwd는 설명 AI 작업 폴더)', async () => {
+  const {w, calls, agyCalls} = agyWorld(AGY_EXEC);
+  const card = w.makeCard();
+  await enable(w);
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  assert.equal(fs.readFileSync(agentFile(w), 'utf8'), NOEXEC_AGENT_MD);
+  assert.equal(agyCalls().length, 1); assert.equal(agyCalls()[0].cwd, w.ai.workDir);
+  assert.equal(w.rows().at(-1).outcome, 'written');
+  // 다른 내용이 들어 있으면(도구가 늘어난 정의 등) 다음 호출 직전에 정해진 내용으로 되돌린다.
+  fs.writeFileSync(agentFile(w), NOEXEC_AGENT_MD.replace('- view_file', '- view_file\n  - run_command'));
+  w.clock.t += 60_000; w.finish(card, 1000);
+  {const {done} = w.run(); await done;}
+  assert.equal(agyCalls().length, 2);
+  assert.equal(fs.readFileSync(agentFile(w), 'utf8'), NOEXEC_AGENT_MD);
+  assert.equal(calls.length, 2);
+});
+
+test('agy 묶기: 틀에 --agent kadan-noexec가 없으면 agy를 부르지 않고 대체 후보로 넘어간다', async () => {
+  for (const exec of ['agy --model {model} --print-timeout 90s --output-format json --print {prompt}', 'agy --agent other --model {model} --print {prompt}']) {
+    const {w, calls, agyCalls} = agyWorld(exec);
+    const card = w.makeCard();
+    await enable(w);
+    w.dispatch(card, 0);
+    {const {done} = w.run(); await done;}
+    assert.equal(agyCalls().length, 0, exec);
+    assert.equal(calls.length, 1, '대체 후보 1회');
+    const row = w.rows().at(-1);
+    assert.equal(row.attempts[0].runner, 'agy'); assert.equal(row.attempts[0].result, 'template-error');
+    assert.equal(row.outcome, 'written');
+    assert.equal(fs.existsSync(agentFile(w)), false, '틀 검사에서 막히면 파일도 만들지 않는다');
+  }
+});
+
+test('agy 묶기: 에이전트 파일을 쓸 수 없으면 agy를 부르지 않고 대체 후보로 넘어가 written이 된다', async () => {
+  const {w, calls, agyCalls} = agyWorld(AGY_EXEC);
+  const card = w.makeCard();
+  await enable(w);
+  fs.mkdirSync(w.ai.workDir, {recursive: true});
+  fs.writeFileSync(path.join(w.ai.workDir, '.agents'), '폴더 자리를 파일이 막는다');
+  w.dispatch(card, 0);
+  {const {done} = w.run(); await done;}
+  assert.equal(agyCalls().length, 0);
+  assert.equal(calls.length, 1);
+  const row = w.rows().at(-1);
+  assert.equal(row.attempts[0].result, 'template-error'); assert.equal(row.outcome, 'written');
+});
+
+test('agy 묶기: 묶기 표에 없는 실행기(claude 틀 등)는 검사 없이 지나간다', () => {
+  const settings = {runners: {fake: {exec: 'fake {prompt}'}}};
+  assert.equal(assertExecBound(settings, 'fake'), null);
+  assert.equal(bindExec(settings, 'fake', fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-bind-'))), null);
+  assert.equal(assertExecBound({runners: {agy: {exec: 'agy --agent kadan-noexec --print {prompt}'}}}, 'agy').agent, 'kadan-noexec');
+  assert.throws(() => assertExecBound({runners: {agy: {exec: 'agy --agent-x kadan-noexec --print {prompt}'}}}, 'agy'), /--agent kadan-noexec가 없다/);
 });

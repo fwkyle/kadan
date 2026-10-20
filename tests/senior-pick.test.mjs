@@ -7,6 +7,7 @@ import path from 'node:path';
 import {seniorCommand, composeAdvicePrompt} from '../src/senior.mjs';
 import {SENIOR_SAFE_RUNNERS, blockModel, initSettings, setFallback, setRole, setRunner, setRunnerModel} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
+import {NOEXEC_AGENT_MD} from '../src/exec-agent.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
 // 시니어 한 칸 + 호출 때 모델 고르기(2026-10-20 [kyle]). 실제 codex는 부르지 않고 가짜 spawn이 senior.sh 자리를 대신한다.
@@ -14,14 +15,16 @@ const models = [{slug: 'gpt-6-sol', supported_reasoning_levels: ['low', 'high'].
   {slug: 'gpt-6-luna', supported_reasoning_levels: ['low', 'medium'].map(effort => ({effort}))}];
 const readCodexModels = () => ({models});
 
-function fixture({body = '# 시험 카드\n\n- 열 이름을 바꾼다\n', stored = {}} = {}) {
+const BOUND = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}';
+
+function fixture({body = '# 시험 카드\n\n- 열 이름을 바꾼다\n', stored = {}, agyExec = 'agy --model {model} --print {prompt}'} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-pick-'));
   const repo = path.join(home, 'repo'); fs.mkdirSync(repo);
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [{id: 'codex', spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"'}]}));
   const meta = revision => ({revision, by: 'kyle', reason: '시험', record: () => {}, readCodexModels});
   initSettings(home, {by: 'kyle', reason: '시작', record: () => {}});
   setRole(home, {role: 'senior', runner: 'codex', model: 'gpt-6-sol', effort: 'high', ...meta(1)});
-  setRunner(home, {runner: 'agy', spawn: 'agy --model {model}', table: {exec: 'agy --model {model} --print {prompt}', execField: 'response'}, ...meta(2)});
+  setRunner(home, {runner: 'agy', spawn: 'agy --model {model}', table: {exec: agyExec, execField: 'response'}, ...meta(2)});
   setRunnerModel(home, {runner: 'agy', model: 'argon', efforts: '', ...meta(3)});
   if (stored.senior2) { // 옛 설정 파일에 남은 senior2를 흉내 낸다
     const file = path.join(home, 'runner-settings.json');
@@ -32,7 +35,8 @@ function fixture({body = '# 시험 카드\n\n- 열 이름을 바꾼다\n', store
   new CardStore(home).create({repo: 'qa', id: 'card-a', repoPath: repo, body});
   const calls = [];
   const spawn = async (command, opts) => {
-    calls.push({command, env: opts.env});
+    calls.push({command, env: opts.env, cwd: opts.cwd});
+    if (command.startsWith('agy')) return {status: 0, stderr: '', stdout: JSON.stringify({response: '결론: agy 답'})};
     fs.writeFileSync(path.join(opts.env.KADAN_SENIOR_DIR, 'result.txt'), '결론: 답');
     return {status: 0, stderr: '', stdout: '결론: 답'};
   };
@@ -79,17 +83,69 @@ test('--runner만 주면 오류이고 호출은 0회다', async () => {
   assert.equal(f.calls.length, 0); assert.equal(f.advices().length, 0);
 });
 
-test('허용 목록 밖 --runner agy는 호출 전에 거절한다(실행 0회, 증거 폴더도 없다)', async () => {
+test('허용 목록은 codex·agy이고 목록 밖 실행기는 호출 전에 거절한다(실행 0회, 증거 폴더도 없다)', async () => {
   const f = fixture();
-  assert.deepEqual(SENIOR_SAFE_RUNNERS, ['codex']);
-  await assert.rejects(f.run({runner: 'agy', model: 'argon'}), /안전하게 묶을 수 있는 실행기\(codex\)만.*agy.*실측/);
+  assert.deepEqual(SENIOR_SAFE_RUNNERS, ['codex', 'agy']);
+  await assert.rejects(f.run({runner: 'devin', model: 'x'}), /안전하게 묶을 수 있는 실행기\(codex, agy\)만.*devin/);
   assert.equal(f.calls.length, 0); assert.equal(f.advices().length, 0);
   assert.equal(fs.existsSync(path.join(f.home, 'advice')), false);
 });
 
-test('설정 저장도 목록 밖 실행기를 거절한다', () => {
+test('agy 틀에 --agent kadan-noexec가 없으면 호출 전에 거절한다(실행 0회, 증거 폴더도 없다)', async () => {
   const f = fixture();
-  assert.throws(() => setRole(f.home, {role: 'senior', runner: 'agy', model: 'argon', ...f.meta(4)}), /안전하게 묶을 수 있는 실행기/);
+  await assert.rejects(f.run({runner: 'agy', model: 'argon'}), /agy 실행 틀에 --agent kadan-noexec가 없다/);
+  assert.equal(f.calls.length, 0); assert.equal(f.advices().length, 0);
+  assert.equal(fs.existsSync(path.join(f.home, 'advice')), false);
+});
+
+test('설정 저장은 목록 밖 실행기를 거절하고 agy는 받는다', () => {
+  const f = fixture();
+  setRunner(f.home, {runner: 'devin', spawn: 'devin --model {model}', table: {}, ...f.meta(4)});
+  setRunnerModel(f.home, {runner: 'devin', model: 'x', efforts: '', ...f.meta(5)});
+  assert.throws(() => setRole(f.home, {role: 'senior', runner: 'devin', model: 'x', ...f.meta(6)}), /안전하게 묶을 수 있는 실행기/);
+  setRole(f.home, {role: 'senior', runner: 'agy', model: 'argon', ...f.meta(6)});
+});
+
+test('--runner agy --model: 실행기 표 틀로 호출 폴더에서 부른다(--add-dir 없음, 저장소 못 읽는다는 문구, 가림, 시간 상한, 에이전트 파일)', async () => {
+  const secret = 'Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq0Pp9Oo8Nn7Mm6Ll5Kk4Jj3Ii2Hh1Gg0Ff9Ee8Dd7Cc6Bb5';
+  const f = fixture({agyExec: BOUND, body: `# 카드\n\n알림 https://discord.com/api/webhooks/123456789012345678/${secret}\n`});
+  const r = await f.run({runner: 'agy', model: 'argon', timeout: 120, effort: 'low'});
+  assert.equal(r.reason, 'ok'); assert.equal(r.source, 'flag'); assert.equal(r.runner, 'agy'); assert.equal(r.answer, '결론: agy 답');
+  assert.match(r.note, /--effort는 agy 실행 틀에 강도 자리가 없어 무시했다/);
+  const [call] = f.calls;
+  assert.equal(call.command, 'agy --agent kadan-noexec --model argon --print-timeout 120s --output-format json --print "$KADAN_EXPLAIN_PROMPT"');
+  assert.ok(!call.command.includes('--add-dir'));
+  assert.equal(call.cwd, r.evidencePath);
+  assert.equal(fs.readFileSync(path.join(r.evidencePath, '.agents/agents/kadan-noexec/agent.md'), 'utf8'), NOEXEC_AGENT_MD);
+  const prompt = call.env.KADAN_EXPLAIN_PROMPT;
+  assert.match(prompt, /저장소를 직접 읽을 수 없다/); assert.ok(!prompt.includes('현재 작업 폴더가 그 카드의 저장소다'));
+  assert.ok(!prompt.includes(secret)); assert.ok(!prompt.includes('discord.com/api/webhooks'));
+  assert.equal(fs.readFileSync(path.join(r.evidencePath, 'result.txt'), 'utf8'), '결론: agy 답');
+  const [entry] = f.advices();
+  assert.equal(entry.source, 'flag'); assert.equal(entry.runner, 'agy'); assert.equal(entry.settingsRunner, 'codex'); assert.equal(entry.reason, 'ok');
+});
+
+test('설정의 시니어가 agy여도 지정 표시 없이 같은 exec 경로로 간다', async () => {
+  const f = fixture({agyExec: BOUND});
+  setRole(f.home, {role: 'senior', runner: 'agy', model: 'argon', ...f.meta(4)});
+  const r = await f.run();
+  assert.equal(r.source, undefined); assert.equal(r.runner, 'agy'); assert.equal(f.calls.length, 1);
+  assert.match(f.calls[0].command, /^agy --agent kadan-noexec --model argon --print-timeout 1800s /);
+  assert.equal(f.advices()[0].source, undefined);
+});
+
+test('exec 경로의 프롬프트가 200KB를 넘으면 부르지 않는다', async () => {
+  const f = fixture({agyExec: BOUND});
+  const files = [];
+  for (let i = 0; i < 4; i++) { const file = path.join(f.home, `a${i}.txt`); fs.writeFileSync(file, 'x'.repeat(60 * 1024)); files.push(file); }
+  await assert.rejects(f.run({runner: 'agy', model: 'argon', file: files}), /프롬프트가 너무 크다/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('agy 호출이 실패하면 자문 실패로 끝나고 원장에 남는다', async () => {
+  const f = fixture({agyExec: BOUND});
+  await assert.rejects(f.run({runner: 'agy', model: 'argon'}, {spawn: async () => ({status: 1, stdout: '', stderr: 'boom'})}), /자문 실패\(call-failed\)/);
+  assert.equal(f.advices()[0].reason, 'call-failed');
 });
 
 test('block --roles senior는 골라 부른 모델도 막는다', async () => {

@@ -174,7 +174,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 `scripts/senior.sh`가 `codex exec`로 한 번 돌린다(2026-10-05 [kyle] 승인). 슈퍼감독은 값싼 모델로 두고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 자세한 규칙은 [시니어](senior.md).
 
 - 설정: 활성 프리셋의 `roles.senior`. 명령은 `kadan runners set senior --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **시니어** 줄이다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음).
-- 실행기는 안전 허용 목록(`SENIOR_SAFE_RUNNERS`, 지금 `codex`만)에 든 것만 받는다. 저장(`runners set senior`)과 호출(`kadan senior --runner`)이 같은 검사로 거절한다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 호출 때 골라 부른 모델에도 적용한다.
+- 실행기는 안전 허용 목록(`SENIOR_SAFE_RUNNERS`, 지금 `codex`·`agy`)에 든 것만 받는다. agy는 실행기 표 `exec` 틀 + 도구 없는 에이전트로 부르며 저장소를 읽지 못한다([시니어](senior.md), [agy 묶기](#agy-도구-없는-에이전트-묶기)). 저장(`runners set senior`)과 호출(`kadan senior --runner`)이 같은 검사로 거절한다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 호출 때 골라 부른 모델에도 적용한다.
 - **호출 때 고르기**: `kadan senior … [--runner <실행기> --model <모델>]`은 이번 호출만 바꾸고 설정은 그대로다([시니어](senior.md)). 카드 글은 외부로 보내기 전에 `scrubForAI`로 웹훅 주소·토큰 모양을 가린다.
 - **폴백이 없다.** `runners fallback senior`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
 - 상한은 호출마다 기본 30분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽고 시험까지 돌려 볼 수 있는 호출이라 감시 AI(5분)보다 훨씬 길다. 횟수 제한은 없다 — 필요할 때만 부른다.
@@ -187,6 +187,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 - 실행기는 codex로 묶지 않는다. **실행기 표에 `exec` 틀이 있는 실행기만** 고를 수 있다(없으면 저장 거절). 강도는 그 `exec` 틀에 `{effort}`가 있을 때만 받는다. 작업자↔검수자 계열 규칙은 적용하지 않고 정책 차단(`block --roles explain`)은 적용한다. 감시 AI·시니어의 codex 고정은 그대로다.
 - 코드에는 실행기 이름이 없다. `runners.<실행기>.exec` 틀을 채워 빈 작업 폴더(`<KADAN_HOME>/explain-ai-work`)에서 실행하고, `execField`가 가리키는 필드(없으면 표준 출력 전체)를 답으로 읽는다. **카드 글은 명령 문자열에 글자로 끼워 넣지 않는다**(2026-10-15 검수 F1): `{prompt}` 자리는 셸 변수 참조 `"$KADAN_EXPLAIN_PROMPT"`로 채우고 글은 그 프로세스의 환경변수로만 넘긴다. 셸은 변수 값을 다시 해석하지 않으므로 명령 치환·백틱·따옴표·줄바꿈이 든 카드 글도 원문 그대로 전달된다(따옴표 처리로 막는 방식은 틀 작성자가 `"{prompt}"`로 쓰면 깨진다). `{prompt}`가 없는 틀은 표준 입력으로 보낸다. 명령줄(`ps`)에는 글이 나오지 않는다. 자리 채우기는 한 번에 처리해 `$&` 같은 글자나 값 안의 `{cwd}`가 바뀌지 않는다.
 - 표준 출력·표준 오류는 합쳐 1MiB까지만 받는다. 넘으면 그 프로세스 묶음을 끝내고 사유(`output-limit`)만 기록하며 줄을 쓰지 않고 대체 후보로 내려가지 않는다(설명 AI 경로만, 감시 AI는 그대로).
+- **agy는 도구 없는 에이전트로 묶어야 부른다**: 틀에 `--agent kadan-noexec`가 없으면 호출하지 않고 대체 후보로 넘어가며(`template-error`), 작업 폴더에 에이전트 파일을 둘 수 없을 때도 같다([agy 묶기](#agy-도구-없는-에이전트-묶기)).
 - **칸이 비었거나 1순위 실행기에 `exec` 틀이 없으면 아무것도 하지 않는다**(실패 닫힘). 운영 설정의 표가 비어 있으면 머지해도 운영 동작은 그대로다.
 - 부르는 사건(카드 하나당 사건마다 한 번, 같은 입력이면 부르지 않는다): 발령(원장 `send`로 시작한 실행) · 완료(원장 `done`으로 끝난 실행) · 결과 등록(`card report`) · 막힘(표시 상태가 일시정지·실패·세션 확인 필요로 들어감, 발령됨은 10분 넘게 확인 안 된 것만) · 결정(요청 생성·답·취소). 화면 갱신·대시보드 조회는 AI를 부르지 않는다.
 - **켜는 시점 이후 사건만** 본다. 칸을 처음 채운 뒤 감시기가 첫 주기에 `explain-state` 기록(`enabled`)을 남기고, 그 시각 이후에 일어난 사건만 대상이다. 옛 카드를 한꺼번에 부르지 않는다. 칸을 비우면 `disabled`가 남고 **대기열도 비운다**. 다시 채우면 그 시각부터 새로 세고, 대기열에서 꺼낼 때도 지금 켜진 시점과 사건 시각을 다시 대조한다.
@@ -217,7 +218,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 | --- | --- |
 | `resume` | `spawn` 틀 **뒤에** 대화 인자를 붙인 모양(`… --resume {conversation}`). 자리: `{model}`·`{effort}`·`{conversation}` |
 | `fork` | 같은 모양으로 대화를 갈라 여는 틀(있으면 restart가 갈라 연 명령을 resume으로 바꾼다) |
-| `exec` | 화면 없이 한 번 호출하는 틀(`{prompt}`가 있으면 인자, 없으면 표준 입력. `{prompt}`는 앞뒤가 공백인 독립 낱말이어야 하고 따옴표·글자에 붙이면 저장 단계에서 거절). **설명 AI가 이 틀로 부른다**([설명 AI](#설명-ai)). 감시 AI·시니어는 그대로 codex만 쓴다 |
+| `exec` | 화면 없이 한 번 호출하는 틀(`{prompt}`가 있으면 인자, 없으면 표준 입력. `{prompt}`는 앞뒤가 공백인 독립 낱말이어야 하고 따옴표·글자에 붙이면 저장 단계에서 거절). **설명 AI가 이 틀로 부른다**([설명 AI](#설명-ai)). 시니어는 codex는 `senior.sh`, 허용 목록의 agy는 이 틀로 부른다. 감시 AI는 그대로 codex만 쓴다. `EXEC_BINDINGS`에 든 실행기(agy)는 틀에 `--agent kadan-noexec`가 있어야 한다 |
 | `execField` | `exec`의 표준 출력이 JSON일 때 답이 든 필드 이름(`response`·`result`, 점으로 안쪽 필드). 비우면 표준 출력 전체가 답이다. 실행기마다 다른 출력 모양을 코드가 알지 않도록 표에 둔다 |
 | `version`·`update` | 버전 확인·업데이트 명령 문자열. 카단은 실행하지 않는다 |
 | `listModels` | 실행기가 자기 모델 목록을 내는 명령 틀(자리 `{…}` 없음, 예: agy는 `agy models`). 줄마다 **첫 낱말**을 모델 id로 읽고 이름 규칙(영문·숫자·`./-[]`)에 안 맞는 줄·중복은 버린다. 대시보드의 **목록 불러오기** 버튼을 누를 때만 한 번 실행한다(POST·토큰, 20초·256KiB 상한, 넘으면 프로세스 묶음 종료). 결과는 저장하지 않고 설정·원장에도 쓰지 않는다 |
@@ -246,10 +247,23 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 | 실행기 | `exec` | `execField` | 비고 |
 | --- | --- | --- | --- |
-| agy 1.3.5 | `agy --model {model} --print-timeout 90s --output-format json --print {prompt}` | `response` | `--print`가 프롬프트를 인자로 요구한다(표준 입력만 주면 `--model`을 프롬프트로 읽고 거절 — 모델 호출 전에 끝). 모델 `gemini-3.8-flash-low`. `{prompt}`는 `"$KADAN_EXPLAIN_PROMPT"`로 채워져 명령줄에는 글이 안 보인다 |
+| agy 1.3.5 | `agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}` | `response` | **`--agent kadan-noexec`가 없는 틀은 카단이 거절한다**([agy 묶기](#agy-도구-없는-에이전트-묶기)). `--print`가 프롬프트를 인자로 요구한다(표준 입력만 주면 `--model`을 프롬프트로 읽고 거절 — 모델 호출 전에 끝). 모델 `gemini-3.8-flash-low`. `{prompt}`는 `"$KADAN_EXPLAIN_PROMPT"`로 채워져 명령줄에는 글이 안 보인다 |
 | claude 2.1.300 | `claude -p --model {model} --tools "" --no-session-persistence --disable-slash-commands --strict-mcp-config --setting-sources "" --system-prompt "You are a concise assistant." --output-format json` | `result` | 표준 입력으로 프롬프트. 모델 `claude-haiku-5-5`. **`--bare` 금지**(구독 로그인을 건너뛰어 실패) |
 
 표 칸은 `kadan runners runner <실행기> --table '<JSON>' --revision N --reason 이유`로 채우고(값이 null이면 비움), `agent-runners.json`의 실행기 항목에 같은 키를 두면 `runners init`이 함께 옮긴다.
+
+### agy 도구 없는 에이전트 묶기
+
+Why: kyle의 agy 사용자 설정 `permissions.allow`(cp|mkdir|ln|git add|git commit) 때문에, 헤드리스 agy에서도 카드 글 속 지시가 명령을 실행할 수 있다(exec-edf8a701, exec-22cb8058). 호출하는 폴더에 `tools: view_file`만 가진 에이전트를 두고 `--agent`로 부르면 명령 도구 자체가 없다(격리 실측 exec-af71d91d: 명령 0건, JSON 정상. exec-0e6d6310: 작업 폴더 밖 읽기는 도구 수준에서 거부, 표본 1건).
+
+- **에이전트 이름 하나**: `kadan-noexec`. 정의는 코드 상수(`src/exec-agent.mjs`의 `NOEXEC_AGENT_MD`: `tools: [view_file]`, `commandExecutionPolicy: off`, `mainAgent: true`, `subagent: false`).
+- **파일 관리**: agy를 부르기 직전, 그 호출의 cwd에 `.agents/agents/kadan-noexec/agent.md`를 정해진 내용으로 둔다(없으면 만들고, 다르면 고쳐 쓰고, 쓴 뒤 다시 읽어 확인). cwd는 설명 AI는 `<KADAN_HOME>/explain-ai-work`, 시니어는 호출 폴더다. **쓰기·확인에 실패하면 agy를 부르지 않는다**(설명 AI는 그 시도를 `template-error`로 기록하고 대체 후보로 넘어간다, 시니어는 자문 실패).
+- **틀 검사(데이터 표현)**: 코드 상수 표 `EXEC_BINDINGS`(실행기 → `{agent, timeoutFlag}`)에 든 실행기는 `exec` 틀에 `--agent <agent>`가 있어야 부른다. 코드는 실행기 이름으로 갈라지지 않고 표를 읽는다(`CLAUDE.md`의 다중 provider 어댑터 금지). 이 표를 **운영 실행기 표의 칸으로 두지 않은 이유**: 운영 표에 칸이 없으면 '묶기 불필요'로 읽혀 검사가 열린다(fail open). 코드 상수는 운영 설정이 옛 틀이어도 닫힌다. 표에 없는 실행기(claude 등)는 검사하지 않는다.
+- **머지~반영 사이 동작(중요)**: 이 변경을 머지해도 **운영 실행기 표는 그대로**다(옛 agy 틀, `--agent` 없음). 그동안 운영 설명 AI의 agy는 틀 검사에 걸려 호출되지 않고 **대체 후보(claude)로 간다.** 시니어에 agy를 고르면 호출 전에 거절된다. kyle 승인 뒤 아래 명령으로 운영 틀을 바꾸면 agy가 다시 쓰인다.
+  ```
+  kadan runners runner agy --table '{"exec":"agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}"}' --revision N --reason "agy 도구 없는 에이전트 묶기"
+  ```
+- **재확인 스크립트** `scripts/check-agy-noexec.mjs`: agy 버전을 올린 뒤 사람이 돌린다(`node scripts/check-agy-noexec.mjs [--model gemini-3.8-flash-low]`). 격리 임시 폴더에서 agy를 3번 부른다(명령 실행 시도 / 폴더 밖 가짜 표식 읽기 / 지시 주입 모양). cp·ln·mkdir·git commit 0건, 가짜 표식 미노출, 요약 요청의 JSON 정상을 화면에 낸다(명령 도구가 없는 에이전트는 첫 두 호출에 JSON이 아니라 '못 한다'는 글로 답할 수 있어 JSON 판정은 요약 요청에만 쓴다)(종료 코드 0=통과, 1=실패, 2=시험 못 함). 원장에는 쓰지 않고 CI에도 넣지 않는다(인증 필요). 진짜 비밀 경로는 쓰지 않는다.
 
 ### 어댑터 금지와의 경계
 
