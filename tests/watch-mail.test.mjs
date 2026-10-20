@@ -406,3 +406,14 @@ test('저장 전용 우편이 닫힌 업무에 걸려도 보류 뒤 재시도한
   f.tick(watch);assert.equal(f.sent.length,0);
   held=false;f.tick(watch);assert.equal(f.sent.length,1);
 });
+
+test('닫힌 업무에 걸린 슈퍼끼리 peer 저장 우편은 계속 제외한다 (main 동작 유지)',()=>{
+  const parents=new Map([['worker','@user'],['boss','@user']]);
+  for(const status of ['done','cancelled']) {
+    const f=fixture([stored('p',{workKey:'r/w'})]);
+    f.works=[{key:'r/w',status,executions:[]}];f.now=60000;
+    f.create().tick({entries:[...f.entries],cards:f.cards,works:f.works,now:f.now,floor:f.floor,
+      readEntries:()=>[...f.entries],readCards:()=>f.cards,readWorks:()=>f.works,parents});
+    assert.equal(f.sent.length,0,status);
+  }
+});
