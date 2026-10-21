@@ -63,3 +63,10 @@ test("차례가 작업자면 응답 책임은 여전히 owner다(차례와 책�
   const work = { ...base, turnOwner: "r-작업자", turnAt: T(50) };
   assert.equal(currentResponsibility(work, parents, [card]).role, "r-슈퍼");
 });
+
+test("차례가 owner 자신이면 지난 기록이어도 since를 유지한다(세대 판정 불변, main과 같음)", () => {
+  const work = { ...base, turnOwner: "r-슈퍼", turnAt: T(30), ownedAt: T(20) };
+  assert.equal(turnState(work, [card]), "stale");
+  assert.deepEqual(currentResponsibility(work, parents, [card]), { role: "r-슈퍼", since: T(30) });
+  assert.deepEqual(currentResponsibility(work, parents, [card]), currentResponsibility(work, parents));
+});

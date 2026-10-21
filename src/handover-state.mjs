@@ -81,9 +81,11 @@ export function isTurnCurrent(work, cards) {
   return turnState(work, cards) === 'current';
 }
 
-// 감시는 시각이 없는 옛 기록(unknown)은 지금처럼 turnOwner를 따르고, 지난 기록(stale)만 owner 경로로 보낸다.
+// 감시는 시각이 없는 옛 기록(unknown)은 지금처럼 turnOwner를 따르고, 지난 기록(stale)은 역할 선택에서만 무효로 본다.
+// turnOwner가 owner 자신이면 무효화해도 같은 역할이라 main과 같게 둔다(since가 owner 생성 시각으로 되돌아가면 세대 판정이 바뀐다).
 export function currentResponsibility(work, parents, cards = null) {
-  const turn = turnState(work, cards) === 'stale' ? undefined : work.turnOwner;
+  const stale = turnState(work, cards) === 'stale' && work.turnOwner !== work.owner;
+  const turn = stale ? undefined : work.turnOwner;
   if (parents?.has(turn) && (turn === work.owner || [...parents.values()].includes(turn))) {
     const turned = work.turnAt ?? work.at ?? null;
     return { role: turn, since: turn === work.owner ? laterOf(turned, work.ownedAt) : turned };
