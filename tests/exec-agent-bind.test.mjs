@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {NOEXEC_AGENT, NOEXEC_AGENT_MD, EXEC_BINDINGS, assertExecBound, ensureAgentFile, withTimeout} from '../src/exec-agent.mjs';
+import {NOEXEC_AGENT, NOEXEC_AGENT_MD, EXEC_BINDINGS, assertExecBound, ensureAgentFile, isReadDirValue, withReadDir, withTimeout} from '../src/exec-agent.mjs';
 import {initSettings, setRunner} from '../src/runner-settings.mjs';
 
 // PR #212 검수 2라운드(F1~F6): 묶기 대상 틀은 셸이 공백 분리와 똑같이 읽는 단순 명령만 받는다. 링크를 따라 쓰지 않는다.
@@ -173,4 +173,29 @@ test('저장은 이번에 쓰는 실행기 행만 검사한다: 잘못된 agy �
   setRunner(home, {runner: 'other', spawn: 'other --model {model}', table: {exec: 'other {prompt}'}, ...meta(3)});
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).runners.other.exec, 'other {prompt}');
   assert.equal(NOEXEC_AGENT, 'kadan-noexec');
+});
+
+test('읽기 폴더: 코드가 덧붙인 값 하나만 받고, 저장된 틀·다른 값·중복은 거절한다', () => {
+  const dir = '/FAKE/home/Dev/repo';
+  const added = withReadDir(GOOD, EXEC_BINDINGS.agy, dir);
+  assert.equal(added, `${GOOD} --add-dir ${dir}`);
+  assert.equal(assertExecBound({runners: {agy: {exec: added}}}, 'agy', dir), EXEC_BINDINGS.agy);
+  assert.throws(() => assertExecBound({runners: {agy: {exec: added}}}, 'agy'), /허용하지 않는 낱말 --add-dir/, '저장 검사(값 없이)는 거절');
+  assert.throws(() => assertExecBound({runners: {agy: {exec: added}}}, 'agy', '/other'), /--add-dir 값 모양/);
+  assert.throws(() => assertExecBound({runners: {agy: {exec: `${added} --add-dir ${dir}`}}}, 'agy', dir), /중복/);
+  assert.throws(() => assertExecBound({runners: {agy: {exec: GOOD}}}, 'agy', dir), /--add-dir가 없다/);
+});
+
+test('읽기 폴더 값은 절대경로·허용 글자만, 아니면 덧붙이지 않는다', () => {
+  for (const bad of ['rel/dir', '/a b', '/a;b', '/a$b', "/a'b", '/a/{model}', '/a/../b', '', null, undefined, '/한글'])
+    assert.equal(isReadDirValue(bad), false, String(bad));
+  assert.equal(isReadDirValue('/FAKE/home/Dev/my-repo_1.2'), true);
+  assert.equal(withReadDir(GOOD, EXEC_BINDINGS.agy, '/a b'), GOOD);
+  assert.equal(withReadDir(GOOD, {program: 'x'}, '/ok'), GOOD, 'readDirFlag가 없는 묶기는 그대로');
+});
+
+test('읽기 폴더를 덧붙이는 곳은 시니어 한 곳뿐이다(설명 AI는 cwd만 쓴다)', () => {
+  const users = fs.readdirSync(new URL('../src/', import.meta.url)).filter(f => f.endsWith('.mjs'))
+    .filter(f => /withReadDir/.test(fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8'))).sort();
+  assert.deepEqual(users, ['exec-agent.mjs', 'senior.mjs']);
 });

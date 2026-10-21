@@ -37,6 +37,7 @@ export function guardedSend({
   mailContext,
   roleProfile,
   raw = false,
+  omitInstructions = false,
   notificationOnly = false,
   notificationGuard,
   busyMail = false,
@@ -88,8 +89,12 @@ export function guardedSend({
   }
   const sourceCwd = entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd ?? null;
   const originalCardPath = extractCardPath(message,sourceCwd);
-  const composed = composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
-    role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards,slim:true});
+  // omitInstructions는 감시기 알림용이다: 역할 지침만 뺀다. 원장에 지침 기록(instructions)이 남지 않아
+  // 다음 일반 전송의 전문·요약 판정(decideInstructionsMode)이 이 알림 때문에 달라지지 않는다.
+  const composed = omitInstructions
+    ? {message,instructions:null,metadata:{status:'not-applied',reason:'watch-notice'}}
+    : composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
+      role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards,slim:true});
   message = composed.message;
   if (!raw) {
     const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,dispatch:taskId!=null,expectReply:mailContext?.expectReply===true,sender:by,env});

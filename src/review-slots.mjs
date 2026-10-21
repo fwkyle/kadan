@@ -6,9 +6,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
+import {CardStore} from './card-store.mjs';
 import {createExclusive, readResourceConfig, reclaim, runLimited, sleep} from './heavy-limit.mjs';
 
-export const SLOT_USAGE = 'kadan slot acquire <저장소> --for <카드|역할> [--ref <SHA|브랜치>] [--no-wait] [--wait-timeout 1800] [--temporary --reason <이유>] | deps <자리경로> [--cmd "<설치 명령>"] | release <자리경로> | release --for <카드|역할> | status [<저장소>]. 위치 인자를 옵션보다 앞에 둔다. 상세: docs/review-slots.md';
+export const SLOT_USAGE = 'kadan slot acquire <저장소 경로|저장소 이름> --for <카드|역할> [--ref <SHA|브랜치>] [--no-wait] [--wait-timeout 1800] [--temporary --reason <이유>] | deps <자리경로> [--cmd "<설치 명령>"] | release <자리경로> | release --for <카드|역할> | status [<저장소 경로|저장소 이름>]. `/`가 없고 `.`·`~`로 시작하지 않는 인자는 항상 카드 원장의 저장소 이름이다(경로는 ./이름). 저장소·worktree 꼭대기만 받는다. 위치 인자를 옵션보다 앞에 둔다. 상세: docs/review-slots.md';
 const BUSY_EXIT = 3;
 // 잠금 파일 → 설치 명령. 잠금 파일을 그대로 따르게 고정 설치를 쓴다.
 const INSTALLERS = [
@@ -29,10 +30,35 @@ function git(cwd, args, {allowFail = false} = {}) {
 
 // worktree 경로를 줘도 같은 자리 묶음을 쓰도록 원본 저장소로 되돌린다.
 function mainRepo(input) {
-  const common = git(path.resolve(input), ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  if (path.basename(common) !== '.git') throw new Error(`일반 저장소만 지원(bare 저장소 아님): ${input}`);
+  const dir = path.resolve(input);
+  const common = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir'], {allowFail: true});
+  if (common === null) throw new Error(`저장소 경로가 아닙니다: ${dir}. 저장소 절대경로나 카드의 저장소 이름을 주세요`);
+  // git은 상위 폴더의 .git까지 찾아 올라간다. 저장소(또는 worktree) 꼭대기가 아니면 받지 않는다.
+  const top = git(dir, ['rev-parse', '--show-toplevel'], {allowFail: true});
+  if (top === null || real(top) !== real(dir)) {
+    throw new Error(`저장소 꼭대기가 아닙니다: ${dir} (꼭대기: ${top === null ? '없음' : real(top)}). 저장소 절대경로나 카드의 저장소 이름을 주세요`);
+  }
+  if (path.basename(common) !== '.git') throw new Error(`일반 저장소만 지원(bare 저장소 아님): ${dir}. 일반 저장소 경로를 주세요`);
   return real(path.dirname(common));
 }
+
+// `/`를 포함하거나 `.`·`~`로 시작하면 경로, 그 밖의 순수 이름은 항상 카드 원장의 repo → repoPath(원본 저장소)로 찾는다.
+// 어느 쪽이든 저장소 꼭대기만 받는다. 원장은 읽기만 한다.
+function resolveRepo(input, home) {
+  if (/^[.~]/.test(input) || input.includes('/')) return mainRepo(input);
+  const found = new Set();
+  for (const card of new CardStore(home).listSummaries()) {
+    if (card.repo !== input || !card.repoPath) continue;
+    try { found.add(mainRepo(card.repoPath)); } catch { /* 옮겨졌거나 저장소가 아닌 등록은 후보에서 뺀다 */ }
+  }
+  if (found.size === 1) return [...found][0];
+  if (!found.size) {
+    const hint = isDir(input) ? ` 경로로 쓰려면 ./${input}` : '';
+    throw new Error(`이 이름의 저장소를 찾지 못했습니다: ${input}. 저장소 경로를 주세요(예: kadan slot acquire /절대/경로 --for …).${hint}`);
+  }
+  throw new Error(`이 이름의 저장소가 둘 이상입니다: ${input} → ${[...found].sort().join(', ')}. 경로를 주세요(예: kadan slot acquire /절대/경로 --for …)`);
+}
+const isDir = p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 
 const poolsDir = home => path.join(home, 'review-slots');
 function poolOf(home, repo) {
@@ -145,7 +171,7 @@ function busyError(pool, ctx, dirty) {
 async function acquire(target, flags, ctx) {
   if (!target || typeof flags.for !== 'string') throw new Error(SLOT_USAGE);
   if (flags.temporary && typeof flags.reason !== 'string') throw new Error('임시 자리는 --reason "<이유>" 필요');
-  const pool = poolOf(ctx.home, mainRepo(target));
+  const pool = poolOf(ctx.home, resolveRepo(target, ctx.home));
   // --ref가 없으면 원본 저장소의 HEAD. 이전 검수의 커밋이 남아 그대로 검수되는 일을 막는다.
   const sha = resolveRef(pool.repo, typeof flags.ref === 'string' ? flags.ref : 'HEAD');
   const holder = holderFor(flags, ctx);
@@ -222,7 +248,7 @@ async function deps(target, flags, ctx) {
 }
 
 function status(target, ctx) {
-  const want = target ? mainRepo(target) : null;
+  const want = target ? resolveRepo(target, ctx.home) : null;
   return {pools: allPools(ctx.home).filter(p => !want || p.repo === want).map(pool => {
     const cap = Number(readResourceConfig(ctx.home).reviewSlots);
     const leases = new Map(leasesOf(pool).map(x => [x.lease.slot, x.lease]));

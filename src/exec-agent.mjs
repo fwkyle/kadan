@@ -17,6 +17,8 @@ const MODEL_VALUE = /^(?:\{model\}|[A-Za-z0-9][A-Za-z0-9._-]*)$/;
 export const EXEC_BINDINGS = {
   agy: {
     program: 'agy', agent: NOEXEC_AGENT, timeoutFlag: '--print-timeout',
+    // readDirFlag: 저장된 틀에는 못 쓰는 옵션(위 flags에 없다). 시니어 코드만 실행 직전에 정규화한 절대경로 값을 덧붙인다(withReadDir).
+    readDirFlag: '--add-dir',
     flags: {
       '--agent': /^kadan-noexec$/,
       '--model': MODEL_VALUE,
@@ -57,7 +59,8 @@ function findBinding(runner, template) {
 // 허용 글자 밖(# ; & | $ ` ( ) < > ' " \ 줄바꿈·글롭 등)이 하나라도 있으면 거절 → 검사가 읽은 낱말과 셸이 실행하는 인자가 같다.
 const TEMPLATE_CHARS = /^[A-Za-z0-9_@%+=:,./{} \t-]+$/;
 const PROGRAM_WORD = /^[A-Za-z0-9_./-]+$/;
-export function checkBoundTemplate(binding, template) {
+// readDir: 코드가 덧붙인 읽기 폴더 값. 있으면 readDirFlag가 정확히 그 값으로 한 번 있어야 하고, 없으면 readDirFlag는 다른 낱말처럼 거절된다.
+export function checkBoundTemplate(binding, template, readDir = null) {
   const fail = why => { throw new Error(`${binding.program} 실행 틀이 묶기 문법에 맞지 않는다(${why}) — 도구 없는 에이전트로 묶으려면 단순 명령 문법만 받는다(docs/runner-settings.md)`); };
   const text = String(template ?? '');
   if (!TEMPLATE_CHARS.test(text)) fail('허용하지 않는 글자');
@@ -65,24 +68,26 @@ export function checkBoundTemplate(binding, template) {
   if (!PROGRAM_WORD.test(words[0]) || programName(words[0]) !== binding.program) fail('첫 낱말이 실행기 프로그램이 아니다');
   const rest = words.slice(1);
   if (rest.length % 2 !== 0) fail('옵션과 값이 짝이 아니다');
+  const flags = readDir && binding.readDirFlag ? {...binding.flags, [binding.readDirFlag]: {test: value => value === readDir}} : binding.flags;
   const seen = new Set();
   for (let i = 0; i < rest.length; i += 2) {
     const [flag, value] = [rest[i], rest[i + 1]];
-    if (!Object.hasOwn(binding.flags, flag)) fail(`허용하지 않는 낱말 ${flag}`);
+    if (!Object.hasOwn(flags, flag)) fail(`허용하지 않는 낱말 ${flag}`);
     if (seen.has(flag)) fail(`${flag} 중복`);
     seen.add(flag);
-    if (!binding.flags[flag].test(value)) fail(`${flag} 값 모양`);
+    if (!flags[flag].test(value)) fail(`${flag} 값 모양`);
   }
+  if (readDir && binding.readDirFlag && !seen.has(binding.readDirFlag)) fail(`${binding.readDirFlag}가 없다`);
   if (!seen.has('--agent')) fail(`--agent ${binding.agent}가 없다`);
   return words;
 }
 
 // 그 실행기 행의 exec 틀이 묶기 문법을 지키는지. 묶기가 필요 없는 실행기는 그냥 통과한다(null).
-export function assertExecBound(settings, runner) {
+export function assertExecBound(settings, runner, readDir = null) {
   const template = settings?.runners?.[runner]?.exec;
   const binding = findBinding(runner, template);
   if (!binding) return null;
-  checkBoundTemplate(binding, template);
+  checkBoundTemplate(binding, template, readDir);
   return binding;
 }
 
@@ -151,4 +156,14 @@ export function withTimeout(template, binding, seconds) {
   if (at < 0 || at + 1 >= words.length) return template;
   words[at + 1] = `${seconds}s`;
   return words.join(' ');
+}
+
+// 읽기 폴더로 덧붙일 수 있는 값: 절대경로, 허용 글자만(공백·메타문자·`{}`·`..` 없음). 틀 문법과 {model} 같은 자리 치환에 걸리지 않는 값만 받는다.
+const READ_DIR_VALUE = /^\/[A-Za-z0-9_@%+=:,./-]+$/;
+export const isReadDirValue = value => typeof value === 'string' && READ_DIR_VALUE.test(value) && !value.split('/').includes('..');
+
+// 시니어 코드가 실행 직전에 틀 뒤에 `<readDirFlag> <절대경로>`를 덧붙인다. 묶기 정보에 readDirFlag가 없거나 값이 안전한 모양이 아니면 틀 그대로 둔다(저장 틀의 같은 옵션은 여전히 거절된다).
+export function withReadDir(template, binding, dir) {
+  if (!binding?.readDirFlag || !isReadDirValue(dir)) return template;
+  return `${template.trim()} ${binding.readDirFlag} ${dir}`;
 }
