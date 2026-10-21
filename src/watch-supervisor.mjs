@@ -54,7 +54,7 @@ export function assessSupervisorIdle(
   idleMs,
   ledgerError = null,
   parents = new Map(),
-  { works = [], cards = [], waits = [], peerEntries = entries } = {}
+  { works = [], cards = [], waits = [], peerEntries = entries, ownTurn = null } = {}
 ) {
   const excluded = waitingExcluder(waits, parents);
   if (ledgerError) {
@@ -147,6 +147,7 @@ export function assessSupervisorIdle(
     all.filter(current),
     roleStates, now, idleMs, parents, waiting,
     new Set(all.filter(e => e.kind === "send" && parents.has(e.role) && e.taskId).map(e => e.taskId)),
+    ownTurn,
   ));
   return alerts;
 }
@@ -197,7 +198,7 @@ export function idleOwnText(alert) {
   return `본인 차례: ${names.join(", ")}${rest > 0 ? ` 외 ${rest}건` : ""}.${hint}`;
 }
 
-export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null) {
+export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null, ownTurn = null) {
   const userWaiting = excluded.userWait ?? (() => false), answers = excluded.answers ?? (() => false);
   const questions = excluded.questions ?? (() => []);
   const pending = new Map();
@@ -228,6 +229,7 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents, exclu
     const mine = entry => dutyOf(entry) === role || answers(entry.taskId, role);
     const cards = open.filter(mine);
     if (!cards.length) continue;
+    ownTurn?.add(role); // 시간 기준(idleMs) 전에 센다 — 감독 정기 확인이 같은 계산을 재사용한다.
     const lower = {};
     for (const entry of open) if (!mine(entry)) lower[dutyOf(entry)] = (lower[dutyOf(entry)] ?? 0) + 1;
     const waitIds = [...new Set(below.filter(entry => userWaiting(entry.taskId)).map(entry => entry.taskId))];

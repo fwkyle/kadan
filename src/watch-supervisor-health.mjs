@@ -2,7 +2,7 @@ import {mailboxLetters} from './mailbox-state.mjs';
 import {workEntries} from './handover-state.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
-import {statusProgress} from './watch-status-line.mjs';
+import {statusProgress,isQuietScreen} from './watch-status-line.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
@@ -35,9 +35,11 @@ export class SupervisorHealth {
     state.lastCheck=now;state.at=now;state.screen=screen.slice(-8000);
     if(state.errorSince!=null)state.errorChecked=true;
   }
-  select({scope,observations,entries,mailEntries=entries,cards,now,enabled}) {
+  // ownTurn: 본인 차례 항목이 있는 감독 역할 집합(놀고 있음 계산 결과). null이면 모르는 것이라 거르지 않는다.
+  select({scope,observations,entries,mailEntries=entries,cards,now,enabled,ownTurn=null}) {
     for (const session of this.states.keys()) if (!scope.sessions.has(session)) this.states.delete(session);
     const candidates = [], alerts = [];
+    let quietSkipped = 0;
     for (const session of scope.sessions) {
       const seen = observations.get(session), role = session.slice(6);
       if (!seen || !seen.alive || seen.screen == null || seen.expectedPid != null && String(seen.pid) !== String(seen.expectedPid)) {
@@ -61,7 +63,10 @@ export class SupervisorHealth {
       state.workClock = progress.status?.kind === 'working' ? progress.status.clockSec : null;
       state.prevScreen = seen.screen.slice(-8000);
       const early = error && !state.errorChecked && now-state.errorSince >= SUPERVISOR_ERROR_MS;
-      if (enabled && !progress.moving && (early || now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
+      // 정상 대기(빈 입력창 + 오류 없음 + 본인 차례 없음)는 정기 확인 때 부르지 않는다. 애매하면(unknown·오류·본인 차례) 그대로 부른다.
+      const quiet = !error && ownTurn != null && !ownTurn.has(role) && isQuietScreen(seen.screen, progress.status);
+      if (quiet && !early && now-state.lastCheck >= SUPERVISOR_CHECK_MS) quietSkipped++;
+      if (enabled && !progress.moving && !quiet && (early || now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
           ...observationContext(role,seen,mailEntries,cards,scope.entries),
           check:early?'persistent-error':'hourly',minutes:Math.floor((now-state.at)/60000),
@@ -78,6 +83,6 @@ export class SupervisorHealth {
     if (candidate) {
       delete candidate.state;delete candidate.early;
     }
-    return {candidate,alerts};
+    return {candidate,alerts,quietSkipped};
   }
 }

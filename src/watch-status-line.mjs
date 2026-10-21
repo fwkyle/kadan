@@ -72,6 +72,12 @@ export function statusProgress(screen, previousClockSec) {
   return { status, moving };
 }
 
+// 감독 정기 확인을 거르는 '정상 대기' 화면 조건 (a)(b): 빈 입력창(idle)이고 아래 12줄에 오류 낱말이 없다.
+// 오류 범위는 넓은 쪽(진행 중 거부와 같은 anyStopWordInBottom)을 쓴다 — 놓치면 멈춘 감독이 조용히 묻힌다.
+export function isQuietScreen(screen, status = screen != null ? readStatusLine(screen) : null) {
+  return screen != null && status?.kind === "idle" && !anyStopWordInBottom(screen);
+}
+
 // 답을 기다리는 질문 우편이 그 발령 뒤에 있는가. 있으면 작업자는 정당하게 기다리는 중이다.
 export function hasOpenQuestion(entries, role, sinceIso) {
   const since = Date.parse(sinceIso);

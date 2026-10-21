@@ -7,6 +7,7 @@ import {buildWatchScope,buildSupervisorScope} from '../src/watch-scope.mjs';
 import {SupervisorHealth,SUPERVISOR_CHECK_MS,SUPERVISOR_ERROR_MS} from '../src/watch-supervisor-health.mjs';
 import {WatchReports,watchResponsibility} from '../src/watch-report.mjs';
 import {runWatch} from './helpers/watch-runner.mjs';
+import {assessSupervisorIdle} from '../src/watch-supervisor.mjs';
 
 const t='2026-09-09T00:00:00.000Z',epoch=Date.parse(t);
 const parents=new Map([['worker','boss'],['boss','top'],['top','@user'],['old','@user']]);
@@ -155,4 +156,45 @@ test('오류 낱말이 아래에 있으면 시계가 늘어도 persistent-error 
  f.check(SUPERVISOR_ERROR_MS-60_000,err('5m 0s'));
  const c=f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate;
  assert.equal(c.input.check,'persistent-error');
+});
+
+const idleScreen='하위 결과를 기다리는 중\n\n❯ \n';
+test('정상 대기(빈 입력창·오류 없음·본인 차례 없음)는 1시간이 지나도 후보를 내지 않고 lastCheck를 갱신하지 않는다',()=>{
+ const f=health(),own=new Set();
+ assert.equal(f.check(0,idleScreen,{ownTurn:own}).candidate,undefined);
+ const r=f.check(SUPERVISOR_CHECK_MS,idleScreen,{ownTurn:own});
+ assert.equal(r.candidate,undefined);assert.equal(r.quietSkipped,1);
+ assert.equal(f.h.states.get('kadan-boss').lastCheck,epoch);
+ // 조건이 하나라도 깨지면 곧바로 도래한 확인이 나간다.
+ assert.equal(f.check(SUPERVISOR_CHECK_MS+60_000,idleScreen,{ownTurn:new Set(['boss'])}).candidate.input.check,'hourly');
+});
+test('본인 차례·알 수 없는 상태 줄·아래쪽 오류·본인 차례 모름이면 지금처럼 부른다',()=>{
+ const due=(screen,ownTurn)=>{const f=health();f.check(0,screen,{ownTurn});return f.check(SUPERVISOR_CHECK_MS,screen,{ownTurn}).candidate;};
+ assert.equal(due(idleScreen,new Set(['boss'])).role,'boss');
+ assert.equal(due('하위 결과를 기다리는 중',new Set()).role,'boss');
+ assert.equal(due('Reconnecting... 1/2\n❯ \n',new Set()).role,'boss');
+ assert.equal(due(idleScreen,null).role,'boss');
+ assert.equal(due(crafting('4m 0s'),new Set()).role,'boss');
+});
+test('오류 지속 5분 경로는 정상 대기 거르기와 무관하게 그대로다',()=>{
+ const err='Reconnecting... 1/2\n❯ \n',f=health(),own=new Set();
+ f.check(0,err,{ownTurn:own});
+ assert.equal(f.check(SUPERVISOR_ERROR_MS,err,{ownTurn:own}).candidate.input.check,'persistent-error');
+});
+test('놀고 있음 계산은 시간 기준 전에 본인 차례 역할을 ownTurn에 채우고 알림은 바꾸지 않는다',()=>{
+ const own=new Set(),rows=[...starts,send];
+ const alerts=assessSupervisorIdle(rows,new Map(),epoch,15*60_000,null,parents,{ownTurn:own});
+ assert.deepEqual([...own],['boss']); // top에게는 하위(boss) 차례 일이라 본인 차례가 아니다
+ const plain=assessSupervisorIdle(rows,new Map(),epoch,15*60_000,null,parents);
+ assert.deepEqual(alerts,plain);
+ const none=new Set();assessSupervisorIdle(starts,new Map(),epoch,15*60_000,null,parents,{ownTurn:none});
+ assert.equal(none.size,0);
+});
+test('작업자 경로와 감독 경로는 같은 공용 상태 줄 함수를 부르고 자기 상태 줄 정규식을 새로 만들지 않는다',()=>{
+ for(const file of ['watch.mjs','watch-supervisor-health.mjs']){
+  const src=fs.readFileSync(new URL(`../src/${file}`,import.meta.url),'utf8');
+  assert.match(src,/import\s*\{[^}]*statusProgress[^}]*\}\s*from\s*['"]\.\/watch-status-line\.mjs['"]/u,file);
+  assert.match(src,/statusProgress\(/u,file);
+  assert.doesNotMatch(src,/esc to interrupt|Working\s*\(|CLAUDE_WORKING|CODEX_WORKING/u,file);
+ }
 });
