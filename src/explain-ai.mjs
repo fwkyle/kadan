@@ -15,6 +15,7 @@ import {readStream, appendStream} from './storage.mjs';
 import {cardEvents} from './explain-events.mjs';
 import {explainChain, readSettings} from './runner-settings.mjs';
 import {execCommand} from './runner-table.mjs';
+import {bindExec} from './exec-agent.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
 import {answerText, buildExplainPrompt, decisionsByCard, envelopeState, parseBriefOutput} from './explain-input.mjs';
@@ -156,6 +157,8 @@ export class ExplainAI {
       let seen = null;
       let attempt = {runner: judge.runner, model: judge.model, fallbackIndex: judge.fallbackIndex, result: 'call-failed'};
       try {
+        // 도구 없는 에이전트로 묶어야 하는 실행기는 틀 검사와 에이전트 파일 쓰기가 끝난 뒤에만 부른다(실패하면 부르지 않고 다음 후보로).
+        bindExec(settings, judge.runner, this.workDir);
         const {command, stdin, env, field} = execCommand(settings, judge.runner, {model: judge.model, effort: judge.effort ?? '', prompt, cwd: this.workDir});
         const res = await this.spawn(command, {input: stdin, timeout: this.timeoutMs, cwd: this.workDir, signal: this.controller.signal,
           reportComplete: () => false, maxBytes: EXPLAIN_MAX_OUTPUT_BYTES, env: {...process.env, ...env}});

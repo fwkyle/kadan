@@ -111,9 +111,9 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     assert.deepEqual(missing(),[],'안내 명령 실행 뒤 시작보고누락 0');
     assert.doesNotMatch(send('standalone','회신 참고').body,/현재 발령 ID:/);
     const target='=kadan-ri-worker:';tx('copy-mode','-t',target);const prior=sends().length;
-    assert.notEqual(call('send','ri-worker','BLOCKED_COPY').status,0);assert.equal(sends().length,prior);assert.equal(tx('display-message','-p','-t',target,'#{pane_in_mode}').trim(),'1');tx('send-keys','-t',target,'-X','cancel');
+    {const all=()=>entries().filter(e=>e.kind==='send'),storedBefore=all().length,blocked=call('send','ri-worker','BLOCKED_COPY');assert.equal(blocked.status,0,blocked.stderr);assert.equal(sends().length,prior,'창에는 넣지 않는다');assert.equal(all().length,storedBefore+1);assert.equal(all().at(-1).transport,'mailbox');}assert.equal(tx('display-message','-p','-t',target,'#{pane_in_mode}').trim(),'1');tx('send-keys','-t',target,'-X','cancel');
     const original=entries().filter(e=>e.kind==='start'&&e.role==='ri-worker').at(-1);
-    appendLedger({...original,panePid:'999999999'},home);assert.notEqual(call('send','ri-worker','BLOCKED_PID').status,0);assert.equal(sends().length,prior);appendLedger(original,home);
+    appendLedger({...original,panePid:'999999999'},home);{const all=()=>entries().filter(e=>e.kind==='send'),storedBefore=all().length,blocked=call('send','ri-worker','BLOCKED_PID');assert.equal(blocked.status,0,blocked.stderr);assert.equal(sends().length,prior,'창에는 넣지 않는다');assert.equal(all().length,storedBefore+1);assert.equal(all().at(-1).transport,'mailbox');}appendLedger(original,home);
     const mail=JSON.parse(run('send','비서','공식 완료 원문')),beforeRead=entries();
     const letter=JSON.parse(run('inbox','read',mail.mailId));assert.equal(letter.body,'공식 완료 원문');assert.equal(letter.receiverInstructionsProfile,'secretary');assert.ok(letter.receiverInstructions);
     assert.deepEqual(entries(),beforeRead);assert.ok(Array.isArray(JSON.parse(run('inbox','list'))));assert.equal(mail.wake,'not-connected');

@@ -25,6 +25,7 @@ import {
   resolveLedgerBy,
 } from "./ledger.mjs";
 import { stripAnsi, digest, recordedPid } from "./cli-basics.mjs";
+import { mailRuleField } from "./mail-rule.mjs";
 import { familyConflictAlerts } from "./cli-family.mjs";
 
 export function guardedSend({
@@ -172,6 +173,7 @@ export function guardedSend({
   const entry = {
     kind: "send",
     mailId,
+    ...mailRuleField(),
     ...(notificationOnly?{notificationOnly:true}:{}),
     ...(deliveredRead?{deliveredRead:true}:{}),
     ...(mailContext?.expectReply?{expectReply:true}:{}),

@@ -127,7 +127,7 @@ test('화면 경로: 목록 불러오기는 토큰·POST일 때만 실행되고,
 
     // 화면 표 저장 == CLI(setRunner) 저장
     const cli = fixture();
-    const table = {exec: 'agy -p {prompt}', version: 'agy --version'};
+    const table = {exec: 'agy --agent kadan-noexec --print {prompt}', version: 'agy --version'};
     setRunner(cli.home, {runner: 'agy', table, ...cli.meta()});
     const rev = readSettings(f.home).revision, n = readLedger(f.home).length;
     const saved = await post('/runners/runner', {runner: 'agy', table: JSON.stringify({...table, resume: null}), reason: '화면', revision: String(rev)});

@@ -300,14 +300,18 @@ export function projectLedger(state,domain) {
   const inDomain=kind => domain === 'mailbox' ? ledgerDomain(kind) === 'mail' || kind === 'start' || kind === 'stop' : ledgerDomain(kind) === domain;
   const mailDomain = domain === 'mail' || domain === 'mailbox';
   const mailEvidence=value=>isMailTransfer(value)||value?.kind==='done'&&value.completionMailId;
+  // 우편함 조회는 '알림이 실제로 들어간' 감시 사건(sent)의 최소 정보만 더한다. 감시기와 같은 넣은 시각(deliveredAt)·세대 판정을 하려는 것이다.
+  const reminderSent=value=>domain==='mailbox'&&value?.kind==='watch-mail-reminder'&&value.action==='result'&&value.delivery==='sent'&&value.held!==true&&value.mailId&&value.role;
+  const slimReminder=({kind,t,mailId,role,action,delivery})=>({kind,t,mailId,role,action,delivery});
   const legacy = state.legacy.flatMap(value => {
     if (!domain) return [value];
     if (domain === 'tasks' && taskSend(value || {})) {
       return [{...value,kind:'dispatch',legacy:true}];
     }
-    return inDomain(value?.kind) || mailDomain && mailEvidence(value) ? [value] : [];
+    return reminderSent(value) ? [slimReminder(value)] : inDomain(value?.kind) || mailDomain && mailEvidence(value) ? [value] : [];
   });
   // 인계와 완료는 자기 영역에 한 번만 저장한다. 우편 조회에는 판정 근거를 원래 순서로 포함한다.
-  const rows = state.ordered.filter(value => domain ? inDomain(value.kind) || mailDomain && mailEvidence(value) : value.kind !== 'dispatch').map(publicEvent);
+  const rows = state.ordered.filter(value => domain ? inDomain(value.kind) || mailDomain && mailEvidence(value) || reminderSent(value) : value.kind !== 'dispatch')
+    .map(value => reminderSent(value) ? slimReminder(value) : publicEvent(value));
   return uniqueDone([...legacy,...rows]);
 }

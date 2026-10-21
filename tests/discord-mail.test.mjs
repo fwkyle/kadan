@@ -14,6 +14,7 @@ import {createChat, runWatch, STATE_FILE, LOCK_DIR} from '../src/discord-chat.mj
 import {createMailOut, composeDiscordMail, DISCORD_BY, DISCORD_MAIL_KIND} from '../src/discord-mail.mjs';
 import {Mailbox, readMailboxEntries} from '../src/mailbox.mjs';
 import {isUserActor} from '../src/actors.mjs';
+import {MAIL_RULE} from '../src/mail-rule.mjs';
 import {isPeerSuperMail} from '../src/peer-mail.mjs';
 import {MailWatch} from '../src/watch-mail.mjs';
 import {collectRoles} from '../src/watch-roles.mjs';
@@ -337,3 +338,11 @@ for (const backend of ['jsonl', 'sqlite']) {
     } finally { await fake.close(); }
   });
 }
+
+test('디코 우편에도 규칙 표지가 붙어 감시기의 새 상태표(유예 0, 못 넣으면 매 순회)를 탄다', () => {
+  const home = tmp('rule');
+  createMailOut({home})({id: 'rule-1', content: '질문', where: 'channel', at: '2026-10-21T00:00:00Z'});
+  const [mail] = readMailboxEntries(home).filter(e => e.kind === 'send');
+  assert.equal(mail.mailRule, MAIL_RULE);
+  assert.equal(mail.by, DISCORD_BY);
+});
