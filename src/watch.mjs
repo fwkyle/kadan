@@ -1,11 +1,11 @@
 import {findDoneMarkers} from './done-marker.mjs';
 import {securityFilterNotice} from './watch-security-filter.mjs';
-import { WORKER_PHRASES, phraseKinds, phraseOfLine, currentStopPhrases, anyStopWordInBottom } from "./watch-stop-phrases.mjs";
+import { WORKER_PHRASES, phraseKinds, phraseOfLine, currentStopPhrases } from "./watch-stop-phrases.mjs";
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { holdPosts } from "./notify-policy.mjs";
-import { readStatusLine, isWorkingMoving } from "./watch-status-line.mjs";
+import { statusProgress } from "./watch-status-line.mjs";
 
 const JUDGE_INPUT_PREFIX = [
   "너는 터미널 화면 조각을 보고 에이전트 상태를 판정한다.",
@@ -213,11 +213,10 @@ export function assessRoles(
 
     // (a) 화면 맨 아래 상태 줄의 경과 시계가 주기 사이에 움직이면 일하는 중이다(변화 지문은 숫자를 지워 못 본다).
     // 같은 아래쪽 영역에 끊김·429가 걸리면 일하는 중이 아니다 — #187의 14시간 Reconnecting이 다시 묻히지 않게.
-    const status = alive && current.screen != null ? readStatusLine(current.screen) : null;
-    // 오류 낱말 확인은 넓게(아래 12줄 어디든, 덩어리·인용 무관) — 즉시 경보는 좁게 내지만, 거부는 놓치면 멈춘 화면이 영원히 묻힌다.
-    const workingMoving =
-      !(alive && current.screen != null && anyStopWordInBottom(current.screen)) &&
-      isWorkingMoving(status, previous?.workClock ?? null);
+    const { status, moving: workingMoving } = statusProgress(
+      alive && current.screen != null ? current.screen : null,
+      previous?.workClock ?? null
+    );
 
     // 일하는 동안 쌓인 '변화 없음' 시간은 정체 시간이 아니다. 일이 끝난 직후 곧바로 정체로 넘어가지 않게 0으로 둔다.
     if (sameDigest && !workingMoving) {

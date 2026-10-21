@@ -126,3 +126,47 @@ test('같은 실행 완료 화면은 AI 재호출을 생략하지만 다른 미�
   assert.deepEqual(calls,mode==='changed-screen'?[1,4]:mode==='complete'?[1]:[1,31]);
  }
 });
+const crafting=clock=>`✢ Crafting… (${clock} · ↓ 1.2k tokens)\n\n❯ \n`;
+test('진행 중(시계 증가)인 감독은 1시간이 지나도 후보를 내지 않고 멈추면 후보가 나간다',()=>{
+ const f=health();f.check(0,crafting('3m 52s'));
+ assert.equal(f.check(SUPERVISOR_CHECK_MS-60_000,crafting('3m 52s')).candidate,undefined);
+ assert.equal(f.check(SUPERVISOR_CHECK_MS,crafting('4m 52s')).candidate,undefined);
+ // lastCheck를 건드리지 않았으니 시계가 멈추면 곧바로 도래한 확인이 나간다.
+ const stopped=f.check(SUPERVISOR_CHECK_MS+60_000,crafting('4m 52s')).candidate;
+ assert.equal(stopped.input.check,'hourly');
+ assert.equal(stopped.input.previous,crafting('4m 52s'));
+ assert.deepEqual(stopped.input.statusLine,{kind:'working',clockSec:292,previousClockSec:292});
+});
+test('처음 본 화면은 진행 근거가 아니고 PID가 바뀌면 시계 기억을 버린다',()=>{
+ const f=health();
+ // 첫 순회부터 1시간 경과 상태로 만든다(lastCheck를 과거로).
+ f.check(0,crafting('9m 0s'));f.h.states.get('kadan-boss').lastCheck=epoch-SUPERVISOR_CHECK_MS;
+ assert.equal(f.check(60_000,crafting('9m 0s')).candidate.input.statusLine.previousClockSec,540);
+ const swapped=new Map([['kadan-boss',{role:'boss',alive:true,pid:7,expectedPid:7,screen:crafting('9m 5s'),digest:'x',startedAt:t}]]);
+ f.h.states.get('kadan-boss').lastCheck=epoch-SUPERVISOR_CHECK_MS;
+ const r=f.check(120_000,'',{observations:swapped});
+ assert.equal(f.h.states.get('kadan-boss').workClock,545);
+ assert.equal(f.h.states.get('kadan-boss').pid,7);
+ assert.equal(r.candidate?.input.statusLine.previousClockSec??null,null);
+});
+test('오류 낱말이 아래에 있으면 시계가 늘어도 persistent-error 후보가 묻히지 않는다',()=>{
+ const err=clock=>`Reconnecting... 1/2\n✢ Crafting… (${clock} · ↓ 1k tokens)\n❯ \n`;
+ const f=health();f.check(0,err('1m 0s'));
+ f.check(SUPERVISOR_ERROR_MS-60_000,err('5m 0s'));
+ const c=f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate;
+ assert.equal(c.input.check,'persistent-error');
+});
+test('감독 전용 오류(SSE·압축)는 시계가 늘어도 5분 지속되면 persistent-error 후보가 난다',()=>{
+ for(const line of ['Error running remote compact task: idle timeout waiting for SSE','idle timeout waiting for SSE','Error running remote compact task']){
+  const err=clock=>`${line}\n✢ Crafting… (${clock} · ↓ 1k tokens)\n❯ \n`;
+  const f=health();f.check(0,err('1m 0s'));
+  assert.equal(f.check(SUPERVISOR_ERROR_MS-60_000,err('5m 0s')).candidate,undefined);
+  const first=f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate;
+  assert.equal(first.input.check,'persistent-error');
+  // 확인을 시작한 뒤에도 오류+시계 증가면 진행 중 제외를 쓰지 않아 정기 후보가 난다(main과 같다).
+  f.h.started(first.session,err('6m 0s'),epoch+SUPERVISOR_ERROR_MS);
+  const hourly=SUPERVISOR_ERROR_MS+SUPERVISOR_CHECK_MS;
+  for(let at=SUPERVISOR_ERROR_MS+60_000;at<hourly;at+=60_000)assert.equal(f.check(at,err(`${at}s`)).candidate,undefined);
+  assert.equal(f.check(hourly,err(`${hourly}s`)).candidate.input.check,'hourly');
+ }
+});

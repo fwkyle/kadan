@@ -2,6 +2,7 @@ import {mailboxLetters} from './mailbox-state.mjs';
 import {workEntries} from './handover-state.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
+import {statusProgress} from './watch-status-line.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
@@ -48,19 +49,26 @@ export class SupervisorHealth {
       let state = this.states.get(session);
       if (!state || String(state.pid) !== String(seen.pid)) {
         const previous = entries.findLast(e => e.kind === 'watch-ai-request' && e.source === 'supervisor-health' && e.session === session && Date.parse(e.t) >= Date.parse(seen.startedAt));
-        state = {pid:seen.pid,at:now,screen:seen.screen.slice(-8000),lastCheck:Number.isFinite(Date.parse(previous?.t))?Date.parse(previous.t):now,errorSince:null,errorChecked:false};
+        state = {pid:seen.pid,at:now,screen:seen.screen.slice(-8000),lastCheck:Number.isFinite(Date.parse(previous?.t))?Date.parse(previous.t):now,errorSince:null,errorChecked:false,workClock:null,prevScreen:seen.screen.slice(-8000)};
         this.states.set(session,state);
       }
       const error = errorPattern.test(seen.screen.split('\n').slice(-20).join('\n'));
       if (!error) { state.errorSince=null;state.errorChecked=false; }
       else if (state.errorSince == null) state.errorSince=now;
+      // 감독 오류(errorPattern)가 보이는 화면에서는 진행 중 판정을 쓰지 않는다(early·hourly 모두 main과 같다). 오류가 없을 때만 직전 순회 대비 진행 중이면 정기 후보를 내지 않는다(작업자 감시와 같은 공용 판정). 시계·화면은 후보 여부와 무관하게 매 순회 갱신한다.
+      const progress = statusProgress(seen.screen, state.workClock);
+      const previousScreen = state.prevScreen, previousClockSec = state.workClock;
+      state.workClock = progress.status?.kind === 'working' ? progress.status.clockSec : null;
+      state.prevScreen = seen.screen.slice(-8000);
       const early = error && !state.errorChecked && now-state.errorSince >= SUPERVISOR_ERROR_MS;
-      if (enabled && (early || now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
+      if (enabled && (early || (error || !progress.moving) && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
           ...observationContext(role,seen,mailEntries,cards,scope.entries),
           check:early?'persistent-error':'hourly',minutes:Math.floor((now-state.at)/60000),
           errorMinutes:error?Math.floor((now-state.errorSince)/60000):0,
-          previous:state.screen,current:seen.screen.slice(-8000),
+          // previous는 직전 순회(약 60초 전) 화면이다. 마지막 관찰AI 확인 때 화면이 아니다(minutes가 그 뒤 경과).
+          previous:previousScreen,current:seen.screen.slice(-8000),
+          statusLine:{kind:progress.status?.kind??null,clockSec:progress.status?.clockSec??null,previousClockSec},
         }});
       }
     }
