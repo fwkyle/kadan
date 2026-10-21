@@ -65,7 +65,7 @@ export function buildSupervisorScope(cards, entries, parents = new Map(), works 
     // 실행을 모두 끝내도 업무 최종 확인이 남으면 책임 감독은 응답 가능해야 한다.
     const opened = work.history?.findLast(e => e.action === 'reopen' || e.action === 'create');
     // 책임 대상(역할, 시각)은 이전 세대 목록과 같은 responsibilityTargets로 구한다.
-    for (const {role, since} of responsibilityTargets(work, parents)) {
+    for (const {role, since} of responsibilityTargets(work, parents, cards)) {
       if (since && isPreviousOwner(generations, role, since)) continue;
       add(role, {role, taskId:`work:${work.key}`, t:opened?.at ?? null, workKey:work.key});
     }
@@ -82,11 +82,11 @@ export function previousGenerationExecutions(cards, entries, parents = new Map()
 
 // 이전 세대 소속이라 할 일에서 빠진 열린 업무. works는 withEffectiveOwner로 현재 책임과 ownedAt을 얹은 것이다.
 // 감시 범위와 같은 책임 대상 목록을 쓴다: 대상이 모두 이전 세대일 때만 여기에 나오고, 하나라도 현재면 감시 범위에 남는다.
-export function previousGenerationWorks(works, entries, parents = new Map()) {
+export function previousGenerationWorks(works, entries, parents = new Map(), cards = null) {
   const generations = ownerGenerations(entries);
   return (works ?? []).filter(w => {
     if (w?.status !== 'open') return false;
-    const targets = responsibilityTargets(w, parents).filter(t => parents.has(t.role));
+    const targets = responsibilityTargets(w, parents, cards).filter(t => parents.has(t.role));
     return targets.length > 0 && targets.every(t => t.since && isPreviousOwner(generations, t.role, t.since));
   }).map(w => ({kind: 'work', key: w.key, role: w.owner}));
 }

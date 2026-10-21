@@ -36,6 +36,6 @@ export function scenario(steps) {
 // 이 업무가 감독 응답 감시 범위와 대시보드 이전 세대 목록 중 어디에 나오는가.
 export function surfaces(s, tree = parents) {
   const scope = buildSupervisorScope(s.cards, s.entries, tree, s.works).entries.filter((e) => e.workKey === "r/w1");
-  const previous = previousGenerationWorks(s.works, s.entries, tree);
+  const previous = previousGenerationWorks(s.works, s.entries, tree, s.cards);
   return { scopeRoles: [...new Set(scope.map((e) => e.role))].sort(), previous: previous.map((p) => p.role) };
 }
