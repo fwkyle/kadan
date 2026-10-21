@@ -157,6 +157,14 @@ test('오류 낱말이 아래에 있으면 시계가 늘어도 persistent-error 
  const c=f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate;
  assert.equal(c.input.check,'persistent-error');
 });
+test('감독 전용 오류(SSE·압축)는 시계가 늘어도 5분 지속되면 persistent-error 후보가 난다',()=>{
+ for(const line of ['Error running remote compact task: idle timeout waiting for SSE','idle timeout waiting for SSE','Error running remote compact task']){
+  const err=clock=>`${line}\n✢ Crafting… (${clock} · ↓ 1k tokens)\n❯ \n`;
+  const f=health();f.check(0,err('1m 0s'));
+  assert.equal(f.check(SUPERVISOR_ERROR_MS-60_000,err('5m 0s')).candidate,undefined);
+  assert.equal(f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate.input.check,'persistent-error');
+ }
+});
 
 const idleScreen='하위 결과를 기다리는 중\n\n❯ \n';
 test('정상 대기(빈 입력창·오류 없음·본인 차례 없음)는 1시간이 지나도 후보를 내지 않고 lastCheck를 갱신하지 않는다',()=>{
@@ -196,5 +204,11 @@ test('작업자 경로와 감독 경로는 같은 공용 상태 줄 함수를 �
   assert.match(src,/import\s*\{[^}]*statusProgress[^}]*\}\s*from\s*['"]\.\/watch-status-line\.mjs['"]/u,file);
   assert.match(src,/statusProgress\(/u,file);
   assert.doesNotMatch(src,/esc to interrupt|Working\s*\(|CLAUDE_WORKING|CODEX_WORKING/u,file);
+ }
+});
+test('감독 전용 오류(SSE·압축)가 빈 입력창 아래에 보이면 정상 대기가 아니라 1시간 후보가 난다',()=>{
+ for(const line of ['Error running remote compact task: idle timeout waiting for SSE','idle timeout waiting for SSE']){
+  const screen=`${line}\n\n❯ \n`,own=new Set(),f=health();f.check(0,screen,{ownTurn:own});
+  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen,{ownTurn:own}).candidate.role,'boss',line);
  }
 });
