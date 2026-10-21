@@ -61,8 +61,31 @@ export function withEffectiveOwner(work, entries) {
 // 차례가 작업자면 응답 책임은 owner에게 둔다: 감독 응답 점검은 감독만 보고, 작업자는 작업자 감시가 따로 본다(잠긴 규칙 8).
 // 시각 값이 없으면 업무 시각(차례) 또는 null(owner)이다.
 const laterOf = (a, b) => (!b || (a && Date.parse(a) >= Date.parse(b)) ? a : b) ?? null;
-export function currentResponsibility(work, parents) {
-  const turn = work.turnOwner;
+// 차례 기록(turnOwner·turnAt)이 아직 유효한가(2026-10-21 같은 개념 감사 5번). 기록 뒤에 하위 실행(카드 at·runs[].at)이
+// 움직였으면 지난 기록이다. 대시보드(work-dashboard)와 감시(currentResponsibility)가 같은 기준을 쓴다.
+// cards를 안 주면 하위 실행을 모르는 것이라 시각만 본다.
+export function lastChildAt(work, cards) {
+  const byKey = new Map((cards ?? []).map(c => [c.key, c]));
+  return Math.max(0, ...(work.executions ?? []).flatMap(x => {
+    const card = byKey.get(x.key);
+    return [Date.parse(card?.at) || 0, ...(card?.runs ?? []).map(r => Date.parse(r.at) || 0)];
+  }));
+}
+// 'current' = 기록이 마지막 하위 실행 이후, 'stale' = 그 앞, 'unknown' = turnOwner나 유효한 turnAt이 없다.
+export function turnState(work, cards) {
+  if (!work.turnOwner || !Number.isFinite(Date.parse(work.turnAt))) return 'unknown';
+  return Date.parse(work.turnAt) >= lastChildAt(work, cards) ? 'current' : 'stale';
+}
+// 대시보드는 'current'일 때만 차례 기록을 보인다(turnLabel).
+export function isTurnCurrent(work, cards) {
+  return turnState(work, cards) === 'current';
+}
+
+// 감시는 시각이 없는 옛 기록(unknown)은 지금처럼 turnOwner를 따르고, 지난 기록(stale)은 역할 선택에서만 무효로 본다.
+// turnOwner가 owner 자신이면 무효화해도 같은 역할이라 main과 같게 둔다(since가 owner 생성 시각으로 되돌아가면 세대 판정이 바뀐다).
+export function currentResponsibility(work, parents, cards = null) {
+  const stale = turnState(work, cards) === 'stale' && work.turnOwner !== work.owner;
+  const turn = stale ? undefined : work.turnOwner;
   if (parents?.has(turn) && (turn === work.owner || [...parents.values()].includes(turn))) {
     const turned = work.turnAt ?? work.at ?? null;
     return { role: turn, since: turn === work.owner ? laterOf(turned, work.ownedAt) : turned };
@@ -72,8 +95,8 @@ export function currentResponsibility(work, parents) {
 
 // 이 업무의 책임 대상 목록(역할, 시각). 지금 몫인 역할이 owner와 다르면 owner도 따로 본다.
 // 감독 응답 감시 범위와 이전 세대 목록이 같은 목록으로 세대를 가른다.
-export function responsibilityTargets(work, parents) {
-  const holder = currentResponsibility(work, parents);
+export function responsibilityTargets(work, parents, cards = null) {
+  const holder = currentResponsibility(work, parents, cards);
   return holder.role === work.owner ? [holder] : [{ role: work.owner, since: work.ownedAt ?? null }, holder];
 }
 

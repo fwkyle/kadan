@@ -166,3 +166,7 @@ console.table(by);"
 ```
 
 기간은 `e.t` 문자열 비교로 거른다. 이유별 수는 키를 `e.instructions.reason`으로 바꿔 본다. `kadan log`는 최근 30줄만 보여 주므로 집계에는 쓰지 않는다.
+
+## 감시기 알림은 지침을 붙이지 않는다 (2026-10-21 [kyle])
+
+감시기 알림(경보·미확인 우편 재알림·상위 알림·놀고 있음 본인 알림)은 `guardedSend`의 `omitInstructions`로 역할 지침을 붙이지 않는다. 원장에 `instructions`가 남지 않으므로 이 알림은 전문·요약 판정(`decideInstructionsMode`)의 "마지막 전문"이 되지 않고, 전달에 실패해도 `send-failed` 전문 시도를 남기지 않는다. 일반 우편의 판정은 알림이 있든 없든 같다(`tests/watch-notice-format.test.mjs`가 고정). `--raw`와 다른 점: 우편 ID·ack 안내는 `notificationOnly`가 따로 정한다.

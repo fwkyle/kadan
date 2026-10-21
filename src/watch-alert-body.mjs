@@ -2,8 +2,9 @@
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { phraseAction } from "./watch-stop-phrases.mjs";
-import { idleCountsText, idleOwnText } from "./watch-supervisor.mjs";
+import { idleCountsText, idleOwnText, buildIdleNudge } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
+import { WATCH_ALERT_FOOTER } from "./watch-notice-format.mjs";
 
 export function clockTime(at) {
   const date = new Date(at);
@@ -231,3 +232,21 @@ export function deliverResolution({
 }
 
 export const isDatabaseBusy=error=>error?.errcode===5||/database is locked|SQLITE_BUSY/i.test(String(error?.message??''));
+
+// 역할 창에 넣는 경보·놀고 있음 알림: 첫 줄은 [watch HH:MM] 요약 한 줄 그대로, 그 아래에 항목 이름을 붙인다(2026-10-21 [kyle]).
+// 화면 출력·사용자 알림·원장은 이 틀이 아니라 formatAlertBody 한 줄을 쓴다.
+export function itemizedAlert(alert, clock) {
+  const idle = alert.kind === "놀고 있음";
+  const own = idle ? idleOwnText(alert) : "";
+  let basis = "", todo = WATCH_ALERT_FOOTER;
+  if (idle) {
+    basis = `${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음`
+      + (alert.stage === 2 ? `; ${Math.floor(alert.idleMinutes / 2)}분 전에 본인에게 알렸으나 그대로` : "");
+    if (alert.stage !== 2) todo = `판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
+  } else if (alert.kind === "정체") basis = `지문 무변화 ${alert.count}회`;
+  else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째, 미완료 실행 있음·답 기다리는 질문 없음`;
+  else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
+  const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
+  return [`[watch ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,
+    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), `할 일: ${todo}`].join("\n");
+}

@@ -4,7 +4,7 @@
 //  - 그 밖에 '?' 표식 하나(목록에 없는 키를 센다)
 // 숫자는 바이트·길이·개수·종료 코드 칸과, 값이 0~9999 정수일 때의 값(v)만 쓴다.
 import {constants} from 'node:os';
-import {STOP_PHRASES} from './watch-stop-phrases.mjs';
+import {OVERLOAD_PATTERN, STOP_PHRASES} from './watch-stop-phrases.mjs';
 
 // 설명 칸 7개와 실행기 봉투·오류에서 흔한 키. 이 밖의 키는 글자를 남기지 않고 unknown으로 센다.
 export const KEY_NAMES = ['title', 'workstream', 'stage', 'goal', 'summary', 'next', 'blocker',
@@ -41,7 +41,7 @@ const EXTRA_WORDS = [
   ['invalid_api_key', /invalid[ _-]?api[ _-]?key|incorrect api key/u],
   ['model_not_found', /model[ _-]?not[ _-]?found|unknown model/u],
   ['context_length', /context[ _-]?(?:length|window)|too many tokens|maximum context/u],
-  ['overloaded', /overloaded|capacity/u],
+  ['overloaded', OVERLOAD_PATTERN],
   ['empty_response', /empty[ _-]?response|no content/u],
 ];
 const STOP_WORDS = STOP_PHRASES.filter(p => p.pattern).map(p => [p.id, p.pattern]);

@@ -1,7 +1,8 @@
 import {mailboxLetters} from './mailbox-state.mjs';
 import {isUserActor,DISCORD_BY} from './actors.mjs';
 import {taskIdentity} from './task-identity.mjs';
-import {shellQuote} from './mail-instructions.mjs';
+import {unreadMailMessage,escalationNotice} from './watch-notice-format.mjs';
+import {readMailBody,ledgerHome} from './ledger.mjs';
 import {isNotificationHold} from './notification-guard.mjs';
 import {isPeerSuperMail} from './peer-mail.mjs';
 import {SECRETARY} from './mailbox.mjs';
@@ -26,13 +27,12 @@ function escalateKind(stages, now) {
   return Number.isFinite(sentAt) && now - sentAt >= ESCALATE_AFTER_MS ? 'unread' : null;
 }
 
-// 상위 한 명에게 가는 한 통. 우편마다 한 줄이고 본문·미리보기는 넣지 않는다. 값은 모두 원장에서 온다.
-export function escalationMessage(items) {
-  const line = ({mail, kind, minutes}) => `- ${recipient(mail)} · ${mail.mailId} · 보낸이 ${mail.by} · 보낸 시각 ${mail.t} · `
-    + `${kind === 'unknown' ? '결과 불명' : `${minutes}분째 미읽음`} · 확인: kadan inbox read ${mail.mailId} --role ${shellQuote(recipient(mail))}`;
-  const rest = items.length - ESCALATE_LIST_MAX;
-  return [`[미읽음 우편 상위 알림] 직속 부하 앞 우편 ${items.length}건이 읽히지 않았습니다. 읽음 확인은 수신자 몫이니 대신 ack하지 마세요.`,
-    ...items.slice(0, ESCALATE_LIST_MAX).map(line), ...(rest > 0 ? [`- 외 ${rest}건`] : [])].join('\n');
+// 상위 한 명에게 가는 한 통. 우편마다 항목 이름을 붙인 블록이고 값은 모두 원장에서 온다(watch-notice-format.mjs).
+export const escalationMessage = items => escalationNotice(items, previewOf);
+// 첫 줄 글감: 일반 전송은 원장 preview가 있고, 우편함(mailbox) 우편은 preview 없이 본문 파일(digest)이 있다. 못 읽으면 빈 글(= 미리보기 없음).
+function previewOf(mail) {
+  if (mail.preview) return mail.preview;
+  try { return mail.digest ? readMailBody(mail.digest, ledgerHome()) ?? '' : ''; } catch { return ''; }
 }
 
 // 새 규칙 우편의 실패 사유는 원장에 고정 값만 쓴다. 오류 문장에는 tmux 버퍼 이름(PID·시각)·명령 인자처럼 매번 달라지는 말이 섞여
@@ -211,8 +211,9 @@ export class MailWatch {
         pending = ids.filter(id => unread.has(id));
         if (!signal?.aborted && String(currentPid(target,fresh,live)) === String(expectedPid) && pending.length) {
           attempted = true;
+          const pendingIds = new Set(pending);
           this.send(target,escalate ? escalationMessage(unreadItems)
-            : `[미확인 우편] ${pending.length}건이 남아 있습니다. kadan inbox --role ${shellQuote(target)} --unread로 확인하고 내용을 읽은 우편만 직접 ack하세요. 질문의 최종 답변은 읽음 확인과 별개입니다.`,expectedPid);
+            : unreadMailMessage(unreadItems.filter(({mail}) => pendingIds.has(mail.mailId)).map(({mail}) => mail),target,previewOf),expectedPid);
           delivery = 'sent'; reason = null; code = null; delivered.add(target);
         }
       } catch (error) {

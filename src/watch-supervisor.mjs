@@ -40,10 +40,10 @@ export function waitingExcluder(waits, parents) {
 // owner만 보면 하위 감독 차례인 업무가 상위의 할 일로 세어지고 정작 차례인 쪽에는 가지 않았다.
 export function idleWorkEntries(works, cards, parents) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
-  return (works ?? []).filter(w => w?.status === "open" && parents.has(currentResponsibility(w, parents).role)
+  return (works ?? []).filter(w => w?.status === "open" && parents.has(currentResponsibility(w, parents, cards).role)
       && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
-    .map(w => { const { role, since } = currentResponsibility(w, parents);
+    .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
       return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since }; });
 }
 
