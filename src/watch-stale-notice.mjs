@@ -1,4 +1,4 @@
-import {buildCardCenter} from './card-center.mjs';
+import {buildCardCenter, liveSessionTree} from './card-center.mjs';
 import {isNotificationHold} from './notification-guard.mjs';
 
 // 오래된 미확정 재안내(2026-10-19). 역할이 다음 일로 넘어갔거나 같은 업무에 뒤 라운드가 생겼는데
@@ -37,9 +37,7 @@ export function noticeRecipient(card, works) {
 // null이면 생존을 모르는 것으로 보고 세션 소실(orphaned)은 판정하지 않는다(확실하지 않으면 보내지 않는다).
 export function planStaleNotices({cards, entries, works = [], now = Date.now(), liveSessions = null}) {
   const known = liveSessions != null;
-  const tree = known ? [{roles: [...new Set(cards.map(c => c.role).filter(Boolean))].map(role => ({
-    role, life: {state: liveSessions.has(`kadan-${role}`) ? 'alive' : 'absent', pidState: 'match'},
-  }))}] : [];
+  const tree = liveSessionTree(cards, liveSessions);
   const center = buildCardCenter({
     cards: cards.map(c => ({...c, history: c.history ?? []})), entries, tree, runtimeKnown: known, now,
   }).cards;

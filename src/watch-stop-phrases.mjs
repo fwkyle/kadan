@@ -28,6 +28,9 @@ export const STOP_PHRASES = [
     pattern: /oauth\/token|authentication (?:failed|required)|401 Unauthorized/iu, sample: "없음(intervention.md 표)" },
   { id: "reconnecting", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"], live: true,
     pattern: /Reconnecting\.\.\./iu, sample: "codex 0.163 `• Reconnecting... 2/5 (9m 34s • esc to interrupt)`" },
+  // Claude 화면: `⏺ API Error: Your computer went to sleep mid-response…` 뒤에 빈 입력창만 남는다(2026-10-21 감독 오판 사고).
+  { id: "sleep-interrupted", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
+    pattern: /went to sleep mid-response/iu, sample: "claude 감독 `API Error: Your computer went to sleep mid-response` (tests/fixtures/sleep-interrupt-screens.json)" },
   { id: "stream-error", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
     pattern: /stream error|stream disconnected/iu, sample: "codex 0.163 `Stream disconnected before completion`" },
   { id: "bad-gateway", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
@@ -73,6 +76,8 @@ export function phraseOfLine(line) {
 // 첫 관찰 주기에도 바로 경보한다(#194 보안필터와 같은 방식).
 const ERROR_HEAD = /^[■✕×ⓘ]/u;
 const RECONNECT_HEAD = /^•\s*Reconnecting\.\.\.(?:\s+\d+\/\d+)?(?:\s*\([^)]*\))?\s*$/iu; // 줄 전체가 상태 줄 모양일 때만(설명 문장 안의 낱말은 아님)
+const CLAUDE_ERROR_HEAD = /^⏺\s+API Error:/u; // Claude 응답 오류 줄. 응답 머리표(⏺)로 시작하지만 이 모양만 오류 머리줄로 본다
+const TURN_DONE = /^✻\s+\S+\s+for\s+\d/u; // Claude 턴 끝 줄(`✻ Baked for 8m 22s · done 6:12 PM`)
 const FENCE = /^\s*(```|~~~)/u;
 const EMPTY_COMPOSER = /^\s*(?:›\s*(?:Ask Codex to do anything)?|[❯>])\s*$/u;
 const ANY_COMPOSER = /^\s*[›❯]/u;
@@ -109,9 +114,15 @@ export function currentErrorBlock(screen) {
   let end = composer - 1;
   while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
   if (end < 0) return null;
-  let head = end;
-  while (head > 0 && /^\s+\S/u.test(lines[head])) head--;
-  if (!(ERROR_HEAD.test(lines[head]) || RECONNECT_HEAD.test(lines[head]))) return null;
+  const headOf = (from) => { let at = from; while (at > 0 && /^\s+\S/u.test(lines[at])) at--; return at; };
+  let head = headOf(end);
+  // Claude는 오류 줄과 입력창 사이에 턴 끝 줄이 낀다. 그 줄을 건너뛴 위가 `⏺ API Error:` 머리줄일 때만 덩어리로 읽는다(다른 머리줄 판정은 그대로).
+  if (TURN_DONE.test(lines[end])) {
+    let above = end - 1;
+    while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+    if (above >= 0 && CLAUDE_ERROR_HEAD.test(lines[headOf(above)])) { end = above; head = headOf(above); }
+  }
+  if (!(ERROR_HEAD.test(lines[head]) || RECONNECT_HEAD.test(lines[head]) || CLAUDE_ERROR_HEAD.test(lines[head]))) return null;
   if (rows.slice(head, end + 1).some((r) => r.inFence)) return null;
   // 위쪽 소개 문단 제외(#194 보안필터와 같은 규칙): 오류 표시 머리줄 바로 위(빈 줄·장식 줄을 건너)가 응답 머리표 문단이거나 콜론으로 끝나는
   // 소개 문장이면 설명·예시이지 현재 오류가 아니다. 애매하면 즉시 경보 대신 정체 경로로 간다. 상태 줄 모양의 재연결 머리줄에는 적용하지 않는다.

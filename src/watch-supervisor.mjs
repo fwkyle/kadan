@@ -3,6 +3,7 @@ import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
 import { ownerGenerations, isPreviousOwner } from "./owner-generation.mjs";
+import { buildCardCenter, liveSessionTree } from "./card-center.mjs";
 
 function startedAtMs(state) {
   const at = Date.parse(state?.startedAt);
@@ -34,14 +35,38 @@ export function waitingExcluder(waits, parents) {
   return excluded;
 }
 
+// 카드는 assigned로 남았지만 실제로는 끝났거나 담당이 없는 실행의 카드 키(2026-10-21 절전 중단 사고: 작업자가 원장 done·stop 했는데
+// 카드 status가 assigned라 업무를 계속 붙잡았다). 새 판정을 만들지 않고 카드 센터의 판정을 쓴다: 원장 done이 마지막 발령 뒤에 있으면
+// doneButOpen, 마지막 발령이 미확정인데 담당 세션이 없으면 orphaned. liveSessions가 null이면 생존을 모르는 것이라 세션 소실은 보지 않는다.
+// hold는 감독이 일부러 멈춘 것이라 여기서 다루지 않는다.
+export function endedExecutionKeys({ cards, entries, liveSessions = null, now = Date.now() }) {
+  try {
+    const center = buildCardCenter({ cards: (cards ?? []).map(c => ({ ...c, history: c.history ?? [] })), entries,
+      tree: liveSessionTree(cards ?? [], liveSessions), runtimeKnown: liveSessions != null, now });
+    const lastRun = c => [...c.runs].filter(r => r.role === c.role)
+      .sort((a, b) => (Date.parse(a.sentAt ?? a.at) || 0) - (Date.parse(b.sentAt ?? b.at) || 0)).at(-1);
+    return new Set([
+      ...center.doneButOpen.filter(d => d.status === "assigned").map(d => d.key),
+      ...center.cards.filter(c => c.status === "assigned" && lastRun(c)?.state === "orphaned").map(c => c.key),
+    ]);
+  } catch { return new Set(); } // 원장 손상 등 모르면 예전처럼 진행 중으로 둔다
+}
+
 // 실행이 다 끝났거나 아직 없는 열린 워크는 책임 감독의 할 일이다(2026-10-05 [kyle]: "매번 내가 말해 줘야 다음 걸 한다").
 // 진행 중 실행 = 카드가 assigned·hold인 것. draft·ready는 아직 발령 전이라 할 일로 본다.
+// 단 assigned라도 endedKeys()에 든 실행(끝났거나 담당 세션이 없음)은 진행 중으로 세지 않는다. endedKeys는 처음 필요할 때 한 번만 계산한다.
 // 할 일은 지금 차례(turnOwner)인 역할의 것이다(2026-10-16 [kyle]). 차례가 관계표에 없으면 책임 감독(owner)에게 둔다.
 // owner만 보면 하위 감독 차례인 업무가 상위의 할 일로 세어지고 정작 차례인 쪽에는 가지 않았다.
-export function idleWorkEntries(works, cards, parents) {
+export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set()) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
+  let ended = null;
+  const inProgress = x => {
+    const status = byKey.get(x.key)?.status;
+    if (!["assigned", "hold"].includes(status)) return false;
+    return !(status === "assigned" && (ended ??= endedKeys()).has(x.key));
+  };
   return (works ?? []).filter(w => w?.status === "open" && parents.has(currentResponsibility(w, parents, cards).role)
-      && !(w.executions ?? []).some(x => ["assigned", "hold"].includes(byKey.get(x.key)?.status)))
+      && !(w.executions ?? []).some(inProgress))
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
     .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
       return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since }; });
@@ -54,7 +79,7 @@ export function assessSupervisorIdle(
   idleMs,
   ledgerError = null,
   parents = new Map(),
-  { works = [], cards = [], waits = [], peerEntries = entries, ownTurn = null } = {}
+  { works = [], cards = [], waits = [], peerEntries = entries, ownTurn = null, executionEntries = null, liveRoleSessions = null } = {}
 ) {
   const excluded = waitingExcluder(waits, parents);
   if (ledgerError) {
@@ -142,7 +167,9 @@ export function assessSupervisorIdle(
   const current = entry => entry.peerRequest || entry.kind !== "send" || !parents.has(entry.role)
     || !isPreviousOwner(generations, entry.role, Object.hasOwn(entry, "ownedAt") ? entry.ownedAt : entry.t);
   // 발령 이력이 있는가는 세대 필터 전 원본 기준이다. 이전 세대 발령을 뺐다고 그 plan을 미발령 할 일로 되살리지 않는다.
-  const all = [...entries, ...idleWorkEntries(works, cards, parents), ...requests];
+  const all = [...entries, ...idleWorkEntries(works, cards, parents,
+    // 원장 전체(executionEntries)를 모르면 끝난 실행을 가릴 수 없어 예전처럼 둔다.
+    () => executionEntries ? endedExecutionKeys({ cards, entries: executionEntries, liveSessions: liveRoleSessions, now }) : new Set()), ...requests];
   alerts.push(...assessHierarchyIdle(
     all.filter(current),
     roleStates, now, idleMs, parents, waiting,
