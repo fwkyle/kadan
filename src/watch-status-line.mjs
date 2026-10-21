@@ -4,6 +4,7 @@
 // 표본 근거: 감시AI 관찰 자료(codex 0.163 일하는 중·입력 대기·끊김, claude 입력 대기)와 claude 2.1.302 일하는 중 실제 화면 2장.
 // claude 일하는 중 모양은 감독이 자기 세션에서 뜬 실제 화면 두 장으로 맞췄다.
 import { mailboxLetters } from "./mailbox-state.mjs";
+import { anyStopWordInBottom } from "./watch-stop-phrases.mjs";
 
 // (b) 멈춤 경보의 코드 기본값. 감시 주기 60초, 정체 기본 5분보다 짧게 둔다. 프로필 키는 더하지 않는다.
 export const IDLE_STOP_AFTER_MS = 4 * 60_000;
@@ -60,6 +61,15 @@ export function isWorkingMoving(status, previousClockSec) {
     previousClockSec != null &&
     status.clockSec !== previousClockSec
   );
+}
+
+// 작업자 감시(watch.mjs)와 감독 관찰(watch-supervisor-health.mjs)이 함께 쓰는 '이번 화면이 직전 순회 대비 진행 중인가' 판정.
+// 화면이 없으면(죽음·읽기 실패) screen에 null을 준다 → {status: null, moving: false}.
+// 오류 낱말이 아래 12줄 어디든 있으면 시계가 늘어도 moving은 거짓이다(#187: 끊김 화면이 일하는 중으로 묻히지 않게).
+export function statusProgress(screen, previousClockSec) {
+  const status = screen != null ? readStatusLine(screen) : null;
+  const moving = !(screen != null && anyStopWordInBottom(screen)) && isWorkingMoving(status, previousClockSec ?? null);
+  return { status, moving };
 }
 
 // 답을 기다리는 질문 우편이 그 발령 뒤에 있는가. 있으면 작업자는 정당하게 기다리는 중이다.

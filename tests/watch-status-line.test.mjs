@@ -304,3 +304,12 @@ test('F2: 보류 중인 역할(KADAN_PANE_IN_MODE 등 holdCode 무엇이든)은 
   // 보류가 풀리면 다시 4분을 채워야 경보한다.
   assert.equal(idleRun(Array(5).fill(codexIdle)).at(-1).length, 1);
 });
+import {statusProgress} from '../src/watch-status-line.mjs';
+test('statusProgress: 시계 증가=진행, 같은 시계·처음 본 화면·오류 낱말·화면 없음=진행 아님',()=>{
+ assert.equal(statusProgress(codexWorking('5m 12s'),300).moving,true);
+ assert.equal(statusProgress(codexWorking('5m 12s'),312).moving,false);
+ assert.equal(statusProgress(codexWorking('5m 12s'),null).moving,false);
+ assert.equal(statusProgress(reconnecting('5m 12s'),300).moving,false);
+ assert.deepEqual(statusProgress(null,300),{status:null,moving:false});
+ assert.equal(statusProgress(codexIdle,300).status.kind,'idle');
+});
