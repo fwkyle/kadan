@@ -55,6 +55,7 @@ import { shortDigest, normalizeForChange, readText, collectRoles, absorbDelivere
 import {
   clockTime,
   formatAlertBody,
+  itemizedAlert,
   resolvedBody,
   recordAlert,
   seedAlertState,
@@ -667,7 +668,7 @@ export async function runWatch({
       const message = `[watch ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
       let target = alert.role, held = false, delivered = false;
       try {
-        (sendNudge ?? sendAlert)(alert.role, message);
+        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt)));
         delivered = true;
         deliveredRecipients.add(alert.role);
       } catch (error) {
@@ -724,7 +725,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, message, `alert:${alert.id}:${alert.level ?? ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
+          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {
