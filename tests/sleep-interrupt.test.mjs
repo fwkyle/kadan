@@ -16,7 +16,8 @@ const SLEEP = load("sleep-interrupt-screens.json")["A-claude-sleep-interrupted-t
 
 test("실제 절전 중단 화면: 작업자 오류 덩어리·낱말·넓은 판정·감독 20줄 판정이 모두 오류로 잡는다", () => {
   assert.ok(STOP_PHRASES.some((p) => p.id === "sleep-interrupted" && p.scope.includes("worker") && p.scope.includes("supervisor")));
-  const block = currentErrorBlock(SLEEP);
+  assert.equal(currentErrorBlock(SLEEP), null, "기본 판정(main과 같음)은 이 머리줄을 덩어리로 읽지 않는다");
+  const block = currentErrorBlock(SLEEP, { claudeHead: true });
   assert.match(block.head, /^⏺ API Error: Your computer went to sleep mid-response/u);
   assert.equal(currentStopPhrases(SLEEP).size, 1);
   assert.equal(screenDisconnects(SLEEP).size, 1);
@@ -27,14 +28,14 @@ test("실제 절전 중단 화면: 작업자 오류 덩어리·낱말·넓은 �
 
 test("절전 낱말을 인용만 한 화면, 입력 중인 화면은 오류 덩어리가 아니다", () => {
   const quoted = "⏺ 로그에 'went to sleep mid-response' 가 찍혔습니다.\n\n✻ Baked for 1m 2s\n\n❯ \n";
-  assert.equal(currentErrorBlock(quoted), null);
+  assert.equal(currentErrorBlock(quoted, { claudeHead: true }), null);
   const typing = SLEEP.replace("❯ \n", "❯ 계속해줘\n");
-  assert.equal(currentErrorBlock(typing), null);
+  assert.equal(currentErrorBlock(typing, { claudeHead: true }), null);
   const resumed = SLEEP.replace("⏺ API Error", "⏺ API Error").replace("✻ Baked for 8m 22s · done 6:12 PM", "✻ Baked for 8m 22s · done 6:12 PM\n\n⏺ 이어서 하겠습니다.");
-  assert.equal(currentErrorBlock(resumed), null);
+  assert.equal(currentErrorBlock(resumed, { claudeHead: true }), null);
 });
 
-test("작업자 판정은 main과 같다: 절전 낱말이 없는 입력 14개의 낱말·넓은 판정이 main 값과 일치", () => {
+test("작업자 판정은 main과 같다: 절전 낱말이 없는 입력(Claude 오류 401·No API key·rate limit·stream·502·529 포함)의 낱말·넓은 판정이 main 값과 일치", () => {
   const rows = Object.entries(load("sleep-interrupt-worker-inputs.json"));
   assert.ok(rows.length >= 10);
   for (const [name, row] of rows) {
@@ -84,5 +85,15 @@ test("감시AI 지시문: 응답 중단 오류 뒤 빈 입력창은 실행완료
     const prompt = buildWatchPrompt({ source, command: "cmd", input: {} });
     assert.match(prompt, /응답 중단 오류\(절전 went to sleep mid-response·API Error 등\) 뒤에 남은 빈 입력창은 실행완료가 아니다/u);
     assert.match(prompt, /실행완료: 현재 맡긴 실행의 완료 표시 뒤 정상 입력 프롬프트로 복귀/u, "기존 문구는 그대로");
+  }
+});
+
+test("소개 문단 아래의 절전 문구는 경보가 아니다. 절전이 아닌 Claude API 오류는 경보가 늘지 않는다", () => {
+  const intro = SLEEP.replace(/⏺ API Error:/u, "⏺ 아래는 오류 예시입니다:\n⏺ API Error:");
+  assert.equal(currentStopPhrases(intro).size, 0);
+  assert.equal(screenDisconnects(intro).size, 0);
+  for (const text of ["401 Unauthorized", "No API key", "rate limit exceeded", "stream error", "502 Bad Gateway", "529 overloaded_error"]) {
+    const screen = SLEEP.replace(/⏺ API Error:.*\n/u, `⏺ API Error: ${text}\n`);
+    assert.equal(screenDisconnects(screen).size, 0, text);
   }
 });
