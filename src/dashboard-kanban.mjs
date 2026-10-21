@@ -49,7 +49,8 @@ function marksOf(row, { decided }) {
 
 // rows: 실행 카드 행(model().rows 중 실행) · works: 업무(owner는 이미 현재 책임 감독) · decisions: 결정 목록 또는 null
 // hierarchy: 역할 → 상위 역할 · profiles: superProfiles() 결과 또는 null
-export function buildKanban({ rows = [], works = [], decisions = [], hierarchy = null, profiles = null, now = Date.now() }) {
+// lookup: 판에 올리지 않지만 결정의 출처 카드를 찾는 데 쓰는 행(조율 카드 포함). 모르면 rows만 쓴다.
+export function buildKanban({ rows = [], works = [], decisions = [], hierarchy = null, profiles = null, now = Date.now(), lookup = rows }) {
   const workOf = new Map();
   for (const w of works ?? []) for (const e of w.executions ?? []) workOf.set(e.key, w);
   const open = decisions === null ? [] : decisions.filter((d) => d.status === "open");
@@ -106,11 +107,54 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
       workKey: work?.key ?? null,
       workTitle: work?.title ?? null,
       marks: marksOf(row, { decided }),
+      decisionIds: open.filter((d) => d.card === row.key || (decided === "work" && bareWork(d.work) === bareWork(work.key))).map((d) => d.id),
       signalAt: row.signalAt || null,
       at: row.at || null,
       since: sinceOf(row),
     });
   }
+
+  // 불변식: 열린 결정은 칸반에 최소 한 장으로 보인다. 위에서 어떤 카드에도 걸리지 않은 결정은 대신 보이는 카드를 만든다.
+  //  - 업무가 있으면 업무 자체(제목=업무 제목, 담당=owner, 경과=결정 요청 시각, 판=owner).
+  //  - 업무가 없으면 출처 카드(조율 카드 포함)를 카드 판 규칙(관계표 부모 → 미연결)으로. 출처도 못 찾으면 키만 가진 자리표시 카드.
+  const shown = new Set(rows.map((r) => r.key));
+  const workByKey = new Map((works ?? []).map((w) => [bareWork(w.key), w]));
+  const lookupByKey = new Map(lookup.map((r) => [r.key, r]));
+  const stand = new Map();
+  for (const d of open) {
+    const w = d.work ? workByKey.get(bareWork(d.work)) ?? null : null;
+    if (shown.has(d.card) || (w && rowsOfWork.has(w.key))) continue;
+    const src = lookupByKey.get(d.card) ?? null;
+    const key = w ? "work:" + bareWork(w.key) : d.card;
+    if (!stand.has(key)) {
+      const parent = src?.owner && parents ? parents.get(src.owner) : null;
+      const owner = w ? w.owner || null : parent && parent !== "@user" ? parent : null;
+      stand.set(key, {
+        owner,
+        card: {
+          key,
+          title: w ? w.title || bareWork(w.key) : src?.title || d.card,
+          role: w ? w.owner || "" : src?.owner || "",
+          repo: src?.repo || "",
+          board: src?.board || "",
+          state: w ? "work" : src?.state ?? "",
+          stateLabel: w ? "업무" : src ? statusLabel(src.state) : "카드 기록 없음",
+          healthLabel: "",
+          workKey: w?.key ?? null,
+          workTitle: w?.title ?? null,
+          marks: [{ kind: "decision", label: w ? "결정 대기(업무)" : "결정 대기(카드)" }],
+          decisionIds: [],
+          signalAt: null,
+          at: d.at || null,
+          since: d.at || null,
+        },
+      });
+    }
+    const entry = stand.get(key);
+    entry.card.decisionIds.push(d.id);
+    if (time(d.at) !== null && (time(entry.card.since) === null || time(d.at) > time(entry.card.since))) entry.card.since = entry.card.at = d.at;
+  }
+  for (const { owner, card } of stand.values()) boardFor(owner).lines.decision.push(card);
 
   const newest = (a, b) => (time(b.since) ?? 0) - (time(a.since) ?? 0);
   const result = [...boards.values()].map((board) => {

@@ -9,8 +9,11 @@ export function kanbanData(snapshot, url, stamp, m) {
   const entries = snapshot.entries ?? [];
   const works = (registeredCenterWorks(snapshot).works ?? []).map((w) => ({ ...w, owner: effectiveWorkOwner(w, entries) }));
   const profiles = snapshot.ledgerLines === null ? null : superProfiles(entries);
+  const executions = m.rows.filter((r) => r.kind !== "work");
   const kanban = buildKanban({
-    rows: m.rows.filter((r) => r.kind !== "work" && isExecution(r)),
+    rows: executions.filter(isExecution),
+    // 조율 카드는 판에 올리지 않지만 열린 결정의 출처로는 찾아야 한다.
+    lookup: executions,
     works,
     decisions: snapshot.decisionError ? null : snapshot.decisions ?? [],
     hierarchy: m.hierarchy,

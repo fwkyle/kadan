@@ -138,6 +138,68 @@ test("F1: 막힘은 끝나지 않은 카드에만 적용한다", () => {
   assert.equal(lineOf(result, "r/d"), "감독A/done");
 });
 
+// 열린 결정 id → 칸반 어디에 보이는가. 불변식: 열린 결정은 최소 한 장에 보인다.
+const shownDecisions = (result) => new Set(result.boards.flatMap((b) => b.lines.flatMap((l) => l.cards.flatMap((c) => c.decisionIds ?? []))));
+const openIds = (decisions) => new Set(decisions.filter((d) => d.status === "open").map((d) => d.id));
+
+test("F2: 실행 0장 업무 + 조율 카드 출처의 열린 결정은 업무 자체 카드로 kyle 확인 필요에 보인다", () => {
+  const w = [{ key: "r/empty", title: "빈 업무", owner: "감독C", status: "open", executions: [] }];
+  const coord = row("r/origin", { workType: "coordination" });
+  const decisions = [{ id: "d1", status: "open", card: "r/origin", work: "r/empty", at: ago(5000) }];
+  const result = buildKanban({ rows: [], lookup: [coord], works: w, hierarchy, now, decisions });
+  assert.equal(lineOf(result, "work:r/empty"), "감독C/decision");
+  const card = result.boards[0].lines[0].cards[0];
+  assert.equal(card.title, "빈 업무");
+  assert.equal(card.role, "감독C");
+  assert.equal(card.since, ago(5000), "경과 시간은 결정 요청 시각");
+  assert.deepEqual(card.marks.map((m) => m.label), ["결정 대기(업무)"]);
+  assert.deepEqual(shownDecisions(result), openIds(decisions));
+});
+
+test("F2: 업무 없는 조율 카드 출처 결정은 출처 카드를 관계표 부모 판에, 출처도 없으면 미연결에 둔다", () => {
+  const coord = row("r/coord", { workType: "coordination", owner: "작업자" });
+  const decisions = [{ id: "d1", status: "open", card: "r/coord", at: ago(1) }, { id: "d2", status: "open", card: "r/gone", at: ago(2) }];
+  const result = buildKanban({ rows: [], lookup: [coord], hierarchy, now, decisions });
+  assert.equal(lineOf(result, "r/coord"), "감독A/decision");
+  assert.equal(lineOf(result, "r/gone"), `${UNLINKED}/decision`);
+  assert.deepEqual(shownDecisions(result), openIds(decisions));
+});
+
+test("F2: 같은 업무의 결정 둘은 업무 카드 한 장, 같은 결정으로 카드가 두 번 나오지 않는다", () => {
+  const w = [{ key: "r/empty", title: "빈 업무", owner: "감독C", executions: [] }];
+  const decisions = [{ id: "d1", status: "open", work: "r/empty", card: "r/c1", at: ago(9000) }, { id: "d2", status: "open", work: "work:r/empty", card: "r/c2", at: ago(1000) }];
+  const result = buildKanban({ rows: [], works: w, hierarchy, now, decisions });
+  const cards = result.boards.flatMap((b) => b.lines.flatMap((l) => l.cards));
+  assert.equal(cards.length, 1);
+  assert.deepEqual(cards[0].decisionIds, ["d1", "d2"]);
+  assert.equal(cards[0].since, ago(1000), "가장 최근 요청 시각");
+});
+
+test("F2 불변식: 고정 입력 여러 개에서 열린 결정 수 = 칸반에 걸린 서로 다른 열린 결정 수", () => {
+  const w = [
+    { key: "r/empty", title: "빈 업무", owner: "감독C", executions: [] },
+    { key: "r/finished", title: "끝난 업무", owner: "감독C", executions: [{ key: "r/f1" }, { key: "r/f2" }] },
+    { key: "r/live", title: "진행 업무", owner: "감독B", executions: [{ key: "r/l1" }] },
+  ];
+  const rows = [row("r/f1", { state: "done", signalAt: ago(RECENT_MS + 9) }), row("r/f2", { state: "done", signalAt: ago(RECENT_MS + 1) }),
+    row("r/l1"), row("r/free"), row("r/old", { state: "done", signalAt: ago(RECENT_MS * 3) }), row("r/orphan", { owner: "고아" })];
+  const lookup = [...rows, row("r/coord", { workType: "coordination" })];
+  const inputs = [
+    [],
+    [{ id: "a", status: "open", card: "r/coord", work: "r/empty", at: ago(1) }],
+    [{ id: "a", status: "open", card: "r/coord", at: ago(1) }, { id: "b", status: "open", card: "r/nowhere", at: ago(2) }],
+    [{ id: "a", status: "open", work: "r/finished", card: "r/coord", at: ago(1) }, { id: "b", status: "open", card: "r/old", at: ago(2) }],
+    [{ id: "a", status: "open", work: "r/live", card: "r/free", at: ago(1) }, { id: "b", status: "answered", card: "r/free" }, { id: "c", status: "cancelled", work: "r/empty" }],
+    [{ id: "a", status: "open", card: "r/orphan" }, { id: "b", status: "open", work: "r/missing-work", card: "r/coord" }, { id: "c", status: "open", work: "r/empty", card: "r/free" }],
+  ];
+  for (const decisions of inputs) for (const h of [hierarchy, null]) {
+    const result = buildKanban({ rows, lookup, works: w, hierarchy: h, now, decisions });
+    assert.deepEqual([...shownDecisions(result)].sort(), [...openIds(decisions)].sort(), JSON.stringify(decisions));
+    const keys = result.boards.flatMap((b) => b.lines.flatMap((l) => l.cards.map((c) => c.key)));
+    assert.equal(new Set(keys).size, keys.length, "한 카드는 한 번만");
+  }
+});
+
 test("kanbanLine: 모르는 상태(실패·세션 확인 필요)는 끝난 것처럼 숨기지 않고 작업중에 둔다", () => {
   for (const state of ["failed", "orphaned", "unconfirmed", "needs-check"]) assert.equal(kanbanLine({ state, bucket: "stale" }, { now }), "working");
 });
