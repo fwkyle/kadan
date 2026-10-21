@@ -43,6 +43,10 @@ export const STOP_PHRASES = [
     detect: securityFilterNotice, sample: "tests/fixtures/security-filter-screens.json (2026-09-30 codex)" },
 ];
 
+// 설명 AI(explain-diag.mjs)의 '모델 과부하' 낱말 모양. STOP_PHRASES에 넣지 않는다 — 넣으면 감시 경보가 새로 생기고,
+// `capacity`는 일반 문장에도 흔한 낱말이다. 감시 판정(WORKER_SIGNATURES·SUPERVISOR_ERROR_PATTERN 등)에는 쓰이지 않는다.
+export const OVERLOAD_PATTERN = /overloaded|capacity/u;
+
 const withPattern = (scope) => STOP_PHRASES.filter((p) => p.pattern && p.scope.includes(scope));
 const sourceOf = (entries) => entries.map(({ pattern }) => pattern.source).join("|");
 
