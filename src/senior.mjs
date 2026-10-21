@@ -3,21 +3,23 @@
 // 자문은 기록이지 결정이 아니다: 감독이 읽고 판단하거나 decision request로 사용자에게 올린다. 카드를 고치지 않는다.
 // 호출 방식은 감시 AI와 같다(scripts/senior.sh가 codex exec). 폴백은 없다 — 한 번 실패하면 실패로 끝낸다(fail closed).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
 import {CardStore} from './card-store.mjs';
 import {SENIOR_SCRIPT_RUNNER, assertSeniorRunner, readSettings, runnerChoices} from './runner-settings.mjs';
 import {answerText, scrubForAI} from './explain-input.mjs';
 import {execCommand, runnerTemplate} from './runner-table.mjs';
-import {assertExecBound, bindExec, withTimeout} from './exec-agent.mjs';
+import {assertExecBound, bindExec, isReadDirValue, withReadDir, withTimeout} from './exec-agent.mjs';
 import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
 import {closeOnSignal, closeSeniorTab, openSeniorTab, writeTabState} from './senior-tab.mjs';
 
-export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. --runner/--model은 이번 호출만 고르고(--model만 주면 설정의 실행기), 실행기는 안전 허용 목록(지금 codex·agy)만 된다. agy는 저장소를 읽지 못하고 카드 본문·첨부만 근거로 답한다. 상세: docs/senior.md';
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 시니어(실행 모델 설정의 senior)에게 의견을 한 번 묻는다. --runner/--model은 이번 호출만 고르고(--model만 주면 설정의 실행기), 실행기는 안전 허용 목록(지금 codex·agy)만 된다. agy는 카드 저장소(git, 안전한 경로)를 읽기 전용 폴더로 받아 읽고, 그렇지 못하면 카드 본문·첨부만 근거로 답한다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
@@ -67,10 +69,26 @@ function readAttachment(file) {
   return fs.readFileSync(file, 'utf8');
 }
 
-export function composeAdvicePrompt({question, card, attachments, readsRepo = true}) {
+// 카드의 repoPath가 git 최상위(show-toplevel) 자체일 때만 그 실경로를 읽기 폴더로 쓴다. 하위 폴더·작업트리 부모·git 메타데이터로 부모를 계산하지 않는다.
+// 홈·/ 이거나 읽기 폴더 값으로 쓸 수 없는 모양(공백·메타문자)이면 null.
+export function resolveRepoReadDir(repoPath) {
+  try {
+    const real = fs.realpathSync(repoPath);
+    const git = spawnSync('git', ['-C', real, 'rev-parse', '--show-toplevel'], {encoding: 'utf8', timeout: 10_000});
+    if (git.status !== 0) return null;
+    if (fs.realpathSync(git.stdout.trim()) !== real) return null;
+    if (real === path.parse(real).root || real === fs.realpathSync(os.homedir())) return null;
+    return isReadDirValue(real) ? real : null;
+  } catch { return null; }
+}
+
+// readsRepo: 저장소를 읽을 수 있다. repoDir가 있으면 작업 폴더가 저장소가 아니라 읽기 전용 폴더로 따로 열린 경우(agy)다.
+export function composeAdvicePrompt({question, card, attachments, readsRepo = true, repoDir = null}) {
   return [
     '당신은 시니어다. 감독이 카드 하나의 작업 결과를 두고 결정할 부분을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
-    readsRepo
+    readsRepo && repoDir
+      ? `그 카드의 저장소가 읽기 전용 폴더로 열려 있다: ${repoDir} — 필요한 파일은 이 절대경로 아래에서 직접 읽어 근거로 삼아라(이 폴더 밖은 읽을 수 없다). 파일을 고치거나 명령으로 상태를 바꾸지 마라.`
+      : readsRepo
       ? '현재 작업 폴더가 그 카드의 저장소다(읽기 전용). 필요한 파일·이력은 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.'
       : '저장소를 직접 읽을 수 없다. 아래 카드 본문과 첨부만 근거로 삼고, 거기에 없는 것은 모른다고 써라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.',
     '답은 한국어로, 아래 네 칸을 이 순서로 짧게 쓴다.',
@@ -87,14 +105,15 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
 }
 
 // 실행기 표 exec 틀로 한 번 부른다(설명 AI 호출과 같은 틀 채우기). cwd는 이번 호출 폴더(저장소가 아니다)다.
+// 저장소는 cwd가 아니라 readDir(정규화한 절대경로)를 코드가 틀 끝에 덧붙여 읽기 전용으로 연다. 저장한 틀에 같은 옵션을 쓰는 것은 여전히 거절된다.
 // 에이전트 파일을 쓰지 못하면 던진다 — 부르지 않는다(fail closed). 틀 안의 자체 시간 상한은 --timeout 값으로 바꾼다.
 // 답은 result.txt에 저장하고 종료 코드·모델도 senior.sh와 같은 이름으로 남긴다.
-async function callExec({settings, binding, value, dir, prompt, timeoutS, spawn, env}) {
+async function callExec({settings, binding, value, dir, prompt, timeoutS, spawn, env, readDir}) {
   bindExec(settings, value.runner, dir);
   const timed = {...settings, runners: {...settings.runners, [value.runner]: {...settings.runners[value.runner],
-    exec: withTimeout(runnerTemplate(settings, value.runner, 'exec'), binding, Math.ceil(timeoutS))}}};
-  // 실제로 돌릴 틀(시간 치환 뒤)도 같은 문법을 통과해야 부른다.
-  assertExecBound(timed, value.runner);
+    exec: withReadDir(withTimeout(runnerTemplate(settings, value.runner, 'exec'), binding, Math.ceil(timeoutS)), binding, readDir)}}};
+  // 실제로 돌릴 틀(시간 치환·읽기 폴더 덧붙임 뒤)도 같은 문법을 통과해야 부른다. 읽기 폴더 옵션은 코드가 덧붙인 그 값 하나만 받는다.
+  assertExecBound(timed, value.runner, readDir);
   const {command, stdin, env: execEnv, field} = execCommand(timed, value.runner, {model: value.model, effort: value.effort ?? '', prompt, cwd: dir});
   fs.writeFileSync(path.join(dir, 'model.txt'), `${value.model}\n`, {mode: 0o600});
   const result = await spawn(command, {input: stdin, timeout: timeoutS * 1000, cwd: dir, reportComplete: () => false, env: {...env, ...execEnv}});
@@ -133,7 +152,9 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const dir = path.join(home, 'advice', adviceId);
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   // 카드 글은 외부 서비스로 나가므로 웹훅 주소·토큰 모양을 가린 뒤 보낸다(docs/runner-settings.md).
-  const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments, readsRepo: !viaExec}));
+  // agy는 묶기 정보에 readDirFlag가 있고 저장소가 안전한 git 경로일 때만 저장소를 읽는다. 아니면 지금처럼 카드 본문·첨부만 쓴다.
+  const readDir = binding?.readDirFlag ? resolveRepoReadDir(card.repoPath) : null;
+  const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments, readsRepo: !viaExec || readDir != null, repoDir: viaExec ? readDir : null}));
   if (viaExec && Buffer.byteLength(prompt) > EXEC_PROMPT_LIMIT_BYTES) throw new Error(`프롬프트가 너무 크다(${Buffer.byteLength(prompt)}B > ${EXEC_PROMPT_LIMIT_BYTES}B) — 첨부를 줄여라`);
   fs.writeFileSync(path.join(dir, 'input.txt'), prompt, {mode: 0o600});
   // 따라 볼 진행 출력 파일을 미리 만들어 둔다(탭이 먼저 떠도 비어 있는 채로 기다린다). senior.sh가 같은 파일에 쓴다.
@@ -160,7 +181,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   tab = opened.tab === 'opened' ? {tab: 'opened'} : {tab: opened.tab, tabReason: opened.tabReason};
   let result;
   try {
-    result = viaExec ? await callExec({settings, binding, value, dir, prompt, timeoutS, spawn, env})
+    result = viaExec ? await callExec({settings, binding, value, dir, prompt, timeoutS, spawn, env, readDir})
       : await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
         env: {...env, KADAN_HOME: home, KADAN_SENIOR_DIR: dir, KADAN_SENIOR_REPO: card.repoPath, KADAN_SENIOR_MODEL: value.model, KADAN_SENIOR_EFFORT: value.effort ?? 'max'}});
   } catch (error) { result = viaExec ? {error, stderr: String(error?.message ?? error)} : {error}; }
