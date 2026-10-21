@@ -2,12 +2,14 @@ import {mailboxLetters} from './mailbox-state.mjs';
 import {workEntries} from './handover-state.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
-import {statusProgress,isQuietScreen} from './watch-status-line.mjs';
+import {statusProgress} from './watch-status-line.mjs';
+import {changeDigest} from './watch-roles.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
-// 정상 대기를 거르는 연속 정기 확인 수. 이만큼 건너뛴 뒤(마지막 확인 후 4시간)에는 정상 대기여도 한 번 부른다.
-export const SUPERVISOR_QUIET_SKIPS = 3;
+// 같은 화면 재사용: 원장의 마지막 요청 뒤 이 시간이 지나면 같은 화면이어도 정기 확인을 한 번 부른다(재시작해도 유지).
+export const SUPERVISOR_REUSE_MS = 4 * 60 * 60_000;
+const REUSABLE_VERDICTS = new Set(['입력대기', '실행완료']);
 const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
 
 export function observationContext(role, observation, entries, cards, tasks) {
@@ -29,6 +31,15 @@ export function observationContext(role, observation, entries, cards, tasks) {
   };
 }
 
+// 그 세션의 마지막 감독 관찰AI 요청(원장)과 짝인 보고가 정상 판정이고, 그 요청의 화면 지문이 지금 화면과 같고, 마지막 요청 뒤 SUPERVISOR_REUSE_MS가 안 지났는가.
+// 요청의 observationDigest는 호출 때 화면의 changeDigest다(숫자·회전 표시만 바뀐 화면은 같은 화면으로 본다). 지문이 없는 옛 요청·보고 없음은 재사용하지 않는다.
+function sameAsJudgedNormal(entries, session, screen, now) {
+  const request = entries.findLast(e => e.kind === 'watch-ai-request' && e.source === 'supervisor-health' && e.session === session);
+  if (!request?.observationDigest || !(now - Date.parse(request.t) < SUPERVISOR_REUSE_MS)) return false;
+  const report = entries.findLast(e => e.kind === 'watch-ai-report' && e.requestId === request.requestId && e.accepted);
+  return REUSABLE_VERDICTS.has(report?.verdict) && changeDigest(screen) === request.observationDigest;
+}
+
 export class SupervisorHealth {
   states = new Map();
   started(session,screen,now) {
@@ -41,7 +52,6 @@ export class SupervisorHealth {
   select({scope,observations,entries,mailEntries=entries,cards,now,enabled,ownTurn=null}) {
     for (const session of this.states.keys()) if (!scope.sessions.has(session)) this.states.delete(session);
     const candidates = [], alerts = [];
-    let quietSkipped = 0;
     for (const session of scope.sessions) {
       const seen = observations.get(session), role = session.slice(6);
       if (!seen || !seen.alive || seen.screen == null || seen.expectedPid != null && String(seen.pid) !== String(seen.expectedPid)) {
@@ -65,10 +75,8 @@ export class SupervisorHealth {
       state.workClock = progress.status?.kind === 'working' ? progress.status.clockSec : null;
       state.prevScreen = seen.screen.slice(-8000);
       const early = error && !state.errorChecked && now-state.errorSince >= SUPERVISOR_ERROR_MS;
-      // 정상 대기(빈 입력창 + 오류 없음 + 본인 차례 없음)는 정기 확인 때 부르지 않는다. 애매하면(unknown·오류·본인 차례) 그대로 부른다.
-      const quiet = !error && ownTurn != null && !ownTurn.has(role) && now-state.lastCheck < (SUPERVISOR_QUIET_SKIPS+1)*SUPERVISOR_CHECK_MS
-        && isQuietScreen(seen.screen, progress.status);
-      if (quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS) quietSkipped++;
+      // 같은 화면 재사용: 지난 관찰AI가 정상으로 판정한 그 화면(changeDigest 같음)이고 오류·본인 차례가 없으면 정기 확인을 부르지 않는다. 화면 모양은 해석하지 않는다. 하나라도 아니면 그대로 부른다.
+      const quiet = !error && now-state.lastCheck >= SUPERVISOR_CHECK_MS && ownTurn != null && !ownTurn.has(role) && sameAsJudgedNormal(entries, session, seen.screen, now);
       if (enabled && (early || (error || !progress.moving) && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
           ...observationContext(role,seen,mailEntries,cards,scope.entries),
@@ -86,6 +94,6 @@ export class SupervisorHealth {
     if (candidate) {
       delete candidate.state;delete candidate.early;
     }
-    return {candidate,alerts,quietSkipped};
+    return {candidate,alerts};
   }
 }

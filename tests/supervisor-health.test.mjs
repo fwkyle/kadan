@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {buildWatchScope,buildSupervisorScope} from '../src/watch-scope.mjs';
-import {SupervisorHealth,SUPERVISOR_CHECK_MS,SUPERVISOR_ERROR_MS} from '../src/watch-supervisor-health.mjs';
+import {SupervisorHealth,SUPERVISOR_CHECK_MS,SUPERVISOR_ERROR_MS,SUPERVISOR_REUSE_MS} from '../src/watch-supervisor-health.mjs';
 import {WatchReports,watchResponsibility} from '../src/watch-report.mjs';
+import {changeDigest} from '../src/watch-roles.mjs';
 import {runWatch} from './helpers/watch-runner.mjs';
 import {assessSupervisorIdle} from '../src/watch-supervisor.mjs';
 
@@ -173,27 +174,64 @@ test('감독 전용 오류(SSE·압축)는 시계가 늘어도 5분 지속되면
 });
 
 const idleScreen='✻ Cogitated for 3m 44s · done 1:16 PM\n\n❯ \n';
-test('정상 대기(빈 입력창·오류 없음·본인 차례 없음)는 1시간이 지나도 후보를 내지 않고 lastCheck를 갱신하지 않는다',()=>{
- const f=health(),own=new Set();
- assert.equal(f.check(0,idleScreen,{ownTurn:own}).candidate,undefined);
- const r=f.check(SUPERVISOR_CHECK_MS,idleScreen,{ownTurn:own});
- assert.equal(r.candidate,undefined);assert.equal(r.quietSkipped,1);
- assert.equal(f.h.states.get('kadan-boss').lastCheck,epoch);
- // 조건이 하나라도 깨지면 곧바로 도래한 확인이 나간다.
- assert.equal(f.check(SUPERVISOR_CHECK_MS+60_000,idleScreen,{ownTurn:new Set(['boss'])}).candidate.input.check,'hourly');
+const dg=changeDigest;
+// 지난 관찰AI 요청·보고 한 쌍을 원장 모양으로 만든다(observationDigest = 그때 화면의 changeDigest).
+const judged=(screen,verdict,atMs=0,{digest=dg(screen),id='r1'}={})=>[
+ {kind:'watch-ai-request',source:'supervisor-health',role:'boss',session:'kadan-boss',requestId:id,observationDigest:digest,t:new Date(epoch+atMs).toISOString()},
+ {kind:'watch-ai-report',source:'supervisor-health',role:'boss',requestId:id,verdict,accepted:true,t:new Date(epoch+atMs+1000).toISOString()},
+];
+const reuse=(ledger,screen,own=new Set())=>{
+ const f=health(),extra={ownTurn:own,entries:[...entries,...ledger]};
+ f.check(0,screen,extra); // 감시기 시작 순회: 상태가 생기고 정기 확인 시계가 시작한다
+ return f.check(SUPERVISOR_CHECK_MS,screen,extra);
+};
+const due=(ledger,screen,own)=>reuse(ledger,screen,own).candidate;
+
+test('같은 화면·직전 판정 정상·4시간 미만이면 정기 확인 후보가 없다',()=>{
+ for(const verdict of ['입력대기','실행완료']){
+  assert.equal(due(judged(idleScreen,verdict),idleScreen),undefined,verdict);
+ }
+ // 숫자만 바뀐 화면은 같은 화면이다(changeDigest의 한계).
+ assert.equal(due(judged('✻ Cogitated for 3m 44s\n❯ \n','입력대기'),'✻ Cogitated for 4m 10s\n❯ \n'),undefined);
 });
-test('본인 차례·알 수 없는 상태 줄·아래쪽 오류·본인 차례 모름이면 지금처럼 부른다',()=>{
- const due=(screen,ownTurn)=>{const f=health();f.check(0,screen,{ownTurn});return f.check(SUPERVISOR_CHECK_MS,screen,{ownTurn}).candidate;};
- assert.equal(due(idleScreen,new Set(['boss'])).role,'boss');
- assert.equal(due('✻ Cogitated for 3m 44s',new Set()).role,'boss');
- assert.equal(due('Reconnecting... 1/2\n❯ \n',new Set()).role,'boss');
- assert.equal(due(idleScreen,null).role,'boss');
- assert.equal(due(crafting('4m 0s'),new Set()).role,'boss');
+test('한 글자 바뀐 화면·정상이 아닌 직전 판정·4시간 경과·본인 차례·감독 오류·옛 요청은 후보가 난다',()=>{
+ const ok=judged(idleScreen,'입력대기');
+ assert.equal(due(ok,idleScreen.replace('Cogitated','Cogitatee')).input.check,'hourly');
+ for(const verdict of ['정체','모름','진행중','응답장애','조정'])assert.equal(due(judged(idleScreen,verdict),idleScreen).role,'boss',verdict);
+ assert.equal(due(judged(idleScreen,'입력대기',-SUPERVISOR_REUSE_MS+SUPERVISOR_CHECK_MS),idleScreen).role,'boss');
+ assert.equal(due(ok,idleScreen,new Set(['boss'])).role,'boss');
+ assert.equal(due(ok,idleScreen,null).role,'boss');
+ const errScreen='Reconnecting... 1/2\n❯ \n';
+ assert.equal(due(judged(errScreen,'입력대기'),errScreen,new Set()).role,'boss');
+ const old=judged(idleScreen,'입력대기');delete old[0].observationDigest;
+ assert.equal(due(old,idleScreen).role,'boss');
+ assert.equal(due([old[0]],idleScreen).role,'boss'); // 보고 없음
+ assert.equal(due([],idleScreen).role,'boss');
 });
-test('오류 지속 5분 경로는 정상 대기 거르기와 무관하게 그대로다',()=>{
- const err='Reconnecting... 1/2\n❯ \n',f=health(),own=new Set();
- f.check(0,err,{ownTurn:own});
- assert.equal(f.check(SUPERVISOR_ERROR_MS,err,{ownTurn:own}).candidate.input.check,'persistent-error');
+test('상한은 원장의 마지막 요청 시각 기준이라 새 SupervisorHealth(재시작)에서도 밀리지 않는다',()=>{
+ const ledger=judged(idleScreen,'입력대기');
+ for(let restart=0;restart<2;restart++)assert.equal(due(ledger,idleScreen),undefined,`restart ${restart}`);
+ const f=health(),extra={entries:[...entries,...ledger],ownTurn:new Set()};
+ f.check(0,idleScreen,extra);
+ assert.equal(f.check(SUPERVISOR_REUSE_MS-1,idleScreen,extra).candidate,undefined);
+ assert.equal(f.check(SUPERVISOR_REUSE_MS,idleScreen,extra).candidate.input.check,'hourly');
+ // 마지막 요청은 가장 최근 것만 본다: 더 새로운 요청이 정체 판정이면 옛 정상 요청은 쓰지 않는다.
+ const newer=judged(idleScreen,'정체',0,{id:'r2'});
+ assert.equal(due([...ledger,...newer],idleScreen).role,'boss');
+});
+test('1~2라운드 금지 표본은 같은 화면 재사용 경로에서도 직전 판정이 정상이 아니면 부르고 화면이 바뀌면 부른다',()=>{
+ const forbidden=['Your Claude session has expired. Sign in again to continue (claude auth login).\n\n❯ \n',
+  '✢ Compacting conversation… (12s · ↓ 0 tokens)\n\n❯ \n','하위 결과를 기다리는 중\n\n❯ \n','✻ Cogitated for 3m 44s · done 1:16 PM\n\n❯ 쓰던 글\n',
+  '질문: 어느 쪽으로 진행할까요? (y/n)\n\n❯ \n'];
+ for(const screen of forbidden){
+  for(const verdict of ['정체','모름','응답장애'])assert.equal(due(judged(screen,verdict),screen).role,'boss',`${verdict}: ${screen}`);
+  assert.equal(due(judged(idleScreen,'입력대기'),screen).role,'boss',`바뀐 화면: ${screen}`);
+ }
+});
+test('오류 지속 5분 경로는 같은 화면 재사용과 무관하게 그대로다',()=>{
+ const err='Reconnecting... 1/2\n❯ \n',f=health(),own=new Set(),ledger=[...entries,...judged(err,'입력대기')];
+ f.check(0,err,{ownTurn:own,entries:ledger});
+ assert.equal(f.check(SUPERVISOR_ERROR_MS,err,{ownTurn:own,entries:ledger}).candidate.input.check,'persistent-error');
 });
 test('놀고 있음 계산은 시간 기준 전에 본인 차례 역할을 ownTurn에 채우고 알림은 바꾸지 않는다',()=>{
  const own=new Set(),rows=[...starts,send];
@@ -219,20 +257,3 @@ test('감독 전용 오류(SSE·압축)가 빈 입력창 아래에 보이면 정
  }
 });
 
-import {readFileSync} from 'node:fs';
-import {isQuietScreen} from '../src/watch-status-line.mjs';
-const quietFixture=JSON.parse(readFileSync(new URL('./fixtures/quiet-screens.json',import.meta.url),'utf8'));
-test('정상 대기는 아는 끝난 턴 모양일 때만 — 로그인 만료·압축 중·모르는 화면은 부른다',()=>{
- for(const s of quietFixture.quiet)assert.equal(isQuietScreen(s),true,s);
- for(const s of quietFixture.notQuiet)assert.equal(isQuietScreen(s),false,s);
- for(const s of quietFixture.notQuiet){
-  const f=health(),own=new Set();f.check(0,s,{ownTurn:own});
-  const r=f.check(SUPERVISOR_CHECK_MS,s,{ownTurn:own});
-  assert.equal(r.candidate.input.check,'hourly',s);assert.equal(r.quietSkipped,0);
- }
-});
-test('정상 대기를 건너뛰는 것은 연속 3번까지 — 4시간째에는 한 번 부른다',()=>{
- const f=health(),own=new Set();f.check(0,idleScreen,{ownTurn:own});
- for(let h=1;h<=3;h++)assert.equal(f.check(h*SUPERVISOR_CHECK_MS,idleScreen,{ownTurn:own}).candidate,undefined,`${h}h`);
- assert.equal(f.check(4*SUPERVISOR_CHECK_MS,idleScreen,{ownTurn:own}).candidate.input.check,'hourly');
-});

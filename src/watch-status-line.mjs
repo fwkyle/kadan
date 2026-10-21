@@ -72,31 +72,6 @@ export function statusProgress(screen, previousClockSec) {
   return { status, moving };
 }
 
-// 감독 정기 확인을 거르는 '정상 대기' 화면 조건: 빈 입력창(idle) + 아래 12줄에 멈춤 낱말 없음 +
-// 입력창 바로 위(빈 줄·구분선 제외)가 실제 표본의 '끝난 턴' 줄이다. 낱말 목록으로 막지 않고 아는 모양만 통과시킨다 —
-// 로그인 만료·압축 중처럼 모르는 화면은 입력창만 비어 있어도 거르지 않고 부른다(PR #219 검수 F1·F2).
-// 표본: claude `✻ Cogitated for 3m 44s · done 1:16 PM`, codex `Worked for 1m 6s • 12:59 PM`.
-const FINISHED_CLOCK = String.raw`(?:\d+h\s+)?(?:\d+m\s+)?\d+s`;
-const FINISHED_TURN = [
-  new RegExp(String.raw`^\s*✻\s+\S+ for ${FINISHED_CLOCK}(?:\s+·\s+done\s+\d{1,2}:\d{2}\s*[AP]M)?\s*$`, "u"),
-  new RegExp(String.raw`^\s*Worked for ${FINISHED_CLOCK}\s+•\s+\d{1,2}:\d{2}\s*[AP]M\s*$`, "u"),
-];
-const RULE_OR_BLANK = /^[\s─━-]*$/u;
-
-function endsWithFinishedTurn(screen) {
-  const lines = bottomLines(screen);
-  const input = lines.findLastIndex((line) => CODEX_INPUT.test(line) || CLAUDE_INPUT.test(line));
-  for (let i = input - 1; i >= 0; i--) {
-    if (RULE_OR_BLANK.test(lines[i])) continue;
-    return FINISHED_TURN.some((shape) => shape.test(lines[i]));
-  }
-  return false;
-}
-
-export function isQuietScreen(screen, status = screen != null ? readStatusLine(screen) : null) {
-  return screen != null && status?.kind === "idle" && !anyStopWordInBottom(screen) && endsWithFinishedTurn(screen);
-}
-
 // 답을 기다리는 질문 우편이 그 발령 뒤에 있는가. 있으면 작업자는 정당하게 기다리는 중이다.
 export function hasOpenQuestion(entries, role, sinceIso) {
   const since = Date.parse(sinceIso);
