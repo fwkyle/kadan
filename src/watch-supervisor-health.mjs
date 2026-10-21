@@ -57,7 +57,7 @@ export class SupervisorHealth {
       const error = errorPattern.test(seen.screen.split('\n').slice(-20).join('\n'));
       if (!error) { state.errorSince=null;state.errorChecked=false; }
       else if (state.errorSince == null) state.errorSince=now;
-      // 직전 순회 대비 진행 중이면 정기 후보를 내지 않는다(작업자 감시와 같은 공용 판정). 5분 오류 후보는 진행 중이어도 낸다(감독 전용 오류는 작업자 거름망에 없어 묻히면 안 된다). 시계·화면은 후보 여부와 무관하게 매 순회 갱신한다.
+      // 감독 오류(errorPattern)가 보이는 화면에서는 진행 중 판정을 쓰지 않는다(early·hourly 모두 main과 같다). 오류가 없을 때만 직전 순회 대비 진행 중이면 정기 후보를 내지 않는다(작업자 감시와 같은 공용 판정). 시계·화면은 후보 여부와 무관하게 매 순회 갱신한다.
       const progress = statusProgress(seen.screen, state.workClock);
       const previousScreen = state.prevScreen, previousClockSec = state.workClock;
       state.workClock = progress.status?.kind === 'working' ? progress.status.clockSec : null;
@@ -66,7 +66,7 @@ export class SupervisorHealth {
       // 정상 대기(빈 입력창 + 오류 없음 + 본인 차례 없음)는 정기 확인 때 부르지 않는다. 애매하면(unknown·오류·본인 차례) 그대로 부른다.
       const quiet = !error && ownTurn != null && !ownTurn.has(role) && isQuietScreen(seen.screen, progress.status);
       if (quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS) quietSkipped++;
-      if (enabled && (early || !progress.moving && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
+      if (enabled && (early || (error || !progress.moving) && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
           ...observationContext(role,seen,mailEntries,cards,scope.entries),
           check:early?'persistent-error':'hourly',minutes:Math.floor((now-state.at)/60000),
