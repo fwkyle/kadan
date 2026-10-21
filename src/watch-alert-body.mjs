@@ -2,7 +2,7 @@
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { phraseAction } from "./watch-stop-phrases.mjs";
-import { idleCountsText } from "./watch-supervisor.mjs";
+import { idleCountsText, idleOwnText } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
 
 export function clockTime(at) {
@@ -87,7 +87,8 @@ export function formatAlertBody(alert) {
   if (alert.kind === "놀고 있음") {
     // 상위가 받는 건 2단이다: 본인에게 먼저 알렸는데도 그대로였다.
     const self = alert.stage === 2 ? `; ${Math.floor(alert.idleMinutes / 2)}분 전에 본인에게 알렸으나 그대로` : "";
-    return `놀고 있음 ${alert.session} (${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음${self})`;
+    const own = idleOwnText(alert);
+    return `놀고 있음 ${alert.session} (${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음${self})${own && ` — ${own}`}`;
   }
   if (alert.kind === "모름" && alert.screenError) {
     return `상태 확인 필요 ${alert.session} (화면 읽기 실패: ${alert.screenError})`;
