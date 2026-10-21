@@ -217,3 +217,43 @@ test('git 저장소가 아닌 경로는 다음 행동이 붙은 문구로 실패
   await assert.rejects(run(f, ['acquire', plain], {for: 'card-a'}),
     e => e.message.includes(`저장소 경로가 아닙니다: ${plain}`) && /저장소 이름을 주세요/.test(e.message));
 });
+
+test('옮겨진 repoPath의 빈 폴더가 다른 저장소 아래에 있어도 상위 저장소를 빌리지 않는다', async () => {
+  const f = fixture();
+  const former = path.join(f.repo, 'former'); fs.mkdirSync(former); // 옛 경로: 일반 폴더, 상위가 다른 저장소
+  register(f, 'moved-project', former);
+  await assert.rejects(run(f, ['acquire', 'moved-project'], {for: 'card-a'}), /찾지 못했습니다: moved-project/);
+  assert.equal(fs.existsSync(path.join(f.home, 'review-slots')), false);
+  assert.equal(fs.existsSync(path.join(f.base, 'app-review-slots')), false);
+});
+
+test('다른 저장소 안의 일반 폴더·하위 폴더 경로는 꼭대기 아님으로 실패한다', async () => {
+  const f = fixture();
+  const sub = path.join(f.repo, 'sub'); fs.mkdirSync(sub);
+  await assert.rejects(run(f, ['acquire', sub], {for: 'card-a'}),
+    e => e.message.includes(`저장소 꼭대기가 아닙니다: ${fs.realpathSync(sub)}`) && e.message.includes(`꼭대기: ${f.repo}`));
+  // 의도된 변화: `.`도 저장소 꼭대기가 아닌 하위 폴더에서 실행하면 이제 실패한다.
+  const before = process.cwd();
+  process.chdir(sub);
+  try { await assert.rejects(run(f, ['acquire', '.'], {for: 'card-a'}), /저장소 꼭대기가 아닙니다/); }
+  finally { process.chdir(before); }
+  assert.equal(fs.existsSync(path.join(f.home, 'review-slots')), false);
+});
+
+test('cwd 아래 같은 이름의 다른 저장소 폴더가 있어도 순수 이름은 카드 원장으로 해석한다', async () => {
+  const f = fixture();
+  register(f, 'app-name', f.repo);
+  const shadow = path.join(f.base, 'work', 'app-name'); fs.mkdirSync(shadow, {recursive: true});
+  git(shadow, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(shadow, 'x'), '1'); git(shadow, 'add', '.'); git(shadow, 'commit', '-q', '-m', 'x');
+  const before = process.cwd();
+  process.chdir(path.join(f.base, 'work'));
+  try {
+    assert.equal((await run(f, ['acquire', 'app-name'], {for: 'card-a'})).repo, f.repo);
+    // 원장에 없는 이름이면 cwd 폴더는 쓰지 않고 ./이름을 안내한다.
+    await assert.rejects(run(f, ['acquire', 'app-name2'], {for: 'card-b'}), e => !/\.\/app-name2/.test(e.message));
+    fs.mkdirSync(path.join(f.base, 'work', 'plain-dir'));
+    await assert.rejects(run(f, ['acquire', 'plain-dir'], {for: 'card-b'}), /경로로 쓰려면 \.\/plain-dir/);
+    assert.equal((await run(f, ['acquire', './app-name'], {for: 'card-c'})).repo, fs.realpathSync(shadow));
+  } finally { process.chdir(before); }
+});
