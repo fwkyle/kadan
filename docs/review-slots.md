@@ -10,11 +10,12 @@
 
 | 명령 | 하는 일 |
 |---|---|
-| `kadan slot acquire <저장소> --for <카드\|역할> [--ref <SHA\|브랜치>]` | 빈 자리를 빌린다. 처음 쓰는 자리는 이때 worktree를 만든다(분리된 HEAD). 요청한 커밋으로 옮기고 결과 JSON의 `path`가 자리 경로다. `--ref`가 없으면 원본 저장소의 HEAD |
+| `kadan slot acquire <저장소 경로|저장소 이름> --for <카드\|역할> [--ref <SHA\|브랜치>]` | 빈 자리를 빌린다. 처음 쓰는 자리는 이때 worktree를 만든다(분리된 HEAD). 요청한 커밋으로 옮기고 결과 JSON의 `path`가 자리 경로다. `--ref`가 없으면 원본 저장소의 HEAD |
 | `kadan slot deps <자리경로> [--cmd "<설치 명령>"]` | 잠금 파일이 그 자리의 마지막 설치 때와 다르거나 `node_modules`가 없을 때만 설치한다. 설치는 `kadan limit run install`과 같은 제한을 거친다 |
 | `kadan slot release <자리경로>` / `kadan slot release --for <카드\|역할>` | 자리를 돌려준다. `node_modules`는 남긴다(다시 쓰려고 만든 기능이다) |
-| `kadan slot status [<저장소>]` | 자리별 빌린 쪽·커밋·경과 분·회수 가능 여부 |
+| `kadan slot status [<저장소 경로|저장소 이름>]` | 자리별 빌린 쪽·커밋·경과 분·회수 가능 여부 |
 
+- **저장소 인자**: `/`·`.`·`~`로 시작하거나 `/`를 포함하거나 실제 디렉터리면 경로, 그 밖의 순수 이름이면 카드 원장(`card.repo` → `repoPath`)에서 찾는다. 이름은 고유한 원본 저장소 하나로 정해져야 하고, 못 찾거나 둘 이상이면 실패하며 경로를 달라고 안내한다. 원장은 읽기만 한다.
 - **자리 위치**: 원본 저장소 옆 `<저장소이름>-review-slots/slot-1…4`. worktree 경로를 줘도 원본 저장소의 자리 묶음을 쓴다.
 - **자리 수**: 저장소마다 기본 4. 임차 기록은 `$KADAN_HOME/review-slots/<저장소>/slot-N.lease.json`, 설치 기록은 같은 폴더의 `slot-N.meta.json`이다.
 - **모두 사용 중**: 기본은 기다린다(5초 간격, 최대 `--wait-timeout` 초, 기본 1800). 기다리는 동안 누가 쥐었는지 표준 오류에 알린다. `--no-wait`이면 빌린 쪽 정보와 함께 종료 코드 3으로 바로 실패한다.
@@ -22,13 +23,13 @@
 - **더러운 자리**: 커밋 안 된 변경·새 파일이 있는 자리는 다시 빌려주지 않는다. 검수자는 코드를 고치지 않으므로 변경이 생겼다면 확인해 치운 뒤 쓴다. 대상 저장소의 `.gitignore`에 `node_modules`가 없으면 설치 뒤 항상 더럽게 보인다.
 - **버려진 임차 회수**: 카단 역할(`KADAN_ROLE` 또는 `--role`)이 빌렸으면 그 역할 세션이 사라지거나 세션 PID가 바뀐 임차를, 역할 밖에서 빌렸으면 12시간이 지난 임차를 다음 사람이 회수한다. 회수했으면 결과의 `reclaimed`에 이유가 나온다.
 - **참조 가져오기**: `--ref`가 로컬에 없을 때만 `git fetch origin <ref>` 하나를 한다. 검수는 작업자 결과의 SHA를 `--ref`로 주는 것이 가장 정확하다.
-- 결과 JSON은 표준 출력, 대기·설치 출력은 표준 오류로 나온다: `kadan slot acquire <저장소> --for <카드> --ref <SHA> | jq -r .path`.
+- 결과 JSON은 표준 출력, 대기·설치 출력은 표준 오류로 나온다: `kadan slot acquire <저장소 경로|저장소 이름> --for <카드> --ref <SHA> | jq -r .path`.
 - 위치 인자(저장소·자리 경로)를 옵션보다 앞에 둔다.
 
 ### 검수 흐름
 
 ```bash
-kadan slot acquire <저장소> --for <카드id> --ref <검수할 SHA>   # path 확인
+kadan slot acquire <저장소 경로|저장소 이름> --for <카드id> --ref <검수할 SHA>   # path 확인
 kadan slot deps <자리경로>                                      # 필요할 때만 설치
 # … 검수 (코드 수정 금지) …
 kadan slot release <자리경로>
