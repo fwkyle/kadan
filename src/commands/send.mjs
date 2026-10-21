@@ -39,7 +39,7 @@ export function cmdDispatch(argv, flags) {
 function usage(command) {
   if (command === 'mail') {
     return '사용법: kadan mail <역할> [--work <업무키>] [--execution <실행키>] ' +
-      '[--mailbox] [--expect-reply] [--reply-to <우편ID>] [--reply-final] [--raw] <메시지...> ' +
+      '[--expect-reply] [--reply-to <우편ID>] [--reply-final] [--raw] <메시지...> ' +
       '(메시지 생략 시 표준 입력). 우편 전용이며 --task는 금지, --execution으로 발령하지 않습니다.';
   }
   if (command === 'dispatch') {
@@ -48,7 +48,7 @@ function usage(command) {
       '(지시 생략 시 표준 입력). 카드 발령 전용이며 질문·답장·저장 우편은 mail을 사용하세요.';
   }
   return '사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] ' +
-    '[--execution <실행키>] [--allow-old-runner <이유>] [--raw] [--mailbox] ' +
+    '[--execution <실행키>] [--allow-old-runner <이유>] [--raw] ' +
     '[--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). ' +
     '기존 호환 명령입니다. --execution도 조건에 따라 발령으로 추론합니다. ' +
     '새 우편은 mail, 명시 발령은 dispatch --task를 사용하세요.';
@@ -73,16 +73,17 @@ function deliverMessage(argv, flags, command) {
       throw new Error('dispatch는 질문·답장을 받지 않습니다. mail을 사용하세요');
     }
   }
-  if((role==='비서'||flags.mailbox)&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
+  const storeOnly=isStoreOnlyRecipient(role);
+  if(storeOnly&&flags.task)throw new Error('저장 우편은 작업 발령이 아닙니다. --task를 사용하지 마세요');
+  const flagWarning=mailboxFlagWarning(role,flags);
+  if(flagWarning)console.error(flagWarning);
   const argText = argv.slice(1).join(" ");
   const input = argText || fs.readFileSync(0, "utf8");
   const message = flags.raw || argText ? input : input.replace(/\n+$/, "");
   if (!message) die("보낼 메시지가 비어 있다");
-  if(role==='비서'||flags.mailbox===true){
+  if(storeOnly){
     if (flags.raw) throw new Error('저장 우편함은 --raw 대상이 아닙니다. 원문은 항상 보존됩니다');
     const by=resolveLedgerBy({env:process.env});
-    const liveWarning=storedMailLiveWarning(role,flags);
-    if(liveWarning)console.error(liveWarning);
     const receipt=new Mailbox(ledgerHome(),role).send({
       by,message,category:flags['mail-kind']||'report',replyTo:flags['reply-to'],workKey:flags.work,
       executionKey:flags.execution,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true
@@ -110,9 +111,15 @@ function deliverMessage(argv, flags, command) {
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
     const by = resolveLedgerBy({env:process.env});
     const entries = readLedger();
+    // 바로 넣을 수 없어 보관할 수 있는 우편: 발령(--task)·--raw는 보관하지 않는다.
+    const storable = taskId == null && flags.raw !== true;
+    // 슈퍼 간 우편만 감시기 알림과 같은 입력 보호를 붙인다(2026-10-13 [kyle]). 보관·실패 규칙은 모든 우편이 같다.
+    // herdr에서는 이 보호(대기 화면 30초 안정, 응답 중 거부)가 일반 우편(응답 중에도 입력 대기열에 넣음)보다 엄격하다.
+    // 모두에게 붙이면 응답 중인 수신자 앞 즉시 전달이 사라져 '바로 넣기 vs 저장 우선'(kyle 미결정)을 바꾸므로 붙이지 않았다.
     const peer = taskId == null && isPeerSuperMail(entries, readActiveHierarchy(entries), by, recipient);
     if (peer && flags.raw) throw new Error('슈퍼 간 우편은 입력 보호를 거쳐 전달하거나 보관해 안전하게 알립니다. --raw 없이 보내세요');
-    const peerStore = () => {
+    const store = reason => {
+      console.error(`바로 넣지 못해 보관했습니다: ${reason}`);
       const stored = new Mailbox(ledgerHome(), recipient).send({
         by, message, category:flags['mail-kind'] || 'report', ...mailContext,
       });
@@ -120,12 +127,20 @@ function deliverMessage(argv, flags, command) {
         note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
     };
     const expectedPid=recordedPid(lastStartFor(session));
-    // 슈퍼 간 우편도 바로 넣되 감시기와 같은 입력 보호를 붙인다(2026-10-13 [kyle]). 시작 기록이 없거나
-    // 세션이 없거나 보호에 걸리면 넣지 않고 지금처럼 보관해 감시기에 맡긴다.
-    if (peer && !expectedPid) return peerStore();
-    if (recipient!==role && !expectedPid) {
-      const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
-      error.delivery='not-sent';throw error;
+    // 슈퍼 간 우편은 시작 PID를 확인하지 못하면 세션이 살아 있어도 보관한다(main과 같은 경계, 2026-10-21 검수 F1).
+    // 같은 이름이지만 원장과 연결되지 않은 프로세스로 바로 넣지 않으려는 것이다. 일반 우편은 아래처럼 경고 후 PID 대조 없이 전송한다.
+    // 일반 우편까지 보관하면 카단이 띄우지 않은 세션으로 보내던 길이 막혀 이번 범위 밖이다.
+    if (!expectedPid) {
+      if (peer) return store(`시작 PID 기록 없음: ${session}`);
+      if (recipient!==role) {
+        const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
+        error.delivery='not-sent';throw error;
+      }
+      // 시작 기록이 없고 세션도 없으면: 아는 역할은 보관하고, 모르는 역할(오타)은 조용히 저장하지 않고 실패한다.
+      if (storable && !sessionAlive(session)) {
+        if (isKnownRole(entries, readActiveHierarchy(entries), role)) return store(`세션 없음: ${session}`);
+        throw new Error(`알 수 없는 역할: ${role} — 시작 기록도 책임 관계도 없습니다. 역할 이름을 확인하세요`);
+      }
     }
     try {
       receipt = guardedSend({
@@ -142,13 +157,9 @@ function deliverMessage(argv, flags, command) {
         ...(peer ? {notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}} : {}),
       });
     } catch (error) {
-      // 붙여넣기 전에 멈춘 실패(입력 보호·세션 없음·PID 변경 등 delivery=not-sent)만 보관으로 돌린다.
-      // 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해 그대로 실패다.
-      if (peer && error.delivery === 'not-sent' && error.code !== 'KADAN_MAIL_RECIPIENT_CHANGED') return peerStore();
-      // 슈퍼 간이 아닌 일반 우편도 사람 입력·복사 모드 보류만 보관한다(종료 0). 보낸 AI가 --mailbox로 우회해
-      // 알림이 묻히는 것을 막고, 저장 전용 우편은 감시기가 다음 순회에 알린다. 세션 없음·PID 변경·발령·--raw·sent/unknown은 그대로 실패다.
-      if (!peer && command === 'mail' && taskId == null && flags.raw !== true
-        && isStorableMailHold(error)) return peerStore();
+      // 붙여넣기 전에 멈춘 실패(입력 보호 보류·세션 없음·PID 변경)는 보관으로 돌린다(종료 0).
+      // 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해, 수신자 변경·역할 지침 오류·발령·--raw는 보관할 수 없어 그대로 실패다.
+      if (storable && isStorableMailHold(error)) return store(error.message);
       throw error;
     }
   } catch (error) {
@@ -170,13 +181,25 @@ function deliverMessage(argv, flags, command) {
   }
 }
 
-// --mailbox는 받는 세션이 없을 때만 쓴다(지침). 세션이 살아 있는데 붙이면(세션 존재만 본다. 전달 성공은 보장하지 않는다) 화면에 바로 안 가고 감시기 알림만 기다린다
-// (2026-10-20 retire_ooo 감독→감독 우편 두 통). 경고만 하고 저장은 그대로 한다(종료 0). 비서·사람 수신과 세션 조회 실패는 조용히 넘긴다.
-export function storedMailLiveWarning(role, flags, alive = session => floor.alive(session)) {
-  if (flags.mailbox !== true || role === '비서' || isUserActor(role)) return null;
-  let live = false;
-  try { live = alive(sessionName(role)) === true; } catch { return null; }
-  return live ? `경고: ${role} 세션이 살아 있습니다. --mailbox 없이 보내면 바로 전달을 시도합니다. 이 우편은 저장만 되고 감시기가 다음 순회에 알립니다.` : null;
+// 비서와 사람 앞 우편은 지금처럼 저장 전용이다(받는 세션이 없다).
+export const isStoreOnlyRecipient = role => role === '비서' || isUserActor(role);
+
+// 예전 --mailbox(보내는 쪽이 고르는 저장)는 더 이상 쓰지 않는다. 거절하면 옛 지침을 가진 에이전트의 보내기가 깨지므로
+// 받되 무시하고 알린다: 바로 넣기를 시도하고, 막히면 자동으로 보관한다. 비서·사람 앞은 원래 저장 전용이라 알리지 않는다.
+export function mailboxFlagWarning(role, flags) {
+  if (flags.mailbox === undefined || isStoreOnlyRecipient(role)) return null;
+  return '--mailbox는 더 이상 쓰지 않습니다 — 바로 넣기를 시도하고, 막히면 자동으로 보관합니다';
+}
+
+// 시작 기록이 한 번이라도 있거나 활성 책임 관계(계층표)에 있는 역할만 아는 역할이다. 오타를 조용히 저장하지 않으려는 구분.
+export function isKnownRole(entries, hierarchy, role) {
+  const session = sessionName(role);
+  if (entries.some(e => ['start', 'stop'].includes(e.kind) && (e.session === session || e.role === role))) return true;
+  return hierarchy != null && (Object.hasOwn(hierarchy, role) || Object.values(hierarchy).includes(role));
+}
+
+function sessionAlive(session) {
+  try { return floor.alive(session) === true; } catch { return false; }
 }
 
 // 완료 통지를 보낸 작업자가 화면 DONE을 빠뜨리는 일이 잦다(2026-09-23 밤 작업자 10명 중 5명, 2026-09-24 kimi 검수자).

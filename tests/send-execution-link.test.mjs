@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
-import {readLedger,readTaskLedger} from '../src/ledger.mjs';
+import {appendLedger,readLedger,readTaskLedger} from '../src/ledger.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {inferDispatchTask,resolveWorkMail} from '../src/work-mail.mjs';
@@ -81,7 +81,8 @@ test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 
   assert.equal(sends().length,count);
   // 회귀: 답장(--reply-to)과 다른 담당 실행 연결은 taskId를 만들지 않는다
   // 답장은 원본 발신자에게만 간다 — p-worker가 보낸 우편에 사람이 p-worker로 답장하는 형태로 맞춘다
-  const outbound=spawnSync(process.execPath,[cli,'send','q-worker','--mailbox','--execution',mine.key,'p-worker가 보낸 질문'],{env:{...env,KADAN_ROLE:'p-worker'},cwd:home,encoding:'utf8',timeout:10000});
+  appendLedger({kind:'start',role:'q-worker',session:'kadan-q-worker',panePid:'4242'},home);
+  const outbound=spawnSync(process.execPath,[cli,'send','q-worker','--execution',mine.key,'p-worker가 보낸 질문'],{env:{...env,KADAN_ROLE:'p-worker'},cwd:home,encoding:'utf8',timeout:10000});
   assert.equal(outbound.status,0,outbound.stderr);
   const outboundMail=readLedger(home).filter(e=>e.kind==='send').at(-1);
   run('send','p-worker','--reply-to',outboundMail.mailId,'--execution',mine.key,'첫 편지에 대한 답장');

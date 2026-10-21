@@ -45,8 +45,11 @@ test('격리 실제 tmux: 정상 CLI·복사모드·사용자 미제출 입력·
    const selection=()=>tmux(['display-message','-p','-t',target,'#{selection_present}|#{scroll_position}|#{copy_cursor_x}|#{copy_cursor_y}']);
    const beforeSelection=selection();
    const count=readLedger(home).filter(e=>e.kind==='send').length;
-   sent=command('send',role,'BLOCKED');assert.notEqual(sent.status,0);assert.match(sent.stderr,/전송 보류: 기록보기/);
-   assert.equal(mode(),'1');assert.equal(contents(),expectedReceived);assert.equal(readLedger(home).filter(e=>e.kind==='send').length,count);
+   // 복사 모드면 창에는 넣지 않고 보관한다(2026-10-21 우편 단순화: 막힌 우편은 아는 역할에 자동 보관, 종료 0).
+   sent=command('send',role,'BLOCKED');assert.equal(sent.status,0,sent.stderr);assert.match(sent.stderr,/전송 보류: 기록보기/);
+   assert.equal(JSON.parse(sent.stdout).status,'stored');
+   assert.equal(mode(),'1');assert.equal(contents(),expectedReceived);
+   const stored=readLedger(home).filter(e=>e.kind==='send');assert.equal(stored.length,count+1);assert.equal(stored.at(-1).transport,'mailbox');
    assert.equal(selection(),beforeSelection,'선택·스크롤 위치 보존');
    tmux(['send-keys','-t',target,'-X','cancel']); // 시험자가 설정한 모드만 시험자가 해제. 제품 send는 해제하지 않는다.
   }
