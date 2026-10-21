@@ -156,3 +156,11 @@ test('오류 낱말이 아래에 있으면 시계가 늘어도 persistent-error 
  const c=f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate;
  assert.equal(c.input.check,'persistent-error');
 });
+test('감독 전용 오류(SSE·압축)는 시계가 늘어도 5분 지속되면 persistent-error 후보가 난다',()=>{
+ for(const line of ['Error running remote compact task: idle timeout waiting for SSE','idle timeout waiting for SSE','Error running remote compact task']){
+  const err=clock=>`${line}\n✢ Crafting… (${clock} · ↓ 1k tokens)\n❯ \n`;
+  const f=health();f.check(0,err('1m 0s'));
+  assert.equal(f.check(SUPERVISOR_ERROR_MS-60_000,err('5m 0s')).candidate,undefined);
+  assert.equal(f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate.input.check,'persistent-error');
+ }
+});
