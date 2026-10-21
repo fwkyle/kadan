@@ -29,8 +29,8 @@ test('5분 유예 뒤 역할별 묶음 한 번, 재시작 뒤 중복 없음',()=
   const f=fixture([question('q'),question('other')]);
   f.now=299999;f.tick();assert.equal(f.sent.length,0);
   f.now=300000;f.tick();assert.equal(f.sent.length,1);
-  assert.equal(f.sent[0][2],1);assert.match(f.sent[0][1],/2건/);
-  assert(f.sent[0][1].length<300);
+  assert.equal(f.sent[0][2],1);assert.match(f.sent[0][1],/^미확인 우편 2건\n보낸이: boss\n받는이: worker\n/);
+  assert(f.sent[0][1].length<1000);
   assert.equal(f.records.filter(e=>e.action==='reserved').length,2);
   f.tick();assert.equal(f.sent.length,1);
 });

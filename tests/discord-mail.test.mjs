@@ -147,8 +147,8 @@ test('5 비서 세션이 없어도 저장·cursor 진행, 재안내 경로(MailW
     assert.equal(run({before: [start], live}, mailAt).sent.length, 1, '디코 우편은 유예 0 — 같은 순간에 재안내');
     assert.equal(sent.length, 1);
     assert.equal(sent[0][0], '비서');
-    assert.match(sent[0][1], /\[미확인 우편\] 건수 1건/);
-    assert.match(sent[0][1], /kadan inbox --role '비서' --unread/);
+    assert.match(sent[0][1], /^미확인 우편 1건\n보낸이: 디코\n받는이: 비서\n/);
+    assert.match(sent[0][1], /확인: kadan inbox read \S+ --role '비서'\n읽음 기록: kadan inbox ack \S+ --role '비서'/);
     // 사람이 입력 중이면 붙여넣기 전에 보류한다(입력 보호)
     const held = run({before: [start], live, hold: () => ({code: 'human-input', message: '사람 입력 중'})}, mailAt);
     assert.equal(held.sent.length, 0);

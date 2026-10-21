@@ -29,10 +29,9 @@ import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { HUMAN_IDLE_MS } from "../notification-guard.mjs";
 import { NotifyHoldTracker } from "../watch-notify-hold.mjs";
-import { labeledNotice } from "../watch-notice-format.mjs";
+import { WATCH_ALERT_FOOTER } from "../watch-notice-format.mjs";
 
-// 해소 우편이 없으므로(2026-10-05 [kyle]) 경보를 받은 감독은 행동 전에 지금 상태를 스스로 확인한다.
-export const WATCH_ALERT_FOOTER='행동 전 지금 상태를 확인하라(감독 템플릿의 현황 확인 절차). 풀렸으면 따로 알리지 않는다.';
+export { WATCH_ALERT_FOOTER };
 // 입력 보호로 밀린 횟수는 tracker가 받는 창 단위로 센다. 5번 연속이면 guardFor가 입력 보호만 뺀다.
 function guardedWatchSend(tracker,args,role,guard) {
   const {send,...rest}=args;
@@ -57,7 +56,7 @@ export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=las
   // 감시 경보 우편은 기록용이다: 경보는 상태 변화로 닫히지 수신자 ack로 닫히지 않으므로 읽음 확인 안내를 붙이지 않고
   // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기). 해소 우편도 없으므로 받는 쪽이 행동 전에
   // 지금 상태를 확인한다(감독 템플릿의 현황 확인 절차).
-  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:labeledNotice({role,content:message,todo:WATCH_ALERT_FOOTER}),
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:/^할 일:/mu.test(message)?message:`${message}\n할 일: ${WATCH_ALERT_FOOTER}`,
     source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,omitInstructions:true},role,{humanIdleMs:HUMAN_IDLE_MS});
 }
 
@@ -74,7 +73,7 @@ export function sendWatchMailReminder(role,message,expectedPid,{
     error.delivery='not-sent';
     throw error;
   }
-  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:labeledNotice({role,content:message}),source:'watch',recordedPid:expectedPid,
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,
     notificationOnly:true,omitInstructions:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 
@@ -82,7 +81,7 @@ export function sendWatchMailReminder(role,message,expectedPid,{
 // 사용자가 슈퍼감독과 직접 대화하는 창에 반쯤 쓴 문장 뒤에 붙지 않게 한다(2026-10-05). 읽음 재알림도 만들지 않는다.
 export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
   const session=sessionName(role);
-  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:labeledNotice({role,content:message}),source:'watch',
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message,source:'watch',
     recordedPid:recordedPid(readStart(session)),notificationOnly:true,omitInstructions:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 

@@ -7,7 +7,6 @@ import os from 'node:os';
 import path from 'node:path';
 import {guardedSend} from '../src/cli.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
-import {labeledNotice} from '../src/watch-notice-format.mjs';
 import {sendWatchMessage, sendWatchNudge, sendWatchMailReminder, WATCH_ALERT_FOOTER} from '../src/commands/watch.mjs';
 
 const ROLE = 'kadan-시험판-감독', SESSION = `kadan-${ROLE}`;
@@ -25,21 +24,16 @@ function fixture() {
   const base = {floor, session: SESSION, role: ROLE, recordedPid: '100', env: {KADAN_HOME: h},
     readEntries: () => readLedger(h), record: e => appendLedger(e, h), saveBody: () => {}};
   const mail = (extra = {}) => guardedSend({...base, message: '본문', roleProfile: 'conductor', ...extra});
-  const notice = (extra = {}) => guardedSend({...base, message: labeledNotice({role: ROLE, content: '알림'}), source: 'watch',
+  const notice = (extra = {}) => guardedSend({...base, message: '알림 본문', source: 'watch',
     notificationOnly: true, omitInstructions: true, ...extra});
   return {h, state, mail, notice};
 }
-
-test('labeledNotice: 보낸이·받는이·내용·할 일 이름이 붙는다', () => {
-  assert.equal(labeledNotice({role: 'a', content: '본문', todo: '확인'}), '보낸이: 감시기(watch)\n받는이: a\n내용: 본문\n할 일: 확인');
-  assert.equal(labeledNotice({role: 'a', content: '본문'}), '보낸이: 감시기(watch)\n받는이: a\n내용: 본문');
-});
 
 test('omitInstructions: 본문에 역할 지침이 없고 원장에 지침 기록(instructions)이 남지 않는다', () => {
   const t = fixture();
   const entry = t.notice();
   assert.ok(!t.state.messages[0].includes(MARK));
-  assert.match(t.state.messages[0], /^보낸이: 감시기\(watch\)\n받는이: kadan-시험판-감독\n내용: 알림/);
+  assert.equal(t.state.messages[0], '알림 본문');
   assert.equal(entry.instructions, undefined);
   assert.equal(entry.roleInstructions.status, 'not-applied');
   assert.equal(entry.roleInstructions.reason, 'watch-notice');
@@ -75,19 +69,23 @@ test('알림 전달이 실패해도 send-failed(전문 시도)를 남기지 않�
   }
 });
 
-test('감시기 세 전송 길(경보·놀고 있음 본인 알림·미확인 우편)은 지침을 빼고 항목 이름 본문을 만든다', () => {
+test('감시기 세 전송 길(경보·놀고 있음 본인 알림·미확인 우편)은 지침을 빼고 감시기 보낸이 줄을 붙이지 않는다', () => {
   const calls = [];
   const send = args => { calls.push(args); return {}; };
   const start = () => ({role: ROLE, session: SESSION, panePid: '100'});
   const opts = {send, readStart: start, selectedFloor: {}};
   sendWatchMessage(ROLE, '[watch 12:00] 화면이 멈춤 x', opts);
   sendWatchNudge(ROLE, '[watch 12:00] 놀고 있음 x', opts);
-  sendWatchMailReminder(ROLE, '[미확인 우편] 건수 1건', '100', opts);
+  sendWatchMailReminder(ROLE, '미확인 우편 1건', '100', opts);
   assert.equal(calls.length, 3);
   for (const c of calls) {
     assert.equal(c.omitInstructions, true);
     assert.equal(c.notificationOnly, true);
-    assert.match(c.message, /^보낸이: 감시기\(watch\)\n받는이: kadan-시험판-감독\n내용: /);
+    assert.doesNotMatch(c.message, /보낸이: 감시기/);
   }
-  assert.ok(calls[0].message.endsWith(`\n할 일: ${WATCH_ALERT_FOOTER}`));
+  // 이미 할 일 줄이 있으면 덧붙이지 않고, 없으면 경보 안내 한 줄을 덧붙인다.
+  assert.equal(calls[0].message, `[watch 12:00] 화면이 멈춤 x\n할 일: ${WATCH_ALERT_FOOTER}`);
+  assert.equal(calls[1].message, '[watch 12:00] 놀고 있음 x');
+  sendWatchMessage(ROLE, '[watch 12:00] 요약\n할 일: 직접', opts);
+  assert.equal(calls[3].message, '[watch 12:00] 요약\n할 일: 직접');
 });
