@@ -544,7 +544,8 @@ export async function runWatch({
       idleMs,
       ledgerError,
       parents,
-      { works, cards: cards ?? [], waits, peerEntries: observationError ? [] : mailEntries, ownTurn }
+      { works, cards: cards ?? [], waits, peerEntries: observationError ? [] : mailEntries, ownTurn,
+        executionEntries: observationError || !cards ? null : entries, liveRoleSessions: observationError ? null : roles.liveSessions }
     );
     const supervisorCheck=supervisorScope&&!observationError
       ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,mailEntries,cards,now:cycleAt,enabled:Boolean(judgeCmd),

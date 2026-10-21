@@ -89,8 +89,13 @@ test('작업자가 다 끝냈는데 감독이 다음 발령을 안 하면 열린
   assert.match(nudges[0][2],/본인 차례 1건/);
   assert.deepEqual(sent.filter(([,,m])=>m.includes('놀고 있음')).map(([m,r])=>[m,r]),[[30,'p-슈퍼감독']]);
   // 진행 중 실행(assigned)이 있으면 그 워크는 할 일이 아니다. 감독이 10분에 움직이면 아무것도 없다.
-  const busy=await simulate({minutes:40,...base,cards:[card]});
-  assert.deepEqual(busy.nudges,[],'실행이 진행 중이면 워크는 할 일이 아니다');
+  // 원장에 done이 이미 있는데 카드만 assigned로 남은 실행은 진행 중이 아니다(2026-10-22 절전 중단 사고) — 그 모양은 base와 같아 워크가 할 일이다.
+  const stale=await simulate({minutes:40,...base,cards:[card]});
+  assert.deepEqual(stale.nudges.map(([m,r])=>[m,r]),[[15,'p-감독']],'done 뒤에도 assigned로 남은 카드가 업무를 붙잡지 않는다');
+  assert.match(stale.nudges[0][2],/work:repo\/w1/);
+  // done이 없고 담당이 살아 있는 진행 중 실행: 워크는 할 일이 아니다(안 끝난 카드 t1만 남는다).
+  const busy=await simulate({minutes:40,...base,cards:[card],entries:base.entries.slice(0,1)});
+  assert.ok(busy.nudges.every(([,,m])=>!m.includes('work:repo/w1')),'실행이 진행 중이면 워크는 할 일이 아니다');
   const moved=await simulate({minutes:40,...base,read:(s,m)=>s==='kadan-p-감독'&&m>=10?'moved '+lt(Math.floor(m/10)):'frozen screen'});
   assert.deepEqual(moved.nudges.filter(([,r])=>r==='p-감독'),[]);
 });
