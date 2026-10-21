@@ -21,10 +21,19 @@ function assertProcessGone(pid){
  // /proc이 있으면(Linux·CI) 그것을, 없으면(macOS) ps stat을 본다. ps가 비어 있으면 그 사이에 사라진 것이다.
  let state=null,how='/proc';
  try{state=fs.readFileSync(`/proc/${pid}/stat`,'utf8').replace(/^.*\) /s,'')[0];}catch{
-  how='ps';const out=(spawnSync('ps',['-o','stat=','-p',String(pid)],{encoding:'utf8',timeout:3000}).stdout||'').trim();
-  if(!out)return;state=out[0];
+  how='ps';const verdict=psGone(spawnSync('ps',['-o','stat=','-p',String(pid)],{encoding:'utf8',timeout:3000}));
+  if(verdict==='gone')return;state=verdict==='zombie'?'Z':verdict.alive;
  }
  assert.equal(state,'Z',`프로세스 ${pid}가 아직 살아 있다(${how} stat=${state})`);
+}
+// ps 결과(spawnSync 반환값) 판정: 'gone'(없음)|'zombie'|{alive:stat}. 조회 실패(실행 불가·시간 초과·알 수 없는 조합)는
+// '종료'로 통과시키지 않고 시험 전제 실패로 던진다(빈 출력이라고 사라진 것이 아니다).
+function psGone(r){
+ const out=(r.stdout||'').trim();
+ if(r.error||r.signal)throw new assert.AssertionError({message:`시험 전제 실패: ps 조회 실패(${r.error?.code||r.error?.message||`signal ${r.signal}`})`});
+ if(r.status===1&&!out)return 'gone';
+ if(r.status===0&&out)return out[0]==='Z'?'zombie':{alive:out};
+ throw new assert.AssertionError({message:`시험 전제 실패: ps 조회 결과를 해석할 수 없다(status ${r.status}, stdout ${JSON.stringify(out)})`});
 }
 const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],['p-슈퍼감독','@user']]);
 function fixture({sqlite=true}={}) {
@@ -287,6 +296,18 @@ test('assertProcessGone은 좀비 PID를 종료로 본다(macOS /proc 없음·Li
 test('assertProcessGone은 살아 있는 PID를 실패로 판정한다',()=>{
  const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
  try{assert.throws(()=>assertProcessGone(child.pid),/아직 살아 있다/);}finally{child.kill('SIGKILL');}
+});
+test('psGone은 ps 조회 실패를 종료로 통과시키지 않고 시험 전제 실패로 던진다',()=>{
+ for(const r of [
+  {error:Object.assign(new Error('spawnSync ps ENOENT'),{code:'ENOENT'}),status:null,stdout:''},
+  {error:Object.assign(new Error('spawnSync ps ETIMEDOUT'),{code:'ETIMEDOUT'}),signal:'SIGTERM',status:null,stdout:''},
+  {status:2,stdout:''},
+  {status:0,stdout:''},
+  {status:1,stdout:'S\n'},
+ ])assert.throws(()=>psGone(r),/시험 전제 실패: ps 조회/);
+ assert.equal(psGone({status:1,stdout:''}),'gone');
+ assert.equal(psGone({status:0,stdout:'Z+\n'}),'zombie');
+ assert.deepEqual(psGone({status:0,stdout:'S\n'}),{alive:'S'});
 });
 test('assertProcessGone은 사라진 PID를 종료로 본다',()=>{
  const r=spawnSync('sh',['-c',':']);
