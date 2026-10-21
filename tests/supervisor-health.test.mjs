@@ -161,6 +161,12 @@ test('감독 전용 오류(SSE·압축)는 시계가 늘어도 5분 지속되면
   const err=clock=>`${line}\n✢ Crafting… (${clock} · ↓ 1k tokens)\n❯ \n`;
   const f=health();f.check(0,err('1m 0s'));
   assert.equal(f.check(SUPERVISOR_ERROR_MS-60_000,err('5m 0s')).candidate,undefined);
-  assert.equal(f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate.input.check,'persistent-error');
+  const first=f.check(SUPERVISOR_ERROR_MS,err('6m 0s')).candidate;
+  assert.equal(first.input.check,'persistent-error');
+  // 확인을 시작한 뒤에도 오류+시계 증가면 진행 중 제외를 쓰지 않아 정기 후보가 난다(main과 같다).
+  f.h.started(first.session,err('6m 0s'),epoch+SUPERVISOR_ERROR_MS);
+  const hourly=SUPERVISOR_ERROR_MS+SUPERVISOR_CHECK_MS;
+  for(let at=SUPERVISOR_ERROR_MS+60_000;at<hourly;at+=60_000)assert.equal(f.check(at,err(`${at}s`)).candidate,undefined);
+  assert.equal(f.check(hourly,err(`${hourly}s`)).candidate.input.check,'hourly');
  }
 });
