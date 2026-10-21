@@ -523,8 +523,33 @@ export async function runWatch({
         enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session))});
       if(progress) invokeAI(progress);
     }
+    // 답을 기다리는 일(2026-10-05 [kyle]): 사용자 결정을 기다리는 카드는 모두에게, 감독이 상위에게 물은 질문 우편(답 대기)이
+    // 걸린 카드·워크는 묻는 쪽에게 할 일이 아니다. 답할 쪽에게는 그대로 할 일이다. 감독을 통째로 빼지 않는다 — 다른 일은 그대로 판정한다.
+    // 목록을 못 읽으면 아무것도 빼지 않는다(판정을 숨기지 않는다).
+    let waits = [];
+    try {
+      const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
+      const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
+      const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
+      for (const d of readDecisions() ?? []) if (d?.status === "open" && typeof d.card === "string") waits.push(item(d.card, null, d.work ?? null, "@user"));
+      for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
+        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
+    } catch { waits = []; }
+    // 놀고 있음 계산을 감독 정기 확인보다 먼저 한다: 같은 순회의 본인 차례(ownTurn)를 정기 확인이 그대로 재사용한다(원장을 다시 읽지 않는다).
+    const ownTurn=new Set();
+    const idleAssessment=assessSupervisorIdle(
+      scope?.entries ?? entries,
+      new Map([...roleStates, ...supervisorStates]),
+      cycleAt,
+      idleMs,
+      ledgerError,
+      parents,
+      { works, cards: cards ?? [], waits, peerEntries: observationError ? [] : mailEntries, ownTurn }
+    );
     const supervisorCheck=supervisorScope&&!observationError
-      ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,mailEntries,cards,now:cycleAt,enabled:Boolean(judgeCmd)})
+      ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,mailEntries,cards,now:cycleAt,enabled:Boolean(judgeCmd),
+          // 원장·카드를 못 읽었으면 본인 차례를 모르는 것이라 거르지 않는다.
+          ownTurn:ledgerError||cardError||!cards?null:ownTurn})
       : {candidate:null,alerts:[]};
     if(supervisorCheck.candidate)invokeAI(supervisorCheck.candidate);
     if(cardError) reportAlerts=[{id:'cards:unreadable',kind:'모름',level:'AMBER',screenError:'감시 대상 카드 읽기 실패'}];
@@ -575,18 +600,6 @@ export async function runWatch({
     lap('ai');
     const roleAlerts=judgeCmd?stallAlerts.filter(a=>!a.id.startsWith('stall:')):stallAlerts;
     const stallSessions=new Set(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>a.session));
-    // 답을 기다리는 일(2026-10-05 [kyle]): 사용자 결정을 기다리는 카드는 모두에게, 감독이 상위에게 물은 질문 우편(답 대기)이
-    // 걸린 카드·워크는 묻는 쪽에게 할 일이 아니다. 답할 쪽에게는 그대로 할 일이다. 감독을 통째로 빼지 않는다 — 다른 일은 그대로 판정한다.
-    // 목록을 못 읽으면 아무것도 빼지 않는다(판정을 숨기지 않는다).
-    let waits = [];
-    try {
-      const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
-      const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
-      const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
-      for (const d of readDecisions() ?? []) if (d?.status === "open" && typeof d.card === "string") waits.push(item(d.card, null, d.work ?? null, "@user"));
-      for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
-        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
-    } catch { waits = []; }
     // 한도 경보의 새로고침(ocx-refresh.mjs). 호출 여부는 경보를 보낼지와 따로 판단한다.
     // 새 경보: 처음 생길 때 부르고 결과를 경보 본문에 붙인다.
     // 복원된 활성 경보(감시기 재시작): 화면에 한도 줄이 그대로면 경보는 첫 순회에 해소로 닫히고 다시 뜨지 않는다. 그래서 경보가 닫히기 전에
@@ -639,15 +652,7 @@ export async function runWatch({
       ...supervisorCheck.alerts,
       // 유휴 판정은 작업자뿐 아니라 감독 세션(상위가 있는 감독·최상위 감독)에도 닿는다.
       // 이전에는 작업 감시 범위로만 걸러 등록된 감독에게는 영원히 가지 않았다(2026-10-05, hierarchy.md 2-H1).
-      ...assessSupervisorIdle(
-        scope?.entries ?? entries,
-        new Map([...roleStates, ...supervisorStates]),
-        cycleAt,
-        idleMs,
-        ledgerError,
-        parents,
-        { works, cards: cards ?? [], waits, peerEntries: observationError ? [] : mailEntries }
-      ).filter(a=>(!observedSessions || !a.session || observedSessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))
+      ...idleAssessment.filter(a=>(!observedSessions || !a.session || observedSessions.has(a.session)) && (!cardError || a.id === 'ledger:unreadable') && (a.kind!=="놀고 있음"||!stallSessions.has(a.session))
 
         // 감독의 세션 부재·화면 없음은 감독 점검이 이미 알린다. 같은 세션에 '모름'을 겹쳐 올리지 않는다.
         && !supervisorCheck.alerts.some(s=>s.session===a.session)),
