@@ -15,6 +15,8 @@ import {WatchAI} from '../src/watch-ai.mjs';
 const cli=fileURLToPath(new URL('../src/cli.mjs',import.meta.url));
 // 종료된 프로세스: 사라졌거나, 거둬 줄 init이 없는 컨테이너(PID 1이 좀비를 거두지 않음)에서 좀비로 남은 경우.
 function assertProcessGone(pid){
+ // PID 0은 프로세스 그룹이라 kill(0,0)이 항상 성공한다. 빈 pid 파일을 읽은 Number('')=0을 '살아 있음'으로 오판하지 않게 먼저 막는다.
+ assert.ok(Number.isInteger(pid)&&pid>0,`시험 전제 실패: PID가 양의 정수가 아니다(${pid})`);
  try{process.kill(pid,0);}catch(e){assert.equal(e.code,'ESRCH');return;}
  let state=null;try{state=fs.readFileSync(`/proc/${pid}/stat`,'utf8').replace(/^.*\) /s,'')[0];}catch{}
  assert.equal(state,'Z',`프로세스 ${pid}가 아직 살아 있다`);
@@ -230,21 +232,36 @@ test('완료 신호 파일만으로 성공하지 않고 원장의 보고·전달
  assert.equal(result.reason,'timeout');assert.equal(result.ok,false);assert.equal(f.sent.length,0);
 });
 
-test('감시 종료 신호는 해당 AI만 취소하고 늦은 보고를 허용하지 않는다',async()=>{
+// 가짜 AI(helperSource)가 cancel.pid를 쓰는 동안 취소 신호를 보내고, 취소된 AI가 사라졌는지 본다.
+async function cancelScenario(helperSource){
  const f=fixture(),helper=path.join(f.home,'cancel-hang.mjs');
- fs.writeFileSync(helper,"import fs from 'node:fs';fs.writeFileSync(process.env.KADAN_HOME+'/cancel.pid',String(process.pid));setInterval(()=>{},1000);\n");
+ fs.writeFileSync(helper,helperSource);
  // 가짜 AI가 떠서 PID를 쓴 뒤에 취소해야 '실행 중인 AI 취소'를 시험한다. 200ms 고정 취소는 느린 CI에서
  // node가 뜨기 전에 걸려 cancel.pid가 없었다(2026-09-24 PR #32, 400ms 늦게 쓰는 가짜 AI로 재현).
  const pidFile=path.join(f.home,'cancel.pid'),controller=new AbortController(),startedAt=Date.now();
- const timer=setInterval(()=>{if(fs.existsSync(pidFile)||Date.now()-startedAt>4000)controller.abort();},20);
+ // 파일이 생기기만 한 것(내용 쓰기 전)으로는 취소하지 않는다. 내용이 양의 정수 PID가 된 뒤에만 취소한다.
+ const readPid=()=>{try{return Number(fs.readFileSync(pidFile,'utf8'));}catch{return 0;}};
+ const timer=setInterval(()=>{if(readPid()>0||Date.now()-startedAt>4000)controller.abort();},20);
  try{
   const result=await new WatchAI(f.options).run({judgeCmd:`'${process.execPath}' '${helper}'`,source:'stall',role:'p-작업자',parents,input:{},signal:controller.signal,timeoutMs:5000});
   assert.equal(result.reason,'cancelled');assert.equal(f.sent.length,0);
   assert.equal(f.r.submit(result.requestId,'정체','취소 뒤 늦은 보고').accepted,false);
-  assert.ok(fs.existsSync(pidFile),'가짜 AI가 4초 안에 PID를 쓰지 않았다 — 시험 전제(실행 중 취소)가 깨졌다');
-  const pid=Number(fs.readFileSync(pidFile,'utf8'));
+  const pid=readPid();
+  assert.ok(pid>0,'가짜 AI가 4초 안에 PID를 쓰지 않았다 — 시험 전제(실행 중 취소)가 깨졌다');
   assertProcessGone(pid);
  }finally{clearInterval(timer);}
+}
+
+test('감시 종료 신호는 해당 AI만 취소하고 늦은 보고를 허용하지 않는다',()=>cancelScenario(
+ "import fs from 'node:fs';fs.writeFileSync(process.env.KADAN_HOME+'/cancel.pid',String(process.pid));setInterval(()=>{},1000);\n"));
+
+// 2026-10-21 'PID 0' 실패: 파일이 만들어진 직후(내용 쓰기 전)에 취소되면 빈 파일이 남는다.
+// 느린 기기에서 우연히 생기던 순서를 openSync와 write 사이 300ms 지연으로 항상 만든다.
+test('cancel.pid가 비어 있을 때 취소돼도 PID 0을 살아 있는 프로세스로 오판하지 않는다',()=>cancelScenario(
+ "import fs from 'node:fs';const fd=fs.openSync(process.env.KADAN_HOME+'/cancel.pid','w');setTimeout(()=>{fs.writeSync(fd,String(process.pid));},300);setInterval(()=>{},1000);\n"));
+
+test('assertProcessGone은 0·음수·NaN PID를 시험 전제 실패로 분명히 거부한다',()=>{
+ for(const bad of [0,-1,NaN])assert.throws(()=>assertProcessGone(bad),/시험 전제 실패/);
 });
 
 test('진행 중인 카드의 작업자가 아무것도 묻지 않은 채 입력 대기면 감독에게 알린다',()=>{
