@@ -48,9 +48,10 @@ test('followup sent 뒤 14분은 없음, 15분에 상위에게 1통(수신자·�
   f.now = followupAt + 14 * MIN; f.tick(watch); assert.equal(f.toParent().length, 0);
   f.now = followupAt + 15 * MIN; f.tick(watch);
   assert.equal(f.toParent().length, 1);
-  const [head, line] = f.toParent()[0].message.split('\n');
-  assert.match(head, /^\[미읽음 우편 상위 알림\] 직속 부하 앞 우편 1건/);
-  assert.equal(line, `- worker · ${ID(1)} · 보낸이 boss · 보낸 시각 ${at(T0)} · 20분째 미읽음 · 확인: kadan inbox read ${ID(1)} --role 'worker'`);
+  const lines = f.toParent()[0].message.split('\n');
+  assert.deepEqual(lines, ['[감시기] 하위 역할의 미읽음 우편 1건', '보낸이: boss', '받는이: worker', '보낸 시각: 2020-01-01 10:00',
+    '첫 줄: (본문 미리보기 없음)', '상태: 20분째 미읽음', `확인: kadan inbox read ${ID(1)} --role 'worker'`, '',
+    '읽음 확인은 수신자 몫이니 대신 ack하지 마세요.']);
   f.now += 60 * MIN; f.tick(watch); f.tick(f.create()); assert.equal(f.toParent().length, 1, '평생 1회, 재시작해도 0회');
 });
 
@@ -68,7 +69,7 @@ test('initial unknown과 followup unknown은 각각 다음 순회에 escalate("�
   a.failFor = role => role === 'worker' ? unknownError : null;
   a.tick(); a.failFor = null; a.now += 1000; a.tick();
   assert.equal(a.toParent().length, 1);
-  assert.match(a.toParent()[0].message, /결과 불명 · 확인: kadan inbox read/);
+  assert.match(a.toParent()[0].message, /상태: 결과 불명\n확인: kadan inbox read/);
   assert.equal(a.sent.filter(s => s.role === 'worker').length, 0, '넣지 못한 우편이 상위 알림으로 넣은 것이 되지 않는다');
   a.now += 60 * MIN; a.tick(); assert.equal(a.sent.filter(s => s.role === 'worker').length, 0, 'escalate sent가 followup 시계를 켜지 않는다');
   assert.equal(firstReminderSent(a.entries).size, 0);
@@ -117,17 +118,17 @@ test('같은 상위 아래 수신자 둘의 우편은 한 순회에 1통, 6건 �
   const followupAt = f.untilFollowup(watch);
   f.now = followupAt + 15 * MIN; f.tick(watch);
   assert.equal(f.toParent().length, 1);
-  assert.equal(f.toParent()[0].message.split('\n').length, 3, '머리 1줄 + 우편 2줄');
+  assert.equal([...f.toParent()[0].message.matchAll(/^보낸이: /gmu)].length, 2, '한 통에 우편 블록 2개');
 
   const many = fixture(Array.from({length: 7}, (_, i) => stored(ID(10 + i))));
   const w = many.create();
   const at2 = many.untilFollowup(w);
   many.now = at2 + 15 * MIN; many.tick(w);
-  const lines = many.toParent()[0].message.split('\n');
+  const message = many.toParent()[0].message;
   assert.equal(many.toParent().length, 1);
-  assert.equal(lines.length, 1 + ESCALATE_LIST_MAX + 1);
-  assert.equal(lines.at(-1), '- 외 2건');
-  assert.match(lines[0], /우편 7건/);
+  assert.equal([...message.matchAll(/^보낸이: /gmu)].length, ESCALATE_LIST_MAX);
+  assert.ok(message.includes('\n\n외 2건\n\n'));
+  assert.match(message.split('\n')[0], /우편 7건/);
   assert.equal(many.escalateRecords().filter(e => e.action === 'result' && e.delivery === 'sent').length, 7, '묶어도 기록은 우편마다');
 });
 

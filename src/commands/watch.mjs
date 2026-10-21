@@ -29,9 +29,9 @@ import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { HUMAN_IDLE_MS } from "../notification-guard.mjs";
 import { NotifyHoldTracker } from "../watch-notify-hold.mjs";
+import { WATCH_ALERT_FOOTER } from "../watch-notice-format.mjs";
 
-// 해소 우편이 없으므로(2026-10-05 [kyle]) 경보를 받은 감독은 행동 전에 지금 상태를 스스로 확인한다.
-export const WATCH_ALERT_FOOTER='행동 전 지금 상태를 확인하라(감독 템플릿의 현황 확인 절차). 풀렸으면 따로 알리지 않는다.';
+export { WATCH_ALERT_FOOTER };
 // 입력 보호로 밀린 횟수는 tracker가 받는 창 단위로 센다. 5번 연속이면 guardFor가 입력 보호만 뺀다.
 function guardedWatchSend(tracker,args,role,guard) {
   const {send,...rest}=args;
@@ -56,8 +56,8 @@ export function sendWatchMessage(role,message,{selectedFloor=floor,readStart=las
   // 감시 경보 우편은 기록용이다: 경보는 상태 변화로 닫히지 수신자 ack로 닫히지 않으므로 읽음 확인 안내를 붙이지 않고
   // 미확인 우편 재알림 대상에서도 뺀다(2026-10-05 [kyle] 소음 줄이기). 해소 우편도 없으므로 받는 쪽이 행동 전에
   // 지금 상태를 확인한다(감독 템플릿의 현황 확인 절차).
-  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:`${message}\n${WATCH_ALERT_FOOTER}`,
-    source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true},role,{humanIdleMs:HUMAN_IDLE_MS});
+  return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message:/^할 일:/mu.test(message)?message:`${message}\n할 일: ${WATCH_ALERT_FOOTER}`,
+    source:'watch',recordedPid:recordedPid(readStart(session)),notificationOnly:true,omitInstructions:true},role,{humanIdleMs:HUMAN_IDLE_MS});
 }
 
 // 사람이 이 시간 안에 창에서 키를 눌렀으면 입력 중으로 보고 미확인 우편 알림을 미룬다.
@@ -74,7 +74,7 @@ export function sendWatchMailReminder(role,message,expectedPid,{
     throw error;
   }
   return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message,source:'watch',recordedPid:expectedPid,
-    notificationOnly:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
+    notificationOnly:true,omitInstructions:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 
 // 놀고 있음 본인 알림은 감독 창에 붙여넣는 우편이라, 사람이 그 창에서 대화 중이면 미룬다.
@@ -82,7 +82,7 @@ export function sendWatchMailReminder(role,message,expectedPid,{
 export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastStartFor,send=guardedSend,tracker=null}={}) {
   const session=sessionName(role);
   return guardedWatchSend(tracker,{send,floor:selectedFloor,session,role,message,source:'watch',
-    recordedPid:recordedPid(readStart(session)),notificationOnly:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
+    recordedPid:recordedPid(readStart(session)),notificationOnly:true,omitInstructions:true},role,{humanIdleMs:WATCH_MAIL_HUMAN_IDLE_MS});
 }
 
 // 바닥이 보류 조회를 지원하지 않으면 기존처럼 보류 없이 진행한다.
