@@ -6,6 +6,7 @@ import {renderDetailHistory,renderDetailSections} from './dashboard-detail.mjs';
 import {renderInbox} from './dashboard-inbox.mjs';
 import {workPhases,endedExecution} from './work-store.mjs';
 import {workLetters} from './work-mail.mjs';
+import {lastChildAt,isTurnCurrent} from './handover-state.mjs';
 
 const short=at=>at?new Date(at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'모름';
 const workState={open:'진행 중',hold:'일시정지',done:'업무 완료',cancelled:'취소'};
@@ -24,8 +25,8 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   // 정상 왕복이 100라운드에 이르는 일은 없다고 보고 100 이상만 번호표로 읽는다(앞 라운드 실행이 빠진 2라운드 업무는 그대로).
   const roundLabel=round>=100?`병렬 실행 ${w.executions.length}건`:`${round}라운드`;
   const closed=['done','cancelled'].includes(w.status);
-  const lastChild=Math.max(0,...executions.flatMap(x=>[Date.parse(x.card?.at)||0,...(x.card?.runs||[]).map(r=>Date.parse(r.at)||0)]));
-  const explicit=w.turnOwner&&Number.isFinite(Date.parse(w.turnAt))&&Date.parse(w.turnAt)>=lastChild;
+  const lastChild=lastChildAt(w,cards);
+  const explicit=isTurnCurrent(w,cards);
   const turns=active.map(x=>x.card?cardTurn(x.card):{owner:null,label:'차례 확인 필요'});
   const owners=[...new Set(turns.map(x=>x.owner).filter(Boolean))];
   const unknown=turns.filter(x=>!x.owner).length;

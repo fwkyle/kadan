@@ -38,7 +38,7 @@ function previousGenerationItems(snapshot, m) {
   try {
     const parents = new Map(Object.entries(m.hierarchy)), entries = snapshot.entries ?? [];
     const works = (registeredCenterWorks(snapshot).works ?? []).map((w) => withEffectiveOwner(w, entries));
-    return [...previousGenerationWorks(works, entries, parents), ...previousGenerationExecutions(m.cards, entries, parents, works)];
+    return [...previousGenerationWorks(works, entries, parents, m.cards), ...previousGenerationExecutions(m.cards, entries, parents, works)];
   } catch { return null; }
 }
 const previousSummary = (items) => items && ({
