@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawnSync,execFile} from 'node:child_process';
+import {spawn,spawnSync,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {createDatabase} from '../src/storage.mjs';
@@ -18,8 +18,13 @@ function assertProcessGone(pid){
  // PID 0은 프로세스 그룹이라 kill(0,0)이 항상 성공한다. 빈 pid 파일을 읽은 Number('')=0을 '살아 있음'으로 오판하지 않게 먼저 막는다.
  assert.ok(Number.isInteger(pid)&&pid>0,`시험 전제 실패: PID가 양의 정수가 아니다(${pid})`);
  try{process.kill(pid,0);}catch(e){assert.equal(e.code,'ESRCH');return;}
- let state=null;try{state=fs.readFileSync(`/proc/${pid}/stat`,'utf8').replace(/^.*\) /s,'')[0];}catch{}
- assert.equal(state,'Z',`프로세스 ${pid}가 아직 살아 있다`);
+ // /proc이 있으면(Linux·CI) 그것을, 없으면(macOS) ps stat을 본다. ps가 비어 있으면 그 사이에 사라진 것이다.
+ let state=null,how='/proc';
+ try{state=fs.readFileSync(`/proc/${pid}/stat`,'utf8').replace(/^.*\) /s,'')[0];}catch{
+  how='ps';const out=(spawnSync('ps',['-o','stat=','-p',String(pid)],{encoding:'utf8',timeout:3000}).stdout||'').trim();
+  if(!out)return;state=out[0];
+ }
+ assert.equal(state,'Z',`프로세스 ${pid}가 아직 살아 있다(${how} stat=${state})`);
 }
 const parents=new Map([['p-작업자','p-감독'],['p-감독','p-슈퍼감독'],['p-슈퍼감독','@user']]);
 function fixture({sqlite=true}={}) {
@@ -262,6 +267,30 @@ test('cancel.pid가 비어 있을 때 취소돼도 PID 0을 살아 있는 프로
 
 test('assertProcessGone은 0·음수·NaN PID를 시험 전제 실패로 분명히 거부한다',()=>{
  for(const bad of [0,-1,NaN])assert.throws(()=>assertProcessGone(bad),/시험 전제 실패/);
+});
+
+// macOS에는 /proc이 없어 좀비(이미 끝났지만 부모가 안 거둔 PID)를 '살아 있음'으로 오판했다(2026-10-21 PID 54224).
+// 좀비는 부모(이 시험 프로세스)가 거두기 전에 만든다: 시험 본문을 동기로 유지하면 이벤트 루프가 돌지 않아
+// Node가 자식을 거두지 못하므로 결정적이다. ps로 Z가 보일 때까지 짧게(최대 5초) 기다린다.
+function makeZombie(){
+ const child=spawn('sh',['-c',':'],{stdio:'ignore'}),wait=new Int32Array(new SharedArrayBuffer(4));
+ for(let i=0;i<250;i++){
+  const r=spawnSync('ps',['-o','stat=','-p',String(child.pid)],{encoding:'utf8',timeout:3000});
+  if(r.stdout.trim().startsWith('Z'))return child.pid;
+  Atomics.wait(wait,0,0,20);
+ }
+ child.kill('SIGKILL');assert.fail('시험 전제 실패: 자식이 좀비가 되지 않았다');
+}
+test('assertProcessGone은 좀비 PID를 종료로 본다(macOS /proc 없음·Linux 모두)',()=>{
+ assertProcessGone(makeZombie());
+});
+test('assertProcessGone은 살아 있는 PID를 실패로 판정한다',()=>{
+ const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
+ try{assert.throws(()=>assertProcessGone(child.pid),/아직 살아 있다/);}finally{child.kill('SIGKILL');}
+});
+test('assertProcessGone은 사라진 PID를 종료로 본다',()=>{
+ const r=spawnSync('sh',['-c',':']);
+ assertProcessGone(r.pid);
 });
 
 test('진행 중인 카드의 작업자가 아무것도 묻지 않은 채 입력 대기면 감독에게 알린다',()=>{
