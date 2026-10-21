@@ -1,4 +1,4 @@
-import {doneMarkerOf} from './done-marker.mjs';
+import {doneEvidence} from './done-evidence.mjs';
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {workEntries,effectiveCardRole} from './handover-state.mjs';
 // 같은 발령(카드·담당·전달 시각)의 시작보고누락 경보가 한 번 울리고 해소(또는 감시제외)됐으면 다시 만들지 않는다.
@@ -12,7 +12,7 @@ export function alertedStartReports(entries){
 // states: 감시기가 이번 실행에서 관찰한 세션 상태(unchangedMs). 새 경보는 화면이 유예 시간만큼 멈춰 있을 때만 만든다.
 // active: 이미 울려서 살아 있는 경보 id. 재시작 뒤 복원된 경보는 화면 관찰이 다시 쌓이기 전이라도 조건이 남아 있으면 유지한다.
 // 발령 후 경과 시간만으로는 알리지 않는다 — 검수자가 한창 작업 중인데 시작 보고가 없다고 알리던 오경보(2026-09-12)를 막는다.
-export function assessMissingStartReports(cards,entries,observations,now,graceMs,{states=null,alerted=null,active=null}={}){
+export function assessMissingStartReports(cards,entries,observations,now,graceMs,{states=null,alerted=null,active=null,hookHome=null}={}){
  const identity=taskIdentity(cards);entries=identity.project(entries);
  cards=cards.map(c=>({...c,role:effectiveCardRole(c,entries,identity)}));
  const pending=new Map();for(const e of workEntries(entries)){if(!e.role||!e.taskId||taskConnectionError(e))continue;const k=e.role+'\0'+e.taskId;if(e.kind==='send')pending.set(k,e);if(e.kind==='done')pending.delete(k);}
@@ -23,7 +23,11 @@ export function assessMissingStartReports(cards,entries,observations,now,graceMs
   if(['running','waiting'].includes(c.activity)&&c.activityRole===c.role&&Date.parse(c.activityAt)>=at&&Date.parse(c.activityAt)<=now)continue;
   const seen=observations.get('kadan-'+c.role);
   if(!seen?.alive||seen.digest==null||seen.expectedPid!=null&&String(seen.pid)!==String(seen.expectedPid))continue;
-  const done=(seen.screen||'').trimEnd().split('\n').slice(-6).some(line=>{const m=doneMarkerOf(line);return m&&identity.resolve(m.taskId).key===c.key;});if(done)continue;
+  // 완료 증거는 감시기 완료 판정과 같은 함수로 본다(그 발령 이후·그 카드, 훅 우선 + 화면의 새 마커).
+  // 관찰에 발령 목록이 없는 옛 호출은 이 발령(send)을 기준으로 삼는다.
+  const dispatch=seen.completionDispatches?seen.completionDispatches.get(c.key):sent;
+  if(dispatch&&doneEvidence({dispatches:new Map([[c.key,dispatch]]),screen:seen.screen,home:hookHome,
+   role:c.role,taskKey:id=>identity.resolve(id).key}).marker)continue;
   const id=`start-report:${c.key}:${c.role}:${sent.t}`;
   if(!active?.has(id)){
    if(states&&(states.get('kadan-'+c.role)?.unchangedMs??0)<graceMs)continue;

@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {assessMissingStartReports,alertedStartReports} from '../src/watch-start-report.mjs';
 const at='2026-09-07T00:00:00Z',now=Date.parse(at)+6*60000,grace=5*60000;
