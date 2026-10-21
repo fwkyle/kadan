@@ -24,6 +24,7 @@
 | 전체 구조·원장 관계·개편 경계 | [구조 기준](architecture.md) | 문서 안 구조도 |
 | 작업·우편 원장과 역할 inbox | [원장 계약](mail-task-ledgers.md), [우편함 명령](secretary-mailbox.md) | — |
 | 작업 감시와 감독 관찰 | [감시 기준](watch-overview.md) | [HTML 안내](watch-overview.html) |
+| 같은 이름 다른 기준·시간 상수 표 | [이름과 시간 기준](watch-thresholds.md) | — |
 | 업무와 실행 | [업무 카드](business-work.md) | — |
 | 중앙 카드 | [카드 안내](card-center.md) | — |
 | 책임과 보고 경로 | [책임 관계](hierarchy.md) | — |

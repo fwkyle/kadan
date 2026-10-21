@@ -9,7 +9,7 @@ export const listPageSize=50;
 export const mailViews=[['all','전체'],['received','받은 편지'],['sent','보낸 편지'],['to-reply','내가 답할 질문'],['waiting','답변 대기']];
 export const replyStates=[['','모든 답변 상태'],['waiting','답변 대기'],['answered','답변 완료'],['cancelled','질문 취소']];
 export function mailStatus(m){
- const read=isPreviousGenerationUnread(m)?'이전 세대 미확인 · 현재 역할에 알리지 않음':m.readKind==='delivered-read'?'창 전달 읽음 · 수신자 확인 아님':m.read===true?'받는 사람 읽음 확인':m.read===false?'읽음 미확인':'전달 기록 · 읽음 모름';
+ const read=isPreviousGenerationUnread(m)?'이전 세대 미확인 · 현재 역할에 알리지 않음':m.readKind==='delivered-read'?'창 전달 읽음 · 수신자 확인 아님':m.read===true?'받는 사람 읽음 확인':m.read===false?'읽음 기록 없음':'전달 기록 · 읽음 모름';
  const reply=replyStates.find(([value])=>value&&value===m.replyStatus)?.[1];
  const sender=m.currentSender||m.by,recipient=m.currentRecipient||m.role;
  const responsibility=sender!==m.by||recipient!==m.role?`현재 책임: ${sender||'모름'} → ${recipient||'모름'}`:'';

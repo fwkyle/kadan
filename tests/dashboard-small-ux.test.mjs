@@ -34,10 +34,10 @@ test('작은 UX: 현황과 우편함은 미확인 수 대신 답을 기다리는
  assert.equal(mailboxAwaitingReply([{broken:true}],null),null);
  const status=renderDashboardStatus({center:{cards:[],boards:[]},works:[],decisions:[],entries,ledgerLines:entries.length});
  assert.match(status,/href="\?mailView=to-reply#mailbox"><span class="st-num">2<\/span><span class="st-lbl">답을 기다리는 질문/);
- assert.doesNotMatch(status,/전체 역할 미확인 우편/);
+ assert.doesNotMatch(status,/전체 역할 읽음 기록 없는 우편/);
  const box=renderActivity({entries,ledgerLines:entries.length},new URL('http://localhost/'));
  assert.match(box,/<a href="\?mailView=to-reply#mailbox">답을 기다리는 질문 2건<\/a>/);
- assert.match(box,/전체 역할 미확인 3건/);
+ assert.match(box,/전체 역할 읽음 기록 없음 3건/);
 });
 
 test('작은 UX: 현황 설명은 PID·세션 같은 내부 말을 앞세우지 않는다',()=>{

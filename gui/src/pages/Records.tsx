@@ -150,7 +150,7 @@ export function Mailbox({ url }: { url: URL }) {
             label: "읽음 상태",
             options: [
               ["", "전체"],
-              ["1", "읽음 미확인"],
+              ["1", "읽음 기록 없음"],
               ["previous", "이전 세대 미확인"],
             ],
           },

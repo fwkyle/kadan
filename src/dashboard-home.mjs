@@ -48,7 +48,7 @@ export function renderSecretaryQuestions(center,briefs,{fold=false}={}){
 export function renderDashboardHome({center,decisions=[],decisionError,briefs,entries=[],ledgerLines=0}){
  const mailUnknown=ledgerLines===null||entries.some(e=>e?.broken);
  const unread=mailboxUnread(entries,ledgerLines);
- const secretaryShortcut=`<a class="decision-shortcut secretary-shortcut" href="?mailUnread=1#mailbox" title="모든 역할의 읽음 미확인 우편입니다(기록용 알림 제외). 사용자 결정 요청과 구분합니다."><span>전체 역할 미확인 우편</span><strong>${mailUnknown?'모름':unread+'건'}</strong></a>`;
+ const secretaryShortcut=`<a class="decision-shortcut secretary-shortcut" href="?mailUnread=1#mailbox" title="모든 역할의 읽음 기록 없는 우편입니다(감시기가 다시 알릴 우편 수와 다릅니다)(기록용 알림 제외). 사용자 결정 요청과 구분합니다."><span>전체 역할 읽음 기록 없는 우편</span><strong>${mailUnknown?'모름':unread+'건'}</strong></a>`;
  if(!center)return `<section class="panel" data-view="dashboard">${secretaryShortcut}<h2>현재 상황을 확인할 수 없습니다</h2><p>카드 기록을 읽지 못해 진행 수와 남은 수를 계산하지 않았습니다.</p></section>`;
  const open=center.boards.filter(b=>b.state!=='done'),closed=center.boards.filter(b=>b.state==='done');
  const decisionsOpen=decisions.filter(d=>d.status==='open');
