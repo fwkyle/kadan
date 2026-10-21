@@ -446,8 +446,8 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 </script></body></html>`;
 }
 
-// 결정 목록이 필요한 응답: 현황·결정·요약(내 결정 건수)·상세와 서버가 그리는 중앙 화면. 그 밖(/api/cards, 우편·기록·작업 목록 등)은 읽지 않는다.
-const DECISION_ROUTES=new Set(['status','decisions','summary','detail']);
+// 결정 목록이 필요한 응답: 현황·결정·요약(내 결정 건수)·상세·칸반과 서버가 그리는 중앙 화면. 그 밖(/api/cards, 우편·기록·작업 목록 등)은 읽지 않는다.
+const DECISION_ROUTES=new Set(['status','decisions','summary','detail','kanban']);
 export function needsDecisions(url){
   if(url.pathname.startsWith('/api/dashboard/'))return DECISION_ROUTES.has(url.pathname.slice('/api/dashboard/'.length));
   return !url.pathname.startsWith('/api/')&&url.searchParams.get('legacy')!=='1';
