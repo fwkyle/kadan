@@ -36,10 +36,11 @@ export function kanbanLine(row, { decided = false, now = Date.now() } = {}) {
   return review && row.state !== "hold" ? "review" : "working";
 }
 
-function marksOf(row, { decided }) {
+function marksOf(row, { byCard, byWork }) {
   const marks = [];
-  // decided: "card"(이 카드에 걸림) | "work"(연결된 업무에 걸림)
-  if (decided) marks.push({ kind: "decision", label: decided === "work" ? "결정 대기(업무)" : "결정 대기(카드)" });
+  // 카드 결정과 업무 결정이 겹치면 두 표시를 모두 보인다(어느 결정이 걸렸는지 숨기지 않는다).
+  if (byCard) marks.push({ kind: "decision", label: "결정 대기(카드)" });
+  if (byWork) marks.push({ kind: "decision", label: "결정 대기(업무)" });
   if (row.bucket === "stuck") marks.push({ kind: "stuck", label: "막힘" });
   if (row.bucket === "stale") marks.push({ kind: "stale", label: "오래된 미확정" });
   if (row.state === "hold") marks.push({ kind: "hold", label: "일시정지" });
@@ -89,7 +90,8 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     const work = workOf.get(row.key) ?? null;
     const ended = statusBucket(row.state) === "end";
     const workDecided = work !== null && decidedWorks.has(bareWork(work.key)) && (!ended || elevated.has(row.key));
-    const decided = decidedCards.has(row.key) ? "card" : workDecided ? "work" : false;
+    const byCard = decidedCards.has(row.key);
+    const decided = byCard || workDecided;
     const line = kanbanLine(row, { decided, now });
     if (line === null) continue;
     // 판: 연결된 업무의 owner → 담당 역할의 관계표 부모 → 미연결. 조용히 빼지 않는다.
@@ -106,8 +108,8 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
       healthLabel: row.healthLabel || "",
       workKey: work?.key ?? null,
       workTitle: work?.title ?? null,
-      marks: marksOf(row, { decided }),
-      decisionIds: open.filter((d) => d.card === row.key || (decided === "work" && bareWork(d.work) === bareWork(work.key))).map((d) => d.id),
+      marks: marksOf(row, { byCard, byWork: workDecided }),
+      decisionIds: open.filter((d) => d.card === row.key || (workDecided && bareWork(d.work) === bareWork(work.key))).map((d) => d.id),
       signalAt: row.signalAt || null,
       at: row.at || null,
       since: sinceOf(row),

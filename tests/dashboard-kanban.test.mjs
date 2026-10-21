@@ -191,6 +191,10 @@ test("F2 불변식: 고정 입력 여러 개에서 열린 결정 수 = 칸반에
     [{ id: "a", status: "open", work: "r/finished", card: "r/coord", at: ago(1) }, { id: "b", status: "open", card: "r/old", at: ago(2) }],
     [{ id: "a", status: "open", work: "r/live", card: "r/free", at: ago(1) }, { id: "b", status: "answered", card: "r/free" }, { id: "c", status: "cancelled", work: "r/empty" }],
     [{ id: "a", status: "open", card: "r/orphan" }, { id: "b", status: "open", work: "r/missing-work", card: "r/coord" }, { id: "c", status: "open", work: "r/empty", card: "r/free" }],
+    // F3: 실행 카드 결정 + 별도 조율 출처의 업무 결정, 같은 카드 출처의 카드+업무 결정
+    [{ id: "a", status: "open", card: "r/l1", at: ago(2) }, { id: "b", status: "open", card: "r/coord", work: "r/live", at: ago(1) }],
+    [{ id: "a", status: "open", card: "r/l1", work: "r/live" }, { id: "b", status: "open", card: "r/f1", work: "r/finished" }, { id: "c", status: "open", card: "r/coord", work: "r/finished" }],
+    [{ id: "a", status: "open", card: "r/coord", work: "r/empty" }, { id: "b", status: "open", card: "r/coord", work: "r/live" }, { id: "c", status: "open", card: "r/coord", work: "r/finished" }],
   ];
   for (const decisions of inputs) for (const h of [hierarchy, null]) {
     const result = buildKanban({ rows, lookup, works: w, hierarchy: h, now, decisions });
@@ -198,6 +202,28 @@ test("F2 불변식: 고정 입력 여러 개에서 열린 결정 수 = 칸반에
     const keys = result.boards.flatMap((b) => b.lines.flatMap((l) => l.cards.map((c) => c.key)));
     assert.equal(new Set(keys).size, keys.length, "한 카드는 한 번만");
   }
+});
+
+test("F3: 카드 결정과 업무 결정이 한 카드에 겹치면 두 결정 ID와 두 표시를 모두 싣는다", () => {
+  const w = [{ key: "r/w", title: "업무", owner: "감독C", executions: [{ key: "r/live" }] }];
+  const coord = row("r/coord", { workType: "coordination" });
+  const decisions = [{ id: "D1", status: "open", card: "r/live", at: ago(2) }, { id: "D2", status: "open", card: "r/coord", work: "r/w", at: ago(1) }];
+  const result = buildKanban({ rows: [row("r/live")], lookup: [row("r/live"), coord], works: w, hierarchy, now, decisions });
+  const card = result.boards[0].lines[0].cards[0];
+  assert.deepEqual(card.decisionIds, ["D1", "D2"]);
+  assert.deepEqual(card.marks.map((m) => m.label), ["결정 대기(카드)", "결정 대기(업무)"]);
+  assert.deepEqual(shownDecisions(result), openIds(decisions));
+  const both = buildKanban({ rows: [row("r/live")], works: w, hierarchy, now, decisions: [{ id: "A", status: "open", card: "r/live", work: "r/w" }, { id: "B", status: "open", work: "r/w", card: "r/coord" }] });
+  assert.deepEqual(both.boards[0].lines[0].cards[0].decisionIds, ["A", "B"], "같은 카드 출처의 카드+업무 결정도 한 장에 두 ID, 중복 없음");
+});
+
+test("F3: 같은 조율 출처에서 서로 다른 두 업무 결정은 각 업무 판에 한 장씩, 두 ID 보존", () => {
+  const w = [{ key: "r/w1", title: "업무1", owner: "감독B", executions: [] }, { key: "r/w2", title: "업무2", owner: "감독C", executions: [] }];
+  const decisions = [{ id: "x1", status: "open", card: "r/coord", work: "r/w1" }, { id: "x2", status: "open", card: "r/coord", work: "r/w2" }];
+  const result = buildKanban({ rows: [], lookup: [row("r/coord", { workType: "coordination" })], works: w, hierarchy, now, decisions });
+  assert.equal(lineOf(result, "work:r/w1"), "감독B/decision");
+  assert.equal(lineOf(result, "work:r/w2"), "감독C/decision");
+  assert.deepEqual(shownDecisions(result), openIds(decisions));
 });
 
 test("kanbanLine: 모르는 상태(실패·세션 확인 필요)는 끝난 것처럼 숨기지 않고 작업중에 둔다", () => {

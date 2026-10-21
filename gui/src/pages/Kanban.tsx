@@ -17,14 +17,14 @@ type KanbanData = Stamp & {
 
 function Card({ card, line }: { card: KanbanCard; line: string }) {
   return (
-    <li className={"kb-card kb-line-" + line} data-fresh={`kb:${card.key}:${line}:${card.marks.map((m) => m.kind).join("+")}`}>
+    <li className={"kb-card kb-line-" + line} data-fresh={`kb:${card.key}:${line}:${card.marks.map((m) => m.label).join("+")}`}>
       <strong className="kb-title"><CardLink row={card} /></strong>
       <small className="kb-meta">
         <Pulse at={card.since} />담당 {card.role || "미배정"} · {card.stateLabel} · {card.since ? time(card.since) : "시각 모름"}
       </small>
       {card.workTitle && <small className="kb-meta">업무 {card.workTitle}</small>}
       {card.marks.length > 0 && (
-        <span className="kb-marks">{card.marks.map((m) => <span key={m.kind} className={"kb-mark kb-mark-" + m.kind}>{m.label}</span>)}</span>
+        <span className="kb-marks">{card.marks.map((m) => <span key={m.label} className={"kb-mark kb-mark-" + m.kind}>{m.label}</span>)}</span>
       )}
     </li>
   );
