@@ -3,6 +3,7 @@
 // 자문은 기록이지 결정이 아니다: 감독이 읽고 판단하거나 decision request로 사용자에게 올린다. 카드를 고치지 않는다.
 // 호출 방식은 감시 AI와 같다(scripts/senior.sh가 codex exec). 폴백은 없다 — 한 번 실패하면 실패로 끝낸다(fail closed).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
@@ -68,16 +69,16 @@ function readAttachment(file) {
   return fs.readFileSync(file, 'utf8');
 }
 
-// 카드의 repoPath를 원본 저장소(git 최상위, 작업트리면 원본 쪽)의 실경로로 정규화한다. 경로가 없거나 git이 아니거나 읽기 폴더 값으로 쓸 수 없는 모양(공백·메타문자)이면 null.
+// 카드의 repoPath가 git 최상위(show-toplevel) 자체일 때만 그 실경로를 읽기 폴더로 쓴다. 하위 폴더·작업트리 부모·git 메타데이터로 부모를 계산하지 않는다.
+// 홈·/ 이거나 읽기 폴더 값으로 쓸 수 없는 모양(공백·메타문자)이면 null.
 export function resolveRepoReadDir(repoPath) {
   try {
     const real = fs.realpathSync(repoPath);
-    const git = spawnSync('git', ['-C', real, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding: 'utf8', timeout: 10_000});
+    const git = spawnSync('git', ['-C', real, 'rev-parse', '--show-toplevel'], {encoding: 'utf8', timeout: 10_000});
     if (git.status !== 0) return null;
-    const common = git.stdout.trim();
-    if (path.basename(common) !== '.git') return null;
-    const root = fs.realpathSync(path.dirname(common));
-    return isReadDirValue(root) ? root : null;
+    if (fs.realpathSync(git.stdout.trim()) !== real) return null;
+    if (real === path.parse(real).root || real === fs.realpathSync(os.homedir())) return null;
+    return isReadDirValue(real) ? real : null;
   } catch { return null; }
 }
 

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {seniorCommand, composeAdvicePrompt} from '../src/senior.mjs';
+import {seniorCommand, composeAdvicePrompt, resolveRepoReadDir} from '../src/senior.mjs';
 import {SENIOR_SAFE_RUNNERS, blockModel, initSettings, setFallback, setRole, setRunner, setRunnerModel} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {NOEXEC_AGENT_MD} from '../src/exec-agent.mjs';
@@ -229,7 +229,7 @@ test('agy 시니어: git 저장소면 코드가 --add-dir <정규화 절대경�
   assert.ok(!prompt.includes('현재 작업 폴더가 그 카드의 저장소다'));
 });
 
-test('agy 시니어: 카드 경로가 git 작업트리여도 원본 저장소로 정규화해 붙인다', async () => {
+test('agy 시니어: 카드 경로가 git 작업트리면 그 작업트리 자체만 붙이고 원본 저장소는 붙이지 않는다', async () => {
   const f = fixture({agyExec: BOUND, git: true});
   const wt = path.join(f.home, 'wt');
   execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-q', '-b', 'side', wt], {stdio: 'ignore'});
@@ -237,7 +237,24 @@ test('agy 시니어: 카드 경로가 git 작업트리여도 원본 저장소로
   const r = await seniorCommand(['qa/card-wt'], {question: '바꿀까?', runner: 'agy', model: 'argon'},
     {home: f.home, by: 'qa-슈퍼감독', env: {PATH: process.env.PATH}, readCodexModels, spawn: async (command, opts) => { f.calls.push({command, env: opts.env}); return {status: 0, stderr: '', stdout: JSON.stringify({response: '결론: 답'})}; }});
   assert.equal(r.reason, 'ok');
-  assert.ok(f.calls.at(-1).command.endsWith(` --add-dir ${fs.realpathSync(f.repo)}`), f.calls.at(-1).command);
+  assert.ok(f.calls.at(-1).command.endsWith(` --add-dir ${fs.realpathSync(wt)}`), f.calls.at(-1).command);
+  assert.ok(!f.calls.at(-1).command.includes(fs.realpathSync(f.repo)));
+});
+
+test('resolveRepoReadDir: 하위 폴더·홈·/·상위 .git·separate-git-dir는 null, 최상위 자체만 통과', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rrd-')));
+  const repo = path.join(root, 'repo'); fs.mkdirSync(path.join(repo, 'sub'), {recursive: true});
+  execFileSync('git', ['-C', repo, 'init', '-q']);
+  assert.equal(resolveRepoReadDir(repo), repo);
+  assert.equal(resolveRepoReadDir(path.join(repo, 'sub')), null);
+  assert.equal(resolveRepoReadDir(os.homedir()), null);
+  assert.equal(resolveRepoReadDir('/'), null);
+  const outer = path.join(root, 'outer'); fs.mkdirSync(path.join(outer, 'inner'), {recursive: true});
+  execFileSync('git', ['-C', outer, 'init', '-q']);
+  assert.equal(resolveRepoReadDir(path.join(outer, 'inner')), null);
+  const sep = path.join(root, 'sep'); fs.mkdirSync(sep);
+  execFileSync('git', ['init', '-q', `--separate-git-dir=${path.join(root, 'meta.git')}`, sep]);
+  assert.equal(resolveRepoReadDir(sep), sep);
 });
 
 test('agy 시니어: git이 아니거나 공백이 든 경로면 --add-dir 없이 카드 본문·첨부만 쓴다', async () => {
