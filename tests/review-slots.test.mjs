@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {slotCommand} from '../src/review-slots.mjs';
+import {CardStore} from '../src/card-store.mjs';
 
 const env = {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'};
 function git(cwd, ...args) {
@@ -165,4 +166,94 @@ test('값 없는 옵션 뒤의 위치 인자도 그대로 쓴다(공용 옵션 �
   const f = fixture();
   const got = await run(f, ['acquire'], {for: 'card-a', 'no-wait': f.repo});
   assert.equal(got.slot, 'slot-1');
+});
+
+// 카드 원장에 저장소 이름을 등록한다(이름 → repoPath 조회 시험용).
+const register = (f, repo, repoPath) => new CardStore(f.home).create({repo, id: `c-${Math.random().toString(36).slice(2, 8)}`, repoPath, body: '# 시험'});
+
+test('저장소 안에서 카드의 저장소 이름으로 빌려도 같은 자리 묶음을 쓴다(실제 사고 재현)', async () => {
+  const f = fixture();
+  register(f, 'app-name', f.repo);
+  const before = process.cwd();
+  process.chdir(f.repo);
+  try {
+    const byName = await run(f, ['acquire', 'app-name'], {for: 'card-a'});
+    assert.equal(byName.repo, f.repo);
+    assert.equal(byName.path, path.join(f.base, 'app-review-slots', 'slot-1'));
+    const byDot = await run(f, ['acquire', '.'], {for: 'card-b'});
+    assert.equal(byDot.slot, 'slot-2');
+    const byWorktree = await run(f, ['acquire', byName.path], {for: 'card-c'});
+    assert.equal(byWorktree.slot, 'slot-3');
+    const status = await run(f, ['status', 'app-name']);
+    assert.equal(status.pools.length, 1);
+    assert.equal(status.pools[0].repo, f.repo);
+  } finally { process.chdir(before); }
+});
+
+test('모르는 이름은 자리를 만들지 않고 경로를 달라고 안내한다', async () => {
+  const f = fixture();
+  await assert.rejects(run(f, ['acquire', 'nope'], {for: 'card-a'}), /찾지 못했습니다: nope.*경로를 주세요/);
+  assert.equal(fs.existsSync(path.join(f.home, 'review-slots')), false);
+  assert.equal(fs.existsSync(path.join(f.base, 'app-review-slots')), false);
+  await assert.rejects(run(f, ['status', 'nope']), /경로를 주세요/);
+});
+
+test('같은 이름이 서로 다른 저장소 경로에 등록되면 후보를 나열하고 실패한다', async () => {
+  const f = fixture();
+  const other = path.join(f.base, 'other');
+  fs.mkdirSync(other); git(other, 'init', '-q', '-b', 'main');
+  register(f, 'dup', f.repo); register(f, 'dup', other);
+  await assert.rejects(run(f, ['acquire', 'dup'], {for: 'card-a'}),
+    e => e.message.includes(f.repo) && e.message.includes(other) && /경로를 주세요/.test(e.message));
+  // 같은 이름이 같은 저장소의 worktree로 등록된 것은 하나로 본다.
+  const wt = path.join(f.base, 'wt'); git(f.repo, 'worktree', 'add', '-q', '--detach', wt);
+  register(f, 'one', f.repo); register(f, 'one', wt);
+  assert.equal((await run(f, ['acquire', 'one'], {for: 'card-a'})).repo, f.repo);
+});
+
+test('git 저장소가 아닌 경로는 다음 행동이 붙은 문구로 실패한다', async () => {
+  const f = fixture();
+  const plain = path.join(f.base, 'plain'); fs.mkdirSync(plain);
+  await assert.rejects(run(f, ['acquire', plain], {for: 'card-a'}),
+    e => e.message.includes(`저장소 경로가 아닙니다: ${plain}`) && /저장소 이름을 주세요/.test(e.message));
+});
+
+test('옮겨진 repoPath의 빈 폴더가 다른 저장소 아래에 있어도 상위 저장소를 빌리지 않는다', async () => {
+  const f = fixture();
+  const former = path.join(f.repo, 'former'); fs.mkdirSync(former); // 옛 경로: 일반 폴더, 상위가 다른 저장소
+  register(f, 'moved-project', former);
+  await assert.rejects(run(f, ['acquire', 'moved-project'], {for: 'card-a'}), /찾지 못했습니다: moved-project/);
+  assert.equal(fs.existsSync(path.join(f.home, 'review-slots')), false);
+  assert.equal(fs.existsSync(path.join(f.base, 'app-review-slots')), false);
+});
+
+test('다른 저장소 안의 일반 폴더·하위 폴더 경로는 꼭대기 아님으로 실패한다', async () => {
+  const f = fixture();
+  const sub = path.join(f.repo, 'sub'); fs.mkdirSync(sub);
+  await assert.rejects(run(f, ['acquire', sub], {for: 'card-a'}),
+    e => e.message.includes(`저장소 꼭대기가 아닙니다: ${fs.realpathSync(sub)}`) && e.message.includes(`꼭대기: ${f.repo}`));
+  // 의도된 변화: `.`도 저장소 꼭대기가 아닌 하위 폴더에서 실행하면 이제 실패한다.
+  const before = process.cwd();
+  process.chdir(sub);
+  try { await assert.rejects(run(f, ['acquire', '.'], {for: 'card-a'}), /저장소 꼭대기가 아닙니다/); }
+  finally { process.chdir(before); }
+  assert.equal(fs.existsSync(path.join(f.home, 'review-slots')), false);
+});
+
+test('cwd 아래 같은 이름의 다른 저장소 폴더가 있어도 순수 이름은 카드 원장으로 해석한다', async () => {
+  const f = fixture();
+  register(f, 'app-name', f.repo);
+  const shadow = path.join(f.base, 'work', 'app-name'); fs.mkdirSync(shadow, {recursive: true});
+  git(shadow, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(shadow, 'x'), '1'); git(shadow, 'add', '.'); git(shadow, 'commit', '-q', '-m', 'x');
+  const before = process.cwd();
+  process.chdir(path.join(f.base, 'work'));
+  try {
+    assert.equal((await run(f, ['acquire', 'app-name'], {for: 'card-a'})).repo, f.repo);
+    // 원장에 없는 이름이면 cwd 폴더는 쓰지 않고 ./이름을 안내한다.
+    await assert.rejects(run(f, ['acquire', 'app-name2'], {for: 'card-b'}), e => !/\.\/app-name2/.test(e.message));
+    fs.mkdirSync(path.join(f.base, 'work', 'plain-dir'));
+    await assert.rejects(run(f, ['acquire', 'plain-dir'], {for: 'card-b'}), /경로로 쓰려면 \.\/plain-dir/);
+    assert.equal((await run(f, ['acquire', './app-name'], {for: 'card-c'})).repo, fs.realpathSync(shadow));
+  } finally { process.chdir(before); }
 });
