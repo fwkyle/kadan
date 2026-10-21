@@ -50,7 +50,7 @@ test('우편의 옛 taskId·완료 통지·정식 주소를 연결하되 중복�
   assert.equal(byId.modern.card.key, 'demo/card-2');
   for (const id of ['ambiguous', 'conflict', 'missing']) assert.equal(byId[id].card, null, id);
   assert.equal(byId.legacy.executionKey, null, '표시용 연결을 저장 원문으로 꾸미지 않는다');
-  assert.match(byId.legacy.status, /읽음 미확인.*답변 대기/);
+  assert.match(byId.legacy.status, /읽음 기록 없음.*답변 대기/);
   const detail = dashboardData(snapshot, new URL('http://local/api/dashboard/detail?card=demo/card-1'));
   assert.ok(detail.mail.some(m => m.mailId === 'legacy' && m.card.key === 'demo/card-1'));
   assert.equal(JSON.stringify(snapshot.entries), original);

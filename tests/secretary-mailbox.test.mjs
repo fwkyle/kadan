@@ -11,7 +11,7 @@ test('비서 공식 보고는 세션 없이 저장되고 별도 확인 전까지
 test('새 CLI 수신 경로는 실제 tmux를 만들거나 발령 기록을 만들지 않는다',()=>{
  const h=home(),r=spawnSync(process.execPath,['src/cli.mjs','send','비서','--mail-kind','decision','결정 내용'],{cwd:process.cwd(),env:{...process.env,KADAN_HOME:h,KADAN_ROLE:'p-슈퍼감독',KADAN_WINDOW:'none'},encoding:'utf8'});
  assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(r.stdout).status,'stored');assert.equal(readLedger(h).some(e=>e.kind==='start'||e.taskId),false);
- const html=renderActivity({entries:readLedger(h),ledgerLines:1,home:h},new URL('http://localhost'));assert.match(html,/미확인/);assert.match(html,/미확인 1건/);
+ const html=renderActivity({entries:readLedger(h),ledgerLines:1,home:h},new URL('http://localhost'));assert.match(html,/미확인/);assert.match(html,/읽음 기록 없음 1건/);
 });
 test('잘못된 종류·참조·손상·없는 본문은 실패하고 읽음을 만들지 않는다',()=>{
  const h=home(),m=new SecretaryMailbox(h);assert.throws(()=>m.send({by:'x',message:'x',category:'chat'}),/공식/);assert.throws(()=>m.send({by:'x',message:'x',replyTo:'missing'}),/원본/);
@@ -22,9 +22,9 @@ test('대시보드 비서 보고 수는 결정 수와 분리되고 읽음/손상
  const {renderDashboardHome}=await import('../src/dashboard-home.mjs');const h=home(),m=new SecretaryMailbox(h);
  const a=m.send({by:'p-슈퍼감독',message:'one'}),b=m.send({by:'p-슈퍼감독',message:'two'});m.acknowledge(a.mailId,'비서');
  const center={cards:[],boards:[]},entries=readLedger(h);
- const html=renderDashboardHome({center,entries,briefs:new Map()});assert.match(html,/전체 역할 미확인 우편<\/span><strong>1건/);assert.match(html,/내가 결정할 일<\/span><strong>0건/);
+ const html=renderDashboardHome({center,entries,briefs:new Map()});assert.match(html,/전체 역할 읽음 기록 없는 우편<\/span><strong>1건/);assert.match(html,/내가 결정할 일<\/span><strong>0건/);
  const mails=renderActivity({center,entries,ledgerLines:entries.length,home:h},new URL('http://localhost/?mailRole=비서&mailUnread=1'));
  assert.ok(mails.includes('two'));assert.ok(!mails.includes('<pre>one</pre>'));
- const broken=renderDashboardHome({center,entries:[{broken:'bad'}],ledgerLines:null,briefs:new Map()});assert.match(broken,/전체 역할 미확인 우편<\/span><strong>모름/);
- m.acknowledge(b.mailId,'비서');assert.match(renderDashboardHome({center,entries:readLedger(h),briefs:new Map()}),/전체 역할 미확인 우편<\/span><strong>0건/);
+ const broken=renderDashboardHome({center,entries:[{broken:'bad'}],ledgerLines:null,briefs:new Map()});assert.match(broken,/전체 역할 읽음 기록 없는 우편<\/span><strong>모름/);
+ m.acknowledge(b.mailId,'비서');assert.match(renderDashboardHome({center,entries:readLedger(h),briefs:new Map()}),/전체 역할 읽음 기록 없는 우편<\/span><strong>0건/);
 });

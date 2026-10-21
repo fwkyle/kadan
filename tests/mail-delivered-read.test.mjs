@@ -80,7 +80,7 @@ test('기록용 알림은 원장에 남지만 미확인 목록·대시보드 건
  assert.equal(mailboxUnread(entries,entries.length),1);
  assert.deepEqual(filterMail(letters,url('?mailUnread=1')).map(e=>e.mailId),['plain']);
  assert.equal(dashboardData({entries,ledgerLines:entries.length,collectedAt:'t'},url('api/dashboard/mail')).unread,1);
- assert.match(renderActivity({entries,ledgerLines:entries.length},url('')),/전체 역할 미확인 1건/);
+ assert.match(renderActivity({entries,ledgerLines:entries.length},url('')),/전체 역할 읽음 기록 없음 1건/);
 });
 
 test('감시기 재알림 대상은 그대로: 전달 읽음·기록용 알림 제외, 일반 미확인만',()=>{

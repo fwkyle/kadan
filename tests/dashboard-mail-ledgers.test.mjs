@@ -56,7 +56,7 @@ test('기록용 자동 결과와 확인 알림은 추가 알림 제외 표시를
  assert.equal(mailboxUnread(entries,entries.length),0);
  const html=renderInbox({key:'c',letters},null,url(''));
  assert.match(html,/기록용 · 추가 알림 없음/);
- assert.match(html,/2통/);assert.match(html,/읽음 미확인/);
+ assert.match(html,/2통/);assert.match(html,/읽음 기록 없음/);
  assert.doesNotMatch(renderInbox({key:'c',letters},null,url('?mailUnread=1')),/기록용 · 추가 알림 없음/);
  assert.deepEqual(letters,before);
 });
@@ -90,10 +90,10 @@ test('카드 인박스는 필터 후 페이지를 나누고 HTML을 이스케이
 test('과거 우편 읽음 모름과 신규 미확인, 원장 오류를 구분한다',()=>{
  const entries=[send({mailId:undefined,expectReply:false}),send({mailId:'new',expectReply:false})];
  const html=renderActivity({entries,ledgerLines:2},url('?mailUnread=1'));
- assert.equal(mailboxUnread(entries,2),1);assert.match(section(html,'mailbox'),/미확인 1건/);
+ assert.equal(mailboxUnread(entries,2),1);assert.match(section(html,'mailbox'),/읽음 기록 없음 1건/);
  assert.match(renderInbox({key:'c',letters:mailboxLetters(entries)}),/읽음 모름/);
  const broken=renderDashboardHome({center:null,entries:[{broken:true}],ledgerLines:null});
- assert.match(broken,/전체 역할 미확인 우편<\/span><strong>모름/);
+ assert.match(broken,/전체 역할 읽음 기록 없는 우편<\/span><strong>모름/);
  for(const query of ['', '?ledgerDomain=mail'])assert.match(renderActivity({entries:[{broken:true}],ledgerLines:1},url(query)),/모름 — 원장을 읽을 수 없습니다/);
 });
 
