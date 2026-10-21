@@ -172,7 +172,7 @@ test('감독 전용 오류(SSE·압축)는 시계가 늘어도 5분 지속되면
  }
 });
 
-const idleScreen='하위 결과를 기다리는 중\n\n❯ \n';
+const idleScreen='✻ Cogitated for 3m 44s · done 1:16 PM\n\n❯ \n';
 test('정상 대기(빈 입력창·오류 없음·본인 차례 없음)는 1시간이 지나도 후보를 내지 않고 lastCheck를 갱신하지 않는다',()=>{
  const f=health(),own=new Set();
  assert.equal(f.check(0,idleScreen,{ownTurn:own}).candidate,undefined);
@@ -185,7 +185,7 @@ test('정상 대기(빈 입력창·오류 없음·본인 차례 없음)는 1시�
 test('본인 차례·알 수 없는 상태 줄·아래쪽 오류·본인 차례 모름이면 지금처럼 부른다',()=>{
  const due=(screen,ownTurn)=>{const f=health();f.check(0,screen,{ownTurn});return f.check(SUPERVISOR_CHECK_MS,screen,{ownTurn}).candidate;};
  assert.equal(due(idleScreen,new Set(['boss'])).role,'boss');
- assert.equal(due('하위 결과를 기다리는 중',new Set()).role,'boss');
+ assert.equal(due('✻ Cogitated for 3m 44s',new Set()).role,'boss');
  assert.equal(due('Reconnecting... 1/2\n❯ \n',new Set()).role,'boss');
  assert.equal(due(idleScreen,null).role,'boss');
  assert.equal(due(crafting('4m 0s'),new Set()).role,'boss');
@@ -217,4 +217,22 @@ test('감독 전용 오류(SSE·압축)가 빈 입력창 아래에 보이면 정
   const screen=`${line}\n\n❯ \n`,own=new Set(),f=health();f.check(0,screen,{ownTurn:own});
   assert.equal(f.check(SUPERVISOR_CHECK_MS,screen,{ownTurn:own}).candidate.role,'boss',line);
  }
+});
+
+import {readFileSync} from 'node:fs';
+import {isQuietScreen} from '../src/watch-status-line.mjs';
+const quietFixture=JSON.parse(readFileSync(new URL('./fixtures/quiet-screens.json',import.meta.url),'utf8'));
+test('정상 대기는 아는 끝난 턴 모양일 때만 — 로그인 만료·압축 중·모르는 화면은 부른다',()=>{
+ for(const s of quietFixture.quiet)assert.equal(isQuietScreen(s),true,s);
+ for(const s of quietFixture.notQuiet)assert.equal(isQuietScreen(s),false,s);
+ for(const s of quietFixture.notQuiet){
+  const f=health(),own=new Set();f.check(0,s,{ownTurn:own});
+  const r=f.check(SUPERVISOR_CHECK_MS,s,{ownTurn:own});
+  assert.equal(r.candidate.input.check,'hourly',s);assert.equal(r.quietSkipped,0);
+ }
+});
+test('정상 대기를 건너뛰는 것은 연속 3번까지 — 4시간째에는 한 번 부른다',()=>{
+ const f=health(),own=new Set();f.check(0,idleScreen,{ownTurn:own});
+ for(let h=1;h<=3;h++)assert.equal(f.check(h*SUPERVISOR_CHECK_MS,idleScreen,{ownTurn:own}).candidate,undefined,`${h}h`);
+ assert.equal(f.check(4*SUPERVISOR_CHECK_MS,idleScreen,{ownTurn:own}).candidate.input.check,'hourly');
 });

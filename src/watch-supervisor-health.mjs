@@ -6,6 +6,8 @@ import {statusProgress,isQuietScreen} from './watch-status-line.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
+// 정상 대기를 거르는 연속 정기 확인 수. 이만큼 건너뛴 뒤(마지막 확인 후 4시간)에는 정상 대기여도 한 번 부른다.
+export const SUPERVISOR_QUIET_SKIPS = 3;
 const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
 
 export function observationContext(role, observation, entries, cards, tasks) {
@@ -64,7 +66,8 @@ export class SupervisorHealth {
       state.prevScreen = seen.screen.slice(-8000);
       const early = error && !state.errorChecked && now-state.errorSince >= SUPERVISOR_ERROR_MS;
       // 정상 대기(빈 입력창 + 오류 없음 + 본인 차례 없음)는 정기 확인 때 부르지 않는다. 애매하면(unknown·오류·본인 차례) 그대로 부른다.
-      const quiet = !error && ownTurn != null && !ownTurn.has(role) && isQuietScreen(seen.screen, progress.status);
+      const quiet = !error && ownTurn != null && !ownTurn.has(role) && now-state.lastCheck < (SUPERVISOR_QUIET_SKIPS+1)*SUPERVISOR_CHECK_MS
+        && isQuietScreen(seen.screen, progress.status);
       if (quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS) quietSkipped++;
       if (enabled && (early || (error || !progress.moving) && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
