@@ -1,9 +1,7 @@
 // 감시 한 바퀴에서 역할 화면 읽기·전달된 화면 흡수 (HW-3-impl: watch-runner.mjs에서 옮김)
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
-import { findDoneMarkers, diffDoneMarkers } from "./done-marker.mjs";
 import { createHash } from "node:crypto";
-import { hookDoneSince } from "./stop-hook-spool.mjs";
-import { ledgerHome } from "./ledger.mjs";
+import { doneEvidence } from "./done-evidence.mjs";
 
 export function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -140,28 +138,13 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       }
     }
     const completionDispatches = dispatches.get(session) ?? new Map();
-    const markers = findDoneMarkers(screen ?? ''), fresh = new Set();
-    for (const [key, dispatch] of completionDispatches) {
-      const newer = diffDoneMarkers(dispatch.baselineMarkers ?? [], markers,
-        marker => JSON.stringify([taskKey(marker.taskId), marker.result]));
-      for (const marker of newer) {
-        if (taskKey(marker.taskId) === key && marker.result !== dispatch.confirmedResult) fresh.add(marker);
-      }
-    }
+    // 완료 증거(훅 우선 + 화면의 새 마커)는 시작보고 누락 경보와 같은 공용 판정을 쓴다.
     // 중앙 카드 조회를 쓰지 않는 기존 호출은 발령 없는 화면 후보도 보고한다.
-    // 실제 CLI는 카드 목록(빈 목록 포함)을 넘기므로 등록 카드 감시는 위 대조를 반드시 거친다.
-    // 빠른 길: 실행기가 턴을 마칠 때 훅이 남긴 증거가 발령 뒤에 있으면 화면 대신 그것을 쓴다. 없으면 화면 판정이다.
-    // 증거는 같은 역할(훅이 보는 KADAN_ROLE = 세션 이름에서 kadan- 뗀 것)·같은 카드·그 발령(send) 뒤 시각이어야 한다.
-    let hookMarker = null;
-    for (const [key, dispatch] of completionDispatches) {
-      const found = hookDoneSince({ home: hookHome ?? ledgerHome(), role: session.slice("kadan-".length), since: dispatch.t,
-        taskMatches: id => taskKey(id) === key }).at(-1);
-      if (found && found.result !== dispatch.confirmedResult &&
-          (!hookMarker || Date.parse(found.at) > Date.parse(hookMarker.at))) hookMarker = found;
-    }
-    const screenMarker = cards == null && completionDispatches.size === 0
-      ? markers.at(-1) : markers.findLast(marker => fresh.has(marker));
-    const doneMarker = hookMarker ? { taskId: hookMarker.taskId, result: hookMarker.result } : screenMarker;
+    // 실제 CLI는 카드 목록(빈 목록 포함)을 넘기므로 등록 카드 감시는 발령 대조를 반드시 거친다.
+    const { marker: doneMarker, source: doneSource } = doneEvidence({
+      dispatches: completionDispatches, screen, home: hookHome,
+      role: session.slice("kadan-".length), taskKey, unscoped: cards == null,
+    });
     observations.set(session, {
       role,
       alive: Boolean(live),
@@ -173,7 +156,7 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       screenError,
       startedAt: generations.get(session)?.t ?? start.t,
       doneMarker: doneMarker ?? null,
-      doneSource: doneMarker ? (hookMarker ? "hook" : "screen") : null,
+      doneSource,
       completionDispatches,
     });
   }
