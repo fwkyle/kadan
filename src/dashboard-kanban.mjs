@@ -21,14 +21,16 @@ const bareWork = (key) => String(key ?? "").replace(/^work:/, "");
 const sinceOf = (row) => row.signalAt || row.at || null;
 const time = (value) => (Number.isFinite(Date.parse(value)) ? Date.parse(value) : null);
 
-// 먼저 맞는 줄. 결정·막힘 > 검수 > 작업중 > 발령 전 > 완료. 끝난 카드는 결정이 걸려 있어도 완료다.
+// 먼저 맞는 줄. 열린 결정 > (끝나지 않은 카드의) 막힘 > 검수 > 작업중 > 발령 전 > 완료.
+// 열린 결정은 상태·24시간·완료 상한보다 먼저다. 끝난 카드에 걸려도 kyle 확인 필요에 둔다(2라운드 F1).
 export function kanbanLine(row, { decided = false, now = Date.now() } = {}) {
   const bucket = statusBucket(row.state);
+  if (decided) return "decision";
   if (bucket === "end") {
     const at = time(sinceOf(row));
     return at !== null && at <= now && now - at <= RECENT_MS ? "done" : null;
   }
-  if (decided || row.bucket === "stuck") return "decision";
+  if (row.bucket === "stuck") return "decision";
   if (bucket === "before") return "before";
   const review = row.rallyStep === "review" || row.profile === "reviewer";
   return review && row.state !== "hold" ? "review" : "working";
@@ -36,7 +38,8 @@ export function kanbanLine(row, { decided = false, now = Date.now() } = {}) {
 
 function marksOf(row, { decided }) {
   const marks = [];
-  if (decided) marks.push({ kind: "decision", label: "결정 대기" });
+  // decided: "card"(이 카드에 걸림) | "work"(연결된 업무에 걸림)
+  if (decided) marks.push({ kind: "decision", label: decided === "work" ? "결정 대기(업무)" : "결정 대기(카드)" });
   if (row.bucket === "stuck") marks.push({ kind: "stuck", label: "막힘" });
   if (row.bucket === "stale") marks.push({ kind: "stale", label: "오래된 미확정" });
   if (row.state === "hold") marks.push({ kind: "hold", label: "일시정지" });
@@ -69,9 +72,23 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     return boards.get(id);
   };
 
+  // 업무에 열린 결정이 걸렸는데 끝나지 않은 카드가 없으면, 가장 최근 실행 1장을 올려 판에 나타나게 한다.
+  const rowsOfWork = new Map();
+  for (const row of rows) {
+    const w = workOf.get(row.key);
+    if (w) rowsOfWork.set(w.key, [...(rowsOfWork.get(w.key) ?? []), row]);
+  }
+  const elevated = new Set();
+  for (const [key, list] of rowsOfWork) {
+    if (!decidedWorks.has(bareWork(key)) || list.some((r) => statusBucket(r.state) !== "end")) continue;
+    elevated.add([...list].sort((a, b) => (time(sinceOf(b)) ?? 0) - (time(sinceOf(a)) ?? 0))[0].key);
+  }
+
   for (const row of rows) {
     const work = workOf.get(row.key) ?? null;
-    const decided = decidedCards.has(row.key) || (work !== null && decidedWorks.has(bareWork(work.key)));
+    const ended = statusBucket(row.state) === "end";
+    const workDecided = work !== null && decidedWorks.has(bareWork(work.key)) && (!ended || elevated.has(row.key));
+    const decided = decidedCards.has(row.key) ? "card" : workDecided ? "work" : false;
     const line = kanbanLine(row, { decided, now });
     if (line === null) continue;
     // 판: 연결된 업무의 owner → 담당 역할의 관계표 부모 → 미연결. 조용히 빼지 않는다.

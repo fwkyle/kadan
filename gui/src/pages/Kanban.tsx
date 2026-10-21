@@ -62,7 +62,7 @@ export default function Kanban({ url }: { url: URL }) {
     <div className="kb-view" data-view="kanban">
       <header className="kb-lead">
         <h1>감독별 칸반</h1>
-        <p>감독마다 실행 카드가 어느 단계에 있는지 봅니다. 보기 전용이며, 완료는 최근 24시간만 보입니다.</p>
+        <p>감독마다 실행 카드가 어느 단계에 있는지 봅니다. 보기 전용이며, 완료는 최근 24시간만 보입니다. 열린 결정이 걸린 카드는 끝났어도 'kyle 확인 필요'에 보입니다.</p>
         <label className="kb-pick">감독{" "}
           <select value={owner} onChange={(e) => patchLocation({ owner: e.target.value || null }, "kanban")}>
             <option value="">전체</option>

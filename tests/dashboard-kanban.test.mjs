@@ -64,7 +64,7 @@ test("24시간 경계: 안쪽 끝난 카드는 완료, 바깥은 제외한다. �
   const rows = [row("r/in", { state: "done", signalAt: ago(RECENT_MS) }), row("r/out", { state: "done", signalAt: ago(RECENT_MS + 1) }),
     row("r/sup", { state: "superseded", signalAt: null, at: ago(1000) }), row("r/can", { state: "cancelled" }), row("r/fut", { state: "done", signalAt: ago(-5000) })];
   const result = buildKanban({ rows, hierarchy, now, decisions: [{ id: "d", status: "open", card: "r/in" }] });
-  assert.equal(lineOf(result, "r/in"), "감독A/done", "끝난 카드는 결정이 걸려 있어도 완료");
+  assert.equal(lineOf(result, "r/in"), "감독A/decision", "열린 결정이 걸린 끝난 카드는 24시간 안이어도 kyle 확인 필요");
   assert.equal(lineOf(result, "r/out"), undefined);
   assert.equal(lineOf(result, "r/sup"), "감독A/done");
   assert.equal(lineOf(result, "r/can"), "감독A/done");
@@ -93,6 +93,49 @@ test("완료 줄은 최신 순 상한과 나머지 개수를 낸다", () => {
   assert.equal(done.hidden, 3);
   assert.equal(done.cards.length, DONE_LIMIT);
   assert.equal(done.cards[0].key, "r/0", "가장 최근이 앞");
+});
+
+test("F1: 끝난 카드에 걸린 열린 카드 결정은 kyle 확인 필요(24시간 밖이어도)", () => {
+  const rows = [row("r/done", { state: "done", signalAt: ago(RECENT_MS + 1) })];
+  const result = buildKanban({ rows, hierarchy, now, decisions: [{ id: "d", status: "open", card: "r/done" }] });
+  assert.equal(lineOf(result, "r/done"), "감독A/decision");
+  assert.deepEqual(result.boards[0].lines[0].cards[0].marks.map((m) => m.label), ["결정 대기(카드)"]);
+  const closed = buildKanban({ rows, hierarchy, now, decisions: [{ id: "d", status: "answered", card: "r/done" }] });
+  assert.equal(closed.boards.length, 0, "닫힌 결정이면 24시간 밖 완료는 지금처럼 제외");
+});
+
+test("F1: 24시간+1ms 지난 완료 카드뿐인 업무에 열린 업무 결정이 있으면 판이 생기고 최근 1장만 kyle 확인", () => {
+  const w = [{ key: "r/work-2", title: "업무2", owner: "감독C", executions: [{ key: "r/old1" }, { key: "r/old2" }] }];
+  const rows = [row("r/old1", { state: "done", signalAt: ago(RECENT_MS + 5000) }), row("r/old2", { state: "done", signalAt: ago(RECENT_MS + 1) })];
+  const result = buildKanban({ rows, works: w, hierarchy, now, decisions: [{ id: "d", status: "open", work: "r/work-2" }] });
+  assert.equal(lineOf(result, "r/old2"), "감독C/decision", "가장 최근 실행");
+  assert.equal(lineOf(result, "r/old1"), undefined, "나머지 옛 카드는 올리지 않는다");
+  assert.deepEqual(result.boards[0].lines[0].cards[0].marks.map((m) => m.label), ["결정 대기(업무)"]);
+  const closed = buildKanban({ rows, works: w, hierarchy, now, decisions: [{ id: "d", status: "closed", work: "r/work-2" }] });
+  assert.equal(closed.boards.length, 0);
+});
+
+test("F1: 끝나지 않은 카드가 있는 업무의 업무 결정은 그 카드로 간다(끝난 카드를 따로 올리지 않는다)", () => {
+  const w = [{ key: "r/work-3", title: "업무3", owner: "감독C", executions: [{ key: "r/live" }, { key: "r/fin" }] }];
+  const rows = [row("r/live"), row("r/fin", { state: "done", signalAt: ago(1000) })];
+  const result = buildKanban({ rows, works: w, hierarchy, now, decisions: [{ id: "d", status: "open", work: "work:r/work-3" }] });
+  assert.equal(lineOf(result, "r/live"), "감독C/decision");
+  assert.equal(lineOf(result, "r/fin"), "감독C/done");
+});
+
+test("F1: 완료 11장 중 가장 오래된 카드에 열린 결정이 있어도 완료 상한과 무관하게 kyle 확인", () => {
+  const rows = Array.from({ length: DONE_LIMIT + 1 }, (_, i) => row(`r/${i}`, { state: "done", signalAt: ago(1000 * (i + 1)) }));
+  const oldest = `r/${DONE_LIMIT}`;
+  const result = buildKanban({ rows, hierarchy, now, decisions: [{ id: "d", status: "open", card: oldest }] });
+  assert.equal(lineOf(result, oldest), "감독A/decision");
+  const done = result.boards[0].lines.find((l) => l.key === "done");
+  assert.equal(done.count, DONE_LIMIT, "결정으로 올라간 카드는 완료 줄에서 빠진다");
+  assert.equal(done.hidden, 0);
+});
+
+test("F1: 막힘은 끝나지 않은 카드에만 적용한다", () => {
+  const result = buildKanban({ rows: [row("r/d", { state: "done", bucket: "stuck" })], hierarchy, now });
+  assert.equal(lineOf(result, "r/d"), "감독A/done");
 });
 
 test("kanbanLine: 모르는 상태(실패·세션 확인 필요)는 끝난 것처럼 숨기지 않고 작업중에 둔다", () => {
