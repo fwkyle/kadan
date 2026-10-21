@@ -301,7 +301,7 @@ export function projectLedger(state,domain) {
   const mailDomain = domain === 'mail' || domain === 'mailbox';
   const mailEvidence=value=>isMailTransfer(value)||value?.kind==='done'&&value.completionMailId;
   // 우편함 조회는 '알림이 실제로 들어간' 감시 사건(sent)의 최소 정보만 더한다. 감시기와 같은 넣은 시각(deliveredAt)·세대 판정을 하려는 것이다.
-  const reminderSent=value=>domain==='mailbox'&&value?.kind==='watch-mail-reminder'&&value.action==='result'&&value.delivery==='sent'&&value.held!==true&&value.mailId&&value.role;
+  const reminderSent=value=>domain==='mailbox'&&value?.kind==='watch-mail-reminder'&&value.action==='result'&&value.delivery==='sent'&&value.held!==true&&value.stage!=='escalate'&&value.mailId&&value.role;
   const slimReminder=({kind,t,mailId,role,action,delivery})=>({kind,t,mailId,role,action,delivery});
   const legacy = state.legacy.flatMap(value => {
     if (!domain) return [value];

@@ -8,10 +8,11 @@ export const isSimplifiedMail = mail => Number(mail?.mailRule) >= MAIL_RULE;
 export const reminderKey = (mailId, role) => JSON.stringify([mailId, role]);
 
 // 감시 알림 사건에서 우편·받는 역할별로 처음 sent된 시각(ms). 보류(held)·not-sent·unknown은 넣은 것이 아니다.
+// escalate(직속 상위에게 가는 알림)는 받는 역할에게 넣은 것이 아니므로 센다면 안 된다(role은 우편 수신자다).
 export function firstReminderSent(entries) {
   const sent = new Map();
   for (const e of entries) {
-    if (e?.kind !== 'watch-mail-reminder' || e.action !== 'result' || e.held === true || e.delivery !== 'sent'
+    if (e?.kind !== 'watch-mail-reminder' || e.action !== 'result' || e.held === true || e.delivery !== 'sent' || e.stage === 'escalate'
       || !e.mailId || !e.role) continue;
     const key = reminderKey(e.mailId, e.role), at = Date.parse(e.t);
     if (Number.isFinite(at) && !sent.has(key)) sent.set(key, at);
