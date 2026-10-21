@@ -50,7 +50,7 @@ test('followup sent 뒤 14분은 없음, 15분에 상위에게 1통(수신자·�
   assert.equal(f.toParent().length, 1);
   const [head, line] = f.toParent()[0].message.split('\n');
   assert.match(head, /^\[미읽음 우편 상위 알림\] 직속 부하 앞 우편 1건/);
-  assert.equal(line, `- worker · ${ID(1)} · 보낸이 boss · 보낸 시각 ${at(T0)} · 20분째 미읽음 · 확인: kadan inbox read ${ID(1)} --role 'worker'`);
+  assert.equal(line, `- 우편 받는이 worker · 우편 ID ${ID(1)} · 보낸이 boss · 보낸 시각 ${at(T0)} · 상태 20분째 미읽음 · 확인: kadan inbox read ${ID(1)} --role 'worker'`);
   f.now += 60 * MIN; f.tick(watch); f.tick(f.create()); assert.equal(f.toParent().length, 1, '평생 1회, 재시작해도 0회');
 });
 

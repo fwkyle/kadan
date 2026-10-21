@@ -1,0 +1,93 @@
+// 감시기 알림: 역할 지침을 붙이지 않고 항목 이름을 붙인 본문으로 가며, 이 알림이 일반 우편의 지침 전문·요약 판정을 흐트러뜨리지 않는다.
+import './helpers/isolated-home.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {guardedSend} from '../src/cli.mjs';
+import {appendLedger, readLedger} from '../src/ledger.mjs';
+import {labeledNotice} from '../src/watch-notice-format.mjs';
+import {sendWatchMessage, sendWatchNudge, sendWatchMailReminder, WATCH_ALERT_FOOTER} from '../src/commands/watch.mjs';
+
+const ROLE = 'kadan-시험판-감독', SESSION = `kadan-${ROLE}`;
+const MARK = 'kadan:receiver-instructions';
+
+function fixture() {
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notice-'));
+  appendLedger({kind: 'start', role: ROLE, session: SESSION, panePid: '100', cmd: 'x', cwd: '/x/Dev/kadan'}, h);
+  const state = {messages: [], fail: null};
+  const floor = {name: 'fake', alive: () => true, pid: () => '100', send: (_s, m) => {
+    state.messages.push(m);
+    if (state.fail) { const e = new Error('바닥 전달 실패'); e.delivery = state.fail; throw e; }
+    return {keyDelivery: 'sent', inputAcceptance: 'accepted'};
+  }};
+  const base = {floor, session: SESSION, role: ROLE, recordedPid: '100', env: {KADAN_HOME: h},
+    readEntries: () => readLedger(h), record: e => appendLedger(e, h), saveBody: () => {}};
+  const mail = (extra = {}) => guardedSend({...base, message: '본문', roleProfile: 'conductor', ...extra});
+  const notice = (extra = {}) => guardedSend({...base, message: labeledNotice({role: ROLE, content: '알림'}), source: 'watch',
+    notificationOnly: true, omitInstructions: true, ...extra});
+  return {h, state, mail, notice};
+}
+
+test('labeledNotice: 보낸이·받는이·내용·할 일 이름이 붙는다', () => {
+  assert.equal(labeledNotice({role: 'a', content: '본문', todo: '확인'}), '보낸이: 감시기(watch)\n받는이: a\n내용: 본문\n할 일: 확인');
+  assert.equal(labeledNotice({role: 'a', content: '본문'}), '보낸이: 감시기(watch)\n받는이: a\n내용: 본문');
+});
+
+test('omitInstructions: 본문에 역할 지침이 없고 원장에 지침 기록(instructions)이 남지 않는다', () => {
+  const t = fixture();
+  const entry = t.notice();
+  assert.ok(!t.state.messages[0].includes(MARK));
+  assert.match(t.state.messages[0], /^보낸이: 감시기\(watch\)\n받는이: kadan-시험판-감독\n내용: 알림/);
+  assert.equal(entry.instructions, undefined);
+  assert.equal(entry.roleInstructions.status, 'not-applied');
+  assert.equal(entry.roleInstructions.reason, 'watch-notice');
+});
+
+test('알림만 있던 역할의 첫 일반 우편은 전문(generation-first)이다 — 알림이 전문을 보낸 것으로 세어지지 않는다', () => {
+  const t = fixture();
+  t.notice(); t.notice();
+  const first = t.mail();
+  assert.equal(first.instructions.mode, 'full');
+  assert.equal(first.instructions.reason, 'generation-first');
+  assert.ok(t.state.messages.at(-1).includes(MARK));
+});
+
+test('일반 전문 뒤 알림이 여러 번 가도 다음 일반 우편은 요약(within-interval)이다', () => {
+  const t = fixture();
+  assert.equal(t.mail().instructions.mode, 'full');
+  t.notice(); t.notice(); t.notice();
+  const next = t.mail();
+  assert.deepEqual([next.instructions.mode, next.instructions.reason], ['summary', 'within-interval']);
+});
+
+test('알림 전달이 실패해도 send-failed(전문 시도)를 남기지 않아 다음 일반 우편이 delivery-unclear가 되지 않는다', () => {
+  for (const delivery of ['not-sent', 'unknown']) {
+    const t = fixture();
+    assert.equal(t.mail().instructions.mode, 'full');
+    t.state.fail = delivery;
+    assert.throws(() => t.notice(), e => e.delivery === delivery);
+    t.state.fail = null;
+    assert.equal(readLedger(t.h).filter(e => e.kind === 'send-failed').length, 0);
+    const next = t.mail();
+    assert.deepEqual([next.instructions.mode, next.instructions.reason], ['summary', 'within-interval']);
+  }
+});
+
+test('감시기 세 전송 길(경보·놀고 있음 본인 알림·미확인 우편)은 지침을 빼고 항목 이름 본문을 만든다', () => {
+  const calls = [];
+  const send = args => { calls.push(args); return {}; };
+  const start = () => ({role: ROLE, session: SESSION, panePid: '100'});
+  const opts = {send, readStart: start, selectedFloor: {}};
+  sendWatchMessage(ROLE, '[watch 12:00] 화면이 멈춤 x', opts);
+  sendWatchNudge(ROLE, '[watch 12:00] 놀고 있음 x', opts);
+  sendWatchMailReminder(ROLE, '[미확인 우편] 건수 1건', '100', opts);
+  assert.equal(calls.length, 3);
+  for (const c of calls) {
+    assert.equal(c.omitInstructions, true);
+    assert.equal(c.notificationOnly, true);
+    assert.match(c.message, /^보낸이: 감시기\(watch\)\n받는이: kadan-시험판-감독\n내용: /);
+  }
+  assert.ok(calls[0].message.endsWith(`\n할 일: ${WATCH_ALERT_FOOTER}`));
+});

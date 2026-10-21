@@ -28,8 +28,8 @@ function escalateKind(stages, now) {
 
 // 상위 한 명에게 가는 한 통. 우편마다 한 줄이고 본문·미리보기는 넣지 않는다. 값은 모두 원장에서 온다.
 export function escalationMessage(items) {
-  const line = ({mail, kind, minutes}) => `- ${recipient(mail)} · ${mail.mailId} · 보낸이 ${mail.by} · 보낸 시각 ${mail.t} · `
-    + `${kind === 'unknown' ? '결과 불명' : `${minutes}분째 미읽음`} · 확인: kadan inbox read ${mail.mailId} --role ${shellQuote(recipient(mail))}`;
+  const line = ({mail, kind, minutes}) => `- 우편 받는이 ${recipient(mail)} · 우편 ID ${mail.mailId} · 보낸이 ${mail.by} · 보낸 시각 ${mail.t} · `
+    + `상태 ${kind === 'unknown' ? '결과 불명' : `${minutes}분째 미읽음`} · 확인: kadan inbox read ${mail.mailId} --role ${shellQuote(recipient(mail))}`;
   const rest = items.length - ESCALATE_LIST_MAX;
   return [`[미읽음 우편 상위 알림] 직속 부하 앞 우편 ${items.length}건이 읽히지 않았습니다. 읽음 확인은 수신자 몫이니 대신 ack하지 마세요.`,
     ...items.slice(0, ESCALATE_LIST_MAX).map(line), ...(rest > 0 ? [`- 외 ${rest}건`] : [])].join('\n');
@@ -212,7 +212,7 @@ export class MailWatch {
         if (!signal?.aborted && String(currentPid(target,fresh,live)) === String(expectedPid) && pending.length) {
           attempted = true;
           this.send(target,escalate ? escalationMessage(unreadItems)
-            : `[미확인 우편] ${pending.length}건이 남아 있습니다. kadan inbox --role ${shellQuote(target)} --unread로 확인하고 내용을 읽은 우편만 직접 ack하세요. 질문의 최종 답변은 읽음 확인과 별개입니다.`,expectedPid);
+            : `[미확인 우편] 건수 ${pending.length}건 · 확인: kadan inbox --role ${shellQuote(target)} --unread · 안내: 내용을 읽은 우편만 직접 ack하세요. 질문의 최종 답변은 읽음 확인과 별개입니다.`,expectedPid);
           delivery = 'sent'; reason = null; code = null; delivered.add(target);
         }
       } catch (error) {
