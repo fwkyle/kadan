@@ -92,6 +92,7 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 | 명령 | 하는 일 |
 |---|---|
 | `kadan init` / `kadan up` | 처음 준비 / 비서·대시보드 띄우기 |
+| `kadan doctor` | 막힌 곳 한 번에 점검(읽기 전용, 풀려면 칠 명령을 보여 줌) |
 | `kadan start <역할>` | 역할 세션 만들기 |
 | `kadan mail <역할> <메시지>` | 일반 우편. `--execution`을 연결해도 발령하지 않음 |
 | `kadan dispatch <역할> --task <카드ID> <지시>` | 명시한 실행 카드 발령 |

@@ -11,6 +11,21 @@ const types = {
   ".png": "image/png",
   ".woff2": "font/woff2",
 };
+export const DASHBOARD_BUILD_COMMAND = "npm --prefix gui ci && npm run build:gui";
+
+// 대시보드 화면 빌드를 읽을 수 있는지 본다. serveDashboard가 "/"에 503을 내는 조건과 같다:
+// gui/dist 폴더가 있는지가 아니라 index.html을 파일로 읽을 수 있는지다. 아무것도 만들거나 고치지 않는다.
+export function dashboardBuild({ root = defaultRoot } = {}) {
+  const file = path.join(root, "index.html");
+  try {
+    if (!fs.statSync(file).isFile()) throw new Error("not a file");
+    fs.closeSync(fs.openSync(file, "r"));
+    return { ok: true, file };
+  } catch (error) {
+    return { ok: false, file, reason: error.code === "ENOENT" ? "파일이 없다" : "읽을 수 없다" };
+  }
+}
+
 export function serveDashboard(
   request,
   response,

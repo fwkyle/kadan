@@ -25,6 +25,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 import { cmdStart } from "./start.mjs";
 import { checkpointSecretary, resumeSecretary, withRecoveryLock } from "../secretary-resume.mjs";
+import { dashboardBuild } from "../dashboard-static.mjs";
 
 export function cmdInit(_argv, flags) {
   if (flags.help) {
@@ -113,6 +114,7 @@ function runUpOnce({ home, flags, auto }) {
     start: (argv, startFlags) => cmdStart(argv, startFlags),
     skip: prepared.skip,
     log,
+    dashboardBuild,
     ...(tmuxFloor ? {
       restoreSecretary: startNew => resumeSecretary({home, floor, startNew}),
       startWatch: () => startWatchSession(home),
