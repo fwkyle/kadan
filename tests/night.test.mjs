@@ -292,7 +292,7 @@ test('요약: 재시작·우편·보류 집계, 대리 위임 원문이 첫 줄,
   ];
   const start = baseOn({viaChat: true, by: 'a-슈퍼감독', quote: '다 알아서 승인해', delivered: [{role: 'a-슈퍼감독', mailId: 'night-1'}]});
   const s = summarize({start, entries, bodies: {held1: '[나이트 보류] 운영 DB 마이그레이션\n자세히', plain: '안녕'}});
-  assert.equal(s.text.split('\n')[0], '대리 위임: a-슈퍼감독이(가) kyle의 채팅 말을 옮겨 적었습니다 — "다 알아서 승인해" (전체 원문: kadan night status, 원장)');
+  assert.equal(s.text.split('\n')[0], '대리 위임: a-슈퍼감독이(가) kyle의 채팅 말을 옮겨 적었습니다 — "다 알아서 승인해" (전체 원문: kadan night status --text, 원장)');
   assert.equal(s.counts.restarts, 1);
   assert.equal(s.counts.mails, 3);
   assert.equal(s.counts.held, 1);
@@ -302,7 +302,7 @@ test('요약: 재시작·우편·보류 집계, 대리 위임 원문이 첫 줄,
 
   const empty = summarize({});
   assert.match(empty.text, /밤사이 처리한 일 없음/);
-  assert.equal(empty.text.split('\n')[0], 'kyle 위임: "자러 감" (전체: kadan night status, 원장)');
+  assert.equal(empty.text.split('\n')[0], 'kyle 위임: "자러 감" (전체: kadan night status --text, 원장)');
 });
 
 test('CLI: 일반감독의 night on은 거절되고, status는 읽기만 한다', () => {
@@ -447,7 +447,7 @@ test('F2: 줄바꿈 원문도 대리 위임 표시는 한 줄이고, 보류가 �
 test('F3: 꺼진 뒤 status가 마지막 켜짐의 원문을 보인다(줄바꿈 유지), 사람 명의·켠 적 없음도 확인', () => {
   const f = fixture();
   assert.deepEqual(f.run(['status']), {on: false, last: null}); // 켠 적 없음
-  assert.equal(nightOriginalText(f.run(['status'])), null);
+  assert.match(nightOriginalText(f.run(['status'])), /켠 적이 없습니다/);
   const quote = '첫 줄\n둘째 줄';
   f.run(['on', '대리', '위임'], {quote, for: '6h'}, 'a-슈퍼감독');
   const on = f.run(['status']);
@@ -495,4 +495,47 @@ test('#247 뒤: 증분 읽기(SQLite) entries에도 night 사건이 그대로 �
     assert.equal(watchNightExpiry({entries: [], now: T0, home}), null);
   } finally { DatabaseSync.prototype.prepare = prepare; }
   assert.equal(queries.length, 0, `추가 SQL ${queries.length}회`);
+});
+
+test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 --text에서만 그대로 보인다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-json-'));
+  const table = {'a-슈퍼감독': '@user', 'a-감독': 'a-슈퍼감독', 'b-슈퍼감독': '@user', 'b-감독': 'b-슈퍼감독'};
+  const file = path.join(home, 'h.json');
+  fs.writeFileSync(file, JSON.stringify(table));
+  appendLedger({kind: 'hierarchy-loaded', path: file, hash: 'x', by: 'watch'}, home);
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const run = (args, role) => spawnSync(process.execPath, [cli, 'night', ...args],
+    {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
+  const json = (args, role = '사람') => { const r = run(args, role); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); }; // stdout 전체가 JSON이어야 한다
+  assert.deepEqual(json(['status']), {on: false, last: null});
+  assert.match(run(['status', '--text'], '사람').stdout, /켠 적이 없습니다/);
+  const quote = '첫 줄\n둘째 줄';
+  // 열린 업무가 없으니 받을 슈퍼가 없어도 켜진다(우편 전송 없음)
+  const on = run(['on', '사람 문구', '--for', '2h'], '사람'); assert.equal(on.status, 0, on.stderr);
+  const onStatus = json(['status']);
+  assert.equal(onStatus.on, true);
+  assert.equal(onStatus.text, '사람 문구');
+  assert.match(run(['status', '--text'], '사람').stdout, /지금 켜진 위임 원문[\s\S]*사람 문구[\s\S]*끝: /);
+  assert.equal(run(['off'], '사람').status, 0);
+  const human = json(['status']);
+  assert.equal(human.on, false);
+  assert.equal(human.last.text, '사람 문구');
+  assert.ok(!('quote' in human.last));
+  // 꺼짐(대리·줄바꿈 원문)
+  assert.equal(run(['on', '대리 위임', '--quote', quote, '--for', '2h'], 'a-슈퍼감독').status, 0);
+  assert.equal(run(['off'], '사람').status, 0);
+  const proxy = json(['status']);
+  assert.equal(proxy.last.quote, quote); // JSON 안에서는 \n이 그대로 복원된다
+  assert.equal(proxy.last.viaChat, true);
+  assert.ok(run(['status'], '사람').stdout.includes('\\n')); // 원문 줄바꿈은 JSON 안에서 이스케이프
+  const text = run(['status', '--text'], '사람').stdout;
+  assert.ok(text.includes('첫 줄\n둘째 줄'), '--text는 원문 줄바꿈을 그대로 낸다');
+  assert.match(text, /마지막 위임 원문 \(a-슈퍼감독, kyle 채팅을 옮겨 적음\)/);
+  assert.throws(() => JSON.parse(text)); // --text는 JSON이 아니다
+});
+
+test('F4: 종료 알림의 원문 안내는 status --text를 가리킨다', () => {
+  const start = {kind: 'night', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true, quote: 'q', text: 't', to: [], delivered: []};
+  assert.match(summarizeNight({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan night status --text/);
+  assert.match(summarizeNight({start: {...start, viaChat: false}, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan night status --text/);
 });

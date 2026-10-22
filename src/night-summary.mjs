@@ -54,8 +54,8 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
   const render = (quoteLimit, showHeld) => {
     const lines = [];
     lines.push(start.viaChat
-      ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan night status, 원장)`
-      : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan night status, 원장)`);
+      ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan night status --text, 원장)`
+      : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan night status --text, 원장)`);
     lines.push(`나이트 모드 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase})`);
     const night = [];
     if (decisions.answered) night.push(`결정 답 ${decisions.answered}건`);

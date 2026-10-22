@@ -41,12 +41,13 @@ function lastRun(entries, state) {
   return null;
 }
 
-// status 결과의 원문(문구·kyle 원문)을 줄바꿈 그대로 보이는 글. JSON에서는 줄바꿈이 \n으로 보여 사람이 읽기 어렵다.
+// `status --text`의 글: 문구·kyle 원문을 줄바꿈 그대로 보인다. 켜 있으면 지금 문구와 끝 시각, 켠 적이 없으면 한 줄 안내.
 export function nightOriginalText(result) {
   const run = result?.on ? result : result?.last;
-  if (!run?.text) return null;
+  if (!run?.text) return '켠 적이 없습니다. 원문이 없습니다.';
   return [`--- ${result?.on ? '지금 켜진' : '마지막'} 위임 원문 (${run.by}${run.viaChat ? ', kyle 채팅을 옮겨 적음' : ''}) ---`, run.text,
-    ...(run.quote ? ['--- kyle 채팅 원문 ---', run.quote] : [])].join('\n');
+    ...(run.quote ? ['--- kyle 채팅 원문 ---', run.quote] : []),
+    `--- ${result?.on ? `끝: ${result.untilLocal}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
 }
 
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.
