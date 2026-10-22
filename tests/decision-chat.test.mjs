@@ -93,6 +93,22 @@ test('자동 닫힘 3경로: 같은 업무의 열린 채팅 결정만 이유 문
   }
 });
 
+test('차례 변경으로 닫는 것은 저장 전후 turnOwner가 실제로 다를 때만이다. 같은 값 재저장은 열어 둔다. 차례 해제(값 비움)는 변경이다',()=>{
+  const f=fixture();
+  workCommand(['update','repo/w1'],{revision:1,note:'넘김','turn-owner':'a-감독'},f.ctx);
+  const d=f.store.request(null,{...chatInput,chat:true},SUPER);
+  workCommand(['update','repo/w1'],{revision:2,note:'같은 값 재저장','turn-owner':'a-감독'},f.ctx);
+  assert.equal(f.store.get(d.id).status,'open','같은 값 재저장은 닫지 않는다');
+  workCommand(['update','repo/w1'],{revision:3,note:'다른 값','turn-owner':'b-감독'},f.ctx);
+  assert.equal(f.store.get(d.id).status,'cancelled','다른 값은 닫는다');
+  const e=f.store.request(null,{...chatInput,chat:true},SUPER);
+  workCommand(['update','repo/w1'],{revision:4,note:'차례 해제','turn-owner':''},f.ctx);
+  assert.equal(f.store.get(e.id).status,'cancelled','차례 해제도 차례가 움직인 변경이다');
+  const g=f.store.request(null,{...chatInput,chat:true},SUPER);
+  workCommand(['update','repo/w1'],{revision:5,note:'빈 값 재저장','turn-owner':''},f.ctx);
+  assert.equal(f.store.get(g.id).status,'open','비운 채 다시 비우는 것은 변경이 아니다');
+});
+
 test('업무 명령이 실패하면 닫지 않고, 닫기가 실패해도 업무 명령은 성공하며 stderr에 한 줄만 낸다. 만료는 없다',()=>{
   const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
   assert.throws(()=>workCommand(['execute','repo/w1'],{revision:9,phase:'implementation',round:1,title:'구현','body-file':f.body,note:'x'},f.ctx));

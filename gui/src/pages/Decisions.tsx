@@ -94,7 +94,7 @@ function PastDecisions({newest}: {newest: boolean}) {
   const resource = useResource<Stamp & {items: Decision[]; page: number; pages: number; total: number}>(`decisions?past=1&page=${page}${newest ? "&sort=newest" : ""}`), data = resource.data;
   return <>
     <ErrorMessage error={resource.error}/>
-    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}{d.chat ? <span className="chat-tag">채팅</span> : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}</article>)}
+    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}{d.chat ? <p className="decision-meta"><span className="chat-tag">채팅</span>{d.work && <span className="chat-work">업무 {d.work}</span>}</p> : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}</article>)}
     {data && data.pages > 1 && <p><button disabled={page <= 1} onClick={()=>setPage(page-1)}>이전</button> {data.page}/{data.pages}쪽 · {data.total}건 <button disabled={page >= data.pages} onClick={()=>setPage(page+1)}>다음</button></p>}
   </>;
 }

@@ -41,17 +41,24 @@ function assignAndDispatch(store,work,before,flags,{home,by,send}){
 const STATUS_ACTIONS=new Set(['update','execute','complete','cancel','reopen']);
 export function workCommand(args,flags,context){
  let result;
+ const turnBefore=turnOwnerOf(args,flags,context);
  try{result=workCommandInner(args,flags,context);}
  finally{if(STATUS_ACTIONS.has(args[0])&&args[1]&&!flags.help)refreshWorkStatus(context.home,args[1]);}
- closeChatDecisions(args,flags,context);
+ closeChatDecisions(args,flags,context,turnBefore,result);
  return result;
 }
 
 // 후속 행동이 성공하면 그 업무에 열린 채팅 결정(decision request --chat)을 닫는다. 업무 쓰기가 끝난 뒤 별도 트랜잭션이고,
 // 닫기가 실패해도 업무 명령은 실패시키지 않는다(stderr 한 줄). 대상은 같은 업무의 채팅 결정뿐이다.
 const CHAT_CLOSE={execute:['후속 발령으로 자동 닫힘','work execute'],turn:['차례 변경으로 자동 닫힘','work update --turn-owner'],complete:['업무 완료로 자동 닫힘','work complete']};
-function closeChatDecisions([action,key],flags,{home}){
- const kind=action==='update'?(flags['turn-owner']!==undefined?'turn':null):action;
+// 차례 변경은 저장 전 값과 저장 결과가 실제로 다를 때만 센다. 같은 값 재저장·차례 해제 없이 비운 채 재저장은 닫지 않는다.
+function turnOwnerOf([action,key],flags,{home}){
+ if(action!=='update'||flags['turn-owner']===undefined||!key||flags.help)return null;
+ try{return new WorkStore(home).get(key)?.turnOwner??'';}catch{return null;}
+}
+function closeChatDecisions([action,key],flags,{home},turnBefore,result){
+ const turnChanged=turnBefore!==null&&(result?.turnOwner??'')!==turnBefore;
+ const kind=action==='update'?(turnChanged?'turn':null):action;
  if(!CHAT_CLOSE[kind]||!key||flags.help)return;
  try{new DecisionStore(home).closeChatForWork(key,...CHAT_CLOSE[kind]);}
  catch(error){process.stderr.write(`채팅 결정 자동 닫기 실패(업무 명령은 성공): ${error.message}\n`);}
