@@ -605,14 +605,21 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .kb-board-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .kb-board-head h2 { font-size: 16px; margin: 0; text-wrap: balance; }
 .kb-board-sub { font-size: 12px; color: var(--ds-color-muted); }
-.kb-lines { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 10px; align-items: start; overflow-x: auto; }
+.kb-lines { display: grid; grid-template-columns: repeat(6, minmax(140px, 1fr)); gap: 10px; align-items: start; overflow-x: auto; }
 .kb-col { background: #eef3ef; border-radius: 8px; padding: 10px; min-width: 0; }
 .kb-col h3 { font-size: 13px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 6px; text-wrap: balance; }
 .kb-col-decision { background: #e8ecf8; }
+.kb-col-merge { background: #e6f1ec; }
+.kb-fold { text-wrap: balance; font-size: 13px; font-weight: 700; cursor: pointer; list-style: none; display: flex; gap: 6px; margin: 0 0 8px; }
+.kb-fold::before { content: "▸"; margin-right: 2px; }
+.kb-col[open] > .kb-fold::before { content: "▾"; }
+.kb-col:not([open]) > .kb-fold { margin-bottom: 0; }
 .kb-count { font-weight: 700; }
+.kb-fold .kb-count { margin-left: auto; }
 .kb-col ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .kb-card { background: #fff; border: 1px solid #dfe6e0; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .kb-line-decision { border-left: 4px solid #2b47a8; }
+.kb-line-merge { border-left: 4px solid #1f7a5a; }
 .kb-title { font-size: 13px; line-height: 1.35; text-wrap: balance; }
 .kb-title a { color: #202724; text-decoration: none; }
 .kb-title a:hover { text-decoration: underline; }
@@ -620,6 +627,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .kb-marks { display: flex; gap: 4px; flex-wrap: wrap; }
 .kb-mark { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 8px; background: #edf0ed; color: #536159; white-space: nowrap; }
 .kb-mark-decision { background: #dde4f7; color: #1f3a93; }
+.kb-mark-merge { background: #d5ece1; color: #14573f; }
 .kb-mark-stuck { background: #fff0d0; color: #794e00; }
 .kb-mark-hold { background: #efe5f3; color: #80578f; }
 .kb-empty, .kb-more { font-size: 12px; color: var(--ds-color-muted); margin: 0; }
