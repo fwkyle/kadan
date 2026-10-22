@@ -8,7 +8,7 @@ import { inlineScreenEnv } from "./inline-screen.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
-import { HUMAN_IDLE_MS } from "./notification-guard.mjs";
+import { HUMAN_IDLE_MS, forcedIdleMsFor } from "./notification-guard.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -467,7 +467,7 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
 // (격리 소켓 실측 2026-10-17: 크기 바꾸기·paste-buffer·send-keys로는 안 변하고 그 client의 키 입력으로만 변한다),
 // 제어 모드 client는 명령을 보내도 변하지 않는다. 그래서 활동이 생성 시각보다 뒤일 때(`activity > created`, 초 단위라 차이 1초 이상)만 입력으로 센다.
 // 받아들인 손해: 사람이 글을 치다 그 시간 넘게 손을 떼면 그 글 뒤에 우편이 붙어 제출될 수 있고,
-// 붙은 바로 그 초 안에 누른 키는 놓친다. 반대로 붙은 뒤 터미널 응답 같은 입력이 다음 초에 들어와 활동이 바뀌면 그 창은 30초 보류된다. kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다.
+// 붙은 바로 그 초 안에 누른 키는 놓친다. 반대로 붙은 뒤 터미널 응답 같은 입력이 다음 초에 들어와 활동이 바뀌면 그 창은 입력 보호 시간(기본 30초, 슈퍼감독 창은 2분)만큼 보류된다. kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다.
 function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_created} #{client_activity}"]).split("\n").filter(Boolean);
@@ -522,14 +522,20 @@ function checkCardPane(session, identity, run, spawn, humanIdleMs) {
 
 // 감시기 알림도 사람의 입력을 덮지 않는다(2026-09-23 미확인 우편 알림이 kyle의 입력 중 문장에 붙어 제출된 사고).
 function checkNotificationPane(session, guard, run) {
-  // 감시기가 5번 연속 밀린 알림을 입력 보호 없이 넣는 차례다(2026-10-13). 기록보기 확인은 sendTmux가 따로 한다.
-  if (guard.force === true) return;
+  // 감시기가 5번 연속 밀린 알림을 넣는 차례다(2026-10-13). 기록보기 확인은 sendTmux가 따로 한다.
+  // 보호가 30초보다 긴 창(슈퍼감독)은 마지막 입력 뒤 30초는 기다리고, 30초인 창은 입력 보호를 건너뛴다(2026-10-22 [kyle] 결정 B).
+  if (guard.force === true) {
+    const idle = forcedIdleMsFor(guard.humanIdleMs);
+    if (idle === null) return;
+    return checkHumanIdle(session, run, {...guard, humanIdleMs: idle});
+  }
   checkHumanIdle(session, run, guard);
 }
 
 // 붙여넣지 않고 알림 보류 사유만 돌려준다. 감시기가 예약 기록 전에 확인해 순회마다 기록이 쌓이지 않게 한다.
 export function notificationHold(session, guard, {run = tmuxOut} = {}) {
-  try { checkPaneMode(session, run); checkNotificationPane(session, guard, run); return null; }
+  // 강제 차례는 복사 모드를 해제하고 넣으므로 복사 모드 때문에 미리 밀지 않는다. 사람 입력 확인은 그대로 한다.
+  try { if (guard.force !== true) checkPaneMode(session, run); checkNotificationPane(session, guard, run); return null; }
   catch (error) { return {code: error.code ?? "KADAN_NOTIFY_CHECK_FAILED", message: error.message}; }
 }
 
@@ -548,8 +554,11 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
   let released = false;
   try {
     // 감시기 알림이 5번 밀린 강제 차례에 한해 복사 모드를 해제하고 넣는다(2026-10-14).
-    if (notificationGuard?.force === true && !cardIdentity) released = checkPaneMode(session, run, {release: true});
-    else checkMode();
+    if (notificationGuard?.force === true && !cardIdentity) {
+      // 사람 입력으로 밀릴 차례면 복사 모드를 건드리기 전에 먼저 멈춘다.
+      checkSendPane();
+      released = checkPaneMode(session, run, {release: true});
+    } else checkMode();
     checkSendPane();
     run(["load-buffer", "-b", buffer, "-"], text);
     loaded = true;
@@ -565,11 +574,11 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     checkMode();
     // 붙여넣기와 Enter 사이 1초에 사람이 치면 그 글과 함께 제출된다. Enter 직전에 같은 사람 입력 검사를 한 번 더 한다.
     // 거부되면 본문은 이미 붙었으므로 지우지 않고 Enter만 보내지 않는다(stage가 body-pasted라 아래 catch가 delivery=unknown을 붙인다).
-    // 5번째 강제 알림은 앞 검사처럼 건너뛴다.
-    if (!(notificationGuard?.force === true && !cardIdentity)) {
-      try { checkHumanIdle(session, run, cardIdentity || !notificationGuard ? {humanIdleMs} : notificationGuard); }
-      catch (error) { error.enterWithheld = true; throw error; }
-    }
+    // 5번째 강제 알림은 앞 검사와 같은 기준이다: 보호가 30초인 창은 건너뛰고, 슈퍼감독 창은 30초를 다시 본다.
+    try {
+      if (cardIdentity || !notificationGuard) checkHumanIdle(session, run, {humanIdleMs});
+      else checkNotificationPane(session, notificationGuard, run);
+    } catch (error) { error.enterWithheld = true; throw error; }
     stage = "enter-attempted";
     run(["send-keys", "-t", `=${session}:`, "Enter"]);
   } catch (error) {

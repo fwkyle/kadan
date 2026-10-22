@@ -4,8 +4,9 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HUMAN_IDLE_MS, SUPER_HUMAN_IDLE_MS, humanIdleMsFor,
+  HUMAN_IDLE_MS, SUPER_HUMAN_IDLE_MS, forcedIdleMsFor, humanIdleMsFor,
 } from '../src/notification-guard.mjs';
+import {makeHerdrFloor} from '../src/floor-herdr.mjs';
 import {sendTmux, tmuxFloor} from '../src/floor-tmux.mjs';
 import {herdrNotificationGuard} from '../src/herdr-notification.mjs';
 import {guardedSend} from '../src/cli-guarded-send.mjs';
@@ -161,24 +162,190 @@ test('guardedSend: 일반 우편·카드 경로 값은 받는 역할의 start �
   assert.equal(guardedSeen(null), 30_000);
 });
 
-// ---- 5번 강제 넣기(바꾸지 않음): 숫자로 보고만 한다 ----
-test('5번 강제 시각 실측(가짜 시계): 감시 주기 60초, 슈퍼감독이 60초마다 키를 치면 강제가 2분 보호를 넘는다', () => {
-  const CYCLE = 60_000;
+// ---- 5번 강제 넣기도 마지막 사람 입력 뒤 30초는 기다린다(kyle 결정 B, 2026-10-22). 5번·3번 값은 그대로다 ----
+test('forcedIdleMsFor: 보호가 30초보다 긴 창만 30초, 30초 창·모르는 값은 null(검사 건너뜀)', () => {
+  assert.equal(forcedIdleMsFor(SUPER_HUMAN_IDLE_MS), HUMAN_IDLE_MS);
+  assert.equal(forcedIdleMsFor(HUMAN_IDLE_MS), null);
+  for (const value of [undefined, null, NaN, 0, 10_000]) assert.equal(forcedIdleMsFor(value), null, String(value));
+});
+
+// 감시 주기 60초 가짜 시계. keys: 사람이 키를 친 시각 목록. phase: 각 주기가 마지막 키 뒤 몇 초 지점에서 도는가.
+// 강제 차례의 기준은 sendTmux·watchMailHold가 쓰는 것과 같은 forcedIdleMsFor다.
+function simulateForce({idleMs, lastKeyAt, cycles = 14, cycleMs = 60_000, startAt = 0}) {
   const tracker = new NotifyHoldTracker();
-  const typedAt = t => t; // 슈퍼감독이 매 주기 직전(=60초 전)에 마지막 키를 쳤다고 둔다
-  let forcedAt = null, ageAtForce = null, heldCycles = 0;
-  for (let cycle = 0; cycle < 12 && forcedAt === null; cycle++) {
-    const now = cycle * CYCLE;
-    const lastKey = typedAt(now - 60_000 < 0 ? 0 : now - 60_000);
+  const forcedAt = [];
+  const hold = Object.assign(new Error('x'), {code: 'KADAN_HUMAN_ACTIVE', delivery: 'not-sent'});
+  for (let cycle = 0; cycle < cycles; cycle++) {
+    const now = startAt + cycle * cycleMs;
+    const age = now - lastKeyAt(now);
     tracker.beginCycle();
-    if (tracker.forced('s')) { forcedAt = now; ageAtForce = now - lastKey; tracker.delivered('s'); }
-    else if (now - lastKey < SUPER_HUMAN_IDLE_MS) { tracker.held('s', Object.assign(new Error('x'), {code: 'KADAN_HUMAN_ACTIVE', delivery: 'not-sent'})); heldCycles += 1; }
-    else tracker.delivered('s');
+    const forced = tracker.forced('s');
+    const window = forced ? forcedIdleMsFor(idleMs) : idleMs;
+    if (window !== null && age < window) tracker.held('s', hold);
+    else { if (forced) forcedAt.push({at: now, age}); tracker.delivered('s'); }
     tracker.endCycle(now);
   }
+  return {forcedAt, tracker};
+}
+
+test('B: 슈퍼감독이 60초마다 키를 치고 주기가 키 20초 뒤에 돌면 강제 넣기 0번(마지막 키 뒤 30초 미만이라 계속 밀림)', () => {
+  // 키 시각 0, 60, 120, ... / 주기 20, 80, 140, ... → 마지막 키 뒤 항상 20초
+  const {forcedAt, tracker} = simulateForce({idleMs: SUPER_HUMAN_IDLE_MS, startAt: 20_000, cycles: 20,
+    lastKeyAt: now => Math.floor((now - 20_000) / 60_000) * 60_000 + 0});
+  assert.deepEqual(forcedAt, []);
+  assert.ok(tracker.streaks.get('s').count >= NOTIFY_FORCE_AT + 10, '밀림 횟수는 5 이상으로 계속 유지된다');
+  assert.equal(tracker.forced('s'), true);
+});
+
+test('B: 키가 마지막 키 뒤 45초 지점에서 보이면 5번 밀린 다음 주기에 강제로 들어간다(2분까지 기다리지 않음)', () => {
+  const {forcedAt} = simulateForce({idleMs: SUPER_HUMAN_IDLE_MS, startAt: 45_000, cycles: 10,
+    lastKeyAt: now => Math.floor((now - 45_000) / 60_000) * 60_000});
   assert.equal(NOTIFY_FORCE_AT, 5);
-  assert.equal(heldCycles, 5);
-  assert.equal(forcedAt, 300_000, '첫 보류 뒤 5주기=300초에 강제 차례(주기 60초 × 5)');
-  assert.equal(ageAtForce, 60_000, '마지막 키 입력 60초 뒤라 2분 보호 안에서 강제로 들어간다');
-  assert.ok(ageAtForce < SUPER_HUMAN_IDLE_MS);
+  assert.deepEqual(forcedAt, [{at: 45_000 + 5 * 60_000, age: 45_000}], '첫 보류 뒤 5주기=345초, 마지막 키 뒤 45초(≥30초, <2분)');
+});
+
+test('B: 계속 치다 멈추면 마지막 키(600초) 뒤 30초 이상인 첫 주기(680초)에 강제로 들어간다', () => {
+  const {forcedAt} = simulateForce({idleMs: SUPER_HUMAN_IDLE_MS, startAt: 20_000, cycles: 14,
+    lastKeyAt: now => Math.min(Math.floor((now - 20_000) / 60_000) * 60_000, 600_000)});
+  assert.deepEqual(forcedAt[0], {at: 680_000, age: 80_000}, '620초는 20초 뒤라 밀림, 680초는 80초 뒤라 강제 통과');
+  assert.ok(forcedAt[0].age < SUPER_HUMAN_IDLE_MS, '2분을 다 기다리지 않는다');
+});
+
+test('B: 30초 창(작업자·일반감독)의 강제는 지금과 같다: 마지막 키 뒤 20초여도 5번 밀린 다음 주기에 입력 보호 없이 들어간다', () => {
+  const {forcedAt} = simulateForce({idleMs: HUMAN_IDLE_MS, startAt: 20_000, cycles: 10,
+    lastKeyAt: now => Math.floor((now - 20_000) / 60_000) * 60_000 + 10_000});
+  // 키 뒤 10초 → 30초 창에서는 계속 밀리다 5번 뒤 강제(검사 없음)로 들어간다
+  assert.equal(forcedAt.length >= 1, true);
+  assert.equal(forcedAt[0].age, 10_000, '10초 전 입력이어도 강제로 들어갔다(검사 건너뜀)');
+});
+
+// ---- 바닥 단위: 강제 차례 ----
+const FORCE_SUPER = {force: true, humanIdleMs: SUPER_HUMAN_IDLE_MS};
+const tmuxForced = (ago, guard, extra = {}) => {
+  const f = tmuxFixture({ago});
+  return {f, send: () => sendTmux('kadan-r', 'MAIL', {...f.options, notificationGuard: {...guard, now: NOW * 1000}, ...extra})};
+};
+test('B tmux: 강제 + 2분 창, 20초 전 입력 → 보류(붙이지 않음), 60초 전 → 통과', () => {
+  const held = tmuxForced(20, FORCE_SUPER);
+  assert.throws(held.send, e => e.code === 'KADAN_HUMAN_ACTIVE' && e.delivery === 'not-sent');
+  assert.equal(pastes(held.f), 0);
+  const ok = tmuxForced(60, FORCE_SUPER);
+  ok.send();
+  assert.equal(pastes(ok.f), 1);
+});
+test('B tmux: 강제 + 2분 창, 사람 입력으로 밀리는 차례는 복사 모드를 건드리지 않는다', () => {
+  const f = tmuxFixture({ago: 20});
+  const run = args => args.includes('#{pane_in_mode}') ? '1' : f.options.run(args);
+  assert.throws(() => sendTmux('kadan-r', 'MAIL', {...f.options, run, notificationGuard: {...FORCE_SUPER, now: NOW * 1000}}),
+    e => e.code === 'KADAN_HUMAN_ACTIVE');
+  assert.equal(f.calls.some(a => a.includes('cancel')), false);
+});
+test('B tmux: 강제 + 2분 창, Enter 직전 재검사도 30초: 붙인 뒤 20초 전 입력이 보이면 Enter를 보내지 않는다', () => {
+  const calls = [];
+  let listed = 0;
+  const run = args => {
+    calls.push(args);
+    if (args.includes('#{pane_in_mode}')) return '0';
+    if (args[0] === 'list-clients') { listed += 1; return `${NOW - 3600} ${NOW - (listed < 4 ? 60 : 20)}`; }
+    return '';
+  };
+  assert.throws(() => sendTmux('kadan-r', 'MAIL', {run, spawn: () => ({status: 0}), pid: 1, hrtime: () => 1n,
+    notificationGuard: {...FORCE_SUPER, now: NOW * 1000}}), e => e.enterWithheld === true && e.code === 'KADAN_HUMAN_ACTIVE');
+  assert.equal(calls.filter(a => a[0] === 'send-keys' && a.at(-1) === 'Enter').length, 0);
+  assert.equal(listed, 4, '붙이기 전 2번 + 붙인 뒤 Enter 직전까지 모두 같은 기준');
+});
+test('B tmux: 강제 + 30초 창(작업자·일반감독·모름)은 사람 입력 검사를 아예 하지 않는다(지금과 같은 건너뜀)', () => {
+  for (const guard of [{force: true, humanIdleMs: HUMAN_IDLE_MS}, {force: true}]) {
+    const t = tmuxForced(1, guard);
+    t.send();
+    assert.equal(pastes(t.f), 1);
+    assert.equal(t.f.calls.some(a => a[0] === 'list-clients'), false, JSON.stringify(guard));
+    assert.equal(t.f.calls.some(a => a[0] === 'send-keys' && a.at(-1) === 'Enter'), true);
+  }
+});
+test('B tmux notificationHold: 강제 + 2분 창은 20초 전 입력이면 보류, 60초 전이면 null. 복사 모드는 미리 밀지 않는다', () => {
+  const clients = (ago, mode = '0') => args => args.includes('#{pane_in_mode}') ? mode
+    : args[0] === 'list-clients' ? `${NOW - 3600} ${NOW - ago}` : '';
+  const hold = (guard, ago, mode) => tmuxFloor.notificationHold('kadan-r', {...guard, now: NOW * 1000}, {run: clients(ago, mode)});
+  assert.equal(hold(FORCE_SUPER, 20)?.code, 'KADAN_HUMAN_ACTIVE');
+  assert.equal(hold(FORCE_SUPER, 60), null);
+  assert.equal(hold(FORCE_SUPER, 60, '1'), null, '강제 차례는 복사 모드를 해제하고 넣는다');
+  assert.equal(hold({force: true, humanIdleMs: HUMAN_IDLE_MS}, 1), null);
+  assert.equal(hold({humanIdleMs: SUPER_HUMAN_IDLE_MS}, 60, '1')?.code, 'KADAN_PANE_IN_MODE', '강제 아닌 차례는 그대로 복사 모드로 밀린다');
+});
+
+function herdrFixture() {
+  const env = {KADAN_HOME: '/tmp/kadan-herdr-force-test', KADAN_HERDR_SOCKET: '/tmp/herdr-force-test.sock'};
+  const start = {kind: 'start', floor: 'herdr', session: 'kadan-판-감독', panePid: '123', harness: 'codex', model: 'm',
+    herdrSocket: env.KADAN_HERDR_SOCKET, herdrWorkspaceId: 'w', herdrPaneId: 'p', herdrTerminalId: 't'};
+  const pane = {pane_id: 'p', workspace_id: 'w', terminal_id: 't', scroll: {offset_from_bottom: 0, viewport_rows: 58}};
+  const state = {status: 'idle', prompts: 0};
+  const rpc = (_socket, method) => {
+    if (method === 'session.snapshot') return {snapshot: {panes: [pane]}};
+    if (method === 'pane.process_info') return {process_info: {shell_pid: 123, foreground_processes: [{pid: 123, argv: ['codex', '--model', 'm']}]}};
+    if (method === 'agent.get') return {agent: {terminal_id: 't', agent_status: state.status}};
+    if (method === 'pane.read') return {read: {text: '\n› \n\nstatus', revision: 7, truncated: false}};
+    if (method === 'agent.prompt') { state.prompts += 1; return {type: 'ok'}; }
+    throw new Error(`Unexpected request ${method}`);
+  };
+  return {floor: makeHerdrFloor({env, entries: () => [start], rpc, argsForPid: () => ''}), state, session: start.session};
+}
+test('B herdr: 강제 + 2분 창은 같은 화면 안정 검사를 30초로 돈다(29.999초 보류, 30초 통과). 응답 중이어도 관측한다', () => {
+  const f = herdrFixture();
+  const send = now => f.floor.send(f.session, '알림', {notificationGuard: {...FORCE_SUPER, now}});
+  assert.throws(() => send(0), e => e.code === 'KADAN_HUMAN_ACTIVE' && e.delivery === 'not-sent');
+  assert.throws(() => send(29_999), e => e.code === 'KADAN_HUMAN_ACTIVE');
+  assert.equal(f.state.prompts, 0);
+  f.state.status = 'working';
+  assert.equal(send(30_000).keyDelivery, 'sent');
+  assert.equal(f.state.prompts, 1);
+  assert.equal(f.floor.notificationHold(f.session, {...FORCE_SUPER, now: 30_000}), null);
+  assert.equal(f.floor.notificationHold(f.session, {...FORCE_SUPER, now: 59_999})?.code ?? null, null, '사전 확인도 같은 30초 기준');
+});
+test('B herdr: 강제 + 30초 창은 화면 안정 검사를 건너뛴다(첫 관측도 바로 통과)', () => {
+  const f = herdrFixture();
+  assert.equal(f.floor.send(f.session, '알림', {notificationGuard: {force: true, humanIdleMs: HUMAN_IDLE_MS, now: 0}}).keyDelivery, 'sent');
+  assert.equal(f.state.prompts, 1);
+  assert.equal(f.floor.notificationHold(f.session, {force: true, humanIdleMs: HUMAN_IDLE_MS, now: 0}), null);
+});
+
+// ---- 감시기: 사전 확인과 전송 경로가 같은 함수를 거친다 ----
+function forcedTracker(records = []) {
+  const tracker = new NotifyHoldTracker({record: entry => records.push(entry)});
+  for (let i = 0; i < NOTIFY_FORCE_AT; i++) {
+    tracker.beginCycle();
+    tracker.held('r', Object.assign(new Error('x'), {code: 'KADAN_HUMAN_ACTIVE', delivery: 'not-sent'}));
+    tracker.endCycle(i);
+  }
+  assert.equal(tracker.forced('r'), true);
+  return tracker;
+}
+test('B watchMailHold: 2분 창 강제 차례에 20초 전 입력 → 밀림 반환, 횟수 유지, watch-notify-forced 기록 없음', () => {
+  const records = [];
+  const tracker = forcedTracker(records);
+  const run = args => args.includes('#{pane_in_mode}') ? '0' : args[0] === 'list-clients' ? `${NOW - 3600} ${NOW - 20}` : '';
+  const selectedFloor = {notificationHold: (session, guard) => tmuxFloor.notificationHold(session, guard, {run})};
+  tracker.beginCycle();
+  const held = watchMailHold('r', {selectedFloor, readStart: () => SUPER, tracker});
+  assert.equal(held?.code, 'KADAN_HUMAN_ACTIVE');
+  tracker.endCycle(99);
+  assert.equal(tracker.streaks.get('r').count, NOTIFY_FORCE_AT + 1);
+  assert.equal(tracker.forced('r'), true);
+  assert.deepEqual(records, []);
+});
+test('B watchMailHold: 2분 창 강제 차례에 60초 전 입력 → 통과(null). 30초 창은 사전 확인 자체를 건너뛴다', () => {
+  const run = args => args.includes('#{pane_in_mode}') ? '0' : args[0] === 'list-clients' ? `${NOW - 3600} ${NOW - 60}` : '';
+  const seen = [];
+  const selectedFloor = {notificationHold: (session, guard) => { seen.push(guard); return tmuxFloor.notificationHold(session, guard, {run}); }};
+  assert.equal(watchMailHold('r', {selectedFloor, readStart: () => SUPER, tracker: forcedTracker()}), null);
+  assert.deepEqual(seen, [{humanIdleMs: SUPER_HUMAN_IDLE_MS, force: true}], '값은 전송 경로와 같은 모양으로 넘기고 바닥이 30초로 줄인다');
+  seen.length = 0;
+  assert.equal(watchMailHold('r', {selectedFloor, readStart: () => WORKER, tracker: forcedTracker()}), null);
+  assert.deepEqual(seen, [], '작업자 창 강제는 사전 확인을 하지 않는다(지금과 같음)');
+});
+test('B 전송 경로: 강제 차례의 알림은 force와 start 프로필 값(2분)을 바닥에 그대로 넘기고, 바닥이 30초로 줄인다', () => {
+  const seen = [];
+  const send = options => { seen.push(options.notificationGuard); return {session: 'kadan-x', digest: 'd', bytes: 1}; };
+  sendWatchMessage('r', '경보', {selectedFloor: fakeFloor(), readStart: () => SUPER, send, tracker: forcedTracker()});
+  assert.deepEqual(seen, [{humanIdleMs: SUPER_HUMAN_IDLE_MS, force: true}]);
 });

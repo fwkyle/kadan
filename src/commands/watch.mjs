@@ -27,12 +27,12 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { runWatch } from "../watch-runner.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
-import { HUMAN_IDLE_MS, humanIdleMsFor } from "../notification-guard.mjs";
+import { HUMAN_IDLE_MS, forcedIdleMsFor, humanIdleMsFor } from "../notification-guard.mjs";
 import { NotifyHoldTracker } from "../watch-notify-hold.mjs";
 import { WATCH_ALERT_FOOTER } from "../watch-notice-format.mjs";
 
 export { WATCH_ALERT_FOOTER };
-// 입력 보호로 밀린 횟수는 tracker가 받는 창 단위로 센다. 5번 연속이면 guardFor가 입력 보호만 뺀다.
+// 입력 보호로 밀린 횟수는 tracker가 받는 창 단위로 센다. 5번 연속이면 guardFor가 입력 보호를 뺀다(슈퍼감독 창은 30초만 본다).
 function guardedWatchSend(tracker,args,role,guard) {
   const {send,...rest}=args;
   try {
@@ -90,11 +90,18 @@ export function sendWatchNudge(role,message,{selectedFloor=floor,readStart=lastS
 }
 
 // 바닥이 보류 조회를 지원하지 않으면 기존처럼 보류 없이 진행한다.
-// 5번 연속 밀린 창은 사전 확인도 건너뛴다. 실제 입력 보호는 전송 쪽 guardFor가 같은 기준으로 뺀다.
+// 5번 연속 밀린 창은 강제 차례다. 보호가 30초인 창은 사전 확인도 건너뛰고, 슈퍼감독 창은 마지막 입력 뒤 30초를
+// 사전 확인한다(2026-10-22 [kyle] 결정 B; 값은 forcedIdleMsFor 하나가 고른다). 걸리면 입력 보호 밀림으로 세어 횟수가 유지된다.
 export function watchMailHold(role,{selectedFloor=floor,readStart=lastStartFor,tracker=null}={}) {
-  if (tracker?.forced(role)) return null;
   const session=sessionName(role);
-  const held=selectedFloor.notificationHold?.(session,{humanIdleMs:humanIdleMsFor(readStart(session))}) ?? null;
+  const humanIdleMs=humanIdleMsFor(readStart(session));
+  let guard={humanIdleMs};
+  if (tracker?.forced(role)) {
+    // 바닥이 force 표시를 보고 같은 함수로 30초로 줄인다(전송 경로 guardFor와 같은 모양으로 넘긴다).
+    if (forcedIdleMsFor(humanIdleMs)===null) return null;
+    guard={humanIdleMs,force:true};
+  }
+  const held=selectedFloor.notificationHold?.(session,guard) ?? null;
   // 입력 보호 코드만 미룸으로 센다(herdr의 프로세스 신원 미확인 같은 다른 오류는 세지 않는다).
   if (held) tracker?.heldIfGuard(role,{...held,delivery:'not-sent'});
   return held;

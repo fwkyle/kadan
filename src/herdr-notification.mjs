@@ -8,7 +8,7 @@ export function herdrNotificationGuard(observe) {
   const quiet = new Map();
   return (session, guard = {}) => {
     let view;
-    try { view = observe(session); }
+    try { view = observe(session, guard); }
     catch (error) { quiet.delete(session); throw error; }
     const now = guard.now ?? Date.now();
     const duration = Math.max(HUMAN_IDLE_MS, guard.humanIdleMs ?? HUMAN_IDLE_MS);
