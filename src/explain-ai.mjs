@@ -78,7 +78,7 @@ export class ExplainAI {
     const keys = new Set();
     for (const card of cards) if (at(card.at) >= this.enabledAt) keys.add(card.key);
     for (const e of entries.slice(-5000)) if (e.executionKey && ['send', 'done'].includes(e.kind) && at(e.t) >= this.enabledAt) keys.add(e.executionKey);
-    for (const d of decisions) if (Math.max(at(d.at), at(d.answer?.at), at(d.cancelledAt)) >= this.enabledAt) keys.add(d.card);
+    for (const d of decisions) if (Math.max(at(d.at), at(d.answer?.at), at(d.cancelledAt)) >= this.enabledAt && typeof d.card === 'string') keys.add(d.card);
     let queued = 0;
     for (const card of this.center([...keys], now)) {
       // 대기열뿐 아니라 지금 호출 중인 카드도 다시 예약하지 않는다.

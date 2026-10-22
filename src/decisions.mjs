@@ -19,6 +19,10 @@ const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
 // 보이는 본문의 UUID를 앞 8자로 줄인다. 단 경로·주소 조각(/·~·./·../로 시작, ://, 슬래시 2개 이상)은 확인 경로가 깨지므로 그대로 둔다.
 const keepWhole=tok=>/^[(\[<"'`]*(?:[/~]|\.{1,2}\/|[a-z][a-z0-9+.-]*:\/\/)/i.test(tok)||(tok.match(/\//g)??[]).length>=2;
 const shortIds=text=>String(text).split(/(\s+)/).map(tok=>keepWhole(tok)?tok:tok.replace(UUID,m=>m.slice(0,8))).join('');
+// 채팅 질문(--chat): kyle에게 이미 채팅으로 물은 질문을 가볍게 등록한다. 선택지·확인 경로를 자동으로 채운다.
+export const CHAT_OPTIONS=Object.freeze(['추천대로 진행','보류']);
+const CHAT_VERIFY_LINE='- 확인 경로 없음: 채팅 질문';
+export const AUTO_BY='자동';
 const required=(v,name)=>{if(typeof v!=='string'||!v.trim())throw new Error(`${name} 필요`);return v.trim()};
 // 새 결정 요청은 사용자가 답하기 전에 열어 볼 주소·절대경로, 또는 '확인 경로 없음: 이유' 줄이 있어야 한다.
 export function assertVerifyPath(...texts){
@@ -53,31 +57,38 @@ export class DecisionStore {
  });}
  list(){
   const latest=new Map();for(const e of readStream(this.home,'decisions/events.jsonl',{optional:true})){
-   const old=latest.get(e.id);if(!Array.isArray(e.options)||e.options.length<2||!e.options.every(x=>typeof x==='string')||typeof e.question!=='string'||typeof e.reason!=='string'||typeof e.card!=='string'||(e.work!==undefined&&typeof e.work!=='string')||!supervisor(e.requestedBy)||(e.status==='answered'&&typeof e.answer?.text!=='string')||(e.answer?.source!==undefined&&e.answer.source!=='discord')||(e.answer?.messageId!==undefined&&typeof e.answer.messageId!=='string')||!e.id||e.to!=='@user'||e.revision!==(old?.revision??0)+1||!['open','answered','cancelled'].includes(e.status))throw new Error('결정 이력 손상');latest.set(e.id,e);
+   const old=latest.get(e.id);if(!Array.isArray(e.options)||e.options.length<2||!e.options.every(x=>typeof x==='string')||typeof e.question!=='string'||typeof e.reason!=='string'||(e.chat!==undefined&&e.chat!==true)||(e.chat===true?(e.card!==null||typeof e.work!=='string'):typeof e.card!=='string')||(e.work!==undefined&&typeof e.work!=='string')||!supervisor(e.requestedBy)||(e.status==='answered'&&typeof e.answer?.text!=='string')||(e.answer?.source!==undefined&&e.answer.source!=='discord')||(e.answer?.messageId!==undefined&&typeof e.answer.messageId!=='string')||!e.id||e.to!=='@user'||e.revision!==(old?.revision??0)+1||!['open','answered','cancelled'].includes(e.status))throw new Error('결정 이력 손상');latest.set(e.id,e);
   }return [...latest.values()];}
  get(id){const d=this.list().find(d=>d.id===id);if(!d)throw new Error('결정 요청 없음');return d;}
  write(d){appendStream(this.home,'decisions/events.jsonl',d);return d;}
  locked(fn){assertWritable(this.home);if(storageMode(this.home)==='sqlite')return transaction(this.home,fn);fs.mkdirSync(this.dir,{recursive:true,mode:0o700});const lock=path.join(this.dir,'.lock');try{fs.mkdirSync(lock)}catch{throw new Error('결정 저장 중: 새 상태를 확인하세요')}
   try{return fn()}finally{fs.renameSync(lock,path.join(this.dir,`.released-${randomUUID()}`))}}
  // work: 결정이 막고 있는 업무. 카드가 그 업무의 실행이 아니어도(조사 카드 등) 감시·후속 표시가 업무를 답 대기로 알아보게 한다(2026-10-07 [kyle]).
- request(card,{question,options,recommendation,reason,work},by){let created=false;const saved=this.locked(()=>{
+ request(card,{question,options,recommendation,reason,work,chat},by){let created=false;const saved=this.locked(()=>{
   if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독만 작성');
-  const c=new CardStore(this.home).get(card);this.list();
+  chat=chat===true;if(chat&&card!=null)throw new Error('--chat 결정은 카드 없이 업무로만 등록');
+  const c=chat?null:new CardStore(this.home).get(card);this.list();
+  if(chat){if(work===undefined||String(work).trim()==='없음')throw new Error('--chat 결정은 --work <업무주소> 필요');}
   if(work!==undefined&&String(work).trim()==='없음')work=undefined;
   else if(work!==undefined){work=required(work,'업무 주소').replace(/^work:/,'');if(new WorkStore(this.home).get(work).status!=='open')throw new Error('열린 업무만 연결');}
-  else{
+  else if(!chat){
    // 업무 밖 카드의 결정은 막는 업무를 밝혀야 저장한다(2026-10-08 [kyle]: 지침만으로는 --work 누락이 반복돼 감독이 15분마다 깨워졌다).
    const open=new WorkStore(this.home).list().filter(w=>w.status==='open');
    const candidates=open.some(w=>w.executions.some(x=>x.key===card))?[]:open.filter(w=>c.board&&w.board===c.board).map(w=>w.key);
    if(candidates.length)throw new Error(`업무 연결 필요: 이 카드는 업무의 실행이 아닙니다. 이 결정이 막는 업무를 --work로 적으세요: ${candidates.join(', ')}. 막는 업무가 없으면 --work 없음`);
   }
-  question=required(question,'질문');reason=required(reason,'추천 이유/사용자 판단 필요 이유');
-  assertVerifyPath(question,reason);
+  question=required(question,'질문');
+  if(chat){ // 선택지를 안 주면 고정 선택지, 이유를 안 주면 고정 문구, 확인 경로가 없으면 '확인 경로 없음: 채팅 질문' 줄을 채운다.
+   if(options===undefined){options=[...CHAT_OPTIONS];recommendation??=CHAT_OPTIONS[0];}
+   reason=required(reason??'kyle에게 채팅으로 물은 질문','추천 이유/사용자 판단 필요 이유');
+   try{assertVerifyPath(question,reason)}catch{reason=`${reason}\n${CHAT_VERIFY_LINE}`}
+  }else{reason=required(reason,'추천 이유/사용자 판단 필요 이유');assertVerifyPath(question,reason);}
+  if(!Array.isArray(options))options=options===undefined?options:[options];
   if(!Array.isArray(options)||options.length<2||options.length>4)throw new Error('선택지 2~4개 필요');
   options=options.map(x=>required(x,'선택지'));if(new Set(options).size!==options.length||!options.includes(recommendation))throw new Error('중복 없는 선택지와 일치하는 추천 필요');
-  const existing=this.list().find(d=>d.status==='open'&&d.card===card&&d.requestedBy===by&&d.question===question);
+  const existing=this.list().find(d=>d.status==='open'&&d.requestedBy===by&&d.question===question&&(chat?d.chat===true&&d.work===work:d.card===card));
   if(existing){if(JSON.stringify(existing.options)!==JSON.stringify(options)||existing.reason!==reason||existing.recommendation!==recommendation)throw new Error('같은 질문의 다른 내용: 기존 요청을 취소한 뒤 새 요청');return existing;}
-  created=true;return this.write({id:randomUUID(),revision:1,card,...(work?{work}:{}),to:'@user',requestedBy:by,question,options,recommendation,reason,status:'open',at:new Date().toISOString()});
+  created=true;return this.write({id:randomUUID(),revision:1,card:chat?null:card,...(chat?{chat:true}:{}),...(work?{work}:{}),to:'@user',requestedBy:by,question,options,recommendation,reason,status:'open',at:new Date().toISOString()});
  });
  if(created)this.announce('request',saved);return saved;}
  // 사용자 알림(디스코드 → 시스템 알림). 결정은 이미 저장된 뒤에 부르고, 알림이 실패해도 던지지 않는다(2026-10-14 [kyle]).
@@ -85,7 +96,7 @@ export class DecisionStore {
  // 모든 결정 알림은 `[레포]`(카드 키 앞부분)로 시작한다. 요청은 업무 글, 업무가 없으면 그 레포의 '결정' 글로 가고(레포 웹훅이 없을 때만 #브리핑),
  // 답변·취소는 원래 요청 메시지를 고친다(상태를 맨 위에). 원래 메시지를 못 찾을 때만 질문 앞부분·사유가 든 새 메시지를 보낸다.
  announce(kind,d){
-  if(process.env.KADAN_NOTIFY==='off')return null;
+  if(process.env.KADAN_NOTIFY==='off'||d.chat===true)return null; // 채팅 질문은 kyle이 이미 채팅으로 받았다: 등록·닫힘 알림을 보내지 않는다(중복 멘션 방지).
   const cut=(t,n)=>{t=String(t).replace(/\s+/g,' ').trim();return t.length>n?t.slice(0,n-1)+'…':t;};
   const repo=d.card.split('/')[0],tag=`[${repo}]`;
   const link=decisionLink(this.home,d.id),where=link.startsWith('https://')?'열어서':'맥에서'; // 공개 주소 링크는 맥 밖(폰)에서 열린다
@@ -135,8 +146,8 @@ export class DecisionStore {
  const d=saved;
   let delivery;try{
    const rows=readLedger(this.home);if(rows.some(e=>e?.broken))throw new Error('원장 손상');
-   const role=effectiveCardRole({key:d.card,role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows,new CardStore(this.home).list());
-   this.notify(role,`[kyle] 결정 답변 ${id} / 카드 ${d.card}: ${text}${choice?` (선택: ${choice})`:''}. decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`);
+   const role=d.chat===true?d.requestedBy:effectiveCardRole({key:d.card,role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows,new CardStore(this.home).list());
+   this.notify(role,`[kyle] 결정 답변 ${id} / ${d.chat===true?`업무 ${d.work}`:`카드 ${d.card}`}: ${text}${choice?` (선택: ${choice})`:''}. decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`);
    delivery={status:'sent',role};
   }catch(error){delivery={status:'failed',error:error.message};}
   this.announce('answer',d);
@@ -144,14 +155,24 @@ export class DecisionStore {
  }
  // 디코 자유 답(choice 없음)은 관계없는 말이 답으로 굳을 수 있어 그 결정의 요청자만 answered 상태에서도 취소할 수 있다(2026-10-16 PR #173 검수).
  // 기록은 고치지 않고 취소 사건을 뒤에 쌓는다. 선택지 답과 디코 밖의 답은 지금처럼 취소하지 못한다. 취소하면 그 스레드에 조용한 글을 단다.
- cancel(id,{revision,reason},by){let freeAnswer=false;const cancelled=this.locked(()=>{const d=this.get(id);if(!human(by)&&by!==d.requestedBy)throw new Error('요청자 또는 사용자만 취소');
+ cancel(id,{revision,reason,via},by){let freeAnswer=false;const cancelled=this.locked(()=>{const d=this.get(id);if(!human(by)&&by!==d.requestedBy&&!(by===AUTO_BY&&d.chat===true))throw new Error('요청자 또는 사용자만 취소');
   freeAnswer=d.status==='answered'&&d.answer.source==='discord'&&!d.answer.choice&&by===d.requestedBy;
-  if((d.status!=='open'&&!freeAnswer)||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString(),...(freeAnswer?{cancelledAnswer:true}:{})});});this.announce('cancel',cancelled);
+  if((d.status!=='open'&&!freeAnswer)||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString(),...(via?{cancelledVia:via}:{}),...(freeAnswer?{cancelledAnswer:true}:{})});});this.announce('cancel',cancelled);
   if(freeAnswer)this.threadNote(cancelled,'기타 답 기록 취소됨');return cancelled;}
+ // 업무 명령(execute·turn-owner update·complete)이 성공한 뒤, 같은 업무의 열린 채팅 결정만 닫는다. 카드 결정은 건드리지 않는다.
+ // 닫힌 건수의 취소마다 따로 잠근다(업무 쓰기와 같은 트랜잭션에 넣지 않는다). 만료는 만들지 않는다.
+ closeChatForWork(work,reason,via){const key=String(work).replace(/^work:/,'');const closed=[];
+  for(const d of this.list())if(d.status==='open'&&d.chat===true&&d.work===key)closed.push(this.cancel(d.id,{revision:d.revision,reason,via},AUTO_BY));
+  return closed;}
 }
 export function decisionCommand(args,flags,{home,by,notify}){
  const s=new DecisionStore(home,{notify}),[cmd,key]=args;
- if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
+ if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 | request --chat --work <업무주소> --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
+ if(cmd==='request'&&flags.chat){
+  if(key)throw new Error('--chat 결정은 카드키 없이 --work <업무주소>로 등록');
+  const d=s.request(null,{question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,work:flags.work,chat:true},by);
+  return {...d,chatCloseCommand:`kadan decision cancel ${d.id} --revision ${d.revision} --reason "kyle 채팅 답: <원문>"`};
+ }
  if(cmd==='request')return s.request(key,{question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,work:flags.work},by);
  if(cmd==='list')return s.list().filter(d=>!flags.status||d.status===flags.status);
  if(cmd==='show')return s.get(key);

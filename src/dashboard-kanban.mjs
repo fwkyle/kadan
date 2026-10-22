@@ -205,7 +205,7 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
         projectRepo: w ? w.repo || "" : src?.repo || "",
         card: {
           key,
-          title: w ? w.title || bareWork(w.key) : src?.title || d.card,
+          title: w ? w.title || bareWork(w.key) : src?.title || d.card || bareWork(d.work),
           role: w ? w.owner || "" : src?.owner || "",
           repo: src?.repo || "",
           board: src?.board || "",

@@ -85,7 +85,9 @@ export type Mail = {
 };
 export type Decision = {
   id: string;
-  card: string;
+  card: string | null; // 채팅 질문(chat)은 카드 없이 업무(work)로만 등록된다
+  chat?: boolean;
+  work?: string;
   revision: number;
   question: string;
   questionTitle?: string;

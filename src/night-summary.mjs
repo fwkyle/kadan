@@ -19,9 +19,11 @@ const REASON = {off: 'night off로 껐음', expired: '끝 시각이 되어 꺼�
 // 결정 이력(같은 id의 여러 revision)에서 구간 안의 답·취소를 id당 한 번씩만 센다.
 function countDecisions(events, startMs, endMs) {
   const inWindow = at => { const ms = Date.parse(at); return ms >= startMs && ms <= endMs; };
-  const answered = new Map(), cancelled = new Map();
+  const answered = new Map(), cancelled = new Map(), chatRegistered = new Set();
   for (const e of events) {
     if (e?.status === 'answered' && inWindow(e.answer?.at) && !answered.has(e.id)) answered.set(e.id, e);
+    // 채팅 결정(--chat)의 닫힘은 취소로 세지 않는다. 등록만 "채팅 등록 N건"으로 따로 센다.
+    if (e?.chat === true) { if (e.revision === 1 && inWindow(e.at)) chatRegistered.add(e.id); continue; }
     if (e?.status === 'cancelled' && inWindow(e.cancelledAt) && !cancelled.has(e.id)) cancelled.set(e.id, e);
   }
   const merge = e => PR_URL.test([e.question, e.reason, e.recommendation, ...(e.options ?? [])].join('\n'));
@@ -29,6 +31,7 @@ function countDecisions(events, startMs, endMs) {
   const bySuper = [...cancelled.values()].filter(e => isSupervisorActor(e.cancelledBy));
   return {
     answered: answered.size,
+    chatRegistered: chatRegistered.size,
     cancelledByHuman: byHuman.length,
     cancelledBySuper: bySuper.length,
     mergeAnswered: [...answered.values()].filter(merge).length,
@@ -59,6 +62,7 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     lines.push(`나이트 모드 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase})`);
     const night = [];
     if (decisions.answered) night.push(`결정 답 ${decisions.answered}건`);
+    if (decisions.chatRegistered) night.push(`채팅 등록 ${decisions.chatRegistered}건`);
     if (decisions.cancelledByHuman) night.push(`사람이 취소한 결정 ${decisions.cancelledByHuman}건`);
     if (restarts) night.push(`재시작 ${restarts}건`);
     if (sends.length) night.push(`우편 ${sends.length}건`);

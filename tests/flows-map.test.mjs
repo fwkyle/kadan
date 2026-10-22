@@ -32,7 +32,7 @@ test('역할 프로필과 핵심 소통 명령이 흐름 지도에 있다', () =
   for (const profile of ROLE_PROFILES) assert.ok(section('1\\. 누가').includes(`--profile ${profile}`), `1절에 --profile ${profile} 없음`);
   const talk = section('3\\. 어떻게 주고받나');
   for (const command of ['kadan send', '--task', '--expect-reply', '--reply-final', 'kadan work execute', 'kadan card progress',
-    'kadan done', 'kadan inbox ack', 'kadan decision request', 'kadan night on', 'kadan senior', 'kadan handover', 'kadan discord watch'])
+    'kadan done', 'kadan inbox ack', 'kadan decision request', 'kadan decision request --chat', 'kadan night on', 'kadan senior', 'kadan handover', 'kadan discord watch'])
     assert.ok(talk.includes(command), `3절에 ${command} 없음`);
 });
 

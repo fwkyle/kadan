@@ -540,7 +540,7 @@ export async function runWatch({
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
       const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
-      for (const d of readDecisions() ?? []) if (d?.status === "open" && typeof d.card === "string") waits.push(item(d.card, null, d.work ?? null, "@user"));
+      for (const d of readDecisions() ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push(item(d.card ?? null, null, d.work ?? null, "@user"));
       for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
       // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.

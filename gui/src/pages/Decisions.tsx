@@ -3,6 +3,7 @@ import { useResource } from "../resource";
 import { navigate } from "../navigation";
 import type { Decision, Stamp } from "../types";
 import { ActionForm, AppContext, CardLink, DocumentContent, ErrorMessage, Freshness, Loading, time } from "../ui";
+import { chatAge } from "../chat-age";
 import { readFolded, saveFolded, toggleFolded, unfoldTarget } from "../decision-fold";
 import { focusLinkedField, linkMode, linkOutcome, linkTarget } from "../decision-link";
 
@@ -93,7 +94,7 @@ function PastDecisions({newest}: {newest: boolean}) {
   const resource = useResource<Stamp & {items: Decision[]; page: number; pages: number; total: number}>(`decisions?past=1&page=${page}${newest ? "&sort=newest" : ""}`), data = resource.data;
   return <>
     <ErrorMessage error={resource.error}/>
-    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}<CardLink row={{key:d.card,title:"관련 카드"}}/></article>)}
+    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}{d.chat ? <p className="decision-meta"><span className="chat-tag">채팅</span>{d.work && <span className="chat-work">업무 {d.work}</span>}</p> : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}</article>)}
     {data && data.pages > 1 && <p><button disabled={page <= 1} onClick={()=>setPage(page-1)}>이전</button> {data.page}/{data.pages}쪽 · {data.total}건 <button disabled={page >= data.pages} onClick={()=>setPage(page+1)}>다음</button></p>}
   </>;
 }
@@ -101,7 +102,7 @@ function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Dec
   const onDirtyChange = useCallback((dirty: boolean)=>draft(decision.id,dirty), [draft,decision.id]);
   // 접어도 본문은 숨기기만 한다. 쓰던 메모와 고른 선택지가 남는다.
   return <article id={"decision-"+decision.id} data-fresh={`decision:${decision.id}:${decision.status}`} className={folded ? "folded" : undefined}>
-    <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span><CardLink row={{key:decision.card,title:decision.card}}/><time>{time(decision.at)}</time><button type="button" className="decision-fold" aria-expanded={!folded} aria-controls={"decision-body-"+decision.id} onClick={()=>onToggleFold(decision.id)}>{folded ? "펼치기" : "접기"}</button></div>
+    <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span>{decision.chat ? <><span className="chat-tag">채팅</span><span className="chat-work">업무 {decision.work}</span></> : <CardLink row={{key:decision.card ?? "",title:decision.card ?? ""}}/>}<time>{time(decision.at)}{decision.chat && chatAge(decision.at, Date.now()) ? " · " + chatAge(decision.at, Date.now()) : ""}</time><button type="button" className="decision-fold" aria-expanded={!folded} aria-controls={"decision-body-"+decision.id} onClick={()=>onToggleFold(decision.id)}>{folded ? "펼치기" : "접기"}</button></div>
     <h2>{decision.questionTitle ?? decision.question}</h2>
     {folded && <p className="decision-folded-note">접어 둔 결정 · 추천안: {decision.recommendation}</p>}
     <div className="decision-body" id={"decision-body-"+decision.id} hidden={folded}>
