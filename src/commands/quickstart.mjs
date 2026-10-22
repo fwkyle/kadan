@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { defaultProfilePath } from "../watch-profile.mjs";
 import { readWatchProcesses } from "../watch-overview.mjs";
 import { watchProcessName } from "../watch-system.mjs";
-import { autostartCommand } from "../autostart.mjs";
+import { autostartCommand, describeStale } from "../autostart.mjs";
 import { floor } from "../floor.mjs";
 import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
@@ -277,7 +277,7 @@ export function cmdAutostart(argv) {
     if (argv[0] === "show") { console.log(`# ${result.file} (${result.installed ? "설치돼 있음" : "아직 없음"})`); console.log(result.content); return; }
     console.log(JSON.stringify(result, null, 2));
     if (argv[0] === "status" && result.stale?.length) {
-      console.error(`경고: 자동 시작 설정이 낡았다 — 없는 경로: ${result.stale.map((s) => `${s.what}=${s.path}`).join(", ")}. 다시 만들기: ${result.fix}`);
+      console.error(`경고: 자동 시작 설정이 낡았다 — 쓸 수 없는 경로: ${result.stale.map(describeStale).join(", ")}. 다시 만들기: ${result.fix}`);
       process.exitCode = 1;
     }
   } catch (error) { die(error.message, 2); }
