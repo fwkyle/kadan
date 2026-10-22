@@ -7,12 +7,13 @@ import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveCardRole} from './handover-state.mjs';
-import {isUserActor} from './actors.mjs';
+import {isUserActor,isSupervisorActor} from './actors.mjs';
+import {settleNight} from './night.mjs';
 import {notifyUser,fitDiscord} from './user-notify.mjs';
 import {DEFAULT_PORT} from './quickstart.mjs';
 import {readDecisions} from './notify-threads.mjs';
 import {loadRemoteConfig} from './remote-access.mjs';
-const supervisor=by=>typeof by==='string'&&/(^|-)슈퍼감독(?:-\d+)?$/.test(by);
+const supervisor=isSupervisorActor;
 const human=by=>isUserActor(by);
 const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
 // 보이는 본문의 UUID를 앞 8자로 줄인다. 단 경로·주소 조각(/·~·./·../로 시작, ://, 슬래시 2개 이상)은 확인 경로가 깨지므로 그대로 둔다.
@@ -129,6 +130,8 @@ export class DecisionStore {
   newlyAnswered=true;return this.write({...d,revision:d.revision+1,status:'answered',answer:{by,text,choice,at:new Date().toISOString(),...(source?{source}:{}),...(messageId?{messageId}:{}),...(remote?{remote}:{})},delivery:{status:'pending'}});
  });
  if(!newlyAnswered)return saved;
+ // 나이트 모드 중 사람 명의 답은 kyle의 새 입력이다: 깨어 있음으로 보고 끈다. 답은 이미 저장됐으므로 실패해도 던지지 않는다.
+ try{settleNight({home:this.home})}catch{}
  const d=saved;
   let delivery;try{
    const rows=readLedger(this.home);if(rows.some(e=>e?.broken))throw new Error('원장 손상');
