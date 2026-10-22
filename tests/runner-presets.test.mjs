@@ -6,8 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  addPreset, initSettings, launchFor, readSettings, removePreset, renamePreset, setActivePreset, setRole,
+  addPreset, explainChain, initSettings, launchFor, readSettings, removePreset, renamePreset, setActivePreset, setRole, watchJudgeChain,
 } from '../src/runner-settings.mjs';
+import {seniorCommand} from '../src/senior.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 
 const example = new URL('../skills/kadan-conductor/references/agent-runners.example.json', import.meta.url).pathname;
@@ -209,4 +210,19 @@ test('set --preset <없던 이름>은 지금도 프리셋을 만든다(tests/run
   const r = init(['codex']);
   const next = setRole(r.dir, {role: 'worker', runner: 'codex', model: 'fake-model-2', effort: 'low', preset: 'auto', readCodexModels: () => ({models: fakeModels}), ...meta(1)});
   assert.equal(next.presets.auto.roles.worker.model, 'fake-model-2');
+});
+
+test('비워 둔 감시 AI·시니어·설명 AI는 조용히 깨지지 않는다: 감시는 프로필 모델, 시니어는 분명한 오류, 설명은 꺼짐', async () => {
+  const r = init(['codex']);
+  // 감시 AI: 순서가 없으면 null이고, watch-ai.mjs가 [null]로 한 번 부른다(judgeSource: 'profile', 감시 프로필의 KADAN_JUDGE_MODEL).
+  assert.equal(watchJudgeChain(r.value), null);
+  // 설명 AI: 순서가 없으면 null이고, 설명기는 아무것도 하지 않는다.
+  assert.equal(explainChain(r.value), null);
+  // 시니어: 외부 호출·증거 폴더 전에 설정 없음 오류로 끝난다.
+  const calls = [];
+  await assert.rejects(
+    seniorCommand(['kadan/none'], {question: '질문'}, {home: r.dir, by: 'x-슈퍼감독', readSettings: () => r.value, spawn: () => { calls.push('spawn'); }}),
+    /시니어 모델 설정 없음 — kadan runners set senior/);
+  assert.deepEqual(calls, []);
+  assert.equal(fs.existsSync(path.join(r.dir, 'advice')), false);
 });

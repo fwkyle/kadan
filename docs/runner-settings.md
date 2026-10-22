@@ -67,7 +67,10 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - **codex**: `~/.codex/models_cache.json`(또는 `KADAN_CODEX_MODELS_CACHE`)의 숨김(`visibility: hide`)이 아닌 첫 모델과 그 모델의 기본 강도로 작업자·일반감독·슈퍼감독을 채운다. 모델 이름은 코드에 없다. 목록이 아직 없으면(codex를 한 번도 안 돌린 기계) 등록만 하고 역할은 비우고 안내를 낸다.
 - **claude**: 모델 목록 파일이 없고 코드에 이름을 두지 않으므로 역할을 비우고 안내한다. `kadan runners model claude <모델> --efforts …`로 모델을 등록한 뒤 `kadan runners set …`로 채운다. 그러니 바로 쓸 수 있는 것은 codex가 깔린 기계뿐이다.
 - **검수자**: 작업자와 다른 계열이어야 하므로 늘 비운다. 절반만 채운 프리셋은 저장 때 계열 검사가 받아 준다.
-- 감시 AI·시니어·설명 AI는 자동 호출·비용이 생기는 칸이라 채우지 않는다.
+- 감시 AI·시니어·설명 AI는 자동 호출·비용이 생기는 칸이라 채우지 않는다. 비어 있어도 조용히 깨지지 않는다(시험: `tests/runner-presets.test.mjs`).
+  - 감시 AI: 순서가 없으면 감시 프로필의 `KADAN_JUDGE_MODEL`로 한 번 부른다(호출 기록 `judgeSource: profile`).
+  - 시니어: `kadan senior`는 외부 호출·증거 폴더를 만들기 전에 `시니어 모델 설정 없음 — kadan runners set senior …` 오류로 끝난다.
+  - 설명 AI: 꺼진다(대기열도 비운다). 아무것도 부르지 않는다.
 
 ## 프리셋 관리
 
