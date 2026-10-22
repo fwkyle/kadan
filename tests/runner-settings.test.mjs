@@ -36,9 +36,23 @@ test('처음 만들기는 실행기 틀만 옮기고 역할 값은 비워 두며
   const value = initialize(f);
   assert.equal(value.revision, 1);
   assert.deepEqual(Object.keys(value.runners).sort(), ['claude', 'codex', 'devin']);
-  assert.deepEqual(value.presets.B.roles, {});
+  assert.deepEqual(value.presets['기본'].roles, {});
   assert.throws(() => initialize(f), /이미 있다/);
   assert.equal(f.records.filter(e => e.kind === 'runner-settings' && e.action === 'init').length, 1);
+});
+
+test('저장소 예시 agent-runners.example.json으로 처음 만들면 성공하고 역할 값은 비어 있다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-runner-example-'));
+  const example = new URL('../skills/kadan-conductor/references/agent-runners.example.json', import.meta.url).pathname;
+  fs.copyFileSync(example, path.join(home, 'agent-runners.json'));
+  const value = initSettings(home, {by:'kyle', reason:'예시 시험', record: () => {}});
+  assert.equal(value.version, 1);
+  assert.deepEqual(Object.keys(value.runners).sort(), ['claude', 'codex']);
+  assert.equal(value.activePreset, '기본');
+  assert.equal(value.presets['기본'].label, '처음 시작용');
+  assert.deepEqual(value.presets['기본'].roles, {});
+  assert.equal(launchFor(value, 'worker'), null, '역할 값이 비어 있으면 실행 명령을 만들지 않는다');
+  assert.doesNotMatch(JSON.stringify(value), /값싼 병렬판/);
 });
 
 test('역할 값은 목록의 모델·지원 강도만 받고, 바꾸기 전→후와 이유를 원장에 남긴다', () => {

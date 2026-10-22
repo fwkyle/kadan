@@ -87,7 +87,7 @@ test('성공: 질문·카드 본문·첨부를 한 입력으로 넘기고 저장
   const [entry] = f.advices();
   assert.equal(entry.by, 'qa-슈퍼감독'); assert.equal(entry.card, 'qa/card-a'); assert.equal(entry.adviceId, one.adviceId); assert.equal(entry.askId, r.askId);
   assert.equal(entry.question, '열 이름을 지금 바꿔도 되나?'); assert.match(entry.questionDigest, /^[0-9a-f]{64}$/);
-  assert.deepEqual([entry.model, entry.effort, entry.settingsRevision, entry.settingsPreset], ['gpt-6-sol', 'high', 2, 'B']);
+  assert.deepEqual([entry.model, entry.effort, entry.settingsRevision, entry.settingsPreset], ['gpt-6-sol', 'high', 2, '기본']);
   assert.deepEqual([entry.reason, entry.exitCode, entry.durationMs, entry.bytes], ['ok', 0, 1500, Buffer.byteLength(one.answer)]);
   assert.deepEqual(entry.files, [note]); assert.equal(entry.evidencePath, one.evidencePath); assert.equal(entry.t, '2026-10-05T00:00:00.000Z');
   assert.ok(!('answer' in entry), '답변 본문은 원장에 넣지 않는다');
