@@ -423,3 +423,25 @@ test('F2 3라운드: 모양 오류는 roles·fallback·families 키·값·label�
   assert.match(messageOf(b.dir, (() => { const d = exported(); d.preset.roles = {x: d.preset.roles.worker}; return d; })(), {as: 'team'}),
     /파일 형식 오류: 모르는 역할 roles\[0\]/);
 });
+
+test('F5 4라운드: 파일의 preset.name이 이름 규칙 밖이어도 오류에 원문이 없고 설정·원장은 그대로다', () => {
+  const b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
+  for (const w of ['QQr3 raw preset marker!', tokenCases['prod_ghp_'], fake.email, tokenCases.AKIA]) {
+    const data = exported();
+    data.preset.name = w;
+    const message = messageOf(b.dir, data);
+    assert.ok(!message.includes(w), `원문이 오류에 나왔다: ${message}`);
+    // 토큰·이메일은 개인정보 검사가 먼저 거절하고(위치만 출력), 나머지는 이름 규칙 문구로 거절한다.
+    assertRejected(b.dir, data, w.includes(' ') ? /프리셋 이름에는 영문·한글·숫자.*\(파일의 preset\.name\) — 다른 이름으로 가져오려면 --as/ : /개인정보 꼴.*file\.preset\.name/);
+  }
+  // 예약 이름(고정 단어)도 파일 이름 자리표시로만 알린다.
+  const reserved = exported();
+  reserved.preset.name = 'add';
+  assertRejected(b.dir, reserved, /\(파일의 preset\.name\)/);
+});
+
+test('F5 4라운드 대조: --as로 준 규칙 밖 이름과 이 기계에 이미 있는 이름은 오류에 나와도 된다', () => {
+  const b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
+  assertRejected(b.dir, exported(), /\(가져오려던 이름: bad name!\)/, {as: 'bad name!'});
+  assertRejected(b.dir, exported(), /이미 있는 프리셋: 기본 \(가져오려던 이름: 기본\)/);
+});

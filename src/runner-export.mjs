@@ -252,7 +252,11 @@ export function importPreset(home, {data, as, readCodexModels, ...meta}) {
   const next = change(home, {...meta, action: 'preset-import'}, settings => {
     const name = as ?? file.name;
     try { checkNewPresetName(settings, name); }
-    catch (error) { throw new Error(`${error.message} (가져오려던 이름: ${name}) — 다른 이름으로 가져오려면 --as <새 이름>`); }
+    catch (error) {
+      // 이름 원문은 --as(호출자 입력)이거나 이 기계에 이미 있는 이름일 때만 출력한다. 파일에서 온 이름은 고정 문구로만 알린다.
+      const shown = as != null || Object.hasOwn(settings.presets, name) ? `가져오려던 이름: ${name}` : '파일의 preset.name';
+      throw new Error(`${error.message} (${shown}) — 다른 이름으로 가져오려면 --as <새 이름>`);
+    }
     const report = missingReport(settings, file.preset, readCodexModels);
     if (report) throw new Error(report);
     try { checkPresetFamilies(file.preset, settings.families); }
