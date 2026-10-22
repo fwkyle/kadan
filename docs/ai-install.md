@@ -34,7 +34,7 @@ which claude codex   # 둘 중 하나는 있어야 비서를 띄울 수 있다
 
 없는 것이 있으면 설치 방법만 알려 주고 멈춘다. 예: `brew install tmux`, `nvm install 24`.
 
-**성공하면:** Node 24 이상, tmux 3.x, `claude` 또는 `codex` 경로가 출력된다.
+**성공하면:** Node 24 이상, tmux 3.x, `claude` 또는 `codex` 경로가 출력된다. 둘 중 하나의 경로가 나오면 통과한다. 종료 코드만으로 판단하지 않는다.
 
 ## 2. 설치
 
@@ -49,6 +49,7 @@ kadan --help
 
 `npm link`가 싫다는 사용자에게는 `node ~/Dev/kadan/src/cli.mjs <명령>`으로 같은 명령을 쓴다고 알린다.
 이 문서의 `kadan <명령>`을 모두 그렇게 바꿔 실행한다.
+위치를 바꿨다면 위의 `cd`와 대체 실행 경로도 같은 위치로 바꾼다.
 
 **성공하면:** `kadan --help`가 사용법 한 줄을 출력한다. `npm run build:gui`가 오류 없이 끝난다.
 
@@ -62,7 +63,7 @@ kadan up                                                # 비서와 대시보드
 
 - `kadan init`은 `codex`와 `claude`가 둘 다 있으면 `codex`를 비서로 고른다. 사용자가 다른 쪽을 원하면 `kadan init --runner claude` 또는 `--runner codex`로 다시 한다.
 - Codex는 읽을 수 있는 모델 목록이 있을 때 작업자·감독 기본값을 채운다. 모델 목록이 없거나 Claude만 있으면 역할 값이 비어 있을 수 있다. 실행 결과의 안내를 사용자에게 전하고 모델을 임의로 고르지 않는다. 검수자 역할은 늘 비어 있다. 비어 있는 역할은 나중에 [실행 모델 설정](runner-settings.md)대로 채운다.
-- `kadan up`은 기본 설정(`none`)에서 창을 자동으로 열지 않는다. `kadan attach 비서`도 같아서 `창 열림(manual)` 한 줄만 나온다. 사람이 터미널에서 `kadan up`이 출력한 `tmux -L kadan attach -t kadan-비서`로 비서에 붙는다. 소켓 이름을 바꿨다면(`KADAN_SOCKET`) 출력된 값을 쓴다. 창을 자동으로 열려면 `kadan window set rottie --rottie-bin <절대경로>`로 바꿀 수 있다([명령어 사전](commands.md)). 막히면 4단계로 간다.
+- macOS에서 `kadan up`은 기본 설정(`none`)이면 창을 자동으로 열지 않는다. `kadan attach 비서`도 같아서 `창 열림(manual)` 한 줄만 나온다. 사람이 터미널에서 `kadan up`이 출력한 `tmux -L kadan attach -t kadan-비서`로 비서에 붙는다. 소켓 이름을 바꿨다면(`KADAN_SOCKET`) 출력된 값을 쓴다. macOS에서 로티 창을 쓰려면 `kadan window set rottie --rottie-bin <절대경로>`로 설정한다([명령어 사전](commands.md)). Linux에서는 창을 자동으로 열지 않으므로 출력된 tmux 명령으로 붙는다. 막히면 4단계로 간다.
 
 **성공하면:** `kadan up`이 `대시보드: http://127.0.0.1:8790` 같은 주소를 출력한다.
 
@@ -111,7 +112,7 @@ kadan doctor
 
 - 설치 위치
 - 대시보드 주소
-- 비서에 붙는 법: 터미널에서 `tmux -L kadan attach -t kadan-비서`(기본 소켓일 때. `kadan up` 출력 참고). 창을 자동으로 열려면 `kadan window`로 설정한다
+- 비서에 붙는 법: 터미널에서 `tmux -L kadan attach -t kadan-비서`(기본 소켓일 때. `kadan up` 출력 참고). macOS에서 창을 자동으로 열려면 `kadan window`로 설정한다
 - 끄는 법: `kadan stop 비서`, `kadan stop 대시보드`
 - 막힌 것이 있었다면 무엇이었는지, 디스코드 연결처럼 사람이 나중에 직접 해야 하는 선택 기능이 있다는 것
 
