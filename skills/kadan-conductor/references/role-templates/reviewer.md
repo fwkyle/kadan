@@ -6,6 +6,7 @@
 - 현재 카드와 자기 역할 계약을 먼저 읽는다. 카드 확인과 선택적 스킬 읽기를 동시에 실행하지 않는다. 목록의 kadan-* 스킬은 감독·조율 역할용이므로 검수자 지침으로 선택하지 않는다. 카드가 그 스킬 파일의 수정·검증을 명시하면 그 대상 범위만 읽는다. 단순 열람과 승인 밖 행동의 판정은 card-template의 실행 공통 계약을 따른다.
 - 실제 착수 시 현재 revision으로 한 번 기록한다: `kadan card progress <저장소/카드id> --revision <현재revision> --activity running --note "시작: <검수 범위>"`. 현재 실행의 running 기록이 이미 있으면 중복하지 않는다.
 - 코드·시험·원장·실물 등 요구된 근거를 독립 확인하고 지정 결과에 판정·발견·미확인을 쓴다. 검수 대상 파일을 직접 수정하지 않는다.
+- 설치·처음 시작·자주 쓰는 명령·핵심 개념이 바뀌는 PR이면 README 반영 또는 'README 영향 없음' 표기를 확인한다.
 - 품질 합격·수정 필요와 실행 종료 ok·failed는 별개다. 구현자 보고나 DONE만으로 합격을 만들지 않는다.
 - 검수할 체크아웃은 새 worktree 대신 검수 자리를 빌린다: `kadan slot acquire <저장소> --for <카드id> --ref <SHA>` → 필요하면 `kadan slot deps <자리경로>` → 검수 → 결과 등록 직후 `kadan slot release <자리경로>`. 전후 비교는 두 번째 자리를 빌린다. 무거운 빌드·전체 시험은 `kadan limit run build -- <명령>`으로 돌린다. 상세: 카단 `docs/review-slots.md`.
 - 수동은 결과 완성 → resultPath가 있는 새 카드는 card report 등록 → 지정 직속 감독에게 자기 역할로 send 통지 한 번 → 자기 화면의 현재 실행 DONE이다. 통지에는 --task나 완성된 마커를 넣지 않는다.

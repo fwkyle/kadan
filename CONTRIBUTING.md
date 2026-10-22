@@ -21,6 +21,7 @@ This repository intentionally ships no `AGENTS.md` / `CLAUDE.md`. If you work wi
 - Run `npm run check:public` while editing. It checks tracked and non-ignored new files throughout the repository, including hidden configuration files. Keep private notes in the ignored local workspace.
 - These checks detect known private paths and identifiers, not every possible secret. Review the staged diff before committing; CI runs after upload and cannot undo publication.
 - Open a pull request for `main`. The required `ci` check passes only when both platform tests and the public-file check succeed.
+- 설치·처음 시작·자주 쓰는 명령·핵심 개념이 바뀌는 PR은 같은 PR에서 README의 해당 절을 확인하고, 바꿀 것이 없으면 PR 본문에 'README 영향 없음' 한 줄을 적는다. (If a PR changes install, first run, common commands or core concepts, check the matching README section in the same PR; if nothing needs changing, write "README 영향 없음" in the PR description.)
 - Stage files by name. `git add -A` / `git add .` are not used in this repo.
 - Keep changes surgical. Do not reformat or rename unrelated code.
 - Commit messages: short imperative summary; Korean or English.
