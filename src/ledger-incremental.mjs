@@ -22,7 +22,6 @@ const slimOf = stream => stream === ledgerStreams.system ? slimWatchRequest : nu
 // 한 스냅샷 안에서 전체를 읽어 상태를 만든다. 검증에 실패하면 예외를 그대로 던지고 상태는 만들어지지 않는다.
 function build(home) {
   const heads = streamHeads(home,[LEGACY,...names]);
-  const identity = databaseIdentity(home);
   const legacy = readStream(home,LEGACY,{optional:true});
   const streams = new Map(names.map(stream => [stream,readStream(home,stream,{optional:true,slim:slimOf(stream)})]));
   const validator = createDomainValidator(legacy);
@@ -33,7 +32,7 @@ function build(home) {
     cursors.set(stream,head?.seq ?? 0);
     prints.set(stream,head ? sha(head.payload) : null);
   }
-  return {identity,cursors,prints,validator,view:{legacy,streams,ordered},legacyBad:legacyCorrupt(legacy),projections:new Map()};
+  return {cursors,prints,validator,view:{legacy,streams,ordered},legacyBad:legacyCorrupt(legacy),projections:new Map()};
 }
 
 // 커서 뒤 새 사건만 읽어 이어 붙인다. 어긋나면 {drift:이유}, 검증에 실패하면 예외, 바뀐 게 없으면 st 그대로.
@@ -69,9 +68,16 @@ function advance(home,st) {
 }
 
 function rebuild(home,key) {
-  const st = storageSnapshot(home,() => build(home));
-  states.set(key,st);counts.full++;
-  return st;
+  // 파일 식별값을 읽기 전·후에 잰다. 읽는 도중 파일이 바뀌었으면 옛 데이터에 새 식별값이 붙으므로 한 번 더 읽고, 또 바뀌면 포기한다.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const identity = databaseIdentity(home);
+    const st = storageSnapshot(home,() => build(home));
+    if (databaseIdentity(home) !== identity) continue;
+    st.identity = identity;
+    states.set(key,st);counts.full++;
+    return st;
+  }
+  throw new Error('원장 DB 파일이 읽는 도중 바뀜: 잠시 뒤 다시 시도');
 }
 
 function current(home,log) {
