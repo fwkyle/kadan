@@ -11,6 +11,7 @@ import {MailWatch} from '../src/watch-mail.mjs';
 import {MAIL_RULE} from '../src/mail-rule.mjs';
 import {kstTime, firstLine, unreadMailMessage, escalationNotice, WATCH_ALERT_FOOTER} from '../src/watch-notice-format.mjs';
 import {itemizedAlert, formatAlertBody} from '../src/watch-alert-body.mjs';
+import {idleRegisterHint, idleOwnText} from '../src/watch-supervisor.mjs';
 
 const T0 = Date.parse('2020-01-01T01:00:00Z'); // KST 2020-01-01 10:00
 const MIN = 60_000;
@@ -139,4 +140,24 @@ test('놀고 있음 1단·2단·경보: 대상·상태·근거·본인 차례·�
   assert.match(itemizedAlert({kind: '멈춤', session: 's', idleMs: 600000}, 'c'), /\n상태: 일하는 표시 없이 입력을 기다리며 멈춤\n근거: 빈 입력창 10분째/);
   assert.match(itemizedAlert({kind: '죽음', session: 's'}, 'c'), /\n상태: 세션 종료 의심\n근거: 세션 없음 또는 PID 불일치\n/);
   assert.equal(itemizedAlert({kind: '큐대기', session: 's', queuedMs: 0, line: 'x'}, 'c').split('\n').filter(l => l.startsWith('근거')).length, 0, '근거를 모르는 종류는 근거 줄이 없다');
+});
+
+test('놀고 있음 1단: 답할 쪽에 맞는 등록 명령 꼴(2단·한 줄 글은 그대로)', () => {
+  const base = {kind: '놀고 있음', session: 'kadan-x', role: 'x-감독', openCards: 1, lower: {}, idleMinutes: 15, stage: 1};
+  const withItem = (id, reason = '내 차례') => ({...base, idleItems: {ownWhy: [{id, reason}]}});
+  const plain = itemizedAlert(withItem('work:r/w'), '12:30');
+  const user = itemizedAlert(withItem('work:r/w'), '12:30', new Map([['x-감독', '@user']]));
+  assert.ok(user.includes("kadan decision request <카드키> --work r/w --question '<질문>'"));
+  assert.ok(user.includes('실제로 기다리는 중일 때만') && user.includes('멈춘 것이면 등록하지 말고 다음 행동'));
+  assert.equal(user.split('\n').length, plain.split('\n').length + 1, '한 줄만 더해진다');
+  const mail = itemizedAlert(withItem('work:r/w'), '12:30', new Map([['x-감독', '상위']]));
+  assert.ok(mail.includes("kadan mail 상위 --work r/w --expect-reply '<질문>'"));
+  assert.ok(itemizedAlert(withItem('r/card1'), '12:30', new Map([['x-감독', '@user']])).includes('decision request r/card1 --work <업무주소>'));
+  assert.equal(idleRegisterHint(withItem('work:r/w'), new Map()), '', '상위를 모르면 없다');
+  assert.equal(idleRegisterHint(withItem('work:r/w', '답할 질문'), new Map([['x-감독', '@user']])), '', '답할 질문이면 없다');
+  const second = {...withItem('work:r/w'), stage: 2, idleMinutes: 30};
+  const parents = new Map([['x-감독', '@user']]);
+  assert.equal(itemizedAlert(second, '12:45', parents), itemizedAlert(second, '12:45'));
+  assert.ok(!formatAlertBody(withItem('work:r/w')).includes('decision request'));
+  assert.ok(!idleOwnText(withItem('work:r/w')).includes('decision request'));
 });

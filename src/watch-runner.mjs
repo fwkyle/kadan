@@ -674,7 +674,7 @@ export async function runWatch({
       const message = `[watch ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
       let target = alert.role, held = false, delivered = false;
       try {
-        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt)));
+        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt), parents));
         delivered = true;
         deliveredRecipients.add(alert.role);
       } catch (error) {

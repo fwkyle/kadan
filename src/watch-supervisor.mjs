@@ -225,6 +225,21 @@ export function idleOwnText(alert) {
   return `본인 차례: ${names.join(", ")}${rest > 0 ? ` 외 ${rest}건` : ""}.${hint}`;
 }
 
+// 1단 본인 창 글에만 붙는 등록 명령 꼴(2026-10-22). 말로만 기다리면 감시가 답 대기로 못 알아보고 '놀고 있음'을 되풀이한다.
+// 판정은 바꾸지 않는다: 답할 쪽 = 관계표의 직속 상위. 상위를 모르거나 첫 항목이 '답할 질문'이면 붙이지 않는다.
+// 아는 값(업무 키·카드 키)만 채우고 나머지는 자리표시로 둔다.
+export function idleRegisterHint(alert, parents) {
+  const up = (parents instanceof Map ? parents : new Map(Object.entries(parents ?? {}))).get(alert?.role);
+  const item = alert?.idleItems?.ownWhy?.[0];
+  if (!up || !item || item.reason === "답할 질문") return "";
+  const work = item.id.startsWith("work:") ? item.id.slice(5) : "<업무주소>";
+  const card = item.id.startsWith("work:") ? "<카드키>" : item.id;
+  const cmd = up === "@user"
+    ? `kadan decision request ${card} --work ${work} --question '<질문>' --option '<선택1>' --option '<선택2>' --recommend '<추천>' --reason '<이유>'`
+    : `kadan mail ${up} --work ${work} --expect-reply '<질문>'`;
+  return `상위·kyle의 답을 실제로 기다리는 중일 때만 등록한다: ${cmd}. 멈춘 것이면 등록하지 말고 다음 행동을 한다.`;
+}
+
 export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null, ownTurn = null) {
   const userWaiting = excluded.userWait ?? (() => false), answers = excluded.answers ?? (() => false);
   const questions = excluded.questions ?? (() => []);
