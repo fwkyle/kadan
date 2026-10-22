@@ -79,6 +79,7 @@ import { cmdSecrets } from "./commands/secrets.mjs";
 import { cmdDiscord } from "./commands/discord.mjs";
 import { adoptMachineWindow } from "./window-setting.mjs";
 import { recoveryCommand } from "./recovery.mjs";
+import { formatFullHelp, formatShortHelp } from "./command-help.mjs";
 import { cmdStatus } from "./commands/status.mjs";
 import { cmdTree, cmdWall } from "./commands/tree-wall.mjs";
 import { cmdInit, cmdUp, cmdAdopt, cmdAutostart } from "./commands/quickstart.mjs";
@@ -186,7 +187,8 @@ function printWorkResult(args,result){
   console.log(JSON.stringify(result,null,2));
 }
 
-const COMMANDS = {
+export const COMMANDS = {
+  help:(args,flags)=>console.log(flags.all?formatFullHelp():formatShortHelp()),
   hierarchy:(args,flags)=>console.log(JSON.stringify(hierarchyCommand(args,flags,{home:ledgerHome(),floor}),null,2)),
   work:async(args,flags)=>printWorkResult(args,await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
@@ -267,18 +269,18 @@ const COMMANDS = {
 export function main(argv) {
   const [command, ...rest] = argv;
   const fn = COMMANDS[command];
+  if (!command || command === "--help") {
+    console.log(formatShortHelp());
+    process.exit(0);
+  }
   if (!fn) {
-    console.error(
-      "사용법: kadan <init|up|adopt|autostart|doctor|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
-        "stop|status|tree|wall|dashboard|" +
-        "read|log|attach|restore|restart|window|notify|stop-hook|secrets|discord|recovery|handover|hierarchy|work|card|decision|night|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
-    );
-    process.exit(command && command !== "--help" ? 1 : 0);
+    console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
+    process.exit(1);
   }
   const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
-    if (command !== 'window' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
+    if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
     if(
       ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||
