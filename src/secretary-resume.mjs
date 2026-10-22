@@ -10,9 +10,9 @@ import {withInlineScreen} from './inline-screen.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {descendantPids, openFilesOf} from './process-tree.mjs';
+import {mergeCodexOptions, dedupeResumeCommand, serializeWords} from './codex-option-merge.mjs';
 
 export const startDigest = entry => createHash('sha256').update(JSON.stringify(entry)).digest('hex');
-const quote = word => `'${String(word).replace(/'/g, "'\\''")}'`;
 const checkpointPath = home => path.join(home, 'secretary-resume.json');
 
 function conversationOptions(file) {
@@ -106,10 +106,14 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
     if (args[1] !== identity.id) throw new Error('비서 복원 명령과 실제 대화가 다릅니다.');
     args = args.slice(2);
   }
+  const head = [words[0], 'resume', identity.id];
+  // 대화 옵션에 인용할 수 없는 낱말(줄바꿈)이 있으면 그 합치기만 건너뛰고 시작 명령 낱말로 저장한다.
+  // 저장을 거절하면 옛 startDigest가 남아 다음 복원이 막힌다. 시작 명령 낱말은 이미 읽힌 것이라 언제나 인용된다.
+  const command = serializeWords([...head, ...mergeCodexOptions(args, conversationOptions(transcript))])
+    ?? serializeWords([...head, ...mergeCodexOptions(args)]);
+  if (!command) throw new Error('비서 복원 명령을 안전하게 저장할 수 없습니다.');
   const checkpoint = {version: 1, startDigest: startDigest(start), transcript,
-    conversation: identity.id, cwd: start.cwd,
-    command: [words[0], 'resume', identity.id, ...args, ...conversationOptions(transcript)]
-      .map(quote).join(' ')};
+    conversation: identity.id, cwd: start.cwd, command};
   // Recheck the generation before atomically publishing the checkpoint.
   if (startDigest(secretaryStart(read())) !== checkpoint.startDigest
     || String(floor.pid(start.session)) !== String(start.panePid)) {
@@ -141,7 +145,8 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
       throw new Error('저장된 비서 대화와 현재 역할 기록이 다릅니다. 자동 복원을 중단합니다.');
     }
     const window = currentRottieWindow(entries, start.session);
-    const command = withInlineScreen(saved.command); // 옛 체크포인트에도 인라인 화면을 붙인다
+    const savedCommand = dedupeResumeCommand(saved.command); // 이미 겹쳐 쌓인 체크포인트도 한 벌로 낫는다
+    const command = withInlineScreen(savedCommand); // 옛 체크포인트에도 인라인 화면을 붙인다
     const evidence = floor.create({session: start.session, role: start.role,
       cwd: saved.cwd, cmd: command});
     record({...buildStartLedgerEntry({floorName: 'tmux', role: start.role, session: start.session,
@@ -154,7 +159,7 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
     if (!current || String(current.panePid) !== String(evidence.panePid)) {
       throw new Error('비서 복원 시작 기록 확인 필요. 자동 재시도하지 않습니다.');
     }
-    fs.writeFileSync(file + '.tmp', JSON.stringify({...saved, startDigest: startDigest(current)}) + '\n',
+    fs.writeFileSync(file + '.tmp', JSON.stringify({...saved, command: savedCommand, startDigest: startDigest(current)}) + '\n',
       {mode: 0o600});
     fs.renameSync(file + '.tmp', file);
     return 'restored';
@@ -187,7 +192,8 @@ export function savedSecretaryCommand(home, context, command) {
     || identity.cwd !== context.cwd || saved.cwd !== context.cwd) {
     throw new Error('비서 복원 요청과 저장된 대화가 다릅니다.');
   }
-  return withInlineScreen([words[0], ...savedWords.slice(1)].map(quote).join(' '));
+  const joined = serializeWords([words[0], ...savedWords.slice(1)]);
+  return joined ? withInlineScreen(dedupeResumeCommand(joined)) : command;
 }
 
 // An autostart may precede Rottie. Only a continuous exact-conversation lineage may attach.

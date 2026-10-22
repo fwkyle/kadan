@@ -16,7 +16,10 @@ test('09-07 슈퍼의 명시 결정만 생성, 질문 단위로 답변, 같은 �
  const a=f.store.request('repo/card-a',input,'p-슈퍼감독');assert.equal(f.store.request('repo/card-a',input,'p-슈퍼감독').id,a.id);
  const b=f.store.request('repo/card-a',{...input,question:'별칭을 연결할까요?'},'p-슈퍼감독');
  assert.throws(()=>f.store.answer(a.id,{revision:1,text:'분리'},'p-감독'),/사람/);
+ assert.throws(()=>f.store.answer(a.id,{revision:1,text:'분리'},'p-감독'),e=>e.message.startsWith('사용자 답변은 사람 명의로만 기록')&&e.message.includes(`요청한 역할(p-슈퍼감독)`)&&e.message.includes(`kadan decision cancel ${a.id} --revision 1 --reason "kyle 채팅 승인: <답 원문>"`));
+ assert.throws(()=>f.store.answer('없는-ID',{revision:1,text:'분리'},'p-감독'),e=>e.message==='사용자 답변은 사람 명의로만 기록');
  const answer=f.store.answer(a.id,{revision:1,text:'분리하세요',choice:'분리'},'사람');assert.equal(answer.delivery.status,'sent');assert.equal(f.sent.length,1);
+ assert.throws(()=>f.store.answer(a.id,{revision:2,text:'분리'},'p-감독'),e=>e.message==='사용자 답변은 사람 명의로만 기록');
  f.store.answer(a.id,{revision:1,text:'분리하세요',choice:'분리'},'사람');assert.equal(f.sent.length,1);assert.equal(f.store.get(b.id).status,'open');
  const chosen=f.store.answer(b.id,{revision:1,choice:'유지'},'사람');assert.equal(chosen.answer.text,'유지');
  assert.throws(()=>f.store.answer(a.id,{revision:1,text:'다른 결정'},'사람'),/버전/);
