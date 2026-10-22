@@ -68,13 +68,13 @@ test('폴백 저장은 항목마다 선택지·강도·정책을 검사하고 �
   assert.throws(() => set('worker', []), /바뀐 것이 없다/);
   const saved = set('worker', [{runner:'devin', model:'swe-2-max'}]);
   assert.equal(saved.revision, 7);
-  assert.deepEqual(readSettings(f.home).presets.B.fallback.worker, [{runner:'devin', model:'swe-2-max'}]);
+  assert.deepEqual(readSettings(f.home).presets['기본'].fallback.worker, [{runner:'devin', model:'swe-2-max'}]);
   const event = f.records.at(-1);
   assert.deepEqual({action:event.action, role:event.role, preset:event.preset, before:event.before, after:event.after},
-    {action:'fallback', role:'worker', preset:'B', before:[], after:[{runner:'devin', model:'swe-2-max'}]});
+    {action:'fallback', role:'worker', preset:'기본', before:[], after:[{runner:'devin', model:'swe-2-max'}]});
   // 빈 목록은 비운다.
   set('worker', [], 7);
-  assert.equal(readSettings(f.home).presets.B.fallback.worker, undefined);
+  assert.equal(readSettings(f.home).presets['기본'].fallback.worker, undefined);
 });
 
 test('계열: 검수자 폴백↔작업자 1순위, 작업자 폴백↔검수자 1순위가 같으면 거부하고, 1순위를 바꿀 때도 기존 폴백과 대조한다', () => {
@@ -88,7 +88,7 @@ test('계열: 검수자 폴백↔작업자 1순위, 작업자 폴백↔검수자
   set('conductor', [{runner:'codex', model:'xai/grok-4.7-build-fast', effort:'low'}], 7);
   // 작업자 1순위를 glm으로 바꾸면 검수자 폴백 1번과 같은 계열이라 저장하지 않는다.
   assert.throws(() => setRole(f.home, {role:'worker', runner:'codex', model:'zai/glm-5.3', effort:'high', ...f.meta(8)}), /검수자 폴백 1번\(zai\/glm-5.3\)이 작업자 1순위와 같은 계열\(glm\)/);
-  assert.equal(readSettings(f.home).presets.B.roles.worker.model, 'xai/grok-4.7-build-fast');
+  assert.equal(readSettings(f.home).presets['기본'].roles.worker.model, 'xai/grok-4.7-build-fast');
 });
 
 test('N번째 폴백으로 실행 명령을 채우고 없는 번호는 거부한다', () => {
@@ -97,7 +97,7 @@ test('N번째 폴백으로 실행 명령을 채우고 없는 번호는 거부한
   const settings = readSettings(f.home);
   const second = launchForFallback(settings, 'worker', 2);
   assert.equal(second.cmd, 'codex -p lite --model zai/glm-5.3 -c model_reasoning_effort="high" --no-alt-screen');
-  assert.equal(second.fallbackIndex, 2); assert.equal(second.revision, 7); assert.equal(second.preset, 'B');
+  assert.equal(second.fallbackIndex, 2); assert.equal(second.revision, 7); assert.equal(second.preset, '기본');
   assert.equal(launchForFallback(settings, 'worker', '1').cmd, 'devin --model swe-2-max --permission-mode dangerous');
   for (const n of [0, 3, 'x', '1.5']) assert.throws(() => launchForFallback(settings, 'worker', n), /없는 폴백 번호/);
   assert.throws(() => launchForFallback(settings, 'reviewer', 1), /비어 있다/);
@@ -148,7 +148,7 @@ test('CLI: runners fallback·show와 start --fallback N (이유 필수, --cmd �
     assert.equal(alive('rs-fb-ok'), true);
     const start = readLedger(f.home).filter(e => e.kind === 'start' && e.role === 'rs-fb-ok').at(-1);
     assert.equal(start.launchSource, 'fallback'); assert.equal(start.fallbackIndex, 2);
-    assert.equal(start.fallbackReason, '1순위 429 확인'); assert.equal(start.settingsRevision, 7); assert.equal(start.settingsPreset, 'B');
+    assert.equal(start.fallbackReason, '1순위 429 확인'); assert.equal(start.settingsRevision, 7); assert.equal(start.settingsPreset, '기본');
     assert.equal(start.cmd, `${fake} --model zai/glm-5.3 -c model_reasoning_effort="high"`);
     assert.equal(start.settingsCmd, `${fake} --model xai/grok-4.7-build-fast -c model_reasoning_effort="xhigh"`);
     // 이미 떠 있는 세션에는 폴백을 쓰지 않는다.

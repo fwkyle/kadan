@@ -103,11 +103,11 @@ test('프리셋 전환은 있는 다른 프리셋만, 이유와 revision을 받�
   const records = [];
   const meta = r => ({revision:r, by:'사람', reason:'전환', record:e => records.push(e)});
   assert.throws(() => setActivePreset(f.home, {preset:'Z', ...meta(6)}), /없는 프리셋/);
-  assert.throws(() => setActivePreset(f.home, {preset:'B', ...meta(6)}), /이미 활성/);
+  assert.throws(() => setActivePreset(f.home, {preset:'기본', ...meta(6)}), /이미 활성/);
   assert.throws(() => setActivePreset(f.home, {preset:'A', ...meta(5)}), /다시 읽고/);
   assert.throws(() => setActivePreset(f.home, {preset:'A', ...meta(6), reason:' '}), /이유/);
   assert.equal(setActivePreset(f.home, {preset:'A', ...meta(6)}).activePreset, 'A');
-  assert.deepEqual(records.map(({action, before, after, by}) => ({action, before, after, by})), [{action:'preset', before:'B', after:'A', by:'사람'}]);
+  assert.deepEqual(records.map(({action, before, after, by}) => ({action, before, after, by})), [{action:'preset', before:'기본', after:'A', by:'사람'}]);
 });
 
 test('서버 쓰기 경로는 사람 명의로 저장하고, 토큰·revision·이유·목록 밖·차단·같은 계열을 거부한다', async () => {
@@ -146,8 +146,8 @@ test('서버 쓰기 경로는 사람 명의로 저장하고, 토큰·revision·�
 
     const settings = readSettings(f.home);
     assert.equal(settings.activePreset, 'A');
-    assert.deepEqual(settings.presets.B.roles.worker, {runner:'codex', model:'xai/grok-4.7-build-fast', effort:'high'});
-    assert.deepEqual(settings.presets.B.roles.conductor, {runner:'devin', model:'swe-2-max'});
+    assert.deepEqual(settings.presets['기본'].roles.worker, {runner:'codex', model:'xai/grok-4.7-build-fast', effort:'high'});
+    assert.deepEqual(settings.presets['기본'].roles.conductor, {runner:'devin', model:'swe-2-max'});
     const events = readLedger(f.home).filter(e => e.kind === 'runner-settings');
     assert.deepEqual(events.map(e => [e.action, e.by, e.revision]), [['set', '사람', 7], ['set', '사람', 8], ['preset', '사람', 9]]);
     assert.deepEqual(events[0].before, {runner:'codex', model:'xai/grok-4.7-build-fast', effort:'xhigh'});
@@ -238,9 +238,9 @@ test('폴백 쓰기 경로: 추가·순서·삭제는 사람 명의로 저장하
     await refused(await post({op:'down:2'}), 409, /2번은 더 아래로 옮길 수 없다/);
     await refused(await post({op:'remove:3'}), 409, /없는 폴백 번호: 3 — 가능: 1\.\.2/);
     await saved(await post({op:'up:2'}));
-    assert.deepEqual(readSettings(f.home).presets.B.fallback.worker.map(x => x.model), ['xai/grok-5-review', 'swe-2-max']);
+    assert.deepEqual(readSettings(f.home).presets['기본'].fallback.worker.map(x => x.model), ['xai/grok-5-review', 'swe-2-max']);
     await saved(await post({op:'remove:1'}));
-    assert.deepEqual(readSettings(f.home).presets.B.fallback.worker, [{runner:'devin', model:'swe-2-max'}]);
+    assert.deepEqual(readSettings(f.home).presets['기본'].fallback.worker, [{runner:'devin', model:'swe-2-max'}]);
     // 1순위를 기존 폴백과 같은 계열로 바꾸는 저장도 거부한다.
     await refused(await post({role:'reviewer', runner:'devin', model:'swe-2-max'}, {where:'/runners/set'}), 409, /작업자 폴백 1번\(swe-2-max\)이 검수자 1순위와 같은 계열\(devin-swe\)/);
 
