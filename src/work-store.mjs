@@ -41,10 +41,12 @@ export class WorkStore {
    appendStream(this.home,stream,record);return this.get(key);
   });
  }
- change(key,action,fields,{revision,by='사람',note}={}){
+ change(key,action,fields,{revision,by='사람',note,guard}={}){
   return this.locked(()=>{
    const current=this.get(key),{history,...old}=current;
-   if(Number(revision)!==current.revision)throw new Error('업무가 변경됨: 새로 읽고 다시 저장');
+   if(!(guard&&revision==null)&&Number(revision)!==current.revision)throw new Error('업무가 변경됨: 새로 읽고 다시 저장');
+   // guard는 잠금 안에서 최신 업무로 다시 판정한다(던지면 쓰지 않음). {note}를 돌려주면 변경 이유로 쓴다. 우편 차례 반환이 쓴다.
+   if(guard){const decided=guard(current);if(decided?.note)note=decided.note;}
    note=required(note,'변경 이유');
    const next={...old,executions:old.executions.map(x=>({...x})),mailRefs:[...old.mailRefs],revision:old.revision+1,at:new Date().toISOString(),by,note,action};
    if(['done','cancelled'].includes(old.status)&&action!=='reopen')throw new Error('종료한 업무입니다. 이유를 남기고 다시 열어주세요');
