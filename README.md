@@ -57,6 +57,7 @@ kadan attach 비서   # 비서 터미널에 들어가 대화 시작
 kadan doctor        # 막힌 곳이 있으면 한 번에 점검 (읽기 전용)
 ```
 
+- 기본 설정에서는 `kadan up`이 출력한 tmux 명령으로 비서에 접속하세요. 창을 설정했다면 `kadan attach 비서`로 엽니다.
 - `kadan up`이 대시보드 주소를 알려 줍니다. 기본은 http://127.0.0.1:8790 입니다.
 - 비서는 카단 스킬을 알고 있어서, 원하는 일을 말하면 감독·작업자를 대신 꾸려 줍니다.
 - 끝낼 때는 `kadan stop 비서`, `kadan stop 대시보드`.
@@ -98,9 +99,9 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 |---|---|
 | `kadan init` | 처음 한 번, 환경 확인하고 준비하기 |
 | `kadan up` | 비서·대시보드 켜기 (매일) |
-| `kadan attach 비서` | 비서 창에 들어가기 |
+| `kadan attach 비서` | 비서 창 열기 (창 설정 시) |
 | `kadan adopt <이름> --model <모델>` | 지금 하던 대화를 감독으로 이어 열기 |
-| `kadan status` | 지금 살아 있는 세션 보기 |
+| `kadan status` | 지금 켜진 역할 보기 |
 | `kadan mail <역할> <말>` | 역할에게 메시지 보내기 |
 | `kadan stop <역할>` | 역할 끝내기 |
 | `kadan doctor` | 막힌 곳 한 번에 점검하기 |

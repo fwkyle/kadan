@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { COMMANDS } from "../src/cli.mjs";
-import { ALIASES, GROUPS, SHORT_LIST, coverageProblems, displayWidth } from "../src/command-help.mjs";
+import { ALIASES, ATTACH_NOTE, GROUPS, SHORT_LIST, coverageProblems, displayWidth } from "../src/command-help.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = path.join(root, "src", "cli.mjs");
@@ -45,6 +45,11 @@ test("README의 표와 5분 시작 블록에 적힌 kadan 명령은 모두 COMMA
 
 test("짧은 목록 9개의 명령과 문구가 README에 그대로 있다", () => {
   for (const [command, text] of SHORT_LIST) assert.ok(readme.includes(`| \`${command}\` | ${text} |`), command);
+});
+
+test("기본 창 설정의 접속 안내가 짧은 도움말과 README에 같은 문장으로 있다", () => {
+  assert.ok(readme.includes(ATTACH_NOTE));
+  assert.ok(run(["help"]).stdout.includes(ATTACH_NOTE));
 });
 
 test("5분 시작 블록이 docs/ai-install.md 3·4단계와 같은 순서로 runners init과 doctor를 둔다", () => {

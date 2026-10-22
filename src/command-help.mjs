@@ -2,15 +2,17 @@
 // 짧은 목록(SHORT_LIST)·묶음 목록(GROUPS)·README 짧은 목록 표·시험이 모두 여기서 읽는다.
 // 설명 문장은 docs/commands.md에 복사하지 않는다. 그쪽과는 명령 이름만 시험으로 맞춘다.
 
-export const INTRO = "카단 — 여러 AI CLI를 역할별 터미널로 띄워 함께 일하기";
+export const ATTACH_NOTE = "기본 설정에서는 `kadan up`이 출력한 tmux 명령으로 비서에 접속하세요. 창을 설정했다면 `kadan attach 비서`로 엽니다.";
+
+export const INTRO = "카단 — 여러 AI 도구를 역할별로 띄워 함께 일하기";
 
 // 처음 쓰는 사람이 꼭 필요한 9개. 위에서 아래가 쓰는 순서다.
 export const SHORT_LIST = [
   ["kadan init", "처음 한 번, 환경 확인하고 준비하기"],
   ["kadan up", "비서·대시보드 켜기 (매일)"],
-  ["kadan attach 비서", "비서 창에 들어가기"],
+  ["kadan attach 비서", "비서 창 열기 (창 설정 시)"],
   ["kadan adopt <이름> --model <모델>", "지금 하던 대화를 감독으로 이어 열기"],
-  ["kadan status", "지금 살아 있는 세션 보기"],
+  ["kadan status", "지금 켜진 역할 보기"],
   ["kadan mail <역할> <말>", "역할에게 메시지 보내기"],
   ["kadan stop <역할>", "역할 끝내기"],
   ["kadan doctor", "막힌 곳 한 번에 점검하기"],
@@ -29,7 +31,7 @@ export const GROUPS = [
   ["역할 다루기", [
     ["start", "역할 세션 만들기"],
     ["adopt", "하던 AI 대화를 감독으로 이어 열기"],
-    ["attach", "역할 터미널에 들어가기"],
+    ["attach", "역할 창 열기 (창 설정 시)"],
     ["read", "역할 화면 끝부분 읽기"],
     ["wait", "완료나 조용함 기다리기"],
     ["done", "확인한 완료를 원장에 적기"],
@@ -40,7 +42,7 @@ export const GROUPS = [
     ["hierarchy", "끝난 역할의 관계 정리하기"],
   ]],
   ["판과 현황", [
-    ["status", "지금 살아 있는 세션 보기"],
+    ["status", "지금 켜진 역할 보기"],
     ["tree", "판·카드·역할 요약 보기 (JSON)"],
     ["log", "원장 최근 기록 보기"],
     ["wall", "관제 화면 열기 (대시보드)"],
@@ -112,6 +114,8 @@ export function formatShortHelp() {
     INTRO,
     "",
     ...table(SHORT_LIST),
+    "",
+    ATTACH_NOTE,
     "",
     "전체: `kadan help --all` · 명령어 사전: docs/commands.md",
   ].join("\n");
