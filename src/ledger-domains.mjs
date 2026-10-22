@@ -16,7 +16,7 @@ const taskSend = value => value.kind === 'send' && value.taskId != null && value
 // 상태 판정은 쓰지 않으므로 읽기에서 뺀다. 원장 원본은 그대로이고, 필요한 곳은 readWatchRequest로 단건을 읽는다.
 // 빼도 되는 필드의 허용 목록(이 밖의 필드는 어떤 경우에도 빼지 않는다). 검증기가 읽는 필드와 겹치면 시험이 실패한다.
 export const SLIM_DROPPABLE = Object.freeze(['parents','routes','timing']);
-const slimWatchRequest = [{kind:'watch-ai-request',drop:['parents','routes']}];
+export const slimWatchRequest = [{kind:'watch-ai-request',drop:['parents','routes']}];
 // 작업·우편 영역 조회는 시스템 영역의 감시 사건(watch-*)을 출력하지 않으므로 큰 본문(관계표·경로표·순회 시간표)도 뺀다.
 // 순번·연결 검증과 작업 주소 판정이 읽는 필드는 값과 자료형 그대로 남는다.
 const slimWatchForDomain = [{prefix:'watch-',drop:[...SLIM_DROPPABLE]}];
@@ -54,51 +54,69 @@ function dispatchFor(send) {
     kind:'dispatch',mailId:send.mailId,dispatchId:send.mailId,_ledgerOrder:send._ledgerOrder};
 }
 
-export function validateDomainStreams(streams,legacy = []) {
-  const groups = new Map(), mailIds = new Set(legacy.filter(row=>row?.kind==='send' && row.mailId).map(row=>row.mailId));
-  for (const [stream,rows] of streams) {
-    let previous = 0;
-    for (const value of rows) {
-      validateDomainEvent(stream,value);
-      if (value._ledgerOrder <= previous) throw new Error(`도메인 원장 순서 손상: ${stream}`);
-      previous = value._ledgerOrder;
-      const group = groups.get(previous) || [];
-      group.push(value);groups.set(previous,group);
-      if (value.kind === 'send') {
-        if (mailIds.has(value.mailId)) throw new Error('도메인 원장 중복 mailId');
-        mailIds.add(value.mailId);
+// 검증 상태를 들고 있다가 새 사건 묶음(add)만 이어서 검증한다. 전체 읽기는 한 번의 add이고, 증분 읽기는 커서 뒤 묶음마다 add한다.
+// add가 예외를 던지면 이 검증기는 중간 상태이므로 버려야 한다(재사용 금지).
+export function createDomainValidator(legacy = []) {
+  const mailIds = new Set(legacy.filter(row=>row?.kind==='send' && row.mailId).map(row=>row.mailId));
+  const lastByStream = new Map(), mails = new Map(), completions = new Map(), lookup = createCompletionIndex();
+  let expected = 1;
+  for (const row of legacy) {
+    lookup.add(row);
+    if (row?.kind==='send' && row.mailId) mails.set(row.mailId,row);
+  }
+  return {add(streams) {
+    const groups = new Map();
+    for (const [stream,rows] of streams) {
+      let previous = lastByStream.get(stream) ?? 0;
+      for (const value of rows) {
+        validateDomainEvent(stream,value);
+        if (value._ledgerOrder <= previous) throw new Error(`도메인 원장 순서 손상: ${stream}`);
+        previous = value._ledgerOrder;
+        const group = groups.get(previous) || [];
+        group.push(value);groups.set(previous,group);
+        if (value.kind === 'send') {
+          if (mailIds.has(value.mailId)) throw new Error('도메인 원장 중복 mailId');
+          mailIds.add(value.mailId);
+        }
       }
+      lastByStream.set(stream,previous);
     }
-  }
-  const ordered = [...groups].sort(([a],[b]) => a-b);
-  for (const [i,[order,rows]] of ordered.entries()) {
-    if (order !== i+1) throw new Error('도메인 원장 순번 누락');
-    const send = rows.find(row => row.kind === 'send');
-    const dispatch = rows.find(row => row.kind === 'dispatch');
-    if (dispatch || taskSend(send || {})) {
-      if (!send || !dispatch || rows.length !== 2 || !taskSend(send) ||
-          JSON.stringify(dispatchFor(send)) !== JSON.stringify(dispatchFor({...dispatch,kind:'send'})))
-        throw new Error('도메인 원장 send/dispatch 연결 손상');
-    } else if (rows.length !== 1) throw new Error('도메인 원장 순번 중복');
-  }
-  const result = ordered.flatMap(([,rows]) => rows);
-  const history=[...legacy,...result];
-  const mails = new Map(history.filter(row=>row?.kind==='send' && row.mailId).map(row=>[row.mailId,row]));
-  const completions = new Map();
-  const lookup = completionHistory(history);
-  for (const done of result.filter(row=>row.kind==='done' && row.completionMailId)) {
-    const mail=mails.get(done.completionMailId),request=mail && mails.get(mail.replyTo);
-    if (!mail || mail.systemGenerated!=='task-completion' || !mail.completion || !mail.replyFinal || mail.transport!=='mailbox' || own(mail,'taskId') ||
-        mail._ledgerOrder!==done._ledgerOrder+1 || mail.by!==done.role || mail.completionTaskId!==done.taskId || mail.result!==done.result ||
-        !request || request!==completionRequest(done,lookup.before(done)) || request.by!==mail.role || !request.by || request.by==='모름')
-      throw new Error('도메인 원장 완료 우편 연결 손상');
-    if (completions.has(mail.mailId)) throw new Error('도메인 원장 완료 우편 중복');
-    completions.set(mail.mailId,done);
-  }
-  for (const mail of result.filter(row=>row.systemGenerated==='task-completion')) {
-    if (mail.kind!=='send' || !completions.has(mail.mailId)) throw new Error('도메인 원장 완료 사건 없는 우편');
-  }
-  return result;
+    const ordered = [...groups].sort(([a],[b]) => a-b);
+    for (const [i,[order,rows]] of ordered.entries()) {
+      if (order !== expected+i) throw new Error('도메인 원장 순번 누락');
+      const send = rows.find(row => row.kind === 'send');
+      const dispatch = rows.find(row => row.kind === 'dispatch');
+      if (dispatch || taskSend(send || {})) {
+        if (!send || !dispatch || rows.length !== 2 || !taskSend(send) ||
+            JSON.stringify(dispatchFor(send)) !== JSON.stringify(dispatchFor({...dispatch,kind:'send'})))
+          throw new Error('도메인 원장 send/dispatch 연결 손상');
+      } else if (rows.length !== 1) throw new Error('도메인 원장 순번 중복');
+    }
+    expected += ordered.length;
+    const result = ordered.flatMap(([,rows]) => rows);
+    // 새 묶음의 우편까지 색인한 뒤에 새 done의 완료 우편을 검사한다(완료 우편은 done 바로 뒤 순번이라 같은 묶음에 든다).
+    for (const row of result) {
+      lookup.add(row);
+      if (row?.kind==='send' && row.mailId) mails.set(row.mailId,row);
+    }
+    for (const done of result.filter(row=>row.kind==='done' && row.completionMailId)) {
+      const mail=mails.get(done.completionMailId),request=mail && mails.get(mail.replyTo);
+      if (!mail || mail.systemGenerated!=='task-completion' || !mail.completion || !mail.replyFinal || mail.transport!=='mailbox' || own(mail,'taskId') ||
+          mail._ledgerOrder!==done._ledgerOrder+1 || mail.by!==done.role || mail.completionTaskId!==done.taskId || mail.result!==done.result ||
+          !request || request!==completionRequest(done,lookup.before(done)) || request.by!==mail.role || !request.by || request.by==='모름')
+        throw new Error('도메인 원장 완료 우편 연결 손상');
+      if (completions.has(mail.mailId)) throw new Error('도메인 원장 완료 우편 중복');
+      completions.set(mail.mailId,done);
+    }
+    for (const mail of result.filter(row=>row.systemGenerated==='task-completion')) {
+      if (mail.kind!=='send' || !completions.has(mail.mailId)) throw new Error('도메인 원장 완료 사건 없는 우편');
+    }
+    return result;
+  }};
+}
+
+export function validateDomainStreams(streams,legacy = []) {
+  return createDomainValidator(legacy).add(streams);
 }
 
 function legacyRows(home) {
@@ -132,9 +150,11 @@ const explicitTaskKey = value => value.executionKey || (value.taskId?.includes('
 // 완료마다 전체 감시·우편 이력을 다시 훑지 않는다. 같은 짧은 ID의 다른 정식 주소도 함께
 // 보존해야 별칭 충돌을 판정할 수 있다. 인계는 다른 카드의 사건도 보존한다(중복 인계 ID).
 // 조회마다 새로 만들고 완료 이전 행만 넘기므로 미래 주소나 인계가 과거 판정을 바꾸지 않는다.
-function completionHistory(history) {
+function createCompletionIndex() {
   const positions=new Map(),tasks=new Map(),transfers=[],doneByMail=new Map();
-  history.forEach((entry,index)=>{
+  let count=0;
+  return {positions,doneByMail,add(entry){
+    const index=count++;
     if(!positions.has(entry))positions.set(entry,index);
     if(entry?.kind==='done'&&!doneByMail.has(entry.completionMailId))doneByMail.set(entry.completionMailId,entry);
     if(isMailTransfer(entry)&&Array.isArray(entry.taskIds))transfers.push({entry,index});
@@ -143,12 +163,16 @@ function completionHistory(history) {
       if(!tasks.has(id))tasks.set(id,[]);
       tasks.get(id).push({entry,index});
     }
-  });
-  return {positions,doneByMail,before(done){
+  },before(done){
     const end=positions.get(done),id=typeof done.taskId==='string'?done.taskId.split('/').at(-1):null;
     return [...(tasks.get(id)||[]),...transfers].filter(row=>row.index<end)
       .sort((a,b)=>a.index-b.index).map(row=>row.entry);
   }};
+}
+function completionHistory(history) {
+  const index=createCompletionIndex();
+  history.forEach(entry=>index.add(entry));
+  return index;
 }
 function completionRequest(done,history) {
   // 우편 책임과 달리 작업은 확정 인계의 taskIds에 적힌 실행만 옮긴다.
@@ -284,18 +308,22 @@ function publicEvent(value) {
   return entry;
 }
 
-export function uniqueDone(rows) {
+// 완료 사건의 첫 줄만 인정하는 거르개. 호출마다 새로 만들어 쓴다(증분 투영은 영역마다 하나씩 들고 이어 쓴다).
+export function createUniqueDone() {
   const seen = new Set();
-  return rows.filter(entry => {
+  return entry => {
     if (entry?.kind !== 'done' || !entry.role || !entry.taskId) return true;
     const key = JSON.stringify([entry.role,entry.taskId,entry.executionKey || '']);
     if (seen.has(key)) return false;
     seen.add(key);return true;
-  });
+  };
+}
+export function uniqueDone(rows) {
+  return rows.filter(createUniqueDone());
 }
 
-export function projectLedger(state,domain) {
-  if (domain && state.legacy.some(row=>!row || typeof row.kind!=='string' || row.broken)) throw new Error('과거 원장 손상: 도메인 조회 불가');
+// 영역(domain)별 투영 규칙. legacy(과거 원문)와 ordered(새 저장 순서)를 따로 받아 uniqueDone 앞 단계까지 만든다.
+export function domainProjector(domain) {
   // 'mailbox'는 우편 영역에 세대 판정 근거(start·stop)를 원래 순서로 더한 조회다. 우편함 계산용이고 영역 표시는 'mail' 그대로다.
   const inDomain=kind => domain === 'mailbox' ? ledgerDomain(kind) === 'mail' || kind === 'start' || kind === 'stop' : ledgerDomain(kind) === domain;
   const mailDomain = domain === 'mail' || domain === 'mailbox';
@@ -303,15 +331,24 @@ export function projectLedger(state,domain) {
   // 우편함 조회는 '알림이 실제로 들어간' 감시 사건(sent)의 최소 정보만 더한다. 감시기와 같은 넣은 시각(deliveredAt)·세대 판정을 하려는 것이다.
   const reminderSent=value=>domain==='mailbox'&&value?.kind==='watch-mail-reminder'&&value.action==='result'&&value.delivery==='sent'&&value.held!==true&&value.stage!=='escalate'&&value.mailId&&value.role;
   const slimReminder=({kind,t,mailId,role,action,delivery})=>({kind,t,mailId,role,action,delivery});
-  const legacy = state.legacy.flatMap(value => {
-    if (!domain) return [value];
-    if (domain === 'tasks' && taskSend(value || {})) {
-      return [{...value,kind:'dispatch',legacy:true}];
-    }
-    return reminderSent(value) ? [slimReminder(value)] : inDomain(value?.kind) || mailDomain && mailEvidence(value) ? [value] : [];
-  });
-  // 인계와 완료는 자기 영역에 한 번만 저장한다. 우편 조회에는 판정 근거를 원래 순서로 포함한다.
-  const rows = state.ordered.filter(value => domain ? inDomain(value.kind) || mailDomain && mailEvidence(value) || reminderSent(value) : value.kind !== 'dispatch')
-    .map(value => reminderSent(value) ? slimReminder(value) : publicEvent(value));
-  return uniqueDone([...legacy,...rows]);
+  return {
+    legacy:rows => rows.flatMap(value => {
+      if (!domain) return [value];
+      if (domain === 'tasks' && taskSend(value || {})) {
+        return [{...value,kind:'dispatch',legacy:true}];
+      }
+      return reminderSent(value) ? [slimReminder(value)] : inDomain(value?.kind) || mailDomain && mailEvidence(value) ? [value] : [];
+    }),
+    // 인계와 완료는 자기 영역에 한 번만 저장한다. 우편 조회에는 판정 근거를 원래 순서로 포함한다.
+    rows:rows => rows.filter(value => domain ? inDomain(value.kind) || mailDomain && mailEvidence(value) || reminderSent(value) : value.kind !== 'dispatch')
+      .map(value => reminderSent(value) ? slimReminder(value) : publicEvent(value)),
+  };
+}
+
+export const legacyCorrupt = legacy => legacy.some(row=>!row || typeof row.kind!=='string' || row.broken);
+
+export function projectLedger(state,domain) {
+  if (domain && legacyCorrupt(state.legacy)) throw new Error('과거 원장 손상: 도메인 조회 불가');
+  const project = domainProjector(domain);
+  return uniqueDone([...project.legacy(state.legacy),...project.rows(state.ordered)]);
 }

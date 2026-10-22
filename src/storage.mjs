@@ -96,7 +96,7 @@ function slimSql(rules){
  });
  return {expr:`CASE ${when.join(' ')} ELSE payload END`,args};
 }
-export function readStream(home,stream,{optional=false,slim=null}={}){
+export function readStream(home,stream,{optional=false,slim=null,after=null}={}){
  if(storageMode(home)==='jsonl'){
   const f=path.join(home,stream);if(optional&&!fs.existsSync(f))return [];
   const rows=fs.readFileSync(f,'utf8').split('\n').filter(x=>x.trim()).map(JSON.parse);
@@ -107,8 +107,10 @@ export function readStream(home,stream,{optional=false,slim=null}={}){
   const q=slim?slimSql(slim):null;
   // 한 줄씩 해석한다: .all()은 원문 문자열 배열과 해석한 객체를 한꺼번에 쥐어 정점이 약 30% 컸다(2026-10-22 실측 586→408MB).
   const rows=[];
-  for(const r of db.prepare(q?`SELECT ${q.expr} AS payload FROM events WHERE stream=? ORDER BY seq`:'SELECT payload FROM events WHERE stream=? ORDER BY seq').iterate(...(q?[...q.args,stream]:[stream])))rows.push(JSON.parse(r.payload));
-  if(!rows.length&&!optional)throw new Error(`기록 없음: ${stream}`);return rows;
+  // after: 이 순번보다 큰 행만 읽는다(증분 읽기). 나눠 읽기·LIMIT은 두지 않는다 — 묶음 경계를 자르지 않으려는 것이다.
+  const tail=after===null?'':' AND seq>?',more=after===null?[]:[after];
+  for(const r of db.prepare(`SELECT ${q?q.expr:'payload'} AS payload FROM events WHERE stream=?${tail} ORDER BY seq`).iterate(...(q?q.args:[]),stream,...more))rows.push(JSON.parse(r.payload));
+  if(!rows.length&&!optional&&after===null)throw new Error(`기록 없음: ${stream}`);return rows;
  },{readOnly:true});
 }
 export function appendStream(home,stream,value){
@@ -129,4 +131,17 @@ export function writeStorageMarker(home,backend){
  const tmp=path.join(home,`.storage-${randomUUID()}.json`);
  fs.writeFileSync(tmp,JSON.stringify({version:1,backend})+'\n',{flag:'wx',mode:0o600});
  fs.renameSync(tmp,path.join(home,'storage.json'));
+}
+// 증분 읽기용 도우미. 모두 storageSnapshot 안에서 불러 같은 읽기 스냅샷을 쓴다(트랜잭션이 이미 열려 있으면 그 연결을 재사용한다).
+// 영역별 끝 행: {seq,payload}. 행이 없는 영역은 빠진다.
+export function streamHeads(home,streams){
+ return transaction(home,db=>new Map(db.prepare(`SELECT stream,seq,payload FROM heads WHERE stream IN (${streams.map(()=>'?').join(',')})`).all(...streams).map(r=>[r.stream,{seq:r.seq,payload:r.payload}])),{readOnly:true});
+}
+export function streamRowPayload(home,stream,seq){
+ return transaction(home,db=>db.prepare('SELECT payload FROM events WHERE stream=? AND seq=?').get(stream,seq)?.payload??null,{readOnly:true});
+}
+// 열린 DB 파일의 식별값. 파일이 통째로 바뀌면(복원·교체) inode나 생성 시각이 달라진다. 쓰기만으로는 바뀌지 않는다.
+export function databaseIdentity(home){
+ const st=fs.statSync(storagePath(home));
+ return `${st.dev}:${st.ino}:${Math.round(st.birthtimeMs)}`;
 }
