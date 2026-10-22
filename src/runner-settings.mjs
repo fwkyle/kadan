@@ -262,7 +262,7 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
     }
     if (!runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
     const value = {
-      version: 1, revision: 1, activePreset: 'B', presets: {B: {label: '값싼 병렬판', roles: {}}},
+      version: 1, revision: 1, activePreset: '기본', presets: {'기본': {label: '처음 시작용', roles: {}}},
       runners, families: DEFAULT_FAMILIES, blocked: [],
     };
     write(home, value);
