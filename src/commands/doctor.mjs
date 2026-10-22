@@ -11,7 +11,7 @@ import { watchProcessName } from "../watch-system.mjs";
 import { readBridgeStatus } from "./quickstart.mjs";
 import { runDoctor, renderDoctor, doctorJson } from "../doctor.mjs";
 
-const USAGE = "사용법: kadan doctor [--json]  (읽기 전용 점검. 아무것도 만들거나 고치지 않는다. 막힘이 있으면 종료 코드 1)";
+const USAGE = "사용법: kadan doctor [--json]  (읽기 전용 점검. 카단 데이터와 상태를 바꾸지 않는다. 막힘이 있으면 종료 코드 1)";
 
 export function cmdDoctor(argv, flags) {
   if (flags.help) { console.log(USAGE); return; }

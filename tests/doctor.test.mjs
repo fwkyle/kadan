@@ -5,8 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {spawnSync} from 'node:child_process';
-import {runDoctor, renderDoctor, doctorJson, sqliteWalState} from '../src/doctor.mjs';
+import crypto from 'node:crypto';
+import {spawn, spawnSync} from 'node:child_process';
+import {runDoctor, renderDoctor, doctorJson} from '../src/doctor.mjs';
 import {appendLedger, readSystemLedger} from '../src/ledger.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
@@ -46,20 +47,32 @@ const byId = (report, id) => report.checks.find(c => c.id === id);
 const startEntry = (home, cmd) => appendLedger({kind: 'start', floor: 'tmux', role: '비서', session: 'kadan-비서',
   panePid: '20', cwd: home, roleProfile: 'secretary', cmd, by: '사람', t: new Date().toISOString()}, home);
 
-// 폴더 안 모든 항목의 종류·크기·mtime·권한. doctor 전후가 같아야 "아무것도 쓰지 않았다".
+// 폴더 안 모든 항목의 종류·내용 해시·권한. doctor 전후가 같아야 "카단 데이터·상태를 바꾸지 않았다".
+// SQLite가 스스로 관리하는 -wal/-shm과, 읽기 명령이 만드는 tmux 런타임 폴더(tmux-<uid>) 자체는 뺀다.
 function snapshot(dir) {
   const out = {};
   const walk = current => {
     for (const name of fs.readdirSync(current).sort()) {
+      if (/-(wal|shm)$/.test(name) || /^tmux-\d+$/.test(name)) continue;
       const file = path.join(current, name), stat = fs.lstatSync(file);
-      const kind = stat.isDirectory() ? 'd' : stat.isSymbolicLink() ? 'l' : 'f';
-      out[path.relative(dir, file)] = `${kind}:${stat.size}:${stat.mtimeMs}:${stat.mode}`;
-      if (stat.isDirectory()) walk(file);
+      const rel = path.relative(dir, file);
+      if (stat.isDirectory()) { out[rel] = `d:${stat.mode}`; walk(file); }
+      else if (stat.isSymbolicLink()) out[rel] = `l:${fs.readlinkSync(file)}`;
+      else out[rel] = `f:${stat.mode}:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
     }
   };
   walk(dir);
   return out;
 }
+const userVersion = home => {
+  const {DatabaseSync} = createRequire(import.meta.url)('node:sqlite');
+  const db = new DatabaseSync(path.join(home, 'kadan.sqlite'), {readOnly: true});
+  try {
+    return {version: db.prepare('PRAGMA user_version').get().user_version,
+      rows: db.prepare('SELECT count(*) AS n FROM events').get().n};
+  } finally { db.close(); }
+};
+const verdicts = report => report.checks.map(c => `${c.id}:${c.state}`);
 
 test('정상: 막힘이 없으면 종료 코드 0이고 정상·해당 없음만 나온다', () => {
   const w = world();
@@ -195,6 +208,29 @@ test('스킬 링크: 안 걸린 링크는 주의로 이름만 보이고 만들�
   assert.equal(fs.existsSync(path.join(w.userHome, '.codex', 'skills', 'kadan-go')), false);
 });
 
+test('스킬 링크: 끊어졌거나 다른 곳을 가리키는 링크는 주의로 경로를 보이고 바꾸지 않는다', () => {
+  for (const kind of ['끊김', '다른 곳']) {
+    const w = world({skills: false});
+    const link = path.join(w.userHome, '.codex', 'skills', 'kadan-go');
+    const elsewhere = path.join(w.root, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    fs.symlinkSync(kind === '끊김' ? path.join(w.root, 'gone') : elsewhere, link);
+    const target = fs.readlinkSync(link);
+    const row = byId(runDoctor(w.deps), 'skills');
+    assert.equal(row.state, 'warn', kind);
+    assert.ok(row.reason.includes(link), '경로를 보인다');
+    assert.equal(fs.readlinkSync(link), target, '자동으로 바꾸지 않는다');
+  }
+});
+
+test('스킬 링크: 다른 경로 표기여도 저장소 스킬로 풀리면 정상이다', () => {
+  const w = world({skills: false});
+  const alias = path.join(w.root, 'alias');
+  fs.symlinkSync(w.repoRoot, alias);
+  fs.symlinkSync(path.join(alias, 'skills', 'kadan-go'), path.join(w.userHome, '.codex', 'skills', 'kadan-go'));
+  assert.equal(byId(runDoctor(w.deps), 'skills').state, 'ok');
+});
+
 test('비밀 파일 권한이 넓으면 주의다(값은 읽지 않는다)', () => {
   const w = world();
   fs.mkdirSync(path.join(w.home, 'secrets'), {mode: 0o700});
@@ -256,49 +292,43 @@ test('무쓰기 잠금(빈 홈·없는 폴더): 홈이 없어도 아무것도 �
   assert.equal(fs.existsSync(missing), false);
 });
 
-test('무쓰기 잠금(SQLite 닫힌 원장): 읽기 전용으로 열어도 -wal/-shm이 생기지 않는다', () => {
+test('데이터 무변경(SQLite 닫힌 원장): 행 수·user_version·본파일 내용이 같고 체크포인트도 읽는다', () => {
   const w = world();
   createDatabase(w.home);
   writeStorageMarker(w.home, 'sqlite');
-  assert.equal(sqliteWalState(w.home), 'idle', '시험 준비: 닫힌 원장');
+  startEntry(w.home, 'codex --model x');
+  const rows = userVersion(w.home);
   const before = snapshot(w.root);
   const report = runDoctor(w.deps);
   assert.equal(byId(report, 'storage').state, 'ok');
-  assert.match(byId(report, 'storage').reason, /파일 생성 없음/);
-  assert.equal(byId(report, 'secretary-checkpoint').state, 'unknown', '닫힌 원장은 읽으면 파일이 생겨 읽지 않는다');
+  assert.notEqual(byId(report, 'secretary-checkpoint').state, 'unknown', '닫힌 원장도 status와 같은 길로 읽는다');
+  assert.deepEqual(userVersion(w.home), rows);
   assert.deepEqual(snapshot(w.root), before);
-  for (const suffix of ['-wal', '-shm']) assert.ok(!fs.existsSync(path.join(w.home, `kadan.sqlite${suffix}`)));
 });
 
-test('무쓰기 잠금(SQLite 열려 있는 원장): 새 파일을 만들지 않고 원장 파일을 바꾸지 않는다', () => {
+test('데이터 무변경(SQLite 살아 있는 쓰기 프로세스): 쓰는 동안에도 판정이 쓰기 없을 때와 같다', async () => {
   const w = world();
   createDatabase(w.home);
   writeStorageMarker(w.home, 'sqlite');
-  const {DatabaseSync} = createRequire(import.meta.url)('node:sqlite');
-  const writer = new DatabaseSync(path.join(w.home, 'kadan.sqlite'));
+  startEntry(w.home, 'codex --model x');
+  const quiet = verdicts(runDoctor(w.deps));
+  // 작은 쓰기 프로세스 하나: 고정 5건을 40ms 간격으로 쓰고 끝난다(부하 시험 아님, 자체 종료 상한 10초).
+  const code = `const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);
+    db.exec('PRAGMA busy_timeout=5000');let n=0;process.send('ready');
+    const t=setInterval(()=>{db.exec("INSERT INTO events(stream,seq,payload) VALUES('probe',"+(++n)+",'{}')");
+    if(n>=5){clearInterval(t);db.close();process.exit(0);}},40);setTimeout(()=>process.exit(2),10000).unref();`;
+  const child = spawn(process.execPath, ['-e', code, path.join(w.home, 'kadan.sqlite')], {stdio: ['ignore', 'ignore', 'inherit', 'ipc']});
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  await new Promise(resolve => child.once('message', resolve));
   try {
-    writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
-    writer.exec("INSERT INTO events(stream,seq,payload) VALUES('probe',1,'{}')");
-    assert.equal(sqliteWalState(w.home), 'live', '시험 준비: 열려 있는 원장');
-    const names = fs.readdirSync(w.home).sort();
-    const main = fs.statSync(path.join(w.home, 'kadan.sqlite'));
-    const report = runDoctor(w.deps);
-    assert.equal(byId(report, 'storage').state, 'ok');
-    assert.notEqual(byId(report, 'secretary-checkpoint').state, 'unknown', '열려 있는 원장은 읽는다');
-    assert.deepEqual(fs.readdirSync(w.home).sort(), names, '새 파일이 없다');
-    const after = fs.statSync(path.join(w.home, 'kadan.sqlite'));
-    assert.equal(`${after.size}:${after.mtimeMs}`, `${main.size}:${main.mtimeMs}`);
-  } finally { writer.close(); }
-});
-
-test('SQLite -wal/-shm 한쪽만 있으면 열지 않고 확인 불가다', () => {
-  const w = world();
-  createDatabase(w.home);
-  writeStorageMarker(w.home, 'sqlite');
-  fs.writeFileSync(path.join(w.home, 'kadan.sqlite-wal'), '');
+    for (let i = 0; i < 3; i++) assert.deepEqual(verdicts(runDoctor(w.deps)), quiet, `쓰기 중 ${i + 1}번째`);
+  } finally { child.kill('SIGKILL'); }
+  await exited;
+  const rows = userVersion(w.home);
+  assert.equal(rows.version, 1);
   const before = snapshot(w.root);
-  const row = byId(runDoctor(w.deps), 'storage');
-  assert.equal(row.state, 'unknown');
+  runDoctor(w.deps);
+  assert.deepEqual(userVersion(w.home), rows);
   assert.deepEqual(snapshot(w.root), before);
 });
 
@@ -307,8 +337,10 @@ test('CLI: kadan doctor --json은 격리 홈에서 JSON을 내고, 막힘이 있
   const home = path.join(root, 'home'), user = path.join(root, 'user');
   fs.mkdirSync(home); fs.mkdirSync(user);
   const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const tmuxTmp = path.join(root, 'tmuxtmp');
+  fs.mkdirSync(tmuxTmp);
   const env = {...process.env, HOME: user, KADAN_HOME: home, KADAN_SOCKET: `kadan-doctor-${process.pid}`,
-    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_FLOOR: 'tmux'};
+    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_FLOOR: 'tmux', TMUX_TMPDIR: tmuxTmp};
   delete env.KADAN_ROLE;
   const before = snapshot(root);
   const run = spawnSync(process.execPath, [cli, 'doctor', '--json'], {env, encoding: 'utf8', timeout: 30000});
@@ -316,7 +348,10 @@ test('CLI: kadan doctor --json은 격리 홈에서 JSON을 내고, 막힘이 있
   assert.equal(json.checks.length, 11);
   assert.equal(json.checks.find(c => c.id === 'base').state, 'blocked', '세션이 하나도 없다');
   assert.equal(run.status, 1, run.stdout + run.stderr);
-  assert.deepEqual(snapshot(root), before, '홈과 사용자 폴더에 아무것도 만들지 않았다');
+  assert.deepEqual(snapshot(root), before, '홈과 사용자 폴더의 데이터·상태가 같다');
+  for (const name of fs.readdirSync(tmuxTmp)) {
+    assert.deepEqual(fs.readdirSync(path.join(tmuxTmp, name)), [], '런타임 폴더 안에 소켓·세션이 없다');
+  }
   const text = spawnSync(process.execPath, [cli, 'doctor'], {env, encoding: 'utf8', timeout: 30000});
   assert.match(text.stdout, /^node·tmux \| (정상|막힘) \| /m);
   assert.equal(spawnSync(process.execPath, [cli, 'doctor', '--help'], {env, encoding: 'utf8'}).status, 0);

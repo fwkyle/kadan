@@ -1,11 +1,10 @@
 // kadan doctor — 막힌 곳을 한 번에 보여 주는 읽기 전용 점검 (설치·상주 PR-1).
-// 아무것도 만들거나 고치거나 옮기지 않는다. 원인을 모르는 상태를 스스로 바꾸지 않는다(카단의 '모호하면 실패 닫힘').
+// 카단의 데이터와 상태(원장 행·스키마·설정·체크포인트·잠금·revive-state)를 바꾸지 않고, tmux 세션·서버를 만들지 않는다.
+// SQLite의 -wal/-shm과 tmux 런타임 폴더는 `kadan status`와 같은 수준으로 생길 수 있다.
 // 각 점검은 기존 모듈의 읽기 함수를 부른다. 같은 판정을 새로 짜지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
-import {storageMode, storagePath} from './storage.mjs';
+import {storageMode, storageSnapshot} from './storage.mjs';
 import {readSystemLedger} from './ledger.mjs';
 import {dashboardBuild, DASHBOARD_BUILD_COMMAND} from './dashboard-static.mjs';
 import {readReviveState, TARGETS, REVIVE_LABELS} from './revive.mjs';
@@ -22,37 +21,10 @@ const RANK = {ok: 0, na: 0, warn: 1, unknown: 2, blocked: 3};
 const worst = states => states.reduce((a, b) => (RANK[b] > RANK[a] ? b : a), 'ok');
 const result = (state, reason, fix = '') => ({state, reason, fix});
 
-// SQLite는 열기만 해도 -wal/-shm 파일이 생길 수 있다(닫힌 WAL 원장을 읽기 전용으로 열어도 생긴다, 2026-10-22 실측).
-// 'live' = 둘 다 있다(열려 있는 원장, 읽어도 새 파일이 없다), 'idle' = 둘 다 없다(닫힌 원장), 'partial' = 한쪽만 있다.
-export function sqliteWalState(home) {
-  const file = storagePath(home);
-  const wal = fs.existsSync(`${file}-wal`), shm = fs.existsSync(`${file}-shm`);
-  return wal && shm ? 'live' : !wal && !shm ? 'idle' : 'partial';
-}
-
-// 읽기 전용으로 열어 형식만 확인한다. 닫힌 원장은 immutable로 열어 -wal/-shm이 생기지 않게 한다.
+// 원장은 `kadan status`·대시보드와 같은 읽기 경로(storageSnapshot)로 연다. 자체 우회 열기를 두지 않는다.
+// SQLite의 -wal/-shm 관리는 다른 읽기 명령과 같은 수준으로 SQLite 자신이 한다.
 function probeSqlite(home) {
-  const file = storagePath(home);
-  if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink()) throw new Error('SQLite 원본이 없거나 심볼릭 링크다');
-  const wal = sqliteWalState(home);
-  if (wal === 'partial') throw new Error('-wal/-shm 중 한쪽만 있어 열면 파일이 생긴다. 열지 않았다');
-  const {DatabaseSync} = createRequire(import.meta.url)('node:sqlite');
-  const location = wal === 'live' ? file : `${pathToFileURL(file).href}?immutable=1`;
-  const db = new DatabaseSync(location, {readOnly: true});
-  try {
-    const id = db.prepare('PRAGMA application_id').get().application_id;
-    const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (id !== 1262767153 || version !== 1) throw new Error('지원하지 않는 SQLite 원본/버전이다');
-  } finally { db.close(); }
-  return wal;
-}
-
-// 원장 읽기(비서 시작 기록용). 닫힌 SQLite는 읽으면 -wal/-shm이 생기므로 읽지 않고 이유를 던진다.
-function readEntries(home) {
-  if (storageMode(home) === 'sqlite' && sqliteWalState(home) !== 'live') {
-    throw new Error('원장이 닫힌 SQLite라 읽으면 -wal/-shm 파일이 생긴다. doctor는 읽지 않는다');
-  }
-  return readSystemLedger(home);
+  storageSnapshot(home, db => db.prepare('SELECT 1').get()); // 형식·버전 확인은 openDatabase가 한다
 }
 
 function checkRuntime({run, nodeVersion, floorName}) {
@@ -78,10 +50,10 @@ function checkStorage({home}) {
   if (!fs.existsSync(home)) return result('blocked', '데이터 폴더가 없다', 'kadan init');
   if (!fs.statSync(home).isDirectory()) return result('blocked', '데이터 폴더 자리에 파일이 있다');
   if (storageMode(home) === 'sqlite') {
-    const wal = probeSqlite(home);
+    probeSqlite(home);
     const paused = fs.existsSync(path.join(home, 'storage-paused.json'));
     return paused ? result('warn', 'SQLite는 열리지만 저장 전환 중이라 쓰기가 중지돼 있다', 'kadan storage --help')
-      : result('ok', `SQLite 원장을 읽기 전용으로 열었다(${wal === 'live' ? '열려 있는 원장' : '닫힌 원장, 파일 생성 없음'})`);
+      : result('ok', 'SQLite 원장을 읽기 전용으로 열었다');
   }
   const ledger = path.join(home, 'ledger.jsonl');
   if (!fs.existsSync(ledger)) return result('na', '아직 원장이 없다(처음 kadan up 전)');
@@ -132,7 +104,7 @@ function checkBase({home, probes}) {
 
 function checkSecretaryCheckpoint({home, floorName, probes}) {
   if (floorName !== 'tmux') return result('na', 'tmux 바닥이 아니라 체크포인트를 쓰지 않는다');
-  const found = inspectSecretaryCheckpoint({home, entries: readEntries(home)});
+  const found = inspectSecretaryCheckpoint({home, entries: readSystemLedger(home)});
   const alive = probes.alive('비서');
   switch (found.kind) {
     case 'none': return result('na', '아직 비서 시작 기록이 없다');
@@ -211,15 +183,26 @@ function checkLiveFloor({home, env}) {
 // 읽기 전용: 링크를 만들지 않는 가짜 fs로 linkSkills의 판정만 쓴다('linked' = 아직 안 걸린 링크).
 const dryFs = {existsSync: fs.existsSync, readdirSync: fs.readdirSync, statSync: fs.statSync,
   lstatSync: fs.lstatSync, readlinkSync: fs.readlinkSync, symlinkSync: () => {}};
+function resolvesTo(link, target) {
+  try { return fs.realpathSync(link) === fs.realpathSync(target); } catch { return false; } // 끊긴 링크는 거짓
+}
 function checkSkills({repoRoot, userHome}) {
-  const planned = linkSkills({skillsDir: path.join(repoRoot, 'skills'), userHome, fsm: dryFs});
+  const skillsDir = path.join(repoRoot, 'skills');
+  const planned = linkSkills({skillsDir, userHome, fsm: dryFs});
   const folders = planned.filter(r => r.state !== 'skipped');
   if (!folders.length) return result('na', '스킬을 걸 에이전트 폴더(~/.codex·~/.claude·~/.agents의 skills)가 없다');
   const missing = planned.filter(r => r.state === 'linked');
-  if (missing.length) {
-    return result('warn', `걸리지 않은 스킬 링크 ${missing.length}개: ${missing.map(r => r.name).join(', ')}`, 'kadan init');
+  // linkSkills의 kept(남의 링크는 덮지 않는다)는 건강하다는 뜻이 아니다. 링크가 저장소 스킬로 실제 풀리는지 본다.
+  const wrong = planned.filter(r => r.state === 'kept' && r.reason.includes('링크')
+    && !resolvesTo(path.join(r.dir, r.name), path.join(skillsDir, r.name)));
+  if (!missing.length && !wrong.length) return result('ok', '스킬 링크가 모두 걸려 있다');
+  const parts = [];
+  if (missing.length) parts.push(`걸리지 않은 스킬 링크 ${missing.length}개: ${missing.map(r => r.name).join(', ')}`);
+  if (wrong.length) {
+    parts.push(`저장소 스킬로 풀리지 않는 링크 ${wrong.length}개(자동으로 바꾸지 않는다): `
+      + wrong.map(r => path.join(r.dir, r.name)).join(', '));
   }
-  return result('ok', '스킬 링크가 모두 걸려 있다');
+  return result('warn', parts.join(' / '), missing.length ? 'kadan init' : `ls -l '${path.join(wrong[0].dir, wrong[0].name)}'`);
 }
 
 function checkRecoveryLocks({home}) {
