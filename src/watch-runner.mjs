@@ -124,6 +124,8 @@ export async function runWatch({
   loadHierarchy = null,
   // 하루 한 번 관계표 정리. ({file, now}) => 정리 결과. 없으면(--hierarchy 없음·끔) 정리도 기록도 하지 않는다.
   pruneHierarchy = null,
+  // 나이트 모드 끝 시각 확인. ({entries, now}) => 끝 사건 또는 null. 켠 적이 없으면 아무것도 읽지 않는다. 없으면 하지 않는다.
+  checkNightExpiry = null,
   idleMs = 15 * 60 * 1_000,
   userNotify = false,
   judgeCmd = null,
@@ -247,6 +249,9 @@ export async function runWatch({
     // 정리를 읽기 앞에 둬서, 줄이 바뀌면 같은 주기의 hierarchy-loaded가 새 표를 읽는다.
     if (pruneHierarchy && hierarchyPath && !ledgerError) {
       runDailyHierarchyPrune({entries, now:cycleAt, file:hierarchyPath, prune:pruneHierarchy, record});
+    }
+    if (checkNightExpiry && !ledgerError) {
+      try { checkNightExpiry({entries, now:cycleAt}); } catch (error) { console.error(`나이트 모드 끝 시각 확인 실패(다음 주기에 다시 본다): ${error.message}`); }
     }
     if (loadHierarchy) {
       try {

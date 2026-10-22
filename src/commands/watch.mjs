@@ -18,6 +18,7 @@ import { CardStore } from "../card-store.mjs";
 import { WorkStore } from "../work-store.mjs";
 import { parseHierarchy } from "../hierarchy.mjs";
 import { pruneHierarchy } from "../hierarchy-prune.mjs";
+import { watchNightExpiry } from "../night.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -266,6 +267,7 @@ export function cmdWatch(argv, flags) {
     pruneHierarchy: flags.hierarchy && prune !== "off"
       ? ({file, now}) => pruneHierarchy({home: ledgerHome(), floor, file, apply: true, now: () => now})
       : null,
+    checkNightExpiry: ({entries}) => watchNightExpiry({entries, home: ledgerHome()}),
     idleMs: idleMinutes * 60 * 1_000,
     userNotify: flags["user-notify"] === true,
     judgeCmd: flags["judge-cmd"] || null,

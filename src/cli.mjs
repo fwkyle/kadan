@@ -6,6 +6,7 @@ import { storageCommand } from "./storage-migration.mjs";
 import { assertWritable } from "./storage.mjs";
 import { inboxCommand } from "./mailbox.mjs";
 import { decisionCommand } from "./decisions.mjs";
+import { nightCommand } from "./commands/night.mjs";
 import { seniorCommand } from "./senior.mjs";
 import { runnersCommand } from "./runners-command.mjs";
 import { CardStore } from "./card-store.mjs";
@@ -208,6 +209,7 @@ const COMMANDS = {
   storage:(args,flags)=>console.log(JSON.stringify(storageCommand(args,flags,{home:ledgerHome()}),null,2)),
   inbox:(args,flags)=>console.log(JSON.stringify(inboxCommand(args,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   decision: (argv,flags) => console.log(JSON.stringify(decisionCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
+  night: (argv,flags) => console.log(JSON.stringify(nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     if (typeof result==='string') { console.log(result); return; }
@@ -265,7 +267,7 @@ export function main(argv) {
     console.error(
       "사용법: kadan <init|up|adopt|autostart|doctor|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
         "stop|status|tree|wall|dashboard|" +
-        "read|log|attach|restore|restart|window|notify|stop-hook|secrets|discord|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
+        "read|log|attach|restore|restart|window|notify|stop-hook|secrets|discord|recovery|handover|hierarchy|work|card|decision|night|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );
     process.exit(command && command !== "--help" ? 1 : 0);
   }
@@ -277,7 +279,8 @@ export function main(argv) {
       ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
-      command==='decision'&&!['list','show'].includes(args[0])
+      command==='decision'&&!['list','show'].includes(args[0])||
+      command==='night'&&['on','off'].includes(args[0])
     )assertWritable(ledgerHome());
     const result=fn(args, flags);
     if(result?.catch)return result.catch(error=>{
