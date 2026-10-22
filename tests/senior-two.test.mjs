@@ -78,8 +78,13 @@ test('설정 저장: 3명·같은 실행기+모델 중복·빈 목록·허용 �
   assert.equal(readSettings(f.home).revision, revision + 2);
 });
 
-test('kadan runners set senior --set: 두 명을 한 번에 등록하고, 3개·중복·--runner와 섞기는 거절한다', () => {
+test('kadan runners set senior --set: 두 명을 한 번에 등록하고, 3개·중복·--runner와 섞기는 거절한다', t => {
   const f = fixture({seniors: [ASTRA]});
+  // runnersCommand는 codex 모델 목록을 파일에서 읽는다: 이 기계의 캐시에 기대지 않고 시험용 파일을 가리킨다(CI에는 없다).
+  const cache = path.join(f.home, 'models_cache.json'), before = process.env.KADAN_CODEX_MODELS_CACHE;
+  fs.writeFileSync(cache, JSON.stringify({models}));
+  process.env.KADAN_CODEX_MODELS_CACHE = cache;
+  t.after(() => { if (before === undefined) delete process.env.KADAN_CODEX_MODELS_CACHE; else process.env.KADAN_CODEX_MODELS_CACHE = before; });
   const meta = () => ({home: f.home, by: 'kyle', record: () => {}});
   const revision = () => String(readSettings(f.home).revision);
   const set = flags => runnersCommand(['set', 'senior'], {revision: revision(), reason: '시험', ...flags}, meta());
