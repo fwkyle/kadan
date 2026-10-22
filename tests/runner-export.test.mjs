@@ -8,7 +8,7 @@ import path from 'node:path';
 import {
   addPreset, initSettings, readSettings, renamePreset, setFallback, setRole, setRunnerModel, setFavorites,
 } from '../src/runner-settings.mjs';
-import {exportPreset, importPreset} from '../src/runner-export.mjs';
+import {exportPreset, findPrivate, importPreset} from '../src/runner-export.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 
 const example = new URL('../skills/kadan-conductor/references/agent-runners.example.json', import.meta.url).pathname;
@@ -20,7 +20,7 @@ const fakeModels = [
 const readCodexModels = () => ({models: fakeModels});
 const privateText = {
   users: ['', 'Users', 'x'].join('/'), home: ['', 'home', 'x'].join('/'), tilde: '~/notes',
-  email: 'someone@example.test', token: 'sk-abcdefghijklmnop',
+  email: 'someone@example.test', token: ['sk', '-', 'abcdefghij1234567890klmn'].join(''),
 };
 
 const records = () => { const list = []; return {list, record: e => list.push(e)}; };
@@ -127,7 +127,7 @@ test('export 개인정보 검사: 차단 사유·계열 규칙 같은 다른 자
   patch(a.dir, v => { v.blocked = [{model: 'fake-x', reason: `메모 ${privateText.users}`}]; });
   assert.throws(() => exportPreset(a.dir, {name: '기본'}), /blocked\[0\]\.reason/);
   patch(a.dir, v => { v.blocked = []; v.families = {fam: [privateText.email]}; });
-  assert.throws(() => exportPreset(a.dir, {name: '기본'}), /families\.fam\[0\]/);
+  assert.throws(() => exportPreset(a.dir, {name: '기본'}), /families\[0\]\[0\]/);
 });
 
 test('--out: 명시한 경로에만 쓰고 KADAN_HOME 안·이미 있는 파일·없는 폴더는 거절한다', () => {
@@ -312,3 +312,64 @@ test('한글 이름 CLI: 내보낸 파일의 preset.name과 --out 파일에 한�
   runnersCommand(['export', '기본'], {out}, {home: a.dir, by: 'kyle', record: () => {}});
   assert.equal(JSON.parse(fs.readFileSync(out, 'utf8')).preset.name, '기본');
 });
+
+// 합성 값만 쓴다(실제 비밀값 아님). 조립해서 쓰므로 저장소 검사에도 걸리지 않는다.
+const fake = {
+  ghp: ['ghp', '_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join(''),
+  proj: ['sk', '-proj-', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4'].join(''),
+  email: ['zed', '@', 'example', '.test'].join(''),
+};
+
+test('F1: 접두어가 붙은 토큰(prod_ghp_…, prod_sk-proj-…)과 label 중간에 낀 토큰도 내보내기를 막고, 정상 모델 이름은 통과한다', () => {
+  for (const [kind, text] of [['ghp', `prod_${fake.ghp}`], ['proj', `prod_${fake.proj}`], ['mid', `메모 앞 ${fake.ghp} 메모 뒤`]]) {
+    const a = sender(), out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-out-')), 'p.json');
+    patch(a.dir, v => { v.presets['기본'].label = text; });
+    let message;
+    try { runnersCommand(['export', '기본'], {out}, {home: a.dir, by: 'kyle', record: () => {}}); } catch (error) { message = error.message; }
+    assert.match(message, /preset\.label\(토큰 꼴\)/, kind);
+    assert.ok(!message.includes(fake.ghp) && !message.includes(fake.proj), kind);
+    assert.equal(fs.existsSync(out), false, kind);
+  }
+  const names = ['zai/glm-5.1-flash', 'gpt-6-1-sol', 'claude-opus-5-5', 'claude-fable-5-1', 'command-code/deepseek-v4.1-flash',
+    'xai/grok-4-fast-reasoning', 'kimi/k3', 'swe-2-max', 'task-1', 'desk-model-v2', 'openai-codex/gpt-5-codex-mini'];
+  assert.deepEqual(findPrivate(names.map(name => ({model: name}))), []);
+});
+
+test('F2: families 키·값에 토큰·이메일이 있어도 오류의 위치·종류만 나오고 원문은 어디에도 없다(내보내기·가져오기 둘 다)', () => {
+  const a = sender(), b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
+  for (const secret of [fake.ghp, fake.proj, fake.email]) {
+    patch(a.dir, v => { v.families = {ok: ['x-'], [secret]: ['y-']}; });
+    let message;
+    try { exportPreset(a.dir, {name: '기본'}); } catch (error) { message = error.message; }
+    assert.match(message, /export\.families\[1\]\(키\)\(/);
+    assert.ok(!message.includes(secret), '내보내기 오류에 원문이 있다');
+    const data = exported();
+    data.families = {[secret]: ['y-']};
+    data.preset.roles = {[secret]: data.preset.roles.worker};
+    const inbound = messageOf(b.dir, data, {as: 'team'});
+    assert.ok(!inbound.includes(secret), '가져오기 오류에 원문이 있다');
+    assert.match(inbound, /file\./);
+    // 값에서 잡혀도 위치에 민감한 키 원문이 다시 들어가지 않는다.
+    const viaValue = exported();
+    viaValue.families = {[fake.email]: [fake.ghp]};
+    assert.ok(!messageOf(b.dir, viaValue, {as: 'team'}).includes(fake.email));
+  }
+});
+
+for (const bad of ['bad;echo injected', 'a b', 'x$(id)', 'x`id`']) {
+  for (const key of ['runner', 'model', 'effort']) {
+    test(`F3: 파일의 ${key}에 ${JSON.stringify(bad)}가 있으면 안내 명령 없이 전체 거절하고 설정·원장은 그대로다`, () => {
+      const b = makeHome(null);
+      const data = exported();
+      data.preset.roles.reviewer[key] = bad;
+      const message = messageOf(b.dir, data, {as: 'team'});
+      assert.match(message, /이름 규칙 밖이다: roles\.reviewer\.\w+/);
+      assert.ok(!/kadan runners/.test(message), '안내 명령이 만들어졌다');
+      assert.ok(!message.includes(bad), '값 원문이 나왔다');
+      assertRejected(b.dir, data, /이름 규칙 밖/, {as: 'team'});
+      const inFallback = exported();
+      inFallback.preset.fallback.worker[0][key] = bad;
+      assertRejected(b.dir, inFallback, /이름 규칙 밖/, {as: 'team'});
+    });
+  }
+}

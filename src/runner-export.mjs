@@ -2,6 +2,7 @@
 // 실행기 명령 틀·경로·계정·revision·즐겨찾기는 싣지 않는다. 가져오기는 프리셋 한 벌만 더하고 받는 쪽 전역 규칙은 바꾸지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
+import {NAME_PATTERN} from './runner-table.mjs';
 import {
   EXPLAIN_MAX_ATTEMPTS, SETTINGS_ROLES, assertSeniorShape, change, checkChoice, checkNewPresetName, checkPresetFamilies,
   findBlocked, readSettings, runnerChoices, seniorList,
@@ -15,20 +16,25 @@ const MAX_IMPORT_BYTES = 1024 * 1024;
 const PRIVATE_PATTERNS = [
   ['개인 경로(사용자 폴더)', new RegExp(['', 'Users', ''].join('/'))], ['개인 경로(/home/)', /\/home\//], ['홈 경로(~/)', /~\//],
   ['홈 변수($HOME)', /\$\{?HOME\b/], ['윈도 경로', /[A-Za-z]:\\/], ['이메일', /[^\s@]+@[^\s@]+\.[^\s@]+/],
-  ['토큰 꼴', /\b(?:sk-|ghp_|gho_|ghu_|ghs_|github_pat_|xox[abprs]-|AKIA|AIza)[A-Za-z0-9_-]{10,}/],
+  // 앞 경계(\b)에 기대지 않는다: `prod_ghp_…`처럼 접두어가 붙어도 잡는다. 정상 모델 이름을 잡지 않도록 뒷부분은 20자 이상이고 숫자가 하나 있어야 한다.
+  ['토큰 꼴', /(?:sk-(?:proj-|ant-)?|ghp_|gho_|ghu_|ghs_|github_pat_|xox[abprs]-|AKIA|AIza)(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/],
 ];
 
 // 값 전체(키 포함)를 훑어 개인정보 꼴이 있는 칸을 찾는다. 반환: [{at, kind}]
+// 위치(at)에는 키·값 원문을 넣지 않는다: 형식이 정한 칸 이름만 쓰고, 그 밖의 키(families의 계열 이름 등)는 순번 [n]으로 적는다.
+const SAFE_KEYS = new Set(['format', 'version', 'createdAt', 'kadanVersion', 'preset', 'name', 'label', 'roles', 'fallback', 'runners',
+  'families', 'blocked', 'runner', 'model', 'effort', 'reason', ...SETTINGS_ROLES]);
 export function findPrivate(value, at = '$') {
   const hits = [];
   const scan = (text, where) => { for (const [kind, re] of PRIVATE_PATTERNS) if (re.test(text)) hits.push({at: where, kind}); };
   const walk = (v, where) => {
     if (typeof v === 'string') scan(v, where);
     else if (Array.isArray(v)) v.forEach((item, i) => walk(item, `${where}[${i}]`));
-    else if (v && typeof v === 'object') for (const [key, item] of Object.entries(v)) {
-      scan(key, `${where}.${key}(키)`);
-      walk(item, `${where}.${key}`);
-    }
+    else if (v && typeof v === 'object') Object.entries(v).forEach(([key, item], i) => {
+      const here = SAFE_KEYS.has(key) ? `${where}.${key}` : `${where}[${i}]`;
+      scan(key, `${here}(키)`);
+      walk(item, here);
+    });
   };
   walk(value, at);
   return hits;
@@ -108,11 +114,17 @@ const isPlain = v => v && typeof v === 'object' && !Array.isArray(v);
 function cleanChoice(v, where) {
   if (!isPlain(v) || typeof v.runner !== 'string' || typeof v.model !== 'string' || (v.effort != null && typeof v.effort !== 'string'))
     throw new Error(`파일 형식 오류: ${where}는 {runner, model[, effort]}여야 한다`);
+  // 값은 거절 때 안내하는 명령에 들어가므로 이름 규칙 밖이면 안내를 만들기 전에 전체 거절한다(값 원문은 출력하지 않는다).
+  for (const key of ['runner', 'model', 'effort'])
+    if (v[key] != null && !NAME_PATTERN.test(v[key])) throw new Error(`파일의 값이 이름 규칙 밖이다: ${where}.${key} — 실행기·모델·강도에는 영문·숫자·./-[]만 쓴다`);
   return pickChoice(v);
 }
 
 // 1단계: format·version과 모양. 모르는 칸은 버리고 알려진 칸만 새 객체로 옮긴다(파일의 객체를 그대로 저장하지 않는다).
 function readExport(data) {
+  // 개인정보 꼴을 먼저 본다: 뒤의 모양 오류 메시지가 파일의 키·값을 되풀이하기 전에 막는다.
+  const hits = findPrivate(data, 'file');
+  if (hits.length) throw new Error(`가져오기 거절: 파일에 개인정보 꼴이 있다 — ${describeHits(hits)}. 보낸 사람에게 고친 파일을 받는다`);
   if (!isPlain(data) || data.format !== EXPORT_FORMAT) throw new Error(`가져올 수 없는 파일: format이 ${EXPORT_FORMAT}이 아니다`);
   if (data.version !== EXPORT_VERSION) throw new Error(`지원하지 않는 version: ${String(data.version)} — 이 카단은 ${EXPORT_VERSION}만 읽는다`);
   const p = data.preset;
@@ -138,9 +150,7 @@ function readExport(data) {
   if (!isPlain(families) || !Object.values(families).every(v => Array.isArray(v) && v.every(x => typeof x === 'string')))
     throw new Error('파일 형식 오류: families는 {계열: [앞머리,…]}여야 한다');
   if (!Array.isArray(blocked) || !blocked.every(b => isPlain(b) && typeof b.model === 'string')) throw new Error('파일 형식 오류: blocked는 {model,…} 목록이어야 한다');
-  if (!Array.isArray(runners) || !runners.every(r => typeof r === 'string')) throw new Error('파일 형식 오류: runners는 이름 목록이어야 한다');
-  const hits = findPrivate(data, 'file');
-  if (hits.length) throw new Error(`가져오기 거절: 파일에 개인정보 꼴이 있다 — ${describeHits(hits)}. 보낸 사람에게 고친 파일을 받는다`);
+  if (!Array.isArray(runners) || !runners.every(r => typeof r === 'string' && NAME_PATTERN.test(r))) throw new Error('파일 형식 오류: runners는 이름 목록이어야 한다');
   return {
     preset: {label: p.label ?? p.name, roles, fallback}, name: p.name, families, blocked, runners,
   };
