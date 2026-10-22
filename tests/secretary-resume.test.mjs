@@ -9,14 +9,14 @@ import {commandWords} from '../src/ai-identity.mjs';
 import {inspectRecovery, restoreRecovery} from '../src/recovery.mjs';
 import {runUp} from '../src/quickstart.mjs';
 
-function fixture() {
+function fixture(startCmd) {
   const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'secretary-'));
   const transcript = path.join(home, 'rollout-exact.jsonl');
   fs.writeFileSync(transcript, JSON.stringify({type: 'session_meta',
     payload: {id: 'exact-conversation', cwd: home}}) + '\n');
   const entries = [{kind: 'start', floor: 'tmux', role: '비서', session: 'kadan-비서',
     panePid: '20', cwd: home, roleProfile: 'secretary', rottieTerminalId: 'old',
-    cmd: 'codex --model test-model -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox'}];
+    cmd: startCmd ?? 'codex --model test-model -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox'}];
   let pane = {pid: '20', dead: false, created: '100'};
   const calls = [];
   const floor = {name: 'tmux', alive: () => Boolean(pane), pid: () => pane?.pid,
@@ -285,4 +285,18 @@ test('savedSecretaryCommand also dedupes a doubled checkpoint for the Rottie pat
     JSON.stringify({...f.checkpoint, command: doubledCommand()}) + '\n');
   const command = savedSecretaryCommand(f.home, f.context, 'codex resume exact-conversation');
   assert.equal(commandWords(command).filter(word => word === '--model').length, 1);
+});
+
+test('single quotes in a setting survive two restores and stay readable by commandWords', () => {
+  const f = fixture(`codex --model gpt-x -c "model_reasoning_effort='high'"`);
+  const want = ['codex', 'resume', 'exact-conversation', '--model', 'gpt-x', '-c', "model_reasoning_effort='high'"];
+  assert.deepEqual(commandWords(f.checkpoint.command), want);
+  f.setPane(null);
+  assert.equal(resumeSecretary(f.deps), 'restored');
+  const saved = JSON.parse(fs.readFileSync(path.join(f.home, 'secretary-resume.json')));
+  assert.deepEqual(commandWords(saved.command), want);
+  f.setPane(null);
+  assert.equal(resumeSecretary(f.deps), 'restored');
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(commandWords(f.calls[1].cmd).slice(0, 7), want);
 });

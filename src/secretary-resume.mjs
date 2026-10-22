@@ -10,10 +10,9 @@ import {withInlineScreen} from './inline-screen.mjs';
 import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {descendantPids, openFilesOf} from './process-tree.mjs';
-import {mergeCodexOptions, dedupeResumeCommand} from './codex-option-merge.mjs';
+import {mergeCodexOptions, dedupeResumeCommand, serializeWords} from './codex-option-merge.mjs';
 
 export const startDigest = entry => createHash('sha256').update(JSON.stringify(entry)).digest('hex');
-const quote = word => `'${String(word).replace(/'/g, "'\\''")}'`;
 const checkpointPath = home => path.join(home, 'secretary-resume.json');
 
 function conversationOptions(file) {
@@ -107,10 +106,10 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
     if (args[1] !== identity.id) throw new Error('비서 복원 명령과 실제 대화가 다릅니다.');
     args = args.slice(2);
   }
+  const command = serializeWords([words[0], 'resume', identity.id, ...mergeCodexOptions(args, conversationOptions(transcript))]);
+  if (!command) throw new Error('비서 복원 명령을 안전하게 저장할 수 없습니다.');
   const checkpoint = {version: 1, startDigest: startDigest(start), transcript,
-    conversation: identity.id, cwd: start.cwd,
-    command: [words[0], 'resume', identity.id, ...mergeCodexOptions(args, conversationOptions(transcript))]
-      .map(quote).join(' ')};
+    conversation: identity.id, cwd: start.cwd, command};
   // Recheck the generation before atomically publishing the checkpoint.
   if (startDigest(secretaryStart(read())) !== checkpoint.startDigest
     || String(floor.pid(start.session)) !== String(start.panePid)) {
@@ -189,7 +188,8 @@ export function savedSecretaryCommand(home, context, command) {
     || identity.cwd !== context.cwd || saved.cwd !== context.cwd) {
     throw new Error('비서 복원 요청과 저장된 대화가 다릅니다.');
   }
-  return withInlineScreen(dedupeResumeCommand([words[0], ...savedWords.slice(1)].map(quote).join(' ')));
+  const joined = serializeWords([words[0], ...savedWords.slice(1)]);
+  return joined ? withInlineScreen(dedupeResumeCommand(joined)) : command;
 }
 
 // An autostart may precede Rottie. Only a continuous exact-conversation lineage may attach.

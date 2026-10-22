@@ -3,8 +3,18 @@
 // 규칙: 키(--model·-m 하나, -c/--config는 `k=v`의 k)마다 처음 나온 것 하나만 남긴다.
 // 시작 명령을 먼저 쓰므로 시작 명령이 이기고, 대화의 옵션은 빈 키만 채운다. 다른 낱말은 순서 그대로 둔다.
 import {commandWords} from './ai-identity.mjs';
+import {shellQuote} from './stop-hook-settings.mjs';
 
-const quote = word => `'${String(word).replace(/'/g, "'\\''")}'`;
+
+// 낱말 목록을 commandWords가 같은 낱말로 되읽는 명령 문자열로 만든다. 되읽기가 어긋나거나 안전하게 인용할
+// 수 없으면 null이다(호출자가 원문을 두거나 저장을 멈춘다). `--`만 인용하지 않는다(withInlineScreen이 인용 안 한 `--`만 찾는다). `'\\''` 이스케이프는 commandWords가 거절하므로 쓰지 않는다.
+export function serializeWords(words) {
+  const parts = words.map(word => word === '--' ? word : shellQuote(word));
+  if (parts.some(part => part === null)) return null;
+  const text = parts.join(' ');
+  const back = commandWords(text);
+  return back && back.length === words.length && back.every((word, i) => word === words[i]) ? text : null;
+}
 
 // 반환: {key, take}. 중복을 가릴 옵션이 아니면 null. take = 이 옵션이 차지하는 낱말 수.
 function optionKey(args, i) {
@@ -40,5 +50,5 @@ export function mergeCodexOptions(startArgs, transcriptArgs = []) {
 export function dedupeResumeCommand(cmd) {
   const words = commandWords(cmd);
   if (!words || words[1] !== 'resume' || words.length < 3) return cmd;
-  return [...words.slice(0, 3), ...mergeCodexOptions(words.slice(3))].map(quote).join(' ');
+  return serializeWords([...words.slice(0, 3), ...mergeCodexOptions(words.slice(3))]) ?? cmd;
 }
