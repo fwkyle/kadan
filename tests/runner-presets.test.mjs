@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  addPreset, explainChain, initSettings, launchFor, readSettings, removePreset, renamePreset, setActivePreset, setRole, watchJudgeChain,
+  addPreset, explainChain, initSettings, launchFor, readSettings, removePreset, renamePreset, setActivePreset, setFallback, setRole, watchJudgeChain,
 } from '../src/runner-settings.mjs';
 import {seniorCommand} from '../src/senior.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
@@ -225,4 +225,38 @@ test('비워 둔 감시 AI·시니어·설명 AI는 조용히 깨지지 않는�
     /시니어 모델 설정 없음 — kadan runners set senior/);
   assert.deepEqual(calls, []);
   assert.equal(fs.existsSync(path.join(r.dir, 'advice')), false);
+});
+
+test('예약 이름(__proto__·constructor·prototype·add·rename·remove)은 add·rename·숨은 생성 모두 거절하고 revision·원장·파일이 그대로다', () => {
+  const r = init(['codex']);
+  const file = path.join(r.dir, 'runner-settings.json');
+  const before = fs.readFileSync(file);
+  const {list, record} = records();
+  const options = {readCodexModels: () => ({models: fakeModels})};
+  const names = ['__proto__', 'constructor', 'prototype', 'add', 'rename', 'remove'];
+  for (const name of names) {
+    assert.throws(() => addPreset(r.dir, {name, ...meta(1, {record})}), /쓸 수 없다/, `add ${name}`);
+    assert.throws(() => renamePreset(r.dir, {from: '기본', to: name, ...meta(1, {record})}), /쓸 수 없다/, `rename ${name}`);
+    assert.throws(() => setRole(r.dir, {role: 'worker', runner: 'codex', model: 'fake-model-1', effort: 'low', preset: name, ...options, ...meta(1, {record})}), /쓸 수 없다/, `set ${name}`);
+  }
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(list.length, 0);
+  assert.equal(readSettings(r.dir).revision, 1);
+  // CLI 꼴도 같다.
+  assert.throws(() => runnersCommand(['preset', 'add', '__proto__'], {reason: '시험', revision: 1}, {home: r.dir, by: 'kyle', record}), /쓸 수 없다/);
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('이미 있는 프리셋에 쓰는 동작과 --preset A 자동 생성은 그대로다', () => {
+  const r = init(['codex']);
+  const options = {readCodexModels: () => ({models: fakeModels})};
+  const set = (preset, revision) => setRole(r.dir, {role: 'worker', runner: 'codex', model: 'fake-model-2', effort: 'low', preset, ...options, ...meta(revision)});
+  assert.equal(set('A', 1).presets.A.roles.worker.model, 'fake-model-2');
+  assert.equal(set('A', 2).revision, 3, '이미 있는 이름은 다시 써도 거절하지 않는다');
+  assert.equal(set('기본', 3).presets['기본'].roles.worker.model, 'fake-model-2');
+});
+
+test('없는 프리셋 이름(constructor 등)으로 폴백을 바꾸면 상속된 칸이 아니라 없는 프리셋으로 거절한다', () => {
+  const r = init(['codex']);
+  assert.throws(() => setFallback(r.dir, {role: 'worker', items: [], preset: 'constructor', ...meta(1)}), /없는 프리셋/);
 });

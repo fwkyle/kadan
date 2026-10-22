@@ -454,9 +454,21 @@ export function setActivePreset(home, {preset, ...meta}) {
 // 프리셋 관리(B1). 프리셋에 담기는 것은 roles·fallback·label뿐이고, 실행기 표·계열 규칙·차단·즐겨찾기는 모든 프리셋 공통이다.
 // 'add'·'rename'·'remove'는 `runners preset <이름>`(전환)과 같은 자리의 하위 명령이라 프리셋 이름으로 쓸 수 없다.
 export const PRESET_ACTIONS = ['add', 'rename', 'remove'];
+// 예약 이름: 하위 명령 이름, 그리고 일반 객체의 칸이 아닌 프로토타입을 건드리는 이름(`presets['__proto__'] = …`는 저장되지 않는다).
+// 새 프리셋을 만드는 모든 경로(add·rename·set/fallback의 --preset 자동 생성)가 같이 쓴다.
+const RESERVED_PRESET_NAMES = [...PRESET_ACTIONS, '__proto__', 'constructor', 'prototype'];
+const assertNotReservedPresetName = name => {
+  if (RESERVED_PRESET_NAMES.includes(name)) throw new Error(`프리셋 이름으로 쓸 수 없다: ${name}`);
+};
+// 없는 프리셋이면 만든다(set --preset 자동 생성). 이미 있으면 그대로 두고, 새로 만들 때만 예약 이름을 거절한다.
+function ensurePreset(next, name) {
+  if (Object.hasOwn(next.presets, name)) return;
+  assertNotReservedPresetName(name);
+  next.presets[name] = {label: name, roles: {}};
+}
 function checkNewPresetName(next, name) {
   if (typeof name !== 'string' || !VALUE.test(name)) throw new Error('프리셋 이름에는 영문·숫자·./-[]만 쓴다');
-  if (PRESET_ACTIONS.includes(name)) throw new Error(`프리셋 이름으로 쓸 수 없다: ${name}`);
+  assertNotReservedPresetName(name);
   if (Object.hasOwn(next.presets, name)) throw new Error(`이미 있는 프리셋: ${name}`);
 }
 
@@ -499,7 +511,7 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
-    next.presets[name] ??= {label: name, roles: {}};
+    ensurePreset(next, name);
     const value = {runner, model, ...(effort != null ? {effort} : {})};
     checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
     const before = next.presets[name].roles[role] ?? null;
@@ -516,7 +528,7 @@ export function setSeniors(home, {items, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
-    next.presets[name] ??= {label: name, roles: {}};
+    ensurePreset(next, name);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
     list.forEach((item, i) => {
       try { checkChoice(next, 'senior', item, readCodexModels ? {readCodexModels} : {}); }
@@ -540,7 +552,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {
     const name = preset ?? next.activePreset;
-    if (!next.presets[name]) throw new Error(`없는 프리셋: ${name}`);
+    if (!Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name}`);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
     list.forEach((item, i) => {
       try { checkChoice(next, role, item, readCodexModels ? {readCodexModels} : {}); }
