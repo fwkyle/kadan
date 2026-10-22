@@ -52,7 +52,7 @@ function validateJsonl(home){
  // 기존 validator가 허용하는 역사/미등록 실행은 보존한다.
  const cards=new CardStore(home).list();const keys=new Set(cards.map(c=>c.key));
  validateWorks(home,keys);
- for(const d of new DecisionStore(home).list())if(!keys.has(d.card))throw new Error('결정이 가리키는 카드 없음: '+d.card);
+ for(const d of new DecisionStore(home).list())if(d.chat!==true&&!keys.has(d.card))throw new Error('결정이 가리키는 카드 없음: '+d.card);
  const briefs=new BriefStore(home);for(const c of cards)briefs.read(c.key);
  return {manifest,streams,cards:cards.length};
 }
@@ -123,7 +123,7 @@ export function verifyStorage(home){
   db.exec('COMMIT');
   const cards=new CardStore(home).list();const keys=new Set(cards.map(c=>c.key));
   validateWorks(home,keys);
- for(const d of new DecisionStore(home).list())if(!keys.has(d.card))throw new Error('결정이 가리키는 카드 없음: '+d.card);for(const c of cards)new BriefStore(home).read(c.key);
+ for(const d of new DecisionStore(home).list())if(d.chat!==true&&!keys.has(d.card))throw new Error('결정이 가리키는 카드 없음: '+d.card);for(const c of cards)new BriefStore(home).read(c.key);
   return {backend:'sqlite',path:storagePath(home),integrity:'ok',streams:heads.size,events:events.length,cards:cards.length};
  }catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e}finally{db.close()}
 }

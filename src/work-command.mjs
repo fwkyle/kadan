@@ -6,6 +6,7 @@ import {CardStore,readFirstPaths} from './card-store.mjs';
 import {appendLedger,readLedger} from './ledger.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {automaticReviewCommand} from './automatic-review-command.mjs';
+import {DecisionStore} from './decisions.mjs';
 
 const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 
@@ -39,8 +40,21 @@ function assignAndDispatch(store,work,before,flags,{home,by,send}){
 // 바뀌었을 수 있어 finally에서 맞춘다. 맞추기는 실패해도 던지지 않고, 글이 없거나 디코 설정이 없으면 요청 0건이다.
 const STATUS_ACTIONS=new Set(['update','execute','complete','cancel','reopen']);
 export function workCommand(args,flags,context){
- try{return workCommandInner(args,flags,context);}
+ let result;
+ try{result=workCommandInner(args,flags,context);}
  finally{if(STATUS_ACTIONS.has(args[0])&&args[1]&&!flags.help)refreshWorkStatus(context.home,args[1]);}
+ closeChatDecisions(args,flags,context);
+ return result;
+}
+
+// 후속 행동이 성공하면 그 업무에 열린 채팅 결정(decision request --chat)을 닫는다. 업무 쓰기가 끝난 뒤 별도 트랜잭션이고,
+// 닫기가 실패해도 업무 명령은 실패시키지 않는다(stderr 한 줄). 대상은 같은 업무의 채팅 결정뿐이다.
+const CHAT_CLOSE={execute:['후속 발령으로 자동 닫힘','work execute'],turn:['차례 변경으로 자동 닫힘','work update --turn-owner'],complete:['업무 완료로 자동 닫힘','work complete']};
+function closeChatDecisions([action,key],flags,{home}){
+ const kind=action==='update'?(flags['turn-owner']!==undefined?'turn':null):action;
+ if(!CHAT_CLOSE[kind]||!key||flags.help)return;
+ try{new DecisionStore(home).closeChatForWork(key,...CHAT_CLOSE[kind]);}
+ catch(error){process.stderr.write(`채팅 결정 자동 닫기 실패(업무 명령은 성공): ${error.message}\n`);}
 }
 
 function workCommandInner(args,flags,context){

@@ -18,6 +18,9 @@ const linked=value=>{const text=String(value??'');let html='',last=0;
 // 첫 줄의 첫 물음표까지를 제목으로, 나머지는 줄바꿈을 살린 본문으로 보인다(2026-09-23 [kyle]: 한 문단 굵은 글씨라 읽기 어려움).
 export const splitQuestion=value=>{const text=String(value??'').trim(),line=text.split('\n')[0],at=line.indexOf('?'),cut=at>=0?at+1:line.length;return [text.slice(0,cut).trim(),text.slice(cut).trim()];};
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
+// 채팅 질문(decision request --chat)은 카드가 없다: 꼬리표 '채팅'과 업무, 안 닫힌 채 흐른 시간을 보인다.
+const chatAge=at=>{const m=Math.floor((Date.now()-Date.parse(at))/60000);return !(m>=0)?'':m<1?'방금':m<60?`${m}분 경과`:m<2880?`${Math.floor(m/60)}시간 경과`:`${Math.floor(m/1440)}일 경과`;};
+const keyLink=d=>d.chat===true?`<span class="dc-chat">채팅</span><span class="dc-key">업무 ${e(d.work)}</span>`:`<a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`;
 export const RUN_STATE_LABELS={failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료',done:'완료 기록'};
 // 방금 답한 결정의 전달 결과를 오른쪽 위 토스트로 알린다. 성공·확인 중은 15초 뒤 사라지고(마우스를 올리면 멈춤),
 // 알림 전달 실패는 닫을 때까지 남긴다. 지난 결정은 오른쪽 드로어에서 본다(2026-09-24 [kyle]).
@@ -69,6 +72,7 @@ export const decisionStyle=`#decisions.panel{max-width:880px;margin-left:auto;ma
 .dc-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .dc-chip{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:#dcefe8;color:#1f6f5c}
 .dc-key{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5d6762;word-break:break-all}
+.dc-chat{font-size:12px;font-weight:600;padding:1px 7px;border-radius:4px;border:1px solid #1f6f5c;color:#1f6f5c;white-space:nowrap}
 .dc-age{font-size:12px;color:#5d6762;margin-left:auto}
 .dc-card h3{font-size:17px;font-weight:650;margin:0;line-height:1.45;text-wrap:balance}
 .dc-fields{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:14px;line-height:1.55}
@@ -187,7 +191,7 @@ const historyItem=d=>{
   :failed?`<p>알림 실패: ${e(d.delivery.error)}</p>`:d.delivery?.status==='pending'?'<p>알림 확인 중</p>':'';
  const cancelled=d.status==='cancelled'?`<p>취소 이유: ${e(d.cancelReason||'모름')}${d.cancelledBy?` (${e(d.cancelledBy)})`:''}</p>`:'';
  return `<article class="dh-item" id="decision-${e(d.id)}"><div class="dh-meta">${badge}${d.answer?.at?`<span>${e(time(d.answer.at))}</span>`:''}</div><h3>${e(title)}</h3>${answer}${delivery}${cancelled}`+
-  `<p class="dh-meta"><a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a><span>요청자 ${e(d.requestedBy)} · ${e(time(d.at))}</span></p>`+
+  `<p class="dh-meta">${d.chat===true?`<span class="dc-chat">채팅</span> <span>업무 ${e(d.work)}</span>`:`<a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`}<span>요청자 ${e(d.requestedBy)} · ${e(time(d.at))}</span></p>`+
   `<details><summary>원문 보기</summary>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><strong>추천: ${e(d.recommendation)}</strong></p><p style="white-space:pre-wrap">${linked(d.reason)}</p></details></article>`;
 };
 const renderDecisionHistory=past=>{
@@ -201,7 +205,7 @@ export function renderDecisions(items,error,token,answered=null){
  const open=items.map((d,i)=>[d,i]).filter(([d])=>d.status==='open').sort(([a,i],[b,j])=>(Date.parse(a.at)||0)-(Date.parse(b.at)||0)||i-j).map(([d])=>d);
  const one=d=>{const [title,body]=splitQuestion(d.question);
   const options=d.options.map(o=>`<label class="dc-opt"><input type="radio" name="choice" value="${e(o)}"><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">${e(o)}${o===d.recommendation?'<span class="dc-rec">추천</span>':''}</span></label>`).join('');
-  return `<article class="dc-card" id="decision-${e(d.id)}" data-at="${Date.parse(d.at)||0}"><div class="dc-top"><span class="dc-chip">요청 ${e(d.requestedBy)}</span><a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>${d.at?`<span class="dc-age">${e(time(d.at))}</span>`:''}</div><h3>${e(title)}</h3>${body?questionBody(body):''}<dl class="dc-fields"><dt>추천 이유</dt><dd class="dc-pre">${linked(d.reason)}</dd></dl>`+
+  return `<article class="dc-card" id="decision-${e(d.id)}" data-at="${Date.parse(d.at)||0}"><div class="dc-top"><span class="dc-chip">요청 ${e(d.requestedBy)}</span>${keyLink(d)}${d.at?`<span class="dc-age">${e(time(d.at))}${d.chat===true?` · ${e(chatAge(d.at))}`:''}</span>`:''}</div><h3>${e(title)}</h3>${body?questionBody(body):''}<dl class="dc-fields"><dt>추천 이유</dt><dd class="dc-pre">${linked(d.reason)}</dd></dl>`+
    `<form method="post" action="/decisions/answer" class="dc-form"><input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="id" value="${e(d.id)}"><input type="hidden" name="revision" value="${d.revision}"><fieldset class="dc-opts"><legend class="dw-sr">선택지</legend>${options}<label class="dc-opt dc-opt-free"><input type="radio" name="choice" value="" checked><span class="dc-dot" aria-hidden="true"></span><span class="dc-opt-text">선택지 없이 메모로 답변</span></label></fieldset><textarea name="text" rows="2" placeholder="메모 (선택) · 선택지 없이 보내려면 여기에 답을 적으세요"></textarea><div class="dc-actions"><button>답변 전달</button><small>누를 때만 보냅니다. 요청한 슈퍼감독에게 한 번 알립니다.</small></div></form></article>`;};
  // 오늘(서울) 답한 수와 남은 수로 진행 막대를 그린다.
  const today=new Date(Date.now()+9*3600_000).toISOString().slice(0,10);
