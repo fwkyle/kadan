@@ -81,6 +81,7 @@ import { recoveryCommand } from "./recovery.mjs";
 import { cmdStatus } from "./commands/status.mjs";
 import { cmdTree, cmdWall } from "./commands/tree-wall.mjs";
 import { cmdInit, cmdUp, cmdAdopt, cmdAutostart } from "./commands/quickstart.mjs";
+import { cmdDoctor } from "./commands/doctor.mjs";
 import { cmdRead, cmdLog, cmdAttach } from "./commands/inspect.mjs";
 import { cmdHandover } from "./commands/handover.mjs";
 
@@ -231,6 +232,7 @@ const COMMANDS = {
   up: cmdUp,
   adopt: cmdAdopt,
   autostart: cmdAutostart,
+  doctor: cmdDoctor,
   start: cmdStart,
   send: cmdSend,
   mail: cmdMail,
@@ -261,7 +263,7 @@ export function main(argv) {
   const fn = COMMANDS[command];
   if (!fn) {
     console.error(
-      "사용법: kadan <init|up|adopt|autostart|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
+      "사용법: kadan <init|up|adopt|autostart|doctor|plan|start|send|mail|dispatch|done|wait|watch|watch-report|" +
         "stop|status|tree|wall|dashboard|" +
         "read|log|attach|restore|restart|window|notify|stop-hook|secrets|discord|recovery|handover|hierarchy|work|card|decision|senior|runners|storage|inbox|slot|limit> [대상] [옵션]"
     );

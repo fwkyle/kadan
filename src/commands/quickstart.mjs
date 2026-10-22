@@ -25,6 +25,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 import { cmdStart } from "./start.mjs";
 import { checkpointSecretary, resumeSecretary, withRecoveryLock } from "../secretary-resume.mjs";
+import { dashboardBuild } from "../dashboard-static.mjs";
 
 export function cmdInit(_argv, flags) {
   if (flags.help) {
@@ -113,6 +114,8 @@ function runUpOnce({ home, flags, auto }) {
     start: (argv, startFlags) => cmdStart(argv, startFlags),
     skip: prepared.skip,
     log,
+    // 1분마다 도는 자동 실행은 바뀐 것이 있을 때만 출력한다. 화면 빌드 경고는 사람이 친 up에만 낸다.
+    ...(auto ? {} : { dashboardBuild }),
     ...(tmuxFloor ? {
       restoreSecretary: startNew => resumeSecretary({home, floor, startNew}),
       startWatch: () => startWatchSession(home),

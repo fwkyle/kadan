@@ -3,6 +3,11 @@
 재부팅 뒤 사용자가 역할 이름과 대화를 다시 맞추지 않고, 같은 카단 역할과 정확한
 AI 대화를 Rottie 터미널에서 이어 열도록 한다.
 
+# 막히면 먼저 `kadan doctor`
+
+`kadan doctor`는 아무것도 바꾸지 않고 막힌 곳(대시보드 화면 빌드, 비서 복원 정보, 복원 잠금, 창 설정 손상 등)과
+풀려면 칠 명령을 한 화면에 보인다. 고치는 일은 사람이 한다. 설명은 [명령어 사전](commands.md)의 `kadan doctor` 행.
+
 # Rottie 역할 복원
 
 `kadan recovery inspect`와 `kadan recovery restore`는 Rottie가 호출하는 JSON 명령이다.

@@ -99,6 +99,22 @@ test('runUp은 살아 있는 세션을 다시 만들지 않고, --no-prompt는 s
  assert.throws(() => runUp({ home, flags: { cmd: 'codex', port: '99999' }, floor: w2.floor, start: w2.start, send: w2.send, cliPath: '/c', sessionName, log: quiet }), /--port/);
 });
 
+test('runUp은 대시보드 화면 빌드가 없으면 주소 옆에 한 줄 경고만 내고, 있으면 내지 않는다', () => {
+ const run = (dashboardBuild) => {
+  const w = fakeWorld(); const lines = [];
+  const out = runUp({ home: tmp('kadan-qs-build-'), flags: { cmd: 'codex' }, floor: w.floor, start: w.start, cliPath: '/c', sessionName, log: (l) => lines.push(l), dashboardBuild });
+  return { out, lines, started: w.started.map((s) => s.role) };
+ };
+ const missing = run(() => ({ ok: false, reason: '파일이 없다' }));
+ const warnings = missing.lines.filter((l) => l.startsWith('경고:'));
+ assert.deepEqual(warnings, ['경고: 대시보드 화면 빌드가 없다 — npm --prefix gui ci && npm run build:gui']);
+ assert.ok(missing.lines.indexOf(warnings[0]) > missing.lines.findIndex((l) => l.startsWith('대시보드: http')), '대시보드 주소 다음 줄에 낸다');
+ assert.deepEqual(missing.started, [SECRETARY_ROLE, DASHBOARD_ROLE], '빌드를 대신 돌리거나 시작을 막지 않는다');
+ assert.deepEqual([missing.out.secretary, missing.out.dashboard], ['started', 'started']);
+ assert.equal(run(() => ({ ok: true })).lines.some((l) => l.startsWith('경고:')), false);
+ assert.equal(run(undefined).lines.some((l) => l.startsWith('경고:')), false, '점검 함수를 넘기지 않으면 경고하지 않는다');
+});
+
 test('ensureWatch는 기본 프로필이 있고 감시 프로세스·세션이 없을 때만 감시기를 띄운다', () => {
  const run = (o) => { let created = 0; const r = ensureWatch({ profileExists: () => true, running: () => [], alive: () => false, create: () => { created++; }, ...o }); return [r, created]; };
  assert.deepEqual(run({}), ['started', 1]);
@@ -134,8 +150,10 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
  const env = { ...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux', KADAN_WINDOW: 'none' };
  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
  try {
+  const built = fs.existsSync(new URL('../gui/dist/index.html', import.meta.url));
   const up = spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden'], { env, encoding: 'utf8', timeout: 60000 });
-  assert.equal(up.status, 0, up.stdout + up.stderr);
+  assert.equal(up.status, 0, up.stdout + up.stderr); // 빌드가 없어도 경고만 내고 종료 코드는 그대로 0이다
+  assert.equal(/경고: 대시보드 화면 빌드가 없다 — npm --prefix gui ci && npm run build:gui/.test(up.stdout), !built, up.stdout);
   assert.match(up.stdout, /시작됨: kadan-비서/); assert.match(up.stdout, /시작됨: kadan-대시보드/); assert.doesNotMatch(up.stdout, /첫 (지문|안내) 전송됨/, 'sh는 AI 실행기가 아니라 안내를 붙이지 않는다');
   const list = spawnSync('tmux', ['-u', '-L', socket, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).stdout;
   assert.match(list, /kadan-비서/); assert.match(list, /kadan-대시보드/);
@@ -143,7 +161,6 @@ test('격리 tmux: kadan up이 비서·대시보드 세션을 만들고 대시�
   let status = null;
   for (let i = 0; i < 40 && status !== 200; i++) { try { status = (await fetch(`http://127.0.0.1:${port}/api/dashboard/session`)).status; } catch { await new Promise((r) => setTimeout(r, 250)); } }
   assert.equal(status, 200);
-  const built = fs.existsSync(new URL('../gui/dist/index.html', import.meta.url));
   assert.equal((await fetch(`http://127.0.0.1:${port}/`)).status, built ? 200 : 503);
   const again = spawnSync(process.execPath, [cli, 'up', '--cmd', 'sh', '--port', String(port), '--hidden'], { env, encoding: 'utf8', timeout: 60000 });
   assert.match(again.stdout, /비서 이미 살아 있음/); assert.match(again.stdout, /대시보드 이미 살아 있음/);
