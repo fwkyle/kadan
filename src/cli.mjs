@@ -6,6 +6,7 @@ import { storageCommand } from "./storage-migration.mjs";
 import { assertWritable } from "./storage.mjs";
 import { inboxCommand } from "./mailbox.mjs";
 import { decisionCommand } from "./decisions.mjs";
+import { nightCommand, nightOriginalText } from "./commands/night.mjs";
 import { seniorCommand } from "./senior.mjs";
 import { runnersCommand } from "./runners-command.mjs";
 import { CardStore } from "./card-store.mjs";
@@ -210,6 +211,11 @@ export const COMMANDS = {
   storage:(args,flags)=>console.log(JSON.stringify(storageCommand(args,flags,{home:ledgerHome()}),null,2)),
   inbox:(args,flags)=>console.log(JSON.stringify(inboxCommand(args,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   decision: (argv,flags) => console.log(JSON.stringify(decisionCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
+  night: (argv,flags) => {
+    const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
+    // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
+    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):JSON.stringify(result,null,2));
+  },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     if (typeof result==='string') { console.log(result); return; }
@@ -271,7 +277,7 @@ export function main(argv) {
     console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
     process.exit(1);
   }
-  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : undefined);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
@@ -279,7 +285,8 @@ export function main(argv) {
       ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
-      command==='decision'&&!['list','show'].includes(args[0])
+      command==='decision'&&!['list','show'].includes(args[0])||
+      command==='night'&&['on','off'].includes(args[0])
     )assertWritable(ledgerHome());
     const result=fn(args, flags);
     if(result?.catch)return result.catch(error=>{

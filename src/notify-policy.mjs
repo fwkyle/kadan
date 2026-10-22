@@ -20,7 +20,7 @@ const SELF_RESOLVING_HOLDS = new Set([
 export const holdPosts = alert => postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode: alert?.holdCode}).post;
 
 // notifyUser를 부르는 모든 종류(kind). 새 종류를 쓰면 여기와 docs/user-notify.md 표에 올려야 한다(tests/notify-policy.test.mjs가 소스와 대조한다).
-export const KNOWN_KINDS = ['alert', 'alert-resolved', 'decision-request', 'decision-answer', 'decision-cancel', 'revive', 'mail', 'handover'];
+export const KNOWN_KINDS = ['alert', 'alert-resolved', 'decision-request', 'decision-answer', 'decision-cancel', 'revive', 'mail', 'handover', 'night-summary'];
 
 // 반환 {post:true} 또는 {post:false, reason}. opts: notifyUser의 opts(kind, key, alertKind, holdCode).
 export function postPolicy(opts = {}) {
@@ -34,6 +34,8 @@ export function postPolicy(opts = {}) {
     if (opts.alertKind === '알림밀림' && SELF_RESOLVING_HOLDS.has(opts.holdCode)) return {post: false, reason: `알림밀림(${opts.holdCode})은 5번 뒤 스스로 풀리는 입력 보호`};
     return {post: true};
   }
+  // 나이트 모드 아침 요약은 켜진 한 번에 한 통뿐이고 kyle이 기상 뒤 읽으려고 만든 글이다. 새 글로 올린다(멘션은 없다).
+  if (kind === 'night-summary') return {post: true};
   if (kind === 'revive') return REVIVE_STOP.test(opts.key ?? '') ? {post: true} : {post: false, reason: '되살리기 소식(조치 필요 없음)'};
   return {post: false, reason: kind ? `${kind}는 새 글 대상이 아님` : '종류 없음(기본 안 보냄)'};
 }

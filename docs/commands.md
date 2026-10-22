@@ -124,6 +124,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | `kadan work auto-*` | 구현·검수 자동 전달. `auto-configure`·`auto-show`·`auto-run`·`auto-report` 등 | [자동 전달](automatic-review.md) |
 | `kadan card` | 중앙 카드. `list`·`show`·`create`·`update`·`note`·`brief`·`progress`·`report`·`link` 등 | [중앙 카드](card-center.md) |
 | `kadan decision` | 사용자 결정 요청. `request`·`list`·`show`·`answer`·`cancel`. 답은 디코 레포 포럼의 요청 글에 번호·정확한 문구로 답해도 다리가 같은 `answer` 경로로 기록한다(답에 `source`·`messageId`가 남는다) → [디코에서 결정 답하기](discord-chat.md#디코에서-결정-답하기) | [결정 기록](decisions.md) |
+| `kadan night` | 취침 위임. `on "<문구>" [--until HH:MM \| --for 8h] [--quote "<kyle 원문>"]`·`off`·`status`(JSON, 꺼진 뒤에도 마지막 위임 원문을 담는다. 줄바꿈 그대로 보려면 `status --text`). 사람은 바로 켜고, 슈퍼감독은 kyle 채팅 원문 `--quote`가 필수(`viaChat` 기록), 일반감독 이하는 거절. 기본 8시간·상한 12시간, 문구·원문은 각 4,000자 이하. 끄는 조건은 `off`·끝 시각·kyle의 새 입력(사람 명의 결정 답) 셋뿐이고, 끝나면 아침 요약이 한 번 간다. 새 권한이 아니다 | [밤 위임](decisions.md#밤-위임-나이트-모드-2026-10-23) |
 | `kadan senior <카드키> --question <질문>` | 작업 결과에 결정할 부분이 있을 때 감독이 **등록된 시니어 전원(최대 2명)에게 동시에** 의견을 한 번 묻고 모델별 답을 받는다(감독은 모델을 고르지 않는다). `--file <절대경로>`(5개·64KB까지), `--timeout <초>`(기본 1800), `--effort <강도>`(이번 호출만, 부르는 모델마다 검사, 실측 시험은 low), `--runner/--model`(등록된 시니어 한 명만 고를 때, 등록 밖은 거절) | [시니어](senior.md) |
 
 ## 우편
