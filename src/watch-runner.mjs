@@ -48,7 +48,7 @@ import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
-import { withEffectiveOwner } from "./handover-state.mjs";
+import { withEffectiveOwner, userTurnWaitList } from "./handover-state.mjs";
 import { mailboxLetters } from "./mailbox-state.mjs";
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
@@ -226,6 +226,8 @@ export async function runWatch({
   // 주기 기록은 5분에 한 번이라, 그 사이 주기들의 시간을 합계·최대로 모아 함께 남긴다.
   let timingWindow = null;
 
+  // 이번 주기에 차례 칸 때문에 사용자 대기로 뺀 업무(주기 기록에 남는다).
+  let userTurnWaits = [];
   try { while (!signal?.aborted) {
     // 원장 잠금(SQLITE_BUSY)은 원인이 식별된 실패다. 이번 주기만 건너뛰고 다음 주기에 다시 본다. 같은 오류가
     // 3주기 연속이면 멈추고 보고한다(잠긴 규칙 3). 2026-09-24 22:55: 잠금 오류 한 번에 감시가 종료됐다.
@@ -533,6 +535,7 @@ export async function runWatch({
     // 걸린 카드·워크는 묻는 쪽에게 할 일이 아니다. 답할 쪽에게는 그대로 할 일이다. 감독을 통째로 빼지 않는다 — 다른 일은 그대로 판정한다.
     // 목록을 못 읽으면 아무것도 빼지 않는다(판정을 숨기지 않는다).
     let waits = [];
+    userTurnWaits = [];
     try {
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
@@ -540,7 +543,12 @@ export async function runWatch({
       for (const d of readDecisions() ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push(item(d.card ?? null, null, d.work ?? null, "@user"));
       for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
-    } catch { waits = []; }
+      // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.
+      if (cards) {
+        userTurnWaits = userTurnWaitList(works, cards);
+        for (const w of userTurnWaits) waits.push({ ids: [`work:${w.work}`], answerer: "@user" });
+      }
+    } catch { waits = []; userTurnWaits = []; }
     // 놀고 있음 계산을 감독 정기 확인보다 먼저 한다: 같은 순회의 본인 차례(ownTurn)를 정기 확인이 그대로 재사용한다(원장을 다시 읽지 않는다).
     const ownTurn=new Set();
     const idleAssessment=assessSupervisorIdle(
@@ -864,7 +872,7 @@ export async function runWatch({
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
           memoryMb:roundAll({rss:memory.rss/2**20,heapUsed:memory.heapUsed/2**20}),window:timingWindow};
         record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs, routes, superRole,
-          sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError}));
+          sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError, userTurnWaits}));
         // 기록에 성공한 뒤에만 비운다. 잠금으로 실패하면 모은 주기를 다음 기록에 이어 싣는다.
         timingWindow=null;
         lastCycleRecordedAt = cycleAt;

@@ -10,10 +10,14 @@ export function cycleRecordDue(lastRecordedAt, now) {
  return lastRecordedAt == null || now - lastRecordedAt >= CYCLE_RECORD_MS;
 }
 
-export function buildCycleEntry({runtime = null,timing = null,pid, hierarchyPath = null, hierarchyHash = null, judge = false, profile = null, intervalMs = null, sessions = null, supervisorSessions = null, ok = true, routes = null, superRole = null}) {
+// 기록·응답에 싣는 차례 값 길이 상한(원문은 최대 12,000자라 주기 기록이 커진다). 판정에는 원문을 쓴다.
+const TURN_VALUE_RECORD_CAP = 80;
+export const capTurnValue = value => typeof value === 'string' && value.length > TURN_VALUE_RECORD_CAP ? `${value.slice(0, TURN_VALUE_RECORD_CAP)}…` : value;
+
+export function buildCycleEntry({runtime = null,timing = null,pid, hierarchyPath = null, hierarchyHash = null, judge = false, profile = null, intervalMs = null, sessions = null, supervisorSessions = null, ok = true, routes = null, superRole = null, userTurnWaits = null}) {
  return {kind: 'watch-cycle', by: 'watch', pid,...(runtime?{runtime}:{}),...(timing?{timing}:{}), hierarchy: hierarchyPath, hierarchyHash, judge: Boolean(judge), profile,
   intervalMs, sessions: sessions == null ? null : sessions.length, supervisorSessions: supervisorSessions == null ? null : supervisorSessions.length, ok,
-  ...(routes && (routes instanceof Map ? routes.size : Object.keys(routes).length) ? {routes: routes instanceof Map ? Object.fromEntries(routes) : routes} : {}), ...(superRole ? {superRole} : {})};
+  ...(routes && (routes instanceof Map ? routes.size : Object.keys(routes).length) ? {routes: routes instanceof Map ? Object.fromEntries(routes) : routes} : {}), ...(superRole ? {superRole} : {}), ...(userTurnWaits?.length ? {userTurnWaits: userTurnWaits.slice(0, 20).map(w => ({...w, turnOwner: capTurnValue(w.turnOwner)}))} : {})};
 }
 
 // 순회 시간 분해(2026-09-30 계획 0단계). 주기 기록이 5분에 한 번이라 그 사이 주기는 합계·최대로 모은다.
@@ -57,7 +61,7 @@ export function cycleStatus(entries, worker, now, {windowMs = 24 * 60 * 60_000} 
  const cycles = entries.filter(e => e?.kind === 'watch-cycle' && ms(e.t) != null && ms(e.t) <= now);
  const mine = worker ? cycles.filter(e => Number(e.pid) === worker.pid && ms(e.t) >= (ms(worker.startedAt) ?? 0)) : [];
  const last = mine.at(-1) ?? null;
- const settings = last ? {...(last.timing?{timing:last.timing}:{}),...(last.runtime?{runtime:last.runtime}:{}),hierarchy: last.hierarchy ?? null, judge: last.judge === true, profile: last.profile ?? null, intervalMs: last.intervalMs ?? null, ...(last.routes?{routes:last.routes}:{}), ...(last.superRole?{superRole:last.superRole}:{})} : null;
+ const settings = last ? {...(last.timing?{timing:last.timing}:{}),...(last.runtime?{runtime:last.runtime}:{}),hierarchy: last.hierarchy ?? null, judge: last.judge === true, profile: last.profile ?? null, intervalMs: last.intervalMs ?? null, ...(last.routes?{routes:last.routes}:{}), ...(last.superRole?{superRole:last.superRole}:{}), ...(last.userTurnWaits?.length?{userTurnWaits:last.userTurnWaits}:{})} : null;
  const gaps = [];
  const first = cycles[0];
  let gapMinutes = null;

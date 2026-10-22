@@ -85,6 +85,9 @@ export function statusData(snapshot, url, stamp, m) {
     // 요약 목록의 행은 가장 가까운 슈퍼 조상에 한 번만 묶지만, ?super=는 X 자신과 X 아래 전부(하위 슈퍼감독의 몫 포함)를 돌려준다.
     const mine = (role) => isDescendant(role, superFilter, parents);
     const myAlerts = (allAlerts?.items ?? []).filter((a) => mine(a.recipient));
+    // 사용자 대기로 뺀 업무도 같은 범위(업무 담당이 이 슈퍼감독 아래)만 싣는다. 다른 판 목록은 내보내지 않는다(PR #254 수정 2).
+    const myWorkKeys = new Set(statusWorks.filter((w) => mine(w.owner)).map((w) => String(w.key).replace(/^work:/, "")));
+    const myUserTurnWaits = (snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits ?? []).filter((x) => myWorkKeys.has(x.work));
     return {
       ...stamp,
       super: superFilter,
@@ -97,6 +100,7 @@ export function statusData(snapshot, url, stamp, m) {
       works: statusWorks.filter((w) => mine(w.owner) && ["running", "hold"].includes(w.state))
         .map((w) => pick(w, ["key", "title", "owner", "state", "turnLabel", "next"])),
       decisions: openDecisions === null ? null : openDecisions.filter((d) => mine(d.requestedBy)),
+      userTurnWaits: myUserTurnWaits,
       previousGeneration: previousSummary(previousItems?.filter((i) => mine(i.role)) ?? null),
       alerts: allAlerts === null ? null : { count: myAlerts.length, items: myAlerts.slice(0, 20) },
       recent: recent.filter((e) => mine(e.role)).slice(0, 20).map((e) => ({ ...pick(e, ["at", "kind", "label", "role"]), card: pick(e.card, ["key", "title"]) })),
@@ -112,6 +116,8 @@ export function statusData(snapshot, url, stamp, m) {
     resources: snapshot.resources,
     resourceError: snapshot.resourceError,
     workError: m.workError,
+    // 차례 칸 때문에 사용자 대기로 뺀 업무(최근 감시 주기 기준). 새 키만 더한다(2026-10-23 놀고 있음 PR-1 수정 1).
+    userTurnWaits: snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits ?? [],
     executionCount: m.cards.filter(isExecution).length,
     waitingQuestions: (() => {
       try { return letters(snapshot).filter(letter => letter.replyStatus === "waiting").length; }

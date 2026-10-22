@@ -57,3 +57,12 @@ test('흐름 지도가 문서 입구와 감독 지침에서 이어진다', () =>
   assert.match(read('docs/README.md'), /\(flows\.md\)/);
   assert.match(read('src/role-instructions.mjs'), /docs\/flows\.md/);
 });
+
+test('놀고 있음의 차례 칸 값(사용자 대기·글 값 안내)이 흐름 지도와 감시 문서에 있다', () => {
+  const row = section('4\\. 감시가 잡는 것').split('\n').find(l => l.includes('감독 멈춤'));
+  assert.ok(row?.includes('차례 칸'), '4절 감독 멈춤 행에 차례 칸 사용자 값 구절 없음');
+  const overview = read('docs/watch-overview.md');
+  for (const text of ['사용자 대기(차례 칸)', 'userTurnWaits', '--turn-owner @user', '--status hold'])
+    assert.ok(overview.includes(text), `watch-overview.md에 ${text} 없음`);
+  assert.ok(read('docs/hierarchy.md').includes('`@user`(current)'), 'hierarchy.md에 차례 칸 안내 없음');
+});

@@ -2,7 +2,7 @@
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { phraseAction } from "./watch-stop-phrases.mjs";
-import { idleCountsText, idleOwnText, idleRegisterHint, buildIdleNudge } from "./watch-supervisor.mjs";
+import { idleCountsText, idleOwnText, idleRegisterHint, idleTurnHint, buildIdleNudge } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
 import { WATCH_ALERT_FOOTER } from "./watch-notice-format.mjs";
 
@@ -239,6 +239,7 @@ export function itemizedAlert(alert, clock, ctx = null) {
   const idle = alert.kind === "놀고 있음";
   const own = idle ? idleOwnText(alert) : "";
   const register = idle && alert.stage !== 2 ? idleRegisterHint(alert, ctx ?? {}) : "";
+  const turnHint = idle && alert.stage !== 2 ? idleTurnHint(alert) : [];
   let basis = "", todo = WATCH_ALERT_FOOTER;
   if (idle) {
     basis = `${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음`
@@ -249,5 +250,5 @@ export function itemizedAlert(alert, clock, ctx = null) {
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
   return [`[watch ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,
-    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), `할 일: ${todo}`].join("\n");
+    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), ...turnHint, `할 일: ${todo}`].join("\n");
 }
