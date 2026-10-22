@@ -1,5 +1,5 @@
 // kadan init·up·adopt·autostart (HW-3-impl: cli.mjs에서 옮김)
-import { runAdopt } from "../adopt.mjs";
+import { ADOPT_USAGE, runAdopt } from "../adopt.mjs";
 import { runInit, runUp, ensureWatch, ensureBridge, bridgeStatus, BRIDGE_ROLE } from "../quickstart.mjs";
 import { loadSecret } from "../secrets.mjs";
 import { loadChatConfig, watchLockInfo } from "../discord-chat.mjs";
@@ -263,7 +263,7 @@ export function cmdAdopt(argv, flags) {
       },
     });
   } catch (error) {
-    if (argv[0] !== 'status') notice({id: error.adoptionId || (argv[0] === 'accept' ? argv[1] : undefined),
+    if (argv[0] !== 'status' && error.code !== ADOPT_USAGE) notice({id: error.adoptionId || (argv[0] === 'accept' ? argv[1] : undefined),
       role: process.env.KADAN_ROLE || argv[0], reason: error.message});
     die(error.message, 2);
   }
