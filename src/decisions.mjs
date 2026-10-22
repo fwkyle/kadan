@@ -115,7 +115,11 @@ export class DecisionStore {
  // source·messageId: 디코 다리가 사람 명의로 기록할 때 남기는 출처('discord')와 그 디코 글 id. 같은 글을 두 번 처리하지 않는 표시이기도 하다.
  // remote: 원격 답변의 감사 필드(Access 이메일·sub·iat·exp·IP). 옛 검증기가 무시하는 선택 필드 answer.remote로만 남기고 source 값은 넓히지 않는다.
  answer(id,{revision,text,choice,source,messageId,remote},by){let newlyAnswered=false;const saved=this.locked(()=>{
-  if(!human(by))throw new Error('사용자 답변은 사람 명의로만 기록');
+  if(!human(by)){
+   // 역할이 kyle의 채팅 답을 기록하려다 거절될 때 닫는 길(cancel)을 실제 ID·revision으로 보인다. 못 찾거나 열린 결정이 아니면 값을 지어내지 않고 원래 문구만 낸다.
+   let open=null;try{const d=this.get(id);if(d.status==='open')open=d;}catch{}
+   throw new Error('사용자 답변은 사람 명의로만 기록'+(open?` — kyle이 채팅으로 답했으면 요청한 역할(${open.requestedBy})이 kadan decision cancel ${open.id} --revision ${open.revision} --reason "kyle 채팅 승인: <답 원문>"으로 닫는다`:''));
+  }
   if(source!==undefined&&source!=='discord')throw new Error('알 수 없는 답변 출처');
   if(messageId!==undefined&&(typeof messageId!=='string'||!messageId))throw new Error('디코 글 id 형식 오류');
   const d=this.get(id);choice=choice||null;text=required(typeof text==='string'&&text.trim()?text:choice,'답변 또는 선택');
