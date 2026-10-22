@@ -30,16 +30,19 @@
 ## 명령
 
 ```sh
-kadan runners init --reason <이유>          # agent-runners.json의 실행기 틀만 옮겨 처음 만든다
-kadan runners set worker --runner codex --model xai/grok-4.7-build-fast --effort xhigh --revision N --reason <이유>
+kadan runners init --reason <이유>          # PATH에서 설치가 감지된 실행기의 틀을 옮겨 처음 만들고 기본 프리셋을 채운다([기본 프리셋](#기본-프리셋))
+kadan runners set worker --runner codex --model <모델> --effort <강도> --revision N --reason <이유>
 kadan runners show                          # 역할별 값과 채워질 실행 명령
 kadan runners runner claude --spawn '<명령 틀>' --revision N --reason <이유>      # 실행기 명령 틀(래퍼 포함)
-kadan runners model claude claude-opus-5-5 --efforts low,medium,high,xhigh,max --revision N --reason <이유>  # 목록 파일이 없는 실행기의 실측 모델
-kadan runners model claude claude-opus-5-5 --remove --revision N --reason <이유>  # 등록 모델 빼기(역할 값·대체 후보·즐겨찾기가 쓰는 모델은 거절하고 쓰는 곳을 모두 적는다. codex는 목록 파일이라 거절)
-kadan runners block gpt-6-astra --roles reviewer --revision N --reason <이유>      # 정책 차단(역할 생략 시 모든 역할)
+kadan runners model claude <모델> --efforts <강도,…> --revision N --reason <이유>  # 목록 파일이 없는 실행기의 실측 모델
+kadan runners model claude <모델> --remove --revision N --reason <이유>  # 등록 모델 빼기(역할 값·대체 후보·즐겨찾기가 쓰는 모델은 거절하고 쓰는 곳을 모두 적는다. codex는 목록 파일이라 거절)
+kadan runners block <모델> --roles reviewer --revision N --reason <이유>      # 정책 차단(역할 생략 시 모든 역할)
 kadan runners preset A --revision N --reason <이유>          # 활성 프리셋 전환(있는 프리셋만)
-kadan runners fallback worker --set 'devin:swe-2-max,codex:zai/glm-5.3:high' --revision N --reason <이유>  # 폴백 순서 전체(빈 글이면 비움)
-kadan runners favorite --set 'claude:claude-opus-5-5:high,codex:kimi/k3[1m]:max' --revision N --reason <이유>  # 즐겨찾기 전체(빈 글이면 비움)
+kadan runners preset add fast [--from A] --revision N --reason <이유>   # 프리셋 만들기: 원본(기본은 활성 프리셋)의 roles·fallback 복사
+kadan runners preset rename fast quick --revision N --reason <이유>      # 이름 바꾸기(활성이면 활성 이름도 따라간다)
+kadan runners preset remove quick --revision N --reason <이유>           # 지우기(활성 프리셋은 거절)
+kadan runners fallback worker --set '<실행기>:<모델>[:<강도>],…' --revision N --reason <이유>  # 폴백 순서 전체(빈 글이면 비움)
+kadan runners favorite --set '<실행기>:<모델>[:<강도>],…' --revision N --reason <이유>  # 즐겨찾기 전체(빈 글이면 비움)
 kadan start <역할> --profile worker          # --cmd 없이: 설정의 명령으로 띄운다
 kadan start <역할> --profile worker --cmd '<명령>' --reason <이유>   # 설정과 다른 명령
 kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 폴백으로 띄운다
@@ -55,6 +58,28 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - 설정 파일이 없으면 `start`는 예전처럼 `--cmd`가 필요하다. 인계 후임 생성은 선임 명령을 이유("인계: 선임 실행 명령 유지")와 함께 그대로 쓴다.
 - `work auto-configure`는 작업자·검수자 세션을 실제로 띄운 모델의 계열이 같으면 거부한다.
 - 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 발령에는 자동 라우팅·자동 폴백을 만들지 않는다(감시 AI만 예외, 아래 [감시 AI](#감시-ai)). 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.
+
+## 기본 프리셋
+
+처음 `kadan runners init`을 할 때만 만든다. 설정 파일이 이미 있으면 거절하므로 운영 중인 설정에는 아무것도 소급하지 않는다.
+
+- **감지**: `kadan init`과 같은 `detectRunners`(PATH에서 `which codex`·`which claude`)다. 감지된 실행기만 등록한다. `agent-runners.json`에 적힌 그 밖의 실행기는 감지 대상이 아니라 적힌 대로 등록한다. 하나도 감지되지 않으면 파일을 만들지 않고 거절한다(설치 뒤 다시 init).
+- **codex**: `~/.codex/models_cache.json`(또는 `KADAN_CODEX_MODELS_CACHE`)의 숨김(`visibility: hide`)이 아닌 첫 모델과 그 모델의 기본 강도로 작업자·일반감독·슈퍼감독을 채운다. 모델 이름은 코드에 없다. 목록이 아직 없으면(codex를 한 번도 안 돌린 기계) 등록만 하고 역할은 비우고 안내를 낸다.
+- **claude**: 모델 목록 파일이 없고 코드에 이름을 두지 않으므로 역할을 비우고 안내한다. `kadan runners model claude <모델> --efforts …`로 모델을 등록한 뒤 `kadan runners set …`로 채운다. 그러니 바로 쓸 수 있는 것은 codex가 깔린 기계뿐이다.
+- **검수자**: 작업자와 다른 계열이어야 하므로 늘 비운다. 절반만 채운 프리셋은 저장 때 계열 검사가 받아 준다.
+- 감시 AI·시니어·설명 AI는 자동 호출·비용이 생기는 칸이라 채우지 않는다. 비어 있어도 조용히 깨지지 않는다(시험: `tests/runner-presets.test.mjs`).
+  - 감시 AI: 순서가 없으면 감시 프로필의 `KADAN_JUDGE_MODEL`로 한 번 부른다(호출 기록 `judgeSource: profile`).
+  - 시니어: `kadan senior`는 외부 호출·증거 폴더를 만들기 전에 `시니어 모델 설정 없음 — kadan runners set senior …` 오류로 끝난다.
+  - 설명 AI: 꺼진다(대기열도 비운다). 아무것도 부르지 않는다.
+
+## 프리셋 관리
+
+프리셋에는 역할 값(`roles`)·폴백(`fallback`)·설명(`label`)만 담긴다. 실행기 표(`runners`)·계열 규칙(`families`)·정책 차단(`blocked`)·즐겨찾기(`favorites`)는 모든 프리셋이 함께 쓴다.
+
+- `preset add <이름> [--from <원본>]`: 원본(기본은 활성 프리셋)을 복사한다. 활성 프리셋은 바뀌지 않는다.
+- `preset rename <옛> <새>`, `preset remove <이름>`. 활성 프리셋은 지울 수 없다.
+- 이름은 영문·숫자·`.`·`/`·`-`·`[`·`]`만 쓰고(`NAME_PATTERN`), 이미 있는 이름과 `add`·`rename`·`remove`는 쓸 수 없다. 전부 `--revision`·`--reason`을 받고 원장에 `preset-add`·`preset-rename`·`preset-remove`로 남는다.
+- `set`·`fallback`의 `--preset <없던 이름>`은 아직 프리셋을 새로 만든다(시험이 기대는 동작이라 유지). 만들 때는 `preset add`를 쓴다.
 
 ## 옛 세션 발령 막기
 

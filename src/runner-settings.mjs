@@ -11,6 +11,7 @@ import {acquireDirLock} from './dir-lock.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {assertExecBound} from './exec-agent.mjs';
+import {RUNNER_CANDIDATES} from './quickstart.mjs';
 import {
   NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
 } from './runner-table.mjs';
@@ -244,8 +245,45 @@ function lockedSettings(home, apply) {
   finally { fs.renameSync(lock, `${lock}.released-${randomUUID()}`); }
 }
 
-// 처음 한 번 기존 agent-runners.json의 실행기 틀(runners[].spawn)만 옮겨 만든다. 역할 값은 set으로 채운다.
-export function initSettings(home, {runnersFile = path.join(home, 'agent-runners.json'), by, reason, record}) {
+// 설치 감지로 기본 프리셋 역할을 채우는 대상. 작업자·검수자는 다른 계열이어야 하므로 검수자는 늘 비워 둔다.
+// 감시·시니어·설명 AI는 자동 호출·비용이 생기는 칸이라 처음부터 채우지 않는다.
+const DEFAULT_FILL_ROLES = ['worker', 'conductor', 'super'];
+
+// codex 모델 목록(캐시)에서 이름을 읽는다: 숨김(visibility:'hide')이 아닌 첫 모델, 강도는 그 모델의 기본 강도(없으면 지원 강도의 첫째).
+// 이름을 코드에 두지 않고, 읽을 수 없거나 쓸 만한 모델이 없으면 null과 이유를 돌려준다.
+function pickCodexDefault(readCodexModels) {
+  let list;
+  try { list = readCodexModels(); } catch { return {reason: 'codex 모델 목록(캐시)을 읽을 수 없다 — codex를 한 번 실행한 뒤'}; }
+  const models = Array.isArray(list) ? list : list?.models;
+  const model = Array.isArray(models) && models.find(m => typeof m?.slug === 'string' && VALUE.test(m.slug) && m.visibility !== 'hide');
+  if (!model) return {reason: 'codex 모델 목록에 고를 수 있는 모델이 없다'};
+  const efforts = (model.supported_reasoning_levels ?? []).map(l => l.effort).filter(Boolean);
+  const effort = efforts.includes(model.default_reasoning_level) ? model.default_reasoning_level : efforts[0];
+  return {value: {runner: 'codex', model: model.slug, ...(effort ? {effort} : {})}};
+}
+
+// 감지된 실행기로 기본 프리셋의 역할 값과 안내를 만든다. 순수 계산이고, 고른 값은 저장 전에 checkChoice로 한 번 더 검사한다.
+function defaultRoles(settings, installed, readCodexModels, notes) {
+  const roles = {};
+  if (installed.includes('codex') && settings.runners.codex) {
+    const {value, reason} = pickCodexDefault(readCodexModels);
+    if (value) {
+      for (const role of DEFAULT_FILL_ROLES) {
+        try { checkChoice(settings, role, value, {readCodexModels}); roles[role] = {...value}; }
+        catch (error) { notes.push(`${role} 칸은 비워 뒀다: ${error.message}`); }
+      }
+    } else notes.push(`codex는 등록했지만 역할 값은 비워 뒀다: ${reason}, kadan runners set worker --runner codex --model <모델> --revision N --reason <이유>로 채운다`);
+  }
+  if (installed.includes('claude') && settings.runners.claude)
+    notes.push('claude는 모델 목록이 없어 역할을 비워 뒀다 — kadan runners model claude <모델> --efforts <강도,…>로 쓸 모델을 등록한 뒤 kadan runners set <역할> --runner claude --model <모델> …로 채운다');
+  notes.push('검수자(reviewer)는 비워 뒀다 — 작업자와 다른 계열 실행기·모델을 kadan runners set reviewer …로 지정한다');
+  return roles;
+}
+
+// 처음 한 번 기존 agent-runners.json의 실행기 틀(runners[].spawn)을 옮겨 만든다.
+// detect({installed, readCodexModels, notes})를 주면 설치가 감지된 실행기(RUNNER_CANDIDATES)만 등록하고 작업자·일반감독·슈퍼감독 칸을 채운다.
+// 감지 대상이 아닌 실행기는 파일에 적힌 대로 등록한다. 안내 문구는 detect.notes에 쌓는다. detect를 안 주면 역할 값은 비운다.
+export function initSettings(home, {runnersFile = path.join(home, 'agent-runners.json'), by, reason, record, detect}) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
   return lockedSettings(home, () => {
     if (fs.existsSync(settingsPath(home))) throw new Error(`이미 있다: ${settingsPath(home)}`);
@@ -255,16 +293,24 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
     for (const r of source.runners ?? []) {
       const name = r?.id ?? r?.name;
       if (typeof name !== 'string' || typeof r.spawn !== 'string') continue;
+      const key = name === 'claude-code' ? 'claude' : name;
+      if (detect && RUNNER_CANDIDATES.includes(key) && !detect.installed.includes(key)) continue;
       const spec = {spawn: r.spawn, ...(name === 'codex' ? {catalog: 'codex-models-cache'} : {models: []})};
       const fields = [...TABLE_KEYS, 'conversation'].filter(key => r[key] != null);
       applyTable(spec, Object.fromEntries(fields.map(key => [key, r[key]])));
-      runners[name === 'claude-code' ? 'claude' : name] = spec;
+      runners[key] = spec;
     }
-    if (!runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
+    if (detect && !detect.installed.length)
+      throw new Error(`설치된 실행기(${RUNNER_CANDIDATES.join('·')})를 PATH에서 찾지 못했다 — 하나를 설치한 뒤 다시 kadan runners init`);
+    if (!detect && !runners.codex) throw new Error('agent-runners.json에 codex 실행기 틀이 없다');
     const value = {
       version: 1, revision: 1, activePreset: '기본', presets: {'기본': {label: '처음 시작용', roles: {}}},
       runners, families: DEFAULT_FAMILIES, blocked: [],
     };
+    if (detect) {
+      const readCodexModels = detect.readCodexModels ?? (() => JSON.parse(fs.readFileSync(codexModelsCachePath(), 'utf8')));
+      value.presets['기본'].roles = defaultRoles(value, detect.installed, readCodexModels, detect.notes ?? []);
+    }
     write(home, value);
     record({kind: 'runner-settings', action: 'init', by, reason: reason.trim(), revision: 1, after: value});
     return value;
@@ -405,13 +451,67 @@ export function setActivePreset(home, {preset, ...meta}) {
   });
 }
 
+// 프리셋 관리(B1). 프리셋에 담기는 것은 roles·fallback·label뿐이고, 실행기 표·계열 규칙·차단·즐겨찾기는 모든 프리셋 공통이다.
+// 'add'·'rename'·'remove'는 `runners preset <이름>`(전환)과 같은 자리의 하위 명령이라 프리셋 이름으로 쓸 수 없다.
+export const PRESET_ACTIONS = ['add', 'rename', 'remove'];
+// 예약 이름: 하위 명령 이름, 그리고 일반 객체의 칸이 아닌 프로토타입을 건드리는 이름(`presets['__proto__'] = …`는 저장되지 않는다).
+// 새 프리셋을 만드는 모든 경로(add·rename·set/fallback의 --preset 자동 생성)가 같이 쓴다.
+const RESERVED_PRESET_NAMES = [...PRESET_ACTIONS, '__proto__', 'constructor', 'prototype'];
+const assertNotReservedPresetName = name => {
+  if (RESERVED_PRESET_NAMES.includes(name)) throw new Error(`프리셋 이름으로 쓸 수 없다: ${name}`);
+};
+// 없는 프리셋이면 만든다(set --preset 자동 생성). 이미 있으면 그대로 두고, 새로 만들 때만 예약 이름을 거절한다.
+function ensurePreset(next, name) {
+  if (Object.hasOwn(next.presets, name)) return;
+  assertNotReservedPresetName(name);
+  next.presets[name] = {label: name, roles: {}};
+}
+function checkNewPresetName(next, name) {
+  if (typeof name !== 'string' || !VALUE.test(name)) throw new Error('프리셋 이름에는 영문·숫자·./-[]만 쓴다');
+  assertNotReservedPresetName(name);
+  if (Object.hasOwn(next.presets, name)) throw new Error(`이미 있는 프리셋: ${name}`);
+}
+
+// 프리셋을 만든다: 원본(기본은 활성 프리셋)의 roles·fallback을 복사하고 label은 '<원본> 복사'로 둔다. 활성 프리셋은 바뀌지 않는다.
+export function addPreset(home, {name, from, ...meta}) {
+  return change(home, {...meta, action: 'preset-add'}, next => {
+    checkNewPresetName(next, name);
+    const source = from ?? next.activePreset;
+    if (!Object.hasOwn(next.presets, source)) throw new Error(`복사할 프리셋이 없다: ${source}`);
+    next.presets[name] = {...structuredClone(next.presets[source]), label: `${source} 복사`};
+    return {preset: name, from: source, after: next.presets[name]};
+  });
+}
+
+export function renamePreset(home, {from, to, ...meta}) {
+  return change(home, {...meta, action: 'preset-rename'}, next => {
+    if (typeof from !== 'string' || !Object.hasOwn(next.presets, from)) throw new Error(`없는 프리셋: ${from ?? '(없음)'}`);
+    checkNewPresetName(next, to);
+    // 이름 순서를 지키려고 새 객체로 다시 담는다.
+    next.presets = Object.fromEntries(Object.entries(next.presets).map(([key, value]) => [key === from ? to : key, value]));
+    if (next.activePreset === from) next.activePreset = to;
+    return {before: from, after: to};
+  });
+}
+
+// 활성 프리셋은 지울 수 없다(발령이 읽는 값이 사라진다). 먼저 다른 프리셋으로 전환한다.
+export function removePreset(home, {name, ...meta}) {
+  return change(home, {...meta, action: 'preset-remove'}, next => {
+    if (typeof name !== 'string' || !Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name ?? '(없음)'}`);
+    if (name === next.activePreset) throw new Error(`활성 프리셋은 지울 수 없다: ${name} — 먼저 kadan runners preset <다른 이름>으로 전환`);
+    const before = next.presets[name];
+    delete next.presets[name];
+    return {before, after: null, preset: name};
+  });
+}
+
 // 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
 export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
-    next.presets[name] ??= {label: name, roles: {}};
+    ensurePreset(next, name);
     const value = {runner, model, ...(effort != null ? {effort} : {})};
     checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
     const before = next.presets[name].roles[role] ?? null;
@@ -428,7 +528,7 @@ export function setSeniors(home, {items, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
-    next.presets[name] ??= {label: name, roles: {}};
+    ensurePreset(next, name);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
     list.forEach((item, i) => {
       try { checkChoice(next, 'senior', item, readCodexModels ? {readCodexModels} : {}); }
@@ -452,7 +552,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {
     const name = preset ?? next.activePreset;
-    if (!next.presets[name]) throw new Error(`없는 프리셋: ${name}`);
+    if (!Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name}`);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
     list.forEach((item, i) => {
       try { checkChoice(next, role, item, readCodexModels ? {readCodexModels} : {}); }

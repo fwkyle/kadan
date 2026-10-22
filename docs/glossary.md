@@ -113,6 +113,7 @@
 ### 실행 모델 설정 (2026-09-23)
 
 - 실행 모델 설정(runner settings): 역할(작업자·검수자·일반감독·슈퍼감독)별 실행기·모델·강도의 기계용 기준. `$KADAN_HOME/runner-settings.json` 한 곳에 둔다. 상세는 [실행 모델 설정](runner-settings.md).
+- 프리셋(preset): 역할별 모델 묶음. 역할 값·폴백·설명만 담고, 실행기 표·계열 규칙·차단·즐겨찾기는 모든 프리셋이 함께 쓴다. `kadan runners preset add|rename|remove`로 만들고 바꾸고 지운다. 처음 init 때 설치 감지로 기본 프리셋 하나를 채운다.
 - 활성 프리셋(active preset): 역할 값 묶음 가운데 발령이 지금 읽는 하나. 대시보드 '실행 모델'이나 `kadan runners preset`으로 바꾸고, 원장에 `action: preset`으로 남는다.
 - 폴백 순서(fallback): 역할의 1순위 모델이 원인이 확인된 막힘(쿼터·429·로그인 실패·모델 이름 오류)으로 못 뜰 때 내려갈 실행기·모델·강도 목록. 자동으로 내려가지 않는다.
 - 폴백 발령: `start --profile <역할> --fallback N --reason`으로 N번째 폴백을 골라 띄운 발령. start 기록에 `launchSource: fallback`과 `fallbackIndex`로 남는다.
