@@ -22,7 +22,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { isPeerSuperMail } from "../peer-mail.mjs";
-import { HUMAN_IDLE_MS, isStorableMailHold } from "../notification-guard.mjs";
+import { humanIdleMsFor, isStorableMailHold } from "../notification-guard.mjs";
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -154,7 +154,7 @@ function deliverMessage(argv, flags, command) {
         allowOldRunner:flags["allow-old-runner"],
         recordedPid: expectedPid,
         busyMail: true,
-        ...(peer ? {notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}} : {}),
+        ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session))}} : {}),
       });
     } catch (error) {
       // 붙여넣기 전에 멈춘 실패(입력 보호 보류·세션 없음·PID 변경)는 보관으로 돌린다(종료 0).

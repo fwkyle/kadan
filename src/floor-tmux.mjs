@@ -498,7 +498,7 @@ function relayedHumanInputRecent(session, run, at, humanIdleMs) {
 }
 
 // 카드는 pane 종료·PID·AI 프로세스를 확인하고 사람 입력 시각을 본다. 기존 복사모드 검사는 그대로 둔다.
-function checkCardPane(session, identity, run, spawn) {
+function checkCardPane(session, identity, run, spawn, humanIdleMs) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const state = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}"]).trim();
   if (!/^\d+\|[01]$/.test(state)) deny("KADAN_PANE_STATE_UNKNOWN", "카드 전송 불가: pane 상태 미확인");
@@ -517,7 +517,7 @@ function checkCardPane(session, identity, run, spawn) {
   if (!(Number(foreground) > 0) || !rows.some(row => descendants.has(row[1]) && row[3] === foreground && matchesAiProcess(row[5], identity.harness, identity.model))) {
     deny("KADAN_AI_PROCESS_UNVERIFIED", "카드 전송 불가: 현재 pane 프로세스의 AI 실행기·명시 모델이 시작 기록과 다르거나 미확인이다");
   }
-  checkHumanIdle(session, run);
+  checkHumanIdle(session, run, {humanIdleMs});
 }
 
 // 감시기 알림도 사람의 입력을 덮지 않는다(2026-09-23 미확인 우편 알림이 kyle의 입력 중 문장에 붙어 제출된 사고).
@@ -533,16 +533,17 @@ export function notificationHold(session, guard, {run = tmuxOut} = {}) {
   catch (error) { return {code: error.code ?? "KADAN_NOTIFY_CHECK_FAILED", message: error.message}; }
 }
 
-export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity, notificationGuard} = {}) {
+export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity, notificationGuard, humanIdleMs} = {}) {
   const buffer = `kadan-send-${pid}-${hrtime().toString(36)}`;
   let stage = "not-started";
   let loaded = false;
   const checkMode = () => checkPaneMode(session, run);
-  // 카드·알림·일반 우편이 같은 사람 입력 시각 기준을 쓴다. 일반 우편은 알림 보호 객체가 없으면 기본 30초다.
+  // 카드·알림·일반 우편이 같은 사람 입력 시각 기준을 쓴다. 알림 보호 객체가 없는 카드·일반 우편은
+  // 호출자(guardedSend)가 받는 역할에 맞춰 넘긴 humanIdleMs를 쓴다. 안 넘기면 기본 30초다(슈퍼감독 2분, 2026-10-22).
   const checkSendPane = () => {
-    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn);
+    if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn, humanIdleMs);
     else if (notificationGuard) checkNotificationPane(session, notificationGuard, run);
-    else checkHumanIdle(session, run);
+    else checkHumanIdle(session, run, {humanIdleMs});
   };
   let released = false;
   try {
@@ -566,7 +567,7 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     // 거부되면 본문은 이미 붙었으므로 지우지 않고 Enter만 보내지 않는다(stage가 body-pasted라 아래 catch가 delivery=unknown을 붙인다).
     // 5번째 강제 알림은 앞 검사처럼 건너뛴다.
     if (!(notificationGuard?.force === true && !cardIdentity)) {
-      try { checkHumanIdle(session, run, cardIdentity ? undefined : notificationGuard); }
+      try { checkHumanIdle(session, run, cardIdentity || !notificationGuard ? {humanIdleMs} : notificationGuard); }
       catch (error) { error.enterWithheld = true; throw error; }
     }
     stage = "enter-attempted";
