@@ -609,7 +609,12 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .kb-col { background: #eef3ef; border-radius: 8px; padding: 10px; min-width: 0; }
 .kb-col h3 { font-size: 13px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 6px; text-wrap: balance; }
 .kb-col-decision { background: #e8ecf8; }
+.kb-fold { font-size: 13px; font-weight: 700; cursor: pointer; list-style: none; display: flex; gap: 6px; margin: 0 0 8px; }
+.kb-fold::before { content: "▸"; margin-right: 2px; }
+.kb-col[open] > .kb-fold::before { content: "▾"; }
+.kb-col:not([open]) > .kb-fold { margin-bottom: 0; }
 .kb-count { font-weight: 700; }
+.kb-fold .kb-count { margin-left: auto; }
 .kb-col ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .kb-card { background: #fff; border: 1px solid #dfe6e0; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .kb-line-decision { border-left: 4px solid #2b47a8; }
