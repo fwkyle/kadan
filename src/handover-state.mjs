@@ -34,6 +34,19 @@ export function openTaskIds(entries, role, cards = null) {
 
 // 업무 owner도 확정된 역할 인계를 따라간다. 원장의 owner 원문은 그대로 두고,
 // owner를 정한 뒤에 확정된 인계만 이어서 현재 책임 감독을 계산한다(2026-09-23 감독-3→4 사고).
+// 업무마다 원장 전체(약 7만 건)를 훑으면 업무 수×원장 길이가 든다(2026-10-22 실측: 업무 340개에 1.4~2.5초).
+// 쓰는 사건은 확정된 인계뿐이라 같은 entries 배열이면 한 번만 거르고, 원래 순서를 지켜 업무별로 재사용한다.
+// 길이가 달라지면 다시 만든다(같은 배열에 사건이 덧붙은 경우).
+const transferredCache = new WeakMap();
+const isTransferred = e => e?.kind === 'handover' && e.phase === 'transferred';
+function transferredHandovers(entries) {
+  if (!Array.isArray(entries)) return [...entries].filter(isTransferred);
+  const hit = transferredCache.get(entries);
+  if (hit && hit.length === entries.length) return hit.transferred;
+  const transferred = entries.filter(isTransferred);
+  transferredCache.set(entries, { length: entries.length, transferred });
+  return transferred;
+}
 export function effectiveWorkOwnership(work, entries) {
   const history = work.history ?? [];
   const changed = history.findLast((h, i) => i === 0 || history[i - 1].owner !== h.owner)?.at ?? work.at;
@@ -41,8 +54,9 @@ export function effectiveWorkOwnership(work, entries) {
   const assigned = history.findLast(h => h.ownerAssignedAt)?.ownerAssignedAt;
   const since = assigned && (!changed || Date.parse(assigned) > Date.parse(changed)) ? assigned : changed;
   let owner = work.owner, at = since ?? null;
-  for (const e of entries) if (e?.kind === 'handover' && e.phase === 'transferred' && e.from === owner &&
-    (!since || !e.t || Date.parse(e.t) >= Date.parse(since))) { owner = e.to; at = e.t ?? null; }
+  const sinceMs = since ? Date.parse(since) : 0;
+  for (const e of transferredHandovers(entries)) if (e.from === owner &&
+    (!since || !e.t || Date.parse(e.t) >= sinceMs)) { owner = e.to; at = e.t ?? null; }
   return { owner, at };
 }
 export function effectiveWorkOwner(work, entries) {
