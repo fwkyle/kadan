@@ -235,10 +235,10 @@ export const isDatabaseBusy=error=>error?.errcode===5||/database is locked|SQLIT
 
 // 역할 창에 넣는 경보·놀고 있음 알림: 첫 줄은 [watch HH:MM] 요약 한 줄 그대로, 그 아래에 항목 이름을 붙인다(2026-10-21 [kyle]).
 // 화면 출력·사용자 알림·원장은 이 틀이 아니라 formatAlertBody 한 줄을 쓴다.
-export function itemizedAlert(alert, clock, parents = null) {
+export function itemizedAlert(alert, clock, ctx = null) {
   const idle = alert.kind === "놀고 있음";
   const own = idle ? idleOwnText(alert) : "";
-  const register = idle && alert.stage !== 2 ? idleRegisterHint(alert, parents) : "";
+  const register = idle && alert.stage !== 2 ? idleRegisterHint(alert, ctx ?? {}) : "";
   let basis = "", todo = WATCH_ALERT_FOOTER;
   if (idle) {
     basis = `${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음`

@@ -4,6 +4,8 @@ import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
 import { ownerGenerations, isPreviousOwner } from "./owner-generation.mjs";
 import { buildCardCenter, liveSessionTree } from "./card-center.mjs";
+import { isSuperRole } from "./super-role.mjs";
+import { shellQuote } from "./mail-instructions.mjs";
 
 function startedAtMs(state) {
   const at = Date.parse(state?.startedAt);
@@ -226,18 +228,34 @@ export function idleOwnText(alert) {
 }
 
 // 1단 본인 창 글에만 붙는 등록 명령 꼴(2026-10-22). 말로만 기다리면 감시가 답 대기로 못 알아보고 '놀고 있음'을 되풀이한다.
-// 판정은 바꾸지 않는다: 답할 쪽 = 관계표의 직속 상위. 상위를 모르거나 첫 항목이 '답할 질문'이면 붙이지 않는다.
-// 아는 값(업무 키·카드 키)만 채우고 나머지는 자리표시로 둔다.
-export function idleRegisterHint(alert, parents) {
-  const up = (parents instanceof Map ? parents : new Map(Object.entries(parents ?? {}))).get(alert?.role);
+// 판정은 바꾸지 않는다. 꼴은 역할 프로필로 고른다(isSuperRole): 슈퍼감독은 kyle 결정(decision request)이고, 직속 상위가
+// 역할이면 상위에게 묻는 우편 꼴을 덧붙인다. 일반감독은 상위 역할에게 보내는 우편 꼴만 있고, 상위가 @user이거나 모르면
+// 실행하지 못할 명령이라 안내하지 않는다. 첫 항목이 '답할 질문'이어도 안내하지 않는다.
+// 실행 카드 항목은 --execution(전체 카드 주소)을 넣어야 그 카드가 대기에서 빠진다. 아는 값만 채우고 인용한다.
+// ctx: { parents, profiles, cards, works }
+export function idleRegisterHint(alert, ctx = {}) {
+  const parents = ctx.parents instanceof Map ? ctx.parents : new Map(Object.entries(ctx.parents ?? {}));
+  const up = parents.get(alert?.role);
   const item = alert?.idleItems?.ownWhy?.[0];
-  if (!up || !item || item.reason === "답할 질문") return "";
-  const work = item.id.startsWith("work:") ? item.id.slice(5) : "<업무주소>";
-  const card = item.id.startsWith("work:") ? "<카드키>" : item.id;
-  const cmd = up === "@user"
-    ? `kadan decision request ${card} --work ${work} --question '<질문>' --option '<선택1>' --option '<선택2>' --recommend '<추천>' --reason '<이유>'`
-    : `kadan mail ${up} --work ${work} --expect-reply '<질문>'`;
-  return `상위·kyle의 답을 실제로 기다리는 중일 때만 등록한다: ${cmd}. 멈춘 것이면 등록하지 말고 다음 행동을 한다.`;
+  if (!item || item.reason === "답할 질문") return "";
+  const sup = isSuperRole(alert.role, parents, ctx.profiles ?? null);
+  const toRole = up && up !== "@user" ? up : null;
+  if (!sup && !toRole) return "";
+  let work = null, exec = null;
+  if (item.id.startsWith("work:")) work = item.id.slice(5);
+  else {
+    const hits = (ctx.cards ?? []).filter(c => c.key === item.id || c.id === item.id);
+    exec = hits.length === 1 ? hits[0].key : null;
+    if (exec) work = (ctx.works ?? []).find(w => (w.executions ?? []).some(x => x.key === exec))?.key ?? null;
+  }
+  const workArg = work ? shellQuote(work) : "<업무주소>";
+  const decision = `kadan decision request ${exec ? shellQuote(exec) : "<카드키>"} --work ${workArg} --question '<질문>' --option '<선택1>' --option '<선택2>' --recommend '<추천>' --reason '<이유>'`;
+  const target = work && !exec ? ` --work ${shellQuote(work)}`
+    : ` --execution ${exec ? shellQuote(exec) : "<실행키>"}${work ? ` --work ${shellQuote(work)}` : ""}`;
+  const mail = toRole ? `kadan mail ${shellQuote(toRole)}${target} --expect-reply '<질문>'` : "";
+  const tail = "멈춘 것이면 등록하지 말고 다음 행동을 한다.";
+  if (sup && mail) return `상위·kyle의 답을 실제로 기다리는 중일 때만 등록한다. kyle 결정을 기다리면: ${decision}. 상위(${toRole})의 답을 기다리면: ${mail}. ${tail}`;
+  return `상위·kyle의 답을 실제로 기다리는 중일 때만 등록한다: ${sup ? decision : mail}. ${tail}`;
 }
 
 export function assessHierarchyIdle(entries, states, now, idleMs, parents, excluded = () => false, assignedTaskIds = null, ownTurn = null) {

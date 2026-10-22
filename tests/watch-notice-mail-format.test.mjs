@@ -1,3 +1,4 @@
+import {spawnSync} from 'node:child_process';
 // 감시기 알림 본문 형식(kyle이 글자로 정함): 미확인 우편 1통·6통, 상위 알림, 놀고 있음·경보. '보낸이'는 원래 우편 발신자다.
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
@@ -142,22 +143,44 @@ test('놀고 있음 1단·2단·경보: 대상·상태·근거·본인 차례·�
   assert.equal(itemizedAlert({kind: '큐대기', session: 's', queuedMs: 0, line: 'x'}, 'c').split('\n').filter(l => l.startsWith('근거')).length, 0, '근거를 모르는 종류는 근거 줄이 없다');
 });
 
-test('놀고 있음 1단: 답할 쪽에 맞는 등록 명령 꼴(2단·한 줄 글은 그대로)', () => {
+test('놀고 있음 1단: 꼴은 역할 프로필로 고른다(2단·한 줄 글은 그대로)', () => {
   const base = {kind: '놀고 있음', session: 'kadan-x', role: 'x-감독', openCards: 1, lower: {}, idleMinutes: 15, stage: 1};
-  const withItem = (id, reason = '내 차례') => ({...base, idleItems: {ownWhy: [{id, reason}]}});
+  const withItem = (id, reason = '내 차례', role = 'x-감독') => ({...base, role, idleItems: {ownWhy: [{id, reason}]}});
+  const ctx = (up, profile, extra = {}) => ({parents: new Map([['x-감독', up]]), profiles: profile ? new Map([['x-감독', profile]]) : null, ...extra});
   const plain = itemizedAlert(withItem('work:r/w'), '12:30');
-  const user = itemizedAlert(withItem('work:r/w'), '12:30', new Map([['x-감독', '@user']]));
-  assert.ok(user.includes("kadan decision request <카드키> --work r/w --question '<질문>'"));
-  assert.ok(user.includes('실제로 기다리는 중일 때만') && user.includes('멈춘 것이면 등록하지 말고 다음 행동'));
-  assert.equal(user.split('\n').length, plain.split('\n').length + 1, '한 줄만 더해진다');
-  const mail = itemizedAlert(withItem('work:r/w'), '12:30', new Map([['x-감독', '상위']]));
-  assert.ok(mail.includes("kadan mail 상위 --work r/w --expect-reply '<질문>'"));
-  assert.ok(itemizedAlert(withItem('r/card1'), '12:30', new Map([['x-감독', '@user']])).includes('decision request r/card1 --work <업무주소>'));
-  assert.equal(idleRegisterHint(withItem('work:r/w'), new Map()), '', '상위를 모르면 없다');
-  assert.equal(idleRegisterHint(withItem('work:r/w', '답할 질문'), new Map([['x-감독', '@user']])), '', '답할 질문이면 없다');
+  const sup = itemizedAlert(withItem('work:r/w'), '12:30', ctx('@user', 'super'));
+  assert.ok(sup.includes("kadan decision request <카드키> --work 'r/w' --question '<질문>'"));
+  assert.ok(sup.includes('실제로 기다리는 중일 때만') && sup.includes('멈춘 것이면 등록하지 말고 다음 행동'));
+  assert.ok(!sup.includes('kadan mail'));
+  assert.equal(sup.split('\n').length, plain.split('\n').length + 1, '한 줄만 더해진다');
+  const both = itemizedAlert(withItem('work:r/w'), '12:30', ctx('비서', 'super'));
+  assert.ok(both.includes('kyle 결정을 기다리면: kadan decision request') && both.includes("상위(비서)의 답을 기다리면: kadan mail '비서' --work 'r/w' --expect-reply"));
+  assert.equal(idleRegisterHint(withItem('work:r/w'), ctx('@user', 'conductor')), '', '일반감독+@user는 안내 없음');
+  const mail = itemizedAlert(withItem('work:r/w'), '12:30', ctx('상위', 'conductor'));
+  assert.ok(mail.includes("kadan mail '상위' --work 'r/w' --expect-reply '<질문>'") && !mail.includes('decision request'));
+  assert.ok(idleRegisterHint(withItem('work:r/w'), ctx('@user', null)).includes('decision request'), '프로필 없으면 기존 대체 규칙(상위 @user=슈퍼)');
+  assert.equal(idleRegisterHint(withItem('work:r/w'), ctx('상위', null)).includes('decision request'), false);
+  assert.equal(idleRegisterHint(withItem('work:r/w'), {parents: new Map()}), '', '상위를 모르면 없다');
+  assert.equal(idleRegisterHint(withItem('work:r/w', '답할 질문'), ctx('비서', 'super')), '', '답할 질문이면 없다');
   const second = {...withItem('work:r/w'), stage: 2, idleMinutes: 30};
-  const parents = new Map([['x-감독', '@user']]);
-  assert.equal(itemizedAlert(second, '12:45', parents), itemizedAlert(second, '12:45'));
+  assert.equal(itemizedAlert(second, '12:45', ctx('비서', 'super')), itemizedAlert(second, '12:45'));
   assert.ok(!formatAlertBody(withItem('work:r/w')).includes('decision request'));
   assert.ok(!idleOwnText(withItem('work:r/w')).includes('decision request'));
+});
+
+test('놀고 있음 1단: 실행 카드 항목은 전체 주소로 --execution을 넣고 값은 인용한다', () => {
+  const alert = {kind: '놀고 있음', session: 's', role: 'g', openCards: 1, idleMinutes: 15, stage: 1, idleItems: {ownWhy: [{id: 'exec-1', reason: '내 차례'}]}};
+  const cards = [{key: 'r/exec-1', id: 'exec-1'}], works = [{key: 'r/w1', executions: [{key: 'r/exec-1'}]}];
+  const ctx = {parents: new Map([['g', '상위']]), profiles: new Map([['g', 'conductor']]), cards, works};
+  assert.ok(idleRegisterHint(alert, ctx).includes("kadan mail '상위' --execution 'r/exec-1' --work 'r/w1' --expect-reply '<질문>'"));
+  assert.ok(idleRegisterHint(alert, {...ctx, works: []}).includes("--execution 'r/exec-1' --expect-reply"), '업무를 모르면 --work 없이 실행만');
+  assert.ok(idleRegisterHint(alert, {...ctx, cards: []}).includes('--execution <실행키>'), '모르는 주소는 지어내지 않는다');
+  const sup = idleRegisterHint(alert, {...ctx, parents: new Map([['g', '@user']]), profiles: new Map([['g', 'super']])});
+  assert.ok(sup.includes("kadan decision request 'r/exec-1' --work 'r/w1' --question"));
+  for (const up of ["상위'감독", '상위$(pwd)']) {
+    const line = idleRegisterHint(alert, {...ctx, parents: new Map([['g', up]])});
+    const cmd = line.slice(line.indexOf('kadan mail ')).replace(/\. 멈춘.*$/, '');
+    const out = spawnSync('sh', ['-c', `set -f; printf '%s\\n' ${cmd.replace(/^kadan mail /, '').split(' --')[0]}`], {encoding: 'utf8'});
+    assert.equal(out.stdout, up + '\n', `${up}는 한 인수로 남는다`);
+  }
 });

@@ -45,6 +45,7 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
+import { superProfiles } from "./super-role.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner } from "./handover-state.mjs";
@@ -674,7 +675,7 @@ export async function runWatch({
       const message = `[watch ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
       let target = alert.role, held = false, delivered = false;
       try {
-        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt), parents));
+        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt), { parents, profiles: superProfiles(entries), cards, works }));
         delivered = true;
         deliveredRecipients.add(alert.role);
       } catch (error) {
