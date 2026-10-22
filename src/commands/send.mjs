@@ -22,7 +22,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { isPeerSuperMail } from "../peer-mail.mjs";
-import { HUMAN_IDLE_MS, isStorableMailHold } from "../notification-guard.mjs";
+import { humanIdleMsFor, isStorableMailHold } from "../notification-guard.mjs";
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -114,7 +114,7 @@ function deliverMessage(argv, flags, command) {
     // 바로 넣을 수 없어 보관할 수 있는 우편: 발령(--task)·--raw는 보관하지 않는다.
     const storable = taskId == null && flags.raw !== true;
     // 슈퍼 간 우편만 감시기 알림과 같은 입력 보호를 붙인다(2026-10-13 [kyle]). 보관·실패 규칙은 모든 우편이 같다.
-    // herdr에서는 이 보호(대기 화면 30초 안정, 응답 중 거부)가 일반 우편(응답 중에도 입력 대기열에 넣음)보다 엄격하다.
+    // herdr에서는 이 보호(대기 화면 안정 검사 기본 30초·슈퍼감독 창 2분, 응답 중 거부)가 일반 우편(응답 중에도 입력 대기열에 넣음)보다 엄격하다.
     // 모두에게 붙이면 응답 중인 수신자 앞 즉시 전달이 사라져 '바로 넣기 vs 저장 우선'(kyle 미결정)을 바꾸므로 붙이지 않았다.
     const peer = taskId == null && isPeerSuperMail(entries, readActiveHierarchy(entries), by, recipient);
     if (peer && flags.raw) throw new Error('슈퍼 간 우편은 입력 보호를 거쳐 전달하거나 보관해 안전하게 알립니다. --raw 없이 보내세요');
@@ -154,7 +154,7 @@ function deliverMessage(argv, flags, command) {
         allowOldRunner:flags["allow-old-runner"],
         recordedPid: expectedPid,
         busyMail: true,
-        ...(peer ? {notificationGuard:{humanIdleMs:HUMAN_IDLE_MS}} : {}),
+        ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session))}} : {}),
       });
     } catch (error) {
       // 붙여넣기 전에 멈춘 실패(입력 보호 보류·세션 없음·PID 변경)는 보관으로 돌린다(종료 0).

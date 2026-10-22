@@ -26,6 +26,7 @@ import {
 } from "./ledger.mjs";
 import { stripAnsi, digest, recordedPid } from "./cli-basics.mjs";
 import { mailRuleField } from "./mail-rule.mjs";
+import { humanIdleMsFor } from "./notification-guard.mjs";
 import { familyConflictAlerts } from "./cli-family.mjs";
 
 export function guardedSend({
@@ -156,7 +157,9 @@ export function guardedSend({
 
   let receipt;
   try {
-    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard, busyMail}) || {};
+    // 카드·일반 우편의 사람 입력 보호 시간은 받는 역할의 시작 프로필로 고른다(슈퍼감독 2분). 알림은 호출자가 notificationGuard에 담는다.
+    const humanIdleMs = humanIdleMsFor(entries.filter(e => e.kind === "start" && e.session === session).at(-1));
+    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard, busyMail, humanIdleMs}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     // 실제 바닥은 전송 실패를 영수증이 아니라 예외로 던진다. 전문 시도가 실패했다는 사실만 별도 kind로 남겨

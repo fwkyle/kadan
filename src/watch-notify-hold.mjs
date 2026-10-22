@@ -1,7 +1,8 @@
 import { isNotificationHold } from './notification-guard.mjs';
 
 // 입력 보호로 알림이 밀린 횟수를 받는 창(역할) 단위로 센다(2026-10-13 [kyle]).
-// 3번 연속이면 사용자에게 알리고, 5번 연속이면 입력 보호만 건너뛰고 넣는다. 카운터는 메모리에만 두며
+// 3번 연속이면 사용자에게 알리고, 5번 연속이면 넣는다. 보호가 30초인 창은 입력 보호를 건너뛰고,
+// 슈퍼감독 창은 마지막 사람 입력 뒤 30초는 기다린다(2026-10-22 [kyle] 결정 B; 규칙은 notification-guard의 forcedIdleMsFor). 카운터는 메모리에만 두며
 // 감시기를 다시 시작하면 0부터 센다.
 export const NOTIFY_WARN_AT = 3;
 export const NOTIFY_FORCE_AT = 5;
@@ -27,10 +28,10 @@ export class NotifyHoldTracker {
   // 이 창에 알림이 밀리는 중인가(이번 주기에 밀렸거나 이전 주기부터 이어짐). 판정 소비자용 읽기 전용이다.
   isHeld(role) { return this.heldNow.has(role) || this.streaks.has(role); }
 
-  // 이 창은 이미 5번 연속 밀렸다 — 입력 보호를 건너뛰고 넣을 차례다.
+  // 이 창은 이미 5번 연속 밀렸다 — 넣을 차례다(입력 보호는 건너뛰거나, 슈퍼감독 창은 30초로 줄인다).
   forced(role) { return (this.streaks.get(role)?.count ?? 0) >= NOTIFY_FORCE_AT; }
 
-  // 붙여넣기 직전 검사에 넘길 값. 강제 차례면 force 표시를 달아 바닥이 입력 보호만 건너뛰게 한다.
+  // 붙여넣기 직전 검사에 넘길 값. 강제 차례면 force 표시를 달아 바닥이 forcedIdleMsFor 규칙으로 입력 보호를 줄이거나 건너뛰게 한다.
   // guard를 아예 빼면 바닥이 카드 전송용 검사로 바뀌므로 빼지 않는다. 생존·PID 대조·복사 모드 확인은
   // guardedSend가 그대로 한다. tmux 복사 모드는 바닥 send가 강제 차례에 한해 해제·재확인하고, herdr의 승인 대기·기록보기 확인은 남는다.
   guardFor(role, guard) {
