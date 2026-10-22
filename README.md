@@ -51,8 +51,10 @@ kadan --help
 
 ```bash
 kadan init          # 처음 한 번: node·tmux 확인, 스킬 연결, 비서용 AI CLI 선택
+kadan runners init --reason "처음 시작용 기본 프리셋"   # 역할별 실행기 기본 틀
 kadan up            # 매일: 비서 세션 + 대시보드 세션을 띄움 (이미 있으면 그대로 사용, 감시 프로필이 있으면 감시기도)
 kadan attach 비서   # 비서 터미널에 들어가 대화 시작
+kadan doctor        # 막힌 곳이 있으면 한 번에 점검 (읽기 전용)
 ```
 
 - `kadan up`이 대시보드 주소를 알려 줍니다. 기본은 http://127.0.0.1:8790 입니다.
@@ -94,23 +96,26 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 
 | 명령 | 하는 일 |
 |---|---|
-| `kadan init` / `kadan up` | 처음 준비 / 비서·대시보드 띄우기 |
-| `kadan doctor` | 막힌 곳 한 번에 점검(읽기 전용, 풀려면 칠 명령을 보여 줌) |
+| `kadan init` | 처음 한 번, 환경 확인하고 준비하기 |
+| `kadan up` | 비서·대시보드 켜기 (매일) |
+| `kadan attach 비서` | 비서 창에 들어가기 |
+| `kadan adopt <이름> --model <모델>` | 지금 하던 대화를 감독으로 이어 열기 |
+| `kadan status` | 지금 살아 있는 세션 보기 |
+| `kadan mail <역할> <말>` | 역할에게 메시지 보내기 |
+| `kadan stop <역할>` | 역할 끝내기 |
+| `kadan doctor` | 막힌 곳 한 번에 점검하기 |
+| `kadan help --all` | 전체 명령 목록 보기 |
 | `kadan start <역할>` | 역할 세션 만들기 |
-| `kadan mail <역할> <메시지>` | 일반 우편. `--execution`을 연결해도 발령하지 않음 |
 | `kadan dispatch <역할> --task <카드ID> <지시>` | 명시한 실행 카드 발령 |
 | `kadan send <역할> <메시지>` | 기존 호출 호환. 새 우편은 `mail`, 새 발령은 `dispatch` |
 | `kadan wait <역할>` | 완료 마커나 조용함 기다리기 |
 | `kadan read <역할>` | 화면 끝부분 읽기 |
-| `kadan status` | 살아 있는 세션과 PID 일치 여부 |
-| `kadan attach <역할>` | 실제 터미널에 들어가기 |
-| `kadan stop <역할>` | 세션 끝내기 |
 | `kadan inbox` | 역할별 받은·보낸 우편, 답장 대기 보기 |
 | `kadan watch` | 감시 시작 |
 | `kadan wall` / `kadan dashboard` | 로컬 대시보드 |
 | `kadan work` / `kadan card` | 워크·카드 관리 |
 
-모든 명령과 옵션은 [명령어 사전](docs/commands.md)에 있습니다. 묶음 명령은 `kadan <명령> --help`로도 볼 수 있습니다.
+앞 9줄은 `kadan help`와 같습니다. 전체는 `kadan help --all`, 모든 명령과 옵션은 [명령어 사전](docs/commands.md)에 있습니다. 묶음 명령은 `kadan <명령> --help`로도 볼 수 있습니다.
 
 ## 데이터와 설정
 
