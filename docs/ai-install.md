@@ -2,7 +2,7 @@
 
 > **For AI agents (Claude Code, Codex, …):** the user pointed you here to install kadan. Read this whole file (do not summarize it), then follow steps 0–6 in order.
 > Needs Node.js 24+, tmux 3.x and one AI CLI (`claude` or `codex`). Never run sudo or enable login autostart unprompted, and never ask for or write down tokens or keys.
-> The steps are in Korean; report to the user in the language they use.
+> The steps are in Korean; report to the user in the language they use, in 5 lines or fewer.
 
 ## Why
 
@@ -61,8 +61,8 @@ kadan up                                                # 비서와 대시보드
 ```
 
 - `kadan init`은 `codex`와 `claude`가 둘 다 있으면 `codex`를 비서로 고른다. 사용자가 다른 쪽을 원하면 `kadan init --runner claude` 또는 `--runner codex`로 다시 한다.
-- `kadan runners init`이 `codex`는 모델을 채우지만 `claude`만 있는 컴퓨터에서는 역할을 비우고 안내를 낸다. 그 안내를 사용자에게 그대로 전하고, 모델을 임의로 고르지 않는다.
-- `kadan up`은 기본으로 창을 열지 않는다(`KADAN_WINDOW` 기본 `none`). 비서에 들어가려면 6단계의 `kadan attach 비서`를 쓴다. 막히면 4단계로 간다.
+- Codex는 읽을 수 있는 모델 목록이 있을 때 작업자·감독 기본값을 채운다. 모델 목록이 없거나 Claude만 있으면 역할 값이 비어 있을 수 있다. 실행 결과의 안내를 사용자에게 전하고 모델을 임의로 고르지 않는다. 검수자 역할은 늘 비어 있다. 비어 있는 역할은 나중에 [실행 모델 설정](runner-settings.md)대로 채운다.
+- `kadan up`은 기본 설정(`none`)에서 창을 자동으로 열지 않는다. `kadan attach 비서`도 같아서 `창 열림(manual)` 한 줄만 나온다. 사람이 터미널에서 `kadan up`이 출력한 `tmux -L kadan attach -t kadan-비서`로 비서에 붙는다. 소켓 이름을 바꿨다면(`KADAN_SOCKET`) 출력된 값을 쓴다. 창을 자동으로 열려면 `kadan window set rottie --rottie-bin <절대경로>`로 바꿀 수 있다([명령어 사전](commands.md)). 막히면 4단계로 간다.
 
 **성공하면:** `kadan up`이 `대시보드: http://127.0.0.1:8790` 같은 주소를 출력한다.
 
@@ -75,9 +75,10 @@ kadan doctor
 - 읽기 전용 점검이다. 막힌 곳이 있으면 그 줄의 `풀려면:` 명령을 보여 준다.
 - 막힘이 있으면 **풀려면 한 줄만** 사용자에게 알리고, 사용자가 확인한 뒤에 실행한다. 한 번 풀고 `kadan doctor`를 다시 돌려 본다.
 - 원인을 모르는 실패는 다시 시도하지 않고 멈춰서 상태를 그대로 알린다.
-- `주의`는 사용자에게 알리되 설치 실패로 보지 않는다. `해당 없음`은 안 깐 선택 기능이라 정상이다.
+- 상태는 다섯 가지다: `정상`, `해당 없음`(안 깐 선택 기능이라 정상), `주의`(알리되 설치 실패로 보지 않는다), `막힘`, `확인 불가`(조회하지 못함).
+- `확인 불가`가 있으면 확인하지 못한 항목을 사용자에게 알리고 설치 확인을 보류한다. 종료 코드 0만으로 성공을 단정하지 않는다(`확인 불가`는 종료 코드에 잡히지 않는다).
 
-**성공하면:** `kadan doctor`에 `막힘`이 0개이고 종료 코드가 0이다.
+**성공하면:** `kadan doctor`에 `막힘`과 `확인 불가`가 모두 0개이고 종료 코드가 0이다.
 
 ## 5. 이 대화를 카단에 붙일지 제안 (조건부)
 
@@ -106,11 +107,11 @@ kadan doctor
 
 ## 6. 사용자에게 보고할 것
 
-한국어로 5줄 이내.
+사용자가 쓰는 언어로 5줄 이내로 보고한다.
 
 - 설치 위치
 - 대시보드 주소
-- 비서 창 여는 법: `kadan attach 비서`
+- 비서에 붙는 법: 터미널에서 `tmux -L kadan attach -t kadan-비서`(기본 소켓일 때. `kadan up` 출력 참고). 창을 자동으로 열려면 `kadan window`로 설정한다
 - 끄는 법: `kadan stop 비서`, `kadan stop 대시보드`
 - 막힌 것이 있었다면 무엇이었는지, 디스코드 연결처럼 사람이 나중에 직접 해야 하는 선택 기능이 있다는 것
 

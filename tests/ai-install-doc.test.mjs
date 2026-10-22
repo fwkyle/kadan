@@ -28,3 +28,8 @@ test('ai-install.md가 빌드 단계와 금지 목록을 빠뜨리지 않는다'
   for (const text of ['npm --prefix gui ci', 'npm run build:gui', '## 0. 하지 않는 것', 'kadan autostart install', '비밀값', '## 4. 확인', '## 5.'])
     assert.ok(doc.includes(text), `ai-install.md에 "${text}" 없음`);
 });
+
+test('ai-install.md가 확인 불가 보류와 기본 창 설정의 비서 접속법을 남긴다', () => {
+  for (const text of ['`확인 불가`가 있으면', '설치 확인을 보류한다', '`막힘`과 `확인 불가`가 모두 0개', 'tmux -L kadan attach -t kadan-비서'])
+    assert.ok(doc.includes(text), `ai-install.md에 "${text}" 없음`);
+});
