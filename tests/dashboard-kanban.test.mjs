@@ -335,11 +335,14 @@ test("F2: kyle 앞이 아닌 결정의 PR 주소로는 PR 표시를 만들지 �
 test("F3: PR 주소 경계 — 정확한 github.com 호스트, 번호 뒤 숫자·영문자 없음", () => {
   const nums = (question) => prNumbers({ question });
   for (const text of ["https://github.com/o/r/pull/12.", "https://github.com/o/r/pull/12,", "(https://github.com/o/r/pull/12)",
-    "[PR](https://github.com/o/r/pull/12)", "https://github.com/o/r/pull/12/files", "github.com/o/r/pull/12 머지", "PR github.com/o/r/pull/12"]) {
+    "[PR](https://github.com/o/r/pull/12)", "https://github.com/o/r/pull/12/files", "github.com/o/r/pull/12 머지", "PR github.com/o/r/pull/12",
+    "<https://github.com/o/r/pull/12>", "<github.com/o/r/pull/12>", "https://www.github.com/o/r/pull/12", "www.github.com/o/r/pull/12",
+    "https://GitHub.com/o/r/pull/12", "\"https://github.com/o/r/pull/12\"", "'github.com/o/r/pull/12'"]) {
     assert.deepEqual(nums(text), ["12"], text);
   }
   for (const text of ["https://github.com/o/r/issues/12", "https://notgithub.com/o/r/pull/12", "https://github.com.evil/o/r/pull/12",
-    "https://github.com/o/r/pull/12abc", "https://github.com/o/r/pull/12a", "xgithub.com/o/r/pull/12"]) {
+    "https://github.com/o/r/pull/12abc", "https://github.com/o/r/pull/12a", "xgithub.com/o/r/pull/12",
+    "https://example.test//github.com/o/r/pull/12", "https://example.test/?next=//github.com/o/r/pull/12"]) {
     assert.deepEqual(nums(text), [], text);
     assert.equal(isMergeRequest(mergeD("x", { question: text })), false, text);
   }

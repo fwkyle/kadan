@@ -24,8 +24,10 @@ const time = (value) => (Number.isFinite(Date.parse(value)) ? Date.parse(value) 
 
 // 머지 요청 결정: 열린 결정이고, kyle 앞이고, 질문이나 이유에 GitHub PR 주소가 있다.
 // 결정 기록에 따로 필드를 두지 않고 이 세 조건으로만 가른다(우편 글에서 추측하지 않는다).
-// 호스트는 정확히 github.com이어야 한다(// · 문장 처음 · 공백 · 괄호 뒤). 번호 뒤에 숫자·영문자가 이어지면 PR 주소가 아니다.
-const PR_URL = /(?:^|[\s(\[]|\/\/)github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)(?![0-9A-Za-z])/g;
+// 호스트는 github.com 또는 www.github.com(대소문자 무시)이다. 앞은 문장 처음·공백·여는 괄호·`<`·따옴표이고,
+// 그 바로 뒤에 http(s)://가 올 수 있다. `//`만 단독으로 오는 것은 다른 호스트 경로 안일 수 있어 허용하지 않는다.
+// 번호 뒤에 숫자·영문자가 이어지면 PR 주소가 아니다.
+const PR_URL = /(?:^|[\s(\[<"'])(?:https?:\/\/)?(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)(?![0-9A-Za-z])/gi;
 export function prNumbers(decision) {
   const text = `${decision?.question ?? ""}\n${decision?.reason ?? ""}`;
   return [...new Set([...text.matchAll(PR_URL)].map((m) => m[1]))];
