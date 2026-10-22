@@ -57,7 +57,9 @@ function workAt(home,key){
 
 function followupContext(home,snapshot={}){
  const context={cards:[],read:null,decisions:[],error:null};
- try{context.cards=snapshot.cards??heads(home,'cards');context.read=eventReader(home,snapshot.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');context.decisions=snapshot.decisions??new DecisionStore(home).list();}
+ try{context.cards=snapshot.cards??heads(home,'cards');context.read=eventReader(home,snapshot.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');
+  // 업무마다 원장 전체를 훑지 않게 우편·완료와 인계 사건을 한 번만 골라 둔다(순서는 그대로 유지된다).
+  context.sendDone=context.read(e=>['send','done'].includes(e.kind));context.transfers=context.read(e=>e.kind==='handover');context.identity=taskIdentity(context.cards);context.decisions=snapshot.decisions??new DecisionStore(home).list();}
  catch{context.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
  return context;
 }
@@ -67,7 +69,7 @@ function followupFor(home,work,executions,context,now=stamp()){
  catch{error='자동 왕복 기록 조회 실패';}
  const decisions=context.decisions.filter(d=>d.work===work.key||work.executions.some(c=>c.key===d.card));
  const followup=workFollowup(work,executions,{automatic,decisions,error});
- const identity=taskIdentity(context.cards||[]),keys=new Set(work.executions.map(x=>x.key));
+ const identity=context.identity||taskIdentity(context.cards||[]),keys=new Set(work.executions.map(x=>x.key));
  const linkedWatchCalls=context.watchCalls?context.watchCalls.filter(e=>e.taskId&&keys.has(identity.resolve(e.taskId,e.executionKey).key)).length:null;
  const history=work.history||[],opened=history.findLast(h=>['create','reopen'].includes(h.action));
  const ended=history.findLast(h=>['complete','cancel'].includes(h.action));
@@ -89,9 +91,9 @@ export function operationsFlowSummaries(home,works,snapshot={}){
    let records=null;
    if(context.read){
     const keys=new Set(work.executions.map(x=>x.key)),ids=new Set(context.cards.filter(c=>keys.has(c.key)).map(c=>c.id));
-    records={events:context.read(e=>['send','done'].includes(e.kind)&&(!e.workKey||e.workKey===work.key)&&(keys.has(e.executionKey)||keys.has(e.taskId)||ids.has(e.taskId))),handovers:context.read(e=>e.kind==='handover')};
+    records={events:context.sendDone.filter(e=>(!e.workKey||e.workKey===work.key)&&(keys.has(e.executionKey)||keys.has(e.taskId)||ids.has(e.taskId))),handovers:context.transfers};
    }
-   const executions=work.executions.map(link=>executionModel(home,link,context.cards,records));
+   const executions=work.executions.map(link=>executionModel(home,link,context.cards,records,context.identity));
    return [work.key,followupFor(home,work,executions,context,now)];
   }));
  });
@@ -128,13 +130,13 @@ function linkedRecords(home,work,cardHeads,read=eventReader(home)){
  return {watchCalls:read(e=>e.kind==='watch-ai-call'),events:seed.filter(e=>['send','done'].includes(e.kind)&&connected(e)),letters,handovers,ids};
 }
 
-function executionModel(home,link,cardHeads,records){
+function executionModel(home,link,cardHeads,records,sharedIdentity=null){
  const base={key:link.key,phase:link.phase,round:link.round,title:link.key,role:null,status:null,signals:[],reportState:'unknown'};
  try{
   if(!validKey(link.key))throw failure('실행 주소 확인 필요');
   const history=readStream(home,`cards/${link.key}/events.jsonl`);
   if(!history.length||history.some((c,i)=>c.key!==link.key||c.revision!==i+1))throw failure('실행 이력 확인 필요');
-  const card=history.at(-1),identity=taskIdentity(cardHeads);
+  const card=history.at(-1),identity=sharedIdentity||taskIdentity(cardHeads);
   const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
   const runs=new Map(),sent=new Map(),seen=new Set();
   if(records&&!ambiguous)for(const e of workEntries([...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq),identity).filter(e=>e.taskConnection?.state==='resolved'&&e.executionKey===card.key&&e.role)){

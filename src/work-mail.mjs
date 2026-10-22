@@ -54,15 +54,28 @@ export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,rol
  return {...replyFlags,...(workKey?{workKey}:{}),...(executionKey?{executionKey}:{}),...(replyTo?{replyTo,currentRecipient:parent.currentSender}:{})};
 }
 
-export function workLetters(work,entries,cards){
- if(entries.some(x=>x.broken))throw new Error('원장 손상: 업무 인박스 모름');
- const sends=entries.filter(x=>x.kind==='send'),executionKeys=new Set(work.executions.map(x=>x.key));
- const identity=taskIdentity(cards);
- const selected=new Set(sends.filter(x=>x.workKey===work.key||(!x.workKey&&executionKeys.has(identity.resolve(x.taskId,x.executionKey).key))||work.mailRefs.some(ref=>x.mailId===ref||x.digest===ref)));
+// 업무마다 전체 우편 투영·카드 주소 해석·답장 연결표를 다시 만들면 업무 수×우편 수가 든다(2026-10-22 실측: 원장 6.9만 건,
+// 업무 목록 계산 CPU 31초 중 대부분). 같은 entries·cards 배열이면 업무와 무관한 부분을 한 번만 만들고 업무별로는 고르기만 한다.
+const lettersContexts=new WeakMap();
+function lettersContext(entries,cards){
+ const hit=lettersContexts.get(entries);
+ if(hit&&hit.cards===cards&&hit.length===entries.length)return hit;
+ const sends=entries.filter(x=>x.kind==='send'),identity=taskIdentity(cards);
+ // 업무 연결이 없는 우편은 실행 주소로 업무를 찾는다. 해석은 우편마다 한 번이면 된다.
+ const execKey=sends.map(x=>x.workKey?null:identity.resolve(x.taskId,x.executionKey).key);
  // 답장 연결은 유일한 우편 ID/지문에 대해서만 따른다. 같은 내용 여러 통은 합치지 않는다.
  const byRef=new Map();for(const x of sends)for(const ref of [x.mailId,x.digest].filter(Boolean)){if(!byRef.has(ref))byRef.set(ref,[]);byRef.get(ref).push(x);}
- const children=new Map();for(const x of sends){const parents=byRef.get(x.replyTo);if(parents?.length!==1||x.workKey&&x.workKey!==work.key)continue;const parent=parents[0];if(!children.has(parent))children.set(parent,[]);children.get(parent).push(x);}
- const queue=[...selected];for(let i=0;i<queue.length;i++)for(const child of children.get(queue[i])||[]){if(!selected.has(child)){selected.add(child);queue.push(child);}}
+ const children=new Map();for(const x of sends){const parents=byRef.get(x.replyTo);if(parents?.length!==1)continue;const parent=parents[0];if(!children.has(parent))children.set(parent,[]);children.get(parent).push(x);}
  const projected=mailboxLetters(entries),byEntry=new Map(sends.map((entry,index)=>[entry,projected[index]]));
- return [...selected].map(x=>byEntry.get(x)).reverse();
+ const value={cards,length:entries.length,sends,execKey,children,byEntry};
+ lettersContexts.set(entries,value);return value;
+}
+
+export function workLetters(work,entries,cards){
+ if(entries.some(x=>x.broken))throw new Error('원장 손상: 업무 인박스 모름');
+ const {sends,execKey,children,byEntry}=lettersContext(entries,cards),executionKeys=new Set(work.executions.map(x=>x.key));
+ const selected=new Set(sends.filter((x,i)=>x.workKey===work.key||(!x.workKey&&executionKeys.has(execKey[i]))||work.mailRefs.some(ref=>x.mailId===ref||x.digest===ref)));
+ const queue=[...selected];for(let i=0;i<queue.length;i++)for(const child of children.get(queue[i])||[]){if(child.workKey&&child.workKey!==work.key)continue;if(!selected.has(child)){selected.add(child);queue.push(child);}}
+ // 부르는 쪽이 고쳐도 다른 호출에 번지지 않게 고른 우편만 새 객체로 돌려준다(mailboxLetters가 하던 복제와 같다).
+ return [...selected].map(x=>{const l=byEntry.get(x);return {...l,replyRecipients:[...l.replyRecipients]};}).reverse();
 }

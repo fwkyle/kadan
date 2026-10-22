@@ -29,6 +29,10 @@ export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
 export const SENIOR_SAFE_RUNNERS = ['codex', 'agy'];
 // scripts/senior.sh가 직접 부르는 실행기. 그 밖의 허용 실행기는 실행기 표 exec 틀로 부른다.
 export const SENIOR_SCRIPT_RUNNER = 'codex';
+// 시니어는 최대 2명을 등록하고, 질문하면 등록된 전원에게 동시에 묻는다(2026-10-22 [kyle] 승인). 둘은 폴백이 아니라 동등하다.
+export const SENIOR_MAX = 2;
+// 설정의 senior 칸을 목록으로 읽는다: 옛 단일 객체는 1개짜리 목록, 비면 빈 목록.
+export const seniorList = value => Array.isArray(value) ? value : value ? [value] : [];
 export function assertSeniorRunner(runner, safeRunners = SENIOR_SAFE_RUNNERS) {
   if (!safeRunners.includes(runner))
     throw new Error(`시니어는 안전하게 묶을 수 있는 실행기(${safeRunners.join(', ')})만 고를 수 있다: ${runner} — 목록에 넣으려면 그 실행기가 읽기 전용으로 갇힌다는 실측(쓰기 차단)이 먼저 합격해야 한다`);
@@ -64,6 +68,8 @@ export function readSettings(home) {
   for (const preset of Object.values(value.presets)) {
     if (preset?.roles?.advisor && !preset.roles.senior) preset.roles.senior = preset.roles.advisor;
     if (preset?.roles) delete preset.roles.advisor;
+    // 옛 단일 객체 senior는 1개짜리 목록으로 읽는다(2026-10-22). 다음 저장 때 목록으로 남는다.
+    if (preset?.roles?.senior && !Array.isArray(preset.roles.senior)) preset.roles.senior = [preset.roles.senior];
   }
   return value;
 }
@@ -82,6 +88,29 @@ export function runnerChoices(settings, runner, {readCodexModels = () => JSON.pa
   return new Map((spec.models ?? []).map(m => [m.model, m.efforts ?? []]));
 }
 
+// 정책 차단(block)에 걸린 항목. roles가 없으면 전역 차단, 있으면 그 역할만.
+const findBlocked = (settings, role, model) => (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+
+// 시니어 목록의 모양 검사: 1..SENIOR_MAX명, 같은 실행기+모델 중복 없음. 저장(setSeniors)과 호출(kadan senior)이 같이 쓴다.
+export function assertSeniorShape(list) {
+  if (!Array.isArray(list) || !list.length) throw new Error(`시니어 목록 필요(1..${SENIOR_MAX}명) — 한 명 등록은 --runner/--model, 여럿은 --set "실행기:모델[:강도],…"`);
+  if (list.length > SENIOR_MAX) throw new Error(`시니어는 최대 ${SENIOR_MAX}명이다: ${list.length}명을 받았다`);
+  const keys = list.map(item => `${item?.runner}:${item?.model}`);
+  if (new Set(keys).size !== keys.length) throw new Error('같은 실행기·모델 시니어가 두 번 있다');
+}
+
+// 호출 직전 검사(2026-10-22 검수 F1·F2): 저장 때와 같은 모양·안전 실행기·정책 차단 검사를 설정 파일에 든 목록 전체에 한다.
+// 하나라도 걸리면 전원 거절한다(fail closed) — kyle이 정한 목록과 다른 조합으로 몰래 돌지 않게. 외부 호출·증거 폴더 전에 부른다.
+export function assertSeniorCallable(settings, list) {
+  const hint = ' — 고치려면 kadan runners set senior --set "실행기:모델[:강도],…" --revision N --reason …로 목록을 바꾼다';
+  try { assertSeniorShape(list); } catch (error) { throw new Error(`${error.message}${hint}`); }
+  list.forEach((item, i) => {
+    try { assertSeniorRunner(item.runner); } catch (error) { throw new Error(`시니어 ${i + 1}번(${item.runner}/${item.model}): ${error.message}${hint}`); }
+    const blocked = findBlocked(settings, 'senior', item.model);
+    if (blocked) throw new Error(`시니어 ${i + 1}번(${item.runner}/${item.model}): 정책으로 막은 모델 — ${blocked.reason}${hint} (차단은 block 설정이라 풀려면 kyle 승인으로 설정을 고친다)`);
+  });
+}
+
 function checkChoice(settings, role, {runner, model, effort}, options, {checkBlocked = true} = {}) {
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
@@ -95,7 +124,7 @@ function checkChoice(settings, role, {runner, model, effort}, options, {checkBlo
   const needsEffort = (role === 'explain' ? settings.runners[runner].exec : settings.runners[runner].spawn).includes('{effort}');
   if (needsEffort && !efforts.includes(effort)) throw new Error(`${model}이 지원하지 않는 강도: ${effort ?? '(없음)'} — 가능: ${efforts.join('/') || '없음'}`);
   if (!needsEffort && effort != null) throw new Error(`${runner}은 강도를 받지 않는다`);
-  const blocked = checkBlocked && (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+  const blocked = checkBlocked && findBlocked(settings, role, model);
   if (blocked) throw new Error(`정책으로 막은 모델: ${model} — ${blocked.reason}`);
 }
 
@@ -330,7 +359,7 @@ function modelUsage(settings, runner, model) {
   const hit = v => v?.runner === runner && v.model === model;
   const found = [];
   for (const [name, preset] of Object.entries(settings.presets)) {
-    for (const [role, value] of Object.entries(preset.roles ?? {})) if (hit(value)) found.push(`프리셋 ${name} ${role} 값`);
+    for (const [role, value] of Object.entries(preset.roles ?? {})) if ([].concat(value).some(hit)) found.push(`프리셋 ${name} ${role} 값`);
     for (const [role, list] of Object.entries(preset.fallback ?? {}))
       list.forEach((item, i) => { if (hit(item)) found.push(`프리셋 ${name} ${role} 대체 후보 ${i + 1}번`); });
   }
@@ -386,8 +415,29 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
     const value = {runner, model, ...(effort != null ? {effort} : {})};
     checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
     const before = next.presets[name].roles[role] ?? null;
-    next.presets[name].roles[role] = value;
-    return {preset: name, role, before, after: value};
+    // 시니어 칸은 목록이다: 한 명 등록은 목록을 그 한 명으로 바꾼다. 둘을 등록하려면 setSeniors(--set).
+    next.presets[name].roles[role] = role === 'senior' ? [value] : value;
+    return {preset: name, role, before, after: role === 'senior' ? [value] : value};
+  });
+}
+
+// 시니어 목록(최대 SENIOR_MAX명) 전체를 바꾼다. 항목마다 한 명 등록과 같은 검사(안전 실행기·모델·강도·정책 차단)를 하고,
+// 같은 실행기+모델 중복과 최대 수 초과는 거절한다. 폴백이 아니라 동등한 목록이라 순서는 호출 결과의 줄 순서일 뿐이다.
+export function setSeniors(home, {items, preset, ...meta}) {
+  assertSeniorShape(items);
+  const {readCodexModels, ...rest} = meta;
+  return change(home, {...rest, action: 'set'}, next => {
+    const name = preset ?? next.activePreset;
+    next.presets[name] ??= {label: name, roles: {}};
+    const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
+    list.forEach((item, i) => {
+      try { checkChoice(next, 'senior', item, readCodexModels ? {readCodexModels} : {}); }
+      catch (error) { throw new Error(`시니어 ${i + 1}번: ${error.message}`); }
+    });
+    assertSeniorShape(list);
+    const before = next.presets[name].roles.senior ?? null;
+    next.presets[name].roles.senior = list;
+    return {preset: name, role: 'senior', before, after: list};
   });
 }
 
@@ -397,7 +447,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
   // 시니어는 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
   if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
     throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
-  if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 한 번 호출이고 실패는 실패로 남긴다(docs/senior.md)');
+  if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 등록된 시니어(최대 2명)가 동등하게 함께 불린다(docs/senior.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {

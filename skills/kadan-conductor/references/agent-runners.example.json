@@ -9,9 +9,9 @@
     "claude": { "모델": "<model-slug>", "예": "claude --model <model-slug>" }
   },
   "_역할별기본": {
-    "기본_프리셋": "A",
+    "기본_프리셋": "기본",
     "프리셋": {
-      "A": { "슈퍼감독": "codex/<model>", "감독": "codex/<model>", "작업자": "codex/<model>", "검수자": "claude/<model>", "규칙": "작업자와 검수자는 다른 모델 계열로 둔다" }
+      "기본": { "슈퍼감독": "codex/<model>", "감독": "codex/<model>", "작업자": "codex/<model>", "검수자": "claude/<model>", "규칙": "작업자와 검수자는 다른 모델 계열로 둔다" }
     }
   },
   "_폴백순서": ["codex/<model-a>", "codex/<model-b>", "claude/<model>"],
