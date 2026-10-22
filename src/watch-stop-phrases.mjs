@@ -28,6 +28,9 @@ export const STOP_PHRASES = [
     pattern: /oauth\/token|authentication (?:failed|required)|401 Unauthorized/iu, sample: "없음(intervention.md 표)" },
   { id: "reconnecting", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"], live: true,
     pattern: /Reconnecting\.\.\./iu, sample: "codex 0.163 `• Reconnecting... 2/5 (9m 34s • esc to interrupt)`" },
+  // Claude 화면: `⏺ API Error: Your computer went to sleep mid-response…` 뒤에 빈 입력창만 남는다(2026-10-21 감독 오판 사고).
+  { id: "sleep-interrupted", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
+    pattern: /went to sleep mid-response/iu, sample: "claude 감독 `API Error: Your computer went to sleep mid-response` (tests/fixtures/sleep-interrupt-screens.json)" },
   { id: "stream-error", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
     pattern: /stream error|stream disconnected/iu, sample: "codex 0.163 `Stream disconnected before completion`" },
   { id: "bad-gateway", kind: "끊김", action: "alert-supervisor", scope: ["worker", "supervisor"],
@@ -55,6 +58,8 @@ export const WORKER_PHRASES = withPattern("worker");
 export const WORKER_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES), "giu");
 export const SUPERVISOR_ERROR_PATTERN = new RegExp(sourceOf(withPattern("supervisor")), "iu");
 
+const SLEEP_SIGNATURE = new RegExp(STOP_PHRASES.find((p) => p.id === "sleep-interrupted").pattern.source, "giu");
+
 export const phraseKinds = () => [...new Set(WORKER_PHRASES.map(({ kind }) => kind))];
 export const phraseByKind = (kind) => STOP_PHRASES.find((p) => p.kind === kind);
 export const phraseAction = (kind) => phraseByKind(kind)?.action ?? null;
@@ -73,6 +78,8 @@ export function phraseOfLine(line) {
 // 첫 관찰 주기에도 바로 경보한다(#194 보안필터와 같은 방식).
 const ERROR_HEAD = /^[■✕×ⓘ]/u;
 const RECONNECT_HEAD = /^•\s*Reconnecting\.\.\.(?:\s+\d+\/\d+)?(?:\s*\([^)]*\))?\s*$/iu; // 줄 전체가 상태 줄 모양일 때만(설명 문장 안의 낱말은 아님)
+const CLAUDE_ERROR_HEAD = /^⏺\s+API Error:/u; // Claude 응답 오류 줄. 응답 머리표(⏺)로 시작하지만 이 모양만 오류 머리줄로 본다
+const TURN_DONE = /^✻\s+\S+\s+for\s+\d/u; // Claude 턴 끝 줄(`✻ Baked for 8m 22s · done 6:12 PM`)
 const FENCE = /^\s*(```|~~~)/u;
 const EMPTY_COMPOSER = /^\s*(?:›\s*(?:Ask Codex to do anything)?|[❯>])\s*$/u;
 const ANY_COMPOSER = /^\s*[›❯]/u;
@@ -98,7 +105,9 @@ export function linesWithFence(screen) {
   });
 }
 
-export function currentErrorBlock(screen) {
+// claudeHead: Claude 화면의 `⏺ API Error:` 머리줄과 턴 끝 줄(`✻ …`) 건너뛰기까지 덩어리로 읽는다. 이 덩어리는 절전 중단 낱말 판정에만 쓴다
+// (currentStopPhrases) — 기본값(false)은 main과 같은 판정이다. 다른 Claude API 오류를 작업자 즉시 경보로 넓히지 않는다(2026-10-22 검수 F1).
+export function currentErrorBlock(screen, { claudeHead = false } = {}) {
   // tmux는 floor.read에서 추천 문구를 뺀 판정용 화면을 준다. 표시용 readView를 넣지 않는다.
   const rows = linesWithFence(screen);
   const lines = rows.map((r) => r.line);
@@ -109,13 +118,19 @@ export function currentErrorBlock(screen) {
   let end = composer - 1;
   while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
   if (end < 0) return null;
-  let head = end;
-  while (head > 0 && /^\s+\S/u.test(lines[head])) head--;
-  if (!(ERROR_HEAD.test(lines[head]) || RECONNECT_HEAD.test(lines[head]))) return null;
+  const headOf = (from) => { let at = from; while (at > 0 && /^\s+\S/u.test(lines[at])) at--; return at; };
+  let head = headOf(end);
+  // Claude는 오류 줄과 입력창 사이에 턴 끝 줄이 낀다. 그 줄을 건너뛴 위가 `⏺ API Error:` 머리줄일 때만 덩어리로 읽는다(다른 머리줄 판정은 그대로).
+  if (claudeHead && TURN_DONE.test(lines[end])) {
+    let above = end - 1;
+    while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+    if (above >= 0 && CLAUDE_ERROR_HEAD.test(lines[headOf(above)])) { end = above; head = headOf(above); }
+  }
+  if (!(ERROR_HEAD.test(lines[head]) || RECONNECT_HEAD.test(lines[head]) || claudeHead && CLAUDE_ERROR_HEAD.test(lines[head]))) return null;
   if (rows.slice(head, end + 1).some((r) => r.inFence)) return null;
   // 위쪽 소개 문단 제외(#194 보안필터와 같은 규칙): 오류 표시 머리줄 바로 위(빈 줄·장식 줄을 건너)가 응답 머리표 문단이거나 콜론으로 끝나는
   // 소개 문장이면 설명·예시이지 현재 오류가 아니다. 애매하면 즉시 경보 대신 정체 경로로 간다. 상태 줄 모양의 재연결 머리줄에는 적용하지 않는다.
-  if (ERROR_HEAD.test(lines[head])) {
+  if (ERROR_HEAD.test(lines[head]) || CLAUDE_ERROR_HEAD.test(lines[head])) {
     let above = head - 1;
     while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--; // 빈 줄·가로선 등 장식 줄은 몇 개든 건너뛴다
     const intro = above >= 0 ? lines[above] : "";
@@ -127,12 +142,15 @@ export function currentErrorBlock(screen) {
 // 현재 오류 덩어리 안의 목록 낱말: Map(줄 키 → 줄). 덩어리가 아니면 빈 Map.
 export function currentStopPhrases(screen) {
   const found = new Map();
-  const block = currentErrorBlock(screen);
-  if (!block) return found;
-  for (const line of block.lines) {
-    WORKER_SIGNATURES.lastIndex = 0;
-    for (const match of line.matchAll(WORKER_SIGNATURES)) found.set(lineKey(match[0], line), line.trim());
-  }
+  const collect = (block, signatures) => {
+    for (const line of block?.lines ?? []) {
+      signatures.lastIndex = 0;
+      for (const match of line.matchAll(signatures)) found.set(lineKey(match[0], line), line.trim());
+    }
+  };
+  collect(currentErrorBlock(screen), WORKER_SIGNATURES);
+  // Claude `⏺ API Error:` 덩어리는 절전 중단 낱말만 읽는다(다른 낱말의 판정 범위는 main 그대로).
+  collect(currentErrorBlock(screen, { claudeHead: true }), SLEEP_SIGNATURE);
   return found;
 }
 

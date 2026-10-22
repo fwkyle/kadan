@@ -18,6 +18,14 @@ export function reportedActivity(card,own,{now=Date.now(),alive=true}={}) {
   return own.some(r=>r.role===card.activityRole&&r.role===card.role&&r.state==='unconfirmed'&&(!alive||r.sessionState==='alive')&&activityAt>=(Date.parse(r.sentAt)||0))?card.activity:null;
 }
 
+// 살아 있는 세션 집합(kadan-<역할>)으로 buildCardCenter의 tree를 만든다. liveSessions가 null이면 생존을 모르는 것이라 tree도 비운다.
+export function liveSessionTree(cards,liveSessions) {
+  if(liveSessions==null)return [];
+  return [{roles:[...new Set(cards.map(c=>c.role).filter(Boolean))].map(role=>({
+    role,life:{state:liveSessions.has(`kadan-${role}`)?'alive':'absent',pidState:'match'},
+  }))}];
+}
+
 // 카드 한 장과 그 카드에 대한 여러 역할의 실행을 분리한다.
 export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now()}) {
   if(entries.some(e=>e?.broken))throw new Error('원장 손상: 카드 실행 상태 모름');

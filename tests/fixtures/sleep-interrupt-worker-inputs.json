@@ -1,0 +1,139 @@
+{
+ "plain-empty-codex": {
+  "screen": "hello\n› Ask Codex to do anything",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "error-mark-head": {
+  "screen": "x\n\n■ Conversation interrupted\n  └ detail line\n\n› Ask Codex to do anything\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "reconnect-status": {
+  "screen": "x\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n› Ask Codex to do anything",
+  "mainPhrases": [
+   "reconnecting...|• Reconnecting... #/# (#m #s • esc to interrupt)"
+  ],
+  "mainBroad": true
+ },
+ "codex-429-terminal": {
+  "screen": "x\n\n■ exceeded retry limit, last status: 429 Too Many Requests\n\n› Ask Codex to do anything\n",
+  "mainPhrases": [
+   "exceeded retry limit|■ exceeded retry limit, last status: # Too Many Requests",
+   "429 too many requests|■ exceeded retry limit, last status: # Too Many Requests"
+  ],
+  "mainBroad": true
+ },
+ "claude-529-no-phrase": {
+  "screen": "⏺ API Error: 529 overloaded_error\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "claude-529-turn-line": {
+  "screen": "⏺ API Error: 529 overloaded_error\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "claude-working": {
+  "screen": "⏺ Bash(ls)\n  ⎿  a b\n\n✻ Pondering… (12s · esc to interrupt)\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "claude-done-normal": {
+  "screen": "⏺ 끝났습니다.\n\n✻ Baked for 3m 3s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "claude-turn-line-after-text": {
+  "screen": "⏺ 정리했습니다.\n  내용입니다.\n\n✻ Worked for 1m 5s\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "quoted-429-in-fence": {
+  "screen": "x\n```\n■ 429 Too Many Requests\n```\n\n› Ask Codex to do anything\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "intro-colon-then-error": {
+  "screen": "다음은 예시입니다:\n■ stream error\n\n› Ask Codex to do anything\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "typing-in-composer": {
+  "screen": "■ stream error\n\n› 쓰는 중",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "no-composer": {
+  "screen": "■ stream error\n  └ boom\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "bad-gateway-head": {
+  "screen": "x\n\n■ 502 Bad Gateway\n\n› Ask Codex to do anything\n",
+  "mainPhrases": [
+   "502 bad gateway|■ # Bad Gateway"
+  ],
+  "mainBroad": true
+ },
+ "claude-529-overloaded": {
+  "screen": "⏺ API Error: 529 overloaded_error\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "claude-generic-api": {
+  "screen": "⏺ API Error: An unknown error occurred.\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": false
+ },
+ "claude-auth-401": {
+  "screen": "⏺ API Error: 401 Unauthorized\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-auth-no-key": {
+  "screen": "⏺ API Error: No API key\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-stream-error": {
+  "screen": "⏺ API Error: stream error\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-bad-gateway": {
+  "screen": "⏺ API Error: 502 Bad Gateway\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-rate-limit": {
+  "screen": "⏺ API Error: rate limit exceeded\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-plain-401": {
+  "screen": "⏺ API Error: 401 Unauthorized\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-intro-quoted-401": {
+  "screen": "⏺ 아래는 오류 예시입니다:\n⏺ API Error: 401 Unauthorized\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n────────────\n❯ \n────────────\n  ~/Dev/app[main]\n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-fenced-401": {
+  "screen": "```\n⏺ API Error: 401 Unauthorized\n\n✻ Baked for 2m 1s · done 6:12 PM\n\n```\n\n❯ \n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-non-api-turn": {
+  "screen": "■ 502 Bad Gateway\n\n✻ Baked for 2m 1s\n\n❯ \n",
+  "mainPhrases": [],
+  "mainBroad": true
+ },
+ "claude-normal-turn": {
+  "screen": "⏺ 완료했습니다.\n\n✻ Baked for 2m 1s\n\n❯ \n",
+  "mainPhrases": [],
+  "mainBroad": false
+ }
+}
