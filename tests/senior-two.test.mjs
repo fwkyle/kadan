@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {seniorCommand, seniorCommandLabel, LIMIT_PATTERN} from '../src/senior.mjs';
-import {initSettings, readSettings, setRole, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
+import {blockModel, initSettings, readSettings, setRole, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -211,4 +211,47 @@ await seniorCommand(['qa/card-a'], {question: '바꿀까?'}, {home: ${JSON.strin
   const entries = f.advices();
   assert.deepEqual(entries.map(e => [e.reason, e.seniorIndex]), [['interrupted', 1], ['interrupted', 2]]);
   assert.equal(new Set(entries.map(e => e.askId)).size, 1);
+});
+
+// 검수 F1·F2(2026-10-22): 저장 때만 검사하던 틈. 호출 직전에도 같은 검사를 하고, 하나라도 걸리면 아무도 부르지 않는다.
+const rejectedWithoutCalls = async (f, flags, pattern) => {
+  await assert.rejects(f.run(flags), pattern);
+  assert.equal(f.calls.length, 0, '호출 0회'); assert.deepEqual(f.advices(), []);
+  assert.equal(fs.existsSync(path.join(f.home, 'advice')), false, '증거 폴더도 없다');
+};
+const block = (f, model, roles) => blockModel(f.home, {model, roles, ...f.meta(readSettings(f.home).revision)});
+
+test('F1: 등록한 뒤 역할별 block(senior)이 걸리면 전원 거절(호출 0회), 오류에 고치는 명령이 있다', async () => {
+  const f = fixture();
+  block(f, 'gpt-6-astra', 'senior');
+  await rejectedWithoutCalls(f, {}, /시니어 1번\(codex\/gpt-6-astra\): 정책으로 막은 모델.*kadan runners set senior --set/);
+  await rejectedWithoutCalls(f, {model: 'gemini-4-argon-medium'}, /정책으로 막은 모델/); // 차단 안 된 한 명만 골라도 전원 거절
+});
+
+test('F1: 등록한 뒤 전역 block이 걸리면 호출 0회', async () => {
+  const f = fixture();
+  block(f, 'gemini-4-argon-medium', '');
+  await rejectedWithoutCalls(f, {}, /시니어 2번\(agy\/gemini-4-argon-medium\): 정책으로 막은 모델/);
+});
+
+test('F1: --model로 차단 항목을 지정해도 호출 0회', async () => {
+  const f = fixture();
+  block(f, 'gpt-6-astra', 'senior');
+  await rejectedWithoutCalls(f, {runner: 'codex', model: 'gpt-6-astra'}, /정책으로 막은 모델/);
+});
+
+test('F1: 다른 역할에만 걸린 block은 시니어를 막지 않는다', async () => {
+  const f = fixture();
+  block(f, 'gpt-6-astra', 'reviewer');
+  const r = await f.run();
+  assert.equal(r.answers.length, 2); assert.equal(f.calls.length, 2);
+});
+
+test('F2: 설정 파일을 직접 고쳐 3명(서로 다른 3개·동일 3개)을 넣어도 호출 0회', async () => {
+  for (const list of [[ASTRA, ARGON, {runner: 'agy', model: 'gemini-3.8-flash-high'}], [ARGON, ARGON, ARGON], [ASTRA, ASTRA]]) {
+    const f = fixture();
+    const file = path.join(f.home, 'runner-settings.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')); raw.presets[raw.activePreset].roles.senior = list; fs.writeFileSync(file, JSON.stringify(raw));
+    await rejectedWithoutCalls(f, {}, list.length > 2 ? /시니어는 최대 2명이다.*kadan runners set senior --set/ : /같은 실행기·모델 시니어가 두 번/);
+  }
 });

@@ -88,6 +88,29 @@ export function runnerChoices(settings, runner, {readCodexModels = () => JSON.pa
   return new Map((spec.models ?? []).map(m => [m.model, m.efforts ?? []]));
 }
 
+// 정책 차단(block)에 걸린 항목. roles가 없으면 전역 차단, 있으면 그 역할만.
+const findBlocked = (settings, role, model) => (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+
+// 시니어 목록의 모양 검사: 1..SENIOR_MAX명, 같은 실행기+모델 중복 없음. 저장(setSeniors)과 호출(kadan senior)이 같이 쓴다.
+export function assertSeniorShape(list) {
+  if (!Array.isArray(list) || !list.length) throw new Error(`시니어 목록 필요(1..${SENIOR_MAX}명) — 한 명 등록은 --runner/--model, 여럿은 --set "실행기:모델[:강도],…"`);
+  if (list.length > SENIOR_MAX) throw new Error(`시니어는 최대 ${SENIOR_MAX}명이다: ${list.length}명을 받았다`);
+  const keys = list.map(item => `${item?.runner}:${item?.model}`);
+  if (new Set(keys).size !== keys.length) throw new Error('같은 실행기·모델 시니어가 두 번 있다');
+}
+
+// 호출 직전 검사(2026-10-22 검수 F1·F2): 저장 때와 같은 모양·안전 실행기·정책 차단 검사를 설정 파일에 든 목록 전체에 한다.
+// 하나라도 걸리면 전원 거절한다(fail closed) — kyle이 정한 목록과 다른 조합으로 몰래 돌지 않게. 외부 호출·증거 폴더 전에 부른다.
+export function assertSeniorCallable(settings, list) {
+  const hint = ' — 고치려면 kadan runners set senior --set "실행기:모델[:강도],…" --revision N --reason …로 목록을 바꾼다';
+  try { assertSeniorShape(list); } catch (error) { throw new Error(`${error.message}${hint}`); }
+  list.forEach((item, i) => {
+    try { assertSeniorRunner(item.runner); } catch (error) { throw new Error(`시니어 ${i + 1}번(${item.runner}/${item.model}): ${error.message}${hint}`); }
+    const blocked = findBlocked(settings, 'senior', item.model);
+    if (blocked) throw new Error(`시니어 ${i + 1}번(${item.runner}/${item.model}): 정책으로 막은 모델 — ${blocked.reason}${hint} (차단은 block 설정이라 풀려면 kyle 승인으로 설정을 고친다)`);
+  });
+}
+
 function checkChoice(settings, role, {runner, model, effort}, options, {checkBlocked = true} = {}) {
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
@@ -101,7 +124,7 @@ function checkChoice(settings, role, {runner, model, effort}, options, {checkBlo
   const needsEffort = (role === 'explain' ? settings.runners[runner].exec : settings.runners[runner].spawn).includes('{effort}');
   if (needsEffort && !efforts.includes(effort)) throw new Error(`${model}이 지원하지 않는 강도: ${effort ?? '(없음)'} — 가능: ${efforts.join('/') || '없음'}`);
   if (!needsEffort && effort != null) throw new Error(`${runner}은 강도를 받지 않는다`);
-  const blocked = checkBlocked && (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+  const blocked = checkBlocked && findBlocked(settings, role, model);
   if (blocked) throw new Error(`정책으로 막은 모델: ${model} — ${blocked.reason}`);
 }
 
@@ -401,8 +424,7 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
 // 시니어 목록(최대 SENIOR_MAX명) 전체를 바꾼다. 항목마다 한 명 등록과 같은 검사(안전 실행기·모델·강도·정책 차단)를 하고,
 // 같은 실행기+모델 중복과 최대 수 초과는 거절한다. 폴백이 아니라 동등한 목록이라 순서는 호출 결과의 줄 순서일 뿐이다.
 export function setSeniors(home, {items, preset, ...meta}) {
-  if (!Array.isArray(items) || !items.length) throw new Error(`시니어 목록 필요(1..${SENIOR_MAX}명) — 한 명 등록은 --runner/--model, 여럿은 --set "실행기:모델[:강도],…"`);
-  if (items.length > SENIOR_MAX) throw new Error(`시니어는 최대 ${SENIOR_MAX}명이다: ${items.length}명을 받았다`);
+  assertSeniorShape(items);
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
@@ -412,8 +434,7 @@ export function setSeniors(home, {items, preset, ...meta}) {
       try { checkChoice(next, 'senior', item, readCodexModels ? {readCodexModels} : {}); }
       catch (error) { throw new Error(`시니어 ${i + 1}번: ${error.message}`); }
     });
-    const keys = list.map(item => `${item.runner}:${item.model}`);
-    if (new Set(keys).size !== keys.length) throw new Error('같은 실행기·모델 시니어가 두 번 있다');
+    assertSeniorShape(list);
     const before = next.presets[name].roles.senior ?? null;
     next.presets[name].roles.senior = list;
     return {preset: name, role: 'senior', before, after: list};

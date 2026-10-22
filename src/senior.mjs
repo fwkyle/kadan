@@ -10,7 +10,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {CardStore} from './card-store.mjs';
-import {SENIOR_SCRIPT_RUNNER, assertSeniorRunner, readSettings, runnerChoices, seniorList} from './runner-settings.mjs';
+import {SENIOR_SCRIPT_RUNNER, assertSeniorCallable, assertSeniorRunner, readSettings, runnerChoices, seniorList} from './runner-settings.mjs';
 import {answerText, scrubForAI} from './explain-input.mjs';
 import {execCommand, runnerTemplate} from './runner-table.mjs';
 import {assertExecBound, bindExec, isReadDirValue, withReadDir, withTimeout} from './exec-agent.mjs';
@@ -146,6 +146,8 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const settings = read();
   const configured = seniorList(settings?.presets?.[settings.activePreset]?.roles?.senior);
   if (!configured.length) throw new Error('시니어 모델 설정 없음 — kadan runners set senior --runner codex --model <모델> [--effort <강도>] --revision N --reason <이유> (둘이면 --set "실행기:모델[:강도],…")');
+  // 호출 직전 검사는 저장 검사와 같은 함수다. 덮어쓰기로 한 명만 골라도 설정 목록 전체가 통과해야 한다(하나라도 걸리면 전원 거절).
+  assertSeniorCallable(settings, configured);
   const {values, picked} = pickSeniors(configured, flags);
   // 지정 없는 호출(설정 직접 편집·옛 advisor 이름 포함)도 실행 직전에 같은 허용 목록 검사를 거친다.
   // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 부르는 모델마다 그 모델이 지원하는지 본다(2026-10-05 [kyle]).
