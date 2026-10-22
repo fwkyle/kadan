@@ -173,10 +173,10 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 codex는 `scripts/senior.sh`가 `codex exec`로, 허용 목록의 agy는 실행기 표 `exec` 틀로 한 번 돌린다(2026-10-05 [kyle] 승인, agy는 아래 [시니어](#시니어) 설정 참고). 슈퍼감독은 값싼 모델로 두고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 자세한 규칙은 [시니어](senior.md).
 
-- 설정: 활성 프리셋의 `roles.senior`. 명령은 `kadan runners set senior --runner codex --model … [--effort …]`, 대시보드는 '실행 모델'의 **시니어** 줄이다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음).
+- 설정: 활성 프리셋의 `roles.senior`는 **최대 2명 목록**(`{runner, model, effort}`)이다(2026-10-22 [kyle] 승인). 옛 단일 객체는 1명 목록으로 읽고 다음 저장 때 목록으로 남는다. 명령은 `kadan runners set senior --set "실행기:모델[:강도],…" --revision N --reason …`(최대 2명, 각 항목은 한 명 등록과 같은 검사, 같은 실행기+모델 중복·3명 이상 거절)이고, 한 명이면 기존 `--runner codex --model … [--effort …]`가 된다(목록이 그 한 명으로 바뀐다). 대시보드는 '실행 모델'의 **시니어** 줄(등록 목록)과 '시니어 바꾸기'(추가·삭제·위로·아래로)다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음). 감독이 `kadan senior`를 부르면 **등록된 전원에게 동시에** 묻는다.
 - 실행기는 안전 허용 목록(`SENIOR_SAFE_RUNNERS`, 지금 `codex`·`agy`)에 든 것만 받는다. agy는 실행기 표 `exec` 틀 + 도구 없는 에이전트로 부르며, 카드 저장소(git·안전한 경로)는 코드가 실행 직전에 덧붙이는 `--add-dir`로 읽기 전용으로 읽는다([시니어](senior.md), [agy 묶기](#agy-도구-없는-에이전트-묶기)). 저장(`runners set senior`)과 호출(`kadan senior --runner`)이 같은 검사로 거절한다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 호출 때 골라 부른 모델에도 적용한다.
-- **호출 때 고르기**: `kadan senior … [--runner <실행기> --model <모델>]`은 이번 호출만 바꾸고 설정은 그대로다([시니어](senior.md)). 카드 글은 외부로 보내기 전에 `scrubForAI`로 웹훅 주소·토큰 모양을 가린다.
-- **폴백이 없다.** `runners fallback senior`는 거절한다. 감독이 명령으로 부르고 실패(시간 초과·호출 실패·빈 답)를 그 자리에서 보므로, 감시 AI처럼 자동으로 내려갈 이유가 없다.
+- **호출 때 고르기**: `kadan senior … [--runner <실행기> --model <모델>]`은 **등록된 시니어 중 한 명만** 고른다. 등록 밖의 모델은 거절하고 등록 목록을 보인다. 설정은 그대로다([시니어](senior.md)). 카드 글은 외부로 보내기 전에 `scrubForAI`로 웹훅 주소·토큰 모양을 가린다.
+- **폴백이 없다.** `runners fallback senior`는 거절한다. 두 시니어는 폴백이 아니라 동등하고, 감독이 명령으로 부르고 한도·실패(시간 초과·호출 실패·빈 답)를 칸마다 그 자리에서 보므로 자동으로 내려갈 이유가 없다. 재시도도 없다.
 - 상한은 호출마다 기본 30분(`--timeout <초>`, 최대 3600). 고급·느린 모델이 저장소를 직접 읽고 시험까지 돌려 볼 수 있는 호출이라 감시 AI(5분)보다 훨씬 길다. 횟수 제한은 없다 — 필요할 때만 부른다.
 
 ## 설명 AI

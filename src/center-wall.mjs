@@ -26,7 +26,7 @@ import { promisify } from 'node:util';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger,readLedger} from './ledger.mjs';
-import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,setActivePreset,setFallback,setFavorites,setRole,setRunner,setRunnerModel} from './runner-settings.mjs';
+import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
@@ -258,7 +258,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      if(op==='add'&&!f.model)throw new Error('추가할 모델을 고르세요');
      const current=readSettings(home);
      if(!current)throw new Error('실행 모델 설정이 없다 — kadan runners init 먼저');
-     const items=editFallback(current.presets[current.activePreset].fallback?.[f.role]??[],{op,index,item:{runner:f.runner,model:f.model,effort:f.effort||undefined}});
+     const preset=current.presets[current.activePreset];
+     // 시니어는 폴백이 아니라 등록 목록(최대 2명)이다. 같은 추가·삭제·위로·아래로 조작을 쓰되 senior 칸에 저장한다.
+     const items=editFallback(f.role==='senior'?seniorList(preset.roles.senior):preset.fallback?.[f.role]??[],{op,index,item:{runner:f.runner,model:f.model,effort:f.effort||undefined}});
+     if(f.role==='senior')return setSeniors(home,{items,...meta});
      return setFallback(home,{role:f.role,items,...meta});
     };
     // 즐겨찾기도 폴백과 같은 한 번 조작(add·remove:N)이다. 목록은 저장 직전 설정에서 읽는다.

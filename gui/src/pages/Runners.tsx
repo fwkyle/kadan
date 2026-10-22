@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import { save, useResource } from "../resource";
-import { fallbackLabels, ownPart } from "../runner-draft";
+import { fallbackLabels, listOf, ownPart } from "../runner-draft";
 import type { Stamp } from "../types";
 import { Sessions } from "./Records";
 import { RunnerTables } from "./RunnerTables";
@@ -20,7 +20,7 @@ type Settings = {
     string,
     {
       label?: string;
-      roles: Record<string, Choice>;
+      roles: Record<string, Choice | Choice[]>;
       fallback?: Record<string, Choice[]>;
     }
   >;
@@ -52,8 +52,8 @@ type RunnersData = Stamp & {
   history: unknown[];
   // 감시 AI는 이 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 자동으로 차례로 시도한다.
   watch?: { runner: string; maxAttempts: number };
-  // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
-  senior?: { runner: string };
+  // 시니어는 안전 허용 목록의 실행기에서 최대 max명을 등록하고, 질문하면 전원에게 동시에 묻는다.
+  senior?: { runners: string[]; max: number };
   // 설명 AI는 실행기 표에 한 번 호출(exec) 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 시도한다.
   explain?: { runners: string[]; maxAttempts: number };
 };
@@ -112,23 +112,25 @@ export default function Runners({ url }: { url: URL }) {
               </thead>
               <tbody>
                 {Object.entries(data.roles).map(([role, label]) => {
-                  const current =
-                    data.settings!.presets[data.settings!.activePreset].roles[
-                      role
-                    ];
+                  const current = data.settings!.presets[
+                    data.settings!.activePreset
+                  ].roles[role] as Choice | undefined;
                   return (
                     <tr key={role}>
                       <th>{label}</th>
                       <td>
-                        {current
-                          ? [current.runner, current.model, current.effort]
-                              .filter(Boolean)
-                              .join(" / ")
-                          : "미설정"}
+                        {role === "senior"
+                          ? fallbackLabels(data.settings!, role).join(" + ") ||
+                            "미설정"
+                          : current
+                            ? [current.runner, current.model, current.effort]
+                                .filter(Boolean)
+                                .join(" / ")
+                            : "미설정"}
                       </td>
                       <td>
                         {role === "senior" ? (
-                          "없음 (시니어는 대체 후보가 없습니다)"
+                          "없음 (등록된 시니어 전원에게 동시에 묻습니다)"
                         ) : fallbackLabels(data.settings!, role).length ? (
                           <ol>
                             {fallbackLabels(data.settings!, role).map(
@@ -165,7 +167,9 @@ export default function Runners({ url }: { url: URL }) {
           </p>
           <p className="muted">
             시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
-            의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 대체 후보가 없고, 실패는 그 자리에서 실패로 끝납니다.
+            의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 최대{" "}
+            {data.senior?.max ?? 2}명을 등록하면 묻는 즉시 등록된 전원에게 동시에 묻고, 감독은 모델을 고르지 않습니다.
+            대체 후보는 없고, 한도·실패는 재시도 없이 그 시니어 칸에 표시됩니다.
           </p>
           <p className="muted">
             설명 AI는 감시 AI가 아닙니다. 발령·완료·막힘·결정이 생긴 카드의 요약 칸만 채웁니다(1순위 포함 최대{" "}
@@ -176,18 +180,19 @@ export default function Runners({ url }: { url: URL }) {
             <details key={role}>
               <summary>
                 {label} 바꾸기
-                {role !== "senior" &&
-                  ` · 대체 후보 ${fallbackLabels(data.settings!, role).length}개`}
+                {role === "senior"
+                  ? ` · 등록 ${fallbackLabels(data.settings!, role).length}명`
+                  : ` · 대체 후보 ${fallbackLabels(data.settings!, role).length}개`}
               </summary>
-              <RunnerForm data={data} settings={data.settings!} role={role} />
               {role !== "senior" && (
-                <RunnerForm
-                  data={data}
-                  settings={data.settings!}
-                  role={role}
-                  fallback
-                />
+                <RunnerForm data={data} settings={data.settings!} role={role} />
               )}
+              <RunnerForm
+                data={data}
+                settings={data.settings!}
+                role={role}
+                fallback
+              />
             </details>
           ))}
           <Favorites settings={data.settings} />
@@ -253,7 +258,7 @@ function RunnerForm({
     role === "watch" && data.watch
       ? [data.watch.runner]
       : role === "senior" && data.senior
-        ? [data.senior.runner]
+        ? data.senior.runners
         : role === "explain" && data.explain
           ? data.explain.runners
           : Object.keys(data.catalog);
@@ -268,7 +273,7 @@ function RunnerForm({
   const initial = () =>
     fallback
       ? { runner: runners[0] || "", model: "", effort: "" }
-      : settings.presets[settings.activePreset].roles[role] || {
+      : (settings.presets[settings.activePreset].roles[role] as Choice | undefined) || {
           runner: runners[0] || "",
           model: "",
           effort: "",
@@ -299,7 +304,7 @@ function RunnerForm({
     setChoice(next);
     setDirty(true);
   };
-  const list = settings.presets[settings.activePreset].fallback?.[role] || [];
+  const list = listOf(settings, role) as Choice[];
   const favorites = settings.favorites || [];
   const blockedFor = (model: string) =>
     settings.blocked?.find(
@@ -402,7 +407,13 @@ function RunnerForm({
         }
       }}
     >
-      <h3>{fallback ? "대체 후보 순서" : "기본 실행 모델"}</h3>
+      <h3>
+        {role === "senior"
+          ? `등록된 시니어 (최대 ${data.senior?.max ?? 2}명, 전원에게 동시에 묻습니다)`
+          : fallback
+            ? "대체 후보 순서"
+            : "기본 실행 모델"}
+      </h3>
       {dirty && revision !== settings.revision && (
         <p className="warning">
           작성하는 사이 다른 곳에서 이 {fallback ? "대체 후보 목록" : "역할의 값"}이
@@ -410,7 +421,7 @@ function RunnerForm({
           {!fallback &&
             `(지금 값: ${
               settings.presets[settings.activePreset].roles[role]
-                ? label(settings.presets[settings.activePreset].roles[role])
+                ? label(settings.presets[settings.activePreset].roles[role] as Choice)
                 : "미설정"
             })`}
           . 이대로는 저장되지 않습니다.{" "}
@@ -555,7 +566,7 @@ function RunnerForm({
               {role === "watch"
                 ? `KADAN_JUDGE_MODEL=${choice.model} KADAN_JUDGE_EFFORT=${choice.effort || "max"} watch-judge.sh (codex exec)`
                 : role === "senior"
-                  ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (codex exec, 저장소 읽기 전용)`
+                  ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (${choice.runner} exec, 저장소 읽기 전용)`
                   : role === "explain"
                     ? "실행기 표의 exec 틀로 한 번 호출 (실행기 이름은 코드에 없음)"
                     : spec?.spawn
@@ -577,7 +588,13 @@ function RunnerForm({
           />
         </label>
         <button className="primary" value="add">
-          {busy ? "저장 중…" : fallback ? "대체 후보 추가" : "실행 모델 저장"}
+          {busy
+            ? "저장 중…"
+            : role === "senior"
+              ? "시니어 추가"
+              : fallback
+                ? "대체 후보 추가"
+                : "실행 모델 저장"}
         </button>
         {!fallback && (
           <button
