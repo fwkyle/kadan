@@ -1,4 +1,5 @@
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
+import {isUserActor} from './actors.mjs';
 // 원장 원문은 보존하고 카드 책임을 계산할 때만 확정된 인계를 반영한다.
 export function workEntries(entries, cards = null) {
   const identity = Array.isArray(cards) ? taskIdentity(cards) : cards;
@@ -93,6 +94,14 @@ export function turnState(work, cards) {
 // 대시보드는 'current'일 때만 차례 기록을 보인다(turnLabel).
 export function isTurnCurrent(work, cards) {
   return turnState(work, cards) === 'current';
+}
+
+// 차례 칸이 사용자 행위자(isUserActor)이고 기록이 current인 열린 업무는 사용자 답을 기다리는 중이다(2026-10-23 놀고 있음 PR-1 B4a).
+// stale·unknown은 해당하지 않는다: 옛 `@user`가 남은 업무가 영구 무경보가 되지 않게 지금처럼 owner로 돌린다.
+export const USER_TURN_WAIT_TAG = '사용자 대기(차례 칸)';
+export function userTurnWaitList(works, cards, env = process.env) {
+  return (works ?? []).filter(w => w?.status === 'open' && isUserActor(w.turnOwner, env) && turnState(w, cards) === 'current')
+    .map(w => ({ work: w.key, turnOwner: w.turnOwner, tag: USER_TURN_WAIT_TAG }));
 }
 
 // 감시는 시각이 없는 옛 기록(unknown)은 지금처럼 turnOwner를 따르고, 지난 기록(stale)은 역할 선택에서만 무효로 본다.

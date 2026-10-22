@@ -1,4 +1,5 @@
-import { workEntries, currentResponsibility } from "./handover-state.mjs";
+import { workEntries, currentResponsibility, turnState } from "./handover-state.mjs";
+import { isUserActor } from "./actors.mjs";
 import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
@@ -54,6 +55,15 @@ export function endedExecutionKeys({ cards, entries, liveSessions = null, now = 
   } catch { return new Set(); } // 원장 손상 등 모르면 예전처럼 진행 중으로 둔다
 }
 
+// 차례 칸에 관계표 밖 글이 current로 적혀 있어 업무가 책임 감독에게 돌아온 경우의 값(B4b, 2026-10-23). 판정은 바꾸지 않고
+// 경보 본문 안내에만 쓴다. 글 내용은 해석하지 않고 공백만 접어 40자에서 자른다. stale·unknown은 값 때문에 돌아온 것이 아니라 제외한다.
+const TURN_VALUE_CAP = 40;
+function outsideTurnValue(work, parents, cards) {
+  const value = typeof work.turnOwner === "string" ? work.turnOwner.replace(/\s+/g, " ").trim() : "";
+  if (!value || parents.has(work.turnOwner) || isUserActor(work.turnOwner) || turnState(work, cards) !== "current") return "";
+  return value.length > TURN_VALUE_CAP ? `${value.slice(0, TURN_VALUE_CAP)}…` : value;
+}
+
 // 실행이 다 끝났거나 아직 없는 열린 워크는 책임 감독의 할 일이다(2026-10-05 [kyle]: "매번 내가 말해 줘야 다음 걸 한다").
 // 진행 중 실행 = 카드가 assigned·hold인 것. draft·ready는 아직 발령 전이라 할 일로 본다.
 // 단 assigned라도 endedKeys()에 든 실행(끝났거나 담당 세션이 없음)은 진행 중으로 세지 않는다. endedKeys는 처음 필요할 때 한 번만 계산한다.
@@ -71,7 +81,8 @@ export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set
       && !(w.executions ?? []).some(inProgress))
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
     .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
-      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since }; });
+      const turnValue = outsideTurnValue(w, parents, cards);
+      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}) }; });
 }
 
 export function assessSupervisorIdle(
@@ -208,7 +219,7 @@ function ownReason(entry, role, answers, questions) {
     const asked = questions(id, role).slice(0, 3);
     return { id, reason: "답할 질문", ...(asked.length ? { questions: asked.map(m => ({ mailId: m.mailId, asker: m.asker ?? null })) } : {}) };
   }
-  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례" };
+  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례", ...(entry.turnValue ? { turnValue: entry.turnValue, workRevision: entry.workRevision } : {}) };
 }
 
 const BODY_ITEMS = 5;
@@ -225,6 +236,17 @@ export function idleOwnText(alert) {
     .map(q => `kadan send ${q.asker ?? "<질문자>"} --reply-to ${q.mailId} --reply-final '답'`);
   const hint = closes.length ? ` 답했으면 질문마다 닫는다: ${closes.join(" ; ")}` : "";
   return `본인 차례: ${names.join(", ")}${rest > 0 ? ` 외 ${rest}건` : ""}.${hint}`;
+}
+
+// 차례 칸의 관계표 밖 글 값 안내 두 줄(B4b). 첫 항목 하나만 안내한다. 값은 이미 40자에서 잘려 있다.
+export function idleTurnHint(alert) {
+  const item = alert?.idleItems?.ownWhy?.find(w => w.turnValue && w.id?.startsWith("work:"));
+  if (!item) return [];
+  const work = shellQuote(item.id.slice(5));
+  // 저장소는 오래된 화면의 쓰기를 거절하므로(revision 검사) 감시기가 아는 현재 revision을 명령에 채운다. 그 사이 바뀌면 거절되어 work show로 새 값을 본다.
+  const revision = Number.isInteger(item.workRevision) ? item.workRevision : "<revision>";
+  return [`차례 칸 값 '${item.turnValue}'는 관계표에 없어 책임 감독에게 계속 갑니다.`,
+    `사용자 답을 기다리면 \`--turn-owner @user\`, 밖에서 기다리면 \`kadan work update ${work} --revision ${revision} --status hold --next-action '…' --note '외부 대기'\`로 멈추세요. 거절되면 \`kadan work show ${work}\`로 새 revision을 보세요.`];
 }
 
 // 1단 본인 창 글에만 붙는 등록 명령 꼴(2026-10-22). 말로만 기다리면 감시가 답 대기로 못 알아보고 '놀고 있음'을 되풀이한다.
@@ -297,7 +319,7 @@ export function assessHierarchyIdle(entries, states, now, idleMs, parents, exclu
       own: cards.map(entry => entry.taskId).slice(0, ITEM_CAP),
       lower: open.filter(entry => !mine(entry)).map(entry => entry.taskId).slice(0, ITEM_CAP),
       userWait: waitIds.slice(0, ITEM_CAP),
-      // 본인 차례인 이유(own과 같은 순서·같은 20개 상한). 글자는 키·고정 낱말·ID뿐이다.
+      // 본인 차례인 이유(own과 같은 순서·같은 20개 상한). 글자는 키·고정 낱말·ID뿐이고, 관계표 밖 차례 값(turnValue)만 40자로 자른 원문이다.
       ownWhy: cards.slice(0, ITEM_CAP).map(entry => ownReason(entry, role, answers, questions)),
     };
     const extra = { lower, userWait: waitIds.length, idleItems: items };
