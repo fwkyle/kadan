@@ -630,5 +630,11 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .kb-mark-merge { background: #d5ece1; color: #14573f; }
 .kb-mark-stuck { background: #fff0d0; color: #794e00; }
 .kb-mark-hold { background: #efe5f3; color: #80578f; }
+.kb-mark-super { background: #e3e8f5; color: #2b3f86; }
+.kb-mark-phase { background: #d9ece4; color: #14573f; }
+.kb-mark-state { background: #edf0ed; color: #536159; }
+.kb-pick[role="group"] { display: inline-flex; gap: 4px; margin: 0 12px 6px 0; }
+.kb-toggle { font: inherit; font-size: 13px; padding: 3px 12px; border: 1px solid #c9d3cc; border-radius: 999px; background: #fff; color: #202724; cursor: pointer; white-space: nowrap; }
+.kb-toggle[aria-pressed="true"] { background: #2b47a8; border-color: #2b47a8; color: #fff; font-weight: 700; }
 .kb-empty, .kb-more { font-size: 12px; color: var(--ds-color-muted); margin: 0; }
 @media (max-width: 720px) { .kb-lines { grid-template-columns: 1fr; overflow-x: visible; } }

@@ -373,3 +373,77 @@ test("읽기 전용 새 주소 /api/dashboard/kanban: 쓰기 없이 판을 낸�
   assert.notEqual(post.status, 200, "쓰기 요청은 받지 않는다");
   assert.deepEqual((await get("kanban")).boards, data.boards, "읽어도 바뀌지 않는다");
 });
+
+// 프로젝트별 보기(group=project): 판 나누기 키만 repo로 바꾼다. 줄·묶음 규칙은 감독별과 같다.
+const projectOf = (result, key) => result.boards.filter((b) => b.lines.some((l) => l.cards.some((c) => c.key === key))).map((b) => b.label);
+const cardOf = (result, key) => result.boards.flatMap((b) => b.lines.flatMap((l) => l.cards)).find((c) => c.key === key);
+
+test("프로젝트별: 두 저장소 카드가 각 판에 나뉘고 repo 없는 카드는 저장소 모름 판에 둔다", () => {
+  const rows = [row("a/c1", { repo: "a" }), row("b/c2", { repo: "b" }), row("x/c3", { repo: "" })];
+  const result = buildKanban({ rows, hierarchy, now, group: "project" });
+  assert.equal(result.group, "project");
+  assert.deepEqual(result.boards.map((b) => b.label), ["a", "b", "저장소 모름"], "저장소 모름은 맨 아래");
+  assert.deepEqual(projectOf(result, "x/c3"), ["저장소 모름"]);
+  assert.equal(buildKanban({ rows, hierarchy, now }).group, "owner");
+});
+
+test("프로젝트별: 감독 배지는 감독별 보기에서 그 카드의 판 주인과 같고, 단계 값이 없으면 단계 배지가 없다", () => {
+  const w = [{ key: "a/work-1", title: "업무", owner: "감독B", repo: "a", executions: [{ key: "a/c1", phase: "review" }] }];
+  const rows = [row("a/c1", { repo: "a" }), row("a/c2", { repo: "a", rallyStep: "fix" }), row("a/c3", { repo: "a", rallyStep: "엉뚱" }), row("a/orphan", { repo: "a", owner: "무소속" })];
+  const byOwner = buildKanban({ rows, works: w, hierarchy, now });
+  const byProject = buildKanban({ rows, works: w, hierarchy, now, group: "project" });
+  for (const r of rows) assert.equal(cardOf(byProject, r.key).supervisor, lineOf(byOwner, r.key).split("/")[0], r.key);
+  assert.equal(cardOf(byProject, "a/orphan").supervisor, UNLINKED);
+  assert.deepEqual([cardOf(byProject, "a/c1").phase, cardOf(byProject, "a/c1").phaseLabel], ["review", "검수"], "업무 실행 phase");
+  assert.equal(cardOf(byProject, "a/c2").phaseLabel, "수정", "업무에 없으면 카드의 rallyStep");
+  assert.ok(!("phase" in cardOf(byProject, "a/c3")), "모르는 값은 지어내지 않는다");
+  assert.ok(!("supervisor" in cardOf(byOwner, "a/c1")), "감독별 보기의 카드 모양은 그대로");
+  assert.deepEqual(byProject.supervisors, ["감독A", "감독B", UNLINKED].sort((a, b) => a.localeCompare(b, "ko")));
+});
+
+test("프로젝트별 불변식: 같은 입력에서 열린 결정 ID는 감독별과 같은 줄 종류에만 나온다", () => {
+  const w = [{ key: "a/empty", title: "빈 업무", owner: "감독C", repo: "a", executions: [] }, { key: "a/work-1", title: "업무1", owner: "감독B", repo: "a", executions: [{ key: "a/c-w" }, { key: "b/c-x" }] }];
+  const decisions = [
+    mergeD("m1", { work: "a/empty" }), mergeD("m2", { card: "a/lone" }), { id: "n1", status: "open", to: "@user", card: "a/lone" },
+    mergeD("m3", { card: "a/c-w" }), mergeD("m4", { work: "a/work-1" }), mergeD("m5", { card: "b/none" }),
+  ];
+  const input = { rows: [row("a/c-w", { repo: "a" }), row("b/c-x", { repo: "b" })], lookup: [row("a/c-w", { repo: "a" }), row("b/c-x", { repo: "b" }), row("a/lone", { repo: "a", workType: "coordination" })], works: w, hierarchy, now, decisions };
+  const owner = buildKanban(input);
+  const project = buildKanban({ ...input, group: "project" });
+  for (const d of decisions) {
+    assert.equal(kinds(project, d.id).size, 1, `${d.id}는 한 줄 종류에만`);
+    assert.deepEqual([...kinds(project, d.id)], [...kinds(owner, d.id)], `${d.id} 줄 종류가 감독별과 같다`);
+  }
+  assert.deepEqual(shownDecisions(project), openIds(decisions));
+  assert.deepEqual(projectOf(project, "a/c-w"), ["a"]);
+  assert.deepEqual(projectOf(project, "b/c-x"), ["b"], "한 묶음이 두 저장소에 걸쳐 두 판에 나뉘어도 줄 종류는 같다");
+  assert.deepEqual(projectOf(project, "work:a/empty"), ["a"], "대신 보이는 업무 카드는 업무의 repo");
+  assert.deepEqual(projectOf(project, "b/none"), ["저장소 모름"], "출처를 못 찾은 자리표시 카드");
+});
+
+test("프로젝트별 owner 거르기: 그 감독의 카드만 프로젝트로 묶고 완료 상한도 그 안에서 센다", () => {
+  const done = Array.from({ length: DONE_LIMIT + 2 }, (_, i) => row(`a/d${i}`, { repo: "a", state: "done", bucket: "done", owner: "작업자", signalAt: ago(60_000 + i) }));
+  const other = row("a/o", { repo: "a", owner: "무소속" });
+  const result = buildKanban({ rows: [...done, other], hierarchy, now, group: "project", only: "감독A" });
+  assert.ok(!cardOf(result, "a/o"), "다른 감독 카드는 올리지 않는다");
+  assert.equal(result.boards[0].lines.at(-1).hidden, 2);
+  assert.deepEqual(result.supervisors, ["감독A", UNLINKED].sort((a, b) => a.localeCompare(b, "ko")), "고르기 목록은 거르기 전 전체");
+});
+
+test("프로젝트별 주소: ?group=project와 ?owner=를 같이 쓰면 그 감독 카드만", async (t) => {
+  const f = dashboardFixture({ mode: "sqlite" });
+  t.after(() => f.server.close());
+  await new Promise((resolve) => f.server.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + f.server.address().port + "/api/dashboard/";
+  const get = async (route) => JSON.parse(await (await fetch(base + route)).text());
+  const all = await get("kanban?group=project");
+  assert.equal(all.group, "project");
+  const cards = (d) => d.boards.flatMap((b) => b.lines.flatMap((l) => l.cards));
+  assert.ok(cards(all).length > 0 && cards(all).every((c) => typeof c.supervisor === "string"));
+  assert.deepEqual(all.owners, all.supervisors ?? all.owners);
+  const who = cards(all)[0].supervisor;
+  const one = await get("kanban?group=project&owner=" + encodeURIComponent(who));
+  assert.ok(cards(one).length > 0 && cards(one).every((c) => c.supervisor === who));
+  assert.deepEqual(one.owners, all.owners, "감독 고르기 목록은 거르기 전 전체");
+  assert.equal((await get("kanban")).group, "owner");
+});
