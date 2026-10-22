@@ -285,6 +285,66 @@ test("열린 결정 카드는 완료 줄에 들어가지 않는다(전체 보기
   assert.equal(lineOf(result, "r/x"), "감독A/decision");
 });
 
+// 수정 2라운드: 줄은 결정 묶음(연결 요소) 단위, PR 표시는 머지 요청에서만, 주소 경계.
+const kinds = (result, id) => new Set(cellsOf(result, id).map((l) => (l === "merge" ? "merge" : "decision")));
+
+test("F1 검수 반례(dualTarget): 머지 결정과 일반 결정이 한 업무를 공유하면 결정 ID마다 한 줄 종류만 나온다", () => {
+  const rs = [row("r/source", { state: "done", bucket: "done", signalAt: "2020-01-01T00:00:00Z", at: "2020-01-01T00:00:00Z" }), row("r/a"), row("r/b")];
+  const w = [{ key: "r/work", owner: "감독B", executions: [{ key: "r/a" }, { key: "r/b" }] }];
+  const decisions = [mergeD("merge", { card: "r/source", work: "r/work" }), { id: "normal", status: "open", to: "@user", card: "r/a", question: "범위를 늘릴까요?" }];
+  const result = buildKanban({ rows: rs, works: w, hierarchy, now, decisions });
+  assert.deepEqual([...kinds(result, "merge")], ["decision"]);
+  assert.deepEqual([...kinds(result, "normal")], ["decision"]);
+  for (const key of ["r/source", "r/a", "r/b"]) assert.equal(lineOf(result, key).split("/")[1], "decision", key);
+});
+
+test("F1 사슬: 카드 a{merge1, normal}, b{merge1, merge2}, c{merge2}는 모두 decision이고 merge2도 decision에만 나온다", () => {
+  const rs = [row("r/a"), row("r/b"), row("r/c")];
+  const w = [{ key: "r/w1", owner: "감독B", executions: [{ key: "r/b" }] }, { key: "r/w2", owner: "감독B", executions: [{ key: "r/c" }] }];
+  const decisions = [
+    mergeD("merge1", { card: "r/a", work: "r/w1" }), { id: "normal", status: "open", to: "@user", card: "r/a" },
+    mergeD("merge2", { card: "r/b", work: "r/w2" }),
+  ];
+  const result = buildKanban({ rows: rs, works: w, hierarchy, now, decisions });
+  for (const key of ["r/a", "r/b", "r/c"]) assert.equal(lineOf(result, key).split("/")[1], "decision", key);
+  for (const id of ["merge1", "merge2", "normal"]) assert.deepEqual([...kinds(result, id)], ["decision"], id);
+});
+
+test("F1 불변식: 모든 열린 결정 ID가 정확히 한 줄 종류에만 나온다(대신 보이는 카드 포함)", () => {
+  const w = [{ key: "r/empty", title: "빈 업무", owner: "감독C", executions: [] }, { key: "r/work-1", title: "업무1", owner: "감독B", executions: [{ key: "r/c-w" }] }];
+  const decisions = [
+    mergeD("m1", { work: "r/empty" }), mergeD("m2", { card: "r/lone" }), { id: "n1", status: "open", to: "@user", card: "r/lone" },
+    mergeD("m3", { card: "r/c-w" }), mergeD("m4", { work: "r/work-1" }), mergeD("m5", { card: "r/none" }),
+  ];
+  const result = buildKanban({ rows: [row("r/c-w")], lookup: [row("r/c-w"), row("r/lone", { workType: "coordination" })], works: w, hierarchy, now, decisions });
+  for (const d of decisions) assert.equal(kinds(result, d.id).size, 1, `${d.id}는 한 줄 종류에만`);
+  assert.deepEqual(shownDecisions(result), openIds(decisions));
+  assert.deepEqual([...kinds(result, "m2")], ["decision"], "같은 출처 카드의 일반 결정이 섞이면 묶음 전체가 kyle 확인 필요");
+  assert.deepEqual([...kinds(result, "m5")], ["merge"]);
+});
+
+test("F2: kyle 앞이 아닌 결정의 PR 주소로는 PR 표시를 만들지 않는다(카드·대신 보이는 카드 모두)", () => {
+  const other = { id: "o1", status: "open", to: "다른역할", card: "r/a", question: PR };
+  const result = buildKanban({ rows: [row("r/a")], hierarchy, now, decisions: [other] });
+  assert.equal(lineOf(result, "r/a"), "감독A/decision");
+  assert.deepEqual(result.boards[0].lines[0].cards[0].marks.map((m) => m.label), ["결정 대기(카드)"]);
+  const stand = buildKanban({ rows: [], lookup: [row("r/a")], hierarchy, now, decisions: [other] });
+  assert.deepEqual(stand.boards[0].lines[0].cards[0].marks.map((m) => m.label), ["결정 대기(카드)"]);
+});
+
+test("F3: PR 주소 경계 — 정확한 github.com 호스트, 번호 뒤 숫자·영문자 없음", () => {
+  const nums = (question) => prNumbers({ question });
+  for (const text of ["https://github.com/o/r/pull/12.", "https://github.com/o/r/pull/12,", "(https://github.com/o/r/pull/12)",
+    "[PR](https://github.com/o/r/pull/12)", "https://github.com/o/r/pull/12/files", "github.com/o/r/pull/12 머지", "PR github.com/o/r/pull/12"]) {
+    assert.deepEqual(nums(text), ["12"], text);
+  }
+  for (const text of ["https://github.com/o/r/issues/12", "https://notgithub.com/o/r/pull/12", "https://github.com.evil/o/r/pull/12",
+    "https://github.com/o/r/pull/12abc", "https://github.com/o/r/pull/12a", "xgithub.com/o/r/pull/12"]) {
+    assert.deepEqual(nums(text), [], text);
+    assert.equal(isMergeRequest(mergeD("x", { question: text })), false, text);
+  }
+});
+
 test("읽기 전용 새 주소 /api/dashboard/kanban: 쓰기 없이 판을 낸다", async (t) => {
   const f = dashboardFixture({ mode: "sqlite" });
   t.after(() => f.server.close());

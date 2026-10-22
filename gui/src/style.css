@@ -610,7 +610,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .kb-col h3 { font-size: 13px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 6px; text-wrap: balance; }
 .kb-col-decision { background: #e8ecf8; }
 .kb-col-merge { background: #e6f1ec; }
-.kb-fold { font-size: 13px; font-weight: 700; cursor: pointer; list-style: none; display: flex; gap: 6px; margin: 0 0 8px; }
+.kb-fold { text-wrap: balance; font-size: 13px; font-weight: 700; cursor: pointer; list-style: none; display: flex; gap: 6px; margin: 0 0 8px; }
 .kb-fold::before { content: "▸"; margin-right: 2px; }
 .kb-col[open] > .kb-fold::before { content: "▾"; }
 .kb-col:not([open]) > .kb-fold { margin-bottom: 0; }
