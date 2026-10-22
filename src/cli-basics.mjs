@@ -100,7 +100,7 @@ export function parseFlags(argv, {booleans = []} = {}) {
     if (
       arg === "--raw" || arg === "--hidden" || arg === "--user-notify" || arg === "--help" ||
       arg === "--writers-stopped" || arg === "--at-boundary" || arg === "--source-ended" ||
-      arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--all" ||
+      arg === "--force-no-card" || arg === "--expect-reply" || arg === "--reply-final" || arg === "--keep-turn" || arg === "--all" ||
       arg === "--unread" || arg === "--mailbox" || arg === "--dry-run" || arg === "--close-card" || arg === "--inherit-mail" || arg === "--previous-generations" ||
       arg === "--once" || arg === "--stdin" || arg === "--archive" ||
       arg === "--from-screen" || arg === "--next-block" || arg === "--no-prompt" || arg === "--auto" ||
