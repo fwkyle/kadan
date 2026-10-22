@@ -2,7 +2,7 @@
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { phraseAction } from "./watch-stop-phrases.mjs";
-import { idleCountsText, idleOwnText, buildIdleNudge } from "./watch-supervisor.mjs";
+import { idleCountsText, idleOwnText, idleRegisterHint, buildIdleNudge } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
 import { WATCH_ALERT_FOOTER } from "./watch-notice-format.mjs";
 
@@ -235,9 +235,10 @@ export const isDatabaseBusy=error=>error?.errcode===5||/database is locked|SQLIT
 
 // 역할 창에 넣는 경보·놀고 있음 알림: 첫 줄은 [watch HH:MM] 요약 한 줄 그대로, 그 아래에 항목 이름을 붙인다(2026-10-21 [kyle]).
 // 화면 출력·사용자 알림·원장은 이 틀이 아니라 formatAlertBody 한 줄을 쓴다.
-export function itemizedAlert(alert, clock) {
+export function itemizedAlert(alert, clock, ctx = null) {
   const idle = alert.kind === "놀고 있음";
   const own = idle ? idleOwnText(alert) : "";
+  const register = idle && alert.stage !== 2 ? idleRegisterHint(alert, ctx ?? {}) : "";
   let basis = "", todo = WATCH_ALERT_FOOTER;
   if (idle) {
     basis = `${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음`
@@ -248,5 +249,5 @@ export function itemizedAlert(alert, clock) {
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
   return [`[watch ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,
-    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), `할 일: ${todo}`].join("\n");
+    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), `할 일: ${todo}`].join("\n");
 }

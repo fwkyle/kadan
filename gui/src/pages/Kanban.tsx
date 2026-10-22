@@ -30,7 +30,7 @@ function Card({ card, line }: { card: KanbanCard; line: string }) {
   );
 }
 
-function Board({ board }: { board: KanbanBoard }) {
+function Board({ board, foldDone }: { board: KanbanBoard; foldDone: boolean }) {
   const total = board.lines.reduce((sum, line) => sum + line.count, 0);
   return (
     <section className="kb-board" aria-label={board.label + " 판"} data-fresh={`kbb:${board.label}:${board.lines.map((l) => l.count).join(",")}`}>
@@ -41,15 +41,21 @@ function Board({ board }: { board: KanbanBoard }) {
         </span>
       </header>
       <div className="kb-lines">
-        {board.lines.map((line) => (
-          <div key={line.key} className={"kb-col kb-col-" + line.key}>
-            <h3>{line.label}<span className="kb-count">{line.count}</span></h3>
-            {line.cards.length
-              ? <ul>{line.cards.map((card) => <Card key={card.key} card={card} line={line.key} />)}</ul>
-              : <p className="kb-empty">없음</p>}
-            {line.hidden > 0 && <p className="kb-more">나머지 {line.hidden}건</p>}
-          </div>
-        ))}
+        {board.lines.map((line) => {
+          const body = (
+            <>
+              {line.cards.length
+                ? <ul>{line.cards.map((card) => <Card key={card.key} card={card} line={line.key} />)}</ul>
+                : <p className="kb-empty">없음</p>}
+              {line.hidden > 0 && <p className="kb-more">나머지 {line.hidden}건</p>}
+            </>
+          );
+          const head = <>{line.label}<span className="kb-count">{line.count}</span></>;
+          // 전체 보기에서는 완료 줄을 접은 채 시작한다. 펼침 상태는 저장하지 않는다.
+          return foldDone && line.key === "done"
+            ? <details key={line.key} className={"kb-col kb-col-" + line.key}><summary className="kb-fold">{head}</summary>{body}</details>
+            : <div key={line.key} className={"kb-col kb-col-" + line.key}><h3>{head}</h3>{body}</div>;
+        })}
       </div>
     </section>
   );
@@ -62,7 +68,7 @@ export default function Kanban({ url }: { url: URL }) {
     <div className="kb-view" data-view="kanban">
       <header className="kb-lead">
         <h1>감독별 칸반</h1>
-        <p>감독마다 실행 카드가 어느 단계에 있는지 봅니다. 보기 전용이며, 완료는 최근 24시간만 보입니다. 열린 결정은 카드가 끝났어도, 실행 카드가 없는 업무여도 'kyle 확인 필요'에 보입니다.</p>
+        <p>감독마다 실행 카드가 어느 단계에 있는지 봅니다. 보기 전용이며, 완료는 최근 24시간만 보입니다. 전체 보기에서는 완료 줄이 접혀 있고 눌러서 펼칩니다(감독 하나를 고르면 펼쳐 보입니다). 열린 결정은 카드가 끝났어도, 실행 카드가 없는 업무여도 보입니다. kyle 앞에 놓인 PR 머지 요청(PR 주소가 있는 결정)은 '머지 요청' 줄에, 그 밖의 결정과 막힘은 'kyle 확인 필요' 줄에 따로 보입니다.</p>
         <label className="kb-pick">감독{" "}
           <select value={owner} onChange={(e) => patchLocation({ owner: e.target.value || null }, "kanban")}>
             <option value="">전체</option>
@@ -75,7 +81,7 @@ export default function Kanban({ url }: { url: URL }) {
       {data?.decisionError && <p className="error" role="alert">결정 기록을 읽지 못해 'kyle 확인 필요' 줄은 막힌 카드만 담았습니다: {data.decisionError}</p>}
       {data?.workError && <p className="error" role="alert">업무 기록을 읽지 못해 판을 관계표로만 나눴습니다: {data.workError}</p>}
       {!data ? <Loading /> : data.boards.length
-        ? data.boards.map((board) => <Board key={board.label} board={board} />)
+        ? data.boards.map((board) => <Board key={board.label} board={board} foldDone={!owner} />)
         : <p className="empty">보여 줄 카드가 없습니다.</p>}
       <Freshness collectedAt={data?.collectedAt} {...resource} />
     </div>
