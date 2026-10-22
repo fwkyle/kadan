@@ -12,17 +12,20 @@ const SAFE = /^[\w.:/@-]+$/;
 // 큰 문맥 모델 이름(예: claude-opus-5-5[1m])은 대괄호가 있어 셸이 파일 이름 패턴으로 읽지 않게 따옴표로 감싼다.
 // 긴 대화를 옮길 때는 원래와 같은 큰 문맥 모델이어야 문맥이 넘치지 않는다.
 const SAFE_MODEL = /^[\w.:/@[\]-]+$/;
+// 인자·사용법 검증 실패 표시. 이 오류는 인수 준비 전이라 비서 우편함에 알리지 않는다(2026-10-22 [kyle]).
+export const ADOPT_USAGE = 'KADAN_ADOPT_USAGE';
+const usageError = message => Object.assign(new Error(message), {code: ADOPT_USAGE});
 const shellModel = (model) => (/[[\]]/.test(model) ? `'${model}'` : model);
 
 // 실행기마다 "복제해서 이어 열기" 명령이 다르다. 모델은 꼭 적는다 — 모델이 안 적힌 창에는 카드 전송이 거부된다.
 export function adoptCommand({ harness, id, model, effort, permissionArgs = [] } = {}) {
-  if (!id || !SAFE.test(id)) throw new Error('대화 ID가 비었거나 쓸 수 없는 글자가 있다');
-  if (!model || !SAFE_MODEL.test(model)) throw new Error('--model이 필요하다 — 옮긴 감독 창에 모델이 적혀 있어야 카드 전송이 된다');
-  if (effort !== undefined && !/^[a-z]+$/.test(effort)) throw new Error('--effort는 영문 소문자 한 낱말이다(예: high)');
+  if (!id || !SAFE.test(id)) throw usageError('대화 ID가 비었거나 쓸 수 없는 글자가 있다');
+  if (!model || !SAFE_MODEL.test(model)) throw usageError('--model이 필요하다 — 옮긴 감독 창에 모델이 적혀 있어야 카드 전송이 된다');
+  if (effort !== undefined && !/^[a-z]+$/.test(effort)) throw usageError('--effort는 영문 소문자 한 낱말이다(예: high)');
   const permissions = permissionArgs.map(arg => ` ${shellArg(arg)}`).join('');
   if (harness === 'claude') return `claude --resume ${id} --fork-session --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}${permissions}`;
   if (harness === 'codex') return `codex fork ${id} --model ${shellModel(model)}${effort ? ` -c model_reasoning_effort=${effort}` : ''}${permissions}`;
-  throw new Error('--harness는 claude 또는 codex다');
+  throw usageError('--harness는 claude 또는 codex다');
 }
 
 // 지금 대화가 스스로 밝힌 ID와 생각 강도. Claude Code는 실행 중인 대화 ID를 CLAUDE_CODE_SESSION_ID로, 강도를 CLAUDE_EFFORT로
@@ -53,22 +56,22 @@ export function adoptPrompt(role, parent, profile = 'conductor') {
 export function runAdopt({role, flags = {}, env = process.env, floor, sessionName, start, send,
   log = console.log, sleep, findTranscript = findClaudeTranscript, inherit, prepare,
   notice = () => {}, monitor = () => {}} = {}) {
-  if (!role || /\s/.test(role)) throw new Error('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt] [--inherit-mail]');
+  if (!role || /\s/.test(role)) throw usageError('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt] [--inherit-mail]');
   const conversation = typeof flags.resume === 'string'
     ? { harness: typeof flags.harness === 'string' ? flags.harness : 'claude', id: flags.resume }
     : detectConversation(env);
-  if (!conversation) throw new Error('옮길 대화를 모른다 — Claude Code 안에서 실행하거나 --resume <대화ID> --harness codex로 알려 줘라');
+  if (!conversation) throw usageError('옮길 대화를 모른다 — Claude Code 안에서 실행하거나 --resume <대화ID> --harness codex로 알려 줘라');
   const profile = typeof flags.profile === 'string' ? flags.profile : 'conductor';
-  if (!ADOPT_PROFILES.includes(profile)) throw new Error('--profile은 conductor(감독) 또는 super(슈퍼감독)다');
+  if (!ADOPT_PROFILES.includes(profile)) throw usageError('--profile은 conductor(감독) 또는 super(슈퍼감독)다');
   const parent = typeof flags.parent === 'string' ? flags.parent : '@user';
   // Validate basic arguments before reading private conversation state.
   adoptCommand({...conversation, model: flags.model});
   const session = sessionName(role);
   // 살아 있는 세션을 재사용하면 대화가 옮겨지지 않은 채 "옮겼다"고 보고하게 된다.
-  if (floor.alive(session)) throw new Error(`이미 살아 있음: ${session} — 다른 이름을 써라`);
+  if (floor.alive(session)) throw usageError(`이미 살아 있음: ${session} — 다른 이름을 써라`);
   if (conversation.harness === 'claude') {
     const found = findTranscript({ id: conversation.id });
-    if (!found.ok) throw new Error(found.elsewhere
+    if (!found.ok) throw usageError(found.elsewhere
       ? `이 폴더에서 시작한 대화가 아니다(기록 폴더 ${found.elsewhere}) — 대화를 시작한 폴더에서 실행해라`
       : `대화 기록을 찾지 못했다: ${conversation.id}`);
   }
