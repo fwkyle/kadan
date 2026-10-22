@@ -8,6 +8,7 @@ import { RECENT_MS } from "./dashboard-execution.mjs";
 
 export const KANBAN_LINES = [
   ["decision", "kyle 확인 필요"],
+  ["merge", "머지 요청"],
   ["review", "검수"],
   ["working", "작업중"],
   ["before", "발령 전"],
@@ -21,11 +22,24 @@ const bareWork = (key) => String(key ?? "").replace(/^work:/, "");
 const sinceOf = (row) => row.signalAt || row.at || null;
 const time = (value) => (Number.isFinite(Date.parse(value)) ? Date.parse(value) : null);
 
+// 머지 요청 결정: 열린 결정이고, kyle 앞이고, 질문이나 이유에 GitHub PR 주소가 있다.
+// 결정 기록에 따로 필드를 두지 않고 이 세 조건으로만 가른다(우편 글에서 추측하지 않는다).
+const PR_URL = /github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)/g;
+export function prNumbers(decision) {
+  const text = `${decision?.question ?? ""}\n${decision?.reason ?? ""}`;
+  return [...new Set([...text.matchAll(PR_URL)].map((m) => m[1]))];
+}
+export const isMergeRequest = (decision) =>
+  decision?.status === "open" && decision.to === "@user" && prNumbers(decision).length > 0;
+const allMerge = (list) => list.length > 0 && list.every(isMergeRequest);
+const prMarks = (list) => [...new Set(list.flatMap(prNumbers))].map((n) => ({ kind: "merge", label: `PR #${n}` }));
+
 // 먼저 맞는 줄. 열린 결정 > (끝나지 않은 카드의) 막힘 > 검수 > 작업중 > 발령 전 > 완료.
 // 열린 결정은 상태·24시간·완료 상한보다 먼저다. 끝난 카드에 걸려도 kyle 확인 필요에 둔다(2라운드 F1).
-export function kanbanLine(row, { decided = false, now = Date.now() } = {}) {
+// 걸린 열린 결정이 모두 머지 요청(mergeOnly)이면 kyle 확인 필요 대신 머지 요청 줄이다. 하나라도 다르면 kyle 확인 필요.
+export function kanbanLine(row, { decided = false, mergeOnly = false, now = Date.now() } = {}) {
   const bucket = statusBucket(row.state);
-  if (decided) return "decision";
+  if (decided) return mergeOnly ? "merge" : "decision";
   if (bucket === "end") {
     const at = time(sinceOf(row));
     return at !== null && at <= now && now - at <= RECENT_MS ? "done" : null;
@@ -92,7 +106,8 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     const workDecided = work !== null && decidedWorks.has(bareWork(work.key)) && (!ended || elevated.has(row.key));
     const byCard = decidedCards.has(row.key);
     const decided = byCard || workDecided;
-    const line = kanbanLine(row, { decided, now });
+    const attached = open.filter((d) => d.card === row.key || (workDecided && bareWork(d.work) === bareWork(work.key)));
+    const line = kanbanLine(row, { decided, mergeOnly: allMerge(attached), now });
     if (line === null) continue;
     // 판: 연결된 업무의 owner → 담당 역할의 관계표 부모 → 미연결. 조용히 빼지 않는다.
     const parent = row.owner && parents ? parents.get(row.owner) : null;
@@ -108,8 +123,8 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
       healthLabel: row.healthLabel || "",
       workKey: work?.key ?? null,
       workTitle: work?.title ?? null,
-      marks: marksOf(row, { byCard, byWork: workDecided }),
-      decisionIds: open.filter((d) => d.card === row.key || (workDecided && bareWork(d.work) === bareWork(work.key))).map((d) => d.id),
+      marks: [...marksOf(row, { byCard, byWork: workDecided }), ...prMarks(attached)],
+      decisionIds: attached.map((d) => d.id),
       signalAt: row.signalAt || null,
       at: row.at || null,
       since: sinceOf(row),
@@ -150,13 +165,18 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
           at: d.at || null,
           since: d.at || null,
         },
+        decided: [],
       });
     }
     const entry = stand.get(key);
     entry.card.decisionIds.push(d.id);
+    entry.decided.push(d);
     if (time(d.at) !== null && (time(entry.card.since) === null || time(d.at) > time(entry.card.since))) entry.card.since = entry.card.at = d.at;
   }
-  for (const { owner, card } of stand.values()) boardFor(owner).lines.decision.push(card);
+  for (const { owner, card, decided } of stand.values()) {
+    card.marks.push(...prMarks(decided));
+    boardFor(owner).lines[allMerge(decided) ? "merge" : "decision"].push(card);
+  }
 
   const newest = (a, b) => (time(b.since) ?? 0) - (time(a.since) ?? 0);
   const result = [...boards.values()].map((board) => {
