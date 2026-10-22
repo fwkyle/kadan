@@ -1,5 +1,7 @@
 // kadan tree·wall·dashboard (HW-3-impl: cli.mjs에서 옮김)
 import { readLedgerState, projectLedger } from "../ledger-domains.mjs";
+import { readLedgerStateIncremental, readLedgerIncremental } from "../ledger-incremental.mjs";
+import { storageMode } from "../storage.mjs";
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { attachWatchOverview } from "../watch-overview.mjs";
 import { watchProcessName } from "../watch-system.mjs";
@@ -53,8 +55,12 @@ export function loadWallSnapshot(runtime=null) {
   const errors = [];
   try {
     ({ state: ledgerState, entries } = wallCache.memo("ledger", version, () => {
-      const state = readLedgerState(home);
-      return { state, entries: projectLedger(state) };
+      // SQLite는 커서 뒤 새 사건만 읽는다. 버전마다 entries는 새 배열이다. JSONL은 전체 읽기 한 번으로 둘 다 만든다.
+      if (storageMode(home) !== "sqlite") {
+        const state = readLedgerState(home);
+        return { state, entries: projectLedger(state) };
+      }
+      return { state: readLedgerStateIncremental(home), entries: readLedgerIncremental(home) };
     }));
     ledgerLines = entries.length;
   } catch (error) {

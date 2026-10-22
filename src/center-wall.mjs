@@ -25,7 +25,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
-import {appendLedger,readLedger} from './ledger.mjs';
+import {appendLedger} from './ledger.mjs';
+import {readLedgerIncremental} from './ledger-incremental.mjs';
 import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
@@ -195,7 +196,7 @@ export function askMessage({unit,text,context}) {
  return `[대시보드 질문 · ${unit}]\n${text}${context?`\n\n${context}`:''}\n\n이 편지는 사용자의 질문이다. 새 발령·승인이 아니다.`;
 }
 
-export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedger(home))}={}) {
+export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedgerIncremental(home))}={}) {
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
@@ -223,7 +224,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     if(!reason)throw new Error('다시 띄우는 이유를 적어 주세요');
     if(!/^\d+$/.test(expectPid))throw new Error('이 역할의 지금 세대 표시(pane PID 숫자)가 없다 — 화면을 새로 읽은 뒤 다시 시도하세요');
     // 별칭('-역할'·'역할-' 등)은 같은 세션을 가리켜도 거절한다 — 최근 시작이 기록한 정확한 이름만 받는다(2026-10-15 2라운드).
-    const latest=readLedger(home).findLast(x=>x.kind==='start'&&x.session===sessionName(role));
+    const latest=readLedgerIncremental(home).findLast(x=>x.kind==='start'&&x.session===sessionName(role));
     if(!latest||latest.role!==role)throw new Error('역할 이름이 최근 시작 기록과 다르다 — 목록을 새로 읽고 정확한 이름으로 다시 시도하세요');
     saved('/#runner-settings',await restart({role,reason,expectPid}));return true;
    }
@@ -232,7 +233,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     if(!/^[\p{L}\p{N}_-]+$/u.test(unit))throw new Error('물을 유닛 이름이 올바르지 않다');
     if(!text)throw new Error('물어볼 내용을 적어 주세요');
     if(text.length>4000||context.length>2000)throw new Error('질문이 너무 길다(본문 4000자·유닛 정보 2000자 이하)');
-    let profiles=null;try{profiles=superProfiles(readLedger(home));}catch{}
+    let profiles=null;try{profiles=superProfiles(readLedgerIncremental(home));}catch{}
     const to=askRecipient(unit,hierarchy(),profiles);
     saved('/#strategy-map',await ask({to,message:askMessage({unit,text,context})}));return true;
    }
