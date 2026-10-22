@@ -158,6 +158,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 4. 마지막 `start`의 명령에서 대화 인자만 바꾼다(`resume` 틀의 꼬리). 실행기·모델이 같고 같은 대화(resume)로 읽혀야 한다. 갈라 연 명령(`adopt`의 `--fork-session` 등)은 표에 `fork` 틀이 있으면 그 꼬리를 떼고 살아 있는 대화로 resume한다.
 5. `stop`(`restart: true` 표시) → 같은 작업 폴더에서 새 명령으로 시작 → 기계 창 설정(`KADAN_WINDOW`)대로 창을 연다 → `start`에 `restartOf`(옛 start의 지문)·`restartConversation`을 적는다. `restartOf`는 `restoredFrom`처럼 새 세대가 아니다(우편·책임·감시 발령을 이어받음).
 
+- 비서 복원 명령의 `--model`·`-c`는 키마다 시작 명령의 것이 이기고 대화의 옵션은 빈 키만 채운다([복원 규칙](recovery.md#로그인-때-비서-대화-복원)).
 - `비서`는 일반 찾기 대신 `kadan up`과 같은 체크포인트(`secretary-resume.json`) 경로로 같은 `start` 사건을 만든다. 체크포인트를 못 만들면(codex가 아닌 비서·래퍼 명령) 끄지 않고 거절하며, 새 `start`에도 `restartOf`(`--force`면 `forced`·`forcedTasks`)를 남겨 감시 발령이 이어진다. `restart: true`인 `stop`은 사용자가 직접 끈 것으로 읽히지 않는다.
 - 감시: `stop`과 `start` 사이 몇 초 동안 감시가 그 세션을 죽은 것으로 볼 수 있다. 감시 한 주기보다 훨씬 짧아 보통 경보가 나기 전에 끝나지만, 따로 감시를 멈추는 표시는 없다(한계).
 - 운영 소켓의 역할에 쓰려면 먼저 해당 `runner-settings.json`에 표를 채워야 한다(없으면 "미지원"으로 거절).
