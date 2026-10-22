@@ -88,6 +88,35 @@ export function liveSecretaryTranscript(panePid, run = spawnSync) {
   return files[0];
 }
 
+// 저장된 체크포인트가 지금 비서 시작 기록·대화 파일과 맞는지 본다. 복원(resumeSecretary)과 doctor가 같은 판정을 쓴다. 읽기만 한다.
+function assertCheckpointMatches(saved, start) {
+  const identity = transcriptIdentity(saved.transcript);
+  const resumeWords = commandWords(saved.command);
+  if (saved.version !== 1 || saved.startDigest !== startDigest(start)
+    || saved.conversation !== identity.id || saved.cwd !== identity.cwd || saved.cwd !== start.cwd
+    || resumeWords?.[0]?.split('/').pop() !== 'codex' || resumeWords[1] !== 'resume'
+    || resumeWords[2] !== identity.id || !fs.statSync(saved.cwd).isDirectory()) {
+    throw new Error('저장된 비서 대화와 현재 역할 기록이 다릅니다. 자동 복원을 중단합니다.');
+  }
+}
+
+// doctor용 읽기 전용 조회. 파일을 만들거나 고치지 않는다. kind:
+// 'none'(비서 시작 기록 없음) | 'stopped'(사람이 끔) | 'not-codex'(체크포인트 대상 아님) | 'missing' | 'broken' | 'ok'
+export function inspectSecretaryCheckpoint({home, entries}) {
+  let start;
+  try { start = secretaryStart(entries); } catch (error) { return {kind: 'stopped', message: error.message}; }
+  if (!start) return {kind: 'none'};
+  const words = commandWords(start.cmd);
+  const runner = words?.[0]?.split('/').pop() ?? null;
+  if (runner !== 'codex') return {kind: 'not-codex', runner};
+  const file = checkpointPath(home);
+  if (!fs.existsSync(file)) return {kind: 'missing', file};
+  try {
+    assertCheckpointMatches(JSON.parse(fs.readFileSync(file, 'utf8')), start);
+    return {kind: 'ok', file};
+  } catch (error) { return {kind: 'broken', file, message: error.message}; }
+}
+
 export function checkpointSecretary({home, floor, read = () => readSystemLedger(home),
   findTranscript = liveSecretaryTranscript} = {}) {
   const entries = read();
@@ -136,14 +165,7 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
     const file = checkpointPath(home);
     if (!fs.existsSync(file)) throw new Error('이전 비서 대화 정보가 없습니다. 새 비서를 중복 생성하지 않습니다.');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const identity = transcriptIdentity(saved.transcript);
-    const resumeWords = commandWords(saved.command);
-    if (saved.version !== 1 || saved.startDigest !== startDigest(start)
-      || saved.conversation !== identity.id || saved.cwd !== identity.cwd || saved.cwd !== start.cwd
-      || resumeWords?.[0]?.split('/').pop() !== 'codex' || resumeWords[1] !== 'resume'
-      || resumeWords[2] !== identity.id || !fs.statSync(saved.cwd).isDirectory()) {
-      throw new Error('저장된 비서 대화와 현재 역할 기록이 다릅니다. 자동 복원을 중단합니다.');
-    }
+    assertCheckpointMatches(saved, start);
     const window = currentRottieWindow(entries, start.session);
     const savedCommand = dedupeResumeCommand(saved.command); // 이미 겹쳐 쌓인 체크포인트도 한 벌로 낫는다
     const command = withInlineScreen(savedCommand); // 옛 체크포인트에도 인라인 화면을 붙인다
