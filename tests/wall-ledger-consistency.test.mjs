@@ -1,0 +1,42 @@
+import './helpers/isolated-home.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createDatabase,writeStorageMarker} from '../src/storage.mjs';
+import {WorkStore} from '../src/work-store.mjs';
+import {CardStore} from '../src/card-store.mjs';
+import {appendLedger} from '../src/ledger.mjs';
+import {projectLedger} from '../src/ledger-domains.mjs';
+import {loadWallSnapshot} from '../src/commands/tree-wall.mjs';
+import {prepareCenterWall} from '../src/center-wall.mjs';
+import {dashboardData} from '../src/dashboard-api.mjs';
+import {floor} from '../src/floor.mjs';
+import {wallCache} from '../src/wall-snapshot-cache.mjs';
+import {resetIncremental} from '../src/ledger-incremental.mjs';
+
+// Why: 대시보드 한 번의 수집에서 state와 entries가 같은 순번까지만 보여야 한다(PR #252 검수 F1). 두 읽기 사이 주입 훅은 src에 없다.
+test('한 수집 일관성: 완료 사건 직후에도 카드 done과 업무 후속 판단이 같은 원장을 본다',()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-wall-consistency-'));
+ process.env.KADAN_HOME=home;
+ createDatabase(home);writeStorageMarker(home,'sqlite');
+ floor.list=()=>[];wallCache.clear();resetIncremental();
+ const store=new WorkStore(home),cards=new CardStore(home);
+ store.create({key:'repo/race',title:'일관성',goal:'원장 일관성',scope:'격리',acceptance:'두 값 같음',owner:'boss',repoPath:home});
+ let w=store.get('repo/race');
+ store.change(w.key,'execute',{title:'검수 실행',body:'격리',phase:'review',round:1},{revision:w.revision,by:'boss',note:'검수'});
+ w=store.get(w.key);const key=w.executions[0].key,id=key.split('/')[1];
+ cards.update(key,{role:'worker',status:'assigned',board:'race',scope:'isolated',rallyId:'race',rallyTitle:'재현',rallyRound:'1',rallyStep:'review'},{revision:1,by:'boss',note:'배정'});
+ const t=Date.now()+1000;
+ appendLedger({kind:'send',role:'worker',by:'boss',executionKey:key,taskId:id,t:new Date(t).toISOString()},home);
+ loadWallSnapshot();
+ appendLedger({kind:'done',role:'worker',taskId:id,executionKey:key,result:'ok',t:new Date(t+1000).toISOString()},home);
+ const snap={...loadWallSnapshot(),home};
+ assert.equal(JSON.stringify(snap.entries),JSON.stringify(projectLedger(snap.ledgerState)));
+ const model=prepareCenterWall(snap),work=model.works[0],card=snap.center.cards.find(c=>c.key===key);
+ assert.equal(card.displayState,'done');
+ assert.equal(work.ended.length,1);
+ assert.equal(work.followup.executions[0].state,'confirm');
+ assert.ok(dashboardData(snap,new URL('http://x/api/dashboard/workspace')));
+});
