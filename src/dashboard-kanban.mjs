@@ -5,6 +5,7 @@
 import { isSuperRole, nearestSuper } from "./super-role.mjs";
 import { statusBucket, statusLabel } from "./status-labels.mjs";
 import { RECENT_MS } from "./dashboard-execution.mjs";
+import { workPhases } from "./work-store.mjs";
 
 export const KANBAN_LINES = [
   ["decision", "kyle 확인 필요"],
@@ -17,6 +18,7 @@ export const KANBAN_LINES = [
 // 완료 줄은 최신 몇 건만 보이고 나머지는 개수로 말한다(전체 현황의 접힘 규칙과 같은 크기).
 export const DONE_LIMIT = 10;
 export const UNLINKED = "미연결";
+export const UNKNOWN_REPO = "저장소 모름";
 
 const bareWork = (key) => String(key ?? "").replace(/^work:/, "");
 const sinceOf = (row) => row.signalAt || row.at || null;
@@ -68,7 +70,11 @@ function marksOf(row, { byCard, byWork }) {
 // rows: 실행 카드 행(model().rows 중 실행) · works: 업무(owner는 이미 현재 책임 감독) · decisions: 결정 목록 또는 null
 // hierarchy: 역할 → 상위 역할 · profiles: superProfiles() 결과 또는 null
 // lookup: 판에 올리지 않지만 결정의 출처 카드를 찾는 데 쓰는 행(조율 카드 포함). 모르면 rows만 쓴다.
-export function buildKanban({ rows = [], works = [], decisions = [], hierarchy = null, profiles = null, now = Date.now(), lookup = rows }) {
+// group: "owner"(기본, 감독별) | "project"(저장소별). 줄·묶음은 판을 나누기 전에 전체에서 정하고, 판 나누기 키만 바꾼다.
+// project에서만 카드에 감독 배지(supervisor)와 단계(phase)를 더한다. only: project 보기에서 그 감독 판의 카드만 올린다.
+export function buildKanban({ rows = [], works = [], decisions = [], hierarchy = null, profiles = null, now = Date.now(), lookup = rows, group = "owner", only = null }) {
+  const project = group === "project";
+  const supervisors = new Set(); // project 보기의 감독 고르기 목록(only로 거르기 전 전체)
   const workOf = new Map();
   for (const w of works ?? []) for (const e of w.executions ?? []) workOf.set(e.key, w);
   const open = decisions === null ? [] : decisions.filter((d) => d.status === "open");
@@ -77,14 +83,14 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
   const parents = hierarchy && typeof hierarchy === "object" ? new Map(Object.entries(hierarchy)) : null;
 
   const boards = new Map();
-  const boardFor = (owner) => {
-    const id = owner || UNLINKED;
+  const boardFor = (owner, repo = "") => {
+    const id = project ? repo || UNKNOWN_REPO : owner || UNLINKED;
     if (!boards.has(id)) {
       boards.set(id, {
-        owner: owner || null,
+        owner: project ? null : owner || null,
         label: id,
-        super: owner && parents ? nearestSuper(owner, parents, profiles) : null,
-        isSuper: Boolean(owner && parents && isSuperRole(owner, parents, profiles)),
+        super: !project && owner && parents ? nearestSuper(owner, parents, profiles) : null,
+        isSuper: Boolean(!project && owner && parents && isSuperRole(owner, parents, profiles)),
         lines: Object.fromEntries(KANBAN_LINES.map(([key]) => [key, []])),
       });
     }
@@ -102,6 +108,17 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     if (!decidedWorks.has(bareWork(key)) || list.some((r) => statusBucket(r.state) !== "end")) continue;
     elevated.add([...list].sort((a, b) => (time(sinceOf(b)) ?? 0) - (time(sinceOf(a)) ?? 0))[0].key);
   }
+
+  // 프로젝트별 보기의 배지. 감독 배지는 감독별 보기에서 그 카드가 들어갈 판의 주인이다.
+  // 단계는 업무 실행 기록(없으면 카드의 rallyStep)에서 알려진 값만 쓰고, 없으면 만들지 않는다.
+  const phaseOf = (work, row) => {
+    const phase = work?.executions?.find((e) => e.key === row.key)?.phase ?? row.rallyStep;
+    return Object.hasOwn(workPhases, phase) ? phase : null;
+  };
+  const projectBadges = (owner, phase) => ({
+    supervisor: owner || UNLINKED,
+    ...(phase ? { phase, phaseLabel: workPhases[phase] } : {}),
+  });
 
   // 카드 한 장에 걸린 열린 결정(카드 결정 + 끌어올려진 업무 결정)
   const attachedOf = (row) => {
@@ -145,7 +162,10 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     // 판: 연결된 업무의 owner → 담당 역할의 관계표 부모 → 미연결. 조용히 빼지 않는다.
     const parent = row.owner && parents ? parents.get(row.owner) : null;
     const owner = work?.owner || (parent && parent !== "@user" ? parent : null);
-    boardFor(owner).lines[line].push({
+    supervisors.add(owner || UNLINKED);
+    if (project && only !== null && (owner || UNLINKED) !== only) continue;
+    const phase = project ? phaseOf(work, row) : null;
+    boardFor(owner, row.repo).lines[line].push({
       key: row.key,
       title: row.title,
       role: row.owner || "",
@@ -161,6 +181,7 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
       signalAt: row.signalAt || null,
       at: row.at || null,
       since: sinceOf(row),
+      ...(project ? projectBadges(owner, phase) : {}),
     });
   }
 
@@ -177,8 +198,11 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     if (!stand.has(key)) {
       const parent = src?.owner && parents ? parents.get(src.owner) : null;
       const owner = w ? w.owner || null : parent && parent !== "@user" ? parent : null;
+      // 프로젝트 판 키. 업무가 있으면 업무의 repo만 보고(비면 저장소 모름), 업무가 없을 때만 출처 카드의 repo를 본다.
+      // 카드 칸(repo)은 main과 같게 출처 카드 값을 그대로 둔다.
       stand.set(key, {
         owner,
+        projectRepo: w ? w.repo || "" : src?.repo || "",
         card: {
           key,
           title: w ? w.title || bareWork(w.key) : src?.title || d.card,
@@ -195,6 +219,7 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
           signalAt: null,
           at: d.at || null,
           since: d.at || null,
+          ...(project ? projectBadges(owner, null) : {}),
         },
         decided: [],
       });
@@ -204,9 +229,11 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     entry.decided.push(d);
     if (time(d.at) !== null && (time(entry.card.since) === null || time(d.at) > time(entry.card.since))) entry.card.since = entry.card.at = d.at;
   }
-  for (const { owner, card, decided } of stand.values()) {
+  for (const { owner, projectRepo, card, decided } of stand.values()) {
     card.marks.push(...prMarks(decided));
-    boardFor(owner).lines[bundleIsMerge(decided) ? "merge" : "decision"].push(card);
+    supervisors.add(owner || UNLINKED);
+    if (project && only !== null && (owner || UNLINKED) !== only) continue;
+    boardFor(owner, projectRepo).lines[bundleIsMerge(decided) ? "merge" : "decision"].push(card);
   }
 
   const newest = (a, b) => (time(b.since) ?? 0) - (time(a.since) ?? 0);
@@ -218,7 +245,8 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     });
     return { owner: board.owner, label: board.label, super: board.super, isSuper: board.isSuper, lines };
   });
-  // 감독 이름순, 미연결은 맨 아래.
-  result.sort((a, b) => (a.owner === null) - (b.owner === null) || String(a.owner).localeCompare(String(b.owner), "ko"));
-  return { boards: result, lines: KANBAN_LINES.map(([key, label]) => ({ key, label })), doneWindowMs: RECENT_MS, doneLimit: DONE_LIMIT };
+  // 감독(저장소) 이름순, 미연결(저장소 모름)은 맨 아래.
+  const last = project ? UNKNOWN_REPO : UNLINKED;
+  result.sort((a, b) => (a.label === last) - (b.label === last) || a.label.localeCompare(b.label, "ko"));
+  return { group: project ? "project" : "owner", supervisors: [...supervisors].sort((a, b) => a.localeCompare(b, "ko")), boards: result, lines: KANBAN_LINES.map(([key, label]) => ({ key, label })), doneWindowMs: RECENT_MS, doneLimit: DONE_LIMIT };
 }
