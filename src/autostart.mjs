@@ -53,13 +53,29 @@ ${vars.join('\n')}
 `;
 }
 
+const STALE_FIX = 'kadan autostart remove → kadan autostart install → launchctl 재적재 (status는 고치지 않는다)';
+const unxml = (s) => s.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+
+// 설치된 plist에 적힌 node·cli·KADAN_ROTTIE_BIN 경로가 지금도 있는지 읽기만 한다. 없는 것만 돌려준다.
+export function staleAutostartPaths(plistText) {
+  const args = [...(plistText.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => unxml(m[1]));
+  const rottie = plistText.match(/<key>KADAN_ROTTIE_BIN<\/key>\s*<string>([^<]*)<\/string>/)?.[1];
+  const checks = [['node', args[0]], ['cli', args[1]], ['KADAN_ROTTIE_BIN', rottie === undefined ? undefined : unxml(rottie)]];
+  return checks.filter(([, p]) => p !== undefined && !fs.existsSync(p)).map(([what, p]) => ({ what, path: p }));
+}
+
 // show: 만들 파일을 보여 주기만 한다. install: 없을 때만 쓴다(다른 내용이 있으면 remove 먼저). remove: 지우지 않고 .trash로 옮긴다.
 export function autostartCommand(action, { home, cli, node = process.execPath, cwd = process.cwd(), env = process.env, userHome = os.homedir(), now = new Date() } = {}) {
   const file = autostartPath(userHome);
   const content = autostartPlist({ node, cli, cwd, env, logPath: path.join(home, 'autostart.log') });
   const exists = fs.existsSync(file);
   if (action === 'show') return { file, installed: exists, content };
-  if (action === 'status') return { file, installed: exists, current: exists ? fs.readFileSync(file, 'utf8') === content : null };
+  if (action === 'status') {
+    if (!exists) return { file, installed: false, current: null };
+    const installed = fs.readFileSync(file, 'utf8');
+    const stale = staleAutostartPaths(installed);
+    return { file, installed: true, current: installed === content, stale, ...(stale.length ? { fix: STALE_FIX } : {}) };
+  }
   if (action === 'install') {
     if (exists) {
       if (fs.readFileSync(file, 'utf8') === content) return { file, installed: true, changed: false };

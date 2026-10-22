@@ -43,3 +43,36 @@ test('show는 쓰지 않고, install은 없을 때만 쓰고, 같은 내용이�
   assert.equal(autostartCommand('remove', opts).changed, false);
   assert.throws(() => autostartCommand('bogus', opts), /사용법/);
 });
+
+// 낡은 경로 검사: 가짜 경로만 쓴다. plist는 임시 userHome 안에 직접 쓴다.
+const stalePlist = (userHome, { node, cli, rottie }) => {
+  const file = path.join(userHome, 'Library', 'LaunchAgents', AUTOSTART_LABEL + '.plist');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, autostartPlist({ node, cli, cwd: '/work', env: { ...env, KADAN_ROTTIE_BIN: rottie }, logPath: '/k/autostart.log' }));
+};
+const touch = (dir, name) => { const p = path.join(dir, name); fs.writeFileSync(p, ''); return p; };
+
+test('status: 경로가 모두 있으면 stale 없음, 하나라도 없으면 항목별로 알리고 다시 만드는 명령을 준다', () => {
+  const opts = base();
+  const bins = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autostart-bins-'));
+  const [node, cli, rottie] = ['node', 'cli.mjs', 'rottie'].map((n) => touch(bins, n));
+  stalePlist(opts.userHome, { node, cli, rottie });
+  assert.deepEqual(autostartCommand('status', opts).stale, []);
+  for (const [key, label] of [['node', 'node'], ['cli', 'cli'], ['rottie', 'KADAN_ROTTIE_BIN']]) {
+    const paths = { node, cli, rottie, [key]: path.join(bins, 'gone-' + key) };
+    stalePlist(opts.userHome, paths);
+    const s = autostartCommand('status', opts);
+    assert.deepEqual(s.stale, [{ what: label, path: paths[key] }], `${label} 없음`);
+    assert.match(s.fix, /kadan autostart remove.*kadan autostart install/s);
+  }
+});
+
+test('status: plist가 없으면 stale 검사를 하지 않고, 검사는 파일을 바꾸지 않는다', () => {
+  const opts = base();
+  assert.equal(autostartCommand('status', opts).stale, undefined);
+  stalePlist(opts.userHome, { node: '/gone/node', cli: '/gone/cli.mjs', rottie: '/gone/rottie' });
+  const file = autostartCommand('status', opts).file;
+  const before = fs.readFileSync(file, 'utf8');
+  assert.equal(autostartCommand('status', opts).stale.length, 3);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'status는 읽기만 한다');
+});
