@@ -105,8 +105,10 @@ export function readStream(home,stream,{optional=false,slim=null}={}){
  }
  return transaction(home,db=>{
   const q=slim?slimSql(slim):null;
-  const rows=db.prepare(q?`SELECT ${q.expr} AS payload FROM events WHERE stream=? ORDER BY seq`:'SELECT payload FROM events WHERE stream=? ORDER BY seq').all(...(q?[...q.args,stream]:[stream]));
-  if(!rows.length&&!optional)throw new Error(`기록 없음: ${stream}`);return rows.map(r=>JSON.parse(r.payload));
+  // 한 줄씩 해석한다: .all()은 원문 문자열 배열과 해석한 객체를 한꺼번에 쥐어 정점이 약 30% 컸다(2026-10-22 실측 586→408MB).
+  const rows=[];
+  for(const r of db.prepare(q?`SELECT ${q.expr} AS payload FROM events WHERE stream=? ORDER BY seq`:'SELECT payload FROM events WHERE stream=? ORDER BY seq').iterate(...(q?[...q.args,stream]:[stream])))rows.push(JSON.parse(r.payload));
+  if(!rows.length&&!optional)throw new Error(`기록 없음: ${stream}`);return rows;
  },{readOnly:true});
 }
 export function appendStream(home,stream,value){

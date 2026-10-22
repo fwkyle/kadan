@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 import {NotifyHoldTracker} from '../src/watch-notify-hold.mjs';
 import {SupervisorHealth} from '../src/watch-supervisor-health.mjs';
 import {cycleReads} from '../src/watch-reads.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createDatabase, writeStorageMarker, appendStream, readStream} from '../src/storage.mjs';
 
 // 감시기는 몇 달씩 켜져 있다. 역할·세션 이름이 계속 바뀌어도(2026-10 실측: 역할 수백 개가 오가는 판) 주기 사이에
 // 붙잡는 자료가 지금 살아 있는 역할 수를 넘지 않아야 한다. 시간이 아니라 주기 횟수로 센다.
@@ -43,4 +47,21 @@ test('주기 읽기 재사용: begin·end 뒤에는 원장 사본을 쥐지 않�
     reader.end();
   }
   assert.equal(reads, CYCLES, '주기마다 정확히 한 번만 읽는다');
+});
+
+// readStream은 사건을 한 줄씩 해석한다(원문 문자열 배열을 쥐지 않으려고). 결과는 같은 사건·같은 순서여야 한다.
+test('readStream: 순서·slim·빈 stream 동작이 그대로다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-readstream-'));
+  createDatabase(home); writeStorageMarker(home, 'sqlite');
+  const rows = Array.from({length: 50}, (_, i) => ({kind: i % 2 ? 'watch-ai-request' : 'plan', i, screen: 'x'.repeat(20), keep: true}));
+  for (const row of rows) appendStream(home, 's/a.jsonl', row);
+  appendStream(home, 's/b.jsonl', {kind: 'plan', i: 'other'});
+  assert.deepEqual(readStream(home, 's/a.jsonl'), rows, '같은 사건·같은 순서');
+  const slim = readStream(home, 's/a.jsonl', {slim: [{kind: 'watch-ai-request', drop: ['screen']}]});
+  assert.deepEqual(slim.map(r => r.i), rows.map(r => r.i));
+  assert.ok(slim.every(r => r.kind === 'watch-ai-request' ? !('screen' in r) && r.keep === true : r.screen === 'x'.repeat(20)));
+  assert.deepEqual(readStream(home, 's/none.jsonl', {optional: true}), []);
+  assert.throws(() => readStream(home, 's/none.jsonl'), /기록 없음: s\/none\.jsonl/);
+  appendStream(home, 's/c.jsonl', {kind: 'plan'});
+  assert.equal(readStream(home, 's/c.jsonl').length, 1, '읽은 뒤에도 연결이 닫혀 다음 쓰기·읽기가 된다');
 });
