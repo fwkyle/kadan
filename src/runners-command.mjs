@@ -1,9 +1,10 @@
-import {blockModel, initSettings, removeRunnerModel, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setSeniors, setFavorites, setRunner, setRunnerModel, settingsPath, watchJudgeCommand, explainCommand, PROFILE_ROLES} from './runner-settings.mjs';
+import {addPreset, blockModel, initSettings, PRESET_ACTIONS, removePreset, renamePreset, removeRunnerModel, launchFor, launchForFallback, parseFallbackSpec, readSettings, setActivePreset, setFallback, setRole, setSeniors, setFavorites, setRunner, setRunnerModel, settingsPath, watchJudgeCommand, explainCommand, PROFILE_ROLES} from './runner-settings.mjs';
 import {seniorCommandLabel} from './senior.mjs';
+import {detectRunners} from './quickstart.mjs';
 
-export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch|senior|explain> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] (senior는 --set "실행기:모델[:강도],…"로 최대 2명, 한 명이면 --runner/--model. 질문하면 등록된 전원에게 동시에 묻는다) | runner <실행기> [--spawn 명령틀] [--table JSON(resume·fork·exec·execField·version·update·listModels·conversation 칸. listModels는 모델 목록을 내는 명령, 자리 없음)] --revision N --reason 이유 | model <실행기> <모델> (--efforts a,b | --remove) --revision N --reason 이유 (--remove는 어디서도 안 쓰는 모델만 목록에서 뺀다) | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 | fallback <worker|reviewer|conductor|super|watch|explain> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움, senior는 폴백 없음, explain은 대체 후보 1개까지) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
+export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch|senior|explain> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] (senior는 --set "실행기:모델[:강도],…"로 최대 2명, 한 명이면 --runner/--model. 질문하면 등록된 전원에게 동시에 묻는다) | runner <실행기> [--spawn 명령틀] [--table JSON(resume·fork·exec·execField·version·update·listModels·conversation 칸. listModels는 모델 목록을 내는 명령, 자리 없음)] --revision N --reason 이유 | model <실행기> <모델> (--efforts a,b | --remove) --revision N --reason 이유 (--remove는 어디서도 안 쓰는 모델만 목록에서 뺀다) | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 (활성 프리셋 전환) | preset add <이름> [--from 원본] --revision N --reason 이유 (원본, 기본은 활성 프리셋을 복사) | preset rename <옛> <새> --revision N --reason 이유 | preset remove <이름> --revision N --reason 이유 (활성 프리셋은 거절) | fallback <worker|reviewer|conductor|super|watch|explain> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움, senior는 폴백 없음, explain은 대체 후보 1개까지) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
 
-export function runnersCommand([action, role, model], flags, {home, by, record}) {
+export function runnersCommand([action, role, model, extra], flags, {home, by, record, detect = detectRunners}) {
   flags = {...flags, _model: model};
   if (flags.help || !action) return RUNNERS_USAGE;
   if (action === 'show') {
@@ -19,7 +20,12 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
     return {path: settingsPath(home), exists: true, revision: settings.revision, activePreset: settings.activePreset,
       roles: settings.presets[settings.activePreset].roles, launch, fallback, favorites: settings.favorites ?? []};
   }
-  if (action === 'init') return initSettings(home, {by, reason: flags.reason, record});
+  if (action === 'init') {
+    // 설치된 실행기(PATH)만 등록하고 기본 프리셋을 채운다. 채우지 못한 칸은 안내(notes)로 알린다.
+    const notes = [];
+    const settings = initSettings(home, {by, reason: flags.reason, record, detect: {installed: detect(), notes}});
+    return {...settings, notes};
+  }
   if (action === 'set' && role === 'senior' && flags.set != null) {
     if (typeof flags.set !== 'string' || flags.runner != null || flags.model != null) throw new Error("시니어 목록은 --set '실행기:모델[:강도],…' 하나로만 준다(--runner/--model과 함께 쓰지 않는다)");
     return setSeniors(home, {items: parseFallbackSpec(flags.set), preset: flags.preset, revision: flags.revision, by, reason: flags.reason, record});
@@ -38,6 +44,11 @@ export function runnersCommand([action, role, model], flags, {home, by, record})
   if (action === 'model' && flags.remove) return removeRunnerModel(home, {runner: role, model: flags._model, ...meta});
   if (action === 'model') return setRunnerModel(home, {runner: role, model: flags._model, efforts: flags.efforts, ...meta});
   if (action === 'block') return blockModel(home, {model: role, roles: flags.roles, ...meta});
+  if (action === 'preset' && PRESET_ACTIONS.includes(role)) {
+    if (role === 'add') return addPreset(home, {name: model, from: typeof flags.from === 'string' ? flags.from : undefined, ...meta});
+    if (role === 'rename') return renamePreset(home, {from: model, to: extra, ...meta});
+    return removePreset(home, {name: model, ...meta});
+  }
   if (action === 'preset') return setActivePreset(home, {preset: role, ...meta});
   if (action === 'fallback') {
     if (typeof flags.set !== 'string') throw new Error("폴백 목록 필요: --set '실행기:모델[:강도],…' (비우려면 --set '')");
