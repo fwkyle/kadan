@@ -9,7 +9,7 @@ import {readSystemLedger} from './ledger.mjs';
 import {dashboardBuild, DASHBOARD_BUILD_COMMAND} from './dashboard-static.mjs';
 import {readReviveState, TARGETS, REVIVE_LABELS} from './revive.mjs';
 import {inspectSecretaryCheckpoint} from './secretary-resume.mjs';
-import {autostartCommand} from './autostart.mjs';
+import {autostartCommand, describeStale} from './autostart.mjs';
 import {readWindowSetting} from './window-setting.mjs';
 import {readSettings} from './runner-settings.mjs';
 import {SECRET_NAMES, resolveSecret, permissionWarnings, secretsDirPath} from './secrets.mjs';
@@ -127,6 +127,9 @@ function checkAutostart({home, cli, userHome, platform}) {
   if (platform !== 'darwin') return result('na', 'macOS가 아니라 로그인 자동 시작(LaunchAgent)을 쓰지 않는다');
   const status = autostartCommand('status', {home, cli, userHome});
   if (!status.installed) return result('warn', '로그인 자동 시작이 설치돼 있지 않다(재부팅 뒤 카단이 저절로 안 켜진다)', 'kadan autostart install');
+  if (status.stale?.length) {
+    return result('warn', `설치된 plist가 쓸 수 없는 경로를 가리킨다 — ${status.stale.map(describeStale).join(', ')}(재부팅 뒤 자동 시작이 실패할 수 있다)`, status.fix);
+  }
   if (status.current === false) {
     return result('warn', '설치된 plist가 지금 환경으로 만들 내용과 다르다(실행 폴더·PATH가 달랐을 수 있다)', 'kadan autostart status');
   }

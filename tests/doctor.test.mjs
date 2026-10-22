@@ -7,6 +7,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import crypto from 'node:crypto';
 import {spawn, spawnSync} from 'node:child_process';
+import {autostartCommand} from '../src/autostart.mjs';
 import {runDoctor, renderDoctor, doctorJson} from '../src/doctor.mjs';
 import {appendLedger, readSystemLedger} from '../src/ledger.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
@@ -249,6 +250,30 @@ test('autostart: macOS에서 설치돼 있지 않으면 주의, 설치 판정은
   assert.equal(byId(report, 'autostart').state, 'warn');
   assert.equal(byId(report, 'autostart').fix, 'kadan autostart install');
   assert.ok(!fs.existsSync(path.join(w.userHome, 'Library')), 'plist를 만들지 않는다');
+});
+
+test('autostart: plist의 사라진 경로(stale)는 주의, 풀려면은 autostart status 안내와 같다', () => {
+  const w = world();
+  const deps = {...w.deps, platform: 'darwin'};
+  const rottie = path.join(w.root, 'gone-rottie');
+  const options = {home: w.home, cli: deps.cli, userHome: w.userHome};
+  fs.mkdirSync(path.dirname(deps.cli), {recursive: true});
+  fs.writeFileSync(deps.cli, '');
+  fs.writeFileSync(rottie, '#!/bin/sh\n', {mode: 0o755});
+  const before = process.env.KADAN_ROTTIE_BIN;
+  process.env.KADAN_ROTTIE_BIN = rottie;
+  try {
+    autostartCommand('install', options);
+    assert.equal(byId(runDoctor(deps), 'autostart').state, 'ok', '대조군: 경로가 모두 있으면 정상');
+    fs.rmSync(rottie);
+    const status = autostartCommand('status', options);
+    const row = byId(runDoctor(deps), 'autostart');
+    assert.equal(row.state, 'warn');
+    assert.ok(row.reason.includes(`KADAN_ROTTIE_BIN=${rottie}`), row.reason);
+    assert.equal(row.fix, status.fix);
+  } finally {
+    if (before === undefined) delete process.env.KADAN_ROTTIE_BIN; else process.env.KADAN_ROTTIE_BIN = before;
+  }
 });
 
 test('조회가 실패하면 확인 불가이고 종료 코드는 막힘만 센다', () => {
