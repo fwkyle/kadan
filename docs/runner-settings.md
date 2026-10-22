@@ -41,6 +41,8 @@ kadan runners preset A --revision N --reason <이유>          # 활성 프리�
 kadan runners preset add fast [--from A] --revision N --reason <이유>   # 프리셋 만들기: 원본(기본은 활성 프리셋)의 roles·fallback 복사
 kadan runners preset rename fast quick --revision N --reason <이유>      # 이름 바꾸기(활성이면 활성 이름도 따라간다)
 kadan runners preset remove quick --revision N --reason <이유>           # 지우기(활성 프리셋은 거절)
+kadan runners export fast [--out <파일>]       # 프리셋 한 벌을 JSON으로 내보낸다(기본은 표준 출력). 설정·원장은 바꾸지 않는다
+kadan runners import <파일> [--as <이름>] --revision N --reason <이유>   # 프리셋 한 벌만 더한다(활성화하지 않는다)
 kadan runners fallback worker --set '<실행기>:<모델>[:<강도>],…' --revision N --reason <이유>  # 폴백 순서 전체(빈 글이면 비움)
 kadan runners favorite --set '<실행기>:<모델>[:<강도>],…' --revision N --reason <이유>  # 즐겨찾기 전체(빈 글이면 비움)
 kadan start <역할> --profile worker          # --cmd 없이: 설정의 명령으로 띄운다
@@ -80,6 +82,33 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - `preset rename <옛> <새>`, `preset remove <이름>`. 활성 프리셋은 지울 수 없다.
 - 이름은 영문·숫자·`.`·`/`·`-`·`[`·`]`만 쓰고(`NAME_PATTERN`), 이미 있는 이름과 `add`·`rename`·`remove`는 쓸 수 없다. 전부 `--revision`·`--reason`을 받고 원장에 `preset-add`·`preset-rename`·`preset-remove`로 남는다.
 - `set`·`fallback`의 `--preset <없던 이름>`은 아직 프리셋을 새로 만든다(시험이 기대는 동작이라 유지). 만들 때는 `preset add`를 쓴다.
+
+## 내보내기·가져오기
+
+내가 만든 프리셋 한 벌을 동료가 가져다 쓰게 하는 기능이다. 파일 하나(JSON)로 주고받고, 받는 쪽 기계의 설정은 프리셋 한 벌이 더해지는 것 말고는 바뀌지 않는다.
+
+```sh
+kadan runners export fast > fast.json          # 표준 출력(그대로 파일로 받아도 된다)
+kadan runners export fast --out ~/share/fast.json   # 명시한 경로에만 쓴다. 이미 있는 파일과 KADAN_HOME 안은 거절
+kadan runners import fast.json --as fast2 --revision N --reason <이유>   # 이름을 안 주면 파일의 프리셋 이름을 쓴다
+```
+
+파일 모양(값은 자리표시):
+
+```json
+{"format": "kadan-runner-export", "version": 1, "createdAt": "<시각>", "kadanVersion": "<버전>",
+ "preset": {"name": "<이름>", "label": "<설명>", "roles": {"worker": {"runner": "<실행기>", "model": "<모델>", "effort": "<강도>"}},
+            "fallback": {"worker": [{"runner": "<실행기>", "model": "<모델>"}]}},
+ "runners": ["<쓰는 실행기 이름>"], "families": {"<계열>": ["<모델 앞머리>"]}, "blocked": [{"model": "<모델>", "reason": "<사유>"}]}
+```
+
+- **싣지 않는 것**: `revision`, 즐겨찾기, 실행기 명령 틀(`spawn`)·`conversation` 같은 실행기 표 내용, 창·로티 설정, 원장, 경로·계정·토큰·이메일. 실행기는 이름만 싣고, 명령 틀은 받는 사람 기계의 것을 쓴다.
+- **내보내기 개인정보 검사**: 파일이 될 값 전체(label·차단 사유·계열 앞머리 포함)에서 사용자 폴더·`/home/`·`~/`·`$HOME`·윈도 경로·이메일·토큰 꼴(`sk-`·`ghp_` 등)을 찾는다. 하나라도 걸리면 파일을 만들지 않고 칸 이름과 종류만 알린다(값은 출력하지 않는다). 기존 `scrubSecrets`는 주어진 비밀값 목록을 가리는 함수라 패턴을 찾지 못하고, `check:public`은 저장소 파일 검사라 맞지 않아 `src/runner-export.mjs`에 전용 검사를 뒀다. 가져오기도 같은 검사를 파일에 한다.
+- **가져오기는 프리셋 한 벌만 더한다.** 받는 쪽 `runners`·`families`·`blocked`·`favorites`와 활성 프리셋은 바꾸지 않는다. 파일의 `families`·`blocked`는 받는 쪽과 다른 점만 결과의 `differences`로 보고하고 적용하지 않는다(전역 규칙은 모든 프리셋 공통이라 남의 기계 규칙을 조용히 바꾸면 안 된다).
+- **검사 순서**(하나라도 걸리면 전체 거절, revision·원장·설정 파일 불변): (1) `format`·`version`·파일 모양 (2) 프리셋 이름(또는 `--as`)이 새 이름 검사를 통과 — 예약 이름, 이름 규칙, 이미 있는 이름이 모두 걸리고 `--as`를 안내한다. 기본 프리셋 이름 `기본`은 이름 규칙(영문·숫자)에 걸리므로 처음 만든 기본 프리셋을 가져올 때는 `--as`가 필요하다 (3) 역할 값·대체 후보마다 이 기계에 그 실행기가 등록돼 있는지, 모델이 목록에 있는지, 강도가 있는지 (4) 이 기계 계열 규칙 (5) 이 기계 차단 모델.
+- **새 기계에서는 (3)의 거절이 흔하다.** claude는 모델을 등록하기 전까지 목록이 비어 있고, codex 목록은 codex를 한 번 실행하기 전엔 없다. 거절 메시지는 빠진 실행기·모델·강도를 **모두** 나열하고 그대로 칠 수 있는 명령(`kadan runners runner …`, `kadan runners model <실행기> <모델> --efforts …`)과 "등록한 뒤 import를 다시"를 붙인다. codex 목록에 없는 모델·강도는 명령이 없고 codex를 갱신해 한 번 실행하라고 알린다. 부분 적용은 없다.
+- 저장은 `change()` 경로(revision 대조, `--reason` 필수)이고 원장에는 `preset-import` 한 줄이 남는다. 가져온 프리셋은 활성화하지 않으므로 쓰려면 `kadan runners preset <이름>`으로 바꾼다.
+- 시험: `tests/runner-export.test.mjs`(격리 홈 두 개, 가짜 실행기·가짜 codex 목록).
 
 ## 옛 세션 발령 막기
 

@@ -90,7 +90,7 @@ export function runnerChoices(settings, runner, {readCodexModels = () => JSON.pa
 }
 
 // 정책 차단(block)에 걸린 항목. roles가 없으면 전역 차단, 있으면 그 역할만.
-const findBlocked = (settings, role, model) => (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+export const findBlocked = (settings, role, model) => (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
 
 // 시니어 목록의 모양 검사: 1..SENIOR_MAX명, 같은 실행기+모델 중복 없음. 저장(setSeniors)과 호출(kadan senior)이 같이 쓴다.
 export function assertSeniorShape(list) {
@@ -112,7 +112,7 @@ export function assertSeniorCallable(settings, list) {
   });
 }
 
-function checkChoice(settings, role, {runner, model, effort}, options, {checkBlocked = true} = {}) {
+export function checkChoice(settings, role, {runner, model, effort}, options, {checkBlocked = true} = {}) {
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
   const choices = runnerChoices(settings, runner, options);
@@ -136,7 +136,7 @@ export function checkFamilies(roles, families = DEFAULT_FAMILIES) {
 
 // 프리셋 하나의 계열 확인: 1순위끼리, 그리고 검수자 폴백↔작업자 1순위·작업자 폴백↔검수자 1순위(3단계).
 // 1순위를 바꿀 때도 같은 확인을 거치므로 기존 폴백과 충돌하는 저장은 거부된다.
-function checkPresetFamilies(preset, families = DEFAULT_FAMILIES) {
+export function checkPresetFamilies(preset, families = DEFAULT_FAMILIES) {
   checkFamilies(preset.roles, families);
   const pairs = [['reviewer', 'worker', '검수자', '작업자'], ['worker', 'reviewer', '작업자', '검수자']];
   for (const [role, other, label, otherLabel] of pairs) {
@@ -318,7 +318,7 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
 }
 
 // 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 계열 확인 → 저장 → 원장 사건.
-function change(home, {revision, by, reason, record, action}, apply) {
+export function change(home, {revision, by, reason, record, action}, apply) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
   return lockedSettings(home, () => {
     const current = readSettings(home);
@@ -466,7 +466,7 @@ function ensurePreset(next, name) {
   assertNotReservedPresetName(name);
   next.presets[name] = {label: name, roles: {}};
 }
-function checkNewPresetName(next, name) {
+export function checkNewPresetName(next, name) {
   if (typeof name !== 'string' || !VALUE.test(name)) throw new Error('프리셋 이름에는 영문·숫자·./-[]만 쓴다');
   assertNotReservedPresetName(name);
   if (Object.hasOwn(next.presets, name)) throw new Error(`이미 있는 프리셋: ${name}`);
