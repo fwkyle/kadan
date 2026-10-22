@@ -240,12 +240,12 @@ test('거절: 잘못된 format·version·모양', () => {
   const b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
   const data = exported();
   assertRejected(b.dir, {...data, format: 'other'}, /format이 kadan-runner-export이 아니다/, {as: 'team'});
-  assertRejected(b.dir, {...data, version: 2}, /지원하지 않는 version: 2/, {as: 'team'});
+  assertRejected(b.dir, {...data, version: 2}, /지원하지 않는 version — 이 카단은 1만/, {as: 'team'});
   assertRejected(b.dir, {...data, version: undefined}, /지원하지 않는 version/, {as: 'team'});
   assertRejected(b.dir, null, /가져올 수 없는 파일/, {as: 'team'});
-  assertRejected(b.dir, {...data, preset: {...data.preset, roles: {nobody: data.preset.roles.worker}}}, /모르는 역할 nobody/, {as: 'team'});
+  assertRejected(b.dir, {...data, preset: {...data.preset, roles: {nobody: data.preset.roles.worker}}}, /모르는 역할 roles\[0\]/, {as: 'team'});
   assertRejected(b.dir, {...data, preset: {...data.preset, roles: {worker: {runner: 'codex'}}}}, /roles\.worker/, {as: 'team'});
-  assertRejected(b.dir, {...data, preset: {...data.preset, fallback: {senior: []}}}, /대체 후보를 둘 수 없는 역할 senior/, {as: 'team'});
+  assertRejected(b.dir, {...data, preset: {...data.preset, fallback: {senior: []}}}, /대체 후보를 둘 수 없는 역할 fallback\.senior/, {as: 'team'});
   assertRejected(b.dir, {...data, families: []}, /families/, {as: 'team'});
 });
 
@@ -373,3 +373,53 @@ for (const bad of ['bad;echo injected', 'a b', 'x$(id)', 'x`id`']) {
     });
   }
 }
+
+// 3라운드: 앞 글자 경계 + 접두어별 모양(숫자 조건 없음), 모든 오류에서 파일 원문 비출력. 합성 값만 쓴다.
+const A = n => 'A'.repeat(n);
+const tokenCases = {
+  'prod_ghp_': `prod_${['ghp', '_'].join('')}${A(36)}`, 'prod_sk-proj-': `prod_${['sk', '-proj-'].join('')}${A(48)}`,
+  'mid ghp_': `앞 ${['ghp', '_'].join('')}${A(36)} 뒤`, github_pat_: `${['github', '_pat_'].join('')}${A(64)}`,
+  gho_: `${['gho', '_'].join('')}${A(36)}`, 'xoxb-': `${['xox', 'b-'].join('')}${A(48)}`, AKIA: `${['AK', 'IA'].join('')}${A(16)}`,
+  ASIA: `x/${['AS', 'IA'].join('')}${A(16)}`, AIza: `${['AI', 'za'].join('')}${A(35)}`, 'sk-ant-': `-${['sk', '-ant-'].join('')}${A(30)}`,
+};
+
+test('F1 3라운드: 숫자 없는 토큰도 앞 경계 + 접두어 모양이면 stdout·파일 모두 없이 거절한다', () => {
+  for (const [kind, text] of Object.entries(tokenCases)) {
+    const a = sender(), out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-out-')), 'p.json');
+    patch(a.dir, v => { v.presets['기본'].label = text; });
+    assert.throws(() => runnersCommand(['export', '기본'], {out}, {home: a.dir, by: 'kyle', record: () => {}}), /preset\.label\(토큰 꼴\)/, kind);
+    assert.equal(fs.existsSync(out), false, kind);
+    assert.throws(() => runnersCommand(['export', '기본'], {}, {home: a.dir, by: 'kyle', record: () => {}}), /토큰 꼴/, kind);
+  }
+});
+
+test('F4 3라운드: 정상 이름은 오탐하지 않는다(단어 안쪽 sk-·짧은 접두어 뒤)', () => {
+  const names = ['desk-customer-specific-model-v2', 'task-sk-runner', 'zai/glm-4.6', 'gpt-6-astra', 'gpt-6-luna', 'claude-sonnet-5-5',
+    'claude-opus-5-5', 'gemini-4-argon-medium', 'command-code/deepseek-deepseek-v4.1-flash', 'zai/glm-5.1-flash', 'gpt-6-1-sol',
+    'claude-fable-5-1', 'command-code/deepseek-v4.1-flash', 'xai/grok-4-fast-reasoning', 'kimi/k3', 'swe-2-max', 'task-1', 'desk-model-v2',
+    'openai-codex/gpt-5-codex-mini'];
+  assert.deepEqual(findPrivate(names.map(name => ({model: name}))), []);
+});
+
+test('F2 3라운드: 모양 오류는 roles·fallback·families 키·값·label에 무엇을 넣어도 원문 없이 칸 이름·위치만 낸다', () => {
+  const b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
+  const words = ['QQzzmarker', ...Object.values(tokenCases), fake.email];
+  for (const w of words) {
+    const bad = [];
+    const roleKey = exported(); roleKey.preset.roles = {[w]: roleKey.preset.roles.worker}; bad.push(roleKey);
+    const fbKey = exported(); fbKey.preset.fallback = {[w]: []}; bad.push(fbKey);
+    const famKey = exported(); famKey.families = {[w]: 'not-a-list'}; bad.push(famKey);
+    const famVal = exported(); famVal.families = {ok: [w, 7]}; bad.push(famVal);
+    const lbl = exported(); lbl.preset.label = [w]; bad.push(lbl);
+    const ver = exported(); ver.version = w; bad.push(ver);
+    const fmt = exported(); fmt.format = w; bad.push(fmt);
+    const blk = exported(); blk.blocked = [{model: 7, reason: w}]; bad.push(blk);
+    const run = exported(); run.runners = [w, 7]; bad.push(run);
+    for (const data of bad) {
+      const message = messageOf(b.dir, data, {as: 'team'});
+      assert.ok(!message.includes(w), `원문이 오류에 나왔다: ${message}`);
+    }
+  }
+  assert.match(messageOf(b.dir, (() => { const d = exported(); d.preset.roles = {x: d.preset.roles.worker}; return d; })(), {as: 'team'}),
+    /파일 형식 오류: 모르는 역할 roles\[0\]/);
+});

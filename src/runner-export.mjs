@@ -12,12 +12,17 @@ export const EXPORT_FORMAT = 'kadan-runner-export';
 export const EXPORT_VERSION = 1;
 const MAX_IMPORT_BYTES = 1024 * 1024;
 
+// 접두어별 최소 모양(합성 기준): GitHub 토큰 / 파인그레인 PAT / OpenAI·Anthropic 키 / Slack 토큰 / AWS 액세스 키 ID / Google API 키.
+const TOKEN_SHAPES = ['gh[pousr]_[A-Za-z0-9]{30,}', 'github_pat_[A-Za-z0-9_]{20,}', 'sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}',
+  'xox[abpr]-[A-Za-z0-9-]{10,}', '(?:AKIA|ASIA)[A-Z0-9]{16}', 'AIza[A-Za-z0-9_-]{30,}'];
+
 // 내보내기에 실리면 안 되는 개인정보 꼴. 걸린 값은 출력하지 않고 칸 이름과 종류만 알린다.
 const PRIVATE_PATTERNS = [
   ['개인 경로(사용자 폴더)', new RegExp(['', 'Users', ''].join('/'))], ['개인 경로(/home/)', /\/home\//], ['홈 경로(~/)', /~\//],
   ['홈 변수($HOME)', /\$\{?HOME\b/], ['윈도 경로', /[A-Za-z]:\\/], ['이메일', /[^\s@]+@[^\s@]+\.[^\s@]+/],
-  // 앞 경계(\b)에 기대지 않는다: `prod_ghp_…`처럼 접두어가 붙어도 잡는다. 정상 모델 이름을 잡지 않도록 뒷부분은 20자 이상이고 숫자가 하나 있어야 한다.
-  ['토큰 꼴', /(?:sk-(?:proj-|ant-)?|ghp_|gho_|ghu_|ghs_|github_pat_|xox[abprs]-|AKIA|AIza)(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/],
+  // 토큰은 접두어 바로 앞이 영문자·숫자가 아닐 때(문자열 처음, _ - / 공백 뒤) 접두어별 최소 모양으로 찾는다. 숫자 포함 여부는 조건이 아니다.
+  // `prod_ghp_…`는 잡고 `desk-…`의 sk-처럼 단어 안쪽은 잡지 않는다.
+  ['토큰 꼴', new RegExp(`(?<![A-Za-z0-9])(?:${TOKEN_SHAPES.join('|')})`)],
 ];
 
 // 값 전체(키 포함)를 훑어 개인정보 꼴이 있는 칸을 찾는다. 반환: [{at, kind}]
@@ -126,26 +131,28 @@ function readExport(data) {
   const hits = findPrivate(data, 'file');
   if (hits.length) throw new Error(`가져오기 거절: 파일에 개인정보 꼴이 있다 — ${describeHits(hits)}. 보낸 사람에게 고친 파일을 받는다`);
   if (!isPlain(data) || data.format !== EXPORT_FORMAT) throw new Error(`가져올 수 없는 파일: format이 ${EXPORT_FORMAT}이 아니다`);
-  if (data.version !== EXPORT_VERSION) throw new Error(`지원하지 않는 version: ${String(data.version)} — 이 카단은 ${EXPORT_VERSION}만 읽는다`);
+  if (data.version !== EXPORT_VERSION) throw new Error(`지원하지 않는 version — 이 카단은 ${EXPORT_VERSION}만 읽는다`);
   const p = data.preset;
   if (!isPlain(p) || typeof p.name !== 'string' || !isPlain(p.roles)) throw new Error('파일 형식 오류: preset.name·preset.roles가 필요하다');
   if (p.label != null && (typeof p.label !== 'string' || p.label.length > 200)) throw new Error('파일 형식 오류: preset.label은 200자 이하 글이어야 한다');
   const roles = {};
-  for (const [role, value] of Object.entries(p.roles)) {
-    if (!SETTINGS_ROLES.includes(role)) throw new Error(`파일 형식 오류: 모르는 역할 ${role}`);
+  Object.entries(p.roles).forEach(([role, value], i) => {
+    if (!SETTINGS_ROLES.includes(role)) throw new Error(`파일 형식 오류: 모르는 역할 roles[${i}]`);
     if (role === 'senior') {
       const list = (Array.isArray(value) ? value : [value]).map((v, i) => cleanChoice(v, `roles.senior[${i}]`));
       try { assertSeniorShape(list); } catch (error) { throw new Error(`파일 형식 오류: ${error.message}`); }
       roles.senior = list;
     } else roles[role] = cleanChoice(value, `roles.${role}`);
-  }
+  });
   const fallback = {};
-  for (const [role, list] of Object.entries(p.fallback ?? {})) {
-    if (!SETTINGS_ROLES.includes(role) || role === 'senior') throw new Error(`파일 형식 오류: 대체 후보를 둘 수 없는 역할 ${role}`);
+  Object.entries(p.fallback ?? {}).forEach(([role, list], i) => {
+    // 알려진 역할 이름(형식이 정한 고정 이름)만 그대로 쓰고, 모르는 키는 위치 번호로만 알린다.
+    if (!SETTINGS_ROLES.includes(role)) throw new Error(`파일 형식 오류: 모르는 역할 fallback[${i}]`);
+    if (role === 'senior') throw new Error('파일 형식 오류: 대체 후보를 둘 수 없는 역할 fallback.senior');
     if (!Array.isArray(list)) throw new Error(`파일 형식 오류: fallback.${role}은 목록이어야 한다`);
     if (role === 'explain' && list.length + 1 > EXPLAIN_MAX_ATTEMPTS) throw new Error(`파일 형식 오류: 설명 AI 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지다`);
-    if (list.length) fallback[role] = list.map((v, i) => cleanChoice(v, `fallback.${role}[${i}]`));
-  }
+    if (list.length) fallback[role] = list.map((v, j) => cleanChoice(v, `fallback.${role}[${j}]`));
+  });
   const families = data.families ?? {}, blocked = data.blocked ?? [], runners = data.runners ?? [];
   if (!isPlain(families) || !Object.values(families).every(v => Array.isArray(v) && v.every(x => typeof x === 'string')))
     throw new Error('파일 형식 오류: families는 {계열: [앞머리,…]}여야 한다');
