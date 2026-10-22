@@ -466,8 +466,10 @@ function ensurePreset(next, name) {
   assertNotReservedPresetName(name);
   next.presets[name] = {label: name, roles: {}};
 }
+// 프리셋 이름은 실행기·모델 이름(NAME_PATTERN)과 달리 명령 틀에 들어가지 않고 기록에만 남으므로 한글 음절(가-힣)도 받는다.
+const PRESET_NAME = /^[A-Za-z0-9._/\-[\]가-힣]+$/;
 export function checkNewPresetName(next, name) {
-  if (typeof name !== 'string' || !VALUE.test(name)) throw new Error('프리셋 이름에는 영문·숫자·./-[]만 쓴다');
+  if (typeof name !== 'string' || !PRESET_NAME.test(name)) throw new Error('프리셋 이름에는 영문·한글·숫자·./-[]만 쓴다');
   assertNotReservedPresetName(name);
   if (Object.hasOwn(next.presets, name)) throw new Error(`이미 있는 프리셋: ${name}`);
 }

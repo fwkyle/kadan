@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  addPreset, initSettings, readSettings, setFallback, setRole, setRunnerModel, setFavorites,
+  addPreset, initSettings, readSettings, renamePreset, setFallback, setRole, setRunnerModel, setFavorites,
 } from '../src/runner-settings.mjs';
 import {exportPreset, importPreset} from '../src/runner-export.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
@@ -221,12 +221,14 @@ test('거절: 받는 쪽 차단 모델이 쓰이면 거절하고 사유를 보�
 test('거절: 이름 충돌은 --as를 안내하고, 새 이름 검사(__proto__·예약어·이름 규칙)를 그대로 지난다', () => {
   const b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
   const data = exported();
-  // 기본 프리셋 이름(한글)은 새 이름 규칙(영문·숫자)에 걸리므로 --as 안내가 나온다.
-  assertRejected(b.dir, data, /영문·숫자.*이름: 기본\) — 다른 이름으로 가져오려면 --as/);
+  // 이름이 이미 있으면(양쪽 다 기본 프리셋 '기본') --as 안내가 나온다.
+  assertRejected(b.dir, data, /이미 있는 프리셋: 기본 \(가져오려던 이름: 기본\) — 다른 이름으로 가져오려면 --as/);
   addPreset(b.dir, {name: 'team', ...meta(b.revision())});
   assertRejected(b.dir, data, /이미 있는 프리셋: team \(가져오려던 이름: team\) — 다른 이름으로 가져오려면 --as/, {as: 'team'});
   for (const name of ['__proto__', 'constructor', 'prototype', 'add', 'rename', 'remove']) assertRejected(b.dir, data, /쓸 수 없다/, {as: name});
-  assertRejected(b.dir, data, /영문·숫자/, {as: 'bad name!'});
+  assertRejected(b.dir, data, /영문·한글·숫자/, {as: 'bad name!'});
+  assertRejected(b.dir, data, /영문·한글·숫자/, {as: '팀 용'});
+  assertRejected(b.dir, data, /영문·한글·숫자/, {as: '$팀용'});
   assertRejected(b.dir, data, /--as에는/, {as: true});
   const hostile = JSON.parse(JSON.stringify(data).replace('"name":"기본"', '"name":"__proto__"'));
   assert.equal(hostile.preset.name, '__proto__');
@@ -289,4 +291,24 @@ test('이전 revision으로 가져오면 다른 변경을 덮지 않고 거절�
   addPreset(b.dir, {name: 'other', ...meta(stale)});
   assert.throws(() => importPreset(b.dir, {data: exportPreset(a.dir, {name: '기본'}), as: 'team', ...meta(stale)}), /설정이 바뀌었다/);
   assert.equal(readSettings(b.dir).presets.team, undefined);
+});
+
+test('한글 이름: 기본을 내보내 다른 홈에 --as 없이 가져오고(이름 충돌 없을 때), --as 팀용도 된다', () => {
+  const a = sender(), b = makeHome({'fake-claude-1': ['low', 'high'], 'fake-claude-2': ['medium']});
+  const data = JSON.parse(JSON.stringify(exportPreset(a.dir, {name: '기본'})));
+  assert.equal(data.preset.name, '기본');
+  // 받는 홈의 기본 프리셋 이름을 먼저 바꿔 충돌을 없앤다.
+  renamePreset(b.dir, {from: '기본', to: '개인용', ...meta(b.revision())});
+  const result = importPreset(b.dir, {data, ...meta(b.revision())});
+  assert.equal(result.imported, '기본');
+  assert.deepEqual(readSettings(b.dir).presets['기본'].roles, readSettings(a.dir).presets['기본'].roles);
+  assert.equal(readSettings(b.dir).activePreset, '개인용');
+  assert.equal(importPreset(b.dir, {data, as: '팀용', ...meta(b.revision())}).imported, '팀용');
+  assert.match(result.next, /kadan runners preset 기본 --revision/);
+});
+
+test('한글 이름 CLI: 내보낸 파일의 preset.name과 --out 파일에 한글이 깨지지 않는다', () => {
+  const a = sender(), out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-out-')), 'p.json');
+  runnersCommand(['export', '기본'], {out}, {home: a.dir, by: 'kyle', record: () => {}});
+  assert.equal(JSON.parse(fs.readFileSync(out, 'utf8')).preset.name, '기본');
 });

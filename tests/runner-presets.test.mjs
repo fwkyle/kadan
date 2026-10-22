@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  addPreset, explainChain, initSettings, launchFor, readSettings, removePreset, renamePreset, setActivePreset, setFallback, setRole, watchJudgeChain,
+  addPreset, explainChain, initSettings, launchFor, readSettings, removePreset, renamePreset, setActivePreset, setFallback, setRole, setRunnerModel, watchJudgeChain,
 } from '../src/runner-settings.mjs';
 import {seniorCommand} from '../src/senior.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
@@ -153,8 +153,8 @@ test('preset add: 활성 프리셋을 복사해 새 프리셋을 만들고 활�
 
 test('preset add 반례: 이름 규칙 위반·이미 있는 이름·예약어·없는 원본·이유 없음·옛 revision', () => {
   const r = init(['codex']);
-  for (const name of ['빠름', 'a b', '', undefined, 'x;y']) assert.throws(() => addPreset(r.dir, {name, ...meta(1)}), /영문·숫자/, String(name));
-  assert.throws(() => addPreset(r.dir, {name: '기본', ...meta(1)}), /영문·숫자/);
+  for (const name of ['빠 름', 'a b', '', undefined, 'x;y', 'x$y', '빠름!', 'ㅂㅏ', '$(x)한글']) assert.throws(() => addPreset(r.dir, {name, ...meta(1)}), /영문·한글·숫자/, String(name));
+  assert.throws(() => addPreset(r.dir, {name: '기본', ...meta(1)}), /이미 있는/);
   addPreset(r.dir, {name: 'one', ...meta(1)});
   assert.throws(() => addPreset(r.dir, {name: 'one', ...meta(2)}), /이미 있는/);
   for (const name of ['add', 'rename', 'remove']) assert.throws(() => addPreset(r.dir, {name, ...meta(2)}), /쓸 수 없다/);
@@ -177,7 +177,7 @@ test('preset rename: 이름을 바꾸고 활성 프리셋이면 활성 이름도
   assert.ok(launchFor(active, 'worker'), '이름이 바뀐 활성 프리셋으로 계속 읽힌다');
   assert.throws(() => renamePreset(r.dir, {from: 'nope', to: 'x', ...meta(4)}), /없는 프리셋/);
   assert.throws(() => renamePreset(r.dir, {from: 'two', to: 'main', ...meta(4)}), /이미 있는/);
-  assert.throws(() => renamePreset(r.dir, {from: 'two', to: '빠름', ...meta(4)}), /영문·숫자/);
+  assert.throws(() => renamePreset(r.dir, {from: 'two', to: '빠 름', ...meta(4)}), /영문·한글·숫자/);
   assert.throws(() => renamePreset(r.dir, {from: 'two', to: 'remove', ...meta(4)}), /쓸 수 없다/);
 });
 
@@ -259,4 +259,23 @@ test('이미 있는 프리셋에 쓰는 동작과 --preset A 자동 생성은 �
 test('없는 프리셋 이름(constructor 등)으로 폴백을 바꾸면 상속된 칸이 아니라 없는 프리셋으로 거절한다', () => {
   const r = init(['codex']);
   assert.throws(() => setFallback(r.dir, {role: 'worker', items: [], preset: 'constructor', ...meta(1)}), /없는 프리셋/);
+});
+
+test('한글 프리셋 이름: add·rename·활성 전환이 되고 원장 줄에 한글이 그대로 남는다', () => {
+  const r = init(['codex']), {list, record} = records();
+  addPreset(r.dir, {name: '팀용', ...meta(1, {record})});
+  assert.equal(list[0].preset, '팀용');
+  renamePreset(r.dir, {from: '기본', to: '개인용', ...meta(2, {record})});
+  assert.equal(readSettings(r.dir).activePreset, '개인용');
+  setActivePreset(r.dir, {preset: '팀용', ...meta(3, {record})});
+  assert.equal(list[2].after, '팀용');
+  assert.ok(JSON.parse(JSON.stringify(list[1])).after === '개인용');
+  assert.throws(() => renamePreset(r.dir, {from: '팀용', to: '__proto__', ...meta(4)}), /쓸 수 없다/);
+});
+
+test('실행기·모델·강도 이름은 한글을 계속 거절한다(NAME_PATTERN 회귀)', () => {
+  const r = init(['codex', 'claude']);
+  assert.throws(() => setRunnerModel(r.dir, {runner: 'claude', model: '모델', efforts: 'low', ...meta(1)}), /모델 이름 필요/);
+  assert.throws(() => setRunnerModel(r.dir, {runner: 'claude', model: 'fake-c', efforts: '낮음', ...meta(1)}), /강도 목록/);
+  assert.throws(() => setRole(r.dir, {role: 'worker', runner: '코덱스', model: 'fake-model-1', effort: 'low', ...meta(1)}), /영문·숫자/);
 });
