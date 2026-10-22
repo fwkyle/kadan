@@ -56,7 +56,7 @@ for (const [name, send] of Object.entries(PATHS)) {
   // 시계는 시험 시작 때 한 번 읽어 고정한다(알림은 now로, 카드·일반 우편은 Date.now()라 흐르는 1~2초는 90/150초 경계에 영향이 없다).
   test(`${name}: 슈퍼감독이 90초 전에 입력 → 보류`, () => {
     const f = tmuxFixture({ago: 90, card});
-   
+
     assert.throws(() => send(f, SUPER), e => e.code === 'KADAN_HUMAN_ACTIVE' && e.delivery === 'not-sent');
     assert.equal(pastes(f), 0);
   });
