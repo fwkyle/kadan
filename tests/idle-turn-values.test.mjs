@@ -172,3 +172,22 @@ test('/api/dashboard/status 응답에 userTurnWaits가 실린다(없으면 빈 �
   assert.deepEqual(status.userTurnWaits,waits);
   assert.ok('executionCount' in status&&'works' in status&&'rows' in status,'기존 키는 그대로');
 });
+
+// F5: 감독별 응답(?super=)도 자기 판 업무의 사용자 대기만 싣고, 다른 판 항목은 싣지 않는다.
+test('/api/dashboard/status?super= 응답에 자기 판 userTurnWaits만 실린다',()=>{
+  const f=dashboardFixture({count:2});
+  const other=f.works.create({key:'demo/other',title:'다른 판',goal:'g',scope:'s',acceptance:'a',
+    owner:'다른-감독',repoPath:f.home,board:'다른판'});
+  const file=path.join(f.home,'hierarchy.json');
+  fs.writeFileSync(file,JSON.stringify({'감독':'qa-슈퍼감독','qa-슈퍼감독':'@user','다른-감독':'다른-슈퍼감독','다른-슈퍼감독':'@user'}));
+  const snapshot=f.snapshot();
+  snapshot.entries.push({kind:'hierarchy-loaded',path:file,t:new Date().toISOString()});
+  snapshot.registeredWorks=f.works.list();
+  const mineWait={work:'demo/dashboard',turnOwner:'@user',tag:USER_TURN_WAIT_TAG};
+  const otherWait={work:other.key,turnOwner:'@user',tag:USER_TURN_WAIT_TAG};
+  snapshot.center.monitoring={process:{instances:[]},configuration:{},boards:[],cycle:{settings:{userTurnWaits:[mineWait,otherWait]}}};
+  const mine=dashboardData(snapshot,new URL('http://local/api/dashboard/status?super=qa-슈퍼감독'));
+  assert.deepEqual(mine.userTurnWaits,[mineWait]);
+  const all=dashboardData(snapshot,new URL('http://local/api/dashboard/status'));
+  assert.deepEqual(all.userTurnWaits,[mineWait,otherWait]);
+});
