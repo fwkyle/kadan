@@ -10,7 +10,10 @@ import {CardStore} from '../src/card-store.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {nightCommand} from '../src/commands/night.mjs';
 import {nightState, resolveEnd, watchNightExpiry, DEFAULT_MS} from '../src/night.mjs';
-import {summarizeNight} from '../src/night-summary.mjs';
+import {summarizeNight, NOTICE_LIMIT} from '../src/night-summary.mjs';
+import {MAX_TEXT} from '../src/commands/night.mjs';
+import {appendStream, createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {DatabaseSync} from 'node:sqlite';
 import {runWatch} from './helpers/watch-runner.mjs';
 
 // 가짜 시계·가짜 우편·가짜 알림만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다.
@@ -170,7 +173,7 @@ test('끝 시각 만료: 감시기 한 주기에 expired 한 번, 두 번째 주
   const f = fixture();
   f.run(['on', '문구'], {for: '1h'});
   f.sent.length = 0;
-  const cycle = now => { f.setNow(now); return watchNightExpiry({entries: readLedger(f.home), home: f.home, deps: f.deps}); };
+  const cycle = now => { f.setNow(now); return watchNightExpiry({entries: readLedger(f.home), now, home: f.home, deps: f.deps}); };
   assert.equal(cycle(T0 + 30 * 60_000), null); // 아직 켜짐
   assert.equal(f.entries().length, 1);
   const done = cycle(T0 + 61 * 60_000);
@@ -183,7 +186,7 @@ test('끝 시각 만료: 감시기 한 주기에 expired 한 번, 두 번째 주
   assert.equal(f.notes.length, 1);
   assert.equal(f.sent.length, 2); // 종료 우편도 슈퍼마다 한 번
   // 켠 적이 없는 홈에서는 원장을 더 읽지도 않는다
-  assert.equal(watchNightExpiry({entries: [], home: f.home, deps: {readEntries: () => { throw new Error('읽으면 안 됨'); }}}), null);
+  assert.equal(watchNightExpiry({entries: [], now: T0, home: f.home, deps: {readEntries: () => { throw new Error('읽으면 안 됨'); }}}), null);
 });
 
 test('만료된 켜짐이 마무리되지 않은 채 night on을 치면 먼저 expired를 쓰고 새로 켠다', () => {
@@ -288,7 +291,7 @@ test('요약: 재시작·우편·보류 집계, 대리 위임 원문이 첫 줄,
   ];
   const start = baseOn({viaChat: true, by: 'a-슈퍼감독', quote: '다 알아서 승인해', delivered: [{role: 'a-슈퍼감독', mailId: 'night-1'}]});
   const s = summarize({start, entries, bodies: {held1: '[나이트 보류] 운영 DB 마이그레이션\n자세히', plain: '안녕'}});
-  assert.equal(s.text.split('\n')[0], '대리 위임: a-슈퍼감독이(가) kyle의 채팅 말을 옮겨 적었습니다 — "다 알아서 승인해"');
+  assert.equal(s.text.split('\n')[0], '대리 위임: a-슈퍼감독이(가) kyle의 채팅 말을 옮겨 적었습니다 — "다 알아서 승인해" (전체 원문: kadan night status, 원장)');
   assert.equal(s.counts.restarts, 1);
   assert.equal(s.counts.mails, 3);
   assert.equal(s.counts.held, 1);
@@ -298,7 +301,7 @@ test('요약: 재시작·우편·보류 집계, 대리 위임 원문이 첫 줄,
 
   const empty = summarize({});
   assert.match(empty.text, /밤사이 처리한 일 없음/);
-  assert.equal(empty.text.split('\n')[0], 'kyle 위임: "자러 감"');
+  assert.equal(empty.text.split('\n')[0], 'kyle 위임: "자러 감" (전체: kadan night status, 원장)');
 });
 
 test('CLI: 일반감독의 night on은 거절되고, status는 읽기만 한다', () => {
@@ -342,4 +345,100 @@ test('감시기는 주기마다 끝 시각 확인을 한 번 부르고, 그 확�
   assert.deepEqual(calls.map(c => c.now), times);
   assert.equal(calls[0].n, 1);
   assert.equal(errors.filter(e => e.includes('나이트 모드 끝 시각 확인 실패')).length, 1);
+});
+
+test('F1: 미만료 주기는 추가 원장·결정 이력 읽기가 0회이고, 꺼짐·켠 적 없음도 0회', () => {
+  const f = fixture();
+  f.run(['on', '문구'], {for: '8h'});
+  let reads = 0;
+  const counting = {...f.deps, readEntries: () => { reads++; return []; }, readDecisions: () => { reads++; return []; }};
+  const entries = readLedger(f.home);
+  for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchNightExpiry({entries, now: T0 + ms, home: f.home, deps: counting}), null);
+  assert.equal(reads, 0);
+  // 마지막 night 사건이 끝 사건이면(꺼짐) 만료 시각이 지나도 읽지 않는다
+  f.run(['off']);
+  const after = readLedger(f.home);
+  assert.equal(watchNightExpiry({entries: after, now: T0 + 20 * HOUR, home: f.home, deps: counting}), null);
+  assert.equal(watchNightExpiry({entries: [], now: T0, home: f.home, deps: counting}), null);
+  assert.equal(reads, 0);
+  // 배열을 복사하지 않고 인덱스 역순으로 훑는다(코드 대조)
+  const src = fs.readFileSync(new URL('../src/night.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export function watchNightExpiry'));
+  assert.ok(!/\.reverse\(\)|\[\.\.\.entries\]|\.slice\(|\.filter\(/.test(body), '감시기 확인에서 배열 복사 금지');
+});
+
+test('F1: 실제 저장 계층(JSONL·SQLite)에서 미만료 주기의 추가 읽기가 0회', () => {
+  for (const backend of ['jsonl', 'sqlite']) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `kadan-night-${backend}-`));
+    if (backend === 'sqlite') { createDatabase(home); writeStorageMarker(home, 'sqlite'); }
+    appendLedger({kind: 'night', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);
+    appendStream(home, 'decisions/events.jsonl', {id: 'x', status: 'open'});
+    const entries = readLedger(home);
+    const files = [], queries = [];
+    const readFile = fs.readFileSync, prepare = DatabaseSync.prototype.prepare;
+    fs.readFileSync = function (file, ...rest) { if (String(file).startsWith(home) && String(file).endsWith('events.jsonl')) files.push(String(file)); return readFile.call(this, file, ...rest); };
+    DatabaseSync.prototype.prepare = function (sql, ...rest) { if (/FROM events WHERE stream=\?/s.test(sql)) queries.push(sql); return prepare.call(this, sql, ...rest); };
+    try { for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchNightExpiry({entries, now: T0 + ms, home}), null); }
+    finally { fs.readFileSync = readFile; DatabaseSync.prototype.prepare = prepare; }
+    assert.equal(files.length + queries.length, 0, `${backend}: 추가 읽기 ${files.length + queries.length}회`);
+  }
+});
+
+test('F1: 결정 답 경로의 마무리가 실패했어도 끝 시각에 감시기가 ended-by-input으로 한 번만 끝낸다', () => {
+  const f = fixture();
+  f.run(['on', '문구'], {for: '2h'});
+  // kyle의 답이 있었지만 settleNight가 실패해 끝 사건이 없는 상태
+  const decisions = [{id: 'd1', status: 'answered', answer: {by: '사람', at: iso(T0 + HOUR), text: 'ok'}}];
+  const deps = {...f.deps, readDecisions: () => decisions};
+  f.setNow(T0 + 90 * 60_000);
+  assert.equal(watchNightExpiry({entries: readLedger(f.home), now: T0 + 90 * 60_000, home: f.home, deps}), null); // 아직 끝 시각 전: 감시기는 결정 이력을 보지 않는다
+  const done = watchNightExpiry({entries: readLedger(f.home), now: T0 + 2 * HOUR, home: f.home, deps});
+  assert.equal(done.phase, 'ended-by-input');
+  assert.equal(done.endedAt, iso(T0 + HOUR));
+  assert.equal(watchNightExpiry({entries: readLedger(f.home), now: T0 + 3 * HOUR, home: f.home, deps}), null);
+  assert.deepEqual(f.entries().map(e => e.phase), ['on', 'ended-by-input']);
+  assert.equal(f.notes.length, 1);
+});
+
+test('F2: 2,200자 원문은 켜지고, 끝날 때 알림이 1,800자 이하에 제목·기간·집계를 모두 담는다', () => {
+  const f = fixture();
+  const quote = '알아서 다 승인해 줘. '.repeat(200).slice(0, 2200);
+  f.run(['on', '위임'], {quote, for: '6h'}, 'a-슈퍼감독');
+  assert.equal(f.entries()[0].quote.length, 2200); // 원장에는 원문 그대로
+  f.setNow(T0 + HOUR);
+  f.run(['off'], {}, '사람');
+  const message = f.notes[0].message;
+  assert.ok(message.length <= NOTICE_LIMIT, `알림 ${message.length}자`);
+  assert.match(message, /나이트 모드 요약 \(/);
+  assert.match(message, /밤사이 생긴 일/);
+  assert.match(message, /위임으로 대신 처리한 일/);
+  assert.match(message, /kadan night status/);
+  assert.equal(message.split('\n')[0].startsWith('대리 위임: '), true);
+});
+
+test('F2: 4,001자는 거절하고 원장에 쓰지 않는다', () => {
+  const f = fixture();
+  assert.equal(MAX_TEXT, 4000);
+  assert.throws(() => f.run(['on', '위임'], {quote: 'ㄱ'.repeat(4001)}, 'a-슈퍼감독'), /4000자를 넘습니다/);
+  assert.throws(() => f.run(['on', 'ㄱ'.repeat(4001)], {}), /4000자를 넘습니다/);
+  assert.equal(f.entries().length, 0);
+  assert.equal(f.sent.length, 0);
+  f.run(['on', 'ㄱ'.repeat(4000)], {}); // 경계값은 켜진다
+  assert.equal(f.entries().length, 1);
+});
+
+test('F2: 줄바꿈 원문도 대리 위임 표시는 한 줄이고, 보류가 많아도 집계는 잘리지 않는다', () => {
+  const start = {kind: 'night', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true,
+    quote: '첫 줄\n둘째 줄\n\n셋째 줄', text: 't', to: [], delivered: []};
+  const s = summarizeNight({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null});
+  const lines = s.text.split('\n');
+  assert.match(lines[0], /^대리 위임: .*"첫 줄 둘째 줄 셋째 줄"/);
+  assert.match(lines[1], /^나이트 모드 요약 \(/);
+  // 보류 200건(각 100자) + 긴 원문: 상한 안에서 제목·집계는 남고 보류 상세만 줄어든다
+  const entries = Array.from({length: 200}, (_, i) => ({kind: 'send', mailId: `m${i}`, role: '사람', digest: `h${i}`, t: iso(T0 + 1000 + i)}));
+  const big = summarizeNight({start: {...start, quote: 'ㄱ'.repeat(4000)}, phase: 'off', endedAt: T0 + HOUR, entries, decisionEvents: [],
+    readBody: () => `[나이트 보류] ${'ㅂ'.repeat(120)}`});
+  assert.ok(big.text.length <= NOTICE_LIMIT, `${big.text.length}자`);
+  assert.match(big.text, /보류로 남긴 것 200건/);
+  assert.match(big.text, /위임으로 대신 처리한 일\n- 없음$/);
 });

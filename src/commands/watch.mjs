@@ -267,7 +267,7 @@ export function cmdWatch(argv, flags) {
     pruneHierarchy: flags.hierarchy && prune !== "off"
       ? ({file, now}) => pruneHierarchy({home: ledgerHome(), floor, file, apply: true, now: () => now})
       : null,
-    checkNightExpiry: ({entries}) => watchNightExpiry({entries, home: ledgerHome()}),
+    checkNightExpiry: ({entries, now}) => watchNightExpiry({entries, now, home: ledgerHome()}),
     idleMs: idleMinutes * 60 * 1_000,
     userNotify: flags["user-notify"] === true,
     judgeCmd: flags["judge-cmd"] || null,

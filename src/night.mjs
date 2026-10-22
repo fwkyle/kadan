@@ -146,7 +146,7 @@ export function finishNight({home, by, phase = null, reason = null, deps: given}
     };
     deps.record(event);
     try {
-      deps.notify(summary.text.slice(0, 1800), {kind: 'night-summary', key: `night-summary:${start.t}`});
+      deps.notify(summary.text, {kind: 'night-summary', key: `night-summary:${start.t}`});
     } catch { /* 알림 실패는 기록(본체)을 되돌리지 않는다 */ }
     // 이미 쓰인 문구를 근거로 슈퍼가 계속 움직이지 않게 같은 우편 경로로 종료를 알린다. 읽음은 요구하지 않고 실패는 무시한다.
     const send = deps.sendMail ?? sendNightMail(home, by);
@@ -161,9 +161,15 @@ export function settleNight({home, by = '사람', deps}) {
   return finishNight({home, by, deps});
 }
 
-// 감시기 한 주기의 확인 한 가지: 마지막 night 사건이 켜짐일 때만 위 함수를 부른다(켠 적이 없으면 원장 읽기 말고 하는 일 없음).
-export function watchNightExpiry({entries, home, deps}) {
-  const last = [...entries].reverse().find(e => e?.kind === 'night');
-  if (last?.phase !== 'on') return null;
-  return settleNight({home, by: 'watch', deps});
+// 감시기 한 주기의 확인 한 가지. 주기에서 이미 읽은 entries만 본다: 뒤에서부터 마지막 night 사건을 찾아(복사·추가 읽기 없음)
+// 켜짐이 아니거나 끝 시각 전이면 바로 끝낸다. 끝 시각이 지났을 때만 finishNight가 잠금 안에서 다시 확인한다
+// (사람 결정 답이 켜진 뒤 있었는데 결정 답 경로의 마무리가 실패했다면 거기서 ended-by-input으로 끝낸다).
+export function watchNightExpiry({entries, now, home, deps}) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e?.kind !== 'night') continue;
+    if (e.phase !== 'on' || now < Date.parse(e.until)) return null;
+    return finishNight({home, by: 'watch', deps: {...deps, now: () => now}});
+  }
+  return null;
 }

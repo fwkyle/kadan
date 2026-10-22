@@ -3,8 +3,13 @@
 import {isUserActor,isSupervisorActor} from './actors.mjs';
 
 export const HELD_PREFIX = '[나이트 보류]';
+// 알림 한 통의 글자 수 상한. 요약 글(summary.text)이 이 안에 들어오게 만든다.
+export const NOTICE_LIMIT = 1800;
+const HELD_LISTED = 10;
 const PR_URL = /https?:\/\/github\.com\/[^\s)]+\/pull\/\d+/;
 
+// 줄바꿈을 공백 하나로 접고 n자에서 자른다. 원문 전체는 원장의 on 사건에 그대로 있다.
+const fold = (t, n) => { const x = String(t ?? '').replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
 const stamp = ms => {
   const d = new Date(ms), p = n => String(n).padStart(2, '0');
   return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -45,23 +50,29 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     .map(body => body.slice(HELD_PREFIX.length).trim().split('\n')[0].slice(0, 100));
   const counts = {...decisions, restarts, mails: sends.length, held: held.length};
 
-  const lines = [];
-  lines.push(start.viaChat
-    ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${start.quote}"`
-    : `kyle 위임: "${start.text}"`);
-  lines.push(`나이트 모드 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase})`);
-  const night = [];
-  if (decisions.answered) night.push(`결정 답 ${decisions.answered}건`);
-  if (decisions.cancelledByHuman) night.push(`사람이 취소한 결정 ${decisions.cancelledByHuman}건`);
-  if (restarts) night.push(`재시작 ${restarts}건`);
-  if (sends.length) night.push(`우편 ${sends.length}건`);
-  if (held.length) night.push(`보류로 남긴 것 ${held.length}건`);
-  lines.push('밤사이 생긴 일', night.length ? `- ${night.join(' · ')}` : '- 밤사이 처리한 일 없음');
-  for (const item of held) lines.push(`  · 보류: ${item}`);
-  if (decisions.mergeAnswered || decisions.mergeCancelled)
-    lines.push(`- 머지 관련 결정 답 ${decisions.mergeAnswered}건·취소 ${decisions.mergeCancelled}건 — 실제 머지는 GitHub에서 확인`);
-  lines.push('위임으로 대신 처리한 일', decisions.cancelledBySuper
-    ? `- 슈퍼감독이 대신 닫은 결정 ${decisions.cancelledBySuper}건`
-    : '- 없음');
-  return {counts, held, text: lines.join('\n')};
+  // 알림 상한 안에 제목·기간·집계가 모두 들어가야 한다. 넘치면 원문 표시를 먼저 줄이고, 그래도 넘치면 보류 상세를 뺀다(건수는 남는다).
+  const render = (quoteLimit, showHeld) => {
+    const lines = [];
+    lines.push(start.viaChat
+      ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan night status, 원장)`
+      : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan night status, 원장)`);
+    lines.push(`나이트 모드 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase})`);
+    const night = [];
+    if (decisions.answered) night.push(`결정 답 ${decisions.answered}건`);
+    if (decisions.cancelledByHuman) night.push(`사람이 취소한 결정 ${decisions.cancelledByHuman}건`);
+    if (restarts) night.push(`재시작 ${restarts}건`);
+    if (sends.length) night.push(`우편 ${sends.length}건`);
+    if (held.length) night.push(`보류로 남긴 것 ${held.length}건`);
+    lines.push('밤사이 생긴 일', night.length ? `- ${night.join(' · ')}` : '- 밤사이 처리한 일 없음');
+    if (showHeld) for (const item of held.slice(0, HELD_LISTED)) lines.push(`  · 보류: ${item}`);
+    if (showHeld && held.length > HELD_LISTED) lines.push(`  · 그 밖 ${held.length - HELD_LISTED}건`);
+    if (decisions.mergeAnswered || decisions.mergeCancelled)
+      lines.push(`- 머지 관련 결정 답 ${decisions.mergeAnswered}건·취소 ${decisions.mergeCancelled}건 — 실제 머지는 GitHub에서 확인`);
+    lines.push('위임으로 대신 처리한 일', decisions.cancelledBySuper
+      ? `- 슈퍼감독이 대신 닫은 결정 ${decisions.cancelledBySuper}건`
+      : '- 없음');
+    return lines.join('\n');
+  };
+  const text = [[200, true], [80, true], [80, false]].map(([q, h]) => render(q, h)).find(t => t.length <= NOTICE_LIMIT) ?? render(80, false);
+  return {counts, held, text};
 }

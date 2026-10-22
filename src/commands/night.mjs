@@ -7,6 +7,7 @@ import {
   nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock,
 } from '../night.mjs';
 
+export const MAX_TEXT = 4000;
 const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--discord-message <글 id>] | off [--reason 이유] | status';
 
 function describeOn(state, now, missing) {
@@ -60,6 +61,9 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   const text = rest.join(' ').trim();
   if (!text) throw new Error(`위임 문구가 필요합니다. ${USAGE}`);
   const quote = typeof flags.quote === 'string' ? flags.quote.trim() : '';
+  // 원장에 무한 길이를 쓰지 않는다. 긴 글은 요약 알림에서 접어 보이지만 원문 전체는 on 사건에 남으므로 상한을 둔다.
+  for (const [name, value] of [['문구', text], ['kyle 원문', quote]])
+    if (value.length > MAX_TEXT) throw new Error(`${name}이(가) ${MAX_TEXT}자를 넘습니다(${value.length}자): 줄여서 다시 켜세요`);
   const viaChat = actor === 'super';
   if (viaChat && !quote) throw new Error('슈퍼감독이 켤 때는 kyle의 채팅 원문이 필요합니다: kyle이 말한 그대로 --quote "<원문>"으로 옮기세요');
   if (flags['discord-message'] !== undefined && (typeof flags['discord-message'] !== 'string' || !flags['discord-message'])) throw new Error('--discord-message는 디코 글 id 하나여야 합니다');
