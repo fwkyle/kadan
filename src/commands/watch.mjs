@@ -3,6 +3,7 @@ import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { WatchAI } from "../watch-ai.mjs";
 import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
+import { readLedgerIncremental } from "../ledger-incremental.mjs";
 import { notifyUser, watchProcessName } from "../watch-system.mjs";
 import { storageVersion } from "../storage.mjs";
 import { PROFILE_FILE } from "../watch-cycle.mjs";
@@ -24,7 +25,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { floor } from "../floor.mjs";
-import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
+import { appendLedger, ledgerHome } from "../ledger.mjs";
 import { runWatch } from "../watch-runner.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -218,7 +219,7 @@ export function cmdWatch(argv, flags) {
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
-  const reads=cycleReads({readEntries:()=>readLedger(),readCards:()=>new CardStore(ledgerHome()).list(),
+  const reads=cycleReads({readEntries:()=>readLedgerIncremental(ledgerHome()),readCards:()=>new CardStore(ledgerHome()).list(),
     readWorks:()=>new WorkStore(ledgerHome()).list(),version:()=>storageVersion(ledgerHome())});
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
   const holdTracker=new NotifyHoldTracker({record});
