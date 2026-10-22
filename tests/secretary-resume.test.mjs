@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {checkpointSecretary, resumeSecretary, startDigest, withRecoveryLock,
-  advanceSecretaryCheckpoint} from '../src/secretary-resume.mjs';
+  advanceSecretaryCheckpoint, savedSecretaryCommand} from '../src/secretary-resume.mjs';
+import {commandWords} from '../src/ai-identity.mjs';
 import {inspectRecovery, restoreRecovery} from '../src/recovery.mjs';
 import {runUp} from '../src/quickstart.mjs';
 
@@ -226,4 +227,62 @@ test('Rottie first also keeps implicit high effort and bypass from the exact che
   assert.match(f.calls[0].cmd, /model_reasoning_effort="high"/);
   assert.match(f.calls[0].cmd, /sandbox_mode="danger-full-access"/);
   assert.match(f.calls[0].cmd, /'--model' 'test-model'/);
+});
+
+const optionCount = (command, flag) => commandWords(command).filter(word => word === flag).length;
+const doubledCommand = () => "'codex' 'resume' 'exact-conversation' '--model' 'start-model' '-c' 'k=v' "
+  + "'--model' 'other-model' '-c' 'k=w'";
+
+test('checkpoint keeps the start model and fills only missing keys from the dialogue', () => {
+  const f = fixture();
+  fs.appendFileSync(f.transcript, JSON.stringify({type: 'turn_context', payload: {
+    model: 'other-model', effort: 'low', approval_policy: 'never',
+    sandbox_policy: {type: 'danger-full-access'},
+  }}) + '\n');
+  const words = commandWords(checkpointSecretary(f.deps).command);
+  assert.equal(optionCount(words.join(' '), '--model'), 1);
+  assert.equal(words[words.indexOf('--model') + 1], 'test-model');
+  assert.equal(words.filter(word => word.startsWith('model_reasoning_effort=')).length, 1);
+  assert.ok(words.includes('model_reasoning_effort=high'));
+  assert.ok(words.includes('approval_policy="never"') || words.includes('approval_policy=never'));
+});
+
+test('checkpoint -> resume cycles three times without growing the command', () => {
+  const f = fixture();
+  fs.appendFileSync(f.transcript, JSON.stringify({type: 'turn_context', payload: {
+    model: 'other-model', effort: 'low', approval_policy: 'never',
+    sandbox_policy: {type: 'danger-full-access'},
+  }}) + '\n');
+  checkpointSecretary(f.deps);
+  let length = 0; // 첫 순환은 --no-alt-screen 한 낱말이 붙는다. 그 뒤로는 길이가 변하면 안 된다
+  for (let i = 0; i < 4; i++) {
+    f.setPane(null);
+    assert.equal(resumeSecretary(f.deps), 'restored');
+    f.entries[f.entries.length - 1].cmd = f.calls.at(-1).cmd;
+    const next = checkpointSecretary(f.deps);
+    if (i > 0) assert.equal(next.command.length, length);
+    length = next.command.length;
+    assert.equal(optionCount(next.command, '--model'), 1);
+  }
+});
+
+test('resume launches a doubled checkpoint with one --model and one of each -c key', () => {
+  const f = fixture(); f.setPane(null);
+  const file = path.join(f.home, 'secretary-resume.json');
+  fs.writeFileSync(file, JSON.stringify({...f.checkpoint, command: doubledCommand()}) + '\n');
+  assert.equal(resumeSecretary(f.deps), 'restored');
+  const launched = commandWords(f.calls.at(-1).cmd);
+  assert.deepEqual(launched.slice(0, 7), ['codex', 'resume', 'exact-conversation', '--model', 'start-model',
+    '-c', 'k=v']);
+  assert.equal(launched.filter(word => word === '--model').length, 1);
+  assert.equal(launched.filter(word => word.startsWith('k=')).length, 1);
+  assert.equal(commandWords(JSON.parse(fs.readFileSync(file, 'utf8')).command).filter(w => w === '--model').length, 1);
+});
+
+test('savedSecretaryCommand also dedupes a doubled checkpoint for the Rottie path', () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.home, 'secretary-resume.json'),
+    JSON.stringify({...f.checkpoint, command: doubledCommand()}) + '\n');
+  const command = savedSecretaryCommand(f.home, f.context, 'codex resume exact-conversation');
+  assert.equal(commandWords(command).filter(word => word === '--model').length, 1);
 });
