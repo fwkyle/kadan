@@ -6,7 +6,7 @@ import { storageCommand } from "./storage-migration.mjs";
 import { assertWritable } from "./storage.mjs";
 import { inboxCommand } from "./mailbox.mjs";
 import { decisionCommand } from "./decisions.mjs";
-import { nightCommand } from "./commands/night.mjs";
+import { nightCommand, nightOriginalText } from "./commands/night.mjs";
 import { seniorCommand } from "./senior.mjs";
 import { runnersCommand } from "./runners-command.mjs";
 import { CardStore } from "./card-store.mjs";
@@ -209,7 +209,12 @@ const COMMANDS = {
   storage:(args,flags)=>console.log(JSON.stringify(storageCommand(args,flags,{home:ledgerHome()}),null,2)),
   inbox:(args,flags)=>console.log(JSON.stringify(inboxCommand(args,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   decision: (argv,flags) => console.log(JSON.stringify(decisionCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
-  night: (argv,flags) => console.log(JSON.stringify(nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
+  night: (argv,flags) => {
+    const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
+    console.log(JSON.stringify(result,null,2));
+    const original=argv[0]==='status'?nightOriginalText(result):null;
+    if(original)console.log(`\n${original}`);
+  },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     if (typeof result==='string') { console.log(result); return; }

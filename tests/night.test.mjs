@@ -11,7 +11,8 @@ import {DecisionStore} from '../src/decisions.mjs';
 import {nightCommand} from '../src/commands/night.mjs';
 import {nightState, resolveEnd, watchNightExpiry, DEFAULT_MS} from '../src/night.mjs';
 import {summarizeNight, NOTICE_LIMIT} from '../src/night-summary.mjs';
-import {MAX_TEXT} from '../src/commands/night.mjs';
+import {MAX_TEXT, nightOriginalText} from '../src/commands/night.mjs';
+import {readLedgerIncremental} from '../src/ledger-incremental.mjs';
 import {appendStream, createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {runWatch} from './helpers/watch-runner.mjs';
@@ -441,4 +442,57 @@ test('F2: 줄바꿈 원문도 대리 위임 표시는 한 줄이고, 보류가 �
   assert.ok(big.text.length <= NOTICE_LIMIT, `${big.text.length}자`);
   assert.match(big.text, /보류로 남긴 것 200건/);
   assert.match(big.text, /위임으로 대신 처리한 일\n- 없음$/);
+});
+
+test('F3: 꺼진 뒤 status가 마지막 켜짐의 원문을 보인다(줄바꿈 유지), 사람 명의·켠 적 없음도 확인', () => {
+  const f = fixture();
+  assert.deepEqual(f.run(['status']), {on: false, last: null}); // 켠 적 없음
+  assert.equal(nightOriginalText(f.run(['status'])), null);
+  const quote = '첫 줄\n둘째 줄';
+  f.run(['on', '대리', '위임'], {quote, for: '6h'}, 'a-슈퍼감독');
+  const on = f.run(['status']);
+  assert.equal(nightOriginalText(on).includes('첫 줄\n둘째 줄'), true);
+  f.setNow(T0 + HOUR);
+  f.run(['off'], {}, '사람');
+  const off = f.run(['status']);
+  assert.equal(off.on, false);
+  assert.deepEqual(off.last, {phase: 'off', t: iso(T0 + HOUR), startedAt: iso(T0), endedAt: iso(T0 + HOUR), by: 'a-슈퍼감독', viaChat: true, text: '대리 위임', quote});
+  const shown = nightOriginalText(off);
+  assert.match(shown, /마지막 위임 원문 \(a-슈퍼감독, kyle 채팅을 옮겨 적음\)/);
+  assert.ok(shown.includes('대리 위임') && shown.includes('첫 줄\n둘째 줄'));
+  // 사람 명의(원문 quote 없음): 문구만, quote 칸 없음. 새로 켜면 마지막 켜짐이 바뀐다
+  f.setNow(T0 + 2 * HOUR);
+  f.run(['on', '사람 문구'], {for: '1h'}, '사람');
+  f.setNow(T0 + 3 * HOUR);
+  f.run(['off'], {}, '사람');
+  const human = f.run(['status']).last;
+  assert.equal(human.text, '사람 문구');
+  assert.equal(human.viaChat, false);
+  assert.ok(!('quote' in human));
+  assert.ok(!nightOriginalText(f.run(['status'])).includes('kyle 채팅 원문'));
+  // 만료 뒤 마무리 전: 끝 시각이 보인다
+  f.setNow(T0 + 4 * HOUR);
+  f.run(['on', '만료 문구'], {for: '1h'}, '사람');
+  f.setNow(T0 + 6 * HOUR);
+  const pending = f.run(['status']);
+  assert.equal(pending.last.phase, 'expired');
+  assert.equal(pending.last.endedAt, iso(T0 + 5 * HOUR));
+  assert.equal(pending.last.text, '만료 문구');
+});
+
+test('#247 뒤: 증분 읽기(SQLite) entries에도 night 사건이 그대로 있고, 미만료·꺼짐 주기는 추가 읽기 0회', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-incr-'));
+  createDatabase(home); writeStorageMarker(home, 'sqlite');
+  appendLedger({kind: 'night', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);
+  appendStream(home, 'decisions/events.jsonl', {id: 'x', status: 'open'});
+  const entries = readLedgerIncremental(home); // 감시기의 cycleReads가 쓰는 읽기
+  assert.ok(entries.some(e => e.kind === 'night' && e.phase === 'on'), '증분 entries에 night 사건이 있어야 한다');
+  const queries = [];
+  const prepare = DatabaseSync.prototype.prepare;
+  DatabaseSync.prototype.prepare = function (sql, ...rest) { queries.push(sql); return prepare.call(this, sql, ...rest); };
+  try {
+    for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchNightExpiry({entries, now: T0 + ms, home}), null);
+    assert.equal(watchNightExpiry({entries: [], now: T0, home}), null);
+  } finally { DatabaseSync.prototype.prepare = prepare; }
+  assert.equal(queries.length, 0, `추가 SQL ${queries.length}회`);
 });

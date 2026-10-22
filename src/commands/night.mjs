@@ -27,6 +27,28 @@ function missingSupers(home, entries, on) {
   } catch { return null; }
 }
 
+// 가장 최근 켜짐의 원문. 원장의 마지막 `on` 사건과 그 뒤 끝 사건에서 읽는다(새 저장소 없음). 켠 적이 없으면 null.
+function lastRun(entries, state) {
+  let end = null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e?.kind !== 'night') continue;
+    if (e.phase !== 'on') { end ??= e; continue; }
+    const endedAt = end ? end.endedAt : (state.pending ? new Date(state.pending.endedAt).toISOString() : undefined);
+    return {phase: end?.phase ?? state.pending?.phase ?? 'on', t: (end ?? e).t, startedAt: e.t, ...(endedAt ? {endedAt} : {}),
+      by: e.by, viaChat: e.viaChat === true, text: e.text, ...(e.quote ? {quote: e.quote} : {})};
+  }
+  return null;
+}
+
+// status 결과의 원문(문구·kyle 원문)을 줄바꿈 그대로 보이는 글. JSON에서는 줄바꿈이 \n으로 보여 사람이 읽기 어렵다.
+export function nightOriginalText(result) {
+  const run = result?.on ? result : result?.last;
+  if (!run?.text) return null;
+  return [`--- ${result?.on ? '지금 켜진' : '마지막'} 위임 원문 (${run.by}${run.viaChat ? ', kyle 채팅을 옮겨 적음' : ''}) ---`, run.text,
+    ...(run.quote ? ['--- kyle 채팅 원문 ---', run.quote] : [])].join('\n');
+}
+
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.
 export function nightCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
@@ -38,7 +60,7 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   if (sub === 'status') {
     if (state.on) return describeOn(state, now, missingSupers(home, entries, state.start));
     return {on: false, ...(state.pending ? {pendingEnd: state.pending.phase, note: '끝났지만 아직 요약 전입니다(감시기 다음 주기나 다음 night 명령이 마무리합니다)'} : {}),
-      last: state.last ? {phase: state.last.phase, t: state.last.t} : null};
+      last: lastRun(entries, state)};
   }
   if (!['on', 'off'].includes(sub)) throw new Error(`알 수 없는 night 명령. ${USAGE}`);
 
