@@ -46,7 +46,8 @@ function fixture() {
     if (error) throw error;
     return {status, stderr, stdout: ''};
   };
-  const run = (extra = {}, {env = envOn(), ...more} = {}) => seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home, by: 'qa-감독', env, followScript, ...more, ...extra});
+  // 이 파일의 주제는 탭이라 시니어 한 명으로 돈다: 결과는 그 한 명의 칸(answers[0])으로 돌려준다.
+  const run = async (extra = {}, {env = envOn(), ...more} = {}) => (await seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home, by: 'qa-감독', env, followScript, ...more, ...extra})).answers[0];
   const advices = () => readLedger(home).filter(e => e.kind === 'advice');
   return {home, repo, calls, rottieFn, spawnFn, run, advices};
 }
@@ -77,7 +78,7 @@ test('가짜 로티: create 인자는 역할용이 아니다(KADAN_ROLE·kadan-*
   assert.equal(flag('--workspace'), f.repo); assert.equal(flag('--title'), '시니어 · qa/card-a');
   assert.match(flag('--idempotency-key'), new RegExp(`^kadan-senior-${r.adviceId}$`));
   const command = flag('--command');
-  assert.match(command, new RegExp(`^/bin/bash .*senior-follow\\.sh .*${r.adviceId} ${process.pid}$`));
+  assert.match(command, new RegExp(`^/bin/bash .*senior-follow\\.sh .*${path.basename(r.evidencePath)} ${process.pid}$`));
   assert.ok(!create.join(' ').includes('KADAN_ROLE') && !command.includes('env '), '역할용 env 접두가 없어야 한다');
   assert.ok(!flag('--title').startsWith('kadan-'), 'kadan-* 세션 이름을 쓰지 않는다');
   assert.match(r.follow, /^tail -F .*diagnostic\.log$/);
@@ -288,8 +289,10 @@ await seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home: ${JSON.strin
 
 // 라운드 2: 생성 응답이 유실돼도 키를 잃지 않는다 — 호출 폴더 tab.json과 interrupted 사건이 복구 근거다.
 const tabJson = home => {
-  const [id] = fs.readdirSync(path.join(home, 'advice'));
-  return {id, dir: path.join(home, 'advice', id), state: JSON.parse(fs.readFileSync(path.join(home, 'advice', id, 'tab.json'), 'utf8'))};
+  // 증거 폴더는 advice/<askId>/<n>-<실행기>-<모델>이고, 탭 키는 adviceId로 만든다.
+  const [ask] = fs.readdirSync(path.join(home, 'advice')), [sub] = fs.readdirSync(path.join(home, 'advice', ask));
+  const dir = path.join(home, 'advice', ask, sub), state = JSON.parse(fs.readFileSync(path.join(dir, 'tab.json'), 'utf8'));
+  return {id: state.key.replace('kadan-senior-', ''), dir, state};
 };
 
 test('R2: 터미널 Ctrl-C처럼 프로세스 그룹 전체가 SIGINT를 받아 로티 CLI도 죽어도 tab.json 키·unknown·interrupted 사건이 남고 remove는 0회', async () => {
@@ -316,11 +319,11 @@ await seniorCommand(['qa/card-a'], {question: '합칠까?'}, {home: ${JSON.strin
   process.kill(-child.pid, 'SIGINT');
   assert.equal((await exited).code, 130);
   assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['create']);
-  const {id, state} = tabJson(f.home);
+  const {id, dir: evidenceDir, state} = tabJson(f.home);
   assert.equal(state.key, `kadan-senior-${id}`); assert.equal(state.state, 'unknown');
   const [entry] = f.advices();
   assert.equal(entry.reason, 'interrupted'); assert.equal(entry.tab, 'unknown'); assert.equal(entry.tabKey, state.key);
-  assert.equal(entry.evidencePath, path.join(f.home, 'advice', id)); assert.equal(entry.rottieTerminalId, undefined);
+  assert.equal(entry.evidencePath, evidenceDir); assert.equal(entry.rottieTerminalId, undefined);
 });
 
 test('R2: 로티 CLI가 JSON 없이 비정상 종료(130·신호)해도 skipped가 아니라 unknown이고 키가 남으며 remove·목록 조회가 없다', async () => {

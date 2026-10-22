@@ -11,6 +11,8 @@ import {
   explainCommand,
   PROFILE_ROLES,
   WATCH_RUNNER,
+  SENIOR_SAFE_RUNNERS,
+  SENIOR_MAX,
   WATCH_MAX_ATTEMPTS,
   EXPLAIN_MAX_ATTEMPTS,
 } from "../runner-settings.mjs";
@@ -124,8 +126,8 @@ export function runnersData(snapshot, url, stamp) {
     commands,
     // 감시 AI는 codex만 고를 수 있고, 1순위 포함 최대 N개를 자동으로 차례로 시도한다.
     watch: { runner: WATCH_RUNNER, maxAttempts: WATCH_MAX_ATTEMPTS },
-    // 시니어도 codex만 고르고(senior.sh), 폴백 없이 한 번 부른다.
-    senior: { runner: WATCH_RUNNER },
+    // 시니어는 안전 허용 목록의 실행기(codex·agy)에서 최대 N명을 등록하고, 질문하면 전원에게 동시에 묻는다. 폴백은 없다.
+    senior: { runners: SENIOR_SAFE_RUNNERS, max: SENIOR_MAX },
     // 설명 AI는 실행기 표에 exec 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 N개를 차례로 시도한다.
     explain: {
       runners: Object.entries(settings.runners)

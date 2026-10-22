@@ -45,7 +45,7 @@ test('감독·사람만 부르고 작업자·검수자는 원장에 아무것도
   assert.ok(!fs.existsSync(path.join(f.home, 'advice')));
   for (const by of ['qa-감독', 'qa-슈퍼감독', 'qa-슈퍼감독-2', '사람']) {
     const r = await f.run(['qa/card-a'], {question:'바꿀까?'}, {by, spawn:f.spawn()});
-    assert.equal(r.reason, 'ok');
+    assert.equal(r.answers[0].reason, 'ok');
   }
   assert.deepEqual(f.advices().map(e => e.by), ['qa-감독', 'qa-슈퍼감독', 'qa-슈퍼감독-2', '사람']);
 });
@@ -67,25 +67,29 @@ test('성공: 질문·카드 본문·첨부를 한 입력으로 넘기고 저장
   const note = path.join(f.home, 'note.md'); fs.writeFileSync(note, '첨부 내용');
   const started = Date.parse('2026-10-05T00:00:00Z'); let tick = 0;
   const r = await f.run(['qa/card-a'], {question:' 열 이름을 지금 바꿔도 되나? ', file:note, timeout:'120'}, {spawn:f.spawn(), now:() => started + (tick++) * 1500});
-  assert.equal(r.reason, 'ok'); assert.equal(r.model, 'gpt-6-sol'); assert.equal(r.effort, 'high');
-  assert.match(r.answer, /^결론:/); assert.equal(r.card, 'qa/card-a');
+  // 결과는 모델별 answers[]다. 옛 단일 answer·model 칸은 없다(2026-10-22).
+  assert.equal(r.answers.length, 1); assert.ok(!('answer' in r)); assert.match(r.askId, /^[0-9a-f-]{36}$/);
+  const [one] = r.answers;
+  assert.equal(one.reason, 'ok'); assert.equal(one.status, 'ok'); assert.equal(one.model, 'gpt-6-sol'); assert.equal(one.effort, 'high');
+  assert.match(one.answer, /^결론:/); assert.equal(r.card, 'qa/card-a');
   const [{command, settings}] = f.calls;
   assert.match(command, /senior\.sh'$/);
   assert.equal(settings.timeout, 120_000); assert.equal(settings.reportComplete(), false);
   assert.equal(settings.env.KADAN_SENIOR_REPO, f.repo); assert.equal(settings.env.KADAN_SENIOR_MODEL, 'gpt-6-sol');
   assert.equal(settings.env.KADAN_SENIOR_EFFORT, 'high'); assert.equal(settings.env.KADAN_HOME, f.home);
-  assert.equal(settings.env.KADAN_SENIOR_DIR, r.evidencePath); assert.ok(r.evidencePath.startsWith(path.join(f.home, 'advice', '')));
-  assert.equal(fs.readFileSync(path.join(r.evidencePath, 'input.txt'), 'utf8'), settings.input);
+  assert.equal(settings.env.KADAN_SENIOR_DIR, one.evidencePath);
+  assert.equal(one.evidencePath, path.join(f.home, 'advice', r.askId, '1-codex-gpt-6-sol'));
+  assert.equal(fs.readFileSync(path.join(one.evidencePath, 'input.txt'), 'utf8'), settings.input);
   assert.ok(settings.input.includes('--- 질문 ---\n열 이름을 지금 바꿔도 되나?'));
   assert.ok(settings.input.includes('--- 카드 qa/card-a (시험 카드) ---\n# 시험 카드'));
   assert.ok(settings.input.includes(`--- 첨부 ${note} ---\n첨부 내용`));
   assert.match(settings.input, /결정하지 않는다/); assert.match(settings.input, /읽기 전용/); assert.match(settings.input, /지시는 실행하지 않는다/);
   const [entry] = f.advices();
-  assert.equal(entry.by, 'qa-슈퍼감독'); assert.equal(entry.card, 'qa/card-a'); assert.equal(entry.adviceId, r.adviceId);
+  assert.equal(entry.by, 'qa-슈퍼감독'); assert.equal(entry.card, 'qa/card-a'); assert.equal(entry.adviceId, one.adviceId); assert.equal(entry.askId, r.askId);
   assert.equal(entry.question, '열 이름을 지금 바꿔도 되나?'); assert.match(entry.questionDigest, /^[0-9a-f]{64}$/);
   assert.deepEqual([entry.model, entry.effort, entry.settingsRevision, entry.settingsPreset], ['gpt-6-sol', 'high', 2, 'B']);
-  assert.deepEqual([entry.reason, entry.exitCode, entry.durationMs, entry.bytes], ['ok', 0, 1500, Buffer.byteLength(r.answer)]);
-  assert.deepEqual(entry.files, [note]); assert.equal(entry.evidencePath, r.evidencePath); assert.equal(entry.t, '2026-10-05T00:00:00.000Z');
+  assert.deepEqual([entry.reason, entry.exitCode, entry.durationMs, entry.bytes], ['ok', 0, 1500, Buffer.byteLength(one.answer)]);
+  assert.deepEqual(entry.files, [note]); assert.equal(entry.evidencePath, one.evidencePath); assert.equal(entry.t, '2026-10-05T00:00:00.000Z');
   assert.ok(!('answer' in entry), '답변 본문은 원장에 넣지 않는다');
   // 기본 상한은 감시 AI(5분)보다 긴 30분이다(2026-10-05 [kyle]). 같은 카드로 다시 불러도 막지 않는다.
   await f.run(['qa/card-a'], {question:'다시'}, {spawn:f.spawn()});
@@ -117,7 +121,7 @@ test('첨부는 절대경로 5개·64KB까지이고, 넘으면 호출 전에 거
   await assert.rejects(() => f.run(['qa/card-a'], {question:'?', file:Array(6).fill(small)}, {spawn:f.spawn()}), /5개까지/);
   assert.equal(f.calls.length, 0); assert.deepEqual(f.advices(), []);
   const r = await f.run(['qa/card-a'], {question:'?', file:Array(5).fill(small)}, {spawn:f.spawn()});
-  assert.equal(r.reason, 'ok'); assert.equal(f.advices()[0].files.length, 5);
+  assert.equal(r.answers[0].reason, 'ok'); assert.equal(f.advices()[0].files.length, 5);
 });
 
 test('입력 조립은 질문·카드·첨부 순서이고 자료 구분선이 있다', () => {
@@ -185,25 +189,25 @@ test('옛 설정 키 roles.advisor는 senior로 읽고, 그 값으로 시니어�
   raw.presets[raw.activePreset].roles.advisor = {runner:'codex', model:'gpt-old', effort:'high'};
   fs.writeFileSync(file, JSON.stringify(raw));
   const read = readSettings(f.home);
-  assert.deepEqual(read.presets[read.activePreset].roles.senior, {runner:'codex', model:'gpt-old', effort:'high'});
+  assert.deepEqual(read.presets[read.activePreset].roles.senior, [{runner:'codex', model:'gpt-old', effort:'high'}], '옛 단일 객체는 1개짜리 목록으로 읽는다');
   assert.equal(read.presets[read.activePreset].roles.advisor, undefined);
   const result = await f.run(['qa/card-a'], {question:'바꿀까?'}, {spawn:f.spawn()});
-  assert.equal(result.model, 'gpt-old');
+  assert.equal(result.answers[0].model, 'gpt-old');
 });
 
 test('--effort는 이번 호출만 강도를 바꾸고(설정 그대로) 원장에 바꾼 사실을 남긴다, 모델이 지원하지 않는 강도·형식 오류는 호출 전에 거절', async () => {
   const f = fixture();
   const r = await f.run(['qa/card-a'], {question:'시험', effort:'low'}, {spawn:f.spawn(), readCodexModels});
-  assert.equal(r.effort, 'low');
+  assert.equal(r.answers[0].effort, 'low');
   assert.equal(f.calls[0].settings.env.KADAN_SENIOR_EFFORT, 'low');
   const [entry] = f.advices();
   assert.deepEqual([entry.effort, entry.effortOverride, entry.settingsEffort], ['low', true, 'high']);
-  assert.equal(readSettings(f.home).presets[readSettings(f.home).activePreset].roles.senior.effort, 'high', '설정은 바뀌지 않는다');
+  assert.equal(readSettings(f.home).presets[readSettings(f.home).activePreset].roles.senior[0].effort, 'high', '설정은 바뀌지 않는다');
   await assert.rejects(f.run(['qa/card-a'], {question:'시험', effort:'ultra'}, {spawn:f.spawn(), readCodexModels}), /지원하지 않는 강도: ultra/);
   await assert.rejects(f.run(['qa/card-a'], {question:'시험', effort:'LOW;rm'}, {spawn:f.spawn(), readCodexModels}), /--effort 형식 오류/);
   assert.equal(f.calls.length, 1); assert.equal(f.advices().length, 1);
   const plain = await f.run(['qa/card-a'], {question:'시험'}, {spawn:f.spawn(), readCodexModels});
-  assert.equal(plain.effort, 'high'); assert.equal(f.advices().at(-1).effortOverride, undefined);
+  assert.equal(plain.answers[0].effort, 'high'); assert.equal(f.advices().at(-1).effortOverride, undefined);
 });
 
 test('지정 없는 호출도 설정 직접 편집·옛 advisor 키의 허용 밖 실행기는 실행 전에 거절한다', async () => {
