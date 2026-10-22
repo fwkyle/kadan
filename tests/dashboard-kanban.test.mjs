@@ -447,3 +447,25 @@ test("프로젝트별 주소: ?group=project와 ?owner=를 같이 쓰면 그 감
   assert.deepEqual(one.owners, all.owners, "감독 고르기 목록은 거르기 전 전체");
   assert.equal((await get("kanban")).group, "owner");
 });
+
+test("F1: 실행 없는 업무의 결정 카드는 감독별 보기에서 main과 같다(새 최상위 칸만 다르다)", () => {
+  const w = [{ key: "alpha/work", title: "알파 업무", owner: "감독B", repo: "alpha", executions: [] }];
+  const input = { rows: [], lookup: [row("alpha/src", { repo: "src-repo", workType: "coordination" })], works: w, hierarchy, now, decisions: [mergeD("m1", { work: "alpha/work", card: "alpha/src" })] };
+  const { group, supervisors, ...rest } = buildKanban(input);
+  assert.equal(group, "owner");
+  assert.ok(Array.isArray(supervisors));
+  assert.equal(cardOf(rest, "work:alpha/work").repo, "src-repo", "카드 칸은 출처 카드 값 그대로(업무 repo를 넣지 않는다)");
+  const project = buildKanban({ ...input, group: "project" });
+  assert.deepEqual(projectOf(project, "work:alpha/work"), ["alpha"], "판 키는 업무 repo");
+  const { boards: ob } = buildKanban({ ...input, group: "owner" });
+  assert.deepEqual(rest.boards, ob);
+});
+
+test("F2: 업무 repo가 비면 출처 카드 repo로 분류하지 않고 저장소 모름에 둔다. 업무가 없을 때만 출처 카드 repo", () => {
+  const w = [{ key: "alpha/w", title: "업무", owner: "감독B", repo: "", executions: [] }];
+  const lookup = [row("alpha/src", { repo: "unrelated-source", workType: "coordination" })];
+  const withWork = buildKanban({ rows: [], lookup, works: w, hierarchy, now, group: "project", decisions: [mergeD("m1", { work: "alpha/w", card: "alpha/src" })] });
+  assert.deepEqual(projectOf(withWork, "work:alpha/w"), ["저장소 모름"]);
+  const noWork = buildKanban({ rows: [], lookup, works: [], hierarchy, now, group: "project", decisions: [mergeD("m2", { card: "alpha/src" })] });
+  assert.deepEqual(projectOf(noWork, "alpha/src"), ["unrelated-source"]);
+});

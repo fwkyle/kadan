@@ -198,13 +198,16 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     if (!stand.has(key)) {
       const parent = src?.owner && parents ? parents.get(src.owner) : null;
       const owner = w ? w.owner || null : parent && parent !== "@user" ? parent : null;
+      // 프로젝트 판 키. 업무가 있으면 업무의 repo만 보고(비면 저장소 모름), 업무가 없을 때만 출처 카드의 repo를 본다.
+      // 카드 칸(repo)은 main과 같게 출처 카드 값을 그대로 둔다.
       stand.set(key, {
         owner,
+        projectRepo: w ? w.repo || "" : src?.repo || "",
         card: {
           key,
           title: w ? w.title || bareWork(w.key) : src?.title || d.card,
           role: w ? w.owner || "" : src?.owner || "",
-          repo: w?.repo || src?.repo || "",
+          repo: src?.repo || "",
           board: src?.board || "",
           state: w ? "work" : src?.state ?? "",
           stateLabel: w ? "업무" : src ? statusLabel(src.state) : "카드 기록 없음",
@@ -226,11 +229,11 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     entry.decided.push(d);
     if (time(d.at) !== null && (time(entry.card.since) === null || time(d.at) > time(entry.card.since))) entry.card.since = entry.card.at = d.at;
   }
-  for (const { owner, card, decided } of stand.values()) {
+  for (const { owner, projectRepo, card, decided } of stand.values()) {
     card.marks.push(...prMarks(decided));
     supervisors.add(owner || UNLINKED);
     if (project && only !== null && (owner || UNLINKED) !== only) continue;
-    boardFor(owner, card.repo).lines[bundleIsMerge(decided) ? "merge" : "decision"].push(card);
+    boardFor(owner, projectRepo).lines[bundleIsMerge(decided) ? "merge" : "decision"].push(card);
   }
 
   const newest = (a, b) => (time(b.since) ?? 0) - (time(a.since) ?? 0);
