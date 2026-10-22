@@ -106,7 +106,11 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
     if (args[1] !== identity.id) throw new Error('비서 복원 명령과 실제 대화가 다릅니다.');
     args = args.slice(2);
   }
-  const command = serializeWords([words[0], 'resume', identity.id, ...mergeCodexOptions(args, conversationOptions(transcript))]);
+  const head = [words[0], 'resume', identity.id];
+  // 대화 옵션에 인용할 수 없는 낱말(줄바꿈)이 있으면 그 합치기만 건너뛰고 시작 명령 낱말로 저장한다.
+  // 저장을 거절하면 옛 startDigest가 남아 다음 복원이 막힌다. 시작 명령 낱말은 이미 읽힌 것이라 언제나 인용된다.
+  const command = serializeWords([...head, ...mergeCodexOptions(args, conversationOptions(transcript))])
+    ?? serializeWords([...head, ...mergeCodexOptions(args)]);
   if (!command) throw new Error('비서 복원 명령을 안전하게 저장할 수 없습니다.');
   const checkpoint = {version: 1, startDigest: startDigest(start), transcript,
     conversation: identity.id, cwd: start.cwd, command};

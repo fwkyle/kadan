@@ -3,13 +3,19 @@
 // 규칙: 키(--model·-m 하나, -c/--config는 `k=v`의 k)마다 처음 나온 것 하나만 남긴다.
 // 시작 명령을 먼저 쓰므로 시작 명령이 이기고, 대화의 옵션은 빈 키만 채운다. 다른 낱말은 순서 그대로 둔다.
 import {commandWords} from './ai-identity.mjs';
-import {shellQuote} from './stop-hook-settings.mjs';
 
+// commandWords 문법에 맞춘 인용: 작은따옴표가 아닌 구간은 '…', 작은따옴표 하나는 "'"로 쓰고 이어 붙인다.
+// 예: Don't → 'Don'"'"'t'. 줄바꿈이 든 낱말만 null(commandWords도 읽지 못한다).
+export function quoteWord(word) {
+  const text = String(word);
+  if (/[\n\r]/.test(text)) return null;
+  return text.split("'").map(part => `'${part}'`).join(`"'"`);
+}
 
-// 낱말 목록을 commandWords가 같은 낱말로 되읽는 명령 문자열로 만든다. 되읽기가 어긋나거나 안전하게 인용할
-// 수 없으면 null이다(호출자가 원문을 두거나 저장을 멈춘다). `--`만 인용하지 않는다(withInlineScreen이 인용 안 한 `--`만 찾는다). `'\\''` 이스케이프는 commandWords가 거절하므로 쓰지 않는다.
+// 낱말 목록을 commandWords가 같은 낱말로 되읽는 명령 문자열로 만든다. 되읽기가 어긋나면 null이다(마지막 울타리).
+// `--`만 인용하지 않는다(withInlineScreen이 인용 안 한 `--`만 찾는다).
 export function serializeWords(words) {
-  const parts = words.map(word => word === '--' ? word : shellQuote(word));
+  const parts = words.map(word => word === '--' ? word : quoteWord(word));
   if (parts.some(part => part === null)) return null;
   const text = parts.join(' ');
   const back = commandWords(text);

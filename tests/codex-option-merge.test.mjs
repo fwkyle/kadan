@@ -40,14 +40,23 @@ test('dedupeResumeCommand fixes resume commands and leaves others as they are', 
   assert.equal(dedupeResumeCommand("codex 'unclosed"), "codex 'unclosed");
 });
 
-test('serializeWords round-trips through commandWords', () => {
-  const samples = [['a', "it's", 'x y', '--', 'k=a=b=c'], ['c', '"q"', "a'b\"c"], ['', 'plain'], ['--', 'hi there']];
+test('serializeWords round-trips every readable word, including mixed quotes', () => {
+  const mixed = `developer_instructions="Don't modify files"`;
+  const samples = [['a', "it's", 'x y', '--', 'k=a=b=c'], ['c', '"q"', "a'b\"c"], ['', 'plain'], ['--', 'hi there'],
+    ['-c', mixed], ["'", "''", `"'"`], ['$HOME', '`x`', 'a\\b', "it's $x `y` \\z \"w\""]];
   for (const words of samples) {
     const text = serializeWords(words);
-    if (text === null) { assert.ok(words.some(w => /'/.test(w) && /["]/.test(w)) , JSON.stringify(words)); continue; }
+    assert.notEqual(text, null, JSON.stringify(words));
     assert.deepEqual(commandWords(text), words);
   }
   assert.equal(serializeWords(['a\nb']), null);
+  assert.equal(serializeWords(['-c', mixed]), `'-c' 'developer_instructions="Don'"'"'t modify files"'`);
+});
+
+test('dedupe collapses doubled --model beside a mixed-quote setting', () => {
+  const mixed = `developer_instructions="Don't modify files"`;
+  const cmd = serializeWords(['codex', 'resume', 'ID', '--model', 'A', '-c', mixed, '--model', 'B']);
+  assert.deepEqual(commandWords(dedupeResumeCommand(cmd)), ['codex', 'resume', 'ID', '--model', 'A', '-c', mixed]);
 });
 
 test('dedupe keeps single-quoted settings readable', () => {

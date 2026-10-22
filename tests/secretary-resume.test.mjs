@@ -6,6 +6,7 @@ import path from 'node:path';
 import {checkpointSecretary, resumeSecretary, startDigest, withRecoveryLock,
   advanceSecretaryCheckpoint, savedSecretaryCommand} from '../src/secretary-resume.mjs';
 import {commandWords} from '../src/ai-identity.mjs';
+import {serializeWords} from '../src/codex-option-merge.mjs';
 import {inspectRecovery, restoreRecovery} from '../src/recovery.mjs';
 import {runUp} from '../src/quickstart.mjs';
 
@@ -299,4 +300,31 @@ test('single quotes in a setting survive two restores and stay readable by comma
   assert.equal(resumeSecretary(f.deps), 'restored');
   assert.equal(f.calls.length, 2);
   assert.deepEqual(commandWords(f.calls[1].cmd).slice(0, 7), want);
+});
+
+const MIXED = `developer_instructions="Don't modify files"`;
+const mixedStart = `codex --model gpt-x -c 'developer_instructions="Don'"'"'t modify files"'`;
+
+test('a mixed-quote setting in the start command is checkpointed and restored twice in a row', () => {
+  const f = fixture(mixedStart);
+  const want = ['codex', 'resume', 'exact-conversation', '--model', 'gpt-x', '-c', MIXED];
+  assert.deepEqual(commandWords(f.checkpoint.command), want);
+  for (let i = 0; i < 2; i++) {
+    f.setPane(null);
+    assert.equal(resumeSecretary(f.deps), 'restored');
+  }
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(commandWords(f.calls[1].cmd).slice(0, 7), want);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.home, 'secretary-resume.json')));
+  assert.deepEqual(commandWords(saved.command), want);
+});
+
+test('savedSecretaryCommand keeps a mixed-quote setting and one --model on the Rottie path', () => {
+  const f = fixture(mixedStart);
+  fs.writeFileSync(path.join(f.home, 'secretary-resume.json'),
+    JSON.stringify({...f.checkpoint, command: serializeWords(['codex', 'resume', 'exact-conversation',
+      '--model', 'gpt-x', '-c', MIXED, '--model', 'gpt-y'])}) + '\n');
+  const words = commandWords(savedSecretaryCommand(f.home, f.context, 'codex resume exact-conversation'));
+  assert.deepEqual(words.slice(0, 7), ['codex', 'resume', 'exact-conversation', '--model', 'gpt-x', '-c', MIXED]);
+  assert.equal(words.filter(w => w === '--model').length, 1);
 });
