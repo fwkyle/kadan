@@ -107,24 +107,40 @@ export function readLedgerStateIncremental(home,{log = console.error} = {}) {
   return current(home,log).view;
 }
 
-// readLedger / readTaskLedger / readMailLedger / readMailboxLedger / readSystemLedger와 같은 결과. 영역(domain)마다 투영 상태를 따로 둔다.
-// uniqueDone의 본 키 집합은 영역 사이에 공유하지 않는다 — 영역 필터를 거친 뒤의 첫 완료여야 한다.
-export function readLedgerIncremental(home,{domain = null,log = console.error} = {}) {
-  if (storageMode(home) !== 'sqlite') return projectLedger(readLedgerState(home,{domain}),domain);
-  const st = current(home,log),key = domain ?? '';
+// 한 상태(st)의 현재 view까지 영역별 투영 메모를 이어 붙인다. view 길이를 넘어 투영하지 않는다.
+function projectUpTo(st,view,domain) {
+  const key = domain ?? '';
   let memo = st.projections.get(key);
   if (!memo) {
     if (domain && st.legacyBad) throw new Error('과거 원장 손상: 도메인 조회 불가');
     const project = domainProjector(domain),unique = createUniqueDone();
-    memo = {project,unique,out:project.legacy(st.view.legacy).filter(unique),upTo:0};
+    memo = {project,unique,out:project.legacy(view.legacy).filter(unique),upTo:0};
     st.projections.set(key,memo);
   }
-  const rows = st.view.ordered;
+  const rows = view.ordered;
   if (memo.upTo < rows.length) {
     memo.out = memo.out.concat(memo.project.rows(rows.slice(memo.upTo)).filter(memo.unique));
     memo.upTo = rows.length;
   }
   return memo.out;
+}
+
+// readLedger / readTaskLedger / readMailLedger / readMailboxLedger / readSystemLedger와 같은 결과. 영역(domain)마다 투영 상태를 따로 둔다.
+// uniqueDone의 본 키 집합은 영역 사이에 공유하지 않는다 — 영역 필터를 거친 뒤의 첫 완료여야 한다.
+export function readLedgerIncremental(home,{domain = null,log = console.error} = {}) {
+  if (storageMode(home) !== 'sqlite') return projectLedger(readLedgerState(home,{domain}),domain);
+  const st = current(home,log);
+  return projectUpTo(st,st.view,domain);
+}
+
+// state와 entries를 같은 current() 한 번에서 만든다. 두 번 따로 읽으면 사이에 들어온 사건 때문에 서로 다른 순번을 보게 된다.
+export function readLedgerViewIncremental(home,{domain = null,log = console.error} = {}) {
+  if (storageMode(home) !== 'sqlite') {
+    const state = readLedgerState(home,{domain});
+    return {state,entries:projectLedger(state,domain)};
+  }
+  const st = current(home,log),view = st.view;
+  return {state:view,entries:projectUpTo(st,view,domain)};
 }
 
 // 시험·진단용. 상태가 없으면 null.

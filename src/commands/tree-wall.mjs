@@ -1,6 +1,6 @@
 // kadan tree·wall·dashboard (HW-3-impl: cli.mjs에서 옮김)
 import { readLedgerState, projectLedger } from "../ledger-domains.mjs";
-import { readLedgerStateIncremental, readLedgerIncremental } from "../ledger-incremental.mjs";
+import { readLedgerViewIncremental } from "../ledger-incremental.mjs";
 import { storageMode } from "../storage.mjs";
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { attachWatchOverview } from "../watch-overview.mjs";
@@ -60,7 +60,7 @@ export function loadWallSnapshot(runtime=null) {
         const state = readLedgerState(home);
         return { state, entries: projectLedger(state) };
       }
-      return { state: readLedgerStateIncremental(home), entries: readLedgerIncremental(home) };
+      return readLedgerViewIncremental(home);
     }));
     ledgerLines = entries.length;
   } catch (error) {
