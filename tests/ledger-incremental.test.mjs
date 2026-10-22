@@ -7,8 +7,8 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {appendLedger,readLedger,readTaskLedger,readMailLedger,readMailboxLedger,readSystemLedger} from '../src/ledger.mjs';
 import {createDatabase,writeStorageMarker,appendStream,readStream,transaction,storagePath} from '../src/storage.mjs';
-import {ledgerStreams} from '../src/ledger-domains.mjs';
-import {readLedgerIncremental,readLedgerStateIncremental,incrementalInfo,incrementalCounts,resetIncremental}
+import {ledgerStreams,projectLedger} from '../src/ledger-domains.mjs';
+import {readLedgerIncremental,readLedgerStateIncremental,readLedgerViewIncremental,incrementalInfo,incrementalCounts,resetIncremental}
   from '../src/ledger-incremental.mjs';
 import {cycleReads} from '../src/watch-reads.mjs';
 import {collectRoles} from '../src/watch-roles.mjs';
@@ -263,4 +263,37 @@ test('감시기 연결: 같은 고정 입력으로 K주기 동안 낸 경보 판
     viaFull.end();viaIncremental.end();
   }
   assert.equal(incrementalCounts().full, 1);
+});
+
+test('한 번 읽기: state와 entries는 같은 current() 한 번에서 나와 같은 끝 순번까지만 반영한다', () => {
+  resetIncremental();
+  const home = sqliteHome();seed(home);
+  const first = readLedgerViewIncremental(home, {log: quiet});
+  assert.equal(digest(first.entries), digest(readLedger(home)));
+  assert.equal(digest(first.entries), digest(projectLedger(first.state)));
+  const base = incrementalCounts();
+  // 호출마다 읽기 한 번(full+incremental+unchanged 합이 정확히 1 늘어난다). 둘을 따로 부르면 2가 늘어난다.
+  const passes = () => {const c = incrementalCounts();return c.full + c.incremental + c.unchanged;};
+  const before = passes();
+  batches.mail(home);
+  const second = readLedgerViewIncremental(home, {log: quiet});
+  assert.equal(passes() - before, 1);
+  assert.equal(incrementalCounts().incremental - base.incremental, 1);
+  assert.equal(digest(second.entries), digest(readLedger(home)));
+  assert.equal(digest(second.entries), digest(projectLedger(second.state)));
+  assert.equal(second.state.ordered.length, readLedgerStateIncremental(home, {log: quiet}).ordered.length);
+  // 이미 돌려준 결과는 뒤에 들어온 사건으로 자라지 않는다(버전마다 새 배열).
+  const frozen = {ordered: second.state.ordered.length, entries: second.entries.length};
+  batches.mail(home);readLedgerViewIncremental(home, {log: quiet});
+  assert.deepEqual({ordered: second.state.ordered.length, entries: second.entries.length}, frozen);
+  assert.equal(incrementalCounts().full, 1);
+});
+
+test('한 번 읽기: JSONL 홈은 전체 읽기 한 번으로 state와 entries를 함께 만든다', () => {
+  resetIncremental();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-view-jsonl-'));
+  appendLedger({kind: 'send', role: 'worker', by: 'lead', taskId: 'x', mailId: id('m')}, home);
+  const view = readLedgerViewIncremental(home, {log: quiet});
+  assert.equal(digest(view.entries), digest(readLedger(home)));
+  assert.equal(digest(view.entries), digest(projectLedger(view.state)));
 });
