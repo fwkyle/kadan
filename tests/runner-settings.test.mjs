@@ -104,7 +104,11 @@ test('발령 명령은 활성 프리셋의 역할 값으로 실행기 틀을 채
 test('CLI: runners set/show와 start --profile 자동 채움·다른 명령의 이유 필수', () => {
   const f = fixture();
   const socket = `runner-settings-test-${process.pid}-${Date.now()}`;
-  const env = {...process.env, KADAN_HOME:f.home, KADAN_SOCKET:socket, KADAN_FLOOR:'tmux', KADAN_WINDOW:'none', KADAN_CODEX_MODELS_CACHE:f.cache, KADAN_ROLE:'시험-슈퍼'};
+  // init은 PATH에서 설치된 실행기만 등록한다. 깨끗한 러너에도 codex가 없으니 가짜 실행 파일을 PATH 앞에 둔다.
+  const bin = path.join(f.home, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nexit 0\n', {mode:0o755});
+  const env = {...process.env, PATH:`${bin}${path.delimiter}${process.env.PATH}`, KADAN_HOME:f.home, KADAN_SOCKET:socket, KADAN_FLOOR:'tmux', KADAN_WINDOW:'none', KADAN_CODEX_MODELS_CACHE:f.cache, KADAN_ROLE:'시험-슈퍼'};
   delete env.KADAN_LITE_HOME;
   const run = (...args) => spawnSync(process.execPath, [cli, ...args], {env, encoding:'utf8', timeout:15000});
   const ok = (...args) => { const p = run(...args); assert.equal(p.status, 0, p.stderr); return p.stdout; };
