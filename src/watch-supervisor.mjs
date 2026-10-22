@@ -82,7 +82,7 @@ export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
     .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
       const turnValue = outsideTurnValue(w, parents, cards);
-      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since, ...(turnValue ? { turnValue } : {}) }; });
+      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}) }; });
 }
 
 export function assessSupervisorIdle(
@@ -219,7 +219,7 @@ function ownReason(entry, role, answers, questions) {
     const asked = questions(id, role).slice(0, 3);
     return { id, reason: "답할 질문", ...(asked.length ? { questions: asked.map(m => ({ mailId: m.mailId, asker: m.asker ?? null })) } : {}) };
   }
-  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례", ...(entry.turnValue ? { turnValue: entry.turnValue } : {}) };
+  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례", ...(entry.turnValue ? { turnValue: entry.turnValue, workRevision: entry.workRevision } : {}) };
 }
 
 const BODY_ITEMS = 5;
@@ -243,8 +243,10 @@ export function idleTurnHint(alert) {
   const item = alert?.idleItems?.ownWhy?.find(w => w.turnValue && w.id?.startsWith("work:"));
   if (!item) return [];
   const work = shellQuote(item.id.slice(5));
+  // 저장소는 오래된 화면의 쓰기를 거절하므로(revision 검사) 감시기가 아는 현재 revision을 명령에 채운다. 그 사이 바뀌면 거절되어 work show로 새 값을 본다.
+  const revision = Number.isInteger(item.workRevision) ? item.workRevision : "<revision>";
   return [`차례 칸 값 '${item.turnValue}'는 관계표에 없어 책임 감독에게 계속 갑니다.`,
-    `사용자 답을 기다리면 \`--turn-owner @user\`, 밖에서 기다리면 \`kadan work update ${work} --status hold --next-action '…'\`로 멈추세요.`];
+    `사용자 답을 기다리면 \`--turn-owner @user\`, 밖에서 기다리면 \`kadan work update ${work} --revision ${revision} --status hold --next-action '…' --note '외부 대기'\`로 멈추세요. 거절되면 \`kadan work show ${work}\`로 새 revision을 보세요.`];
 }
 
 // 1단 본인 창 글에만 붙는 등록 명령 꼴(2026-10-22). 말로만 기다리면 감시가 답 대기로 못 알아보고 '놀고 있음'을 되풀이한다.

@@ -9,6 +9,9 @@ import {userTurnWaitList, USER_TURN_WAIT_TAG} from '../src/handover-state.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {workCommand} from '../src/work-command.mjs';
 import {cycleStatus} from '../src/watch-cycle.mjs';
+import {spawnSync} from 'node:child_process';
+import {dashboardData} from '../src/dashboard-api.mjs';
+import {dashboardFixture} from './helpers/dashboard-fixture.mjs';
 
 // 놀고 있음 PR-1: 차례 칸의 사용자·글 값. 판정이 바뀌는 곳은 B4a(사용자 값이면서 current) 하나뿐이다.
 // 가짜 시계로 감시 순회를 돌리고, 실제 알림·모델 호출·운영 홈은 쓰지 않는다.
@@ -83,7 +86,7 @@ test('글 차례: 판정은 owner 그대로, 본문에 안내 두 줄. 긴 값�
   assert.equal(r.idle[0]?.role,'p-감독');
   const text=r.nudges[0][2];
   assert.match(text,/차례 칸 값 '외부 대기: 업체 회신'는 관계표에 없어 책임 감독에게 계속 갑니다\./);
-  assert.match(text,/사용자 답을 기다리면 `--turn-owner @user`, 밖에서 기다리면 `kadan work update 'repo\/w1' --status hold --next-action '…'`로 멈추세요\./);
+  assert.match(text,/사용자 답을 기다리면 `--turn-owner @user`, 밖에서 기다리면 `kadan work update 'repo\/w1' --revision 1 --status hold --next-action '…' --note '외부 대기'`로 멈추세요\. 거절되면 `kadan work show 'repo\/w1'`로 새 revision을 보세요\./);
   const long='가'.repeat(60);
   const cut=await simulate({works:[work({turnOwner:long,turnAt:stamp(1)})]});
   assert.match(cut.nudges[0][2],new RegExp(`'${'가'.repeat(40)}…'`));
@@ -120,4 +123,52 @@ test('--turn-owner @user·사람 진입: 받아들여지고 원장에 남는다.
       assert.ok(Number.isFinite(Date.parse(store.get(key).turnAt)));
     }
   }finally{fs.rmSync(home,{recursive:true,force:true});}
+});
+
+// F1: 경보가 안내한 명령 문자열을 격리 홈의 실제 CLI로 그대로 실행한다.
+test('안내한 hold 명령은 실제 CLI에서 종료 0으로 hold를 저장하고, 오래된 revision은 거절한다',async()=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-hold-hint-'));
+  const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
+  const run=cmd=>spawnSync('sh',['-c',cmd.replace(/^kadan /,`${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} `)],
+    {encoding:'utf8',env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'p-감독',KADAN_NOTIFY:'off',KADAN_WINDOW:'none'}});
+  try{
+    const store=new WorkStore(home);
+    store.create({key:'repo/w1',title:'t',goal:'g',scope:'s',acceptance:'a',owner:'p-감독',repoPath:home});
+    // 차례 값을 글로 바꿔 revision을 올린 뒤, 그 업무 객체로 경보 본문을 만든다.
+    workCommand(['update','repo/w1'],{revision:store.get('repo/w1').revision,note:'글 차례','turn-owner':'외부 대기: 업체 회신'},{home,by:'p-감독'});
+    const stored=store.get('repo/w1');
+    const r=await simulate({works:[work({turnOwner:stored.turnOwner,turnAt:stamp(1),revision:stored.revision})]});
+    const command=r.nudges[0][2].match(/`(kadan work update [^`]+)`/)[1];
+    assert.match(command,new RegExp(`--revision ${stored.revision} `));
+    const stale=run(command.replace(`--revision ${stored.revision} `,`--revision ${stored.revision-1} `));
+    assert.notEqual(stale.status,0);
+    assert.equal(store.get('repo/w1').status,'open');
+    const ok=run(command);
+    assert.equal(ok.status,0,ok.stderr);
+    assert.equal(new WorkStore(home).get('repo/w1').status,'hold');
+    assert.equal(new WorkStore(home).get('repo/w1').nextAction,'…');
+    const show=run(r.nudges[0][2].match(/`(kadan work show [^`]+)`/)[1]);
+    assert.equal(show.status,0,show.stderr);
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+});
+
+// F3: 기록·응답용 차례 값만 80자에서 자른다. 판정은 원문을 쓴다.
+test('주기 기록의 userTurnWaits 차례 값은 80자 상한을 둔다',async()=>{
+  const long='@user'.padEnd(200,'가');
+  const r=await withEnv('KADAN_USER_NAMES',long,()=>simulate({works:[work({turnOwner:long,turnAt:stamp(1)})]}));
+  assert.deepEqual(r.idle,[],'판정에는 원문을 써서 사용자 대기로 뺀다');
+  assert.equal(r.cycles[0].userTurnWaits[0].turnOwner,long.slice(0,80)+'…');
+});
+
+// F2: status API에 새 키 userTurnWaits만 더한다.
+test('/api/dashboard/status 응답에 userTurnWaits가 실린다(없으면 빈 목록)',()=>{
+  const f=dashboardFixture({count:2});
+  const none=dashboardData(f.snapshot(),new URL('http://local/api/dashboard/status'));
+  assert.deepEqual(none.userTurnWaits,[]);
+  const snapshot=f.snapshot();
+  const waits=[{work:'repo/w1',turnOwner:'@user',tag:USER_TURN_WAIT_TAG}];
+  snapshot.center.monitoring={process:{instances:[]},configuration:{},boards:[],cycle:{settings:{userTurnWaits:waits}}};
+  const status=dashboardData(snapshot,new URL('http://local/api/dashboard/status'));
+  assert.deepEqual(status.userTurnWaits,waits);
+  assert.ok('executionCount' in status&&'works' in status&&'rows' in status,'기존 키는 그대로');
 });

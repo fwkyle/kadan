@@ -112,6 +112,8 @@ export function statusData(snapshot, url, stamp, m) {
     resources: snapshot.resources,
     resourceError: snapshot.resourceError,
     workError: m.workError,
+    // 차례 칸 때문에 사용자 대기로 뺀 업무(최근 감시 주기 기준). 새 키만 더한다(2026-10-23 놀고 있음 PR-1 수정 1).
+    userTurnWaits: snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits ?? [],
     executionCount: m.cards.filter(isExecution).length,
     waitingQuestions: (() => {
       try { return letters(snapshot).filter(letter => letter.replyStatus === "waiting").length; }
