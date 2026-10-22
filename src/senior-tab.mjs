@@ -34,13 +34,13 @@ export function seniorTabEnabled(env) {
   return value === 'on' ? true : value === 'off' ? false : SENIOR_TAB_DEFAULT_ON;
 }
 
-export function buildSeniorTabCreateArgv({card, adviceId, command}) {
-  return ['terminal', 'create', '--workspace', card.repoPath, '--title', `시니어 · ${card.key}`,
+export function buildSeniorTabCreateArgv({card, adviceId, command, suffix}) {
+  return ['terminal', 'create', '--workspace', card.repoPath, '--title', `시니어 · ${card.key}${suffix ? ` · ${suffix}` : ''}`,
     '--command', command, '--idempotency-key', `kadan-senior-${adviceId}`, '--json'];
 }
 
 // 반환: {tab: 'opened'|'skipped', tabReason?, rottieTerminalId?, call?}. call(argv)는 닫을 때도 같은 환경으로 로티를 부른다.
-export function openSeniorTab({home, env, card, adviceId, dir, followScript, parentPid = process.pid, rottie}) {
+export function openSeniorTab({home, env, card, adviceId, dir, followScript, parentPid = process.pid, rottie, suffix}) {
   try {
     if (!seniorTabEnabled(env)) return {tab: 'skipped', tabReason: 'tab-off'};
     const setting = effectiveWindow(env, home);
@@ -53,7 +53,7 @@ export function openSeniorTab({home, env, card, adviceId, dir, followScript, par
     const call = rottie ?? (argv => runRottie(argv, spawnSync, runEnv));
     const command = `/bin/bash ${shellWord(followScript)} ${shellWord(dir)} ${parentPid}`;
     // workspace가 로티에 열려 있지 않으면(ROTTIE_WORKSPACE_NOT_OPEN) 새로 추가하지 않고 건너뛴다.
-    const argv = buildSeniorTabCreateArgv({card, adviceId, command});
+    const argv = buildSeniorTabCreateArgv({card, adviceId, command, suffix});
     const key = argv[argv.indexOf('--idempotency-key') + 1];
     writeTabState(dir, {key, state: 'creating'});
     let envelope;

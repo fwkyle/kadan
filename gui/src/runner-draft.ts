@@ -8,16 +8,25 @@ type Part = {
     { roles: Record<string, unknown>; fallback?: Record<string, unknown[]> }
   >;
 };
+// 시니어는 대체 후보가 아니라 등록 목록(최대 2명)이 roles.senior에 있다. 같은 목록 조작 칸을 쓰되 읽는 곳만 다르다.
+export const listOf = (settings: Part, role: string): unknown[] => {
+  const preset = settings.presets[settings.activePreset];
+  if (role === "senior") {
+    const value = preset?.roles.senior;
+    return Array.isArray(value) ? value : value ? [value] : [];
+  }
+  return preset?.fallback?.[role] ?? [];
+};
 export const ownPart = (settings: Part, role: string, fallback: boolean) => {
   const preset = settings.presets[settings.activePreset];
   return JSON.stringify(
-    fallback ? (preset?.fallback?.[role] ?? []) : (preset?.roles[role] ?? null),
+    fallback ? listOf(settings, role) : (preset?.roles[role] ?? null),
   );
 };
 
 // 늘 보이는 요약표·접힌 칸 제목에 쓰는, 역할별 저장된 대체 후보 목록(순서대로 "실행기 / 모델 / 강도").
 export const fallbackLabels = (settings: Part, role: string) =>
-  (settings.presets[settings.activePreset]?.fallback?.[role] ?? []).map((c) => {
+  listOf(settings, role).map((c) => {
     const { runner, model, effort } = c as {
       runner?: string;
       model?: string;
