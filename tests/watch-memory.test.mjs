@@ -37,16 +37,38 @@ test('감독 건강 추적: 범위에서 빠진 세션은 다음 주기에 지�
   }
 });
 
-test('주기 읽기 재사용: begin·end 뒤에는 원장 사본을 쥐지 않는다', () => {
+// begin의 초기화와 end의 해제를 따로 검사한다: begin이 매번 캐시를 지우므로 end만 비워 두어도 begin 뒤 횟수는 같기 때문이다.
+function assertCycleReadsRelease(makeReads) {
   let reads = 0;
-  const reader = cycleReads({readEntries: () => (reads++, new Array(10).fill({})), version: () => 1});
-  for (let i = 0; i < CYCLES; i++) {
-    reader.begin();
-    reader.readEntries();
-    reader.readEntries(); // 같은 주기 안 두 번째는 재사용
-    reader.end();
-  }
-  assert.equal(reads, CYCLES, '주기마다 정확히 한 번만 읽는다');
+  const reader = makeReads({readEntries: () => (reads++, new Array(10).fill({})), version: () => 1});
+  reader.begin();
+  reader.readEntries();
+  reader.readEntries();
+  assert.equal(reads, 1, '같은 주기 안 두 번째 읽기는 재사용');
+  reader.end();
+  reader.readEntries(); // end 직후·다음 begin 전: 해제했다면 다시 읽는다
+  assert.equal(reads, 2, 'end()가 재사용 자료를 놓지 않았다');
+  reader.begin();
+  reader.readEntries();
+  assert.equal(reads, 3, 'begin()이 재사용 자료를 지우지 않았다');
+  for (let i = 0; i < CYCLES; i++) { reader.begin(); reader.readEntries(); reader.readEntries(); reader.end(); }
+  assert.equal(reads, 3 + CYCLES, '주기마다 정확히 한 번만 읽는다');
+}
+
+test('주기 읽기 재사용: end 직후와 begin 직후 모두 원장 사본을 쥐지 않는다', () => {
+  assertCycleReadsRelease(cycleReads);
+});
+
+test('주기 읽기 재사용 시험은 end()를 비운 변형을 잡아낸다(메모리 안 치환, 소스 파일은 그대로)', async () => {
+  const source = fs.readFileSync(new URL('../src/watch-reads.mjs', import.meta.url), 'utf8');
+  const mutated = source.replace('end() { cache.clear(); }', 'end() {}');
+  assert.notEqual(mutated, source, '치환 대상 줄이 있어야 한다');
+  const {cycleReads: broken} = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString('base64')}`);
+  assert.throws(() => assertCycleReadsRelease(broken), /end\(\)가 재사용 자료를 놓지 않았다/);
+  const noBegin = source.replace('begin() { cache.clear();', 'begin() {');
+  assert.notEqual(noBegin, source);
+  const {cycleReads: broken2} = await import(`data:text/javascript;base64,${Buffer.from(noBegin).toString('base64')}`);
+  assert.throws(() => assertCycleReadsRelease(broken2), /재사용|begin/);
 });
 
 // readStream은 사건을 한 줄씩 해석한다(원문 문자열 배열을 쥐지 않으려고). 결과는 같은 사건·같은 순서여야 한다.
