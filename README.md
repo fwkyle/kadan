@@ -5,6 +5,9 @@
 > **Run AI CLI agents (Claude Code, Codex, …) as named roles in tmux — start them, message them, watch for completion, and step in yourself.**
 > Zero runtime dependencies (Node built-ins + tmux). The interface is currently Korean; contributions are welcome in any language.
 
+> **AI에게 설치를 맡기려면 이 주소를 주세요:** [`docs/ai-install.md`](https://github.com/fwkyle/kadan/blob/main/docs/ai-install.md)
+> (원문 그대로 읽게 하려면 [raw 주소](https://raw.githubusercontent.com/fwkyle/kadan/main/docs/ai-install.md)) — *Hand this URL to your AI agent to have it install kadan.*
+
 카단은 특정 AI를 감싸거나 흉내 내지 않습니다. 터미널에서 돌아가는 CLI라면 무엇이든 카단 안에서 돌아갑니다.
 
 - 🧑‍💼 **역할로 나눠 맡깁니다.** 비서·감독·작업자·검수자가 각자 자기 tmux 세션에서 일합니다.
