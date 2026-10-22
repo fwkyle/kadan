@@ -13,6 +13,7 @@ import {
 import { reviewResultData, workspaceData, runsData } from "./dashboard/workspace.mjs";
 import { statusData, flowUnconfirmedData } from "./dashboard/status.mjs";
 import { detailData } from "./dashboard/detail.mjs";
+import { kanbanData } from "./dashboard/kanban.mjs";
 
 export { visibleSessionRoles };
 
@@ -35,6 +36,7 @@ const WITH_MODEL = new Map([
   ["review-result", reviewResultData],
   ["workspace", workspaceData],
   ["status", statusData],
+  ["kanban", kanbanData],
   ["flow-unconfirmed", flowUnconfirmedData],
   ["sessions", sessionsData],
   ["runs", runsData],
