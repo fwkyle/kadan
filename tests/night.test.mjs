@@ -504,8 +504,12 @@ test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 
   fs.writeFileSync(file, JSON.stringify(table));
   appendLedger({kind: 'hierarchy-loaded', path: file, hash: 'x', by: 'watch'}, home);
   const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  // 끝 처리의 사용자 알림이 진짜 osascript로 새지 않는지 본다: PATH 앞의 가짜 osascript가 불리면 기록이 남는다(2026-10-23 kyle 맥 알림 누출).
+  const bin = path.join(home, 'bin'), osLog = path.join(home, 'osascript.log');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'osascript'), `#!/bin/sh\necho "$2" >> ${JSON.stringify(osLog)}\n`, {mode: 0o755});
   const run = (args, role) => spawnSync(process.execPath, [cli, 'night', ...args],
-    {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
+    {env: {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
   const json = (args, role = '사람') => { const r = run(args, role); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); }; // stdout 전체가 JSON이어야 한다
   assert.deepEqual(json(['status']), {on: false, last: null});
   assert.match(run(['status', '--text'], '사람').stdout, /켠 적이 없습니다/);
@@ -532,6 +536,7 @@ test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 
   assert.ok(text.includes('첫 줄\n둘째 줄'), '--text는 원문 줄바꿈을 그대로 낸다');
   assert.match(text, /마지막 위임 원문 \(a-슈퍼감독, kyle 채팅을 옮겨 적음\)/);
   assert.throws(() => JSON.parse(text)); // --text는 JSON이 아니다
+  assert.ok(!fs.existsSync(osLog), 'KADAN_NOTIFY=off인데 CLI 끝 처리가 osascript를 불렀다');
 });
 
 test('F4: 종료 알림의 원문 안내는 status --text를 가리킨다', () => {
