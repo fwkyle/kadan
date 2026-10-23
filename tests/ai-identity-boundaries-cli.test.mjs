@@ -48,7 +48,7 @@ process.exit(r.status??1);\n`,{mode:0o755});
  fs.writeFileSync(receiver,"process.stdout.write('› ');import fs from 'node:fs';process.stdin.on('data',b=>fs.appendFileSync(process.env.KADAN_HOME+'/'+process.env.KADAN_ROLE+'.received',b));\n");
  for(const name of ['codex','devin','omo','claude'])fs.writeFileSync(path.join(bin,name),`#!${process.execPath}\nif(process.argv.includes("--version")){console.log("test receiver");process.exit(0); }\n`+fs.readFileSync(receiver,'utf8'),{mode:0o755});
  const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_FLOOR:'tmux',KADAN_WINDOW:'none',KADAN_ROLE:'',PATH:bin+':'+process.env.PATH};
- const call=(args,extra={})=>{const r=spawnSync(process.execPath,[cli,...args],{env:{...env,...extra},cwd:home,encoding:'utf8',timeout:15000});transcript.push({backend,args,status:r.status,stdout:r.stdout,stderr:r.stderr});return r;};
+ const call=(args,extra={})=>{const r=spawnSync(process.execPath,[cli,...args],{env:{...env,...extra},cwd:os.tmpdir(),encoding:'utf8',timeout:15000});transcript.push({backend,args,status:r.status,stdout:r.stdout,stderr:r.stderr});return r;};
  const tm=(...args)=>spawnSync(realTmux,['-L',env.KADAN_SOCKET,...args],{env,encoding:'utf8'});
  const must=r=>{if(r.status!==0)throw Error(r.stderr);return r;};
  const store=new CardStore(home);const started=[];

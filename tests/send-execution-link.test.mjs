@@ -50,7 +50,7 @@ test('inferDispatchTask는 수신 역할의 발령 카드만 추론한다',()=>{
 test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 들어간다',{skip:spawnSync('tmux',['-V']).status!==0},()=>{
  const {home,store,assign}=fixture();
  const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
- const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
+ const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:os.tmpdir(),encoding:'utf8',timeout:10000});
  const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
  const receiver=path.join(home,'codex.mjs');
  fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");
@@ -82,7 +82,7 @@ test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 
   // 회귀: 답장(--reply-to)과 다른 담당 실행 연결은 taskId를 만들지 않는다
   // 답장은 원본 발신자에게만 간다 — p-worker가 보낸 우편에 사람이 p-worker로 답장하는 형태로 맞춘다
   appendLedger({kind:'start',role:'q-worker',session:'kadan-q-worker',panePid:'4242'},home);
-  const outbound=spawnSync(process.execPath,[cli,'send','q-worker','--execution',mine.key,'p-worker가 보낸 질문'],{env:{...env,KADAN_ROLE:'p-worker'},cwd:home,encoding:'utf8',timeout:10000});
+  const outbound=spawnSync(process.execPath,[cli,'send','q-worker','--execution',mine.key,'p-worker가 보낸 질문'],{env:{...env,KADAN_ROLE:'p-worker'},cwd:os.tmpdir(),encoding:'utf8',timeout:10000});
   assert.equal(outbound.status,0,outbound.stderr);
   const outboundMail=readLedger(home).filter(e=>e.kind==='send').at(-1);
   run('send','p-worker','--reply-to',outboundMail.mailId,'--execution',mine.key,'첫 편지에 대한 답장');
@@ -105,7 +105,7 @@ test('질문(--expect-reply)은 실행 카드 추론에서 빠지고 taskId·dis
   if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
   const store=new CardStore(home);
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
-  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
+  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:os.tmpdir(),encoding:'utf8',timeout:10000});
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r;};
   const receiver=path.join(home,'codex.mjs');
   fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H› ');prompt();process.stdin.on('data',b=>{fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b);prompt();});fs.writeFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.ready'),'ready');\n");

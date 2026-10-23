@@ -14,7 +14,7 @@ for (const profileSource of ['start','roles']) test(`09-07 실제 CLI 인계: ${
  const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
  const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:'비서'};
  const run=(args,role='비서')=>{
-  const r=spawnSync(process.execPath,[cli,...args],{env:{...env,KADAN_ROLE:role},cwd:home,encoding:'utf8'});
+  const r=spawnSync(process.execPath,[cli,...args],{env:{...env,KADAN_ROLE:role},cwd:os.tmpdir(),encoding:'utf8'});
   assert.equal(r.status,0,r.stderr+r.stdout);return r.stdout;
  };
  const graph=path.join(home,'parents.json'),context=path.join(home,'context.md'),receipt=path.join(home,'receipt.json');
@@ -26,7 +26,7 @@ for (const profileSource of ['start','roles']) test(`09-07 실제 CLI 인계: ${
   assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role==='qa-감독').at(-1).roleProfile,profileSource==='start'?'conductor':undefined);
   // 후임 화면을 읽어 검사하므로 터미널 에코를 끈다. 에코와 cat 출력이 한 화면에 섞이면 한글 바이트가
   // 쪼개져 문구가 깨진다(2026-09-24 macOS CI 실패, 격리 tmux 8/8 재현 → 에코 끄면 0/8).
-  const s=JSON.parse(run(['handover','qa-감독','--manual','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',home,'--cmd','stty -echo; exec cat']));
+  const s=JSON.parse(run(['handover','qa-감독','--manual','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',os.tmpdir(),'--cmd','stty -echo; exec cat']));
   assert.equal(s.runner,null);
   assert.equal(s.roleProfile,'conductor');
   assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role===s.to).at(-1).roleProfile,'conductor');
@@ -49,7 +49,7 @@ for (const profileSource of ['start','roles']) test(`09-07 실제 CLI 인계: ${
   assert.equal(spawnSync('tmux',['-L',env.KADAN_SOCKET,'has-session','-t','=kadan-qa-감독']).status,1);
   assert.equal(spawnSync('tmux',['-L',env.KADAN_SOCKET,'has-session','-t','=kadan-qa-감독-2']).status,0);
  } finally {
-  for(const role of ['qa-감독','qa-감독-2'])spawnSync(process.execPath,[cli,'stop',role],{env,cwd:home,encoding:'utf8'});
+  for(const role of ['qa-감독','qa-감독-2'])spawnSync(process.execPath,[cli,'stop',role],{env,cwd:os.tmpdir(),encoding:'utf8'});
  }
 });
 
@@ -72,9 +72,9 @@ function backgroundFixture({human=false,sqlite=false}={}) {
  fs.writeFileSync(graph,JSON.stringify({'qa-감독':'qa-상위','qa-작업자':'qa-감독','qa-상위':'@user'}));
  fs.writeFileSync(context,'격리 CLI 시험만 승인');
  const roles=['qa-감독','qa-작업자',...(!human?['qa-상위']:[])];
- const raw=(args,role=env.KADAN_ROLE)=>spawnSync(process.execPath,[cli,...args],{cwd:home,env:{...env,KADAN_ROLE:role},encoding:'utf8',timeout:8000});
+ const raw=(args,role=env.KADAN_ROLE)=>spawnSync(process.execPath,[cli,...args],{cwd:os.tmpdir(),env:{...env,KADAN_ROLE:role},encoding:'utf8',timeout:8000});
  const run=(args,role)=>{const r=raw(args,role);assert.equal(r.status,0,r.stderr+r.stdout);return r.stdout;};
- const beginArgs=['handover','qa-감독','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',home,'--cmd','cat'];
+ const beginArgs=['handover','qa-감독','--to','qa-감독-2','--at-boundary','--hierarchy',graph,'--context',context,'--cwd',os.tmpdir(),'--cmd','cat'];
  const pid=role=>spawnSync('tmux',['-L',env.KADAN_SOCKET,'display-message','-p','-t',`=kadan-${role}:`,'#{pane_pid}'],{encoding:'utf8'}).stdout.trim();
  const f={home,env,graph,context,receipt,roles,raw,run,beginArgs,pid};
  f.begin=extra=>{
@@ -142,7 +142,7 @@ test('독립 CLI 한 사이클: 부모 종료→지연 accept→실제 watch 기
   assert.equal(isAlive(s.runner.pid),true);assert.equal(f.pid('qa-감독'),oldPid);
   assert.equal(Date.parse(f.result().deadlineAt)-Date.parse(f.result().startedAt),1800000);
   assert.equal(fs.existsSync(path.join(f.home,'handovers','.lock')),false);
-  const duplicate=spawnSync(process.execPath,[runnerFile,s.id],{env:f.env,cwd:f.home,encoding:'utf8',timeout:4000});
+  const duplicate=spawnSync(process.execPath,[runnerFile,s.id],{env:f.env,cwd:os.tmpdir(),encoding:'utf8',timeout:4000});
   assert.equal(duplicate.status,1);
   f.accept();
   await until(()=>JSON.parse(fs.readFileSync(s.statePath)).phase==='routes-pending');
@@ -210,7 +210,7 @@ test('CLI runner 중단은 status에 드러나며 자동 재실행 없이 수동
   process.kill(f.s.runner.pid,'SIGTERM');await until(()=>!isAlive(f.s.runner.pid));
   const status=JSON.parse(f.run(['handover','status',f.s.id]));assert.equal(status.runner.status,'interrupted');
   const before=fs.readFileSync(f.s.runner.resultPath);
-  const duplicate=spawnSync(process.execPath,[runnerFile,f.s.id],{env:f.env,cwd:f.home,encoding:'utf8'});
+  const duplicate=spawnSync(process.execPath,[runnerFile,f.s.id],{env:f.env,cwd:os.tmpdir(),encoding:'utf8'});
   assert.equal(duplicate.status,1);assert.deepEqual(fs.readFileSync(f.s.runner.resultPath),before);
   assert.equal(JSON.parse(f.run(['handover','abort',f.s.id])).phase,'aborted');
   assert.ok(f.pid('qa-감독'));assert.ok(f.pid('qa-감독-2'));

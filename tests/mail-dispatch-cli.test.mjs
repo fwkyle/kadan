@@ -27,7 +27,7 @@ function fixture(backend = 'sqlite') {
     KADAN_FLOOR: 'tmux', KADAN_ROLE: '', KADAN_NOTIFY: 'off',
   };
   const call = (...args) => spawnSync(process.execPath, [cli, ...args], {
-    env, cwd: home, encoding: 'utf8', input: '', timeout: 10000,
+    env, cwd:os.tmpdir(), encoding: 'utf8', input: '', timeout: 10000,
   });
   const run = (...args) => {
     const result = call(...args);

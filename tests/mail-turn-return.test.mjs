@@ -23,12 +23,12 @@ function fixture(roles = [], {jsonl = false} = {}) {
   if (!jsonl) { createDatabase(home); fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'})); }
   const socket = path.basename(home);
   const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_NOTIFY: 'off'};
-  const call = (role, ...args) => spawnSync(process.execPath, [cli, ...args], {env: {...env, KADAN_ROLE: role}, cwd: home, encoding: 'utf8', input: '', timeout: 15000});
+  const call = (role, ...args) => spawnSync(process.execPath, [cli, ...args], {env: {...env, KADAN_ROLE: role}, cwd:os.tmpdir(), encoding: 'utf8', input: '', timeout: 15000});
   const works = new WorkStore(home);
   const receiver = path.join(home, 'receiver.mjs');
   fs.writeFileSync(receiver, "import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
   for (const role of roles) {
-    const started = spawnSync(process.execPath, [cli, 'start', role, '--hidden', '--cmd', `${quote(process.execPath)} ${quote(receiver)}`], {env: {...env, KADAN_ROLE: ''}, cwd: home, encoding: 'utf8', timeout: 15000});
+    const started = spawnSync(process.execPath, [cli, 'start', role, '--hidden', '--cmd', `${quote(process.execPath)} ${quote(receiver)}`], {env: {...env, KADAN_ROLE: ''}, cwd:os.tmpdir(), encoding: 'utf8', timeout: 15000});
     assert.equal(started.status, 0, started.stderr);
   }
   const received = (role, text = '우편ID') => {
@@ -69,7 +69,7 @@ test('양성: 작업자(차례 보유)가 owner에게 --work 결과 우편 → �
   // PR-2 접점: work-command를 거치지 않으므로 열린 채팅 결정은 닫히지 않는다
   assert.equal(new DecisionStore(f.home, {notify: () => {}, userNotify: () => null}).list().find(d => d.id === decision.id).status, 'open');
   // 영수증의 명령을 그대로 실행하면 원래 차례로 돌아간다
-  const undone = spawnSync('sh', ['-c', undo.replace(/^kadan/, `${quote(process.execPath)} ${quote(cli)}`)], {env: {...f.env, KADAN_ROLE: 'p-아무개'}, cwd: f.home, encoding: 'utf8', timeout: 15000});
+  const undone = spawnSync('sh', ['-c', undo.replace(/^kadan/, `${quote(process.execPath)} ${quote(cli)}`)], {env: {...f.env, KADAN_ROLE: 'p-아무개'}, cwd:os.tmpdir(), encoding: 'utf8', timeout: 15000});
   assert.equal(undone.status, 0, undone.stderr);
   assert.equal(f.turn('w1'), WORKER);
 });
