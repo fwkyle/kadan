@@ -228,16 +228,30 @@ test('SQLite 전송 중 인계 확정(검수 F2 재현): 판정 뒤 쓰기 전�
 
 test('SQLite claim 창 안에 별도 프로세스가 transferred를 넣으려 하면 쓰기 트랜잭션이 끝날 때까지 못 넣는다(낡은 쓰기 없음)', () => {
   const {home, works, plan} = unitHome(true);
+  // 홈은 argv[2]다(argv[1]은 자식 파일 경로). 결과는 JSON 한 줄로 내서 잠금 오류와 인자 오류를 구분한다.
   const script = `import {appendLedger} from ${JSON.stringify(new URL('../src/ledger.mjs', import.meta.url).href)};` +
-    `appendLedger({kind:'handover',phase:'transferred',from:${JSON.stringify(OWNER)},to:${JSON.stringify(HEIR)},taskIds:[],handoverId:'h-x',t:new Date().toISOString()},process.argv[1]);`;
+    `try { appendLedger({kind:'handover',phase:'transferred',from:${JSON.stringify(OWNER)},to:${JSON.stringify(HEIR)},taskIds:[],handoverId:'h-x',t:new Date().toISOString()},process.argv[2]);` +
+    `console.log(JSON.stringify({committed:true})); } catch (e) { console.log(JSON.stringify({committed:false,error:e.message,code:e.code})); process.exit(2); }`;
   const child = path.join(home, 'insert-handover.mjs');
   fs.writeFileSync(child, script);
+  const run = h => {
+    const r = spawnSync(process.execPath, [child, h], {env: {...process.env, KADAN_BUSY_TIMEOUT_MS: '200'}, encoding: 'utf8', timeout: 15000});
+    return {status: r.status, out: JSON.parse(r.stdout.trim().split('\n').pop() || 'null'), stderr: r.stderr};
+  };
+  // 대조군: 잠금 없는 격리 SQLite 홈에서는 같은 자식이 성공(종료 0)한다. 인자 오류면 여기서 먼저 깨진다.
+  const free = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-turn-free-'));
+  createDatabase(free); fs.writeFileSync(path.join(free, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'}));
+  const control = run(free);
+  assert.equal(control.status, 0, control.stderr); assert.equal(control.out.committed, true);
+  assert.equal(readLedger(free).filter(e => e.phase === 'transferred').length, 1);
   let during = null;
   const claim = claimTurnReturn(home, plan, {warn: l => assert.fail(l), readEntries: h => {
-    during = spawnSync(process.execPath, [child, h], {env: {...process.env, KADAN_BUSY_TIMEOUT_MS: '200'}, encoding: 'utf8', timeout: 15000});
+    during = run(h);
     return readLedger(h);
   }});
-  assert.notEqual(during.status, 0, '창 안의 인계 삽입은 잠금 때문에 커밋되지 못한다');
+  assert.equal(during.status, 2, during.stderr); assert.equal(during.out.committed, false);
+  assert.match(during.out.error, /database is locked|SQLITE_BUSY/i, '인자 오류가 아니라 실제 잠금 오류여야 한다');
+  assert.notEqual(during.out.code, 'EEXIST');
   assert.equal(readLedger(home).filter(e => e.phase === 'transferred').length, 0);
   assert.ok(claim); assert.equal(works.get('repo/u1').turnOwner, OWNER);
 });
