@@ -85,7 +85,7 @@ test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI �
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-ai-guard-cli-'));
   if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
-  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:15000});
+  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:os.tmpdir(),encoding:'utf8',timeout:15000});
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,`${backend} ${args}: ${r.stderr}`);return r;};
   const tmux=(...args)=>spawnSync('tmux',['-L',socket,...args],{env,encoding:'utf8'});
   const starts=()=>readLedger(home).filter(e=>e.kind==='start');

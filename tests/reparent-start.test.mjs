@@ -52,7 +52,7 @@ test("실제 start/stop: 새 세대 start가 X의 상위 줄만 바꾼다. resum
     ...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_WINDOW: "none", KADAN_NOTIFY: "off",
     KADAN_FLOOR: "tmux", KADAN_ROLE: role,
   });
-  const run = (role, args) => spawnSync(process.execPath, [cli, ...args], { env: env(role), encoding: "utf8", cwd: home });
+  const run = (role, args) => spawnSync(process.execPath, [cli, ...args], { env: env(role), encoding: "utf8", cwd:os.tmpdir() });
   appendLedger({ kind: "hierarchy-loaded", path: file, by: "watch", t: new Date().toISOString() }, home);
   try {
     const cmd = "claude --model sonnet";

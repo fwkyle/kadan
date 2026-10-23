@@ -539,6 +539,64 @@ export function notificationHold(session, guard, {run = tmuxOut} = {}) {
   catch (error) { return {code: error.code ?? "KADAN_NOTIFY_CHECK_FAILED", message: error.message}; }
 }
 
+// Claude Code의 '폴더 신뢰' 확인 창은 기본 선택이 "No, exit"라, 우리가 보내는 Enter가 그걸 눌러 역할이 종료된다
+// (2026-10-23 rottie 작업자 3명 소실). 문구만 보면 대화에 문구를 인용한 정상 화면도 막히고(검수 F1), '정상 입력창이 있나'를
+// 찾는 방식은 감시기의 상태 판정과 얽혀 경계가 계속 나왔다(F4·F5). 그래서 기준점을 '화면의 맨 끝'으로 둔다.
+// 근거: 사고 원본 화면은 `Enter to confirm · Esc to cancel`이 마지막 줄이고 그 아래는 빈 줄뿐이다. 모달은 화면 맨 끝에 그려지고,
+// 문구를 인용한 정상 화면은 대개 그 아래에 다른 글(입력창·상태 줄·진행 표시)이 이어진다.
+// 판정(모두 참일 때만): (1) 끝의 빈 줄(공백만 있는 줄 포함)을 걷는다. (2) 비지 않은 마지막 줄이 확인 안내 `Enter to confirm`이다
+// (좁은 폭에서 안내가 여러 줄로 감기면 그 뒤에 `· Esc to cancel`의 나머지만 남을 수 있다). (3) 확인 안내에서 위로 가장 가까운
+// `Yes, I trust this folder` → `No, exit` → 질문 `Is this a project you created or one you trust`가 이 순서(질문 → No → Yes → 안내)로 있다.
+// 첫 질문이 아니라 안내에 가장 가까운 묶음을 쓰므로, 위쪽의 인용이나 옛 창이 판정을 바꾸지 못한다.
+// 위로 찾을 때는 같은 모달 묶음 안에서만 찾는다(F7): 위로 가다가 다른 `Enter to confirm` 줄이나 빈 입력창 줄(`❯`·`>` 하나뿐인 줄)을 만나면
+// 거기서 멈춘다(그 줄은 포함하지 않는다). 그래야 위쪽 인용의 질문·선택지를 빌려 다른 모달(권한 확인 등)을 신뢰 창으로 오인하지 않는다.
+// 한계(F8, 알려진 것): 신뢰 창 문구를 전부 인용한 응답이 `Enter to confirm`에서 끝난 채 렌더가 멈춘 순간은 문자열로 신뢰 창과 구별할 수 없어
+// 일반 우편이 잠시 보관될 수 있다(안전한 쪽으로 틀린다). 보관된 우편은 감시기의 미확인 우편 재알림(`inbox read` 안내)이 순회마다 다시 시도하고,
+// 이 코드가 입력 보호와 같은 보류(`isNotificationHold`)라 예약을 풀고 다음 순회에 다시 시도하므로 화면이 바뀌면 전달된다(`src/watch-mail.mjs`).
+// 범위는 비지 않은 마지막 60줄이다: 폭 10글자로 줄이 감기면 사고 화면이 비지 않은 57줄이 된다(검수 F6). 높이가 큰 창의 아래 빈 줄은
+// 먼저 걷으므로 줄 수에 들지 않는다(F2). 줄바꿈으로 낱말이 갈리거나 화면 기록에서 공백이 빠진 꼴이 있어 문구는 공백을 모두 걷고 비교한다.
+// Yes가 위에 오는 옛 배치는 기본 선택이 Yes라 Enter가 해롭지 않아 막지 않는다.
+const TRUST_QUESTION = "Isthisaprojectyoucreatedoroneyoutrust";
+const TRUST_NO = "No,exit", TRUST_YES = "Yes,Itrustthisfolder", TRUST_CONFIRM = "Entertoconfirm";
+const TRUST_CONFIRM_REST = /^[·•\-–—]*(?:esc(?:to(?:cancel)?)?)?$/iu;
+const TRUST_PROMPT_TAIL_LINES = 60;
+// capture-pane -p는 제어 시퀀스를 내지 않지만, 재생·기록 화면 끝에는 터미널 응답 찌꺼기(`ESC[?1;2;4c` 등)가 줄 하나로 붙어 있었다(사고 화면 파일).
+// 그런 줄이 '맨 끝 줄'을 가로채 모달을 놓치지 않게 제어 시퀀스를 먼저 걷는다.
+const CONTROL_SEQUENCES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|P[\s\S]*?\x1b\\|[()][A-Za-z0-9]|[78=>])|[\x00-\x08\x0b-\x1f\x7f]/gu;
+export function hasTrustPrompt(screen) {
+  if (typeof screen !== "string") return false;
+  const lines = screen.replace(CONTROL_SEQUENCES, "").split("\n").map(line => line.replace(/\s+/gu, "")).filter(Boolean).slice(-TRUST_PROMPT_TAIL_LINES);
+  const flat = lines.join("");
+  const confirm = flat.lastIndexOf(TRUST_CONFIRM);
+  if (confirm < 0 || !TRUST_CONFIRM_REST.test(flat.slice(confirm + TRUST_CONFIRM.length))) return false;
+  // 마지막 확인 안내가 시작하는 줄에서 위로 올라가며 묶음의 시작(다른 확인 안내·빈 입력창 줄 바로 아래)을 찾는다.
+  const starts = [];
+  let offset = 0;
+  for (const line of lines) { starts.push(offset); offset += line.length; }
+  let row = starts.findLastIndex(start => start <= confirm);
+  let from = 0;
+  for (let i = row - 1; i >= 0; i--) {
+    if (lines[i] === "❯" || lines[i] === ">" || lines[i].includes(TRUST_CONFIRM)) { from = starts[i + 1]; break; }
+  }
+  const group = flat.slice(from, confirm);
+  const yes = group.lastIndexOf(TRUST_YES);
+  const no = yes < 0 ? -1 : group.lastIndexOf(TRUST_NO, yes);
+  return no >= 0 && group.lastIndexOf(TRUST_QUESTION, no) >= 0;
+}
+
+// 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회). 읽기에 실패하면 지금까지처럼 보낸다 —
+// 이 검사가 새 전송 실패 원인이 되지 않게 하려는 것이다(실패 닫힘은 '확인 창이 보일 때'에만 적용한다).
+function checkTrustPrompt(session, run) {
+  let screen;
+  try { screen = run(["capture-pane", "-p", "-J", "-t", `=${session}:`]); }
+  catch { return; }
+  if (!hasTrustPrompt(screen)) return;
+  const error = new Error("전송 보류: 받는 Claude가 폴더 신뢰 확인 창에 멈춰 있다 — 보내면 Enter가 \"No, exit\"를 눌러 역할이 종료된다. " +
+    "사람이 창에서 직접 고르거나, 역할을 작업 저장소 폴더에서 다시 시작하라");
+  error.code = "KADAN_TRUST_PROMPT";
+  throw error;
+}
+
 export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity, notificationGuard, humanIdleMs} = {}) {
   const buffer = `kadan-send-${pid}-${hrtime().toString(36)}`;
   let stage = "not-started";
@@ -553,6 +611,7 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
   };
   let released = false;
   try {
+    checkTrustPrompt(session, run);
     // 감시기 알림이 5번 밀린 강제 차례에 한해 복사 모드를 해제하고 넣는다(2026-10-14).
     if (notificationGuard?.force === true && !cardIdentity) {
       // 사람 입력으로 밀릴 차례면 복사 모드를 건드리기 전에 먼저 멈춘다.
@@ -651,6 +710,8 @@ export const tmuxFloor = {
   readView: capturePaneView,
   stop,
   list,
+  // 사람 입력 보호를 바닥 밖에서 한 번 확인한다(계정 전환 재시작의 끄기 직전 재확인). 최근 입력이면 던진다.
+  assertHumanIdle: session => checkHumanIdle(session, tmuxOut),
   waitForChange,
   attach(session) {
     return `tmux -L ${currentSocket()} attach -t ${session}`;
