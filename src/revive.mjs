@@ -107,7 +107,13 @@ export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wa
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      fs.mkdirSync(lock); fs.writeFileSync(pidFile, String(process.pid));
+      fs.mkdirSync(lock);
+      // mkdir 성공 뒤 pid를 쓰기 전에 다른 쪽이 낡은 잠금으로 보고 이 폴더를 옮길 수 있다(ENOENT). 원인이 식별된 경쟁
+      // ('잠금을 빼앗김')이라 던지지 않고 처음부터 다시 얻는다. 그 밖의 오류는 원인을 모르므로 그대로 던진다.
+      try { fs.writeFileSync(pidFile, String(process.pid)); }
+      catch (writeError) { if (writeError.code === 'ENOENT') continue; throw writeError; }
+      // 쓴 뒤 다시 읽어 자기 pid일 때만 얻은 것으로 본다. 아니면 그 사이 빼앗긴 것이므로 다시 돈다.
+      try { if (Number(fs.readFileSync(pidFile, 'utf8')) !== process.pid) continue; } catch { continue; }
       // 해제는 pid 파일이 자기 pid일 때만 한다 — 되찾기로 치워진 뒤 다른 프로세스가 새로 잡은 잠금을 지우지 않는다.
       return () => {
         try {

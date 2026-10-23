@@ -62,3 +62,32 @@ test('6c 죽은 주인 잠금은 되찾고 onReclaim을 부른다, 살아 있는
   release();
   assert.ok(!fs.existsSync(lock));
 });
+
+// 항목 6d: mkdir 성공 뒤 pid를 쓰기 전에 다른 쪽이 막 만든 잠금을 옮기면(ENOENT) 죽지 않고 다시 얻는다.
+// fs.writeFileSync에 멈춤을 주입해 그 순서를 결정적으로 만든다(시계·부하 없음).
+test('6d 막 만든 잠금을 pid 쓰기 전에 빼앗겨도 던지지 않고 다시 시도해 얻는다', () => {
+  const home = tmp(), lock = path.join(home, 'revive.lock');
+  const orig = fs.writeFileSync; let stolen = 0;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file) === path.join(lock, 'pid') && !stolen++) fs.renameSync(lock, `${lock}.stale-test`);
+    return orig(file, ...rest);
+  };
+  let release;
+  try { release = acquireReviveLock(home); } finally { fs.writeFileSync = orig; }
+  assert.equal(stolen, 2, '첫 쓰기는 빼앗겼고 다시 시도해 두 번째로 썼다');
+  assert.ok(release, '다시 시도해 잠금을 얻었다');
+  assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), String(process.pid));
+  release();
+  assert.ok(!fs.existsSync(lock));
+});
+
+test('6e pid를 쓴 뒤 다시 읽어 자기 pid가 아니면 얻은 것으로 보지 않는다', () => {
+  const home = tmp(), lock = path.join(home, 'revive.lock');
+  const orig = fs.writeFileSync; let calls = 0;
+  fs.writeFileSync = (file, data, ...rest) => orig(file, calls++ ? data : String(process.pid + 1), ...rest);
+  let release;
+  try { release = acquireReviveLock(home, {isAlive: pid => pid === process.pid}); } finally { fs.writeFileSync = orig; }
+  assert.ok(release, '남의 pid가 보이면 낡은 잠금으로 되찾아 다시 얻는다');
+  assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), String(process.pid));
+  release();
+});
