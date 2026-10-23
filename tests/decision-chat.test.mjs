@@ -2,6 +2,7 @@ import "./helpers/isolated-home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
@@ -16,7 +17,7 @@ process.env.KADAN_NOTIFY='off';
 const SUPER='a-슈퍼감독';
 const mkWork=(works,key)=>works.create({key,title:'채팅 시험',goal:'목표',scope:'범위',acceptance:'조건',owner:'a-감독',repoPath:os.tmpdir()});
 function fixture(){
-  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-chat-'));
+  const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-chat-')));
   const cards=new CardStore(home),works=new WorkStore(home),sent=[],user=[];
   cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});
   mkWork(works,'repo/w1');mkWork(works,'repo/w2');

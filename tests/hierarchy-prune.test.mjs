@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -190,7 +191,7 @@ test('SQLite 자료 변경은 적용 직전 버전 검사에서 멈춘다', () =
 });
 
 test('CLI 기본 미리 보기와 잘못된 옵션, tmux 조회 실패를 확인한다', () => {
-  const f=fixture();fs.writeFileSync(path.join(f.home,'ledger.jsonl'),f.snapshot.entries.map(e=>JSON.stringify(e)).join('\n')+'\n');
+  const f=fixture();markJsonl(f.home);fs.writeFileSync(path.join(f.home,'ledger.jsonl'),f.snapshot.entries.map(e=>JSON.stringify(e)).join('\n')+'\n');
   const bin=path.join(f.home,'bin');fs.mkdirSync(bin);
   const executable=path.join(bin,'tmux');fs.writeFileSync(executable,'#!/bin/sh\nexit 0\n',{mode:0o700});
   const env={...process.env,KADAN_HOME:f.home,KADAN_FLOOR:'tmux',PATH:`${bin}:${process.env.PATH}`};
@@ -206,7 +207,7 @@ test('CLI 기본 미리 보기와 잘못된 옵션, tmux 조회 실패를 확인
 });
 
 test('CLI add는 자동 등록이 빠진 역할을 표에 더하고 잘못된 인자를 거부한다', () => {
-  const f=fixture();
+  const f=fixture();markJsonl(f.home);
   fs.writeFileSync(path.join(f.home,'ledger.jsonl'),f.snapshot.entries.map(e=>JSON.stringify(e)).join('\n')+'\n');
   const added=hierarchyCommand(['add','사람이-띄운-역할','boss'],{},{home:f.home,floor:{list:()=>[]}});
   assert.equal(added.registered,true);

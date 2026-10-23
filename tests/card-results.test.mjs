@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -77,7 +78,7 @@ for(const backend of ['jsonl','sqlite']) {
 }
 
 test('기존 저장소 이전·내보내기가 결과 원문·근거·등록 이력을 함께 보존한다',()=>{
- const source=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-results-backup-'));
+ const source=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-results-backup-')));
  const cards=new CardStore(source),card=cards.create({repo:'test',id:'a',repoPath:source,body:'# 지시'});
  fs.writeFileSync(card.resultPath,'보존할 결과');fs.writeFileSync(path.join(card.evidenceDir,'check.log'),'검증 원문');
  const saved=cards.report(card.key,{revision:1,outcome:'ok'});

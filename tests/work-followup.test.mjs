@@ -2,6 +2,7 @@ import "./helpers/isolated-home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {WorkStore} from '../src/work-store.mjs';
@@ -15,7 +16,7 @@ import {elapsed} from '../src/work-followup.mjs';
 
 function fixture(mode='sqlite',phase='review'){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-followup-'));
- if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
+ if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}else markJsonl(home);
  const works=new WorkStore(home),cards=new CardStore(home),key='test/work';
  works.create({key,title:'종료 후속',goal:'다음 담당 확인',scope:'격리 시험',acceptance:'근거와 후속 분리',owner:'감독',repoPath:home});
  const change=(action,fields)=>works.change(key,action,fields,{revision:works.get(key).revision,by:'감독',note:'시험 판단'});

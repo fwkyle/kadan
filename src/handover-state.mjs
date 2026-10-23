@@ -124,10 +124,11 @@ export function responsibilityTargets(work, parents, cards = null) {
 }
 
 // 중앙 카드의 담당도 과거 인계 기록을 따라간다. 이후 명시 재배정은 우선한다.
+// 카드마다 원장 전체를 훑지 않도록 업무 owner와 같은 인계 목록 캐시를 쓴다(카드 수×원장 길이 → 원장 길이 1번, 2026-10-23 감시기 CPU 약 70%).
 export function effectiveCardRole(card, entries, cards = null) {
   const identity = Array.isArray(cards) ? taskIdentity(cards) : cards;
   let role=card.role;
-  for(const e of entries) if(e?.kind==='handover'&&e.phase==='transferred'&&e.from===role&&
+  for(const e of transferredHandovers(entries)) if(e.from===role&&
     card.key&&e.taskIds?.some(id=>{const found=identity?.resolve(id);return identity?found.state==='resolved'&&found.key===card.key:id===card.key;})&&(!card.at||!e.t||Date.parse(e.t)>=Date.parse(card.at))) role=e.to;
   return role;
 }

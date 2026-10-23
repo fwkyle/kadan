@@ -1,12 +1,14 @@
 // Why: claude-swap switch만으론 켜진 카단 Claude 세션이 새 계정을 읽지 못했다(2026-10-23 kyle 실측).
 // 한도에 걸린 세션을 골라 같은 대화로 다시 켜야 하고, PR-1은 '어느 세션을 왜 켤지'를 보여 주기만 한다.
-// 이 모듈은 읽기 전용이다: 바닥에 키를 보내지 않고, 원장·우편·알림을 쓰지 않는다.
+// 이 모듈의 미리보기(buildPreview·formatPreview)는 읽기 전용이다: 바닥에 키를 보내지 않고, 원장·우편·알림을 쓰지 않는다.
+// 실제 다시 켜기(runRefresh, PR-2)는 사람이 고른 역할만 restartRole로 켠다 — 아래 runRefresh 머리말.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { launchIdentityOf } from "./ai-identity.mjs";
 import { readStatusLine } from "./watch-status-line.mjs";
+import { STATE_CHANGED_CODE } from "./restart.mjs";
 import { scrubForAI } from "./explain-input.mjs";
 import { scrubScreen } from "./revive.mjs";
 
@@ -138,39 +140,39 @@ function currentStart(entries, session) {
 
 const errText = (error) => safeText(String(error?.message ?? error).split("\n")[0], 80);
 
-// 바닥에 살아 있는 카단 세션마다 한 줄. floor.read(화면 읽기)·floor.alive·floor.pid만 쓴다.
+// 세션 하나의 한 줄. floor.read(화면 읽기)·floor.alive·floor.pid만 쓴다. buildPreview와 runRefresh(직전 확인)가 같은 판정을 쓴다.
+export function previewRow({ entries, floor, pendingCards, session, self = process.env.KADAN_ROLE, select = "limit" }) {
+  const start = currentStart(entries, session);
+  const row = { role: start?.role ?? session.slice("kadan-".length), session, harness: null, model: null, cards: null, verdict: "excluded", reason: "", resetLine: null, screenTail: [], pending: [] };
+  if (!start) { row.reason = "기반"; return row; }
+  if (start.role === SECRETARY || start.roleProfile === "secretary") { row.reason = "비서"; return row; }
+  if (self && start.role === self) { row.reason = "자기 자신"; return row; }
+  const identity = launchIdentityOf(start.cmd);
+  // not-ai: 등록 실행기가 아닌 명령(셸 등)이라 harness 칸에 든 이름은 실행기가 아니다.
+  row.harness = identity.reason === "not-ai" ? null : identity.harness ?? null;
+  row.model = identity.model ?? null;
+  if (!row.harness) { row.reason = "실행기 모름"; return row; }
+  if (row.harness !== "claude") { row.reason = `다른 실행기(${row.harness})`; return row; }
+  try { row.pending = pendingCards(entries, start.role); row.cards = row.pending.length; } catch { row.cards = null; }
+  try {
+    if (floor.alive && !floor.alive(session)) throw new Error("세션 없음");
+    if (start.panePid && floor.pid && String(floor.pid(session)) !== String(start.panePid)) throw new Error("pane PID 불일치");
+  } catch { row.verdict = "skip"; row.reason = "생존 확인 실패"; return row; }
+  let screen;
+  try { screen = floor.read(session); } catch (error) { row.verdict = "skip"; row.reason = `화면 읽기 실패(${errText(error)})`; return row; }
+  if (typeof screen !== "string") { row.verdict = "skip"; row.reason = "화면 읽기 실패(빈 응답)"; return row; }
+  const judged = judgeScreen(screen, select);
+  row.verdict = judged.verdict;
+  row.reason = judged.reason;
+  row.resetLine = judged.resetLine ?? null;
+  if (judged.verdict === "target") row.screenTail = claudeScreenTail(screen);
+  return row;
+}
+
+// 바닥에 살아 있는 카단 세션마다 한 줄.
 export function buildPreview({ entries, floor, pendingCards, self = process.env.KADAN_ROLE, select = "limit" }) {
-  const rows = [];
   const live = floor.list().filter((item) => item.alive !== false && String(item.session).startsWith("kadan-"));
-  for (const item of live) {
-    const session = item.session;
-    const start = currentStart(entries, session);
-    const row = { role: start?.role ?? session.slice("kadan-".length), session, harness: null, model: null, cards: null, verdict: "excluded", reason: "", resetLine: null, screenTail: [] };
-    rows.push(row);
-    if (!start) { row.reason = "기반"; continue; }
-    if (start.role === SECRETARY || start.roleProfile === "secretary") { row.reason = "비서"; continue; }
-    if (self && start.role === self) { row.reason = "자기 자신"; continue; }
-    const identity = launchIdentityOf(start.cmd);
-    // not-ai: 등록 실행기가 아닌 명령(셸 등)이라 harness 칸에 든 이름은 실행기가 아니다.
-    row.harness = identity.reason === "not-ai" ? null : identity.harness ?? null;
-    row.model = identity.model ?? null;
-    if (!row.harness) { row.reason = "실행기 모름"; continue; }
-    if (row.harness !== "claude") { row.reason = `다른 실행기(${row.harness})`; continue; }
-    try { row.cards = pendingCards(entries, start.role).length; } catch { row.cards = null; }
-    try {
-      if (floor.alive && !floor.alive(session)) throw new Error("세션 없음");
-      if (start.panePid && floor.pid && String(floor.pid(session)) !== String(start.panePid)) throw new Error("pane PID 불일치");
-    } catch { row.verdict = "skip"; row.reason = "생존 확인 실패"; continue; }
-    let screen;
-    try { screen = floor.read(session); } catch (error) { row.verdict = "skip"; row.reason = `화면 읽기 실패(${errText(error)})`; continue; }
-    if (typeof screen !== "string") { row.verdict = "skip"; row.reason = "화면 읽기 실패(빈 응답)"; continue; }
-    const judged = judgeScreen(screen, select);
-    row.verdict = judged.verdict;
-    row.reason = judged.reason;
-    row.resetLine = judged.resetLine ?? null;
-    if (judged.verdict === "target") row.screenTail = claudeScreenTail(screen);
-  }
-  return rows;
+  return live.map((item) => { const { pending, ...row } = previewRow({ entries, floor, pendingCards, session: item.session, self, select }); return row; });
 }
 
 export function previewCounts(rows) {
@@ -249,7 +251,7 @@ export function formatPreview(rows, accounts, { select = "limit" } = {}) {
     const screenJudged = ["응답 생성 중", "판정 불가", "입력 대기"].includes(r.reason) || r.verdict === "target" || r.verdict === "none";
     const judged = screenJudged ? r.reason : `${{ skip: "건너뜀", excluded: "제외" }[r.verdict]}: ${r.reason}`;
     const action = r.verdict === "target"
-      ? (r.cards > 0 ? `다시 켜기 대상(카드 ${r.cards}건 — 카드 유지 재시작은 kyle 결정 대기)` : "다시 켜기 대상")
+      ? (r.cards > 0 ? `다시 켜기 대상(카드 ${r.cards}건 — 다시 켜도 카드는 그대로 남는다)` : "다시 켜기 대상")
       : "-";
     return [r.role, r.session, r.harness ? `${r.harness} ${cell(r.model)}` : "-", cell(r.cards), judged, action];
   });
@@ -291,4 +293,96 @@ function displayWidth(value) {
 
 export function previewJson(rows, accounts) {
   return { preview: true, rows, counts: previewCounts(rows), accounts: accounts ?? null };
+}
+
+// ---- 2단계: 사람이 --role로 고른 세션만 같은 대화로 다시 켜기 ----
+// 대상은 사람이 고른다. 화면 판정(한도로 보임 등)은 추천일 뿐이라 선택에 쓰지 않고, 직전 안전 확인(입력창 비어 있고 응답 생성 중이 아님)에만 쓴다.
+// 다시 켜기는 restartRole(accountRefresh)이 한다 — 끝나지 않은 카드가 있어도 --force 없이 켠다(2026-10-23 [kyle] 질문 2).
+// 사람 확인: KADAN_ROLE이 설정된 셸(카단 역할 세션 안)에서는 거절한다. 스스로 밝힌 신분이라 완전한 인증은 아니다 —
+// 환경 변수를 비우면 우회할 수 있어, 막는 것은 역할 AI가 실수로 부르는 경우다.
+export const HUMAN_ONLY_MESSAGE = "이 명령은 사람이 직접 친다 — 역할 세션 안에서는 실행하지 않는다";
+// --role 값은 미리보기 표의 role 칸 이름이다. 세션 이름(kadan-…)을 주면 알아보기 쉬운 오류를 낸다. 잘못된 값은 Error로 던진다.
+export const roleOfSession = (entries, session) => currentStart(entries, session)?.role ?? session.slice("kadan-".length);
+
+export function parseRoleList(flag, liveRoles, liveSessions) {
+  if (typeof flag !== "string" || !flag.trim()) throw new Error("--role에는 역할 이름이 필요하다 — 미리보기 표의 role 칸 이름(쉼표로 여러 개)");
+  const roles = flag.split(",").map((name) => name.trim());
+  if (roles.some((name) => !name)) throw new Error("--role에 빈 이름이 있다");
+  if (new Set(roles).size !== roles.length) throw new Error("--role에 같은 역할이 두 번 들어 있다");
+  for (const name of roles) {
+    if (!liveRoles.has(name) && liveSessions.has(name)) {
+      throw new Error(`'${name}'은 세션 이름이다 — --role에는 미리보기 표의 role 칸 이름(예: ${name.slice("kadan-".length)})을 쓴다`);
+    }
+  }
+  return roles;
+}
+
+const READY_WAIT_MS = 30_000;
+const READY_POLL_MS = 2_000;
+const SCREEN_END_LINES = 4;
+
+// 다시 켠 뒤 화면 끝 원문 4줄(가림 함수 통과). 입력창 위치와 무관하게 마지막 비지 않은 줄을 본다.
+export function screenEnd(screen) {
+  return trimmedLines(screen).filter((line) => !RULE_OR_BLANK.test(line)).slice(-SCREEN_END_LINES).map((line) => safeText(line, MAX_TAIL_WIDTH));
+}
+
+// 큰 대화의 --resume은 처음 몇 초가 불러오는 화면이라 idle 또는 working이 될 때까지 최대 30초 읽는다. 판정은 하지 않는다.
+export function waitForScreen({ floor, session, sleep, now }) {
+  const started = now();
+  let screen = null, error = null;
+  for (;;) {
+    try { screen = floor.read(session); error = null; } catch (e) { error = e; }
+    if (typeof screen === "string" && readStatusLine(screen).kind !== "unknown") return { state: "ready", screen };
+    if (now() - started >= READY_WAIT_MS) return { state: "timeout", screen: typeof screen === "string" ? screen : null, error };
+    sleep(READY_POLL_MS);
+  }
+}
+
+// roles: 사람이 고른 역할 이름(순서 그대로). 첫 실패에서 멈추고 나머지는 "안 함"으로 표에 남긴다.
+export function runRefresh({ roles, entriesOf, floor, pendingCards, restart, reason = null, accountSlot = null, intervalSec = 8, self = process.env.KADAN_ROLE, sleep, now }) {
+  const results = [];
+  let needRest = false, halted = false;
+  for (const role of roles) {
+    if (halted) { results.push({ role, outcome: "not-run", reason: "앞선 역할 실패로 멈춤" }); continue; }
+    const entries = entriesOf();
+    const live = floor.list().filter((item) => item.alive !== false && String(item.session).startsWith("kadan-"));
+    const session = live.map((item) => item.session).find((name) => currentStart(entries, name)?.role === role);
+    if (!session) { results.push({ role, outcome: "skipped", reason: "살아 있는 역할이 아님" }); continue; }
+    // 순서는 "쉬기 → 확인 → 다시 켜기"다. 쉰 뒤에 확인해야 확인과 끄기 사이에 기다리는 시간이 끼지 않는다(검수 F1).
+    if (needRest) { sleep(intervalSec * 1000); needRest = false; }
+    // 직전 확인: 바로 지금 읽은 화면이 idle이어야 한다. select "all"에서 target이면 곧 idle(빈 입력창, 진행 표시 없음)이다.
+    const row = previewRow({ entries, floor, pendingCards, session, self, select: "all" });
+    if (row.verdict !== "target") { results.push({ role, outcome: "skipped", reason: `${row.verdict === "excluded" ? "제외" : "건너뜀"}: ${row.reason}` }); continue; }
+    let receipt;
+    try {
+      receipt = restart({ role, session, flags: { accountRefresh: true, ...(reason ? { reason } : {}), ...(accountSlot != null ? { accountSlot } : {}) } });
+    } catch (error) {
+      // 끄기 직전 재확인(restartRole의 beforeStop)이 막은 것은 실패가 아니다. 끄지 않았으니 다음 역할로 계속 간다.
+      if (error?.code === STATE_CHANGED_CODE) { results.push({ role, outcome: "skipped", reason: safeText(error.message, 300), cards: row.pending }); continue; }
+      results.push({ role, outcome: "failed", reason: safeText(error?.message ?? error, 1000), cards: row.pending });
+      halted = true;
+      continue;
+    }
+    needRest = true;
+    const waited = waitForScreen({ floor, session, sleep, now });
+    results.push({ role, outcome: "restarted", cards: row.pending, panePid: receipt.panePid ?? null, conversation: receipt.conversation ?? null,
+      screenState: waited.state, screenEnd: waited.screen == null ? [] : screenEnd(waited.screen) });
+  }
+  return results;
+}
+
+const OUTCOME_LABEL = { restarted: "다시 켬", skipped: "건너뜀", failed: "실패", "not-run": "안 함" };
+
+export function formatRefreshResult(results) {
+  const out = ["계정 전환 재시작 결과", ""];
+  out.push(...table([["역할", "결과", "카드", "새 PID", "이유"], ...results.map((r) => [r.role, OUTCOME_LABEL[r.outcome], r.cards ? r.cards.length : "-", r.panePid ?? "-", r.reason ?? "-"])]));
+  for (const r of results) {
+    if (r.outcome === "failed") out.push("", `[${r.role}] 실패 — 나머지는 하지 않았다. 원인을 모르면 재시도하지 않는다. 복구 명령은 위 이유 칸의 안내를 따른다.`);
+    if (r.outcome !== "restarted") continue;
+    out.push("", `[${r.role}] 화면 끝 원문(최대 ${SCREEN_END_LINES}줄) — ${r.screenState === "ready" ? "입력 대기 또는 작업 중 화면" : "30초 안에 안정되지 않아 시간 초과 시점 화면"}`, ...r.screenEnd.map((line) => `  | ${line}`));
+  }
+  const count = (outcome) => results.filter((r) => r.outcome === outcome).length;
+  out.push("", `다시 켬 ${count("restarted")} · 건너뜀 ${count("skipped")} · 실패 ${count("failed")} · 안 함 ${count("not-run")}`);
+  out.push("판정은 하지 않는다. 한도 메시지가 사라졌는지는 위 원문을 직접 읽어 확인한다");
+  return out.join("\n");
 }

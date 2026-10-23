@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
@@ -11,7 +12,7 @@ import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 
 function fixture(sqlite = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-report-lock-'));
-  if (sqlite) { createDatabase(home); writeStorageMarker(home, 'sqlite'); }
+  if (sqlite) { createDatabase(home); writeStorageMarker(home, 'sqlite'); } else markJsonl(home);
   const reports = new WatchReports({home, floor: {list: () => []}, send: () => assert.fail('외부 발송 없음'),
     readCards: () => [{id: 'card', key: 'test/card', role: 'worker', status: 'assigned'}],
     readWorks: () => [],

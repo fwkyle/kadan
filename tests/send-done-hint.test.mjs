@@ -24,7 +24,7 @@ test('격리 실제 tmux: 열린 카드가 있는 작업자의 send 출력에만
   createDatabase(home);writeStorageMarker(home,'sqlite');
   const cli=new URL('../src/cli.mjs',import.meta.url).pathname;
   const env={...process.env,KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_FLOOR:'tmux',KADAN_WINDOW:'none'};
-  const run=(args,role)=>{const r=spawnSync(process.execPath,[cli,...args],{env:{...env,KADAN_ROLE:role},cwd:home,encoding:'utf8',timeout:10000});assert.equal(r.status,0,r.stderr+r.stdout);return r.stdout;};
+  const run=(args,role)=>{const r=spawnSync(process.execPath,[cli,...args],{env:{...env,KADAN_ROLE:role},cwd:os.tmpdir(),encoding:'utf8',timeout:10000});assert.equal(r.status,0,r.stderr+r.stdout);return r.stdout;};
   const roles=['dh-감독','dh-작업자'];
   try {
     for (const role of roles) run(['start',role,'--cmd','stty -echo; exec cat'],'사람');
@@ -46,6 +46,6 @@ test('격리 실제 tmux: 열린 카드가 있는 작업자의 send 출력에만
     const after=run(['send','dh-감독','추가 보고'],'dh-작업자');
     assert.doesNotMatch(after,/완료 표시/);
   } finally {
-    for (const role of roles) spawnSync(process.execPath,[cli,'stop',role],{env,cwd:home,encoding:'utf8'});
+    for (const role of roles) spawnSync(process.execPath,[cli,'stop',role],{env,cwd:os.tmpdir(),encoding:'utf8'});
   }
 });

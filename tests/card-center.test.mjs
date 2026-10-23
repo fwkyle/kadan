@@ -2,13 +2,14 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { CardStore } from '../src/card-store.mjs';
 import { buildCardCenter } from '../src/card-center.mjs';
 import { createWallServer } from '../src/wall.mjs';
 import { renderCenterWall } from '../src/center-wall.mjs';
-function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-center-'));const store=new CardStore(home);const c=store.create({repo:'repo',id:'card-a',repoPath:home,body:'# 제품 검색',by:'사람'});return{home,store,c};}
+function fixture(){const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-center-')));const store=new CardStore(home);const c=store.create({repo:'repo',id:'card-a',repoPath:home,body:'# 제품 검색',by:'사람'});return{home,store,c};}
 const rows=[{kind:'plan',taskId:'card-a',board:'integration',t:'2020-09-07T00:00:00Z'}, {kind:'send',role:'different-작업자',taskId:'card-a',t:'2020-09-07T00:01:00Z'}];
 const tree=[{name:'different',roles:[{role:'different-작업자',life:{state:'alive',pidState:'match'}}]}];
 test('09-07 중앙 카드 버전/승인/배정 경계와 질문 답변 기록',()=>{

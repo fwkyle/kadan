@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -15,7 +16,7 @@ import {renderCenterWall} from '../src/center-wall.mjs';
 
 function fixture(mode='sqlite'){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-operations-flow-'));
- if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
+ if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}else markJsonl(home);
  const store=new WorkStore(home),cards=new CardStore(home);
  const make=(key='repo/flow')=>store.create({key,title:'운영 흐름 검토',goal:'보고·마감·인수를 구분',scope:'전체 연결 실행',acceptance:'세 상태와 원문 확인',owner:'감독',repoPath:home});
  const work=make();
