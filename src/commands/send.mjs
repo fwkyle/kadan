@@ -12,6 +12,7 @@ import { isUserActor } from "../actors.mjs";
 import { Mailbox } from "../mailbox.mjs";
 import { CardStore } from "../card-store.mjs";
 import { resolveWorkMail, inferDispatchTask } from "../work-mail.mjs";
+import { planTurnReturn, claimTurnReturn, turnReturnTail, turnReturnReceipt, revertTurnReturn } from "../mail-turn-return.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floor } from "../floor.mjs";
@@ -39,7 +40,7 @@ export function cmdDispatch(argv, flags) {
 function usage(command) {
   if (command === 'mail') {
     return '사용법: kadan mail <역할> [--work <업무키>] [--execution <실행키>] ' +
-      '[--expect-reply] [--reply-to <우편ID>] [--reply-final] [--raw] <메시지...> ' +
+      '[--expect-reply] [--reply-to <우편ID>] [--reply-final] [--keep-turn] [--raw] <메시지...> ' +
       '(메시지 생략 시 표준 입력). 우편 전용이며 --task는 금지, --execution으로 발령하지 않습니다.';
   }
   if (command === 'dispatch') {
@@ -49,7 +50,7 @@ function usage(command) {
   }
   return '사용법: kadan send <역할> [--task <카드id>] [--work <업무키>] ' +
     '[--execution <실행키>] [--allow-old-runner <이유>] [--raw] ' +
-    '[--expect-reply] [--reply-to <우편ID>] [--reply-final] <메시지...> (메시지 생략 시 표준 입력). ' +
+    '[--expect-reply] [--reply-to <우편ID>] [--reply-final] [--keep-turn] <메시지...> (메시지 생략 시 표준 입력). ' +
     '기존 호환 명령입니다. --execution도 조건에 따라 발령으로 추론합니다. ' +
     '새 우편은 mail, 명시 발령은 dispatch --task를 사용하세요.';
 }
@@ -95,7 +96,7 @@ function deliverMessage(argv, flags, command) {
     console.log(JSON.stringify(receipt));return;
   }
 
-  let receipt;
+  let receipt, turnClaim = null;
   try {
     // 기존 send만 --execution의 발령 추론을 유지한다. mail은 연결 주소로만 사용하며,
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
@@ -142,12 +143,18 @@ function deliverMessage(argv, flags, command) {
         throw new Error(`알 수 없는 역할: ${role} — 시작 기록도 책임 관계도 없습니다. 역할 이름을 확인하세요`);
       }
     }
+    // 위임받은 쪽이 업무 owner에게 보내는 결과 우편이면 보내기 전에 업무 잠금 안에서 판정·쓰기를 하고(놀고 있음 PR-3),
+    // 쓰기가 성공했을 때만 실제 revision의 꼬리를 붙인다. 업무 잠금은 여기서 놓이고 우편은 그 뒤에 시작한다(잠금이 겹치지 않는다).
+    const turnPlan = planTurnReturn(ledgerHome(), {sender: process.env.KADAN_ROLE, by, recipient, workKey: mailContext.workKey, taskId,
+      raw: flags.raw === true, keepTurn: flags['keep-turn'] === true});
+    turnClaim = claimTurnReturn(ledgerHome(), turnPlan);
+    const outgoing = turnClaim ? message + turnReturnTail(turnClaim) : message;
     try {
       receipt = guardedSend({
         floor,
         session,
         role:recipient,
-        message,
+        message: outgoing,
         taskId,
         mailContext,
         raw:flags.raw===true,
@@ -157,6 +164,8 @@ function deliverMessage(argv, flags, command) {
         ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session))}} : {}),
       });
     } catch (error) {
+      // 전달이 확인된 실패('sent': 기록만 실패)가 아니면 방금 쓴 차례를 되돌린다(best-effort).
+      if (turnClaim && error.delivery !== 'sent') { revertTurnReturn(ledgerHome(), turnClaim); turnClaim = null; }
       // 붙여넣기 전에 멈춘 실패(입력 보호 보류·세션 없음·PID 변경)는 보관으로 돌린다(종료 0).
       // 전달이 됐거나 불명확하면(sent·unknown) 중복 방지를 위해, 수신자 변경·역할 지침 오류·발령·--raw는 보관할 수 없어 그대로 실패다.
       if (storable && isStorableMailHold(error)) return store(error.message);
@@ -170,6 +179,7 @@ function deliverMessage(argv, flags, command) {
     `${floor.name === "tmux" ? " — 입력 접수·AI 실행 미확인" : ""}${receipt.executionKey?` — 실행 ${receipt.executionKey}`:""}` +
     ` — 받는 쪽에 붙인 역할 지침 ${receipt.roleInstructions.status==='applied'?receipt.roleProfile:`적용 안 됨 (${receipt.roleInstructions.reason})`}`
   );
+  if (turnClaim) console.log(JSON.stringify({turnReturn: turnReturnReceipt(turnClaim, receipt.mailId)}));
   // 보낸 쪽이 카단 역할이고 열린 카드가 있으면, 응답을 끝내기 직전 읽는 이 출력에 완료 표시 형식을 알린다.
   // 질문(--expect-reply)은 작업 중이므로 알리지 않는다. 조회 실패는 전송 결과를 바꾸지 않고 안내만 생략한다.
   const sender=process.env.KADAN_ROLE;
