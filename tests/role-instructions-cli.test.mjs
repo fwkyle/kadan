@@ -21,7 +21,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
   createDatabase(home);writeStorageMarker(home,'sqlite');
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
   const transcript=[],started=[];
-  const call=(...args)=>{const r=spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});transcript.push({args,status:r.status,stdout:r.stdout,stderr:r.stderr});return r;};
+  const call=(...args)=>{const r=spawnSync(process.execPath,[cli,...args],{env,cwd:os.tmpdir(),encoding:'utf8',timeout:10000});transcript.push({args,status:r.status,stdout:r.stdout,stderr:r.stderr});return r;};
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r.stdout;};
   const tx=(...args)=>{const r=spawnSync('tmux',['-L',socket,...args],{env,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout;};
   const receiver=path.join(home,'codex.mjs');
@@ -77,7 +77,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     const raw=send('legacy','RAW_INPUT',['--raw']);assert.equal(raw.body,'RAW_INPUT');assert.equal(raw.r.roleInstructions.reason,'explicit-raw');
     const rawInput='  RAW_STDIN\n\n';
     const beforeRaw=received('legacy');
-    const rawResult=spawnSync(process.execPath,[cli,'send','legacy','--raw'],{env,cwd:home,input:rawInput,encoding:'utf8',timeout:10000});
+    const rawResult=spawnSync(process.execPath,[cli,'send','legacy','--raw'],{env,cwd:os.tmpdir(),input:rawInput,encoding:'utf8',timeout:10000});
     transcript.push({args:['send','legacy','--raw'],input:rawInput,status:rawResult.status,stdout:rawResult.stdout,stderr:rawResult.stderr});
     assert.equal(rawResult.status,0,rawResult.stderr);
     const rawReceipt=sends().at(-1);
@@ -105,7 +105,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     const command=assigned.body.match(/^KADAN_ROLE=(\S+) kadan (card progress \S+ --revision \d+ --activity running) --note "([^"]+)"$/m);
     assert.ok(command,'생성한 안내에 그대로 실행 가능한 시작 명령이 있어야 함');
     const progressArgs=[...command[2].split(' '),'--note',command[3]];
-    const progress=spawnSync(process.execPath,[cli,...progressArgs],{env:{...env,KADAN_ROLE:command[1]},cwd:home,encoding:'utf8',timeout:10000});
+    const progress=spawnSync(process.execPath,[cli,...progressArgs],{env:{...env,KADAN_ROLE:command[1]},cwd:os.tmpdir(),encoding:'utf8',timeout:10000});
     transcript.push({args:progressArgs,role:command[1],status:progress.status,stdout:progress.stdout,stderr:progress.stderr});
     assert.equal(progress.status,0,progress.stderr);assert.equal(new CardStore(home).get('test/standalone').activity,'running');
     assert.deepEqual(missing(),[],'안내 명령 실행 뒤 시작보고누락 0');

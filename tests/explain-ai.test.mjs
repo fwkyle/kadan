@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
@@ -27,7 +28,7 @@ const EXEC = `node '${fake}' {model}`;
 
 // 가짜 실행기와 설정이 든 격리 홈. 시계는 시험이 직접 움직인다(켜는 시점 이후 사건만 보는 규칙을 시각으로 시험한다).
 function world({chain = [{runner: 'fake', model: 'ok'}], exec = EXEC, spawn, timeoutMs = 3000, extraRunners = {}} = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-explain-'));
+  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-explain-')));
   const log = path.join(home, 'fake-log.jsonl');
   process.env.FAKE_EXPLAIN_LOG = log;
   const writeSettings = roles => fs.writeFileSync(path.join(home, 'runner-settings.json'), JSON.stringify({

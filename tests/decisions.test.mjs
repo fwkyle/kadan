@@ -2,6 +2,7 @@ import "./helpers/isolated-home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
@@ -9,7 +10,7 @@ import {DecisionStore,decisionCommand} from '../src/decisions.mjs';
 import {createWallServer} from '../src/wall.mjs';
 import {renderCenterWall} from '../src/center-wall.mjs';
 const input={question:'서비스를 제품과 분리할까요?',options:['분리','유지'],recommendation:'분리',reason:'기존 결정으로 해결할 수 없는 표시 정책\n- 결과 파일: /repo/card-a/result.md'};
-function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-'));const cards=new CardStore(home);cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});const sent=[];const notify=(...x)=>sent.push(x);const store=new DecisionStore(home,{notify});return{home,cards,store,sent,notify};}
+function fixture(){const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-')));const cards=new CardStore(home);cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});const sent=[];const notify=(...x)=>sent.push(x);const store=new DecisionStore(home,{notify});return{home,cards,store,sent,notify};}
 test('09-07 슈퍼의 명시 결정만 생성, 질문 단위로 답변, 같은 답변은 중복 통지 없음',()=>{
  const f=fixture();assert.throws(()=>f.store.request('repo/card-a',input,'작업자'),/슈퍼감독/);
  assert.throws(()=>f.store.request('repo/card-a',{...input,recommendation:'아무거나'},'시험-슈퍼감독'),/추천/);
