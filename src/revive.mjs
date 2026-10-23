@@ -100,20 +100,32 @@ export const lockWaitMs = (fallback = 15000) => {
 };
 export const reclaimLog = (reason) => console.log(`[${new Date().toISOString()}] 낡은 revive.lock을 되찾음: ${reason}`);
 export const STALE_LOCK_MS = 2 * 60 * 1000;
+const RETRY_MAX = 3, RETRY_SLEEP_MS = 25;
 export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
   isAlive = pidAlive, now = Date.now, onReclaim = () => {} } = {}) {
   const lock = path.join(home, 'revive.lock'), pidFile = path.join(lock, 'pid');
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const deadline = Date.now() + waitMs;
+  // 경쟁에서 지거나 되찾은 뒤 처음부터 다시 도는 길은 모두 여기를 지난다. 첫 재시도는 waitMs=0이어도 한 번 허용하고
+  // (단발 ENOENT), 그 뒤로는 마감과 최대 횟수를 지키며 짧게 쉰다. false면 호출한 쪽이 null을 돌려준다.
+  let retries = 0;
+  const retry = () => {
+    retries += 1;
+    if (retries > RETRY_MAX || (retries > 1 && Date.now() >= deadline)) return false;
+    sleep(RETRY_SLEEP_MS);
+    return true;
+  };
   for (;;) {
     try {
       fs.mkdirSync(lock);
       // mkdir 성공 뒤 pid를 쓰기 전에 다른 쪽이 낡은 잠금으로 보고 이 폴더를 옮길 수 있다(ENOENT). 원인이 식별된 경쟁
       // ('잠금을 빼앗김')이라 던지지 않고 처음부터 다시 얻는다. 그 밖의 오류는 원인을 모르므로 그대로 던진다.
       try { fs.writeFileSync(pidFile, String(process.pid)); }
-      catch (writeError) { if (writeError.code === 'ENOENT') continue; throw writeError; }
+      catch (writeError) { if (writeError.code !== 'ENOENT') throw writeError; if (retry()) continue; return null; }
       // 쓴 뒤 다시 읽어 자기 pid일 때만 얻은 것으로 본다. 아니면 그 사이 빼앗긴 것이므로 다시 돈다.
-      try { if (Number(fs.readFileSync(pidFile, 'utf8')) !== process.pid) continue; } catch { continue; }
+      let mine = false;
+      try { mine = Number(fs.readFileSync(pidFile, 'utf8')) === process.pid; } catch { /* 빼앗김 */ }
+      if (!mine) { if (retry()) continue; return null; }
       // 해제는 pid 파일이 자기 pid일 때만 한다 — 되찾기로 치워진 뒤 다른 프로세스가 새로 잡은 잠금을 지우지 않는다.
       return () => {
         try {
@@ -129,7 +141,7 @@ export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wa
       if (Number.isInteger(pid) && pid > 0) { if (!isAlive(pid)) reason = `주인(pid ${pid})이 죽었다`; }
       else {
         let age = 0;
-        try { age = now() - fs.statSync(lock).mtimeMs; } catch { continue; }
+        try { age = now() - fs.statSync(lock).mtimeMs; } catch { if (retry()) continue; return null; }
         if (age > STALE_LOCK_MS) reason = `pid 파일이 없거나 깨진 채 ${Math.round(age / 1000)}초 지났다`;
       }
       if (reason) {
@@ -138,20 +150,28 @@ export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wa
         const stale = `${lock}.stale-${process.pid}-${Date.now()}`;
         const readPid = file => { try { return Number(fs.readFileSync(file, 'utf8')); } catch { return NaN; } };
         // 옮기기 직전에 다시 읽는다: 그 사이 다른 쪽이 이미 되찾아 새로 잡았다면(주인이 달라졌다) 건드리지 않는다.
-        if (readPid(pidFile) !== pid && !(Number.isNaN(pid) && Number.isNaN(readPid(pidFile)))) continue;
+        if (readPid(pidFile) !== pid && !(Number.isNaN(pid) && Number.isNaN(readPid(pidFile)))) { if (retry()) continue; return null; }
         let moved = false;
         try { fs.renameSync(lock, stale); moved = true; } catch { /* 다른 쪽이 먼저 치웠다 */ }
         if (moved) {
           // 옮긴 폴더가 우리가 낡았다고 본 그 잠금인지 확인한다. 다시 읽은 뒤 옮기기 전에 다른 쪽이 새 잠금을 만들었다면
-          // (pid가 다르거나, pid 파일을 쓰기 전이라 막 만든 폴더) 지우지 않고 제자리로 돌려놓는다.
+          // 지우지 않고 제자리로 돌려놓는다(다른 pid의 잠금). 단, pid 없는 어린 폴더는 돌려놓지 않고 지운다: 만든 쪽은 pid를
+          // 아직 못 썼고 폴더가 옮겨졌으니 그쪽 쓰기는 ENOENT로 다시 시도한다. 돌려놓으면 pid 없는 빈 잠금만 남아
+          // STALE_LOCK_MS가 지나야 회수된다.
+          // 알려진 한계: 돌려놓는 순간 다른 쪽이 이미 새 잠금을 만들었다면 되돌리기가 실패해 옮긴 폴더가 남을 수 있다.
+          // 노드에는 커널 잠금(flock)이 없어 디렉터리 잠금만으로는 완전히 막지 못한다.
           const owner = readPid(path.join(stale, 'pid'));
-          let same;
-          if (Number.isInteger(pid) && pid > 0) same = owner === pid;
-          else { let age = 0; try { age = now() - fs.statSync(stale).mtimeMs; } catch { /* 없음 */ } same = !(owner > 0) && age > STALE_LOCK_MS; }
-          if (same) { fs.rmSync(stale, { recursive: true, force: true }); onReclaim(reason); }
-          else { try { fs.renameSync(stale, lock); } catch { /* 이미 다른 잠금이 있다 */ } }
+          let age = 0; try { age = now() - fs.statSync(stale).mtimeMs; } catch { /* 없음 */ }
+          const hasPid = Number.isInteger(pid) && pid > 0;
+          const same = hasPid ? owner === pid : !(owner > 0) && age > STALE_LOCK_MS;
+          const youngEmpty = !(owner > 0) && age <= STALE_LOCK_MS;
+          // 낡은 잠금을 치웠으면(같은 잠금이거나 어린 빈 폴더) 진전이 있었으니 바로 다시 얻는다. 되돌렸거나 옮기지 못했으면 다시 시도 처리로 간다.
+          if (same) { fs.rmSync(stale, { recursive: true, force: true }); onReclaim(reason); continue; }
+          if (youngEmpty) { fs.rmSync(stale, { recursive: true, force: true }); continue; }
+          try { fs.renameSync(stale, lock); } catch { /* 이미 다른 잠금이 있다 */ }
         }
-        continue;
+        if (retry()) continue;
+        return null;
       }
       if (Date.now() >= deadline) return null;
       sleep(200);

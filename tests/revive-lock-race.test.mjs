@@ -91,3 +91,50 @@ test('6e pid를 쓴 뒤 다시 읽어 자기 pid가 아니면 얻은 것으로 �
   assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), String(process.pid));
   release();
 });
+
+// 항목 6f: 다시 시도 길은 모두 마감과 쉬기를 지난다. 매 시도 잠금을 빼앗기게 주입해도 waitMs=1에서 null로 끝난다.
+// 쓰기·읽기에 주입하므로 시계·부하 없이 결정적이다. 쉬기는 주입한 sleep으로 센다.
+const pidOf = home => path.join(home, 'revive.lock', 'pid');
+const losing = {
+  '쓰기 ENOENT': {write: (home, orig) => (file, ...rest) => { if (String(file) === pidOf(home)) fs.rmSync(path.dirname(file), {recursive: true}); return orig(file, ...rest); }},
+  '다시 읽기 실패': {write: (home, orig) => (file, ...rest) => { orig(file, ...rest); if (String(file) === pidOf(home)) fs.rmSync(path.dirname(file), {recursive: true}); }},
+  '남의 pid': {read: (home, orig) => (file, ...rest) => { if (String(file) !== pidOf(home)) return orig(file, ...rest); fs.rmSync(path.dirname(file), {recursive: true}); return String(process.pid + 1); }},
+};
+for (const [name, inject] of Object.entries(losing)) {
+  test(`6f ${name}이 매번 반복돼도 마감을 지키고 null로 끝나며 쉰다`, () => {
+    const home = tmp();
+    const origWrite = fs.writeFileSync, origRead = fs.readFileSync; let writes = 0, sleeps = 0;
+    if (inject.write) fs.writeFileSync = (file, ...rest) => { if (String(file) === pidOf(home)) writes++; return inject.write(home, origWrite)(file, ...rest); };
+    if (inject.read) fs.readFileSync = inject.read(home, origRead);
+    let release;
+    try { release = acquireReviveLock(home, {waitMs: 1, sleep: () => { sleeps++; }}); }
+    finally { fs.writeFileSync = origWrite; fs.readFileSync = origRead; }
+    assert.equal(release, null);
+    assert.ok(sleeps > 0, '다시 시도하기 전에 쉬었다');
+    assert.ok(writes <= 4, `즉시 재시도에 상한이 있다(쓰기 ${writes}회)`);
+  });
+}
+
+// 항목 6g: 되찾으려고 옮긴 폴더가 누군가 막 만든 pid 없는 폴더면 돌려놓지 않고 지우고, 바로 새로 얻는다.
+test('6g 옮긴 폴더가 pid 없는 어린 폴더면 되돌려 빈 잠금을 남기지 않고 지운 뒤 바로 얻는다', () => {
+  const home = tmp(), lock = path.join(home, 'revive.lock');
+  fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, 'pid'), String(deadPid()));
+  const origRename = fs.renameSync; let swapped = false;
+  // 옛 죽은 소유자 잠금을 읽은 뒤 옮기기 직전에, 다른 쪽이 그것을 치우고 막 만든 빈 폴더로 바꿔 둔 상황.
+  fs.renameSync = (from, to) => {
+    if (!swapped && String(from) === lock) { swapped = true; fs.rmSync(lock, {recursive: true}); fs.mkdirSync(lock); }
+    return origRename(from, to);
+  };
+  const reasons = []; let release;
+  try { release = acquireReviveLock(home, {onReclaim: r => reasons.push(r)}); } finally { fs.renameSync = origRename; }
+  assert.ok(swapped);
+  assert.ok(release, '빈 잠금이 남지 않아 바로 얻는다');
+  assert.equal(reasons.length, 0, '낡은 잠금을 되찾은 것이 아니라 어린 폴더를 치운 것이다');
+  assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), String(process.pid));
+  assert.deepEqual(fs.readdirSync(home).filter(n => n.startsWith('revive.lock.stale')), [], '옮긴 폴더가 남지 않는다');
+  release();
+  assert.ok(!fs.existsSync(lock));
+  // 가짜 60초 뒤의 다음 회차도 막히지 않는다.
+  const again = acquireReviveLock(home, {now: () => Date.now() + 60000});
+  assert.ok(again); again();
+});
