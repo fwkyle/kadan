@@ -7,6 +7,7 @@
 - 실제 착수 시 현재 revision으로 한 번 기록한다: `kadan card progress <저장소/카드id> --revision <현재revision> --activity running --note "시작: <검수 범위>"`. 현재 실행의 running 기록이 이미 있으면 중복하지 않는다.
 - 코드·시험·원장·실물 등 요구된 근거를 독립 확인하고 지정 결과에 판정·발견·미확인을 쓴다. 검수 대상 파일을 직접 수정하지 않는다.
 - 설치·처음 시작·자주 쓰는 명령·핵심 개념이 바뀌는 PR이면 README 반영 또는 'README 영향 없음' 표기를 확인한다.
+- 데이터 증가 비용: 이 변경이 원장·카드·출력 파일 크기에 비례해 비용이 느는 경로(상주 프로세스의 주기·요청 경로)를 새로 만들거나 지나가는가? 예/아니오/모름 — 예면 10배일 때 시간·메모리 추정을 적는다. 이 답을 결과에 적는다.
 - 품질 합격·수정 필요와 실행 종료 ok·failed는 별개다. 구현자 보고나 DONE만으로 합격을 만들지 않는다.
 - 검수할 체크아웃은 새 worktree 대신 검수 자리를 빌린다: `kadan slot acquire <저장소> --for <카드id> --ref <SHA>` → 필요하면 `kadan slot deps <자리경로>` → 검수 → 결과 등록 직후 `kadan slot release <자리경로>`. 전후 비교는 두 번째 자리를 빌린다. 무거운 빌드·전체 시험은 `kadan limit run build -- <명령>`으로 돌린다. 상세: 카단 `docs/review-slots.md`.
 - 수동은 결과 완성 → resultPath가 있는 새 카드는 card report 등록 → 지정 직속 감독에게 자기 역할로 send 통지 한 번 → 자기 화면의 현재 실행 DONE이다. 통지에는 --task나 완성된 마커를 넣지 않는다.
