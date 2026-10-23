@@ -66,6 +66,7 @@
 | `kadan restore [역할...]` | 로티 데몬 재시작 뒤, 기록된 로티 탭이 죽은 살아 있는 세션에 새 탭을 붙인다 | `--dry-run` |
 | `kadan recovery inspect\|restore\|report` | 재부팅 뒤 역할과 AI 대화를 다시 맞춘다. 결과는 JSON(`ok`, `result`)으로 내고 실패는 종료 코드 1이다. `restore`는 tmux에서만 된다. 자세한 규칙 → [복구](recovery.md) | — |
 | `kadan restart <역할>` | 살아 있는 역할의 프로그램만 다시 띄우고 대화 기억은 유지한다. 같은 이름·같은 대화(resume)·같은 작업 폴더·같은 모델 옵션이라 우편·책임 세대·관계표가 끊기지 않는다. 대화를 확정하지 못하면 기존 세션을 끄지 않고 거절한다([자세히](#kadan-restart-자세히)) | `--force`(끝나지 않은 카드가 있어도 진행, 사람 확인용), `--reason <이유>`(stop·start 기록에 이유), `--expect-pid <pane PID>`(세대 대조, 화면용) |
+| `kadan claude refresh` | **PR-1은 미리보기만 한다(읽기 전용).** 살아 있는 Claude 역할 중 한도에 걸린 세션을 골라 표로 보인다: 응답 생성 중이면 건너뜀, 마지막 빈 입력창 바로 위 오류 덩어리 안에 `You've hit your session limit`·`Usage limit reached`가 있으면 대상. 비서·기반 프로세스·다른 실행기·자기 자신은 제외. 아무것도 끄거나 켜지 않고 원장·우편·알림을 쓰지 않으며 바닥에 키를 보내지 않는다. 표 아래에 `claude-swap list --json`(1회·10초 상한)으로 계정별 남은 한도를 보인다(이메일은 출력하지 않는다). 실제 다시 켜기는 PR-2, 계정 전환 일괄은 PR-3 | `--select limit\|all`(기본 limit, `login`은 문구 미확보로 거절), `--json`, `--no-accounts`. `--yes`·`--switch`는 exit 2 |
 | `kadan stop <역할>` | 카단이 만든 세션만 끝내고 연결된 로티 탭을 닫는다. 미확정 카드가 있으면 알린다 | — |
 | `kadan hierarchy prune` | 끝난 역할의 관계를 정리할 후보와 보존 이유를 표시한다. [정리 기준](hierarchy.md#끝난-역할-정리) | `--apply`(백업 후 적용), `--file <절대경로>`(복사본 등 대상 지정) |
 
