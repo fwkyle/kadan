@@ -31,38 +31,43 @@ function world(roles) {
 const preview = (w, extra = {}) => buildPreview({entries: w.entries, floor: w.floor, pendingCards: (_, role) => (extra.cards?.[role] ?? []), self: extra.self ?? 'me', select: extra.select ?? 'limit'});
 const rowOf = (rows, role) => rows.find(r => r.role === role);
 
-test('양성: 빈 입력창 위 오류 덩어리의 한도 문구 → 대상, 초기화 줄 원문, 남은 시간 원문', () => {
-  const w = world([{role: 'a', screen: SCREENS['limit-resets']}, {role: 'b', screen: SCREENS['limit-curly']}, {role: 'c', screen: SCREENS['limit-usage']}]);
+test('양성: 줄 맨 앞이 한도 머리말이면 대상 — 기호 없음·⏺·⎿·둘째 줄 안내·reached·Usage limit', () => {
+  for (const name of Object.keys(SCREENS).filter(k => k.startsWith('pos-'))) {
+    const rows = preview(world([{role: 'a', screen: SCREENS[name]}]));
+    assert.equal(rows[0].verdict, 'target', name); assert.equal(rows[0].reason, '한도 문구 일치', name);
+  }
+});
+
+test('양성 세부: 초기화 줄 원문·남은 시간 원문·카드 수·둥근 아포스트로피·조치 문구', () => {
+  const w = world([{role: 'a', screen: SCREENS['pos-plain']}, {role: 'b', screen: SCREENS['pos-two-lines']}, {role: 'c', screen: SCREENS['pos-reached']}]);
   const rows = preview(w, {cards: {a: ['c1', 'c2']}});
-  for (const role of ['a', 'b', 'c']) { assert.equal(rowOf(rows, role).verdict, 'target', role); assert.equal(rowOf(rows, role).reason, '한도 문구 일치'); }
   assert.equal(rowOf(rows, 'a').resetLine, "You've hit your session limit · resets 3pm (Asia/Seoul)");
   assert.equal(rowOf(rows, 'a').timeLeft, '0h 20m left');
   assert.equal(rowOf(rows, 'a').cards, 2);
-  assert.equal(rowOf(rows, 'b').resetLine, null); // 둥근 아포스트로피도 맞고, 시각 줄이 없으면 비운다
-  assert.equal(rowOf(rows, 'c').timeLeft, null);
+  assert.equal(rowOf(rows, 'b').resetLine, '⏺ You’ve hit your session limit · resets 3pm'); // 줄 원문 그대로(앞 공백만 뺌)
+  assert.equal(rowOf(rows, 'c').resetLine, null);
   assert.match(formatPreview(rows, null), /다시 켜기 대상\(카드 2건 — 카드 유지 재시작은 kyle 결정 대기\)/);
 });
 
-test('음성: 대화 본문·인용·코드 울타리 안의 같은 문구는 대상이 아니다', () => {
-  for (const name of ['quoted-in-reply', 'quoted-in-fence', 'quoted-block-line']) {
+test('음성: 목록·본문·번호·표·인용·울타리·백틱·떨어진 도구 출력·사이에 낀 응답/입력 → 대상 아님(검수 F1 재현 포함)', () => {
+  for (const name of Object.keys(SCREENS).filter(k => k.startsWith('neg-') && k !== 'neg-working')) {
     assert.equal(claudeLimitMatch(SCREENS[name]), null, name);
-    const rows = preview(world([{role: 'a', screen: SCREENS[name]}]));
-    assert.equal(rows[0].verdict, 'none', name);
+    assert.equal(preview(world([{role: 'a', screen: SCREENS[name]}]))[0].verdict, 'none', name);
   }
 });
 
 test('음성: 일하는 중이면 한도 문구가 있어도 건너뜀(응답 생성 중)', () => {
-  const rows = preview(world([{role: 'a', screen: SCREENS['working-with-limit']}]));
+  const rows = preview(world([{role: 'a', screen: SCREENS['neg-working']}]));
   assert.deepEqual([rows[0].verdict, rows[0].reason], ['skip', '응답 생성 중']);
 });
 
 test('제외: codex·비서·자기 자신·실행기 모름·기반(원장 start 없음)', () => {
   const w = world([
-    {role: 'x', cmd: CODEX, screen: SCREENS['limit-resets']},
-    {role: '비서', profile: 'secretary', screen: SCREENS['limit-resets']},
-    {role: 'me', screen: SCREENS['limit-resets']},
-    {role: 'u', cmd: 'zsh -l', screen: SCREENS['limit-resets']},
-    {role: 'dashboard', noStart: true, screen: SCREENS['limit-resets']},
+    {role: 'x', cmd: CODEX, screen: SCREENS['pos-plain']},
+    {role: '비서', profile: 'secretary', screen: SCREENS['pos-plain']},
+    {role: 'me', screen: SCREENS['pos-plain']},
+    {role: 'u', cmd: 'zsh -l', screen: SCREENS['pos-plain']},
+    {role: 'dashboard', noStart: true, screen: SCREENS['pos-plain']},
   ]);
   const rows = preview(w);
   assert.deepEqual(rows.map(r => [r.role, r.verdict, r.reason]), [
@@ -71,13 +76,13 @@ test('제외: codex·비서·자기 자신·실행기 모름·기반(원장 star
 });
 
 test('화면 읽기 실패는 그 줄만 건너뜀이고 나머지는 계속된다', () => {
-  const rows = preview(world([{role: 'a', failRead: true, screen: ''}, {role: 'b', screen: SCREENS['limit-resets']}]));
+  const rows = preview(world([{role: 'a', failRead: true, screen: ''}, {role: 'b', screen: SCREENS['pos-plain']}]));
   assert.equal(rowOf(rows, 'a').verdict, 'skip'); assert.match(rowOf(rows, 'a').reason, /^화면 읽기 실패\(/);
   assert.equal(rowOf(rows, 'b').verdict, 'target');
 });
 
 test('생존 확인(pane PID 대조) 실패 → 건너뜀', () => {
-  const w = world([{role: 'a', screen: SCREENS['limit-resets']}]);
+  const w = world([{role: 'a', screen: SCREENS['pos-plain']}]);
   w.entries[0].panePid = '999';
   assert.deepEqual([preview(w)[0].verdict, preview(w)[0].reason], ['skip', '생존 확인 실패']);
 });
@@ -91,14 +96,14 @@ test('--select all: 입력 대기 → 대상, limit이면 해당 없음, 알 수
 });
 
 test('원장·바닥 무변화: 미리보기는 사건을 쓰지 않고 키를 한 번도 보내지 않는다', () => {
-  const w = world([{role: 'a', screen: SCREENS['limit-resets']}, {role: 'b', screen: SCREENS['idle-plain']}]);
+  const w = world([{role: 'a', screen: SCREENS['pos-plain']}, {role: 'b', screen: SCREENS['idle-plain']}]);
   preview(w); preview(w, {select: 'all'});
   assert.equal(JSON.stringify(w.entries), w.snapshot);
   assert.equal(w.keys.length, 0);
 });
 
 test('--json 모양: 영어 camelCase 키 배열과 개수', () => {
-  const rows = preview(world([{role: 'a', screen: SCREENS['limit-resets']}, {role: 'b', cmd: CODEX, screen: ''}]));
+  const rows = preview(world([{role: 'a', screen: SCREENS['pos-plain']}, {role: 'b', cmd: CODEX, screen: ''}]));
   const json = previewJson(rows, null);
   assert.deepEqual(Object.keys(json.rows[0]).sort(), ['cards', 'harness', 'model', 'reason', 'resetLine', 'role', 'session', 'timeLeft', 'verdict']);
   assert.deepEqual(json.counts, {target: 1, skip: 0, excluded: 1, none: 0});
@@ -119,7 +124,7 @@ test('계정 한도: 남은 %는 100-사용%, 조회 실패 칸만 실패, 이�
   assert.deepEqual([accounts.accounts[0].fiveHourLeftPct, accounts.accounts[0].sevenDayLeftPct, accounts.accounts[0].fiveHourResetsIn], [70, 19, '4h 32m']);
   assert.equal(accounts.accounts[1].active, true);
   assert.equal(accounts.accounts[2].status, '조회 실패(http-429)');
-  const rows = preview(world([{role: 'a', screen: SCREENS['limit-resets']}]));
+  const rows = preview(world([{role: 'a', screen: SCREENS['pos-plain']}]));
   const everything = formatPreview(rows, accounts) + JSON.stringify(previewJson(rows, accounts));
   assert.ok(!everything.includes(EMAIL) && !everything.includes('uuid-x') && !everything.includes('Org'));
   assert.match(formatPreview(rows, accounts), /활성 계정 = 새로 켜는 세션이 쓸 계정, 이미 켜진 세션은 옛 로그인일 수 있음/);
@@ -131,11 +136,11 @@ test('계정 한도: 명령 없음·실패·시간 초과·모양 다름·키 �
     [fakeSwap('', {error: Object.assign(new Error('x'), {code: 'ENOENT'})}), /claude-swap 없음/],
     [fakeSwap('', {error: Object.assign(new Error('x'), {code: 'ETIMEDOUT'})}), /시간 초과/],
     [fakeSwap('', {status: 1}), /종료 코드 1/],
-    [fakeSwap('not json'), /JSON이 아님/],
-    [fakeSwap('{"foo":1}'), /모양이 다름/],
-    [fakeSwap(JSON.stringify({accounts: [{email: EMAIL}]})), /번호 없음/],
+    [fakeSwap('not json'), /JSON 아님/],
+    [fakeSwap('{"foo":1}'), /모양 다름/],
+    [fakeSwap(JSON.stringify({accounts: [{email: EMAIL}]})), /모양 다름/],
   ];
-  const rows = preview(world([{role: 'a', screen: SCREENS['limit-resets']}]));
+  const rows = preview(world([{role: 'a', screen: SCREENS['pos-plain']}]));
   for (const [run, pattern] of cases) {
     const accounts = readAccounts({run});
     assert.equal(accounts.ok, false);
@@ -181,4 +186,66 @@ test('실제 CLI(격리 홈·빈 바닥): 미리보기 머리말, --json, --no-a
   assert.equal(json.preview, true); assert.equal(json.accounts.ok, true); assert.ok(!JSON.stringify(json).includes(EMAIL));
   assert.equal(runCli(['refresh', '--json', '--no-accounts'], env).stdout.includes('"accounts": null'), true);
   assert.ok(!fs.existsSync(path.join(text.home, 'ledger.jsonl')) || fs.readFileSync(path.join(text.home, 'ledger.jsonl'), 'utf8') === '');
+});
+
+// ---- 검수 수정: F2 이메일 방어 · claude-swap 찾기 · F4 옵션 검사 ----
+const LEAK = 'leak@example.test';
+const everywhere = (accounts) => {
+  const rows = preview(world([{role: 'a', screen: SCREENS['pos-plain']}]));
+  return formatPreview(rows, accounts) + JSON.stringify(previewJson(rows, accounts));
+};
+
+test('F2: countdown·usageStatus에 이메일이 섞여도 표와 --json 어디에도 안 나온다', () => {
+  const bad = {...account(1), usage: {fiveHour: {pct: 10, countdown: LEAK}, sevenDay: {pct: 20, countdown: `4h ${LEAK}`, willLastToReset: true}}};
+  const badStatus = account(2, {usageStatus: LEAK, usage: null});
+  const accounts = readAccounts({run: fakeSwap(JSON.stringify({accounts: [bad, badStatus, account(3, {usageStatus: 'rate_limited'})]})), home: '/nonexistent'});
+  assert.equal(accounts.ok, true);
+  assert.equal(accounts.accounts[0].fiveHourResetsIn, '?'); assert.equal(accounts.accounts[0].sevenDayResetsIn, '?');
+  assert.equal(accounts.accounts[1].status, '조회 실패(기타)');
+  assert.equal(accounts.accounts[2].status, '조회 실패(rate_limited)');
+  assert.ok(!everywhere(accounts).includes('@'), 'at-sign 없음');
+});
+
+test('F2: 예외·오류의 message 원문은 싣지 않고 정해진 짧은 코드만 낸다', () => {
+  for (const [error, reason] of [[Object.assign(new Error(LEAK), {code: 'EACCES'}), '실행 실패'], [Object.assign(new Error(LEAK), {code: 'ENOENT'}), 'claude-swap 없음'], [Object.assign(new Error(LEAK), {code: 'ETIMEDOUT'}), '시간 초과']]) {
+    const accounts = readAccounts({run: fakeSwap('', {error}), home: '/nonexistent'});
+    assert.equal(accounts.reason, reason);
+    assert.ok(!everywhere(accounts).includes(LEAK));
+  }
+  const thrown = readAccounts({run: () => { throw Object.assign(new Error(LEAK), {code: 'EPERM'}); }, home: '/nonexistent'});
+  assert.equal(thrown.reason, '실행 실패'); assert.ok(!everywhere(thrown).includes(LEAK));
+  assert.equal(readAccounts({run: fakeSwap('', {status: 3}), home: '/nonexistent'}).reason, '종료 코드 3');
+});
+
+test('claude-swap 찾기: KADAN_CLAUDE_SWAP_BIN → PATH → ~/.local/bin, ENOENT이면 다음 후보', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-swap-home-'));
+  fs.mkdirSync(path.join(home, '.local/bin'), {recursive: true});
+  const local = path.join(home, '.local/bin/claude-swap');
+  fs.writeFileSync(local, '#!/bin/sh\n', {mode: 0o755});
+  const tried = [];
+  const run = bin => { tried.push(bin); return bin === local ? {stdout: good, status: 0} : {error: {code: 'ENOENT'}, status: null}; };
+  const accounts = readAccounts({run, home, env: {KADAN_CLAUDE_SWAP_BIN: '/nope/claude-swap'}});
+  assert.equal(accounts.ok, true);
+  assert.deepEqual(tried, ['/nope/claude-swap', 'claude-swap', local]);
+  // 실행 파일이 아니면 후보에 넣지 않고, 다 없으면 한 줄로 끝난다.
+  fs.chmodSync(local, 0o644);
+  const none = readAccounts({run: () => ({error: {code: 'ENOENT'}}), home, env: {}});
+  assert.deepEqual([none.ok, none.reason], [false, 'claude-swap 없음']);
+  assert.equal(readAccounts({run: bin => bin === 'claude-swap' ? {stdout: good, status: 0} : {error: {code: 'ENOENT'}}, home, env: {}}).ok, true);
+});
+
+test('F2/F4 실제 CLI: 이메일이 든 가짜 claude-swap 출력은 stdout·stderr 어디에도 안 나오고, 알 수 없는 옵션은 exit 2', () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-fake-swap-'));
+  const payload = JSON.stringify({accounts: [{...account(1), usage: {fiveHour: {pct: 1, countdown: LEAK}, sevenDay: {pct: 2, countdown: '1d 2h'}}}, account(2, {usageStatus: LEAK, usage: null})]});
+  fs.writeFileSync(path.join(bin, 'claude-swap'), `#!/bin/sh\ncat <<'EOF'\n${payload}\nEOF\n`, {mode: 0o755});
+  for (const args of [['refresh'], ['refresh', '--json']]) {
+    const r = runCli(args, {PATH: `${bin}:${process.env.PATH}`});
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!(r.stdout + r.stderr).includes('@'), args.join(' '));
+  }
+  for (const args of [['refresh', '--bogus', '--no-accounts'], ['refresh', '--jsno']]) {
+    const r = runCli(args);
+    assert.equal(r.status, 2, args.join(' ')); assert.match(r.stderr, /알 수 없는 옵션: --(bogus|jsno)/);
+  }
+  assert.equal(runCli(['refresh', '--no-accounts', '--select', 'all']).status, 0);
 });

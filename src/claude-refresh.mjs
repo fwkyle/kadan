@@ -1,6 +1,9 @@
 // Why: claude-swap switch만으론 켜진 카단 Claude 세션이 새 계정을 읽지 못했다(2026-10-23 kyle 실측).
 // 한도에 걸린 세션을 골라 같은 대화로 다시 켜야 하고, PR-1은 '어느 세션을 왜 켤지'를 보여 주기만 한다.
 // 이 모듈은 읽기 전용이다: 바닥에 키를 보내지 않고, 원장·우편·알림을 쓰지 않는다.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { launchIdentityOf } from "./ai-identity.mjs";
 import { readStatusLine } from "./watch-status-line.mjs";
@@ -10,17 +13,22 @@ const BOTTOM_LINES = 14;
 const MAX_RESET_LINE = 120;
 const ACCOUNT_TIMEOUT_MS = 10_000;
 
-// 둘 다 kyle이 본 문구다. 실제 Claude 한도 화면 표본은 없다(2026-10-23 감독이 감시AI 기록·작업자 화면을 찾았으나 못 찾음).
+// 한도 줄은 '줄 맨 앞'이 아래 머리말로 시작할 때만 본다. 문장 중간에 문구가 든 줄은 설명·인용이라 버린다.
+// 출처: Claude Code 2.1.309 프로그램(~/.local/share/claude/versions/2.1.309)의 한도 오류 판별 목록 `i4r`
+// (`["You've hit your","You've reached your",…]`를 `startsWith`로 비교). 이름 목록은 가져오지 않는다.
+// `Usage limit reached`는 같은 프로그램의 목표 상태 줄(`Usage limit reached · continuing …`) 머리말이다.
+// 실제 한도 화면 표본은 없다: 앞에 어떤 기호가 붙는지는 미확인이라 아래 기호 5개를 선택적으로 걷어 낸다.
 // 아포스트로피는 `'`와 `’` 둘 다 받고 대소문자는 원문 그대로 본다. 감시기 STOP_PHRASES에는 붙이지 않는다(이번 범위 밖).
-export const CLAUDE_LIMIT_PHRASES = [/You['’]ve hit your session limit/u, /Usage limit reached/u];
+export const CLAUDE_LIMIT_HEADS = [/^You['’]ve hit your /u, /^You['’]ve reached your /u, /^Usage limit reached/u];
+const LEAD_SYMBOL = /^\s*(?:[⏺⎿●✗⚠]\s+)?/u;
 
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 const ANY_COMPOSER = /^\s*[›❯]/u;
+const USER_INPUT_LINE = /^\s*[❯>]\s+\S/u;
+const RESPONSE_LINE = /^\s*⏺(?:\s|$)/u;
 const TURN_DONE = /^✻\s+\S+\s+for\s+\d/u;
-const CLAUDE_ERROR_HEAD = /^⏺\s+API Error:/u;
 const FENCE = /^\s*(```|~~~)/u;
 const RULE_OR_BLANK = /^[\s─━—-]*$/u;
-const QUOTED = /^\s*[>❯"“'‘│]/u;
 const FOOTER_LINES = 5;
 const TIME_LEFT = /\d+h \d+m left/gu;
 
@@ -31,51 +39,52 @@ function trimmedLines(screen) {
   return lines;
 }
 
-// 현재 오류 덩어리: 마지막 빈 입력창(또는 그 위 턴 끝 줄) 바로 위에 붙은, 빈 줄로 끊기지 않는 덩어리.
-// 머리줄 모양(`⏺ API Error:` 등)에는 기대지 않는다. 대신 대화 본문으로 보이는 것만 뺀다:
-//  - 코드 울타리가 한 줄이라도 걸친 덩어리, 응답 머리표(`⏺ `) 문단(`⏺ API Error:`만 예외), 콜론으로 끝나는 소개 문단 바로 아래
-//  - 입력창에 쓰는 중인 글이 마지막이거나 입력창 아래에 다른 응답·입력창이 있는 화면
-export function claudeCurrentBlock(screen) {
+const limitHeadOf = (line) => {
+  const rest = line.replace(LEAD_SYMBOL, "");
+  return CLAUDE_LIMIT_HEADS.find((head) => head.test(rest)) ? rest : null;
+};
+
+// 한도 줄 찾기. 마지막 빈 입력창(또는 그 위 턴 끝 줄) 위쪽에서, 입력창과의 사이에 빈 줄·가로선·턴 끝 줄·들여쓴 이어진 줄만 있는
+// 첫 한도 줄을 돌려준다. 확정할 수 없으면 null(놓치는 쪽으로 기울인다 — 오검출은 곧 엉뚱한 세션 재시작이다).
+// 버리는 경우: 사이에 다른 응답 문단(`⏺ `)·사용자 입력 줄·들여쓰지 않은 다른 글이 있음, 코드 울타리 안,
+// 줄 위쪽 덩어리(빈 줄 전까지)나 바로 위 줄이 `⏺ ` 응답/도구 호출이라 응답 안의 글일 수 있음.
+// 알려진 한계: 응답 문단 첫 줄이 `⏺ You've hit your …`로 시작하는 설명도 한도 줄과 구별하지 못한다.
+export function claudeLimitLine(screen) {
   const lines = trimmedLines(screen);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));
   if (composer < 0 || !CLAUDE_INPUT.test(lines[composer])) return null;
   const footer = lines.slice(composer + 1).filter((line) => !RULE_OR_BLANK.test(line));
   if (footer.length > FOOTER_LINES || footer.some((line) => ANY_COMPOSER.test(line) || FENCE.test(line) || /^\s*[•⏺]\s/u.test(line))) return null;
-  let end = composer - 1;
-  while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
-  if (end >= 0 && TURN_DONE.test(lines[end])) {
-    end--;
-    while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
-  }
-  if (end < 0) return null;
-  let head = end;
-  while (head > 0 && !RULE_OR_BLANK.test(lines[head - 1])) head--;
-  const block = lines.slice(head, end + 1);
-  // 코드 울타리: 덩어리 안에 울타리 줄이 있거나, 위쪽에서 열린 울타리 안이면 코드다.
-  let open = false;
-  for (const line of lines.slice(0, head)) if (FENCE.test(line)) open = !open;
-  if (open || block.some((line) => FENCE.test(line))) return null;
-  if (/^⏺\s/u.test(block[0]) && !CLAUDE_ERROR_HEAD.test(block[0])) return null;
-  let above = head - 1;
-  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
-  const intro = above >= 0 ? lines[above] : "";
-  if (/[:：]\s*$/u.test(intro)) return null;
-  return { lines: block };
-}
-
-// 한도 문구가 현재 오류 덩어리 안에 있으면 {phrase, resetLine}. 없으면 null.
-// 인용 줄(`>`·`❯`·따옴표로 시작)의 문구는 대화 인용이라 세지 않는다. resetLine: 문구가 든 줄에 초기화 시각(`resets …`)이 있으면 원문 그대로(최대 120자).
-export function claudeLimitMatch(screen) {
-  const block = claudeCurrentBlock(screen);
-  if (!block) return null;
-  for (const line of block.lines) {
-    if (QUOTED.test(line)) continue;
-    const pattern = CLAUDE_LIMIT_PHRASES.find((p) => p.test(line));
-    if (!pattern) continue;
-    const text = line.trim();
-    return { phrase: pattern.exec(line)[0], resetLine: /\bresets?\b/iu.test(text) ? text.slice(0, MAX_RESET_LINE) : null };
+  for (let at = composer - 1; at >= 0; at--) {
+    const line = lines[at];
+    if (RULE_OR_BLANK.test(line) || TURN_DONE.test(line)) continue;
+    if (FENCE.test(line) || USER_INPUT_LINE.test(line)) return null;
+    const head = limitHeadOf(line);
+    if (head) return precededByResponse(lines, at) || insideFence(lines, at) ? null : { line: line.trim(), head };
+    if (RESPONSE_LINE.test(line) || !/^\s+\S/u.test(line)) return null; // 들여쓴 이어진 줄만 건너뛴다
   }
   return null;
+}
+
+function insideFence(lines, at) {
+  let open = false;
+  for (const line of lines.slice(0, at)) if (FENCE.test(line)) open = !open;
+  return open;
+}
+
+// 한도 줄과 같은 덩어리(빈 줄 전까지) 위쪽에 응답 머리표가 있거나, 빈 줄을 건너 바로 위 글줄이 응답 머리표 줄이면 응답 안의 글이다.
+function precededByResponse(lines, at) {
+  let above = at - 1;
+  while (above >= 0 && !RULE_OR_BLANK.test(lines[above])) { if (RESPONSE_LINE.test(lines[above])) return true; above--; }
+  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+  return above >= 0 && RESPONSE_LINE.test(lines[above]);
+}
+
+// 한도 줄이 있으면 {phrase, resetLine}. resetLine: 그 줄에 초기화 시각(`resets …`)이 있으면 원문 그대로(최대 120자).
+export function claudeLimitMatch(screen) {
+  const found = claudeLimitLine(screen);
+  if (!found) return null;
+  return { phrase: found.head.slice(0, 40), resetLine: /\bresets?\b/iu.test(found.line) ? found.line.slice(0, MAX_RESET_LINE) : null };
 }
 
 // Claude 화면 아래 상태 줄의 `3h 43m left` 조각을 원문 그대로. 없으면 null. 해석하지 않는다.
@@ -148,7 +157,13 @@ export function previewCounts(rows) {
 // ---- 계정 남은 한도: `claude-swap list --json` 출력만 읽는다. 이메일·조직 정보는 읽자마자 버린다. ----
 const num = (value) => (Number.isFinite(value) ? value : null);
 const left = (used) => (used == null ? null : Math.max(0, Math.min(100, 100 - used)));
-const text = (value) => (typeof value === "string" ? value.slice(0, 40) : null);
+// 허용 꼴만 싣고 아니면 대체 글자로 바꾼다: 이 칸들은 claude-swap이 준 임의 문자열이라 이메일이 섞일 수 있다(검수 F2).
+const COUNTDOWN = /^\d+[dhm](?: \d+[dhm])*$/u;
+const STATUS = /^[a-z0-9_-]{1,32}$/u;
+const countdown = (value) => (typeof value === "string" ? (COUNTDOWN.test(value) ? value : "?") : null);
+const statusCode = (value) => (typeof value === "string" ? (STATUS.test(value) ? value : "기타") : "알 수 없음");
+// 마지막 방어: 계정 관련 모든 문자열에서 이메일 꼴을 지운다.
+const scrub = (value) => (typeof value === "string" ? value.replace(/\S+@\S+/gu, "") : value);
 
 function accountRow(raw) {
   const usage = raw?.usage && typeof raw.usage === "object" ? raw.usage : null;
@@ -157,29 +172,45 @@ function accountRow(raw) {
   return {
     number: num(raw?.number),
     active: raw?.active === true,
-    status: ok ? "ok" : `조회 실패(${text(raw?.usageStatus) ?? "알 수 없음"})`,
+    status: scrub(ok ? "ok" : `조회 실패(${statusCode(raw?.usageStatus)})`),
     fiveHourUsedPct: ok ? num(five?.pct) : null,
     fiveHourLeftPct: ok ? left(num(five?.pct)) : null,
-    fiveHourResetsIn: ok ? text(five?.countdown) : null,
+    fiveHourResetsIn: ok ? scrub(countdown(five?.countdown)) : null,
     sevenDayUsedPct: ok ? num(seven?.pct) : null,
     sevenDayLeftPct: ok ? left(num(seven?.pct)) : null,
-    sevenDayResetsIn: ok ? text(seven?.countdown) : null,
+    sevenDayResetsIn: ok ? scrub(countdown(seven?.countdown)) : null,
     willLastToReset: ok && typeof seven?.willLastToReset === "boolean" ? seven.willLastToReset : null,
   };
 }
 
-// 실행 1번에 한 번만 부른다. 실패·시간 초과·모양 불일치는 표를 깨지 않고 {ok:false, reason} 한 줄로 끝낸다.
-export function readAccounts({ run = spawnSync, env = process.env } = {}) {
-  let result;
-  try { result = run("claude-swap", ["list", "--json"], { encoding: "utf8", timeout: ACCOUNT_TIMEOUT_MS, env, maxBuffer: 1 << 20 }); }
-  catch (error) { return { ok: false, reason: errText(error) }; }
-  if (result?.error) return { ok: false, reason: result.error.code === "ETIMEDOUT" ? "시간 초과(10초)" : result.error.code === "ENOENT" ? "claude-swap 없음" : errText(result.error) };
-  if (result?.status !== 0) return { ok: false, reason: `종료 코드 ${result?.status ?? "없음"}` };
+const isExecutable = (file) => { try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; } };
+
+// 찾는 순서: KADAN_CLAUDE_SWAP_BIN → PATH의 claude-swap → ~/.local/bin/claude-swap(실행 파일일 때). 작업자 셸에서 PATH에 없어 127이 난 일의 재발 방지.
+export function claudeSwapCandidates({ env = process.env, home = os.homedir(), executable = isExecutable } = {}) {
+  const list = [];
+  if (env.KADAN_CLAUDE_SWAP_BIN) list.push(env.KADAN_CLAUDE_SWAP_BIN);
+  list.push("claude-swap");
+  const local = path.join(home, ".local", "bin", "claude-swap");
+  if (executable(local)) list.push(local);
+  return list;
+}
+
+// 실행 1번에 한 번만 부른다(못 찾아 다음 후보로 넘어간 시도는 세지 않는다). 실패·시간 초과·모양 불일치는 표를 깨지 않고
+// {ok:false, reason} 한 줄로 끝낸다. 이유는 정해진 짧은 코드로만 낸다 — error.message 원문은 싣지 않는다(이메일이 섞일 수 있음).
+export function readAccounts({ run = spawnSync, env = process.env, home = os.homedir(), executable = isExecutable } = {}) {
+  let result = null;
+  for (const bin of claudeSwapCandidates({ env, home, executable })) {
+    try { result = run(bin, ["list", "--json"], { encoding: "utf8", timeout: ACCOUNT_TIMEOUT_MS, env, maxBuffer: 1 << 20 }); }
+    catch (error) { result = { error: { code: error?.code } }; }
+    if (result?.error?.code !== "ENOENT") break;
+  }
+  if (result?.error) return { ok: false, reason: result.error.code === "ETIMEDOUT" ? "시간 초과" : result.error.code === "ENOENT" ? "claude-swap 없음" : "실행 실패" };
+  if (result?.status !== 0) return { ok: false, reason: `종료 코드 ${Number.isInteger(result?.status) ? result.status : "없음"}` };
   let parsed;
-  try { parsed = JSON.parse(result.stdout); } catch { return { ok: false, reason: "JSON이 아님" }; }
-  if (!parsed || !Array.isArray(parsed.accounts)) return { ok: false, reason: "모양이 다름(accounts 없음)" };
+  try { parsed = JSON.parse(result.stdout); } catch { return { ok: false, reason: "JSON 아님" }; }
+  if (!parsed || !Array.isArray(parsed.accounts)) return { ok: false, reason: "모양 다름" };
   const accounts = parsed.accounts.map(accountRow);
-  if (accounts.some((a) => a.number == null)) return { ok: false, reason: "모양이 다름(번호 없음)" };
+  if (accounts.some((a) => a.number == null)) return { ok: false, reason: "모양 다름" };
   return { ok: true, activeAccountNumber: num(parsed.activeAccountNumber), accounts };
 }
 
@@ -204,7 +235,7 @@ export function formatPreview(rows, accounts, { select = "limit" } = {}) {
   out.push("", `대상 ${c.target} · 건너뜀 ${c.skip} · 제외 ${c.excluded} · 해당 없음 ${c.none}`);
   if (accounts) {
     out.push("");
-    if (!accounts.ok) out.push(`계정 한도: 읽지 못함(${accounts.reason})`);
+    if (!accounts.ok) out.push(`계정 한도: 읽지 못함(${scrub(accounts.reason)})`);
     else {
       out.push(...table([
         ["계정", "활성", "5시간 남은", "5시간 초기화까지", "주간 남은", "주간 초기화까지", "주간 버팀", "조회"],

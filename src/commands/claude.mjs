@@ -8,7 +8,11 @@ import { die } from "../cli-basics.mjs";
 import { pendingCardsFor } from "../cli-start-support.mjs";
 import { buildPreview, formatPreview, previewJson, readAccounts } from "../claude-refresh.mjs";
 
+const KNOWN_FLAGS = new Set(["select", "json", "no-accounts", "yes", "switch"]);
+
 export function cmdClaude(argv, flags) {
+  const unknown = Object.keys(flags).find((name) => !KNOWN_FLAGS.has(name));
+  if (unknown) die(`알 수 없는 옵션: --${unknown}`, 2);
   if (argv[0] !== "refresh" || argv.length > 1)
     die("사용법: kadan claude refresh [--select limit|all] [--json] [--no-accounts]  (PR-1은 미리보기만 한다)", 2);
   if (flags.yes !== undefined || flags.switch !== undefined)
