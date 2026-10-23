@@ -9,16 +9,14 @@ import {DecisionStore} from './decisions.mjs';
 import {BriefStore} from './human-brief.mjs';
 import {ledgerStreams,validateDomainEvent,validateDomainStreams} from './ledger-domains.mjs';
 const sha=data=>createHash('sha256').update(data).digest('hex');
-const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.ledger-lock','.storage-gate','.storage-writers','.storage-init.lock'].includes(name)||name.startsWith('.released-')||name.startsWith('.storage-init.lock');
+const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.ledger-lock','.storage-gate','.storage-writers'].includes(name)||name.startsWith('.released-');
 // 비밀 폴더($KADAN_HOME/secrets/)는 홈 최상위에 있을 때만 복사·목록에서 뺀다. 링크여도 같다. 다른 곳의 같은 이름은 그대로 둔다.
 const isSecretsDir=(root,dir,name)=>name==='secrets'&&dir===root;
-// 홈 최상위 .trash/(초기화 잠금 회수물 등 보존본)도 이전 대상이 아니다.
-const isTrashDir=(root,dir,name)=>name==='.trash'&&dir===root;
 function files(root,relative=''){
  if(!fs.existsSync(path.join(root,relative)))return [];
  const result=[];
  for(const item of fs.readdirSync(path.join(root,relative),{withFileTypes:true})){
-  if(omitted(item.name)||isTrashDir(root,path.join(root,relative),item.name)||isSecretsDir(root,path.join(root,relative),item.name))continue;
+  if(omitted(item.name)||isSecretsDir(root,path.join(root,relative),item.name))continue;
   const rel=path.join(relative,item.name);
   if(item.isDirectory())result.push(...files(root,rel));
   else if(item.isFile())result.push(rel);
@@ -72,7 +70,7 @@ function copyFiles(source,target){
  fs.mkdirSync(target,{recursive:true,mode:0o700});
  fs.cpSync(source,target,{recursive:true,dereference:false,verbatimSymlinks:true,filter:(src)=>{
   if(src===source)return true;
-  if(omitted(path.basename(src))||isSecretsDir(source,path.dirname(src),path.basename(src))||isTrashDir(source,path.dirname(src),path.basename(src)))return false;
+  if(omitted(path.basename(src))||isSecretsDir(source,path.dirname(src),path.basename(src)))return false;
   const stat=fs.lstatSync(src);return stat.isFile()||stat.isDirectory()||stat.isSymbolicLink();
  }});
  fs.chmodSync(target,0o700);

@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
-import {assertTestHome} from './test-home-guard.mjs';
-import {acquireInitLock,releaseInitLock,waitForLiveInit,testKillPoint} from './storage-init-lock.mjs';
+import {assertTestHome,underTest} from './test-home-guard.mjs';
 const require=createRequire(import.meta.url);
 const connections=new Map();
 export const storagePath=home=>path.join(home,'kadan.sqlite');
-const INIT_WAIT_MS=3000; // 초기화 창(DB 생성~표시 파일 rename)은 짧다. 읽기는 이만큼만 기다린다
+const APP_ID=1262767153; // PRAGMA application_id: 카단 저장소 표식
+const BUSY_MS=()=>Number(process.env.KADAN_BUSY_TIMEOUT_MS)||15000;
+// 시험 전용 중단 고리: 시험 중이고 환경 변수가 이 지점을 가리킬 때만 자기 프로세스를 SIGKILL한다. 운영에서는 꺼져 있다.
+const testKillPoint=point=>{if(process.env.KADAN_TEST_INIT_KILL===point&&underTest())process.kill(process.pid,'SIGKILL')};
 const DB_FILES=['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm'];
 // 표시 파일이 없는데 이 중 하나라도 있으면 새 홈이 아니다. -wal/-shm은 DB 파일 쪽(DB만 있음)에서 따로 본다.
 const TRACE_FILES=['ledger.jsonl','decisions/events.jsonl','tasks/events.jsonl','mail/events.jsonl','system/events.jsonl','explain-ai.jsonl','storage-import.json','storage-paused.json'];
@@ -24,13 +26,37 @@ function legacyTrace(home){
  return null;
 }
 const dbTrace=home=>{for(const name of DB_FILES){const f=path.join(home,name);if(lexists(f))return f}return null};
+const dbError=(file,cause)=>new Error(`SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지 (${file})${cause?`: ${cause.message}`:''}`,{cause});
+// application_id와 테이블 수를 한 문장으로 읽는다. 두 문장으로 나누면 그 사이에 다른 프로세스가 스키마를 커밋해
+// '표식 없음 + 테이블 있음'(=남의 DB)으로 잘못 보인다(동시 첫 쓰기 시험에서 실제로 재현됨).
+const dbMark=db=>db.prepare('SELECT (SELECT application_id FROM pragma_application_id) AS id, (SELECT count(*) FROM sqlite_master) AS n').get();
+// SQLite가 '데이터베이스 파일이 아님'(깨진 파일)이라고 한 오류만 찾는다. 잠김(BUSY) 같은 다른 오류는 그대로 올린다.
+const notDatabase=e=>e?.errcode===26||/not a database|malformed/i.test(String(e?.message));
+// 표시 파일이 없는 홈의 DB가 어떤 상태인지 읽기 전용으로 본다(파일을 쓰거나 옮기지 않는다).
+// kadan: 카단 application_id 표식 / empty: 표식도 테이블도 없는 빈 DB(초기화 전) / foreign: 그 밖(다른 DB, 깨진 파일, 링크, -wal만 남음).
+function unmarkedDb(home){
+ const file=storagePath(home);
+ try{if(fs.lstatSync(file).isSymbolicLink())return 'foreign'}catch{return 'foreign'}
+ const DB=driver();let db;
+ try{
+  db=new DB(file,{readOnly:true,timeout:2000});
+  const {id,n}=dbMark(db);
+  if(id===APP_ID)return 'kadan';
+  return id===0&&n===0?'empty':'foreign';
+ }catch(e){if(notDatabase(e))return 'foreign';throw e}
+ finally{db?.close()}
+}
+// 표시 파일이 없는 홈: DB도 없으면 새 홈('jsonl' 읽기 = 빈 결과). 카단 표식이 찍힌 DB는 sqlite로 연다(읽기는 아무것도 쓰지 않는다).
+// 이것은 '자동 JSONL 우회 금지'의 우회가 아니다: 규칙은 JSONL로 몰래 내려가는 것을 막는 것이고, 카단 표식 DB를 sqlite로 마저 여는 것은 그 반대다.
+// 빈 DB는 초기화 전과 같아 새 홈으로 본다(옛 흔적이 함께 있으면 오류). 그 밖의 DB는 기존 오류.
 export function storageMode(home){
  const marker=path.join(home,'storage.json');
  if(!fs.existsSync(marker)){
-  // 초기화 창(DB는 만들어졌고 표시 파일은 아직)일 수 있다. 초기화 주인이 살아 있을 때만 잠깐 기다린 뒤 다시 판정한다.
-  // 잠금이 없거나 주인이 죽었거나 모르면 기다리지 않는다. 읽기는 회수·이동을 하지 않는다(회수는 ensureStorage에서만).
-  if(dbTrace(home)){waitForLiveInit(home,INIT_WAIT_MS);if(fs.existsSync(marker))return storageMode(home);throw new Error('SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지');}
-  return 'jsonl';
+  if(!dbTrace(home))return 'jsonl';
+  const state=unmarkedDb(home);
+  if(state==='kadan')return 'sqlite';
+  if(state==='empty'&&!legacyTrace(home))return 'jsonl';
+  throw dbError(storagePath(home));
  }
  const value=JSON.parse(fs.readFileSync(marker,'utf8'));
  if(value.version!==1||!['jsonl','sqlite'].includes(value.backend))throw new Error('잘못된 저장소 설정');
@@ -41,34 +67,57 @@ function guardWritable(home){
  if(fs.existsSync(path.join(home,'storage-paused.json')))throw new Error('저장 전환 중: 쓰기와 외부 실행이 중지되었습니다');
 }
 // 새 홈만 SQLite로 시작한다. 표시 파일이 있으면(backend가 무엇이든) 건드리지 않고 검증은 storageMode에 맡긴다.
-// 표시 파일이 없을 때: 새 홈이면 만들고, DB만 있거나 옛 흔적이 있으면 오류(빈 결과나 재생성으로 숨기지 않는다).
-// 흔적 검사 → DB 생성 → 표시 파일 쓰기 전체를 홈 안의 폴더 잠금 하나로 묶고, 잠금을 얻은 뒤 다시 판정한다.
-// 잠금에는 주인(owner.json)이 적혀 있어, 초기화 도중 죽은 주인의 잠금은 .trash로 옮겨 보존하고 다시 얻는다.
+// 표시 파일이 없을 때: 옛 JSONL 흔적이 있으면 오류(빈 결과나 재생성으로 숨기지 않는다). 아니면 SQLite 자체 잠금으로 DB를 만든다.
+// 폴더 잠금·주인 기록·회수는 없다: 프로세스가 죽으면 OS가 SQLite 파일 잠금을 풀어 주므로 남는 잠금이 없다.
+// 코드는 어떤 경우에도 kadan.sqlite*를 옮기거나 지우지 않는다.
 export function ensureStorage(home){
  guardWritable(home);
  if(fs.existsSync(path.join(home,'storage.json')))return;
  fs.mkdirSync(home,{recursive:true,mode:0o700});
- const {reclaimed}=acquireInitLock(home);
- try{
-  if(fs.existsSync(path.join(home,'storage.json')))return; // 다른 프로세스가 끝냈다: 그대로 연다
-  testKillPoint('lock');
-  const db=dbTrace(home);
-  // 죽은 주인의 잠금을 회수한 바로 그 흐름에서만, 행이 하나도 없는 반쯤 된 DB를 .trash로 옮기고 다시 시작한다.
-  if(db&&reclaimed&&emptyDatabase(home))for(const name of DB_FILES){const f=path.join(home,name);if(lexists(f))fs.renameSync(f,path.join(reclaimed,name))}
-  else if(db)throw new Error(`SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지 (${db})${reclaimed?'. 초기화가 중단된 홈이지만 DB에 기록이 있거나 읽을 수 없어 옮기지 않았습니다. 직접 확인하세요':''}`);
-  const trace=legacyTrace(home);
-  if(trace)throw new Error(`옛 저장소 흔적이 있습니다(${trace}). 이 버전은 새 홈만 자동으로 SQLite로 시작합니다. 옛 JSONL 홈은 태그 jsonl-last의 kadan storage import로 변환하세요.`);
-  createDatabase(home);
-  testKillPoint('db');
-  writeStorageMarker(home,'sqlite');
- }finally{releaseInitLock(home)}
+ const trace=legacyTrace(home);
+ if(trace)throw new Error(`옛 저장소 흔적이 있습니다(${trace}). 이 버전은 새 홈만 자동으로 SQLite로 시작합니다. 옛 JSONL 홈은 태그 jsonl-last의 kadan storage import로 변환하세요.`);
+ initDatabase(home);
+ testKillPoint('commit');
+ writeStorageMarker(home,'sqlite'); // 커밋 뒤에 쓴다. 내용이 같고 임시 파일+rename이라 여럿이 동시에 써도 해가 없다
 }
-// 반쯤 된 DB가 비었는지(events·heads·imports 행이 모두 0). 열기나 세기가 실패하면(0바이트·스키마 손상 등) 비었다고 믿지 않는다.
-function emptyDatabase(home){
+// 새 DB를 WAL로 바꾸는 순간 다른 연결이 잠그고 있으면 busy 대기가 적용되지 않고 곧바로 SQLITE_BUSY(5)·LOCKED(6)가 난다.
+// 동시에 몰린 첫 쓰기가 실제로 이 오류로 실패했다(시험 경쟁 (a), 10회 중 1회). 한도 안에서 짧게 다시 시도한다.
+function enableWal(db){
+ const end=Date.now()+BUSY_MS();
+ for(;;){
+  try{db.exec('PRAGMA journal_mode=WAL');return}
+  catch(e){if((e?.errcode!==5&&e?.errcode!==6)||Date.now()>=end)throw e;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10)}
+ }
+}
+// 파일을 열거나 만들고 BEGIN IMMEDIATE 안에서 스키마를 마저 만든다. 동시에 들어온 쪽은 SQLite 잠금에서 줄을 서고,
+// 앞 쪽이 끝낸 뒤 들어오면 이미 카단 표식이 있어 아무것도 하지 않는다. 스키마 도중 죽으면 롤백되어 다음 IMMEDIATE가 마저 만든다.
+function initDatabase(home){
+ const file=storagePath(home);
+ // 본 파일 없이 -wal/-shm만 남은 홈은 다른 DB의 잔해일 수 있다. -wal을 먼저 보고 본 파일을 나중에 본다: 다른 프로세스가
+ // 막 만드는 중이면 본 파일이 -wal보다 먼저 생기므로, 이 순서면 만드는 중인 정상 DB를 잔해로 오판하지 않는다.
+ const leftover=lexists(`${file}-wal`)||lexists(`${file}-shm`),exists=lexists(file);
+ if(exists&&fs.lstatSync(file).isSymbolicLink())throw dbError(file);
+ if(leftover&&!exists)throw dbError(file);
+ const DB=driver();let db;
  try{
-  const db=new (driver())(storagePath(home),{readOnly:true});
-  try{return ['events','heads','imports'].every(t=>db.prepare(`SELECT count(*) AS n FROM ${t}`).get().n===0)}finally{db.close()}
- }catch{return false}
+  db=new DB(file);
+  db.exec(`PRAGMA busy_timeout=${BUSY_MS()}; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;`);
+  // 남의 DB는 WAL 전환(헤더 쓰기)조차 하지 않도록, 아무것도 쓰기 전에 읽기만으로 먼저 거른다.
+  const foreign=()=>{const {id,n}=dbMark(db);return id!==APP_ID&&(id!==0||n!==0)};
+  if(foreign())throw dbError(file);
+  enableWal(db);
+  db.exec('BEGIN IMMEDIATE');
+  // 잠금을 얻은 뒤 다시 판정한다(그 사이 다른 프로세스가 끝냈으면 이미 카단 표식이 있어 아무것도 하지 않는다).
+  if(foreign())throw dbError(file);
+  if(dbMark(db).id!==APP_ID){
+   testKillPoint('schema');
+   db.exec(schema);
+  }
+  db.exec('COMMIT');
+ }catch(e){
+  if(db?.isTransaction)db.exec('ROLLBACK');
+  throw notDatabase(e)?dbError(file,e):e;
+ }finally{db?.close()}
 }
 export function assertWritable(home){
  guardWritable(home);
@@ -80,14 +129,14 @@ function driver(){
  return sqlite.DatabaseSync;
 }
 const schema=`
-CREATE TABLE events (stream TEXT NOT NULL, seq INTEGER NOT NULL CHECK(seq>0), payload TEXT NOT NULL CHECK(json_valid(payload)), source TEXT, source_line INTEGER, raw TEXT, PRIMARY KEY(stream,seq));
-CREATE TABLE heads (stream TEXT PRIMARY KEY, seq INTEGER NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload)), FOREIGN KEY(stream,seq) REFERENCES events(stream,seq));
-CREATE TABLE imports (source TEXT PRIMARY KEY, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, rows INTEGER NOT NULL);
-CREATE TRIGGER events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT,'이력 수정 금지'); END;
-CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'이력 삭제 금지'); END;
-CREATE TRIGGER imports_no_update BEFORE UPDATE ON imports BEGIN SELECT RAISE(ABORT,'수입 원본 수정 금지'); END;
-CREATE TRIGGER imports_no_delete BEFORE DELETE ON imports BEGIN SELECT RAISE(ABORT,'수입 원본 삭제 금지'); END;
-PRAGMA application_id=1262767153;
+CREATE TABLE IF NOT EXISTS events (stream TEXT NOT NULL, seq INTEGER NOT NULL CHECK(seq>0), payload TEXT NOT NULL CHECK(json_valid(payload)), source TEXT, source_line INTEGER, raw TEXT, PRIMARY KEY(stream,seq));
+CREATE TABLE IF NOT EXISTS heads (stream TEXT PRIMARY KEY, seq INTEGER NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload)), FOREIGN KEY(stream,seq) REFERENCES events(stream,seq));
+CREATE TABLE IF NOT EXISTS imports (source TEXT PRIMARY KEY, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, rows INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT,'이력 수정 금지'); END;
+CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'이력 삭제 금지'); END;
+CREATE TRIGGER IF NOT EXISTS imports_no_update BEFORE UPDATE ON imports BEGIN SELECT RAISE(ABORT,'수입 원본 수정 금지'); END;
+CREATE TRIGGER IF NOT EXISTS imports_no_delete BEFORE DELETE ON imports BEGIN SELECT RAISE(ABORT,'수입 원본 삭제 금지'); END;
+PRAGMA application_id=${APP_ID};
 PRAGMA user_version=1;`;
 export function createDatabase(home){
  fs.mkdirSync(home,{recursive:true,mode:0o700});const file=storagePath(home);

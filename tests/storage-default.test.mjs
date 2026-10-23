@@ -28,7 +28,6 @@ test('새 홈은 첫 쓰기에서 SQLite로 시작하고 사건이 DB에 들어�
   assert.ok(fs.existsSync(path.join(home, 'kadan.sqlite')));
   assert.equal(readStream(home, 'cards/r/a/events.jsonl')[0].revision, 1);
   assert.ok(!fs.existsSync(path.join(home, 'cards/r/a/events.jsonl')));
-  assert.ok(!fs.existsSync(path.join(home, '.storage-init.lock')));
   assert.equal(new CardStore(home).get(card.key).key, 'r/a');
 });
 
@@ -60,8 +59,7 @@ for (const [name, rel] of Object.entries(traces)) {
     assert.throws(() => appendStream(home, 'mail/events.jsonl', {a: 1}), /옛 저장소 흔적이 있습니다.*jsonl-last/s);
     assert.ok(!fs.existsSync(path.join(home, 'kadan.sqlite')));
     assert.ok(!fs.existsSync(path.join(home, 'storage.json')));
-    assert.ok(!fs.existsSync(path.join(home, '.storage-init.lock')));
-  });
+    });
 }
 
 test('끊어진 링크 흔적도 오류다', () => {
@@ -76,14 +74,20 @@ test('card.md만 남은 홈(DB만 사라진 사고)에 CardStore 쓰기는 오�
   assert.throws(() => new CardStore(home).create({repo: 'r', id: 'b', repoPath: home, body: '# b'}), /옛 저장소 흔적/);
 });
 
-test('DB만 있음 / 표시만 있음 / 미완성 스키마는 오류다', () => {
-  const dbOnly = root();
-  createDatabase(dbOnly);
-  assert.throws(() => ensureStorage(dbOnly), /저장소 선택 기록 없음/);
-  assert.throws(() => storageMode(dbOnly), /저장소 선택 기록 없음/);
+test('카단 표식이 있는 DB만 있고 표시 파일이 없으면 읽기는 sqlite, 쓰기는 표시 파일을 마저 쓴다', () => {
+  const home = root();
+  createDatabase(home);
+  assert.equal(storageMode(home), 'sqlite'); // 읽기는 아무것도 쓰지 않는다
+  assert.ok(!fs.existsSync(path.join(home, 'storage.json')));
+  ensureStorage(home);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'storage.json'), 'utf8')), {version: 1, backend: 'sqlite'});
+});
+
+test('표시만 있음 / 미완성 스키마 / -wal만 있음은 오류다', () => {
   const walOnly = root();
   put(walOnly, 'kadan.sqlite-wal');
   assert.throws(() => ensureStorage(walOnly), /저장소 선택 기록 없음/);
+  assert.throws(() => storageMode(walOnly), /저장소 선택 기록 없음/);
   const markerOnly = root();
   marker(markerOnly, 'sqlite');
   assert.throws(() => transaction(markerOnly, () => 1), /SQLite 원본 없음/);
@@ -105,24 +109,18 @@ appendStream(home,'mail/events.jsonl',{n:Number(n)});`;
   assert.equal(b.status, 0, b.err);
   assert.equal(storageMode(home), 'sqlite');
   assert.deepEqual(readStream(home, 'mail/events.jsonl').map(x => x.n).sort(), [1, 2]);
-  assert.ok(!fs.existsSync(path.join(home, '.storage-init.lock')));
 });
 
-test('초기화 창(DB는 있고 표시 파일은 아직)의 읽기는 우회 오류 없이 최종 상태를 본다', async () => {
+test('초기화 창(커밋 뒤 표시 파일 전)의 읽기는 기다리지 않고 sqlite를 본다', async () => {
   const home = root();
   createDatabase(home);
-  // 초기화 주인이 살아 있는 창: 주인(이 프로세스)을 적은 잠금
-  fs.mkdirSync(path.join(home, '.storage-init.lock'));
-  fs.writeFileSync(path.join(home, '.storage-init.lock', 'owner.json'), JSON.stringify({pid: process.pid, startedAt: new Date().toISOString(), host: os.hostname()}));
   const code = `import {storageMode} from ${JSON.stringify(new URL('../src/storage.mjs', import.meta.url).href)};
 console.log(storageMode(process.argv[1]));`;
-  const reading = child(code, [home]);
-  await new Promise(resolve => setTimeout(resolve, 300));
-  writeStorageMarker(home, 'sqlite');
-  fs.rmSync(path.join(home, '.storage-init.lock'), {recursive: true});
-  const r = await reading;
+  const t = Date.now();
+  const r = await child(code, [home]);
   assert.equal(r.status, 0, r.err);
   assert.equal(r.out.trim(), 'sqlite');
+  assert.ok(Date.now() - t < 3000);
 });
 
 test('빈 홈 읽기는 홈에 아무것도 만들지 않는다', () => {
