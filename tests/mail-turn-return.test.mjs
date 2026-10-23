@@ -2,6 +2,7 @@
 import test, {after} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -20,7 +21,7 @@ const OWNER = 'p-감독', WORKER = 'p-작업자', SUPER = 'p-슈퍼감독', UPPE
 
 function fixture(roles = [], {jsonl = false} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-turn-return-'));
-  if (!jsonl) { createDatabase(home); fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'})); }
+  if (!jsonl) { createDatabase(home); fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'})); } else markJsonl(home);
   const socket = path.basename(home);
   const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_NOTIFY: 'off'};
   const call = (role, ...args) => spawnSync(process.execPath, [cli, ...args], {env: {...env, KADAN_ROLE: role}, cwd: home, encoding: 'utf8', input: '', timeout: 15000});
@@ -196,7 +197,7 @@ test('단위: 발령(--task)·--raw·알림 전용·시스템 생성·watch는 �
 // 단위 시험 바닥: JSONL·SQLite 홈에 업무를 만들고 차례를 작업자에게 둔다.
 function unitHome(sqlite) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-turn-unit-'));
-  if (sqlite) { createDatabase(home); fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'})); }
+  if (sqlite) { createDatabase(home); fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'})); } else markJsonl(home);
   const works = new WorkStore(home);
   works.create({key: 'repo/u1', title: 't', goal: 'g', scope: 's', acceptance: 'a', owner: OWNER, repoPath: home});
   works.change('repo/u1', 'update', {turnOwner: WORKER}, {revision: 1, by: '시험', note: '준비'});

@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from "node:os";
 import path from "node:path";
 
 process.env.TZ = "Asia/Seoul";
-process.env.KADAN_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-test-"));
+process.env.KADAN_HOME = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-test-")));
 process.env.KADAN_SOCKET = "kadan-unittest";
 
 const {
@@ -1305,7 +1306,7 @@ test("역할 이름이 정확히 같아야 확정한다 — 세션 이름이 같
 });
 
 test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20개 동시 실행에서 2개가 통과했다(card-35r)", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-done-race-"));
+  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-done-race-")));
   appendLedger(
     {
       kind: "start",

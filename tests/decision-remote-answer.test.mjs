@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,7 +29,7 @@ function certsServer() {
 
 async function start() {
   const certs = await certsServer();
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-remote-answer-'));
+  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-remote-answer-')));
   new CardStore(home).create({repo: 'repo', id: 'card-a', repoPath: home, body: '# 테스트'});
   const sent = [];
   const notify = (role, message) => { sent.push({role, message}); };

@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
@@ -45,7 +46,7 @@ test('SQLite: 같은 카드에 동시에 쓰면 하나만 성공하고 다른 �
  assert.ok(writes.every(r=>r.status===0),JSON.stringify(writes));assert.equal(readLedger(home).length,80);assert.equal(new Set(readLedger(home).map(r=>r.id)).size,80);
 });
 test('SQLite: JSONL 수입은 중복 done 원문을 보존하고 새 DB 기록도 JSONL로 복구한다',()=>{
- const source=root(),target=source+'-import',output=source+'-export';const store=new CardStore(source);
+ const source=markJsonl(root()),target=source+'-import',output=source+'-export';const store=new CardStore(source);
  store.create({repo:'r',id:'a',repoPath:source,body:'# a'});
  // 과거 원문을 직접 준비한다. 신규 appendLedger는 tasks 원장만 쓴다.
  fs.writeFileSync(path.join(source,'ledger.jsonl'),Array.from({length:2},()=>JSON.stringify({kind:'done',role:'r',taskId:'a',result:'ok'})).join('\n')+'\n');
@@ -91,7 +92,7 @@ test('SQLite: 전환 중 send는 실제 터미널 전송 전에 거절한다',as
 });
 test('SQLite: 마지막 스냅샷만 명시적 중지 확인 후 원본 위치로 전환한다',async()=>{
  const {activateStorage}=await import('../src/storage-migration.mjs');
- const source=root(),target=source+'-candidate';new CardStore(source).create({repo:'r',id:'a',repoPath:source,body:'# a'});
+ const source=markJsonl(root()),target=source+'-candidate';new CardStore(source).create({repo:'r',id:'a',repoPath:source,body:'# a'});
  const before=fs.readFileSync(path.join(source,'cards/r/a/events.jsonl'),'utf8');
  importStorage(source,target);
  assert.throws(()=>activateStorage(source,target),/중지|pause/);

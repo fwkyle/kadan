@@ -4,19 +4,64 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {assertTestHome} from './test-home-guard.mjs';
+import {acquireDirLock,waitDirUnlocked} from './dir-lock.mjs';
 const require=createRequire(import.meta.url);
 const connections=new Map();
 export const storagePath=home=>path.join(home,'kadan.sqlite');
+const INIT_LOCK='.storage-init.lock';
+const INIT_WAIT_MS=3000; // 초기화 창(DB 생성~표시 파일 rename)은 짧다. 읽기는 이만큼만 기다린다
+const DB_FILES=['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm'];
+// 표시 파일이 없는데 이 중 하나라도 있으면 새 홈이 아니다. -wal/-shm은 DB 파일 쪽(DB만 있음)에서 따로 본다.
+const TRACE_FILES=['ledger.jsonl','decisions/events.jsonl','tasks/events.jsonl','mail/events.jsonl','system/events.jsonl','explain-ai.jsonl','storage-import.json','storage-paused.json'];
+const TRACE_IN_CARD=['events.jsonl','briefs.jsonl','card.md'];
+const lexists=file=>{try{fs.lstatSync(file);return true}catch{return false}};
+const subdirs=dir=>{try{return fs.readdirSync(dir,{withFileTypes:true}).filter(d=>d.isDirectory()||d.isSymbolicLink()).map(d=>d.name).sort()}catch{return []}};
+// 첫 흔적 경로(없으면 null). 끊어진 링크도 흔적이다: 있는 척하는 파일을 새 홈으로 덮지 않는다.
+function legacyTrace(home){
+ const hit=rel=>{const f=path.join(home,rel);return lexists(f)?f:null};
+ for(const rel of TRACE_FILES){const f=hit(rel);if(f)return f}
+ for(const rel of ['cards','works'])for(const a of subdirs(path.join(home,rel)))for(const b of subdirs(path.join(home,rel,a)))
+  for(const name of rel==='cards'?TRACE_IN_CARD:['events.jsonl']){const f=hit(path.join(rel,a,b,name));if(f)return f}
+ return null;
+}
+const dbTrace=home=>{for(const name of DB_FILES){const f=path.join(home,name);if(lexists(f))return f}return null};
 export function storageMode(home){
  const marker=path.join(home,'storage.json');
- if(!fs.existsSync(marker)){if(fs.existsSync(storagePath(home)))throw new Error('SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지');return 'jsonl';}
+ if(!fs.existsSync(marker)){
+  // 초기화 창(DB는 만들어졌고 표시 파일은 아직)일 수 있다. 초기화가 끝나기를 잠깐 기다린 뒤 다시 판정한다.
+  if(dbTrace(home)){waitDirUnlocked(path.join(home,INIT_LOCK),{waitMs:INIT_WAIT_MS});if(fs.existsSync(marker))return storageMode(home);throw new Error('SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지');}
+  return 'jsonl';
+ }
  const value=JSON.parse(fs.readFileSync(marker,'utf8'));
  if(value.version!==1||!['jsonl','sqlite'].includes(value.backend))throw new Error('잘못된 저장소 설정');
  return value.backend;
 }
-export function assertWritable(home){
+function guardWritable(home){
  assertTestHome(home);
  if(fs.existsSync(path.join(home,'storage-paused.json')))throw new Error('저장 전환 중: 쓰기와 외부 실행이 중지되었습니다');
+}
+// 새 홈만 SQLite로 시작한다. 표시 파일이 있으면(backend가 무엇이든) 건드리지 않고 검증은 storageMode에 맡긴다.
+// 표시 파일이 없을 때: 새 홈이면 만들고, DB만 있거나 옛 흔적이 있으면 오류(빈 결과나 재생성으로 숨기지 않는다).
+// 흔적 검사 → DB 생성 → 표시 파일 쓰기 전체를 홈 안의 폴더 잠금 하나로 묶고, 잠금을 얻은 뒤 다시 판정한다.
+export function ensureStorage(home){
+ guardWritable(home);
+ if(fs.existsSync(path.join(home,'storage.json')))return;
+ fs.mkdirSync(home,{recursive:true,mode:0o700});
+ const lock=path.join(home,INIT_LOCK);
+ if(!acquireDirLock(lock))throw new Error(`저장소 초기화 중: 잠시 뒤 다시 시도하세요 (${lock})`);
+ try{
+  if(fs.existsSync(path.join(home,'storage.json')))return; // 다른 프로세스가 끝냈다: 그대로 연다
+  const db=dbTrace(home);
+  if(db)throw new Error(`SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지 (${db})`);
+  const trace=legacyTrace(home);
+  if(trace)throw new Error(`옛 저장소 흔적이 있습니다(${trace}). 이 버전은 새 홈만 자동으로 SQLite로 시작합니다. 옛 JSONL 홈은 태그 jsonl-last의 kadan storage import로 변환하세요.`);
+  createDatabase(home);
+  writeStorageMarker(home,'sqlite');
+ }finally{fs.rmdirSync(lock)}
+}
+export function assertWritable(home){
+ guardWritable(home);
+ ensureStorage(home);
 }
 function driver(){
  if(Number(process.versions.node.split('.')[0])<24)throw new Error('SQLite 저장에는 Node 24 이상이 필요합니다. JSONL은 기존 런타임을 유지할 수 있습니다');

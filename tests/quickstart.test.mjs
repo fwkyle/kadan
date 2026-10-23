@@ -189,3 +189,20 @@ test('격리 tmux: LANG 없는 환경에서도 한글 역할 세션을 그대로
   spawnSync('tmux', ['-L', socket, 'kill-server']);
  }
 });
+
+test('runInit·runUp은 새 홈을 SQLite로 시작하고, 옛 흔적이 있는 홈은 멈춘다', () => {
+ const read = (home) => JSON.parse(fs.readFileSync(path.join(home, 'storage.json'), 'utf8')).backend;
+ const repo = tmp('kadan-qs-repo3-'); const userHome = tmp('kadan-qs-home3-');
+ const okSpawn = () => ({ status: 0, stdout: 'tmux 3.5a' });
+ const initHome = tmp('kadan-qs-init-');
+ runInit({ home: initHome, repoRoot: repo, spawn: okSpawn, which: () => '/bin/x', flags: { 'no-skills': true }, userHome, log: quiet });
+ assert.equal(read(initHome), 'sqlite');
+ assert.ok(fs.existsSync(path.join(initHome, 'kadan.sqlite')));
+ const upHome = tmp('kadan-qs-up2-'); const w = fakeWorld();
+ runUp({ home: upHome, flags: { cmd: 'codex', port: '8123' }, floor: w.floor, start: w.start, send: w.send, cliPath: '/repo/src/cli.mjs', nodePath: '/usr/bin/node', sessionName, log: quiet, sleep: () => {} });
+ assert.equal(read(upHome), 'sqlite');
+ const old = tmp('kadan-qs-old-'); fs.writeFileSync(path.join(old, 'ledger.jsonl'), '{}\n');
+ assert.throws(() => runInit({ home: old, repoRoot: repo, spawn: okSpawn, which: () => '/bin/x', flags: { 'no-skills': true }, userHome, log: quiet }), /옛 저장소 흔적/);
+ assert.throws(() => runUp({ home: old, flags: { cmd: 'codex' }, floor: fakeWorld().floor, start: () => {}, cliPath: '/c', sessionName, log: quiet }), /옛 저장소 흔적/);
+ assert.ok(!fs.existsSync(path.join(old, 'storage.json')));
+});

@@ -8,7 +8,9 @@
 
 2026-09-07 실제 기본 데이터 폴더 `~/.kadan`를 SQLite로 전환했다. 현재 원본은 `kadan.sqlite`이며 기존 JSONL은 전환 시점의 동결 보존본이다. 파일 존재만으로 자동 전환하지 않으며 `storage.json`으로 선택한다. JSONL 경로는 전환 준비·호환·복구용으로 유지한다.
 
-- 기본 선택: storage.json이 없고 kadan.sqlite도 없으면 기존 JSONL.
+- 기본 선택: 새 홈은 SQLite로 자동 시작한다. storage.json·kadan.sqlite(-wal/-shm)와 옛 흔적이 모두 없는 홈에서 `kadan init`·`kadan up` 또는 첫 쓰기가 일어나면 `ensureStorage`가 DB와 storage.json을 만든다. 읽기는 홈을 만들지 않는다(빈 홈 읽기는 빈 결과). storage.json이 이미 있으면(backend가 무엇이든) 건드리지 않는다.
+- 옛 흔적이 있으면 멈춘다(이 버전부터 동작이 바뀐 지점): storage.json이 없는데 `ledger.jsonl`·`cards/*/*/events.jsonl`·`card.md` 등 옛 JSONL 파일이 있는 홈에 쓰면 이전에는 JSONL로 계속 썼지만 이제는 오류로 멈춘다. DB 파일만 있고 storage.json이 없는 홈도 같다. 빈 결과나 재생성으로 숨기지 않는다. 옛 JSONL 홈은 태그 `jsonl-last`(1ba8a63)의 `kadan storage import`로 SQLite로 변환한다. JSONL 백엔드 설명 전체는 PR-3에서 정리한다.
+- 초기화는 홈 안의 폴더 잠금 `.storage-init.lock` 하나로 직렬화한다(흔적 검사 → DB 생성 → storage.json 원자적 쓰기). 읽기는 잠금을 잡지 않고, DB는 있으나 storage.json이 아직 없으면 최대 3초 기다린 뒤 다시 판정한다.
 - SQLite 선택: storage.json `{ "version": 1, "backend": "sqlite" }`. DB 누락·다른 버전·손상은 오류. 자동 JSONL 폴백 없음.
 - Node 24 이상/내장 node:sqlite 사용. 이번 검증은 Node24.20.0·SQLite3.53.4. JSONL 기능의 기존 Node 요구는 유지한다.
 

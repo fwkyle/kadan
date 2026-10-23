@@ -9,7 +9,7 @@ import {DecisionStore} from './decisions.mjs';
 import {BriefStore} from './human-brief.mjs';
 import {ledgerStreams,validateDomainEvent,validateDomainStreams} from './ledger-domains.mjs';
 const sha=data=>createHash('sha256').update(data).digest('hex');
-const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.ledger-lock','.storage-gate','.storage-writers'].includes(name)||name.startsWith('.released-');
+const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.ledger-lock','.storage-gate','.storage-writers','.storage-init.lock'].includes(name)||name.startsWith('.released-');
 // 비밀 폴더($KADAN_HOME/secrets/)는 홈 최상위에 있을 때만 복사·목록에서 뺀다. 링크여도 같다. 다른 곳의 같은 이름은 그대로 둔다.
 const isSecretsDir=(root,dir,name)=>name==='secrets'&&dir===root;
 function files(root,relative=''){
