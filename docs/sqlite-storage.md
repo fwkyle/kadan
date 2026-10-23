@@ -10,7 +10,8 @@
 
 - 기본 선택: 새 홈은 SQLite로 자동 시작한다. storage.json·kadan.sqlite(-wal/-shm)와 옛 흔적이 모두 없는 홈에서 `kadan init`·`kadan up` 또는 첫 쓰기가 일어나면 `ensureStorage`가 DB와 storage.json을 만든다. 읽기는 홈을 만들지 않는다(빈 홈 읽기는 빈 결과). storage.json이 이미 있으면(backend가 무엇이든) 건드리지 않는다.
 - 옛 흔적이 있으면 멈춘다(이 버전부터 동작이 바뀐 지점): storage.json이 없는데 `ledger.jsonl`·`cards/*/*/events.jsonl`·`card.md` 등 옛 JSONL 파일이 있는 홈에 쓰면 이전에는 JSONL로 계속 썼지만 이제는 오류로 멈춘다. DB 파일만 있고 storage.json이 없는 홈도 같다. 빈 결과나 재생성으로 숨기지 않는다. 옛 JSONL 홈은 태그 `jsonl-last`(1ba8a63)의 `kadan storage import`로 SQLite로 변환한다. JSONL 백엔드 설명 전체는 PR-3에서 정리한다.
-- 초기화는 홈 안의 폴더 잠금 `.storage-init.lock` 하나로 직렬화한다(흔적 검사 → DB 생성 → storage.json 원자적 쓰기). 읽기는 잠금을 잡지 않고, DB는 있으나 storage.json이 아직 없으면 최대 3초 기다린 뒤 다시 판정한다.
+- 초기화는 홈 안의 폴더 잠금 `.storage-init.lock` 하나로 직렬화한다(흔적 검사 → DB 생성 → storage.json 원자적 쓰기). 잠금 폴더 안의 `owner.json`(`{pid, startedAt, host}`)이 주인이다. 읽기는 잠금을 잡지 않고, DB는 있으나 storage.json이 아직 없으면 주인이 살아 있을 때만 최대 3초 기다린 뒤 다시 판정한다.
+- 남은 초기화 잠금 처리: 초기화 도중 프로세스가 강제 종료되면 잠금이 남는다. 쓰기 입구(`ensureStorage`)가 주인 pid가 죽었음을 확인하면 잠금을 지우지 않고 `<home>/.trash/storage-init-<시각>-<pid>/`로 옮겨 보존한 뒤 다시 얻는다(`host`는 기록만 하고 판정에 쓰지 않는다). 그 회수 흐름에서 DB만 남았고 `events`·`heads`·`imports`가 모두 비어 있으면 DB 파일도 같은 폴더로 옮기고 처음부터 다시 만든다. 행이 있거나 DB를 열 수 없으면 아무것도 옮기지 않고 오류를 낸다. `owner.json`이 없거나 깨진 잠금(옛 버전이 남긴 빈 잠금 등)은 주인을 알 수 없어 기다리지 않고 즉시 오류를 낸다: 초기화 중인 kadan 프로세스가 없는지 확인한 뒤 그 폴더를 `<home>/.trash/`로 옮기고 다시 실행한다. 잠금 없이 DB만 있는 홈은 자동 복구하지 않는다. 읽기는 회수하지 않는다.
 - SQLite 선택: storage.json `{ "version": 1, "backend": "sqlite" }`. DB 누락·다른 버전·손상은 오류. 자동 JSONL 폴백 없음.
 - Node 24 이상/내장 node:sqlite 사용. 이번 검증은 Node24.20.0·SQLite3.53.4. JSONL 기능의 기존 Node 요구는 유지한다.
 

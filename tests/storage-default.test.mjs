@@ -111,13 +111,15 @@ appendStream(home,'mail/events.jsonl',{n:Number(n)});`;
 test('초기화 창(DB는 있고 표시 파일은 아직)의 읽기는 우회 오류 없이 최종 상태를 본다', async () => {
   const home = root();
   createDatabase(home);
+  // 초기화 주인이 살아 있는 창: 주인(이 프로세스)을 적은 잠금
   fs.mkdirSync(path.join(home, '.storage-init.lock'));
+  fs.writeFileSync(path.join(home, '.storage-init.lock', 'owner.json'), JSON.stringify({pid: process.pid, startedAt: new Date().toISOString(), host: os.hostname()}));
   const code = `import {storageMode} from ${JSON.stringify(new URL('../src/storage.mjs', import.meta.url).href)};
 console.log(storageMode(process.argv[1]));`;
   const reading = child(code, [home]);
   await new Promise(resolve => setTimeout(resolve, 300));
   writeStorageMarker(home, 'sqlite');
-  fs.rmdirSync(path.join(home, '.storage-init.lock'));
+  fs.rmSync(path.join(home, '.storage-init.lock'), {recursive: true});
   const r = await reading;
   assert.equal(r.status, 0, r.err);
   assert.equal(r.out.trim(), 'sqlite');

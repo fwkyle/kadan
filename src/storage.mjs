@@ -4,11 +4,10 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {assertTestHome} from './test-home-guard.mjs';
-import {acquireDirLock,waitDirUnlocked} from './dir-lock.mjs';
+import {acquireInitLock,releaseInitLock,waitForLiveInit,testKillPoint} from './storage-init-lock.mjs';
 const require=createRequire(import.meta.url);
 const connections=new Map();
 export const storagePath=home=>path.join(home,'kadan.sqlite');
-const INIT_LOCK='.storage-init.lock';
 const INIT_WAIT_MS=3000; // 초기화 창(DB 생성~표시 파일 rename)은 짧다. 읽기는 이만큼만 기다린다
 const DB_FILES=['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm'];
 // 표시 파일이 없는데 이 중 하나라도 있으면 새 홈이 아니다. -wal/-shm은 DB 파일 쪽(DB만 있음)에서 따로 본다.
@@ -28,8 +27,9 @@ const dbTrace=home=>{for(const name of DB_FILES){const f=path.join(home,name);if
 export function storageMode(home){
  const marker=path.join(home,'storage.json');
  if(!fs.existsSync(marker)){
-  // 초기화 창(DB는 만들어졌고 표시 파일은 아직)일 수 있다. 초기화가 끝나기를 잠깐 기다린 뒤 다시 판정한다.
-  if(dbTrace(home)){waitDirUnlocked(path.join(home,INIT_LOCK),{waitMs:INIT_WAIT_MS});if(fs.existsSync(marker))return storageMode(home);throw new Error('SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지');}
+  // 초기화 창(DB는 만들어졌고 표시 파일은 아직)일 수 있다. 초기화 주인이 살아 있을 때만 잠깐 기다린 뒤 다시 판정한다.
+  // 잠금이 없거나 주인이 죽었거나 모르면 기다리지 않는다. 읽기는 회수·이동을 하지 않는다(회수는 ensureStorage에서만).
+  if(dbTrace(home)){waitForLiveInit(home,INIT_WAIT_MS);if(fs.existsSync(marker))return storageMode(home);throw new Error('SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지');}
   return 'jsonl';
  }
  const value=JSON.parse(fs.readFileSync(marker,'utf8'));
@@ -43,21 +43,32 @@ function guardWritable(home){
 // 새 홈만 SQLite로 시작한다. 표시 파일이 있으면(backend가 무엇이든) 건드리지 않고 검증은 storageMode에 맡긴다.
 // 표시 파일이 없을 때: 새 홈이면 만들고, DB만 있거나 옛 흔적이 있으면 오류(빈 결과나 재생성으로 숨기지 않는다).
 // 흔적 검사 → DB 생성 → 표시 파일 쓰기 전체를 홈 안의 폴더 잠금 하나로 묶고, 잠금을 얻은 뒤 다시 판정한다.
+// 잠금에는 주인(owner.json)이 적혀 있어, 초기화 도중 죽은 주인의 잠금은 .trash로 옮겨 보존하고 다시 얻는다.
 export function ensureStorage(home){
  guardWritable(home);
  if(fs.existsSync(path.join(home,'storage.json')))return;
  fs.mkdirSync(home,{recursive:true,mode:0o700});
- const lock=path.join(home,INIT_LOCK);
- if(!acquireDirLock(lock))throw new Error(`저장소 초기화 중: 잠시 뒤 다시 시도하세요 (${lock})`);
+ const {reclaimed}=acquireInitLock(home);
  try{
   if(fs.existsSync(path.join(home,'storage.json')))return; // 다른 프로세스가 끝냈다: 그대로 연다
+  testKillPoint('lock');
   const db=dbTrace(home);
-  if(db)throw new Error(`SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지 (${db})`);
+  // 죽은 주인의 잠금을 회수한 바로 그 흐름에서만, 행이 하나도 없는 반쯤 된 DB를 .trash로 옮기고 다시 시작한다.
+  if(db&&reclaimed&&emptyDatabase(home))for(const name of DB_FILES){const f=path.join(home,name);if(lexists(f))fs.renameSync(f,path.join(reclaimed,name))}
+  else if(db)throw new Error(`SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지 (${db})${reclaimed?'. 초기화가 중단된 홈이지만 DB에 기록이 있거나 읽을 수 없어 옮기지 않았습니다. 직접 확인하세요':''}`);
   const trace=legacyTrace(home);
   if(trace)throw new Error(`옛 저장소 흔적이 있습니다(${trace}). 이 버전은 새 홈만 자동으로 SQLite로 시작합니다. 옛 JSONL 홈은 태그 jsonl-last의 kadan storage import로 변환하세요.`);
   createDatabase(home);
+  testKillPoint('db');
   writeStorageMarker(home,'sqlite');
- }finally{fs.rmdirSync(lock)}
+ }finally{releaseInitLock(home)}
+}
+// 반쯤 된 DB가 비었는지(events·heads·imports 행이 모두 0). 열기나 세기가 실패하면(0바이트·스키마 손상 등) 비었다고 믿지 않는다.
+function emptyDatabase(home){
+ try{
+  const db=new (driver())(storagePath(home),{readOnly:true});
+  try{return ['events','heads','imports'].every(t=>db.prepare(`SELECT count(*) AS n FROM ${t}`).get().n===0)}finally{db.close()}
+ }catch{return false}
 }
 export function assertWritable(home){
  guardWritable(home);
