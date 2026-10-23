@@ -41,7 +41,11 @@ function workTitleOf(home, work) {
   try { return new WorkStore(home).get(work).title ?? ''; } catch { return ''; }
 }
 
-export function systemNotify(message, spawn) {
+// 시험 관문: KADAN_NOTIFY=off인데 진짜 spawnSync가 넘어오면 osascript를 부르지 않고 오류 문구를 돌려준다(던지지 않는다 —
+// 부른 쪽 흐름이 깨지면 안 된다). 가짜 spawn을 넣은 시험은 그대로 돈다. 운영에는 KADAN_NOTIFY가 없어 동작이 같다.
+export const SYSTEM_NOTIFY_REFUSED = 'KADAN_NOTIFY=off: 실제 시스템 알림 거절';
+export function systemNotify(message, spawn, env = process.env) {
+  if (env.KADAN_NOTIFY === 'off' && spawn === spawnSync) return SYSTEM_NOTIFY_REFUSED;
   const script = `display notification ${JSON.stringify(message)} with title "kadan watch"`;
   const result = spawn('osascript', ['-e', script], {encoding: 'utf8', timeout: systemTimeoutMs()});
   // 성공은 종료 코드 0이면서 오류·신호가 없을 때만이다. 시간 초과(spawnSync는 status:null, error.code:ETIMEDOUT, signal:SIGTERM)는
@@ -458,6 +462,6 @@ export function notifyUser(message, spawn, opts = {}) {
   // 시스템 알림도 같은 판단이다: 이미 해결 메시지를 보낸 결정의 요청은 다시 띄우지 않고, 해결됐다고 읽히면 해결 문구로 바꾼다.
   const sysMessage = decisionSystemMessage(home, opts.decision, message);
   if (sysMessage === null) return {...result, via: 'discord', discord: result.discord ?? {outcome: 'resolved-skip', reason: '이미 해결됨'}};
-  result.error = systemNotify(tagged(sysMessage), spawn);
+  result.error = systemNotify(tagged(sysMessage), spawn, env);
   return result;
 }
