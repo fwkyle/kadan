@@ -17,7 +17,7 @@ import { autostartCommand, describeStale } from "../autostart.mjs";
 import { floor } from "../floor.mjs";
 import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
-import { acquireReviveLock, lockWaitMs, reclaimLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
+import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
 import { appendLedger, ledgerHome } from "../ledger.mjs";
 import { tmux, paneState, captureTail } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
@@ -51,7 +51,7 @@ export function cmdUp(_argv, flags) {
   if (auto && floor.name !== "tmux") die("--auto는 tmux 바닥에서만 쓴다", 2);
   if (floor.name === "tmux") requireWindowChoice();
   // 자동 실행과 손으로 친 up이 겹치지 않게 한다. 자동은 이번 회차를 건너뛰고, 사람은 잠시 기다린다.
-  const release = floor.name === "tmux" ? acquireReviveLock(home, { waitMs: auto ? 0 : lockWaitMs(), onReclaim: reclaimLog }) : () => {};
+  const release = floor.name === "tmux" ? acquireReviveLock(home, { waitMs: auto ? 0 : lockWaitMs(), onReclaim: reclaimLog, onLegacy: auto ? undefined : legacyLog }) : () => {};
   if (!release) {
     if (auto) return;
     die("다른 kadan up이 돌고 있습니다(자동 실행일 수 있음). 잠시 뒤 다시 치세요", 1);
