@@ -128,6 +128,10 @@ export function verifyStorage(home){
  }catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e}finally{db.close()}
 }
 export function exportStorage(source,target){
+ // JSONL 백엔드가 없어 받아 줄 곳이 없다. 파일을 만들기 전에 거절한다(코드 삭제는 PR-3).
+ throw new Error(`JSONL 내보내기는 없어졌다(JSONL 저장 방식 제거). 백업은 sqlite3 ${storagePath(source)} ".backup <파일>"로 한다`);
+}
+function legacyExportStorage(source,target){
  const {src,dst}=requireNewTarget(source,target);
  if(storageMode(src)!=='sqlite')throw new Error('내보내기 원본은 SQLite여야 합니다');
  verifyStorage(src);

@@ -104,3 +104,9 @@ test('09-24 잠금 밖 미리 계산: 그 사이 바뀐 게 없으면 한 번만
  // 미리 계산이 실패하면 잠금 안에서 다시 계산한다(예전과 같은 결과·오류).
  let first=true;assert.equal(preparedTransaction(home,()=>{if(first){first=false;throw new Error('일시 실패');}return 'ok';},value=>value),'ok');
 });
+test('SQLite: storage export는 JSONL 백엔드가 없어 파일을 만들기 전에 거절한다',()=>{
+ const home=setup();const target=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-export-')),'out');
+ assert.throws(()=>storageCommand(['export'],{target},{home}),/JSONL 내보내기는 없어졌다.*\.backup/);
+ assert.equal(fs.existsSync(target),false);
+ assert.deepEqual(fs.readdirSync(path.dirname(target)),[]);
+});

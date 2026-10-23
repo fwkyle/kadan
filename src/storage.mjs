@@ -18,7 +18,7 @@ const TRACE_IN_CARD=['events.jsonl','briefs.jsonl','card.md'];
 const lexists=file=>{try{fs.lstatSync(file);return true}catch{return false}};
 const subdirs=dir=>{try{return fs.readdirSync(dir,{withFileTypes:true}).filter(d=>d.isDirectory()||d.isSymbolicLink()).map(d=>d.name).sort()}catch{return []}};
 // 첫 흔적 경로(없으면 null). 끊어진 링크도 흔적이다: 있는 척하는 파일을 새 홈으로 덮지 않는다.
-function legacyTrace(home){
+export function legacyTrace(home){
  const hit=rel=>{const f=path.join(home,rel);return lexists(f)?f:null};
  for(const rel of TRACE_FILES){const f=hit(rel);if(f)return f}
  for(const rel of ['cards','works'])for(const a of subdirs(path.join(home,rel)))for(const b of subdirs(path.join(home,rel,a)))
