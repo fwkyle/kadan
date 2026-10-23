@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { CardStore } from "../src/card-store.mjs";
 import { createDatabase, writeStorageMarker } from "../src/storage.mjs";
 import { endedExecutionKeys } from "../src/watch-supervisor.mjs";
@@ -69,13 +70,28 @@ for (const mode of ["jsonl", "sqlite"]) {
   });
 }
 
-test("sqlite: 요약을 읽은 뒤 상태가 바뀐 카드도 개별로 이력을 채운다", () => {
-  const { store } = setup("sqlite");
+test("sqlite: 요약과 이력 사이에 다른 연결이 써도 요약 시점 그대로 읽는다(한 읽기 트랜잭션)", () => {
+  const { home, store } = setup("sqlite");
   const original = store.listSummaries.bind(store);
   let raced = false;
-  store.listSummaries = () => { const rows = original(); if (raced) return rows; raced = true; store.update("r/open", { scope: "읽은 뒤 변경" }, { revision: 2, note: "경쟁 쓰기" }); return rows; };
+  // 요약을 읽은 직후 다른 프로세스가 열린 카드를 완료로 바꾼다. WAL 읽기 스냅샷은 이 쓰기를 보지 못해야 한다.
+  store.listSummaries = () => {
+    const rows = original();
+    if (!raced) {
+      raced = true;
+      const code = `import {CardStore} from ${JSON.stringify(new URL("../src/card-store.mjs", import.meta.url).href)};
+        new CardStore(process.env.KADAN_HOME).update("r/open", {status: "done"}, {revision: 2, note: "경쟁 쓰기"});`;
+      const run = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, KADAN_HOME: home }, encoding: "utf8", timeout: 20000 });
+      assert.equal(run.status, 0, run.stderr);
+    }
+    return rows;
+  };
   const w = store.listWatch().find(c => c.key === "r/open");
-  assert.equal(w.history.length, w.revision, "순번이 어긋난 카드는 개별로 다시 읽는다");
+  assert.equal(raced, true);
+  assert.equal(w.status, "assigned", "요약 시점의 상태 그대로");
+  assert.equal(w.revision, 2);
+  assert.equal(w.history.length, 2, "이력도 같은 시점");
+  assert.equal(store.get("r/open").status, "done", "쓰기는 실제로 반영됐다");
 });
 
 test("ProgressWatch: 후보로 고른 카드 한 장만 본문을 읽는다", () => {

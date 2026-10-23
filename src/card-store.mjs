@@ -64,9 +64,16 @@ export class CardStore {
   }
   // 감시기용: 본문 없이 요약을 읽고, 카드 센터가 판정에 쓰는 열린 카드(HISTORY_STATUSES)에만 이력을 붙인다.
   // 이력은 SQL 한 번으로 묶어 읽는다(카드마다 읽으면 열린 카드 수만큼 문장이 는다). 닫힌 카드는 history가 없다.
+  // 요약과 이력은 읽기 트랜잭션 하나에서 읽는다(옛 list()가 지키던 한 스냅샷). 중첩 transaction은 같은 db를 재사용한다.
   listWatch() {
+    if(storageMode(this.home)!=='sqlite'){
+      const cards=this.listSummaries();
+      return cards.map(c=>HISTORY_STATUSES.has(c.status)?this.get(c.key,{body:false}):c);
+    }
+    return transaction(this.home,()=>this.#listWatchSnapshot(),{readOnly:true});
+  }
+  #listWatchSnapshot() {
     const cards=this.listSummaries();
-    if(storageMode(this.home)!=='sqlite')return cards.map(c=>HISTORY_STATUSES.has(c.status)?this.get(c.key,{body:false}):c);
     const want=new Set(cards.filter(c=>HISTORY_STATUSES.has(c.status)).map(c=>`cards/${c.key}/events.jsonl`));
     const byStream=new Map();
     transaction(this.home,db=>{
@@ -78,7 +85,7 @@ export class CardStore {
         byStream.get(r.stream).push(JSON.parse(r.payload));
       }
     },{readOnly:true});
-    // 요약을 읽은 뒤 상태가 바뀐 카드는 묶음에 없거나 순번이 어긋난다. 그 카드만 개별로 읽는다.
+    // 같은 스냅샷이라 어긋날 일이 없다. 방어용으로 어긋나면 같은 트랜잭션 안에서 그 카드만 다시 읽는다.
     return cards.map(c=>{
       if(!HISTORY_STATUSES.has(c.status))return c;
       const history=byStream.get(`cards/${c.key}/events.jsonl`);
