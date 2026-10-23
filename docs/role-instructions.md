@@ -133,6 +133,7 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 대신 `role-templates/<프로필>-summary.md`(지금은 `conductor-summary.md`)가 붙는다. 전문 경로는 참고 파일 목록에 남는다.
 요약일 때도 템플릿 파일은 읽는다(지문 비교용). 줄어드는 것은 메시지뿐이다.
 `SUMMARY_PROFILES`·`SUMMARY_REPO`·`FULL_INTERVAL_MS`(1시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
+1단계 확대: `kadan-슈퍼감독`(2026-10-23 kyle 결정 'c')은 `SUMMARY_ROLES`로 프로필·판 시험 조건 없이 `super-summary.md` 요약을 받는다. 역할 이름은 우편 수신자 역할 이름과 정확히 같아야 하며, 전문 조건은 위 표 그대로다. 요약 파일은 템플릿 지문에 들어가지 않아 나중에 고쳐도 전문 재전송이 없다.
 
 전문이 되는 이유와 기록 이름(`instructions.reason`):
 
