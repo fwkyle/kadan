@@ -2,14 +2,14 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { CardStore } from '../src/card-store.mjs';
+import { appendStream } from '../src/storage.mjs';
 import { buildCardCenter } from '../src/card-center.mjs';
 import { createWallServer } from '../src/wall.mjs';
 import { renderCenterWall } from '../src/center-wall.mjs';
-function fixture(){const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-center-')));const store=new CardStore(home);const c=store.create({repo:'repo',id:'card-a',repoPath:home,body:'# 제품 검색',by:'사람'});return{home,store,c};}
+function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-center-'));const store=new CardStore(home);const c=store.create({repo:'repo',id:'card-a',repoPath:home,body:'# 제품 검색',by:'사람'});return{home,store,c};}
 const rows=[{kind:'plan',taskId:'card-a',board:'integration',t:'2020-09-07T00:00:00Z'}, {kind:'send',role:'different-작업자',taskId:'card-a',t:'2020-09-07T00:01:00Z'}];
 const tree=[{name:'different',roles:[{role:'different-작업자',life:{state:'alive',pidState:'match'}}]}];
 test('09-07 중앙 카드 버전/승인/배정 경계와 질문 답변 기록',()=>{
@@ -30,7 +30,7 @@ test('09-07 중앙 원본 연결과 원본 변경/이력 손상은 조용히 덮
  const c=store.create({repo:'repo',id:'card-b',repoPath:home,sourcePath:source});store.link(c.key);
  assert.equal(fs.realpathSync(source),fs.realpathSync(c.path));assert.equal(fs.readFileSync(source,'utf8'),'# 옛 카드');
  assert.equal(fs.readdirSync(store.dir(c.key)).filter(n=>n.startsWith('original-')).length,1);
- fs.appendFileSync(path.join(store.dir(c.key),'events.jsonl'),'broken\n');assert.throws(()=>store.list());
+ appendStream(home,`cards/${c.key}/events.jsonl`,'broken');assert.throws(()=>store.list());
 });
 test('09-07 생존은 진행이 아님, 다른 역할 이름도 명시 계획에 연결하고 재발령은 재개한다',()=>{
  const {c}=fixture();let center=buildCardCenter({cards:[c],entries:rows,tree});
@@ -78,7 +78,7 @@ test('09-07 시작 보고는 시간으로 만료되지 않으며 세션 소실�
 test('09-07 인계한 중앙 카드도 후임에게 귀속하며 옛 담당에게 발령하지 않는다',()=>{
  const {store,c,home}=fixture();store.update(c.key,{status:'assigned',scope:'로컬',board:'b',role:'old',rallyId:'r1',rallyTitle:'묶음',rallyRound:'1',rallyStep:'implementation'},{revision:1,note:'배정'});
  const transfer={kind:'handover',phase:'transferred',from:'old',to:'new',taskIds:['card-a'],t:'2099-01-01T00:00:00Z'};
- fs.writeFileSync(path.join(home,'ledger.jsonl'),JSON.stringify(transfer)+'\n');
+ appendStream(home,'ledger.jsonl',transfer);
  assert.equal(store.checkSend('card-a','new').role,'new');assert.throws(()=>store.checkSend('card-a','old'),/발령 불가/);
  const center=buildCardCenter({cards:store.list(),entries:[transfer],tree:[]});assert.equal(center.cards[0].role,'new');
 });

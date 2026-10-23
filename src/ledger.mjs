@@ -1,4 +1,4 @@
-import {storageMode,storagePath,storageSnapshot,readStream} from './storage.mjs';
+import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -14,7 +14,7 @@ export function ledgerHome() {
 }
 
 export function ledgerPath() {
-  return storageMode(ledgerHome())==='sqlite'?storagePath(ledgerHome()):path.join(ledgerHome(), "ledger.jsonl");
+  return storagePath(ledgerHome());
 }
 
 export function resolveLedgerBy({ source, env = process.env } = {}) {
@@ -75,9 +75,9 @@ export function readMailboxLedger(home = ledgerHome()) {
 }
 // 우편 중복 거르기용 좁은 조회: 수신자·sourceKey가 같은 send 사건 하나. 원장 전체를 읽고 검증하지 않는다.
 // SQLite는 우편 영역(과거 원문 포함) 줄만 최신부터 훑고, 글자 포함(instr)으로 먼저 걸러 JSON 해석 없이 첫 일치에서 멈춘다.
-// 그래서 방금 저장한 우편(재시작 중복)은 사건 수와 상관없이 바로 찾는다. 없다고 확인하는 데는 우편 영역 전체를 한 번 훑는다. JSONL은 기존 읽기.
+// 그래서 방금 저장한 우편(재시작 중복)은 사건 수와 상관없이 바로 찾는다. 없다고 확인하는 데는 우편 영역 전체를 한 번 훑는다. 저장소가 없으면 null.
 export function findMailBySourceKey(home,role,sourceKey) {
-  if (storageMode(home) !== 'sqlite') return readMailboxLedger(home).find(e => e.kind === 'send' && e.role === role && e.sourceKey === sourceKey) ?? null;
+  if (storageMode(home) === 'none') return null;
   const needle = `"sourceKey":${JSON.stringify(sourceKey)}`;
   return storageSnapshot(home,db => {
     const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream IN ('ledger.jsonl','mail/events.jsonl') AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='send' AND json_extract(payload,'$.role')=? ORDER BY rowid DESC LIMIT 1").get(needle, role);
@@ -86,7 +86,7 @@ export function findMailBySourceKey(home,role,sourceKey) {
 }
 // 받는 역할과 상관없이 같은 sourceKey의 우편을 찾는다. 디코 우편은 받는이가 우편마다 달라질 수 있어(비서 또는 레포 슈퍼) 중복 확인에 쓴다.
 export function findMailBySourceKeyAny(home,sourceKey) {
-  if (storageMode(home) !== 'sqlite') return readMailboxLedger(home).find(e => e.kind === 'send' && e.sourceKey === sourceKey) ?? null;
+  if (storageMode(home) === 'none') return null;
   const needle = `"sourceKey":${JSON.stringify(sourceKey)}`;
   return storageSnapshot(home,db => {
     const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream IN ('ledger.jsonl','mail/events.jsonl') AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='send' ORDER BY rowid DESC LIMIT 1").get(needle);
@@ -97,9 +97,9 @@ export function readSystemLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home,{domain:'system'}),'system');
 }
 // 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.
-// SQLite는 requestId 글자 포함(instr)으로 먼저 걸러 해당 줄만 해석한다. JSONL은 전체를 읽는다.
+// requestId 글자 포함(instr)으로 먼저 걸러 해당 줄만 해석한다. 저장소가 없으면 null.
 export function readWatchRequest(home,requestId) {
-  if (storageMode(home) !== 'sqlite') return readStream(home,'system/events.jsonl',{optional:true}).find(e => e.kind === 'watch-ai-request' && e.requestId === requestId) ?? null;
+  if (storageMode(home) === 'none') return null;
   return storageSnapshot(home,db => {
     const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream='system/events.jsonl' AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='watch-ai-request' AND json_extract(payload,'$.requestId')=? LIMIT 1").get(requestId,requestId);
     return row ? JSON.parse(row.payload) : null;

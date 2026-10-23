@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -16,7 +15,7 @@ import {renderCenterWall} from '../src/center-wall.mjs';
 
 function fixture(mode='sqlite'){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-operations-flow-'));
- if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}else markJsonl(home);
+ if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  const store=new WorkStore(home),cards=new CardStore(home);
  const make=(key='repo/flow')=>store.create({key,title:'운영 흐름 검토',goal:'보고·마감·인수를 구분',scope:'전체 연결 실행',acceptance:'세 상태와 원문 확인',owner:'감독',repoPath:home});
  const work=make();
@@ -99,7 +98,7 @@ test('다른 업무·상충하는 실행 주소의 원문과 유일하지 않은
 });
 
 test('손상된 연결 원장은 모름이고 업무 저장 상태는 유지한다',()=>{
- const f=fixture('jsonl');fs.appendFileSync(path.join(f.home,'ledger.jsonl'),'손상된 줄\n');
+ const f=fixture();appendStream(f.home,'ledger.jsonl',{t:null,broken:'손상된 줄'});
  const d=operationsFlowDetail(f.home,f.work.key);assert.equal(d.work.status,'open');assert.equal(d.mail.total,null);assert.equal(d.handovers,null);assert.equal(d.executions[0].reportState,'unknown');assert.equal(d.errors.length,1);
 });
 

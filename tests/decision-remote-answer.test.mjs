@@ -2,12 +2,12 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import {createWallServer} from '../src/wall.mjs';
 import {CardStore} from '../src/card-store.mjs';
+import {readStream} from '../src/storage.mjs';
 import {DecisionStore, decisionLink} from '../src/decisions.mjs';
 import {REMOTE_ACCESS_FILE} from '../src/remote-access.mjs';
 import {TEAM, AUD, EMAIL, HOST, makeKey, sign} from './helpers/access-jwt-fixture.mjs';
@@ -29,7 +29,7 @@ function certsServer() {
 
 async function start() {
   const certs = await certsServer();
-  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-remote-answer-')));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-remote-answer-'));
   new CardStore(home).create({repo: 'repo', id: 'card-a', repoPath: home, body: '# 테스트'});
   const sent = [];
   const notify = (role, message) => { sent.push({role, message}); };
@@ -80,7 +80,7 @@ test('원격: 유효 JWT + 맞는 Origin + 결정 token이면 답이 기록되�
     assert.ok(saved.answer.at, '시각');
     assert.ok(saved.revision > 1 && saved.id === app.decision.id);
     assert.equal(app.sent.length, 1, '요청자에게 한 번 알린다');
-    const raw = fs.readFileSync(path.join(app.home, 'decisions/events.jsonl'), 'utf8');
+    const raw = JSON.stringify(readStream(app.home, 'decisions/events.jsonl'));
     assert.ok(!raw.includes(jwt) && !raw.includes('eyJ'), 'JWT 원문은 기록에 없다');
   } finally { app.close(); }
 });
@@ -186,7 +186,7 @@ test('저장 형식 호환: 새 코드가 쓴 원격 답변 이력을 옛 검증
   try {
     const token = (await app.sessionOf(app.jwtFor())).decisionToken;
     assert.equal((await app.remote('POST', '/decisions/answer', {body: app.answerBody(token)})).status, 303);
-    const rows = fs.readFileSync(path.join(app.home, 'decisions/events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const rows = readStream(app.home, 'decisions/events.jsonl');
     assert.ok(rows.length >= 3, '요청·답변·전달 기록');
     assert.ok(rows.some(row => row.answer?.remote), '원격 표시가 있는 답변');
     let old;

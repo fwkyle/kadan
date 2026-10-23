@@ -1,4 +1,4 @@
-// 저장 경계: JSONL 호환 또는 명시적으로 초기화된 SQLite. 자동 폴백 금지.
+// 저장 경계: SQLite 하나. 저장소가 아직 없는 홈은 'none'(읽기는 빈 결과, 첫 쓰기에서 만든다). 자동 폴백 금지.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
@@ -49,33 +49,35 @@ function unmarkedDb(home){
  }catch(e){if(notDatabase(e))return 'foreign';throw e}
  finally{db?.close()}
 }
-// 표시 파일이 없는 홈: DB도 없으면 새 홈('jsonl' 읽기 = 빈 결과). 카단 표식이 찍힌 DB는 sqlite로 연다(읽기는 아무것도 쓰지 않는다).
-// 이것은 '자동 JSONL 우회 금지'의 우회가 아니다: 규칙은 JSONL로 몰래 내려가는 것을 막는 것이고, 카단 표식 DB를 sqlite로 마저 여는 것은 그 반대다.
-// 빈 DB는 초기화 전과 같아 새 홈으로 본다(옛 흔적이 함께 있으면 오류). 그 밖의 DB는 기존 오류.
+// 'sqlite' | 'none'. 'none' = 표시 파일도 카단 DB도 없는 새 홈: 읽는 쪽은 DB를 열지 않고 빈 결과를 돌려주고, 첫 쓰기가 SQLite를 만든다.
+// 표시 파일이 없는 홈: 카단 표식이 찍힌 DB는 sqlite로 연다(읽기는 아무것도 쓰지 않는다).
+// 빈 DB는 초기화 전과 같아 새 홈('none')으로 본다(옛 흔적이 함께 있으면 오류). 그 밖의 DB는 기존 오류.
+// 오류는 표시 파일이 backend:'jsonl'인 옛 저장소 하나뿐이다: JSONL로 몰래 내려가지 않고 변환 방법을 안내한다.
 export function storageMode(home){
  const marker=path.join(home,'storage.json');
  if(!fs.existsSync(marker)){
-  if(!dbTrace(home))return 'jsonl';
+  if(!dbTrace(home))return 'none';
   const state=unmarkedDb(home);
   if(state==='kadan')return 'sqlite';
-  if(state==='empty'&&!legacyTrace(home))return 'jsonl';
+  if(state==='empty'&&!legacyTrace(home))return 'none';
   throw dbError(storagePath(home));
  }
  const value=JSON.parse(fs.readFileSync(marker,'utf8'));
  if(value.version!==1||!['jsonl','sqlite'].includes(value.backend))throw new Error('잘못된 저장소 설정');
- return value.backend;
+ if(value.backend==='jsonl')throw new Error(`옛 JSONL 저장소입니다(${marker}). 이 버전은 JSONL 저장을 지원하지 않습니다. 옛 JSONL 홈은 태그 jsonl-last의 kadan storage import로 변환하세요.`);
+ return 'sqlite';
 }
 function guardWritable(home){
  assertTestHome(home);
  if(fs.existsSync(path.join(home,'storage-paused.json')))throw new Error('저장 전환 중: 쓰기와 외부 실행이 중지되었습니다');
 }
-// 새 홈만 SQLite로 시작한다. 표시 파일이 있으면(backend가 무엇이든) 건드리지 않고 검증은 storageMode에 맡긴다.
+// 새 홈만 SQLite로 시작한다. 표시 파일이 있으면 건드리지 않고 storageMode로 검증만 한다(옛 JSONL 표시면 오류).
 // 표시 파일이 없을 때: 옛 JSONL 흔적이 있으면 오류(빈 결과나 재생성으로 숨기지 않는다). 아니면 SQLite 자체 잠금으로 DB를 만든다.
 // 폴더 잠금·주인 기록·회수는 없다: 프로세스가 죽으면 OS가 SQLite 파일 잠금을 풀어 주므로 남는 잠금이 없다.
 // 코드는 어떤 경우에도 kadan.sqlite*를 옮기거나 지우지 않는다.
 export function ensureStorage(home){
  guardWritable(home);
- if(fs.existsSync(path.join(home,'storage.json')))return;
+ if(fs.existsSync(path.join(home,'storage.json'))){storageMode(home);return}
  fs.mkdirSync(home,{recursive:true,mode:0o700});
  const trace=legacyTrace(home);
  if(trace)throw new Error(`옛 저장소 흔적이 있습니다(${trace}). 이 버전은 새 홈만 자동으로 SQLite로 시작합니다. 옛 JSONL 홈은 태그 jsonl-last의 kadan storage import로 변환하세요.`);
@@ -127,7 +129,7 @@ export function assertWritable(home){
  ensureStorage(home);
 }
 function driver(){
- if(Number(process.versions.node.split('.')[0])<24)throw new Error('SQLite 저장에는 Node 24 이상이 필요합니다. JSONL은 기존 런타임을 유지할 수 있습니다');
+ if(Number(process.versions.node.split('.')[0])<24)throw new Error('SQLite 저장에는 Node 24 이상이 필요합니다');
  let sqlite;try{sqlite=require('node:sqlite')}catch{throw new Error('SQLite 저장에는 node:sqlite를 지원하는 Node가 필요합니다');}
  return sqlite.DatabaseSync;
 }
@@ -172,10 +174,10 @@ export function transaction(home,fn,{readOnly=false}={}){
  catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e}
  finally{connections.delete(key);db.close()}
 }
-export function storageTransaction(home,fn){return storageMode(home)==='sqlite'?transaction(home,fn):fn();}
+export function storageTransaction(home,fn){return transaction(home,fn);}
 // 원장 전체의 마지막 사건 번호. 사건은 지우지 못하므로(삭제 금지 트리거) 무엇이든 추가되면 커진다.
-// 잠금 밖에서 미리 계산한 결과가 잠금 안에서도 유효한지 확인하는 데 쓴다. JSONL은 null(미리 계산하지 않음).
-export function storageVersion(home){return storageMode(home)==='sqlite'?transaction(home,db=>db.prepare('SELECT max(rowid) AS v FROM events').get().v??0,{readOnly:true}):null;}
+// 잠금 밖에서 미리 계산한 결과가 잠금 안에서도 유효한지 확인하는 데 쓴다. 'none'(저장소 없음)은 null이라 미리 계산하지 않는다.
+export function storageVersion(home){return storageMode(home)==='none'?null:transaction(home,db=>db.prepare('SELECT max(rowid) AS v FROM events').get().v??0,{readOnly:true});}
 // 무거운 계산은 쓰기 잠금 밖에서 먼저 하고, 잠금 안에서는 그 사이 원장이 바뀌지 않았는지만 확인한다.
 // 바뀌었거나 미리 계산이 실패했으면 잠금 안에서 다시 계산한다(예전과 같은 결과). 2026-09-24 실측: 우편 ack가
 // 잠금을 2.6초, send가 1.5초 쥐어 부하가 높을 때 다른 쓰기(감시 포함)가 busy_timeout을 넘겨 실패했다.
@@ -190,11 +192,10 @@ export function preparedTransaction(home,compute,apply){
  const current=prepareOutsideLock(home,compute);
  return storageTransaction(home,()=>apply(current()));
 }
-export function storageSnapshot(home,fn){return storageMode(home)==='sqlite'?transaction(home,fn,{readOnly:true}):fn();}
+// 'none'(저장소 없음)이면 DB를 열지 않고 fn()만 부른다(db 인자 없음): 읽는 쪽은 빈 결과를 만든다.
+export function storageSnapshot(home,fn){return storageMode(home)==='none'?fn():transaction(home,fn,{readOnly:true});}
 // slim: 사건 종류별로 큰 필드를 뺀 채 읽는 규칙 목록 [{kind 또는 prefix, drop:[필드]}]. 원본 JSON에서 지정 필드만 빼므로
 // 나머지 필드의 값과 JSON 자료형(true·문자열 등)은 그대로다. SQLite는 SQL 안에서 빼서 큰 문자열이 JS 힙에 오르지 않는다.
-// JSONL은 해석한 뒤 같은 규칙을 적용한다(두 저장소의 읽기 결과를 같게 한다).
-const slimMatch=(rule,kind)=>typeof kind==='string'&&(rule.kind?kind===rule.kind:kind.startsWith(rule.prefix));
 function slimSql(rules){
  const args=[],kind="json_extract(payload,'$.kind')";
  const when=rules.map(rule=>{
@@ -205,12 +206,7 @@ function slimSql(rules){
  return {expr:`CASE ${when.join(' ')} ELSE payload END`,args};
 }
 export function readStream(home,stream,{optional=false,slim=null,after=null}={}){
- if(storageMode(home)==='jsonl'){
-  const f=path.join(home,stream);if(optional&&!fs.existsSync(f))return [];
-  const rows=fs.readFileSync(f,'utf8').split('\n').filter(x=>x.trim()).map(JSON.parse);
-  if(slim)for(const row of rows){const rule=slim.find(r=>slimMatch(r,row?.kind));if(rule)for(const key of rule.drop)delete row[key];}
-  return rows;
- }
+ if(storageMode(home)==='none'){if(!optional&&after===null)throw new Error(`기록 없음: ${stream}`);return [];}
  return transaction(home,db=>{
   const q=slim?slimSql(slim):null;
   // 한 줄씩 해석한다: .all()은 원문 문자열 배열과 해석한 객체를 한꺼번에 쥐어 정점이 약 30% 컸다(2026-10-22 실측 586→408MB).
@@ -223,7 +219,6 @@ export function readStream(home,stream,{optional=false,slim=null,after=null}={})
 }
 export function appendStream(home,stream,value){
  assertWritable(home);
- if(storageMode(home)==='jsonl'){fs.mkdirSync(path.dirname(path.join(home,stream)),{recursive:true,mode:0o700});fs.appendFileSync(path.join(home,stream),JSON.stringify(value)+'\n',{mode:0o600});return value;}
  return transaction(home,db=>{appendRow(db,stream,value);return value});
 }
 export function appendRow(db,stream,value,provenance={}){
@@ -233,6 +228,7 @@ export function appendRow(db,stream,value,provenance={}){
  db.prepare('INSERT INTO heads(stream,seq,payload) VALUES(?,?,?) ON CONFLICT(stream) DO UPDATE SET seq=excluded.seq,payload=excluded.payload').run(stream,seq,payload);
 }
 export function listStreams(home,prefix=''){
+ if(storageMode(home)==='none')return [];
  return transaction(home,db=>db.prepare('SELECT stream FROM heads ORDER BY stream').all().map(x=>x.stream).filter(x=>x.startsWith(prefix)),{readOnly:true});
 }
 export function writeStorageMarker(home,backend){
@@ -243,9 +239,11 @@ export function writeStorageMarker(home,backend){
 // 증분 읽기용 도우미. 모두 storageSnapshot 안에서 불러 같은 읽기 스냅샷을 쓴다(트랜잭션이 이미 열려 있으면 그 연결을 재사용한다).
 // 영역별 끝 행: {seq,payload}. 행이 없는 영역은 빠진다.
 export function streamHeads(home,streams){
+ if(storageMode(home)==='none')return new Map();
  return transaction(home,db=>new Map(db.prepare(`SELECT stream,seq,payload FROM heads WHERE stream IN (${streams.map(()=>'?').join(',')})`).all(...streams).map(r=>[r.stream,{seq:r.seq,payload:r.payload}])),{readOnly:true});
 }
 export function streamRowPayload(home,stream,seq){
+ if(storageMode(home)==='none')return null;
  return transaction(home,db=>db.prepare('SELECT payload FROM events WHERE stream=? AND seq=?').get(stream,seq)?.payload??null,{readOnly:true});
 }
 // 열린 DB 파일의 식별값. 파일이 통째로 바뀌면(복원·교체) inode나 생성 시각이 달라진다. 쓰기만으로는 바뀌지 않는다.

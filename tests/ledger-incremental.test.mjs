@@ -2,7 +2,6 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -231,13 +230,16 @@ test('어긋남 감지: 끝 순번 감소, 끝 행 지문 다름, 옛 원문 변
   }
 });
 
-test('JSONL 저장은 증분 상태 없이 지금처럼 전체를 읽는다', () => {
+test('저장소 없는 홈(none)은 증분 상태 없이 빈 결과를 돌려주고 파일을 만들지 않는다', () => {
   resetIncremental();
-  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-incremental-jsonl-')));
-  appendLedger({kind: 'start', role: 'a', session: 's'}, home);
-  assert.equal(digest(readLedgerIncremental(home, {log: quiet})), digest(readLedger(home)));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-incremental-none-'));
+  for (const domain of [null, 'tasks', 'mail', 'mailbox', 'system'])
+    assert.deepEqual(readLedgerIncremental(home, {domain, log: quiet}), []);
+  assert.deepEqual(readLedger(home), []);
+  assert.equal(storageVersion(home), null);
   assert.equal(incrementalInfo(home), null);
   assert.equal(incrementalCounts().full, 0);
+  assert.deepEqual(fs.readdirSync(home), []);
 });
 
 test('감시기 연결: 같은 고정 입력으로 K주기 동안 낸 경보 판단 입력이 전체 읽기 때와 같다', () => {
@@ -290,11 +292,12 @@ test('한 번 읽기: state와 entries는 같은 current() 한 번에서 나와 
   assert.equal(incrementalCounts().full, 1);
 });
 
-test('한 번 읽기: JSONL 홈은 전체 읽기 한 번으로 state와 entries를 함께 만든다', () => {
+test('한 번 읽기: 저장소 없는 홈(none)은 DB를 열지 않고 빈 state와 entries를 함께 만든다', () => {
   resetIncremental();
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-view-jsonl-'));
-  appendLedger({kind: 'send', role: 'worker', by: 'lead', taskId: 'x', mailId: id('m')}, home);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-view-none-'));
   const view = readLedgerViewIncremental(home, {log: quiet});
+  assert.deepEqual(view.entries, []);
   assert.equal(digest(view.entries), digest(readLedger(home)));
   assert.equal(digest(view.entries), digest(projectLedger(view.state)));
+  assert.deepEqual(fs.readdirSync(home), []);
 });

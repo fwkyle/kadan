@@ -2,11 +2,11 @@ import "./helpers/isolated-home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
 import {WorkStore} from '../src/work-store.mjs';
+import {appendStream,readStream} from '../src/storage.mjs';
 import {DecisionStore,decisionCommand,CHAT_OPTIONS} from '../src/decisions.mjs';
 import {workCommand} from '../src/work-command.mjs';
 import {appendLedger,readLedger} from '../src/ledger.mjs';
@@ -17,7 +17,7 @@ process.env.KADAN_NOTIFY='off';
 const SUPER='a-슈퍼감독';
 const mkWork=(works,key)=>works.create({key,title:'채팅 시험',goal:'목표',scope:'범위',acceptance:'조건',owner:'a-감독',repoPath:os.tmpdir()});
 function fixture(){
-  const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-chat-')));
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-chat-'));
   const cards=new CardStore(home),works=new WorkStore(home),sent=[],user=[];
   cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});
   mkWork(works,'repo/w1');mkWork(works,'repo/w2');
@@ -27,7 +27,7 @@ function fixture(){
 }
 const chatInput={question:'합칠까요?',work:'repo/w1'};
 const cardInput={question:'카드 결정?',options:['예','아니오'],recommendation:'예',reason:'이유\n- 확인 경로 없음: 시험',work:'repo/w1'};
-const events=home=>fs.readFileSync(path.join(home,'decisions/events.jsonl'),'utf8').trim().split('\n').map(l=>JSON.parse(l));
+const events=home=>readStream(home,'decisions/events.jsonl');
 
 test('채팅 등록: 업무만 있으면 되고 기본 선택지·확인 경로가 자동으로 채워지며 알림은 0건이다',()=>{
   const f=fixture();
@@ -66,7 +66,7 @@ test('옛 이력이 섞여도 list()가 통과하고, chat이 아닌 card:null·
   const chat=f.store.request(null,{...chatInput,chat:true},SUPER);
   assert.deepEqual(f.store.list().map(d=>d.id).sort(),[old.id,chat.id].sort());
   const bad=extra=>{const g=fixture();g.store.request(null,{...chatInput,chat:true},SUPER);
-    fs.appendFileSync(path.join(g.home,'decisions/events.jsonl'),JSON.stringify({...events(g.home)[0],id:'x',revision:1,...extra})+'\n');
+    appendStream(g.home,'decisions/events.jsonl',{...events(g.home)[0],id:'x',revision:1,...extra});
     assert.throws(()=>g.store.list(),/결정 이력 손상/);};
   bad({chat:undefined});            // chat 없이 card:null
   bad({card:'repo/card-a'});        // chat인데 카드가 있음
@@ -116,7 +116,7 @@ test('업무 명령이 실패하면 닫지 않고, 닫기가 실패해도 업무
   assert.equal(f.store.get(d.id).status,'open','실패한 업무 명령은 닫지 않는다');
   workCommand(['update','repo/w1'],{revision:1,note:'진행',progress:'3/10'},f.ctx); // turn-owner 없는 update
   assert.equal(f.store.get(d.id).status,'open');
-  fs.appendFileSync(path.join(f.home,'decisions/events.jsonl'),'bad\n'); // 결정 저장소를 읽을 수 없게 만든다
+  appendStream(f.home,'decisions/events.jsonl','bad'); // 결정 저장소를 읽을 수 없게 만든다
   const lines=[],write=process.stderr.write;process.stderr.write=s=>{lines.push(String(s));return true;};
   let result;try{result=workCommand(['complete','repo/w1'],{revision:2,result:'끝: 근거',note:'완료'},{home:f.home,by:'사람'});}finally{process.stderr.write=write;}
   assert.equal(result.status,'done','닫기 실패가 업무 명령을 깨뜨리지 않는다');
@@ -166,11 +166,8 @@ test('대시보드 결정 화면: 채팅 꼬리표와 업무·경과 시간을 �
   assert.ok(html.includes(card.id));
 });
 
-test('저장소 점검·가져오기는 카드가 없는 채팅 결정을 "가리키는 카드 없음"으로 거절하지 않는다',async()=>{
-  const {inspectStorage,importStorage,verifyStorage}=await import('../src/storage-migration.mjs');
+test('저장소 점검은 카드가 없는 채팅 결정을 "가리키는 카드 없음"으로 거절하지 않는다',async()=>{
+  const {verifyStorage}=await import('../src/storage-migration.mjs');
   const f=fixture();f.store.request(null,{...chatInput,chat:true},SUPER);f.store.request('repo/card-a',cardInput,SUPER);
-  assert.doesNotThrow(()=>inspectStorage(f.home));
-  const target=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-chat-target-')),'new');
-  assert.doesNotThrow(()=>importStorage(f.home,target));
-  assert.doesNotThrow(()=>verifyStorage(target));
+  assert.doesNotThrow(()=>verifyStorage(f.home));
 });

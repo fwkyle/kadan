@@ -1,9 +1,8 @@
 // Why: 전달 사실과 작업 발령을 따로 보존하면서 기존 조회의 순서를 유지한다.
-import {acquireDirLock,waitDirUnlocked,LOCK_WAIT_MS} from './dir-lock.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
-import {appendStream,readStream,storageMode,storageSnapshot,storageTransaction,assertWritable} from './storage.mjs';
+import {appendStream,readStream,storageSnapshot,storageTransaction,assertWritable} from './storage.mjs';
 import {isMailTransfer} from './mail-routing.mjs';
 import {taskIdentity} from './task-identity.mjs';
 
@@ -20,7 +19,6 @@ export const slimWatchRequest = [{kind:'watch-ai-request',drop:['parents','route
 // 작업·우편 영역 조회는 시스템 영역의 감시 사건(watch-*)을 출력하지 않으므로 큰 본문(관계표·경로표·순회 시간표)도 뺀다.
 // 순번·연결 검증과 작업 주소 판정이 읽는 필드는 값과 자료형 그대로 남는다.
 const slimWatchForDomain = [{prefix:'watch-',drop:[...SLIM_DROPPABLE]}];
-const lockPath = home => path.join(home,'.ledger-lock');
 
 export function ledgerDomain(kind) {
   if (taskKinds.has(kind)) return 'tasks';
@@ -119,27 +117,15 @@ export function validateDomainStreams(streams,legacy = []) {
   return createDomainValidator(legacy).add(streams);
 }
 
-function legacyRows(home) {
-  if (storageMode(home) === 'sqlite') return readStream(home,'ledger.jsonl',{optional:true});
-  const file = path.join(home,'ledger.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file,'utf8').split('\n').filter(Boolean).map(line => {
-    try { return JSON.parse(line); } catch { return {t:null,broken:line}; }
-  });
-}
+// 'ledger.jsonl'은 파일이 아니라 SQLite 안의 옛 원장 사건 영역(스트림) 이름이다.
+const legacyRows = home => readStream(home,'ledger.jsonl',{optional:true});
 
-export function readLedgerState(home,{locked=false,domain=null}={}) {
+export function readLedgerState(home,{domain=null}={}) {
   return storageSnapshot(home,() => {
-    // 쓰는 중이면 끝나기를 기다렸다가 읽고, 읽는 사이 새 쓰기가 끼면 다시 읽는다. 예산을 넘기면 기존처럼 실패한다.
-    const guarded = !locked && storageMode(home) === 'jsonl', lock = lockPath(home), deadline = Date.now() + LOCK_WAIT_MS;
-    const busy = () => new Error(`도메인 원장 저장 중 또는 미완료 잠금: 상태 확인 필요 (${lock})`);
-    for (;;) {
-      if (guarded && !waitDirUnlocked(lock, {waitMs: Math.max(0, deadline - Date.now())})) throw busy();
-      const legacy = legacyRows(home);
-      const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true,slim:stream!==ledgerStreams.system?null:(domain&&domain!=='system'?slimWatchForDomain:slimWatchRequest)})]));
-      const ordered = validateDomainStreams(streams,legacy);
-      if (!guarded || !fs.existsSync(lock)) return {legacy,streams,ordered};
-    }
+    const legacy = legacyRows(home);
+    const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true,slim:stream!==ledgerStreams.system?null:(domain&&domain!=='system'?slimWatchForDomain:slimWatchRequest)})]));
+    const ordered = validateDomainStreams(streams,legacy);
+    return {legacy,streams,ordered};
   });
 }
 
@@ -256,11 +242,11 @@ export function appendDomainLedger(entry,home) {
   assertWritable(home);
   fs.mkdirSync(home,{recursive:true,mode:0o700});
   const write = db => {
-    // SQLite 일반 사건 추가는 heads 세 행만 읽는다. 전체 이력 검증은 read/verify에 둔다.
-    const state = db ? {legacy:[],ordered:[]} : readLedgerState(home,{locked:true});
-    const lastOrder = db ? Math.max(0,...db.prepare("SELECT stream,payload FROM heads WHERE stream IN (?,?,?)").all(...Object.values(ledgerStreams)).map(row => {
+    // 일반 사건 추가는 heads 세 행만 읽는다. 전체 이력 검증은 read/verify에 둔다.
+    const state = {legacy:[],ordered:[]};
+    const lastOrder = Math.max(0,...db.prepare("SELECT stream,payload FROM heads WHERE stream IN (?,?,?)").all(...Object.values(ledgerStreams)).map(row => {
       const value=JSON.parse(row.payload);validateDomainEvent(row.stream,value);return value._ledgerOrder;
-    })) : (state.ordered.at(-1)?._ledgerOrder || 0);
+    }));
     const value = JSON.parse(JSON.stringify({t:new Date().toISOString(),...entry}));
     if (own(value,'completionMailId') || value.systemGenerated === 'task-completion') throw new Error('완료 우편 연결은 done 저장이 생성합니다');
     if (own(value,'_ledgerOrder')) throw new Error('원장 저장 순번은 호출자가 지정할 수 없습니다');
@@ -268,11 +254,11 @@ export function appendDomainLedger(entry,home) {
     value._ledgerOrder = lastOrder+1;
     if (value.kind === 'send') {
       value.mailId ??= randomUUID();
-      if (db ? db.prepare("SELECT 1 FROM events WHERE stream IN ('ledger.jsonl','mail/events.jsonl') AND json_extract(payload,'$.kind')='send' AND json_extract(payload,'$.mailId')=? LIMIT 1").get(value.mailId) : [...state.legacy,...state.ordered].some(row => row?.kind === 'send' && row.mailId === value.mailId))
+      if (db.prepare("SELECT 1 FROM events WHERE stream IN ('ledger.jsonl','mail/events.jsonl') AND json_extract(payload,'$.kind')='send' AND json_extract(payload,'$.mailId')=? LIMIT 1").get(value.mailId))
         throw new Error('도메인 원장 중복 mailId');
       if (taskSend(value)) value.dispatchId = value.mailId;
     }
-    if (db && value.kind === 'done' && value.role && validTask(value)) {
+    if (value.kind === 'done' && value.role && validTask(value)) {
       // 같은 작업 주소 후보와 확정 인계만 읽는다. 후임 완료는 선임 발령도 함께 확인한다.
       const address=value.executionKey || value.taskId,shortId=value.taskId.split('/').at(-1);
       const rows=db.prepare(`SELECT stream,payload FROM events WHERE
@@ -294,12 +280,7 @@ export function appendDomainLedger(entry,home) {
     if (completion) { validateDomainEvent(ledgerStreams.mail,completion);appendStream(home,ledgerStreams.mail,completion); }
     return JSON.stringify(publicEvent(value));
   };
-  if (storageMode(home) === 'sqlite') return storageTransaction(home,write);
-  // JSONL은 파일 두 개의 원자적 쓰기를 지원하지 않는다. 잠금 + 연결 검증으로
-  // 중간 실패를 성공한 발령으로 읽지 않는다. 남이 쓰는 중이면 잠깐 기다리고(dir-lock), 중단한 잠금/원문은 자동 삭제하지 않는다.
-  const lock = lockPath(home);
-  if (!acquireDirLock(lock)) throw new Error(`도메인 원장 저장 중 또는 미완료 잠금: 상태 확인 필요 (${lock})`);
-  try { return write(); } finally { fs.renameSync(lock,path.join(home,`.released-ledger-${randomUUID()}`)); }
+  return storageTransaction(home,write);
 }
 
 function publicEvent(value) {

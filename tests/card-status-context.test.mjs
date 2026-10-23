@@ -1,21 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
+import {readStream} from '../src/storage.mjs';
 import {statusChanges,statusContext,renderStatusContext,renderStatusHistory} from '../src/card-status-context.mjs';
 import {buildCardCenter} from '../src/card-center.mjs';
 test('상태 이유는 일반 메모로 덮이지 않고 다음 전환에서 후속 담당을 초기화한다',()=>{
- const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-state-'))),store=new CardStore(home);
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-state-')),store=new CardStore(home);
  let c=store.create({repo:'test',id:'a',repoPath:home,body:'# test'});
  c=store.update(c.key,{status:'hold',resolutionOwner:'감독',nextAction:'자료 인계 후 종료'},{revision:c.revision,note:'방향 변경'});
- const before=fs.readFileSync(path.join(store.dir(c.key),'events.jsonl'),'utf8');
+ const before=readStream(home,`cards/${c.key}/events.jsonl`);
  c=store.update(c.key,{}, {revision:c.revision,note:'무관한 질문',noteKind:'question'});
  assert.equal(statusContext(c).reason,'방향 변경');
  assert.equal(statusContext(c).nextAction,'자료 인계 후 종료');
- assert.ok(fs.readFileSync(path.join(store.dir(c.key),'events.jsonl'),'utf8').startsWith(before));
+ assert.deepEqual(readStream(home,`cards/${c.key}/events.jsonl`).slice(0,before.length),before);
  assert.throws(()=>store.update(c.key,{status:'cancelled'},{revision:c.revision,note:' '}));
  c=store.update(c.key,{status:'cancelled'},{revision:c.revision,note:'새 카드로 인계 완료'});
  assert.equal(c.nextAction,null);assert.equal(c.resolutionOwner,null);

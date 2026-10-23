@@ -2,7 +2,6 @@ import "./helpers/isolated-home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {WorkStore} from '../src/work-store.mjs';
@@ -16,7 +15,7 @@ import {elapsed} from '../src/work-followup.mjs';
 
 function fixture(mode='sqlite',phase='review'){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-followup-'));
- if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}else markJsonl(home);
+ if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  const works=new WorkStore(home),cards=new CardStore(home),key='test/work';
  works.create({key,title:'종료 후속',goal:'다음 담당 확인',scope:'격리 시험',acceptance:'근거와 후속 분리',owner:'감독',repoPath:home});
  const change=(action,fields)=>works.change(key,action,fields,{revision:works.get(key).revision,by:'감독',note:'시험 판단'});
@@ -129,7 +128,7 @@ test('업무의 새 후속 판단을 표시하고 전체 완료는 별도 기록
 });
 
 test('근거 읽기 실패는 다음 행동 미지정으로 축소하지 않는다',()=>{
- const f=fixture('jsonl');fs.mkdirSync(path.join(f.home,'decisions'),{recursive:true});fs.appendFileSync(path.join(f.home,'decisions','events.jsonl'),'{broken\n',{flag:'a'});
+ const f=fixture();appendStream(f.home,'decisions/events.jsonl','{broken');
  assert.equal(f.detail().followup.state,'unknown');
 });
 
