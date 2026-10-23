@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { initSecretsDir } from './secrets.mjs';
 import { DASHBOARD_BUILD_COMMAND } from './dashboard-static.mjs';
+import { ensureStorage } from './storage.mjs';
 
 export const SECRETARY_ROLE = '비서';
 export const DASHBOARD_ROLE = '대시보드';
@@ -66,6 +67,7 @@ export function runInit({ home, repoRoot, flags = {}, floorName = 'tmux', spawn 
  report.runners = detectRunners(which ? { which } : {});
  if (flags.runner && !report.runners.includes(flags.runner)) throw new Error(`실행기 ${flags.runner}가 PATH에 없습니다`);
  fs.mkdirSync(home, { recursive: true });
+ ensureStorage(home);
  report.secrets = initSecretsDir(home);
  if (!flags['no-skills']) report.skills = linkSkills({ skillsDir: path.join(repoRoot, 'skills'), userHome });
  const example = path.join(repoRoot, 'skills', 'kadan-conductor', 'references', 'agent-runners.example.json');
@@ -105,6 +107,7 @@ function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0,
 // skip: 건너뛸 대상 역할 이름 집합(`kadan up --auto`가 멈춤 상태·상한에 걸린 대상을 뺀다). 사람이 친 up은 비워 둔다.
 export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = process.execPath,
  log = console.log, sessionName, restoreSecretary, startWatch, startBridge, skip = new Set(), dashboardBuild } = {}) {
+ ensureStorage(home);
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');

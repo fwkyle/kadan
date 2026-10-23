@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -191,7 +192,7 @@ test('4 storage export 결과에 secrets/가 없다(가짜 값 파일 포함) �
 });
 
 test('4 import와 activate 경로도 secrets/를 뺀다(링크로 된 secrets 포함)', () => {
-  const source = tmp('imp'); // JSONL 홈
+  const source = markJsonl(tmp('imp')); // JSONL 홈
   new CardStore(source).create({repo: 'r', id: 'a', repoPath: source, body: '# a'});
   const elsewhere = tmp('elsewhere');
   fs.writeFileSync(path.join(elsewhere, 'discord.env'), `DISCORD_USER_ID=${FAKE_USER}\nTOKEN=${FAKE_TOKEN}\n`);
