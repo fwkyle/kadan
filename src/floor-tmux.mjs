@@ -710,6 +710,8 @@ export const tmuxFloor = {
   readView: capturePaneView,
   stop,
   list,
+  // 사람 입력 보호를 바닥 밖에서 한 번 확인한다(계정 전환 재시작의 끄기 직전 재확인). 최근 입력이면 던진다.
+  assertHumanIdle: session => checkHumanIdle(session, tmuxOut),
   waitForChange,
   attach(session) {
     return `tmux -L ${currentSocket()} attach -t ${session}`;

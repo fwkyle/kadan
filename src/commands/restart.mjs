@@ -8,6 +8,7 @@ import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole } from "../restart.mjs";
+import { readStatusLine } from "../watch-status-line.mjs";
 import { processTree, openFilesOf } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import { pendingCardsFor, closeStartedWindow, openStartedWindow, requireWindowChoice } from "../cli-start-support.mjs";
@@ -21,7 +22,45 @@ function paneInfo(session) {
   return { panePid, location };
 }
 
+// 계정 전환 재시작이 끄기 바로 앞에서 부른다: 화면을 다시 읽어 idle이고, 사람이 최근 입력하지 않았을 때만 통과한다.
+// 하나라도 아니면 던져서 끄지 않는다. 일반 restart는 부르지 않는다.
+export function confirmIdleBeforeStop(session, base = floor) {
+  const screen = base.read(session);
+  if (typeof screen !== "string") throw new Error("판정 불가: 화면을 읽지 못함");
+  const kind = readStatusLine(screen).kind;
+  if (kind === "working") throw new Error("working: 응답 생성 중");
+  if (kind !== "idle") throw new Error("판정 불가: 입력 대기 화면이 아님");
+  if (typeof base.assertHumanIdle !== "function") throw new Error("판정 불가: 사람 입력 확인 불가");
+  try { base.assertHumanIdle(session); }
+  catch (error) { throw new Error(error?.code === "KADAN_HUMAN_ACTIVE" ? "입력 중: 사람이 최근 입력함" : `판정 불가: ${error?.message ?? error}`); }
+}
+
+// restartRole이 쓰는 실제 의존성. `kadan claude refresh --yes`도 같은 것을 쓴다(복제하지 않는다).
+export function restartDeps(home) {
+  const choice = requireWindowChoice();
+  return {
+    read: () => readLedger(home),
+    record: entry => appendLedger(entry, home),
+    pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
+    closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
+    openWindow: ({ session: name, role: who, panePid }) =>
+      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
+    beforeStop: session => confirmIdleBeforeStop(session),
+    paneInfo,
+    processTree,
+    openFiles: openFilesOf,
+    readJson: file => JSON.parse(fs.readFileSync(file, "utf8")),
+  };
+}
+
+// 계정 전환 재시작 표시는 `kadan claude refresh --yes --role`만 넘길 수 있다. 명령줄의 같은 이름 옵션은 버린다.
+export function cliRestartFlags(flags) {
+  const {accountRefresh, "account-refresh": dashed, accountSlot, "account-slot": dashedSlot, ...rest} = flags;
+  return rest;
+}
+
 export function cmdRestart(argv, flags) {
+  flags = cliRestartFlags(flags);
   const role = argv[0];
   if (!role) die("사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]");
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
@@ -50,19 +89,7 @@ export function cmdRestart(argv, flags) {
   if (flags["expect-pid"] !== undefined && !/^\d+$/.test(String(flags["expect-pid"]))) die("--expect-pid는 pane PID 숫자다");
   const home = ledgerHome();
   const session = sessionName(role);
-  const choice = requireWindowChoice();
-  const deps = {
-    read: () => readLedger(home),
-    record: entry => appendLedger(entry, home),
-    pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
-    closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
-    openWindow: ({ session: name, role: who, panePid }) =>
-      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
-    paneInfo,
-    processTree,
-    openFiles: openFilesOf,
-    readJson: file => JSON.parse(fs.readFileSync(file, "utf8")),
-  };
+  const deps = restartDeps(home);
   let result;
   try { result = restartRole({ home, role, session, flags, floor, settings: readSettings(home), deps }); }
   catch (error) { die(error.message); }

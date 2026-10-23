@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {buildPreview, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail, scrubText} from '../src/claude-refresh.mjs';
+import {STATE_CHANGED_CODE} from '../src/restart.mjs';
+import {confirmIdleBeforeStop} from '../src/commands/restart.mjs';
+import {buildPreview, previewRow, runRefresh, formatRefreshResult, screenEnd, parseRoleList, HUMAN_ONLY_MESSAGE, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail, scrubText} from '../src/claude-refresh.mjs';
 
 const SCREENS = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-screens.json', import.meta.url), 'utf8'));
 const CLAUDE = 'claude --model claude-haiku-5-5 --effort low';
@@ -45,7 +47,7 @@ test('양성 세부: 초기화 줄 원문·카드 수·둥근 아포스트로피
   assert.equal(rowOf(rows, 'a').cards, 2);
   assert.equal(rowOf(rows, 'b').resetLine, '⏺ You’ve hit your session limit · resets 3pm'); // 줄 원문 그대로(앞 공백만 뺌)
   assert.equal(rowOf(rows, 'c').resetLine, null);
-  assert.match(formatPreview(rows, null), /다시 켜기 대상\(카드 2건 — 카드 유지 재시작은 kyle 결정 대기\)/);
+  assert.match(formatPreview(rows, null), /다시 켜기 대상\(카드 2건 — 다시 켜도 카드는 그대로 남는다\)/);
 });
 
 test('음성: 목록·본문·번호·표·인용·울타리·백틱·떨어진 도구 출력·사이에 낀 응답/입력 → 대상 아님(검수 F1 재현 포함)', () => {
@@ -163,12 +165,13 @@ function runCli(args, env = {}) {
 }
 
 test('--yes·--switch·--select login·잘못된 인자는 exit 2이고 원장을 만들지 않는다', () => {
-  for (const args of [['refresh', '--yes'], ['refresh', '--switch', '2'], ['refresh', '--select', 'login'], ['refresh', '--select', 'x'], []]) {
+  for (const args of [['refresh', '--yes'], ['refresh', '--yes', '--switch'], ['refresh', '--switch', '2'], ['refresh', '--yes', '--role', 'a', '--interval', '-1'], ['refresh', '--yes', '--role'], ['refresh', '--reason', 'x'], ['refresh', '--select', 'login'], ['refresh', '--select', 'x'], []]) {
     const r = runCli(args);
     assert.equal(r.status, 2, args.join(' ') + r.stderr);
   }
   assert.match(runCli(['refresh', '--select', 'login']).stderr, /로그인 만료 문구 미확보/);
-  assert.match(runCli(['refresh', '--yes']).stderr, /PR-2\/PR-3/);
+  assert.match(runCli(['refresh', '--yes']).stderr, /사람이 --role/);
+  assert.match(runCli(['refresh', '--yes', '--switch']).stderr, /PR-3/);
 });
 
 test('실제 CLI(격리 홈·빈 바닥): 미리보기 머리말, --json, --no-accounts, 이메일 없음', () => {
@@ -371,4 +374,161 @@ test('고정물 전체가 가림 함수를 지나도 바뀌지 않고 이메일 
     if (name.startsWith('_')) continue;
     assert.equal(scrubText(screen), screen, name); assert.ok(!screen.includes('@'), name);
   }
+});
+
+// ---- 2단계: 사람이 --role로 고른 세션만 다시 켜기 (가짜 바닥·가짜 restart·가짜 시계) ----
+function refreshRig(roles, {restartFail = {}} = {}) {
+  const w = world(roles);
+  const calls = [], sleeps = [];
+  let clock = 0;
+  const sleep = (ms) => { sleeps.push(ms); clock += ms; };
+  const restart = ({role, session, flags}) => {
+    calls.push({role, session, flags});
+    if (restartFail[role]) throw new Error(restartFail[role]);
+    return {panePid: '200', conversation: 'conv-' + role};
+  };
+  const run = (chosen, extra = {}) => runRefresh({roles: chosen, entriesOf: () => w.entries, floor: w.floor, pendingCards: (_, role) => extra.cards?.[role] ?? [],
+    restart, sleep, now: () => clock, self: 'me', ...extra.opts});
+  return {w, calls, sleeps, run};
+}
+const IDLE = SCREENS['idle-plain'];
+
+test('--yes --role: idle이면 restart를 accountRefresh로 부르고 카드 목록·이유·계정 번호를 넘긴다(forced 아님)', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}]);
+  const results = r.run(['a'], {cards: {a: ['c1', 'c2']}, opts: {reason: '한도', accountSlot: 2}});
+  assert.equal(r.calls.length, 1);
+  assert.deepEqual(r.calls[0].flags, {accountRefresh: true, reason: '한도', accountSlot: 2});
+  assert.equal(r.calls[0].flags.force, undefined);
+  assert.deepEqual([results[0].outcome, results[0].cards, results[0].panePid], ['restarted', ['c1', 'c2'], '200']);
+});
+
+test('--role 없이 고르지 않은 세션은 건드리지 않는다 — 한도로 보이는 세션이 있어도 고른 것만', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: SCREENS['pos-plain']}]);
+  r.run(['a']);
+  assert.deepEqual(r.calls.map(c => c.role), ['a']);
+});
+
+test('건너뜀: working·unknown·생존 불일치·codex·비서·자기 자신·살아 있지 않은 역할 → restart 0회', () => {
+  const r = refreshRig([
+    {role: 'work', screen: SCREENS['neg-working']}, {role: 'unk', screen: SCREENS.unknown}, {role: 'pid', screen: IDLE},
+    {role: 'cx', cmd: CODEX, screen: IDLE}, {role: '비서', profile: 'secretary', screen: IDLE}, {role: 'me', screen: IDLE},
+  ]);
+  r.w.entries.find(e => e.role === 'pid').panePid = '999';
+  const results = r.run(['work', 'unk', 'pid', 'cx', '비서', 'me', 'ghost']);
+  assert.equal(r.calls.length, 0);
+  assert.deepEqual(results.map(x => [x.role, x.outcome]), [['work', 'skipped'], ['unk', 'skipped'], ['pid', 'skipped'], ['cx', 'skipped'], ['비서', 'skipped'], ['me', 'skipped'], ['ghost', 'skipped']]);
+  assert.match(results[0].reason, /응답 생성 중/); assert.match(results[1].reason, /판정 불가/); assert.match(results[2].reason, /생존 확인 실패/);
+  assert.match(results[3].reason, /다른 실행기\(codex\)/); assert.match(results[4].reason, /비서/); assert.match(results[5].reason, /자기 자신/); assert.match(results[6].reason, /살아 있는 역할이 아님/);
+});
+
+test('직전 확인은 restart 직전에 화면을 다시 읽는다 — 앞 역할을 켜는 사이 working으로 바뀐 역할은 건너뛴다', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: IDLE}]);
+  const original = r.w.floor.read;
+  r.w.floor.read = (session) => (r.calls.length >= 1 && session === 'kadan-b' ? SCREENS['neg-working'] : original(session));
+  const results = r.run(['a', 'b']);
+  assert.deepEqual(r.calls.map(c => c.role), ['a']);
+  assert.deepEqual(results.map(x => x.outcome), ['restarted', 'skipped']);
+});
+
+test('두 번째 역할이 실패하면 세 번째는 하지 않고 표에 안 함으로 남는다 — 원인 모르는 실패는 재시도 없음', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: IDLE}, {role: 'c', screen: IDLE}], {restartFail: {b: '직접 복구: cd /x && claude --resume y'}});
+  const results = r.run(['a', 'b', 'c']);
+  assert.deepEqual(r.calls.map(c => c.role), ['a', 'b']);
+  assert.deepEqual(results.map(x => x.outcome), ['restarted', 'failed', 'not-run']);
+  assert.match(results[1].reason, /직접 복구/);
+  const text = formatRefreshResult(results);
+  assert.match(text, /실패/); assert.match(text, /안 함/); assert.match(text, /재시도하지 않는다/);
+});
+
+test('간격: 켠 역할 뒤 다음 확인 앞에서 interval초를 쉰다(첫 역할 앞·마지막 뒤는 없음, 연속 두 번 쉬지 않음)', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'skip', screen: SCREENS['neg-working']}, {role: 'b', screen: IDLE}, {role: 'c', screen: IDLE}]);
+  r.run(['a', 'skip', 'b', 'c'], {opts: {intervalSec: 5}});
+  assert.deepEqual(r.calls.map(c => c.role), ['a', 'b', 'c']);
+  assert.equal(r.sleeps.filter(ms => ms === 5000).length, 2, '켠 세 역할 사이 두 번');
+});
+
+test('F1 재현 1: 간격 대기 중 working으로 바뀐 역할은 쉰 뒤 확인에서 걸려 restart 0회이고 다음 역할은 계속된다', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: IDLE}, {role: 'c', screen: IDLE}]);
+  const original = r.w.floor.read;
+  let rested = false;
+  r.w.floor.read = (session) => (session === 'kadan-b' && rested ? SCREENS['neg-working'] : original(session));
+  const results = r.run(['a', 'b', 'c'], {opts: {sleep: (ms) => { rested = true; r.sleeps.push(ms); }}});
+  assert.deepEqual(r.calls.map(c => c.role), ['a', 'c']);
+  assert.deepEqual(results.map(x => x.outcome), ['restarted', 'skipped', 'restarted']);
+  assert.match(results[1].reason, /응답 생성 중/);
+});
+
+test('끄기 직전 재확인이 막은 역할(상태 바뀜 코드)은 실패가 아니라 건너뜀이고 멈추지 않는다', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: IDLE}]);
+  const calls = [];
+  const results = runRefresh({roles: ['a', 'b'], entriesOf: () => r.w.entries, floor: r.w.floor, pendingCards: () => [], self: 'me',
+    sleep: () => {}, now: () => 0, restart: ({role}) => {
+      calls.push(role);
+      if (role === 'a') { const e = new Error('건너뜀: 확인 뒤 상태 바뀜(입력 중: 사람이 최근 입력함)'); e.code = STATE_CHANGED_CODE; throw e; }
+      return {panePid: '300'};
+    }});
+  assert.deepEqual(calls, ['a', 'b']);
+  assert.deepEqual(results.map(x => x.outcome), ['skipped', 'restarted']);
+  assert.match(results[0].reason, /상태 바뀜/);
+});
+
+test('끄기 직전 확인(confirmIdleBeforeStop): idle+사람 없음만 통과, working·미확인·입력 중은 던진다', () => {
+  const mk = (screen, humanError) => ({read: () => screen, assertHumanIdle: () => { if (humanError) throw humanError; }});
+  assert.doesNotThrow(() => confirmIdleBeforeStop('s', mk(IDLE)));
+  assert.throws(() => confirmIdleBeforeStop('s', mk(SCREENS['neg-working'])), /working/);
+  assert.throws(() => confirmIdleBeforeStop('s', mk(SCREENS.unknown)), /판정 불가/);
+  assert.throws(() => confirmIdleBeforeStop('s', mk(null)), /판정 불가/);
+  const active = Object.assign(new Error('전송 보류'), {code: 'KADAN_HUMAN_ACTIVE'});
+  assert.throws(() => confirmIdleBeforeStop('s', mk(IDLE, active)), /입력 중/);
+  assert.throws(() => confirmIdleBeforeStop('s', mk(IDLE, new Error('x'))), /판정 불가/);
+  assert.throws(() => confirmIdleBeforeStop('s', {read: () => IDLE}), /판정 불가/);
+});
+
+test('다시 켠 뒤 화면: 안정되면 그때 읽고(ready), 30초 안에 안 되면 시간 초과 화면을 싣는다 — 이메일은 가린다', () => {
+  const loading = 'Resuming conversation…\nloading someone@example.test';
+  const rig = (screenAfter) => {
+    const r = refreshRig([{role: 'a', screen: IDLE}]);
+    let restarted = false;
+    r.w.floor.read = () => (restarted ? screenAfter() : IDLE);
+    let clock = 0;
+    const results = runRefresh({roles: ['a'], entriesOf: () => r.w.entries, floor: r.w.floor, pendingCards: () => [], self: 'me',
+      sleep: (ms) => { clock += ms; }, now: () => clock, restart: () => { restarted = true; return {panePid: '300'}; }});
+    return {result: results[0], clock};
+  };
+  const stuck = rig(() => loading);
+  assert.equal(stuck.result.screenState, 'timeout');
+  assert.ok(stuck.clock >= 30_000 && stuck.clock <= 32_000, '약 30초 읽는다');
+  assert.ok(stuck.result.screenEnd.length > 0 && stuck.result.screenEnd.every(line => !line.includes('@')));
+  let polls = 0;
+  const slow = rig(() => (++polls >= 3 ? IDLE : loading));
+  assert.equal(slow.result.screenState, 'ready');
+  assert.ok(slow.clock < 10_000, '안정되면 바로 멈춘다');
+  assert.ok(screenEnd(SCREENS['pos-plain']).length <= 4);
+});
+
+test('--role 값 검사: 세션 이름은 역할 이름 안내와 함께 거절, 중복·빈 이름도 거절', () => {
+  const roles = new Set(['Dongkyoung-결함수정-감독']), sessions = new Set(['kadan-Dongkyoung-결함수정-감독']);
+  assert.throws(() => parseRoleList('kadan-Dongkyoung-결함수정-감독', roles, sessions), /세션 이름이다.*Dongkyoung-결함수정-감독/);
+  assert.deepEqual(parseRoleList('Dongkyoung-결함수정-감독, a', roles, sessions), ['Dongkyoung-결함수정-감독', 'a']);
+  assert.throws(() => parseRoleList('a,a', roles, sessions), /두 번/);
+  assert.throws(() => parseRoleList('a,,b', roles, sessions), /빈 이름/);
+  assert.throws(() => parseRoleList(true, roles, sessions), /역할 이름이 필요/);
+});
+
+test('역할 세션 안(KADAN_ROLE)에서는 --yes를 거절하고 아무것도 하지 않는다', () => {
+  const r = runCli(['refresh', '--yes', '--role', 'a'], {KADAN_ROLE: 'some-role'});
+  assert.equal(r.status, 2); assert.ok(r.stderr.includes(HUMAN_ONLY_MESSAGE));
+  assert.ok(!fs.existsSync(path.join(r.home, 'ledger.jsonl')) || fs.readFileSync(path.join(r.home, 'ledger.jsonl'), 'utf8') === '');
+});
+
+test('--role만(--yes 없음): 고른 역할만 미리보기로 보이고 없는 역할은 건너뜀으로 보인다', () => {
+  const r = runCli(['refresh', '--role', 'ghost', '--no-accounts']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^미리보기 — 아무것도 바꾸지 않음/); assert.match(r.stdout, /ghost/); assert.match(r.stdout, /살아 있는 역할이 아님/);
+});
+
+test('--yes --role ghost(빈 바닥): 켠 것 없이 건너뜀 표로 끝난다(exit 0)', () => {
+  const r = runCli(['refresh', '--yes', '--role', 'ghost', '--no-accounts']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /계정 전환 재시작 결과/); assert.match(r.stdout, /다시 켬 0 · 건너뜀 1 · 실패 0 · 안 함 0/);
 });
