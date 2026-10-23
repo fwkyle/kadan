@@ -25,7 +25,7 @@
 | `KADAN_SECRET_<이름>_FILE` | 이름별 비밀 파일의 절대경로(`KADAN_SECRET_DISCORD_FILE`·`_DISCORD_BOT_FILE`·`_EXPLAIN_AI_FILE`). 있으면 기계 설정(`kadan secrets`)보다 먼저다 → [비밀값 위치 규칙](secrets.md) |
 | `KADAN_NOTIFY_ENV_FILE` | `KADAN_SECRET_DISCORD_FILE`의 옛 이름(별칭). 둘 다 있으면 `KADAN_SECRET_DISCORD_FILE`이 이긴다. 없으면 설정, 그다음 기본 위치(`$KADAN_HOME/secrets/discord.env`), 모두 없으면 시스템 알림만 쓴다 → [사용자 알림](user-notify.md) |
 | `KADAN_NOTIFY` | `off`면 디스코드·결정 알림·사용자 우편함 알림·맥 시스템 알림을 모두 보내지 않는다(시험용). 시험 러너는 가짜 osascript로 시도를 잡아 실패시킨다 |
-| `KADAN_TEST_FAKE_OSASCRIPT` | **시험 전용, 운영에서 설정하지 않는다.** `1`이면 `KADAN_NOTIFY=off`의 시스템 알림 거절을 풀어, `PATH` 앞의 가짜 osascript가 알림을 받는 시험을 허용한다 |
+| `KADAN_TEST_NOTIFY_SINK` | **시험 전용, 운영에서 설정하지 않는다.** `KADAN_NOTIFY=off`이고 절대경로가 있으면 맥 시스템 알림을 실행하지 않고 그 파일에 `{at,title,message}` 한 줄을 덧붙인다. 실제 알림을 켜지 않는다 |
 | `KADAN_TEST_SYSTEM_NOTIFY_TIMEOUT_MS` | **시험 전용, 운영에서 설정하지 않는다.** 맥 시스템 알림(osascript) 한 건을 기다리는 상한(밀리초)을 늘린다. 1000~120000 정수만 받고 그 밖의 값은 기본 3000 |
 | `KADAN_SOCKET` | tmux 구획 이름. 기본 `kadan` (`tmux -L kadan`). `KADAN_HOME`이 기본 홈(`~/.kadan`, 링크면 실제 경로)이 아닌데 이 값이 없거나 `kadan`이면 tmux 호출을 `KADAN_LIVE_FLOOR_DENIED`로 거절한다(시험이 운영 창으로 새는 것을 막는 장치). 기본이 아닌 홈에서는 격리 이름을 주고, `KADAN_WINDOW=rottie`·`orca`도 기본이 아닌 홈에서는 같은 이유로 거절한다 |
 | `KADAN_ALLOW_LIVE_FLOOR` | `1`이면 위 거절을 끈다. 기본이 아닌 홈으로 운영 구획·창을 일부러 다룰 때만 쓴다 |

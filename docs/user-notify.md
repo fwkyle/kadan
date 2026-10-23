@@ -102,7 +102,7 @@ kadan secrets unset discord
 - 읽는 순서: 환경변수 `KADAN_SECRET_DISCORD_FILE`(옛 이름 `KADAN_NOTIFY_ENV_FILE`도 같은 자리, 둘 다 있으면 앞의 것) > 기계 설정(옛 `notify-setting.json`도 그대로 읽힘) > 기본 위치 `$KADAN_HOME/secrets/discord.env`(파일이 있을 때) > 없음(= 시스템 알림만).
 - 비밀 파일은 **보낼 때마다** 읽고 `KEY=VALUE` 줄만 해석한다(따옴표 한 겹·`export`·`#` 주석). 셸로 실행하거나 `source`하지 않는다. 필요한 값은 `DISCORD_WEBHOOK_URL`(https, 시험용 로컬 주소만 http 허용), `DISCORD_USER_ID`(숫자).
 - 파일 없음·값 빠짐·형식 오류는 "설정 오류"로 시스템 알림으로 내려가고, 사유(주소·ID 없이)가 `notify-log.jsonl`에 남는다.
-- `KADAN_NOTIFY=off`면 디스코드·결정 알림·맥 시스템 알림을 모두 보내지 않는다(시험용; 진짜 `spawnSync`로 `osascript`를 부르려 하면 `systemNotify`가 "실제 시스템 알림 거절" 오류를 돌려준다). 시험 러너(`tests/run.mjs`)는 가짜 `osascript`를 `PATH` 맨 앞에 두어 시도를 잡고, 1번이라도 있으면 실행을 실패시킨다. 시험은 이 값을 켠 채 돈다(`tests/helpers/isolated-home.mjs`).
+- `KADAN_NOTIFY=off`면 디스코드·결정 알림·맥 시스템 알림을 모두 보내지 않는다(시험용; 진짜 `spawnSync`로 `osascript`를 부르려 하면 `systemNotify`가 "실제 시스템 알림 거절" 오류를 돌려준다). 시험 러너(`tests/run.mjs`)는 가짜 `osascript`를 `PATH` 맨 앞에 두어 시도를 잡고, 1번이라도 있으면 실행을 실패시킨다. 알림 문구를 확인해야 하는 시험은 `KADAN_TEST_NOTIFY_SINK=<절대경로>`를 준다 — 아무것도 실행하지 않고 그 파일에 `{at,title,message}` 한 줄씩 덧붙인다(시험 전용, 실제 알림을 켜지 않음, `KADAN_NOTIFY=off`가 아니면 무시). 시험은 이 값을 켠 채 돈다(`tests/helpers/isolated-home.mjs`).
 - 참고: `kadan notify set discord --env-file <경로>`(별칭)의 `--env-file`과 `kadan secrets set <이름> --file <경로>`의 `--file`은 카단 플래그이고 Node 옵션이 아니다. Node가 가로채는 것은 `node --env-file <파일> src/cli.mjs …`처럼 옵션을 스크립트 **앞**에 둘 때뿐이다(독립 검수가 실행 파일·`node src/cli.mjs` 두 방식 모두 확인). 설정에는 경로만 저장되고 파일의 변수는 환경에 올라가지 않는다. 비밀 파일이 심볼릭 링크여도 그대로 읽는다.
 
 ### 레포별 포럼 채널

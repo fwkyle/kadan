@@ -10,7 +10,7 @@ import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {readLedger} from '../src/ledger.mjs';
 import {pidAlive} from '../src/pid-alive.mjs';
 
-// 격리 tmux 소켓·격리 KADAN_HOME·가짜 디코 API. 맥 알림은 PATH 앞의 가짜 osascript가 받아 파일에 적는다(실제 알림 0).
+// 격리 tmux 소켓·격리 KADAN_HOME·가짜 디코 API. 맥 알림은 KADAN_TEST_NOTIFY_SINK 파일에 적는다(osascript는 실행되지 않는다).
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -18,16 +18,15 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
   if (spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux 없음');
   const fake = await startFakeDiscord();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-revive-up-'));
-  const home = path.join(root, 'home'), bin = path.join(root, 'bin'), notices = path.join(root, 'notices.log');
-  fs.mkdirSync(home); fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'osascript'), `#!/bin/sh\necho "$@" >> '${notices}'\n`, {mode: 0o755});
+  const home = path.join(root, 'home'), notices = path.join(root, 'notices.log');
+  fs.mkdirSync(home);
   const socket = `kadan-revive-${process.pid}`;
   const port = await new Promise(res => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
   const botFile = path.join(root, 'bot.env'), hookFile = path.join(root, 'hook.env');
   fs.writeFileSync(botFile, `DISCORD_BOT_TOKEN=${FAKE.token}\nDISCORD_APPLICATION_ID=${FAKE.appId}\n`, {mode: 0o600});
   fs.writeFileSync(hookFile, `DISCORD_USER_ID=${FAKE.userId}\nDISCORD_WEBHOOK_URL_SECRETARY=https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken}\n`, {mode: 0o600});
-  const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux',
-    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_TEST_FAKE_OSASCRIPT: '1', KADAN_TEST_SYSTEM_NOTIFY_TIMEOUT_MS: '30000', KADAN_DISCORD_API_BASE: fake.base,
+  const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux',
+    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_TEST_NOTIFY_SINK: notices, KADAN_TEST_SYSTEM_NOTIFY_TIMEOUT_MS: '30000', KADAN_DISCORD_API_BASE: fake.base,
     KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile};
   const kadan = (...args) => spawnSync(process.execPath, [CLI, ...args], {env, encoding: 'utf8', timeout: 60000});
   const up = (...extra) => kadan('up', '--cmd', 'sh', '--port', String(port), '--hidden', '--no-prompt', ...extra);
