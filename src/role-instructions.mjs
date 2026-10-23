@@ -275,7 +275,12 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
       const decision=slim?decideInstructionsMode({role,profile:selected.profile,templateDigest,entries,now,unavailable:context.unavailable,
         current:Boolean(current),repos:[work?.repo,card?.repo,cwdRepo(entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd)]}):{mode:'full',reason:'not-slim',generation:null};
       // 요약일 때도 템플릿은 위에서 읽었다(지문 비교용). 줄어드는 것은 메시지뿐이다.
-      const body=decision.mode==='summary'?[readFile(path.join(templateRoot,`${selected.profile}-summary.md`),{template:true}).text]:templates.map(t=>t.text);
+      // 한 통 안의 중복은 조립할 때만 푼다(틀 파일은 그대로, 지문도 그대로).
+      // 요약: 요약 틀 첫 줄이 '새 권한·발령·업무 완료를 만들지 않는다'를 이미 말하므로 맨 앞 줄의 같은 문장은 뺀다.
+      // 전문: 공통 틀과 역할 틀이 둘 다 '## Why'로 시작해 머리가 겹치므로 역할 틀 머리를 그 역할 이름으로 바꾼다.
+      if (decision.mode==='summary') lines[0]='최신 승인·카드·보류·인계 조건을 먼저 대조하라.';
+      const body=decision.mode==='summary'?[readFile(path.join(templateRoot,`${selected.profile}-summary.md`),{template:true}).text]
+        :templates.map((t,i)=>i===0?t.text:t.text.replace(/^## Why(?=\r?\n)/u,`## ${selected.profile}`));
       const instructions=['<!-- kadan:receiver-instructions -->',...body,...lines,
         '참고할 실제 파일 (이번 역할과 행동에 필요한 절만 적용):',...templates.map(t=>t.path),...referencePaths(selected.profile),'<!-- /kadan:receiver-instructions -->'].join('\n\n');
       if (finishedMarker.test(instructions)) throw failure('생성된 지침에 완성된 DONE 마커가 있습니다');

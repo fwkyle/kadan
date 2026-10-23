@@ -291,3 +291,11 @@ import {CardStore} from '../src/card-store.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 function awaitImport() { return {CardStore}; }
 function appendEntry(h, entry) { appendLedger(entry, h); }
+
+test('요약: 맨 앞 줄은 요약 틀이 이미 말한 "새 권한·발령·업무 완료" 문장을 반복하지 않는다', () => {
+  const s = setup(), r = compose(KADAN_ROLE_NAME, {home: s.h, entries: s.entries});
+  assert.equal(r.metadata.instructionsMode, 'summary');
+  assert.match(r.instructions, /^최신 승인·카드·보류·인계 조건을 먼저 대조하라\.$/m);
+  assert.equal(r.instructions.match(/새 권한·발령·업무 완료를 만들지 않/g).length, 1);
+  assert.match(r.instructions, /착수·성공·완료로 확대하지 않는다/);
+});

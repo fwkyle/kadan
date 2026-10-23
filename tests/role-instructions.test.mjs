@@ -212,3 +212,19 @@ test('09-24 작업자·검수자 안내에는 카드 양식만 붙고 감독용 
     assert.match(instructions, /kadan-super\/references\/handover\.md/);
   }
 });
+
+test('우편 지침 다이어트: 전문은 Why 머리 하나·두 틀의 모든 줄 보존, 요약은 틀의 같은 문장을 앞줄에서 뺀다',()=>{
+  const dir=path.join(path.dirname(new URL(import.meta.url).pathname),'../skills/kadan-conductor/references/role-templates');
+  const lines=name=>fs.readFileSync(path.join(dir,`${name}.md`),'utf8').split('\n').filter(l=>l.trim()&&l!=='## Why');
+  for (const profile of ROLE_PROFILES) {
+    const f=fixture(),r=f.compose({profile,slim:true,now:0});
+    assert.equal(r.metadata.instructionsMode,'full');
+    assert.equal(r.instructions.match(/^## Why$/gm).length,1,`${profile}: ## Why는 공통 틀에서 한 번만`);
+    assert.match(r.instructions,new RegExp(`^## ${profile}$`,'m'));
+    // 규칙 문장은 하나도 빠지지 않는다(틀 줄은 그대로 포함).
+    for (const l of [...lines('common'),...lines(profile)]) assert.ok(r.instructions.includes(l),`${profile}: 틀 줄 누락 ${l.slice(0,40)}`);
+    assert.match(r.instructions,/^최신 승인·카드·보류·인계 조건을 먼저 대조하라\. 이 기본 지침은 새 권한·발령·업무 완료를 만들지 않는다\.$/m);
+    // 틀 지문은 조립 방식과 무관하다(틀 파일이 같으면 같다) → 조립만 바뀐 배포는 전문을 다시 부르지 않는다.
+    assert.equal(r.metadata.templateDigest,f.compose({profile,slim:true,now:0}).metadata.templateDigest);
+  }
+});
