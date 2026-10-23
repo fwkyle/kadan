@@ -13,6 +13,7 @@ const env = {...process.env};
 env.KADAN_SOCKET = `kadan-test-${process.pid}-${Date.now().toString(36)}`;
 env.KADAN_WINDOW = 'none';
 env.KADAN_NOTIFY = 'off';
+delete env.KADAN_TEST_NOTIFY_SINK; // 시험 파일이 필요할 때 스스로 넣는다
 env.KADAN_ALT_CHECK_MS ??= '0'; // 시작 뒤 풀스크린 확인의 기다림을 끈다(전용 시험만 켠다)
 if (isDefaultHome(env.KADAN_HOME)) delete env.KADAN_HOME; // 운영 홈 값은 지운다
 for (const name of ['KADAN_ROLE', 'KADAN_ROTTIE_BIN', 'KADAN_LITE_SOCKET', 'KADAN_LITE_HOME',
@@ -40,6 +41,24 @@ fs.mkdirSync(tmuxTmp);
 env.TMPDIR = runTmp;
 env.TMUX_TMPDIR = tmuxTmp;
 
+// 마지막 그물: 가짜 osascript를 PATH 맨 앞에 둔다. 자식이 KADAN_NOTIFY를 지운 env로 돌아도 PATH는 물려받으므로
+// 실제 맥 알림 대신 여기에 걸려 기록이 남고, 시험이 끝난 뒤 기록이 있으면 실행을 실패시킨다(2026-10-23 시험이 kyle 맥에 알림을 띄웠다).
+const netDir = path.join(runTmp, 'osascript-net');
+const netLog = path.join(netDir, 'calls.log');
+fs.mkdirSync(netDir);
+fs.writeFileSync(netLog, '');
+fs.writeFileSync(path.join(netDir, 'osascript'),
+  `#!/bin/sh\nprintf '%s\\n' "$*" >> '${netLog}'\nexit 1\n`, {mode: 0o755});
+env.PATH = `${netDir}${path.delimiter}${env.PATH ?? ''}`;
+// 기록이 있으면 첫 몇 줄과 개수를 출력하고 true. 절대경로(/usr/bin/osascript)로 부르는 길은 이 그물에 걸리지 않는다(src에는 없음을 rg로 확인).
+function reportNetHits() {
+  const lines = fs.readFileSync(netLog, 'utf8').split('\n').filter(Boolean);
+  if (!lines.length) return false;
+  console.error(`osascript 호출이 ${lines.length}번 있었다 — 시험이 실제 알림을 시도함`);
+  for (const line of lines.slice(0, 5)) console.error(`  osascript ${line.slice(0, 200)}`);
+  return true;
+}
+
 const dir = new URL('./', import.meta.url);
 const files = process.argv.length > 2 ? process.argv.slice(2)
   : fs.readdirSync(dir).filter(f => f.endsWith('.test.mjs')).sort().map(f => `tests/${f}`);
@@ -55,6 +74,8 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
 }
 child.on('error', err => { console.error(err.message); cleanup(); process.exit(1); });
 child.on('exit', (status, signal) => {
+  const leaked = reportNetHits();
   cleanup();
-  process.exit(interrupted ?? status ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1));
+  const code = interrupted ?? status ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1);
+  process.exit(leaked && code === 0 ? 1 : code);
 });
