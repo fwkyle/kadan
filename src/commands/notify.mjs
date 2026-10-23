@@ -30,7 +30,7 @@ function showText(home, env) {
   }
   if (env[LEGACY_DISCORD_ENV_VAR] && env.KADAN_SECRET_DISCORD_FILE && env[LEGACY_DISCORD_ENV_VAR] !== env.KADAN_SECRET_DISCORD_FILE)
     lines.push(`참고: KADAN_SECRET_DISCORD_FILE과 ${LEGACY_DISCORD_ENV_VAR}가 모두 있다 — KADAN_SECRET_DISCORD_FILE이 이긴다`);
-  if (env.KADAN_NOTIFY === "off") lines.push("참고: KADAN_NOTIFY=off 라서 디스코드·결정 알림을 보내지 않는다");
+  if (env.KADAN_NOTIFY === "off") lines.push("참고: KADAN_NOTIFY=off 라서 디스코드·결정 알림·맥 시스템 알림을 보내지 않는다");
   return lines.join("\n");
 }
 
