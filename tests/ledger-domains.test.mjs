@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
@@ -12,7 +13,7 @@ import {importStorage,exportStorage,verifyStorage,inspectStorage,storageCommand}
 // 테스트 전용 폴더는 삭제하지 않는다. 실제 기본 KADAN_HOME을 사용하지 않는다.
 function home(mode='jsonl') {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-ledger-domains-'));
-  if(mode==='sqlite'){createDatabase(dir);writeStorageMarker(dir,'sqlite');}
+  if(mode==='sqlite'){createDatabase(dir);writeStorageMarker(dir,'sqlite');}else markJsonl(dir);
   return dir;
 }
 const send={kind:'send',role:'worker',by:'lead',taskId:'a',executionKey:'r/a',mailId:'request-1'};

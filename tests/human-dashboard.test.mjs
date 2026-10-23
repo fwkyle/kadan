@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
@@ -9,7 +10,7 @@ import {cardCommand} from '../src/card-command.mjs';
 import {renderDashboardHome} from '../src/dashboard-home.mjs';
 import {buildCardCenter} from '../src/card-center.mjs';
 import {statusContext} from '../src/card-status-context.mjs';
-const setup=()=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-human-'));const store=new CardStore(home);const card=store.create({repo:'r',id:'card-a',repoPath:home,body:'# 原본',title:'card-a — 긴 제목'});return{home,store,card};};
+const setup=()=>{const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-human-')));const store=new CardStore(home);const card=store.create({repo:'r',id:'card-a',repoPath:home,body:'# 原본',title:'card-a — 긴 제목'});return{home,store,card};};
 test('서기 기록은 원본/원장을 바꾸지 않고 새 보고 후 오래된 진행 서술을 숨긴다',()=>{
  const {home,store,card}=setup(),before=fs.readFileSync(path.join(store.dir(card.key),'events.jsonl'),'utf8');
  const brief=cardCommand(['brief',card.key],{revision:1,title:'제품 분류',workstream:'제품 찾기',stage:'검수',summary:'근거를 검토했습니다'},{home,by:'서기'});

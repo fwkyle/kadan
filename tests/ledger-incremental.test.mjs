@@ -2,6 +2,7 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -232,7 +233,7 @@ test('어긋남 감지: 끝 순번 감소, 끝 행 지문 다름, 옛 원문 변
 
 test('JSONL 저장은 증분 상태 없이 지금처럼 전체를 읽는다', () => {
   resetIncremental();
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-incremental-jsonl-'));
+  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-incremental-jsonl-')));
   appendLedger({kind: 'start', role: 'a', session: 's'}, home);
   assert.equal(digest(readLedgerIncremental(home, {log: quiet})), digest(readLedger(home)));
   assert.equal(incrementalInfo(home), null);
