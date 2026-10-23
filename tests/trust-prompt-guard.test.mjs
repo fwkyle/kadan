@@ -104,6 +104,40 @@ test('F4: 위쪽에 질문 인용과 옛 빈 입력창이 있고 그 아래에 �
   }
 });
 
+// 신뢰 창이 아닌 다른 모달(권한 확인·로그인 방식 선택). 둘 다 마지막 줄이 `Enter to confirm`이다.
+const PERMISSION = ['Do you want to run this command?', '❯ 1. Yes', '  2. No', 'Enter to confirm'].join('\n');
+const LOGIN = ['Select login method:', '❯ 1. Claude account', '  2. Anthropic Console account', 'Enter to confirm'].join('\n');
+
+test('F7: 위쪽 신뢰 창 인용 아래에 다른 모달이 뜨면 옛 인용의 질문·선택지를 빌리지 않는다 — 보낸다', () => {
+  const screens = {
+    '인용 + 입력창 + 권한 모달': `${PROMPT}\n${INPUT_BOX}\n${PERMISSION}`,
+    '인용 + 입력창 + 로그인 모달': `${PROMPT}\n${INPUT_BOX}\n${LOGIN}`,
+    '전체 인용(코드 블록) + 입력창 + 권한 모달': `${FULL_QUOTE}\n${INPUT_BOX}\n${PERMISSION}`,
+    '인용 + 다른 확인 안내가 끼어든 정상 글 + 마지막 안내': `${PROMPT}\n일반 설명 글\nEnter to confirm`,
+    '인용(안내 없음) + 입력창 + 정상 글 + 마지막 안내': `> ${QUESTION}\n> ${YES}\n${INPUT_BOX}\n일반 설명 글\nEnter to confirm`,
+    '다른 모달 단독': PERMISSION,
+    '로그인 모달 단독': LOGIN,
+  };
+  for (const [name, screen] of Object.entries(screens)) {
+    assert.equal(hasTrustPrompt(screen), false, name);
+    const calls = [];
+    assert.equal(sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}).keyDelivery, 'sent', name);
+    assert.equal(calls.filter(c => c[0] === 'send-keys').length, 1, name);
+  }
+});
+
+test('F7 반대편: 다른 모달 아래에 진짜 신뢰 창이 뜨면, 위에 무엇이 있든 막는다', () => {
+  for (const above of [PERMISSION, `${PERMISSION}\n${INPUT_BOX}`, `${PROMPT}\n${INPUT_BOX}\n${PERMISSION}`, LOGIN]) {
+    for (const modal of [INCIDENT, PROMPT, hardWrap(INCIDENT, 12)]) {
+      const screen = `${above}\n${modal}`;
+      assert.equal(hasTrustPrompt(screen), true);
+      const calls = [];
+      assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT');
+      assert.equal(keysSent(calls), 0);
+    }
+  }
+});
+
 test('오검출 반증(F1): 두 문구를 인용한 정상 화면 4종은 아래에 글이 이어져 신뢰 창이 아니고, 그대로 보낸다', () => {
   for (const [name, screen] of Object.entries(QUOTED)) {
     assert.equal(hasTrustPrompt(screen), false, name);
