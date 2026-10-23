@@ -37,6 +37,7 @@ export const GROUPS = [
     ["done", "확인한 완료를 원장에 적기"],
     ["restore", "끊어진 로티 탭 다시 붙이기"],
     ["restart", "역할 프로그램만 다시 띄우기"],
+    ["claude", "한도 걸린 Claude 세션 골라 보기 (미리보기만)"],
     ["stop", "역할 끝내기"],
     ["handover", "맡은 일을 후임에게 넘기기"],
     ["hierarchy", "끝난 역할의 관계 정리하기"],
