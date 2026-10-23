@@ -288,7 +288,8 @@ export function main(argv) {
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])||
-      command==='night'&&['on','off'].includes(args[0])
+      command==='night'&&['on','off'].includes(args[0])||
+      command==='claude'&&flags.yes===true
     )assertWritable(ledgerHome());
     const result=fn(args, flags);
     if(result?.catch)return result.catch(error=>{

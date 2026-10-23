@@ -381,7 +381,7 @@ test('inspectDispatchRunnerGuard: 시작 기록·모델을 모르면 이 검사�
 test('실제 CLI+격리 tmux: 살아 있는 옛 세션에 start를 다시 불러도 카드 발령은 거절된다',{skip:!hasTmux},()=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-cli-'));
  const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
- const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:15000});
+ const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:os.tmpdir(),encoding:'utf8',timeout:15000});
  const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,`${args}: ${r.stderr}`);return r;};
  const tmux=(...args)=>spawnSync('tmux',['-L',socket,...args],{env,encoding:'utf8'});
  const ledger=()=>readLedger(home);

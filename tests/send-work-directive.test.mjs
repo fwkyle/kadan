@@ -32,7 +32,7 @@ test('카드 없는 대화는 말투와 무관하고 구 강제 옵션은 호환
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-guard-'));
   createDatabase(home);writeStorageMarker(home,'sqlite');
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};
-  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:home,encoding:'utf8',timeout:10000});
+  const call=(...args)=>spawnSync(process.execPath,[cli,...args],{env,cwd:os.tmpdir(),encoding:'utf8',timeout:10000});
   const run=(...args)=>{const r=call(...args);assert.equal(r.status,0,r.stderr);return r.stdout;};
   const receiver=path.join(home,'receiver.mjs');
   fs.writeFileSync(receiver,"import fs from 'node:fs';import path from 'node:path';process.stdin.on('data',b=>fs.appendFileSync(path.join(process.env.KADAN_HOME,process.env.KADAN_ROLE+'.received'),b));\n");
