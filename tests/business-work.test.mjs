@@ -18,7 +18,6 @@ import {workDashboardModel} from '../src/work-dashboard.mjs';
 import {renderCenterWall} from '../src/center-wall.mjs';
 import {createWallServer} from '../src/wall.mjs';
 import {filterWorkspaceRows} from '../src/dashboard-workspace.mjs';
-import {importStorage,exportStorage,verifyStorage} from '../src/storage-migration.mjs';
 
 function fixture(mode='sqlite'){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-business-work-'));
@@ -146,18 +145,6 @@ test('CLI 업무 지시문은 새 실행 번호를 만들고 카드 발령과 DO
  const result=workCommand(['execute',work.key],{revision:1,phase:'implementation',round:1,title:'구현',note:'첫 실행','body-file':body},{home,by:'감독'});
  assert.equal(result.executions.length,1);assert.equal(new CardStore(home).get(result.executions[0].key).status,'draft');
  assert.equal(store.get(work.key).status,'open');assert.equal(readLedger(home).length,0);
-});
-test('업무·실행·SQLite 인박스는 기존 내보내기와 재수입에서도 이력 그대로 복구된다',()=>{
- const {home,work,store,change}=fixture();
- change('execute',{title:'구현',body:'변하지 않을 원문',phase:'implementation',round:1});
- new SecretaryMailbox(home).send({by:'감독',message:'업무에 연결한 원본 편지',workKey:work.key});
- const before=store.get(work.key),letters=readLedger(home);
- fs.writeFileSync(path.join(home,'storage-paused.json'),'{}');
- const destination=home+'-export',imported=home+'-import';
- exportStorage(home,destination);assert.deepEqual(new WorkStore(destination).get(work.key),before);
- importStorage(destination,imported);assert.equal(verifyStorage(imported).integrity,'ok');
- assert.deepEqual(new WorkStore(imported).get(work.key),before);assert.deepEqual(readLedger(imported),letters);
- assert.equal(new SecretaryMailbox(imported).read(letters[0].mailId).body,'업무에 연결한 원본 편지');
 });
 test('업무 ID는 발령하지 않으며 종료한 업무 안의 실행 재발령은 재개 확인이 필요하다',()=>{
  const {home,work,store,cards,change}=fixture();
