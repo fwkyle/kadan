@@ -72,6 +72,7 @@ import { sendWatchMessage, cmdWatch } from "./commands/watch.mjs";
 import { cmdStop } from "./commands/stop.mjs";
 import { cmdRestore } from "./commands/restore.mjs";
 import { cmdRestart } from "./commands/restart.mjs";
+import { cmdClaude } from "./commands/claude.mjs";
 import { cmdWindow } from "./commands/window.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
 import { cmdStopHook } from "./commands/stop-hook.mjs";
@@ -258,6 +259,7 @@ export const COMMANDS = {
   attach: cmdAttach,
   restore: cmdRestore,
   restart: cmdRestart,
+  claude: cmdClaude,
   window: cmdWindow,
   notify: cmdNotify,
   "stop-hook": cmdStopHook,
@@ -277,7 +279,7 @@ export function main(argv) {
     console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
     process.exit(1);
   }
-  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text']} : command === 'decision' ? {booleans: ['chat']} : undefined);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
