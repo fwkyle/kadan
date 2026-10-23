@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {restartRole} from '../src/restart.mjs';
+import {restartRole, STATE_CHANGED_CODE} from '../src/restart.mjs';
 import {startDigest, resumeSecretary, checkpointSecretary} from '../src/secretary-resume.mjs';
 import {ownerGenerations, isPreviousOwner} from '../src/owner-generation.mjs';
 import {createMailGenerations} from '../src/mail-generation.mjs';
@@ -36,8 +36,10 @@ function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {},
     processTree: () => [{pid: '100', ppid: '1', args: '-zsh'}, {pid: '150', ppid: '100', args: entries.findLast(e => e.kind === 'start').cmd}, ...extraTree],
     openFiles: pids => pids.flatMap(p => held[p] ?? []),
     readJson: f => JSON.parse(fs.readFileSync(f, 'utf8')), homeDir};
+  let beforeStop = () => {};
+  deps.beforeStop = session => { log.push(['beforeStop', session]); beforeStop(session); };
   const run = (flags = {}, settings = settingsWith()) => restartRole({home, role, session, flags, floor, settings, deps});
-  return {home, dir, entries, log, run, session, role, deps, floor, homeDir};
+  return {home, dir, entries, log, run, session, role, deps, floor, homeDir, setBeforeStop: fn => { beforeStop = fn; }};
 }
 const claudeFiles = {'.claude/sessions/150.json': {sessionId: ID, tmux: 'kadan-w:@3.%3'}, [`.claude/projects/-x/${ID}.jsonl`]: {}};
 
@@ -341,7 +343,7 @@ test('accountRefresh: 카드가 있어도 --force 없이 켜고, 원장에는 fo
   const f = fixture({files: claudeFiles, pending: ['card-1', 'card-2']});
   const receipt = f.run({accountRefresh: true, reason: '  한도 걸려서 계정 전환  ', accountSlot: 2});
   assert.equal(receipt.accountRefresh, true); assert.equal(receipt.forced, false);
-  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
   const [stop, start] = f.entries.slice(1);
   assert.equal(stop.restart, true); assert.equal(stop.reason, 'account-refresh'); assert.equal(stop.reasonNote, '한도 걸려서 계정 전환');
   assert.equal(stop.accountRefresh, true); assert.deepEqual(stop.pendingTasks, ['card-1', 'card-2']); assert.equal(stop.accountSlot, 2);
@@ -392,4 +394,45 @@ test('하류 대조: accountRefresh 재시작도 우편·책임·감시 발령 �
   const seen = collectRoles({list: () => live, read: () => 'screen'}, f.entries, null, null).observations.get('kadan-w');
   assert.deepEqual([...seen.completionDispatches.keys()], ['c1'], '감시 발령(카드는 그 역할에 그대로)');
   assert.equal(seen.alive, true, '세션 종료 의심 근거 없음');
+});
+
+// ---- 끄기 직전 재확인(검수 F1, PR #264) ----
+test('accountRefresh: 재확인은 대화 확인·명령 조립이 끝난 뒤 stop 바로 앞에서 한 번 부른다', () => {
+  const f = fixture({files: claudeFiles});
+  f.run({accountRefresh: true});
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
+});
+
+test('F1 재현 2: restartRole 안 대화 확인(processTree) 중 working으로 바뀌면 끄지 않고 상태 바뀜 건너뜀 코드를 낸다', () => {
+  const f = fixture({files: claudeFiles});
+  let screen = 'idle';
+  const tree = f.deps.processTree;
+  f.deps.processTree = pid => { screen = 'working'; return tree(pid); };
+  f.setBeforeStop(() => { if (screen !== 'idle') throw new Error('working: 응답 생성 중'); });
+  assert.throws(() => f.run({accountRefresh: true}), error => error.code === STATE_CHANGED_CODE && /건너뜀: 확인 뒤 상태 바뀜\(working/.test(error.message));
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop']);
+  assert.equal(f.entries.length, 1, '원장 무변화');
+});
+
+test('사람 입력 직후(checkHumanIdle 거절)·판정 불가면 끄지 않는다', () => {
+  for (const message of ['입력 중: 사람이 최근 입력함', '판정 불가: 화면을 읽지 못함']) {
+    const f = fixture({files: claudeFiles});
+    f.setBeforeStop(() => { throw new Error(message); });
+    assert.throws(() => f.run({accountRefresh: true}), error => error.code === STATE_CHANGED_CODE && error.message.includes(message));
+    assert.equal(f.log.some(([kind]) => kind === 'stop' || kind === 'create'), false);
+  }
+});
+
+test('accountRefresh인데 재확인 장치가 없으면 끄지 않는다', () => {
+  const f = fixture({files: claudeFiles});
+  delete f.deps.beforeStop;
+  assert.throws(() => f.run({accountRefresh: true}), /beforeStop/);
+  assert.equal(f.log.length, 0);
+});
+
+test('일반 restart는 재확인을 부르지 않는다 — 동작 무변경', () => {
+  const f = fixture({files: claudeFiles});
+  f.setBeforeStop(() => { throw new Error('부르면 안 됨'); });
+  f.run();
+  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
 });

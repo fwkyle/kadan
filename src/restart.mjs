@@ -17,6 +17,8 @@ import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry} from './cli-start-support.mjs';
 
 const SECRETARY = '비서';
+// 계정 전환 재시작에서 끄기 직전 재확인이 "상태가 바뀌었다"며 막았다는 표시. 실패가 아니라 건너뜀이다(claude-refresh가 읽는다).
+export const STATE_CHANGED_CODE = 'KADAN_REFRESH_STATE_CHANGED';
 const fail = message => { throw new Error(message); };
 
 // 이 세션의 현재 세대 시작 기록. 마지막 start 뒤에 stop이 있으면(restart가 남긴 stop 제외) 이미 끝난 역할이다.
@@ -61,6 +63,16 @@ function stopForRestart({role, session, floor, entries, deps, forced, reason, re
   deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
     ...(refresh ? {accountRefresh: true, pendingTasks: refresh.pending, ...(refresh.reasonNote ? {reasonNote: refresh.reasonNote} : {}), ...(refresh.accountSlot != null ? {accountSlot: refresh.accountSlot} : {})} : {}), ...windowFields});
   return windowFields;
+}
+
+function confirmBeforeStop(session, deps) {
+  if (typeof deps.beforeStop !== 'function') fail('끄기 직전 재확인 장치(deps.beforeStop)가 없어 계정 전환 재시작을 하지 않는다');
+  try { deps.beforeStop(session); }
+  catch (error) {
+    const stale = new Error(`건너뜀: 확인 뒤 상태 바뀜(${error?.message ?? error})`);
+    stale.code = STATE_CHANGED_CODE;
+    throw stale;
+  }
 }
 
 export function restartRole({home, role, session, flags = {}, floor, settings, deps}) {
@@ -111,7 +123,11 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
 
-  // 3) 여기까지 거절 사유가 없다. 이제 끄고 같은 정체로 다시 띄운다.
+  // 3) 여기까지 거절 사유가 없다. 계정 전환 재시작이면 끄기 바로 앞에서 한 번 더 확인한다(화면 idle + 사람 입력 보호).
+  // 위 확인(대화 찾기 등)이 오래 걸려 그 사이 응답이 시작되거나 사람이 입력했을 수 있어서다(검수 F1).
+  // 남는 틈은 이 확인과 kill-session 사이 수 ms뿐이고 없앨 수 없다. 일반 restart는 이 확인을 하지 않는다.
+  if (accountRefresh) confirmBeforeStop(session, deps);
+  // 이제 끄고 같은 정체로 다시 띄운다.
   const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
   const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
   stopForRestart({role, session, floor, entries, deps, forced: force ? pending : null, reason, refresh});

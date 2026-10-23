@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {STATE_CHANGED_CODE} from '../src/restart.mjs';
+import {confirmIdleBeforeStop} from '../src/commands/restart.mjs';
 import {buildPreview, previewRow, runRefresh, formatRefreshResult, screenEnd, parseRoleList, HUMAN_ONLY_MESSAGE, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail, scrubText} from '../src/claude-refresh.mjs';
 
 const SCREENS = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-screens.json', import.meta.url), 'utf8'));
@@ -438,11 +440,48 @@ test('두 번째 역할이 실패하면 세 번째는 하지 않고 표에 안 �
   assert.match(text, /실패/); assert.match(text, /안 함/); assert.match(text, /재시도하지 않는다/);
 });
 
-test('간격: 켠 역할 사이에만 interval초를 쉬고(첫 역할 앞·마지막 뒤는 없음), 건너뛴 역할은 쉬지 않게 한다', () => {
+test('간격: 켠 역할 뒤 다음 확인 앞에서 interval초를 쉰다(첫 역할 앞·마지막 뒤는 없음, 연속 두 번 쉬지 않음)', () => {
   const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'skip', screen: SCREENS['neg-working']}, {role: 'b', screen: IDLE}, {role: 'c', screen: IDLE}]);
   r.run(['a', 'skip', 'b', 'c'], {opts: {intervalSec: 5}});
   assert.deepEqual(r.calls.map(c => c.role), ['a', 'b', 'c']);
   assert.equal(r.sleeps.filter(ms => ms === 5000).length, 2, '켠 세 역할 사이 두 번');
+});
+
+test('F1 재현 1: 간격 대기 중 working으로 바뀐 역할은 쉰 뒤 확인에서 걸려 restart 0회이고 다음 역할은 계속된다', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: IDLE}, {role: 'c', screen: IDLE}]);
+  const original = r.w.floor.read;
+  let rested = false;
+  r.w.floor.read = (session) => (session === 'kadan-b' && rested ? SCREENS['neg-working'] : original(session));
+  const results = r.run(['a', 'b', 'c'], {opts: {sleep: (ms) => { rested = true; r.sleeps.push(ms); }}});
+  assert.deepEqual(r.calls.map(c => c.role), ['a', 'c']);
+  assert.deepEqual(results.map(x => x.outcome), ['restarted', 'skipped', 'restarted']);
+  assert.match(results[1].reason, /응답 생성 중/);
+});
+
+test('끄기 직전 재확인이 막은 역할(상태 바뀜 코드)은 실패가 아니라 건너뜀이고 멈추지 않는다', () => {
+  const r = refreshRig([{role: 'a', screen: IDLE}, {role: 'b', screen: IDLE}]);
+  const calls = [];
+  const results = runRefresh({roles: ['a', 'b'], entriesOf: () => r.w.entries, floor: r.w.floor, pendingCards: () => [], self: 'me',
+    sleep: () => {}, now: () => 0, restart: ({role}) => {
+      calls.push(role);
+      if (role === 'a') { const e = new Error('건너뜀: 확인 뒤 상태 바뀜(입력 중: 사람이 최근 입력함)'); e.code = STATE_CHANGED_CODE; throw e; }
+      return {panePid: '300'};
+    }});
+  assert.deepEqual(calls, ['a', 'b']);
+  assert.deepEqual(results.map(x => x.outcome), ['skipped', 'restarted']);
+  assert.match(results[0].reason, /상태 바뀜/);
+});
+
+test('끄기 직전 확인(confirmIdleBeforeStop): idle+사람 없음만 통과, working·미확인·입력 중은 던진다', () => {
+  const mk = (screen, humanError) => ({read: () => screen, assertHumanIdle: () => { if (humanError) throw humanError; }});
+  assert.doesNotThrow(() => confirmIdleBeforeStop('s', mk(IDLE)));
+  assert.throws(() => confirmIdleBeforeStop('s', mk(SCREENS['neg-working'])), /working/);
+  assert.throws(() => confirmIdleBeforeStop('s', mk(SCREENS.unknown)), /판정 불가/);
+  assert.throws(() => confirmIdleBeforeStop('s', mk(null)), /판정 불가/);
+  const active = Object.assign(new Error('전송 보류'), {code: 'KADAN_HUMAN_ACTIVE'});
+  assert.throws(() => confirmIdleBeforeStop('s', mk(IDLE, active)), /입력 중/);
+  assert.throws(() => confirmIdleBeforeStop('s', mk(IDLE, new Error('x'))), /판정 불가/);
+  assert.throws(() => confirmIdleBeforeStop('s', {read: () => IDLE}), /판정 불가/);
 });
 
 test('다시 켠 뒤 화면: 안정되면 그때 읽고(ready), 30초 안에 안 되면 시간 초과 화면을 싣는다 — 이메일은 가린다', () => {

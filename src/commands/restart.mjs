@@ -8,6 +8,7 @@ import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole } from "../restart.mjs";
+import { readStatusLine } from "../watch-status-line.mjs";
 import { processTree, openFilesOf } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import { pendingCardsFor, closeStartedWindow, openStartedWindow, requireWindowChoice } from "../cli-start-support.mjs";
@@ -21,6 +22,19 @@ function paneInfo(session) {
   return { panePid, location };
 }
 
+// 계정 전환 재시작이 끄기 바로 앞에서 부른다: 화면을 다시 읽어 idle이고, 사람이 최근 입력하지 않았을 때만 통과한다.
+// 하나라도 아니면 던져서 끄지 않는다. 일반 restart는 부르지 않는다.
+export function confirmIdleBeforeStop(session, base = floor) {
+  const screen = base.read(session);
+  if (typeof screen !== "string") throw new Error("판정 불가: 화면을 읽지 못함");
+  const kind = readStatusLine(screen).kind;
+  if (kind === "working") throw new Error("working: 응답 생성 중");
+  if (kind !== "idle") throw new Error("판정 불가: 입력 대기 화면이 아님");
+  if (typeof base.assertHumanIdle !== "function") throw new Error("판정 불가: 사람 입력 확인 불가");
+  try { base.assertHumanIdle(session); }
+  catch (error) { throw new Error(error?.code === "KADAN_HUMAN_ACTIVE" ? "입력 중: 사람이 최근 입력함" : `판정 불가: ${error?.message ?? error}`); }
+}
+
 // restartRole이 쓰는 실제 의존성. `kadan claude refresh --yes`도 같은 것을 쓴다(복제하지 않는다).
 export function restartDeps(home) {
   const choice = requireWindowChoice();
@@ -31,6 +45,7 @@ export function restartDeps(home) {
     closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
     openWindow: ({ session: name, role: who, panePid }) =>
       process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
+    beforeStop: session => confirmIdleBeforeStop(session),
     paneInfo,
     processTree,
     openFiles: openFilesOf,

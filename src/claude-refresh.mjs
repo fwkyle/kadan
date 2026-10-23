@@ -8,6 +8,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { launchIdentityOf } from "./ai-identity.mjs";
 import { readStatusLine } from "./watch-status-line.mjs";
+import { STATE_CHANGED_CODE } from "./restart.mjs";
 import { scrubForAI } from "./explain-input.mjs";
 import { scrubScreen } from "./revive.mjs";
 
@@ -340,26 +341,29 @@ export function waitForScreen({ floor, session, sleep, now }) {
 // roles: 사람이 고른 역할 이름(순서 그대로). 첫 실패에서 멈추고 나머지는 "안 함"으로 표에 남긴다.
 export function runRefresh({ roles, entriesOf, floor, pendingCards, restart, reason = null, accountSlot = null, intervalSec = 8, self = process.env.KADAN_ROLE, sleep, now }) {
   const results = [];
-  let restarted = false, halted = false;
+  let needRest = false, halted = false;
   for (const role of roles) {
     if (halted) { results.push({ role, outcome: "not-run", reason: "앞선 역할 실패로 멈춤" }); continue; }
     const entries = entriesOf();
     const live = floor.list().filter((item) => item.alive !== false && String(item.session).startsWith("kadan-"));
     const session = live.map((item) => item.session).find((name) => currentStart(entries, name)?.role === role);
     if (!session) { results.push({ role, outcome: "skipped", reason: "살아 있는 역할이 아님" }); continue; }
+    // 순서는 "쉬기 → 확인 → 다시 켜기"다. 쉰 뒤에 확인해야 확인과 끄기 사이에 기다리는 시간이 끼지 않는다(검수 F1).
+    if (needRest) { sleep(intervalSec * 1000); needRest = false; }
     // 직전 확인: 바로 지금 읽은 화면이 idle이어야 한다. select "all"에서 target이면 곧 idle(빈 입력창, 진행 표시 없음)이다.
     const row = previewRow({ entries, floor, pendingCards, session, self, select: "all" });
     if (row.verdict !== "target") { results.push({ role, outcome: "skipped", reason: `${row.verdict === "excluded" ? "제외" : "건너뜀"}: ${row.reason}` }); continue; }
-    if (restarted) sleep(intervalSec * 1000);
     let receipt;
     try {
       receipt = restart({ role, session, flags: { accountRefresh: true, ...(reason ? { reason } : {}), ...(accountSlot != null ? { accountSlot } : {}) } });
     } catch (error) {
+      // 끄기 직전 재확인(restartRole의 beforeStop)이 막은 것은 실패가 아니다. 끄지 않았으니 다음 역할로 계속 간다.
+      if (error?.code === STATE_CHANGED_CODE) { results.push({ role, outcome: "skipped", reason: safeText(error.message, 300), cards: row.pending }); continue; }
       results.push({ role, outcome: "failed", reason: safeText(error?.message ?? error, 1000), cards: row.pending });
       halted = true;
       continue;
     }
-    restarted = true;
+    needRest = true;
     const waited = waitForScreen({ floor, session, sleep, now });
     results.push({ role, outcome: "restarted", cards: row.pending, panePid: receipt.panePid ?? null, conversation: receipt.conversation ?? null,
       screenState: waited.state, screenEnd: waited.screen == null ? [] : screenEnd(waited.screen) });
