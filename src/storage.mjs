@@ -29,7 +29,10 @@ const dbTrace=home=>{for(const name of DB_FILES){const f=path.join(home,name);if
 const dbError=(file,cause)=>new Error(`SQLite 파일은 있으나 저장소 선택 기록 없음: 자동 JSONL 우회 금지 (${file})${cause?`: ${cause.message}`:''}`,{cause});
 // application_id와 테이블 수를 한 문장으로 읽는다. 두 문장으로 나누면 그 사이에 다른 프로세스가 스키마를 커밋해
 // '표식 없음 + 테이블 있음'(=남의 DB)으로 잘못 보인다(동시 첫 쓰기 시험에서 실제로 재현됨).
-const dbMark=db=>db.prepare('SELECT (SELECT application_id FROM pragma_application_id) AS id, (SELECT count(*) FROM sqlite_master) AS n').get();
+const dbMark=db=>db.prepare('SELECT (SELECT application_id FROM pragma_application_id) AS id, (SELECT user_version FROM pragma_user_version) AS v, (SELECT count(*) FROM sqlite_master) AS n').get();
+// 카단 DB = 표식과 버전이 모두 맞다. 표식만 같고 버전이 다르면 남의 DB와 같게 다룬다(WAL 전환도 표시 파일 쓰기도 하지 않는다).
+const isKadan=m=>m.id===APP_ID&&m.v===1;
+const isEmpty=m=>m.id===0&&m.v===0&&m.n===0;
 // SQLite가 '데이터베이스 파일이 아님'(깨진 파일)이라고 한 오류만 찾는다. 잠김(BUSY) 같은 다른 오류는 그대로 올린다.
 const notDatabase=e=>e?.errcode===26||/not a database|malformed/i.test(String(e?.message));
 // 표시 파일이 없는 홈의 DB가 어떤 상태인지 읽기 전용으로 본다(파일을 쓰거나 옮기지 않는다).
@@ -40,9 +43,9 @@ function unmarkedDb(home){
  const DB=driver();let db;
  try{
   db=new DB(file,{readOnly:true,timeout:2000});
-  const {id,n}=dbMark(db);
-  if(id===APP_ID)return 'kadan';
-  return id===0&&n===0?'empty':'foreign';
+  const mark=dbMark(db);
+  if(isKadan(mark))return 'kadan';
+  return isEmpty(mark)?'empty':'foreign';
  }catch(e){if(notDatabase(e))return 'foreign';throw e}
  finally{db?.close()}
 }
@@ -103,13 +106,13 @@ function initDatabase(home){
   db=new DB(file);
   db.exec(`PRAGMA busy_timeout=${BUSY_MS()}; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;`);
   // 남의 DB는 WAL 전환(헤더 쓰기)조차 하지 않도록, 아무것도 쓰기 전에 읽기만으로 먼저 거른다.
-  const foreign=()=>{const {id,n}=dbMark(db);return id!==APP_ID&&(id!==0||n!==0)};
+  const foreign=()=>{const mark=dbMark(db);return !isKadan(mark)&&!isEmpty(mark)};
   if(foreign())throw dbError(file);
   enableWal(db);
   db.exec('BEGIN IMMEDIATE');
   // 잠금을 얻은 뒤 다시 판정한다(그 사이 다른 프로세스가 끝냈으면 이미 카단 표식이 있어 아무것도 하지 않는다).
   if(foreign())throw dbError(file);
-  if(dbMark(db).id!==APP_ID){
+  if(!isKadan(dbMark(db))){
    testKillPoint('schema');
    db.exec(schema);
   }

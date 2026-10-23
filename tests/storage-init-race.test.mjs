@@ -106,6 +106,19 @@ test('application_id가 다른 DB는 기존 오류이고 아무것도 옮기거�
   assert.deepEqual(fs.readdirSync(home).sort(), ['kadan.sqlite']);
 });
 
+test('application_id는 카단 값이지만 user_version이 다른 DB는 남의 DB와 같게 오류이고 WAL 전환도 표시 파일 쓰기도 없다', () => {
+  const home = root(), file = path.join(home, 'kadan.sqlite');
+  const other = new DatabaseSync(file); other.exec('PRAGMA application_id=1262767153; PRAGMA user_version=2; CREATE TABLE t(x)'); other.close();
+  const before = fs.readFileSync(file);
+  assert.throws(() => storageMode(home), /저장소 선택 기록 없음/);
+  assert.throws(() => ensureStorage(home), /저장소 선택 기록 없음/);
+  assert.ok(before.equals(fs.readFileSync(file)), '파일 바이트가 그대로여야 한다');
+  const check = new DatabaseSync(file, {readOnly: true});
+  try { assert.equal(check.prepare('PRAGMA journal_mode').get().journal_mode, 'delete'); } finally { check.close(); }
+  assert.ok(!fs.existsSync(path.join(home, 'storage.json')));
+  assert.deepEqual(fs.readdirSync(home).sort(), ['kadan.sqlite']);
+});
+
 test('표식은 없지만 테이블이 있는 DB도 건드리지 않는다', () => {
   const home = root(), file = path.join(home, 'kadan.sqlite');
   const other = new DatabaseSync(file); other.exec('CREATE TABLE events(x)'); other.close();
