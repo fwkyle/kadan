@@ -16,24 +16,26 @@ import {settingsWith} from './helpers/runner-table.mjs';
 const CLI = path.resolve(import.meta.dirname, '../src/cli.mjs');
 const noopSpawn = () => ({});
 
+const QUESTION = 'Is this a project you created or one you trust?', YES = 'Yes, I trust this folder';
+// 현재 Claude Code의 신뢰 창(선택 표시 ❯는 "No, exit"에 있다). 아래에 아무것도 없다.
 const PROMPT = [
   ' Accessing workspace:',
   '',
   ' /home/user/.kadan',
   '',
-  ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source',
+  ` Quick safety check: ${QUESTION} (Like your own code, a well-known open source`,
   ' project, or work from your team). If not, take a moment to review what\'s in this folder first.',
   '',
-  ' ❯ 1. Yes, I trust this folder',
-  '   2. No, exit',
+  ' Claude Code\'ll be able to read, edit, and execute files here.',
+  '',
+  ' Security guide',
+  '',
+  ' ❯ No, exit',
+  `   ${YES}`,
   '',
   ' Enter to confirm · Esc to cancel',
 ].join('\n');
-// 화면 기록에서 공백이 빠진 실제 꼴.
-const PROMPT_NO_SPACES = 'Quicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?\n❯1.Yes,Itrustthisfolder\n2.No,exit\nEntertoconfirm·Esctocancel';
-// 줄바꿈으로 낱말이 갈린 꼴(좁은 폭).
-const PROMPT_WRAPPED = 'Is this a project you cre\nated or one you trust?\n❯ 1. Yes, I tr\nust this folder\n2. No, exit\nEnter to con\nfirm · Esc to cancel';
-// 사고 원본(2026-10-23, rottie WL2 작업자)의 마지막 화면. 공백이 빠진 꼴이고 선택 표시 ❯는 "No, exit"에 있다.
+// 사고 원본(2026-10-23, rottie WL2 작업자)의 마지막 화면. 공백이 빠진 꼴이다.
 const INCIDENT = [
   'Accessingworkspace:', '', '/home/user/.kadan', '',
   'Quicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?(Likeyourowncode,awell-knownopensource',
@@ -43,7 +45,8 @@ const INCIDENT = [
 ].join('\n');
 // 정상 화면 바닥: 빈 입력창과 상태 줄.
 const INPUT_BOX = ['─'.repeat(40), '❯ ', '─'.repeat(40), '  ? for shortcuts'].join('\n');
-const QUESTION = 'Is this a project you created or one you trust?', YES = 'Yes, I trust this folder';
+// 문구와 선택지·확인 안내까지 전부 인용한 설명(코드 블록 안).
+const FULL_QUOTE = `이 창이 뜨면:\n\`\`\`text\n${QUESTION}\n❯ No, exit\n${YES}\nEnter to confirm · Esc to cancel\n\`\`\``;
 // 검수자의 오검출 반증 화면 4종: 두 문구를 인용만 했고 아래에 정상 입력창이 있다.
 const QUOTED = {
   '인용 문단': `사용자: "${QUESTION}"라는 창과 "${YES}"를 설명해 줘.\n${INPUT_BOX}`,
@@ -51,6 +54,8 @@ const QUOTED = {
   '인용문': `> ${QUESTION}\n> ${YES}\n${INPUT_BOX}`,
   '흩어진 줄': `${QUESTION}\n${Array.from({length: 8}, (_, i) => `중간 줄 ${i}`).join('\n')}\n${YES}\n${INPUT_BOX}`,
 };
+// 좁은 폭 재현: 모든 줄을 width글자마다 끊는다(공백이 있든 없든 글자 단위, 검수자의 hard-wrap과 같은 방식).
+const hardWrap = (text, width) => text.split('\n').flatMap(line => line === '' ? [''] : (line.match(new RegExp(`[\\s\\S]{1,${width}}`, 'gu')) ?? [''])).join('\n');
 
 function fakeRun(screen, calls) {
   return args => {
@@ -63,21 +68,43 @@ function fakeRun(screen, calls) {
 }
 const keysSent = calls => calls.filter(c => ['load-buffer', 'paste-buffer', 'send-keys'].includes(c[0])).length;
 
-test('hasTrustPrompt: 사고 원본·옛 꼴·공백 빠진 꼴·낱말이 갈린 꼴은 신뢰 창이다', () => {
-  for (const screen of [INCIDENT, PROMPT, PROMPT_NO_SPACES, PROMPT_WRAPPED]) assert.equal(hasTrustPrompt(screen), true);
+test('hasTrustPrompt: 사고 원본·현재 꼴·공백 빠진 꼴·낱말이 갈린 꼴은 신뢰 창이다', () => {
+  for (const screen of [INCIDENT, PROMPT, hardWrap(PROMPT, 30)]) assert.equal(hasTrustPrompt(screen), true);
   assert.equal(hasTrustPrompt(''), false);
   assert.equal(hasTrustPrompt(undefined), false);
 });
 
-test('hasTrustPrompt: 질문·선택지·Enter 안내 중 하나라도 없으면 신뢰 창이 아니다', () => {
-  assert.equal(hasTrustPrompt(`${QUESTION}\n${YES}`), false, '선택지·안내 없음');
-  assert.equal(hasTrustPrompt(`${QUESTION}\n❯ No, exit\n${YES}`), false, 'Enter 안내 없음');
-  assert.equal(hasTrustPrompt(`❯ No, exit\n${YES}\nEnter to confirm`), false, '질문 없음');
-  assert.equal(hasTrustPrompt(`${QUESTION}\n${YES}\nEnter to confirm`), false, 'No, exit 선택지 없음');
-  assert.equal(hasTrustPrompt('대화: "Yes, I trust this folder" 를 눌렀다'), false);
+test('놓침 반증(F2): 사고 원본 아래에 빈 줄이 24·40·50·60줄 남아도, 공백만 있는 끝 줄이 있어도 막는다', () => {
+  for (const height of [24, 40, 50, 60]) {
+    assert.equal(hasTrustPrompt(`${INCIDENT}${'\n'.repeat(height - INCIDENT.split('\n').length + 1)}`), true, `높이 ${height}`);
+  }
+  assert.equal(hasTrustPrompt(`${INCIDENT}\n${'   \n'.repeat(30)}`), true);
 });
 
-test('오검출 반증(검수 F1): 두 문구를 인용한 정상 화면 4종은 아래에 입력창이 있어 신뢰 창이 아니고, 그대로 보낸다', () => {
+test('F6: 좁은 폭(10·12·16·18·20·24·32글자)으로 줄이 감겨도 막는다 — 폭 10에서 사고 화면은 비지 않은 57줄', () => {
+  for (const width of [10, 12, 16, 18, 20, 24, 32]) {
+    const wrapped = hardWrap(INCIDENT, width);
+    assert.equal(hasTrustPrompt(wrapped), true, `폭 ${width}`);
+    const calls = [];
+    assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(wrapped, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT', `폭 ${width}`);
+    assert.equal(keysSent(calls), 0, `폭 ${width}: 키 0회`);
+  }
+  // 폭 10에서는 옛 25줄 상한을 훌쩍 넘고(검수의 실제 사고 화면은 57줄) 새 60줄 상한 안에 든다.
+  const rows = hardWrap(INCIDENT, 10).split('\n').filter(l => l.trim()).length;
+  assert.ok(rows > 25 && rows <= 60, `폭 10 비지 않은 줄 ${rows}`);
+});
+
+test('F4: 위쪽에 질문 인용과 옛 빈 입력창이 있고 그 아래에 진짜 창이 뜨면 막는다(첫 질문이 아니라 안내에 가장 가까운 묶음)', () => {
+  for (const above of [`> ${QUESTION}\n${INPUT_BOX}`, `${FULL_QUOTE}\n${INPUT_BOX}`, `${PROMPT}\n${INPUT_BOX}`]) {
+    const screen = `${above}\n${INCIDENT}`;
+    assert.equal(hasTrustPrompt(screen), true);
+    const calls = [];
+    assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT');
+    assert.equal(keysSent(calls), 0);
+  }
+});
+
+test('오검출 반증(F1): 두 문구를 인용한 정상 화면 4종은 아래에 글이 이어져 신뢰 창이 아니고, 그대로 보낸다', () => {
   for (const [name, screen] of Object.entries(QUOTED)) {
     assert.equal(hasTrustPrompt(screen), false, name);
     const calls = [];
@@ -86,9 +113,20 @@ test('오검출 반증(검수 F1): 두 문구를 인용한 정상 화면 4종은
   }
 });
 
-test('오검출 반증: 인용에 선택지·Enter 안내까지 다 있어도 아래에 정상 입력창이 있으면 보낸다', () => {
-  const screen = `예시:\n${QUESTION}\n❯ No, exit\n${YES}\nEnter to confirm · Esc to cancel\n${INPUT_BOX}`;
-  assert.equal(hasTrustPrompt(screen), false);
+test('F5: 문구·선택지·안내를 전부 인용한 세션은 작업 중·도구 실행 중·대기 어느 상태든 보낸다', () => {
+  const tails = {
+    '대기(빈 입력창)': INPUT_BOX,
+    '작업 중(✢ Grooving…)': `✢ Grooving… (32s · ↓ 1.7k tokens)\n${INPUT_BOX}`,
+    '도구 실행 중': `⎿  Running… (4s)\n${INPUT_BOX}`,
+  };
+  for (const [name, tail] of Object.entries(tails)) {
+    for (const quote of [FULL_QUOTE, PROMPT]) {
+      const screen = `${quote}\n${tail}`;
+      assert.equal(hasTrustPrompt(screen), false, name);
+      const calls = [];
+      assert.equal(sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}).keyDelivery, 'sent', name);
+    }
+  }
 });
 
 test('이미 고르고 지나가 아래에 정상 입력창이 생긴 화면은 보낸다', () => {
@@ -96,16 +134,23 @@ test('이미 고르고 지나가 아래에 정상 입력창이 생긴 화면은 
   assert.equal(hasTrustPrompt(`${PROMPT}\n${INPUT_BOX}`), false);
 });
 
-test('놓침 반증(검수 F2): 사고 원본 아래에 빈 줄이 24·40·50·60줄 남아도 모두 막고 키 0회', () => {
-  for (const height of [24, 40, 50, 60]) {
-    const screen = `${INCIDENT}${'\n'.repeat(height - INCIDENT.split('\n').length + 1)}`;
-    assert.equal(hasTrustPrompt(screen), true, `높이 ${height}`);
-    const calls = [];
-    assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT' && e.delivery === 'not-sent', `높이 ${height}`);
-    assert.equal(keysSent(calls), 0, `높이 ${height}: 키 0회`);
-  }
-  // 공백만 있는 끝 줄도 빈 줄로 본다.
-  assert.equal(hasTrustPrompt(`${INCIDENT}\n${'   \n'.repeat(30)}`), true);
+test('구성 요소가 빠지거나 순서가 바뀌거나 안내 뒤에 글이 있으면 신뢰 창이 아니다 — 보낸다', () => {
+  const cases = {
+    '질문 없음': ['❯ No, exit', YES, 'Enter to confirm · Esc to cancel'],
+    'Yes 없음': [QUESTION, '❯ No, exit', 'Enter to confirm · Esc to cancel'],
+    'No 없음': [QUESTION, YES, 'Enter to confirm · Esc to cancel'],
+    '확인 안내 없음': [QUESTION, '❯ No, exit', YES],
+    '확인 안내 뒤에 글 한 줄': [QUESTION, '❯ No, exit', YES, 'Enter to confirm · Esc to cancel', '다음 줄'],
+    '순서 바뀜(질문이 선택지 뒤)': ['❯ No, exit', YES, QUESTION, 'Enter to confirm · Esc to cancel'],
+    '순서 바뀜(안내가 선택지 앞)': [QUESTION, 'Enter to confirm · Esc to cancel', '❯ No, exit', YES],
+  };
+  for (const [name, lines] of Object.entries(cases)) assert.equal(hasTrustPrompt(lines.join('\n')), false, name);
+  assert.equal(hasTrustPrompt(`대화: "${YES}" 를 눌렀다`), false);
+});
+
+test('제어 시퀀스가 붙은 끝 줄이 맨 끝 줄을 가로채지 못한다', () => {
+  assert.equal(hasTrustPrompt(`${INCIDENT}\n\x1b(B\x0f\x1b[<u\x1b[>5u\x1b7\x1b8`), true);
+  assert.equal(hasTrustPrompt(`${INCIDENT}\n\x1bP>|tmux 3.6a\x1b\\\x1b[?1;2;4c`), true);
 });
 
 test('확인 창이 보이면 일반·카드·알림 전송 모두 키 0회 + KADAN_TRUST_PROMPT + not-sent', () => {
@@ -115,7 +160,7 @@ test('확인 창이 보이면 일반·카드·알림 전송 모두 키 0회 + KA
     '카드 발령(cardIdentity)': {cardIdentity: identity},
     '감시 알림(강제 차례)': {notificationGuard: {force: true, humanIdleMs: 30000}},
   };
-  for (const screen of [INCIDENT, PROMPT, PROMPT_NO_SPACES, PROMPT_WRAPPED]) {
+  for (const screen of [INCIDENT, PROMPT, hardWrap(PROMPT, 30)]) {
     for (const [name, options] of Object.entries(variants)) {
       const calls = [];
       assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn, ...options}), error => {
@@ -149,7 +194,7 @@ test('화면 읽기가 실패하면 지금까지처럼 보낸다(새 실패 원�
   assert.equal(calls.filter(c => c[0] === 'send-keys').length, 1);
 });
 
-test('비지 않은 마지막 25줄 밖에 남은 옛 확인 창은 막지 않는다', () => {
+test('확인 안내 아래에 작업 줄이 한참 이어진 옛 확인 창은 막지 않는다', () => {
   const screen = `${PROMPT}\n${Array.from({length: 40}, (_, i) => `작업 줄 ${i}`).join('\n')}`;
   const calls = [];
   assert.equal(hasTrustPrompt(screen), false);

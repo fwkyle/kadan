@@ -9,7 +9,6 @@ import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
 import { HUMAN_IDLE_MS, forcedIdleMsFor } from "./notification-guard.mjs";
-import { readStatusLine } from "./watch-status-line.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -541,30 +540,32 @@ export function notificationHold(session, guard, {run = tmuxOut} = {}) {
 }
 
 // Claude Code의 '폴더 신뢰' 확인 창은 기본 선택이 "No, exit"라, 우리가 보내는 Enter가 그걸 눌러 역할이 종료된다
-// (2026-10-23 rottie 작업자 3명 소실). 문구만 보면 대화에 두 문구를 인용한 정상 화면도 막히므로(검수 F1) 화면 구조로 판정한다:
-// (가) 질문 문구, (나) 그 뒤에 선택지 두 개와 `Enter to confirm` 안내, (다) 그 아래에 정상 입력창(빈 `❯`)이 없을 것 — 셋 다 참일 때만 막는다.
-// 인용 화면은 아래에 입력창이 있어 (다)에서 빠지고, 이미 고르고 지나간 화면도 아래에 입력창이 생겨 보낸다.
-// 높이가 큰 창은 화면 아래가 빈 줄로 남아(검수 F2, 높이 40·50·60) 고정 줄 수로 자르면 질문을 놓친다. 그래서 끝 빈 줄을 먼저 걷고,
-// 비지 않은 줄만 세어 마지막 25줄을 본다: 실제 창은 질문·안내·선택지·바닥 안내까지 17줄(사고 화면)이라 여유를 두되 옛 창이 한참 위에 남은 화면은 놓아준다.
-// 줄바꿈으로 낱말이 갈리거나 화면 기록에서 공백이 빠진 꼴이 있어 문구는 공백을 모두 걷고 비교한다.
+// (2026-10-23 rottie 작업자 3명 소실). 문구만 보면 대화에 문구를 인용한 정상 화면도 막히고(검수 F1), '정상 입력창이 있나'를
+// 찾는 방식은 감시기의 상태 판정과 얽혀 경계가 계속 나왔다(F4·F5). 그래서 기준점을 '화면의 맨 끝'으로 둔다.
+// 근거: 사고 원본 화면은 `Enter to confirm · Esc to cancel`이 마지막 줄이고 그 아래는 빈 줄뿐이다. 모달은 화면 맨 끝에 그려지고,
+// 문구를 인용한 정상 화면은 언제나 그 아래에 다른 글(입력창·상태 줄·진행 표시)이 이어진다.
+// 판정(모두 참일 때만): (1) 끝의 빈 줄(공백만 있는 줄 포함)을 걷는다. (2) 비지 않은 마지막 줄이 확인 안내 `Enter to confirm`이다
+// (좁은 폭에서 안내가 여러 줄로 감기면 그 뒤에 `· Esc to cancel`의 나머지만 남을 수 있다). (3) 확인 안내에서 위로 가장 가까운
+// `Yes, I trust this folder` → `No, exit` → 질문 `Is this a project you created or one you trust`가 이 순서(질문 → No → Yes → 안내)로 있다.
+// 첫 질문이 아니라 안내에 가장 가까운 묶음을 쓰므로, 위쪽의 인용이나 옛 창이 판정을 바꾸지 못한다.
+// 범위는 비지 않은 마지막 60줄이다: 폭 10글자로 줄이 감기면 사고 화면이 비지 않은 57줄이 된다(검수 F6). 높이가 큰 창의 아래 빈 줄은
+// 먼저 걷으므로 줄 수에 들지 않는다(F2). 줄바꿈으로 낱말이 갈리거나 화면 기록에서 공백이 빠진 꼴이 있어 문구는 공백을 모두 걷고 비교한다.
+// Yes가 위에 오는 옛 배치는 기본 선택이 Yes라 Enter가 해롭지 않아 막지 않는다.
 const TRUST_QUESTION = "Isthisaprojectyoucreatedoroneyoutrust";
-const TRUST_PROMPT_PARTS = ["No,exit", "Yes,Itrustthisfolder", "Entertoconfirm"];
-const TRUST_PROMPT_TAIL_LINES = 25;
-const squeeze = text => text.replace(/\s+/gu, "");
+const TRUST_NO = "No,exit", TRUST_YES = "Yes,Itrustthisfolder", TRUST_CONFIRM = "Entertoconfirm";
+const TRUST_CONFIRM_REST = /^[·•\-–—]*(?:esc(?:to(?:cancel)?)?)?$/iu;
+const TRUST_PROMPT_TAIL_LINES = 60;
+// capture-pane -p는 제어 시퀀스를 내지 않지만, 재생·기록 화면 끝에는 터미널 응답 찌꺼기(`ESC[?1;2;4c` 등)가 줄 하나로 붙어 있었다(사고 화면 파일).
+// 그런 줄이 '맨 끝 줄'을 가로채 모달을 놓치지 않게 제어 시퀀스를 먼저 걷는다.
+const CONTROL_SEQUENCES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|P[\s\S]*?\x1b\\|[()][A-Za-z0-9]|[78=>])|[\x00-\x08\x0b-\x1f\x7f]/gu;
 export function hasTrustPrompt(screen) {
   if (typeof screen !== "string") return false;
-  const lines = screen.split("\n").filter(line => line.trim() !== "").slice(-TRUST_PROMPT_TAIL_LINES);
-  // 질문 문구가 끝나는 줄을 찾는다(낱말이 줄 사이에서 갈려도 이어 붙여 찾는다).
-  let flat = "", questionEnd = -1;
-  for (let i = 0; i < lines.length && questionEnd < 0; i++) {
-    flat += squeeze(lines[i]);
-    if (flat.includes(TRUST_QUESTION)) questionEnd = i;
-  }
-  if (questionEnd < 0) return false;
-  const below = lines.slice(questionEnd + 1);
-  const rest = squeeze(below.join("\n"));
-  if (!TRUST_PROMPT_PARTS.every(part => rest.includes(part))) return false;
-  return readStatusLine(below.join("\n")).kind !== "idle";
+  const flat = screen.replace(CONTROL_SEQUENCES, "").split("\n").filter(line => line.trim() !== "").slice(-TRUST_PROMPT_TAIL_LINES).join("").replace(/\s+/gu, "");
+  const confirm = flat.lastIndexOf(TRUST_CONFIRM);
+  if (confirm < 0 || !TRUST_CONFIRM_REST.test(flat.slice(confirm + TRUST_CONFIRM.length))) return false;
+  const yes = flat.lastIndexOf(TRUST_YES, confirm);
+  const no = yes < 0 ? -1 : flat.lastIndexOf(TRUST_NO, yes);
+  return no >= 0 && flat.lastIndexOf(TRUST_QUESTION, no) >= 0;
 }
 
 // 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회). 읽기에 실패하면 지금까지처럼 보낸다 —
