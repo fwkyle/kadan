@@ -142,7 +142,7 @@ export class DecisionStore {
  });
  if(!newlyAnswered)return saved;
  // 나이트 모드 중 사람 명의 답은 kyle의 새 입력이다: 깨어 있음으로 보고 끈다. 답은 이미 저장됐으므로 실패해도 던지지 않는다.
- try{settleNight({home:this.home})}catch{}
+ try{settleNight({home:this.home,deps:{notify:(message,opts)=>this.userNotify(message,opts)}})}catch{}
  const d=saved;
   let delivery;try{
    const rows=readLedger(this.home);if(rows.some(e=>e?.broken))throw new Error('원장 손상');
