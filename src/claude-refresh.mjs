@@ -9,7 +9,8 @@ import { launchIdentityOf } from "./ai-identity.mjs";
 import { readStatusLine } from "./watch-status-line.mjs";
 
 const SECRETARY = "비서";
-const BOTTOM_LINES = 14;
+const MAX_TAIL_LINES = 4;
+const MAX_TAIL_WIDTH = 120;
 const MAX_RESET_LINE = 120;
 const ACCOUNT_TIMEOUT_MS = 10_000;
 
@@ -30,7 +31,6 @@ const TURN_DONE = /^✻\s+\S+\s+for\s+\d/u;
 const FENCE = /^\s*(```|~~~)/u;
 const RULE_OR_BLANK = /^[\s─━—-]*$/u;
 const FOOTER_LINES = 5;
-const TIME_LEFT = /\d+h \d+m left/gu;
 
 function trimmedLines(screen) {
   if (typeof screen !== "string") return [];
@@ -48,7 +48,8 @@ const limitHeadOf = (line) => {
 // 첫 한도 줄을 돌려준다. 확정할 수 없으면 null(놓치는 쪽으로 기울인다 — 오검출은 곧 엉뚱한 세션 재시작이다).
 // 버리는 경우: 사이에 다른 응답 문단(`⏺ `)·사용자 입력 줄·들여쓰지 않은 다른 글이 있음, 코드 울타리 안,
 // 줄 위쪽 덩어리(빈 줄 전까지)나 바로 위 줄이 `⏺ ` 응답/도구 호출이라 응답 안의 글일 수 있음.
-// 알려진 한계: 응답 문단 첫 줄이 `⏺ You've hit your …`로 시작하는 설명도 한도 줄과 구별하지 못한다.
+// 알려진 한계(고치지 않음, 판정은 추천이다): 여러 줄 응답·도구 출력 뒤 빈 줄을 건너 나온 문구(F5), 문구로 시작하는 응답 첫 줄
+// `⏺ You've hit your …`(F7)은 한도로 잘못 보일 수 있다. 실제 한도 화면 표본이 없어 규칙을 더 다듬지 않는다.
 export function claudeLimitLine(screen) {
   const lines = trimmedLines(screen);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));
@@ -73,11 +74,17 @@ function insideFence(lines, at) {
 }
 
 // 한도 줄과 같은 덩어리(빈 줄 전까지) 위쪽에 응답 머리표가 있거나, 빈 줄을 건너 바로 위 글줄이 응답 머리표 줄이면 응답 안의 글이다.
+// 위로 훑다가 사용자 입력 줄(`❯ 글`)이나 턴 끝 줄(`✻ … for …`)을 만나면 거기서 멈춘다 — 그 앞의 응답은 이전 턴이다(F6).
 function precededByResponse(lines, at) {
+  const boundary = (line) => USER_INPUT_LINE.test(line) || TURN_DONE.test(line);
   let above = at - 1;
-  while (above >= 0 && !RULE_OR_BLANK.test(lines[above])) { if (RESPONSE_LINE.test(lines[above])) return true; above--; }
+  while (above >= 0 && !RULE_OR_BLANK.test(lines[above])) {
+    if (boundary(lines[above])) return false;
+    if (RESPONSE_LINE.test(lines[above])) return true;
+    above--;
+  }
   while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
-  return above >= 0 && RESPONSE_LINE.test(lines[above]);
+  return above >= 0 && !boundary(lines[above]) && RESPONSE_LINE.test(lines[above]);
 }
 
 // 한도 줄이 있으면 {phrase, resetLine}. resetLine: 그 줄에 초기화 시각(`resets …`)이 있으면 원문 그대로(최대 120자).
@@ -87,21 +94,26 @@ export function claudeLimitMatch(screen) {
   return { phrase: found.head.slice(0, 40), resetLine: /\bresets?\b/iu.test(found.line) ? found.line.slice(0, MAX_RESET_LINE) : null };
 }
 
-// Claude 화면 아래 상태 줄의 `3h 43m left` 조각을 원문 그대로. 없으면 null. 해석하지 않는다.
-export function claudeTimeLeft(screen) {
-  const text = trimmedLines(screen).slice(-BOTTOM_LINES).join("\n");
-  const found = text.match(TIME_LEFT);
-  return found ? found.at(-1) : null;
+// 화면 아래 상태 줄의 `Nh Nm left`는 싣지 않는다: 상태 줄 스크립트가 ccusage 공용 캐시 파일 하나에서 그리는 값이라
+// 세션별·계정별 근거가 아니다(2026-10-23 감독 확인).
+
+// 마지막 빈 입력창 위의 비지 않은 줄 최대 4줄 원문(각 줄 120자, 이메일 꼴은 지움). 사람이 직접 읽고 확인하는 근거다.
+export function claudeScreenTail(screen) {
+  const lines = trimmedLines(screen);
+  const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));
+  const above = composer < 0 ? lines : lines.slice(0, composer);
+  return above.filter((line) => !RULE_OR_BLANK.test(line)).slice(-MAX_TAIL_LINES).map((line) => scrub(line.slice(0, MAX_TAIL_WIDTH)));
 }
 
-// 첫 번째로 맞는 판정 하나: (a) 응답 생성 중 → (b) 한도 문구 → (c) 입력 대기 → (d) 화면 판정 불가
+// 첫 번째로 맞는 추정 하나: (a) 응답 생성 중 → (b) 한도로 보임(규칙) → (c) 입력 대기 → (d) 판정 불가
+// 화면 글 규칙에 따른 추천이다. 실제 한도 화면 표본이 없어 오검출·누락이 있을 수 있고, 근거는 사람이 원문(screenTail)을 읽어 확인한다.
 export function judgeScreen(screen, select) {
   const status = readStatusLine(screen);
   if (status.kind === "working") return { verdict: "skip", reason: "응답 생성 중" };
   const limit = claudeLimitMatch(screen);
-  if (limit) return { verdict: "target", reason: "한도 문구 일치", resetLine: limit.resetLine };
+  if (limit) return { verdict: "target", reason: "한도로 보임(규칙)", resetLine: limit.resetLine };
   if (status.kind === "idle") return select === "all" ? { verdict: "target", reason: "입력 대기" } : { verdict: "none", reason: "해당 없음" };
-  return { verdict: "skip", reason: "화면 판정 불가" };
+  return { verdict: "skip", reason: "판정 불가" };
 }
 
 function currentStart(entries, session) {
@@ -121,7 +133,7 @@ export function buildPreview({ entries, floor, pendingCards, self = process.env.
   for (const item of live) {
     const session = item.session;
     const start = currentStart(entries, session);
-    const row = { role: start?.role ?? session.slice("kadan-".length), session, harness: null, model: null, cards: null, timeLeft: null, verdict: "excluded", reason: "", resetLine: null };
+    const row = { role: start?.role ?? session.slice("kadan-".length), session, harness: null, model: null, cards: null, verdict: "excluded", reason: "", resetLine: null, screenTail: [] };
     rows.push(row);
     if (!start) { row.reason = "기반"; continue; }
     if (start.role === SECRETARY || start.roleProfile === "secretary") { row.reason = "비서"; continue; }
@@ -140,11 +152,11 @@ export function buildPreview({ entries, floor, pendingCards, self = process.env.
     let screen;
     try { screen = floor.read(session); } catch (error) { row.verdict = "skip"; row.reason = `화면 읽기 실패(${errText(error)})`; continue; }
     if (typeof screen !== "string") { row.verdict = "skip"; row.reason = "화면 읽기 실패(빈 응답)"; continue; }
-    row.timeLeft = claudeTimeLeft(screen);
     const judged = judgeScreen(screen, select);
     row.verdict = judged.verdict;
     row.reason = judged.reason;
     row.resetLine = judged.resetLine ?? null;
+    if (judged.verdict === "target") row.screenTail = claudeScreenTail(screen);
   }
   return rows;
 }
@@ -220,19 +232,24 @@ const cell = (value) => (value == null || value === "" ? "-" : String(value));
 
 export function formatPreview(rows, accounts, { select = "limit" } = {}) {
   const out = ["미리보기 — 아무것도 바꾸지 않음", `선택 기준: ${select}`, ""];
-  const header = ["역할", "세션", "실행기·모델", "카드", "남은 시간", "판정", "조치"];
+  const header = ["역할", "세션", "실행기·모델", "카드", "추정", "조치"];
   const body = rows.map((r) => {
-    const verdict = { target: "대상", skip: "건너뜀", excluded: "제외", none: "" }[r.verdict];
-    const judged = r.verdict === "none" ? r.reason : `${verdict}: ${r.reason}`;
+    const screenJudged = ["응답 생성 중", "판정 불가", "입력 대기"].includes(r.reason) || r.verdict === "target" || r.verdict === "none";
+    const judged = screenJudged ? r.reason : `${{ skip: "건너뜀", excluded: "제외" }[r.verdict]}: ${r.reason}`;
     const action = r.verdict === "target"
       ? (r.cards > 0 ? `다시 켜기 대상(카드 ${r.cards}건 — 카드 유지 재시작은 kyle 결정 대기)` : "다시 켜기 대상")
       : "-";
-    return [r.role, r.session, r.harness ? `${r.harness} ${cell(r.model)}` : "-", cell(r.cards), cell(r.timeLeft), judged, action];
+    return [r.role, r.session, r.harness ? `${r.harness} ${cell(r.model)}` : "-", cell(r.cards), judged, action];
   });
   out.push(...table([header, ...body]));
-  for (const r of rows) if (r.resetLine) out.push(`  ${r.role} 초기화 줄: ${r.resetLine}`);
   const c = previewCounts(rows);
   out.push("", `대상 ${c.target} · 건너뜀 ${c.skip} · 제외 ${c.excluded} · 해당 없음 ${c.none}`);
+  out.push("추정은 화면 글 규칙에 따른 추천이다. 근거는 아래 원문을 직접 읽어 확인한다");
+  for (const r of rows) {
+    if (!r.screenTail?.length) continue;
+    out.push("", `[${r.role}] 입력창 위 화면 원문(최대 ${MAX_TAIL_LINES}줄)`, ...r.screenTail.map((line) => `  | ${line}`));
+    if (r.resetLine) out.push(`  초기화 줄: ${r.resetLine}`);
+  }
   if (accounts) {
     out.push("");
     if (!accounts.ok) out.push(`계정 한도: 읽지 못함(${scrub(accounts.reason)})`);

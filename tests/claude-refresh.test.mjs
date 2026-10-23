@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {buildPreview, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeTimeLeft} from '../src/claude-refresh.mjs';
+import {buildPreview, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail} from '../src/claude-refresh.mjs';
 
 const SCREENS = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-screens.json', import.meta.url), 'utf8'));
 const CLAUDE = 'claude --model claude-haiku-5-5 --effort low';
@@ -32,17 +32,16 @@ const preview = (w, extra = {}) => buildPreview({entries: w.entries, floor: w.fl
 const rowOf = (rows, role) => rows.find(r => r.role === role);
 
 test('양성: 줄 맨 앞이 한도 머리말이면 대상 — 기호 없음·⏺·⎿·둘째 줄 안내·reached·Usage limit', () => {
-  for (const name of Object.keys(SCREENS).filter(k => k.startsWith('pos-'))) {
+  for (const name of Object.keys(SCREENS).filter(k => k.startsWith('pos-'))) { // pos-after-* 는 F6 양성
     const rows = preview(world([{role: 'a', screen: SCREENS[name]}]));
-    assert.equal(rows[0].verdict, 'target', name); assert.equal(rows[0].reason, '한도 문구 일치', name);
+    assert.equal(rows[0].verdict, 'target', name); assert.equal(rows[0].reason, '한도로 보임(규칙)', name);
   }
 });
 
-test('양성 세부: 초기화 줄 원문·남은 시간 원문·카드 수·둥근 아포스트로피·조치 문구', () => {
+test('양성 세부: 초기화 줄 원문·카드 수·둥근 아포스트로피·조치 문구', () => {
   const w = world([{role: 'a', screen: SCREENS['pos-plain']}, {role: 'b', screen: SCREENS['pos-two-lines']}, {role: 'c', screen: SCREENS['pos-reached']}]);
   const rows = preview(w, {cards: {a: ['c1', 'c2']}});
   assert.equal(rowOf(rows, 'a').resetLine, "You've hit your session limit · resets 3pm (Asia/Seoul)");
-  assert.equal(rowOf(rows, 'a').timeLeft, '0h 20m left');
   assert.equal(rowOf(rows, 'a').cards, 2);
   assert.equal(rowOf(rows, 'b').resetLine, '⏺ You’ve hit your session limit · resets 3pm'); // 줄 원문 그대로(앞 공백만 뺌)
   assert.equal(rowOf(rows, 'c').resetLine, null);
@@ -91,8 +90,7 @@ test('--select all: 입력 대기 → 대상, limit이면 해당 없음, 알 수
   const w = world([{role: 'a', screen: SCREENS['idle-plain']}, {role: 'b', screen: SCREENS.unknown}]);
   assert.deepEqual([preview(w, {select: 'all'})[0].verdict, preview(w, {select: 'all'})[0].reason], ['target', '입력 대기']);
   assert.equal(preview(w)[0].verdict, 'none');
-  assert.deepEqual([preview(w)[1].verdict, preview(w)[1].reason], ['skip', '화면 판정 불가']);
-  assert.equal(claudeTimeLeft(SCREENS['idle-plain']), '3h 43m left');
+  assert.deepEqual([preview(w)[1].verdict, preview(w)[1].reason], ['skip', '판정 불가']);
 });
 
 test('원장·바닥 무변화: 미리보기는 사건을 쓰지 않고 키를 한 번도 보내지 않는다', () => {
@@ -105,7 +103,7 @@ test('원장·바닥 무변화: 미리보기는 사건을 쓰지 않고 키를 �
 test('--json 모양: 영어 camelCase 키 배열과 개수', () => {
   const rows = preview(world([{role: 'a', screen: SCREENS['pos-plain']}, {role: 'b', cmd: CODEX, screen: ''}]));
   const json = previewJson(rows, null);
-  assert.deepEqual(Object.keys(json.rows[0]).sort(), ['cards', 'harness', 'model', 'reason', 'resetLine', 'role', 'session', 'timeLeft', 'verdict']);
+  assert.deepEqual(Object.keys(json.rows[0]).sort(), ['cards', 'harness', 'model', 'reason', 'resetLine', 'role', 'screenTail', 'session', 'verdict']);
   assert.deepEqual(json.counts, {target: 1, skip: 0, excluded: 1, none: 0});
   assert.equal(json.preview, true);
 });
@@ -248,4 +246,44 @@ test('F2/F4 실제 CLI: 이메일이 든 가짜 claude-swap 출력은 stdout·st
     assert.equal(r.status, 2, args.join(' ')); assert.match(r.stderr, /알 수 없는 옵션: --(bogus|jsno)/);
   }
   assert.equal(runCli(['refresh', '--no-accounts', '--select', 'all']).status, 0);
+});
+
+// ---- 수정 3: F6 고침 · F5·F7 알려진 한계(현재 동작 고정, 고쳐졌다고 단언하지 않음) · 원문 · 추정 ----
+test('F6: 한도 줄 위쪽 탐색은 사용자 입력 줄·턴 끝 줄에서 멈춘다 → 이전 응답이 있어도 대상', () => {
+  for (const name of ['pos-after-old-response', 'pos-after-turn-done']) {
+    assert.equal(preview(world([{role: 'a', screen: SCREENS[name]}]))[0].verdict, 'target', name);
+  }
+});
+
+test('F6 고치다 넓히지 않기: 한도 줄과 입력창 사이 입력·응답, 붙은 도구 출력, 목록·표는 그대로 대상 아님', () => {
+  for (const name of Object.keys(SCREENS).filter(k => k.startsWith('neg-') && k !== 'neg-working')) {
+    assert.equal(preview(world([{role: 'a', screen: SCREENS[name]}]))[0].verdict, 'none', name);
+  }
+});
+
+test('알려진 한계 F5·F7 (현재 동작 고정): 여러 줄 응답 뒤 문구·응답 첫 줄 문구는 한도로 보일 수 있다', () => {
+  for (const name of ['known-f5-multiline-response', 'known-f7-response-first-line']) {
+    assert.equal(preview(world([{role: 'a', screen: SCREENS[name]}]))[0].verdict, 'target', name);
+  }
+});
+
+test('원문: 대상과 입력 대기(all)에만 입력창 위 비지 않은 줄 최대 4줄(120자·이메일 꼴 삭제), 생성 중·제외·해당 없음은 비움', () => {
+  const long = 'x'.repeat(200);
+  const screen = `a1\n${long}\nmail me@example.test now\nb4\n${SCREENS['pos-plain']}`;
+  const tail = claudeScreenTail(screen);
+  assert.equal(tail.length, 4); assert.ok(tail.every(line => line.length <= 120));
+  assert.ok(!tail.join('\n').includes('@'));
+  assert.ok(!tail.some(line => /^─+$/.test(line)));
+  const w = world([{role: 'a', screen: SCREENS['pos-plain']}, {role: 'b', screen: SCREENS['neg-working']}, {role: 'c', cmd: CODEX, screen: SCREENS['pos-plain']},
+    {role: 'd', screen: SCREENS['idle-plain']}]);
+  const rows = preview(w);
+  assert.ok(rowOf(rows, 'a').screenTail.length > 0 && rowOf(rows, 'a').screenTail.length <= 4);
+  assert.match(rowOf(rows, 'a').screenTail.join('\n'), /You've hit your session limit/);
+  for (const role of ['b', 'c', 'd']) assert.deepEqual(rowOf(rows, role).screenTail, [], role);
+  assert.ok(preview(w, {select: 'all'}).find(r => r.role === 'd').screenTail.length > 0);
+  const text = formatPreview(rows, null);
+  assert.match(text, /추정은 화면 글 규칙에 따른 추천이다\. 근거는 아래 원문을 직접 읽어 확인한다/);
+  assert.match(text, /\[a\] 입력창 위 화면 원문/); assert.ok(!text.includes('[b] 입력창'));
+  assert.match(text, /\s추정\s/); assert.ok(!text.includes('남은 시간'));
+  assert.ok(!JSON.stringify(previewJson(rows, null)).includes('timeLeft'));
 });
