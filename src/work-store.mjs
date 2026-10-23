@@ -41,12 +41,19 @@ export class WorkStore {
    appendStream(this.home,stream,record);return this.get(key);
   });
  }
- change(key,action,fields,{revision,by='사람',note,guard}={}){
+ change(key,action,fields,opts={}){return this.locked(()=>this.#change(this.get(key),action,fields,opts));}
+ // 우편 차례 반환 전용: 잠금 안에서 읽은 최신 업무로 decide가 {turnOwner,by,note}를 정하면 그 revision을 명시해 turnOwner만 쓴다.
+ // 던지면 쓰지 않는다. revision 검사를 건너뛰는 길이 아니라, 잠금 안에서 읽은 값으로 검사하는 꼴이다(JSONL에서 공개 change를 잠금 안에 다시 부르면 이중 잠금).
+ changeTurnOwner(key,decide){
   return this.locked(()=>{
-   const current=this.get(key),{history,...old}=current;
-   if(!(guard&&revision==null)&&Number(revision)!==current.revision)throw new Error('업무가 변경됨: 새로 읽고 다시 저장');
-   // guard는 잠금 안에서 최신 업무로 다시 판정한다(던지면 쓰지 않음). {note}를 돌려주면 변경 이유로 쓴다. 우편 차례 반환이 쓴다.
-   if(guard){const decided=guard(current);if(decided?.note)note=decided.note;}
+   const current=this.get(key),{turnOwner,by,note}=decide(current);
+   return this.#change(current,'update',{turnOwner},{revision:current.revision,by,note});
+  });
+ }
+ #change(current,action,fields,{revision,by='사람',note}={}){
+  {
+   const {history,...old}=current,key=current.key;
+   if(Number(revision)!==current.revision)throw new Error('업무가 변경됨: 새로 읽고 다시 저장');
    note=required(note,'변경 이유');
    const next={...old,executions:old.executions.map(x=>({...x})),mailRefs:[...old.mailRefs],revision:old.revision+1,at:new Date().toISOString(),by,note,action};
    if(['done','cancelled'].includes(old.status)&&action!=='reopen')throw new Error('종료한 업무입니다. 이유를 남기고 다시 열어주세요');
@@ -96,6 +103,6 @@ export class WorkStore {
     }
    }else throw new Error('알 수 없는 업무 변경');
    appendStream(this.home,keyStream(key),next);return this.get(key);
-  });
+  }
  }
 }

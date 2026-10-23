@@ -18,8 +18,9 @@ const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
 const OWNER = 'p-감독', WORKER = 'p-작업자', SUPER = 'p-슈퍼감독', UPPER = 'p-상위', HEIR = 'p-후임';
 
-function fixture(roles = []) {
+function fixture(roles = [], {jsonl = false} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-turn-return-'));
+  if (!jsonl) { createDatabase(home); fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'})); }
   const socket = path.basename(home);
   const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_NOTIFY: 'off'};
   const call = (role, ...args) => spawnSync(process.execPath, [cli, ...args], {env: {...env, KADAN_ROLE: role}, cwd: home, encoding: 'utf8', input: '', timeout: 15000});
@@ -145,21 +146,17 @@ test('인계 뒤에는 effective owner로 판정한다', opts, () => {
   assert.equal(heir.status, 0, heir.stderr); assert.equal(f.turn('h1'), HEIR);
 });
 
-test('업무 쓰기 실패(잠금 보유, 검수 F1 재현): 꼬리 없는 보통 우편, stderr 한 줄과 수동 명령, 차례 그대로', opts, () => {
-  const f = fixture([OWNER, WORKER]);
+test('JSONL 저장소: 정상 결과 우편도 쓰지 않고 꼬리 없이 보낸다. stderr 한 줄과 수동 명령 (수정 2, 검수 F2 JSONL)', opts, () => {
+  const f = fixture([OWNER, WORKER], {jsonl: true});
   try {
     f.mkWork('x1'); f.setTurn('x1', WORKER);
     const revision = f.works.get('repo/x1').revision;
-    fs.mkdirSync(path.join(f.home, 'works', '.lock'));
     const r = f.call(WORKER, 'mail', OWNER, '--work', 'repo/x1', '결과');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /우편ID/); assert.doesNotMatch(r.stdout, /turnReturn/);
-    assert.equal(r.stderr.trim().split('\n').filter(l => /차례 반환 실패/.test(l)).length, 1);
+    assert.equal(r.stderr.trim().split('\n').filter(l => /JSONL 저장소에서는 자동 차례 반환을 하지 않습니다/.test(l)).length, 1);
     assert.match(r.stderr, /kadan work update 'repo\/x1' --revision <현재 revision> --turn-owner 'p-감독'/);
-    assert.equal(f.turn('x1'), WORKER);
-    fs.rmSync(path.join(f.home, 'works', '.lock'), {recursive: true});
-    assert.equal(f.works.get('repo/x1').revision, revision);
-    assert.equal(readLedger(f.home).filter(e => e.kind === 'send').length, 1, '우편은 기록됐다');
+    assert.equal(f.turn('x1'), WORKER); assert.equal(f.works.get('repo/x1').revision, revision);
     const screen = f.received(OWNER, '결과');
     assert.match(screen, /결과/); assert.doesNotMatch(screen, /차례를 .* 돌렸습니다/, '거짓 꼬리가 없다');
   } finally { f.stop(); }
@@ -206,45 +203,106 @@ function unitHome(sqlite) {
   const base = {sender: WORKER, by: WORKER, recipient: OWNER, workKey: 'repo/u1'};
   return {home, works, base, plan: planTurnReturn(home, base)};
 }
+const handover = home => appendLedger({kind: 'handover', phase: 'transferred', from: OWNER, to: HEIR, taskIds: [], handoverId: 'h-1', t: new Date().toISOString()}, home);
 
-for (const sqlite of [false, true]) {
-  const kind = sqlite ? 'SQLite' : 'JSONL';
-  test(`${kind} 전송 중 인계 확정(검수 F2 재현): 판정 뒤 쓰기 전에 transferred가 생기면 쓰지 않고 경고, 꼬리용 claim 없음`, () => {
-    const {home, works, plan} = unitHome(sqlite);
-    assert.ok(plan);
-    appendLedger({kind: 'handover', phase: 'transferred', from: OWNER, to: HEIR, taskIds: [], handoverId: 'h-1', t: new Date().toISOString()}, home);
-    const warnings = [], revision = works.get('repo/u1').revision;
-    assert.equal(claimTurnReturn(home, plan, {warn: l => warnings.push(l)}), null);
-    assert.equal(warnings.length, 1); assert.match(warnings[0], /차례 반환 건너뜀/); assert.match(warnings[0], /kadan work show 'repo\/u1'/);
-    assert.equal(works.get('repo/u1').turnOwner, WORKER); assert.equal(works.get('repo/u1').revision, revision);
-  });
+test('JSONL 단위(검수 jsonl-snapshot-race): claim은 읽지도 쓰지도 않고 경고 한 줄과 수동 명령만 낸다', () => {
+  const {home, works, plan} = unitHome(false);
+  assert.ok(plan);
+  const warnings = [], revision = works.get('repo/u1').revision;
+  const store = {changeTurnOwner() { assert.fail('JSONL은 쓰지 않는다'); }};
+  assert.equal(claimTurnReturn(home, plan, {store, readEntries: () => assert.fail('원장도 읽지 않는다'), warn: l => warnings.push(l)}), null);
+  assert.equal(warnings.length, 1); assert.match(warnings[0], /^JSONL 저장소에서는 자동 차례 반환을 하지 않습니다/);
+  assert.match(warnings[0], /필요하면: kadan work update 'repo\/u1' --revision <현재 revision> --turn-owner 'p-감독'/);
+  assert.equal(works.get('repo/u1').turnOwner, WORKER); assert.equal(works.get('repo/u1').revision, revision);
+});
 
-  test(`${kind} 전송 전 다른 변경(revision만 바뀜)이 있어도 최신 상태로 다시 판정해 쓴다. 꼬리용 revision은 실제 새 값이다`, () => {
-    const {home, works, plan} = unitHome(sqlite);
-    works.change('repo/u1', 'update', {progress: '다른 변경'}, {revision: 2, by: '시험', note: '끼어들기'});
-    const claim = claimTurnReturn(home, plan, {warn: () => assert.fail('경고 없음')});
-    assert.equal(claim.revision, 4); assert.equal(works.get('repo/u1').revision, 4);
-    assert.equal(claim.undo, undoCommand('repo/u1', 4, WORKER));
-    assert.equal(works.get('repo/u1').turnOwner, OWNER);
-  });
+test('SQLite 전송 중 인계 확정(검수 F2 재현): 판정 뒤 쓰기 전에 transferred가 생기면 쓰지 않고 경고, 꼬리용 claim 없음', () => {
+  const {home, works, plan} = unitHome(true);
+  assert.ok(plan);
+  handover(home);
+  const warnings = [], revision = works.get('repo/u1').revision;
+  assert.equal(claimTurnReturn(home, plan, {warn: l => warnings.push(l)}), null);
+  assert.equal(warnings.length, 1); assert.match(warnings[0], /차례 반환 건너뜀/); assert.match(warnings[0], /kadan work show 'repo\/u1'/);
+  assert.equal(works.get('repo/u1').turnOwner, WORKER); assert.equal(works.get('repo/u1').revision, revision);
+});
 
-  test(`${kind} 차례가 제3자로 바뀌었으면 쓰지 않고, 쓰기 성공 뒤 되돌리기는 차례가 그대로일 때만 한다`, () => {
-    const {home, works, plan} = unitHome(sqlite);
+test('SQLite claim 창 안에 별도 프로세스가 transferred를 넣으려 하면 쓰기 트랜잭션이 끝날 때까지 못 넣는다(낡은 쓰기 없음)', () => {
+  const {home, works, plan} = unitHome(true);
+  const script = `import {appendLedger} from ${JSON.stringify(new URL('../src/ledger.mjs', import.meta.url).href)};` +
+    `appendLedger({kind:'handover',phase:'transferred',from:${JSON.stringify(OWNER)},to:${JSON.stringify(HEIR)},taskIds:[],handoverId:'h-x',t:new Date().toISOString()},process.argv[1]);`;
+  const child = path.join(home, 'insert-handover.mjs');
+  fs.writeFileSync(child, script);
+  let during = null;
+  const claim = claimTurnReturn(home, plan, {warn: l => assert.fail(l), readEntries: h => {
+    during = spawnSync(process.execPath, [child, h], {env: {...process.env, KADAN_BUSY_TIMEOUT_MS: '200'}, encoding: 'utf8', timeout: 15000});
+    return readLedger(h);
+  }});
+  assert.notEqual(during.status, 0, '창 안의 인계 삽입은 잠금 때문에 커밋되지 못한다');
+  assert.equal(readLedger(home).filter(e => e.phase === 'transferred').length, 0);
+  assert.ok(claim); assert.equal(works.get('repo/u1').turnOwner, OWNER);
+});
+
+test('SQLite 전송 전 다른 변경(revision만 바뀜)이 있어도 최신 상태로 다시 판정해 쓴다. 꼬리용 revision은 실제 새 값이다', () => {
+  const {home, works, plan} = unitHome(true);
+  works.change('repo/u1', 'update', {progress: '다른 변경'}, {revision: 2, by: '시험', note: '끼어들기'});
+  const claim = claimTurnReturn(home, plan, {warn: () => assert.fail('경고 없음')});
+  assert.equal(claim.revision, 4); assert.equal(works.get('repo/u1').revision, 4);
+  assert.equal(claim.undo, undoCommand('repo/u1', 4, WORKER));
+  assert.equal(works.get('repo/u1').turnOwner, OWNER);
+});
+
+test('SQLite 차례가 제3자로 바뀌었으면 쓰지 않는다', () => {
+  const {home, works, plan} = unitHome(true);
+  works.change('repo/u1', 'update', {turnOwner: UPPER}, {revision: 2, by: '시험', note: '제3자'});
+  const warnings = [];
+  assert.equal(claimTurnReturn(home, plan, {warn: l => warnings.push(l)}), null);
+  assert.match(warnings[0], /차례 반환 건너뜀/); assert.equal(works.get('repo/u1').turnOwner, UPPER);
+});
+
+// 되돌림은 claim이 남긴 revision 그대로일 때만 한다 (검수 F3: probe-same-owner, probe-aba).
+test('SQLite 되돌림: claim revision 그대로면 되돌리고, 어떤 변경이든 있었으면(제3자·같은 이름 재지정·A→B→A·관계없는 필드) 건너뛰고 경고한다', () => {
+  const cases = [
+    ['제3자', (works, r) => works.change('repo/u1', 'update', {turnOwner: UPPER}, {revision: r, by: '시험', note: '제3자'}), UPPER],
+    ['같은 이름 재지정(probe-same-owner)', (works, r) => works.change('repo/u1', 'update', {turnOwner: OWNER}, {revision: r, by: '시험', note: '재지정'}), OWNER],
+    ['A→B→A(probe-aba)', (works, r) => {
+      works.change('repo/u1', 'update', {turnOwner: UPPER}, {revision: r, by: '시험', note: 'B'});
+      works.change('repo/u1', 'update', {turnOwner: OWNER}, {revision: r + 1, by: '시험', note: 'A'});
+    }, OWNER],
+    ['관계없는 필드', (works, r) => works.change('repo/u1', 'update', {progress: '진행'}, {revision: r, by: '시험', note: '진행'}), OWNER],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    const {home, works, plan} = unitHome(true);
     const claim = claimTurnReturn(home, plan);
-    assert.ok(claim);
-    works.change('repo/u1', 'update', {turnOwner: UPPER}, {revision: claim.revision, by: '시험', note: '제3자'});
-    const warnings = [];
-    assert.equal(revertTurnReturn(home, claim, {warn: l => warnings.push(l)}), false);
-    assert.match(warnings[0], /되돌리기 건너뜀/); assert.equal(works.get('repo/u1').turnOwner, UPPER);
-    works.change('repo/u1', 'update', {turnOwner: OWNER}, {revision: 4, by: '시험', note: '다시 owner'});
-    assert.equal(revertTurnReturn(home, claim, {warn: l => assert.fail(l)}), true);
-    assert.equal(works.get('repo/u1').turnOwner, WORKER);
-  });
-}
+    assert.ok(claim, label);
+    mutate(works, claim.revision);
+    const revision = works.get('repo/u1').revision, warnings = [];
+    assert.equal(revertTurnReturn(home, claim, {warn: l => warnings.push(l)}), false, label);
+    assert.equal(warnings.length, 1, label); assert.match(warnings[0], /되돌리기 건너뜀/, label);
+    assert.match(warnings[0], /--revision <현재 revision> --turn-owner 'p-작업자'/, label);
+    assert.equal(works.get('repo/u1').turnOwner, expected, label); assert.equal(works.get('repo/u1').revision, revision, label);
+  }
+  const {home, works, plan} = unitHome(true);
+  const claim = claimTurnReturn(home, plan);
+  assert.equal(revertTurnReturn(home, claim, {warn: l => assert.fail(l)}), true);
+  assert.equal(works.get('repo/u1').turnOwner, WORKER);
+});
 
-test('저장 EIO 주입: 던지지 않고 경고 한 줄과 수동 명령, claim 없음. 되돌리기도 실패하면 정확한 되돌리기 명령을 크게 낸다', () => {
-  const {home, plan} = unitHome(false);
-  const broken = {change() { throw new Error('EIO: i/o error'); }};
+// 공용 change()는 revision 필수다 (검수 probe-guard-noop·probe-guard-false). 건너뛰는 공개 옵션이 없다.
+test('공용 WorkStore.change는 revision 없이는 JSONL·SQLite 모두 거절하고, guard 옵션은 효력이 없다', () => {
+  for (const sqlite of [false, true]) {
+    const {works} = unitHome(sqlite);
+    for (const opts of [{by: '시험', note: 'x'}, {by: '시험', note: 'x', guard: () => {}}, {by: '시험', note: 'x', guard: () => false}]) {
+      assert.throws(() => works.change('repo/u1', 'update', {title: '낡은 값'}, opts), /업무가 변경됨/);
+    }
+    assert.equal(works.get('repo/u1').title, 't');
+    assert.equal(typeof works.constructor.prototype.change, 'function');
+    assert.equal(works.constructor.prototype.guard, undefined);
+  }
+});
+
+test('저장 EIO 주입(SQLite): 던지지 않고 경고 한 줄과 수동 명령, claim 없음. 되돌리기도 실패하면 정확한 되돌리기 명령을 크게 낸다', () => {
+  const {home, plan} = unitHome(true);
+  const broken = {changeTurnOwner() { throw new Error('EIO: i/o error'); }, change() { throw new Error('EIO: i/o error'); }};
   const warnings = [];
   assert.equal(claimTurnReturn(home, plan, {store: broken, warn: l => warnings.push(l)}), null);
   assert.equal(warnings.length, 1); assert.match(warnings[0], /차례 반환 실패\(우편은 꼬리 없이 보냄\): EIO/);

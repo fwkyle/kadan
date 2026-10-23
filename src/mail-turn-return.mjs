@@ -2,6 +2,7 @@ import {WorkStore} from './work-store.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
 import {isUserActor} from './actors.mjs';
+import {storageMode} from './storage.mjs';
 
 // 놀고 있음 PR-3: 위임받은 쪽이 결과 우편을 업무 owner에게 보내면 업무 차례(turnOwner)를 owner로 돌려준다.
 // 규칙(셋이 모두 참일 때만): (a) 보낸 역할 == 저장된 turnOwner, (b) 보낸 역할 != 현재 책임 owner(인계 반영),
@@ -10,7 +11,9 @@ import {isUserActor} from './actors.mjs';
 // 순서(2026-10-23 검수 F1·F2 수정): 보내기 전에 업무 잠금 안에서 다시 판정하고 쓴다(claimTurnReturn) →
 // 쓰기가 성공했을 때만 실제 revision으로 만든 꼬리를 붙여 보낸다 → 전송이 실패하면 되돌린다(revertTurnReturn).
 // 잠금은 겹치지 않는다: claim·revert는 업무 잠금을 쥐었다 놓고 끝나며, 우편(guardedSend)은 그 잠금을 놓은 뒤에만 시작한다.
-// 이 잠금 안에서 우편을 부르는 일은 없다(guard는 업무·원장 읽기만 한다).
+// 이 잠금 안에서 우편을 부르는 일은 없다(판정은 업무·원장 읽기만 한다).
+// 2026-10-23 수정 2: JSONL 저장소에서는 자동 반환을 하지 않는다(업무 잠금과 인계 원장 잠금이 따로라 판정·쓰기가 한 순간이 아니다.
+// 운영은 SQLite). 되돌림은 claim이 남긴 revision 그대로일 때만 한다(같은 이름 재지정·A→B→A를 덮어쓰지 않는다).
 const quote=s=>`'${String(s).replaceAll("'","'\\''")}'`;
 
 export const undoCommand=(workKey,revision,sender)=>
@@ -41,14 +44,18 @@ const manualMove=(plan)=>`kadan work update ${quote(plan.workKey)} --revision <�
 // 던지지 않고 stderr 한 줄만 낸다 — 이때 호출한 쪽은 꼬리 없이 보통 우편을 보낸다.
 export function claimTurnReturn(home,plan,{store=new WorkStore(home),readEntries=readLedger,warn=line=>console.error(line)}={}){
  if(!plan)return null;
+ if(storageMode(home)!=='sqlite'){
+  warn(`JSONL 저장소에서는 자동 차례 반환을 하지 않습니다(우편은 꼬리 없이 보냄). 필요하면: ${manualMove(plan)}`);
+  return null;
+ }
  let undo=null;
  try{
-  const work=store.change(plan.workKey,'update',{turnOwner:plan.owner},{by:plan.sender,note:'우편으로 owner에게 차례 반환',guard:current=>{
+  const work=store.changeTurnOwner(plan.workKey,current=>{
    const owner=effectiveWorkOwner(current,readEntries(home));
    if(current.status!=='open'||current.turnOwner!==plan.sender||!owner||owner===plan.sender||owner!==plan.owner)throw new TurnReturnSkip('업무·차례·책임자가 보내는 사이 바뀜');
    undo=undoCommand(plan.workKey,current.revision+1,plan.sender);
-   return {note:`우편으로 owner에게 차례 반환(되돌리기: ${undo})`};
-  }});
+   return {turnOwner:plan.owner,by:plan.sender,note:`우편으로 owner에게 차례 반환(되돌리기: ${undo})`};
+  });
   return {workKey:plan.workKey,sender:plan.sender,owner:plan.owner,revision:work.revision,undo};
  }catch(error){
   warn(error instanceof TurnReturnSkip
@@ -69,17 +76,15 @@ export function turnReturnReceipt(claim,mailId){
 }
 
 // 쓰기는 성공했는데 전송이 실패했을 때(not-sent·send-failed·unknown) 되돌린다. best-effort이며 던지지 않는다.
-// 잠금 안에서 저장 차례가 방금 쓴 owner와 같을 때만 쓴다(그 사이 다른 쪽이 바꿨으면 되돌리지 않고 알린다).
+// claim이 남긴 revision 그대로일 때만 쓴다. 그 사이 어떤 변경이든 있었으면(이름이 같아도) 되돌리지 않고 알린다.
 export function revertTurnReturn(home,claim,{store=new WorkStore(home),warn=line=>console.error(line)}={}){
  if(!claim)return false;
  try{
-  store.change(claim.workKey,'update',{turnOwner:claim.sender},{by:claim.sender,note:'우편 전송 실패로 차례 반환 취소',guard:current=>{
-   if(current.turnOwner!==claim.owner)throw new TurnReturnSkip(`그 사이 차례가 ${current.turnOwner||'비어 있음'}(으)로 바뀜`);
-  }});
+  store.change(claim.workKey,'update',{turnOwner:claim.sender},{revision:claim.revision,by:claim.sender,note:'우편 전송 실패로 차례 반환 취소'});
   return true;
  }catch(error){
-  warn(error instanceof TurnReturnSkip
-   ?`차례 되돌리기 건너뜀(우편 전송 실패): ${error.message}. 확인: kadan work show ${quote(claim.workKey)}`
+  warn(String(error.message).startsWith('업무가 변경됨')
+   ?`차례 되돌리기 건너뜀(우편 전송 실패): 그 사이 업무가 바뀜(revision ${claim.revision} 아님). 확인: kadan work show ${quote(claim.workKey)} — 아직 ${claim.owner}가 차례면 직접: kadan work update ${quote(claim.workKey)} --revision <현재 revision> --turn-owner ${quote(claim.sender)} --note '차례 되돌림'`
    :`!!! 우편 전송 실패 + 차례 되돌리기 실패: ${error.message}. 차례가 ${claim.owner}에게 남아 있을 수 있습니다. 직접 되돌리세요: ${claim.undo}`);
   return false;
  }
