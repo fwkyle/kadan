@@ -42,36 +42,47 @@ function ensureReady({role, session, floor, entries, deps, expectPid}) {
   return start;
 }
 
-function guardRunning({role, entries, force, deps}) {
+// accountRefresh(계정 전환 재시작, 2026-10-23 [kyle] "카드 있어도 다시 켜")만 끝나지 않은 카드 거절을 건너뛴다.
+// 호출한 쪽(claude refresh --yes)이 입력창 비어 있음·응답 생성 중 아님을 직전에 확인한 뒤에만 이 플래그를 준다.
+function guardRunning({role, entries, force, accountRefresh = false, deps}) {
   const pending = deps.pendingCards(entries, role);
-  if (pending.length && !force) {
+  if (pending.length && !force && !accountRefresh) {
     fail(`${role}에 끝나지 않은 카드 ${pending.length}건이 있다: ${pending.join(', ')} — 사람이 확인했으면 --force로 다시 실행한다`);
   }
   return pending;
 }
 
 // 끄기 → stop 원장. restart가 낸 stop은 표시를 달아 "사용자가 직접 끈 역할"로 읽히지 않게 한다.
-function stopForRestart({role, session, floor, entries, deps, forced, reason}) {
+// 계정 전환 재시작은 forced를 쓰지 않는다(--force와 구별). 하류(우편 세대·감시 발령·비서 이어열기)는 forced가 아니라
+// restart:true·restartOf를 읽으므로 같은 모양으로 이어진다(카드 docs/commands.md 대조표).
+function stopForRestart({role, session, floor, entries, deps, forced, reason, refresh}) {
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
-  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}), ...windowFields});
+  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
+    ...(refresh ? {accountRefresh: true, pendingTasks: refresh.pending, ...(refresh.reasonNote ? {reasonNote: refresh.reasonNote} : {}), ...(refresh.accountSlot != null ? {accountSlot: refresh.accountSlot} : {})} : {}), ...windowFields});
   return windowFields;
 }
 
 export function restartRole({home, role, session, flags = {}, floor, settings, deps}) {
   // 비서는 resumeSecretary가 같은 잠금을 스스로 잡으므로 겹쳐 잡지 않는다.
   // 이유(--reason)는 stop·start 두 사건에 같은 값으로 남긴다. 세대 표시(--expect-pid)는 화면의 두 번 재시작 방지다.
-  const reason = typeof flags.reason === 'string' && flags.reason.trim() ? flags.reason.trim() : null;
+  const given = typeof flags.reason === 'string' && flags.reason.trim() ? flags.reason.trim() : null;
+  // 계정 전환 재시작이면 reason은 고정 코드, 사람이 준 이유는 reasonNote 칸으로 간다.
+  const accountRefresh = flags.accountRefresh === true;
+  const reason = accountRefresh ? 'account-refresh' : given;
+  const reasonNote = accountRefresh ? given : null;
   const expectPid = flags['expect-pid'] ?? flags.expectPid ?? null;
+  if (accountRefresh && role === SECRETARY) fail('비서는 계정 전환 재시작 대상이 아니다');
   if (role === SECRETARY) return restartSecretary({home, role, session, floor, force: flags.force === true, reason, expectPid, deps});
-  return withRecoveryLock(home, session, () => restartLocked({home, role, session, flags, floor, settings, deps, reason, expectPid}));
+  return withRecoveryLock(home, session, () => restartLocked({home, role, session, flags, floor, settings, deps, reason, reasonNote, expectPid}));
 }
 
-function restartLocked({home, role, session, flags, floor, settings, deps, reason, expectPid}) {
+function restartLocked({home, role, session, flags, floor, settings, deps, reason, reasonNote, expectPid}) {
   const force = flags.force === true;
+  const accountRefresh = flags.accountRefresh === true;
   const entries = deps.read();
   const start = ensureReady({role, session, floor, entries, deps, expectPid});
-  const pending = guardRunning({role, entries, force, deps});
+  const pending = guardRunning({role, entries, force, accountRefresh, deps});
 
   const identity = launchIdentityOf(start.cmd);
   if (!identity.ok) fail(`마지막 시작 명령에서 등록 실행기·모델을 읽지 못했다(${identity.reason})`);
@@ -101,7 +112,9 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
 
   // 3) 여기까지 거절 사유가 없다. 이제 끄고 같은 정체로 다시 띄운다.
-  stopForRestart({role, session, floor, entries, deps, forced: force ? pending : null, reason});
+  const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
+  const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
+  stopForRestart({role, session, floor, entries, deps, forced: force ? pending : null, reason, refresh});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -117,8 +130,9 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
     restartOf: startDigest(start), restartConversation: conversation,
     ...(reason ? {reason} : {}),
     ...(force ? {forced: true, forcedTasks: pending} : {}),
+    ...(refresh ? {accountRefresh: true, pendingTasks: pending, ...(reasonNote ? {reasonNote} : {})} : {}),
   });
-  return {role, session, conversation, command, harness, model, panePid: evidence.panePid ?? null, forced: force, pending,
+  return {role, session, conversation, command, harness, model, panePid: evidence.panePid ?? null, forced: force, accountRefresh, pending,
     window: window.method ?? 'hidden'};
 }
 

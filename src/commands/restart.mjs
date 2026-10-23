@@ -21,7 +21,31 @@ function paneInfo(session) {
   return { panePid, location };
 }
 
+// restartRole이 쓰는 실제 의존성. `kadan claude refresh --yes`도 같은 것을 쓴다(복제하지 않는다).
+export function restartDeps(home) {
+  const choice = requireWindowChoice();
+  return {
+    read: () => readLedger(home),
+    record: entry => appendLedger(entry, home),
+    pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
+    closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
+    openWindow: ({ session: name, role: who, panePid }) =>
+      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
+    paneInfo,
+    processTree,
+    openFiles: openFilesOf,
+    readJson: file => JSON.parse(fs.readFileSync(file, "utf8")),
+  };
+}
+
+// 계정 전환 재시작 표시는 `kadan claude refresh --yes --role`만 넘길 수 있다. 명령줄의 같은 이름 옵션은 버린다.
+export function cliRestartFlags(flags) {
+  const {accountRefresh, "account-refresh": dashed, accountSlot, "account-slot": dashedSlot, ...rest} = flags;
+  return rest;
+}
+
 export function cmdRestart(argv, flags) {
+  flags = cliRestartFlags(flags);
   const role = argv[0];
   if (!role) die("사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]");
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
@@ -50,19 +74,7 @@ export function cmdRestart(argv, flags) {
   if (flags["expect-pid"] !== undefined && !/^\d+$/.test(String(flags["expect-pid"]))) die("--expect-pid는 pane PID 숫자다");
   const home = ledgerHome();
   const session = sessionName(role);
-  const choice = requireWindowChoice();
-  const deps = {
-    read: () => readLedger(home),
-    record: entry => appendLedger(entry, home),
-    pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
-    closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
-    openWindow: ({ session: name, role: who, panePid }) =>
-      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
-    paneInfo,
-    processTree,
-    openFiles: openFilesOf,
-    readJson: file => JSON.parse(fs.readFileSync(file, "utf8")),
-  };
+  const deps = restartDeps(home);
   let result;
   try { result = restartRole({ home, role, session, flags, floor, settings: readSettings(home), deps }); }
   catch (error) { die(error.message); }
