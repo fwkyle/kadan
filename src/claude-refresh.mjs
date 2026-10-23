@@ -7,18 +7,27 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { launchIdentityOf } from "./ai-identity.mjs";
 import { readStatusLine } from "./watch-status-line.mjs";
+import { scrubForAI } from "./explain-input.mjs";
+import { scrubScreen } from "./revive.mjs";
 
 const SECRETARY = "비서";
 const MAX_TAIL_LINES = 4;
 const MAX_TAIL_WIDTH = 120;
 const MAX_RESET_LINE = 120;
+
+// 화면·오류·계정에서 온 모든 글은 이 함수 하나를 지나서 나간다(검수 F8·F9: 필드마다 따로 가리면 빠지는 곳이 생긴다).
+// 기존 가림 함수 둘을 겹친다 — scrubForAI(웹훅·디코 봇 토큰·깃허브 토큰·`sk-` 키·Bearer)와 scrubScreen(Bot/Bearer 헤더·토큰 모양) —
+// 거기에 이메일 꼴을 더한다. 자르기는 반드시 가림 뒤에 한다(잘린 토큰 조각이 남지 않게).
+const EMAIL_SHAPE = /\S+@\S+/gu;
+export const scrubText = (value) => (typeof value === "string" ? scrubScreen(scrubForAI(value)).replace(EMAIL_SHAPE, "") : value);
+const safeText = (value, max) => scrubText(String(value ?? "")).slice(0, max);
 const ACCOUNT_TIMEOUT_MS = 10_000;
 
 // 한도 줄은 '줄 맨 앞'이 아래 머리말로 시작할 때만 본다. 문장 중간에 문구가 든 줄은 설명·인용이라 버린다.
 // 출처: Claude Code 2.1.309 프로그램(~/.local/share/claude/versions/2.1.309)의 한도 오류 판별 목록 `i4r`
 // (`["You've hit your","You've reached your",…]`를 `startsWith`로 비교). 이름 목록은 가져오지 않는다.
 // `Usage limit reached`는 같은 프로그램의 목표 상태 줄(`Usage limit reached · continuing …`) 머리말이다.
-// 실제 한도 화면 표본은 없다: 앞에 어떤 기호가 붙는지는 미확인이라 아래 기호 5개를 선택적으로 걷어 낸다.
+// 실제 한도 화면은 2.1.308 이미지 전사 1장(`●`/`⏺` 변형)만 확인했다. 다른 버전·한도 종류의 기호는 미확인이라 아래 기호 5개를 선택적으로 걷어 낸다.
 // 아포스트로피는 `'`와 `’` 둘 다 받고 대소문자는 원문 그대로 본다. 감시기 STOP_PHRASES에는 붙이지 않는다(이번 범위 밖).
 export const CLAUDE_LIMIT_HEADS = [/^You['’]ve hit your /u, /^You['’]ve reached your /u, /^Usage limit reached/u];
 const LEAD_SYMBOL = /^\s*(?:[⏺⎿●✗⚠]\s+)?/u;
@@ -49,7 +58,7 @@ const limitHeadOf = (line) => {
 // 버리는 경우: 사이에 다른 응답 문단(`⏺ `)·사용자 입력 줄·들여쓰지 않은 다른 글이 있음, 코드 울타리 안,
 // 줄 위쪽 덩어리(빈 줄 전까지)나 바로 위 줄이 `⏺ ` 응답/도구 호출이라 응답 안의 글일 수 있음.
 // 알려진 한계(고치지 않음, 판정은 추천이다): 여러 줄 응답·도구 출력 뒤 빈 줄을 건너 나온 문구(F5), 문구로 시작하는 응답 첫 줄
-// `⏺ You've hit your …`(F7)은 한도로 잘못 보일 수 있다. 실제 한도 화면 표본이 없어 규칙을 더 다듬지 않는다.
+// `⏺ You've hit your …`(F7)은 한도로 잘못 보일 수 있다. 실제 표본이 2.1.308 이미지 전사 1장뿐이라 규칙을 더 다듬지 않는다.
 export function claudeLimitLine(screen) {
   const lines = trimmedLines(screen);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));
@@ -94,7 +103,7 @@ function precededByResponse(lines, at) {
 export function claudeLimitMatch(screen) {
   const found = claudeLimitLine(screen);
   if (!found) return null;
-  return { phrase: found.head.slice(0, 40), resetLine: /\bresets?\b/iu.test(found.line) ? found.line.slice(0, MAX_RESET_LINE) : null };
+  return { phrase: found.head.slice(0, 40), resetLine: /\bresets?\b/iu.test(found.line) ? safeText(found.line, MAX_RESET_LINE) : null };
 }
 
 // 화면 아래 상태 줄의 `Nh Nm left`는 싣지 않는다: 상태 줄 스크립트가 ccusage 공용 캐시 파일 하나에서 그리는 값이라
@@ -105,11 +114,11 @@ export function claudeScreenTail(screen) {
   const lines = trimmedLines(screen);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));
   const above = composer < 0 ? lines : lines.slice(0, composer);
-  return above.filter((line) => !RULE_OR_BLANK.test(line)).slice(-MAX_TAIL_LINES).map((line) => scrub(line.slice(0, MAX_TAIL_WIDTH)));
+  return above.filter((line) => !RULE_OR_BLANK.test(line)).slice(-MAX_TAIL_LINES).map((line) => safeText(line, MAX_TAIL_WIDTH));
 }
 
 // 첫 번째로 맞는 추정 하나: (a) 응답 생성 중 → (b) 한도로 보임(규칙) → (c) 입력 대기 → (d) 판정 불가
-// 화면 글 규칙에 따른 추천이다. 실제 한도 화면 표본이 없어 오검출·누락이 있을 수 있고, 근거는 사람이 원문(screenTail)을 읽어 확인한다.
+// 화면 글 규칙에 따른 추천이다. 실제 표본이 1장뿐이라 오검출·누락이 있을 수 있고, 근거는 사람이 원문(screenTail)을 읽어 확인한다.
 export function judgeScreen(screen, select) {
   const status = readStatusLine(screen);
   if (status.kind === "working") return { verdict: "skip", reason: "응답 생성 중" };
@@ -127,7 +136,7 @@ function currentStart(entries, session) {
   return events[index];
 }
 
-const errText = (error) => String(error?.message ?? error).split("\n")[0].slice(0, 80);
+const errText = (error) => safeText(String(error?.message ?? error).split("\n")[0], 80);
 
 // 바닥에 살아 있는 카단 세션마다 한 줄. floor.read(화면 읽기)·floor.alive·floor.pid만 쓴다.
 export function buildPreview({ entries, floor, pendingCards, self = process.env.KADAN_ROLE, select = "limit" }) {
@@ -177,8 +186,8 @@ const COUNTDOWN = /^\d+[dhm](?: \d+[dhm])*$/u;
 const STATUS = /^[a-z0-9_-]{1,32}$/u;
 const countdown = (value) => (typeof value === "string" ? (COUNTDOWN.test(value) ? value : "?") : null);
 const statusCode = (value) => (typeof value === "string" ? (STATUS.test(value) ? value : "기타") : "알 수 없음");
-// 마지막 방어: 계정 관련 모든 문자열에서 이메일 꼴을 지운다.
-const scrub = (value) => (typeof value === "string" ? value.replace(/\S+@\S+/gu, "") : value);
+// 마지막 방어: 계정 관련 모든 문자열도 같은 가림 함수를 지난다.
+const scrub = scrubText;
 
 function accountRow(raw) {
   const usage = raw?.usage && typeof raw.usage === "object" ? raw.usage : null;

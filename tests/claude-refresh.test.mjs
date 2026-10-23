@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {buildPreview, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail} from '../src/claude-refresh.mjs';
+import {buildPreview, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail, scrubText} from '../src/claude-refresh.mjs';
 
 const SCREENS = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-screens.json', import.meta.url), 'utf8'));
 const CLAUDE = 'claude --model claude-haiku-5-5 --effort low';
@@ -301,4 +301,74 @@ test('한도 머리말로 시작하는 ⏺ 줄 예외는 일반 응답 문맥 �
   // 머리줄이 한도 머리말이 아닌 ⏺ 응답 + ⎿ 한도 줄은 여전히 대상이 아니다(neg-attached-tool-output과 같은 구조).
   const screen = SCREENS['real-2.1.308-tmux'].replaceAll('⏺ Usage limit reached again · continuing automatically at 12:40pm · esc to cancel', '⏺ 로그를 읽었습니다');
   assert.equal(preview(world([{role: 'a', screen}]))[0].verdict, 'none');
+});
+
+// ---- 수정 4: 화면에서 온 모든 글은 가림 함수 한 곳을 지난다 (재검수 F8·F9) ----
+// 합성 값만 쓴다. 비밀 스캐너에 걸리지 않게 조각을 이어 붙여 만든다.
+const SYN = {
+  bearer: 'Bearer ' + 'sk-ant-api03-' + 'A1b2C3d4'.repeat(4),
+  sk: 'sk-' + 'Zz9Yy8Xx7W'.repeat(3),
+  gh: 'ghp_' + 'Qq1Ww2Ee3R'.repeat(3),
+  discord: 'M'.repeat(24) + '.' + 'abcdef' + '.' + 'x'.repeat(30),
+  webhook: 'https://discord.com/api/webhooks/123456/' + 'tok'.repeat(10),
+  mail: 'someone.private@example.test',
+};
+const dirty = (extra = '') => [
+  `❯ old input ${SYN.bearer}`, `  Authorization: ${SYN.bearer}`, `  TOKEN=${SYN.sk} ${SYN.gh}`, `  ${SYN.discord} ${SYN.webhook}`,
+  `You've hit your session limit · resets 3pm ${SYN.mail} ${SYN.bearer}${extra}`,
+].join('\n') + '\n' + SCREENS['pos-plain'].split('\n').slice(-9).join('\n');
+const leaks = (text) => Object.entries(SYN).filter(([, v]) => text.includes(v.replace(/^Bearer /, '')) || text.includes(v)).map(([k]) => k);
+
+test('F8·F9: 원문 줄·초기화 줄의 토큰·이메일이 표·--json 어디에도 원문으로 나오지 않는다', () => {
+  const rows = preview(world([{role: 'a', screen: dirty()}]));
+  assert.equal(rows[0].verdict, 'target');
+  assert.ok(rows[0].screenTail.length > 0 && rows[0].resetLine);
+  const everything = formatPreview(rows, null) + JSON.stringify(previewJson(rows, null));
+  assert.deepEqual(leaks(everything), []);
+  assert.ok(!everything.includes('@'), 'at-sign 없음');
+  assert.match(rows[0].resetLine, /resets 3pm/); // 가린 뒤에도 초기화 시각은 남는다
+});
+
+test('F8: --select all 평범한 입력 대기 화면의 토큰 줄도 가려진다', () => {
+  const screen = `⏺ TOKEN=${SYN.sk}\n  ${SYN.bearer}\n` + SCREENS['idle-plain'];
+  const rows = preview(world([{role: 'a', screen}]), {select: 'all'});
+  assert.equal(rows[0].verdict, 'target');
+  assert.deepEqual(leaks(formatPreview(rows, null) + JSON.stringify(previewJson(rows, null))), []);
+});
+
+test('가림 뒤에 자른다: 120자 경계에 걸친 토큰 조각이 남지 않는다', () => {
+  const token = 'sk-' + 'Zz9Yy8Xx7W'.repeat(3); // 33자
+  const line = 'p'.repeat(100) + ' ' + token; // 토큰이 100~134번째 글자에 걸친다
+  const screen = `${line}\n` + SCREENS['pos-plain'];
+  const tail = claudeScreenTail(screen).join('\n');
+  assert.ok(!tail.includes('sk-'), tail);
+});
+
+test('오류 이유(화면 읽기 실패)에 든 토큰·이메일도 가려진다', () => {
+  const w = world([{role: 'a', screen: '', failRead: true}]);
+  w.floor.read = () => { throw new Error(`boom ${SYN.bearer} ${SYN.mail}`); };
+  const rows = preview(w);
+  assert.equal(rows[0].verdict, 'skip');
+  assert.deepEqual(leaks(rows[0].reason + formatPreview(rows, null) + JSON.stringify(previewJson(rows, null))), []);
+  assert.match(rows[0].reason, /^화면 읽기 실패\(/);
+});
+
+test('실제 CLI: 정상 경로에서 stderr는 비어 있다', () => {
+  const r = runCli(['refresh', '--no-accounts']);
+  assert.equal(r.status, 0); assert.equal(r.stderr, '');
+});
+
+test('운영 화면의 가짜 양성 2개(문구를 인용한 화면)는 대상이 아니다 — 감독 답변 안 인용 / 검수자의 Search 인용', () => {
+  for (const name of ['sample-neg-quote-in-reply', 'sample-neg-codex-search-quote']) {
+    assert.equal(claudeLimitMatch(SCREENS[name]), null, name);
+    const row = preview(world([{role: 'a', screen: SCREENS[name]}]))[0];
+    assert.notEqual(row.verdict, 'target', name); assert.deepEqual(row.screenTail, [], name);
+  }
+});
+
+test('고정물 전체가 가림 함수를 지나도 바뀌지 않고 이메일 꼴이 없다', () => {
+  for (const [name, screen] of Object.entries(SCREENS)) {
+    if (name.startsWith('_')) continue;
+    assert.equal(scrubText(screen), screen, name); assert.ok(!screen.includes('@'), name);
+  }
 });
