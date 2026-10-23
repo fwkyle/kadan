@@ -18,7 +18,7 @@ function fixture() {
   const socket = path.basename(home);
   const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_WINDOW: 'none',
     KADAN_FLOOR: 'tmux', KADAN_ROLE: 'boss', KADAN_NOTIFY: 'off'};
-  const call = (...args) => spawnSync(process.execPath, [cli, ...args], {env, cwd: home, encoding: 'utf8', input: '', timeout: 10000});
+  const call = (...args) => spawnSync(process.execPath, [cli, ...args], {env, cwd: os.tmpdir(), encoding: 'utf8', input: '', timeout: 10000});
   const sends = () => readLedger(home).filter(e => e.kind === 'send');
   return {home, socket, env, call, sends};
 }

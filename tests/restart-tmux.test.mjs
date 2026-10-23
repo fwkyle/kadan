@@ -57,13 +57,14 @@ fs.writeFileSync(${JSON.stringify(ready)}+(child?'.child':''),'ok');${WATCH_PARE
     conversation: {kind: 'open-file', pattern: '/sessions/.+/rollout-[0-9T-]+-([0-9a-f-]{36})\\.jsonl$',
       evidence: ['/thread-writer-locks/([0-9a-f-]{36})\\.lock$']}}});
   fs.writeFileSync(path.join(home, 'runner-settings.json'), JSON.stringify(settings));
-  return {home, dir, fake, rollout, lock, ready};
+  return {home, dir, fake, rollout, lock, ready, work: sockDir};
 }
 
-function launch(env, {home, dir, fake, ready}, session, role) {
+// 역할의 작업 폴더는 KADAN_HOME 밖이어야 한다(restart가 안쪽이면 거절한다, 2026-10-23). 소켓 폴더가 이미 홈 밖의 정리 대상이라 그것을 쓴다.
+function launch(env, {home, dir, fake, ready, work}, session, role) {
   const cmd = `${fake} --model test-model -c e=low`;
-  const created = tmuxFloor.create({session, role, cwd: dir, cmd: `env ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ')} ${cmd}`});
-  appendLedger({kind: 'start', floor: 'tmux', role, session, cwd: dir, cmd, by: 'test', ...created});
+  const created = tmuxFloor.create({session, role, cwd: work, cmd: `env ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ')} ${cmd}`});
+  appendLedger({kind: 'start', floor: 'tmux', role, session, cwd: work, cmd, by: 'test', ...created});
   for (let i = 0; i < 100 && !(fs.existsSync(ready) && (!(env.CHILD_FILES || env.SPAWN_SAME) || fs.existsSync(ready + '.child'))); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   assert.ok(fs.existsSync(ready), '가짜 실행기가 파일을 열었다');
   return created;

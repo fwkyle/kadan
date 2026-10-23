@@ -3,6 +3,7 @@ import { conversationOf } from "./conversation-ref.mjs";
 import { openTaskIds } from "./handover-state.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { floor } from "./floor.mjs";
 import { resolveLedgerBy } from "./ledger.mjs";
 import {
@@ -15,6 +16,21 @@ import {
 } from "./floor-tmux.mjs";
 import { die } from "./cli-basics.mjs";
 import { windowSettingBlock } from "./window-setting.mjs";
+
+// Claude Code는 처음 보는 폴더에서 '폴더 신뢰' 확인 창을 띄우고, 발령의 Enter가 그 창의 "No, exit"를 눌러 역할이 사라진다
+// (2026-10-23). 역할의 작업 폴더가 카단 기록 폴더(KADAN_HOME) 자신이거나 그 안이면 막는다. 안이면 그 기록 폴더 경로를, 아니면 null.
+export function workdirInsideHome(cwd, home) {
+  const real = value => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+  const root = real(home), dir = real(cwd);
+  const relative = path.relative(root, dir);
+  // `..review` 같은 이름의 자식 폴더는 부모 경로가 아니다(검수 F3). 부모는 `..` 단독이나 `../`로 시작할 때뿐이다.
+  const outside = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  return outside ? null : root;
+}
+
+export function workdirInsideHomeMessage(root) {
+  return `작업 폴더가 카단 기록 폴더(${root}) 안이다 — 작업 저장소(worktree)에서 다시 실행하라`;
+}
 
 export function resolveWindowChoice(env = process.env) {
   const value = env.KADAN_WINDOW;

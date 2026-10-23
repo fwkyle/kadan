@@ -134,7 +134,8 @@ for (const [path, cfg] of Object.entries(PATHS)) {
     const f=fixture({screen:'› USER_PENDING_\nSECOND_PENDING', clients:'', card:cfg.card});
     send(f, guard());
     assert.equal(count(f,'paste-buffer'),1);
-    assert.equal(count(f,'capture-pane'),0, '화면 모양은 읽지 않는다');
+    // 화면은 폴더 신뢰 확인 창 검사(KADAN_TRUST_PROMPT)용으로 전송 직전에 딱 한 번만 읽고, 미제출 글 모양은 판정에 쓰지 않는다(위 paste 1건이 증거).
+    assert.equal(count(f,'capture-pane'),1, '화면은 신뢰 창 검사로 한 번만 읽는다');
   });
 }
 
