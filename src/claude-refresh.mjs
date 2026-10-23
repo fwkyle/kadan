@@ -75,16 +75,19 @@ function insideFence(lines, at) {
 
 // 한도 줄과 같은 덩어리(빈 줄 전까지) 위쪽에 응답 머리표가 있거나, 빈 줄을 건너 바로 위 글줄이 응답 머리표 줄이면 응답 안의 글이다.
 // 위로 훑다가 사용자 입력 줄(`❯ 글`)이나 턴 끝 줄(`✻ … for …`)을 만나면 거기서 멈춘다 — 그 앞의 응답은 이전 턴이다(F6).
+// 응답 머리표 줄이 그 자체로 한도 머리말이면(실측 2.1.308: `⏺ Usage limit reached again · continuing automatically …`) 응답 문맥이 아니라
+// 한도 덩어리의 일부로 본다.
 function precededByResponse(lines, at) {
   const boundary = (line) => USER_INPUT_LINE.test(line) || TURN_DONE.test(line);
+  const response = (line) => RESPONSE_LINE.test(line) && !limitHeadOf(line);
   let above = at - 1;
   while (above >= 0 && !RULE_OR_BLANK.test(lines[above])) {
     if (boundary(lines[above])) return false;
-    if (RESPONSE_LINE.test(lines[above])) return true;
+    if (response(lines[above])) return true;
     above--;
   }
   while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
-  return above >= 0 && !boundary(lines[above]) && RESPONSE_LINE.test(lines[above]);
+  return above >= 0 && !boundary(lines[above]) && response(lines[above]);
 }
 
 // 한도 줄이 있으면 {phrase, resetLine}. resetLine: 그 줄에 초기화 시각(`resets …`)이 있으면 원문 그대로(최대 120자).

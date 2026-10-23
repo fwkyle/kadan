@@ -287,3 +287,18 @@ test('원문: 대상과 입력 대기(all)에만 입력창 위 비지 않은 줄
   assert.match(text, /\s추정\s/); assert.ok(!text.includes('남은 시간'));
   assert.ok(!JSON.stringify(previewJson(rows, null)).includes('timeLeft'));
 });
+
+test('실측 2.1.308(이미지에서 옮겨 적음): 한도 머리줄 + ⎿ 둘째 줄이 사용자 입력 뒤에 반복돼도 ●·⏺ 모두 한도로 보임, 초기화 줄은 둘째 줄', () => {
+  for (const name of ['real-2.1.308-bullet', 'real-2.1.308-tmux']) {
+    const row = preview(world([{role: 'a', screen: SCREENS[name]}]))[0];
+    assert.equal(row.verdict, 'target', name); assert.equal(row.reason, '한도로 보임(규칙)', name);
+    assert.equal(row.resetLine, "⎿ You've hit your session limit · resets 12:40pm (Asia/Seoul)", name);
+    assert.equal(row.screenTail.length, 4, name);
+  }
+});
+
+test('한도 머리말로 시작하는 ⏺ 줄 예외는 일반 응답 문맥 제외를 넓히지 않는다', () => {
+  // 머리줄이 한도 머리말이 아닌 ⏺ 응답 + ⎿ 한도 줄은 여전히 대상이 아니다(neg-attached-tool-output과 같은 구조).
+  const screen = SCREENS['real-2.1.308-tmux'].replaceAll('⏺ Usage limit reached again · continuing automatically at 12:40pm · esc to cancel', '⏺ 로그를 읽었습니다');
+  assert.equal(preview(world([{role: 'a', screen}]))[0].verdict, 'none');
+});
