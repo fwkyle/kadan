@@ -43,3 +43,9 @@ test('나이트 끝 처리: 기본 알림(가짜 notify 없음)이 거절돼도 
   assert.equal(event.phase, 'off');
   assert.deepEqual(readLedger(home).filter(e => e.kind === 'night').map(e => e.phase), ['on', 'off']);
 });
+
+test('KADAN_TEST_FAKE_OSASCRIPT=1이면 거절을 풀지만 이 시험은 진짜 spawnSync를 넘기지 않고 가짜 spawn으로만 확인한다', () => {
+  const a = [];
+  assert.equal(systemNotify('문구', fakeSpawn(a), {KADAN_NOTIFY: 'off', KADAN_TEST_FAKE_OSASCRIPT: '1'}), null);
+  assert.equal(a.length, 1);
+});

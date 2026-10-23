@@ -42,10 +42,10 @@ function workTitleOf(home, work) {
 }
 
 // 시험 관문: KADAN_NOTIFY=off인데 진짜 spawnSync가 넘어오면 osascript를 부르지 않고 오류 문구를 돌려준다(던지지 않는다 —
-// 부른 쪽 흐름이 깨지면 안 된다). 가짜 spawn을 넣은 시험은 그대로 돈다. 운영에는 KADAN_NOTIFY가 없어 동작이 같다.
+// 부른 쪽 흐름이 깨지면 안 된다). 가짜 spawn을 넣은 시험은 그대로 돈다. 자식 CLI가 PATH 앞의 가짜 osascript로 알림을 받는 시험만 KADAN_TEST_FAKE_OSASCRIPT=1로 푼다(시험 전용). 운영에는 KADAN_NOTIFY가 없어 동작이 같다.
 export const SYSTEM_NOTIFY_REFUSED = 'KADAN_NOTIFY=off: 실제 시스템 알림 거절';
 export function systemNotify(message, spawn, env = process.env) {
-  if (env.KADAN_NOTIFY === 'off' && spawn === spawnSync) return SYSTEM_NOTIFY_REFUSED;
+  if (env.KADAN_NOTIFY === 'off' && spawn === spawnSync && env.KADAN_TEST_FAKE_OSASCRIPT !== '1') return SYSTEM_NOTIFY_REFUSED;
   const script = `display notification ${JSON.stringify(message)} with title "kadan watch"`;
   const result = spawn('osascript', ['-e', script], {encoding: 'utf8', timeout: systemTimeoutMs()});
   // 성공은 종료 코드 0이면서 오류·신호가 없을 때만이다. 시간 초과(spawnSync는 status:null, error.code:ETIMEDOUT, signal:SIGTERM)는

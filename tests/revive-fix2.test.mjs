@@ -27,7 +27,7 @@ async function world(t) {
   fs.writeFileSync(botFile, `DISCORD_BOT_TOKEN=${FAKE.token}\nDISCORD_APPLICATION_ID=${FAKE.appId}\n`, {mode: 0o600});
   fs.writeFileSync(hookFile, `DISCORD_USER_ID=${FAKE.userId}\nDISCORD_WEBHOOK_URL_SECRETARY=https://discord.com/api/webhooks/${FAKE.hookId}/${FAKE.hookToken}\n`, {mode: 0o600});
   const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux',
-    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_DISCORD_API_BASE: fake.base,
+    KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_TEST_FAKE_OSASCRIPT: '1', KADAN_DISCORD_API_BASE: fake.base,
     KADAN_SECRET_DISCORD_BOT_FILE: botFile, KADAN_SECRET_DISCORD_FILE: hookFile};
   const kadan = (envExtra, ...args) => spawnSync(process.execPath, [CLI, ...args], {env: {...env, ...envExtra}, encoding: 'utf8', timeout: 60000});
   const up = (...extra) => kadan({}, 'up', '--cmd', 'sh', '--port', String(port), '--hidden', '--no-prompt', ...extra);
