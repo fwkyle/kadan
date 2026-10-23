@@ -23,7 +23,9 @@ export function workdirInsideHome(cwd, home) {
   const real = value => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
   const root = real(home), dir = real(cwd);
   const relative = path.relative(root, dir);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)) ? root : null;
+  // `..review` 같은 이름의 자식 폴더는 부모 경로가 아니다(검수 F3). 부모는 `..` 단독이나 `../`로 시작할 때뿐이다.
+  const outside = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  return outside ? null : root;
 }
 
 export function workdirInsideHomeMessage(root) {

@@ -9,6 +9,7 @@ import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
 import { HUMAN_IDLE_MS, forcedIdleMsFor } from "./notification-guard.mjs";
+import { readStatusLine } from "./watch-status-line.mjs";
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -540,15 +541,30 @@ export function notificationHold(session, guard, {run = tmuxOut} = {}) {
 }
 
 // Claude Code의 '폴더 신뢰' 확인 창은 기본 선택이 "No, exit"라, 우리가 보내는 Enter가 그걸 눌러 역할이 종료된다
-// (2026-10-23 rottie 작업자 3명 소실). 두 문구가 화면 아래쪽에 함께 보이면 보내지 않는다.
-// 줄바꿈으로 낱말이 갈리거나 화면 기록에서 공백이 빠진 꼴이 있어 공백을 모두 걷고 비교한다.
-// 대화 본문이 한 문구만 인용한 화면은 두 문구가 함께 있지 않으므로 통과한다.
-const TRUST_PROMPT_LINES = ["Isthisaprojectyoucreatedoroneyoutrust", "Yes,Itrustthisfolder"];
-const TRUST_PROMPT_TAIL_LINES = 30;
+// (2026-10-23 rottie 작업자 3명 소실). 문구만 보면 대화에 두 문구를 인용한 정상 화면도 막히므로(검수 F1) 화면 구조로 판정한다:
+// (가) 질문 문구, (나) 그 뒤에 선택지 두 개와 `Enter to confirm` 안내, (다) 그 아래에 정상 입력창(빈 `❯`)이 없을 것 — 셋 다 참일 때만 막는다.
+// 인용 화면은 아래에 입력창이 있어 (다)에서 빠지고, 이미 고르고 지나간 화면도 아래에 입력창이 생겨 보낸다.
+// 높이가 큰 창은 화면 아래가 빈 줄로 남아(검수 F2, 높이 40·50·60) 고정 줄 수로 자르면 질문을 놓친다. 그래서 끝 빈 줄을 먼저 걷고,
+// 비지 않은 줄만 세어 마지막 25줄을 본다: 실제 창은 질문·안내·선택지·바닥 안내까지 17줄(사고 화면)이라 여유를 두되 옛 창이 한참 위에 남은 화면은 놓아준다.
+// 줄바꿈으로 낱말이 갈리거나 화면 기록에서 공백이 빠진 꼴이 있어 문구는 공백을 모두 걷고 비교한다.
+const TRUST_QUESTION = "Isthisaprojectyoucreatedoroneyoutrust";
+const TRUST_PROMPT_PARTS = ["No,exit", "Yes,Itrustthisfolder", "Entertoconfirm"];
+const TRUST_PROMPT_TAIL_LINES = 25;
+const squeeze = text => text.replace(/\s+/gu, "");
 export function hasTrustPrompt(screen) {
   if (typeof screen !== "string") return false;
-  const tail = screen.split("\n").slice(-TRUST_PROMPT_TAIL_LINES).join("").replace(/\s+/gu, "");
-  return TRUST_PROMPT_LINES.every(line => tail.includes(line));
+  const lines = screen.split("\n").filter(line => line.trim() !== "").slice(-TRUST_PROMPT_TAIL_LINES);
+  // 질문 문구가 끝나는 줄을 찾는다(낱말이 줄 사이에서 갈려도 이어 붙여 찾는다).
+  let flat = "", questionEnd = -1;
+  for (let i = 0; i < lines.length && questionEnd < 0; i++) {
+    flat += squeeze(lines[i]);
+    if (flat.includes(TRUST_QUESTION)) questionEnd = i;
+  }
+  if (questionEnd < 0) return false;
+  const below = lines.slice(questionEnd + 1);
+  const rest = squeeze(below.join("\n"));
+  if (!TRUST_PROMPT_PARTS.every(part => rest.includes(part))) return false;
+  return readStatusLine(below.join("\n")).kind !== "idle";
 }
 
 // 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회). 읽기에 실패하면 지금까지처럼 보낸다 —
