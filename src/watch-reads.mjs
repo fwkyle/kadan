@@ -2,7 +2,7 @@
 // 2026-09-30 실측: 429·큐 재개 재확인과 우편 감시가 세션마다 전체를 다시 읽어 한 주기에 N+1번 읽을 수 있었다.
 // 화면·PID(바닥 조회)는 여기서 감싸지 않는다 — 재개 직전·전송 후 확인은 항상 새로 읽어야 한다.
 // version()은 원장 전체의 마지막 사건 번호다(null이면 비교 불가: JSONL은 매번 다시 읽는다).
-// 카드 목록은 card.md 본문과 폴더 목록도 읽어 version이 다 덮지 못하므로, 재사용은 한 주기 안으로 한정한다.
+// 카드 목록(listWatch)은 본문 없는 요약이지만 JSONL 모드에서는 폴더 목록을 읽어 version이 다 덮지 못하므로, 재사용은 한 주기 안으로 한정한다.
 export function cycleReads({readEntries, readCards = null, readWorks = () => [], version = () => null}) {
   const cache = new Map();
   const counts = {entries:0, cards:0, works:0, reused:0};

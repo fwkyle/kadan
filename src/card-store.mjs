@@ -6,6 +6,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readLedger } from './ledger.mjs';
 import { effectiveCardRole } from './handover-state.mjs';
+// 카드 센터가 이력으로 판정을 바꾸는 상태: 전환 시각(ready·draft·assigned)과 완료 뒤 변경(assigned·ready).
+const HISTORY_STATUSES = new Set(['assigned','ready','draft']);
 const slug = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
 // 카드 본문 '읽고 시작할 것'에 적힌 절대경로. 양식의 예시 문구(<>·…)는 세지 않는다.
 export function readFirstPaths(body) {
@@ -59,6 +61,29 @@ export class CardStore {
       if(row.invalid||row.count!==row.seq||row.lastSeq!==row.seq||row.lastPayload!==row.payload||latest.key!==key||latest.revision!==row.seq)throw new Error('카드 이력 손상');
       return {...latest,path:path.join(dir,'card.md'),...(latest.artifactLayout==='card-v1'?{resultPath:path.resolve(dir,'result.md'),evidenceDir:path.resolve(dir,'evidence')}: {})};
     }),{readOnly:true});
+  }
+  // 감시기용: 본문 없이 요약을 읽고, 카드 센터가 판정에 쓰는 열린 카드(HISTORY_STATUSES)에만 이력을 붙인다.
+  // 이력은 SQL 한 번으로 묶어 읽는다(카드마다 읽으면 열린 카드 수만큼 문장이 는다). 닫힌 카드는 history가 없다.
+  listWatch() {
+    const cards=this.listSummaries();
+    if(storageMode(this.home)!=='sqlite')return cards.map(c=>HISTORY_STATUSES.has(c.status)?this.get(c.key,{body:false}):c);
+    const want=new Set(cards.filter(c=>HISTORY_STATUSES.has(c.status)).map(c=>`cards/${c.key}/events.jsonl`));
+    const byStream=new Map();
+    transaction(this.home,db=>{
+      for(const r of db.prepare(`SELECT e.stream AS stream,e.payload AS payload FROM events e JOIN heads h ON h.stream=e.stream
+        WHERE h.stream GLOB 'cards/*/*/events.jsonl' AND json_extract(h.payload,'$.status') IN (${[...HISTORY_STATUSES].map(s=>`'${s}'`).join(',')})
+        ORDER BY e.stream,e.seq`).iterate()){
+        if(!want.has(r.stream))continue;
+        if(!byStream.has(r.stream))byStream.set(r.stream,[]);
+        byStream.get(r.stream).push(JSON.parse(r.payload));
+      }
+    },{readOnly:true});
+    // 요약을 읽은 뒤 상태가 바뀐 카드는 묶음에 없거나 순번이 어긋난다. 그 카드만 개별로 읽는다.
+    return cards.map(c=>{
+      if(!HISTORY_STATUSES.has(c.status))return c;
+      const history=byStream.get(`cards/${c.key}/events.jsonl`);
+      return history?.length===c.revision&&history.at(-1).revision===c.revision?{...c,history}:this.get(c.key,{body:false});
+    });
   }
   listWithoutBody() {
     if(!fs.existsSync(this.root))return [];

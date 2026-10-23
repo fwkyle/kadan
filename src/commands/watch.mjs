@@ -219,7 +219,7 @@ export function cmdWatch(argv, flags) {
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
-  const reads=cycleReads({readEntries:()=>readLedgerIncremental(ledgerHome()),readCards:()=>new CardStore(ledgerHome()).list(),
+  const reads=cycleReads({readEntries:()=>readLedgerIncremental(ledgerHome()),readCards:()=>new CardStore(ledgerHome()).listWatch(),
     readWorks:()=>new WorkStore(ledgerHome()).list(),version:()=>storageVersion(ledgerHome())});
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
   const holdTracker=new NotifyHoldTracker({record});
