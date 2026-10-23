@@ -14,7 +14,7 @@ import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
-import {buildStartLedgerEntry, buildStopLedgerEntry} from './cli-start-support.mjs';
+import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
 
 const SECRETARY = '비서';
 const fail = message => { throw new Error(message); };
@@ -83,6 +83,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (!spec) fail(`이 실행기(${harness})는 conversation 미지원 — runner-settings.json의 runners.${harness}.conversation 칸이 비어 있다`);
   checkConversationSpec(spec);
   if (!fs.statSync(start.cwd).isDirectory()) fail('역할 작업 폴더를 찾을 수 없다');
+  const insideHome = workdirInsideHome(start.cwd, home);
+  if (insideHome) fail(workdirInsideHomeMessage(insideHome));
 
   // 1) 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 끄지 않고 거절한다.
   const pane = deps.paneInfo(session);

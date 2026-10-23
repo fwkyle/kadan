@@ -22,6 +22,8 @@ import {
   buildStartLedgerEntry,
   openStartedWindow,
   unpinnedWindowWarning,
+  workdirInsideHome,
+  workdirInsideHomeMessage,
 } from "../cli-start-support.mjs";
 
 // 창을 띄운 뒤 잠깐 기다렸다가 tmux #{alternate_on}(0/1)을 읽는다. 기다림은 KADAN_ALT_CHECK_MS(기본 2000, 0이면 건너뜀).
@@ -42,6 +44,8 @@ function readAlternateOn(session) {
 export function cmdStart(argv, flags) {
   const role = argv[0];
   if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--no-prompt]");
+  const insideHome = workdirInsideHome(process.cwd(), ledgerHome());
+  if (insideHome) die(workdirInsideHomeMessage(insideHome), 2);
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
   if (floor.name === "tmux" && !flags.hidden) {
     const warning = unpinnedWindowWarning();

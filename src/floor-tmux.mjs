@@ -539,6 +539,31 @@ export function notificationHold(session, guard, {run = tmuxOut} = {}) {
   catch (error) { return {code: error.code ?? "KADAN_NOTIFY_CHECK_FAILED", message: error.message}; }
 }
 
+// Claude Code의 '폴더 신뢰' 확인 창은 기본 선택이 "No, exit"라, 우리가 보내는 Enter가 그걸 눌러 역할이 종료된다
+// (2026-10-23 rottie 작업자 3명 소실). 두 문구가 화면 아래쪽에 함께 보이면 보내지 않는다.
+// 줄바꿈으로 낱말이 갈리거나 화면 기록에서 공백이 빠진 꼴이 있어 공백을 모두 걷고 비교한다.
+// 대화 본문이 한 문구만 인용한 화면은 두 문구가 함께 있지 않으므로 통과한다.
+const TRUST_PROMPT_LINES = ["Isthisaprojectyoucreatedoroneyoutrust", "Yes,Itrustthisfolder"];
+const TRUST_PROMPT_TAIL_LINES = 30;
+export function hasTrustPrompt(screen) {
+  if (typeof screen !== "string") return false;
+  const tail = screen.split("\n").slice(-TRUST_PROMPT_TAIL_LINES).join("").replace(/\s+/gu, "");
+  return TRUST_PROMPT_LINES.every(line => tail.includes(line));
+}
+
+// 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회). 읽기에 실패하면 지금까지처럼 보낸다 —
+// 이 검사가 새 전송 실패 원인이 되지 않게 하려는 것이다(실패 닫힘은 '확인 창이 보일 때'에만 적용한다).
+function checkTrustPrompt(session, run) {
+  let screen;
+  try { screen = run(["capture-pane", "-p", "-J", "-t", `=${session}:`]); }
+  catch { return; }
+  if (!hasTrustPrompt(screen)) return;
+  const error = new Error("전송 보류: 받는 Claude가 폴더 신뢰 확인 창에 멈춰 있다 — 보내면 Enter가 \"No, exit\"를 눌러 역할이 종료된다. " +
+    "사람이 창에서 직접 고르거나, 역할을 작업 저장소 폴더에서 다시 시작하라");
+  error.code = "KADAN_TRUST_PROMPT";
+  throw error;
+}
+
 export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity, notificationGuard, humanIdleMs} = {}) {
   const buffer = `kadan-send-${pid}-${hrtime().toString(36)}`;
   let stage = "not-started";
@@ -553,6 +578,7 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
   };
   let released = false;
   try {
+    checkTrustPrompt(session, run);
     // 감시기 알림이 5번 밀린 강제 차례에 한해 복사 모드를 해제하고 넣는다(2026-10-14).
     if (notificationGuard?.force === true && !cardIdentity) {
       // 사람 입력으로 밀릴 차례면 복사 모드를 건드리기 전에 먼저 멈춘다.
