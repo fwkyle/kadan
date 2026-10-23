@@ -24,6 +24,10 @@ const roleName = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test
 // 시험값(kyle 결정 cc77fcc2, 시니어 자문 452d380f): 요약 우편은 일반감독(conductor)에게만 보내고,
 // 마지막 전달 성공 전문 뒤 1시간이 지나면 전문을 다시 보낸다. 설정·환경변수 스위치는 두지 않는다(되돌리기는 PR 되돌리기).
 export const SUMMARY_PROFILES = new Set(['conductor']);
+// 1단계 확대(kyle 결정 'c', 2026-10-23): 역할 이름이 정확히 일치하는 슈퍼감독 한 명에게도 요약을 연다. 세션 이름(kadan-<역할>)이 아니라 우편 수신자 역할 이름이다.
+// 이 역할은 프로필·판 시험 조건을 보지 않고 super-summary.md를 쓴다. 요약 파일은 템플릿 지문에 들어가지 않으므로
+// 나중에 고쳐도 전문 재전송이 일어나지 않는다(알려진 성질).
+export const SUMMARY_ROLES = new Set(['kadan-슈퍼감독']);
 export const FULL_INTERVAL_MS = 60*60*1000;
 // 시험 대상 판은 레포 kadan뿐이다(감독 범위 조정, 슈퍼감독 우편 69d524ff). 판 판정은 이름(boardFromRole)과
 // 레포(연결 업무·카드의 repo, 없으면 수신자 start cwd의 ~/Dev/<레포>)가 둘 다 kadan일 때만 인정한다.
@@ -213,11 +217,14 @@ function decideInstructionsMode({role,profile,templateDigest,entries,current,una
   entries.forEach((e,i)=>gens.apply(e,i));
   const generation=gens.generationOf(role);
   const full=reason=>({mode:'full',reason,generation});
-  if (!SUMMARY_PROFILES.has(profile)) return full('profile-not-in-trial');
+  const byRole=SUMMARY_ROLES.has(role)&&['super','conductor'].includes(profile);
+  if (!byRole&&!SUMMARY_PROFILES.has(profile)) return full('profile-not-in-trial');
   if (unavailable.length) return full('facts-unavailable');
-  const board=trialBoard(role,repos);
-  if (board==='unknown') return full('facts-unavailable');
-  if (board==='other') return full('board-not-in-trial');
+  if (!byRole) {
+    const board=trialBoard(role,repos);
+    if (board==='unknown') return full('facts-unavailable');
+    if (board==='other') return full('board-not-in-trial');
+  }
   const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>(e.kind==='send'||e.kind==='send-failed')&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i));
   const lastAt=fulls.at(-1),last=lastAt?.e;
   // 이어 연 start(restart·resume·inherit 등)가 마지막 전문 시도보다 늦으면 압축 뒤 규칙 기억을 모르므로 전문을 다시 보낸다.
