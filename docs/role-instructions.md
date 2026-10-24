@@ -124,24 +124,25 @@ send의 바이트 수와 지문은 지침까지 포함한 실제 전달문 기�
 **프로그램을 새로 시작한 뒤 적용된다.** 저장소 업데이트만으로 기존 프로세스에 적용됐다고 보장하지 않는다.
 이 기능은 운영 프로세스를 자동 재시작하지 않는다. 기존 편지·과거 원장·카드를 소급 수정하지 않는다.
 
-## 요약 우편 시험 (kadan 판 conductor 한정)
+## 요약 우편 (conductor·super 프로필, 모든 판)
 
 Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았다. 결정 cc77fcc2, 시니어 자문 452d380f.
 
 `guardedSend`는 우편마다 전문(`full`)과 요약(`summary`) 중 하나를 고른다.
 요약은 템플릿 전문만 빼고, 수신 역할·회신 대상·연결 업무/실행·완료 방식·참고 파일 경로는 그대로 둔다.
-대신 `role-templates/<프로필>-summary.md`(지금은 `conductor-summary.md`)가 붙는다. 전문 경로는 참고 파일 목록에 남는다.
+대신 `role-templates/<프로필>-summary.md`(`conductor-summary.md`·`super-summary.md`)가 붙는다. 전문 경로는 참고 파일 목록에 남는다.
 요약일 때도 템플릿 파일은 읽는다(지문 비교용). 줄어드는 것은 메시지뿐이다.
-`SUMMARY_PROFILES`·`SUMMARY_REPO`·`FULL_INTERVAL_MS`(1시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
-1단계 확대: `kadan-슈퍼감독`(2026-10-23 kyle 결정 'c')은 `SUMMARY_ROLES`로 프로필·판 시험 조건 없이 `super-summary.md` 요약을 받는다. 역할 이름은 우편 수신자 역할 이름과 정확히 같아야 하며, 전문 조건은 위 표 그대로다. 요약 파일은 템플릿 지문에 들어가지 않아 나중에 고쳐도 전문 재전송이 없다.
+`SUMMARY_PROFILES`·`FULL_INTERVAL_MS`(1시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
+현재 범위는 프로필 `conductor`·`super`, 모든 판이다(2026-10-24 슈퍼 승인, kyle 단계안 'c'의 2단계).
+역할 이름·판 조건은 보지 않는다. 비서·작업자·검수자와 프로필을 못 정한 역할은 전문이다.
+전문 조건은 아래 표 그대로다. 요약 파일은 템플릿 지문에 들어가지 않아 나중에 고쳐도 전문 재전송이 없다.
 
 전문이 되는 이유와 기록 이름(`instructions.reason`):
 
 | 조건 | 이유 값 |
 |---|---|
-| 시험 프로필(conductor)이 아님 | `profile-not-in-trial` |
-| 업무·카드 사실을 못 읽음, 판 판별 근거가 없거나 어긋남 | `facts-unavailable` |
-| 레포 kadan 판이 아님(예: 다른 레포 감독) | `board-not-in-trial` |
+| 요약 프로필(conductor·super)이 아님(프로필 없음 포함) | `profile-not-in-trial` |
+| 업무·카드 사실을 못 읽음 | `facts-unavailable` |
 | 이 세대 마지막 전문 시도 뒤에 이어 연 start가 있음(아래 목록) | `resumed-generation` |
 | 현재 발령(`--task`) | `dispatch` |
 | 이 세대에 전문이 없음(첫 안내·새 대화 첫 우편 포함) | `generation-first` |
@@ -151,7 +152,6 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 | 위에 해당 없음 | 요약(`within-interval`) |
 
 - 이어 연 start는 세대 경계가 아니라서(우편 세대 그대로) 압축된 대화가 규칙을 잊었을 수 있는 자리만 따로 센다. 센다: `restartOf`, `conversationMode==='resume'`, `--inherit-mail`(`inheritMail`), `restoredFrom`, `secretaryResumeSource`. 안 센다: `sameProcess`(같은 pane PID로 다시 기록된 살아 있는 세션 재사용, 새 프로세스도 대화 재로드도 없음). new·fork는 이미 새 세대라 `generation-first`다. 전문이 한 번 시도되면(`sent`면 풀리고, 실패면 `delivery-unclear`) `resumed-generation`은 끝난다. 이유 우선순위는 resumed-generation → dispatch → generation-first → 나머지 순이며 어느 쪽이든 전문이다.
-- 판 판별은 이름(`boardFromRole`)과 레포(연결 업무·카드의 `repo`, 없으면 start 사건 cwd의 `~/Dev/<레포>`)가 둘 다 kadan일 때만 인정한다. 둘이 어긋나거나 근거가 없으면 `facts-unavailable`이다.
 - '전달 성공'은 `keyDelivery === 'sent'`만이다. 세대는 `mail-generation.mjs`의 start 경계를 그대로 쓴다. raw 전송은 `instructions`가 없어 건너뛴다.
 - 실제 바닥은 전송 실패를 영수증이 아니라 예외로 던진다. 전문 시도가 던져지면(`not-sent`·`unknown`) 원장에 별도 kind `send-failed`(시스템 영역, `mailId` 없음, `keyDelivery`·`instructions`만)를 남기고 원래 오류를 다시 던진다. `send`가 아니라서 발령·우편함·감시 재안내·디코 중복 방지(`findMailBySourceKeyAny`)가 전달로 보지 않는다. 그 세대의 마지막 전문 시도가 `sent`가 아니면 다음 우편은 `delivery-unclear`이고, 전문이 한 번 `sent`로 가면 풀린다. raw·요약 시도의 실패는 남기지 않으며 기록 실패가 원래 오류를 가리지 않는다. 자동 재전송은 없다.
 - 이 기능 전의 send 줄에는 `instructions`가 없다. 그래서 적용 뒤 각 감독의 첫 우편은 전문이다(정상).
