@@ -24,7 +24,15 @@ export const workspaceColumnSets={
 export function workspaceColumnsFor(collection){return collection==='work'?workspaceColumnSets.work:workspaceColumnSets.execution;}
 // 값이 하나도 없는 열은 표 머리글까지 남기지 않는다. 실행 모델은 대부분의 카드에서 빈 칸이다.
 export function workspaceVisibleColumns(collection,rows){return workspaceColumnsFor(collection).filter(([key])=>key!=='model'||(rows||[]).some(row=>row.model));}
-export const timeLabel=value=>Number.isFinite(Date.parse(value))?new Date(value).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
+export const timeLabel=value=>{
+ if(!Number.isFinite(Date.parse(value)))return '모름';
+ // 옛 HTML은 이 함수의 문자열을 복사한다. 재사용 객체도 함수 안에서 만든다.
+ timeLabel.formatter??=new Intl.DateTimeFormat('ko-KR',{
+  timeZone:'Asia/Seoul',hour12:false,year:'numeric',month:'numeric',day:'numeric',
+  hour:'numeric',minute:'numeric',second:'numeric',
+ });
+ return timeLabel.formatter.format(new Date(value));
+};
 const clip=(value,n=220)=>String(value??'').slice(0,n);
 // 진행 중인 카드만 현재 모델을 말한다. 종료 카드의 최신 시작 기록은 지금 돌고 있는 모델이 아닐 수 있어 빈 칸으로 둔다.
 const terminalState=new Set(['done','cancelled','superseded','archived']);
@@ -106,7 +114,10 @@ export function sortWorkspaceRows(rows,key='at',direction='desc') {
 const statePill=c=>`<span class="state ${e(c.state||c.displayState)}">${e(c.stateLabel||stateText[c.displayState]||'모름')}</span>`;
 export function shortTimeLabel(value) {
  if(!Number.isFinite(Date.parse(value)))return '모름';
- const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).map(p=>[p.type,p.value]));
+ shortTimeLabel.formatter??=new Intl.DateTimeFormat('en-GB',{
+  timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',
+ });
+ const parts=Object.fromEntries(shortTimeLabel.formatter.formatToParts(new Date(value)).map(p=>[p.type,p.value]));
  return `${parts.month}.${parts.day} ${parts.hour}:${parts.minute}`;
 }
 // 표는 넘겨받은 열 순서대로 셀을 조립한다. 실행 표에는 카드 상태 열이 없고, 값이 없는 실행 모델 열도 빠진다.

@@ -6,6 +6,7 @@ import {CardStore} from './card-store.mjs';
 import {statusLabel,isEnded} from './status-labels.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
 import {BRIEF_STAGES,buildExplainInput,explainInputHash,decisionsByCard} from './explain-input.mjs';
+import {createDashboardBriefReader} from './dashboard-brief-reader.mjs';
 
 export const isExecution=c=>c.workType!=='coordination';
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 남은 일로 센다. 끝은 완료·취소·대체뿐이다(2026-10-05 [kyle]).
@@ -103,13 +104,19 @@ export class Scribe {
  retain(keys){const keep=new Set(keys);for(const key of this.cache.keys())if(!keep.has(key))this.cache.delete(key);}
 }
 const scribe=new Scribe();
+let briefReader = null;
 export function buildHumanBrief(center,home){
  if(!center)return null;
- const store=home?new BriefStore(home):null;
+ let stored = new Map(), readError = null;
+ if (home) {
+  if (briefReader?.home !== home) briefReader = {home, read: createDashboardBriefReader(home)};
+  try {stored = briefReader.read.read(center.cards.map(c => c.key));}
+  catch {readError = '설명 기록을 읽을 수 없습니다';}
+ }
  const cards=new Map();
  // 결정 기록은 설명 AI 줄의 신선도 판단에만 쓴다. 못 읽으면 결정 없는 입력으로 보고, 설명 AI 줄은 낡은 것으로 숨는다.
  let decisions=new Map();if(home)try{decisions=decisionsByCard(readStream(home,'decisions/events.jsonl',{optional:true}));}catch{}
- for(const c of center.cards){let brief=null,error=null;try{brief=store?.read(c.key)}catch{error='설명 기록을 읽을 수 없습니다';}cards.set(c.key,{...scribe.summarize(c,brief,Date.now(),decisions.get(c.key)??[]),error});}
+ for(const c of center.cards){const {brief=null,error=readError}=stored.get(c.key)??{};cards.set(c.key,{...scribe.summarize(c,brief,Date.now(),decisions.get(c.key)??[]),error});}
  scribe.retain(cards.keys());return cards;
 }
 

@@ -67,14 +67,30 @@ function lettersContext(entries,cards){
  const byRef=new Map();for(const x of sends)for(const ref of [x.mailId,x.digest].filter(Boolean)){if(!byRef.has(ref))byRef.set(ref,[]);byRef.get(ref).push(x);}
  const children=new Map();for(const x of sends){const parents=byRef.get(x.replyTo);if(parents?.length!==1)continue;const parent=parents[0];if(!children.has(parent))children.set(parent,[]);children.get(parent).push(x);}
  const projected=mailboxLetters(entries),byEntry=new Map(sends.map((entry,index)=>[entry,projected[index]]));
- const value={cards,length:entries.length,sends,execKey,children,byEntry};
+ const byWork=new Map(),byExecution=new Map(),position=new Map(),seedRefs=new Map();
+ const add=(map,key,value)=>{if(!map.has(key))map.set(key,[]);map.get(key).push(value);};
+ sends.forEach((entry,i)=>{position.set(entry,i);add(byWork,entry.workKey,entry);
+  if(!entry.workKey)add(byExecution,execKey[i],entry);
+  add(seedRefs,entry.mailId,entry);add(seedRefs,entry.digest,entry);});
+ const value={cards,length:entries.length,children,byEntry,seedRefs,byWork,byExecution,position};
  lettersContexts.set(entries,value);return value;
 }
 
 export function workLetters(work,entries,cards){
+ return createWorkLettersReader(entries,cards)(work);
+}
+// 같은 불변 snapshot의 여러 업무를 읽을 때 원장 손상 검사는 한 번만 한다.
+export function createWorkLettersReader(entries,cards){
  if(entries.some(x=>x.broken))throw new Error('원장 손상: 업무 인박스 모름');
- const {sends,execKey,children,byEntry}=lettersContext(entries,cards),executionKeys=new Set(work.executions.map(x=>x.key));
- const selected=new Set(sends.filter((x,i)=>x.workKey===work.key||(!x.workKey&&executionKeys.has(execKey[i]))||work.mailRefs.some(ref=>x.mailId===ref||x.digest===ref)));
+ const context=lettersContext(entries,cards);
+ return work=>selectWorkLetters(work,context);
+}
+function selectWorkLetters(work,{children,byEntry,seedRefs,byWork,byExecution,position}){
+ const seeds=new Set(byWork.get(work.key)??[]);
+ for(const {key} of work.executions)for(const entry of byExecution.get(key)??[])seeds.add(entry);
+ for(const ref of work.mailRefs??[])for(const entry of seedRefs.get(ref)??[])seeds.add(entry);
+ // 원래 전체 filter의 순서와 이후 답장 너비 우선 순서를 유지한다.
+ const selected=new Set([...seeds].sort((a,b)=>position.get(a)-position.get(b)));
  const queue=[...selected];for(let i=0;i<queue.length;i++)for(const child of children.get(queue[i])||[]){if(child.workKey&&child.workKey!==work.key)continue;if(!selected.has(child)){selected.add(child);queue.push(child);}}
  // 부르는 쪽이 고쳐도 다른 호출에 번지지 않게 고른 우편만 새 객체로 돌려준다(mailboxLetters가 하던 복제와 같다).
  return [...selected].map(x=>{const l=byEntry.get(x);return {...l,replyRecipients:[...l.replyRecipients]};}).reverse();

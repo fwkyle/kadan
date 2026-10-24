@@ -7,7 +7,6 @@ import { attachWatchOverview } from "../watch-overview.mjs";
 import { watchProcessName } from "../watch-system.mjs";
 import { defaultProfilePath } from "../watch-profile.mjs";
 import { CardStore } from "../card-store.mjs";
-import { WorkStore } from "../work-store.mjs";
 import { buildCardCenter } from "../card-center.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -22,6 +21,7 @@ import { centerSummary } from "../center-summary.mjs";
 import { nextTimeBoundary, wallCache } from "../wall-snapshot-cache.mjs";
 import {dashboardDataVersions} from '../dashboard-data-versions.mjs';
 import {createTreeInputCache} from '../dashboard-tree-inputs.mjs';
+import {createDashboardStoreReader} from '../dashboard-store-reader.mjs';
 import { createDashboardSummaryReader } from "../dashboard-summary-reader.mjs";
 
 export function cmdTree(_argv, flags = {}) {
@@ -46,16 +46,23 @@ export function cmdTree(_argv, flags = {}) {
 }
 
 const treeInputs = createTreeInputCache();
+let stores = null;
+function dashboardStores(home) {
+  if (stores?.home !== home) stores = {home,
+    cards: createDashboardStoreReader(home, 'cards'),
+    works: createDashboardStoreReader(home, 'works')};
+  return stores;
+}
 // 원장/카드/업무 버전을 나눠 바뀐 입력만 다시 읽는다. 사건 분류는 새 부분만 이어서 한다.
 // 생존 여부·자원·감시 프로세스는 원장에 없는 값이라 매번 새로 읽는다.
-export function loadWallSnapshot(runtime=null) {
+export function loadWallSnapshot(runtime=null, {listOnly=false}={}) {
   const collectedAt = new Date();
   const home = ledgerHome();
   let versions;
   try { versions = dashboardDataVersions(home); }
   catch { versions = {all: null, cards: null, works: null}; }
   const version = versions.all;
-  const resourceSnapshot = buildWallSnapshot({ collect: () => collectResources(spawnSync) });
+  const resourceSnapshot = listOnly ? {} : buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   const file = ledgerPath();
   let entries = [];
   let ledgerLines = null,ledgerState=null;
@@ -86,7 +93,7 @@ export function loadWallSnapshot(runtime=null) {
       .map((item) => [item.session, item])
   );
   let cards=[],cardError=null;
-  try {cards=wallCache.memo("cards", versions.cards, () => new CardStore(home).list());}catch(error){cardError=error;}
+  try {cards=wallCache.memo("cards", versions.cards, () => dashboardStores(home).cards.read());}catch(error){cardError=error;}
   const inputs = treeInputs(entries);
   const aliveKey = JSON.stringify(Object.keys(aliveBySession).sort()
     .map(name => [name, aliveBySession[name].pid ?? null]));
@@ -106,8 +113,8 @@ export function loadWallSnapshot(runtime=null) {
       { boundary: () => nextTimeBoundary(cards, builtAt) });
     // 대기 출력 꼬리(out/*.wait-*.txt)는 원장 밖 파일이라 재사용한 카드 상태에 낡은 값이 남는다. 역할 목록은 매번 새 tree의 것을 쓴다.
     center = { ...cached, roles: [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()] };
-    registeredWorks=wallCache.memo("works", versions.works, () => new WorkStore(home).list());
-    center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
+    registeredWorks=wallCache.memo("works", versions.works, () => dashboardStores(home).works.read());
+    if(!listOnly)center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
   let cardFiles = null;
   return {
@@ -151,7 +158,8 @@ export function cmdWall(_argv, flags) {
   const runtime=captureRuntimeVersion();
   const home = ledgerHome();
   const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
-  const server = createWallServer(()=>loadWallSnapshot(runtime), {home,cacheSec,gui:true,loadSummary});
+  const server = createWallServer(()=>loadWallSnapshot(runtime), {home,cacheSec,gui:true,loadSummary,
+    loadListSnapshot: () => loadWallSnapshot(runtime, {listOnly: true})});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;
