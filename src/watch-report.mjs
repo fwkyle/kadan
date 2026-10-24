@@ -9,7 +9,7 @@ import {assertWritable, transaction} from './storage.mjs';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
-import {mailboxLetters} from './mailbox-state.mjs';
+import {waitingLetters} from './mailbox-queries.mjs';
 import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
 import {explainAlertRoute,failureEscalation} from './watch.mjs';
@@ -60,7 +60,7 @@ export function waitingWithoutAsking(entries, {role, taskId}, cards = []) {
     && execution(e) === task && classifyLedgerEntry(e).dispatch);
   if (index < 0) return false;
   const afterDispatch = new Set(projected.slice(index + 1).filter(e => e.kind === 'send' && e.mailId).map(e => e.mailId));
-  const questions = mailboxLetters(entries, role, {view:'waiting'});
+  const questions = waitingLetters(entries, role);
   return !questions.some(e => e.expectReply && e.replyStatus === 'waiting'
     && !e.replyFinal && !e.notificationOnly && !e.systemGenerated && execution(e) === task
     && afterDispatch.has(e.mailId));

@@ -171,23 +171,39 @@ function applyState(store, info, actors, cold) {
 export function withMailboxView(home, read, {domain = null, cards = null} = {}) {
   if (![null, 'mailbox', 'watch'].includes(domain)) throw new Error('우편 조회 영역 확인 필요');
   if (domain === 'watch' && !Array.isArray(cards)) throw new Error('감시 우편의 카드 주소 수집이 필요합니다');
-  const key = `${path.resolve(home)}:${domain ?? ''}`;
   return withLedgerView(home, (db, info, source) => {
-    if (!db) return read(null, {...info, mailCount:0, mailStateVersion:0, mailGeneration:null});
-    if (domain && metaGet(db, 'legacyBad')) throw new Error('과거 원장 손상: 도메인 조회 불가');
-    if (metaGet(db, 'mailboxError')) throw new Error(metaGet(db, 'mailboxError'));
-    const projection = domain === 'watch' ? applyWatchMailProjection(home, db, source, info, cards) : null;
-    if (projection) info = projection.info;
-    const store = createMailViewStore(db, source, domain, projection ?? undefined);
-    const actors = JSON.stringify([...new Set(userActorNames())].sort());
-    const previous = store.metadata(), stamp = JSON.stringify([info.generation, actors, previous?.revision]);
-    const value = applyState(store, info, actors, verified.get(key) !== stamp);
-    const result = read(store, value);
-    // 콜백 실패나 바깥 commit 실패 뒤에도 source/cursor 재확인이 먼저 실행된다.
-    verified.delete(key);verified.set(key, JSON.stringify([info.generation, actors, value.mailGeneration]));
-    while (verified.size > 8) verified.delete(verified.keys().next().value);
-    return result;
+    const value = mailboxView(home, db, info, source, domain, cards);
+    return read(value.store, value.info);
   });
+}
+
+// 원문과 주소 해석 후의 상태를 같은 원본 snapshot/조회 DB transaction에서 얻는다.
+export function withWatchMailboxViews(home, read, readCards = null) {
+  return withLedgerView(home, (db, info, source) => {
+    const raw = mailboxView(home, db, info, source, null, null);
+    let cards = null;
+    // 카드 읽기 실패는 기존 감시의 readCards 경계에서 보고한다. 원장 실패로 바꾸지 않는다.
+    try { cards = readCards?.() ?? null; } catch { /* 원문 우편은 계속 조회할 수 있다. */ }
+    const projected = cards ? mailboxView(home, db, info, source, 'watch', cards) : null;
+    return read({raw, projected, cards});
+  });
+}
+
+function mailboxView(home, db, info, source, domain, cards) {
+  const key = `${path.resolve(home)}:${domain ?? ''}`;
+  if (!db) return {store:null, info:{...info, mailCount:0, mailStateVersion:0, mailGeneration:null}};
+  if (domain && metaGet(db, 'legacyBad')) throw new Error('과거 원장 손상: 도메인 조회 불가');
+  if (metaGet(db, 'mailboxError')) throw new Error(metaGet(db, 'mailboxError'));
+  const projection = domain === 'watch' ? applyWatchMailProjection(home, db, source, info, cards) : null;
+  if (projection) info = projection.info;
+  const store = createMailViewStore(db, source, domain, projection ?? undefined);
+  const actors = JSON.stringify([...new Set(userActorNames())].sort());
+  const previous = store.metadata(), stamp = JSON.stringify([info.generation, actors, previous?.revision]);
+  const value = applyState(store, info, actors, verified.get(key) !== stamp);
+  // 콜백 실패나 바깥 commit 실패 뒤에도 source/cursor 재확인이 먼저 실행된다.
+  verified.delete(key);verified.set(key, JSON.stringify([info.generation, actors, value.mailGeneration]));
+  while (verified.size > 8) verified.delete(verified.keys().next().value);
+  return {store, info:value};
 }
 
 export function readMailboxViewPage(home, {domain = null, before = null, limit = 50} = {}) {
@@ -214,4 +230,24 @@ export function mailReminderCandidates(store) {
   const rows = store.prepare(`${mailStateSelect} WHERE m.domain=? AND m.read=0 AND m.notification=0
     AND NOT COALESCE((${previousMailExpression}),0) ORDER BY m.position`).all(store.scope);
   return rows.map(row => storedMailLetter(store, row));
+}
+
+export function mailWaitingLetters(store) {
+  if (!store) return [];
+  const rows = store.prepare(`${mailStateSelect} WHERE m.domain=? AND m.reply_status='waiting'
+    ORDER BY m.position`).all(store.scope);
+  return rows.map(row => storedMailLetter(store, row));
+}
+
+export function mailRecentLetters(store, role) {
+  if (!store) return [];
+  // 양쪽 주소 색인에서 12개씩만 읽는다. 오래된 전체 우편을 OR/정렬로 훑지 않는다.
+  const positions = store.prepare(`SELECT position FROM (
+      SELECT position FROM (SELECT position FROM mail_current
+        WHERE domain=? AND recipient_key=? ORDER BY position DESC LIMIT 12)
+      UNION SELECT position FROM (SELECT position FROM mail_current
+        WHERE domain=? AND sender_key=? ORDER BY position DESC LIMIT 12)
+    ) ORDER BY position DESC LIMIT 12`).all(store.scope, store.key(role), store.scope, store.key(role));
+  return positions.reverse().map(({position}) => storedMailLetter(store,
+    store.prepare(`${mailStateSelect} WHERE m.domain=? AND m.position=?`).get(store.scope, position)));
 }

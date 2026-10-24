@@ -3,7 +3,7 @@
 // 이 모듈이 정규화 전 원래 화면의 아래쪽만 따로 읽는다.
 // 표본 근거: 감시AI 관찰 자료(codex 0.163 일하는 중·입력 대기·끊김, claude 입력 대기)와 claude 2.1.302 일하는 중 실제 화면 2장.
 // claude 일하는 중 모양은 감독이 자기 세션에서 뜬 실제 화면 두 장으로 맞췄다.
-import { mailboxLetters } from "./mailbox-state.mjs";
+import {waitingLetters} from './mailbox-queries.mjs';
 import { anyStopWordInBottom } from "./watch-stop-phrases.mjs";
 
 // (b) 멈춤 경보의 코드 기본값. 감시 주기 60초, 정체 기본 5분보다 짧게 둔다. 프로필 키는 더하지 않는다.
@@ -76,7 +76,7 @@ export function statusProgress(screen, previousClockSec) {
 export function hasOpenQuestion(entries, role, sinceIso) {
   const since = Date.parse(sinceIso);
   try {
-    return mailboxLetters(entries, role, { view: "waiting" }).some(
+    return waitingLetters(entries, role).some(
       (letter) =>
         letter.replyStatus === "waiting" &&
         !letter.notificationOnly &&

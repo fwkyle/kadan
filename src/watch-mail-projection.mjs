@@ -30,14 +30,17 @@ export function applyWatchMailProjection(home, db, source, info, cards) {
   let rebuilt = !meta || meta.version !== 1 || meta.generation !== info.generation ||
     meta.signature !== signature || typeof meta.revision !== 'string' || !meta.revision ||
     !Number.isSafeInteger(meta.position) || meta.position < 0 || meta.position > info.position ||
-    !Number.isSafeInteger(meta.count) || meta.count < 0;
+    !Number.isSafeInteger(meta.count) || meta.count < 0 ||
+    !Number.isSafeInteger(meta.completed) || meta.completed < 0;
   if (!rebuilt && verified.get(key) !== stamp(meta)) {
-    rebuilt = db.prepare('SELECT count(*) AS n FROM views WHERE domain=?').get(DOMAIN).n !== meta.count;
+    rebuilt = db.prepare('SELECT count(*) AS n FROM views WHERE domain=?').get(DOMAIN).n !== meta.count ||
+      db.prepare('SELECT count(*) AS n FROM watch_mail_completions').get().n !== meta.completed;
   }
   if (rebuilt) {
     db.prepare('DELETE FROM views WHERE domain=?').run(DOMAIN);
     db.exec('DELETE FROM watch_mail_completions');
-    meta = {version:1, generation:info.generation, signature, revision:randomUUID(), position:0, count:0};
+    meta = {version:1, generation:info.generation, signature, revision:randomUUID(),
+      position:0, count:0, completed:0};
   }
   const previous = meta.position;
   const query = db.prepare(`SELECT r.stream,r.seq,v.position,v.routine
@@ -55,6 +58,7 @@ export function applyWatchMailProjection(home, db, source, info, cards) {
       const raw = (row.stream === 'ledger.jsonl' ? projector.legacy([value]) : projector.rows([value]))[0];
       const entry = identity.projectEntry(raw), completion = projectedCompletionKey(entry);
       const duplicate = completion !== null && !done.run(completion).changes;
+      if (completion !== null && !duplicate) meta.completed++;
       if (!duplicate && !taskConnectionError(entry)) {
         insert.run(DOMAIN, row.position, row.routine);meta.count++;
       }

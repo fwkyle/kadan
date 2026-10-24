@@ -1,4 +1,4 @@
-import { mailboxLetters } from './mailbox-state.mjs';
+import {waitingLetters} from './mailbox-queries.mjs';
 import { effectiveCardRole, effectiveWorkOwner } from './handover-state.mjs';
 import { isDescendant } from './hierarchy.mjs';
 import { isSuperRole, superProfiles } from './super-role.mjs';
@@ -15,7 +15,7 @@ export function isPeerSuperMail(entries, parents, from, to) {
 
 // 우편의 답변 대기를 임시 책임으로 계산한다. 실행 카드·업무 owner는 옮기거나 생성하지 않는다.
 export function peerResponsibilities(entries, parents, works = [], cards = []) {
-  const questions = mailboxLetters(entries, undefined, { view: 'waiting' });
+  const questions = waitingLetters(entries);
   return questions.filter(q => !q.notificationOnly && !q.systemGenerated && q.mailId
     && isPeerSuperMail(entries, parents, q.currentSender, q.currentRecipient)
     && parents.has(q.currentRecipient)).flatMap(q => {

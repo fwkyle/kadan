@@ -221,7 +221,9 @@ export function cmdWatch(argv, flags) {
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
   const stores = createWatchStoreReaders(ledgerHome());
-  const mailReader = createWatchMailReader(ledgerHome(), () => readLedgerIncremental(ledgerHome()));
+  const mailReader = createWatchMailReader(ledgerHome(), () => readLedgerIncremental(ledgerHome()), {
+    readCards:stores.cards.read, readRoles:() => [...parents.keys()],
+  });
   const reads=cycleReads({readEntries:mailReader.readEntries,readCards:stores.cards.read,
     readWorks:stores.works.read,version:()=>storageVersion(ledgerHome())});
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
@@ -235,6 +237,7 @@ export function cmdWatch(argv, flags) {
     floor,
     readEntries: reads.readEntries,
     readMailLetters: mailReader.letters,
+    projectEntries: mailReader.project,
     readCards: reads.readCards,
     readWorks: reads.readWorks,
     readDecisions: () => new DecisionStore(ledgerHome()).list(),
@@ -269,7 +272,8 @@ export function cmdWatch(argv, flags) {
     parents,
     loadHierarchy: flags.hierarchy ? () => {
       const text = fs.readFileSync(flags.hierarchy, "utf8");
-      return { parents: parseHierarchy(JSON.parse(text)), path: path.resolve(flags.hierarchy), hash: createHash("sha256").update(text).digest("hex") };
+      parents = parseHierarchy(JSON.parse(text));
+      return { parents, path: path.resolve(flags.hierarchy), hash: createHash("sha256").update(text).digest("hex") };
     } : null,
     pruneHierarchy: flags.hierarchy && prune !== "off"
       ? ({file, now}) => pruneHierarchy({home: ledgerHome(), floor, file, apply: true, now: () => now})
