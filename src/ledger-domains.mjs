@@ -205,8 +205,8 @@ function completionRequest(done,history) {
 export function isTaskCompletionReply(entries,mail,request) {
   return createTaskCompletionChecker(entries)(mail,request);
 }
-export function createTaskCompletionChecker(entries) {
-  let lookup;
+export function createTaskCompletionChecker(entries, saved = null) {
+  let lookup = saved;
   return (mail,request)=>{
     if(!request||!taskSend(request)||mail.systemGenerated!=='task-completion'||mail.completion!==true||
       mail.replyFinal!==true||mail.transport!=='mailbox'||own(mail,'taskId')||mail.replyTo!==request.mailId)return false;

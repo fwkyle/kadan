@@ -100,6 +100,8 @@ export function Mailbox({ url }: { url: URL }) {
         waiting: number;
         unread: number;
         previousGenerationUnread: number;
+        nextCursor?: string | null;
+        previousCursor?: string | null;
       }
     >("mail?" + url.searchParams),
     data = resource.data;
@@ -113,6 +115,7 @@ export function Mailbox({ url }: { url: URL }) {
       <Filters
         url={url}
         pageKey="mailPage"
+        resetKeys={["mailCursor"]}
         fields={[
           {
             name: "mailRole",
@@ -180,7 +183,11 @@ export function Mailbox({ url }: { url: URL }) {
           )}
           <Pages
             {...data}
-            onPage={(page) => patchLocation({ mailPage: String(page) })}
+            onPage={(page) => patchLocation({
+              mailPage: String(page),
+              mailCursor: page === 1 ? null : page === data.page + 1
+                ? data.nextCursor ?? null : page === data.page - 1 ? data.previousCursor ?? null : null,
+            })}
           />
         </>
       )}

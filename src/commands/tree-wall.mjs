@@ -27,6 +27,7 @@ import {readHumanBriefInputs} from '../human-brief.mjs';
 import {readOperationsFlowInputs} from '../operations-flow.mjs';
 import {DecisionStore} from '../decisions.mjs';
 import {createDashboardLedgerReader} from '../dashboard-ledger-reader.mjs';
+import {createDashboardMailReader} from '../dashboard-mail-reader.mjs';
 
 export function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
@@ -195,6 +196,7 @@ export function cmdWall(_argv, flags) {
   const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
   const server = createWallServer(createWallSnapshotLoader(runtime), {home,cacheSec,gui:true,loadSummary,
     loadLedger:createDashboardLedgerReader(home, {runtime}),
+    loadMail:createDashboardMailReader(home, {runtime}),
     loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly: true})});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
