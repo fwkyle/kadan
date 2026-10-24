@@ -50,7 +50,7 @@ test('읽음·답장 사건 없이 새 우편만 도착해도 같은 주기의 �
 function run(mode, change) {
   const home = homeOf(), records = [], sent = [];
   for (const event of initial) appendLedger(event, home);
-  const reader = createWatchMailReader(home, () => readLedgerIncremental(home));
+  const reader = createWatchMailReader(home);
   const readEntries = mode === 'view' ? reader.readEntries : () => readLedgerIncremental(home);
   let injected = false, now = 300_000;
   const works = [{key:'fixture/work', status:'open', executions:[]}];

@@ -4,7 +4,6 @@ import { WatchAI } from "../watch-ai.mjs";
 import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
 import { createProcessCollections } from "../process-collections.mjs";
-import { readLedgerIncremental } from "../ledger-incremental.mjs";
 import { notifyUser, watchProcessName } from "../watch-system.mjs";
 import { storageVersion } from "../storage.mjs";
 import { PROFILE_FILE } from "../watch-cycle.mjs";
@@ -221,7 +220,7 @@ export function cmdWatch(argv, flags) {
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
   const stores = createWatchStoreReaders(ledgerHome());
-  const mailReader = createWatchMailReader(ledgerHome(), () => readLedgerIncremental(ledgerHome()), {
+  const mailReader = createWatchMailReader(ledgerHome(), null, {
     readCards:stores.cards.read, readRoles:() => [...parents.keys()],
   });
   const reads=cycleReads({readEntries:mailReader.readEntries,readCards:stores.cards.read,
