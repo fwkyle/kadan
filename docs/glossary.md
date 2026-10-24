@@ -61,7 +61,7 @@
 
 ### SQLite 저장 전환
 
-- 저장 backend: storage.json으로 선택한 JSONL 또는 SQLite 기록 방식. 동시에 두 원본에 쓰지 않는다.
+- 저장 backend: storage.json이 표시하는 SQLite 기록 방식. 원본은 `kadan.sqlite`의 events 하나다(옛 JSONL 백엔드는 제거, 마지막 지원 태그 `jsonl-last`).
 - 스트림(stream): 같은 카드 또는 같은 기록 종류의 사건을 순서대로 묶는 저장 단위.
 - events / heads: 과거 사건과 마지막 상태. 동일 트랜잭션에서 함께 확정한다.
 - 저장 pause: 새로운 쓰기와 외부 실행을 거절하는 표식. 진행 중 명령이나 옛 프로세스가 종료되었다는 증거는 아니다.

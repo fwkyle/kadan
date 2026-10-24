@@ -58,8 +58,8 @@ function checkStorage({home}) {
   // 표시 파일·DB가 없는 홈에서만 옛 흔적을 찾는다(일반 읽기 경로에는 넣지 않는다).
   const trace = legacyTrace(home);
   if (trace) {
-    return result('warn', `주의(변환 필요): 옛 JSONL 흔적 ${trace} — 태그 jsonl-last의 kadan storage import로 변환`,
-      'kadan storage import  (태그 jsonl-last 버전)');
+    return result('warn', `주의(변환 필요): 옛 JSONL 흔적 ${trace} — 이 버전에는 import가 없다. 태그 jsonl-last를 체크아웃해 그 버전의 kadan storage import로 변환`,
+      'git checkout jsonl-last  후 kadan storage import  (이 버전에는 없음)');
   }
   return result('na', '아직 원장이 없다(처음 kadan up 전)');
 }

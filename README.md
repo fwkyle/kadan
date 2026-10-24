@@ -22,7 +22,7 @@
 
 | 항목 | 버전 | 비고 |
 |---|---|---|
-| Node.js | **24 이상** | 기본 저장소가 Node 내장 SQLite(`node:sqlite`)를 씁니다 |
+| Node.js | **24 이상** | 저장소가 Node 내장 SQLite(`node:sqlite`)입니다 |
 | tmux | 3.x | 기본 실행 바닥 |
 | AI CLI | — | 비서로 쓸 `claude` 또는 `codex` 등 |
 | OS | macOS / Linux | Linux에서는 창을 자동으로 열지 않고 붙는 명령을 알려 줍니다 |

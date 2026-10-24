@@ -148,7 +148,7 @@ export function pruneHierarchy({home, floor, file, apply = false, now = Date.now
     const backup = path.join(trash, `${path.basename(resolved)}.before-prune-${stamp}-${randomUUID()}`);
     fs.writeFileSync(backup, current.original, {flag:'wx', mode:0o600});
     // SQLite는 마지막 확인과 파일 교체 동안 새 발령·카드 변경이 끼어들지 못하게 한다.
-    // JSONL에서는 저장소를 다시 읽어 달라졌으면 중단한다.
+    // version==null은 저장소 없는 홈이다. 그때는 저장소를 다시 읽어 달라졌으면 중단한다.
     return storageTransaction(home, () => {
       if (current.snapshot.version != null) {
         if (storageVersion(home) !== current.snapshot.version) throw new Error('판정 중 원장·카드 변경: 적용하지 않음');
