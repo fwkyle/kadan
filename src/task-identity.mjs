@@ -22,24 +22,35 @@ export function taskIdentity(cards = []) {
     if (!['resolved','unregistered'].includes(found.state)) throw new Error(`기록 연결 실패: ${taskId} — ${found.reason}`);
     return found.key ? {taskId:found.taskId,executionKey:found.key,...(taskId!==found.taskId?{rawTaskId:taskId}:{})} : {taskId};
   };
+  const projectEntry = entry => {
+    if (entry?.kind === 'handover' && Array.isArray(entry.taskIds)) {
+      return {...entry, taskIds:entry.taskIds.map(id => resolve(id).taskId)};
+    }
+    if (!entry?.taskId) return entry;
+    const found = resolve(entry.taskId, entry.executionKey);
+    return {...entry, taskId:found.taskId, rawTaskId:entry.rawTaskId ?? entry.taskId,
+      ...(found.key ? {executionKey:found.key} : {}),
+      taskConnection:{state:found.state, reason:found.reason, candidates:found.candidates}};
+  };
   const project = entries => {
     const seen = new Set();
-    return entries.map(entry => {
-      if (entry?.kind === 'handover' && Array.isArray(entry.taskIds)) return {...entry,taskIds:entry.taskIds.map(id => resolve(id).taskId)};
-      if (!entry?.taskId) return entry;
-      const found = resolve(entry.taskId, entry.executionKey);
-      return {...entry,taskId:found.taskId,rawTaskId:entry.rawTaskId ?? entry.taskId,
-        ...(found.key ? {executionKey:found.key} : {}),taskConnection:{state:found.state,reason:found.reason,candidates:found.candidates}};
-    }).filter(entry => {
-      if (entry?.kind !== 'done' || !entry.role || !entry.taskId) return true;
-      // 별칭 해석 뒤에 최초 완료만 남긴다. 역할이 다르면 별개 실행이다.
-      const connection=entry.taskConnection;
-      const key = `${entry.role}\0${connection?.state==='resolved'?entry.executionKey:`${connection?.state}:${entry.taskId}:${entry.executionKey||''}`}`;
+    return entries.map(projectEntry).filter(entry => {
+      const key = projectedCompletionKey(entry);
+      if (key === null) return true;
       if (seen.has(key)) return false;
       seen.add(key);return true;
     });
   };
-  return {resolve,write,project,taskIdFor};
+  return {resolve,write,project,projectEntry,taskIdFor};
+}
+
+// 별칭 해석 뒤에 최초 완료만 남긴다. 역할이 다르면 별개 실행이다.
+export function projectedCompletionKey(entry) {
+  if (entry?.kind !== 'done' || !entry.role || !entry.taskId) return null;
+  const connection = entry.taskConnection;
+  const address = connection?.state === 'resolved' ? entry.executionKey
+    : `${connection?.state}:${entry.taskId}:${entry.executionKey || ''}`;
+  return `${entry.role}\0${address}`;
 }
 
 export const taskConnectionError = entry => Boolean(entry?.taskConnection && !['resolved','unregistered'].includes(entry.taskConnection.state));

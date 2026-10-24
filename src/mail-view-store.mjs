@@ -47,10 +47,11 @@ const schema = `
 export const encodeMailValue = value => JSON.stringify({value});
 export const decodeMailValue = value => JSON.parse(value).value;
 
-export function createMailViewStore(db, source, domain) {
+export function createMailViewStore(db, source, domain,
+  {projector = domainProjector(domain), projectEntry = entry => entry} = {}) {
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_view_meta'").get()) db.exec(schema);
   const scope = domain ?? '', statements = new Map(), objects = new Map(), positions = new WeakMap();
-  const objectKeys = new WeakMap(), project = domainProjector(domain);
+  const objectKeys = new WeakMap(), project = projector;
   let unknown = 0;
   const prepare = sql => {
     if (!statements.has(sql)) statements.set(sql, db.prepare(sql));
@@ -78,7 +79,8 @@ export function createMailViewStore(db, source, domain) {
     const row = prepare('SELECT stream,seq,payload FROM source_rows WHERE position=?').get(position);
     if (!row) throw new Error('우편 조회 위치 손상');
     const value = row.payload === null ? sourceViewValues(source, [row])[0] : JSON.parse(row.payload);
-    const entry = (row.stream === 'ledger.jsonl' ? project.legacy([value]) : project.rows([value]))[0];
+    const entry = projectEntry(
+      (row.stream === 'ledger.jsonl' ? project.legacy([value]) : project.rows([value]))[0]);
     return remember(position, entry);
   };
   const map = name => ({

@@ -8,6 +8,7 @@ import {firstReminderSent, isSimplifiedMail} from './mail-rule.mjs';
 import {createTaskCompletionChecker} from './ledger-domains.mjs';
 import {withLedgerView} from './ledger-view.mjs';
 import {metaGet} from './ledger-view-store.mjs';
+import {applyWatchMailProjection} from './watch-mail-projection.mjs';
 import {createMailViewStore, encodeMailValue, decodeMailValue, storedMailLetter,
   mailStateSelect, previousMailExpression} from './mail-view-store.mjs';
 
@@ -167,14 +168,17 @@ function applyState(store, info, actors, cold) {
     mailStateVersion:meta.stateVersion, mailCount:meta.count};
 }
 
-export function withMailboxView(home, read, {domain = null} = {}) {
-  if (![null, 'mailbox'].includes(domain)) throw new Error('우편 조회 영역 확인 필요');
+export function withMailboxView(home, read, {domain = null, cards = null} = {}) {
+  if (![null, 'mailbox', 'watch'].includes(domain)) throw new Error('우편 조회 영역 확인 필요');
+  if (domain === 'watch' && !Array.isArray(cards)) throw new Error('감시 우편의 카드 주소 수집이 필요합니다');
   const key = `${path.resolve(home)}:${domain ?? ''}`;
   return withLedgerView(home, (db, info, source) => {
     if (!db) return read(null, {...info, mailCount:0, mailStateVersion:0, mailGeneration:null});
     if (domain && metaGet(db, 'legacyBad')) throw new Error('과거 원장 손상: 도메인 조회 불가');
     if (metaGet(db, 'mailboxError')) throw new Error(metaGet(db, 'mailboxError'));
-    const store = createMailViewStore(db, source, domain);
+    const projection = domain === 'watch' ? applyWatchMailProjection(home, db, source, info, cards) : null;
+    if (projection) info = projection.info;
+    const store = createMailViewStore(db, source, domain, projection ?? undefined);
     const actors = JSON.stringify([...new Set(userActorNames())].sort());
     const previous = store.metadata(), stamp = JSON.stringify([info.generation, actors, previous?.revision]);
     const value = applyState(store, info, actors, verified.get(key) !== stamp);
