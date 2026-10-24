@@ -100,6 +100,7 @@ export async function runWatch({
   floor,
   readEntries,
   readMailLetters = null,
+  rememberObservedRoles = null,
   projectEntries = (entries, cards) => taskIdentity(cards).project(entries).filter(e => !taskConnectionError(e)),
   readCards = null,
   readWorks = () => [],
@@ -290,6 +291,8 @@ export async function runWatch({
     }
     const observationError = ledgerError || cardError;
     const observedSessions = scope ? new Set([...scope.sessions,...supervisorScope.sessions]) : null;
+    // 다음 수집은 실제 감시 역할의 문맥만 준비한다. 새 역할은 이번 수집의 기존 해석을 쓴다.
+    if (observedSessions) rememberObservedRoles?.([...observedSessions].map(session => session.slice(6)));
     const currentAI = job => !observationError && (!observedSessions || observedSessions.has(job.candidate.session))
       && job.responsibility === watchResponsibility(job.candidate.role,cards??[],entries,parents,job.candidate.source,works);
     const aiRecipients = new Set();
