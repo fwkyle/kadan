@@ -104,7 +104,8 @@ test('순회 계측은 기존 주기 사건에만 기록하며 잠든 시간과 
   cpuMs:{user:2.5,system:1.5},record:{count:0,ms:0,maxMs:0},send:{count:0,ms:0,maxMs:0},
   screens:{entries:0,bytes:0,reads:1,hits:0},
   collections:{mail:null,explain:null,
-   restoredChecked:{entries:0,sampledEntries:0,serializedBytes:0,complete:true},
+   restoredChecked:{entries:0,sampledEntries:0,serializedBytes:0,complete:true,
+    storage:'memory',retainedEntries:0},
    userPosts:{entries:0,sampledEntries:0,serializedBytes:0,complete:true}},
   memoryMb:{rss:100,heapUsed:25}});
  assert.deepEqual(Object.keys(stages),['rateLimit','queueResume','assess','ai','alerts','mail','absorb']);

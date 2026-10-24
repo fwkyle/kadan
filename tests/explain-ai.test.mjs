@@ -56,6 +56,23 @@ function world({chain = [{runner: 'fake', model: 'ok'}], exec = EXEC, spawn, tim
 }
 const enable = async w => { w.run(); await w.ai.drain(); w.clock.t += 60_000; };
 
+test('오래된 시도 키를 임시 DB로 옮긴 뒤에도 같은 입력과 재시작 중복 호출을 막는다', async t => {
+  const w = world();t.after(() => w.ai.stop());
+  for (let i = 0; i < 1100; i++) w.ai.attempted.add(`old-${i}|hash`);
+  assert.equal(w.ai.collections.info().storage, 'temporary');
+  const card = w.makeCard();await enable(w);w.dispatch(card, 0);
+  await w.run().done;assert.equal(w.calls().length, 1);
+  w.clock.t += 60_000;await w.run().done;
+  assert.equal(w.calls().length, 1);
+  assert(w.ai.attempted.has('old-0|hash'));
+  const again = new ExplainAI({home:w.home, now:() => w.clock.t});t.after(() => again.stop());
+  for (let i = 0; i < 1100; i++) again.handled.add(`unrelated-${i}`);
+  again.tick({cards:w.store.listSummaries(), entries:taskIdentity(w.store.listSummaries()).project(w.raw),
+    readEntries:() => w.raw});
+  await again.drain();assert.equal(w.calls().length, 1);
+  assert.equal(again.attempted.has('old-0|hash'), false, '원장에 없는 프로세스 내부 기억은 재시작 때 사라진다');
+});
+
 test('설명 AI 칸이 비었거나 exec 틀이 없으면 사건이 나도 호출 0, 설명 줄 변화 0, 기록 0', async () => {
   for (const options of [{chain: []}, {exec: null}]) {
     const w = world(options);

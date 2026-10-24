@@ -129,17 +129,36 @@ test('비서 앞 우편은 새 규칙에서 빠져 옛 5분 유예를 그대로 
 
 const reminderLines = (f, mailId = 'm1') => f.records.filter(e => e.kind === 'watch-mail-reminder' && e.mailId === mailId);
 
-test('같은 사유 not-sent를 480순회 돌려도 reminder 원장 줄 수는 일정하다(예약 1 + 첫 실패 1)', () => {
+test('같은 사유 not-sent를 480순회 돌려도 reminder 원장 줄 수는 일정하다(예약 1 + 첫 실패 1)', t => {
   const f = fixture([stored('m1')]);
   f.failWith = notSent('세션 입력 거절');
   const watch = f.create();
+  t.after(() => watch.close());
+  for (let i = 0; i < 1100; i++) watch.reserved.add(`past-${i}`);
+  assert.equal(watch.collections.info().storage, 'temporary');
   f.tick(watch);
   const after1 = reminderLines(f).length;
   for (let i = 0; i < 480; i++) { f.now += MIN; f.tick(watch); }
   assert.equal(after1, 2);
   assert.equal(reminderLines(f).length, after1);
-  assert.equal(watch.suppressed.size, 1, '쓰지 않은 재시도는 메모리로 센다');
+  assert.equal(watch.suppressed.size, 1, '쓰지 않은 재시도는 프로세스 기억으로 센다');
   assert.equal([...watch.suppressed.values()][0], 480);
+});
+
+test('임시 저장 뒤 전송 결과 기록이 실패해도 같은 프로세스에서 다시 보내지 않는다', t => {
+  const f = fixture([stored('m1')]), watch = f.create();
+  t.after(() => watch.close());
+  for (let i = 0; i < 1100; i++) watch.attempted.add(`past-${i}`);
+  const record = f.record;
+  f.record = event => {
+    if (event.action === 'result' && event.delivery === 'sent') throw Error('result unavailable');
+    record(event);
+  };
+  assert.throws(() => f.tick(watch), /result unavailable/);
+  assert.equal(f.sent.length, 1);
+  f.record = record;f.now += MIN;f.tick(watch);
+  assert.equal(f.sent.length, 1);
+  assert(watch.attempted.has('past-0'));
 });
 
 test('사유가 바뀌면 1줄 늘고(센 횟수 포함), sent·unknown은 그대로 기록하며 unknown은 영구 예약이다', () => {

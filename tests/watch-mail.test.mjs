@@ -9,6 +9,7 @@ import {MailWatch} from '../src/watch-mail.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
 import {waitingWithoutAsking} from '../src/watch-report.mjs';
 import {observationContext} from '../src/watch-supervisor-health.mjs';
+import {createProcessCollections} from '../src/process-collections.mjs';
 
 const at = n => new Date(n).toISOString();
 const question = (mailId, more={}) => ({kind:'send',mailId,role:'worker',by:'boss',t:at(0),expectReply:true,...more});
@@ -79,6 +80,20 @@ test('예약 쓰기 실패면 전송하지 않고 중단 뒤 남은 예약도 �
   assert.throws(()=>f.tick(),/record unavailable/);assert.equal(f.sent.length,0);
   const stopped=fixture();stopped.entries.push({kind:'watch-mail-reminder',action:'reserved',role:'worker',mailId:'q'});
   stopped.tick();assert.equal(stopped.sent.length,0);
+});
+
+test('임시 DB로 옮겨도 예약 기록 실패의 기억과 오래된 중복 방지를 유지한다', t => {
+  const f = fixture(), collections = createProcessCollections({maxEntries:1});
+  t.after(() => collections.close());
+  const watch = new MailWatch({collections, record:e => f.record(e), send:(...args) => f.send(...args)});
+  watch.reserved.add('old-one');watch.reserved.add('old-two');
+  assert.equal(collections.info().storage, 'temporary');
+  f.record = () => {throw Error('record unavailable');};
+  assert.throws(() => f.tick(watch), /record unavailable/);
+  f.record = e => {f.records.push(e);f.entries.push(e);};
+  f.tick(watch);assert.equal(f.sent.length, 0);
+  assert(watch.reserved.has('old-one'));
+  assert.equal(watch.reserved.size, 3);
 });
 
 test('예약 중 들어온 ack와 마지막 생존 검사 중 들어온 ack 제외',()=>{

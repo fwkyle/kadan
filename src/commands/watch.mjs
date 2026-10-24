@@ -3,6 +3,7 @@ import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { WatchAI } from "../watch-ai.mjs";
 import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
+import { createProcessCollections } from "../process-collections.mjs";
 import { readLedgerIncremental } from "../ledger-incremental.mjs";
 import { notifyUser, watchProcessName } from "../watch-system.mjs";
 import { storageVersion } from "../storage.mjs";
@@ -224,8 +225,10 @@ export function cmdWatch(argv, flags) {
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
   const holdTracker=new NotifyHoldTracker({record});
   const processName=watchProcessName(ledgerHome());
+  const collections = createProcessCollections();
   if(processName!=='kadan-watch')console.log(`감시 프로세스 이름: ${processName}`);
   return runWatch({
+    collections,
     runtime:captureRuntimeVersion(),
     floor,
     readEntries: reads.readEntries,
@@ -253,7 +256,7 @@ export function cmdWatch(argv, flags) {
       return floor.sendEnter(session);
     } : null,
     ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:(role,message,extra)=>sendWatchMessage(role,message,{tracker:holdTracker,...extra}),readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
-    explain: new ExplainAI({home:ledgerHome(),print:console.log}),
+    explain: new ExplainAI({home:ledgerHome(),print:console.log,collections}),
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,
     intervalMs: intervalSeconds * 1000,
@@ -274,5 +277,8 @@ export function cmdWatch(argv, flags) {
     judgeCmd: flags["judge-cmd"] || null,
     judgeCooldownMs: judgeCooldownMinutes * 60 * 1_000,
     signal:watchController.signal,
-  }).finally(()=>{process.removeListener('SIGTERM',stopWatch);process.removeListener('SIGINT',stopWatch);});
+  }).finally(()=>{
+    collections.close();
+    process.removeListener('SIGTERM',stopWatch);process.removeListener('SIGINT',stopWatch);
+  });
 }
