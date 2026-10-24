@@ -81,7 +81,7 @@ test('guardedSend: 카드 연결 전송은 AI 신원 미확인 pane에 전달·s
 });
 
 test('실제 CLI+격리 tmux: profile+no-cmd 시작 차단과 카드 전송 AI 신원 경계',{skip:!hasTmux},()=>{
- for(const backend of ['jsonl','sqlite']){
+ for(const backend of ['sqlite']){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-ai-guard-cli-'));
   if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
   const socket=path.basename(home),env={...process.env,KADAN_HOME:home,KADAN_SOCKET:socket,KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:''};

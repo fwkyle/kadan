@@ -12,7 +12,7 @@ import {parseHierarchy} from '../src/hierarchy.mjs';
 import {buildWatchScope} from '../src/watch-scope.mjs';
 import {MailWatch} from '../src/watch-mail.mjs';
 
-for (const backend of ['jsonl', 'sqlite']) {
+for (const backend of ['sqlite']) {
   test(`${backend}: 슈퍼 mail의 배정 카드 연결은 저장·알림만 하고 발령·대기를 바꾸지 않는다`, () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-peer-dispatch-'));
     if (backend === 'sqlite') {

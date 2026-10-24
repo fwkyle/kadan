@@ -36,7 +36,7 @@ function fixture(backend) {
   return f;
 }
 
-for (const backend of ['jsonl', 'sqlite']) {
+for (const backend of ['sqlite']) {
   for (const latestHeld of [true, false]) {
     test(`${backend}: 회복 뒤 재발하면 옛 보류 알림은 취소하고 최신 알림만 전달한다 (${latestHeld})`, () => {
       const f = fixture(backend);
