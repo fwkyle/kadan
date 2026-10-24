@@ -2,6 +2,8 @@
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
 import { createHash } from "node:crypto";
 import { doneEvidence } from "./done-evidence.mjs";
+import {readSpool} from './stop-hook-spool.mjs';
+import {ledgerHome} from './ledger.mjs';
 
 export function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -43,13 +45,15 @@ function startTimeMs(entry) {
 }
 
 // hookHome: Stop 훅 증거(spool) 폴더. 기본은 원장 홈이다(시험은 가짜 홈을 넘긴다).
-export function collectRoles(selectedFloor, entries, monitoredSessions = null, cards = null, { hookHome = null } = {}) {
-  const liveItems = selectedFloor.list();
+export function collectRoles(selectedFloor, entries, monitoredSessions = null, cards = null,
+  {hookHome = null, screenCache = null} = {}) {
+  const liveItems = selectedFloor.list(screenCache ? {observeOutput: true} : undefined);
   const liveBySession = new Map(
     liveItems
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
+  screenCache?.retain(new Set(liveBySession.keys()));
   const starts = latestStarts(entries);
   const identity = taskIdentity(cards ?? []);
   const taskKey = (id, key) => {
@@ -109,6 +113,10 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
   }
   const observations = new Map();
   const screenAlerts = [];
+  // 같은 256KiB 꼬리를 과거 발령 수만큼 다시 파싱하지 않는다. 매 수집마다 새로 읽고
+  // 그 수집 안에서만 공유한다. 다음 주기의 새 훅과 전송 직전 별도 관측은 그대로 확인한다.
+  const hookRows = [...dispatches.values()].some(items => items.size)
+    ? readSpool(hookHome ?? ledgerHome()) : [];
   for (const [session, start] of starts) {
     const monitored =
       monitoredSessions == null || monitoredSessions.has(session);
@@ -121,7 +129,8 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
     // 다만 화면 읽기 실패 경보의 표면은 그대로 두어 감시 대상에만 올린다.
     if (live) {
       try {
-        screen = readText(selectedFloor.read(session));
+        const read = () => readText(selectedFloor.read(session));
+        screen = screenCache ? screenCache.read(session, live, read) : read();
         if (screen == null) throw new Error("빈 응답");
       } catch (error) {
         screenError = error.message;
@@ -142,7 +151,7 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
     // 중앙 카드 조회를 쓰지 않는 기존 호출은 발령 없는 화면 후보도 보고한다.
     // 실제 CLI는 카드 목록(빈 목록 포함)을 넘기므로 등록 카드 감시는 발령 대조를 반드시 거친다.
     const { marker: doneMarker, source: doneSource } = doneEvidence({
-      dispatches: completionDispatches, screen, home: hookHome,
+      dispatches: completionDispatches, screen, home: hookHome, hookRows,
       role: session.slice("kadan-".length), taskKey, unscoped: cards == null,
     });
     observations.set(session, {

@@ -667,11 +667,14 @@ function stop(session) {
   }
 }
 
-function list({ strict = false, run = tmux } = {}) {
+function list({ strict = false, run = tmux, observeOutput = false } = {}) {
+  const outputFormat = '\t#{window_activity}\t#{window_id}\t#{pane_width}\t#{pane_height}' +
+    '\t#{alternate_on}\t#{pane_in_mode}\t#{pane_dead}';
   const result = run([
     "list-sessions",
     "-F",
-    "#{session_name}\t#{session_attached}\t#{session_created}\t#{pane_pid}",
+    "#{session_name}\t#{session_attached}\t#{session_created}\t#{pane_pid}" +
+      (observeOutput ? outputFormat : ''),
   ]);
   if (result.status !== 0) {
     if (strict) throw new Error('tmux 세션 목록 조회 실패: 생존 상태 모름');
@@ -682,7 +685,10 @@ function list({ strict = false, run = tmux } = {}) {
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [session, attached, created, pid] = line.split("\t");
+      const [session, attached, created, pid, ...output] = line.split("\t");
+      const validOutput = observeOutput && /^\d+$/.test(pid) && output.length === 7 &&
+        /^\d+$/.test(output[0]) && Number.isSafeInteger(Number(output[0])) && Number(output[0]) > 0 &&
+        /^@\d+$/.test(output[1]) && output.slice(2).every(value => /^\d+$/.test(value));
       return {
         session,
         alive: true,
@@ -690,6 +696,8 @@ function list({ strict = false, run = tmux } = {}) {
         pid: pid || null,
         attached,
         created: Number(created),
+        // ID는 변화 비교 재료일 뿐 주소가 아니다. 실제 읽기·전송은 계속 세션 이름으로 한다.
+        ...(validOutput ? {screenVersion: {activity: Number(output[0]), signature: output.join(':')}} : {}),
       };
     });
 }

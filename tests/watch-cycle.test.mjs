@@ -101,7 +101,8 @@ test('순회 계측은 기존 주기 사건에만 기록하며 잠든 시간과 
  const {stages,window,...timing}=cycles[0].timing;
  // 기존 네 구간은 그대로 남고, 나머지(otherMs)는 단계별 합과 같다.
  assert.deepEqual(timing,{totalMs:110,ledgerMs:10,prepareMs:10,screenMs:10,otherMs:80,observedSessions:1,
-  cpuMs:{user:2.5,system:1.5},record:{count:0,ms:0,maxMs:0},send:{count:0,ms:0,maxMs:0},memoryMb:{rss:100,heapUsed:25}});
+  cpuMs:{user:2.5,system:1.5},record:{count:0,ms:0,maxMs:0},send:{count:0,ms:0,maxMs:0},
+  screens:{entries:0,bytes:0,reads:1,hits:0},memoryMb:{rss:100,heapUsed:25}});
  assert.deepEqual(Object.keys(stages),['rateLimit','queueResume','assess','ai','alerts','mail','absorb']);
  assert.equal(Object.values(stages).reduce((a,b)=>a+b,0)+10,timing.otherMs); // 마지막 10은 absorb 뒤 종료 측정
  assert.equal(window.cycles,1);assert.deepEqual(window.otherMs,{sum:80,max:80});

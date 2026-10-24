@@ -53,6 +53,7 @@ import { mailboxLetters } from "./mailbox-state.mjs";
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
 import { shortDigest, normalizeForChange, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
+import {createWatchScreenCache} from './watch-screen-cache.mjs';
 import {
   clockTime,
   formatAlertBody,
@@ -225,6 +226,7 @@ export async function runWatch({
   let lockFailures = 0;
   // 주기 기록은 5분에 한 번이라, 그 사이 주기들의 시간을 합계·최대로 모아 함께 남긴다.
   let timingWindow = null;
+  const screenCache = createWatchScreenCache({now});
 
   // 이번 주기에 차례 칸 때문에 사용자 대기로 뺀 업무(주기 기록에 남는다).
   let userTurnWaits = [];
@@ -344,7 +346,7 @@ export async function runWatch({
     const preparedAt=measure();
     const roles = observationError
       ? { observations: new Map(), liveSessions: new Set(), screenAlerts: [] }
-      : collectRoles(floor, entries, observedSessions, cards);
+      : collectRoles(floor, entries, observedSessions, cards, {screenCache});
     const observedAt=measure();
     // otherMs를 단계별로 나눈다. 감시AI 응답은 주기가 기다리지 않으므로 여기 들어가지 않는다
     // (응답 시간은 watch-ai-call의 durationMs에 따로 남는다).
@@ -870,6 +872,7 @@ export async function runWatch({
         const timing={totalMs:sample.totalMs,ledgerMs:sample.ledgerMs,prepareMs:sample.prepareMs,screenMs:sample.screenMs,otherMs:sample.otherMs,
           observedSessions:[...roles.observations.values()].filter(r=>r.alive).length,
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
+          screens:screenCache.info(),
           memoryMb:roundAll({rss:memory.rss/2**20,heapUsed:memory.heapUsed/2**20}),window:timingWindow};
         record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs, routes, superRole,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError, userTurnWaits}));
