@@ -667,11 +667,11 @@ function stop(session) {
   }
 }
 
-function list({ strict = false } = {}) {
-  const result = tmux([
+function list({ strict = false, run = tmux } = {}) {
+  const result = run([
     "list-sessions",
     "-F",
-    "#{session_name}\t#{session_attached}\t#{session_created}",
+    "#{session_name}\t#{session_attached}\t#{session_created}\t#{pane_pid}",
   ]);
   if (result.status !== 0) {
     if (strict) throw new Error('tmux 세션 목록 조회 실패: 생존 상태 모름');
@@ -682,11 +682,12 @@ function list({ strict = false } = {}) {
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [session, attached, created] = line.split("\t");
+      const [session, attached, created, pid] = line.split("\t");
       return {
         session,
         alive: true,
-        pid: panePid(session),
+        // list-sessions의 pane은 그 세션의 현재 창·활성 화면이다. 전송 직전 PID 검사는 별도로 유지한다.
+        pid: pid || null,
         attached,
         created: Number(created),
       };
