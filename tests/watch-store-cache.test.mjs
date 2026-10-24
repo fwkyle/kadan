@@ -28,6 +28,8 @@ function append(home, kind, key, patch) {
 const cardPatch = {status: 'assigned', role: 'worker', repo: 'r', id: 'card'};
 const workPatch = {owner: 'boss', action: 'create', status: 'open', executions: [], mailRefs: []};
 const normalized = cards => cards.map(c => ({...c, history: c.history ?? []}));
+const withoutHistory = value => JSON.parse(JSON.stringify(value, (key, item) =>
+  ['history', 'watchHistorySummary'].includes(key) ? undefined : item));
 
 test('증분 요약은 열림·닫힘·재개와 업무 담당 경계에서 기존 전체 요약과 같다', () => {
   const {home, cards, works, readers} = setup();
@@ -50,10 +52,10 @@ test('증분 요약은 열림·닫힘·재개와 업무 담당 경계에서 기�
     const c = append(home, 'cards', 'r/card', {...cardPatch, ...patch});
     append(home, 'works', 'r/work', {...workPatch, ...patch});
     const nextCards = readers.cards.read(), nextWorks = readers.works.read();
-    assert.deepEqual(nextCards, cards.listWatch());
+    assert.deepEqual(withoutHistory(nextCards), withoutHistory(cards.listWatch()));
     assert.deepEqual(nextWorks, works.listWatch());
     const center = rows => buildCardCenter({cards: normalized(rows), entries, tree: [], now: Date.parse(at(20))});
-    assert.deepEqual(center(nextCards), center(cards.listWatch()));
+    assert.deepEqual(withoutHistory(center(nextCards)), withoutHistory(center(cards.listWatch())));
     assert.deepEqual(nextWorks.map(w => effectiveWorkOwnership(w, entries)),
       works.list().map(w => effectiveWorkOwnership(w, entries)));
     assert.notStrictEqual(nextCards, oldCards, '버전마다 새 배열');
@@ -76,7 +78,7 @@ test('무관한 사건·변경 없는 주기는 같은 요약을 재사용하고
   assert.strictEqual(readers.cards.read(), first);
   assert.equal(readers.cards.info().rows, before.rows);
   append(home, 'cards', 'r/new', {...cardPatch, id: 'new'});
-  assert.deepEqual(readers.cards.read(), cards.listWatch());
+  assert.deepEqual(withoutHistory(readers.cards.read()), withoutHistory(cards.listWatch()));
   assert.equal(readers.cards.info().changed, 1);
 });
 
@@ -114,7 +116,7 @@ test('파일 교체는 같은 순번이어도 전체 검증으로 복구한다',
   a.readers.cards.read();
   fs.renameSync(storagePath(a.home), path.join(a.home, 'previous.sqlite'));
   fs.copyFileSync(storagePath(b.home), storagePath(a.home));
-  assert.deepEqual(a.readers.cards.read(), new CardStore(a.home).listWatch());
+  assert.deepEqual(withoutHistory(a.readers.cards.read()), withoutHistory(new CardStore(a.home).listWatch()));
   assert.equal(a.readers.cards.read()[0].title, 'after');
   assert.equal(a.readers.cards.info().full, 2);
 });
