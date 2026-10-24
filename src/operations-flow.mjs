@@ -46,9 +46,50 @@ function workAt(home,key){
  return work;
 }
 
+function readFollowupSources(home,snapshot){
+ const sources={cards:[],ledgerState:null,decisions:[],error:null};
+ try{
+  sources.cards=snapshot.cards??heads(home,'cards');
+  sources.ledgerState=snapshot.ledgerState??readLedgerState(home);
+  if(snapshot.decisionError)throw new Error(snapshot.decisionError);
+  sources.decisions=snapshot.decisions??new DecisionStore(home).list();
+ }catch{sources.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
+ return sources;
+}
+function readAutomaticInputs(home,works){
+ const values=new Map(works.map(w=>[w.key,[]]));
+ try{
+  if(!works.length||storageMode(home)==='none')return values;
+  transaction(home,db=>{
+   const streams=[...new Set(works.map(w=>`automatic-review/${w.key}/events.jsonl`))];
+   const query=db.prepare(`SELECT e.stream,e.payload FROM json_each(?) wanted
+    JOIN events e ON e.stream=wanted.value ORDER BY e.stream,e.seq`);
+   for(const row of query.iterate(JSON.stringify(streams))){
+    const key=row.stream.slice(17,-13),rows=values.get(key);
+    if(rows instanceof Error)continue;
+    try{rows.push(JSON.parse(row.payload));}catch(error){values.set(key,error);}
+   }
+  },{readOnly:true});
+ }catch(error){for(const key of values.keys())values.set(key,error);}
+ return values;
+}
+// 원본 확보만 같은 snapshot 안에서 한다. 관계 색인·상태 판정은 DB를 닫은 다음 계산한다.
+export function readOperationsFlowInputs(home,works,snapshot={}){
+ const sources=readFollowupSources(home,snapshot),histories=new Map();
+ const known=new Map(sources.cards.filter(c=>Array.isArray(c.history)&&c.history.length===c.revision&&
+  c.history.every((h,i)=>h.key===c.key&&h.revision===i+1)).map(c=>[c.key,c.history]));
+ const read=stream=>{try{return readStream(home,stream);}catch(error){return error;}};
+ for(const key of new Set(works.flatMap(w=>w.executions.map(e=>e.key)))){
+  histories.set(key,known.get(key)??read(`cards/${key}/events.jsonl`));
+ }
+ const captured=works.map(work=>work.history?work:
+  {...work,history:readStream(home,`works/${work.key}/events.jsonl`)});
+ return {sources,histories,automatic:readAutomaticInputs(home,works),works:captured};
+}
 function followupContext(home,snapshot={}){
+ const sources=snapshot.sources??readFollowupSources(home,snapshot);
  const context={cards:[],read:null,decisions:[],error:null};
- try{context.cards=snapshot.cards??heads(home,'cards');context.read=eventReader(home,snapshot.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');
+ try{context.cards=sources.cards;context.read=eventReader(home,sources.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');
   // 업무마다 원장 전체를 훑지 않게 우편·완료와 인계 사건을 한 번만 골라 둔다(순서는 그대로 유지된다).
   context.sendDone=context.read(e=>['send','done'].includes(e.kind));
   context.transfers=context.read(e=>e.kind==='handover');
@@ -66,13 +107,20 @@ function followupContext(home,snapshot={}){
   context.byAddress=index(context.sendDone,e=>[e.executionKey,e.taskId]);
   context.transfersByKey=index(context.transfers,e=>Array.isArray(e.taskIds)
    ?e.taskIds.map(id=>context.identity.resolve(id).key):[null]);
-  context.decisions=snapshot.decisions??new DecisionStore(home).list();}
+  context.decisions=sources.decisions;context.error=sources.error;}
  catch{context.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
  return context;
 }
 function followupFor(home,work,executions,context,now=stamp()){
  let automatic=null,error=context.error,terminalAt=null;
- try{const rows=readStream(home,`automatic-review/${work.key}/events.jsonl`,{optional:true});automatic=rows.at(-1)||null;terminalAt=rows.find(e=>e.current?.key===automatic?.current?.key&&['pass','boundary','limit','exception'].includes(e.status))?.at||null;}
+ try{
+  const rows=context.automatic?.get(work.key)??
+   readStream(home,`automatic-review/${work.key}/events.jsonl`,{optional:true});
+  if(rows instanceof Error)throw rows;
+  automatic=rows.at(-1)||null;
+  terminalAt=rows.find(e=>e.current?.key===automatic?.current?.key&&
+   ['pass','boundary','limit','exception'].includes(e.status))?.at||null;
+ }
  catch{error='자동 왕복 기록 조회 실패';}
  const decisions=context.decisions.filter(d=>d.work===work.key||work.executions.some(c=>c.key===d.card));
  const followup=workFollowup(work,executions,{automatic,decisions,error});
@@ -91,10 +139,10 @@ function followupFor(home,work,executions,context,now=stamp()){
 // 목록도 본문을 열지 않고 같은 실행·결정 기록을 한 번만 읽는다.
 export function operationsFlowSummaries(home,works,snapshot={}){
  if(!works.length)return new Map();
- return storageSnapshot(home,()=>{
-  const context=followupContext(home,snapshot),now=stamp();
-  return new Map(works.map(work=>{
-   if(!work.history)work={...work,history:readStream(home,`works/${work.key}/events.jsonl`)};
+ const inputs=snapshot.inputs??storageSnapshot(home,()=>readOperationsFlowInputs(home,works,snapshot));
+ const context=followupContext(home,inputs),now=stamp();
+ context.automatic=inputs.automatic;context.histories=inputs.histories;
+ return new Map(inputs.works.map(work=>{
    let records=null;
    if(context.read){
     const keys=new Set(work.executions.map(x=>x.key));
@@ -118,8 +166,7 @@ export function operationsFlowSummaries(home,works,snapshot={}){
    }
    const executions=work.executions.map(link=>executionModel(home,link,context.cards,records,context.identity,context.histories));
    return [work.key,followupFor(home,work,executions,context,now)];
-  }));
- });
+ }));
 }
 export function operationsFlowIndex(home){
  return storageSnapshot(home,()=>{
@@ -158,6 +205,7 @@ function executionModel(home,link,cardHeads,records,sharedIdentity=null,historie
  try{
   if(!validKey(link.key))throw failure('실행 주소 확인 필요');
   const history=histories?.get(link.key)??readStream(home,`cards/${link.key}/events.jsonl`);
+  if(history instanceof Error)throw history;
   if(!history.length||history.some((c,i)=>c.key!==link.key||c.revision!==i+1))throw failure('실행 이력 확인 필요');
   const card=history.at(-1),identity=sharedIdentity||taskIdentity(cardHeads);
   const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;

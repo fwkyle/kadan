@@ -1,7 +1,7 @@
 // kadan tree·wall·dashboard (HW-3-impl: cli.mjs에서 옮김)
 import { readLedgerState, projectLedger } from "../ledger-domains.mjs";
 import { readLedgerViewIncremental } from "../ledger-incremental.mjs";
-import { storageMode } from "../storage.mjs";
+import { storageMode, storageSnapshot } from "../storage.mjs";
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { attachWatchOverview } from "../watch-overview.mjs";
 import { watchProcessName } from "../watch-system.mjs";
@@ -23,6 +23,9 @@ import {dashboardDataVersions} from '../dashboard-data-versions.mjs';
 import {createTreeInputCache} from '../dashboard-tree-inputs.mjs';
 import {createDashboardStoreReader} from '../dashboard-store-reader.mjs';
 import { createDashboardSummaryReader } from "../dashboard-summary-reader.mjs";
+import {readHumanBriefInputs} from '../human-brief.mjs';
+import {readOperationsFlowInputs} from '../operations-flow.mjs';
+import {DecisionStore} from '../decisions.mjs';
 
 export function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
@@ -55,14 +58,13 @@ function dashboardStores(home) {
 }
 // 원장/카드/업무 버전을 나눠 바뀐 입력만 다시 읽는다. 사건 분류는 새 부분만 이어서 한다.
 // 생존 여부·자원·감시 프로세스는 원장에 없는 값이라 매번 새로 읽는다.
-export function loadWallSnapshot(runtime=null, {listOnly=false}={}) {
+function readWallData(runtime, listOnly) {
   const collectedAt = new Date();
   const home = ledgerHome();
   let versions;
   try { versions = dashboardDataVersions(home); }
   catch { versions = {all: null, cards: null, works: null}; }
   const version = versions.all;
-  const resourceSnapshot = listOnly ? {} : buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   const file = ledgerPath();
   let entries = [];
   let ledgerLines = null,ledgerState=null;
@@ -81,6 +83,28 @@ export function loadWallSnapshot(runtime=null, {listOnly=false}={}) {
     errors.push(`원장 못 읽음(0개가 아니라 모름): ${error.message}`);
   }
 
+  let cards=[],cardError=null,registeredWorks=null,workError=null;
+  try {cards=wallCache.memo("cards", versions.cards, () => dashboardStores(home).cards.read());}
+  catch(error){cardError=error;}
+  try {registeredWorks=wallCache.memo("works", versions.works, () => dashboardStores(home).works.read());}
+  catch(error){workError=error;}
+  const briefInputs=readHumanBriefInputs(home,cards.map(c=>c.key));
+  let operationsInputs=null,operationsInputsError=null,decisions=[],decisionError=null;
+  try{decisions=new DecisionStore(home).list();}catch(error){decisionError=error.message;}
+  if(registeredWorks)try{
+    operationsInputs=readOperationsFlowInputs(home,registeredWorks,{cards,ledgerState,decisions,decisionError});
+  }catch(error){operationsInputsError=error.message;}
+  return {runtime,listOnly,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
+    errors,cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
+    decisions,decisionError};
+}
+
+function buildWallData(data) {
+  const {runtime,listOnly,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
+    cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
+    decisions,decisionError}=data;
+  const errors=[...data.errors];
+  const resourceSnapshot = listOnly ? {} : buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   let sessions = [];
   try {
     sessions = floor.list();
@@ -92,15 +116,13 @@ export function loadWallSnapshot(runtime=null, {listOnly=false}={}) {
       .filter((item) => item.alive !== false)
       .map((item) => [item.session, item])
   );
-  let cards=[],cardError=null;
-  try {cards=wallCache.memo("cards", versions.cards, () => dashboardStores(home).cards.read());}catch(error){cardError=error;}
   const inputs = treeInputs(entries);
   const aliveKey = JSON.stringify(Object.keys(aliveBySession).sort()
     .map(name => [name, aliveBySession[name].pid ?? null]));
   const treeKey = version && JSON.stringify([versions.cards, inputs.revision, aliveKey]);
   const tree=withWaitSnapshots(wallCache.memo('tree', treeKey,
     () => buildTree(inputs.entries,aliveBySession,cards)),home);
-  let center=null, centerError=null,registeredWorks=null,centerKey=null;
+  let center=null, centerError=null,centerKey=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
     if(cardError)throw cardError;
@@ -113,12 +135,14 @@ export function loadWallSnapshot(runtime=null, {listOnly=false}={}) {
       { boundary: () => nextTimeBoundary(cards, builtAt) });
     // 대기 출력 꼬리(out/*.wait-*.txt)는 원장 밖 파일이라 재사용한 카드 상태에 낡은 값이 남는다. 역할 목록은 매번 새 tree의 것을 쓴다.
     center = { ...cached, roles: [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()] };
-    registeredWorks=wallCache.memo("works", versions.works, () => dashboardStores(home).works.read());
+    if(workError)throw workError;
     if(!listOnly)center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
   let cardFiles = null;
   return {
     center,centerError,tree,ledgerState,registeredWorks,runtime,
+    registeredWorkError:workError?.message??null,
+    briefInputs,operationsInputs,operationsInputsError,decisions,decisionError,
     ...resourceSnapshot,
     entries,
     centerKey,
@@ -137,6 +161,16 @@ export function loadWallSnapshot(runtime=null, {listOnly=false}={}) {
     ledgerLines,
     error: errors.length > 0 ? errors.join(" / ") : null,
   };
+}
+
+// 서버는 read만 DB snapshot으로 묶고 build·렌더는 닫힌 뒤 실행한다.
+// 10배 이력에서 원본 배열 보관은 여전히 늘지만 OS 조회와 상태 계산은 DB를 붙잡지 않는다.
+export function createWallSnapshotLoader(runtime=null,{listOnly=false}={}) {
+  return {read:()=>readWallData(runtime,listOnly),build:buildWallData};
+}
+export function loadWallSnapshot(runtime=null,options={}) {
+  const loader=createWallSnapshotLoader(runtime,options);
+  return loader.build(storageSnapshot(ledgerHome(),loader.read));
 }
 
 export function cmdWall(_argv, flags) {
@@ -158,8 +192,8 @@ export function cmdWall(_argv, flags) {
   const runtime=captureRuntimeVersion();
   const home = ledgerHome();
   const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
-  const server = createWallServer(()=>loadWallSnapshot(runtime), {home,cacheSec,gui:true,loadSummary,
-    loadListSnapshot: () => loadWallSnapshot(runtime, {listOnly: true})});
+  const server = createWallServer(createWallSnapshotLoader(runtime), {home,cacheSec,gui:true,loadSummary,
+    loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly: true})});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;

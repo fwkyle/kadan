@@ -44,7 +44,10 @@ const registeredBySnapshot=new WeakMap();
 export function registeredCenterWorks(snapshot){
  const hit=registeredBySnapshot.get(snapshot);if(hit)return hit;
  let works=snapshot.home?[]:null,workError=null;
- if(snapshot.home)try{works=snapshot.registeredWorks??new WorkStore(snapshot.home).list();}catch(error){works=null;workError=error.message;}
+ if(snapshot.home)try{
+  if(snapshot.registeredWorkError)throw new Error(snapshot.registeredWorkError);
+  works=snapshot.registeredWorks??new WorkStore(snapshot.home).list();
+ }catch(error){works=null;workError=error.message;}
  const value={works,workError};registeredBySnapshot.set(snapshot,value);return value;
 }
 export function prepareCenterWall(snapshot){
@@ -54,7 +57,10 @@ export function prepareCenterWall(snapshot){
  let {works,workError}=registeredCenterWorks(snapshot);
  // 카드 상태 키(snapshot.centerKey)가 같으면 업무 목록 계산(약 2.3초)도 같다. 키가 없으면(저장소 없는 홈·시험) 매번 계산한다.
  let builtAt=0;
- const compute=()=>{builtAt=Date.now();return workDashboardModel(works,center,entries,operationsFlowSummaries(home,works,{ledgerState:ledgerState??undefined,cards:center?.cards}));};
+ const compute=()=>{builtAt=Date.now();if(snapshot.operationsInputsError)throw new Error(snapshot.operationsInputsError);
+  return workDashboardModel(works,center,entries,
+  operationsFlowSummaries(home,works,{ledgerState:ledgerState??undefined,cards:center?.cards,
+   inputs:snapshot.operationsInputs}));};
  const modelKey = center && snapshot.centerKey ? snapshot.workModelKey ?? snapshot.centerKey : null;
  if(works)try{works=wallCache.memo('works-model',modelKey,compute,{maxAge:TIME_DEPENDENT_MAX_AGE_MS,boundary:()=>nextTimeBoundary(center?.cards,builtAt)})}catch(error){works=null;workError=error.message;}
  const value={works,workError};worksBySnapshot.set(snapshot,value);return value;
@@ -62,7 +68,7 @@ export function prepareCenterWall(snapshot){
 export function renderCenterWall(snapshot, {token='',url=new URL('http://localhost')}={}) {
  let {center,centerError,collectedAt,error,resources,decisions=[],decisionError=null,entries=[],ledgerLines=0,home,runtime}=snapshot;
  if(centerError)center=null;
- const briefs=buildHumanBrief(center,home);
+ const briefs=buildHumanBrief(center,home,snapshot.briefInputs);
  // 위 메뉴의 우편함 배지: 답을 기다리는 질문 수(모든 역할). 원장을 못 읽으면 0이 아니라 모름.
  let waitingQuestions=null;
  try{if(ledgerLines!==null)waitingQuestions=mailboxLetters(entries).filter(m=>m.replyStatus==='waiting').length;}catch{waitingQuestions=null;}

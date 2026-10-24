@@ -70,6 +70,7 @@ export function ledgerData(snapshot, url, stamp) {
     snapshot.entries || [],
     snapshot.home,
     url.searchParams.get("ledgerDomain") || "all",
+    snapshot.ledgerState,
   );
   const filtered = filterLedgerRows(all, {
     kind: url.searchParams.get("ledgerKind") || "",

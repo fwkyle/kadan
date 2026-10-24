@@ -4,6 +4,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {assertTestHome,underTest} from './test-home-guard.mjs';
+import {observeTransaction} from './storage-observation.mjs';
 const require=createRequire(import.meta.url);
 const connections=new Map();
 export const storagePath=home=>path.join(home,'kadan.sqlite');
@@ -170,9 +171,15 @@ export function transaction(home,fn,{readOnly=false}={}){
  if(!readOnly)assertWritable(home);
  const db=openDatabase(home,{readOnly});
  connections.set(key,{db,readOnly});
- try{db.exec(readOnly?'BEGIN':'BEGIN IMMEDIATE');const out=fn(db);if(out&&typeof out.then==='function')throw new Error('DB 트랜잭션 안에서 비동기/외부 대기 금지');db.exec('COMMIT');return out;}
- catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e}
- finally{connections.delete(key);db.close()}
+ const observation=observeTransaction(home,readOnly);let failure=null;
+ try{
+  db.exec(readOnly?'BEGIN':'BEGIN IMMEDIATE');observation.began();
+  const out=fn(db);
+  if(out&&typeof out.then==='function')throw new Error('DB 트랜잭션 안에서 비동기/외부 대기 금지');
+  db.exec('COMMIT');return out;
+ }
+ catch(e){failure=e;if(db.isTransaction)db.exec('ROLLBACK');throw e;}
+ finally{connections.delete(key);try{db.close();}finally{observation.end(failure);}}
 }
 export function storageTransaction(home,fn){return transaction(home,fn);}
 // 원장 전체의 마지막 사건 번호. 사건은 지우지 못하므로(삭제 금지 트리거) 무엇이든 추가되면 커진다.
