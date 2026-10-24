@@ -55,12 +55,13 @@ let stores = null;
 function dashboardStores(home) {
   if (stores?.home !== home) stores = {home,
     cards: createDashboardStoreReader(home, 'cards'),
+    summaryCards: createDashboardStoreReader(home, 'cards', {summaryBodies: true}),
     works: createDashboardStoreReader(home, 'works')};
   return stores;
 }
 // 원장/카드/업무 버전을 나눠 바뀐 입력만 다시 읽는다. 사건 분류는 새 부분만 이어서 한다.
 // 생존 여부·자원·감시 프로세스는 원장에 없는 값이라 매번 새로 읽는다.
-function readWallData(runtime, listOnly) {
+function readWallData(runtime, listOnly, summaryBodies) {
   const collectedAt = new Date();
   const home = ledgerHome();
   let versions;
@@ -86,7 +87,8 @@ function readWallData(runtime, listOnly) {
   }
 
   let cards=[],cardError=null,registeredWorks=null,workError=null;
-  try {cards=wallCache.memo("cards", versions.cards, () => dashboardStores(home).cards.read());}
+  const cardReader = summaryBodies ? 'summaryCards' : 'cards';
+  try {cards=wallCache.memo(cardReader, versions.cards, () => dashboardStores(home)[cardReader].read());}
   catch(error){cardError=error;}
   try {registeredWorks=wallCache.memo("works", versions.works, () => dashboardStores(home).works.read());}
   catch(error){workError=error;}
@@ -96,13 +98,13 @@ function readWallData(runtime, listOnly) {
   if(registeredWorks)try{
     operationsInputs=readOperationsFlowInputs(home,registeredWorks,{cards,ledgerState,decisions,decisionError});
   }catch(error){operationsInputsError=error.message;}
-  return {runtime,listOnly,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
+  return {runtime,listOnly,summaryBodies,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
     errors,cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
     decisions,decisionError};
 }
 
 function buildWallData(data) {
-  const {runtime,listOnly,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
+  const {runtime,listOnly,summaryBodies,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
     cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
     decisions,decisionError}=data;
   const errors=[...data.errors];
@@ -130,7 +132,7 @@ function buildWallData(data) {
     if(cardError)throw cardError;
     const runtimeKnown=!errors.some(x=>x.startsWith("생존"));
     // 카드 상태 계산은 원장·카드 파일과 세션 생존 여부(pid 포함)가 같으면 결과가 같다.
-    centerKey = version && JSON.stringify([versions.cards, inputs.revision, runtimeKnown, aliveKey]);
+    centerKey = version && JSON.stringify([versions.cards, inputs.revision, runtimeKnown, aliveKey, summaryBodies]);
     // 상태 판정이 현재 시각을 본다(card-center의 activityAt 비교). 계산한 시각을 쓰고, 카드에 적힌 다음 시각 경계가 지나면 다시 계산한다.
     let builtAt = 0;
     const cached = wallCache.memo("center", centerKey, () => buildCardCenter({cards,entries:inputs.entries,tree,runtimeKnown,now:(builtAt=Date.now())}),
@@ -167,8 +169,8 @@ function buildWallData(data) {
 
 // 서버는 read만 DB snapshot으로 묶고 build·렌더는 닫힌 뒤 실행한다.
 // 10배 이력에서 원본 배열 보관은 여전히 늘지만 OS 조회와 상태 계산은 DB를 붙잡지 않는다.
-export function createWallSnapshotLoader(runtime=null,{listOnly=false}={}) {
-  return {read:()=>readWallData(runtime,listOnly),build:buildWallData};
+export function createWallSnapshotLoader(runtime=null,{listOnly=false,summaryBodies=false}={}) {
+  return {read:()=>readWallData(runtime,listOnly,summaryBodies),build:buildWallData};
 }
 export function loadWallSnapshot(runtime=null,options={}) {
   const loader=createWallSnapshotLoader(runtime,options);
@@ -194,10 +196,11 @@ export function cmdWall(_argv, flags) {
   const runtime=captureRuntimeVersion();
   const home = ledgerHome();
   const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
-  const server = createWallServer(createWallSnapshotLoader(runtime), {home,cacheSec,gui:true,loadSummary,
+  const server = createWallServer(createWallSnapshotLoader(runtime, {summaryBodies:true}),
+    {home,cacheSec,gui:true,loadSummary,
     loadLedger:createDashboardLedgerReader(home, {runtime}),
     loadMail:createDashboardMailReader(home, {runtime}),
-    loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly: true})});
+    loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly:true,summaryBodies:true})});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;

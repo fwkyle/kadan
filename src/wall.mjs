@@ -622,7 +622,20 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     });
     response.end(html);
     };
-    try{if(home&&typeof readSnapshot==='function')storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(error.status||503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});response.end('저장소 확인 불가: '+error.message);}
+    const serveOnce = () => home && typeof readSnapshot === 'function'
+      ? storageSnapshot(home, serve) : serve();
+    try {
+      try {serveOnce();}
+      catch (error) {
+        if (error.code !== 'KADAN_BODY_CHANGED' || response.headersSent || request.method !== 'GET') throw error;
+        // 원문과 요약의 지문이 달라졌을 때만 새 수집 한 번. 계속 바뀌면 아래 오류로 돌려준다.
+        clear();serveOnce();
+      }
+    } catch (error) {
+      if (!response.headersSent) response.writeHead(error.status || 503,
+        {'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
+      response.end('저장소 확인 불가: ' + error.message);
+    }
   });
   // 요청을 다 보내고 쓰기 쪽만 닫은 클라이언트도 응답을 받는다(기본값은 상대가 닫으면 이쪽도 닫는다).
   server.httpAllowHalfOpen=true;
