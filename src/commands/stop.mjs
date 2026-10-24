@@ -6,7 +6,7 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
-import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, markStopped, unmarkStopped, readReviveState } from "../revive.mjs";
+import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, markStopped, unmarkStopped, readReviveState } from "../revive.mjs";
 import {
   pendingCardsFor,
   buildStopLedgerEntry,
@@ -20,7 +20,7 @@ export function cmdStop(argv) {
   const home = ledgerHome();
   // 기반 프로세스 4개의 stop은 `kadan up --auto`와 같은 잠금 아래에서 돈다. 안 그러면 끄는 도중 자동 실행이 세션이 없는 것을 보고 되살린다.
   // 잠금을 못 잡으면 끄지 않고 안내한다(사람 명령을 조용히 무시하지 않는다).
-  const release = TARGETS.includes(role) ? acquireReviveLock(home, { waitMs: lockWaitMs(), onReclaim: reclaimLog }) : () => {};
+  const release = TARGETS.includes(role) ? acquireReviveLock(home, { waitMs: lockWaitMs(), onReclaim: reclaimLog, onLegacy: legacyLog }) : () => {};
   if (!release) die(`자동 되살리기(kadan up --auto)가 실행 중이라 끄지 않았습니다. 잠시 뒤 다시 kadan stop ${role}를 치세요`, 1);
   const fail = (message) => { release(); die(message); };
   if (!floor.alive(session)) fail(`세션 없음: ${session}`);
