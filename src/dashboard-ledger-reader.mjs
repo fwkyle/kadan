@@ -1,27 +1,14 @@
 // Why: 활동 기록은 카드·세션 수집 없이 SQL에서 한 쪽만 읽는다.
-import {createHash} from 'node:crypto';
 import {withLedgerView, sourceViewValues} from './ledger-view.mjs';
 import {metaGet} from './ledger-view-store.mjs';
 import {ledgerWhere} from './ledger-view-filters.mjs';
 import {domainProjector} from './ledger-domains.mjs';
 import {ledgerOriginal, eventLabel, eventSummary} from './ledger-table.mjs';
+import {pageQueryKey as fingerprint, encodePageCursor as encode, decodePageCursor as decode,
+  invalidPageCursor as invalidCursor} from './dashboard-page-cursor.mjs';
 
 const PAGE_SIZE = 50;
 const FROM = 'FROM views v JOIN filters f USING(position)';
-const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
-const invalidCursor = () => Object.assign(new Error('기록 조회 위치가 올바르지 않습니다'), {status:400});
-function decode(value) {
-  if (!value) return null;
-  if (value.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(value)) throw invalidCursor();
-  let cursor;
-  try {cursor = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));} catch {throw invalidCursor();}
-  if (cursor?.v !== 1 || typeof cursor.g !== 'string' || typeof cursor.q !== 'string' ||
-    !['before', 'after'].includes(cursor.direction) ||
-    ![cursor.anchor, cursor.edge, cursor.page].every(n => Number.isSafeInteger(n) && n > 0) ||
-    cursor.edge > cursor.anchor + 1) throw invalidCursor();
-  return cursor;
-}
 
 function queryPage(db, info, source, url) {
   const rawDomain = url.searchParams.get('ledgerDomain');

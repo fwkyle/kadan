@@ -8,8 +8,10 @@ const pidOf = e => e.panePid ?? e.rottiePid;
 // 기록 필드가 없는 옛 start는 cmd 원문에 같은 파싱을 적용한다. 원장은 고치지 않는다.
 export const conversationModeOf = e => e.conversationMode ?? conversationOf(e.cmd).conversationMode;
 
-export function createMailGenerations() {
-  const live = new Map(), seen = new Set(), bounds = new Map(), boundTimes = new Map(), resumes = new Map();
+export function createMailGenerations(saved = null) {
+  const {live, seen, bounds, resumes} = saved ?? {
+    live:new Map(), seen:new Set(), bounds:new Map(), resumes:new Map(),
+  };
   const apply = (e, index) => {
     if (e?.kind === 'stop') { live.delete(e.session); return; }
     if (e?.kind !== 'start') return;
@@ -25,22 +27,27 @@ export function createMailGenerations() {
     // 이어 연 start(압축된 대화를 다시 연 경우): 세대 경계는 아니지만 지침 전문을 새로 보내야 할 자리다.
     // sameProcess(살아 있는 세션 재사용)는 새 프로세스도 대화 재로드도 없으므로 뺀다.
     if (!sameProcess && (e.inheritMail === true || e.restoredFrom || e.secretaryResumeSource || e.restartOf
-      || conversationModeOf(e) === 'resume')) resumes.set(role, [...(resumes.get(role) ?? []), index]);
+      || conversationModeOf(e) === 'resume')) resumes.set(role, Math.max(resumes.get(role) ?? -1, index));
     if (!continues && seen.has(role)) {
-      bounds.set(role, [...(bounds.get(role) ?? []), index]);
-      boundTimes.set(role, [...(boundTimes.get(role) ?? []), Date.parse(e.t)]);
+      const previous = bounds.get(role), time = Date.parse(e.t);
+      bounds.set(role, {count:(previous?.count ?? 0) + 1, index:Math.max(previous?.index ?? -1, index),
+        time:Number.isFinite(time) ? Math.max(previous?.time ?? -Infinity, time) : previous?.time ?? null});
     }
     seen.add(role);
   };
   // at 이후에 이 역할의 새 세대가 시작됐으면 그 편지는 이전 세대 소속이다.
-  const isPrevious = (role, at) => (bounds.get(role) ?? []).some(index => index > at);
+  // 필요한 값은 마지막 경계와 개수다. 과거 경계 배열을 계속 보관하지 않는다.
+  const isPrevious = (role, at) => bounds.get(role)?.index > at;
   // 책임(업무·카드 owner)은 원장 순번이 아니라 시각으로 붙는다. 같은 경계를 시각으로 비교한다(owner-generation.mjs).
   // 시각을 모르면(파싱 불가) 이전 세대로 단정하지 않는다.
   const isPreviousAt = (role, at) => {
     const ms = typeof at === 'number' ? at : Date.parse(at);
-    return Number.isFinite(ms) && (boundTimes.get(role) ?? []).some(bound => bound > ms);
+    const time = bounds.get(role)?.time;
+    return Number.isFinite(ms) && time != null && time > ms;
   };
-  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role), resumedAfter: (role, at) => (resumes.get(role) ?? []).some(index => index > at), generationOf: role => (bounds.get(role) ?? []).length};
+  return {apply, isPrevious, isPreviousAt, hasStarted: role => seen.has(role),
+    resumedAfter:(role, at) => resumes.get(role) > at,
+    generationOf:role => bounds.get(role)?.count ?? 0};
 }
 
 // 이전 세대 미확인: 읽음 미확인이면서 기록용 알림이 아니고 새 세대가 시작되기 전의 편지.
