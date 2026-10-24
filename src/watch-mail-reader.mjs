@@ -9,7 +9,7 @@ export function createWatchMailReader(home, readEntries) {
     readEntries() {
       // 조회 DB 잠금 다음 원본 snapshot. 실제 전송/OS 조회 전에 두 트랜잭션을 닫는다.
       const value = withMailboxView(home, (store, info) => {
-        const key = JSON.stringify([info.mailGeneration, info.mailStateVersion]);
+        const key = JSON.stringify([info.mailGeneration, info.mailStateVersion, info.mailCount]);
         return {raw:readEntries(), key,
           letters:last?.key === key ? last.letters : mailReminderCandidates(store)};
       });

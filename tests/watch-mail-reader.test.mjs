@@ -35,6 +35,18 @@ test('같은 수집의 원장·후보를 유지하고 새 ack 뒤에는 새 후�
   assert.throws(() => reader.readEntries());
 });
 
+test('읽음·답장 사건 없이 새 우편만 도착해도 같은 주기의 최신 후보에 들어간다', () => {
+  const home = homeOf();for (const event of initial) appendLedger(event, home);
+  const reader = createWatchMailReader(home, () => readLedgerIncremental(home));
+  const old = reader.readEntries();
+  appendLedger({kind:'send', mailId:'new-question', role:'fixture-worker', by:'fixture-lead',
+    expectReply:true, transport:'mailbox', mailRule:1, t:at(1)}, home);
+  const current = reader.readEntries();
+  assert.deepEqual(reader.letters(current).map(m => m.mailId), ['question', 'new-question']);
+  assert.deepEqual(reader.letters(old).map(m => m.mailId), ['question']);
+  assert.strictEqual(reader.readEntries(), current);
+});
+
 function run(mode, change) {
   const home = homeOf(), records = [], sent = [];
   for (const event of initial) appendLedger(event, home);
