@@ -8,6 +8,7 @@ import {WorkStore} from './work-store.mjs';
 import {DecisionStore} from './decisions.mjs';
 import {BriefStore} from './human-brief.mjs';
 import {ledgerStreams,validateDomainEvent,validateDomainStreams} from './ledger-domains.mjs';
+import {verifyWatchContexts} from './watch-request-context.mjs';
 const sha=data=>createHash('sha256').update(data).digest('hex');
 const omitted=name=>['kadan.sqlite','kadan.sqlite-wal','kadan.sqlite-shm','storage.json','storage-paused.json','storage-import.json','.lock','.ledger-lock','.storage-gate','.storage-writers'].includes(name)||name.startsWith('.released-');
 // 비밀 폴더($KADAN_HOME/secrets/)는 홈 최상위에 있을 때만 복사·목록에서 뺀다. 링크여도 같다. 다른 곳의 같은 이름은 그대로 둔다.
@@ -111,6 +112,7 @@ export function verifyStorage(home){
   const current=new Map(),domains=new Map();
   for(const row of events){if(row.seq!==(current.get(row.stream)?.seq??0)+1)throw new Error('사건 순번 손상');const value=JSON.parse(row.payload);validateDomainEvent(row.stream,value);if(Object.values(ledgerStreams).includes(row.stream)){if(!domains.has(row.stream))domains.set(row.stream,[]);domains.get(row.stream).push(value);}current.set(row.stream,row);}
   validateDomainStreams(domains,events.filter(row=>row.stream==='ledger.jsonl').map(row=>JSON.parse(row.payload)));
+  verifyWatchContexts(db);
   if(current.size!==heads.size)throw new Error('현재 상태와 이력 수 불일치');
   for(const [stream,last] of current){const h=heads.get(stream);if(!h||h.seq!==last.seq||h.payload!==last.payload)throw new Error('현재 상태와 마지막 사건 불일치');}
   const imports=db.prepare('SELECT * FROM imports').all();
