@@ -198,7 +198,10 @@ type Event = {
   original: { text: string; omitted: number };
 };
 export function Ledger({ url }: { url: URL }) {
-  const resource = useResource<Paged<Event>>("ledger?" + url.searchParams),
+  const resource = useResource<Paged<Event> & {
+    nextCursor?: string | null;
+    previousCursor?: string | null;
+  }>("ledger?" + url.searchParams),
     data = resource.data;
   return (
     <section>
@@ -207,6 +210,7 @@ export function Ledger({ url }: { url: URL }) {
       <Filters
         url={url}
         pageKey="logPage"
+        resetKeys={["logCursor"]}
         fields={[
           {
             name: "ledgerDomain",
@@ -259,7 +263,11 @@ export function Ledger({ url }: { url: URL }) {
           ))}
           <Pages
             {...data}
-            onPage={(page) => patchLocation({ logPage: String(page) })}
+            onPage={(page) => patchLocation({
+              logPage: String(page),
+              logCursor: page === 1 ? null :
+                page > data.page ? data.nextCursor ?? null : data.previousCursor ?? null,
+            })}
           />
         </>
       )}
