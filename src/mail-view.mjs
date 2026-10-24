@@ -9,7 +9,7 @@ import {createTaskCompletionChecker} from './ledger-domains.mjs';
 import {withLedgerView} from './ledger-view.mjs';
 import {metaGet} from './ledger-view-store.mjs';
 import {createMailViewStore, encodeMailValue, decodeMailValue, storedMailLetter,
-  mailStateSelect} from './mail-view-store.mjs';
+  mailStateSelect, previousMailExpression} from './mail-view-store.mjs';
 
 const verified = new Map();
 const canAct = (by, role) => by === role || isUserActor(by);
@@ -196,4 +196,18 @@ export function readMailboxViewPage(home, {domain = null, before = null, limit =
     return {...info, items:rows.slice(0, limit).map(row => storedMailLetter(store, row)),
       next:rows.length > limit ? rows[limit - 1].position : null};
   }, {domain});
+}
+
+// 숫자/알림 후보만 읽는 소비자는 전체 우편 객체를 만들지 않는다. withMailboxView 안에서 호출한다.
+export function mailboxWaitingCount(store) {
+  return store ? store.prepare(`SELECT count(*) AS n FROM mail_current
+    WHERE domain=? AND reply_status='waiting'`).get(store.scope).n : 0;
+}
+
+export function mailReminderCandidates(store) {
+  if (!store) return [];
+  // notification에는 notificationOnly와 완료 우편이 포함된다. 둘 다 기존 알림 제외 조건이다.
+  const rows = store.prepare(`${mailStateSelect} WHERE m.domain=? AND m.read=0 AND m.notification=0
+    AND NOT COALESCE((${previousMailExpression}),0) ORDER BY m.position`).all(store.scope);
+  return rows.map(row => storedMailLetter(store, row));
 }

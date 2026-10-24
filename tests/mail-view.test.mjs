@@ -10,7 +10,8 @@ import {createDatabase, writeStorageMarker, appendStream, storagePath} from '../
 import {appendLedger, readLedger, readMailboxLedger} from '../src/ledger.mjs';
 import {mailboxLetters} from '../src/mailbox-state.mjs';
 import {createMailGenerations} from '../src/mail-generation.mjs';
-import {readMailboxViewPage, withMailboxView} from '../src/mail-view.mjs';
+import {readMailboxViewPage, withMailboxView, mailboxWaitingCount,
+  mailReminderCandidates} from '../src/mail-view.mjs';
 import {ledgerViewPath} from '../src/ledger-view-store.mjs';
 
 const homeOf = () => {
@@ -31,7 +32,13 @@ function all(home, domain = null) {
 }
 function equal(home) {
   for (const domain of [null, 'mailbox']) {
-    assert.deepEqual(all(home, domain), mailboxLetters(domain ? readMailboxLedger(home) : readLedger(home)));
+    const expected = mailboxLetters(domain ? readMailboxLedger(home) : readLedger(home));
+    assert.deepEqual(all(home, domain), expected);
+    withMailboxView(home, store => {
+      assert.equal(mailboxWaitingCount(store), expected.filter(m => m.replyStatus === 'waiting').length);
+      assert.deepEqual(mailReminderCandidates(store), expected.filter(m => m.read === false
+        && !m.previousGeneration && m.notificationOnly !== true && m.systemGenerated !== 'task-completion'));
+    }, {domain});
   }
 }
 
