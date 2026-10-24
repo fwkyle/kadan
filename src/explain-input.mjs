@@ -21,6 +21,7 @@ export function scrubForAI(text) {
   return out;
 }
 const cut = (text, max) => { const t = scrubForAI(text); return t.length > max ? t.slice(0, max) + '…' : t; };
+export const explainBody = text => cut(text, BODY_MAX);
 
 // 카드의 결정 요청 기록을 카드 키별로 묶는다(같은 결정 ID는 마지막 줄이 현재 상태).
 export function decisionsByCard(rows) {
@@ -47,7 +48,8 @@ function rawInput(card, {progress, decisions}) {
   const notes = (card.history ?? []).filter(h => ['decision', 'question', 'answer'].includes(h.noteKind) && h.note).slice(-NOTES)
     .map(h => ({kind: h.noteKind, by: h.by ?? '모름', note: cut(h.note, NOTE_MAX)}));
   return {
-    title: cut(card.title ?? card.id ?? '', 300), body: cut(card.body ?? '', BODY_MAX),
+    title: cut(card.title ?? card.id ?? '', 300),
+    body: card.bodySummary?.explainBody ?? explainBody(card.body ?? ''),
     state: statusLabel(card.displayState ?? card.status ?? ''), statusReason: cut(card.statusReason ?? '', NOTE_MAX),
     nextAction: cut(card.nextAction ?? '', NOTE_MAX), role: card.role ?? null,
     progress: cut(progress, NOTE_MAX), notes,

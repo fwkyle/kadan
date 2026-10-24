@@ -14,6 +14,7 @@ const short=(value,n=220)=>value.length>n?value.slice(0,n)+'…':value;
 // 목적은 지시문의 명시된 항목에서만 읽는다. 여러 Why와 추가 목적을 함께 보존한다.
 export function cardPurpose(c,brief) {
  if(brief?.goal)return {text:brief.goal,source:'카드 설명의 목적'};
+ if(c.bodySummary)return c.bodySummary.purpose;
  const sections=instructionSections(c.body).sections.filter(s=>/^(why|작업 목적|목적)$/i.test(s.title));
  const values=sections.map(s=>s.content.replace(/^\s*[-*+]\s+/gm,'').replace(/\s+/g,' ').trim()).filter(Boolean);
  return {text:[...new Set(values)].join(' / 추가 목적: '),source:values.length?'작업 지시의 목적':''};

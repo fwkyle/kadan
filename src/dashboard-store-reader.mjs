@@ -1,13 +1,15 @@
 // Why: 목록마다 카드 수만큼 SQL을 준비하고 이전 이력을 다시 읽지 않도록 한다.
 // DB 검증은 head와 새 사건만 읽는다. 상세 호환을 위해 이력은 보관하며 변경된 이력 배열은 복사한다.
 // 이력이 10배면 최초 복구·보관 메모리·변경 카드의 배열 복사는 늘어난다. 현재 상태 투영은 별도 작업이다.
+// 운영 대시보드는 본문 요약 모드로 지문·짧은 발췌만 보관한다. 원문은 선택한 상세에서 읽는다.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {CardStore} from './card-store.mjs';
 import {databaseIdentity, storageMode, transaction} from './storage.mjs';
+import {summarizeCardBody} from './dashboard-card-body.mjs';
 
-export function createDashboardStoreReader(home, kind) {
+export function createDashboardStoreReader(home, kind, {summaryBodies = false} = {}) {
   const cards = new CardStore(home), pattern = `${kind}/*/*/events.jsonl`;
   const failure = () => new Error(kind === 'cards' ? '카드 이력 손상' : '업무 이력 손상');
   let identity = null, cached = new Map(), bodies = new Map();
@@ -65,11 +67,16 @@ export function createDashboardStoreReader(home, kind) {
       const dir = cards.dir(latest.key), file = path.join(dir, 'card.md'), stat = fs.statSync(file);
       const signature = [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
       let body = bodies.get(file);
-      if (!body || body.signature !== signature) {
-        body = {signature, text: fs.readFileSync(file, 'utf8')};stats.bodies++;
+      if (!body || body.signature !== signature || summaryBodies &&
+          (body.revision !== latest.revision || body.title !== latest.title)) {
+        const text = fs.readFileSync(file, 'utf8');
+        const previous = body?.signature === signature ? body : undefined;
+        body = {signature, revision:latest.revision, title:latest.title,
+          ...(summaryBodies ? {summary:summarizeCardBody(latest, text, previous)} : {text})};
+        stats.bodies++;
       }
       nextBodies.set(file, body);
-      return {...latest, history, body: body.text, path: file,
+      return {...latest, history, ...(summaryBodies ? {bodySummary:body.summary} : {body:body.text}), path: file,
         ...(latest.artifactLayout === 'card-v1'
           ? {resultPath: path.resolve(dir, 'result.md'), evidenceDir: path.resolve(dir, 'evidence')} : {})};
     });

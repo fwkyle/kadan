@@ -19,8 +19,10 @@ export function cleanTitle(card){
  const stripped=title.startsWith(card.id)?title.slice(card.id.length).replace(/^\s*[—–:·-]\s*/,''):title;
  return stripped.trim()||title;
 }
-const contentHash=card=>createHash('sha256').update(JSON.stringify([card.title,card.body])).digest('hex');
-const sourceHash=card=>createHash('sha256').update(JSON.stringify([card.revision,card.body])).digest('hex');
+const contentHash=card=>card.bodySummary?.contentHash??
+ createHash('sha256').update(JSON.stringify([card.title,card.body])).digest('hex');
+const sourceHash=card=>card.bodySummary?.sourceHash??
+ createHash('sha256').update(JSON.stringify([card.revision,card.body])).digest('hex');
 export class BriefStore {
  constructor(home){this.cards=new CardStore(home);}
  file(key){return path.join(this.cards.dir(key),'briefs.jsonl');}

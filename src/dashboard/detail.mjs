@@ -13,11 +13,12 @@ import {
 import { cardForms, workForms } from "../dashboard-forms.mjs";
 import { workLetters } from "../work-mail.mjs";
 import { pick, mailRow } from "./shared.mjs";
+import { hydrateCardBody } from "../dashboard-card-body.mjs";
 
 export function detailData(snapshot, url, stamp, m) {
   const key = url.searchParams.get("card") || "",
     w = m.works?.find((w) => w.key === key),
-    c = m.byKey.get(key);
+    c = hydrateCardBody(m.byKey.get(key));
   if (!w && !c)
     throw Object.assign(new Error("카드를 찾을 수 없습니다"), {
       status: 404,
