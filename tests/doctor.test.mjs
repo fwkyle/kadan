@@ -389,7 +389,7 @@ test('doctor: 표시 파일·DB 없이 옛 ledger.jsonl 흔적만 있으면 변�
   const before = snapshot(w.home);
   const storage = byId(runDoctor(w.deps), 'storage');
   assert.equal(storage.state, 'warn', JSON.stringify(storage));
-  assert.match(storage.reason,/변환 필요.*ledger\.jsonl.*jsonl-last.*storage import/);
+  assert.match(storage.reason,/변환 필요.*ledger\.jsonl.*import가 없다.*jsonl-last.*체크아웃.*storage import/);
   assert.deepEqual(snapshot(w.home), before);
 });
 

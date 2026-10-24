@@ -51,4 +51,4 @@ kadan secrets init
 
 ## 복사에서 빠진다
 
-`$KADAN_HOME/secrets/`는 홈 전체 복사에 들어가지 않는다. `kadan storage export`·`import`·`activate`가 홈 **최상위** `secrets`(링크 포함)를 뺀다. 최상위가 아닌 같은 이름 폴더는 그대로 복사한다. 설정 파일(`secrets-setting.json`)에는 경로만 있고 값은 없지만, 사본에서 같은 경로를 가리키지 않도록 격리 시험에서는 가짜 파일과 가짜 링크만 쓴다.
+`$KADAN_HOME/secrets/`는 홈 전체 복사에 들어가지 않는다. 복사할 때는 홈 **최상위** `secrets`(링크 포함)를 뺀다(옛 `kadan storage export`·`import`·`activate`가 하던 규칙이며 이 도구들은 제거됐다). 최상위가 아닌 같은 이름 폴더는 그대로 복사한다. 설정 파일(`secrets-setting.json`)에는 경로만 있고 값은 없지만, 사본에서 같은 경로를 가리키지 않도록 격리 시험에서는 가짜 파일과 가짜 링크만 쓴다.

@@ -40,7 +40,7 @@
 
 ## 2라운드: `readStream` 한 줄씩 해석 (2026-10-22)
 - 바꾼 곳: `src/storage.mjs` `readStream`의 SQLite 경로만. `.all()`로 원문 문자열 배열을 만든 뒤 `map(JSON.parse)`하던 것을 `.iterate()`로 한 줄씩 해석한다.
-  읽는 사건·순서·`slim`·`기록 없음` 오류·JSONL 경로는 그대로다.
+  읽는 사건·순서·`slim`·`기록 없음` 오류는 그대로다.
 - 실측(격리 사본, 한 주기에 해당하는 `readLedger` 1번): footprint 367MB → 286MB(-22%), heapUsed 215 → 147MB. 1라운드의 단순 비교(586 → 408MB)와 같은 방향이다.
 - 같은 모양의 `.all()`: `listStreams`(`src/storage.mjs`, `heads` 표 이름만 읽음, 작음). 이번에는 바꾸지 않았다.
 

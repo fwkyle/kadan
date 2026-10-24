@@ -9,7 +9,7 @@ import {CardStore} from '../src/card-store.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {BriefStore} from '../src/human-brief.mjs';
 import {appendLedger,readLedger} from '../src/ledger.mjs';
-import {createDatabase,writeStorageMarker,transaction,openDatabase} from '../src/storage.mjs';
+import {createDatabase,writeStorageMarker,transaction,openDatabase,appendRow} from '../src/storage.mjs';
 import {verifyStorage,storageCommand} from '../src/storage-migration.mjs';
 const root=()=>fs.mkdtempSync(path.join(os.tmpdir(),'kadan-sqlite-'));
 function setup(){const home=root();createDatabase(home);writeStorageMarker(home,'sqlite');return home;}
@@ -104,9 +104,30 @@ test('09-24 잠금 밖 미리 계산: 그 사이 바뀐 게 없으면 한 번만
  // 미리 계산이 실패하면 잠금 안에서 다시 계산한다(예전과 같은 결과·오류).
  let first=true;assert.equal(preparedTransaction(home,()=>{if(first){first=false;throw new Error('일시 실패');}return 'ok';},value=>value),'ok');
 });
-test('SQLite: storage export는 JSONL 백엔드가 없어 파일을 만들기 전에 거절한다',()=>{
- const home=setup();const target=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-export-')),'out');
- assert.throws(()=>storageCommand(['export'],{target},{home}),/JSONL 내보내기는 없어졌다.*\.backup/);
- assert.equal(fs.existsSync(target),false);
- assert.deepEqual(fs.readdirSync(path.dirname(target)),[]);
+test('SQLite: 지워진 import·export·activate·inspect는 알 수 없는 명령으로 거절하고 jsonl-last를 안내한다',()=>{
+ const home=setup();
+ for(const name of ['import','export','activate','inspect'])assert.throws(()=>storageCommand([name],{},{home}),/알 수 없는 storage 명령.*jsonl-last/);
+ assert.throws(()=>storageCommand(['nope'],{},{home}),/알 수 없는 storage 명령/);
+ const help=storageCommand([],{},{home});assert.match(help,/verify \| pause \| resume/);assert.doesNotMatch(help,/--source|--candidate/);
+ assert.deepEqual(fs.readdirSync(home).sort(),['kadan.sqlite','kadan.sqlite-shm','kadan.sqlite-wal','storage.json'].filter(n=>fs.existsSync(path.join(home,n))).sort());
+});
+// verify는 DB 안의 수입 행만 대조한다. 동결 원본 파일(imports.source)이 없어도 통과해야 한다.
+function importedHome({rows=1,raw='{"kind":"x"}',value={kind:'x'}}={}){
+ const home=setup(),db=openDatabase(home);
+ try{
+  db.prepare('INSERT INTO imports(source,sha256,bytes,rows) VALUES(?,?,?,?)').run('ledger.jsonl','0'.repeat(64),raw.length,rows);
+  appendRow(db,'ledger.jsonl',value,{source:'ledger.jsonl',line:1,raw});
+ }finally{db.close()}
+ return home;
+}
+test('SQLite verify: imports 행이 있고 원본 파일이 없어도 통과한다',()=>{
+ const home=importedHome();assert.equal(fs.existsSync(path.join(home,'ledger.jsonl')),false);
+ assert.equal(verifyStorage(home).integrity,'ok');
+ assert.equal(storageCommand(['verify'],{},{home}).events,1);
+});
+test('SQLite verify: raw와 payload가 다르면 여전히 수입 행 원문 불일치로 실패한다',()=>{
+ assert.throws(()=>verifyStorage(importedHome({raw:'{"kind":"x"}',value:{kind:'y'}})),/수입 행 원문 불일치/);
+});
+test('SQLite verify: imports 행 수와 DB 안 수입 행 수가 다르면 여전히 실패한다',()=>{
+ assert.throws(()=>verifyStorage(importedHome({rows:2})),/수입 행 원문 불일치/);
 });
