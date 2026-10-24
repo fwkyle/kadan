@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import {watchResourceStats, memoryMegabytes} from './watch-resource-stats.mjs';
+import {createProcessCollections} from './process-collections.mjs';
 import { ledgerHome } from "./ledger.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
 import { runStaleNotices, STALE_NOTICE_EVERY_MS } from './watch-stale-notice.mjs';
@@ -94,6 +95,7 @@ export function repoOfAlert(alert, identity) {
 
 export async function runWatch({
   runtime = null,
+  collections = createProcessCollections(),
   measure = () => performance.now(),
   floor,
   readEntries,
@@ -184,7 +186,8 @@ export async function runWatch({
   // 자동 재개가 처음 예약될 때(최종 429 화면)도 사용량을 먼저 새로 받는다. 예약 중인 세션은 한도 경보를 보내지 않으므로 결과는 원장과 감시 출력에 남는다.
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429, onSchedule:refreshOcxFor});
   const mailDelivered = new Set();
-  const mailWatch = sendMailReminder ? new MailWatch({record,graceMs:mailUnreadGraceMs,hold:mailHold,send:(role,message,pid)=>{
+  const mailWatch = sendMailReminder ? new MailWatch({record,collections,
+    graceMs:mailUnreadGraceMs,hold:mailHold,send:(role,message,pid)=>{
     try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
     catch (error) {
       if (error.delivery === 'sent') mailDelivered.add(role);
@@ -193,7 +196,7 @@ export async function runWatch({
   }}) : null;
   const queueResume = new QueueResume({record, sendEnter:sendQueueEnter, sleep,
     readScreen: session => { try { return readText(floor.read(session)); } catch { return null; } }});
-  const restoredChecked = new Set();
+  const restoredChecked = collections.set();
   let roleStates = new Map();
   // 감독 세션의 화면 지문·생존 추적. 작업자 상태와 분리해 둔다 — 같은 맵에 넣으면 감독이 정체 AI·완료후보
   // 경로로 흘러든다. 유휴 판정(놀고 있음)과 죽은 감독 건너뛰기에만 쓴다.
@@ -897,7 +900,9 @@ export async function runWatch({
     catch(error) {if(!signal?.aborted)throw error;}
   }} finally {
     queuedAI.clear();
-    await explain?.stop();
-    if(activeAI){const job=activeAI;job.controller.abort();await job.promise;}
+    try {
+      await explain?.stop();
+      if(activeAI){const job=activeAI;job.controller.abort();await job.promise;}
+    } finally {collections.close();}
   }
 }

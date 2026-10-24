@@ -7,6 +7,7 @@ import {isNotificationHold} from './notification-guard.mjs';
 import {isPeerSuperMail} from './peer-mail.mjs';
 import {SECRETARY} from './mailbox.mjs';
 import {isSimplifiedMail,deliveredAt,firstReminderSent,reminderKey} from './mail-rule.mjs';
+import {createProcessCollections} from './process-collections.mjs';
 
 const recipient = mail => mail.currentRecipient || mail.role;
 
@@ -129,19 +130,23 @@ function currentPid(role, entries, live) {
 }
 
 export class MailWatch {
-  constructor({record, send, hold = null, graceMs = 300_000}) {
+  constructor({record, send, hold = null, graceMs = 300_000, collections = null}) {
     if (!Number.isFinite(graceMs) || graceMs < 0) throw new Error('우편 유예 시간은 0 이상이어야 합니다');
     Object.assign(this, {record, send, hold, graceMs});
-    this.reserved = new Set();
+    this.collections = collections ?? createProcessCollections();
+    this.ownsCollections = !collections;
+    this.reserved = this.collections.set();
     // 새 규칙 우편 중 이 프로세스가 실제로 보낸(sent·unknown) 단계. 결과 기록이 실패해도 같은 프로세스가 다시 보내지 않게 한다.
-    this.attempted = new Set();
-    this.heldLogged = new Map();
+    this.attempted = this.collections.set();
+    this.heldLogged = this.collections.map();
     // 새 규칙 우편은 원장에 상태가 바뀔 때만 쓴다(원장은 지울 수 없어 같은 사유 재시도를 매 순회 쌓으면 100통·8시간에 96,000줄).
     // written: 이 프로세스가 마지막으로 쓴 상태(우편·역할·단계별), 없으면 원장 기록을 쓴다. suppressed: 쓰지 않고 센 같은 사유 재시도 수.
-    // 상태 파일은 두지 않는다: 재시작하면 원장의 첫 실패·미전달 판정만으로 재시도가 이어지고, 같은 사유는 다시 쓰지 않는다.
-    this.written = new Map();
-    this.suppressed = new Map();
+    // 프로세스 수명만 보관한다: 재시작하면 원장의 첫 실패·미전달 판정으로 이어가고 같은 사유는 다시 쓰지 않는다.
+    this.written = this.collections.map();
+    this.suppressed = this.collections.map();
   }
+
+  close() {if (this.ownsCollections) this.collections.close();}
 
   tick({entries, cards, works, now, floor, readEntries, readCards, readWorks, signal, parents}) {
     this.failed = false;

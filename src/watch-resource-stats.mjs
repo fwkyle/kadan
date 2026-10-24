@@ -1,7 +1,10 @@
 // Why: 과거 중복 방지 키의 실제 크기를 관측해 막연한 메모리 누수 추측을 피한다.
 // 10배 이력에서도 5분 기록마다 모음당 1,000개·256KiB까지만 잰다. JS 힙 크기는 아니다.
+import {processCollectionInfo} from './process-collections.mjs';
+
 export function collectionStats(collection) {
-  if (!(collection instanceof Map) && !(collection instanceof Set)) return null;
+  const stored = processCollectionInfo(collection);
+  if (!(collection instanceof Map) && !(collection instanceof Set) && !stored) return null;
   let sampledEntries = 0, serializedBytes = 0, truncated = false;
   for (const value of collection) {
     if (sampledEntries >= 1000 || serializedBytes >= 256 * 1024) break;
@@ -14,7 +17,8 @@ export function collectionStats(collection) {
     sampledEntries++;
   }
   return {entries: collection.size, sampledEntries, serializedBytes,
-    complete: !truncated && sampledEntries === collection.size};
+    complete: !truncated && sampledEntries === collection.size,
+    ...(stored ? {storage:stored.storage, retainedEntries:stored.retainedEntries} : {})};
 }
 
 export function watchResourceStats({mail, explain, restoredChecked, userPosts}) {

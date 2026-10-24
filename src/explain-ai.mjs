@@ -7,6 +7,7 @@
 // 설명 AI는 감시 AI가 아니다. 판정·보고·알림을 하지 않고 brief 줄만 쓴다.
 import fs from 'node:fs';
 import {createExplainQueue} from './explain-queue.mjs';
+import {createProcessCollections} from './process-collections.mjs';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {CardStore} from './card-store.mjs';
@@ -33,12 +34,15 @@ const handledKey = (key, id) => `${key}|${id}`;
 
 export class ExplainAI {
   constructor({home, readSettings: read = () => readSettings(home), spawn = runJudgeProcess, now = Date.now,
-    timeoutMs = EXPLAIN_TIMEOUT_MS, maxPerCycle = EXPLAIN_MAX_PER_CYCLE, print = () => {}}) {
+    timeoutMs = EXPLAIN_TIMEOUT_MS, maxPerCycle = EXPLAIN_MAX_PER_CYCLE, print = () => {},
+    collections = null}) {
     Object.assign(this, {home, read, spawn, now, timeoutMs, maxPerCycle, print});
     this.workDir = path.join(home, 'explain-ai-work');
     this.enabledAt = null;
-    this.handled = new Set();
-    this.attempted = new Set();
+    this.collections = collections ?? createProcessCollections();
+    this.ownsCollections = !collections;
+    this.handled = this.collections.set();
+    this.attempted = this.collections.set();
     this.queue = createExplainQueue();
     this.staleQueued = 0;
     this.running = null;
@@ -48,7 +52,7 @@ export class ExplainAI {
     this.loaded = false;
   }
 
-  // 시작할 때 한 번만 시도 기록을 읽는다. 이 프로세스만 쓰므로 이후는 메모리를 따른다.
+  // 시작할 때 한 번만 시도 기록을 읽는다. 이후 기억은 이 프로세스 수명만 유지한다.
   load() {
     if (this.loaded) return;
     for (const row of readStream(this.home, EXPLAIN_FILE, {optional: true})) {
@@ -134,7 +138,11 @@ export class ExplainAI {
     return this.running;
   }
   async drain() { while (this.running) await this.running; }
-  async stop() { this.controller.abort(); this.queue.clear(); await this.drain(); }
+  async stop() {
+    this.controller.abort();this.queue.clear();
+    try {await this.drain();}
+    finally {if (this.ownsCollections) this.collections.close();}
+  }
 
   // 대기 중에 바뀐 입력에는 모델을 부르지 않는다. 다음 tick이 최신 입력을 예약한다.
   freshQueuedJob(job) {
