@@ -52,7 +52,7 @@ export function prepareCenterWall(snapshot){
  const hit=worksBySnapshot.get(snapshot);if(hit)return hit;
  const {centerError,entries=[],home,ledgerState}=snapshot,center=centerError?null:snapshot.center;
  let {works,workError}=registeredCenterWorks(snapshot);
- // 카드 상태 키(snapshot.centerKey)가 같으면 업무 목록 계산(약 2.3초)도 같다. 키가 없으면(JSONL·시험) 매번 계산한다.
+ // 카드 상태 키(snapshot.centerKey)가 같으면 업무 목록 계산(약 2.3초)도 같다. 키가 없으면(저장소 없는 홈·시험) 매번 계산한다.
  let builtAt=0;
  const compute=()=>{builtAt=Date.now();return workDashboardModel(works,center,entries,operationsFlowSummaries(home,works,{ledgerState:ledgerState??undefined,cards:center?.cards}));};
  const modelKey = center && snapshot.centerKey ? snapshot.workModelKey ?? snapshot.centerKey : null;
