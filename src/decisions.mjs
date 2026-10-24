@@ -1,5 +1,4 @@
-import {assertWritable,storageMode,transaction,readStream,appendStream} from './storage.mjs';
-import fs from 'node:fs';
+import {assertWritable,transaction,readStream,appendStream} from './storage.mjs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
@@ -61,8 +60,7 @@ export class DecisionStore {
   }return [...latest.values()];}
  get(id){const d=this.list().find(d=>d.id===id);if(!d)throw new Error('결정 요청 없음');return d;}
  write(d){appendStream(this.home,'decisions/events.jsonl',d);return d;}
- locked(fn){assertWritable(this.home);if(storageMode(this.home)==='sqlite')return transaction(this.home,fn);fs.mkdirSync(this.dir,{recursive:true,mode:0o700});const lock=path.join(this.dir,'.lock');try{fs.mkdirSync(lock)}catch{throw new Error('결정 저장 중: 새 상태를 확인하세요')}
-  try{return fn()}finally{fs.renameSync(lock,path.join(this.dir,`.released-${randomUUID()}`))}}
+ locked(fn){assertWritable(this.home);return transaction(this.home,fn);}
  // work: 결정이 막고 있는 업무. 카드가 그 업무의 실행이 아니어도(조사 카드 등) 감시·후속 표시가 업무를 답 대기로 알아보게 한다(2026-10-07 [kyle]).
  request(card,{question,options,recommendation,reason,work,chat},by){let created=false;const saved=this.locked(()=>{
   if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독만 작성');

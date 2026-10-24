@@ -2,7 +2,6 @@ import {WorkStore} from './work-store.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
 import {isUserActor} from './actors.mjs';
-import {storageMode} from './storage.mjs';
 
 // 놀고 있음 PR-3: 위임받은 쪽이 결과 우편을 업무 owner에게 보내면 업무 차례(turnOwner)를 owner로 돌려준다.
 // 규칙(셋이 모두 참일 때만): (a) 보낸 역할 == 저장된 turnOwner, (b) 보낸 역할 != 현재 책임 owner(인계 반영),
@@ -44,10 +43,6 @@ const manualMove=(plan)=>`kadan work update ${quote(plan.workKey)} --revision <�
 // 던지지 않고 stderr 한 줄만 낸다 — 이때 호출한 쪽은 꼬리 없이 보통 우편을 보낸다.
 export function claimTurnReturn(home,plan,{store=new WorkStore(home),readEntries=readLedger,warn=line=>console.error(line)}={}){
  if(!plan)return null;
- if(storageMode(home)!=='sqlite'){
-  warn(`JSONL 저장소에서는 자동 차례 반환을 하지 않습니다(우편은 꼬리 없이 보냄). 필요하면: ${manualMove(plan)}`);
-  return null;
- }
  let undo=null;
  try{
   const work=store.changeTurnOwner(plan.workKey,current=>{

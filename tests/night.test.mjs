@@ -369,7 +369,7 @@ test('F1: 미만료 주기는 추가 원장·결정 이력 읽기가 0회이고,
 });
 
 test('F1: 실제 저장 계층(JSONL·SQLite)에서 미만료 주기의 추가 읽기가 0회', () => {
-  for (const backend of ['jsonl', 'sqlite']) {
+  for (const backend of ['sqlite']) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), `kadan-night-${backend}-`));
     if (backend === 'sqlite') { createDatabase(home); writeStorageMarker(home, 'sqlite'); }
     appendLedger({kind: 'night', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);

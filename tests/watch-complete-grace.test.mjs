@@ -47,7 +47,7 @@ async function exercise(mode, doneCycle, graceMinutes) {
 }
 
 test('유예 안 tasks done: 마커가 사라져도 완료후보와 해소 우편 없음',async()=>{
-  for(const mode of ['jsonl','sqlite']){
+  for(const mode of ['sqlite']){
     const result=await exercise(mode,1);
     assert.deepEqual(result.alerts,[]);assert.deepEqual(result.messages,[]);
   }
@@ -56,7 +56,7 @@ test('유예 안 tasks done: 마커가 사라져도 완료후보와 해소 우�
 test('done 없이 유예 경과: 기본 15분 및 설정 시각에 경보 한 건',async()=>{
   const profile=readWatchProfile('/tmp/grace-profile.json',()=>JSON.stringify({flags:{'completion-grace':2}}));
   assert.equal(profile.flags['completion-grace'],'2');
-  for(const mode of ['jsonl','sqlite'])for(const minutes of [undefined,Number(profile.flags['completion-grace'])]){
+  for(const mode of ['sqlite'])for(const minutes of [undefined,Number(profile.flags['completion-grace'])]){
     const result=await exercise(mode,null,minutes);
     assert.equal(result.alerts.filter(e=>!e.resolved).length,1);assert.equal(result.alerts[0].cycle,minutes??15);
     assert.equal(result.alerts[0].resolved,undefined);assert.equal(result.messages.filter(e=>!e.message.includes('해소됨')).length,1);
@@ -64,7 +64,7 @@ test('done 없이 유예 경과: 기본 15분 및 설정 시각에 경보 한 �
 });
 
 test('사전 tasks done: executionKey와 전체 주소 마커 대조로 경보 없음',async()=>{
-  for(const mode of ['jsonl','sqlite']){
+  for(const mode of ['sqlite']){
     const result=await exercise(mode,0);
     assert.deepEqual(result.alerts,[]);assert.deepEqual(result.messages,[]);
   }
