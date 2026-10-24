@@ -12,7 +12,7 @@ import { buildCardCenter } from "../card-center.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floor } from "../floor.mjs";
-import { ledgerHome, ledgerPath, readLedger } from "../ledger.mjs";
+import { ledgerHome, ledgerPath, readLedger, readMailBody } from "../ledger.mjs";
 import { buildWallSnapshot, createWallServer, withWaitSnapshots } from "../wall.mjs";
 import { collectResources } from "../watch-resource.mjs";
 import { recentSends, die } from "../cli-basics.mjs";
@@ -109,6 +109,7 @@ export function loadWallSnapshot(runtime=null) {
     registeredWorks=wallCache.memo("works", versions.works, () => new WorkStore(home).list());
     center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
+  let cardFiles = null;
   return {
     center,centerError,tree,ledgerState,registeredWorks,runtime,
     ...resourceSnapshot,
@@ -118,7 +119,12 @@ export function loadWallSnapshot(runtime=null) {
     workModelKey: version && JSON.stringify([version, centerKey]),
     version: fs.existsSync(new URL("../../package.json", import.meta.url)) ? JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version : "",
     mailbox: ledgerLines === null ? null : recentSends(entries),
-    cardFiles: ledgerLines === null ? {} : collectCardFiles(entries),
+    // 옛 HTML 카드 본문을 펼칠 때만 쓴다. 새 대시보드 API는 과거 첨부 파일을 읽지 않는다.
+    get cardFiles() {
+      cardFiles ??= ledgerLines === null ? {} : collectCardFiles(entries,
+        {readBody: digest => readMailBody(digest, home)});
+      return cardFiles;
+    },
     collectedAt,
     ledgerPath: file,
     ledgerLines,

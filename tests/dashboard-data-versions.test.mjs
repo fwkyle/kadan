@@ -88,3 +88,19 @@ test('순회 사건만 추가되면 카드·업무·트리·카드 상태 계산
     assert.notEqual(loadWallSnapshot().centerKey, b.centerKey);
   } finally { floor.list = original; }
 });
+
+test('옛 카드 첨부 본문은 그 필드를 요청할 때만 읽고 같은 수집에서는 한 번만 읽는다', () => {
+  const f = dashboardFixture({count: 2});process.env.KADAN_HOME = f.home;wallCache.clear();
+  const file = path.join(f.home, 'old-card.md');fs.writeFileSync(file, '# 과거 카드 본문');
+  appendLedger({kind: 'send', role: 'qa-worker', taskId: 'old-card', originalCardPath: file}, f.home);
+  const original = fs.readFileSync;let reads = 0;
+  fs.readFileSync = function(name, ...args) {
+    if (name === file) reads++;
+    return original.call(this, name, ...args);
+  };
+  try {
+    const snapshot = loadWallSnapshot();assert.equal(reads, 0);
+    assert.equal(snapshot.cardFiles['old-card'].text, '# 과거 카드 본문');assert.equal(reads, 1);
+    assert.strictEqual(snapshot.cardFiles, snapshot.cardFiles);assert.equal(reads, 1);
+  } finally { fs.readFileSync = original; }
+});
