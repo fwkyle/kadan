@@ -61,7 +61,7 @@ test('SIGKILL (가) 스키마 전: 다음 쓰기는 대기 없이 성공하고, 
   killedInit(home, 'schema');
   const read = timed(() => storageMode(home));
   assert.equal(read.error, null, read.error?.message);
-  assert.ok(['jsonl', 'sqlite'].includes(read.value)); // 빈 DB는 초기화 전과 같다(새 홈 읽기 = 빈 결과)
+  assert.ok(['none', 'sqlite'].includes(read.value)); // 빈 DB는 초기화 전과 같다(새 홈 읽기 = 빈 결과)
   assert.ok(read.ms < 1000, `읽기 ${read.ms}ms`);
   const write = timed(() => appendStream(home, 'mail/events.jsonl', {n: 1}));
   assert.equal(write.error, null, write.error?.message);
@@ -140,7 +140,7 @@ test('0바이트가 아닌 깨진 DB는 기존 오류이고 아무것도 옮기�
 test('0바이트 DB 파일은 초기화 전으로 보고 다음 쓰기가 마저 만든다', () => {
   const home = root();
   fs.writeFileSync(path.join(home, 'kadan.sqlite'), '');
-  assert.equal(storageMode(home), 'jsonl');
+  assert.equal(storageMode(home), 'none');
   appendStream(home, 'mail/events.jsonl', {n: 1});
   assert.equal(storageMode(home), 'sqlite');
   assert.deepEqual(readStream(home, 'mail/events.jsonl'), [{n: 1}]);

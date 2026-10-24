@@ -27,7 +27,7 @@ const cases={
  duplicateMail:[{kind:'send',_ledgerOrder:1,mailId:'m'},{kind:'send',_ledgerOrder:2,mailId:'m'}],
 };
 const stripBig=rows=>rows.map(r=>{if(r?.kind!=='watch-ai-request')return r;const {parents,routes,...rest}=r;return rest;});
-for(const mode of ['sqlite','jsonl'])for(const [name,events] of Object.entries(cases))
+for(const mode of ['sqlite'])for(const [name,events] of Object.entries(cases))
 test(`손상·순서 사례 ${name} (${mode}): 줄여 읽어도 기준과 같은 결과·같은 오류 메시지`,()=>{
   const home=mk(mode);
   for(const e of events)appendStream(home,e.kind==='dispatch'?'tasks/events.jsonl':e.kind==='send'?'mail/events.jsonl':'system/events.jsonl',e);
@@ -55,7 +55,7 @@ test('빼도 되는 필드 허용 목록은 검증기가 읽는 필드와 겹치
   assert.deepEqual(SLIM_DROPPABLE.filter(f=>read.has(f)),[],'검증기가 읽는 필드는 허용 목록에 둘 수 없다');
 });
 
-for(const mode of ['sqlite','jsonl'])
+for(const mode of ['sqlite'])
 test(`보류 알림 재전송: 실제 감시기처럼 readEntries를 주입해도 원래 수신자에게 간다 (${mode})`,()=>{
   const home=mk(mode),role='qa-worker',boss='qa-routeboss',parents=new Map(),routes=new Map([['qa',boss]]),sent=[];
   const cards=[{id:'a',key:'r/a',role,board:'qa',status:'assigned',workType:'execution'}];

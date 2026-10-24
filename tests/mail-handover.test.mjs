@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {Mailbox,mailboxLetters} from '../src/mailbox.mjs';
 import {appendLedger,readLedger,readMailLedger,readSystemLedger} from '../src/ledger.mjs';
 import {resolveWorkMail} from '../src/work-mail.mjs';
-import {createDatabase,writeStorageMarker,readStream} from '../src/storage.mjs';
+import {createDatabase,writeStorageMarker,readStream,appendStream} from '../src/storage.mjs';
 import {Handover} from '../src/handover.mjs';
 import {ledgerStreams,validateDomainStreams} from '../src/ledger-domains.mjs';
 
@@ -149,15 +149,15 @@ for(const mode of ['jsonl','sqlite']){
  });
 }
 
-test('과거 JSONL 인계도 mail 조회에서 반영하고 원본 바이트와 옛 완료 속성을 보존한다',()=>{
- const {home}=fixture('jsonl');
+test('과거 원장 영역의 인계도 mail 조회에서 반영하고 옛 완료 속성을 보존한다',()=>{
+ const {home}=fixture('sqlite');
  const rows=[{kind:'send',mailId:'old',taskId:'a',role:'worker',by:'lead',expectReply:true},transfer('lead','next'),
   {kind:'done',role:'worker',taskId:'a',result:'ok',completionMailId:'completion'},
   {kind:'send',mailId:'completion',role:'lead',by:'worker',replyTo:'old',replyFinal:true,completion:true,systemGenerated:'task-completion',transport:'mailbox',completionTaskId:'a',result:'ok'}];
- const raw=rows.map(JSON.stringify).join('\n')+'\n',file=path.join(home,'ledger.jsonl');fs.writeFileSync(file,raw);
+ for(const row of rows)appendStream(home,'ledger.jsonl',row);
  const letters=mailboxLetters(readMailLedger(home));
  assert.equal(letters[0].replyStatus,'answered');assert.equal(letters[1].currentRecipient,'next');
- assert.equal(letters[1].notificationOnly,undefined);assert.equal(fs.readFileSync(file,'utf8'),raw);
+ assert.equal(letters[1].notificationOnly,undefined);assert.equal(readStream(home,'ledger.jsonl').length,rows.length);
  assert.deepEqual(letters,mailboxLetters(readLedger(home)));
 });
 

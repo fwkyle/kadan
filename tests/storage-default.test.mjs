@@ -31,11 +31,11 @@ test('새 홈은 첫 쓰기에서 SQLite로 시작하고 사건이 DB에 들어�
   assert.equal(new CardStore(home).get(card.key).key, 'r/a');
 });
 
-test('표시 파일이 있으면 ensureStorage는 아무것도 하지 않는다(backend:jsonl 포함)', () => {
+test('표시 파일이 있으면 ensureStorage는 아무것도 하지 않는다(backend:sqlite)', () => {
   const home = root();
-  marker(home, 'jsonl');
+  marker(home, 'sqlite');
   ensureStorage(home);
-  assert.equal(storageMode(home), 'jsonl');
+  assert.equal(storageMode(home), 'sqlite');
   assert.deepEqual(fs.readdirSync(home).sort(), ['storage.json']);
 });
 
@@ -125,7 +125,7 @@ console.log(storageMode(process.argv[1]));`;
 
 test('빈 홈 읽기는 홈에 아무것도 만들지 않는다', () => {
   const home = root();
-  assert.equal(storageMode(home), 'jsonl');
+  assert.equal(storageMode(home), 'none');
   assert.equal(storageVersion(home), null);
   assert.equal(storageSnapshot(home, () => 'ok'), 'ok');
   assert.deepEqual(new CardStore(home).list(), []);

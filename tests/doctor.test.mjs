@@ -382,3 +382,18 @@ test('CLI: kadan doctor --json은 격리 홈에서 JSON을 내고, 막힘이 있
   assert.equal(spawnSync(process.execPath, [cli, 'doctor', '--help'], {env, encoding: 'utf8'}).status, 0);
   assert.equal(spawnSync(process.execPath, [cli, 'doctor', 'extra'], {env, encoding: 'utf8'}).status, 2);
 });
+
+test('doctor: 표시 파일·DB 없이 옛 ledger.jsonl 흔적만 있으면 변환 필요 안내(주의)이고 파일을 바꾸지 않는다', () => {
+  const w = world();
+  fs.writeFileSync(path.join(w.home, 'ledger.jsonl'), '{"kind":"x"}\n');
+  const before = snapshot(w.home);
+  const storage = byId(runDoctor(w.deps), 'storage');
+  assert.equal(storage.state, 'warn', JSON.stringify(storage));
+  assert.match(storage.reason,/변환 필요.*ledger\.jsonl.*jsonl-last.*storage import/);
+  assert.deepEqual(snapshot(w.home), before);
+});
+
+test('doctor: 흔적 없는 빈 홈은 해당 없음(na)이다', () => {
+  const w = world();
+  assert.equal(byId(runDoctor(w.deps), 'storage').state, 'na');
+});

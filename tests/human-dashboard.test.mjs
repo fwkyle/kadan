@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
+import {appendStream,readStream,listStreams} from '../src/storage.mjs';
 import {BriefStore,Scribe,buildHumanBrief,progressLabel,currentProgressReport} from '../src/human-brief.mjs';
 import {cardCommand} from '../src/card-command.mjs';
 import {renderDashboardHome} from '../src/dashboard-home.mjs';
 import {buildCardCenter} from '../src/card-center.mjs';
 import {statusContext} from '../src/card-status-context.mjs';
-const setup=()=>{const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-human-')));const store=new CardStore(home);const card=store.create({repo:'r',id:'card-a',repoPath:home,body:'# 原본',title:'card-a — 긴 제목'});return{home,store,card};};
+const setup=()=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-human-'));const store=new CardStore(home);const card=store.create({repo:'r',id:'card-a',repoPath:home,body:'# 原본',title:'card-a — 긴 제목'});return{home,store,card};};
 test('서기 기록은 원본/원장을 바꾸지 않고 새 보고 후 오래된 진행 서술을 숨긴다',()=>{
- const {home,store,card}=setup(),before=fs.readFileSync(path.join(store.dir(card.key),'events.jsonl'),'utf8');
+ const {home,store,card}=setup(),before=readStream(home,`cards/${card.key}/events.jsonl`);
  const brief=cardCommand(['brief',card.key],{revision:1,title:'제품 분류',workstream:'제품 찾기',stage:'검수',summary:'근거를 검토했습니다'},{home,by:'서기'});
- assert.equal(fs.readFileSync(path.join(store.dir(card.key),'events.jsonl'),'utf8'),before);assert.ok(!fs.existsSync(path.join(home,'ledger.jsonl')));
+ assert.deepEqual(readStream(home,`cards/${card.key}/events.jsonl`),before);assert.deepEqual(listStreams(home).filter(s=>!s.startsWith('cards/')),[]);
  const scribe=new Scribe();const first=scribe.summarize({...card,displayState:'draft',runs:[]},brief);
  assert.equal(first.title,'제품 분류');assert.equal(first.summary,'근거를 검토했습니다');
  assert.strictEqual(scribe.summarize({...card,displayState:'draft',runs:[]},brief),first);
@@ -36,7 +36,7 @@ test('첫 화면은 현재 판의 남은 카드와 결정 요청을 분리하고
  const broken=renderDashboardHome({center,briefs:buildHumanBrief(center),decisionError:'broken'});assert.match(broken,/결정 기록을 읽지 못했습니다/);assert.ok(!broken.includes('사용자 결정은 없습니다'));
 });
 test('서기 파일 손상은 원본 상태를 유지하며 명시적으로 표시한다',()=>{
- const {home,card}=setup();fs.writeFileSync(path.join(new CardStore(home).dir(card.key),'briefs.jsonl'),'bad');
+ const {home,card}=setup();appendStream(home,`cards/${card.key}/briefs.jsonl`,'bad');
  const result=buildHumanBrief({cards:[{...card,displayState:'draft',runs:[]}]},home).get(card.key);
  assert.match(result.error,/읽을 수 없습니다/);assert.equal(result.status,'draft');
 });

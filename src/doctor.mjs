@@ -4,7 +4,7 @@
 // 각 점검은 기존 모듈의 읽기 함수를 부른다. 같은 판정을 새로 짜지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
-import {storageMode, storageSnapshot} from './storage.mjs';
+import {legacyTrace, storageMode, storageSnapshot} from './storage.mjs';
 import {readSystemLedger} from './ledger.mjs';
 import {dashboardBuild, DASHBOARD_BUILD_COMMAND} from './dashboard-static.mjs';
 import {readReviveState, TARGETS, REVIVE_LABELS} from './revive.mjs';
@@ -55,10 +55,13 @@ function checkStorage({home}) {
     return paused ? result('warn', 'SQLite는 열리지만 저장 전환 중이라 쓰기가 중지돼 있다', 'kadan storage --help')
       : result('ok', 'SQLite 원장을 읽기 전용으로 열었다');
   }
-  const ledger = path.join(home, 'ledger.jsonl');
-  if (!fs.existsSync(ledger)) return result('na', '아직 원장이 없다(처음 kadan up 전)');
-  fs.accessSync(ledger, fs.constants.R_OK);
-  return result('ok', 'JSONL 원장을 읽을 수 있다');
+  // 표시 파일·DB가 없는 홈에서만 옛 흔적을 찾는다(일반 읽기 경로에는 넣지 않는다).
+  const trace = legacyTrace(home);
+  if (trace) {
+    return result('warn', `주의(변환 필요): 옛 JSONL 흔적 ${trace} — 태그 jsonl-last의 kadan storage import로 변환`,
+      'kadan storage import  (태그 jsonl-last 버전)');
+  }
+  return result('na', '아직 원장이 없다(처음 kadan up 전)');
 }
 
 function checkBase({home, probes}) {

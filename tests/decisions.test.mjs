@@ -2,15 +2,15 @@ import "./helpers/isolated-home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
+import {appendStream} from '../src/storage.mjs';
 import {DecisionStore,decisionCommand} from '../src/decisions.mjs';
 import {createWallServer} from '../src/wall.mjs';
 import {renderCenterWall} from '../src/center-wall.mjs';
 const input={question:'서비스를 제품과 분리할까요?',options:['분리','유지'],recommendation:'분리',reason:'기존 결정으로 해결할 수 없는 표시 정책\n- 결과 파일: /repo/card-a/result.md'};
-function fixture(){const home=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-')));const cards=new CardStore(home);cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});const sent=[];const notify=(...x)=>sent.push(x);const store=new DecisionStore(home,{notify});return{home,cards,store,sent,notify};}
+function fixture(){const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-decision-'));const cards=new CardStore(home);cards.create({repo:'repo',id:'card-a',repoPath:home,body:'# 테스트'});const sent=[];const notify=(...x)=>sent.push(x);const store=new DecisionStore(home,{notify});return{home,cards,store,sent,notify};}
 test('09-07 슈퍼의 명시 결정만 생성, 질문 단위로 답변, 같은 답변은 중복 통지 없음',()=>{
  const f=fixture();assert.throws(()=>f.store.request('repo/card-a',input,'작업자'),/슈퍼감독/);
  assert.throws(()=>f.store.request('repo/card-a',{...input,recommendation:'아무거나'},'시험-슈퍼감독'),/추천/);
@@ -30,7 +30,7 @@ test('09-07 통지 실패에도 답변 보존, 손상 이력은 성공처럼 읽
  const f=fixture();const a=f.store.request('repo/card-a',input,'시험-슈퍼감독');const failing=new DecisionStore(f.home,{notify:()=>{throw Error('gone')}});
  assert.equal(failing.answer(a.id,{revision:1,text:'분리'},'사람').delivery.status,'failed');
  assert.equal(failing.get(a.id).status,'answered');
- fs.appendFileSync(path.join(f.home,'decisions/events.jsonl'),'bad\n');assert.throws(()=>failing.list());assert.throws(()=>failing.request('repo/card-a',input,'시험-슈퍼감독'));
+ appendStream(f.home,'decisions/events.jsonl','bad');assert.throws(()=>failing.list());assert.throws(()=>failing.request('repo/card-a',input,'시험-슈퍼감독'));
 });
 test('09-07 내부 question은 사용자 결정함에 안 뜨고 웹 답변은 CLI 공통 경로를 사용한다',async()=>{
  const f=fixture();f.cards.update('repo/card-a',{}, {revision:1,by:'작업자',noteKind:'question',note:'내부 오류 보고'});

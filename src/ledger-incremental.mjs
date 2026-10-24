@@ -1,5 +1,5 @@
 // Why: 감시기는 주기마다 원장 사건 약 7만 개를 처음부터 다시 읽고 검증·투영했다. 커서 뒤 새 사건만 이어 붙여 같은 결과를 낸다.
-// SQLite 저장 전용이다. JSONL 저장은 지금처럼 전체를 읽는다. 상태는 디스크에 쓰지 않고 프로세스 안에만 둔다.
+// 저장소가 없는 홈('none')은 증분 상태 없이 전체 읽기(빈 결과)로 돌아간다. 상태는 디스크에 쓰지 않고 프로세스 안에만 둔다.
 //
 // 실패는 두 갈래이고 이름이 다르다.
 //  (a) 새 묶음 검증 실패(순번 빈틈·mailId 중복·완료 우편 짝 깨짐·인계 충돌): 증분 상태와 커서를 함께 버리고,
@@ -103,7 +103,7 @@ function current(home,log) {
 }
 
 export function readLedgerStateIncremental(home,{log = console.error} = {}) {
-  if (storageMode(home) !== 'sqlite') return readLedgerState(home);
+  if (storageMode(home) === 'none') return readLedgerState(home);
   return current(home,log).view;
 }
 
@@ -128,14 +128,14 @@ function projectUpTo(st,view,domain) {
 // readLedger / readTaskLedger / readMailLedger / readMailboxLedger / readSystemLedger와 같은 결과. 영역(domain)마다 투영 상태를 따로 둔다.
 // uniqueDone의 본 키 집합은 영역 사이에 공유하지 않는다 — 영역 필터를 거친 뒤의 첫 완료여야 한다.
 export function readLedgerIncremental(home,{domain = null,log = console.error} = {}) {
-  if (storageMode(home) !== 'sqlite') return projectLedger(readLedgerState(home,{domain}),domain);
+  if (storageMode(home) === 'none') return projectLedger(readLedgerState(home,{domain}),domain);
   const st = current(home,log);
   return projectUpTo(st,st.view,domain);
 }
 
 // state와 entries를 같은 current() 한 번에서 만든다. 두 번 따로 읽으면 사이에 들어온 사건 때문에 서로 다른 순번을 보게 된다.
 export function readLedgerViewIncremental(home,{domain = null,log = console.error} = {}) {
-  if (storageMode(home) !== 'sqlite') {
+  if (storageMode(home) === 'none') {
     const state = readLedgerState(home,{domain});
     return {state,entries:projectLedger(state,domain)};
   }

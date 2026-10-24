@@ -2,7 +2,6 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {CardStore} from '../src/card-store.mjs';
@@ -28,7 +27,7 @@ const EXEC = `node '${fake}' {model}`;
 
 // 가짜 실행기와 설정이 든 격리 홈. 시계는 시험이 직접 움직인다(켜는 시점 이후 사건만 보는 규칙을 시각으로 시험한다).
 function world({chain = [{runner: 'fake', model: 'ok'}], exec = EXEC, spawn, timeoutMs = 3000, extraRunners = {}} = {}) {
-  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-explain-')));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-explain-'));
   const log = path.join(home, 'fake-log.jsonl');
   process.env.FAKE_EXPLAIN_LOG = log;
   const writeSettings = roles => fs.writeFileSync(path.join(home, 'runner-settings.json'), JSON.stringify({
@@ -811,7 +810,7 @@ test('F1: write 실패의 오류 메시지 원문은 원장 reason에 남지 않
       assert.equal(row.outcome, 'failed', name);
       assert.equal(row.reason, expected, name);
       assertCallRow(row, name);
-      assert.ok(!fs.readFileSync(path.join(w.home, EXPLAIN_FILE), 'utf8').includes('FakeSecret'), name);
+      assert.ok(!JSON.stringify(w.rows()).includes('FakeSecret'), name);
     }
   } finally { BriefStore.prototype.write = original; }
 });
@@ -896,7 +895,7 @@ test('8R F1: 예외 code 접근 함수·Proxy·던지는 접근 함수는 한 �
       BriefStore.prototype.write = original;
       const [row] = w.rows().filter(r => r.kind === 'explain-call');
       assert.equal(row.reason, expected, name);
-      const text = fs.readFileSync(path.join(w.home, EXPLAIN_FILE), 'utf8');
+      const text = JSON.stringify(w.rows());
       for (const bad of ['Fake', 'ORCHID']) assert.ok(!text.includes(bad), `${name}: ${bad}`);
     }
   } finally { BriefStore.prototype.write = original; }

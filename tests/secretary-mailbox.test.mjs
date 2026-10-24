@@ -1,12 +1,11 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync} from 'node:child_process';
-import {SecretaryMailbox,secretaryLetters} from '../src/secretary-mailbox.mjs';import {readLedger} from '../src/ledger.mjs';import {buildTree} from '../src/cli.mjs';import {collectRoles} from '../src/watch-runner.mjs';import {renderActivity} from '../src/decision-wall.mjs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
-const home=()=>markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-secretary-')));
+import {SecretaryMailbox,secretaryLetters} from '../src/secretary-mailbox.mjs';import {readLedger} from '../src/ledger.mjs';import {readStream} from '../src/storage.mjs';import {buildTree} from '../src/cli.mjs';import {collectRoles} from '../src/watch-runner.mjs';import {renderActivity} from '../src/decision-wall.mjs';
+const home=()=>fs.mkdtempSync(path.join(os.tmpdir(),'kadan-secretary-'));
 test('비서 공식 보고는 세션 없이 저장되고 별도 확인 전까지 미확인이다',()=>{
  const h=home(),m=new SecretaryMailbox(h),r=m.send({by:'p-슈퍼감독',message:'중지 준비 완료',category:'report'});
  assert.equal(r.status,'stored');assert.equal(r.wake,'not-connected');assert.equal(m.list().length,1);assert.equal(m.read(r.mailId).body,'중지 준비 완료');assert.equal(m.list().length,1);
  assert.throws(()=>m.acknowledge(r.mailId,'p-작업자'),/비서/);m.acknowledge(r.mailId,'비서');m.acknowledge(r.mailId,'비서');assert.equal(m.list().length,0);assert.equal(readLedger(h).filter(e=>e.kind==='mail-read').length,1);
- const raw=fs.readFileSync(path.join(h,'mail/events.jsonl'),'utf8');assert.ok(!raw.includes('중지 준비 완료'));assert.equal(buildTree(readLedger(h)).length,0);
+ const raw=JSON.stringify(readStream(h,'mail/events.jsonl'));assert.ok(!raw.includes('중지 준비 완료'));assert.equal(buildTree(readLedger(h)).length,0);
  assert.deepEqual([...collectRoles({list:()=>[]},readLedger(h)).observations.values()],[]);
 });
 test('새 CLI 수신 경로는 실제 tmux를 만들거나 발령 기록을 만들지 않는다',()=>{

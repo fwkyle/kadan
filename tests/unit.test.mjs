@@ -4,13 +4,14 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from "node:os";
 import path from "node:path";
 
 process.env.TZ = "Asia/Seoul";
-process.env.KADAN_HOME = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-test-")));
+process.env.KADAN_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-test-"));
 process.env.KADAN_SOCKET = "kadan-unittest";
+
+const { readStream, appendStream } = await import("../src/storage.mjs");
 
 const {
   buildOrcaCreateArgv,
@@ -1306,7 +1307,7 @@ test("역할 이름이 정확히 같아야 확정한다 — 세션 이름이 같
 });
 
 test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20개 동시 실행에서 2개가 통과했다(card-35r)", async () => {
-  const home = markJsonl(fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-done-race-")));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-done-race-"));
   appendLedger(
     {
       kind: "start",
@@ -1345,11 +1346,7 @@ test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20
   );
 
   const successes = runs.filter((run) => run.code === 0).length;
-  const firstDone = fs
-    .readFileSync(path.join(home, "tasks", "events.jsonl"), "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  const firstDone = readStream(home, "tasks/events.jsonl")
     .find(
       (entry) =>
         entry.kind === "done" &&
@@ -1369,11 +1366,7 @@ test("동시에 확정해도 같은 역할·카드는 하나로 읽는다 — 20
     },
     home
   );
-  const rawDoneLines = fs
-    .readFileSync(path.join(home, "tasks", "events.jsonl"), "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  const rawDoneLines = readStream(home, "tasks/events.jsonl")
     .filter(
       (entry) =>
         entry.kind === "done" &&
@@ -1838,27 +1831,25 @@ test("원장은 append-only로 쌓이고 순서대로 읽힌다", () => {
     { domain: "mail", kinds: ["send", "mail-read"], order: [2, 5] },
     { domain: "tasks", kinds: ["plan", "done"], order: [3, 6] },
   ];
-  const rawStream = domain => fs.readFileSync(path.join(process.env.KADAN_HOME, domain, "events.jsonl"), "utf8");
+  const rawStream = domain => readStream(process.env.KADAN_HOME, `${domain}/events.jsonl`);
   const before = streams.map(({ domain }) => rawStream(domain));
   appendLedger({ kind: "stop", role: "작업자", session: "kadan-작업자" });
   appendLedger({ kind: "mail-read", role: "작업자", mailId: rows[1].mailId });
   appendLedger({ kind: "done", role: "작업자", taskId: "order", result: "ok" });
   for (const [index, { domain, kinds, order }] of streams.entries()) {
-    const raw = rawStream(domain);
-    assert.equal(raw.startsWith(before[index]), true, `${domain}: 기존 원문 보존`);
-    assert.equal(raw.endsWith("\n"), true);
-    const events = raw.trimEnd().split("\n").map(line => JSON.parse(line));
+    const events = rawStream(domain);
+    assert.deepEqual(events.slice(0, before[index].length), before[index], `${domain}: 기존 원문 보존`);
     assert.deepEqual(events.map(entry => entry.kind), kinds);
     assert.deepEqual(events.map(entry => entry._ledgerOrder), order);
   }
   assert.deepEqual(readLedger().map(entry => entry.kind), ["start", "send", "plan", "stop", "mail-read", "done"]);
 });
 
-test("원장의 깨진 JSON 줄은 원본을 broken 속성으로 보존한다", async () => {
+test("원장의 깨진 옛 행은 원본을 broken 속성으로 보존한다", async () => {
+  // 옛 원장 영역(스트림 'ledger.jsonl')의 행. SQLite는 JSON이 아닌 줄을 받지 못하므로 {broken} 꼴로 들어온 행만 다룬다.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-lite-broken-ledger-test-"));
-  const file = path.join(home, "ledger.jsonl");
-  await fs.promises.appendFile(file, '{"kind":"start"}\n');
-  await fs.promises.appendFile(file, "not-json\n");
+  appendStream(home, "ledger.jsonl", { kind: "start" });
+  appendStream(home, "ledger.jsonl", { t: null, broken: "not-json" });
 
   const rows = readLedger(home);
   assert.equal(rows.length, 2);

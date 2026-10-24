@@ -2,7 +2,6 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -14,9 +13,6 @@ import {setNotifySetting, effectiveNotifyEnvFile, readDiscordSecrets} from '../s
 import {cmdSecrets} from '../src/commands/secrets.mjs';
 import {cmdNotify} from '../src/commands/notify.mjs';
 import {notifyUser as rawNotifyUser} from '../src/user-notify.mjs';
-import {importStorage, exportStorage, activateStorage, storageCommand} from '../src/storage-migration.mjs';
-import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
-import {CardStore} from '../src/card-store.mjs';
 import {runInit} from '../src/quickstart.mjs';
 const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, {kind: 'alert', ...opts}); // 전송 시험은 새 글 대상 종류로 돌린다(정책은 notify-policy.test.mjs)
 
@@ -173,41 +169,6 @@ test('set/unset은 이름별로 따로이고 원자적으로 쓰며 값은 저�
   assert.equal(fs.statSync(r.dir).mode & 0o777, 0o755); // 이미 있으면 권한을 바꾸지 않는다
 });
 
-function sqliteHome() { const home = tmp('store'); createDatabase(home); writeStorageMarker(home, 'sqlite'); return home; }
-
-test('4 storage export 결과에 secrets/가 없다(가짜 값 파일 포함) — 링크된 secrets도, 다른 곳의 같은 이름 폴더는 그대로', () => {
-  const source = sqliteHome(), out = source + '-out';
-  new CardStore(source).create({repo: 'r', id: 'a', repoPath: source, body: '# a'});
-  initSecretsDir(source);
-  fs.writeFileSync(path.join(source, 'secrets', 'discord.env'), `DISCORD_USER_ID=${FAKE_USER}\nDISCORD_WEBHOOK_URL=${FAKE_TOKEN}\n`, {mode: 0o600});
-  fs.mkdirSync(path.join(source, 'cards', 'secrets'), {recursive: true}); // 최상위가 아닌 같은 이름은 제외 대상이 아니다
-  fs.writeFileSync(path.join(source, 'cards', 'secrets', 'keep.txt'), 'keep');
-  storageCommand(['pause'], {}, {home: source});
-  const result = exportStorage(source, out);
-  assert.equal(result.backend, 'jsonl');
-  assert.ok(!fs.existsSync(path.join(out, 'secrets')), 'export에 secrets/가 있다');
-  assert.ok(fs.existsSync(path.join(out, 'cards', 'secrets', 'keep.txt')));
-  const all = spawnSync('grep', ['-r', '-l', FAKE_TOKEN, out], {encoding: 'utf8'});
-  assert.equal(all.stdout, '', '가짜 값이 export 어딘가에 있다');
-});
-
-test('4 import와 activate 경로도 secrets/를 뺀다(링크로 된 secrets 포함)', () => {
-  const source = markJsonl(tmp('imp')); // JSONL 홈
-  new CardStore(source).create({repo: 'r', id: 'a', repoPath: source, body: '# a'});
-  const elsewhere = tmp('elsewhere');
-  fs.writeFileSync(path.join(elsewhere, 'discord.env'), `DISCORD_USER_ID=${FAKE_USER}\nTOKEN=${FAKE_TOKEN}\n`);
-  fs.symlinkSync(elsewhere, path.join(source, 'secrets')); // 사용자가 secrets를 다른 곳으로 링크해 둔 경우
-  const target = source + '-candidate';
-  importStorage(source, target); // 링크 secrets가 있어도 중앙 기록 링크 오류가 나지 않고 복사에서도 빠진다
-  assert.ok(!fs.existsSync(path.join(target, 'secrets')));
-  storageCommand(['pause'], {}, {home: source}); storageCommand(['pause'], {}, {home: target});
-  const act = activateStorage(source, target, {writersStopped: true});
-  assert.equal(act.backend, 'sqlite');
-  assert.ok(fs.existsSync(path.join(source, 'secrets')), 'activate가 원본 secrets를 건드렸다');
-  assert.equal(fs.readFileSync(path.join(elsewhere, 'discord.env'), 'utf8').includes(FAKE_TOKEN), true);
-  const all = spawnSync('grep', ['-r', '-l', FAKE_TOKEN, target], {encoding: 'utf8'});
-  assert.equal(all.stdout, '');
-});
 
 test('quickstart init은 빈 secrets/(700)만 만들고 값 파일은 만들지 않는다', () => {
   const home = tmp('qs'), userHome = tmp('qsu'), repo = tmp('qsr');

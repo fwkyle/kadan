@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {markJsonl} from './helpers/legacy-jsonl.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {CardStore} from '../src/card-store.mjs';
 import {cardCommand} from '../src/card-command.mjs';
 import {createDatabase,writeStorageMarker,appendStream} from '../src/storage.mjs';
-import {importStorage,exportStorage,storageCommand} from '../src/storage-migration.mjs';
 
 for(const backend of ['jsonl','sqlite']) {
  function fixture() {
@@ -76,18 +74,3 @@ for(const backend of ['jsonl','sqlite']) {
   assert.equal(fs.existsSync(path.join(dir,'evidence')),false);
  });
 }
-
-test('기존 저장소 이전·내보내기가 결과 원문·근거·등록 이력을 함께 보존한다',()=>{
- const source=markJsonl(fs.mkdtempSync(path.join(os.tmpdir(),'kadan-results-backup-')));
- const cards=new CardStore(source),card=cards.create({repo:'test',id:'a',repoPath:source,body:'# 지시'});
- fs.writeFileSync(card.resultPath,'보존할 결과');fs.writeFileSync(path.join(card.evidenceDir,'check.log'),'검증 원문');
- const saved=cards.report(card.key,{revision:1,outcome:'ok'});
- const target=source+'-sqlite',output=source+'-export';
- importStorage(source,target);storageCommand(['pause'],{},{home:target});exportStorage(target,output);
- for(const home of [source,target,output]){
-  const copied=new CardStore(home).get(card.key);
-  assert.deepEqual(copied.history,saved.history);
-  assert.equal(fs.readFileSync(copied.resultPath,'utf8'),'보존할 결과');
-  assert.equal(fs.readFileSync(path.join(copied.evidenceDir,'check.log'),'utf8'),'검증 원문');
- }
-});
