@@ -74,8 +74,11 @@ test('확보 도중 다른 연결의 원자적 변경은 다음 수집에서만 
   }finally{DatabaseSync.prototype.prepare=prepare;wallCache.clear();}
 });
 
-test('HTTP·선행 수집에서 tmux와 화면 계산 전에 DB가 닫히고 진단은 쓰지 않는다',async()=>{
+test('HTTP·선행 수집에서 tmux와 화면 계산 전에 DB가 닫히고 진단은 쓰지 않는다',async t=>{
   const f=dashboardFixture({count:2});process.env.KADAN_HOME=f.home;wallCache.clear();
+  // 선행 수집이 첫 HTTP의 양보 구간보다 먼저 실행되면 그 결과가 재사용될 수 있다.
+  // 시간을 직접 전진시켜 첫 요청과 선행 수집의 DB 종료 경계를 각각 확인한다.
+  t.mock.timers.enable({apis:['setTimeout']});
   const exec=DatabaseSync.prototype.exec,list=floor.list;let active=0,checked=0,queries=0;
   DatabaseSync.prototype.exec=function(sql,...args){
     const result=exec.call(this,sql,...args);
@@ -90,7 +93,8 @@ test('HTTP·선행 수집에서 tmux와 화면 계산 전에 DB가 닫히고 진
   const base=`http://127.0.0.1:${server.address().port}/api/dashboard/`;
   try{
     const r=await fetch(base+'workspace?collection=work');assert.equal(r.status,200);await r.text();
-    await new Promise(resolve=>setTimeout(resolve,30));assert.ok(checked>=2);
+    assert.equal(checked,1);
+    t.mock.timers.tick(10);assert.equal(checked,2);
     const prepare=DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare=function(...args){queries++;return prepare.apply(this,args);};
     try{
