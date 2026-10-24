@@ -1,9 +1,12 @@
+import fs from 'node:fs';
 import {taskIdentity} from './task-identity.mjs';
 import {effectiveCardRole,openTaskIds} from './handover-state.mjs';
 
 export const WORKER_RECHECK_MS=30*60_000;
 const INTERVAL=WORKER_RECHECK_MS;
 const superRole=role=>role==='슈퍼감독'||/^[^-]+-슈퍼감독(?:-|$)/u.test(role);
+// 감시 경로의 카드는 본문이 없는 요약이다. 후보로 고른 카드 한 장만 본문을 읽는다.
+const cardBody=card=>{try{return fs.readFileSync(card.path,'utf8');}catch{return undefined;}};
 // 시간과 대상만 고른다. 판정·기록·상신은 감시AI의 watch-report가 맡는다.
 export class ProgressWatch {
   states=new Map();
@@ -22,7 +25,7 @@ export class ProgressWatch {
       let s=this.states.get(key);
       if(!s){s={at:now,screen:seen.screen.slice(-8000),session};this.states.set(key,s);}
       if(enabled&&!selected&&!blockedSessions.has(session)&&now-s.at>=INTERVAL&&now-(this.lastJudged.get(session)??-Infinity)>=INTERVAL){
-        selected={source:'progress',role,session,taskId:identity.taskIdFor(card),input:{title:card.title,scope:card.scope,goal:card.body?.slice(0,6000),
+        selected={source:'progress',role,session,taskId:identity.taskIdFor(card),input:{title:card.title,scope:card.scope,goal:(card.body??cardBody(card))?.slice(0,6000),
           minutes:Math.floor((now-s.at)/60000),previous:s.screen,current:seen.screen.slice(-8000)}};
       }
     }
