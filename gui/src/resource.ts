@@ -1,21 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { Resource, type ResourceOptions } from "./resource-core.ts";
 import { writeAllowed } from "./write-policy.ts";
+import { createJsonLoader } from "./resource-http.ts";
+export { json } from "./resource-http.ts";
 
 const resources = new Map<string, Resource<unknown>>();
 const api = "/api/dashboard/";
-export async function json<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok)
-    throw new Error(
-      (await response.text()).slice(0, 600) || `조회 실패 (${response.status})`,
-    );
-  return response.json() as Promise<T>;
-}
 document.addEventListener("visibilitychange", () => {
   for (const resource of resources.values())
     resource.setVisible(!document.hidden);
@@ -25,11 +15,7 @@ export function useResource<T>(path: string, options: ResourceOptions = {}) {
   let resource = resources.get(url) as Resource<T> | undefined;
   if (!resource) {
     resource = new Resource<T>(
-      (signal, force) =>
-        json<T>(
-          url + (force ? (url.includes("?") ? "&" : "?") + "fresh=1" : ""),
-          signal,
-        ),
+      createJsonLoader<T>(url),
       { pollMs: 15_000, staleMs: 5000, ...options },
     );
     resource.setVisible(!document.hidden);

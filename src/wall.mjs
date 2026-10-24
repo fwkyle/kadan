@@ -3,6 +3,8 @@ import {mailboxLetters} from './mailbox.mjs';
 import {filterMail,mailStatus,mailViews,replyStates} from './dashboard-inbox.mjs';
 import {storageSnapshot} from './storage.mjs';
 import {sendDashboardData} from './dashboard-api.mjs';
+import {createResponseCache} from './response-cache.mjs';
+import {sendVersionedJson} from './versioned-response.mjs';
 import {serveDashboard} from './dashboard-static.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
@@ -453,14 +455,15 @@ export function needsDecisions(url){
   return !url.pathname.startsWith('/api/')&&url.searchParams.get('legacy')!=='1';
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions} = {}) {
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,
+  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  // 원격 접속 설정(KADAN_HOME/remote-access.json)이 있을 때만 게이트를 만든다. 없으면 열쇠 조회도 타이머도 없다(2026-10-18).
  // remote를 직접 넘기면(시험) 파일 대신 그 설정을 쓴다.
  const remoteGate=centerHandler?createRemoteGate(remote===undefined?loadRemoteConfig(home):remote,remoteOptions):null;
  const decisionSecret=randomBytes(32); // 결정 전용 token용 비밀. 프로세스 안에만 둔다.
- const cache=new Map();
+ const cache=createResponseCache();
  let sharedSnapshot=null;
  const clear=()=>{cache.clear();sharedSnapshot=null;};
  // 키 앞의 구분(local/remote)은 서버가 판정 결과로 붙인다. URL 매개변수로는 바꿀 수 없다(2026-10-18 검수: 주소에 표시를 넣어 섞던 결함).
@@ -476,7 +479,6 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
   if(!cacheSec)return;
   const key=cacheKey(url);
   cache.delete(key);cache.set(key,{at,body,type});
-  while(cache.size>50)cache.delete(cache.keys().next().value);
  };
  // 화면은 15초마다 자료를 받는데 공통 수집은 10초만 유지돼 매번 2초 넘는 수집을 기다렸다(2026-09-25 실측: 수집 약 2.2초,
  // 그리기·전송 약 0.5초). 요청 뒤 12초에 한 번 미리 수집해 다음 요청이 새 수집을 바로 쓰게 한다. 수집은 멈춤 없이 돌아
@@ -514,6 +516,16 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true,...(request.kadanDecisionToken?{decisionToken:request.kadanDecisionToken}:{})}:{token:centerHandler.token}));return;}
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
+    if (request.method === 'GET' && loadSummary && url.pathname === '/api/dashboard/summary') {
+      try {
+        sendVersionedJson(request, response, loadSummary(), {fresh: url.searchParams.has('fresh')});
+      } catch (error) {
+        response.writeHead(error.status || 503, {'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store'});
+        response.end('저장소 확인 불가: ' + error.message);
+      }
+      return;
+    }
     if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(cacheUrl);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}

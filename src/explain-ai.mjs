@@ -6,6 +6,7 @@
 // - 감시 AI와 자리를 나누지 않는 별도 대기열(동시 1개, 시도당 상한)이며, 호출은 감시 순회를 기다리게 하지 않는다.
 // 설명 AI는 감시 AI가 아니다. 판정·보고·알림을 하지 않고 brief 줄만 쓴다.
 import fs from 'node:fs';
+import {createExplainQueue} from './explain-queue.mjs';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {CardStore} from './card-store.mjs';
@@ -38,7 +39,8 @@ export class ExplainAI {
     this.enabledAt = null;
     this.handled = new Set();
     this.attempted = new Set();
-    this.queue = [];
+    this.queue = createExplainQueue();
+    this.staleQueued = 0;
     this.running = null;
     this.active = null;
     this.controller = new AbortController();
@@ -68,7 +70,7 @@ export class ExplainAI {
     const chain = this.chain();
     if (!chain) {
       // 칸을 비우면 대기열도 무효로 한다. 다시 켠 뒤 옛 사건이 실행되지 않게.
-      this.queue.length = 0;
+      this.queue.clear();
       if (this.enabledAt != null) { this.record({kind: 'explain-state', state: 'disabled'}); this.enabledAt = null; }
       return {state: 'off', queued: 0};
     }
@@ -82,7 +84,7 @@ export class ExplainAI {
     let queued = 0;
     for (const card of this.center([...keys], now)) {
       // 대기열뿐 아니라 지금 호출 중인 카드도 다시 예약하지 않는다.
-      if (queued >= this.maxPerCycle || this.queue.some(j => j.key === card.key) || this.active?.key === card.key) continue;
+      if (queued >= this.maxPerCycle || this.active?.key === card.key) continue;
       const mine = grouped.get(card.key) ?? [];
       const events = cardEvents(card, mine, now).filter(e => e.at >= this.enabledAt && !this.handled.has(handledKey(card.key, e.id)));
       if (!events.length) continue;
@@ -94,8 +96,8 @@ export class ExplainAI {
         for (const {id} of ids) this.handled.add(handledKey(card.key, id));
         continue;
       }
-      this.queue.push({key: card.key, input, hash, ids, revision: card.revision, resultPath: card.result?.path ?? null, resultSha256: card.result?.sha256 ?? null});
-      queued++;
+      if (this.queue.enqueue({key: card.key, input, hash, ids, revision: card.revision,
+        resultPath: card.result?.path ?? null, resultSha256: card.result?.sha256 ?? null})) queued++;
     }
     if (this.queue.length) this.pump();
     return {state: 'on', queued};
@@ -117,11 +119,13 @@ export class ExplainAI {
     if (this.running) return this.running;
     this.running = (async () => {
       while (this.queue.length && !this.controller.signal.aborted) {
-        const job = this.queue.shift();
+        let job = this.queue.take();
         // 꺼낼 때 지금 켜진 시점과 사건 시각을 다시 대조한다(그사이 꺼졌다 켜졌으면 옛 사건은 버린다).
         if (this.enabledAt == null) continue;
         job.ids = job.ids.filter(e => e.at >= this.enabledAt);
         if (!job.ids.length) continue;
+        job = this.freshQueuedJob(job);
+        if (!job) { this.staleQueued++; continue; }
         this.active = job;
         try { await this.run(job); } catch (error) { this.print(`[설명 AI] ${job.key} 처리 실패: ${error.message}`); }
         finally { this.active = null; }
@@ -130,7 +134,20 @@ export class ExplainAI {
     return this.running;
   }
   async drain() { while (this.running) await this.running; }
-  async stop() { this.controller.abort(); this.queue.length = 0; await this.drain(); }
+  async stop() { this.controller.abort(); this.queue.clear(); await this.drain(); }
+
+  // 대기 중에 바뀐 입력에는 모델을 부르지 않는다. 다음 tick이 최신 입력을 예약한다.
+  freshQueuedJob(job) {
+    try {
+      const now = this.now(), [card] = this.center([job.key], now);
+      const decisions = decisionsByCard(readStream(this.home, 'decisions/events.jsonl', {optional: true}));
+      if (!card) return null;
+      const {input, hash} = briefInput(card, decisions.get(job.key) ?? [], now);
+      if (hash !== job.hash) return null;
+      return {...job, input, revision: card.revision,
+        resultPath: card.result?.path ?? null, resultSha256: card.result?.sha256 ?? null};
+    } catch { return null; } // 새 입력을 확인하지 못하면 오래된 입력을 실행하지 않는다.
+  }
 
   async run(job) {
     const settings = this.read();

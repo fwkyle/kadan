@@ -1,6 +1,7 @@
 import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
+import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
 // 원장 — 바닥과 무관한 append-only 사건. 저장 backend는 공통 저장 경계가 선택한다.
 import fs from "node:fs";
@@ -102,6 +103,6 @@ export function readWatchRequest(home,requestId) {
   if (storageMode(home) === 'none') return null;
   return storageSnapshot(home,db => {
     const row = db.prepare("SELECT payload FROM events NOT INDEXED WHERE stream='system/events.jsonl' AND instr(payload,?)>0 AND json_extract(payload,'$.kind')='watch-ai-request' AND json_extract(payload,'$.requestId')=? LIMIT 1").get(requestId,requestId);
-    return row ? JSON.parse(row.payload) : null;
+    return row ? hydrateWatchRequest(db,JSON.parse(row.payload)) : null;
   });
 }
