@@ -484,9 +484,9 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  // 그리기·전송 약 0.5초). 요청 뒤 12초에 한 번 미리 수집해 다음 요청이 새 수집을 바로 쓰게 한다. 수집은 멈춤 없이 돌아
  // 그 사이 온 요청은 기다리므로, 요청 직전에 끝나는 시점을 고른다. 요청이 끊기면 더 수집하지 않는다.
  let warming=null;
- const warm=()=>{
+ const warm=(loader=loadSnapshot)=>{
   warming=null;
-  const load=()=>{const value=loadSnapshot();if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value,loader:loadSnapshot};};
+  const load=()=>{const value=loader();if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value,loader};};
   try{if(home)storageSnapshot(home,load);else load();}catch{}
  };
   const server=http.createServer(async (request, response) => {
@@ -532,7 +532,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       && now() - sharedSnapshot.at < cacheSec * 1000;
     if(request.method==='GET'&&cacheSec&&centerHandler){
       clearTimeout(warming);warming=null;
-      if(!listRequest){warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
+      warming=setTimeout(()=>warm(readSnapshot),warmAfterMs);warming.unref?.();
     }
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(cacheUrl);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}

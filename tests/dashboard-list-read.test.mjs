@@ -35,10 +35,10 @@ test('목록 전용 수집도 목록·상세 응답은 전체 수집과 같다',
   } finally {floor.list = original;wallCache.clear();}
 });
 
-test('목록 HTTP는 별도 수집을 쓰며 현황 캐시와 섞거나 전체 수집을 예약하지 않는다', async () => {
+test('목록 HTTP는 별도 수집을 쓰며 현황 캐시와 섞지 않는다', async () => {
   const f = dashboardFixture({count: 2});let full = 0, lists = 0, fail = false;
   const server = createWallServer(() => {full++;return f.snapshot();}, {
-    home: f.home, warmAfterMs: 5, loadListSnapshot: () => {
+    home: f.home, warmAfterMs: 60_000, loadListSnapshot: () => {
       lists++;if (fail) throw new Error('조회 실패');return f.snapshot();
     },
   });
@@ -48,15 +48,28 @@ test('목록 HTTP는 별도 수집을 쓰며 현황 캐시와 섞거나 전체 �
   try {
     assert.equal(await get('workspace?collection=executions'), 200);
     assert.equal(await get('detail?card=demo/card-1'), 200);assert.equal(lists, 1);
-    await new Promise(resolve => setTimeout(resolve, 15));assert.equal(full, 0);
-    assert.equal(await get('status'), 200);assert.ok(full >= 1);
+    assert.equal(full, 0);
+    assert.equal(await get('status'), 200);assert.equal(full, 1);
     assert.equal(await get('workspace?collection=work'), 200);assert.equal(lists, 2);
-    const before = full; // 현황의 예약이 다음 요청 도착 전에 실행된 경우는 허용한다.
-    await new Promise(resolve => setTimeout(resolve, 15));assert.equal(full, before);
+    assert.equal(full, 1);
     assert.equal(await get('workspace?fresh=1'), 200);assert.equal(lists, 3);
     assert.equal(await get('workspace', {headers: {origin: 'https://untrusted.invalid'}}), 403);
     assert.equal(lists, 3);
     fail = true;assert.equal(await get('workspace?fresh=1'), 503);assert.equal(lists, 4);
+  } finally {await new Promise(resolve => server.close(resolve));}
+});
+
+test('목록 뒤의 선행 수집은 전체 현황 대신 가벼운 목록 경로를 쓴다', async () => {
+  const f = dashboardFixture({count: 2});let full = 0, lists = 0;
+  const server = createWallServer(() => {full++;throw new Error('전체 수집 금지');}, {
+    home: f.home, warmAfterMs: 5, loadListSnapshot: () => {lists++;return f.snapshot();},
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/api/dashboard/workspace?collection=executions`;
+    const response = await fetch(url);assert.equal(response.status, 200);await response.text();
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(full, 0);assert.equal(lists, 2);
   } finally {await new Promise(resolve => server.close(resolve));}
 });
 
