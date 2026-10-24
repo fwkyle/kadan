@@ -6,9 +6,11 @@ import {databaseIdentity, storageMode, storageSnapshot, streamHeads} from './sto
 import {DecisionStore} from './decisions.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {buildTree} from './cli-tree.mjs';
+import {createTreeInputCache} from './dashboard-tree-inputs.mjs';
 
 export function createDashboardSummaryReader(home, {listSessions, runtime = null, now = Date.now}) {
   const stores = createWatchStoreReaders(home);
+  const treeInputs = createTreeInputCache();
   let decisionCache, countCache, mailCache, treeCache;
   return () => {
     const errors = [];
@@ -28,6 +30,7 @@ export function createDashboardSummaryReader(home, {listSessions, runtime = null
       return {entries, mail, cards, works, decisions};
     });
     const {cards, works, entries, mail, decisions} = data;
+    const treeEntries = treeInputs(entries).entries;
     if (countCache?.cards !== cards || countCache?.works !== works) {
       const linked = new Set(works.flatMap(work => work.executions.map(e => e.key)));
       countCache = {cards, works, value: {work: works.length, executions: cards.length,
@@ -42,10 +45,10 @@ export function createDashboardSummaryReader(home, {listSessions, runtime = null
     try {
       const sessions = listSessions().filter(s => s.alive !== false);
       const key = JSON.stringify(sessions.map(s => [s.session, s.pid ?? null]));
-      if (treeCache?.entries !== entries || treeCache?.cards !== cards || treeCache?.key !== key) {
+      if (treeCache?.entries !== treeEntries || treeCache?.cards !== cards || treeCache?.key !== key) {
         const alive = Object.fromEntries(sessions.map(s => [s.session, s]));
-        const tree = buildTree(entries, alive, cards);
-        treeCache = {entries, cards, key,
+        const tree = buildTree(treeEntries, alive, cards);
+        treeCache = {entries: treeEntries, cards, key,
           secretary: tree.some(b => b.roles.some(r => r.role === '비서' && r.life.state === 'alive'))};
       }
       secretary = treeCache.secretary;
