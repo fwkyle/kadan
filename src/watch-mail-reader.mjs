@@ -4,14 +4,16 @@ import {withWatchMailboxViews, mailReminderCandidates, mailWaitingLetters,
   mailRecentLetters} from './mail-view.mjs';
 import {rememberMailboxQueries} from './mailbox-queries.mjs';
 import {taskIdentity, taskConnectionError} from './task-identity.mjs';
+import {createWatchLedgerView} from './watch-ledger-view.mjs';
 
 const stateKey = info => info && JSON.stringify([
   info.mailGeneration, info.mailStateVersion, info.mailCount,
 ]);
 const project = (entries, cards) => taskIdentity(cards).project(entries).filter(e => !taskConnectionError(e));
 
-export function createWatchMailReader(home, readEntries, {readCards = null, readRoles = () => []} = {}) {
+export function createWatchMailReader(home, readEntries = null, {readCards = null, readRoles = () => []} = {}) {
   const snapshots = new WeakMap();
+  const ledger = createWatchLedgerView();
   let last = null;
   return {
     readEntries() {
@@ -25,7 +27,7 @@ export function createWatchMailReader(home, readEntries, {readCards = null, read
           waiting:same ? previous.waiting : mailWaitingLetters(view.store),
           recent:new Map(withRecent ? roles.map(role => [role, mailRecentLetters(view.store, role)]) : []),
         };
-        return {raw:readEntries(), key, projectedKey, cards, roleKey,
+        return {raw:readEntries ? readEntries() : ledger(raw.store, raw.info), key, projectedKey, cards, roleKey,
           letters:sameRaw ? last.letters : mailReminderCandidates(raw.store),
           rawQueries:queries(raw, last?.rawQueries, sameRaw, true),
           projectedQueries:projected ? queries(projected, last?.projectedQueries,

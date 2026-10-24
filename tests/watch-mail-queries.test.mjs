@@ -8,7 +8,6 @@ import {spawnSync} from 'node:child_process';
 import {DatabaseSync} from 'node:sqlite';
 import {createDatabase, writeStorageMarker, appendStream} from '../src/storage.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
-import {readLedgerIncremental} from '../src/ledger-incremental.mjs';
 import {ledgerViewPath} from '../src/ledger-view-store.mjs';
 import {createWatchStoreReaders} from '../src/watch-store-cache.mjs';
 import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
@@ -57,7 +56,7 @@ function equalQueries(entries) {
 
 test('원문/해석 후의 기다림·책임·최근 문맥을 구분하고 이미 내준 수집을 바꾸지 않는다', () => {
   const home = homeOf();let cards = [card], visibleRoles = roles;
-  const reader = createWatchMailReader(home, () => readLedgerIncremental(home),
+  const reader = createWatchMailReader(home, null,
     {readCards:() => cards, readRoles:() => visibleRoles});
   for (const event of [question, answer]) appendLedger(event, home);
   const raw = reader.readEntries(), projected = reader.project(raw, cards);
@@ -78,7 +77,7 @@ test('원문/해석 후의 기다림·책임·최근 문맥을 구분하고 이�
 
 test('인계·읽음·세대·취소·최근 12통이 원래 저장 순서와 같고 미답변을 자르지 않는다', () => {
   const home = homeOf(), cards = [card];
-  const reader = createWatchMailReader(home, () => readLedgerIncremental(home),
+  const reader = createWatchMailReader(home, null,
     {readCards:() => cards, readRoles:() => roles});
   appendLedger({kind:'send', role:card.role, taskId:card.id, executionKey:card.key, t:at}, home);
   for (let n = 0; n < 30; n++) appendLedger({...question, mailId:`q${n}`, t:n % 2 ? at : 'invalid'}, home);
@@ -102,7 +101,7 @@ test('카드 읽기 실패 뒤 원문 수집은 유지하고 회복 후 새 해�
   const home = homeOf();let fail = true;const cards = [card];
   appendLedger(question, home);appendLedger(answer, home);
   const readCards = () => {if (fail) throw Error('fixture cards unreadable');return cards;};
-  const reader = createWatchMailReader(home, () => readLedgerIncremental(home), {readCards});
+  const reader = createWatchMailReader(home, null, {readCards});
   const raw = reader.readEntries();assert.throws(readCards, /cards unreadable/);equalQueries(raw);
   assert.deepEqual(reader.project(raw, cards), project(raw, cards));
   fail = false;const next = reader.readEntries();equalQueries(reader.project(next, cards));
@@ -126,7 +125,7 @@ test('동시 쓰기가 끼어도 카드 주소·원장·우편은 하나의 원�
     }
     return stores.cards.read();
   };
-  const reader = createWatchMailReader(home, () => readLedgerIncremental(home), {readCards});
+  const reader = createWatchMailReader(home, null, {readCards});
   const old = reader.readEntries();assert.equal(old.length, 1);assert.equal(waitingLetters(old).length, 1);
   const next = reader.readEntries(), cards = stores.cards.read();
   assert.equal(next.length, 2);assert.equal(cards.length, 2);
@@ -139,7 +138,7 @@ test('재시작 때 누락된 해석 위치나 완료 중복 키를 복구하고
     for (const event of [question, {kind:'done', role:card.role, taskId:card.id, result:'ok', t:at}]) {
       appendStream(home, 'ledger.jsonl', event);
     }
-    const reader = createWatchMailReader(home, () => readLedgerIncremental(home), {readCards:() => cards});
+    const reader = createWatchMailReader(home, null, {readCards:() => cards});
     reader.readEntries();const original = readLedger(home);
     const db = new DatabaseSync(ledgerViewPath(home));
     try {db.exec(damaged === 'views' ? "DELETE FROM views WHERE domain='watch'" :
@@ -162,7 +161,7 @@ test('같은 홈의 원본 파일이 교체되면 이전 해석 상태를 새 �
   appendLedger(question, home);appendLedger(answer, home);
   appendLedger({...question, mailId:'replacement-q'}, replacement);
   appendLedger({...answer, mailId:'replacement-a', replyTo:'unknown'}, replacement);
-  const reader = createWatchMailReader(home, () => readLedgerIncremental(home, {log:() => {}}),
+  const reader = createWatchMailReader(home, null,
     {readCards:() => cards, readRoles:() => roles});
   const old = reader.readEntries(), oldProjected = reader.project(old, cards);
   assert.equal(waitingLetters(oldProjected).length, 0);
