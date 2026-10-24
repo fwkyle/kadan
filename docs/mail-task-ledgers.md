@@ -14,7 +14,7 @@
 | 우편 | 보낸 편지, 읽음 확인, 질문 취소 | `mail/events.jsonl` |
 | 시스템 | 세션 시작·종료, 감시 등 운영 사건 | `system/events.jsonl` |
 
-SQLite에서는 같은 `kadan.sqlite` 안의 스트림을 구분한다. 별도 DB를 세 개 만드는 것이 아니다. JSONL 방식에서는 같은 이름의 파일에 기록한다. 기존 `ledger.jsonl` 이력은 수정·이동·재정렬하지 않는다. 우편 본문은 기존 `mail/<지문>.txt`에 둔다.
+SQLite에서는 같은 `kadan.sqlite` 안의 스트림을 구분한다. 별도 DB를 세 개 만드는 것이 아니다. `tasks/events.jsonl` 같은 이름은 DB 안의 스트림 이름이며 파일이 아니다. 기존 `ledger.jsonl` 이력은 수정·이동·재정렬하지 않는다. 우편 본문은 기존 `mail/<지문>.txt`에 둔다.
 
 `tasks/events.jsonl`은 작업 영역의 발령·완료 사건 원장이다. 기존 업무·카드의 상태 이력을 대체하지 않으며, 업무·실행과 별개인 새로운 작업 개념도 아니다. [업무 카드와 실행](business-work.md)의 완료 기준은 그대로다.
 

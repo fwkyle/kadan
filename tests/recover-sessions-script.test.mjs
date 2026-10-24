@@ -81,3 +81,15 @@ test('대화 ID가 없거나 잘못되면 복구 안내를 보류한다', () => 
     }));
   }
 });
+
+test('복구 도구: DB가 없는 홈은 KADAN_HOME 확인을 안내하며 오류로 끝난다(옛 ledger.jsonl은 읽지 않는다)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-recover-nodb-'));
+  fs.writeFileSync(path.join(root, 'ledger.jsonl'), '{"kind":"start","role":"x","t":"2026-10-15T00:00:00Z"}\n');
+  const script = new URL('../scripts/recover-sessions.mjs', import.meta.url).pathname;
+  const result = spawnSync(process.execPath, [script], {
+    env: {...process.env, HOME: root, KADAN_HOME: root, KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off'},
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /KADAN_HOME.*확인/);
+});

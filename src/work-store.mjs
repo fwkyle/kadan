@@ -43,7 +43,7 @@ export class WorkStore {
  }
  change(key,action,fields,opts={}){return this.locked(()=>this.#change(this.get(key),action,fields,opts));}
  // 우편 차례 반환 전용: 잠금 안에서 읽은 최신 업무로 decide가 {turnOwner,by,note}를 정하면 그 revision을 명시해 turnOwner만 쓴다.
- // 던지면 쓰지 않는다. revision 검사를 건너뛰는 길이 아니라, 잠금 안에서 읽은 값으로 검사하는 꼴이다(JSONL에서 공개 change를 잠금 안에 다시 부르면 이중 잠금).
+ // 던지면 쓰지 않는다. revision 검사를 건너뛰는 길이 아니라, 잠금 안에서 읽은 값으로 검사하는 꼴이다(공개 change를 잠금 안에 다시 부르면 이중 잠금).
  changeTurnOwner(key,decide){
   return this.locked(()=>{
    const current=this.get(key),{turnOwner,by,note}=decide(current);

@@ -40,7 +40,7 @@ export function nextTimeBoundary(cards,now){
  return next===Infinity?null:next;
 }
 
-// 저장소 전환 없이 쓰는 SQLite일 때만 데이터 버전을 만든다. JSONL이거나 읽기 실패면 null이고, null이면 재사용하지 않는다.
+// 저장소 전환 없이 쓰는 SQLite일 때만 데이터 버전을 만든다. 저장소가 없거나 읽기 실패면 null이고, null이면 재사용하지 않는다.
 // 읽기 조회(storageSnapshot) 안에서 불러야 읽은 값과 같은 시점의 버전이 된다.
 export function dataVersion(home){
  try{

@@ -31,14 +31,7 @@ function startRecords() {
       try { const e = JSON.parse(line); if (e.kind === 'start') out.push(e); } catch {}
     }
   }
-  const jsonl = path.join(HOME, 'ledger.jsonl');
-  if (fs.existsSync(jsonl)) {
-    for (const line of fs.readFileSync(jsonl, 'utf8').split('\n')) {
-      if (!line.includes('"kind":"start"')) continue;
-      try { const e = JSON.parse(line); if (e.kind === 'start') out.push(e); } catch {}
-    }
-  }
-  if (!out.length) die('start 기록을 찾지 못했다. KADAN_HOME 을 확인하라: ' + HOME);
+  if (!out.length) die('start 기록을 찾지 못했다(kadan.sqlite 없음 또는 start 없음). KADAN_HOME 을 확인하라: ' + HOME);
   const last = new Map();
   for (const e of out.sort((a, b) => String(a.t).localeCompare(String(b.t)))) last.set(e.role, e);
   return [...last.values()].filter((e) => String(e.t) >= since);

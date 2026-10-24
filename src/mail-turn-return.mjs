@@ -11,8 +11,7 @@ import {isUserActor} from './actors.mjs';
 // 쓰기가 성공했을 때만 실제 revision으로 만든 꼬리를 붙여 보낸다 → 전송이 실패하면 되돌린다(revertTurnReturn).
 // 잠금은 겹치지 않는다: claim·revert는 업무 잠금을 쥐었다 놓고 끝나며, 우편(guardedSend)은 그 잠금을 놓은 뒤에만 시작한다.
 // 이 잠금 안에서 우편을 부르는 일은 없다(판정은 업무·원장 읽기만 한다).
-// 2026-10-23 수정 2: JSONL 저장소에서는 자동 반환을 하지 않는다(업무 잠금과 인계 원장 잠금이 따로라 판정·쓰기가 한 순간이 아니다.
-// 운영은 SQLite). 되돌림은 claim이 남긴 revision 그대로일 때만 한다(같은 이름 재지정·A→B→A를 덮어쓰지 않는다).
+// 2026-10-23 수정 2였던 'JSONL이면 자동 반환 안 함' 건너뛰기는 JSONL 백엔드와 함께 지웠다(쓰기는 항상 SQLite 트랜잭션). 되돌림은 claim이 남긴 revision 그대로일 때만 한다(같은 이름 재지정·A→B→A를 덮어쓰지 않는다).
 const quote=s=>`'${String(s).replaceAll("'","'\\''")}'`;
 
 export const undoCommand=(workKey,revision,sender)=>
