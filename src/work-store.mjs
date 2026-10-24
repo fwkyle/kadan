@@ -7,6 +7,7 @@ import {CardStore} from './card-store.mjs';
 import {buildCardCenter} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
+import {readWatchWorkSummaries} from './work-watch-summary.mjs';
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 export const endedExecution=c=>['done','failed','cancelled','superseded','archived'].includes(c.displayState);
@@ -25,6 +26,10 @@ export class WorkStore {
   if(storageMode(this.home)==='none')return [];
   return listStreams(this.home,'works/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13)));
  });}
+ // 감시 전용 요약: 판정에 필요한 이력만 남긴다. 상세 화면·변경 기록은 기존 list/get을 쓴다.
+ listWatch(){
+  return storageMode(this.home)==='none'?this.list():readWatchWorkSummaries(this.home,keyStream);
+ }
  locked(fn){
   assertWritable(this.home);return transaction(this.home,fn);
  }
