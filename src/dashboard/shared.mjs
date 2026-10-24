@@ -49,7 +49,7 @@ export function model(snapshot, includeWorks = true) {
   if (snapshot.centerError || !snapshot.center)
     throw new Error(snapshot.centerError || "카드 상태를 읽을 수 없습니다");
   const { works, workError } = includeWorks ? prepareCenterWall(snapshot) : registeredCenterWorks(snapshot),
-    briefs = buildHumanBrief(snapshot.center, snapshot.home);
+    briefs = buildHumanBrief(snapshot.center, snapshot.home, snapshot.briefInputs);
   const cards = snapshot.center.cards,
     byKey = new Map(cards.map((c) => [c.key, c])),
     times = worktimes(snapshot);

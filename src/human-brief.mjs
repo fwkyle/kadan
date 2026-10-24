@@ -105,17 +105,21 @@ export class Scribe {
 }
 const scribe=new Scribe();
 let briefReader = null;
-export function buildHumanBrief(center,home){
- if(!center)return null;
+export function readHumanBriefInputs(home,keys){
  let stored = new Map(), readError = null;
  if (home) {
   if (briefReader?.home !== home) briefReader = {home, read: createDashboardBriefReader(home)};
-  try {stored = briefReader.read.read(center.cards.map(c => c.key));}
+  try {stored = briefReader.read.read(keys);}
   catch {readError = '설명 기록을 읽을 수 없습니다';}
  }
- const cards=new Map();
  // 결정 기록은 설명 AI 줄의 신선도 판단에만 쓴다. 못 읽으면 결정 없는 입력으로 보고, 설명 AI 줄은 낡은 것으로 숨는다.
  let decisions=new Map();if(home)try{decisions=decisionsByCard(readStream(home,'decisions/events.jsonl',{optional:true}));}catch{}
+ return {stored,readError,decisions};
+}
+export function buildHumanBrief(center,home,inputs){
+ if(!center)return null;
+ const {stored,readError,decisions}=inputs??readHumanBriefInputs(home,center.cards.map(c=>c.key));
+ const cards=new Map();
  for(const c of center.cards){const {brief=null,error=readError}=stored.get(c.key)??{};cards.set(c.key,{...scribe.summarize(c,brief,Date.now(),decisions.get(c.key)??[]),error});}
  scribe.retain(cards.keys());return cards;
 }

@@ -4,8 +4,9 @@ import {projectLedger} from './ledger-domains.mjs';
 import {watchAILabel} from './watch-report.mjs';
 
 export const ledgerViews=[['all','전체 · 호환 조회'],['tasks','작업원장'],['mail','우편원장'],['system','시스템원장']];
-export function ledgerView(entries,home,domain='all'){
+export function ledgerView(entries,home,domain='all',state=null){
  if(!['tasks','mail','system'].includes(domain))return entries;
+ if(state)return projectLedger(state,domain);
  if(home)return {tasks:readTaskLedger,mail:readMailLedger,system:readSystemLedger}[domain](home);
  // 저장소 없는 렌더 fixture도 코어의 과거 호환 분류 규칙을 재사용한다.
  return projectLedger({legacy:entries,ordered:[]},domain);

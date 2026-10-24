@@ -2,6 +2,7 @@ import {ledgerView,ledgerViews} from './ledger-table.mjs';
 import {mailboxLetters} from './mailbox.mjs';
 import {filterMail,mailStatus,mailViews,replyStates} from './dashboard-inbox.mjs';
 import {storageSnapshot} from './storage.mjs';
+import {storageObservation} from './storage-observation.mjs';
 import {sendDashboardData} from './dashboard-api.mjs';
 import {createResponseCache} from './response-cache.mjs';
 import {sendVersionedJson} from './versioned-response.mjs';
@@ -355,7 +356,7 @@ function renderResources(resources, resourceError, judge, all, toggleHref) {
       </section>`;
 }
 
-export function renderWallHtml({ tree, mailbox = [], entries = [], collectedAt, ledgerPath, ledgerLines, error, all = false, resources = null, resourceError = null, judge = false, refresh = 10, mailBoard = '', hideWatch = false, kind = '', mailRole = '', mailView = 'all', mailReply = '', mailUnread = false, ledgerDomain = 'all', home, watchPid = null, version = '', cardFiles = {} }) {
+export function renderWallHtml({ tree, mailbox = [], entries = [], collectedAt, ledgerPath, ledgerLines, error, all = false, resources = null, resourceError = null, judge = false, refresh = 10, mailBoard = '', hideWatch = false, kind = '', mailRole = '', mailView = 'all', mailReply = '', mailUnread = false, ledgerDomain = 'all', ledgerState = null, home, watchPid = null, version = '', cardFiles = {} }) {
   const known = ledgerLines !== null && !entries.some(entry=>entry?.broken);
   const activityOf = board => Math.max(Date.parse(board.plannedAt) || -Infinity, ...(board.roles ?? []).map(role => Date.parse(role.lastActivityAt) || -Infinity));
   // "도는 판"은 살아있는 역할이 있는 판만이다. 24시간 안에 활동만 있으면 도는 판으로 세던 옛 기준은
@@ -385,7 +386,7 @@ export function renderWallHtml({ tree, mailbox = [], entries = [], collectedAt, 
   const mailUrl=new URL(query({}),'http://localhost');
   const selectedMail=filterMail(allMail,mailUrl).filter(item=>!mailBoard||boardFromRole(item.currentRecipient||item.role)===mailBoard);
   let ledgerRows=[],ledgerError=null;
-  try{ledgerRows=known?ledgerView(entries,home,ledgerDomain):[];if(ledgerRows.some(row=>row?.broken))throw new Error('원장 손상');}catch(error){ledgerError=error.message;}
+  try{ledgerRows=known?ledgerView(entries,home,ledgerDomain,ledgerState):[];if(ledgerRows.some(row=>row?.broken))throw new Error('원장 손상');}catch(error){ledgerError=error.message;}
   const mailFor = board => allMail.filter(item=>boardFromRole(item.currentRecipient||item.role)===board).slice(0,10);
   const pills = board => board.roles.map(role=>`<span class="pill ${roleState(role).className}">${escapeHtml(role.role)} ${roleState(role).label}</span>`).join(' ') || '-';
   const summary = known ? `살아있는 역할 ${alive}개 · 도는 판 ${currentTree.length}개 · 안 끝난 카드 ${currentTree.reduce((n,b)=>n+pending(b),0)}장 · 발령 전 ${currentTree.reduce((n,b)=>n+planned(b),0)}장` : '살아있는 역할 모름 · 도는 판 모름 · 안 끝난 카드 모름 · 발령 전 모름';
@@ -465,6 +466,13 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  const decisionSecret=randomBytes(32); // 결정 전용 token용 비밀. 프로세스 안에만 둔다.
  const cache=createResponseCache();
  let sharedSnapshot=null;
+ // 두 단계 loader는 DB 입력만 확보하고 닫은 뒤 OS 조회·상태 계산을 한다.
+ // 기존 함수 loader는 호출자가 DB 읽기/계산을 나누지 않은 호환 경로다.
+ const load=loader=>{
+  const read=typeof loader==='function'?loader:loader.read;
+  const data=home?storageSnapshot(home,read):read();
+  return typeof loader==='function'?data:loader.build(data);
+ };
  const clear=()=>{cache.clear();sharedSnapshot=null;};
  // 키 앞의 구분(local/remote)은 서버가 판정 결과로 붙인다. URL 매개변수로는 바꿀 수 없다(2026-10-18 검수: 주소에 표시를 넣어 섞던 결함).
  const cacheKey=url=>{const query=new URLSearchParams(url.searchParams);query.delete('fresh');query.sort();return (url.cacheScope||'local')+'|'+url.pathname+'?'+query.toString();};
@@ -486,8 +494,8 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  let warming=null;
  const warm=(loader=loadSnapshot)=>{
   warming=null;
-  const load=()=>{const value=loader();if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value,loader};};
-  try{if(home)storageSnapshot(home,load);else load();}catch{}
+  const collect=()=>{const value=load(loader);if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value,loader};};
+  try{if(home&&typeof loader==='function')storageSnapshot(home,collect);else collect();}catch{}
  };
   const server=http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
@@ -513,6 +521,10 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       if(!centerHandler){response.writeHead(503);response.end('대시보드 저장소 없음');return;}
       if(request.method!=='GET'){response.writeHead(405,{allow:'GET'});response.end('조회만 지원합니다');return;}
       if(request.headers['sec-fetch-site']==='cross-site'||request.headers.origin&&!sameOrigin(request)){response.writeHead(403);response.end('다른 사이트에서 조회할 수 없습니다');return;}
+      if(url.pathname==='/api/dashboard/storage'){
+        response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        response.end(JSON.stringify(storageObservation(home)));return;
+      }
       if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true,...(request.kadanDecisionToken?{decisionToken:request.kadanDecisionToken}:{})}:{token:centerHandler.token}));return;}
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
@@ -549,13 +561,17 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       if(closed||response.destroyed||request.socket.destroyed)return;
     }
     const serve=()=>{
-    const snapshot=snapshotMatches()?sharedSnapshot.value:readSnapshot();
+    const reused=snapshotMatches();
+    const snapshot=reused?sharedSnapshot.value:load(readSnapshot);
     if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshot={
       at:sharedSnapshot?.value===snapshot?sharedSnapshot.at:now(),value:snapshot,loader:readSnapshot};
     if(centerHandler) {
       snapshot.home=home;
       // 결정 목록은 쓰는 응답에서만 읽는다(2026-10-14: 모든 요청이 매번 읽고 있었다).
-      if(needsDecisions(url)){try{snapshot.decisions=new DecisionStore(home).list();snapshot.decisionError=null}catch(error){snapshot.decisionError=error.message;snapshot.decisions=[]}}
+      if(needsDecisions(url)&&(reused||typeof readSnapshot==='function')){
+        try{snapshot.decisions=new DecisionStore(home).list();snapshot.decisionError=null;}
+        catch(error){snapshot.decisionError=error.message;snapshot.decisions=[];}
+      }
     }
     if (url.pathname === '/api/cards') {
       const body=JSON.stringify({center:snapshot.center&&centerSummary(snapshot.center),error:snapshot.centerError});
@@ -593,7 +609,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     });
     response.end(html);
     };
-    try{if(home)storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(error.status||503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});response.end('저장소 확인 불가: '+error.message);}
+    try{if(home&&typeof readSnapshot==='function')storageSnapshot(home,serve);else serve();}catch(error){if(!response.headersSent)response.writeHead(error.status||503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});response.end('저장소 확인 불가: '+error.message);}
   });
   // 요청을 다 보내고 쓰기 쪽만 닫은 클라이언트도 응답을 받는다(기본값은 상대가 닫으면 이쪽도 닫는다).
   server.httpAllowHalfOpen=true;
