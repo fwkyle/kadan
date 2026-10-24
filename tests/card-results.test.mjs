@@ -8,7 +8,7 @@ import {CardStore} from '../src/card-store.mjs';
 import {cardCommand} from '../src/card-command.mjs';
 import {createDatabase,writeStorageMarker,appendStream} from '../src/storage.mjs';
 
-for(const backend of ['jsonl','sqlite']) {
+for(const backend of ['sqlite']) {
  function fixture() {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-card-results-'));
   const home=path.join(root,'state'),repoPath=path.join(root,'repo');

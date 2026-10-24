@@ -28,7 +28,7 @@ function fixture(mode='sqlite'){
  const change=(action,fields={},extra={})=>store.change(work.key,action,fields,{revision:store.get(work.key).revision,by:'감독',note:'명시적으로 확인',...extra});
  return {home,store,cards,work,create,change};
 }
-for(const mode of ['jsonl','sqlite'])test(`${mode}: 병렬 실행·검수·재수정은 같은 업무에 남고 실행 종료는 업무를 완료하지 않는다`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 병렬 실행·검수·재수정은 같은 업무에 남고 실행 종료는 업무를 완료하지 않는다`,()=>{
  const {home,store,cards,work,change}=fixture(mode);
  for(const phase of ['implementation','release','review','fix'])change('execute',{title:phase,body:'허용한 작업만 수행하고 결과를 기록',phase,round:phase==='fix'?'2':'1'});
  const executions=store.get(work.key).executions;
@@ -156,7 +156,7 @@ test('업무 ID는 발령하지 않으며 종료한 업무 안의 실행 재발�
  assert.equal(resolveWorkMail(home,{workKey:work.key}).workKey,work.key,'완료 뒤 결과 우편은 연결할 수 있다');
 });
 
-for(const mode of ['jsonl','sqlite'])test(`${mode}: 업무 owner는 owner를 정한 뒤 확정된 역할 인계를 따라간다`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 업무 owner는 owner를 정한 뒤 확정된 역할 인계를 따라간다`,()=>{
  const {home,store,change}=fixture(mode);
  const transfer=(from,to,t)=>appendLedger({kind:'handover',phase:'transferred',handoverId:`${from}-${to}`,from,to,taskIds:[],t},home);
  transfer('감독','옛-후임','2000-01-01T00:00:00.000Z');

@@ -44,7 +44,7 @@ export function nextTimeBoundary(cards,now){
 // 읽기 조회(storageSnapshot) 안에서 불러야 읽은 값과 같은 시점의 버전이 된다.
 export function dataVersion(home){
  try{
-  if(storageMode(home)!=='sqlite')return null;
+  if(storageMode(home)==='none')return null;
   return `${path.resolve(home)}|${storageVersion(home)}|${cardFilesFingerprint(home)}`;
  }catch{return null;}
 }

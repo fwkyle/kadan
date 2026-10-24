@@ -56,8 +56,8 @@ export function loadWallSnapshot(runtime=null) {
   const errors = [];
   try {
     ({ state: ledgerState, entries } = wallCache.memo("ledger", version, () => {
-      // SQLite는 커서 뒤 새 사건만 읽는다. 버전마다 entries는 새 배열이다. JSONL은 전체 읽기 한 번으로 둘 다 만든다.
-      if (storageMode(home) !== "sqlite") {
+      // SQLite는 커서 뒤 새 사건만 읽는다. 버전마다 entries는 새 배열이다. 빈 홈은 전체 읽기 한 번으로 둘 다 만든다.
+      if (storageMode(home) === "none") {
         const state = readLedgerState(home);
         return { state, entries: projectLedger(state) };
       }

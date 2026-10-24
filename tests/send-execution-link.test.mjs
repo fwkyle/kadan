@@ -100,7 +100,7 @@ test('send --execution만 쓴 발령은 taskId로 기록되고 감시 범위에 
 });
 
 test('질문(--expect-reply)은 실행 카드 추론에서 빠지고 taskId·dispatch·대기 해제를 만들지 않는다',{skip:spawnSync('tmux',['-V']).status!==0},()=>{
- for(const backend of ['jsonl','sqlite']){
+ for(const backend of ['sqlite']){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-exec-question-'));
   if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
   const store=new CardStore(home);

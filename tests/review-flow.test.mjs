@@ -53,7 +53,7 @@ test('중간 라운드 누락·같은 단계 중복·다른 저장소/판을 구
  assert.equal(buildReviewFlows([...three(),card('other',1,'review','pass',{repo:'other'})]).length,2);
 });
 
-for(const mode of ['jsonl','sqlite'])test(`${mode}: 연결 이어받기 → API 왕복 표·목록 요약·등록 결과 원문`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 연결 이어받기 → API 왕복 표·목록 요약·등록 결과 원문`,()=>{
  const f=dashboardFixture({mode,count:6});
  const outcomes=['implemented','changes','implemented','changes','implemented','pass'];
  for(let i=1;i<=6;i++){

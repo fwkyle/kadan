@@ -23,17 +23,8 @@ const stamp=()=>new Date().toISOString();
 
 // headsは現在値だけ。カード本文や他業務の変更履歴を読み込まない。
 function heads(home,kind){
- let rows;
- if(storageMode(home)==='sqlite'){
-  rows=transaction(home,db=>db.prepare('SELECT stream,seq,payload FROM heads WHERE stream GLOB ? ORDER BY stream').all(`${kind}/*/*/events.jsonl`).map(r=>({...r,value:JSON.parse(r.payload)})),{readOnly:true});
- }else{
-  const root=path.join(home,kind);if(!fs.existsSync(root))return [];
-  rows=fs.readdirSync(root,{withFileTypes:true}).filter(x=>x.isDirectory()&&!x.name.startsWith('.')).flatMap(repo=>
-   fs.readdirSync(path.join(root,repo.name),{withFileTypes:true}).filter(x=>x.isDirectory()&&!x.name.startsWith('.')).map(item=>{
-    const stream=`${kind}/${repo.name}/${item.name}/events.jsonl`,history=readStream(home,stream);
-    return {stream,seq:history.length,value:history.at(-1)};
-   }));
- }
+ if(storageMode(home)==='none')return [];
+ const rows=transaction(home,db=>db.prepare('SELECT stream,seq,payload FROM heads WHERE stream GLOB ? ORDER BY stream').all(`${kind}/*/*/events.jsonl`).map(r=>({...r,value:JSON.parse(r.payload)})),{readOnly:true});
  return rows.map(({stream,seq,value})=>{
   if(!value||!validKey(value.key)||stream!==`${kind}/${value.key}/events.jsonl`||value.revision!==seq)throw failure('현재 기록의 주소·버전을 확인할 수 없습니다.');
   return value;

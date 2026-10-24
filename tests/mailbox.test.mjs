@@ -9,12 +9,12 @@ import {guardedSend,parseFlags} from '../src/cli.mjs';
 import {appendLedger,readLedger,readMailLedger,readTaskLedger,saveMailBody} from '../src/ledger.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {createDatabase,writeStorageMarker,appendStream} from '../src/storage.mjs';
-const fixture=(mode='jsonl')=>{
+const fixture=(mode='sqlite')=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-mailbox-'));
  if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  return {home,sender:new Mailbox(home,'sender'),receiver:new Mailbox(home,'receiver')};
 };
-for(const mode of ['jsonl','sqlite'])test(`${mode}: 읽음·일반답장·최종답장·취소와 카드완료는 독립이다`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 읽음·일반답장·최종답장·취소와 카드완료는 독립이다`,()=>{
  const {home,sender,receiver}=fixture(mode);
  const q=receiver.send({by:'sender',message:'의견을 알려주세요',expectReply:true});
  assert.equal(sender.list({view:'waiting'}).length,1);

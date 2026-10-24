@@ -142,9 +142,9 @@ test('watch 순회에서 큐 배너는 AI 판정 없이 Enter를 보내고 timeo
   assert.ok(!alerts.some(([,m])=>typeof m==='string'&&m.includes('대답을 못 함')));
 });
 
-test('JSONL·SQLite 저장 방식에서 사건과 중복 방지가 동일하다',async()=>{
+test('SQLite 저장소에서 사건과 중복 방지가 지켜진다',async()=>{
   const runs=[];
-  for(const backend of ['jsonl','sqlite']){
+  for(const backend of ['sqlite']){
     const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-queue-'));
     if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
     const sent=[];
@@ -157,8 +157,7 @@ test('JSONL·SQLite 저장 방식에서 사건과 중복 방지가 동일하다'
     }
     runs.push({sentCount:sent.length,actions:readLedger(home).filter(e=>e.kind==='queue-resume').map(e=>e.action)});
   }
-  assert.equal(runs[0].sentCount,1);assert.equal(runs[1].sentCount,1);
-  assert.deepEqual(runs[0].actions,runs[1].actions);
+  assert.equal(runs[0].sentCount,1);
   assert.deepEqual(runs[0].actions,['attempt','sent','transition']);
 });
 

@@ -26,7 +26,7 @@ export class AutomaticReview {
   this.works=new WorkStore(home);this.cards=new CardStore(home);
  }
  stream(key){this.cards.dir(key);return `automatic-review/${key}/events.jsonl`;}
- locked(fn){if(storageMode(this.home)!=='sqlite')throw new Error('자동 전달에는 기존 SQLite 저장소가 필요합니다');return transaction(this.home,fn);}
+ locked(fn){if(storageMode(this.home)==='none')throw new Error('자동 전달에는 기존 SQLite 저장소가 필요합니다');return transaction(this.home,fn);}
  get(key){const rows=readStream(this.home,this.stream(key),{optional:true});return rows.at(-1)||null;}
  save(s,patch){const next={...s,...patch,revision:(s.revision||0)+1,at:new Date(this.now()).toISOString(),by:this.by};appendStream(this.home,this.stream(s.key),next);return next;}
  entries(){const rows=readLedger(this.home);if(rows.some(x=>x.broken))throw new Error('원장 손상: 자동 전달 중단');return taskIdentity(this.cards.list()).project(rows);}

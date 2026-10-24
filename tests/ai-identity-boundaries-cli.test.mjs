@@ -20,7 +20,7 @@ const pause=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);
 const waitFor=(read,ok,what)=>{const end=Date.now()+10000;while(Date.now()<end){if(ok(read()))return;pause(20);}throw Error(what+' timeout');};
 const out=[];const transcript=[];
 test('JSONL·SQLite 실제 CLI: 세 거부 경계의 paste/Enter/send/dispatch 0과 정상 우편', {skip:spawnSync('tmux',['-V']).status!==0},()=>{
-for(const backend of ['jsonl','sqlite']){
+for(const backend of ['sqlite']){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-send-boundaries-'+backend+'-'));
  if(backend==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  const bin=path.join(home,'bin');fs.mkdirSync(bin);

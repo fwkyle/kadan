@@ -40,7 +40,7 @@ function fixture(mode='sqlite'){
  return {home,store,cards,work,execution,id,record,mail,letter,handover,change,make};
 }
 
-for(const mode of ['sqlite','jsonl'])test(`${mode}: 완료 신호·미마감 업무·인수 수락을 분리하고 조회가 아무 기록도 쓰지 않는다`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 완료 신호·미마감 업무·인수 수락을 분리하고 조회가 아무 기록도 쓰지 않는다`,()=>{
  const f=fixture(mode),streams=['ledger.jsonl','tasks/events.jsonl','mail/events.jsonl','system/events.jsonl',`works/${f.work.key}/events.jsonl`,`cards/${f.execution}/events.jsonl`];
  const before=streams.map(s=>readStream(f.home,s,{optional:true})),handFile=path.join(f.home,'handovers',`${f.handover.id}.json`),handBefore=fs.readFileSync(handFile,'utf8');
  const index=operationsFlowIndex(f.home);assert.equal(index.works[0].key,f.work.key);assert.equal(index.works[0].status,'open');
@@ -187,7 +187,7 @@ test('새 완료 결과 우편은 실행 담당을 늘리지 않고 읽음·중�
  assert.equal(detail.executions[0].reportState,'ok');
 });
 
-for(const mode of ['sqlite','jsonl'])test(`${mode}: 카드 없는 연속 인계도 우편 현재 책임에 반영하고 원본·조회 전후 기록을 보존한다`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 카드 없는 연속 인계도 우편 현재 책임에 반영하고 원본·조회 전후 기록을 보존한다`,()=>{
  const f=fixture(mode),q=f.mail('인계 뒤 답할 질문',{expectReply:true});
  f.record({kind:'handover',phase:'transferred',handoverId:randomUUID(),from:'감독',to:'다음감독',taskIds:[]});
  f.record({kind:'handover',phase:'transferred',handoverId:randomUUID(),from:'다음감독',to:'최종감독',taskIds:[]});

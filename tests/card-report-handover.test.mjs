@@ -9,7 +9,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {effectiveCardRole} from '../src/handover-state.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 
-for (const mode of ['jsonl', 'sqlite']) {
+for (const mode of ['sqlite']) {
   for (const scenario of ['handover', 'chained', 'reassigned']) {
     test(`${mode}: ${scenario} 뒤 첫 결과 보고가 현재 담당과 과거 이력을 보존한다`, async () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-report-handover-'));

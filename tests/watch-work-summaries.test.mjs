@@ -95,16 +95,21 @@ for (const mode of ['new-home', 'sqlite']) {
   }
 }
 
-test('저장소 없는 홈은 읽기만으로 생성하지 않고, 옛 JSONL 표시와 불완전한 업무는 숨기지 않는다', () => {
+test("저장소 없는 'none' 홈의 읽기는 빈 결과이고 홈을 바꾸지 않으며, 옛 JSONL 표시는 변환 안내 오류다", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-work-summary-empty-'));
   const store = new WorkStore(home);
   assert.deepEqual(store.listWatch(), []);
   assert.deepEqual(fs.readdirSync(home), [], '읽기로 저장소를 만들지 않는다');
+  // 'none' 홈은 fs·DB를 보지 않으므로 고아 폴더가 있어도 예외 없이 빈 결과다.
   fs.mkdirSync(path.join(home, 'works', 'r', 'orphan'), {recursive: true});
-  assert.throws(() => store.list());
-  assert.throws(() => store.listWatch());
+  assert.deepEqual(store.list(), []);
+  assert.deepEqual(store.listWatch(), []);
+  assert.deepEqual(fs.readdirSync(home), ['works'], '읽기가 홈을 바꾸지 않는다');
+  assert.deepEqual(fs.readdirSync(path.join(home, 'works', 'r')), ['orphan']);
+  fs.rmSync(path.join(home, 'works'), {recursive: true});
   writeStorageMarker(home, 'jsonl');
-  assert.throws(() => store.listWatch(), /JSONL/);
+  assert.throws(() => store.list(), /jsonl-last/);
+  assert.throws(() => store.listWatch(), /jsonl-last/);
 });
 
 test('sqlite: 최신 업무와 압축 이력은 동시 쓰기에도 같은 읽기 스냅샷이다', () => {
