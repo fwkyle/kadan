@@ -220,8 +220,9 @@ export function cmdWatch(argv, flags) {
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
   const stores = createWatchStoreReaders(ledgerHome());
+  let mailRoles = [];
   const mailReader = createWatchMailReader(ledgerHome(), null, {
-    readCards:stores.cards.read, readRoles:() => [...parents.keys()],
+    readCards:stores.cards.read, readRoles:() => mailRoles,
   });
   const reads=cycleReads({readEntries:mailReader.readEntries,readCards:stores.cards.read,
     readWorks:stores.works.read,version:()=>storageVersion(ledgerHome())});
@@ -237,6 +238,7 @@ export function cmdWatch(argv, flags) {
     readEntries: reads.readEntries,
     readMailLetters: mailReader.letters,
     projectEntries: mailReader.project,
+    rememberObservedRoles: roles => { mailRoles = roles; },
     readCards: reads.readCards,
     readWorks: reads.readWorks,
     readDecisions: () => new DecisionStore(ledgerHome()).list(),
