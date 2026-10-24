@@ -15,10 +15,23 @@ function historySummary() {
       return [...new Set([...boundary, assigned, opened].filter(Boolean))]
         .sort((a, b) => a.revision - b.revision);
     },
+    resume(row) { previous = row; },
   };
 }
 
 const fields = ['owner', 'at', 'ownerAssignedAt', 'action'];
+const minimal = row => Object.fromEntries(['revision', ...fields]
+  .filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]]));
+
+// 이전 요약의 마지막 담당 변경 두 행이 보존되어 있으므로 같은 축약을 이어갈 수 있다.
+// 마지막 revision이 요약에 없을 수 있어, 새 사건과 비교할 직전 담당은 최신 업무에서 복구한다.
+export function advanceWatchWorkSummary(work, added) {
+  const history = historySummary();
+  for (const row of work?.history ?? []) history.add(row);
+  if (work) history.resume(work.history?.find(row => row.revision === work.revision) ?? minimal(work));
+  for (const row of added) history.add(minimal(row));
+  return {...(added.at(-1) ?? work), history: history.rows()};
+}
 // 10배 이력에서도 JS에는 최신 업무와 판정용 최대 네 행만 남는다. SQL 무결성 검사는 전체 이력을 훑는다.
 // 요약·이력 검증을 한 읽기 트랜잭션에서 수행한다. 원장과 상세 조회(get/list)는 바꾸지 않는다.
 export function readWatchWorkSummaries(home, keyStream) {
