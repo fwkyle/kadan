@@ -88,7 +88,7 @@ export function createWorkLettersReader(entries,cards){
 function selectWorkLetters(work,{children,byEntry,seedRefs,byWork,byExecution,position}){
  const seeds=new Set(byWork.get(work.key)??[]);
  for(const {key} of work.executions)for(const entry of byExecution.get(key)??[])seeds.add(entry);
- for(const ref of work.mailRefs)for(const entry of seedRefs.get(ref)??[])seeds.add(entry);
+ for(const ref of work.mailRefs??[])for(const entry of seedRefs.get(ref)??[])seeds.add(entry);
  // 원래 전체 filter의 순서와 이후 답장 너비 우선 순서를 유지한다.
  const selected=new Set([...seeds].sort((a,b)=>position.get(a)-position.get(b)));
  const queue=[...selected];for(let i=0;i<queue.length;i++)for(const child of children.get(queue[i])||[]){if(child.workKey&&child.workKey!==work.key)continue;if(!selected.has(child)){selected.add(child);queue.push(child);}}
