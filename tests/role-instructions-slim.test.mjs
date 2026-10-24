@@ -1,4 +1,4 @@
-// 역할 우편 지침 축소 시험(kadan 판 conductor만 요약). 운영 이름 대신 가짜 역할 이름과 격리 홈만 쓴다.
+// 역할 우편 지침 축소 시험(conductor·super 프로필만 요약, 모든 판). 운영 이름 대신 가짜 역할 이름과 격리 홈만 쓴다.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -87,8 +87,8 @@ test('8 같은 역할 새 start(새 대화) → full/generation-first', () => {
   assert.equal(r.metadata.generation, 1);
 });
 
-test('9 worker·reviewer·super 수신자는 항상 full', () => {
-  for (const profile of ['worker', 'reviewer', 'super']) {
+test('9 worker·reviewer·secretary 수신자는 항상 full', () => {
+  for (const profile of ['worker', 'reviewer', 'secretary']) {
     const role = 'kadan-시험판-' + profile, h = home();
     const f = {digest: composeRoleInstructions({home: h, role, profile, entries: [], slim: true, now: NOW}).metadata.templateDigest};
     const entries = [start(role), {...fullSend(role, f), instructions: {mode: 'full', reason: 'x', profile, templateDigest: f.digest, generation: 0}}];
@@ -131,19 +131,28 @@ test('12 guardedSend 원장 줄에 instructions 객체와 keyDelivery', () => {
   assert.equal(stored.at(-1).keyDelivery, 'sent');
 });
 
-test('14 다른 레포 판 conductor는 1시간 안이어도 full/board-not-in-trial', () => {
+test('14 다른 레포 판 conductor도 1시간 안이면 summary(conductor-summary)', () => {
   const h = home(), f = {digest: digestOf(OTHER_ROLE_NAME, h)};
   const entries = [start(OTHER_ROLE_NAME, undefined, {cwd: '/x/Dev/other-repo'}), fullSend(OTHER_ROLE_NAME, f)];
-  assert.deepEqual(meta(compose(OTHER_ROLE_NAME, {home: h, entries})), ['full', 'board-not-in-trial']);
+  const r = compose(OTHER_ROLE_NAME, {home: h, entries});
+  assert.deepEqual(meta(r), ['summary', 'within-interval']);
+  assert.match(r.instructions, /common\.md · conductor\.md/);
+  assert.doesNotMatch(r.instructions, /herdr 화면 확인/);
 });
 
-test('15 판정 불가(레포 근거 없음·이름과 레포 어긋남) → full/facts-unavailable', () => {
+test('15 판 조건이 없다: 레포 근거 없음·이름과 레포 어긋남·감독 아닌 이름도 프로필만 보고 summary', () => {
   const s = setup();
   const noRepo = [start(KADAN_ROLE_NAME, undefined, {cwd: '/x/_worktrees/kadan-foo'}), fullSend(KADAN_ROLE_NAME, s.f)];
-  assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries: noRepo})), ['full', 'facts-unavailable']);
+  assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries: noRepo})), ['summary', 'within-interval']);
   const mismatch = [start(KADAN_ROLE_NAME, undefined, {cwd: '/x/Dev/other-repo'}), fullSend(KADAN_ROLE_NAME, s.f)];
-  assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries: mismatch})), ['full', 'facts-unavailable']);
-  assert.deepEqual(meta(compose('감독없는이름', {home: s.h, entries: s.entries})), ['full', 'facts-unavailable']);
+  assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries: mismatch})), ['summary', 'within-interval']);
+});
+
+test('15b 프로필을 못 정한 역할은 지침 자체가 붙지 않고 요약도 아니다(null → 전문 경로 유지)', () => {
+  const r = composeRoleInstructions({home: home(), role: '프로필모름-역할', message: '본문', entries: [], slim: true, now: NOW});
+  assert.equal(r.metadata.status, 'not-applied');
+  assert.equal(r.instructions, null);
+  assert.throws(() => composeRoleInstructions({home: home(), role: '프로필모름-역할', profile: 'nope', entries: [], slim: true, now: NOW}));
 });
 
 // 실제 바닥처럼 영수증이 아니라 delivery를 단 예외를 던지는 경로(F1).
@@ -292,7 +301,7 @@ import {appendLedger} from '../src/ledger.mjs';
 function awaitImport() { return {CardStore}; }
 function appendEntry(h, entry) { appendLedger(entry, h); }
 
-// 1단계 확대: 역할 이름이 정확히 kadan-슈퍼감독일 때만 super 프로필도 요약이다(우편 수신자 역할 이름, 세션 이름 아님).
+// 2단계: super 프로필은 역할 이름·판과 무관하게 요약이다.
 const SUPER_ROLE = 'kadan-슈퍼감독';
 function superSetup(role = SUPER_ROLE) {
   const h = home(), f = {digest: composeRoleInstructions({home: h, role, profile: 'super', entries: [start(role)], slim: true, now: NOW}).metadata.templateDigest};
@@ -321,10 +330,11 @@ test('13 kadan-슈퍼감독: 첫 우편·전달 불명확·1시간 경과·템�
   assert.deepEqual(meta(compose(SUPER_ROLE, {home: s.h, entries: s.entries, profile: 'super'})), ['full', 'template-changed']);
 });
 
-test('14 세션 이름(kadan-kadan-슈퍼감독)·다른 super 역할은 요약이 아니다', () => {
+test('14b 다른 판 super 역할도 summary(super-summary), 이름 특례 없음', () => {
   for (const role of ['kadan-kadan-슈퍼감독', 'rottie-슈퍼감독']) {
     const s = superSetup(role), r = compose(role, {home: s.h, entries: s.entries, profile: 'super'});
-    assert.deepEqual(meta(r), ['full', 'profile-not-in-trial']);
+    assert.deepEqual(meta(r), ['summary', 'within-interval']);
+    assert.match(r.instructions, /common\.md · super\.md/);
   }
 });
 

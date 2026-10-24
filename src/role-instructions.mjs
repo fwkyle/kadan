@@ -13,7 +13,6 @@ import {parseHierarchy} from './hierarchy.mjs';
 import {effectiveCardRole,workEntries} from './handover-state.mjs';
 import {shellQuote} from './mail-instructions.mjs';
 import {createMailGenerations} from './mail-generation.mjs';
-import {boardFromRole} from './board.mjs';
 
 export const ROLE_PROFILES = ['secretary','super','conductor','worker','reviewer'];
 const root = fileURLToPath(new URL('..',import.meta.url));
@@ -21,17 +20,12 @@ const templateRoot = path.join(root,'skills/kadan-conductor/references/role-temp
 const hash = value => createHash('sha256').update(value).digest('hex');
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const roleName = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
-// 시험값(kyle 결정 cc77fcc2, 시니어 자문 452d380f): 요약 우편은 일반감독(conductor)에게만 보내고,
-// 마지막 전달 성공 전문 뒤 1시간이 지나면 전문을 다시 보낸다. 설정·환경변수 스위치는 두지 않는다(되돌리기는 PR 되돌리기).
-export const SUMMARY_PROFILES = new Set(['conductor']);
-// 1단계 확대(kyle 결정 'c', 2026-10-23): 역할 이름이 정확히 일치하는 슈퍼감독 한 명에게도 요약을 연다. 세션 이름(kadan-<역할>)이 아니라 우편 수신자 역할 이름이다.
-// 이 역할은 프로필·판 시험 조건을 보지 않고 super-summary.md를 쓴다. 요약 파일은 템플릿 지문에 들어가지 않으므로
+// 요약 우편 대상(kyle 결정 cc77fcc2, 단계안 'c' 2단계 2026-10-24 슈퍼 승인): 모든 판의 일반감독(conductor)·슈퍼감독(super).
+// 비서·작업자·검수자는 아직 전문이다. 마지막 전달 성공 전문 뒤 1시간이 지나면 전문을 다시 보낸다.
+// 설정·환경변수 스위치는 두지 않는다(되돌리기는 PR 되돌리기). 요약 파일은 템플릿 지문에 들어가지 않으므로
 // 나중에 고쳐도 전문 재전송이 일어나지 않는다(알려진 성질).
-export const SUMMARY_ROLES = new Set(['kadan-슈퍼감독']);
+export const SUMMARY_PROFILES = new Set(['conductor','super']);
 export const FULL_INTERVAL_MS = 60*60*1000;
-// 시험 대상 판은 레포 kadan뿐이다(감독 범위 조정, 슈퍼감독 우편 69d524ff). 판 판정은 이름(boardFromRole)과
-// 레포(연결 업무·카드의 repo, 없으면 수신자 start cwd의 ~/Dev/<레포>)가 둘 다 kadan일 때만 인정한다.
-export const SUMMARY_REPO = 'kadan';
 const finishedMarker = /KADAN:DONE\s+\S+\s+(?:ok|failed)(?=\s|$)/u;
 // Markdown의 탭·LF·CRLF만 허용한다. ANSI/C0/C1과 단독 CR은 터미널 표시를 바꿀 수 있다.
 const terminalControl = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]|\r(?!\n)/u;
@@ -204,27 +198,13 @@ export function inferCardPhaseProfile({home,role,taskId,mailContext,entries=read
 
 // 전문(full)을 보낼지 요약(summary)을 보낼지 정한다. 이미 읽은 entries만 거르고 원장을 새로 읽지 않는다.
 // '전달 성공'은 keyDelivery==='sent'만이다. 세대는 mail-generation의 start 경계를 그대로 쓴다.
-function trialBoard(role,repos) {
-  const board=boardFromRole(role),set=new Set(repos.filter(Boolean));
-  if (!board||set.size!==1) return 'unknown';
-  const byName=board===SUMMARY_REPO||board.startsWith(`${SUMMARY_REPO}-`),byRepo=set.has(SUMMARY_REPO);
-  if (byName!==byRepo) return 'unknown';
-  return byRepo?'kadan':'other';
-}
-const cwdRepo=cwd=>{const m=typeof cwd==='string'&&cwd.match(/\/Dev\/([^/]+)/u);return m&&!m[1].startsWith('_')?m[1]:null;};
-function decideInstructionsMode({role,profile,templateDigest,entries,current,unavailable,now,repos=[]}) {
+function decideInstructionsMode({role,profile,templateDigest,entries,current,unavailable,now}) {
   const gens=createMailGenerations();
   entries.forEach((e,i)=>gens.apply(e,i));
   const generation=gens.generationOf(role);
   const full=reason=>({mode:'full',reason,generation});
-  const byRole=SUMMARY_ROLES.has(role)&&['super','conductor'].includes(profile);
-  if (!byRole&&!SUMMARY_PROFILES.has(profile)) return full('profile-not-in-trial');
+  if (!SUMMARY_PROFILES.has(profile)) return full('profile-not-in-trial');
   if (unavailable.length) return full('facts-unavailable');
-  if (!byRole) {
-    const board=trialBoard(role,repos);
-    if (board==='unknown') return full('facts-unavailable');
-    if (board==='other') return full('board-not-in-trial');
-  }
   const fulls=entries.map((e,i)=>({e,i})).filter(({e,i})=>(e.kind==='send'||e.kind==='send-failed')&&e.role===role&&e.instructions?.mode==='full'&&!gens.isPrevious(role,i));
   const lastAt=fulls.at(-1),last=lastAt?.e;
   // 이어 연 start(restart·resume·inherit 등)가 마지막 전문 시도보다 늦으면 압축 뒤 규칙 기억을 모르므로 전문을 다시 보낸다.
@@ -280,7 +260,7 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
       if (['super','conductor'].includes(selected.profile)) lines.push('완료 수신 다음 행동: 근거 확인 → 아직 확정되지 않은 실행만 done 기록 → 빠진 검수·후속 연결. 전체 완료 조건 충족을 확인한 책임 owner만 최신 work show revision으로 work complete한다. PASS만으로 업무를 자동 종료하지 않는다.');
       const templateDigest=hash(JSON.stringify(templates.map(t=>[t.name,t.digest])));
       const decision=slim?decideInstructionsMode({role,profile:selected.profile,templateDigest,entries,now,unavailable:context.unavailable,
-        current:Boolean(current),repos:[work?.repo,card?.repo,cwdRepo(entries.filter(e=>e.kind==='start'&&e.role===role&&e.cwd).at(-1)?.cwd)]}):{mode:'full',reason:'not-slim',generation:null};
+        current:Boolean(current)}):{mode:'full',reason:'not-slim',generation:null};
       // 요약일 때도 템플릿은 위에서 읽었다(지문 비교용). 줄어드는 것은 메시지뿐이다.
       const body=decision.mode==='summary'?[readFile(path.join(templateRoot,`${selected.profile}-summary.md`),{template:true}).text]:templates.map(t=>t.text);
       const instructions=['<!-- kadan:receiver-instructions -->',...body,...lines,
