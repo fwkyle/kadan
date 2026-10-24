@@ -156,3 +156,23 @@ test('재시작 때 누락된 해석 위치나 완료 중복 키를 복구하고
     assert.deepEqual(readLedger(home), original);
   }
 });
+
+test('같은 홈의 원본 파일이 교체되면 이전 해석 상태를 새 원본에서 다시 만든다', () => {
+  const home = homeOf(), replacement = homeOf(), cards = [card];
+  appendLedger(question, home);appendLedger(answer, home);
+  appendLedger({...question, mailId:'replacement-q'}, replacement);
+  appendLedger({...answer, mailId:'replacement-a', replyTo:'unknown'}, replacement);
+  const reader = createWatchMailReader(home, () => readLedgerIncremental(home, {log:() => {}}),
+    {readCards:() => cards, readRoles:() => roles});
+  const old = reader.readEntries(), oldProjected = reader.project(old, cards);
+  assert.equal(waitingLetters(oldProjected).length, 0);
+  // 원본을 보존한 채 격리 홈의 DB만 교체한다. 열려 있는 transaction은 없다.
+  for (const suffix of ['', '-wal', '-shm']) {
+    const file = path.join(home, `kadan.sqlite${suffix}`);
+    if (fs.existsSync(file)) fs.renameSync(file, path.join(home, `original.sqlite${suffix}`));
+  }
+  fs.copyFileSync(path.join(replacement, 'kadan.sqlite'), path.join(home, 'kadan.sqlite'));
+  const next = reader.readEntries(), projected = reader.project(next, cards);
+  assert.deepEqual(waitingLetters(projected).map(letter => letter.mailId), ['replacement-q']);
+  equalQueries(next);equalQueries(projected);equalQueries(old);equalQueries(oldProjected);
+});
