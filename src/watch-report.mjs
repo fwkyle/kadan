@@ -82,7 +82,7 @@ export class WatchReports {
     this.readEntries = readEntries ?? (() => readLedger(this.home));
     // 일반 읽기는 호출 기록의 큰 필드(parents·routes)를 뺀다. 읽기를 주입해도 원본 단건 조회는 항상 저장소에서 한다. 저장소에 없으면 받은 기록을 그대로 쓴다.
     this.readRequest = readRequest ?? (id => readWatchRequest(this.home,id));
-    this.readCards = readCards ?? (() => new CardStore(this.home).list());
+    this.readCards = readCards ?? (() => new CardStore(this.home).listWatch());
     this.readWorks = readWorks ?? (() => new WorkStore(this.home).list());
     this.record = record ?? (e => appendLedger(e,this.home));
   }
