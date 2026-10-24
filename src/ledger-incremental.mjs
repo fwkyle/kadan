@@ -119,7 +119,8 @@ function projectUpTo(st,view,domain) {
   }
   const rows = view.ordered;
   if (memo.upTo < rows.length) {
-    memo.out = memo.out.concat(memo.project.rows(rows.slice(memo.upTo)).filter(memo.unique));
+    const added = memo.project.rows(rows.slice(memo.upTo)).filter(memo.unique);
+    if (added.length) memo.out = memo.out.concat(added);
     memo.upTo = rows.length;
   }
   return memo.out;

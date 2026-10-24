@@ -6,6 +6,7 @@ import {WorkStore} from './work-store.mjs';
 import {DecisionStore} from './decisions.mjs';
 import {BriefStore} from './human-brief.mjs';
 import {ledgerStreams,validateDomainEvent,validateDomainStreams} from './ledger-domains.mjs';
+import {verifyWatchContexts} from './watch-request-context.mjs';
 function validateWorks(home,keys){
  const linked=new Set();
  for(const work of new WorkStore(home).list())for(const x of work.executions){
@@ -26,6 +27,7 @@ export function verifyStorage(home){
   const current=new Map(),domains=new Map();
   for(const row of events){if(row.seq!==(current.get(row.stream)?.seq??0)+1)throw new Error('사건 순번 손상');const value=JSON.parse(row.payload);validateDomainEvent(row.stream,value);if(Object.values(ledgerStreams).includes(row.stream)){if(!domains.has(row.stream))domains.set(row.stream,[]);domains.get(row.stream).push(value);}current.set(row.stream,row);}
   validateDomainStreams(domains,events.filter(row=>row.stream==='ledger.jsonl').map(row=>JSON.parse(row.payload)));
+  verifyWatchContexts(db);
   if(current.size!==heads.size)throw new Error('현재 상태와 이력 수 불일치');
   for(const [stream,last] of current){const h=heads.get(stream);if(!h||h.seq!==last.seq||h.payload!==last.payload)throw new Error('현재 상태와 마지막 사건 불일치');}
   // DB 안의 수입 행만 대조한다. 동결 원본 파일은 열지 않는다(파일이 없어도 통과).

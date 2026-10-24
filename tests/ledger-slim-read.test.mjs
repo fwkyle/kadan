@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {appendLedger,readLedger,readSystemLedger,readTaskLedger,readMailboxLedger,readWatchRequest} from '../src/ledger.mjs';
-import {createDatabase,writeStorageMarker,readStream} from '../src/storage.mjs';
+import {createDatabase,writeStorageMarker,readStream,appendStream} from '../src/storage.mjs';
 import {cycleReads} from '../src/watch-reads.mjs';
 // Why: 감시AI 호출 기록의 관계표(parents·routes)가 시스템 영역의 2/3를 차지해 상태 읽기마다 힙을 채웠다.
 const setup=()=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-slim-'));createDatabase(home);writeStorageMarker(home,'sqlite');return home;};
@@ -15,7 +15,7 @@ const request={kind:'watch-ai-request',by:'watch',requestId:'req-1',role:'w',tas
 test('상태 읽기는 감시 호출 기록의 큰 필드를 빼고, 단건 조회와 원장 원본은 그대로다',()=>{
   const home=setup();
   appendLedger({kind:'plan',role:'w',taskId:'r/a'},home);
-  appendLedger(request,home);
+  appendStream(home,'system/events.jsonl',{...request,_ledgerOrder:2}); // 과거 본문 포함 원본
   appendLedger({kind:'watch-cycle',by:'watch',timing:{x:'y'.repeat(100)}},home);
   const slim=readLedger(home).find(e=>e.kind==='watch-ai-request');
   assert.equal(slim.requestId,'req-1');assert.ok(!('parents' in slim)&&!('routes' in slim));

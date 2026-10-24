@@ -5,6 +5,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {appendStream,readStream,storageSnapshot,storageTransaction,assertWritable} from './storage.mjs';
 import {isMailTransfer} from './mail-routing.mjs';
 import {taskIdentity} from './task-identity.mjs';
+import {storeWatchRequestContext} from './watch-request-context.mjs';
 
 export const ledgerStreams = Object.freeze({tasks:'tasks/events.jsonl',mail:'mail/events.jsonl',system:'system/events.jsonl'});
 const taskKinds = new Set(['plan','dispatch','done']);
@@ -275,7 +276,7 @@ export function appendDomainLedger(entry,home) {
     validateDomainEvent(stream,value);
     const dispatch = taskSend(value) ? dispatchFor(value) : null;
     if (dispatch) validateDomainEvent(ledgerStreams.tasks,dispatch);
-    appendStream(home,stream,value);
+    appendStream(home,stream,storeWatchRequestContext(db,value));
     if (dispatch) appendStream(home,ledgerStreams.tasks,dispatch);
     if (completion) { validateDomainEvent(ledgerStreams.mail,completion);appendStream(home,ledgerStreams.mail,completion); }
     return JSON.stringify(publicEvent(value));

@@ -511,6 +511,48 @@ test('F7 칸을 비우면 대기열이 무효가 되어, 다시 켠 뒤에도 �
   assert.deepEqual(w.rows().filter(r => r.kind === 'explain-state').map(r => r.state), ['enabled', 'disabled', 'enabled']);
 });
 
+test('대기 중 같은 카드가 바뀌면 최신 입력 한 건으로 합쳐 실행한다', async () => {
+  const g = gate(), inputs = [];
+  const w = world({spawn: async (command, options) => {
+    inputs.push(JSON.stringify(command) + (options.input ?? ''));
+    if (inputs.length === 1) await g.wait;
+    return {status: 0, stdout: brief, stderr: ''};
+  }});
+  const cards = ['a', 'b'].map(id => w.makeCard(`card-${id}`));
+  await enable(w);
+  for (const card of cards) w.dispatch(card, 0);
+  w.run();assert.equal(w.ai.queue.length, 1);
+  const card = w.store.get(cards.find(item => item.key !== w.ai.active.key).key);
+  w.store.update(card.key, {}, {revision: card.revision, by: 'qa-lead',
+    note: '최신 범위로 바뀜', noteKind: 'decision'});
+  w.clock.t += 60_000;w.run();
+  assert.equal(w.ai.queue.length, 1);assert.equal(w.ai.queue.info().coalesced, 1);
+  g.open();await w.ai.drain();
+  assert.equal(inputs.length, 2);assert.ok(inputs[1].includes('최신 범위로 바뀜'));
+  assert.equal(w.ai.queue.info().bytes, 0);
+});
+
+test('실행 직전 입력이 달라진 대기 건은 호출하지 않고 다음 주기의 최신 입력을 기다린다', async () => {
+  const g = gate(), inputs = [];
+  const w = world({spawn: async (command, options) => {
+    inputs.push(JSON.stringify(command) + (options.input ?? ''));
+    if (inputs.length === 1) await g.wait;
+    return {status: 0, stdout: brief, stderr: ''};
+  }});
+  const cards = ['a', 'b'].map(id => w.makeCard(`card-${id}`));
+  await enable(w);
+  for (const card of cards) w.dispatch(card, 0);
+  w.run();
+  const card = w.store.get(cards.find(item => item.key !== w.ai.active.key).key);
+  w.store.update(card.key, {}, {revision: card.revision, by: 'qa-lead',
+    note: '대기 중 변경된 결정', noteKind: 'decision'});
+  g.open();await w.ai.drain(); // 다음 tick 전에 기존 대기 건을 꺼내는 경우
+  assert.equal(inputs.length, 1);assert.equal(w.ai.staleQueued, 1);
+  assert.equal(w.rows().filter(row => row.key === card.key && row.kind === 'explain-call').length, 0);
+  w.clock.t += 60_000;await w.run().done;
+  assert.equal(inputs.length, 2);assert.ok(inputs[1].includes('대기 중 변경된 결정'));
+});
+
 test('S1 자리 채우기는 한 번에 처리해 $& 같은 치환 문법과 값 안의 {cwd}를 원문 그대로 둔다', () => {
   const out = fillTemplate('run {model} {prompt} {cwd}', {model: 'm', prompt: '$& $` $\' $$ {cwd} {model}', cwd: '/w'});
   assert.equal(out, 'run m $& $` $\' $$ {cwd} {model} /w');
