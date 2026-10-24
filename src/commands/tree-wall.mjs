@@ -19,7 +19,9 @@ import { recentSends, die } from "../cli-basics.mjs";
 import { buildTree, renderTree } from "../cli-tree.mjs";
 import { collectCardFiles } from "../cli-guarded-send.mjs";
 import { centerSummary } from "../center-summary.mjs";
-import { dataVersion, nextTimeBoundary, wallCache } from "../wall-snapshot-cache.mjs";
+import { nextTimeBoundary, wallCache } from "../wall-snapshot-cache.mjs";
+import {dashboardDataVersions} from '../dashboard-data-versions.mjs';
+import {createTreeInputCache} from '../dashboard-tree-inputs.mjs';
 import { createDashboardSummaryReader } from "../dashboard-summary-reader.mjs";
 
 export function cmdTree(_argv, flags = {}) {
@@ -43,12 +45,16 @@ export function cmdTree(_argv, flags = {}) {
   console.log(renderTree(buildTree(readLedger(), aliveBySession,new CardStore(ledgerHome()).listSummaries())));
 }
 
-// 데이터 버전(원장 마지막 사건 번호·카드 파일 지문)이 같으면 원장 읽기·카드 읽기·카드 상태 계산을 다시 하지 않는다.
+const treeInputs = createTreeInputCache();
+// 원장/카드/업무 버전을 나눠 바뀐 입력만 다시 읽는다. 사건 분류는 새 부분만 이어서 한다.
 // 생존 여부·자원·감시 프로세스는 원장에 없는 값이라 매번 새로 읽는다.
 export function loadWallSnapshot(runtime=null) {
   const collectedAt = new Date();
   const home = ledgerHome();
-  const version = dataVersion(home);
+  let versions;
+  try { versions = dashboardDataVersions(home); }
+  catch { versions = {all: null, cards: null, works: null}; }
+  const version = versions.all;
   const resourceSnapshot = buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   const file = ledgerPath();
   let entries = [];
@@ -80,22 +86,27 @@ export function loadWallSnapshot(runtime=null) {
       .map((item) => [item.session, item])
   );
   let cards=[],cardError=null;
-  try {cards=wallCache.memo("cards", version, () => new CardStore(home).list());}catch(error){cardError=error;}
-  const tree=withWaitSnapshots(buildTree(entries,aliveBySession,cards),home);
+  try {cards=wallCache.memo("cards", versions.cards, () => new CardStore(home).list());}catch(error){cardError=error;}
+  const inputs = treeInputs(entries);
+  const aliveKey = JSON.stringify(Object.keys(aliveBySession).sort()
+    .map(name => [name, aliveBySession[name].pid ?? null]));
+  const treeKey = version && JSON.stringify([versions.cards, inputs.revision, aliveKey]);
+  const tree=withWaitSnapshots(wallCache.memo('tree', treeKey,
+    () => buildTree(inputs.entries,aliveBySession,cards)),home);
   let center=null, centerError=null,registeredWorks=null,centerKey=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
     if(cardError)throw cardError;
     const runtimeKnown=!errors.some(x=>x.startsWith("생존"));
     // 카드 상태 계산은 원장·카드 파일과 세션 생존 여부(pid 포함)가 같으면 결과가 같다.
-    centerKey = version && JSON.stringify([version, runtimeKnown, Object.keys(aliveBySession).sort().map(name => [name, aliveBySession[name].pid ?? null])]);
+    centerKey = version && JSON.stringify([versions.cards, inputs.revision, runtimeKnown, aliveKey]);
     // 상태 판정이 현재 시각을 본다(card-center의 activityAt 비교). 계산한 시각을 쓰고, 카드에 적힌 다음 시각 경계가 지나면 다시 계산한다.
     let builtAt = 0;
-    const cached = wallCache.memo("center", centerKey, () => buildCardCenter({cards,entries,tree,runtimeKnown,now:(builtAt=Date.now())}),
+    const cached = wallCache.memo("center", centerKey, () => buildCardCenter({cards,entries:inputs.entries,tree,runtimeKnown,now:(builtAt=Date.now())}),
       { boundary: () => nextTimeBoundary(cards, builtAt) });
     // 대기 출력 꼬리(out/*.wait-*.txt)는 원장 밖 파일이라 재사용한 카드 상태에 낡은 값이 남는다. 역할 목록은 매번 새 tree의 것을 쓴다.
     center = { ...cached, roles: [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()] };
-    registeredWorks=wallCache.memo("works", version, () => new WorkStore(home).list());
+    registeredWorks=wallCache.memo("works", versions.works, () => new WorkStore(home).list());
     center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
   return {
@@ -103,6 +114,8 @@ export function loadWallSnapshot(runtime=null) {
     ...resourceSnapshot,
     entries,
     centerKey,
+    // 업무 후속 판정에는 우편/흐름 등 더 넓은 입력이 필요하므로 기존 전체 버전을 유지한다.
+    workModelKey: version && JSON.stringify([version, centerKey]),
     version: fs.existsSync(new URL("../../package.json", import.meta.url)) ? JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version : "",
     mailbox: ledgerLines === null ? null : recentSends(entries),
     cardFiles: ledgerLines === null ? {} : collectCardFiles(entries),
