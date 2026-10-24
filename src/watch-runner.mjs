@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import {watchResourceStats, memoryMegabytes} from './watch-resource-stats.mjs';
 import { ledgerHome } from "./ledger.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
 import { runStaleNotices, STALE_NOTICE_EVERY_MS } from './watch-stale-notice.mjs';
@@ -873,7 +874,8 @@ export async function runWatch({
           observedSessions:[...roles.observations.values()].filter(r=>r.alive).length,
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
           screens:screenCache.info(),
-          memoryMb:roundAll({rss:memory.rss/2**20,heapUsed:memory.heapUsed/2**20}),window:timingWindow};
+          collections:watchResourceStats({mail:mailWatch,explain,restoredChecked,userPosts}),
+          memoryMb:roundAll(memoryMegabytes(memory)),window:timingWindow};
         record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs, routes, superRole,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError, userTurnWaits}));
         // 기록에 성공한 뒤에만 비운다. 잠금으로 실패하면 모은 주기를 다음 기록에 이어 싣는다.
