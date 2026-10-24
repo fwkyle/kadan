@@ -26,5 +26,6 @@ export function prepareOutputLog(session, home, {compressed = true, split = true
   const writer = split ? (compressed ? `gzip -1c | ${sink}` : `exec ${sink}`)
     : `exec ${compressed ? 'gzip -1c' : 'cat'} > ${shellQuote(prefix + 'aaaaaa')}`;
   const program = `umask 077; ${writer}`;
-  return {manifestPath, command: `exec /bin/bash -o pipefail -c ${shellQuote(program)}`};
+  const shell = split && compressed ? '/bin/bash -o pipefail' : '/bin/sh';
+  return {manifestPath, command: `exec ${shell} -c ${shellQuote(program)}`};
 }

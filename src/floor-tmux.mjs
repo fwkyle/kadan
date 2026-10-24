@@ -110,11 +110,11 @@ export function outputLogPath(session, home = ledgerHome(), compressed = true) {
 function attachOutputLog(session) {
   // 새 세션에만 붙인다. 실행 중인 로거와 기존 원문·압축 로그를 교체하지 않는다.
   const compressed=spawnSync("gzip",["--version"],{stdio:"ignore",timeout:1000}).status===0;
-  const split=spawnSync("/bin/sh",["-c","command -v split >/dev/null"],{
+  const split=spawnSync("/bin/sh",["-c","command -v split >/dev/null && test -x /bin/bash"],{
     stdio:"ignore",timeout:1000,
   }).status===0;
   if(!compressed)console.error("경고: gzip 사용 불가 — 출력은 원문 조각으로 보존합니다");
-  if(!split)console.error("경고: split 사용 불가 — 이번 세션 출력은 크기 상한 없이 보존합니다");
+  if(!split)console.error("경고: 출력 분할 도구 사용 불가 — 이번 세션 출력은 크기 상한 없이 보존합니다");
   let log;
   try {
     log = prepareOutputLog(session, ledgerHome(), {compressed, split});
