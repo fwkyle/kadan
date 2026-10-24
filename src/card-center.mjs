@@ -79,12 +79,14 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     if(own.length&&state!=='superseded'&&(!['done','hold','cancelled','superseded'].includes(state)||lastRun>lastEdit)) {
       state=own.every(r=>r.state==='done')?'done':own.some(r=>r.state==='failed')?'failed':own.some(r=>r.state==='orphaned')?'orphaned':'unconfirmed';
     }
-    const transition=card.history.filter((h,i)=>i>0&&h.status!==card.history[i-1].status).at(-1);
+    const facts=card.watchHistorySummary;
+    const transition=facts?facts.transition:
+      card.history.filter((h,i)=>i>0&&h.status!==card.history[i-1].status).at(-1);
     if(transition&&Date.parse(transition.at)>lastRun&&['ready','draft'].includes(card.status))state=card.status;
     if(transition&&Date.parse(transition.at)>lastRun&&card.status==='assigned'&&own.every(r=>r.state==='done'))state='assigned';
     if(state==='unconfirmed'&&reportedActivity(card,own,{now,alive:true}))state=card.activity;
-    const question=card.history.filter(h=>h.noteKind==='question').at(-1);
-    const answer=card.history.filter(h=>h.noteKind==='answer').at(-1);
+    const question=facts?facts.question:card.history.filter(h=>h.noteKind==='question').at(-1);
+    const answer=facts?facts.answer:card.history.filter(h=>h.noteKind==='answer').at(-1);
     return {...card,board,runs:own,displayState:state,ambiguous:connectionErrors.length>0,connectionErrors,pendingQuestion:!!question&&(!answer||question.revision>answer.revision)};
   });
   const moved=movedOnReasons(result);
@@ -107,7 +109,11 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const last=[...c.runs].sort((a,b)=>(Date.parse(a.sentAt??a.at)||0)-(Date.parse(b.sentAt??b.at)||0)).at(-1);
     if(last?.state!=='done')return [];
     const doneAt=Date.parse(last.at)||0;
-    if(c.history.some((h,i)=>i>0&&(Date.parse(h.at)||0)>doneAt&&(h.status!==c.history[i-1].status||h.role!==c.history[i-1].role)))return [];
+    const changed=c.watchHistorySummary
+      ? c.watchHistorySummary.changedAt!==null&&c.watchHistorySummary.changedAt>doneAt
+      : c.history.some((h,i)=>i>0&&(Date.parse(h.at)||0)>doneAt&&
+        (h.status!==c.history[i-1].status||h.role!==c.history[i-1].role));
+    if(changed)return [];
     return [{key:c.key,title:c.title,status:c.status,role:last.role,doneAt:last.at,doneBy:last.doneBy??'모름',revision:c.revision}];
   });
   const execution=result.filter(c=>c.workType!=='coordination');
