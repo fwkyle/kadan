@@ -51,7 +51,7 @@ import { superProfiles } from "./super-role.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner, userTurnWaitList } from "./handover-state.mjs";
-import { mailboxLetters } from "./mailbox-state.mjs";
+import {waitingLetters} from './mailbox-queries.mjs';
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
 import { shortDigest, normalizeForChange, readText, collectRoles, absorbDeliveredScreens } from "./watch-roles.mjs";
@@ -100,6 +100,7 @@ export async function runWatch({
   floor,
   readEntries,
   readMailLetters = null,
+  projectEntries = (entries, cards) => taskIdentity(cards).project(entries).filter(e => !taskConnectionError(e)),
   readCards = null,
   readWorks = () => [],
   // 사용자 결정 요청 목록. 열린 결정을 올린 감독은 노는 게 아니라 답을 기다리는 것이다(2026-10-05 [kyle]).
@@ -281,7 +282,7 @@ export async function runWatch({
         // 워크 owner는 확정된 역할 인계를 따라 지금 책임 감독으로 바꿔 쓴다. 옛 감독 이름 그대로면 감독 점검 범위와
         // 할 일 판정에서 이어 맡은 감독이 빠졌다(PR #99 검수 2). 원장의 owner 원문은 바꾸지 않는다.
         cards = readCards(); works = readWorks().map(w => withEffectiveOwner(w, entries));
-        entries = taskIdentity(cards).project(entries).filter(e=>!taskConnectionError(e));
+        entries = projectEntries(entries, cards);
         scope = buildWatchScope(cards, entries, parents, works);
         supervisorScope = buildSupervisorScope(cards, entries, parents, works);
       }
@@ -363,7 +364,7 @@ export async function runWatch({
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
           const currentCards=readCards();
-          const currentEntries=taskIdentity(currentCards).project(readEntries()).filter(e=>!taskConnectionError(e));
+          const currentEntries=projectEntries(readEntries(), currentCards);
           const currentScope=buildWatchScope(currentCards,currentEntries,parents,readWorks().map(w=>withEffectiveOwner(w,currentEntries)));
           const currentTasks=currentScope.entries.filter(e=>e.role===seen.role);
           if(currentTasks.length!==1||currentTasks[0].taskId!==taskId)return false;
@@ -548,7 +549,7 @@ export async function runWatch({
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
       const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
       for (const d of readDecisions() ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push(item(d.card ?? null, null, d.work ?? null, "@user"));
-      for (const l of mailboxLetters(entries, undefined, { view: "waiting" }))
+      for (const l of waitingLetters(entries))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
       // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.
       if (cards) {

@@ -1,4 +1,4 @@
-import {mailboxLetters} from './mailbox-state.mjs';
+import {recentLetters} from './mailbox-queries.mjs';
 import {workEntries} from './handover-state.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
@@ -21,8 +21,7 @@ export function observationContext(role, observation, entries, cards, tasks) {
     responsibilities:tasks.filter(e => e.role === role),
     recentTaskEvents:workEntries(entries,identity).filter(e => e.kind === 'done' && (e.role === role || e.by === role))
       .slice(-12).map(e => ({at:e.t,kind:e.kind,role:e.role,by:e.by,taskId:e.taskId,executionKey:e.executionKey,result:e.result})),
-    recentMail:mailboxLetters(entries).filter(e => (e.currentRecipient || e.role) === role || (e.currentSender || e.by) === role)
-      .slice(-12).map(e => ({at:e.t,kind:e.kind,mailId:e.mailId,from:e.by,to:e.role,
+    recentMail:recentLetters(entries, role).map(e => ({at:e.t,kind:e.kind,mailId:e.mailId,from:e.by,to:e.role,
         currentRecipient:e.currentRecipient || e.role,currentSender:e.currentSender || e.by,
         taskId:e.taskId,executionKey:e.executionKey,workKey:e.workKey,replyTo:e.replyTo,
         transport:e.transport,completion:e.completion,systemGenerated:e.systemGenerated,notificationOnly:e.notificationOnly,
