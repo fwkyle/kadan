@@ -8,7 +8,7 @@ import { ledgerHome } from "./ledger.mjs";
 // taskKey(id): 마커의 카드 id를 dispatches 키로 푼다. 풀지 못하면 null.
 // home: 훅 증거 폴더. 비우면 원장 홈이며, 발령이 있을 때만 읽는다.
 // unscoped: 카드 조회를 쓰지 않는 옛 호출은 발령 없는 화면의 마지막 마커도 후보로 본다.
-export function doneEvidence({ dispatches, screen, home, role, taskKey, unscoped = false }) {
+export function doneEvidence({ dispatches, screen, home, role, taskKey, unscoped = false, hookRows }) {
   const markers = findDoneMarkers(screen ?? ""), fresh = new Set();
   for (const [key, dispatch] of dispatches) {
     const newer = diffDoneMarkers(dispatch.baselineMarkers ?? [], markers,
@@ -21,7 +21,8 @@ export function doneEvidence({ dispatches, screen, home, role, taskKey, unscoped
   // 증거는 같은 역할·같은 카드·그 발령(send) 뒤 시각이어야 한다.
   let hookMarker = null;
   for (const [key, dispatch] of dispatches) {
-    const found = hookDoneSince({ home: home ?? ledgerHome(), role, since: dispatch.t, taskMatches: id => taskKey(id) === key }).at(-1);
+    const found = hookDoneSince({home: home ?? ledgerHome(), role, since: dispatch.t,
+      taskMatches: id => taskKey(id) === key, rows: hookRows}).at(-1);
     if (found && found.result !== dispatch.confirmedResult &&
         (!hookMarker || Date.parse(found.at) > Date.parse(hookMarker.at))) hookMarker = found;
   }
