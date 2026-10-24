@@ -12,6 +12,7 @@ const notifyUser = (message, spawn, opts = {}) => rawNotifyUser(message, spawn, 
 
 // 가짜 값만 쓴다. 이 시험 파일의 어떤 값도 실제 주소·ID가 아니다.
 const TOKEN = 'FAKETOKEN-abc123', USER_ID = '424242424242';
+const FORUM_ID = '333000000000000333';
 const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
 const live = [];
 process.on('exit', () => { for (const c of live) c.kill('SIGKILL'); });
@@ -286,7 +287,11 @@ async function forumWorld(known = [], repoKeys = ['kadan'], forumOptions = {}) {
   const base = await world();
   const forum = await world([{status: 204}], {forum: {known, ...forumOptions}});
   let extra = '';
-  for (const r of repoKeys) extra += `DISCORD_WEBHOOK_URL_${r.toUpperCase().replace(/[^A-Z0-9]/g, '_')}=http://127.0.0.1:${forum.port}/api/webhooks/333/${TOKEN}\n`;
+  for (const r of repoKeys) {
+    const key = r.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    const url = `http://127.0.0.1:${forum.port}/api/webhooks/${FORUM_ID}/${TOKEN}`;
+    extra += `DISCORD_WEBHOOK_URL_${key}=${url}\n`;
+  }
   fs.appendFileSync(base.envFile, extra);
   const rawThreads = () => { try { return JSON.parse(fs.readFileSync(path.join(base.home, 'notify-threads.json'), 'utf8')).threads; } catch { return null; } };
   // 글 id만 비교하는 옛 시험용(값이 옛 문자열이든 새 {threadId,statusMessageId}든). 새 형식 전체는 rawThreads.
@@ -762,7 +767,9 @@ test('S7 KADAN_NOTIFY=off·설정 없음·레포 키 없음·글 없음이면 �
   } finally { w.stop(); }
 });
 
-test('S8 상태 파일·알림 기록에 주소·토큰·사용자 ID가 없고, 상태 본문은 WorkStore에서만 만든다', async () => {
+test('S8 상태 파일·알림 기록에 주소·토큰·사용자 ID가 없고, 상태 본문은 WorkStore에서만 만든다', async t => {
+  // 짧은 ID '333'은 정상 시각의 밀리초에도 나온다. 긴 가짜 ID 전체를 검사한다.
+  t.mock.timers.enable({apis: ['Date'], now: Date.parse('2026-01-02T03:04:05.333Z')});
   const w = await forumWorld();
   try {
     const store = mkWork(w.base.home);
@@ -770,7 +777,9 @@ test('S8 상태 파일·알림 기록에 주소·토큰·사용자 ID가 없고,
     touch(store);
     refreshWorkStatus(w.base.home, 'kadan/work-x', {env: {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: w.base.envFile}});
     const state = fs.readFileSync(path.join(w.base.home, 'notify-threads.json'), 'utf8');
-    for (const text of [state, w.base.log()]) for (const x of [TOKEN, USER_ID, '/api/webhooks', 'http', '333']) assert.ok(!text.includes(x), x);
+    for (const text of [state, w.base.log()]) {
+      for (const x of [TOKEN, USER_ID, '/api/webhooks', 'http', FORUM_ID]) assert.ok(!text.includes(x), x);
+    }
     const s = buildWorkStatus(w.base.home, 'kadan/work-x');
     assert.match(s.content, /^\*\*업무 상태\*\* · kadan\/work-x\n제목: 상태 시험\n상태: 열림 · revision 2\n열린 실행: 없음/);
     assert.equal(buildWorkStatus(w.base.home, 'kadan/work-none'), null);
