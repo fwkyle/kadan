@@ -457,7 +457,8 @@ export function needsDecisions(url){
 }
 
 export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,
-  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary,loadListSnapshot} = {}) {
+  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary,loadListSnapshot,
+  loadLedger} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  // 원격 접속 설정(KADAN_HOME/remote-access.json)이 있을 때만 게이트를 만든다. 없으면 열쇠 조회도 타이머도 없다(2026-10-18).
@@ -528,6 +529,16 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true,...(request.kadanDecisionToken?{decisionToken:request.kadanDecisionToken}:{})}:{token:centerHandler.token}));return;}
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
+    if (request.method === 'GET' && loadLedger && url.pathname === '/api/dashboard/ledger') {
+      try {
+        sendVersionedJson(request, response, loadLedger(url), {fresh:url.searchParams.has('fresh')});
+      } catch (error) {
+        response.writeHead(error.status || 503, {'content-type':'text/plain; charset=utf-8',
+          'cache-control':'no-store'});
+        response.end('저장소 확인 불가: ' + error.message);
+      }
+      return;
+    }
     if (request.method === 'GET' && loadSummary && url.pathname === '/api/dashboard/summary') {
       try {
         sendVersionedJson(request, response, loadSummary(), {fresh: url.searchParams.has('fresh')});

@@ -55,15 +55,22 @@ function dispatchFor(send) {
 
 // 검증 상태를 들고 있다가 새 사건 묶음(add)만 이어서 검증한다. 전체 읽기는 한 번의 add이고, 증분 읽기는 커서 뒤 묶음마다 add한다.
 // add가 예외를 던지면 이 검증기는 중간 상태이므로 버려야 한다(재사용 금지).
-export function createDomainValidator(legacy = []) {
-  const mailIds = new Set(legacy.filter(row=>row?.kind==='send' && row.mailId).map(row=>row.mailId));
-  const lastByStream = new Map(), mails = new Map(), completions = new Map(), lookup = createCompletionIndex();
-  let expected = 1;
-  for (const row of legacy) {
-    lookup.add(row);
-    if (row?.kind==='send' && row.mailId) mails.set(row.mailId,row);
-  }
-  return {add(streams) {
+export function createDomainValidator(legacy = [], saved = null) {
+  const {mailIds, lastByStream, mails, completions, lookup} = saved ?? {
+    mailIds:new Set(), lastByStream:new Map(), mails:new Map(),
+    completions:new Map(), lookup:createCompletionIndex(),
+  };
+  let expected = saved?.expected ?? 1;
+  const addLegacy = rows => {
+    for (const row of rows) {
+      lookup.add(row);
+      if (row?.kind==='send' && row.mailId) {
+        mailIds.add(row.mailId);mails.set(row.mailId,row);
+      }
+    }
+  };
+  addLegacy(legacy);
+  return {addLegacy, get expected() {return expected;}, add(streams) {
     const groups = new Map();
     for (const [stream,rows] of streams) {
       let previous = lastByStream.get(stream) ?? 0;
@@ -133,6 +140,7 @@ export function readLedgerState(home,{domain=null}={}) {
 const validTask = value => typeof value.taskId === 'string' && value.taskId &&
   (!value.executionKey || (typeof value.executionKey === 'string' &&
     (value.taskId === value.executionKey || value.taskId === value.executionKey.split('/').at(-1))));
+export const completionTaskShortId = value => validTask(value || {}) ? value.taskId.split('/').at(-1) : null;
 const explicitTaskKey = value => value.executionKey || (value.taskId?.includes('/') ? value.taskId : null);
 // 완료마다 전체 감시·우편 이력을 다시 훑지 않는다. 같은 짧은 ID의 다른 정식 주소도 함께
 // 보존해야 별칭 충돌을 판정할 수 있다. 인계는 다른 카드의 사건도 보존한다(중복 인계 ID).

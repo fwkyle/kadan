@@ -88,7 +88,7 @@ export function ensureStorage(home){
 }
 // 새 DB를 WAL로 바꾸는 순간 다른 연결이 잠그고 있으면 busy 대기가 적용되지 않고 곧바로 SQLITE_BUSY(5)·LOCKED(6)가 난다.
 // 동시에 몰린 첫 쓰기가 실제로 이 오류로 실패했다(시험 경쟁 (a), 10회 중 1회). 한도 안에서 짧게 다시 시도한다.
-function enableWal(db){
+export function enableWal(db){
  const end=Date.now()+BUSY_MS();
  for(;;){
   try{db.exec('PRAGMA journal_mode=WAL');return}
