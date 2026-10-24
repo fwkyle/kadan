@@ -20,6 +20,7 @@ import { buildTree, renderTree } from "../cli-tree.mjs";
 import { collectCardFiles } from "../cli-guarded-send.mjs";
 import { centerSummary } from "../center-summary.mjs";
 import { dataVersion, nextTimeBoundary, wallCache } from "../wall-snapshot-cache.mjs";
+import { createDashboardSummaryReader } from "../dashboard-summary-reader.mjs";
 
 export function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
@@ -129,7 +130,9 @@ export function cmdWall(_argv, flags) {
   // 같은 주소를 15초마다 다시 읽는 화면을 위해 응답을 잠깐 재사용한다. 0이면 끈다.
   if(!Number.isInteger(cacheSec)||cacheSec<0)die('--cache-sec는 0 이상의 정수여야 한다');
   const runtime=captureRuntimeVersion();
-  const server = createWallServer(()=>loadWallSnapshot(runtime), {home:ledgerHome(),cacheSec,gui:true});
+  const home = ledgerHome();
+  const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
+  const server = createWallServer(()=>loadWallSnapshot(runtime), {home,cacheSec,gui:true,loadSummary});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
     process.exitCode = 1;
