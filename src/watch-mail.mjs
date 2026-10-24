@@ -67,12 +67,12 @@ function simplifiedStage(stages, delivered, now, graceMs) {
 }
 
 // 판의 독립적인 활성 상태는 없다. 명시적으로 연결된 업무의 보류/종료만 따른다.
-function eligibleLetters(entries, cards, works, now, graceMs, parents) {
+function eligibleLetters(entries, cards, works, now, graceMs, parents, letters = mailboxLetters(entries)) {
   const identity = taskIdentity(cards);
   const history = reminderHistory(entries);
   const firstSent = firstReminderSent(entries);
   const out = [];
-  for (const mail of mailboxLetters(entries)) {
+  for (const mail of letters) {
     // 발령 우편(taskId, 질문 아님)은 읽음 확인 안내가 없으니 재알림하지 않는다 — 미착수는 시작보고누락 경보가 잡는다(2026-10-05).
     // 이전 세대 앞으로 온 미확인은 같은 이름의 새 세션에게 다시 알리지 않는다(mail-generation.mjs).
     // 단, 키로 한 번도 못 넣고 저장된 새 우편은 mailbox-state가 이전 세대로 세지 않는다.
@@ -130,9 +130,9 @@ function currentPid(role, entries, live) {
 }
 
 export class MailWatch {
-  constructor({record, send, hold = null, graceMs = 300_000, collections = null}) {
+  constructor({record, send, hold = null, graceMs = 300_000, collections = null, readLetters = null}) {
     if (!Number.isFinite(graceMs) || graceMs < 0) throw new Error('우편 유예 시간은 0 이상이어야 합니다');
-    Object.assign(this, {record, send, hold, graceMs});
+    Object.assign(this, {record, send, hold, graceMs, readLetters});
     this.collections = collections ?? createProcessCollections();
     this.ownsCollections = !collections;
     this.reserved = this.collections.set();
@@ -159,7 +159,8 @@ export class MailWatch {
     const lastState = (mailId, role, stage) => this.written.get(stageKey(mailId, role, stage)) ?? ledgerState.get(reminderKey(mailId, role))?.[stage];
     // 받는 쪽(target)별 묶음. 수신자 앞 알림은 수신자별, escalate는 수신자의 직속 상위별이다(같은 상위에게 가는 것은 한 통).
     const groups = new Map(), escalations = new Map();
-    for (const {mail, stage, to} of eligibleLetters(entries,cards,works,now,this.graceMs,parents)) {
+    for (const {mail, stage, to} of eligibleLetters(entries,cards,works,now,this.graceMs,parents,
+      this.readLetters?.(entries))) {
       const role = recipient(mail), escalate = stage === 'escalate';
       if (stage === 'legacy' ? this.reserved.has(reminderKey(mail.mailId,role)) : this.attempted.has(stageKey(mail.mailId,role,stage))) continue;
       const bucket = escalate ? escalations : groups, target = escalate ? to : role;
@@ -210,7 +211,8 @@ export class MailWatch {
         const currentCards = readCards(), currentWorks = readWorks(), live = floor.list();
         // 마지막 전달 직전 원장을 다시 읽는다. 예약 중 들어온 ack도 여기서 제외한다.
         const fresh = readEntries();
-        const unreadItems = eligibleLetters(fresh,currentCards,currentWorks,now,this.graceMs,parents)
+        const unreadItems = eligibleLetters(fresh,currentCards,currentWorks,now,this.graceMs,parents,
+          this.readLetters?.(fresh))
           .filter(({mail, stage, to}) => roleOf.get(mail.mailId) === recipient(mail) && stageOf.get(mail.mailId) === stage && (!escalate || to === target));
         const unread = new Set(unreadItems.map(({mail}) => mail.mailId));
         pending = ids.filter(id => unread.has(id));

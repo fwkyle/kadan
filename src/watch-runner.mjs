@@ -99,6 +99,7 @@ export async function runWatch({
   measure = () => performance.now(),
   floor,
   readEntries,
+  readMailLetters = null,
   readCards = null,
   readWorks = () => [],
   // 사용자 결정 요청 목록. 열린 결정을 올린 감독은 노는 게 아니라 답을 기다리는 것이다(2026-10-05 [kyle]).
@@ -186,7 +187,7 @@ export async function runWatch({
   // 자동 재개가 처음 예약될 때(최종 429 화면)도 사용량을 먼저 새로 받는다. 예약 중인 세션은 한도 경보를 보내지 않으므로 결과는 원장과 감시 출력에 남는다.
   const rateLimitRetry = new RateLimitRetry({record, resume:resume429, onSchedule:refreshOcxFor});
   const mailDelivered = new Set();
-  const mailWatch = sendMailReminder ? new MailWatch({record,collections,
+  const mailWatch = sendMailReminder ? new MailWatch({record,collections,readLetters:readMailLetters,
     graceMs:mailUnreadGraceMs,hold:mailHold,send:(role,message,pid)=>{
     try { sendMailReminder(role,message,pid); mailDelivered.add(role); }
     catch (error) {
