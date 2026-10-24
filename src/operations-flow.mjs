@@ -50,7 +50,23 @@ function followupContext(home,snapshot={}){
  const context={cards:[],read:null,decisions:[],error:null};
  try{context.cards=snapshot.cards??heads(home,'cards');context.read=eventReader(home,snapshot.ledgerState);context.watchCalls=context.read(e=>e.kind==='watch-ai-call');
   // 업무마다 원장 전체를 훑지 않게 우편·완료와 인계 사건을 한 번만 골라 둔다(순서는 그대로 유지된다).
-  context.sendDone=context.read(e=>['send','done'].includes(e.kind));context.transfers=context.read(e=>e.kind==='handover');context.identity=taskIdentity(context.cards);context.decisions=snapshot.decisions??new DecisionStore(home).list();}
+  context.sendDone=context.read(e=>['send','done'].includes(e.kind));
+  context.transfers=context.read(e=>e.kind==='handover');
+  context.identity=taskIdentity(context.cards);
+  context.byKey=new Map(context.cards.map(c=>[c.key,c]));
+  context.histories=new Map(context.cards.filter(c=>Array.isArray(c.history)&&c.history.length===c.revision&&
+    c.history.every((h,i)=>h.key===c.key&&h.revision===i+1)).map(c=>[c.key,c.history]));
+  const index=(entries,keys)=>{
+   const result=new Map();
+   for(const entry of entries)for(const key of new Set(keys(entry))){
+    if(!result.has(key))result.set(key,[]);result.get(key).push(entry);
+   }
+   return result;
+  };
+  context.byAddress=index(context.sendDone,e=>[e.executionKey,e.taskId]);
+  context.transfersByKey=index(context.transfers,e=>Array.isArray(e.taskIds)
+   ?e.taskIds.map(id=>context.identity.resolve(id).key):[null]);
+  context.decisions=snapshot.decisions??new DecisionStore(home).list();}
  catch{context.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
  return context;
 }
@@ -81,10 +97,26 @@ export function operationsFlowSummaries(home,works,snapshot={}){
    if(!work.history)work={...work,history:readStream(home,`works/${work.key}/events.jsonl`)};
    let records=null;
    if(context.read){
-    const keys=new Set(work.executions.map(x=>x.key)),ids=new Set(context.cards.filter(c=>keys.has(c.key)).map(c=>c.id));
-    records={events:context.sendDone.filter(e=>(!e.workKey||e.workKey===work.key)&&(keys.has(e.executionKey)||keys.has(e.taskId)||ids.has(e.taskId))),handovers:context.transfers};
+    const keys=new Set(work.executions.map(x=>x.key));
+    const ids=new Set([...keys].map(key=>context.byKey.get(key)?.id).filter(id=>id!==undefined));
+    const events=new Set(),handovers=new Set(context.transfersByKey.get(null)??[]);
+    for(const address of new Set([...keys,...ids])) {
+     for(const e of context.byAddress.get(address)??[]) {
+      if((!e.workKey||e.workKey===work.key)&&
+         (keys.has(e.executionKey)||keys.has(e.taskId)||ids.has(e.taskId)))events.add(e);
+     }
+    }
+    for(const key of keys)for(const e of context.transfersByKey.get(key)??[])handovers.add(e);
+    records={events:[...events].sort((a,b)=>a.seq-b.seq),handovers:[...handovers].sort((a,b)=>a.seq-b.seq)};
+    records.ordered=[...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq);
+    records.byExecution=new Map();
+    for(const e of workEntries(records.ordered,context.identity)) {
+     if(e.taskConnection?.state!=='resolved'||!e.role)continue;
+     if(!records.byExecution.has(e.executionKey))records.byExecution.set(e.executionKey,[]);
+     records.byExecution.get(e.executionKey).push(e);
+    }
    }
-   const executions=work.executions.map(link=>executionModel(home,link,context.cards,records,context.identity));
+   const executions=work.executions.map(link=>executionModel(home,link,context.cards,records,context.identity,context.histories));
    return [work.key,followupFor(home,work,executions,context,now)];
   }));
  });
@@ -121,16 +153,19 @@ function linkedRecords(home,work,cardHeads,read=eventReader(home)){
  return {watchCalls:read(e=>e.kind==='watch-ai-call'),events:seed.filter(e=>['send','done'].includes(e.kind)&&connected(e)),letters,handovers,ids};
 }
 
-function executionModel(home,link,cardHeads,records,sharedIdentity=null){
+function executionModel(home,link,cardHeads,records,sharedIdentity=null,histories=null){
  const base={key:link.key,phase:link.phase,round:link.round,title:link.key,role:null,status:null,signals:[],reportState:'unknown'};
  try{
   if(!validKey(link.key))throw failure('실행 주소 확인 필요');
-  const history=readStream(home,`cards/${link.key}/events.jsonl`);
+  const history=histories?.get(link.key)??readStream(home,`cards/${link.key}/events.jsonl`);
   if(!history.length||history.some((c,i)=>c.key!==link.key||c.revision!==i+1))throw failure('실행 이력 확인 필요');
   const card=history.at(-1),identity=sharedIdentity||taskIdentity(cardHeads);
   const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
   const runs=new Map(),sent=new Map(),seen=new Set();
-  if(records&&!ambiguous)for(const e of workEntries([...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq),identity).filter(e=>e.taskConnection?.state==='resolved'&&e.executionKey===card.key&&e.role)){
+  const ordered=records?(records.ordered??[...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq)):[];
+  const own=records?.byExecution?.get(card.key)??(records?.byExecution?[]:
+   workEntries(ordered,identity).filter(e=>e.taskConnection?.state==='resolved'&&e.executionKey===card.key&&e.role));
+  if(records&&!ambiguous)for(const e of own){
    if(e.kind==='send'&&classifyLedgerEntry(e).dispatch){runs.set(e.role,null);sent.set(e.role,e.t);}
    else if(e.kind==='done'&&!seen.has(e.role)){seen.add(e.role);runs.set(e.role,e);}
   }
@@ -141,7 +176,7 @@ function executionModel(home,link,cardHeads,records,sharedIdentity=null){
   const transition=history.filter((h,i)=>i&&h.status!==history[i-1].status).at(-1);
   if(reportState!=='unknown'&&transition&&['draft','ready','assigned'].includes(card.status)&&Date.parse(transition.at)>Math.max(Date.parse(sentAt)||0,Date.parse(completedAt)||0))reportState='unreported';
   const result=card.result,registered=history.find(h=>h.result),changedAfterResult=registered&&['scope','role','repoPath'].some(k=>registered[k]!==card[k]);
-  const role=effectiveCardRole(card,records?[...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq):[],identity);
+  const role=effectiveCardRole(card,ordered,identity);
   const sameRun=result&&sentAt&&elapsed(sentAt,result.at)!==null&&!changedAfterResult&&!(transition&&['draft','ready','assigned'].includes(card.status)&&Date.parse(transition.at)>Date.parse(result.at));
   const active=reportState==='unreported'&&card.status==='assigned'&&card.activityRole===role&&sent.has(role)&&elapsed(sent.get(role),card.activityAt)!==null;
   return {...base,...fields(card,['title','role','status','id','revision','at','nextAction','resolutionOwner','activityAt']),role,ambiguous,signals,reportState,sentAt,completedAt,

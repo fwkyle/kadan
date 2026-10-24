@@ -5,10 +5,13 @@ import {stateText} from './human-brief.mjs';
 import {renderDetailHistory,renderDetailSections} from './dashboard-detail.mjs';
 import {renderInbox} from './dashboard-inbox.mjs';
 import {workPhases,endedExecution} from './work-store.mjs';
-import {workLetters} from './work-mail.mjs';
+import {createWorkLettersReader} from './work-mail.mjs';
 import {lastChildAt,isTurnCurrent} from './handover-state.mjs';
 
-const short=at=>at?new Date(at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'모름';
+const shortFormat=new Intl.DateTimeFormat('ko-KR',{
+ timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false,
+});
+const short=at=>at?(Number.isNaN(new Date(at).getTime())?'Invalid Date':shortFormat.format(new Date(at))):'모름';
 const workState={open:'진행 중',hold:'일시정지',done:'업무 완료',cancelled:'취소'};
 const anchor=(key,title)=>`<a data-card-key="${e(key)}" href="?card=${encodeURIComponent(key)}#detail">${e(title)}</a>`;
 const option=(value,title,selected)=>`<option value="${e(value)}"${value===selected?' selected':''}>${e(title)}</option>`;
@@ -16,8 +19,10 @@ const actionNames={create:'업무 등록',update:'업무 보고',link:'실행 �
 
 export function workDashboardModel(works,center,entries,summaries=new Map()){
  const cards=center?.cards||[];
+ const byKey=new Map(cards.map(c=>[c.key,c]));
+ const readLetters=works.length?createWorkLettersReader(entries,cards):null;
  return works.map(w=>{
-  const executions=w.executions.map(link=>({...link,card:cards.find(c=>c.key===link.key)}));
+  const executions=w.executions.map(link=>({...link,card:byKey.get(link.key)}));
   const ended=executions.filter(x=>x.card&&endedExecution(x.card));
   const active=executions.filter(x=>!x.card||!endedExecution(x.card));
   const round=Math.max(0,...w.executions.map(x=>x.round));
@@ -25,15 +30,16 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   // 정상 왕복이 100라운드에 이르는 일은 없다고 보고 100 이상만 번호표로 읽는다(앞 라운드 실행이 빠진 2라운드 업무는 그대로).
   const roundLabel=round>=100?`병렬 실행 ${w.executions.length}건`:`${round}라운드`;
   const closed=['done','cancelled'].includes(w.status);
-  const lastChild=lastChildAt(w,cards);
-  const explicit=isTurnCurrent(w,cards);
+  const linkedCards=executions.map(x=>x.card).filter(Boolean);
+  const lastChild=lastChildAt(w,linkedCards);
+  const explicit=isTurnCurrent(w,linkedCards);
   const turns=active.map(x=>x.card?cardTurn(x.card):{owner:null,label:'차례 확인 필요'});
   const owners=[...new Set(turns.map(x=>x.owner).filter(Boolean))];
   const unknown=turns.filter(x=>!x.owner).length;
   const turn=closed?'종료':explicit?w.turnOwner:active.length?(owners.join(' · ')+(unknown?`${owners.length?' · ':''}차례 확인 필요 ${unknown}건`:'')):w.owner;
   const latest=active.filter(x=>x.round===round);
   const stage=closed?(active.length?'종료 후 미종료 실행 · 확인 필요':workState[w.status]):w.status==='hold'?'일시정지':!executions.length?'실행 준비':!active.length?'감독 최종 확인':(latest.length?latest:active).map(x=>workPhases[x.phase]).filter((x,i,a)=>a.indexOf(x)===i).join(' · ');
-  const letters=workLetters(w,entries,cards);
+  const letters=readLetters(w);
   const summary=summaries.get(w.key),followup=summary?.followup;
   return {...w,...workHealth(w,executions),...summary,key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
    purpose:w.goal,flowLabel:round?`${roundLabel} · ${followup?.label||stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,

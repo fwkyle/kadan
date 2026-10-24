@@ -456,7 +456,7 @@ export function needsDecisions(url){
 }
 
 export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,
-  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary} = {}) {
+  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary,loadListSnapshot} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  // 원격 접속 설정(KADAN_HOME/remote-access.json)이 있을 때만 게이트를 만든다. 없으면 열쇠 조회도 타이머도 없다(2026-10-18).
@@ -486,7 +486,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  let warming=null;
  const warm=()=>{
   warming=null;
-  const load=()=>{const value=loadSnapshot();if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value};};
+  const load=()=>{const value=loadSnapshot();if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value,loader:loadSnapshot};};
   try{if(home)storageSnapshot(home,load);else load();}catch{}
  };
   const server=http.createServer(async (request, response) => {
@@ -526,7 +526,14 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       }
       return;
     }
-    if(request.method==='GET'&&cacheSec&&centerHandler){clearTimeout(warming);warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
+    const listRequest = loadListSnapshot && ['/api/dashboard/workspace', '/api/dashboard/detail'].includes(url.pathname);
+    const readSnapshot = listRequest ? loadListSnapshot : loadSnapshot;
+    const snapshotMatches = () => sharedSnapshot?.loader === readSnapshot && cacheSec
+      && now() - sharedSnapshot.at < cacheSec * 1000;
+    if(request.method==='GET'&&cacheSec&&centerHandler){
+      clearTimeout(warming);warming=null;
+      if(!listRequest){warming=setTimeout(warm,warmAfterMs);warming.unref?.();}
+    }
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(cacheUrl);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
     if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(cacheUrl),remember:(body,type)=>remember(cacheUrl,body,type)})) return;
@@ -535,16 +542,16 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     // 끊긴 연결을 알아채고, 아무도 기다리지 않는 요청은 계산하지 않는다(2026-10-14: 11~41초 응답이 겹쳐 쌓였다).
     // 응답 쪽 연결이 실제로 닫혔을 때(소켓 파괴·응답 close)만 건너뛴다. 읽기 쪽만 끝난 연결은 응답을 기다릴 수 있어 건너뛰지 않는다.
     // 한계: 화면이 FIN만 보내고 닫으면 서버는 반쯤 닫힌 연결과 구별하지 못해 계산한다(RST·소켓 오류 때는 건너뛴다).
-    if(home&&request.method==='GET'&&!(sharedSnapshot&&cacheSec&&now()-sharedSnapshot.at<cacheSec*1000)){
+    if(home&&request.method==='GET'&&!snapshotMatches()){
       let closed=false;
       response.once('close',()=>{if(!response.writableFinished)closed=true;});
       for(let i=0;i<3;i++)await new Promise(resolve=>setImmediate(resolve));
       if(closed||response.destroyed||request.socket.destroyed)return;
     }
     const serve=()=>{
-    const snapshot=sharedSnapshot&&cacheSec&&now()-sharedSnapshot.at<cacheSec*1000
-      ? sharedSnapshot.value : loadSnapshot();
-    if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshot={at:sharedSnapshot?.value===snapshot?sharedSnapshot.at:now(),value:snapshot};
+    const snapshot=snapshotMatches()?sharedSnapshot.value:readSnapshot();
+    if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshot={
+      at:sharedSnapshot?.value===snapshot?sharedSnapshot.at:now(),value:snapshot,loader:readSnapshot};
     if(centerHandler) {
       snapshot.home=home;
       // 결정 목록은 쓰는 응답에서만 읽는다(2026-10-14: 모든 요청이 매번 읽고 있었다).
