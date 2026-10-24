@@ -222,7 +222,7 @@ export function cmdWatch(argv, flags) {
   const stores = createWatchStoreReaders(ledgerHome());
   let mailRoles = [];
   const mailReader = createWatchMailReader(ledgerHome(), null, {
-    readCards:stores.cards.read, readRoles:() => mailRoles,
+    readCards:stores.cards.read, readWorks:stores.works.read, readRoles:() => mailRoles,
   });
   const reads=cycleReads({readEntries:mailReader.readEntries,readCards:stores.cards.read,
     readWorks:stores.works.read,version:()=>storageVersion(ledgerHome())});
