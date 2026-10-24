@@ -10,6 +10,8 @@ import {storageMode, storageVersion, storageSnapshot, readStream, listStreams, s
 import {readLedger, appendLedger, findMailBySourceKey, findMailBySourceKeyAny, readWatchRequest, ledgerPath} from '../src/ledger.mjs';
 import {readLedgerState} from '../src/ledger-domains.mjs';
 import {CardStore} from '../src/card-store.mjs';
+import {WorkStore} from '../src/work-store.mjs';
+import {DecisionStore} from '../src/decisions.mjs';
 
 // Why: 'jsonl'이 겸하던 '아직 저장소 없음'(빈 홈)은 'none'이 맡는다. 빈 홈 읽기는 DB를 열지 않고 빈 결과를 주며 파일을 만들지 않는다.
 const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-storage-none-'));
@@ -110,4 +112,58 @@ test("알 수 없는 backend 값은 JSONL 안내가 아니라 잘못된 저장�
   const home = root();
   fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'mystery'}) + '\n');
   assert.throws(() => storageMode(home), /잘못된 저장소 설정/);
+});
+
+// Why: 쓰기 경로는 모드를 보지 않고 항상 transaction이다. 'none' 홈의 첫 쓰기가 조용히 아무 일도 안 하면 안 된다.
+const workArgs = (home, key = 'repo/w1') => ['work', 'create', key, '--title', '제목', '--goal', '결과', '--scope', '범위',
+  '--acceptance', '조건', '--owner', '감독', '--repo-path', home];
+
+test("빈 홈: kadan work create는 SQLite를 만들고 바로 뒤 work list에 보인다", () => {
+  const home = root();
+  assert.equal(storageMode(home), 'none');
+  const made = cli(workArgs(home), home);
+  assert.equal(made.status, 0, made.stderr);
+  assert.equal(storageMode(home), 'sqlite');
+  assert.ok(fs.existsSync(path.join(home, 'kadan.sqlite')));
+  const listed = cli(['work', 'list'], home);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /repo\/w1/);
+});
+
+test("빈 홈: kadan card create는 SQLite를 만들고 바로 뒤 card list에 보인다", () => {
+  const home = root(), source = path.join(root(), 'card.md');
+  fs.writeFileSync(source, '# 새 카드\n\n본문\n');
+  const made = cli(['card', 'create', 'repo/c1', '--repo-path', home, '--source', source], home);
+  assert.equal(made.status, 0, made.stderr);
+  assert.equal(storageMode(home), 'sqlite');
+  const store = new CardStore(home);
+  assert.deepEqual(store.list().map(card => card.key), ['repo/c1']);
+  assert.deepEqual(store.listSummaries().map(card => card.key), ['repo/c1']);
+  assert.deepEqual(store.listWatch().map(card => card.key), ['repo/c1']);
+  assert.equal(store.get('repo/c1').revision, 1);
+  assert.match(cli(['card', 'list'], home).stdout, /repo\/c1/);
+});
+
+test("빈 홈: 결정 한 건을 쓰면 SQLite가 생기고 같은 홈 목록에 보인다", () => {
+  const home = root();
+  const store = new DecisionStore(home);
+  assert.deepEqual(store.list(), []);
+  const saved = store.locked(() => store.write({id: 'd1', revision: 1, card: null, chat: true, work: 'repo/w1', to: '@user',
+    requestedBy: 'a-슈퍼감독', question: '질문?', options: ['예', '아니오'], recommendation: '예', reason: '이유', status: 'open',
+    at: new Date().toISOString()}));
+  assert.equal(storageMode(home), 'sqlite');
+  assert.deepEqual(store.list().map(d => d.id), [saved.id]);
+});
+
+test("빈 홈: 카드·업무·결정 읽기와 card list·work list·tree는 종료 0이고 파일을 만들지 않는다", () => {
+  const home = root();
+  assert.deepEqual(new CardStore(home).listSummaries(), []);
+  assert.deepEqual(new CardStore(home).listWatch(), []);
+  assert.deepEqual(new WorkStore(home).list(), []);
+  assert.deepEqual(new DecisionStore(home).list(), []);
+  for (const args of [['card', 'list'], ['work', 'list'], ['tree'], ['status']]) {
+    const r = cli(args, home);
+    assert.equal(r.status, 0, `${args.join(' ')}: ${r.stderr}`);
+    assert.deepEqual(fs.readdirSync(home), [], args.join(' '));
+  }
 });

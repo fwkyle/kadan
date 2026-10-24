@@ -1,4 +1,3 @@
-import {acquireDirLock} from './dir-lock.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {isUserActor} from './actors.mjs';
@@ -23,15 +22,11 @@ export class WorkStore {
   return {...history.at(-1),history};
  }
  list(){return storageSnapshot(this.home,()=>{
-  if(storageMode(this.home)==='sqlite')return listStreams(this.home,'works/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13)));
-  const root=path.join(this.home,'works');if(!fs.existsSync(root))return [];
-  return fs.readdirSync(root,{withFileTypes:true}).filter(x=>x.isDirectory()&&!x.name.startsWith('.')).flatMap(repo=>fs.readdirSync(path.join(root,repo.name),{withFileTypes:true}).filter(x=>x.isDirectory()).map(x=>this.get(`${repo.name}/${x.name}`)));
+  if(storageMode(this.home)==='none')return [];
+  return listStreams(this.home,'works/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13)));
  });}
  locked(fn){
-  assertWritable(this.home);if(storageMode(this.home)==='sqlite')return transaction(this.home,fn);
-  const root=path.join(this.home,'works');fs.mkdirSync(root,{recursive:true,mode:0o700});
-  const lock=path.join(root,'.lock');if(!acquireDirLock(lock))throw new Error('업무 저장 중: 새로 읽고 확인하세요');
-  try{return fn()}finally{fs.renameSync(lock,path.join(root,`.released-${randomUUID()}`));}
+  assertWritable(this.home);return transaction(this.home,fn);
  }
  create({key,title,goal,scope,acceptance,owner,repoPath,board='',by='사람'}){
   return this.locked(()=>{

@@ -18,7 +18,7 @@ function setup(mode){
  const store=new CardStore(home),card=store.create({repo:'repo',id:'task',repoPath:home,body:'# 원문'});
  return {home,store,card};
 }
-for(const mode of ['jsonl','sqlite']){
+for(const mode of ['sqlite']){
  test(`${mode}: 요약은 본문을 읽지 않고 최신 상태·주소·결과 경로를 보존한다`,()=>{
   const {home,store,card}=setup(mode);
   store.update(card.key,{status:'hold'},{revision:1,note:'보류'});

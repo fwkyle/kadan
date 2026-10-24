@@ -34,7 +34,7 @@ function fixture(mode='sqlite',phase='review'){
  return {home,works,cards,key,execution,id,start,change,add,send,done,report,detail,decisions};
 }
 
-for(const mode of ['jsonl','sqlite'])test(`${mode}: 수동 DONE과 품질 판정 분리, CLI·목록·상세 일치, 조회는 무쓰기`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 수동 DONE과 품질 판정 분리, CLI·목록·상세 일치, 조회는 무쓰기`,()=>{
  const f=fixture(mode);f.done();
  let d=f.detail();assert.equal(d.work.status,'open');assert.equal(d.followup.state,'confirm');assert.equal(d.executions[0].quality,null);
  f.report('changes');d=f.detail();assert.equal(d.followup.state,'fix');assert.equal(d.followup.owner,'감독');

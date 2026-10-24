@@ -99,7 +99,7 @@ test('mail·dispatch는 도움말을 제공하고 잘못된 의도를 전송·�
   }
 });
 
-for (const backend of ['jsonl', 'sqlite']) {
+for (const backend of ['sqlite']) {
   test(`${backend}: mail의 실행 연결은 우편이고 dispatch만 발령·감시 상태를 바꾼다`, {
     skip: !hasTmux,
   }, () => {

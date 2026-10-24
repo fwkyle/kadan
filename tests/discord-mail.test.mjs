@@ -318,7 +318,7 @@ test('11 중복 조회는 좁은 조회라 원장 사건 10만 건에서도 작�
 });
 
 // 검수자 restart-fourth 모양: 스레드 우편 저장 직후 강제 종료 → 그 사이 본문에 새 글 3개 → 재시작하면 스레드 글이 4번째 줄로 나온다.
-for (const backend of ['jsonl', 'sqlite']) {
+for (const backend of ['sqlite']) {
   test(`12 저장 직후 종료한 스레드 글이 재시작 때 4번째 줄로 와도 같은 글 우편은 1통이다(${backend})`, async () => {
     const fake = await startFakeDiscord();
     try {

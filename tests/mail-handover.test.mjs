@@ -19,7 +19,7 @@ function fixture(mode){
 }
 const transfer=(from,to,id=`${from}-${to}`)=>({kind:'handover',phase:'transferred',from,to,handoverId:id,taskIds:[]});
 
-for(const mode of ['jsonl','sqlite']){
+for(const mode of ['sqlite']){
  test(`${mode}: 우편 조회만으로 확정 인계, 현재 책임 필터와 원문 보존`,()=>{
   const {home,box,record}=fixture(mode);
   const q=box('receiver').send({by:'sender',message:'원본 질문',expectReply:true});
@@ -171,7 +171,7 @@ test('미래 읽음/답장은 인정하지 않고 타임스탬프 대신 저장 
  assert.equal(JSON.stringify(entries),raw);
 });
 
-for(const mode of ['jsonl','sqlite']){
+for(const mode of ['sqlite']){
  test(`${mode}: 실행 인계 뒤 후임 완료는 원발령에 연결되고 별칭 결과도 질문을 종료`,()=>{
   for(const [requestTask,requestKey,transferred,doneTask,doneKey] of [
    ['r/a',undefined,'a','a','r/a'],['a','r/a','r/a','r/a',undefined],['a',undefined,'a','a',undefined],
@@ -243,7 +243,7 @@ test('일반 답장의 실행 교차와 done 없는 위조 완료는 질문을 �
 });
 
 test('완료 원장 검증도 실제 이전한 실행과 사건 당시 인계만 인정한다',()=>{
- const {home,record}=fixture('jsonl');
+ const {home,record}=fixture('sqlite');
  record({kind:'send',role:'old',by:'lead',mailId:'dispatch',taskId:'r/a',expectReply:true});
  record({...transfer('old','next'),taskIds:['r/a']});
  record({kind:'done',role:'next',taskId:'a',executionKey:'r/a',result:'ok'});

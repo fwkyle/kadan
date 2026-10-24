@@ -1,6 +1,6 @@
 import {CardStore} from './card-store.mjs';
 import {taskIdentity} from './task-identity.mjs';
-import {storageMode,storagePath,assertWritable} from './storage.mjs';
+import {storagePath,assertWritable} from './storage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -103,7 +103,7 @@ export class Handover {
       this.save(state);
       const packet = path.join(this.dir, `${id}.md`);
       fs.writeFileSync(packet, `# 인수 확인 ${id}\n\n선임: ${from}\n후임: ${to}\n작업공간: ${directory}\n` +
-        `원장: ${storageMode(this.home)==='sqlite'?storagePath(this.home):path.join(this.home, 'ledger.jsonl')}\n현재 승인/기준: ${context}\n` +
+        `원장: ${storagePath(this.home)}\n현재 승인/기준: ${context}\n` +
         `인계할 미완료 카드: ${JSON.stringify(state.taskIds)}\n관계표: ${hierarchy}\n\n` +
         '카드·결과·원장을 읽고 다음 행동을 확인하라. 이 문서는 새 구현/배포 승인이 아니다.\n' +
         '독립적으로 확인한 근거 파일 경로와 다음 행동을 JSON에 적어라: {"taskIds":[],"evidencePaths":[],"nextAction":"..."}.\n' +

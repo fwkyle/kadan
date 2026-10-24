@@ -1,4 +1,3 @@
-import {acquireDirLock} from './dir-lock.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams,prepareOutsideLock} from './storage.mjs';
 import fs from 'node:fs';
@@ -41,12 +40,12 @@ export class CardStore {
       ...(latest.artifactLayout==='card-v1'?{resultPath:path.resolve(dir,'result.md'),evidenceDir:path.resolve(dir,'evidence')}: {})};
   }
   list() {
-    if(storageMode(this.home)==='sqlite')return transaction(this.home,()=>listStreams(this.home,'cards/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13))),{readOnly:true});
-    return this.listWithoutBody().map(card=>({...card,body:fs.readFileSync(card.path,'utf8')}));
+    if(storageMode(this.home)==='none')return [];
+    return transaction(this.home,()=>listStreams(this.home,'cards/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13))),{readOnly:true});
   }
   // 목록/주소 확인에는 본문이 필요 없다. SQLite는 이력의 주소·순번을 SQL로 검증한다.
   listSummaries() {
-    if(storageMode(this.home)!=='sqlite')return this.listWithoutBody().map(({history,...card})=>card);
+    if(storageMode(this.home)==='none')return [];
     return transaction(this.home,db=>db.prepare(`
       SELECT h.stream,h.seq,h.payload,COUNT(e.seq) AS count,MAX(e.seq) AS lastSeq,
         MAX(CASE WHEN e.seq=h.seq THEN e.payload END) AS lastPayload,
@@ -66,10 +65,7 @@ export class CardStore {
   // 이력은 SQL 한 번으로 묶어 읽는다(카드마다 읽으면 열린 카드 수만큼 문장이 는다). 닫힌 카드는 history가 없다.
   // 요약과 이력은 읽기 트랜잭션 하나에서 읽는다(옛 list()가 지키던 한 스냅샷). 중첩 transaction은 같은 db를 재사용한다.
   listWatch() {
-    if(storageMode(this.home)!=='sqlite'){
-      const cards=this.listSummaries();
-      return cards.map(c=>HISTORY_STATUSES.has(c.status)?this.get(c.key,{body:false}):c);
-    }
+    if(storageMode(this.home)==='none')return [];
     return transaction(this.home,()=>this.#listWatchSnapshot(),{readOnly:true});
   }
   #listWatchSnapshot() {
@@ -92,18 +88,9 @@ export class CardStore {
       return history?.length===c.revision&&history.at(-1).revision===c.revision?{...c,history}:this.get(c.key,{body:false});
     });
   }
-  listWithoutBody() {
-    if(!fs.existsSync(this.root))return [];
-    return fs.readdirSync(this.root,{withFileTypes:true}).filter(x=>x.isDirectory()&&!x.name.startsWith('.')).flatMap(repo=>
-      fs.readdirSync(path.join(this.root,repo.name),{withFileTypes:true}).filter(x=>x.isDirectory()).map(card=>this.get(`${repo.name}/${card.name}`,{body:false})));
-  }
   locked(fn) {
     assertWritable(this.home);
-    if(storageMode(this.home)==='sqlite')return transaction(this.home,fn);
-    fs.mkdirSync(this.root,{recursive:true,mode:0o700});
-    const lock=path.join(this.root,'.lock');
-    if(!acquireDirLock(lock))throw new Error('카드 저장 중: 잠시 뒤 상태를 다시 확인');
-    try{return fn()}finally{fs.renameSync(lock,path.join(this.root,`.released-${randomUUID()}`))}
+    return transaction(this.home,fn);
   }
   create({repo,id,repoPath,sourcePath,title,body,workType='execution',by='사람'}) {
     return this.locked(()=>{
@@ -119,9 +106,8 @@ export class CardStore {
       fs.mkdirSync(path.join(dir,'evidence'),{mode:0o700});
       const entry={key,repo,id,repoPath,sourcePath:sourcePath??null,title:title||text.match(/^#\s+(.+)$/m)?.[1]||id,
         status:'draft',workType,artifactLayout:'card-v1',scope:'',board:null,role:null,revision:1,by,at:new Date().toISOString(),note:'중앙 등록',noteKind:'decision'};
-      if(storageMode(this.home)==='jsonl')fs.writeFileSync(path.join(dir,'events.jsonl'),JSON.stringify(entry)+'\n',{flag:'wx',mode:0o600});
       fs.mkdirSync(path.dirname(target),{recursive:true});fs.renameSync(dir,target);
-      if(storageMode(this.home)==='sqlite')appendStream(this.home,`cards/${key}/events.jsonl`,entry);
+      appendStream(this.home,`cards/${key}/events.jsonl`,entry);
       return this.get(key);
     });
   }

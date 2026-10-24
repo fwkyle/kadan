@@ -25,7 +25,7 @@ const done=(taskId='c',result='ok',extra={})=>({...send(taskId),kind:'done',resu
 const start={kind:'start',role:'p-worker',session:'kadan-p-worker',panePid:11,t:t(0)};
 const alive={'kadan-p-worker':{alive:true,pid:11}};
 const center=(cards,entries)=>buildCardCenter({cards,entries,tree:buildTree([start,...entries],alive,cards)});
-function fixture(mode='jsonl'){
+function fixture(mode='sqlite'){
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-task-identity-'));
  if(mode==='sqlite'){createDatabase(home);writeStorageMarker(home,'sqlite');}
  const store=new CardStore(home),c=store.create({repo:'r',id:'c',repoPath:home,body:'# local'});
@@ -59,7 +59,7 @@ test('동명 full key는 구분, bare는 모호함, 틀린 repo는 연결 실패
  assert(valid.cards.every(c=>!c.ambiguous));
 });
 
-for(const mode of ['jsonl','sqlite'])test(`${mode}: 원문 보존, 충돌 done이 뒤 정상 done의 최초 완료를 소모하지 않는다`,()=>{
+for(const mode of ['sqlite'])test(`${mode}: 원문 보존, 충돌 done이 뒤 정상 done의 최초 완료를 소모하지 않는다`,()=>{
  const f=fixture(mode),rows=[send(),done('wrong','failed',{executionKey:'r/c'}),done('c','ok',{executionKey:'r/c'}),done('r/c','failed')];
  for(const row of rows)appendLedger(row,f.home);
  const snapshot=()=>['tasks/events.jsonl','mail/events.jsonl','system/events.jsonl','ledger.jsonl'].map(stream=>readStream(f.home,stream,{optional:true}));

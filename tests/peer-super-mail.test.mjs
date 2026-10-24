@@ -61,7 +61,7 @@ test(`실제 ${command} CLI: 슈퍼끼리는 소켓 접속 없이 저장하고 �
 
 }
 
-for (const backend of ['jsonl', 'sqlite']) {
+for (const backend of ['sqlite']) {
   test(`${backend}: 기본 mail은 읽음·수신 업무 완료 뒤에도 회신 대기나 누락 경보를 만들지 않는다`, () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-peer-policy-'));
     if (backend === 'sqlite') {
