@@ -15,8 +15,7 @@ import {
   watchRouteNameWarnings,
 } from "../watch-profile.mjs";
 import { DecisionStore } from "../decisions.mjs";
-import { CardStore } from "../card-store.mjs";
-import { WorkStore } from "../work-store.mjs";
+import { createWatchStoreReaders } from "../watch-store-cache.mjs";
 import { parseHierarchy } from "../hierarchy.mjs";
 import { pruneHierarchy } from "../hierarchy-prune.mjs";
 import { watchNightExpiry } from "../night.mjs";
@@ -219,8 +218,9 @@ export function cmdWatch(argv, flags) {
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
-  const reads=cycleReads({readEntries:()=>readLedgerIncremental(ledgerHome()),readCards:()=>new CardStore(ledgerHome()).listWatch(),
-    readWorks:()=>new WorkStore(ledgerHome()).listWatch(),version:()=>storageVersion(ledgerHome())});
+  const stores = createWatchStoreReaders(ledgerHome());
+  const reads=cycleReads({readEntries:()=>readLedgerIncremental(ledgerHome()),readCards:stores.cards.read,
+    readWorks:stores.works.read,version:()=>storageVersion(ledgerHome())});
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
   const holdTracker=new NotifyHoldTracker({record});
   const processName=watchProcessName(ledgerHome());
