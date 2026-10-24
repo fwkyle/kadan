@@ -291,3 +291,44 @@ import {CardStore} from '../src/card-store.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 function awaitImport() { return {CardStore}; }
 function appendEntry(h, entry) { appendLedger(entry, h); }
+
+// 1단계 확대: 역할 이름이 정확히 kadan-슈퍼감독일 때만 super 프로필도 요약이다(우편 수신자 역할 이름, 세션 이름 아님).
+const SUPER_ROLE = 'kadan-슈퍼감독';
+function superSetup(role = SUPER_ROLE) {
+  const h = home(), f = {digest: composeRoleInstructions({home: h, role, profile: 'super', entries: [start(role)], slim: true, now: NOW}).metadata.templateDigest};
+  const entries = [start(role), {...fullSend(role, f), instructions: {mode: 'full', reason: 'x', profile: 'super', templateDigest: f.digest, generation: 0}}];
+  return {h, f, entries};
+}
+
+test('12 kadan-슈퍼감독: 1시간 안 일반 우편 → summary(super-summary 내용·super.md 경로)', () => {
+  const s = superSetup(), r = compose(SUPER_ROLE, {home: s.h, entries: s.entries, profile: 'super'});
+  assert.deepEqual(meta(r), ['summary', 'within-interval']);
+  assert.match(r.instructions, /common\.md · super\.md/);
+  assert.match(r.instructions, /role-templates\/super\.md/);
+  assert.doesNotMatch(r.instructions, /herdr 화면 확인/);
+});
+
+test('13 kadan-슈퍼감독: 첫 우편·전달 불명확·1시간 경과·템플릿 변경 → full', () => {
+  const s = superSetup();
+  assert.deepEqual(meta(compose(SUPER_ROLE, {entries: [start(SUPER_ROLE)], profile: 'super'})), ['full', 'generation-first']);
+  const unclear = [start(SUPER_ROLE), {...s.entries[1], keyDelivery: 'unknown'}];
+  assert.deepEqual(meta(compose(SUPER_ROLE, {home: s.h, entries: unclear, profile: 'super'})), ['full', 'delivery-unclear']);
+  const old = [start(SUPER_ROLE), {...s.entries[1], t: iso(NOW - FULL_INTERVAL_MS - 1000)}];
+  assert.deepEqual(meta(compose(SUPER_ROLE, {home: s.h, entries: old, profile: 'super'})), ['full', 'interval']);
+  const custom = path.join(s.h, 'super.md');
+  fs.writeFileSync(custom, '# 격리 super 지침 v2');
+  fs.writeFileSync(path.join(s.h, 'role-instructions.json'), JSON.stringify({version: 1, templates: {super: custom}}));
+  assert.deepEqual(meta(compose(SUPER_ROLE, {home: s.h, entries: s.entries, profile: 'super'})), ['full', 'template-changed']);
+});
+
+test('14 세션 이름(kadan-kadan-슈퍼감독)·다른 super 역할은 요약이 아니다', () => {
+  for (const role of ['kadan-kadan-슈퍼감독', 'rottie-슈퍼감독']) {
+    const s = superSetup(role), r = compose(role, {home: s.h, entries: s.entries, profile: 'super'});
+    assert.deepEqual(meta(r), ['full', 'profile-not-in-trial']);
+  }
+});
+
+test('15 요약 파일은 템플릿 지문에 들어가지 않는다(알려진 성질)', () => {
+  const h = home(), a = composeRoleInstructions({home: h, role: SUPER_ROLE, profile: 'super', entries: [start(SUPER_ROLE)], slim: true, now: NOW}).metadata;
+  assert.deepEqual(a.templates.map(t => t.name), ['common', 'super']);
+});

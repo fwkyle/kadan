@@ -7,7 +7,7 @@ import path from 'node:path';
 import net from 'node:net';
 import {spawn, spawnSync} from 'node:child_process';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
-import {acquireReviveLock, readReviveState, STALE_LOCK_MS} from '../src/revive.mjs';
+import {acquireReviveLock, readReviveState} from '../src/revive.mjs';
 
 // PR #167 2라운드 검수가 격리 환경에서 재현한 세 건을 같은 모양으로 고정한다. 격리 tmux 소켓·격리 KADAN_HOME·가짜 디코 API.
 // 맥 알림은 KADAN_TEST_NOTIFY_SINK 파일에 적는다(osascript는 실행되지 않는다).
@@ -98,22 +98,17 @@ test('F2 끄는 도중 자동 실행이 겹쳐도 stop이 끝난 뒤 세션은 �
   } finally { await w.close(); }
 });
 
-test('F3 pid 없는 오래된 잠금은 자동 실행이 되찾아 로그 한 줄을 남기고, 막 만든 잠금은 그대로 둔다', async (t) => {
+test('F3 옛 방식 revive.lock 폴더가 남아 있어도 자동 실행은 평소대로 되살리고, 옛 폴더는 그대로 둔다', async (t) => {
   const w = await world(t); if (!w) return;
   try {
-    const lock = path.join(w.home, 'revive.lock');
-    fs.mkdirSync(lock);
-    const skipped = w.up('--auto');
-    assert.equal(skipped.status, 0);
-    assert.equal(skipped.stdout.trim(), '', '막 만든 잠금은 주인이 있을 수 있어 이번 회차만 건너뛴다');
-    assert.deepEqual(w.sessions(), []);
-    const old = new Date(Date.now() - STALE_LOCK_MS - 60_000);
-    fs.utimesSync(lock, old, old);
+    const legacy = path.join(w.home, 'revive.lock');
+    fs.mkdirSync(legacy);
     const run = w.up('--auto');
     assert.equal(run.status, 0, run.stdout + run.stderr);
-    assert.match(run.stdout, /낡은 revive\.lock을 되찾음: pid 파일이 없거나 깨진 채/);
-    assert.ok(w.sessions().includes('kadan-비서'), '되찾은 뒤 평소대로 되살린다');
-    assert.equal(fs.existsSync(lock), false, '일이 끝나면 잠금을 풀었다');
+    assert.equal(run.stdout.includes('옛 방식 잠금'), false, '1분마다 도는 자동 실행은 옛 폴더 안내로 로그를 채우지 않는다');
+    assert.ok(w.sessions().includes('kadan-비서'), '옛 폴더를 무시하고 평소대로 되살린다');
+    assert.equal(fs.existsSync(legacy), true, '옛 폴더는 지우지 않는다');
+    assert.equal(fs.existsSync(path.join(w.home, 'revive.lock2')), false, '일이 끝나면 잠금을 풀었다');
   } finally { await w.close(); }
 });
 

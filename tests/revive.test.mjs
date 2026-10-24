@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   TARGETS, REVIVE_CAP, REVIVE_WINDOW_MS, readReviveState, markStopped, clearForUp, acquireReviveLock,
-  prepareRevive, finishRevive, changedOutput, scrubScreen, unmarkStopped, recoverCorruptState, STALE_LOCK_MS,
+  prepareRevive, finishRevive, changedOutput, scrubScreen, unmarkStopped, recoverCorruptState,
 } from '../src/revive.mjs';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {createChat, runWatch, CONNECT_OUTAGE_MS} from '../src/discord-chat.mjs';
@@ -189,8 +189,7 @@ test('동시 실행 잠금: 잡혀 있으면 자동은 건너뛰고(null), 해�
   assert.equal(typeof again, 'function');
   again();
   // 주인이 없는 잠금(프로세스 죽음)
-  fs.mkdirSync(path.join(home, 'revive.lock'));
-  fs.writeFileSync(path.join(home, 'revive.lock', 'pid'), '999999');
+  fs.symlinkSync(JSON.stringify({pid: 999999, startedAt: 1}), path.join(home, 'revive.lock2'));
   assert.equal(typeof acquireReviveLock(home), 'function');
 });
 
@@ -322,32 +321,21 @@ test('F1: 세션에 죽은 창과 살아 있는 창이 섞여 있으면(또는 �
   assert.deepEqual(calls.killed, []);
 });
 
-test('F3: 잠금 회수 — 주인이 죽었거나(좀비 포함) pid 없는 오래된 잠금은 되찾고, 막 만든 잠금·산 주인은 둔다', () => {
-  const lockOf = home => path.join(home, 'revive.lock');
+test('F3: 잠금 회수 — 주인이 죽었거나(좀비 포함) 주인 정보가 깨진 잠금은 되찾고, 산 주인은 둔다', () => {
   const reasons = [];
-  const make = (home, pid, ageMs) => {
-    fs.mkdirSync(lockOf(home));
-    if (pid !== null) fs.writeFileSync(path.join(lockOf(home), 'pid'), String(pid));
-    const when = new Date(Date.now() - ageMs);
-    fs.utimesSync(lockOf(home), when, when);
-  };
-  // pid 없는 오래된 잠금 → 회수
-  let home = tmp('f3a'); make(home, null, STALE_LOCK_MS + 60_000);
+  const make = (home, target) => fs.symlinkSync(target, path.join(home, 'revive.lock2'));
+  const owner = pid => JSON.stringify({pid, startedAt: 1});
+  // 주인 정보가 깨진 잠금 → 회수
+  let home = tmp('f3a'); make(home, 'abc');
   assert.equal(typeof acquireReviveLock(home, {onReclaim: r => reasons.push(r)}), 'function');
-  // pid 파일이 깨진 오래된 잠금 → 회수
-  home = tmp('f3b'); make(home, 'abc', STALE_LOCK_MS + 60_000);
-  assert.equal(typeof acquireReviveLock(home, {onReclaim: r => reasons.push(r)}), 'function');
-  // 막 만든 잠금(pid 아직 없음) → 유지
-  home = tmp('f3c'); make(home, null, 1000);
-  assert.equal(acquireReviveLock(home, {onReclaim: r => reasons.push(r)}), null);
-  // 산 주인 → 유지
-  home = tmp('f3d'); make(home, 4242, 10 * STALE_LOCK_MS);
+  // 산 주인 → 유지(오래돼도)
+  home = tmp('f3d'); make(home, owner(4242));
   assert.equal(acquireReviveLock(home, {isAlive: pid => pid === 4242, onReclaim: r => reasons.push(r)}), null);
   // 죽은(좀비로 보이는) 주인 → 회수
-  home = tmp('f3e'); make(home, 4243, 1000);
+  home = tmp('f3e'); make(home, owner(4243));
   assert.equal(typeof acquireReviveLock(home, {isAlive: () => false, onReclaim: r => reasons.push(r)}), 'function');
-  assert.equal(reasons.length, 3);
-  assert.match(reasons[2], /죽었다/);
+  assert.equal(reasons.length, 2);
+  assert.match(reasons[1], /죽었다/);
 });
 
 test('F4: 상태 파일이 깨졌으면 --auto는 모두 건너뛰고 울림 1번(같은 파일이면 다시 안 울림), 파일은 그대로 둔다. 사람이 친 up은 .trash로 옮기고 새로 시작', () => {

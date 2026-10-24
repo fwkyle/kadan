@@ -89,67 +89,77 @@ export function clearForUp(home) {
   return true;
 }
 
-// 동시 실행 잠금: 폴더 + pid. 1분마다 도는 일이라 멈춘 잠금이 영원히 남으면 안 되므로 주인이 없는 잠금은 되찾는다.
-//   - pid 주인이 죽었다(좀비 포함)
-//   - pid 파일이 없거나 깨졌는데 잠금이 STALE_LOCK_MS보다 오래됐다
-// 막 만든 잠금(pid 쓰기 직전)과 살아 있는 주인의 잠금은 그대로 둔다. 되찾으면 onReclaim(이유)을 부른다.
+// 동시 실행 잠금: symlink 하나. 링크의 대상 문자열에 주인({pid, startedAt})을 담아 만들기와 주인 기록을 한 번에 한다.
+// 만들면 곧 주인이 적혀 있으므로 '주인 없는 잠금'이라는 중간 상태가 없다. 이미 있으면 EEXIST, 주인은 readlink 한 번으로 읽는다.
+// 1분마다 도는 일이라 멈춘 잠금이 영원히 남으면 안 되므로 주인(pid)이 죽은 잠금은 되찾는다. 되찾으면 onReclaim(이유)을 부른다.
+// 옛 방식(revive.lock 폴더)은 무시하고 지우지 않는다. 있으면 onLegacy(경로)로 알리기만 한다.
 // 사람이 친 명령이 잠금을 기다리는 시간(시험이 줄일 수 있다).
 export const lockWaitMs = (fallback = 15000) => {
   const v = Number(process.env.KADAN_REVIVE_LOCK_WAIT_MS);
   return Number.isFinite(v) && v >= 0 && process.env.KADAN_REVIVE_LOCK_WAIT_MS !== undefined ? v : fallback;
 };
-export const reclaimLog = (reason) => console.log(`[${new Date().toISOString()}] 낡은 revive.lock을 되찾음: ${reason}`);
-export const STALE_LOCK_MS = 2 * 60 * 1000;
+export const reclaimLog = (reason) => console.log(`[${new Date().toISOString()}] 낡은 revive 잠금을 되찾음: ${reason}`);
+export const legacyLog = (file) => console.log(`[${new Date().toISOString()}] 옛 방식 잠금 ${file}이 남아 있다(무시한다, 지워도 된다)`);
+export const REVIVE_LOCK_NAME = 'revive.lock2';
+const RETRY_MAX = 3, RETRY_SLEEP_MS = 25;
 export function acquireReviveLock(home, { waitMs = 0, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
-  isAlive = pidAlive, now = Date.now, onReclaim = () => {} } = {}) {
-  const lock = path.join(home, 'revive.lock'), pidFile = path.join(lock, 'pid');
+  isAlive = pidAlive, onReclaim = () => {}, onLegacy = () => {} } = {}) {
+  const lock = path.join(home, REVIVE_LOCK_NAME);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const legacy = path.join(home, 'revive.lock');
+  if (fs.existsSync(legacy)) onLegacy(legacy);
   const deadline = Date.now() + waitMs;
+  // 링크가 그 사이 사라졌거나 되찾기에서 졌을 때 처음부터 다시 도는 길은 모두 여기를 지난다. 첫 재시도는 waitMs=0이어도
+  // 한 번 허용하고, 그 뒤로는 마감과 최대 횟수를 지키며 짧게 쉰다. false면 호출한 쪽이 null을 돌려준다.
+  let retries = 0;
+  const retry = () => {
+    retries += 1;
+    if (retries > RETRY_MAX || (retries > 1 && Date.now() >= deadline)) return false;
+    sleep(RETRY_SLEEP_MS);
+    return true;
+  };
+  const owner = JSON.stringify({ pid: process.pid, startedAt: Date.now() });
   for (;;) {
     try {
-      fs.mkdirSync(lock); fs.writeFileSync(pidFile, String(process.pid));
-      // 해제는 pid 파일이 자기 pid일 때만 한다 — 되찾기로 치워진 뒤 다른 프로세스가 새로 잡은 잠금을 지우지 않는다.
+      fs.symlinkSync(owner, lock);
+      // 해제는 링크의 주인이 우리({pid, startedAt} 전체)일 때만 한다 — 되찾기로 치워진 뒤 다른 프로세스가 새로 잡은 잠금과
+      // pid가 재사용된 잠금을 지우지 않는다.
       return () => {
-        try {
-          if (Number(fs.readFileSync(pidFile, 'utf8')) !== process.pid) return;
-          fs.rmSync(pidFile, { force: true }); fs.rmdirSync(lock);
-        } catch { /* 이미 없음 */ }
+        try { if (fs.readlinkSync(lock) === owner) fs.unlinkSync(lock); } catch { /* 이미 없음 */ }
       };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      let pid = NaN;
-      try { pid = Number(fs.readFileSync(pidFile, 'utf8')); } catch { /* pid가 아직 없음 */ }
-      let reason = null;
-      if (Number.isInteger(pid) && pid > 0) { if (!isAlive(pid)) reason = `주인(pid ${pid})이 죽었다`; }
-      else {
-        let age = 0;
-        try { age = now() - fs.statSync(lock).mtimeMs; } catch { continue; }
-        if (age > STALE_LOCK_MS) reason = `pid 파일이 없거나 깨진 채 ${Math.round(age / 1000)}초 지났다`;
-      }
-      if (reason) {
-        // 되찾기는 rename 하나로 한다: 두 프로세스가 같이 시도해도 한 쪽만 이기고, 진 쪽은 ENOENT를 받아 mkdir부터 다시 한다.
-        // (지우기로 하면 늦은 쪽이 이긴 쪽이 막 만든 새 잠금을 지운다.) 옮긴 폴더는 우리 잠금 내부 폴더라 그 뒤에 지운다.
-        const stale = `${lock}.stale-${process.pid}-${Date.now()}`;
-        const readPid = file => { try { return Number(fs.readFileSync(file, 'utf8')); } catch { return NaN; } };
-        // 옮기기 직전에 다시 읽는다: 그 사이 다른 쪽이 이미 되찾아 새로 잡았다면(주인이 달라졌다) 건드리지 않는다.
-        if (readPid(pidFile) !== pid && !(Number.isNaN(pid) && Number.isNaN(readPid(pidFile)))) continue;
-        let moved = false;
-        try { fs.renameSync(lock, stale); moved = true; } catch { /* 다른 쪽이 먼저 치웠다 */ }
-        if (moved) {
-          // 옮긴 폴더가 우리가 낡았다고 본 그 잠금인지 확인한다. 다시 읽은 뒤 옮기기 전에 다른 쪽이 새 잠금을 만들었다면
-          // (pid가 다르거나, pid 파일을 쓰기 전이라 막 만든 폴더) 지우지 않고 제자리로 돌려놓는다.
-          const owner = readPid(path.join(stale, 'pid'));
-          let same;
-          if (Number.isInteger(pid) && pid > 0) same = owner === pid;
-          else { let age = 0; try { age = now() - fs.statSync(stale).mtimeMs; } catch { /* 없음 */ } same = !(owner > 0) && age > STALE_LOCK_MS; }
-          if (same) { fs.rmSync(stale, { recursive: true, force: true }); onReclaim(reason); }
-          else { try { fs.renameSync(stale, lock); } catch { /* 이미 다른 잠금이 있다 */ } }
-        }
-        continue;
-      }
+    }
+    let seen;
+    try { seen = fs.readlinkSync(lock); }
+    catch (error) {
+      if (error.code === 'ENOENT') { if (retry()) continue; return null; } // 읽기 전에 풀렸다
+      if (error.code === 'EINVAL') return null; // 링크가 아닌 것이 자리를 차지했다. 건드리지 않는다.
+      throw error;
+    }
+    let pid = NaN;
+    try { pid = Number(JSON.parse(seen).pid); } catch { /* 깨진 주인 정보 */ }
+    const known = Number.isInteger(pid) && pid > 0;
+    if (known && isAlive(pid)) {
       if (Date.now() >= deadline) return null;
       sleep(200);
+      continue;
     }
+    // 되찾기는 rename 하나로 한다: 두 프로세스가 같이 시도해도 한 쪽만 이기고, 진 쪽은 ENOENT를 받아 다시 시도한다.
+    const stale = `${lock}.stale-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    try { fs.renameSync(lock, stale); } catch { if (retry()) continue; return null; }
+    let moved = null;
+    try { moved = fs.readlinkSync(stale); } catch { /* 읽지 못함 */ }
+    if (moved === seen) {
+      try { fs.unlinkSync(stale); } catch { /* 이미 없음 */ }
+      onReclaim(known ? `주인(pid ${pid})이 죽었다` : '주인 정보가 깨졌다');
+      continue;
+    }
+    // 우리가 본 죽은 주인이 아니라, 그 사이 생긴 새 주인의 링크를 옮겨 버렸다. 같은 대상 문자열로 링크를 다시 만들어
+    // (원자적이다) 새 주인에게 돌려준다. 그 사이 다른 쪽이 먼저 잡았으면 EEXIST라 그대로 두고 다시 시도한다.
+    if (moved !== null) { try { fs.symlinkSync(moved, lock); fs.unlinkSync(stale); } catch { /* 이미 다른 잠금이 있다 */ } }
+    if (retry()) continue;
+    return null;
   }
 }
 
