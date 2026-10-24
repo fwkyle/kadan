@@ -58,11 +58,17 @@ test('본문 원문은 보관하지 않고 변경 파일·제목·revision의 �
   assert.notEqual(second[0].bodySummary.sourceHash, old.bodySummary.sourceHash);
   assert.notEqual(second[0].bodySummary.contentHash, old.bodySummary.contentHash);
   assert.deepEqual(second.map(hydrateCardBody), f.cards.list());
+  appendStream(f.home, `cards/${old.key}/events.jsonl`,
+    {...second[0].history.at(-1), revision:old.revision + 2, note:'기록만 추가'});
+  const third = reader.read();
+  assert.notEqual(third[0].bodySummary.sourceHash, second[0].bodySummary.sourceHash);
+  assert.equal(third[0].bodySummary.contentHash, second[0].bodySummary.contentHash);
+  assert.deepEqual(third.map(hydrateCardBody), f.cards.list());
   const stat = fs.statSync(old.path);
   fs.writeFileSync(old.path, '# 본문 변경\n## Why\n새 목적');fs.utimesSync(old.path, stat.atime, stat.mtime);
   assert.throws(() => hydrateCardBody(old), {code:'KADAN_BODY_CHANGED'});
   assert.deepEqual(reader.read().map(hydrateCardBody), f.cards.list());
-  assert.equal(reader.info().bodies - stats.bodies, 2);
+  assert.equal(reader.info().bodies - stats.bodies, 3);
   assert.equal(first[0].revision, old.revision, '이전 수집 결과는 바꾸지 않는다');
 });
 

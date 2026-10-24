@@ -70,8 +70,9 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false} =
       if (!body || body.signature !== signature || summaryBodies &&
           (body.revision !== latest.revision || body.title !== latest.title)) {
         const text = fs.readFileSync(file, 'utf8');
+        const previous = body?.signature === signature ? body : undefined;
         body = {signature, revision:latest.revision, title:latest.title,
-          ...(summaryBodies ? {summary:summarizeCardBody(latest, text)} : {text})};
+          ...(summaryBodies ? {summary:summarizeCardBody(latest, text, previous)} : {text})};
         stats.bodies++;
       }
       nextBodies.set(file, body);
