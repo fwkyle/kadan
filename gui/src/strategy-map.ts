@@ -14,6 +14,8 @@ export type Crates = { running: number; stuck: number; stale: number; planned: n
 export type Unit = {
   role: string; kind: UnitKind; parent: string | null; state: UnitState; alive: boolean | null;
   model: string | null; crates: Crates; alerts: number; rows: Row[];
+  // 열린 창의 시작 기록(실행 도구·모델·PID 대조·세대). 창이 없거나 세션 상태를 모르면 null.
+  session: LiveSession | null;
 };
 export type Base = { id: string; label: string; super: string | null; units: Unit[] };
 export type MapModel = {
@@ -101,7 +103,7 @@ export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel 
       : alive ? "idle" : "off";
     return {
       role, kind, parent: parent && parent !== USER ? parent : null, state, alive,
-      model: liveByRole.get(role)?.model ?? null, crates, alerts: alertsByRole.get(role) ?? 0,
+      model: liveByRole.get(role)?.model ?? null, session: liveByRole.get(role) ?? null, crates, alerts: alertsByRole.get(role) ?? 0,
       rows: own.filter((r) => r.bucket === "running" || r.bucket === "stuck" || r.bucket === "stale"),
     };
   };
@@ -156,6 +158,17 @@ export function shortName(role: string, base: string | null) {
 }
 
 // 쉬는 역할(창도 진행 카드도 없이 진행 전·일시정지 카드만 든 작업자)을 뺀 유닛. 슈퍼감독·감독은 기지의 뼈대라 늘 남긴다.
+// 옆 칸의 생존 줄. 옛 '담당자 상태' 표(2026-10-25 전략 맵으로 옮김)와 같은 낱말을 쓴다.
+export function lifeLabel(unit: Unit) {
+  if (unit.alive === null) return "모름";
+  if (!unit.alive) return "닫힘";
+  return unit.session?.pidState === "match" ? "열려 있음" : "PID 변경 · 확인 필요";
+}
+// 다시 띄우기에 보낼 세대(최근 start의 pane PID). 창이 열려 있고 세대가 기록된 역할만, 원격 읽기 전용이면 없음.
+export function restartGeneration(unit: Unit, readOnly: boolean) {
+  return readOnly || !unit.alive ? null : unit.session?.recordedPid ?? null;
+}
+
 export function visibleUnits(units: Unit[], showResting: boolean) {
   return showResting ? units : units.filter((u) => u.kind !== "worker" || u.state !== "off");
 }

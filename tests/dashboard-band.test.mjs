@@ -6,7 +6,7 @@ test("살아 있는 담당: 창이 열린 역할만, 시작 기록의 모델·�
   const center = {
     runtimeKnown: true,
     roles: [
-      { role: "p-작업자", life: { state: "alive", pidState: "match" } },
+      { role: "p-작업자", life: { state: "alive", pidState: "match", recordedPid: "41" } },
       { role: "p-검수자", life: { state: "dead" } },
       { role: "p-감독", life: { state: "alive", pidState: "changed" } },
     ],
@@ -16,8 +16,8 @@ test("살아 있는 담당: 창이 열린 역할만, 시작 기록의 모델·�
     },
   };
   assert.deepEqual(liveSessions(center), [
-    { role: "p-감독", harness: null, model: null, effort: null, pidState: "changed" },
-    { role: "p-작업자", harness: "claude", model: "sonnet", effort: "high", pidState: "match" },
+    { role: "p-감독", harness: null, model: null, effort: null, pidState: "changed", recordedPid: null },
+    { role: "p-작업자", harness: "claude", model: "sonnet", effort: "high", pidState: "match", recordedPid: "41" },
   ]);
   assert.equal(liveSessions({ ...center, runtimeKnown: false }), null, "세션 상태를 모르면 null");
   assert.equal(liveSessions(null), null);
@@ -59,4 +59,43 @@ test("열린 경보: 같은 id의 마지막 기록이 해소가 아니면 센다
   assert.deepEqual([openAlerts(many).count, openAlerts(many).items.length, openAlerts(many, { limit: Infinity }).items.length, openAlerts(many, { limit: 3 }).items.length], [25, 20, 25, 3]);
   assert.equal(openAlerts(null), null);
   assert.deepEqual(openAlerts([]), { count: 0, items: [] });
+});
+
+// 담당자 상태 표(sessions)를 전략 맵 옆 칸(status.live)으로 옮겼다(2026-10-25). 두 자료는 모델을 다른 곳에서 읽는다 —
+// sessions는 마지막 start 줄, live는 모델이 적힌 가장 최근 start 줄. 옮긴 뒤 '모름'이 늘지 않는지 같은 원장으로 대조한다.
+test("살아 있는 담당의 실행 도구·모델·세대가 sessions 표와 같다(모델 모름이 늘지 않는다)", async () => {
+  const { buildTree } = await import("../src/cli.mjs");
+  const { buildCardCenter } = await import("../src/card-center.mjs");
+  const { sessionsData } = await import("../src/dashboard/summary.mjs");
+  const t = (n) => new Date(Date.UTC(2026, 9, 25, 0, n)).toISOString();
+  const start = (role, panePid, n, cmd) => ({ kind: "start", role, session: `kadan-${role}`, panePid, t: t(n),
+    ...(cmd ? { cmd, harness: cmd.split(" ")[0], model: cmd.split("--model ")[1] } : {}) });
+  const entries = [
+    start("q-작업자", 11, 0, "claude --model sonnet"),
+    start("q-검수자", 12, 1, "codex --model gpt-x"),
+    start("q-감독", 13, 2, "claude --model opus"),
+    start("q-감독", 23, 5), // 모델 없이 다시 띄움(재사용·옛 start)
+    start("q-닫힘", 14, 3, "claude --model haiku"),
+  ];
+  const alive = {
+    "kadan-q-작업자": { alive: true, pid: 11 },
+    "kadan-q-검수자": { alive: true, pid: 99 },
+    "kadan-q-감독": { alive: true, pid: 23 },
+  };
+  const center = buildCardCenter({ cards: [], entries, tree: buildTree(entries, alive, []) });
+  const live = liveSessions(center), sessions = sessionsData({ center }, new URL("http://x/"), {});
+  const open = sessions.roles.filter((r) => r.life.state === "alive");
+  assert.deepEqual(live.map((s) => s.role), open.map((r) => r.role).sort((a, b) => a.localeCompare(b, "ko")));
+  for (const r of open) {
+    const s = live.find((x) => x.role === r.role);
+    assert.equal(s.recordedPid, r.life.recordedPid, r.role + " 세대");
+    assert.equal(s.pidState, r.life.pidState, r.role + " PID 대조");
+    if (r.model && r.model !== "모름") {
+      assert.equal(s.model, r.model, r.role + " 모델");
+      assert.equal(s.harness, r.harness, r.role + " 실행 도구");
+    }
+  }
+  // 알려진 차이: 마지막 start에 모델이 없으면 sessions는 '모름', live는 그 전 start의 모델을 보인다(전략 맵은 모름이 줄어든다).
+  assert.equal(open.find((r) => r.role === "q-감독").model, "모름");
+  assert.equal(live.find((s) => s.role === "q-감독").model, "opus");
 });

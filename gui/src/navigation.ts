@@ -108,7 +108,7 @@ export function viewOf(url: URL) {
   if (["overview", "boards", ""].includes(hash)) return "status";
   if (hash.startsWith("decision-")) return "decisions";
   if (hash.startsWith("status-")) return "status";
-  // 담당자 상태는 실행 모델 화면 안의 절이 됐다(2026-10-05). 옛 주소는 그 절로 온다.
-  if (hash === "sessions") return "runner-settings";
+  // 담당자 상태는 전략 맵 옆 칸으로 옮겼다(2026-10-25). 옛 주소는 전략 맵으로 오고 alive=1 같은 옛 조건은 버린다.
+  if (hash === "sessions") return "strategy-map";
   return hash;
 }

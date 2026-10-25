@@ -1,8 +1,7 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useState } from "react";
 import { save, useResource } from "../resource";
 import { fallbackLabels } from "../runner-draft";
 import type { Stamp } from "../types";
-import { Sessions } from "./Records";
 import { PresetEditor } from "./PresetEditor";
 import { RunnerTables } from "./RunnerTables";
 import {
@@ -58,23 +57,16 @@ export type RunnersData = Stamp & {
   // 설명 AI는 실행기 표에 한 번 호출(exec) 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 시도한다.
   explain?: { runners: string[]; maxAttempts: number };
 };
-// 담당자 상태(지금 열린 창의 모델)와 실행 모델 설정(다음 발령의 모델)은 같은 질문 "어느 모델인가"의 지금·다음이라
-// 한 화면에 둔다(2026-10-05 점검 보고서 3부). 옛 주소 #sessions는 아래 절로 내려온다.
-export default function Runners({ url }: { url: URL }) {
+// 설정 화면은 설정만 둔다(2026-10-25 [kyle]). 지금 열린 창의 생존·모델·다시 띄우기는 전략 맵 옆 칸에 있다.
+export default function Runners() {
   const { readOnly } = useContext(AppContext),
     resource = useResource<RunnersData>("runners"),
-    data = resource.data,
-    scrolled = useRef("");
-  useEffect(() => {
-    if (url.hash !== "#sessions" || scrolled.current === url.href) return;
-    document.getElementById("sessions")?.scrollIntoView({ block: "start" });
-    scrolled.current = url.href;
-  }, [url.href, url.hash]);
+    data = resource.data;
   return (
     <section>
-      <h1>실행 모델</h1>
-      <p>지금 열린 담당 창이 어떤 모델로 돌고 있는지 보고, 다음 발령에 쓸 AI 도구·모델·강도를 역할별로 설정합니다. 설정 변경은 다음 발령부터 적용되며 열린 창은 그대로입니다.</p>
-      <Sessions url={url} />
+      <h1>실행 모델 설정</h1>
+      <p>다음 발령에 쓸 AI 도구·모델·강도를 역할별로 설정합니다. 설정 변경은 다음 발령부터 적용되며 열린 창은 그대로입니다.
+        지금 열린 창이 살아 있는지·어느 모델인지는 <a href="#strategy-map">전략 맵</a>에서 유닛을 눌러 봅니다.</p>
       {data?.window && (
         <p id="window-setting">
           새 담당 창: <strong>{data.window.label}</strong>

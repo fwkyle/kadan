@@ -412,6 +412,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-ask-error { color: #b3261e; }
 
 /* 담당자 상태의 '다시 띄우기' 칸(2026-10-15). 좁은 폭에서는 세로로 쌓는다. */
+.sm-side .restart-cell { margin: 8px 0 4px; }
 .restart-cell .restart-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .restart-cell .restart-form input { flex: 1; min-width: 140px; }
 .restart-cell small { display: block; margin-top: 4px; overflow-wrap: anywhere; }

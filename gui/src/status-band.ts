@@ -1,7 +1,7 @@
 // 현황 상단 띠: 다섯 질문에 숫자 하나씩 답한다. 화면은 이 결과를 그대로 그린다.
 // (1) 지금 도는가 → 작업중, (2) 막혔는가 → 지금 막힌 것 + 열린 경보, (3) 내 결정이 있는가,
 // (4) 흐름대로 가는가 → 연결 확인이 필요한 묶음, (5) 어느 모델인가 → 살아 있는 담당과 모델.
-export type LiveSession = { role: string; harness: string | null; model: string | null; effort: string | null; pidState: string | null };
+export type LiveSession = { role: string; harness: string | null; model: string | null; effort: string | null; pidState: string | null; recordedPid?: string | null };
 export type FlowSummary = { total: number; unconfirmedCount: number; unconfirmed: { id: string; title: string; label: string; warnings: string[] }[] };
 export type OpenAlerts = { count: number; items: { id: string; kind: string; level: string; role: string; session: string; recipient: string; at: string; holdCount?: number | null; holdCode?: string; holdReason?: string; heldSince?: string; trustState?: string; trustText?: string }[] };
 export type BandInput = {

@@ -1,11 +1,13 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
-import { CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, Spark, time, useSkin } from "../ui";
+import { AppContext, CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, Spark, time, useSkin } from "../ui";
+import { liveLabel } from "../status-band";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
-import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
+import { RestartRole } from "./RestartRole";
+import { buildMap, diffMap, iso, lifeLabel, placeUnits, restartGeneration, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
 
 // 전략 맵(2026-10-05 [kyle]): 현황판과 같은 자료(status)를 슈퍼감독 기지·역할 유닛으로 그린다. 1단계는 SVG 2D 등각.
 // 색은 전부 style.css의 클래스로만 준다 — SVG 속성에 색을 적으면 다크 모드 변환(theme.mjs)을 거치지 않는다.
@@ -137,7 +139,8 @@ function Depot({ rows, close }: { rows: Row[]; close: () => void }) {
   </>;
 }
 
-export default function StrategyMap() {
+export default function StrategyMap({ url }: { url: URL }) {
+  const { readOnly } = useContext(AppContext);
   const resource = useResource<StatusData>("status"), data = resource.data;
   const ship = useSkin() === "space";
   const [selected, setSelected] = useState<string | null>(null);
@@ -179,6 +182,7 @@ export default function StrategyMap() {
     <header className="st-lead"><h1>전략 맵</h1>
       <p>슈퍼감독마다 기지 하나, 역할마다 유닛 하나입니다. 유닛 옆 상자는 그 역할이 든 카드입니다. 유닛을 누르면 옆 칸(좁은 화면에서는 아래)에 그 역할의 카드가 보입니다. 숫자의 기준은 <a href="#status">전체 현황</a>과 같습니다.</p>
       <small>수집 {time(data?.collectedAt)}</small></header>
+    {url.hash === "#sessions" && <p className="muted">담당자 상태는 전략 맵으로 옮겼습니다. 유닛을 누르면 옆 칸에 생존·실행 도구·모델과 다시 띄우기가 있습니다.</p>}
     <ErrorMessage error={resource.error} /><Freshness collectedAt={data?.collectedAt} {...resource} />
     {!data || !map ? <Loading /> : <>
       <p className="sm-totals" role="group" aria-label="지도 요약">
@@ -235,10 +239,12 @@ export default function StrategyMap() {
               <dt>상태</dt><dd><i className={"sm-dot sm-s-" + unit.state} />{STATE_LABEL[unit.state]}</dd>
               <dt>종류</dt><dd>{KIND_LABEL[unit.kind]}</dd>
               <dt>직속 상위</dt><dd>{unit.parent ?? (unit.kind === "super" ? "사용자" : "관계표에 없음")}</dd>
-              <dt>모델</dt><dd>{unit.model ?? (unit.alive === false ? "창 없음" : "모름")}</dd>
+              <dt>생존</dt><dd>{lifeLabel(unit)}</dd>
+              <dt>실행 도구 · 모델</dt><dd>{unit.session ? liveLabel(unit.session) : unit.alive === false ? "창 없음" : "모름"}</dd>
               <dt>경보</dt><dd>{unit.alerts ? `${unit.alerts}건` : "없음"}</dd>
               <dt>최근 1시간</dt><dd className="sm-activity">{data.activity?.[unit.role] ? <><Spark values={data.activity[unit.role]} width={140} height={22} /><small>{data.activity[unit.role].reduce((a, b) => a + b, 0)}건</small></> : "활동 없음"}</dd>
             </dl>
+            <RestartRole key={unit.role} role={unit.role} generation={restartGeneration(unit, readOnly)} />
             <h3>진행 카드 {unit.rows.length}장</h3>
             {unit.rows.length ? <ul className="sm-cards">{unit.rows.map((row) => <li key={row.key}>
               <span className={"sm-dot sm-c-" + row.bucket} /><CardLink row={row} />

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, diffMap, placeUnits, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
+import { buildMap, diffMap, lifeLabel, placeUnits, restartGeneration, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -128,4 +128,26 @@ test("모션: 직전 지도와 비교해 창고→유닛·유닛→유닛 이동
   const stuck = buildMap({ hierarchy, rows: rows.map((r) => (r.key === "r/3" ? row("r/3", "m-검수자", "stuck") : r)), live, alerts: null });
   assert.deepEqual(diffMap(before, stuck).filter((e) => e.kind === "state"), [{ kind: "state", role: "m-검수자", from: "running", to: "stuck" }]);
   assert.equal(diffMap(before, after, 2).length, 2, "한 번에 limit개까지만");
+});
+
+test("옆 칸의 생존·다시 띄우기: 옛 담당자 상태 표와 같은 낱말, 창이 열리고 세대가 있을 때만, 원격 읽기 전용이면 없음", () => {
+  const withPid = [
+    { role: "m-슈퍼감독", harness: "claude", model: "opus", effort: null, pidState: "match", recordedPid: "101" },
+    { role: "m-감독", harness: "claude", model: "sonnet", effort: null, pidState: "changed", recordedPid: "102" },
+    { role: "m-검수자", harness: "codex", model: "gpt", effort: null, pidState: "match", recordedPid: null },
+  ];
+  const map = buildMap({ hierarchy, rows, live: withPid, alerts: null });
+  const unit = (role: string) => map.bases.flatMap((b) => b.units).find((u) => u.role === role)!;
+  assert.equal(unit("m-슈퍼감독").session?.harness, "claude", "실행 도구가 옆 칸까지 온다");
+  assert.equal(lifeLabel(unit("m-슈퍼감독")), "열려 있음");
+  assert.equal(lifeLabel(unit("m-감독")), "PID 변경 · 확인 필요");
+  assert.equal(lifeLabel(unit("m-작업자")), "닫힘");
+  assert.equal(restartGeneration(unit("m-슈퍼감독"), false), "101");
+  assert.equal(restartGeneration(unit("m-감독"), false), "102", "PID가 바뀌어도 옛 표처럼 기록된 세대로 보낸다(서버가 대조)");
+  assert.equal(restartGeneration(unit("m-검수자"), false), null, "세대 기록이 없으면 버튼 없음");
+  assert.equal(restartGeneration(unit("m-작업자"), false), null, "창이 없으면 버튼 없음");
+  assert.equal(restartGeneration(unit("m-슈퍼감독"), true), null, "원격 읽기 전용이면 버튼 없음");
+  const unknown = buildMap({ hierarchy, rows, live: null, alerts: null }).bases.flatMap((b) => b.units)[0];
+  assert.equal(lifeLabel(unknown), "모름");
+  assert.equal(restartGeneration(unknown, false), null, "세션 상태를 모르면 버튼 없음");
 });

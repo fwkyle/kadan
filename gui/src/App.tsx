@@ -45,7 +45,7 @@ const links = [
   ["strategy-map", "전략 맵"],
   ["dashboard", "워크·카드"],
   ["decisions", "내 결정"],
-  ["runner-settings", "실행 모델"],
+  ["runner-settings", "실행 모델 설정"],
   ["mailbox", "우편함"],
   ["ledger", "기록"],
   ["kanban", "칸반"],
@@ -113,7 +113,7 @@ export default function App() {
     view === "status" ? (
       <Status url={url} />
     ) : view === "strategy-map" ? (
-      <StrategyMap />
+      <StrategyMap url={url} />
     ) : view === "dashboard" ? (
       <Workspace url={url} />
     ) : view === "decisions" ? (
@@ -127,7 +127,7 @@ export default function App() {
     ) : view === "kanban" ? (
       <Kanban url={url} />
     ) : view === "runner-settings" ? (
-      <Runners url={url} />
+      <Runners />
     ) : view === "operations-flow" ? (
       <Operations url={url} />
     ) : view === "work-create" || view === "card-create" ? (

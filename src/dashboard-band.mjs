@@ -17,6 +17,8 @@ export function liveSessions(center) {
         model: m.model || null,
         effort: m.effort || null,
         pidState: r.life?.pidState || null,
+        // 전략 맵 옆 칸의 '다시 띄우기' 세대 표시. 서버가 restart 직전 원장의 최근 start PID와 대조한다.
+        recordedPid: r.life?.recordedPid ?? null,
       };
     })
     .sort((a, b) => a.role.localeCompare(b.role, "ko"));
