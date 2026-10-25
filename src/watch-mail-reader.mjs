@@ -8,6 +8,8 @@ import {createWatchLedgerView, readWatchRows} from './watch-ledger-view.mjs';
 import {withLedgerView} from './ledger-view.mjs';
 import {domainProjector} from './ledger-domains.mjs';
 import {openDatabase, storageMode} from './storage.mjs';
+import {DatabaseSync} from 'node:sqlite';
+import {createHash} from 'node:crypto';
 import {applyWatchWorkState} from './watch-work-state.mjs';
 import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
 import {applyWatchRoleState} from './watch-role-state.mjs';
@@ -56,6 +58,23 @@ function createProjectionMemo() {
     return out;
   };
 }
+
+// 역할·발령 상태표(watch_role_*)의 내용 지문. 위치·세대·revision은 빼고 상태 행과 계수만 본다.
+function roleStateDigest(db, meta) {
+  const hash = createHash('sha256');
+  const rows = sql => db.prepare(sql).all();
+  hash.update(JSON.stringify(rows('SELECT key,value,rank,start_position,generation_position,dispatch_ready FROM watch_role_sessions ORDER BY key')));
+  hash.update(JSON.stringify(rows('SELECT session_key,task_key,task_value,position,rank,overlay FROM watch_role_dispatches ORDER BY session_key,task_key')));
+  hash.update(JSON.stringify([meta.stateVersion, meta.sessionCount, meta.dispatchCount, meta.nextRank, meta.legacyRequired]));
+  return hash.digest('hex');
+}
+const roleMetaOf = db => {
+  const saved = db.prepare('SELECT value FROM watch_role_meta WHERE id=1').get();
+  return saved ? JSON.parse(saved.value) : null;
+};
+// 정식 reducer(applyWatchRoleState)를 그대로 쓰되 상태 행만 임시 메모리 DB에 쌓는다. 위치→사건 조회는 실제 조회 영역을 읽는다.
+const scratchStoreOf = (real, db) => ({scope: 'watch', db, key: value => real.key(value), load: position => real.load(position),
+  clear: () => real.clear?.(), prepare: sql => /\bFROM views\b/u.test(sql) ? real.prepare(sql) : db.prepare(sql)});
 
 export function createWatchMailReader(home, readEntries = null,
   {readCards = null, readWorks = null, readRoles = () => []} = {}) {
@@ -130,6 +149,55 @@ export function createWatchMailReader(home, readEntries = null,
             ({raw}) => readWatchRows({prepare: sql => raw.store.prepare(sql), source}, projector, after, upTo, limit)),
           close() { try { source.exec('ROLLBACK'); } finally { source.close(); } },
         };
+      },
+      // 열린 카드 수 불변식: 카드 읽기(증분 캐시)의 열린 카드 수 대 같은 snapshot의 카드 stream 끝 사건 상태 수.
+      // '열린 상태' 집합은 watch-store-cache.mjs의 OPEN과 같다(assigned·ready·draft). 카드의 현재 상태는 마지막 사건이라
+      // 정식 규칙과 SQL 집계가 갈릴 여지가 없어 넣었다(무작위 prefix 시험: tests/watch-sweep-open-cards.test.mjs).
+      openCards: () => !readCards ? null : withLedgerView(home, (cache, info, source) => {
+        if (!source) return null;
+        const open = new Set(['assigned', 'ready', 'draft']);
+        const list = readCards();
+        const row = source.prepare(`SELECT count(*) AS n FROM heads WHERE stream GLOB 'cards/*/*/events.jsonl'
+          AND json_extract(payload,'$.status') IN ('assigned','ready','draft')`).get();
+        return {incremental: list.filter(card => open.has(card.status)).length, sql: row.n};
+      }),
+      // 역할·발령 상태표 대조(F7). 독자 SQL로 규칙을 다시 쓰지 않고 정식 reducer를 임시 DB에 처음부터 적용해 지문을 비교한다.
+      roleState: {
+        // 저렴한 대조: 행 수와 기록된 계수. 상태 행 유실을 매 바퀴 가까운 주기로 잡는다.
+        counts: () => withWatchMailboxViews(home, ({projected, cards}) => {
+          if (!projected || !cards) return null;
+          const live = applyWatchRoleState(home, projected.store, projected.info, cards);
+          const db = projected.store;
+          const count = table => db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n;
+          return live && {sessions: count('watch_role_sessions'), metaSessions: live.sessionCount,
+            dispatches: count('watch_role_dispatches'), metaDispatches: live.dispatchCount};
+        }, readCards),
+        live: () => withWatchMailboxViews(home, ({projected, cards}) => {
+          if (!projected || !cards) return null;
+          const live = applyWatchRoleState(home, projected.store, projected.info, cards);
+          const meta = roleMetaOf(projected.store.db);
+          return live && meta && {position: meta.position, generation: meta.generation, digest: roleStateDigest(projected.store.db, meta),
+            cardsKey: JSON.stringify(cards.map(card => [card.key, card.id])), cards};
+        }, readCards),
+        // 지문 비교용 재생: 조각(위치 범위)마다 한 번씩 정식 reducer를 이어서 적용한다.
+        async replay({upTo, generation, cards, chunkPositions = 2000, yieldNow}) {
+          const scratch = new DatabaseSync(':memory:'), scratchHome = `${home}#sweep-role-state`;
+          try {
+            let position = 0;
+            while (position < upTo) {
+              position = Math.min(upTo, position + chunkPositions);
+              withWatchMailboxViews(home, ({projected}) => {
+                if (!projected) throw new Error('역할 상태 재생에 조회 영역이 없습니다');
+                applyWatchRoleState(scratchHome, scratchStoreOf(projected.store, scratch), {generation, position}, cards);
+              }, readCards);
+              await yieldNow?.();
+            }
+            const meta = roleMetaOf(scratch);
+            return meta && {digest: roleStateDigest(scratch, meta), position: meta.position};
+          } finally { scratch.close(); }
+        },
+        // 교체: 상태표 메타를 지워 다음 읽기가 처음부터 다시 만들게 한다(원장·조회 DB는 건드리지 않는다).
+        reset: () => withWatchMailboxViews(home, ({projected}) => { projected?.store.db.exec('DELETE FROM watch_role_meta'); }, readCards),
       },
       // 조회 DB가 적용한 영역별 마지막 순번과 원본 stream 끝 순번. 같은 snapshot에서 함께 읽는다.
       streamCursors: () => withLedgerView(home, (cache, info, source) => {

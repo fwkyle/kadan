@@ -232,7 +232,7 @@ export function cmdWatch(argv, flags) {
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
   const sweepPolicy=createSweepPolicy({diagnostics:createSweepDiagnostics(path.join(ledgerHome(),'diagnostics'))});
   const sweepRunner=createSweepRunner({engine:createLedgerArraySweep({access:mailReader.sweepAccess}),policy:sweepPolicy,
-    reset:mailReader.resetIncremental,onError:error=>console.error(`[watch] 정기 대조 실패: ${error.message}`)});
+    reset:keys=>{ if(keys.includes('ledger-array'))mailReader.resetIncremental(); if(keys.includes('role-state'))mailReader.sweepAccess.roleState.reset(); },onError:error=>console.error(`[watch] 정기 대조 실패: ${error.message}`)});
   const holdTracker=new NotifyHoldTracker({record});
   const processName=watchProcessName(ledgerHome());
   const collections = createProcessCollections();

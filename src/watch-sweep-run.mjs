@@ -16,7 +16,7 @@ export function createSweepRunner({engine, policy, reset, now = Date.now, interv
     running = engine.full().then(result => {
       const outcome = policy.record(result);
       // 교체: 같은 고정 snapshot에서 원본이 검증됐고 비교 중 위치가 바뀌지 않은 diff만, 진단 기록이 된 뒤에 증분 상태를 버려 다시 만든다.
-      if (outcome.replace) reset();
+      if (outcome.replace) reset((result.diffs ?? []).map(diff => diff.key));
     }).catch(error => {
       // 예외도 안전한 쪽(보류)으로 기록한다: 진단 쓰기 장애 때도 policy.record는 던지지 않고 메모리 보류를 유지한다(독립검수 F4).
       onError(error);
