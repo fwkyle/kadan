@@ -3,7 +3,7 @@
 import {withWatchMailboxViews, mailReminderCandidates, mailWaitingLetters,
   mailRecentLetters} from './mail-view.mjs';
 import {rememberMailboxQueries} from './mailbox-queries.mjs';
-import {taskIdentity, taskConnectionError} from './task-identity.mjs';
+import {taskIdentity, taskConnectionError, projectedCompletionKey} from './task-identity.mjs';
 import {createWatchLedgerView} from './watch-ledger-view.mjs';
 import {applyWatchWorkState} from './watch-work-state.mjs';
 import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
@@ -15,10 +15,50 @@ const stateKey = info => info && JSON.stringify([
 ]);
 const project = (entries, cards) => taskIdentity(cards).project(entries).filter(e => !taskConnectionError(e));
 
+// 같은 카드 배열에서 원문이 앞 수집의 뒤로 이어 붙은 것이면 새 사건만 해석해 이어 붙인다(별칭 뒤 최초 완료 규칙 포함).
+// 앞 수집과 이어짐이 확인되지 않으면 처음부터 다시 해석한다. 결과는 project()와 같다.
+function createProjectionMemo() {
+  let memo = null;
+  // 카드 객체가 제자리에서 바뀔 수 있으므로 배열 동일성이 아니라 주소 해석에 쓰는 key·id 내용을 비교한다.
+  const sameCards = (previous, cards) => previous.length === cards.length &&
+    previous.every(([key, id], index) => key === cards[index].key && id === cards[index].id);
+  const extends_ = (previous, entries) => entries.length >= previous.raw.length &&
+    (previous.raw.length === 0 || (entries[0] === previous.raw[0] &&
+      entries[previous.raw.length - 1] === previous.raw[previous.raw.length - 1]));
+  return (entries, cards) => {
+    if (memo && sameCards(memo.addresses, cards) && extends_(memo, entries)) {
+      if (entries.length === memo.raw.length) return memo.out.slice(); // 이미 내준 배열에 상태표가 붙어 있으므로 새 배열을 준다
+      const added = [], identity = taskIdentity(cards);
+      for (let index = memo.raw.length; index < entries.length; index++) {
+        const entry = identity.projectEntry(entries[index]), key = projectedCompletionKey(entry);
+        if (key !== null) {
+          if (memo.seen.has(key)) continue;
+          memo.seen.add(key);
+        }
+        if (!taskConnectionError(entry)) added.push(entry);
+      }
+      memo = {addresses:memo.addresses, raw:entries, seen:memo.seen, out:memo.out.concat(added)};
+      return memo.out;
+    }
+    const identity = taskIdentity(cards), seen = new Set(), out = [];
+    for (const raw of entries) {
+      const entry = identity.projectEntry(raw), key = projectedCompletionKey(entry);
+      if (key !== null) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      if (!taskConnectionError(entry)) out.push(entry);
+    }
+    memo = {addresses:cards.map(card => [card.key, card.id]), raw:entries, seen, out};
+    return out;
+  };
+}
+
 export function createWatchMailReader(home, readEntries = null,
   {readCards = null, readWorks = null, readRoles = () => []} = {}) {
   const snapshots = new WeakMap();
   const ledger = createWatchLedgerView();
+  const projectMemo = createProjectionMemo();
   let last = null;
   return {
     readEntries() {
@@ -75,7 +115,7 @@ export function createWatchMailReader(home, readEntries = null,
       // 그 사이 카드가 바뀌면 받은 카드로 예전과 똑같이 해석한다. 다른 시점 SQL 상태를 섞지 않는다.
       if (!value?.projectedQueries || value.cards !== cards) return project(entries, cards);
       if (!value.projected) {
-        value.projected = project(entries, cards);
+        value.projected = projectMemo(entries, cards);
         rememberMailboxQueries(value.projected, value.projectedQueries);
         rememberWatchScopeFacts(value.projected, cards, value.scopeFacts);
         rememberWatchRoleState(value.projected, cards, value.roleFacts);
