@@ -18,10 +18,9 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false} =
   function read(db) {
     const currentIdentity = databaseIdentity(home);
     const heads = [];
-    for (const row of db.prepare(`SELECT h.stream,h.seq,h.payload,h.payload=e.payload AS valid
-      FROM heads h LEFT JOIN events e ON e.stream=h.stream AND e.seq=h.seq
-      WHERE h.stream GLOB ? ORDER BY h.stream`).iterate(pattern)) {
-      if (!row.valid) throw failure();
+    // heads만 읽어 지문을 만든다. 끝 행과 events의 대조는 처음·바뀐 스트림에만 한다(아래).
+    for (const row of db.prepare('SELECT stream,seq,payload FROM heads WHERE stream GLOB ? ORDER BY stream')
+      .iterate(pattern)) {
       heads.push({stream: row.stream, seq: row.seq,
         hash: createHash('sha256').update(row.payload).digest('hex')});
     }
@@ -34,6 +33,12 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false} =
     });
     const next = new Map(cached);
     if (changed.length) {
+      // 처음 보거나 순번·지문이 달라진 스트림만 끝 행을 events와 대조한다(변경 없는 요청은 events를 건드리지 않는다).
+      // 한계: 같은 순번·같은 head 지문인 채 과거 events만 고친 손상은 시작·파일 교체 때만 잡힌다.
+      const mismatched = db.prepare(`SELECT count(*) AS n FROM json_each(?) c
+        JOIN heads h ON h.stream=c.value LEFT JOIN events e ON e.stream=h.stream AND e.seq=h.seq
+        WHERE coalesce(h.payload=e.payload,0)=0`).get(JSON.stringify(changed.map(h => h.stream)));
+      if (mismatched.n) throw failure();
       const starts = changed.map(h => {
         const previous = cached.get(h.stream);
         // 같은 순번의 끝 행이 교체되어도 이전 검증 결과를 이어 쓰지 않는다.
