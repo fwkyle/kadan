@@ -51,7 +51,7 @@ test('같은 순번에서 head payload만 바뀌면 지문이 달라져 다음 �
   }
 });
 
-test('알려진 한계: head를 그대로 두고 과거 events만 고친 손상은 파일 교체·새 reader 때만 잡힌다', () => {
+test('알려진 한계: head를 그대로 두고 끝 행 events만 고친 손상은 새 reader 첫 적재·파일 교체 때만 잡힌다(정상 형식의 과거 중간 행 수정은 탐지 보장 없음)', () => {
   for (const name of ['dashboard', 'watch']) {
     const f = dashboardFixture({count: 2}), reader = readers(f)[name];
     reader.read();

@@ -115,7 +115,7 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false, f
       const state = next.get(head.stream), latest = state.last;
       const historyFields = state.history ? {history: state.history}
         : {...(kind === 'cards' ? {listFacts: state.facts} : {workFacts: state.facts}),
-          historyRef: {stream: head.stream, revision: head.seq, hash: state.hash}};
+          historyRef: {stream: head.stream, revision: head.seq, hash: state.hash, identity: currentIdentity}};
       if (kind === 'works') return {...latest, ...historyFields};
       const dir = cards.dir(latest.key), file = path.join(dir, 'card.md'), stat = fs.statSync(file);
       const signature = [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
