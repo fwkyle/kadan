@@ -42,6 +42,7 @@ export type SaveResult = {
   result: {
     key?: string;
     revision?: number;
+    warnings?: string[];
     delivery?: { status: string; error?: string; role?: string };
     to?: string; // 질문을 받은 역할(/ask)
     mailId?: string | null;

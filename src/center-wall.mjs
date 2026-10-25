@@ -1,4 +1,5 @@
 import {operationsFlowSummaries} from './operations-flow.mjs';
+import {importPreset, EXPORT_FORMAT, EXPORT_VERSION} from './runner-export.mjs';
 import {hydrateCardBody} from './dashboard-card-body.mjs';
 import {WorkStore} from './work-store.mjs';
 import {wallCache,nextTimeBoundary,TIME_DEPENDENT_MAX_AGE_MS} from './wall-snapshot-cache.mjs';
@@ -209,7 +210,12 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
-  if(req.method!=='POST'||!['/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer','/runners/set','/runners/preset','/runners/fallback','/runners/favorite','/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x)].includes(url.pathname))return false;
+  if(req.method!=='POST'||![
+    '/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer',
+    '/runners/set','/runners/preset-save','/runners/preset','/runners/fallback','/runners/favorite',
+    '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',
+    ...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x),
+  ].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
   const saved=(location,result)=>{
    if(req.headers.accept?.includes('application/json')){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({location,result}));}
@@ -294,8 +300,28 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      if(!changed)throw new Error('바뀐 것이 없다');
      return setRunner(home,{runner:f.runner,...changed,...meta});
     };
-    const next=url.pathname==='/runners/set'?setRole(home,{role:f.role,runner:f.runner,model:f.model,effort:f.effort||undefined,...meta}):url.pathname==='/runners/fallback'?fallback():url.pathname==='/runners/favorite'?favorite():url.pathname==='/runners/runner'?runnerEdit():url.pathname==='/runners/model-add'?modelAdd():url.pathname==='/runners/model-remove'?removeRunnerModel(home,{runner:f.runner,model:f.model,...meta}):setActivePreset(home,{preset:f.preset,...meta});
-    saved('/?runnersSaved='+next.revision+'#runner-settings',{revision:next.revision});return true;
+    const presetSave = () => {
+      let preset;
+      try { preset = JSON.parse(f.value); } catch { throw new Error('프리셋은 JSON 글이어야 한다'); }
+      return importPreset(home, {
+        data: {format: EXPORT_FORMAT, version: EXPORT_VERSION, preset: {...preset, name: f.preset}},
+        replace: true, ...meta,
+      });
+    };
+    const next = url.pathname === '/runners/preset-save' ? presetSave()
+      : url.pathname === '/runners/set' ? setRole(home, {
+        role: f.role, runner: f.runner, model: f.model, effort: f.effort || undefined, ...meta,
+      })
+      : url.pathname === '/runners/fallback' ? fallback()
+      : url.pathname === '/runners/favorite' ? favorite()
+      : url.pathname === '/runners/runner' ? runnerEdit()
+      : url.pathname === '/runners/model-add' ? modelAdd()
+      : url.pathname === '/runners/model-remove'
+        ? removeRunnerModel(home, {runner: f.runner, model: f.model, ...meta})
+        : setActivePreset(home, {preset: f.preset, ...meta});
+    saved('/?runnersSaved='+next.revision+'#runner-settings',{
+      revision: next.revision, warnings: next.warnings ?? [],
+    });return true;
    }
    if(url.pathname.startsWith('/works/')){
     const action=url.pathname.slice(7);let work;

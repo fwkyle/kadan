@@ -1,4 +1,5 @@
 // 카단이 띄우는 대화형 codex 명령에 --no-alt-screen을 붙여 스크롤백 화면으로 고정한다 (2026-10-18 [kyle] 결정).
+import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

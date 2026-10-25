@@ -113,7 +113,9 @@ export function renderRunnerSettings({home,entries=[],token='',saved=null,readCo
  const summaryTable=`<div class="scroll"><table class="rs-summary"><thead><tr><th>역할</th><th>지금 값</th><th>발령 때 채워질 명령</th><th>폴백</th><th><span class="dw-sr">바꾸기</span></th></tr></thead><tbody>${Object.keys(PROFILE_ROLES).map(summaryRow).join('')}</tbody></table></div>`;
  const editors=Object.keys(PROFILE_ROLES).map(role=>`<details class="rs-edit" id="rs-edit-${e(role)}"><summary>${e(RUNNER_ROLE_LABELS[role])} 값·폴백 변경</summary>${roleForm(settings,runners,role,token)}${fallbackForm(settings,runners,role,token)}</details>`).join('');
  const notice=saved!=null&&Number(saved)===settings.revision?`<p role="status"><strong>저장했습니다(revision ${settings.revision}). ${APPLY_NOTE}.</strong></p>`:'';
- return head+notice+`<p class="muted">화면을 읽은 설정 revision ${settings.revision} · 그사이 다른 곳에서 바뀌면 저장을 거부합니다. 저장은 사람 명의로 원장에 남습니다.</p>
+ const warnings=notice?(events.find(x=>x.revision===settings.revision)?.warnings??[]):[];
+ const warningHtml=warnings.map(message=>`<p role="alert">경고: ${e(message)}</p>`).join('');
+ return head+notice+warningHtml+`<p class="muted">화면을 읽은 설정 revision ${settings.revision} · 그사이 다른 곳에서 바뀌면 저장을 거부합니다. 저장은 사람 명의로 원장에 남습니다.</p>
 <h3>지금 설정 (프리셋 ${e(settings.activePreset)})</h3>${summaryTable}
 <h3>바꾸기</h3><p role="note"><strong>${FALLBACK_WHEN}.</strong> 자동 전환은 없습니다. 사람이나 감독이 번호를 골라 발령합니다. 고르는 즉시 바뀔 명령을 보여 주고, 저장은 이유를 적어야 됩니다.</p>${editors}
 <h3>프리셋</h3>${presetForm(settings,token)}${history}
