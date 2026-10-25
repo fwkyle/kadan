@@ -35,11 +35,13 @@ test('확보 후 DB가 바뀌어도 계산·응답은 DB를 다시 열지 않고
     f.decisions.cancel(f.decision.id,{revision:1,reason:'새 상태'},'사람');
     appendStream(f.home,'automatic-review/demo/dashboard/events.jsonl',
       {status:'exception',reason:'확보 후 변경',current:{key:'demo/card-1'}});
-    wallCache.clear();let sql=0;
+    wallCache.clear();const sql=[];
     const prepare=DatabaseSync.prototype.prepare;
-    DatabaseSync.prototype.prepare=function(...args){sql++;return prepare.apply(this,args);};
-    try{assert.deepEqual(outputs(build(captured)),expected);assert.equal(sql,0);}
+    DatabaseSync.prototype.prepare=function(...args){sql.push(String(args[0]).replace(/\s+/g,' '));return prepare.apply(this,args);};
+    try{assert.deepEqual(outputs(build(captured)),expected);}
     finally{DatabaseSync.prototype.prepare=prepare;}
+    // 현재 상태를 계산하려고 DB를 다시 열지 않는다. 상세의 과거 이력만 수집한 revision까지 읽는다(바뀌지 않는 사건 + 끝 행 지문 대조).
+    assert.deepEqual(sql.filter(text=>!text.startsWith('PRAGMA ')&&!text.startsWith('SELECT seq,payload FROM events WHERE stream=? AND seq<=?')),[]);
     assert.notDeepEqual(outputs(build(storageSnapshot(f.home,loader.read))),expected);
   }finally{floor.list=list;wallCache.clear();}
 });

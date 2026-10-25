@@ -627,7 +627,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     try {
       try {serveOnce();}
       catch (error) {
-        if (error.code !== 'KADAN_BODY_CHANGED' || response.headersSent || request.method !== 'GET') throw error;
+        if (!['KADAN_BODY_CHANGED', 'KADAN_HISTORY_CHANGED'].includes(error.code) || response.headersSent || request.method !== 'GET') throw error;
         // 원문과 요약의 지문이 달라졌을 때만 새 수집 한 번. 계속 바뀌면 아래 오류로 돌려준다.
         clear();serveOnce();
       }

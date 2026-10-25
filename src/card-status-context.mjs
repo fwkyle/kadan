@@ -37,7 +37,8 @@ function displayEvidence(card){
  if(shown==='orphaned')return evidence('미완료 발령의 담당 세션 없음 · 조회 시각 미기록','session');
  if(['running','waiting'].includes(shown)){
   // 현재 상태를 만든 활동 보고와 이후의 일반 진행 보고 시각을 구분한다.
-  const report=currentProgressReport({...card,history:(card.history??[]).filter(h=>h.noteKind!=='progress'||
+  // 걸러낸 이력이 기준이다: 목록 행이 든 사실(listFacts)은 걸러내지 않은 이력의 것이라 빼고 이력에서 다시 만든다.
+  const report=currentProgressReport({...card,listFacts:undefined,history:(card.history??[]).filter(h=>h.noteKind!=='progress'||
    h.at===card.activityAt&&h.activityAt===h.at&&h.activity===card.activity)});
   return card.activity===shown&&report.state==='reported'?
    evidence(shown==='running'?'담당자의 작업 시작 보고 확인':'담당자의 결과 대기 보고 확인',report.source,report.at,report.by):
