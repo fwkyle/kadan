@@ -112,3 +112,33 @@ test('저장소 없는 읽기는 폴더를 만들지 않고 빈 배열을 재사
   assert.deepEqual(entries, []);assert.strictEqual(reader.readEntries(), entries);
   assert.equal(fs.existsSync(home), false);
 });
+
+test('감시 배열은 읽는 곳이 없는 종류·필드만 빼고 나머지는 전체 원장 배열과 모든 prefix에서 같다', () => {
+  const home = homeOf(), reader = createWatchMailReader(home);
+  const dropKinds = new Set(['watch-cycle', 'watch-scope']);
+  const same = () => {
+    const entries = reader.readEntries(), full = expected(home);
+    const wanted = full.filter(e => !dropKinds.has(e.kind)).map(e => {
+      if (e.kind !== 'send') return e;
+      const {roleInstructions, ...rest} = e;return rest;
+    });
+    assert.deepEqual(entries, wanted);
+    return entries;
+  };
+  for (const event of [
+    {kind:'start', role, session:`kadan-${role}`, panePid:1, t:at},
+    {kind:'watch-cycle', by:'watch', pid:1, t:at},
+    {kind:'send', role, by, taskId:'task', mailId:'ri-1', roleInstructions:{status:'applied', text:'x'.repeat(600)}, preview:'p', t:at},
+    {kind:'watch-scope', by:'watch', pid:1, sessions:[], t:at},
+    {kind:'alert', id:'a1', alertKind:'x', level:'AMBER', role, t:at},
+    {kind:'send', role, by, taskId:'task', mailId:'ri-2', t:at},
+    {kind:'watch-cycle', by:'watch', pid:1, t:at},
+  ]) {
+    appendLedger(event, home);same();
+  }
+  const entries = same();
+  assert.equal(entries.some(e => dropKinds.has(e.kind)), false);
+  assert.equal(entries.some(e => Object.hasOwn(e, 'roleInstructions')), false);
+  assert.equal(entries.find(e => e.mailId === 'ri-1').preview, 'p');
+  assert.strictEqual(reader.readEntries(), entries); // 바뀐 게 없으면 같은 배열
+});
