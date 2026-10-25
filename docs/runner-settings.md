@@ -81,6 +81,7 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - `preset add <이름> [--from <원본>]`: 원본(기본은 활성 프리셋)을 복사한다. 활성 프리셋은 바뀌지 않는다.
 - `preset rename <옛> <새>`, `preset remove <이름>`. 활성 프리셋은 지울 수 없다.
 - 이름은 영문·한글 음절(가-힣)·숫자·`.`·`/`·`-`·`[`·`]`만 쓰고(실행기·모델 이름은 명령 틀에 들어가므로 한글 없이 `NAME_PATTERN` 그대로), 이미 있는 이름과 `add`·`rename`·`remove`는 쓸 수 없다. 전부 `--revision`·`--reason`을 받고 원장에 `preset-add`·`preset-rename`·`preset-remove`로 남는다.
+- 화면(실행 모델 설정 → **프리셋 관리**)에서도 같은 일을 한다: 만들기(복사로 시작)·이름 바꾸기·삭제·내보내기(파일 내려받기)·가져오기(파일 올리기, **다른 이름으로 가져오기**, **같은 이름이 있으면 바꾸기** 체크). 판정은 모두 위 CLI와 같은 함수가 하고 화면은 입력만 보낸다. 올리는 파일은 64KB 이하(실제 내보내기 파일은 2~4KB 안팎이라 여유를 둔 값)이고 넘으면 화면과 서버가 모두 거절한다. 원격 읽기 전용 화면에는 이 칸 전체가 없고 서버도 405다.
 - `set`·`fallback`의 `--preset <없던 이름>`은 아직 프리셋을 새로 만든다(시험이 기대는 동작이라 유지). 만들 때는 `preset add`를 쓴다.
 
 ## 내보내기·가져오기
@@ -154,6 +155,7 @@ kadan start <검수자> --profile reviewer --for <작업자역할>
   `--for`를 생략하면 종전대로 1순위를 쓰며 이 추가 계열 검사는 하지 않는다.
 - start 기록의 `launchSource: "review-for"`와 `reviewFor`에 작업자 역할·PID·모델·계열,
   선택된 모델·계열·이유·건너뛴 후보를 남긴다. 폴백이면 `fallbackIndex`·`fallbackReason`도 남긴다.
+- `--for`가 폴백을 고르면 그 검수자에게 발령할 때 폴백 경고가 한 줄 나온다(정상이고 막지 않는다).
 - 발령 입구의 기존 검사와 수동 `--fallback` 경로는 그대로다. 원장 조회는 한 번 실행되는
   start 명령에서 전체 사건을 읽는다(상주 감시 경로가 아니다).
 
@@ -191,6 +193,11 @@ Why: codex 0.157부터 대화형 화면이 풀스크린(alternate screen)이 기
 | `POST /runners/set` | `token`·`revision`·`role`·`runner`·`model`·`effort`·`reason` | 활성 프리셋의 역할 값을 `set`과 같은 검사로 바꾼다 |
 | `POST /runners/preset-save` | `token`·`revision`·`preset`·`value`(roles·fallback·label JSON)·`reason` | 기존 프리셋 한 벌을 교체한다. 계열 검사·저장·원장 기록은 한 번, 경고는 응답 `warnings`와 원장에 남는다 |
 | `POST /runners/preset` | `token`·`revision`·`preset`·`reason` | 활성 프리셋을 바꾼다 |
+| `POST /runners/preset-add` | `token`·`revision`·`preset`(새 이름)·`from`(원본, 비우면 활성)·`reason` | `preset add`와 같다. 활성 프리셋은 바뀌지 않는다 |
+| `POST /runners/preset-rename` | `token`·`revision`·`from`·`preset`(새 이름)·`reason` | `preset rename`과 같다 |
+| `POST /runners/preset-remove` | `token`·`revision`·`preset`·`reason` | `preset remove`와 같다. 활성 프리셋은 거절 |
+| `POST /runners/preset-import` | `token`·`revision`·`file`(내보내기 파일 글, 64KB 이하)·`as`(선택)·`replace`(`1`일 때만 같은 이름 교체)·`reason` | `import`와 같은 `importPreset`. 전체 거절·자동 활성화 없음. 응답에 `imported`·`next` |
+| `POST /runners/preset-export` | `token`·`preset` | `export`와 같은 `exportPreset`. 응답 `filename`·`text`를 화면이 파일로 내려받는다. 설정·원장은 바꾸지 않아 revision·이유가 없다 |
 | `POST /runners/model-add` | `token`·`revision`·`runner`·`model`·`efforts`·`reason` | `runners model`과 같은 `setRunnerModel` |
 | `POST /runners/model-remove` | `token`·`revision`·`runner`·`model`·`reason` | `runners model --remove`와 같은 `removeRunnerModel`(원장 `action: model-remove`) |
 | `POST /runners/runner` | `token`·`revision`·`runner`·`spawn`(선택)·`table`(JSON)·`reason` | `runners runner --table`과 같은 `setRunner`. 지금 값과 같은 칸은 버리고 바뀐 칸만 저장 |

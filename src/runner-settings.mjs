@@ -457,8 +457,9 @@ export const PRESET_ACTIONS = ['add', 'rename', 'remove'];
 // 예약 이름: 하위 명령 이름, 그리고 일반 객체의 칸이 아닌 프로토타입을 건드리는 이름(`presets['__proto__'] = …`는 저장되지 않는다).
 // 새 프리셋을 만드는 모든 경로(add·rename·set/fallback의 --preset 자동 생성)가 같이 쓴다.
 const RESERVED_PRESET_NAMES = [...PRESET_ACTIONS, '__proto__', 'constructor', 'prototype'];
-const assertNotReservedPresetName = name => {
-  if (RESERVED_PRESET_NAMES.includes(name)) throw new Error(`프리셋 이름으로 쓸 수 없다: ${name}`);
+// shown: 오류 문구에 대신 적을 이름(파일에서 온 이름 원문을 되풀이하지 않으려고 가져오기가 준다).
+const assertNotReservedPresetName = (name, shown = name) => {
+  if (RESERVED_PRESET_NAMES.includes(name)) throw new Error(`프리셋 이름으로 쓸 수 없다: ${shown}`);
 };
 // 없는 프리셋이면 만든다(set --preset 자동 생성). 이미 있으면 그대로 두고, 새로 만들 때만 예약 이름을 거절한다.
 function ensurePreset(next, name) {
@@ -468,9 +469,9 @@ function ensurePreset(next, name) {
 }
 // 프리셋 이름은 실행기·모델 이름(NAME_PATTERN)과 달리 명령 틀에 들어가지 않고 기록에만 남으므로 한글 음절(가-힣)도 받는다.
 const PRESET_NAME = /^[A-Za-z0-9._/\-[\]가-힣]+$/;
-export function checkNewPresetName(next, name) {
+export function checkNewPresetName(next, name, shown = name) {
   if (typeof name !== 'string' || !PRESET_NAME.test(name)) throw new Error('프리셋 이름에는 영문·한글·숫자·./-[]만 쓴다');
-  assertNotReservedPresetName(name);
+  assertNotReservedPresetName(name, shown);
   if (Object.hasOwn(next.presets, name)) throw new Error(`이미 있는 프리셋: ${name}`);
 }
 

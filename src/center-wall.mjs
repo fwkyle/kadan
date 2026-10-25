@@ -1,5 +1,5 @@
 import {operationsFlowSummaries} from './operations-flow.mjs';
-import {importPreset, EXPORT_FORMAT, EXPORT_VERSION} from './runner-export.mjs';
+import {importPreset, exportPreset, parseExportText, MAX_UPLOAD_BYTES, EXPORT_FORMAT, EXPORT_VERSION} from './runner-export.mjs';
 import {hydrateCardBody} from './dashboard-card-body.mjs';
 import {hydrateHistory} from './dashboard-card-history.mjs';
 import {WorkStore} from './work-store.mjs';
@@ -30,7 +30,7 @@ import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger} from './ledger.mjs';
 import {readLedgerIncremental} from './ledger-incremental.mjs';
-import {changedRunnerFields,editFallback,readSettings,removeRunnerModel,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
+import {addPreset,changedRunnerFields,editFallback,readSettings,removePreset,removeRunnerModel,renamePreset,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
@@ -214,6 +214,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
   if(req.method!=='POST'||![
     '/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer',
     '/runners/set','/runners/preset-save','/runners/preset','/runners/fallback','/runners/favorite',
+    '/runners/preset-add','/runners/preset-rename','/runners/preset-remove','/runners/preset-import','/runners/preset-export',
     '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',
     ...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x),
   ].includes(url.pathname))return false;
@@ -269,6 +270,13 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      finally{listing=false;}
      return true;
     }
+    if(url.pathname==='/runners/preset-export'){
+     // 내려받기: 설정·원장은 읽기만 한다(revision·이유 없음). CLI export와 같은 exportPreset이라 금지 패턴 검사도 같다.
+     const out=exportPreset(home,{name:f.preset});
+     res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+     res.end(JSON.stringify({location:'',result:{filename:`kadan-preset-${out.preset.name.replaceAll('/','_')}.json`,text:JSON.stringify(out,null,2)+'\n'}}));
+     return true;
+    }
     const fallback=()=>{
      // 버튼 값은 add 또는 remove:N·up:N·down:N. 목록은 저장 직전 설정에서 읽고, revision 대조는 공통 경로가 한다.
      const [op,index]=String(f.op??'').split(':');
@@ -309,7 +317,18 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
         replace: true, ...meta,
       });
     };
+    // 가져오기: 파일 글을 CLI import와 같은 importPreset에 넘긴다. 같은 이름은 replace='1'(명시)일 때만 교체한다.
+    const presetImport = () => {
+      const text = String(f.file ?? '');
+      if (!text) throw new Error('가져올 파일을 고르세요');
+      if (f.replace !== undefined && f.replace !== '' && f.replace !== '1') throw new Error('같은 이름 바꾸기 값이 올바르지 않다');
+      return importPreset(home, {data: parseExportText(text, MAX_UPLOAD_BYTES), as: f.as?.trim() || undefined, replace: f.replace === '1', ...meta});
+    };
     const next = url.pathname === '/runners/preset-save' ? presetSave()
+      : url.pathname === '/runners/preset-add' ? addPreset(home, {name: f.preset, from: f.from || undefined, ...meta})
+      : url.pathname === '/runners/preset-rename' ? renamePreset(home, {from: f.from, to: f.preset, ...meta})
+      : url.pathname === '/runners/preset-remove' ? removePreset(home, {name: f.preset, ...meta})
+      : url.pathname === '/runners/preset-import' ? presetImport()
       : url.pathname === '/runners/set' ? setRole(home, {
         role: f.role, runner: f.runner, model: f.model, effort: f.effort || undefined, ...meta,
       })
@@ -321,7 +340,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
         ? removeRunnerModel(home, {runner: f.runner, model: f.model, ...meta})
         : setActivePreset(home, {preset: f.preset, ...meta});
     saved('/?runnersSaved='+next.revision+'#runner-settings',{
-      revision: next.revision, warnings: next.warnings ?? [],
+      revision: next.revision, warnings: next.warnings ?? [], ...(next.imported ? {imported: next.imported, next: next.next} : {}),
     });return true;
    }
    if(url.pathname.startsWith('/works/')){

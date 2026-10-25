@@ -48,6 +48,10 @@ export type SaveResult = {
     mailId?: string | null;
     output?: string; // CLI 출력 요약(/roles/restart — 새 pane PID·대화 id·창)
     pending?: boolean; // /roles/restart — 화면 응답 상한(28초)을 넘겨 자식이 계속 진행 중
+    filename?: string; // /runners/preset-export — 내려받을 파일 이름과 글
+    text?: string;
+    imported?: string; // /runners/preset-import — 가져온 프리셋 이름과 다음 안내
+    next?: string;
   };
 };
 // 원격 보기(session의 readOnly:true)에서는 쓰기 전송을 아예 보내지 않는다. 서버도 405로 막지만 화면이 먼저 멈춘다.
