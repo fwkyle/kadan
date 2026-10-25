@@ -1,6 +1,30 @@
 // Why: 같은 카드의 두 주소를 화면·감시·완료가 함께 해석한다. 저장 원문은 바꾸지 않는다.
 // 저장소/카드ID가 정식 주소이며 짧은 ID는 유일할 때만 별칭이다.
+// 같은 카드 배열은 주소 해석표가 같다. 감시 한 순회 안에서 소비자마다 다시 만들지 않는다.
+// 배열 동일성이나 길이만 믿지 않는다: 카드 객체나 원소가 제자리에서 바뀔 수 있으므로 key·id 목록 자체를 비교해 무효화한다
+// (같은 길이에서 주소만 바뀐 경우 옛 해석표를 쓰던 문제, 독립검수 F6).
+const memo = new WeakMap();
+const sameAddresses = (saved, cards) => {
+  if (saved.cards.length !== cards.length) return false;
+  for (let index = 0; index < cards.length; index++) {
+    // 해석 결과가 카드 객체를 돌려주므로 원소가 다른 객체로 바뀐 경우도 무효다.
+    if (saved.cards[index] !== cards[index] || saved.addresses[index * 2] !== cards[index].key
+      || saved.addresses[index * 2 + 1] !== cards[index].id) return false;
+  }
+  return true;
+};
 export function taskIdentity(cards = []) {
+  if (Array.isArray(cards)) {
+    const hit = memo.get(cards);
+    if (hit && sameAddresses(hit, cards)) return hit.identity;
+    const identity = buildTaskIdentity(cards);
+    memo.set(cards, {cards: [...cards], addresses: cards.flatMap(card => [card.key, card.id]), identity});
+    return identity;
+  }
+  return buildTaskIdentity(cards);
+}
+
+function buildTaskIdentity(cards) {
   const keys = new Map(), ids = new Map();
   for (const card of cards) {
     keys.set(card.key, card);

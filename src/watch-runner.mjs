@@ -120,6 +120,8 @@ export async function runWatch({
   mailHold = null,
   // 받는 창별 입력 보호 연속 미룸 횟수(watch-notify-hold.mjs). 없으면 세지 않는다.
   holdTracker = null,
+  // 정기 대조(watch-sweep-run.mjs). tick() => {holding, alerts}. 보류 중에는 한도 재개·큐 재개·우편 재알림을 하지 않는다.
+  sweepTick = null,
   mailUnreadGraceMs = 300_000,
   sendQueueEnter = null,
   record = () => {},
@@ -256,6 +258,7 @@ export async function runWatch({
       ledgerError = error;
     }
     const ledgerReadAt=measure();
+    const sweepState = !ledgerError && sweepTick ? sweepTick() : {holding:false, alerts:[]};
     let hierarchyError = null;
     // 정리를 읽기 앞에 둬서, 줄이 바뀌면 같은 주기의 hierarchy-loaded가 새 표를 읽는다.
     if (pruneHierarchy && hierarchyPath && !ledgerError) {
@@ -362,7 +365,7 @@ export async function runWatch({
     const stages={};let lapAt=observedAt;
     const lap=name=>{const at=measure();stages[name]=at-lapAt;lapAt=at;};
     const workerObservations = scope ? new Map([...roles.observations].filter(([s])=>scope.sessions.has(s))) : roles.observations;
-    const retrySessions = observationError || !scope ? new Set() : rateLimitRetry.tick({
+    const retrySessions = observationError || !scope || sweepState.holding ? new Set() : rateLimitRetry.tick({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
@@ -381,7 +384,7 @@ export async function runWatch({
     });
     lap('rateLimit');
     // 명시 큐 배너는 AI 판정 없이 결정식으로 먼저 처리한다. Enter를 보낸 세션은 이번 주기의 정체·AI 판정에서 뺀다.
-    const queueHandled = observationError || !scope ? new Set() : await queueResume.tick({
+    const queueHandled = observationError || !scope || sweepState.holding ? new Set() : await queueResume.tick({
       observations:workerObservations, tasks:scope.entries, cards:cards??[], entries, now:cycleAt,
       fresh:(session,seen,taskId,fingerprint)=> {
         try {
@@ -479,7 +482,7 @@ export async function runWatch({
     // 미확인 우편 감시(알림 전달 시도와 입력 보호 보류 관측)는 멈춤 판정과 모든 경보 전달보다 앞서 한 번 돈다.
     // 늦게 돌면 처음 보류되는 주기에 isHeld가 비어 있어 감독에게 헛멈춤이 간다(검수 3라운드). 우편 보류 정책·유예 값은 그대로다.
     let mailError = false;
-    if (mailWatch && !observationError) {
+    if (mailWatch && !observationError && !sweepState.holding) {
       try {
         mailWatch.tick({entries:mailEntries,cards:cards??[],works,now:cycleAt,
           floor,readEntries,readCards:readCards??(()=>[]),readWorks,signal,parents});
@@ -660,6 +663,7 @@ export async function runWatch({
     const nextAlerts = [
       ...(observationError ? [] : stopHookAlerts),
       ...(hierarchyError ? [hierarchyError] : []),
+      ...sweepState.alerts,
       ...(aiStoreError ? [aiStoreError] : []),
       // 429 재개가 예약된 세션의 '한도' 경보는 새로 알리지 않는다. 다만 이미 알린 경보는 화면에 429가 남아 있는 동안
       // 통지 없이 그대로 이월한다 — 숨기면 dedup이 해소로 보고 '한도 → 해소됨'이 깜빡였다(2026-10-05 점검 보고서 2-M2).
