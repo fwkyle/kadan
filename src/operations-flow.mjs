@@ -6,6 +6,7 @@ import {classifyLedgerEntry} from './ledger.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {workEntries,effectiveCardRole} from './handover-state.mjs';
 import {listFactsOf,listFactsFromHistory} from './card-list-facts.mjs';
+import {workFactsOf} from './work-list-facts.mjs';
 // 운영 흐름은 저장된 관계와 근거만 읽는다. 실행·업무·인수 상태를 쓰거나 추정하지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -82,9 +83,32 @@ export function readOperationsFlowInputs(home,works,snapshot={}){
  for(const key of new Set(works.flatMap(w=>w.executions.map(e=>e.key)))){
   histories.set(key,known.get(key)??read(`cards/${key}/events.jsonl`));
  }
- const captured=works.map(work=>work.history?work:
+ // 업무 사실을 든 행은 이력을 다시 읽지 않는다. 사실도 이력도 없는 행만 원본에서 읽는다.
+ const captured=works.map(work=>work.history||work.workFacts?work:
   {...work,history:readStream(home,`works/${work.key}/events.jsonl`)});
- return {sources,histories,automatic:readAutomaticInputs(home,works),works:captured};
+ const automatic=readAutomaticInputs(home,works);
+ return {sources,histories,automatic,works:captured,supervisorFollowups:readSupervisorFollowups(home,captured,automatic)};
+}
+// 자동 왕복이 끝난 뒤 담당 감독이 처음 남긴 갱신·완료·취소 시각. 종결 시각과 현재 담당에 따라 달라지는 조회라
+// 사실로 들 수 없어, 읽기 snapshot 안에서 그 업무 이력만 흘려 읽어 시각 하나만 남긴다(이력은 보관하지 않는다).
+function terminalAtOf(rows){
+ const automatic=rows.at(-1)||null;
+ return {automatic,terminalAt:rows.find(e=>e.current?.key===automatic?.current?.key&&
+  ['pass','boundary','limit','exception'].includes(e.status))?.at||null};
+}
+function readSupervisorFollowups(home,works,automaticByWork){
+ const found=new Map();
+ for(const work of works){
+  const rows=automaticByWork.get(work.key);
+  if(!rows||rows instanceof Error||!rows.length)continue;
+  const {automatic,terminalAt}=terminalAtOf(rows);
+  if(!automatic||!['pass','boundary','limit','exception'].includes(automatic.status)||!terminalAt)continue;
+  try{
+   const history=work.history??readStream(home,`works/${work.key}/events.jsonl`);
+   found.set(work.key,history.find(h=>Date.parse(h.at)>Date.parse(terminalAt)&&['update','complete','cancel'].includes(h.action)&&h.by===work.owner)?.at);
+  }catch{/* 읽기 실패는 아래 followupFor가 옛 방식으로 다시 시도해 같은 오류를 낸다 */}
+ }
+ return found;
 }
 function followupContext(home,snapshot={}){
  const sources=snapshot.sources??readFollowupSources(home,snapshot);
@@ -110,6 +134,11 @@ function followupContext(home,snapshot={}){
  catch{context.error='후속 근거 조회 실패: 실행·결정 기록을 확인하세요.';}
  return context;
 }
+function supervisorFollowupAt(work,terminalAt,context){
+ const captured=context.supervisorFollowups?.get(work.key);
+ if(captured!==undefined)return captured;
+ return (work.history||[]).find(h=>Date.parse(h.at)>Date.parse(terminalAt)&&['update','complete','cancel'].includes(h.action)&&h.by===work.owner)?.at;
+}
 function followupFor(home,work,executions,context,now=stamp()){
  let automatic=null,error=context.error,terminalAt=null;
  try{
@@ -125,14 +154,13 @@ function followupFor(home,work,executions,context,now=stamp()){
  const followup=workFollowup(work,executions,{automatic,decisions,error});
  const identity=context.identity||taskIdentity(context.cards||[]),keys=new Set(work.executions.map(x=>x.key));
  const linkedWatchCalls=context.watchCalls?context.watchCalls.filter(e=>e.taskId&&keys.has(identity.resolve(e.taskId,e.executionKey).key)).length:null;
- const history=work.history||[],opened=history.findLast(h=>['create','reopen'].includes(h.action));
- const ended=history.findLast(h=>['complete','cancel'].includes(h.action));
+ const workFacts=workFactsOf(work),opened=workFacts.opened,ended=workFacts.ended;
  const terminal=['done','cancelled'].includes(work.status);
  const cycles=Math.max(0,...work.executions.filter(c=>['implementation','fix','review'].includes(c.phase)).map(c=>Number(c.round)||0));
  return {followup,decisions,automatic:automatic?fields(automatic,['status','terminal','round','at','reason','notification']):null,
   timing:{openedAt:opened?.at||null,closedAt:terminal?ended?.at||null:null,elapsedMs:elapsed(opened?.at,terminal?ended?.at:now),
    pending:!terminal,cycles,linkedWatchCalls,watchCost:null,completionConfirmationMs:null,actualWorkMs:null,
-   supervisorFollowupMs:automatic&&['pass','boundary','limit','exception'].includes(automatic.status)?elapsed(terminalAt,history.find(h=>Date.parse(h.at)>Date.parse(terminalAt)&&['update','complete','cancel'].includes(h.action)&&h.by===work.owner)?.at):null}};
+   supervisorFollowupMs:automatic&&['pass','boundary','limit','exception'].includes(automatic.status)?elapsed(terminalAt,supervisorFollowupAt(work,terminalAt,context)):null}};
 }
 
 // 목록도 본문을 열지 않고 같은 실행·결정 기록을 한 번만 읽는다.
@@ -140,7 +168,7 @@ export function operationsFlowSummaries(home,works,snapshot={}){
  if(!works.length)return new Map();
  const inputs=snapshot.inputs??storageSnapshot(home,()=>readOperationsFlowInputs(home,works,snapshot));
  const context=followupContext(home,inputs),now=stamp();
- context.automatic=inputs.automatic;context.histories=inputs.histories;
+ context.automatic=inputs.automatic;context.histories=inputs.histories;context.supervisorFollowups=inputs.supervisorFollowups;
  return new Map(inputs.works.map(work=>{
    let records=null;
    if(context.read){

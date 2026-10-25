@@ -1,4 +1,5 @@
 // Why: 실행 종료 뒤 다음 행동을 기존 기록에서 읽는다. 저장 상태·발령·승인을 바꾸지 않는다.
+import {workFactsOf} from './work-list-facts.mjs';
 const time=value=>Date.parse(value)||0;
 const closed=c=>['cancelled','superseded','archived'].includes(c.status);
 const item=(state,label,owner,next,at=null)=>({state,label,owner:owner||null,next,at});
@@ -56,7 +57,7 @@ export function workFollowup(work,executions,{automatic=null,decisions=[],error=
  if(linked&&next?.state!=='decision')next=item('decision','사용자 결정 대기','@user',linked.question,linked.at);
  next||=item('unspecified','다음 행동 미지정',work.owner,'다음 실행과 담당자를 기록하세요.');
  // 기존 업무 입력이 새 결과보다 앞서면 옛 다음 행동으로 덮지 않는다.
- const changed=(work.history||[]).filter((h,i,a)=>h.nextAction&&(!i||h.nextAction!==a[i-1].nextAction||h.turnOwner!==a[i-1].turnOwner)).at(-1);
+ const changed=workFactsOf(work).nextActionChange;
  const newest=Math.max(0,...executions.map(c=>Math.max(time(c.sentAt),time(c.completedAt),time(c.resultAt),time(c.activityAt))),time(auto?automatic.at:null),...decisions.map(d=>time(d.answer?.at||d.at)));
  if(changed&&time(changed.at)>=newest&&!['decision','answer','unknown'].includes(next.state))next=item('assigned','기록된 다음 행동',work.turnOwner||work.owner,work.nextAction,changed.at);
  return result(next);

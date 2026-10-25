@@ -1,5 +1,6 @@
 import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {isUserActor} from './actors.mjs';
+import {workFactsOf} from './work-list-facts.mjs';
 // 원장 원문은 보존하고 카드 책임을 계산할 때만 확정된 인계를 반영한다.
 export function workEntries(entries, cards = null) {
   const identity = Array.isArray(cards) ? taskIdentity(cards) : cards;
@@ -49,10 +50,10 @@ function transferredHandovers(entries) {
   return transferred;
 }
 export function effectiveWorkOwnership(work, entries) {
-  const history = work.history ?? [];
-  const changed = history.findLast((h, i) => i === 0 || history[i - 1].owner !== h.owner)?.at ?? work.at;
+  const facts = workFactsOf(work);
+  const changed = facts.ownerChange?.at ?? work.at;
   // owner 값이 같아도 명시 재지정(ownerAssignedAt)이 있었으면 그 시각부터 책임이 다시 붙었다.
-  const assigned = history.findLast(h => h.ownerAssignedAt)?.ownerAssignedAt;
+  const assigned = facts.ownerAssignedAt ?? undefined;
   const since = assigned && (!changed || Date.parse(assigned) > Date.parse(changed)) ? assigned : changed;
   let owner = work.owner, at = since ?? null;
   const sinceMs = since ? Date.parse(since) : 0;
