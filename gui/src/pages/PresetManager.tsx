@@ -2,6 +2,7 @@ import {useContext, useState} from 'react';
 import {save} from '../resource';
 import {AppContext, ErrorMessage} from '../ui';
 import {downloadText} from '../download';
+import {pickCopySource} from '../preset-draft';
 import type {Settings} from './Runners';
 
 // 프리셋 만들기(복사)·이름 바꾸기·삭제·내보내기·가져오기. 판정은 모두 서버(CLI와 같은 함수)가 한다.
@@ -10,7 +11,9 @@ export function PresetManager({settings}: {settings: Settings}) {
   const names = Object.keys(settings.presets);
   const [reason, setReason] = useState(''), [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [newName, setNewName] = useState(''), [from, setFrom] = useState(settings.activePreset);
+  const [newName, setNewName] = useState(''), [chosenFrom, setFrom] = useState(settings.activePreset);
+  // 표시와 제출이 같은 값을 쓰도록 최신 목록에 맞춘다(이름 바꾸기·삭제로 고른 이름이 사라질 수 있다).
+  const from = pickCopySource(names, settings.activePreset, chosenFrom);
   const [renaming, setRenaming] = useState<string | null>(null), [renameTo, setRenameTo] = useState('');
   const [file, setFile] = useState<{name: string; text: string} | null>(null);
   const [importAs, setImportAs] = useState(''), [replace, setReplace] = useState(false);

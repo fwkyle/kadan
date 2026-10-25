@@ -37,3 +37,7 @@ export const presetSaveFields = (settings: Settings, reason: string) => ({
   value: JSON.stringify(settings.presets[settings.activePreset]),
   revision: String(settings.revision), reason,
 });
+
+// 복사 원본 선택: 고른 이름이 최신 목록에 없으면(이름 바꾸기·삭제 뒤) 활성 프리셋, 그것도 없으면 첫 이름으로 맞춘다.
+export const pickCopySource = (names: string[], active: string, chosen: string) =>
+  names.includes(chosen) ? chosen : names.includes(active) ? active : (names[0] ?? '');

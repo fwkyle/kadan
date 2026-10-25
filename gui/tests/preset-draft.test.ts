@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {presetSaveFields, presetStamp, stagePreset} from '../src/preset-draft.ts';
+import {pickCopySource, presetSaveFields, presetStamp, stagePreset} from '../src/preset-draft.ts';
 
 test('여러 역할·폴백 편집은 로컬 변경안이고 저장 요청 하나에 전부 담긴다', () => {
   const settings = {revision: 7, activePreset: 'A', presets: {A: {roles: {
@@ -32,4 +32,15 @@ test('후보 추가·순서·삭제는 서버 저장 없이 같은 변경안에�
   draft = stagePreset(draft, 'worker', true, b, 'remove:2');
   const value = JSON.parse(presetSaveFields(draft, '시험').value);
   assert.deepEqual(value.fallback.worker, [b]);
+});
+
+test('복사 원본: 이름 바꾸기·삭제로 고른 이름이 사라지면 표시와 제출이 같은 유효한 이름으로 맞춰진다', () => {
+  assert.equal(pickCopySource(['A', 'B'], 'A', 'A'), 'A');
+  // 검수 재현: 활성 A를 AA로 바꾸면 처음 고른 A가 사라지고 활성 AA가 원본이 된다(옛 값 A를 보내면 409였다).
+  assert.equal(pickCopySource(['AA', 'B'], 'AA', 'A'), 'AA');
+  // 고른 B를 삭제한 뒤에도 활성 프리셋으로 맞춘다.
+  assert.equal(pickCopySource(['AA'], 'AA', 'B'), 'AA');
+  // 사용자가 목록에 남은 다른 이름을 고른 것은 존중한다.
+  assert.equal(pickCopySource(['AA', 'B'], 'AA', 'B'), 'B');
+  assert.equal(pickCopySource(['X', 'Y'], 'gone', 'gone2'), 'X');
 });
