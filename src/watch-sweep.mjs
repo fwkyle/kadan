@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 
 const yieldLoop = () => new Promise(resolve => setImmediate(resolve));
 
-export function createLedgerArraySweep({access, chunkRows = 2000, yieldNow = yieldLoop}) {
+export function createLedgerArraySweep({access, chunkRows = 500, yieldNow = yieldLoop}) {
   async function digestArray(entries) {
     const hash = createHash('sha256');
     for (let index = 0; index < entries.length; index += chunkRows) {
