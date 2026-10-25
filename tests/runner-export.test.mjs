@@ -53,6 +53,30 @@ function sender() {
 }
 const exported = () => JSON.parse(JSON.stringify(exportPreset(sender().dir, {name: '기본'})));
 
+test('명시 --replace: 여러 칸을 한 번에 바꾸고 revision·원장 1회, 다른 프리셋 충돌은 무관하다', () => {
+  const a = sender(), before = readSettings(a.dir), data = exportPreset(a.dir, {name: '기본'});
+  patch(a.dir, s => {
+    s.families = {first: ['fake-model-'], second: ['fake-claude-']};
+    s.presets.broken = {roles: {worker: {runner: 'codex', model: 'fake-model-1'},
+      reviewer: {runner: 'codex', model: 'fake-model-1'}}};
+  });
+  // 두 1순위를 따로 바꾸면 중간에 같은 계열이지만 한 벌로 교환하면 유효하다.
+  [data.preset.roles.worker, data.preset.roles.reviewer] =
+    [data.preset.roles.reviewer, data.preset.roles.worker];
+  const file = path.join(a.dir, 'replace.json'); fs.writeFileSync(file, JSON.stringify(data));
+  const {list, record} = records();
+  assert.throws(() => runnersCommand(['import', file], {revision: before.revision, reason: '시험'},
+    {home: a.dir, by: '시험', record}), /이미 있는 프리셋/);
+  importPreset(a.dir, {data, replace: true, ...meta(before.revision, {record})});
+  const after = readSettings(a.dir);
+  assert.equal(after.revision, before.revision + 1); assert.equal(list.length, 1);
+  assert.deepEqual(after.presets['기본'].roles, data.preset.roles);
+  assert.equal(after.presets.broken.roles.worker.model, 'fake-model-1');
+  assert.equal(list[0].replace, true); assert.deepEqual(list[0].before, before.presets['기본']);
+  assert.throws(() => importPreset(a.dir, {data, replace: true, as: 'absent', ...meta(after.revision)}), /덮어쓸 프리셋이 없다/);
+  assertRejected(a.dir, data, /설정이 바뀌었다/, {replace: true, revision: before.revision});
+});
+
 // 거절은 설정 파일·revision·원장이 그대로여야 한다.
 function assertRejected(dir, data, pattern, extra = {}) {
   const before = fs.readFileSync(ledgerOf(dir)), {list, record} = records();
@@ -207,7 +231,7 @@ test('거절: 받는 쪽 계열 규칙에 걸리면 파일의 규칙이 아니�
   patch(b.dir, v => { v.families = {same: ['fake-claude-', 'fake-model-']}; });
   const data = exported();
   data.families = {};
-  assertRejected(b.dir, data, /계열 규칙에 걸린다.*같은 계열\(same\)/, {as: 'team'});
+  assertRejected(b.dir, data, /같은 계열\(same\)/, {as: 'team'});
 });
 
 test('거절: 받는 쪽 차단 모델이 쓰이면 거절하고 사유를 보여 준다', () => {

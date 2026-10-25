@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {NAME_PATTERN} from './runner-table.mjs';
 import {
-  EXPLAIN_MAX_ATTEMPTS, SETTINGS_ROLES, assertSeniorShape, change, checkChoice, checkNewPresetName, checkPresetFamilies,
+  EXPLAIN_MAX_ATTEMPTS, SETTINGS_ROLES, assertSeniorShape, change, checkChoice, checkNewPresetName,
   findBlocked, readSettings, runnerChoices, seniorList,
 } from './runner-settings.mjs';
 
@@ -151,7 +151,11 @@ function readExport(data) {
     if (role === 'senior') throw new Error('파일 형식 오류: 대체 후보를 둘 수 없는 역할 fallback.senior');
     if (!Array.isArray(list)) throw new Error(`파일 형식 오류: fallback.${role}은 목록이어야 한다`);
     if (role === 'explain' && list.length + 1 > EXPLAIN_MAX_ATTEMPTS) throw new Error(`파일 형식 오류: 설명 AI 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지다`);
-    if (list.length) fallback[role] = list.map((v, j) => cleanChoice(v, `fallback.${role}[${j}]`));
+    if (list.length) {
+      fallback[role] = list.map((v, j) => cleanChoice(v, `fallback.${role}[${j}]`));
+      if (new Set(fallback[role].map(v => JSON.stringify(v))).size !== list.length)
+        throw new Error('같은 폴백 항목이 두 번 있다');
+    }
   });
   const families = data.families ?? {}, blocked = data.blocked ?? [], runners = data.runners ?? [];
   if (!isPlain(families) || !Object.values(families).every(v => Array.isArray(v) && v.every(x => typeof x === 'string')))
@@ -243,15 +247,20 @@ function ruleDifferences(next, file) {
   return diff;
 }
 
-// 프리셋 한 벌만 더한다. 검사 순서(하나라도 걸리면 전체 거절, 저장·원장 없음): 파일 형식 → 이름 → 이 기계의 실행기·모델·강도 → 계열 → 차단.
-// 활성 프리셋·실행기 표·계열 규칙·차단·즐겨찾기는 바꾸지 않는다.
-export function importPreset(home, {data, as, readCodexModels, ...meta}) {
+// 프리셋 한 벌을 더하거나 명시적으로 교체한다. 형식 → 이름 → 선택지 → 차단 → 계열 검사 뒤 한 번 저장한다.
+// 활성 프리셋 이름·실행기 표·계열 규칙·차단·즐겨찾기는 바꾸지 않는다.
+export function importPreset(home, {data, as, replace = false, readCodexModels, ...meta}) {
   if (as != null && typeof as !== 'string') throw new Error('--as에는 새 이름이 필요하다');
   const file = readExport(data);
   let differences;
   const next = change(home, {...meta, action: 'preset-import'}, settings => {
     const name = as ?? file.name;
-    try { checkNewPresetName(settings, name); }
+    try {
+      if (replace === true) {
+        if (!Object.hasOwn(settings.presets, name)) throw new Error(`덮어쓸 프리셋이 없다: ${name}`);
+        checkNewPresetName({presets: {}}, name);
+      } else checkNewPresetName(settings, name);
+    }
     catch (error) {
       // 이름 원문은 --as(호출자 입력)이거나 이 기계에 이미 있는 이름일 때만 출력한다. 파일에서 온 이름은 고정 문구로만 알린다.
       const shown = as != null || Object.hasOwn(settings.presets, name) ? `가져오려던 이름: ${name}` : '파일의 preset.name';
@@ -259,16 +268,17 @@ export function importPreset(home, {data, as, readCodexModels, ...meta}) {
     }
     const report = missingReport(settings, file.preset, readCodexModels);
     if (report) throw new Error(report);
-    try { checkPresetFamilies(file.preset, settings.families); }
-    catch (error) { throw new Error(`가져오기 거절: 이 기계의 계열 규칙에 걸린다 — ${error.message}`); }
     const blocked = slots(file.preset).map(({role, value, where}) => ({where, hit: findBlocked(settings, role, value.model), value})).filter(x => x.hit);
     if (blocked.length)
       throw new Error(`가져오기 거절: 이 기계에서 막은 모델이 있다 — ${blocked.map(b => `${b.where}: ${b.value.model} (${b.hit.reason})`).join('; ')}`);
     differences = ruleDifferences(settings, file);
+    const before = settings.presets[name] ?? null;
     settings.presets[name] = structuredClone(file.preset);
-    return {preset: name, source: file.name, after: settings.presets[name]};
+    return {preset: name, source: file.name, replace, before, after: settings.presets[name]};
   });
   const imported = as ?? file.name;
   return {imported, revision: next.revision, activePreset: next.activePreset, differences,
-    next: `활성 프리셋은 그대로다. 쓰려면 kadan runners preset ${imported} --revision ${next.revision} --reason <이유>`};
+    warnings: next.warnings ?? [],
+    next: imported === next.activePreset ? '활성 프리셋을 교체했다. 다음 발령부터 적용된다.'
+      : `활성 프리셋은 그대로다. 쓰려면 kadan runners preset ${imported} --revision ${next.revision} --reason <이유>`};
 }

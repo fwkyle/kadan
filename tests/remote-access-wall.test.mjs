@@ -146,19 +146,20 @@ test('원격 화면(서버가 그리는 중앙 화면)은 token을 비우고, �
 
 // 설계 2-1 쓰기 경로 전수 목록(center-wall.mjs의 POST 허용 목록과 같다).
 const WRITE_PATHS = ['/ask', '/secretary/start', '/roles/restart', '/cards/update', '/cards/create', '/decisions/answer',
-  '/runners/set', '/runners/preset', '/runners/fallback', '/runners/favorite', '/runners/runner', '/runners/model-add',
+  '/runners/set', '/runners/preset-save', '/runners/preset', '/runners/fallback', '/runners/favorite',
+  '/runners/runner', '/runners/model-add',
   '/runners/model-remove', '/runners/models-list',
   ...['create', 'update', 'link', 'unlink', 'execute', 'mail', 'complete', 'cancel', 'reopen'].map(x => '/works/' + x)];
 
 test('쓰기 경로 목록이 서버의 POST 허용 목록과 같다', () => {
   const source = fs.readFileSync(new URL('../src/center-wall.mjs', import.meta.url), 'utf8');
-  const listed = source.match(/\['\/ask'[^\]]*\]/)[0];
+  const listed = source.match(/\[\s*'\/ask'[^\]]*\]/)[0];
   for (const p of WRITE_PATHS.filter(p => !p.startsWith('/works/'))) assert.ok(listed.includes(`'${p}'`), p);
   assert.match(listed, /\['create','update','link','unlink','execute','mail','complete','cancel','reopen'\]/);
-  assert.equal(WRITE_PATHS.length, 23);
+  assert.equal(WRITE_PATHS.length, 24);
 });
 
-test('원격은 쓰기 경로 22개 모두 405이고(POST /decisions/answer 하나만 예외) 어느 것도 처리기까지 가지 않는다', async () => {
+test('원격은 쓰기 경로 23개 모두 405이고(POST /decisions/answer 하나만 예외) 어느 것도 처리기까지 가지 않는다', async () => {
   const certs = await certsServer();
   const app = await start({remote: config, certs});
   try {
