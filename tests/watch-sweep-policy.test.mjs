@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createSweepDiagnostics, createSweepPolicy, createFullSchedule} from '../src/watch-sweep-policy.mjs';
 import {dedupAlerts, explainAlertRoute} from '../src/watch.mjs';
+import {recordAlert, seedAlertState} from '../src/watch-alert-body.mjs';
 
 const dirOf = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-sweep-policy-'));
 const diff = (key = 'ledger-array', fingerprint = 'f1') => ({key, fingerprint, detail: '배열 지문 불일치'});
@@ -144,4 +145,53 @@ test('가벼운 대조 불일치로 즉시 전체 대조를 돌린 뒤 쿨다운
   assert.equal(schedule.due({now: 700_000, reason: 'light-mismatch'}), 'light-mismatch');
   schedule.ran(700_000);
   assert.equal(schedule.due({now: 700_000 + 6 * 3600_000}), 'periodic');
+});
+
+// 재검수 F8-R1: 새 지문이 생긴 뒤 재시작하면 끝난 이전 지문의 사용자 경보가 다시 살아나던 문제(검수자 재현 도구 2개를 시험으로 옮김).
+// 실제 recordAlert → seedAlertState → dedupAlerts → explainAlertRoute 경로를 지난다.
+for (const newPasses of [1, 2]) {
+  test(`F8-R1: f1 반복 경보 1회 → f2 diff ${newPasses}번 → 재시작해도 f1 사용자 경보가 다시 나오지 않고, f2는 3번 연속 전에는 나오지 않는다`, () => {
+    const dir = dirOf(), diagnostics = createSweepDiagnostics(dir);
+    const ledger = [];
+    let policy = createSweepPolicy({diagnostics, now: () => Date.parse('2026-10-25T00:00:00Z')}), active = [];
+    const route = alert => explainAlertRoute(alert, new Map(), ['kadan-boss'], 'boss', new Map()).recipient;
+    const cycle = () => {
+      const out = dedupAlerts(active, policy.alerts());active = out.active;
+      for (const alert of out.notify) recordAlert(entry => ledger.push(entry), alert, route(alert), true);
+      for (const alert of out.resolved) recordAlert(entry => ledger.push(entry), alert, null, false, true);
+      return {notify: out.notify.map(alert => ({id: alert.id, recipient: route(alert)})), active: out.active.map(alert => alert.id)};
+    };
+    for (let n = 0; n < 3; n++) policy.record(diffPass('f1'));
+    const first = cycle();
+    assert.deepEqual(first.notify.filter(item => item.id.startsWith('sweep-repeat:')),
+      [{id: 'sweep-repeat:ledger-array:f1', recipient: '@user'}]);                // f1 사용자 경보 1회
+    for (let n = 0; n < newPasses; n++) policy.record(diffPass('f2'));            // 새 지문: 아직 3번 연속 전
+    const before = cycle();
+    assert.equal(before.active.some(id => id.startsWith('sweep-repeat:')), false); // 실행 중에도 옛 반복 경보는 끝난다
+    // 재시작: 진단 기록에서 정책을 복원하고 알림 이력(원장)에서 활성 경보를 복원한다.
+    policy = createSweepPolicy({diagnostics, now: () => Date.parse('2026-10-25T00:00:00Z')});
+    active = seedAlertState(ledger).active;
+    const afterRestart = cycle();
+    assert.equal(afterRestart.notify.some(item => item.id.startsWith('sweep-repeat:')), false,
+      '재시작이 이미 끝난 f1 경보를 사용자에게 다시 내보냈다');
+    assert.equal(policy.alerts().some(alert => alert.id.startsWith('sweep-repeat:')), false);
+    // f2는 남은 횟수를 채워 3번째에만, 새 지문 id로 사용자에게 1회.
+    for (let n = newPasses; n < 2; n++) policy.record(diffPass('f2'));
+    assert.deepEqual(cycle().notify.filter(item => item.id.startsWith('sweep-repeat:')), []);
+    policy.record(diffPass('f2'));
+    assert.deepEqual(cycle().notify.filter(item => item.id.startsWith('sweep-repeat:')),
+      [{id: 'sweep-repeat:ledger-array:f2', recipient: '@user'}]);
+  });
+}
+
+test('F8-R1: 기록 복원은 실행 중과 같은 결과를 낸다 — 해제·재발·지문 전환을 거친 임의 순서에서 재시작 전후 경보가 같다', () => {
+  const dir = dirOf();
+  let live = policyOf(dir);
+  const steps = [['f1', 3], ['match', 1], ['f1', 3], ['f2', 2], ['f2', 1], ['f3', 1], ['f2', 3], ['match', 1], ['f4', 3]];
+  for (const [what, count] of steps) {
+    for (let n = 0; n < count; n++) live.record(what === 'match' ? {status: 'match', diffs: []} : diffPass(what));
+    const restored = policyOf(dir);
+    assert.deepEqual(restored.alerts().map(alert => alert.id), live.alerts().map(alert => alert.id), `${what} x${count}`);
+    assert.equal(restored.holding(), live.holding());
+  }
 });

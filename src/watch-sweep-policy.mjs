@@ -72,6 +72,9 @@ export function createSweepPolicy({diagnostics, now = Date.now, repeatPasses = R
         const previous = streaks.get(diff.key);
         streaks.set(diff.key, previous?.fingerprint === diff.fingerprint
           ? {fingerprint: diff.fingerprint, count: previous.count + 1} : {fingerprint: diff.fingerprint, count: 1});
+        // 실행 중(record)과 같은 전이: 새 지문을 보면 이전 지문의 반복 에피소드는 끝난다. 이 전이가 복원에 없으면 재시작 뒤
+        // 끝난 반복 경보가 사용자에게 다시 살아난다(재검수 F8-R1). 이어지는 notified 행이 새 지문의 에피소드를 다시 연다.
+        if (episodes.has(diff.key) && episodes.get(diff.key) !== diff.fingerprint) episodes.delete(diff.key);
       }
       for (const key of [...streaks.keys()]) if (!seen.has(key)) streaks.delete(key);
     }
