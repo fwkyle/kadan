@@ -59,7 +59,7 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 - `start`의 start 기록에는 `launchSource`(`settings`/`override`/`fallback`), `settingsRevision`을 남긴다. `override`면 `overrideReason`과 그때의 설정 명령(`settingsCmd`)도 남긴다. `fallback`이면 `fallbackIndex`·`fallbackReason`·`settingsPreset`과 1순위 명령(`settingsCmd`, 있으면)을 남긴다.
 - 설정 파일이 없으면 `start`는 예전처럼 `--cmd`가 필요하다. 인계 후임 생성은 선임 명령을 이유("인계: 선임 실행 명령 유지")와 함께 그대로 쓴다.
 - `work auto-configure`는 작업자·검수자 세션을 실제로 띄운 모델의 계열이 같으면 거부한다.
-- 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 발령에는 자동 라우팅·자동 폴백을 만들지 않는다(감시 AI만 예외, 아래 [감시 AI](#감시-ai)). 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.
+- 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 검수자 `start --for`는 다른 계열의 첫 후보를 고른다. 그 밖의 대화형 역할은 자동 폴백을 하지 않는다(감시 AI는 아래 [감시 AI](#감시-ai)). 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.
 
 ## 기본 프리셋
 
@@ -91,6 +91,7 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
 kadan runners export fast > fast.json          # 표준 출력(그대로 파일로 받아도 된다)
 kadan runners export fast --out ~/share/fast.json   # 명시한 경로에만 쓴다. 이미 있는 파일과 KADAN_HOME 안은 거절
 kadan runners import fast.json --as fast2 --revision N --reason <이유>   # 이름을 안 주면 파일의 프리셋 이름을 쓴다
+kadan runners import fast.json --replace --revision N --reason <이유>  # 기존 이름 한 벌을 통째로 교체
 ```
 
 파일 모양(값은 자리표시):
@@ -104,10 +105,10 @@ kadan runners import fast.json --as fast2 --revision N --reason <이유>   # 이
 
 - **싣지 않는 것**: `revision`, 즐겨찾기, 실행기 명령 틀(`spawn`)·`conversation` 같은 실행기 표 내용, 창·로티 설정, 원장, 경로·계정·토큰·이메일. 실행기는 이름만 싣고, 명령 틀은 받는 사람 기계의 것을 쓴다.
 - **내보내기 개인정보 검사**: 파일이 될 값 전체(label·차단 사유·계열 앞머리 포함)에서 사용자 폴더·`/home/`·`~/`·`$HOME`·윈도 경로·이메일·토큰 꼴(`sk-`·`ghp_` 등)을 찾는다. 하나라도 걸리면 파일을 만들지 않고 칸 이름과 종류만 알린다(값은 출력하지 않는다). 기존 `scrubSecrets`는 주어진 비밀값 목록을 가리는 함수라 패턴을 찾지 못하고, `check:public`은 저장소 파일 검사라 맞지 않아 `src/runner-export.mjs`에 전용 검사를 뒀다. 가져오기도 같은 검사를 파일에 한다.
-- **가져오기는 프리셋 한 벌만 더한다.** 받는 쪽 `runners`·`families`·`blocked`·`favorites`와 활성 프리셋은 바꾸지 않는다. 파일의 `families`·`blocked`는 받는 쪽과 다른 점만 결과의 `differences`로 보고하고 적용하지 않는다(전역 규칙은 모든 프리셋 공통이라 남의 기계 규칙을 조용히 바꾸면 안 된다).
-- **검사 순서**(하나라도 걸리면 전체 거절, revision·원장·설정 파일 불변): (1) `format`·`version`·파일 모양 (2) 프리셋 이름(또는 `--as`)이 새 이름 검사를 통과 — 예약 이름, 이름 규칙, 이미 있는 이름이 모두 걸리고 `--as`를 안내한다. 이름이 이미 있으면(기본 프리셋 `기본`끼리 등) `--as`로 다른 이름을 준다 (3) 역할 값·대체 후보마다 이 기계에 그 실행기가 등록돼 있는지, 모델이 목록에 있는지, 강도가 있는지 (4) 이 기계 계열 규칙 (5) 이 기계 차단 모델.
+- **가져오기는 프리셋 한 벌만 더한다.** 명시적으로 `--replace`를 주면 기존 이름의 한 벌을 통째로 바꾼다(없는 이름은 거절). 받는 쪽 `runners`·`families`·`blocked`·`favorites`와 활성 프리셋 이름은 바꾸지 않는다. 파일의 `families`·`blocked`는 받는 쪽과 다른 점만 결과의 `differences`로 보고하고 적용하지 않는다.
+- **검사 순서**(하나라도 걸리면 전체 거절, revision·원장·설정 파일 불변): (1) `format`·`version`·파일 모양 (2) 프리셋 이름(또는 `--as`)이 새 이름 검사를 통과 — 예약 이름, 이름 규칙, 이미 있는 이름이 모두 걸리고 `--as`를 안내한다. 이름이 이미 있으면 `--as`로 다른 이름을 주거나 `--replace`로 교체를 명시한다 (3) 역할 값·대체 후보마다 이 기계에 그 실행기가 등록돼 있는지, 모델이 목록에 있는지, 강도가 있는지 (4) 이 기계 차단 모델 (5) 고친 프리셋의 1순위 계열 규칙과 후보 경고.
 - **새 기계에서는 (3)의 거절이 흔하다.** claude는 모델을 등록하기 전까지 목록이 비어 있고, codex 목록은 codex를 한 번 실행하기 전엔 없다. 거절 메시지는 빠진 실행기·모델·강도를 **모두** 나열하고 그대로 칠 수 있는 명령(`kadan runners runner …`, `kadan runners model <실행기> <모델> --efforts …`)과 "등록한 뒤 import를 다시"를 붙인다. codex 목록에 없는 모델·강도는 명령이 없고 codex를 갱신해 한 번 실행하라고 알린다. 부분 적용은 없다.
-- 저장은 `change()` 경로(revision 대조, `--reason` 필수)이고 원장에는 `preset-import` 한 줄이 남는다. 가져온 프리셋은 활성화하지 않으므로 쓰려면 `kadan runners preset <이름>`으로 바꾼다.
+- 저장은 `change()` 경로(revision 대조, `--reason` 필수)이고 원장에는 `preset-import` 한 줄이 남으며 revision은 1 오른다. 고친 프리셋만 계열 검사하므로 다른 프리셋의 기존 충돌 때문에 저장이 막히지 않는다. 새 프리셋은 별도로 활성화해야 하고, 활성 프리셋을 `--replace`하면 다음 발령부터 새 값이 쓰인다.
 - 시험: `tests/runner-export.test.mjs`(격리 홈 두 개, 가짜 실행기·가짜 codex 목록).
 
 ## 옛 세션 발령 막기
@@ -139,6 +140,23 @@ kadan runners import fast.json --as fast2 --revision N --reason <이유>   # 이
 - `--fallback N`·`--cmd … --reason`으로 띄운 세션도 지금 기본값과 다르면 같은 규칙으로 거절된다.
 - `work` 자동 발령에는 예외 옵션이 없다. 거절되면 그 자동 실행이 멈추고 이유가 남는다.
 
+## 작업자에 맞춰 검수자 시작하기
+
+```sh
+kadan start <검수자> --profile reviewer --for <작업자역할>
+```
+
+- 검수 작업을 연결할 때는 이 경로를 쓴다. 살아 있는 작업자의 현재 PID와 마지막 stop 이후의
+  실제 명령이 있는 start 기록을 대조한다. 재사용 때문에 뒤에 붙은 빈 start는 무시한다.
+- 검수자 1순위 → 폴백 1 → 폴백 2 순서로, 작업자와 다른 계열이며 등록·강도·차단 검사를
+  통과하는 첫 후보를 고른다. 작업자 모델·계열을 모르거나 적합한 후보가 없으면 띄우지 않는다.
+- `--for`는 새 검수자에게만 쓰며 `--cmd`·`--fallback`과 함께 쓸 수 없다.
+  `--for`를 생략하면 종전대로 1순위를 쓰며 이 추가 계열 검사는 하지 않는다.
+- start 기록의 `launchSource: "review-for"`와 `reviewFor`에 작업자 역할·PID·모델·계열,
+  선택된 모델·계열·이유·건너뛴 후보를 남긴다. 폴백이면 `fallbackIndex`·`fallbackReason`도 남긴다.
+- 발령 입구의 기존 검사와 수동 `--fallback` 경로는 그대로다. 원장 조회는 한 번 실행되는
+  start 명령에서 전체 사건을 읽는다(상주 감시 경로가 아니다).
+
 ## 스크롤백(인라인) 화면 고정
 
 Why: codex 0.157부터 대화형 화면이 풀스크린(alternate screen)이 기본이다. 풀스크린이면 죽은 창의 마지막 줄 보존(`captureTail`)·`pipe-pane` 출력 기록(DONE 마커를 여기서 찾는다)·tmux 위로 스크롤이 약해진다. 기본값이 언제 바뀔지 모르므로 사용자 설정에 기대지 않고 카단이 만드는 명령에 붙여 고정한다(2026-10-18 [kyle] 결정).
@@ -157,6 +175,7 @@ Why: codex 0.157부터 대화형 화면이 풀스크린(alternate screen)이 기
 - 활성 프리셋의 역할 5개(작업자·검수자·일반감독·슈퍼감독·감시 AI)마다 실행기 → 모델 → 추론 강도를 고른다. 감시 AI 줄은 실행기로 codex만 보여 준다. 선택지는 `set`과 같은 목록(codex는 모델 목록 파일, 그 밖은 실측 목록)에서만 온다. 실행기를 바꾸면 그 실행기의 모델만, 모델을 바꾸면 그 모델이 지원하는 강도만 남는다. 강도를 받지 않는 실행기는 "해당 없음"이다.
 - 정책으로 막은 모델은 목록에 "차단: 이유"로 보이지만 그 역할에서는 고를 수 없다.
 - 각 행 아래에 지금 설정으로 채워질 실행 명령을 보여 준다.
+- React 화면은 여러 역할의 모델·강도·대체 후보를 변경안에 모은 뒤 **프리셋 저장**으로 한 번에 저장한다. 1순위 칸은 선택 즉시 변경안에 반영하고, 대체 후보의 **추가·위로·아래로·삭제**도 저장 전까지 화면 안에서만 바뀐다. 바꾸는 이유는 마지막에 한 번 적는다. **지금 값 불러오기**는 변경안을 버리고 최신 값을 읽는다. 다른 곳에서 같은 프리셋을 고쳤으면 덮어쓰지 않고 다시 읽도록 안내한다.
 - 프리셋이 둘 이상이면 활성 프리셋을 바꿀 수 있다. 전환도 `runner-settings` 사건(`action: preset`, `before`·`after`는 프리셋 이름)으로 남는다.
 - 저장에는 이유가 필요하다. 폼은 화면을 읽은 `revision`을 함께 보내고, 그사이 설정이 바뀌었으면 "설정이 바뀌었다(현재 revision N) — 다시 읽고 저장"으로 거부한다.
 - 저장하면 "다음 발령부터 적용, 떠 있는 세션은 그대로"를 보여 준다. 쓰기는 `by: 사람`으로 원장에 남는다.
@@ -170,6 +189,7 @@ Why: codex 0.157부터 대화형 화면이 풀스크린(alternate screen)이 기
 | 주소 | 입력 | 하는 일 |
 | --- | --- | --- |
 | `POST /runners/set` | `token`·`revision`·`role`·`runner`·`model`·`effort`·`reason` | 활성 프리셋의 역할 값을 `set`과 같은 검사로 바꾼다 |
+| `POST /runners/preset-save` | `token`·`revision`·`preset`·`value`(roles·fallback·label JSON)·`reason` | 기존 프리셋 한 벌을 교체한다. 계열 검사·저장·원장 기록은 한 번, 경고는 응답 `warnings`와 원장에 남는다 |
 | `POST /runners/preset` | `token`·`revision`·`preset`·`reason` | 활성 프리셋을 바꾼다 |
 | `POST /runners/model-add` | `token`·`revision`·`runner`·`model`·`efforts`·`reason` | `runners model`과 같은 `setRunnerModel` |
 | `POST /runners/model-remove` | `token`·`revision`·`runner`·`model`·`reason` | `runners model --remove`와 같은 `removeRunnerModel`(원장 `action: model-remove`) |
@@ -184,7 +204,7 @@ Why: codex 0.157부터 대화형 화면이 풀스크린(alternate screen)이 기
 
 - 목록은 `presets.<활성 프리셋>.fallback.<역할>`에 순서대로 둔다. 저장은 다른 설정과 같은 공통 경로(revision 대조·이유 필수·원장 `runner-settings` 사건, `action: fallback`, `before`·`after`는 목록 전체)다.
 - 항목마다 1순위와 같은 검사를 한다: 목록 안의 실행기·모델, 모델이 지원하는 강도(강도를 받지 않는 실행기는 강도 없음), 그 역할에 대한 정책 차단. 같은 항목을 두 번 넣거나 바뀐 것이 없는 저장은 거부한다.
-- 계열 규칙: 검수자 폴백 항목이 작업자 1순위와 같은 계열이거나, 작업자 폴백 항목이 검수자 1순위와 같은 계열이면 거부한다. 모르는 계열은 막지 않는다. 1순위를 바꿀 때도 같은 확인을 하므로 기존 폴백과 부딪히는 1순위 변경은 저장되지 않는다.
+- 계열 규칙: 작업자·검수자 **1순위끼리** 같은 계열이면 저장을 거절한다. 폴백이 상대 1순위와 같은 계열이어도 저장한다. 작업자 후보마다 다른 계열의 검수자 후보가 하나라도 있는지 보고, 없거나 계열을 모르면 `작업자 후보 …에 맞는 다른 계열 검수자 없음`을 경고한다. 경고는 저장 결과와 원장에 남는다. 실제 선택은 아래 `start --for`가 맡는다.
 - `kadan runners show`는 활성 프리셋의 폴백 목록과 번호별로 채워질 실행 명령(`fallback.<역할>[].cmd`)을 보여 준다.
 
 ### 폴백으로 띄우기
@@ -203,7 +223,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 - 추가: 2단계와 같은 실행기 → 모델 → 강도 선택 칸(차단 모델은 고를 수 없음)에서 골라 **폴백 추가**.
 - 순서 바꾸기·삭제: 항목의 **위로**·**아래로**·**삭제**.
-- 버튼 한 번이 저장 한 번이다. 매번 이유가 필요하고 원장 사건이 하나씩 남는다.
+- React 화면에서는 버튼이 변경안만 고친다. 모든 역할 편집을 마친 뒤 **프리셋 저장**을 한 번 누르면 이유·revision을 함께 보내고 원장 사건 하나가 남는다. 기존 HTML 화면과 단일 칸 API는 종전처럼 칸마다 저장하며, 새 계열 경고 규칙은 함께 적용된다.
 - 쓰기 주소는 `POST /runners/fallback`(`token`·`revision`·`role`·`reason`·`op`=`add`|`remove:N`|`up:N`|`down:N`, 추가면 `runner`·`model`·`effort`). 서버가 저장 직전 목록에 조작을 적용한 뒤 위 검사를 모두 거친다. 토큰·출처가 틀리면 403, 틀린 revision·빈 이유·목록 밖 값·강도·차단·계열 충돌·없는 번호는 409.
 
 ## 감시 AI

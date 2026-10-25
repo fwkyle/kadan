@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -227,11 +228,15 @@ test('폴백 쓰기 경로: 추가·순서·삭제는 사람 명의로 저장하
     await refused(await post({op:'add', runner:'codex'}), 409, /추가할 모델을 고르세요/);
     await refused(await add('gpt-9-nowhere', 'low'), 409, /폴백 1번: codex에서 고를 수 없는 모델/);
     await refused(await add('gpt-6-sol', 'xhigh'), 409, /지원하지 않는 강도/);
-    await refused(await add('gpt-6-sol', 'low'), 409, /작업자 폴백 1번\(gpt-6-sol\)이 검수자 1순위와 같은 계열\(gpt\)/);
+    await saved(await add('gpt-6-sol', 'low'));
+    assert.match(readLedger(f.home).at(-1).warnings.join(' '), /다른 계열 검수자 없음/);
+    await saved(await post({op:'remove:1'}));
     await refused(await add('gpt-6-astra', 'low', {role:'reviewer'}), 409, /정책으로 막은 모델/);
-    await refused(await add('xai/grok-5-review', 'medium', {role:'reviewer'}), 409, /검수자 폴백 1번.*작업자 1순위와 같은 계열\(grok\)/);
+    await saved(await add('xai/grok-5-review', 'medium', {role:'reviewer'}));
+    assert.equal(readLedger(f.home).at(-1).warnings, undefined);
+    await saved(await post({role:'reviewer', op:'remove:1'}));
     await refused(await post({op:'remove:1'}), 409, /없는 폴백 번호: 1 — 가능: 없음/);
-    assert.equal(readSettings(f.home).revision, 6);
+    assert.equal(readSettings(f.home).revision, 10);
 
     await saved(await add('swe-2-max', null));
     await saved(await add('xai/grok-5-review', 'medium'));
@@ -241,13 +246,15 @@ test('폴백 쓰기 경로: 추가·순서·삭제는 사람 명의로 저장하
     assert.deepEqual(readSettings(f.home).presets['기본'].fallback.worker.map(x => x.model), ['xai/grok-5-review', 'swe-2-max']);
     await saved(await post({op:'remove:1'}));
     assert.deepEqual(readSettings(f.home).presets['기본'].fallback.worker, [{runner:'devin', model:'swe-2-max'}]);
-    // 1순위를 기존 폴백과 같은 계열로 바꾸는 저장도 거부한다.
-    await refused(await post({role:'reviewer', runner:'devin', model:'swe-2-max'}, {where:'/runners/set'}), 409, /작업자 폴백 1번\(swe-2-max\)이 검수자 1순위와 같은 계열\(devin-swe\)/);
+    // 같은 계열 폴백만 남으면 경고하고 저장한다.
+    await saved(await post({role:'reviewer', runner:'devin', model:'swe-2-max'}, {where:'/runners/set'}));
+    assert.match(readLedger(f.home).at(-1).warnings.join(' '), /작업자 후보 swe-2-max에 맞는 다른 계열 검수자 없음/);
 
     const events = readLedger(f.home).filter(e => e.kind === 'runner-settings' && e.action === 'fallback');
-    assert.deepEqual(events.map(e => [e.by, e.revision, e.after.length]), [['사람', 7, 1], ['사람', 8, 2], ['사람', 9, 2], ['사람', 10, 1]]);
-    const html = await (await fetch(base + '/?runnersSaved=10')).text();
-    assert.match(html, /저장했습니다\(revision 10\)\. 다음 발령부터 적용, 떠 있는 세션은 그대로/);
+    assert.deepEqual(events.slice(-4).map(e => [e.by, e.revision, e.after.length]), [['사람', 11, 1], ['사람', 12, 2], ['사람', 13, 2], ['사람', 14, 1]]);
+    const html = await (await fetch(base + '/?runnersSaved=15')).text();
+    assert.match(html, /저장했습니다\(revision 15\)\. 다음 발령부터 적용, 떠 있는 세션은 그대로/);
+    assert.match(html, /경고: 작업자 후보 swe-2-max에 맞는 다른 계열 검수자 없음/);
     assert.match(html, /1번 devin \/ swe-2-max/);
   } finally { await new Promise(r => server.close(r)); }
 });

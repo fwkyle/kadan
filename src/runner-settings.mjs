@@ -134,19 +134,17 @@ export function checkFamilies(roles, families = DEFAULT_FAMILIES) {
   if (worker && worker === reviewer) throw new Error(`작업자와 검수자가 같은 계열(${worker})이다 — 자기 검수가 된다`);
 }
 
-// 프리셋 하나의 계열 확인: 1순위끼리, 그리고 검수자 폴백↔작업자 1순위·작업자 폴백↔검수자 1순위(3단계).
-// 1순위를 바꿀 때도 같은 확인을 거치므로 기존 폴백과 충돌하는 저장은 거부된다.
+// 1순위끼리는 거절한다. 작업자 후보에 다른 계열 검수자가 없는 경우는 경고로 돌려준다.
+// 실제 작업자와 검수자의 계열 대조는 start --for에서 한다.
 export function checkPresetFamilies(preset, families = DEFAULT_FAMILIES) {
   checkFamilies(preset.roles, families);
-  const pairs = [['reviewer', 'worker', '검수자', '작업자'], ['worker', 'reviewer', '작업자', '검수자']];
-  for (const [role, other, label, otherLabel] of pairs) {
-    const primary = modelFamily(preset.roles?.[other]?.model, families);
-    if (!primary) continue;
-    (preset.fallback?.[role] ?? []).forEach((item, i) => {
-      if (modelFamily(item.model, families) === primary)
-        throw new Error(`${label} 폴백 ${i + 1}번(${item.model})이 ${otherLabel} 1순위와 같은 계열(${primary})이다 — 자기 검수가 된다`);
-    });
-  }
+  const candidates = role => [preset.roles?.[role], ...(preset.fallback?.[role] ?? [])].filter(Boolean);
+  const reviewers = candidates('reviewer').map(item => modelFamily(item.model, families));
+  return candidates('worker').flatMap(item => {
+    const family = modelFamily(item.model, families);
+    return family && reviewers.some(other => other && other !== family) ? []
+      : [`작업자 후보 ${item.model}에 맞는 다른 계열 검수자 없음 — 검수자 후보를 추가하세요`];
+  });
 }
 
 // 현재 설정으로 역할의 실행 명령을 만든다. 설정이 없거나 역할 값이 없으면 null.
@@ -328,11 +326,13 @@ export function change(home, {revision, by, reason, record, action}, apply) {
     }
     const next = structuredClone(current);
     const detail = apply(next);
-    for (const preset of Object.values(next.presets)) checkPresetFamilies(preset, next.families);
+    const warnings = detail?.preset && next.presets[detail.preset]
+      ? checkPresetFamilies(next.presets[detail.preset], next.families) : [];
     next.revision = current.revision + 1;
     write(home, next);
-    record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision, ...detail});
-    return next;
+    record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision,
+      ...detail, ...(warnings.length ? {warnings} : {})});
+    return warnings.length ? {...next, warnings} : next;
   });
 }
 
@@ -447,7 +447,7 @@ export function setActivePreset(home, {preset, ...meta}) {
     if (preset === next.activePreset) throw new Error(`이미 활성 프리셋: ${preset}`);
     const before = next.activePreset;
     next.activePreset = preset;
-    return {before, after: preset};
+    return {before, after: preset, preset};
   });
 }
 
@@ -492,7 +492,7 @@ export function renamePreset(home, {from, to, ...meta}) {
     // 이름 순서를 지키려고 새 객체로 다시 담는다.
     next.presets = Object.fromEntries(Object.entries(next.presets).map(([key, value]) => [key === from ? to : key, value]));
     if (next.activePreset === from) next.activePreset = to;
-    return {before: from, after: to};
+    return {before: from, after: to, preset: to};
   });
 }
 

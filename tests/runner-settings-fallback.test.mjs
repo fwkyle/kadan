@@ -1,3 +1,4 @@
+import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -77,18 +78,24 @@ test('폴백 저장은 항목마다 선택지·강도·정책을 검사하고 �
   assert.equal(readSettings(f.home).presets['기본'].fallback.worker, undefined);
 });
 
-test('계열: 검수자 폴백↔작업자 1순위, 작업자 폴백↔검수자 1순위가 같으면 거부하고, 1순위를 바꿀 때도 기존 폴백과 대조한다', () => {
+test('계열: 폴백 겹침은 저장하고 다른 계열 검수자 후보가 없을 때만 경고한다', () => {
   const f = fixture();
   const set = (role, items, revision) => setFallback(f.home, {role, items, ...f.meta(revision)});
-  assert.throws(() => set('reviewer', [{runner:'codex', model:'zai/glm-5.3', effort:'high'}, {runner:'codex', model:'xai/grok-4.7-build-fast', effort:'low'}], 6),
-    /검수자 폴백 2번\(xai\/grok-4.7-build-fast\)이 작업자 1순위와 같은 계열\(grok\)/);
-  assert.throws(() => set('worker', [{runner:'codex', model:'gpt-6-astra', effort:'low'}], 6), /작업자 폴백 1번\(gpt-6-astra\)이 검수자 1순위와 같은 계열\(gpt\)/);
-  // 모르는 계열은 막지 않는다. 일반감독 폴백은 계열 규칙 대상이 아니다.
-  set('reviewer', [{runner:'codex', model:'zai/glm-5.3', effort:'high'}, {runner:'codex', model:'mystery-model', effort:'medium'}], 6);
-  set('conductor', [{runner:'codex', model:'xai/grok-4.7-build-fast', effort:'low'}], 7);
-  // 작업자 1순위를 glm으로 바꾸면 검수자 폴백 1번과 같은 계열이라 저장하지 않는다.
-  assert.throws(() => setRole(f.home, {role:'worker', runner:'codex', model:'zai/glm-5.3', effort:'high', ...f.meta(8)}), /검수자 폴백 1번\(zai\/glm-5.3\)이 작업자 1순위와 같은 계열\(glm\)/);
-  assert.equal(readSettings(f.home).presets['기본'].roles.worker.model, 'xai/grok-4.7-build-fast');
+  // 검수자 폴백이 작업자 1순위와 같아도 다른 계열인 검수자 1순위가 있다.
+  assert.equal(set('reviewer', [{runner:'codex', model:'zai/glm-5.3', effort:'high'},
+    {runner:'codex', model:'xai/grok-4.7-build-fast', effort:'low'}], 6).warnings, undefined);
+  // 작업자 폴백과 검수자 1순위가 같아도 다른 계열 검수자 폴백이 있다.
+  assert.equal(set('worker', [{runner:'codex', model:'gpt-6-astra', effort:'low'}], 7).warnings, undefined);
+  const warning = set('reviewer', [], 8);
+  assert.match(warning.warnings.join(' '), /작업자 후보 gpt-6-astra에 맞는 다른 계열 검수자 없음/);
+  assert.deepEqual(f.records.at(-1).warnings, warning.warnings);
+  // 모르는 계열은 저장을 막지 않는다. 일반감독 폴백도 저장할 수 있다.
+  set('reviewer', [{runner:'codex', model:'zai/glm-5.3', effort:'high'},
+    {runner:'codex', model:'mystery-model', effort:'medium'}], 9);
+  set('conductor', [{runner:'codex', model:'xai/grok-4.7-build-fast', effort:'low'}], 10);
+  // 작업자 1순위와 검수자 폴백은 같아도 검수자 1순위(gpt)가 다르므로 통과.
+  setRole(f.home, {role:'worker', runner:'codex', model:'zai/glm-5.3', effort:'high', ...f.meta(11)});
+  assert.equal(readSettings(f.home).presets['기본'].roles.worker.model, 'zai/glm-5.3');
 });
 
 test('N번째 폴백으로 실행 명령을 채우고 없는 번호는 거부한다', () => {

@@ -1,5 +1,6 @@
 // kadan start (HW-3-impl: cli.mjs에서 옮김)
 import { startRoleProfile } from "../role-instructions.mjs";
+import { reviewerLaunch } from "../reviewer-launch.mjs";
 import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../runner-settings.mjs";
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
@@ -43,7 +44,7 @@ function readAlternateOn(session) {
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--no-prompt]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--for 작업자역할] [--no-prompt]");
   const insideHome = workdirInsideHome(process.cwd(), ledgerHome());
   if (insideHome) die(workdirInsideHomeMessage(insideHome), 2);
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
@@ -62,10 +63,25 @@ export function cmdStart(argv, flags) {
   const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
   const hiddenPolicy = inspectHiddenStartPolicy({ floorName: floor.name, hidden: Boolean(flags.hidden), roleProfile, reusing });
   if (!hiddenPolicy.ok) die(hiddenPolicy.message, 2);
+  let reviewSelection = null;
+  if (flags.for !== undefined) {
+    if (typeof flags.for !== "string" || !flags.for.trim()) die("--for에는 작업자 역할이 필요하다", 2);
+    if (roleProfile !== "reviewer") die("--for는 --profile reviewer에서만 쓴다", 2);
+    if (flags.cmd !== undefined || flags.fallback !== undefined)
+      die("--for는 --cmd·--fallback과 함께 쓸 수 없다", 2);
+    if (reusing) die("--for는 검수자를 새로 띄울 때만 쓴다 — 살아 있는 검수자는 바꾸지 않는다", 2);
+    const workerSession = sessionName(flags.for);
+    if (!floor.alive(workerSession)) die(`작업자가 살아 있지 않다: ${flags.for}`, 2);
+    try {
+      reviewSelection = reviewerLaunch({settings: readSettings(ledgerHome()), entries: readLedger(ledgerHome()),
+        workerRole: flags.for, workerSession, currentPid: floor.pid(workerSession)});
+    } catch (error) { die(error.message, 2); }
+  }
   // 실행 모델 설정이 있으면 --cmd 없이도 역할 기본 명령을 채운다. 다른 명령은 이유를 남긴다(2026-09-23 [kyle] 승인 1단계).
   let launch = null;
   if (!reusing && Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) {
-    try { launch = launchFor(readSettings(ledgerHome()), roleProfile); } catch (error) { die(error.message, 2); }
+    try { launch = reviewSelection ?? launchFor(readSettings(ledgerHome()), roleProfile); }
+    catch (error) { die(error.message, 2); }
   }
   // 사람이 직접 준 --cmd(adopt·handover 포함)도 대화형 codex면 인라인 화면 플래그를 붙인다. 설정값과의 비교도 같은 꼴로 한다.
   if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withStopHook(withInlineScreen(flags.cmd.trim()), ledgerHome(), message => console.error(message));
@@ -94,6 +110,15 @@ export function cmdStart(argv, flags) {
     : !launch ? {} : useSettings || flags.cmd.trim() === launch.cmd
     ? {launchSource:"settings", settingsRevision:launch.revision, settingsPreset:launch.preset}
     : {launchSource:"override", overrideReason:flags.reason.trim(), settingsRevision:launch.revision, settingsCmd:launch.cmd};
+  if (reviewSelection) {
+    launchRecord.reviewFor = reviewSelection.reviewFor;
+    launchRecord.launchSource = 'review-for';
+    if (reviewSelection.fallbackIndex) {
+      launchRecord.fallbackIndex = reviewSelection.fallbackIndex;
+      launchRecord.fallbackReason = reviewSelection.reviewFor.reason;
+    }
+    console.error(`검수자 선택: ${reviewSelection.model} — ${reviewSelection.reviewFor.reason}`);
+  }
   // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
   const cmdPolicy = inspectStartCmdPolicy({ roleProfile, cmd: flags.cmd, reusing });
   if (!cmdPolicy.ok) die(cmdPolicy.message, 2);
