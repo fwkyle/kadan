@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {createDatabase, writeStorageMarker, appendStream} from '../src/storage.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
 import {ledgerViewPath} from '../src/ledger-view-store.mjs';
@@ -23,9 +23,13 @@ const dispatch = (n, id) => ({kind: 'send', role, session: `kadan-${role}`, task
   mailId: `fixture-q-${n}`, baselineMarkers: [], t: at(n)});
 
 // 독립검수 F7 재현: 조회 DB의 발령 상태 행 하나가 실행 중 유실돼도 예전 대조는 둘 다 통과했다.
+// 열린 카드 수 불변식이 실제 저장소와 맞도록 카드 사건을 저장소에도 둔다.
+const storeCards = (home, list) => list.forEach(card => appendStream(home, `cards/${card.key}/events.jsonl`,
+  {key: card.key, id: card.id, repo: card.key.split('/')[0], revision: 1, at: card.at, role: card.role, status: card.status, workType: 'execution'}));
 function setup() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-sweep-role-state-'));
   createDatabase(home);writeStorageMarker(home, 'sqlite');
+  storeCards(home, cards);
   const reader = createWatchMailReader(home, null, {readCards: () => cards});
   const dispatches = () => {
     const raw = reader.readEntries(), entries = reader.project(raw, cards);
@@ -113,7 +117,8 @@ test('교체 뒤 다음 순회: 실제 reader·정기 대조·reset으로 보류
   const worker = 'worker', session = 'kadan-worker';
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-sweep-role-state-run-'));
   createDatabase(home);writeStorageMarker(home, 'sqlite');
-  const card = {id: 'task', key: 'repo/task', role: worker, status: 'assigned', workType: 'execution'};
+  const card = {id: 'task', key: 'repo/task', role: worker, status: 'assigned', workType: 'execution', at: new Date(0).toISOString()};
+  storeCards(home, [card]);
   const reader = createWatchMailReader(home, null, {readCards: () => [card]});
   appendLedger({kind: 'start', role: worker, session, panePid: 1, t: new Date(0).toISOString()}, home);
   appendLedger({kind: 'send', role: worker, session, taskId: 'task', executionKey: 'repo/task', baselineMarkers: [], t: new Date(0).toISOString()}, home);
