@@ -181,3 +181,14 @@ test('전체 주소 완료는 업무 최종 완료 검사에서도 종료로 연
  appendLedger({...done('r/c'),t:'2099-01-01T00:01:00Z'},f.home);
  assert.equal(works.change(w.key,'complete',{result:'verified'},{revision:w.revision,by:'p-boss',note:'checked'}).status,'done');
 });
+
+test('같은 카드 배열은 해석표를 재사용하고, 길이가 바뀌면 다시 만든다', () => {
+  const cards = [{key:'a/x1', id:'x1'}];
+  const first = taskIdentity(cards);
+  assert.equal(taskIdentity(cards), first);
+  cards.push({key:'a/x2', id:'x2'});
+  const second = taskIdentity(cards);
+  assert.notEqual(second, first);
+  assert.equal(second.resolve('x2').state, 'resolved');
+  assert.notEqual(taskIdentity([...cards]), second);
+});
