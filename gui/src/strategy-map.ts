@@ -3,7 +3,7 @@
 // 이 결과를 그대로 그린다 — 데이터 해석을 화면마다 다시 만들지 않기 위해서다.
 // 미감 기준: 납작한 등각(2:1). 바닥은 저채도 한 색, 상태색만 채도 높게(현황판과 같은 색), 외곽선 없음.
 import type { Row } from "./types";
-import type { LiveSession, OpenAlerts } from "./status-band";
+import { liveLabel, type LiveSession, type OpenAlerts } from "./status-band.ts";
 
 export type UnitKind = "super" | "director" | "worker";
 // 우선순위 순서: 창 없음 > 막힘 > 작업중 > 오래된 미확정 > 대기(창만 있음). 결과 대기는 #102부터 작업중에 합쳐 센다. 세션 상태를 모르면 unknown,
@@ -16,7 +16,10 @@ export type Unit = {
   model: string | null; crates: Crates; alerts: number; rows: Row[];
   // 열린 창의 시작 기록(실행 도구·모델·PID 대조·세대). 창이 없거나 세션 상태를 모르면 null.
   session: LiveSession | null;
+  // 창이 닫혔거나 세션 상태를 모를 때 마지막 start 줄의 실행 도구·모델(status.lastRuns). 없으면 null.
+  lastRun: LastRun | null;
 };
+export type LastRun = { harness: string | null; model: string | null };
 export type Base = { id: string; label: string; super: string | null; units: Unit[] };
 export type MapModel = {
   bases: Base[];
@@ -29,6 +32,7 @@ export type MapInput = {
   rows: Row[];
   live: LiveSession[] | null;
   alerts: OpenAlerts | null;
+  lastRuns?: Record<string, LastRun>;
 };
 
 export const STATE_LABEL: Record<UnitState, string> = {
@@ -43,7 +47,7 @@ function emptyCrates(): Crates {
   return { running: 0, stuck: 0, stale: 0, planned: 0, hold: 0 };
 }
 
-export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel {
+export function buildMap({ hierarchy, rows, live, alerts, lastRuns }: MapInput): MapModel {
   const parents = new Map(Object.entries(hierarchy ?? {}));
   const children = new Map<string, string[]>();
   for (const [role, parent] of parents) {
@@ -103,7 +107,8 @@ export function buildMap({ hierarchy, rows, live, alerts }: MapInput): MapModel 
       : alive ? "idle" : "off";
     return {
       role, kind, parent: parent && parent !== USER ? parent : null, state, alive,
-      model: liveByRole.get(role)?.model ?? null, session: liveByRole.get(role) ?? null, crates, alerts: alertsByRole.get(role) ?? 0,
+      model: liveByRole.get(role)?.model ?? null, session: liveByRole.get(role) ?? null,
+      lastRun: liveByRole.has(role) ? null : lastRuns?.[role] ?? null, crates, alerts: alertsByRole.get(role) ?? 0,
       rows: own.filter((r) => r.bucket === "running" || r.bucket === "stuck" || r.bucket === "stale"),
     };
   };
@@ -159,14 +164,27 @@ export function shortName(role: string, base: string | null) {
 
 // 쉬는 역할(창도 진행 카드도 없이 진행 전·일시정지 카드만 든 작업자)을 뺀 유닛. 슈퍼감독·감독은 기지의 뼈대라 늘 남긴다.
 // 옆 칸의 생존 줄. 옛 '담당자 상태' 표(2026-10-25 전략 맵으로 옮김)와 같은 낱말을 쓴다.
-export function lifeLabel(unit: Unit) {
+type Life = Pick<Unit, "alive" | "session">;
+export function lifeLabel(unit: Life) {
   if (unit.alive === null) return "모름";
   if (!unit.alive) return "닫힘";
   return unit.session?.pidState === "match" ? "열려 있음" : "PID 변경 · 확인 필요";
 }
 // 다시 띄우기에 보낼 세대(최근 start의 pane PID). 창이 열려 있고 세대가 기록된 역할만, 원격 읽기 전용이면 없음.
-export function restartGeneration(unit: Unit, readOnly: boolean) {
+export function restartGeneration(unit: Life, readOnly: boolean) {
   return readOnly || !unit.alive ? null : unit.session?.recordedPid ?? null;
+}
+
+// 옆 칸의 실행 도구 · 모델 줄. 창이 닫혀도 마지막 start 기록을 보인다(옛 담당자 상태 표와 같은 정보).
+export function runLabel(unit: Pick<Unit, "alive" | "session" | "lastRun">) {
+  if (unit.session) return liveLabel(unit.session);
+  const last = unit.lastRun && [unit.lastRun.harness, unit.lastRun.model].filter(Boolean).join(" · ");
+  if (last) return "마지막 실행: " + last;
+  return unit.alive === false ? "창 없음" : "모름";
+}
+// 감시기·대시보드처럼 지도 유닛이 아닌 카단 자체 세션. 전략 맵의 '기반 세션' 묶음에 따로 보인다.
+export function systemSessions(live: LiveSession[] | null) {
+  return live === null ? null : live.filter((s) => SYSTEM_ROLES.has(s.role));
 }
 
 export function visibleUnits(units: Unit[], showResting: boolean) {

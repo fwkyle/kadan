@@ -99,3 +99,50 @@ test("살아 있는 담당의 실행 도구·모델·세대가 sessions 표와 �
   assert.equal(open.find((r) => r.role === "q-감독").model, "모름");
   assert.equal(live.find((s) => s.role === "q-감독").model, "opus");
 });
+
+// PR #298 검수 F2: 창이 닫힌 담당(열린 카드 있음)과 세션 상태를 모를 때도 옛 표의 실행 도구·모델이 남아야 한다.
+// 옛 표(sessions)가 보이던 모든 역할을 새 자료(살아 있으면 live, 아니면 lastRuns)와 대조한다.
+test("닫힌 담당·세션 상태 모름에서도 sessions 표의 실행 도구·모델이 live 또는 lastRuns로 남는다", async () => {
+  const { buildTree } = await import("../src/cli.mjs");
+  const { buildCardCenter } = await import("../src/card-center.mjs");
+  const { sessionsData, lastRuns } = await import("../src/dashboard/summary.mjs");
+  const t = (n) => new Date(Date.UTC(2026, 9, 25, 1, n)).toISOString();
+  const start = (role, panePid, n, cmd) => ({ kind: "start", role, session: `kadan-${role}`, panePid, t: t(n),
+    ...(cmd ? { cmd, harness: cmd.split(" ")[0], model: cmd.split("--model ")[1] } : {}) });
+  const card = (role) => ({ id: "c-" + role, key: "r/c-" + role, repo: "r", role, status: "assigned", scope: "local",
+    board: "r", at: t(0), history: [], workType: "execution" });
+  const send = (role) => ({ kind: "send", role, session: `kadan-${role}`, taskId: "c-" + role, t: t(9) });
+  const entries = [
+    start("r-열림", 11, 0, "claude --model sonnet"),
+    start("r-닫힘", 12, 1, "codex --model model-2"),
+    { kind: "stop", role: "r-닫힘", session: "kadan-r-닫힘", t: t(4) },
+    start("r-기록만", 13, 2, "codex --model model-3"), // stop 없이 세션만 사라짐
+    start("r-끝남", 14, 3, "claude --model haiku"), // 열린 카드 없음 → 옛 표도 숨김
+    send("r-열림"), send("r-닫힘"), send("r-기록만"),
+  ];
+  const cards = ["r-열림", "r-닫힘", "r-기록만"].map(card);
+  const build = (alive, runtimeKnown) =>
+    buildCardCenter({ cards, entries, tree: buildTree(entries, alive, cards), runtimeKnown });
+  for (const [label, center] of [
+    ["세션 상태 앎", build({ "kadan-r-열림": { alive: true, pid: 11 } }, true)],
+    ["세션 상태 모름", build({}, false)],
+  ]) {
+    const sessions = sessionsData({ center }, new URL("http://x/"), {}), live = liveSessions(center) ?? [];
+    const runs = lastRuns(center);
+    const owners = new Set(cards.map((c) => c.role));
+    const checked = [];
+    for (const r of sessions.roles) {
+      if (!r.model || r.model === "모름") continue;
+      const now = live.find((s) => s.role === r.role);
+      // 세션 상태를 모르면 옛 표는 모든 역할을 보였다. 새 자료는 지도에 오르는 담당(열린 카드)으로 줄인다.
+      if (!now && !owners.has(r.role)) continue;
+      const got = now ?? runs[r.role];
+      assert.ok(got, `${label}: ${r.role}의 실행 기록이 사라짐`);
+      assert.equal(got.model, r.model, `${label}: ${r.role} 모델`);
+      assert.equal(got.harness, r.harness, `${label}: ${r.role} 실행 도구`);
+      checked.push(r.role);
+    }
+    assert.deepEqual(checked.sort(), ["r-기록만", "r-닫힘", "r-열림"].sort(), label + ": 닫힌 담당까지 대조");
+    assert.ok(!("r-끝남" in runs), label + ": 열린 카드 없는 담당은 싣지 않는다");
+  }
+});

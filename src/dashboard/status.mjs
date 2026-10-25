@@ -18,6 +18,7 @@ import {
   supervisorSummary,
   roleActivity,
 } from "../dashboard-band.mjs";
+import { lastRuns } from "./summary.mjs";
 import { effectiveWorkOwner, withEffectiveOwner } from "../handover-state.mjs";
 import { previousGenerationExecutions, previousGenerationWorks } from "../watch-scope.mjs";
 import { isDescendant } from "../hierarchy.mjs";
@@ -136,6 +137,7 @@ export function statusData(snapshot, url, stamp, m) {
     decisions: openDecisions,
     previousGeneration: previousSummary(previousItems),
     live,
+    lastRuns: lastRuns(snapshot.center),
     flow: (({ total, unconfirmed }) => ({ total, unconfirmedCount: unconfirmed.length, unconfirmed: unconfirmed.slice(0, FLOW_PREVIEW) }))(flowSummary(m.reviewFlows)),
     alerts,
     // 슈퍼감독마다 한 줄(관계표 기준). 관계표를 모르면 null.

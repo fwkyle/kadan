@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, diffMap, lifeLabel, placeUnits, restartGeneration, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
+import { buildMap, diffMap, lifeLabel, placeUnits, restartGeneration, runLabel, systemSessions, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -150,4 +150,27 @@ test("옆 칸의 생존·다시 띄우기: 옛 담당자 상태 표와 같은 �
   const unknown = buildMap({ hierarchy, rows, live: null, alerts: null }).bases.flatMap((b) => b.units)[0];
   assert.equal(lifeLabel(unknown), "모름");
   assert.equal(restartGeneration(unknown, false), null, "세션 상태를 모르면 버튼 없음");
+});
+
+test("닫힌 담당·세션 상태 모름에도 마지막 실행 기록을 보이고, 기반 세션은 지도 유닛이 아니라 따로 모인다(검수 F2·F3)", () => {
+  const lastRuns = { "m-작업자": { harness: "codex", model: "model-2" }, "m-감독": { harness: "claude", model: "old" } };
+  const sys = [
+    { role: "watch", harness: "codex", model: "model-3", effort: null, pidState: "match", recordedPid: "103" },
+    { role: "대시보드", harness: "codex", model: "model-4", effort: null, pidState: "changed", recordedPid: "104" },
+  ];
+  const base = buildMap({ hierarchy, rows, live, alerts: null });
+  const map = buildMap({ hierarchy, rows, live: [...live, ...sys], alerts: null, lastRuns });
+  const unit = (m: typeof map, role: string) => m.bases.flatMap((b) => b.units).find((u) => u.role === role)!;
+  assert.equal(lifeLabel(unit(map, "m-작업자")), "닫힘");
+  assert.equal(runLabel(unit(map, "m-작업자")), "마지막 실행: codex · model-2", "창이 닫혀도 마지막 start 기록");
+  assert.equal(runLabel(unit(map, "m-감독")), "claude · sonnet", "살아 있으면 지금 창의 기록이 우선");
+  assert.equal(unit(map, "m-감독").lastRun, null);
+  const unknown = buildMap({ hierarchy, rows, live: null, alerts: null, lastRuns });
+  assert.equal(runLabel(unit(unknown, "m-작업자")), "마지막 실행: codex · model-2", "세션 상태를 몰라도 기록은 보인다");
+  assert.equal(runLabel(unit(base, "m-작업자")), "창 없음", "기록이 없으면 예전처럼");
+  assert.equal(map.totals.units, base.totals.units, "기반 세션은 지도 유닛 수를 바꾸지 않는다");
+  assert.deepEqual(systemSessions([...live, ...sys])?.map((s) => s.role), ["watch", "대시보드"]);
+  assert.equal(systemSessions(null), null);
+  assert.equal(restartGeneration({ alive: true, session: sys[1] }, false), "104");
+  assert.equal(restartGeneration({ alive: true, session: sys[1] }, true), null);
 });
