@@ -464,6 +464,8 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
   const chosen=(recipient,basis)=>({recipient:recipient||null,basis,skipped});
   if (alert.kind === '자원' && Object.hasOwn(alert,'recipient')) return chosen(alert.recipient,'explicit');
   if (alert.id === 'hierarchy:unreadable') return chosen('@user','hierarchy-unreadable');
+  // 정기 대조 차이가 반복된 경보(watch-sweep-policy)는 사용자에게만 간다. 새 알림 경로가 아니라 이 라우터의 명시 규칙이다.
+  if (alert.id.startsWith('sweep-repeat:')) return chosen('@user','sweep-repeat');
   // 밀리고 있는 그 창이나 상위로 보내면 같은 입력 보호에 또 걸린다. 사용자에게만 간다(2026-10-13 [kyle]).
   if (alert.kind === '알림밀림') return chosen('@user','notify-held');
   // codex가 카단 Stop 훅을 신뢰하지 않은 상태는 kyle만 풀 수 있다(codex 화면에서 승인). 작업자의 감독에게 보내도 할 일이 없다.

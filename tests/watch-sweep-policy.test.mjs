@@ -5,23 +5,29 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createSweepDiagnostics, createSweepPolicy, createFullSchedule} from '../src/watch-sweep-policy.mjs';
+import {dedupAlerts, explainAlertRoute} from '../src/watch.mjs';
 
 const dirOf = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-sweep-policy-'));
 const diff = (key = 'ledger-array', fingerprint = 'f1') => ({key, fingerprint, detail: '배열 지문 불일치'});
-const policyOf = (dir, extra = {}) => createSweepPolicy({diagnostics: createSweepDiagnostics(dir, extra), now: () => Date.parse('2026-10-25T00:00:00Z'), userRecipient: '@user'});
+const diffPass = (fingerprint = 'f1', key = 'ledger-array') => ({status: 'diff', diffs: [diff(key, fingerprint)], position: 9, generation: 'g1',
+  arrayDigest: 'a', sourceDigest: 'b', arrayCount: 3, sourceCount: 3});
+const policyOf = (dir, extra = {}) => createSweepPolicy({diagnostics: createSweepDiagnostics(dir, extra), now: () => Date.parse('2026-10-25T00:00:00Z')});
+const repeatIds = policy => policy.alerts().map(alert => alert.id).filter(id => id.startsWith('sweep-repeat:'));
 
 test('차이는 진단 파일에 남기고 보류·경보를 만들며, 같은 항목이 일치하면 해제를 기록한다', () => {
   const dir = dirOf(), policy = policyOf(dir);
   assert.equal(policy.holding(), false);
-  const first = policy.record({status: 'diff', diffs: [diff()]});
+  const first = policy.record(diffPass());
   assert.equal(first.replace, true);            // 원본 검증 성공·위치 불변이므로 교체 허용
   assert.equal(policy.holding(), true);
   assert.equal(policy.alerts()[0].id, 'sweep-hold:ledger-array');
   policy.record({status: 'match', diffs: []});
   assert.equal(policy.holding(), false);
   assert.deepEqual(policy.alerts(), []);
-  const kinds = createSweepDiagnostics(dir).rows().map(row => row.kind);
-  assert.deepEqual(kinds, ['pass', 'hold', 'pass', 'released']);
+  const rows = createSweepDiagnostics(dir).rows();
+  assert.deepEqual(rows.map(row => row.kind), ['pass', 'hold', 'pass', 'released']);
+  // F9: pass 행에 위치·세대·양쪽 지문을 남긴다.
+  assert.deepEqual([rows[0].position, rows[0].generation, rows[0].arrayDigest, rows[0].sourceDigest], [9, 'g1', 'a', 'b']);
 });
 
 test('구분 불가(error)는 교체하지 않고 보류하며 일치 전까지 풀지 않는다, 비교 중 위치 변화(moved)는 차이로 세지 않는다', () => {
@@ -36,31 +42,96 @@ test('구분 불가(error)는 교체하지 않고 보류하며 일치 전까지 
   assert.equal(policy.holding(), false);
 });
 
-test('같은 키·같은 차이가 전체 대조 3번 이어지면 kyle 알림은 한 번만 나가고 재시작해도 다시 나가지 않는다', () => {
-  const dir = dirOf();
-  let policy = policyOf(dir);
-  assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
-  assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
-  assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, ['ledger-array']);
-  assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
-  assert.deepEqual(policy.alerts().map(alert => alert.id), ['sweep-hold:ledger-array', 'sweep-repeat:ledger-array']);
-  assert.equal(policy.alerts()[1].role, '@user');
-  policy = policyOf(dir);                       // 재시작
-  assert.equal(policy.holding(), true);         // 보류도 진단 파일에서 복원된다
-  assert.deepEqual(policy.alerts().map(alert => alert.id), ['sweep-hold:ledger-array', 'sweep-repeat:ledger-array']); // 같은 id로 이어져 다시 울리지 않는다
-  assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
-  // 차이 지문이 바뀌면 새로 센다.
-  for (let n = 0; n < 2; n++) assert.deepEqual(policy.record({status: 'diff', diffs: [diff('ledger-array', 'f2')]}).escalate, []);
-  assert.deepEqual(policy.record({status: 'diff', diffs: [diff('ledger-array', 'f2')]}).escalate, ['ledger-array']);
+test('F1: 가벼운 대조 불일치는 쿨다운과 상관없이 바로 보류하고, 검증된 전체 대조 일치로만 풀린다', () => {
+  const dir = dirOf(), policy = policyOf(dir);
+  policy.holdLight([{name: '커서 대 최대 순번 mail', incremental: 1, sql: 2}]);
+  assert.equal(policy.holding(), true);
+  assert.match(policy.alerts()[0].id, /^sweep-hold:light:/u);
+  policy.record({status: 'moved'});
+  assert.equal(policy.holding(), true);        // 확인되지 않은 대조로는 풀리지 않는다
+  policy.record({status: 'match', diffs: []});
+  assert.equal(policy.holding(), false);
+  assert.ok(createSweepDiagnostics(dir).rows().some(row => row.kind === 'released' && row.key.startsWith('light:')));
 });
 
-test('진단 파일은 상한을 넘으면 다음 순번 파일로 넘어가고 옛 파일을 지우지 않는다', () => {
+test('F4: 진단 파일을 쓰지 못해도 메모리 보류·경보는 사라지지 않고 교체를 막으며, 기록이 복구된 뒤 정상 대조가 일치해야 풀린다', () => {
+  const rows = [];
+  let failing = true;
+  const diagnostics = {rows: () => [], append: row => { if (failing) throw Object.assign(new Error('EACCES'), {code: 'EACCES'});rows.push(row); }};
+  const policy = createSweepPolicy({diagnostics, now: () => 0});
+  assert.doesNotThrow(() => policy.record({status: 'error', error: '원본 조회 실패', errorKey: 'ledger-source'}));
+  assert.equal(policy.holding(), true);
+  const ids = policy.alerts().map(alert => alert.id);
+  assert.ok(ids.includes('sweep-hold:ledger-source') && ids.includes('sweep-hold:sweep-diagnostics'));
+  assert.equal(policy.record(diffPass()).replace, false);      // 기록하지 못한 채 상태를 바꾸지 않는다
+  assert.equal(policy.record({status: 'match', diffs: []}).replace, false);
+  assert.equal(policy.holding(), true);                         // 기록 장애 중 일치는 보류를 풀지 않는다
+  failing = false;
+  policy.record({status: 'match', diffs: []});                 // 복구: 밀린 행을 순서대로 쓰고
+  assert.equal(policy.holding(), false);                        // 정상 대조 일치로 푼다
+  const kinds = rows.map(row => row.kind);
+  assert.equal(kinds[0], 'pass');                               // 장애 중 쌓인 행이 순서대로 기록됨
+  assert.ok(kinds.filter(kind => kind === 'hold').length >= 1 && kinds.includes('released'));
+  assert.equal(policy.diagnosticsError(), null);
+});
+
+test('F8·F2: 같은 키·지문은 평생 1회 — 3번 연속 뒤에만 알리고, 해제 뒤 재발·새 지문·재시작을 실제 dedup 경로로 확인한다', () => {
+  const dir = dirOf();
+  let policy = policyOf(dir), active = [];
+  const cycle = () => { const out = dedupAlerts(active, policy.alerts());active = out.active;return out.notify.map(alert => alert.id); };
+  policy.record(diffPass('f1'));policy.record(diffPass('f1'));
+  assert.deepEqual(repeatIds(policy), []);                     // 2번째까지는 사용자 경보가 없다
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), []);
+  policy.record(diffPass('f1'));
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), ['sweep-repeat:ledger-array:f1']);   // 3번째에 1회
+  policy.record(diffPass('f1'));
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), []);                                   // 계속 이어져도 다시 안 알림
+  // 재시작: 같은 id로 이어지므로 새 통지가 아니다.
+  policy = policyOf(dir);
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), []);
+  // 해제 → 같은 지문 재발 3번: 평생 1회라 사용자 경보가 다시 나가지 않는다.
+  policy.record({status: 'match', diffs: []});
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), []);
+  assert.deepEqual(repeatIds(policy), []);
+  for (let n = 0; n < 3; n++) policy.record(diffPass('f1'));
+  assert.deepEqual(repeatIds(policy), []);
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), []);
+  // 새 지문 f2: 1~2번은 사용자 경보 없음, 3번째에 새 id로 1회.
+  policy.record(diffPass('f2'));
+  assert.deepEqual(repeatIds(policy), []);
+  policy.record(diffPass('f2'));
+  assert.deepEqual(repeatIds(policy), []);
+  policy.record(diffPass('f2'));
+  assert.deepEqual(cycle().filter(id => id.startsWith('sweep-repeat:')), ['sweep-repeat:ledger-array:f2']);
+});
+
+test('F2: 반복 경보는 실제 경보 라우터에서 사용자에게만 가고, 보류 경보는 사용자 전용이 아니다', () => {
+  const policy = policyOf(dirOf());
+  for (let n = 0; n < 3; n++) policy.record(diffPass('f1'));
+  const repeat = policy.alerts().find(alert => alert.id.startsWith('sweep-repeat:'));
+  const hold = policy.alerts().find(alert => alert.id.startsWith('sweep-hold:'));
+  const parents = new Map([['boss', '@user'], ['worker', 'boss']]);
+  const route = explainAlertRoute(repeat, new Map(), ['kadan-boss'], 'boss', parents);
+  assert.equal(route.recipient, '@user');
+  assert.equal(route.basis, 'sweep-repeat');
+  assert.equal(explainAlertRoute(repeat, new Map(), [], null, new Map()).recipient, '@user');   // super가 없어도 사용자
+  assert.notEqual(explainAlertRoute(hold, new Map(), ['kadan-boss'], 'boss', parents).basis, 'sweep-repeat');
+});
+
+test('진단 파일은 새 행을 더한 크기가 상한을 넘으면 다음 순번 파일로 넘어가고 옛 파일을 지우지 않는다(F9)', () => {
   const dir = dirOf(), diagnostics = createSweepDiagnostics(dir, {maxBytes: 200});
   for (let n = 0; n < 12; n++) diagnostics.append({kind: 'pass', n, pad: 'x'.repeat(60)});
   const sequences = diagnostics.sequences();
   assert.ok(sequences.length >= 3);
   assert.deepEqual(sequences, sequences.map((_, index) => index + 1));
   assert.equal(diagnostics.rows().length, 12);   // 옛 파일의 행이 그대로 남아 있다
+  for (const seq of sequences) {
+    const size = fs.statSync(path.join(dir, `watch-sweep-diagnostics-${String(seq).padStart(4, '0')}.jsonl`)).size;
+    assert.ok(size <= 200, `파일 ${seq} 크기 ${size}`);          // 새 행을 더한 크기로 판단해 상한을 넘지 않는다
+  }
+  // 행 하나가 상한보다 크면 그 행만 새 파일에 쓴다(상한 초과는 그 경우뿐).
+  diagnostics.append({kind: 'pass', pad: 'y'.repeat(500)});
+  assert.equal(diagnostics.sequences().length, sequences.length + 1);
   assert.ok(fs.readdirSync(dir).every(name => /^watch-sweep-diagnostics-\d{4}\.jsonl$/u.test(name)));
 });
 

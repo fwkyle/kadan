@@ -7,6 +7,7 @@ import {taskIdentity, taskConnectionError, projectedCompletionKey} from './task-
 import {createWatchLedgerView, readWatchRows} from './watch-ledger-view.mjs';
 import {withLedgerView} from './ledger-view.mjs';
 import {domainProjector} from './ledger-domains.mjs';
+import {openDatabase, storageMode} from './storage.mjs';
 import {applyWatchWorkState} from './watch-work-state.mjs';
 import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
 import {applyWatchRoleState} from './watch-role-state.mjs';
@@ -116,8 +117,20 @@ export function createWatchMailReader(home, readEntries = null,
         const counts = cache?.prepare("SELECT value FROM meta WHERE key='counts'").get()?.value;
         return counts ? JSON.parse(counts)['']?.total ?? 0 : 0;
       }),
-      readChunk: (after, upTo, projector, limit) =>
-        withWatchMailboxViews(home, ({raw}) => readWatchRows(raw.store, projector, after, upTo, limit)),
+      // 전체 재생은 원본을 **하나의 고정 읽기 snapshot**에서 읽는다(독립검수 F5). 조각마다 새 transaction을 열면 그 사이 바뀐 내용이
+      // 한 지문에 섞여 실제로 없던 상태가 diff(교체 가능)로 보인다. 원본 읽기 연결 하나가 BEGIN으로 snapshot을 붙잡고, 위치→행 대응은
+      // 조회 DB(append-only)에서 읽는다. 긴 읽기 transaction은 WAL 정리(checkpoint)만 늦출 뿐 쓰기를 막지 않는다.
+      openSnapshot() {
+        if (storageMode(home) === 'none') return null;
+        const source = openDatabase(home, {readOnly: true});
+        try { source.exec('BEGIN'); source.prepare('SELECT 1 FROM events LIMIT 1').get(); }
+        catch (error) { source.close();throw error; }
+        return {
+          readChunk: (after, upTo, projector, limit) => withWatchMailboxViews(home,
+            ({raw}) => readWatchRows({prepare: sql => raw.store.prepare(sql), source}, projector, after, upTo, limit)),
+          close() { try { source.exec('ROLLBACK'); } finally { source.close(); } },
+        };
+      },
       // 조회 DB가 적용한 영역별 마지막 순번과 원본 stream 끝 순번. 같은 snapshot에서 함께 읽는다.
       streamCursors: () => withLedgerView(home, (cache, info, source) => {
         const cursor = {}, max = {};

@@ -15,9 +15,13 @@ export function createSweepRunner({engine, policy, reset, now = Date.now, interv
     schedule.ran(now());
     running = engine.full().then(result => {
       const outcome = policy.record(result);
-      // 교체: 같은 snapshot에서 원본이 검증됐고 비교 중 위치가 바뀌지 않은 diff만 증분 상태를 버려 처음부터 다시 만든다.
+      // 교체: 같은 고정 snapshot에서 원본이 검증됐고 비교 중 위치가 바뀌지 않은 diff만, 진단 기록이 된 뒤에 증분 상태를 버려 다시 만든다.
       if (outcome.replace) reset();
-    }).catch(error => { onError(error); }).finally(() => { running = null; });
+    }).catch(error => {
+      // 예외도 안전한 쪽(보류)으로 기록한다: 진단 쓰기 장애 때도 policy.record는 던지지 않고 메모리 보류를 유지한다(독립검수 F4).
+      onError(error);
+      policy.record({status: 'error', error: error?.message ?? String(error), errorKey: 'sweep-engine', diffs: []});
+    }).finally(() => { running = null; });
     return reason;
   };
   return {
@@ -30,10 +34,14 @@ export function createSweepRunner({engine, policy, reset, now = Date.now, interv
           try {
             const light = engine.light();
             if (light.mismatches.length) {
-              policy.note({kind: 'light-mismatch', mismatches: light.mismatches});
+              // 새 불일치는 쿨다운과 상관없이 바로 보류한다. 쿨다운은 전체 대조를 다시 돌리는 빈도만 정한다(독립검수 F1).
+              policy.holdLight(light.mismatches);
               reason = schedule.due({now: now(), reason: 'light-mismatch'});
             }
-          } catch (error) { onError(error); }
+          } catch (error) {
+            onError(error);
+            policy.record({status: 'error', error: error?.message ?? String(error), errorKey: 'sweep-light', diffs: []});
+          }
         }
         reason ??= schedule.due({now: now()});
         if (reason) startFull(reason);

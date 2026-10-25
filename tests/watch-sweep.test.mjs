@@ -64,7 +64,7 @@ test('비교 도중 원본이 바뀌면 차이로 세지 않고 moved로 돌려�
     return ++calls > 2 ? {...real, generation: 'changed'} : real;
   }});
   assert.equal((await moving.full()).status, 'moved');
-  const broken = sweepOf(reader, {readChunk: () => { throw new Error('원본 검증 실패'); }});
+  const broken = sweepOf(reader, {openSnapshot: () => ({readChunk: () => { throw new Error('원본 검증 실패'); }, close() {}})});
   const failed = await broken.full();
   assert.equal(failed.status, 'error');
   assert.match(failed.error, /원본 검증 실패/u);
@@ -115,4 +115,38 @@ test('시작(첫 적재) 전에 고쳐진 과거 events는 증분 상태와 원�
   const result = await sweepOf(reader).full();
   // 한계를 시험으로 고정한다: 이 경우를 잡으려면 불변 체크섬(별도 검증)이 필요하다.
   assert.equal(result.status, 'match');
+});
+
+test('F5: 전체 재생은 하나의 고정 snapshot에서 읽는다 — 도중에 원본이 바뀌어도 섞지 않고, 바뀐 내용은 다음 대조가 잡는다', async () => {
+  const home = homeOf(), reader = createWatchMailReader(home);
+  for (const event of events(30)) appendLedger(event, home);
+  const entries = reader.readEntries();
+  let yields = 0, tampered = false;
+  const arrayYields = Math.ceil(entries.length / 4);
+  const sweep = createLedgerArraySweep({access: reader.sweepAccess, chunkRows: 4, yieldNow: async () => {
+    // 원본 조각을 읽기 시작한 뒤(배열 지문 조각 수 + 1번째 양보)에 다른 연결이 과거 행을 고친다.
+    if (++yields === arrayYields + 1 && !tampered) { tampered = true;await tamperOldEvent(home, 'preview'); }
+  }});
+  const during = await sweep.full();
+  assert.ok(tampered);
+  assert.equal(during.status, 'match', JSON.stringify(during));   // 고정 snapshot이라 도중 변경이 섞이지 않는다
+  assert.equal(during.arrayDigest, during.sourceDigest);
+  const next = await sweepOf(reader).full();                       // 새 snapshot은 바뀐 내용을 본다
+  assert.equal(next.status, 'diff');
+  assert.ok(next.arrayDigest && next.sourceDigest && next.arrayDigest !== next.sourceDigest);
+  assert.equal(typeof next.position, 'number');
+});
+
+test('F5: 대조 도중 새 사건이 붙어도(실제 감시처럼 배열이 계속 새로 만들어져도) 어긋남은 moved가 아니라 diff로 잡힌다', async () => {
+  const home = homeOf(), reader = createWatchMailReader(home);
+  for (const event of events(24)) appendLedger(event, home);
+  reader.readEntries();
+  const real = reader.sweepAccess.peek();
+  const tampered = {...real, entries: real.entries.map((entry, index) => index === 3 ? {...entry, role: 'tampered'} : entry)};
+  let appended = 0;
+  const sweep = createLedgerArraySweep({access: {...reader.sweepAccess, peek: () => tampered}, chunkRows: 5, yieldNow: async () => {
+    if (appended++ < 2) { appendLedger({kind: 'send', mailId: `live-${appended}`, role: 'w', by: 'lead', taskId: 't1', t: at}, home);reader.readEntries(); }
+  }});
+  const result = await sweep.full();
+  assert.equal(result.status, 'diff', JSON.stringify(result));
 });
