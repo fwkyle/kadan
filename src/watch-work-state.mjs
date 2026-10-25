@@ -77,6 +77,7 @@ export function applyWatchWorkState(home, store, info, cards) {
   try {meta = saved ? JSON.parse(saved.value) : null;} catch {meta = null;}
   const key = path.resolve(home), stamp = value => JSON.stringify([info.generation, value?.revision]);
   let rebuilt = !meta || meta.version !== 1 || meta.generation !== info.generation ||
+    typeof meta.legacyRequired !== 'boolean' ||
     typeof meta.revision !== 'string' || !meta.revision ||
     !['position','stateVersion','lastCount','sentCount','transferCount']
       .every(name => Number.isSafeInteger(meta[name]) && meta[name] >= 0) ||
@@ -89,7 +90,7 @@ export function applyWatchWorkState(home, store, info, cards) {
   if (rebuilt) {
     store.db.exec('DELETE FROM watch_work_last; DELETE FROM watch_work_sent; DELETE FROM watch_work_transfers');
     meta = {version:1, generation:info.generation, revision:randomUUID(), position:0,
-      stateVersion:0, lastCount:0, sentCount:0, transferCount:0};
+      stateVersion:0, lastCount:0, sentCount:0, transferCount:0, legacyRequired:false};
   }
   const before = meta.position;
   let identity = null, applied = 0;
@@ -101,8 +102,13 @@ export function applyWatchWorkState(home, store, info, cards) {
       const entry = store.load(position);
       if (entry == null || entry.broken) throw new Error('원장 손상: 감시 책임 조회 불가');
       if (entry.kind === 'handover' && entry.phase === 'transferred') {
-        identity ??= taskIdentity(cards);
-        transfer(store, meta, entry, position, identity);meta.stateVersion = position;
+        // 옛 잘못된 목록의 오류/적용 범위는 기존 책임 계산에 맡긴다.
+        if (entry.taskIds != null && !Array.isArray(entry.taskIds)) meta.legacyRequired = true;
+        else {
+          identity ??= taskIdentity(cards);
+          transfer(store, meta, entry, position, identity);
+        }
+        meta.stateVersion = position;
       } else if (['send','done'].includes(entry.kind) && entry.role && entry.taskId &&
           entry.transport !== 'mailbox') {
         putLast(store, meta, entry, position);meta.stateVersion = position;

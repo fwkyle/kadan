@@ -31,7 +31,7 @@ export function createWatchMailReader(home, readEntries = null,
         const factsKey = state && JSON.stringify([state.generation, state.revision, state.stateVersion]);
         const scopeFacts = factsKey && last?.factsKey === factsKey &&
           last.cards === cards && last.works === works && sameWatchCards(last.scopeFacts, cards) ? last.scopeFacts :
-          state ? captureWatchScopeFacts(projected.store, cards, works, entries) : null;
+          state && !state.legacyRequired ? captureWatchScopeFacts(projected.store, cards, works, entries) : null;
         const key = stateKey(raw.info), projectedKey = stateKey(projected?.info);
         const sameRaw = last?.key === key, sameRoles = last?.roleKey === roleKey;
         const queries = (view, previous, same, withRecent = false) =>

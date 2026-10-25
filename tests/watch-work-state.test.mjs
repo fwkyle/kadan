@@ -211,3 +211,19 @@ test('같은 카드 배열 안에서 metadata나 카드가 바뀌면 준비한 �
   assert.equal(watchScopeFacts(current, state.cards), null);
   assert.deepEqual(scopes(state.cards, current, state.works), scopes(state.cards, [...current], state.works));
 });
+
+test('옛 인계의 실행 목록이 배열이 아니면 기존 계산의 오류와 정상 경계를 유지한다', () => {
+  for (const taskIds of ['task', '', 42, false, {}, null, undefined]) {
+    const state = fixture();state.append(send(a, 1));
+    state.append(transfer(a, b, 2, {taskIds}));
+    const expected = taskIdentity(state.cards).project(readLedgerIncremental(state.home));
+    const outcome = run => {
+      try {return {value:run()};} catch (error) {return {error:error.constructor.name, message:error.message};}
+    };
+    const actual = outcome(() => {
+      const entries = state.reader.project(state.reader.readEntries(), state.cards);
+      return scopes(state.cards, entries, state.works);
+    });
+    assert.deepEqual(actual, outcome(() => scopes(state.cards, expected, state.works)), String(taskIds));
+  }
+});
