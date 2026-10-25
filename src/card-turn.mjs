@@ -1,4 +1,5 @@
 import {currentProgressReport} from './human-brief.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 // 현재 차례는 작성자와 별개다. 자유 형식 메모에서 받는 사람을 추측하지 않는다.
 export function cardTurn(card,now=Date.now()) {
@@ -9,17 +10,17 @@ export function cardTurn(card,now=Date.now()) {
  const terminal=['done','cancelled','superseded','archived'];
  if(terminal.includes(card.status)&&terminal.includes(card.displayState||card.status))return result(null,'종료','카드가 종료되어 현재 차례가 없습니다.');
  if(card.ambiguous)return unknown('같은 카드 ID가 여러 저장소에 있어 전달 대상을 구분할 수 없습니다.');
- const history=card.history||[],runs=card.runs||[];
- const boundary=history.filter((h,i)=>!i||h.status!==history[i-1].status||h.role!==history[i-1].role).at(-1);
+ const facts=listFactsOf(card),runs=card.runs||[];
+ const boundary=facts.boundary;
  if(boundary&&!valid(boundary.at))return unknown('배정·상태 변경 시각을 확인할 수 없습니다.');
  if(runs.some(r=>!valid(r.sentAt)||!valid(r.at)))return unknown('전달·실행 시각을 확인할 수 없습니다.');
  if(card.activityAt&&!valid(card.activityAt))return unknown('진행 보고 시각을 확인할 수 없습니다.');
- const dialogue=history.filter(h=>['question','answer'].includes(h.noteKind)).at(-1);
+ const dialogue=facts.dialogue;
  if(dialogue&&!valid(dialogue.at))return unknown('질문·답변 시각을 확인할 수 없습니다.');
  const actionAt=Math.max(0,time(boundary?.at)||0,...runs.map(r=>time(r.at)),time(card.activityAt)||0);
  const latest=Math.max(actionAt,time(dialogue?.at)||0);
  // 명시 기록은 이후의 발령·진행 전환·질문보다 최신일 때만 사용한다.
- const explicit=history.findLast(h=>Number.isInteger(h.turnRevision)&&h.turnRevision===h.revision&&h.turnRevision===card.turnRevision&&h.turnAt===h.at&&h.turnOwner===card.turnOwner&&h.turnAt===card.turnAt&&h.turnBy===h.by);
+ const explicit=facts.explicit.findLast(h=>Number.isInteger(h.turnRevision)&&h.turnRevision===h.revision&&h.turnRevision===card.turnRevision&&h.turnAt===h.at&&h.turnOwner===card.turnOwner&&h.turnAt===card.turnAt&&h.turnBy===h.by);
  if(card.turnOwner&&explicit&&valid(explicit.at)&&time(explicit.at)>=latest&&
    explicit.role===card.role&&explicit.status===card.status&&(!dialogue||explicit.revision>=dialogue.revision)) {
   return result(card.turnOwner,card.turnOwner,'현재 차례로 지정됨','차례 기록',explicit.at,explicit.by);

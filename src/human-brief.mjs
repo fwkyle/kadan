@@ -7,6 +7,7 @@ import {statusLabel,isEnded} from './status-labels.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
 import {BRIEF_STAGES,buildExplainInput,explainInputHash,decisionsByCard} from './explain-input.mjs';
 import {createDashboardBriefReader} from './dashboard-brief-reader.mjs';
+import {listFactsOf,progressQuery} from './card-list-facts.mjs';
 
 export const isExecution=c=>c.workType!=='coordination';
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 남은 일로 센다. 끝은 완료·취소·대체뿐이다(2026-10-05 [kyle]).
@@ -44,16 +45,15 @@ export class BriefStore {
 // activityAt은 메모마다 복사되는 원래 활동 보고 시각이며, 새 메모의 at으로 대체하지 않는다.
 export function currentProgressReport(card,now=Date.now()){
  const empty=(state,reason)=>({state,at:null,by:null,note:'',source:null,reason});
- const history=card.history??[],reports=history.filter(h=>h.noteKind==='progress');
+ const facts=listFactsOf(card),hasReports=facts.progressCount>0;
  const activity=['running','waiting','unknown'].includes(card.activity)&&card.activityAt!=null;
- if(!card.role)return empty(reports.length||activity?'unknown':'none',reports.length||activity?'role-unknown':'no-report');
+ if(!card.role)return empty(hasReports||activity?'unknown':'none',hasReports||activity?'role-unknown':'no-report');
  const run=(card.runs??[]).filter(r=>r.role===card.role).at(-1);
  if(!run)return empty('none','no-dispatch');
  const sent=Date.parse(run.sentAt);
  if(!Number.isFinite(sent))return empty('unknown','dispatch-time');
  if(sent>now)return empty('unknown','future-time');
- const assignment=history.filter((h,i)=>h.role===card.role&&h.status==='assigned'&&
-  (history[i-1]?.role!==h.role||history[i-1]?.status!=='assigned')).at(-1);
+ const assignment=facts.assignments.get(card.role);
  let since=sent;
  if(assignment){
   const at=Date.parse(assignment.at);
@@ -61,16 +61,15 @@ export function currentProgressReport(card,now=Date.now()){
   // 과거 발령을 중앙 카드로 이관할 수 있다. 발령·현재 배정 이후의 보고는 인정한다.
   since=Math.max(sent,at);
  }
- const owned=reports.filter(h=>h.by===card.role&&(!h.role||h.role===card.role));
- // 시각이 잘못된 최신 보고를 옛 정상 보고나 복사된 activityAt으로 숨기지 않는다.
- const report=owned.filter(h=>!Number.isFinite(Date.parse(h.at))||Date.parse(h.at)>=since).at(-1);
+ // 보고 선택은 사실 색인에서 한다: 시각이 잘못된 최신 보고를 옛 정상 보고나 복사된 activityAt으로 숨기지 않는다.
+ const found=progressQuery(facts,card.role,since),report=found.report;
  const ownActivity=activity&&card.activityRole===card.role;
  const fallback=ownActivity&&(!Number.isFinite(Date.parse(card.activityAt))||Date.parse(card.activityAt)>=since)?{at:card.activityAt,by:card.activityRole,note:'',source:'activity'}:null;
  let selected=report?{at:report.at,by:report.by,note:report.note||'',source:'progress'}:null;
  if(fallback&&(!selected||Number.isFinite(Date.parse(selected.at))&&Date.parse(fallback.at)>Date.parse(selected.at)))selected=fallback;
  if(!selected){
-  if(reports.some(h=>(!h.by||h.by==='모름')&&(!h.role||h.role===card.role)&&(!Number.isFinite(Date.parse(h.at))||Date.parse(h.at)>=since)))return empty('unknown','author-unknown');
-  if(owned.some(h=>Date.parse(h.at)<since)||ownActivity&&Date.parse(card.activityAt)<since)return empty('none',since>sent?'before-assignment':'before-dispatch');
+  if(found.unknownAfter)return empty('unknown','author-unknown');
+  if(found.ownedBefore||ownActivity&&Date.parse(card.activityAt)<since)return empty('none',since>sent?'before-assignment':'before-dispatch');
   return empty('none','no-report');
  }
  const at=Date.parse(selected.at);
@@ -130,8 +129,7 @@ export function buildHumanBrief(center,home,inputs){
 // 지금 활동을 만든 보고 한 줄만 읽는다. 뒤에 붙은 일반 메모를 기다리는 이유로 쓰지 않는다(2026-10-05 [kyle]).
 export function waitingText(card){
  if(card.displayState!=='waiting')return stateText[card.displayState]||'상태 모름';
- const report=(card.history??[]).filter(h=>h.noteKind==='progress'&&h.activity==='waiting'&&h.activityAt===h.at&&h.at===card.activityAt).at(-1);
- const reason=String(report?.note||'').replace(/\s+/g,' ').trim();
+ const reason=String(listFactsOf(card).waitingNotes.get(card.activityAt)||'').replace(/\s+/g,' ').trim();
  return reason?`${stateText.waiting} · ${reason.length>120?reason.slice(0,120)+'…':reason} 기다림`:stateText.waiting;
 }
 // 경과 시간은 캐시된 요약이 아니라 화면을 그리는 시각에 계산한다. detail이면 결과 대기의 이유를 붙인다.

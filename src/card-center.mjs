@@ -3,6 +3,7 @@ import {movedOnReasons} from './execution-moved-on.mjs';
 import {buildRallies} from './rallies.mjs';
 import { workEntries, effectiveCardRole } from './handover-state.mjs';
 import {isEnded} from './status-labels.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 // 실행 명령에서 추론 강도를 읽는다. 실행기마다 강도 플래그가 다르다: codex는 model_reasoning_effort, claude는 --effort, omo는 --thinking.
 // 하나만 읽으면 다른 실행기의 강도가 화면에서 빈칸이 된다(2026-09-12 fable 발령에서 실제로 빔).
@@ -79,14 +80,13 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     if(own.length&&state!=='superseded'&&(!['done','hold','cancelled','superseded'].includes(state)||lastRun>lastEdit)) {
       state=own.every(r=>r.state==='done')?'done':own.some(r=>r.state==='failed')?'failed':own.some(r=>r.state==='orphaned')?'orphaned':'unconfirmed';
     }
-    const facts=card.watchHistorySummary;
-    const transition=facts?facts.transition:
-      card.history.filter((h,i)=>i>0&&h.status!==card.history[i-1].status).at(-1);
+    const facts=card.watchHistorySummary??listFactsOf(card).center;
+    const transition=facts.transition;
     if(transition&&Date.parse(transition.at)>lastRun&&['ready','draft'].includes(card.status))state=card.status;
     if(transition&&Date.parse(transition.at)>lastRun&&card.status==='assigned'&&own.every(r=>r.state==='done'))state='assigned';
     if(state==='unconfirmed'&&reportedActivity(card,own,{now,alive:true}))state=card.activity;
-    const question=facts?facts.question:card.history.filter(h=>h.noteKind==='question').at(-1);
-    const answer=facts?facts.answer:card.history.filter(h=>h.noteKind==='answer').at(-1);
+    const question=facts.question;
+    const answer=facts.answer;
     return {...card,board,runs:own,displayState:state,ambiguous:connectionErrors.length>0,connectionErrors,pendingQuestion:!!question&&(!answer||question.revision>answer.revision)};
   });
   const moved=movedOnReasons(result);
@@ -109,10 +109,8 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     const last=[...c.runs].sort((a,b)=>(Date.parse(a.sentAt??a.at)||0)-(Date.parse(b.sentAt??b.at)||0)).at(-1);
     if(last?.state!=='done')return [];
     const doneAt=Date.parse(last.at)||0;
-    const changed=c.watchHistorySummary
-      ? c.watchHistorySummary.changedAt!==null&&c.watchHistorySummary.changedAt>doneAt
-      : c.history.some((h,i)=>i>0&&(Date.parse(h.at)||0)>doneAt&&
-        (h.status!==c.history[i-1].status||h.role!==c.history[i-1].role));
+    const changedAt=(c.watchHistorySummary??listFactsOf(c).center).changedAt;
+    const changed=changedAt!==null&&changedAt>doneAt;
     if(changed)return [];
     return [{key:c.key,title:c.title,status:c.status,role:last.role,doneAt:last.at,doneBy:last.doneBy??'모름',revision:c.revision}];
   });
