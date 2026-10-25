@@ -117,7 +117,7 @@ export default function Status({url}: {url: URL}) {
   </article>;
   return <section className="st-view">
     <header className="st-lead"><h1>전체 현황</h1><p>내가 답할 요청과 막힌 일을 먼저 확인합니다. 맡긴 일의 자세한 진행 상황은 <a href="/?collection=work#dashboard">워크</a>에서 봅니다.</p><small>수집 {time(data?.collectedAt)}</small></header>
-    <nav className="inline-nav" aria-label="현황 상세"><a href="#sessions">담당자 상태</a></nav>
+    <nav className="inline-nav" aria-label="현황 상세"><a href="#strategy-map">전략 맵(담당 상태)</a></nav>
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
     {!data ? <Loading/> : <>
       <div className="st-band" role="group" aria-label="지금 내가 볼 것 · 다섯 질문">
@@ -132,7 +132,7 @@ export default function Status({url}: {url: URL}) {
         {data.live === null ? <li className="st-live-row"><small>세션 상태 모름</small></li>
           : data.live.length === 0 ? <li className="st-live-row"><small>열린 담당 창이 없습니다.</small></li>
           : data.live.map(s => <li key={s.role} data-fresh={`live:${s.role}:${s.pidState}`} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small><Spark values={data.activity?.[s.role]} /></li>)}
-        <li className="st-live-row"><a href="#sessions">담당자 상태 전체</a></li>
+        <li className="st-live-row"><a href="#strategy-map">전략 맵에서 담당 전체 보기</a></li>
       </ul>
       <section id="status-supers" className="st-section">
         <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">슈퍼감독(--profile super로 시작한 역할)마다 한 줄입니다. 그 아래 감독·담당의 실행을 가장 가까운 슈퍼감독 한 곳에만 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>

@@ -22,6 +22,29 @@ export function visibleSessionRoles(center) {
   );
 }
 
+// 전략 맵 옆 칸의 '마지막 실행'(2026-10-25 담당자 상태 표에서 옮김). 옛 표와 같은 자료(역할의 마지막 start 줄)를,
+// 창이 닫혔거나 세션 상태를 모르는 역할 가운데 전략 맵에 오를 수 있는 역할에 싣는다. 살아 있는 창은 live가 이미 싣는다.
+// 지도(gui/src/strategy-map.ts buildMap)는 열린 카드 담당·경보 대상과 그 상위 사슬, 슈퍼감독을 올리는데, 사슬의 상위와
+// 슈퍼감독은 모두 관계표에 자기 줄이 있는 역할이다. 그래서 대상은 열린 카드 담당·경보 대상·관계표의 역할이다(PR #298 수정 2).
+// 원장의 모든 과거 역할로는 넓히지 않는다 — 현황은 15초마다 읽는다.
+export function lastRuns(center, { hierarchy = null, alerts = null } = {}) {
+  if (!center) return {};
+  const owners = new Set([
+    ...(center.cards ?? []).filter((c) => c.role && !CLOSED_CARD_STATES.includes(c.displayState)).map((c) => c.role),
+    ...(alerts?.items ?? []).map((a) => a.role),
+    ...Object.keys(hierarchy ?? {}),
+  ]);
+  const out = {};
+  for (const r of center.roles ?? []) {
+    const alive = center.runtimeKnown && r.life?.state === "alive";
+    if (alive || !owners.has(r.role)) continue;
+    const harness = r.harness && r.harness !== "모름" ? r.harness : null;
+    const model = r.model && r.model !== "모름" ? r.model : null;
+    if (harness || model) out[r.role] = { harness, model };
+  }
+  return out;
+}
+
 export function worktimeData(snapshot, url, stamp) {
   const period = url.searchParams.get("period") || "today";
   if (!WORKTIME_PERIODS.includes(period))

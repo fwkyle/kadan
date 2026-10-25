@@ -40,6 +40,8 @@ test("업무 미연결 필터에서 상세를 열고 닫아도 조건과 미저�
   setNavigationGuard(() => false);
   assert.equal(navigate("#runner-settings"), false);
   assert.equal(viewOf(current), "mailbox");
+  assert.equal(viewOf(new URL("http://local/?alive=1#sessions")), "strategy-map", "옛 담당자 상태 주소는 전략 맵으로");
+  assert.equal(viewOf(new URL("http://local/#runner-settings")), "runner-settings", "설정 주소는 그대로");
 });
 
 test("실행 상세와 업무 상세의 진행 이력 링크가 실제 API에서 열린다", async (t) => {

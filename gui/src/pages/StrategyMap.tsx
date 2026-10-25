@@ -1,17 +1,20 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useResource } from "../resource";
 import type { Row, Stamp } from "../types";
-import { CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, Spark, time, useSkin } from "../ui";
+import { AppContext, CardLink, ErrorMessage, Freshness, Loading, Pulse, Roll, Spark, time, useSkin } from "../ui";
+import { liveLabel } from "../status-band";
+import type { LastRun } from "../strategy-map";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
-import { buildMap, diffMap, iso, placeUnits, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
+import { RestartRole } from "./RestartRole";
+import { buildMap, diffMap, iso, lifeLabel, placeUnits, restartGeneration, runLabel, systemSessions, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
 
 // 전략 맵(2026-10-05 [kyle]): 현황판과 같은 자료(status)를 슈퍼감독 기지·역할 유닛으로 그린다. 1단계는 SVG 2D 등각.
 // 색은 전부 style.css의 클래스로만 준다 — SVG 속성에 색을 적으면 다크 모드 변환(theme.mjs)을 거치지 않는다.
 type StatusData = Stamp & {
   rows: Row[]; live: LiveSession[] | null; alerts: OpenAlerts | null; hierarchy: Record<string, string> | null;
-  activity?: Record<string, number[]>;
+  activity?: Record<string, number[]>; lastRuns?: Record<string, LastRun>;
 };
 const KIND_LABEL = { super: "슈퍼감독", director: "감독", worker: "작업자·검수자" } as const;
 const SLAB = 10, HEAD_ROOM = 86, FOOT_ROOM = 44, GAP = 56, COLS = 4;
@@ -137,14 +140,15 @@ function Depot({ rows, close }: { rows: Row[]; close: () => void }) {
   </>;
 }
 
-export default function StrategyMap() {
+export default function StrategyMap({ url }: { url: URL }) {
+  const { readOnly } = useContext(AppContext);
   const resource = useResource<StatusData>("status"), data = resource.data;
   const ship = useSkin() === "space";
   const [selected, setSelected] = useState<string | null>(null);
   const [showResting, setShowResting] = useState(false);
   const [view, setView] = useState<View>(readView);
   const pick = (key: string) => setSelected((now) => (now === key ? null : key));
-  const map = data ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts }) : null;
+  const map = data ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts, lastRuns: data.lastRuns }) : null;
   // 새 자료가 들어올 때마다(15초) 직전 지도와 비교해 바뀐 것만 2초 동안 움직인다. 처음 열 때는 움직이지 않는다.
   const prevMap = useRef<MapModel | null>(null);
   const [motion, setMotion] = useState<{ id: number; events: MapEvent[] } | null>(null);
@@ -179,6 +183,7 @@ export default function StrategyMap() {
     <header className="st-lead"><h1>전략 맵</h1>
       <p>슈퍼감독마다 기지 하나, 역할마다 유닛 하나입니다. 유닛 옆 상자는 그 역할이 든 카드입니다. 유닛을 누르면 옆 칸(좁은 화면에서는 아래)에 그 역할의 카드가 보입니다. 숫자의 기준은 <a href="#status">전체 현황</a>과 같습니다.</p>
       <small>수집 {time(data?.collectedAt)}</small></header>
+    {url.hash === "#sessions" && <p className="muted">담당자 상태는 전략 맵으로 옮겼습니다. 유닛을 누르면 옆 칸에 생존·실행 도구·모델과 다시 띄우기가 있습니다.</p>}
     <ErrorMessage error={resource.error} /><Freshness collectedAt={data?.collectedAt} {...resource} />
     {!data || !map ? <Loading /> : <>
       <p className="sm-totals" role="group" aria-label="지도 요약">
@@ -235,19 +240,41 @@ export default function StrategyMap() {
               <dt>상태</dt><dd><i className={"sm-dot sm-s-" + unit.state} />{STATE_LABEL[unit.state]}</dd>
               <dt>종류</dt><dd>{KIND_LABEL[unit.kind]}</dd>
               <dt>직속 상위</dt><dd>{unit.parent ?? (unit.kind === "super" ? "사용자" : "관계표에 없음")}</dd>
-              <dt>모델</dt><dd>{unit.model ?? (unit.alive === false ? "창 없음" : "모름")}</dd>
+              <dt>생존</dt><dd>{lifeLabel(unit)}</dd>
+              <dt>실행 도구 · 모델</dt><dd>{runLabel(unit)}</dd>
               <dt>경보</dt><dd>{unit.alerts ? `${unit.alerts}건` : "없음"}</dd>
               <dt>최근 1시간</dt><dd className="sm-activity">{data.activity?.[unit.role] ? <><Spark values={data.activity[unit.role]} width={140} height={22} /><small>{data.activity[unit.role].reduce((a, b) => a + b, 0)}건</small></> : "활동 없음"}</dd>
             </dl>
+            {/* 형제 부품마다 다른 key — 같은 key면 역할을 바꿀 때 옛 버튼이 남는다(PR #298 검수 F1). */}
+            <RestartRole key={"restart:" + unit.role} role={unit.role} generation={restartGeneration(unit, readOnly)} />
             <h3>진행 카드 {unit.rows.length}장</h3>
             {unit.rows.length ? <ul className="sm-cards">{unit.rows.map((row) => <li key={row.key}>
               <span className={"sm-dot sm-c-" + row.bucket} /><CardLink row={row} />
               <small><Pulse at={row.signalAt} />{row.healthLabel}{row.signalAt ? ` · 마지막 신호 ${time(row.signalAt)}` : ""}</small></li>)}</ul>
               : <p className="st-empty">진행 중인 카드가 없습니다.</p>}
-            {unitBase && <AskSuper key={unit.role} unit={unit} base={unitBase} />}
+            {unitBase && <AskSuper key={"ask:" + unit.role} unit={unit} base={unitBase} />}
           </>}
         </aside>
       </div>
+      <BaseSessions live={data.live} readOnly={readOnly} />
     </>}
+  </section>;
+}
+
+// 기반 세션(2026-10-25 PR #298 검수 F3): 감시기·대시보드는 지도 유닛이 아니지만, 옛 담당자 상태 표가 보이던
+// 생존·실행 도구 · 모델·다시 띄우기를 여기서 그대로 보인다. 같은 RestartRole을 쓰고 원격 읽기 전용이면 버튼이 없다.
+function BaseSessions({ live, readOnly }: { live: LiveSession[] | null; readOnly: boolean }) {
+  const sessions = systemSessions(live);
+  return <section className="sm-base-sessions" aria-label="기반 세션">
+    <h2>기반 세션</h2>
+    {sessions === null ? <p className="st-empty">세션 상태를 지금 알 수 없습니다.</p>
+      : !sessions.length ? <p className="st-empty">열린 기반 세션(감시기·대시보드)이 없습니다.</p>
+      : <div className="table-scroll"><table>
+        <thead><tr><th>역할</th><th>생존</th><th>실행 도구 · 모델</th><th>다시 띄우기</th></tr></thead>
+        <tbody>{sessions.map((s) => { const life = { alive: true, session: s }; return <tr key={s.role}>
+          <td>{s.role}</td><td>{lifeLabel(life)}</td><td>{liveLabel(s)}</td>
+          <td><RestartRole key={"restart:" + s.role} role={s.role} generation={restartGeneration(life, readOnly)} /></td>
+        </tr>; })}</tbody>
+      </table></div>}
   </section>;
 }
