@@ -14,11 +14,12 @@ import { cardForms, workForms } from "../dashboard-forms.mjs";
 import { workLetters } from "../work-mail.mjs";
 import { pick, mailRow } from "./shared.mjs";
 import { hydrateCardBody } from "../dashboard-card-body.mjs";
+import { hydrateHistory } from "../dashboard-card-history.mjs";
 
 export function detailData(snapshot, url, stamp, m) {
   const key = url.searchParams.get("card") || "",
     w = m.works?.find((w) => w.key === key),
-    c = hydrateCardBody(m.byKey.get(key));
+    c = hydrateHistory(hydrateCardBody(m.byKey.get(key)), snapshot.home);
   if (!w && !c)
     throw Object.assign(new Error("카드를 찾을 수 없습니다"), {
       status: 404,
@@ -48,7 +49,7 @@ export function detailData(snapshot, url, stamp, m) {
         row: m.rows.find((r) => r.key === e.key) || null,
       })),
       reviewFlows: m.reviewFlows.filter(flow => flow.cardKeys.some(key => w.executions.some(e => e.key === key))),
-      history: [...w.history].reverse(),
+      history: [...hydrateHistory(w, snapshot.home).history].reverse(),
       mail: w.letters.slice(0, 5).map((letter) => mailRow(letter, m.identity)),
       mailTotal: w.letters.length,
     };

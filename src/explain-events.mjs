@@ -6,6 +6,8 @@
 //   blocked   막힘: 표시 상태가 hold·failed·orphaned로 들어감, unconfirmed는 발령 뒤 유예 시간이 지난 것만
 //   decision  결정: 요청 생성·답·취소
 // 화면 갱신·대시보드 조회는 여기를 지나지 않는다.
+import {listFactsOf} from './card-list-facts.mjs';
+
 export const UNCONFIRMED_GRACE_MS = 10 * 60_000;
 const at = value => { const t = Date.parse(value); return Number.isFinite(t) ? t : 0; };
 
@@ -20,8 +22,7 @@ export function cardEvents(card, decisions = [], now = Date.now()) {
   if (card.result?.at) add('report', card.result.at, at(card.result.at));
   const state = card.displayState;
   if (state === 'hold') {
-    const history = card.history ?? [];
-    const entered = history.findLast((h, i) => h.status === 'hold' && history[i - 1]?.status !== 'hold');
+    const entered = listFactsOf(card).lastHoldEntry;
     add('blocked', `hold:${entered?.at ?? card.at}`, at(entered?.at ?? card.at));
   } else if (state === 'failed') {
     const failed = runs.filter(r => r.state === 'failed').at(-1);

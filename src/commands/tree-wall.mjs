@@ -55,8 +55,9 @@ let stores = null;
 function dashboardStores(home) {
   if (stores?.home !== home) stores = {home,
     cards: createDashboardStoreReader(home, 'cards'),
-    summaryCards: createDashboardStoreReader(home, 'cards', {summaryBodies: true}),
-    works: createDashboardStoreReader(home, 'works')};
+    // 대시보드 서버 경로(요약 본문 모드)와 업무는 과거 이력을 RAM에 두지 않고 사실만 든다. 이력은 상세에서 SQL로 읽는다.
+    summaryCards: createDashboardStoreReader(home, 'cards', {summaryBodies: true, facts: true}),
+    works: createDashboardStoreReader(home, 'works', {facts: true})};
   return stores;
 }
 // 원장/카드/업무 버전을 나눠 바뀐 입력만 다시 읽는다. 사건 분류는 새 부분만 이어서 한다.

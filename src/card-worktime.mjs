@@ -12,6 +12,7 @@
 // 대기 시간 = 배정 → 시작. 마감 대기 = 결과 → 원장 확정(없으면 null).
 // 재작업 횟수는 결과 재등록이 아니라 티키타카 라운드로 센다: 같은 묶음(rallyId)의 앞선 라운드 수 = rallyRound − 1.
 import {effortOfCmd} from './card-center.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 const time = (value) => {
   const n = Date.parse(value);
@@ -86,9 +87,9 @@ const PROFILES = ['worker', 'reviewer'];
 // 카드 하나의 시간·모델. 조율(coordination) 카드는 대상이 아니라 null이다.
 export function cardWorktime(card, index) {
   if (!card || card.workType === 'coordination') return null;
-  const history = card.history ?? [];
-  const assignedAt = time(history.find((h) => h.status === 'assigned')?.at);
-  const running = history.find((h) => h.activity === 'running');
+  const facts = listFactsOf(card);
+  const assignedAt = time(facts.firstAssigned?.at);
+  const running = facts.firstRunning;
   const startAt = time(running?.activityAt ?? running?.at);
   const resultAt = time(card.result?.at);
   const role = running?.activityRole || card.role || null;

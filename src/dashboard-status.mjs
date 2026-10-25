@@ -5,6 +5,7 @@ import {renderWatchVerdict} from './watch-overview-wall.mjs';
 import {renderSecretaryQuestions,renderUpcoming,mailboxAwaitingReply} from './dashboard-home.mjs';
 import {renderBoardProgress} from './board-progress.mjs';
 import {splitQuestion} from './decision-wall.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 const stamp=x=>Number.isFinite(Date.parse(x))?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'모름';
 const ago=(x,now)=>{const t=Date.parse(x);if(!Number.isFinite(t))return '시각 모름';const m=Math.max(0,Math.round((now-t)/60_000));return m<60?m+'분 전':m<48*60?Math.floor(m/60)+'시간 전':Math.floor(m/1440)+'일 전';};
@@ -19,7 +20,7 @@ export function failureReason(c){
  const pick=lines.map(line=>line.match(/한 줄 요약\s*[:：]\s*(.+)/)?.[1]).find(Boolean)
   ||lines.map(line=>line.match(/원인\s*[:：]\s*(.+)/)?.[1]).find(Boolean)
   ||lines.find(line=>/실패|failed|막힘|막힌|중단|오류|error|blocked/i.test(line));
- const reason=plainLine(pick||c.history?.at?.(-1)?.note||c.statusReason||'');
+ const reason=plainLine(pick||listFactsOf(c).last?.note||c.statusReason||'');
  return reason.length>150?reason.slice(0,150)+'…':reason;
 }
 const askSupervisor=(c,reason)=>`[대시보드 확인 요청] 카드 ${c.key} 실행이 '${c.healthLabel||'확인 필요'}'로 멈춰 있고 카드는 아직 ${c.status||'열린'} 상태입니다.${reason?` 이유(결과 파일): ${reason}`:''} 다시 시도·후속 카드로 대체·취소·일시정지 중 어떻게 정리할지 정해 주세요.`;

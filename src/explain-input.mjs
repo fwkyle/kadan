@@ -1,8 +1,10 @@
 // 설명 AI의 입력·프롬프트·출력 해석. 다른 카단 모듈을 가져오지 않는 말단 모듈이다
 // (human-brief.mjs가 신선도 판정에 이 지문을 쓰므로, 여기서 human-brief를 가져오면 순환이 된다).
 import {createHash} from 'node:crypto';
+import {deflateRawSync, inflateRawSync} from 'node:zlib';
 import {scrubSecrets} from './user-notify.mjs';
 import {statusLabel} from './status-labels.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 export const BRIEF_STAGES = ['구현', '검수', '통합', '프리뷰 확인', '조율', '조사', '기타'];
 export const BRIEF_FIELD_MAX = 1000;
@@ -22,6 +24,12 @@ export function scrubForAI(text) {
 }
 const cut = (text, max) => { const t = scrubForAI(text); return t.length > max ? t.slice(0, max) + '…' : t; };
 export const explainBody = text => cut(text, BODY_MAX);
+// 본문 요약이 들고 있는 설명 입력 발췌(UTF-16 그대로: 잘린 서로게이트 쌍도 보존)는 압축해 두었다가 설명 지문을 만들 때만 푼다. 작은 Buffer는 공용 슬랩을 붙잡으므로 복사본을 둔다.
+export const compressExplainBody = text => new Uint8Array(deflateRawSync(Buffer.from(text, 'utf16le')));
+export function explainBodyFromSummary(summary) {
+  if (summary?.explainZ) return inflateRawSync(summary.explainZ).toString('utf16le');
+  return summary?.explainBody;
+}
 
 // 카드의 결정 요청 기록을 카드 키별로 묶는다(같은 결정 ID는 마지막 줄이 현재 상태).
 export function decisionsByCard(rows) {
@@ -45,11 +53,11 @@ function scrubAll(value) {
   return value;
 }
 function rawInput(card, {progress, decisions}) {
-  const notes = (card.history ?? []).filter(h => ['decision', 'question', 'answer'].includes(h.noteKind) && h.note).slice(-NOTES)
-    .map(h => ({kind: h.noteKind, by: h.by ?? '모름', note: cut(h.note, NOTE_MAX)}));
+  const notes = listFactsOf(card).notes.slice(-NOTES)
+    .map(h => ({kind: h.kind, by: h.by ?? '모름', note: cut(h.note, NOTE_MAX)}));
   return {
     title: cut(card.title ?? card.id ?? '', 300),
-    body: card.bodySummary?.explainBody ?? explainBody(card.body ?? ''),
+    body: explainBodyFromSummary(card.bodySummary) ?? explainBody(card.body ?? ''),
     state: statusLabel(card.displayState ?? card.status ?? ''), statusReason: cut(card.statusReason ?? '', NOTE_MAX),
     nextAction: cut(card.nextAction ?? '', NOTE_MAX), role: card.role ?? null,
     progress: cut(progress, NOTE_MAX), notes,

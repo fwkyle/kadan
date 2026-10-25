@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import {cardPurpose} from './dashboard-flow.mjs';
-import {explainBody} from './explain-input.mjs';
+import {explainBody, compressExplainBody} from './explain-input.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 
@@ -14,13 +14,15 @@ export function summarizeCardBody(card, body, previous) {
       : hash(JSON.stringify([card.title, body]))};
   const purpose = cardPurpose({body});
   // 긴 원문의 slice가 원문 문자열을 계속 붙잡지 않도록 작은 값만 복사한다.
-  return JSON.parse(JSON.stringify({
+  const small = JSON.parse(JSON.stringify({
     digest:hash(body),
     sourceHash,
     contentHash:hash(JSON.stringify([card.title, body])),
-    explainBody:explainBody(body),
     purpose:{...purpose, text:purpose.text.slice(0, 220)},
   }));
+  // 설명 입력 발췌(최대 4,001자)는 카드당 힙의 약 60%였다. 압축해 들고 설명 지문을 만들 때만 푼다(출력은 같다).
+  // 작은 Buffer는 공용 슬랩을 붙잡으므로 정확한 크기의 복사본을 둔다.
+  return {...small, explainZ:compressExplainBody(explainBody(body))};
 }
 
 export function hydrateCardBody(card) {

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 import {buildRallies} from './rallies.mjs';
 import {statusLabel} from './status-labels.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 const outcomes={implemented:'구현 결과 등록',pass:'통과',changes:'수정 필요',exception:'검수 중단',ok:'실행 완료',failed:'실행 실패'};
 const ended=new Set(['cancelled','superseded']);
@@ -10,9 +11,9 @@ const date=value=>Date.parse(value)||0;
 // 결과 판정과 실행 종료는 별개다. 새 발령 뒤에는 이전 결과를 현재 검수로 세지 않는다.
 function stage(card){
  const result=card.result,latestSend=Math.max(0,...(card.runs||[]).map(r=>date(r.sentAt)));
- const history=card.history||[],registered=history.find(h=>h.result);
+ const facts=listFactsOf(card),registered=facts.registered;
  const changed=registered&&['scope','role','repoPath'].some(key=>registered[key]!==card[key]);
- const reopened=history.some((h,i)=>i>0&&h.status!==history[i-1].status&&['draft','ready','assigned'].includes(h.status)&&date(h.at)>date(result?.at));
+ const reopened=facts.reopenMax!==null&&facts.reopenMax>date(result?.at);
  const stale=!!result&&(!date(result.at)||latestSend>date(result.at)||changed||reopened);
  const current=!!result&&!stale&&!ended.has(card.displayState);
  return {key:card.key,title:card.title,role:card.role,step:card.rallyStep,

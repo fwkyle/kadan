@@ -1,6 +1,7 @@
 // Why: 감시 요약도 매 순회 과거 이력을 검증했다. 시작에는 전체를 검증하고 이후에는 새 revision만 읽는다.
 // 10배 과거 이력에서도 정상 조회는 heads 수와 새 사건에 비례한다. 카드 이력은 유한한 판정 요약으로 둔다.
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {advanceWatchWorkSummary} from './work-watch-summary.mjs';
@@ -50,18 +51,30 @@ function reader(home, kind, store) {
 
   function readSnapshot(db, identity) {
     // head를 바꿔도 원본 끝 행과 다르면 거절한다. payload는 JS로 복사하지 않는다.
-    const heads = db.prepare(`SELECT h.stream, h.seq, h.payload=e.payload AS valid
-      FROM heads h LEFT JOIN events e ON e.stream=h.stream AND e.seq=h.seq
-      WHERE h.stream GLOB ? ORDER BY h.stream`).all(pattern);
+    // heads만 읽어 (순번, payload 지문)을 기억한 값과 비교한다. 끝 행과 events의 대조는 처음·파일 교체 뒤
+    // 전체, 그 밖에는 순번이나 지문이 달라진 스트림만 한다. payload는 JS에 보관하지 않는다.
+    // 한계: 같은 순번·같은 head인 채 과거 events만 고친 손상은 시작·파일 교체 때만 잡힌다.
+    const heads = [], prints = new Map();
+    for (const row of db.prepare('SELECT stream, seq, payload FROM heads WHERE stream GLOB ? ORDER BY stream')
+      .iterate(pattern)) {
+      heads.push({stream: row.stream, seq: row.seq});
+      prints.set(row.stream, `${row.seq}:${createHash('sha256').update(row.payload).digest('base64')}`);
+    }
     const streams = new Set(heads.map(h => h.stream));
-    if (heads.some(h => !h.valid)) throw errorFor(kind);
     if (state?.identity !== identity || heads.some(h => h.seq < (state?.seqs.get(h.stream) ?? 0))
         || (state && [...state.seqs.keys()].some(s => !streams.has(s)))) state = null;
+    const unverified = state ? heads.filter(h => state.prints.get(h.stream) !== prints.get(h.stream)) : heads;
+    if (unverified.length) {
+      const bad = db.prepare(`SELECT count(*) AS n FROM json_each(?) c JOIN heads h ON h.stream=c.value
+        LEFT JOIN events e ON e.stream=h.stream AND e.seq=h.seq WHERE coalesce(h.payload=e.payload,0)=0`)
+        .get(JSON.stringify(unverified.map(h => h.stream)));
+      if (bad.n) throw errorFor(kind);
+    }
     if (!state) {
-      if (kind === 'cards') state = {identity, ...initialCards(db, heads)};
+      if (kind === 'cards') state = {identity, prints, ...initialCards(db, heads)};
       else {
         const rows = store.listWatch();
-        state = {identity, seqs: new Map(heads.map(h => [h.stream, h.seq])),
+        state = {identity, prints, seqs: new Map(heads.map(h => [h.stream, h.seq])),
           rows: new Map(rows.map(row => [row.key, row])), list: rows};
       }
       stats.full++;
@@ -69,7 +82,7 @@ function reader(home, kind, store) {
       return state.list;
     }
     const changed = heads.filter(h => h.seq !== state.seqs.get(h.stream));
-    if (!changed.length) { stats.unchanged++; return state.list; }
+    if (!changed.length) { stats.unchanged++; state.prints = prints; return state.list; }
     // 검증·요약이 모두 성공하기 전에는 이전 상태/순번을 바꾸지 않는다.
     const rows = new Map(state.rows), seqs = new Map(state.seqs);
     const facts = state.facts ? new Map(state.facts) : null;
@@ -101,7 +114,7 @@ function reader(home, kind, store) {
       seqs.set(head.stream, seq);
     }
     const list = heads.map(h => rows.get(keyOf(h.stream)));
-    state = {identity, rows, seqs, list, ...(facts ? {facts} : {})};
+    state = {identity, prints, rows, seqs, list, ...(facts ? {facts} : {})};
     stats.changed += changed.length; stats.rows += count;
     return list;
   }

@@ -7,6 +7,7 @@ import {renderInbox} from './dashboard-inbox.mjs';
 import {workPhases,endedExecution} from './work-store.mjs';
 import {createWorkLettersReader} from './work-mail.mjs';
 import {lastChildAt,isTurnCurrent} from './handover-state.mjs';
+import {hydrateHistory} from './dashboard-card-history.mjs';
 
 const shortFormat=new Intl.DateTimeFormat('ko-KR',{
  timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false,
@@ -56,6 +57,7 @@ function executionTable(executions){
 }
 
 export function renderWorkDetail(w,{token,center,models,home,url}){
+ w=hydrateHistory(w,home);
  const closed=['done','cancelled'].includes(w.status),hidden=`<input type="hidden" name="token" value="${e(token)}"><input type="hidden" name="key" value="${e(w.key)}"><input type="hidden" name="revision" value="${w.revision}">`;
  const form=(action,body)=>`<form method="post" action="/works/${action}" class="edit bw-form">${hidden}${body}</form>`;
  const input=(name,label,value='',required=false)=>`<label>${label}<input name="${name}" value="${e(value)}"${required?' required':''}></label>`;
