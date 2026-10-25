@@ -4,20 +4,29 @@ import { isDescendant } from './hierarchy.mjs';
 import { isSuperRole, superProfiles } from './super-role.mjs';
 
 // 이름 접두사·cwd로 책임을 추측하지 않는다. start에 기록된 슈퍼 프로필을 쓰고, 프로필 기록이 없는 옛 역할만 사용자 직속 관계를 쓴다.
+function peerClassifier(entries, parents) {
+  let profiles;
+  return (from, to) => {
+    if (!from || !to || from === to || ['사람', '@user', 'watch', '비서'].includes(from)
+      || ['사람', '@user', 'watch', '비서'].includes(to)) return false;
+    const table = parents instanceof Map ? parents : new Map(Object.entries(parents ?? {}));
+    profiles ??= superProfiles(entries);
+    const isSuper = role => isSuperRole(role, table, profiles);
+    return isSuper(from) && isSuper(to);
+  };
+}
+
 export function isPeerSuperMail(entries, parents, from, to) {
-  if (!from || !to || from === to || ['사람', '@user', 'watch', '비서'].includes(from)
-    || ['사람', '@user', 'watch', '비서'].includes(to)) return false;
-  const table = parents instanceof Map ? parents : new Map(Object.entries(parents ?? {}));
-  const profiles = superProfiles(entries);
-  const isSuper = role => isSuperRole(role, table, profiles);
-  return isSuper(from) && isSuper(to);
+  return peerClassifier(entries, parents)(from, to);
 }
 
 // 우편의 답변 대기를 임시 책임으로 계산한다. 실행 카드·업무 owner는 옮기거나 생성하지 않는다.
 export function peerResponsibilities(entries, parents, works = [], cards = []) {
   const questions = waitingLetters(entries);
+  // 과거가10배여도 한 호출 안에서는 프로필을 한 번만 읽는다. 호출 사이의 입력 변경은 다시 읽는다.
+  const isPeer = peerClassifier(entries, parents);
   return questions.filter(q => !q.notificationOnly && !q.systemGenerated && q.mailId
-    && isPeerSuperMail(entries, parents, q.currentSender, q.currentRecipient)
+    && isPeer(q.currentSender, q.currentRecipient)
     && parents.has(q.currentRecipient)).flatMap(q => {
     const original = works.find(w => w.key === q.workKey
       || (q.executionKey && w.executions?.some(e => e.key === q.executionKey)));
