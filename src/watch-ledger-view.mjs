@@ -14,10 +14,31 @@ const slimEntry = entry => {
   return rest;
 };
 
+// 원문 행 [after, upTo]를 감시 배열 규칙(종류 제외·필드 슬림)으로 읽는다. 증분 읽기와 정기 대조가 같은 규칙을 쓴다.
+export function readWatchRows(store, projector, after, upTo, limit = 256) {
+  const query = store.prepare(`SELECT v.position,r.stream,r.seq FROM views v
+    JOIN source_rows r USING(position) WHERE v.domain='' AND v.position>? AND v.position<=?
+    ORDER BY v.position LIMIT ?`);
+  const rows = query.all(after, upTo, limit);
+  const entries = [];
+  let skipped = 0;
+  if (rows.length) {
+    const values = sourceViewValues(store.source, rows);
+    for (const [index, row] of rows.entries()) {
+      const entry = (row.stream === 'ledger.jsonl' ? projector.legacy([values[index]])
+        : projector.rows([values[index]]))[0];
+      if (entry == null || entry.broken) throw new Error('원장 손상: 감시 사건 조회 불가');
+      if (WATCH_ARRAY_SKIP_KINDS.has(entry.kind)) skipped++;
+      else entries.push(slimEntry(entry));
+    }
+  }
+  return {entries, skipped, rows: rows.length, last: rows.length ? rows.at(-1).position : after};
+}
+
 export function createWatchLedgerView() {
   let state = null;
   const projector = domainProjector(null);
-  return (store, info) => {
+  const view = (store, info) => {
     if (store && store.scope !== '') throw new Error('감시 사건은 원문 조회 영역이 필요합니다');
     const counts = store?.prepare("SELECT value FROM meta WHERE key='counts'").get()?.value;
     const total = counts ? JSON.parse(counts)['']?.total ?? 0 : 0;
@@ -26,21 +47,10 @@ export function createWatchLedgerView() {
     const added = [];
     let position = previous?.position ?? 0, skipped = previous?.skipped ?? 0;
     if (store) {
-      const query = store.prepare(`SELECT v.position,r.stream,r.seq FROM views v
-        JOIN source_rows r USING(position) WHERE v.domain='' AND v.position>? AND v.position<=?
-        ORDER BY v.position LIMIT 256`);
       while (true) {
-        const rows = query.all(position, info.position);
-        if (!rows.length) break;
-        const values = sourceViewValues(store.source, rows);
-        for (const [index, row] of rows.entries()) {
-          const entry = (row.stream === 'ledger.jsonl' ? projector.legacy([values[index]])
-            : projector.rows([values[index]]))[0];
-          if (entry == null || entry.broken) throw new Error('원장 손상: 감시 사건 조회 불가');
-          if (WATCH_ARRAY_SKIP_KINDS.has(entry.kind)) skipped++;
-          else added.push(slimEntry(entry));
-          position = row.position;
-        }
+        const chunk = readWatchRows(store, projector, position, info.position);
+        if (!chunk.rows) break;
+        added.push(...chunk.entries);skipped += chunk.skipped;position = chunk.last;
       }
     }
     const entries = previous && !added.length ? previous.entries : (previous?.entries ?? []).concat(added);
@@ -49,4 +59,9 @@ export function createWatchLedgerView() {
     state = {generation:info.generation, position:info.position, entries, skipped};
     return entries;
   };
+  // 정기 대조용: 지금 들고 있는 증분 상태(불변 배열)와, 처음부터 다시 만들기 위한 초기화.
+  view.peek = () => state && {generation:state.generation, position:state.position, entries:state.entries, skipped:state.skipped};
+  view.reset = () => { state = null; };
+  view.projector = projector;
+  return view;
 }

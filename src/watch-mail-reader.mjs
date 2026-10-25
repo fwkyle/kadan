@@ -4,7 +4,9 @@ import {withWatchMailboxViews, mailReminderCandidates, mailWaitingLetters,
   mailRecentLetters} from './mail-view.mjs';
 import {rememberMailboxQueries} from './mailbox-queries.mjs';
 import {taskIdentity, taskConnectionError, projectedCompletionKey} from './task-identity.mjs';
-import {createWatchLedgerView} from './watch-ledger-view.mjs';
+import {createWatchLedgerView, readWatchRows} from './watch-ledger-view.mjs';
+import {withLedgerView} from './ledger-view.mjs';
+import {domainProjector} from './ledger-domains.mjs';
 import {applyWatchWorkState} from './watch-work-state.mjs';
 import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
 import {applyWatchRoleState} from './watch-role-state.mjs';
@@ -105,6 +107,29 @@ export function createWatchMailReader(home, readEntries = null,
       last = {...value, entries};snapshots.set(entries, last);
       return entries;
     },
+    // 정기 대조(watch-sweep.mjs)가 쓰는 읽기 전용 접근. 증분 상태를 들여다보고 처음부터 다시 만들 때만 쓴다.
+    sweepAccess: {
+      peek: () => ledger.peek(),
+      newProjector: () => domainProjector(null),
+      info: () => withLedgerView(home, (cache, info) => ({generation:info.generation, position:info.position})),
+      total: () => withLedgerView(home, cache => {
+        const counts = cache?.prepare("SELECT value FROM meta WHERE key='counts'").get()?.value;
+        return counts ? JSON.parse(counts)['']?.total ?? 0 : 0;
+      }),
+      readChunk: (after, upTo, projector, limit) =>
+        withWatchMailboxViews(home, ({raw}) => readWatchRows(raw.store, projector, after, upTo, limit)),
+      // 조회 DB가 적용한 영역별 마지막 순번과 원본 stream 끝 순번. 같은 snapshot에서 함께 읽는다.
+      streamCursors: () => withLedgerView(home, (cache, info, source) => {
+        const cursor = {}, max = {};
+        if (!cache) return {cursor, max};
+        for (const row of cache.prepare('SELECT stream, seq FROM cursors').all()) cursor[row.stream] = row.seq;
+        const head = source.prepare('SELECT seq FROM heads WHERE stream=?');
+        for (const stream of Object.keys(cursor)) max[stream] = head.get(stream)?.seq ?? 0;
+        return {cursor, max};
+      }),
+    },
+    // 교체: 증분 상태를 버려 다음 읽기가 원본에서 처음부터 다시 만들게 한다.
+    resetIncremental() { ledger.reset();last = null; },
     letters(entries) {
       const value = snapshots.get(entries);
       if (!value) throw new Error('감시 우편과 원장 수집 버전이 다릅니다');
