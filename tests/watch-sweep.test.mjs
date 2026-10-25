@@ -81,3 +81,38 @@ test('가벼운 대조는 원본 총건수·커서와 어긋난 값만 불일치
   const skewed = sweepOf(reader, {total: () => 999});
   assert.equal(skewed.light().mismatches[0].name, '배열 건수 대 원본 총건수');
 });
+
+// B 조율 질문: 트리거를 끄고 과거 events 한 줄만 고친 손상을 전체 대조가 잡는가.
+async function tamperOldEvent(home, field = 'role') {
+  const {DatabaseSync} = await import('node:sqlite');
+  const {storagePath} = await import('../src/storage.mjs');
+  const db = new DatabaseSync(storagePath(home));
+  try {
+    db.exec('DROP TRIGGER events_no_update');
+    const changed = db.prepare(`UPDATE events SET payload=json_set(payload,'$.${field}','tampered')
+      WHERE rowid=(SELECT min(rowid) FROM events WHERE json_extract(payload,'$.kind')='send')`).run().changes;
+    assert.equal(changed, 1);
+  } finally { db.close(); }
+}
+
+test('실행 중에 과거 events를 트리거 없이 고치면 전체 대조가 diff로 잡는다(조용히 match하지 않는다)', async () => {
+  const home = homeOf(), reader = createWatchMailReader(home);
+  for (const event of events(20)) appendLedger(event, home);
+  reader.readEntries();
+  assert.equal((await sweepOf(reader).full()).status, 'match');
+  await tamperOldEvent(home);
+  const result = await sweepOf(reader).full();
+  assert.notEqual(result.status, 'match', JSON.stringify(result));
+  assert.equal(result.status, 'diff');
+});
+
+test('시작(첫 적재) 전에 고쳐진 과거 events는 증분 상태와 원본이 같은 값을 읽어 전체 대조만으로는 알 수 없다', async () => {
+  const home = homeOf();
+  for (const event of events(20)) appendLedger(event, home);
+  await tamperOldEvent(home, 'preview'); // 스키마 검증을 통과하는 값 변경(검증에 걸리는 변경은 조회 계층이 적재 때 던진다)
+  const reader = createWatchMailReader(home);
+  reader.readEntries();
+  const result = await sweepOf(reader).full();
+  // 한계를 시험으로 고정한다: 이 경우를 잡으려면 불변 체크섬(별도 검증)이 필요하다.
+  assert.equal(result.status, 'match');
+});
