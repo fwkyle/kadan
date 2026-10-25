@@ -5,13 +5,16 @@ import {withWatchMailboxViews, mailReminderCandidates, mailWaitingLetters,
 import {rememberMailboxQueries} from './mailbox-queries.mjs';
 import {taskIdentity, taskConnectionError} from './task-identity.mjs';
 import {createWatchLedgerView} from './watch-ledger-view.mjs';
+import {applyWatchWorkState} from './watch-work-state.mjs';
+import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
 
 const stateKey = info => info && JSON.stringify([
   info.mailGeneration, info.mailStateVersion, info.mailCount,
 ]);
 const project = (entries, cards) => taskIdentity(cards).project(entries).filter(e => !taskConnectionError(e));
 
-export function createWatchMailReader(home, readEntries = null, {readCards = null, readRoles = () => []} = {}) {
+export function createWatchMailReader(home, readEntries = null,
+  {readCards = null, readWorks = null, readRoles = () => []} = {}) {
   const snapshots = new WeakMap();
   const ledger = createWatchLedgerView();
   let last = null;
@@ -20,6 +23,15 @@ export function createWatchMailReader(home, readEntries = null, {readCards = nul
       const roles = [...new Set(readRoles())].sort(), roleKey = JSON.stringify(roles);
       // 조회 DB 잠금 다음 원본 snapshot. 실제 전송/OS 조회 전에 두 트랜잭션을 닫는다.
       const value = withWatchMailboxViews(home, ({raw, projected, cards}) => {
+        let works = null;
+        try { works = readWorks?.() ?? null; } catch { /* 기존 readWorks 오류 경계에서 보고한다. */ }
+        const entries = readEntries ? readEntries() : ledger(raw.store, raw.info);
+        const state = !readEntries && projected &&
+          applyWatchWorkState(home, projected.store, projected.info, cards);
+        const factsKey = state && JSON.stringify([state.generation, state.revision, state.stateVersion]);
+        const scopeFacts = factsKey && last?.factsKey === factsKey &&
+          last.cards === cards && last.works === works && sameWatchCards(last.scopeFacts, cards) ? last.scopeFacts :
+          state && !state.legacyRequired ? captureWatchScopeFacts(projected.store, cards, works, entries) : null;
         const key = stateKey(raw.info), projectedKey = stateKey(projected?.info);
         const sameRaw = last?.key === key, sameRoles = last?.roleKey === roleKey;
         const queries = (view, previous, same, withRecent = false) =>
@@ -27,7 +39,7 @@ export function createWatchMailReader(home, readEntries = null, {readCards = nul
           waiting:same ? previous.waiting : mailWaitingLetters(view.store),
           recent:new Map(withRecent ? roles.map(role => [role, mailRecentLetters(view.store, role)]) : []),
         };
-        return {raw:readEntries ? readEntries() : ledger(raw.store, raw.info), key, projectedKey, cards, roleKey,
+        return {raw:entries, key, projectedKey, cards, works, factsKey, scopeFacts, roleKey,
           letters:sameRaw ? last.letters : mailReminderCandidates(raw.store),
           rawQueries:queries(raw, last?.rawQueries, sameRaw, true),
           projectedQueries:projected ? queries(projected, last?.projectedQueries,
@@ -35,7 +47,8 @@ export function createWatchMailReader(home, readEntries = null, {readCards = nul
       }, readCards);
       // commit 실패 때는 이전 정상 후보로 대체하지 않는다.
       if (last?.raw === value.raw && last.key === value.key && last.projectedKey === value.projectedKey &&
-          last.cards === value.cards && last.roleKey === roleKey) return last.entries;
+          last.cards === value.cards && last.works === value.works && last.factsKey === value.factsKey &&
+          last.scopeFacts === value.scopeFacts && last.roleKey === roleKey) return last.entries;
       // 이미 내준 수집의 판정은 뒤의 설정·카드 주소 변화로 바꾸지 않는다.
       const entries = snapshots.has(value.raw) ? value.raw.slice() : value.raw;
       rememberMailboxQueries(entries, value.rawQueries);
@@ -54,6 +67,7 @@ export function createWatchMailReader(home, readEntries = null, {readCards = nul
       if (!value.projected) {
         value.projected = project(entries, cards);
         rememberMailboxQueries(value.projected, value.projectedQueries);
+        rememberWatchScopeFacts(value.projected, cards, value.scopeFacts);
       }
       return value.projected;
     },

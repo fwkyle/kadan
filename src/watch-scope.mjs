@@ -2,12 +2,14 @@ import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import {effectiveCardRole, workEntries, responsibilityTargets} from './handover-state.mjs';
 import {peerResponsibilities} from './peer-mail.mjs';
 import {ownerGenerations,isPreviousOwner} from './owner-generation.mjs';
+import {watchScopeFacts, watchScopeGenerations, watchSentTasks} from './watch-scope-facts.mjs';
 
 // previous를 주면 이전 세대 소속이라 거른 발령을 거기 담는다(대시보드 "이전 세대 업무" 건수, owner-generation.mjs).
 function activeExecutions(cards, entries, parents, works, excludeWaiting, previous = null) {
   if (entries.some(entry => entry?.broken)) throw new Error('감시 대상 원장 읽기 실패');
   const identity=taskIdentity(cards);
-  const projected = workEntries(entries,identity);
+  const facts = watchScopeFacts(entries, cards);
+  const projected = facts ? [] : workEntries(entries,identity);
   const pending = new Map();
   for (const entry of projected) {
     if (!entry.role || !entry.taskId || entry.transport === 'mailbox' || taskConnectionError(entry)) continue;
@@ -16,15 +18,16 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
     if (entry.kind === 'done') pending.delete(key);
   }
   const tasks = [];
-  const generations = ownerGenerations(entries);
+  const generations = watchScopeGenerations(entries, facts);
   const supervisors = new Set(parents.values());
   const inactive = new Set(works.filter(w => w.status !== 'open').flatMap(w => w.executions.map(e => e.key)));
   for (const card of cards) {
     if (card.status !== 'assigned' || card.workType === 'coordination' || inactive.has(card.key)) continue;
-    const role = effectiveCardRole(card, entries,identity);
+    const value = facts?.cards.get(card);
+    const role = value ? value.role : effectiveCardRole(card, entries,identity);
     // 이름을 추측하지 않고 실제 하위 역할을 관리하는 상위를 제외한다.
     if (!role || role === '@user' || supervisors.has(role)) continue;
-    const sent = pending.get(`${role}\0${identity.taskIdFor(card)}`);
+    const sent = value ? value.sent : pending.get(`${role}\0${identity.taskIdFor(card)}`);
     if (!sent || !['resolved','unregistered'].includes(sent.taskConnection?.state)) continue;
     // 새 세대가 시작되기 전에 이 이름에 붙은 책임은 새 세션의 할 일이 아니다. 인계·재배정으로 새 세대 뒤에 붙었으면 현재 세대다.
     if (isPreviousOwner(generations, role, Object.hasOwn(sent, 'ownedAt') ? sent.ownedAt : sent.t)) { previous?.push({kind:'execution', key:card.key, role}); continue; }
@@ -43,7 +46,8 @@ export function buildWatchScope(cards, entries, parents = new Map(), works = [])
 export function buildSupervisorScope(cards, entries, parents = new Map(), works = []) {
   const active = activeExecutions(cards, entries, parents, works, false);
   const tasks = [];
-  const generations = ownerGenerations(entries);
+  const facts = watchScopeFacts(entries, cards);
+  const generations = watchScopeGenerations(entries, facts);
   // 사슬의 끝(상위가 @user인 최상위 감독)까지 포함한다. 최상위를 빼면 그 세션의 죽음·정체는 누구도
   // 알리지 않는 사각이 된다(2026-10-05 점검). 활성 실행이 아래에 있을 때만 대상인 규칙은 다른 감독과 같다.
   const add = (role, entry) => {
@@ -59,7 +63,9 @@ export function buildSupervisorScope(cards, entries, parents = new Map(), works 
   };
   for (const entry of active) add(parents.get(entry.role), entry);
   for (const request of peerResponsibilities(entries, parents, works, cards)) add(request.role, request);
-  const sent = new Set(workEntries(entries,cards).filter(e => e.kind === 'send' && e.taskId && e.transport !== 'mailbox' && !taskConnectionError(e)).map(e => e.executionKey || e.taskId));
+  const sent = watchSentTasks(works, facts) ?? new Set(workEntries(entries,cards)
+    .filter(e => e.kind === 'send' && e.taskId && e.transport !== 'mailbox' && !taskConnectionError(e))
+    .map(e => e.executionKey || e.taskId));
   for (const work of works) {
     if (work.status !== 'open' || !work.executions.some(e => sent.has(e.key))) continue;
     // 실행을 모두 끝내도 업무 최종 확인이 남으면 책임 감독은 응답 가능해야 한다.
