@@ -50,7 +50,7 @@ test('확보 도중 다른 연결의 원자적 변경은 다음 수집에서만 
   const loader=createWallSnapshotLoader(null,{listOnly:true});
   const prepare=DatabaseSync.prototype.prepare;let injected=false;
   DatabaseSync.prototype.prepare=function(sql,...args){
-    if(!injected&&sql.includes('FROM heads h LEFT JOIN events')){
+    if(!injected&&sql.includes('SELECT stream,seq,payload FROM heads WHERE stream GLOB')){
       injected=true;
       const writer=new DatabaseSync(storagePath(f.home));
       try{

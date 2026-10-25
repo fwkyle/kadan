@@ -3,6 +3,7 @@
 import {createHash} from 'node:crypto';
 import {scrubSecrets} from './user-notify.mjs';
 import {statusLabel} from './status-labels.mjs';
+import {listFactsOf} from './card-list-facts.mjs';
 
 export const BRIEF_STAGES = ['구현', '검수', '통합', '프리뷰 확인', '조율', '조사', '기타'];
 export const BRIEF_FIELD_MAX = 1000;
@@ -45,8 +46,8 @@ function scrubAll(value) {
   return value;
 }
 function rawInput(card, {progress, decisions}) {
-  const notes = (card.history ?? []).filter(h => ['decision', 'question', 'answer'].includes(h.noteKind) && h.note).slice(-NOTES)
-    .map(h => ({kind: h.noteKind, by: h.by ?? '모름', note: cut(h.note, NOTE_MAX)}));
+  const notes = listFactsOf(card).notes.slice(-NOTES)
+    .map(h => ({kind: h.kind, by: h.by ?? '모름', note: cut(h.note, NOTE_MAX)}));
   return {
     title: cut(card.title ?? card.id ?? '', 300),
     body: card.bodySummary?.explainBody ?? explainBody(card.body ?? ''),

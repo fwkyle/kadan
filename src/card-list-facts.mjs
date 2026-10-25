@@ -1,12 +1,18 @@
 // Why: 목록은 카드마다 전체 이력 객체를 보관해 이력이 쌓일수록 RAM이 늘었다(실측 19,934행 63.5MiB, 행당 약 3.3KB).
 // 목록 소비자가 이력에서 실제로 읽는 사실만 이름을 나눠 사건을 하나씩 적용하며 갱신한다.
 // 요약 행을 이어 붙인 가짜 이력을 만들지 않는다: 모든 사실은 원래 인접 행을 비교해 얻은 값이다.
-// 이력이 없는 호출(시험·옛 호출자)은 listFactsOf가 같은 advance로 이력에서 사실을 만든다. 소비자 코드는 한 갈래다.
+// 이력이 없는 호출(시험·옛 호출자·상세)은 listFactsOf가 같은 advance로 이력에서 사실을 만든다. 소비자 코드는 한 갈래다.
+//
+// 상시 보관(bounded) 모드: 카드당 크기가 이력 길이와 무관하도록 한도를 둔다. 한도를 넘으면(overflow) 또는 한도 때문에
+// 지금 필요한 값을 잃었으면(needsHistory) 그 카드만 이력 전체를 보관하고 사실을 쓰지 않는다. 그래서 출력은 항상 같다.
+// 이력 기반(unbounded) 모드: 한도 없이 이력 위에서 만든다(상세·시험·옛 호출자).
 import {advanceCardHistoryFacts} from './card-history-facts.mjs';
 
 const NOTES = ['decision', 'question', 'answer'];
 const RALLY = ['rallyId', 'rallyTitle', 'rallyRound', 'rallyStep'];
-const DEFAULT_ROLES = ['draft', 'ready', 'assigned'];
+const REOPEN = ['draft', 'ready', 'assigned'];
+// 한도: 실제 사본 4,036장에서 보고 스택은 묶음당 1개, 묶음 3개 이하, 명시 차례 행 최대 12개였다(evidence/iso-facts-shape.json).
+export const LIMITS = {stack: 4, groups: 8, explicit: 3, waiting: 3, future: 4, roles: 6};
 const parse = value => Date.parse(value);
 const date = value => Date.parse(value) || 0;
 
@@ -27,21 +33,24 @@ function advanceGroup(group, report, index) {
 
 export function emptyListFacts() {
   return {
-    n: 0, firstKey: null, keyConsistent: true, contiguous: true,
+    n: 0, last: null, firstKey: null, keyConsistent: true, contiguous: true,
     center: {transition: null, question: null, answer: null, changedAt: null},
     firstAssigned: null, firstRunning: null,
     registered: null, reopenMax: null,
-    lastHoldEntry: null, boundary: null, dialogue: null, explicit: [],
+    lastHoldEntry: null, boundary: null, dialogue: null, explicit: [], explicitDropped: false,
     notes: [], rallyDecisions: [], futureTimes: [],
-    progressCount: 0, authored: new Map(), unknownAuthor: new Map(), assignments: new Map(), waitingNotes: new Map(),
+    progressCount: 0, authored: new Map(), unknownAuthor: new Map(), assignments: new Map(),
+    waitingNotes: new Map(), waitingDropped: false,
+    overflow: false, needsHistory: false,
   };
 }
 
 // row: 새 사건, previousRow: 바로 앞 원래 행(없으면 null), now: 미래 시각 판정 기준(적용 시각).
-export function advanceListFacts(previous, previousRow, row, now = Date.now()) {
+export function advanceListFacts(previous, previousRow, row, now = Date.now(), {bounded = false} = {}) {
   const facts = {...(previous ?? emptyListFacts())};
   const first = !previousRow, index = facts.n;
   facts.n = index + 1;
+  facts.last = row; // 가장 최근 원래 행(목록 행이 이미 같은 객체를 든다). 실행 모델이 원래 행을 읽는다.
   if (first) facts.firstKey = row.key;
   if (row.key !== facts.firstKey) facts.keyConsistent = false;
   if (row.revision !== index + 1) facts.contiguous = false;
@@ -53,7 +62,7 @@ export function advanceListFacts(previous, previousRow, row, now = Date.now()) {
     facts.firstRunning = {activityAt: row.activityAt, at: row.at, activityRole: row.activityRole};
   }
   if (!facts.registered && row.result) facts.registered = {scope: row.scope, role: row.role, repoPath: row.repoPath};
-  if (statusChanged && DEFAULT_ROLES.includes(row.status)) {
+  if (statusChanged && REOPEN.includes(row.status)) {
     facts.reopenMax = facts.reopenMax === null ? date(row.at) : Math.max(facts.reopenMax, date(row.at));
   }
   if (row.status === 'hold' && previousRow?.status !== 'hold') facts.lastHoldEntry = {at: row.at};
@@ -62,41 +71,55 @@ export function advanceListFacts(previous, previousRow, row, now = Date.now()) {
     facts.dialogue = {at: row.at, revision: row.revision, noteKind: row.noteKind};
   }
   if (Number.isInteger(row.turnRevision) && row.turnRevision === row.revision) {
-    facts.explicit = [...facts.explicit, {revision: row.revision, at: row.at, by: row.by, role: row.role,
+    const kept = [...facts.explicit, {revision: row.revision, at: row.at, by: row.by, role: row.role,
       status: row.status, turnAt: row.turnAt, turnOwner: row.turnOwner, turnBy: row.turnBy, turnRevision: row.turnRevision}];
+    facts.explicit = bounded ? kept.slice(-LIMITS.explicit) : kept;
+    if (bounded && kept.length > LIMITS.explicit) facts.explicitDropped = true;
   }
   if (NOTES.includes(row.noteKind) && row.note) {
     facts.notes = [...facts.notes, {kind: row.noteKind, by: row.by, note: row.note}].slice(-5);
   }
-  // 옛 목록의 최근 판단은 rally 필드가 인접 행과 모두 같은 행의 decision만 후보로 삼는다.
+  // 옛 목록의 최근 판단은 rally 필드가 인접 행과 모두 같은 행의 decision만 후보로 삼고, 시각이 가장 늦은(같으면 앞선) 하나만 쓴다.
   if (row.noteKind === 'decision' && row.note && !RALLY.some(k => row[k] !== previousRow?.[k])) {
-    facts.rallyDecisions = [...facts.rallyDecisions, {at: row.at, note: row.note.slice(0, 240)}];
+    const candidate = {at: row.at, note: row.note.slice(0, 240)};
+    if (!bounded) facts.rallyDecisions = [...facts.rallyDecisions, candidate];
+    else if (!Number.isFinite(parse(row.at))) facts.overflow = true; // 잘못된 시각이 섞이면 정렬 결과가 후보 전체에 달려 있다
+    else if (!facts.rallyDecisions.length || parse(row.at) > parse(facts.rallyDecisions[0].at)) facts.rallyDecisions = [candidate];
   }
   for (const value of [row.at, row.activityAt]) {
     const t = parse(value);
-    if (t > now && !facts.futureTimes.includes(t)) facts.futureTimes = [...facts.futureTimes, t].sort((a, b) => a - b);
+    if (t > now && !facts.futureTimes.includes(t)) {
+      facts.futureTimes = [...facts.futureTimes, t].sort((a, b) => a - b);
+      if (bounded && facts.futureTimes.length > LIMITS.future) facts.overflow = true;
+    }
   }
   if (row.noteKind === 'progress') {
     facts.progressCount += 1;
     const by = row.by, unknown = !by || by === '모름', key = `${row.role || ''}`;
+    const put = (map, mapKey) => {
+      const next = new Map(map), group = advanceGroup(next.get(mapKey) ?? EMPTY_GROUP, row, index);
+      if (bounded && (group.stack.length > LIMITS.stack || (!next.has(mapKey) && next.size >= LIMITS.groups))) facts.overflow = true;
+      next.set(mapKey, group);
+      return next;
+    };
     // 작성자가 '모름'인 보고는 현재 역할이 '모름'인 드문 경우에만 owned이기도 하다(기존 두 필터가 독립이라 둘 다 센다).
-    if (unknown) {
-      const map = new Map(facts.unknownAuthor);
-      map.set(key, advanceGroup(map.get(key) ?? EMPTY_GROUP, row, index));
-      facts.unknownAuthor = map;
-    }
-    if (by) {
-      const map = new Map(facts.authored), mapKey = `${by}\u0000${key}`;
-      map.set(mapKey, advanceGroup(map.get(mapKey) ?? EMPTY_GROUP, row, index));
-      facts.authored = map;
-    }
+    if (unknown) facts.unknownAuthor = put(facts.unknownAuthor, key);
+    if (by) facts.authored = put(facts.authored, `${by}\u0000${key}`);
     if (row.activity === 'waiting' && row.activityAt === row.at) {
-      facts.waitingNotes = new Map(facts.waitingNotes).set(row.at, row.note);
+      const waiting = new Map(facts.waitingNotes);
+      waiting.delete(row.at);waiting.set(row.at, row.note);
+      if (bounded && waiting.size > LIMITS.waiting) {waiting.delete(waiting.keys().next().value);facts.waitingDropped = true;}
+      facts.waitingNotes = waiting;
     }
   }
   if (row.status === 'assigned' && row.role && (previousRow?.role !== row.role || previousRow?.status !== 'assigned')) {
     facts.assignments = new Map(facts.assignments).set(row.role, {at: row.at});
+    if (bounded && facts.assignments.size > LIMITS.roles) facts.overflow = true;
   }
+  // 한도 때문에 지금 행이 필요로 하는 값을 잃었으면 이 카드는 이력 전체를 보관한다(출력이 달라지지 않게).
+  facts.needsHistory = facts.overflow
+    || (facts.explicitDropped && Number.isInteger(row.turnRevision) && !facts.explicit.some(e => e.revision === row.turnRevision))
+    || (facts.waitingDropped && row.activityAt != null && !facts.waitingNotes.has(row.activityAt));
   return facts;
 }
 

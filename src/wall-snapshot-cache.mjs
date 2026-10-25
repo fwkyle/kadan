@@ -36,7 +36,11 @@ export function cardFilesFingerprint(home){
 export function nextTimeBoundary(cards,now){
  let next=Infinity;
  const see=value=>{const t=Date.parse(value);if(t>now&&t<next)next=t;};
- for(const card of cards??[]){see(card.at);see(card.activityAt);for(const h of card.history??[]){see(h.at);see(h.activityAt);}for(const r of card.runs??[]){see(r.sentAt);see(r.at);}}
+ for(const card of cards??[]){see(card.at);see(card.activityAt);
+  // 사실을 든 목록 행은 행을 적용한 시각보다 뒤인 이력 시각만 들고 있다(now는 그 뒤로만 간다). 이력을 든 호출은 옛 방식 그대로 훑는다.
+  if(card.listFacts){for(const t of card.listFacts.futureTimes)if(t>now&&t<next)next=t;}
+  else for(const h of card.history??[]){see(h.at);see(h.activityAt);}
+  for(const r of card.runs??[]){see(r.sentAt);see(r.at);}}
  return next===Infinity?null:next;
 }
 

@@ -5,6 +5,7 @@ import {readLedgerState} from './ledger-domains.mjs';
 import {classifyLedgerEntry} from './ledger.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {workEntries,effectiveCardRole} from './handover-state.mjs';
+import {listFactsOf,listFactsFromHistory} from './card-list-facts.mjs';
 // 운영 흐름은 저장된 관계와 근거만 읽는다. 실행·업무·인수 상태를 쓰거나 추정하지 않는다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -76,9 +77,8 @@ function readAutomaticInputs(home,works){
 // 원본 확보만 같은 snapshot 안에서 한다. 관계 색인·상태 판정은 DB를 닫은 다음 계산한다.
 export function readOperationsFlowInputs(home,works,snapshot={}){
  const sources=readFollowupSources(home,snapshot),histories=new Map();
- const known=new Map(sources.cards.filter(c=>Array.isArray(c.history)&&c.history.length===c.revision&&
-  c.history.every((h,i)=>h.key===c.key&&h.revision===i+1)).map(c=>[c.key,c.history]));
- const read=stream=>{try{return readStream(home,stream);}catch(error){return error;}};
+ const known=completeEntries(sources.cards);
+ const read=stream=>{try{return executionEntry(readStream(home,stream));}catch(error){return error;}};
  for(const key of new Set(works.flatMap(w=>w.executions.map(e=>e.key)))){
   histories.set(key,known.get(key)??read(`cards/${key}/events.jsonl`));
  }
@@ -95,8 +95,7 @@ function followupContext(home,snapshot={}){
   context.transfers=context.read(e=>e.kind==='handover');
   context.identity=taskIdentity(context.cards);
   context.byKey=new Map(context.cards.map(c=>[c.key,c]));
-  context.histories=new Map(context.cards.filter(c=>Array.isArray(c.history)&&c.history.length===c.revision&&
-    c.history.every((h,i)=>h.key===c.key&&h.revision===i+1)).map(c=>[c.key,c.history]));
+  context.histories=completeEntries(context.cards);
   const index=(entries,keys)=>{
    const result=new Map();
    for(const entry of entries)for(const key of new Set(keys(entry))){
@@ -200,14 +199,24 @@ function linkedRecords(home,work,cardHeads,read=eventReader(home)){
  return {watchCalls:read(e=>e.kind==='watch-ai-call'),events:seed.filter(e=>['send','done'].includes(e.kind)&&connected(e)),letters,handovers,ids};
 }
 
+// 실행 이력은 사실로 들고 간다: 이력 전체 대신 순번 연속성·원래 끝 행·전환·최초 결과 당시 값만 쓴다.
+const executionEntry=rows=>({facts:listFactsFromHistory(rows)});
+// 이력 길이가 revision과 같고 모든 행 번호가 이어진 카드만 다시 읽지 않고 재사용한다(명시적 판정 사실).
+function completeEntries(cards){
+ const entries=new Map();
+ for(const c of cards){const facts=listFactsOf(c);
+  if(facts.n===c.revision&&facts.contiguous&&facts.keyConsistent&&facts.firstKey===c.key)entries.set(c.key,{facts});}
+ return entries;
+}
 function executionModel(home,link,cardHeads,records,sharedIdentity=null,histories=null){
  const base={key:link.key,phase:link.phase,round:link.round,title:link.key,role:null,status:null,signals:[],reportState:'unknown'};
  try{
   if(!validKey(link.key))throw failure('실행 주소 확인 필요');
-  const history=histories?.get(link.key)??readStream(home,`cards/${link.key}/events.jsonl`);
-  if(history instanceof Error)throw history;
-  if(!history.length||history.some((c,i)=>c.key!==link.key||c.revision!==i+1))throw failure('실행 이력 확인 필요');
-  const card=history.at(-1),identity=sharedIdentity||taskIdentity(cardHeads);
+  const entry=histories?.get(link.key)??executionEntry(readStream(home,`cards/${link.key}/events.jsonl`));
+  if(entry instanceof Error)throw entry;
+  const facts=entry.facts;
+  if(!facts.n||!facts.contiguous||!facts.keyConsistent||facts.firstKey!==link.key)throw failure('실행 이력 확인 필요');
+  const card=facts.last,identity=sharedIdentity||taskIdentity(cardHeads);
   const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
   const runs=new Map(),sent=new Map(),seen=new Set();
   const ordered=records?(records.ordered??[...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq)):[];
@@ -221,9 +230,9 @@ function executionModel(home,link,cardHeads,records,sharedIdentity=null,historie
   let reportState=!records||ambiguous?'unknown':signals.some(e=>e.result==='failed')?'failed':signals.length&&[...runs.values()].every(e=>e?.result==='ok')?'ok':signals.length?'partial':'unreported';
   const sentAt=[...sent.values()].sort().at(-1)||null,completedAt=signals.map(e=>e.at).sort().at(-1)||null;
   if(signals.some(e=>sent.has(e.role)&&elapsed(sent.get(e.role),e.at)===null))reportState='unknown';
-  const transition=history.filter((h,i)=>i&&h.status!==history[i-1].status).at(-1);
+  const transition=facts.center.transition;
   if(reportState!=='unknown'&&transition&&['draft','ready','assigned'].includes(card.status)&&Date.parse(transition.at)>Math.max(Date.parse(sentAt)||0,Date.parse(completedAt)||0))reportState='unreported';
-  const result=card.result,registered=history.find(h=>h.result),changedAfterResult=registered&&['scope','role','repoPath'].some(k=>registered[k]!==card[k]);
+  const result=card.result,registered=facts.registered,changedAfterResult=registered&&['scope','role','repoPath'].some(k=>registered[k]!==card[k]);
   const role=effectiveCardRole(card,ordered,identity);
   const sameRun=result&&sentAt&&elapsed(sentAt,result.at)!==null&&!changedAfterResult&&!(transition&&['draft','ready','assigned'].includes(card.status)&&Date.parse(transition.at)>Date.parse(result.at));
   const active=reportState==='unreported'&&card.status==='assigned'&&card.activityRole===role&&sent.has(role)&&elapsed(sent.get(role),card.activityAt)!==null;
