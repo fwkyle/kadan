@@ -181,3 +181,28 @@ test('전체 주소 완료는 업무 최종 완료 검사에서도 종료로 연
  appendLedger({...done('r/c'),t:'2099-01-01T00:01:00Z'},f.home);
  assert.equal(works.change(w.key,'complete',{result:'verified'},{revision:w.revision,by:'p-boss',note:'checked'}).status,'done');
 });
+
+test('같은 카드 배열은 해석표를 재사용하고, 길이가 바뀌면 다시 만든다', () => {
+  const cards = [{key:'a/x1', id:'x1'}];
+  const first = taskIdentity(cards);
+  assert.equal(taskIdentity(cards), first);
+  cards.push({key:'a/x2', id:'x2'});
+  const second = taskIdentity(cards);
+  assert.notEqual(second, first);
+  assert.equal(second.resolve('x2').state, 'resolved');
+  assert.notEqual(taskIdentity([...cards]), second);
+});
+
+test('같은 배열·같은 길이에서 카드 주소가 제자리에서 바뀌면 옛 해석표를 쓰지 않는다(독립검수 F6)', () => {
+  const cards = [{key: 'r/c', id: 'c'}];
+  assert.equal(taskIdentity(cards).resolve('c', 'r/c').state, 'resolved');
+  cards[0] = {key: 's/c', id: 'c'};                       // 원소 교체
+  assert.equal(taskIdentity(cards).resolve('c', 'r/c').state, 'missing-address');
+  assert.equal(taskIdentity(cards).resolve('c', 's/c').state, 'resolved');
+  cards[0].key = 't/c';                                    // 같은 객체의 key 변경
+  assert.equal(taskIdentity(cards).resolve('c', 's/c').state, 'missing-address');
+  assert.equal(taskIdentity(cards).resolve('c', 't/c').state, 'resolved');
+  // 독립 해석(새 배열)과 같은 결과여야 한다 — 비교 양쪽이 같은 캐시를 공유하지 않게 새 배열 사본으로 확인한다.
+  const independent = taskIdentity(cards.map(card => ({...card})));
+  assert.deepEqual(independent.resolve('c', 't/c').state, taskIdentity(cards).resolve('c', 't/c').state);
+});

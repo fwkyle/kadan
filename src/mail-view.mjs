@@ -224,18 +224,29 @@ export function mailboxWaitingCount(store) {
     WHERE domain=? AND reply_status='waiting'`).get(store.scope).n : 0;
 }
 
+// 조건 열이 색인된 조회는 PK(domain, position) 순회가 아니라 그 색인으로 읽는다. 힌트가 없으면 SQLite가 position 정렬을
+// 피하려 영역의 모든 행을 훑는다(10배 과거 자료에서 호출당 0.06→2.8ms). 색인이 없는 옛 파일이면 힌트 없이 같은 질의를 쓴다.
+function hintedRows(store, index, tail, params) {
+  const hinted = mailStateSelect.replace('FROM mail_current m', `FROM mail_current m INDEXED BY ${index}`);
+  try { return store.prepare(`${hinted} ${tail}`).all(...params); }
+  catch (error) {
+    if (!/no such index/iu.test(error?.message ?? '')) throw error;
+    return store.prepare(`${mailStateSelect} ${tail}`).all(...params);
+  }
+}
+
 export function mailReminderCandidates(store) {
   if (!store) return [];
   // notification에는 notificationOnly와 완료 우편이 포함된다. 둘 다 기존 알림 제외 조건이다.
-  const rows = store.prepare(`${mailStateSelect} WHERE m.domain=? AND m.read=0 AND m.notification=0
-    AND NOT COALESCE((${previousMailExpression}),0) ORDER BY m.position`).all(store.scope);
+  const rows = hintedRows(store, 'mail_read', `WHERE m.domain=? AND m.read=0 AND m.notification=0
+    AND NOT COALESCE((${previousMailExpression}),0) ORDER BY m.position`, [store.scope]);
   return rows.map(row => storedMailLetter(store, row));
 }
 
 export function mailWaitingLetters(store) {
   if (!store) return [];
-  const rows = store.prepare(`${mailStateSelect} WHERE m.domain=? AND m.reply_status='waiting'
-    ORDER BY m.position`).all(store.scope);
+  const rows = hintedRows(store, 'mail_reply', `WHERE m.domain=? AND m.reply_status='waiting'
+    ORDER BY m.position`, [store.scope]);
   return rows.map(row => storedMailLetter(store, row));
 }
 
