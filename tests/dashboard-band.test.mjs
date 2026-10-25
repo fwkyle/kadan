@@ -101,11 +101,13 @@ test("살아 있는 담당의 실행 도구·모델·세대가 sessions 표와 �
 });
 
 // PR #298 검수 F2: 창이 닫힌 담당(열린 카드 있음)과 세션 상태를 모를 때도 옛 표의 실행 도구·모델이 남아야 한다.
-// 옛 표(sessions)가 보이던 모든 역할을 새 자료(살아 있으면 live, 아니면 lastRuns)와 대조한다.
+// 옛 표(sessions)가 보이던 역할 가운데 전략 맵에 실제로 오르는 모든 역할(카드 없는 감독·슈퍼감독 조상 포함, 수정 2)을
+// 실제 지도 계산(buildMap·runLabel)으로 대조한다.
 test("닫힌 담당·세션 상태 모름에서도 sessions 표의 실행 도구·모델이 live 또는 lastRuns로 남는다", async () => {
   const { buildTree } = await import("../src/cli.mjs");
   const { buildCardCenter } = await import("../src/card-center.mjs");
   const { sessionsData, lastRuns } = await import("../src/dashboard/summary.mjs");
+  const { buildMap, runLabel } = await import("../gui/src/strategy-map.ts");
   const t = (n) => new Date(Date.UTC(2026, 9, 25, 1, n)).toISOString();
   const start = (role, panePid, n, cmd) => ({ kind: "start", role, session: `kadan-${role}`, panePid, t: t(n),
     ...(cmd ? { cmd, harness: cmd.split(" ")[0], model: cmd.split("--model ")[1] } : {}) });
@@ -117,10 +119,15 @@ test("닫힌 담당·세션 상태 모름에서도 sessions 표의 실행 도구
     start("r-닫힘", 12, 1, "codex --model model-2"),
     { kind: "stop", role: "r-닫힘", session: "kadan-r-닫힘", t: t(4) },
     start("r-기록만", 13, 2, "codex --model model-3"), // stop 없이 세션만 사라짐
-    start("r-끝남", 14, 3, "claude --model haiku"), // 열린 카드 없음 → 옛 표도 숨김
+    start("r-끝남", 14, 3, "claude --model haiku"), // 열린 카드 없음·관계표에 없음 → 지도에 안 오름
+    start("r-감독", 15, 4, "codex --model model-5"), // 자기 카드 없는 상위 사슬
+    start("r-슈퍼", 16, 5, "codex --model model-6"), // 자기 카드 없는 슈퍼감독
     send("r-열림"), send("r-닫힘"), send("r-기록만"),
   ];
   const cards = ["r-열림", "r-닫힘", "r-기록만"].map(card);
+  const hierarchy = { "r-슈퍼": "@user", "r-감독": "r-슈퍼", "r-열림": "r-감독", "r-닫힘": "r-감독", "r-기록만": "r-감독" };
+  const rows = cards.map((c) => ({ key: c.key, title: c.id, owner: c.role, bucket: "running" }));
+  const runtimeKnownOf = (label) => label === "세션 상태 앎";
   const build = (alive, runtimeKnown) =>
     buildCardCenter({ cards, entries, tree: buildTree(entries, alive, cards), runtimeKnown });
   for (const [label, center] of [
@@ -128,21 +135,28 @@ test("닫힌 담당·세션 상태 모름에서도 sessions 표의 실행 도구
     ["세션 상태 모름", build({}, false)],
   ]) {
     const sessions = sessionsData({ center }, new URL("http://x/"), {}), live = liveSessions(center) ?? [];
-    const runs = lastRuns(center);
-    const owners = new Set(cards.map((c) => c.role));
+    const runs = lastRuns(center, { hierarchy, alerts: null });
+    const map = buildMap({ hierarchy, rows, live: liveSessions(center), alerts: null, lastRuns: runs });
+    const units = new Map(map.bases.flatMap((b) => b.units).map((u) => [u.role, u]));
     const checked = [];
     for (const r of sessions.roles) {
       if (!r.model || r.model === "모름") continue;
       const now = live.find((s) => s.role === r.role);
-      // 세션 상태를 모르면 옛 표는 모든 역할을 보였다. 새 자료는 지도에 오르는 담당(열린 카드)으로 줄인다.
-      if (!now && !owners.has(r.role)) continue;
+      // 세션 상태를 모르면 옛 표는 모든 역할을 보였다. 새 화면은 지도에 오르는 역할만 보인다.
+      if (!units.has(r.role)) continue;
       const got = now ?? runs[r.role];
       assert.ok(got, `${label}: ${r.role}의 실행 기록이 사라짐`);
       assert.equal(got.model, r.model, `${label}: ${r.role} 모델`);
       assert.equal(got.harness, r.harness, `${label}: ${r.role} 실행 도구`);
+      assert.ok(runLabel(units.get(r.role)).includes(`${r.harness} · ${r.model}`), `${label}: ${r.role} 옆 칸 문구`);
       checked.push(r.role);
     }
-    assert.deepEqual(checked.sort(), ["r-기록만", "r-닫힘", "r-열림"].sort(), label + ": 닫힌 담당까지 대조");
-    assert.ok(!("r-끝남" in runs), label + ": 열린 카드 없는 담당은 싣지 않는다");
+    // 세션 상태를 알면 옛 표도 카드 없는 닫힌 감독·슈퍼감독을 숨겼다. 모르면 옛 표가 보이던 조상까지 대조한다.
+    const expected = runtimeKnownOf(label) ? ["r-기록만", "r-닫힘", "r-열림"] : ["r-감독", "r-기록만", "r-닫힘", "r-슈퍼", "r-열림"];
+    assert.deepEqual(checked.sort(), expected.sort(), label + ": 지도에 오르는 역할 대조");
+    assert.equal(units.size, 5, label + ": 지도 유닛 수(슈퍼·감독·작업자 3)");
+    assert.ok(!("r-끝남" in runs), label + ": 지도에 안 오르는 과거 역할은 싣지 않는다");
+    assert.deepEqual(runs["r-감독"], { harness: "codex", model: "model-5" }, label + ": 카드 없는 감독");
+    assert.deepEqual(runs["r-슈퍼"], { harness: "codex", model: "model-6" }, label + ": 카드 없는 슈퍼감독");
   }
 });
