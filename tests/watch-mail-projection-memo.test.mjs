@@ -41,3 +41,19 @@ test('증분 해석은 모든 prefix에서 전체 재해석과 같다(별칭 뒤
   assert.notStrictEqual(reader.project(raw.slice(), cards), first);
   assert.deepEqual(reader.project(raw.slice(), cards), first);
 });
+
+test('같은 배열·같은 길이에서 카드 주소가 바뀌면 reader도 옛 연결을 남기지 않는다(독립검수 F6)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-watch-projection-memo-'));
+  createDatabase(home);writeStorageMarker(home, 'sqlite');
+  const cards = [{key: 'r/c', id: 'c', role: 'w', status: 'assigned', revision: 1, at}];
+  const reader = createWatchMailReader(home, null, {readCards: () => cards, readRoles: () => ['w']});
+  appendLedger({kind: 'send', role: 'w', by: 'lead', mailId: 'm1', taskId: 'c', executionKey: 'r/c', t: at}, home);
+  let raw = reader.readEntries();
+  assert.equal(reader.project(raw, cards).length, 1);            // r/c로 연결됨
+  cards[0] = {...cards[0], key: 's/c'};                           // 같은 배열·같은 길이, 주소만 바뀜
+  appendLedger({kind: 'send', role: 'w', by: 'lead', mailId: 'm2', taskId: 'c', executionKey: 's/c', t: at}, home);
+  raw = reader.readEntries();
+  const independent = taskIdentity(cards.map(card => ({...card}))).project(raw).filter(e => !taskConnectionError(e));
+  assert.deepEqual(reader.project(raw, cards), independent);     // 독립 해석(새 배열)과 같다: r/c의 옛 send는 연결 오류로 빠진다
+  assert.deepEqual(independent.map(e => e.mailId), ['m2']);
+});

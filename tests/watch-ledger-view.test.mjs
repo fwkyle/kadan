@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {createDatabase, writeStorageMarker, appendStream} from '../src/storage.mjs';
+import {createDatabase, writeStorageMarker, appendStream, transaction} from '../src/storage.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 import {readLedgerIncremental} from '../src/ledger-incremental.mjs';
 import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
@@ -113,23 +113,25 @@ test('저장소 없는 읽기는 폴더를 만들지 않고 빈 배열을 재사
   assert.equal(fs.existsSync(home), false);
 });
 
-test('감시 배열은 읽는 곳이 없는 종류·필드만 빼고 나머지는 전체 원장 배열과 모든 prefix에서 같다', () => {
+test('감시 배열은 읽는 곳이 없는 종류·필드만 작게 줄이고 개수·순서·나머지는 전체 원장 배열과 모든 prefix에서 같다', () => {
   const home = homeOf(), reader = createWatchMailReader(home);
-  const dropKinds = new Set(['watch-cycle', 'watch-scope']);
+  const stubKinds = new Set(['watch-cycle', 'watch-scope']);
   const same = () => {
     const entries = reader.readEntries(), full = expected(home);
-    const wanted = full.filter(e => !dropKinds.has(e.kind)).map(e => {
+    const wanted = full.map(e => {
+      if (stubKinds.has(e.kind)) return {kind:e.kind, by:e.by, t:e.t, ...(Object.hasOwn(e, '_ledgerOrder') ? {_ledgerOrder:e._ledgerOrder} : {})};
       if (e.kind !== 'send') return e;
       const {roleInstructions, ...rest} = e;return rest;
     });
+    assert.equal(entries.length, full.length);          // 개수·순서는 원문 그대로(F3)
     assert.deepEqual(entries, wanted);
     return entries;
   };
   for (const event of [
     {kind:'start', role, session:`kadan-${role}`, panePid:1, t:at},
-    {kind:'watch-cycle', by:'watch', pid:1, t:at},
+    {kind:'watch-cycle', by:'watch', pid:1, runtime:{big:'x'.repeat(500)}, t:at},
     {kind:'send', role, by, taskId:'task', mailId:'ri-1', roleInstructions:{status:'applied', text:'x'.repeat(600)}, preview:'p', t:at},
-    {kind:'watch-scope', by:'watch', pid:1, sessions:[], t:at},
+    {kind:'watch-scope', by:'watch', pid:1, sessions:['a'], t:at},
     {kind:'alert', id:'a1', alertKind:'x', level:'AMBER', role, t:at},
     {kind:'send', role, by, taskId:'task', mailId:'ri-2', t:at},
     {kind:'watch-cycle', by:'watch', pid:1, t:at},
@@ -137,8 +139,20 @@ test('감시 배열은 읽는 곳이 없는 종류·필드만 빼고 나머지�
     appendLedger(event, home);same();
   }
   const entries = same();
-  assert.equal(entries.some(e => dropKinds.has(e.kind)), false);
+  const stub = entries.find(e => e.kind === 'watch-cycle');
+  assert.ok(Object.keys(stub).every(key => ['_ledgerOrder', 'by', 'kind', 't'].includes(key)));   // 나머지 필드는 없다
   assert.equal(entries.some(e => Object.hasOwn(e, 'roleInstructions')), false);
   assert.equal(entries.find(e => e.mailId === 'ri-1').preview, 'p');
   assert.strictEqual(reader.readEntries(), entries); // 바뀐 게 없으면 같은 배열
+});
+
+test('개수 창(최근 5000개)을 쓰는 소비자의 후보가 종류 축소로 바뀌지 않는다(독립검수 F3 5001건 반례)', () => {
+  const home = homeOf(), reader = createWatchMailReader(home);
+  appendLedger({kind:'send', role, by, taskId:'task', executionKey:'fixture/task', mailId:'window-send', t:'2026-01-01T00:00:02Z'}, home);
+  transaction(home, () => { for (let n = 0; n < 5000; n++) appendLedger({kind:'watch-cycle', by:'watch', pid:1, t:at}, home); });
+  const entries = reader.readEntries(), full = expected(home);
+  const candidates = list => list.slice(-5000).filter(e => e.executionKey && ['send', 'done'].includes(e.kind)).map(e => e.executionKey);
+  assert.equal(full.length, 5001);
+  assert.deepEqual(candidates(entries), candidates(full));    // 원문 기준: 5000개 창에 send가 들어오지 않아 후보 없음
+  assert.deepEqual(candidates(entries), []);
 });
