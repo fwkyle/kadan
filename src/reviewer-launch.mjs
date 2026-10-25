@@ -21,7 +21,10 @@ export function reviewerLaunch({settings, entries, workerRole, workerSession, cu
     const parsed = launchIdentityOf(candidate.cmd);
     const other = parsed.ok && modelFamily(parsed.model, settings.families);
     if (!other || other === family || parsed.model !== candidate.model) {
-      skipped.push(`${candidate.model}: ${other === family ? '작업자와 같은 계열' : '명령·계열 확인 불가'}`);
+      // 명령에 박힌 모델이 설정과 다르면 계열 비교보다 먼저 그 원인을 적는다.
+      const why = parsed.ok && parsed.model !== candidate.model ? '명령·설정 모델 다름'
+        : other === family ? '작업자와 같은 계열' : '명령·계열 확인 불가';
+      skipped.push(`${candidate.model}: ${why}`);
       continue;
     }
     try { checkChoice(settings, 'reviewer', candidate); }

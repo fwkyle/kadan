@@ -3,6 +3,7 @@ import { save, useResource } from "../resource";
 import { fallbackLabels } from "../runner-draft";
 import type { Stamp } from "../types";
 import { PresetEditor } from "./PresetEditor";
+import { PresetManager } from "./PresetManager";
 import { RunnerTables } from "./RunnerTables";
 import {
   ActionForm,
@@ -170,6 +171,7 @@ export default function Runners() {
             exec 틀이 없으면 아무것도 하지 않고, 칸을 채운 시점 이후의 사건만 다룹니다.
           </p>
           <PresetEditor data={data} settings={data.settings} />
+          <PresetManager settings={data.settings} />
           <Favorites settings={data.settings} />
           <RunnerTables catalog={data.catalog} revision={data.settings.revision} />
           <details>

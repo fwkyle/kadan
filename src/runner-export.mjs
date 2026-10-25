@@ -11,6 +11,8 @@ import {
 export const EXPORT_FORMAT = 'kadan-runner-export';
 export const EXPORT_VERSION = 1;
 const MAX_IMPORT_BYTES = 1024 * 1024;
+// 화면 업로드 상한: 실제 내보내기 파일은 프리셋 한 벌이라 수 KB(역할 7개·후보 포함 약 2~4KB)다. 16배 여유를 두고 64KB로 자른다.
+export const MAX_UPLOAD_BYTES = 64 * 1024;
 
 // 접두어별 최소 모양(합성 기준): GitHub 토큰 / 파인그레인 PAT / OpenAI·Anthropic 키 / Slack 토큰 / AWS 액세스 키 ID / Google API 키.
 const TOKEN_SHAPES = ['gh[pousr]_[A-Za-z0-9]{30,}', 'github_pat_[A-Za-z0-9_]{20,}', 'sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}',
@@ -108,11 +110,16 @@ export function writeExportFile(home, out, text) {
 }
 
 // 가져올 파일 읽기(크기 상한·JSON 검사).
+export function parseExportText(text, limit = MAX_IMPORT_BYTES) {
+  const size = Buffer.byteLength(text);
+  if (size > limit) throw new Error(`가져올 파일이 너무 크다(${size}바이트, 상한 ${limit})`);
+  try { return JSON.parse(text); }
+  catch { throw new Error('가져올 파일이 JSON이 아니다'); }
+}
 export function readExportFile(file) {
   const size = fs.statSync(file).size;
   if (size > MAX_IMPORT_BYTES) throw new Error(`가져올 파일이 너무 크다(${size}바이트, 상한 ${MAX_IMPORT_BYTES})`);
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-  catch { throw new Error('가져올 파일이 JSON이 아니다'); }
+  return parseExportText(fs.readFileSync(file, 'utf8'));
 }
 
 const isPlain = v => v && typeof v === 'object' && !Array.isArray(v);
@@ -255,16 +262,18 @@ export function importPreset(home, {data, as, replace = false, readCodexModels, 
   let differences;
   const next = change(home, {...meta, action: 'preset-import'}, settings => {
     const name = as ?? file.name;
+    // 이름 원문은 --as(호출자 입력)이거나 이 기계에 이미 있는 이름일 때만 출력한다. 파일에서 온 이름은 고정 문구로만 알린다.
+    const known = as != null || Object.hasOwn(settings.presets, name);
+    const tail = known ? `가져오려던 이름: ${name}` : '파일의 preset.name';
+    const inner = known ? name : '(파일의 preset.name)';
     try {
       if (replace === true) {
-        if (!Object.hasOwn(settings.presets, name)) throw new Error(`덮어쓸 프리셋이 없다: ${name}`);
-        checkNewPresetName({presets: {}}, name);
-      } else checkNewPresetName(settings, name);
+        if (!Object.hasOwn(settings.presets, name)) throw new Error(`덮어쓸 프리셋이 없다: ${inner}`);
+        checkNewPresetName({presets: {}}, name, inner);
+      } else checkNewPresetName(settings, name, inner);
     }
     catch (error) {
-      // 이름 원문은 --as(호출자 입력)이거나 이 기계에 이미 있는 이름일 때만 출력한다. 파일에서 온 이름은 고정 문구로만 알린다.
-      const shown = as != null || Object.hasOwn(settings.presets, name) ? `가져오려던 이름: ${name}` : '파일의 preset.name';
-      throw new Error(`${error.message} (${shown}) — 다른 이름으로 가져오려면 --as <새 이름>`);
+      throw new Error(`${error.message} (${tail}) — 다른 이름으로 가져오려면 --as <새 이름>`);
     }
     const report = missingReport(settings, file.preset, readCodexModels);
     if (report) throw new Error(report);

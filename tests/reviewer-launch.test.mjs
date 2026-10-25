@@ -84,3 +84,15 @@ test('실제 CLI --for: 가짜 실행기·격리 소켓에서 선택 기록, 무
     assert.notEqual(spawnSync('tmux', ['-L', socket, 'has-session', '-t', '=kadan-test-refused'], {env}).status, 0);
   } finally { spawnSync('tmux', ['-L', socket, 'kill-server'], {env}); }
 });
+
+test('P3-1: 실행기 틀에 박힌 모델이 설정 모델과 다르면 같은 계열보다 먼저 "명령·설정 모델 다름"으로 적는다', () => {
+  const s = settings();
+  // 틀이 설정 모델(deepseek)과 상관없이 작업자와 같은 계열 모델을 박아 두었다.
+  s.runners.codex.spawn = 'codex --model gpt-6.1-sol';
+  s.presets.A.roles.reviewer = choice(models[2]);
+  s.presets.A.fallback.reviewer = [choice(models[3])];
+  const skipped = (() => { try { return select(s); } catch (error) { return error.message; } })();
+  const text = typeof skipped === 'string' ? skipped : skipped.reviewFor.skipped.join('; ');
+  assert.match(text, /command-code\/deepseek-test: 명령·설정 모델 다름/);
+  assert.doesNotMatch(text, /deepseek-test: 작업자와 같은 계열/);
+});
