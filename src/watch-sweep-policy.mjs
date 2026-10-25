@@ -50,7 +50,7 @@ export function createSweepDiagnostics(dir, {maxBytes = DIAGNOSTICS_MAX_BYTES} =
 //  - diff: 같은 snapshot에서 원본이 검증됐고 비교 중 위치가 바뀌지 않았다. 증분 상태를 처음 계산한 값으로 바꿔도 된다(replace).
 //  - error·구분 불가: 교체하지 않는다. 해당 자동 행동은 보류하고 경보한다.
 //  - moved: 비교 중 적용 위치나 세대가 바뀌었다. 차이로 세지 않고 다음 기회에 다시 본다.
-export function createSweepPolicy({diagnostics, now = Date.now, repeatPasses = REPEAT_PASSES}) {
+export function createSweepPolicy({diagnostics, now = Date.now, repeatPasses = REPEAT_PASSES, userRecipient = null}) {
   const holds = new Map(), notified = new Set(), streaks = new Map();
   for (const row of diagnostics.rows()) {
     if (row.kind === 'hold') holds.set(row.key, {since: row.at, detail: row.detail ?? null});
@@ -69,11 +69,17 @@ export function createSweepPolicy({diagnostics, now = Date.now, repeatPasses = R
   }
   const at = () => new Date(now()).toISOString();
   return {
+    note: row => diagnostics.append({at: at(), ...row}),
     holding: () => holds.size > 0,
     holds: () => [...holds].map(([key, value]) => ({key, ...value})),
     // 기존 감시 경보 경로로 넘길 경보. 보류가 있는 동안 계속 보이고, 해제되면 사라져 해소로 기록된다.
-    alerts: () => [...holds].map(([key, value]) => ({id: `sweep-hold:${key}`, kind: '모름', level: 'AMBER',
-      message: `정기 대조 차이로 자동 재개·우편 재알림을 보류 중: ${key} (${value.detail ?? '차이 기록 참고'})`})),
+    // 반복으로 판정된 항목은 보류가 풀릴 때까지 같은 id의 사용자 경보를 계속 내보낸다 — 같은 id라 한 번만 전달되고, 재시작해도 복원된다.
+    alerts: () => [...holds].flatMap(([key, value]) => [
+      {id: `sweep-hold:${key}`, kind: '모름', level: 'AMBER',
+        message: `정기 대조 차이로 자동 재개·우편 재알림을 보류 중: ${key} (${value.detail ?? '차이 기록 참고'})`},
+      ...(userRecipient && [...notified].some(tag => tag.startsWith(`${key}|`)) ? [{id: `sweep-repeat:${key}`, kind: '모름',
+        level: 'RED', role: userRecipient, message: `정기 대조 차이가 ${repeatPasses}번 이상 반복됐습니다: ${key} (${value.detail ?? '진단 파일 참고'})`}] : []),
+    ]),
     // 반복 판정이 새로 난 항목만 돌려준다(같은 키·지문은 평생 한 번).
     record(result) {
       const diffs = result.diffs ?? [], escalate = [];

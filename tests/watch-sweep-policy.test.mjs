@@ -8,7 +8,7 @@ import {createSweepDiagnostics, createSweepPolicy, createFullSchedule} from '../
 
 const dirOf = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-sweep-policy-'));
 const diff = (key = 'ledger-array', fingerprint = 'f1') => ({key, fingerprint, detail: '배열 지문 불일치'});
-const policyOf = (dir, extra = {}) => createSweepPolicy({diagnostics: createSweepDiagnostics(dir, extra), now: () => Date.parse('2026-10-25T00:00:00Z')});
+const policyOf = (dir, extra = {}) => createSweepPolicy({diagnostics: createSweepDiagnostics(dir, extra), now: () => Date.parse('2026-10-25T00:00:00Z'), userRecipient: '@user'});
 
 test('차이는 진단 파일에 남기고 보류·경보를 만들며, 같은 항목이 일치하면 해제를 기록한다', () => {
   const dir = dirOf(), policy = policyOf(dir);
@@ -43,8 +43,11 @@ test('같은 키·같은 차이가 전체 대조 3번 이어지면 kyle 알림�
   assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
   assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, ['ledger-array']);
   assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
+  assert.deepEqual(policy.alerts().map(alert => alert.id), ['sweep-hold:ledger-array', 'sweep-repeat:ledger-array']);
+  assert.equal(policy.alerts()[1].role, '@user');
   policy = policyOf(dir);                       // 재시작
   assert.equal(policy.holding(), true);         // 보류도 진단 파일에서 복원된다
+  assert.deepEqual(policy.alerts().map(alert => alert.id), ['sweep-hold:ledger-array', 'sweep-repeat:ledger-array']); // 같은 id로 이어져 다시 울리지 않는다
   assert.deepEqual(policy.record({status: 'diff', diffs: [diff()]}).escalate, []);
   // 차이 지문이 바뀌면 새로 센다.
   for (let n = 0; n < 2; n++) assert.deepEqual(policy.record({status: 'diff', diffs: [diff('ledger-array', 'f2')]}).escalate, []);

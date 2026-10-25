@@ -116,3 +116,25 @@ test('runWatch 마지막 429 검사 경합: mailbox/ack는 입력 아님, 실제
   assert.equal(records.filter(e=>e.kind==='rate-limit-retry'&&e.action==='cancelled').length,kind==='reminder'?1:0,kind);
  }
 });
+
+test('정기 대조가 보류 중이면 한도 재개 입력을 보내지 않고 보류 경보를 올리며, 풀리면 다시 재개한다', async()=>{
+ const {runWatch}=await import('../src/watch-runner.mjs');
+ for(const hold of [true,false]) {
+  const controller=new AbortController();let now=0,cycle=0;
+  const role='worker',session='kadan-worker',resumes=[],alerts=[];
+  const card={id:'task',key:'repo/task',role,status:'assigned',workType:'execution'};
+  const entries=[{kind:'start',role,session,panePid:1,t:new Date(0).toISOString()},
+   {kind:'send',role,taskId:'task',t:new Date(0).toISOString()}];
+  const sweepAlert={id:'sweep-hold:ledger-array',kind:'모름',level:'AMBER',message:'정기 대조 차이로 보류 중'};
+  await runWatch({floor:{list:()=>[{session,pid:1,alive:true}],read:()=>screen(1)},
+   readEntries:()=>[...entries],readCards:()=>[card],readWorks:()=>[],
+   record:e=>{entries.push({...e,t:new Date(now).toISOString()});},
+   resume429:(...args)=>resumes.push(args),sendAlert:(...args)=>alerts.push(args),
+   sweepTick:()=>hold?{holding:true,alerts:[sweepAlert]}:{holding:false,alerts:[]},
+   intervalMs:60000,stallN:100,routes:new Map(),superRole:'boss',now:()=>now,
+   spawn:()=>({status:0,stdout:String(process.pid)}),signal:controller.signal,print:()=>{},
+   sleep:async()=>{now+=60000;if(++cycle===3)controller.abort();}});
+  assert.equal(resumes.length,hold?0:1,`hold=${hold}`);
+  assert.equal(entries.some(e=>e.kind==='alert'&&e.id==='sweep-hold:ledger-array'),hold,`hold=${hold}`);
+ }
+});
