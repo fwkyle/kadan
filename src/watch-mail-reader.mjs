@@ -7,6 +7,8 @@ import {taskIdentity, taskConnectionError} from './task-identity.mjs';
 import {createWatchLedgerView} from './watch-ledger-view.mjs';
 import {applyWatchWorkState} from './watch-work-state.mjs';
 import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
+import {applyWatchRoleState} from './watch-role-state.mjs';
+import {captureWatchRoleState, rememberWatchRoleState, sameRoleCards} from './watch-role-facts.mjs';
 
 const stateKey = info => info && JSON.stringify([
   info.mailGeneration, info.mailStateVersion, info.mailCount,
@@ -26,6 +28,13 @@ export function createWatchMailReader(home, readEntries = null,
         let works = null;
         try { works = readWorks?.() ?? null; } catch { /* 기존 readWorks 오류 경계에서 보고한다. */ }
         const entries = readEntries ? readEntries() : ledger(raw.store, raw.info);
+        const roleState = !readEntries && projected &&
+          applyWatchRoleState(home, projected.store, projected.info, cards);
+        const roleStateKey = roleState &&
+          JSON.stringify([roleState.generation, roleState.revision, roleState.stateVersion]);
+        const roleFacts = roleStateKey && last?.roleStateKey === roleStateKey &&
+          last.cards === cards && sameRoleCards(last.roleFacts, cards) ? last.roleFacts :
+          roleState && !roleState.legacyRequired ? captureWatchRoleState(projected.store, cards) : null;
         const state = !readEntries && projected &&
           applyWatchWorkState(home, projected.store, projected.info, cards);
         const factsKey = state && JSON.stringify([state.generation, state.revision, state.stateVersion]);
@@ -39,7 +48,7 @@ export function createWatchMailReader(home, readEntries = null,
           waiting:same ? previous.waiting : mailWaitingLetters(view.store),
           recent:new Map(withRecent ? roles.map(role => [role, mailRecentLetters(view.store, role)]) : []),
         };
-        return {raw:entries, key, projectedKey, cards, works, factsKey, scopeFacts, roleKey,
+        return {raw:entries, key, projectedKey, cards, works, factsKey, scopeFacts, roleKey, roleStateKey, roleFacts,
           letters:sameRaw ? last.letters : mailReminderCandidates(raw.store),
           rawQueries:queries(raw, last?.rawQueries, sameRaw, true),
           projectedQueries:projected ? queries(projected, last?.projectedQueries,
@@ -48,7 +57,8 @@ export function createWatchMailReader(home, readEntries = null,
       // commit 실패 때는 이전 정상 후보로 대체하지 않는다.
       if (last?.raw === value.raw && last.key === value.key && last.projectedKey === value.projectedKey &&
           last.cards === value.cards && last.works === value.works && last.factsKey === value.factsKey &&
-          last.scopeFacts === value.scopeFacts && last.roleKey === roleKey) return last.entries;
+          last.scopeFacts === value.scopeFacts && last.roleKey === roleKey &&
+          last.roleFacts === value.roleFacts && last.roleStateKey === value.roleStateKey) return last.entries;
       // 이미 내준 수집의 판정은 뒤의 설정·카드 주소 변화로 바꾸지 않는다.
       const entries = snapshots.has(value.raw) ? value.raw.slice() : value.raw;
       rememberMailboxQueries(entries, value.rawQueries);
@@ -68,6 +78,7 @@ export function createWatchMailReader(home, readEntries = null,
         value.projected = project(entries, cards);
         rememberMailboxQueries(value.projected, value.projectedQueries);
         rememberWatchScopeFacts(value.projected, cards, value.scopeFacts);
+        rememberWatchRoleState(value.projected, cards, value.roleFacts);
       }
       return value.projected;
     },
