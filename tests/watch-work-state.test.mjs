@@ -101,7 +101,8 @@ test('세대·재시작·열린 업무의 발령 이력과 준비되지 않은 �
     {kind:'start', role:a, session:`kadan-${a}`, panePid:32, t:at(4)},
     transfer(a, b, 5), done(b, 6),
     {kind:'start', role:lead, session:`kadan-${lead}`, panePid:41, t:at(7)},
-    {kind:'start', role:lead, session:`kadan-${lead}`, panePid:42, resume:true, t:at(8)},
+    {kind:'start', role:lead, session:`kadan-${lead}`, panePid:42, conversationMode:'resume', t:at(8)},
+    {kind:'start', role:lead, session:`kadan-${lead}`, panePid:43, inheritMail:true, t:at(9)},
   ]) {state.append(event);state.check();}
   const {entries} = state.check();
   const newWorks = [{...work, executions:[{key:'fixture/other'}], owner:b}];
@@ -196,4 +197,17 @@ test('수집 중 다른 writer의 추가는 다음 수집부터 보이고 업무
   assert.deepEqual(scopes(state.cards, failed, works), scopes(state.cards, [...failed], works));
   assert.notStrictEqual(failed, next);
   failWorks = false;assert.deepEqual(scopes(state.cards, read(), works), scopes(state.cards, [...failed], works));
+});
+
+test('같은 카드 배열 안에서 metadata나 카드가 바뀌면 준비한 사실을 재사용하지 않는다', () => {
+  const state = fixture();state.append(send(a, 1));state.append(transfer(a, b, 2));
+  const {entries} = state.check();
+  state.cards[0].at = at(4);
+  assert.equal(watchScopeFacts(entries, state.cards), null);
+  assert.deepEqual(scopes(state.cards, entries, state.works), scopes(state.cards, [...entries], state.works));
+  const current = state.reader.project(state.reader.readEntries(), state.cards);
+  assert.notStrictEqual(current, entries);assert.ok(watchScopeFacts(current, state.cards));
+  state.cards.push({...card, key:'other/task'});
+  assert.equal(watchScopeFacts(current, state.cards), null);
+  assert.deepEqual(scopes(state.cards, current, state.works), scopes(state.cards, [...current], state.works));
 });

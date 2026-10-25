@@ -5,6 +5,13 @@ import {taskIdentity} from './task-identity.mjs';
 import {loadWorkEntry, workPendingKey} from './watch-work-state.mjs';
 
 const snapshots = new WeakMap();
+const cardFields = ['key', 'id', 'role', 'status', 'at'];
+
+export function sameWatchCards(facts, cards) {
+  return Boolean(facts) && facts.inputs.length === cards.length && facts.inputs.every((input, index) =>
+    input[0] === cards[index] && cardFields.every((field, offset) =>
+      Object.is(input[offset + 1], cards[index][field])));
+}
 
 function effectiveRole(store, card) {
   let role = card.role, position = 0;
@@ -24,7 +31,8 @@ function effectiveRole(store, card) {
 
 export function captureWatchScopeFacts(store, cards, works, rawEntries) {
   if (!store) return null;
-  const facts = {cards:new Map(), bounds:new Map(), covered:new Set(), sent:new Set()};
+  const facts = {cards:new Map(), bounds:new Map(), covered:new Set(), sent:new Set(),
+    inputs:cards.map(card => [card, ...cardFields.map(field => card[field])])};
   const bounds = store.map('bounds');
   const includeRole = role => {
     if (!facts.bounds.has(role)) facts.bounds.set(role, bounds.get(role)?.time ?? null);
@@ -58,7 +66,8 @@ export function rememberWatchScopeFacts(entries, cards, facts) {
 
 export function watchScopeFacts(entries, cards) {
   const found = snapshots.get(entries);
-  return found?.length === entries.length && found.cards === cards ? found.facts : null;
+  return found?.length === entries.length && found.cards === cards && sameWatchCards(found.facts, cards)
+    ? found.facts : null;
 }
 
 export function watchScopeGenerations(entries, facts) {

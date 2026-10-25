@@ -6,7 +6,7 @@ import {rememberMailboxQueries} from './mailbox-queries.mjs';
 import {taskIdentity, taskConnectionError} from './task-identity.mjs';
 import {createWatchLedgerView} from './watch-ledger-view.mjs';
 import {applyWatchWorkState} from './watch-work-state.mjs';
-import {captureWatchScopeFacts, rememberWatchScopeFacts} from './watch-scope-facts.mjs';
+import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
 
 const stateKey = info => info && JSON.stringify([
   info.mailGeneration, info.mailStateVersion, info.mailCount,
@@ -30,7 +30,7 @@ export function createWatchMailReader(home, readEntries = null,
           applyWatchWorkState(home, projected.store, projected.info, cards);
         const factsKey = state && JSON.stringify([state.generation, state.revision, state.stateVersion]);
         const scopeFacts = factsKey && last?.factsKey === factsKey &&
-          last.cards === cards && last.works === works ? last.scopeFacts :
+          last.cards === cards && last.works === works && sameWatchCards(last.scopeFacts, cards) ? last.scopeFacts :
           state ? captureWatchScopeFacts(projected.store, cards, works, entries) : null;
         const key = stateKey(raw.info), projectedKey = stateKey(projected?.info);
         const sameRaw = last?.key === key, sameRoles = last?.roleKey === roleKey;
@@ -48,7 +48,7 @@ export function createWatchMailReader(home, readEntries = null,
       // commit 실패 때는 이전 정상 후보로 대체하지 않는다.
       if (last?.raw === value.raw && last.key === value.key && last.projectedKey === value.projectedKey &&
           last.cards === value.cards && last.works === value.works && last.factsKey === value.factsKey &&
-          last.roleKey === roleKey) return last.entries;
+          last.scopeFacts === value.scopeFacts && last.roleKey === roleKey) return last.entries;
       // 이미 내준 수집의 판정은 뒤의 설정·카드 주소 변화로 바꾸지 않는다.
       const entries = snapshots.has(value.raw) ? value.raw.slice() : value.raw;
       rememberMailboxQueries(entries, value.rawQueries);
