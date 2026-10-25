@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { doneEvidence } from "./done-evidence.mjs";
 import {readSpool} from './stop-hook-spool.mjs';
 import {ledgerHome} from './ledger.mjs';
+import {watchRoleState} from './watch-role-facts.mjs';
 
 export function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -54,7 +55,8 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
       .map((item) => [item.session, item])
   );
   screenCache?.retain(new Set(liveBySession.keys()));
-  const starts = latestStarts(entries);
+  const captured = watchRoleState(entries, cards);
+  const starts = captured?.starts ?? latestStarts(entries);
   const identity = taskIdentity(cards ?? []);
   const taskKey = (id, key) => {
     const found = identity.resolve(id, key);
@@ -63,8 +65,8 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
     return found.state === 'unregistered' ? id : null;
   };
   // 6줄 제한을 없애되, 현재 세대에 실제 발령한 카드와 발령 전 화면을 함께 대조한다.
-  const dispatches = new Map(), generations = new Map();
-  for (const entry of entries) {
+  const dispatches = captured?.dispatches ?? new Map(), generations = captured?.generations ?? new Map();
+  for (const entry of captured ? [] : entries) {
     if (entry?.kind === 'start') {
       const previous = generations.get(entry.session);
       const pid = entry.panePid ?? entry.rottiePid;

@@ -11,7 +11,7 @@ import {appendLedger, readLedger, readMailboxLedger} from '../src/ledger.mjs';
 import {mailboxLetters} from '../src/mailbox-state.mjs';
 import {createMailGenerations} from '../src/mail-generation.mjs';
 import {readMailboxViewPage, withMailboxView, mailboxWaitingCount,
-  mailReminderCandidates} from '../src/mail-view.mjs';
+  mailReminderCandidates, mailWaitingLetters} from '../src/mail-view.mjs';
 import {ledgerViewPath} from '../src/ledger-view-store.mjs';
 
 const homeOf = () => {
@@ -230,4 +230,24 @@ test('동시 첫 우편 조회도 한 번만 적용하고 같은 상태를 반�
   assert.equal(new Set(results.map(result => result.mailGeneration)).size, 1);
   assert.equal(results.reduce((sum, result) => sum + result.mailApplied, 0), 2);
   assert.ok(results.every(result => result.items[0].read));equal(home);
+});
+
+test('답변 대기·미확인 재알림 조회는 영역 전체가 아니라 색인으로 읽는다', () => {
+  const home = homeOf();
+  for (let n = 0; n < 20; n++) add(home, {kind:'send', mailId:`old-${n}`, role:'r', by:'lead', expectReply:true, deliveredRead:true});
+  add(home, {kind:'send', mailId:'open', role:'r', by:'lead', expectReply:true});
+  withMailboxView(home, store => {
+    const plans = [];
+    const original = store.prepare.bind(store);
+    store.prepare = sql => {
+      if (/FROM mail_current m/u.test(sql)) plans.push(original(`EXPLAIN QUERY PLAN ${sql}`).all(store.scope).map(row => row.detail).join(' '));
+      return original(sql);
+    };
+    assert.equal(mailWaitingLetters(store).length, 21);
+    assert.ok(mailReminderCandidates(store).length >= 1);
+    assert.equal(plans.length, 2);
+    assert.match(plans[0] + plans[1], /INDEX mail_read/u);
+    assert.match(plans[0] + plans[1], /INDEX mail_reply/u);
+    for (const plan of plans) assert.doesNotMatch(plan, /SEARCH m USING PRIMARY KEY/u);
+  });
 });
