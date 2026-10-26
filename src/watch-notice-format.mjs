@@ -48,7 +48,7 @@ export function escalationNotice(items, textOf = m => m.preview) {
   const rest = items.length - MAIL_NOTICE_MAX;
   const blocks = items.slice(0, MAIL_NOTICE_MAX).map(({mail, kind, minutes}) =>
     mailBlock(mail, {status: kind === 'unknown' ? '결과 불명' : `${minutes}분째 미읽음`, ack: false}, textOf));
-  return [`[감시기] 하위 역할의 미읽음 우편 ${items.length}건\n${blocks.join('\n\n')}`,
+  return [`[감시sh] 하위 역할의 미읽음 우편 ${items.length}건\n${blocks.join('\n\n')}`,
     ...(rest > 0 ? [`외 ${rest}건`] : []),
     '읽음 확인은 수신자 몫이니 대신 ack하지 마세요.'].join('\n\n');
 }

@@ -75,7 +75,7 @@ test('미확인 우편 6통: 블록 5개 + 외 1건', () => {
 test('상위 알림: 같은 블록 + 상태, 읽음 기록 명령은 없다', () => {
   const items = [{mail: letter(1), kind: 'unread', minutes: 20}, {mail: letter(2, {role: 'w2'}), kind: 'unknown', minutes: 0}];
   assert.equal(escalationNotice(items), [
-    '[감시기] 하위 역할의 미읽음 우편 2건',
+    '[감시sh] 하위 역할의 미읽음 우편 2건',
     '보낸이: boss', '받는이: worker', '보낸 시각: 2020-01-01 10:00', '첫 줄: 본문 1', '상태: 20분째 미읽음',
     `확인: kadan inbox read ${ID(1)} --role 'worker'`,
     '',
@@ -125,7 +125,7 @@ test('우편함 우편(preview 없음)은 본문 파일 첫 줄을 쓰고, 안�
 test('놀고 있음 1단·2단·경보: 대상·상태·근거·본인 차례·할 일 항목', () => {
   const idle = {kind: '놀고 있음', session: 'kadan-x', role: 'kadan-x-감독', openCards: 2, lower: {}, idleMinutes: 15, stage: 1};
   assert.equal(itemizedAlert(idle, '12:30'), [
-    '[watch 12:30] 놀고 있음 kadan-x (본인 차례 2건, 15분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 15분 더 멈추면 상위에게 알린다.',
+    '[감시sh 12:30] 놀고 있음 kadan-x (본인 차례 2건, 15분간 화면 변화 없음) — 판을 확인하고 다음 행동을 정하라. 이대로 15분 더 멈추면 상위에게 알린다.',
     '대상: kadan-x', '상태: 놀고 있음', '근거: 본인 차례 2건, 15분간 화면 변화 없음',
     '할 일: 판을 확인하고 다음 행동을 정하라. 이대로 15분 더 멈추면 상위에게 알린다.'].join('\n'));
   const own = {...idle, idleItems: {ownWhy: [{id: 'c1', reason: '답 필요'}]}};
@@ -136,7 +136,7 @@ test('놀고 있음 1단·2단·경보: 대상·상태·근거·본인 차례·�
   assert.ok(!/보낸이/.test(second));
 
   const stall = {kind: '정체', session: 'kadan-x', count: 3};
-  assert.equal(itemizedAlert(stall, '12:30'), [`[watch 12:30] ${formatAlertBody(stall)}`, '대상: kadan-x', '상태: 화면이 멈춤',
+  assert.equal(itemizedAlert(stall, '12:30'), [`[감시sh 12:30] ${formatAlertBody(stall)}`, '대상: kadan-x', '상태: 화면이 멈춤',
     '근거: 지문 무변화 3회', `할 일: ${WATCH_ALERT_FOOTER}`].join('\n'));
   assert.match(itemizedAlert({kind: '멈춤', session: 's', idleMs: 600000}, 'c'), /\n상태: 일하는 표시 없이 입력을 기다리며 멈춤\n근거: 빈 입력창 10분째/);
   assert.match(itemizedAlert({kind: '죽음', session: 's'}, 'c'), /\n상태: 세션 종료 의심\n근거: 세션 없음 또는 PID 불일치\n/);

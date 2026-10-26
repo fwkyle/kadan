@@ -69,7 +69,7 @@ export function noticeMessage(list, now = Date.now()) {
     `  취소: kadan card update ${c.key} --revision ${c.revision} --status cancelled --note "<이유>"`);
   const rest = list.length - shown.length;
   return [
-    `[watch ${new Date(now).toISOString().slice(11, 16)}Z] 오래된 미확정 실행 ${list.length}개 — 판정해 주세요(실행당 1회만 안내).`,
+    `[감시sh ${new Date(now).toISOString().slice(11, 16)}Z] 오래된 미확정 실행 ${list.length}개 — 판정해 주세요(실행당 1회만 안내).`,
     '담당이 다음 일로 넘어갔거나 같은 업무에 더 뒤 라운드가 생겼는데 결과가 확정되지 않았거나 실패로 남은 실행입니다. 대시보드 지금 막힘에서는 뺐습니다. 감시기는 실행 상태를 바꾸지 않습니다.',
     ...lines,
     ...(rest > 0 ? [`- 외 ${rest}개는 대시보드 '오래된 미확정'에서 확인`] : []),
