@@ -38,7 +38,7 @@ function mailBlock(mail, {status, ack}, textOf) {
 // 수신자 앞 미확인 우편 재알림. 우편마다 블록 하나, 5통까지 쓰고 넘으면 '외 N건'.
 export function unreadMailMessage(mails, target, textOf = m => m.preview) {
   const rest = mails.length - MAIL_NOTICE_MAX;
-  return [`미확인 우편 ${mails.length}건\n${mails.slice(0, MAIL_NOTICE_MAX).map(m => mailBlock(m, {ack: true}, textOf)).join('\n\n')}`,
+  return [`[감시sh] 미확인 우편 ${mails.length}건\n${mails.slice(0, MAIL_NOTICE_MAX).map(m => mailBlock(m, {ack: true}, textOf)).join('\n\n')}`,
     ...(rest > 0 ? [`외 ${rest}건 — kadan inbox --role ${shellQuote(target)} --unread`] : []),
     '읽은 우편만 직접 ack하세요. 최종 답변은 읽음 확인과 별개입니다.'].join('\n\n');
 }

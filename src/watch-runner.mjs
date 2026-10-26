@@ -830,8 +830,8 @@ export async function runWatch({
       const posted = userPosts.get(alert.id);
       if (posted) {
         userPosts.delete(alert.id);
-        notifyUser(`해결됨 — ${resolvedBody(alert)}`, spawn, {kind: "alert-resolved", work: posted.work, tagRepo: posted.repo, systemFallback: false,
-          decision: {id: posted.post, edit: `✅ 해결됨 — ${resolvedBody(alert)}`}});
+        notifyUser(`[감시sh ${clockTime(cycleAt)}] 해결됨 — ${resolvedBody(alert)}`, spawn, {kind: "alert-resolved", work: posted.work, tagRepo: posted.repo, systemFallback: false,
+          decision: {id: posted.post, edit: `[감시sh ${clockTime(cycleAt)}] ✅ 해결됨 — ${resolvedBody(alert)}`}});
       }
       if (alert.kind === "감시AI오류") continue;
       const recipient = deliverResolution({

@@ -42,7 +42,7 @@ test('firstLine: 지침 블록을 걷고 비밀을 가리고 80자 이내로 자
 test('미확인 우편 1통 본문이 kyle 형식과 글자 단위로 같다 (보낸이는 원래 발신자)', () => {
   const m = letter(1, {preview: '배포 전에 확인 부탁'});
   assert.equal(unreadMailMessage([m], 'worker'), [
-    '미확인 우편 1건',
+    '[감시sh] 미확인 우편 1건',
     '보낸이: boss',
     '받는이: worker',
     '보낸 시각: 2020-01-01 10:00',
@@ -63,7 +63,7 @@ test('currentSender·currentRecipient(인계 뒤)를 따른다', () => {
 test('미확인 우편 6통: 블록 5개 + 외 1건', () => {
   const mails = [1, 2, 3, 4, 5, 6].map(n => letter(n, {by: `b${n}`}));
   const text = unreadMailMessage(mails, 'worker');
-  assert.ok(text.startsWith('미확인 우편 6건\n보낸이: b1\n'));
+  assert.ok(text.startsWith('[감시sh] 미확인 우편 6건\n보낸이: b1\n'));
   assert.equal(text.split('\n\n').length, 5 + 1 + 1, '블록 5 + 외 N건 + 안내');
   assert.equal([...text.matchAll(/^보낸이: /gmu)].length, 5);
   assert.ok(text.includes(`읽음 기록: kadan inbox ack ${ID(5)} --role 'worker'`));
@@ -98,7 +98,7 @@ test('MailWatch가 실제로 새 형식을 보내고, 같은 우편은 순회가
     readCards: () => [], readWorks: () => [], parents: new Map()});
   tick(T0 + MIN);
   assert.equal(sent.length, 1);
-  assert.match(sent[0].message, /^미확인 우편 2건\n보낸이: boss\n받는이: worker\n보낸 시각: 2020-01-01 10:00\n첫 줄: 첫째\n/);
+  assert.match(sent[0].message, /^\[감시sh\] 미확인 우편 2건\n보낸이: boss\n받는이: worker\n보낸 시각: 2020-01-01 10:00\n첫 줄: 첫째\n/);
   assert.match(sent[0].message, /\n\n보낸이: boss\n받는이: worker\n보낸 시각: 2020-01-01 10:00\n첫 줄: 둘째\n/);
   tick(T0 + 2 * MIN); tick(T0 + 3 * MIN);
   assert.equal(sent.length, 1, '본문이 우편별 블록이어도 순회마다 새 알림을 만들지 않는다(우편 ID·단계 예약)');
