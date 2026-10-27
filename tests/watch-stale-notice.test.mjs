@@ -76,6 +76,7 @@ test('재안내: 감독별로 한 통에 묶고, 판정 명령 뼈대는 있되 
   assert.deepEqual(plans.map(p => p.recipient).sort(), ['감독-A', '감독-B']);
   const a = plans.find(p => p.recipient === '감독-A');
   assert.deepEqual(a.keys, ['repo/old1']);
+  assert.match(a.message, /^\[감시sh 06:00Z\] 오래된 미확정 실행 1개/);
   assert.doesNotMatch(a.message, /kadan done/); // 실패한 실행에는 결과 확정 명령을 주지 않는다
   assert.match(plans.find(p => p.recipient === '감독-B').message, /kadan done 작업자-2 repo\/old2 <ok\|failed>/);
   assert.match(a.message, /--status superseded --replaced-by/);

@@ -185,7 +185,7 @@ export async function runWatch({
     // codex지만 openai라는 근거가 없으면 부르지 않고 원장도 쓰지 않는다. 경보에는 그 사실을 한 줄 붙인다.
     if (!basis.target) return {outcome: "skipped", reason: basis.reason};
     const result = ocxRefresh({entries, now, trigger: {role, session}});
-    print(`[watch ${clockTime(now)}] ${session} ocx 사용량 새로고침: ${ocxAlertLine(result)}`);
+    print(`[감시sh ${clockTime(now)}] ${session} ocx 사용량 새로고침: ${ocxAlertLine(result)}`);
     return result;
   };
   // 자동 재개가 처음 예약될 때(최종 429 화면)도 사용량을 먼저 새로 받는다. 예약 중인 세션은 한도 경보를 보내지 않으므로 결과는 원장과 감시 출력에 남는다.
@@ -700,7 +700,7 @@ export async function runWatch({
           return false;
         }
       }
-      const message = `[watch ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
+      const message = `[감시sh ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
       let target = alert.role, held = false, delivered = false;
       try {
         (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt), { parents, profiles: superProfiles(entries), cards, works }));
@@ -721,9 +721,9 @@ export async function runWatch({
         const out = runStaleNotices({cards, entries: readEntries(), works, now: cycleAt, record, liveSessions: roles.liveSessions, pendingHeld: pendingStaleHeld,
           send: (role, message) => (sendNudge ?? sendAlert)(role, message)});
         if (out.sent || out.held || out.failed || out.unknownRecipient) {
-          print(`[watch ${clockTime(cycleAt)}] 오래된 미확정 재안내: 보냄 ${out.sent} · 미룸 ${out.held} · 실패 ${out.failed} · 받는 쪽 모름 ${out.unknownRecipient}`);
+          print(`[감시sh ${clockTime(cycleAt)}] 오래된 미확정 재안내: 보냄 ${out.sent} · 미룸 ${out.held} · 실패 ${out.failed} · 받는 쪽 모름 ${out.unknownRecipient}`);
         }
-      } catch (error) { print(`[watch ${clockTime(cycleAt)}] 오래된 미확정 재안내 실패: ${error.message}`); }
+      } catch (error) { print(`[감시sh ${clockTime(cycleAt)}] 오래된 미확정 재안내 실패: ${error.message}`); }
     }
     // 이전 주기에 보류된 1단 알림. 이번 주기의 새 보류는 다음 주기에 다시 본다.
     const heldNudges = new Map(pendingNudges);
@@ -741,7 +741,7 @@ export async function runWatch({
         recordAlert(record, {...alert, held:pendingNudges.has(alert.id), route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
         continue;
       }
-      const message = `[watch ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
+      const message = `[감시sh ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
       const route = explainAlertRoute(
         alert,
         routes,
@@ -787,7 +787,7 @@ export async function runWatch({
               failedRecipient: recipient,
               deliveryError: error.message,
             };
-            const escalationMessage = `[watch ${clockTime(cycleAt)}] ${formatAlertBody(escalation)}`;
+            const escalationMessage = `[감시sh ${clockTime(cycleAt)}] ${formatAlertBody(escalation)}`;
             let escalationTarget = failureRecipient;
             let escalationDelivered = false;
             try {
@@ -830,8 +830,8 @@ export async function runWatch({
       const posted = userPosts.get(alert.id);
       if (posted) {
         userPosts.delete(alert.id);
-        notifyUser(`해결됨 — ${resolvedBody(alert)}`, spawn, {kind: "alert-resolved", work: posted.work, tagRepo: posted.repo, systemFallback: false,
-          decision: {id: posted.post, edit: `✅ 해결됨 — ${resolvedBody(alert)}`}});
+        notifyUser(`[감시sh ${clockTime(cycleAt)}] 해결됨 — ${resolvedBody(alert)}`, spawn, {kind: "alert-resolved", work: posted.work, tagRepo: posted.repo, systemFallback: false,
+          decision: {id: posted.post, edit: `[감시sh ${clockTime(cycleAt)}] ✅ 해결됨 — ${resolvedBody(alert)}`}});
       }
       if (alert.kind === "감시AI오류") continue;
       const recipient = deliverResolution({

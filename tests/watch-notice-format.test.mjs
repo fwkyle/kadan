@@ -74,8 +74,8 @@ test('감시기 세 전송 길(경보·놀고 있음 본인 알림·미확인 �
   const send = args => { calls.push(args); return {}; };
   const start = () => ({role: ROLE, session: SESSION, panePid: '100'});
   const opts = {send, readStart: start, selectedFloor: {}};
-  sendWatchMessage(ROLE, '[watch 12:00] 화면이 멈춤 x', opts);
-  sendWatchNudge(ROLE, '[watch 12:00] 놀고 있음 x', opts);
+  sendWatchMessage(ROLE, '[감시sh 12:00] 화면이 멈춤 x', opts);
+  sendWatchNudge(ROLE, '[감시sh 12:00] 놀고 있음 x', opts);
   sendWatchMailReminder(ROLE, '미확인 우편 1건', '100', opts);
   assert.equal(calls.length, 3);
   for (const c of calls) {
@@ -84,8 +84,8 @@ test('감시기 세 전송 길(경보·놀고 있음 본인 알림·미확인 �
     assert.doesNotMatch(c.message, /보낸이: 감시기/);
   }
   // 이미 할 일 줄이 있으면 덧붙이지 않고, 없으면 경보 안내 한 줄을 덧붙인다.
-  assert.equal(calls[0].message, `[watch 12:00] 화면이 멈춤 x\n할 일: ${WATCH_ALERT_FOOTER}`);
-  assert.equal(calls[1].message, '[watch 12:00] 놀고 있음 x');
-  sendWatchMessage(ROLE, '[watch 12:00] 요약\n할 일: 직접', opts);
-  assert.equal(calls[3].message, '[watch 12:00] 요약\n할 일: 직접');
+  assert.equal(calls[0].message, `[감시sh 12:00] 화면이 멈춤 x\n할 일: ${WATCH_ALERT_FOOTER}`);
+  assert.equal(calls[1].message, '[감시sh 12:00] 놀고 있음 x');
+  sendWatchMessage(ROLE, '[감시sh 12:00] 요약\n할 일: 직접', opts);
+  assert.equal(calls[3].message, '[감시sh 12:00] 요약\n할 일: 직접');
 });

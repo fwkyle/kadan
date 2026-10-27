@@ -49,7 +49,7 @@ test('followup sent 뒤 14분은 없음, 15분에 상위에게 1통(수신자·�
   f.now = followupAt + 15 * MIN; f.tick(watch);
   assert.equal(f.toParent().length, 1);
   const lines = f.toParent()[0].message.split('\n');
-  assert.deepEqual(lines, ['[감시기] 하위 역할의 미읽음 우편 1건', '보낸이: boss', '받는이: worker', '보낸 시각: 2020-01-01 10:00',
+  assert.deepEqual(lines, ['[감시sh] 하위 역할의 미읽음 우편 1건', '보낸이: boss', '받는이: worker', '보낸 시각: 2020-01-01 10:00',
     '첫 줄: (본문 미리보기 없음)', '상태: 20분째 미읽음', `확인: kadan inbox read ${ID(1)} --role 'worker'`, '',
     '읽음 확인은 수신자 몫이니 대신 ack하지 마세요.']);
   f.now += 60 * MIN; f.tick(watch); f.tick(f.create()); assert.equal(f.toParent().length, 1, '평생 1회, 재시작해도 0회');

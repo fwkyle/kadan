@@ -141,7 +141,7 @@ test('F2(2라운드) 강제 뒤에도 남는 시계 모드 밀림은 사용자�
   }
 });
 
-test('F1(3라운드) 조용함 → 신뢰 → 조용함 → 신뢰 → 해소: 글 1건, 해소 때 처음 글에 ✅ 해결됨 고치기 1건', async () => {
+test('F1(3라운드) 조용함 → 신뢰 → 조용함 → 신뢰 → 해소: 글 1건, 해소 때 처음 글에 ✅ 해결됨 고치기 1건', async t => {
   const w = await world();
   try {
     const {records, system, tracker, role} = await runHeld(w, 'Do you trust the contents of this directory?',
@@ -154,7 +154,8 @@ test('F1(3라운드) 조용함 → 신뢰 → 조용함 → 신뢰 → 해소: �
     assert.equal(sent.length, 2);                                    // 새 글 1건 + 해소 고치기 1건 (두 번째 신뢰는 중복이라 새 글 없음)
     assert.match(sent[0].url, /wait=true/);
     assert.match(sent[1].url, /\/messages\/M1/);                    // 처음 올린 글 M1을 고친다
-    assert.match(JSON.parse(sent[1].body).content, /✅ 해결됨/);
+    assert.match(JSON.parse(sent[1].body).content, /^\[감시sh \d{2}:\d{2}\] ✅ 해결됨 — /);
+    t.diagnostic(JSON.parse(sent[1].body).content);
     assert.deepEqual(system, []);
     const posts = Object.entries(readDecisions(w.home)).filter(([k]) => k.startsWith('alert:'));
     assert.equal(posts.length, 1);                                    // 처음 글과의 연결만 남는다
