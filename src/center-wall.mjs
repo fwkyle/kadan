@@ -32,6 +32,8 @@ import {appendLedger} from './ledger.mjs';
 import {readLedgerIncremental} from './ledger-incremental.mjs';
 import {addPreset,changedRunnerFields,editFallback,readSettings,removePreset,removeRunnerModel,renamePreset,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
+import {compareState, setCompare} from './runner-compare.mjs';
+import {compareReport} from './compare-report.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
@@ -211,9 +213,21 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url) {
+  if (req.method === 'GET' && ['/runners/compare', '/runners/compare-report'].includes(url.pathname)) {
+   try {
+    const result = url.pathname === '/runners/compare' ? compareState(home)
+      : compareReport(home, {since: url.searchParams.get('since') ?? undefined});
+    res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(JSON.stringify(result));
+   } catch (error) {
+    res.writeHead(409, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(error.message);
+   }
+   return true;
+  }
   if(req.method!=='POST'||![
     '/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer',
-    '/runners/set','/runners/preset-save','/runners/preset','/runners/fallback','/runners/favorite',
+    '/runners/compare','/runners/set','/runners/preset-save','/runners/preset','/runners/fallback','/runners/favorite',
     '/runners/preset-add','/runners/preset-rename','/runners/preset-remove','/runners/preset-import','/runners/preset-export',
     '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',
     ...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x),
@@ -262,6 +276,13 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    }
    if(url.pathname.startsWith('/runners/')){
     const meta={revision:f.revision,by:'사람',reason:f.reason,record:entry=>appendLedger(entry,home)};
+    if (url.pathname === '/runners/compare') {
+     if (!['on', 'off'].includes(f.mode)) throw new Error('비교 모드는 on 또는 off');
+     const next = setCompare(home, {enabled: f.mode === 'on',
+      presets: f.presets ? JSON.parse(f.presets) : undefined, ...meta});
+     saved('/#runner-settings', {revision: next.revision});
+     return true;
+    }
     if(url.pathname==='/runners/models-list'){
      // 실행기가 주는 모델 목록 불러오기: 설정·원장에 쓰지 않으므로 revision·이유가 없다. 토큰을 통과한 POST만 명령을 돌리고, 동시에 하나만 돈다.
      if(listing)throw new Error('이미 목록을 불러오는 중이다');

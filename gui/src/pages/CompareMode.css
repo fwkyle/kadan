@@ -1,0 +1,9 @@
+.compare-mode { min-width: 0; max-width: 100%; word-break: keep-all; overflow-wrap: break-word; }
+.compare-mode h2, .compare-mode h3, .compare-mode h4, .compare-mode button { text-wrap: balance; }
+.compare-mode p { text-wrap: pretty; }
+.compare-mode fieldset { min-width: 0; }
+.compare-mode fieldset > label { display: block; margin-block: .6rem; }
+.compare-mode input:not([type="checkbox"]) { max-width: 100%; box-sizing: border-box; }
+.compare-mode .table-scroll { max-width: 100%; overflow-x: auto; }
+.compare-mode table { min-width: 72rem; }
+.compare-mode td, .compare-mode th { max-width: 20rem; overflow-wrap: anywhere; }
