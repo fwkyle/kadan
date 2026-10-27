@@ -17,6 +17,16 @@ export function PresetManager({settings}: {settings: Settings}) {
   const [renaming, setRenaming] = useState<string | null>(null), [renameTo, setRenameTo] = useState('');
   const [file, setFile] = useState<{name: string; text: string} | null>(null);
   const [importAs, setImportAs] = useState(''), [replace, setReplace] = useState(false);
+  const locked = (name: string) => Boolean(settings.compare?.enabled && settings.compare.presets.includes(name));
+  let filePreset = '';
+  try {
+    const parsed: unknown = file ? JSON.parse(file.text) : null;
+    if (parsed && typeof parsed === 'object' && 'preset' in parsed && parsed.preset
+      && typeof parsed.preset === 'object' && 'name' in parsed.preset && typeof parsed.preset.name === 'string') {
+      filePreset = parsed.preset.name;
+    }
+  } catch { /* 파일 형식의 최종 검사는 서버가 한다. */ }
+  const importLocked = locked(importAs.trim() || filePreset);
   const run = async (action: string, fields: Record<string, string>, done: string, needReason = true) => {
     if (busy) return false;
     if (needReason && !reason.trim()) { setError('바꾸는 이유를 먼저 적어 주세요.'); return false; }
@@ -49,9 +59,10 @@ export function PresetManager({settings}: {settings: Settings}) {
         <strong>{name}</strong>{name === settings.activePreset && ' (활성)'}
         {settings.presets[name].label && settings.presets[name].label !== name && ` — ${settings.presets[name].label}`}{' '}
         <button type="button" disabled={busy} onClick={() => exportOne(name)}>내보내기</button>{' '}
-        <button type="button" disabled={busy} onClick={() => { setRenaming(renaming === name ? null : name); setRenameTo(''); }}>
+        {locked(name) && <span className="warning">비교 모드 중 — 먼저 끄기 </span>}
+        <button type="button" disabled={busy || locked(name)} onClick={() => { setRenaming(renaming === name ? null : name); setRenameTo(''); }}>
           이름 바꾸기</button>{' '}
-        <button type="button" disabled={busy || name === settings.activePreset}
+        <button type="button" disabled={busy || locked(name) || name === settings.activePreset}
           title={name === settings.activePreset ? '활성 프리셋은 지울 수 없습니다. 먼저 다른 프리셋으로 전환하세요.' : undefined}
           onClick={() => {
             if (window.confirm(`프리셋 '${name}'을 삭제할까요?`))
@@ -59,10 +70,11 @@ export function PresetManager({settings}: {settings: Settings}) {
           }}>삭제</button>
         {renaming === name && <form className="action-form" onSubmit={async e => {
           e.preventDefault();
+          if (locked(name)) return;
           if (await run('/runners/preset-rename', {from: name, preset: renameTo}, `이름을 바꿨습니다: ${name} → ${renameTo}`)) setRenaming(null);
         }}>
           <label>새 이름<input required value={renameTo} disabled={busy} onChange={e => setRenameTo(e.target.value)} /></label>
-          <button disabled={busy || !renameTo}>이름 바꾸기 저장</button>
+          <button disabled={busy || locked(name) || !renameTo}>이름 바꾸기 저장</button>
         </form>}
       </li>)}
     </ul>
@@ -78,7 +90,7 @@ export function PresetManager({settings}: {settings: Settings}) {
     </form>
     <form className="action-form" onSubmit={async e => {
       e.preventDefault();
-      if (!file) return;
+      if (!file || importLocked) return;
       const saved = await run('/runners/preset-import',
         {file: file.text, as: importAs, ...(replace ? {replace: '1'} : {})}, '가져왔습니다: {imported} (활성 프리셋은 그대로입니다)');
       if (saved) { setFile(null); setImportAs(''); setReplace(false); }
@@ -94,9 +106,10 @@ export function PresetManager({settings}: {settings: Settings}) {
         }} /></label>
       <label>다른 이름으로 가져오기 (비우면 파일 안의 이름)
         <input value={importAs} disabled={busy} onChange={e => setImportAs(e.target.value)} /></label>
-      <label><input type="checkbox" checked={replace} disabled={busy} onChange={e => setReplace(e.target.checked)} />
+      {importLocked && <p className="warning">비교 모드 중 — 먼저 끄기 (다른 이름으로 가져오기는 가능합니다)</p>}
+      <label><input type="checkbox" checked={replace} disabled={busy || importLocked} onChange={e => setReplace(e.target.checked)} />
         같은 이름이 있으면 바꾸기 (기존 프리셋을 통째로 교체합니다)</label>
-      <button disabled={busy || !file}>가져오기</button>
+      <button disabled={busy || !file || importLocked}>가져오기</button>
     </form>
     <ErrorMessage error={error} />
   </details>;

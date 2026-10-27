@@ -123,6 +123,10 @@ test('원격 session은 token이 비고 readOnly:true, 로컬은 token을 그대
     const local = JSON.parse((await app.call('GET', '/api/dashboard/session')).text);
     assert.match(local.token, /^[a-f0-9]{48}$/);
     assert.equal(local.readOnly, undefined);
+    const report = await app.remoteCall('GET', '/runners/compare-report');
+    assert.equal(report.status, 200, '비교 결과는 원격에서도 조회 가능');
+    assert.deepEqual(JSON.parse(report.text).groups, []);
+    assert.equal((await app.remoteCall('GET', '/runners/compare')).status, 200);
   } finally { app.close(); certs.server.close(); }
 });
 
@@ -146,7 +150,7 @@ test('원격 화면(서버가 그리는 중앙 화면)은 token을 비우고, �
 
 // 설계 2-1 쓰기 경로 전수 목록(center-wall.mjs의 POST 허용 목록과 같다).
 const WRITE_PATHS = ['/ask', '/secretary/start', '/roles/restart', '/cards/update', '/cards/create', '/decisions/answer',
-  '/runners/set', '/runners/preset-save', '/runners/preset', '/runners/fallback', '/runners/favorite',
+  '/runners/compare', '/runners/set', '/runners/preset-save', '/runners/preset', '/runners/fallback', '/runners/favorite',
   '/runners/preset-add', '/runners/preset-rename', '/runners/preset-remove', '/runners/preset-import', '/runners/preset-export',
   '/runners/runner', '/runners/model-add',
   '/runners/model-remove', '/runners/models-list',
@@ -157,10 +161,10 @@ test('쓰기 경로 목록이 서버의 POST 허용 목록과 같다', () => {
   const listed = source.match(/\[\s*'\/ask'[^\]]*\]/)[0];
   for (const p of WRITE_PATHS.filter(p => !p.startsWith('/works/'))) assert.ok(listed.includes(`'${p}'`), p);
   assert.match(listed, /\['create','update','link','unlink','execute','mail','complete','cancel','reopen'\]/);
-  assert.equal(WRITE_PATHS.length, 29);
+  assert.equal(WRITE_PATHS.length, 30);
 });
 
-test('원격은 쓰기 경로 28개 모두 405이고(POST /decisions/answer 하나만 예외) 어느 것도 처리기까지 가지 않는다', async () => {
+test('원격은 쓰기 경로 29개 모두 405이고(POST /decisions/answer 하나만 예외) 어느 것도 처리기까지 가지 않는다', async () => {
   const certs = await certsServer();
   const app = await start({remote: config, certs});
   try {

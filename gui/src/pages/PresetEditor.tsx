@@ -12,6 +12,7 @@ export function PresetEditor({data, settings}: {data: RunnersData; settings: Set
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]), [reset, setReset] = useState(0);
   const dirty = presetStamp(draft) !== base;
+  const locked = settings.compare?.enabled && settings.compare.presets.includes(settings.activePreset);
   const conflict = dirty && presetStamp(settings) !== base;
   useEffect(() => {
     context.draft(id, dirty || busy);
@@ -26,7 +27,8 @@ export function PresetEditor({data, settings}: {data: RunnersData; settings: Set
   return <div style={{wordBreak: 'keep-all', overflowWrap: 'break-word', textWrap: 'pretty'}}>
     <p>여러 역할의 모델·대체 후보를 고친 뒤 <strong>프리셋 저장</strong>을 한 번 누르세요.
       저장 전에는 실행 모델 설정이 바뀌지 않습니다.</p>
-    <fieldset disabled={busy || conflict}>
+    {locked && <p className="warning">비교 모드 중 — 먼저 끄기</p>}
+    <fieldset disabled={busy || conflict || locked}>
       {Object.entries(data.roles).map(([role, label]) => <details key={`${reset}:${role}`}>
         <summary>{label} 바꾸기</summary>
         {role !== 'senior' && <RunnerForm data={data} settings={draft} role={role}
@@ -38,7 +40,7 @@ export function PresetEditor({data, settings}: {data: RunnersData; settings: Set
     {conflict && <p className="warning">다른 곳에서 이 프리셋이 바뀌었습니다. 최신 값을 불러온 뒤 다시 고르세요.</p>}
     <form className="action-form" onSubmit={async event => {
       event.preventDefault();
-      if (busy || !dirty || conflict) return;
+      if (busy || !dirty || conflict || locked) return;
       setBusy(true); setError(null);
       try {
         const saved = await save('/runners/preset-save', presetSaveFields(draft, reason), context.token);
@@ -50,7 +52,7 @@ export function PresetEditor({data, settings}: {data: RunnersData; settings: Set
     }}>
       <label>바꾸는 이유<input required maxLength={500} value={reason}
         disabled={busy} onChange={event => setReason(event.target.value)} /></label>
-      <button className="primary" disabled={busy || !dirty || conflict}>
+      <button className="primary" disabled={busy || !dirty || conflict || locked}>
         {busy ? '저장 중…' : '프리셋 저장'}
       </button>
       <button type="button" disabled={busy} onClick={() => {
