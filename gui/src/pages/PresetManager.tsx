@@ -60,7 +60,9 @@ export function PresetManager({settings}: {settings: Settings}) {
         {settings.presets[name].label && settings.presets[name].label !== name && ` — ${settings.presets[name].label}`}{' '}
         <button type="button" disabled={busy} onClick={() => exportOne(name)}>내보내기</button>{' '}
         {locked(name) && <span className="warning">비교 모드 중 — 먼저 끄기 </span>}
-        <button type="button" disabled={busy || locked(name)} onClick={() => { setRenaming(renaming === name ? null : name); setRenameTo(''); }}>
+        <button type="button" disabled={busy || locked(name)} onClick={() => {
+          setRenaming(renaming === name ? null : name); setRenameTo('');
+        }}>
           이름 바꾸기</button>{' '}
         <button type="button" disabled={busy || locked(name) || name === settings.activePreset}
           title={name === settings.activePreset ? '활성 프리셋은 지울 수 없습니다. 먼저 다른 프리셋으로 전환하세요.' : undefined}
@@ -107,7 +109,8 @@ export function PresetManager({settings}: {settings: Settings}) {
       <label>다른 이름으로 가져오기 (비우면 파일 안의 이름)
         <input value={importAs} disabled={busy} onChange={e => setImportAs(e.target.value)} /></label>
       {importLocked && <p className="warning">비교 모드 중 — 먼저 끄기 (다른 이름으로 가져오기는 가능합니다)</p>}
-      <label><input type="checkbox" checked={replace} disabled={busy || importLocked} onChange={e => setReplace(e.target.checked)} />
+      <label><input type="checkbox" checked={replace} disabled={busy || importLocked}
+        onChange={e => setReplace(e.target.checked)} />
         같은 이름이 있으면 바꾸기 (기존 프리셋을 통째로 교체합니다)</label>
       <button disabled={busy || !file || importLocked}>가져오기</button>
     </form>
