@@ -44,12 +44,12 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
   const send=(role,message,extra=[])=>{
     const before=received(role);
     const out=run('send',role,...extra,message),r=sends().at(-1),body=readMailBody(r.digest,home);
-    assert.equal(r.bytes,Buffer.byteLength(body));assert.equal(r.digest,digest(body));assert.ok(out.includes(`${r.bytes}B, 지문 ${r.digest}, 우편ID ${r.mailId}`));
+    const hdr=extra.includes('--raw')?'':body.slice(0,body.indexOf('\n\n')+2);assert.equal(r.bytes,Buffer.byteLength(body)-Buffer.byteLength(hdr));assert.equal(r.digest,digest(body));assert.ok(out.includes(`${r.bytes}B, 지문 ${r.digest}, 우편ID ${r.mailId}`));
     assertReceived(role,before,body);
     if(extra.includes('--raw'))assert.equal(body,message);
     else if(extra.includes('--task'))assert.ok(!body.includes('inbox ack'),'발령 우편에는 읽음 확인 안내가 없다(2026-10-05)');
     else assert.equal(body.slice(-(ack(r.mailId,role).length+2)),'\n\n'+ack(r.mailId,role));
-    assert.ok(body.startsWith(message));assert.deepEqual(findDoneMarkers(body),[]);return {r,body,out};
+    assert.ok(body.slice(hdr.length).startsWith(message));assert.deepEqual(findDoneMarkers(body),[]);return {r,body,out};
   };
   const config=value=>fs.writeFileSync(path.join(home,'role-instructions.json'),JSON.stringify(value));
   try {
@@ -65,7 +65,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     run('start','ri-worker','--hidden');assert.equal(entries().filter(e=>e.kind==='start'&&e.role==='ri-worker').at(-1).roleProfile,'worker');
     assert.notEqual(call('start','invalid','--profile','admin').status,0);
     begin('legacy');const unknown=send('legacy','plain shell input');
-    assert.equal(unknown.body,'plain shell input\n\n'+ack(unknown.r.mailId,'legacy'));
+    assert.equal(unknown.body,'사람 → legacy\n\nplain shell input\n\n'+ack(unknown.r.mailId,'legacy'));
     assert.equal(unknown.r.roleInstructions.reason,'unknown-role');assert.match(unknown.out,/적용 안 됨/);
     const custom=path.join(home,'custom.md');fs.writeFileSync(custom,'# 첫 사용자 지침');
     config({version:1,roles:{legacy:'worker'},templates:{worker:custom,reviewer:path.join(home,'missing.md')}});
@@ -116,7 +116,7 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     const original=entries().filter(e=>e.kind==='start'&&e.role==='ri-worker').at(-1);
     appendLedger({...original,panePid:'999999999'},home);{const all=()=>entries().filter(e=>e.kind==='send'),storedBefore=all().length,blocked=call('send','ri-worker','BLOCKED_PID');assert.equal(blocked.status,0,blocked.stderr);assert.equal(sends().length,prior,'창에는 넣지 않는다');assert.equal(all().length,storedBefore+1);assert.equal(all().at(-1).transport,'mailbox');}appendLedger(original,home);
     const mail=JSON.parse(run('send','비서','공식 완료 원문')),beforeRead=entries();
-    const letter=JSON.parse(run('inbox','read',mail.mailId));assert.equal(letter.body,'공식 완료 원문');assert.equal(letter.receiverInstructionsProfile,'secretary');assert.ok(letter.receiverInstructions);
+    const letter=JSON.parse(run('inbox','read',mail.mailId));assert.equal(letter.body,'사람 → 비서\n\n공식 완료 원문');assert.equal(letter.receiverInstructionsProfile,'secretary');assert.ok(letter.receiverInstructions);
     assert.deepEqual(entries(),beforeRead);assert.ok(Array.isArray(JSON.parse(run('inbox','list'))));assert.equal(mail.wake,'not-connected');
   } finally {
     for (const role of started)run('stop',role);

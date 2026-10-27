@@ -8,6 +8,7 @@ import {
   inferDispatchProfile,
 } from "./role-instructions.mjs";
 import { composeMailInstructions } from "./mail-instructions.mjs";
+import { mailHeaderLine } from "./mail-header.mjs";
 import { CardStore } from "./card-store.mjs";
 import { resolveWorkMail } from "./work-mail.mjs";
 import { inspectCardSendIdentity } from "./ai-identity.mjs";
@@ -97,6 +98,10 @@ export function guardedSend({
     : composeRoleInstructions({home:env.KADAN_HOME||env.KADAN_LITE_HOME||ledgerHome(),
       role,message,profile:roleProfile,raw,taskId,mailContext,entries,cards,slim:true});
   message = composed.message;
+  // 머리말은 사용자 본문 앞 한 줄이다. preview·bytes는 머리말을 뺀 본문 기준으로 둬 목록에서 본문 앞부분이 밀리지 않게 한다.
+  const previewSource = message;
+  const header = raw ? "" : mailHeaderLine({by,role,workKey:mailContext?.workKey});
+  message = header + message;
   if (!raw) {
     const instructions=composeMailInstructions({mailId,recipient:role,notificationOnly,dispatch:taskId!=null,expectReply:mailContext?.expectReply===true,sender:by,env});
     if (instructions) message+=`\n\n${instructions}`;
@@ -213,9 +218,9 @@ export function guardedSend({
       ...(cardIdentity.launch.reviewFor ? {reviewFor: cardIdentity.launch.reviewFor} : {}),
     } : {}),
     ...(originalTaskId!==taskId?{rawTaskId:originalTaskId}:{}),
-    bytes: Buffer.byteLength(message),
+    bytes: Buffer.byteLength(message) - Buffer.byteLength(header),
     digest: digest(message),
-    ...(mailPreview(message) ? { preview: mailPreview(message) } : {}),
+    ...(mailPreview(previewSource) ? { preview: mailPreview(previewSource) } : {}),
     ...(receipt.sequence != null ? { sequence: receipt.sequence } : {}),
     ...(receipt.enterSequence != null
       ? { enterSequence: receipt.enterSequence }

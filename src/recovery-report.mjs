@@ -5,6 +5,7 @@ import {createHash} from 'node:crypto';
 import {Mailbox} from './mailbox.mjs';
 import {ledgerHome, readMailLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
+import {mailHeaderLine} from './mail-header.mjs';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 export function reportRecovery(flags, deps = {}) {
@@ -45,7 +46,7 @@ export function reportRecovery(flags, deps = {}) {
     // A crash after mailbox commit can be reconciled without sending a second letter.
     const letter = (deps.read || (() => readMailLedger(home)))().find(entry =>
       entry.kind === 'send' && entry.transport === 'mailbox' && entry.role === '비서'
-      && entry.by === 'Rottie' && entry.digest === hash(message));
+      && entry.by === 'Rottie' && entry.digest === hash(mailHeaderLine({by: 'Rottie', role: '비서'}) + message));
     if (letter) return {mailId: letter.mailId, recipient: '비서', status: 'stored', duplicate: true};
     throw new Error('비서 보고 전달 결과가 불확실합니다. 중복 방지를 위해 자동 재전송하지 않습니다.');
   }
