@@ -48,14 +48,14 @@ export class Mailbox {
  }
  #store({by,message:body,category='report',sourceKey,workKey},context){
   assertWritable(this.home);
-  const message=mailHeaderLine({by,role:context.currentRecipient||this.role,workKey:context.workKey??workKey})+body;
+  const message=mailHeaderLine({by,role:this.role,workKey:context.workKey??workKey})+body;
   const digest=createHash('sha256').update(message).digest('hex'),mailId=randomUUID(),dir=path.join(this.home,'mail');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const file=path.join(dir,`${digest}.txt`);
   if(fs.existsSync(file)){if(fs.readFileSync(file,'utf8')!==message)throw new Error('우편 본문 지문 충돌');}
   else fs.writeFileSync(file,message,{mode:0o600,flag:'wx'});
   const {currentRecipient,...connection}=context;
-  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,digest,bytes:Buffer.byteLength(body),...mailRuleField(),...(sourceKey!==undefined?{sourceKey}:{}),...connection},this.home);
+  ledger.appendLedger({kind:'send',transport:'mailbox',role:this.role,by,mailId,mailKind:category,header:true,digest,bytes:Buffer.byteLength(body),...mailRuleField(),...(sourceKey!==undefined?{sourceKey}:{}),...connection},this.home);
   return {mailId,recipient:currentRecipient||this.role,currentRecipient:currentRecipient||this.role,status:'stored',wake:'not-connected'};
  }
  // 기본 받은 편지 목록은 이전 세대 미확인을 빼고, previousGenerations=true면 그것만 보인다(읽음 기록은 가능).

@@ -8,7 +8,7 @@ import {isPeerSuperMail} from './peer-mail.mjs';
 import {SECRETARY} from './mailbox.mjs';
 import {isSimplifiedMail,deliveredAt,firstReminderSent,reminderKey} from './mail-rule.mjs';
 import {createProcessCollections} from './process-collections.mjs';
-import {stripMailHeader} from './mail-header.mjs';
+import {stripStoredHeader} from './mail-header.mjs';
 
 const recipient = mail => mail.currentRecipient || mail.role;
 
@@ -35,7 +35,7 @@ export const escalationMessage = items => escalationNotice(items, previewOf);
 function previewOf(mail) {
   if (mail.preview) return mail.preview;
   try {
-    return mail.digest ? stripMailHeader(readMailBody(mail.digest, ledgerHome()), {by: mail.by, role: mail.currentRecipient || mail.role, workKey: mail.workKey}) ?? '' : '';
+    return mail.digest ? stripStoredHeader(readMailBody(mail.digest, ledgerHome()), mail) ?? '' : '';
   } catch { return ''; }
 }
 

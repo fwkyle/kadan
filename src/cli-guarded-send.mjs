@@ -189,6 +189,7 @@ export function guardedSend({
     ...mailRuleField(),
     ...(notificationOnly?{notificationOnly:true}:{}),
     ...(deliveredRead?{deliveredRead:true}:{}),
+    ...(header?{header:true}:{}),
     ...(mailContext?.expectReply?{expectReply:true}:{}),
     ...(mailContext?.replyFinal?{replyFinal:true}:{}),
     ...(mailContext?.workKey?{workKey:mailContext.workKey}:{}),

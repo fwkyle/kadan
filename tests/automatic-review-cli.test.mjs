@@ -122,7 +122,9 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
    assert.equal(completion.taskId,undefined);assert.equal(completion.executionKey,dispatch.executionKey);
    assert.equal(completion.workKey,dispatch.workKey);assert.equal(completion.result,done.result);
    const body=readMailBody(completion.digest,home);assert.equal(typeof body,'string');
-   assert.equal(completion.bytes,Buffer.byteLength(body)); // 시스템 생성 완료 통지는 머리말 없음(원장 안에서 만든다)assert.equal(completion.digest,createHash('sha256').update(body).digest('hex'));
+   assert.equal(completion.bytes,Buffer.byteLength(body)); 
+   // 시스템 생성 완료 통지는 머리말 없음(원장 안에서 만든다)
+   assert.equal(completion.digest,createHash('sha256').update(body).digest('hex'));
    assert.ok(!fs.readFileSync(path.join(home,completion.role+'.received'),'utf8').includes(body+'\n'),'저장 완료 통지는 감독 화면에 주입하지 않는다');
   }
   assert.deepEqual(sends.map(e=>e.role),[roles[0],roles[1],roles[0],roles[1],roles[2]]);

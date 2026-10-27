@@ -7,9 +7,10 @@ export function mailHeaderLine({by,role,workKey}={}) {
   return `${from} → ${to}${work}\n\n`;
 }
 
-// 저장된 본문이 정확히 이 머리말로 시작할 때만 떼어 낸다(손으로 쓴 비슷한 첫 줄은 건드리지 않는다).
-export function stripMailHeader(body, fields) {
-  if (typeof body !== 'string') return body;
-  const header = mailHeaderLine(fields);
+// 표시·판정용: 우편 기록에 `header: true`가 있을 때만, 저장 당시의 보낸 사람·받는 사람(`role`)·업무로 만든 머리말을 뗀다.
+// 지금 주소(`currentRecipient`)나 표지 없는 옛 편지의 손으로 쓴 첫 줄은 건드리지 않는다.
+export function stripStoredHeader(body, entry) {
+  if (typeof body !== 'string' || entry?.header !== true) return body;
+  const header = mailHeaderLine({by: entry.by, role: entry.role, workKey: entry.workKey});
   return body.startsWith(header) ? body.slice(header.length) : body;
 }

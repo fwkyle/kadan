@@ -2,10 +2,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import * as awaitedCrypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {guardedSend} from '../src/cli.mjs';
-import {mailHeaderLine} from '../src/mail-header.mjs';
+import {mailHeaderLine, stripStoredHeader} from '../src/mail-header.mjs';
+import {summarizeNight} from '../src/night-summary.mjs';
+import {escalationMessage} from '../src/watch-mail.mjs';
+import {mailboxLetters} from '../src/mailbox-state.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
 import {appendLedger, readLedger, readMailBody} from '../src/ledger.mjs';
 import {CardStore} from '../src/card-store.mjs';
@@ -81,4 +85,50 @@ test('저장 전용 우편함: 본문에 머리말, bytes는 사용자 본문 �
   const body = readMailBody(entry.digest, h);
   assert.equal(body, 'header-보내는 → 비서\n\n저장 본문');
   assert.equal(entry.bytes, Buffer.byteLength('저장 본문'));
+});
+
+const nightStart = {t: '2026-10-27T00:00:00Z', by: 'qa-night-super'};
+const nightArgs = (h, entries) => ({start: nightStart, phase: 'off', endedAt: Date.parse('2026-10-27T08:00:00Z'), entries,
+  decisionEvents: [], readBody: d => readMailBody(d, h)});
+
+test('F1: 실제 Mailbox.send로 저장한 보류(머리말 있음)와 머리말 없는 옛 보류가 모두 아침 요약에 남는다', () => {
+  const h = home();
+  new Mailbox(h, '사람').send({by: 'qa-night-super', message: '[나이트 보류] 운영 DB 마이그레이션'});
+  const entries = readLedger(h).map(e => ({...e, t: '2026-10-27T03:00:00Z'}));
+  assert.equal(entries[0].header, true);
+  // 머리말 표지가 없는 옛 보류 우편: 본문 그대로 저장
+  const {createHash} = awaitedCrypto;
+  const old = '[나이트 보류] 옛 편지', digest = createHash('sha256').update(old).digest('hex');
+  fs.mkdirSync(path.join(h, 'mail'), {recursive: true});
+  fs.writeFileSync(path.join(h, 'mail', `${digest}.txt`), old);
+  entries.push({kind: 'send', mailId: 'old', role: '사람', by: 'x', digest, t: '2026-10-27T02:00:00Z'});
+  const summary = summarizeNight(nightArgs(h, entries));
+  assert.equal(summary.counts.held, 2);
+});
+
+test('F3: 머리말 제거는 저장 당시 값 기준 — 인계 뒤 currentRecipient가 달라도 같은 미리보기, 표지 없는 손머리말은 보존', t => {
+  const h = home(), prior = process.env.KADAN_HOME;
+  process.env.KADAN_HOME = h;
+  t.after(() => { if (prior === undefined) delete process.env.KADAN_HOME; else process.env.KADAN_HOME = prior; });
+  new Mailbox(h, 'f3-old').send({by: 'f3-from', message: '확인할 질문'});
+  const [letter] = mailboxLetters(readLedger(h), 'f3-old', {all: true});
+  const item = mail => ({mail: {...mail, preview: undefined}, kind: 'unread', minutes: 10});
+  const before = escalationMessage([item(letter)]);
+  const after = escalationMessage([item({...letter, currentRecipient: 'f3-new'})]);
+  assert.match(before, /확인할 질문/); assert.doesNotMatch(before, /f3-from → f3-old/);
+  const firstLine = text => text.match(/첫 줄: .*/)[0];
+  assert.equal(firstLine(after), firstLine(before)); // 받는이 표시는 인계 뒤 바뀌어도 첫 줄 미리보기는 같다
+  const hand = 'a → b\n\n손으로 쓴 머리말';
+  assert.equal(stripStoredHeader(hand, {by: 'a', role: 'b'}), hand); // 표지 없음
+  assert.equal(stripStoredHeader(hand, {header: true, by: 'a', role: 'b'}), '손으로 쓴 머리말');
+  assert.equal(stripStoredHeader(hand, {header: true, by: 'a', role: 'other'}), hand);
+});
+
+test('F5: 대시보드 목록 검색용 미리보기는 머리말을 뗀 본문이고 상세 원문(readMailBody)은 그대로다', () => {
+  const h = home();
+  new Mailbox(h, 'f5-받는').send({by: 'f5-보낸', message: '대시보드 본문'});
+  const entry = readLedger(h).find(e => e.kind === 'send');
+  const full = readMailBody(entry.digest, h);
+  assert.match(full, /^f5-보낸 → f5-받는\n\n대시보드 본문$/);
+  assert.equal(stripStoredHeader(full, entry), '대시보드 본문');
 });
