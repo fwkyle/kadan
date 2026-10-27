@@ -63,6 +63,8 @@ export function compareState(home) {
 }
 
 export function pickCompareLaunch(home, role, {readCodexModels, record = entry => appendLedger(entry, home)} = {}) {
+  const current = readSettings(home);
+  if (!current?.compare?.enabled) return launchFor(current, 'worker');
   // 설정 변경과 같은 잠금: 회차를 읽기 → 검증 → 예약 기록까지 설정이 바뀌지 않는다.
   // 세션/창 생성은 이 함수가 돌아온 뒤라 잠금을 쥔 채 외부 실행을 기다리지 않는다.
   return lockedSettings(home, () => {

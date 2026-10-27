@@ -6,7 +6,7 @@ import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {compareFixture, choice} from './helpers/compare-fixture.mjs';
 import {compareCounts, compareState, pickCompareLaunch, setCompare} from '../src/runner-compare.mjs';
-import {addPreset, blockModel, launchFor, readSettings, removePreset, renamePreset,
+import {addPreset, blockModel, launchFor, launchForFallback, readSettings, removePreset, renamePreset,
   setActivePreset, setRole} from '../src/runner-settings.mjs';
 import {exportPreset, importPreset} from '../src/runner-export.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -15,6 +15,34 @@ import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
 import {runnersCommand} from '../src/runners-command.mjs';
 
 const enable = f => setCompare(f.home, {enabled: true, presets: 'A,B,C,D,E', ...f.meta()});
+
+test('비교 없음·꺼짐은 잠금 흔적 없이 선택하며 잡힌 잠금도 기다리지 않는다', () => {
+  for (const compare of [undefined, {enabled: false, presets: [], enabledAt: null}]) {
+    const f = compareFixture();
+    f.save({...f.settings, compare});
+    const expected = launchFor(readSettings(f.home), 'worker');
+    for (let i = 0; i < 3; i++) assert.deepEqual(pickCompareLaunch(f.home, 'test-disabled'), expected);
+    assert.deepEqual(fs.readdirSync(f.home).filter(n => n.startsWith('.runner-settings-lock')), []);
+    fs.mkdirSync(path.join(f.home, '.runner-settings-lock'));
+    const started = Date.now();
+    assert.deepEqual(pickCompareLaunch(f.home, 'test-disabled'), expected);
+    assert.ok(Date.now() - started < 1000, '기존 잠금 대기(5초)를 거치지 않는다');
+  }
+});
+
+test('비교 검수자 폴백은 그 세션 프리셋 후보를 찾아 경고로 발령 허용', () => {
+  const f = compareFixture();
+  const settings = readSettings(f.home);
+  settings.presets.E.fallback.reviewer = [choice('gpt-two', 'high')];
+  f.save(settings); enable(f);
+  const fallback = launchForFallback(readSettings(f.home), 'reviewer', 1, 'E');
+  const result = inspectDispatchRunnerGuard({home: f.home, role: 'test-reviewer',
+    session: 'kadan-test-reviewer', profile: 'reviewer',
+    identity: {harness: 'codex', model: fallback.model, launch: {cmd: fallback.cmd,
+      launchSource: 'review-for', fallbackIndex: 1, settingsPreset: 'E'}}});
+  assert.equal(result.result, 'warn');
+  assert.equal(result.code, 'fallback');
+});
 
 test('옛 파일 호환, CLI on/off/show, revision·이유·목록 전체 검증', () => {
   const f = compareFixture();

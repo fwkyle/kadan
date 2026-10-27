@@ -75,6 +75,7 @@ function sampleOf(execution, work, index, outcomes, picks) {
   return {workKey: work.key, key: execution.key, preset: send.settingsPreset,
     worker: send.runnerChoice, reviewer, send, reason, pending, failed: run.done?.result === 'failed',
     rounds: relativeRounds(execution.round, firstPass?.round),
+    implementationRound: Number(execution.round), passedRound: firstPass ? Number(firstPass.round) : null,
     durationMs: run.done ? time(run.done) - time(send) : null,
     reviewKeys: used.map(e => e.key)};
 }
@@ -109,12 +110,19 @@ export function calculateCompareReport({entries, works, cards}, {since, epoch, a
     const implementations = (work.executions ?? []).filter(e => e.phase === 'implementation');
     const comparison = implementations.filter(e => index.runs.get(e.key)?.sends.some(s => s.compareMode
       || ['fallback', 'override'].includes(s.launchSource)));
+    const firstSend = comparison.map(e => index.runs.get(e.key).sends[0])
+      .sort((a, b) => time(a) - time(b))[0];
+    if (!firstSend || !inWindow(firstSend)) continue;
     const selected = comparison.filter(e => {
       const send = index.runs.get(e.key).sends[0];
-      return inWindow(send) && (!epoch || picks.get(send.pickId)?.epoch === epoch
+      return (!epoch || picks.get(send.pickId)?.epoch === epoch
         || (!send.compareMode && time(send) >= Date.parse(epoch)));
     });
     if (!selected.length) continue;
+    if (comparison.some(e => index.runs.get(e.key).sends.some(s => !s.compareMode))) {
+      excluded['폴백·명시 명령'] = (excluded['폴백·명시 명령'] ?? 0) + 1;
+      continue;
+    }
     // 기간 밖의 같은 업무도 군 혼합 판정에는 포함한다. 업무당 독립 표본은 늘 하나다.
     const presets = new Set(comparison.flatMap(e => index.runs.get(e.key).sends
       .filter(s => s.compareMode).map(s => s.settingsPreset)));
@@ -123,7 +131,7 @@ export function calculateCompareReport({entries, works, cards}, {since, epoch, a
       excluded['혼합 군'] = (excluded['혼합 군'] ?? 0) + 1;
       continue;
     }
-    const samples = selected.map(e => sampleOf(e, work, index, outcomes, picks)).filter(Boolean);
+    const samples = comparison.map(e => sampleOf(e, work, index, outcomes, picks)).filter(Boolean);
     const first = samples[0];
     if (!first) continue;
     const row = rowFor(first.preset, first.worker, first.reviewer);
@@ -144,9 +152,11 @@ export function calculateCompareReport({entries, works, cards}, {since, epoch, a
     row.failed += samples.filter(s => s.failed).length;
     if (samples.some(s => s.pending)) { row.inProgress++; continue; }
     row.completedSamples++;
-    if (samples.every(s => !s.failed && s.rounds === 1)) row.firstRoundPasses++;
-    const rounds = median(samples.map(s => s.rounds));
-    const duration = median(samples.map(s => s.durationMs));
+    const firstRound = Math.min(...samples.map(s => s.implementationRound));
+    const passed = samples.map(s => s.passedRound).filter(Number.isFinite);
+    const rounds = relativeRounds(firstRound, passed.length ? Math.min(...passed) : null);
+    if (samples.every(s => !s.failed) && rounds === 1) row.firstRoundPasses++;
+    const duration = median(samples.filter(s => s.implementationRound === firstRound).map(s => s.durationMs));
     if (rounds !== null) row.rounds.push(rounds);
     if (duration !== null) row.durations.push(duration);
   }

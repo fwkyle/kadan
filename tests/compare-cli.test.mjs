@@ -11,6 +11,32 @@ import {readLedger} from '../src/ledger.mjs';
 import {guardedSend} from '../src/cli-guarded-send.mjs';
 import {CardStore} from '../src/card-store.mjs';
 
+test('비교 꺼짐 CLI start 3회는 잠금 흔적 없이, 잠금이 있어도 바로 시작한다', () => {
+  const f = compareFixture();
+  f.save({...f.settings, compare: {enabled: false, presets: [], enabledAt: null}});
+  const bin = path.join(f.home, 'bin'); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nexec sleep 60\n', {mode: 0o755});
+  const socket = `compare-disabled-test-${process.pid}`;
+  const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: f.home,
+    KADAN_SOCKET: socket, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ALT_CHECK_MS: '0'};
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const run = (...args) => {
+    const result = spawnSync(process.execPath, [cli, ...args], {env, encoding: 'utf8', timeout: 4000});
+    assert.equal(result.status, 0, result.stderr);
+  };
+  try {
+    for (let i = 0; i < 3; i++) {
+      run('start', 'test-disabled-worker', '--hidden', '--no-prompt', '--profile', 'worker');
+      run('stop', 'test-disabled-worker');
+    }
+    assert.deepEqual(fs.readdirSync(f.home).filter(n => n.startsWith('.runner-settings-lock')), []);
+    fs.mkdirSync(path.join(f.home, '.runner-settings-lock'));
+    run('start', 'test-disabled-worker', '--hidden', '--no-prompt', '--profile', 'worker');
+    run('stop', 'test-disabled-worker');
+    assert.equal(readLedger(f.home).filter(e => e.kind === 'compare-pick').length, 0);
+  } finally { spawnSync('tmux', ['-L', socket, 'kill-server'], {env}); }
+});
+
 test('격리 CLI: 10회 시작·재사용·명시 명령·폴백·검수자, 발령 귀속 저장', () => {
   const f = compareFixture();
   const bin = path.join(f.home, 'bin'); fs.mkdirSync(bin);

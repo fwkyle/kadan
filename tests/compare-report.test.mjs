@@ -67,14 +67,48 @@ test('검수자별 묶음, 업무당 1표본, 병렬 구현 중앙값과 상대 
   assert.doesNotMatch(formatCompareReport(report), /엄격도|1위|순위: /);
 });
 
-test('혼합 군은 업무 전체 제외, 기간 밖 비교 구현도 혼합 판정에 포함', () => {
+test('혼합 군은 업무 전체 제외, 첫 비교 구현이 기간 밖이면 업무 전체 제외', () => {
   const f = fixture(); f.add();
   const other = f.add({preset: 'B'}); other.send.t = stamp(30);
-  const report = calculateCompareReport(f.data, {since: stamp(25)});
+  const report = calculateCompareReport(f.data, {since: stamp(0)});
   assert.equal(report.mixed.length, 1);
   assert.deepEqual(report.mixed[0].presets, ['A', 'B']);
   assert.equal(report.mixed[0].cardIds.length, 2);
   assert.equal(rows(report).reduce((n, r) => n + r.independentSamples, 0), 0);
+  assert.equal(calculateCompareReport(f.data, {since: stamp(25)}).mixed.length, 0);
+});
+
+test('순차 2·3라운드는 업무 첫 구현부터 세고 첫 라운드 시간만 집계한다', () => {
+  for (const rounds of [2, 3]) {
+    const f = fixture();
+    for (let round = 1; round <= rounds; round++) {
+      const run = f.add({round, passRound: round === rounds ? round : null});
+      run.send.t = stamp((round - 1) * 40 + 1);
+      const done = f.data.entries.find(e => e.kind === 'done' && e.executionKey === run.key);
+      done.t = stamp((round - 1) * 40 + 1 + round * 10);
+    }
+    const row = rows(calculateCompareReport(f.data))[0];
+    assert.equal(row.independentSamples, 1);
+    assert.equal(row.samples, rounds);
+    assert.equal(row.medianRounds, rounds);
+    assert.equal(row.firstRoundPasses, 0);
+    assert.equal(row.medianImplementationMs, 600000);
+    const since = calculateCompareReport(f.data, {since: stamp(25)});
+    assert.equal(rows(since).reduce((sum, r) => sum + r.independentSamples, 0), 0);
+  }
+});
+
+test('명시 명령·폴백 작업자는 전역 제외 수만 남기며 비교 밖 행을 만들지 않는다', () => {
+  const f = fixture();
+  for (const [preset, launchSource] of [[null, 'override'], ['outside', 'fallback']]) {
+    const run = f.add({work: `test/${launchSource}`, fallback: 'worker', preset});
+    run.send.launchSource = launchSource;
+    delete run.send.pickId;
+    f.data.entries = f.data.entries.filter(e => e !== run.pick && e !== run.start);
+  }
+  const report = calculateCompareReport(f.data, {epoch});
+  assert.equal(report.excluded['폴백·명시 명령'], 2);
+  assert.deepEqual(report.groups, []);
 });
 
 test('미완료는 비율 분모에서 제외, failed는 별도 열, 미통과는 통과로 세지 않는다', () => {

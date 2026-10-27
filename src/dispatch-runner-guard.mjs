@@ -131,10 +131,11 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
 // `kadan start --profile <p> --fallback N`으로 정식으로 띄운 세션을 옛 세션으로 거절하지 않게 한다(2026-10-02 [kyle]).
 // 읽지 못하는 폴백 항목은 건너뛴다 — 맞는 항목이 없으면 기존처럼 거절이다.
 function matchingFallback(settings, profile, identity) {
-  const count = settings.presets[settings.activePreset].fallback?.[PROFILE_ROLES[profile]]?.length ?? 0;
+  const preset = identity.launch?.settingsPreset ?? settings.activePreset;
+  const count = settings.presets[preset]?.fallback?.[PROFILE_ROLES[profile]]?.length ?? 0;
   for (let index = 1; index <= count; index++) {
     let fallback;
-    try { fallback = launchForFallback(settings, profile, index); } catch { continue; }
+    try { fallback = launchForFallback(settings, profile, index, preset); } catch { continue; }
     const got = launchIdentityOf(fallback.cmd);
     if (got.ok && got.harness === identity.harness && got.model === identity.model) return fallback;
   }
