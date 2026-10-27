@@ -24,8 +24,20 @@ function inputReady(screen) {
     judgeScreen(screen, 'all').verdict === 'target' && readStatusLine(screen).kind !== 'working';
 }
 
+function waitForMenuClose({ floor, session, pid, sleep, now }) {
+  const deadline = now() + 2000;
+  for (;;) {
+    assertAlive(floor, session, pid);
+    const screen = floor.read(session);
+    if (!claudeLimitMenu(screen) && !hasLimitMenuText(screen)) return screen;
+    const remaining = deadline - now();
+    if (remaining <= 0) return screen;
+    sleep(Math.min(200, remaining));
+  }
+}
+
 export function runNudge({ entriesOf, floor, pendingCards, send, pressKey, roles = null,
-  self = process.env.KADAN_ROLE, intervalSec = 8, sleep }) {
+  self = process.env.KADAN_ROLE, intervalSec = 8, sleep, now = Date.now }) {
   if (floor.name !== 'tmux') throw new Error('claude refresh는 tmux 바닥에서만 쓴다');
   const initial = entriesOf();
   const screens = new Map();
@@ -61,7 +73,7 @@ export function runNudge({ entriesOf, floor, pendingCards, send, pressKey, roles
           if (latest !== current || !claudeLimitMenu(latest)) throw new Error('Escape 직전 화면 변경');
         } });
         result.escaped = true;
-        ready = floor.read(session);
+        ready = waitForMenuClose({ floor, session, pid, sleep, now });
         if (claudeLimitMenu(ready) || hasLimitMenuText(ready)) {
           result.outcome = 'limited';
           result.reason = 'Escape 뒤에도 한도 메뉴가 남음 — 우편 안 보냄';
@@ -97,15 +109,17 @@ export function runNudge({ entriesOf, floor, pendingCards, send, pressKey, roles
       }
     } catch (error) {
       result.reason = scrubText(String(error?.message ?? error)).slice(0, 300);
+      if (result.sent) result.outcome = 'sent-unconfirmed';
       // 전달 불명확도 재시도하지 않는다.
-      if (error.delivery === 'unknown' || error.delivery === 'sent') result.outcome = 'failed';
+      else if (error.delivery === 'unknown' || error.delivery === 'sent') result.outcome = 'failed';
     }
   }
   return results;
 }
 
 export function formatNudgeResult(results) {
-  const labels = { nudged: '깨움', skipped: '건너뜀', limited: '그대로 한도', failed: '실패' };
+  const labels = { nudged: '깨움', skipped: '건너뜀', limited: '그대로 한도', failed: '실패',
+    'sent-unconfirmed': '우편 보냄·재확인 실패' };
   return ['한도 깨움 결과', '역할\t결과\tEscape\t이유', ...results.map(row =>
     `${row.role}\t${labels[row.outcome]}\t${row.escaped ? '1' : '0'}\t${row.reason}`)].join('\n');
 }

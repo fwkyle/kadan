@@ -65,8 +65,19 @@ const limitHeadOf = (line) => {
 export function claudeLimitLine(screen) {
   const menu = claudeLimitMenu(screen);
   if (menu) {
-    // 실제 메뉴 아래에는 입력창이 없다. 메뉴 앞의 기존 한도 줄 판정을 그대로 재사용한다.
-    return claudeLimitLine(screen.split('\n').slice(0, menu.title).join('\n') + '\n❯');
+    const above = screen.split('\n').slice(0, menu.title);
+    let command = above.length - 1;
+    while (command >= 0 && RULE_OR_BLANK.test(above[command])) command--;
+    // 확인된 메뉴 바로 앞의 이 명령 한 줄만 예외다. 다른 입력은 기존 탐색 경계로 남긴다.
+    if (command >= 0 && /^\s*❯ \/rate-limit-options\s*$/u.test(above[command])) {
+      let at = command - 1;
+      while (at >= 0 && (RULE_OR_BLANK.test(above[at]) || TURN_DONE.test(above[at]))) at--;
+      const line = above[at];
+      const head = line == null ? null : limitHeadOf(line);
+      // 실제 메뉴와 정확한 명령이 바로 뒤따른 한도는 앞선 도구 응답의 들여쓰기 문맥과 구분한다.
+      return head && !insideFence(above, at) ? { line: line.trim(), head } : null;
+    }
+    return claudeLimitLine(above.join('\n') + '\n❯');
   }
   const lines = trimmedLines(screen);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));

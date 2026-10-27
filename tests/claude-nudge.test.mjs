@@ -20,18 +20,20 @@ const MENU = `${LIMIT}\n\nWhat do you want to do?\n` +
   '❯ 1. Stop and wait for limit to reset\n' +
   '  2. Wait here, then continue automatically at Oct 28, 11pm\n\nEsc to cancel';
 const FIXTURES = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-screens.json', import.meta.url)));
+const REAL_MENUS = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-real-limit-menu.json', import.meta.url)));
 
 function world(screen = MENU, { afterEscape = INPUT, afterSend = IDLE } = {}) {
   const entries = [{ kind: 'start', session: 'kadan-nudge-test', role: 'nudge-test', panePid: '101',
     cmd: 'claude --model claude-haiku-5-5', roleProfile: 'worker' }];
   const keys = [], sends = [], records = [], sleeps = [];
   let current = screen;
+  let clock = 0;
   const floor = { name: 'tmux', list: () => [{ session: 'kadan-nudge-test', alive: true }],
     alive: () => true, pid: () => '101', read: () => current,
     send: (session, message) => { sends.push({ session, message }); current = afterSend;
       return { keyDelivery: 'sent', inputAcceptance: 'unconfirmed' }; } };
   const args = { entriesOf: () => entries, floor, self: 'test-sender', pendingCards: () => [],
-    intervalSec: 2, sleep: ms => sleeps.push(ms),
+    intervalSec: 2, sleep: ms => { sleeps.push(ms); clock += ms; }, now: () => clock,
     pressKey: (session, key, options) => { options.beforeKey(); keys.push(key); current = afterEscape; },
     send: ({ escaped, ...options }) => guardedSend({ ...options, raw: true,
       readEntries: () => entries, saveBody: () => {},
@@ -65,6 +67,54 @@ test('Escape 뒤 메뉴가 남으면 우편 없음', () => {
   assert.equal(runNudge(w.args)[0].outcome, 'limited');
   assert.equal(w.keys.length, 1);
   assert.equal(w.sends.length, 0);
+  assert.deepEqual(w.sleeps, Array(10).fill(200));
+});
+
+test('F0: 실제 메뉴 배치 2종은 리셋 시각 포함 target, Escape 1회·우편 1통', () => {
+  for (const screen of [REAL_MENUS.threeOptions, REAL_MENUS.fourOptions]) {
+    const w = world(screen);
+    const rows = buildPreview({ entries: w.entries, floor: w.floor, pendingCards: () => [] });
+    assert.equal(rows[0].verdict, 'target');
+    assert.match(rows[0].resetLine, /resets Oct (?:27 at 4pm|28 at 11pm)/);
+    assert.match(formatPreview(rows, null), /대상 1/);
+    assert.equal(runNudge(w.args)[0].outcome, 'nudged');
+    assert.deepEqual(w.keys, ['Escape']);
+    assert.equal(w.sends.length, 1);
+  }
+});
+
+test('F0 경계: 다른 입력·인자·메뉴 없는 명령 줄은 옛 한도 줄을 찾지 않는다', () => {
+  const menu = REAL_MENUS.fourOptions;
+  for (const screen of [menu.replace('/rate-limit-options', '/other-command'),
+    menu.replace('/rate-limit-options', '/rate-limit-options extra'),
+    menu.replace('/rate-limit-options', '다른 사용자 입력'),
+    menu.replace('/rate-limit-options', '다른 사용자 입력\n❯ /rate-limit-options'),
+    menu.slice(0, menu.indexOf('  What do you want to do?')) + '❯ ']) {
+    const w = world(screen);
+    assert.equal(runNudge(w.args)[0].outcome, 'skipped', screen);
+    assert.equal(w.keys.length + w.sends.length, 0);
+  }
+});
+
+test('F1: Escape 뒤 첫 읽기는 메뉴, 다음 읽기는 빈 입력창이면 기다린 뒤 우편 1통', () => {
+  const w = world(REAL_MENUS.fourOptions, { afterEscape: REAL_MENUS.fourOptions });
+  const sleep = w.args.sleep;
+  w.args.sleep = ms => { sleep(ms); if (ms === 200) w.set(INPUT); };
+  assert.equal(runNudge(w.args)[0].outcome, 'nudged');
+  assert.deepEqual(w.keys, ['Escape']);
+  assert.equal(w.sends.length, 1);
+  assert.deepEqual(w.sleeps, [200, 2000]);
+});
+
+test('F2: 우편 뒤 생존 재확인 실패는 이미 보낸 사실을 표·JSON에 남긴다', () => {
+  const w = world(INPUT);
+  w.floor.alive = () => w.sends.length === 0;
+  const results = runNudge(w.args);
+  assert.equal(results[0].sent, true);
+  assert.equal(results[0].outcome, 'sent-unconfirmed');
+  assert.match(formatNudgeResult(results), /우편 보냄·재확인 실패/);
+  assert.equal(JSON.parse(JSON.stringify(results))[0].outcome, 'sent-unconfirmed');
+  assert.equal(w.sends.length, 1);
 });
 
 test('생성 중·입력 글·쉬는 화면·모호한 메뉴·메뉴 뒤 응답은 키/우편 없음', () => {
