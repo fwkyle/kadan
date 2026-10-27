@@ -1,4 +1,4 @@
-import {useContext, useEffect, useId, useState} from 'react';
+import {useContext, useEffect, useId, useRef, useState} from 'react';
 import {json, save, useResource} from '../resource';
 import {cardUrl} from '../navigation';
 import {AppContext, ErrorMessage} from '../ui';
@@ -41,6 +41,13 @@ export function CompareMode({settings}: {settings: Settings}) {
   const [loading, setLoading] = useState(false), [reportError, setReportError] = useState<string | null>(null);
   const counts = useResource<{revision: number; picks: Record<string, number>}>(
     '/runners/compare', {pollMs: 0});
+  const countsRevision = useRef(settings.revision);
+  useEffect(() => {
+    if (countsRevision.current === settings.revision) return;
+    countsRevision.current = settings.revision;
+    // 옛 revision의 조회가 진행 중이어도 최신 설정 기준으로 한 번 다시 읽는다.
+    void counts.refresh(true);
+  }, [settings.revision, counts.refresh]);
   const conflict = dirty && (base !== stamp || selected.some(name => !Object.hasOwn(settings.presets, name)));
   useEffect(() => {
     if (!dirty && !busy) { setSelected(settings.compare?.presets ?? []); setBase(stamp); }
