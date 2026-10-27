@@ -59,7 +59,9 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   try {
     settings = readSettingsFn(home);
     if (!settings) return { result: "skip", reason: "no-settings" };
-    expected = launchFor(settings, target);
+    const preset = identity.launch?.compareMode ? identity.launch.settingsPreset : settings.activePreset;
+    expected = launchFor(settings, target, preset);
+    if (identity.launch?.compareMode && !expected) throw new Error(`비교 프리셋 ${preset}의 역할 값 없음`);
   } catch (error) {
     return stop("settings-unreadable", [
       `카드 발령 거절: 실행 모델 설정을 읽을 수 없다 — ${error.message}`,
@@ -93,7 +95,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     };
   }
   if (want.harness !== identity.harness || want.model !== identity.model) {
-    const fallback = matchingFallback(settings, target, identity);
+    const fallback = !identity.launch?.compareMode && matchingFallback(settings, target, identity);
     if (fallback) {
       return {
         result: "warn", code: "fallback",
@@ -109,6 +111,10 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   }
   // 카단이 붙이는 --no-alt-screen만 다른 옛 세션은 같은 명령으로 본다(inline-screen.mjs).
   if (withoutInlineScreen(identity.launch.cmd.trim()) !== withoutInlineScreen(expected.cmd.trim())) {
+    if (identity.launch.compareMode) return stop('compare-choice-changed', [
+      '카드 발령 거절: 비교 세션을 띄운 프리셋의 강도·실행 인자가 바뀌었다',
+      `조치: ${command}`,
+    ], expected.revision);
     return {
       result: "warn", code: "effort-or-args",
       warning: `경고: ${session}의 강도·실행 인자가 지금 ${profile} 기본값과 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,

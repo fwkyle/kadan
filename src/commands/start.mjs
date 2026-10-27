@@ -1,6 +1,7 @@
 // kadan start (HW-3-impl: cli.mjs에서 옮김)
 import { startRoleProfile } from "../role-instructions.mjs";
 import { reviewerLaunch } from "../reviewer-launch.mjs";
+import { pickCompareLaunch } from "../runner-compare.mjs";
 import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../runner-settings.mjs";
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
@@ -80,7 +81,11 @@ export function cmdStart(argv, flags) {
   // 실행 모델 설정이 있으면 --cmd 없이도 역할 기본 명령을 채운다. 다른 명령은 이유를 남긴다(2026-09-23 [kyle] 승인 1단계).
   let launch = null;
   if (!reusing && Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) {
-    try { launch = reviewSelection ?? launchFor(readSettings(ledgerHome()), roleProfile); }
+    try {
+      launch = reviewSelection ?? (roleProfile === 'worker' && flags.cmd === undefined
+        && flags.fallback === undefined ? pickCompareLaunch(ledgerHome(), role)
+          : launchFor(readSettings(ledgerHome()), roleProfile));
+    }
     catch (error) { die(error.message, 2); }
   }
   // 사람이 직접 준 --cmd(adopt·handover 포함)도 대화형 codex면 인라인 화면 플래그를 붙인다. 설정값과의 비교도 같은 꼴로 한다.
@@ -119,6 +124,14 @@ export function cmdStart(argv, flags) {
     }
     console.error(`검수자 선택: ${reviewSelection.model} — ${reviewSelection.reviewFor.reason}`);
   }
+  if (useSettings && launch.compareMode) {
+    launchRecord.compareMode = true;
+    launchRecord.pickId = launch.pickId;
+  }
+  const selected = fallback ?? (useSettings ? launch : null);
+  if (selected) launchRecord.runnerChoice = {
+    runner: selected.runner, model: selected.model, ...(selected.effort ? {effort: selected.effort} : {}),
+  };
   // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
   const cmdPolicy = inspectStartCmdPolicy({ roleProfile, cmd: flags.cmd, reusing });
   if (!cmdPolicy.ok) die(cmdPolicy.message, 2);

@@ -7,15 +7,16 @@ export function reviewerLaunch({settings, entries, workerRole, workerSession, cu
   if (!identity.ok) throw new Error(`검수자 시작 거절: 작업자 실행 모델 확인 실패 — ${identity.message}`);
   const family = modelFamily(identity.model, settings?.families);
   if (!family) throw new Error(`검수자 시작 거절: 작업자 ${identity.model}의 계열을 모른다`);
-  const preset = settings?.presets[settings.activePreset];
+  const presetName = identity.launch.compareMode ? identity.launch.settingsPreset : settings?.activePreset;
+  const preset = settings?.presets[presetName];
   if (!preset?.roles.reviewer) throw new Error('검수자 시작 거절: 검수자 1순위 설정이 없다');
   const candidates = [preset.roles.reviewer, ...(preset.fallback?.reviewer ?? [])];
   const skipped = [];
   for (const [index, value] of candidates.entries()) {
     let candidate;
     try {
-      candidate = index === 0 ? launchFor(settings, 'reviewer')
-        : launchForFallback(settings, 'reviewer', index);
+      candidate = index === 0 ? launchFor(settings, 'reviewer', presetName)
+        : launchForFallback(settings, 'reviewer', index, presetName);
     } catch (error) { skipped.push(`${value.model}: ${error.message}`); continue; }
     // 설정의 model뿐 아니라 실제 명령에서도 같은 모델이 읽혀야 한다.
     const parsed = launchIdentityOf(candidate.cmd);
@@ -31,6 +32,8 @@ export function reviewerLaunch({settings, entries, workerRole, workerSession, cu
     catch (error) { skipped.push(`${candidate.model}: ${error.message}`); continue; }
     return {
       ...candidate,
+      ...(identity.launch.compareMode && index === 0
+        ? {compareMode: true, pickId: identity.launch.pickId} : {}),
       reviewFor: {role: workerRole, session: workerSession, panePid: String(currentPid),
         model: identity.model, family, reviewerModel: parsed.model, reviewerFamily: other,
         reason: `작업자 ${identity.model}(${family})와 다른 계열 ${other} 선택`, skipped},
