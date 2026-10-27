@@ -51,6 +51,7 @@ test('켜진 프리셋 rename/remove/set/import/block 거절, 목록 밖 변경�
   for (const action of [
     () => renamePreset(f.home, {from: 'B', to: 'renamed', ...f.meta()}),
     () => removePreset(f.home, {name: 'B', ...f.meta()}),
+    () => removePreset(f.home, {name: 'A', ...f.meta()}),
     () => setRole(f.home, {role: 'worker', preset: 'B', ...choice('gpt-one'), ...f.meta()}),
     () => importPreset(f.home, {data: exported, as: 'B', replace: true, ...f.meta()}),
     () => blockModel(f.home, {model: 'gpt-two', ...f.meta()}),

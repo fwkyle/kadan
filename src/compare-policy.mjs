@@ -1,6 +1,12 @@
 // 비교 회차의 프리셋 이름과 역할 값을 고정한다. 설정의 모든 저장 입구가 함께 쓴다.
 export const COMPARE_OFF_HINT = '먼저 `kadan runners compare off`';
 
+export function assertComparePresetMutable(settings, name) {
+  if (settings.compare?.enabled && settings.compare.presets.includes(name)) {
+    throw new Error(`비교 중인 프리셋 ${name}은 바꿀 수 없다 — ${COMPARE_OFF_HINT}`);
+  }
+}
+
 export function assertCompareShape(compare) {
   if (compare === undefined) return;
   if (!compare || typeof compare.enabled !== 'boolean' || !Array.isArray(compare.presets)

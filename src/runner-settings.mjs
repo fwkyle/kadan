@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {acquireDirLock} from './dir-lock.mjs';
-import {assertCompareShape, assertCompareUnchanged} from './compare-policy.mjs';
+import {assertCompareShape, assertCompareUnchanged, assertComparePresetMutable} from './compare-policy.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {assertExecBound} from './exec-agent.mjs';
@@ -493,6 +493,7 @@ export function addPreset(home, {name, from, ...meta}) {
 
 export function renamePreset(home, {from, to, ...meta}) {
   return change(home, {...meta, action: 'preset-rename'}, next => {
+    assertComparePresetMutable(next, from);
     if (typeof from !== 'string' || !Object.hasOwn(next.presets, from)) throw new Error(`없는 프리셋: ${from ?? '(없음)'}`);
     checkNewPresetName(next, to);
     // 이름 순서를 지키려고 새 객체로 다시 담는다.
@@ -505,6 +506,7 @@ export function renamePreset(home, {from, to, ...meta}) {
 // 활성 프리셋은 지울 수 없다(발령이 읽는 값이 사라진다). 먼저 다른 프리셋으로 전환한다.
 export function removePreset(home, {name, ...meta}) {
   return change(home, {...meta, action: 'preset-remove'}, next => {
+    assertComparePresetMutable(next, name);
     if (typeof name !== 'string' || !Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name ?? '(없음)'}`);
     if (name === next.activePreset) throw new Error(`활성 프리셋은 지울 수 없다: ${name} — 먼저 kadan runners preset <다른 이름>으로 전환`);
     const before = next.presets[name];
@@ -519,6 +521,7 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
+    assertComparePresetMutable(next, name);
     ensurePreset(next, name);
     const value = {runner, model, ...(effort != null ? {effort} : {})};
     checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
@@ -536,6 +539,7 @@ export function setSeniors(home, {items, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
+    assertComparePresetMutable(next, name);
     ensurePreset(next, name);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
     list.forEach((item, i) => {

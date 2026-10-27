@@ -58,7 +58,10 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   let expected, settings;
   try {
     settings = readSettingsFn(home);
-    if (!settings) return { result: "skip", reason: "no-settings" };
+    if (!settings) {
+      if (identity.launch?.compareMode) throw new Error('비교 세션의 설정 파일 없음');
+      return { result: "skip", reason: "no-settings" };
+    }
     const preset = identity.launch?.compareMode ? identity.launch.settingsPreset : settings.activePreset;
     expected = launchFor(settings, target, preset);
     if (identity.launch?.compareMode && !expected) throw new Error(`비교 프리셋 ${preset}의 역할 값 없음`);

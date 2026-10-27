@@ -227,8 +227,11 @@ export const COMMANDS = {
   },
   // 옛 이름(2026-10-05 advisor→senior 개명). 이미 떠 있는 감독이 옛 지침대로 불러도 같은 명령이 돈다.
   advise: (argv,flags) => COMMANDS.senior(argv,flags),
-  runners: (argv,flags) => console.log(JSON.stringify(runnersCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),
-    record:entry=>appendLedger({...entry,t:new Date().toISOString()})}),null,2)),
+  runners: (argv,flags) => {
+    const result = runnersCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),
+      record:entry=>appendLedger({...entry,t:new Date().toISOString()})});
+    console.log(argv[0] === 'report' && !flags.json ? result : JSON.stringify(result,null,2));
+  },
   card: (argv,flags) => console.log(JSON.stringify(cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
