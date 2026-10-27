@@ -4,6 +4,7 @@ import { fallbackLabels } from "../runner-draft";
 import type { Stamp } from "../types";
 import { PresetEditor } from "./PresetEditor";
 import { PresetManager } from "./PresetManager";
+import { CompareMode } from "./CompareMode";
 import { RunnerTables } from "./RunnerTables";
 import {
   ActionForm,
@@ -16,6 +17,7 @@ import {
 export type Choice = { runner: string; model: string; effort?: string };
 export type Settings = {
   revision: number;
+  compare?: {enabled: boolean; presets: string[]; enabledAt: string | null};
   activePreset: string;
   presets: Record<
     string,
@@ -146,6 +148,7 @@ export default function Runners() {
               </tbody>
             </table>
           </div>
+          <CompareMode settings={data.settings} />
           {!readOnly && (
             <>
           <h2>모델·대체 후보 변경</h2>

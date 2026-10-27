@@ -53,7 +53,8 @@
 
 ## 원격에서 막히는 것
 
-- 모든 쓰기 요청(POST·PUT·DELETE·PATCH 등)은 405 `원격은 조회만 지원합니다`이며 처리기까지 가지 않는다. 막는 경로 28개(29개 중 `/decisions/answer`만 아래 절의 한 길로 열린다): `/ask`, `/secretary/start`, `/roles/restart`, `/cards/{update,create}`, `/decisions/answer`, `/runners/{set,preset-save,preset,preset-add,preset-rename,preset-remove,preset-import,preset-export,fallback,favorite,runner,model-add,model-remove,models-list}`, `/works/{create,update,link,unlink,execute,mail,complete,cancel,reopen}`.
+- 모든 쓰기 요청(POST·PUT·DELETE·PATCH 등)은 405 `원격은 조회만 지원합니다`이며 처리기까지 가지 않는다. 막는 경로 29개(30개 중 `/decisions/answer`만 아래 절의 한 길로 열린다): `/ask`, `/secretary/start`, `/roles/restart`, `/cards/{update,create}`, `/decisions/answer`, `/runners/{compare,set,preset-save,preset,preset-add,preset-rename,preset-remove,preset-import,preset-export,fallback,favorite,runner,model-add,model-remove,models-list}`, `/works/{create,update,link,unlink,execute,mail,complete,cancel,reopen}`.
+- GET `/runners/compare`(비교 상태·뽑힌 수)와 `/runners/compare-report`(비교 결과)는 원격에서도 보인다. 프리셋·모델 이름·숫자·업무/카드 ID만 다루므로 조회는 허용하고 설정 쓰기는 막는다.
 - `/api/dashboard/session`은 원격에 `{"token":"","readOnly":true,"decisionToken":"…"}`를 준다(쓰기 token은 주지 않고, 결정 전용 token만 준다). 로컬에는 `decisionToken`이 없다.
 - 서버가 그리는 화면(`renderCenterWall`)의 token도 빈 값이다. 응답 캐시는 서버가 판정 결과(로컬/원격)로 나눠 쓴다. 구분은 URL 매개변수와 무관해서 주소에 무엇을 붙여도 섞이지 않는다.
 - `?fresh`(캐시 비우기)는 원격에서 무시한다.

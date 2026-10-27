@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {acquireDirLock} from './dir-lock.mjs';
+import {assertCompareShape, assertCompareUnchanged, assertComparePresetMutable} from './compare-policy.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {assertExecBound} from './exec-agent.mjs';
@@ -63,6 +64,7 @@ export function readSettings(home) {
   const file = settingsPath(home);
   if (!fs.existsSync(file)) return null;
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assertCompareShape(value.compare);
   if (value?.version !== 1 || !Number.isInteger(value.revision) || !value.presets?.[value.activePreset]?.roles || typeof value.runners !== 'object')
     throw new Error(`실행 모델 설정 손상: ${file}`);
   // 옛 이름 advisor(자문위원)로 저장된 값은 senior(시니어)로 읽는다(2026-10-05 개명). 다음 저장 때 새 이름으로 남는다.
@@ -148,11 +150,12 @@ export function checkPresetFamilies(preset, families = DEFAULT_FAMILIES) {
 }
 
 // 현재 설정으로 역할의 실행 명령을 만든다. 설정이 없거나 역할 값이 없으면 null.
-export function launchFor(settings, profile) {
+export function launchFor(settings, profile, preset = settings?.activePreset) {
   const role = PROFILE_ROLES[profile];
-  const value = role && settings?.presets[settings.activePreset].roles[role];
+  if (settings && !Object.hasOwn(settings.presets, preset)) throw new Error(`없는 프리셋: ${preset}`);
+  const value = role && settings?.presets[preset].roles[role];
   if (!value) return null;
-  return {cmd: fill(settings, value), role, preset: settings.activePreset, revision: settings.revision, ...value};
+  return {cmd: fill(settings, value), role, preset, revision: settings.revision, ...value};
 }
 
 function fill(settings, value) {
@@ -162,15 +165,16 @@ function fill(settings, value) {
 }
 
 // 활성 프리셋 역할의 N번째(1부터) 폴백으로 실행 명령을 만든다. 자동으로 고르지 않고 번호를 받은 경우에만 쓴다.
-export function launchForFallback(settings, profile, n) {
+export function launchForFallback(settings, profile, n, preset = settings?.activePreset) {
   const role = PROFILE_ROLES[profile];
   if (!role || !settings) throw new Error('폴백 발령에는 실행 모델 설정과 역할 프로필이 필요하다');
-  const list = settings.presets[settings.activePreset].fallback?.[role] ?? [];
+  if (!Object.hasOwn(settings.presets, preset)) throw new Error(`없는 프리셋: ${preset}`);
+  const list = settings.presets[preset].fallback?.[role] ?? [];
   const index = Number(n);
   if (!Number.isInteger(index) || index < 1 || index > list.length)
     throw new Error(`없는 폴백 번호: ${n} — 가능: ${list.length ? `1..${list.length}` : '없음(폴백 목록이 비어 있다)'}`);
   const value = list[index - 1];
-  return {cmd: fill(settings, value), role, preset: settings.activePreset, revision: settings.revision, fallbackIndex: index, ...value};
+  return {cmd: fill(settings, value), role, preset, revision: settings.revision, fallbackIndex: index, ...value};
 }
 
 // 감시 AI 호출 순서: 1순위 뒤에 폴백 목록, 최대 WATCH_MAX_ATTEMPTS개. 설정 파일이나 watch 값이 없으면 null(감시 프로필의 KADAN_JUDGE_MODEL을 쓴다).
@@ -235,7 +239,7 @@ function write(home, value) {
   fs.renameSync(tmp, file);
 }
 
-function lockedSettings(home, apply) {
+export function lockedSettings(home, apply) {
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   const lock = path.join(home, '.runner-settings-lock');
   if (!acquireDirLock(lock)) throw new Error('실행 모델 설정 저장 중: 잠시 뒤 상태를 다시 확인');
@@ -326,6 +330,7 @@ export function change(home, {revision, by, reason, record, action}, apply) {
     }
     const next = structuredClone(current);
     const detail = apply(next);
+    assertCompareUnchanged(current, next, action, detail);
     const warnings = detail?.preset && next.presets[detail.preset]
       ? checkPresetFamilies(next.presets[detail.preset], next.families) : [];
     next.revision = current.revision + 1;
@@ -488,6 +493,7 @@ export function addPreset(home, {name, from, ...meta}) {
 
 export function renamePreset(home, {from, to, ...meta}) {
   return change(home, {...meta, action: 'preset-rename'}, next => {
+    assertComparePresetMutable(next, from);
     if (typeof from !== 'string' || !Object.hasOwn(next.presets, from)) throw new Error(`없는 프리셋: ${from ?? '(없음)'}`);
     checkNewPresetName(next, to);
     // 이름 순서를 지키려고 새 객체로 다시 담는다.
@@ -500,6 +506,7 @@ export function renamePreset(home, {from, to, ...meta}) {
 // 활성 프리셋은 지울 수 없다(발령이 읽는 값이 사라진다). 먼저 다른 프리셋으로 전환한다.
 export function removePreset(home, {name, ...meta}) {
   return change(home, {...meta, action: 'preset-remove'}, next => {
+    assertComparePresetMutable(next, name);
     if (typeof name !== 'string' || !Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name ?? '(없음)'}`);
     if (name === next.activePreset) throw new Error(`활성 프리셋은 지울 수 없다: ${name} — 먼저 kadan runners preset <다른 이름>으로 전환`);
     const before = next.presets[name];
@@ -514,6 +521,7 @@ export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
+    assertComparePresetMutable(next, name);
     ensurePreset(next, name);
     const value = {runner, model, ...(effort != null ? {effort} : {})};
     checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
@@ -531,6 +539,7 @@ export function setSeniors(home, {items, preset, ...meta}) {
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
+    assertComparePresetMutable(next, name);
     ensurePreset(next, name);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
     list.forEach((item, i) => {

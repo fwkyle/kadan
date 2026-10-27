@@ -202,6 +202,16 @@ export function guardedSend({
     ...(runnerGuard?.ledger ? {runnerGuard:runnerGuard.ledger} : {}),
     by: resolveLedgerBy({ source, env }),
     ...(taskId != null ? { taskId } : {}),
+    ...(cardIdentity ? {
+      settingsPreset: cardIdentity.launch.settingsPreset ?? null,
+      compareMode: cardIdentity.launch.compareMode === true,
+      pickId: cardIdentity.launch.pickId ?? null,
+      runnerChoice: cardIdentity.launch.runnerChoice ?? {
+        runner: cardIdentity.harness, model: cardIdentity.model,
+      },
+      launchSource: cardIdentity.launch.launchSource ?? null,
+      ...(cardIdentity.launch.reviewFor ? {reviewFor: cardIdentity.launch.reviewFor} : {}),
+    } : {}),
     ...(originalTaskId!==taskId?{rawTaskId:originalTaskId}:{}),
     bytes: Buffer.byteLength(message),
     digest: digest(message),
