@@ -41,7 +41,8 @@ function usage(command) {
   if (command === 'mail') {
     return '사용법: kadan mail <역할> [--work <업무키>] [--execution <실행키>] ' +
       '[--expect-reply] [--reply-to <우편ID>] [--reply-final] [--keep-turn] [--raw] <메시지...> ' +
-      '(메시지 생략 시 표준 입력). 우편 전용이며 --task는 금지, --execution으로 발령하지 않습니다.';
+      '(메시지 생략 시 표준 입력). 우편 전용이며 --task는 금지, --execution으로 발령하지 않습니다. ' +
+      '--expect-reply는 값이 없다. 긴 본문은 위치 인자 없이 `< 파일`로, 질문은 본문 첫 줄에. 위치 인자와 파일 표준 입력을 함께 주면 거절한다(파이프는 검출하지 못함).';
   }
   if (command === 'dispatch') {
     return '사용법: kadan dispatch <역할> --task <카드ID> [--work <업무키>] ' +
@@ -53,6 +54,10 @@ function usage(command) {
     '[--expect-reply] [--reply-to <우편ID>] [--reply-final] [--keep-turn] <메시지...> (메시지 생략 시 표준 입력). ' +
     '기존 호환 명령입니다. --execution도 조건에 따라 발령으로 추론합니다. ' +
     '새 우편은 mail, 명시 발령은 dispatch --task를 사용하세요.';
+}
+
+function stdinIsNonEmptyFile() {
+  try { const st = fs.fstatSync(0); return st.isFile() && st.size > 0; } catch { return false; }
 }
 
 function deliverMessage(argv, flags, command) {
@@ -79,6 +84,11 @@ function deliverMessage(argv, flags, command) {
   const flagWarning=mailboxFlagWarning(role,flags);
   if(flagWarning)console.error(flagWarning);
   const argText = argv.slice(1).join(" ");
+  // 본문이 위치 인자와 파일 표준 입력에 함께 오면 한쪽이 조용히 버려진다. 내용을 읽지 않고 fstat만 본다.
+  // 파이프(FIFO)는 쓰는 쪽이 안 닫으면 읽기가 멈출 수 있어 검출하지 않는다(잡지 못함).
+  if (argText && stdinIsNonEmptyFile()) {
+    throw new Error('본문이 두 곳에 있다: 위치 인자와 표준 입력(파일). 질문을 본문 첫 줄에 쓰고 위치 인자 없이 `< 파일`로 보내거나, 위치 인자만 쓴다');
+  }
   const input = argText || fs.readFileSync(0, "utf8");
   const message = flags.raw || argText ? input : input.replace(/\n+$/, "");
   if (!message) die("보낼 메시지가 비어 있다");
