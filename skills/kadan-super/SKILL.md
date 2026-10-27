@@ -60,6 +60,8 @@ description: "카단 여러 판의 부하·충돌·우선순위와 역할 폭주
 
 ## 카단 명령 표
 
+Claude 한도 대응은 [한도에 멈춘 역할 이어가기](references/claude-limit.md)를 따른다.
+
 `kadan`이 PATH에 없으면 `node <저장소>/src/cli.mjs`로 치환한다.
 
 | 목적 | 명령 |

@@ -11,6 +11,7 @@ import { readStatusLine } from "./watch-status-line.mjs";
 import { STATE_CHANGED_CODE } from "./restart.mjs";
 import { scrubForAI } from "./explain-input.mjs";
 import { scrubScreen } from "./revive.mjs";
+import { claudeLimitMenu } from "./claude-limit-menu.mjs";
 
 const SECRETARY = "비서";
 const MAX_TAIL_LINES = 4;
@@ -62,6 +63,11 @@ const limitHeadOf = (line) => {
 // 알려진 한계(고치지 않음, 판정은 추천이다): 여러 줄 응답·도구 출력 뒤 빈 줄을 건너 나온 문구(F5), 문구로 시작하는 응답 첫 줄
 // `⏺ You've hit your …`(F7)은 한도로 잘못 보일 수 있다. 실제 표본이 2.1.308 이미지 전사 1장뿐이라 규칙을 더 다듬지 않는다.
 export function claudeLimitLine(screen) {
+  const menu = claudeLimitMenu(screen);
+  if (menu) {
+    // 실제 메뉴 아래에는 입력창이 없다. 메뉴 앞의 기존 한도 줄 판정을 그대로 재사용한다.
+    return claudeLimitLine(screen.split('\n').slice(0, menu.title).join('\n') + '\n❯');
+  }
   const lines = trimmedLines(screen);
   const composer = lines.findLastIndex((line) => ANY_COMPOSER.test(line));
   if (composer < 0 || !CLAUDE_INPUT.test(lines[composer])) return null;
@@ -124,6 +130,7 @@ export function claudeScreenTail(screen) {
 export function judgeScreen(screen, select) {
   const status = readStatusLine(screen);
   if (status.kind === "working") return { verdict: "skip", reason: "응답 생성 중" };
+  if (select === 'all' && claudeLimitMenu(screen)) return { verdict: 'skip', reason: '한도 선택 메뉴' };
   const limit = claudeLimitMatch(screen);
   if (limit) return { verdict: "target", reason: "한도로 보임(규칙)", resetLine: limit.resetLine };
   if (status.kind === "idle") return select === "all" ? { verdict: "target", reason: "입력 대기" } : { verdict: "none", reason: "해당 없음" };

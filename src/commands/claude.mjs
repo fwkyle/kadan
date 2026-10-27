@@ -1,4 +1,4 @@
-// kadan claude refresh — 한도에 걸린 Claude 세션을 골라 보여 주고(PR-1), 사람이 --role로 고른 세션만 같은 대화로 다시 켠다(PR-2).
+// kadan claude refresh — 한도 미리보기, --nudge로 이어가기, 사람이 --yes로 고른 세션의 재시작.
 // 계정 전환까지 묶는 일괄 실행(--switch)은 PR-3이다. 미리보기는 원장·우편·알림을 쓰지 않고 바닥에 키를 보내지 않는다.
 import { taskIdentity } from "../task-identity.mjs";
 import { CardStore } from "../card-store.mjs";
@@ -9,14 +9,21 @@ import { pendingCardsFor } from "../cli-start-support.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole } from "../restart.mjs";
 import { restartDeps } from "./restart.mjs";
+import { sendTmuxKey } from '../floor-tmux.mjs';
+import { guardedSend } from '../cli-guarded-send.mjs';
+import { appendLedger } from '../ledger.mjs';
+import { humanIdleMsFor } from '../notification-guard.mjs';
+import { runNudge, formatNudgeResult } from '../claude-nudge.mjs';
 import {
   buildPreview, formatPreview, previewJson, readAccounts, runRefresh, formatRefreshResult, parseRoleList, roleOfSession, HUMAN_ONLY_MESSAGE,
 } from "../claude-refresh.mjs";
 
-const KNOWN_FLAGS = new Set(["select", "json", "no-accounts", "yes", "switch", "role", "reason", "interval"]);
+const KNOWN_FLAGS = new Set(["select", "json", "no-accounts", "yes", "switch", "role", "reason", "interval", "nudge"]);
 const DEFAULT_INTERVAL_SEC = 8;
 const MAX_INTERVAL_SEC = 600;
-const USAGE = "사용법: kadan claude refresh [--select limit|all] [--json] [--no-accounts]  |  --yes --role <역할>[,<역할>…] [--reason <이유>] [--interval <초>]";
+const USAGE = '사용법: kadan claude refresh [--select limit|all] [--json] [--no-accounts]  |  ' +
+  '--nudge [--role <역할>[,…]] [--interval <초>] [--json]  |  ' +
+  '--yes --role <역할>[,…] [--reason <이유>] [--interval <초>]';
 
 const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
@@ -24,11 +31,18 @@ export function cmdClaude(argv, flags) {
   const unknown = Object.keys(flags).find((name) => !KNOWN_FLAGS.has(name));
   if (unknown) die(`알 수 없는 옵션: --${unknown}`, 2);
   if (argv[0] !== "refresh" || argv.length > 1) die(USAGE, 2);
+  const nudge = flags.nudge === true;
+  if (flags.nudge !== undefined && !nudge) die('--nudge는 값 없이 쓴다', 2);
+  if (nudge && ['yes', 'switch', 'select', 'reason'].some(name => flags[name] !== undefined)) {
+    die('--nudge는 --yes·--switch·--select·--reason과 함께 쓰지 않는다', 2);
+  }
   if (flags.switch !== undefined) die("--switch는 PR-3에서 지원한다 — 지금은 미리보기와 --yes --role 다시 켜기만 한다", 2);
   const yes = flags.yes === true;
   if (flags.yes !== undefined && !yes) die("--yes는 값 없이 쓴다", 2);
   if (yes && flags.role === undefined) die("--yes만으로는 실행하지 않는다 — 다시 켤 대상은 사람이 --role <역할>[,<역할>…]로 고른다(미리보기 표의 role 칸)", 2);
-  if (!yes && (flags.reason !== undefined || flags.interval !== undefined)) die("--reason·--interval은 --yes와 함께 쓴다", 2);
+  if (!yes && !nudge && (flags.reason !== undefined || flags.interval !== undefined)) {
+    die('--reason은 --yes, --interval은 --yes 또는 --nudge와 함께 쓴다', 2);
+  }
   // 사람이 친 명령만 실제로 켠다. KADAN_ROLE은 카단 역할 세션 안에서 설정된다(스스로 밝힌 신분이라 완전한 인증은 아니다).
   if (yes && process.env.KADAN_ROLE) die(HUMAN_ONLY_MESSAGE, 2);
   const select = flags.select ?? (flags.role !== undefined ? "all" : "limit");
@@ -53,6 +67,20 @@ export function cmdClaude(argv, flags) {
   let chosen = null;
   if (flags.role !== undefined) {
     try { chosen = parseRoleList(flags.role, liveRoles, liveSessions); } catch (error) { die(error.message, 2); }
+  }
+
+  if (nudge) {
+    const results = runNudge({ entriesOf: () => readLedger(home), floor, pendingCards, roles: chosen,
+      intervalSec, sleep: sleepMs,
+      pressKey: (session, key, options) => sendTmuxKey(session, key, { ...options,
+        humanIdleMs: humanIdleMsFor(entries.findLast(e => e.kind === 'start' && e.session === session)) }),
+      send: ({ escaped, ...options }) => guardedSend({ ...options,
+        record: entry => appendLedger(entry.kind === 'send'
+          ? { ...entry, nudge: true, ...(escaped ? { escaped: true } : {}) } : entry, home) }),
+    });
+    console.log(flags.json === true ? JSON.stringify({ results }, null, 2) : formatNudgeResult(results));
+    if (results.some(result => result.outcome === 'failed')) process.exitCode = 1;
+    return;
   }
 
   if (!yes) {
