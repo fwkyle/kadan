@@ -70,9 +70,8 @@ function sampleOf(execution, work, index, outcomes, picks) {
   if (!reason && reviewerChoices.size > 1) reason = '검수자 변경';
   if (!reason && (!send.settingsPreset || !send.runnerChoice || !reviewer)) reason = '귀속 확인 필요';
   if (!reason && reviews.length && !matched.length) reason = '귀속 확인 필요';
-  const pending = !run.done || used.some(e => !index.runs.get(e.key)?.done);
   return {workKey: work.key, key: execution.key, preset: send.settingsPreset,
-    worker: send.runnerChoice, reviewer, send, reason, pending, failed: run.done?.result === 'failed',
+    worker: send.runnerChoice, reviewer, send, reason, failed: run.done?.result === 'failed',
     rounds: relativeRounds(execution.round, firstPass?.round),
     implementationRound: Number(execution.round), passedRound: firstPass ? Number(firstPass.round) : null,
     durationMs: run.done ? time(run.done) - time(send) : null,
@@ -149,8 +148,6 @@ export function calculateCompareReport({entries, works, cards}, {since, epoch, a
     row.samples += samples.length;
     row.independentSamples++;
     row.failed += samples.filter(s => s.failed).length;
-    if (samples.some(s => s.pending)) { row.inProgress++; continue; }
-    row.completedSamples++;
     const firstRound = Math.min(...samples.map(s => s.implementationRound));
     const branches = new Map();
     for (const sample of samples) {
@@ -160,6 +157,11 @@ export function calculateCompareReport({entries, works, cards}, {since, epoch, a
         ? (previous === null ? passed : Math.min(previous, passed)) : previous);
     }
     const passed = [...branches.values()];
+    if (!passed.every(Number.isFinite) && !['done', 'cancelled'].includes(work.status)) {
+      row.inProgress++;
+      continue;
+    }
+    row.completedSamples++;
     const rounds = relativeRounds(firstRound,
       passed.every(Number.isFinite) ? Math.max(...passed) : null);
     if (samples.every(s => !s.failed) && rounds === 1) row.firstRoundPasses++;

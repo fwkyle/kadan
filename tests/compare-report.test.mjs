@@ -17,7 +17,7 @@ function fixture() {
     role = null} = {}) => {
     const n = data.entries.length, key = `test/impl-${n}`, reviewKey = `test/review-${n}`;
     let w = data.works.find(w => w.key === work);
-    if (!w) { w = {key: work, executions: []}; data.works.push(w); }
+    if (!w) { w = {key: work, status: 'open', executions: []}; data.works.push(w); }
     const workerRole = role ?? `test-worker-${n}`, reviewRole = `test-reviewer-${n}`, pickId = `pick-${n}`;
     const pick = {kind: 'compare-pick', pickId, preset, role: workerRole, epoch, t: stamp(0),
       worker: choice(worker), reviewer: choice(reviewer, 'high')};
@@ -107,8 +107,8 @@ test('병렬 갈래는 모두 통과해야 하며 가장 늦은 갈래의 첫 pa
     if (bPass === 2) f.add({role: 'test-b', round: 2, passRound: 2});
     const row = rows(calculateCompareReport(f.data))[0];
     assert.equal(row.independentSamples, 1);
-    assert.equal(row.completedSamples, 1);
-    assert.equal(row.inProgress, 0);
+    assert.equal(row.completedSamples, bPass === null ? 0 : 1);
+    assert.equal(row.inProgress, bPass === null ? 1 : 0);
     assert.equal(row.firstRoundPasses, expected === 1 ? 1 : 0);
     assert.equal(row.medianRounds, expected);
   }
@@ -125,10 +125,38 @@ test('병렬 갈래는 모두 통과해야 하며 가장 늦은 갈래의 첫 pa
   const other = finished.add({role: 'test-b', passRound: null});
   finished.data.cards = finished.data.cards.filter(card => card.key !== other.reviewKey);
   const withoutPass = rows(calculateCompareReport(finished.data))[0];
-  assert.equal(withoutPass.completedSamples, 1, '모두 done이고 pass가 없으면 통과 못 함');
-  assert.equal(withoutPass.inProgress, 0);
+  assert.equal(withoutPass.completedSamples, 0, '열린 업무는 모두 done이어도 진행 중');
+  assert.equal(withoutPass.inProgress, 1);
   assert.equal(withoutPass.firstRoundPasses, 0);
   assert.equal(withoutPass.medianRounds, null);
+});
+
+test('미통과 갈래의 분모 포함 여부는 실행 done이 아니라 업무 상태로 정한다', () => {
+  for (const status of ['open', 'hold', 'done', 'cancelled']) {
+    for (const scenario of ['no-review', 'second-review', 'changes', 'exception', 'parallel', 'pending']) {
+      const f = fixture();
+      if (scenario === 'second-review') {
+        f.add({role: 'test-a', passRound: null});
+        f.add({role: 'test-a', round: 2, review: false});
+      } else if (scenario === 'parallel') {
+        f.add({role: 'test-a'});
+        f.add({role: 'test-b', passRound: null});
+      } else {
+        const run = f.add({review: scenario !== 'no-review', passRound: null,
+          pending: scenario === 'pending'});
+        if (scenario === 'exception') {
+          f.data.cards.find(card => card.key === run.reviewKey).result.outcome = 'exception';
+        }
+      }
+      f.data.works[0].status = status;
+      const row = rows(calculateCompareReport(f.data))[0];
+      const closed = ['done', 'cancelled'].includes(status);
+      assert.equal(row.completedSamples, closed ? 1 : 0, `${status}/${scenario}`);
+      assert.equal(row.inProgress, closed ? 0 : 1, `${status}/${scenario}`);
+      assert.equal(row.firstRoundPasses, 0);
+      assert.equal(row.medianRounds, null);
+    }
+  }
 });
 
 test('명시 명령·폴백 작업자는 전역 제외 수만 남기며 비교 밖 행을 만들지 않는다', () => {
@@ -148,6 +176,9 @@ test('미완료는 비율 분모에서 제외, failed는 별도 열, 미통과�
   const f = fixture(); f.add(); f.add({work: 'test/pending', pending: true});
   f.add({work: 'test/failed', failed: true, review: false});
   f.add({work: 'test/changes', passRound: null});
+  for (const work of f.data.works) {
+    if (['test/failed', 'test/changes'].includes(work.key)) work.status = 'done';
+  }
   const row = rows(calculateCompareReport(f.data))[0];
   assert.equal(row.independentSamples, 4); assert.equal(row.completedSamples, 3);
   assert.equal(row.firstRoundPassRate, 1 / 3); assert.equal(row.failed, 1); assert.equal(row.inProgress, 1);
@@ -221,4 +252,21 @@ test('SQLite 범위 조회와 실제 report CLI: 과거 원장 제외, 읽기 �
   assert.equal(rows(JSON.parse(run('--json', '--since', stamp(30)).stdout)).length, 0);
   assert.notEqual(run('--since', 'broken').status, 0);
   assert.equal(storageVersion(f.home), before);
+});
+
+test('report는 기존 업무 스트림의 마지막 상태로 진행 중 여부를 읽는다', () => {
+  const f = compareFixture();
+  setCompare(f.home, {enabled: true, presets: 'A', now: () => epoch, ...f.meta()});
+  const fake = fixture(); fake.add({review: false});
+  for (const entry of fake.data.entries) f.record(entry);
+  const work = fake.data.works[0];
+  for (const status of ['open', 'hold', 'done', 'cancelled', 'open']) {
+    appendStream(f.home, `works/${work.key}/events.jsonl`, {...work, status});
+    const before = storageVersion(f.home);
+    const row = rows(compareReport(f.home))[0];
+    const closed = ['done', 'cancelled'].includes(status);
+    assert.equal(row.completedSamples, closed ? 1 : 0);
+    assert.equal(row.inProgress, closed ? 0 : 1);
+    assert.equal(storageVersion(f.home), before);
+  }
 });
