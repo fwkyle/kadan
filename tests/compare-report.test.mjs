@@ -13,11 +13,12 @@ const stamp = minutes => new Date(Date.parse(epoch) + minutes * 60000).toISOStri
 function fixture() {
   const data = {entries: [], works: [], cards: []};
   const add = ({work = 'test/work', preset = 'A', round = 1, passRound = round, failed = false,
-    pending = false, reviewer = 'claude-one', worker = 'gpt-one', fallback = null, review = true} = {}) => {
+    pending = false, reviewer = 'claude-one', worker = 'gpt-one', fallback = null, review = true,
+    role = null} = {}) => {
     const n = data.entries.length, key = `test/impl-${n}`, reviewKey = `test/review-${n}`;
     let w = data.works.find(w => w.key === work);
     if (!w) { w = {key: work, executions: []}; data.works.push(w); }
-    const workerRole = `test-worker-${n}`, reviewRole = `test-reviewer-${n}`, pickId = `pick-${n}`;
+    const workerRole = role ?? `test-worker-${n}`, reviewRole = `test-reviewer-${n}`, pickId = `pick-${n}`;
     const pick = {kind: 'compare-pick', pickId, preset, role: workerRole, epoch, t: stamp(0),
       worker: choice(worker), reviewer: choice(reviewer, 'high')};
     const start = {kind: 'start', role: workerRole, cmd: 'fake', roleProfile: 'worker',
@@ -82,7 +83,7 @@ test('순차 2·3라운드는 업무 첫 구현부터 세고 첫 라운드 시�
   for (const rounds of [2, 3]) {
     const f = fixture();
     for (let round = 1; round <= rounds; round++) {
-      const run = f.add({round, passRound: round === rounds ? round : null});
+      const run = f.add({round, passRound: round === rounds ? round : null, role: 'test-sequential'});
       run.send.t = stamp((round - 1) * 40 + 1);
       const done = f.data.entries.find(e => e.kind === 'done' && e.executionKey === run.key);
       done.t = stamp((round - 1) * 40 + 1 + round * 10);
@@ -96,6 +97,38 @@ test('순차 2·3라운드는 업무 첫 구현부터 세고 첫 라운드 시�
     const since = calculateCompareReport(f.data, {since: stamp(25)});
     assert.equal(rows(since).reduce((sum, r) => sum + r.independentSamples, 0), 0);
   }
+});
+
+test('병렬 갈래는 모두 통과해야 하며 가장 늦은 갈래의 첫 pass로 왕복을 센다', () => {
+  for (const [bPass, expected] of [[null, null], [1, 1], [2, 2]]) {
+    const f = fixture();
+    f.add({role: 'test-a'});
+    f.add({role: 'test-b', passRound: bPass === 1 ? 1 : null});
+    if (bPass === 2) f.add({role: 'test-b', round: 2, passRound: 2});
+    const row = rows(calculateCompareReport(f.data))[0];
+    assert.equal(row.independentSamples, 1);
+    assert.equal(row.completedSamples, 1);
+    assert.equal(row.inProgress, 0);
+    assert.equal(row.firstRoundPasses, expected === 1 ? 1 : 0);
+    assert.equal(row.medianRounds, expected);
+  }
+  const f = fixture();
+  f.add({role: 'test-a'});
+  f.add({role: 'test-b', pending: true});
+  const row = rows(calculateCompareReport(f.data))[0];
+  assert.equal(row.completedSamples, 0);
+  assert.equal(row.inProgress, 1);
+  assert.equal(row.firstRoundPasses, 0);
+  assert.equal(row.medianRounds, null);
+  const finished = fixture();
+  finished.add({role: 'test-a'});
+  const other = finished.add({role: 'test-b', passRound: null});
+  finished.data.cards = finished.data.cards.filter(card => card.key !== other.reviewKey);
+  const withoutPass = rows(calculateCompareReport(finished.data))[0];
+  assert.equal(withoutPass.completedSamples, 1, '모두 done이고 pass가 없으면 통과 못 함');
+  assert.equal(withoutPass.inProgress, 0);
+  assert.equal(withoutPass.firstRoundPasses, 0);
+  assert.equal(withoutPass.medianRounds, null);
 });
 
 test('명시 명령·폴백 작업자는 전역 제외 수만 남기며 비교 밖 행을 만들지 않는다', () => {

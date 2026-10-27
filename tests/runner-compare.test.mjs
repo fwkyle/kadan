@@ -44,6 +44,24 @@ test('비교 검수자 폴백은 그 세션 프리셋 후보를 찾아 경고로
   assert.equal(result.code, 'fallback');
 });
 
+test('비교 목록 밖 옛 프리셋 폴백은 활성 프리셋 변경 뒤 거절한다', () => {
+  for (const compare of [undefined, {enabled: false, presets: ['E'], enabledAt: null}]) {
+    const f = compareFixture();
+    const settings = readSettings(f.home);
+    settings.compare = compare;
+    settings.presets.C.fallback.worker = [choice('claude-two')];
+    f.save(settings);
+    const fallback = launchForFallback(readSettings(f.home), 'worker', 1, 'A');
+    setActivePreset(f.home, {preset: 'C', ...f.meta()});
+    const result = inspectDispatchRunnerGuard({home: f.home, role: 'test-worker',
+      session: 'kadan-test-worker', profile: 'worker',
+      identity: {harness: 'codex', model: fallback.model, launch: {cmd: fallback.cmd,
+        launchSource: 'fallback', fallbackIndex: 1, settingsPreset: 'A'}}});
+    assert.equal(result.result, 'reject');
+    assert.equal(result.code, 'runner-or-model');
+  }
+});
+
 test('옛 파일 호환, CLI on/off/show, revision·이유·목록 전체 검증', () => {
   const f = compareFixture();
   assert.equal(readSettings(f.home).compare, undefined);
