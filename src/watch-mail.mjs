@@ -98,9 +98,10 @@ function eligibleLetters(entries, cards, works, now, graceMs, parents, letters =
         }
         continue;
       }
-      // 첫 알림은 업무가 done/cancelled여도 낸다(받는 쪽이 아직 못 본 편지). 일시정지(hold)는 제외한다.
-      // 넣은 뒤 5분 알림은 닫힌 업무면 생략한다.
-      const blocked = stage === 'initial' ? related.some(work => work.status === 'hold') : related.some(work => work.status !== 'open');
+      // 첫 알림은 연결 업무 상태(hold·done·cancelled)와 무관하게 낸다. 받는 쪽이 아직 못 본 편지이고 hold는 보낸 쪽 업무의
+      // 상태다(2026-10-27: hold 아래 승인 질문이 3시간 묻힘). 안내는 우편당 1번뿐이라 소음이 작다.
+      // 넣은 뒤 5분 알림은 open이 아닌 업무면 생략한다.
+      const blocked = stage === 'initial' ? false : related.some(work => work.status !== 'open');
       if (!blocked) out.push({mail, stage});
       continue;
     }

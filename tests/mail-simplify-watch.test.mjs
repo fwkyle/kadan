@@ -105,14 +105,20 @@ test('함정 B: 표지 없는 옛 우편은 시각과 상관없이 옛 규칙 �
   assert.equal(g.sent.length, 0, '옛 우편은 못 넣어도 예약이 풀리지 않아 재시도하지 않는다');
 });
 
-test('닫힌 업무: 첫 알림은 내고 5분 알림은 생략하며, 일시정지(hold)는 제외한다', () => {
+test('닫힌·보류 업무: 첫 알림은 모두 내고 5분 알림은 open이 아니면 생략한다', () => {
+  for (const status of ['done', 'cancelled', 'hold']) {
+    const f = fixture([stored('m1', {workKey: 'r/w'})]);
+    f.works = [{key: 'r/w', status, executions: []}];
+    f.tick(); assert.equal(f.sent.length, 1, `${status}여도 첫 알림`);
+    f.now += 5 * MIN; f.tick(); assert.equal(f.sent.length, 1, `${status}면 두 번째 알림은 생략`);
+  }
+});
+
+test('보류(hold) 업무 아래 우편은 상위 알림(escalate)도 나가지 않는다', () => {
   const f = fixture([stored('m1', {workKey: 'r/w'})]);
-  f.works = [{key: 'r/w', status: 'done', executions: []}];
-  f.tick(); assert.equal(f.sent.length, 1, 'done이어도 첫 알림');
-  f.now += 5 * MIN; f.tick(); assert.equal(f.sent.length, 1, '두 번째 알림은 닫힌 업무라 생략');
-  const g = fixture([stored('m2', {workKey: 'r/w'})]);
-  g.works = [{key: 'r/w', status: 'hold', executions: []}];
-  g.tick(); assert.equal(g.sent.length, 0);
+  f.works = [{key: 'r/w', status: 'hold', executions: []}];
+  f.tick(); assert.equal(f.sent.length, 1);
+  f.now += 30 * MIN; f.tick(); assert.equal(f.sent.length, 1, 'hold는 첫 알림 뒤로 조용하다');
 });
 
 test('디코 우편은 키 전달 기록 없이 저장되어 다음 순회에 바로 알린다', () => {
