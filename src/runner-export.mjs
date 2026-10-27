@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {NAME_PATTERN} from './runner-table.mjs';
+import {assertComparePresetMutable} from './compare-policy.mjs';
 import {
   EXPLAIN_MAX_ATTEMPTS, SETTINGS_ROLES, assertSeniorShape, change, checkChoice, checkNewPresetName,
   findBlocked, readSettings, runnerChoices, seniorList,
@@ -262,6 +263,7 @@ export function importPreset(home, {data, as, replace = false, readCodexModels, 
   let differences;
   const next = change(home, {...meta, action: 'preset-import'}, settings => {
     const name = as ?? file.name;
+    assertComparePresetMutable(settings, name);
     // 이름 원문은 --as(호출자 입력)이거나 이 기계에 이미 있는 이름일 때만 출력한다. 파일에서 온 이름은 고정 문구로만 알린다.
     const known = as != null || Object.hasOwn(settings.presets, name);
     const tail = known ? `가져오려던 이름: ${name}` : '파일의 preset.name';

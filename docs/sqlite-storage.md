@@ -30,6 +30,17 @@
 
 카드 Markdown, 우편 본문, 보고서, 인계 JSON, 계층 설정은 파일로 유지한다. 새 실행의 `cards/<저장소>/<실행ID>/result.md`와 `evidence/`도 파일이며, 백업·이전 때 DB와 `cards/` 전체를 함께 보존한다. DB가 이 파일들의 변경까지 원자적으로 확정하는 것은 아니다. 신규 카드 생성 중 중단되면 본문만 남을 수 있으며 자동 삭제하지 않는다. 재생성 전에 원인 확인이 필요하다.
 
+## 비교 모드 예약과 보고 조회
+
+`system/events.jsonl`의 `compare-pick`은 세션 생성 전의 선택 예약이다.
+`pickId`, `epoch`(compare.enabledAt), `settingsRevision`, `preset`, `role`,
+작업자·검수자 선택값을 남긴다. 성공한 start와 카드 발령 send는 같은 pickId를 보존한다.
+예약 수는 실제 시작 수와 다를 수 있으며 보고서에서 둘을 나눠 표시한다.
+
+예약 집계는 설정에 저장한 회차 시작 `rowid` 뒤만, 보고서는 최초 비교 시작 `rowid` 뒤만 읽는다.
+관련 업무·카드는 `heads`의 stream 키로 읽고 전체 카드 상태 목록은 만들지 않는다.
+기존 스키마·사건을 수정하지 않는다. [비교 모드](runner-settings.md#비교-모드) 참조.
+
 ## 검증
 
 ```sh

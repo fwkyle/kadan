@@ -200,6 +200,10 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
 
 - `plan`: `role` 없이 `board`, `taskId`, `by`를 기록한다. 감독이 판을 열 때 카드
   목록을 미리 적는다. 남은 일은 distinct(plan ∪ send) − distinct(done)이다.
+- `compare-pick`: 비교 모드의 시작 전 예약이다. `pickId`, `epoch`(회차),
+  `settingsRevision`, `preset`, `role`, 작업자·검수자 선택값을 시스템 영역에 기록한다.
+  실제 시작과 카드 발령은 같은 pickId·compareMode·settingsPreset을 남긴다.
+  예약 수와 실제 시작 수는 다를 수 있다. [비교 모드](runner-settings.md#비교-모드)를 따른다.
 - `start`: `role`은 시작 대상이다. pane PID와 창을 연 방법을 포함하고, `by`는
   시작시킨 사람 또는 역할이다. `--cmd`로 띄우면 명령 원문(`cmd`)과 거기서 읽은
   실행기(`harness` — 명령 첫 낱말)·모델(`model` — `--model` 값)을 함께 적는다
