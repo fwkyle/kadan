@@ -132,7 +132,7 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 요약은 템플릿 전문만 빼고, 수신 역할·회신 대상·연결 업무/실행·완료 방식·참고 파일 경로는 그대로 둔다.
 대신 `role-templates/<프로필>-summary.md`(`conductor-summary.md`·`super-summary.md`)가 붙는다. 전문 경로는 참고 파일 목록에 남는다.
 요약일 때도 템플릿 파일은 읽는다(지문 비교용). 줄어드는 것은 메시지뿐이다.
-`SUMMARY_PROFILES`·`FULL_INTERVAL_MS`(1시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
+`SUMMARY_PROFILES`·`FULL_INTERVAL_MS`(3시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
 현재 범위는 프로필 `conductor`·`super`, 모든 판이다(2026-10-24 슈퍼 승인, kyle 단계안 'c'의 2단계).
 역할 이름·판 조건은 보지 않는다. 비서·작업자·검수자는 전문이다. 프로필을 못 정한 역할은 지침을 붙이지 않는다(`mode=none`, 메타 `status=not-applied`, 사유 `unknown-role` 등 프로필 근거 값; 코드 `composeRoleInstructions`).
 전문 조건은 아래 표 그대로다. 요약 파일은 템플릿 지문에 들어가지 않아 나중에 고쳐도 전문 재전송이 없다.
@@ -148,7 +148,7 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 | 이 세대에 전문이 없음(첫 안내·새 대화 첫 우편 포함) | `generation-first` |
 | 이 세대 마지막 전문이 `keyDelivery !== 'sent'` | `delivery-unclear` |
 | 프로필 또는 `templateDigest`가 마지막 전문과 다름 | `profile-changed` · `template-changed` |
-| 마지막 전달 성공 전문 뒤 1시간 이상 경과(정확히 60분 포함) | `interval` |
+| 마지막 전달 성공 전문 뒤 3시간 이상 경과(정확히 180분 포함) | `interval` |
 | 위에 해당 없음 | 요약(`within-interval`) |
 
 - 이어 연 start는 세대 경계가 아니라서(우편 세대 그대로) 압축된 대화가 규칙을 잊었을 수 있는 자리만 따로 센다. 센다: `restartOf`, `conversationMode==='resume'`, `--inherit-mail`(`inheritMail`), `restoredFrom`, `secretaryResumeSource`. 안 센다: `sameProcess`(같은 pane PID로 다시 기록된 살아 있는 세션 재사용, 새 프로세스도 대화 재로드도 없음). new·fork는 이미 새 세대라 `generation-first`다. 전문이 한 번 시도되면(`sent`면 풀리고, 실패면 `delivery-unclear`) `resumed-generation`은 끝난다. 이유 우선순위는 resumed-generation → dispatch → generation-first → 나머지 순이며 어느 쪽이든 전문이다.
