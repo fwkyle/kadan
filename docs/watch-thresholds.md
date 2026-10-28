@@ -64,7 +64,7 @@
 | 훅 경계 신선도 | 30분 | `stop-hook-context.mjs:13` | 오래된 경계는 이미 지난 일 |
 | 감독 정기 확인 | 1시간 | `watch-supervisor-health.mjs:8` | 위 계단 참조 |
 | 되살리기 횟수 창 | 1시간 | `revive.mjs:14` | 창 안 되살림 횟수 상한(`REVIVE_CAP` 3) |
-| 역할 지침 전문 재전송 | 1시간 | `role-instructions.mjs:27` | 현재 세대의 마지막 전문(full) 전달 성공 뒤 이 시간이 지나면 전문을 다시 보냄. 요약(summary) 전달은 시계를 다시 시작하지 않음(`role-instructions.mjs:221-231`) |
+| 역할 지침 전문 재전송 | 3시간 | `role-instructions.mjs:28` | 현재 세대의 마지막 전문(full) 전달 성공 뒤 이 시간이 지나면 전문을 다시 보냄. 요약(summary) 전달은 시계를 다시 시작하지 않음(`role-instructions.mjs:208-221`) |
 | 설명 AI 미확정 유예 | 10분 | `explain-events.mjs:9` | 위 '설명 AI 막힘 사건'(실행 이력 '완료 미확인' 표시와 무관) |
 | 경보 중복 제거 | 10분 | `user-notify.mjs:22` | 같은 경보 반복 억제 |
 | 오래된 알림 재안내 | 10분 | `watch-stale-notice.mjs:9` | 재안내 간격 |

@@ -34,7 +34,7 @@ test('1 세대에 full 없음 → full/generation-first', () => {
   assert.match(r.message, /kadan:receiver-instructions/);
 });
 
-test('2 전달 성공 full 1시간 안 → summary(B 줄·금지선 두 줄·전문 경로 두 개)', () => {
+test('2 전달 성공 full 3시간 안 → summary(B 줄·금지선 두 줄·전문 경로 두 개)', () => {
   const s = setup(), r = compose(KADAN_ROLE_NAME, {home: s.h, entries: s.entries});
   assert.deepEqual(meta(r), ['summary', 'within-interval']);
   assert.match(r.instructions, /수신 역할: kadan-시험판-감독/);
@@ -63,7 +63,7 @@ test('4 직전 full이 not-sent·unknown → full/delivery-unclear', () => {
   }
 });
 
-test('5 full 뒤 1시간 넘음 → full/interval', () => {
+test('5 full 뒤 3시간 넘음 → full/interval', () => {
   const s = setup(), old = fullSend(KADAN_ROLE_NAME, s.f, {t: iso(NOW - FULL_INTERVAL_MS - 1000)});
   assert.deepEqual(meta(compose(KADAN_ROLE_NAME, {home: s.h, entries: [start(KADAN_ROLE_NAME), old]})), ['full', 'interval']);
 });
@@ -131,7 +131,7 @@ test('12 guardedSend 원장 줄에 instructions 객체와 keyDelivery', () => {
   assert.equal(stored.at(-1).keyDelivery, 'sent');
 });
 
-test('14 다른 레포 판 conductor도 1시간 안이면 summary(conductor-summary)', () => {
+test('14 다른 레포 판 conductor도 3시간 안이면 summary(conductor-summary)', () => {
   const h = home(), f = {digest: digestOf(OTHER_ROLE_NAME, h)};
   const entries = [start(OTHER_ROLE_NAME, undefined, {cwd: '/x/Dev/other-repo'}), fullSend(OTHER_ROLE_NAME, f)];
   const r = compose(OTHER_ROLE_NAME, {home: h, entries});
@@ -200,7 +200,7 @@ test('17 실패 기록 뒤에도 template-changed·interval은 마지막 성공 
   t.state.fail = null; assert.equal(t.send().instructions.reason, 'delivery-unclear');
   fs.writeFileSync(path.join(t.h, 'c.md'), '# v3');
   assert.equal(t.send().instructions.reason, 'template-changed');
-  // interval: 실패 줄이 끼어 있어도 마지막 성공 전문 뒤 1시간이 지나면 interval
+  // interval: 실패 줄이 끼어 있어도 마지막 성공 전문 뒤 3시간이 지나면 interval
   const s = setup(), old = fullSend(KADAN_ROLE_NAME, s.f, {t: iso(NOW - FULL_INTERVAL_MS - 5)});
   const failedLine = {kind: 'send-failed', role: KADAN_ROLE_NAME, keyDelivery: 'unknown', t: iso(NOW - 1000), instructions: {mode: 'full', reason: 'x', profile: 'conductor', templateDigest: s.f.digest, generation: 0}};
   const ok = {...old, t: iso(NOW - FULL_INTERVAL_MS - 5)};
@@ -233,7 +233,7 @@ test('19 소비자 감사: send-failed는 우편함·발령·중복 방지·메�
   assert.equal(findMailBySourceKeyAny(t.h, 'x'), null);
 });
 
-test('20 60분 경계: -1ms 요약 / 정확히 60분 전문 / +1ms 전문', () => {
+test('20 3시간 경계: -1ms 요약 / 정확히 3시간 전문 / +1ms 전문', () => {
   const s = setup();
   for (const [delta, expected] of [[-1, 'summary'], [0, 'full'], [1, 'full']]) {
     const sent = fullSend(KADAN_ROLE_NAME, s.f, {t: iso(NOW - FULL_INTERVAL_MS - delta)});
@@ -309,7 +309,7 @@ function superSetup(role = SUPER_ROLE) {
   return {h, f, entries};
 }
 
-test('12 kadan-슈퍼감독: 1시간 안 일반 우편 → summary(super-summary 내용·super.md 경로)', () => {
+test('12 kadan-슈퍼감독: 3시간 안 일반 우편 → summary(super-summary 내용·super.md 경로)', () => {
   const s = superSetup(), r = compose(SUPER_ROLE, {home: s.h, entries: s.entries, profile: 'super'});
   assert.deepEqual(meta(r), ['summary', 'within-interval']);
   assert.match(r.instructions, /common\.md · super\.md/);
@@ -317,7 +317,7 @@ test('12 kadan-슈퍼감독: 1시간 안 일반 우편 → summary(super-summary
   assert.doesNotMatch(r.instructions, /herdr 화면 확인/);
 });
 
-test('13 kadan-슈퍼감독: 첫 우편·전달 불명확·1시간 경과·템플릿 변경 → full', () => {
+test('13 kadan-슈퍼감독: 첫 우편·전달 불명확·3시간 경과·템플릿 변경 → full', () => {
   const s = superSetup();
   assert.deepEqual(meta(compose(SUPER_ROLE, {entries: [start(SUPER_ROLE)], profile: 'super'})), ['full', 'generation-first']);
   const unclear = [start(SUPER_ROLE), {...s.entries[1], keyDelivery: 'unknown'}];
