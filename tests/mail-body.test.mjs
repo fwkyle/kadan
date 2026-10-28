@@ -45,7 +45,7 @@ test("보낸 본문은 지문 이름의 옆 파일로 남고 원장 줄에는 �
 
   // 본문은 옆 파일에 그대로 있다. 발령 우편(--task)이라 읽음 확인 안내는 붙지 않는다(2026-10-05).
   const saved = readMailBody(entry.digest, home);
-  assert.equal(saved, message);
+  assert.equal(saved, `사람 → b-작업자\n\n${message}`);
   assert.equal(composeMailInstructions({mailId:entry.mailId,recipient:'b-작업자',dispatch:true}),'');
   assert.equal(fs.existsSync(path.join(mailDir(home), `${entry.digest}.txt`)), true);
 
@@ -68,10 +68,10 @@ test('모든 일반 우편은 역할 프로필 없이도 ID와 수신자 ack 안
   const f=mailFixture();
   for (const options of [{},{source:'watch'},{roleProfile:'worker'},{mailContext:{expectReply:true}}]) {
     const receipt=f.send(options),body=f.sent.at(-1).message;
-    assert.ok(body.startsWith('본문\n\n'));
+    const header=body.slice(0,body.indexOf('본문'));assert.match(header,/^\S+ → recipient\n\n$/);assert.ok(body.startsWith(header+'본문\n\n'));
     assert.ok(body.includes(composeMailInstructions({mailId:receipt.mailId,recipient:'recipient'})));
     assert.equal(receipt.notificationOnly,undefined);
-    assert.equal(receipt.bytes,Buffer.byteLength(body));assert.equal(readMailBody(receipt.digest,f.home),body);
+    assert.equal(receipt.bytes,Buffer.byteLength(body)-Buffer.byteLength(header));assert.equal(readMailBody(receipt.digest,f.home),body);
     if(options.mailContext?.expectReply)assert.match(body,/질문ID: .*최종 답변: kadan send 'sender'/);
   }
   const raw='원문\n그대로\n',receipt=f.send({raw:true,message:raw});
@@ -123,7 +123,7 @@ test('발령 우편(--task)은 읽음 확인 안내 없이 질문 안내만 붙�
   const f=mailFixture();
   appendLedger({kind:'start',role:'recipient',session:'kadan-recipient',panePid:'111',cmd:'codex --model test-model'},f.home);
   const dispatch=f.send({taskId:'legacy-run'}),body=f.sent.at(-1).message;
-  assert.equal(body,'본문');assert.doesNotMatch(body,/inbox ack|우편 ID:/);
+  assert.equal(body,'sender → recipient\n\n본문');assert.doesNotMatch(body,/inbox ack|우편 ID:/);
   assert.equal(dispatch.notificationOnly,undefined,'발령은 기록용 알림이 아니다 — 발령 추적은 taskId로 계속한다');
   assert.equal(new Mailbox(f.home,'recipient').read(dispatch.mailId).read,false);
   assert.doesNotMatch(new Mailbox(f.home,'recipient').read(dispatch.mailId).receiverInstructions,/inbox ack/);

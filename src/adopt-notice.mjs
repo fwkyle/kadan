@@ -2,6 +2,7 @@
 import {createHash} from 'node:crypto';
 import {Mailbox} from './mailbox.mjs';
 import {readMailLedger} from './ledger.mjs';
+import {mailHeaderLine} from './mail-header.mjs';
 
 export function notifyAdoption(home, {id, role, reason}, deps = {}) {
   const message = [
@@ -15,7 +16,7 @@ export function notifyAdoption(home, {id, role, reason}, deps = {}) {
     '새 감독 중복 생성·일괄 바이패스·인수 전 원본 종료는 하지 마세요.',
     '인수는 새 감독이 adopt accept로 확인합니다. 원본 탭을 특정하지 못한 경우는 보존 이유를 알려 주세요.',
   ].join('\n');
-  const digest = createHash('sha256').update(message).digest('hex');
+  const digest = createHash('sha256').update(mailHeaderLine({by: 'kadan-adopt', role: '비서'}) + message).digest('hex');
   const previous = (deps.read || (() => readMailLedger(home)))().find(event =>
     event.kind === 'send' && event.role === '비서' && event.by === 'kadan-adopt' && event.digest === digest);
   if (previous) return {status: 'stored', mailId: previous.mailId, duplicate: true};

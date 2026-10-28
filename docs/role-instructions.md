@@ -134,14 +134,14 @@ Why: 감독 창이 같은 규칙 전문의 반복으로 차서 압축이 잦았�
 요약일 때도 템플릿 파일은 읽는다(지문 비교용). 줄어드는 것은 메시지뿐이다.
 `SUMMARY_PROFILES`·`FULL_INTERVAL_MS`(1시간)는 시험값 상수이며 설정·환경변수 스위치는 없다. 되돌리기는 PR 되돌리기다.
 현재 범위는 프로필 `conductor`·`super`, 모든 판이다(2026-10-24 슈퍼 승인, kyle 단계안 'c'의 2단계).
-역할 이름·판 조건은 보지 않는다. 비서·작업자·검수자와 프로필을 못 정한 역할은 전문이다.
+역할 이름·판 조건은 보지 않는다. 비서·작업자·검수자는 전문이다. 프로필을 못 정한 역할은 지침을 붙이지 않는다(`mode=none`, 메타 `status=not-applied`, 사유 `unknown-role` 등 프로필 근거 값; 코드 `composeRoleInstructions`).
 전문 조건은 아래 표 그대로다. 요약 파일은 템플릿 지문에 들어가지 않아 나중에 고쳐도 전문 재전송이 없다.
 
 전문이 되는 이유와 기록 이름(`instructions.reason`):
 
 | 조건 | 이유 값 |
 |---|---|
-| 요약 프로필(conductor·super)이 아님(프로필 없음 포함) | `profile-not-in-trial` |
+| 요약 프로필(conductor·super)이 아님(프로필은 있음. 프로필 없음은 지침 자체를 안 붙인다) | `profile-not-in-trial` |
 | 업무·카드 사실을 못 읽음 | `facts-unavailable` |
 | 이 세대 마지막 전문 시도 뒤에 이어 연 start가 있음(아래 목록) | `resumed-generation` |
 | 현재 발령(`--task`) | `dispatch` |
@@ -171,3 +171,26 @@ console.table(by);"
 ## 감시기 알림은 지침을 붙이지 않는다 (2026-10-21 [kyle])
 
 감시기 알림(경보·미확인 우편 재알림·상위 알림·놀고 있음 본인 알림)은 `guardedSend`의 `omitInstructions`로 역할 지침을 붙이지 않는다. 원장에 `instructions`가 남지 않으므로 이 알림은 전문·요약 판정(`decideInstructionsMode`)의 "마지막 전문"이 되지 않고, 전달에 실패해도 `send-failed` 전문 시도를 남기지 않는다. 일반 우편의 판정은 알림이 있든 없든 같다(`tests/watch-notice-format.test.mjs`가 고정). `--raw`와 다른 점: 우편 ID·ack 안내는 `notificationOnly`가 따로 정한다.
+
+## 우편 머리말 한 줄
+
+모든 우편(raw 제외) 본문 맨 앞에 한 줄을 붙인다: `<보낸 사람> → <받는 사람>[ · <업무키>]` + 빈 줄. 업무가 없으면 `· 업무키`를 뺀다.
+예: `kadan-역할주소-감독 → kadan-우편머리말-작업 · kadan/work-mail-diet`. 함수는 `src/mail-header.mjs`의 `mailHeaderLine`이다.
+
+- 역할 지침 템플릿 밖의 본문이다. 그래서 `templateDigest`·전문/요약 판정은 그대로다(머지 때 전문 일괄 재전송 없음).
+- 원장 `preview`와 `bytes`는 머리말을 뺀 사용자 본문 기준이다. 우편함 저장 본문과 화면에 넣는 문자열에만 머리말이 들어간다.
+- 감시기 알림(`omitInstructions`)은 보낸 사람이 `watch`로 머리말이 붙는다. `--raw`는 원문 그대로라 붙지 않는다.
+- 이미 손으로 쓴 머리말과 겹쳐도 막지 않는다. 우편함 우편의 감시 알림 첫 줄은 정확히 이 머리말일 때만 떼고 읽는다(`stripMailHeader`).
+- 중복 방지가 본문 지문을 비교하는 곳(`recovery-report.mjs`·`adopt-notice.mjs`)은 머리말을 붙인 본문의 지문으로 비교한다.
+
+| 우편 경로 | 본문을 만드는 곳 | 머리말 |
+|---|---|---|
+| `kadan mail`·`send`·`dispatch` 바로 넣기 | `cli-guarded-send.mjs` | 붙음(raw 제외) |
+| 같은 명령이 바로 못 넣어 보관 | `commands/send.mjs` → `Mailbox.send` | 붙음 |
+| 저장 전용 수신자(비서·사용자) | `commands/send.mjs` → `Mailbox.send` | 붙음 |
+| 감시기 알림·경보(`guardedSend`, `omitInstructions`) | `commands/watch.mjs`·`watch-*.mjs` | 붙음(`watch → 받는 사람`) |
+| 인계·시작 안내·야간·quickstart 등 `guardedSend` 호출 | 각 명령 파일 | 붙음 |
+| 비서 복구 보고·입양 알림·디코 다리·인계 비서 우편 | `Mailbox.send` 호출 | 붙음 |
+| 실행 완료 통지(`task-completion`) | `ledger-domains.mjs` `completionFor` | 일부러 뺌: 원장 안에서 시스템이 만들고 검증이 다시 읽는 기록용 통지 |
+
+크기: 실측 통당 평균 약 83바이트(최대 129), 전체 우편의 약 1.8%.

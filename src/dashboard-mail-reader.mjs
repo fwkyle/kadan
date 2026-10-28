@@ -3,6 +3,7 @@ import {queryDashboardMail, queryDashboardMailBody} from './dashboard-mail-query
 import {createWatchStoreReaders} from './watch-store-cache.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {mailRow, bodyOf} from './dashboard/shared.mjs';
+import {stripStoredHeader} from './mail-header.mjs';
 
 export function createDashboardMailReader(home, {runtime = null, now = Date.now, readCards} = {}) {
   const cards = readCards ? null : createWatchStoreReaders(home).cards;
@@ -22,6 +23,6 @@ export function createDashboardMailReader(home, {runtime = null, now = Date.now,
     const {page, cards} = queryDashboardMail(home, url, {bodyOf:body, readCards:metadata});
     const identity = taskIdentity(cards);
     return {...stamp(), ...page, items:page.items.map(mail => ({...mailRow(mail, identity),
-      preview:mail.preview || String(body(mail) || '').replace(/\s+/g, ' ').slice(0, 120)}))};
+      preview:mail.preview || String(stripStoredHeader(body(mail), mail) || '').replace(/\s+/g, ' ').slice(0, 120)}))};
   };
 }

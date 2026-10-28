@@ -176,3 +176,27 @@ test('F1: 시작 PID 기록이 없는 슈퍼 앞 우편은 같은 이름 세션�
     spawnSync('tmux', ['-L', f.socket, 'kill-session', '-t', 'kadan-peer-b'], {env: f.env});
   }
 });
+
+test('위치 인자와 파일 표준 입력을 함께 주면 거절하고 원장에 아무것도 쓰지 않는다', () => {
+  const f = fixture(); knownOffline(f);
+  const body = path.join(f.home, 'body.txt'); fs.writeFileSync(body, '긴 본문\n');
+  for (const command of ['mail', 'send']) {
+    const result = spawnSync(process.execPath, [cli, command, 'worker', '--expect-reply', '질문'],
+      {env: f.env, cwd: os.tmpdir(), encoding: 'utf8', stdio: [fs.openSync(body, 'r'), 'pipe', 'pipe'], timeout: 10000});
+    assert.notEqual(result.status, 0, command);
+    assert.match(result.stderr, /본문이 두 곳에 있다/, command);
+  }
+  assert.equal(f.sends().length, 0);
+});
+
+test('위치 인자만, 파일 표준 입력만, 위치 인자 + 빈 파일은 정상 보관한다', () => {
+  const f = fixture(); knownOffline(f);
+  const body = path.join(f.home, 'body.txt'), empty = path.join(f.home, 'empty.txt');
+  fs.writeFileSync(body, '파일 본문\n'); fs.writeFileSync(empty, '');
+  const run = (args, file) => spawnSync(process.execPath, [cli, 'mail', 'worker', ...args],
+    {env: f.env, cwd: os.tmpdir(), encoding: 'utf8', stdio: [file ? fs.openSync(file, 'r') : 'pipe', 'pipe', 'pipe'], input: undefined, timeout: 10000});
+  for (const [args, file] of [[['위치 본문'], null], [[], body], [['위치 본문'], empty]]) {
+    const result = run(args, file); assert.equal(result.status, 0, result.stderr);
+  }
+  assert.equal(f.sends().length, 3);
+});

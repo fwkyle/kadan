@@ -40,7 +40,7 @@ for(const mode of ['sqlite']){
   assert.equal(box('lead').list({view:'waiting'}).length,1);
   const letter=box('next').read(q.mailId);
   assert.equal(letter.currentRecipient,'next');assert.equal(letter.currentSender,'lead');
-  assert.equal(letter.role,'receiver');assert.equal(letter.by,'sender');assert.equal(letter.body,'원본 질문');
+  assert.equal(letter.role,'receiver');assert.equal(letter.by,'sender');assert.equal(letter.body,'sender → receiver\n\n원본 질문');
   assert.match(letter.receiverInstructions,/KADAN_ROLE='next' kadan inbox ack/);
   assert.match(letter.receiverInstructions,/kadan send 'lead' --reply-to/);
   assert.equal(letter.read,false);

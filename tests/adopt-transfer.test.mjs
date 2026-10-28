@@ -1,3 +1,4 @@
+import {mailHeaderLine} from '../src/mail-header.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -120,7 +121,7 @@ test('secretary exception reports use existing mailbox and suppress duplicate me
   const deps = {read: () => entries, send: options => {
     sends++;
     entries.push({kind: 'send', role: '비서', by: options.by, mailId: 'letter',
-      digest: createHash('sha256').update(options.message).digest('hex')});
+      digest: createHash('sha256').update(mailHeaderLine({by: options.by, role: '비서'}) + options.message).digest('hex')});
     assert.equal(options.by, 'kadan-adopt');
     return {mailId: 'letter', status: 'stored'};
   }};

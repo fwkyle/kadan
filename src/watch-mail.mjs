@@ -8,6 +8,7 @@ import {isPeerSuperMail} from './peer-mail.mjs';
 import {SECRETARY} from './mailbox.mjs';
 import {isSimplifiedMail,deliveredAt,firstReminderSent,reminderKey} from './mail-rule.mjs';
 import {createProcessCollections} from './process-collections.mjs';
+import {stripStoredHeader} from './mail-header.mjs';
 
 const recipient = mail => mail.currentRecipient || mail.role;
 
@@ -33,7 +34,9 @@ export const escalationMessage = items => escalationNotice(items, previewOf);
 // 첫 줄 글감: 일반 전송은 원장 preview가 있고, 우편함(mailbox) 우편은 preview 없이 본문 파일(digest)이 있다. 못 읽으면 빈 글(= 미리보기 없음).
 function previewOf(mail) {
   if (mail.preview) return mail.preview;
-  try { return mail.digest ? readMailBody(mail.digest, ledgerHome()) ?? '' : ''; } catch { return ''; }
+  try {
+    return mail.digest ? stripStoredHeader(readMailBody(mail.digest, ledgerHome()), mail) ?? '' : '';
+  } catch { return ''; }
 }
 
 // 새 규칙 우편의 실패 사유는 원장에 고정 값만 쓴다. 오류 문장에는 tmux 버퍼 이름(PID·시각)·명령 인자처럼 매번 달라지는 말이 섞여
@@ -98,9 +101,10 @@ function eligibleLetters(entries, cards, works, now, graceMs, parents, letters =
         }
         continue;
       }
-      // 첫 알림은 업무가 done/cancelled여도 낸다(받는 쪽이 아직 못 본 편지). 일시정지(hold)는 제외한다.
-      // 넣은 뒤 5분 알림은 닫힌 업무면 생략한다.
-      const blocked = stage === 'initial' ? related.some(work => work.status === 'hold') : related.some(work => work.status !== 'open');
+      // 첫 알림은 연결 업무 상태(hold·done·cancelled)와 무관하게 낸다. 받는 쪽이 아직 못 본 편지이고 hold는 보낸 쪽 업무의
+      // 상태다(2026-10-27: hold 아래 승인 질문이 3시간 묻힘). 안내는 우편당 1번뿐이라 소음이 작다.
+      // 넣은 뒤 5분 알림은 open이 아닌 업무면 생략한다.
+      const blocked = stage === 'initial' ? false : related.some(work => work.status !== 'open');
       if (!blocked) out.push({mail, stage});
       continue;
     }

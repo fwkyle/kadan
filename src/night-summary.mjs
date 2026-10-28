@@ -1,5 +1,6 @@
 // 나이트 모드 아침 요약. 켜진 동안(시작~끝)의 결정 저장소·원장 기록을 세어 글 한 덩어리로 만든다.
 // 순수 함수다: 읽기는 부르는 쪽이 한다. 장치는 판정하지 않고 센 것만 적는다 — 모르는 것(실제 머지)은 모른다고 적는다.
+import {stripStoredHeader} from './mail-header.mjs';
 import {isUserActor,isSupervisorActor} from './actors.mjs';
 
 export const HELD_PREFIX = '[나이트 보류]';
@@ -49,7 +50,7 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
   const sends = entries.filter(e => e?.kind === 'send' && inWindow(e) && !delivered.has(e.mailId));
   // 보류: 사람 우편함으로 간 `[나이트 보류] <한 줄>` 편지. 본문은 원장이 아니라 옆 파일에 있다.
   const held = sends.filter(e => isUserActor(e.role) && e.digest)
-    .map(e => readBody(e.digest)).filter(body => typeof body === 'string' && body.startsWith(HELD_PREFIX))
+    .map(e => stripStoredHeader(readBody(e.digest), e)).filter(body => typeof body === 'string' && body.startsWith(HELD_PREFIX))
     .map(body => body.slice(HELD_PREFIX.length).trim().split('\n')[0].slice(0, 100));
   const counts = {...decisions, restarts, mails: sends.length, held: held.length};
 

@@ -33,7 +33,7 @@ test('omitInstructions: 본문에 역할 지침이 없고 원장에 지침 기�
   const t = fixture();
   const entry = t.notice();
   assert.ok(!t.state.messages[0].includes(MARK));
-  assert.equal(t.state.messages[0], '알림 본문');
+  assert.equal(t.state.messages[0], 'watch → kadan-시험판-감독\n\n알림 본문');
   assert.equal(entry.instructions, undefined);
   assert.equal(entry.roleInstructions.status, 'not-applied');
   assert.equal(entry.roleInstructions.reason, 'watch-notice');

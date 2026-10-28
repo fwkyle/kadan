@@ -128,7 +128,7 @@ test('guardedSend: 준비 후 생존/PID·bytes/digest/saveBody 일치·오류 �
   const floor={name:'fake',alive:()=>{order.push('alive');return true;},pid:()=>{order.push('pid');return '1';},send:(s,m)=>{order.push('send');sent.push(m);return {keyDelivery:'sent',inputAcceptance:'unconfirmed'};}};
   const send=extra=>guardedSend({floor,role:'recipient',session:'kadan-recipient',message:'완료 보고',roleProfile:'conductor',recordedPid:'1',env:{KADAN_HOME:f.home},source:'watch',
     readEntries:()=>{order.push('read');return [];},record:e=>recorded.push(e),saveBody:(d,b)=>saveMailBody(d,b,f.home),...extra});
-  const receipt=send();assert.deepEqual(order,['read','alive','pid','send']);assert.equal(receipt.bytes,Buffer.byteLength(sent[0]));
+  const receipt=send();assert.deepEqual(order,['read','alive','pid','send']);assert.equal(receipt.bytes,Buffer.byteLength(sent[0])-Buffer.byteLength(sent[0].slice(0,sent[0].indexOf('\n\n')+2)));
   assert.equal(receipt.originalCardPath,null);
   assert.equal(receipt.digest,digest(sent[0]));assert.equal(readMailBody(receipt.digest,f.home),sent[0]);assert.equal(receipt.by,'watch');
   assert.equal(receipt.roleProfile,'conductor');assert.equal(receipt.taskId,undefined);
@@ -151,7 +151,7 @@ test('비서 read는 읽기 전용 저장소 안에서도 원문/digest 보존 +
   const f=fixture();createDatabase(f.home);writeStorageMarker(f.home,'sqlite');
   const mailbox=new SecretaryMailbox(f.home),receipt=mailbox.send({by:'sender',message:'원문 편지'});
   const before=readLedger(f.home),result=storageSnapshot(f.home,()=>mailbox.read(receipt.mailId));
-  assert.equal(result.body,'원문 편지');assert.equal(result.digest,hash(result.body));
+  assert.equal(result.body,'sender → 비서\n\n원문 편지');assert.equal(result.digest,hash(result.body));
   assert.equal(result.receiverInstructionsProfile,'secretary');assert.equal(result.receiverInstructionsDigest,hash(result.receiverInstructions));
   assert.deepEqual(readLedger(f.home),before);assert.ok(Array.isArray(mailbox.list()));assert.equal(mailbox.list()[0].read,false);
   const custom=path.join(f.home,'secretary.md');fs.writeFileSync(custom,'# 비서 최신 사용자 지침');f.configure({version:1,templates:{secretary:custom}});
@@ -193,7 +193,7 @@ test('관계 없는 카드 본문 유실·hierarchy 실패·원장 오류의 통
     readEntries:()=>{throw new Error('손상');},record:()=>{},saveBody:()=>{}});
   assert.equal(sent.length,1);assert.equal(receipt.roleProfile,'conductor');assert.match(sent[0],/원장 손상: 현재 담당·완료 상태 모름/);
   const mailbox=new SecretaryMailbox(f.home),stored=mailbox.send({by:'sender',message:'카드 유실 보고'});
-  assert.equal(mailbox.read(stored.mailId).body,'카드 유실 보고');
+  assert.equal(mailbox.read(stored.mailId).body,'sender → 비서\n\n카드 유실 보고');
 });
 
 test('09-24 작업자·검수자 안내에는 카드 양식만 붙고 감독용 발령·결정 범위·교대 문서는 붙지 않는다', () => {

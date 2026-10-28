@@ -244,7 +244,7 @@ export function composeRoleInstructions({home,role,message='',profile,raw=false,
         lines.push(
           `현재 실행에 관한 질문으로 답변을 기다릴 때는 기존 질문에 --execution ${shellQuote(card.key)} ` +
           `--expect-reply를 붙인다: kadan mail ${questionRecipient} --execution ${shellQuote(card.key)} ` +
-          '--expect-reply <질문>. 일반 대화를 억지로 연결하거나 다른 실행을 추정하지 않는다.'
+          '--expect-reply <질문>. 긴 본문은 위치 인자 없이 `--expect-reply < 파일`(파일 첫 줄에 질문)로 보낸다. 일반 대화를 억지로 연결하거나 다른 실행을 추정하지 않는다.'
         );
         lines.push(`현재 발령 ID: ${identity.taskIdFor(card)}. 실제 착수 시 최신 kadan card show ${card.key}의 revision을 사용해 한 번 기록하라. 아래 명령의 ${card.revision}은 이 지침 생성 시점의 revision이므로 실행 전에 최신 값과 대조한다.\n\n`+
           `KADAN_ROLE=${role} kadan card progress ${card.key} --revision ${card.revision} --activity running --note "시작: 현재 실행 착수"\n\n`+

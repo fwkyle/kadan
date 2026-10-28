@@ -28,13 +28,14 @@ test('격리 실제 tmux: 정상 CLI·복사모드·사용자 미제출 입력·
   const p=command('start',role,'--cmd',`'${process.execPath}' '${receiver}'`);assert.equal(p.status,0,p.stderr);started=true;
   let sent=command('send',role,'NORMAL');assert.equal(sent.status,0,sent.stderr);assert.match(sent.stdout,/키 전송됨.*입력 접수·AI 실행 미확인/);
   const receipt=readLedger(home).filter(e=>e.kind==='send').at(-1);assert.equal(receipt.keyDelivery,'sent');assert.equal(receipt.inputAcceptance,'unconfirmed');
-  const expectedBody=`NORMAL\n\n우편 ID: ${receipt.mailId}. 내용을 확인한 수신자가 직접 읽음 확인을 기록하라.\n`+
+  const header=`사람 → ${role}\n\n`;
+  const expectedBody=`${header}NORMAL\n\n우편 ID: ${receipt.mailId}. 내용을 확인한 수신자가 직접 읽음 확인을 기록하라.\n`+
    `KADAN_ROLE='${role}' kadan inbox ack '${receipt.mailId}' --role '${role}'\n`+
    '조회·답장·DONE은 자동 읽음 처리가 아니다. ack는 로컬 읽음 사건만 기록하며 회신 우편이나 추가 알림을 보내지 않는다. 읽음은 승인·착수·답변 완료·작업 완료를 뜻하지 않는다.';
   const expectedReceived=expectedBody+'\n';
   assert.equal(readMailBody(receipt.digest,home),expectedBody);
   assert.equal(receipt.digest,createHash('sha256').update(expectedBody).digest('hex').slice(0,12));
-  assert.equal(receipt.bytes,Buffer.byteLength(expectedBody));assert.ok(sent.stdout.includes(`우편ID ${receipt.mailId}`));
+  assert.equal(receipt.bytes,Buffer.byteLength(expectedBody)-Buffer.byteLength(header));assert.ok(sent.stdout.includes(`우편ID ${receipt.mailId}`));
   const end=Date.now()+3000;
   while(Date.now()<end&&contents()!==expectedReceived)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
   assert.equal(contents(),expectedReceived);

@@ -23,7 +23,7 @@ function fixture(options = {}) {
   const f = {home,hierarchy,context,receipt,rows,live,sent,stopped,notifications,spawns,options};
   const floor = {name:'tmux',alive:s=>live.has(s),pid:s=>live.get(s),
     stop:s=>{stopped.push({session:s,pid:live.get(s)});if(!options.stopFails)live.delete(s);},
-    send:(s,message)=>{sent.push({session:s,message});if(options.activationFails&&message.startsWith('인계 전환 완료'))throw new Error('send uncertain');}};
+    send:(s,message)=>{sent.push({session:s,message});if(options.activationFails&&message.includes('인계 전환 완료'))throw new Error('send uncertain');}};
   const h = new Handover({home,floor,env:{KADAN_ROLE:'upper',KADAN_HOME:home,PRIVATE_TOKEN:'runner-canary'},
     readEntries:()=>rows,record:e=>rows.push(e),now:()=>clock,watchAlive:()=>!options.watchDead,
     start:role=>{live.set(`kadan-${role}`,'30');rows.push({kind:'start',role,panePid:'30'});},
@@ -71,7 +71,7 @@ test('독립 runner: 정상 6분 독해를 유지하고 watch 확인 후 정확 
   const result=f.runner.run(f.s.id);
   assert.equal(result.status,'complete');assert.equal(result.phase,'complete');
   assert.deepEqual(f.stopped,[{session:'kadan-old',pid:'10'}]);assert.equal(f.live.get('kadan-child'),'11');
-  assert.equal(f.sent.filter(x=>x.message.startsWith('인계 전환 완료')).length,1);
+  assert.equal(f.sent.filter(x=>x.message.includes('\n\n인계 전환 완료')).length,1);
   assert.equal(f.notifications.length,1);assert.equal(result.notification.delivery,'sent');
   assert.equal(f.rows.filter(e=>e.phase==='transferred').length,1);
 });
@@ -138,7 +138,7 @@ test('활성화 불확실은 activation-pending으로 보존하고 자동/수동
   const result=f.runner.run(f.s.id);assert.equal(result.status,'failed');assert.equal(result.phase,'activation-pending');
   assert.throws(()=>f.h.finish(f.s.id,{timeout:0}),/activation-pending/);
   assert.throws(()=>f.runner.run(f.s.id),/중복/);
-  assert.equal(f.sent.filter(x=>x.message.startsWith('인계 전환 완료')).length,1);assert.equal(f.notifications.length,1);
+  assert.equal(f.sent.filter(x=>x.message.includes('\n\n인계 전환 완료')).length,1);assert.equal(f.notifications.length,1);
 });
 
 test('책임 이전 후 종료 실패는 거짓완료 없이 종료; 명시 수동 finish만 복구한다',()=>{
