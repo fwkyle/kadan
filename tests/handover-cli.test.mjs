@@ -31,7 +31,7 @@ for (const profileSource of ['start','roles']) test(`09-07 실제 CLI 인계: ${
   assert.equal(s.roleProfile,'conductor');
   assert.equal(readLedger(home).filter(e=>e.kind==='start'&&e.role===s.to).at(-1).roleProfile,'conductor');
   const prepared=readLedger(home).filter(e=>e.kind==='send'&&e.role===s.to).at(-1);
-  assert.equal(prepared.roleProfile,'conductor');assert.ok(readMailBody(prepared.digest,home).startsWith('인수 준비:'));
+  assert.equal(prepared.roleProfile,'conductor');assert.ok(/^[^\n]* → [^\n]*\n\n인수 준비:/.test(readMailBody(prepared.digest,home)));
   assert.match(readMailBody(prepared.digest,home),/전환 완료 전 새 작업 금지/);
   assert.equal(spawnSync('tmux',['-L',env.KADAN_SOCKET,'has-session','-t','=kadan-qa-감독']).status,0);
   fs.writeFileSync(path.join(home,'profile-inheritance.json'),JSON.stringify({profileSource,state:s,prepared,body:readMailBody(prepared.digest,home)},null,2));
@@ -155,8 +155,8 @@ test('독립 CLI 한 사이클: 부모 종료→지연 accept→실제 watch 기
   assert.equal(rows.filter(e=>e.kind==='handover'&&e.phase==='transferred').length,1);
   assert.equal(rows.filter(e=>e.kind==='stop'&&e.role==='qa-감독').length,1);
   assert.ok(rows.some(e=>e.kind==='hierarchy-loaded'&&e.pid===f.watch.pid&&e.hash===JSON.parse(fs.readFileSync(s.statePath)).routesHash));
-  assert.equal(mails.filter(e=>e.body?.startsWith('인계 전환 완료')).length,1);
-  assert.equal(mails.filter(e=>e.body?.startsWith('인계 프로그램 종결')).length,1);
+  assert.equal(mails.filter(e=>/^[^\n]* → [^\n]*\n\n인계 전환 완료/.test(e.body??'')).length,1);
+  assert.equal(mails.filter(e=>/^[^\n]* → [^\n]*\n\n인계 프로그램 종결/.test(e.body??'')).length,1);
   assert.equal(f.pid('qa-감독'),'');assert.equal(f.pid('qa-작업자'),childPid);assert.ok(f.pid('qa-감독-2'));
   f.run(['handover','finish',s.id,'--timeout','0']);
   assert.equal(readLedger(f.home).filter(e=>e.kind==='send').length,rows.filter(e=>e.kind==='send').length);

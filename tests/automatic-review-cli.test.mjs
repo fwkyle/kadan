@@ -122,15 +122,17 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
    assert.equal(completion.taskId,undefined);assert.equal(completion.executionKey,dispatch.executionKey);
    assert.equal(completion.workKey,dispatch.workKey);assert.equal(completion.result,done.result);
    const body=readMailBody(completion.digest,home);assert.equal(typeof body,'string');
-   assert.equal(completion.bytes,Buffer.byteLength(body));assert.equal(completion.digest,createHash('sha256').update(body).digest('hex'));
+   assert.equal(completion.bytes,Buffer.byteLength(body)); 
+   // 시스템 생성 완료 통지는 머리말 없음(원장 안에서 만든다)
+   assert.equal(completion.digest,createHash('sha256').update(body).digest('hex'));
    assert.ok(!fs.readFileSync(path.join(home,completion.role+'.received'),'utf8').includes(body+'\n'),'저장 완료 통지는 감독 화면에 주입하지 않는다');
   }
   assert.deepEqual(sends.map(e=>e.role),[roles[0],roles[1],roles[0],roles[1],roles[2]]);
   assert.deepEqual(sends.map(e=>e.roleProfile),['worker','reviewer','worker','reviewer','conductor']);
   for(const e of sends){
-   const body=readMailBody(e.digest,home);assert.equal(e.bytes,Buffer.byteLength(body));assert.equal(e.digest,digest(body));
+   const body=readMailBody(e.digest,home);assert.equal(e.bytes,Buffer.byteLength(body)-Buffer.byteLength(body.slice(0,body.indexOf('\n\n')+2)));assert.equal(e.digest,digest(body));
    assert.deepEqual(findDoneMarkers(body),[]);
-   if(e.taskId){assert.ok(body.startsWith('중앙 카드 '));assert.match(body,/완료 방식: 자동\./);}
+   if(e.taskId){assert.ok(body.slice(body.indexOf('\n\n')+2).startsWith('중앙 카드 '));assert.match(body,/완료 방식: 자동\./);}
    else {assert.match(body,/next action/);assert.match(body,/kadan work show ar-test\/work/);}
    const end=Date.now()+2000;
    while(Date.now()<end&&!fs.readFileSync(path.join(home,e.role+'.received'),'utf8').includes(body+'\n'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);

@@ -1,5 +1,6 @@
 import {escapeHtml as e} from './card-content.mjs';
 import {readMailBody} from './ledger.mjs';
+import {stripStoredHeader} from './mail-header.mjs';
 import {workLetters} from './work-mail.mjs';
 import {isUnreadLetter} from './mailbox-state.mjs';
 import {isPreviousGenerationUnread} from './mail-generation.mjs';
@@ -63,12 +64,12 @@ export function renderInbox(w,home,url=new URL('http://localhost'),{limit=null}=
  return `<div class="dd-history-heading"><h3>인박스 <span>${letters.length}통</span></h3><span class="muted">${pages>1?`${page}/${pages}쪽 · ${listPageSize}통씩 · `:''}최신순 · 행을 펼쳐 원문 확인</span></div>${filters}${!items.length?'<p>조건에 맞는 연결된 편지가 없습니다. 업무·실행 주소나 답장으로 연결된 편지만 보여줍니다.</p>':`<div class="dd-history-scroll" tabindex="0" aria-label="이 카드의 인박스"><table class="dd-history-table bw-mail"><colgroup><col style="width:100px"><col style="width:170px"><col></colgroup><thead><tr><th>시각</th><th>보낸 사람 → 받는 사람</th><th>내용</th></tr></thead><tbody>${items.map((m,i)=>{
   const id=`bw-mail-${i}`,body=(m.digest&&home?readMailBody(m.digest,home):null),text=body??m.preview??'본문을 읽을 수 없습니다.';
   const status=mailStatus(m);
-  return `<tr data-dd-row="${id}"><td class="dd-time">${e(short(m.t))}</td><td class="di-people" title="${e(m.by||'모름')} → ${e(m.role||'모름')}"><span>${e(m.by||'모름')}</span><span>→ ${e(m.role||'모름')}</span></td><td><button class="dd-open" type="button" aria-expanded="false" aria-controls="${id}"><span class="muted">${e(status)}</span> <span class="dd-preview">${e(text.replace(/\s+/g,' ').slice(0,150))}</span><span aria-hidden="true">›</span></button></td></tr><tr class="dd-expanded" id="${id}" hidden><td colspan="3"><div class="dd-history-original dd-original"><div class="dd-original-head"><span>${e(status)}</span><button type="button" data-dd-close="${id}">접기</button></div><p class="dd-history-note">${e(text)}</p><details><summary>우편 정보 · 읽음 처리는 하지 않음</summary><p class="muted">${m.completion?`완료 대상: ${e(m.executionKey||m.completionTaskId||'모름')} · `:''}우편 ID: ${e(m.mailId||m.digest||'모름')}${m.replyTo?` · 원본: ${e(m.replyTo)}`:''}</p></details></div></td></tr>`;
+  return `<tr data-dd-row="${id}"><td class="dd-time">${e(short(m.t))}</td><td class="di-people" title="${e(m.by||'모름')} → ${e(m.role||'모름')}"><span>${e(m.by||'모름')}</span><span>→ ${e(m.role||'모름')}</span></td><td><button class="dd-open" type="button" aria-expanded="false" aria-controls="${id}"><span class="muted">${e(status)}</span> <span class="dd-preview">${e(stripStoredHeader(text,m).replace(/\s+/g,' ').slice(0,150))}</span><span aria-hidden="true">›</span></button></td></tr><tr class="dd-expanded" id="${id}" hidden><td colspan="3"><div class="dd-history-original dd-original"><div class="dd-original-head"><span>${e(status)}</span><button type="button" data-dd-close="${id}">접기</button></div><p class="dd-history-note">${e(text)}</p><details><summary>우편 정보 · 읽음 처리는 하지 않음</summary><p class="muted">${m.completion?`완료 대상: ${e(m.executionKey||m.completionTaskId||'모름')} · `:''}우편 ID: ${e(m.mailId||m.digest||'모름')}${m.replyTo?` · 원본: ${e(m.replyTo)}`:''}</p></details></div></td></tr>`;
  }).join('')}</tbody></table></div>`}${pages>1?`<p class="bw-mail-pages">${page>1?`<a data-work-page href="${e(nav(page-1))}">이전 ${listPageSize}통</a>`:''} ${page<pages?`<a data-work-page href="${e(nav(page+1))}">다음 ${listPageSize}통</a>`:''}</p>`:''}`;
 }
 
 function compactMail(items,home){
- return `<ul class="bw-mail-compact">${items.map(m=>{let body=null;try{body=m.digest&&home?readMailBody(m.digest,home):null;}catch{body=null;}const text=String(body??m.preview??'').replace(/\s+/g,' ').trim();
+ return `<ul class="bw-mail-compact">${items.map(m=>{let body=null;try{body=m.digest&&home?readMailBody(m.digest,home):null;}catch{body=null;}const text=String(stripStoredHeader(body,m)??m.preview??'').replace(/\s+/g,' ').trim();
   return `<li><span class="dd-time">${e(short(m.t))}</span><span class="di-people">${e(m.by||'모름')} → ${e(m.role||'모름')}</span><span class="muted">${e(mailStatus(m))}</span><span class="bw-mail-text">${e(text.length>140?text.slice(0,140)+'…':text)}</span></li>`;}).join('')}</ul>`;
 }
 export function renderCardInbox(card,{entries=[],cards=[card],home,url}={}) {

@@ -206,7 +206,7 @@ test('안내하는 확인 명령: 상위가 남의 우편을 읽을 수 있고 �
   const unread = () => inboxCommand(['list'], {role: 'worker', unread: true}, {home, by: 'worker'}).map(e => e.mailId);
   assert.deepEqual(unread(), [mailId]);
   const letter = inboxCommand(['read', mailId], {role: 'worker'}, {home, by: 'boss'});
-  assert.equal(letter.body, '본문'); assert.equal(letter.read, false);
+  assert.equal(letter.body, 'boss → worker\n\n본문'); assert.equal(letter.read, false);
   assert.deepEqual(unread(), [mailId], '확인 뒤에도 미읽음');
   assert.equal(readLedger(home).filter(e => e.kind === 'mail-read').length, 0);
   assert.throws(() => inboxCommand(['ack', mailId], {role: 'worker'}, {home, by: 'boss'}), /수신자|읽음 기록 가능/);

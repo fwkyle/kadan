@@ -12,6 +12,7 @@ import {
   eventSummary,
 } from "../ledger-table.mjs";
 import { letters, bodyOf, mailRow, page } from "./shared.mjs";
+import { stripStoredHeader } from "../mail-header.mjs";
 
 export function mailBodyData(snapshot, url, stamp) {
   const m = letters(snapshot).find(
@@ -44,7 +45,7 @@ export function mailData(snapshot, url, stamp) {
       ...mailRow(m, identity),
       preview:
         m.preview ||
-        String(bodyOf(snapshot, m) || "")
+        String(stripStoredHeader(bodyOf(snapshot, m), m) || "")
           .replace(/\s+/g, " ")
           .slice(0, 120),
     })),
