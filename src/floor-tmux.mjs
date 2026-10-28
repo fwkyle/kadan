@@ -465,6 +465,23 @@ export function sendTmuxEnter(session, {run = tmuxOut} = {}) {
   return {keyDelivery:"sent", inputAcceptance:"unconfirmed"};
 }
 
+// tmux 전용 보조 함수다. 공통 바닥 계약에 키 API를 추가하지 않는다.
+export function sendTmuxKey(session, key, { expectedPid, run = tmuxOut, humanIdleMs, beforeKey } = {}) {
+  if (!/^kadan-[^\s:.]+$/u.test(session) || key !== 'Escape') {
+    throw new Error('한도 메뉴 키는 카단 세션 이름과 Escape만 허용한다');
+  }
+  if (!expectedPid) throw new Error('Escape 전송에는 기록된 pane PID가 필요하다');
+  checkPaneMode(session, run);
+  checkHumanIdle(session, run, { humanIdleMs });
+  beforeKey?.();
+  run(['has-session', '-t', `=${session}`]);
+  const state = run(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}|#{pane_dead}']).trim();
+  if (state !== `${expectedPid}|0`) throw new Error('Escape 전송 직전 pane PID 불일치 또는 죽은 화면');
+  try { run(['send-keys', '-t', `=${session}:`, key]); }
+  catch (error) { error.delivery = 'unknown'; throw error; }
+  return { keyDelivery: 'sent', inputAcceptance: 'unconfirmed' };
+}
+
 // 사람 보호는 이것 하나다(2026-10-17 [kyle] 결정). 화면 모양(프롬프트·자리표시자·테두리·바닥글)을 읽어
 // 미제출 글을 판정하던 장치는 실행기 업데이트마다 빈 입력창을 오판해 발령과 알림을 막아 없앴다.
 // 창에 붙은 사람이 humanIdleMs 안에 키를 눌렀으면 보류한다. 붙은 client가 없으면 통과한다.
