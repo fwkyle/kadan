@@ -1,6 +1,6 @@
 // 업무 글의 "상태 메시지" 본문 — WorkStore·카드·원장에서만 만든다(AI 호출 없음). 고정 틀, 2,000자 안.
 // 디스코드 포럼 업무 글에 하나만 두고, 바뀔 때마다 이 본문으로 그 메시지를 고쳐 쓴다(user-notify.mjs의 refreshWorkStatus).
-import {WorkStore, workPhases, endedExecution} from './work-store.mjs';
+import {WorkStore, workPhases, closableExecution} from './work-store.mjs';
 import {CardStore} from './card-store.mjs';
 import {buildCardCenter, reportedActivity} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
@@ -27,9 +27,9 @@ export function buildWorkStatus(home, workKey, {summary = ''} = {}) {
   try {
     work = new WorkStore(home).get(workKey);
     const center = buildCardCenter({cards: new CardStore(home).list(), entries: readLedger(home), tree: [], runtimeKnown: false});
-    // 열린 실행 판정은 업무 완료 확인(work-store.mjs)과 같은 endedExecution이다: 원장 결과 failed로 끝난 실행은 열려 있지 않다.
+    // 열린 실행 판정은 업무 완료 확인(work-store.mjs)과 같은 closableExecution이다: 원장 결과 failed로 끝난 실행은 열려 있지 않다.
     const all = work.executions.map(x => ({x, card: center.cards.find(c => c.key === x.key)}));
-    const open = all.filter(({card}) => !card || card.ambiguous || !endedExecution(card));
+    const open = all.filter(({card}) => !card || card.ambiguous || !closableExecution(card));
     failed = all.filter(({card}) => card?.displayState === 'failed').length;
     hidden = Math.max(0, open.length - MAX_LISTED);
     running = open.slice(0, MAX_LISTED).map(({x, card}) =>

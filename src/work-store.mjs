@@ -10,7 +10,17 @@ import {effectiveWorkOwner} from './handover-state.mjs';
 import {readWatchWorkSummaries} from './work-watch-summary.mjs';
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
-export const endedExecution=c=>['done','failed','cancelled','superseded','archived'].includes(c.displayState);
+// 보류(archived)는 시작 전에 미뤄 둔 카드라 끝이 아니다(status-labels.mjs·docs/card-center.md).
+export const endedExecution=c=>['done','failed','cancelled','superseded'].includes(c.displayState);
+// 화면 요약은 하나라도 failed면 failed지만(card-center.mjs), 마감은 같은 카드의 미완료 실행(failed 뒤 다른 담당에게 다시 보낸 것)을 가리면 안 된다.
+const openRuns=c=>(c.runs??[]).filter(r=>!['done','failed'].includes(r.state));
+export const closableExecution=c=>endedExecution(c)&&!(c.displayState==='failed'&&openRuns(c).length);
+const remainingText=(x,card)=>{
+ if(!card)return `${x.key}(카드 없음)`;
+ if(card.ambiguous)return `${x.key}(실행 연결 모호)`;
+ const open=openRuns(card);
+ return `${x.key}(${open.length&&card.displayState==='failed'?`failed 뒤 미완료 ${open.map(r=>`${r.role} ${r.state}`).join('·')}`:card.displayState})`;
+};
 const required=(value,label,max=12000)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new Error(`${label}을(를) 적어주세요 (${max}자 이내)`);return value.trim();};
 const keyStream=key=>{if(typeof key!=='string'||!/^([\p{L}\p{N}_-]+)\/([\p{L}\p{N}_-]+)$/u.test(key))throw new Error('업무 주소는 저장소/업무ID');return `works/${key}/events.jsonl`;};
 
@@ -97,8 +107,8 @@ export class WorkStore {
     }else{
      const cards=new CardStore(this.home).list(),entries=readLedger(this.home);
      const center=buildCardCenter({cards,entries,tree:[],runtimeKnown:false});
-     const unresolved=old.executions.filter(x=>{const card=center.cards.find(c=>c.key===x.key);return !card||card.ambiguous||!endedExecution(card);});
-     if(unresolved.length)throw new Error(`끝나지 않은 실행 ${unresolved.length}건: 실행을 마치거나 취소한 뒤 업무 결과를 확인하세요`);
+     const unresolved=old.executions.filter(x=>{const card=center.cards.find(c=>c.key===x.key);return !card||card.ambiguous||!closableExecution(card);});
+     if(unresolved.length)throw new Error(`끝나지 않은 실행 ${unresolved.length}건: ${unresolved.slice(0,3).map(x=>remainingText(x,center.cards.find(c=>c.key===x.key))).join(', ')}${unresolved.length>3?` 외 ${unresolved.length-3}건`:''}. 실행을 마치거나 취소하고, 담당을 바꿨다면 명시 인계 또는 완료 확정(kadan done)을 한 뒤 업무 결과를 확인하세요`);
      next.result=required(fields.result,'최종 결과와 확인 근거');next.status=action==='complete'?'done':'cancelled';next.turnOwner='';
     }
    }else throw new Error('알 수 없는 업무 변경');
