@@ -6,7 +6,7 @@ import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../ru
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
-import { withInlineScreen } from "../inline-screen.mjs";
+import { withInlineScreen, withoutInlineScreen } from "../inline-screen.mjs";
 import { withStopHook } from "../stop-hook-settings.mjs";
 import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
 import { mailboxLetters } from "../mailbox-state.mjs";
@@ -90,7 +90,7 @@ export function cmdStart(argv, flags) {
   }
   // 사람이 직접 준 --cmd(adopt·handover 포함)도 대화형 codex면 인라인 화면 플래그를 붙인다. 설정값과의 비교도 같은 꼴로 한다.
   if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withStopHook(withInlineScreen(flags.cmd.trim()), ledgerHome(), message => console.error(message));
-  if (launch && typeof flags.cmd === "string" && flags.cmd.trim() && flags.cmd.trim() !== launch.cmd) {
+  if (launch && typeof flags.cmd === "string" && flags.cmd.trim() && withoutInlineScreen(flags.cmd.trim()) !== withoutInlineScreen(launch.cmd)) {
     if (typeof flags.reason !== "string" || !flags.reason.trim())
       die(`실행 모델 설정과 다른 명령이다 — --reason <이유>를 함께 줘라. 설정값: ${launch.cmd}`, 2);
   }
@@ -112,7 +112,7 @@ export function cmdStart(argv, flags) {
       launchSource:"fallback", fallbackIndex:fallback.fallbackIndex, fallbackReason:flags.reason.trim(),
       settingsRevision:fallback.revision, settingsPreset:fallback.preset, ...(launch ? {settingsCmd:launch.cmd} : {})
     }
-    : !launch ? {} : useSettings || flags.cmd.trim() === launch.cmd
+    : !launch ? {} : useSettings || withoutInlineScreen(flags.cmd.trim()) === withoutInlineScreen(launch.cmd)
     ? {launchSource:"settings", settingsRevision:launch.revision, settingsPreset:launch.preset}
     : {launchSource:"override", overrideReason:flags.reason.trim(), settingsRevision:launch.revision, settingsCmd:launch.cmd};
   if (reviewSelection) {

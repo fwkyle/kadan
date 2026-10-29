@@ -10,6 +10,12 @@ import {ledgerHome} from './ledger.mjs';
 
 export const SETTINGS_FLAG = '--settings';
 export const SETTINGS_SUFFIX = path.join('stop-hook', 'claude-settings.json');
+// 프로필(실행 모델 설정)로 띄우는 역할 전용 설정 파일. Stop 훅에 더해 화면 점검 MCP(ui-inspector)를 막는다(2026-10-29 [kyle] ㄱㄱㄱ).
+// `--cmd`로 직접 띄운 명령은 위 공용 파일을 그대로 쓴다 — ui-inspector가 필요한 역할(디자인·화면 검증)의 빠져나갈 길이다.
+// 막는 방법: 설정 키 deniedMcpServers는 "모든 설정 출처에서 합쳐진다"고 실행 파일(2.1.312)에 적혀 있고, 격리 세션 실측으로
+// ui-inspector만 빠지고 http MCP·플러그인 MCP는 남음을 확인했다(docs/stop-hook.md). 새 깃발·MCP 설정 파일이 필요 없다.
+export const PROFILE_SETTINGS_SUFFIX = path.join('stop-hook', 'claude-settings-profile.json');
+export const DENIED_MCP_SERVERS = [{serverName: 'ui-inspector'}];
 // 이 저장소의 훅 감싸개. 설치한 체크아웃의 절대 경로가 설정 파일에 들어간다(main 체크아웃에서 만든다).
 export const HOOK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'stop-hook.sh');
 
@@ -30,22 +36,29 @@ export function hookCommand(script = HOOK_SCRIPT) {
 }
 
 export const claudeSettingsPath = home => path.join(home, SETTINGS_SUFFIX);
+export const claudeProfileSettingsPath = home => path.join(home, PROFILE_SETTINGS_SUFFIX);
 
-export function claudeSettingsBody(script = HOOK_SCRIPT) {
-  return `${JSON.stringify({hooks: {Stop: [{hooks: [{type: 'command',
-    command: hookCommand(script), timeout: 10}]}]}}, null, 2)}\n`;
+export function claudeSettingsBody(script = HOOK_SCRIPT, {profile = false} = {}) {
+  const hooks = {Stop: [{hooks: [{type: 'command', command: hookCommand(script), timeout: 10}]}]};
+  return `${JSON.stringify(profile ? {hooks, deniedMcpServers: DENIED_MCP_SERVERS} : {hooks}, null, 2)}\n`;
 }
 
-// 같은 내용이면 다시 쓰지 않는다. 돌려주는 값: {path, changed}.
-export function writeClaudeSettings(home = ledgerHome(), script = HOOK_SCRIPT) {
-  const file = claudeSettingsPath(home), body = claudeSettingsBody(script);
+function writeIfChanged(file, body) {
   if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === body) return {path: file, changed: false};
   fs.mkdirSync(path.dirname(file), {recursive: true});
   fs.writeFileSync(file, body, {mode: 0o600});
   return {path: file, changed: true};
 }
 
-const isOurSettingsValue = value => typeof value === 'string' && value.endsWith(SETTINGS_SUFFIX);
+// 같은 내용이면 다시 쓰지 않는다. 돌려주는 값: {path, changed, profile: {path, changed}}.
+export function writeClaudeSettings(home = ledgerHome(), script = HOOK_SCRIPT) {
+  const result = writeIfChanged(claudeSettingsPath(home), claudeSettingsBody(script));
+  const profile = writeIfChanged(claudeProfileSettingsPath(home), claudeSettingsBody(script, {profile: true}));
+  return {...result, profile};
+}
+
+const isOurSettingsValue = value => typeof value === 'string'
+  && (value.endsWith(SETTINGS_SUFFIX) || value.endsWith(PROFILE_SETTINGS_SUFFIX));
 
 // 카단이 붙인 `--settings <우리 파일>`(또는 `--settings=<우리 파일>`)만 걷어낸 낱말 목록. 사람이 준 다른 --settings는 둔다.
 export function wordsWithoutStopHook(words) {
@@ -73,11 +86,13 @@ function afterExecutable(cmd, head) {
 // claude 실행 명령이고, 설정 파일이 있고, 이미 --settings가 없으면 실행 파일 바로 뒤에 `--settings <파일>`을 끼운다.
 // 끝에 붙이지 않는 이유: 끝에는 위치 인자(프롬프트)가 올 수 있다. 판단할 수 없는 명령은 그대로 둔다.
 // warn(메시지): 설정 파일이 있는데도 훅을 붙이지 못할 때 부른다(조용히 빠지지 않게). 기본은 알리지 않는다.
-export function withStopHook(cmd, home = ledgerHome(), warn = () => {}) {
+// profile: 프로필(실행 모델 설정) 출신 명령이면 true — 프로필 전용 파일이 있을 때 그것을 쓰고, 없으면 공용 파일로 돌아간다.
+export function withStopHook(cmd, home = ledgerHome(), warn = () => {}, {profile = false} = {}) {
   if (typeof cmd !== 'string' || launchIdentityOf(cmd).harness !== 'claude') return cmd;
   const words = commandWords(cmd);
   if (!words?.length) return cmd;
-  const file = claudeSettingsPath(home);
+  const plain = claudeSettingsPath(home), profileFile = claudeProfileSettingsPath(home);
+  const file = profile && fs.existsSync(profileFile) ? profileFile : plain;
   if (!fs.existsSync(file)) return cmd;
   if (words.some(word => word === SETTINGS_FLAG || word.startsWith(`${SETTINGS_FLAG}=`))) return cmd;
   let head = 0;

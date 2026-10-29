@@ -161,7 +161,8 @@ export function launchFor(settings, profile, preset = settings?.activePreset) {
 function fill(settings, value) {
   const spawn = settings.runners[value.runner]?.spawn;
   if (!spawn) throw new Error(`실행 모델 설정의 실행기 틀 없음: ${value.runner}`);
-  return withStopHook(withInlineScreen(spawn.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? '')));
+  const cmd = withInlineScreen(spawn.replaceAll('{model}', value.model).replaceAll('{effort}', value.effort ?? ''));
+  return withStopHook(cmd, undefined, undefined, {profile: true}); // 프로필 출신만 ui-inspector MCP를 막는다(stop-hook-settings.mjs)
 }
 
 // 활성 프리셋 역할의 N번째(1부터) 폴백으로 실행 명령을 만든다. 자동으로 고르지 않고 번호를 받은 경우에만 쓴다.

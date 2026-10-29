@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {handleStopHook, lastLineMarker, mayBeSameRun} from '../src/stop-hook.mjs';
 import {appendSpool, readSpool, hookDoneSince, spoolPath} from '../src/stop-hook-spool.mjs';
-import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
+import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
 import {withInlineScreen, withoutInlineScreen} from '../src/inline-screen.mjs';
 import {launchIdentityOf, matchesAiProcess, commandWords} from '../src/ai-identity.mjs';
 import {launchFor} from '../src/runner-settings.mjs';
@@ -499,4 +499,45 @@ test('신뢰 경보 기록: unknown과 untrusted의 상태 설명이 원장 경�
   assert.equal(by['stop-hook:untrusted'].trustState, 'untrusted');
   assert.match(by['stop-hook:untrusted'].trustText, /신뢰하지 않았다/);
   assert.ok(!JSON.stringify(entries).includes('/secret/config/path') && !JSON.stringify(entries).includes('trusted_hash'));
+});
+
+test('프로필 시작 전용 설정: ui-inspector 차단은 프로필 명령에만, --cmd·사람 --settings·비 claude는 그대로', () => {
+  const home = tmp();
+  const plain = claudeSettingsPath(home), prof = claudeProfileSettingsPath(home);
+  assert.equal(withStopHook(CLAUDE, home, undefined, {profile: true}), CLAUDE); // 파일 없음 = 지금과 똑같다
+  const result = writeClaudeSettings(home);
+  assert.equal(result.profile.path, prof);
+  assert.deepEqual(JSON.parse(fs.readFileSync(prof, 'utf8')).deniedMcpServers, DENIED_MCP_SERVERS);
+  assert.equal(JSON.parse(fs.readFileSync(plain, 'utf8')).deniedMcpServers, undefined); // 공용 파일(--cmd)은 막지 않는다
+  assert.deepEqual(JSON.parse(fs.readFileSync(prof, 'utf8')).hooks, JSON.parse(fs.readFileSync(plain, 'utf8')).hooks);
+  assert.equal(writeClaudeSettings(home).profile.changed, false);
+  const viaProfile = withStopHook(CLAUDE, home, undefined, {profile: true}), viaCmd = withStopHook(CLAUDE, home);
+  assert.ok(commandWords(viaProfile).includes(prof));
+  assert.ok(commandWords(viaCmd).includes(plain));
+  assert.equal(withStopHook(viaProfile, home, undefined, {profile: true}), viaProfile); // 멱등
+  assert.equal(withStopHook('claude --settings /x.json', home, undefined, {profile: true}), 'claude --settings /x.json');
+  assert.equal(withStopHook('codex --model m', home, undefined, {profile: true}), 'codex --model m');
+  // 프로필 파일이 없는 옛 설치는 공용 파일로 돌아간다
+  fs.rmSync(prof);
+  assert.ok(commandWords(withStopHook(CLAUDE, home, undefined, {profile: true})).includes(plain));
+});
+
+test('표시·비교: 프로필 파일을 붙인 명령과 공용 파일 명령은 withoutInlineScreen에서 같다', () => {
+  const home = tmp();
+  writeClaudeSettings(home);
+  const viaProfile = withStopHook(CLAUDE, home, undefined, {profile: true}), viaCmd = withStopHook(CLAUDE, home);
+  assert.notEqual(viaProfile, viaCmd);
+  assert.equal(withoutInlineScreen(viaProfile), withoutInlineScreen(viaCmd));
+  assert.equal(withoutInlineScreen(viaProfile), withoutInlineScreen(CLAUDE));
+});
+
+test('restart 재조립: 프로필 파일이 붙은 시작 명령은 재시작 뒤에도 프로필 파일을 지킨다', () => {
+  const home = tmp();
+  writeClaudeSettings(home);
+  const settings = {runners: {claude: {spawn: 'claude --model {model}', resume: 'claude --model {model} --resume {conversation}'}}};
+  const id = '0197aaaa-1111-4222-8333-444455556666';
+  const old = withStopHook('claude --model claude-fable-5-1', home, undefined, {profile: true});
+  const rebuilt = withStopHook(withInlineScreen(rebuildResumeCommand(settings, 'claude', old, id)), home);
+  assert.ok(commandWords(rebuilt).includes(claudeProfileSettingsPath(home)));
+  assert.equal(rebuilt.split('--settings').length, 2);
 });
