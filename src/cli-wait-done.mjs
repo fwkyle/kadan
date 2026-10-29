@@ -201,6 +201,12 @@ export function screenDoneResult({ text, entries = [], role, taskId, cards = [],
   return { result: markers.at(-1)?.result ?? null, dispatch: dispatch ?? null, count: markers.length };
 }
 
+function lastPerTask(markers, keyOf) {
+  const last = new Map();
+  markers.forEach((marker, index) => last.set(keyOf(marker), index));
+  return markers.filter((marker, index) => last.get(keyOf(marker)) === index);
+}
+
 export function runWaitLoop({
   floor: selectedFloor,
   session,
@@ -254,7 +260,8 @@ export function runWaitLoop({
     );
     if (fresh.length === 0) return null;
     const identity=taskIdentity(cards ?? (snapshotHome?new CardStore(snapshotHome).listSummaries():[]));
-    const resolved=fresh.map(marker=>({...marker,...identity.write(marker.taskId)}));
+    // 화면에 같은 카드의 마커가 여럿이면 카드별 마지막 하나만 기록한다 — screenDoneResult(from-screen)와 같은 의미다.
+    const resolved=lastPerTask(fresh.map(marker=>({...marker,...identity.write(marker.taskId)})),m=>m.executionKey??m.taskId);
     for (const marker of resolved) {
       record({
         kind: "done",
