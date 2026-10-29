@@ -168,10 +168,12 @@ test('F1: 시작 PID 기록이 없는 슈퍼 앞 우편은 같은 이름 세션�
     const peerMail = f.sends().find(e => e.by === 'peer-a');
     assert.equal(peerMail.transport, 'mailbox'); assert.equal(peerMail.keyDelivery, undefined);
     assert.doesNotMatch(peer.stderr, /PID 대조 생략/);
-    // 슈퍼가 아닌 발신자(boss)의 일반 우편은 main과 같이 경고하고 PID 대조 없이 바로 보낸다.
+    // 일반 발신자도 시작 PID를 모르면 같은 보관 경로를 쓴다.
     const plain = f.call('mail', 'peer-b', '일반 우편');
-    assert.match(plain.stderr, /PID 대조 생략/);
-    assert.equal(f.sends().filter(e => e.by === 'boss' && e.keyDelivery === 'sent').length, 1, plain.stdout + plain.stderr);
+    assert.equal(plain.status,0,plain.stderr);
+    assert.equal(JSON.parse(plain.stdout).wake,'watch-required');
+    assert.doesNotMatch(plain.stderr, /PID 대조 생략/);
+    assert.equal(f.sends().filter(e => e.by === 'boss' && e.keyDelivery === 'sent').length,0);
   } finally {
     spawnSync('tmux', ['-L', f.socket, 'kill-session', '-t', 'kadan-peer-b'], {env: f.env});
   }

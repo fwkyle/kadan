@@ -6,6 +6,7 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
+import {sessionOwner, assertSessionOwner} from '../session-ownership.mjs';
 import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, markStopped, unmarkStopped, readReviveState } from "../revive.mjs";
 import {
   pendingCardsFor,
@@ -24,7 +25,13 @@ export function cmdStop(argv) {
   if (!release) die(`자동 되살리기(kadan up --auto)가 실행 중이라 끄지 않았습니다. 잠시 뒤 다시 kadan stop ${role}를 치세요`, 1);
   const fail = (message) => { release(); die(message); };
   if (!floor.alive(session)) fail(`세션 없음: ${session}`);
-  const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(readLedger()), role);
+  const entries = readLedger();
+  let owner;
+  try {
+    owner = sessionOwner(entries, session, role);
+    assertSessionOwner(owner, floor.pid(session), {infrastructure:TARGETS.includes(role)});
+  } catch (error) { fail(error.message); }
+  const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), role);
   if (pending.length > 0) {
     console.log(
       `미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`
@@ -39,6 +46,7 @@ export function cmdStop(argv) {
     if (marked && readReviveState(home).targets?.[role]?.state !== "stopped") throw new Error("표시가 저장되지 않았다");
   } catch (error) { fail(`자동 되살리기 멈춤 표시 실패: ${error.message} — 끄지 않았습니다`); }
   try {
+    assertSessionOwner(owner, floor.pid(session), {infrastructure:TARGETS.includes(role)});
     floor.stop(session);
   } catch (error) {
     if (marked) { try { unmarkStopped(home, role, marked); } catch { /* 표시를 못 되돌려도 오류는 알린다 */ } }

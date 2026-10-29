@@ -197,6 +197,7 @@ test("해소 뒤 다시 죽으면 새 수명으로 한 번 상신한다(card-52)
 
 test("guardedSend 오류는 delivery를 밝힌다(card-52)", () => {
   const options = { session, role: entry.role, message: "card-52", recordedPid: 1,
+    readEntries:()=>[{kind:'start',role:entry.role,session,panePid:'1'}],
     floor: { name: "fake", alive: () => true, pid: () => "1", send: () => ({}) }, record: () => {} };
   assert.throws(() => guardedSend({ ...options, floor: { ...options.floor, alive: () => false } }),
     e => e.code === "KADAN_SESSION_MISSING" && e.delivery === "not-sent");

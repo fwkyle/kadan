@@ -21,7 +21,8 @@ function send(h, options = {}) {
   const receipt = guardedSend({
     floor: {name: 'fake', alive: () => true, pid: () => '7', send: (name, text) => { sent.push(text); return {}; }},
     session: 'kadan-header-받는', role: 'header-받는', message: '본문입니다', recordedPid: '7',
-    roleProfile: 'conductor', env: {KADAN_HOME: h, KADAN_ROLE: 'header-보내는'}, readEntries: () => [],
+    roleProfile: 'conductor', env: {KADAN_HOME: h, KADAN_ROLE: 'header-보내는'},
+    readEntries: () => [{kind:'start',role:'header-받는',session:'kadan-header-받는',panePid:'7'}],
     record: e => records.push(e), saveBody: (d, m) => saved.push(m), ...options,
   });
   return {receipt, text: sent[0], records, saved};

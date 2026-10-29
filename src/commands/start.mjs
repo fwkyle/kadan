@@ -15,6 +15,7 @@ import { roleNameWarning } from "../role-name.mjs";
 import { conversationOf } from "../conversation-ref.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
+import {sessionOwner} from '../session-ownership.mjs';
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { briefStartedRole } from "../start-brief.mjs";
 import {
@@ -60,6 +61,13 @@ export function cmdStart(argv, flags) {
   if (!preflight.ok) die(preflight.message, 2);
   if (preflight.switched) console.error(`로티 경로 자동 교정: ${preflight.switched.from ?? "(없음)"} → ${preflight.switched.to} (켜진 로티 1개, 연결 확인)`);
   const session = sessionName(role);
+  let startEntries;
+  try {
+    // 이름 충돌과 이전 세대 안내는 같은 시작 전 원장으로 판단한다.
+    startEntries = readLedger(ledgerHome());
+    sessionOwner(startEntries, session, role);
+  }
+  catch (error) { die(error.message, 2); }
   const reusing = floor.alive(session);
   const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
   const hiddenPolicy = inspectHiddenStartPolicy({ floorName: floor.name, hidden: Boolean(flags.hidden), roleProfile, reusing });
@@ -141,7 +149,7 @@ export function cmdStart(argv, flags) {
   if (!reusing) {
     let previous = null, previousUnread = null;
     try {
-      const entries = readLedger(ledgerHome());
+      const entries = startEntries;
       previous = entries.findLast(e => e.kind === "start" && (e.role ?? e.session?.replace(/^kadan-/, "")) === role) ?? null;
       if (previous) previousUnread = unreadForRole(mailboxLetters(entries), role);
     } catch { /* 원장을 못 읽으면 판단하지 않는다 */ }

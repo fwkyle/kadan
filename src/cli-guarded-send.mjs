@@ -29,6 +29,7 @@ import { stripAnsi, digest, recordedPid } from "./cli-basics.mjs";
 import { mailRuleField } from "./mail-rule.mjs";
 import { humanIdleMsFor } from "./notification-guard.mjs";
 import { familyConflictAlerts } from "./cli-family.mjs";
+import {sessionOwner, assertSessionOwner, assertSessionPid} from './session-ownership.mjs';
 
 export function guardedSend({
   floor: selectedFloor,
@@ -119,17 +120,9 @@ export function guardedSend({
     throw error;
   }
   const currentPid = selectedFloor.pid(session);
-  if (expectedPid && currentPid !== String(expectedPid)) {
-    const error = new Error(
-      `이름은 같은데 다른 프로세스다 (기록 ${expectedPid} / 현재 ${currentPid}). 사람 확인 필요.`
-    );
-    error.code = "KADAN_PID_MISMATCH";
-    error.delivery = "not-sent";
-    throw error;
-  }
-  if (!expectedPid) {
-    console.error("경고: 원장에 이 세션의 시작 기록이 없다 (PID 대조 생략)");
-  }
+  const owner = sessionOwner(entries, session, role);
+  const ownedPid = assertSessionOwner(owner, currentPid);
+  if (expectedPid != null) assertSessionPid(expectedPid, currentPid, session);
   // 카드 연결 전송은 현재 세대의 AI 신원(등록 실행기+모델)이 확인될 때만 전달한다.
   // 일반 우편·질문·답장은 taskId가 없으므로 이 경계를 거치지 않는다.
   let cardIdentity, runnerGuard;
@@ -163,8 +156,9 @@ export function guardedSend({
   let receipt;
   try {
     // 카드·일반 우편의 사람 입력 보호 시간은 받는 역할의 시작 프로필로 고른다(슈퍼감독 2분). 알림은 호출자가 notificationGuard에 담는다.
-    const humanIdleMs = humanIdleMsFor(entries.filter(e => e.kind === "start" && e.session === session).at(-1));
-    receipt = selectedFloor.send(session, message, {cardIdentity, notificationGuard, busyMail, humanIdleMs}) || {};
+    const humanIdleMs = humanIdleMsFor(owner.start);
+    receipt = selectedFloor.send(session, message,
+      {cardIdentity, expectedPid:ownedPid, notificationGuard, busyMail, humanIdleMs}) || {};
   } catch (error) {
     if (!["not-sent", "unknown"].includes(error.delivery)) error.delivery = "unknown";
     // 실제 바닥은 전송 실패를 영수증이 아니라 예외로 던진다. 전문 시도가 실패했다는 사실만 별도 kind로 남겨

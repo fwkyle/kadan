@@ -66,7 +66,9 @@ function backgroundFixture({human=false,sqlite=false}={}) {
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-handover-background-'));
  if(sqlite&&Number(process.versions.node.split('.')[0])>=24){createDatabase(home);writeStorageMarker(home,'sqlite');}
  // TMPDIR·TMUX_TMPDIR도 넘긴다: 빠지면 자식 CLI가 기본 tmux 폴더를 쓰고 시험의 tmux 조회와 소켓이 갈려 멈추고 서버가 남는다.
+ // 실행기가 끈 화면 대기도 전달한다. 빠지면 main/PR 모두 start마다 기본 2초를 기다린다.
  const env={PATH:process.env.PATH,HOME:process.env.HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:process.env.TMUX_TMPDIR,LANG:'en_US.UTF-8',
+  KADAN_ALT_CHECK_MS:process.env.KADAN_ALT_CHECK_MS,
   KADAN_HOME:home,KADAN_SOCKET:path.basename(home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux',KADAN_ROLE:human?'':'qa-상위'};
  const graph=path.join(home,'parents.json'),context=path.join(home,'context.md'),receipt=path.join(home,'receipt.json');
  fs.writeFileSync(graph,JSON.stringify({'qa-감독':'qa-상위','qa-작업자':'qa-감독','qa-상위':'@user'}));

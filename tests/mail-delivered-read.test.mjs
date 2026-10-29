@@ -16,7 +16,12 @@ import {dashboardData} from '../src/dashboard-api.mjs';
 // raw 창 전달 성공은 전달 읽음, 기록용 알림은 미확인 목록·건수에서 제외 (2026-09-27 [kyle])
 // 기본 원장 경로로 새지 않게 이 파일의 기본 KADAN_HOME도 임시 폴더로 둔다. 각 시험은 자기 폴더를 명시한다.
 process.env.KADAN_HOME=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-delivered-read-default-'));
-const home=()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-delivered-read-'));createDatabase(dir);writeStorageMarker(dir,'sqlite');return dir;};
+const home=()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-delivered-read-'));
+ createDatabase(dir);writeStorageMarker(dir,'sqlite');
+ appendLedger({kind:'start',role:'receiver',session:'kadan-receiver',panePid:'42'},dir);
+ return dir;
+};
 const fakeFloor=(receipt)=>({name:'tmux',alive:()=>true,pid:()=> '42',send:()=>typeof receipt==='function'?receipt():receipt});
 const deliver=(dir,{raw=true,receipt={keyDelivery:'sent',inputAcceptance:'unconfirmed'},...more}={})=>
  guardedSend({floor:fakeFloor(receipt),session:'kadan-receiver',role:'receiver',message:'감독 보고 원문',raw,recordedPid:'42',env:{KADAN_HOME:dir,KADAN_ROLE:'sender'},

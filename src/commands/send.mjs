@@ -24,6 +24,7 @@ import { pendingCardsFor } from "../cli-start-support.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { isPeerSuperMail } from "../peer-mail.mjs";
 import { humanIdleMsFor, isStorableMailHold } from "../notification-guard.mjs";
+import {sessionOwner} from '../session-ownership.mjs';
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -122,6 +123,7 @@ function deliverMessage(argv, flags, command) {
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
     const by = resolveLedgerBy({env:process.env});
     const entries = readLedger();
+    const owner = sessionOwner(entries, session, recipient);
     // 바로 넣을 수 없어 보관할 수 있는 우편: 발령(--task)·--raw는 보관하지 않는다.
     const storable = taskId == null && flags.raw !== true;
     // 슈퍼 간 우편만 감시기 알림과 같은 입력 보호를 붙인다(2026-10-13 [kyle]). 보관·실패 규칙은 모든 우편이 같다.
@@ -137,20 +139,18 @@ function deliverMessage(argv, flags, command) {
       console.log(JSON.stringify({...stored, wake:'watch-required',
         note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
     };
-    const expectedPid=recordedPid(lastStartFor(session));
-    // 슈퍼 간 우편은 시작 PID를 확인하지 못하면 세션이 살아 있어도 보관한다(main과 같은 경계, 2026-10-21 검수 F1).
-    // 같은 이름이지만 원장과 연결되지 않은 프로세스로 바로 넣지 않으려는 것이다. 일반 우편은 아래처럼 경고 후 PID 대조 없이 전송한다.
-    // 일반 우편까지 보관하면 카단이 띄우지 않은 세션으로 보내던 길이 막혀 이번 범위 밖이다.
+    const expectedPid=recordedPid(owner.start);
+    // 일반 우편도 현재 세대의 시작 PID가 없으면 기존 보관·감시기 안내 경로를 쓴다.
     if (!expectedPid) {
+      // 인계 전 주소로 온 슈퍼 답장도 확인된 현재 책임자에게 보관한다.
       if (peer) return store(`시작 PID 기록 없음: ${session}`);
       if (recipient!==role) {
         const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
         error.delivery='not-sent';throw error;
       }
-      // 시작 기록이 없고 세션도 없으면: 아는 역할은 보관하고, 모르는 역할(오타)은 조용히 저장하지 않고 실패한다.
-      if (storable && !sessionAlive(session)) {
-        if (isKnownRole(entries, readActiveHierarchy(entries), role)) return store(`세션 없음: ${session}`);
-        throw new Error(`알 수 없는 역할: ${role} — 시작 기록도 책임 관계도 없습니다. 역할 이름을 확인하세요`);
+      if (storable) {
+        if (isKnownRole(entries, readActiveHierarchy(entries), recipient)) return store(`시작 PID 기록 없음: ${session}`);
+        throw new Error(`알 수 없는 역할: ${recipient} — 시작 기록도 책임 관계도 없습니다. 역할 이름을 확인하세요`);
       }
     }
     // 위임받은 쪽이 업무 owner에게 보내는 결과 우편이면 보내기 전에 업무 잠금 안에서 판정·쓰기를 하고(놀고 있음 PR-3),
@@ -216,10 +216,6 @@ export function isKnownRole(entries, hierarchy, role) {
   const session = sessionName(role);
   if (entries.some(e => ['start', 'stop'].includes(e.kind) && (e.session === session || e.role === role))) return true;
   return hierarchy != null && (Object.hasOwn(hierarchy, role) || Object.values(hierarchy).includes(role));
-}
-
-function sessionAlive(session) {
-  try { return floor.alive(session) === true; } catch { return false; }
 }
 
 // 완료 통지를 보낸 작업자가 화면 DONE을 빠뜨리는 일이 잦다(2026-09-23 밤 작업자 10명 중 5명, 2026-09-24 kimi 검수자).
