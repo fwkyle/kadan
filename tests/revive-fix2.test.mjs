@@ -1,5 +1,6 @@
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -73,6 +74,7 @@ test('F2 끄는 도중 자동 실행이 겹쳐도 stop이 끝난 뒤 세션은 �
     const release = acquireReviveLock(w.home);
     assert.equal(typeof release, 'function');
     const stopper = spawn(process.execPath, [CLI, 'stop', '디코'], {env: w.env, stdio: ['ignore', 'pipe', 'pipe']});
+    t.after(() => stopChild(stopper));
     let out = ''; stopper.stdout.on('data', d => { out += d; }); stopper.stderr.on('data', d => { out += d; });
     const closed = new Promise(res => stopper.on('close', res));
     await sleep(1500);

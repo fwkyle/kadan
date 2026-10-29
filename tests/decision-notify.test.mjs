@@ -1,5 +1,6 @@
 import './helpers/isolated-home.mjs';
-import test from 'node:test';
+import test, {afterEach} from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,6 +16,11 @@ const TOKEN = 'FAKETOKEN-abc123', USER_ID = '424242424242';
 const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
 const childScript = new URL('./helpers/decision-child.mjs', import.meta.url).pathname;
 const live = [];
+// world() 준비 중 실패해도 시험 종료 훅이 서버 종료를 기다리고 SIGKILL로 대체한다.
+afterEach(async () => {
+  await Promise.all(live.map(child => stopChild(child)));
+  live.length = 0;
+});
 process.on('exit', () => { for (const c of live) c.kill('SIGKILL'); });
 const bodyOf = r => JSON.parse(r.body);
 const UUID = '91f490fd-1234-4abc-8def-0123456789ab';

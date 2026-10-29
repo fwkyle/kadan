@@ -8,9 +8,11 @@ import { once } from "node:events";
 import { makeHerdrFloor, herdrRpc } from "../src/floor-herdr.mjs";
 import { buildStartLedgerEntry, guardedSend } from "../src/cli.mjs";
 import { selectFloorName } from "../src/floor.mjs";
+import { stopChild } from './helpers/child-cleanup.mjs';
 
 function fixture() {
-  const env = { KADAN_HOME: "/tmp/kadan-herdr-test", KADAN_HERDR_SOCKET: path.join(os.homedir(), ".config/herdr/sessions/test/herdr.sock") };
+  const env = { KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-herdr-')),
+    KADAN_HERDR_SOCKET: path.join(os.homedir(), ".config/herdr/sessions/test/herdr.sock") };
   const start = { kind: "start", floor: "herdr", session: "kadan-판-작업자", panePid: "123",
     harness: "codex", model: "fixture-model", herdrSocket: env.KADAN_HERDR_SOCKET,
     herdrWorkspaceId: "opaque-workspace", herdrPaneId: "old-pane", herdrTerminalId: "opaque-terminal" };
@@ -211,7 +213,7 @@ test("소켓 응답의 한글 글자가 패킷 경계에서 나뉘어도 보존�
   try {
     await once(server.stdout, "data");
     assert.equal(herdrRpc(socket, "session.snapshot").text, "작업자 왕복");
-  } finally { server.kill(); await once(server, "exit"); }
+  } finally { await stopChild(server); }
 });
 
 for (const [runner, screen, keys] of [
@@ -237,6 +239,18 @@ test("신뢰 화면이 아닌 blocked는 기존처럼 입력 대기 실패다", 
 
 const busy = { busyMail: true };
 const prompts = f => f.state.calls.filter(call => call.method === "agent.prompt").length;
+
+test('herdr 시험 홈은 실행마다 다르고 옛 흔적 거절은 별도 홈에서 확인한다', () => {
+  const f = fixture(), clean = fixture();
+  assert.notEqual(f.env.KADAN_HOME, clean.env.KADAN_HOME);
+  assert.equal(path.dirname(f.env.KADAN_HOME), os.tmpdir());
+  fs.writeFileSync(path.join(f.env.KADAN_HOME, 'ledger.jsonl'), '');
+  assert.throws(() => guardedSend({floor: f.floor, session: f.start.session, role: '판-작업자',
+    message: '시험', env: f.env, recordedPid: '123', readEntries: () => [f.start],
+    record: () => {}, saveBody: () => {}}), /옛 저장소 흔적/);
+  assert.equal(f.state.calls.length, 0, '저장소에서 거절되어 바닥에 도달하지 않는다');
+  assert.equal(fs.existsSync(path.join(clean.env.KADAN_HOME, 'ledger.jsonl')), false);
+});
 
 test("응답 중 사람·역할 우편(busyMail 표시)은 입력 검사를 통과하면 전달된다 (LBR-1 결함 2)", () => {
   const f = fixture(); f.state.status = "working";
