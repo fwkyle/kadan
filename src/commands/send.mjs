@@ -142,6 +142,8 @@ function deliverMessage(argv, flags, command) {
     const expectedPid=recordedPid(owner.start);
     // 일반 우편도 현재 세대의 시작 PID가 없으면 기존 보관·감시기 안내 경로를 쓴다.
     if (!expectedPid) {
+      // 인계 전 주소로 온 슈퍼 답장도 확인된 현재 책임자에게 보관한다.
+      if (peer) return store(`시작 PID 기록 없음: ${session}`);
       if (recipient!==role) {
         const error=new Error(`답장 수신 책임자 ${recipient}의 시작 기록/PID가 없습니다`);
         error.delivery='not-sent';throw error;

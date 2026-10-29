@@ -55,11 +55,26 @@ function guardRunning({role, entries, force, accountRefresh = false, deps}) {
   return pending;
 }
 
-// 끄기 → stop 원장. restart가 낸 stop은 표시를 달아 "사용자가 직접 끈 역할"로 읽히지 않게 한다.
-// 계정 전환 재시작은 forced를 쓰지 않는다(--force와 구별). 하류(우편 세대·감시 발령·비서 이어열기)는 forced가 아니라
-// restart:true·restartOf를 읽으므로 같은 모양으로 이어진다(카드 docs/commands.md 대조표).
-function stopForRestart({role, session, floor, entries, deps, forced, reason, refresh}) {
-  assertSessionOwner(sessionOwner(deps.read(), session, role), floor.pid(session));
+// append-only 원장에서는 같은 PID·내용의 새 start도 역할 내 순번으로 구별한다.
+function restartGeneration(entries, role) {
+  let count = 0, start = null;
+  for (const entry of entries) {
+    if (entry.role !== role) continue;
+    if (entry.kind === 'start') { count++; start = entry; }
+    if (entry.kind === 'stop') start = null;
+  }
+  return start ? {count, digest: startDigest(start), pid: String(start.panePid)} : null;
+}
+
+// 끄기 → stop 원장. restart:true·restartOf로 우편·책임 세대를 이어간다.
+function stopForRestart({role, session, floor, entries, deps, generation, forced, reason, refresh}) {
+  const latest = deps.read();
+  const current = restartGeneration(latest, role);
+  if (!generation || !current || current.count !== generation.count
+      || current.digest !== generation.digest || current.pid !== generation.pid) {
+    fail('대화를 확인한 뒤 역할 세대가 바뀌었습니다 — 새 상태를 확인하고 다시 시도하세요');
+  }
+  assertSessionOwner(sessionOwner(latest, session, role), floor.pid(session));
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
   deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
@@ -96,6 +111,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const accountRefresh = flags.accountRefresh === true;
   const entries = deps.read();
   const start = ensureReady({role, session, floor, entries, deps, expectPid});
+  const generation = restartGeneration(entries, role);
   const pending = guardRunning({role, entries, force, accountRefresh, deps});
 
   const identity = launchIdentityOf(start.cmd);
@@ -134,7 +150,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   // 이제 끄고 같은 정체로 다시 띄운다.
   const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
   const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
-  stopForRestart({role, session, floor, entries, deps, forced: force ? pending : null, reason, refresh});
+  stopForRestart({role, session, floor, entries, deps, generation,
+    forced: force ? pending : null, reason, refresh});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -162,11 +179,12 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
   const {pending, previous} = withRecoveryLock(home, session, () => {
     const entries = deps.read();
     const start = ensureReady({role, session, floor, entries, deps, expectPid});
+    const generation = restartGeneration(entries, role);
     const open = guardRunning({role, entries, force, deps});
     const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
     // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
     if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
-    stopForRestart({role, session, floor, entries, deps, forced: force ? open : null, reason});
+    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, reason});
     return {pending: open, previous: startDigest(start)};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).

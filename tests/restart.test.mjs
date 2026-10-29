@@ -43,6 +43,34 @@ function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {},
 }
 const claudeFiles = {'.claude/sessions/150.json': {sessionId: ID, tmux: 'kadan-w:@3.%3'}, [`.claude/projects/-x/${ID}.jsonl`]: {}};
 
+for (const scenario of ['unchanged', 'pid-only', 'record-and-pid', 'record-same-pid', 'stop-only']) {
+  test(`대화 확인 중 재시작 대상 세대: ${scenario}`, () => {
+    const f = fixture({files: claudeFiles});
+    const original = f.deps.readJson;
+    let changed = false;
+    f.deps.readJson = file => {
+      const value = original(file);
+      if (!changed && scenario !== 'unchanged') {
+        changed = true;
+        const pid = ['record-same-pid', 'stop-only'].includes(scenario) ? '100' : '999';
+        if (scenario.startsWith('record-') || scenario === 'stop-only') {
+          f.entries.push({kind: 'stop', role: f.role, session: f.session});
+          if (scenario !== 'stop-only') f.entries.push({...f.entries[0], panePid: pid});
+        }
+        f.floor.pid = () => pid;
+      }
+      return value;
+    };
+    if (scenario === 'unchanged') {
+      f.run();
+      assert.equal(f.log.filter(([kind]) => kind === 'stop').length, 1);
+    } else {
+      assert.throws(() => f.run(), /PID|세대|다른 프로세스/);
+      assert.deepEqual(f.log, []);
+    }
+  });
+}
+
 test('restart는 대화 준비 뒤 PID가 바뀌어도 기존 세션을 끄지 않는다', () => {
   const f=fixture({files:claudeFiles});
   const original=f.deps.readJson;
