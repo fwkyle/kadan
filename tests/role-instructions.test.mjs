@@ -127,7 +127,8 @@ test('guardedSend: 준비 후 생존/PID·bytes/digest/saveBody 일치·오류 �
   const f=fixture(),sent=[],recorded=[],order=[];
   const floor={name:'fake',alive:()=>{order.push('alive');return true;},pid:()=>{order.push('pid');return '1';},send:(s,m)=>{order.push('send');sent.push(m);return {keyDelivery:'sent',inputAcceptance:'unconfirmed'};}};
   const send=extra=>guardedSend({floor,role:'recipient',session:'kadan-recipient',message:'완료 보고',roleProfile:'conductor',recordedPid:'1',env:{KADAN_HOME:f.home},source:'watch',
-    readEntries:()=>{order.push('read');return [];},record:e=>recorded.push(e),saveBody:(d,b)=>saveMailBody(d,b,f.home),...extra});
+    readEntries:()=>{order.push('read');return [{kind:'start',role:'recipient',session:'kadan-recipient',panePid:'1'}];},
+    record:e=>recorded.push(e),saveBody:(d,b)=>saveMailBody(d,b,f.home),...extra});
   const receipt=send();assert.deepEqual(order,['read','alive','pid','send']);assert.equal(receipt.bytes,Buffer.byteLength(sent[0])-Buffer.byteLength(sent[0].slice(0,sent[0].indexOf('\n\n')+2)));
   assert.equal(receipt.originalCardPath,null);
   assert.equal(receipt.digest,digest(sent[0]));assert.equal(readMailBody(receipt.digest,f.home),sent[0]);assert.equal(receipt.by,'watch');
@@ -143,7 +144,8 @@ test('전송 전 원문 상대경로는 기록된 start.cwd로 고정하며 첨�
   const f=fixture();
   const receipt=guardedSend({floor:{name:'fake',alive:()=>true,pid:()=> '1',send:()=>({})},role:'recipient',session:'kadan-recipient',
     message:'tasks/card.md 읽기',roleProfile:'worker',recordedPid:'1',env:{KADAN_HOME:f.home},
-    readEntries:()=>[{kind:'start',role:'recipient',cwd:'/repo/worker'}],record:()=>{},saveBody:()=>{}});
+    readEntries:()=>[{kind:'start',role:'recipient',session:'kadan-recipient',panePid:'1',cwd:'/repo/worker'}],
+    record:()=>{},saveBody:()=>{}});
   assert.equal(receipt.originalCardPath,'/repo/worker/tasks/card.md');
 });
 
@@ -178,7 +180,7 @@ test('conductor 지침: 정상 발령 후 AI 반복 폴링·문맥 유입 금지
   assert.doesNotMatch(f.compose({profile:'worker'}).instructions,/대화 문맥으로 가져오지 않는다/);
 });
 
-test('관계 없는 카드 본문 유실·hierarchy 실패·원장 오류의 통지도 전달하며 모름 표시',()=>{
+test('카드 본문 유실·hierarchy 실패는 모름 표시, 원장 오류는 PID 확인 불가로 전송 거절',()=>{
   const f=fixture(),c=card(f);
   fs.renameSync(c.path,c.path+'.preserved');
   const explicit=f.compose({profile:'worker'});assert.equal(explicit.metadata.profile,'worker');
@@ -188,10 +190,10 @@ test('관계 없는 카드 본문 유실·hierarchy 실패·원장 오류의 통
   assert.match(f.compose({profile:'conductor'}).instructions,/현재 hierarchy/);
   const sent=[];
   f.configure({version:1,roles:{recipient:'conductor'}});
-  const receipt=guardedSend({floor:{name:'fake',alive:()=>true,pid:()=> '1',send:(s,m)=>sent.push(m)},
+  assert.throws(()=>guardedSend({floor:{name:'fake',alive:()=>true,pid:()=> '1',send:(s,m)=>sent.push(m)},
     role:'recipient',session:'kadan-recipient',message:'원장 읽기 실패 알림',recordedPid:'1',env:{KADAN_HOME:f.home},source:'watch',
-    readEntries:()=>{throw new Error('손상');},record:()=>{},saveBody:()=>{}});
-  assert.equal(sent.length,1);assert.equal(receipt.roleProfile,'conductor');assert.match(sent[0],/원장 손상: 현재 담당·완료 상태 모름/);
+    readEntries:()=>{throw new Error('손상');},record:()=>{},saveBody:()=>{}}),e=>e.code==='KADAN_PID_MISSING');
+  assert.equal(sent.length,0);
   const mailbox=new SecretaryMailbox(f.home),stored=mailbox.send({by:'sender',message:'카드 유실 보고'});
   assert.equal(mailbox.read(stored.mailId).body,'sender → 비서\n\n카드 유실 보고');
 });

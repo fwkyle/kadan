@@ -204,6 +204,7 @@ test("watch가 보낸 것은 by=watch다 — 감독이 일한 것으로 세지 �
     source: "watch",
     env: { KADAN_ROLE: "b1-감독" },
     recordedPid: "111",
+    readEntries: () => [{kind:'start',role:'b1-작업자',session:'kadan-b1-작업자',panePid:'111'}],
     record: (entry) => records.push(entry),
   });
 
@@ -1179,6 +1180,7 @@ test("send --task는 taskId를 원장에 남기고 옵션이 없으면 예전 se
     role: "c21",
     message: "무표 발령",
     recordedPid: "111",
+    readEntries: () => [{kind:'start',role:'c21',session:'kadan-c21',panePid:'111'}],
     record: (entry) => records.push(entry),
   });
 

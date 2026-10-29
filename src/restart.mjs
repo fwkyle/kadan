@@ -15,6 +15,7 @@ import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversatio
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
+import {sessionOwner, assertSessionOwner} from './session-ownership.mjs';
 
 const SECRETARY = '비서';
 // 계정 전환 재시작에서 끄기 직전 재확인이 "상태가 바뀌었다"며 막았다는 표시. 실패가 아니라 건너뜀이다(claude-refresh가 읽는다).
@@ -58,6 +59,7 @@ function guardRunning({role, entries, force, accountRefresh = false, deps}) {
 // 계정 전환 재시작은 forced를 쓰지 않는다(--force와 구별). 하류(우편 세대·감시 발령·비서 이어열기)는 forced가 아니라
 // restart:true·restartOf를 읽으므로 같은 모양으로 이어진다(카드 docs/commands.md 대조표).
 function stopForRestart({role, session, floor, entries, deps, forced, reason, refresh}) {
+  assertSessionOwner(sessionOwner(deps.read(), session, role), floor.pid(session));
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
   deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),

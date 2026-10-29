@@ -10,6 +10,7 @@ import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
 import { HUMAN_IDLE_MS, forcedIdleMsFor } from "./notification-guard.mjs";
 import { prepareOutputLog } from "./output-log.mjs";
+import {assertSessionPid} from './session-ownership.mjs';
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
@@ -619,14 +620,28 @@ function checkTrustPrompt(session, run) {
   throw error;
 }
 
-export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid, hrtime = process.hrtime.bigint, cardIdentity, notificationGuard, humanIdleMs} = {}) {
+export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid = process.pid,
+  hrtime = process.hrtime.bigint, cardIdentity, expectedPid, notificationGuard, humanIdleMs} = {}) {
   const buffer = `kadan-send-${pid}-${hrtime().toString(36)}`;
   let stage = "not-started";
   let loaded = false;
   const checkMode = () => checkPaneMode(session, run);
+  const checkOwner = () => {
+    const pinnedPid = expectedPid ?? cardIdentity?.currentPid;
+    if (pinnedPid == null) return; // 직접 바닥 호출의 기존 계약. guardedSend는 항상 기대 PID를 준다.
+    const state = String(run(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}|#{pane_dead}'])).trim();
+    const [currentPid, dead] = state.split('|');
+    assertSessionPid(pinnedPid, currentPid, session);
+    if (dead !== '0') {
+      const error = new Error(`종료됐거나 상태를 확인하지 못한 pane: ${session}`);
+      error.code = 'KADAN_PANE_DEAD';
+      throw error;
+    }
+  };
   // 카드·알림·일반 우편이 같은 사람 입력 시각 기준을 쓴다. 알림 보호 객체가 없는 카드·일반 우편은
   // 호출자(guardedSend)가 받는 역할에 맞춰 넘긴 humanIdleMs를 쓴다. 안 넘기면 기본 30초다(슈퍼감독 2분, 2026-10-22).
   const checkSendPane = () => {
+    if (!cardIdentity) checkOwner();
     if (cardIdentity) checkCardPane(session, cardIdentity, run, spawn, humanIdleMs);
     else if (notificationGuard) checkNotificationPane(session, notificationGuard, run);
     else checkHumanIdle(session, run, {humanIdleMs});
@@ -659,6 +674,7 @@ export function sendTmux(session, text, {run = tmuxOut, spawn = spawnSync, pid =
     try {
       if (cardIdentity || !notificationGuard) checkHumanIdle(session, run, {humanIdleMs});
       else checkNotificationPane(session, notificationGuard, run);
+      checkOwner();
     } catch (error) { error.enterWithheld = true; throw error; }
     stage = "enter-attempted";
     run(["send-keys", "-t", `=${session}:`, "Enter"]);

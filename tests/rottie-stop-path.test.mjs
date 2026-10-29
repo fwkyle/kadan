@@ -78,6 +78,7 @@ function commandFixture({removeFails=false,showFails=false,closeFails=false,hasT
   executable(path.join(binDir,'ps'),`console.log(${JSON.stringify(binary)});`);
   executable(path.join(binDir,'tmux'),`
     const fs=require('node:fs'),args=process.argv.slice(2);
+    if(args.includes('display-message'))console.log('123');
     if(args.includes('kill-session'))fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(['tmux-stop'])+'\\n');
   `);
   const role='test-worker',session='kadan-test-worker';

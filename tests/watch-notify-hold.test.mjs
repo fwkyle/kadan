@@ -81,7 +81,8 @@ test('강제로 넣으려다 입력 보호 밖의 이유로 실패하면 횟수�
   assert.equal(tracker.forced('w'), true);
   const floor = {name: 'fake', alive: () => true, pid: () => '1', send: () => ({})};
   const send = options => guardedSend({...options, env: {KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-sent-'))},
-    readEntries: () => [], saveBody: () => {}, record: () => { throw new Error('ledger down'); }});
+    readEntries: () => [{kind:'start',role:'w',session:'kadan-w',panePid:'1'}],
+    saveBody: () => {}, record: () => { throw new Error('ledger down'); }});
   tracker.beginCycle();
   assert.throws(() => sendWatchMessage('w', '경보', {selectedFloor: floor, readStart: () => ({panePid: 1}), send, tracker}),
     e => e.delivery === 'sent');
@@ -174,7 +175,8 @@ test('강제 전달도 세션이 없으면 넣지 않는다 — 생존·PID 확�
   const pastes = [];
   const floor = {name: 'fake', alive: () => false, pid: () => '1', send: () => pastes.push(1)};
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-notify-force-'));
-  const send = options => guardedSend({...options, env: {KADAN_HOME: home}, readEntries: () => [],
+  const send = options => guardedSend({...options, env: {KADAN_HOME: home},
+    readEntries: () => [{kind:'start',role:'worker',session:'kadan-worker',panePid:'1'}],
     saveBody: () => {}, record: () => {}});
   assert.throws(() => sendWatchMessage('worker', '경보', {selectedFloor: floor, readStart: () => ({panePid: 1}), send, tracker}),
     e => e.code === 'KADAN_SESSION_MISSING');

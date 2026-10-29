@@ -98,7 +98,7 @@ test('강도만 다르면 통과하고 경고 한 줄을 출력하며 send 기�
 test('시작 기록이 없거나 명령이 없는 세션은 옛 신원 경계가 먼저, 더 엄하게 막는다(약화 없음)',()=>{
  const r=rig();
  r.entries=[];
- assert.throws(()=>r.call(),e=>e.code==='KADAN_AI_IDENTITY_UNVERIFIED');
+ assert.throws(()=>r.call(),e=>e.code==='KADAN_PID_MISSING');
  r.entries=[r.start()];
  assert.throws(()=>r.call(),e=>e.code==='KADAN_AI_IDENTITY_UNVERIFIED');
  assert.equal(r.sent,0);

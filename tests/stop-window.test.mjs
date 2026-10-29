@@ -105,9 +105,10 @@ test("cmdStop wires last start after floor stop and appends the close receipt", 
     process.exitCode = exitCode;
   });
   cli.appendLedger({ kind: "start", role: base.role, session: base.session, rottieTerminalId: "stale" });
-  cli.appendLedger({ kind: "start", role: base.role, session: base.session, rottieTerminalId: "latest" });
+  cli.appendLedger({ kind: "start", role: base.role, session: base.session, panePid:'11', rottieTerminalId: "latest" });
   let stopped = false;
   t.mock.method(floor, "alive", () => true);
+  t.mock.method(floor, "pid", () => '11');
   t.mock.method(floor, "stop", session => { assert.equal(session, base.session); stopped = true; });
   t.mock.method(console, "log", () => { assert.equal(stopped, true); });
   t.mock.method(console, "error", () => { assert.equal(stopped, true); });

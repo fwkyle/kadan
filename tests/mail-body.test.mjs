@@ -57,6 +57,9 @@ test("보낸 본문은 지문 이름의 옆 파일로 남고 원장 줄에는 �
 
 function mailFixture() {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-mail-ack-')),sent=[];
+  for (const role of ['recipient','sender','next']) {
+    appendLedger({kind:'start',role,session:`kadan-${role}`,panePid:'111'},home);
+  }
   const floor={...fakeFloor,send:(session,message)=>{sent.push({session,message});return {};}};
   const send=options=>guardedSend({floor,session:'kadan-recipient',role:'recipient',message:'본문',recordedPid:'111',
     env:{KADAN_HOME:home,KADAN_ROLE:'sender'},readEntries:()=>readLedger(home),
@@ -81,7 +84,10 @@ test('모든 일반 우편은 역할 프로필 없이도 ID와 수신자 ack 안
 });
 
 test('ack 명령의 수신자 작은따옴표·명령 치환·세미콜론은 셸에서 그대로 보존된다',()=>{
-  const f=mailFixture(),role="receiver'$(printf hacked);`printf hacked`",receipt=f.send({role});
+  const f=mailFixture(),role="receiver'$(printf hacked);`printf hacked`";
+  const session='kadan-quoted-receiver';
+  appendLedger({kind:'start',role,session,panePid:'111'},f.home);
+  const receipt=f.send({role,session});
   const command=f.sent.at(-1).message.split('\n').find(line=>line.startsWith('KADAN_ROLE='));
   const result=spawnSync('/bin/sh',['-c',`kadan() { printf '%s\\n' "$KADAN_ROLE" "$@"; }\n${command}`],{encoding:'utf8',env:{PATH:'/usr/bin:/bin'}});
   assert.equal(result.status,0,result.stderr);

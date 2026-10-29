@@ -123,7 +123,10 @@ test('미전송·부분전송 오류는 guardedSend에서 덮지 않고 성공 s
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'scm-test-unit-'));
   for(const delivery of ['not-sent','unknown',undefined]){
     const records=[],error=new Error('바닥 오류');if(delivery)error.delivery=delivery;
-    assert.throws(()=>guardedSend({floor:{name:'tmux',alive:()=>true,pid:()=> '123',send:()=>{throw error;}},session:'kadan-test',role:'test',message:'본문',recordedPid:'123',env:{KADAN_HOME:home},readEntries:()=>[],record:e=>records.push(e)}),e=>e.delivery===(delivery||'unknown'));
+    const entries=[{kind:'start',role:'test',session:'kadan-test',panePid:'123'}];
+    assert.throws(()=>guardedSend({floor:{name:'tmux',alive:()=>true,pid:()=> '123',send:()=>{throw error;}},
+      session:'kadan-test',role:'test',message:'본문',recordedPid:'123',env:{KADAN_HOME:home},
+      readEntries:()=>entries,record:e=>records.push(e)}),e=>e.delivery===(delivery||'unknown'));
     assert.equal(records.length,0);
   }
 });

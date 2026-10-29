@@ -15,7 +15,8 @@ function fixture(options = {}) {
   const hierarchy = path.join(home, 'parents.json'), context = path.join(home, 'context.md'), receipt = path.join(home, 'receipt.json');
   fs.writeFileSync(hierarchy, JSON.stringify({old:'upper',child:'old',upper:'@user'}));
   fs.writeFileSync(context, '승인된 작업');
-  const rows = ['old','child','upper'].map((role,i) => ({kind:'start',role,panePid:String(i+10),floor:'tmux',cmd:'cat',cwd:home}));
+  const rows = ['old','child','upper'].map((role,i) =>
+    ({kind:'start',role,session:`kadan-${role}`,panePid:String(i+10),floor:'tmux',cmd:'cat',cwd:home}));
   rows.push({kind:'send',role:'old',taskId:'existing-task'});
   const live = new Map(rows.filter(e=>e.kind==='start').map(e=>[`kadan-${e.role}`,e.panePid]));
   const sent = [], stopped = [], notifications = [], spawns = [];
@@ -26,7 +27,7 @@ function fixture(options = {}) {
     send:(s,message)=>{sent.push({session:s,message});if(options.activationFails&&message.includes('인계 전환 완료'))throw new Error('send uncertain');}};
   const h = new Handover({home,floor,env:{KADAN_ROLE:'upper',KADAN_HOME:home,PRIVATE_TOKEN:'runner-canary'},
     readEntries:()=>rows,record:e=>rows.push(e),now:()=>clock,watchAlive:()=>!options.watchDead,
-    start:role=>{live.set(`kadan-${role}`,'30');rows.push({kind:'start',role,panePid:'30'});},
+    start:role=>{live.set(`kadan-${role}`,'30');rows.push({kind:'start',role,session:`kadan-${role}`,panePid:'30'});},
     send:(role,message,pid)=>guardedSend({floor,session:`kadan-${role}`,role,message,recordedPid:pid || live.get(`kadan-${role}`),
       env:{KADAN_HOME:home},readEntries:()=>rows,record:e=>rows.push(e),saveBody:()=>{}}),
     sleep:ms=>{assert.ok(!fs.existsSync(path.join(home,'handovers','.lock')) || options.busyLock);clock+=ms;f.onSleep?.(clock-Date.parse('2026-09-09T00:00:00Z'));},

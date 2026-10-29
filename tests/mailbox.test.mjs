@@ -86,6 +86,9 @@ test('inbox 기본 역할, 명시 역할, 보기와 boolean 옵션은 본문을 
 });
 test('fake floor 실터미널 경로의 질문ID·원문 조회·최종 답장·잘못된 수신자 전달 차단',()=>{
  const {home,sender,receiver}=fixture('sqlite');let injections=0,body='';
+ for (const role of ['sender','receiver']) {
+  appendLedger({kind:'start',role,session:`kadan-${role}`,panePid:'42'},home);
+ }
  const floor={name:'fake',alive:()=>true,pid:()=> '42',send:(session,message)=>{injections++;body=message;return {};}};
  const send=(role,by,message,mailContext)=>guardedSend({floor,role,session:`kadan-${role}`,message,mailContext,
   recordedPid:'42',env:{KADAN_HOME:home,KADAN_ROLE:by},readEntries:()=>readLedger(home),record:e=>appendLedger(e,home),saveBody:(d,b)=>saveMailBody(d,b,home)});
@@ -132,6 +135,7 @@ test('SQLite 동시 최종 답장과 취소는 한 쪽만 성공한다',async()=
 
 test('전달 중 취소 경쟁은 외부전달 완료와 최종 반영 실패를 구분한다',()=>{
  const {home,sender,receiver}=fixture('sqlite');
+ appendLedger({kind:'start',role:'sender',session:'kadan-sender',panePid:'42'},home);
  const q=receiver.send({by:'sender',message:'경쟁 질문',expectReply:true});
  let delivered=0;
  const module=new URL('../src/mailbox.mjs',import.meta.url).href;

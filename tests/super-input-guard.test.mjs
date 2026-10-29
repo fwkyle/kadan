@@ -159,7 +159,7 @@ function guardedSeen(start) {
 test('guardedSend: 일반 우편·카드 경로 값은 받는 역할의 start 프로필이 정한다', () => {
   assert.equal(guardedSeen(SUPER), 120_000);
   assert.equal(guardedSeen(WORKER), 30_000);
-  assert.equal(guardedSeen(null), 30_000);
+  assert.throws(()=>guardedSeen(null),e=>e.code==='KADAN_PID_MISSING');
 });
 
 // ---- 5번 강제 넣기도 마지막 사람 입력 뒤 30초는 기다린다(kyle 결정 B, 2026-10-22). 5번·3번 값은 그대로다 ----
