@@ -33,7 +33,7 @@ export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,rol
   if(matches.length!==1)throw new Error('고유한 원본 우편 ID 필요');
   parent=matches[0];
   if(typeof parent.by!=='string'||!parent.by.trim()||typeof parent.role!=='string'||!parent.role.trim())throw new Error('원본 우편 참가자 정보 손상');
-  if(workKey&&workKey!==parent.workKey)throw new Error('답장과 원본의 업무가 다릅니다');
+  if(workKey&&workKey!==parent.workKey)throw new Error(parent.workKey?'답장과 원본의 업무가 다릅니다':'원본 질문에는 업무가 없습니다. 답장에서 --work를 빼세요(원본의 연결을 그대로 이어받습니다)');
   if(executionKey&&executionKey!==parent.executionKey)throw new Error('답장과 원본의 실행이 다릅니다');
   if(role!==undefined&&!parent.replyRecipients.includes(role))throw new Error(`답장 받는 역할은 원본 발신자의 현재 책임자 ${parent.currentSender}여야 합니다`);
   if(by!==undefined&&by!==parent.currentRecipient&&!isUserActor(by))throw new Error(`원본 수신자의 현재 책임자 ${parent.currentRecipient} 또는 사용자만 답장할 수 있습니다`);
@@ -46,7 +46,8 @@ export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,rol
   if(!cards.some(c=>c.key===executionKey))throw new Error('연결할 실행 없음');
   const linked=works.find(w=>w.executions.some(x=>x.key===executionKey));
   if(workKey&&(!linked||linked.key!==workKey))throw new Error('해당 업무에 연결된 실행이 아닙니다');
-  workKey??=linked?.key;
+  // 답장은 질문 시점의 연결을 그대로 잇는다. 그 뒤에 실행이 업무에 연결돼도 업무를 새로 붙이지 않는다(새 우편만 추론).
+  if(!parent)workKey??=linked?.key;
  }
  if(workKey&&!works.some(w=>w.key===workKey))throw new Error('연결할 업무 없음');
  if(parent&&(workKey!==parent.workKey||executionKey!==parent.executionKey))throw new Error('답장과 원본의 업무 또는 실행이 다릅니다');
