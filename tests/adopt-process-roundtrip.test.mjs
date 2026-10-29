@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fork, spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import {prepareTransfer, transferStatus} from '../src/adopt-transfer.mjs';
 import {processIdentity} from '../src/adopt-process.mjs';
 import {readConversationPermissions} from '../src/adopt-permissions.mjs';
@@ -17,7 +18,7 @@ test('real receiver process acknowledges; only the captured fake Rottie source p
   {timeout: 20000}, async t => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-adopt-roundtrip-'));
     const source = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
-    t.after(() => { if (source.exitCode === null) source.kill(); });
+    t.after(() => stopChild(source));
     const original = path.join(home, 'original.jsonl');
     const current = path.join(home, 'current.jsonl');
     const event = id => ({type: 'user', sessionId: id, uuid: 'message',
@@ -56,7 +57,7 @@ process.send({ready:true});
 `);
     const receiver = fork(receiverFile, [], {stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: {...process.env, KADAN_HOME: home, KADAN_ROLE: 'new', CLAUDE_CODE_SESSION_ID: 'receiver'}});
-    t.after(() => { if (receiver.exitCode === null) receiver.kill(); });
+    t.after(() => stopChild(receiver));
     const [ready] = await once(receiver, 'message');
     assert.equal(ready.ready, true);
     const originalProcess = processIdentity(source.pid);

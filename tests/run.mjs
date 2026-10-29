@@ -6,8 +6,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn, spawnSync} from 'node:child_process';
+import {spawnSync} from 'node:child_process';
 import {isDefaultHome} from '../src/live-floor-guard.mjs';
+import {runTestFile} from './helpers/run-file.mjs';
+
+// 최장 개별 시험 86.6초(2026-10-29)와 같은 파일의 나머지 시험·병렬 지연에 여유를 둔다.
+const FILE_TIMEOUT_MS = 300_000;
 
 const env = {...process.env};
 env.KADAN_SOCKET = `kadan-test-${process.pid}-${Date.now().toString(36)}`;
@@ -60,22 +64,40 @@ function reportNetHits() {
 }
 
 const dir = new URL('./', import.meta.url);
-const files = process.argv.length > 2 ? process.argv.slice(2)
+const options = [], selected = [];
+let concurrency = Math.max(1, os.availableParallelism() - 1);
+for (let i = 2; i < process.argv.length; i++) {
+  const arg = process.argv[i];
+  if (arg.startsWith('--test-concurrency')) {
+    concurrency = Number(arg.includes('=') ? arg.split('=')[1] : process.argv[++i]);
+  } else if (arg.startsWith('-')) {
+    options.push(arg);
+    if (!arg.includes('=') && /^--test-(name-pattern|skip-pattern|reporter|reporter-destination|timeout)$/.test(arg)) {
+      options.push(process.argv[++i]);
+    }
+  } else selected.push(arg);
+}
+if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('시험 동시 개수는 양의 정수여야 합니다');
+const files = selected.length ? selected
   : fs.readdirSync(dir).filter(f => f.endsWith('.test.mjs')).sort().map(f => `tests/${f}`);
-// spawnSync는 신호 처리기를 막으므로 비동기로 띄운다.
-const child = spawn(process.execPath, ['--test', ...files], {env, stdio: 'inherit'});
+const controller = new AbortController();
 let interrupted = null; // 중단 신호를 받으면 시험 쪽 종료 코드와 상관없이 128+신호 번호로 끝낸다
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
   process.on(signal, () => {
     interrupted = code;
-    child.kill(signal);
-    setTimeout(() => { cleanup(); process.exit(code); }, 10_000).unref();
+    controller.abort();
   });
 }
-child.on('error', err => { console.error(err.message); cleanup(); process.exit(1); });
-child.on('exit', (status, signal) => {
-  const leaked = reportNetHits();
-  cleanup();
-  const code = interrupted ?? status ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1);
-  process.exit(leaked && code === 0 ? 1 : code);
-});
+let next = 0, failed = 0, completed = 0;
+await Promise.all(Array.from({length: Math.min(concurrency, files.length)}, async () => {
+  while (!controller.signal.aborted && next < files.length) {
+    const file = files[next++];
+    const code = await runTestFile(file, {env, timeoutMs: FILE_TIMEOUT_MS, args: options, signal: controller.signal});
+    completed++;
+    if (code !== 0) { failed++; console.error(`실패한 시험 파일: ${file} (exit ${code})`); }
+  }
+}));
+const leaked = reportNetHits();
+console.error(`시험 파일: 완료 ${completed}/${files.length}, 실패 ${failed}`);
+cleanup();
+process.exit(interrupted ?? (failed || leaked ? 1 : 0));

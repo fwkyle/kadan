@@ -1,5 +1,5 @@
 import './helpers/isolated-home.mjs';
-import test from 'node:test';
+import test, {afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,6 +7,10 @@ import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {limitEnv, limitHolders} from '../src/heavy-limit.mjs';
+import {stopChild} from './helpers/child-cleanup.mjs';
+
+const children = new Set();
+afterEach(async () => { await Promise.all([...children].map(child => stopChild(child))); });
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 // 시험마다 새 카단 폴더. 실사용 카단 폴더의 잠금은 건드리지 않는다.
@@ -15,6 +19,8 @@ const node = script => [process.execPath, '-e', script];
 
 function start(home, kind, command) {
   const child = spawn(process.execPath, [cli, 'limit', 'run', kind, '--', ...command], {env: {...process.env, KADAN_HOME: home}});
+  children.add(child);
+  child.once('exit', () => children.delete(child));
   const out = {stdout: '', stderr: ''};
   child.stdout.on('data', d => { out.stdout += d; });
   child.stderr.on('data', d => { out.stderr += d; });

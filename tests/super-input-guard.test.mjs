@@ -3,6 +3,9 @@
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   HUMAN_IDLE_MS, SUPER_HUMAN_IDLE_MS, forcedIdleMsFor, humanIdleMsFor,
 } from '../src/notification-guard.mjs';
@@ -275,7 +278,8 @@ test('B tmux notificationHold: 강제 + 2분 창은 20초 전 입력이면 보�
 });
 
 function herdrFixture() {
-  const env = {KADAN_HOME: '/tmp/kadan-herdr-force-test', KADAN_HERDR_SOCKET: '/tmp/herdr-force-test.sock'};
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-herdr-force-'));
+  const env = {KADAN_HOME: home, KADAN_HERDR_SOCKET: path.join(home, 'herdr.sock')};
   const start = {kind: 'start', floor: 'herdr', session: 'kadan-판-감독', panePid: '123', harness: 'codex', model: 'm',
     herdrSocket: env.KADAN_HERDR_SOCKET, herdrWorkspaceId: 'w', herdrPaneId: 'p', herdrTerminalId: 't'};
   const pane = {pane_id: 'p', workspace_id: 'w', terminal_id: 't', scroll: {offset_from_bottom: 0, viewport_rows: 58}};

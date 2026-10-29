@@ -1,10 +1,21 @@
 import './helpers/isolated-home.mjs';
-import test from 'node:test';
+import test, {afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn, spawnSync} from 'node:child_process';
+import {spawn as rawSpawn, spawnSync} from 'node:child_process';
+import {stopChild} from './helpers/child-cleanup.mjs';
+
+const children = new Set();
+const spawn = (...args) => {
+  const child = rawSpawn(...args);
+  children.add(child);
+  child.once('exit', () => children.delete(child));
+  return child;
+};
+// 준비 완료 단언이 실패해도 harness·따라 보기·가짜 부모를 모두 정리한다.
+afterEach(async () => { await Promise.all([...children].map(child => stopChild(child))); });
 import {seniorCommand} from '../src/senior.mjs';
 import {RottieFloorError, assertRottieArgv, runRottie} from '../src/rottie-cli.mjs';
 import {closeSeniorTab} from '../src/senior-tab.mjs';

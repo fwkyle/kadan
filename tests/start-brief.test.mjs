@@ -1,5 +1,6 @@
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -198,6 +199,7 @@ test('격리 tmux: 화면을 기다리는 동안 세션이 다른 세대로 바�
   const w = world(t, 'g');
   w.env.KADAN_START_BRIEF_INTERVAL_MS = '1500';
   const child = spawn(process.execPath, [CLI, 'start', 'swap', '--hidden', '--profile', 'worker', '--cmd', 'claude', '--reason', 't'], {env: w.env});
+  t.after(() => stopChild(child));
   let stdout = '', stderr = '';
   child.stdout.on('data', d => { stdout += d; }); child.stderr.on('data', d => { stderr += d; });
   const done = new Promise(res => child.on('close', res));

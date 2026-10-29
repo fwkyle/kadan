@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,7 +28,7 @@ test('프로세스 간 설정 저장은 한 번만 성공하고 충돌한 변경
   const run = writer => {
     const script = fileURLToPath(new URL('./helpers/runner-settings-writer.mjs', import.meta.url));
     const child = spawn(process.execPath, [script, home, writer]);
-    t.after(() => { if (child.exitCode === null) child.kill(); });
+    t.after(() => stopChild(child));
     let output = '';
     child.stdout.on('data', data => output += data);
     child.stderr.on('data', data => output += data);

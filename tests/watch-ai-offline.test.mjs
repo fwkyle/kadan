@@ -1,5 +1,6 @@
 // 감시 AI가 맥북 잠자기·인터넷 없음 때문에 실패하면 사용자에게 알리지 않는다(2026-10-07 [kyle]).
 import test from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,8 +11,9 @@ import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const callProcess=path.join(root,'src/watch-call-process.mjs');
 
-test('호출 중 프로세스가 멈췄다 깨어나면(잠자기) 시간 초과가 아니라 slept로 끝낸다',async()=>{
+test('호출 중 프로세스가 멈췄다 깨어나면(잠자기) 시간 초과가 아니라 slept로 끝낸다',async t=>{
  const child=spawn(process.execPath,[callProcess,'sleep 5','4000'],{env:{...process.env,KADAN_JUDGE_SLEEP_GAP_MS:'300'},stdio:['pipe','pipe','pipe','ipc']});
+ t.after(()=>stopChild(child));
  let stderr='';child.stderr.on('data',d=>{stderr+=d;});child.stdin.end();
  await new Promise(r=>setTimeout(r,200));
  process.kill(child.pid,'SIGSTOP');
