@@ -13,7 +13,7 @@ import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
-import {withStopHook, withProfileStopHookOnRestart, isProfileOriginStart, stopHookSettingsKindOf} from './stop-hook-settings.mjs';
+import {withStopHook, withProfileStopHookOnRestart, isProfileOriginStart, isClaudeCommand} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
 
 const SECRETARY = '비서';
@@ -123,7 +123,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   // 프로필 출신(stop-hook-settings.mjs isProfileOriginStart)만 프로필 설정 파일(ui-inspector 차단)로 맞춘다. --cmd 출신·override는 그대로.
   const rebuilt = withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation));
   const command = isProfileOriginStart(start) ? withProfileStopHookOnRestart(rebuilt, home) : withStopHook(rebuilt, home);
-  const stopHookSettings = stopHookSettingsKindOf(command);
+  const stopHookSettings = isClaudeCommand(command) ? (isProfileOriginStart(start) ? 'profile' : 'common') : null; // 의도를 이어 적는다
   const again = launchIdentityOf(command), mode = conversationOf(command);
   if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');

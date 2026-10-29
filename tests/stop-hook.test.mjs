@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {handleStopHook, lastLineMarker, mayBeSameRun} from '../src/stop-hook.mjs';
 import {appendSpool, readSpool, hookDoneSince, spoolPath} from '../src/stop-hook-spool.mjs';
-import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, withProfileStopHookOnRestart, stopHookSettingsKindOf, isProfileOriginStart, hasMcpOptions, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
+import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, withProfileStopHookOnRestart, stopHookSettingsKindOf, stopHookIntent, isClaudeCommand, isProfileOriginStart, hasMcpOptions, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
 import {withInlineScreen, withoutInlineScreen} from '../src/inline-screen.mjs';
 import {launchIdentityOf, matchesAiProcess, commandWords} from '../src/ai-identity.mjs';
 import {launchFor} from '../src/runner-settings.mjs';
@@ -621,11 +621,62 @@ test('restartRole: runnerChoice 있는 시작은 프로필 파일로, 출처 필
   assert.ok(commandWords(keptCommon.command).includes(plain) && !commandWords(keptCommon.command).includes(prof));
   assert.ok(commandWords(cmdOrigin.again().command).includes(plain)); // 연속 재시작에도 유지
   assert.ok(commandWords(run('prof', {stopHookSettings: 'profile'}).again().command).includes(prof));
-  assert.equal(stopHookSettingsKindOf(withStopHook(CLAUDE, home)), 'common');
+  assert.equal(stopHookSettingsKindOf(withStopHook(CLAUDE, home)), 'common'); // 실제로 붙은 파일 종류(확인용)
   assert.equal(stopHookSettingsKindOf(withStopHook(CLAUDE, home, undefined, {profile: true})), 'profile');
   assert.equal(stopHookSettingsKindOf('claude --settings /x.json'), null);
   assert.equal(stopHookSettingsKindOf(CLAUDE), null);
+  assert.equal(stopHookIntent({profileLaunch: true}), 'profile');
+  assert.equal(stopHookIntent({profileLaunch: false}), 'common');
+  assert.equal(stopHookIntent({profileLaunch: true, cmd: 'claude --mcp-config=/m.json'}), 'common'); // MCP 옵션이면 의도도 common
+  assert.ok(isClaudeCommand(CLAUDE) && !isClaudeCommand('codex --model m'));
+  // F4: 의도 필드가 있으면 launchSource 규칙은 쓰지 않는다
+  assert.equal(isProfileOriginStart({launchSource: 'settings', stopHookSettings: 'common'}), false);
   assert.equal(isProfileOriginStart({launchSource: 'settings'}), true);
   assert.equal(isProfileOriginStart({launchSource: 'override'}), false);
   assert.equal(isProfileOriginStart({}), false);
+});
+
+test('F4 조합: 설치 전·후 × (프로필 시작·같은 직접 명령·MCP 옵션·사람 --settings) 시작 → 설치 → 재시작 2회', async () => {
+  const {restartRole} = await import('../src/restart.mjs');
+  const {settingsWith} = await import('./helpers/runner-table.mjs');
+  const id = '0197aaaa-1111-4222-8333-444455556666';
+  const base = 'claude --model claude-haiku-5-5 --effort low';
+  const cases = [
+    // [이름, 시작 명령 꼴, 프로필 시작?, 재시작 뒤 기대 파일]
+    ['profile', base, true, 'profile'], ['direct', base, false, 'common'],
+    ['mcp', `${base} --strict-mcp-config`, true, 'common'], ['human', `${base} --settings /x/custom.json`, true, 'human'],
+    ['mcp-direct', `${base} --mcp-config /m.json`, false, 'common'],
+  ];
+  for (const installedBefore of [false, true]) for (const [name, cmd, profileLaunch, want] of cases) {
+    const home = tmp(), label = `${installedBefore ? '설치 후' : '설치 전'} ${name}`;
+    if (installedBefore) writeClaudeSettings(home);
+    const plain = claudeSettingsPath(home), prof = claudeProfileSettingsPath(home);
+    // start.mjs와 같은 순서: 설정 명령은 profile 주입, 직접 명령은 공용 주입, 의도는 파일 유무와 무관하게 기록
+    const started = withStopHook(cmd, home, undefined, {profile: profileLaunch});
+    const entry = {kind: 'start', floor: 'tmux', role: 'probe', session: 'kadan-probe', cmd: started, roleProfile: 'worker',
+      launchSource: 'settings', // 직접 명령도 설정값과 같으면 launchSource는 settings로 남는다(F4 재현)
+      stopHookSettings: stopHookIntent({profileLaunch, cmd}),
+      ...(profileLaunch ? {runnerChoice: {runner: 'claude', model: 'claude-haiku-5-5', effort: 'low'}} : {})};
+    const user = path.join(home, 'u'), cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-f4-cwd-'));
+    fs.mkdirSync(path.join(user, '.claude/sessions'), {recursive: true});
+    fs.mkdirSync(path.join(user, '.claude/projects/-x'), {recursive: true});
+    fs.writeFileSync(path.join(user, '.claude/sessions/150.json'), JSON.stringify({sessionId: id, tmux: 'kadan-probe:@3.%3'}));
+    fs.writeFileSync(path.join(user, `.claude/projects/-x/${id}.jsonl`), '{}');
+    entry.cwd = cwd; entry.panePid = '100';
+    const entries = [entry];
+    let pid = '100';
+    const floor = {name: 'tmux', alive: () => true, pid: () => pid, stop() {}, create() { pid = String(Number(pid) + 100); return {panePid: pid}; }};
+    const deps = {read: () => entries, record: e => entries.push(e), pendingCards: () => [], closeWindow: () => ({}),
+      openWindow: () => ({method: 'hidden'}), paneInfo: () => ({panePid: pid, location: 'kadan-probe:@3.%3'}),
+      processTree: () => [{pid, ppid: '1', args: '-zsh'}, {pid: '150', ppid: pid, args: entries.at(-1).cmd}],
+      openFiles: () => [], readJson: f => JSON.parse(fs.readFileSync(f)), homeDir: user};
+    writeClaudeSettings(home); // 설치(이미 있으면 그대로)
+    for (let round = 1; round <= 2; round++) {
+      const out = restartRole({home, role: 'probe', session: 'kadan-probe', floor, settings: settingsWith(), deps});
+      const words = commandWords(out.command);
+      if (want === 'human') assert.ok(words.includes('/x/custom.json') && !words.includes(prof) && !words.includes(plain), `${label} r${round}`);
+      else assert.ok(words.includes(want === 'profile' ? prof : plain) && !words.includes(want === 'profile' ? plain : prof), `${label} r${round}`);
+      assert.equal(entries.at(-1).stopHookSettings, entry.stopHookSettings, `${label} 의도 보존 r${round}`);
+    }
+  }
 });

@@ -112,25 +112,31 @@ export function withStopHook(cmd, home = ledgerHome(), warn = () => {}, {profile
   return got && got.length === expected.length && got.every((word, i) => word === expected[i]) ? next : skip('명령을 다시 읽을 수 없음');
 }
 
-// 명령에 카단이 붙인 설정 파일 종류: 'profile'(프로필 전용) | 'common'(공용) | null(없음·사람이 준 다른 파일).
-// start 사건의 stopHookSettings에 적어, 재시작이 어느 파일을 붙였었는지 추측 없이 따르게 한다.
+// 명령에 실제로 붙은 카단 설정 파일 종류: 'profile' | 'common' | null(없음·사람이 준 다른 파일). 기록용이 아니라 확인용이다(의도는 아래).
 export function stopHookSettingsKindOf(cmd) {
   const words = typeof cmd === 'string' ? commandWords(cmd) : null;
-  if (!words) return null;
-  const at = words.findIndex(word => word === SETTINGS_FLAG || word.startsWith(`${SETTINGS_FLAG}=`));
+  const at = words ? words.findIndex(word => word === SETTINGS_FLAG || word.startsWith(`${SETTINGS_FLAG}=`)) : -1;
   if (at < 0) return null;
   const value = words[at] === SETTINGS_FLAG ? words[at + 1] : words[at].slice(SETTINGS_FLAG.length + 1);
   if (typeof value !== 'string') return null;
   return value.endsWith(PROFILE_SETTINGS_SUFFIX) ? 'profile' : value.endsWith(SETTINGS_SUFFIX) ? 'common' : null;
 }
 
-// 재시작에서 이 역할을 프로필 출신으로 볼지. 새 사건은 stopHookSettings를 따른다(--cmd 출신 common은 common 유지 = 빠져나갈 길).
-// 설정이 명령을 고른 흔적(runnerChoice)이 있으면 profile — 프로필 파일이 없던 때 시작해 common이 적힌 경우도 되돌린다.
-// 필드가 없는 옛 사건은 launchSource가 settings·fallback·review-for면 프로필 출신이다: 이 변경 전에는 --cmd 빠져나갈 길이 없었다.
+// start 사건의 stopHookSettings는 '적용 의도'다: 설정이 고른 명령이면 'profile', 그 밖의 claude 명령(--cmd·override)은 'common'.
+// 실제로 붙은 파일이 아니라 의도를 적는 이유: 설정 파일이 아직 설치되기 전에 시작해도 설치 뒤 재시작이 같은 판정을 하게 하려고(F4).
+// MCP 옵션이 있는 명령은 프로필 시작이어도 차단을 끼우지 않으므로 의도도 common이다.
+export function stopHookIntent({profileLaunch, cmd}) {
+  const words = cmd ? commandWords(cmd) : null;
+  return profileLaunch && !(words && hasMcpOptions(words)) ? 'profile' : 'common';
+}
+export const isClaudeCommand = cmd => typeof cmd === 'string' && launchIdentityOf(cmd).harness === 'claude';
+
+// 재시작에서 이 역할을 프로필 출신으로 볼지. 의도 필드(stopHookSettings)가 있으면 그것만 따른다(--cmd 출신 common은 common 유지 = 빠져나갈 길).
+// 의도 필드가 없는 옛 사건만: 설정이 명령을 고른 흔적(runnerChoice)이 있거나 launchSource가 settings·fallback·review-for면 프로필 출신이다.
+// 이 변경 전에는 --cmd 빠져나갈 길이 없었으니 옛 settings 사건을 profile로 봐도 누구의 의도도 깨지 않는다.
 export function isProfileOriginStart(start) {
-  if (start?.runnerChoice) return true;
   if (start?.stopHookSettings) return start.stopHookSettings === 'profile';
-  return ['settings', 'fallback', 'review-for'].includes(start?.launchSource);
+  return Boolean(start?.runnerChoice) || ['settings', 'fallback', 'review-for'].includes(start?.launchSource);
 }
 
 // 재시작용: 설정이 고른 명령(runnerChoice 있음)으로 시작한 역할이면 공용 설정 파일(또는 설정 옵션 없음)을 프로필 파일로 맞춘다.

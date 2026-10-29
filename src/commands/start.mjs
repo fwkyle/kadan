@@ -7,7 +7,7 @@ import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadan
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
 import { withInlineScreen, withoutInlineScreen } from "../inline-screen.mjs";
-import { withStopHook, stopHookSettingsKindOf } from "../stop-hook-settings.mjs";
+import { withStopHook, stopHookIntent, isClaudeCommand } from "../stop-hook-settings.mjs";
 import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
 import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
@@ -132,8 +132,8 @@ export function cmdStart(argv, flags) {
   if (selected) launchRecord.runnerChoice = {
     runner: selected.runner, model: selected.model, ...(selected.effort ? {effort: selected.effort} : {}),
   };
-  const stopHookSettings = stopHookSettingsKindOf(flags.cmd); // 어느 설정 파일을 붙였는지 — 재시작이 따른다
-  if (stopHookSettings) launchRecord.stopHookSettings = stopHookSettings;
+  // 적용 의도(profile|common)를 파일 설치 여부와 무관하게 남긴다 — 재시작이 따른다(stop-hook-settings.mjs stopHookIntent).
+  if (isClaudeCommand(flags.cmd)) launchRecord.stopHookSettings = stopHookIntent({profileLaunch: Boolean(selected), cmd: flags.cmd});
   // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
   const cmdPolicy = inspectStartCmdPolicy({ roleProfile, cmd: flags.cmd, reusing });
   if (!cmdPolicy.ok) die(cmdPolicy.message, 2);
