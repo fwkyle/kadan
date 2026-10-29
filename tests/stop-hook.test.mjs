@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {handleStopHook, lastLineMarker, mayBeSameRun} from '../src/stop-hook.mjs';
 import {appendSpool, readSpool, hookDoneSince, spoolPath} from '../src/stop-hook-spool.mjs';
-import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, withProfileStopHookOnRestart, hasMcpOptions, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
+import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, withProfileStopHookOnRestart, stopHookSettingsKindOf, isProfileOriginStart, hasMcpOptions, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
 import {withInlineScreen, withoutInlineScreen} from '../src/inline-screen.mjs';
 import {launchIdentityOf, matchesAiProcess, commandWords} from '../src/ai-identity.mjs';
 import {launchFor} from '../src/runner-settings.mjs';
@@ -598,8 +598,34 @@ test('restartRole: runnerChoice 있는 시작은 프로필 파일로, 출처 필
   const second = a.again(); // 연속 재시작
   assert.ok(commandWords(second.command).includes(prof));
   assert.deepEqual(a.entries.at(-1).runnerChoice, choice);
-  const b = run('b', {launchSource: 'settings'}); // runnerChoice 없음(옛 기록·--cmd)
-  const viaCmd = b.again();
-  assert.ok(commandWords(viaCmd.command).includes(plain) && !commandWords(viaCmd.command).includes(prof));
-  assert.equal(b.entries.at(-1).runnerChoice, undefined);
+  assert.equal(a.entries.at(-1).stopHookSettings, 'profile');
+  // 옛 사건(필드 없음): settings·fallback·review-for는 프로필 출신이라 공용·설정 없음 모두 profile로, override·없음은 그대로
+  const c = run('c', {launchSource: 'settings'});
+  const viaOld = c.again();
+  assert.ok(commandWords(viaOld.command).includes(prof) && !commandWords(viaOld.command).includes(plain));
+  assert.equal(c.entries.at(-1).stopHookSettings, 'profile');
+  assert.ok(commandWords(c.again().command).includes(prof)); // 연속 재시작
+  for (const source of ['fallback', 'review-for']) {
+    assert.ok(commandWords(run(source, {launchSource: source}).again().command).includes(prof), source);
+  }
+  for (const extra of [{launchSource: 'override'}, {}]) {
+    const r = run(`o${Object.keys(extra).length}`, extra);
+    const out = r.again();
+    assert.ok(commandWords(out.command).includes(plain) && !commandWords(out.command).includes(prof));
+    assert.equal(r.entries.at(-1).stopHookSettings, 'common');
+    assert.equal(r.entries.at(-1).runnerChoice, undefined);
+  }
+  // 새 사건: 필드를 그대로 따른다. --cmd 출신 common(launchSource가 settings처럼 보여도)은 common 유지 = 빠져나갈 길
+  const cmdOrigin = run('cmd', {launchSource: 'settings', stopHookSettings: 'common'});
+  const keptCommon = cmdOrigin.again();
+  assert.ok(commandWords(keptCommon.command).includes(plain) && !commandWords(keptCommon.command).includes(prof));
+  assert.ok(commandWords(cmdOrigin.again().command).includes(plain)); // 연속 재시작에도 유지
+  assert.ok(commandWords(run('prof', {stopHookSettings: 'profile'}).again().command).includes(prof));
+  assert.equal(stopHookSettingsKindOf(withStopHook(CLAUDE, home)), 'common');
+  assert.equal(stopHookSettingsKindOf(withStopHook(CLAUDE, home, undefined, {profile: true})), 'profile');
+  assert.equal(stopHookSettingsKindOf('claude --settings /x.json'), null);
+  assert.equal(stopHookSettingsKindOf(CLAUDE), null);
+  assert.equal(isProfileOriginStart({launchSource: 'settings'}), true);
+  assert.equal(isProfileOriginStart({launchSource: 'override'}), false);
+  assert.equal(isProfileOriginStart({}), false);
 });

@@ -7,7 +7,7 @@ import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadan
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
 import { withInlineScreen, withoutInlineScreen } from "../inline-screen.mjs";
-import { withStopHook } from "../stop-hook-settings.mjs";
+import { withStopHook, stopHookSettingsKindOf } from "../stop-hook-settings.mjs";
 import { appendLedger, ledgerHome, resolveLedgerBy, readLedger } from "../ledger.mjs";
 import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
@@ -132,6 +132,8 @@ export function cmdStart(argv, flags) {
   if (selected) launchRecord.runnerChoice = {
     runner: selected.runner, model: selected.model, ...(selected.effort ? {effort: selected.effort} : {}),
   };
+  const stopHookSettings = stopHookSettingsKindOf(flags.cmd); // 어느 설정 파일을 붙였는지 — 재시작이 따른다
+  if (stopHookSettings) launchRecord.stopHookSettings = stopHookSettings;
   // 프로필을 단 새 pane은 실행 명령 없이 만들 수 없다 — 빈 셸에 카드 지시가 붙는 사고 차단.
   const cmdPolicy = inspectStartCmdPolicy({ roleProfile, cmd: flags.cmd, reusing });
   if (!cmdPolicy.ok) die(cmdPolicy.message, 2);
