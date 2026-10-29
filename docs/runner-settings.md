@@ -57,6 +57,7 @@ kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 �
   덮어쓰지 않으며, 충돌한 쪽은 최신 설정을 다시 읽고 저장해야 한다. 잠금은 최대 5초 기다리고
   풀리지 않으면 실패한다. 원인을 모르는 잠금을 자동으로 지우지 않는다.
 - `start`의 start 기록에는 `launchSource`(`settings`/`override`/`fallback`), `settingsRevision`을 남긴다. `override`면 `overrideReason`과 그때의 설정 명령(`settingsCmd`)도 남긴다. `fallback`이면 `fallbackIndex`·`fallbackReason`·`settingsPreset`과 1순위 명령(`settingsCmd`, 있으면)을 남긴다.
+- 설정이 고른 claude 명령(프로필 시작·재시작)에는 `--settings`로 프로필 전용 파일이 붙어 ui-inspector MCP가 막힌다. `--cmd` 직접 시작은 막지 않는다(화면 검증 역할의 빠져나갈 길). 새로 띄우는 세션부터 적용되고, 재시작은 start 사건의 `runnerChoice`가 있는 역할만 바뀐다. 자세한 동작은 [Stop 훅](stop-hook.md)의 해당 절.
 - 설정 파일이 없으면 `start`는 예전처럼 `--cmd`가 필요하다. 인계 후임 생성은 선임 명령을 이유("인계: 선임 실행 명령 유지")와 함께 그대로 쓴다.
 - `work auto-configure`는 작업자·검수자 세션을 실제로 띄운 모델의 계열이 같으면 거부한다.
 - 설정을 바꿔도 떠 있는 세션은 그대로다. 다음 발령부터 적용된다. 검수자 `start --for`는 다른 계열의 첫 후보를 고른다. 그 밖의 대화형 역할은 자동 폴백을 하지 않는다(감시 AI는 아래 [감시 AI](#감시-ai)). 다만 떠 있는 옛 세션에 카드를 보내는 것은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)가 막는다.

@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {handleStopHook, lastLineMarker, mayBeSameRun} from '../src/stop-hook.mjs';
 import {appendSpool, readSpool, hookDoneSince, spoolPath} from '../src/stop-hook-spool.mjs';
-import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
+import {withStopHook, writeClaudeSettings, claudeSettingsPath, claudeProfileSettingsPath, DENIED_MCP_SERVERS, withProfileStopHookOnRestart, hasMcpOptions, claudeSettingsBody, shellQuote, hookCommand, HOOK_SCRIPT} from '../src/stop-hook-settings.mjs';
 import {withInlineScreen, withoutInlineScreen} from '../src/inline-screen.mjs';
 import {launchIdentityOf, matchesAiProcess, commandWords} from '../src/ai-identity.mjs';
 import {launchFor} from '../src/runner-settings.mjs';
@@ -540,4 +540,66 @@ test('restart 재조립: 프로필 파일이 붙은 시작 명령은 재시작 �
   const rebuilt = withStopHook(withInlineScreen(rebuildResumeCommand(settings, 'claude', old, id)), home);
   assert.ok(commandWords(rebuilt).includes(claudeProfileSettingsPath(home)));
   assert.equal(rebuilt.split('--settings').length, 2);
+});
+
+test('재시작 출처 판정: runnerChoice 출신은 공용·옵션 없음 → 프로필 파일, 이미 프로필·사람 --settings·MCP 옵션은 그대로', () => {
+  const home = tmp();
+  writeClaudeSettings(home);
+  const plain = claudeSettingsPath(home), prof = claudeProfileSettingsPath(home);
+  const fromPlain = withStopHook(CLAUDE, home), fromProfile = withStopHook(CLAUDE, home, undefined, {profile: true});
+  assert.deepEqual(commandWords(withProfileStopHookOnRestart(fromPlain, home)), commandWords(fromProfile));
+  assert.deepEqual(commandWords(withProfileStopHookOnRestart(CLAUDE, home)), commandWords(fromProfile)); // 설정 옵션 없음
+  assert.equal(withProfileStopHookOnRestart(fromProfile, home), fromProfile);
+  assert.equal(withProfileStopHookOnRestart('claude --settings /x.json --model m', home), 'claude --settings /x.json --model m');
+  assert.equal(withProfileStopHookOnRestart(`claude --settings=${plain} --model m`, home).includes(prof), true); // = 꼴도 바꾼다
+  for (const cmd of ['claude --mcp-config /m.json --model m', 'claude --model m --strict-mcp-config', 'claude --mcp-config=/m.json']) {
+    assert.ok(hasMcpOptions(commandWords(cmd)));
+    assert.ok(!commandWords(withProfileStopHookOnRestart(cmd, home)).includes(prof), cmd); // 차단을 끼우지 않는다(공용 파일만)
+    assert.ok(!commandWords(withStopHook(cmd, home, undefined, {profile: true})).includes(prof), cmd);
+  }
+  assert.equal(withProfileStopHookOnRestart('codex --model m', home), 'codex --model m');
+});
+
+test('restartRole: runnerChoice 있는 시작은 프로필 파일로, 출처 필드를 이어 적어 2회 연속에서도 보존. --cmd 출신은 공용 유지', async () => {
+  const {restartRole} = await import('../src/restart.mjs');
+  const {settingsWith} = await import('./helpers/runner-table.mjs');
+  const home = tmp();
+  writeClaudeSettings(home);
+  const plain = claudeSettingsPath(home), prof = claudeProfileSettingsPath(home);
+  const id = '0197aaaa-1111-4222-8333-444455556666';
+  const run = (name, startExtra) => {
+    const user = path.join(home, name, 'user'), cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-rs-cwd-'));
+    fs.mkdirSync(path.join(user, '.claude/sessions'), {recursive: true});
+    fs.mkdirSync(path.join(user, '.claude/projects/-x'), {recursive: true});
+    fs.mkdirSync(cwd, {recursive: true});
+    fs.writeFileSync(path.join(user, '.claude/sessions/150.json'), JSON.stringify({sessionId: id, tmux: 'kadan-probe:@3.%3'}));
+    fs.writeFileSync(path.join(user, `.claude/projects/-x/${id}.jsonl`), '{}');
+    const original = withStopHook('claude --model claude-haiku-5-5 --effort low', home);
+    let pid = '100';
+    const entries = [{kind: 'start', floor: 'tmux', role: 'probe', session: 'kadan-probe', cmd: original, cwd, panePid: pid,
+      roleProfile: 'worker', ...startExtra}];
+    const floor = {name: 'tmux', alive: () => true, pid: () => pid, stop() {}, create() { pid = String(Number(pid) + 100); return {panePid: pid}; }};
+    const deps = {read: () => entries, record: e => entries.push(e), pendingCards: () => [], closeWindow: () => ({}),
+      openWindow: () => ({method: 'hidden'}), paneInfo: () => ({panePid: pid, location: 'kadan-probe:@3.%3'}),
+      processTree: () => [{pid, ppid: '1', args: '-zsh'}, {pid: '150', ppid: pid, args: entries.at(-1).cmd}],
+      openFiles: () => [], readJson: f => JSON.parse(fs.readFileSync(f)), homeDir: user};
+    const again = () => restartRole({home, role: 'probe', session: 'kadan-probe', floor, settings: settingsWith(), deps});
+    return {entries, again};
+  };
+  const choice = {runner: 'claude', model: 'claude-haiku-5-5', effort: 'low'};
+  const a = run('a', {launchSource: 'settings', settingsPreset: 'p1', settingsRevision: 3, runnerChoice: choice});
+  const first = a.again();
+  assert.ok(commandWords(first.command).includes(prof) && !commandWords(first.command).includes(plain));
+  const startA = a.entries.at(-1);
+  assert.deepEqual(startA.runnerChoice, choice);
+  assert.equal(startA.launchSource, 'settings');
+  assert.equal(startA.settingsPreset, 'p1');
+  assert.equal(startA.compareMode, undefined);
+  const second = a.again(); // 연속 재시작
+  assert.ok(commandWords(second.command).includes(prof));
+  assert.deepEqual(a.entries.at(-1).runnerChoice, choice);
+  const b = run('b', {launchSource: 'settings'}); // runnerChoice 없음(옛 기록·--cmd)
+  const viaCmd = b.again();
+  assert.ok(commandWords(viaCmd.command).includes(plain) && !commandWords(viaCmd.command).includes(prof));
+  assert.equal(b.entries.at(-1).runnerChoice, undefined);
 });

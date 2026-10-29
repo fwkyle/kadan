@@ -71,6 +71,10 @@ export function wordsWithoutStopHook(words) {
   return kept;
 }
 
+// 사람이 MCP를 직접 지정한 명령(--mcp-config·--strict-mcp-config, `=` 꼴 포함)에는 MCP 차단을 끼우지 않는다(원본 카드 To-be 2 멱등 조건).
+const MCP_FLAGS = ['--mcp-config', '--strict-mcp-config'];
+export const hasMcpOptions = words => words.some(word => MCP_FLAGS.some(flag => word === flag || word.startsWith(`${flag}=`)));
+
 // 실행 파일 낱말 바로 뒤의 글자 위치. 따옴표 낱말도 commandWords와 같은 규칙으로 센다.
 function afterExecutable(cmd, head) {
   for (let i = 1; i <= cmd.length; i++) {
@@ -92,7 +96,7 @@ export function withStopHook(cmd, home = ledgerHome(), warn = () => {}, {profile
   const words = commandWords(cmd);
   if (!words?.length) return cmd;
   const plain = claudeSettingsPath(home), profileFile = claudeProfileSettingsPath(home);
-  const file = profile && fs.existsSync(profileFile) ? profileFile : plain;
+  const file = profile && !hasMcpOptions(words) && fs.existsSync(profileFile) ? profileFile : plain;
   if (!fs.existsSync(file)) return cmd;
   if (words.some(word => word === SETTINGS_FLAG || word.startsWith(`${SETTINGS_FLAG}=`))) return cmd;
   let head = 0;
@@ -106,4 +110,25 @@ export function withStopHook(cmd, home = ledgerHome(), warn = () => {}, {profile
   const expected = [...words.slice(0, head + 1), SETTINGS_FLAG, file, ...words.slice(head + 1)];
   const got = commandWords(next);
   return got && got.length === expected.length && got.every((word, i) => word === expected[i]) ? next : skip('명령을 다시 읽을 수 없음');
+}
+
+// 재시작용: 설정이 고른 명령(runnerChoice 있음)으로 시작한 역할이면 공용 설정 파일(또는 설정 옵션 없음)을 프로필 파일로 맞춘다.
+// 사람이 준 다른 --settings, MCP 옵션이 있는 명령, 이미 프로필 파일인 명령은 그대로 둔다. 추측하지 않는다.
+export function withProfileStopHookOnRestart(cmd, home = ledgerHome(), warn = () => {}) {
+  if (typeof cmd !== 'string' || launchIdentityOf(cmd).harness !== 'claude') return cmd;
+  const words = commandWords(cmd);
+  const profileFile = claudeProfileSettingsPath(home);
+  if (!words?.length || hasMcpOptions(words) || !fs.existsSync(profileFile)) return withStopHook(cmd, home, warn, {profile: true});
+  const plain = claudeSettingsPath(home);
+  const at = words.findIndex(word => word === SETTINGS_FLAG);
+  const inline = words.findIndex(word => word.startsWith(`${SETTINGS_FLAG}=`));
+  if (at < 0 && inline < 0) return withStopHook(cmd, home, warn, {profile: true});
+  const valueIndex = at >= 0 ? at + 1 : inline;
+  const value = at >= 0 ? words[valueIndex] : words[inline].slice(SETTINGS_FLAG.length + 1);
+  if (value !== plain) return cmd; // 프로필 파일이거나 사람이 준 다른 파일
+  if (!cmd.includes(plain)) return cmd;
+  const next = cmd.replace(plain, () => profileFile); // 두 파일은 같은 폴더·같은 인용 규칙이라 경로 부분만 바꾸면 따옴표가 유지된다
+  const got = commandWords(next);
+  const expected = words.map((word, i) => i === valueIndex ? (at >= 0 ? profileFile : `${SETTINGS_FLAG}=${profileFile}`) : word);
+  return got && got.length === expected.length && got.every((word, i) => word === expected[i]) ? next : cmd;
 }

@@ -13,7 +13,7 @@ import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
-import {withStopHook} from './stop-hook-settings.mjs';
+import {withStopHook, withProfileStopHookOnRestart} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
 
 const SECRETARY = '비서';
@@ -120,7 +120,9 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const conversation = findConversation(spec, {pids: [chain.root], openFiles: () => deps.openFiles(chain.pids),
     readJson: deps.readJson, tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
-  const command = withStopHook(withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation)));
+  // 설정이 고른 명령으로 시작한 역할(start 사건의 runnerChoice)만 프로필 설정 파일(ui-inspector 차단)로 맞춘다. --cmd 출신·옛 기록은 그대로.
+  const rebuilt = withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation));
+  const command = start.runnerChoice ? withProfileStopHookOnRestart(rebuilt, home) : withStopHook(rebuilt, home);
   const again = launchIdentityOf(command), mode = conversationOf(command);
   if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
@@ -145,6 +147,11 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       cmd: command, cwd: start.cwd}),
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
+    // 출처를 이어 적어 연속 재시작에서도 같은 판정이 된다. compareMode·pickId는 이어받지 않는다(시작 수가 겹쳐 세어진다).
+    ...(start.runnerChoice ? {runnerChoice: start.runnerChoice} : {}),
+    ...(start.launchSource ? {launchSource: start.launchSource} : {}),
+    ...(start.settingsPreset ? {settingsPreset: start.settingsPreset} : {}),
+    ...(start.settingsRevision != null ? {settingsRevision: start.settingsRevision} : {}),
     restartOf: startDigest(start), restartConversation: conversation,
     ...(reason ? {reason} : {}),
     ...(force ? {forced: true, forcedTasks: pending} : {}),
