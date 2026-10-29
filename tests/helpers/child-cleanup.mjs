@@ -18,22 +18,32 @@ export async function stopChild(child, graceMs = 500) {
   }
 }
 
-export function signalPid(pid, signal) {
-  try { process.kill(pid, signal); }
-  catch (error) { if (error.code !== 'ESRCH') throw error; }
+// 환경은 표지 확인에만 쓰고 출력/예외에 담지 않는다. ps 실패는 정리 대상을 늘리지 않는다.
+function processes(pid) {
+  const args = pid ? ['eww', '-p', String(pid)] : ['axeww'];
+  const result = spawnSync('ps', [...args, '-o', 'pid=,lstart=,command='], {
+    encoding: 'utf8', timeout: 1000, maxBuffer: 32 * 1024 * 1024,
+    env: {...process.env, LC_ALL: 'C'},
+  });
+  if (pid && result.status === 1 && !result.stdout?.trim()) return [];
+  if (result.status !== 0) throw new Error('시험 프로세스 신원 조회 실패');
+  return result.stdout.split('\n').flatMap(line => {
+    const match = line.trim().match(/^(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.+)$/);
+    return match ? [{pid: Number(match[1]), identity: `${match[2]} ${match[3]}`}]: [];
+  });
 }
 
-// 파일별 독립 프로세스 그룹과 그 자손만 고른다. 운영 세션 이름/소켓은 조회하지 않는다.
-export function childPids(pid) {
-  const result = spawnSync('ps', ['-axo', 'pid=,ppid=,pgid='], {encoding: 'utf8', timeout: 1000});
-  if (result.status !== 0) throw new Error(`시험 자식 PID 조회 실패: ${result.error?.code ?? result.status}`);
-  const rows = result.stdout.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number));
-  const owned = new Set([pid]);
-  for (const [id, , group] of rows) if (group === pid) owned.add(id);
-  let size;
-  do {
-    size = owned.size;
-    for (const [id, parent] of rows) if (owned.has(parent)) owned.add(id);
-  } while (size !== owned.size);
-  return [...owned].filter(id => rows.some(([p]) => p === id));
+const marked = (row, marker) => row.identity.split(/\s+/).includes(`${marker}=1`);
+
+// 부모가 종료되어 PPID가 1로 바뀌어도 실행별 표지는 상속된다.
+export function markedChildren(marker) {
+  return processes().filter(row => row.pid > 1 && row.pid !== process.pid && marked(row, marker));
+}
+
+export function signalChild(row, marker, signal) {
+  const current = processes(row.pid).find(p => p.pid === row.pid);
+  if (!current || current.identity !== row.identity || !marked(current, marker)) return false;
+  try { process.kill(row.pid, signal); return true; }
+  catch (error) { if (error.code !== 'ESRCH') throw new Error('시험 프로세스 신호 전송 실패'); }
+  return false;
 }

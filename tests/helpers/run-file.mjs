@@ -1,10 +1,13 @@
 import {spawn} from 'node:child_process';
-import {childPids, signalPid} from './child-cleanup.mjs';
+import {randomUUID} from 'node:crypto';
+import {markedChildren, signalChild} from './child-cleanup.mjs';
 
 export function runTestFile(file, {env, timeoutMs, args = [], signal, report = console.error,
   stdio = 'inherit'} = {}) {
   return new Promise(resolve => {
-    const childEnv = {...env};
+    // 중첩 실행도 바깥 표지를 보존한다. 값 하나를 덮어쓰면 바깥 정리에서 빠진다.
+    const marker = `KADAN_TEST_OWNER_${randomUUID().replaceAll('-', '')}`;
+    const childEnv = {...env, [marker]: '1'};
     delete childEnv.NODE_TEST_CONTEXT;
     const child = spawn(process.execPath, ['--test', ...args, file], {
       env: childEnv, stdio, detached: true,
@@ -20,14 +23,16 @@ export function runTestFile(file, {env, timeoutMs, args = [], signal, report = c
     const stop = reason => {
       if (stopping || finished) return;
       stopping = true;
-      let pids = [];
-      try { pids = childPids(child.pid); }
+      let children = [];
+      try { children = markedChildren(marker); }
       catch (error) { report(`${file}: ${error.message}`); }
-      report(`${reason}: ${file}; 남은 자식 PID: ${pids.join(', ') || child.pid}`);
-      // 부모가 먼저 끝나도 그룹과 미리 확보한 detached 자손까지 정리한다.
+      report(`${reason}: ${file}; 남은 자식 PID: ${children.map(p => p.pid).join(', ') || child.pid}`);
+      // 그룹 주소는 재사용될 수 있다. 개별 PID의 표지·시작 시각·명령을 매번 다시 확인한다.
       const send = sig => {
-        for (const pid of pids.toReversed()) signalPid(pid, sig);
-        if (child.pid) signalPid(-child.pid, sig);
+        for (const row of children.toReversed()) {
+          try { signalChild(row, marker, sig); }
+          catch (error) { report(`${file}: PID ${row.pid}: ${error.message}`); }
+        }
       };
       send('SIGTERM');
       killTimer = setTimeout(() => {

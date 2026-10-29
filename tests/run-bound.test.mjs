@@ -54,6 +54,41 @@ test('파일 상한: 정상 성공과 정상 실패의 종료 코드는 유지�
   }
 });
 
+test('파일 상한: 중간 부모가 끝난 detached 자손을 정리하고 무관한 자식은 보존한다', async t => {
+  const f = fixture('');
+  const middle = path.join(path.dirname(f.file), 'middle.mjs');
+  fs.writeFileSync(middle, `import {spawn} from 'node:child_process'; import fs from 'node:fs';
+const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},5000)'],
+  {detached:true, stdio:'ignore'});
+child.unref();
+fs.writeFileSync(${JSON.stringify(f.info)}, JSON.stringify({pid:child.pid,parent:process.pid}));`);
+  fs.writeFileSync(f.file, `import test from 'node:test'; import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+test('orphan', async () => {
+  const p = spawn(process.execPath, [${JSON.stringify(middle)}], {stdio:'ignore'});
+  await once(p, 'exit');
+  setTimeout(()=>{},5000);
+  throw new Error('expected');
+});`);
+  const sentinel = spawn(process.execPath, ['-e', 'setTimeout(()=>{},5000)'], {stdio: 'ignore'});
+  t.after(() => stopChild(sentinel));
+  const messages = [], started = Date.now();
+  const code = await runTestFile(f.file, {env: process.env, timeoutMs: 1000,
+    stdio: 'ignore', report: message => messages.push(message)});
+  const {pid, parent} = JSON.parse(fs.readFileSync(f.info));
+  // 실패해도 유한 타이머가 끝날 때까지 확인하여 재현 자손을 남기지 않는다.
+  t.after(async () => {
+    if (!gone(pid)) await new Promise(resolve => setTimeout(resolve, Math.max(0, 6000 - (Date.now() - started))));
+    assert.ok(gone(pid));
+  });
+  assert.equal(code, 1);
+  assert.ok(gone(parent), '상한 전에 중간 부모 종료');
+  assert.ok(messages.some(message => message.includes(String(pid))), '분리된 자손 진단');
+  assert.ok(gone(pid), '분리된 자손 종료');
+  assert.equal(gone(sentinel.pid), false, '파일별 표지가 없는 형제는 유지');
+  assert.ok(Date.now() - started < 4500, '유한 종료');
+});
+
 test('finally 정리는 단언 실패에도 실행되며 SIGTERM 무응답에는 SIGKILL을 쓴다', async () => {
   const child = spawn(process.execPath, ['-e',
     "process.on('SIGTERM',()=>{}); console.log('ready'); setTimeout(()=>{},10000)"],

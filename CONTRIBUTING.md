@@ -16,8 +16,12 @@ This repository intentionally ships no `AGENTS.md` / `CLAUDE.md`. If you work wi
 ## Workflow
 
 - Behaviour changes ship with tests in the same commit: `npm test`.
-- The test runner gives each file five minutes, including child-process shutdown. On timeout it reports
-  the file and remaining child PIDs, terminates that file's process group and descendants, then fails.
+- The test runner gives each file five minutes, then a bounded shutdown period. On timeout it reports
+  the file and child PIDs carrying its unique inherited environment marker, then fails. Before each
+  TERM/KILL it rechecks the marker, start time and command; it never signals an entire process group.
+  Reparented detached children retain the marker. Children that clear their environment or cannot be
+  identified are not signalled; fixtures must still clean up their own children. Process environment
+  contents are inspected locally and never printed. A failed identity lookup cannot block runner exit.
   Fixtures must use `mkdtemp` under `os.tmpdir()` for writable homes and clean up spawned children in
   `finally` or a test cleanup hook; fixed shared `/tmp` homes are rejected by a regression check.
 - `npm test` never calls a real model. Live checks of the senior (`kadan senior`, a costly model) use `npm run smoke:senior`, which runs at low effort by default (or `kadan senior … --effort low`); do not test at the configured effort. Details: [docs/senior.md](docs/senior.md#실측-시험).
