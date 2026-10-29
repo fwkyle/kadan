@@ -1,5 +1,6 @@
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -190,7 +191,7 @@ test('동시성: 지연시킨 가짜 호출 둘이 한꺼번에 진행 중이다
   assert.deepEqual(r.answers.map(a => a.status), ['ok', 'ok']);
 });
 
-test('신호(SIGTERM)로 끊기면 진행 중이던 시니어마다 interrupted 줄이 남는다', async () => {
+test('신호(SIGTERM)로 끊기면 진행 중이던 시니어마다 interrupted 줄이 남는다', async t => {
   const f = fixture();
   const script = path.join(f.home, 'child.mjs'), ready = path.join(f.home, 'ready');
   fs.writeFileSync(script, `import fs from 'node:fs';
@@ -202,6 +203,7 @@ await seniorCommand(['qa/card-a'], {question: '바꿀까?'}, {home: ${JSON.strin
   readCodexModels: () => ({models: ${JSON.stringify(models)}})});
 `);
   const child = spawn(process.execPath, [script], {env: {...process.env, KADAN_HOME: f.home}, stdio: 'ignore'});
+  t.after(() => stopChild(child));
   const exited = new Promise(resolve => child.on('exit', (code, signal) => resolve({code, signal})));
   const deadline = Date.now() + 10_000;
   while (!fs.existsSync(ready) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));

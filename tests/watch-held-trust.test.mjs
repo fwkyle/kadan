@@ -1,5 +1,6 @@
 import './helpers/isolated-home.mjs';
-import test from 'node:test';
+import test, {afterEach} from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,6 +18,11 @@ import {sendTmux, notificationHold} from '../src/floor-tmux.mjs';
 // 사용자 알림이 정확히 1건(새 글)이어야 하고, 반복 주기에도 중복이 없어야 한다. 가짜 값·가짜 서버·모의 RPC만 쓴다.
 const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
 const live = [];
+// world() 준비 중 실패해도 시험 종료 훅이 서버 종료를 기다리고 SIGKILL로 대체한다.
+afterEach(async () => {
+  await Promise.all(live.map(child => stopChild(child)));
+  live.length = 0;
+});
 process.on('exit', () => { for (const c of live) c.kill('SIGKILL'); });
 
 async function world() {

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
+import {stopChild} from './helpers/child-cleanup.mjs';
 
 // 실행기(tests/run.mjs)가 실행별 임시 폴더와 자기 tmux 서버를 성공·실패·중단(SIGINT) 모두에서 정리하는지 본다.
 // 가짜 시험 파일이 TMPDIR 아래에 폴더를 만들고 tmux 서버를 띄운 뒤 그 값을 info 파일에 적는다.
@@ -70,6 +71,7 @@ test('실행기: 시험이 실패하면 종료 코드는 그대로 실패이고 
 test('실행기: SIGINT로 중단해도 실행별 폴더와 tmux 서버를 정리한다', {skip}, async t => {
   const {file, info} = fixture(t, 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);');
   const child = await run(file, nestedEnv());
+  t.after(() => stopChild(child));
   const done = exited(child);
   assert.equal(await waitFor(() => fs.existsSync(info), 20_000), true, '가짜 시험이 시작했다');
   child.kill('SIGINT');

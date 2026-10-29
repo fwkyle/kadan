@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import {startFakeDiscord, FAKE} from './helpers/fake-discord-api.mjs';
 import {splitDiscord, apiBase, discordRequest, DiscordError} from '../src/discord-bot.mjs';
 import {
@@ -504,7 +505,7 @@ test('20 R1 오래된 글에서 지금 연 새 스레드의 첫 질문도 받는
   } finally { await fake.close(); }
 });
 
-test('21 R2 출력이 끝난 뒤에만 cursor를 올린다 — 읽지 않는 파이프를 끊어도 질문이 다음 실행에서 나온다', async () => {
+test('21 R2 출력이 끝난 뒤에만 cursor를 올린다 — 읽지 않는 파이프를 끊어도 질문이 다음 실행에서 나온다', async t => {
   const fake = await startFakeDiscord();
   try {
     const s = setup(fake);
@@ -513,6 +514,7 @@ test('21 R2 출력이 끝난 뒤에만 cursor를 올린다 — 읽지 않는 파
     const ids = Array.from({length: 120}, (_, i) => fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)}).id);
     // 소비자가 읽지 않는 파이프(스트림을 흘리지 않는다)
     const child = spawn(process.execPath, [CLI, 'discord', 'watch', '--once'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
+    t.after(() => stopChild(child));
     await new Promise(resolve => setTimeout(resolve, 2500));
     let buffered = '';
     child.stdout.on('data', c => { buffered += c; }); // 끊긴 뒤 파이프에 남은 것을 소비자가 마저 받는 상황
@@ -686,12 +688,13 @@ test('28 N3 중단 신호가 막힌 출력 대기를 끝낸다 — 대기가 풀
 
 test('29 N3 실제 CLI: 큰 질문 다수 + 파이프 미소비 + SIGTERM → 제한 시간 안에 종료·잠금 반환, 신호 뒤 cursor·반응 불변, 유실 0', async () => {
   const fake = await startFakeDiscord();
+  let child;
   try {
     const s = setup(fake);
     const env = {...s.env, KADAN_HOME: s.home};
     assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0);
     const ids = Array.from({length: 200}, (_, i) => fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)}).id);
-    const child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
+    child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
     let buffered = '';
     const closed = new Promise(resolve => child.on('exit', (code, signal) => resolve({code, signal}))); // 'close'는 파이프를 비워야 오므로 'exit'
     await new Promise(resolve => setTimeout(resolve, 2500)); // 파이프가 가득 차서 막힘
@@ -722,17 +725,20 @@ test('29 N3 실제 CLI: 큰 질문 다수 + 파이프 미소비 + SIGTERM → �
     const emittedUpTo = BigInt(JSON.parse(snap1).main);
     assert.ok(ids.some(id => BigInt(id) <= emittedUpTo), '신호 전에 일부는 나갔다');
     assert.deepEqual(ids.filter(id => BigInt(id) > emittedUpTo && !seen.has(id)), [], '유실 0');
-  } finally { await fake.close(); }
+  } finally {
+    try { await stopChild(child); } finally { await fake.close(); }
+  }
 });
 
 test('30 N3 실제 CLI: 소비자가 끝까지 안 읽어도 SIGTERM으로 제한 시간 안에 종료하고 잠금을 돌려준다', async () => {
   const fake = await startFakeDiscord();
+  let child;
   try {
     const s = setup(fake);
     const env = {...s.env, KADAN_HOME: s.home};
     assert.equal((await runCli(['discord', 'watch', '--once'], env)).code, 0);
     for (let i = 0; i < 100; i++) fake.add(FAKE.channelId, {content: `질문${i} ` + 'x'.repeat(1900)});
-    const child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
+    child = spawn(process.execPath, [CLI, 'discord', 'watch'], {env: {PATH: process.env.PATH, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
     const closed = new Promise(resolve => child.on('close', () => resolve('closed')));
     await new Promise(resolve => setTimeout(resolve, 2000));
     child.kill('SIGTERM'); // stdout을 끝까지 읽지 않는다
@@ -740,5 +746,7 @@ test('30 N3 실제 CLI: 소비자가 끝까지 안 읽어도 SIGTERM으로 제�
     child.kill('SIGKILL');
     assert.equal(end, 'closed');
     assert.ok(!fs.existsSync(path.join(s.home, LOCK_DIR)));
-  } finally { await fake.close(); }
+  } finally {
+    try { await stopChild(child); } finally { await fake.close(); }
+  }
 });

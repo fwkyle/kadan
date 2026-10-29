@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {stopChild} from './helpers/child-cleanup.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -45,7 +46,7 @@ test('자동 발령도 사람이 창에 붙어 최근 입력했으면 paste·Ent
  }finally{human?.kill();for(const role of started)run('stop',role);}
 });
 
-test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→수정→PASS·마커·동시 실행',async()=>{
+test('격리 SQLite + 실제 tmux + CLI 자동 프로그램: 구현→검수→수정→PASS·마커·동시 실행',async t=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-auto-review-cli-'));
  createDatabase(home);writeStorageMarker(home,'sqlite');
  const socket=`auto-review-test-${process.pid}-${Date.now()}`;
@@ -94,6 +95,7 @@ readline.createInterface({input:process.stdin,terminal:false}).on('line',line=>{
   run('work','auto-configure','ar-test/work','--revision','1','--implementation','ar-test/implementation','--review','ar-test/review','--worker',roles[0],'--reviewer',roles[1],'--notify',roles[2],'--deadline',new Date(Date.now()+45000).toISOString());
   const program=()=>new Promise((resolve,reject)=>{
    const child=spawn(process.execPath,[cli,'work','auto-run','ar-test/work','--interval','0.1'],{env});let stdout='',stderr='';
+   t.after(()=>stopChild(child));
    const timer=setTimeout(()=>{child.kill('SIGTERM');reject(new Error('격리 프로그램 50초 상한'));},50000);
    child.stdout.on('data',b=>{stdout+=b});child.stderr.on('data',b=>{stderr+=b});
    child.on('error',reject);child.on('close',code=>{clearTimeout(timer);transcript.push({args:['work','auto-run'],status:code,stdout,stderr});if(code!==0)reject(new Error(stderr));else resolve(JSON.parse(stdout));});
