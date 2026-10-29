@@ -156,7 +156,7 @@ export function guardedSend({
   let receipt;
   try {
     // 카드·일반 우편의 사람 입력 보호 시간은 받는 역할의 시작 프로필로 고른다(슈퍼감독 2분). 알림은 호출자가 notificationGuard에 담는다.
-    const humanIdleMs = humanIdleMsFor(entries.filter(e => e.kind === "start" && e.session === session).at(-1));
+    const humanIdleMs = humanIdleMsFor(owner.start);
     receipt = selectedFloor.send(session, message,
       {cardIdentity, expectedPid:ownedPid, notificationGuard, busyMail, humanIdleMs}) || {};
   } catch (error) {
