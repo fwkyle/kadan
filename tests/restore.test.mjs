@@ -136,9 +136,9 @@ test("로티 탭 상태 조회: 상태·없는 탭·JSON 아닌 실패를 구분
   const ok = showRottieWindow({ bin: "/r", terminalId: "t", spawnFn: reply(JSON.stringify({ ok: true, result: { terminal: { state: "unknown" } } })) });
   assert.deepEqual(ok, { ok: true, state: "unknown" });
   const missing = showRottieWindow({ bin: "/r", terminalId: "t", spawnFn: reply(JSON.stringify({ ok: false, error: { code: "ROTTIE_TERMINAL_NOT_FOUND" } }), 3) });
-  assert.deepEqual(missing, { ok: false, code: "ROTTIE_TERMINAL_NOT_FOUND" });
+  assert.deepEqual(missing, { ok: false, code: "ROTTIE_TERMINAL_NOT_FOUND", message: "Rottie terminal show failed" });
   const broken = showRottieWindow({ bin: "/r", terminalId: "t", spawnFn: reply("boom", 4) });
-  assert.deepEqual(broken, { ok: false, code: 4 });
+  assert.deepEqual(broken, { ok: false, code: 4, message: "Rottie terminal show failed" });
 });
 
 test('숨김 역할에 붙인 Rottie 탭은 같은 pane 세대의 window 기록만 받는다', () => {

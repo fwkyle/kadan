@@ -240,9 +240,13 @@ export function showRottieWindow({ bin, terminalId, spawnFn = spawnSync }) {
     }
     const state = reply?.result?.terminal?.state;
     if (reply?.ok === true && typeof state === "string") return { ok: true, state };
-    return { ok: false, code: reply?.error?.code || result.error?.code || result.status || "ROTTIE_SHOW_FAILED" };
+    return {
+      ok: false,
+      code: reply?.error?.code || result.error?.code || result.status || "ROTTIE_SHOW_FAILED",
+      message: reply?.error?.message || result.error?.message || (result.stderr || "").trim() || "Rottie terminal show failed",
+    };
   } catch (error) {
-    return { ok: false, code: error.code || "ROTTIE_SHOW_FAILED" };
+    return { ok: false, code: error.code || "ROTTIE_SHOW_FAILED", message: error.message || String(error) };
   }
 }
 
