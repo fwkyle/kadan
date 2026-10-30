@@ -50,6 +50,13 @@ test('active 판정 보존: 연결 실패(모호한 ID) 줄은 완료로 세지 
   assert.deepEqual(phaseOf(home,'r-conn',[...entries,done('r-conn','dup',{executionKey:'test/dup'})],'test/dup'),{dispatch:INACTIVE,card:null});
 });
 
+test('active 판정 보존: taskId와 executionKey가 서로 다른 카드를 가리키는 충돌 done은 완료로 세지 않는다',()=>{
+  const home=fixtureHome();
+  addCard(home,{id:'target',role:'r-owner'});addCard(home,{id:'other',role:'r-other'});
+  const entries=[send('r-owner','target'),done('r-owner','other',{executionKey:'test/target'})];
+  assert.deepEqual(phaseOf(home,'r-owner',entries,'test/target'),{dispatch:ACTIVE,card:ACTIVE});
+});
+
 test('active 판정 보존: 확정 인계는 담당과 완료를 새 담당에게 투영한다',()=>{
   const home=fixtureHome();
   addCard(home,{id:'h1',role:'old-a'});addCard(home,{id:'h2',role:'old-b'});
