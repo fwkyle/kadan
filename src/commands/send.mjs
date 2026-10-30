@@ -107,22 +107,24 @@ function deliverMessage(argv, flags, command) {
     console.log(JSON.stringify(receipt));return;
   }
 
-  let receipt, turnClaim = null;
+  let receipt, turnClaim = null, entries;
   try {
     // 기존 send만 --execution의 발령 추론을 유지한다. mail은 연결 주소로만 사용하며,
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
+    // 준비 단계의 파생 계산(발령 추론·우편 연결·슈퍼 간 판정·마지막 시작·완료 안내)은 이 읽기 하나를 같이 쓴다.
+    // 전송 직전 소유·답장 수신자 판정은 이 값을 넘기지 않고 guardedSend가 새로 읽는다(#311 F2: 준비와 전송 사이의 세대 교체).
+    entries = readLedger();
     let taskId=flags.task;
     if(command === 'send' && taskId==null){
-      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true});
-      if(inferred){taskId=inferred;new CardStore(ledgerHome()).checkSend(taskId,role);console.error(`실행 연결 ${flags.execution}은(는) ${role}의 발령 카드입니다 — taskId로 기록합니다. 명시 발령은 --task <카드id>를 사용하세요`);}
+      const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true,entries});
+      if(inferred){taskId=inferred;new CardStore(ledgerHome()).checkSend(taskId,role,undefined,entries);console.error(`실행 연결 ${flags.execution}은(는) ${role}의 발령 카드입니다 — taskId로 기록합니다. 명시 발령은 --task <카드id>를 사용하세요`);}
     }
     const mailContext=resolveWorkMail(ledgerHome(),{
       workKey:flags.work,executionKey:flags.execution,replyTo:flags['reply-to'],taskId,
       by:resolveLedgerBy({env:process.env}),role,expectReply:flags['expect-reply']===true,replyFinal:flags['reply-final']===true
-    });
+    },{entries});
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
     const by = resolveLedgerBy({env:process.env});
-    const entries = readLedger();
     const owner = sessionOwner(entries, session, recipient);
     // 바로 넣을 수 없어 보관할 수 있는 우편: 발령(--task)·--raw는 보관하지 않는다.
     const storable = taskId == null && flags.raw !== true;
@@ -171,7 +173,7 @@ function deliverMessage(argv, flags, command) {
         allowOldRunner:flags["allow-old-runner"],
         recordedPid: expectedPid,
         busyMail: true,
-        ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session))}} : {}),
+        ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session,entries))}} : {}),
       });
     } catch (error) {
       // 전달이 확인된 실패('sent': 기록만 실패)가 아니면 방금 쓴 차례를 되돌린다(best-effort).
@@ -195,7 +197,7 @@ function deliverMessage(argv, flags, command) {
   const sender=process.env.KADAN_ROLE;
   if(sender&&sessionName(sender)!==receipt.session&&flags['expect-reply']!==true){
     let pending=[];
-    try{pending=pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).listSummaries()).project(readLedger()),sender);}catch{}
+    try{pending=pendingCardsFor(taskIdentity(new CardStore(ledgerHome()).listSummaries()).project(entries),sender);}catch{}
     const hint=doneHintFor(pending);
     if(hint)console.log(hint);
   }

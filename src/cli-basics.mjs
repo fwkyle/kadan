@@ -60,8 +60,9 @@ export function digest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
 }
 
-export function lastStartFor(session) {
-  const starts = readLedger().filter(
+// entries를 주면 호출자가 이미 읽은 원장을 쓴다. 인자 없는 호출(start 등)은 지금처럼 새로 읽는다.
+export function lastStartFor(session, entries = readLedger()) {
+  const starts = entries.filter(
     (entry) => entry.kind === "start" && entry.session === session
   );
   return starts[starts.length - 1] || null;
