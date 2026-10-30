@@ -184,7 +184,7 @@ test('spawn error는 동기 main을 기다리게 하지 않고 실패 파일/통
   assert.equal(f.notifications.length,1);assert.equal(f.stopped.length,0);
   const file=f.runner.paths(f.s.id).result,before=fs.readFileSync(file);
   const duplicate=spawnSync(process.execPath,[new URL('../src/handover-runner.mjs',import.meta.url).pathname,f.s.id],
-    {env:{PATH:process.env.PATH,HOME:process.env.HOME,KADAN_HOME:f.home,KADAN_SOCKET:path.basename(f.home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux'},encoding:'utf8'});
+    {env:{PATH:process.env.PATH,HOME:process.env.HOME,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:process.env.TMUX_TMPDIR,KADAN_NOTIFY:process.env.KADAN_NOTIFY,KADAN_HOME:f.home,KADAN_SOCKET:path.basename(f.home),KADAN_WINDOW:'none',KADAN_FLOOR:'tmux'},encoding:'utf8'});
   assert.equal(duplicate.status,1);assert.deepEqual(fs.readFileSync(file),before);
 });
 
@@ -192,12 +192,12 @@ test('독립 프로세스의 import 실패는 시작 실패와 구분하고 통�
   const f=fixture();f.begin();
   const file=path.join(f.home,'handover-runner.mjs');
   fs.copyFileSync(new URL('../src/handover-runner.mjs',import.meta.url),file);
-  const r=spawnSync(process.execPath,[file,f.s.id],{env:{PATH:process.env.PATH,KADAN_HOME:f.home},encoding:'utf8'});
+  const r=spawnSync(process.execPath,[file,f.s.id],{env:{PATH:process.env.PATH,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:process.env.TMUX_TMPDIR,KADAN_NOTIFY:process.env.KADAN_NOTIFY,KADAN_HOME:f.home},encoding:'utf8'});
   assert.equal(r.status,1);assert.equal(r.stdout,'');assert.equal(r.stderr,'');
   const result=f.runner.status(f.s.id).runner;assert.equal(result.failureStage,'bootstrap-import');
   assert.equal(result.notification.status,'not-attempted');assert.equal(f.notifications.length,0);assert.equal(f.stopped.length,0);
   const resultFile=f.runner.paths(f.s.id).result,before=fs.readFileSync(resultFile);
-  assert.equal(spawnSync(process.execPath,[file,f.s.id],{env:{PATH:process.env.PATH,KADAN_HOME:f.home},encoding:'utf8'}).status,1);
+  assert.equal(spawnSync(process.execPath,[file,f.s.id],{env:{PATH:process.env.PATH,TMPDIR:process.env.TMPDIR,TMUX_TMPDIR:process.env.TMUX_TMPDIR,KADAN_NOTIFY:process.env.KADAN_NOTIFY,KADAN_HOME:f.home},encoding:'utf8'}).status,1);
   assert.deepEqual(fs.readFileSync(resultFile),before);
 });
 
