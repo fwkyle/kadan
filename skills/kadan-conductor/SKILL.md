@@ -83,6 +83,7 @@ description: Supervisor (conductor) only — workers and reviewers must not use 
 | 감독 임명·교대 | [임명장](references/appointment-template.md) |
 | 세션 수명·판 종료 | [종료·정리](references/cleanup.md) |
 | 명령 치트시트 | [명령](references/commands.md) |
+| 반복된 명령 함정·검수 독립성·비밀 출력·보고 표현 | [현장 교훈](references/field-lessons.md) |
 
 스킬 전체는 첫 정독 1회, 이후에는 이번 행동의 필요한 절만 읽는다. 작업자·검수자에게 감독용 SKILL 전체를 읽히지 않는다. 자동 역할 지침은 [공통](references/role-templates/common.md)과 [역할별 템플릿](../../docs/role-instructions.md)을 사용하며, 새 발령·승인이나 카드의 실제 값을 대신하지 않는다.
 
