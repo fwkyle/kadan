@@ -2,7 +2,7 @@
 import { floor } from "../floor.mjs";
 import { ledgerHome, readLedger } from "../ledger.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
-import { runWaitLoop, hookTaskMatcher } from "../cli-wait-done.mjs";
+import { runWaitLoop, hookTaskMatcher, waitMarkerLines } from "../cli-wait-done.mjs";
 import { CardStore } from "../card-store.mjs";
 
 export function cmdWait(argv, flags) {
@@ -40,9 +40,7 @@ export function cmdWait(argv, flags) {
     die(error.message, error.exitCode || 1);
   }
   if (result.code === 0) {
-    for (const marker of result.markers) {
-      console.log(`완료 마커: taskId=${marker.taskId} 결과=${marker.result}`);
-    }
+    for (const line of waitMarkerLines(result.final)) console.log(line);
   } else if (result.reason === "gap") {
     console.log(
       `출력 누락 보고: ${result.gap.from}→${result.gap.to}, 마커를 놓쳤을 수 있음 — 사람 확인 필요`

@@ -136,3 +136,30 @@ test('receiver death after acceptance recording still preserves original tab', (
   assert.throws(() => acceptTransfer(deps), /새 감독 프로세스/);
   assert.equal(calls.includes('close'), false);
 });
+
+test('원본 탭 닫기·remove 실패는 code 옆에 정리된 원인 문구(message)를 결과와 원장에 남기고, 성공이면 칸이 없다', () => {
+  const long = '로티\n오류 ' + 'x'.repeat(300);
+  const closeFailed = fixture();
+  closeFailed.deps.close = () => ({closed: false, code: 'ROTTIE_CLOSE_FAILED', message: long});
+  const events = []; closeFailed.deps.record = event => events.push(event);
+  const result = acceptTransfer(closeFailed.deps);
+  assert.equal(result.source, 'close-failed');
+  assert.equal(result.code, 'ROTTIE_CLOSE_FAILED');
+  assert.ok(result.message.startsWith('로티 오류 xxx') && result.message.endsWith('…'));
+  assert.equal([...result.message].length, 201);
+  assert.deepEqual(events.at(-1).result, result);
+  assert.equal(transferStatus(closeFailed.home, closeFailed.transfer.id).message, result.message);
+
+  const removeFailed = fixture();
+  removeFailed.deps.remove = () => ({removed: false, code: 'ROTTIE_REMOVE_FAILED', message: '탭이 목록에 남음'});
+  const removed = acceptTransfer(removeFailed.deps);
+  assert.deepEqual([removed.source, removed.code, removed.message], ['remove-failed', 'ROTTIE_REMOVE_FAILED', '탭이 목록에 남음']);
+
+  const noMessage = fixture();
+  noMessage.deps.close = () => ({closed: false, code: 'ROTTIE_CLOSE_FAILED', message: ' \n '});
+  assert.ok(!('message' in acceptTransfer(noMessage.deps)));
+
+  const ok = acceptTransfer(fixture().deps);
+  assert.equal(ok.source, 'removed');
+  assert.ok(!('message' in ok));
+});
