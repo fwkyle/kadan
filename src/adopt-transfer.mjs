@@ -6,7 +6,10 @@ import {conversationFile, readConversationPermissions, shellArg} from './adopt-p
 import {ancestors, processIdentity, verifySource} from './adopt-process.mjs';
 import {closeRottieWindow, removeRottieWindow} from './floor-tmux.mjs';
 import {appendLedger} from './ledger.mjs';
+import {cleanWindowMessage} from './cli-start-support.mjs';
 
+// 로티가 준 원인 문구는 코드 옆 `message`에 남긴다(#314 cleanWindowMessage 꼴). 문구가 비면 칸이 없다.
+const messageField = message => { const text = cleanWindowMessage(message); return text ? {message: text} : {}; };
 const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n',
   {flag: 'wx', mode: 0o600});
 function directory(home, id) {
@@ -88,10 +91,11 @@ export function acceptTransfer({home, id, flags, floor, env = process.env, inspe
     verify(request.source);
     const options = {bin: request.source.bin, terminalId: request.source.terminalId};
     const closed = close(options);
-    result = {id, status: 'accepted', source: 'close-failed', code: closed.code};
+    result = {id, status: 'accepted', source: 'close-failed', code: closed.code, ...messageField(closed.message)};
     if (closed.closed) {
       const removed = remove(options);
-      result = {id, status: 'accepted', source: removed.removed ? 'removed' : 'remove-failed', code: removed.code};
+      result = {id, status: 'accepted', source: removed.removed ? 'removed' : 'remove-failed', code: removed.code,
+        ...(removed.removed ? {} : messageField(removed.message))};
     }
   }
   write(resultPath, result);

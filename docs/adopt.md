@@ -29,6 +29,10 @@ kadan adopt status <인수ID>
 `accept`의 설명은 실제 이어받은 내용으로 바꾼다. 이는 감독이 대화를 읽고 실행할 수 있다는 확인이며,
 업무 완료나 이후의 push·병합·배포 승인이 아니다. 화면 출력·입력 에코·정지된 안내창은 인수로 인정하지 않는다.
 
+원본 탭 정리 결과(`result.json`, 원장 `adopt` `finished`의 `result`)는 `source`가 `removed`·`retained`·`close-failed`·`remove-failed` 중 하나다.
+닫기나 제거가 실패하면 `code`(로티 오류 코드) 옆에 로티가 준 원인 문구를 `message`에 남긴다. 줄바꿈·제어 문자는 공백 하나로 줄이고
+글자 200개(넘으면 앞 200개 + `…`)로 자르며(`stop`의 `rottieWindowMessage`와 같은 정리), 문구가 없거나 성공이면 `message` 칸이 없다.
+
 ## 권한을 이어받는 범위
 
 - Claude: 정확한 대화 기록의 마지막 권한 모드. `bypassPermissions`, `plan`, `acceptEdits` 등 현재 값을 사용한다.

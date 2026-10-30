@@ -207,6 +207,10 @@ function lastPerTask(markers, keyOf) {
   return markers.filter((marker, index) => last.get(keyOf(marker)) === index);
 }
 
+// 같은 카드의 마커가 여럿이면 원장에 기록한 마지막 결과 하나만 줄로 보이고, 앞 결과는 바뀐 것으로 밝힌다.
+export const waitMarkerLines = (final) => final.map(({ taskId, result, earlier }) =>
+  `완료 마커: taskId=${taskId} 결과=${result}${earlier.length ? ` (앞선 결과 ${earlier.join("·")}는 나중 결과로 바뀜)` : ""}`);
+
 export function runWaitLoop({
   floor: selectedFloor,
   session,
@@ -261,7 +265,9 @@ export function runWaitLoop({
     if (fresh.length === 0) return null;
     const identity=taskIdentity(cards ?? (snapshotHome?new CardStore(snapshotHome).listSummaries():[]));
     // 화면에 같은 카드의 마커가 여럿이면 카드별 마지막 하나만 기록한다 — screenDoneResult(from-screen)와 같은 의미다.
-    const resolved=lastPerTask(fresh.map(marker=>({...marker,...identity.write(marker.taskId)})),m=>m.executionKey??m.taskId);
+    const identified=fresh.map(marker=>({...marker,...identity.write(marker.taskId)}));
+    const keyOf=m=>m.executionKey??m.taskId;
+    const resolved=lastPerTask(identified,keyOf);
     for (const marker of resolved) {
       record({
         kind: "done",
@@ -275,7 +281,10 @@ export function runWaitLoop({
         via: hooked.length ? "hook" : "screen",
       });
     }
-    return { code: 0, reason: "done", markers: fresh, via: hooked.length ? "hook" : "screen" };
+    // 출력용: 카드마다 기록한 최종 결과 하나와, 그 앞에서 나중 결과로 바뀐 결과들(기록 루프와 무관).
+    const final = resolved.map(({ taskId, result }, i) => ({ taskId, result,
+      earlier: identified.filter(m => keyOf(m) === keyOf(resolved[i]) && m !== resolved[i]).map(m => m.result) }));
+    return { code: 0, reason: "done", markers: fresh, final, via: hooked.length ? "hook" : "screen" };
   };
 
   if (baselineMarkers) {
