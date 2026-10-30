@@ -235,7 +235,7 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
   확인해 기록할 수도 있고, 사람 또는 감독이 확인한 뒤 `kadan done`으로 수동
   확정할 수도 있다. 수동 확정은 확인한 사람 또는 역할을 `by`에 남긴다. 동시
   실행으로 같은 역할·카드의 줄이 여럿 생기면 읽을 때 가장 먼저 쓴 한 줄만 인정한다.
-- `stop`: `role`은 종료 대상이다. `by`는 종료시킨 사람 또는 역할이다.
+- `stop`: `role`은 종료 대상이다. `by`는 종료시킨 사람 또는 역할이다. 로티 탭을 정리했으면 `rottieWindowClosed`·`rottieWindowRemoved`와, 실패 때 오류 코드(`rottieWindowError`·`rottieRemoveError`) 및 원인 문구(`rottieWindowMessage`·`rottieRemoveMessage`, 200자 이내)가 붙는다.
 - `alert`: watch가 낸 알림 한 줄. alertKind·level·수신자·전달 여부를 담는다. by는 watch다.
 
 `by`는 watch 내부 전달이면 `watch`, 카단 세션 안에서 실행해 `KADAN_ROLE`이 있으면

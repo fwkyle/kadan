@@ -289,6 +289,19 @@ export function openStartedWindow(session, platform = process.platform, deps = {
   return { ...(openWindow(session, platform, deps) ?? { method: "manual" }), ...fields };
 }
 
+const WINDOW_MESSAGE_MAX = 200;
+
+// 로티가 준 원인 문구를 원장에 한 줄로 남기려고 줄바꿈·제어 문자를 공백 하나로 줄이고 200자에서 자른다.
+export function cleanWindowMessage(message) {
+  const text = String(message ?? "").replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
+  return text.length > WINDOW_MESSAGE_MAX ? text.slice(0, WINDOW_MESSAGE_MAX) : text;
+}
+
+function messageField(name, message) {
+  const text = cleanWindowMessage(message);
+  return text ? { [name]: text } : {};
+}
+
 export function closeStartedWindow(lastStart, { env = process.env, closeFn = closeRottieWindow, removeFn = removeRottieWindow,
   connectFn = rottieConnectivity, showFn = showRottieWindow, existsFn = fs.existsSync,
   listBinsFn = listRunningRottieBins, print = console.log } = {}) {
@@ -298,11 +311,12 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
   // 현재 KADAN_WINDOW와 무관하게, 실제로 열었던 로티 탭 기록을 기준으로 한다.
   const preflight = inspectRottieStartPreflight({env, forceWindow:true, existsFn, connectFn, listBinsFn});
   const fields = {rottieTerminalId:terminalId, ...(preflight.switched ? {rottieBinSwitched:preflight.switched} : {})};
-  const failed = code => ({...fields, rottieWindowClosed:false, rottieWindowError:String(code)});
+  const failed = (code, message) => ({...fields, rottieWindowClosed:false, rottieWindowError:String(code),
+    ...messageField("rottieWindowMessage", message)});
   if (!preflight.ok) {
     const code = preflight.connection?.code || (env.KADAN_ROTTIE_BIN ? "ENOENT" : "KADAN_ROTTIE_BIN 없음");
     print(`창 닫기 실패: ${terminalId} ${code} — ${preflight.message}`);
-    return failed(code);
+    return failed(code, preflight.connection?.message ?? preflight.message);
   }
   const bin = env.KADAN_ROTTIE_BIN;
   if (preflight.switched) print(`로티 경로 자동 교정: ${preflight.switched.from ?? "(없음)"} → ${bin}`);
@@ -310,12 +324,12 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
   const shown = showFn({bin, terminalId});
   if (!shown.ok) {
     print(`창 닫기 실패: ${terminalId} ${shown.code} — 대상 탭 조회 실패, 닫기·제거하지 않음`);
-    return failed(shown.code);
+    return failed(shown.code, shown.message);
   }
   const result = closeFn({ bin, terminalId });
   if (!result.closed) {
     print(`창 닫기 실패: ${terminalId} ${result.code} (번들 ${preflight.connection?.bundleId ?? "모름"})`);
-    return failed(result.code);
+    return failed(result.code, result.message);
   }
   print(`창 닫힘: ${terminalId}`);
   // 닫힌 탭은 목록에 '종료됨'으로 남으므로 한 번 더 제거한다. 제거 실패는 기록만 하고 재시도하지 않는다.
@@ -326,6 +340,8 @@ export function closeStartedWindow(lastStart, { env = process.env, closeFn = clo
     ...fields,
     rottieWindowClosed: true,
     rottieWindowRemoved: removal.removed,
-    ...(!removal.removed ? { rottieRemoveError: String(removal.code) } : {}),
+    ...(!removal.removed
+      ? { rottieRemoveError: String(removal.code), ...messageField("rottieRemoveMessage", removal.message) }
+      : {}),
   };
 }

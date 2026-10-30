@@ -41,7 +41,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
       removeFn() { assert.fail("unexpected remove"); },
     });
     assert.equal(calls, 1);
-    assert.deepEqual({ ...entry(), ...fields }, { ...base, rottieTerminalId: "owned-tab", rottieWindowClosed: false, rottieWindowError: "ROTTIE_INTERNAL" });
+    assert.deepEqual({ ...entry(), ...fields }, { ...base, rottieTerminalId: "owned-tab", rottieWindowClosed: false, rottieWindowError: "ROTTIE_INTERNAL", rottieWindowMessage: "failed" });
   });
   test("remove failure keeps the close receipt and is recorded once without retry", () => {
     let removes = 0;
@@ -53,7 +53,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
       removeFn: (options) => tmux.removeRottieWindow({ ...options, spawnFn: () => { removes++; return { status: 5, stdout: JSON.stringify({ ok: false, error: { code: "ROTTIE_TERMINAL_RUNNING", message: "먼저 terminal close로 종료하세요." } }) }; } }),
     });
     assert.equal(removes, 1);
-    assert.deepEqual({ ...entry(), ...fields }, { ...base, rottieTerminalId: "owned-tab", rottieWindowClosed: true, rottieWindowRemoved: false, rottieRemoveError: "ROTTIE_TERMINAL_RUNNING" });
+    assert.deepEqual({ ...entry(), ...fields }, { ...base, rottieTerminalId: "owned-tab", rottieWindowClosed: true, rottieWindowRemoved: false, rottieRemoveError: "ROTTIE_TERMINAL_RUNNING", rottieRemoveMessage: "먼저 terminal close로 종료하세요." });
     assert.deepEqual(lines.map(line => line.split(":")[0]), ["창 닫힘", "탭 제거 실패"]);
   });
   test("missing last-start tab leaves entry unchanged and never closes", () => {
@@ -65,7 +65,10 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
     const lines = [];
     const fields = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, { env: {}, listBinsFn:()=>[], print: line => lines.push(line), closeFn() { assert.fail("unexpected close"); }, removeFn() { assert.fail("unexpected remove"); } });
     assert.equal(lines.length, 1);
-    assert.deepEqual(fields, { rottieTerminalId: "owned-tab", rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" });
+    const { rottieWindowMessage, ...rest } = fields;
+    assert.deepEqual(rest, { rottieTerminalId: "owned-tab", rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" });
+    assert.match(rottieWindowMessage, /KADAN_ROTTIE_BIN/);
+    assert.ok(rottieWindowMessage.length <= 200);
   });
   test("close and remove handle non-JSON, spawn errors and thrown errors once", () => {
     for (const result of [{ status: 7, stderr: "bad" }, { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) }, new Error("thrown")]) {
@@ -120,4 +123,40 @@ test("cmdStop wires last start after floor stop and appends the close receipt", 
   assert.equal(rows.at(-1).rottieTerminalId, "latest");
   assert.equal(rows.at(-1).rottieWindowClosed, false);
   assert.equal(Object.hasOwn(rows.at(-1), "window"), false);
+});
+
+test("창 정리 실패는 로티가 준 원인 문구를 정리해 원장 필드에 남긴다", () => {
+  const run = overrides => cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+    ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {}, ...overrides,
+  });
+  const preflight = run({ connectFn: () => ({ ok: false, code: "ROTTIE_APP_NOT_RUNNING", message: "앱이\n꺼져 있다" }) });
+  assert.equal(preflight.rottieWindowError, "ROTTIE_APP_NOT_RUNNING");
+  assert.equal(preflight.rottieWindowMessage, "앱이 꺼져 있다");
+  const show = run({ showFn: () => ({ ok: false, code: "ROTTIE_TERMINAL_NOT_FOUND", message: "탭 없음" }),
+    closeFn() { assert.fail("unexpected close"); } });
+  assert.equal(show.rottieWindowMessage, "탭 없음");
+  const close = run({ closeFn: () => ({ closed: false, code: "ROTTIE_INTERNAL", message: "내부\t오류" }) });
+  assert.equal(close.rottieWindowMessage, "내부 오류");
+  const remove = run({ closeFn: () => ({ closed: true }),
+    removeFn: () => ({ removed: false, code: "ROTTIE_TERMINAL_RUNNING", message: "먼저 close" }) });
+  assert.equal(remove.rottieRemoveMessage, "먼저 close");
+  assert.equal(remove.rottieWindowMessage, undefined);
+});
+
+test("성공하면 문구 필드가 없고 긴 문구는 200자에서 자른다", () => {
+  const ok = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+    ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
+    closeFn: () => ({ closed: true }), removeFn: () => ({ removed: true }),
+  });
+  assert.deepEqual(Object.keys(ok).sort(), ["rottieTerminalId", "rottieWindowClosed", "rottieWindowRemoved"]);
+  const long = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+    ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
+    closeFn: () => ({ closed: false, code: "X", message: "가".repeat(500) }),
+  });
+  assert.equal(long.rottieWindowMessage.length, 200);
+  const empty = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+    ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
+    closeFn: () => ({ closed: false, code: "X", message: " \n " }),
+  });
+  assert.equal("rottieWindowMessage" in empty, false);
 });
