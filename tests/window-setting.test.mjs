@@ -16,9 +16,12 @@ const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-window-setting-'
 const BIN = '/apps/Rottie/Contents/MacOS/rottie';
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
 // TMPDIR·TMUX_TMPDIR도 넘긴다: 빠지면 자식 CLI가 기본 tmux 폴더를 써서 시험의 tmux 조회와 소켓이 갈린다.
+// KADAN_ALT_CHECK_MS(화면 대기 끔)·KADAN_NOTIFY(알림 끔)만 더 넘긴다: 빠지면 start마다 기본 2초를 기다린다.
+// KADAN_WINDOW·KADAN_SOCKET은 이 시험이 정한 값만 쓰므로 부모 env에서 상속하지 않는다.
 const run = (h, args, env = {}) => spawnSync(process.execPath, [cli, ...args], {encoding: 'utf8',
   env: {PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
-    TMUX_TMPDIR: process.env.TMUX_TMPDIR, KADAN_HOME: h, ...env}});
+    TMUX_TMPDIR: process.env.TMUX_TMPDIR, KADAN_ALT_CHECK_MS: process.env.KADAN_ALT_CHECK_MS,
+    KADAN_NOTIFY: process.env.KADAN_NOTIFY, KADAN_HOME: h, ...env}});
 
 test('rottie 고정은 절대경로 없이는 받지 않고, 잘못된 값도 거절한다', () => {
   const h = home();
