@@ -207,9 +207,11 @@ function lastPerTask(markers, keyOf) {
   return markers.filter((marker, index) => last.get(keyOf(marker)) === index);
 }
 
-// 같은 카드의 마커가 여럿이면 원장에 기록한 마지막 결과 하나만 줄로 보이고, 앞 결과는 바뀐 것으로 밝힌다.
-export const waitMarkerLines = (final) => final.map(({ taskId, result, earlier }) =>
-  `완료 마커: taskId=${taskId} 결과=${result}${earlier.length ? ` (앞선 결과 ${earlier.join("·")}는 나중 결과로 바뀜)` : ""}`);
+// 같은 카드의 마커가 여럿이면 원장에 기록한 마지막 결과 하나만 줄로 보이고, 결과가 다른 앞 결과만 바뀐 것으로 밝힌다(같은 결과 반복은 문구 없음).
+export const waitMarkerLines = (final) => final.map(({ taskId, result, earlier }) => {
+  const changed = [...new Set(earlier.filter(value => value !== result))];
+  return `완료 마커: taskId=${taskId} 결과=${result}${changed.length ? ` (앞선 결과 ${changed.join("·")}는 나중 결과로 바뀜)` : ""}`;
+});
 
 export function runWaitLoop({
   floor: selectedFloor,

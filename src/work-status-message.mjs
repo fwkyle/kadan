@@ -29,8 +29,9 @@ export function buildWorkStatus(home, workKey, {summary = ''} = {}) {
     const center = buildCardCenter({cards: new CardStore(home).list(), entries: readLedger(home), tree: [], runtimeKnown: false});
     // 열린 실행 판정은 업무 완료 확인(work-store.mjs)과 같은 closableExecution이다: 원장 결과 failed로 끝난 실행은 열려 있지 않다.
     const all = work.executions.map(x => ({x, card: center.cards.find(c => c.key === x.key)}));
-    const open = all.filter(({card}) => !card || card.ambiguous || !closableExecution(card));
-    failed = all.filter(({card}) => card?.displayState === 'failed' && closableExecution(card)).length;
+    const isOpen = ({card}) => !card || card.ambiguous || !closableExecution(card);
+    const open = all.filter(isOpen);
+    failed = all.filter(x => !isOpen(x) && x.card.displayState === 'failed').length;
     hidden = Math.max(0, open.length - MAX_LISTED);
     running = open.slice(0, MAX_LISTED).map(({x, card}) =>
       `- ${workPhases[x.phase] ?? x.phase} ${x.round}라운드 · ${cut(card?.role || '역할 미정', 60)} · ${stateText(card)}`);

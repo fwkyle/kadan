@@ -24,9 +24,10 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
  const readLetters=works.length?createWorkLettersReader(entries,cards):null;
  return works.map(w=>{
   const executions=w.executions.map(link=>({...link,card:byKey.get(link.key)}));
-  // 종료 수·차례는 업무 마감 판정(closableExecution)과 같다: failed 뒤 미완료 실행이 남았으면 아직 열린 실행이다.
-  const ended=executions.filter(x=>x.card&&closableExecution(x.card));
-  const active=executions.filter(x=>!x.card||!closableExecution(x.card));
+  // 종료 수·차례는 업무 마감 판정(work-store.mjs complete)과 같은 열린 기준이다: 카드 없음·실행 연결 모호·failed 뒤 미완료 실행은 열린 실행.
+  const isOpen=x=>!x.card||x.card.ambiguous||!closableExecution(x.card);
+  const ended=executions.filter(x=>!isOpen(x));
+  const active=executions.filter(isOpen);
   const round=Math.max(0,...w.executions.map(x=>x.round));
   // 라운드를 병렬 실행 번호표로 쓴 업무는 '999라운드' 대신 실행 수로 보인다(2026-09-24 실측: 117건·101~999를 번호로 씀).
   // 정상 왕복이 100라운드에 이르는 일은 없다고 보고 100 이상만 번호표로 읽는다(앞 라운드 실행이 빠진 2라운드 업무는 그대로).

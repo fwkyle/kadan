@@ -32,6 +32,11 @@ function fixture(runs) {
   return {home, work, store, center};
 }
 const failedPlusOpen = ({home, key, id}) => { send(home, 'A', id, key); finish(home, 'A', id, key, 'failed'); send(home, 'B', id, key); };
+const ambiguousFailed = ({home, key, id}) => {
+  new CardStore(home).create({repo: 'other', id, repoPath: home, title: '동일 짧은 ID', body: '본문'});
+  send(home, 'A', id, key); finish(home, 'A', id, key, 'failed');
+  appendLedger({kind: 'send', by: '감독', role: 'C', taskId: id, digest: 'C', t: FUTURE}, home);
+};
 const failedOnly = ({home, key, id}) => { send(home, 'A', id, key); finish(home, 'A', id, key, 'failed'); };
 
 test('R1: failed 뒤 미완료 실행이 남은 업무는 종료 수에 안 들어가고 차례 계산에 남는다', () => {
@@ -65,6 +70,19 @@ test('R2: 끝난 실패는 "실패로 끝난 실행"에 센다', () => {
   assert.match(text, /열린 실행: 없음/);
 });
 
+test('R1·R2: 실행 연결이 모호한 failed 카드는 열린 쪽 한 곳에만 센다(마감 판정과 같은 기준)', () => {
+  const {home, store, center} = fixture(ambiguousFailed);
+  const card = center.cards.find(c => c.key === store.list()[0].executions[0].key);
+  assert.equal(card.ambiguous, true);
+  assert.equal(card.displayState, 'failed');
+  const model = workDashboardModel(store.list(), center, readLedger(home))[0];
+  assert.equal(model.ended.length, 0);
+  assert.equal(model.active.length, 1);
+  const text = buildWorkStatus(home, 'repo/w').content;
+  assert.match(text, /열린 실행 1건/);
+  assert.doesNotMatch(text, /실패로 끝난 실행/);
+});
+
 // --- W1: kadan wait 출력은 카드마다 최종 결과 하나를 보이고, 원장 기록은 그대로다 ---
 const {runWaitLoop, waitMarkerLines} = await import('../src/cli-wait-done.mjs');
 test('W1: 같은 카드 ok→failed 마커는 출력에 최종 failed 하나와 바뀜 표시만 보이고 원장 기록은 하나다', () => {
@@ -85,4 +103,10 @@ test('W1: 같은 카드 ok→failed 마커는 출력에 최종 failed 하나와 
 
 test('W1: 마커가 하나면 출력 줄은 전과 같다', () => {
   assert.deepEqual(waitMarkerLines([{taskId: 'a', result: 'ok', earlier: []}]), ['완료 마커: taskId=a 결과=ok']);
+});
+
+test('W1: 같은 결과가 반복되면 바뀜 문구를 붙이지 않고 결과가 다른 앞 결과만 밝힌다', () => {
+  assert.deepEqual(waitMarkerLines([{taskId: 'a', result: 'ok', earlier: ['ok']}]), ['완료 마커: taskId=a 결과=ok']);
+  assert.deepEqual(waitMarkerLines([{taskId: 'a', result: 'failed', earlier: ['ok', 'ok', 'failed']}]),
+    ['완료 마커: taskId=a 결과=failed (앞선 결과 ok는 나중 결과로 바뀜)']);
 });
