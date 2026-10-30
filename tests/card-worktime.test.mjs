@@ -6,6 +6,7 @@ import {dashboardData} from '../src/dashboard-api.mjs';
 import {dashboardFixture} from './helpers/dashboard-fixture.mjs';
 
 const MIN=60_000;
+const DAY_MS=86_400_000;
 const T0=Date.parse('2026-09-29T00:00:00.000Z');
 const at=minutes=>new Date(T0+minutes*MIN).toISOString();
 const opus='claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions';
@@ -212,6 +213,17 @@ test('기간 필터는 결과 등록 시각 기준이고 오늘은 한국 시간
   assert.equal(summarizeWorktimes(list,{period:'all',now}).count,3);
 });
 
+test('오늘 경계: 한국 시간 자정 직전(23:59)·직후(00:01)에도 그 날 0시부터 센다(기계 시간대와 무관)',()=>{
+  const w=resultAt=>({resultAt,workMs:MIN,profile:'worker',kind:'implementation',basis:'start',reworks:0,model:{state:'known',model:'m',effort:'high'}});
+  const day=Date.parse('2026-09-28T15:00:00.000Z');   // KST 9/29 00:00
+  const list=[w(day-DAY_MS-MIN),w(day-DAY_MS+MIN),w(day-MIN),w(day+MIN)];   // 9/27 23:59, 9/28 00:01, 9/28 23:59, 9/29 00:01
+  const count=now=>summarizeWorktimes(list,{period:'today',now}).count;
+  assert.equal(count(day-MIN),3,'9/28 23:59: 오늘은 9/28 0시부터 — 9/27 23:59만 뺀다(하한만 있고 상한은 없다)');
+  assert.equal(count(day+MIN),1,'9/29 00:01: 오늘은 9/29 0시부터 — 어제 23:59·00:01은 뺀다');
+  assert.equal(new Date(periodStart('today',day-MIN)).toISOString(),'2026-09-27T15:00:00.000Z');
+  assert.equal(new Date(periodStart('today',day+MIN)).toISOString(),'2026-09-28T15:00:00.000Z');
+});
+
 test('요약은 역할 프로필 × 모델(강도) × 종류로 건수·중간값·평균을 묶고 모름은 따로 세며 섞지 않는다',()=>{
   const now=Date.parse('2026-09-29T06:00:00.000Z'),r=Date.parse('2026-09-29T05:00:00.000Z');
   const known=(model,effort)=>({state:'known',model,effort});
@@ -277,9 +289,10 @@ test('대시보드: 시작·결과가 있는데 모델을 알 수 없는 카드�
 test('대시보드 worktime 경로: 기간 검사·요약을 돌려주고 수집당 원장 색인은 한 번만 만든다',()=>{
   const f=dashboardFixture({count:2}),snapshot=f.snapshot();
   const [a]=snapshot.center.cards;
-  const now=Date.now(),recent=new Date(now-60_000).toISOString();
+  // 서버가 실제 시계로 '오늘(한국 시간 0시~지금)'을 정하므로, 결과 시각은 1분 전이되 오늘 0시보다 앞서지 않게 한다(자정 직후에도 오늘).
+  const now=Date.now(),resultMs=Math.max(now-60_000,periodStart('today',now)),recent=new Date(resultMs).toISOString();
   Object.assign(a,card({key:a.key,role:'worker-a',assigned:1,start:2,result:3}));
-  a.history=a.history.map(h=>({...h,at:recent,...(h.activityAt?{activityAt:new Date(now-600_000).toISOString()}:{})}));
+  a.history=a.history.map(h=>({...h,at:recent,...(h.activityAt?{activityAt:new Date(resultMs-9*MIN).toISOString()}:{})}));
   a.result={at:recent,by:'worker-a',outcome:'implemented'};
   let visits=0;
   const entries=[launch('worker-a',0,opus,{t:new Date(now-3_600_000).toISOString()}),...snapshot.entries];
