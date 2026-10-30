@@ -291,10 +291,19 @@ export function openStartedWindow(session, platform = process.platform, deps = {
 
 const WINDOW_MESSAGE_MAX = 200;
 
-// 로티가 준 원인 문구를 원장에 한 줄로 남기려고 줄바꿈·제어 문자를 공백 하나로 줄이고 200자에서 자르고 잘렸으면 끝에 …를 붙인다.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+// 로티가 준 원인 문구를 원장에 한 줄로 남기려고 줄바꿈·제어 문자(C0·DEL·C1)를 공백 하나로 줄이고
+// 글자(grapheme) 200개에서 자르고 잘렸으면 끝에 …를 붙인다. 이모지·분해 한글을 반으로 끊지 않는다.
 export function cleanWindowMessage(message) {
-  const text = String(message ?? "").replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
-  return text.length > WINDOW_MESSAGE_MAX ? `${text.slice(0, WINDOW_MESSAGE_MAX)}…` : text;
+  const text = String(message ?? "").replace(/[\p{Cc}\s]+/gu, " ").trim();
+  if (text.length <= WINDOW_MESSAGE_MAX) return text;
+  const kept = [];
+  for (const { segment } of graphemes.segment(text)) {
+    if (kept.length === WINDOW_MESSAGE_MAX) return `${kept.join("")}…`;
+    kept.push(segment);
+  }
+  return text;
 }
 
 function messageField(name, message) {

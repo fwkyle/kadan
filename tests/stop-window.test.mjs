@@ -160,3 +160,25 @@ test("성공하면 문구 필드가 없고 긴 문구는 200자에서 자르고 
   });
   assert.equal("rottieWindowMessage" in empty, false);
 });
+
+test("문구 정리는 글자(grapheme) 200개 기준으로 자르고 글자를 반으로 끊지 않는다", () => {
+  const msg = (message) => cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
+    ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
+    closeFn: () => ({ closed: false, code: "X", message }),
+  }).rottieWindowMessage;
+  const count = (s) => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(s)].length;
+  const emojiEdge = msg("a".repeat(199) + "😀xyz");
+  assert.equal(emojiEdge.isWellFormed(), true);
+  assert.equal(emojiEdge, `${"a".repeat(199)}😀…`);
+  assert.equal(msg("😀".repeat(250)), `${"😀".repeat(200)}…`);
+  const jamo = "각";
+  assert.equal(msg("a".repeat(199) + jamo + "b"), `${"a".repeat(199)}${jamo}…`);
+  const zwj = "👨‍👩‍👧";
+  assert.equal(msg("a".repeat(199) + zwj + "b"), `${"a".repeat(199)}${zwj}…`);
+  assert.doesNotMatch(msg("before\u0085\u009bafter"), /\p{Cc}/u);
+  assert.equal(msg("before\u0085\u009bafter"), "before after");
+  assert.equal(msg("a".repeat(200)), "a".repeat(200));
+  assert.equal(count(msg("😀".repeat(200))), 200);
+  assert.equal(msg("a".repeat(201)), `${"a".repeat(200)}…`);
+  assert.equal(msg("😀".repeat(201)), `${"😀".repeat(200)}…`);
+});
