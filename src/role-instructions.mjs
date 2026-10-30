@@ -110,14 +110,27 @@ function facts(home,entries,{taskId,mailContext={},infer=false,cards:providedCar
   if (card && !cards.some(c=>c.key===card.key)) cards.push(card);
   const hierarchyPath=activeHierarchyPath(entries);
   const parents=hierarchyPath?read('현재 hierarchy',()=>parseHierarchy(JSON.parse(fs.readFileSync(hierarchyPath,'utf8'))),new Map()):new Map();
-  if (entries.some(e=>e.broken)) unavailable.push('원장 손상: 현재 담당·완료 상태 모름');
+  const broken=entries.some(e=>e.broken);
+  if (broken) unavailable.push('원장 손상: 현재 담당·완료 상태 모름');
   const projected=workEntries(entries,identity);
+  // (실행, 역할) → 마지막 send/done 종류. 카드마다 원장을 다시 훑지 않도록 처음 필요할 때 한 번만 만든다.
+  let lastKinds=null;
+  const lastKindOf=(executionKey,role)=>{
+    if (!lastKinds) {
+      lastKinds=new Map();
+      for (const e of projected) {
+        if (taskConnectionError(e) || !['send','done'].includes(e.kind)) continue;
+        if (!lastKinds.has(e.executionKey)) lastKinds.set(e.executionKey,new Map());
+        lastKinds.get(e.executionKey).set(e.role,e.kind);
+      }
+    }
+    return lastKinds.get(executionKey)?.get(role);
+  };
   const active=c=>{
-    if (c.status!=='assigned' || entries.some(e=>e.broken)) return false;
+    if (c.status!=='assigned' || broken) return false;
     const owner=effectiveCardRole(c,entries,identity);
     // 동일 ID를 쓴 다른 역할의 완료는 이 담당의 완료가 아니다. 확정 인계는 투영한다.
-    const history=projected.filter(e=>!taskConnectionError(e)&&e.executionKey===c.key&&e.role===owner&&['send','done'].includes(e.kind));
-    return history.at(-1)?.kind!=='done';
+    return lastKindOf(c.key,owner)!=='done';
   };
   return {works,cards,card,work,parents,hierarchyPath,active,unavailable,identity};
 }
