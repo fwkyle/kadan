@@ -68,7 +68,7 @@ test("baseline: stop entry retains its existing shape and pending cards", () => 
     const { rottieWindowMessage, ...rest } = fields;
     assert.deepEqual(rest, { rottieTerminalId: "owned-tab", rottieWindowClosed: false, rottieWindowError: "KADAN_ROTTIE_BIN 없음" });
     assert.match(rottieWindowMessage, /KADAN_ROTTIE_BIN/);
-    assert.ok(rottieWindowMessage.length <= 200);
+    assert.ok(rottieWindowMessage.length <= 201);
   });
   test("close and remove handle non-JSON, spawn errors and thrown errors once", () => {
     for (const result of [{ status: 7, stderr: "bad" }, { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) }, new Error("thrown")]) {
@@ -143,7 +143,7 @@ test("창 정리 실패는 로티가 준 원인 문구를 정리해 원장 필�
   assert.equal(remove.rottieWindowMessage, undefined);
 });
 
-test("성공하면 문구 필드가 없고 긴 문구는 200자에서 자른다", () => {
+test("성공하면 문구 필드가 없고 긴 문구는 200자에서 자르고 …를 붙인다", () => {
   const ok = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
     ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
     closeFn: () => ({ closed: true }), removeFn: () => ({ removed: true }),
@@ -153,7 +153,7 @@ test("성공하면 문구 필드가 없고 긴 문구는 200자에서 자른다"
     ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
     closeFn: () => ({ closed: false, code: "X", message: "가".repeat(500) }),
   });
-  assert.equal(long.rottieWindowMessage.length, 200);
+  assert.equal(long.rottieWindowMessage, `${"가".repeat(200)}…`);
   const empty = cli.closeStartedWindow({ rottieTerminalId: "owned-tab" }, {
     ...reachable, env: { KADAN_ROTTIE_BIN: "/fake" }, print() {},
     closeFn: () => ({ closed: false, code: "X", message: " \n " }),

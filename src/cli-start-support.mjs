@@ -291,10 +291,10 @@ export function openStartedWindow(session, platform = process.platform, deps = {
 
 const WINDOW_MESSAGE_MAX = 200;
 
-// 로티가 준 원인 문구를 원장에 한 줄로 남기려고 줄바꿈·제어 문자를 공백 하나로 줄이고 200자에서 자른다.
+// 로티가 준 원인 문구를 원장에 한 줄로 남기려고 줄바꿈·제어 문자를 공백 하나로 줄이고 200자에서 자르고 잘렸으면 끝에 …를 붙인다.
 export function cleanWindowMessage(message) {
   const text = String(message ?? "").replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
-  return text.length > WINDOW_MESSAGE_MAX ? text.slice(0, WINDOW_MESSAGE_MAX) : text;
+  return text.length > WINDOW_MESSAGE_MAX ? `${text.slice(0, WINDOW_MESSAGE_MAX)}…` : text;
 }
 
 function messageField(name, message) {
