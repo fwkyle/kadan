@@ -669,7 +669,7 @@ export async function runWatch({
         lastProcessAt = cycleAt;
         let settings = null;
         try { settings = readSettings(ledgerHome()); } catch { /* 설정이 손상돼도 시작값으로 돈다 */ }
-        const assessed = assessProcesses(processState, collectProcesses(spawn, { socket: currentSocket() }), processThresholds(settings));
+        const assessed = assessProcesses(processState, collectProcesses(spawn, { socket: currentSocket() }), processThresholds(settings), cycleAt);
         processState = assessed.state;
       }
       if (processState.processAlert) processAlerts = [processState.processAlert];
@@ -779,7 +779,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}${alert.kind === "프로세스" ? `:${(alert.signals ?? []).join("+")}` : ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
+          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}${alert.kind === "프로세스" ? `:${(alert.signals ?? []).join("+")}:${alert.since ?? ""}` : ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {

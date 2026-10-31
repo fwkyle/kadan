@@ -157,7 +157,10 @@ export function collectProcesses(spawn, { socket }) {
   if (psResult?.status !== 0 || typeof psResult.stdout !== "string") {
     return { ok: false, reason: "ps를 읽지 못함" };
   }
-  return { ok: true, serverPid, ...buildSnapshot(parsePs(psResult.stdout), serverPid, panes) };
+  const rows = parsePs(psResult.stdout);
+  // 서버 루트 행을 못 찾은 표본(빈 출력·깨진 출력)은 0개가 아니라 모름이다.
+  if (!rows.some((row) => row.pid === serverPid)) return { ok: false, reason: "ps 출력에 tmux 서버 행이 없음" };
+  return { ok: true, serverPid, ...buildSnapshot(rows, serverPid, panes) };
 }
 
 // 넘은 기준의 집합. 주 기준(총량·한 프로세스)은 RED, 보조 기준만이면 AMBER.
@@ -185,11 +188,12 @@ export function alertText(snapshot, signals) {
 }
 
 // 경보 열기·닫기. 닫힐 때는 기준을 다시 넘지 않는 주기가 3번 이어져야 닫는다(자원 경보와 같은 깜빡임 방지).
-// 못 읽은 주기(ok:false)는 열림도 닫힘도 세지 않는다.
-export function assessProcesses(previousState, result, thresholds) {
+// 못 읽은 주기(ok:false)는 경보를 유지하고 정상 연속을 0으로 끊는다. 수집하지 않은 순회는 이 함수를 부르지 않는다.
+export function assessProcesses(previousState, result, thresholds, at = 0) {
   const previous = previousState?.processAlert ?? null;
   if (!result?.ok) {
-    return { state: { processAlert: previous, normalCycles: previousState?.normalCycles ?? 0 }, alerts: previous ? [previous] : [] };
+    // 실제 수집 실패: 열린 경보는 유지하고 정상 연속은 끊는다(정상-실패-정상이 3으로 이어져 닫히지 않게).
+    return { state: { processAlert: previous, normalCycles: 0 }, alerts: previous ? [previous] : [] };
   }
   const signals = exceededSignals(result, thresholds);
   let alert = null, normalCycles = 0;
@@ -200,6 +204,8 @@ export function assessProcesses(previousState, result, thresholds) {
       level: signals.includes("total") || signals.includes("process") ? "RED" : "AMBER",
       signals,
       text: alertText(result, signals),
+      // 기준 집합이 바뀐 시각. 알림 중복 막기 키에 들어가 A→B→A 전이마다 키가 달라진다.
+      since: previous && previous.signals.join() === signals.join() && previous.since != null ? previous.since : at,
     };
   } else if (previous) {
     normalCycles = (previousState?.normalCycles ?? 0) + 1;

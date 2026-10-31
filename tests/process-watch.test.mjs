@@ -154,3 +154,35 @@ test('대시보드 재사용 캐시: TTL 안에서는 수집 1회', () => {
   const failing = createProcessCache(() => { throw new Error('boom'); }, {now: () => 0});
   assert.equal(failing().ok, false);
 });
+
+test('F1: tmux가 준 서버 PID 행이 ps에 없으면 0개 정상이 아니라 ok:false이고 열린 경보는 닫히지 않는다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  for (const ps of ['', '이건 깨진 줄\n', '  999     1   2048  05:00:00 /usr/bin/other\n']) {
+    const bad = collectProcesses(fakeSpawn({ps: {status: 0, stdout: ps}}), {socket: 'x'});
+    assert.equal(bad.ok, false, JSON.stringify(ps));
+  }
+  let r = assessProcesses(null, snap({rssMb: 13 * 1024}), t);
+  assert.equal(r.alerts.length, 1);
+  for (let i = 0; i < 5; i++) r = assessProcesses(r.state, collectProcesses(fakeSpawn({ps: {status: 0, stdout: ''}}), {socket: 'x'}), t);
+  assert.equal(r.alerts.length, 1, '빈 ps 5번에도 경보 유지');
+});
+
+test('F3: 정상 → 수집 실패 → 정상 → 실패 → 정상은 정상 연속이 끊겨 닫히지 않고, 연속 3번 정상만 닫는다', () => {
+  const t = DEFAULT_THRESHOLDS, fail = {ok: false};
+  let r = assessProcesses(null, snap({rssMb: 13 * 1024}), t);
+  for (const sample of [snap(), fail, snap(), fail, snap()]) r = assessProcesses(r.state, sample, t);
+  assert.equal(r.alerts.length, 1, '정상 1,실패,정상 1,실패,정상 1');
+  assert.equal(r.state.normalCycles, 1);
+  r = assessProcesses(r.state, snap(), t); assert.equal(r.alerts.length, 1);
+  r = assessProcesses(r.state, snap(), t); assert.equal(r.alerts.length, 0, '이어진 3번째 정상');
+});
+
+test('F2 바탕: 기준 집합이 바뀐 시각(since)은 전이마다 달라지고 같은 상태에서는 유지된다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  const A = snap({rssMb: 13 * 1024}), B = snap({rssMb: 13 * 1024, kinds: {python: 0, node: 40}});
+  let r = assessProcesses(null, A, t, 1000); const a1 = r.alerts[0].since;
+  r = assessProcesses(r.state, A, t, 2000); assert.equal(r.alerts[0].since, a1, '같은 상태는 유지');
+  r = assessProcesses(r.state, B, t, 3000); const b = r.alerts[0].since;
+  r = assessProcesses(r.state, A, t, 4000); const a2 = r.alerts[0].since;
+  assert.deepEqual([a1, b, a2], [1000, 3000, 4000]);
+});
