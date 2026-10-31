@@ -186,3 +186,21 @@ test('F2 바탕: 기준 집합이 바뀐 시각(since)은 전이마다 달라지
   r = assessProcesses(r.state, A, t, 4000); const a2 = r.alerts[0].since;
   assert.deepEqual([a1, b, a2], [1000, 3000, 4000]);
 });
+
+test('F4: since가 원장 줄에 적히고 복원되며, 같은 표본 재평가에도 같은 since·같은 알림 키 재료', async () => {
+  const {recordAlert, seedAlertState} = await import('../src/watch-alert-body.mjs');
+  const t = DEFAULT_THRESHOLDS, A = snap({rssMb: 13 * 1024});
+  const first = assessProcesses(null, A, t, 123456).alerts[0];
+  const lines = [];
+  recordAlert(e => lines.push({t: '2026-10-31T00:00:00.000Z', ...e}), first, '@user', true);
+  assert.equal(lines[0].since, 123456);
+  const restored = seedAlertState(lines).active.find(a => a.id === 'process:memory');
+  assert.equal(restored.since, 123456);
+  const again = assessProcesses({processAlert: restored, normalCycles: 0}, A, t, 987654).alerts[0];
+  assert.equal(again.since, 123456, '재시작 뒤 같은 표본 재평가에도 since 유지');
+  // since 없는 옛 줄은 지금처럼 동작한다(복원 undefined, 재평가가 새 시각을 매김)
+  const old = seedAlertState([{t: 'x', kind: 'alert', id: 'process:memory', alertKind: '프로세스', level: 'RED', signals: ['total'], text: 't'}])
+    .active.find(a => a.id === 'process:memory');
+  assert.equal('since' in old, false);
+  assert.equal(assessProcesses({processAlert: old, normalCycles: 0}, A, t, 555).alerts[0].since, 555);
+});
