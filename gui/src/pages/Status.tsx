@@ -28,6 +28,22 @@ function FlowMore({skip}: {skip: number}) {
     {data && data.pages > 1 && <p><button disabled={page <= 1} onClick={() => setPage(page - 1)}>이전</button> {data.page}/{data.pages}쪽 <button disabled={page >= data.pages} onClick={() => setPage(page + 1)}>다음</button></p>}
   </>;
 }
+type ProcessBig = {pid: number; name: string; rssMb: number};
+type ProcessGroup = {session: string; count: number; rssMb: number; kinds: Record<string, number>; leak: number; big: ProcessBig[]};
+type ProcessData = {ok: boolean; reason?: string; count?: number; rssMb?: number; kinds?: Record<string, number>; leak?: number;
+  sessions?: ProcessGroup[]; exceeded?: string[]; thresholds?: {totalGb: number; processGb: number; python: number; node: number}};
+const gb = (mb: number) => (mb / 1024).toFixed(1) + " GB";
+function ProcessTable({processes}: {processes?: ProcessData | null}) {
+  if (!processes) return <p>프로세스 상태 모름</p>;
+  if (!processes.ok) return <p>프로세스 상태 모름 ({processes.reason ?? "읽지 못함"})</p>;
+  const sessions = processes.sessions ?? [], kinds = processes.kinds ?? {}, limit = processes.thresholds;
+  return <>
+    <p className="st-hint">카단 tmux 서버 아래 {processes.count}개 · {gb(processes.rssMb ?? 0)}{limit ? " (기준 합계 "+limit.totalGb+" GB, 한 프로세스 "+limit.processGb+" GB, python "+limit.python+"개, node "+limit.node+"개)" : ""} · 종류별 {Object.entries(kinds).filter(([,n])=>n>0).map(([k,n])=>k+" "+n).join(" · ")} · 24시간 넘게 남은 작은 프로세스 {processes.leak ?? 0}개{processes.exceeded?.length ? " · 기준 넘음: "+processes.exceeded.join(", ") : ""}</p>
+    <div className="table-scroll"><table><thead><tr><th>세션</th><th>개수</th><th>메모리</th><th>큰 프로세스</th><th>오래 남은 작은 것</th></tr></thead><tbody>
+      {sessions.map(group=><tr key={group.session}><td>{group.session}</td><td>{group.count}</td><td>{gb(group.rssMb)}</td><td>{group.big.map(proc=>proc.name+"#"+proc.pid+" "+gb(proc.rssMb)).join(", ")}</td><td>{group.leak}</td></tr>)}
+    </tbody></table></div>
+  </>;
+}
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
@@ -36,6 +52,7 @@ type StatusData = Stamp & {
   watchHtml: string;
   resources: {current: {memory: string; freePercent: number | null; swapUsed: number | null; load5: number | null}; ncpu: number | null} | null;
   resourceError: string | null; workError: string | null; decisions: Decision[] | null;
+  processes?: ProcessData | null;
   recent: {at: string; kind: string; label: string; role: string; card: {key: string; title: string}}[];
   recentCounts: Record<string, number>;
   activity?: Record<string, number[]>;
@@ -171,6 +188,7 @@ export default function Status({url}: {url: URL}) {
       <details className="st-fold"><summary>진행 전 카드 {bucket("planned").length}건</summary>{bucket("planned").map(row=><p key={row.key}><CardLink row={row}/> · {row.owner || "미배정"}</p>)}</details>
       <details className="st-fold"><summary>끝난 판 {data.boards.filter(b=>b.state==="done").length}개 · 끝난 워크 {closed.length}장</summary>{closed.map(row=><p key={row.key}><CardLink row={row}/> · {row.stateLabel}</p>)}{data.boards.filter(b=>b.state==="done").map(board=><p key={board.name}>{board.name} · 실행 {board.total}장</p>)}</details>
       <details className="st-fold"><summary>자원 사용</summary><ErrorMessage error={data.resourceError}/>{data.resources ? <Facts items={[["메모리 여유",data.resources.current.freePercent===null ? "모름" : data.resources.current.freePercent+"%"],["스왑 사용",data.resources.current.swapUsed===null ? "모름" : data.resources.current.swapUsed.toFixed(1)+" MB"],["CPU 5분 부하",data.resources.current.load5===null ? "모름" : data.resources.current.load5.toFixed(2)+" / "+(data.resources.ncpu ?? "모름")]]}/> : <p>자원 상태 모름</p>}</details>
+      <details className="st-fold"><summary>프로세스·메모리 (카단 tmux 서버 아래)</summary><ProcessTable processes={data.processes}/></details>
       <p className="st-footnote">모든 수치는 카드 한 장을 한 번씩 센 값이며 관리·조율 카드는 제외합니다. 제품 완성률이 아닙니다. 상세 비교·정렬은 <a href="?collection=executions#dashboard">작업 표</a>에서 확인하세요.</p>
     </>}
   </section>;

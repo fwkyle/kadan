@@ -48,6 +48,9 @@ import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
+import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
+import { readSettings } from "./runner-settings.mjs";
+import { currentSocket } from "./floor-tmux.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner, userTurnWaitList } from "./handover-state.mjs";
@@ -137,6 +140,8 @@ export async function runWatch({
   checkNightExpiry = null,
   idleMs = 15 * 60 * 1_000,
   userNotify = false,
+  // 카단 tmux 서버 아래 프로세스·메모리 경보(process-watch.mjs). 이 간격보다 자주 ps를 부르지 않는다. 0이면 매 주기.
+  processEveryMs = 60_000,
   judgeCmd = null,
   ai = null,
   // 설명 AI(explain-ai.mjs). 감시 AI가 아니다: brief 줄만 쓰고 판정·알림을 하지 않으며 감시 순회를 기다리게 하지 않는다. 없으면 하지 않는다.
@@ -212,6 +217,8 @@ export async function runWatch({
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   const seeded = seedAlertState(readEntries());
   let activeAlerts = seeded.active;
+  let processState = { processAlert: seeded.active.find(a => a.id === "process:memory") ?? null, normalCycles: 0 };
+  let lastProcessAt = -Infinity;
   const alertRecipients = seeded.recipients;
   const deliveryFailures = new Map();
   const pendingAlerts = new Map(seeded.active.filter(a => a.held).map(a => [a.id, a]));
@@ -656,11 +663,23 @@ export async function runWatch({
       }
     }
     // Stop 훅 빠른 길을 켠 기계(claude 설정 파일이 있음)에서만 codex 훅 신뢰 상태를 읽어 알린다. 읽기 전용이다.
+    let processAlerts = [];
+    try {
+      if (cycleAt - lastProcessAt >= processEveryMs) {
+        lastProcessAt = cycleAt;
+        let settings = null;
+        try { settings = readSettings(ledgerHome()); } catch { /* 설정이 손상돼도 시작값으로 돈다 */ }
+        const assessed = assessProcesses(processState, collectProcesses(spawn, { socket: currentSocket() }), processThresholds(settings), cycleAt);
+        processState = assessed.state;
+      }
+      if (processState.processAlert) processAlerts = [processState.processAlert];
+    } catch { /* 프로세스 확인 실패가 감시를 멈추지 않는다 */ }
     let stopHookAlerts = [];
     try {
       stopHookAlerts = assessStopHookTrust({ enabled: fs.existsSync(claudeSettingsPath(ledgerHome())), trust: codexStopHookTrust() });
     } catch { /* 신뢰 확인 실패가 감시를 멈추지 않는다 */ }
     const nextAlerts = [
+      ...processAlerts,
       ...(observationError ? [] : stopHookAlerts),
       ...(hierarchyError ? [hierarchyError] : []),
       ...sweepState.alerts,
@@ -760,7 +779,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
+          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}${alert.kind === "프로세스" ? `:${(alert.signals ?? []).join("+")}:${alert.since ?? ""}` : ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {
