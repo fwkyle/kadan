@@ -4,21 +4,31 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {cardCommand} from '../src/card-command.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 import {mergeCheck, formatMergeCheck} from '../src/merge-check.mjs';
+import {leaseShaFor} from '../src/review-sha.mjs';
 
 // Why: 머지 직전에 검수가 본 커밋과 PR head가 같은지 사람 눈으로만 맞추던 것을 나란히 표시한다(표시만, 관문 아님).
 const A = 'a'.repeat(40), B = 'b'.repeat(40);
 
+// 검수 SHA는 카드의 원본 저장소(repoPath)의 자리 묶음에서만 가져온다 → 시험도 진짜 git 저장소가 필요하다.
+function gitRepo(prefix) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  assert.equal(spawnSync('git', ['-C', dir, 'init', '--quiet'], {encoding: 'utf8'}).status, 0);
+  return dir;
+}
+
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-merge-check-'));
+  const repoDir = gitRepo('kadan-mc-repo-');
   createDatabase(home); writeStorageMarker(home, 'sqlite');
   const store = new WorkStore(home), cards = new CardStore(home);
-  store.create({key: 'repo/w', title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: '감독', repoPath: home});
+  store.create({key: 'repo/w', title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: '감독', repoPath: repoDir});
   const addReview = round => {
     store.change('repo/w', 'execute', {title: `검수${round}`, body: `# 검수\n\n## 읽고 시작할 것\n- ${home}/AGENTS.md — 규칙\n`, phase: 'review', round: String(round)}, {revision: store.get('repo/w').revision, by: '감독', note: '검수 등록'});
     const key = store.get('repo/w').executions.at(-1).key;
@@ -31,12 +41,14 @@ function fixture() {
     fs.writeFileSync(card.resultPath, `검수 결과 ${key}`);
     return cardCommand(['report', key], {revision: card.revision, outcome, ...flags}, {home, by: 'rv-test'});
   };
-  const lease = (name, sha, at = new Date().toISOString()) => {
-    const dir = path.join(home, 'review-slots', 'repo-12345678');
+  // pool: 자리 묶음 폴더 이름, poolRepo: 그 묶음의 원본 저장소(repo.json). 기본은 카드의 저장소.
+  const lease = (name, sha, at = new Date().toISOString(), {pool = 'repo-12345678', poolRepo = repoDir} = {}) => {
+    const dir = path.join(home, 'review-slots', pool);
     fs.mkdirSync(dir, {recursive: true});
+    fs.writeFileSync(path.join(dir, 'repo.json'), JSON.stringify({repo: poolRepo}));
     fs.writeFileSync(path.join(dir, `${name}.lease.json`), JSON.stringify({for: name.split('@')[0], sha, at, slot: name}));
   };
-  return {home, store, cards, addReview, report, lease, check: head => mergeCheck('repo/w', {head}, {home})};
+  return {home, repoDir, store, cards, addReview, report, lease, check: head => mergeCheck('repo/w', {head}, {home})};
 }
 
 test('card report --sha: 준 값을 given으로 저장한다', () => {
@@ -53,6 +65,44 @@ test('--sha 없이 report: 그 카드 이름으로 빌린 임차 기록의 커�
   const saved = f.report(key, 'pass');
   assert.equal(saved.result.reviewedSha, B);
   assert.equal(saved.result.reviewedShaSource, 'slot');
+});
+
+test('다른 저장소의 같은 카드 id 임차는 검수 SHA로 쓰지 않는다', () => {
+  const f = fixture(), key = f.addReview(1), id = key.split('/')[1];
+  const other = gitRepo('kadan-mc-other-');
+  f.lease(`${id}@slot-1`, B, undefined, {pool: 'beta-pool', poolRepo: other});
+  const saved = f.report(key, 'pass');
+  assert.equal(saved.result.reviewedSha, null);
+  assert.equal(saved.result.reviewedShaSource, null);
+  assert.equal(f.check(B).result, '검수 SHA 없음');
+});
+
+test('자기 저장소 임차가 있으면 다른 저장소의 더 최신 같은 id 임차가 덮어쓰지 못한다', () => {
+  const f = fixture(), key = f.addReview(1), id = key.split('/')[1];
+  const other = gitRepo('kadan-mc-other-');
+  f.lease(`${id}@slot-1`, A, '2026-01-01T00:00:00Z');
+  f.lease(`${id}@slot-2`, B, '2026-02-01T00:00:00Z', {pool: 'beta-pool', poolRepo: other});
+  const saved = f.report(key, 'pass');
+  assert.equal(saved.result.reviewedSha, A);
+  assert.equal(saved.result.reviewedShaSource, 'slot');
+});
+
+test('카드의 저장소를 정할 수 없으면(git 저장소 아님) 임차에서 가져오지 않는다', () => {
+  const f = fixture(), key = f.addReview(1), id = key.split('/')[1];
+  const notRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-mc-norepo-'));
+  f.lease(`${id}@slot-1`, B, undefined, {poolRepo: notRepo});
+  const card = f.cards.get(key);
+  card.repoPath = notRepo; // 저장소 판정 함수만 직접 확인한다(카드 원장은 건드리지 않는다)
+  assert.equal(leaseShaFor(f.home, card), null);
+});
+
+test('잘못된 명시 --sha는 임차가 있어도 경고 뒤 null로 남고 report는 성공한다', () => {
+  const f = fixture(), key = f.addReview(1), id = key.split('/')[1];
+  f.lease(`${id}@slot-1`, A);
+  const saved = f.report(key, 'pass', {sha: 'invalid-sha'});
+  assert.equal(saved.result.reviewedSha, null);
+  assert.equal(saved.result.reviewedShaSource, null);
+  assert.equal(saved.result.outcome, 'pass');
 });
 
 test('둘 다 없거나 형식이 틀리면 null이고 report는 성공한다', () => {

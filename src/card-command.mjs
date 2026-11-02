@@ -9,7 +9,7 @@ export function cardCommand(args,flags,{home,by}) {
   if(command==='list')return store.listSummaries().filter(c=>(!flags.status||c.status===flags.status)&&(!flags.repo||c.repo===flags.repo)).map(c=>({key:c.key,title:c.title,status:c.status,board:c.board,role:c.role,workType:c.workType||'execution',revision:c.revision}));
   if(command==='show')return store.get(key);
   if(command==='report') {
-    let sha=null;
+    let sha;
     if(flags.sha!==undefined){
       sha=normalizeSha(flags.sha);
       if(!sha)process.stderr.write(`경고: --sha는 7~40자리 16진 커밋이어야 해서 기록하지 않았습니다 (${String(flags.sha).slice(0,60)})\n`);

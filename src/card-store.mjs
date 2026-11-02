@@ -214,7 +214,7 @@ export class CardStore {
     if(card.resultPath&&path.resolve(file)!==card.resultPath)throw new Error(`새 실행의 결과 파일은 card show의 resultPath를 사용하세요: ${card.resultPath}`);
     return path.resolve(file);
   }
-  report(key,{revision,resultFile,outcome,sha=null,by='사람'}={}) {
+  report(key,{revision,resultFile,outcome,sha,by='사람'}={}) {
     const role=this.#roleOf(key);
     return this.locked(()=>{
       const card=this.get(key);
@@ -225,10 +225,10 @@ export class CardStore {
       if(!(card.resultPath?fs.lstatSync(file):fs.statSync(file)).isFile())throw new Error('결과 경로는 일반 파일이어야 합니다');
       const bytes=fs.readFileSync(file);
       if(!bytes.length)throw new Error('빈 결과 파일은 등록할 수 없습니다');
-      // 검수한 커밋은 표시용 기록이다(필수 아님). 준 값이 있으면 given, 없으면 이 카드 이름으로 빌린 검수 자리 임차 기록(slot), 둘 다 없으면 null.
-      const slotSha=sha?null:leaseShaFor(this.home,card);
+      // 검수한 커밋은 표시용 기록이다(필수 아님). sha: undefined=옵션 안 줌, null=준 값이 형식 오류, 문자열=유효. 유효하면 given, 안 줬을 때만 이 카드 이름으로 빌린 검수 자리 임차 기록(slot), 둘 다 없으면 null.
+      const slotSha=sha===undefined?leaseShaFor(this.home,card):null;
       const result={path:file,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,outcome};
-      const reviewedSha=sha||slotSha,reviewedShaSource=sha?'given':slotSha?'slot':null;
+      const reviewedSha=sha||slotSha||null,reviewedShaSource=sha?'given':slotSha?'slot':null;
       if(card.result){
         if(['path','sha256','bytes','outcome'].every(k=>card.result[k]===result[k]))return card;
         throw new Error('이미 등록한 결과와 다릅니다. 기존 근거를 보존하고 수정·재검수는 새 실행으로 연결하세요');
