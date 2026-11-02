@@ -26,23 +26,29 @@ export function readFirstPaths(body) {
 }
 // 카드 본문 `## 완료 검사` 절의 줄. 절이 없으면 빈 배열이다. 발령 때 이 줄을 이력에 저장한다(completionChecks).
 export const COMPLETION_CHECK_STORE_MAX=21,COMPLETION_CHECK_LINE_MAX=500;
-export function checkLines(body) {
-  const lines=String(body??'').split('\n');
-  const start=lines.findIndex(line=>/^#{1,6}\s*완료 검사\s*$/.test(line.trim()));
-  if(start===-1)return [];
+// 본문 첫 줄부터 코드 펜스 상태를 추적한다(``` 와 ~~~, 닫는 줄은 같은 글자에 같거나 긴 길이). 펜스 안의 제목·줄은 무시한다.
+// lines는 저장 상한까지, total은 상한과 상관없이 센 전체 검사 줄 수다.
+export function scanChecks(body) {
   const found=[];
-  let fenced=false;
-  for(const line of lines.slice(start+1)) {
-    if(line.trim().startsWith('```')){fenced=!fenced;continue;}
-    if(fenced)continue;
+  let total=0,open=null,inSection=false;
+  for(const line of String(body??'').split('\n')) {
+    if(open) {
+      const close=/^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if(close&&close[1][0]===open.char&&close[1].length>=open.len)open=null;
+      continue;
+    }
+    const fence=/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if(fence&&!(fence[1][0]==='`'&&fence[2].includes('`'))){open={char:fence[1][0],len:fence[1].length};continue;}
+    if(!inSection){if(/^#{1,6}\s*완료 검사\s*$/.test(line.trim()))inSection=true;continue;}
     if(/^#{1,6}\s/.test(line))break;
     const text=line.trim().replace(/^[-*]\s+/,'').replace(/^`([^`]*)`$/,'$1').trim();
     if(!text||text.startsWith('<!--'))continue;
-    found.push(text.slice(0,COMPLETION_CHECK_LINE_MAX));
-    if(found.length>=COMPLETION_CHECK_STORE_MAX)break;
+    total+=1;
+    if(found.length<COMPLETION_CHECK_STORE_MAX)found.push(text.slice(0,COMPLETION_CHECK_LINE_MAX));
   }
-  return found;
+  return {lines:found,total};
 }
+export const checkLines=body=>scanChecks(body).lines;
 export class CardStore {
   constructor(home) { this.home=home; this.root=path.join(home,'cards'); }
   dir(key) {
@@ -185,8 +191,9 @@ export class CardStore {
       }
       // 발령 때 완료 검사 줄을 이력에 고정한다. 이후 card.md를 고쳐도 실행 내용은 바뀌지 않는다.
       if(next.status==='assigned'&&current.status!=='assigned'){
-        const lines=checkLines(body);
-        if(lines.length)next.completionChecks=lines;else delete next.completionChecks;
+        const scanned=scanChecks(body);
+        if(scanned.lines.length){next.completionChecks=scanned.lines;next.completionChecksTotal=scanned.total;}
+        else{delete next.completionChecks;delete next.completionChecksTotal;}
       }
       if(next.status==='ready'){next.board=null;next.role=null;}
       if(Object.hasOwn(patch,'turnOwner')){

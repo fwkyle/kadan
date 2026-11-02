@@ -157,8 +157,8 @@ test('git-env-exec·path-exec: 환경의 GIT_CONFIG_*·PATH 앞의 가짜 git은
  assert.ok(spawn.calls.length>0);
  for(const c of spawn.calls){
   assert.ok(path.isAbsolute(c.file)&&!c.file.startsWith(dir),`git 실행 파일: ${c.file}`);
-  assert.deepEqual(Object.keys(c.opts.env).sort(),['GIT_ALLOW_PROTOCOL','GIT_CONFIG_NOSYSTEM','GIT_OPTIONAL_LOCKS','GIT_TERMINAL_PROMPT','HOME','PATH']);
-  assert.equal(c.opts.env.PATH,'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin');assert.equal(c.opts.env.GIT_ALLOW_PROTOCOL,'https:ssh');assert.equal(c.opts.env.GIT_CONFIG_NOSYSTEM,'1');
+  assert.deepEqual(Object.keys(c.opts.env).sort(),['GIT_ALLOW_PROTOCOL','GIT_OPTIONAL_LOCKS','GIT_TERMINAL_PROMPT','HOME','PATH']);
+  assert.equal(c.opts.env.PATH,'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin');assert.equal(c.opts.env.GIT_ALLOW_PROTOCOL,'https:ssh');assert.equal(c.opts.env.GIT_CONFIG_NOSYSTEM,undefined);
   assert.deepEqual(c.args.slice(0,cc.GIT_FRONT_ARGS.length),cc.GIT_FRONT_ARGS);
   assert.equal(c.opts.shell,undefined);assert.equal(c.opts.stdio[0],'ignore');
  }
@@ -177,8 +177,8 @@ test('memo-growth: 검사는 20개까지만 돌리고 메모 길이에 상한이
  assert.equal(f.store.get(f.key).completionChecks.length,21); // 20개 + 넘침 표시 1줄
  const r=f.done();assert.equal(r.status,0,r.stderr);
  const [note]=memos(f);
- assert.ok(note.note.length<=cc.MAX_NOTE_CHARS+60,`메모 ${note.note.length}자`);
- assert.match(note.note,/20개 상한으로 1개 생략/);
+ assert.ok(note.note.length<=cc.MAX_NOTE_CHARS,`메모 ${note.note.length}자`);
+ assert.match(note.note,/20개 상한으로 80개 생략/);
 });
 
 test('assigned-source-mutation: 발령 뒤 바뀐 card.md는 무시한다 (발령 때 저장한 줄 기준)',()=>{
@@ -294,16 +294,101 @@ test('시간 초과: 검사당 상한과 전체 상한(넘으면 나머지는 �
  const repo=repoDir();let clock=0;
  const slow=recording({status:()=>{clock+=70_000;return {status:0,stdout:''};}});
  const total=await cc.runChecks(card(repo),['git tidy .','git tidy .','git tidy .','file a.txt exists','bad line'],{spawn:slow,now:()=>clock});
- assert.deepEqual(statuses(total),['pass','pass','skipped','skipped','unreadable']);
- assert.equal(slow.calls.filter(c=>c.args.includes('status'))[1].opts.timeout,30000);
- assert.equal(cc.summarize(total.results),'통과 2·실패 0·읽지 못함 1·건너뜀 2');
+ assert.deepEqual(statuses(total),['timeout','timeout','skipped','skipped','unreadable']); // 70초 걸린 검사는 마감을 넘겼으니 통과로 치지 않는다
+ assert.equal(slow.calls.filter(c=>c.args.includes('status'))[1].opts.timeout,30000); // 두 번째 검사: 검사당 30초, 전체 남은 50초 중 이른 쪽
+ assert.equal(cc.summarize(total.results),'통과 0·실패 2·읽지 못함 1·건너뜀 2');
  const hung=recording({status:()=>({error:{code:'ETIMEDOUT'},status:null})});
  const per=await cc.runChecks(card(repo),['git tidy .','git tidy .'],{spawn:hung,perMs:25});
- assert.deepEqual(statuses(per),['timeout','timeout']);assert.equal(hung.calls.find(c=>c.args.includes('status')).opts.timeout,25);
+ assert.deepEqual(statuses(per),['timeout','timeout']);{const t=hung.calls.find(c=>c.args.includes('status')).opts.timeout;assert.ok(t>0&&t<=25,`timeout ${t}`);}
  assert.equal(cc.PER_CHECK_MS,30000);assert.equal(cc.TOTAL_MS,120000);
 });
 
 test('문법: 네 종류만 읽고 나머지는 형식 오류',()=>{
  for(const ok of ['file a exists','file a sha256='+'a'.repeat(64),'git head . = abcdef1','git pushed . feat/x','git tidy /abs/path'])assert.ok(!cc.parseCheck(ok).error,ok);
  for(const bad of ['hello','command ls','url https://x status=200','file a','file a sha256=abc','git head . = zz','git head .','git pushed .','git tidy','git status','git head . abc1234 extra'])assert.ok(cc.parseCheck(bad).error,bad);
+});
+
+// ---- 3라운드: 위협 범위(카드 글은 막고 저장소 설정은 작업자와 같은 신뢰) 뒤의 남은 버그 ----
+
+test('credential-helper-compatibility: 고정 앞 인자·환경에서도 사용자의 인증 도우미가 인증을 돌려준다',()=>{
+ const repo=repoDir(),dir=tmp('kadan-cc-cred-');
+ const helper=path.join(dir,'helper');fs.writeFileSync(helper,'#!/bin/sh\necho username=fake-user\necho password=fake-pass\n',{mode:0o755});
+ git(repo,'config','credential.helper',`!${helper}`);
+ const r=spawnSync(cc.gitBinary(),[...cc.GIT_FRONT_ARGS,'credential','fill'],{cwd:repo,env:{...cc.gitEnv(),HOME:dir},input:'protocol=https\nhost=example.test\n\n',encoding:'utf8'});
+ assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/password=fake-pass/);
+ const keys=cc.GIT_FRONT_ARGS.filter((_,i)=>i%2===1).map(a=>a.split('=')[0]);
+ for(const gone of ['credential.helper','core.sshCommand'])assert.ok(!keys.includes(gone),`${gone}를 덮어쓰면 정상 인증·ssh 설정이 깨진다`);
+ for(const kept of ['core.fsmonitor','core.hooksPath','core.pager'])assert.ok(keys.includes(kept),kept);
+ assert.equal(cc.gitEnv().GIT_TERMINAL_PROMPT,'0');assert.equal(cc.gitEnv().GIT_OPTIONAL_LOCKS,'0');
+});
+
+test('fence-state: 본문 첫 줄부터 코드 블록 상태를 추적한다 (outer-fence-heading·tilde-fence·여닫는 길이)',()=>{
+ // 다른 절의 예제 펜스 안에 든 제목은 절이 아니다
+ assert.deepEqual(cc.checkLines('# t\n## 예시\n```markdown\n## 완료 검사\nfile a.txt exists\n```\n'),[]);
+ assert.deepEqual(cc.checkLines('# t\n## 예시\n~~~\n## 완료 검사\nfile a.txt exists\n~~~\n\n## 완료 검사\n- file real.txt exists\n'),['file real.txt exists']);
+ // 절 안의 ~~~ 펜스도 건너뛴다
+ assert.deepEqual(cc.checkLines('## 완료 검사\n- file a exists\n~~~\nfile b exists\n~~~\n- file c exists\n'),['file a exists','file c exists']);
+ // 닫는 줄은 같은 글자에 같거나 긴 길이만: 짧은 ```는 ```` 를 닫지 못하고, 펜스 안의 제목은 절을 끝내지 못한다
+ assert.deepEqual(cc.checkLines('## 완료 검사\n````\n```\nfile b exists\n```\n## 가짜\n````\n- file c exists\n'),['file c exists']);
+ // 다른 글자는 닫지 못한다
+ assert.deepEqual(cc.checkLines('## 완료 검사\n```\n~~~\nfile b exists\n~~~\n```\n- file c exists\n'),['file c exists']);
+ // 닫히지 않은 펜스는 끝까지 무시한다
+ assert.deepEqual(cc.checkLines('## 완료 검사\n- file a exists\n```\nfile b exists\n'),['file a exists']);
+});
+
+test('time-budget: git을 부르기 직전마다 남은 시간을 다시 계산하고, 마감을 넘기면 시간 초과다',async()=>{
+ const repo=repoDir(),sha=headOf(repo);
+ let clock=0;
+ const adv=(ms,make)=>args=>{clock+=ms;return make(args);};
+ // (a) pushed: 하위 명령마다 20초. 검사당 30초 안에서 남은 시간만 넘기고, 마감 뒤에는 다음 명령을 부르지 않는다
+ const spawn=recording({
+  'rev-parse':adv(20_000,()=>({status:0,stdout:`${sha}\n`})),
+  'check-ref-format':adv(20_000,args=>({status:0,stdout:`${args.at(-1)}\n`})),
+  'ls-remote':adv(20_000,args=>({status:0,stdout:`${sha}\t${args.at(-1)}\n`})),
+ });
+ const a=await cc.runChecks(card(repo),['git pushed . main'],{spawn,now:()=>clock});
+ assert.deepEqual(statuses(a),['timeout']);
+ const timeoutOf=sub=>spawn.calls.find(c=>c.args.includes(sub))?.opts.timeout;
+ assert.ok(timeoutOf('rev-parse')<=30_000);assert.ok(timeoutOf('check-ref-format')<=10_000,`check-ref-format ${timeoutOf('check-ref-format')}ms`);
+ assert.equal(spawn.calls.filter(c=>c.args.includes('ls-remote')).length,0,'마감 뒤에 원격을 불렀다');
+ // (b) 마지막 하위 명령이 마감을 넘겨 돌아와도 통과로 치지 않는다
+ clock=0;
+ const b=await cc.runChecks(card(repo),['git tidy .'],{spawn:recording({status:adv(31_000,()=>({status:0,stdout:''}))}),now:()=>clock});
+ assert.deepEqual(statuses(b),['timeout']);
+ // (c) worktree 목록 조회도 전체 120초 예산에 든다
+ clock=0;
+ const c=recording({worktree:adv(115_000,()=>({status:0,stdout:''})),status:adv(0,()=>({status:0,stdout:''}))});
+ const res=await cc.runChecks(card(repo),['git tidy .'],{spawn:c,now:()=>clock,perMs:200_000});
+ assert.deepEqual(statuses(res),['pass']);
+ const wt=c.calls.find(x=>x.args.includes('worktree')).opts.timeout,st=c.calls.find(x=>x.args.includes('status')).opts.timeout;
+ assert.ok(wt<=120_000);assert.ok(st<=5_000,`status ${st}ms (worktree 조회 뒤 남은 전체 시간은 5초)`);
+});
+
+test('time-budget: worktree 조회가 마감을 넘기면 그 검사는 시간 초과이고 git 검사는 돌지 않는다',async()=>{
+ const repo=repoDir();let clock=0;
+ const spawn=recording({worktree:()=>{clock+=40_000;return {error:{code:'ETIMEDOUT'},status:null,stdout:''};}});
+ const res=await cc.runChecks(card(repo),['git tidy .','file a.txt exists'],{spawn,now:()=>clock});
+ assert.equal(res.results[0].status,'timeout');
+ assert.equal(spawn.calls.filter(c=>c.args.includes('status')).length,0);
+});
+
+test('count-and-cap: 발령 때 전체 줄 수를 저장해 생략 수가 정확하고, 메모는 생략 안내를 더해도 상한을 넘지 않는다',async()=>{
+ const f=fixture(Array.from({length:100},(_,i)=>`file f${i}.txt exists`).join('\n'));
+ const stored=f.store.get(f.key);
+ assert.equal(stored.completionChecks.length,21);assert.equal(stored.completionChecksTotal,100);
+ const r=f.done();assert.equal(r.status,0,r.stderr);
+ assert.match(r.stdout,/20개 상한으로 80개 생략/);assert.match(memos(f)[0].note,/20개 상한으로 80개 생략/);
+ // 긴 줄 25개: 본문을 자른 뒤 안내를 덧붙이면 4000자를 넘던 경우
+ const g=fixture('- file a.txt exists'),repo=g.repo,sha=headOf(repo);
+ const lines=Array.from({length:25},(_,i)=>`git pushed . ${'b'.repeat(190)}${String(i).padStart(2,'0')}`);
+ const spawn=recording({
+  'rev-parse':()=>({status:0,stdout:`${sha}\n`}),
+  'check-ref-format':args=>({status:0,stdout:`${args.at(-1)}\n`}),
+  'ls-remote':args=>({status:0,stdout:`${sha}\t${args.at(-1)}\n`}),
+ });
+ const report=await cc.runChecks(card(repo),lines,{spawn,total:25});
+ assert.equal(report.omitted,5);
+ assert.equal(cc.recordReport(g.store,g.key,report,'p-감독'),'recorded');
+ const note=memos(g)[0].note;
+ assert.ok(note.length<=cc.MAX_NOTE_CHARS,`메모 ${note.length}자`);assert.match(note,/메모 길이 상한으로 생략/);
 });

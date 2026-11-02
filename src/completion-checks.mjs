@@ -2,6 +2,14 @@
 // 막지 않는다. 검사가 실패해도 done 확정과 종료 코드는 그대로이고, 결과만 보이고 카드 메모에 남긴다.
 // 줄은 고정 검사 네 종류뿐이다(file·git head·git pushed·git tidy). 카드에는 데이터(경로·SHA·브랜치)만 적고,
 // 실행 인자는 코드가 정한다. 출력 원문은 화면에도 카드 메모에도 남기지 않는다(종류·대상·결과·정해진 이유 낱말만).
+//
+// 위협 범위 (2026-11-02 확정):
+// - 카드 글은 막는다. 감독이 카드에 적은 검사 줄이 임의 명령·옵션·밖 파일 읽기가 되면 안 된다. 그래서 줄은 고정 4종뿐이다.
+// - 저장소 내용·설정은 작업자와 같은 신뢰 수준이다. `.git/config`·`.gitattributes`·작업 폴더 파일을 바꿀 수 있는 쪽은
+//   그 폴더에 쓰는 작업자뿐이고, 작업자는 이미 같은 사용자로 셸을 돌린다. 감독·사람도 worktree 정리 때 같은 폴더에서
+//   `git status --porcelain`을 돌린다. 그러니 저장소 설정으로 프로그램이 도는 위험은 이 기능이 새로 만든 것이 아니다.
+// - 이 검사는 감독 프로세스에서 돈다(`kadan done`·`kadan card check`를 친 쪽).
+// 그래서 저장소 설정과 경쟁하려고 git 설정을 더 덮어쓰지 않는다. 정상 사용(인증 도우미·ssh 설정)을 깨뜨리기 때문이다.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -20,13 +28,13 @@ export const SOURCE_STORED = "발령 때 저장한 검사 줄";
 const SOURCE_DRAFT = "발령 전 카드 본문";
 
 // git 실행기 하나: 고정 PATH에서 한 번 찾은 절대경로, 최소 환경, 코드가 정한 앞 인자.
-// 저장소 설정(fsmonitor·hooks·pager·외부 diff·ext 전송·자격 증명·ssh/프록시 실행)이 외부 프로그램을 부르지 못하게 막는다.
+// 위 위협 범위 안에서, 감독 프로세스를 느리게 하거나 멈추게 하는 흔한 경로(fsmonitor·hooks·pager·외부 diff·ext 전송)만 끈다.
+// 사용자의 인증 도우미(credential.helper)와 ssh 명령(core.sshCommand)은 덮어쓰지 않는다. 덮으면 정상 push 확인이 실패한다.
 export const GIT_PATH = "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin";
 export const GIT_FRONT_ARGS = [
   "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
   "-c", "diff.external=", "-c", "protocol.ext.allow=never",
-  "-c", "credential.helper=", "-c", "core.sshCommand=ssh", "-c", "core.gitProxy=",
-  "-c", "remote.origin.uploadpack=git-upload-pack", "-c", "remote.origin.proxy=",
+  "-c", "core.gitProxy=", "-c", "remote.origin.uploadpack=git-upload-pack", "-c", "remote.origin.proxy=",
 ];
 let gitBinCache;
 export function gitBinary() {
@@ -40,17 +48,21 @@ export function gitBinary() {
 }
 export function gitEnv() {
   return {
-    PATH: GIT_PATH, HOME: process.env.HOME ?? "", GIT_ALLOW_PROTOCOL: "https:ssh", GIT_CONFIG_NOSYSTEM: "1",
+    PATH: GIT_PATH, HOME: process.env.HOME ?? "", GIT_ALLOW_PROTOCOL: "https:ssh",
     GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0",
   };
 }
-function runGit(spawn, args, cwd, ms) {
+// budget()은 지금 남은 ms(검사 마감과 전체 마감 중 이른 쪽)다. git을 부르기 직전마다 다시 계산하고, 없으면 부르지 않는다.
+function runGit(spawn, args, cwd, budget) {
   const bin = gitBinary();
   if (!bin) return { error: { code: "ENOENT" }, status: null, stdout: "" };
+  const ms = budget();
+  if (ms <= 0) return { error: { code: "ETIMEDOUT" }, status: null, stdout: "" };
   return spawn(bin, [...GIT_FRONT_ARGS, ...args], {
     cwd, encoding: "utf8", timeout: ms, maxBuffer: 1024 * 1024, env: gitEnv(), stdio: ["ignore", "pipe", "ignore"],
   });
 }
+const budgetExceeded = () => Object.assign(new Error("시간 초과"), { budgetExceeded: true });
 
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const branchShapeOk = name => BRANCH_RE.test(name) && !/\.\.|\/\/|\.lock(\/|$)|[./]$|\/\./.test(name);
@@ -85,9 +97,10 @@ function realpathLoose(target) {
 }
 
 // 저장소와 등록된 worktree 목록. 이 호출도 같은 git 실행기를 지난다.
-function allowedRoots(card, spawn) {
+function allowedRoots(card, spawn, budget) {
   const roots = [fs.realpathSync(card.repoPath)];
-  const listed = runGit(spawn, ["worktree", "list", "--porcelain"], card.repoPath, 10_000);
+  const listed = runGit(spawn, ["worktree", "list", "--porcelain"], card.repoPath, budget);
+  if (listed.error?.code === "ETIMEDOUT") throw budgetExceeded();
   for (const line of String(listed.stdout ?? "").split("\n")) {
     const m = /^worktree (.+)$/.exec(line);
     if (!m) continue;
@@ -100,7 +113,7 @@ function allowedRoots(card, spawn) {
 function scoped(rawPath, ctx) {
   if (rawPath.split(/[\\/]/).includes("..")) return { denied: true };
   const real = realpathLoose(path.resolve(ctx.base, rawPath));
-  const roots = (ctx.roots ??= allowedRoots(ctx.card, ctx.spawn));
+  const roots = (ctx.roots ??= allowedRoots(ctx.card, ctx.spawn, ctx.budget));
   const root = roots.find(r => underRoot(real, r));
   if (!root) return { denied: true };
   const rel = path.relative(root, real) || ".";
@@ -109,12 +122,12 @@ function scoped(rawPath, ctx) {
 
 const out = (status, detail = "", label = "") => ({ status, detail, label });
 const clip = (text, n = SHOW_CHARS) => (String(text).length > n ? `${String(text).slice(0, n)}…` : String(text));
-const gitFailure = (ran, ms) => {
+const gitFailure = ran => {
   if (ran.error?.code === "ETIMEDOUT") return out("timeout", "시간 초과");
   return null;
 };
 
-async function runOne(parsed, ctx, ms) {
+async function runOne(parsed, ctx) {
   const { spawn } = ctx;
   const where = scoped(parsed.path, ctx);
   const head = { file: "file", head: "git head", pushed: "git pushed", tidy: "git tidy" }[parsed.kind];
@@ -134,8 +147,8 @@ async function runOne(parsed, ctx, ms) {
   const label = parsed.kind === "pushed" ? `git pushed ${shown} ${parsed.branch}`
     : parsed.kind === "head" ? `git head ${shown}` : `git tidy ${shown}`;
   try { if (!fs.statSync(where.real).isDirectory()) return out("fail", "파일 없음", label); } catch { return out("fail", "파일 없음", label); }
-  const git = args => runGit(spawn, args, where.real, ms);
-  const bad = ran => gitFailure(ran, ms) ?? (ran.error || ran.status !== 0 ? out("fail", "실행 실패", label) : null);
+  const git = args => runGit(spawn, args, where.real, ctx.budget);
+  const bad = ran => gitFailure(ran) ?? (ran.error || ran.status !== 0 ? out("fail", "실행 실패", label) : null);
   if (parsed.kind === "tidy") {
     const ran = git(["status", "--porcelain"]);
     if (ran.error?.code === "ENOBUFS") return out("fail", "변경 있음", label);
@@ -165,18 +178,25 @@ export async function runChecks(card, lines, deps = {}) {
   const spawn = deps.spawn ?? spawnSync, now = deps.now ?? Date.now;
   const perMs = deps.perMs ?? PER_CHECK_MS, totalMs = deps.totalMs ?? TOTAL_MS;
   const ctx = { card, spawn, roots: null, base: fs.realpathSync(card.repoPath), maxFileBytes: deps.maxFileBytes ?? MAX_FILE_BYTES };
-  const startedAt = now();
+  // 절대 마감 시각: 전체는 하나, 검사마다 하나. git을 부르기 직전마다 남은 시간을 다시 계산한다(worktree 조회 포함).
+  const totalEnd = now() + totalMs;
+  ctx.budget = () => Math.min(ctx.checkEnd, totalEnd) - now();
   const results = [];
   for (const [index, line] of lines.slice(0, MAX_CHECKS).entries()) {
     const parsed = parseCheck(line);
     if (parsed.error) { results.push(out("unreadable", parsed.error, `줄 ${index + 1}`)); continue; }
-    const remaining = totalMs - (now() - startedAt);
-    if (remaining <= 0) { results.push(out("skipped", "시간 초과", `줄 ${index + 1}`)); continue; }
+    if (totalEnd - now() <= 0) { results.push(out("skipped", "시간 초과", `줄 ${index + 1}`)); continue; }
+    ctx.checkEnd = now() + perMs;
     let outcome;
-    try { outcome = await runOne(parsed, ctx, Math.min(perMs, remaining)); } catch { outcome = out("fail", "실행 실패", `줄 ${index + 1}`); }
+    try { outcome = await runOne(parsed, ctx); } catch (error) {
+      outcome = error?.budgetExceeded ? out("timeout", "시간 초과", `줄 ${index + 1}`) : out("fail", "실행 실패", `줄 ${index + 1}`);
+    }
+    // 마지막 명령이 마감을 넘겨 돌아왔으면 결과가 있어도 통과·실패로 치지 않는다.
+    if ((outcome.status === "pass" || outcome.status === "fail") && now() > Math.min(ctx.checkEnd, totalEnd)) outcome = out("timeout", "시간 초과", outcome.label);
     results.push(outcome);
   }
-  const omitted = Math.max(0, lines.length - MAX_CHECKS);
+  // 전체 줄 수는 발령 때 저장한 값(deps.total)이다. 저장된 줄은 상한까지만이라 lines.length로는 센 수가 작아진다.
+  const omitted = Math.max(0, Math.max(deps.total ?? 0, lines.length) - MAX_CHECKS);
   return { source: deps.source ?? SOURCE_STORED, results, omitted, summary: summarize(results) };
 }
 
@@ -199,7 +219,9 @@ export function formatReport(report) {
 
 function noteText(report) {
   const text = [`${NOTE_PREFIX} ${report.summary} (기준: ${report.source})`, ...reportLines(report)].join("\n");
-  return text.length > MAX_NOTE_CHARS ? `${text.slice(0, MAX_NOTE_CHARS)}\n  … 메모 길이 상한으로 생략` : text;
+  if (text.length <= MAX_NOTE_CHARS) return text;
+  const cut = "\n  … 메모 길이 상한으로 생략"; // 안내 길이를 뺀 만큼만 남겨 전체가 상한을 넘지 않게 한다
+  return `${text.slice(0, MAX_NOTE_CHARS - cut.length)}${cut}`;
 }
 
 // 같은 결과가 이어지면 다시 적지 않는다(마지막 완료 검사 메모와 글자까지 같을 때).
@@ -222,7 +244,8 @@ export function loadChecks(home, key) {
     card = store.get(key, { body: false });
     if (Array.isArray(card.completionChecks)) {
       const lines = card.completionChecks.filter(l => typeof l === "string");
-      return lines.length ? { card, lines, source: SOURCE_STORED } : null;
+      const total = Number.isInteger(card.completionChecksTotal) ? card.completionChecksTotal : lines.length;
+      return lines.length ? { card, lines, total, source: SOURCE_STORED } : null;
     }
     if (!["draft", "ready"].includes(card.status)) return null;
     const lines = checkLines(store.get(key).body);
@@ -234,7 +257,7 @@ export function loadChecks(home, key) {
 export async function runCardChecks(home, key, { by, deps } = {}) {
   const loaded = loadChecks(home, key);
   if (!loaded) return null;
-  const report = await runChecks(loaded.card, loaded.lines, { ...deps, source: loaded.source });
+  const report = await runChecks(loaded.card, loaded.lines, { ...deps, source: loaded.source, total: loaded.total });
   try { report.recorded = recordReport(new CardStore(home), key, report, by); } catch (error) { report.recordError = error.message; }
   return report;
 }
