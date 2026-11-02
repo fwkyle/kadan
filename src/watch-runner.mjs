@@ -225,6 +225,8 @@ export async function runWatch({
   let processState = { processAlert: seeded.active.find(a => a.id === "process:memory") ?? null, normalCycles: 0 };
   let lastProcessAt = -Infinity;
   const alertRecipients = seeded.recipients;
+  // 재시작 뒤에도 이미 경보한 hold는 열린 채로 둔다(같은 id라 중복 제거로 새 알림 없음, 해소 없음).
+  for (const a of seeded.active) if (a.id.startsWith('hold-working:')) holdWorkingAlerted.add(a.id.slice('hold-working:'.length));
   const deliveryFailures = new Map();
   const pendingAlerts = new Map(seeded.active.filter(a => a.held).map(a => [a.id, a]));
   const workerChecks = new Map();

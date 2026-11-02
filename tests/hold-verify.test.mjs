@@ -77,9 +77,9 @@ const starts=['hvw','hvboss','hvtop'].map((role,i)=>({kind:'start',role,session:
 const holdCard=(holdAtMin,status='hold')=>({id:'c1',key:'r/c1',role:'hvw',status,workType:'execution',at:stamp(holdAtMin),
  listFacts:{lastHoldEntry:status==='hold'?{at:stamp(holdAtMin)}:null}});
 
-async function simulate({until=14,cardsAt,screenAt,isHeld=()=>false}) {
- const records=[...starts],alerts=[],controller=new AbortController();
- let minute=0;
+async function simulate({until=14,from=0,records=[...starts],cardsAt,screenAt,isHeld=()=>false}) {
+ const alerts=[],controller=new AbortController();
+ let minute=from;
  const holdTracker={beginCycle(){},endCycle(){},isHeld,alerts:()=>[],forced:()=>false,held(){},heldIfGuard(){},delivered(){}};
  await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,
   parents,routes:new Map(),superRole:'hvtop',judgeCmd:'fake',now:()=>epoch+minute*60_000,holdTracker,
@@ -129,6 +129,28 @@ test('H8: hold → 열림(assigned) → 다시 hold + 작업 중이면 다시 1�
  const cardsAt=minute=>[minute<6?holdCard(0):minute<8?holdCard(0,'assigned'):holdCard(8)];
  const {alerts}=await simulate({until:16,cardsAt,screenAt:movingScreen});
  assert.deepEqual(alerts.map(a=>a.minute),[4,12]);
+});
+test('H11(F1): 4분 첫 경보 → 같은 원장으로 7분에 감시기 재시작 → 해소 0, 두 번째 경보 0',async()=>{
+ const records=[...starts];
+ const first=await simulate({until:5,records,cardsAt:()=>[holdCard(0)],screenAt:movingScreen});
+ assert.equal(first.alerts.length,1);
+ const second=await simulate({from:7,until:12,records,cardsAt:()=>[holdCard(0)],screenAt:movingScreen});
+ assert.equal(second.alerts.length,0,'재시작 뒤 같은 hold에 새 알림이 가지 않는다');
+ const mine=records.filter(r=>r.kind==='alert'&&r.alertKind==='일시정지중작업');
+ assert.equal(mine.filter(r=>r.resolved).length,0,'열린 경보가 해소되지 않는다');
+ assert.equal(new Set(mine.map(r=>r.id)).size,1,'경보 id는 카드와 hold 진입 시각으로 같다');
+ assert.match(mine[0].id,/^hold-working:r\/c1@/);
+});
+test('H12(F2): 4분 첫 경보 → 7분 화면 읽기 1회 실패 → 8분 회복 → 해소 0, 두 번째 경보 0',async()=>{
+ const screenAt=minute=>{if(minute===7)throw new Error('read 실패');return movingScreen(minute);};
+ const {alerts,records}=await simulate({until:12,cardsAt:()=>[holdCard(0)],screenAt});
+ assert.equal(alerts.length,1);
+ assert.equal(records.filter(r=>r.kind==='alert'&&r.alertKind==='일시정지중작업'&&r.resolved).length,0);
+});
+test('H13: hold가 실제로 끝나면(저장 상태 done) 경보가 닫힌다',async()=>{
+ const {alerts,records}=await simulate({until:10,cardsAt:minute=>[minute>=6?holdCard(0,'done'):holdCard(0)],screenAt:movingScreen});
+ assert.equal(alerts.length,1);
+ assert.equal(records.filter(r=>r.kind==='alert'&&r.alertKind==='일시정지중작업'&&r.resolved).length,1);
 });
 test('H9: 배정된(assigned) 카드가 하나라도 있는 역할은 감지 대상이 아니다',()=>{
  const other={...holdCard(0,'assigned'),id:'c2',key:'r/c2'};

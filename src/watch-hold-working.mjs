@@ -47,7 +47,14 @@ export function assessHoldWorking(previous, observations, cards, {
   for (const [role, target] of targets) {
     const session = `kadan-${role}`;
     const seen = observations.get(session);
-    if (!seen || seen.alive !== true || seen.screen == null) continue;
+    const emit = () => alerts.push({id: `hold-working:${target.holdKey}`, kind: '일시정지중작업', level: 'AMBER',
+      role: seen?.role ?? role, session, taskId: target.cardKey, cardKey: target.cardKey, streak: HOLD_WORKING_CYCLES});
+    // 세션이 사라졌으면 그 hold는 끝난 것이다. 화면만 못 읽은 순회는 끝이 아니므로 이미 낸 경보를 그대로 내보낸다.
+    if (seen && seen.alive === false) { alerted.delete(target.holdKey); continue; }
+    if (!seen || seen.alive !== true || seen.screen == null) {
+      if (alerted.has(target.holdKey)) emit();
+      continue;
+    }
     const before = previous.get(session)?.holdKey === target.holdKey ? previous.get(session) : null;
     const {status, moving} = statusProgress(seen.screen, before?.clockSec ?? null);
     const skipped = now - target.holdAt < graceMs || isHeld(role);
@@ -56,10 +63,7 @@ export function assessHoldWorking(previous, observations, cards, {
     // 한 번 낸 경보는 그 hold가 끝날 때까지 계속 내보낸다. 같은 id라 감시기의 중복 제거가 다시 알리지 않고,
     // hold가 끝나거나 열리면 그때 해소로 닫힌다. 새 hold(열림 → 다시 hold)는 holdKey가 달라 새 경보가 된다.
     if (streak >= HOLD_WORKING_CYCLES) alerted.add(target.holdKey);
-    if (alerted.has(target.holdKey)) {
-      alerts.push({id: `hold-working:${target.holdKey}`, kind: '일시정지중작업', level: 'AMBER', role: seen.role ?? role, session,
-        taskId: target.cardKey, cardKey: target.cardKey, streak: HOLD_WORKING_CYCLES});
-    }
+    if (alerted.has(target.holdKey)) emit();
   }
   return {states, alerts};
 }
