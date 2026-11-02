@@ -151,3 +151,36 @@ test('F4 비용: 긴 restart 사슬에서도 배열을 복사·뒤집지 않고 
   assert.equal(got.length, 10);
   assert.equal(got[0].panePid, String(100 + 1998));
 });
+
+test('N1 비용: 같은 이름을 여러 세대가 재사용해도 내부 탐색이 사건 수에 비례한다', () => {
+  // 세대마다 start(원본) → adopt → start(새 후임) → handover(원본→후임). 이름은 세대마다 다시 쓴다.
+  const build = (generations) => {
+    const entries = [];
+    for (let g = 0; g < generations; g++) {
+      entries.push(start('세대-원', g * 4), adoptOf('세대-원', `term-${g}`, g * 4 + 1), start(`세대-후${g}`, g * 4 + 2),
+        { kind: 'handover', phase: 'complete', handoverId: `h${g}`, from: '세대-원', to: `세대-후${g}`, t: T(g % 60) });
+    }
+    return entries;
+  };
+  // 배열 반복자가 내준 원소 수 = 내부 목록 탐색량. 실측 시간은 단언하지 않는다.
+  const visited = (entries) => {
+    const original = Array.prototype[Symbol.iterator];
+    let count = 0;
+    Array.prototype[Symbol.iterator] = function patched() {
+      const it = original.call(this);
+      return { next() { const r = it.next(); if (!r.done) count++; return r; }, [Symbol.iterator]() { return this; } };
+    };
+    let got;
+    try { got = roleLineage(entries); } finally { Array.prototype[Symbol.iterator] = original; }
+    return { count, got };
+  };
+  const small = build(20);
+  const large = build(200);
+  const a = visited(small);
+  const b = visited(large);
+  // 사건 80→800: 훑는 양도 대략 10배(제곱이면 약 100배). 사건당 상수 배 이내로 묶는다.
+  assert.ok(b.count <= large.length * 4, `탐색 ${b.count}회, 사건 ${large.length}건`);
+  assert.ok(b.count <= a.count * 12, `${a.count} → ${b.count}`);
+  // 결과는 그대로: 후임의 사슬은 원본 start와 그 세대 adopt 2개.
+  assert.equal(b.got.get('세대-후199').length, 2);
+});

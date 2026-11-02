@@ -38,28 +38,25 @@ function lastBefore(starts, order) {
   return found;
 }
 
-// 사건을 한 번 훑어 지도를 만들고 역할마다 사슬을 올라간다. 사슬 길이(상한 10)에 비례하는 일만 한다.
+// 사건을 한 번 훑어 start 구간별 색인을 만들고(비용: 사건 수에 비례), 역할마다 사슬을 올라간다(길이 상한 10).
 // 반환: { chains: Map<역할, [{source, rottieTerminalId, panePid, conversation}]>, current: Map<역할, 마지막 start> }
 export function buildLineage(entries) {
   const startsByRole = new Map(); // 역할 → [{ entry, order }]
   const byDigest = new Map(); // 지문 → { entry, role, index }
-  const adopts = new Map(); // 받는 역할 → [{ order, terminal }]
-  const handovers = new Map(); // 받는 역할 → [{ order, from }]
   const seenHandover = new Set();
   entries.forEach((entry, order) => {
     if (entry?.kind === "start" && entry.role) {
       if (!startsByRole.has(entry.role)) startsByRole.set(entry.role, []);
       const list = startsByRole.get(entry.role);
-      list.push({ entry, order });
+      // adopts·handovers: 이 start 이후~같은 역할의 다음 start 이전에 받은 사건. 훑으며 직전 start에 한 번만 붙인다.
+      list.push({ entry, order, adopts: [], handovers: [] });
       byDigest.set(startDigest(entry), { role: entry.role, index: list.length - 1 });
     } else if (entry?.kind === "adopt" && entry.phase === "accepted" && entry.role) {
-      if (!adopts.has(entry.role)) adopts.set(entry.role, []);
-      adopts.get(entry.role).push({ order, terminal: text(entry.sourceTerminalId) });
+      startsByRole.get(entry.role)?.at(-1).adopts.push({ order, terminal: text(entry.sourceTerminalId) });
     } else if (entry?.kind === "handover" && ["transferred", "complete"].includes(entry.phase)
       && entry.from && entry.to && !seenHandover.has(entry.handoverId ?? order)) {
       seenHandover.add(entry.handoverId ?? order);
-      if (!handovers.has(entry.to)) handovers.set(entry.to, []);
-      handovers.get(entry.to).push({ order, from: entry.from });
+      startsByRole.get(entry.to)?.at(-1).handovers.push({ order, from: entry.from });
     }
   });
 
@@ -74,9 +71,6 @@ export function buildLineage(entries) {
       const node = list[index];
       if (visited.has(node)) continue; // 순환(같은 start가 다시 나옴)
       visited.add(node);
-      const from = node.order;
-      const until = list[index + 1]?.order ?? Infinity;
-      const inWindow = (item) => item.order > from && item.order < until;
       if (node.entry.restartOf) {
         const old = byDigest.get(node.entry.restartOf);
         // 옛 start는 같은 역할의 앞선 start여야 한다.
@@ -85,11 +79,10 @@ export function buildLineage(entries) {
           queue.push({ role: r, index: old.index });
         }
       }
-      for (const adopt of adopts.get(r) ?? []) {
-        if (inWindow(adopt)) found.push({ order: adopt.order, item: { source: "adopt", rottieTerminalId: adopt.terminal, panePid: null, conversation: null } });
+      for (const adopt of node.adopts) {
+        found.push({ order: adopt.order, item: { source: "adopt", rottieTerminalId: adopt.terminal, panePid: null, conversation: null } });
       }
-      for (const handover of handovers.get(r) ?? []) {
-        if (!inWindow(handover)) continue;
+      for (const handover of node.handovers) {
         const fromList = startsByRole.get(handover.from);
         const at = fromList ? lastBefore(fromList, handover.order) : -1;
         if (at < 0) continue;
