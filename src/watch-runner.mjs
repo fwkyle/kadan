@@ -696,7 +696,9 @@ export async function runWatch({
         lastProcessAt = cycleAt;
         let settings = null;
         try { settings = readSettings(ledgerHome()); } catch { /* 설정이 손상돼도 시작값으로 돈다 */ }
-        const assessed = assessProcesses(processState, collectProcesses(spawn, { socket: currentSocket() }), processThresholds(settings), cycleAt);
+        const thresholds = processThresholds(settings);
+        const collected = collectProcesses(spawn, { socket: currentSocket(), bigMb: thresholds.processGb * 1024 });
+        const assessed = assessProcesses(processState, collected, thresholds, cycleAt);
         processState = assessed.state;
       }
       if (processState.processAlert) processAlerts = [processState.processAlert];
