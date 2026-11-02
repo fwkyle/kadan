@@ -13,7 +13,7 @@ import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
 import { roleNameWarning } from "../role-name.mjs";
 import { conversationOf } from "../conversation-ref.mjs";
-import { tmux } from "../floor-tmux.mjs";
+import { tmux, currentSocket } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -25,6 +25,7 @@ import {
   buildStartLedgerEntry,
   openStartedWindow,
   unpinnedWindowWarning,
+  inheritedWindowWarning,
   workdirInsideHome,
   workdirInsideHomeMessage,
 } from "../cli-start-support.mjs";
@@ -50,6 +51,10 @@ export function cmdStart(argv, flags) {
   const insideHome = workdirInsideHome(process.cwd(), ledgerHome());
   if (insideHome) die(workdirInsideHomeMessage(insideHome), 2);
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
+  if (floor.name === "tmux") {
+    const inherited = inheritedWindowWarning({ home: ledgerHome(), socket: currentSocket() });
+    if (inherited) console.error(inherited);
+  }
   if (floor.name === "tmux" && !flags.hidden) {
     const warning = unpinnedWindowWarning();
     if (warning) console.error(warning);
