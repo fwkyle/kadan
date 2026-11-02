@@ -216,7 +216,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
   for (const proc of bigNow) {
     bigSince[proc.pid] = priorSince?.[proc.pid] ?? (restorePids?.has(proc.pid) ? Math.min(previous.since, at - sustainMs) : at);
   }
-  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
+  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid).sort((a, b) => a - b);
   const signals = exceededSignals(result, thresholds, sustained);
   let alert = null, normalCycles = 0;
   if (signals.length) {

@@ -739,6 +739,15 @@ export async function runWatch({
     const sourceIds = new Set(nextAlerts.map(alert => alert.id));
     nextAlerts.push(...[...deliveryFailures.values()].filter(alert => sourceIds.has(alert.sourceAlertId)));
     const changes = dedupAlerts(activeAlerts, nextAlerts);
+    // 프로세스 경보가 열려 있는 동안 오래 넘은 PID가 바뀌면 원장의 pids만 갱신한다(재시작 복원용).
+    // 신호·since·알림 키는 그대로라 새 알림·디코 글은 없고, 목록이 실제로 바뀐 주기에만 한 번 적는다.
+    for (const alert of nextAlerts) {
+      if (alert.kind !== "프로세스" || changes.notify.includes(alert) || pendingAlerts.has(alert.id)) continue;
+      const before = activeAlerts.find(a => a.id === alert.id);
+      if (!before || before.pids === undefined || (before.pids ?? []).join() === (alert.pids ?? []).join()) continue;
+      const to = alertRecipients.get(alert.id) ?? (userNotify ? USER_RECIPIENT : null);
+      recordAlert(record, alert, to, to != null);
+    }
     const deliveredRecipients = aiRecipients;
     // 놀고 있음 1단은 상위가 아니라 감독 본인에게 간다(2026-10-05 [kyle]). 사람이 그 창에서 입력 중이면 미루고 다음 주기에 다시.
     const sendIdleNudge = (alert, retry = false) => {

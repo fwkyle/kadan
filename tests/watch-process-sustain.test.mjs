@@ -1,6 +1,7 @@
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {runWatch} from './helpers/watch-runner.mjs';
 
 // 큰 프로세스 경보는 같은 PID가 오래 넘을 때만. 가짜 시계(60초 간격)·가짜 ps/tmux·격리 홈만 쓴다.
@@ -18,14 +19,14 @@ function psFor(pids) {
   return lines.join('\n');
 }
 
-async function simulate(plan, {entries = starts} = {}) {
+async function simulate(plan, {entries = starts, start = 0} = {}) {
   let cycle = 0;
   const stop = Error('end'), sent = [], records = [], notified = [];
   await assert.rejects(() => runWatch({
     floor: {list: () => starts.map(s => ({session: s.session, pid: s.panePid})), read: () => `정상 작업 ${lt(cycle)}`},
     readEntries: () => entries, readCards: () => [], parents,
     intervalMs: 60_000, stallN: 2, routes: {p: 'p-감독'}, superRole: 'p-슈퍼감독', userNotify: true, processEveryMs: 0,
-    now: () => epoch + cycle * 60_000, record: e => records.push(e), print: () => {},
+    now: () => epoch + (start + cycle) * 60_000, record: e => records.push(e), print: () => {},
     sendAlert: (role, message, key) => sent.push({role, message, key}),
     spawn: (command, args) => {
       if (command === 'sleep') { if (++cycle === plan.length) throw stop; return {status: 0, stdout: ''}; }
@@ -36,7 +37,7 @@ async function simulate(plan, {entries = starts} = {}) {
     },
   }), error => error === stop);
   const alerts = records.filter(r => r.kind === 'alert' && r.alertKind === '프로세스');
-  return {sent, notified: notified.filter(m => /프로세스/.test(m)), alerts};
+  return {sent, notified: notified.filter(m => /프로세스/.test(m)), alerts, records};
 }
 
 const range = (from, to) => Array.from({length: to - from}, (_, i) => from + i);
@@ -71,4 +72,37 @@ test('재시작: 오래 넘은 PID 목록이 적힌 열린 경보로 시작하�
 test('재시작 대조: 목록이 없는 옛 경보는 채우지 않아 평소대로 3주기 뒤 닫힌다', async () => {
   const r = await simulate(range(0, 5).map(() => [300]), {entries: [...starts, open()]});
   assert.deepEqual(r.alerts.map(a => !!a.resolved), [true]);
+});
+
+// 오래 넘은 PID가 A(300)→B(301)로 바뀌어도 신호·since는 같다. 원장의 pids만 최신으로 갱신한다.
+const swapPlan = Array.from({length: 18}, (_, i) => (i < 5 ? [300] : i < 16 ? [300, 301] : [301]));
+
+test('교대: 지속 PID가 바뀌면 원장 pids만 바뀐 주기에 한 번씩 갱신하고 사용자 알림은 1건', async () => {
+  const r = await simulate(swapPlan);
+  assert.deepEqual(r.alerts.map(a => a.pids), [[300], [300, 301], [301]], '10분 열림, 15분 B 추가, 16분 A 이탈');
+  assert.equal(new Set(r.alerts.map(a => a.since)).size, 1, 'since 그대로');
+  assert.equal(r.alerts.every(a => !a.resolved), true);
+  assert.equal(r.notified.length, 1, '새 사용자 알림 없음');
+});
+
+test('교대 뒤 재시작: 최신 pids로 복원해 해소·재경보·새 사용자 알림 0건', async () => {
+  const before = await simulate(swapPlan);
+  const after = await simulate(Array(12).fill([301]), {entries: [...starts, ...before.alerts], start: 18});
+  assert.deepEqual(after.alerts, []);
+  assert.deepEqual(after.notified, []);
+});
+
+test('같은 지속 PID 집합이 이어지는 동안은 원장에 다시 쓰지 않는다', async () => {
+  const r = await simulate(range(0, 20).map(() => [300]));
+  assert.equal(r.alerts.length, 1);
+});
+
+// 디코 글 게시 성공 대역이 필요한 양성 대조는 모듈 대역 플래그가 있는 자식 프로세스에서 돈다.
+test('양성 대조: 긴 PID는 alert→alert-resolved 각 1건, 짧은 PID 교대는 둘 다 0건', () => {
+  const script = new URL('./helpers/process-sustain-posted.mjs', import.meta.url).pathname;
+  const run = spawnSync(process.execPath, ['--experimental-test-module-mocks', script], {encoding: 'utf8', env: process.env});
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout.trim().split('\n').pop());
+  assert.deepEqual(out.long, ['alert', 'alert-resolved']);
+  assert.deepEqual(out.short, []);
 });
