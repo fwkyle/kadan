@@ -74,6 +74,44 @@ test('executionKind: 업무 연결의 phase가 있으면 그 값(release·other 
   assert.equal(liveRolesOf({ entries: after, cards: [older, newer], works, aliveRoles: ['배지-작업'] })['배지-작업'].executionKind, 'implementation');
 });
 
+const kindOf = (cards, role = '배지-작업', works = [], year = 2036) => executionKindByRole(buildCardCenter({ cards, entries: sends(cards, role, year), tree: [] }).cards, works).get(role) ?? null;
+// 카드마다 발령(plan+send)을 순서대로 적는다. 발령 시각은 T(10 + 순번*2)다.
+function sends(cards, role, year) {
+  const at = (n) => T(n).replace('2036', String(year));
+  return cards.flatMap((c, i) => [{ kind: 'plan', taskId: c.id, board: 'b', t: at(10 + i * 2) }, { ...send(role, c.id, 11 + i * 2), t: at(11 + i * 2) }]);
+}
+
+test('executionKind F1: 일시정지(hold) 카드는 현재 실행이 아니다', () => {
+  const h = home(), store = new CardStore(h);
+  const card = assigned(store, h, 'k-hold', '배지-작업', 'review');
+  const held = store.update(card.key, { status: 'hold' }, { revision: card.revision, note: '멈춤' });
+  assert.equal(kindOf([held]), null);
+});
+
+test('executionKind F2: 오래된 카드의 제목 수정이 가장 최근 발령을 덮지 않는다', () => {
+  const h = home(), store = new CardStore(h);
+  const old = assigned(store, h, 'k-f2-old', '배지-작업', 'implementation');
+  const recent = assigned(store, h, 'k-f2-new', '배지-작업', 'review');
+  const edited = store.update(old.key, { title: '제목만 고침' }, { revision: old.revision, note: '제목' });
+  // 발령은 과거(2020), 제목 수정은 지금이라 수정 시각이 발령보다 늦다.
+  assert.equal(kindOf([edited, recent], '배지-작업', [], 2020), 'review');
+});
+
+test('executionKind F3: 가장 최근 발령 실행에 종류가 없으면 과거 종류를 쓰지 않고 null', () => {
+  const h = home(), store = new CardStore(h);
+  const old = assigned(store, h, 'k-f3-old', '배지-작업', 'review');
+  const recent = assigned(store, h, 'k-f3-new', '배지-작업', 'review');
+  const blank = store.update(recent.key, { rallyId: null, rallyTitle: null, rallyRound: null, rallyStep: null }, { revision: recent.revision, note: '묶음 지움' });
+  assert.equal(kindOf([old, blank]), null);
+});
+
+test('executionKind F4: 관리 카드(coordination)는 실행으로 세지 않는다', () => {
+  const h = home(), store = new CardStore(h);
+  const card = assigned(store, h, 'k-coord', '배지-작업', 'review');
+  const coord = store.update(card.key, { workType: 'coordination' }, { revision: card.revision, note: '관리 카드' });
+  assert.equal(kindOf([coord]), null);
+});
+
 test('원장·카드·업무 읽기 횟수는 두 칸을 더해도 한 번씩이다', () => {
   const h = home();
   process.env.KADAN_HOME = h;
