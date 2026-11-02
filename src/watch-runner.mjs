@@ -19,6 +19,7 @@ import { OFFLINE_REASONS } from "./watch-ai.mjs";
 import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
+import { decisionList, decisionFields, waitFields, waitingCardKeys } from "./watch-waits.mjs";
 import { assessMissingStartReports, alertedStartReports } from "./watch-start-report.mjs";
 import {
   buildCycleEntry,
@@ -53,7 +54,7 @@ import { readSettings } from "./runner-settings.mjs";
 import { currentSocket } from "./floor-tmux.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
-import { withEffectiveOwner, userTurnWaitList } from "./handover-state.mjs";
+import { withEffectiveOwner, userTurnWaitList, effectiveCardRole } from "./handover-state.mjs";
 import {waitingLetters} from './mailbox-queries.mjs';
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
@@ -481,8 +482,11 @@ export async function runWatch({
     queuedStates = queuedAssessment.states;
     lap('assess');
     // 설명 AI는 대기열에 넣기까지만 이 순회에서 하고, AI 호출은 뒤에서 따로 돈다. 실패해도 감시를 멈추지 않는다.
+    // 결정 목록은 순회마다 한 번만 읽는다. 설명 AI·답 대기 계산·감시AI 입력이 같은 결과를 쓴다. 못 읽으면 null(없음 []과 구분).
+    let decisionsNow = null;
+    try { decisionsNow = decisionList(readDecisions()); } catch { decisionsNow = null; }
     if (explain && !observationError && cards) {
-      try { explain.tick({cards, entries, readEntries, decisions: readDecisions(), liveSessions: roles.liveSessions, now: cycleAt}); }
+      try { if (decisionsNow === null) throw new Error('결정 목록 읽기 실패'); explain.tick({cards, entries, readEntries, decisions: decisionsNow, liveSessions: roles.liveSessions, now: cycleAt}); }
       catch (error) { print(`[watch] 설명 AI 점검 실패: ${error.message}`); }
     }
 
@@ -544,32 +548,45 @@ export async function runWatch({
       queuedAI.set(candidate.role,{key,candidate,
         responsibility:watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works)});
     };
-    if(cards&&!observationError){
-      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{
-        states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))
-      });
-      const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
-        enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session))});
-      if(progress) invokeAI(progress);
-    }
     // 답을 기다리는 일(2026-10-05 [kyle]): 사용자 결정을 기다리는 카드는 모두에게, 감독이 상위에게 물은 질문 우편(답 대기)이
     // 걸린 카드·워크는 묻는 쪽에게 할 일이 아니다. 답할 쪽에게는 그대로 할 일이다. 감독을 통째로 빼지 않는다 — 다른 일은 그대로 판정한다.
     // 목록을 못 읽으면 아무것도 빼지 않는다(판정을 숨기지 않는다).
-    let waits = [];
+    let waits = [], waitsRead = false;
     userTurnWaits = [];
     try {
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
       const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
-      for (const d of readDecisions() ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push(item(d.card ?? null, null, d.work ?? null, "@user"));
+      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push({ ...item(d.card ?? null, null, d.work ?? null, "@user"), kind: "decision", ref: d.id });
       for (const l of waitingLetters(entries))
-        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), mailId: l.mailId, asker: l.currentSender || l.by });
+        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), kind: "mail", ref: l.mailId, mailId: l.mailId, asker: l.currentSender || l.by });
       // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.
       if (cards) {
         userTurnWaits = userTurnWaitList(works, cards);
         for (const w of userTurnWaits) waits.push({ ids: [`work:${w.work}`], answerer: "@user" });
       }
-    } catch { waits = []; userTurnWaits = []; }
+      // 결정 목록을 못 읽었으면 결정 대기를 모른 채 거르는 것이라 waits 전체를 못 읽은 것으로 본다(아무것도 빼지 않는다).
+      waitsRead = decisionsNow !== null;
+    } catch { waits = []; userTurnWaits = []; waitsRead = false; }
+    const identityNow=taskIdentity(cards??[]);
+    let waitingKeys=new Set();
+    if(cards&&!observationError){
+      reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{
+        states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))
+      });
+      // 명확히 연결된 답 대기에 걸린 실행은 정체·입력대기 판정(progress)에서만 뺀다. 화면 오류·세션 죽음 경로(stall·생존 경보)와 그 감독의 다른 실행은 그대로다.
+      const projected=identityNow.project(entries);
+      waitingKeys=waitingCardKeys(cards,works,waits,waitsRead,card=>effectiveCardRole(card,projected,identityNow));
+      if(waitingKeys.size){
+        // 걸리기 전의 비정상 보고는 풀어 둔다: 답이 온 뒤에도 재개하지 않으면 새 비정상으로 다시 알린다(재알림 묶음은 이 풀림 앞뒤를 가른다).
+        for(const report of latestWatchReports(entries))
+          if(report.source==='progress'&&report.taskId&&waitingKeys.has(identityNow.resolve(report.taskId).key)&&(!normalWatchVerdict(report.verdict)||report.idleWithoutAsk))
+            record({kind:'watch-ai-retired',by:'watch',key:report.key,requestId:report.requestId,source:report.source,role:report.role,reason:'waiting-for-answer'});
+      }
+      const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
+        enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session)),waiting:waitingKeys});
+      if(progress) invokeAI(progress);
+    }
     // 놀고 있음 계산을 감독 정기 확인보다 먼저 한다: 같은 순회의 본인 차례(ownTurn)를 정기 확인이 그대로 재사용한다(원장을 다시 읽지 않는다).
     const ownTurn=new Set();
     const idleAssessment=assessSupervisorIdle(
@@ -585,7 +602,7 @@ export async function runWatch({
     const supervisorCheck=supervisorScope&&!observationError
       ? supervisorHealth.select({scope:supervisorScope,observations:roles.observations,entries,mailEntries,cards,now:cycleAt,enabled:Boolean(judgeCmd),
           // 원장·카드를 못 읽었으면 본인 차례를 모르는 것이라 거르지 않는다.
-          ownTurn:ledgerError||cardError||!cards?null:ownTurn})
+          ownTurn:ledgerError||cardError||!cards?null:ownTurn,decisions:decisionsNow})
       : {candidate:null,alerts:[]};
     if(supervisorCheck.candidate)invokeAI(supervisorCheck.candidate);
     if(cardError) reportAlerts=[{id:'cards:unreadable',kind:'모름',level:'AMBER',screenError:'감시 대상 카드 읽기 실패'}];
@@ -606,12 +623,22 @@ export async function runWatch({
     if(!activeAI&&!observationError)for(const [role,job] of orderedAI) {
       queuedAI.delete(role);
       if(!currentAI(job))continue;
+      // 대기열에 들어간 뒤 답 대기가 생긴 progress 작업도 실행 직전에 같은 기준으로 뺀다(stall·감독 관찰은 유지).
+      if(job.candidate.source==='progress'&&waitingKeys.has(identityNow.resolve(job.candidate.taskId).key))continue;
       const {candidate}=job,seen=roles.observations.get(candidate.session);
       if(!seen?.alive||!seen.screen)continue;
       const check=candidate.source==='supervisor-health'?null:workerCheck(candidate,seen);
       if(check&&!check.due)continue;
       const input={...candidate.input,...observationContext(role,seen,mailEntries,cards??[],
-        candidate.source==='supervisor-health'?supervisorScope.entries:scope?.entries??[])};
+        candidate.source==='supervisor-health'?supervisorScope.entries:scope?.entries??[],
+        candidate.source==='supervisor-health'?decisionsNow:undefined)};
+      if(candidate.source==='progress'){
+        // 걸러지지 않아 AI를 부르는 실행에는 그 실행에 걸린 답 대기와, 알림을 받을 상위 감독이 올린 열린 결정을 문맥으로 싣는다(거름 근거가 아니다).
+        const card=(cards??[]).find(c=>c.key===taskIdentity(cards??[]).resolve(candidate.taskId).key);
+        if(card)Object.assign(input,waitFields(waits,waitsRead,card,candidate.taskId,works,role),decisionFields(decisionsNow,
+          // 실제 전달 경로(살아 있는 상위로 올림)가 고르는 수신 감독의 결정을 싣는다. 직속 감독 세션이 꺼져 있어도 같다.
+          explainAlertRoute({id:`progress:${role}:${candidate.taskId??''}`,role},routes,roles.liveSessions,superRole,parents).recipient));
+      }
       if(candidate.source==='stall')input.screen=seen.screen.slice(-8000);
       else input.current=seen.screen.slice(-8000);
       job.controller=new AbortController();activeAI=job;

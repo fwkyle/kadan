@@ -15,7 +15,8 @@ export class ProgressWatch {
     this.lastJudged.set(session,now);
     for(const s of this.states.values())if(s.session===session){s.at=now;s.screen=screen.slice(-8000);}
   }
-  select({cards,entries,observations,now,enabled,blockedSessions=new Set()}) {
+  // waiting: 명확히 연결된 답 대기에 걸린 카드 key. 판정 후보에서만 빼고 시간 상태는 그대로 둔다(답이 온 뒤 바로 다시 판정한다).
+  select({cards,entries,observations,now,enabled,blockedSessions=new Set(),waiting=new Set()}) {
     const identity=taskIdentity(cards);entries=identity.project(entries);
     const active=new Set();let selected=null;
     for(const card of cards){
@@ -24,7 +25,7 @@ export class ProgressWatch {
       const key=card.key+'\0'+role+'\0'+seen.pid;active.add(key);
       let s=this.states.get(key);
       if(!s){s={at:now,screen:seen.screen.slice(-8000),session};this.states.set(key,s);}
-      if(enabled&&!selected&&!blockedSessions.has(session)&&now-s.at>=INTERVAL&&now-(this.lastJudged.get(session)??-Infinity)>=INTERVAL){
+      if(enabled&&!selected&&!blockedSessions.has(session)&&!waiting.has(card.key)&&now-s.at>=INTERVAL&&now-(this.lastJudged.get(session)??-Infinity)>=INTERVAL){
         selected={source:'progress',role,session,taskId:identity.taskIdFor(card),input:{title:card.title,scope:card.scope,goal:(card.body??cardBody(card))?.slice(0,6000),
           minutes:Math.floor((now-s.at)/60000),previous:s.screen,current:seen.screen.slice(-8000)}};
       }
