@@ -8,17 +8,22 @@ export const NOTE_TEXT_LIMIT = 200;
 export const DECISION_PREFIX = '[나이트 결정]';
 const USAGE = `kadan night note ${NOTE_KINDS.join('|')} "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind ${HOLD_KINDS.join('|')}] [--verdict ${VERDICTS.join('|')}]`;
 
-// 줄바꿈을 공백 하나로 접고 글자 200개에서 자른다(adopt message 규칙과 같게 `…`을 붙인다).
+// 공백류(줄바꿈·탭)는 공백 하나로 접고 남은 제어 문자(C0·DEL·C1: ESC·NUL·backspace 등)는 지운다.
+// 아침 요약과 CLI 출력이 화면 제어 문자로 깨지지 않게 저장 전과 요약 직전에 같은 함수를 거친다.
+export const cleanNoteText = value => String(value ?? '').replace(/\s+/g, ' ').replace(/\p{Cc}/gu, '').trim();
+
+// 정리한 뒤 글자 200개에서 자른다(adopt message 규칙과 같게 `…`을 붙인다).
 export function foldNoteText(value, limit = NOTE_TEXT_LIMIT) {
-  const chars = [...String(value ?? '').replace(/\s+/g, ' ').trim()];
+  const chars = [...cleanNoteText(value)];
   return chars.length > limit ? `${chars.slice(0, limit).join('')}…` : chars.join('');
 }
 
 const optional = (flags, name) => {
   const v = flags[name];
   if (v === undefined) return null;
-  if (typeof v !== 'string' || !v.trim()) throw new Error(`--${name}에 값이 필요합니다. ${USAGE}`);
-  return v.trim();
+  const clean = typeof v === 'string' ? cleanNoteText(v) : '';
+  if (!clean) throw new Error(`--${name}에 값이 필요합니다. ${USAGE}`);
+  return clean;
 };
 
 // 입력을 검사해 원장에 쓸 사건을 만든다. 나이트가 켜져 있는지는 부르는 쪽이 먼저 본다.
@@ -57,6 +62,7 @@ export function tallyNotes(notes) {
   const holds = by('hold');
   const gates = by('gate');
   return {
+    total: notes.length,
     decisions: by('decision'), holds, starts: by('start'),
     passes: gates.filter(n => n.verdict === 'pass'), rejects: gates.filter(n => n.verdict === 'reject'), merges: by('merge'),
     counts: {

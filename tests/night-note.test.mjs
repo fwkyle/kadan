@@ -201,3 +201,60 @@ test('CLI 입구: 자동 단계 켜짐 홈에서 역할 세션의 night note가 
   assert.equal(r2.status, 2);
   assert.equal(off.notes().length, 0);
 });
+
+// ── 1차 검수 지적(F1~F4) 회귀. 제어 문자는 문자열로만 단언하고 터미널에 출력하지 않는다.
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
+
+test('F1 제어 문자: 저장된 text·reason·work·pr와 명령 출력·요약에 제어 문자가 남지 않는다', () => {
+  const f = fixture({level: '자동'});
+  f.on();
+  const out = f.run(['note', 'decision', '정상\u001b[2J\u0000\b\u0085\n다음'], {work: 'a/w\u001b1', reason: '이유\u0007\t끝', pr: 'k\u001b#3'});
+  const [n] = f.notes();
+  assert.equal(n.text, '정상[2J 다음');
+  assert.equal(n.reason, '이유 끝');
+  assert.equal(n.work, 'a/w1');
+  assert.equal(n.pr, 'k#3');
+  assert.doesNotMatch(out, CONTROL);
+  // 옛 기록·직접 쓴 사건도 요약에서 한 번 더 정리한다.
+  const s = summarize([note(0, 'decision', '직접\u001b[31m쓴\u0000'), note(1, 'hold', '보류\b', {holdKind: 'deploy-repo', pr: 'x#1\u001b', reason: '근거\u0000'}), note(2, 'gate', '통과\u001b', {verdict: 'pass', pr: 'k\u001b#9'})]);
+  assert.doesNotMatch(s.text, CONTROL);
+  assert.match(s.text, /직접\[31m쓴/);
+});
+
+test('F1 반대 대조: 정상 문구·줄접기·탭·유니코드 200자+…는 그대로', () => {
+  const f = fixture();
+  f.on();
+  f.run(['note', 'decision', '가\n나\t다  라']);
+  f.run(['note', 'decision', '😀'.repeat(201)]);
+  const [a, b] = f.notes();
+  assert.equal(a.text, '가 나 다 라');
+  assert.equal([...b.text].length, 201);
+  assert.ok(b.text.endsWith('…'));
+});
+
+test('F2 거절만 있으면 관문 기록 없음이라 쓰지 않고 센 것을 그대로 쓴다', () => {
+  const s = summarize([note(0, 'gate', '거절', {verdict: 'reject', pr: 'sample/repo#1', reason: '검수 없음'})]);
+  assert.match(s.text, /관문 통과 0건 · 거절 1건/);
+  assert.match(s.text, /머지 기록 0건[^\n]*GitHub에서 확인/);
+  assert.doesNotMatch(s.text, /관문·머지 기록 없음/);
+  // 관문·머지 기록이 정말 0일 때만 없음 문구
+  assert.match(summarize([note(0, 'decision', '결정')]).text, /관문·머지 기록 없음/);
+});
+
+test('F3 통과 PR도 거절·머지처럼 목록에 보이고, 길면 줄이기 순서대로 줄어 1,800자 안', () => {
+  const one = summarize([note(0, 'gate', '통과', {verdict: 'pass', pr: 'sample/repo#99'})]).text;
+  assert.match(one, /통과: sample\/repo#99/);
+  const many = Array.from({length: 60}, (_, i) => note(i, 'gate', '통과 '.repeat(40), {verdict: 'pass', pr: `sample/repo#${i + 1}`}));
+  const s = summarize(many);
+  assert.ok(s.text.length <= NOTICE_LIMIT);
+  assert.match(s.text, /통과 외 \d+건/);
+});
+
+test('F4 기록이 있는 밤에는 처리한 일 없음 같은 전체 없음 문구를 쓰지 않고 칸만 좁혀 없음으로 쓴다', () => {
+  const s = summarize([note(0, 'decision', '결정')]);
+  assert.doesNotMatch(s.text, /밤사이 처리한 일 없음/);
+  assert.match(s.text, /결정 답·우편·재시작 없음/);
+  assert.match(s.text, /대신 정한 결정 1건/);
+  // 기록도 없으면 옛 문구 그대로
+  assert.match(summarize([]).text, /밤사이 처리한 일 없음/);
+});
