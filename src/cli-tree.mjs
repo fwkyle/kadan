@@ -170,6 +170,7 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
       untrackedSends: item.untrackedSends,
       life,
       cards,
+      roleProfile: item.lastStart?.roleProfile ?? null,
       ...startDisplay(item.lastStart),
     });
   }

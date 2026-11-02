@@ -108,7 +108,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자주 쓰는 옵션 |
 |---|---|---|
 | `kadan plan <판> <카드id[:제목]>...` | 판을 열 때 카드 목록을 원장에 먼저 적는다 | `--about "<판 설명>"` |
-| `kadan tree` | 판·카드·실행·살아 있는 역할 요약(JSON) | `--legacy`(옛 세션 나무) |
+| `kadan tree` | 판·카드·실행·살아 있는 역할 요약(JSON). 살아 있는 역할마다 `roleProfile`(로티 딱지용)·`executionKind`(로티 hover·대시보드용), 없으면 `null` — [뜻](card-center.md) | `--legacy`(옛 세션 나무) |
 | `kadan log` | 원장 최근 30줄 | — |
 | `kadan wall` / `kadan dashboard` | 로컬 관제 화면(HTML)을 띄운다 | `--port 8790`, `--cache-sec 초` (같은 주소 응답 재사용, 기본 10) |
 
