@@ -14,6 +14,7 @@ import { cardCommand } from "./card-command.mjs";
 import { hierarchyCommand } from "./hierarchy-prune.mjs";
 import { workCommand } from "./work-command.mjs";
 import { slotCommand } from "./review-slots.mjs";
+import { mergeCheck, formatMergeCheck } from "./merge-check.mjs";
 import { limitCommand } from "./heavy-limit.mjs";
 import fs from "node:fs";
 import { floor } from "./floor.mjs";
@@ -235,6 +236,7 @@ export const COMMANDS = {
   card: async (argv,flags) => console.log(JSON.stringify(await cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
+  'merge-check': (argv,flags) => console.log(flags.help ? '사용: kadan merge-check <저장소/업무ID> --head <PR head 커밋>. 업무의 최근 pass 검수가 본 커밋과 PR head를 나란히 보입니다(표시만, 머지를 막지 않음, GitHub 호출 없음). 입력 형식 오류만 종료 코드 2.' : formatMergeCheck(mergeCheck(argv[0],{head:flags.head},{home:ledgerHome()}))),
   limit: async (argv,flags) => {
     const result = flags.help ? await limitCommand([],{home:ledgerHome()}) : await limitCommand(argv,{home:ledgerHome()});
     if (result != null) console.log(JSON.stringify(result,null,2));
