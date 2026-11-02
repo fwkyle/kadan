@@ -468,6 +468,8 @@ export function explainAlertRoute(alert, routes, liveSessions, superRole, parent
   if (alert.id.startsWith('sweep-repeat:')) return chosen('@user','sweep-repeat');
   // 밀리고 있는 그 창이나 상위로 보내면 같은 입력 보호에 또 걸린다. 사용자에게만 간다(2026-10-13 [kyle]).
   if (alert.kind === '알림밀림') return chosen('@user','notify-held');
+  // 카단 서버 아래 프로세스·메모리는 기계 수치다. AI 역할을 깨우지 않고 사용자에게만 간다(CLAUDE.md 잠긴 규칙 8).
+  if (alert.kind === '프로세스') return chosen('@user','process-memory');
   // codex가 카단 Stop 훅을 신뢰하지 않은 상태는 kyle만 풀 수 있다(codex 화면에서 승인). 작업자의 감독에게 보내도 할 일이 없다.
   if (alert.kind === '훅신뢰') return chosen('@user','stop-hook-trust');
   // 감시AI 호출 장애(timeout·call-failed·report-missing…)는 판정 CLI·모델의 문제라 운영자 몫이다.
@@ -537,7 +539,9 @@ export function dedupAlerts(previousAlerts, nextAlerts) {
       const previous = previousById.get(alert.id);
       return !previous || previous.level !== alert.level || (alert.kind === '진행조정' && previous.verdict !== alert.verdict) || (alert.kind === '감시AI오류' && previous.reason !== alert.reason) || (alert.judgeVerdict === '모름' && previous.judgeReason !== alert.judgeReason)
         // 알림밀림의 사유가 '안 보냄'(입력 보호)에서 '새 글'(신뢰 승인 등)로 바뀌면 같은 id여도 한 번 다시 알린다. 같은 사유 반복은 그대로 중복이다(재검수 F1).
-        || (alert.kind === '알림밀림' && holdPosts(alert) && !holdPosts(previous));
+        || (alert.kind === '알림밀림' && holdPosts(alert) && !holdPosts(previous))
+        // 프로세스 경보는 넘은 기준의 집합이 바뀔 때만 다시 알린다.
+        || (alert.kind === '프로세스' && (alert.signals ?? []).join() !== (previous.signals ?? []).join());
     }),
     resolved,
     absorbed,

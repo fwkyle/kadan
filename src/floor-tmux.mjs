@@ -14,7 +14,7 @@ import {assertSessionPid} from './session-ownership.mjs';
 
 export const SOCKET = process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || "kadan";
 
-function currentSocket() {
+export function currentSocket() {
   return process.env.KADAN_SOCKET || process.env.KADAN_LITE_SOCKET || SOCKET;
 }
 

@@ -14,6 +14,9 @@ import { floor } from "../floor.mjs";
 import { ledgerHome, ledgerPath, readLedger, readMailBody } from "../ledger.mjs";
 import { buildWallSnapshot, createWallServer, withWaitSnapshots } from "../wall.mjs";
 import { collectResources } from "../watch-resource.mjs";
+import { collectProcesses, createProcessCache, exceededSignals, processThresholds } from "../process-watch.mjs";
+import { currentSocket } from "../floor-tmux.mjs";
+import { readSettings } from "../runner-settings.mjs";
 import { recentSends, die } from "../cli-basics.mjs";
 import { buildTree, renderTree } from "../cli-tree.mjs";
 import { collectCardFiles } from "../cli-guarded-send.mjs";
@@ -104,6 +107,16 @@ function readWallData(runtime, listOnly, summaryBodies) {
     decisions,decisionError};
 }
 
+// 카단 tmux 서버 아래 프로세스. 대시보드 요청마다 ps를 부르지 않도록 15초 재사용한다.
+const cachedProcesses = createProcessCache(() => collectProcesses(spawnSync, { socket: currentSocket() }));
+function processSnapshot() {
+  const result = cachedProcesses();
+  let settings = null;
+  try { settings = readSettings(ledgerHome()); } catch { /* 시작값 */ }
+  const thresholds = processThresholds(settings);
+  return result.ok ? { ...result, thresholds, exceeded: exceededSignals(result, thresholds) } : result;
+}
+
 function buildWallData(data) {
   const {runtime,listOnly,summaryBodies,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
     cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
@@ -149,6 +162,7 @@ function buildWallData(data) {
     registeredWorkError:workError?.message??null,
     briefInputs,operationsInputs,operationsInputsError,decisions,decisionError,
     ...resourceSnapshot,
+    processes: listOnly ? null : processSnapshot(),
     entries,
     centerKey,
     // 업무 후속 판정에는 우편/흐름 등 더 넓은 입력이 필요하므로 기존 전체 버전을 유지한다.

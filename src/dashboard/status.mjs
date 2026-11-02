@@ -116,6 +116,7 @@ export function statusData(snapshot, url, stamp, m) {
     rows: statusRows.map(slimRow),
     resources: snapshot.resources,
     resourceError: snapshot.resourceError,
+    processes: snapshot.processes ?? null,
     workError: m.workError,
     // 차례 칸 때문에 사용자 대기로 뺀 업무(최근 감시 주기 기준). 새 키만 더한다(2026-10-23 놀고 있음 PR-1 수정 1).
     userTurnWaits: snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits ?? [],

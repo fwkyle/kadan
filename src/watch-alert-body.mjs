@@ -58,6 +58,7 @@ function watchAIErrorBody(alert) {
 
 export function formatAlertBody(alert) {
   if (alert.kind === "감시AI오류") return watchAIErrorBody(alert);
+  if (alert.kind === "프로세스") return alert.text ?? "카단 tmux 프로세스 메모리 기준 초과";
   if (alert.kind === "입력큐") {
     return `입력 큐 대기 ${alert.session} (${alert.line})`;
   }
@@ -169,6 +170,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
+      ...(alert.kind === "프로세스" ? {signals:alert.signals,text:alert.text,...(alert.since!==undefined?{since:alert.since}:{})} : {}),
       ...(alert.kind === "훅신뢰" ? {hookTrustState:alert.state,hookTrustText:alert.text} : {}),
       ...(alert.holdCount !== undefined ? {holdCount:alert.holdCount,holdCode:alert.holdCode,heldSince:alert.heldSince} : {}),
       recipient,
@@ -202,6 +204,7 @@ export function seedAlertState(entries) {
       id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
       ...(e.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:e.judgeDeliveredTo} : {}),
+      ...(e.signals !== undefined ? {signals:e.signals,text:e.text,...(e.since!==undefined?{since:e.since}:{})} : {}),
       ...(e.holdCode !== undefined ? {holdCode:e.holdCode} : {}),   // 알림밀림 사유(재시작 뒤에도 사유 변화 판정이 같도록)
     });
     if (e.delivered && e.recipient) recipients.set(e.id, e.recipient);
