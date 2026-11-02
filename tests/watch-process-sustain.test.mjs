@@ -1,6 +1,8 @@
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {runWatch} from './helpers/watch-runner.mjs';
 
@@ -13,9 +15,13 @@ const starts = [...parents.keys()].map((role, i) => ({kind: 'start', role, sessi
 const MB = 1024;
 
 // plan[cycle] = 그 주기에 서버 아래 있는 node PID 목록(각 1.5G). 합계는 12G 아래로 둔다.
+// 항목은 PID 숫자 또는 {pid, etime}. etime을 안 주면 1분 된 프로세스다.
 function psFor(pids) {
   const lines = ['  100     1   2048  05:00:00 /usr/bin/tmux', '  200   100   4096  05:00:00 /bin/zsh'];
-  for (const pid of pids) lines.push(`  ${pid}   200 ${1536 * MB} 01:00 /usr/bin/node`);
+  for (const item of pids) {
+    const {pid, etime = '01:00'} = typeof item === 'number' ? {pid: item} : item;
+    lines.push(`  ${pid}   200 ${1536 * MB} ${etime} /usr/bin/node`);
+  }
   return lines.join('\n');
 }
 
@@ -63,36 +69,58 @@ const open = (extra = {}) => ({
   text: '카단 tmux 프로세스 2개·1.5G · 넘은 기준: 큰 프로세스', since: epoch, delivered: true, recipient: '@user', t: stamp(0), ...extra,
 });
 
-test('재시작: 오래 넘은 PID 목록이 적힌 열린 경보로 시작하면 같은 PID가 이어지는 동안 해소·재경보·새 알림 0건', async () => {
-  const r = await simulate(range(0, 8).map(() => [300]), {entries: [...starts, open({pids: [300]})]});
+const aged = (pid, etime) => ({pid, etime});
+const readLedger = records => [...starts, ...records];
+
+test('재시작: 지금도 큰 PID의 나이가 지속 시간 이상이면 해소·재경보·새 알림 0건', async () => {
+  const r = await simulate(range(0, 8).map(() => [aged(300, '20:00')]), {entries: [...starts, open()]});
   assert.deepEqual(r.notified, []);
   assert.deepEqual(r.alerts, [], '해소 기록도 새 경보 기록도 없다');
 });
 
-test('재시작 대조: 목록이 없는 옛 경보는 채우지 않아 평소대로 3주기 뒤 닫힌다', async () => {
-  const r = await simulate(range(0, 5).map(() => [300]), {entries: [...starts, open()]});
+test('재시작 대조: 3분 된 3G 빌드만 있으면 채우지 않아 평소대로 3주기 뒤 닫힌다', async () => {
+  const r = await simulate(range(0, 6).map(() => [aged(400, '03:00')]), {entries: [...starts, open()]});
   assert.deepEqual(r.alerts.map(a => !!a.resolved), [true]);
+  assert.deepEqual(r.notified, []);
 });
 
-// 오래 넘은 PID가 A(300)→B(301)로 바뀌어도 신호·since는 같다. 원장의 pids만 최신으로 갱신한다.
+// 오래 넘은 PID가 A(300)→B(301)로 바뀌어도 신호·since·알림 키는 같다.
 const swapPlan = Array.from({length: 18}, (_, i) => (i < 5 ? [300] : i < 16 ? [300, 301] : [301]));
 
-test('교대: 지속 PID가 바뀌면 원장 pids만 바뀐 주기에 한 번씩 갱신하고 사용자 알림은 1건', async () => {
+test('F2 A꼴: 교대 동안 원장의 alert 줄은 실제 알림 수와 같은 1줄', async () => {
   const r = await simulate(swapPlan);
-  assert.deepEqual(r.alerts.map(a => a.pids), [[300], [300, 301], [301]], '10분 열림, 15분 B 추가, 16분 A 이탈');
-  assert.equal(new Set(r.alerts.map(a => a.since)).size, 1, 'since 그대로');
-  assert.equal(r.alerts.every(a => !a.resolved), true);
-  assert.equal(r.notified.length, 1, '새 사용자 알림 없음');
+  assert.equal(r.alerts.length, 1);
+  assert.equal(r.alerts[0].delivered, true);
+  assert.equal(r.notified.length, 1);
 });
 
-test('교대 뒤 재시작: 최신 pids로 복원해 해소·재경보·새 사용자 알림 0건', async () => {
+test('F2 B꼴: 전달 못 한 열린 경보를 복원해도 새 알림 0건이고 원장 줄은 하나도 안 는다', async () => {
+  const undelivered = open({delivered: false, recipient: null});
+  const r = await simulate(range(0, 12).map(() => [aged(300, '20:00')]), {entries: [...starts, undelivered]});
+  assert.deepEqual(r.alerts, [], '원장 delivered·recipient가 바뀔 일이 없다');
+  assert.deepEqual(r.notified, []);
+});
+
+test('F1 꼴: A 0분·B 5분부터, A 16분에 사라지고 18분 재시작 — 해소·재경보·새 알림 0건', async () => {
   const before = await simulate(swapPlan);
-  const after = await simulate(Array(12).fill([301]), {entries: [...starts, ...before.alerts], start: 18});
+  const after = await simulate(range(0, 12).map(() => [aged(301, '13:00')]), {entries: readLedger(before.alerts), start: 18});
   assert.deepEqual(after.alerts, []);
   assert.deepEqual(after.notified, []);
 });
 
-test('같은 지속 PID 집합이 이어지는 동안은 원장에 다시 쓰지 않는다', async () => {
+test('설정 20분: 재시작 때 나이 15분은 채우지 않아 닫히고, 25분은 채워 이어진다', async () => {
+  const settings = path.join(process.env.KADAN_HOME, 'runner-settings.json');
+  // 설정 파일은 모양이 맞아야 읽힌다(깨진 파일은 시작값으로 돈다). 모양: version·revision·activePreset·presets·runners.
+  fs.writeFileSync(settings, JSON.stringify({version: 1, revision: 0, activePreset: 'p', presets: {p: {roles: {}}}, runners: {}, processWatch: {processSustainMin: 20}}));
+  try {
+    const young = await simulate(range(0, 6).map(() => [aged(300, '15:00')]), {entries: [...starts, open()]});
+    assert.deepEqual(young.alerts.map(a => !!a.resolved), [true]);
+    const old = await simulate(range(0, 6).map(() => [aged(300, '25:00')]), {entries: [...starts, open()]});
+    assert.deepEqual(old.alerts, []);
+  } finally { fs.rmSync(settings, {force: true}); }
+});
+
+test('같은 지속 PID가 이어지는 동안은 원장에 다시 쓰지 않는다', async () => {
   const r = await simulate(range(0, 20).map(() => [300]));
   assert.equal(r.alerts.length, 1);
 });

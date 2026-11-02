@@ -113,7 +113,7 @@ export function buildSnapshot(rows, serverPid, panes, bigMb = DEFAULT_THRESHOLDS
     group.kinds[row.kind] += 1;
     if (row.ageSec != null && row.ageSec > LEAK_AGE_SEC && row.rssKb < LEAK_RSS_KB) group.leak += 1;
     group.procs.push({ pid: row.pid, name: row.name, rssKb: row.rssKb });
-    if (mb(row.rssKb) >= bigMb) bigAll.push({ pid: row.pid, name: row.name, rssMb: mb(row.rssKb), session: label });
+    if (mb(row.rssKb) >= bigMb) bigAll.push({ pid: row.pid, name: row.name, rssMb: mb(row.rssKb), ageSec: row.ageSec, session: label });
     for (const child of children.get(row.pid) ?? []) stack.push([child, session]);
   }
   const sessions = [...groups.values()]
@@ -207,16 +207,16 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
   // PID별 첫 초과 시각. 수집마다 지금 기준 이상인 PID로 다시 만든다(사라지거나 내려간 PID는 버려 다시 넘으면 새로 잰다).
   const priorSince = previousState?.bigSince;
   const bigNow = result.bigAll ?? result.biggest.filter((proc) => proc.rssMb >= thresholds.processGb * 1024);
-  // 재시작 직후(표 없음): 복원한 경보가 적어 둔 오래 넘은 PID 중 지금도 큰 것은 이미 지속 시간을 채운 것으로 본다.
-  // 경보 since가 기준 집합이 바뀐 시각이라 더 최근일 수 있어, 경보 since와 '지속 시간 전' 중 이른 쪽으로 채운다.
-  const restorePids = !priorSince && previous?.signals?.includes("process") && Array.isArray(previous.pids) && previous.since != null
-    ? new Set(previous.pids) : null;
   const sustainMs = thresholds.processSustainMin * 60_000;
+  // 재시작 뒤 첫 성공 수집(표 없음)에서만, 복원한 열린 경보에 process 신호가 있으면 ps가 주는 프로세스 나이로 시계를 채운다.
+  // 재시작 전에 10분 넘게 넘은 PID는 반드시 10분 넘게 살아 있었다. 어리거나 나이를 못 읽은 PID는 지금부터 잰다.
+  const restoreByAge = !priorSince && previous?.signals?.includes("process");
   const bigSince = {};
   for (const proc of bigNow) {
-    bigSince[proc.pid] = priorSince?.[proc.pid] ?? (restorePids?.has(proc.pid) ? Math.min(previous.since, at - sustainMs) : at);
+    const aged = restoreByAge && proc.ageSec != null && proc.ageSec * 1000 >= sustainMs;
+    bigSince[proc.pid] = priorSince?.[proc.pid] ?? (aged ? at - sustainMs : at);
   }
-  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid).sort((a, b) => a - b);
+  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
   const signals = exceededSignals(result, thresholds, sustained);
   let alert = null, normalCycles = 0;
   if (signals.length) {
@@ -226,8 +226,6 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
       level: signals.includes("total") || signals.includes("process") ? "RED" : "AMBER",
       signals,
       text: alertText(result, signals),
-      // 오래 넘은 PID(재시작 복원용 자료). 알림 중복 막기 키에는 넣지 않는다.
-      ...(sustained.length && signals.includes("process") ? { pids: sustained } : {}),
       // 기준 집합이 바뀐 시각. 알림 중복 막기 키에 들어가 A→B→A 전이마다 키가 달라진다.
       since: previous && previous.signals.join() === signals.join() && previous.since != null ? previous.since : at,
     };

@@ -209,7 +209,7 @@ test('F4: since가 원장 줄에 적히고 복원되며, 같은 표본 재평가
 
 // ── 큰 프로세스 경보: 같은 PID가 오래 넘을 때만 ──
 const MIN = 60_000;
-const P = (pid, rssMb = 1500) => ({pid, name: 'node', rssMb, session: 'a'});
+const P = (pid, rssMb = 1500, ageSec) => ({pid, name: 'node', rssMb, ageSec, session: 'a'});
 const withBig = (...procs) => snap({biggest: [...procs].sort((a, b) => b.rssMb - a.rssMb), bigAll: procs});
 // 60초 간격 수집으로 표본 목록을 흘려 보낸다. 마지막 결과와 모든 경보를 돌려준다.
 function run(samples, { state = null, start = 0, thresholds = DEFAULT_THRESHOLDS } = {}) {
@@ -241,11 +241,11 @@ test('(b) 같은 PID가 10분 넘게 1G 이상이면 RED 경보가 열려 있다
   assert.deepEqual(r.all[11][0].signals, ['process']);
 });
 
-test('(b2) 큰 프로세스 경보는 10분이 되는 수집에서 열리고 오래 넘은 PID 목록을 적는다', () => {
+test('(b2) 큰 프로세스 경보는 10분이 되는 수집에서 열린다', () => {
   const r = run(Array(12).fill(withBig(P(21))));
   assert.deepEqual(r.all.slice(0, 10).map((a) => a.length), Array(10).fill(0), '0~9분');
   assert.equal(r.all[10].length, 1, '10분');
-  assert.deepEqual(r.all[10][0].pids, [21]);
+  assert.equal('pids' in r.all[10][0], false, '원장에 따로 적을 PID 목록은 없다');
   assert.equal(r.all[10][0].since, 10 * MIN);
 });
 
@@ -268,7 +268,7 @@ test('(e) 1G 넘는 PID가 여럿이면 짧은 큰 것보다 오래 붙은 작�
   const samples = Array.from({length: 12}, (_, i) => withBig(P(41, 1200), P(100 + i, 3000)));
   const r = run(samples);
   assert.deepEqual(r.all.slice(0, 10).flat(), []);
-  assert.deepEqual(r.all[10][0].pids, [41], '매번 바뀌는 3G 쪽이 아니라 오래 붙은 1.2G');
+  assert.equal(r.all[10].length, 1, '매번 바뀌는 3G 쪽이 아니라 오래 붙은 1.2G 때문에 10분에 열린다');
 });
 
 test('수집 실패는 PID 시계를 지우지 않는다(9분 뒤 한 번 못 읽어도 다음 수집에서 10분)', () => {
@@ -287,25 +287,41 @@ test('경보가 열린 뒤 PID가 사라지면 3주기 정상 뒤 닫히고, 문
   assert.deepEqual(closed.all.map((a) => a.length), [1, 1, 0]);
 });
 
-test('재시작: 오래 넘은 PID 경보로 시작하면 같은 PID는 이어서 센다(해소·재경보 없음), 없으면 신호가 빠진다', () => {
-  const open = run(Array(12).fill(withBig(P(71))));
-  const restored = {...open.all[11][0]};
-  const state = {processAlert: restored, normalCycles: 0}; // 재시작 직후: 표 없음
-  const same = run(Array(5).fill(withBig(P(71))), {state, start: 20 * MIN});
-  assert.equal(same.all.every((a) => a.length === 1 && a[0].since === restored.since), true);
-  // 경보 since가 방금(기준 집합이 최근에 바뀜)이어도 복원한 PID는 이미 오래 넘은 것으로 본다
-  const recent = {processAlert: {...restored, since: 20 * MIN}, normalCycles: 0};
-  assert.equal(run([withBig(P(71))], {state: recent, start: 20 * MIN}).all[0].length, 1);
-  // 복원한 PID가 사라졌으면 평소대로 3주기 뒤 닫힌다
-  const gone = run([snap(), snap(), snap()], {state, start: 20 * MIN});
-  assert.deepEqual(gone.all.map((a) => a.length), [1, 1, 0]);
-  // 옛 경보(PID 목록 없음)는 채우지 않는다
-  const { pids, ...old } = restored;
-  const oldRun = run([withBig(P(71))], {state: {processAlert: old, normalCycles: 0}, start: 20 * MIN});
-  assert.deepEqual(oldRun.all[0][0].signals, old.signals, '경보는 3주기 유지 중');
-  assert.equal(oldRun.all[0][0], oldRun.state.processAlert);
-  assert.equal(Object.keys(oldRun.state.bigSince).length, 1);
-  assert.equal(oldRun.state.bigSince[71], 20 * MIN, '지금부터 새로 잼');
+// 재시작 복원: 첫 성공 수집에서만, 열린 경보에 process 신호가 있으면 프로세스 나이로 시계를 채운다.
+const openAlert = (extra = {}) => ({id: 'process:memory', kind: '프로세스', level: 'RED', signals: ['process'], text: 'x', since: 5 * MIN, ...extra});
+const restart = (alert) => ({processAlert: alert, normalCycles: 0}); // 재시작 직후: 표 없음
+
+test('재시작: 지금도 큰 PID의 나이가 지속 시간 이상이면 채워서 해소·재경보 없이 이어진다', () => {
+  const r = run(Array(5).fill(withBig(P(71, 1500, 13 * 60))), {state: restart(openAlert()), start: 20 * MIN});
+  assert.equal(r.all.every((a) => a.length === 1 && a[0].since === 5 * MIN), true);
+});
+
+test('재시작: 어린 PID(3분)·나이를 못 읽은 PID는 채우지 않아 평소대로 3주기 뒤 닫힌다', () => {
+  for (const age of [3 * 60, undefined]) {
+    const r = run(Array(5).fill(withBig(P(72, 3000, age))), {state: restart(openAlert()), start: 20 * MIN});
+    assert.deepEqual(r.all.map((a) => a.length), [1, 1, 0, 0, 0], String(age));
+  }
+});
+
+test('재시작: 복원한 경보가 없거나 process 신호가 없으면 채우지 않는다', () => {
+  const none = run([withBig(P(73, 1500, 3600))], {state: restart(null), start: 20 * MIN});
+  assert.deepEqual(none.all.flat(), []);
+  const total = run([withBig(P(73, 1500, 3600))], {state: restart(openAlert({signals: ['total']})), start: 20 * MIN});
+  assert.equal(total.all[0].some((a) => a.signals.includes('process')), false);
+});
+
+test('재시작: 채우기는 한 번뿐이다(평소 순회에서는 나이로 시계를 당기지 않는다)', () => {
+  const r = run([withBig(P(74, 1500, 60))], {state: null, start: 0});
+  const next = run([withBig(P(75, 1500, 3600))], {state: r.state, start: MIN});
+  assert.deepEqual(next.all.flat(), []);
+});
+
+test('재시작: 지속 시간 설정이 20분이면 나이 15분은 채우지 않고 25분은 채운다', () => {
+  const t = {...DEFAULT_THRESHOLDS, processSustainMin: 20};
+  const young = run([withBig(P(76, 1500, 15 * 60)), withBig(P(76, 1500, 15 * 60)), withBig(P(76, 1500, 15 * 60))], {state: restart(openAlert()), thresholds: t});
+  assert.equal(young.all[2].length, 0, '3주기 정상 뒤 닫힘');
+  const old = run([withBig(P(77, 1500, 25 * 60)), withBig(P(77, 1500, 25 * 60)), withBig(P(77, 1500, 25 * 60))], {state: restart(openAlert()), thresholds: t});
+  assert.deepEqual(old.all.map((a) => a.length), [1, 1, 1]);
 });
 
 test('bigAll은 세션별 상위 3개·전체 상위 5개 자르기와 상관없이 기준 이상 PID를 모두 담는다', () => {
@@ -315,5 +331,5 @@ test('bigAll은 세션별 상위 3개·전체 상위 5개 자르기와 상관없
   const r = collectProcesses(fakeSpawn({tmux: {status: 0, stdout: '100 s 200\n'}, ps: {status: 0, stdout: lines.join('\n')}}), {socket: 'k'});
   assert(r.biggest.length <= 5 && r.biggest.length < r.bigAll.length, '상위 N개만 남는 기존 목록');
   assert.equal(r.bigAll.length, 8);
-  assert(r.bigAll.every((proc) => proc.rssMb >= 1024));
+  assert(r.bigAll.every((proc) => proc.rssMb >= 1024 && proc.ageSec === 60), 'ageSec(etime)를 함께 담는다');
 });
