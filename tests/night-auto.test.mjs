@@ -1,0 +1,142 @@
+import "./helpers/isolated-home.mjs";
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {appendLedger, readLedger} from '../src/ledger.mjs';
+import {nightCommand} from '../src/commands/night.mjs';
+import {DecisionStore} from '../src/decisions.mjs';
+import {nightGuard, guardedReason} from '../src/night-guard.mjs';
+
+// 가짜 시계·가짜 우편만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다. 역할 이름도 시험용이다.
+const T0 = Date.parse('2026-11-02T14:00:00.000Z');
+const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
+
+function fixture() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-auto-'));
+  const file = path.join(home, 'hierarchy.json');
+  fs.writeFileSync(file, JSON.stringify({'a-슈퍼감독': '@user', 'a-감독': 'a-슈퍼감독'}));
+  appendLedger({kind: 'hierarchy-loaded', path: file, hash: 'x', by: 'watch'}, home);
+  appendLedger({kind: 'start', role: 'a-슈퍼감독', session: 'kadan-a-슈퍼감독', roleProfile: 'super'}, home);
+  const sent = [];
+  const deps = {
+    now: () => T0,
+    readWorks: () => [{key: 'a/w1', status: 'open', owner: 'a-감독', executions: []}],
+    sendMail: (role, message) => { sent.push({role, message}); return {ok: true, mailId: 'm1'}; },
+    notify: () => {},
+  };
+  const run = (args, flags = {}, by = '사람') => nightCommand(args, flags, {home, by, deps});
+  const night = () => readLedger(home).filter(e => e.kind === 'night');
+  return {home, sent, run, night};
+}
+
+test('--level 자동: on 사건에 level·onlyRunning, status, 자동 단계 문구, 점검 목록', () => {
+  const f = fixture();
+  const r = f.run(['on', '밤 위임'], {level: '자동'});
+  assert.equal(r.level, '자동');
+  assert.equal(r.onlyRunning, false);
+  assert.equal(r.checklist.length, 2);
+  const [on] = f.night();
+  assert.equal(on.level, '자동');
+  assert.equal(on.onlyRunning, false);
+  const s = f.run(['status']);
+  assert.equal(s.level, '자동');
+  assert.equal(s.onlyRunning, false);
+  const msg = f.sent[0].message;
+  assert.match(msg, /단계: 자동/);
+  assert.match(msg, /묻기 전에 스스로 찾습니다/);
+  assert.match(msg, /\[나이트 결정\]/);
+  assert.match(msg, /영구 삭제/);
+  assert.match(msg, /코드가 막지 못하므로/);
+  assert.match(msg, /자동 머지 관문이 생기기 전이라 아침으로 보류/);
+  assert.doesNotMatch(msg, /새 일감을 시작하지 않습니다/);
+  assert.match(msg, /위 \(1\)~\(9\) 줄/);
+});
+
+test('--level 바이패스: 종료 코드 2로 거절하고 켜지지 않는다', () => {
+  const f = fixture();
+  assert.throws(() => f.run(['on', '밤'], {level: '바이패스'}), error => error.exitCode === 2 && /바이패스/.test(error.message));
+  assert.equal(f.night().length, 0);
+  assert.equal(f.sent.length, 0);
+});
+
+test('--level 없이 켜면 지금과 같은 사건·문구(기본)', () => {
+  const f = fixture();
+  const r = f.run(['on', '밤 위임']);
+  assert.equal('level' in r, false);
+  const [on] = f.night();
+  assert.equal('level' in on, false);
+  assert.equal('onlyRunning' in on, false);
+  const msg = f.sent[0].message;
+  assert.doesNotMatch(msg, /단계:|\(4\)/);
+  assert.match(msg, /위 \(1\)~\(2\) 줄/);
+  assert.equal(f.run(['status']).level, '기본');
+});
+
+test('--only-running: 새 일감 금지 줄이 붙고, --level 자동 없이는 거절', () => {
+  const f = fixture();
+  assert.throws(() => f.run(['on', '밤'], {'only-running': true}), /--level 자동과 함께만/);
+  assert.equal(f.night().length, 0);
+  f.run(['on', '밤'], {level: '자동', 'only-running': true});
+  assert.equal(f.night()[0].onlyRunning, true);
+  assert.match(f.sent[0].message, /\(10\) 새 일감을 시작하지 않습니다/);
+  assert.equal(f.run(['status']).onlyRunning, true);
+});
+
+test('알 수 없는 --level 값은 거절한다', () => {
+  assert.throws(() => fixture().run(['on', '밤'], {level: '기본'}), /--level은 자동만/);
+});
+
+const GUARDED = [
+  ['restart', ['x'], {force: true}],
+  ['stop', ['watch'], {}],
+  ['stop', ['대시보드'], {}],
+  ['window', ['set', 'none'], {}],
+  ['window', ['unset'], {}],
+  ['runners', ['set', 'worker'], {}],
+  ['runners', ['runner', 'codex'], {}],
+  ['runners', ['model', 'codex'], {}],
+  ['night', ['on', '밤'], {level: '바이패스'}],
+];
+
+test('켜진 동안 역할 세션의 보호 명령은 거절, 사람·꺼짐·읽기 명령은 통과', () => {
+  const f = fixture();
+  f.run(['on', '밤'], {level: '자동'});
+  const entries = readLedger(f.home);
+  const base = {home: f.home, now: T0 + 1000, entries, decisionEvents: []};
+  for (const [command, args, flags] of GUARDED) {
+    assert.throws(() => nightGuard({...base, command, args, flags, env: {KADAN_ROLE: 'a-작업'}}),
+      error => error.exitCode === 2 && /나이트 모드가 켜져 있어/.test(error.message), `${command} ${args}`);
+    nightGuard({...base, command, args, flags, env: {}}); // 사람(KADAN_ROLE 없음)
+    nightGuard({...base, command, args, flags, env: {KADAN_ROLE: 'a-작업'}, now: T0 + 9 * 3600_000}); // 끝 시각 뒤 = 꺼짐
+  }
+  for (const [command, args, flags] of [['restart', ['x'], {}], ['stop', ['a-작업'], {}], ['window', ['show'], {}], ['runners', ['show'], {}], ['runners', ['report'], {}]])
+    assert.equal(guardedReason(command, args, flags), null, `${command} ${args}`);
+});
+
+test('나이트가 한 번도 안 켜졌으면 역할 세션도 통과한다', () => {
+  const f = fixture();
+  nightGuard({home: f.home, command: 'stop', args: ['watch'], flags: {}, env: {KADAN_ROLE: 'a-작업'}, now: T0, entries: readLedger(f.home), decisionEvents: []});
+});
+
+test('CLI 입구: 켜진 홈에서 역할 세션의 stop watch·window unset은 종료 코드 2', () => {
+  const f = fixture();
+  // 켜진 상태를 실제 시계 기준 끝 시각의 사건으로 직접 만든다(CLI 자식 프로세스는 가짜 시계를 쓰지 않는다).
+  appendLedger({kind: 'night', phase: 'on', by: '사람', text: 'cli', viaChat: false, until: new Date(Date.now() + 3600_000).toISOString(),
+    to: [], delivered: [], t: new Date().toISOString()}, f.home);
+  const env = {...process.env, KADAN_HOME: f.home, KADAN_ROLE: 'a-작업', KADAN_WINDOW: 'none'};
+  for (const argv of [['stop', 'watch'], ['window', 'unset'], ['restart', 'a-작업', '--force']]) {
+    const r = spawnSync(process.execPath, [CLI, ...argv], {env, encoding: 'utf8', timeout: 20_000});
+    assert.equal(r.status, 2, `${argv.join(' ')}: ${r.stderr}`);
+    assert.match(r.stderr, /나이트 모드가 켜져 있어/);
+  }
+});
+
+test('역할 세션의 decision answer는 나이트와 무관하게 거절된다(기존 동작 확인)', () => {
+  const f = fixture();
+  f.run(['on', '밤'], {level: '자동'});
+  const store = new DecisionStore(f.home);
+  assert.throws(() => store.answer('없는-결정', {revision: 1, text: '승인'}, 'a-감독'), /사용자 답변은 사람 명의로만 기록/);
+});
