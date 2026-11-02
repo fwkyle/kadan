@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" width="1200" height="520" role="img" aria-labelledby="t d">
+  <title id="t">카단 한 업무의 생애</title>
+  <desc id="d">업무 카드, 발령, 구현, 독립 검수, PR, 사용자 승인, 머지와 재시작, 정리와 마감 순서. 독립 검수가 불합격이면 다음 라운드로 구현으로 돌아간다. 모든 단계의 사건은 원장에 덧붙고 감시기가 단계마다 멈춤을 본다.</desc>
+  <style>
+    text { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; word-break: keep-all; fill: #0f172a; }
+    .bg { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
+    .title { font-size: 20px; font-weight: 700; }
+    .num { font-size: 12.5px; font-weight: 700; fill: #475569; }
+    .name { font-size: 17px; font-weight: 700; }
+    .who { font-size: 13px; font-weight: 700; fill: #0369a1; }
+    .whoh { font-size: 13px; font-weight: 700; fill: #b45309; }
+    .note { font-size: 12.5px; fill: #334155; }
+    .lbl { font-size: 13px; font-weight: 600; paint-order: stroke; stroke: #f8fafc; stroke-width: 5px; stroke-linejoin: round; }
+    .ai { fill: #e0f2fe; stroke: #0369a1; stroke-width: 1.6; }
+    .human { fill: #fef3c7; stroke: #b45309; stroke-width: 1.6; }
+    .ledger { fill: #dcfce7; stroke: #15803d; stroke-width: 1.6; }
+    .watch { fill: #fee2e2; stroke: #b91c1c; stroke-width: 1.6; }
+    .arrow { fill: none; stroke: #475569; stroke-width: 1.8; marker-end: url(#head); }
+    .loop { fill: none; stroke: #b91c1c; stroke-width: 1.8; stroke-dasharray: 6 4; marker-end: url(#headRed); }
+    .bracket { fill: none; stroke: #64748b; stroke-width: 1.4; }
+  </style>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#475569"/></marker>
+    <marker id="headRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#b91c1c"/></marker>
+  </defs>
+
+  <rect class="bg" x="1" y="1" width="1198" height="518" rx="14"/>
+  <text class="title" x="30" y="38">카단 한 업무의 생애 — 카드에서 마감까지</text>
+
+  <!-- 1 업무 카드 -->
+  <rect class="ai" x="30" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="42" y="128">1</text>
+  <text class="name" x="90" y="148" text-anchor="middle">업무 카드</text>
+  <text class="who" x="90" y="196" text-anchor="middle">일반감독</text>
+  <text class="note" x="90" y="215" text-anchor="middle">목표 · 범위 ·</text>
+  <text class="note" x="90" y="232" text-anchor="middle">완료 조건을 적음</text>
+
+  <!-- 2 발령 -->
+  <rect class="ai" x="180" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="192" y="128">2</text>
+  <text class="name" x="240" y="148" text-anchor="middle">발령</text>
+  <text class="who" x="240" y="196" text-anchor="middle">일반감독</text>
+  <text class="note" x="240" y="215" text-anchor="middle">작업자에게</text>
+  <text class="note" x="240" y="232" text-anchor="middle">실행 카드를 보냄</text>
+
+  <!-- 3 구현 -->
+  <rect class="ai" x="330" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="342" y="128">3</text>
+  <text class="name" x="390" y="148" text-anchor="middle">구현</text>
+  <text class="who" x="390" y="196" text-anchor="middle">작업자</text>
+  <text class="note" x="390" y="215" text-anchor="middle">착수 보고 뒤 구현,</text>
+  <text class="note" x="390" y="232" text-anchor="middle">결과 파일과 DONE</text>
+
+  <!-- 4 독립 검수 -->
+  <rect class="ai" x="480" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="492" y="128">4</text>
+  <text class="name" x="540" y="148" text-anchor="middle">독립 검수</text>
+  <text class="who" x="540" y="196" text-anchor="middle">검수자</text>
+  <text class="note" x="540" y="215" text-anchor="middle">구현과 별개로</text>
+  <text class="note" x="540" y="232" text-anchor="middle">다시 확인</text>
+
+  <!-- 5 PR -->
+  <rect class="ai" x="630" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="642" y="128">5</text>
+  <text class="name" x="690" y="148" text-anchor="middle">PR</text>
+  <text class="who" x="690" y="196" text-anchor="middle">작업자 · 감독</text>
+  <text class="note" x="690" y="215" text-anchor="middle">카드가 허용한</text>
+  <text class="note" x="690" y="232" text-anchor="middle">범위 안에서</text>
+
+  <!-- 6 사용자 승인 -->
+  <rect class="human" x="780" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="792" y="128">6</text>
+  <text class="name" x="840" y="148" text-anchor="middle">사용자 승인</text>
+  <text class="whoh" x="840" y="196" text-anchor="middle">사용자</text>
+  <text class="note" x="840" y="215" text-anchor="middle">결정 요청으로</text>
+  <text class="note" x="840" y="232" text-anchor="middle">main 합류 승인</text>
+
+  <!-- 7 머지·재시작 -->
+  <rect class="ai" x="930" y="110" width="120" height="60" rx="10"/>
+  <text class="num" x="942" y="128">7</text>
+  <text class="name" x="990" y="148" text-anchor="middle">머지 · 재시작</text>
+  <text class="who" x="990" y="196" text-anchor="middle">일반감독</text>
+  <text class="note" x="990" y="215" text-anchor="middle">승인 뒤 합류,</text>
+  <text class="note" x="990" y="232" text-anchor="middle">프로그램 다시 띄움</text>
+
+  <!-- 8 정리·마감 -->
+  <rect class="ai" x="1080" y="110" width="100" height="60" rx="10"/>
+  <text class="num" x="1092" y="128">8</text>
+  <text class="name" x="1130" y="148" text-anchor="middle">정리 · 마감</text>
+  <text class="who" x="1130" y="196" text-anchor="middle">일반감독</text>
+  <text class="note" x="1130" y="215" text-anchor="middle">worktree 정리,</text>
+  <text class="note" x="1130" y="232" text-anchor="middle">work complete</text>
+
+  <!-- 순서 화살표 -->
+  <path class="arrow" d="M150 140 H180"/>
+  <path class="arrow" d="M300 140 H330"/>
+  <path class="arrow" d="M450 140 H480"/>
+  <path class="arrow" d="M600 140 H630"/>
+  <text class="lbl" x="615" y="164" text-anchor="middle">합격</text>
+  <path class="arrow" d="M750 140 H780"/>
+  <path class="arrow" d="M900 140 H930"/>
+  <path class="arrow" d="M1050 140 H1080"/>
+
+  <!-- 불합격 루프 -->
+  <path class="loop" d="M540 110 V82 H390 V108"/>
+  <text class="lbl" x="465" y="74" text-anchor="middle" style="fill:#b91c1c">불합격이면 다음 라운드 (수정 턴 + 재검수 턴)</text>
+
+  <!-- 라운드 괄호 -->
+  <path class="bracket" d="M330 262 V272 H600 V262"/>
+  <text class="note" x="465" y="292" text-anchor="middle">1라운드 = 구현 턴 + 독립 검수 턴</text>
+
+  <!-- 원장 / 감시기 -->
+  <rect class="ledger" x="30" y="330" width="1150" height="64" rx="10"/>
+  <text class="name" x="50" y="358">원장</text>
+  <text class="note" x="50" y="380">모든 단계의 사건(시작 · 발령 · 우편 · 완료 확정)을 뒤에만 덧붙인다. 고치거나 지우지 않는다.</text>
+  <rect class="watch" x="30" y="414" width="1150" height="80" rx="10"/>
+  <text class="name" x="50" y="442">감시기</text>
+  <text class="note" x="50" y="464">단계마다 멈춤을 본다: 시작보고누락 · 정체 · 완료후보 · 죽음 · 한도 같은 경보를 직속 상위에게 보낸다.</text>
+  <text class="note" x="50" y="482">완료는 작업자가 화면에 낸 DONE 마커와 감독의 확정으로 정하고, 감시기가 대신 판정하지 않는다.</text>
+</svg>
