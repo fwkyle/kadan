@@ -29,7 +29,7 @@ function git(cwd, args, {allowFail = false} = {}) {
 }
 
 // worktree 경로를 줘도 같은 자리 묶음을 쓰도록 원본 저장소로 되돌린다.
-function mainRepo(input) {
+export function mainRepo(input) {
   const dir = path.resolve(input);
   const common = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir'], {allowFail: true});
   if (common === null) throw new Error(`저장소 경로가 아닙니다: ${dir}. 저장소 절대경로나 카드의 저장소 이름을 주세요`);
