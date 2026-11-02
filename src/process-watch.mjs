@@ -13,6 +13,7 @@ const TOP_SESSIONS = 3;
 export const DEFAULT_THRESHOLDS = Object.freeze({
   totalGb: 12,
   processGb: 1,
+  processSustainMin: 10, // 큰 프로세스는 같은 PID가 이만큼(분) 계속 넘을 때만 경보
   python: 30,
   node: 30,
 });
@@ -84,7 +85,7 @@ function newGroup(session) {
 }
 
 // 서버 PID에서 자식 지도를 따라 한 번만 내려간다(O(n)). 가장 가까운 pane PID 조상이 세션이다.
-export function buildSnapshot(rows, serverPid, panes) {
+export function buildSnapshot(rows, serverPid, panes, bigMb = DEFAULT_THRESHOLDS.processGb * 1024) {
   const children = new Map();
   for (const row of rows) {
     const list = children.get(row.ppid);
@@ -95,6 +96,7 @@ export function buildSnapshot(rows, serverPid, panes) {
   const paneSession = new Map(panes.map((pane) => [pane.panePid, pane.session]));
   const groups = new Map();
   const seen = new Set();
+  const bigAll = []; // 기준 이상인 PID 전부(지속 시간 판정용). 상위 N개 자르기와 별개다.
   const stack = [];
   const server = byPid.get(serverPid);
   if (server) stack.push([server, null]);
@@ -111,6 +113,7 @@ export function buildSnapshot(rows, serverPid, panes) {
     group.kinds[row.kind] += 1;
     if (row.ageSec != null && row.ageSec > LEAK_AGE_SEC && row.rssKb < LEAK_RSS_KB) group.leak += 1;
     group.procs.push({ pid: row.pid, name: row.name, rssKb: row.rssKb });
+    if (mb(row.rssKb) >= bigMb) bigAll.push({ pid: row.pid, name: row.name, rssMb: mb(row.rssKb), ageSec: row.ageSec, session: label });
     for (const child of children.get(row.pid) ?? []) stack.push([child, session]);
   }
   const sessions = [...groups.values()]
@@ -138,11 +141,12 @@ export function buildSnapshot(rows, serverPid, panes) {
     .flatMap((group) => group.big.map((proc) => ({ ...proc, session: group.session })))
     .sort((a, b) => b.rssMb - a.rssMb)
     .slice(0, 5);
-  return { count, rssMb, kinds, leak, biggest, sessions };
+  bigAll.sort((a, b) => b.rssMb - a.rssMb);
+  return { count, rssMb, kinds, leak, biggest, bigAll, sessions };
 }
 
 // 반환 {ok:true, ...snapshot} | {ok:false, reason}. 못 읽으면 0개로 꾸미지 않는다.
-export function collectProcesses(spawn, { socket }) {
+export function collectProcesses(spawn, { socket, bigMb }) {
   const panesResult = spawn(
     "tmux",
     ["-u", "-L", socket, "list-panes", "-a", "-F", "#{pid} #{session_name} #{pane_pid}"],
@@ -160,14 +164,18 @@ export function collectProcesses(spawn, { socket }) {
   const rows = parsePs(psResult.stdout);
   // 서버 루트 행을 못 찾은 표본(빈 출력·깨진 출력)은 0개가 아니라 모름이다.
   if (!rows.some((row) => row.pid === serverPid)) return { ok: false, reason: "ps 출력에 tmux 서버 행이 없음" };
-  return { ok: true, serverPid, ...buildSnapshot(rows, serverPid, panes) };
+  return { ok: true, serverPid, ...buildSnapshot(rows, serverPid, panes, bigMb) };
 }
 
 // 넘은 기준의 집합. 주 기준(총량·한 프로세스)은 RED, 보조 기준만이면 AMBER.
-export function exceededSignals(snapshot, thresholds) {
+// sustained(오래 넘은 PID 배열)를 주면 '큰 프로세스'는 그 배열이 비지 않을 때만 넣는다(감시 경보).
+// 안 주면 지금 순간 가장 큰 프로세스만 본다(대시보드 표시).
+export function exceededSignals(snapshot, thresholds, sustained) {
   const signals = [];
   if (snapshot.rssMb >= thresholds.totalGb * 1024) signals.push("total");
-  if (snapshot.biggest[0] && snapshot.biggest[0].rssMb >= thresholds.processGb * 1024) signals.push("process");
+  if (Array.isArray(sustained)) {
+    if (sustained.length) signals.push("process");
+  } else if (snapshot.biggest[0] && snapshot.biggest[0].rssMb >= thresholds.processGb * 1024) signals.push("process");
   if (snapshot.kinds.python >= thresholds.python) signals.push("python");
   if (snapshot.kinds.node >= thresholds.node) signals.push("node");
   return signals;
@@ -193,9 +201,23 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
   const previous = previousState?.processAlert ?? null;
   if (!result?.ok) {
     // 실제 수집 실패: 열린 경보는 유지하고 정상 연속은 끊는다(정상-실패-정상이 3으로 이어져 닫히지 않게).
-    return { state: { processAlert: previous, normalCycles: 0 }, alerts: previous ? [previous] : [] };
+    // PID 시계(bigSince)도 그대로 둔다 — 한 번 못 읽었다고 9분 된 시계를 처음부터 다시 재지 않는다.
+    return { state: { processAlert: previous, normalCycles: 0, bigSince: previousState?.bigSince }, alerts: previous ? [previous] : [] };
   }
-  const signals = exceededSignals(result, thresholds);
+  // PID별 첫 초과 시각. 수집마다 지금 기준 이상인 PID로 다시 만든다(사라지거나 내려간 PID는 버려 다시 넘으면 새로 잰다).
+  const priorSince = previousState?.bigSince;
+  const bigNow = result.bigAll ?? result.biggest.filter((proc) => proc.rssMb >= thresholds.processGb * 1024);
+  const sustainMs = thresholds.processSustainMin * 60_000;
+  // 재시작 뒤 첫 성공 수집(표 없음)에서만, 복원한 열린 경보에 process 신호가 있으면 ps가 주는 프로세스 나이로 시계를 채운다.
+  // 재시작 전에 10분 넘게 넘은 PID는 반드시 10분 넘게 살아 있었다. 어리거나 나이를 못 읽은 PID는 지금부터 잰다.
+  const restoreByAge = !priorSince && previous?.signals?.includes("process");
+  const bigSince = {};
+  for (const proc of bigNow) {
+    const aged = restoreByAge && proc.ageSec != null && proc.ageSec * 1000 >= sustainMs;
+    bigSince[proc.pid] = priorSince?.[proc.pid] ?? (aged ? at - sustainMs : at);
+  }
+  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
+  const signals = exceededSignals(result, thresholds, sustained);
   let alert = null, normalCycles = 0;
   if (signals.length) {
     alert = {
@@ -211,7 +233,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     normalCycles = (previousState?.normalCycles ?? 0) + 1;
     alert = normalCycles < 3 ? previous : null;
   }
-  return { state: { processAlert: alert, normalCycles }, alerts: alert ? [alert] : [] };
+  return { state: { processAlert: alert, normalCycles, bigSince }, alerts: alert ? [alert] : [] };
 }
 
 // 대시보드용 잠깐 재사용. 요청마다 ps를 부르지 않는다.
