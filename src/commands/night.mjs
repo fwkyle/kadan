@@ -6,9 +6,10 @@ import {WorkStore} from '../work-store.mjs';
 import {
   nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock, AUTO_CHECKLIST,
 } from '../night.mjs';
+import {buildNightNote, noteLine} from '../night-note.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
@@ -63,6 +64,13 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
     if (state.on) return describeOn(state, now, missingSupers(home, entries, state.start));
     return {on: false, ...(state.pending ? {pendingEnd: state.pending.phase, note: '끝났지만 아직 요약 전입니다(감시기 다음 주기나 다음 night 명령이 마무리합니다)'} : {}),
       last: lastRun(entries, state)};
+  }
+  if (sub === 'note') {
+    // 켜져 있을 때만 받는다. 끝났지만 요약 전인 켜짐도 꺼짐으로 보고 거절한다(마무리는 on/off/감시기 몫). 역할 세션·사람 모두 쓸 수 있다.
+    if (!state.on) throw Object.assign(new Error('나이트 모드가 켜져 있을 때만 기록할 수 있습니다'), {exitCode: 2});
+    const event = buildNightNote({words: rest, flags, by, now});
+    (deps.record ?? (entry => appendLedger(entry, home)))(event);
+    return noteLine(event);
   }
   if (!['on', 'off'].includes(sub)) throw new Error(`알 수 없는 night 명령. ${USAGE}`);
 

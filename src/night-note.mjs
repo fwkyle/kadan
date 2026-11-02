@@ -1,0 +1,71 @@
+// 나이트 기록(`night-note`): 켜진 동안 대신 정한 것·보류·관문 판정·머지·시작한 일감을 한 줄씩 남긴다.
+// `night` 종류와 따로 둔다: night 사건에 phase를 더하면 nightState의 "마지막 night 사건" 계산이 꺼짐으로 읽힌다.
+// 새 권한이 아니다. 판정하지 않고 적기만 한다. 관문 판정(gate)과 실제 머지(merge)는 서로 다른 사건이다.
+export const NOTE_KINDS = ['decision', 'hold', 'gate', 'merge', 'start'];
+export const HOLD_KINDS = ['decision', 'gate', 'deploy-repo'];
+export const VERDICTS = ['pass', 'reject'];
+export const NOTE_TEXT_LIMIT = 200;
+export const DECISION_PREFIX = '[나이트 결정]';
+const USAGE = `kadan night note ${NOTE_KINDS.join('|')} "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind ${HOLD_KINDS.join('|')}] [--verdict ${VERDICTS.join('|')}]`;
+
+// 줄바꿈을 공백 하나로 접고 글자 200개에서 자른다(adopt message 규칙과 같게 `…`을 붙인다).
+export function foldNoteText(value, limit = NOTE_TEXT_LIMIT) {
+  const chars = [...String(value ?? '').replace(/\s+/g, ' ').trim()];
+  return chars.length > limit ? `${chars.slice(0, limit).join('')}…` : chars.join('');
+}
+
+const optional = (flags, name) => {
+  const v = flags[name];
+  if (v === undefined) return null;
+  if (typeof v !== 'string' || !v.trim()) throw new Error(`--${name}에 값이 필요합니다. ${USAGE}`);
+  return v.trim();
+};
+
+// 입력을 검사해 원장에 쓸 사건을 만든다. 나이트가 켜져 있는지는 부르는 쪽이 먼저 본다.
+export function buildNightNote({words, flags, by, now}) {
+  const [noteKind, ...rest] = words;
+  if (!NOTE_KINDS.includes(noteKind)) throw new Error(`종류는 ${NOTE_KINDS.join('|')} 중 하나여야 합니다. ${USAGE}`);
+  const text = foldNoteText(rest.join(' '));
+  if (!text) throw new Error(`기록할 한 줄이 필요합니다. ${USAGE}`);
+  const work = optional(flags, 'work'), pr = optional(flags, 'pr'), sha = optional(flags, 'sha'), reason = optional(flags, 'reason');
+  const holdKind = optional(flags, 'hold-kind'), verdict = optional(flags, 'verdict');
+  if (pr && !/^[^\s#]+#\d+$/.test(pr)) throw new Error(`--pr은 저장소#번호 꼴이어야 합니다(예: kadan#327). ${USAGE}`);
+  if (sha && !/^[0-9a-f]{7,40}$/i.test(sha)) throw new Error(`--sha는 커밋 해시(7~40자리 16진수)여야 합니다. ${USAGE}`);
+  if (noteKind === 'hold') {
+    if (!HOLD_KINDS.includes(holdKind)) throw new Error(`hold에는 --hold-kind ${HOLD_KINDS.join('|')}가 필요합니다. ${USAGE}`);
+  } else if (holdKind) throw new Error(`--hold-kind는 hold에만 쓸 수 있습니다. ${USAGE}`);
+  if (noteKind === 'gate') {
+    if (!VERDICTS.includes(verdict)) throw new Error(`gate에는 --verdict ${VERDICTS.join('|')}가 필요합니다. ${USAGE}`);
+  } else if (verdict) throw new Error(`--verdict는 gate에만 쓸 수 있습니다. ${USAGE}`);
+  return {
+    kind: 'night-note', noteKind, text,
+    ...(holdKind ? {holdKind} : {}), ...(verdict ? {verdict} : {}),
+    ...(work ? {work} : {}), ...(pr ? {pr} : {}), ...(sha ? {sha} : {}),
+    ...(reason ? {reason: foldNoteText(reason)} : {}),
+    by, t: new Date(now).toISOString(),
+  };
+}
+
+const LABEL = {hold: '보류', gate: '관문', merge: '머지', start: '시작'};
+// 명령이 보여 주는 한 줄. 결정은 접두 `[나이트 결정]`을 붙인다.
+export const noteLine = event => (event.noteKind === 'decision' ? `${DECISION_PREFIX} ${event.text}` : `[나이트 ${LABEL[event.noteKind]}] ${event.text}`);
+
+// 아침 요약용 집계. notes는 구간 안 night-note 사건. 같은 PR의 관문 통과·머지는 한 번으로 센다(pr가 없으면 사건마다).
+export function tallyNotes(notes) {
+  const by = kind => notes.filter(n => n.noteKind === kind);
+  const distinct = list => new Set(list.map((n, i) => n.pr || `#${i}`)).size;
+  const holds = by('hold');
+  const gates = by('gate');
+  return {
+    decisions: by('decision'), holds, starts: by('start'),
+    passes: gates.filter(n => n.verdict === 'pass'), rejects: gates.filter(n => n.verdict === 'reject'), merges: by('merge'),
+    counts: {
+      noteDecisions: by('decision').length,
+      noteHolds: Object.fromEntries(HOLD_KINDS.map(k => [k, holds.filter(n => n.holdKind === k).length])),
+      gatePass: distinct(gates.filter(n => n.verdict === 'pass')),
+      gateReject: distinct(gates.filter(n => n.verdict === 'reject')),
+      merges: distinct(by('merge')),
+      starts: by('start').length,
+    },
+  };
+}

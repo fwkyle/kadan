@@ -217,6 +217,9 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
   `settingsRevision`, `preset`, `role`, 작업자·검수자 선택값을 시스템 영역에 기록한다.
   실제 시작과 카드 발령은 같은 pickId·compareMode·settingsPreset을 남긴다.
   예약 수와 실제 시작 수는 다를 수 있다. [비교 모드](runner-settings.md#비교-모드)를 따른다.
+- `night-note`: 나이트 모드가 켜진 동안 `kadan night note`로 남기는 한 줄 기록이다. `noteKind`(`decision`·`hold`·`gate`·`merge`·`start`),
+  `text`(글자 200개 + `…`), 선택 `work`·`pr`·`sha`·`reason`, `hold`의 `holdKind`(`decision`·`gate`·`deploy-repo`), `gate`의 `verdict`(`pass`·`reject`)를 담고
+  `by`는 기록한 사람 또는 역할이다. `night` 종류와 따로 둔다: `night` 사건은 켜짐 계산의 기준이라 섞으면 안 된다. 시스템 영역에 쌓인다.
 - `start`: `role`은 시작 대상이다. pane PID와 창을 연 방법을 포함하고, `by`는
   시작시킨 사람 또는 역할이다. `--cmd`로 띄우면 명령 원문(`cmd`)과 거기서 읽은
   실행기(`harness` — 명령 첫 낱말)·모델(`model` — `--model` 값)을 함께 적는다
