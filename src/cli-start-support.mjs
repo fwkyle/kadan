@@ -15,7 +15,7 @@ import {
   tmux,
 } from "./floor-tmux.mjs";
 import { die } from "./cli-basics.mjs";
-import { windowSettingBlock } from "./window-setting.mjs";
+import { windowSettingBlock, readWindowSetting } from "./window-setting.mjs";
 
 // Claude Code는 처음 보는 폴더에서 '폴더 신뢰' 확인 창을 띄우고, 발령의 Enter가 그 창의 "No, exit"를 눌러 역할이 사라진다
 // (2026-10-23). 역할의 작업 폴더가 카단 기록 폴더(KADAN_HOME) 자신이거나 그 안이면 막는다. 안이면 그 기록 폴더 경로를, 아니면 null.
@@ -68,6 +68,17 @@ export function unpinnedWindowWarning({ env = process.env, listBinsFn } = {}) {
   if (!bins.length) return null;
   return `경고: 창 선택이 고정되지 않았다 — 지금 켜진 로티(${bins[0]}${bins.length > 1 ? ` 외 ${bins.length - 1}개` : ""})가 보이지만 이번 시작은 백그라운드로 진행한다. ` +
     `로티로 고정: kadan window set rottie --rottie-bin <절대경로> / 백그라운드로 고정: kadan window set none`;
+}
+
+// 카단 tmux pane 안에서 도는 start가 환경변수 창 값을 기계 설정과 다르게 들고 있으면 한 줄로 알린다(동작은 안 바꾼다).
+// 노드 안에서는 서버 전역에서 샌 값과 사람이 친 값을 구분할 수 없어 경고만 한다. TMUX는 "<소켓경로>,<서버pid>,<세션>" 꼴이다.
+export function inheritedWindowWarning({ env = process.env, home, socket } = {}) {
+  if (!env.TMUX || !env.KADAN_WINDOW) return null;
+  if (path.basename(String(env.TMUX).split(",")[0]) !== socket) return null;
+  let setting;
+  try { setting = readWindowSetting(home); } catch { return null; }
+  if (!setting || setting.window === env.KADAN_WINDOW) return null;
+  return `경고: 환경변수 KADAN_WINDOW=${env.KADAN_WINDOW}이 기계 설정 ${setting.window}보다 우선한다 — 의도가 아니면 unset 후 다시 시작`;
 }
 
 const ROTTIE_BIN_NAME = /(^|[\/])rottie$/i;
