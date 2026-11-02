@@ -569,12 +569,14 @@ export async function runWatch({
       waitsRead = decisionsNow !== null;
     } catch { waits = []; userTurnWaits = []; waitsRead = false; }
     const identityNow=taskIdentity(cards??[]);
+    let waitingKeys=new Set();
     if(cards&&!observationError){
       reportAlerts=assessMissingStartReports(cards,entries,workerObservations,cycleAt,startReportGraceMs,{
         states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))
       });
       // 명확히 연결된 답 대기에 걸린 실행은 정체·입력대기 판정(progress)에서만 뺀다. 화면 오류·세션 죽음 경로(stall·생존 경보)와 그 감독의 다른 실행은 그대로다.
-      const projected=identityNow.project(entries),waitingKeys=waitingCardKeys(cards,works,waits,waitsRead,card=>effectiveCardRole(card,projected,identityNow));
+      const projected=identityNow.project(entries);
+      waitingKeys=waitingCardKeys(cards,works,waits,waitsRead,card=>effectiveCardRole(card,projected,identityNow));
       if(waitingKeys.size){
         // 걸리기 전의 비정상 보고는 풀어 둔다: 답이 온 뒤에도 재개하지 않으면 새 비정상으로 다시 알린다(재알림 묶음은 이 풀림 앞뒤를 가른다).
         for(const report of latestWatchReports(entries))
@@ -621,6 +623,8 @@ export async function runWatch({
     if(!activeAI&&!observationError)for(const [role,job] of orderedAI) {
       queuedAI.delete(role);
       if(!currentAI(job))continue;
+      // 대기열에 들어간 뒤 답 대기가 생긴 progress 작업도 실행 직전에 같은 기준으로 뺀다(stall·감독 관찰은 유지).
+      if(job.candidate.source==='progress'&&waitingKeys.has(identityNow.resolve(job.candidate.taskId).key))continue;
       const {candidate}=job,seen=roles.observations.get(candidate.session);
       if(!seen?.alive||!seen.screen)continue;
       const check=candidate.source==='supervisor-health'?null:workerCheck(candidate,seen);
@@ -631,7 +635,9 @@ export async function runWatch({
       if(candidate.source==='progress'){
         // 걸러지지 않아 AI를 부르는 실행에는 그 실행에 걸린 답 대기와, 알림을 받을 상위 감독이 올린 열린 결정을 문맥으로 싣는다(거름 근거가 아니다).
         const card=(cards??[]).find(c=>c.key===taskIdentity(cards??[]).resolve(candidate.taskId).key);
-        if(card)Object.assign(input,waitFields(waits,waitsRead,card,candidate.taskId,works,role),decisionFields(decisionsNow,parents.get(role)));
+        if(card)Object.assign(input,waitFields(waits,waitsRead,card,candidate.taskId,works,role),decisionFields(decisionsNow,
+          // 실제 전달 경로(살아 있는 상위로 올림)가 고르는 수신 감독의 결정을 싣는다. 직속 감독 세션이 꺼져 있어도 같다.
+          explainAlertRoute({id:`progress:${role}:${candidate.taskId??''}`,role},routes,roles.liveSessions,superRole,parents).recipient));
       }
       if(candidate.source==='stall')input.screen=seen.screen.slice(-8000);
       else input.current=seen.screen.slice(-8000);

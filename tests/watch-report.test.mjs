@@ -494,3 +494,40 @@ test('재알림 묶음: 다른 source(stall)는 기존 규칙 그대로다',()=>
  f.r.submit(f.request().requestId,'응답장애','연결 지속 실패');
  assert.equal(f.sent.length,2);
 });
+test('보류 첫 알림: 같은 묶음으로 바뀐 판정(정체→카드 미완 입력 대기)이 와도 보류된 첫 알림은 취소되지 않고 전달된다',()=>{
+ const f=bundleFixture();
+ f.held=true;
+ f.options.send=(role,message)=>{
+  if(f.held)throw Object.assign(new Error('입력 중'),{code:'KADAN_PANE_INPUT_PENDING',delivery:'not-sent'});
+  f.sent.push({role,message});
+ };
+ f.r=new WatchReports(f.options);
+ assert.equal(f.progress('정체').notify,true);
+ const idle=f.progress('입력대기');
+ assert.equal(idle.idleWithoutAsk,true);assert.equal(idle.notify,false);
+ assert.equal(f.sent.length,0);
+ f.held=false;
+ f.r.retryHeld(f.rows(),parents);
+ assert.equal(f.sent.length,1,'발송 0건이 되면 안 된다');
+ assert.match(f.sent[0].message,/작업 정체 확인 필요/);
+});
+test('보류 알림 보호는 유지: 정상으로 바뀌면 취소하고, 다른 묶음의 새 알림이 대체하면 최신만 전달한다',()=>{
+ const f=bundleFixture();
+ f.held=true;
+ f.options.send=(role,message)=>{
+  if(f.held)throw Object.assign(new Error('입력 중'),{code:'KADAN_PANE_INPUT_PENDING',delivery:'not-sent'});
+  f.sent.push({role,message});
+ };
+ f.r=new WatchReports(f.options);
+ f.progress('정체');f.progress('진행중','정상 회복');
+ f.held=false;f.r.retryHeld(f.rows(),parents);
+ assert.equal(f.sent.length,0);
+ const g=bundleFixture();g.held=true;
+ g.options.send=f.options.send.bind(null);
+ g.options.send=(role,message)=>{if(g.held)throw Object.assign(new Error('입력 중'),{code:'KADAN_PANE_INPUT_PENDING',delivery:'not-sent'});g.sent.push({role,message});};
+ g.r=new WatchReports(g.options);
+ g.progress('정체','OLD_RESULT');g.progress('응답장애','NEW_RESULT');
+ g.held=false;g.r.retryHeld(g.rows(),parents);
+ assert.equal(g.sent.length,1);
+ assert.match(g.sent[0].message,/NEW_RESULT/);
+});

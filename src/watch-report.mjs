@@ -222,7 +222,8 @@ export class WatchReports {
         // 회복 뒤 재발한 새 알림이 옛 보류 알림을 대체한다. 같은 문제의 notify:false 재확인은 제외한다.
         const latestNotification=report&&fresh.findLast(e=>e.kind==='watch-ai-report'
           &&e.accepted&&e.notify&&e.key===report.key);
-        const valid=request&&current&&current.verdict===report.verdict&&current.level===report.level
+        // 같은 묶음(bundleOf)으로 바뀐 판정은 보류 알림을 대체하지 않으므로 취소하지 않는다. 정상 대기로 바뀌었거나 새 알림이 대체하면 취소한다.
+        const valid=request&&current&&current.level===report.level
           &&latestNotification?.requestId===report.requestId
           &&bundleOf(current)===bundleOf(report)
           &&currentRequest(request,this.readCards(),fresh,parents,this.readWorks());
