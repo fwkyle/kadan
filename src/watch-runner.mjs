@@ -215,7 +215,7 @@ export async function runWatch({
   let supervisorStates = new Map();
   let queuedStates = new Map();
   let idleStopStates = new Map();
-  // 일시정지 중 작업 감지: 지난 순회 상태와, 이미 경보를 낸 hold(카드@hold 진입 시각). 메모리에만 둔다.
+  // 일시정지 중 작업 감지: 지난 순회 상태와, 이미 경보를 낸 hold(카드@역할@hold 진입 시각). 메모리에만 둔다.
   let holdWorkingStates = new Map();
   const holdWorkingAlerted = new Set();
   const pendingCompletions = new Map();

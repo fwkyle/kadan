@@ -14,6 +14,8 @@ export const HOLD_WORKING_CYCLES = 2;
 const at = value => { const t = Date.parse(value); return Number.isFinite(t) ? t : 0; };
 
 // 역할별로 '배정된 미완료 실행 카드가 모두 hold'인 역할만 고른다. 값은 가장 최근에 hold로 들어간 카드다.
+// holdKey는 `카드키@역할@hold진입시각`이다. 배정 역할이 바뀌면 다른 hold라 옛 경보는 닫히고 새 역할은 처음부터 센다.
+// 역할 없는 옛 형식(`카드키@시각`)은 어떤 holdKey와도 같지 않아 복원돼도 이어 붙지 않고 첫 순회에 닫힌다.
 export function holdOnlyRoles(cards, supervisors = new Set()) {
   const open = new Map();
   for (const card of cards ?? []) {
@@ -29,7 +31,7 @@ export function holdOnlyRoles(cards, supervisors = new Set()) {
       const holdAt = at(listFactsOf(card).lastHoldEntry?.at ?? card.at);
       if (!newest || holdAt > newest.holdAt) newest = {card, holdAt};
     }
-    roles.set(role, {cardKey: newest.card.key, holdAt: newest.holdAt, holdKey: `${newest.card.key}@${newest.holdAt}`});
+    roles.set(role, {cardKey: newest.card.key, holdAt: newest.holdAt, holdKey: `${newest.card.key}@${role}@${newest.holdAt}`});
   }
   return roles;
 }

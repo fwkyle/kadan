@@ -72,19 +72,20 @@ test('H3c: floor가 없거나 hold가 아니거나 관리 카드면 화면을 �
 // ---- 감시기: 일시정지 중 작업 감지 ----
 const epoch=Date.parse('2026-09-09T00:00:00Z');
 const stamp=minute=>new Date(epoch+minute*60_000).toISOString();
-const parents=new Map([['hvw','hvboss'],['hvboss','hvtop'],['hvtop','@user']]);
+const parents=new Map([['hvw','hvboss'],['hvw2','hvboss'],['hvboss','hvtop'],['hvtop','@user']]);
 const starts=['hvw','hvboss','hvtop'].map((role,i)=>({kind:'start',role,session:'kadan-'+role,panePid:i+1,t:stamp(0)}));
-const holdCard=(holdAtMin,status='hold')=>({id:'c1',key:'r/c1',role:'hvw',status,workType:'execution',at:stamp(holdAtMin),
+const holdCard=(holdAtMin,status='hold',role='hvw')=>({id:'c1',key:'r/c1',role,status,workType:'execution',at:stamp(holdAtMin),
  listFacts:{lastHoldEntry:status==='hold'?{at:stamp(holdAtMin)}:null}});
 
-async function simulate({until=14,from=0,records=[...starts],cardsAt,screenAt,isHeld=()=>false}) {
+const startOf=(role,pid)=>({kind:'start',role,session:'kadan-'+role,panePid:pid,t:stamp(0)});
+async function simulate({until=14,from=0,records=[...starts],roster=starts,cardsAt,screenAt,isHeld=()=>false}) {
  const alerts=[],controller=new AbortController();
  let minute=from;
  const holdTracker={beginCycle(){},endCycle(){},isHeld,alerts:()=>[],forced:()=>false,held(){},heldIfGuard(){},delivered(){}};
  await runWatch({signal:controller.signal,intervalMs:60_000,stallN:2,stallAfterMs:300_000,
   parents,routes:new Map(),superRole:'hvtop',judgeCmd:'fake',now:()=>epoch+minute*60_000,holdTracker,
-  floor:{list:()=>starts.map(s=>({session:s.session,pid:s.panePid})),
-   read:session=>session==='kadan-hvw'?screenAt(minute):'정당한 대기'},
+  floor:{list:()=>roster.map(s=>({session:s.session,pid:s.panePid})),
+   read:session=>session==='kadan-hvw'||session==='kadan-hvw2'?screenAt(minute,session):'정당한 대기'},
   readEntries:()=>records,readCards:()=>cardsAt(minute),readWorks:()=>[],readDecisions:()=>[],
   sendAlert:(recipient,message)=>{if(/일시정지했는데 계속 일하는 중/.test(message))alerts.push({minute,recipient,message});},
   record:e=>records.push({...e,t:stamp(minute)}),print:()=>{},spawn:()=>({status:0,stdout:''}),
@@ -139,7 +140,7 @@ test('H11(F1): 4분 첫 경보 → 같은 원장으로 7분에 감시기 재시�
  const mine=records.filter(r=>r.kind==='alert'&&r.alertKind==='일시정지중작업');
  assert.equal(mine.filter(r=>r.resolved).length,0,'열린 경보가 해소되지 않는다');
  assert.equal(new Set(mine.map(r=>r.id)).size,1,'경보 id는 카드와 hold 진입 시각으로 같다');
- assert.match(mine[0].id,/^hold-working:r\/c1@/);
+ assert.match(mine[0].id,/^hold-working:r\/c1@hvw@/,'경보 id에 카드·배정 역할·hold 진입 시각이 들어간다');
 });
 test('H12(F2): 4분 첫 경보 → 7분 화면 읽기 1회 실패 → 8분 회복 → 해소 0, 두 번째 경보 0',async()=>{
  const screenAt=minute=>{if(minute===7)throw new Error('read 실패');return movingScreen(minute);};
@@ -172,4 +173,41 @@ test('H10: 카드 이력(history)에서 hold로 들어간 시각을 읽고, 이�
  }
  assert.deepEqual(fired,[0,0,1,1],'처음 본 순회는 근거가 아니고, 두 번째·세 번째 순회에서 streak 2가 된다. 같은 id라 감시기가 한 번만 알린다');
  assert.equal(alerted.size,1);
+});
+
+// ---- F4: 배정 역할이 바뀌면 다른 hold다 ----
+const alertsOf=records=>records.filter(r=>r.kind==='alert'&&r.alertKind==='일시정지중작업');
+const roster2=[...starts,startOf('hvw2',9)];
+test('H14(F4): 4분 첫 경보 → 7분에 같은 hold 진입 그대로 담당만 hvw2로 변경 → 옛 경보 해소 1, 새 역할은 유예 없이 처음부터 2순회 다시 센다',async()=>{
+ const cardsAt=minute=>[holdCard(0,'hold',minute>=7?'hvw2':'hvw')];
+ const {alerts,records}=await simulate({until:14,roster:roster2,records:[...roster2],cardsAt,screenAt:movingScreen});
+ const mine=alertsOf(records);
+ assert.equal(mine.filter(r=>r.resolved).length,1,'옛 역할의 경보가 닫힌다');
+ assert.match(mine.find(r=>r.resolved).id,/^hold-working:r\/c1@hvw@/);
+ const fresh=mine.filter(r=>!r.resolved&&/@hvw2@/.test(r.id));
+ assert.equal(fresh.length,1,'새 역할 id로 새 경보가 한 번');
+ assert.deepEqual(alerts.map(a=>a.minute),[4,9],'새 역할은 7분에 처음 보고(근거 아님) 8·9분 움직임 2번을 봐야 울린다');
+});
+test('H15(F4): 담당이 바뀐 상태로 감시기를 재시작해도 옛 역할의 경보는 첫 순회에 닫히고 이어 붙지 않는다',async()=>{
+ const records=[...roster2];
+ await simulate({until:5,roster:roster2,records,cardsAt:()=>[holdCard(0)],screenAt:movingScreen});
+ const second=await simulate({from:7,until:8,roster:roster2,records,cardsAt:()=>[holdCard(0,'hold','hvw2')],screenAt:()=>IDLE});
+ assert.equal(second.alerts.length,0,'새 역할 화면이 idle이면 경보가 없다');
+ assert.equal(alertsOf(records).filter(r=>r.resolved).length,1,'옛 역할 경보가 닫힌다');
+});
+test('H16(F4): 역할 없는 옛 형식 id가 원장에 열려 있으면 이어 붙이지 않고, 그 hold를 처음 보는 것처럼 다시 센다',async()=>{
+ const old={kind:'alert',alertKind:'일시정지중작업',id:'hold-working:r/c1@'+epoch,role:'hvw',level:'AMBER',t:stamp(4)};
+ const records=[...starts,old];
+ const {alerts,records:out}=await simulate({from:7,until:14,records,cardsAt:()=>[holdCard(0)],screenAt:movingScreen});
+ assert.equal(out.filter(r=>r.resolved&&r.id===old.id).length,1,'옛 형식 경보는 닫힌다');
+ assert.deepEqual(alerts.map(a=>a.minute),[9],'처음 보는 hold처럼 7분은 근거가 아니고 8·9분 2순회를 다시 센다');
+});
+test('H17(F4): holdOnlyRoles의 holdKey에 역할이 들어가고, 역할만 바뀐 같은 hold는 다른 키다',()=>{
+ const a=holdOnlyRoles([holdCard(0)]).get('hvw').holdKey;
+ const b=holdOnlyRoles([holdCard(0,'hold','hvw2')]).get('hvw2').holdKey;
+ assert.equal(a,`r/c1@hvw@${epoch}`);
+ assert.notEqual(a,b);
+ const out=assessHoldWorking(new Map(),new Map([['kadan-hvw2',{role:'hvw2',alive:true,screen:IDLE}]]),
+  [holdCard(0,'hold','hvw2')],{now:epoch+600_000,alerted:new Set([a])});
+ assert.equal(out.alerts.length,0,'옛 역할의 열린 경보를 새 역할이 물려받지 않는다');
 });
