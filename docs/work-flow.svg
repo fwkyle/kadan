@@ -79,7 +79,7 @@
   <rect class="ai" x="930" y="110" width="120" height="60" rx="10"/>
   <text class="num" x="942" y="128">7</text>
   <text class="name" x="990" y="148" text-anchor="middle">머지 · 재시작</text>
-  <text class="who" x="990" y="196" text-anchor="middle">일반감독</text>
+  <text class="who" x="990" y="196" text-anchor="middle">감독(사용자 승인 뒤)</text>
   <text class="note" x="990" y="215" text-anchor="middle">승인 뒤 합류,</text>
   <text class="note" x="990" y="232" text-anchor="middle">프로그램 다시 띄움</text>
 
