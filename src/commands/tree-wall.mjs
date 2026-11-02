@@ -22,7 +22,7 @@ import { buildTree, renderTree } from "../cli-tree.mjs";
 import { collectCardFiles } from "../cli-guarded-send.mjs";
 import { centerSummary } from "../center-summary.mjs";
 import { executionKindByRole } from "../role-execution-kind.mjs";
-import { roleLineage } from "../role-lineage.mjs";
+import { buildLineage, lineageFor } from "../role-lineage.mjs";
 import { nextTimeBoundary, wallCache } from "../wall-snapshot-cache.mjs";
 import {dashboardDataVersions} from '../dashboard-data-versions.mjs';
 import {createTreeInputCache} from '../dashboard-tree-inputs.mjs';
@@ -156,10 +156,12 @@ function buildWallData(data) {
     // 대기 출력 꼬리(out/*.wait-*.txt)는 원장 밖 파일이라 재사용한 카드 상태에 낡은 값이 남는다. 역할 목록은 매번 새 tree의 것을 쓴다.
     // 역할마다 지금 배정된 미완료 실행의 종류를 붙인다(카드·업무 목록을 한 번 훑는다. 원장은 다시 읽지 않는다).
     const kinds = executionKindByRole(cached.cards, registeredWorks);
-    // 대체한 이전 세대 식별자: tree가 이미 읽은 사건 배열을 한 번 훑는다(원장 추가 읽기 없음). 사건이 바뀔 때만 다시 계산한다.
-    const lineage = wallCache.memo("lineage", version && String(inputs.revision), () => roleLineage(inputs.entries));
-    center = { ...cached, roles: [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()]
-      .map(r => ({ ...r, executionKind: kinds.get(r.role) ?? null, supersedes: lineage.get(r.role) ?? [] })) };
+    // 대체한 이전 세대 식별자: tree가 이미 읽은 사건 배열을 한 번 훑어 사슬을 만든다(원장 추가 읽기 없음). 사건이 바뀔 때만 다시 만든다.
+    // 현재 살아 있는 세대의 값 빼기는 생존 상태에 따라 달라지므로 매번 싸게 다시 한다.
+    const roles = [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()];
+    const built = wallCache.memo("lineage", version && String(inputs.revision), () => buildLineage(inputs.entries));
+    const lineage = lineageFor(built, roles.filter(r => r.life?.state === "alive"));
+    center = { ...cached, roles: roles.map(r => ({ ...r, executionKind: kinds.get(r.role) ?? null, supersedes: lineage.get(r.role) ?? [] })) };
     if(workError)throw workError;
     if(!listOnly)center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
