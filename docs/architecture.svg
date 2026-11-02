@@ -112,14 +112,14 @@
 
   <!-- 일반감독 ↔ 작업자 / 검수자 -->
   <path class="arrow" d="M320 386 V470"/>
-  <text class="lbl" x="312" y="432" text-anchor="end">발령</text>
+  <text class="lbl" x="312" y="432" text-anchor="end">발령·답</text>
   <path class="arrow" d="M390 470 V386"/>
-  <text class="lbl" x="398" y="426" text-anchor="start">완료 보고</text>
+  <text class="lbl" x="398" y="426" text-anchor="start">완료 보고·질문</text>
   <text class="lbl" x="398" y="443" text-anchor="start">(DONE 마커)</text>
   <path class="arrow" d="M610 386 V470"/>
-  <text class="lbl" x="602" y="432" text-anchor="end">발령</text>
+  <text class="lbl" x="602" y="432" text-anchor="end">발령·답</text>
   <path class="arrow" d="M680 470 V386"/>
-  <text class="lbl" x="688" y="426" text-anchor="start">완료 보고</text>
+  <text class="lbl" x="688" y="426" text-anchor="start">완료 보고·질문</text>
   <text class="lbl" x="688" y="443" text-anchor="start">(DONE 마커)</text>
 
   <!-- 감시기 경보 -->
