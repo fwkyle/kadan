@@ -96,7 +96,7 @@
   <path class="arrow" d="M300 140 H330"/>
   <path class="arrow" d="M450 140 H480"/>
   <path class="arrow" d="M600 140 H630"/>
-  <text class="lbl" x="615" y="164" text-anchor="middle">합격</text>
+  <text class="lbl" x="615" y="100" text-anchor="middle">합격</text>
   <path class="arrow" d="M750 140 H780"/>
   <path class="arrow" d="M900 140 H930"/>
   <path class="arrow" d="M1050 140 H1080"/>

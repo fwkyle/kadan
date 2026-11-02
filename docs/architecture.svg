@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 800" width="1300" height="800" role="img" aria-labelledby="t d">
   <title id="t">카단 구조: 누가 누구와 무엇을 주고받나</title>
-  <desc id="d">사용자, 비서와 디스코드, 슈퍼감독, 일반감독, 작업자와 검수자가 발령·보고·질문·결정·우편을 주고받고, 감시기가 경보를 보내며, 모든 사건은 원장에 덧붙고, 역할은 tmux 바닥에서 산다.</desc>
+  <desc id="d">주된 길은 사용자와 저장소별 슈퍼감독의 직접 대화다. 대시보드로 상태를 보고 슈퍼감독에게 묻는다. 비서와 디스코드는 보조 창구이고 디스코드 저장소 포럼 글은 그 저장소 슈퍼감독에게 간다. 슈퍼감독은 일반감독에게, 일반감독은 작업자와 검수자에게 발령하고 보고를 받으며, 감독은 시니어에게 의견을 한 번 묻는다. 감시기가 경보를 보내고, 모든 사건은 원장에 덧붙고, 역할은 tmux 바닥에서 산다. 사용자는 kadan attach로 어느 역할이든 직접 들어가 입력할 수 있다.</desc>
   <style>
     text { font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; word-break: keep-all; fill: #0f172a; }
     .bg { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
@@ -9,14 +9,21 @@
     .note { font-size: 12.5px; fill: #334155; }
     .lbl { font-size: 13px; font-weight: 600; fill: #0f172a; paint-order: stroke; stroke: #f8fafc; stroke-width: 5px; stroke-linejoin: round; }
     .box { fill: #ffffff; stroke: #334155; stroke-width: 1.6; }
-    .human { fill: #fef3c7; stroke: #b45309; stroke-width: 1.6; }
+    .human { fill: #fef3c7; stroke: #b45309; stroke-width: 2.4; }
     .ai { fill: #e0f2fe; stroke: #0369a1; stroke-width: 1.6; }
+    .main-box { fill: #e0f2fe; stroke: #0369a1; stroke-width: 3; }
+    .back { fill: #f0f9ff; stroke: #7dd3fc; stroke-width: 1.4; }
+    .aux { fill: #f1f5f9; stroke: #0369a1; stroke-width: 1.3; stroke-dasharray: 5 3; }
+    .senior { fill: #fdf4ff; stroke: #a21caf; stroke-width: 1.6; }
     .watch { fill: #fee2e2; stroke: #b91c1c; stroke-width: 1.6; }
     .inner { fill: #ffffff; stroke: #b91c1c; stroke-width: 1.2; }
     .ledger { fill: #dcfce7; stroke: #15803d; stroke-width: 1.6; }
     .floor { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.6; stroke-dasharray: 7 5; }
     .win { fill: #ede9fe; stroke: #6d28d9; stroke-width: 1.6; }
     .arrow { fill: none; stroke: #475569; stroke-width: 1.8; marker-end: url(#head); }
+    .main { fill: none; stroke: #0369a1; stroke-width: 4.5; marker-end: url(#headBlue); }
+    .ask { fill: none; stroke: #a21caf; stroke-width: 1.6; stroke-dasharray: 6 4; marker-end: url(#headPurple); }
+    .attach { fill: none; stroke: #b45309; stroke-width: 2.6; stroke-dasharray: 9 5; marker-end: url(#headAmber); }
     .alert { fill: none; stroke: #b91c1c; stroke-width: 1.8; marker-end: url(#headRed); }
     .rec { fill: none; stroke: #15803d; stroke-width: 1.6; stroke-dasharray: 5 4; marker-end: url(#headGreen); }
     .read { fill: none; stroke: #b91c1c; stroke-width: 1.4; stroke-dasharray: 5 4; marker-end: url(#headRed); }
@@ -25,119 +32,161 @@
     <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#475569"/></marker>
     <marker id="headRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#b91c1c"/></marker>
     <marker id="headGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#15803d"/></marker>
+    <marker id="headPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a21caf"/></marker>
+    <marker id="headAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#b45309"/></marker>
+    <marker id="headBlue" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0369a1"/></marker>
   </defs>
 
-  <rect class="bg" x="1" y="1" width="1198" height="718" rx="14"/>
+  <rect class="bg" x="1" y="1" width="1298" height="798" rx="14"/>
   <text class="title" x="30" y="38">카단 구조 — 누가 누구와 무엇을 주고받나</text>
 
   <!-- 사용자 -->
-  <rect class="human" x="300" y="64" width="400" height="56" rx="10"/>
-  <text class="name" x="500" y="88" text-anchor="middle">사용자</text>
-  <text class="note" x="500" y="108" text-anchor="middle">승인과 결정은 사람만 한다</text>
+  <rect class="human" x="400" y="64" width="400" height="56" rx="10"/>
+  <text class="name" x="600" y="88" text-anchor="middle">사용자</text>
+  <text class="note" x="600" y="108" text-anchor="middle">승인과 결정은 사람만 한다</text>
 
-  <!-- 비서 · 디스코드 -->
-  <rect class="ai" x="30" y="150" width="205" height="76" rx="10"/>
-  <text class="name" x="132" y="176" text-anchor="middle">비서 · 디스코드</text>
-  <text class="note" x="132" y="196" text-anchor="middle">사용자 요청을 전하고</text>
-  <text class="note" x="132" y="213" text-anchor="middle">확인 결과를 돌려준다</text>
+  <!-- 대시보드 -->
+  <rect class="box" x="30" y="64" width="200" height="56" rx="10"/>
+  <text class="name" x="130" y="88" text-anchor="middle">대시보드</text>
+  <text class="note" x="130" y="108" text-anchor="middle">사람이 상태를 보는 화면</text>
 
-  <!-- 슈퍼감독 -->
-  <rect class="ai" x="300" y="190" width="400" height="56" rx="10"/>
-  <text class="name" x="500" y="214" text-anchor="middle">슈퍼감독</text>
-  <text class="note" x="500" y="234" text-anchor="middle">판 사이 조정 · 사용자에게 결정 요청</text>
+  <!-- 슈퍼감독 (저장소마다 하나씩: 뒤에 겹친 상자) -->
+  <rect class="back" x="416" y="184" width="400" height="64" rx="10"/>
+  <rect class="back" x="408" y="192" width="400" height="64" rx="10"/>
+  <rect class="main-box" x="400" y="200" width="400" height="64" rx="10"/>
+  <text class="name" x="600" y="226" text-anchor="middle">슈퍼감독 (저장소마다 하나씩)</text>
+  <text class="note" x="600" y="248" text-anchor="middle">판 사이 조정 · 사용자에게 결정 요청</text>
+
+  <!-- 비서 · 디스코드 (보조 창구) -->
+  <rect class="aux" x="30" y="300" width="200" height="100" rx="10"/>
+  <text class="name" x="130" y="324" text-anchor="middle">비서 · 디스코드</text>
+  <text class="note" x="130" y="344" text-anchor="middle">보조 창구</text>
+  <text class="note" x="130" y="362" text-anchor="middle">#비서 글은 비서가 받고</text>
+  <text class="note" x="130" y="379" text-anchor="middle">확인 결과를 돌려준다</text>
 
   <!-- 일반감독 -->
-  <rect class="ai" x="300" y="330" width="400" height="56" rx="10"/>
-  <text class="name" x="500" y="354" text-anchor="middle">일반감독</text>
-  <text class="note" x="500" y="374" text-anchor="middle">카드 작성 · 발령 · 결과 검수</text>
+  <rect class="ai" x="400" y="346" width="400" height="56" rx="10"/>
+  <text class="name" x="600" y="370" text-anchor="middle">일반감독</text>
+  <text class="note" x="600" y="390" text-anchor="middle">카드 작성 · 발령 · 결과 검수</text>
 
   <!-- 작업자 / 검수자 -->
-  <rect class="ai" x="250" y="470" width="200" height="56" rx="10"/>
-  <text class="name" x="350" y="494" text-anchor="middle">작업자</text>
-  <text class="note" x="350" y="514" text-anchor="middle">구현</text>
-  <rect class="ai" x="550" y="470" width="200" height="56" rx="10"/>
-  <text class="name" x="650" y="494" text-anchor="middle">검수자</text>
-  <text class="note" x="650" y="514" text-anchor="middle">독립 검증</text>
+  <rect class="ai" x="350" y="486" width="200" height="56" rx="10"/>
+  <text class="name" x="450" y="510" text-anchor="middle">작업자</text>
+  <text class="note" x="450" y="530" text-anchor="middle">구현</text>
+  <rect class="ai" x="650" y="486" width="200" height="56" rx="10"/>
+  <text class="name" x="750" y="510" text-anchor="middle">검수자</text>
+  <text class="note" x="750" y="530" text-anchor="middle">독립 검증</text>
+
+  <!-- 시니어 -->
+  <rect class="senior" x="30" y="470" width="200" height="86" rx="10"/>
+  <text class="name" x="130" y="494" text-anchor="middle">시니어</text>
+  <text class="note" x="130" y="513" text-anchor="middle">등록된 모델에 한 번 묻고 끝</text>
+  <text class="note" x="130" y="530" text-anchor="middle">의견은 기록일 뿐 결정 아님</text>
+  <text class="note" x="130" y="547" text-anchor="middle">일반감독 · 슈퍼감독이 묻는다</text>
 
   <!-- 감시기 -->
-  <rect class="watch" x="830" y="130" width="330" height="140" rx="10"/>
-  <text class="name" x="995" y="156" text-anchor="middle">감시기 (kadan watch)</text>
-  <text class="note" x="995" y="175" text-anchor="middle">화면과 원장을 읽고 이상을 알린다</text>
-  <rect class="inner" x="850" y="192" width="135" height="58" rx="8"/>
-  <text class="name" x="917" y="216" text-anchor="middle">감시sh</text>
-  <text class="note" x="917" y="236" text-anchor="middle">AI 없이 결정식</text>
-  <rect class="inner" x="1005" y="192" width="135" height="58" rx="8"/>
-  <text class="name" x="1072" y="216" text-anchor="middle">감시AI</text>
-  <text class="note" x="1072" y="236" text-anchor="middle">작업·감독 점검</text>
+  <rect class="watch" x="930" y="130" width="330" height="140" rx="10"/>
+  <text class="name" x="1095" y="156" text-anchor="middle">감시기 (kadan watch)</text>
+  <text class="note" x="1095" y="175" text-anchor="middle">화면과 원장을 읽고 이상을 알린다</text>
+  <rect class="inner" x="950" y="192" width="135" height="58" rx="8"/>
+  <text class="name" x="1017" y="216" text-anchor="middle">감시sh</text>
+  <text class="note" x="1017" y="236" text-anchor="middle">AI 없이 결정식</text>
+  <rect class="inner" x="1105" y="192" width="135" height="58" rx="8"/>
+  <text class="name" x="1172" y="216" text-anchor="middle">감시AI</text>
+  <text class="note" x="1172" y="236" text-anchor="middle">작업·감독 점검</text>
 
   <!-- 원장 -->
-  <rect class="ledger" x="850" y="400" width="260" height="78" rx="10"/>
-  <text class="name" x="980" y="428" text-anchor="middle">원장</text>
-  <text class="note" x="980" y="448" text-anchor="middle">모든 사건을 뒤에만 덧붙인다</text>
-  <text class="note" x="980" y="465" text-anchor="middle">고치거나 지우지 않는다</text>
+  <rect class="ledger" x="950" y="420" width="260" height="78" rx="10"/>
+  <text class="name" x="1080" y="448" text-anchor="middle">원장</text>
+  <text class="note" x="1080" y="468" text-anchor="middle">모든 사건을 뒤에만 덧붙인다</text>
+  <text class="note" x="1080" y="485" text-anchor="middle">고치거나 지우지 않는다</text>
 
   <!-- 바닥 / 로티 창 -->
-  <rect class="floor" x="40" y="580" width="1120" height="110" rx="12"/>
-  <text class="name" x="62" y="610">바닥: tmux</text>
-  <text class="note" x="62" y="632">모든 역할은 kadan-&lt;역할&gt; 이름의 세션 하나씩으로 산다.</text>
-  <text class="note" x="62" y="651">kadan attach로 사람이 직접 들어가 입력할 수 있다.</text>
-  <text class="note" x="62" y="670">시험 바닥 herdr는 명시해서 고를 때만 쓴다.</text>
-  <rect class="win" x="560" y="598" width="320" height="76" rx="10"/>
-  <text class="name" x="720" y="624" text-anchor="middle">로티 창</text>
-  <text class="note" x="720" y="644" text-anchor="middle">tmux 세션을 탭으로 붙여 보여 주는 화면</text>
-  <text class="note" x="720" y="661" text-anchor="middle">바닥이 아니라 창이다</text>
+  <rect class="floor" x="40" y="650" width="1220" height="110" rx="12"/>
+  <text class="name" x="62" y="680">바닥: tmux</text>
+  <text class="note" x="62" y="702">모든 역할은 kadan-&lt;역할&gt; 이름의 세션 하나씩으로 산다.</text>
+  <text class="note" x="62" y="721">kadan attach로 사람이 직접 들어가 입력할 수 있다.</text>
+  <text class="note" x="62" y="740">시험 바닥 herdr는 명시해서 고를 때만 쓴다.</text>
+  <rect class="win" x="700" y="668" width="320" height="76" rx="10"/>
+  <text class="name" x="860" y="694" text-anchor="middle">로티 창</text>
+  <text class="note" x="860" y="714" text-anchor="middle">tmux 세션을 탭으로 붙여 보여 주는 화면</text>
+  <text class="note" x="860" y="731" text-anchor="middle">바닥이 아니라 창이다</text>
+
+  <!-- 주된 길: 사용자 ↔ 슈퍼감독 -->
+  <path class="main" d="M480 120 V200"/>
+  <text class="lbl" x="468" y="150" text-anchor="end">결정 답 · 질문</text>
+  <path class="main" d="M720 200 V120"/>
+  <text class="lbl" x="732" y="146" text-anchor="start">결정 요청</text>
+  <text class="lbl" x="732" y="163" text-anchor="start">(머지 승인 포함)</text>
+  <text class="name" x="600" y="152" text-anchor="middle" style="fill:#0369a1">주된 길</text>
+  <text class="note" x="600" y="171" text-anchor="middle">사용자 ↔ 저장소별 슈퍼감독</text>
+
+  <!-- 사용자 ↔ 대시보드 -->
+  <path class="arrow" d="M400 82 H230" style="marker-start:url(#head)"/>
+  <text class="lbl" x="315" y="74" text-anchor="middle">상태 보기 · 내 결정 답</text>
+
+  <!-- 대시보드 → 슈퍼감독 -->
+  <path class="arrow" d="M130 120 V210 H400"/>
+  <text class="lbl" x="138" y="170" text-anchor="start">슈퍼감독에게 묻기</text>
 
   <!-- 사용자 ↔ 비서 -->
-  <path class="arrow" d="M300 92 H132 V150" style="marker-start:url(#head)"/>
-  <text class="lbl" x="216" y="85" text-anchor="middle">요청 · 확인 결과</text>
+  <path class="arrow" d="M400 106 H290 V312 H230" style="marker-start:url(#head)"/>
+  <text class="lbl" x="282" y="290" text-anchor="end">요청 · 확인 결과</text>
 
   <!-- 비서 → 슈퍼감독 -->
-  <path class="arrow" d="M235 188 H268 V218 H300"/>
-  <text class="lbl" x="268" y="172" text-anchor="middle">맥락 우편</text>
+  <path class="arrow" d="M230 352 H330 V240 H400"/>
+  <text class="lbl" x="280" y="346" text-anchor="middle">맥락 우편</text>
 
-  <!-- 사용자 ↔ 슈퍼감독 -->
-  <path class="arrow" d="M380 120 V190"/>
-  <text class="lbl" x="372" y="150" text-anchor="end">결정 답 · 질문</text>
-  <path class="arrow" d="M620 190 V120"/>
-  <text class="lbl" x="628" y="146" text-anchor="start">결정 요청</text>
-  <text class="lbl" x="628" y="163" text-anchor="start">(머지 승인 포함)</text>
+  <!-- 디스코드 저장소 포럼 글 → 그 저장소 슈퍼감독 -->
+  <path class="arrow" d="M230 384 H360 V256 H400"/>
+  <text class="lbl" x="295" y="378" text-anchor="middle">저장소 포럼 글</text>
 
   <!-- 슈퍼감독 ↔ 일반감독 -->
-  <path class="arrow" d="M380 246 V330"/>
-  <text class="lbl" x="372" y="283" text-anchor="end">맥락 우편</text>
-  <text class="lbl" x="372" y="300" text-anchor="end">(담당 연결)</text>
-  <path class="arrow" d="M620 330 V246"/>
-  <text class="lbl" x="628" y="283" text-anchor="start">질문</text>
-  <text class="lbl" x="628" y="300" text-anchor="start">(새 감독 필요 요청)</text>
+  <path class="arrow" d="M480 264 V346"/>
+  <text class="lbl" x="472" y="300" text-anchor="end">맥락 우편</text>
+  <text class="lbl" x="472" y="317" text-anchor="end">(담당 연결)</text>
+  <path class="arrow" d="M720 346 V264"/>
+  <text class="lbl" x="728" y="300" text-anchor="start">질문</text>
+  <text class="lbl" x="728" y="317" text-anchor="start">(새 감독 필요 요청)</text>
 
   <!-- 일반감독 ↔ 작업자 / 검수자 -->
-  <path class="arrow" d="M320 386 V470"/>
-  <text class="lbl" x="312" y="432" text-anchor="end">발령·답</text>
-  <path class="arrow" d="M390 470 V386"/>
-  <text class="lbl" x="398" y="426" text-anchor="start">완료 보고·질문</text>
-  <text class="lbl" x="398" y="443" text-anchor="start">(DONE 마커)</text>
-  <path class="arrow" d="M610 386 V470"/>
-  <text class="lbl" x="602" y="432" text-anchor="end">발령·답</text>
-  <path class="arrow" d="M680 470 V386"/>
-  <text class="lbl" x="688" y="426" text-anchor="start">완료 보고·질문</text>
-  <text class="lbl" x="688" y="443" text-anchor="start">(DONE 마커)</text>
+  <path class="arrow" d="M420 402 V486"/>
+  <text class="lbl" x="412" y="448" text-anchor="end">발령·답</text>
+  <path class="arrow" d="M490 486 V402"/>
+  <text class="lbl" x="498" y="442" text-anchor="start">완료 보고·질문</text>
+  <text class="lbl" x="498" y="459" text-anchor="start">(DONE 마커)</text>
+  <path class="arrow" d="M710 402 V486"/>
+  <text class="lbl" x="702" y="448" text-anchor="end">발령·답</text>
+  <path class="arrow" d="M780 486 V402"/>
+  <text class="lbl" x="788" y="442" text-anchor="start">완료 보고·질문</text>
+  <text class="lbl" x="788" y="459" text-anchor="start">(DONE 마커)</text>
+
+  <!-- 일반감독 → 시니어 (슈퍼감독도 묻는다) -->
+  <path class="ask" d="M400 394 H330 V513 H230"/>
+  <text class="lbl" x="280" y="506" text-anchor="middle" style="fill:#a21caf">의견 묻기</text>
+
+  <!-- 사람 직접 개입: kadan attach -->
+  <path class="attach" d="M440 64 V52 H14 V705 H40"/>
+  <text class="lbl" x="24" y="598" text-anchor="start" style="fill:#b45309">사람 직접 개입</text>
+  <text class="lbl" x="24" y="615" text-anchor="start" style="fill:#b45309">kadan attach &lt;역할&gt;</text>
+  <text class="lbl" x="24" y="632" text-anchor="start" style="fill:#b45309">(어느 역할이든)</text>
 
   <!-- 감시기 경보 -->
-  <path class="alert" d="M830 160 H760 Q740 160 740 180 V210 Q740 218 732 218 H700"/>
-  <text class="lbl" x="748" y="150" text-anchor="start" style="fill:#b91c1c">경보</text>
-  <path class="alert" d="M830 250 H770 Q750 250 750 270 V340 Q750 358 732 358 H700"/>
-  <text class="lbl" x="758" y="300" text-anchor="start" style="fill:#b91c1c">경보</text>
-  <text class="note" x="758" y="316" style="fill:#b91c1c">(직속 상위로)</text>
-  <path class="alert" d="M1100 130 V92 H700"/>
-  <text class="lbl" x="905" y="84" text-anchor="middle" style="fill:#b91c1c">최상위 경보 · OS 알림</text>
+  <path class="alert" d="M930 160 H900 Q880 160 880 180 V222 Q880 232 870 232 H800"/>
+  <text class="lbl" x="888" y="150" text-anchor="start" style="fill:#b91c1c">경보</text>
+  <path class="alert" d="M930 250 H900 Q880 250 880 270 V338 Q880 356 862 356 H800"/>
+  <text class="lbl" x="890" y="300" text-anchor="start" style="fill:#b91c1c">경보</text>
+  <text class="note" x="890" y="316" style="fill:#b91c1c">(직속 상위로)</text>
+  <path class="alert" d="M1200 130 V92 H800"/>
+  <text class="lbl" x="1000" y="84" text-anchor="middle" style="fill:#b91c1c">최상위 경보 · OS 알림</text>
 
   <!-- 감시기 → 바닥 읽기 -->
-  <path class="read" d="M1140 270 V580"/>
-  <text class="lbl" x="1132" y="540" text-anchor="end" style="fill:#b91c1c">화면 읽기</text>
+  <path class="read" d="M1240 270 V650"/>
+  <text class="lbl" x="1232" y="560" text-anchor="end" style="fill:#b91c1c">화면 읽기</text>
 
   <!-- 원장 기록 -->
-  <path class="rec" d="M700 372 H790 V440 H850"/>
-  <text class="lbl" x="780" y="394" text-anchor="end" style="fill:#15803d">사건 기록</text>
-  <path class="rec" d="M980 270 V400"/>
-  <text class="lbl" x="988" y="340" text-anchor="start" style="fill:#15803d">경보를 기록</text>
+  <path class="rec" d="M800 382 H910 V450 H950"/>
+  <text class="lbl" x="900" y="408" text-anchor="end" style="fill:#15803d">사건 기록</text>
+  <path class="rec" d="M1080 270 V420"/>
+  <text class="lbl" x="1088" y="350" text-anchor="start" style="fill:#15803d">경보를 기록</text>
 </svg>
