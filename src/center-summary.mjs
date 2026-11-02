@@ -9,7 +9,9 @@ export function centerSummary(c) {
     pendingCards: c.cards
       .filter((card) => !["done", "cancelled", "superseded", "archived"].includes(card.displayState))
       .map((card) => ({ key: card.key, state: card.displayState, workType: card.workType || "execution", board: card.board, role: card.role })),
-    liveRoles: c.roles.filter((r) => r.life.state === "alive").map((r) => ({ role: r.role, life: r.life })),
+    // roleProfile: 마지막 start의 값(로티 딱지용). executionKind: 지금 배정된 미완료 실행의 종류(로티 hover·대시보드용). 없으면 null.
+    liveRoles: c.roles.filter((r) => r.life.state === "alive")
+      .map((r) => ({ role: r.role, life: r.life, roleProfile: r.roleProfile ?? null, executionKind: r.executionKind ?? null })),
     unregisteredRuns: c.unregistered.length,
   };
 }
