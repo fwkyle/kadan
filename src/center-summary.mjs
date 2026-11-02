@@ -10,8 +10,10 @@ export function centerSummary(c) {
       .filter((card) => !["done", "cancelled", "superseded", "archived"].includes(card.displayState))
       .map((card) => ({ key: card.key, state: card.displayState, workType: card.workType || "execution", board: card.board, role: card.role })),
     // roleProfile: 마지막 start의 값(로티 딱지용). executionKind: 지금 배정된 미완료 실행의 종류(로티 hover·대시보드용). 없으면 null.
+    // supersedes: 이 역할이 대체한 이전 세대 식별자 목록(가까운 것부터, 없으면 빈 목록).
     liveRoles: c.roles.filter((r) => r.life.state === "alive")
-      .map((r) => ({ role: r.role, life: r.life, roleProfile: r.roleProfile ?? null, executionKind: r.executionKind ?? null })),
+      .map((r) => ({ role: r.role, life: r.life, roleProfile: r.roleProfile ?? null, executionKind: r.executionKind ?? null,
+        supersedes: r.supersedes ?? [] })),
     unregisteredRuns: c.unregistered.length,
   };
 }

@@ -109,7 +109,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자주 쓰는 옵션 |
 |---|---|---|
 | `kadan plan <판> <카드id[:제목]>...` | 판을 열 때 카드 목록을 원장에 먼저 적는다 | `--about "<판 설명>"` |
-| `kadan tree` | 판·카드·실행·살아 있는 역할 요약(JSON). 살아 있는 역할마다 `roleProfile`(로티 딱지용)·`executionKind`(로티 hover·대시보드용), 없으면 `null` — [뜻](card-center.md) | `--legacy`(옛 세션 나무) |
+| `kadan tree` | 판·카드·실행·살아 있는 역할 요약(JSON). 살아 있는 역할마다 `roleProfile`(로티 딱지용)·`executionKind`(로티 hover·대시보드용), 없으면 `null`. 또 `supersedes`(이 역할이 대체한 이전 세대 식별자 목록, 가까운 것부터 최대 10개, 없으면 빈 목록 `[]`)를 더한다. 항목은 `{source, rottieTerminalId, panePid, conversation}`이고 값은 원장에 이미 적힌 것만이다(없으면 `null`, 셋 다 없으면 항목을 만들지 않음). `source`는 `restart`(새 start의 `restartOf` 지문으로 옛 start를 찾음, 대화는 `restartConversation`)·`adopt`(`accepted` 사건의 `sourceTerminalId`, 받는 역할에 붙음)·`handover`(`transferred`·`complete` 사건의 `from` 역할 마지막 start 값을 `to`에 붙임, `aborted`는 제외). `rottieTerminalId`=옛 로티 탭의 terminal id, `panePid`=옛 tmux pane의 프로세스 번호, `conversation`=옛 AI 대화 id(resume 대화만. fork 대화의 부모 id는 쓰지 않음). 같은 pane을 이은 새 start와 달리 이 값들로 로티가 옛 탭을 복원 목록에서 지운다 — [뜻](card-center.md) | `--legacy`(옛 세션 나무) |
 | `kadan log` | 원장 최근 30줄 | — |
 | `kadan wall` / `kadan dashboard` | 로컬 관제 화면(HTML)을 띄운다 | `--port 8790`, `--cache-sec 초` (같은 주소 응답 재사용, 기본 10) |
 
