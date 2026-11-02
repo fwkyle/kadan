@@ -4,6 +4,7 @@ import {taskIdentity} from './task-identity.mjs';
 import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
 import {statusProgress} from './watch-status-line.mjs';
 import {changeDigest} from './watch-roles.mjs';
+import {decisionFields} from './watch-waits.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
@@ -12,10 +13,12 @@ export const SUPERVISOR_REUSE_MS = 4 * 60 * 60_000;
 const REUSABLE_VERDICTS = new Set(['입력대기', '실행완료']);
 const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
 
-export function observationContext(role, observation, entries, cards, tasks) {
+// decisions: 이번 순회에 한 번 읽은 결정 목록(못 읽었으면 null, 안 넘기면 결정 필드를 싣지 않는다).
+export function observationContext(role, observation, entries, cards, tasks, decisions) {
   const identity=taskIdentity(cards);
   const ids = new Set(tasks.filter(e => e.role === role).map(e => e.taskId));
   return {
+    ...(decisions===undefined?{}:decisionFields(decisions,role)),
     process:{alive:observation.alive,pid:observation.pid,expectedPid:observation.expectedPid},
     tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,scope:c.scope?.slice(0,1000)})),
     responsibilities:tasks.filter(e => e.role === role),
@@ -48,7 +51,7 @@ export class SupervisorHealth {
     if(state.errorSince!=null)state.errorChecked=true;
   }
   // ownTurn: 본인 차례 항목이 있는 감독 역할 집합(놀고 있음 계산 결과). null이면 모르는 것이라 거르지 않는다.
-  select({scope,observations,entries,mailEntries=entries,cards,now,enabled,ownTurn=null}) {
+  select({scope,observations,entries,mailEntries=entries,cards,now,enabled,ownTurn=null,decisions}) {
     for (const session of this.states.keys()) if (!scope.sessions.has(session)) this.states.delete(session);
     const candidates = [], alerts = [];
     for (const session of scope.sessions) {
@@ -78,7 +81,7 @@ export class SupervisorHealth {
       const quiet = !error && now-state.lastCheck >= SUPERVISOR_CHECK_MS && ownTurn != null && !ownTurn.has(role) && sameAsJudgedNormal(entries, session, seen.screen, now);
       if (enabled && (early || (error || !progress.moving) && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
-          ...observationContext(role,seen,mailEntries,cards,scope.entries),
+          ...observationContext(role,seen,mailEntries,cards,scope.entries,decisions),
           check:early?'persistent-error':'hourly',minutes:Math.floor((now-state.at)/60000),
           errorMinutes:error?Math.floor((now-state.errorSince)/60000):0,
           // previous는 직전 순회(약 60초 전) 화면이다. 마지막 관찰AI 확인 때 화면이 아니다(minutes가 그 뒤 경과).

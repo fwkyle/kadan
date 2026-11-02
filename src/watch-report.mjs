@@ -35,6 +35,15 @@ export function watchResponsibility(role, cards, entries, parents, source='stall
   return hash([start.t, start.panePid ?? start.rottiePid, tasks]);
 }
 
+// 재알림 묶음(2026-11-02): 작업 감시AI(progress)는 같은 실행의 '정체'와 '카드 미완인데 입력 대기'를 같은 비정상으로 본다.
+// 둘이 번갈아 나와도 처음 한 번만 알린다. 등급·다른 비정상 종류·정상 복귀 뒤 재발·새 발령(key 변경)·답 대기 해제(감시 제외)에서만 다시 알린다.
+// 다른 source(stall·supervisor-health)는 기존 규칙(판정·idleWithoutAsk가 바뀌면 알림) 그대로다.
+export function bundleOf(report) {
+  const idle=Boolean(report.idleWithoutAsk);
+  if (report.source==='progress'&&(idle||report.verdict==='정체')) return '정체';
+  return `${report.verdict}${idle?':idle':''}`;
+}
+
 export function latestWatchReports(entries) {
   const states = new Map();
   for (const e of entries) {
@@ -149,7 +158,7 @@ export class WatchReports {
       const idleWithoutAsk=!stale&&verdict==='입력대기'&&request.source==='progress'
         &&waitingWithoutAsking(entries,{role:request.role,taskId:identity.resolve(request.taskId).taskId},cards);
       const notify=!stale&&(!normal(verdict)||idleWithoutAsk)
-        &&(!previous||previous.verdict!==verdict||previous.level!==level||Boolean(previous.idleWithoutAsk)!==idleWithoutAsk);
+        &&(!previous||bundleOf(previous)!==bundleOf({source:request.source,verdict,idleWithoutAsk})||previous.level!==level);
       const reasonPath=path.join(request.evidencePath,'reason.txt');
       fs.writeFileSync(reasonPath,reason,{mode:0o600});
       report={kind:'watch-ai-report',by:'watch-ai',requestId,key:request.key,source:request.source,
@@ -215,7 +224,7 @@ export class WatchReports {
           &&e.accepted&&e.notify&&e.key===report.key);
         const valid=request&&current&&current.verdict===report.verdict&&current.level===report.level
           &&latestNotification?.requestId===report.requestId
-          &&Boolean(current.idleWithoutAsk)===Boolean(report.idleWithoutAsk)
+          &&bundleOf(current)===bundleOf(report)
           &&currentRequest(request,this.readCards(),fresh,parents,this.readWorks());
         // 전송 전 예약: 여기서 중단되면 전달 불명확이며 다음 순회에 자동 재전송하지 않는다.
         this.record({...pending,by:'watch',held:false,delivery:valid?'unknown':'cancelled',

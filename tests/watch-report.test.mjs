@@ -450,3 +450,47 @@ test('보류 중 같은 입력대기 판정이 정상 답변 대기로 바뀌면
  f.r.retryHeld(f.rows(),parents);
  assert.equal(calls,1);
 });
+
+// 재알림 묶음(2026-11-02): progress의 '정체'와 '카드 미완인데 입력 대기'는 같은 비정상 묶음이다.
+const bundleFixture=()=>{
+ const f=fixture();
+ f.cards=[{id:'a',key:'r/a',role:'p-작업자',board:'p',status:'assigned',activity:'running',workType:'execution'}];
+ f.progress=(verdict,reason='같은 실행 재확인')=>f.r.submit(f.request({source:'progress',taskId:'a'}).requestId,verdict,reason);
+ return f;
+};
+test('재알림 묶음: 정체 ↔ 카드 미완인데 입력 대기가 번갈아 나와도 알림은 첫 1번뿐이다(사례 재현)',()=>{
+ const f=bundleFixture();
+ assert.equal(f.progress('정체').notify,true);
+ const idle=f.progress('입력대기');
+ assert.equal(idle.idleWithoutAsk,true);assert.equal(idle.notify,false);
+ assert.equal(f.progress('정체').notify,false);
+ assert.equal(f.progress('입력대기').notify,false);
+ assert.equal(f.sent.length,1);
+});
+test('재알림 묶음: 감시기가 재시작해도 같은 묶음이면 다시 알리지 않는다',()=>{
+ const f=bundleFixture();
+ f.progress('정체');
+ f.r=new WatchReports(f.options);
+ assert.equal(f.progress('입력대기').notify,false);
+ assert.equal(f.sent.length,1);
+});
+test('재알림 묶음: 다른 종류의 비정상·정상 복귀 뒤 재발·감시 제외(답 대기 해제) 뒤에는 다시 알린다',()=>{
+ const f=bundleFixture();
+ f.progress('정체');
+ assert.equal(f.progress('응답장애','연결 재시도 지속').notify,true);
+ assert.equal(f.progress('정체').notify,true);
+ f.progress('진행중','도구 실행 재개');
+ assert.equal(f.progress('정체').notify,true);
+ // 답 대기에 걸려 감시에서 제외됐다가 풀린 뒤 같은 정체가 남아 있으면 새 비정상이다.
+ const last=f.rows().findLast(e=>e.kind==='watch-ai-report');
+ appendLedger({kind:'watch-ai-retired',by:'watch',key:last.key,requestId:last.requestId,source:'progress',role:last.role,reason:'waiting-for-answer'},f.home);
+ assert.equal(f.progress('입력대기').notify,true);
+ assert.equal(f.sent.length,5);
+});
+test('재알림 묶음: 다른 source(stall)는 기존 규칙 그대로다',()=>{
+ const f=fixture();
+ f.r.submit(f.request().requestId,'정체','멈춤');
+ assert.equal(f.sent.length,1);
+ f.r.submit(f.request().requestId,'응답장애','연결 지속 실패');
+ assert.equal(f.sent.length,2);
+});
