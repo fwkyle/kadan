@@ -8,9 +8,12 @@ const KINDS = new Set(Object.keys(workPhases));
 
 // 미완료 = 진행 중(일시정지 제외)·확인 필요 묶음. 진행 전(draft·ready·archived)과 끝(done·cancelled·superseded)은 뺀다.
 // 관리 카드(coordination)는 실행이 아니다(card-center의 executionSummary·execution-moved-on과 같은 기준).
+// 저장 상태가 이미 끝났거나 멈춘 카드는 과거 발령 기록으로 계산한 표시 상태(unconfirmed·orphaned)가 열려 보여도 뺀다.
+// 표시 상태 판정은 저장 상태가 열려 있을 때만 쓴다.
+const CLOSED_STORED = new Set(["done", "cancelled", "superseded", "archived", "hold"]);
 const openAssigned = (card) => Boolean(card.role)
   && card.workType !== "coordination"
-  && card.status !== "hold" && card.displayState !== "hold" // 저장 상태가 hold면 실행 기록으로 계산한 표시 상태가 달라도 뺀다
+  && !CLOSED_STORED.has(card.status) && card.displayState !== "hold"
   && ["active", "check"].includes(statusBucket(card.displayState));
 
 // 발령 시각: 그 역할 실행(runs)의 가장 늦은 sentAt. 발령 기록이 없을 때만 카드 수정 시각을 쓴다.

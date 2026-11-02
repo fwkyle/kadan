@@ -88,6 +88,17 @@ test('executionKind F1: 일시정지(hold) 카드는 현재 실행이 아니다'
   assert.equal(kindOf([held]), null);
 });
 
+test('executionKind F5: 저장 상태가 보관·완료·취소·대체면 과거 발령이 있어도 현재 실행이 아니다', () => {
+  for (const status of ['archived', 'done', 'cancelled', 'superseded']) {
+    const h = home(), store = new CardStore(h);
+    const card = assigned(store, h, `k-${status}`, '배지-작업', 'review');
+    // 발령(send)이 저장 결정보다 뒤인 입력: 표시 상태는 확인 필요로 계산되지만 저장 상태가 끝이다.
+    const patch = status === 'superseded' ? { status, replacedByText: '후속 작업' } : { status };
+    const closed = store.update(card.key, patch,{ revision: card.revision, note: '끝' });
+    assert.equal(kindOf([closed]), null, status);
+  }
+});
+
 test('executionKind F2: 오래된 카드의 제목 수정이 가장 최근 발령을 덮지 않는다', () => {
   const h = home(), store = new CardStore(h);
   const old = assigned(store, h, 'k-f2-old', '배지-작업', 'implementation');
