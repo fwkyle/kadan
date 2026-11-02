@@ -232,7 +232,7 @@ export const COMMANDS = {
       record:entry=>appendLedger({...entry,t:new Date().toISOString()})});
     console.log(argv[0] === 'report' && !flags.json ? result : JSON.stringify(result,null,2));
   },
-  card: (argv,flags) => console.log(JSON.stringify(cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor}),null,2)),
+  card: async (argv,flags) => console.log(JSON.stringify(await cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor}),null,2)),
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
   limit: async (argv,flags) => {
