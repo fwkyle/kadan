@@ -24,6 +24,25 @@ export function readFirstPaths(body) {
   }
   return [...new Set(found)];
 }
+// 카드 본문 `## 완료 검사` 절의 줄. 절이 없으면 빈 배열이다. 발령 때 이 줄을 이력에 저장한다(completionChecks).
+export const COMPLETION_CHECK_STORE_MAX=21,COMPLETION_CHECK_LINE_MAX=500;
+export function checkLines(body) {
+  const lines=String(body??'').split('\n');
+  const start=lines.findIndex(line=>/^#{1,6}\s*완료 검사\s*$/.test(line.trim()));
+  if(start===-1)return [];
+  const found=[];
+  let fenced=false;
+  for(const line of lines.slice(start+1)) {
+    if(line.trim().startsWith('```')){fenced=!fenced;continue;}
+    if(fenced)continue;
+    if(/^#{1,6}\s/.test(line))break;
+    const text=line.trim().replace(/^[-*]\s+/,'').replace(/^`([^`]*)`$/,'$1').trim();
+    if(!text||text.startsWith('<!--'))continue;
+    found.push(text.slice(0,COMPLETION_CHECK_LINE_MAX));
+    if(found.length>=COMPLETION_CHECK_STORE_MAX)break;
+  }
+  return found;
+}
 export class CardStore {
   constructor(home) { this.home=home; this.root=path.join(home,'cards'); }
   dir(key) {
@@ -163,6 +182,11 @@ export class CardStore {
       if(patch.activity!==undefined){
         if(!['running','waiting','unknown'].includes(patch.activity)||next.status!=='assigned'||by!==next.role)throw new Error('진행 보고는 배정된 역할에서만 가능');
         next.activityAt=next.at;next.activityRole=by;
+      }
+      // 발령 때 완료 검사 줄을 이력에 고정한다. 이후 card.md를 고쳐도 실행 내용은 바뀌지 않는다.
+      if(next.status==='assigned'&&current.status!=='assigned'){
+        const lines=checkLines(body);
+        if(lines.length)next.completionChecks=lines;else delete next.completionChecks;
       }
       if(next.status==='ready'){next.board=null;next.role=null;}
       if(Object.hasOwn(patch,'turnOwner')){
