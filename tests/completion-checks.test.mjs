@@ -131,15 +131,23 @@ test('git-content-output·git-upload-option-exec·git-dashdash-external-diff: �
  assert.ok(report.results.every(r=>r.detail==='형식 오류'&&/^줄 \d+$/.test(r.label)),'줄 내용은 화면에 되풀이하지 않는다');
 });
 
-test('git-fsmonitor-exec·git-ext-exec: 저장소 설정(core.fsmonitor·diff.external·hooksPath·sshCommand·credential)이 외부 프로그램을 실행하지 못한다',async()=>{
+test('git-fsmonitor-exec: 남긴 고정 인자(core.fsmonitor·core.pager)가 감시 데몬과 pager를 띄우지 않는다',async()=>{
  const repo=repoDir(),dir=tmp('kadan-cc-hook-'),marker=path.join(dir,'ran');
  const prog=path.join(dir,'fake-prog');fs.writeFileSync(prog,`#!/bin/sh\necho x >> "${marker}"\n`,{mode:0o755});
- for(const [k,v] of [['core.fsmonitor',prog],['diff.external',prog],['core.hooksPath',dir],['core.sshCommand',prog],['credential.helper',`!${prog}`],['core.pager',prog],['remote.origin.url',`ext::${prog}`],['remote.origin.uploadpack',prog]])git(repo,'config',k,v);
+ for(const [k,v] of [['core.fsmonitor',prog],['core.pager',prog]])git(repo,'config',k,v);
  const sha=headOf(repo);
- const report=await cc.runChecks(card(repo),['git tidy .',`git head . = ${sha}`,'git pushed . main'],{});
+ const report=await cc.runChecks(card(repo),['git tidy .',`git head . = ${sha}`],{});
  assert.equal(fs.existsSync(marker),false,'표식 프로그램이 실행됨');
- assert.equal(report.results[0].status,'pass');assert.equal(report.results[1].status,'pass');
- assert.notEqual(report.results[2].status,'pass'); // 원격 전송은 막혀 있어 실패한다
+ assert.deepEqual(statuses(report),['pass','pass']);
+});
+
+test('local-remote-and-overrides: 로컬 경로 원격(file 전송)·사용자 프록시 설정을 덮지 않는다 (고정 인자는 둘뿐)',async()=>{
+ const repo=repoDir(),dir=tmp('kadan-cc-remote-'),bare=path.join(dir,'origin.git');
+ git(dir,'init','-q','--bare',bare);git(repo,'remote','add','origin',bare);git(repo,'push','-q','origin','main');
+ const report=await cc.runChecks(card(repo),['git pushed . main'],{});
+ assert.deepEqual(statuses(report),['pass'],'로컬 경로 원격에 대한 push 확인이 실패함');
+ assert.deepEqual(cc.GIT_FRONT_ARGS,['-c','core.fsmonitor=false','-c','core.pager=cat']);
+ assert.equal(cc.gitEnv().GIT_ALLOW_PROTOCOL,undefined);
 });
 
 test('git-env-exec·path-exec: 환경의 GIT_CONFIG_*·PATH 앞의 가짜 git은 쓰이지 않고, git에는 최소 환경만 간다',async()=>{
@@ -157,12 +165,12 @@ test('git-env-exec·path-exec: 환경의 GIT_CONFIG_*·PATH 앞의 가짜 git은
  assert.ok(spawn.calls.length>0);
  for(const c of spawn.calls){
   assert.ok(path.isAbsolute(c.file)&&!c.file.startsWith(dir),`git 실행 파일: ${c.file}`);
-  assert.deepEqual(Object.keys(c.opts.env).sort(),['GIT_ALLOW_PROTOCOL','GIT_OPTIONAL_LOCKS','GIT_TERMINAL_PROMPT','HOME','PATH']);
-  assert.equal(c.opts.env.PATH,'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin');assert.equal(c.opts.env.GIT_ALLOW_PROTOCOL,'https:ssh');assert.equal(c.opts.env.GIT_CONFIG_NOSYSTEM,undefined);
+  assert.deepEqual(Object.keys(c.opts.env).sort(),['GIT_OPTIONAL_LOCKS','GIT_TERMINAL_PROMPT','HOME','PATH']);
+  assert.equal(c.opts.env.PATH,'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin');assert.equal(c.opts.env.GIT_ALLOW_PROTOCOL,undefined);assert.equal(c.opts.env.GIT_CONFIG_NOSYSTEM,undefined);
   assert.deepEqual(c.args.slice(0,cc.GIT_FRONT_ARGS.length),cc.GIT_FRONT_ARGS);
   assert.equal(c.opts.shell,undefined);assert.equal(c.opts.stdio[0],'ignore');
  }
- assert.ok(cc.GIT_FRONT_ARGS.join(' ').includes('core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat -c diff.external= -c protocol.ext.allow=never'));
+ assert.equal(cc.GIT_FRONT_ARGS.join(' '),'-c core.fsmonitor=false -c core.pager=cat');
  assert.ok(spawn.calls.some(c=>c.args.includes('worktree')),'worktree 목록도 같은 실행기를 지난다');
 });
 
@@ -318,7 +326,7 @@ test('credential-helper-compatibility: 고정 앞 인자·환경에서도 사용
  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/password=fake-pass/);
  const keys=cc.GIT_FRONT_ARGS.filter((_,i)=>i%2===1).map(a=>a.split('=')[0]);
  for(const gone of ['credential.helper','core.sshCommand'])assert.ok(!keys.includes(gone),`${gone}를 덮어쓰면 정상 인증·ssh 설정이 깨진다`);
- for(const kept of ['core.fsmonitor','core.hooksPath','core.pager'])assert.ok(keys.includes(kept),kept);
+ for(const kept of ['core.fsmonitor','core.pager'])assert.ok(keys.includes(kept),kept);
  assert.equal(cc.gitEnv().GIT_TERMINAL_PROMPT,'0');assert.equal(cc.gitEnv().GIT_OPTIONAL_LOCKS,'0');
 });
 

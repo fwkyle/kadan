@@ -28,14 +28,16 @@ export const SOURCE_STORED = "발령 때 저장한 검사 줄";
 const SOURCE_DRAFT = "발령 전 카드 본문";
 
 // git 실행기 하나: 고정 PATH에서 한 번 찾은 절대경로, 최소 환경, 코드가 정한 앞 인자.
-// 위 위협 범위 안에서, 감독 프로세스를 느리게 하거나 멈추게 하는 흔한 경로(fsmonitor·hooks·pager·외부 diff·ext 전송)만 끈다.
-// 사용자의 인증 도우미(credential.helper)와 ssh 명령(core.sshCommand)은 덮어쓰지 않는다. 덮으면 정상 push 확인이 실패한다.
+// 남기는 기준: "정상 사용을 깨지 않고, 무인 실행에 필요한 것"만. 저장소 설정을 통한 실행을 막으려는 덮어쓰기는 위협 범위 밖이라 두지 않는다.
+// 남김: core.fsmonitor=false(감시 데몬을 띄우지 않음 — 무인 실행이 멈추거나 남는 프로세스를 만들지 않게),
+//       core.pager=cat(화면 없는 실행에서 pager 대기 방지), 환경 GIT_TERMINAL_PROMPT=0(입력 대기 방지),
+//       GIT_OPTIONAL_LOCKS=0(읽기 검사가 index를 쓰거나 잠그지 않음), 고정 git 경로·고정 PATH·최소 환경.
+// 뺌: core.hooksPath·diff.external(이 읽기 명령들은 hook·외부 diff를 부르지 않아 필요 없고 사용자 설정만 덮음),
+//     protocol.ext.allow·환경 GIT_ALLOW_PROTOCOL(저장소 설정이 고른 전송만 막는 위협 대응이고, 로컬 경로 원격(file)을 깨뜨림),
+//     core.gitProxy·remote.origin.proxy·remote.origin.uploadpack(사용자 프록시·uploadpack을 깸),
+//     credential.helper·core.sshCommand(정상 인증·ssh 설정을 깸), GIT_CONFIG_NOSYSTEM(시스템 설정의 인증 도우미를 지움).
 export const GIT_PATH = "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin";
-export const GIT_FRONT_ARGS = [
-  "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
-  "-c", "diff.external=", "-c", "protocol.ext.allow=never",
-  "-c", "core.gitProxy=", "-c", "remote.origin.uploadpack=git-upload-pack", "-c", "remote.origin.proxy=",
-];
+export const GIT_FRONT_ARGS = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat"];
 let gitBinCache;
 export function gitBinary() {
   if (gitBinCache !== undefined) return gitBinCache;
@@ -48,7 +50,7 @@ export function gitBinary() {
 }
 export function gitEnv() {
   return {
-    PATH: GIT_PATH, HOME: process.env.HOME ?? "", GIT_ALLOW_PROTOCOL: "https:ssh",
+    PATH: GIT_PATH, HOME: process.env.HOME ?? "",
     GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0",
   };
 }
