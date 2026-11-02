@@ -70,11 +70,11 @@ import { cmdPlan } from "./commands/plan.mjs";
 import { cmdDone } from "./commands/done.mjs";
 import { cmdWait } from "./commands/wait.mjs";
 import { sendWatchMessage, cmdWatch } from "./commands/watch.mjs";
-import { cmdStop } from "./commands/stop.mjs";
+import { cmdStop, STOP_USAGE } from "./commands/stop.mjs";
 import { cmdRestore } from "./commands/restore.mjs";
-import { cmdRestart } from "./commands/restart.mjs";
+import { cmdRestart, RESTART_USAGE } from "./commands/restart.mjs";
 import { cmdClaude } from "./commands/claude.mjs";
-import { cmdWindow } from "./commands/window.mjs";
+import { cmdWindow, WINDOW_USAGE } from "./commands/window.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
 import { cmdStopHook } from "./commands/stop-hook.mjs";
 import { cmdSecrets } from "./commands/secrets.mjs";
@@ -272,6 +272,8 @@ export const COMMANDS = {
   recovery: recoveryCommand,
 };
 
+const HELP_ONLY={window:WINDOW_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE};
+
 export function main(argv) {
   const [command, ...rest] = argv;
   const fn = COMMANDS[command];
@@ -287,7 +289,10 @@ export function main(argv) {
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
-    if(!flags.help)nightGuard({command,args,flags,home:ledgerHome()});
+    // 거절 검사는 --help와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하는 길이 새지 않게).
+    nightGuard({command,args,flags});
+    // 쓰기·종료 명령은 --help면 사용법만 보이고 아무것도 실행하지 않는다.
+    if(flags.help&&HELP_ONLY[command]){console.log(HELP_ONLY[command]);return;}
     if(
       ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||

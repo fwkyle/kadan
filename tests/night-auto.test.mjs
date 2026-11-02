@@ -98,6 +98,18 @@ const GUARDED = [
   ['runners', ['set', 'worker'], {}],
   ['runners', ['runner', 'codex'], {}],
   ['runners', ['model', 'codex'], {}],
+  ['runners', ['preset', '다른설정'], {}],
+  ['runners', ['block', 'm'], {}],
+  ['runners', ['import', 'f.json'], {}],
+  ['runners', ['fallback', 'worker'], {}],
+  ['runners', ['favorite'], {}],
+  ['runners', ['init'], {}],
+  ['runners', ['compare', 'on'], {}],
+  ['runners', ['export', 'p'], {out: 'x.json'}],
+  ['runners', ['새쓰기명령'], {}],
+  ['window', ['새쓰기명령'], {}],
+  ['stop', ['비서'], {}],
+  ['stop', ['디코'], {}],
   ['night', ['on', '밤'], {level: '바이패스'}],
 ];
 
@@ -112,7 +124,9 @@ test('켜진 동안 역할 세션의 보호 명령은 거절, 사람·꺼짐·�
     nightGuard({...base, command, args, flags, env: {}}); // 사람(KADAN_ROLE 없음)
     nightGuard({...base, command, args, flags, env: {KADAN_ROLE: 'a-작업'}, now: T0 + 9 * 3600_000}); // 끝 시각 뒤 = 꺼짐
   }
-  for (const [command, args, flags] of [['restart', ['x'], {}], ['stop', ['a-작업'], {}], ['window', ['show'], {}], ['runners', ['show'], {}], ['runners', ['report'], {}]])
+  for (const [command, args, flags] of [['restart', ['x'], {}], ['stop', ['a-작업'], {}], ['window', ['show'], {}], ['runners', ['show'], {}], ['runners', ['report'], {}],
+    ['runners', ['compare', 'show'], {}], ['runners', ['export', 'p'], {}], ['runners', [], {}], ['window', [], {}],
+    ['stop', ['a-검수'], {}], ['restart', ['x', '--help'], {}]])
     assert.equal(guardedReason(command, args, flags), null, `${command} ${args}`);
 });
 
@@ -132,6 +146,59 @@ test('CLI 입구: 켜진 홈에서 역할 세션의 stop watch·window unset은 
     assert.equal(r.status, 2, `${argv.join(' ')}: ${r.stderr}`);
     assert.match(r.stderr, /나이트 모드가 켜져 있어/);
   }
+});
+
+function nightOnHome(f) {
+  appendLedger({kind: 'night', phase: 'on', by: '사람', text: 'cli', viaChat: false, until: new Date(Date.now() + 3600_000).toISOString(),
+    to: [], delivered: [], t: new Date().toISOString()}, f.home);
+}
+const cli = (f, argv, role) => spawnSync(process.execPath, [CLI, ...argv], {
+  env: {...process.env, KADAN_HOME: f.home, KADAN_WINDOW: 'none', ...(role ? {KADAN_ROLE: role} : {KADAN_ROLE: ''})},
+  encoding: 'utf8', timeout: 20_000,
+});
+
+test('F1: 켜진 홈의 역할 세션은 --help를 붙여도 거절되고 설정·종료는 일어나지 않는다', () => {
+  const f = fixture();
+  nightOnHome(f);
+  const before = readLedger(f.home).length;
+  for (const argv of [['window', 'set', 'none', '--help'], ['window', 'unset', '--help'], ['stop', 'watch', '--help'],
+    ['restart', 'a-작업', '--force', '--help'], ['runners', 'preset', '다른설정', '--help']]) {
+    const r = cli(f, argv, 'a-작업');
+    assert.equal(r.status, 2, `${argv.join(' ')}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /나이트 모드가 켜져 있어/);
+  }
+  assert.equal(fs.existsSync(path.join(f.home, 'window-setting.json')), false);
+  assert.equal(fs.existsSync(path.join(f.home, 'runner-settings.json')), false);
+  assert.equal(readLedger(f.home).length, before, 'stop·restart 기록이 늘지 않는다');
+});
+
+test('F1: 사람이거나 꺼진 홈에서 window·stop·restart --help는 사용법만 보이고 아무것도 하지 않는다', () => {
+  for (const [argv, usage] of [[['window', 'set', 'none', '--help'], /사용법: kadan window/], [['stop', 'watch', '--help'], /사용법: kadan stop/],
+    [['restart', 'a-작업', '--force', '--help'], /사용법: kadan restart/]]) {
+    for (const nightOn of [false, true]) {
+      const g = fixture();
+      if (nightOn) nightOnHome(g);
+      const before = readLedger(g.home).length;
+      const r = cli(g, argv, nightOn ? '' : 'a-작업'); // 켜짐+사람 / 꺼짐+역할
+      assert.equal(r.status, 0, `${argv.join(' ')} night=${nightOn}: ${r.stderr}`);
+      assert.match(r.stdout, usage);
+      assert.equal(fs.existsSync(path.join(g.home, 'window-setting.json')), false);
+      assert.equal(readLedger(g.home).length, before);
+    }
+  }
+});
+
+test('F2: 켜진 홈의 역할 세션은 runners preset·block을 거절하고 설정 파일을 만들지 않으며 show는 통과', () => {
+  const f = fixture();
+  nightOnHome(f);
+  for (const argv of [['runners', 'preset', '다른설정', '--revision', '1', '--reason', 'x'], ['runners', 'block', 'm', '--revision', '1', '--reason', 'x']]) {
+    const r = cli(f, argv, 'a-작업');
+    assert.equal(r.status, 2, `${argv.join(' ')}: ${r.stderr}`);
+    assert.match(r.stderr, /나이트 모드가 켜져 있어/);
+  }
+  assert.equal(fs.existsSync(path.join(f.home, 'runner-settings.json')), false);
+  const show = cli(f, ['runners', 'show'], 'a-작업');
+  assert.equal(show.status, 0, show.stderr);
 });
 
 test('역할 세션의 decision answer는 나이트와 무관하게 거절된다(기존 동작 확인)', () => {

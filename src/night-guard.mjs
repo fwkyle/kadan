@@ -1,18 +1,33 @@
 // 나이트 모드가 켜진 동안 역할 세션(KADAN_ROLE 있음)이 부르면 거절하는 카단 명령 목록. 설계 갈래 A.
 // 한계: KADAN_ROLE은 스스로 밝히는 값이라 `env -u KADAN_ROLE kadan …`로 우회된다. 이 거절은 실수 방지이지 보안 경계가 아니고,
 // 아침 사후 드러냄(요약)과 짝이다. 꺼져 있거나 사람이 직접 치면 동작은 그대로다.
-import {readLedger} from './ledger.mjs';
+import {ledgerHome, readLedger} from './ledger.mjs';
 import {nightState, readDecisionEvents} from './night.mjs';
+import {TARGETS} from './revive.mjs';
 
-const RUNNERS_WRITE = ['set', 'runner', 'model'];
+// 허용 목록 방식(2026-11-02 PR #327 검수 F2): 막을 쓰기 목록이 아니라 읽기만 하는 하위 명령 목록이다.
+// 새 쓰기 하위 명령이 생겨도 여기 넣지 않는 한 켜진 동안 역할 세션에서 자동으로 거절된다.
+// - `window`: 하위 명령 없음(사용법 출력)·`show`만 통과. `set`·`unset`과 모르는 것은 거절.
+// - `runners`: 하위 명령 없음(사용법)·`show`·`report`·`compare show`·`--out` 없는 `export`만 통과.
+//   `set`·`runner`·`model`·`block`·`preset`·`import`·`fallback`·`favorite`·`init`·`compare on|off`·`export --out`은 거절.
+// - `stop`: 기반 프로세스(TARGETS = 비서·대시보드·디코·watch)만 거절. 작업자·검수자 세션 종료는 감독의 정상 정리라 통과.
+// - `restart`: `--force`만 거절.
+// 거절 검사는 `--help`와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하던 길이 샜다, F1).
+function runnersIsReadOnly(args, flags) {
+  const [action, sub] = args;
+  if (action === undefined || action === 'show' || action === 'report') return true;
+  if (action === 'compare') return sub === 'show';
+  if (action === 'export') return flags.out == null;
+  return false;
+}
 
 // 켜진 동안 역할 세션에서 막을 명령이면 이유 한 줄, 아니면 null. 원장을 읽지 않는 싼 검사다.
 export function guardedReason(command, args = [], flags = {}) {
   const [first] = args;
   if (command === 'restart' && flags.force) return 'restart --force';
-  if (command === 'stop' && ['watch', '대시보드'].includes(first)) return `stop ${first}`;
-  if (command === 'window' && ['set', 'unset'].includes(first)) return `window ${first}`;
-  if (command === 'runners' && RUNNERS_WRITE.includes(first)) return `runners ${first}`;
+  if (command === 'stop' && TARGETS.includes(first)) return `stop ${first}`;
+  if (command === 'window' && first !== undefined && first !== 'show') return `window ${first}`;
+  if (command === 'runners' && !runnersIsReadOnly(args, flags)) return `runners ${first}`;
   if (command === 'night' && first === 'on' && flags.level === '바이패스') return 'night on --level 바이패스';
   return null;
 }
@@ -21,7 +36,9 @@ export function guardedReason(command, args = [], flags = {}) {
 export function nightGuard({command, args, flags, home, env = process.env, now = Date.now(), entries, decisionEvents}) {
   const what = guardedReason(command, args, flags);
   if (!what || !String(env.KADAN_ROLE ?? '').trim()) return;
-  const state = nightState(entries ?? readLedger(home), decisionEvents ?? readDecisionEvents(home), now);
+  // home을 안 주면 여기서야 읽는다: 거절 대상·역할 세션이 아니면 홈을 건드리지 않는다(--help·홈 없는 시험도 그대로).
+  const where = home ?? ledgerHome();
+  const state = nightState(entries ?? readLedger(where), decisionEvents ?? readDecisionEvents(where), now);
   if (!state.on) return;
   const error = new Error(`나이트 모드가 켜져 있어 역할 세션에서는 \`kadan ${what}\`를 쓸 수 없습니다. kyle이 직접 치거나 나이트를 끈 뒤 하세요`);
   error.exitCode = 2;
