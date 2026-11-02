@@ -1,6 +1,6 @@
 // 창 선택 기계 설정 — 로티/백그라운드를 KADAN_HOME에 한 번 고정한다(2026-10-14 [kyle]).
 // 이유: KADAN_WINDOW가 셸 환경변수뿐이면 값을 못 물려받은 AI 셸이 역할을 띄울 때 조용히 백그라운드로 뜬다.
-// 읽는 순서는 환경변수 > 이 설정 > 기본 none이다. 값이 하나로 정해지는 우선순위이며, 실패하면 다른 창으로
+// 읽는 순서는 환경변수 > 이 설정 > 기본 none이다. 단 tmux를 부르는 경계(tmuxClientEnv)가 KADAN_WINDOW·KADAN_ROTTIE_BIN을 빼서 tmux 서버 전역 환경에 남지 않는다. 값이 하나로 정해지는 우선순위이며, 실패하면 다른 창으로
 // 넘어가는 폴백이 아니다. 형식과 원자적 쓰기는 runner-settings.mjs와 같은 방식(임시 파일 → rename, 0600).
 import fs from 'node:fs';
 import path from 'node:path';
