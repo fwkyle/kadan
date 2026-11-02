@@ -47,6 +47,7 @@ import {
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
+import { assessHoldWorking } from "./watch-hold-working.mjs";
 import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
@@ -214,6 +215,9 @@ export async function runWatch({
   let supervisorStates = new Map();
   let queuedStates = new Map();
   let idleStopStates = new Map();
+  // 일시정지 중 작업 감지: 지난 순회 상태와, 이미 경보를 낸 hold(카드@hold 진입 시각). 메모리에만 둔다.
+  let holdWorkingStates = new Map();
+  const holdWorkingAlerted = new Set();
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   const seeded = seedAlertState(readEntries());
@@ -357,6 +361,8 @@ export async function runWatch({
         // 큐 대기 경보의 수명은 scope가 아니라 화면 문구가 정한다 — 여기서
         // 퇴역시키면 scope 밖 세션에서 매 주기 알림이 다시 울린다.
         if (alert.kind === '큐대기') return true;
+        // 일시정지 중 작업은 hold 역할이라 처음부터 scope 밖이다. 퇴역 기록(감시제외)을 남기지 않는다.
+        if (alert.kind === '일시정지중작업') return true;
         if (!alert.session || observedSessions.has(alert.session)) return true;
         recordAlert(record, {...alert, kind:'감시제외'}, null, false, true);
         alertRecipients.delete(alert.id); deliveryFailures.delete(alert.id);
@@ -518,6 +524,12 @@ export async function runWatch({
           excludedSessions:earlierSessions,queuedLine:queuedInputLine,
         });
     idleStopStates=idleStopAssessment.states;
+    // hold인 역할은 작업자 범위(scope) 밖이라 workerObservations에 없다. 화면은 collectRoles가 이미 읽었으므로 roles.observations를 쓴다.
+    const holdWorking=observationError||!cards
+      ? {states:holdWorkingStates,alerts:[]}
+      : assessHoldWorking(holdWorkingStates,roles.observations,cards,{now:cycleAt,alerted:holdWorkingAlerted,
+          isHeld:role=>holdTracker?.isHeld(role)??false,supervisors:new Set(parents.values())});
+    holdWorkingStates=holdWorking.states;
     const idleStopSessions=new Set(idleStopAssessment.alerts.map(a=>a.session));
     const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
     let reportAlerts=[];
@@ -720,6 +732,7 @@ export async function runWatch({
       // 큐대기 상태 추적은 그대로 두고 경보만 거른다 — 배너 경로가 조용해지면 쌓인 시간으로 큐대기가 이어받는다.
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
       ...idleStopAssessment.alerts,
+      ...holdWorking.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       // 알림이 3번 이상 연속 밀린 창. 지난 주기까지의 횟수이며 사용자에게만 간다.
