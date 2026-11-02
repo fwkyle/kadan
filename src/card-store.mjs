@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readLedger } from './ledger.mjs';
 import { effectiveCardRole } from './handover-state.mjs';
+import { leaseShaFor } from './review-sha.mjs';
 // 카드 센터가 이력으로 판정을 바꾸는 상태: 전환 시각(ready·draft·assigned)과 완료 뒤 변경(assigned·ready).
 const HISTORY_STATUSES = new Set(['assigned','ready','draft']);
 const slug = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
@@ -213,7 +214,7 @@ export class CardStore {
     if(card.resultPath&&path.resolve(file)!==card.resultPath)throw new Error(`새 실행의 결과 파일은 card show의 resultPath를 사용하세요: ${card.resultPath}`);
     return path.resolve(file);
   }
-  report(key,{revision,resultFile,outcome,by='사람'}={}) {
+  report(key,{revision,resultFile,outcome,sha=null,by='사람'}={}) {
     const role=this.#roleOf(key);
     return this.locked(()=>{
       const card=this.get(key);
@@ -224,14 +225,17 @@ export class CardStore {
       if(!(card.resultPath?fs.lstatSync(file):fs.statSync(file)).isFile())throw new Error('결과 경로는 일반 파일이어야 합니다');
       const bytes=fs.readFileSync(file);
       if(!bytes.length)throw new Error('빈 결과 파일은 등록할 수 없습니다');
+      // 검수한 커밋은 표시용 기록이다(필수 아님). 준 값이 있으면 given, 없으면 이 카드 이름으로 빌린 검수 자리 임차 기록(slot), 둘 다 없으면 null.
+      const slotSha=sha?null:leaseShaFor(this.home,card);
       const result={path:file,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,outcome};
+      const reviewedSha=sha||slotSha,reviewedShaSource=sha?'given':slotSha?'slot':null;
       if(card.result){
         if(['path','sha256','bytes','outcome'].every(k=>card.result[k]===result[k]))return card;
         throw new Error('이미 등록한 결과와 다릅니다. 기존 근거를 보존하고 수정·재검수는 새 실행으로 연결하세요');
       }
       const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=card;
       const at=new Date().toISOString();
-      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,result:{...result,at,by},revision:card.revision+1,at,by,noteKind:'progress',note:'실행 결과 파일과 지문 등록 (완료 확정과 별개)'});
+      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,result:{...result,reviewedSha,reviewedShaSource,at,by},revision:card.revision+1,at,by,noteKind:'progress',note:'실행 결과 파일과 지문 등록 (완료 확정과 별개)'});
       return this.get(key);
     });
   }
