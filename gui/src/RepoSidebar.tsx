@@ -12,19 +12,16 @@ const badge = (mark: string, label: string, n: number | null) =>
   n === 0 ? null : <span className="dw-side-badge" title={label}>{mark} {n ?? "?"}</span>;
 const WIDE = "(min-width: 800px)";
 // 현황(#status) 화면에서만 status 응답을 읽는다(Status와 같은 주소라 요청이 늘지 않는다). 거기서만 슈퍼감독 이름을 알 수 있다.
-function StatusSupers({ repo, onSupers, onNight }: { repo: string | null; onSupers: (names: Record<string, string>) => void; onNight: (night: NightStrip | null) => void }) {
-  const { data } = useResource<{ sidebar?: SidebarRepo[]; night?: NightStrip }>("status" + (repo ? "?repo=" + encodeURIComponent(repo) : ""));
+function StatusSupers({ repo, onSupers }: { repo: string | null; onSupers: (names: Record<string, string>) => void }) {
+  const { data } = useResource<{ sidebar?: SidebarRepo[] }>("status" + (repo ? "?repo=" + encodeURIComponent(repo) : ""));
   useEffect(() => {
     if (data?.sidebar) onSupers(Object.fromEntries(data.sidebar.flatMap((r) => (r.super ? [[r.repo, r.super]] : []))));
   }, [data, onSupers]);
-  // 나이트런 켜짐 여부는 현황 응답에만 있다(요약 응답에는 없다). 현황 밖 화면에서는 마지막으로 본 값을 쓴다.
-  useEffect(() => { if (data?.night) onNight(data.night); }, [data, onNight]);
   return null;
 }
 // 목록과 뱃지 수는 모든 화면이 이미 읽는 summary 응답의 sidebar 칸에서 온다(PR2 검수 S2). 그 밖의 화면에서는 status를 부르지 않는다.
-export default function RepoSidebar({ url, repo, view, repos, failed }: { url: URL; repo: string | null; view: string; repos?: SidebarRepo[]; failed?: boolean }) {
+export default function RepoSidebar({ url, repo, view, repos, night, failed }: { url: URL; repo: string | null; view: string; repos?: SidebarRepo[]; night?: NightStrip | null; failed?: boolean }) {
   const [supers, setSupers] = useState<Record<string, string>>({});
-  const [night, setNight] = useState<NightStrip | null>(null);
   const list = (repos ?? []).map((r) => ({ ...r, super: r.super ?? supers[r.repo] ?? null }));
   const [open, setOpen] = useState(() => matchMedia(WIDE).matches);
   useEffect(() => {
@@ -38,6 +35,7 @@ export default function RepoSidebar({ url, repo, view, repos, failed }: { url: U
   // 🌙 뱃지 재료: 페이지를 열 때 한 번만 읽는다(타이머 없음). 못 읽거나 맞는 줄이 없으면 뱃지를 달지 않는다(정책 없음으로 단정하지 않음).
   const nightRes = useNightRepos();
   const nightBy = nightRes.data ? groupByRepo(nightRes.data.repos, rows.map((r) => r.repo)).byRepo : new Map();
+  // 켜짐 여부는 모든 화면이 15초마다 읽는 summary 응답의 night 칸이다. 아직 못 읽었으면 모름(null)이라 켜짐/꺼짐을 단정하지 않는다.
   const nightOn = night?.on ?? null;
   const total = (key: "decisions" | "merges") =>
     rows.some((r) => r[key] === null) ? null : rows.reduce((sum, r) => sum + (r[key] ?? 0), 0);
@@ -66,7 +64,7 @@ export default function RepoSidebar({ url, repo, view, repos, failed }: { url: U
         {!repos && !failed && <p className="dw-side-note">불러오는 중…</p>}
         {failed && <p className="dw-side-note">저장소 목록을 읽지 못했습니다.</p>}
       </details>
-      {view === "status" && <StatusSupers repo={repo} onSupers={setSupers} onNight={setNight} />}
+      {view === "status" && <StatusSupers repo={repo} onSupers={setSupers} />}
     </aside>
   );
 }
