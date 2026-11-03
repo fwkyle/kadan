@@ -14,9 +14,11 @@ import {
   closeStartedWindow,
 } from "../cli-start-support.mjs";
 
+export const STOP_USAGE = "사용법: kadan stop <역할>";
+
 export function cmdStop(argv) {
   const role = argv[0];
-  if (!role) die("사용법: kadan stop <역할>");
+  if (!role) die(STOP_USAGE);
   const session = sessionName(role);
   const home = ledgerHome();
   // 기반 프로세스 4개의 stop은 `kadan up --auto`와 같은 잠금 아래에서 돈다. 안 그러면 끄는 도중 자동 실행이 세션이 없는 것을 보고 되살린다.

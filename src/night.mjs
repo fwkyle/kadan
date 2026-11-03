@@ -77,16 +77,47 @@ export function nightTargets({works, entries, by}) {
   return {to: [...all].sort(), unreachable};
 }
 
+// 자동 단계 줄. 금지 목록은 설계 2절의 수정본이다(고정 줄, 문구로 못 풂). 머지 줄은 자동 머지 관문(PR C) 전까지 아침 보류다.
+export const AUTO_LINES = [
+  '(4) 묻기 전에 스스로 찾습니다: 저장소·결정 이력·TODO·docs·카드를 먼저 봅니다.',
+  '(5) 되돌릴 수 있고, 근거가 있고, 아래 (6) 금지와 무관하면 추천안으로 진행하고 `[나이트 결정] <한 줄>`로 남깁니다. 되돌릴 수 없으면 보류합니다.'
+    + ' 대신 정한 것·보류·시작한 일감은 `kadan night note decision|hold|start "<한 줄>"`로 원장에 남깁니다(아침 요약에 모입니다).',
+  '(6) 어떤 근거로도 하지 않는 것: 소스·데이터·설정·증거 파일의 영구 삭제(캐시 삭제와, 미커밋 변경 없음·원격에 없는 커밋 없음·사용 중 프로세스 없음·내 브랜치를 모두 확인한 머지된 worktree 정리는 허용);'
+    + ' git 강제 push·reset --hard·clean·checkout -- .·restore .·branch -D·기준 브랜치 직접 push;'
+    + ' 운영 데이터·DB 변경과 스키마 반영(supabase db push·db reset);'
+    + ' 비밀값을 출력·기록·커밋·전송하는 것(승인된 도구가 이미 설정된 인증을 쓰는 것은 허용);'
+    + ' 신규 결제·증액·유료 가입; 테스트 전용 기기를 포함한 연결 기기 쓰기;'
+    + ' 머지가 곧 운영 배포인 저장소의 머지, 배포·외부 공개 효과가 있는 push·PR;'
+    + ' 카단 밖의 사람·서비스로 가는 글; 카단 저장소의 새 의존성(다른 저장소는 의존성 변경 PR의 머지를 아침으로 보류);'
+    + ' 계정·권한·인증과 시스템 설정 변경(kadan window·runners·watch-profile·~/.claude·규칙 원본 포함);'
+    + ' 감시기·대시보드 종료·재시작과 restart --force; 이 장치의 지침·금지 목록·단계 정의를 밤에 바꾸는 것; 기기 전체 부하 시험.',
+  '(7) 위 중 카단 명령(restart --force, stop watch|대시보드, window set|unset, runners set|runner|model, night on --level 바이패스)은 켜진 동안 역할 세션에서 코드가 거절합니다.'
+    + ' 셸·gh로 직접 하는 행위는 코드가 막지 못하므로 이 문구와 아침 사후 드러냄으로만 다룹니다.',
+  '(8) 머지는 자동 머지 관문이 생기기 전이라 아침으로 보류합니다. 구현·검수까지만 하고, 머지 뒤 로컬 main 갱신·재시작도 아침에 합니다.',
+  '(9) kyle의 직접 중지와 명시한 상한이 언제나 최우선입니다.',
+];
+export const ONLY_RUNNING_LINE = '새 일감을 시작하지 않습니다: 진행 중인 업무만 위 판단 범위로 이어 갑니다.';
+// 켤 때 출력에 보이는 점검 목록. 검사하지 않는다(검사하면 어댑터가 된다) — 안내이지 차단이 아니다.
+export const AUTO_CHECKLIST = [
+  '각 실행기(claude·codex 등)의 권한 설정에 위 (6) 금지가 거부 규칙으로 걸려 있는지 kyle이 한 번 확인하세요. 카단은 검사하지 않습니다.',
+  '머지가 곧 운영 배포인 저장소(push 기반 자동배포)가 열린 업무에 있는지 온톨로지 카드로 확인하세요. 자동 단계는 머지를 아침으로 보류합니다.',
+];
+
 // 슈퍼감독에게 가는 우편 본문. 고정 줄 3개 + 사용자 문구. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이라고 밝힌다.
-export function buildNightMessage({text, quote, viaChat, by, untilMs}) {
+// level이 '자동'이면 고정 줄이 (4)~(9)까지 늘고, onlyRunning이면 새 일감 금지 줄이 붙는다. level이 없으면 지금과 같다.
+export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onlyRunning}) {
+  const auto = level === '자동';
+  const extra = auto ? [...AUTO_LINES, ...(onlyRunning ? [`(10) ${ONLY_RUNNING_LINE}`] : [])] : [];
   return [
     `[나이트 모드] kyle이 취침 중입니다. 끝: ${clock(untilMs)} 또는 kyle 새 입력. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이며, 기존 승인 범위 안에서 스스로 판단하세요.`,
+    ...(auto ? [`단계: 자동${onlyRunning ? '(진행 중인 업무만)' : ''}`] : []),
     '(1) 되돌리기 어려운 것(운영 데이터 변경·삭제, push 정책, 외부 공개, 새 의존성)은 kyle 기상 뒤로 보류합니다.',
     `(2) 보류 대상은 밤중에 decision request를 새로 올리지 말고 보류로 남깁니다: kadan mail 사람 "${HELD_PREFIX} <한 줄>". 아침 요약에 모입니다.`,
     '(3) 위임 범위 안의 일은 결정 요청을 올리지 말고 스스로 처리합니다.',
+    ...extra,
     `kyle 추가 문구: ${text}`,
     ...(viaChat ? [`kyle 채팅 원문(${by}이(가) 옮겨 적음): ${quote}`] : []),
-    '감독에게 넘길 때는 위 (1)~(2) 줄을 그대로 붙이세요.',
+    `감독에게 넘길 때는 위 (1)~(${auto ? (onlyRunning ? 10 : 9) : 2}) 줄을 그대로 붙이세요.`,
   ].join('\n');
 }
 

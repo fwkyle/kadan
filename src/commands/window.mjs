@@ -11,7 +11,7 @@ import {
   windowSettingPath,
 } from "../window-setting.mjs";
 
-const USAGE = "사용법: kadan window show | set rottie [--rottie-bin <절대경로>] | set none | unset";
+export const WINDOW_USAGE = "사용법: kadan window show | set rottie [--rottie-bin <절대경로>] | set none | unset";
 
 function showText(home, env) {
   const setting = describeWindowSetting(home);
@@ -39,5 +39,5 @@ export function cmdWindow(argv, flags, { home = ledgerHome(), env = process.env,
     print(`창 선택을 고정했다.\n${showText(home, env)}`);
     return;
   }
-  die(USAGE, 2);
+  die(WINDOW_USAGE, 2);
 }

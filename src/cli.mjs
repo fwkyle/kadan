@@ -7,6 +7,7 @@ import { assertWritable } from "./storage.mjs";
 import { inboxCommand } from "./mailbox.mjs";
 import { decisionCommand } from "./decisions.mjs";
 import { nightCommand, nightOriginalText } from "./commands/night.mjs";
+import { nightGuard } from "./night-guard.mjs";
 import { seniorCommand } from "./senior.mjs";
 import { runnersCommand } from "./runners-command.mjs";
 import { CardStore } from "./card-store.mjs";
@@ -70,11 +71,11 @@ import { cmdPlan } from "./commands/plan.mjs";
 import { cmdDone } from "./commands/done.mjs";
 import { cmdWait } from "./commands/wait.mjs";
 import { sendWatchMessage, cmdWatch } from "./commands/watch.mjs";
-import { cmdStop } from "./commands/stop.mjs";
+import { cmdStop, STOP_USAGE } from "./commands/stop.mjs";
 import { cmdRestore } from "./commands/restore.mjs";
-import { cmdRestart } from "./commands/restart.mjs";
+import { cmdRestart, RESTART_USAGE } from "./commands/restart.mjs";
 import { cmdClaude } from "./commands/claude.mjs";
-import { cmdWindow } from "./commands/window.mjs";
+import { cmdWindow, WINDOW_USAGE } from "./commands/window.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
 import { cmdStopHook } from "./commands/stop-hook.mjs";
 import { cmdSecrets } from "./commands/secrets.mjs";
@@ -216,7 +217,7 @@ export const COMMANDS = {
   night: (argv,flags) => {
     const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
-    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):JSON.stringify(result,null,2));
+    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):argv[0]==='note'?result:JSON.stringify(result,null,2));
   },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
@@ -233,7 +234,7 @@ export const COMMANDS = {
       record:entry=>appendLedger({...entry,t:new Date().toISOString()})});
     console.log(argv[0] === 'report' && !flags.json ? result : JSON.stringify(result,null,2));
   },
-  card: async (argv,flags) => console.log(JSON.stringify(await cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
+  card: async (argv,flags) => console.log(JSON.stringify(await cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor}),null,2)),
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
   'merge-check': (argv,flags) => console.log(flags.help ? '사용: kadan merge-check <저장소/업무ID> --head <PR head 커밋>. 업무의 검수 중 PR head와 같은 커밋을 본 검수를 찾아 나란히 보입니다(같음·같은 커밋 검수 changes·다름·모호, 표시만, 머지를 막지 않음, GitHub 호출 없음). 입력 형식 오류만 종료 코드 2.' : formatMergeCheck(mergeCheck(argv[0],{head:flags.head},{home:ledgerHome()}))),
@@ -273,6 +274,8 @@ export const COMMANDS = {
   recovery: recoveryCommand,
 };
 
+const HELP_ONLY={window:WINDOW_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE};
+
 export function main(argv) {
   const [command, ...rest] = argv;
   const fn = COMMANDS[command];
@@ -284,10 +287,14 @@ export function main(argv) {
     console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
     process.exit(1);
   }
-  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
+    // 거절 검사는 --help와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하는 길이 새지 않게).
+    nightGuard({command,args,flags});
+    // 쓰기·종료 명령은 --help면 사용법만 보이고 아무것도 실행하지 않는다.
+    if(flags.help&&HELP_ONLY[command]){console.log(HELP_ONLY[command]);return;}
     if(
       ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||

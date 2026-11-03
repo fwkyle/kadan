@@ -4,17 +4,19 @@ import {appendLedger, readLedger} from '../ledger.mjs';
 import {isUserActor, isSupervisorActor} from '../actors.mjs';
 import {WorkStore} from '../work-store.mjs';
 import {
-  nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock,
+  nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock, AUTO_CHECKLIST,
 } from '../night.mjs';
+import {buildNightNote, noteLine} from '../night-note.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--discord-message <글 id>] | off [--reason 이유] | status';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
   return {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
     startedAt: on.t, until: on.until, untilLocal: clock(untilMs), remainingMinutes: Math.max(0, Math.round((untilMs - now) / 60_000)),
+    level: on.level ?? '기본', onlyRunning: on.onlyRunning === true,
     to: on.to ?? [], delivered: on.delivered ?? [], missing,
   };
 }
@@ -63,6 +65,13 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
     return {on: false, ...(state.pending ? {pendingEnd: state.pending.phase, note: '끝났지만 아직 요약 전입니다(감시기 다음 주기나 다음 night 명령이 마무리합니다)'} : {}),
       last: lastRun(entries, state)};
   }
+  if (sub === 'note') {
+    // 켜져 있을 때만 받는다. 끝났지만 요약 전인 켜짐도 꺼짐으로 보고 거절한다(마무리는 on/off/감시기 몫). 역할 세션·사람 모두 쓸 수 있다.
+    if (!state.on) throw Object.assign(new Error('나이트 모드가 켜져 있을 때만 기록할 수 있습니다'), {exitCode: 2});
+    const event = buildNightNote({words: rest, flags, by, now});
+    (deps.record ?? (entry => appendLedger(entry, home)))(event);
+    return noteLine(event);
+  }
   if (!['on', 'off'].includes(sub)) throw new Error(`알 수 없는 night 명령. ${USAGE}`);
 
   const actor = isUserActor(by) ? 'human' : isSupervisorActor(by) ? 'super' : null;
@@ -91,10 +100,17 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   if (viaChat && !quote) throw new Error('슈퍼감독이 켤 때는 kyle의 채팅 원문이 필요합니다: kyle이 말한 그대로 --quote "<원문>"으로 옮기세요');
   if (flags['discord-message'] !== undefined && (typeof flags['discord-message'] !== 'string' || !flags['discord-message'])) throw new Error('--discord-message는 디코 글 id 하나여야 합니다');
 
+  // 단계: 없으면 지금과 같은 동작(따로 이름 붙이지 않는다). 바이패스는 아직 구현하지 않는다.
+  const level = flags.level;
+  if (level !== undefined && !['자동', '바이패스'].includes(level)) throw new Error(`--level은 자동만 쓸 수 있습니다. ${USAGE}`);
+  if (level === '바이패스') throw Object.assign(new Error('--level 바이패스는 아직 구현하지 않았습니다'), {exitCode: 2});
+  const onlyRunning = flags['only-running'] === true;
+  if (onlyRunning && level !== '자동') throw new Error('--only-running은 --level 자동과 함께만 쓸 수 있습니다');
+
   const until = resolveEnd({until: flags.until, for: flags.for}, now);
   const works = deps.readWorks ? deps.readWorks() : new WorkStore(home).list();
   const {to, unreachable} = nightTargets({works, entries, by});
-  const message = buildNightMessage({text, quote, viaChat, by, untilMs: Date.parse(until)});
+  const message = buildNightMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, onlyRunning});
   const send = deps.sendMail ?? sendNightMail(home, by);
   const delivered = to.map(role => {
     try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, error: String(error.message).slice(0, 200)}; }
@@ -102,8 +118,9 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   const event = {
     kind: 'night', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),
+    ...(level ? {level, onlyRunning} : {}),
     until, to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
   };
   (deps.record ?? (entry => appendLedger(entry, home)))(event);
-  return {on: true, until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
+  return {on: true, ...(level ? {level, onlyRunning, checklist: AUTO_CHECKLIST} : {}), until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
 }

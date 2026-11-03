@@ -59,10 +59,12 @@ export function cliRestartFlags(flags) {
   return rest;
 }
 
+export const RESTART_USAGE = "사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]";
+
 export function cmdRestart(argv, flags) {
   flags = cliRestartFlags(flags);
   const role = argv[0];
-  if (!role) die("사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]");
+  if (!role) die(RESTART_USAGE);
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
   // 화면(대시보드 '다시 띄우기')에서 온 값은 옵션 재해석을 막기 위해 인자가 아니라 환경변수로 들어온다(2026-10-15 2라운드).
   // 읽은 즉시 이 프로세스의 환경에서 지운다(3라운드): 지우지 않으면 마지막 역할 재시작 때 새 tmux 서버·새 역할 환경에
