@@ -4,6 +4,8 @@ import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse, Spark, useSkin } from "../ui";
 import Radar from "../Radar";
 import StatusFront, { FrontLists, type FrontData } from "./StatusFront";
+import { NightBand, NightPolicyNotes, OtherGithub, RepoNightHead, useNightRepos } from "../NightParts";
+import type { NightStrip } from "../night-repos";
 import { radarBlips } from "../radar-blips";
 import { ALERT_SHOWN, STOP_SHOWN, alertMore, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
@@ -46,7 +48,7 @@ function ProcessTable({processes}: {processes?: ProcessData | null}) {
   </>;
 }
 type StatusData = Stamp & {
-  rows: Row[]; works: Row[]; repo?: string | null; repoView?: {mergedToday: {id: string; prs: number[]; at: string}[] | null}; endedWorks?: {done: number; cancelled: number; total: number; included: boolean}; front?: FrontData; cleanupRequest: string; executionCount: number;
+  rows: Row[]; works: Row[]; repo?: string | null; night?: NightStrip; sidebar?: {repo: string}[]; repoView?: {mergedToday: {id: string; prs: number[]; at: string}[] | null}; endedWorks?: {done: number; cancelled: number; total: number; included: boolean}; front?: FrontData; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
   live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml?: string}[];
@@ -74,6 +76,7 @@ const idleSupers = (items: Supervisors["items"]) => items.filter(isIdleSuper);
 export default function Status({url}: {url: URL}) {
   const repo = url.searchParams.get("repo") || null;
   const resource = useResource<StatusData>("status" + (repo ? "?repo=" + encodeURIComponent(repo) : "")), data = resource.data;
+  const nightRes = useNightRepos();
   const skin = useSkin(), [flowMore, setFlowMore] = useState(false);
   const context = useContext(AppContext), scrolled = useRef("");
   useEffect(() => {
@@ -151,6 +154,8 @@ export default function Status({url}: {url: URL}) {
     const alerts = d.alerts;
     return <>
       <p className="st-repo-lead">저장소 <strong>{repo}</strong>의 일만 보고 있습니다. 사이드 탭의 '전체'를 누르면 모든 저장소를 모아 봅니다.</p>
+      <NightBand night={d.night}/>
+      <RepoNightHead repo={repo!} res={nightRes} on={d.night?.on ?? null}/>
       {d.front?.decisions === null && <p className="st-error" role="alert">결정 기록을 읽지 못해 결정·머지 수를 모릅니다.</p>}
       <FrontLists decisions={d.front?.decisions ?? null} showRepo={false}/>
       <section id="status-attention" className="st-section">
@@ -181,7 +186,10 @@ export default function Status({url}: {url: URL}) {
         {bandChips({decisions: data.decisions?.length ?? null, stopped: stoppedCount, running: bucket("running").length, alerts: data.alerts, flow: data.flow, live: data.live}).map(chip =>
           <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{typeof chip.num === "number" ? <Roll value={chip.num}/> : chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
+      <NightBand night={data.night}/>
+      <NightPolicyNotes res={nightRes}/>
       <StatusFront front={data.front}/>
+      <OtherGithub res={nightRes} known={(data.sidebar ?? []).map(r => r.repo)} on={data.night?.on ?? null}/>
       <details id="status-more" className="st-fold st-more-fold"><summary>전체 현황 더 보기</summary>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
         {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useResource } from "./resource";
 import { repoSwitchUrl } from "./repo-nav";
+import { SideNightBadge, useNightRepos } from "./NightParts";
+import { groupByRepo, type NightStrip } from "./night-repos";
 
 export type SidebarRepo = { repo: string; decisions: number | null; merges: number | null; super: string | null };
 
@@ -18,7 +20,7 @@ function StatusSupers({ repo, onSupers }: { repo: string | null; onSupers: (name
   return null;
 }
 // 목록과 뱃지 수는 모든 화면이 이미 읽는 summary 응답의 sidebar 칸에서 온다(PR2 검수 S2). 그 밖의 화면에서는 status를 부르지 않는다.
-export default function RepoSidebar({ url, repo, view, repos, failed }: { url: URL; repo: string | null; view: string; repos?: SidebarRepo[]; failed?: boolean }) {
+export default function RepoSidebar({ url, repo, view, repos, night, failed }: { url: URL; repo: string | null; view: string; repos?: SidebarRepo[]; night?: NightStrip | null; failed?: boolean }) {
   const [supers, setSupers] = useState<Record<string, string>>({});
   const list = (repos ?? []).map((r) => ({ ...r, super: r.super ?? supers[r.repo] ?? null }));
   const [open, setOpen] = useState(() => matchMedia(WIDE).matches);
@@ -30,6 +32,11 @@ export default function RepoSidebar({ url, repo, view, repos, failed }: { url: U
   // 좁은 화면에서는 저장소를 고르면(주소의 repo가 바뀌면) 선택 목록을 접어 본문을 보이게 한다.
   useEffect(() => { if (!matchMedia(WIDE).matches) setOpen(false); }, [repo]);
   const rows = repo && !list.some((r) => r.repo === repo) ? [...list, { repo, decisions: 0, merges: 0, super: null }] : list;
+  // 🌙 뱃지 재료: 페이지를 열 때 한 번만 읽는다(타이머 없음). 못 읽거나 맞는 줄이 없으면 뱃지를 달지 않는다(정책 없음으로 단정하지 않음).
+  const nightRes = useNightRepos();
+  const nightBy = nightRes.data ? groupByRepo(nightRes.data.repos, rows.map((r) => r.repo)).byRepo : new Map();
+  // 켜짐 여부는 모든 화면이 15초마다 읽는 summary 응답의 night 칸이다. 아직 못 읽었으면 모름(null)이라 켜짐/꺼짐을 단정하지 않는다.
+  const nightOn = night?.on ?? null;
   const total = (key: "decisions" | "merges") =>
     rows.some((r) => r[key] === null) ? null : rows.reduce((sum, r) => sum + (r[key] ?? 0), 0);
   return (
@@ -48,6 +55,7 @@ export default function RepoSidebar({ url, repo, view, repos, failed }: { url: U
               <a href={repoSwitchUrl(url, r.repo)} aria-current={repo === r.repo ? "page" : undefined}>
                 <span className="dw-side-name">{r.repo}</span>
                 {badge("⚑", "결정 대기", r.decisions)}{badge("⇡", "머지 요청", r.merges)}
+                <SideNightBadge lines={nightBy.get(r.repo)} on={nightOn} />
                 {r.super && <small className="dw-side-super">{r.super}</small>}
               </a>
             </li>

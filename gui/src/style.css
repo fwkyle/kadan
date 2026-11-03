@@ -675,3 +675,20 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .st-front-sub, .st-repo-lead, .dw-side { word-break: keep-all; overflow-wrap: break-word; }
 .st-front-sub h3, .st-front-sub h2 { text-wrap: balance; }
 .st-front-sub p, .st-front-sub li, .st-repo-lead { text-wrap: pretty; }
+
+/* PR3: 나이트런 상태 띠 · 저장소별 '나이트런 중 자동 머지' 뱃지 · 머지 요청 줄 정보. 한국어 줄바꿈은 공용 규칙(keep-all + break-word)을 따른다. */
+.st-night, .st-night-head, .st-night-lines, .st-merge-detail { word-break: keep-all; overflow-wrap: break-word; }
+.st-night { margin: 0 0 12px; padding: 6px 10px; border: 1px solid var(--ds-color-border); border-radius: 7px; font-size: 13px; color: var(--ds-color-muted); text-wrap: pretty; }
+.st-night-on { color: var(--ds-color-text); background: var(--ds-color-action-soft); border-color: var(--ds-color-action); font-weight: 600; }
+.st-night-badge { font-size: 12px; white-space: nowrap; padding: 0 6px; border: 1px solid var(--ds-color-border); border-radius: 999px; color: var(--ds-color-muted); }
+.st-night-allow { color: var(--ds-color-text); }
+.st-night-forbid, .st-night-except { color: var(--ds-color-text); border-style: dashed; }
+.st-night-setup, .st-night-unknown { color: var(--ds-color-muted); border-style: dotted; }
+.st-night-lit { background: var(--ds-color-action-soft); border-color: var(--ds-color-action); color: var(--ds-color-action); font-weight: 700; }
+.st-night-head { margin: 0 0 18px; }
+.st-night-head h3 { margin: 0 0 6px; font-size: 14px; text-wrap: balance; }
+.st-night-lines { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.st-night-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.st-night-detail { flex-basis: 100%; color: var(--ds-color-muted); }
+.st-merge-detail { flex-basis: 100%; font-size: 12px; color: var(--ds-color-muted); text-wrap: pretty; }
+@media (max-width: 799px) { .st-night-line strong { flex-basis: 100%; } }

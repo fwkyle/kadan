@@ -16,7 +16,8 @@ const firstLine = (text) => String(text ?? "").split(/\r?\n/).find((l) => l.trim
 const cut = (text, n) => (text.length > n ? text.slice(0, n - 1) + "…" : text);
 
 // decisions: 열린 결정 목록(null이면 읽지 못함). stoppedRows: 막힌·오래된 미확정 실행 행.
-export function frontStrip({ decisions, stoppedRows }) {
+// mergeInfo: 머지 요청 결정 하나의 줄 정보를 돌려주는 함수(PR3, night-view.mjs). 없으면 줄 정보를 싣지 않는다.
+export function frontStrip({ decisions, stoppedRows, mergeInfo = null }) {
   // 결정 기록을 못 읽었으면(null) 결정·머지 수는 0이 아니라 모름(null)이다.
   const unknown = decisions === null;
   const repos = new Map();
@@ -31,7 +32,8 @@ export function frontStrip({ decisions, stoppedRows }) {
     const merge = isMergeRequest(d);
     slot(repo)[merge ? "merges" : "decisions"] += 1;
     items.push({ id: d.id, repo, merge, requestedBy: d.requestedBy ?? null, at: d.at ?? null,
-      title: cut(d.questionTitle ?? firstLine(d.question), 120) });
+      title: cut(d.questionTitle ?? firstLine(d.question), 120),
+      ...(merge && mergeInfo ? { mergeInfo: mergeInfo(d) } : {}) });
   }
   for (const row of stoppedRows) slot(row.repo || repoOfKey(row.key)).stuck += 1;
   const list = [...repos.values()].sort((a, b) =>
