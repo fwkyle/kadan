@@ -71,8 +71,10 @@ function Board({ board, foldDone, project }: { board: KanbanBoard; foldDone: boo
 
 export default function Kanban({ url }: { url: URL }) {
   const owner = url.searchParams.get("owner") || "";
-  const project = url.searchParams.get("group") === "project";
-  const query = [project ? "group=project" : "", owner ? "owner=" + encodeURIComponent(owner) : ""].filter(Boolean).join("&");
+  // 기본 묶음은 프로젝트별. 감독별은 ?group=owner. 사이드 탭에서 고른 ?repo=는 그 저장소 판만 보인다.
+  const project = url.searchParams.get("group") !== "owner";
+  const repo = url.searchParams.get("repo") || "";
+  const query = [project ? "" : "group=owner", owner ? "owner=" + encodeURIComponent(owner) : "", repo ? "repo=" + encodeURIComponent(repo) : ""].filter(Boolean).join("&");
   const resource = useResource<KanbanData>("kanban" + (query ? "?" + query : "")), data = resource.data;
   return (
     <div className="kb-view" data-view="kanban">
@@ -82,7 +84,7 @@ export default function Kanban({ url }: { url: URL }) {
         <div className="kb-pick" role="group" aria-label="묶는 기준">
           {([["owner", "감독별"], ["project", "프로젝트별"]] as const).map(([key, label]) => (
             <button key={key} type="button" className="kb-toggle" aria-pressed={project === (key === "project")}
-              onClick={() => patchLocation({ group: key === "project" ? "project" : null }, "kanban")}>{label}</button>
+              onClick={() => patchLocation({ group: key === "owner" ? "owner" : null }, "kanban")}>{label}</button>
           ))}
         </div>
         <label className="kb-pick">감독{" "}

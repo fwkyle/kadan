@@ -25,6 +25,7 @@ import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
 import { letters, pick, compact, page } from "./shared.mjs";
 import { frontStrip } from "./front.mjs";
+import { sidebarRepos, repoOfRow, repoOfDecision, answeredMergesToday, alertsOfRepo } from "./repo-view.mjs";
 
 // 현황·전략 맵 화면이 읽지 않는 행 칸(gui/src/pages/Status.tsx·StrategyMap.tsx·stopped.ts·strategy-map.ts 기준, 2026-10-14 조사).
 // 업무 목록·상세는 자기 주소(workspace·detail)에서 이 칸을 받는다. ?super= 응답은 pick으로 따로 고르므로 영향이 없다.
@@ -108,10 +109,18 @@ export function statusData(snapshot, url, stamp, m) {
       recent: recent.filter((e) => mine(e.role)).slice(0, 20).map((e) => ({ ...pick(e, ["at", "kind", "label", "role"]), card: pick(e.card, ["key", "title"]) })),
     };
   }
+  // ?repo=<저장소>(PR2 사이드 탭): 행·워크·결정·경보·최근·첫 화면 띠를 그 저장소로 거른다. ?super=가 있으면 위에서 이미 돌려줬으므로 무시된다.
+  // 사이드 탭 목록(sidebar)은 거르기 전 전체로 만든다(저장소를 고른 뒤에도 다른 저장소로 옮길 수 있어야 한다).
+  const repo = url.searchParams.get("repo") || null;
+  const sidebar = sidebarRepos({ rows: m.rows, decisions: openDecisions, supervisors });
+  const inRepo = (r) => !repo || repoOfRow(r) === repo;
+  const repoRows = statusRows.filter(inRepo), repoWorksAll = statusWorks.filter(inRepo);
+  const repoDecisions = !repo || openDecisions === null ? openDecisions : openDecisions.filter((d) => repoOfDecision(d) === repo);
+  const repoOwners = new Set([...repoRows, ...repoWorksAll].map((r) => r.owner).filter(Boolean));
   // 끝난 워크(done·cancelled) 본문은 싣지 않고 건수만 준다(PR1). 본문이 필요한 호출자는 ?works=all.
   const allWorks = url.searchParams.get("works") === "all";
   const endedWorks = { done: 0, cancelled: 0 };
-  const shownWorks = statusWorks.filter((w) => {
+  const shownWorks = repoWorksAll.filter((w) => {
     if (w.state !== "done" && w.state !== "cancelled") return true;
     endedWorks[w.state] += 1;
     return allWorks;
@@ -121,11 +130,14 @@ export function statusData(snapshot, url, stamp, m) {
     works: shownWorks.map(slimRow),
     endedWorks: { ...endedWorks, total: endedWorks.done + endedWorks.cancelled, included: allWorks },
     // 첫 화면 '내 앞' 띠: 저장소별 결정·머지 요청·막힘 수와 열린 결정 첫 줄.
-    front: frontStrip({ decisions: openDecisions, stoppedRows: statusRows.filter((r) => r.bucket === "stuck" || r.bucket === "stale") }),
+    front: frontStrip({ decisions: repoDecisions, stoppedRows: repoRows.filter((r) => r.bucket === "stuck" || r.bucket === "stale") }),
+    repo,
+    sidebar,
+    ...(repo ? { repoView: { mergedToday: answeredMergesToday(snapshot.decisionError ? null : snapshot.decisions ?? [], repo) } } : {}),
     cleanupRequest: staleCleanupRequest(
       m.cards.filter((c) => isExecution(c) && executionBucket(c) === "stale"),
     ),
-    rows: statusRows.map(slimRow),
+    rows: repoRows.map(slimRow),
     resources: snapshot.resources,
     resourceError: snapshot.resourceError,
     processes: snapshot.processes ?? null,
@@ -147,12 +159,12 @@ export function statusData(snapshot, url, stamp, m) {
     watchHtml: renderWatchVerdict(snapshot.center, {
       runtime: snapshot.runtime,
     }),
-    decisions: openDecisions,
+    decisions: repoDecisions,
     previousGeneration: previousSummary(previousItems),
     live,
     lastRuns: lastRuns(snapshot.center, { hierarchy: m.hierarchy, alerts: allAlerts }),
     flow: (({ total, unconfirmed }) => ({ total, unconfirmedCount: unconfirmed.length, unconfirmed: unconfirmed.slice(0, FLOW_PREVIEW) }))(flowSummary(m.reviewFlows)),
-    alerts,
+    alerts: repo ? alertsOfRepo(allAlerts, repoOwners) : alerts,
     // 슈퍼감독마다 한 줄(관계표 기준). 관계표를 모르면 null.
     supervisors,
     // 전략 맵이 역할을 슈퍼감독 기지로 묶는 데 쓴다(2026-10-05). 관계표를 모르면 null.
@@ -161,6 +173,7 @@ export function statusData(snapshot, url, stamp, m) {
     activity: roleActivity(snapshot.entries, { skip: isWatchRoutine }),
     recentCounts: Object.fromEntries(["done", "failed", "send"].map(kind => [kind, recent.filter(event => event.kind === kind).length])),
     recent: recent
+      .filter((e) => !repo || (e.card?.key && repoOfDecision({ card: e.card.key }) === repo))
       .slice(0, 50)
       .map((e) => ({
         ...pick(e, ["at", "kind", "label", "role"]),
