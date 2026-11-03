@@ -7,10 +7,10 @@ import {
   nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock, AUTO_CHECKLIST,
 } from '../night.mjs';
 import {buildNightNote, noteLine} from '../night-note.mjs';
-import {POLICY_VALUES, setRepoPolicy, evaluateRepo, listRepos, repoPathFromWorks, policyPath} from '../night-repo-policy.mjs';
+import {POLICY_VALUES, setRepoPolicy, evaluateGithub, evaluateWork, listRepos, repoPathFromWorks, policyPath, normalizeGithub} from '../night-repo-policy.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<저장소> merge|hold [--repo-path 경로]] | repo list | repo show <저장소> [--repo-path 경로] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> merge|hold] | repo list | repo show <소유자/이름 | 업무키> [--repo-path 경로] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
@@ -53,35 +53,45 @@ export function nightOriginalText(result) {
     `--- ${result?.on ? `끝: ${result.untilLocal}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
 }
 
-// 저장소 정책 한 건을 사람이 읽는 줄로. 기본값 근거는 카드 id만 보인다(절대 경로 없음).
+// 저장소 정책 한 줄 묶음을 사람이 읽는 줄로. 기본값 근거는 카드 id만 보인다(절대 경로 없음).
 function repoLines(info) {
   const {saved, source: src, verdict: v} = info;
+  const name = info.github ?? info.repo ?? '(이름 모름)';
   const word = v.action === 'merge' ? '머지' : '보류';
-  const basis = src.card ? `카드 ${src.card} deploy_branch ${src.deployBranch ?? '(칸 없음)'}, night_merge ${src.nightMerge ?? '(칸 없음=허용)'}${src.reason ? ` — ${src.reason}` : ''}` : `없음${src.reason ? ` — ${src.reason}` : ''}`;
+  const where = info.repo && info.github && info.repo !== info.github ? ` [업무 ${info.repo}]` : '';
+  const basis = src.card
+    ? `카드 ${src.hub ? `${src.hub}:` : ''}${src.card} deploy_branch ${src.deployBranch ?? '(없음/읽지 못함)'}, night_merge ${src.nightMerge ?? '(칸 없음=허용)'}${src.reason ? ` — ${src.reason}` : ''}`
+    : `없음${src.reason ? ` — ${src.reason}` : ''}`;
   return [
-    `${info.repo}: 저장 값 ${saved ? `${saved.value} (${saved.at}, ${saved.by})` : '없음'}`,
-    `${info.repo}: 기본값 근거 ${basis}`,
-    `${info.repo}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''}${v.exceptBranch ? `, ${v.exceptBranch}으로 가는 PR만 보류` : ''})`,
+    `${name}${where}: 저장 값 ${saved ? `${saved.value} (${saved.at}, ${saved.by})` : '없음'}`,
+    `${name}: 기본값 근거 ${basis}`,
+    `${name}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''}${v.exceptBranch ? `, ${v.exceptBranch}으로 가는 PR만 보류` : ''})`,
   ];
 }
 
-// `night repo`: 읽기(인자 없음·list·show)와 쓰기(<저장소> merge|hold). 원장은 읽지 않고 업무 목록만 읽는다.
+// `night repo`: 읽기(인자 없음·list·show)와 쓰기(<소유자/이름> merge|hold). 원장은 읽지 않고 업무 목록만 읽는다.
 function repoCommand(args, flags, {home, by, deps}) {
   const [name, value] = args;
   const works = () => (deps.readWorks ?? (() => new WorkStore(home).list()))();
-  const pathFor = repo => (typeof flags['repo-path'] === 'string' ? flags['repo-path'] : repoPathFromWorks(works(), repo));
-  if (name === undefined) return `정책 파일: ${policyPath(home)}\n사용법: kadan night repo <저장소> ${POLICY_VALUES.join('|')} [--repo-path 경로] | list | show <저장소> [--repo-path 경로]`;
+  if (name === undefined) return `정책 파일: ${policyPath(home)}\n사용법: kadan night repo <소유자/이름> ${POLICY_VALUES.join('|')} | list | show <소유자/이름 | 업무키> [--repo-path 경로]`;
   if (name === 'list') {
-    const {corrupt, repos} = listRepos(home, works());
-    return [...(corrupt ? [`경고: ${corrupt} — 읽기는 hold로 봅니다`] : []), ...(repos.length ? repos.flatMap(repoLines) : ['저장된 값도 업무도 없습니다'])].join('\n');
+    const {corrupt, repos, legacy} = listRepos(home, works());
+    return [...(corrupt ? [`경고: ${corrupt} — 읽기는 hold로 봅니다`] : []),
+      ...(repos.length ? repos.flatMap(repoLines) : ['저장된 값도 업무도 없습니다']),
+      ...legacy.map(l => `옛 형식 저장값(다시 설정 필요): ${l.name} = ${l.value} — 덮어쓰기로 쓰지 않습니다. kadan night repo <소유자/이름> ${l.value}로 다시 저장하세요`)].join('\n');
   }
   if (name === 'show') {
-    if (!value) throw new Error('저장소 이름이 필요합니다: kadan night repo show <저장소>');
-    return repoLines(evaluateRepo(home, value, {repoPath: pathFor(value)})).join('\n');
+    if (!value) throw new Error('저장소 이름이 필요합니다: kadan night repo show <소유자/이름 | 업무키>');
+    if (value.includes('/')) {
+      if (!normalizeGithub(value)) throw new Error(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${value}`);
+      return repoLines(evaluateGithub(home, value)).join('\n');
+    }
+    const repoPath = typeof flags['repo-path'] === 'string' ? flags['repo-path'] : repoPathFromWorks(works(), value);
+    return evaluateWork(home, value, {repoPath}).flatMap(repoLines).join('\n');
   }
   if (!value) throw new Error(`값이 필요합니다(${POLICY_VALUES.join('|')}): kadan night repo ${name} <값>`);
   const saved = setRepoPolicy(home, {repo: name, value, by, record: deps.record ?? (entry => appendLedger(entry, home))});
-  return [`저장: ${saved.repo} = ${saved.value} (이전 ${saved.before ?? '없음'})`, ...repoLines(evaluateRepo(home, name, {repoPath: pathFor(name)})).slice(1)].join('\n');
+  return [`저장: ${saved.repo} = ${saved.value} (이전 ${saved.before ?? '없음'})`, ...repoLines(evaluateGithub(home, saved.repo)).slice(1)].join('\n');
 }
 
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.

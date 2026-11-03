@@ -1,10 +1,12 @@
 // 저장소별 밤 머지 정책(PR C1). 자동 단계에서 관문을 통과한 PR을 저장소마다 merge|hold로 다룬다.
-// 허용 저장소 목록은 두지 않는다(2026-11-02 kyle). 값이 없으면 온톨로지 project 카드의 새 칸 둘이 기본값이다
-// (2026-11-03 kyle: "배포브랜치를 적어두면, 해당 브랜치에만 머지 안 해도 되는 거니까"):
-//   deploy_branch(push·머지되면 운영에 자동 배포되는 브랜치, 없으면 `없음`)와 night_merge(`허용`·`금지`, 칸이 없으면 허용).
+// 판정 키는 GitHub `소유자/이름`이다(소문자, 끝 `.git`·`/` 제거): 업무 키(폴더) 하나에 저장소가 여럿일 수 있고(우산 카드),
+// 머지 관문(C2)은 PR 주소에서 소유자/이름을 바로 얻는다. 허용 저장소 목록은 두지 않는다(2026-11-02 kyle).
+// 값이 없으면 온톨로지 project 카드의 `deploy_branch`·`night_merge`·`remote` 칸이 기본값이다(2026-11-03 kyle:
+// "배포브랜치를 적어두면, 해당 브랜치에만 머지 안 해도 되는 거니까").
 // 판정(위에서부터 처음 맞는 것): 저장값 → 카드·deploy_branch를 못 읽으면 hold(setup-needed) → night_merge 금지면 hold
 //   → 대상 브랜치가 deploy_branch면 hold → merge. 카드의 `deploy` 칸은 판정에 쓰지 않고 화면 참고용으로만 응답에 담는다.
-// 파일 낱말로 배포를 추정하지 않는다. 상주 경로가 아니다: 명령·요청 한 번에 카드 앞머리 몇십 장을 읽는다.
+// 칸은 정해진 형식만 읽는다. 설명 글을 정규식으로 해석하지 않고, 읽지 못하면 setup-needed다(네 라운드의 교훈).
+// 상주 경로가 아니다: 명령·요청 한 번에 카드 앞머리 몇십 장을 읽는다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,9 +15,20 @@ import {acquireDirLock} from './dir-lock.mjs';
 
 export const POLICY_FILE = 'night-repo-policy.json';
 export const POLICY_VALUES = ['merge', 'hold'];
-export const REPO_NAME = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u;
+const LEGACY_NAME = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u; // 옛 형식 저장 키(맨 이름)
 
-// 온톨로지 project 카드 폴더: 개인·회사 허브 모두 `~/Dev/*-hub/ontology/cards/project`다(허브가 늘어도 같은 규칙).
+const GITHUB_KEY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+// GitHub `소유자/이름` 키: 소문자로 바꾸고 끝 `.git`·`/`를 뗀다. `/`가 정확히 하나, 양쪽 부분이 비지 않음, 앞 `/` 없음,
+// `..`·`.` 부분 없음, 글자는 영문·숫자·`._-`. 올바르지 않으면 null.
+export function normalizeGithub(raw) {
+  if (typeof raw !== 'string') return null;
+  let s = raw.trim().toLowerCase();
+  for (let prev = null; prev !== s;) { prev = s; s = s.replace(/\/+$/, '').replace(/\.git$/, ''); }
+  if (!GITHUB_KEY.test(s) || s.includes('..') || s.split('/').some(part => part === '.')) return null;
+  return s;
+}
+
+// 온톨로지 project 카드 폴더: 허브마다 `~/Dev/*-hub/ontology/cards/project`다(허브가 늘어도 같은 규칙).
 // 시험·다른 기계는 KADAN_ONTOLOGY_DIRS(경로 구분자로 여럿)로 바꾼다.
 export const defaultOntologyDirs = () => {
   const dev = path.join(os.homedir(), 'Dev');
@@ -29,25 +42,28 @@ const normPath = p => expandHome(String(p).trim()).replace(/\/+$/, '');
 export const policyPath = home => path.join(home, POLICY_FILE);
 
 // 손상은 "읽지 못함"과 같게 다룬다: 읽기는 hold, 쓰기는 거절. 다른 값으로 넘어가지 않는다.
-// 예전 파일에 저장된 `auto`는 "저장값 없음"으로 읽는다(기본값을 따른다). 다시 쓸 때 빠진다.
+// 저장 키는 GitHub 소유자/이름이다. 옛 형식(맨 이름)은 "덮어쓰기 없음"으로 읽고 legacy에 따로 담는다(지우지 않는다).
+// 예전 `auto` 값은 저장값 없음으로 읽는다(legacy에도 담지 않고, 다시 쓸 때 빠진다).
 export function readPolicy(home) {
   const file = policyPath(home);
-  if (!fs.existsSync(file)) return {repos: {}, corrupt: null};
+  if (!fs.existsSync(file)) return {repos: {}, legacy: {}, corrupt: null};
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
     const ok = value && value.version === 1 && value.repos && typeof value.repos === 'object' && !Array.isArray(value.repos)
-      && Object.entries(value.repos).every(([name, r]) => REPO_NAME.test(name) && [...POLICY_VALUES, 'auto'].includes(r?.value));
+      && Object.entries(value.repos).every(([key, r]) => (key === normalizeGithub(key) || LEGACY_NAME.test(key)) && [...POLICY_VALUES, 'auto'].includes(r?.value));
     if (!ok) throw new Error('모양이 다름');
-    return {repos: Object.fromEntries(Object.entries(value.repos).filter(([, r]) => r.value !== 'auto')), corrupt: null};
+    const live = Object.entries(value.repos).filter(([, r]) => r.value !== 'auto');
+    return {repos: Object.fromEntries(live.filter(([key]) => key.includes('/'))), legacy: Object.fromEntries(live.filter(([key]) => !key.includes('/'))), corrupt: null};
   } catch (error) {
     // 원격 GET에도 나가는 문구라 OS 오류 문장(절대 경로 포함)을 쓰지 않는다: 파일 이름과 오류 코드만.
     const detail = error.code ?? (error instanceof SyntaxError ? 'JSON 구문 오류' : error.message);
-    return {repos: {}, corrupt: `밤 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
+    return {repos: {}, legacy: {}, corrupt: `밤 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
   }
 }
 
 export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toISOString(), record}) {
-  if (!REPO_NAME.test(repo ?? '')) throw new Error(`저장소 이름이 올바르지 않습니다: ${repo ?? '(없음)'}`);
+  const key = normalizeGithub(repo);
+  if (!key) throw new Error(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${repo ?? '(없음)'}`);
   if (!POLICY_VALUES.includes(value)) throw new Error(`값은 ${POLICY_VALUES.join('|')} 중 하나여야 합니다: ${value ?? '(없음)'}`);
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   const lock = path.join(home, '.night-repo-policy-lock');
@@ -55,13 +71,13 @@ export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toI
   try {
     const current = readPolicy(home);
     if (current.corrupt) throw new Error(`${current.corrupt} (${policyPath(home)}) — 파일을 확인한 뒤 고치거나 .trash/로 옮기세요. 읽기는 hold로 봅니다`);
-    const before = current.repos[repo]?.value ?? null;
+    const before = current.repos[key]?.value ?? null;
     const entry = {value, at: now(), by};
     const file = policyPath(home), tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({version: 1, repos: {...current.repos, [repo]: entry}}, null, 2) + '\n', {mode: 0o600});
+    fs.writeFileSync(tmp, JSON.stringify({version: 1, repos: {...current.legacy, ...current.repos, [key]: entry}}, null, 2) + '\n', {mode: 0o600});
     fs.renameSync(tmp, file);
-    record?.({kind: 'night-repo-policy', repo, before, after: value, by, t: entry.at});
-    return {repo, ...entry, before};
+    record?.({kind: 'night-repo-policy', repo: key, before, after: value, by, t: entry.at});
+    return {repo: key, ...entry, before};
   } finally { fs.renameSync(lock, `${lock}.released-${randomUUID()}`); }
 }
 
@@ -84,6 +100,47 @@ const realPath = p => { try { return fs.realpathSync(p).replace(/\/+$/, ''); } c
 const cardRepoPath = value => { const first = String(value ?? '').trim().split(/\s+/)[0]; return first ? realPath(normPath(first)) : null; };
 const firstWord = value => (typeof value === 'string' ? value.trim().split(/\s+/)[0] : '') || null;
 
+// 카드 `remote:`는 세 형식만 읽는다(첫 낱말, 뒤의 괄호 설명은 무시): `github.com/o/n`, `git@github.com:o/n.git`
+// (또는 `git@github-<별칭>:o/n.git`), 맨 `o/n`(소유자에 점 없음). `없음`이거나 다른 형식이면 null이다.
+const REMOTE_FORMS = [
+  /^github\.com\/([^/\s]+\/[^/\s]+)$/i,
+  /^git@github(?:\.com|-[\w.-]+):([^/\s]+\/[^/\s]+)$/i,
+  /^([A-Za-z0-9-]+\/[^/\s:@]+)$/, // 맨 o/n: GitHub 소유자 이름에는 점이 없어 `github.com/x` 같은 도메인 꼴은 맞지 않는다
+];
+export function parseRemote(value) {
+  const first = typeof value === 'string' ? value.trim().split(/\s+/)[0] : '';
+  for (const form of REMOTE_FORMS) { const m = form.exec(first); if (m) return normalizeGithub(m[1]); }
+  return null;
+}
+
+const BRANCH_WORD = /^(?:없음|[A-Za-z0-9._/-]+)$/;
+// `deploy_branch`는 두 형식만 읽는다. (가) 낱말 하나(`main`·`없음`, 뒤는 비었거나 괄호 설명뿐) (나) YAML 흐름 짝 목록
+// `{소유자/이름: 브랜치, …}`. 그 밖은 unreadable이다(설명 글을 해석하지 않는다). 칸이 없으면 null.
+export function parseDeployBranch(raw) {
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  const unreadable = {kind: 'unreadable'};
+  if (text.startsWith('{')) {
+    if (!text.endsWith('}')) return unreadable;
+    const map = {};
+    for (const part of text.slice(1, -1).split(',')) {
+      const i = part.indexOf(':');
+      const key = i < 0 ? null : normalizeGithub(part.slice(0, i)), branch = i < 0 ? '' : part.slice(i + 1).trim();
+      if (!key || !BRANCH_WORD.test(branch) || key in map) return unreadable;
+      map[key] = branch;
+    }
+    return Object.keys(map).length ? {kind: 'map', map} : unreadable;
+  }
+  const m = /^(\S+)(?:\s+\(.*)?$/s.exec(text);
+  return m && BRANCH_WORD.test(m[1]) ? {kind: 'word', value: m[1]} : unreadable;
+}
+
+// 허브 이름: `<허브>/ontology/cards/project` 폴더면 허브 폴더 이름에서 `-hub`를 뗀 것, 아니면 null.
+const hubOf = dir => {
+  const parts = dir.split('/').filter(Boolean);
+  return parts.slice(-3).join('/') === 'ontology/cards/project' && parts.length > 3 ? parts[parts.length - 4].replace(/-hub$/, '') : null;
+};
+
 // 온톨로지 project 카드 전부(앞머리만 읽는다). 폴더가 없으면 건너뛰고, 그 밖의 읽기 오류는 unreadable로 표시한다.
 export function loadCards(dirs = process.env.KADAN_ONTOLOGY_DIRS?.split(path.delimiter).filter(Boolean) ?? defaultOntologyDirs()) {
   const cards = [];
@@ -97,9 +154,10 @@ export function loadCards(dirs = process.env.KADAN_ONTOLOGY_DIRS?.split(path.del
     for (const name of names) {
       let fields = null;
       try { fields = frontmatter(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { /* 깨진 카드와 같게 본다 */ }
-      cards.push({id: `${path.basename(dir)}/${name.slice(0, -3)}`, name: name.slice(0, -3), broken: fields === null,
-        repo: fields ? cardRepoPath(fields.repo) : null, deploy: firstWord(fields?.deploy),
-        deployBranch: firstWord(fields?.deploy_branch), nightMerge: fields && 'night_merge' in fields ? (firstWord(fields.night_merge) ?? '') : null});
+      cards.push({id: `${path.basename(dir)}/${name.slice(0, -3)}`, hub: hubOf(dir), name: name.slice(0, -3), broken: fields === null,
+        repo: fields ? cardRepoPath(fields.repo) : null, github: parseRemote(fields?.remote), deploy: firstWord(fields?.deploy),
+        deployBranch: parseDeployBranch(fields?.deploy_branch),
+        nightMerge: fields && 'night_merge' in fields ? (firstWord(fields.night_merge) ?? '') : null});
     }
   }
   return {cards, unreadable};
@@ -107,65 +165,114 @@ export function loadCards(dirs = process.env.KADAN_ONTOLOGY_DIRS?.split(path.del
 
 const NIGHT_MERGE_VALUES = ['허용', '금지'];
 const NO_BRANCH = '없음';
-// source: 화면 참고용 근거(카드 id만, 절대 경로 없음). null 뜻: nightMerge 칸 없음(판정은 허용)·deployBranch 칸 없음/읽지 못함(판정은 setup-needed)·
-// deploy는 첫 낱말(자동·수동·없음)만, nightMerge·deployBranch는 첫 낱말 원문. verdict.exceptBranch가 있으면 "merge이지만 그 브랜치로 가는 PR만 보류"다.
-const sourceOf = (card, reason, kind = 'none') => ({kind, card: card?.id ?? null, deploy: card?.deploy ?? null,
-  deployBranch: card?.deployBranch ?? null, nightMerge: card?.nightMerge || null, reason});
-const setupNeeded = (reason, card = null) => ({source: sourceOf(card, reason), verdict: {action: 'hold', reason: 'setup-needed', detail: reason, exceptBranch: null}});
+// source: 화면 참고용 근거(카드 id·허브 이름만, 절대 경로 없음). null 뜻: nightMerge 칸 없음(판정은 허용)·deployBranch 칸 없음/읽지 못함
+// (판정은 setup-needed)·github는 카드 remote를 읽지 못함. deploy는 첫 낱말(자동·수동·없음)만. kind는 카드가 판정 근거면 ontology, 아니면 none.
+const sourceOf = (card, reason, {kind = 'none', branch = null} = {}) => ({kind, card: card?.id ?? null, hub: card?.hub ?? null, github: card?.github ?? null,
+  deploy: card?.deploy ?? null, deployBranch: branch, nightMerge: card?.nightMerge || null, reason});
+const setupNeeded = (reason, card = null, branch = null) => ({source: sourceOf(card, reason, {branch}),
+  verdict: {action: 'hold', reason: 'setup-needed', detail: reason, exceptBranch: null}});
+const noSource = () => sourceOf(null, null);
 
-// 값이 없을 때의 기본값(저장소 단위): 카드 고르기(repo: 경로 일치 → 파일 이름) → deploy_branch·night_merge. 애매하면 hold(setup-needed).
-export function ontologyDefault(repo, repoPath, {cards, unreadable}) {
-  if (unreadable) return setupNeeded(unreadable);
-  if (typeof repoPath !== 'string' || !path.isAbsolute(repoPath)) return setupNeeded('저장소 경로를 모름');
+// 카드 한 장 + 저장소 키(우산 카드는 짝 키)의 기본값 판정(저장소 단위, 대상 브랜치는 모른다). verdict.exceptBranch가 있으면
+// "merge이지만 그 브랜치로 가는 PR만 보류"다.
+function judgeCard(card, key) {
+  if (card.broken) return setupNeeded('카드 앞머리를 읽을 수 없음', card);
+  const db = card.deployBranch;
+  if (db === null) return setupNeeded('deploy_branch 칸 없음', card);
+  if (db.kind === 'unreadable') return setupNeeded('deploy_branch 형식을 읽을 수 없음(낱말 하나 또는 {소유자/이름: 브랜치} 목록만 읽음)', card);
+  const branch = db.kind === 'word' ? db.value : (key ? db.map[key] : undefined);
+  if (branch === undefined) return setupNeeded(`deploy_branch 목록에 ${key ?? '(저장소 키 없음)'} 없음`, card);
+  const night = card.nightMerge ?? '허용';
+  if (!NIGHT_MERGE_VALUES.includes(night)) return setupNeeded(`night_merge 값을 모름: ${night || '(빈 값)'}`, card, branch);
+  const ok = {source: sourceOf(card, null, {kind: 'ontology', branch})};
+  if (night === '금지') return {...ok, verdict: {action: 'hold', reason: 'ontology-night-merge-forbidden', exceptBranch: null}};
+  return {...ok, verdict: {action: 'merge', reason: 'ontology-allowed', exceptBranch: branch === NO_BRANCH ? null : branch}};
+}
+
+// 저장 값이 있으면 그것이 이기고(kyle 덮어쓰기), 없으면 카드 판정이다. 정책 파일이 손상이면 hold다.
+function rowFor(policy, {repo, github, card, problem}) {
+  if (policy.corrupt) return {repo, github, value: null, saved: null, ...setupNeeded(policy.corrupt)};
+  const saved = (github && policy.repos[github]) || null;
+  const row = {repo, github, value: saved?.value ?? null, saved};
+  if (saved) return {...row, source: noSource(), verdict: {action: saved.value, reason: `repo-policy-${saved.value}`, exceptBranch: null}};
+  return {...row, ...(card ? judgeCard(card, github) : setupNeeded(problem))};
+}
+
+// baseBranch(PR 대상 브랜치)를 주면 deploy_branch와 같을 때 hold(deploy-branch)로 바꾼다.
+function withBase(row, baseBranch) {
+  const except = row.verdict.exceptBranch;
+  return except && baseBranch === except ? {...row, verdict: {action: 'hold', reason: 'deploy-branch', exceptBranch: null}} : row;
+}
+
+// GitHub 소유자/이름으로 카드 찾기(위에서부터): (a) deploy_branch 짝 목록에 그 키가 있는 카드 (b) 카드 remote가 그 키인 카드.
+// 카드가 하나도 없거나 둘 이상이면 못 찾은 것이다.
+function cardForGithub(key, {cards, unreadable}) {
+  if (unreadable) return {problem: unreadable};
+  let picked = cards.filter(c => c.deployBranch?.kind === 'map' && key in c.deployBranch.map);
+  if (!picked.length) picked = cards.filter(c => c.github === key);
+  if (!picked.length) return {problem: '온톨로지 카드 없음'};
+  if (picked.length > 1) return {problem: `온톨로지 카드가 여럿: ${picked.map(c => `${c.hub ? `${c.hub}/` : ''}${c.id}`).join(', ')}`};
+  return {card: picked[0]};
+}
+
+// 저장소 하나(GitHub 소유자/이름)의 지금 정책. baseBranch를 주면 PR 단위 판정이다.
+export function evaluateGithub(home, github, {baseBranch, policy = readPolicy(home), ontology = loadCards()} = {}) {
+  const key = normalizeGithub(github);
+  if (!key) return {repo: null, github: null, value: null, saved: null, ...setupNeeded(`GitHub 소유자/이름이 올바르지 않음: ${github ?? '(없음)'}`)};
+  return withBase(rowFor(policy, {repo: null, github: key, ...cardForGithub(key, ontology)}), baseBranch);
+}
+
+// C2 머지 관문이 PR마다 부르는 함수. github는 PR 주소의 소유자/이름, baseBranch는 PR 대상 브랜치다.
+// 카드 기본값이 "그 브랜치만 보류"인데 대상 브랜치를 모르면 hold(setup-needed)다.
+export function decideNightMerge(home, {github, baseBranch, policy, ontology} = {}) {
+  const hasBase = typeof baseBranch === 'string' && baseBranch !== '';
+  const info = evaluateGithub(home, github, {baseBranch: hasBase ? baseBranch : undefined, policy, ontology});
+  let {action, reason} = info.verdict;
+  if (action === 'merge' && info.verdict.exceptBranch && !hasBase) { action = 'hold'; reason = 'setup-needed'; }
+  return {action, reason, github: info.github, card: info.source.card, hub: info.source.hub, deployBranch: info.source.deployBranch, nightMerge: info.source.nightMerge};
+}
+
+// 업무 키(폴더)로 카드 찾기: 카드 repo: 경로 == 업무 repoPath(둘 다 realpath) → 없으면 파일 이름 == 업무 키. 둘 이상 맞으면 못 찾은 것이다.
+function cardForWork(workKey, repoPath, {cards, unreadable}) {
+  if (unreadable) return {problem: unreadable};
+  if (typeof repoPath !== 'string' || !path.isAbsolute(repoPath)) return {problem: '저장소 경로를 모름'};
   const target = realPath(normPath(repoPath));
   let picked = cards.filter(c => c.repo === target);
-  if (!picked.length) picked = cards.filter(c => c.name === repo);
-  if (!picked.length) return setupNeeded('온톨로지 카드 없음');
-  if (picked.length > 1) return setupNeeded(`온톨로지 카드가 여럿: ${picked.map(c => c.id).join(', ')}`);
-  const [card] = picked;
-  if (card.broken) return setupNeeded('카드 앞머리를 읽을 수 없음', card);
-  if (!card.deployBranch) return setupNeeded('deploy_branch 칸 없음', card);
-  const night = card.nightMerge ?? '허용';
-  if (!NIGHT_MERGE_VALUES.includes(night)) return setupNeeded(`night_merge 값을 모름: ${night || '(빈 값)'}`, card);
-  const ok = {source: sourceOf(card, null, 'ontology')};
-  if (night === '금지') return {...ok, verdict: {action: 'hold', reason: 'ontology-night-merge-forbidden', exceptBranch: null}};
-  return {...ok, verdict: {action: 'merge', reason: 'ontology-allowed', exceptBranch: card.deployBranch === NO_BRANCH ? null : card.deployBranch}};
+  if (!picked.length) picked = cards.filter(c => c.name === workKey);
+  if (!picked.length) return {problem: '온톨로지 카드 없음'};
+  if (picked.length > 1) return {problem: `온톨로지 카드가 여럿: ${picked.map(c => `${c.hub ? `${c.hub}/` : ''}${c.id}`).join(', ')}`};
+  return {card: picked[0]};
 }
 
-// 저장소의 지금 정책 한 건. 저장 값이 있으면 그것이 이기고(kyle 덮어쓰기), 없으면 온톨로지 기본값이다.
-// baseBranch(PR 대상 브랜치)를 주면 deploy_branch와 같을 때 hold(deploy-branch)로 바꾼다. 주지 않으면 저장소 단위 판정(exceptBranch)이다.
-// 정책 파일이 손상이면 hold다. 응답에 절대 경로를 넣지 않는다(카드는 id만).
-export function evaluateRepo(home, repo, {repoPath, baseBranch, policy = readPolicy(home), ontology = loadCards()} = {}) {
-  if (policy.corrupt) return {repo, value: null, saved: null, ...setupNeeded(policy.corrupt)};
-  const saved = policy.repos[repo] ?? null;
-  const base = {repo, value: saved?.value ?? null, saved};
-  if (saved) return {...base, source: sourceOf(null, null), verdict: {action: saved.value, reason: `repo-policy-${saved.value}`, exceptBranch: null}};
-  const info = {...base, ...ontologyDefault(repo, repoPath, ontology)};
-  const except = info.verdict.exceptBranch;
-  if (baseBranch !== undefined && except && baseBranch === except) info.verdict = {action: 'hold', reason: 'deploy-branch', exceptBranch: null};
-  return info;
+// 업무 키 기준 목록(화면·CLI): 한 업무가 카드 한 장에 맞고, 우산 카드(deploy_branch가 짝 목록)는 짝마다 한 줄이다.
+// 각 줄의 repo는 업무 키 첫 마디, github는 짝 키(일반 카드는 카드 remote를 읽은 값, 못 읽으면 null)다. 덮어쓰기는 github 키로 찾는다.
+export function evaluateWork(home, workKey, {repoPath, policy = readPolicy(home), ontology = loadCards()} = {}) {
+  const found = cardForWork(workKey, repoPath, ontology);
+  if (!found.card) return [rowFor(policy, {repo: workKey, github: null, problem: found.problem})];
+  const {card} = found;
+  const keys = card.deployBranch?.kind === 'map' ? Object.keys(card.deployBranch.map).sort() : [card.github];
+  return keys.map(github => rowFor(policy, {repo: workKey, github, card}));
 }
 
-// C2 머지 관문이 PR마다 부르는 함수. baseBranch는 PR 대상 브랜치다. 카드 기본값이 "그 브랜치만 보류"인데 대상 브랜치를 모르면 hold다.
-export function decideNightMerge(home, repo, {repoPath, baseBranch, policy, ontology} = {}) {
-  const info = evaluateRepo(home, repo, {repoPath, baseBranch: typeof baseBranch === 'string' && baseBranch ? baseBranch : undefined, policy, ontology});
-  let {action, reason} = info.verdict;
-  if (action === 'merge' && info.verdict.exceptBranch && !(typeof baseBranch === 'string' && baseBranch)) { action = 'hold'; reason = 'setup-needed'; }
-  return {action, reason, card: info.source.card, deployBranch: info.source.deployBranch, nightMerge: info.source.nightMerge};
-}
-
-// 업무 목록에서 저장소 경로를 찾는다(업무 키 앞부분 = 저장소). 같은 저장소의 경로가 여럿이면 첫 번째다.
+// 업무 목록에서 저장소 경로를 찾는다(업무 키 앞부분 = 폴더). 같은 키의 경로가 여럿이면 첫 번째다.
 export function repoPathFromWorks(works, repo) {
   return works.find(w => String(w.key ?? '').split('/')[0] === repo && typeof w.repoPath === 'string')?.repoPath ?? null;
 }
 
+// legacy: 옛 형식(맨 이름) 저장값. 덮어쓰기로 쓰지 않고 "다시 설정 필요"로 따로 보인다.
 export function listRepos(home, works) {
   const policy = readPolicy(home), ontology = loadCards();
-  const names = new Set([...Object.keys(policy.repos), ...works.map(w => String(w.key ?? '').split('/')[0]).filter(n => REPO_NAME.test(n))]);
-  return {corrupt: policy.corrupt, repos: [...names].sort()
-    .map(repo => evaluateRepo(home, repo, {repoPath: repoPathFromWorks(works, repo), policy, ontology}))};
+  const workKeys = [...new Set(works.map(w => String(w.key ?? '').split('/')[0]).filter(n => LEGACY_NAME.test(n)))].sort();
+  const rows = workKeys.flatMap(key => evaluateWork(home, key, {repoPath: repoPathFromWorks(works, key), policy, ontology}));
+  // 저장값은 있는데 어떤 업무 줄에도 안 나온 저장소는 따로 한 줄 낸다(github 키만 안다).
+  const listed = new Set(rows.map(r => r.github).filter(Boolean));
+  const extra = policy.corrupt ? [] : Object.keys(policy.repos).filter(key => !listed.has(key)).sort()
+    .map(key => rowFor(policy, {repo: null, github: key, ...cardForGithub(key, ontology)}));
+  const legacy = Object.entries(policy.legacy).map(([name, e]) => ({name, value: e.value, at: e.at ?? null, by: e.by ?? null})).sort((a, b) => a.name.localeCompare(b.name));
+  return {corrupt: policy.corrupt, repos: [...rows, ...extra], legacy};
 }
 
-// 아침 요약용(C2 관문이 그 밤에 본 저장소 목록을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
+// 아침 요약용(C2 관문이 그 밤에 본 저장소 줄을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
+// 소유자/이름을 모르는 줄은 덮어쓸 키가 없어 카드부터 고쳐야 한다.
 export const setupNeededLines = infos => infos.filter(i => i.verdict.reason === 'setup-needed')
-  .map(i => `설정 필요: kadan night repo ${i.repo} merge|hold`);
+  .map(i => (i.github ? `설정 필요: kadan night repo ${i.github} merge|hold` : `설정 필요: ${i.repo ?? '(이름 모름)'} — 온톨로지 카드의 remote(소유자/이름)부터 채우세요`));
