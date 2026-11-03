@@ -35,6 +35,7 @@ async function world() {
   return {envFile, requests};
 }
 
+// node 개수는 10분 넘게 이어질 때만 신호라서, 넷째 주기부터 가짜 시계를 10분 앞으로 보낸다(알림 중복 막기는 진짜 시계라 영향 없음).
 async function run(samples, entries, records) {
   let cycle = 0;
   const stop = Error('end');
@@ -42,7 +43,7 @@ async function run(samples, entries, records) {
     floor: {list: () => starts.map(s => ({session: s.session, pid: s.panePid})), read: () => `정상 작업 ${lt(cycle)}`},
     readEntries: () => entries, readCards: () => [], parents,
     intervalMs: 1000, stallN: 2, routes: {p: 'p-감독'}, superRole: 'p-슈퍼감독', userNotify: true, processEveryMs: 0,
-    now: () => Date.parse(t) + cycle * 1000, record: e => records.push(e), print: () => {},
+    now: () => Date.parse(t) + cycle * 1000 + (cycle >= 3 ? 10 * 60_000 : 0), record: e => records.push(e), print: () => {},
     sendAlert: () => {},
     spawn: (command) => {
       if (command === 'sleep') { if (++cycle === samples.length) throw stop; return {status: 0, stdout: ''}; }
