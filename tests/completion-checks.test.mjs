@@ -305,9 +305,14 @@ test('시간 초과: 검사당 상한과 전체 상한(넘으면 나머지는 �
  assert.deepEqual(statuses(total),['timeout','timeout','skipped','skipped','unreadable']); // 70초 걸린 검사는 마감을 넘겼으니 통과로 치지 않는다
  assert.equal(slow.calls.filter(c=>c.args.includes('status'))[1].opts.timeout,30000); // 두 번째 검사: 검사당 30초, 전체 남은 50초 중 이른 쪽
  assert.equal(cc.summarize(total.results),'통과 0·실패 2·읽지 못함 1·건너뜀 2');
- const hung=recording({status:()=>({error:{code:'ETIMEDOUT'},status:null})});
- const per=await cc.runChecks(card(repo),['git tidy .','git tidy .'],{spawn:hung,perMs:25});
- assert.deepEqual(statuses(per),['timeout','timeout']);{const t=hung.calls.find(c=>c.args.includes('status')).opts.timeout;assert.ok(t>0&&t<=25,`timeout ${t}`);}
+ // 검사당 상한은 가짜 시계로 잰다(실제 25ms에 기대면 느린 러너에서 status 호출 전에 마감이 지난다). worktree 조회도 가짜로 둔다.
+ const hung=recording({worktree:()=>({status:0,stdout:''}),status:()=>({error:{code:'ETIMEDOUT'},status:null})});
+ const per=await cc.runChecks(card(repo),['git tidy .','git tidy .'],{spawn:hung,perMs:25,now:()=>0});
+ assert.deepEqual(statuses(per),['timeout','timeout']);assert.deepEqual(hung.calls.filter(c=>c.args.includes('status')).map(c=>c.opts.timeout),[25,25]); // 시계가 안 가면 남은 시간은 딱 25ms
+ // 느린 러너: git을 부르기 전에 시계가 마감 뒤로 넘어가면 status를 아예 부르지 않고 시간 초과로 끝난다
+ let late=0;const lagged=recording({worktree:()=>{late+=1_000;return {status:0,stdout:''};}});
+ const slowRun=await cc.runChecks(card(repo),['git tidy .'],{spawn:lagged,perMs:25,now:()=>late});
+ assert.deepEqual(statuses(slowRun),['timeout']);assert.equal(lagged.calls.filter(c=>c.args.includes('status')).length,0);
  assert.equal(cc.PER_CHECK_MS,30000);assert.equal(cc.TOTAL_MS,120000);
 });
 

@@ -111,7 +111,12 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | `kadan plan <판> <카드id[:제목]>...` | 판을 열 때 카드 목록을 원장에 먼저 적는다 | `--about "<판 설명>"` |
 | `kadan tree` | 판·카드·실행·살아 있는 역할 요약(JSON). 살아 있는 역할마다 `roleProfile`(로티 딱지용)·`executionKind`(로티 hover·대시보드용), 없으면 `null`. 또 `supersedes`(이 역할이 대체한 이전 세대 식별자 목록, 가까운 것부터 최대 10개, 없으면 빈 목록 `[]`)를 더한다. 항목은 `{source, rottieTerminalId, panePid, conversation}`이고 값은 원장에 이미 적힌 것만이다(없으면 `null`, 셋 다 없으면 항목을 만들지 않음). 사슬은 "지금 살아 있는 그 역할의 마지막 start"에서 출발해 명시적 연결만 따라 거슬러 올라간다(연결되지 않은 과거는 담지 않고, 같은 이름을 다시 쓴 독립 새 start는 빈 목록에서 시작한다). `source`는 `restart`(start의 `restartOf` 지문으로 옛 start를 찾고 거기서 다시 올라감, 대화는 `restartConversation`)·`adopt`(사슬 위 start 이후~같은 역할의 다음 start 이전에 받은 `accepted` 사건의 `sourceTerminalId`)·`handover`(같은 구간에 그 역할로 들어온 `transferred`·`complete` 사건의 `from` 역할이 그 시점에 가진 마지막 start 값, 거기서 다시 올라가므로 A→B→C 인계도 A까지 이어짐, `aborted`는 제외). 비용은 "사건 수에 비례하는 한 번 훑기(시작 구간별 색인)"다 — 훑을 때 adopt·handover를 받는 역할의 직전 start 구간에 한 번만 붙여 두므로, 같은 이름을 여러 세대가 다시 써도 구간 밖 사건을 다시 훑지 않는다. 사슬은 상한 10에서 멈추지만, 한 시작 구간 안의 adopt·handover 후보는 모두 모아 정렬한 뒤 10개로 자른다(구간 안 후보 수에 비례). `rottieTerminalId`=옛 로티 탭의 terminal id, `panePid`=옛 tmux pane의 프로세스 번호, `conversation`=옛 AI 대화 id(resume 대화만. fork 대화의 부모 id는 쓰지 않음). 지금 살아 있는 어느 역할 세션과 같은 `panePid`·`rottieTerminalId`·`conversation`은 그 칸만 `null`로 바꾸고(세 값이 다 `null`이면 항목을 뺌) 내주지 않는다 — restart는 같은 대화를 이어 쓰므로 conversation은 현재 세대와 겹치면 대개 내주지 않는다. 같은 pane을 이은 새 start와 달리 이 값들로 로티가 옛 탭을 복원 목록에서 지운다 — [뜻](card-center.md) | `--legacy`(옛 세션 나무) |
 | `kadan log` | 원장 최근 30줄 | — |
+| `kadan card update <키> --status hold --revision N --note <이유>` | 역할이 있는 실행 카드를 일시정지로 바꿀 때 그 역할 화면을 **한 번 읽어** 실제로 멈췄는지 본다. 출력에 `holdCheck`가 붙고 같은 변경의 카드 메모에 `· 화면 확인: <결과>`가 남는다. 결과는 `멈춤 확인` · `미확인(아직 작업 중)` · `미확인(세션 없음)` · `미확인(화면 못 읽음)`. **일시정지를 막지 않고**, 세션에 아무것도 보내지 않으며, 기다리지 않는다(나중 확인은 감시기의 `일시정지중작업`). `kadan work update --status hold`(업무 단위)와 관리 카드는 화면을 읽지 않는다 — 업무 하나에 역할이 여럿일 수 있어서다 | [일시정지 중 작업 감지](watch-overview.md#일시정지-중-작업-감지-일시정지중작업-2026-11-02) |
 | `kadan wall` / `kadan dashboard` | 로컬 관제 화면(HTML)을 띄운다 | `--port 8790`, `--cache-sec 초` (같은 주소 응답 재사용, 기본 10) |
+
+### 카드 일시정지 확인
+
+`holdCheck`의 판정은 감시기와 같은 `readStatusLine`(일하는 표시 / 빈 입력창)이다. 실행기별 명령(`/goal pause` 류)은 쓰지 않는다. 입력 대기도 일하는 표시도 아닌 화면은 근거가 없어 `미확인(화면 못 읽음)`으로 둔다.
 
 ## 감시
 
@@ -152,7 +157,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
 | `kadan slot` | 저장소마다 다시 쓰는 검수용 worktree(기본 4자리). `acquire <저장소> --for <카드> [--ref <SHA>]`·`deps <자리경로>`·`release <자리경로>\|--for <카드>`·`status` | [검수 자리](review-slots.md) |
-| `kadan merge-check` | 머지 직전 표시: `merge-check <저장소/업무ID> --head <PR head>`가 업무의 최근 유효 pass 검수 SHA와 PR head를 나란히 보인다(`같음`·`다름`·`검수 SHA 없음`·`검수 pass 없음`). PR head는 입력이고 카단은 GitHub를 부르지 않는다. 표시만 하며 종료 코드는 0(입력 형식 오류만 2). 나중에 나이트 자동 머지 관문이 이 기록을 쓴다. `work show`에도 최근 pass 검수 SHA(`latestPassReviewSha`)가 나온다 | [검수 자리](review-slots.md) |
+| `kadan merge-check` | 머지 직전 표시: `merge-check <저장소/업무ID> --head <PR head>`가 업무의 낡지 않은 검수 중 **PR head와 같은 SHA를 본 검수**를 골라 나란히 보인다(한 업무에 PR이 여럿이어도 앞 PR 검수가 덮이지 않는다). 판정: `같음`(그 SHA의 가장 최근 검수가 pass)·`같은 커밋 검수 changes`(가장 최근이 changes)·`다름`(맞는 검수 없음, pass SHA 목록 최대 5개를 보임)·`모호`(짧은 head가 서로 다른 검수 SHA 둘 이상과 맞음)·`검수 SHA 없음`·`검수 pass 없음`. 다름·changes·모호는 첫 줄에 `!!` 경고가 붙는다. PR head는 입력이고 카단은 GitHub를 부르지 않는다. 표시만 하며 종료 코드는 0(입력 형식 오류만 2). 나중에 나이트 자동 머지 관문이 이 기록을 쓴다. `work show`에도 최근 pass 검수 SHA(`latestPassReviewSha`)가 나온다 | [검수 자리](review-slots.md) |
 | `kadan limit` | 무거운 명령의 기계 전체 동시 개수 제한. `run <rust\|install\|build> -- <명령...>`·`status`. rust는 `CARGO_BUILD_JOBS=2` | [무거운 명령 제한](review-slots.md#무거운-명령-제한-kadan-limit) |
 
 ### `kadan restart` 자세히
