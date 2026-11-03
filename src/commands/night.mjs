@@ -78,8 +78,9 @@ function repoCommand(args, flags, {home, by, deps}) {
   if (name === undefined) return `정책 파일: ${policyPath(home)}\n사용법: ${usage}`;
   const listOpts = deps.origin ? {origin: deps.origin} : {};
   if (name === 'list') {
-    const {corrupt, repos, legacy} = listRepos(home, works(), listOpts);
+    const {corrupt, repos, legacy, unreadable} = listRepos(home, works(), listOpts);
     return [...(corrupt ? [`경고: ${corrupt} — 읽기는 나이트런 중 자동 머지 안 함으로 봅니다`] : []),
+      ...unreadable.map(u => `읽지 못함: 폴더 ${u.folder}${u.file ? ` ${u.file}` : ''} — ${u.reason}`),
       ...(repos.length ? repos.flatMap(repoLines) : ['저장된 값도 연결 카드도 업무 저장소도 없습니다']),
       ...legacy.map(l => `옛 형식 저장값(판정에 쓰지 않음): ${l.name} = ${l.value} — kadan night repo ${l.name.includes('/') ? l.name : '<소유자/이름>'} --deploy-branch … 로 다시 설정하세요`)].join('\n');
   }

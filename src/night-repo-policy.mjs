@@ -142,7 +142,8 @@ export function setCardSources(home, {folders, clear = false, by, now = () => ne
   if (!clear && !list.length) throw new NightRepoPolicyError('연결할 카드 폴더가 필요합니다: kadan night source --cards <폴더>… | --clear');
   for (const dir of list) {
     let stat = null;
-    try { stat = fs.statSync(dir); } catch { /* 아래에서 거절 */ }
+    try { stat = fs.lstatSync(dir); } catch { /* 아래에서 거절 */ }
+    if (stat?.isSymbolicLink()) throw new NightRepoPolicyError(`카드 폴더가 링크입니다. 실제 폴더 경로를 등록하세요: ${dir}`);
     if (!stat?.isDirectory()) throw new NightRepoPolicyError(`카드 폴더가 아니거나 없습니다: ${dir}`);
   }
   const cards = [...new Set(list)];
@@ -217,34 +218,48 @@ export function parseDeployBranch(raw) {
 }
 
 // 연결된 폴더의 카드 전부(앞머리만 읽는다). 폴더는 순번(folder)으로만 가리킨다. 하위 폴더를 훑지 않고, 링크는 따라가지 않는다.
-// 폴더를 읽지 못하면(없어짐 포함) unreadable이다: 사용자가 연결한 폴더라 조용히 건너뛰지 않는다.
+// 폴더를 읽지 못하면(없어짐·폴더 링크 포함) unreadable이다: 사용자가 연결한 폴더라 조용히 건너뛰지 않는다.
+// 읽지 못한 카드(파일 읽기 실패·앞머리 손상·판정 칸 형식 틀림·deploy_branch 짝 목록 형식 틀림)는 unreadableCards에 따로 모은다.
+// 누구 카드인지 알 수 없으므로 "이 저장소 카드가 아니다"라고 단정하지 않는다(rowFor가 이 목록으로 보류한다).
 export function loadCards(dirs = []) {
-  const cards = [];
+  const cards = [], unreadableCards = [], unreadableList = [];
   let unreadable = null;
   dirs.forEach((dir, folder) => {
     let names;
-    try { names = fs.readdirSync(dir, {withFileTypes: true}).filter(d => d.isFile() && d.name.endsWith('.md')).map(d => d.name).sort(); } catch (error) {
-      unreadable ??= `연결한 카드 폴더 ${folder}를 읽을 수 없음(${error.code ?? '읽기 실패'})`;
+    try {
+      if (fs.lstatSync(dir).isSymbolicLink()) throw Object.assign(new Error('link'), {code: '폴더 링크'});
+      names = fs.readdirSync(dir, {withFileTypes: true}).filter(d => d.isFile() && d.name.endsWith('.md')).map(d => d.name).sort();
+    } catch (error) {
+      const reason = `연결한 카드 폴더 ${folder}를 읽을 수 없음(${error.code ?? '읽기 실패'})`;
+      unreadable ??= reason;
+      unreadableList.push({folder, file: null, reason});
       return;
     }
     for (const name of names) {
       let parsed = null;
       try { parsed = frontmatter(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { /* 깨진 카드와 같게 본다 */ }
       const fields = parsed?.fields ?? null;
+      const deployBranch = parseDeployBranch(fields?.deploy_branch);
+      const mapBroken = deployBranch?.kind === 'unreadable' && String(fields.deploy_branch).trim().startsWith('{');
+      const reason = parsed === null ? '앞머리를 읽을 수 없음' : parsed.problems.length ? '판정 칸 형식이 틀림' : mapBroken ? 'deploy_branch 짝 목록 형식이 틀림' : null;
+      if (reason) { unreadableCards.push({folder, file: name, reason}); unreadableList.push({folder, file: name, reason}); }
       cards.push({id: name.slice(0, -3), folder, broken: parsed === null, problems: parsed?.problems ?? [],
-        github: parseRemote(fields?.remote), deployBranch: parseDeployBranch(fields?.deploy_branch),
+        github: parseRemote(fields?.remote), deployBranch,
         nightMerge: fields && 'night_merge' in fields ? (firstWord(fields.night_merge) ?? '') : null});
     }
   });
-  return {cards, unreadable};
+  return {cards, unreadable, unreadableCards, unreadableList};
 }
 
 // 소유자/이름으로 카드 찾기(위에서부터): (a) deploy_branch 짝 목록에 그 키가 있는 카드 (b) 카드 remote가 그 키인 카드.
 // 카드가 없으면 {card: null}(빈 칸), 둘 이상이거나 폴더를 못 읽으면 {problem}(못 읽힘)이다.
-function cardForGithub(key, {cards, unreadable}) {
+function cardForGithub(key, {cards, unreadable, unreadableCards = []}) {
   if (unreadable) return {problem: unreadable};
   let picked = cards.filter(c => c.deployBranch?.kind === 'map' && key in c.deployBranch.map);
   if (!picked.length) picked = cards.filter(c => c.github === key);
+  // 그 저장소 카드가 스스로 못 읽히면 구체적인 이유(줄 번호 등)를 보이고, 아니면 읽지 못한 카드가 있다는 사실만 알린다.
+  if (unreadableCards.length && !(picked.length === 1 && (picked[0].broken || picked[0].problems.length)))
+    return {problem: `연결된 카드 ${unreadableCards.length}장을 읽지 못함`};
   if (!picked.length) return {card: null};
   if (picked.length > 1) return {problem: `카드가 여럿: ${picked.map(c => `${c.folder}/${c.id}`).join(', ')}`};
   return {card: picked[0]};
@@ -339,8 +354,9 @@ export function listRepos(home, works = [], {origin = gitOriginGithub} = {}) {
   const policy = readPolicy(home);
   const sources = {cards: policy.cards.map((_, i) => i)};
   const legacy = Object.entries(policy.legacy).map(([name, e]) => ({name, ...e})).sort((a, b) => a.name.localeCompare(b.name));
-  if (policy.corrupt) return {corrupt: policy.corrupt, repos: [], legacy, sources};
+  if (policy.corrupt) return {corrupt: policy.corrupt, repos: [], legacy, sources, unreadable: []};
   const ontology = loadCards(policy.cards);
+  const unreadable = ontology.unreadableList; // 읽지 못한 것(경로 없음): 폴더 순번·파일 이름·이유. 폴더 전체면 file이 null
   const keys = new Map(); // github → 업무 키 첫 마디(있으면)
   for (const key of Object.keys(policy.repos)) keys.set(key, null);
   for (const c of ontology.cards) {
@@ -350,7 +366,7 @@ export function listRepos(home, works = [], {origin = gitOriginGithub} = {}) {
   for (const w of works) if (typeof w.repoPath === 'string' && path.isAbsolute(w.repoPath) && !paths.has(w.repoPath)) paths.set(w.repoPath, String(w.key ?? '').split('/')[0] || null);
   for (const [repoPath, repo] of paths) { const g = origin(repoPath); if (g && (!keys.has(g) || keys.get(g) === null)) keys.set(g, repo); }
   const repos = [...keys].sort(([a], [b]) => a.localeCompare(b)).map(([github, repo]) => rowFor(policy, ontology, github, repo));
-  return {corrupt: null, repos, legacy, sources};
+  return {corrupt: null, repos, legacy, sources, unreadable};
 }
 
 // 아침 요약용(C2 관문이 그 밤에 본 저장소 줄을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
