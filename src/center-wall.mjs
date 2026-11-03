@@ -37,7 +37,7 @@ import {compareReport} from './compare-report.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
 import {nightState, readDecisionEvents} from './night.mjs';
-import {listRepos, setRepoPolicy} from './night-repo-policy.mjs';
+import {listRepos, setRepoPolicy, NightRepoPolicyError, nightRepoHttpMessage} from './night-repo-policy.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
 // 상태 이름은 status-labels 한 곳에서 가져온다(2026-10-05 [kyle]).
@@ -233,7 +233,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     res.end(JSON.stringify(listRepos(home, works.list())));
    } catch (error) {
     res.writeHead(409, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
-    res.end(error.message);
+    res.end(nightRepoHttpMessage(error));
    }
    return true;
   }
@@ -261,10 +261,14 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    const expected=req.kadanRemote===true?req.kadanDecisionToken:token;
    if(!tokenEquals(f.token,expected)){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
    if(url.pathname==='/api/night/repos'){
-    // 나이트가 켜진 동안은 거절한다: 역할 세션이 curl로 대시보드를 거쳐 CLI 거절(night-guard)을 우회하는 길을 막는다.
-    if(nightState(readLedgerIncremental(home),readDecisionEvents(home),Date.now()).on)throw new Error('나이트가 켜진 동안은 바꿀 수 없음');
-    const saved_=setRepoPolicy(home,{repo:String(f.repo||''),value:String(f.value||''),by:'사람',record:entry=>appendLedger(entry,home)});
-    saved('/',{repo:saved_.repo,value:saved_.value});return true;
+    // 이 경로의 오류 문구는 공통 catch로 넘기지 않고 여기서 정한다(error.message는 내보내지 않음).
+    try{
+     // 나이트가 켜진 동안은 거절한다: 역할 세션이 curl로 대시보드를 거쳐 CLI 거절(night-guard)을 우회하는 길을 막는다.
+     if(nightState(readLedgerIncremental(home),readDecisionEvents(home),Date.now()).on)throw new NightRepoPolicyError('나이트가 켜진 동안은 바꿀 수 없음');
+     const saved_=setRepoPolicy(home,{repo:String(f.repo||''),value:String(f.value||''),by:'사람',record:entry=>appendLedger(entry,home)});
+     saved('/',{repo:saved_.repo,value:saved_.value});
+    }catch(error){fail(409,nightRepoHttpMessage(error))}
+    return true;
    }
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
    if(url.pathname==='/roles/restart'){

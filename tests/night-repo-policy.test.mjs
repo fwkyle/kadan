@@ -594,3 +594,14 @@ test('F3: 손상 정책 파일 POST 거절 응답에 절대 경로가 없다(파
   assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{bad');
   assert.throws(() => setRepoPolicy(home, {repo: 'acme/app', value: 'hold', by: '사람'}), error => error.message.includes(policyPath(home)));
 });
+
+test('P2: 정책 임시 파일 쓰기 실패(EISDIR)도 POST 응답에 절대 경로·OS 원문 없이 정해진 문구만 나간다', async () => {
+  const home = tmp('kadan-repo-post-eisdir-');
+  fs.mkdirSync(`${policyPath(home)}.${process.pid}.tmp`);
+  const handler = createCenterHandler(home);
+  const r = await call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, {repo: 'acme/app', value: 'hold'})}));
+  assert.equal(r.status, 409);
+  assert.ok(!r.body.includes(home), r.body);
+  assert.ok(!r.body.includes('illegal operation'), r.body);
+  assert.equal(r.body, '밤 저장소 정책 처리 실패(EISDIR)');
+});

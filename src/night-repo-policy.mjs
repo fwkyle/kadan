@@ -66,13 +66,17 @@ export function readPolicy(home) {
   }
 }
 
+// night repo HTTP 경로에서 나가는 오류 문구는 여기서 한 곳으로 정한다: httpMessage가 있으면 그것, 없으면 error.message 없이 고정 문구.
+export const nightRepoHttpMessage = error =>
+  error?.httpMessage ?? `밤 저장소 정책 처리 실패(${error?.code ?? '알 수 없음'})`;
+
 export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toISOString(), record}) {
   const key = normalizeGithub(repo);
-  if (!key) throw new Error(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${repo ?? '(없음)'}`);
-  if (!POLICY_VALUES.includes(value)) throw new Error(`값은 ${POLICY_VALUES.join('|')} 중 하나여야 합니다: ${value ?? '(없음)'}`);
+  if (!key) throw new NightRepoPolicyError(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${repo ?? '(없음)'}`);
+  if (!POLICY_VALUES.includes(value)) throw new NightRepoPolicyError(`값은 ${POLICY_VALUES.join('|')} 중 하나여야 합니다: ${value ?? '(없음)'}`);
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   const lock = path.join(home, '.night-repo-policy-lock');
-  if (!acquireDirLock(lock)) throw new Error('밤 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
+  if (!acquireDirLock(lock)) throw new NightRepoPolicyError('밤 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
   try {
     const current = readPolicy(home);
     if (current.corrupt) {
