@@ -10,7 +10,7 @@ import {buildNightNote, noteLine} from '../night-note.mjs';
 import {POLICY_VALUES, setRepoPolicy, evaluateRepo, listRepos, repoPathFromWorks, policyPath} from '../night-repo-policy.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<저장소> merge|hold|auto [--repo-path 경로]] | repo list | repo show <저장소> [--repo-path 경로] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<저장소> merge|hold [--repo-path 경로]] | repo list | repo show <저장소> [--repo-path 경로] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
@@ -53,18 +53,19 @@ export function nightOriginalText(result) {
     `--- ${result?.on ? `끝: ${result.untilLocal}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
 }
 
-// 저장소 정책 한 건을 사람이 읽는 줄로. 판정 근거(파일·찾아본 곳)를 같이 보인다.
+// 저장소 정책 한 건을 사람이 읽는 줄로. 기본값 근거는 카드 id만 보인다(절대 경로 없음).
 function repoLines(info) {
-  const {saved, detection: d, verdict: v} = info;
+  const {saved, source: src, verdict: v} = info;
   const word = v.action === 'merge' ? '머지' : '보류';
+  const basis = src.card ? `카드 ${src.card} deploy_branch ${src.deployBranch ?? '(칸 없음)'}, night_merge ${src.nightMerge ?? '(칸 없음=허용)'}${src.reason ? ` — ${src.reason}` : ''}` : `없음${src.reason ? ` — ${src.reason}` : ''}`;
   return [
-    `${info.repo}: 저장 값 ${saved ? `${saved.value} (${saved.at}, ${saved.by})` : '없음(auto)'}`,
-    `${info.repo}: 판별 ${d.result}${d.files ? ` — 근거 ${d.files.join(', ')}` : ''}${d.reason ? ` — ${d.reason}` : ''}${d.result === 'clean' ? ` — 찾아본 파일 ${d.checked.join(', ')}` : ''}`,
-    `${info.repo}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''})`,
+    `${info.repo}: 저장 값 ${saved ? `${saved.value} (${saved.at}, ${saved.by})` : '없음'}`,
+    `${info.repo}: 기본값 근거 ${basis}`,
+    `${info.repo}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''}${v.exceptBranch ? `, ${v.exceptBranch}으로 가는 PR만 보류` : ''})`,
   ];
 }
 
-// `night repo`: 읽기(인자 없음·list·show)와 쓰기(<저장소> merge|hold|auto). 원장은 읽지 않고 업무 목록만 읽는다.
+// `night repo`: 읽기(인자 없음·list·show)와 쓰기(<저장소> merge|hold). 원장은 읽지 않고 업무 목록만 읽는다.
 function repoCommand(args, flags, {home, by, deps}) {
   const [name, value] = args;
   const works = () => (deps.readWorks ?? (() => new WorkStore(home).list()))();

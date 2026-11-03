@@ -1,61 +1,44 @@
-// 저장소별 밤 머지 정책(PR C1). 자동 단계에서 관문을 통과한 PR을 저장소마다 merge|hold|auto로 다룬다.
-// 허용 저장소 목록은 두지 않는다(2026-11-02 kyle): 값이 없으면 auto이고, auto는 파일 신호로 배포 저장소를 가려 아침까지 보류한다.
-// 판별은 파일 신호를 보는 추정이다. 브랜치 보호·웹 콘솔의 자동 배포 같은 외부 설정은 보지 못하므로 의심되면 hold로 덮어쓴다.
-// 상주 경로가 아니다: 명령·요청 한 번에 저장소 파일 몇 개를 읽고, 정책 파일은 저장소 수만큼 작다.
+// 저장소별 밤 머지 정책(PR C1). 자동 단계에서 관문을 통과한 PR을 저장소마다 merge|hold로 다룬다.
+// 허용 저장소 목록은 두지 않는다(2026-11-02 kyle). 값이 없으면 온톨로지 project 카드의 새 칸 둘이 기본값이다
+// (2026-11-03 kyle: "배포브랜치를 적어두면, 해당 브랜치에만 머지 안 해도 되는 거니까"):
+//   deploy_branch(push·머지되면 운영에 자동 배포되는 브랜치, 없으면 `없음`)와 night_merge(`허용`·`금지`, 칸이 없으면 허용).
+// 판정(위에서부터 처음 맞는 것): 저장값 → 카드·deploy_branch를 못 읽으면 hold(setup-needed) → night_merge 금지면 hold
+//   → 대상 브랜치가 deploy_branch면 hold → merge. 카드의 `deploy` 칸은 판정에 쓰지 않고 화면 참고용으로만 응답에 담는다.
+// 파일 낱말로 배포를 추정하지 않는다. 상주 경로가 아니다: 명령·요청 한 번에 카드 앞머리 몇십 장을 읽는다.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {acquireDirLock} from './dir-lock.mjs';
 
 export const POLICY_FILE = 'night-repo-policy.json';
-export const POLICY_VALUES = ['merge', 'hold', 'auto'];
+export const POLICY_VALUES = ['merge', 'hold'];
 export const REPO_NAME = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u;
 
-// 배포를 뜻하는 낱말(대소문자 무시). 워크플로 본문·package.json 스크립트에 하나라도 보이면 deploy로 본다.
-// 트리거(on.push 등)는 읽지 않는다: 낱말이 보이면 어떤 조건이든 보류 쪽으로 틀린다. 앞뒤가 영문·숫자가 아닐 때만 맞고,
-// 줄기 낱말(deploy·publish·release)은 뒤에 글자가 더 붙어도 맞는다(deployment·released). `docker push` 등 두 낱말은 공백 하나 이상.
-export const DEPLOY_WORDS = ['deploy', 'publish', 'release', 'vercel', 'netlify', 'wrangler', 'pages', 'firebase', 'heroku',
-  'fly', 'flyctl', 'render', 'railway', 'aws', 'gcloud', 'azure', 'kubectl', 'helm', 'terraform', 'ansible', 'rsync', 'scp',
-  'ssh', 'docker push', 'npm publish', 'pypi', 'twine', 'cargo publish'];
-const STEM_WORDS = new Set(['deploy', 'publish', 'release']);
-const wordSource = w => w.replace(/ /g, '\\s+') + (STEM_WORDS.has(w) ? '' : '(?![A-Za-z0-9])');
-const DEPLOY_RE = new RegExp(`(?<![A-Za-z0-9])(?:${DEPLOY_WORDS.map(wordSource).join('|')})`, 'i');
-// 셸이 지우는 `\` + 줄바꿈은 공백 하나로 잇고 연속 공백은 하나로 접은 뒤 맞춘다(`docker \\\n push`도 docker push).
-export const normalizeText = text => text.replace(/\\\r?\n/g, ' ').replace(/[ \t]+/g, ' ');
-export const findDeployWord = text => DEPLOY_RE.exec(normalizeText(text))?.[0].toLowerCase().replace(/\s+/g, ' ') ?? null;
-
-// 배포 설정 파일(이름, 대소문자 무시)·폴더. 루트와 하위 폴더에서 찾는다.
-export const DEPLOY_CONFIG_FILES = ['vercel.json', 'netlify.toml', 'wrangler.toml', 'wrangler.json', 'wrangler.jsonc',
-  'fly.toml', 'render.yaml', 'app.yaml', 'firebase.json', 'procfile'];
-export const DEPLOY_CONFIG_DIRS = ['.vercel', '.netlify'];
-export const SKIP_DIRS = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next']);
-export const SCAN_LIMITS = {maxDepth: 4, maxDirs: 2000};
-// 연쇄: workflow_run은 표기와 상관없이 본문에 있으면, `/.github/workflows/` 앞이 `./`가 아니면(다른 저장소의 재사용 workflow) 연쇄 대상을 볼 수 없다.
-// YAML을 해석하지 않고 문자열로만 본다(따옴표 키·흐름 표기·블록 표기 모두 같다).
-const isChained = text => /workflow_run/i.test(text) || [...text.matchAll(/\/\.github\/workflows\//g)]
-  .some(m => !(text[m.index - 1] === '.' && !/[\w.\-/]/.test(text[m.index - 2] ?? ' ')));
-
-// 별도 스크립트·지원하지 않는 CI(2026-11-03 검수 N3·N4). 같은 낱말 목록으로 본다.
-export const SCRIPT_EXTS = ['.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd'];
-export const SCRIPT_NAMES = ['makefile', 'justfile', 'taskfile.yml', 'rakefile'];
-export const SCRIPT_DIRS = ['scripts', 'bin', 'tools', 'ci', 'deploy'];
-export const CI_FILES = ['.gitlab-ci.yml', 'bitbucket-pipelines.yml', 'jenkinsfile', 'azure-pipelines.yml', '.travis.yml', '.drone.yml',
-  'cloudbuild.yaml', 'buildspec.yml', 'appveyor.yml', '.woodpecker.yml', 'codemagic.yaml'];
-export const CI_DIRS = ['.circleci', '.buildkite'];
-export const MAX_SCRIPT_BYTES = 256 * 1024;
+// 온톨로지 project 카드 폴더: 개인·회사 허브 모두 `~/Dev/*-hub/ontology/cards/project`다(허브가 늘어도 같은 규칙).
+// 시험·다른 기계는 KADAN_ONTOLOGY_DIRS(경로 구분자로 여럿)로 바꾼다.
+export const defaultOntologyDirs = () => {
+  const dev = path.join(os.homedir(), 'Dev');
+  try {
+    return fs.readdirSync(dev).filter(n => n.endsWith('-hub')).sort().map(n => path.join(dev, n, 'ontology/cards/project'));
+  } catch { return []; }
+};
+const expandHome = p => (p === '~' || p.startsWith('~/') ? path.join(os.homedir(), p.slice(1)) : p);
+const normPath = p => expandHome(String(p).trim()).replace(/\/+$/, '');
 
 export const policyPath = home => path.join(home, POLICY_FILE);
 
-// 손상은 "판별 못 함"과 같게 다룬다: 읽기는 hold, 쓰기는 거절. 다른 값으로 넘어가지 않는다.
+// 손상은 "읽지 못함"과 같게 다룬다: 읽기는 hold, 쓰기는 거절. 다른 값으로 넘어가지 않는다.
+// 예전 파일에 저장된 `auto`는 "저장값 없음"으로 읽는다(기본값을 따른다). 다시 쓸 때 빠진다.
 export function readPolicy(home) {
   const file = policyPath(home);
   if (!fs.existsSync(file)) return {repos: {}, corrupt: null};
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
     const ok = value && value.version === 1 && value.repos && typeof value.repos === 'object' && !Array.isArray(value.repos)
-      && Object.entries(value.repos).every(([name, r]) => REPO_NAME.test(name) && POLICY_VALUES.includes(r?.value));
+      && Object.entries(value.repos).every(([name, r]) => REPO_NAME.test(name) && [...POLICY_VALUES, 'auto'].includes(r?.value));
     if (!ok) throw new Error('모양이 다름');
-    return {repos: value.repos, corrupt: null};
+    return {repos: Object.fromEntries(Object.entries(value.repos).filter(([, r]) => r.value !== 'auto')), corrupt: null};
   } catch (error) {
     // 원격 GET에도 나가는 문구라 OS 오류 문장(절대 경로 포함)을 쓰지 않는다: 파일 이름과 오류 코드만.
     const detail = error.code ?? (error instanceof SyntaxError ? 'JSON 구문 오류' : error.message);
@@ -82,152 +65,93 @@ export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toI
   } finally { fs.renameSync(lock, `${lock}.released-${randomUUID()}`); }
 }
 
-const readText = file => fs.readFileSync(file, 'utf8');
-const lower = s => s.toLowerCase();
-
-// package.json: scripts의 이름·값, 최상위 키 vercel·netlify·publishConfig에 배포 낱말이 있으면 deploy. 깨졌으면 unknown.
-function inspectPackage(file, rel, out) {
-  out.checked.push(rel);
-  let pkg;
-  try { pkg = JSON.parse(readText(file)); } catch { out.unknown.push(`${rel}: 읽기 실패 또는 JSON 손상`); return; }
-  if (!pkg || typeof pkg !== 'object') { out.unknown.push(`${rel}: JSON 모양이 다름`); return; }
-  const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? Object.entries(pkg.scripts) : [];
-  const hit = scripts.map(([k, v]) => findDeployWord(`${k} ${v}`)).find(Boolean)
-    ?? ['vercel', 'netlify', 'publishConfig'].find(k => k in pkg);
-  if (hit) out.deploy.push({file: rel, word: hit});
+// 카드 앞머리(`---` 사이)의 `키: 값` 줄. 닫는 `---`가 없거나 첫 줄이 `---`가 아니면 null(깨짐).
+function frontmatter(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== '---') return null;
+  const end = lines.indexOf('---', 1);
+  if (end < 0) return null;
+  const fields = {};
+  for (const line of lines.slice(1, end)) {
+    const m = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
+    if (m && !(m[1] in fields)) fields[m[1]] = m[2].trim().replace(/^(["'])(.*)\1$/, '$2');
+  }
+  return fields;
 }
 
-// .github/workflows 아래 모든 .yml·.yaml(대소문자 무시)을 재귀로 본다. 링크는 따라가지 않고 unknown이다.
-function inspectWorkflows(repoPath, out, budget) {
-  const base = path.join(repoPath, '.github');
-  for (const dir of [base, path.join(base, 'workflows')]) {
-    let st;
-    try { st = fs.lstatSync(dir); } catch (error) {
-      if (error.code === 'ENOENT') return;
-      out.unknown.push(`${path.relative(repoPath, dir)}: ${error.code ?? '읽기 실패'}`); return;
+const realPath = p => { try { return fs.realpathSync(p).replace(/\/+$/, ''); } catch { return p; } };
+// 카드 `repo:` 값은 경로 부분만 쓴다(첫 공백 앞까지, 뒤의 "(…)" 설명은 버림). `~`를 펼치고 realpath로 바꾼다.
+const cardRepoPath = value => { const first = String(value ?? '').trim().split(/\s+/)[0]; return first ? realPath(normPath(first)) : null; };
+const firstWord = value => (typeof value === 'string' ? value.trim().split(/\s+/)[0] : '') || null;
+
+// 온톨로지 project 카드 전부(앞머리만 읽는다). 폴더가 없으면 건너뛰고, 그 밖의 읽기 오류는 unreadable로 표시한다.
+export function loadCards(dirs = process.env.KADAN_ONTOLOGY_DIRS?.split(path.delimiter).filter(Boolean) ?? defaultOntologyDirs()) {
+  const cards = [];
+  let unreadable = null;
+  for (const dir of dirs.map(normPath)) {
+    let names;
+    try { names = fs.readdirSync(dir).filter(n => n.endsWith('.md')).sort(); } catch (error) {
+      if (error.code !== 'ENOENT') unreadable ??= `온톨로지 폴더를 읽을 수 없음(${error.code ?? '읽기 실패'})`;
+      continue;
     }
-    if (st.isSymbolicLink() || !st.isDirectory()) { out.unknown.push(`${path.relative(repoPath, dir)}: 링크라 따라가지 않음`); return; }
-  }
-  const stack = [path.join(base, 'workflows')];
-  while (stack.length) {
-    const dir = stack.pop(), relDir = path.relative(repoPath, dir);
-    if (++budget.dirs > budget.maxDirs) { out.unknown.push(`${relDir}: 폴더 수 상한 초과`); return; }
-    let entries;
-    try { entries = fs.readdirSync(dir, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name)); } catch (error) {
-      out.unknown.push(`${relDir}: ${error.code ?? '읽기 실패'}`); continue;
-    }
-    for (const e of entries) {
-      const rel = `${relDir}/${e.name}`;
-      if (e.isSymbolicLink()) { out.unknown.push(`${rel}: 링크라 따라가지 않음`); continue; }
-      if (e.isDirectory()) { stack.push(path.join(dir, e.name)); continue; }
-      if (!/\.ya?ml$/i.test(e.name)) continue;
-      out.checked.push(rel);
-      let text;
-      try { text = readText(path.join(dir, e.name)); } catch { out.unknown.push(`${rel}: 읽기 실패`); continue; }
-      const word = findDeployWord(text);
-      if (word) out.deploy.push({file: rel, word});
-      else if (isChained(text)) out.unknown.push(`${rel}: 다른 workflow로 이어지는 연쇄(workflow_run·외부 재사용)를 볼 수 없음`);
+    for (const name of names) {
+      let fields = null;
+      try { fields = frontmatter(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { /* 깨진 카드와 같게 본다 */ }
+      cards.push({id: `${path.basename(dir)}/${name.slice(0, -3)}`, name: name.slice(0, -3), broken: fields === null,
+        repo: fields ? cardRepoPath(fields.repo) : null, deploy: firstWord(fields?.deploy),
+        deployBranch: firstWord(fields?.deploy_branch), nightMerge: fields && 'night_merge' in fields ? (firstWord(fields.night_merge) ?? '') : null});
     }
   }
+  return {cards, unreadable};
 }
 
-// 배포 신호를 낱말로 읽는 파일 하나. 읽기 실패·크기 초과는 unknown, 낱말이 있으면 deploy, 없으면 낱말 없음(null)이다.
-function scanFile(file, rel, out, {skipBinary = false} = {}) {
-  out.checked.push(rel);
-  let text;
-  try {
-    if (fs.statSync(file).size > MAX_SCRIPT_BYTES) { out.unknown.push(`${rel}: 파일이 256KB를 넘어 읽지 않음`); return null; }
-    text = readText(file);
-  } catch { out.unknown.push(`${rel}: 읽기 실패`); return null; }
-  if (skipBinary && text.includes('\0')) return null;
-  const word = findDeployWord(text);
-  if (word) out.deploy.push({file: rel, word});
-  return {word};
+const NIGHT_MERGE_VALUES = ['허용', '금지'];
+const NO_BRANCH = '없음';
+// source: 화면 참고용 근거(카드 id만, 절대 경로 없음). null 뜻: nightMerge 칸 없음(판정은 허용)·deployBranch 칸 없음/읽지 못함(판정은 setup-needed)·
+// deploy는 첫 낱말(자동·수동·없음)만, nightMerge·deployBranch는 첫 낱말 원문. verdict.exceptBranch가 있으면 "merge이지만 그 브랜치로 가는 PR만 보류"다.
+const sourceOf = (card, reason, kind = 'none') => ({kind, card: card?.id ?? null, deploy: card?.deploy ?? null,
+  deployBranch: card?.deployBranch ?? null, nightMerge: card?.nightMerge || null, reason});
+const setupNeeded = (reason, card = null) => ({source: sourceOf(card, reason), verdict: {action: 'hold', reason: 'setup-needed', detail: reason, exceptBranch: null}});
+
+// 값이 없을 때의 기본값(저장소 단위): 카드 고르기(repo: 경로 일치 → 파일 이름) → deploy_branch·night_merge. 애매하면 hold(setup-needed).
+export function ontologyDefault(repo, repoPath, {cards, unreadable}) {
+  if (unreadable) return setupNeeded(unreadable);
+  if (typeof repoPath !== 'string' || !path.isAbsolute(repoPath)) return setupNeeded('저장소 경로를 모름');
+  const target = realPath(normPath(repoPath));
+  let picked = cards.filter(c => c.repo === target);
+  if (!picked.length) picked = cards.filter(c => c.name === repo);
+  if (!picked.length) return setupNeeded('온톨로지 카드 없음');
+  if (picked.length > 1) return setupNeeded(`온톨로지 카드가 여럿: ${picked.map(c => c.id).join(', ')}`);
+  const [card] = picked;
+  if (card.broken) return setupNeeded('카드 앞머리를 읽을 수 없음', card);
+  if (!card.deployBranch) return setupNeeded('deploy_branch 칸 없음', card);
+  const night = card.nightMerge ?? '허용';
+  if (!NIGHT_MERGE_VALUES.includes(night)) return setupNeeded(`night_merge 값을 모름: ${night || '(빈 값)'}`, card);
+  const ok = {source: sourceOf(card, null, 'ontology')};
+  if (night === '금지') return {...ok, verdict: {action: 'hold', reason: 'ontology-night-merge-forbidden', exceptBranch: null}};
+  return {...ok, verdict: {action: 'merge', reason: 'ontology-allowed', exceptBranch: card.deployBranch === NO_BRANCH ? null : card.deployBranch}};
 }
 
-const isScriptName = name => SCRIPT_EXTS.some(ext => name.endsWith(ext)) || SCRIPT_NAMES.includes(name);
-
-// 루트와 하위 폴더의 배포 설정 파일·폴더·package.json·스크립트·지원하지 않는 CI. 깊이·폴더 수 상한에 걸리면 unknown이다.
-// 루트 경로 자체의 링크만 허용하고(호출 쪽에서 realpath), 그 아래 링크는 따라가지 않는다: 판별 대상 위치의 링크는 unknown, 그 밖은 무시한다.
-function inspectTree(repoPath, out, budget) {
-  const queue = [{dir: repoPath, depth: 0, scripts: false, ci: false}];
-  for (let i = 0; i < queue.length; i++) {
-    const {dir, depth, scripts, ci} = queue[i], relDir = path.relative(repoPath, dir);
-    if (++budget.dirs > budget.maxDirs) { out.unknown.push('폴더 수 상한 초과'); return; }
-    let entries;
-    try { entries = fs.readdirSync(dir, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name)); } catch (error) {
-      out.unknown.push(`${relDir || '.'}: ${error.code ?? '읽기 실패'}`); continue;
-    }
-    for (const e of entries) {
-      const rel = relDir ? `${relDir}/${e.name}` : e.name, name = lower(e.name);
-      const isTarget = e.isDirectory() || e.isSymbolicLink()
-        ? DEPLOY_CONFIG_DIRS.includes(name) || CI_DIRS.includes(name) || SCRIPT_DIRS.includes(name) || name === '.github' || name === 'workflows'
-        : false;
-      if (e.isSymbolicLink()) {
-        const hit = isTarget || DEPLOY_CONFIG_FILES.includes(name) || name === 'package.json' || isScriptName(name) || CI_FILES.includes(name)
-          || scripts || ci;
-        if (hit) out.unknown.push(`${rel}: 링크라 따라가지 않음`);
-        continue;
-      }
-      if (e.isDirectory() && DEPLOY_CONFIG_DIRS.includes(name)) { out.deploy.push({file: rel, word: name}); continue; }
-      if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue;
-        if (depth >= budget.maxDepth) { out.unknown.push(`${rel}: 깊이 상한 초과`); continue; }
-        const isCi = CI_DIRS.includes(name);
-        if (isCi) out.unknown.push(`${rel}: 지원하지 않는 CI`);
-        queue.push({dir: path.join(dir, e.name), depth: depth + 1, scripts: scripts || SCRIPT_DIRS.includes(name), ci: ci || isCi});
-        continue;
-      }
-      const file = path.join(dir, e.name);
-      if (DEPLOY_CONFIG_FILES.includes(name)) { out.deploy.push({file: rel, word: name}); continue; }
-      if (name === 'package.json') { inspectPackage(file, rel, out); continue; }
-      if (ci || CI_FILES.includes(name)) {
-        const r = scanFile(file, rel, out);
-        if (r && !r.word) out.unknown.push(`${rel}: 지원하지 않는 CI`);
-        continue;
-      }
-      if (scripts || isScriptName(name)) scanFile(file, rel, out, {skipBinary: scripts && !isScriptName(name)});
-    }
-  }
-}
-
-// 판별은 낱말 신호를 보는 보수 추정이다: deploy(근거 파일들) | clean(찾아본 파일들) | unknown(이유).
-// 틀리는 방향은 항상 보류다. 근거 경로는 저장소 기준 상대 경로다. 응답 모양(result·files·reason·checked)은 그대로다.
-export function detectDeploy(repoPath, limits = SCAN_LIMITS) {
-  if (typeof repoPath !== 'string' || !path.isAbsolute(repoPath)) return {result: 'unknown', reason: '저장소 경로를 모릅니다', checked: []};
-  let stat, root = repoPath;
-  try { root = fs.realpathSync(repoPath); stat = fs.statSync(root); } catch { stat = null; }
-  if (!stat?.isDirectory()) return {result: 'unknown', reason: '저장소 경로를 읽을 수 없습니다', checked: []};
-  const out = {deploy: [], unknown: [], checked: [...DEPLOY_CONFIG_FILES]};
-  const budget = {dirs: 0, maxDirs: limits.maxDirs, maxDepth: limits.maxDepth};
-  inspectTree(root, out, budget);
-  inspectWorkflows(root, out, budget);
-  const checked = out.checked;
-  if (out.deploy.length) {
-    return {result: 'deploy', files: [...new Set(out.deploy.map(d => d.file))].sort(), checked};
-  }
-  if (out.unknown.length) return {result: 'unknown', reason: out.unknown.join('; '), checked};
-  return {result: 'clean', checked};
-}
-
-// 최종 판정: merge | hold. 판별 못 하면 보류한다.
-export function decide(value, detection) {
-  if (value === 'merge') return {action: 'merge', reason: 'repo-policy-merge'};
-  if (value === 'hold') return {action: 'hold', reason: 'repo-policy-hold'};
-  if (detection.result === 'clean') return {action: 'merge', reason: 'auto-clean'};
-  if (detection.result === 'deploy') return {action: 'hold', reason: 'deploy-repo', files: detection.files};
-  return {action: 'hold', reason: 'deploy-repo', detail: `판별 못 함: ${detection.reason}`};
-}
-
-// 저장소의 지금 정책 한 건: 저장 값·판별·최종 판정. 손상 파일이면 hold(판별 못 함)다.
-export function evaluateRepo(home, repo, {repoPath, policy = readPolicy(home)} = {}) {
+// 저장소의 지금 정책 한 건. 저장 값이 있으면 그것이 이기고(kyle 덮어쓰기), 없으면 온톨로지 기본값이다.
+// baseBranch(PR 대상 브랜치)를 주면 deploy_branch와 같을 때 hold(deploy-branch)로 바꾼다. 주지 않으면 저장소 단위 판정(exceptBranch)이다.
+// 정책 파일이 손상이면 hold다. 응답에 절대 경로를 넣지 않는다(카드는 id만).
+export function evaluateRepo(home, repo, {repoPath, baseBranch, policy = readPolicy(home), ontology = loadCards()} = {}) {
+  if (policy.corrupt) return {repo, value: null, saved: null, ...setupNeeded(policy.corrupt)};
   const saved = policy.repos[repo] ?? null;
-  const value = saved?.value ?? 'auto';
-  if (policy.corrupt) return {repo, value: null, saved: null, detection: {result: 'unknown', reason: policy.corrupt, checked: []},
-    verdict: {action: 'hold', reason: 'deploy-repo', detail: policy.corrupt}};
-  // merge·hold는 판별을 읽지 않아도 정해진다. 그래도 근거를 같이 보이려고 경로가 있으면 판별한다.
-  const detection = detectDeploy(repoPath);
-  return {repo, value, saved, detection, verdict: decide(value, detection)};
+  const base = {repo, value: saved?.value ?? null, saved};
+  if (saved) return {...base, source: sourceOf(null, null), verdict: {action: saved.value, reason: `repo-policy-${saved.value}`, exceptBranch: null}};
+  const info = {...base, ...ontologyDefault(repo, repoPath, ontology)};
+  const except = info.verdict.exceptBranch;
+  if (baseBranch !== undefined && except && baseBranch === except) info.verdict = {action: 'hold', reason: 'deploy-branch', exceptBranch: null};
+  return info;
+}
+
+// C2 머지 관문이 PR마다 부르는 함수. baseBranch는 PR 대상 브랜치다. 카드 기본값이 "그 브랜치만 보류"인데 대상 브랜치를 모르면 hold다.
+export function decideNightMerge(home, repo, {repoPath, baseBranch, policy, ontology} = {}) {
+  const info = evaluateRepo(home, repo, {repoPath, baseBranch: typeof baseBranch === 'string' && baseBranch ? baseBranch : undefined, policy, ontology});
+  let {action, reason} = info.verdict;
+  if (action === 'merge' && info.verdict.exceptBranch && !(typeof baseBranch === 'string' && baseBranch)) { action = 'hold'; reason = 'setup-needed'; }
+  return {action, reason, card: info.source.card, deployBranch: info.source.deployBranch, nightMerge: info.source.nightMerge};
 }
 
 // 업무 목록에서 저장소 경로를 찾는다(업무 키 앞부분 = 저장소). 같은 저장소의 경로가 여럿이면 첫 번째다.
@@ -236,7 +160,12 @@ export function repoPathFromWorks(works, repo) {
 }
 
 export function listRepos(home, works) {
-  const policy = readPolicy(home);
+  const policy = readPolicy(home), ontology = loadCards();
   const names = new Set([...Object.keys(policy.repos), ...works.map(w => String(w.key ?? '').split('/')[0]).filter(n => REPO_NAME.test(n))]);
-  return {corrupt: policy.corrupt, repos: [...names].sort().map(repo => evaluateRepo(home, repo, {repoPath: repoPathFromWorks(works, repo), policy}))};
+  return {corrupt: policy.corrupt, repos: [...names].sort()
+    .map(repo => evaluateRepo(home, repo, {repoPath: repoPathFromWorks(works, repo), policy, ontology}))};
 }
+
+// 아침 요약용(C2 관문이 그 밤에 본 저장소 목록을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
+export const setupNeededLines = infos => infos.filter(i => i.verdict.reason === 'setup-needed')
+  .map(i => `설정 필요: kadan night repo ${i.repo} merge|hold`);

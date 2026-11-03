@@ -10,31 +10,37 @@ import {nightCommand} from '../src/commands/night.mjs';
 import {nightGuard} from '../src/night-guard.mjs';
 import {createCenterHandler} from '../src/center-wall.mjs';
 import {summarizeNight} from '../src/night-summary.mjs';
-import {readPolicy, setRepoPolicy, detectDeploy, decide, evaluateRepo, policyPath, findDeployWord} from '../src/night-repo-policy.mjs';
+import {readPolicy, setRepoPolicy, evaluateRepo, decideNightMerge, listRepos, policyPath, setupNeededLines} from '../src/night-repo-policy.mjs';
 
-// 격리 홈·가짜 저장소 폴더만 쓴다. 운영 홈·실제 포트·GitHub에 닿지 않는다. 역할 이름도 시험용이다.
+// 격리 홈·임시 온톨로지 폴더만 쓴다. 운영 홈·실제 온톨로지·포트·GitHub에 닿지 않는다. 역할 이름도 시험용이다.
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 const REPO_ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const write = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), {recursive: true}); fs.writeFileSync(path.join(root, rel), text); };
-const flow = on => `name: x\non:\n${on}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n`;
-const withDeploy = text => `${text}      - run: npx wrangler deploy\n`;
+// 기본 온톨로지 위치는 비어 있는 임시 폴더다(실제 카드를 읽지 않는다). 시험마다 card()로 채운다.
+const EMPTY_ONTOLOGY = tmp('kadan-onto-empty-');
+process.env.KADAN_ONTOLOGY_DIRS = EMPTY_ONTOLOGY;
+const ontology = (...dirs) => { process.env.KADAN_ONTOLOGY_DIRS = dirs.join(path.delimiter); };
+const card = (dir, name, front, {raw} = {}) => write(dir, `${name}.md`, raw ?? `---\nid: project/${name}\n${front}\n---\n\n## Why\n본문\n`);
 const nightOn = home => appendLedger({kind: 'night', phase: 'on', by: '사람', text: '시험', viaChat: false,
   until: new Date(Date.now() + 3600_000).toISOString(), to: [], delivered: [], t: new Date().toISOString()}, home);
+const ev = (home, repo, repoPath) => evaluateRepo(home, repo, {repoPath});
 
-test('정책: 값 없음은 auto, 저장·읽기·덮어쓰기와 원장 한 줄', () => {
+test('정책: 값 없음은 null(기본값은 카드), 저장·읽기·덮어쓰기와 원장 한 줄, auto 쓰기는 거절', () => {
   const home = tmp('kadan-repo-policy-');
   const records = [];
   const record = e => records.push(e);
   assert.deepEqual(readPolicy(home), {repos: {}, corrupt: null});
-  assert.equal(evaluateRepo(home, 'site', {repoPath: null}).value, 'auto');
+  assert.equal(ev(home, 'site', null).value, null);
   setRepoPolicy(home, {repo: 'site', value: 'hold', by: '사람', now: () => '2026-11-03T00:00:00.000Z', record});
   setRepoPolicy(home, {repo: 'site', value: 'merge', by: 'a-감독', now: () => '2026-11-03T01:00:00.000Z', record});
   assert.deepEqual(readPolicy(home).repos.site, {value: 'merge', at: '2026-11-03T01:00:00.000Z', by: 'a-감독'});
   assert.deepEqual(records.map(r => [r.kind, r.before, r.after]), [['night-repo-policy', null, 'hold'], ['night-repo-policy', 'hold', 'merge']]);
   assert.equal((fs.statSync(policyPath(home)).mode & 0o777), 0o600);
-  assert.throws(() => setRepoPolicy(home, {repo: 'site', value: 'x', by: '사람'}), /merge\|hold\|auto/);
+  assert.throws(() => setRepoPolicy(home, {repo: 'site', value: 'auto', by: '사람'}), /merge\|hold 중 하나/);
+  assert.throws(() => setRepoPolicy(home, {repo: 'site', value: 'x', by: '사람'}), /merge\|hold 중 하나/);
   assert.throws(() => setRepoPolicy(home, {repo: '../x', value: 'hold', by: '사람'}), /저장소 이름/);
+  assert.equal(readPolicy(home).repos.site.value, 'merge');
 });
 
 test('정책: 손상 파일은 쓰기 거절(파일 그대로), 읽기는 hold', () => {
@@ -42,119 +48,193 @@ test('정책: 손상 파일은 쓰기 거절(파일 그대로), 읽기는 hold',
   fs.writeFileSync(policyPath(home), '{깨진');
   assert.throws(() => setRepoPolicy(home, {repo: 'site', value: 'merge', by: '사람'}), /손상/);
   assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{깨진');
-  const info = evaluateRepo(home, 'site', {repoPath: tmp('kadan-clean-repo-')});
+  const info = ev(home, 'site', tmp('kadan-clean-repo-'));
   assert.equal(info.verdict.action, 'hold');
   assert.match(info.verdict.detail, /손상/);
   fs.writeFileSync(policyPath(home), JSON.stringify({version: 1, repos: {site: {value: 'zzz'}}}));
   assert.ok(readPolicy(home).corrupt);
 });
 
-test('판별: 설정 파일·워크플로 push main+배포 → deploy, test만·파일 없음 → clean, 경로 없음 → unknown', () => {
-  const vercel = tmp('kadan-det-');
-  write(vercel, 'vercel.json', '{}');
-  const v = detectDeploy(vercel);
-  assert.equal(v.result, 'deploy');
-  assert.deepEqual(v.files, ['vercel.json']);
-
-  const ci = tmp('kadan-det-');
-  write(ci, '.github/workflows/deploy.yml', withDeploy(flow('  push:\n    branches: [main]')));
-  const d = detectDeploy(ci);
-  assert.equal(d.result, 'deploy');
-  assert.deepEqual(d.files, ['.github/workflows/deploy.yml']);
-
-  const testOnly = tmp('kadan-det-');
-  write(testOnly, '.github/workflows/ci.yml', flow('  push:\n    branches: [main]\n  pull_request:'));
-  const t = detectDeploy(testOnly);
-  assert.equal(t.result, 'clean');
-  assert.ok(t.checked.includes('.github/workflows/ci.yml') && t.checked.includes('vercel.json'));
-
-  assert.equal(detectDeploy(tmp('kadan-det-')).result, 'clean');
-  assert.equal(detectDeploy(null).result, 'unknown');
-  assert.equal(detectDeploy('/nonexistent-kadan-path-xyz').result, 'unknown');
-  assert.equal(detectDeploy('상대/경로').result, 'unknown');
+test('정책: 예전 파일의 auto 저장값은 저장값 없음으로 읽고, 다시 쓸 때 빠진다', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-'), repoPath = tmp('kadan-site-');
+  card(onto, 'site', `repo: ${repoPath}\ndeploy: 수동 (npm run deploy)\ndeploy_branch: 없음`);
+  ontology(onto);
+  fs.writeFileSync(policyPath(home), JSON.stringify({version: 1, repos: {site: {value: 'auto', at: 't', by: '사람'}, docs: {value: 'hold', at: 't', by: '사람'}}}));
+  assert.equal(readPolicy(home).corrupt, null);
+  assert.deepEqual(Object.keys(readPolicy(home).repos), ['docs']);
+  const info = ev(home, 'site', repoPath);
+  assert.deepEqual([info.value, info.saved, info.verdict.action, info.verdict.reason], [null, null, 'merge', 'ontology-allowed']);
+  const saved = setRepoPolicy(home, {repo: 'site', value: 'hold', by: '사람'});
+  assert.equal(saved.before, null);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(policyPath(home), 'utf8')).repos).sort(), ['docs', 'site']);
 });
 
-const repoWith = files => { const r = tmp('kadan-det-'); for (const [rel, text] of Object.entries(files)) write(r, rel, text); return r; };
-const deployStep = '      - run: vercel deploy\n';
-const hold = r => decide('auto', detectDeploy(r)).action === 'hold';
+test('저장된 merge·hold가 카드보다 우선한다(대상 브랜치가 deploy_branch여도 merge)', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-'), a = tmp('kadan-a-'), b = tmp('kadan-b-'), c = tmp('kadan-c-');
+  card(onto, 'a', `repo: ${a}\ndeploy_branch: main`);
+  card(onto, 'b', `repo: ${b}\ndeploy_branch: 없음`);
+  card(onto, 'c', `repo: ${c}\ndeploy_branch: 없음\nnight_merge: 금지`);
+  ontology(onto);
+  assert.deepEqual([ev(home, 'a', a).verdict.action, ev(home, 'b', b).verdict.action, ev(home, 'c', c).verdict.action], ['merge', 'merge', 'hold']);
+  setRepoPolicy(home, {repo: 'a', value: 'merge', by: '사람'});
+  setRepoPolicy(home, {repo: 'b', value: 'hold', by: '사람'});
+  setRepoPolicy(home, {repo: 'c', value: 'merge', by: '사람'});
+  const a1 = evaluateRepo(home, 'a', {repoPath: a, baseBranch: 'main'});
+  assert.deepEqual([a1.verdict.action, a1.verdict.reason, a1.verdict.exceptBranch], ['merge', 'repo-policy-merge', null]);
+  assert.deepEqual(decideNightMerge(home, 'a', {repoPath: a, baseBranch: 'main'}).reason, 'repo-policy-merge');
+  assert.deepEqual([ev(home, 'b', b).verdict.action, ev(home, 'b', b).verdict.reason], ['hold', 'repo-policy-hold']);
+  assert.deepEqual([ev(home, 'c', c).verdict.action, ev(home, 'c', c).verdict.reason], ['merge', 'repo-policy-merge']);
+  assert.equal(decideNightMerge(home, 'b', {repoPath: b, baseBranch: 'feature'}).action, 'hold');
+});
 
-test('판별: 트리거를 읽지 않고 배포 낱말이 보이면 보류(검수 F1~F4 입력)', () => {
-  const head = 'name: x\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n';
-  const cases = {
-    'F1 따옴표 push': `on:\n  "push":\n    branches: [main]\n${head}${deployStep}`,
-    'F2 branches-ignore main': `on:\n  push:\n    branches-ignore: [main]\n${head}${deployStep}`,
-    'F3 기본 브랜치 trunk, 참조 없음': `on:\n  push:\n    branches: [trunk]\n${head}${deployStep}`,
-    'flow map on': `on: {push: {branches: [main]}}\n${head}${deployStep}`,
-    '확장자 대문자': `on: push\n${head}${deployStep}`,
-  };
-  for (const [name, text] of Object.entries(cases)) {
-    const r = repoWith({[`.github/workflows/${name.startsWith('확장자') ? 'ci.YAML' : 'ci.yml'}`]: text});
-    assert.equal(detectDeploy(r).result, 'deploy', name);
-    assert.ok(hold(r), name);
+test('setup-needed: 카드 없음·경로 모름·deploy_branch 칸 없음/빈 값·앞머리 깨짐·이상한 night_merge는 hold이고 night_merge보다 먼저 본다', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-');
+  const names = ['nobranch', 'emptybranch', 'broken', 'oddnight', 'emptynight', 'nocard', 'forbid'];
+  const paths = Object.fromEntries(names.map(k => [k, tmp(`kadan-${k}-`)]));
+  card(onto, 'nobranch', `repo: ${paths.nobranch}\ndeploy: 수동`);
+  card(onto, 'emptybranch', `repo: ${paths.emptybranch}\ndeploy_branch:`);
+  card(onto, 'broken', '', {raw: `---\nrepo: ${paths.broken}\ndeploy_branch: 없음\n(닫는 줄 없음)\n`});
+  card(onto, 'oddnight', `repo: ${paths.oddnight}\ndeploy_branch: 없음\nnight_merge: 가끔`);
+  card(onto, 'emptynight', `repo: ${paths.emptynight}\ndeploy_branch: 없음\nnight_merge:`);
+  card(onto, 'forbid', `repo: ${paths.forbid}\nnight_merge: 금지`); // deploy_branch 없음 → 규칙 2가 먼저
+  ontology(onto);
+  for (const name of names) {
+    const info = ev(home, name, paths[name]);
+    assert.deepEqual([info.verdict.action, info.verdict.reason, info.source.kind], ['hold', 'setup-needed', 'none'], `${name}: ${JSON.stringify(info)}`);
+    assert.equal(decideNightMerge(home, name, {repoPath: paths[name], baseBranch: 'dev'}).reason, 'setup-needed', name);
   }
-  // 워크플로 하위 폴더도 재귀로 본다.
-  assert.equal(detectDeploy(repoWith({'.github/workflows/sub/ship.yml': `on: push\n${head}${deployStep}`})).result, 'deploy');
+  assert.match(ev(home, 'nobranch', paths.nobranch).verdict.detail, /deploy_branch 칸 없음/);
+  assert.match(ev(home, 'oddnight', paths.oddnight).verdict.detail, /night_merge 값을 모름: 가끔/);
+  assert.match(ev(home, 'nocard', null).verdict.detail, /경로를 모름/);
+  assert.match(ev(home, 'nocard', paths.nocard).verdict.detail, /카드 없음/);
 });
 
-test('판별: 연쇄(F4) — 외부 재사용·workflow_run은 낱말이 없어도 unknown, 로컬 재사용은 대상 파일 낱말로 deploy', () => {
-  const ci = 'name: x\non: push\njobs:\n  a:\n    steps:\n      - run: npm test\n';
-  const run = repoWith({'.github/workflows/ci.yml': ci, '.github/workflows/after.yml': 'name: y\non:\n  workflow_run:\n    workflows: [x]\njobs: {}\n'});
-  assert.equal(detectDeploy(run).result, 'unknown');
-  assert.match(detectDeploy(run).reason, /after\.yml/);
-  const ext = repoWith({'.github/workflows/ci.yml': 'name: x\non: push\njobs:\n  a:\n    uses: acme/shared/.github/workflows/ship.yml@v1\n'});
-  assert.equal(detectDeploy(ext).result, 'unknown');
-  const local = repoWith({'.github/workflows/ci.yml': 'name: x\non: push\njobs:\n  a:\n    uses: ./.github/workflows/ship.yml\n',
-    '.github/workflows/ship.yml': `on: workflow_call\njobs:\n  s:\n    steps:\n${deployStep}`});
-  const d = detectDeploy(local);
-  assert.equal(d.result, 'deploy');
-  assert.deepEqual(d.files, ['.github/workflows/ship.yml']);
-  assert.equal(detectDeploy(repoWith({'.github/workflows/ci.yml': 'name: x\non: push\njobs:\n  a:\n    uses: ./.github/workflows/lint.yml\n',
-    '.github/workflows/lint.yml': 'on: workflow_call\njobs:\n  s:\n    steps:\n      - run: npm test\n'})).result, 'clean');
+test('night_merge: 금지면 hold, 칸이 없으면 허용, 허용은 설명이 붙어도 첫 낱말로 읽는다', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-');
+  const p = Object.fromEntries(['forbid', 'absent', 'allow'].map(k => [k, tmp(`kadan-${k}-`)]));
+  card(onto, 'forbid', `repo: ${p.forbid}\ndeploy_branch: 없음\nnight_merge: 금지 (동업자 저장소, kyle 말로만 머지)`);
+  card(onto, 'absent', `repo: ${p.absent}\ndeploy_branch: 없음`);
+  card(onto, 'allow', `repo: ${p.allow}\ndeploy_branch: 없음\nnight_merge: 허용 (기본)`);
+  ontology(onto);
+  const f = decideNightMerge(home, 'forbid', {repoPath: p.forbid, baseBranch: 'dev'});
+  assert.deepEqual([f.action, f.reason, f.nightMerge, f.deployBranch], ['hold', 'ontology-night-merge-forbidden', '금지', '없음']);
+  assert.equal(ev(home, 'forbid', p.forbid).verdict.reason, 'ontology-night-merge-forbidden');
+  const a = decideNightMerge(home, 'absent', {repoPath: p.absent, baseBranch: 'dev'});
+  assert.deepEqual([a.action, a.reason, a.nightMerge], ['merge', 'ontology-allowed', null]);
+  assert.deepEqual(decideNightMerge(home, 'allow', {repoPath: p.allow, baseBranch: 'dev'}).nightMerge, '허용');
 });
 
-test('판별: 하위 폴더 배포 설정·package.json(F5)과 상한', () => {
-  for (const [rel, text] of [['packages/web/netlify.toml', ''], ['packages/web/vercel.json', '{}'], ['apps/a/.vercel/project.json', '{}'],
-    ['svc/Procfile', 'web: node x'], ['package.json', '{"scripts":{"ship":"vercel --prod"}}'],
-    ['packages/web/package.json', '{"scripts":{"release":"x"}}'], ['package.json', '{"publishConfig":{"access":"public"}}']]) {
-    const r = repoWith({[rel]: text});
-    assert.equal(detectDeploy(r).result, 'deploy', rel);
-    assert.ok(detectDeploy(r).files.some(f => rel === f || rel.startsWith(`${f}/`)), rel);
-  }
-  assert.equal(detectDeploy(repoWith({'package.json': '{"scripts":{"test":"node --test"}}', 'packages/a/package.json': '{"name":"a"}'})).result, 'clean');
-  assert.equal(detectDeploy(repoWith({'package.json': '{깨짐'})).result, 'unknown');
-  // 건너뛰는 폴더 안의 신호는 보지 않는다.
-  assert.equal(detectDeploy(repoWith({'node_modules/x/vercel.json': '{}', 'dist/netlify.toml': ''})).result, 'clean');
-  // 상한은 값을 주입해 시험한다(큰 트리를 만들지 않는다).
-  const deep = repoWith({'a/b/c/d/e/f.txt': ''});
-  assert.equal(detectDeploy(deep).result, 'unknown');
-  assert.match(detectDeploy(deep).reason, /깊이 상한/);
-  assert.equal(detectDeploy(deep, {maxDepth: 5, maxDirs: 2000}).result, 'clean');
-  const wide = repoWith({'a/x.txt': '', 'b/x.txt': '', 'c/x.txt': ''});
-  assert.equal(detectDeploy(wide, {maxDepth: 4, maxDirs: 2}).result, 'unknown');
-  assert.match(detectDeploy(wide, {maxDepth: 4, maxDirs: 2}).reason, /상한/);
-  assert.equal(detectDeploy(wide, {maxDepth: 4, maxDirs: 100}).result, 'clean');
+test('대상 브랜치: deploy_branch와 같으면 hold, 다르면 merge, 없음이면 어떤 브랜치든 merge, 브랜치를 모르면 hold', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-');
+  const main = tmp('kadan-main-'), none = tmp('kadan-none-');
+  card(onto, 'main', `repo: ${main}\ndeploy_branch: main (위 이유로 사실상 운영 브랜치)`);
+  card(onto, 'none', `repo: ${none}\ndeploy_branch: 없음`);
+  ontology(onto);
+  const d = (repo, repoPath, baseBranch) => decideNightMerge(home, repo, {repoPath, baseBranch});
+  assert.deepEqual(d('main', main, 'main'), {action: 'hold', reason: 'deploy-branch', card: `${path.basename(onto)}/main`, deployBranch: 'main', nightMerge: null});
+  assert.deepEqual(d('main', main, 'staging'), {action: 'merge', reason: 'ontology-allowed', card: `${path.basename(onto)}/main`, deployBranch: 'main', nightMerge: null});
+  assert.equal(d('main', main, 'Main').action, 'merge'); // 브랜치 이름은 대소문자를 구분한다
+  for (const base of ['main', 'master', 'dev']) assert.equal(d('none', none, base).action, 'merge', base);
+  assert.equal(d('none', none, undefined).action, 'merge'); // 없음이면 대상 브랜치를 몰라도 어떤 브랜치와도 같지 않다
+  const unknown = d('main', main, undefined);
+  assert.deepEqual([unknown.action, unknown.reason], ['hold', 'setup-needed']);
+  assert.equal(d('main', main, '').action, 'hold');
+  // 저장소 단위(API): merge + exceptBranch
+  const repoLevel = ev(home, 'main', main).verdict;
+  assert.deepEqual(repoLevel, {action: 'merge', reason: 'ontology-allowed', exceptBranch: 'main'});
+  assert.equal(ev(home, 'none', none).verdict.exceptBranch, null);
 });
 
-test('판별: 링크·읽기 실패는 unknown(F6), 배포 낱말 없는 CI는 clean', () => {
-  const broken = tmp('kadan-det-');
-  fs.mkdirSync(path.join(broken, '.github'));
-  fs.symlinkSync(path.join(broken, 'no-such-target'), path.join(broken, '.github', 'workflows'));
-  assert.equal(detectDeploy(broken).result, 'unknown');
-  const out = tmp('kadan-det-'), outside = tmp('kadan-det-outside-');
-  write(outside, 'x.yml', `on: push\njobs:\n  s:\n    steps:\n${deployStep}`);
-  write(out, '.github/workflows/ok.yml', 'on: push\n');
-  fs.symlinkSync(path.join(outside, 'x.yml'), path.join(out, '.github', 'workflows', 'link.yml'));
-  assert.equal(detectDeploy(out).result, 'unknown');
-  const noDeploy = repoWith({'.github/workflows/ci.yml': flow('  push:\n    branches: [main]\n  pull_request:'), 'package.json': '{"scripts":{"test":"node tests/run.mjs"}}'});
-  assert.equal(detectDeploy(noDeploy).result, 'clean');
-  assert.equal(decide('auto', detectDeploy(noDeploy)).action, 'merge');
+test('source의 null 규칙: nightMerge 칸 없음→null, deployBranch 없음→"없음"·칸 없음→null, deploy는 첫 낱말만', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-');
+  const p = Object.fromEntries(['full', 'nonight', 'nobranch', 'nodeploy'].map(k => [k, tmp(`kadan-${k}-`)]));
+  card(onto, 'full', `repo: ${p.full}\ndeploy: 자동 (main push → Vercel)\ndeploy_branch: main (설명)\nnight_merge: 허용 (기본)`);
+  card(onto, 'nonight', `repo: ${p.nonight}\ndeploy: 수동 (npm run deploy → …)\ndeploy_branch: 없음`);
+  card(onto, 'nobranch', `repo: ${p.nobranch}\ndeploy: 없음 (로컬)`);
+  card(onto, 'nodeploy', `repo: ${p.nodeploy}\ndeploy_branch: 없음`);
+  ontology(onto);
+  const id = n => `${path.basename(onto)}/${n}`;
+  assert.deepEqual(ev(home, 'full', p.full).source, {kind: 'ontology', card: id('full'), deploy: '자동', deployBranch: 'main', nightMerge: '허용', reason: null});
+  assert.deepEqual(ev(home, 'nonight', p.nonight).source, {kind: 'ontology', card: id('nonight'), deploy: '수동', deployBranch: '없음', nightMerge: null, reason: null});
+  assert.deepEqual(ev(home, 'nobranch', p.nobranch).source,
+    {kind: 'none', card: id('nobranch'), deploy: '없음', deployBranch: null, nightMerge: null, reason: 'deploy_branch 칸 없음'});
+  assert.equal(ev(home, 'nodeploy', p.nodeploy).source.deploy, null); // deploy 칸이 없어도 판정은 deploy_branch로 한다
+  assert.equal(ev(home, 'nodeploy', p.nodeploy).verdict.action, 'merge');
+  assert.deepEqual(ev(home, 'ghost', tmp('kadan-ghost-')).source, {kind: 'none', card: null, deploy: null, deployBranch: null, nightMerge: null, reason: '온톨로지 카드 없음'});
 });
 
-test('판별: 낱말 경계와 목록 — upload-artifact는 배포가 아니다', () => {
-  for (const hit of ['deploy', 'Deployment', 'gh-pages', 'actions/deploy-pages', 'npm publish', 'docker  push', 'flyctl', 'AWS_KEY', 'ssh-agent', 'kubectl apply', 'wrangler'])
-    assert.ok(findDeployWord(hit), hit);
-  for (const miss of ['actions/upload-artifact@v4', 'butterfly', 'npm test', 'compression', 'render2'])
-    assert.equal(findDeployWord(miss), null, miss);
+test('카드 고르기: repo의 ~·끝 /·"(…)" 설명·realpath를 처리하고, 경로 일치가 파일 이름보다 우선하며, 둘 이상 맞으면 hold', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-'), real = tmp('kadan-real-'), other = tmp('kadan-other-');
+  // 이름은 맞지만 경로가 다른 카드 vs 경로가 맞는 카드(oneul-gyeol 꼴).
+  card(onto, 'site', `repo: ${other}\ndeploy_branch: main`);
+  card(onto, 'saju', `repo: ${real}/ (설명 문장 (괄호) 뒤는 버린다)\ndeploy_branch: 없음`);
+  ontology(onto);
+  const byPath = ev(home, 'site', real);
+  assert.deepEqual([byPath.verdict.action, byPath.source.card.endsWith('/saju')], ['merge', true]);
+  assert.equal(ev(home, 'site', tmp('kadan-nomatch-')).source.card.endsWith('/site'), true); // 경로 일치가 없으면 파일 이름
+  // realpath: 업무 repoPath가 심볼릭 링크여도 같은 카드다.
+  const link = path.join(tmp('kadan-link-'), 'to-real');
+  fs.symlinkSync(real, link);
+  assert.equal(ev(home, 'whatever', link).source.card.endsWith('/saju'), true);
+  // 카드 repo가 링크여도 같다.
+  const onto2 = tmp('kadan-onto-link-');
+  card(onto2, 'viaLink', `repo: ${link}\ndeploy_branch: 없음`);
+  ontology(onto2);
+  assert.equal(ev(home, 'x', real).source.card.endsWith('/viaLink'), true);
+  // ~ 펼침
+  const onto3 = tmp('kadan-onto-home-');
+  card(onto3, 'tilde', 'repo: ~/Dev/kadan-test-tilde-xyz (설명)\ndeploy_branch: 없음');
+  ontology(onto3);
+  assert.equal(ev(home, 'tilde', path.join(os.homedir(), 'Dev/kadan-test-tilde-xyz/')).verdict.action, 'merge');
+  // 같은 경로를 가리키는 카드가 둘이면 hold
+  const dup = tmp('kadan-onto-dup-');
+  card(dup, 'one', `repo: ${real}\ndeploy_branch: 없음`);
+  card(dup, 'two', `repo: ${real}\ndeploy_branch: 없음`);
+  ontology(dup);
+  const two = ev(home, 'one', real);
+  assert.deepEqual([two.verdict.action, two.verdict.reason], ['hold', 'setup-needed']);
+  assert.match(two.verdict.detail, /여럿/);
+  // 이름만 같은 카드가 둘(두 허브에 같은 파일 이름)도 같다.
+  const x = tmp('kadan-onto-x-'), y = tmp('kadan-onto-y-');
+  card(x, 'site', 'deploy_branch: 없음');
+  card(y, 'site', 'deploy_branch: 없음');
+  ontology(x, y);
+  assert.equal(ev(home, 'site', tmp('kadan-z-')).verdict.reason, 'setup-needed');
+});
+
+test('회사 허브 폴더의 카드도 찾는다', () => {
+  const home = tmp('kadan-repo-policy-');
+  const personal = tmp('kadan-onto-personal-'), company = tmp('kadan-onto-company-');
+  const repoPath = tmp('kadan-co-');
+  card(personal, 'other', 'repo: /nonexistent/other\ndeploy_branch: main');
+  card(company, 'corp', `repo: ${repoPath}\ndeploy_branch: main\nnight_merge: 금지`);
+  ontology(personal, company);
+  const info = ev(home, 'corp', repoPath);
+  assert.deepEqual([info.verdict.action, info.verdict.reason], ['hold', 'ontology-night-merge-forbidden']);
+  // 폴더가 없어도(ENOENT) 다른 폴더는 읽는다. 읽을 수 없는 폴더(파일 하나)가 있으면 전부 setup-needed다.
+  ontology(path.join(personal, 'missing'), company);
+  assert.equal(ev(home, 'corp', repoPath).verdict.reason, 'ontology-night-merge-forbidden');
+  const file = path.join(personal, 'not-a-dir');
+  fs.writeFileSync(file, 'x');
+  ontology(file, company);
+  assert.equal(ev(home, 'corp', repoPath).verdict.reason, 'setup-needed');
+});
+
+test('아침 요약 줄: 기본값을 못 정해 보류한 저장소만 설정 필요 안내', () => {
+  const home = tmp('kadan-repo-policy-');
+  const onto = tmp('kadan-onto-'), repoPath = tmp('kadan-ok-');
+  card(onto, 'ok', `repo: ${repoPath}\ndeploy_branch: 없음`);
+  ontology(onto);
+  setRepoPolicy(home, {repo: 'pinned', value: 'hold', by: '사람'});
+  const infos = ['ok', 'ghost', 'pinned', 'second'].map(r => ev(home, r, r === 'ok' ? repoPath : null));
+  assert.deepEqual(setupNeededLines(infos), ['설정 필요: kadan night repo ghost merge|hold', '설정 필요: kadan night repo second merge|hold']);
 });
 
 test('정책: 손상 문구에는 홈 절대 경로를 넣지 않는다(F7). 쓰기 거절은 CLI용으로 경로를 붙인다', () => {
@@ -167,39 +247,30 @@ test('정책: 손상 문구에는 홈 절대 경로를 넣지 않는다(F7). 쓰
   assert.throws(() => setRepoPolicy(home, {repo: 'site', value: 'hold', by: '사람'}), e => e.message.includes(home));
 });
 
-test('최종 판정 표: merge·hold·auto × deploy·clean·unknown', () => {
-  const det = {deploy: {result: 'deploy', files: ['vercel.json'], checked: []}, clean: {result: 'clean', checked: []}, unknown: {result: 'unknown', reason: '모름', checked: []}};
-  const table = {
-    merge: {deploy: 'merge', clean: 'merge', unknown: 'merge'},
-    hold: {deploy: 'hold', clean: 'hold', unknown: 'hold'},
-    auto: {deploy: 'hold', clean: 'merge', unknown: 'hold'},
-  };
-  for (const [value, row] of Object.entries(table))
-    for (const [kind, action] of Object.entries(row)) assert.equal(decide(value, det[kind]).action, action, `${value}×${kind}`);
-  assert.equal(decide('auto', det.deploy).reason, 'deploy-repo');
-  assert.deepEqual(decide('auto', det.deploy).files, ['vercel.json']);
-  assert.equal(decide('auto', det.unknown).reason, 'deploy-repo');
-});
 
-test('CLI 명령: 저장 출력·list·show·--repo-path·업무의 repoPath', () => {
+test('CLI 명령: 저장 출력·list·show·--repo-path·업무의 repoPath·기본값 근거(카드 id만)', () => {
   const home = tmp('kadan-repo-cli-');
-  const site = tmp('kadan-site-');
-  write(site, 'netlify.toml', '');
-  const works = [{key: 'site/w1', status: 'open', repoPath: site}, {key: 'docs/w2', status: 'open', repoPath: tmp('kadan-docs-')}];
+  const onto = tmp('kadan-onto-');
+  const site = tmp('kadan-site-'), docs = tmp('kadan-docs-');
+  card(onto, 'site', `repo: ${site}\ndeploy: 자동 (Vercel)\ndeploy_branch: main`);
+  card(onto, 'docs', `repo: ${docs}\ndeploy: 없음\ndeploy_branch: 없음`);
+  ontology(onto);
+  const works = [{key: 'site/w1', status: 'open', repoPath: site}, {key: 'docs/w2', status: 'open', repoPath: docs}];
   const run = (args, flags = {}, by = '사람') => nightCommand(['repo', ...args], flags, {home, by, deps: {readWorks: () => works}});
-  assert.match(run(['site', 'auto']), /저장: site = auto[\s\S]*판별 deploy — 근거 netlify\.toml[\s\S]*최종 판정 보류 \(deploy-repo\)/);
-  const shown = run(['show', 'docs']);
-  assert.match(shown, /docs: 최종 판정 머지 \(auto-clean\)/);
-  assert.match(run(['site', 'merge']), /최종 판정 머지 \(repo-policy-merge\)/);
+  assert.match(run(['show', 'site']), /site: 저장 값 없음[\s\S]*기본값 근거 카드 [^\n]*\/site deploy_branch main[\s\S]*최종 판정 머지 \(ontology-allowed, main으로 가는 PR만 보류\)/);
+  assert.match(run(['show', 'docs']), /docs: 최종 판정 머지 \(ontology-allowed\)/);
+  assert.match(run(['site', 'merge']), /저장: site = merge \(이전 없음\)[\s\S]*최종 판정 머지 \(repo-policy-merge\)/);
   const list = run(['list']);
   assert.match(list, /site: 저장 값 merge/);
-  assert.match(list, /docs: 저장 값 없음\(auto\)/);
-  assert.match(run(['show', 'ghost'], {'repo-path': site}), /ghost: 판별 deploy/);
-  assert.match(run(['show', 'ghost']), /ghost: 판별 unknown/);
-  assert.match(run([]), /사용법/);
+  assert.match(list, /docs: 저장 값 없음/);
+  assert.ok(!list.includes(onto) && !list.includes(site), list); // 절대 경로를 보이지 않는다
+  assert.match(run(['show', 'ghost']), /ghost: 최종 판정 보류 \(setup-needed, 저장소 경로를 모름\)/);
+  assert.match(run(['show', 'ghost'], {'repo-path': tmp('kadan-nocard-')}), /ghost: 최종 판정 보류 \(setup-needed, 온톨로지 카드 없음\)/);
+  assert.match(run([]), /사용법: kadan night repo <저장소> merge\|hold /);
   assert.throws(() => run(['site']), /값이 필요/);
+  assert.throws(() => run(['site', 'auto']), /merge\|hold 중 하나/);
   assert.throws(() => run(['show']), /저장소 이름/);
-  assert.deepEqual(readLedger(home).filter(e => e.kind === 'night-repo-policy').map(e => e.after), ['auto', 'merge']);
+  assert.deepEqual(readLedger(home).filter(e => e.kind === 'night-repo-policy').map(e => e.after), ['merge']);
 });
 
 test('nightGuard: 켜짐+역할 세션의 night repo 쓰기는 거절, list·show·인자 없음은 통과, 꺼짐·사람은 통과', () => {
@@ -252,6 +323,7 @@ test('API: GET 모양, POST는 토큰·출처·원격 검사를 받고 나이트
   const get = await call(handler, fakeReq('GET', '/api/night/repos'));
   assert.equal(get.status, 200);
   assert.deepEqual(Object.keys(JSON.parse(get.body)), ['corrupt', 'repos']);
+  assert.deepEqual(JSON.parse(get.body).repos, []);
 
   const post = (fields, opts) => call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, fields), ...opts}));
   assert.equal((await call(handler, fakeReq('POST', '/api/night/repos', {body: new URLSearchParams({repo: 'site', value: 'hold'}).toString()}))).status, 403); // 토큰 없음
@@ -274,18 +346,32 @@ test('API: GET 모양, POST는 토큰·출처·원격 검사를 받고 나이트
   const bad = await call(handler2, fakeReq('POST', '/api/night/repos', {body: form(handler2, {repo: 'site', value: 'zzz'})}));
   assert.equal(bad.status, 409);
   assert.equal(readPolicy(off).repos.site.value, 'hold');
-  assert.equal(JSON.parse((await call(handler2, fakeReq('GET', '/api/night/repos'))).body).repos[0].verdict.action, 'hold');
+  const body = JSON.parse((await call(handler2, fakeReq('GET', '/api/night/repos'))).body);
+  assert.equal(body.repos[0].verdict.action, 'hold');
+  assert.deepEqual(Object.keys(body.repos[0]).sort(), ['repo', 'saved', 'source', 'value', 'verdict']);
+  assert.deepEqual(Object.keys(body.repos[0].verdict).sort(), ['action', 'exceptBranch', 'reason']);
+  assert.ok(!JSON.stringify(body).includes(off));
 });
 
 // 실제 kadan 저장소 내용에 묶지 않는다(파일 하나만 바뀌어도 깨진다). kadan과 같은 꼴의 고정 fixture로 본다:
-// 배포 낱말 없는 ci.yml + 평범한 scripts. (실제 kadan은 scripts의 'published' 낱말로 deploy 보류다 — docs/decisions.md)
-test('kadan과 같은 꼴의 fixture(배포 낱말 없는 ci.yml + 평범한 scripts)는 clean', () => {
-  const r = repoWith({'.github/workflows/ci.yml': flow('  push:\n    branches: [main]\n  pull_request:'),
-    'scripts/check.mjs': 'console.log("ok");\n', 'scripts/run.sh': '#!/bin/sh\nnode tests/run.mjs\n', 'package.json': '{"scripts":{"test":"node tests/run.mjs"}}'});
-  const d = detectDeploy(r);
-  assert.equal(d.result, 'clean', JSON.stringify(d));
-  assert.ok(d.checked.includes('.github/workflows/ci.yml') && d.checked.includes('scripts/run.sh'));
-  assert.equal(decide('auto', d).action, 'merge');
+
+
+test('API 응답 모양: 저장소 단위 항목(source·verdict.exceptBranch), 절대 경로 없음', () => {
+  const home = tmp('kadan-repo-shape-');
+  const onto = tmp('kadan-onto-shape-'), shop = tmp('kadan-shop-'), rot = tmp('kadan-rot-');
+  card(onto, 'shop', `repo: ${shop}\ndeploy: 수동 (npm run deploy)\ndeploy_branch: main`);
+  card(onto, 'rot', `repo: ${rot}\ndeploy: 수동 (…)\ndeploy_branch: 없음\nnight_merge: 금지`);
+  ontology(onto);
+  const out = listRepos(home, [{key: 'shop/w1', repoPath: shop}, {key: 'rot/w3', repoPath: rot}, {key: 'ghost/w2', repoPath: tmp('kadan-g-')}]);
+  assert.deepEqual(Object.keys(out), ['corrupt', 'repos']);
+  const [ghost, rotInfo, shopInfo] = out.repos;
+  const id = n => `${path.basename(onto)}/${n}`;
+  assert.deepEqual(shopInfo, {repo: 'shop', value: null, saved: null,
+    source: {kind: 'ontology', card: id('shop'), deploy: '수동', deployBranch: 'main', nightMerge: null, reason: null},
+    verdict: {action: 'merge', reason: 'ontology-allowed', exceptBranch: 'main'}});
+  assert.deepEqual(rotInfo.verdict, {action: 'hold', reason: 'ontology-night-merge-forbidden', exceptBranch: null});
+  assert.deepEqual([ghost.source.kind, ghost.source.card, ghost.source.reason, ghost.verdict.reason], ['none', null, '온톨로지 카드 없음', 'setup-needed']);
+  assert.ok(!JSON.stringify(out).includes(onto) && !JSON.stringify(out).includes(shop));
 });
 
 test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따로 보인다', () => {
@@ -298,76 +384,6 @@ test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따�
   assert.equal(s.counts.noteHolds['deploy-repo'], 1);
 });
 
-// 재검수 N1~N4·F6·F7 (exec-8c544125). 모두 "틀리면 보류" 방향이다. 가짜 저장소 폴더만 쓴다.
-const verdict = r => detectDeploy(r).result;
-
-test('판별 N1: 외부 재사용 workflow는 YAML 표기와 상관없이 unknown, 로컬 ./ 는 대상 파일 낱말로 본다', () => {
-  const cases = {
-    '따옴표 키': 'on: push\njobs:\n  job:\n    "uses": acme/ops/.github/workflows/ship.yml@main\n',
-    '흐름 표기': 'on: push\njobs: {job: {uses: acme/ops/.github/workflows/ship.yml@main}}\n',
-    '따옴표 값': 'on: push\njobs:\n  job:\n    uses: "acme/ops/.github/workflows/ship.yml@main"\n',
-    '절대 경로 모양': 'on: push\njobs:\n  job:\n    uses: ../x/.github/workflows/ship.yml\n',
-    'workflow_run 흐름': 'on: {"workflow_run": {workflows: [x]}}\njobs: {}\n',
-  };
-  for (const [name, text] of Object.entries(cases)) assert.equal(verdict(repoWith({'.github/workflows/ci.yml': text})), 'unknown', name);
-  assert.equal(verdict(repoWith({'.github/workflows/ci.yml': 'on: push\njobs:\n  job:\n    uses: ./.github/workflows/lint.yml\n',
-    '.github/workflows/lint.yml': 'on: workflow_call\njobs:\n  s:\n    steps:\n      - run: npm test\n'})), 'clean');
-});
-
-test('판별 N2: 역슬래시 줄 연결·연속 공백을 이은 뒤 두 낱말 신호를 맞춘다', () => {
-  const run = body => repoWith({'.github/workflows/ci.yml': `on: push\njobs:\n  job:\n    steps:\n      - run: |\n${body}`});
-  assert.equal(verdict(run('          docker \\\n            push image\n')), 'deploy');
-  assert.equal(verdict(run('          npm   \\\n   publish\n')), 'deploy');
-  assert.equal(verdict(run('          cargo\t\\\r\n publish\n')), 'deploy');
-  assert.equal(verdict(run('          docker build .\n')), 'clean');
-  assert.ok(findDeployWord('docker \\\n push'));
-});
-
-test('판별 N3: 별도 스크립트도 같은 낱말로 보고, 크기 초과·읽기 실패는 unknown, 그 밖의 언어 파일은 보지 않는다', () => {
-  const sh = 'vercel --prod\n';
-  for (const rel of ['scripts/ship.sh', 'a/run.bash', 'run.zsh', 'x.ps1', 'x.bat', 'x.cmd', 'Makefile', 'justfile', 'Taskfile.yml', 'Rakefile',
-    'scripts/ship', 'bin/go', 'tools/x.txt', 'ci/x.js', 'deploy/note.md', 'packages/a/scripts/ship.mjs']) {
-    const r = repoWith({[rel]: sh});
-    assert.equal(verdict(r), 'deploy', rel);
-    assert.deepEqual(detectDeploy(r).files, [rel], rel);
-  }
-  assert.equal(verdict(repoWith({'src/ship.js': sh, 'lib/ship.py': sh, 'README.md': sh})), 'clean');
-  assert.equal(verdict(repoWith({'scripts/build.sh': 'npm test\n', 'Makefile': 'test:\n\tnode --test\n'})), 'clean');
-  assert.equal(verdict(repoWith({'scripts/big.sh': `${'#'.repeat(256 * 1024)}\n`})), 'unknown');
-  assert.equal(verdict(repoWith({'node_modules/x/scripts/ship.sh': sh})), 'clean');
-  const bin = repoWith({'scripts/data.bin': 'a\0vercel'});
-  assert.equal(verdict(bin), 'clean');
-  const locked = repoWith({'scripts/ship.sh': sh});
-  fs.chmodSync(path.join(locked, 'scripts/ship.sh'), 0o000);
-  try { assert.equal(verdict(locked), 'unknown'); } finally { fs.chmodSync(path.join(locked, 'scripts/ship.sh'), 0o600); }
-});
-
-test('판별 N4: GitHub 밖 CI 파일은 낱말이 있으면 deploy, 없어도 unknown', () => {
-  const files = {'.gitlab-ci.yml': 'a', '.circleci/config.yml': 'a', 'bitbucket-pipelines.yml': 'a', Jenkinsfile: 'a', '.buildkite/pipeline.yml': 'a',
-    'azure-pipelines.yml': 'a', '.travis.yml': 'a', '.drone.yml': 'a', 'cloudbuild.yaml': 'a', 'buildspec.yml': 'a', 'appveyor.yml': 'a',
-    '.woodpecker.yml': 'a', 'codemagic.yaml': 'a', 'sub/.gitlab-ci.yml': 'a'};
-  for (const rel of Object.keys(files)) {
-    assert.equal(verdict(repoWith({[rel]: 'script: npm test\n'})), 'unknown', rel);
-    assert.equal(verdict(repoWith({[rel]: 'script: vercel --prod\n'})), 'deploy', rel);
-  }
-  assert.equal(verdict(repoWith({'.circleci/config.yml': 'x'})), 'unknown');
-  assert.equal(verdict(repoWith({'.github/workflows/ci.yml': 'on: push\njobs: {}\n'})), 'clean');
-});
-
-test('판별 F6: 루트 경로 링크는 허용, 그 아래 링크는 따라가지 않고 판별 대상 위치의 링크만 unknown', () => {
-  const real = repoWith({'package.json': '{"scripts":{"test":"x"}}'});
-  const rootLink = path.join(tmp('kadan-det-link-'), 'repo');
-  fs.symlinkSync(real, rootLink);
-  assert.equal(verdict(rootLink), 'clean');
-  const outside = repoWith({'vercel.json': '{}', 'ship.sh': 'vercel --prod\n'});
-  const linked = (name, target) => { const r = repoWith({'README.md': 'x'}); fs.mkdirSync(path.dirname(path.join(r, name)), {recursive: true});
-    fs.symlinkSync(target, path.join(r, name)); return r; };
-  for (const name of ['scripts', 'bin', 'ship.sh', 'Makefile', '.gitlab-ci.yml', '.circleci', 'package.json', 'scripts/x.txt', 'vercel.json', '.github'])
-    assert.equal(verdict(linked(name, outside)), 'unknown', name);
-  // 그 밖의 링크는 무시한다(끊어진 링크 포함). 대상 안의 신호도 읽지 않는다.
-  assert.equal(verdict(linked('site', outside)), 'clean');
-  assert.equal(verdict(linked('site', path.join(outside, 'no-such'))), 'clean');
-});
 
 test('정책 F7: 읽기 권한 오류 문구에도 절대 경로가 없다(파일 이름과 오류 코드만)', () => {
   const home = tmp('kadan-repo-policy-');
