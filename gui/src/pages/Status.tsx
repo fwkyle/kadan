@@ -3,9 +3,9 @@ import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse, Spark, useSkin } from "../ui";
 import Radar from "../Radar";
-import StatusFront, { type FrontData } from "./StatusFront";
+import StatusFront, { FrontLists, type FrontData } from "./StatusFront";
 import { radarBlips } from "../radar-blips";
-import { ALERT_SHOWN, STOP_SHOWN, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
+import { ALERT_SHOWN, STOP_SHOWN, alertMore, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 
 // 일을 들고 있는데 창이 없는 담당(레이더의 창 없음 점). 세션 상태를 모르면 비워 둔다.
@@ -46,7 +46,7 @@ function ProcessTable({processes}: {processes?: ProcessData | null}) {
   </>;
 }
 type StatusData = Stamp & {
-  rows: Row[]; works: Row[]; endedWorks?: {done: number; cancelled: number; total: number; included: boolean}; front?: FrontData; cleanupRequest: string; executionCount: number;
+  rows: Row[]; works: Row[]; repo?: string | null; repoView?: {mergedToday: {id: string; prs: number[]; at: string}[] | null}; endedWorks?: {done: number; cancelled: number; total: number; included: boolean}; front?: FrontData; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
   live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml?: string}[];
@@ -72,13 +72,17 @@ const isIdleSuper = (s: Supervisors["items"][number]) =>
 const busySupers = (items: Supervisors["items"]) => items.filter(s => !isIdleSuper(s));
 const idleSupers = (items: Supervisors["items"]) => items.filter(isIdleSuper);
 export default function Status({url}: {url: URL}) {
-  const resource = useResource<StatusData>("status"), data = resource.data;
+  const repo = url.searchParams.get("repo") || null;
+  const resource = useResource<StatusData>("status" + (repo ? "?repo=" + encodeURIComponent(repo) : "")), data = resource.data;
   const skin = useSkin(), [flowMore, setFlowMore] = useState(false);
   const context = useContext(AppContext), scrolled = useRef("");
   useEffect(() => {
     if (!data || !url.hash.startsWith("#status-") || scrolled.current === url.hash) return;
     const target = document.getElementById(url.hash.slice(1));
     if (target) {
+      // '전체 현황 더 보기' 접힘 안의 칸을 가리키는 주소면 접힘도 함께 연다.
+      const more = target.closest("details#status-more");
+      if (more instanceof HTMLDetailsElement) more.open = true;
       if (target instanceof HTMLDetailsElement) target.open = true;
       target.scrollIntoView({block:"start"});
       scrolled.current = url.hash;
@@ -141,17 +145,44 @@ export default function Status({url}: {url: URL}) {
     <dl className="st-work-grid"><dt>지금 차례</dt><dd className="st-turn" title={shortenTurn(row.turnLabel).rest ? row.turnLabel : undefined}>{shortenTurn(row.turnLabel).text}</dd><dt>다음 행동</dt><dd>{row.next}</dd></dl>
     <div className="st-work-foot"><span>최근 실행 신호 {row.signalLabel || "없음"} {row.signalAt && time(row.signalAt)}</span><span className="st-when">워크 기록 {row.reportLabel}</span>{row.summary && <span className="st-sum">{row.summary}</span>}</div>
   </article>;
+  // 저장소 하나를 고른 화면: 나한테 온 결정 → 머지 요청 → 막힌 것 → (접힘) 진행 중 일 · 오늘 머지.
+  const repoBody = (d: StatusData) => {
+    const today = d.repoView?.mergedToday;
+    const alerts = d.alerts;
+    return <>
+      <p className="st-repo-lead">저장소 <strong>{repo}</strong>의 일만 보고 있습니다. 사이드 탭의 '전체'를 누르면 모든 저장소를 모아 봅니다.</p>
+      {d.front?.decisions === null && <p className="st-error" role="alert">결정 기록을 읽지 못해 결정·머지 수를 모릅니다.</p>}
+      <FrontLists decisions={d.front?.decisions ?? null} showRepo={false}/>
+      <section id="status-attention" className="st-section">
+        <header className="st-sec-head"><h2>막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span></header>
+        {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">이 저장소에 멈춘 카드가 없습니다.</p>}
+        {alerts && alerts.count > 0 && <section className="st-alerts"><h3>이 저장소 담당이 받은 감시 경보 <span className="st-cnt st-cnt-attn">{alerts.count}건</span></h3><ul className="st-alert-list">{alerts.items.map(alertRow)}</ul></section>}
+      </section>
+      <details id="status-repo-more" className="st-fold"><summary>진행 중 일 {open.length}장 · 오늘 머지</summary>
+        <section id="status-running" className="st-section"><h3>열린 워크 <span className="st-cnt">{d.workError ? "모름" : open.length + "장"}</span></h3>
+          {open.length ? open.map(work) : <p className="st-empty">열린 워크가 없습니다.</p>}
+          {held.length > 0 && <><h3>일시정지 중인 워크</h3>{held.map(work)}</>}
+        </section>
+        <section id="status-merged-today" className="st-section"><h3>오늘 머지</h3>
+          {today === null || today === undefined ? <p className="st-empty">기록 없음 — 결정 기록을 읽지 못했습니다.</p>
+            : today.length === 0 ? <p className="st-empty">기록 없음 — 오늘 답한 머지 요청이 카단 기록에 없습니다. (GitHub는 조회하지 않습니다)</p>
+            : <ul>{today.map(m => <li key={m.id}>오늘 답한 머지 요청 · PR {m.prs.map(p => "#" + p).join(", ")} · {time(m.at)}</li>)}</ul>}
+        </section>
+      </details>
+    </>;
+  };
   return <section className="st-view">
     <header className="st-lead"><h1>전체 현황</h1><p>내가 답할 요청과 막힌 일을 먼저 확인합니다. 맡긴 일의 자세한 진행 상황은 <a href="/?collection=work#dashboard">워크</a>에서 봅니다.</p><small>수집 {time(data?.collectedAt)}</small></header>
     <nav className="inline-nav" aria-label="현황 상세"><a href="#strategy-map">전략 맵(담당 상태)</a></nav>
     <ErrorMessage error={resource.error}/><Freshness collectedAt={data?.collectedAt} {...resource}/>
-    {!data ? <Loading/> : <>
+    {!data ? <Loading/> : repo ? repoBody(data) : <>
       <div className="st-band" role="group" aria-label="지금 내가 볼 것 · 다섯 질문">
         {skin === "space" && <Radar blips={radarBlips({ alerts: data.alerts, rows: data.rows, deadRoles: deadRoles(data) })} />}
         {bandChips({decisions: data.decisions?.length ?? null, stopped: stoppedCount, running: bucket("running").length, alerts: data.alerts, flow: data.flow, live: data.live}).map(chip =>
           <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{typeof chip.num === "number" ? <Roll value={chip.num}/> : chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
       <StatusFront front={data.front}/>
+      <details id="status-more" className="st-fold st-more-fold"><summary>전체 현황 더 보기</summary>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
         {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
       </p>
@@ -184,7 +215,7 @@ export default function Status({url}: {url: URL}) {
         <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미확정은 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
         {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">멈춘 카드가 없습니다.</p>}
         {data.alerts === null ? <p className="st-error" role="alert">감시 경보를 읽지 못했습니다(원장 확인 불가).</p>
-          : data.alerts.count > 0 && <section className="st-alerts"><h3>해소 전 감시 경보 <span className="st-cnt st-cnt-attn">{data.alerts.count}건</span></h3><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.slice(0, ALERT_SHOWN).map(alertRow)}</ul>{data.alerts.items.length > ALERT_SHOWN && <details className="st-fold"><summary>나머지 {data.alerts.count - ALERT_SHOWN}건</summary><ul className="st-alert-list">{data.alerts.items.slice(ALERT_SHOWN).map(alertRow)}</ul></details>}</section>}
+          : data.alerts.count > 0 && <section className="st-alerts"><h3>해소 전 감시 경보 <span className="st-cnt st-cnt-attn">{data.alerts.count}건</span></h3><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.slice(0, ALERT_SHOWN).map(alertRow)}</ul>{data.alerts.count > ALERT_SHOWN && <details className="st-fold"><summary>나머지 {alertMore(data.alerts.count, data.alerts.items.length).total}건</summary><ul className="st-alert-list">{data.alerts.items.slice(ALERT_SHOWN).map(alertRow)}</ul>{alertMore(data.alerts.count, data.alerts.items.length).unlisted > 0 && <p className="st-hint">목록에는 최근 {data.alerts.items.length}건만 싣습니다. 오래된 {alertMore(data.alerts.count, data.alerts.items.length).unlisted}건은 목록에 없습니다.</p>}</details>}</section>}
       </section>
       <section id="status-flow" className="st-section">
         <header className="st-sec-head"><h2>흐름 확인</h2><span className={"st-cnt" + (data.flow.unconfirmedCount ? " st-cnt-attn" : "")}>{data.flow.unconfirmedCount}건</span><span className="st-hint">티키타카 묶음 {data.flow.total}개 중 라운드·구현·검수 연결이 깨져 집계되지 않는 묶음입니다. 감독이 카드의 묶음 번호·단계를 고치면 빠집니다.</span></header>
@@ -202,6 +233,7 @@ export default function Status({url}: {url: URL}) {
       <details className="st-fold"><summary>자원 사용</summary><ErrorMessage error={data.resourceError}/>{data.resources ? <Facts items={[["메모리 여유",data.resources.current.freePercent===null ? "모름" : data.resources.current.freePercent+"%"],["스왑 사용",data.resources.current.swapUsed===null ? "모름" : data.resources.current.swapUsed.toFixed(1)+" MB"],["CPU 5분 부하",data.resources.current.load5===null ? "모름" : data.resources.current.load5.toFixed(2)+" / "+(data.resources.ncpu ?? "모름")]]}/> : <p>자원 상태 모름</p>}</details>
       <details className="st-fold"><summary>프로세스·메모리 (카단 tmux 서버 아래)</summary><ProcessTable processes={data.processes}/></details>
       <p className="st-footnote">모든 수치는 카드 한 장을 한 번씩 센 값이며 관리·조율 카드는 제외합니다. 제품 완성률이 아닙니다. 상세 비교·정렬은 <a href="?collection=executions#dashboard">작업 표</a>에서 확인하세요.</p>
+      </details>
     </>}
   </section>;
 }

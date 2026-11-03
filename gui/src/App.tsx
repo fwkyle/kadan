@@ -23,6 +23,8 @@ import { useFreshMarks } from "./fresh";
 import { usePaneScroll } from "./scroll";
 import { readTheme, saveTheme, THEME_LABEL, THEME_ORDER } from "./theme";
 import Comms from "./Comms";
+import RepoSidebar from "./RepoSidebar";
+import { carryRepo, repoHref } from "./repo-nav";
 const Status = lazy(() => import("./pages/Status")),
   Workspace = lazy(() => import("./pages/Workspace")),
   Decisions = lazy(() => import("./pages/Decisions")),
@@ -59,6 +61,7 @@ export default function App() {
   const href = useLocation(),
     url = useMemo(() => new URL(href), [href]),
     view = viewOf(url),
+    repo = url.searchParams.get("repo") || null,
     section = ["dashboard", "operations-flow", "work-create", "card-create"].includes(view)
       ? "dashboard" : view === "runs" ? "ledger" : view,
     session = useResource<{ token: string; decisionToken?: string; readOnly?: boolean }>("session", {
@@ -156,7 +159,8 @@ export default function App() {
           const anchor = (event.target as Element).closest("a");
           if (!anchor || anchor.target || anchor.hasAttribute("download"))
             return;
-          const target = new URL(anchor.href);
+          // 고른 저장소는 화면 안 링크로 옮겨도 유지한다. '전체'(data-repo-clear)만 푼다.
+          const target = carryRepo(new URL(anchor.href), repo, anchor.hasAttribute("data-repo-clear"));
           if (
             target.origin === location.origin &&
             target.pathname === "/" &&
@@ -179,12 +183,12 @@ export default function App() {
           본문으로 건너뛰기
         </a>
         <header className="dw-top">
-          <a className="dw-brand" href="#status">카단</a>
+          <a className="dw-brand" href={repoHref("#status", repo)}>카단</a>
           <nav id="app-nav" aria-label="주 메뉴">
             {primaryLinks.map(([key, label]) => (
               <a
                 key={key}
-                href={key === "dashboard" ? "/?collection=work#dashboard" : "#" + key}
+                href={repoHref(key === "dashboard" ? "/?collection=work#dashboard" : "#" + key, repo)}
                 aria-current={section === key ? "page" : undefined}
               >
                 <span>{label}</span>
@@ -198,6 +202,7 @@ export default function App() {
             setTheme(next);
           }}>테마: {THEME_LABEL[theme]}</button>
         </header>
+        <RepoSidebar url={url} repo={repo} />
         <main id="main-content" tabIndex={-1} {...mainScroll}>
           {(view === "ledger" || view === "runs") && <nav className="record-tabs" aria-label="기록 종류">
             <a href="#ledger" aria-current={view === "ledger" ? "page" : undefined}>활동 기록</a>

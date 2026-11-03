@@ -359,19 +359,19 @@ test("읽기 전용 새 주소 /api/dashboard/kanban: 쓰기 없이 판을 낸�
     assert.equal(r.status, 200, text);
     return JSON.parse(text);
   };
-  const data = await get("kanban");
+  const data = await get("kanban?group=owner"); // 기본 묶음은 프로젝트별(PR2)이라 감독별은 group=owner
   assert.ok(data.boards.length > 0);
   assert.deepEqual(data.lines.map((l) => l.key), ["decision", "merge", "review", "working", "before", "done"]);
   assert.ok(data.owners.includes(data.boards[0].label));
   assert.ok(data.boards.reduce((n, b) => n + b.lines.reduce((m, l) => m + l.count, 0), 0) > 0);
   assert.equal(data.decisionError, null);
   const label = data.boards[0].label;
-  const one = await get("kanban?owner=" + encodeURIComponent(label));
+  const one = await get("kanban?group=owner&owner=" + encodeURIComponent(label));
   assert.deepEqual(one.boards.map((b) => b.label), [label]);
   assert.deepEqual(one.owners, data.owners, "감독 고르기 목록은 거르기 전 전체");
   const post = await fetch(base + "kanban", { method: "POST", body: "{}" });
   assert.notEqual(post.status, 200, "쓰기 요청은 받지 않는다");
-  assert.deepEqual((await get("kanban")).boards, data.boards, "읽어도 바뀌지 않는다");
+  assert.deepEqual((await get("kanban?group=owner")).boards, data.boards, "읽어도 바뀌지 않는다");
 });
 
 // 프로젝트별 보기(group=project): 판 나누기 키만 repo로 바꾼다. 줄·묶음 규칙은 감독별과 같다.
@@ -445,7 +445,8 @@ test("프로젝트별 주소: ?group=project와 ?owner=를 같이 쓰면 그 감
   const one = await get("kanban?group=project&owner=" + encodeURIComponent(who));
   assert.ok(cards(one).length > 0 && cards(one).every((c) => c.supervisor === who));
   assert.deepEqual(one.owners, all.owners, "감독 고르기 목록은 거르기 전 전체");
-  assert.equal((await get("kanban")).group, "owner");
+  assert.equal((await get("kanban")).group, "project", "기본 묶음은 프로젝트별(PR2)");
+  assert.equal((await get("kanban?group=owner")).group, "owner");
 });
 
 test("F1: 실행 없는 업무의 결정 카드는 감독별 보기에서 main과 같다(새 최상위 칸만 다르다)", () => {
