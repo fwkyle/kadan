@@ -582,3 +582,36 @@ test('O6. 홈 안 ontology 자체가 링크여도 따라가고, 목록 API는 �
   assert.deepEqual(sources, {ontology: {exists: true, files: 1, projects: 1, unreadable: 0}});
   assert.ok(!JSON.stringify(sources).includes(real));
 });
+
+test('O7. type 값은 엄격하다: 닫지 않은 따옴표·대문자·공백 낀 값은 못 읽음, 정상 인용·공백은 project, 올바른 다른 낱말만 무시', () => {
+  const run = type => {
+    const home = home0();
+    set(home, 'acme/app', {deployBranch: '없음'});
+    write(onto(home), 'd.md', `---\ntype: ${type}\nremote: acme/app\ndeploy_branch: main\nnight_merge: 금지\n---\n`);
+    return verdictOf(home, 'acme/app', 'dev');
+  };
+  for (const type of ["'project", '"project', 'project"', "'Project'", 'my project', 'project x', '""', "''"])
+    assert.deepEqual(run(type), ['hold', 'setup-needed'], type);
+  for (const type of ['project', '"project"', "'project'", '   project   ', '"project" '])
+    assert.deepEqual(run(type), ['hold', 'night-merge-forbidden'], type);
+  for (const type of ['account', '"device"', 'rule-x_1']) assert.deepEqual(run(type), ['merge', 'allowed'], type);
+});
+
+test('O8. 루트 ontology 링크: 깨진 링크·파일을 가리키는 링크는 못 읽음, 정상 링크는 읽고, 아예 없으면 빈 상태', () => {
+  const setup = () => { const home = home0(); set(home, 'acme/app', {deployBranch: '없음'}); return home; };
+  const broken = setup();
+  fs.symlinkSync(path.join(broken, '없는-곳'), onto(broken));
+  assert.deepEqual(verdictOf(broken, 'acme/app', 'dev'), ['hold', 'setup-needed']);
+  assert.deepEqual(loadOntology(broken).stats, {exists: true, files: 0, projects: 0, unreadable: 1});
+  const toFile = setup(), file = path.join(toFile, 'plain.txt');
+  fs.writeFileSync(file, '파일');
+  fs.symlinkSync(file, onto(toFile));
+  assert.deepEqual(verdictOf(toFile, 'acme/app', 'dev'), ['hold', 'setup-needed']);
+  const good = setup(), real = tmp('kadan-real-onto-');
+  write(real, 'f.md', '---\ntype: project\nremote: acme/app\ndeploy_branch: main\nnight_merge: 금지\n---\n');
+  fs.symlinkSync(real, onto(good));
+  assert.deepEqual(verdictOf(good, 'acme/app', 'dev'), ['hold', 'night-merge-forbidden']);
+  const none = setup();
+  assert.deepEqual(loadOntology(none).stats, NO_ONTOLOGY);
+  assert.deepEqual(verdictOf(none, 'acme/app', 'dev'), ['merge', 'allowed']);
+});

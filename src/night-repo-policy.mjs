@@ -169,13 +169,13 @@ function frontmatter(text) {
   return {fields, problems, typeProblem};
 }
 
-// type 값: 'project' | 'other'(판정에 쓰지 않음) | 'unreadable'. `project`(뒤에 괄호 설명만 허용)만 project다.
-// `Project`·`project # 메모`처럼 project로 보이는데 정확하지 않은 값은 못 읽음이다: project 문서일 수 있어 무시하지 않는다.
+// type 값: 'project' | 'other'(판정에 쓰지 않음) | 'unreadable'. 앞뒤 공백을 벗기고 짝이 맞는 따옴표만 벗긴 값(앞머리 읽기에서 한 번 벗김)이
+// `project`(뒤에 괄호 설명만 허용)면 project, 소문자 낱말 하나(`^[a-z][a-z0-9_-]*$`)면 other다. 그 밖은 모두 못 읽음이다:
+// 닫지 않은 따옴표·대문자·공백이 낀 값·`project # 메모`·빈 값은 project 문서일 수 있어 무시하지 않는다.
 function typeOf(value) {
-  const v = typeof value === 'string' ? value.trim().replace(/^(["'])(.*)\1$/, '$2').trim() : '';
-  if (!v) return 'unreadable';
+  const v = typeof value === 'string' ? value.trim() : '';
   if (/^project(?:\s+\(.*\))?$/.test(v)) return 'project';
-  return /^project/i.test(v) ? 'unreadable' : 'other';
+  return /^[a-z][a-z0-9_-]*$/.test(v) ? 'other' : 'unreadable';
 }
 
 const firstWord = value => (typeof value === 'string' ? value.trim().split(/\s+/)[0] : '') || null;
@@ -278,9 +278,15 @@ export function loadOntology(home, {limits = ONTOLOGY_LIMITS} = {}) {
     }
   };
 
-  try { stats.exists = fs.statSync(root).isDirectory(); } catch (error) {
+  // 루트는 lstat으로 본다: 항목 자체가 없을 때(ENOENT)만 빈 상태다. 링크인데 대상이 없거나 폴더가 아니면 읽지 못함이다.
+  try {
+    const isLink = fs.lstatSync(root).isSymbolicLink();
+    try {
+      if (fs.statSync(root).isDirectory()) stats.exists = true;
+      else if (isLink) unreadable = '온톨로지 링크 대상이 폴더가 아님'; // 링크 없는 평범한 파일은 예전처럼 없는 것과 같다
+    } catch (error) { unreadable = `온톨로지 폴더를 읽을 수 없음(깨진 링크 또는 ${code(error)})`; }
+  } catch (error) {
     if (error.code !== 'ENOENT') unreadable = `온톨로지 폴더를 읽을 수 없음(${code(error)})`;
-    stats.exists = false;
   }
   if (stats.exists) walk(root, '', 0);
   const unreadableList = [...(unreadable ? [{path: null, reason: unreadable}] : []), ...unreadableCards];

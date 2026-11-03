@@ -38,6 +38,7 @@ ln -s ~/notes/projects "$KADAN_HOME/ontology/notes"   # 폴더 링크. 파일 �
 문서 앞머리(`---` 사이)만 읽는다.
 
 - `type: project`인 문서만 판정에 쓴다. 다른 type(account·device·rule…) 문서와 앞머리가 없는 일반 문서(README 등)는 읽고 무시한다.
+- type 값은 소문자 낱말 하나이고, 따옴표는 짝이 맞을 때만 벗긴다(`project`·`"project"`). 닫지 않은 따옴표·대문자·공백이 낀 값은 읽지 못함이다. `$KADAN_HOME/ontology` 자체가 깨진 링크이거나 폴더가 아닌 것을 가리켜도 읽지 못함이다(아예 없을 때만 빈 상태).
 - 앞머리는 있는데 `type` 칸이 없거나 형식이 틀리면(`type`이 두 번 나옴·`Project`·`project # 메모` 등) 읽지 못함이다. project 문서일 수 있기 때문이다. 닫는 `---`가 없는 앞머리도 읽지 못함이다.
 - project 문서에서 읽는 칸은 셋이고 정확히 `키: 값` 형식이어야 한다. 형식이 틀리거나 같은 칸이 두 번 나오면 그 문서는 못 읽은 것이다.
 
