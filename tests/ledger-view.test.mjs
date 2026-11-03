@@ -11,7 +11,7 @@ import {appendLedger, readLedger, readTaskLedger, readMailLedger,
 import {createDatabase, writeStorageMarker, appendStream, storagePath, transaction} from '../src/storage.mjs';
 import {ledgerStreams} from '../src/ledger-domains.mjs';
 import {readLedgerViewPage, withLedgerView} from '../src/ledger-view.mjs';
-import {ledgerViewPath, metaGet} from '../src/ledger-view-store.mjs';
+import {ledgerViewPath, metaGet, openLedgerView} from '../src/ledger-view-store.mjs';
 
 const homeOf = () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-view-'));
@@ -264,4 +264,25 @@ test('물리적으로 읽을 수 없는 조회 DB는 실패하고 보존 후 원
   assert.equal(after.rebuilt, true);assert.notEqual(after.generation, before.generation);
   assert.deepEqual(after.items, before.items);
   assert.equal(JSON.stringify(readLedger(home)), original);
+});
+
+test('첫 열기 판정의 두 읽기 사이에 다른 열기가 스키마를 만들어도 실패하지 않는다', () => {
+  const home = homeOf();
+  let injected = 0;
+  const db = openLedgerView(home, {afterFirstRead() {
+    // 판정 도중 다른 최초 조회가 스키마 생성을 커밋한 꼴을 순서 고정으로 만든다.
+    injected++;const other = openLedgerView(home);other.exec('COMMIT');other.close();
+  }});
+  assert.equal(injected, 1);
+  assert.equal(db.prepare('PRAGMA application_id').get().application_id, 1262767154);
+  db.exec('COMMIT');db.close();
+});
+
+test('남의 파일은 두 읽기 순서와 무관하게 거절한다', () => {
+  for (const setup of ['CREATE TABLE x(a)', 'PRAGMA application_id=7']) {
+    const home = homeOf();
+    fs.mkdirSync(path.dirname(ledgerViewPath(home)), {recursive:true});
+    const foreign = new DatabaseSync(ledgerViewPath(home));foreign.exec(setup);foreign.close();
+    assert.throws(() => openLedgerView(home), /다른 종류의 조회 캐시/);
+  }
 });

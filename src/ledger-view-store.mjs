@@ -48,7 +48,7 @@ export const metaSet = (db, key, value) => db.prepare(
   'INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
 ).run(key, String(value));
 
-export function openLedgerView(home) {
+export function openLedgerView(home, {afterFirstRead} = {}) {
   assertTestHome(home);
   const file = ledgerViewPath(home), dir = path.dirname(file);
   fs.mkdirSync(dir, {recursive:true, mode:0o700});
@@ -60,11 +60,12 @@ export function openLedgerView(home) {
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA busy_timeout=15000; PRAGMA synchronous=FULL;');
+    // 표 개수를 먼저, 표시를 나중에 읽는다. 개수가 0 이후 다른 열기가 스키마를 커밋해도 표시는 0 또는 APP_ID라
+    // 통과하고, 개수가 0이 아니면 스키마 생성은 이미 한 커밋으로 끝났으므로 표시가 흔들리지 않는다.
+    const tables = db.prepare('SELECT count(*) AS n FROM sqlite_master').get().n;
+    afterFirstRead?.();
     const mark = db.prepare('PRAGMA application_id').get().application_id;
-    if (mark !== APP_ID && (mark !== 0 ||
-      db.prepare('SELECT count(*) AS n FROM sqlite_master').get().n !== 0)) {
-      throw new Error('다른 종류의 조회 캐시입니다');
-    }
+    if (mark !== APP_ID && (mark !== 0 || tables !== 0)) throw new Error('다른 종류의 조회 캐시입니다');
     enableWal(db);
     db.exec('BEGIN IMMEDIATE');
     // 다른 최초 조회가 기다리는 동안 생성했을 수 있으므로 잠금을 얻은 뒤 다시 확인한다.
