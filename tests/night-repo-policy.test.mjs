@@ -157,10 +157,6 @@ test('판별: 낱말 경계와 목록 — upload-artifact는 배포가 아니다
     assert.equal(findDeployWord(miss), null, miss);
 });
 
-test('판별: 이 저장소(kadan) 자체는 clean이다', () => {
-  assert.equal(detectDeploy(REPO_ROOT).result, 'clean');
-});
-
 test('정책: 손상 문구에는 홈 절대 경로를 넣지 않는다(F7). 쓰기 거절은 CLI용으로 경로를 붙인다', () => {
   const home = tmp('kadan-repo-policy-');
   fs.writeFileSync(policyPath(home), '{깨진');
@@ -281,10 +277,15 @@ test('API: GET 모양, POST는 토큰·출처·원격 검사를 받고 나이트
   assert.equal(JSON.parse((await call(handler2, fakeReq('GET', '/api/night/repos'))).body).repos[0].verdict.action, 'hold');
 });
 
-test('이 저장소(kadan) 판별: 배포가 아닌 CI라 clean(문서에 적은 결과와 같다)', () => {
-  const d = detectDeploy(REPO_ROOT);
+// 실제 kadan 저장소 내용에 묶지 않는다(파일 하나만 바뀌어도 깨진다). kadan과 같은 꼴의 고정 fixture로 본다:
+// 배포 낱말 없는 ci.yml + 평범한 scripts. (실제 kadan은 scripts의 'published' 낱말로 deploy 보류다 — docs/decisions.md)
+test('kadan과 같은 꼴의 fixture(배포 낱말 없는 ci.yml + 평범한 scripts)는 clean', () => {
+  const r = repoWith({'.github/workflows/ci.yml': flow('  push:\n    branches: [main]\n  pull_request:'),
+    'scripts/check.mjs': 'console.log("ok");\n', 'scripts/run.sh': '#!/bin/sh\nnode tests/run.mjs\n', 'package.json': '{"scripts":{"test":"node tests/run.mjs"}}'});
+  const d = detectDeploy(r);
   assert.equal(d.result, 'clean', JSON.stringify(d));
-  assert.ok(d.checked.includes('.github/workflows/ci.yml'));
+  assert.ok(d.checked.includes('.github/workflows/ci.yml') && d.checked.includes('scripts/run.sh'));
+  assert.equal(decide('auto', d).action, 'merge');
 });
 
 test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따로 보인다', () => {

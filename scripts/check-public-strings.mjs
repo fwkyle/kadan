@@ -32,7 +32,7 @@ function inspect(file, mode, read, identity) {
   seen.add(key);
   checked++;
   if (privatePath.test(file)) return reject(file, 'private workspace path');
-  if (mode === '160000') return reject(file, 'nested repository must not be included');
+  if (mode === '160000') return reject(file, 'nested repository must not be published');
   if (banned.some(re => re.test(file))) reject(file, 'private identifier in filename');
   const contents = read();
   if (mode === '120000') {
@@ -68,7 +68,7 @@ function history(tip, bases) {
   const commits = git(['rev-list', tip, '--not', ...bases]).trim().split('\n').filter(Boolean);
   for (const sha of commits) {
     // Check each introduced version, including merge changes against every parent.
-    // Unchanged files inherited from earlier history are not new disclosures.
+    // Unchanged files inherited from published history are not new disclosures.
     const changed = new Set(git(['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', '-z', sha]).split('\0').filter(Boolean));
     tree(sha, changed);
   }
