@@ -692,3 +692,10 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .st-night-detail { flex-basis: 100%; color: var(--ds-color-muted); }
 .st-merge-detail { flex-basis: 100%; font-size: 12px; color: var(--ds-color-muted); text-wrap: pretty; }
 @media (max-width: 799px) { .st-night-line strong { flex-basis: 100%; } }
+
+.st-night-form { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 4px; word-break: keep-all; overflow-wrap: break-word; }
+.st-night-form label { display: inline-flex; align-items: center; gap: 6px; }
+.st-night-form input[type="text"] { width: 12em; max-width: 100%; }
+.st-night-confirm { flex-basis: 100%; margin: 0; text-wrap: pretty; }
+.st-night-confirm button { margin-left: 8px; }
+.st-night-clear { flex-basis: 100%; color: var(--ds-color-muted); }

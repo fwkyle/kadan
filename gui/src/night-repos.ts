@@ -4,6 +4,8 @@
 export type NightLine = {
   github: string;
   repo?: string | null;
+  // 카단 설정에 실제로 저장된 값(연결 문서 값은 섞이지 않음). 양식은 이 값을 기준으로 한다.
+  settings?: { deployBranch: string | null; nightMerge: string | null };
   effective: { deployBranch: { value: string | null; from: string | null }; nightMerge: { value: string | null; from: string | null } };
   verdict: { action: string; reason: string; detail?: string | null; exceptBranch?: string | null };
 };
