@@ -157,7 +157,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
 | `kadan slot` | 저장소마다 다시 쓰는 검수용 worktree(기본 4자리). `acquire <저장소> --for <카드> [--ref <SHA>]`·`deps <자리경로>`·`release <자리경로>\|--for <카드>`·`status` | [검수 자리](review-slots.md) |
-| `kadan merge-check` | 머지 직전 표시: `merge-check <저장소/업무ID> --head <PR head>`가 업무의 최근 유효 pass 검수 SHA와 PR head를 나란히 보인다(`같음`·`다름`·`검수 SHA 없음`·`검수 pass 없음`). PR head는 입력이고 카단은 GitHub를 부르지 않는다. 표시만 하며 종료 코드는 0(입력 형식 오류만 2). 나중에 나이트 자동 머지 관문이 이 기록을 쓴다. `work show`에도 최근 pass 검수 SHA(`latestPassReviewSha`)가 나온다 | [검수 자리](review-slots.md) |
+| `kadan merge-check` | 머지 직전 표시: `merge-check <저장소/업무ID> --head <PR head>`가 업무의 낡지 않은 검수 중 **PR head와 같은 SHA를 본 검수**를 골라 나란히 보인다(한 업무에 PR이 여럿이어도 앞 PR 검수가 덮이지 않는다). 판정: `같음`(그 SHA의 가장 최근 검수가 pass)·`같은 커밋 검수 changes`(가장 최근이 changes)·`다름`(맞는 검수 없음, pass SHA 목록 최대 5개를 보임)·`모호`(짧은 head가 서로 다른 검수 SHA 둘 이상과 맞음)·`검수 SHA 없음`·`검수 pass 없음`. 다름·changes·모호는 첫 줄에 `!!` 경고가 붙는다. PR head는 입력이고 카단은 GitHub를 부르지 않는다. 표시만 하며 종료 코드는 0(입력 형식 오류만 2). 나중에 나이트 자동 머지 관문이 이 기록을 쓴다. `work show`에도 최근 pass 검수 SHA(`latestPassReviewSha`)가 나온다 | [검수 자리](review-slots.md) |
 | `kadan limit` | 무거운 명령의 기계 전체 동시 개수 제한. `run <rust\|install\|build> -- <명령...>`·`status`. rust는 `CARGO_BUILD_JOBS=2` | [무거운 명령 제한](review-slots.md#무거운-명령-제한-kadan-limit) |
 
 ### `kadan restart` 자세히

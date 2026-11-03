@@ -162,3 +162,57 @@ test('잘못된 --head 형식은 종료 코드 2 오류', () => {
     assert.throws(() => f.check(head), e => e.exitCode === 2);
   }
 });
+
+// 한 업무에 PR이 둘 이상이면 나중 PR의 검수가 앞 PR의 검수를 덮으면 안 된다(PR C 전제).
+test('두 PR의 pass 검수가 있으면 각 head가 자기 검수와 같음', () => {
+  const f = fixture(), k1 = f.addReview(1), k2 = f.addReview(2);
+  f.report(k1, 'pass', {sha: A});
+  f.report(k2, 'pass', {sha: B});
+  const a = f.check(A), b = f.check(B);
+  assert.equal(a.result, '같음');
+  assert.equal(a.review.key, k1);
+  assert.equal(b.result, '같음');
+  assert.equal(b.review.key, k2);
+});
+
+test('같은 SHA에 pass 뒤 changes면 changes, changes 뒤 pass면 같음', () => {
+  const f = fixture(), k1 = f.addReview(1), k2 = f.addReview(2);
+  f.report(k1, 'pass', {sha: A});
+  f.report(k2, 'changes', {sha: A});
+  const r = f.check(A);
+  assert.equal(r.result, '같은 커밋 검수 changes');
+  assert.equal(r.review.key, k2);
+  assert.ok(formatMergeCheck(r).startsWith('!! 같은 커밋 검수 changes'));
+  const g = fixture(), g1 = g.addReview(1), g2 = g.addReview(2);
+  g.report(g1, 'changes', {sha: A});
+  g.report(g2, 'pass', {sha: A});
+  assert.equal(g.check(A).result, '같음');
+});
+
+test('어떤 검수 SHA와도 안 맞으면 다름 + pass SHA 목록(최근 것부터)', () => {
+  const f = fixture(), k1 = f.addReview(1), k2 = f.addReview(2);
+  f.report(k1, 'pass', {sha: A});
+  f.report(k2, 'pass', {sha: B});
+  const r = f.check('c'.repeat(40));
+  assert.equal(r.result, '다름');
+  assert.deepEqual(r.passShas.map(p => p.sha), [B, A]);
+  const text = formatMergeCheck(r);
+  assert.ok(text.startsWith('!! 다름'));
+  assert.ok(text.includes(`${B}  ${k2}`) && text.includes(`${A}  ${k1}`));
+});
+
+test('짧은 head가 서로 다른 두 검수 SHA에 맞으면 모호', () => {
+  const f = fixture(), k1 = f.addReview(1), k2 = f.addReview(2);
+  const a1 = 'abc1234' + '1'.repeat(33), a2 = 'abc1234' + '2'.repeat(33);
+  f.report(k1, 'pass', {sha: a1});
+  f.report(k2, 'pass', {sha: a2});
+  const r = f.check('abc1234');
+  assert.equal(r.result, '모호');
+  assert.ok(formatMergeCheck(r).startsWith('!! 모호'));
+  assert.equal(f.check(a1).result, '같음', '긴 head로는 구분된다');
+  // 같은 커밋의 짧은/긴 기록은 모호가 아니다
+  const g = fixture(), g1 = g.addReview(1), g2 = g.addReview(2);
+  g.report(g1, 'pass', {sha: A.slice(0, 12)});
+  g.report(g2, 'pass', {sha: A});
+  assert.equal(g.check(A.slice(0, 7)).result, '같음');
+});
