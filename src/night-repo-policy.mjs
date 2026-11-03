@@ -20,7 +20,9 @@ export const DEPLOY_WORDS = ['deploy', 'publish', 'release', 'vercel', 'netlify'
 const STEM_WORDS = new Set(['deploy', 'publish', 'release']);
 const wordSource = w => w.replace(/ /g, '\\s+') + (STEM_WORDS.has(w) ? '' : '(?![A-Za-z0-9])');
 const DEPLOY_RE = new RegExp(`(?<![A-Za-z0-9])(?:${DEPLOY_WORDS.map(wordSource).join('|')})`, 'i');
-export const findDeployWord = text => DEPLOY_RE.exec(text)?.[0].toLowerCase().replace(/\s+/g, ' ') ?? null;
+// 셸이 지우는 `\` + 줄바꿈은 공백 하나로 잇고 연속 공백은 하나로 접은 뒤 맞춘다(`docker \\\n push`도 docker push).
+export const normalizeText = text => text.replace(/\\\r?\n/g, ' ').replace(/[ \t]+/g, ' ');
+export const findDeployWord = text => DEPLOY_RE.exec(normalizeText(text))?.[0].toLowerCase().replace(/\s+/g, ' ') ?? null;
 
 // 배포 설정 파일(이름, 대소문자 무시)·폴더. 루트와 하위 폴더에서 찾는다.
 export const DEPLOY_CONFIG_FILES = ['vercel.json', 'netlify.toml', 'wrangler.toml', 'wrangler.json', 'wrangler.jsonc',
@@ -28,8 +30,19 @@ export const DEPLOY_CONFIG_FILES = ['vercel.json', 'netlify.toml', 'wrangler.tom
 export const DEPLOY_CONFIG_DIRS = ['.vercel', '.netlify'];
 export const SKIP_DIRS = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next']);
 export const SCAN_LIMITS = {maxDepth: 4, maxDirs: 2000};
-// 다른 저장소의 재사용 workflow(`uses: owner/repo/.github/workflows/…`)와 workflow_run은 연쇄 대상을 볼 수 없다.
-const CHAIN_RE = /\bworkflow_run\b|^\s*-?\s*uses:\s*['"]?[^.\s'"/][^\s'"]*\/\.github\/workflows\//m;
+// 연쇄: workflow_run은 표기와 상관없이 본문에 있으면, `/.github/workflows/` 앞이 `./`가 아니면(다른 저장소의 재사용 workflow) 연쇄 대상을 볼 수 없다.
+// YAML을 해석하지 않고 문자열로만 본다(따옴표 키·흐름 표기·블록 표기 모두 같다).
+const isChained = text => /workflow_run/i.test(text) || [...text.matchAll(/\/\.github\/workflows\//g)]
+  .some(m => !(text[m.index - 1] === '.' && !/[\w.\-/]/.test(text[m.index - 2] ?? ' ')));
+
+// 별도 스크립트·지원하지 않는 CI(2026-11-03 검수 N3·N4). 같은 낱말 목록으로 본다.
+export const SCRIPT_EXTS = ['.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd'];
+export const SCRIPT_NAMES = ['makefile', 'justfile', 'taskfile.yml', 'rakefile'];
+export const SCRIPT_DIRS = ['scripts', 'bin', 'tools', 'ci', 'deploy'];
+export const CI_FILES = ['.gitlab-ci.yml', 'bitbucket-pipelines.yml', 'jenkinsfile', 'azure-pipelines.yml', '.travis.yml', '.drone.yml',
+  'cloudbuild.yaml', 'buildspec.yml', 'appveyor.yml', '.woodpecker.yml', 'codemagic.yaml'];
+export const CI_DIRS = ['.circleci', '.buildkite'];
+export const MAX_SCRIPT_BYTES = 256 * 1024;
 
 export const policyPath = home => path.join(home, POLICY_FILE);
 
@@ -44,7 +57,9 @@ export function readPolicy(home) {
     if (!ok) throw new Error('모양이 다름');
     return {repos: value.repos, corrupt: null};
   } catch (error) {
-    return {repos: {}, corrupt: `밤 저장소 정책 파일 손상: ${POLICY_FILE} (${error.message})`};
+    // 원격 GET에도 나가는 문구라 OS 오류 문장(절대 경로 포함)을 쓰지 않는다: 파일 이름과 오류 코드만.
+    const detail = error.code ?? (error instanceof SyntaxError ? 'JSON 구문 오류' : error.message);
+    return {repos: {}, corrupt: `밤 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
   }
 }
 
@@ -111,16 +126,33 @@ function inspectWorkflows(repoPath, out, budget) {
       try { text = readText(path.join(dir, e.name)); } catch { out.unknown.push(`${rel}: 읽기 실패`); continue; }
       const word = findDeployWord(text);
       if (word) out.deploy.push({file: rel, word});
-      else if (CHAIN_RE.test(text)) out.unknown.push(`${rel}: 다른 workflow로 이어지는 연쇄(workflow_run·외부 재사용)를 볼 수 없음`);
+      else if (isChained(text)) out.unknown.push(`${rel}: 다른 workflow로 이어지는 연쇄(workflow_run·외부 재사용)를 볼 수 없음`);
     }
   }
 }
 
-// 루트와 하위 폴더의 배포 설정 파일·폴더·package.json. 깊이·폴더 수 상한에 걸리면 unknown이다. 링크는 따라가지 않는다.
+// 배포 신호를 낱말로 읽는 파일 하나. 읽기 실패·크기 초과는 unknown, 낱말이 있으면 deploy, 없으면 낱말 없음(null)이다.
+function scanFile(file, rel, out, {skipBinary = false} = {}) {
+  out.checked.push(rel);
+  let text;
+  try {
+    if (fs.statSync(file).size > MAX_SCRIPT_BYTES) { out.unknown.push(`${rel}: 파일이 256KB를 넘어 읽지 않음`); return null; }
+    text = readText(file);
+  } catch { out.unknown.push(`${rel}: 읽기 실패`); return null; }
+  if (skipBinary && text.includes('\0')) return null;
+  const word = findDeployWord(text);
+  if (word) out.deploy.push({file: rel, word});
+  return {word};
+}
+
+const isScriptName = name => SCRIPT_EXTS.some(ext => name.endsWith(ext)) || SCRIPT_NAMES.includes(name);
+
+// 루트와 하위 폴더의 배포 설정 파일·폴더·package.json·스크립트·지원하지 않는 CI. 깊이·폴더 수 상한에 걸리면 unknown이다.
+// 루트 경로 자체의 링크만 허용하고(호출 쪽에서 realpath), 그 아래 링크는 따라가지 않는다: 판별 대상 위치의 링크는 unknown, 그 밖은 무시한다.
 function inspectTree(repoPath, out, budget) {
-  const queue = [{dir: repoPath, depth: 0}];
+  const queue = [{dir: repoPath, depth: 0, scripts: false, ci: false}];
   for (let i = 0; i < queue.length; i++) {
-    const {dir, depth} = queue[i], relDir = path.relative(repoPath, dir);
+    const {dir, depth, scripts, ci} = queue[i], relDir = path.relative(repoPath, dir);
     if (++budget.dirs > budget.maxDirs) { out.unknown.push('폴더 수 상한 초과'); return; }
     let entries;
     try { entries = fs.readdirSync(dir, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name)); } catch (error) {
@@ -128,18 +160,33 @@ function inspectTree(repoPath, out, budget) {
     }
     for (const e of entries) {
       const rel = relDir ? `${relDir}/${e.name}` : e.name, name = lower(e.name);
+      const isTarget = e.isDirectory() || e.isSymbolicLink()
+        ? DEPLOY_CONFIG_DIRS.includes(name) || CI_DIRS.includes(name) || SCRIPT_DIRS.includes(name) || name === '.github' || name === 'workflows'
+        : false;
+      if (e.isSymbolicLink()) {
+        const hit = isTarget || DEPLOY_CONFIG_FILES.includes(name) || name === 'package.json' || isScriptName(name) || CI_FILES.includes(name)
+          || scripts || ci;
+        if (hit) out.unknown.push(`${rel}: 링크라 따라가지 않음`);
+        continue;
+      }
       if (e.isDirectory() && DEPLOY_CONFIG_DIRS.includes(name)) { out.deploy.push({file: rel, word: name}); continue; }
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name)) continue;
         if (depth >= budget.maxDepth) { out.unknown.push(`${rel}: 깊이 상한 초과`); continue; }
-        queue.push({dir: path.join(dir, e.name), depth: depth + 1});
+        const isCi = CI_DIRS.includes(name);
+        if (isCi) out.unknown.push(`${rel}: 지원하지 않는 CI`);
+        queue.push({dir: path.join(dir, e.name), depth: depth + 1, scripts: scripts || SCRIPT_DIRS.includes(name), ci: ci || isCi});
         continue;
       }
+      const file = path.join(dir, e.name);
       if (DEPLOY_CONFIG_FILES.includes(name)) { out.deploy.push({file: rel, word: name}); continue; }
-      if (name === 'package.json') {
-        if (e.isSymbolicLink()) out.unknown.push(`${rel}: 링크라 따라가지 않음`);
-        else inspectPackage(path.join(dir, e.name), rel, out);
+      if (name === 'package.json') { inspectPackage(file, rel, out); continue; }
+      if (ci || CI_FILES.includes(name)) {
+        const r = scanFile(file, rel, out);
+        if (r && !r.word) out.unknown.push(`${rel}: 지원하지 않는 CI`);
+        continue;
       }
+      if (scripts || isScriptName(name)) scanFile(file, rel, out, {skipBinary: scripts && !isScriptName(name)});
     }
   }
 }
@@ -148,13 +195,13 @@ function inspectTree(repoPath, out, budget) {
 // 틀리는 방향은 항상 보류다. 근거 경로는 저장소 기준 상대 경로다. 응답 모양(result·files·reason·checked)은 그대로다.
 export function detectDeploy(repoPath, limits = SCAN_LIMITS) {
   if (typeof repoPath !== 'string' || !path.isAbsolute(repoPath)) return {result: 'unknown', reason: '저장소 경로를 모릅니다', checked: []};
-  let stat;
-  try { stat = fs.statSync(repoPath); } catch { stat = null; }
+  let stat, root = repoPath;
+  try { root = fs.realpathSync(repoPath); stat = fs.statSync(root); } catch { stat = null; }
   if (!stat?.isDirectory()) return {result: 'unknown', reason: '저장소 경로를 읽을 수 없습니다', checked: []};
   const out = {deploy: [], unknown: [], checked: [...DEPLOY_CONFIG_FILES]};
   const budget = {dirs: 0, maxDirs: limits.maxDirs, maxDepth: limits.maxDepth};
-  inspectTree(repoPath, out, budget);
-  inspectWorkflows(repoPath, out, budget);
+  inspectTree(root, out, budget);
+  inspectWorkflows(root, out, budget);
   const checked = out.checked;
   if (out.deploy.length) {
     return {result: 'deploy', files: [...new Set(out.deploy.map(d => d.file))].sort(), checked};

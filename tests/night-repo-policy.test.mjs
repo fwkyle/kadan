@@ -296,3 +296,86 @@ test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따�
   assert.match(s.text, /배포 저장소 보류[^\n]*site#7[^\n]*근거: vercel\.json/);
   assert.equal(s.counts.noteHolds['deploy-repo'], 1);
 });
+
+// 재검수 N1~N4·F6·F7 (exec-8c544125). 모두 "틀리면 보류" 방향이다. 가짜 저장소 폴더만 쓴다.
+const verdict = r => detectDeploy(r).result;
+
+test('판별 N1: 외부 재사용 workflow는 YAML 표기와 상관없이 unknown, 로컬 ./ 는 대상 파일 낱말로 본다', () => {
+  const cases = {
+    '따옴표 키': 'on: push\njobs:\n  job:\n    "uses": acme/ops/.github/workflows/ship.yml@main\n',
+    '흐름 표기': 'on: push\njobs: {job: {uses: acme/ops/.github/workflows/ship.yml@main}}\n',
+    '따옴표 값': 'on: push\njobs:\n  job:\n    uses: "acme/ops/.github/workflows/ship.yml@main"\n',
+    '절대 경로 모양': 'on: push\njobs:\n  job:\n    uses: ../x/.github/workflows/ship.yml\n',
+    'workflow_run 흐름': 'on: {"workflow_run": {workflows: [x]}}\njobs: {}\n',
+  };
+  for (const [name, text] of Object.entries(cases)) assert.equal(verdict(repoWith({'.github/workflows/ci.yml': text})), 'unknown', name);
+  assert.equal(verdict(repoWith({'.github/workflows/ci.yml': 'on: push\njobs:\n  job:\n    uses: ./.github/workflows/lint.yml\n',
+    '.github/workflows/lint.yml': 'on: workflow_call\njobs:\n  s:\n    steps:\n      - run: npm test\n'})), 'clean');
+});
+
+test('판별 N2: 역슬래시 줄 연결·연속 공백을 이은 뒤 두 낱말 신호를 맞춘다', () => {
+  const run = body => repoWith({'.github/workflows/ci.yml': `on: push\njobs:\n  job:\n    steps:\n      - run: |\n${body}`});
+  assert.equal(verdict(run('          docker \\\n            push image\n')), 'deploy');
+  assert.equal(verdict(run('          npm   \\\n   publish\n')), 'deploy');
+  assert.equal(verdict(run('          cargo\t\\\r\n publish\n')), 'deploy');
+  assert.equal(verdict(run('          docker build .\n')), 'clean');
+  assert.ok(findDeployWord('docker \\\n push'));
+});
+
+test('판별 N3: 별도 스크립트도 같은 낱말로 보고, 크기 초과·읽기 실패는 unknown, 그 밖의 언어 파일은 보지 않는다', () => {
+  const sh = 'vercel --prod\n';
+  for (const rel of ['scripts/ship.sh', 'a/run.bash', 'run.zsh', 'x.ps1', 'x.bat', 'x.cmd', 'Makefile', 'justfile', 'Taskfile.yml', 'Rakefile',
+    'scripts/ship', 'bin/go', 'tools/x.txt', 'ci/x.js', 'deploy/note.md', 'packages/a/scripts/ship.mjs']) {
+    const r = repoWith({[rel]: sh});
+    assert.equal(verdict(r), 'deploy', rel);
+    assert.deepEqual(detectDeploy(r).files, [rel], rel);
+  }
+  assert.equal(verdict(repoWith({'src/ship.js': sh, 'lib/ship.py': sh, 'README.md': sh})), 'clean');
+  assert.equal(verdict(repoWith({'scripts/build.sh': 'npm test\n', 'Makefile': 'test:\n\tnode --test\n'})), 'clean');
+  assert.equal(verdict(repoWith({'scripts/big.sh': `${'#'.repeat(256 * 1024)}\n`})), 'unknown');
+  assert.equal(verdict(repoWith({'node_modules/x/scripts/ship.sh': sh})), 'clean');
+  const bin = repoWith({'scripts/data.bin': 'a\0vercel'});
+  assert.equal(verdict(bin), 'clean');
+  const locked = repoWith({'scripts/ship.sh': sh});
+  fs.chmodSync(path.join(locked, 'scripts/ship.sh'), 0o000);
+  try { assert.equal(verdict(locked), 'unknown'); } finally { fs.chmodSync(path.join(locked, 'scripts/ship.sh'), 0o600); }
+});
+
+test('판별 N4: GitHub 밖 CI 파일은 낱말이 있으면 deploy, 없어도 unknown', () => {
+  const files = {'.gitlab-ci.yml': 'a', '.circleci/config.yml': 'a', 'bitbucket-pipelines.yml': 'a', Jenkinsfile: 'a', '.buildkite/pipeline.yml': 'a',
+    'azure-pipelines.yml': 'a', '.travis.yml': 'a', '.drone.yml': 'a', 'cloudbuild.yaml': 'a', 'buildspec.yml': 'a', 'appveyor.yml': 'a',
+    '.woodpecker.yml': 'a', 'codemagic.yaml': 'a', 'sub/.gitlab-ci.yml': 'a'};
+  for (const rel of Object.keys(files)) {
+    assert.equal(verdict(repoWith({[rel]: 'script: npm test\n'})), 'unknown', rel);
+    assert.equal(verdict(repoWith({[rel]: 'script: vercel --prod\n'})), 'deploy', rel);
+  }
+  assert.equal(verdict(repoWith({'.circleci/config.yml': 'x'})), 'unknown');
+  assert.equal(verdict(repoWith({'.github/workflows/ci.yml': 'on: push\njobs: {}\n'})), 'clean');
+});
+
+test('판별 F6: 루트 경로 링크는 허용, 그 아래 링크는 따라가지 않고 판별 대상 위치의 링크만 unknown', () => {
+  const real = repoWith({'package.json': '{"scripts":{"test":"x"}}'});
+  const rootLink = path.join(tmp('kadan-det-link-'), 'repo');
+  fs.symlinkSync(real, rootLink);
+  assert.equal(verdict(rootLink), 'clean');
+  const outside = repoWith({'vercel.json': '{}', 'ship.sh': 'vercel --prod\n'});
+  const linked = (name, target) => { const r = repoWith({'README.md': 'x'}); fs.mkdirSync(path.dirname(path.join(r, name)), {recursive: true});
+    fs.symlinkSync(target, path.join(r, name)); return r; };
+  for (const name of ['scripts', 'bin', 'ship.sh', 'Makefile', '.gitlab-ci.yml', '.circleci', 'package.json', 'scripts/x.txt', 'vercel.json', '.github'])
+    assert.equal(verdict(linked(name, outside)), 'unknown', name);
+  // 그 밖의 링크는 무시한다(끊어진 링크 포함). 대상 안의 신호도 읽지 않는다.
+  assert.equal(verdict(linked('site', outside)), 'clean');
+  assert.equal(verdict(linked('site', path.join(outside, 'no-such'))), 'clean');
+});
+
+test('정책 F7: 읽기 권한 오류 문구에도 절대 경로가 없다(파일 이름과 오류 코드만)', () => {
+  const home = tmp('kadan-repo-policy-');
+  setRepoPolicy(home, {repo: 'site', value: 'hold', by: '사람'});
+  fs.chmodSync(policyPath(home), 0o000);
+  try {
+    const {corrupt} = readPolicy(home);
+    assert.match(corrupt, /night-repo-policy\.json \(EACCES\)/);
+    assert.ok(!corrupt.includes(home), corrupt);
+    assert.ok(!JSON.stringify(evaluateRepo(home, 'site', {repoPath: null})).includes(home));
+  } finally { fs.chmodSync(policyPath(home), 0o600); }
+});
