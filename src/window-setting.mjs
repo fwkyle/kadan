@@ -70,13 +70,29 @@ export function effectiveWindow(env, home) {
 let corruptSetting = null;
 export const RECOVERY_HINT = 'kadan window unset 으로 지우거나 kadan window set rottie --rottie-bin <절대경로> | kadan window set none 으로 다시 고정한다';
 
-export function adoptMachineWindow(env, home, {warn = line => console.error(line)} = {}) {
+// 좁은 예외 하나(2026-11-03): 카단 tmux pane 안에서 물려받은 KADAN_WINDOW=none은 기계 설정(rottie)이 이긴다.
+// #321 이전에 뜬 역할이 서버 전역에서 none을 물려받아 작업자를 창 없이 띄우던 문제다. 일부러 none이면 KADAN_WINDOW_FORCE=1.
+// 반대 방향(env rottie·설정 none), pane 밖, 다른 소켓, 설정 없음은 그대로다. socket은 호출부가 아는 현재 카단 소켓 이름이다.
+export function inheritedNoneOverridden(env, setting, socket) {
+  if (!socket || !env.TMUX || env.KADAN_WINDOW !== 'none' || env.KADAN_WINDOW_FORCE) return false;
+  if (path.basename(String(env.TMUX).split(',')[0]) !== socket) return false;
+  return !!setting && setting.window !== 'none';
+}
+
+// warn은 손상 설정 같은 안전 경고(모든 명령), notice는 "물려받은 none을 바꿨다" 안내(창을 고르는 명령에서만, 기본은 warn과 같다).
+export function adoptMachineWindow(env, home, {warn = line => console.error(line), notice = warn, socket} = {}) {
   let resolved;
   corruptSetting = null;
   try { resolved = effectiveWindow(env, home); } catch (error) {
     corruptSetting = {env, message: error.message};
     warn(`경고: ${error.message} — 창을 여는 명령(start·attach 등)은 멈춘다. ${RECOVERY_HINT}`);
     return {windowSource: 'default', setting: null, corrupt: true};
+  }
+  if (inheritedNoneOverridden(env, resolved.setting, socket)) {
+    notice('물려받은 KADAN_WINDOW=none 대신 기계 설정 ' + resolved.setting.window + '를 쓴다(일부러 none이면 KADAN_WINDOW_FORCE=1)');
+    env.KADAN_WINDOW = resolved.setting.window;
+    if (resolved.setting.rottieBin) env.KADAN_ROTTIE_BIN = resolved.setting.rottieBin;
+    return {windowSource: 'setting', setting: resolved.setting, corrupt: false};
   }
   if (resolved.window.source === 'setting') env.KADAN_WINDOW = resolved.window.value;
   if (resolved.rottieBin.source === 'setting') env.KADAN_ROTTIE_BIN = resolved.rottieBin.value;

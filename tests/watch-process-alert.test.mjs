@@ -8,10 +8,12 @@ const parents = new Map([['p-작업자', 'p-감독'], ['p-감독', 'p-슈퍼감�
 const starts = [...parents.keys()].map((role, i) => ({kind: 'start', role, session: `kadan-${role}`, panePid: i + 1, t}));
 const MB = 1024;
 // 주기별 서버 아래 node RSS(MB)와 개수. 13GB 1개 → 집합 바뀜(node 개수 추가) → 정상 3번 → 닫힘.
+// node 개수는 10분 넘게 이어질 때만 신호라서, 31개 두 번째 주기부터 가짜 시계를 10분 앞으로 보낸다.
 const samples = [
   {nodeMb: 100, nodes: 1},
   {nodeMb: 13 * 1024, nodes: 1},
   {nodeMb: 13 * 1024, nodes: 1},
+  {nodeMb: 13 * 1024, nodes: 31},
   {nodeMb: 13 * 1024, nodes: 31},
   {nodeMb: 100, nodes: 1},
   {nodeMb: 100, nodes: 1},
@@ -32,7 +34,7 @@ test('프로세스 경보: 열림 → 같은 상태 반복 없음 → 기준 집
     floor: {list: () => starts.map(s => ({session: s.session, pid: s.panePid})), read: () => `정상 작업 ${lt(cycle)}`},
     readEntries: () => starts, readCards: () => [], parents,
     intervalMs: 1000, stallN: 2, routes: {p: 'p-감독'}, superRole: 'p-슈퍼감독', userNotify: true, processEveryMs: 0,
-    now: () => Date.parse(t) + cycle * 1000, record: e => records.push(e), print: () => {},
+    now: () => Date.parse(t) + cycle * 1000 + (cycle >= 4 ? 10 * 60_000 : 0), record: e => records.push(e), print: () => {},
     sendAlert: (role, message, key) => sent.push({role, message, key}),
     spawn: (command, args) => {
       if (command === 'sleep') { if (++cycle === samples.length) throw stop; return {status: 0, stdout: ''}; }

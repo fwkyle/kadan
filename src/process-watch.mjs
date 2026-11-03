@@ -4,6 +4,7 @@
 
 export const DIRECT_GROUP = "서버 직속";
 const KINDS = ["claude", "codex", "node", "python", "bash", "gzip", "split"];
+const COUNT_KINDS = ["python", "node"]; // 개수 기준이 있는 종류
 const LEAK_AGE_SEC = 24 * 3600;
 const LEAK_RSS_KB = 50 * 1024;
 const TOP_PROCESSES = 3;
@@ -170,14 +171,17 @@ export function collectProcesses(spawn, { socket, bigMb }) {
 // 넘은 기준의 집합. 주 기준(총량·한 프로세스)은 RED, 보조 기준만이면 AMBER.
 // sustained(오래 넘은 PID 배열)를 주면 '큰 프로세스'는 그 배열이 비지 않을 때만 넣는다(감시 경보).
 // 안 주면 지금 순간 가장 큰 프로세스만 본다(대시보드 표시).
-export function exceededSignals(snapshot, thresholds, sustained) {
+// sustainedKinds(오래 넘은 종류 배열, 예: ["node"])도 같다: 주면 python·node 개수는 그 배열에 든 종류만, 안 주면 순간값.
+export function exceededSignals(snapshot, thresholds, sustained, sustainedKinds) {
   const signals = [];
   if (snapshot.rssMb >= thresholds.totalGb * 1024) signals.push("total");
   if (Array.isArray(sustained)) {
     if (sustained.length) signals.push("process");
   } else if (snapshot.biggest[0] && snapshot.biggest[0].rssMb >= thresholds.processGb * 1024) signals.push("process");
-  if (snapshot.kinds.python >= thresholds.python) signals.push("python");
-  if (snapshot.kinds.node >= thresholds.node) signals.push("node");
+  for (const kind of COUNT_KINDS) {
+    if (snapshot.kinds[kind] < thresholds[kind]) continue;
+    if (!Array.isArray(sustainedKinds) || sustainedKinds.includes(kind)) signals.push(kind);
+  }
   return signals;
 }
 
@@ -202,7 +206,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
   if (!result?.ok) {
     // 실제 수집 실패: 열린 경보는 유지하고 정상 연속은 끊는다(정상-실패-정상이 3으로 이어져 닫히지 않게).
     // PID 시계(bigSince)도 그대로 둔다 — 한 번 못 읽었다고 9분 된 시계를 처음부터 다시 재지 않는다.
-    return { state: { processAlert: previous, normalCycles: 0, bigSince: previousState?.bigSince }, alerts: previous ? [previous] : [] };
+    return { state: { processAlert: previous, normalCycles: 0, bigSince: previousState?.bigSince, countSince: previousState?.countSince }, alerts: previous ? [previous] : [] };
   }
   // PID별 첫 초과 시각. 수집마다 지금 기준 이상인 PID로 다시 만든다(사라지거나 내려간 PID는 버려 다시 넘으면 새로 잰다).
   const priorSince = previousState?.bigSince;
@@ -217,7 +221,18 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     bigSince[proc.pid] = priorSince?.[proc.pid] ?? (aged ? at - sustainMs : at);
   }
   const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
-  const signals = exceededSignals(result, thresholds, sustained);
+  // 개수 기준: 대상 집합이 계속 바뀌므로 종류별로 '처음 넘은 시각' 하나만 둔다. 한 번이라도 내려가면 지운다.
+  // 재시작 뒤 첫 성공 수집(표 없음)에서 복원한 열린 경보에 그 종류 신호가 있으면, 이미 10분 넘게 유지된 것이라 시계를 채운다.
+  const priorCount = previousState?.countSince;
+  const countSince = {};
+  for (const kind of COUNT_KINDS) {
+    if (result.kinds[kind] < thresholds[kind]) continue;
+    const restored = !priorCount && previous?.signals?.includes(kind);
+    countSince[kind] = priorCount?.[kind] ?? (restored ? at - sustainMs : at);
+  }
+  const sustainedKinds = COUNT_KINDS.filter((kind) => kind in countSince
+    && (previous?.signals?.includes(kind) || at - countSince[kind] >= sustainMs));
+  const signals = exceededSignals(result, thresholds, sustained, sustainedKinds);
   let alert = null, normalCycles = 0;
   if (signals.length) {
     alert = {
@@ -233,7 +248,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     normalCycles = (previousState?.normalCycles ?? 0) + 1;
     alert = normalCycles < 3 ? previous : null;
   }
-  return { state: { processAlert: alert, normalCycles, bigSince }, alerts: alert ? [alert] : [] };
+  return { state: { processAlert: alert, normalCycles, bigSince, countSince }, alerts: alert ? [alert] : [] };
 }
 
 // 대시보드용 잠깐 재사용. 요청마다 ps를 부르지 않는다.

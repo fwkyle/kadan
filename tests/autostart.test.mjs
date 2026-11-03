@@ -20,6 +20,7 @@ test('로그인 때와 60초마다 kadan up --hidden --auto — KeepAlive 없음
   assert.doesNotMatch(plist, /KeepAlive/, 'KeepAlive 대신 주기 up이 죽은 기반 프로세스만 되살린다');
   assert.match(plist, /<key>PATH<\/key>\s*<string>\/opt\/bin:\/usr\/bin<\/string>/);
   assert.match(plist, /<key>KADAN_WINDOW<\/key>\s*<string>none<\/string>/, '로그인 때는 로티가 없으니 창 없이 숨김(로티 설정이어도)');
+  assert.match(plist, /<key>KADAN_WINDOW_FORCE<\/key>\s*<string>1<\/string>/, '카단 pane 안에서 돌아도 새 상속 규칙이 로티로 바꾸지 않게 강제 표시');
   assert.match(plist, /<key>KADAN_ROTTIE_BIN<\/key>\s*<string>\/apps\/r&amp;d\/rottie<\/string>/, 'XML 특수문자를 바꾼다');
   assert.doesNotMatch(plist, /SECRET_TOKEN|nope/, '카단과 무관한 환경 변수는 옮기지 않는다');
 });
