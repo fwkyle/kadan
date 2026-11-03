@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assessProcesses, collectProcesses, parseEtime, parsePs, processThresholds, DEFAULT_THRESHOLDS, DIRECT_GROUP, createProcessCache,
+  assessProcesses, collectProcesses, exceededSignals, parseEtime, parsePs, processThresholds, DEFAULT_THRESHOLDS, DIRECT_GROUP, createProcessCache,
 } from '../src/process-watch.mjs';
 
 const MB = 1024; // ps rss는 KB
@@ -94,6 +94,8 @@ test('경보: 열림 → 같은 기준 집합이면 같은 신호 → 집합 바
   assert.deepEqual(r.alerts[0].signals, first.signals, '같은 상태');
   const withNode = snap({rssMb: 13 * 1024, kinds: {python: 0, node: 40}});
   r = assessProcesses(r.state, withNode, t);
+  assert.deepEqual(r.alerts[0].signals, ['total'], 'node 개수는 10분 지속 전이라 아직 신호가 아님');
+  r = assessProcesses(r.state, withNode, t, 10 * 60_000);
   assert.deepEqual(r.alerts[0].signals, ['total', 'node']);
   // 못 읽은 주기는 닫힘으로 세지 않는다
   for (let i = 0; i < 5; i++) r = assessProcesses(r.state, {ok: false}, t);
@@ -105,7 +107,9 @@ test('경보: 열림 → 같은 기준 집합이면 같은 신호 → 집합 바
 
 test('보조 기준만 넘으면 AMBER, 큰 프로세스 1GB는 RED', () => {
   const t = DEFAULT_THRESHOLDS;
-  assert.equal(assessProcesses(null, snap({kinds: {python: 31, node: 0}}), t).alerts[0].level, 'AMBER');
+  const py = snap({kinds: {python: 31, node: 0}});
+  assert.deepEqual(assessProcesses(null, py, t, 0).alerts, [], '개수는 순간값으로 울리지 않음');
+  assert.equal(assessProcesses(assessProcesses(null, py, t, 0).state, py, t, 10 * 60_000).alerts[0].level, 'AMBER');
   // 큰 프로세스는 같은 PID가 10분 이어질 때만(아래 '지속 시간' 시험이 전체를 다룬다)
   const proc = {pid: 9, name: 'node', rssMb: 1100, session: 'a'};
   const one = assessProcesses(assessProcesses(null, snap({biggest: [proc]}), t, 0).state, snap({biggest: [proc]}), t, 600_000);
@@ -184,9 +188,11 @@ test('F2 바탕: 기준 집합이 바뀐 시각(since)은 전이마다 달라지
   const A = snap({rssMb: 13 * 1024}), B = snap({rssMb: 13 * 1024, kinds: {python: 0, node: 40}});
   let r = assessProcesses(null, A, t, 1000); const a1 = r.alerts[0].since;
   r = assessProcesses(r.state, A, t, 2000); assert.equal(r.alerts[0].since, a1, '같은 상태는 유지');
-  r = assessProcesses(r.state, B, t, 3000); const b = r.alerts[0].since;
-  r = assessProcesses(r.state, A, t, 4000); const a2 = r.alerts[0].since;
-  assert.deepEqual([a1, b, a2], [1000, 3000, 4000]);
+  r = assessProcesses(r.state, B, t, 3000); // node 개수는 10분 지속 뒤에야 신호가 된다
+  const T = 3000 + 10 * 60_000;
+  r = assessProcesses(r.state, B, t, T); const b = r.alerts[0].since;
+  r = assessProcesses(r.state, A, t, T + 1000); const a2 = r.alerts[0].since;
+  assert.deepEqual([a1, b, a2], [1000, T, T + 1000]);
 });
 
 test('F4: since가 원장 줄에 적히고 복원되며, 같은 표본 재평가에도 같은 since·같은 알림 키 재료', async () => {
@@ -332,4 +338,62 @@ test('bigAll은 세션별 상위 3개·전체 상위 5개 자르기와 상관없
   assert(r.biggest.length <= 5 && r.biggest.length < r.bigAll.length, '상위 N개만 남는 기존 목록');
   assert.equal(r.bigAll.length, 8);
   assert(r.bigAll.every((proc) => proc.rssMb >= 1024 && proc.ageSec === 60), 'ageSec(etime)를 함께 담는다');
+});
+
+// ── 개수 경보(python·node): 종류별로 10분 넘게 이어질 때만 ──
+const withNodes = (node, python = 0) => snap({kinds: {python, node}});
+
+test('개수 (1) node 40개를 5분 → 20개로 내려가면 0건', () => {
+  const r = run([...Array(6).fill(withNodes(40)), withNodes(20), withNodes(20)]);
+  assert.deepEqual(r.all.flat(), []);
+  assert.deepEqual(r.state.countSince, {});
+});
+
+test('개수 (2) node 40개를 11분 유지하면 10분이 되는 수집에서 AMBER 1건(신호 node)', () => {
+  const r = run(Array(12).fill(withNodes(40)));
+  assert.deepEqual(r.all.slice(0, 10).flat(), []);
+  assert.equal(r.all[10].length, 1);
+  assert.equal(r.all[10][0].level, 'AMBER');
+  assert.deepEqual(r.all[10][0].signals, ['node']);
+});
+
+test('개수 (3) 넘음 7분 → 한 번 내려감 → 다시 넘음 7분이면 시계가 초기화되어 0건', () => {
+  const r = run([...Array(8).fill(withNodes(40)), withNodes(10), ...Array(8).fill(withNodes(40))]);
+  assert.deepEqual(r.all.flat(), []);
+});
+
+test('개수 (4) 못 읽은 주기가 끼어도 시계가 유지된다', () => {
+  const r = run([...Array(6).fill(withNodes(40)), {ok: false}, ...Array(5).fill(withNodes(40))]);
+  assert.deepEqual(r.all.slice(0, 10).flat(), []);
+  assert.deepEqual(r.all[10].map((a) => a.signals), [['node']], '처음 넘은 뒤 10분째 수집에서 열림');
+});
+
+test('개수 (5) 재시작: 열린 경보에 node 신호가 있고 countSince가 없으면 첫 수집에서 바로 유지', () => {
+  const open = run([...Array(11).fill(withNodes(40))]).alerts[0];
+  const restored = assessProcesses({processAlert: open, normalCycles: 0}, withNodes(40), DEFAULT_THRESHOLDS, 5 * MIN);
+  assert.deepEqual(restored.alerts[0].signals, ['node']);
+  assert.equal(restored.state.countSince.node, 5 * MIN - 10 * MIN);
+  // 한 번 채운 뒤에도 같은 기준이면 닫혔다 열리는 깜빡임 없이 이어진다
+  assert.equal(assessProcesses(restored.state, withNodes(40), DEFAULT_THRESHOLDS, 6 * MIN).alerts[0].since, restored.alerts[0].since);
+});
+
+test('개수 (5b) 재시작: 복원한 경보에 그 신호가 없으면 지금부터 잰다(python 신호만 복원했으면 node는 새로 잼)', () => {
+  const total = assessProcesses(null, snap({rssMb: 13 * 1024}), DEFAULT_THRESHOLDS, 0).alerts[0];
+  const r = assessProcesses({processAlert: total, normalCycles: 0}, withNodes(40), DEFAULT_THRESHOLDS, 100 * MIN);
+  assert.equal(r.state.countSince.node, 100 * MIN);
+  assert.equal(r.alerts[0] ? r.alerts[0].signals.includes('node') : false, false);
+});
+
+test('개수 (6) 합계 12G는 즉시, 개수 지속과 따로 돈다. 대시보드 경로(sustainedKinds 없음)는 순간값', () => {
+  const r = run([snap({rssMb: 13 * 1024, kinds: {python: 0, node: 40}})]);
+  assert.deepEqual(r.all[0][0].signals, ['total']);
+  const instant = exceededSignals(withNodes(40, 31), DEFAULT_THRESHOLDS);
+  assert.deepEqual(instant, ['python', 'node']);
+  assert.deepEqual(exceededSignals(withNodes(40, 31), DEFAULT_THRESHOLDS, [], ['python']), ['python']);
+});
+
+test('개수 (7) 종류별로 따로 잰다: python이 먼저 넘고 node는 나중에 넘으면 node 시계는 따로 시작', () => {
+  const r = run([...Array(6).fill(withNodes(0, 31)), ...Array(6).fill(withNodes(40, 31))]);
+  assert.deepEqual(r.all[10].map((a) => a.signals), [['python']]);
+  assert.deepEqual(r.all[11].map((a) => a.signals), [['python']], 'node는 6분째라 아직');
 });
