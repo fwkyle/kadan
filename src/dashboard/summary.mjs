@@ -6,6 +6,7 @@ import {
 } from "../card-worktime.mjs";
 import { liveSessions } from "../dashboard-band.mjs";
 import { letters, pick, worktimes } from "./shared.mjs";
+import { sidebarRepos } from "./repo-view.mjs";
 
 // 담당자 상태에는 창이 열려 있거나 아직 안 닫힌 카드를 맡은 담당만 보인다(2026-10-02 [kyle]).
 // 창도 닫히고 맡은 카드도 끝난 담당은 숨긴다. 세션 상태를 모르면 거르지 않는다.
@@ -71,6 +72,12 @@ export function summaryData(snapshot, url, stamp) {
       ? null
       : (snapshot.decisions || []).filter((d) => d.status === "open").length,
     waiting,
+    // 사이드 탭 재료(저장소 목록·⚑ 결정 대기·⇡ 머지 요청). 슈퍼감독 이름은 관계표 계산이 필요해 현황 응답에만 있다.
+    sidebar: sidebarRepos({
+      rows: [...cards, ...(works || [])],
+      decisions: snapshot.decisionError ? null : (snapshot.decisions || []).filter((d) => d.status === "open"),
+      supervisors: null,
+    }),
     counts: {
       work: works === null ? null : works.length,
       executions: cards.length,

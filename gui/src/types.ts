@@ -184,6 +184,7 @@ export type Summary = Stamp & {
   secretary?: boolean | null; // 비서가 살아 있나. null = 세션 상태 모름
   decisions: number | null;
   waiting: number | null;
+  sidebar?: { repo: string; decisions: number | null; merges: number | null; super: string | null }[]; // 사이드 탭 재료
   counts: { work: number | null; executions: number; unlinked: number };
   errors: string[];
 };

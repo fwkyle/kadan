@@ -127,3 +127,9 @@ export const ALERT_SHOWN = 5;
 export function headRest<T>(items: T[], shown: number): { head: T[]; rest: T[] } {
   return { head: items.slice(0, shown), rest: items.slice(shown) };
 }
+
+// 경보 '나머지' 숫자. count는 해소 전 경보 전체, items는 서버가 앞 20건만 싣는다.
+// 접힘 안에 실제로 나열되는 건수(listed)와 요약 숫자(total)가 다를 수 있어 둘을 따로 준다(PR1 재검수 사소 1: 21건일 때 1 어긋남).
+export function alertMore(count: number, itemCount: number) {
+  return { total: Math.max(0, count - ALERT_SHOWN), listed: Math.max(0, itemCount - ALERT_SHOWN), unlisted: Math.max(0, count - itemCount) };
+}

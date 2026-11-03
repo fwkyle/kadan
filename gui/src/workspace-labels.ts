@@ -16,3 +16,13 @@ export function collectionHint(counts?: { work: number | null; executions: numbe
 export function showDoneButOpen(collection: string, count: number): boolean {
   return collection !== "work" && count > 0;
 }
+
+// 워크·카드 화면 주소 조각. 버튼이 이 함수를 그대로 쓰므로 시험이 버튼 경로를 직접 확인한다(PR2 검수 F1).
+// 작업 종류 전환은 거르기 조건은 비우되 사이드 탭이 고른 저장소(repo)는 건드리지 않는다.
+export function collectionSwitchPatch(key: string): Record<string, string | null> {
+  return { collection: key, card: null, detail: "0", q: null, board: null, state: null };
+}
+// '필터 초기화'는 사용자가 일부러 모두 푸는 버튼이라 저장소(repo)도 함께 푼다.
+export function filterResetPatch(): Record<string, string | null> {
+  return { q: null, repo: null, board: null, health: null, rally: null, state: null };
+}

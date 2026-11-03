@@ -17,7 +17,7 @@ import WorktimeSummary from "./WorktimeSummary";
 import { durationLabel, workTitle } from "../worktime";
 import { usePaneScroll } from "../scroll";
 import { shortenTurn } from "../stopped";
-import { collectionHint, columnLabel, showDoneButOpen } from "../workspace-labels";
+import { collectionHint, collectionSwitchPatch, columnLabel, filterResetPatch, showDoneButOpen } from "../workspace-labels";
 const Detail = lazy(() => import("./Detail"));
 // 상태 필터 이름. 서버 status-labels.mjs의 exactStatusLabel과 같게 둔다(2026-10-05 [kyle]).
 // 결과 대기는 요약에서 작업중이지만, 필터에서는 칸 두 개가 같은 글자로 보이지 않게 '작업중 · 기다림'으로 적는다.
@@ -257,15 +257,7 @@ export default function Workspace({ url }: { url: URL }) {
             key={key}
             aria-pressed={key === "work" ? collection === "work" : collection !== "work"}
             onClick={() =>
-              patch({
-                collection: key,
-                card: null,
-                detail: "0",
-                q: null,
-                board: null,
-                repo: null,
-                state: null,
-              })
+              patch(collectionSwitchPatch(key))
             }
           >
             {label} <span className="count">{summary.data?.counts[key === "executions" ? "executions" : "work"] ?? "?"}</span>
@@ -315,14 +307,7 @@ export default function Workspace({ url }: { url: URL }) {
         ))}
         <button
           onClick={() =>
-            patch({
-              q: null,
-              repo: null,
-              board: null,
-              health: null,
-              rally: null,
-              state: null,
-            })
+            patch(filterResetPatch())
           }
         >
           초기화
