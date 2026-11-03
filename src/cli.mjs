@@ -275,6 +275,16 @@ export const COMMANDS = {
   recovery: recoveryCommand,
 };
 
+// 창을 고르거나 여는 명령(start·attach·restart·restore·handover·adopt·up·init·senior/advise의 로티 탭). 물려받은 none을 바꿨다는 안내는 여기서만 낸다.
+// 환경을 기계 설정으로 채우는 일 자체는 모든 명령에서 한다(로티를 부르는 하위 경로가 같은 값을 읽는다). 손상 설정 경고도 모든 명령에서 낸다.
+export const WINDOW_NOTICE_COMMANDS = ['start', 'attach', 'restart', 'restore', 'handover', 'adopt', 'up', 'init', 'senior', 'advise'];
+export function adoptWindowForCommand(command, env, home, {socket, warn} = {}) {
+  const opts = {socket};
+  if (warn) opts.warn = warn;
+  if (!WINDOW_NOTICE_COMMANDS.includes(command)) opts.notice = () => {};
+  return adoptMachineWindow(env, home, opts);
+}
+
 const HELP_ONLY={window:WINDOW_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE};
 
 export function main(argv) {
@@ -291,7 +301,7 @@ export function main(argv) {
   const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
-    if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome(), {socket: currentSocket()});
+    if (command !== 'window' && command !== 'help' && !flags.help) adoptWindowForCommand(command, process.env, ledgerHome(), {socket: currentSocket()});
     // 거절 검사는 --help와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하는 길이 새지 않게).
     nightGuard({command,args,flags});
     // 쓰기·종료 명령은 --help면 사용법만 보이고 아무것도 실행하지 않는다.
