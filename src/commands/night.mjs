@@ -7,10 +7,10 @@ import {
   nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock, AUTO_CHECKLIST,
 } from '../night.mjs';
 import {buildNightNote, noteLine} from '../night-note.mjs';
-import {setRepoPolicy, setCardSources, readPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../night-repo-policy.mjs';
+import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../night-repo-policy.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | source [--cards <폴더>… | --clear] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
@@ -53,16 +53,16 @@ export function nightOriginalText(result) {
     `--- ${result?.on ? `끝: ${result.untilLocal}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
 }
 
-// 저장소 정책 한 줄 묶음을 사람이 읽는 줄로. 연결 카드는 순번과 카드 id만 보인다(경로 없음).
+// 저장소 정책 한 줄 묶음을 사람이 읽는 줄로. 온톨로지 문서는 ontology/ 기준 상대 경로만 보인다(절대 경로 없음).
 function repoLines(info) {
   const {settings: s, card, effective: e, verdict: v} = info;
   const name = info.github ?? info.repo ?? '(이름 모름)';
   const word = v.action === 'merge' ? '나이트런 중 자동 머지' : '나이트런 중 자동 머지 안 함';
   const where = info.repo && info.github && info.repo !== info.github ? ` [업무 ${info.repo}]` : '';
-  const from = x => (x.from === 'kadan' ? '카단 설정' : x.from === 'card' ? '연결 카드' : '값 없음');
+  const from = x => (x.from === 'kadan' ? '카단 설정' : x.from === 'ontology' ? '온톨로지 문서' : '값 없음');
   return [
     `${name}${where}: 카단 설정 deployBranch ${s.deployBranch ?? '(미설정)'}, nightMerge ${s.nightMerge ?? '(미설정)'}${s.at ? ` (${s.at}, ${s.by})` : ''}`,
-    `${name}: 연결 카드 ${card ? `폴더 ${card.folder}/${card.id}` : '없음'}`,
+    `${name}: 온톨로지 문서 ${card ? card.path : '없음'}`,
     `${name}: 적용값 deployBranch ${e.deployBranch.value ?? '(비어 있음)'} [${from(e.deployBranch)}], 나이트런 중 자동 머지(nightMerge) ${e.nightMerge.value ?? '(비어 있음=허용)'} [${from(e.nightMerge)}]`,
     `${name}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''}${v.exceptBranch ? `, ${v.exceptBranch}으로 가는 PR만 보류` : ''})`,
   ];
@@ -80,8 +80,8 @@ function repoCommand(args, flags, {home, by, deps}) {
   if (name === 'list') {
     const {corrupt, repos, legacy, unreadable} = listRepos(home, works(), listOpts);
     return [...(corrupt ? [`경고: ${corrupt} — 읽기는 나이트런 중 자동 머지 안 함으로 봅니다`] : []),
-      ...unreadable.map(u => `읽지 못함: 폴더 ${u.folder}${u.file ? ` ${u.file}` : ''} — ${u.reason}`),
-      ...(repos.length ? repos.flatMap(repoLines) : ['저장된 값도 연결 카드도 업무 저장소도 없습니다']),
+      ...unreadable.map(u => `읽지 못함: ${u.path ?? '온톨로지 폴더'} — ${u.reason}`),
+      ...(repos.length ? repos.flatMap(repoLines) : ['저장된 값도 온톨로지 문서도 업무 저장소도 없습니다']),
       ...legacy.map(l => `옛 형식 저장값(판정에 쓰지 않음): ${l.name} = ${l.value} — kadan night repo ${l.name.includes('/') ? l.name : '<소유자/이름>'} --deploy-branch … 로 다시 설정하세요`)].join('\n');
   }
   if (name === 'show') {
@@ -97,31 +97,11 @@ function repoCommand(args, flags, {home, by, deps}) {
     ...repoLines(evaluateGithub(home, saved.repo))].join('\n');
 }
 
-// `night source`: 외부 카드 폴더 연결(선택). 인자 없음은 읽기, --cards <폴더>…는 바꾸기, --clear는 해제. 기본은 연결 없음이다.
-function sourceCommand(args, flags, {home, by, deps}) {
-  const record = deps.record ?? (entry => appendLedger(entry, home));
-  if (flags.cards === undefined && flags.clear === undefined) {
-    if (args.length) throw new Error('사용법: kadan night source [--cards <폴더>… | --clear]');
-    const {cards, corrupt} = readPolicy(home);
-    return corrupt ? `경고: ${corrupt}` : cards.length ? ['연결한 카드 폴더:', ...cards.map((c, i) => `  ${i}: ${c}`)].join('\n') : '연결한 카드 폴더가 없습니다(기본값). 카단 설정만으로 판정합니다';
-  }
-  if (flags.clear !== undefined && flags.cards !== undefined) throw new Error('--cards와 --clear를 함께 쓸 수 없습니다');
-  if (flags.clear !== undefined) {
-    if (flags.clear !== true || args.length) throw new Error('사용법: kadan night source --clear');
-    setCardSources(home, {clear: true, by, record});
-    return '카드 폴더 연결을 해제했습니다';
-  }
-  const folders = [flags.cards, ...args].flat().filter(f => typeof f === 'string');
-  setCardSources(home, {folders, by, record});
-  return ['연결한 카드 폴더:', ...folders.map((c, i) => `  ${i}: ${c}`)].join('\n');
-}
-
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.
 export function nightCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
   if (flags.help || !sub) return USAGE;
   if (sub === 'repo') return repoCommand(rest, flags, {home, by, deps});
-  if (sub === 'source') return sourceCommand(rest, flags, {home, by, deps});
   const now = (deps.now ?? Date.now)();
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
   const state = nightState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);
