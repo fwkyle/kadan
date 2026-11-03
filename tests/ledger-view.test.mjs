@@ -278,7 +278,8 @@ test('첫 열기 판정의 두 읽기 사이에 다른 열기가 스키마를 �
   db.exec('COMMIT');db.close();
 });
 
-// 알려진 한계: 이 시험의 틈은 SQLite가 트랜잭션 안 WAL 전환을 막아 원리상 없앨 수 없다.
+// 알려진 한계: 이 시험의 틈은 locking_mode=EXCLUSIVE + BEGIN EXCLUSIVE → COMMIT(잠금 유지) → WAL 전환 → close/reopen으로
+// 없앨 수 있다(확인 검수 exec-d17a1db7). 동시 첫 열기에서 다른 열기를 막는 비용 때문에 하지 않았다.
 // ID·표·값은 보존하지만 DELETE로 시작했다면 저널 모드는 WAL일 수 있어 mode를 delete로 단언하지 않는다.
 // 처음부터 남의 파일은 아래 '저널 모드도 그대로' 시험이 지킨다.
 test('첫 읽기 뒤에 표식 없는 다른 표가 생기면 거절하고 파일을 바꾸지 않는다', () => {
