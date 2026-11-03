@@ -116,7 +116,7 @@ export async function cmdBoard(_argv, flags) {
     } finally { busy = false; }
   }
   const tick = () => {
-    readSessions(); rebuild(); readPreview(); draw();
+    readPreview(); draw(); // 틱마다 고른 세션 하나의 capture 1회만. 세션 목록은 summary 간격·r·붙었다 나온 뒤에 다시 읽는다.
     if (Date.now() - lastSummaryAt >= SUMMARY_MIN_MS) refresh({ full: false }).catch(() => {});
   };
 
