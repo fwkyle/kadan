@@ -233,7 +233,7 @@ export const COMMANDS = {
       record:entry=>appendLedger({...entry,t:new Date().toISOString()})});
     console.log(argv[0] === 'report' && !flags.json ? result : JSON.stringify(result,null,2));
   },
-  card: async (argv,flags) => console.log(JSON.stringify(await cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})}),null,2)),
+  card: async (argv,flags) => console.log(JSON.stringify(await cardCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor}),null,2)),
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
   'merge-check': (argv,flags) => console.log(flags.help ? '사용: kadan merge-check <저장소/업무ID> --head <PR head 커밋>. 업무의 검수 중 PR head와 같은 커밋을 본 검수를 찾아 나란히 보입니다(같음·같은 커밋 검수 changes·다름·모호, 표시만, 머지를 막지 않음, GitHub 호출 없음). 입력 형식 오류만 종료 코드 2.' : formatMergeCheck(mergeCheck(argv[0],{head:flags.head},{home:ledgerHome()}))),
