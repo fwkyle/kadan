@@ -12,6 +12,7 @@ import {TARGETS} from './revive.mjs';
 //   `set`·`runner`·`model`·`block`·`preset`·`import`·`fallback`·`favorite`·`init`·`compare on|off`·`export --out`은 거절.
 // - `stop`: 기반 프로세스(TARGETS = 비서·대시보드·디코·watch)만 거절. 작업자·검수자 세션 종료는 감독의 정상 정리라 통과.
 // - `restart`: `--force`만 거절.
+// - `night repo`: 인자 없음·`list`·`show`만 통과. `night repo <저장소> merge|hold|auto`는 거절(저장소 이름이 list·show면 읽기로 본다).
 // 거절 검사는 `--help`와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하던 길이 샜다, F1).
 function runnersIsReadOnly(args, flags) {
   const [action, sub] = args;
@@ -29,6 +30,8 @@ export function guardedReason(command, args = [], flags = {}) {
   if (command === 'window' && first !== undefined && first !== 'show') return `window ${first}`;
   if (command === 'runners' && !runnersIsReadOnly(args, flags)) return `runners ${first}`;
   if (command === 'night' && first === 'on' && flags.level === '바이패스') return 'night on --level 바이패스';
+  // `night repo`: 인자 없음·list·show만 읽기다. 저장소 이름 뒤 값(쓰기)과 모르는 모양은 거절한다.
+  if (command === 'night' && first === 'repo' && ![undefined, 'list', 'show'].includes(args[1])) return `night repo ${args[1]}`;
   return null;
 }
 

@@ -36,6 +36,8 @@ import {compareState, setCompare} from './runner-compare.mjs';
 import {compareReport} from './compare-report.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
+import {nightState, readDecisionEvents} from './night.mjs';
+import {listRepos, setRepoPolicy} from './night-repo-policy.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
 // 상태 이름은 status-labels 한 곳에서 가져온다(2026-10-05 [kyle]).
@@ -225,11 +227,21 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    }
    return true;
   }
+  if (req.method === 'GET' && url.pathname === '/api/night/repos') {
+   try {
+    res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(JSON.stringify(listRepos(home, works.list())));
+   } catch (error) {
+    res.writeHead(409, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(error.message);
+   }
+   return true;
+  }
   if(req.method!=='POST'||![
     '/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer',
     '/runners/compare','/runners/set','/runners/preset-save','/runners/preset','/runners/fallback','/runners/favorite',
     '/runners/preset-add','/runners/preset-rename','/runners/preset-remove','/runners/preset-import','/runners/preset-export',
-    '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list',
+    '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list','/api/night/repos',
     ...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x),
   ].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
@@ -248,6 +260,12 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    // 원격은 결정 전용 token(없으면 null이라 항상 거부), 로컬은 쓰기 token. 서로의 token은 통하지 않는다.
    const expected=req.kadanRemote===true?req.kadanDecisionToken:token;
    if(!tokenEquals(f.token,expected)){fail(403,'화면을 새로 읽은 뒤 저장하세요');return true;}
+   if(url.pathname==='/api/night/repos'){
+    // 나이트가 켜진 동안은 거절한다: 역할 세션이 curl로 대시보드를 거쳐 CLI 거절(night-guard)을 우회하는 길을 막는다.
+    if(nightState(readLedgerIncremental(home),readDecisionEvents(home),Date.now()).on)throw new Error('나이트가 켜진 동안은 바꿀 수 없음');
+    const saved_=setRepoPolicy(home,{repo:String(f.repo||''),value:String(f.value||''),by:'사람',record:entry=>appendLedger(entry,home)});
+    saved('/',{repo:saved_.repo,value:saved_.value});return true;
+   }
    if(url.pathname==='/secretary/start'){saved('/#status',await startSecretary());return true;}
    if(url.pathname==='/roles/restart'){
     const role=String(f.role||''),reason=String(f.reason||'').trim(),expectPid=String(f.expectPid||'').trim();
