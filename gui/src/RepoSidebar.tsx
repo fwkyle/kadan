@@ -18,6 +18,8 @@ export default function RepoSidebar({ url, repo }: { url: URL; repo: string | nu
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  // 좁은 화면에서는 저장소를 고르면(주소의 repo가 바뀌면) 선택 목록을 접어 본문을 보이게 한다.
+  useEffect(() => { if (!matchMedia(WIDE).matches) setOpen(false); }, [repo]);
   const rows = repo && !list.some((r) => r.repo === repo) ? [...list, { repo, decisions: 0, merges: 0, super: null }] : list;
   const total = (key: "decisions" | "merges") =>
     rows.some((r) => r[key] === null) ? null : rows.reduce((sum, r) => sum + (r[key] ?? 0), 0);

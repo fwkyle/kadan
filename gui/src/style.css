@@ -669,3 +669,5 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 }
 .st-front-decs + .st-front-decs, .st-front-sub { margin-top: 10px; }
 .st-repo-lead { margin: 0 0 8px; }
+.st-front-sub { margin-bottom: 18px; }
+.st-more-fold { margin-top: 14px; }
