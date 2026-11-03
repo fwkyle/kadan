@@ -397,3 +397,64 @@ test('개수 (7) 종류별로 따로 잰다: python이 먼저 넘고 node는 나
   assert.deepEqual(r.all[10].map((a) => a.signals), [['python']]);
   assert.deepEqual(r.all[11].map((a) => a.signals), [['python']], 'node는 6분째라 아직');
 });
+
+// 지속 조건(10분)은 새로 여는 데만 건다. 열린 경보의 신호는 지금 기준 이상이면 시계와 상관없이 유지한다.
+const nodes = (n) => snap({kinds: {python: 0, node: n}});
+const opened = (t) => {
+  let r = assessProcesses(null, nodes(31), t, 0);
+  r = assessProcesses(r.state, nodes(31), t, 10 * MIN);
+  assert.deepEqual(r.alerts[0].signals, ['node']);
+  return r;
+};
+
+test('열린 node 경보: 한 번 하락 뒤 다시 넘어도 닫히지 않고 since가 같다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  let r = opened(t);
+  const since = r.alerts[0].since;
+  r = assessProcesses(r.state, nodes(29), t, 11 * MIN);
+  assert.equal(r.alerts.length, 1, '하락 1회는 정상 1회째');
+  for (const [minute, expectedNormal] of [[12, 0], [13, 0], [14, 0]]) {
+    r = assessProcesses(r.state, nodes(31), t, minute * MIN);
+    assert.equal(r.state.normalCycles, expectedNormal, '기준 이상 수집은 정상으로 세지 않는다');
+    assert.deepEqual(r.alerts[0].signals, ['node']);
+    assert.equal(r.alerts[0].since, since, 'since 불변');
+  }
+});
+
+test('열린 node 경보: 3주기 연속 기준 미만이면 닫히고, 닫힌 뒤 다시 넘으면 10분 뒤에 열린다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  let r = opened(t);
+  for (const minute of [11, 12]) { r = assessProcesses(r.state, nodes(29), t, minute * MIN); assert.equal(r.alerts.length, 1); }
+  r = assessProcesses(r.state, nodes(29), t, 13 * MIN);
+  assert.equal(r.alerts.length, 0, '3번째 기준 미만에 닫힘');
+  r = assessProcesses(r.state, nodes(31), t, 14 * MIN);
+  assert.equal(r.alerts.length, 0, '닫힌 뒤 넘음은 새로 잰다');
+  r = assessProcesses(r.state, nodes(31), t, 23 * MIN);
+  assert.equal(r.alerts.length, 0, '9분');
+  r = assessProcesses(r.state, nodes(31), t, 24 * MIN);
+  assert.deepEqual(r.alerts[0]?.signals, ['node'], '10분');
+});
+
+test('경보가 없을 때 짧게 넘으면 0건(새로 여는 데는 지속 조건)', () => {
+  const t = DEFAULT_THRESHOLDS;
+  let r = assessProcesses(null, nodes(31), t, 0);
+  r = assessProcesses(r.state, nodes(31), t, 5 * MIN);
+  r = assessProcesses(r.state, nodes(29), t, 6 * MIN);
+  r = assessProcesses(r.state, nodes(31), t, 12 * MIN);
+  assert.deepEqual(r.alerts, []);
+});
+
+test('열린 큰 프로세스 경보: 한 번 하락 뒤 다시 넘어도 닫히지 않고 since가 같다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  const withBig = snap({biggest: [{pid: 9, name: 'node', rssMb: 1100, session: 'a'}]});
+  let r = assessProcesses(null, withBig, t, 0);
+  r = assessProcesses(r.state, withBig, t, 10 * MIN);
+  assert.deepEqual(r.alerts[0].signals, ['process']);
+  const since = r.alerts[0].since;
+  r = assessProcesses(r.state, snap(), t, 11 * MIN);
+  assert.equal(r.alerts.length, 1);
+  r = assessProcesses(r.state, withBig, t, 12 * MIN);
+  assert.equal(r.state.normalCycles, 0);
+  assert.deepEqual(r.alerts[0].signals, ['process']);
+  assert.equal(r.alerts[0].since, since);
+});
