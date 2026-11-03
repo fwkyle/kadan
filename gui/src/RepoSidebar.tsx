@@ -9,9 +9,18 @@ export type SidebarRepo = { repo: string; decisions: number | null; merges: numb
 const badge = (mark: string, label: string, n: number | null) =>
   n === 0 ? null : <span className="dw-side-badge" title={label}>{mark} {n ?? "?"}</span>;
 const WIDE = "(min-width: 800px)";
-export default function RepoSidebar({ url, repo }: { url: URL; repo: string | null }) {
-  const resource = useResource<{ sidebar?: SidebarRepo[] }>("status" + (repo ? "?repo=" + encodeURIComponent(repo) : ""));
-  const list = resource.data?.sidebar ?? [];
+// 현황(#status) 화면에서만 status 응답을 읽는다(Status와 같은 주소라 요청이 늘지 않는다). 거기서만 슈퍼감독 이름을 알 수 있다.
+function StatusSupers({ repo, onSupers }: { repo: string | null; onSupers: (names: Record<string, string>) => void }) {
+  const { data } = useResource<{ sidebar?: SidebarRepo[] }>("status" + (repo ? "?repo=" + encodeURIComponent(repo) : ""));
+  useEffect(() => {
+    if (data?.sidebar) onSupers(Object.fromEntries(data.sidebar.flatMap((r) => (r.super ? [[r.repo, r.super]] : []))));
+  }, [data, onSupers]);
+  return null;
+}
+// 목록과 뱃지 수는 모든 화면이 이미 읽는 summary 응답의 sidebar 칸에서 온다(PR2 검수 S2). 그 밖의 화면에서는 status를 부르지 않는다.
+export default function RepoSidebar({ url, repo, view, repos, failed }: { url: URL; repo: string | null; view: string; repos?: SidebarRepo[]; failed?: boolean }) {
+  const [supers, setSupers] = useState<Record<string, string>>({});
+  const list = (repos ?? []).map((r) => ({ ...r, super: r.super ?? supers[r.repo] ?? null }));
   const [open, setOpen] = useState(() => matchMedia(WIDE).matches);
   useEffect(() => {
     const query = matchMedia(WIDE), sync = () => setOpen(query.matches);
@@ -44,9 +53,10 @@ export default function RepoSidebar({ url, repo }: { url: URL; repo: string | nu
             </li>
           ))}
         </ul>
-        {!resource.data && !resource.error && <p className="dw-side-note">불러오는 중…</p>}
-        {resource.error && <p className="dw-side-note">저장소 목록을 읽지 못했습니다.</p>}
+        {!repos && !failed && <p className="dw-side-note">불러오는 중…</p>}
+        {failed && <p className="dw-side-note">저장소 목록을 읽지 못했습니다.</p>}
       </details>
+      {view === "status" && <StatusSupers repo={repo} onSupers={setSupers} />}
     </aside>
   );
 }

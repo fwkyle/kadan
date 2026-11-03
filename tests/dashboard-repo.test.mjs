@@ -97,3 +97,21 @@ test("칸반: 기본은 프로젝트별, ?group=owner는 감독별, ?repo=는 �
     assert.equal(one.repo, "other");
   } finally { f.server.close(); }
 });
+
+test("summary 사이드 탭 재료(PR2 검수 S2): 저장소·결정·머지 수가 status와 같고, 가벼운 읽기 경로도 같다", async () => {
+  const { createDashboardSummaryReader } = await import("../src/dashboard-summary-reader.mjs");
+  const f = twoRepos();
+  try {
+    const sum = get(f, "summary"), status = get(f, "status");
+    const tally = (list) => Object.fromEntries(list.map((r) => [r.repo, [r.decisions, r.merges]]));
+    assert.deepEqual(tally(sum.sidebar), tally(status.sidebar), "두 응답의 저장소 목록·수가 같다");
+    assert.deepEqual(tally(sum.sidebar).other, [1, 1]);
+    assert.ok(sum.sidebar.every((r) => r.super === null), "슈퍼감독 이름은 summary에 없다(관계표 계산 필요)");
+    // 결정 0인 저장소도 줄은 있고 수는 0이다. 가벼운 읽기 경로(summary reader)도 같은 값이다.
+    const read = createDashboardSummaryReader(f.home, { listSessions: () => [] });
+    assert.deepEqual(read().sidebar, sum.sidebar);
+    // 입력이 그대로면 같은 배열 객체를 돌려준다(다시 세지 않는다).
+    assert.equal(read().sidebar, read().sidebar);
+    assert.ok(JSON.stringify(sum.sidebar).length < 200 * sum.sidebar.length + 10, "저장소 한 줄은 작다");
+  } finally { f.server.close(); }
+});

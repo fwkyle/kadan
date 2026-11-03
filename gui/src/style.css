@@ -671,3 +671,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .st-repo-lead { margin: 0 0 8px; }
 .st-front-sub { margin-bottom: 18px; }
 .st-more-fold { margin-top: 14px; }
+/* 저장소 화면의 새 한국어 영역(PR2 검수 S1): 줄바꿈 기준을 공용 규칙대로 적용한다. */
+.st-front-sub, .st-repo-lead, .dw-side { word-break: keep-all; overflow-wrap: break-word; }
+.st-front-sub h3, .st-front-sub h2 { text-wrap: balance; }
+.st-front-sub p, .st-front-sub li, .st-repo-lead { text-wrap: pretty; }

@@ -7,11 +7,12 @@ import {DecisionStore} from './decisions.mjs';
 import {withMailboxView, mailboxWaitingCount} from './mail-view.mjs';
 import {buildTree} from './cli-tree.mjs';
 import {createTreeInputCache} from './dashboard-tree-inputs.mjs';
+import {sidebarRepos} from './dashboard/repo-view.mjs';
 
 export function createDashboardSummaryReader(home, {listSessions, runtime = null, now = Date.now}) {
   const stores = createWatchStoreReaders(home);
   const treeInputs = createTreeInputCache();
-  let decisionCache, countCache, treeCache;
+  let decisionCache, countCache, treeCache, sidebarCache;
   return () => {
     const errors = [];
     // 조회 DB 잠금 뒤 원본 snapshot을 연다. OS 조회·트리 계산 전에 둘 다 닫는다.
@@ -36,6 +37,10 @@ export function createDashboardSummaryReader(home, {listSessions, runtime = null
       countCache = {cards, works, value: {work: works.length, executions: cards.length,
         unlinked: cards.filter(card => !linked.has(card.key)).length}};
     }
+    // 사이드 탭 재료(PR2 검수 S2): 이미 읽은 카드·워크 키와 결정 목록만으로 만든다. 입력이 그대로면 다시 세지 않는다.
+    if (sidebarCache?.cards !== cards || sidebarCache?.works !== works || sidebarCache?.decisions !== decisions)
+      sidebarCache = {cards, works, decisions, value: sidebarRepos({rows: [...cards, ...works],
+        decisions: decisions === null ? null : decisions.filter(d => d.status === 'open'), supervisors: null})};
     let secretary = null;
     try {
       const sessions = listSessions().filter(s => s.alive !== false);
@@ -50,6 +55,6 @@ export function createDashboardSummaryReader(home, {listSessions, runtime = null
     } catch (error) { errors.push(`생존 못 읽음(죽음이 아니라 모름): ${error.message}`); }
     return {collectedAt: new Date(now()), runtime, secretary,
       decisions: decisions?.filter(d => d.status === 'open').length ?? null,
-      waiting, counts: countCache.value, errors};
+      waiting, counts: countCache.value, sidebar: sidebarCache.value, errors};
   };
 }
