@@ -37,6 +37,7 @@ import {
   openWindow,
   parseRottieCreateResult,
   tmux,
+  currentSocket,
   tmuxConfPath,
   tmuxConfText,
   hasSession,
@@ -290,7 +291,7 @@ export function main(argv) {
   const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
-    if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
+    if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome(), {socket: currentSocket()});
     // 거절 검사는 --help와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하는 길이 새지 않게).
     nightGuard({command,args,flags});
     // 쓰기·종료 명령은 --help면 사용법만 보이고 아무것도 실행하지 않는다.
