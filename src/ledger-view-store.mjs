@@ -48,7 +48,7 @@ export const metaSet = (db, key, value) => db.prepare(
   'INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
 ).run(key, String(value));
 
-export function openLedgerView(home) {
+export function openLedgerView(home, {afterFirstRead} = {}) {
   assertTestHome(home);
   const file = ledgerViewPath(home), dir = path.dirname(file);
   fs.mkdirSync(dir, {recursive:true, mode:0o700});
@@ -60,15 +60,29 @@ export function openLedgerView(home) {
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA busy_timeout=15000; PRAGMA synchronous=FULL;');
-    const mark = db.prepare('PRAGMA application_id').get().application_id;
-    if (mark !== APP_ID && (mark !== 0 ||
-      db.prepare('SELECT count(*) AS n FROM sqlite_master').get().n !== 0)) {
+    // 잠금 전 검사는 WAL 전환 전에 명백히 남의 파일을 거르는 용도이며, 판정의 원본은 잠금 안 검사다.
+    // 표 개수와 표식을 한 문장(한 스냅샷)으로 읽어 두 읽기 사이에 다른 열기가 끼는 경합을 없앤다.
+    // 알려진 한계: 이 검사와 enableWal 사이에는 잠금 없는 틈이 있다. SQLite는 트랜잭션 안에서 WAL로 바꿀 수 없지만,
+    // 이 틈은 locking_mode=EXCLUSIVE + BEGIN EXCLUSIVE로 확인하고 COMMIT(잠금 유지)한 뒤 WAL 전환, close/reopen하면 없앨 수 있다.
+    // 동시 첫 열기에서 다른 열기의 읽기까지 막는 비용 때문에 하지 않았다(확인 검수 exec-d17a1db7이 반례를 재현).
+    // 그 틈에 남의 표가 생기면 아래 잠금 안 판정이 거절·롤백해 ID·표·값은 지키지만 그 남의 파일의 저널 모드는 WAL로 남을 수 있다.
+    // 처음부터 남의 파일은 이 검사에서 WAL 전에 거절되어 저널 모드도 그대로다.
+    const first = db.prepare('SELECT (SELECT count(*) FROM sqlite_master) AS n, ' +
+      '(SELECT application_id FROM pragma_application_id) AS id').get();
+    afterFirstRead?.();
+    if ((first.id !== 0 && first.id !== APP_ID) || (first.id === 0 && first.n !== 0)) {
       throw new Error('다른 종류의 조회 캐시입니다');
     }
     enableWal(db);
     db.exec('BEGIN IMMEDIATE');
-    // 다른 최초 조회가 기다리는 동안 생성했을 수 있으므로 잠금을 얻은 뒤 다시 확인한다.
-    if (db.prepare('PRAGMA application_id').get().application_id === 0) db.exec(schema);
+    // 잠금 안에서 다시 읽은 값이 원본이다. 첫 검사 뒤 다른 열기·다른 작성자가 끼었을 수 있다.
+    const mark = db.prepare('PRAGMA application_id').get().application_id;
+    if (mark === 0) {
+      if (db.prepare('SELECT count(*) AS n FROM sqlite_master').get().n !== 0) {
+        throw new Error('다른 종류의 조회 캐시입니다');
+      }
+      db.exec(schema);
+    } else if (mark !== APP_ID) throw new Error('다른 종류의 조회 캐시입니다');
     if (db.prepare('PRAGMA application_id').get().application_id !== APP_ID ||
       db.prepare('PRAGMA user_version').get().user_version !== 1) throw new Error('조회 캐시 버전 확인 필요');
     const stat = fs.statSync(file), identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;

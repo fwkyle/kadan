@@ -24,6 +24,7 @@ import { previousGenerationExecutions, previousGenerationWorks } from "../watch-
 import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
 import { letters, pick, compact, page } from "./shared.mjs";
+import { frontStrip } from "./front.mjs";
 
 // 현황·전략 맵 화면이 읽지 않는 행 칸(gui/src/pages/Status.tsx·StrategyMap.tsx·stopped.ts·strategy-map.ts 기준, 2026-10-14 조사).
 // 업무 목록·상세는 자기 주소(workspace·detail)에서 이 칸을 받는다. ?super= 응답은 pick으로 따로 고르므로 영향이 없다.
@@ -107,9 +108,20 @@ export function statusData(snapshot, url, stamp, m) {
       recent: recent.filter((e) => mine(e.role)).slice(0, 20).map((e) => ({ ...pick(e, ["at", "kind", "label", "role"]), card: pick(e.card, ["key", "title"]) })),
     };
   }
+  // 끝난 워크(done·cancelled) 본문은 싣지 않고 건수만 준다(PR1). 본문이 필요한 호출자는 ?works=all.
+  const allWorks = url.searchParams.get("works") === "all";
+  const endedWorks = { done: 0, cancelled: 0 };
+  const shownWorks = statusWorks.filter((w) => {
+    if (w.state !== "done" && w.state !== "cancelled") return true;
+    endedWorks[w.state] += 1;
+    return allWorks;
+  });
   return {
     ...stamp,
-    works: statusWorks.map(slimRow),
+    works: shownWorks.map(slimRow),
+    endedWorks: { ...endedWorks, total: endedWorks.done + endedWorks.cancelled, included: allWorks },
+    // 첫 화면 '내 앞' 띠: 저장소별 결정·머지 요청·막힘 수와 열린 결정 첫 줄.
+    front: frontStrip({ decisions: openDecisions, stoppedRows: statusRows.filter((r) => r.bucket === "stuck" || r.bucket === "stale") }),
     cleanupRequest: staleCleanupRequest(
       m.cards.filter((c) => isExecution(c) && executionBucket(c) === "stale"),
     ),

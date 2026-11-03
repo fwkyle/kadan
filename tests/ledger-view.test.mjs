@@ -11,7 +11,7 @@ import {appendLedger, readLedger, readTaskLedger, readMailLedger,
 import {createDatabase, writeStorageMarker, appendStream, storagePath, transaction} from '../src/storage.mjs';
 import {ledgerStreams} from '../src/ledger-domains.mjs';
 import {readLedgerViewPage, withLedgerView} from '../src/ledger-view.mjs';
-import {ledgerViewPath, metaGet} from '../src/ledger-view-store.mjs';
+import {ledgerViewPath, metaGet, openLedgerView} from '../src/ledger-view-store.mjs';
 
 const homeOf = () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ledger-view-'));
@@ -264,4 +264,63 @@ test('물리적으로 읽을 수 없는 조회 DB는 실패하고 보존 후 원
   assert.equal(after.rebuilt, true);assert.notEqual(after.generation, before.generation);
   assert.deepEqual(after.items, before.items);
   assert.equal(JSON.stringify(readLedger(home)), original);
+});
+
+test('첫 열기 판정의 두 읽기 사이에 다른 열기가 스키마를 만들어도 실패하지 않는다', () => {
+  const home = homeOf();
+  let injected = 0;
+  const db = openLedgerView(home, {afterFirstRead() {
+    // 판정 도중 다른 최초 조회가 스키마 생성을 커밋한 꼴을 순서 고정으로 만든다.
+    injected++;const other = openLedgerView(home);other.exec('COMMIT');other.close();
+  }});
+  assert.equal(injected, 1);
+  assert.equal(db.prepare('PRAGMA application_id').get().application_id, 1262767154);
+  db.exec('COMMIT');db.close();
+});
+
+// 알려진 한계: 이 시험의 틈은 locking_mode=EXCLUSIVE + BEGIN EXCLUSIVE → COMMIT(잠금 유지) → WAL 전환 → close/reopen으로
+// 없앨 수 있다(확인 검수 exec-d17a1db7). 동시 첫 열기에서 다른 열기를 막는 비용 때문에 하지 않았다.
+// ID·표·값은 보존하지만 DELETE로 시작했다면 저널 모드는 WAL일 수 있어 mode를 delete로 단언하지 않는다.
+// 처음부터 남의 파일은 아래 '저널 모드도 그대로' 시험이 지킨다.
+test('첫 읽기 뒤에 표식 없는 다른 표가 생기면 거절하고 파일을 바꾸지 않는다', () => {
+  for (const wal of [false, true]) {
+    const home = homeOf(), file = ledgerViewPath(home);
+    fs.mkdirSync(path.dirname(file), {recursive:true});
+    const seed = new DatabaseSync(file);
+    if (wal) seed.exec('PRAGMA journal_mode=WAL');
+    seed.close();
+    assert.throws(() => openLedgerView(home, {afterFirstRead() {
+      const foreign = new DatabaseSync(file);
+      foreign.exec('CREATE TABLE foreign_data(value); INSERT INTO foreign_data VALUES(42)');foreign.close();
+    }}), /다른 종류의 조회 캐시/);
+    const check = new DatabaseSync(file);
+    try {
+      assert.equal(check.prepare('PRAGMA application_id').get().application_id, 0);
+      assert.equal(check.prepare('SELECT count(*) AS n FROM sqlite_master').get().n, 1);
+      assert.equal(check.prepare('SELECT value FROM foreign_data').get().value, 42);
+    } finally {check.close();}
+  }
+});
+
+test('처음부터 남의 파일(DELETE 모드, 표 있음, id 0)은 거절하고 저널 모드도 그대로다', () => {
+  const home = homeOf(), file = ledgerViewPath(home);
+  fs.mkdirSync(path.dirname(file), {recursive:true});
+  const foreign = new DatabaseSync(file);
+  foreign.exec('CREATE TABLE foreign_data(value); INSERT INTO foreign_data VALUES(42)');foreign.close();
+  assert.throws(() => openLedgerView(home), /다른 종류의 조회 캐시/);
+  const check = new DatabaseSync(file);
+  try {
+    assert.equal(check.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+    assert.equal(check.prepare('PRAGMA application_id').get().application_id, 0);
+    assert.equal(check.prepare('SELECT value FROM foreign_data').get().value, 42);
+  } finally {check.close();}
+});
+
+test('남의 파일은 두 읽기 순서와 무관하게 거절한다', () => {
+  for (const setup of ['CREATE TABLE x(a)', 'PRAGMA application_id=7']) {
+    const home = homeOf();
+    fs.mkdirSync(path.dirname(ledgerViewPath(home)), {recursive:true});
+    const foreign = new DatabaseSync(ledgerViewPath(home));foreign.exec(setup);foreign.close();
+    assert.throws(() => openLedgerView(home), /다른 종류의 조회 캐시/);
+  }
 });
