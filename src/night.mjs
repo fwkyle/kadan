@@ -105,7 +105,7 @@ export const AUTO_CHECKLIST = [
 
 // 슈퍼감독에게 가는 우편 본문. 고정 줄 3개 + 사용자 문구. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이라고 밝힌다.
 // level이 '자동'이면 고정 줄이 (4)~(9)까지 늘고, onlyRunning이면 새 일감 금지 줄이 붙는다. level이 없으면 지금과 같다.
-export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onlyRunning}) {
+export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onlyRunning, allow}) {
   const auto = level === '자동';
   const extra = auto ? [...AUTO_LINES, ...(onlyRunning ? [`(10) ${ONLY_RUNNING_LINE}`] : [])] : [];
   return [
@@ -115,6 +115,7 @@ export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onl
     `(2) 보류 대상은 밤중에 decision request를 새로 올리지 말고 보류로 남깁니다: kadan mail 사람 "${HELD_PREFIX} <한 줄>". 아침 요약에 모입니다.`,
     '(3) 위임 범위 안의 일은 결정 요청을 올리지 말고 스스로 처리합니다.',
     ...extra,
+    ...(auto && allow?.length ? [`나이트런 중 자동 머지 허용(--allow): ${allow.join(', ')} — 관문이 정책 보류(night-merge-forbidden·deploy-branch)만 풀어 줍니다. 그 밖의 관문 조건은 그대로입니다.`] : []),
     `kyle 추가 문구: ${text}`,
     ...(viaChat ? [`kyle 채팅 원문(${by}이(가) 옮겨 적음): ${quote}`] : []),
     `감독에게 넘길 때는 위 (1)~(${auto ? (onlyRunning ? 10 : 9) : 2}) 줄을 그대로 붙이세요.`,

@@ -85,6 +85,30 @@ test('--only-running: 새 일감 금지 줄이 붙고, --level 자동 없이는 
   assert.equal(f.run(['status']).onlyRunning, true);
 });
 
+test('--allow: 자동 단계·kyle 원문·올바른 키가 있어야 하고, on 사건과 status에 정규화한 허용이 남는다', () => {
+  const f = fixture();
+  const q = '이번엔 승인';
+  assert.throws(() => f.run(['on', '밤'], {allow: 'acme/app', quote: q}), /--allow는 --level 자동과 함께만/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: 'acme/app'}), /--quote/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: 'acme/app'}, '사람'), /--quote/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: true, quote: q}), /--allow에는 GitHub 소유자\/이름/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: ['acme/app', 'bad key'], quote: q}), /--allow에는 GitHub 소유자\/이름/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: 'noslash', quote: q}), /--allow에는 GitHub 소유자\/이름/);
+  assert.equal(f.night().length, 0);
+  const r = f.run(['on', '밤 위임'], {level: '자동', allow: ['Acme/App.git', 'acme/app', 'Foo/Bar'], quote: q});
+  assert.deepEqual(r.allow, ['acme/app', 'foo/bar']);
+  assert.deepEqual(f.night()[0].allow, ['acme/app', 'foo/bar']);
+  assert.deepEqual(f.run(['status']).allow, ['acme/app', 'foo/bar']);
+  assert.match(f.sent[0].message, /나이트런 중 자동 머지 허용\(--allow\): acme\/app, foo\/bar/);
+});
+
+test('--allow 없이 켜면 status의 allow는 빈 목록이고 on 사건에 allow가 없다', () => {
+  const f = fixture();
+  f.run(['on', '밤'], {level: '자동'});
+  assert.equal('allow' in f.night()[0], false);
+  assert.deepEqual(f.run(['status']).allow, []);
+});
+
 test('알 수 없는 --level 값은 거절한다', () => {
   assert.throws(() => fixture().run(['on', '밤'], {level: '기본'}), /--level은 자동만/);
 });

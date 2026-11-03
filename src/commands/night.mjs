@@ -10,14 +10,14 @@ import {buildNightNote, noteLine} from '../night-note.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../night-repo-policy.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running] [--allow <소유자/이름>]…] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
   return {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
     startedAt: on.t, until: on.until, untilLocal: clock(untilMs), remainingMinutes: Math.max(0, Math.round((untilMs - now) / 60_000)),
-    level: on.level ?? '기본', onlyRunning: on.onlyRunning === true,
+    level: on.level ?? '기본', onlyRunning: on.onlyRunning === true, allow: on.allow ?? [],
     to: on.to ?? [], delivered: on.delivered ?? [], missing,
   };
 }
@@ -153,10 +153,23 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   const onlyRunning = flags['only-running'] === true;
   if (onlyRunning && level !== '자동') throw new Error('--only-running은 --level 자동과 함께만 쓸 수 있습니다');
 
+  // --allow: 그날 밤에만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. 자동 단계에서만, 값마다 올바른 키, kyle 원문 필수.
+  let allow;
+  if (flags.allow !== undefined) {
+    if (level !== '자동') throw new Error('--allow는 --level 자동과 함께만 쓸 수 있습니다');
+    const keys = (Array.isArray(flags.allow) ? flags.allow : [flags.allow]).map(v => {
+      const key = typeof v === 'string' ? normalizeGithub(v) : null;
+      if (!key) throw new Error(`--allow에는 GitHub 소유자/이름 값이 필요합니다(받은 값: ${typeof v === 'string' ? v : '없음'}). ${USAGE}`);
+      return key;
+    });
+    if (!quote) throw new Error('--allow를 쓰려면 kyle이 말한 그대로 --quote "<원문>"이 필요합니다: 누가 켜든 같습니다');
+    allow = [...new Set(keys)];
+  }
+
   const until = resolveEnd({until: flags.until, for: flags.for}, now);
   const works = deps.readWorks ? deps.readWorks() : new WorkStore(home).list();
   const {to, unreachable} = nightTargets({works, entries, by});
-  const message = buildNightMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, onlyRunning});
+  const message = buildNightMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, onlyRunning, allow});
   const send = deps.sendMail ?? sendNightMail(home, by);
   const delivered = to.map(role => {
     try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, error: String(error.message).slice(0, 200)}; }
@@ -164,9 +177,9 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   const event = {
     kind: 'night', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),
-    ...(level ? {level, onlyRunning} : {}),
+    ...(level ? {level, onlyRunning} : {}), ...(allow ? {allow} : {}),
     until, to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
   };
   (deps.record ?? (entry => appendLedger(entry, home)))(event);
-  return {on: true, ...(level ? {level, onlyRunning, checklist: AUTO_CHECKLIST} : {}), until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
+  return {on: true, ...(level ? {level, onlyRunning, checklist: AUTO_CHECKLIST} : {}), ...(allow ? {allow} : {}), until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
 }
