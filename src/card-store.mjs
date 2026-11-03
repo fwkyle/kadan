@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readLedger } from './ledger.mjs';
 import { effectiveCardRole } from './handover-state.mjs';
+import { leaseShaFor } from './review-sha.mjs';
 // 카드 센터가 이력으로 판정을 바꾸는 상태: 전환 시각(ready·draft·assigned)과 완료 뒤 변경(assigned·ready).
 const HISTORY_STATUSES = new Set(['assigned','ready','draft']);
 const slug = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
@@ -24,6 +25,31 @@ export function readFirstPaths(body) {
   }
   return [...new Set(found)];
 }
+// 카드 본문 `## 완료 검사` 절의 줄. 절이 없으면 빈 배열이다. 발령 때 이 줄을 이력에 저장한다(completionChecks).
+export const COMPLETION_CHECK_STORE_MAX=21,COMPLETION_CHECK_LINE_MAX=500;
+// 본문 첫 줄부터 코드 펜스 상태를 추적한다(``` 와 ~~~, 닫는 줄은 같은 글자에 같거나 긴 길이). 펜스 안의 제목·줄은 무시한다.
+// lines는 저장 상한까지, total은 상한과 상관없이 센 전체 검사 줄 수다.
+export function scanChecks(body) {
+  const found=[];
+  let total=0,open=null,inSection=false;
+  for(const line of String(body??'').split('\n')) {
+    if(open) {
+      const close=/^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if(close&&close[1][0]===open.char&&close[1].length>=open.len)open=null;
+      continue;
+    }
+    const fence=/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if(fence&&!(fence[1][0]==='`'&&fence[2].includes('`'))){open={char:fence[1][0],len:fence[1].length};continue;}
+    if(!inSection){if(/^#{1,6}\s*완료 검사\s*$/.test(line.trim()))inSection=true;continue;}
+    if(/^#{1,6}\s/.test(line))break;
+    const text=line.trim().replace(/^[-*]\s+/,'').replace(/^`([^`]*)`$/,'$1').trim();
+    if(!text||text.startsWith('<!--'))continue;
+    total+=1;
+    if(found.length<COMPLETION_CHECK_STORE_MAX)found.push(text.slice(0,COMPLETION_CHECK_LINE_MAX));
+  }
+  return {lines:found,total};
+}
+export const checkLines=body=>scanChecks(body).lines;
 export class CardStore {
   constructor(home) { this.home=home; this.root=path.join(home,'cards'); }
   dir(key) {
@@ -164,6 +190,12 @@ export class CardStore {
         if(!['running','waiting','unknown'].includes(patch.activity)||next.status!=='assigned'||by!==next.role)throw new Error('진행 보고는 배정된 역할에서만 가능');
         next.activityAt=next.at;next.activityRole=by;
       }
+      // 발령 때 완료 검사 줄을 이력에 고정한다. 이후 card.md를 고쳐도 실행 내용은 바뀌지 않는다.
+      if(next.status==='assigned'&&current.status!=='assigned'){
+        const scanned=scanChecks(body);
+        if(scanned.lines.length){next.completionChecks=scanned.lines;next.completionChecksTotal=scanned.total;}
+        else{delete next.completionChecks;delete next.completionChecksTotal;}
+      }
       if(next.status==='ready'){next.board=null;next.role=null;}
       if(Object.hasOwn(patch,'turnOwner')){
         const owner=patch.turnOwner?.trim()||null;
@@ -213,7 +245,7 @@ export class CardStore {
     if(card.resultPath&&path.resolve(file)!==card.resultPath)throw new Error(`새 실행의 결과 파일은 card show의 resultPath를 사용하세요: ${card.resultPath}`);
     return path.resolve(file);
   }
-  report(key,{revision,resultFile,outcome,by='사람'}={}) {
+  report(key,{revision,resultFile,outcome,sha,by='사람'}={}) {
     const role=this.#roleOf(key);
     return this.locked(()=>{
       const card=this.get(key);
@@ -224,14 +256,17 @@ export class CardStore {
       if(!(card.resultPath?fs.lstatSync(file):fs.statSync(file)).isFile())throw new Error('결과 경로는 일반 파일이어야 합니다');
       const bytes=fs.readFileSync(file);
       if(!bytes.length)throw new Error('빈 결과 파일은 등록할 수 없습니다');
+      // 검수한 커밋은 표시용 기록이다(필수 아님). sha: undefined=옵션 안 줌, null=준 값이 형식 오류, 문자열=유효. 유효하면 given, 안 줬을 때만 이 카드 이름으로 빌린 검수 자리 임차 기록(slot), 둘 다 없으면 null.
+      const slotSha=sha===undefined?leaseShaFor(this.home,card):null;
       const result={path:file,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,outcome};
+      const reviewedSha=sha||slotSha||null,reviewedShaSource=sha?'given':slotSha?'slot':null;
       if(card.result){
         if(['path','sha256','bytes','outcome'].every(k=>card.result[k]===result[k]))return card;
         throw new Error('이미 등록한 결과와 다릅니다. 기존 근거를 보존하고 수정·재검수는 새 실행으로 연결하세요');
       }
       const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=card;
       const at=new Date().toISOString();
-      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,result:{...result,at,by},revision:card.revision+1,at,by,noteKind:'progress',note:'실행 결과 파일과 지문 등록 (완료 확정과 별개)'});
+      appendStream(this.home,`cards/${key}/events.jsonl`,{...previous,result:{...result,reviewedSha,reviewedShaSource,at,by},revision:card.revision+1,at,by,noteKind:'progress',note:'실행 결과 파일과 지문 등록 (완료 확정과 별개)'});
       return this.get(key);
     });
   }

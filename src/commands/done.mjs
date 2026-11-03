@@ -2,11 +2,13 @@
 import { CardStore } from "../card-store.mjs";
 import { closeCardAfterDone } from "../card-command.mjs";
 import { floor } from "../floor.mjs";
-import { ledgerHome, readLedger } from "../ledger.mjs";
+import { ledgerHome, readLedger, resolveLedgerBy } from "../ledger.mjs";
 import { die, sessionName, normalizeFloorRead } from "../cli-basics.mjs";
 import { confirmDone, waitScreenDone } from "../cli-wait-done.mjs";
 import { WorkStore } from "../work-store.mjs";
 import { refreshWorkStatus } from "../user-notify.mjs";
+import { taskIdentity } from "../task-identity.mjs";
+import { formatReport, loadChecks, runCardChecks } from "../completion-checks.mjs";
 
 // 이 실행이 속한 업무 글의 상태 메시지를 맞춘다(사건 지점 1곳). 업무가 없거나 디코 설정이 없으면 아무것도 안 한다.
 export function refreshWorkOfExecution(executionKey) {
@@ -43,16 +45,41 @@ export function cmdDone(argv, flags = {}) {
   if (closeCard && result !== "ok") {
     die("--close-card는 ok 완료에만 쓴다 — failed 실행은 카드를 닫지 않는다", 2);
   }
-  const entry = confirmDone({
-    entries: readLedger(),
-    role,
-    taskId,
-    result,
-    via,
-  });
+  let entry;
+  try {
+    entry = confirmDone({ entries: readLedger(), role, taskId, result, via });
+  } catch (error) {
+    // 이미 완료 확정된 실행에도 완료 검사는 보인다. 검사 절이 없으면 지금처럼 바로 던진다.
+    if (!String(error.message).startsWith("이미 완료 확정됨")) throw error;
+    const key = executionKeyOf(taskId);
+    if (!loadChecks(ledgerHome(), key)) throw error;
+    return showChecks(key).then(() => { throw error; });
+  }
   console.log(
     `완료 확정: 역할=${entry.role} 카드=${entry.taskId} 결과=${entry.result} 확인=${entry.by}`
   );
+  if (!loadChecks(ledgerHome(), entry.executionKey)) return finishDone(entry, flags, closeCard);
+  return showChecks(entry.executionKey).then(() => finishDone(entry, flags, closeCard));
+}
+
+function executionKeyOf(taskId) {
+  try { return taskIdentity(new CardStore(ledgerHome()).listSummaries()).write(taskId).executionKey ?? null; } catch { return null; }
+}
+
+// 완료 검사는 보이기만 한다. 실패해도 done 확정과 종료 코드는 그대로다.
+async function showChecks(key) {
+  try {
+    const report = await runCardChecks(ledgerHome(), key, { by: resolveLedgerBy({ env: process.env }) });
+    if (!report) return;
+    console.log(formatReport(report));
+    if (report.recorded === "recorded") console.log("완료 검사: 카드 메모에 남김");
+    if (report.recordError) console.error(`완료 검사 기록 실패: ${report.recordError} — done 확정은 그대로`);
+  } catch (error) {
+    console.error(`완료 검사 실행 실패: ${error.message} — done 확정은 그대로`);
+  }
+}
+
+function finishDone(entry, flags, closeCard) {
   if (!closeCard) return refreshWorkOfExecution(entry.executionKey);
   try {
     const closed = closeCardAfterDone(entry.executionKey, { home: ledgerHome(), by: entry.by, note: flags.note });
