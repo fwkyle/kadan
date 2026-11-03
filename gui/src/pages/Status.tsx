@@ -3,6 +3,7 @@ import { useResource } from "../resource";
 import type { Decision, Row, Stamp } from "../types";
 import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext, Facts, Loading, time, Roll, Pulse, Spark, useSkin } from "../ui";
 import Radar from "../Radar";
+import StatusFront, { type FrontData } from "./StatusFront";
 import { radarBlips } from "../radar-blips";
 import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
@@ -45,7 +46,7 @@ function ProcessTable({processes}: {processes?: ProcessData | null}) {
   </>;
 }
 type StatusData = Stamp & {
-  rows: Row[]; works: Row[]; cleanupRequest: string; executionCount: number;
+  rows: Row[]; works: Row[]; endedWorks?: {done: number; cancelled: number; total: number; included: boolean}; front?: FrontData; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
   live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml?: string}[];
@@ -64,6 +65,12 @@ const groups = [
   ["stale", "오래된 미확정"], ["planned", "진행 전"], ["hold", "일시정지"],
   ["done", "완료"], ["closed", "취소·대체"],
 ];
+const OPEN_WORK_LIMIT = 8;
+// 저장소·열린 워크·작업중·막힘·결정·경보가 모두 0인 슈퍼감독 줄은 한 줄로 합친다. 하나라도 있으면 늘 보인다.
+const isIdleSuper = (s: Supervisors["items"][number]) =>
+  s.repos.length === 0 && s.openWorks === 0 && s.running === 0 && s.stuck === 0 && s.decisions === 0 && s.alerts === 0;
+const busySupers = (items: Supervisors["items"]) => items.filter(s => !isIdleSuper(s));
+const idleSupers = (items: Supervisors["items"]) => items.filter(isIdleSuper);
 export default function Status({url}: {url: URL}) {
   const resource = useResource<StatusData>("status"), data = resource.data;
   const skin = useSkin(), [flowMore, setFlowMore] = useState(false);
@@ -87,6 +94,7 @@ export default function Status({url}: {url: URL}) {
   const open = data?.works.filter(row => row.state === "running") || [];
   const held = data?.works.filter(row => row.state === "hold") || [];
   const closed = data?.works.filter(row => ["done","cancelled"].includes(row.state)) || [];
+  const closedCount = data?.endedWorks && !data.endedWorks.included ? data.endedWorks.total : closed.length;
   const execution = (row: Row) => <article className={row.healthKind === "attention" ? "st-attn-card" : "st-work"} key={row.key}>
     <div className="st-attn-head"><Health row={row}/><strong><CardLink row={row}/></strong></div>
     <p>{row.healthReason}</p>
@@ -142,24 +150,27 @@ export default function Status({url}: {url: URL}) {
         {bandChips({decisions: data.decisions?.length ?? null, stopped: stoppedCount, running: bucket("running").length, alerts: data.alerts, flow: data.flow, live: data.live}).map(chip =>
           <a key={chip.kind} className={"st-chip st-c-" + chip.kind + (chip.on ? " st-on" : " st-off")} href={chip.href} title={chip.title}><span className="st-num">{typeof chip.num === "number" ? <Roll value={chip.num}/> : chip.num}</span><span className="st-lbl">{chip.label}</span></a>)}
       </div>
+      <StatusFront front={data.front}/>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
         {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
       </p>
-      <ul id="status-live" className="st-live" aria-label="살아 있는 담당과 모델">
+      <details id="status-live" className="st-fold st-live-fold"><summary>살아 있는 담당 {data.live === null ? "모름" : data.live.length + "명"} · 모델 보기</summary>
+      <ul id="status-live-list" className="st-live" aria-label="살아 있는 담당과 모델">
         {data.live === null ? <li className="st-live-row"><small>세션 상태 모름</small></li>
           : data.live.length === 0 ? <li className="st-live-row"><small>열린 담당 창이 없습니다.</small></li>
           : data.live.map(s => <li key={s.role} data-fresh={`live:${s.role}:${s.pidState}`} className={"st-live-row" + (s.pidState === "changed" ? " st-live-changed" : "")} title={s.pidState === "changed" ? "PID가 바뀌었습니다. 확인이 필요합니다." : undefined}><strong>{s.role}</strong><small>{liveLabel(s)}</small><Spark values={data.activity?.[s.role]} /></li>)}
         <li className="st-live-row"><a href="#strategy-map">전략 맵에서 담당 전체 보기</a></li>
-      </ul>
+      </ul></details>
       <section id="status-supers" className="st-section">
         <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">슈퍼감독(--profile super로 시작한 역할)마다 한 줄입니다. 그 아래 감독·담당의 실행을 가장 가까운 슈퍼감독 한 곳에만 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
         {data.supervisors === null ? <p className="st-error" role="alert">관계표를 읽지 못해 슈퍼감독별로 묶지 못했습니다. 감시기가 읽는 관계표 파일(원장의 마지막 hierarchy-loaded 기록이 가리키는 경로)을 확인하세요.</p>
           : data.supervisors.items.length === 0 ? <p className="st-empty">슈퍼감독(--profile super)으로 시작한 역할이 관계표에 없습니다.</p>
-          : <ul className="st-sup-list">{data.supervisors.items.map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
+          : <><ul className="st-sup-list">{busySupers(data.supervisors.items).map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
               <strong>{s.super}</strong>
               <span className="st-sup-life">{supervisorLife(s)}</span>
               <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
-            </li>)}</ul>}
+            </li>)}</ul>
+            {idleSupers(data.supervisors.items).length > 0 && <details className="st-fold st-sup-idle"><summary>일 없는 슈퍼감독 {idleSupers(data.supervisors.items).length}명</summary><p>{idleSupers(data.supervisors.items).map(s => s.super + " (" + supervisorLife(s) + ")").join(" · ")}</p></details>}</>}
         {data.supervisors && data.supervisors.unassigned > 0 && <p className="st-hint">관계표에 없는 담당의 실행 {data.supervisors.unassigned}건은 어느 슈퍼감독에도 묶이지 않았습니다.</p>}
         {data.previousGeneration && data.previousGeneration.works + data.previousGeneration.executions > 0 && <p className="st-hint" id="status-previous-generation">이전 세대 업무 {data.previousGeneration.works + data.previousGeneration.executions}건(업무 {data.previousGeneration.works} · 발령 {data.previousGeneration.executions})은 같은 이름을 새 대화가 다시 쓰기 전에 붙은 책임이라 "놀고 있음" 할 일에서 뺐습니다. 새 대화가 이어받으려면 업무·발령을 다시 맡기거나 인계하세요.</p>}
         {data.supervisors && (data.supervisors.unowned ?? 0) > 0 && <p className="st-hint">담당이 아직 정해지지 않은 실행(진행 전·일시정지) {data.supervisors.unowned}건은 세지 않았습니다.</p>}
@@ -181,12 +192,12 @@ export default function Status({url}: {url: URL}) {
       <DocumentContent html={data.watchHtml}/>
       {section("status-executing","작업중인 카드","running","담당이 진행 중이라고 보고했고 담당 창도 살아 있습니다. 검수·답변 같은 다른 결과를 기다린다고 보고한 카드도 여기 셉니다. 보고가 오래돼도 멈춘 것으로 보지 않습니다.")}
       <p className="st-hint">진행 전 {bucket("planned").length}건 · 일시정지 {bucket("hold").length}건 · 보고 시각은 담당이 마지막으로 알린 때입니다. 지금 일하는지를 실시간으로 잡은 값이 아닙니다.</p>
-      <section id="status-running" className="st-section"><header className="st-sec-head"><h2>열린 워크</h2><span className="st-cnt">{data.workError ? "모름" : open.length+"장"}</span><span className="st-hint">열린 워크도 실행 준비·작업중·감독 확인 단계일 수 있습니다.</span></header><ErrorMessage error={data.workError}/>{open.length ? open.map(work) : !data.workError && <p className="st-empty">열린 워크가 없습니다. 위의 카드 목록에서 개별 작업을 확인하세요.</p>}</section>
+      <section id="status-running" className="st-section"><header className="st-sec-head"><h2>열린 워크</h2><span className="st-cnt">{data.workError ? "모름" : open.length+"장"}</span><span className="st-hint">열린 워크도 실행 준비·작업중·감독 확인 단계일 수 있습니다.</span></header><ErrorMessage error={data.workError}/>{open.length ? <>{open.slice(0, OPEN_WORK_LIMIT).map(work)}{open.length > OPEN_WORK_LIMIT && <details className="st-fold"><summary>나머지 열린 워크 {open.length - OPEN_WORK_LIMIT}장</summary>{open.slice(OPEN_WORK_LIMIT).map(work)}</details>}</> : !data.workError && <p className="st-empty">열린 워크가 없습니다. 위의 카드 목록에서 개별 작업을 확인하세요.</p>}</section>
       {held.length>0 && <section className="st-section"><h2>일시정지 중인 워크</h2>{held.map(work)}</section>}
       <details className="st-fold st-recent-fold"><summary className="st-sec-head"><h2>최근 24시간에 일어난 일</h2><span className="st-cnt">완료 {data.recentCounts.done} · 실패 {data.recentCounts.failed} · 발령 {data.recentCounts.send}</span><span className="st-hint">일을 맡기고, 끝나고, 실패한 시각입니다. 카드 내용을 고친 것은 세지 않습니다.</span></summary>{data.recent.length ? <ul className="st-recent">{data.recent.map((event,i)=><li className={"st-recent-row st-recent-"+event.kind} key={i}><span className="st-recent-time">{time(event.at)}</span><span className="st-recent-kind">{event.label}</span><CardLink row={event.card}/><small>{event.role}</small></li>)}</ul> : <p className="st-empty">최근 24시간에 기록된 발령·완료·실패가 없습니다.</p>}</details>
       <details className="st-fold"><summary>판별 진행 막대 {data.boards.filter(b=>b.state!=="done").length}개 판</summary><p className="st-hint">실제 일을 하는 카드만 한 번씩 셉니다(관리·조율 카드 제외). 위 숫자와 같은 기준입니다.</p>{data.boards.filter(b=>b.state!=="done").map(board=><section className="board-progress" key={board.name}><h3><a href={"/?board="+encodeURIComponent(board.name)+"&collection=executions&state=all#dashboard"}>{board.name}</a></h3><div className="progress-track">{groups.map(([key,label])=><span key={key} className={"progress-"+key} style={{flex:board.counts[key] || 0}} title={label+" "+(board.counts[key] || 0)}/>)}</div><div className="progress-legend">{groups.filter(([key])=>board.counts[key]).map(([key,label])=><span key={key}>{label} {board.counts[key]}</span>)}</div><DocumentContent html={board.watchHtml ?? ""}/></section>)}</details>
       <details className="st-fold"><summary>진행 전 카드 {bucket("planned").length}건</summary>{bucket("planned").map(row=><p key={row.key}><CardLink row={row}/> · {row.owner || "미배정"}</p>)}</details>
-      <details className="st-fold"><summary>끝난 판 {data.boards.filter(b=>b.state==="done").length}개 · 끝난 워크 {closed.length}장</summary>{closed.map(row=><p key={row.key}><CardLink row={row}/> · {row.stateLabel}</p>)}{data.boards.filter(b=>b.state==="done").map(board=><p key={board.name}>{board.name} · 실행 {board.total}장</p>)}</details>
+      <details className="st-fold"><summary>끝난 판 {data.boards.filter(b=>b.state==="done").length}개 · 끝난 워크 {closedCount}장</summary>{closed.length > 0 ? closed.map(row=><p key={row.key}><CardLink row={row}/> · {row.stateLabel}</p>) : closedCount > 0 && <p>완료 {data.endedWorks?.done ?? 0} · 취소 {data.endedWorks?.cancelled ?? 0}건은 응답에 싣지 않았습니다. <a href="/?collection=work&state=all#dashboard">워크 화면에서 상태로 거르기</a></p>}{data.boards.filter(b=>b.state==="done").map(board=><p key={board.name}>{board.name} · 실행 {board.total}장</p>)}</details>
       <details className="st-fold"><summary>자원 사용</summary><ErrorMessage error={data.resourceError}/>{data.resources ? <Facts items={[["메모리 여유",data.resources.current.freePercent===null ? "모름" : data.resources.current.freePercent+"%"],["스왑 사용",data.resources.current.swapUsed===null ? "모름" : data.resources.current.swapUsed.toFixed(1)+" MB"],["CPU 5분 부하",data.resources.current.load5===null ? "모름" : data.resources.current.load5.toFixed(2)+" / "+(data.resources.ncpu ?? "모름")]]}/> : <p>자원 상태 모름</p>}</details>
       <details className="st-fold"><summary>프로세스·메모리 (카단 tmux 서버 아래)</summary><ProcessTable processes={data.processes}/></details>
       <p className="st-footnote">모든 수치는 카드 한 장을 한 번씩 센 값이며 관리·조율 카드는 제외합니다. 제품 완성률이 아닙니다. 상세 비교·정렬은 <a href="?collection=executions#dashboard">작업 표</a>에서 확인하세요.</p>
