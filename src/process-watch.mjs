@@ -251,7 +251,10 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     normalCycles = (previousState?.normalCycles ?? 0) + 1;
     alert = normalCycles < 3 ? previous : null;
   }
-  const heldPids = alert?.signals.includes("process") ? [...new Set([...heldPrior, ...sustained])] : [];
+  // heldPids는 지금 큰 PID로만 좁힌다(sustained = (이전 heldPids ∪ 10분 지속) ∩ bigNow). 종료·하락한 PID는 즉시 빠져
+  // 상태가 쌓이지 않고, 번호가 재사용돼도 10분을 새로 잰다. 이번 수집에 지속 PID가 하나도 없는 하락 주기(경보는 닫기 전 유지 중)만
+  // 이전 목록을 그대로 둬 "한 번 내려갔다 복귀"를 유지한다. 3주기 안에 복귀하지 않으면 경보가 닫혀 비워진다.
+  const heldPids = alert?.signals.includes("process") ? (sustained.length ? sustained : heldPrior) : [];
   return { state: { processAlert: alert, normalCycles, bigSince, countSince, heldPids }, alerts: alert ? [alert] : [] };
 }
 

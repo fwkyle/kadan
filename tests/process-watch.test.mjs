@@ -458,3 +458,29 @@ test('열린 큰 프로세스 경보: 한 번 하락 뒤 다시 넘어도 닫히
   assert.deepEqual(r.alerts[0].signals, ['process']);
   assert.equal(r.alerts[0].since, since);
 });
+
+// heldPids는 지금 수집의 큰 PID로만 좁힌다: 종료된 PID가 쌓이지 않고, 번호가 재사용돼도 10분 지속을 건너뛰지 못한다.
+const bigPids = (...pids) => snap({biggest: pids.map((pid) => ({pid, name: 'node', rssMb: 1100, session: 'a'}))});
+
+test('heldPids: 종료된 PID는 다음 수집에서 바로 빠진다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  let r = assessProcesses(null, bigPids(1), t, 0);
+  r = assessProcesses(r.state, bigPids(1), t, 10 * MIN);
+  assert.deepEqual(r.state.heldPids, [1]);
+  r = assessProcesses(r.state, bigPids(1, 2), t, 11 * MIN);
+  r = assessProcesses(r.state, bigPids(1, 2), t, 21 * MIN);
+  assert.deepEqual(r.state.heldPids, [1, 2]);
+  r = assessProcesses(r.state, bigPids(2), t, 22 * MIN);
+  assert.deepEqual(r.state.heldPids, [2], 'PID 1 종료 → 정리');
+});
+
+test('heldPids: 번호가 재사용된 새 프로세스는 10분 지속을 새로 잰다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  let r = assessProcesses(null, bigPids(1), t, 0);
+  r = assessProcesses(r.state, bigPids(1), t, 10 * MIN);
+  r = assessProcesses(r.state, bigPids(1, 2), t, 11 * MIN);
+  r = assessProcesses(r.state, bigPids(1, 2), t, 21 * MIN);
+  r = assessProcesses(r.state, bigPids(2), t, 22 * MIN);
+  r = assessProcesses(r.state, bigPids(1), t, 23 * MIN);
+  assert.equal(r.state.normalCycles, 1, '재사용 PID 1은 아직 지속 전 → 신호 없음');
+});
