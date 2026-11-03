@@ -62,6 +62,9 @@ export function openLedgerView(home, {afterFirstRead} = {}) {
     db.exec('PRAGMA busy_timeout=15000; PRAGMA synchronous=FULL;');
     // 잠금 전 검사는 WAL 전환 전에 명백히 남의 파일을 거르는 용도이며, 판정의 원본은 잠금 안 검사다.
     // 표 개수와 표식을 한 문장(한 스냅샷)으로 읽어 두 읽기 사이에 다른 열기가 끼는 경합을 없앤다.
+    // 알려진 한계: SQLite는 트랜잭션 안에서 WAL로 바꿀 수 없어 이 검사와 enableWal 사이의 틈은 없앨 수 없다.
+    // 그 틈에 남의 표가 생기면 아래 잠금 안 판정이 거절·롤백해 ID·표·값은 지키지만 저널 모드는 WAL로 남을 수 있다.
+    // 처음부터 남의 파일은 이 검사에서 WAL 전에 거절되어 저널 모드도 그대로다.
     const first = db.prepare('SELECT (SELECT count(*) FROM sqlite_master) AS n, ' +
       '(SELECT application_id FROM pragma_application_id) AS id').get();
     afterFirstRead?.();

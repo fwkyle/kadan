@@ -278,6 +278,9 @@ test('첫 열기 판정의 두 읽기 사이에 다른 열기가 스키마를 �
   db.exec('COMMIT');db.close();
 });
 
+// 알려진 한계: 이 시험의 틈은 SQLite가 트랜잭션 안 WAL 전환을 막아 원리상 없앨 수 없다.
+// ID·표·값은 보존하지만 DELETE로 시작했다면 저널 모드는 WAL일 수 있어 mode를 delete로 단언하지 않는다.
+// 처음부터 남의 파일은 아래 '저널 모드도 그대로' 시험이 지킨다.
 test('첫 읽기 뒤에 표식 없는 다른 표가 생기면 거절하고 파일을 바꾸지 않는다', () => {
   for (const wal of [false, true]) {
     const home = homeOf(), file = ledgerViewPath(home);
@@ -296,6 +299,20 @@ test('첫 읽기 뒤에 표식 없는 다른 표가 생기면 거절하고 파�
       assert.equal(check.prepare('SELECT value FROM foreign_data').get().value, 42);
     } finally {check.close();}
   }
+});
+
+test('처음부터 남의 파일(DELETE 모드, 표 있음, id 0)은 거절하고 저널 모드도 그대로다', () => {
+  const home = homeOf(), file = ledgerViewPath(home);
+  fs.mkdirSync(path.dirname(file), {recursive:true});
+  const foreign = new DatabaseSync(file);
+  foreign.exec('CREATE TABLE foreign_data(value); INSERT INTO foreign_data VALUES(42)');foreign.close();
+  assert.throws(() => openLedgerView(home), /다른 종류의 조회 캐시/);
+  const check = new DatabaseSync(file);
+  try {
+    assert.equal(check.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+    assert.equal(check.prepare('PRAGMA application_id').get().application_id, 0);
+    assert.equal(check.prepare('SELECT value FROM foreign_data').get().value, 42);
+  } finally {check.close();}
 });
 
 test('남의 파일은 두 읽기 순서와 무관하게 거절한다', () => {
