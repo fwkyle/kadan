@@ -11,433 +11,297 @@ import {nightGuard} from '../src/night-guard.mjs';
 import {createCenterHandler} from '../src/center-wall.mjs';
 import {summarizeNight} from '../src/night-summary.mjs';
 import {
-  readPolicy, setRepoPolicy, normalizeGithub, parseRemote, parseDeployBranch, loadCards, evaluateGithub, evaluateWork, decideNightMerge,
+  readPolicy, setRepoPolicy, setCardSources, normalizeGithub, parseRemote, parseDeployBranch, loadCards, evaluateGithub, decideNightMerge,
   listRepos, policyPath, setupNeededLines,
 } from '../src/night-repo-policy.mjs';
 
-// 격리 홈·임시 온톨로지 폴더만 쓴다. 운영 홈·실제 온톨로지·포트·GitHub에 닿지 않는다. 역할 이름·저장소 이름도 시험용이다.
+// 격리 홈·임시 카드 폴더만 쓴다. 운영 홈·실제 개인 폴더·포트·GitHub에 닿지 않는다. 역할 이름·저장소 이름도 시험용이다.
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const write = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), {recursive: true}); fs.writeFileSync(path.join(root, rel), text); };
-// 기본 온톨로지 위치는 비어 있는 임시 폴더다(실제 카드를 읽지 않는다). 시험마다 card()로 채운다.
-process.env.KADAN_ONTOLOGY_DIRS = tmp('kadan-onto-empty-');
-const ontology = (...dirs) => { process.env.KADAN_ONTOLOGY_DIRS = dirs.join(path.delimiter); };
 const card = (dir, name, front, {raw} = {}) => write(dir, `${name}.md`, raw ?? `---\nid: project/${name}\n${front}\n---\n\n## Why\n본문\n`);
 const nightOn = home => appendLedger({kind: 'night', phase: 'on', by: '사람', text: '시험', viaChat: false,
   until: new Date(Date.now() + 3600_000).toISOString(), to: [], delivered: [], t: new Date().toISOString()}, home);
-const decide = (home, github, baseBranch) => decideNightMerge(home, {github, baseBranch});
 const home0 = () => tmp('kadan-repo-policy-');
-// 허브 폴더 모양(`<허브>-hub/ontology/cards/project`)을 임시로 만든다.
-const hubDir = name => { const d = path.join(tmp('kadan-hubs-'), `${name}-hub`, 'ontology/cards/project'); fs.mkdirSync(d, {recursive: true}); return d; };
+const set = (home, repo, fields = {}) => setRepoPolicy(home, {repo, by: '사람', ...fields});
+// 카드 폴더를 `night source`와 같은 길(setCardSources)로 연결한다.
+const link = (home, ...dirs) => setCardSources(home, {folders: dirs, by: '사람'});
+const decide = (home, github, baseBranch) => decideNightMerge(home, {github, baseBranch});
+const verdictOf = (home, github, baseBranch) => { const d = decide(home, github, baseBranch); return [d.action, d.reason]; };
 
 test('키: 소문자·끝 .git·끝 / 정규화, 올바르지 않은 키는 거절', () => {
   assert.equal(normalizeGithub('Acme/Site'), 'acme/site');
   assert.equal(normalizeGithub('Acme/Site.git'), 'acme/site');
-  assert.equal(normalizeGithub('Acme/Site/'), 'acme/site');
   assert.equal(normalizeGithub(' Acme/Site.git/ '), 'acme/site');
-  assert.equal(normalizeGithub('a-b.c_d/e-f.g_h'), 'a-b.c_d/e-f.g_h');
-  for (const bad of ['site', 'a/b/c', '/a/b', 'a/', '/b', '/', '../x', 'a/..', 'a/../b', './a', 'a/.', 'a b/c', 'a/b c', '소유자/이름', '', null, undefined, 3])
+  for (const bad of ['site', 'a/b/c', '/a/b', 'a/', '../x', 'a/..', './a', 'a/.', 'a b/c', '소유자/이름', '', null, undefined, 3])
     assert.equal(normalizeGithub(bad), null, String(bad));
 });
 
-test('정책: 값 없음은 null, 저장 키는 정규화돼 원장에 남고, 올바르지 않은 키·auto 쓰기는 거절', () => {
+test('1. 설정 없음·연결 없음 → setup-needed. 개인 폴더 글롭도 환경변수도 카드를 읽지 않는다', () => {
+  const home = home0();
+  const hubs = tmp('kadan-notes-'); // 옛 글롭·환경변수 모양의 폴더를 만들어도 읽히지 않아야 한다
+  card(path.join(hubs, 'notes/projects'), 'a', 'remote: acme/a\ndeploy_branch: 없음');
+  process.env.KADAN_ONTOLOGY_DIRS = path.join(hubs, 'notes/projects');
+  try {
+    const info = evaluateGithub(home, 'acme/a');
+    assert.deepEqual([info.verdict.action, info.verdict.reason], ['hold', 'setup-needed']);
+    assert.deepEqual(info.card, null);
+    assert.deepEqual(listRepos(home, [], {origin: () => null}), {corrupt: null, repos: [], legacy: [], sources: {cards: []}});
+  } finally { delete process.env.KADAN_ONTOLOGY_DIRS; }
+});
+
+test('2. 카단 설정만으로 판정: 금지→hold, 배포 브랜치와 같음→hold, 다른 브랜치→merge, 없음→merge, 브랜치를 모르면 hold', () => {
+  const home = home0();
+  set(home, 'Acme/Forbid', {deployBranch: 'main', nightMerge: '금지'});
+  set(home, 'acme/web', {deployBranch: 'main'});
+  set(home, 'acme/doc', {deployBranch: '없음'});
+  set(home, 'acme/only-merge', {nightMerge: '허용'});
+  assert.deepEqual(verdictOf(home, 'acme/forbid', 'dev'), ['hold', 'night-merge-forbidden']);
+  assert.deepEqual(verdictOf(home, 'acme/web', 'main'), ['hold', 'deploy-branch']);
+  assert.deepEqual(verdictOf(home, 'acme/web', 'dev'), ['merge', 'allowed']);
+  assert.deepEqual(verdictOf(home, 'acme/web'), ['hold', 'setup-needed']); // 대상 브랜치를 모름
+  assert.deepEqual(verdictOf(home, 'acme/doc', 'main'), ['merge', 'allowed']);
+  assert.deepEqual(verdictOf(home, 'acme/only-merge', 'main'), ['hold', 'setup-needed']); // deployBranch 비어 있음
+  assert.deepEqual(verdictOf(home, 'nobody/none', 'main'), ['hold', 'setup-needed']);
+  assert.equal(evaluateGithub(home, 'site').verdict.reason, 'setup-needed');
+});
+
+test('설정 쓰기: 칸 일부만 바꾸고, --clear로 칸을 지우고, 원장에 이전·이후가 남고, 잘못된 값은 거절', () => {
   const home = home0();
   const records = [];
   const record = e => records.push(e);
-  assert.deepEqual(readPolicy(home), {repos: {}, legacy: {}, corrupt: null});
-  setRepoPolicy(home, {repo: 'Acme/Site.git', value: 'hold', by: '사람', now: () => '2026-11-03T00:00:00.000Z', record});
-  setRepoPolicy(home, {repo: 'acme/site/', value: 'merge', by: 'a-감독', now: () => '2026-11-03T01:00:00.000Z', record});
-  assert.deepEqual(readPolicy(home).repos['acme/site'], {value: 'merge', at: '2026-11-03T01:00:00.000Z', by: 'a-감독'});
-  assert.deepEqual(records.map(r => [r.kind, r.repo, r.before, r.after]), [['night-repo-policy', 'acme/site', null, 'hold'], ['night-repo-policy', 'acme/site', 'hold', 'merge']]);
+  set(home, 'Acme/Site.git', {deployBranch: 'main', nightMerge: '금지', record, now: () => 't1'});
+  set(home, 'acme/site', {nightMerge: '허용', record, now: () => 't2'}); // deployBranch는 그대로
+  assert.deepEqual(readPolicy(home).repos['acme/site'], {deployBranch: 'main', nightMerge: '허용', at: 't2', by: '사람'});
+  set(home, 'acme/site', {clear: 'nightMerge', record});
+  assert.equal(readPolicy(home).repos['acme/site'].nightMerge, null);
+  assert.deepEqual(records.map(r => [r.kind, r.repo, r.before, r.after]), [
+    ['night-repo-policy', 'acme/site', {deployBranch: null, nightMerge: null}, {deployBranch: 'main', nightMerge: '금지'}],
+    ['night-repo-policy', 'acme/site', {deployBranch: 'main', nightMerge: '금지'}, {deployBranch: 'main', nightMerge: '허용'}],
+    ['night-repo-policy', 'acme/site', {deployBranch: 'main', nightMerge: '허용'}, {deployBranch: 'main', nightMerge: null}]]);
+  set(home, 'acme/site', {clear: 'deployBranch'});
+  assert.deepEqual(readPolicy(home).repos, {}); // 두 칸 다 비면 줄이 사라진다
   assert.equal((fs.statSync(policyPath(home)).mode & 0o777), 0o600);
-  assert.throws(() => setRepoPolicy(home, {repo: 'acme/site', value: 'auto', by: '사람'}), /merge\|hold 중 하나/);
-  assert.throws(() => setRepoPolicy(home, {repo: 'acme/site', value: 'x', by: '사람'}), /merge\|hold 중 하나/);
-  for (const bad of ['site', 'a/b/c', '/a/b', 'a/', '../x', 'a/..']) assert.throws(() => setRepoPolicy(home, {repo: bad, value: 'hold', by: '사람'}), /GitHub 소유자\/이름/, bad);
-  assert.equal(readPolicy(home).repos['acme/site'].value, 'merge');
+  assert.throws(() => set(home, 'acme/site', {}), /바꿀 칸이 없습니다/);
+  assert.throws(() => set(home, 'acme/site', {deployBranch: 'main (설명)'}), /deployBranch는/);
+  assert.throws(() => set(home, 'acme/site', {nightMerge: 'merge'}), /허용\|금지/);
+  assert.throws(() => set(home, 'acme/site', {clear: 'at'}), /지울 칸/);
+  assert.throws(() => set(home, 'acme/site', {deployBranch: 'main', clear: 'deployBranch'}), /같은 칸/);
+  for (const bad of ['site', 'a/b/c', '../x']) assert.throws(() => set(home, bad, {deployBranch: 'main'}), /GitHub 소유자\/이름/, bad);
 });
 
-test('정책: 손상 파일은 쓰기 거절(파일 그대로), 읽기는 hold', () => {
+test('3. night source로 연결한 카드가 빈 칸을 채우고, 카단 설정이 칸별로 카드를 이기고, 칸마다 출처가 보인다', () => {
   const home = home0();
-  fs.writeFileSync(policyPath(home), '{깨진');
-  assert.throws(() => setRepoPolicy(home, {repo: 'acme/site', value: 'merge', by: '사람'}), /손상/);
-  assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{깨진');
-  const info = evaluateGithub(home, 'acme/site');
-  assert.deepEqual([info.verdict.action, info.verdict.reason], ['hold', 'setup-needed']);
-  assert.match(info.verdict.detail, /손상/);
-  for (const repos of [{'acme/site': {value: 'zzz'}}, {'a/b/c': {value: 'hold'}}, {'Acme/Site': {value: 'hold'}}]) {
-    fs.writeFileSync(policyPath(home), JSON.stringify({version: 1, repos}));
-    assert.ok(readPolicy(home).corrupt, JSON.stringify(repos));
-  }
+  const onto = tmp('kadan-onto-');
+  card(onto, 'site', 'remote: Acme/Site (비공개)\ndeploy_branch: main\nnight_merge: 허용');
+  link(home, onto);
+  const card_ = evaluateGithub(home, 'acme/site');
+  assert.deepEqual(card_.effective, {deployBranch: {value: 'main', from: 'card'}, nightMerge: {value: '허용', from: 'card'}});
+  assert.deepEqual(card_.card, {id: 'site', folder: 0, deployBranch: 'main', nightMerge: '허용'});
+  assert.deepEqual(verdictOf(home, 'acme/site', 'main'), ['hold', 'deploy-branch']);
+  set(home, 'acme/site', {deployBranch: '없음'}); // 한 칸만 설정: 다른 칸은 카드
+  const mixed = evaluateGithub(home, 'acme/site', {baseBranch: 'main'});
+  assert.deepEqual(mixed.effective, {deployBranch: {value: '없음', from: 'kadan'}, nightMerge: {value: '허용', from: 'card'}});
+  assert.deepEqual([mixed.verdict.action, mixed.verdict.reason], ['merge', 'allowed']);
+  set(home, 'acme/site', {nightMerge: '금지'});
+  assert.deepEqual(verdictOf(home, 'acme/site', 'dev'), ['hold', 'night-merge-forbidden']);
+  // 카드가 없고 설정도 안 채운 칸은 출처가 null이다
+  assert.deepEqual(evaluateGithub(home, 'acme/none').effective, {deployBranch: {value: null, from: null}, nightMerge: {value: null, from: null}});
+  // 연결 해제 뒤에는 카드를 읽지 않는다
+  setCardSources(home, {clear: true, by: '사람'});
+  assert.equal(evaluateGithub(home, 'acme/site').card, null);
 });
 
-test('정책: 옛 형식(맨 이름) 저장값은 덮어쓰기 없음으로 읽고 legacy·list에 따로 보이며, 다시 써도 지우지 않는다. auto는 빠진다', () => {
+test('4. 카드가 못 읽히는데 설정이 두 칸을 다 채우면 설정으로 판정, 한 칸만 채우면 setup-needed', () => {
   const home = home0();
-  const onto = tmp('kadan-onto-'), repoPath = tmp('kadan-site-');
-  card(onto, 'site', `repo: ${repoPath}\nremote: acme/site\ndeploy_branch: 없음`);
-  ontology(onto);
+  const onto = tmp('kadan-onto-');
+  card(onto, 'dup1', 'remote: acme/app\ndeploy_branch: main');
+  card(onto, 'dup2', 'remote: acme/app\ndeploy_branch: develop'); // 카드 둘 → 못 읽힘
+  link(home, onto);
+  assert.match(evaluateGithub(home, 'acme/app').verdict.detail, /카드가 여럿/);
+  assert.deepEqual(verdictOf(home, 'acme/app', 'dev'), ['hold', 'setup-needed']);
+  set(home, 'acme/app', {deployBranch: 'main'});
+  assert.deepEqual(verdictOf(home, 'acme/app', 'dev'), ['hold', 'setup-needed']); // nightMerge 칸이 못 읽힘
+  set(home, 'acme/app', {nightMerge: '허용'});
+  assert.deepEqual(verdictOf(home, 'acme/app', 'dev'), ['merge', 'allowed']);
+  assert.deepEqual(verdictOf(home, 'acme/app', 'main'), ['hold', 'deploy-branch']);
+  // 카드 한 장의 deploy_branch 칸만 못 읽히면 그 칸만 설정이 대신한다
+  card(onto, 'odd', 'remote: acme/odd\ndeploy_branch: main push 때\nnight_merge: 허용');
+  assert.match(evaluateGithub(home, 'acme/odd').verdict.detail, /deploy_branch 형식/);
+  set(home, 'acme/odd', {deployBranch: '없음'});
+  assert.deepEqual(verdictOf(home, 'acme/odd', 'main'), ['merge', 'allowed']);
+});
+
+test('5. 예전 merge|hold 저장값(맨 이름 키 포함)은 legacy로만 보이고 판정에 쓰지 않으며, 다시 써도 지우지 않는다. auto는 빠진다', () => {
+  const home = home0();
   const entry = {value: 'hold', at: 't', by: '사람'};
   fs.writeFileSync(policyPath(home), JSON.stringify({version: 1, repos: {site: entry, 'acme/old': {...entry, value: 'merge'}, gone: {...entry, value: 'auto'}}}));
   const policy = readPolicy(home);
   assert.equal(policy.corrupt, null);
-  assert.deepEqual([Object.keys(policy.repos), Object.keys(policy.legacy)], [['acme/old'], ['site']]);
-  const info = evaluateGithub(home, 'acme/site');
-  assert.deepEqual([info.value, info.saved, info.verdict.action, info.verdict.reason], [null, null, 'merge', 'ontology-allowed']); // 옛 hold는 무시
-  const out = listRepos(home, [{key: 'site/w1', repoPath}]);
-  assert.deepEqual(out.legacy, [{name: 'site', value: 'hold', at: 't', by: '사람'}]);
-  assert.ok(out.repos.some(r => r.github === 'acme/old' && r.repo === null && r.value === 'merge')); // 업무에 안 나온 저장값도 한 줄
-  const text = nightCommand(['repo', 'list'], {}, {home, by: '사람', deps: {readWorks: () => [{key: 'site/w1', repoPath}]}});
-  assert.match(text, /옛 형식 저장값\(다시 설정 필요\): site = hold/);
-  setRepoPolicy(home, {repo: 'acme/site', value: 'hold', by: '사람'});
-  const file = JSON.parse(fs.readFileSync(policyPath(home), 'utf8')).repos;
-  assert.deepEqual(Object.keys(file).sort(), ['acme/old', 'acme/site', 'site']); // 옛 키 보존, auto는 빠짐
+  assert.deepEqual(policy.repos, {});
+  assert.deepEqual(Object.keys(policy.legacy).sort(), ['acme/old', 'site']);
+  assert.deepEqual(verdictOf(home, 'acme/old', 'main'), ['hold', 'setup-needed']); // 예전 merge는 무시
+  const out = listRepos(home, [], {origin: () => null});
+  assert.deepEqual(out.legacy, [{name: 'acme/old', value: 'merge', at: 't', by: '사람'}, {name: 'site', value: 'hold', at: 't', by: '사람'}]);
+  assert.match(nightCommand(['repo', 'list'], {}, {home, by: '사람', deps: {readWorks: () => [], origin: () => null}}), /옛 형식 저장값\(판정에 쓰지 않음\): site = hold/);
+  set(home, 'acme/new', {deployBranch: 'main'});
+  const file = JSON.parse(fs.readFileSync(policyPath(home), 'utf8'));
+  assert.equal(file.version, 2);
+  assert.deepEqual([Object.keys(file.legacy).sort(), Object.keys(file.repos)], [['acme/old', 'site'], ['acme/new']]);
 });
 
-test('remote: 세 형식(github.com/o/n, git@github.com:o/n.git·별칭, 맨 o/n)과 괄호 설명, 그 밖은 null', () => {
-  assert.equal(parseRemote('github.com/Acme/Site'), 'acme/site');
-  assert.equal(parseRemote('github.com/Acme/Site (공개, 동업자 소유)'), 'acme/site');
-  assert.equal(parseRemote('git@github.com:Acme/Site.git'), 'acme/site');
+test('정책 파일 손상: 쓰기 거절(파일 그대로), 읽기는 setup-needed, 문구에 홈 경로 없음, 쓰기 거절은 CLI용으로 경로를 붙인다', () => {
+  const home = home0();
+  fs.writeFileSync(policyPath(home), '{깨진');
+  assert.throws(() => set(home, 'acme/site', {deployBranch: 'main'}), error => error.message.includes(policyPath(home)) && !error.httpMessage.includes(home));
+  assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{깨진');
+  const info = evaluateGithub(home, 'acme/site');
+  assert.deepEqual([info.verdict.action, info.verdict.reason], ['hold', 'setup-needed']);
+  assert.match(info.verdict.detail, /손상/);
+  assert.ok(!JSON.stringify(info).includes(home));
+  for (const repos of [{'acme/site': {deployBranch: 'zzz zzz'}}, {'a/b/c': {deployBranch: 'main'}}, {'Acme/Site': {deployBranch: 'main'}}, {'acme/site': {nightMerge: 'merge'}}]) {
+    fs.writeFileSync(policyPath(home), JSON.stringify({version: 2, repos}));
+    assert.ok(readPolicy(home).corrupt, JSON.stringify(repos));
+  }
+  fs.writeFileSync(policyPath(home), JSON.stringify({version: 2, repos: {}, cards: ['상대/경로']}));
+  assert.ok(readPolicy(home).corrupt);
+  assert.throws(() => set(home, 'acme/x', {deployBranch: 'main'}), /손상/); // cards 경로가 상대 경로인 파일도 손상이다
+});
+
+test('정책: 읽기 권한 오류·임시 파일 쓰기 실패 문구에도 절대 경로가 없다', () => {
+  const home = tmp('kadan-repo-policy-');
+  set(home, 'acme/site', {deployBranch: 'main'});
+  fs.chmodSync(policyPath(home), 0o000);
+  try {
+    const {corrupt} = readPolicy(home);
+    assert.match(corrupt, /night-repo-policy\.json \(EACCES\)/);
+    assert.ok(!corrupt.includes(home), corrupt);
+  } finally { fs.chmodSync(policyPath(home), 0o600); }
+});
+
+test('remote·deploy_branch 읽기 형식(재사용): 세 형식, 낱말 하나·짝 목록, 설명 글은 못 읽음', () => {
+  assert.equal(parseRemote('github.com/Acme/Site (공개)'), 'acme/site');
   assert.equal(parseRemote('git@github-personal:Acme/Site.git (비공개)'), 'acme/site');
   assert.equal(parseRemote('Acme/Site (비공개)'), 'acme/site');
-  assert.equal(parseRemote('acme/site.git'), 'acme/site');
-  for (const none of ['없음 (원격 저장소 미연결)', 'Acme 조직 (a-web, b-web, c)', 'https://github.com/acme/site', 'acme', 'a/b/c', 'github.com/acme', '', undefined])
+  for (const none of ['없음 (원격 저장소 미연결)', 'Acme 조직 (a-web, b-web)', 'https://github.com/acme/site', 'acme', 'a/b/c', '', undefined])
     assert.equal(parseRemote(none), null, String(none));
-});
-
-test('deploy_branch: 낱말 하나(괄호 설명 무시)와 {소유자/이름: 브랜치} 짝 목록만 읽고, 설명 글은 못 읽은 것이다', () => {
-  assert.deepEqual(parseDeployBranch('main'), {kind: 'word', value: 'main'});
-  assert.deepEqual(parseDeployBranch('없음'), {kind: 'word', value: '없음'});
-  assert.deepEqual(parseDeployBranch('main (위 이유로 사실상 운영 브랜치. (괄호) 중첩)'), {kind: 'word', value: 'main'});
-  assert.deepEqual(parseDeployBranch('release/prod'), {kind: 'word', value: 'release/prod'});
+  assert.deepEqual(parseDeployBranch('main (설명. (괄호) 중첩)'), {kind: 'word', value: 'main'});
   assert.deepEqual(parseDeployBranch('{Acme/Web: main, Acme/Admin: 없음}'), {kind: 'map', map: {'acme/web': 'main', 'acme/admin': '없음'}});
   assert.equal(parseDeployBranch(undefined), null);
-  const unreadable = {kind: 'unreadable'};
-  for (const bad of [
-    // 지금 우산 카드의 설명 글 꼴 그대로(고정 fixture)
-    'acme-web=main (머지되면 운영 자동 배포). acme-auth·acme-admin=없음 (운영은 prod-* 태그·수동) — 2026-11-03 각 저장소 origin',
-    '없음 — 설명이 괄호 없이 이어짐', 'main push 때', '자동', '', '{}', '{Acme/Web: main', '{Acme/Web main}', '{web: main}', '{Acme/Web: main, acme/web: 없음}',
-    '{Acme/Web: main (설명)}', '{Acme/Web: }', '{Acme/Web: main,, Acme/Admin: 없음}', 'main, develop'])
-    assert.deepEqual(parseDeployBranch(bad), unreadable, bad);
+  for (const bad of ['acme-web=main (머지되면 운영 자동 배포). acme-admin=없음 — 설명', '없음 — 설명이 괄호 없이 이어짐', 'main push 때', '', '{}', '{Acme/Web: main',
+    '{web: main}', '{Acme/Web: main, acme/web: 없음}', '{Acme/Web: main (설명)}', 'main, develop'])
+    assert.deepEqual(parseDeployBranch(bad), {kind: 'unreadable'}, bad);
 });
 
-test('저장된 merge·hold가 카드보다 우선한다(대상 브랜치가 deploy_branch여도, night_merge 금지여도)', () => {
+test('8. 카드 찾기·우산 카드·엄격 읽기: 짝 목록이 remote보다 먼저, 목록에 없는 키는 못 찾고, night_merge는 카드 전체에 적용', () => {
+  const home = home0();
+  const onto = tmp('kadan-onto-');
+  card(onto, 'umb', 'deploy_branch: {Acme/Web: main, Acme/Admin: 없음}\nnight_merge: 금지');
+  card(onto, 'plain', 'remote: git@github.com:Acme/Plain.git\ndeploy_branch: 없음');
+  card(onto, 'noremote', 'remote: 없음 (원격 미연결)\ndeploy_branch: main');
+  link(home, onto);
+  assert.deepEqual(['acme/web', 'acme/admin'].map(g => verdictOf(home, g, 'dev')[1]), ['night-merge-forbidden', 'night-merge-forbidden']);
+  assert.deepEqual(verdictOf(home, 'ACME/PLAIN.git', 'main'), ['merge', 'allowed']);
+  assert.equal(evaluateGithub(home, 'acme/other').card, null); // 목록에도 remote에도 없음
+  assert.equal(decide(home, 'acme/plain', 'main').card, 'plain');
+  const rows = listRepos(home, [], {origin: () => null}).repos;
+  assert.deepEqual(rows.map(r => r.github), ['acme/admin', 'acme/plain', 'acme/web']); // 연결 카드에서 읽힌 키
+  // 판정 칸 엄격 읽기(검수 F1): 형식 틀림·중복은 못 읽음 → setup-needed, 정상 카드는 그대로
+  const strict = fields => {
+    const d = tmp('kadan-strict-'), h = home0();
+    write(d, 'app.md', `---\nremote: Acme/App\n${fields}\n---\n`);
+    link(h, d);
+    return [h, evaluateGithub(h, 'acme/app', {baseBranch: 'dev'}).verdict];
+  };
+  for (const bad of ['deploy_branch: main\nnight_merge: 금지\nnight_merge: 허용', 'deploy_branch: main\n  night_merge: 허용', 'deploy_branch: main\n"night_merge": 금지',
+    'Deploy_Branch: main', 'deploy_branch: main\nnight_merge: 모름', 'deploy_branch: main\nnight_merge:'])
+    assert.equal(strict(bad)[1].reason, 'setup-needed', bad);
+  assert.deepEqual(strict('deploy_branch: main')[1].reason, 'allowed'); // night_merge 칸이 아예 없으면 허용
+  assert.match(strict('deploy_branch: main\nnight_merge: 금지\nnight_merge: 허용')[1].detail, /줄 \d+·\d+/);
+  // 하위 폴더·링크는 훑지 않는다
+  const d2 = tmp('kadan-sub-'), h2 = home0();
+  card(path.join(d2, 'sub'), 'deep', 'remote: acme/deep\ndeploy_branch: 없음');
+  fs.symlinkSync(path.join(d2, 'sub', 'deep.md'), path.join(d2, 'link.md'));
+  link(h2, d2);
+  assert.deepEqual(loadCards([d2]).cards, []);
+  // 연결한 폴더가 사라지면 조용히 건너뛰지 않고 못 읽힘이다(경로 없는 문구)
+  fs.rmSync(onto, {recursive: true});
+  const gone = evaluateGithub(home, 'acme/plain');
+  assert.equal(gone.verdict.reason, 'setup-needed');
+  assert.match(gone.verdict.detail, /카드 폴더 0를 읽을 수 없음\(ENOENT\)/);
+  assert.ok(!JSON.stringify(gone).includes(onto));
+});
+
+test('목록: 설정 키·연결 카드 키·업무 저장소(git origin)를 합치고, 각 줄 판정은 decideNightMerge와 같다', () => {
   const home = home0();
   const onto = tmp('kadan-onto-');
   card(onto, 'a', 'remote: acme/a\ndeploy_branch: main');
-  card(onto, 'b', 'remote: acme/b\ndeploy_branch: 없음');
-  card(onto, 'c', 'remote: acme/c\ndeploy_branch: 없음\nnight_merge: 금지');
-  ontology(onto);
-  assert.deepEqual(['acme/a', 'acme/b', 'acme/c'].map(g => decide(home, g, 'main').action), ['hold', 'merge', 'hold']);
-  setRepoPolicy(home, {repo: 'acme/a', value: 'merge', by: '사람'});
-  setRepoPolicy(home, {repo: 'ACME/B.git', value: 'hold', by: '사람'});
-  setRepoPolicy(home, {repo: 'acme/c', value: 'merge', by: '사람'});
-  const a = evaluateGithub(home, 'Acme/A', {baseBranch: 'main'});
-  assert.deepEqual([a.verdict.action, a.verdict.reason, a.verdict.exceptBranch, a.value], ['merge', 'repo-policy-merge', null, 'merge']);
-  assert.deepEqual(decide(home, 'acme/a', 'main').reason, 'repo-policy-merge');
-  assert.deepEqual([decide(home, 'acme/b', 'dev').action, decide(home, 'acme/b', 'dev').reason], ['hold', 'repo-policy-hold']);
-  assert.deepEqual([decide(home, 'acme/c', 'dev').action, decide(home, 'acme/c', 'dev').reason], ['merge', 'repo-policy-merge']);
-  // 카드가 아예 없는 저장소도 저장값이 있으면 그것을 따른다
-  setRepoPolicy(home, {repo: 'nobody/nocard', value: 'merge', by: '사람'});
-  assert.equal(decide(home, 'nobody/nocard', 'main').action, 'merge');
-});
-
-test('낱말 하나 카드: 대상 브랜치 같음→hold, 다름→merge, 없음→어떤 브랜치든 merge, 브랜치를 모르면 hold', () => {
-  const home = home0();
-  const onto = hubDir('a');
-  card(onto, 'main', 'remote: github.com/acme/main-app\ndeploy_branch: main (사실상 운영 브랜치)');
-  card(onto, 'none', 'remote: git@github.com:acme/none-app.git\ndeploy_branch: 없음');
-  ontology(onto);
-  const id = n => `project/${n}`;
-  assert.deepEqual(decide(home, 'acme/main-app', 'main'), {action: 'hold', reason: 'deploy-branch', github: 'acme/main-app', card: id('main'), hub: 'a', deployBranch: 'main', nightMerge: null});
-  assert.deepEqual(decide(home, 'Acme/Main-App.git', 'staging'), {action: 'merge', reason: 'ontology-allowed', github: 'acme/main-app', card: id('main'), hub: 'a', deployBranch: 'main', nightMerge: null});
-  assert.equal(decide(home, 'acme/main-app', 'Main').action, 'merge'); // 브랜치 이름은 대소문자를 구분한다
-  for (const base of ['main', 'master', 'dev', undefined]) assert.equal(decide(home, 'acme/none-app', base).action, 'merge', String(base));
-  const unknown = decide(home, 'acme/main-app', undefined);
-  assert.deepEqual([unknown.action, unknown.reason], ['hold', 'setup-needed']);
-  assert.equal(decide(home, 'acme/main-app', '').action, 'hold');
-  assert.deepEqual(evaluateGithub(home, 'acme/main-app').verdict, {action: 'merge', reason: 'ontology-allowed', exceptBranch: 'main'});
-});
-
-test('짝 목록(우산) 카드: 키가 있으면 그 값, 목록에 없으면 setup-needed, night_merge 금지는 모든 키에 적용', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-');
-  card(onto, 'umbrella', 'remote: Acme 조직 (web, admin, auth)\ndeploy_branch: {Acme/Web: main, Acme/Admin: 없음}');
-  card(onto, 'closed', 'deploy_branch: {Acme/Lock-A: main, Acme/Lock-B: 없음}\nnight_merge: 금지');
-  card(onto, 'rem', 'remote: acme/solo\ndeploy_branch: {Acme/Other: main}'); // remote는 맞지만 목록에 키가 없다
-  ontology(onto);
-  assert.equal(decide(home, 'acme/web', 'main').reason, 'deploy-branch');
-  assert.equal(decide(home, 'acme/web', 'dev').reason, 'ontology-allowed');
-  assert.deepEqual([decide(home, 'ACME/ADMIN', 'main').action, decide(home, 'acme/admin', 'main').deployBranch], ['merge', '없음']);
-  assert.deepEqual(['acme/lock-a', 'acme/lock-b'].map(g => decide(home, g, 'dev').reason), ['ontology-night-merge-forbidden', 'ontology-night-merge-forbidden']);
-  const missing = decide(home, 'acme/solo', 'dev');
-  assert.deepEqual([missing.action, missing.reason, missing.deployBranch], ['hold', 'setup-needed', null]);
-  assert.match(evaluateGithub(home, 'acme/solo').verdict.detail, /목록에 acme\/solo 없음/);
-  assert.equal(decide(home, 'acme/unlisted', 'dev').reason, 'setup-needed');
-});
-
-test('지금 우산 카드의 설명 글 deploy_branch(고정 fixture)는 setup-needed다', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-');
-  card(onto, 'umbrella', 'remote: Acme 조직 (customer-web, admin-web, partners)\n'
-    + 'deploy_branch: acme-partners-web=main (머지되면 운영 자동 배포). acme-auth·acme-admin-web=없음 (운영은 prod-* 태그·수동) — 2026-11-03 각 저장소 origin');
-  card(onto, 'partners', 'remote: Acme/acme-partners-web\ndeploy_branch: acme-partners-web=main (머지되면 운영 자동 배포)');
-  ontology(onto);
-  const d = decide(home, 'acme/acme-partners-web', 'main');
-  assert.deepEqual([d.action, d.reason, d.deployBranch], ['hold', 'setup-needed', null]);
-  assert.match(evaluateGithub(home, 'acme/acme-partners-web').verdict.detail, /deploy_branch 형식을 읽을 수 없음/);
-  assert.equal(decide(home, 'acme/acme-admin-web', 'dev').reason, 'setup-needed'); // 카드 없음
-});
-
-test('카드 찾기: (a) 짝 목록 키가 (b) remote보다 먼저, remote 세 형식, 없음 remote는 안 맞음, 둘 이상 맞으면 setup-needed', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-');
-  card(onto, 'r1', 'remote: github.com/acme/one (설명)\ndeploy_branch: main');
-  card(onto, 'r2', 'remote: git@github-work:acme/two.git\ndeploy_branch: main');
-  card(onto, 'r3', 'remote: Acme/Three (설명)\ndeploy_branch: main');
-  card(onto, 'norem', 'remote: 없음 (원격 저장소 미연결)\ndeploy_branch: main');
-  card(onto, 'both-a', 'deploy_branch: {Acme/Both: main}'); // (a)
-  card(onto, 'both-b', 'remote: acme/both\ndeploy_branch: 없음'); // (b)는 (a)가 있으면 쓰지 않는다
-  card(onto, 'dup1', 'remote: acme/dup\ndeploy_branch: main');
-  card(onto, 'dup2', 'remote: acme/dup\ndeploy_branch: 없음');
-  ontology(onto);
-  for (const g of ['acme/one', 'acme/two', 'acme/three']) assert.equal(decide(home, g, 'main').reason, 'deploy-branch', g);
-  assert.equal(decide(home, 'acme/none', 'main').reason, 'setup-needed');
-  assert.equal(decide(home, 'acme/norem', 'main').reason, 'setup-needed');
-  const both = decide(home, 'acme/both', 'main');
-  assert.deepEqual([both.reason, both.card.endsWith('/both-a')], ['deploy-branch', true]);
-  const dup = evaluateGithub(home, 'acme/dup');
-  assert.deepEqual([dup.verdict.action, dup.verdict.reason], ['hold', 'setup-needed']);
-  assert.match(dup.verdict.detail, /여럿/);
-  // 같은 키가 (a) 목록에 두 카드에서 나와도 같다
-  const x = tmp('kadan-onto-x-');
-  card(x, 'p', 'deploy_branch: {Acme/Same: main}');
-  card(x, 'q', 'deploy_branch: {Acme/Same: 없음}');
-  ontology(x);
-  assert.equal(decide(home, 'acme/same', 'dev').reason, 'setup-needed');
-});
-
-test('setup-needed: 카드 없음·잘못된 키·deploy_branch 칸 없음/빈 값·앞머리 깨짐·이상한 night_merge, night_merge보다 먼저 본다', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-');
-  card(onto, 'nobranch', 'remote: acme/nobranch\ndeploy: 수동');
-  card(onto, 'emptybranch', 'remote: acme/emptybranch\ndeploy_branch:');
-  card(onto, 'broken', '', {raw: '---\nremote: acme/broken\ndeploy_branch: 없음\n(닫는 줄 없음)\n'});
-  card(onto, 'oddnight', 'remote: acme/oddnight\ndeploy_branch: 없음\nnight_merge: 가끔');
-  card(onto, 'emptynight', 'remote: acme/emptynight\ndeploy_branch: 없음\nnight_merge:');
-  card(onto, 'forbid', 'remote: acme/forbid\nnight_merge: 금지'); // deploy_branch 없음 → 먼저 setup-needed
-  ontology(onto);
-  for (const g of ['acme/nobranch', 'acme/emptybranch', 'acme/oddnight', 'acme/emptynight', 'acme/forbid', 'acme/nocard', 'bad key', 'site', undefined]) {
-    const d = decide(home, g, 'dev');
-    assert.deepEqual([d.action, d.reason], ['hold', 'setup-needed'], String(g));
+  link(home, onto);
+  set(home, 'acme/saved', {deployBranch: '없음'});
+  const origins = {'/work/site': 'acme/site', '/work/a': 'acme/a'};
+  const works = [{key: 'site/w1', repoPath: '/work/site'}, {key: 'a/w2', repoPath: '/work/a'}, {key: 'x/w3', repoPath: '/work/none'}, {key: 'rel/w4', repoPath: 'relative'}];
+  const out = listRepos(home, works, {origin: p => origins[p] ?? null});
+  assert.deepEqual(out.repos.map(r => [r.github, r.repo]), [['acme/a', 'a'], ['acme/saved', null], ['acme/site', 'site']]);
+  for (const row of out.repos) {
+    assert.deepEqual([row.verdict.action, row.verdict.reason], verdictOf(home, row.github, 'zzz-other'));
+    if (row.verdict.exceptBranch) assert.deepEqual(verdictOf(home, row.github, row.verdict.exceptBranch), ['hold', 'deploy-branch']);
   }
-  assert.match(evaluateGithub(home, 'acme/nobranch').verdict.detail, /deploy_branch 칸 없음/);
-  assert.match(evaluateGithub(home, 'acme/oddnight').verdict.detail, /night_merge 값을 모름: 가끔/);
-  assert.match(evaluateGithub(home, 'acme/nocard').verdict.detail, /카드 없음/);
-  assert.match(evaluateGithub(home, 'site').verdict.detail, /소유자\/이름이 올바르지 않음/);
-  // 앞머리가 깨진 카드는 remote를 못 읽어 못 찾은 것으로 본다
-  assert.match(evaluateGithub(home, 'acme/broken').verdict.detail, /카드 없음/);
+  assert.deepEqual(setupNeededLines(out.repos.concat(evaluateGithub(home, 'acme/ok-none'))),
+    ['설정 필요: acme/site — 나이트런 중 자동 머지 안 함(kadan night repo acme/site --deploy-branch <브랜치|없음>)', '설정 필요: acme/ok-none — 나이트런 중 자동 머지 안 함(kadan night repo acme/ok-none --deploy-branch <브랜치|없음>)']);
 });
 
-test('night_merge: 금지면 hold, 칸이 없으면 허용, 허용은 설명이 붙어도 첫 낱말로 읽는다', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-');
-  card(onto, 'forbid', 'remote: acme/forbid\ndeploy_branch: 없음\nnight_merge: 금지 (동업자 저장소, kyle 말로만 머지)');
-  card(onto, 'absent', 'remote: acme/absent\ndeploy_branch: 없음');
-  card(onto, 'allow', 'remote: acme/allow\ndeploy_branch: 없음\nnight_merge: 허용 (기본)');
-  ontology(onto);
-  const f = decide(home, 'acme/forbid', 'dev');
-  assert.deepEqual([f.action, f.reason, f.nightMerge, f.deployBranch], ['hold', 'ontology-night-merge-forbidden', '금지', '없음']);
-  const a = decide(home, 'acme/absent', 'dev');
-  assert.deepEqual([a.action, a.reason, a.nightMerge], ['merge', 'ontology-allowed', null]);
-  assert.equal(decide(home, 'acme/allow', 'dev').nightMerge, '허용');
-});
-
-test('source의 null 규칙과 github·hub: nightMerge 칸 없음→null, deployBranch 없음→"없음"·칸 없음→null, deploy는 첫 낱말만', () => {
-  const home = home0();
-  const onto = hubDir('team');
-  const p = Object.fromEntries(['full', 'nonight', 'nobranch', 'nodeploy'].map(k => [k, tmp(`kadan-${k}-`)]));
-  card(onto, 'full', `repo: ${p.full}\nremote: Acme/Full (공개)\ndeploy: 자동 (main push → Vercel)\ndeploy_branch: main (설명)\nnight_merge: 허용 (기본)`);
-  card(onto, 'nonight', `repo: ${p.nonight}\nremote: acme/nonight\ndeploy: 수동 (npm run deploy → …)\ndeploy_branch: 없음`);
-  card(onto, 'nobranch', `repo: ${p.nobranch}\nremote: 없음\ndeploy: 없음 (로컬)`);
-  card(onto, 'nodeploy', `repo: ${p.nodeploy}\ndeploy_branch: 없음`);
-  ontology(onto);
-  const one = (key, repoPath) => evaluateWork(home, key, {repoPath})[0];
-  assert.deepEqual(one('full', p.full).source,
-    {kind: 'ontology', card: 'project/full', hub: 'team', github: 'acme/full', deploy: '자동', deployBranch: 'main', nightMerge: '허용', reason: null});
-  assert.deepEqual(one('nonight', p.nonight).source,
-    {kind: 'ontology', card: 'project/nonight', hub: 'team', github: 'acme/nonight', deploy: '수동', deployBranch: '없음', nightMerge: null, reason: null});
-  assert.deepEqual(one('nobranch', p.nobranch).source,
-    {kind: 'none', card: 'project/nobranch', hub: 'team', github: null, deploy: '없음', deployBranch: null, nightMerge: null, reason: 'deploy_branch 칸 없음'});
-  assert.deepEqual([one('nodeploy', p.nodeploy).source.deploy, one('nodeploy', p.nodeploy).verdict.action], [null, 'merge']); // deploy 칸 없어도 판정은 deploy_branch로
-  assert.deepEqual(one('ghost', tmp('kadan-ghost-')).source,
-    {kind: 'none', card: null, hub: null, github: null, deploy: null, deployBranch: null, nightMerge: null, reason: '온톨로지 카드 없음'});
-  // 허브 이름: 허브 폴더 모양이면 `-hub`를 뗀 이름, 아니면 null
-  assert.equal(loadCards([onto]).cards[0].hub, 'team');
-  assert.equal(loadCards([tmp('kadan-plain-')]).cards.length, 0);
-  const plain = tmp('kadan-plain-');
-  card(plain, 'x', 'deploy_branch: 없음');
-  assert.equal(loadCards([plain]).cards[0].hub, null);
-});
-
-test('업무 키로 카드 찾기: repo의 ~·끝 /·"(…)" 설명·realpath, 경로 일치가 파일 이름보다 우선, 둘 이상이면 setup-needed', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-'), real = tmp('kadan-real-'), other = tmp('kadan-other-');
-  const first = (key, repoPath) => evaluateWork(home, key, {repoPath})[0];
-  card(onto, 'site', `repo: ${other}\nremote: acme/site\ndeploy_branch: main`); // 이름은 맞지만 경로가 다르다
-  card(onto, 'saju', `repo: ${real}/ (설명 문장 (괄호) 뒤는 버린다)\nremote: acme/saju\ndeploy_branch: 없음`);
-  ontology(onto);
-  const byPath = first('site', real);
-  assert.deepEqual([byPath.verdict.action, byPath.source.card.endsWith('/saju'), byPath.github, byPath.repo], ['merge', true, 'acme/saju', 'site']);
-  assert.equal(first('site', tmp('kadan-nomatch-')).source.card.endsWith('/site'), true); // 경로 일치가 없으면 파일 이름
-  const link = path.join(tmp('kadan-link-'), 'to-real');
-  fs.symlinkSync(real, link);
-  assert.equal(first('whatever', link).source.card.endsWith('/saju'), true); // 업무 repoPath가 링크여도
-  const onto2 = tmp('kadan-onto-link-');
-  card(onto2, 'viaLink', `repo: ${link}\ndeploy_branch: 없음`);
-  ontology(onto2);
-  assert.equal(first('x', real).source.card.endsWith('/viaLink'), true); // 카드 repo가 링크여도
-  const onto3 = tmp('kadan-onto-home-');
-  card(onto3, 'tilde', 'repo: ~/Dev/kadan-test-tilde-xyz (설명)\ndeploy_branch: 없음');
-  ontology(onto3);
-  assert.equal(first('tilde', path.join(os.homedir(), 'Dev/kadan-test-tilde-xyz/')).verdict.action, 'merge');
-  const dup = tmp('kadan-onto-dup-');
-  card(dup, 'one', `repo: ${real}\ndeploy_branch: 없음`);
-  card(dup, 'two', `repo: ${real}\ndeploy_branch: 없음`);
-  ontology(dup);
-  assert.match(first('one', real).verdict.detail, /여럿/);
-  const x = tmp('kadan-onto-x-'), y = tmp('kadan-onto-y-');
-  card(x, 'site', 'deploy_branch: 없음');
-  card(y, 'site', 'deploy_branch: 없음');
-  ontology(x, y);
-  assert.equal(first('site', tmp('kadan-z-')).verdict.reason, 'setup-needed');
-  assert.match(first('site', null).verdict.detail, /경로를 모름/);
-});
-
-test('우산 카드 목록: 짝마다 한 줄(repo=업무 키 첫 마디, github=짝 키), 덮어쓰기는 github 키로 찾는다', () => {
-  const home = home0();
-  const onto = hubDir('co');
-  const dir = tmp('kadan-umbrella-'), solo = tmp('kadan-solo-');
-  card(onto, 'umbrella', `repo: ${dir} (우산 폴더)\nremote: Acme 조직 (web, admin)\ndeploy: 저장소마다 다름\ndeploy_branch: {Acme/Web: main, Acme/Admin: 없음}\nnight_merge: 허용`);
-  card(onto, 'solo', `repo: ${solo}\nremote: acme/solo\ndeploy_branch: main`);
-  ontology(onto);
-  setRepoPolicy(home, {repo: 'acme/admin', value: 'hold', by: '사람'});
-  const works = [{key: 'umb/w1', repoPath: dir}, {key: 'umb/w2', repoPath: dir}, {key: 'solo/w3', repoPath: solo}, {key: 'lost/w4', repoPath: tmp('kadan-lost-')}];
-  const {corrupt, repos, legacy} = listRepos(home, works);
-  assert.deepEqual([corrupt, legacy], [null, []]);
-  assert.deepEqual(repos.map(r => [r.repo, r.github]), [['lost', null], ['solo', 'acme/solo'], ['umb', 'acme/admin'], ['umb', 'acme/web']]);
-  const [lost, soloRow, admin, web] = repos;
-  assert.deepEqual([admin.value, admin.verdict.reason, admin.source.kind], ['hold', 'repo-policy-hold', 'none']);
-  assert.deepEqual(web.verdict, {action: 'merge', reason: 'ontology-allowed', exceptBranch: 'main'});
-  assert.deepEqual([web.source.card, web.source.hub, web.source.github, web.source.deploy, web.source.deployBranch], ['project/umbrella', 'co', null, '저장소마다', 'main']);
-  assert.deepEqual(soloRow.verdict, {action: 'merge', reason: 'ontology-allowed', exceptBranch: 'main'});
-  assert.deepEqual([lost.verdict.reason, lost.source.reason], ['setup-needed', '온톨로지 카드 없음']);
-  for (const r of repos) assert.deepEqual(Object.keys(r).sort(), ['github', 'repo', 'saved', 'source', 'value', 'verdict']);
-  assert.ok(!JSON.stringify(repos).includes(dir) && !JSON.stringify(repos).includes(onto));
-  // 같은 판정을 PR 단위 함수로: 우산 카드 짝마다 값이 다르다
-  assert.deepEqual([decide(home, 'acme/web', 'main').action, decide(home, 'acme/web', 'dev').action, decide(home, 'acme/admin', 'dev').action], ['hold', 'merge', 'hold']);
-});
-
-test('온톨로지 폴더: 여러 허브(회사 포함)를 찾고, 폴더가 없으면 건너뛰며, 읽을 수 없는 폴더가 있으면 전부 setup-needed', () => {
-  const home = home0();
-  const personal = hubDir('personal'), company = hubDir('company');
-  card(personal, 'other', 'remote: acme/other\ndeploy_branch: main');
-  card(company, 'corp', 'remote: acme/corp\ndeploy_branch: main\nnight_merge: 금지');
-  ontology(personal, company);
-  const d = decideNightMerge(home, {github: 'acme/corp', baseBranch: 'dev'});
-  assert.deepEqual([d.reason, d.hub], ['ontology-night-merge-forbidden', 'company']);
-  ontology(path.join(personal, 'missing'), company);
-  assert.equal(decide(home, 'acme/corp', 'dev').reason, 'ontology-night-merge-forbidden');
-  const file = path.join(personal, 'not-a-dir');
-  fs.writeFileSync(file, 'x');
-  ontology(file, company);
-  assert.equal(decide(home, 'acme/corp', 'dev').reason, 'setup-needed');
-});
-
-test('아침 요약 줄: 기본값을 못 정해 보류한 저장소만 설정 필요 안내(소유자/이름을 모르면 카드부터)', () => {
-  const home = home0();
-  const onto = tmp('kadan-onto-'), repoPath = tmp('kadan-ok-');
-  card(onto, 'ok', `repo: ${repoPath}\nremote: acme/ok\ndeploy_branch: 없음`);
-  ontology(onto);
-  setRepoPolicy(home, {repo: 'acme/pinned', value: 'hold', by: '사람'});
-  const infos = [evaluateGithub(home, 'acme/ok'), evaluateGithub(home, 'Acme/Ghost'), evaluateGithub(home, 'acme/pinned'), ...evaluateWork(home, 'lost', {repoPath: null})];
-  assert.deepEqual(setupNeededLines(infos), ['설정 필요: kadan night repo acme/ghost merge|hold', '설정 필요: lost — 온톨로지 카드의 remote(소유자/이름)부터 채우세요']);
-});
-
-test('정책: 손상 문구에는 홈 절대 경로를 넣지 않는다(F7). 쓰기 거절은 CLI용으로 경로를 붙인다', () => {
-  const home = home0();
-  fs.writeFileSync(policyPath(home), '{깨진');
-  const {corrupt} = readPolicy(home);
-  assert.match(corrupt, /night-repo-policy\.json/);
-  assert.ok(!corrupt.includes(home), corrupt);
-  assert.ok(!evaluateGithub(home, 'acme/site').verdict.detail.includes(home));
-  assert.throws(() => setRepoPolicy(home, {repo: 'acme/site', value: 'hold', by: '사람'}), e => e.message.includes(home));
-});
-
-test('CLI 명령: 저장·list·show(소유자/이름·업무 키)·옛 형식 안내·기본값 근거(카드 id만)', () => {
-  const home = home0();
-  const onto = hubDir('team');
-  const site = tmp('kadan-site-'), docs = tmp('kadan-docs-'), umb = tmp('kadan-umb-');
-  card(onto, 'site', `repo: ${site}\nremote: acme/site\ndeploy: 자동 (Vercel)\ndeploy_branch: main`);
-  card(onto, 'docs', `repo: ${docs}\nremote: acme/docs\ndeploy: 없음\ndeploy_branch: 없음`);
-  card(onto, 'umb', `repo: ${umb}\ndeploy_branch: {Acme/One: main, Acme/Two: 없음}`);
-  ontology(onto);
-  const works = [{key: 'site/w1', status: 'open', repoPath: site}, {key: 'docs/w2', status: 'open', repoPath: docs}, {key: 'umb/w3', repoPath: umb}];
-  const run = (args, flags = {}, by = '사람') => nightCommand(['repo', ...args], flags, {home, by, deps: {readWorks: () => works}});
-  assert.match(run(['show', 'Acme/Site']), /acme\/site: 저장 값 없음[\s\S]*기본값 근거 카드 team:project\/site deploy_branch main[\s\S]*최종 판정 머지 \(ontology-allowed, main으로 가는 PR만 보류\)/);
-  assert.match(run(['show', 'site']), /acme\/site \[업무 site\]: 저장 값 없음/);
-  assert.match(run(['show', 'umb']), /acme\/one [\s\S]*acme\/two /);
-  assert.match(run(['show', 'docs']), /acme\/docs: 최종 판정 머지 \(ontology-allowed\)/);
-  assert.match(run(['Acme/Site.git', 'merge']), /저장: acme\/site = merge \(이전 없음\)[\s\S]*최종 판정 머지 \(repo-policy-merge\)/);
-  const list = run(['list']);
-  assert.match(list, /acme\/site \[업무 site\]: 저장 값 merge/);
-  assert.match(list, /acme\/docs \[업무 docs\]: 저장 값 없음/);
-  assert.ok(!list.includes(onto) && !list.includes(site), list); // 절대 경로를 보이지 않는다
-  assert.match(run(['show', 'ghost']), /ghost: 최종 판정 보류 \(setup-needed, 저장소 경로를 모름\)/);
-  assert.match(run(['show', 'ghost'], {'repo-path': tmp('kadan-nocard-')}), /ghost: 최종 판정 보류 \(setup-needed, 온톨로지 카드 없음\)/);
-  assert.match(run([]), /사용법: kadan night repo <소유자\/이름> merge\|hold /);
-  assert.throws(() => run(['acme/site']), /값이 필요/);
-  assert.throws(() => run(['site', 'merge']), /GitHub 소유자\/이름/);
-  assert.throws(() => run(['acme/site', 'auto']), /merge\|hold 중 하나/);
-  assert.throws(() => run(['show', 'a/b/c']), /GitHub 소유자\/이름/);
-  assert.throws(() => run(['show']), /저장소 이름/);
-  assert.deepEqual(readLedger(home).filter(e => e.kind === 'night-repo-policy').map(e => [e.repo, e.after]), [['acme/site', 'merge']]);
-});
-
-test('nightGuard: 켜짐+역할 세션의 night repo 쓰기는 거절, list·show·인자 없음은 통과, 꺼짐·사람은 통과', () => {
+test('nightGuard: 켜짐+역할 세션의 night repo 쓰기·night source 등록·해제는 거절, 읽기는 통과, 꺼짐·사람은 통과', () => {
   const home = tmp('kadan-repo-guard-');
   const env = {KADAN_ROLE: 'a-작업자'};
-  const call = (args, e = env) => nightGuard({command: 'night', args, flags: {}, home, env: e});
-  call(['repo', 'acme/kadan', 'merge']); // 꺼져 있으면 통과
+  const call = (args, flags = {}, e = env) => nightGuard({command: 'night', args, flags, home, env: e});
+  call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}); // 꺼져 있으면 통과
+  call(['source'], {cards: '/x'});
   nightOn(home);
-  assert.throws(() => call(['repo', 'acme/kadan', 'merge']), error => error.exitCode === 2 && /night repo acme\/kadan/.test(error.message));
-  assert.throws(() => call(['repo', 'acme/kadan']), /나이트 모드가 켜져 있어/);
-  call(['repo']);
-  call(['repo', 'list']);
-  call(['repo', 'show', 'acme/kadan']);
-  call(['repo', 'acme/kadan', 'merge'], {}); // 사람(역할 없음)
+  assert.throws(() => call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}), error => error.exitCode === 2 && /night repo acme\/kadan/.test(error.message));
+  assert.throws(() => call(['source'], {cards: '/x'}), error => error.exitCode === 2 && /night source/.test(error.message));
+  assert.throws(() => call(['source', '/y'], {cards: '/x'}), /나이트 모드가 켜져 있어/);
+  assert.throws(() => call(['source'], {clear: true}), /night source/);
+  for (const args of [['repo'], ['repo', 'list'], ['repo', 'show', 'acme/kadan'], ['source']]) call(args);
+  call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}, {}); // 사람(역할 없음)
+  call(['source'], {clear: true}, {});
 });
 
-test('CLI 실행: 켜짐+역할 세션의 쓰기는 종료 2·저장 안 됨, 읽기는 통과, 사람은 저장', () => {
+test('CLI 실행: 설정 저장·source 등록·해제, 켜짐+역할 세션은 종료 2·저장 안 됨, 읽기는 통과, 예전 merge|hold는 거절', () => {
   const home = tmp('kadan-repo-cli2-');
-  nightOn(home);
+  const onto = tmp('kadan-onto-');
+  card(onto, 'site', 'remote: acme/site\ndeploy_branch: main');
   const run = (argv, role) => spawnSync(process.execPath, [CLI, ...argv], {
     env: {...process.env, KADAN_HOME: home, KADAN_WINDOW: 'none', KADAN_ROLE: role ?? ''}, encoding: 'utf8', timeout: 20_000});
-  const denied = run(['night', 'repo', 'acme/kadan', 'merge'], 'a-작업자');
-  assert.equal(denied.status, 2, denied.stderr);
-  assert.match(denied.stderr, /나이트 모드가 켜져 있어/);
-  assert.equal(fs.existsSync(policyPath(home)), false);
-  const read = run(['night', 'repo', 'list'], 'a-작업자');
-  assert.equal(read.status, 0, read.stderr);
-  const human = run(['night', 'repo', 'Acme/Kadan', 'hold']);
-  assert.equal(human.status, 0, human.stderr);
-  assert.equal(readPolicy(home).repos['acme/kadan'].value, 'hold');
-  assert.equal(run(['night', 'repo', 'kadan', 'hold']).status, 1); // 맨 이름은 거절
+  assert.match(run(['night', 'source']).stdout, /연결한 카드 폴더가 없습니다/);
+  const reg = run(['night', 'source', '--cards', onto, tmp('kadan-onto2-')]);
+  assert.equal(reg.status, 0, reg.stderr);
+  assert.equal(readPolicy(home).cards.length, 2);
+  assert.match(run(['night', 'source']).stdout, /연결한 카드 폴더:/);
+  const saved = run(['night', 'repo', 'Acme/Site', '--night-merge', '금지']);
+  assert.equal(saved.status, 0, saved.stderr);
+  assert.match(saved.stdout, /nightMerge 금지/);
+  assert.match(saved.stdout, /카드 폴더 0\/site|폴더 0\/site/);
+  assert.match(saved.stdout, /최종 판정 나이트런 중 자동 머지 안 함 \(night-merge-forbidden\)/);
+  assert.equal(run(['night', 'repo', 'acme/site', 'hold']).status, 1); // 예전 merge|hold 쓰기는 없다
+  assert.equal(run(['night', 'repo', 'acme/site', '--deploy-branch']).status, 1); // 값 없음
+  assert.equal(run(['night', 'source', '--cards', '/없는/폴더']).status, 1);
+  nightOn(home);
+  const before = fs.readFileSync(policyPath(home), 'utf8');
+  for (const argv of [['night', 'repo', 'acme/kadan', '--deploy-branch', 'main'], ['night', 'source', '--cards', onto], ['night', 'source', '--clear']]) {
+    const denied = run(argv, 'a-작업자');
+    assert.equal(denied.status, 2, denied.stderr);
+    assert.match(denied.stderr, /나이트 모드가 켜져 있어/);
+  }
+  assert.equal(fs.readFileSync(policyPath(home), 'utf8'), before);
+  for (const argv of [['night', 'repo', 'list'], ['night', 'source']]) assert.equal(run(argv, 'a-작업자').status, 0);
+  assert.equal(run(['night', 'source', '--clear']).status, 0); // 사람
+  assert.deepEqual(readPolicy(home).cards, []);
 });
 
 function fakeReq(method, pathname, {body = '', remote = false, origin, host = '127.0.0.1:1'} = {}) {
   const chunks = body ? [Buffer.from(body)] : [];
-  const req = {method, url: pathname, headers: {host, 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', ...(origin ? {origin} : {})}, kadanRemote: remote || undefined,
+  return {method, url: pathname, headers: {host, 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', ...(origin ? {origin} : {})}, kadanRemote: remote || undefined,
     async *[Symbol.asyncIterator]() { yield* chunks; }};
-  return req;
 }
 async function call(handler, req) {
   const out = {status: null, body: ''};
@@ -447,63 +311,60 @@ async function call(handler, req) {
 }
 const form = (handler, fields) => new URLSearchParams({token: handler.token, ...fields}).toString();
 
-test('API: GET 모양, POST는 토큰·출처·원격 검사를 받고 나이트 켜짐이면 409(저장 안 됨), 꺼짐이면 소유자/이름으로 저장', async () => {
+test('7. API: GET 모양(원문 예)·절대 경로 없음, POST는 칸 일부만 바꾸고 기존 거절(토큰·출처·원격 405·나이트 켜짐 409)은 그대로', async () => {
   const home = tmp('kadan-repo-api-');
+  const onto = tmp('kadan-onto-');
+  card(onto, 'shop', 'remote: Acme/Shop (비공개)\ndeploy_branch: main');
+  card(onto, 'umb', 'deploy_branch: {Acme/Web: main, Acme/Admin: 없음}\nnight_merge: 금지');
+  link(home, onto);
   const handler = createCenterHandler(home);
-  const get = await call(handler, fakeReq('GET', '/api/night/repos'));
-  assert.equal(get.status, 200);
-  assert.deepEqual(Object.keys(JSON.parse(get.body)), ['corrupt', 'repos', 'legacy']);
-  assert.deepEqual(JSON.parse(get.body).repos, []);
+  const get = JSON.parse((await call(handler, fakeReq('GET', '/api/night/repos'))).body);
+  assert.deepEqual(Object.keys(get), ['corrupt', 'repos', 'legacy', 'sources']);
+  assert.deepEqual(get.sources, {cards: [0]});
+  const shop = get.repos.find(r => r.github === 'acme/shop');
+  assert.deepEqual(shop, {github: 'acme/shop', repo: null,
+    settings: {deployBranch: null, nightMerge: null, at: null, by: null},
+    card: {id: 'shop', folder: 0, deployBranch: 'main', nightMerge: null},
+    effective: {deployBranch: {value: 'main', from: 'card'}, nightMerge: {value: null, from: null}},
+    verdict: {action: 'merge', reason: 'allowed', detail: null, exceptBranch: 'main'}});
+  assert.deepEqual(get.repos.filter(r => r.github.startsWith('acme/') && r.github !== 'acme/shop').map(r => [r.github, r.verdict.reason]),
+    [['acme/admin', 'night-merge-forbidden'], ['acme/web', 'night-merge-forbidden']]);
+  assert.ok(!JSON.stringify(get).includes(onto) && !JSON.stringify(get).includes(home));
 
   const post = (fields, opts) => call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, fields), ...opts}));
-  assert.equal((await call(handler, fakeReq('POST', '/api/night/repos', {body: new URLSearchParams({repo: 'acme/site', value: 'hold'}).toString()}))).status, 403); // 토큰 없음
-  assert.equal((await post({repo: 'acme/site', value: 'hold'}, {origin: 'http://evil.example'})).status, 403);
-  assert.equal((await post({repo: 'acme/site', value: 'hold'}, {remote: true})).status, 405);
-  assert.equal(fs.existsSync(policyPath(home)), false);
-
+  assert.equal((await call(handler, fakeReq('POST', '/api/night/repos', {body: new URLSearchParams({repo: 'acme/site', deployBranch: 'main'}).toString()}))).status, 403); // 토큰 없음
+  assert.equal((await post({repo: 'acme/site', deployBranch: 'main'}, {origin: 'http://evil.example'})).status, 403);
+  assert.equal((await post({repo: 'acme/site', deployBranch: 'main'}, {remote: true})).status, 405);
+  assert.deepEqual(readPolicy(home).repos, {});
+  assert.equal((await post({repo: 'Acme/Site.git', deployBranch: 'main'})).status, 200);
+  assert.equal((await post({repo: 'acme/site', nightMerge: '금지', deployBranch: ''})).status, 200); // 빈 값은 그대로 둔다
+  assert.deepEqual(readPolicy(home).repos['acme/site'], {deployBranch: 'main', nightMerge: '금지', at: readPolicy(home).repos['acme/site'].at, by: '사람'});
+  for (const bad of [{repo: 'acme/site', nightMerge: 'merge'}, {repo: 'site', deployBranch: 'main'}, {repo: 'acme/site', deployBranch: 'a b'}, {repo: 'acme/site'}]) {
+    assert.equal((await post(bad)).status, 409, JSON.stringify(bad));
+  }
+  assert.equal((await call(handler, fakeReq('POST', '/api/night/sources', {body: form(handler, {cards: '/x'})}))).handled, false); // 연결 바꾸기는 API로 열지 않는다
   nightOn(home);
-  const blocked = await post({repo: 'acme/site', value: 'hold'});
+  const blocked = await post({repo: 'acme/site', deployBranch: 'dev'});
   assert.equal(blocked.status, 409);
   assert.match(blocked.body, /나이트가 켜진 동안은 바꿀 수 없음/);
-  assert.equal(fs.existsSync(policyPath(home)), false);
-
-  const off = tmp('kadan-repo-api-off-');
-  const handler2 = createCenterHandler(off);
-  const ok = await call(handler2, fakeReq('POST', '/api/night/repos', {body: form(handler2, {repo: 'Acme/Site.git', value: 'hold'})}));
-  assert.equal(ok.status, 200);
-  assert.equal(readPolicy(off).repos['acme/site'].value, 'hold');
-  assert.equal(readPolicy(off).repos['acme/site'].by, '사람');
-  for (const bad of [{repo: 'acme/site', value: 'zzz'}, {repo: 'site', value: 'hold'}, {repo: 'acme/site', value: 'auto'}]) {
-    const r = await call(handler2, fakeReq('POST', '/api/night/repos', {body: form(handler2, bad)}));
-    assert.equal(r.status, 409, JSON.stringify(bad));
-  }
-  assert.equal(readPolicy(off).repos['acme/site'].value, 'hold');
-  const body = JSON.parse((await call(handler2, fakeReq('GET', '/api/night/repos'))).body);
-  assert.equal(body.repos[0].verdict.action, 'hold');
-  assert.deepEqual(Object.keys(body.repos[0]).sort(), ['github', 'repo', 'saved', 'source', 'value', 'verdict']);
-  assert.deepEqual(Object.keys(body.repos[0].source), ['kind', 'card', 'hub', 'github', 'deploy', 'deployBranch', 'nightMerge', 'reason']);
-  assert.deepEqual(Object.keys(body.repos[0].verdict).sort(), ['action', 'exceptBranch', 'reason']);
-  assert.ok(!JSON.stringify(body).includes(off));
+  assert.equal(readPolicy(home).repos['acme/site'].deployBranch, 'main');
 });
 
-test('API 응답 모양: 일반 카드·우산 카드·설정 필요(원문 예), 절대 경로 없음', () => {
-  const home = tmp('kadan-repo-shape-');
-  const onto = hubDir('team');
-  const shop = tmp('kadan-shop-'), umb = tmp('kadan-umb-');
-  card(onto, 'shop', `repo: ${shop}\nremote: Acme/Shop (비공개)\ndeploy: 수동 (npm run deploy)\ndeploy_branch: main`);
-  card(onto, 'umb', `repo: ${umb}\ndeploy: 저장소마다 다름\ndeploy_branch: {Acme/Web: main, Acme/Admin: 없음}\nnight_merge: 금지`);
-  ontology(onto);
-  const out = listRepos(home, [{key: 'shop/w1', repoPath: shop}, {key: 'umb/w2', repoPath: umb}, {key: 'ghost/w3', repoPath: tmp('kadan-g-')}]);
-  assert.deepEqual(Object.keys(out), ['corrupt', 'repos', 'legacy']);
-  assert.deepEqual(out.repos[0], {repo: 'ghost', github: null, value: null, saved: null,
-    source: {kind: 'none', card: null, hub: null, github: null, deploy: null, deployBranch: null, nightMerge: null, reason: '온톨로지 카드 없음'},
-    verdict: {action: 'hold', reason: 'setup-needed', detail: '온톨로지 카드 없음', exceptBranch: null}});
-  assert.deepEqual(out.repos[1], {repo: 'shop', github: 'acme/shop', value: null, saved: null,
-    source: {kind: 'ontology', card: 'project/shop', hub: 'team', github: 'acme/shop', deploy: '수동', deployBranch: 'main', nightMerge: null, reason: null},
-    verdict: {action: 'merge', reason: 'ontology-allowed', exceptBranch: 'main'}});
-  assert.deepEqual(out.repos.slice(2).map(r => [r.repo, r.github, r.source.deployBranch, r.verdict.action, r.verdict.reason]),
-    [['umb', 'acme/admin', '없음', 'hold', 'ontology-night-merge-forbidden'], ['umb', 'acme/web', 'main', 'hold', 'ontology-night-merge-forbidden']]);
-  assert.ok(!JSON.stringify(out).includes(onto) && !JSON.stringify(out).includes(shop));
+test('POST 오류 응답에는 절대 경로·OS 원문이 없다(손상 파일, 임시 파일 쓰기 실패)', async () => {
+  const home = tmp('kadan-repo-post-corrupt-');
+  fs.writeFileSync(policyPath(home), '{bad');
+  const handler = createCenterHandler(home);
+  const r = await call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, {repo: 'acme/app', deployBranch: 'main'})}));
+  assert.equal(r.status, 409);
+  assert.ok(!r.body.includes(home), r.body);
+  assert.match(r.body, /night-repo-policy\.json[\s\S]*JSON 구문 오류/);
+  assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{bad');
+  const home2 = tmp('kadan-repo-post-eisdir-');
+  fs.mkdirSync(`${policyPath(home2)}.${process.pid}.tmp`);
+  const handler2 = createCenterHandler(home2);
+  const r2 = await call(handler2, fakeReq('POST', '/api/night/repos', {body: form(handler2, {repo: 'acme/app', deployBranch: 'main'})}));
+  assert.equal(r2.status, 409);
+  assert.equal(r2.body, '밤 저장소 정책 처리 실패(EISDIR)');
 });
 
 test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따로 보인다', () => {
@@ -516,92 +377,15 @@ test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따�
   assert.equal(s.counts.noteHolds['deploy-repo'], 1);
 });
 
-test('정책 F7: 읽기 권한 오류 문구에도 절대 경로가 없다(파일 이름과 오류 코드만)', () => {
-  const home = tmp('kadan-repo-policy-');
-  setRepoPolicy(home, {repo: 'acme/site', value: 'hold', by: '사람'});
-  fs.chmodSync(policyPath(home), 0o000);
-  try {
-    const {corrupt} = readPolicy(home);
-    assert.match(corrupt, /night-repo-policy\.json \(EACCES\)/);
-    assert.ok(!corrupt.includes(home), corrupt);
-    assert.ok(!JSON.stringify(evaluateGithub(home, 'acme/site')).includes(home));
-  } finally { fs.chmodSync(policyPath(home), 0o600); }
-});
-
-// ---- 검수 exec-fd6238f9 F1~F3: 판정 칸은 엄격하게 읽는다 · 목록은 판정 함수와 같다 · HTTP에 절대 경로 없음 ----
-const strictDecide = (fields, baseBranch = 'dev') => {
-  const dir = tmp('kadan-strict-');
-  write(dir, 'app.md', `---\nremote: Acme/App\n${fields}\n---\n`);
-  return decideNightMerge(home0(), {github: 'acme/app', baseBranch, ontology: loadCards([dir])});
-};
-
-test('F1: 판정 칸(night_merge·deploy_branch·remote)이 중복이거나 형식이 틀리면 못 읽음(setup-needed, 줄 번호)', () => {
-  const cases = {
-    'night_merge 중복': ['deploy_branch: 없음\nnight_merge: 허용\nnight_merge: 금지', /night_merge.*중복.*4.*5/],
-    '콜론 앞 공백': ['deploy_branch: 없음\nnight_merge : 금지', /night_merge 줄 4 형식/],
-    '따옴표 키': ['deploy_branch: 없음\n"night_merge": 금지', /night_merge 줄 4 형식/],
-    '대소문자 키': ['deploy_branch: 없음\nNight_Merge: 금지', /night_merge 줄 4 형식/],
-    '들여쓴 키': ['deploy_branch: 없음\n  night_merge: 금지', /night_merge 줄 4 형식/],
-    'deploy_branch 중복': ['deploy_branch: 없음\ndeploy_branch: main', /deploy_branch.*중복.*3.*4/],
-    'deploy_branch 공백 콜론': ['deploy_branch : main', /deploy_branch 줄 3 형식/],
-    'remote 중복': ['deploy_branch: 없음\nremote: Other/App', /remote.*중복.*2.*4/],
-  };
-  for (const [name, [fields, detail]] of Object.entries(cases)) {
-    const out = strictDecide(fields, name.startsWith('deploy_branch') ? 'main' : 'dev');
-    assert.equal(out.action, 'hold', name);
-    assert.equal(out.reason, 'setup-needed', name);
-    const dir = tmp('kadan-strict-d-');
-    write(dir, 'app.md', `---\nremote: Acme/App\n${fields}\n---\n`);
-    const info = evaluateGithub(home0(), 'acme/app', {ontology: loadCards([dir])});
-    assert.match(info.verdict.detail, detail, name);
-  }
-});
-
-test('F1 대조: 정상 카드(칸 하나씩)는 그대로 판정하고, 칸이 정말 없을 때만 기본 허용', () => {
-  assert.equal(strictDecide('deploy_branch: main', 'main').reason, 'deploy-branch');
-  assert.equal(strictDecide('deploy_branch: main', 'dev').reason, 'ontology-allowed');
-  assert.equal(strictDecide('deploy_branch: 없음\nnight_merge: 금지').reason, 'ontology-night-merge-forbidden');
-  assert.equal(strictDecide('deploy_branch: 없음').action, 'merge'); // night_merge 키처럼 보이는 줄 없음 → 허용
-  assert.equal(strictDecide('deploy_branch: 없음\nnight_mergeable: x').action, 'merge'); // 다른 키는 키처럼 안 보임
-  assert.equal(strictDecide('deploy_branch: 없음\nurl : https://x.example\nRules: 느슨').action, 'merge'); // 판정에 안 쓰는 칸은 너그럽게
-});
-
-test('F2: 목록(listRepos)의 각 줄 판정은 그 줄의 github 키로 부른 decideNightMerge와 같다(카드 중복 포함)', () => {
-  const dir = tmp('kadan-dup-'), home = home0();
-  for (const [name, branch] of [['a', '없음'], ['b', 'main']]) card(dir, name, `repo: ${dir}/${name}\nremote: acme/app\ndeploy_branch: ${branch}`);
-  ontology(dir);
-  const row = listRepos(home, [{key: 'a/w', repoPath: `${dir}/a`}]).repos[0];
-  const gate = decideNightMerge(home, {github: 'acme/app'});
-  assert.equal(row.github, 'acme/app');
-  assert.equal(row.verdict.action, 'hold');
-  assert.equal(row.verdict.reason, 'setup-needed');
-  assert.equal(row.verdict.action, gate.action);
-  assert.equal(row.verdict.reason, gate.reason);
-  // 저장된 덮어쓰기는 두 경로 모두 먼저 적용된다.
-  setRepoPolicy(home, {repo: 'acme/app', value: 'merge', by: '사람'});
-  assert.equal(listRepos(home, [{key: 'a/w', repoPath: `${dir}/a`}]).repos[0].verdict.reason, 'repo-policy-merge');
-});
-
-test('F3: 손상 정책 파일 POST 거절 응답에 절대 경로가 없다(파일 이름·오류 종류만), CLI 쪽 오류에는 경로가 남는다', async () => {
-  const home = tmp('kadan-repo-post-corrupt-');
-  fs.writeFileSync(policyPath(home), '{bad');
-  const handler = createCenterHandler(home);
-  const r = await call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, {repo: 'acme/app', value: 'hold'})}));
-  assert.equal(r.status, 409);
-  assert.ok(!r.body.includes(home), r.body);
-  assert.match(r.body, /night-repo-policy\.json/);
-  assert.match(r.body, /JSON 구문 오류/);
-  assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{bad');
-  assert.throws(() => setRepoPolicy(home, {repo: 'acme/app', value: 'hold', by: '사람'}), error => error.message.includes(policyPath(home)));
-});
-
-test('P2: 정책 임시 파일 쓰기 실패(EISDIR)도 POST 응답에 절대 경로·OS 원문 없이 정해진 문구만 나간다', async () => {
-  const home = tmp('kadan-repo-post-eisdir-');
-  fs.mkdirSync(`${policyPath(home)}.${process.pid}.tmp`);
-  const handler = createCenterHandler(home);
-  const r = await call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, {repo: 'acme/app', value: 'hold'})}));
-  assert.equal(r.status, 409);
-  assert.ok(!r.body.includes(home), r.body);
-  assert.ok(!r.body.includes('illegal operation'), r.body);
-  assert.equal(r.body, '밤 저장소 정책 처리 실패(EISDIR)');
+test('원장: source 변경 사건은 폴더 경로가 아니라 개수만 남긴다', () => {
+  const home = home0();
+  const onto = tmp('kadan-onto-');
+  const records = [];
+  setCardSources(home, {folders: [onto], by: '사람', record: e => records.push(e), now: () => 't'});
+  setCardSources(home, {clear: true, by: '사람', record: e => records.push(e), now: () => 't'});
+  assert.deepEqual(records, [{kind: 'night-repo-policy', repo: null, sources: {before: 0, after: 1}, by: '사람', t: 't'},
+    {kind: 'night-repo-policy', repo: null, sources: {before: 1, after: 0}, by: '사람', t: 't'}]);
+  assert.ok(!JSON.stringify(records).includes(onto));
+  assert.throws(() => setCardSources(home, {folders: [], by: '사람'}), /연결할 카드 폴더가 필요/);
+  assert.throws(() => setCardSources(home, {folders: [path.join(onto, 'nope')], by: '사람'}), /카드 폴더가 아니거나 없습니다/);
 });

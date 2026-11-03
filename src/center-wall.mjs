@@ -265,8 +265,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     try{
      // 나이트가 켜진 동안은 거절한다: 역할 세션이 curl로 대시보드를 거쳐 CLI 거절(night-guard)을 우회하는 길을 막는다.
      if(nightState(readLedgerIncremental(home),readDecisionEvents(home),Date.now()).on)throw new NightRepoPolicyError('나이트가 켜진 동안은 바꿀 수 없음');
-     const saved_=setRepoPolicy(home,{repo:String(f.repo||''),value:String(f.value||''),by:'사람',record:entry=>appendLedger(entry,home)});
-     saved('/',{repo:saved_.repo,value:saved_.value});
+     const saved_=setRepoPolicy(home,{repo:String(f.repo||''),deployBranch:String(f.deployBranch||''),nightMerge:String(f.nightMerge||''),by:'사람',record:entry=>appendLedger(entry,home)});
+     saved('/',{repo:saved_.repo,deployBranch:saved_.deployBranch,nightMerge:saved_.nightMerge});
     }catch(error){fail(409,nightRepoHttpMessage(error))}
     return true;
    }

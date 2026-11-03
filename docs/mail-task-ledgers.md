@@ -15,7 +15,7 @@
 | 시스템 | 세션 시작·종료, 감시 등 운영 사건 | `system/events.jsonl` |
 
 비교 모드의 `compare-pick`(회차·프리셋 선택 예약)과 나이트 모드의 `night-note`(대신 정한 것·보류·관문·머지·시작 기록)도 시스템 사건이다.
-`kadan night repo`가 저장소별 밤 머지 정책을 바꿀 때 남기는 `night-repo-policy`(`repo`·`before`·`after`·`by`·`t`)도 시스템 사건이다. 켜짐 계산(`night` 사건)과 섞지 않는다.
+`kadan night repo`가 저장소별 나이트런 중 자동 머지 정책을 바꿀 때 남기는 `night-repo-policy`(`repo`·`before`·`after`: 각각 `{deployBranch, nightMerge}`·`by`·`t`)도 시스템 사건이다. `kadan night source`가 카드 폴더 연결을 바꿀 때는 `repo: null`과 `sources: {before, after}`(폴더 개수만, 경로는 담지 않음)를 남긴다. 켜짐 계산(`night` 사건)과 섞지 않는다.
 카드 발령 `send`는 당시 세션의 `settingsPreset`, `compareMode`, `pickId`, `runnerChoice`와
 검수 대상 `reviewFor`를 보존한다. 보고서는 이 전달 사건으로 귀속을 읽고 현재 PID로 과거를 추정하지 않는다.
 

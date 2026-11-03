@@ -217,7 +217,7 @@ export const COMMANDS = {
   night: (argv,flags) => {
     const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
-    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):(argv[0]==='note'||argv[0]==='repo')?result:JSON.stringify(result,null,2));
+    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):(argv[0]==='note'||argv[0]==='repo'||argv[0]==='source')?result:JSON.stringify(result,null,2));
   },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
@@ -300,7 +300,7 @@ export function main(argv) {
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])||
-      command==='night'&&(['on','off'].includes(args[0])||args[0]==='repo'&&![undefined,'list','show'].includes(args[1]))||
+      command==='night'&&(['on','off'].includes(args[0])||args[0]==='repo'&&![undefined,'list','show'].includes(args[1])||args[0]==='source'&&(args.length>1||flags.cards!==undefined||flags.clear!==undefined))||
       command==='claude'&&flags.yes===true
     )assertWritable(ledgerHome());
     const result=fn(args, flags);
