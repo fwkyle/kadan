@@ -206,7 +206,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
   if (!result?.ok) {
     // 실제 수집 실패: 열린 경보는 유지하고 정상 연속은 끊는다(정상-실패-정상이 3으로 이어져 닫히지 않게).
     // PID 시계(bigSince)도 그대로 둔다 — 한 번 못 읽었다고 9분 된 시계를 처음부터 다시 재지 않는다.
-    return { state: { processAlert: previous, normalCycles: 0, bigSince: previousState?.bigSince, countSince: previousState?.countSince, heldPids: previousState?.heldPids }, alerts: previous ? [previous] : [] };
+    return { state: { processAlert: previous, normalCycles: 0, bigSince: previousState?.bigSince, countSince: previousState?.countSince }, alerts: previous ? [previous] : [] };
   }
   // PID별 첫 초과 시각. 수집마다 지금 기준 이상인 PID로 다시 만든다(사라지거나 내려간 PID는 버려 다시 넘으면 새로 잰다).
   const priorSince = previousState?.bigSince;
@@ -220,10 +220,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     const aged = restoreByAge && proc.ageSec != null && proc.ageSec * 1000 >= sustainMs;
     bigSince[proc.pid] = priorSince?.[proc.pid] ?? (aged ? at - sustainMs : at);
   }
-  // 지속 조건은 새로 여는 데만 건다: 열린 경보가 이미 지속으로 본 PID(heldPids)는 한 번 내려갔다 다시 넘어도 시계와 상관없이 유지한다.
-  // 새로 나타난 PID는 heldPids에 없어 평소대로 10분을 재야 한다.
-  const heldPrior = previous?.signals?.includes("process") ? previousState?.heldPids ?? [] : [];
-  const sustained = bigNow.filter((proc) => heldPrior.includes(proc.pid) || at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
+  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
   // 개수 기준: 대상 집합이 계속 바뀌므로 종류별로 '처음 넘은 시각' 하나만 둔다. 한 번이라도 내려가면 지운다.
   // 재시작 뒤 첫 성공 수집(표 없음)에서 복원한 열린 경보에 그 종류 신호가 있으면, 이미 10분 넘게 유지된 것이라 시계를 채운다.
   const priorCount = previousState?.countSince;
@@ -251,11 +248,7 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     normalCycles = (previousState?.normalCycles ?? 0) + 1;
     alert = normalCycles < 3 ? previous : null;
   }
-  // heldPids는 지금 큰 PID로만 좁힌다(sustained = (이전 heldPids ∪ 10분 지속) ∩ bigNow). 종료·하락한 PID는 즉시 빠져
-  // 상태가 쌓이지 않고, 번호가 재사용돼도 10분을 새로 잰다. 이번 수집에 지속 PID가 하나도 없는 하락 주기(경보는 닫기 전 유지 중)만
-  // 이전 목록을 그대로 둬 "한 번 내려갔다 복귀"를 유지한다. 3주기 안에 복귀하지 않으면 경보가 닫혀 비워진다.
-  const heldPids = alert?.signals.includes("process") ? (sustained.length ? sustained : heldPrior) : [];
-  return { state: { processAlert: alert, normalCycles, bigSince, countSince, heldPids }, alerts: alert ? [alert] : [] };
+  return { state: { processAlert: alert, normalCycles, bigSince, countSince }, alerts: alert ? [alert] : [] };
 }
 
 // 대시보드용 잠깐 재사용. 요청마다 ps를 부르지 않는다.
