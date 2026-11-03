@@ -217,7 +217,7 @@ export const COMMANDS = {
   night: (argv,flags) => {
     const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
-    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):JSON.stringify(result,null,2));
+    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):argv[0]==='note'?result:JSON.stringify(result,null,2));
   },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
