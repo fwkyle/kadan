@@ -9,7 +9,7 @@ const ended=new Set(['cancelled','superseded']);
 const date=value=>Date.parse(value)||0;
 
 // 결과 판정과 실행 종료는 별개다. 새 발령 뒤에는 이전 결과를 현재 검수로 세지 않는다.
-function stage(card){
+export function stage(card){
  const result=card.result,latestSend=Math.max(0,...(card.runs||[]).map(r=>date(r.sentAt)));
  const facts=listFactsOf(card),registered=facts.registered;
  const changed=registered&&['scope','role','repoPath'].some(key=>registered[key]!==card[key]);

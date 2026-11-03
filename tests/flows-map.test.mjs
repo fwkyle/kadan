@@ -67,3 +67,16 @@ test('놀고 있음의 차례 칸 값(사용자 대기·글 값 안내)이 흐�
     assert.ok(overview.includes(text), `watch-overview.md에 ${text} 없음`);
   assert.ok(read('docs/hierarchy.md').includes('`@user`(current)'), 'hierarchy.md에 차례 칸 안내 없음');
 });
+
+test('일시정지 중 작업 감지가 흐름 지도·감시 문서·명령 문서에 이어진다', () => {
+  const row = section('4\\. 감시가 잡는 것').split('\n').find(l => l.includes('`일시정지중작업`'));
+  assert.ok(row, '4절에 일시정지중작업 행이 없음');
+  for (const text of ['hold', '연속 2순회', '직속 상위', 'AI를 부르지 않'])
+    assert.ok(row.includes(text), `일시정지중작업 행에 "${text}" 없음`);
+  const overview = read('docs/watch-overview.md');
+  assert.ok(overview.includes('## 일시정지 중 작업 감지'), 'watch-overview.md에 일시정지 중 작업 감지 절 없음');
+  assert.ok(overview.includes('일시정지 중 작업 감지만 본다'), 'watch-overview.md에 hold 제외 문장 수정 없음');
+  const commands = read('docs/commands.md');
+  for (const text of ['holdCheck', '멈춤 확인', '미확인(세션 없음)', 'work update --status hold'])
+    assert.ok(commands.includes(text), `commands.md에 ${text} 없음`);
+});

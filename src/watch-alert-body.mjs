@@ -18,6 +18,7 @@ const ALERT_LABELS = {
   "죽음": "세션 종료 의심",
   "정체": "화면이 멈춤",
   "멈춤": "일하는 표시 없이 입력을 기다리며 멈춤",
+  "일시정지중작업": "일시정지했는데 계속 일하는 중",
   "완료후보": "끝난 것 같음",
   "응답장애": "대답을 못 함",
   "감시제외": "감시 대상에서 빠짐",
@@ -126,6 +127,9 @@ export function formatAlertBody(alert) {
       ? "해당 창에서 Enter를 눌러 큐를 흘려내면 처리됨"
       : "턴 종료·다음 도구 호출 때 자동 제출 예정 — 계속 쌓여 있으면 해당 창 확인";
     return `입력이 큐에 쌓여 대기 ${alert.session} (${minutes}분째 '${alert.line}' — ${action})`;
+  }
+  if (alert.kind === "일시정지중작업") {
+    return `일시정지했는데 계속 일하는 중 ${alert.session} (카드 ${alert.cardKey ?? alert.taskId}, 화면이 ${alert.streak ?? 2}순회 연속 움직임 — 정말 멈출 건지 감독 확인 필요)`;
   }
   if (alert.kind === "멈춤") {
     const minutes = Math.floor((alert.idleMs ?? 0) / 60_000);
@@ -249,6 +253,7 @@ export function itemizedAlert(alert, clock, ctx = null) {
       + (alert.stage === 2 ? `; ${Math.floor(alert.idleMinutes / 2)}분 전에 본인에게 알렸으나 그대로` : "");
     if (alert.stage !== 2) todo = `판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
   } else if (alert.kind === "정체") basis = `지문 무변화 ${alert.count}회`;
+  else if (alert.kind === "일시정지중작업") basis = `카드 ${alert.cardKey ?? alert.taskId}가 일시정지인데 화면이 ${alert.streak ?? 2}순회 연속 일하는 중`;
   else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째, 미완료 실행 있음·답 기다리는 질문 없음`;
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
