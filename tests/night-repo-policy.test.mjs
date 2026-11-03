@@ -355,7 +355,7 @@ test('POST 오류 응답에는 절대 경로·OS 원문이 없다(손상 파일,
   const handler2 = createCenterHandler(home2);
   const r2 = await call(handler2, fakeReq('POST', '/api/night/repos', {body: form(handler2, {repo: 'acme/app', deployBranch: 'main'})}));
   assert.equal(r2.status, 409);
-  assert.equal(r2.body, '밤 저장소 정책 처리 실패(EISDIR)');
+  assert.equal(r2.body, '나이트런 저장소 정책 처리 실패(EISDIR)');
 });
 
 test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따로 보인다', () => {

@@ -195,3 +195,10 @@ test('입력이 JSON이 아니거나 칸이 틀리면 사용 오류(종료 코�
   }
   assert.throws(() => mergeGate('없는키', f.input(), {home: f.home}), e => e.exitCode === 2);
 });
+
+test('14. 옛 문구 "밤 저장소 정책"이 src/와 gui/src/에 남아 있지 않다', () => {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const walk = dir => fs.existsSync(dir) ? fs.readdirSync(dir, {withFileTypes: true}).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : [];
+  const hits = [...walk(path.join(root, 'src')), ...walk(path.join(root, 'gui', 'src'))].filter(f => fs.readFileSync(f, 'utf8').includes('밤 저장소 정책'));
+  assert.deepEqual(hits, []);
+});

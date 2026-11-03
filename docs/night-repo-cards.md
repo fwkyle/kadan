@@ -66,4 +66,6 @@ night_merge: 금지 (허용 | 금지. 칸이 없으면 허용)
 4. 대상 브랜치 == `deployBranch` → 보류(`deploy-branch`)
 5. 그 밖 → 나이트런 중 자동 머지(`allowed`)
 
+`kadan night on --level 자동 --allow <소유자/이름> --quote "<kyle 원문>"`은 그날 밤에 한해 2번(`night-merge-forbidden`)과 4번(`deploy-branch`) 보류만 푼다. 0·1·3번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
+
 예전 `kadan night source`(외부 폴더 등록)는 없어졌다. 정책 파일에 남은 `cards` 칸은 읽지도 쓰지도 않고 지우지도 않는다.
