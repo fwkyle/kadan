@@ -37,6 +37,7 @@ import {
   openWindow,
   parseRottieCreateResult,
   tmux,
+  currentSocket,
   tmuxConfPath,
   tmuxConfText,
   hasSession,
@@ -217,7 +218,7 @@ export const COMMANDS = {
   night: (argv,flags) => {
     const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
-    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):(argv[0]==='note'||argv[0]==='repo'||argv[0]==='source')?result:JSON.stringify(result,null,2));
+    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):(argv[0]==='note'||argv[0]==='repo')?result:JSON.stringify(result,null,2));
   },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
@@ -274,6 +275,16 @@ export const COMMANDS = {
   recovery: recoveryCommand,
 };
 
+// 창을 고르거나 여는 명령(start·attach·restart·restore·handover·adopt·up·init·senior/advise의 로티 탭). 물려받은 none을 바꿨다는 안내는 여기서만 낸다.
+// 환경을 기계 설정으로 채우는 일 자체는 모든 명령에서 한다(로티를 부르는 하위 경로가 같은 값을 읽는다). 손상 설정 경고도 모든 명령에서 낸다.
+export const WINDOW_NOTICE_COMMANDS = ['start', 'attach', 'restart', 'restore', 'handover', 'adopt', 'up', 'init', 'senior', 'advise'];
+export function adoptWindowForCommand(command, env, home, {socket, warn} = {}) {
+  const opts = {socket};
+  if (warn) opts.warn = warn;
+  if (!WINDOW_NOTICE_COMMANDS.includes(command)) opts.notice = () => {};
+  return adoptMachineWindow(env, home, opts);
+}
+
 const HELP_ONLY={window:WINDOW_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE};
 
 export function main(argv) {
@@ -290,7 +301,7 @@ export function main(argv) {
   const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
-    if (command !== 'window' && command !== 'help' && !flags.help) adoptMachineWindow(process.env, ledgerHome());
+    if (command !== 'window' && command !== 'help' && !flags.help) adoptWindowForCommand(command, process.env, ledgerHome(), {socket: currentSocket()});
     // 거절 검사는 --help와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하는 길이 새지 않게).
     nightGuard({command,args,flags});
     // 쓰기·종료 명령은 --help면 사용법만 보이고 아무것도 실행하지 않는다.
@@ -300,7 +311,7 @@ export function main(argv) {
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])||
-      command==='night'&&(['on','off'].includes(args[0])||args[0]==='repo'&&![undefined,'list','show'].includes(args[1])||args[0]==='source'&&(args.length>1||flags.cards!==undefined||flags.clear!==undefined))||
+      command==='night'&&(['on','off'].includes(args[0])||args[0]==='repo'&&![undefined,'list','show'].includes(args[1]))||
       command==='claude'&&flags.yes===true
     )assertWritable(ledgerHome());
     const result=fn(args, flags);

@@ -156,7 +156,7 @@ export function renderDoneButOpen(center) {
 // 사람이 누른 것이므로 대시보드 세션의 KADAN_ROLE을 비워 원장에 '사람'으로 남긴다.
 export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile)}={}) {
  try {
-  const {stdout}=await run(process.execPath,[cli,'up','--hidden'],{env:{...env,KADAN_ROLE:'',KADAN_WINDOW:'none'},encoding:'utf8',timeout:28_000});
+  const {stdout}=await run(process.execPath,[cli,'up','--hidden'],{env:{...env,KADAN_ROLE:'',KADAN_WINDOW:'none',KADAN_WINDOW_FORCE:'1'},encoding:'utf8',timeout:28_000});
   return {output:String(stdout||'').trim().split('\n').slice(0,6).join('\n')};
  } catch(error) {
   throw new Error('비서를 켜지 못했다: '+String(error.stderr||error.message||'').trim().slice(-300));

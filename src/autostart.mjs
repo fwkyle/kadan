@@ -10,7 +10,7 @@ import path from 'node:path';
 export const AUTOSTART_LABEL = 'dev.kadan.up';
 export const START_INTERVAL_S = 60;
 // 로그인 직후 launchd에는 PATH가 거의 없다. node·tmux·실행기(claude·codex)를 찾을 수 있게 설치 때의 값을 적어 둔다.
-const CARRIED_ENV = ['PATH', 'KADAN_HOME', 'KADAN_WINDOW', 'KADAN_FLOOR', 'KADAN_ROTTIE_BIN', 'KADAN_SOCKET'];
+const CARRIED_ENV = ['PATH', 'KADAN_HOME', 'KADAN_WINDOW', 'KADAN_WINDOW_FORCE', 'KADAN_FLOOR', 'KADAN_ROTTIE_BIN', 'KADAN_SOCKET'];
 
 export function autostartPath(userHome = os.homedir()) {
   return path.join(userHome, 'Library', 'LaunchAgents', AUTOSTART_LABEL + '.plist');
@@ -21,7 +21,7 @@ const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 export function autostartPlist({ node, cli, cwd, env: given, logPath }) {
   // 로그인 직후엔 로티가 아직 없다. 카단은 로티 창 설정에서 역할을 숨김으로 띄우는 것을 막고(KADAN_HIDDEN_FORBIDDEN),
   // "로티를 쓸 수 없을 때만 KADAN_WINDOW=none --hidden"을 허용한다. 로그인 시작이 바로 그 경우다.
-  const env = { ...given, KADAN_WINDOW: 'none' };
+  const env = { ...given, KADAN_WINDOW: 'none', KADAN_WINDOW_FORCE: '1' };
   const vars = CARRIED_ENV.filter((k) => typeof env[k] === 'string' && env[k]).map((k) => `\t\t<key>${k}</key>\n\t\t<string>${xml(env[k])}</string>`);
   const args = [node, cli, 'up', '--hidden', '--auto'].map((a) => `\t\t<string>${xml(a)}</string>`);
   return `<?xml version="1.0" encoding="UTF-8"?>
