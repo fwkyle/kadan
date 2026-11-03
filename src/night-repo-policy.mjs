@@ -11,11 +11,25 @@ export const POLICY_FILE = 'night-repo-policy.json';
 export const POLICY_VALUES = ['merge', 'hold', 'auto'];
 export const REPO_NAME = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u;
 
-// 저장소 루트에 있으면 "기본 브랜치 push = 배포" 신호로 보는 설정 파일.
+// 배포를 뜻하는 낱말(대소문자 무시). 워크플로 본문·package.json 스크립트에 하나라도 보이면 deploy로 본다.
+// 트리거(on.push 등)는 읽지 않는다: 낱말이 보이면 어떤 조건이든 보류 쪽으로 틀린다. 앞뒤가 영문·숫자가 아닐 때만 맞고,
+// 줄기 낱말(deploy·publish·release)은 뒤에 글자가 더 붙어도 맞는다(deployment·released). `docker push` 등 두 낱말은 공백 하나 이상.
+export const DEPLOY_WORDS = ['deploy', 'publish', 'release', 'vercel', 'netlify', 'wrangler', 'pages', 'firebase', 'heroku',
+  'fly', 'flyctl', 'render', 'railway', 'aws', 'gcloud', 'azure', 'kubectl', 'helm', 'terraform', 'ansible', 'rsync', 'scp',
+  'ssh', 'docker push', 'npm publish', 'pypi', 'twine', 'cargo publish'];
+const STEM_WORDS = new Set(['deploy', 'publish', 'release']);
+const wordSource = w => w.replace(/ /g, '\\s+') + (STEM_WORDS.has(w) ? '' : '(?![A-Za-z0-9])');
+const DEPLOY_RE = new RegExp(`(?<![A-Za-z0-9])(?:${DEPLOY_WORDS.map(wordSource).join('|')})`, 'i');
+export const findDeployWord = text => DEPLOY_RE.exec(text)?.[0].toLowerCase().replace(/\s+/g, ' ') ?? null;
+
+// 배포 설정 파일(이름, 대소문자 무시)·폴더. 루트와 하위 폴더에서 찾는다.
 export const DEPLOY_CONFIG_FILES = ['vercel.json', 'netlify.toml', 'wrangler.toml', 'wrangler.json', 'wrangler.jsonc',
-  'fly.toml', 'render.yaml', 'app.yaml'];
-// 워크플로 안에서 배포 단계로 보는 낱말(주석 줄은 뺀다).
-export const DEPLOY_WORDS = /\b(deploy|publish|gh-pages|vercel|wrangler|netlify|flyctl|pages-action)\b/i;
+  'fly.toml', 'render.yaml', 'app.yaml', 'firebase.json', 'procfile'];
+export const DEPLOY_CONFIG_DIRS = ['.vercel', '.netlify'];
+export const SKIP_DIRS = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next']);
+export const SCAN_LIMITS = {maxDepth: 4, maxDirs: 2000};
+// 다른 저장소의 재사용 workflow(`uses: owner/repo/.github/workflows/…`)와 workflow_run은 연쇄 대상을 볼 수 없다.
+const CHAIN_RE = /\bworkflow_run\b|^\s*-?\s*uses:\s*['"]?[^.\s'"/][^\s'"]*\/\.github\/workflows\//m;
 
 export const policyPath = home => path.join(home, POLICY_FILE);
 
@@ -30,7 +44,7 @@ export function readPolicy(home) {
     if (!ok) throw new Error('모양이 다름');
     return {repos: value.repos, corrupt: null};
   } catch (error) {
-    return {repos: {}, corrupt: `밤 저장소 정책 파일 손상: ${file} (${error.message})`};
+    return {repos: {}, corrupt: `밤 저장소 정책 파일 손상: ${POLICY_FILE} (${error.message})`};
   }
 }
 
@@ -42,7 +56,7 @@ export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toI
   if (!acquireDirLock(lock)) throw new Error('밤 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
   try {
     const current = readPolicy(home);
-    if (current.corrupt) throw new Error(`${current.corrupt} — 파일을 확인한 뒤 고치거나 .trash/로 옮기세요. 읽기는 hold로 봅니다`);
+    if (current.corrupt) throw new Error(`${current.corrupt} (${policyPath(home)}) — 파일을 확인한 뒤 고치거나 .trash/로 옮기세요. 읽기는 hold로 봅니다`);
     const before = current.repos[repo]?.value ?? null;
     const entry = {value, at: now(), by};
     const file = policyPath(home), tmp = `${file}.${process.pid}.tmp`;
@@ -54,95 +68,98 @@ export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toI
 }
 
 const readText = file => fs.readFileSync(file, 'utf8');
-const stripComment = line => line.replace(/(^|\s)#.*$/, '');
-const indentOf = line => line.length - line.trimStart().length;
-const unquote = s => s.trim().replace(/^['"]|['"]$/g, '');
+const lower = s => s.toLowerCase();
 
-function defaultBranches(repoPath) {
-  const names = new Set(['main', 'master']);
-  try {
-    const head = readText(path.join(repoPath, '.git', 'refs', 'remotes', 'origin', 'HEAD')).trim();
-    const m = /^ref:\s*refs\/remotes\/origin\/(.+)$/.exec(head);
-    if (m) names.add(m[1]);
-  } catch { /* .git이 파일(worktree)이거나 없으면 main·master만 본다 */ }
-  return names;
+// package.json: scripts의 이름·값, 최상위 키 vercel·netlify·publishConfig에 배포 낱말이 있으면 deploy. 깨졌으면 unknown.
+function inspectPackage(file, rel, out) {
+  out.checked.push(rel);
+  let pkg;
+  try { pkg = JSON.parse(readText(file)); } catch { out.unknown.push(`${rel}: 읽기 실패 또는 JSON 손상`); return; }
+  if (!pkg || typeof pkg !== 'object') { out.unknown.push(`${rel}: JSON 모양이 다름`); return; }
+  const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? Object.entries(pkg.scripts) : [];
+  const hit = scripts.map(([k, v]) => findDeployWord(`${k} ${v}`)).find(Boolean)
+    ?? ['vercel', 'netlify', 'publishConfig'].find(k => k in pkg);
+  if (hit) out.deploy.push({file: rel, word: hit});
 }
 
-const matchesBranch = (token, branches) => token.includes('*') || branches.has(token);
-
-// `on:` 아래 push 블록이 기본 브랜치 push에 반응하는지. true | false | null(판단 못 함).
-export function pushesToDefault(text, branches) {
-  const lines = text.split(/\r?\n/).map(stripComment);
-  const at = lines.findIndex(l => /^(on|"on"|'on'|true)\s*:/.test(l));
-  if (at < 0) return null;
-  const inline = lines[at].replace(/^[^:]+:/, '').trim();
-  if (inline) {
-    if (inline.startsWith('{') || inline.startsWith('&') || inline.startsWith('*')) return null;
-    return inline.replace(/[[\]]/g, '').split(',').some(w => unquote(w) === 'push') ? true : false;
+// .github/workflows 아래 모든 .yml·.yaml(대소문자 무시)을 재귀로 본다. 링크는 따라가지 않고 unknown이다.
+function inspectWorkflows(repoPath, out, budget) {
+  const base = path.join(repoPath, '.github');
+  for (const dir of [base, path.join(base, 'workflows')]) {
+    let st;
+    try { st = fs.lstatSync(dir); } catch (error) {
+      if (error.code === 'ENOENT') return;
+      out.unknown.push(`${path.relative(repoPath, dir)}: ${error.code ?? '읽기 실패'}`); return;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) { out.unknown.push(`${path.relative(repoPath, dir)}: 링크라 따라가지 않음`); return; }
   }
-  const block = [];
-  for (let i = at + 1; i < lines.length; i++) {
-    if (lines[i].trim() && indentOf(lines[i]) === 0) break;
-    block.push(lines[i]);
+  const stack = [path.join(base, 'workflows')];
+  while (stack.length) {
+    const dir = stack.pop(), relDir = path.relative(repoPath, dir);
+    if (++budget.dirs > budget.maxDirs) { out.unknown.push(`${relDir}: 폴더 수 상한 초과`); return; }
+    let entries;
+    try { entries = fs.readdirSync(dir, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name)); } catch (error) {
+      out.unknown.push(`${relDir}: ${error.code ?? '읽기 실패'}`); continue;
+    }
+    for (const e of entries) {
+      const rel = `${relDir}/${e.name}`;
+      if (e.isSymbolicLink()) { out.unknown.push(`${rel}: 링크라 따라가지 않음`); continue; }
+      if (e.isDirectory()) { stack.push(path.join(dir, e.name)); continue; }
+      if (!/\.ya?ml$/i.test(e.name)) continue;
+      out.checked.push(rel);
+      let text;
+      try { text = readText(path.join(dir, e.name)); } catch { out.unknown.push(`${rel}: 읽기 실패`); continue; }
+      const word = findDeployWord(text);
+      if (word) out.deploy.push({file: rel, word});
+      else if (CHAIN_RE.test(text)) out.unknown.push(`${rel}: 다른 workflow로 이어지는 연쇄(workflow_run·외부 재사용)를 볼 수 없음`);
+    }
   }
-  const body = block.filter(l => l.trim());
-  if (!body.length) return null;
-  const childIndent = indentOf(body[0]);
-  if (body[0].trim().startsWith('-')) return body.some(l => unquote(l.trim().replace(/^-\s*/, '')) === 'push') ? true : false;
-  const pushAt = body.findIndex(l => indentOf(l) === childIndent && /^push\s*:/.test(l.trim()));
-  if (pushAt < 0) return false;
-  const pushInline = body[pushAt].trim().replace(/^push\s*:/, '').trim();
-  if (pushInline.startsWith('{')) return null;
-  const sub = [];
-  for (let i = pushAt + 1; i < body.length && indentOf(body[i]) > childIndent; i++) sub.push(body[i]);
-  const keyAt = key => sub.findIndex(l => new RegExp(`^${key}\\s*:`).test(l.trim()));
-  const tokens = key => {
-    const i = keyAt(key);
-    if (i < 0) return null;
-    const rest = sub[i].trim().replace(new RegExp(`^${key}\\s*:`), '').trim();
-    if (rest) return rest.replace(/[[\]]/g, '').split(',').map(unquote).filter(Boolean);
-    const out = [];
-    for (let j = i + 1; j < sub.length && (indentOf(sub[j]) > indentOf(sub[i]) || sub[j].trim().startsWith('-')); j++)
-      if (sub[j].trim().startsWith('-')) out.push(unquote(sub[j].trim().slice(1)));
-    return out;
-  };
-  const branchList = tokens('branches'), ignoreList = tokens('branches-ignore'), tagList = tokens('tags');
-  if (branchList) return branchList.some(t => matchesBranch(t, branches));
-  if (ignoreList) return ![...branches].some(b => ignoreList.includes(b));
-  if (tagList && !sub.some(l => /^(paths|paths-ignore)\s*:/.test(l.trim()))) return false; // 태그 push만 받는다
-  return true; // 브랜치 조건이 없으면 모든 브랜치 push에 반응한다
 }
 
-// 판별: deploy(근거 파일들) | clean(찾아본 파일들) | unknown(이유). 근거 경로는 저장소 기준 상대 경로다.
-export function detectDeploy(repoPath) {
+// 루트와 하위 폴더의 배포 설정 파일·폴더·package.json. 깊이·폴더 수 상한에 걸리면 unknown이다. 링크는 따라가지 않는다.
+function inspectTree(repoPath, out, budget) {
+  const queue = [{dir: repoPath, depth: 0}];
+  for (let i = 0; i < queue.length; i++) {
+    const {dir, depth} = queue[i], relDir = path.relative(repoPath, dir);
+    if (++budget.dirs > budget.maxDirs) { out.unknown.push('폴더 수 상한 초과'); return; }
+    let entries;
+    try { entries = fs.readdirSync(dir, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name)); } catch (error) {
+      out.unknown.push(`${relDir || '.'}: ${error.code ?? '읽기 실패'}`); continue;
+    }
+    for (const e of entries) {
+      const rel = relDir ? `${relDir}/${e.name}` : e.name, name = lower(e.name);
+      if (e.isDirectory() && DEPLOY_CONFIG_DIRS.includes(name)) { out.deploy.push({file: rel, word: name}); continue; }
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        if (depth >= budget.maxDepth) { out.unknown.push(`${rel}: 깊이 상한 초과`); continue; }
+        queue.push({dir: path.join(dir, e.name), depth: depth + 1});
+        continue;
+      }
+      if (DEPLOY_CONFIG_FILES.includes(name)) { out.deploy.push({file: rel, word: name}); continue; }
+      if (name === 'package.json') {
+        if (e.isSymbolicLink()) out.unknown.push(`${rel}: 링크라 따라가지 않음`);
+        else inspectPackage(path.join(dir, e.name), rel, out);
+      }
+    }
+  }
+}
+
+// 판별은 낱말 신호를 보는 보수 추정이다: deploy(근거 파일들) | clean(찾아본 파일들) | unknown(이유).
+// 틀리는 방향은 항상 보류다. 근거 경로는 저장소 기준 상대 경로다. 응답 모양(result·files·reason·checked)은 그대로다.
+export function detectDeploy(repoPath, limits = SCAN_LIMITS) {
   if (typeof repoPath !== 'string' || !path.isAbsolute(repoPath)) return {result: 'unknown', reason: '저장소 경로를 모릅니다', checked: []};
   let stat;
   try { stat = fs.statSync(repoPath); } catch { stat = null; }
   if (!stat?.isDirectory()) return {result: 'unknown', reason: '저장소 경로를 읽을 수 없습니다', checked: []};
-  const checked = [], deploy = [], unknown = [];
-  for (const name of DEPLOY_CONFIG_FILES) {
-    checked.push(name);
-    if (fs.existsSync(path.join(repoPath, name))) deploy.push(name);
+  const out = {deploy: [], unknown: [], checked: [...DEPLOY_CONFIG_FILES]};
+  const budget = {dirs: 0, maxDirs: limits.maxDirs, maxDepth: limits.maxDepth};
+  inspectTree(repoPath, out, budget);
+  inspectWorkflows(repoPath, out, budget);
+  const checked = out.checked;
+  if (out.deploy.length) {
+    return {result: 'deploy', files: [...new Set(out.deploy.map(d => d.file))].sort(), checked};
   }
-  const dir = path.join(repoPath, '.github', 'workflows');
-  let flows = [];
-  try { flows = fs.readdirSync(dir).filter(f => /\.ya?ml$/i.test(f)).sort(); } catch (error) {
-    if (error.code !== 'ENOENT') unknown.push(`.github/workflows: ${error.code ?? '읽기 실패'}`);
-  }
-  const branches = defaultBranches(repoPath);
-  for (const file of flows) {
-    const rel = `.github/workflows/${file}`;
-    checked.push(rel);
-    let text;
-    try { text = readText(path.join(dir, file)); } catch { unknown.push(`${rel}: 읽기 실패`); continue; }
-    const hasDeploy = text.split(/\r?\n/).some(l => DEPLOY_WORDS.test(stripComment(l)));
-    if (!hasDeploy) continue;
-    const push = pushesToDefault(text, branches);
-    if (push === true) deploy.push(rel);
-    else if (push === null) unknown.push(`${rel}: 실행 조건(on)을 판단하지 못함`);
-  }
-  if (deploy.length) return {result: 'deploy', files: deploy, checked};
-  if (unknown.length) return {result: 'unknown', reason: unknown.join('; '), checked};
+  if (out.unknown.length) return {result: 'unknown', reason: out.unknown.join('; '), checked};
   return {result: 'clean', checked};
 }
 

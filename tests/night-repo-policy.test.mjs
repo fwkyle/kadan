@@ -10,7 +10,7 @@ import {nightCommand} from '../src/commands/night.mjs';
 import {nightGuard} from '../src/night-guard.mjs';
 import {createCenterHandler} from '../src/center-wall.mjs';
 import {summarizeNight} from '../src/night-summary.mjs';
-import {readPolicy, setRepoPolicy, detectDeploy, decide, evaluateRepo, policyPath, pushesToDefault} from '../src/night-repo-policy.mjs';
+import {readPolicy, setRepoPolicy, detectDeploy, decide, evaluateRepo, policyPath, findDeployWord} from '../src/night-repo-policy.mjs';
 
 // 격리 홈·가짜 저장소 폴더만 쓴다. 운영 홈·실제 포트·GitHub에 닿지 않는다. 역할 이름도 시험용이다.
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
@@ -74,26 +74,101 @@ test('판별: 설정 파일·워크플로 push main+배포 → deploy, test만·
   assert.equal(detectDeploy('상대/경로').result, 'unknown');
 });
 
-test('판별: 워크플로 실행 조건 모양들(목록·tags·다른 브랜치·pull_request 전용·flow map)', () => {
-  const b = new Set(['main', 'master']);
-  const y = on => flow(on);
-  assert.equal(pushesToDefault(y('  push:\n    branches:\n      - main\n      - "dev"'), b), true);
-  assert.equal(pushesToDefault(y('  push:\n    branches: [release]'), b), false);
-  assert.equal(pushesToDefault(y('  push:\n    tags: ["v*"]'), b), false);
-  assert.equal(pushesToDefault(y('  push:'), b), true);
-  assert.equal(pushesToDefault(y('  pull_request:'), b), false);
-  assert.equal(pushesToDefault('name: x\non: push\njobs: {}\n', b), true);
-  assert.equal(pushesToDefault('name: x\non: [pull_request]\njobs: {}\n', b), false);
-  assert.equal(pushesToDefault('name: x\non: {push: {branches: [main]}}\n', b), null);
-  assert.equal(pushesToDefault('name: x\njobs: {}\n', b), null);
-  assert.equal(pushesToDefault(y('  push:\n    branches-ignore: [main]'), b), false);
+const repoWith = files => { const r = tmp('kadan-det-'); for (const [rel, text] of Object.entries(files)) write(r, rel, text); return r; };
+const deployStep = '      - run: vercel deploy\n';
+const hold = r => decide('auto', detectDeploy(r)).action === 'hold';
 
-  // 배포 낱말이 있는데 on을 판단 못 하면 unknown이다(clean으로 넘기지 않는다).
-  const odd = tmp('kadan-det-');
-  write(odd, '.github/workflows/x.yml', 'name: x\non: {push: {branches: [main]}}\njobs:\n  a:\n    steps:\n      - run: vercel deploy\n');
-  const u = detectDeploy(odd);
-  assert.equal(u.result, 'unknown');
-  assert.match(u.reason, /x\.yml/);
+test('판별: 트리거를 읽지 않고 배포 낱말이 보이면 보류(검수 F1~F4 입력)', () => {
+  const head = 'name: x\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n';
+  const cases = {
+    'F1 따옴표 push': `on:\n  "push":\n    branches: [main]\n${head}${deployStep}`,
+    'F2 branches-ignore main': `on:\n  push:\n    branches-ignore: [main]\n${head}${deployStep}`,
+    'F3 기본 브랜치 trunk, 참조 없음': `on:\n  push:\n    branches: [trunk]\n${head}${deployStep}`,
+    'flow map on': `on: {push: {branches: [main]}}\n${head}${deployStep}`,
+    '확장자 대문자': `on: push\n${head}${deployStep}`,
+  };
+  for (const [name, text] of Object.entries(cases)) {
+    const r = repoWith({[`.github/workflows/${name.startsWith('확장자') ? 'ci.YAML' : 'ci.yml'}`]: text});
+    assert.equal(detectDeploy(r).result, 'deploy', name);
+    assert.ok(hold(r), name);
+  }
+  // 워크플로 하위 폴더도 재귀로 본다.
+  assert.equal(detectDeploy(repoWith({'.github/workflows/sub/ship.yml': `on: push\n${head}${deployStep}`})).result, 'deploy');
+});
+
+test('판별: 연쇄(F4) — 외부 재사용·workflow_run은 낱말이 없어도 unknown, 로컬 재사용은 대상 파일 낱말로 deploy', () => {
+  const ci = 'name: x\non: push\njobs:\n  a:\n    steps:\n      - run: npm test\n';
+  const run = repoWith({'.github/workflows/ci.yml': ci, '.github/workflows/after.yml': 'name: y\non:\n  workflow_run:\n    workflows: [x]\njobs: {}\n'});
+  assert.equal(detectDeploy(run).result, 'unknown');
+  assert.match(detectDeploy(run).reason, /after\.yml/);
+  const ext = repoWith({'.github/workflows/ci.yml': 'name: x\non: push\njobs:\n  a:\n    uses: acme/shared/.github/workflows/ship.yml@v1\n'});
+  assert.equal(detectDeploy(ext).result, 'unknown');
+  const local = repoWith({'.github/workflows/ci.yml': 'name: x\non: push\njobs:\n  a:\n    uses: ./.github/workflows/ship.yml\n',
+    '.github/workflows/ship.yml': `on: workflow_call\njobs:\n  s:\n    steps:\n${deployStep}`});
+  const d = detectDeploy(local);
+  assert.equal(d.result, 'deploy');
+  assert.deepEqual(d.files, ['.github/workflows/ship.yml']);
+  assert.equal(detectDeploy(repoWith({'.github/workflows/ci.yml': 'name: x\non: push\njobs:\n  a:\n    uses: ./.github/workflows/lint.yml\n',
+    '.github/workflows/lint.yml': 'on: workflow_call\njobs:\n  s:\n    steps:\n      - run: npm test\n'})).result, 'clean');
+});
+
+test('판별: 하위 폴더 배포 설정·package.json(F5)과 상한', () => {
+  for (const [rel, text] of [['packages/web/netlify.toml', ''], ['packages/web/vercel.json', '{}'], ['apps/a/.vercel/project.json', '{}'],
+    ['svc/Procfile', 'web: node x'], ['package.json', '{"scripts":{"ship":"vercel --prod"}}'],
+    ['packages/web/package.json', '{"scripts":{"release":"x"}}'], ['package.json', '{"publishConfig":{"access":"public"}}']]) {
+    const r = repoWith({[rel]: text});
+    assert.equal(detectDeploy(r).result, 'deploy', rel);
+    assert.ok(detectDeploy(r).files.some(f => rel === f || rel.startsWith(`${f}/`)), rel);
+  }
+  assert.equal(detectDeploy(repoWith({'package.json': '{"scripts":{"test":"node --test"}}', 'packages/a/package.json': '{"name":"a"}'})).result, 'clean');
+  assert.equal(detectDeploy(repoWith({'package.json': '{깨짐'})).result, 'unknown');
+  // 건너뛰는 폴더 안의 신호는 보지 않는다.
+  assert.equal(detectDeploy(repoWith({'node_modules/x/vercel.json': '{}', 'dist/netlify.toml': ''})).result, 'clean');
+  // 상한은 값을 주입해 시험한다(큰 트리를 만들지 않는다).
+  const deep = repoWith({'a/b/c/d/e/f.txt': ''});
+  assert.equal(detectDeploy(deep).result, 'unknown');
+  assert.match(detectDeploy(deep).reason, /깊이 상한/);
+  assert.equal(detectDeploy(deep, {maxDepth: 5, maxDirs: 2000}).result, 'clean');
+  const wide = repoWith({'a/x.txt': '', 'b/x.txt': '', 'c/x.txt': ''});
+  assert.equal(detectDeploy(wide, {maxDepth: 4, maxDirs: 2}).result, 'unknown');
+  assert.match(detectDeploy(wide, {maxDepth: 4, maxDirs: 2}).reason, /상한/);
+  assert.equal(detectDeploy(wide, {maxDepth: 4, maxDirs: 100}).result, 'clean');
+});
+
+test('판별: 링크·읽기 실패는 unknown(F6), 배포 낱말 없는 CI는 clean', () => {
+  const broken = tmp('kadan-det-');
+  fs.mkdirSync(path.join(broken, '.github'));
+  fs.symlinkSync(path.join(broken, 'no-such-target'), path.join(broken, '.github', 'workflows'));
+  assert.equal(detectDeploy(broken).result, 'unknown');
+  const out = tmp('kadan-det-'), outside = tmp('kadan-det-outside-');
+  write(outside, 'x.yml', `on: push\njobs:\n  s:\n    steps:\n${deployStep}`);
+  write(out, '.github/workflows/ok.yml', 'on: push\n');
+  fs.symlinkSync(path.join(outside, 'x.yml'), path.join(out, '.github', 'workflows', 'link.yml'));
+  assert.equal(detectDeploy(out).result, 'unknown');
+  const noDeploy = repoWith({'.github/workflows/ci.yml': flow('  push:\n    branches: [main]\n  pull_request:'), 'package.json': '{"scripts":{"test":"node tests/run.mjs"}}'});
+  assert.equal(detectDeploy(noDeploy).result, 'clean');
+  assert.equal(decide('auto', detectDeploy(noDeploy)).action, 'merge');
+});
+
+test('판별: 낱말 경계와 목록 — upload-artifact는 배포가 아니다', () => {
+  for (const hit of ['deploy', 'Deployment', 'gh-pages', 'actions/deploy-pages', 'npm publish', 'docker  push', 'flyctl', 'AWS_KEY', 'ssh-agent', 'kubectl apply', 'wrangler'])
+    assert.ok(findDeployWord(hit), hit);
+  for (const miss of ['actions/upload-artifact@v4', 'butterfly', 'npm test', 'compression', 'render2'])
+    assert.equal(findDeployWord(miss), null, miss);
+});
+
+test('판별: 이 저장소(kadan) 자체는 clean이다', () => {
+  assert.equal(detectDeploy(REPO_ROOT).result, 'clean');
+});
+
+test('정책: 손상 문구에는 홈 절대 경로를 넣지 않는다(F7). 쓰기 거절은 CLI용으로 경로를 붙인다', () => {
+  const home = tmp('kadan-repo-policy-');
+  fs.writeFileSync(policyPath(home), '{깨진');
+  const {corrupt} = readPolicy(home);
+  assert.match(corrupt, /night-repo-policy\.json/);
+  assert.ok(!corrupt.includes(home), corrupt);
+  assert.ok(!evaluateRepo(home, 'site', {repoPath: null}).verdict.detail.includes(home));
+  assert.throws(() => setRepoPolicy(home, {repo: 'site', value: 'hold', by: '사람'}), e => e.message.includes(home));
 });
 
 test('최종 판정 표: merge·hold·auto × deploy·clean·unknown', () => {
