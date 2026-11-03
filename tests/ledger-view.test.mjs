@@ -278,6 +278,26 @@ test('첫 열기 판정의 두 읽기 사이에 다른 열기가 스키마를 �
   db.exec('COMMIT');db.close();
 });
 
+test('첫 읽기 뒤에 표식 없는 다른 표가 생기면 거절하고 파일을 바꾸지 않는다', () => {
+  for (const wal of [false, true]) {
+    const home = homeOf(), file = ledgerViewPath(home);
+    fs.mkdirSync(path.dirname(file), {recursive:true});
+    const seed = new DatabaseSync(file);
+    if (wal) seed.exec('PRAGMA journal_mode=WAL');
+    seed.close();
+    assert.throws(() => openLedgerView(home, {afterFirstRead() {
+      const foreign = new DatabaseSync(file);
+      foreign.exec('CREATE TABLE foreign_data(value); INSERT INTO foreign_data VALUES(42)');foreign.close();
+    }}), /다른 종류의 조회 캐시/);
+    const check = new DatabaseSync(file);
+    try {
+      assert.equal(check.prepare('PRAGMA application_id').get().application_id, 0);
+      assert.equal(check.prepare('SELECT count(*) AS n FROM sqlite_master').get().n, 1);
+      assert.equal(check.prepare('SELECT value FROM foreign_data').get().value, 42);
+    } finally {check.close();}
+  }
+});
+
 test('남의 파일은 두 읽기 순서와 무관하게 거절한다', () => {
   for (const setup of ['CREATE TABLE x(a)', 'PRAGMA application_id=7']) {
     const home = homeOf();
