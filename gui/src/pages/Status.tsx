@@ -5,7 +5,7 @@ import { CardLink, DocumentContent, ErrorMessage, Freshness, Health, AppContext,
 import Radar from "../Radar";
 import StatusFront, { type FrontData } from "./StatusFront";
 import { radarBlips } from "../radar-blips";
-import { firstLine, groupAskText, groupStopped, shortenTurn, type StopGroup } from "../stopped";
+import { ALERT_SHOWN, STOP_SHOWN, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 
 // 일을 들고 있는데 창이 없는 담당(레이더의 창 없음 점). 세션 상태를 모르면 비워 둔다.
@@ -110,9 +110,11 @@ export default function Status({url}: {url: URL}) {
       ? <details className="st-reason-fold"><summary>{firstLine(row.failureReason)}</summary><p>{row.failureReason}</p></details>
       : showReason && row.healthReason ? <p className="st-stop-reason">{row.healthReason}</p> : null}
   </li>;
+  const alertRow = (a: OpenAlerts["items"][number]) => <li key={a.id} data-fresh={`alert:${a.id}`} className="st-alert-row"><strong>{a.kind === "알림밀림" ? "알림이 계속 밀림" : a.kind === "훅신뢰" ? (a.trustState === "unknown" ? "Stop 훅 신뢰 확인 불가" : "Stop 훅 신뢰 필요") : a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.kind === "훅신뢰" ? `${a.trustText || a.trustState || "상태 모름"} · ` : ""}{a.kind === "알림밀림" ? `${a.holdCount ?? "?"}번 · ${a.holdReason || a.holdCode || "사유 모름"}${a.holdReason && a.holdCode ? ` (${a.holdCode})` : ""}${a.heldSince ? " · " + time(a.heldSince) + "부터" : ""} · ` : ""}{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>;
   const stopGroup = (group: StopGroup) => {
-    const many = group.rows.length > 3;
-    const rows = group.rows.map(row => stopRow(row, !many));
+    // 앞 STOP_SHOWN장은 이유와 함께 늘 펼쳐 보이고 나머지만 접는다(막힘은 통째로 닫히지 않는다).
+    const split = headRest(group.rows, STOP_SHOWN);
+    const shown = split.head.map(row => stopRow(row, true)), rest = split.rest.map(row => stopRow(row, false));
     const stale = group.key === "stale";
     return <section key={group.key} id={stale ? "status-stale" : undefined} className={"st-stop-group st-stop-" + group.key.split(":")[0]}>
       <header className="st-stop-head">
@@ -120,9 +122,8 @@ export default function Status({url}: {url: URL}) {
         {group.firstAt && <small>신호 {time(group.firstAt)}{group.lastAt && group.lastAt !== group.firstAt ? " ~ " + time(group.lastAt) : ""}</small>}
       </header>
       {group.desc && <p className="st-stop-desc">{group.desc} <button className="copy-question" onClick={() => void copy(stale ? (data?.cleanupRequest || "") : groupAskText(group))}>{stale ? "정리 요청 복사" : "감독에게 물어볼 문장 복사"}</button></p>}
-      {many
-        ? <details className="st-fold"><summary>목록 {group.rows.length}장</summary><ul className="st-stop-list">{rows}</ul></details>
-        : <ul className="st-stop-list">{rows}</ul>}
+      <ul className="st-stop-list">{shown}</ul>
+      {rest.length > 0 && <details className="st-fold"><summary>나머지 {rest.length}장</summary><ul className="st-stop-list">{rest}</ul></details>}
     </section>;
   };
   const section = (id: string, title: string, key: string, hint: string) => {
@@ -183,7 +184,7 @@ export default function Status({url}: {url: URL}) {
         <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미확정은 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>
         {stoppedCount ? stoppedGroups.map(stopGroup) : <p className="st-empty">멈춘 카드가 없습니다.</p>}
         {data.alerts === null ? <p className="st-error" role="alert">감시 경보를 읽지 못했습니다(원장 확인 불가).</p>
-          : data.alerts.count > 0 && <details className="st-fold" open={data.alerts.count <= 5}><summary>해소 전 감시 경보 {data.alerts.count}건</summary><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.map(a => <li key={a.id} data-fresh={`alert:${a.id}`} className="st-alert-row"><strong>{a.kind === "알림밀림" ? "알림이 계속 밀림" : a.kind === "훅신뢰" ? (a.trustState === "unknown" ? "Stop 훅 신뢰 확인 불가" : "Stop 훅 신뢰 필요") : a.kind || "경보"}</strong><span>{a.role || a.session || "대상 모름"}</span><small>{a.kind === "훅신뢰" ? `${a.trustText || a.trustState || "상태 모름"} · ` : ""}{a.kind === "알림밀림" ? `${a.holdCount ?? "?"}번 · ${a.holdReason || a.holdCode || "사유 모름"}${a.holdReason && a.holdCode ? ` (${a.holdCode})` : ""}${a.heldSince ? " · " + time(a.heldSince) + "부터" : ""} · ` : ""}{a.level}{a.recipient ? " · 수신 " + a.recipient : ""} · {time(a.at)}</small></li>)}</ul></details>}
+          : data.alerts.count > 0 && <section className="st-alerts"><h3>해소 전 감시 경보 <span className="st-cnt st-cnt-attn">{data.alerts.count}건</span></h3><p className="st-hint">감시기가 보냈지만 아직 해소 기록이 없는 경보입니다. 수신자가 처리하면 다음 순회에서 닫힙니다.</p><ul className="st-alert-list">{data.alerts.items.slice(0, ALERT_SHOWN).map(alertRow)}</ul>{data.alerts.items.length > ALERT_SHOWN && <details className="st-fold"><summary>나머지 {data.alerts.count - ALERT_SHOWN}건</summary><ul className="st-alert-list">{data.alerts.items.slice(ALERT_SHOWN).map(alertRow)}</ul></details>}</section>}
       </section>
       <section id="status-flow" className="st-section">
         <header className="st-sec-head"><h2>흐름 확인</h2><span className={"st-cnt" + (data.flow.unconfirmedCount ? " st-cnt-attn" : "")}>{data.flow.unconfirmedCount}건</span><span className="st-hint">티키타카 묶음 {data.flow.total}개 중 라운드·구현·검수 연결이 깨져 집계되지 않는 묶음입니다. 감독이 카드의 묶음 번호·단계를 고치면 빠집니다.</span></header>

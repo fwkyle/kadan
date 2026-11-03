@@ -36,6 +36,10 @@ test("내 앞 띠: 결정·머지 요청·막힘을 저장소별로 센다", () 
 test("결정 0건·결정 읽기 실패에서도 깨지지 않는다", () => {
   assert.deepEqual(frontStrip({ decisions: [], stoppedRows: [] }), { repos: [], decisions: [] });
   assert.deepEqual(frontStrip({ decisions: null, stoppedRows: [] }), { repos: [], decisions: null });
+  // 결정 조회 실패: 막힌 저장소 줄의 결정·머지는 0이 아니라 null(모름)
+  const failed = frontStrip({ decisions: null, stoppedRows: [{ key: "rottie/c3", repo: "rottie" }] });
+  assert.deepEqual(failed.repos, [{ repo: "rottie", decisions: null, merges: null, stuck: 1 }]);
+  assert.equal(failed.decisions, null);
 });
 
 test("status 응답: 끝난 워크 본문은 건수만, ?works=all이면 본문, front가 실린다", () => {

@@ -120,3 +120,10 @@ export function groupAskText(group: StopGroup): string {
     ". 후속 처리 방향과 근거를 확인해주세요."
   );
 }
+
+// 막힘 묶음은 앞 3장, 경보는 앞 5건을 늘 펼쳐 보이고 나머지만 접는다(통째로 닫히지 않는다).
+export const STOP_SHOWN = 3;
+export const ALERT_SHOWN = 5;
+export function headRest<T>(items: T[], shown: number): { head: T[]; rest: T[] } {
+  return { head: items.slice(0, shown), rest: items.slice(shown) };
+}

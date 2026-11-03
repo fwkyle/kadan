@@ -17,9 +17,11 @@ const cut = (text, n) => (text.length > n ? text.slice(0, n - 1) + "…" : text)
 
 // decisions: 열린 결정 목록(null이면 읽지 못함). stoppedRows: 막힌·오래된 미확정 실행 행.
 export function frontStrip({ decisions, stoppedRows }) {
+  // 결정 기록을 못 읽었으면(null) 결정·머지 수는 0이 아니라 모름(null)이다.
+  const unknown = decisions === null;
   const repos = new Map();
   const slot = (repo) => {
-    if (!repos.has(repo)) repos.set(repo, { repo, decisions: 0, merges: 0, stuck: 0 });
+    if (!repos.has(repo)) repos.set(repo, { repo, decisions: unknown ? null : 0, merges: unknown ? null : 0, stuck: 0 });
     return repos.get(repo);
   };
   const items = [];
@@ -33,6 +35,6 @@ export function frontStrip({ decisions, stoppedRows }) {
   }
   for (const row of stoppedRows) slot(row.repo || repoOfKey(row.key)).stuck += 1;
   const list = [...repos.values()].sort((a, b) =>
-    (b.decisions + b.merges + b.stuck) - (a.decisions + a.merges + a.stuck) || a.repo.localeCompare(b.repo, "ko"));
+    ((b.decisions ?? 0) + (b.merges ?? 0) + b.stuck) - ((a.decisions ?? 0) + (a.merges ?? 0) + a.stuck) || a.repo.localeCompare(b.repo, "ko"));
   return { repos: list, decisions: decisions === null ? null : items };
 }
