@@ -41,6 +41,11 @@ const normPath = p => expandHome(String(p).trim()).replace(/\/+$/, '');
 
 export const policyPath = home => path.join(home, POLICY_FILE);
 
+// 사람용 문구(message, CLI에서는 경로 포함)와 HTTP용 문구(httpMessage, 파일 이름과 오류 종류만)를 한 곳에서 나눈다(검수 F3).
+export class NightRepoPolicyError extends Error {
+  constructor(message, httpMessage = message) { super(message); this.httpMessage = httpMessage; }
+}
+
 // 손상은 "읽지 못함"과 같게 다룬다: 읽기는 hold, 쓰기는 거절. 다른 값으로 넘어가지 않는다.
 // 저장 키는 GitHub 소유자/이름이다. 옛 형식(맨 이름)은 "덮어쓰기 없음"으로 읽고 legacy에 따로 담는다(지우지 않는다).
 // 예전 `auto` 값은 저장값 없음으로 읽는다(legacy에도 담지 않고, 다시 쓸 때 빠진다).
@@ -70,7 +75,10 @@ export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toI
   if (!acquireDirLock(lock)) throw new Error('밤 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
   try {
     const current = readPolicy(home);
-    if (current.corrupt) throw new Error(`${current.corrupt} (${policyPath(home)}) — 파일을 확인한 뒤 고치거나 .trash/로 옮기세요. 읽기는 hold로 봅니다`);
+    if (current.corrupt) {
+      const advice = '파일을 확인한 뒤 고치거나 .trash/로 옮기세요. 읽기는 hold로 봅니다';
+      throw new NightRepoPolicyError(`${current.corrupt} (${policyPath(home)}) — ${advice}`, `${current.corrupt} — ${advice}`);
+    }
     const before = current.repos[key]?.value ?? null;
     const entry = {value, at: now(), by};
     const file = policyPath(home), tmp = `${file}.${process.pid}.tmp`;
@@ -81,18 +89,33 @@ export function setRepoPolicy(home, {repo, value, by, now = () => new Date().toI
   } finally { fs.renameSync(lock, `${lock}.released-${randomUUID()}`); }
 }
 
+// 판정에 쓰는 칸. 이 키처럼 보이는 줄(따옴표·공백·대소문자·들여쓰기 변형 포함)이 정확한 형식(`키: 값`)이 아니거나 두 번 나오면
+// "못 읽음"이다. "칸 없음(기본 허용)"은 키처럼 보이는 줄이 전혀 없을 때만이다(검수 F1). 다른 칸(url·rules 등)은 너그럽게 읽는다.
+const STRICT_KEYS = ['night_merge', 'deploy_branch', 'remote'];
+const STRICT_LINE = /^(night_merge|deploy_branch|remote):/;
+const LOOSE_LINE = /^\s*["']?\s*(night[_-]merge|deploy[_-]branch|remote)\s*["']?\s*:/i;
+
 // 카드 앞머리(`---` 사이)의 `키: 값` 줄. 닫는 `---`가 없거나 첫 줄이 `---`가 아니면 null(깨짐).
+// 판정 칸의 문제는 problems에 줄 번호(파일 기준 1부터)와 함께 담는다.
 function frontmatter(text) {
   const lines = text.split(/\r?\n/);
   if (lines[0]?.trim() !== '---') return null;
   const end = lines.indexOf('---', 1);
   if (end < 0) return null;
-  const fields = {};
-  for (const line of lines.slice(1, end)) {
+  const fields = {}, exact = {}, badForm = {};
+  lines.slice(1, end).forEach((line, i) => {
+    const no = i + 2;
+    const strict = STRICT_LINE.exec(line)?.[1];
+    if (strict) (exact[strict] ??= []).push(no);
+    else { const loose = LOOSE_LINE.exec(line)?.[1]; if (loose) (badForm[loose.toLowerCase().replace('-', '_')] ??= []).push(no); }
     const m = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
     if (m && !(m[1] in fields)) fields[m[1]] = m[2].trim().replace(/^(["'])(.*)\1$/, '$2');
-  }
-  return fields;
+  });
+  const problems = STRICT_KEYS.flatMap(key => [
+    ...(badForm[key] ? [`${key} 줄 ${badForm[key].join('·')} 형식이 틀림(정확히 "${key}: 값"만 읽음)`] : []),
+    ...(exact[key]?.length > 1 ? [`${key} 칸이 중복: 줄 ${exact[key].join('·')}`] : []),
+  ]);
+  return {fields, problems};
 }
 
 const realPath = p => { try { return fs.realpathSync(p).replace(/\/+$/, ''); } catch { return p; } };
@@ -152,9 +175,11 @@ export function loadCards(dirs = process.env.KADAN_ONTOLOGY_DIRS?.split(path.del
       continue;
     }
     for (const name of names) {
-      let fields = null;
-      try { fields = frontmatter(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { /* 깨진 카드와 같게 본다 */ }
-      cards.push({id: `${path.basename(dir)}/${name.slice(0, -3)}`, hub: hubOf(dir), name: name.slice(0, -3), broken: fields === null,
+      let parsed = null;
+      try { parsed = frontmatter(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { /* 깨진 카드와 같게 본다 */ }
+      const fields = parsed?.fields ?? null;
+      cards.push({id: `${path.basename(dir)}/${name.slice(0, -3)}`, hub: hubOf(dir), name: name.slice(0, -3), broken: parsed === null,
+        problems: parsed?.problems ?? [],
         repo: fields ? cardRepoPath(fields.repo) : null, github: parseRemote(fields?.remote), deploy: firstWord(fields?.deploy),
         deployBranch: parseDeployBranch(fields?.deploy_branch),
         nightMerge: fields && 'night_merge' in fields ? (firstWord(fields.night_merge) ?? '') : null});
@@ -177,6 +202,7 @@ const noSource = () => sourceOf(null, null);
 // "merge이지만 그 브랜치로 가는 PR만 보류"다.
 function judgeCard(card, key) {
   if (card.broken) return setupNeeded('카드 앞머리를 읽을 수 없음', card);
+  if (card.problems.length) return setupNeeded(`카드 판정 칸을 읽을 수 없음: ${card.problems.join('; ')}`, card);
   const db = card.deployBranch;
   if (db === null) return setupNeeded('deploy_branch 칸 없음', card);
   if (db.kind === 'unreadable') return setupNeeded('deploy_branch 형식을 읽을 수 없음(낱말 하나 또는 {소유자/이름: 브랜치} 목록만 읽음)', card);
@@ -251,7 +277,10 @@ export function evaluateWork(home, workKey, {repoPath, policy = readPolicy(home)
   if (!found.card) return [rowFor(policy, {repo: workKey, github: null, problem: found.problem})];
   const {card} = found;
   const keys = card.deployBranch?.kind === 'map' ? Object.keys(card.deployBranch.map).sort() : [card.github];
-  return keys.map(github => rowFor(policy, {repo: workKey, github, card}));
+  // 판정 원본은 한 곳이다(검수 F2): github 키가 있는 줄은 decideNightMerge와 같은 evaluateGithub 결과를 쓰고 업무 경로는 줄을 만들 때만 쓴다.
+  // 그 키가 다른 카드와 겹치면 판정 함수처럼 setup-needed다. 키를 모르는 줄(카드 remote를 못 읽음)만 이 카드로 직접 판정한다.
+  return keys.map(github => (github ? {...evaluateGithub(home, github, {policy, ontology}), repo: workKey}
+    : rowFor(policy, {repo: workKey, github, card})));
 }
 
 // 업무 목록에서 저장소 경로를 찾는다(업무 키 앞부분 = 폴더). 같은 키의 경로가 여럿이면 첫 번째다.

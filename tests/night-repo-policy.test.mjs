@@ -527,3 +527,70 @@ test('정책 F7: 읽기 권한 오류 문구에도 절대 경로가 없다(파�
     assert.ok(!JSON.stringify(evaluateGithub(home, 'acme/site')).includes(home));
   } finally { fs.chmodSync(policyPath(home), 0o600); }
 });
+
+// ---- 검수 exec-fd6238f9 F1~F3: 판정 칸은 엄격하게 읽는다 · 목록은 판정 함수와 같다 · HTTP에 절대 경로 없음 ----
+const strictDecide = (fields, baseBranch = 'dev') => {
+  const dir = tmp('kadan-strict-');
+  write(dir, 'app.md', `---\nremote: Acme/App\n${fields}\n---\n`);
+  return decideNightMerge(home0(), {github: 'acme/app', baseBranch, ontology: loadCards([dir])});
+};
+
+test('F1: 판정 칸(night_merge·deploy_branch·remote)이 중복이거나 형식이 틀리면 못 읽음(setup-needed, 줄 번호)', () => {
+  const cases = {
+    'night_merge 중복': ['deploy_branch: 없음\nnight_merge: 허용\nnight_merge: 금지', /night_merge.*중복.*4.*5/],
+    '콜론 앞 공백': ['deploy_branch: 없음\nnight_merge : 금지', /night_merge 줄 4 형식/],
+    '따옴표 키': ['deploy_branch: 없음\n"night_merge": 금지', /night_merge 줄 4 형식/],
+    '대소문자 키': ['deploy_branch: 없음\nNight_Merge: 금지', /night_merge 줄 4 형식/],
+    '들여쓴 키': ['deploy_branch: 없음\n  night_merge: 금지', /night_merge 줄 4 형식/],
+    'deploy_branch 중복': ['deploy_branch: 없음\ndeploy_branch: main', /deploy_branch.*중복.*3.*4/],
+    'deploy_branch 공백 콜론': ['deploy_branch : main', /deploy_branch 줄 3 형식/],
+    'remote 중복': ['deploy_branch: 없음\nremote: Other/App', /remote.*중복.*2.*4/],
+  };
+  for (const [name, [fields, detail]] of Object.entries(cases)) {
+    const out = strictDecide(fields, name.startsWith('deploy_branch') ? 'main' : 'dev');
+    assert.equal(out.action, 'hold', name);
+    assert.equal(out.reason, 'setup-needed', name);
+    const dir = tmp('kadan-strict-d-');
+    write(dir, 'app.md', `---\nremote: Acme/App\n${fields}\n---\n`);
+    const info = evaluateGithub(home0(), 'acme/app', {ontology: loadCards([dir])});
+    assert.match(info.verdict.detail, detail, name);
+  }
+});
+
+test('F1 대조: 정상 카드(칸 하나씩)는 그대로 판정하고, 칸이 정말 없을 때만 기본 허용', () => {
+  assert.equal(strictDecide('deploy_branch: main', 'main').reason, 'deploy-branch');
+  assert.equal(strictDecide('deploy_branch: main', 'dev').reason, 'ontology-allowed');
+  assert.equal(strictDecide('deploy_branch: 없음\nnight_merge: 금지').reason, 'ontology-night-merge-forbidden');
+  assert.equal(strictDecide('deploy_branch: 없음').action, 'merge'); // night_merge 키처럼 보이는 줄 없음 → 허용
+  assert.equal(strictDecide('deploy_branch: 없음\nnight_mergeable: x').action, 'merge'); // 다른 키는 키처럼 안 보임
+  assert.equal(strictDecide('deploy_branch: 없음\nurl : https://x.example\nRules: 느슨').action, 'merge'); // 판정에 안 쓰는 칸은 너그럽게
+});
+
+test('F2: 목록(listRepos)의 각 줄 판정은 그 줄의 github 키로 부른 decideNightMerge와 같다(카드 중복 포함)', () => {
+  const dir = tmp('kadan-dup-'), home = home0();
+  for (const [name, branch] of [['a', '없음'], ['b', 'main']]) card(dir, name, `repo: ${dir}/${name}\nremote: acme/app\ndeploy_branch: ${branch}`);
+  ontology(dir);
+  const row = listRepos(home, [{key: 'a/w', repoPath: `${dir}/a`}]).repos[0];
+  const gate = decideNightMerge(home, {github: 'acme/app'});
+  assert.equal(row.github, 'acme/app');
+  assert.equal(row.verdict.action, 'hold');
+  assert.equal(row.verdict.reason, 'setup-needed');
+  assert.equal(row.verdict.action, gate.action);
+  assert.equal(row.verdict.reason, gate.reason);
+  // 저장된 덮어쓰기는 두 경로 모두 먼저 적용된다.
+  setRepoPolicy(home, {repo: 'acme/app', value: 'merge', by: '사람'});
+  assert.equal(listRepos(home, [{key: 'a/w', repoPath: `${dir}/a`}]).repos[0].verdict.reason, 'repo-policy-merge');
+});
+
+test('F3: 손상 정책 파일 POST 거절 응답에 절대 경로가 없다(파일 이름·오류 종류만), CLI 쪽 오류에는 경로가 남는다', async () => {
+  const home = tmp('kadan-repo-post-corrupt-');
+  fs.writeFileSync(policyPath(home), '{bad');
+  const handler = createCenterHandler(home);
+  const r = await call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, {repo: 'acme/app', value: 'hold'})}));
+  assert.equal(r.status, 409);
+  assert.ok(!r.body.includes(home), r.body);
+  assert.match(r.body, /night-repo-policy\.json/);
+  assert.match(r.body, /JSON 구문 오류/);
+  assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{bad');
+  assert.throws(() => setRepoPolicy(home, {repo: 'acme/app', value: 'hold', by: '사람'}), error => error.message.includes(policyPath(home)));
+});

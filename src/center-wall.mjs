@@ -398,7 +398,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
    }
    const card=url.pathname.endsWith('create')?store.create({...f,by:'사람'}):store.update(f.key,{...(f.turnOwner?.trim()?{turnOwner:f.turnOwner.trim()}:{}),...(f.status==='superseded'&&f.replacedBy?{replacedBy:f.replacedBy}:{}),...(f.status==='superseded'&&f.replacedByText?{replacedByText:f.replacedByText}:{}),...(f.rallyId!==undefined?{rallyId:f.rallyId,rallyTitle:f.rallyTitle,rallyRound:f.rallyRound,rallyStep:f.rallyStep}:{}),title:f.title,status:f.status,scope:f.scope,...(f.statusReason?{statusReason:f.statusReason}:{}),...(f.resolutionOwner!==undefined?{resolutionOwner:f.resolutionOwner||null}:{}),...(f.nextAction!==undefined?{nextAction:f.nextAction||null}:{}),...(f.workType?{workType:f.workType}:{}),board:f.board||null,role:f.role||null},{revision:f.revision,by:'사람',noteKind:f.noteKind,note:f.note});
    saved(`/?card=${encodeURIComponent(card.key)}#detail`,{key:card.key,revision:card.revision});
-  }catch(error){fail(409,error.message)}
+  }catch(error){fail(409,error.httpMessage??error.message)}
   return true;
  }};
 }
