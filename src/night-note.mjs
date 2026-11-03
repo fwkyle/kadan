@@ -61,16 +61,20 @@ export function tallyNotes(notes) {
   const distinct = list => new Set(list.map((n, i) => n.pr || `#${i}`)).size;
   const holds = by('hold');
   const gates = by('gate');
+  // 관문을 통과했는데 같은 --pr의 merge 기록이 없는 PR(pr가 없는 기록은 짝을 못 지으므로 뺀다). 머지를 못 했거나 기록을 빠뜨린 것이다.
+  const mergedPrs = new Set(by('merge').map(n => n.pr).filter(Boolean));
+  const unmerged = [...new Map(gates.filter(n => n.verdict === 'pass' && n.pr && !mergedPrs.has(n.pr)).map(n => [n.pr, n])).values()];
   return {
     total: notes.length,
     decisions: by('decision'), holds, starts: by('start'),
-    passes: gates.filter(n => n.verdict === 'pass'), rejects: gates.filter(n => n.verdict === 'reject'), merges: by('merge'),
+    passes: gates.filter(n => n.verdict === 'pass'), unmerged, rejects: gates.filter(n => n.verdict === 'reject'), merges: by('merge'),
     counts: {
       noteDecisions: by('decision').length,
       noteHolds: Object.fromEntries(HOLD_KINDS.map(k => [k, holds.filter(n => n.holdKind === k).length])),
       gatePass: distinct(gates.filter(n => n.verdict === 'pass')),
       gateReject: distinct(gates.filter(n => n.verdict === 'reject')),
       merges: distinct(by('merge')),
+      unmerged: unmerged.length,
       starts: by('start').length,
     },
   };

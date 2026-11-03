@@ -70,6 +70,7 @@ function noteLines(t, listN) {
     const warn = c.merges > c.gatePass ? ' (통과 기록보다 머지 기록이 많음)' : '';
     lines.push(`- 관문 통과 ${c.gatePass}건 · 머지 기록 ${c.merges}건${warn} — 관문 기록 없이 한 머지는 GitHub에서 확인`);
     list('머지', t.merges, n => item(`${ref(n)} ${n.text}`.trim()));
+    if (c.unmerged) { lines.push(`- 통과 후 머지 미확인 ${c.unmerged}건 — 관문은 통과했지만 같은 PR의 머지 기록이 없음(머지 못 했거나 기록 누락)`); list('미확인', t.unmerged, n => item(`${n.pr}${n.sha ? ` ${n.sha.slice(0, 7)}` : ''}`)); }
   } else lines.push('- 관문·머지 기록 없음 — 기록 없이 한 머지는 GitHub에서 확인');
   if (c.starts) { lines.push(`- 시작한 밤 일감 ${c.starts}건`); list('일감', t.starts, n => item(`${n.work ? `${n.work} ` : ''}${n.text}`)); }
   return lines;
@@ -93,6 +94,7 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
   // 알림 상한 안에 제목·기간·집계가 모두 들어가야 한다. 넘치면 원문 표시를 먼저 줄이고, 그래도 넘치면 보류 상세를 뺀다(건수는 남는다).
   const render = (quoteLimit, showHeld, listN = 0) => {
     const lines = [];
+    if (start.allow?.length) lines.push(`나이트런 중 자동 머지 허용(--allow): ${start.allow.map(cleanNoteText).join(', ')} — kyle "${fold(start.quote, quoteLimit)}"`);
     lines.push(start.viaChat
       ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan night status --text, 원장)`
       : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan night status --text, 원장)`);

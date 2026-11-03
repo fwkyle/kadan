@@ -148,6 +148,28 @@ test('요약: 결정 50개(긴 문장)여도 1,800자 안이고 외 n건이 맞�
   assert.match(t, /대신 정한 결정 30건/);
 });
 
+test('요약: 통과 2건과 머지 기록 1건이면 "통과 후 머지 미확인 1건"과 그 PR이 나온다', () => {
+  const gate = (i, pr) => note(i, 'gate', '통과', {verdict: 'pass', pr, sha: 'abcdef1234'});
+  const t = summarize([gate(0, 'k#1'), gate(1, 'k#2'), note(2, 'merge', '머지', {pr: 'k#1', sha: 'abc1234'})]);
+  assert.equal(t.counts.unmerged, 1);
+  assert.match(t.text, /통과 후 머지 미확인 1건/);
+  assert.match(t.text, /미확인: k#2/);
+  assert.doesNotMatch(t.text, /미확인: k#1/);
+  const all = summarize([gate(0, 'k#1'), note(1, 'merge', '머지', {pr: 'k#1'})]);
+  assert.equal(all.counts.unmerged, 0);
+  assert.doesNotMatch(all.text, /머지 미확인/);
+  assert.ok(t.text.length <= 1800);
+});
+
+test('요약: 허용(--allow)이 있으면 첫 줄에 보이고, 없으면 줄이 없다', () => {
+  const withAllow = summarizeNight({start: {...startEvent, allow: ['acme/app', 'foo/bar'], quote: '이번엔 승인'}, phase: 'expired', endedAt: T0 + 8 * 3600_000,
+    entries: [note(0, 'decision', '결정')], decisionEvents: [], readBody: () => null});
+  const lines = withAllow.text.split('\n');
+  assert.equal(lines[0], '나이트런 중 자동 머지 허용(--allow): acme/app, foo/bar — kyle "이번엔 승인"');
+  assert.match(lines[1], /^kyle 위임:/);
+  assert.doesNotMatch(summarize([note(0, 'decision', '결정')]).text, /--allow/);
+});
+
 test('요약 머지 문구: 정직하게 쓴다(기록 없는 머지를 0이라고 단정하지 않는다)', () => {
   const gate = (i, pr) => note(i, 'gate', '통과', {verdict: 'pass', pr});
   const merge = (i, pr) => note(i, 'merge', '머지', {pr, sha: 'abc1234'});

@@ -9,6 +9,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {nightCommand} from '../src/commands/night.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {nightGuard, guardedReason} from '../src/night-guard.mjs';
+import {AUTO_CHECKLIST} from '../src/night.mjs';
 
 // 가짜 시계·가짜 우편만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다. 역할 이름도 시험용이다.
 const T0 = Date.parse('2026-11-02T14:00:00.000Z');
@@ -50,7 +51,14 @@ test('--level 자동: on 사건에 level·onlyRunning, status, 자동 단계 문
   assert.match(msg, /\[나이트 결정\]/);
   assert.match(msg, /영구 삭제/);
   assert.match(msg, /코드가 막지 못하므로/);
-  assert.match(msg, /자동 머지 관문이 생기기 전이라 아침으로 보류/);
+  // 13. 머지는 관문 뒤에만: 옛 "아침으로 보류" 문구가 사라지고 관문·머지 명령이 들어 있다.
+  assert.doesNotMatch(msg, /아침으로 보류합니다/);
+  assert.match(msg, /kadan merge-gate/);
+  assert.match(msg, /--match-head-commit/);
+  assert.match(msg, /관문이 거절한 머지, `--allow` 없이 정책이 보류한 저장소의 머지/);
+  assert.doesNotMatch(msg, /머지가 곧 운영 배포인 저장소의 머지/);
+  for (const line of AUTO_CHECKLIST) assert.doesNotMatch(line, /머지를 아침으로 보류합니다/);
+  assert.match(AUTO_CHECKLIST.join('\n'), /merge-gate[\s\S]*--match-head-commit/);
   assert.doesNotMatch(msg, /새 일감을 시작하지 않습니다/);
   assert.match(msg, /위 \(1\)~\(9\) 줄/);
 });
