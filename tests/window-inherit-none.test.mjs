@@ -73,3 +73,40 @@ test('8. 명시 none 호출부(autostart·대시보드 켜기)는 FORCE를 같�
   // 그 env로 들어온 자식은 pane 안이어도 none을 유지한다.
   assert.equal(run({...seen}, home('rottie')).env.KADAN_WINDOW, 'none');
 });
+
+// 알림 줄은 창을 고르는 명령에서만. 환경 채우기와 손상 경고는 모든 명령에서 그대로다.
+const runCmd = async (command, env, h) => {
+  const {adoptWindowForCommand} = await import('../src/cli.mjs');
+  const warns = [];
+  adoptWindowForCommand(command, env, h, {socket: SOCKET, warn: l => warns.push(l)});
+  return {env, warns};
+};
+
+test('9. 창과 무관한 명령(decision·inbox·log)은 알림 줄 없이 환경만 rottie로 채운다', async () => {
+  for (const command of ['decision', 'inbox', 'log']) {
+    const {env, warns} = await runCmd(command, {TMUX: pane, KADAN_WINDOW: 'none'}, home('rottie'));
+    assert.deepEqual(warns, [], command);
+    assert.equal(env.KADAN_WINDOW, 'rottie', command);
+    assert.equal(env.KADAN_ROTTIE_BIN, SETTING_BIN, command);
+  }
+});
+
+test('10. 창을 고르는 명령(start·attach·restart·restore·handover·adopt·up·init·senior)은 알림 한 줄', async () => {
+  const {WINDOW_NOTICE_COMMANDS} = await import('../src/cli.mjs');
+  for (const command of WINDOW_NOTICE_COMMANDS) {
+    const {env, warns} = await runCmd(command, {TMUX: pane, KADAN_WINDOW: 'none'}, home('rottie'));
+    assert.equal(warns.length, 1, command);
+    assert.equal(env.KADAN_WINDOW, 'rottie', command);
+  }
+  assert.deepEqual(WINDOW_NOTICE_COMMANDS.filter(c => ['decision', 'inbox', 'log', 'send', 'card'].includes(c)), []);
+});
+
+test('11. 손상 설정 경고는 창과 무관한 명령에서도, 창 명령에서도 나온다', async () => {
+  for (const command of ['decision', 'start']) {
+    const h = home(null);
+    fs.writeFileSync(path.join(h, 'window-setting.json'), '{깨짐');
+    const {warns} = await runCmd(command, {TMUX: pane, KADAN_WINDOW: ''}, h);
+    assert.equal(warns.length, 1, command);
+    assert.match(warns[0], /창 선택 설정 손상/);
+  }
+});

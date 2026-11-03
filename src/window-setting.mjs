@@ -79,7 +79,8 @@ export function inheritedNoneOverridden(env, setting, socket) {
   return !!setting && setting.window !== 'none';
 }
 
-export function adoptMachineWindow(env, home, {warn = line => console.error(line), socket} = {}) {
+// warn은 손상 설정 같은 안전 경고(모든 명령), notice는 "물려받은 none을 바꿨다" 안내(창을 고르는 명령에서만, 기본은 warn과 같다).
+export function adoptMachineWindow(env, home, {warn = line => console.error(line), notice = warn, socket} = {}) {
   let resolved;
   corruptSetting = null;
   try { resolved = effectiveWindow(env, home); } catch (error) {
@@ -88,7 +89,7 @@ export function adoptMachineWindow(env, home, {warn = line => console.error(line
     return {windowSource: 'default', setting: null, corrupt: true};
   }
   if (inheritedNoneOverridden(env, resolved.setting, socket)) {
-    warn('물려받은 KADAN_WINDOW=none 대신 기계 설정 ' + resolved.setting.window + '를 쓴다(일부러 none이면 KADAN_WINDOW_FORCE=1)');
+    notice('물려받은 KADAN_WINDOW=none 대신 기계 설정 ' + resolved.setting.window + '를 쓴다(일부러 none이면 KADAN_WINDOW_FORCE=1)');
     env.KADAN_WINDOW = resolved.setting.window;
     if (resolved.setting.rottieBin) env.KADAN_ROTTIE_BIN = resolved.setting.rottieBin;
     return {windowSource: 'setting', setting: resolved.setting, corrupt: false};
