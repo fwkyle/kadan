@@ -40,10 +40,10 @@ function writeFileState(home, state) {
   fs.writeFileSync(tmp, JSON.stringify({ids: state.ids.slice(-MAX_HANDLED), late: state.late.slice(-MAX_HANDLED)}) + '\n', {mode: 0o600});
   fs.renameSync(tmp, file);
 }
-const readHandled = home => readFileState(home).ids;
-const markHandled = (home, id) => { const st = readFileState(home); writeFileState(home, {...st, ids: [...st.ids.filter(x => x !== id), id]}); };
-const readLate = home => readFileState(home).late;
-const markLate = (home, id) => { const st = readFileState(home); writeFileState(home, {...st, late: [...st.late.filter(x => x !== id), id]}); };
+export const readHandled = home => readFileState(home).ids;
+export const markHandled = (home, id) => { const st = readFileState(home); writeFileState(home, {...st, ids: [...st.ids.filter(x => x !== id), id]}); };
+export const readLate = home => readFileState(home).late;
+export const markLate = (home, id) => { const st = readFileState(home); writeFileState(home, {...st, late: [...st.late.filter(x => x !== id), id]}); };
 
 // 디코 글 id는 시간순(snowflake)이다. 결정 요청 메시지보다 먼저(같은 id 포함) 쓰인 글은 그 결정의 답이 될 수 없다.
 // 상태 파일·cursor·재등록이 어떻게 꼬여도 옛 글이 새 결정의 답으로 읽히지 않게 하는 바탕 규칙이다.
