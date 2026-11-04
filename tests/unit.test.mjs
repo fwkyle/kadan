@@ -183,7 +183,7 @@ test("kadan start는 세션에 KADAN_ROLE을 심는다 — tmux -e(card-28)", ()
     "KADAN_ROLE=b1-감독",
     "-e",
     `KADAN_PANE_SOCKET=${currentSocket()}`,
-    "exec env -u TMUX -u TMUX_PANE codex --resume",
+    "unset TMUX TMUX_PANE; codex --resume",
   ]);
   assert.ok(tmuxArgv.every((arg) => typeof arg === "string"));
 });

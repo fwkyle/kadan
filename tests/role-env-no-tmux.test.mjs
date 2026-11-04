@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {
   buildTmuxCreateArgv, wrapNoTmux, tmux, currentSocket, tmuxClientEnv, TMUX_CLIENT_ENV_STRIP,
 } from '../src/floor-tmux.mjs';
@@ -14,26 +15,19 @@ import {inheritedWindowWarning, buildStartLedgerEntry} from '../src/cli-start-su
 
 const socket = currentSocket();
 
-test('단순 명령은 exec env -u 로, 연산자가 든 명령은 unset 앞머리로, 명령이 없으면 로그인 셸로 감싼다', () => {
-  assert.equal(wrapNoTmux('codex --model m'), 'exec env -u TMUX -u TMUX_PANE codex --model m');
-  assert.equal(wrapNoTmux('LC_ALL=C claude --model m'), 'exec env -u TMUX -u TMUX_PANE LC_ALL=C claude --model m');
-  assert.equal(wrapNoTmux('a && b'), 'unset TMUX TMUX_PANE; a && b');
-  assert.equal(wrapNoTmux('exec codex -m x'), 'exec env -u TMUX -u TMUX_PANE codex -m x');
-  assert.equal(wrapNoTmux('exec exec codex'), 'exec env -u TMUX -u TMUX_PANE codex');
-  assert.equal(wrapNoTmux('env X=1 codex'), 'exec env -u TMUX -u TMUX_PANE env X=1 codex');
-  assert.equal(wrapNoTmux('env -i codex'), 'unset TMUX TMUX_PANE; env -i codex');
-  assert.equal(wrapNoTmux('exec env X=1 codex'), 'exec env -u TMUX -u TMUX_PANE env X=1 codex');
-  assert.equal(wrapNoTmux('nohup codex'), 'unset TMUX TMUX_PANE; nohup codex');
-  assert.equal(wrapNoTmux('exec nohup codex'), 'unset TMUX TMUX_PANE; exec nohup codex');
-  assert.equal(wrapNoTmux('X=1 command codex'), 'unset TMUX TMUX_PANE; X=1 command codex');
-  assert.equal(wrapNoTmux('exec'), 'unset TMUX TMUX_PANE; exec');
-  assert.match(wrapNoTmux(undefined), /^exec env -u TMUX -u TMUX_PANE "\$\{SHELL:-\/bin\/sh\}" -l$/);
+test('원문 앞에는 언제나 unset만 붙이고 명령이 없으면 로그인 셸을 실행한다', () => {
+  for (const cmd of ['codex --model m', 'exec X=1 node', 'typeset X=v', 'a && b', '  X="a b" node  ']) {
+    assert.equal(wrapNoTmux(cmd), `unset TMUX TMUX_PANE; ${cmd}`);
+  }
+  for (const cmd of [undefined, '']) {
+    assert.equal(wrapNoTmux(cmd), 'unset TMUX TMUX_PANE; exec "${SHELL:-/bin/sh}" -l');
+  }
 });
 
 test('buildTmuxCreateArgv: 감싼 명령과 KADAN_PANE_SOCKET 표시, 앞쪽 inlineScreenEnv는 그대로', () => {
   const claude = 'claude --model claude-fable-5-1';
   const argv = buildTmuxCreateArgv({session: 'kadan-x', role: 'x', cwd: '/tmp', cmd: claude});
-  assert.equal(argv.at(-1), `exec env -u TMUX -u TMUX_PANE ${claude}`);
+  assert.equal(argv.at(-1), `unset TMUX TMUX_PANE; ${claude}`);
   assert.ok(argv.includes(`KADAN_PANE_SOCKET=${socket}`));
   assert.ok(argv.includes('CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1'));
   assert.equal(buildTmuxCreateArgv({session: 'kadan-x', role: 'x', cwd: '/tmp'}).at(-1), wrapNoTmux(undefined));
@@ -116,29 +110,63 @@ test('실제 tmux: 역할 안에서 소켓 없는 tmux kill-server를 쳐도 격
   }
 });
 
-// --- 실제 셸 실행 회귀(PR #348 검수 P1): 감싼 명령을 진짜 sh·zsh로 실행해 종료 코드와 환경을 본다. tmux는 쓰지 않는다. ---
-import {spawnSync} from 'node:child_process';
-const dump = `${process.execPath} -e "console.log(JSON.stringify({t:process.env.TMUX,p:process.env.TMUX_PANE,x:process.env.X}))"`;
-const heads = [
-  ['exec', `exec ${dump}`, undefined],
-  ['exec exec', `exec exec ${dump}`, undefined],
-  ['exec env X=1', `exec env X=1 ${dump}`, '1'],
-  ['env X=1', `env X=1 ${dump}`, '1'],
-  ['X=1 직접', `X=1 ${dump}`, '1'],
-  ['nohup(애매 앞머리)', `nohup ${dump}`, undefined],
-  ['command(애매 앞머리)', `command ${dump}`, undefined],
+// 실제 셸의 원문 실행이 기준이다. sh와 zsh가 서로 다른 뜻으로 읽는 exec도 그대로 비교한다.
+const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+const dump = `${quote(process.execPath)} -e ${quote(
+  'console.log(JSON.stringify({t:process.env.TMUX,p:process.env.TMUX_PANE,' +
+  'x:process.env.X,foo:process.env.FOO,args:process.argv.slice(1)}))',
+)}`;
+const commands = [
+  ['exec node', `exec ${dump}`],
+  ['exec env X=v node', `exec env X=v ${dump}`],
+  ['exec X=1 node (F1)', `exec X=1 ${dump}`],
+  ['exec exec node', `exec exec ${dump}`],
+  ['typeset (F2)', 'typeset X=review'],
+  ['print (F2)', 'print -r -- review-ok'],
+  ['builtin typeset 대조군', 'builtin typeset X=review'],
+  ['env -u FOO', `env -u FOO ${dump}`],
+  ['env X=v', `env X=v ${dump}`],
+  ['직접 대입', `X=v ${dump}`],
+  ['nohup', `nohup ${dump}`],
+  ['command', `command ${dump}`],
+  ['연산자', `false || ${dump} && printf 'operator-ok\\n'`],
+  ['따옴표 안 공백', `X='a b' ${dump} 'two words'`],
+  ['따옴표 exec', `'exec' ${dump}`],
+  ['exec --', `exec -- ${dump}`],
+  ['exec -a', `exec -a named ${dump}`],
+  ['대입만', 'X=1'],
 ];
 for (const shell of ['/bin/sh', '/bin/zsh']) {
-  for (const [name, cmd, x] of heads) {
-    test(`실제 ${shell} 실행: ${name} 앞머리 종료 코드 0, TMUX 없음${x ? ', X=1 유지' : ''}`, () => {
-      const env = {...process.env, TMUX: '/tmp/x,1,0', TMUX_PANE: '%9'};
-      delete env.X;
-      const run = spawnSync(shell, ['-c', wrapNoTmux(cmd)], {env, encoding: 'utf8'});
-      assert.equal(run.status, 0, run.stderr);
-      const seen = JSON.parse(run.stdout.trim().split('\n').at(-1));
-      assert.equal(seen.t, undefined);
-      assert.equal(seen.p, undefined);
-      assert.equal(seen.x, x);
+  for (const [name, cmd] of commands) {
+    test(`원문 대조 ${shell}: ${name}`, t => {
+      const clean = {...process.env, FOO: 'remove-me'};
+      for (const key of ['TMUX', 'TMUX_PANE', 'X']) delete clean[key];
+      const dirty = {...clean, TMUX: '/tmp/fake,1,0', TMUX_PANE: '%9'};
+      const run = (text, env) => spawnSync(shell, ['-c', text], {env, encoding: 'utf8', timeout: 5000});
+      const original = run(cmd, clean);
+      const wrapped = run(wrapNoTmux(cmd), dirty);
+      for (const result of [original, wrapped]) {
+        assert.ifError(result.error);
+        assert.equal(result.signal, null);
+      }
+      assert.equal(wrapped.status, original.status, wrapped.stderr);
+      assert.equal(wrapped.stdout, original.stdout);
+      assert.equal(wrapped.stderr, original.stderr);
+      t.diagnostic(JSON.stringify({shell, name, original: original.status, wrapped: wrapped.status,
+        stdout: original.stdout, stderr: original.stderr}));
+      // exec 성공은 자식 dump로 확인한다. zsh의 exec 실패는 EXIT trap도 건너뛰므로 DEBUG로 관찰한다.
+      const check = 'test -z "${TMUX+x}${TMUX_PANE+x}" && printf clean >&3';
+      const event = shell === '/bin/zsh' ? 'DEBUG' : 'EXIT';
+      const observed = spawnSync(shell, ['-c', `trap ${quote(check)} ${event}; ${wrapNoTmux(cmd)}`], {
+        env: dirty, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+      });
+      assert.ifError(observed.error);
+      const samples = observed.stdout.split('\n').filter(line => line.startsWith('{')).map(JSON.parse);
+      assert.ok(samples.length || /^(clean)+$/.test(observed.output[3]), '환경 관찰 근거 없음');
+      for (const sample of samples) {
+        assert.equal(sample.t, undefined);
+        assert.equal(sample.p, undefined);
+      }
     });
   }
 }
