@@ -18,6 +18,15 @@ test('단순 명령은 exec env -u 로, 연산자가 든 명령은 unset 앞머�
   assert.equal(wrapNoTmux('codex --model m'), 'exec env -u TMUX -u TMUX_PANE codex --model m');
   assert.equal(wrapNoTmux('LC_ALL=C claude --model m'), 'exec env -u TMUX -u TMUX_PANE LC_ALL=C claude --model m');
   assert.equal(wrapNoTmux('a && b'), 'unset TMUX TMUX_PANE; a && b');
+  assert.equal(wrapNoTmux('exec codex -m x'), 'exec env -u TMUX -u TMUX_PANE codex -m x');
+  assert.equal(wrapNoTmux('exec exec codex'), 'exec env -u TMUX -u TMUX_PANE codex');
+  assert.equal(wrapNoTmux('env X=1 codex'), 'exec env -u TMUX -u TMUX_PANE env X=1 codex');
+  assert.equal(wrapNoTmux('env -i codex'), 'unset TMUX TMUX_PANE; env -i codex');
+  assert.equal(wrapNoTmux('exec env X=1 codex'), 'exec env -u TMUX -u TMUX_PANE env X=1 codex');
+  assert.equal(wrapNoTmux('nohup codex'), 'unset TMUX TMUX_PANE; nohup codex');
+  assert.equal(wrapNoTmux('exec nohup codex'), 'unset TMUX TMUX_PANE; exec nohup codex');
+  assert.equal(wrapNoTmux('X=1 command codex'), 'unset TMUX TMUX_PANE; X=1 command codex');
+  assert.equal(wrapNoTmux('exec'), 'unset TMUX TMUX_PANE; exec');
   assert.match(wrapNoTmux(undefined), /^exec env -u TMUX -u TMUX_PANE "\$\{SHELL:-\/bin\/sh\}" -l$/);
 });
 
@@ -106,3 +115,30 @@ test('실제 tmux: 역할 안에서 소켓 없는 tmux kill-server를 쳐도 격
     tmux(['kill-session', '-t', `=${session}`]);
   }
 });
+
+// --- 실제 셸 실행 회귀(PR #348 검수 P1): 감싼 명령을 진짜 sh·zsh로 실행해 종료 코드와 환경을 본다. tmux는 쓰지 않는다. ---
+import {spawnSync} from 'node:child_process';
+const dump = `${process.execPath} -e "console.log(JSON.stringify({t:process.env.TMUX,p:process.env.TMUX_PANE,x:process.env.X}))"`;
+const heads = [
+  ['exec', `exec ${dump}`, undefined],
+  ['exec exec', `exec exec ${dump}`, undefined],
+  ['exec env X=1', `exec env X=1 ${dump}`, '1'],
+  ['env X=1', `env X=1 ${dump}`, '1'],
+  ['X=1 직접', `X=1 ${dump}`, '1'],
+  ['nohup(애매 앞머리)', `nohup ${dump}`, undefined],
+  ['command(애매 앞머리)', `command ${dump}`, undefined],
+];
+for (const shell of ['/bin/sh', '/bin/zsh']) {
+  for (const [name, cmd, x] of heads) {
+    test(`실제 ${shell} 실행: ${name} 앞머리 종료 코드 0, TMUX 없음${x ? ', X=1 유지' : ''}`, () => {
+      const env = {...process.env, TMUX: '/tmp/x,1,0', TMUX_PANE: '%9'};
+      delete env.X;
+      const run = spawnSync(shell, ['-c', wrapNoTmux(cmd)], {env, encoding: 'utf8'});
+      assert.equal(run.status, 0, run.stderr);
+      const seen = JSON.parse(run.stdout.trim().split('\n').at(-1));
+      assert.equal(seen.t, undefined);
+      assert.equal(seen.p, undefined);
+      assert.equal(seen.x, x);
+    });
+  }
+}

@@ -410,12 +410,42 @@ export function openWindow(session, platform = process.platform, deps = {}) {
 }
 
 // 역할 AI와 그 자식이 TMUX·TMUX_PANE을 갖지 않게 한다(2026-11-04 사고: pane 안 QA 스크립트가 소켓 없는 tmux로 운영 서버를 종료).
-// 연산자 없는 단순 명령은 `exec env -u …`로 감싸 pane의 현재 명령이 실행기(claude·codex)로 끝나게 한다(PID일치·실행기 칸 유지).
-// 연산자·줄바꿈이 든 명령은 셸 앞머리에서 unset해 모든 부분이 TMUX 없이 돈다. 명령이 없으면 로그인 셸을 같은 방식으로 띄운다.
+// `env`는 실행 파일만 실행하므로 셸 예약어·내장·`exec` 같은 앞머리 앞에 붙이면 127로 죽는다(PR #348 검수 P1).
+// 원칙은 "모르면 unset 꼴"이다: 실행기가 확실한 단순 명령만 `exec env -u …`로 감싸 pane 현재 명령이 실행기로 끝나게 하고,
+// 앞쪽 `exec`는 떼어 낸 나머지가 확실할 때만 같은 꼴로, 아니면 원문 앞에 `unset TMUX TMUX_PANE; `를 붙인다(원문 뜻 그대로).
+// `env [KEY=값] 명령`은 env 옵션이 없을 때 바깥 env 뒤에 그대로 이어 붙인다(env가 env를 실행해도 뜻이 같다). 명령이 없으면 로그인 셸을 같은 방식으로 띄운다.
 // 원장 start 사건의 cmd는 호출부가 가진 원문이라 이 감싸기와 무관하다.
+const NOT_EXECUTABLE_HEAD = new Set([
+  'exec', 'command', 'builtin', 'nohup', 'time', 'eval', 'noglob', 'nocorrect', 'coproc', 'sudo',
+  'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'select', 'function',
+  '!', '[[', '{', '}', 'cd', 'export', 'set', 'unset', 'alias', 'source', '.', ':', 'read', 'wait', 'trap', 'exit', 'return',
+]);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+// env가 바로 실행할 수 있는 명령인가: 앞의 KEY=값을 건너뛴 첫 낱말이 확실한 실행 파일이다.
+function envCanRun(words) {
+  let i = 0;
+  while (i < words.length && ASSIGNMENT.test(words[i])) i++;
+  const head = words[i];
+  if (!head || head.startsWith('-') || NOT_EXECUTABLE_HEAD.has(head)) return false;
+  if (head === 'env') return envCanRun(words.slice(i + 1));
+  return true;
+}
+
 export function wrapNoTmux(cmd) {
   if (!cmd) return 'exec env -u TMUX -u TMUX_PANE "${SHELL:-/bin/sh}" -l';
-  return commandWords(cmd)?.length ? `exec env -u TMUX -u TMUX_PANE ${cmd}` : `unset TMUX TMUX_PANE; ${cmd}`;
+  const fallback = `unset TMUX TMUX_PANE; ${cmd}`;
+  const words = commandWords(cmd);
+  if (!words?.length) return fallback;
+  let rest = words, text = cmd;
+  while (rest[0] === 'exec') {
+    rest = rest.slice(1);
+    text = text.replace(/^\s*(?:exec|'exec'|"exec")\s*/, '');
+  }
+  if (!rest.length || !envCanRun(rest)) return fallback;
+  // 앞머리를 떼어 낸 text가 words(rest)와 같은 낱말로 읽히는지 마지막으로 확인한다. 어긋나면 원문 unset 꼴.
+  if (JSON.stringify(commandWords(text)) !== JSON.stringify(rest)) return fallback;
+  return `exec env -u TMUX -u TMUX_PANE ${text}`;
 }
 
 // 카단 pane 표시: 이 pane이 카단 소켓에서 떴다는 사실을 TMUX 대신 이 값으로 안다(window-setting.insideKadanPane).
