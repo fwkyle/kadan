@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canSave, cardHint, changesOf, confirmText, fieldsOf, initialForm } from "../src/night-form.ts";
+import { canSave, cardHint, changesOf, confirmText, euro, fieldsOf, forgetSaved, initialForm, rememberSaved, savedNote } from "../src/night-form.ts";
 import type { NightLine } from "../src/night-repos.ts";
 
 const mk = (settings: NightLine["settings"], effective: NightLine["effective"]): NightLine =>
@@ -39,4 +39,20 @@ test("확인 줄: 바뀌는 칸만, 비어 있던 칸을 채우면 덮어씀 안
   assert.match(t, /나이트런 중 자동 머지 카단 설정 없음→허용/);
   assert.match(t, /카단 설정으로 덮어씀 → 연결 문서 값\(금지\)보다 우선/);
   assert.doesNotMatch(t, /배포 브랜치/);
+});
+
+test("확인 줄 조사: 받침 있으면 으로, 없음·ㄹ받침·한글 아님은 로", () => {
+  assert.equal(confirmText(fromDoc, { nightMerge: "허용" }).includes("허용으로 바꿉니다"), true);
+  assert.equal(confirmText(fromDoc, { nightMerge: "금지" }).includes("금지로 바꿉니다"), true);
+  assert.equal(confirmText(own, { deployBranch: "main" }).includes("main로 바꿉니다"), true);
+  assert.equal(confirmText(own, { deployBranch: "없음" }).includes("없음으로 바꿉니다"), true);
+  assert.equal(euro("달"), "로");
+});
+
+test("저장 성공 기록: 줄별로 남고, 편집하면 사라진다", () => {
+  rememberSaved("o/zz", new Date(2026, 10, 4, 9, 5));
+  assert.equal(savedNote("o/zz"), "저장했습니다 · 09:05");
+  assert.equal(savedNote("o/other"), null);
+  forgetSaved("o/zz");
+  assert.equal(savedNote("o/zz"), null);
 });
