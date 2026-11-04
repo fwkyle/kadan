@@ -6,7 +6,17 @@ import {CardStore} from './card-store.mjs';
 
 const ITEM = /^- \[([ xX])\] \*\*(.+?)\*\*(.*)$/;
 const TAG = /^\s*\[(밤 허용 후보|밤 허용)\]/;
-const FENCE = /^\s*(```|~~~)/;
+// CommonMark 울타리: 여는 줄은 들여쓰기 3칸 이하, 백틱·물결 3개 이상(백틱 울타리의 안내 글에는 백틱이 없어야 한다).
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// 닫는 줄: 같은 글자, 여는 줄보다 짧지 않은 길이, 뒤에는 공백만.
+const closesFence = (line, open) => {
+  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  return Boolean(m) && m[1][0] === open[0] && m[1].length >= open.length;
+};
+const openFence = line => {
+  const m = FENCE_OPEN.exec(line);
+  return m && !(m[1][0] === '`' && m[2].includes('`')) ? m[1] : null;
+};
 const plain = text => text.replaceAll('*', '');
 
 // 항목 하나의 형식 검사. 걸린 이유를 모두 모은다(없으면 일감).
@@ -22,14 +32,15 @@ function skipReasons(item) {
   return reasons;
 }
 
-// TODO 글 하나를 읽어 열린(`- [ ]`) 태그 항목만 돌려준다. 코드 울타리 안의 줄은 예시라서 건너뛴다.
+// TODO 글 하나를 읽어 열린(`- [ ]`) 태그 항목만 돌려준다. 코드 울타리 안의 줄은 예시라서 건너뛴다(닫히지 않으면 파일 끝까지).
 export function parseTodoItems(text, file) {
   const lines = text.split('\n');
   const items = [];
-  let section = '', current = null, fenced = false;
+  let section = '', current = null, fence = null;
   lines.forEach((line, index) => {
-    if (FENCE.test(line)) { fenced = !fenced; current = null; return; }
-    if (fenced) return;
+    if (fence) { if (closesFence(line, fence)) fence = null; return; }
+    const opened = openFence(line);
+    if (opened) { fence = opened; current = null; return; }
     if (/^## /.test(line)) { section = line.slice(3).trim(); current = null; return; }
     const m = ITEM.exec(line);
     if (m) {

@@ -99,13 +99,13 @@ export const AUTO_LINES = [
     + ' 관문을 낮추거나 우회해 머지하지 않습니다. 머지 뒤 로컬 main 갱신·재시작은 아침에 합니다.',
   '(9) kyle의 직접 중지와 명시한 상한이 언제나 최우선입니다.',
 ];
-export const PICKS_LINE = '새 일감은 `kadan night picks --todo <TODO 경로>`의 후보(가)에서만 고릅니다. 건너뜀(나)·후보(다) 항목은 시작하지 않습니다. 크기·금지 목록·kyle 결정 선행 여부는 직접 판단합니다.';
+export const PICKS_LINE = '새 일감은 `kadan night picks --todo <TODO 경로>`의 밤 일감 후보(가)와 미배정 ready 카드(라)에서만 고릅니다. 건너뜀(나)·후보(다) 항목은 시작하지 않습니다. 크기·금지 목록·kyle 결정 선행 여부는 직접 판단합니다.';
 export const ONLY_RUNNING_LINE = '새 일감을 시작하지 않습니다: 진행 중인 업무만 위 판단 범위로 이어 갑니다.';
 // 켤 때 출력에 보이는 점검 목록. 검사하지 않는다(검사하면 어댑터가 된다) — 안내이지 차단이 아니다.
 export const AUTO_CHECKLIST = [
   '각 실행기(claude·codex 등)의 권한 설정에 위 (6) 금지가 거부 규칙으로 걸려 있는지 kyle이 한 번 확인하세요. 카단은 검사하지 않습니다.',
   '머지가 곧 운영 배포인 저장소(push 기반 자동배포)가 열린 업무에 있는지 온톨로지 카드로 확인하세요. 관문 입력은 {pr(gh pr view), files(gh api --paginate --slurp …/pulls/N/files), requiredChecks(gh pr checks --required), repo(gh repo view의 머지 허용 세 칸)} 네 칸입니다. 자동 단계는 `kadan merge-gate`를 통과한 PR만 관문이 내준 머지 명령 그대로 머지하고, 정책이 보류한 저장소는 night on --allow가 없으면 아침으로 보류합니다.',
-  '낮에 `kadan night picks --todo <TODO 절대경로>`(읽기 전용)로 밤 일감 후보를 미리 볼 수 있습니다. TODO 항목 제목 뒤에 `[밤 허용]`을 달아야 후보가 됩니다.',
+  '낮에 `kadan night picks --todo <TODO 절대경로>`(읽기 전용)로 밤 일감 후보를 미리 볼 수 있습니다. TODO 항목 제목 뒤에 `[밤 허용]`을 달아야 (가) 후보가 되고, 미배정 ready 카드는 (라)로 함께 나옵니다. 새 일감은 이 둘에서만 고릅니다.',
 ];
 
 // 슈퍼감독에게 가는 우편 본문. 고정 줄 3개 + 사용자 문구. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이라고 밝힌다.
