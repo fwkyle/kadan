@@ -38,7 +38,7 @@ test('--level 자동: on 사건에 level·onlyRunning, status, 자동 단계 문
   const r = f.run(['on', '밤 위임'], {level: '자동'});
   assert.equal(r.level, '자동');
   assert.equal(r.onlyRunning, false);
-  assert.equal(r.checklist.length, 2);
+  assert.equal(r.checklist.length, 3);
   const [on] = f.night();
   assert.equal(on.level, '자동');
   assert.equal(on.onlyRunning, false);
@@ -61,7 +61,8 @@ test('--level 자동: on 사건에 level·onlyRunning, status, 자동 단계 문
   assert.match(AUTO_CHECKLIST.join('\n'), /merge-gate[\s\S]*관문이 내준 머지 명령 그대로/);
   assert.match(msg, /관문이 내준 머지 명령\(`gh pr merge … --match-head-commit … -R …`\)을 그대로 치고/);
   assert.doesNotMatch(msg, /새 일감을 시작하지 않습니다/);
-  assert.match(msg, /위 \(1\)~\(9\) 줄/);
+  assert.match(msg, /위 \(1\)~\(10\) 줄/);
+  assert.match(msg, /\(10\) 새 일감은 `kadan night picks --todo/);
 });
 
 test('--level 바이패스: 종료 코드 2로 거절하고 켜지지 않는다', () => {
