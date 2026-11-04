@@ -53,7 +53,7 @@ export default function RepoSidebar({ url, repo, view, repos, night, failed }: {
           {rows.map((r) => (
             <li key={r.repo}>
               <a href={repoSwitchUrl(url, r.repo)} aria-current={repo === r.repo ? "page" : undefined}>
-                <span className="dw-side-name">{r.repo}</span>
+                <span className="dw-side-name" title={r.repo}>{r.repo}</span>
                 {badge("⚑", "결정 대기", r.decisions)}{badge("⇡", "머지 요청", r.merges)}
                 <SideNightBadge lines={nightBy.get(r.repo)} on={nightOn} />
                 {r.super && <small className="dw-side-super">{r.super}</small>}
