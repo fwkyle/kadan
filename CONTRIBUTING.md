@@ -37,7 +37,14 @@ This repository intentionally ships no `AGENTS.md` / `CLAUDE.md`. If you work wi
 ## Layout
 
 - `src/` — CLI (`cli.mjs`), floors (`floor-tmux.mjs`, `floor-herdr.mjs`), ledger/storage, watch, dashboards.
-- `tests/` — run with `npm test` (`tests/run.mjs` sets an isolated tmux socket, no window, notifications off, then runs `node --test`). Do not run `node --test` bare. Tests that need tmux skip when it is absent.
+- `tests/` — run with `npm test` (`tests/run.mjs` sets an isolated tmux socket, no window,
+  notifications off, then runs `node --test`). When the runner ends (pass, fail, Ctrl-C, SIGTERM,
+  SIGHUP) it stops tmux servers by socket paths (`-S`) inside its own run folder, then stops
+  leftover processes only when their real working folder is that folder or a descendant
+  (`tests/helpers/run-sweep.mjs`). Command lines and environment values are not ownership evidence:
+  if both socket and working folder are outside, the test must clean up its own process.
+  The runner deletes its run folder afterward. Do not run `node --test` bare.
+  Tests that need tmux skip when it is absent.
 - `scripts/watch-judge.sh` — example judge command for `kadan watch`; requires `KADAN_JUDGE_MODEL`.
 - `skills/` — agent skills that drive Kadan (conductor, supervisor, secretary).
 - `docs/` — current rules; `docs/design.md` explains the locked rules and ledger format.

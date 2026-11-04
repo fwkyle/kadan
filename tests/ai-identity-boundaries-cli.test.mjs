@@ -115,7 +115,11 @@ process.exit(r.status??1);\n`,{mode:0o755});
   const watch=guardedSend({floor,session:'kadan-cat',role:'cat',message:'synthetic watch notice',source:'watch',env,recordedPid:floor.pid(),readEntries:()=>readLedger(home),record:e=>out.push({backend,name:'watch-record',taskId:e.taskId??null,by:e.by}),saveBody:()=>{}});out.push({backend,name:'watch-mail',taskId:watch.taskId??null,by:watch.by});
   fs.writeFileSync(path.join(evidence,backend+'-ledger.json'),JSON.stringify(readLedger(home),null,2));fs.writeFileSync(path.join(evidence,backend+'-tasks.json'),JSON.stringify(readTaskLedger(home),null,2));fs.copyFileSync(trace,path.join(evidence,backend+'-tmux.jsonl'));
   out.push({backend,home,socket:env.KADAN_SOCKET});
- }finally{for(const role of started)tm('kill-session','-t','kadan-'+role);}
+ }finally{
+  for(const role of started)tm('kill-session','-t','kadan-'+role);
+  // started에 없는 세션(bare·race-human·devin 등)도 남지 않게 이 시험이 띄운 격리 서버를 끈다(2026-11-04 고아).
+  console.error(`격리 소켓 kill-server: -L ${env.KADAN_SOCKET}`);tm('kill-server');
+ }
 }
 for(const cmd of ['codex "explain --model fake"','codex --version; exec cat # --model fake','codex --model="" --help','devin --model x','omo --model x','claude --model x'])out.push({name:'parser',cmd,result:inspectCardSendIdentity({entries:[{kind:'start',session:'kadan-r',panePid:'1',cmd}],session:'kadan-r',currentPid:'1'})});
 fs.writeFileSync(path.join(evidence,'independent-results.json'),JSON.stringify(out,null,2));fs.writeFileSync(path.join(evidence,'independent-transcript.json'),JSON.stringify(transcript,null,2));console.log('카드 경계 CLI 증거: '+evidence);

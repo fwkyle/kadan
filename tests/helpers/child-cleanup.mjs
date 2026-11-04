@@ -19,10 +19,11 @@ export async function stopChild(child, graceMs = 500) {
 }
 
 // 환경은 표지 확인에만 쓰고 출력/예외에 담지 않는다. ps 실패는 정리 대상을 늘리지 않는다.
-function processes(pid) {
+// 실행기 끝 정리(run-sweep.mjs)도 같은 조회를 쓴다 — 거기서는 부하 중에도 읽히게 timeout을 늘린다.
+export function processes(pid, {timeout = 1000} = {}) {
   const args = pid ? ['eww', '-p', String(pid)] : ['axeww'];
   const result = spawnSync('ps', [...args, '-o', 'pid=,lstart=,command='], {
-    encoding: 'utf8', timeout: 1000, maxBuffer: 32 * 1024 * 1024,
+    encoding: 'utf8', timeout, maxBuffer: 32 * 1024 * 1024,
     env: {...process.env, LC_ALL: 'C'},
   });
   if (pid && result.status === 1 && !result.stdout?.trim()) return [];
