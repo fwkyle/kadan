@@ -73,9 +73,16 @@ export const RECOVERY_HINT = 'kadan window unset 으로 지우거나 kadan windo
 // 좁은 예외 하나(2026-11-03): 카단 tmux pane 안에서 물려받은 KADAN_WINDOW=none은 기계 설정(rottie)이 이긴다.
 // #321 이전에 뜬 역할이 서버 전역에서 none을 물려받아 작업자를 창 없이 띄우던 문제다. 일부러 none이면 KADAN_WINDOW_FORCE=1.
 // 반대 방향(env rottie·설정 none), pane 밖, 다른 소켓, 설정 없음은 그대로다. socket은 호출부가 아는 현재 카단 소켓 이름이다.
+// "카단 pane 안" 판정: 새 표시 KADAN_PANE_SOCKET이 현재 소켓이거나, 옛 TMUX("<소켓경로>,<pid>,<세션>")의 소켓 이름이 같다.
+// TODO(전환용): 옛 TMUX 판정은 TMUX를 지우지 않던 옛 역할용이다. 모든 역할이 재시작된 뒤 지운다.
+export function insideKadanPane(env, socket) {
+  if (!socket) return false;
+  if (env.KADAN_PANE_SOCKET === socket) return true;
+  return !!env.TMUX && path.basename(String(env.TMUX).split(',')[0]) === socket;
+}
+
 export function inheritedNoneOverridden(env, setting, socket) {
-  if (!socket || !env.TMUX || env.KADAN_WINDOW !== 'none' || env.KADAN_WINDOW_FORCE) return false;
-  if (path.basename(String(env.TMUX).split(',')[0]) !== socket) return false;
+  if (env.KADAN_WINDOW !== 'none' || env.KADAN_WINDOW_FORCE || !insideKadanPane(env, socket)) return false;
   return !!setting && setting.window !== 'none';
 }
 
