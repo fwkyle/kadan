@@ -8,6 +8,7 @@ export const HELD_PREFIX = '[나이트 보류]';
 // 알림 한 통의 글자 수 상한. 요약 글(summary.text)이 이 안에 들어오게 만든다.
 export const NOTICE_LIMIT = 1800;
 const HELD_LISTED = 10;
+const ALLOW_SHOWN = 5;
 const NOTE_ITEM = 100;
 const PR_URL = /https?:\/\/github\.com\/[^\s)]+\/pull\/\d+/;
 
@@ -94,7 +95,11 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
   // 알림 상한 안에 제목·기간·집계가 모두 들어가야 한다. 넘치면 원문 표시를 먼저 줄이고, 그래도 넘치면 보류 상세를 뺀다(건수는 남는다).
   const render = (quoteLimit, showHeld, listN = 0) => {
     const lines = [];
-    if (start.allow?.length) lines.push(`나이트런 중 자동 머지 허용(--allow): ${start.allow.map(cleanNoteText).join(', ')} — kyle "${fold(start.quote, quoteLimit)}"`);
+    // 허용 키는 앞 5개만 보이고 나머지는 접는다. 이 첫 줄은 줄이기 단계에서 빼지 않는다.
+    if (start.allow?.length) {
+      const keys = start.allow.map(k => fold(k, 60)), more = keys.length - ALLOW_SHOWN;
+      lines.push(`나이트런 중 자동 머지 허용(--allow): ${keys.slice(0, ALLOW_SHOWN).join(', ')}${more > 0 ? ` 외 ${more}개 (전체: kadan night status)` : ''} — kyle "${fold(start.quote, quoteLimit)}"`);
+    }
     lines.push(start.viaChat
       ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan night status --text, 원장)`
       : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan night status --text, 원장)`);
@@ -120,6 +125,6 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     return lines.join('\n');
   };
   // 줄이기 순서: 원문 표시 → 기록 목록 개수 → 상세 전부(건수는 남는다).
-  const text = [[200, true, 5], [80, true, 5], [80, true, 2], [80, false, 0]].map(([q, h, n]) => render(q, h, n)).find(t => t.length <= NOTICE_LIMIT) ?? render(80, false, 0);
+  const text = [[200, true, 5], [80, true, 5], [80, true, 2], [80, false, 0]].map(([q, h, n]) => render(q, h, n)).find(t => t.length <= NOTICE_LIMIT) ?? render(80, false, 0).slice(0, NOTICE_LIMIT); // 마지막 후보도 넘으면 자른다
   return {counts, held, text};
 }

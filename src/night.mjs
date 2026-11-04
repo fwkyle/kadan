@@ -93,7 +93,7 @@ export const AUTO_LINES = [
     + ' 감시기·대시보드 종료·재시작과 restart --force; 이 장치의 지침·금지 목록·단계 정의를 밤에 바꾸는 것; 기기 전체 부하 시험.',
   '(7) 위 중 카단 명령(restart --force, stop watch|대시보드, window set|unset, runners set|runner|model, night on --level 바이패스)은 켜진 동안 역할 세션에서 코드가 거절합니다.'
     + ' 셸·gh로 직접 하는 행위는 코드가 막지 못하므로 이 문구와 아침 사후 드러냄으로만 다룹니다.',
-  '(8) 머지는 관문을 통과한 PR만 합니다: gh로 PR 정보와 필수 검사를 받아 `kadan merge-gate <업무>`에 넘기고(종료 코드 0이 통과),'
+  '(8) 머지는 관문을 통과한 PR만 합니다: gh로 PR 정보·파일 목록(REST, 이름을 바꾼 옛 경로 포함)·필수 검사를 받아 `jq`로 {pr,files,requiredChecks} 하나로 합쳐 `kadan merge-gate <업무>`에 넘기고(종료 코드 0이 통과; 입력 예시는 docs/commands.md),'
     + ' 통과하면 `gh pr merge <N> --squash --match-head-commit <head>` 뒤 `mergeCommit`을 조회해 `kadan night note merge "<한 줄>" --pr <소유자/이름>#<번호> --sha <mergeCommit>`으로 남깁니다.'
     + ' 거절이면 그 PR만 `[나이트 보류]`(`kadan night note hold --hold-kind gate`, 정책 보류면 `deploy-repo`)로 남기고 나머지 일은 계속합니다.'
     + ' 관문을 낮추거나 우회해 머지하지 않습니다. 머지 뒤 로컬 main 갱신·재시작은 아침에 합니다.',
@@ -103,7 +103,7 @@ export const ONLY_RUNNING_LINE = '새 일감을 시작하지 않습니다: 진�
 // 켤 때 출력에 보이는 점검 목록. 검사하지 않는다(검사하면 어댑터가 된다) — 안내이지 차단이 아니다.
 export const AUTO_CHECKLIST = [
   '각 실행기(claude·codex 등)의 권한 설정에 위 (6) 금지가 거부 규칙으로 걸려 있는지 kyle이 한 번 확인하세요. 카단은 검사하지 않습니다.',
-  '머지가 곧 운영 배포인 저장소(push 기반 자동배포)가 열린 업무에 있는지 온톨로지 카드로 확인하세요. 자동 단계는 `kadan merge-gate`를 통과한 PR만 `gh pr merge --squash --match-head-commit`으로 머지하고, 정책이 보류한 저장소는 night on --allow가 없으면 아침으로 보류합니다.',
+  '머지가 곧 운영 배포인 저장소(push 기반 자동배포)가 열린 업무에 있는지 온톨로지 카드로 확인하세요. 관문 입력은 {pr(gh pr view), files(gh api --paginate --slurp …/pulls/N/files), requiredChecks(gh pr checks --required)} 세 칸입니다. 자동 단계는 `kadan merge-gate`를 통과한 PR만 `gh pr merge --squash --match-head-commit`으로 머지하고, 정책이 보류한 저장소는 night on --allow가 없으면 아침으로 보류합니다.',
 ];
 
 // 슈퍼감독에게 가는 우편 본문. 고정 줄 3개 + 사용자 문구. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이라고 밝힌다.

@@ -1,6 +1,8 @@
 // 나이트 기록(`night-note`): 켜진 동안 대신 정한 것·보류·관문 판정·머지·시작한 일감을 한 줄씩 남긴다.
 // `night` 종류와 따로 둔다: night 사건에 phase를 더하면 nightState의 "마지막 night 사건" 계산이 꺼짐으로 읽힌다.
 // 새 권한이 아니다. 판정하지 않고 적기만 한다. 관문 판정(gate)과 실제 머지(merge)는 서로 다른 사건이다.
+import {normalizeGithub} from './night-repo-policy.mjs';
+
 export const NOTE_KINDS = ['decision', 'hold', 'gate', 'merge', 'start'];
 export const HOLD_KINDS = ['decision', 'gate', 'deploy-repo'];
 export const VERDICTS = ['pass', 'reject'];
@@ -26,6 +28,15 @@ const optional = (flags, name) => {
   return clean;
 };
 
+// PR 키 정규화: `소유자/이름#번호`의 저장소 부분을 normalizeGithub로 맞춘다(대소문자·.git). 관문 기록·merge 기록·요약 짝짓기가 같은 함수를 쓴다.
+// 소유자/이름 꼴이 아닌 키(예: kadan#327)는 그대로 둔다. 옛 원장은 고치지 않고 읽을 때 이 함수를 거친다.
+export function normalizePrKey(pr) {
+  if (typeof pr !== 'string') return pr;
+  const i = pr.lastIndexOf('#');
+  const repo = i > 0 ? normalizeGithub(pr.slice(0, i)) : null;
+  return repo ? `${repo}${pr.slice(i)}` : pr;
+}
+
 // 입력을 검사해 원장에 쓸 사건을 만든다. 나이트가 켜져 있는지는 부르는 쪽이 먼저 본다.
 export function buildNightNote({words, flags, by, now}) {
   const [noteKind, ...rest] = words;
@@ -45,7 +56,7 @@ export function buildNightNote({words, flags, by, now}) {
   return {
     kind: 'night-note', noteKind, text,
     ...(holdKind ? {holdKind} : {}), ...(verdict ? {verdict} : {}),
-    ...(work ? {work} : {}), ...(pr ? {pr} : {}), ...(sha ? {sha} : {}),
+    ...(work ? {work} : {}), ...(pr ? {pr: normalizePrKey(pr)} : {}), ...(sha ? {sha} : {}),
     ...(reason ? {reason: foldNoteText(reason)} : {}),
     by, t: new Date(now).toISOString(),
   };
@@ -58,12 +69,12 @@ export const noteLine = event => (event.noteKind === 'decision' ? `${DECISION_PR
 // 아침 요약용 집계. notes는 구간 안 night-note 사건. 같은 PR의 관문 통과·머지는 한 번으로 센다(pr가 없으면 사건마다).
 export function tallyNotes(notes) {
   const by = kind => notes.filter(n => n.noteKind === kind);
-  const distinct = list => new Set(list.map((n, i) => n.pr || `#${i}`)).size;
+  const distinct = list => new Set(list.map((n, i) => normalizePrKey(n.pr) || `#${i}`)).size;
   const holds = by('hold');
   const gates = by('gate');
   // 관문을 통과했는데 같은 --pr의 merge 기록이 없는 PR(pr가 없는 기록은 짝을 못 지으므로 뺀다). 머지를 못 했거나 기록을 빠뜨린 것이다.
-  const mergedPrs = new Set(by('merge').map(n => n.pr).filter(Boolean));
-  const unmerged = [...new Map(gates.filter(n => n.verdict === 'pass' && n.pr && !mergedPrs.has(n.pr)).map(n => [n.pr, n])).values()];
+  const mergedPrs = new Set(by('merge').map(n => normalizePrKey(n.pr)).filter(Boolean));
+  const unmerged = [...new Map(gates.filter(n => n.verdict === 'pass' && n.pr && !mergedPrs.has(normalizePrKey(n.pr))).map(n => [normalizePrKey(n.pr), n])).values()];
   return {
     total: notes.length,
     decisions: by('decision'), holds, starts: by('start'),

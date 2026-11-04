@@ -37,12 +37,13 @@ function fixture({policy = {deployBranch: '없음', nightMerge: '허용'}, night
     cardCommand(['report', key], {revision: card.revision, outcome, sha}, {home, by: 'rv-test'});
   };
   const pr = (over = {}) => ({url: `https://github.com/${GH}/pull/7`, number: 7, state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headRefOid: H, baseRefName: 'main',
-    files: [{path: 'src/a.mjs'}], changedFiles: 1, ...over});
+    changedFiles: 1, ...over});
   const PASS = [{name: 'ci', state: 'SUCCESS', bucket: 'pass'}];
-  const input = (o = {}) => JSON.stringify({pr: o.pr ?? pr(), ...(Object.hasOwn(o, 'requiredChecks') ? (o.requiredChecks === undefined ? {} : {requiredChecks: o.requiredChecks}) : {requiredChecks: PASS})});
+  const F = (...names) => names.map(filename => ({filename, status: 'modified'}));
+  const input = (o = {}) => JSON.stringify({pr: o.pr ?? pr(), files: Object.hasOwn(o, 'files') ? o.files : F('src/a.mjs'), ...(Object.hasOwn(o, 'requiredChecks') ? (o.requiredChecks === undefined ? {} : {requiredChecks: o.requiredChecks}) : {requiredChecks: PASS})});
   const gate = (raw = input(), deps = {}) => mergeGate('repo/w', raw, {home, by: '슈퍼', deps: {origin: () => GH, ...deps}});
   const notes = () => readLedger(home).filter(e => e.kind === 'night-note');
-  return {home, store, review, pr, input, gate, notes};
+  return {home, store, review, pr, input, gate, notes, F};
 }
 
 const good = f => { f.review('pass', H); return f; };
@@ -120,20 +121,20 @@ test('4. 필수 검사에 skipping·fail이 하나라도 있으면 거절한다'
   }
 });
 
-test('5. 파일 목록이 잘리면 거절한다', () => {
+test('5. 파일 수가 changedFiles와 다르면(3,000개 초과로 잘린 경우 포함) 거절한다', () => {
   const f = good(fixture());
   const r = f.gate(f.input({pr: f.pr({changedFiles: 3000})}));
-  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('잘림')));
+  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('개수가 맞지 않음')));
 });
 
 test('6. 금지 경로는 무리마다 거절하고, src/cli.mjs만 바뀐 PR은 막지 않는다', () => {
   const f = good(fixture());
   for (const p of ['.github/workflows/x.yml', 'package.json', 'sub/CLAUDE.md', 'src/night-guard.mjs', 'src/merge-gate.mjs', '.env.local', 'bun.lockb', 'a/AGENTS.md', 'x.pem']) {
-    const r = f.gate(f.input({pr: f.pr({files: [{path: 'src/a.mjs'}, {path: p}], changedFiles: 2})}));
+    const r = f.gate(f.input({pr: f.pr({changedFiles: 2}), files: f.F('src/a.mjs', p)}));
     assert.equal(r.verdict, 'reject', p); assert.ok(r.reasons.some(x => x.includes('금지 경로')), p);
   }
   assert.equal(forbiddenGroup('src/cli.mjs'), null);
-  const ok = f.gate(f.input({pr: f.pr({files: [{path: 'src/cli.mjs'}], changedFiles: 1})}));
+  const ok = f.gate(f.input({files: f.F('src/cli.mjs')}));
   assert.equal(ok.verdict, 'pass');
 });
 
@@ -201,4 +202,68 @@ test('14. 옛 문구 "밤 저장소 정책"이 src/와 gui/src/에 남아 있지
   const walk = dir => fs.existsSync(dir) ? fs.readdirSync(dir, {withFileTypes: true}).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : [];
   const hits = [...walk(path.join(root, 'src')), ...walk(path.join(root, 'gui', 'src'))].filter(f => fs.readFileSync(f, 'utf8').includes('밤 저장소 정책'));
   assert.deepEqual(hits, []);
+});
+
+// ---- 검수 changes 반영 (F1~F4, F7) ----
+test('F1. 빈 filename·문자열 원소·이름/상태 없는 검사는 사용 오류(종료 코드 2)다', () => {
+  const f = good(fixture());
+  const bad = [
+    f.input({files: [{filename: '', status: 'modified'}]}),
+    f.input({files: ['src/a.mjs']}),
+    f.input({files: [{status: 'modified'}]}),
+    f.input({requiredChecks: [{state: 'SUCCESS', bucket: 'pass'}]}),
+    f.input({requiredChecks: [{name: 'ci', bucket: 'pass'}]}),
+    f.input({requiredChecks: [{name: 'ci', state: 'SUCCESS', bucket: ''}]}),
+    f.input({requiredChecks: ['ci']}),
+  ];
+  for (const raw of bad) assert.throws(() => f.gate(raw), e => e.exitCode === 2, raw.slice(0, 120));
+});
+
+test('F2. 대문자 head·앞뒤 공백 head는 맞춰 주지 않고 거절한다', () => {
+  const f = good(fixture());
+  for (const head of [H.toUpperCase(), ` ${H}`, `${H}\n`]) {
+    const r = f.gate(f.input({pr: f.pr({headRefOid: head})}));
+    assert.equal(r.verdict, 'reject', JSON.stringify(head));
+    assert.ok(r.reasons.some(x => x.includes('소문자 40자리')), JSON.stringify(head));
+  }
+});
+
+test('F3. rename의 옛 경로가 금지 경로면 거절하고, 옛 경로가 없는 rename도 거절한다', () => {
+  const f = good(fixture());
+  for (const old of ['.github/workflows/x.yml', 'package.json', 'src/night-guard.mjs']) {
+    const r = f.gate(f.input({files: [{filename: 'docs/moved.txt', status: 'renamed', previous_filename: old}]}));
+    assert.equal(r.verdict, 'reject', old); assert.ok(r.reasons.some(x => x.includes('금지 경로')), old);
+  }
+  const noOld = f.gate(f.input({files: [{filename: 'docs/moved.txt', status: 'renamed'}]}));
+  assert.equal(noOld.verdict, 'reject'); assert.ok(noOld.reasons.some(x => x.includes('옛 경로')));
+  const fine = f.gate(f.input({files: [{filename: 'docs/b.txt', status: 'renamed', previous_filename: 'docs/a.txt'}]}));
+  assert.equal(fine.verdict, 'pass');
+});
+
+test('F3. 여러 페이지로 나뉜 REST 응답을 펼쳐 개수를 맞춘다', () => {
+  const f = good(fixture());
+  const pages = [f.F('a.txt', 'b.txt'), f.F('c.txt')];
+  assert.equal(f.gate(f.input({pr: f.pr({changedFiles: 3}), files: pages})).verdict, 'pass');
+  const r = f.gate(f.input({pr: f.pr({changedFiles: 4}), files: pages}));
+  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('개수가 맞지 않음')));
+  const hidden = f.gate(f.input({pr: f.pr({changedFiles: 3}), files: [f.F('a.txt'), f.F('package.json', 'c.txt')]}));
+  assert.equal(hidden.verdict, 'reject', '둘째 페이지의 금지 경로도 잡힌다');
+});
+
+test('F3. 맨 위 files가 없으면 사용 오류(종료 코드 2)다', () => {
+  const f = good(fixture());
+  assert.throws(() => f.gate(JSON.stringify({pr: f.pr(), requiredChecks: [{name: 'ci', state: 'SUCCESS', bucket: 'pass'}]})), e => e.exitCode === 2);
+  assert.throws(() => f.gate(f.input({files: 'x'})), e => e.exitCode === 2);
+});
+
+test('F4. 관문 기록의 PR 키는 소문자로 정규화되어 대소문자 다른 머지 기록과 짝지어진다', () => {
+  const f = good(fixture({night: {}}));
+  f.gate(f.input({pr: f.pr({url: `https://github.com/ACME/App/pull/7`})}));
+  assert.equal(f.notes()[0].pr, 'acme/app#7');
+});
+
+test('F7. PR 주소의 번호와 pr.number가 다르면 거절한다', () => {
+  const f = good(fixture());
+  const r = f.gate(f.input({pr: f.pr({number: 8})}));
+  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('pr.number')));
 });
