@@ -519,13 +519,20 @@ export function sendTmuxKey(session, key, { expectedPid, run = tmuxOut, humanIdl
 // 제어 모드 client는 명령을 보내도 변하지 않는다. 그래서 활동이 생성 시각보다 뒤일 때(`activity > created`, 초 단위라 차이 1초 이상)만 입력으로 센다.
 // 받아들인 손해: 사람이 글을 치다 그 시간 넘게 손을 떼면 그 글 뒤에 우편이 붙어 제출될 수 있고,
 // 붙은 바로 그 초 안에 누른 키는 놓친다. 반대로 붙은 뒤 터미널 응답 같은 입력이 다음 초에 들어와 활동이 바뀌면 그 창은 입력 보호 시간(기본 30초, 슈퍼감독 창은 2분)만큼 보류된다. kadan의 붙여넣기(paste-buffer)는 client_activity를 바꾸지 않는다.
+// 붙은 client 중 최근 humanIdleMs 안에 키를 친 것이 있는지: "unknown" | "active" | "idle". checkHumanIdle과 board 키 전달이 같은 기준을 쓴다.
+function clientTypingState(session, run, at, humanIdleMs) {
+  const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_created} #{client_activity}"]).split("\n").filter(Boolean);
+  if (clients.some(value => !/^\d+ \d+$/.test(value))) return "unknown";
+  const typed = clients.map(value => value.split(" ").map(Number)).filter(([created, activity]) => activity > created);
+  return typed.some(([, activity]) => at - activity * 1000 < humanIdleMs) ? "active" : "idle";
+}
+
 function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
-  const clients = run(["list-clients", "-t", `=${session}`, "-F", "#{client_created} #{client_activity}"]).split("\n").filter(Boolean);
-  if (clients.some(value => !/^\d+ \d+$/.test(value))) deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인 — 잠시 뒤 다시 보내라");
   const at = now ?? Date.now();
-  const typed = clients.map(value => value.split(" ").map(Number)).filter(([created, activity]) => activity > created);
-  if (typed.some(([, activity]) => at - activity * 1000 < humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
+  const typing = clientTypingState(session, run, at, humanIdleMs);
+  if (typing === "unknown") deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인 — 잠시 뒤 다시 보내라");
+  if (typing === "active") deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
   if (relayedHumanInputRecent(session, run, at, humanIdleMs)) deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함 — 잠시 뒤 다시 보내라");
 }
 
@@ -546,6 +553,92 @@ function relayedHumanInputRecent(session, run, at, humanIdleMs) {
   if (!/^\d{1,12}$/.test(raw)) return false;
   const ms = Number(raw) * 1000;
   return ms - at <= HUMAN_INPUT_FUTURE_SKEW_MS && at - ms < humanIdleMs;
+}
+
+// ---- kadan board 터미널 칸: 사람이 친 키를 슈퍼감독 창에 전달 (2026-11-04) ----
+// 사람 키 전달의 유일한 길이다. board 쪽은 tmux send-keys를 직접 만들지 않는다. 공통 바닥 계약에 키 API를 더하지 않는 tmux 전용 보조 함수다.
+// 지키는 것: 이름 형식·허용 목록(board 목록의 슈퍼감독 세션만)·정확 대상 `=세션:`·기록한 pane PID와 생존(1초에 1번 이하 재확인)·
+// 기록보기 중이면 보내지 않음(해제하지 않음)·다른 사람이 같은 창에 붙어 최근 키를 쳤으면 보내지 않음(checkHumanIdle은 부르지 않는다:
+// board를 쓰는 사람이 바로 그 사람이다)·`@kadan_human_input` 표시(1초에 1번 이하)로 AI 우편·감시 전송이 끼어들지 않게 함.
+export const HUMAN_KEYS_CHECK_MS = 1000;
+export const HUMAN_KEYS_PASTE_MAX = 64 * 1024; // UTF-8 바이트 기준(글자 수 아님)
+export const HUMAN_KEYS_PASTE_LABEL = `${HUMAN_KEYS_PASTE_MAX / 1024}KB`;
+const HUMAN_KEYS_LITERAL_CHUNK = 2000; // tmux 명령 한 번에 실리는 UTF-8 바이트 수 상한(명령 메시지 크기 한도 안에 두려는 것)
+const HUMAN_KEYS_OTHER_CLIENT_MS = 30_000;
+const HUMAN_KEY_NAME = /^(?:Enter|Tab|BTab|BSpace|Escape|Up|Down|Left|Right|Home|End|PPage|NPage|DC|IC|F(?:[1-9]|1[0-2])|C-[a-z]|C-Space|M-[A-Za-z0-9]|[CSM]-(?:Up|Down|Left|Right|Home|End|PPage|NPage|DC|IC))$/;
+const humanInputMarkedAt = new Map();
+
+function humanKeysDeny(code, message) { const error = new Error(message); error.code = code; throw error; }
+
+// 세션 옵션 `@kadan_human_input`에 지금 epoch 초를 남긴다(읽는 쪽 relayedHumanInputRecent와 같은 값 형식). 같은 세션에는 1초에 1번 이하.
+export function markHumanInput(session, {run = tmuxOut, clock = Date.now, state = humanInputMarkedAt} = {}) {
+  const at = clock();
+  if (at - (state.get(session) ?? -Infinity) < HUMAN_KEYS_CHECK_MS) return false;
+  run(["set-option", "-t", `=${session}:`, "@kadan_human_input", String(Math.floor(at / 1000))]);
+  state.set(session, at);
+  return true;
+}
+
+// 글자 묶음을 `send-keys -l`로. 명령줄 끝의 `;`는 tmux가 명령 구분자로 읽으므로 뒤로 떼어 `\;` 키로 보낸다.
+function literalCommands(target, text) {
+  const commands = [];
+  const chunks = [];
+  let current = "", bytes = 0;
+  for (const ch of text.replaceAll("\0", "")) { // 글자(코드 포인트) 단위로 모아 문자 중간에서 자르지 않는다
+    const size = Buffer.byteLength(ch);
+    if (bytes + size > HUMAN_KEYS_LITERAL_CHUNK) { chunks.push(current); current = ""; bytes = 0; }
+    current += ch; bytes += size;
+  }
+  if (current) chunks.push(current);
+  for (const chunk of chunks) {
+    const tail = chunk.match(/;*$/)[0].length;
+    const body = chunk.slice(0, chunk.length - tail);
+    if (body) commands.push(["send-keys", "-t", target, "-l", "--", body]);
+    if (tail) commands.push(["send-keys", "-t", target, "-N", String(tail), "\\;"]);
+  }
+  return commands;
+}
+
+// tokens: [{text}|{key}]. 모르는 키 이름·큰 입력은 아무것도 보내기 전에 거절한다. guard는 호출 사이에 유지되는 {checkedAt} 상태다.
+export function sendHumanKeys(session, tokens, {allowed, expectedPid, guard = {}, run = tmuxOut, clock = Date.now, markState} = {}) {
+  if (!/^kadan-[^\s:.]+$/u.test(session)) humanKeysDeny("KADAN_BOARD_TARGET_DENIED", "입력 거절: 카단 세션 이름이 아님");
+  if (!(allowed instanceof Set) || !allowed.has(session)) humanKeysDeny("KADAN_BOARD_TARGET_DENIED", "입력 거절: board 목록의 슈퍼감독 세션이 아님");
+  if (!/^\d+$/.test(String(expectedPid ?? ""))) humanKeysDeny("KADAN_PID_MISMATCH", "입력 거절: 포커스 때 기록한 pane PID가 없음");
+  let literalSize = 0;
+  for (const token of tokens) {
+    if (typeof token?.text === "string") literalSize += Buffer.byteLength(token.text);
+    else if (typeof token?.key !== "string" || !HUMAN_KEY_NAME.test(token.key)) humanKeysDeny("KADAN_BOARD_KEY_UNKNOWN", "입력 거절: 모르는 키");
+  }
+  if (literalSize > HUMAN_KEYS_PASTE_MAX) humanKeysDeny("KADAN_BOARD_PASTE_TOO_LARGE", `입력 거절: 붙여넣기가 너무 큼(${HUMAN_KEYS_PASTE_LABEL} 초과)`);
+  if (!tokens.length) return {sent: 0};
+
+  const target = `=${session}:`, at = clock();
+  if (!(guard.checkedAt != null && at - guard.checkedAt < HUMAN_KEYS_CHECK_MS)) {
+    try { run(["has-session", "-t", `=${session}`]); }
+    catch { humanKeysDeny("KADAN_SESSION_GONE", "입력 거절: 세션이 사라짐"); }
+    const state = run(["display-message", "-p", "-t", target, "#{pane_pid}|#{pane_dead}"]).trim();
+    if (state !== `${expectedPid}|0`) humanKeysDeny("KADAN_PID_MISMATCH", "입력 거절: pane PID가 포커스 때와 다르거나 죽은 화면");
+    const typing = clientTypingState(session, run, at, HUMAN_KEYS_OTHER_CLIENT_MS);
+    if (typing === "unknown") humanKeysDeny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "입력 거절: 다른 창의 입력 시각 미확인");
+    if (typing === "active") humanKeysDeny("KADAN_OTHER_CLIENT_ACTIVE", "다른 창에서 입력 중(로티 탭 등) — 입력하지 않았습니다");
+    guard.checkedAt = at;
+  }
+  checkPaneMode(session, run); // 사람이 연 기록보기를 board가 몰래 끄지 않는다
+  markHumanInput(session, {run, clock, ...(markState ? {state: markState} : {})});
+
+  const commands = [];
+  let keys = [];
+  const flushKeys = () => { if (keys.length) commands.push(["send-keys", "-t", target, ...keys]); keys = []; };
+  for (const token of tokens) {
+    if (token.key) { keys.push(token.key); continue; }
+    flushKeys();
+    commands.push(...literalCommands(target, token.text));
+  }
+  flushKeys();
+  for (const command of commands) {
+    try { run(command); } catch (error) { error.delivery = "unknown"; throw error; }
+  }
+  return {sent: commands.length};
 }
 
 // 카드는 pane 종료·PID·AI 프로세스를 확인하고 사람 입력 시각을 본다. 기존 복사모드 검사는 그대로 둔다.
