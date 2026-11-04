@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { badgeOf, badgeTitle, groupByRepo, headFacts, sidebarBadge, type NightLine } from "../src/night-repos.ts";
+import { sourceLabel, badgeOf, badgeTitle, groupByRepo, headFacts, sidebarBadge, type NightLine } from "../src/night-repos.ts";
 
 const eff = { deployBranch: { value: null, from: null }, nightMerge: { value: null, from: null } };
 const line = (github: string, repo: string | null, verdict: NightLine["verdict"], effective = eff): NightLine => ({ github, repo, effective, verdict });
@@ -56,4 +56,12 @@ test("머리 줄 값: 출처 한글 표시, nightMerge가 null이면 기본 허�
   assert.equal(card.deploy, "정해지지 않음");
   assert.equal(card.deployFrom, "없음");
   assert.equal(card.policyFrom, "연결 문서");
+});
+
+test("출처 문구: ontology·card는 연결 문서, kadan은 카단 설정, 모르는 값은 원문, 없으면 없음", () => {
+  assert.equal(sourceLabel("ontology"), "연결 문서");
+  assert.equal(sourceLabel("card"), "연결 문서");
+  assert.equal(sourceLabel("kadan"), "카단 설정");
+  assert.equal(sourceLabel("something-new"), "something-new");
+  assert.equal(sourceLabel(null), "없음");
 });
