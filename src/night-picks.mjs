@@ -34,7 +34,8 @@ function skipReasons(item) {
 
 // TODO 글 하나를 읽어 열린(`- [ ]`) 태그 항목만 돌려준다. 코드 울타리 안의 줄은 예시라서 건너뛴다(닫히지 않으면 파일 끝까지).
 export function parseTodoItems(text, file) {
-  const lines = text.split('\n');
+  // 줄 나누기는 여기 한 곳에서만 한다(CRLF·CR·LF 섞임 포함). 이후 판정은 정규화된 줄만 쓴다.
+  const lines = text.split(/\r\n|\r|\n/);
   const items = [];
   let section = '', current = null, fence = null;
   lines.forEach((line, index) => {

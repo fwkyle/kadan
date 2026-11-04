@@ -150,6 +150,22 @@ test('9. CommonMark 코드 블록: 긴 울타리 안의 짧은 울타리·물결
   assert.deepEqual(titles(['``` a`b', good('백틱 든 안내 글은 여는 줄이 아님')].join('\n')), ['백틱 든 안내 글은 여는 줄이 아님']);
 });
 
+test('10. 줄바꿈 섞임(CRLF·LF·CR): 펜스·항목 어느 쪽이 CRLF여도 예시는 후보가 아니고 줄 번호는 실제 줄 기준이다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'picks-eol-'));
+  const good = (name, eol) => `- [ ] **${name}** [밤 허용] — Why: 이유${eol}  - 확인: 끝`;
+  const run = text => collectPicks({todos: ['/f.md'], home, readFile: () => text}).picks;
+  const names = text => run(text).map(x => x.title);
+  const mix = (fenceEol, itemEol) => ['```' + fenceEol + good('안', itemEol) + itemEol + '```' + fenceEol + good('밖', itemEol)].join('');
+  assert.deepEqual(names(mix('\r\n', '\n')), ['밖']);
+  assert.deepEqual(names(mix('\n', '\r\n')), ['밖']);
+  assert.deepEqual(names(mix('\r\n', '\r\n')), ['밖']);
+  assert.deepEqual(names(mix('\r', '\r')), ['밖']);
+  assert.deepEqual(names(['````md', '```', good('안쪽', '\n'), '```', '````', good('밖', '\n')].join('\r\n')), ['밖']);
+  assert.deepEqual(names(['~~~', '```', good('물결 안', '\n'), '```', '~~~', good('밖', '\n')].join('\r\n')), ['밖']);
+  assert.equal(run(['# T', '', good('셋째 줄', '\r\n'), good('다섯째 줄', '\r\n')].join('\r\n'))[1].line, 5);
+  assert.equal(run('# T\r\n' + good('둘째 줄', '\r\n')).at(0).line, 2);
+});
+
 test('CLI: 꺼진 상태에서도 동작하고 --json은 네 묶음 키를 낸다, --todo 없으면 종료 2', () => {
   const f = fixture();
   const env = {...process.env, KADAN_HOME: f.home, KADAN_WINDOW: 'none'};
