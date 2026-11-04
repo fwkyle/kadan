@@ -43,12 +43,20 @@ export function forbiddenGroup(file) {
 // GitHub REST 파일 목록(pulls/N/files)의 status 값. 이 밖의 값이나 값 없음은 사용 오류다.
 const FILE_STATUSES = ['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'];
 const NEEDS_OLD_PATH = ['renamed', 'copied'];
+const REPO_FLAGS = ['mergeCommitAllowed', 'squashMergeAllowed', 'rebaseMergeAllowed'];
+// 머지 방식 고르는 순서: kyle 규칙 "main 머지는 머지 커밋"이 근거라 머지 커밋 → squash → rebase 순이다. 밤에는 사람이 없어 슈퍼감독의 기억에 맡기지 않고 입력(repo)에서 고른다.
+export function pickMergeMethod(repo) {
+  if (repo.mergeCommitAllowed) return 'merge';
+  if (repo.squashMergeAllowed) return 'squash';
+  if (repo.rebaseMergeAllowed) return 'rebase';
+  return null;
+}
 const usageError = message => Object.assign(new Error(message), {exitCode: 2});
 
 // stdin JSON의 모양을 검사한다. 틀리면 사용 오류(종료 코드 2). requiredChecks는 없어도 되지만(거절 이유가 된다) 있으면 배열이어야 한다.
 function parseInput(raw) {
   let input;
-  try { input = JSON.parse(raw); } catch { throw usageError('stdin이 JSON이 아닙니다. 사용: {"pr":{…},"files":[REST 페이지 배열],"requiredChecks":[…]} | kadan merge-gate <저장소/업무ID>'); }
+  try { input = JSON.parse(raw); } catch { throw usageError('stdin이 JSON이 아닙니다. 사용: {"pr":{…},"files":[REST 페이지 배열],"requiredChecks":[…],"repo":{mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed}} | kadan merge-gate <저장소/업무ID>'); }
   const pr = input?.pr;
   if (!pr || typeof pr !== 'object' || Array.isArray(pr)) throw usageError('입력에 pr 객체가 필요합니다');
   const strings = ['url', 'state', 'mergeable', 'mergeStateStatus', 'headRefOid', 'baseRefName'];
@@ -77,13 +85,17 @@ function parseInput(raw) {
       if (!c || typeof c !== 'object' || Array.isArray(c) || !isText(c.name) || !isText(c.state) || !isText(c.bucket)) throw usageError(`requiredChecks[${i}]는 name·state·bucket이 모두 비어 있지 않은 문자열인 객체여야 합니다`);
     });
   }
-  return {pr, files, requiredChecks: checks ?? null};
+  // repo는 `gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed` 결과다. 세 칸 모두 true/false여야 한다.
+  const repo = input.repo;
+  if (!repo || typeof repo !== 'object' || Array.isArray(repo)) throw usageError('맨 위 repo(gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed 결과)가 필요합니다');
+  for (const k of REPO_FLAGS) if (typeof repo[k] !== 'boolean') throw usageError(`repo.${k}는 true/false여야 합니다`);
+  return {pr, files, requiredChecks: checks ?? null, repo};
 }
 
 // deps(시험용 주입): now, origin(repoPath → 소유자/이름), readEntries, readDecisions, record.
 export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   if (typeof workKey !== 'string' || !workKey.includes('/')) throw usageError('업무 키(저장소/업무ID)가 필요합니다');
-  const {pr, files, requiredChecks} = parseInput(raw);
+  const {pr, files, requiredChecks, repo} = parseInput(raw);
   const now = (deps.now ?? Date.now)();
   let work;
   try { work = new WorkStore(home).get(workKey); } catch (error) { throw usageError(`업무를 찾지 못했습니다: ${workKey} (${error.message})`); }
@@ -126,6 +138,9 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   const origin = work.repoPath ? (deps.origin ?? gitOriginGithub)(work.repoPath) : null;
   if (!github) reject(`PR 주소에서 저장소를 읽지 못함(${pr.url})`);
   else if (!origin || normalizeGithub(origin) !== github) reject(`PR 저장소(${github})가 업무 저장소(${origin ?? '읽지 못함'})와 다름`);
+  // 6b. 머지 방식: 저장소가 허용하는 방식 중 하나가 있어야 한다.
+  const mergeMethod = pickMergeMethod(repo);
+  if (!mergeMethod) reject('허용된 머지 방식 없음(mergeCommitAllowed·squashMergeAllowed·rebaseMergeAllowed 모두 false)');
   // 7. 저장소 정책 (+ --allow)
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
   const state = nightState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);
@@ -141,8 +156,10 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
 
   const verdict = reasons.length ? 'reject' : 'pass';
   const prRef = github ? `${github}#${pr.number}` : null;
+  // 통과일 때만 그대로 칠 명령을 낸다(거절이면 내지 않는다). mergeMethod가 있고 github이 읽혔을 때만 통과가 가능하다.
+  const mergeCommand = verdict === 'pass' ? `gh pr merge ${pr.number} --${mergeMethod} --match-head-commit ${head} -R ${github}` : null;
   const result = {verdict, reasons, work: workKey, pr: prRef, head: pr.headRefOid, reviewSha: review?.reviewSha ?? null,
-    review: review?.review?.key ?? null, reviewResult: review?.result ?? null, policy, allowApplied, allow, nightOn: state.on, recorded: false};
+    review: review?.review?.key ?? null, reviewResult: review?.result ?? null, mergeMethod: verdict === 'pass' ? mergeMethod : null, mergeCommand, policy, allowApplied, allow, nightOn: state.on, recorded: false};
   if (state.on) {
     const text = verdict === 'pass' ? `관문 통과${allowApplied ? ` (kyle 허용 --allow로 ${allowApplied} 보류를 풂)` : ''}` : `관문 거절: ${reasons[0]}`;
     const flags = {verdict, work: workKey, reason: verdict === 'pass' ? (allowApplied ? `allow:${allowApplied}` : '모든 조건 충족') : reasons.join(' / '),
@@ -159,7 +176,7 @@ export function formatMergeGate(r) {
   if (r.allowApplied) lines.push(`kyle 허용(--allow)으로 ${r.allowApplied} 보류를 풂`);
   for (const reason of r.reasons) lines.push(`!! ${reason}`);
   lines.push(r.recorded ? '관문 기록을 남겼습니다(night note gate).' : '기록 없음(나이트런 꺼짐)');
-  if (r.verdict === 'pass') lines.push('머지는 하지 않았습니다. 통과면 gh pr merge <N> --squash --match-head-commit <head> 뒤 kadan night note merge … --pr ' + `${r.pr} --sha <mergeCommit>`);
+  if (r.verdict === 'pass') lines.push(`머지는 하지 않았습니다. 아래 명령을 그대로 치세요(방식을 바꾸지 않습니다): ${r.mergeCommand}`, `그 뒤: kadan night note merge … --pr ${r.pr} --sha <mergeCommit>`);
   return lines.join('\n');
 }
 

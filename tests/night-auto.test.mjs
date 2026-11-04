@@ -58,7 +58,8 @@ test('--level 자동: on 사건에 level·onlyRunning, status, 자동 단계 문
   assert.match(msg, /관문이 거절한 머지, `--allow` 없이 정책이 보류한 저장소의 머지/);
   assert.doesNotMatch(msg, /머지가 곧 운영 배포인 저장소의 머지/);
   for (const line of AUTO_CHECKLIST) assert.doesNotMatch(line, /머지를 아침으로 보류합니다/);
-  assert.match(AUTO_CHECKLIST.join('\n'), /merge-gate[\s\S]*--match-head-commit/);
+  assert.match(AUTO_CHECKLIST.join('\n'), /merge-gate[\s\S]*관문이 내준 머지 명령 그대로/);
+  assert.match(msg, /관문이 내준 머지 명령\(`gh pr merge … --match-head-commit … -R …`\)을 그대로 치고/);
   assert.doesNotMatch(msg, /새 일감을 시작하지 않습니다/);
   assert.match(msg, /위 \(1\)~\(9\) 줄/);
 });

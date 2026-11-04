@@ -40,7 +40,8 @@ function fixture({policy = {deployBranch: '없음', nightMerge: '허용'}, night
     changedFiles: 1, ...over});
   const PASS = [{name: 'ci', state: 'SUCCESS', bucket: 'pass'}];
   const F = (...names) => names.map(filename => ({filename, status: 'modified'}));
-  const input = (o = {}) => JSON.stringify({pr: o.pr ?? pr(), files: Object.hasOwn(o, 'files') ? o.files : F('src/a.mjs'), ...(Object.hasOwn(o, 'requiredChecks') ? (o.requiredChecks === undefined ? {} : {requiredChecks: o.requiredChecks}) : {requiredChecks: PASS})});
+  const REPO = {mergeCommitAllowed: true, squashMergeAllowed: true, rebaseMergeAllowed: true};
+  const input = (o = {}) => JSON.stringify({pr: o.pr ?? pr(), repo: Object.hasOwn(o, 'repo') ? o.repo : REPO, files: Object.hasOwn(o, 'files') ? o.files : F('src/a.mjs'), ...(Object.hasOwn(o, 'requiredChecks') ? (o.requiredChecks === undefined ? {} : {requiredChecks: o.requiredChecks}) : {requiredChecks: PASS})});
   const gate = (raw = input(), deps = {}) => mergeGate('repo/w', raw, {home, by: '슈퍼', deps: {origin: () => GH, ...deps}});
   const notes = () => readLedger(home).filter(e => e.kind === 'night-note');
   return {home, store, review, pr, input, gate, notes, F};
@@ -309,4 +310,37 @@ test('R3. merge-gate --help와 JSON 오류 안내가 {pr, files, requiredChecks}
   assert.match(help.stdout, /requiredChecks/);
   const f = good(fixture());
   assert.throws(() => f.gate('not json'), e => e.exitCode === 2 && /"files":\[/.test(e.message));
+});
+
+test('M1. 머지 방식은 머지 커밋 → squash → rebase 순으로 허용된 첫 방식을 고르고 명령이 head·저장소를 담는다', () => {
+  const f = good(fixture());
+  const cases = [[[true, true, true], 'merge'], [[true, false, false], 'merge'], [[false, true, true], 'squash'], [[false, true, false], 'squash'], [[false, false, true], 'rebase']];
+  for (const [[m, s, r], want] of cases) {
+    const out = f.gate(f.input({repo: {mergeCommitAllowed: m, squashMergeAllowed: s, rebaseMergeAllowed: r}}));
+    assert.equal(out.verdict, 'pass'); assert.equal(out.mergeMethod, want);
+    assert.equal(out.mergeCommand, `gh pr merge 7 --${want} --match-head-commit ${H} -R ${GH}`);
+    assert.match(mergeGateCommand(['repo/w'], {}, {home: f.home, by: '슈퍼', stdin: () => f.input({repo: {mergeCommitAllowed: m, squashMergeAllowed: s, rebaseMergeAllowed: r}}), deps: {origin: () => GH}}).text, new RegExp(`--${want} --match-head-commit ${H} -R ${GH}`));
+  }
+});
+
+test('M2. 세 칸이 모두 false면 거절하고 명령을 내지 않는다', () => {
+  const f = good(fixture());
+  const r = f.gate(f.input({repo: {mergeCommitAllowed: false, squashMergeAllowed: false, rebaseMergeAllowed: false}}));
+  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('허용된 머지 방식 없음')));
+  assert.equal(r.mergeCommand, null); assert.equal(r.mergeMethod, null);
+  assert.doesNotMatch(mergeGateCommand(['repo/w'], {}, {home: f.home, by: '슈퍼', stdin: () => f.input({repo: {mergeCommitAllowed: false, squashMergeAllowed: false, rebaseMergeAllowed: false}}), deps: {origin: () => GH}}).text, /gh pr merge \d/);
+});
+
+test('M3. repo가 없거나 칸 타입이 틀리면 사용 오류(종료 코드 2)다', () => {
+  const f = good(fixture());
+  const bad = [undefined, null, 'x', [], {}, {mergeCommitAllowed: true, squashMergeAllowed: true}, {mergeCommitAllowed: 'true', squashMergeAllowed: true, rebaseMergeAllowed: true}, {mergeCommitAllowed: true, squashMergeAllowed: 1, rebaseMergeAllowed: true}];
+  for (const repo of bad) assert.throws(() => f.gate(f.input({repo})), e => e.exitCode === 2, JSON.stringify(repo));
+});
+
+test('M4. src/·docs/·README.md에 --squash 고정 문구가 남지 않는다(고르는 방식 설명은 예외)', () => {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const walk = d => fs.readdirSync(d, {withFileTypes: true}).flatMap(e => e.isDirectory() ? (e.name === 'daily' || e.name === 'node_modules' ? [] : walk(path.join(d, e.name))) : [path.join(d, e.name)]);
+  const files = [...walk(path.join(root, 'src')), ...walk(path.join(root, 'docs')), path.join(root, 'README.md')].filter(p => fs.existsSync(p) && /\.(mjs|md)$/.test(p));
+  const hits = files.flatMap(p => fs.readFileSync(p, 'utf8').split('\n').map((l, i) => [p, i + 1, l]).filter(([, , l]) => /gh pr merge[^`\n]*--squash/.test(l)));
+  assert.deepEqual(hits.map(([p, i]) => `${p}:${i}`), []);
 });
