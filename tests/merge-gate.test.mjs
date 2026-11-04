@@ -267,3 +267,46 @@ test('F7. PR 주소의 번호와 pr.number가 다르면 거절한다', () => {
   const r = f.gate(f.input({pr: f.pr({number: 8})}));
   assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('pr.number')));
 });
+
+// ---- 재검수 changes 반영 (R1~R3) ----
+test('R1. 파일 상태 없음·빈 상태·모르는 상태는 사용 오류(종료 코드 2)다', () => {
+  const f = good(fixture());
+  for (const file of [{filename: 'a.txt'}, {filename: 'a.txt', status: ''}, {filename: 'a.txt', status: '  '}, {filename: 'a.txt', status: 'weird'}, {filename: 'a.txt', status: 5}]) {
+    assert.throws(() => f.gate(f.input({files: [file]})), e => e.exitCode === 2, JSON.stringify(file));
+  }
+  for (const status of ['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged']) {
+    const file = {filename: 'a.txt', status, ...(['renamed', 'copied'].includes(status) ? {previous_filename: 'b.txt'} : {})};
+    assert.equal(f.gate(f.input({files: [file]})).verdict, 'pass', status);
+  }
+});
+
+test('R1. copied인데 옛 경로가 없으면 거절하고, 옛 경로가 금지 경로인 copied도 거절한다', () => {
+  const f = good(fixture());
+  const noOld = f.gate(f.input({files: [{filename: 'a.txt', status: 'copied'}]}));
+  assert.equal(noOld.verdict, 'reject'); assert.ok(noOld.reasons.some(x => x.includes('옛 경로')));
+  const bad = f.gate(f.input({files: [{filename: 'a.txt', status: 'copied', previous_filename: '.github/workflows/x.yml'}]}));
+  assert.equal(bad.verdict, 'reject'); assert.ok(bad.reasons.some(x => x.includes('금지 경로')));
+});
+
+test('R1. 다른 상태에 previous_filename이 붙어도 그 경로를 금지 경로로 검사한다', () => {
+  const f = good(fixture());
+  const r = f.gate(f.input({files: [{filename: 'a.txt', status: 'modified', previous_filename: 'package.json'}]}));
+  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('금지 경로')));
+});
+
+test('R2. 중복 filename은 changedFiles를 맞춰도 사용 오류(종료 코드 2)로 멈춘다', () => {
+  const f = good(fixture());
+  assert.throws(() => f.gate(f.input({pr: f.pr({changedFiles: 1}), files: f.F('a.txt', 'a.txt')})), e => e.exitCode === 2 && /겹칩니다/.test(e.message));
+  assert.throws(() => f.gate(f.input({pr: f.pr({changedFiles: 1}), files: [f.F('a.txt'), f.F('a.txt')]})), e => e.exitCode === 2);
+});
+
+test('R3. merge-gate --help와 JSON 오류 안내가 {pr, files, requiredChecks} 모양을 말한다', () => {
+  const cli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'src', 'cli.mjs');
+  const env = {...process.env, KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-mg-help-')), KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'};
+  const help = spawnSync(process.execPath, [cli, 'merge-gate', '--help'], {env, encoding: 'utf8'});
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /"files":<gh api --paginate --slurp/);
+  assert.match(help.stdout, /requiredChecks/);
+  const f = good(fixture());
+  assert.throws(() => f.gate('not json'), e => e.exitCode === 2 && /"files":\[/.test(e.message));
+});

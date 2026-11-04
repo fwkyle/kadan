@@ -40,12 +40,15 @@ export function forbiddenGroup(file) {
   return null;
 }
 
+// GitHub REST 파일 목록(pulls/N/files)의 status 값. 이 밖의 값이나 값 없음은 사용 오류다.
+const FILE_STATUSES = ['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'];
+const NEEDS_OLD_PATH = ['renamed', 'copied'];
 const usageError = message => Object.assign(new Error(message), {exitCode: 2});
 
 // stdin JSON의 모양을 검사한다. 틀리면 사용 오류(종료 코드 2). requiredChecks는 없어도 되지만(거절 이유가 된다) 있으면 배열이어야 한다.
 function parseInput(raw) {
   let input;
-  try { input = JSON.parse(raw); } catch { throw usageError('stdin이 JSON이 아닙니다. 사용: {"pr":{…},"requiredChecks":[…]} | kadan merge-gate <저장소/업무ID>'); }
+  try { input = JSON.parse(raw); } catch { throw usageError('stdin이 JSON이 아닙니다. 사용: {"pr":{…},"files":[REST 페이지 배열],"requiredChecks":[…]} | kadan merge-gate <저장소/업무ID>'); }
   const pr = input?.pr;
   if (!pr || typeof pr !== 'object' || Array.isArray(pr)) throw usageError('입력에 pr 객체가 필요합니다');
   const strings = ['url', 'state', 'mergeable', 'mergeStateStatus', 'headRefOid', 'baseRefName'];
@@ -59,8 +62,13 @@ function parseInput(raw) {
   const isText = v => typeof v === 'string' && v.trim() !== '';
   files.forEach((f, i) => {
     if (!f || typeof f !== 'object' || Array.isArray(f) || !isText(f.filename)) throw usageError(`files[${i}]는 filename이 비어 있지 않은 객체여야 합니다`);
-    if (f.status !== undefined && typeof f.status !== 'string') throw usageError(`files[${i}].status는 문자열이어야 합니다`);
+    if (!isText(f.status) || !FILE_STATUSES.includes(f.status)) throw usageError(`files[${i}].status는 ${FILE_STATUSES.join('·')} 중 하나여야 합니다(받은 값: ${JSON.stringify(f.status)})`);
     if (f.previous_filename !== undefined && !isText(f.previous_filename)) throw usageError(`files[${i}].previous_filename은 비어 있지 않은 문자열이어야 합니다`);
+  });
+  const seen = new Set();
+  files.forEach((f, i) => {
+    if (seen.has(f.filename)) throw usageError(`files[${i}]의 filename이 겹칩니다(${f.filename}): 중복을 지우지 않고 멈춥니다`);
+    seen.add(f.filename);
   });
   const checks = input.requiredChecks;
   if (checks !== undefined && checks !== null) {
@@ -95,8 +103,8 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   }
   // 3. 파일 목록 잘림
   if (files.length !== pr.changedFiles) reject(`파일 목록 개수가 맞지 않음(받은 ${files.length}개, PR ${pr.changedFiles}개; REST는 3,000개까지만 줌)`);
-  const noOld = files.filter(f => f.status === 'renamed' && !f.previous_filename);
-  if (noOld.length) reject(`이름을 바꾼 파일 ${noOld.length}개에 옛 경로(previous_filename)가 없음: ${noOld.slice(0, 3).map(f => f.filename).join(', ')}`);
+  const noOld = files.filter(f => NEEDS_OLD_PATH.includes(f.status) && !f.previous_filename);
+  if (noOld.length) reject(`이름을 바꾸거나 복사한 파일 ${noOld.length}개에 옛 경로(previous_filename)가 없음: ${noOld.slice(0, 3).map(f => f.filename).join(', ')}`);
   // 4. 금지 경로: 새 경로와 이름을 바꾸기 전 옛 경로 둘 다 본다.
   const paths = files.flatMap(f => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]);
   const forbidden = paths.map(f => [f, forbiddenGroup(f)]).filter(([, g]) => g);
