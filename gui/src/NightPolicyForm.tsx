@@ -2,7 +2,7 @@ import { useContext, useState } from "react";
 import { save } from "./resource";
 import { AppContext } from "./ui";
 import type { NightLine } from "./night-repos";
-import { MERGE_CHOICES, canSave, cardHint, changesOf, confirmText, fieldsOf, initialForm, problemOf } from "./night-form";
+import { MERGE_CHOICES, canSave, cardHint, changesOf, confirmText, fieldsOf, forgetSaved, initialForm, problemOf, rememberSaved, savedNote } from "./night-form";
 
 // PR3b: github 한 줄의 정책 양식. 초기값·바뀜 판정은 카단 설정(settings) 기준이다.
 // 저장은 기존 `POST /api/night/repos` 그대로. save()가 성공하면 화면 자료를 한 번 다시 읽어(줄·사이드 🌙 뱃지가 같은 자료)
@@ -13,17 +13,21 @@ export default function NightPolicyForm({ line, nightOn }: { line: NightLine; ni
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  // 성공 문구는 저장 뒤 다시 그려져도(양식이 새로 만들어져도) 남도록 모듈 바깥 기록에서 읽는다.
+  const [okNote, setOkNote] = useState(() => savedNote(line.github));
   if (readOnly) return null;
   const locked = nightOn === true;
   const change = changesOf(line, form);
   const problem = problemOf(change);
   const ready = canSave(change) && !locked && !busy && !!token;
-  const edit = (next: Partial<typeof form>) => { setForm({ ...form, ...next }); setAsking(false); setMessage(null); };
+  const edit = (next: Partial<typeof form>) => { setForm({ ...form, ...next }); setAsking(false); setMessage(null); forgetSaved(line.github); setOkNote(null); };
   const submit = async () => {
     setBusy(true);
     try {
       await save("/api/night/repos", fieldsOf(line, change), token);
-      setMessage({ ok: true, text: "저장했습니다." });
+      rememberSaved(line.github);
+      setOkNote(savedNote(line.github));
+      setMessage(null);
       setAsking(false);
     } catch (error) {
       setMessage({ ok: false, text: error instanceof Error ? error.message : "저장 실패" });
@@ -53,6 +57,7 @@ export default function NightPolicyForm({ line, nightOn }: { line: NightLine; ni
       <button type="button" onClick={submit} disabled={busy}>확인하고 저장</button>
       <button type="button" onClick={() => setAsking(false)} disabled={busy}>취소</button>
     </p>}
+    {okNote && !message && <p className="st-hint" role="status">{okNote}</p>}
     {message && <p className={message.ok ? "st-hint" : "st-error"} role={message.ok ? "status" : "alert"}>{message.text}</p>}
     <small className="st-night-clear">값 지우기: <code>kadan night repo {line.github} --clear deployBranch|nightMerge</code></small>
   </form>;
