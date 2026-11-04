@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { matchesAiProcess } from "./ai-identity.mjs";
+import { commandWords, matchesAiProcess } from "./ai-identity.mjs";
 import { splitGhostText } from "./ghost-text.mjs";
 import { inlineScreenEnv } from "./inline-screen.mjs";
 import { ledgerHome } from "./ledger.mjs";
@@ -44,7 +44,7 @@ export function ensureTmuxConf(home = ledgerHome()) {
 
 // tmux 서버를 처음 만든 클라이언트의 환경이 서버 전역 환경으로 복사된다. 창 선택 값이 그 뒤 모든 세션에 새지 않게
 // 클라이언트로 넘기는 환경에서 뺀다(2026-11-02). 이 프로세스 자신의 판단(effectiveWindow)은 process.env를 그대로 쓴다.
-export const TMUX_CLIENT_ENV_STRIP = ["KADAN_WINDOW", "KADAN_ROTTIE_BIN", "KADAN_WINDOW_FORCE"];
+export const TMUX_CLIENT_ENV_STRIP = ["KADAN_WINDOW", "KADAN_ROTTIE_BIN", "KADAN_WINDOW_FORCE", "KADAN_PANE_SOCKET"];
 export function tmuxClientEnv(env = process.env) {
   const clean = { ...env };
   for (const name of TMUX_CLIENT_ENV_STRIP) delete clean[name];
@@ -409,6 +409,18 @@ export function openWindow(session, platform = process.platform, deps = {}) {
   };
 }
 
+// 역할 AI와 그 자식이 TMUX·TMUX_PANE을 갖지 않게 한다(2026-11-04 사고: pane 안 QA 스크립트가 소켓 없는 tmux로 운영 서버를 종료).
+// 연산자 없는 단순 명령은 `exec env -u …`로 감싸 pane의 현재 명령이 실행기(claude·codex)로 끝나게 한다(PID일치·실행기 칸 유지).
+// 연산자·줄바꿈이 든 명령은 셸 앞머리에서 unset해 모든 부분이 TMUX 없이 돈다. 명령이 없으면 로그인 셸을 같은 방식으로 띄운다.
+// 원장 start 사건의 cmd는 호출부가 가진 원문이라 이 감싸기와 무관하다.
+export function wrapNoTmux(cmd) {
+  if (!cmd) return 'exec env -u TMUX -u TMUX_PANE "${SHELL:-/bin/sh}" -l';
+  return commandWords(cmd)?.length ? `exec env -u TMUX -u TMUX_PANE ${cmd}` : `unset TMUX TMUX_PANE; ${cmd}`;
+}
+
+// 카단 pane 표시: 이 pane이 카단 소켓에서 떴다는 사실을 TMUX 대신 이 값으로 안다(window-setting.insideKadanPane).
+export const paneSocketEnv = (socket = currentSocket()) => `KADAN_PANE_SOCKET=${socket}`;
+
 // home: 역할 프로세스가 KADAN_HOME을 물려받게 한다(Stop 훅이 감시기와 같은 spool 폴더를 쓰도록). 없으면 넣지 않는다.
 export function buildTmuxCreateArgv({ session, role, cwd, cmd, home }) {
   const environmentRole = session.startsWith("kadan-")
@@ -424,8 +436,10 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd, home }) {
     "-e",
     `KADAN_ROLE=${environmentRole}`,
     ...(home ? ["-e", `KADAN_HOME=${home}`] : []),
+    "-e",
+    paneSocketEnv(),
     ...inlineScreenEnv(cmd).flatMap(value => ["-e", value]),
-    ...(cmd ? [cmd] : []),
+    wrapNoTmux(cmd),
   ];
 }
 

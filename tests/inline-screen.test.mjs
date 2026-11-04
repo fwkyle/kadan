@@ -133,8 +133,8 @@ test('claude는 명령을 바꾸지 않고 tmux 환경(-e)으로 대체 화면�
   assert.deepEqual(inlineScreenEnv('cat'), []);
   assert.deepEqual(inlineScreenEnv(undefined), []);
   const argv = buildTmuxCreateArgv({session: 'kadan-x', role: 'x', cwd: '/tmp', cmd: claude});
-  assert.deepEqual(argv.slice(-3), ['-e', CLAUDE_INLINE_ENV, claude]);
-  assert.equal(argv.at(-1), claude); // 명령 문자열은 그대로
+  assert.deepEqual(argv.slice(-3, -1), ['-e', CLAUDE_INLINE_ENV]);
+  assert.equal(argv.at(-1), `exec env -u TMUX -u TMUX_PANE ${claude}`); // 명령 원문은 TMUX 제거 감싸기 안에 그대로
   assert.ok(!buildTmuxCreateArgv({session: 'kadan-x', role: 'x', cwd: '/tmp', cmd: 'codex --model m'}).includes(CLAUDE_INLINE_ENV));
 });
 

@@ -1,4 +1,5 @@
 // 유닛 시험 — tmux 없이도 검증되는 순수 함수와 원장.
+import { currentSocket } from "../src/floor-tmux.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -180,7 +181,9 @@ test("kadan start는 세션에 KADAN_ROLE을 심는다 — tmux -e(card-28)", ()
     "/home/te ster/Dev/kadan lite",
     "-e",
     "KADAN_ROLE=b1-감독",
-    "codex --resume",
+    "-e",
+    `KADAN_PANE_SOCKET=${currentSocket()}`,
+    "exec env -u TMUX -u TMUX_PANE codex --resume",
   ]);
   assert.ok(tmuxArgv.every((arg) => typeof arg === "string"));
 });
