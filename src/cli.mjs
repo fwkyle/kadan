@@ -86,6 +86,7 @@ import { recoveryCommand } from "./recovery.mjs";
 import { formatFullHelp, formatShortHelp } from "./command-help.mjs";
 import { cmdStatus } from "./commands/status.mjs";
 import { cmdTree, cmdWall } from "./commands/tree-wall.mjs";
+import { cmdBoard } from "./commands/board.mjs";
 import { cmdInit, cmdUp, cmdAdopt, cmdAutostart } from "./commands/quickstart.mjs";
 import { cmdDoctor } from "./commands/doctor.mjs";
 import { cmdRead, cmdLog, cmdAttach } from "./commands/inspect.mjs";
@@ -260,6 +261,7 @@ export const COMMANDS = {
   status: cmdStatus,
   tree: cmdTree,
   wall: cmdWall,
+  board: cmdBoard,
   dashboard: cmdWall,
   read: cmdRead,
   log: cmdLog,
