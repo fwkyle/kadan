@@ -24,19 +24,6 @@ export function runTmpForms(runTmp) {
 }
 
 const within = (value, forms) => forms.some(form => value === form || value.startsWith(`${form}/`));
-const unquote = word => (word.length > 1 && /^(['"]).*\1$/.test(word) ? word.slice(1, -1) : word);
-
-// 명령줄(ps eww)은 공백 낱말마다, KEY=VALUE 낱말은 VALUE를 ':'로 나눈 항목마다 runTmp 또는 runTmp/… 와 정확히 같을 때만 소속이다.
-// 끝 구분자(= : 공백 따옴표)를 허용하는 검색식은 쓰지 않는다: kadan-run-AB:other 같은 다른 폴더를 잡았다(2026-11-04 검수 P1).
-export function commandOwned(command, runTmp) {
-  const forms = runTmpForms(runTmp);
-  return command.split(/\s+/).filter(Boolean).some(raw => {
-    const word = unquote(raw);
-    if (within(word, forms)) return true;
-    const env = /^[A-Za-z_][A-Za-z0-9_]*=(.*)$/.exec(word);
-    return Boolean(env) && unquote(env[1]).split(':').some(item => within(unquote(item), forms));
-  });
-}
 
 // cwd는 realpath로 정규화해 경로 단위로 비교한다. 정규화에 실패하면(폴더 없음·권한) 소속이 아니다.
 export function cwdOwned(cwd, runTmp) {
@@ -75,13 +62,11 @@ function lsofCwds() {
   return cwds;
 }
 
-// 이 runTmp 소속인 프로세스인가. 명령줄·환경(ps eww)에 경로가 있거나 작업 폴더가 그 아래면 소속이다.
-// macOS는 시스템 프로그램(/bin/sleep 등)과 process.title로 이름을 바꾼 도우미(kadan-watch:<세션>)의 환경을 보여 주지 않는다 —
-// 그때는 cwd만 근거다. 어느 쪽으로도 확인하지 못하면 null(끄지 않음).
+// ps 출력은 값 경계를 잃어 소속을 정확히 가릴 수 없다(2026-11-04 검수 P1 두 번).
+// cwd의 실제 경로만 소속 근거로 쓴다. 명령줄은 운영 구획 제외와 신원 재대조에만 쓴다.
 export function ownership(row, runTmp, {cwd} = {}) {
   const command = row.identity.replace(new RegExp(`^${LSTART}`), '');
   if (OPS_SOCKET.test(command)) return null;
-  if (commandOwned(command, runTmp)) return 'command';
   return cwdOwned(cwd, runTmp) ? 'cwd' : null;
 }
 
@@ -90,8 +75,11 @@ export function sweepRun(runTmp, {
   check = pid => processes(pid, {timeout: 5000}),
   cwds = lsofCwds,
   signal = (pid, sig) => process.kill(pid, sig),
-  killServer = socket => spawnSync('tmux', ['-S', socket, 'kill-server'], {stdio: 'ignore', timeout: 3000,
-    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'TMUX' && key !== 'TMUX_PANE'))}),
+  killServer = socket => {
+    console.error(`격리 소켓 kill-server: ${socket}`);
+    return spawnSync('tmux', ['-S', socket, 'kill-server'], {stdio: 'ignore', timeout: 3000,
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'TMUX' && key !== 'TMUX_PANE'))});
+  },
   sleep = pause,
   self = process.pid,
   graceMs = 1000,
@@ -105,7 +93,7 @@ export function sweepRun(runTmp, {
     killServer(socket);
     result.sockets.push(socket);
   }
-  // 2) 남은 소속 프로세스(소켓 폴더가 밖에 있던 tmux 서버, 출력 기록 자식, kadan-watch 등)를 끈다.
+  // 2) 남은 프로세스는 cwd가 실행 폴더 아래일 때만 끈다. 소켓·cwd가 모두 밖이면 그대로 둔다.
   let rows;
   try { rows = list(); } catch (error) { result.skipped.push(`프로세스 조회 실패: ${error.message}`); return result; }
   let cwdOf;

@@ -36,6 +36,7 @@ function cleanup() {
   if (cleaned) return;
   cleaned = true;
   // 자기 소켓의 tmux 서버만 끈다. 운영(-L kadan)은 건드리지 않는다.
+  console.error(`격리 소켓 kill-server: ${env.TMUX_TMPDIR ?? '(시작 전)'}/${env.KADAN_SOCKET}`);
   spawnSync('tmux', ['-L', env.KADAN_SOCKET, 'kill-server'], {env, stdio: 'ignore'});
   if (runTmp) {
     // 정리 실패가 폴더 삭제를 막지 않는다. 소속을 확인 못 한 것은 끄지 않고 이유만 알린다.

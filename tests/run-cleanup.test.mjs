@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {stopChild} from './helpers/child-cleanup.mjs';
-import {sweepRun, ownership, commandOwned, cwdOwned} from './helpers/run-sweep.mjs';
+import {sweepRun, ownership, cwdOwned} from './helpers/run-sweep.mjs';
 
 // 실행기(tests/run.mjs)가 실행별 임시 폴더와 자기 tmux 서버를 성공·실패·중단(SIGINT) 모두에서 정리하는지 본다.
 // 가짜 시험 파일이 TMPDIR 아래에 폴더를 만들고 tmux 서버를 띄운 뒤 그 값을 info 파일에 적는다.
@@ -120,7 +120,8 @@ test('leak', () => {
   if (!/\\/kadan-run-[^/]+\\/tmux$/.test(process.env.TMUX_TMPDIR ?? '')) throw new Error('실행별 TMUX_TMPDIR 아님');
   const name = 'leak-' + process.pid;
   spawnSync('tmux', ['-u', '-L', name, 'new-session', '-d', 'sleep 300']);
-  spawnSync('tmux', ['-u', '-S', ${JSON.stringify(outside)}, 'new-session', '-d', 'sleep 300']);
+  spawnSync('tmux', ['-u', '-S', ${JSON.stringify(outside)}, 'new-session', '-d', 'sleep 300'],
+    {cwd: process.env.TMPDIR});
   const pid = args => Number(spawnSync('tmux', [...args, 'display', '-p', '#{pid}'], {encoding: 'utf8'}).stdout);
   const child = spawn('sleep', ['300'], {cwd: process.env.TMPDIR, detached: true, stdio: 'ignore'}); child.unref();
   fs.writeFileSync(${JSON.stringify(info)}, JSON.stringify({tmpdir: process.env.TMPDIR,
@@ -194,29 +195,29 @@ test('실행기 그물: 소속을 확인 못 한 도우미·운영 소켓(-L kad
     {pid: 900003, identity: `${at} tmux -u -L kadan -f /x/tmux.conf new-session TMPDIR=${runTmp}`}, // 운영 소켓
     {pid: 900004, identity: `${at} sleep 300 TMPDIR=${sibling}`}, // 이름이 겹치는 다른 폴더
     {pid: 900005, identity: `${at} kadan-watch:kadan-qa-3`}, // cwd가 이 폴더: 대상
-    {pid: 900006, identity: `${at} sleep 300 TMPDIR=${runTmp}`}, // 환경에 이 폴더: 대상
+    {pid: 900006, identity: `${at} sleep 300 TMPDIR=${runTmp}`}, // 환경만 이 폴더: 제외
     {pid: 900007, identity: `${at} node ${runTmp}/x.mjs`}, // 조회 사이에 번호가 재사용됨
   ];
-  const cwds = new Map([[900002, other], [900003, runTmp], [900005, child]]);
+  const cwds = new Map([[900002, other], [900003, runTmp], [900005, child], [900007, child]]);
   const sent = [];
   const swept = sweepRun(runTmp, {
     list: () => rows, cwds: () => cwds, sleep: () => {}, graceMs: 0,
     check: pid => rows.filter(r => r.pid === pid).map(r => (r.pid === 900007 ? {...r, identity: `${at} 다른 명령`} : r)),
     signal: (pid, sig) => sent.push([pid, sig]), killServer: () => { throw new Error('소켓 없음'); },
   });
-  assert.deepEqual(swept.signaled, [900005, 900006]);
-  assert.deepEqual(sent.map(([pid]) => pid).filter((pid, i, all) => all.indexOf(pid) === i), [900005, 900006]);
+  assert.deepEqual(swept.signaled, [900005]);
+  assert.deepEqual(sent.map(([pid]) => pid).filter((pid, i, all) => all.indexOf(pid) === i), [900005]);
   assert.equal(ownership(rows[2], runTmp, {cwd: runTmp}), null, '운영 소켓 줄은 어떤 근거로도 대상이 아니다');
   const noCwd = sweepRun(runTmp, {list: () => rows, cwds: () => { throw new Error('lsof 실패'); },
     check: pid => rows.filter(r => r.pid === pid), signal: () => {}, killServer: () => {},
     sleep: () => {}, graceMs: 0});
-  assert.deepEqual(noCwd.signaled, [900006, 900007], 'cwd 조회가 실패하면 명령줄 근거만 쓴다(900005는 끄지 않는다)');
+  assert.deepEqual(noCwd.signaled, [], 'cwd 조회가 실패하면 누구에게도 신호를 보내지 않는다');
   assert.deepEqual(sweepRun('kadan-run-AbCdEf').skipped, ['실행 폴더가 절대경로가 아님']);
 });
 
 // 2026-11-04 검수 P1: 끝 구분자(: = 공백 따옴표)를 받는 검색식이 kadan-run-AB:other 같은 다른 폴더를 소속으로 잡았다.
-// 이제 cwd는 realpath + '/' 경계, 명령줄·환경은 낱말(KEY=VALUE는 ':' 항목) 단위의 정확한 경로 비교다.
-test('실행기 그물(경로 경계): 이름이 겹치는 다른 폴더·구분자 뒤 문자열은 소속이 아니고, 자기 폴더와 별칭·PATH 항목은 소속이다', t => {
+// cwd는 realpath + '/' 경계로 비교한다. 명령줄·환경은 소속 근거가 아니다(run-sweep.test.mjs).
+test('실행기 그물(경로 경계): 이름이 겹치는 다른 폴더는 소속이 아니고 자기 폴더만 소속이다', t => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-edge-')));
   t.after(() => fs.rmSync(base, {recursive: true, force: true}));
   const a = path.join(base, 'kadan-run-AB');
@@ -232,20 +233,6 @@ test('실행기 그물(경로 경계): 이름이 겹치는 다른 폴더·구분
   assert.equal(cwdOwned('상대/경로', a), false);
   assert.equal(cwdOwned(a, a), true);
   assert.equal(cwdOwned(path.join(a, 'child'), a), true);
-  // 명령줄·환경: 낱말 단위. 구분자 뒤의 문자열이나 다른 경로 안의 문자열은 소속이 아니다.
-  for (const text of [`sleep 1 ${a}C`, `sleep 1 ${a}:other`, `sleep 1 X=${a}=other`, `sleep 1 /o/${a}`,
-    `sleep 1 --dir=${a}`, `sleep 1 TMPDIR=/o${a}`, `sleep 1 ${a}x/y`]) {
-    assert.equal(commandOwned(text, a), false, text);
-  }
-  for (const text of [`sleep 1 ${a}`, `node ${a}/x.mjs`, `sleep 1 TMPDIR=${a}`, `sleep 1 TMPDIR='${a}/t'`,
-    `sleep 1 PATH=/usr/bin:${a}/osascript-net:/bin`]) {
-    assert.equal(commandOwned(text, a), true, text);
-  }
-  // /tmp ↔ /private/tmp 별칭은 같은 폴더다.
-  const alias = '/private/tmp/kadan-run-Alias';
-  assert.equal(commandOwned('sleep 1 TMPDIR=/tmp/kadan-run-Alias/t', alias), true);
-  assert.equal(commandOwned('sleep 1 TMPDIR=/private/tmp/kadan-run-Alias', alias), true);
-  assert.equal(commandOwned('sleep 1 TMPDIR=/tmp/kadan-run-AliasZ', alias), false);
 });
 
 test('실행기 그물(경로 경계): 실제 sweepRun이 이름이 겹치는 폴더의 자식은 살려 두고 자기 폴더의 자식만 끈다', async t => {
