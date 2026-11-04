@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {stopChild} from './helpers/child-cleanup.mjs';
-import {sweepRun, ownership} from './helpers/run-sweep.mjs';
+import {sweepRun, ownership, commandOwned, cwdOwned} from './helpers/run-sweep.mjs';
 
 // 실행기(tests/run.mjs)가 실행별 임시 폴더와 자기 tmux 서버를 성공·실패·중단(SIGINT) 모두에서 정리하는지 본다.
 // 가짜 시험 파일이 TMPDIR 아래에 폴더를 만들고 tmux 서버를 띄운 뒤 그 값을 info 파일에 적는다.
@@ -180,19 +180,24 @@ test('실행기 그물: 다른 실행 폴더의 서버·자식은 살려 두고,
   assert.equal(await waitFor(() => !alive(server) && !alive(sleeper.pid)), true, '자기 폴더 것은 끈다');
 });
 
-test('실행기 그물: 소속을 확인 못 한 도우미·운영 소켓(-L kadan)·번호가 재사용된 프로세스는 끄지 않는다', () => {
-  const runTmp = '/private/tmp/kadan-run-AbCdEf', at = 'Wed Nov  4 02:22:02 2026';
+test('실행기 그물: 소속을 확인 못 한 도우미·운영 소켓(-L kadan)·번호가 재사용된 프로세스는 끄지 않는다', t => {
+  // cwd는 realpath로 판정하므로 실제 폴더를 만든다. 접두 경계 시험을 위해 이름이 겹치는 형제 폴더도 둔다.
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-own-')));
+  t.after(() => fs.rmSync(base, {recursive: true, force: true}));
+  const runTmp = path.join(base, 'kadan-run-AbCdEf'), sibling = `${runTmp}X`, other = path.join(base, 'other');
+  const child = path.join(runTmp, 'kadan-handover-background-x');
+  for (const dir of [child, sibling, other]) fs.mkdirSync(dir, {recursive: true});
+  const at = 'Wed Nov  4 02:22:02 2026';
   const rows = [
     {pid: 900001, identity: `${at} kadan-watch:kadan-qa-1`}, // 이름이 바뀐 도우미: cwd를 모름
     {pid: 900002, identity: `${at} kadan-watch:kadan-qa-2`}, // cwd가 다른 폴더
     {pid: 900003, identity: `${at} tmux -u -L kadan -f /x/tmux.conf new-session TMPDIR=${runTmp}`}, // 운영 소켓
-    {pid: 900004, identity: `${at} sleep 300 TMPDIR=/private/tmp/kadan-run-AbCdEfX`}, // 이름이 겹치는 다른 폴더
+    {pid: 900004, identity: `${at} sleep 300 TMPDIR=${sibling}`}, // 이름이 겹치는 다른 폴더
     {pid: 900005, identity: `${at} kadan-watch:kadan-qa-3`}, // cwd가 이 폴더: 대상
-    {pid: 900006, identity: `${at} sleep 300 TMPDIR=/tmp/kadan-run-AbCdEf`}, // /tmp 표기: 대상
-    {pid: 900007, identity: `${at} node /tmp/kadan-run-AbCdEf/x.mjs`}, // 조회 사이에 번호가 재사용됨
+    {pid: 900006, identity: `${at} sleep 300 TMPDIR=${runTmp}`}, // 환경에 이 폴더: 대상
+    {pid: 900007, identity: `${at} node ${runTmp}/x.mjs`}, // 조회 사이에 번호가 재사용됨
   ];
-  const cwds = new Map([[900002, '/private/tmp/other'], [900003, runTmp],
-    [900005, `${runTmp}/kadan-handover-background-x`]]);
+  const cwds = new Map([[900002, other], [900003, runTmp], [900005, child]]);
   const sent = [];
   const swept = sweepRun(runTmp, {
     list: () => rows, cwds: () => cwds, sleep: () => {}, graceMs: 0,
@@ -207,6 +212,60 @@ test('실행기 그물: 소속을 확인 못 한 도우미·운영 소켓(-L kad
     sleep: () => {}, graceMs: 0});
   assert.deepEqual(noCwd.signaled, [900006, 900007], 'cwd 조회가 실패하면 명령줄 근거만 쓴다(900005는 끄지 않는다)');
   assert.deepEqual(sweepRun('kadan-run-AbCdEf').skipped, ['실행 폴더가 절대경로가 아님']);
+});
+
+// 2026-11-04 검수 P1: 끝 구분자(: = 공백 따옴표)를 받는 검색식이 kadan-run-AB:other 같은 다른 폴더를 소속으로 잡았다.
+// 이제 cwd는 realpath + '/' 경계, 명령줄·환경은 낱말(KEY=VALUE는 ':' 항목) 단위의 정확한 경로 비교다.
+test('실행기 그물(경로 경계): 이름이 겹치는 다른 폴더·구분자 뒤 문자열은 소속이 아니고, 자기 폴더와 별칭·PATH 항목은 소속이다', t => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-edge-')));
+  t.after(() => fs.rmSync(base, {recursive: true, force: true}));
+  const a = path.join(base, 'kadan-run-AB');
+  fs.mkdirSync(path.join(a, 'child'), {recursive: true});
+  for (const dir of [`${a}:other`, `${a}=other`, `${a} other`, `${a}C`, path.join(base, 'x', 'kadan-run-AB', 'y')]) {
+    fs.mkdirSync(dir, {recursive: true});
+  }
+  // cwd: 비슷한 이름의 다른 폴더는 소속이 아니다.
+  for (const dir of [`${a}:other`, `${a}=other`, `${a} other`, `${a}C`, path.join(base, 'x', 'kadan-run-AB', 'y')]) {
+    assert.equal(cwdOwned(dir, a), false, dir);
+  }
+  assert.equal(cwdOwned(path.join(base, 'nope'), a), false, 'realpath 실패는 소속이 아니다');
+  assert.equal(cwdOwned('상대/경로', a), false);
+  assert.equal(cwdOwned(a, a), true);
+  assert.equal(cwdOwned(path.join(a, 'child'), a), true);
+  // 명령줄·환경: 낱말 단위. 구분자 뒤의 문자열이나 다른 경로 안의 문자열은 소속이 아니다.
+  for (const text of [`sleep 1 ${a}C`, `sleep 1 ${a}:other`, `sleep 1 X=${a}=other`, `sleep 1 /o/${a}`,
+    `sleep 1 --dir=${a}`, `sleep 1 TMPDIR=/o${a}`, `sleep 1 ${a}x/y`]) {
+    assert.equal(commandOwned(text, a), false, text);
+  }
+  for (const text of [`sleep 1 ${a}`, `node ${a}/x.mjs`, `sleep 1 TMPDIR=${a}`, `sleep 1 TMPDIR='${a}/t'`,
+    `sleep 1 PATH=/usr/bin:${a}/osascript-net:/bin`]) {
+    assert.equal(commandOwned(text, a), true, text);
+  }
+  // /tmp ↔ /private/tmp 별칭은 같은 폴더다.
+  const alias = '/private/tmp/kadan-run-Alias';
+  assert.equal(commandOwned('sleep 1 TMPDIR=/tmp/kadan-run-Alias/t', alias), true);
+  assert.equal(commandOwned('sleep 1 TMPDIR=/private/tmp/kadan-run-Alias', alias), true);
+  assert.equal(commandOwned('sleep 1 TMPDIR=/tmp/kadan-run-AliasZ', alias), false);
+});
+
+test('실행기 그물(경로 경계): 실제 sweepRun이 이름이 겹치는 폴더의 자식은 살려 두고 자기 폴더의 자식만 끈다', async t => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-real-')));
+  const a = path.join(base, 'kadan-run-AB'), lookalike = `${a}:other`;
+  fs.mkdirSync(a); fs.mkdirSync(lookalike);
+  const start = cwd => { const c = spawn('sleep', ['300'], {cwd, detached: true, stdio: 'ignore'}); c.unref(); return c; };
+  const own = start(a), foreign = start(lookalike);
+  t.after(() => {
+    for (const c of [own, foreign]) if (alive(c.pid)) process.kill(c.pid, 'SIGKILL');
+    fs.rmSync(base, {recursive: true, force: true});
+  });
+  assert.ok(own.pid > 1 && foreign.pid > 1);
+  // 호출 전에 두 자식이 lsof에 보일 때까지 기다린다.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const swept = sweepRun(a, {killServer: () => {}});
+  assert.ok(swept.signaled.includes(own.pid), '자기 폴더 자식에게 신호가 갔다');
+  assert.equal(swept.signaled.includes(foreign.pid), false, '이름이 겹치는 다른 폴더 자식에게는 신호가 가지 않았다');
+  assert.equal(await waitFor(() => !alive(own.pid)), true, '자기 자식은 끝났다');
+  assert.equal(alive(foreign.pid), true, '다른 폴더 자식은 살아 있다');
 });
 
 test('실행기 그물(정적): kill-server는 -S 절대경로나 실행기 자기 소켓에만 쓰고 운영 이름 kadan을 넣지 않는다', () => {

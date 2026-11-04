@@ -9,17 +9,41 @@ import {spawnSync} from 'node:child_process';
 import {processes} from './child-cleanup.mjs';
 
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const LSTART = String.raw`\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+\s+`;
 const OPS_SOCKET = /(^|\s)-L\s*kadan(\s|$)/; // 운영 카단 구획. 명령줄·환경 어디에 runTmp가 있어도 이 줄은 끄지 않는다.
 
-// /private/tmp/… 와 /tmp/… 두 표기를 모두 본다. 뒤 경계를 둬서 kadan-run-AbCdEf가 kadan-run-AbCdEfX를 잡지 않게 한다.
-export function runTmpPattern(runTmp) {
-  const real = path.resolve(runTmp);
-  const forms = new Set([real]);
-  if (real.startsWith('/private/tmp/')) forms.add(real.slice('/private'.length));
-  if (real.startsWith('/tmp/')) forms.add(`/private${real}`);
-  return new RegExp(`(?:${[...forms].map(escape).join('|')})(?=[/\\s'"=:]|$)`);
+// runTmp가 가질 수 있는 표기: 입력 그대로, realpath, /tmp↔/private/tmp 별칭. 문자열 검색이 아니라 경로 단위로 비교한다.
+export function runTmpForms(runTmp) {
+  const forms = new Set([path.resolve(runTmp)]);
+  try { forms.add(fs.realpathSync(runTmp)); } catch { /* 폴더가 없으면 입력 표기만 */ }
+  for (const form of [...forms]) {
+    if (form.startsWith('/private/tmp/')) forms.add(form.slice('/private'.length));
+    if (form.startsWith('/tmp/')) forms.add(`/private${form}`);
+  }
+  return [...forms];
+}
+
+const within = (value, forms) => forms.some(form => value === form || value.startsWith(`${form}/`));
+const unquote = word => (word.length > 1 && /^(['"]).*\1$/.test(word) ? word.slice(1, -1) : word);
+
+// 명령줄(ps eww)은 공백 낱말마다, KEY=VALUE 낱말은 VALUE를 ':'로 나눈 항목마다 runTmp 또는 runTmp/… 와 정확히 같을 때만 소속이다.
+// 끝 구분자(= : 공백 따옴표)를 허용하는 검색식은 쓰지 않는다: kadan-run-AB:other 같은 다른 폴더를 잡았다(2026-11-04 검수 P1).
+export function commandOwned(command, runTmp) {
+  const forms = runTmpForms(runTmp);
+  return command.split(/\s+/).filter(Boolean).some(raw => {
+    const word = unquote(raw);
+    if (within(word, forms)) return true;
+    const env = /^[A-Za-z_][A-Za-z0-9_]*=(.*)$/.exec(word);
+    return Boolean(env) && unquote(env[1]).split(':').some(item => within(unquote(item), forms));
+  });
+}
+
+// cwd는 realpath로 정규화해 경로 단위로 비교한다. 정규화에 실패하면(폴더 없음·권한) 소속이 아니다.
+export function cwdOwned(cwd, runTmp) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return false;
+  let real;
+  try { real = fs.realpathSync(cwd); } catch { return false; }
+  return within(real, runTmpForms(runTmp));
 }
 
 // 실행 폴더 아래의 유닉스 소켓(tmux-<uid>/<이름> 등)을 모두 찾는다. 링크는 따라가지 않는다.
@@ -55,11 +79,10 @@ function lsofCwds() {
 // macOS는 시스템 프로그램(/bin/sleep 등)과 process.title로 이름을 바꾼 도우미(kadan-watch:<세션>)의 환경을 보여 주지 않는다 —
 // 그때는 cwd만 근거다. 어느 쪽으로도 확인하지 못하면 null(끄지 않음).
 export function ownership(row, runTmp, {cwd} = {}) {
-  const pattern = runTmpPattern(runTmp);
   const command = row.identity.replace(new RegExp(`^${LSTART}`), '');
   if (OPS_SOCKET.test(command)) return null;
-  if (pattern.test(command)) return 'command';
-  return typeof cwd === 'string' && pattern.test(cwd) ? 'cwd' : null;
+  if (commandOwned(command, runTmp)) return 'command';
+  return cwdOwned(cwd, runTmp) ? 'cwd' : null;
 }
 
 export function sweepRun(runTmp, {
