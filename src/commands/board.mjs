@@ -5,12 +5,12 @@
 //   설명 칸은 켜진 때만 고를 때(0.4초 가라앉은 뒤)와 15초 이상 간격으로 GET 1번. 사이드바 summary는 켜진 때만 15초 이상 간격.
 //   슈퍼감독 현황·나이트런 정책은 시작과 r 때만. 원장·카드는 (대시보드가 꺼졌을 때의 시작·r 한 번 말고는) 읽지 않으므로 데이터가 10배여도 tick 비용은 같다.
 import { floor } from "../floor.mjs";
-import { sendHumanKeys } from "../floor-tmux.mjs";
+import { sendHumanKeys, HUMAN_KEYS_PASTE_LABEL } from "../floor-tmux.mjs";
 import { DEFAULT_PORT, readConfig } from "../quickstart.mjs";
 import { ledgerHome } from "../ledger.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import { buildEntries, reduceKey } from "../board-model.mjs";
-import { createInputParser, listKeys, toSendTokens } from "../board-input.mjs";
+import { createInputParser, listKeys, toSendTokens, ESC_WAIT_MS, PASTE_IDLE_MS } from "../board-input.mjs";
 import { renderFrame } from "../board-view.mjs";
 import { createTerminal } from "../board-tui.mjs";
 import { httpJson, loadDashboard, loadSuperStatus, loadSupers, localSupers, readPanePid, readScreen } from "../board-data.mjs";
@@ -41,7 +41,7 @@ export function createBoard(deps) {
   const parser = createInputParser();
   const panes = { side: true, desc: true, term: true };
   let state = { sel: 0, notice: "" }, entries = [], focus = "list", screen = null, loading = false;
-  let focusInfo = null, pending = [], flushTimer = null, descTimer = null, tickTimer = null, lastSummaryAt = 0, busy = false, closed = false;
+  let focusInfo = null, pending = [], flushTimer = null, holdTimer = null, descTimer = null, tickTimer = null, lastSummaryAt = 0, busy = false, closed = false;
   const selected = () => entries[Math.min(state.sel, entries.length - 1)];
   const notice = (text) => { state = { ...state, notice: text }; };
 
@@ -59,7 +59,7 @@ export function createBoard(deps) {
   const readSessions = () => { try { data.sessions = new Set(listSessions()); } catch { data.sessions = new Set(); } };
 
   function loseTerminal(message) {
-    focus = "list"; focusInfo = null; pending = []; parser.reset();
+    focus = "list"; focusInfo = null; pending = []; parser.reset(); clearHold();
     if (flushTimer) { cancel(flushTimer); flushTimer = null; }
     notice(message);
   }
@@ -117,7 +117,7 @@ export function createBoard(deps) {
     if (focus !== "term" || !focusInfo || !pending.length) { pending = []; return; }
     const { tokens, over } = toSendTokens(pending);
     pending = [];
-    if (over) { notice("붙여넣기가 너무 커서(64KB 초과) 보내지 않았습니다"); draw(); return; }
+    if (over) { notice(`붙여넣기가 너무 커서(${HUMAN_KEYS_PASTE_LABEL} 초과) 보내지 않았습니다`); draw(); return; }
     try {
       send(focusInfo.session, tokens, { allowed: new Set(entries.map((e) => e.session)), expectedPid: focusInfo.pid, guard: focusInfo.guard });
     } catch (error) {
@@ -134,13 +134,33 @@ export function createBoard(deps) {
     if (!pid) { notice(`${entry.session}: pane PID를 읽지 못해 입력하지 않습니다`); return; }
     panes.term = true;
     focusInfo = { session: entry.session, pid, guard: {} };
-    focus = "term"; parser.reset(); pending = [];
+    focus = "term"; parser.reset(); clearHold(); pending = [];
     notice("");
+  }
+
+  function clearHold() { if (holdTimer) { cancel(holdTimer); holdTimer = null; } }
+  // 이어질 조각을 기다리는 중이면(단독 ESC 50ms·끝 표시 없는 붙여넣기 2초) 시간이 지났을 때 expire로 마무리한다.
+  function armHold() {
+    clearHold();
+    const waiting = parser.waiting();
+    if (waiting) holdTimer = schedule(onHoldExpired, waiting === "paste" ? PASTE_IDLE_MS : ESC_WAIT_MS);
+  }
+  function onHoldExpired() {
+    holdTimer = null;
+    if (closed) return;
+    const { tokens, dropped } = parser.expire();
+    if (dropped) notice("붙여넣기 끝 표시가 오지 않아 보내지 않고 버렸습니다");
+    handle(tokens);
+    if (dropped && focus === "term") draw();
   }
 
   function onInput(chunk) {
     if (closed) return;
-    const parsed = parser.feed(chunk);
+    handle(parser.feed(chunk));
+    if (!closed) armHold();
+  }
+
+  function handle(parsed) {
     if (focus === "term") {
       const leave = parsed.findIndex((t) => t.type === "leave");
       pending.push(...(leave === -1 ? parsed : parsed.slice(0, leave)));
@@ -170,8 +190,8 @@ export function createBoard(deps) {
 
   function close() {
     closed = true;
-    for (const timer of [flushTimer, descTimer, tickTimer]) if (timer) cancel(timer);
-    flushTimer = descTimer = tickTimer = null;
+    for (const timer of [flushTimer, holdTimer, descTimer, tickTimer]) if (timer) cancel(timer);
+    flushTimer = holdTimer = descTimer = tickTimer = null;
     deps.onClose?.();
   }
   async function open() { readSessions(); rebuild(); draw(); start(); await refresh({ full: true }); }

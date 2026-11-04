@@ -5,6 +5,8 @@ import { HUMAN_KEYS_PASTE_MAX } from "./floor-tmux.mjs";
 export const LEAVE_BYTE = "\x1d"; // Ctrl-]
 const ESC = "\x1b", PASTE_START = `${ESC}[200~`, PASTE_END = `${ESC}[201~`;
 const HOLD_MAX = 16; // 쪼개져 온 이스케이프 시퀀스를 다음 입력까지 쥐고 있는 상한
+export const ESC_WAIT_MS = 50; // ESC로 시작하는 불완전한 순서를 이어질 조각을 기다리는 시간(넘으면 단독 Esc)
+export const PASTE_IDLE_MS = 2000; // 붙여넣기 끝 표시 없이 이 시간 입력이 멎으면 버린다
 
 const ARROWS = { A: "Up", B: "Down", C: "Right", D: "Left", H: "Home", F: "End" };
 const TILDE = { 1: "Home", 2: "IC", 3: "DC", 4: "End", 5: "PPage", 6: "NPage", 7: "Home", 8: "End",
@@ -45,6 +47,7 @@ export function createInputParser({ pasteMax = HUMAN_KEYS_PASTE_MAX } = {}) {
   let held = "";
   let paste = null; // 붙여넣기 중이면 모은 글자(상한을 넘기면 over)
   let over = false;
+  let pasteBytes = 0; // 붙여넣기 UTF-8 바이트 수(상한은 글자 수가 아니라 바이트)
   const tokens = [];
   const pushText = (text) => {
     const last = tokens.at(-1);
@@ -68,10 +71,13 @@ export function createInputParser({ pasteMax = HUMAN_KEYS_PASTE_MAX } = {}) {
           }
         }
         const part = s.slice(i, keep);
-        if (!over) { paste += part; if (paste.length > pasteMax) { over = true; paste = ""; } }
+        if (!over) {
+          paste += part; pasteBytes += Buffer.byteLength(part);
+          if (pasteBytes > pasteMax) { over = true; paste = ""; }
+        }
         if (end === -1) break;
         tokens.push({ type: "paste", text: paste, over });
-        paste = null; over = false;
+        paste = null; over = false; pasteBytes = 0;
         i = end + PASTE_END.length;
         continue;
       }
@@ -79,7 +85,8 @@ export function createInputParser({ pasteMax = HUMAN_KEYS_PASTE_MAX } = {}) {
       if (c === LEAVE_BYTE) { tokens.push({ type: "leave" }); return tokens.slice(); }
       if (c === ESC) {
         const rest = s.slice(i);
-        if (rest.startsWith(PASTE_START)) { paste = ""; over = false; i += PASTE_START.length; continue; }
+        if (rest.startsWith(PASTE_START)) { paste = ""; over = false; pasteBytes = 0; i += PASTE_START.length; continue; }
+        if (rest.length === 1) { held = rest; break; } // 다음 조각이 이어질 수 있다: expire()가 시간 뒤 단독 Esc로 낸다
         if (rest[1] === "[") {
           const m = CSI.exec(rest);
           if (m) { const key = csiKey(m[1], m[3]); if (key) pushKey(key); i += m[0].length; continue; }
@@ -106,7 +113,17 @@ export function createInputParser({ pasteMax = HUMAN_KEYS_PASTE_MAX } = {}) {
     }
     return tokens.slice();
   }
-  return { feed, reset() { held = ""; paste = null; over = false; } };
+  // 이어질 조각을 기다리는 중인지: "paste"(끝 표시 대기)·"esc"(불완전한 이스케이프 순서)·null.
+  const waiting = () => (paste !== null ? "paste" : held ? "esc" : null);
+  // 기다리던 시간이 지났을 때. 단독 ESC는 Esc 키로 내고, 다른 불완전한 순서·끝 없는 붙여넣기는 보내지 않고 버린다.
+  function expire() {
+    const kind = waiting();
+    const out = { tokens: [], dropped: kind === "paste" };
+    if (kind === "esc" && held === ESC) out.tokens.push({ type: "key", key: "Escape" });
+    held = ""; paste = null; over = false; pasteBytes = 0;
+    return out;
+  }
+  return { feed, expire, waiting, reset() { held = ""; paste = null; over = false; pasteBytes = 0; } };
 }
 
 // 해석 결과 → 바닥 전송 함수가 받는 {text}|{key} 목록. 붙여넣기가 상한을 넘으면 over를 알린다.

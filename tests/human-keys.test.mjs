@@ -85,7 +85,8 @@ test("글자 끝의 세미콜론은 tmux 명령 구분자로 읽히지 않게 �
 test("긴 붙여넣기는 상한 안에서 여러 명령으로 나누고, 64KB를 넘으면 아무것도 보내지 않는다", () => {
   const f = fake();
   const result = sendHumanKeys(S, [{ text: "가".repeat(4500) }], base(f));
-  assert.equal(result.sent, 3);
+  assert.equal(result.sent, 7); // 한 명령은 UTF-8 2,000바이트 이하(한글 666자)
+  assert.ok(f.sends().every((c) => Buffer.byteLength(c.at(-1)) <= 2000));
   assert.equal(f.sends().map((c) => c.at(-1)).join(""), "가".repeat(4500));
   const big = fake();
   assert.throws(() => sendHumanKeys(S, [{ text: "a".repeat(64 * 1024 + 1) }], base(big)), { code: "KADAN_BOARD_PASTE_TOO_LARGE" });
@@ -147,4 +148,17 @@ test("기존 checkHumanIdle 동작은 그대로다(client 최근 입력이면 KA
   const text = fs.readFileSync(new URL("../src/floor-tmux.mjs", import.meta.url), "utf8");
   assert.ok(text.includes('deny("KADAN_HUMAN_ACTIVE", "전송 보류: 사람이 이 창에서 최근 입력함'));
   assert.ok(text.includes('deny("KADAN_HUMAN_ACTIVITY_UNKNOWN", "전송 보류: 사람 입력 시각 미확인'));
+});
+
+test("상한은 글자 수가 아니라 UTF-8 바이트이고, 넘으면 tmux 호출 전에 거절하며, 조각은 문자 중간에서 자르지 않는다", () => {
+  const over = fake();
+  assert.throws(() => sendHumanKeys(S, [{ text: "가".repeat(21_846) }], base(over)), { code: "KADAN_BOARD_PASTE_TOO_LARGE" });
+  assert.deepEqual(over.calls, []);
+  const ok = fake();
+  assert.ok(sendHumanKeys(S, [{ text: "가".repeat(21_845) }], base(ok)).sent > 0);
+  assert.equal(ok.sends().map((c) => c.at(-1)).join(""), "가".repeat(21_845));
+  const emoji = fake();
+  sendHumanKeys(S, [{ text: "🌙".repeat(1_001) }], base(emoji)); // 4바이트 글자: 경계에서도 깨지지 않는다
+  assert.equal(emoji.sends().map((c) => c.at(-1)).join(""), "🌙".repeat(1_001));
+  assert.ok(emoji.sends().every((c) => Buffer.byteLength(c.at(-1)) <= 2000));
 });

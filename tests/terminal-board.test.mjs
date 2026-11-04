@@ -388,3 +388,59 @@ test("board 코드는 새 세션·창·분할·크기 조절·붙기·종료 길
   for (const word of ["new-session", "split-window", "resize-", "attach", "kill-", "respawn", "paste-buffer"])
     assert.ok(!section.includes(word), `바닥 함수에 ${word}`);
 });
+
+test("컨트롤러 F1: ESC가 먼저 오고 붙여넣기가 이어지면 Esc를 보내지 않고 한 덩어리로 보낸다", async () => {
+  const h = harness();
+  await h.board.open();
+  h.board.onInput("\r");
+  h.board.onInput("\x1b");
+  await h.fire(50); // 이어질 조각을 기다리는 ESC_WAIT_MS 타이머가 걸린다(실제 sleep 없음)
+  assert.deepEqual(h.log.send, []);
+  assert.ok(h.board.state.focus === "term");
+});
+
+test("컨트롤러 F1: 이어지는 조각이 오면 대기 타이머를 취소하고 한 덩어리로 해석한다", async () => {
+  const h = harness();
+  await h.board.open();
+  h.board.onInput("\r");
+  h.board.onInput("\x1b");
+  assert.ok([...h.timers.values()].some((t) => t.ms === 50));
+  h.board.onInput("[200~payload\x1b[201~");
+  assert.ok(![...h.timers.values()].some((t) => t.ms === 2000));
+  h.board.flush();
+  assert.deepEqual(h.log.send.map((s) => s.tokens), [[{ text: "payload" }]]);
+});
+
+test("컨트롤러 F1: ESC 단독은 시간이 지난 뒤에만 Esc로 보낸다", async () => {
+  const h = harness();
+  await h.board.open();
+  h.board.onInput("\r");
+  h.board.onInput("\x1b");
+  h.board.flush();
+  assert.deepEqual(h.log.send, []);
+  await h.fire(50);
+  h.board.flush();
+  assert.deepEqual(h.log.send.map((s) => s.tokens), [[{ key: "Escape" }]]);
+});
+
+test("컨트롤러 F1: 끝 표시 없는 붙여넣기는 상한 시간 뒤 보내지 않고 한 줄로 알린다", async () => {
+  const h = harness();
+  await h.board.open();
+  h.board.onInput("\r");
+  h.board.onInput("\x1b[200~secret");
+  await h.fire(2000);
+  h.board.flush();
+  assert.deepEqual(h.log.send, []);
+  assert.match(h.board.state.notice, /끝 표시가 오지 않아/);
+  assert.equal(h.board.state.focus, "term");
+});
+
+test("컨트롤러 F2: 한글 붙여넣기는 바이트 상한(21,846자)에서 보내지 않고 화면 안내가 같은 상수를 쓴다", async () => {
+  const h = harness();
+  await h.board.open();
+  h.board.onInput("\r");
+  h.board.onInput(`\x1b[200~${"가".repeat(21_846)}\x1b[201~`);
+  h.board.flush();
+  assert.deepEqual(h.log.send, []);
+  assert.match(h.board.state.notice, /64KB/);
+});

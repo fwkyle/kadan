@@ -547,8 +547,9 @@ function relayedHumanInputRecent(session, run, at, humanIdleMs) {
 // 기록보기 중이면 보내지 않음(해제하지 않음)·다른 사람이 같은 창에 붙어 최근 키를 쳤으면 보내지 않음(checkHumanIdle은 부르지 않는다:
 // board를 쓰는 사람이 바로 그 사람이다)·`@kadan_human_input` 표시(1초에 1번 이하)로 AI 우편·감시 전송이 끼어들지 않게 함.
 export const HUMAN_KEYS_CHECK_MS = 1000;
-export const HUMAN_KEYS_PASTE_MAX = 64 * 1024;
-const HUMAN_KEYS_LITERAL_CHUNK = 2000; // tmux 명령 한 번에 실리는 글자 수 상한(명령 메시지 크기 한도 안에 두려는 것)
+export const HUMAN_KEYS_PASTE_MAX = 64 * 1024; // UTF-8 바이트 기준(글자 수 아님)
+export const HUMAN_KEYS_PASTE_LABEL = `${HUMAN_KEYS_PASTE_MAX / 1024}KB`;
+const HUMAN_KEYS_LITERAL_CHUNK = 2000; // tmux 명령 한 번에 실리는 UTF-8 바이트 수 상한(명령 메시지 크기 한도 안에 두려는 것)
 const HUMAN_KEYS_OTHER_CLIENT_MS = 30_000;
 const HUMAN_KEY_NAME = /^(?:Enter|Tab|BTab|BSpace|Escape|Up|Down|Left|Right|Home|End|PPage|NPage|DC|IC|F(?:[1-9]|1[0-2])|C-[a-z]|C-Space|M-[A-Za-z0-9]|[CSM]-(?:Up|Down|Left|Right|Home|End|PPage|NPage|DC|IC))$/;
 const humanInputMarkedAt = new Map();
@@ -567,9 +568,15 @@ export function markHumanInput(session, {run = tmuxOut, clock = Date.now, state 
 // 글자 묶음을 `send-keys -l`로. 명령줄 끝의 `;`는 tmux가 명령 구분자로 읽으므로 뒤로 떼어 `\;` 키로 보낸다.
 function literalCommands(target, text) {
   const commands = [];
-  const chars = [...text.replaceAll("\0", "")];
-  for (let i = 0; i < chars.length; i += HUMAN_KEYS_LITERAL_CHUNK) {
-    const chunk = chars.slice(i, i + HUMAN_KEYS_LITERAL_CHUNK).join("");
+  const chunks = [];
+  let current = "", bytes = 0;
+  for (const ch of text.replaceAll("\0", "")) { // 글자(코드 포인트) 단위로 모아 문자 중간에서 자르지 않는다
+    const size = Buffer.byteLength(ch);
+    if (bytes + size > HUMAN_KEYS_LITERAL_CHUNK) { chunks.push(current); current = ""; bytes = 0; }
+    current += ch; bytes += size;
+  }
+  if (current) chunks.push(current);
+  for (const chunk of chunks) {
     const tail = chunk.match(/;*$/)[0].length;
     const body = chunk.slice(0, chunk.length - tail);
     if (body) commands.push(["send-keys", "-t", target, "-l", "--", body]);
@@ -585,10 +592,10 @@ export function sendHumanKeys(session, tokens, {allowed, expectedPid, guard = {}
   if (!/^\d+$/.test(String(expectedPid ?? ""))) humanKeysDeny("KADAN_PID_MISMATCH", "입력 거절: 포커스 때 기록한 pane PID가 없음");
   let literalSize = 0;
   for (const token of tokens) {
-    if (typeof token?.text === "string") literalSize += token.text.length;
+    if (typeof token?.text === "string") literalSize += Buffer.byteLength(token.text);
     else if (typeof token?.key !== "string" || !HUMAN_KEY_NAME.test(token.key)) humanKeysDeny("KADAN_BOARD_KEY_UNKNOWN", "입력 거절: 모르는 키");
   }
-  if (literalSize > HUMAN_KEYS_PASTE_MAX) humanKeysDeny("KADAN_BOARD_PASTE_TOO_LARGE", "입력 거절: 붙여넣기가 너무 큼(64KB 초과)");
+  if (literalSize > HUMAN_KEYS_PASTE_MAX) humanKeysDeny("KADAN_BOARD_PASTE_TOO_LARGE", `입력 거절: 붙여넣기가 너무 큼(${HUMAN_KEYS_PASTE_LABEL} 초과)`);
   if (!tokens.length) return {sent: 0};
 
   const target = `=${session}:`, at = clock();
