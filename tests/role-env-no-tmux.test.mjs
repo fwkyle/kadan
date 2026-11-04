@@ -137,8 +137,10 @@ const commands = [
   ['대입만', 'X=1'],
 ];
 for (const shell of ['/bin/sh', '/bin/zsh']) {
+  // zsh가 없는 기계(CI ubuntu)에서는 그 셸의 사례만 건너뛴다.
+  const skip = fs.existsSync(shell) ? false : `${path.basename(shell)} 없음`;
   for (const [name, cmd] of commands) {
-    test(`원문 대조 ${shell}: ${name}`, t => {
+    test(`원문 대조 ${shell}: ${name}`, {skip}, t => {
       const clean = {...process.env, FOO: 'remove-me'};
       for (const key of ['TMUX', 'TMUX_PANE', 'X']) delete clean[key];
       const dirty = {...clean, TMUX: '/tmp/fake,1,0', TMUX_PANE: '%9'};
