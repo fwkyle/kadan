@@ -1,10 +1,11 @@
 import { useResource } from "./resource";
+import NightPolicyForm from "./NightPolicyForm";
 import { time } from "./ui";
 import { badgeOf, badgeTitle, groupByRepo, headFacts, sidebarBadge, type NightLine, type NightRepos, type NightStrip } from "./night-repos";
 
-// PR3: 나이트런 상태 띠 · 저장소별 '나이트런 중 자동 머지' 뱃지와 머리 줄. 모두 읽기 전용이다.
+// PR3: 나이트런 상태 띠 · 저장소별 '나이트런 중 자동 머지' 뱃지와 머리 줄. 저장소 화면 머리의 양식만 쓰기다.
 // `/api/night/repos`는 정책이 바뀔 때만 바뀐다(약 1초·5.5KB). 타이머로 반복해 부르지 않는다:
-// 페이지를 열 때와 저장소 화면을 열 때(30초 넘게 지났을 때)만 읽는다. 정책 쓰기 양식은 PR3b에서 따로 한다.
+// 페이지를 열 때와 저장소 화면을 열 때(30초 넘게 지났을 때)만 읽는다. 저장하면 save()가 한 번 다시 읽는다(PR3b).
 export function useNightRepos() {
   return useResource<NightRepos>("/api/night/repos", { pollMs: 0, staleMs: 30_000 });
 }
@@ -55,9 +56,10 @@ export function RepoNightHead({ repo, res, on }: { repo: string; res: ReturnType
         <span>나이트런 중 자동 머지 {facts.policy}{facts.policyFrom && <small> ({facts.policyFrom})</small>}</span>
         <span className={kindClass(badge.kind) + (on ? " st-night-lit" : "")} title={badgeTitle(on, badge)}>{badge.text}</span>
         {badge.detail && <small className="st-night-detail">{badge.detail}</small>}
+        <NightPolicyForm key={`${line.github}|${line.settings?.deployBranch}|${line.settings?.nightMerge}`} line={line} nightOn={on} />
       </li>;
     })}</ul>
-    <p className="st-hint">정하는 법: <code>kadan night repo &lt;소유자/이름&gt; …</code> (이 화면은 읽기 전용입니다)</p>
+    <p className="st-hint">원격 보기에서는 양식이 보이지 않습니다. 명령으로 정하려면 <code>kadan night repo &lt;소유자/이름&gt; …</code></p>
   </section>;
 }
 

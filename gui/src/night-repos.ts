@@ -4,6 +4,8 @@
 export type NightLine = {
   github: string;
   repo?: string | null;
+  // 카단 설정에 실제로 저장된 값(연결 문서 값은 섞이지 않음). 양식은 이 값을 기준으로 한다.
+  settings?: { deployBranch: string | null; nightMerge: string | null };
   effective: { deployBranch: { value: string | null; from: string | null }; nightMerge: { value: string | null; from: string | null } };
   verdict: { action: string; reason: string; detail?: string | null; exceptBranch?: string | null };
 };
@@ -56,7 +58,7 @@ export function sidebarBadge(lines: NightLine[]): Badge | null {
   return same ? { ...badges[0], text: `${badges[0].text} ${lines.length}개` } : { kind: "unknown", text: "섞임", detail: [...new Set(badges.map((b) => b.text))].join(" · ") };
 }
 
-const SOURCE: Record<string, string> = { kadan: "카단 설정", card: "연결 문서" };
+const SOURCE: Record<string, string> = { kadan: "카단 설정", ontology: "연결 문서", card: "연결 문서" };
 export const sourceLabel = (from: string | null | undefined) => (from ? SOURCE[from] ?? from : "없음");
 // 머리 줄에 쓰는 배포 브랜치·나이트런 중 자동 머지 값. nightMerge가 null이면 "기본 허용".
 export function headFacts(line: NightLine) {
