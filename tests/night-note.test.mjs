@@ -9,6 +9,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {nightCommand} from '../src/commands/night.mjs';
 import {nightState, finishNight, AUTO_LINES} from '../src/night.mjs';
 import {summarizeNight, NOTICE_LIMIT} from '../src/night-summary.mjs';
+import {buildNightNote} from '../src/night-note.mjs';
 
 // 가짜 시계·가짜 우편만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다. 역할 이름도 시험용이다.
 const T0 = Date.parse('2026-11-02T14:00:00.000Z');
@@ -146,6 +147,49 @@ test('요약: 결정 50개(긴 문장)여도 1,800자 안이고 외 n건이 맞�
   const t = summarize(all).text;
   assert.ok(t.length <= NOTICE_LIMIT, `길이 ${t.length}`);
   assert.match(t, /대신 정한 결정 30건/);
+});
+
+test('요약: 통과 2건과 머지 기록 1건이면 "통과 후 머지 미확인 1건"과 그 PR이 나온다', () => {
+  const gate = (i, pr) => note(i, 'gate', '통과', {verdict: 'pass', pr, sha: 'abcdef1234'});
+  const t = summarize([gate(0, 'k#1'), gate(1, 'k#2'), note(2, 'merge', '머지', {pr: 'k#1', sha: 'abc1234'})]);
+  assert.equal(t.counts.unmerged, 1);
+  assert.match(t.text, /통과 후 머지 미확인 1건/);
+  assert.match(t.text, /미확인: k#2/);
+  assert.doesNotMatch(t.text, /미확인: k#1/);
+  const all = summarize([gate(0, 'k#1'), note(1, 'merge', '머지', {pr: 'k#1'})]);
+  assert.equal(all.counts.unmerged, 0);
+  assert.doesNotMatch(all.text, /머지 미확인/);
+  assert.ok(t.text.length <= 1800);
+});
+
+test('F4. 대소문자만 다른 PR 키(관문 acme/app#7, 머지 Acme/App#7)는 같은 PR로 짝지어 미확인 0건이다', () => {
+  const g = note(0, 'gate', '통과', {verdict: 'pass', pr: 'acme/app#7'});
+  const m = note(1, 'merge', '머지', {pr: 'Acme/App#7', sha: 'abc1234'});
+  const t = summarize([g, m]);
+  assert.equal(t.counts.unmerged, 0);
+  assert.equal(t.counts.merges, 1);
+  assert.doesNotMatch(t.text, /머지 미확인/);
+  assert.equal(buildNightNote({words: ['merge', '머지'], flags: {pr: 'Acme/App.git#7'}, by: 'a', now: T0}).pr, 'acme/app#7');
+  assert.equal(buildNightNote({words: ['merge', '머지'], flags: {pr: 'kadan#7'}, by: 'a', now: T0}).pr, 'kadan#7');
+});
+
+test('F5. 허용 키 50개와 긴 원문이어도 요약은 1,800자 이하이고 허용 첫 줄은 앞 5개 + 접기다', () => {
+  const allow = Array.from({length: 50}, (_, i) => `owner${i}/repo${i}`);
+  const r = summarizeNight({start: {...startEvent, allow, quote: '원'.repeat(3000)}, phase: 'expired', endedAt: T0 + 8 * 3600_000,
+    entries: Array.from({length: 40}, (_, i) => note(i, 'decision', '결'.repeat(190))), decisionEvents: [], readBody: () => null});
+  assert.ok(r.text.length <= 1800, String(r.text.length));
+  const first = r.text.split('\n')[0];
+  assert.match(first, /^나이트런 중 자동 머지 허용\(--allow\): owner0\/repo0, owner1\/repo1, owner2\/repo2, owner3\/repo3, owner4\/repo4 외 45개 \(전체: kadan night status\)/);
+  assert.doesNotMatch(first, /owner5\//);
+});
+
+test('요약: 허용(--allow)이 있으면 첫 줄에 보이고, 없으면 줄이 없다', () => {
+  const withAllow = summarizeNight({start: {...startEvent, allow: ['acme/app', 'foo/bar'], quote: '이번엔 승인'}, phase: 'expired', endedAt: T0 + 8 * 3600_000,
+    entries: [note(0, 'decision', '결정')], decisionEvents: [], readBody: () => null});
+  const lines = withAllow.text.split('\n');
+  assert.equal(lines[0], '나이트런 중 자동 머지 허용(--allow): acme/app, foo/bar — kyle "이번엔 승인"');
+  assert.match(lines[1], /^kyle 위임:/);
+  assert.doesNotMatch(summarize([note(0, 'decision', '결정')]).text, /--allow/);
 });
 
 test('요약 머지 문구: 정직하게 쓴다(기록 없는 머지를 0이라고 단정하지 않는다)', () => {

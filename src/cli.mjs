@@ -16,6 +16,7 @@ import { hierarchyCommand } from "./hierarchy-prune.mjs";
 import { workCommand } from "./work-command.mjs";
 import { slotCommand } from "./review-slots.mjs";
 import { mergeCheck, formatMergeCheck } from "./merge-check.mjs";
+import { mergeGateCommand } from "./merge-gate.mjs";
 import { limitCommand } from "./heavy-limit.mjs";
 import fs from "node:fs";
 import { floor } from "./floor.mjs";
@@ -239,6 +240,12 @@ export const COMMANDS = {
   handover: cmdHandover,
   slot: async (argv,flags) => console.log(JSON.stringify(await slotCommand(argv,flags,{home:ledgerHome(),floor,sessionName}),null,2)),
   'merge-check': (argv,flags) => console.log(flags.help ? '사용: kadan merge-check <저장소/업무ID> --head <PR head 커밋>. 업무의 검수 중 PR head와 같은 커밋을 본 검수를 찾아 나란히 보입니다(같음·같은 커밋 검수 changes·다름·모호, 표시만, 머지를 막지 않음, GitHub 호출 없음). 입력 형식 오류만 종료 코드 2.' : formatMergeCheck(mergeCheck(argv[0],{head:flags.head},{home:ledgerHome()}))),
+  'merge-gate': (argv,flags) => {
+    if (flags.help) { console.log('사용: <gh JSON> | kadan merge-gate <저장소/업무ID> [--json]. stdin에 {"pr":{url,number,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,changedFiles},"files":<gh api --paginate --slurp repos/<소유자>/<이름>/pulls/N/files 응답(REST 페이지 배열)>,"requiredChecks":[{name,state,bucket}],"repo":<gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed 결과>} 한 개를 받아 나이트런 중 자동 머지 관문을 판정합니다(GitHub 호출·머지 없음). 통과면 그대로 칠 머지 명령(머지 커밋→squash→rebase 중 저장소가 허용하는 첫 방식)을 냅니다. 통과 0, 거절 1, 사용 오류 2. 나이트런이 켜져 있으면 night note gate를 남깁니다.'); return; }
+    const {result,text} = mergeGateCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),stdin:()=>fs.readFileSync(0,'utf8')});
+    console.log(text);
+    if (result.verdict === 'reject') process.exitCode = 1;
+  },
   limit: async (argv,flags) => {
     const result = flags.help ? await limitCommand([],{home:ledgerHome()}) : await limitCommand(argv,{home:ledgerHome()});
     if (result != null) console.log(JSON.stringify(result,null,2));
@@ -298,7 +305,7 @@ export function main(argv) {
     console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
     process.exit(1);
   }
-  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'merge-gate' ? {booleans: ['json']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptWindowForCommand(command, process.env, ledgerHome(), {socket: currentSocket()});

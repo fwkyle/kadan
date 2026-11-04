@@ -41,7 +41,7 @@ export class NightRepoPolicyError extends Error {
 
 // night repo HTTP 경로에서 나가는 오류 문구는 여기서 한 곳으로 정한다: httpMessage가 있으면 그것, 없으면 error.message 없이 고정 문구.
 export const nightRepoHttpMessage = error =>
-  error?.httpMessage ?? `밤 저장소 정책 처리 실패(${error?.code ?? '알 수 없음'})`;
+  error?.httpMessage ?? `나이트런 저장소 정책 처리 실패(${error?.code ?? '알 수 없음'})`;
 
 const validDeployBranch = v => typeof v === 'string' && BRANCH_WORD.test(v);
 const validNightMerge = v => NIGHT_MERGE_VALUES.includes(v);
@@ -83,7 +83,7 @@ export function readPolicy(home) {
   } catch (error) {
     // 원격 GET에도 나가는 문구라 OS 오류 문장(절대 경로 포함)을 쓰지 않는다: 파일 이름과 오류 코드만.
     const detail = error.code ?? (error instanceof SyntaxError ? 'JSON 구문 오류' : error.message);
-    return {...empty(), corrupt: `밤 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
+    return {...empty(), corrupt: `나이트런 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
   }
 }
 
@@ -91,7 +91,7 @@ export function readPolicy(home) {
 function updatePolicy(home, mutate, {record}) {
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
   const lock = path.join(home, '.night-repo-policy-lock');
-  if (!acquireDirLock(lock)) throw new NightRepoPolicyError('밤 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
+  if (!acquireDirLock(lock)) throw new NightRepoPolicyError('나이트런 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
   try {
     const current = readPolicy(home);
     if (current.corrupt) {

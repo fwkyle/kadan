@@ -9,6 +9,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {nightCommand} from '../src/commands/night.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {nightGuard, guardedReason} from '../src/night-guard.mjs';
+import {AUTO_CHECKLIST} from '../src/night.mjs';
 
 // 가짜 시계·가짜 우편만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다. 역할 이름도 시험용이다.
 const T0 = Date.parse('2026-11-02T14:00:00.000Z');
@@ -50,7 +51,15 @@ test('--level 자동: on 사건에 level·onlyRunning, status, 자동 단계 문
   assert.match(msg, /\[나이트 결정\]/);
   assert.match(msg, /영구 삭제/);
   assert.match(msg, /코드가 막지 못하므로/);
-  assert.match(msg, /자동 머지 관문이 생기기 전이라 아침으로 보류/);
+  // 13. 머지는 관문 뒤에만: 옛 "아침으로 보류" 문구가 사라지고 관문·머지 명령이 들어 있다.
+  assert.doesNotMatch(msg, /아침으로 보류합니다/);
+  assert.match(msg, /kadan merge-gate/);
+  assert.match(msg, /--match-head-commit/);
+  assert.match(msg, /관문이 거절한 머지, `--allow` 없이 정책이 보류한 저장소의 머지/);
+  assert.doesNotMatch(msg, /머지가 곧 운영 배포인 저장소의 머지/);
+  for (const line of AUTO_CHECKLIST) assert.doesNotMatch(line, /머지를 아침으로 보류합니다/);
+  assert.match(AUTO_CHECKLIST.join('\n'), /merge-gate[\s\S]*관문이 내준 머지 명령 그대로/);
+  assert.match(msg, /관문이 내준 머지 명령\(`gh pr merge … --match-head-commit … -R …`\)을 그대로 치고/);
   assert.doesNotMatch(msg, /새 일감을 시작하지 않습니다/);
   assert.match(msg, /위 \(1\)~\(9\) 줄/);
 });
@@ -83,6 +92,30 @@ test('--only-running: 새 일감 금지 줄이 붙고, --level 자동 없이는 
   assert.equal(f.night()[0].onlyRunning, true);
   assert.match(f.sent[0].message, /\(10\) 새 일감을 시작하지 않습니다/);
   assert.equal(f.run(['status']).onlyRunning, true);
+});
+
+test('--allow: 자동 단계·kyle 원문·올바른 키가 있어야 하고, on 사건과 status에 정규화한 허용이 남는다', () => {
+  const f = fixture();
+  const q = '이번엔 승인';
+  assert.throws(() => f.run(['on', '밤'], {allow: 'acme/app', quote: q}), /--allow는 --level 자동과 함께만/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: 'acme/app'}), /--quote/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: 'acme/app'}, '사람'), /--quote/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: true, quote: q}), /--allow에는 GitHub 소유자\/이름/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: ['acme/app', 'bad key'], quote: q}), /--allow에는 GitHub 소유자\/이름/);
+  assert.throws(() => f.run(['on', '밤'], {level: '자동', allow: 'noslash', quote: q}), /--allow에는 GitHub 소유자\/이름/);
+  assert.equal(f.night().length, 0);
+  const r = f.run(['on', '밤 위임'], {level: '자동', allow: ['Acme/App.git', 'acme/app', 'Foo/Bar'], quote: q});
+  assert.deepEqual(r.allow, ['acme/app', 'foo/bar']);
+  assert.deepEqual(f.night()[0].allow, ['acme/app', 'foo/bar']);
+  assert.deepEqual(f.run(['status']).allow, ['acme/app', 'foo/bar']);
+  assert.match(f.sent[0].message, /나이트런 중 자동 머지 허용\(--allow\): acme\/app, foo\/bar/);
+});
+
+test('--allow 없이 켜면 status의 allow는 빈 목록이고 on 사건에 allow가 없다', () => {
+  const f = fixture();
+  f.run(['on', '밤'], {level: '자동'});
+  assert.equal('allow' in f.night()[0], false);
+  assert.deepEqual(f.run(['status']).allow, []);
 });
 
 test('알 수 없는 --level 값은 거절한다', () => {
