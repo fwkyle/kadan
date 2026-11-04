@@ -119,7 +119,10 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
     const letter=JSON.parse(run('inbox','read',mail.mailId));assert.equal(letter.body,'사람 → 비서\n\n공식 완료 원문');assert.equal(letter.receiverInstructionsProfile,'secretary');assert.ok(letter.receiverInstructions);
     assert.deepEqual(entries(),beforeRead);assert.ok(Array.isArray(JSON.parse(run('inbox','list'))));assert.equal(mail.wake,'not-connected');
   } finally {
-    for (const role of started)run('stop',role);
+    // 한 역할의 stop이 실패해도 나머지와 격리 서버 정리는 이어 간다(2026-11-04 고아: stop만 하고 서버가 남았다).
+    for (const role of started)try{run('stop',role);}catch(error){console.error(`stop ${role} 실패: ${error.message}`);}
+    console.error(`격리 소켓 kill-server: -L ${socket}`);
+    spawnSync('tmux',['-L',socket,'kill-server'],{env,encoding:'utf8'});
     fs.writeFileSync(path.join(home,'transcript.json'),JSON.stringify(transcript,null,2)+'\n');
     console.log(`역할 지침 실제 CLI 증거: ${home}/transcript.json / socket=${socket}`);
   }

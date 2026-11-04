@@ -3,12 +3,15 @@
 // --import 대신 환경만 넘긴다: --import는 시험 프로세스의 실행 인자를 바꿔 프로세스 신원 비교 시험을 깬다.
 // 실행별 임시 폴더(TMPDIR)·tmux 소켓 폴더(TMUX_TMPDIR)를 따로 만들고 끝나면 이 실행기가 직접 지운다.
 // 이유: 시험 129개 파일이 os.tmpdir() 아래 홈을 만들고 지우지 않아 $TMPDIR에 19GB가 쌓였다(2026-10-16).
+// 폴더를 지우기 전에 그 폴더 아래 tmux 서버(소켓 -S 절대경로)와 소속 도우미(kadan-watch 등)를 끈다(tests/helpers/run-sweep.mjs).
+// 이유: 시험 파일이 띄운 격리 tmux 서버·출력 기록 자식·kadan-watch가 폴더가 지워진 뒤 부모 1로 남았다(2026-11-04 11개).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {isDefaultHome} from '../src/live-floor-guard.mjs';
 import {runTestFile} from './helpers/run-file.mjs';
+import {sweepRun} from './helpers/run-sweep.mjs';
 
 // 최장 개별 시험 86.6초(2026-10-29)와 같은 파일의 나머지 시험·병렬 지연에 여유를 둔다.
 const FILE_TIMEOUT_MS = 300_000;
@@ -34,7 +37,17 @@ function cleanup() {
   cleaned = true;
   // 자기 소켓의 tmux 서버만 끈다. 운영(-L kadan)은 건드리지 않는다.
   spawnSync('tmux', ['-L', env.KADAN_SOCKET, 'kill-server'], {env, stdio: 'ignore'});
-  if (runTmp) fs.rmSync(runTmp, {recursive: true, force: true}); // tmux 소켓 폴더도 이 안에 있다
+  if (runTmp) {
+    // 정리 실패가 폴더 삭제를 막지 않는다. 소속을 확인 못 한 것은 끄지 않고 이유만 알린다.
+    try {
+      const swept = sweepRun(runTmp);
+      if (swept.sockets.length || swept.signaled.length) {
+        console.error(`실행기 정리: tmux 소켓 ${swept.sockets.length}개 종료, 남은 소속 프로세스 ${swept.signaled.length}개 종료`);
+      }
+      for (const reason of swept.skipped) console.error(`실행기 정리 건너뜀: ${reason}`);
+    } catch (error) { console.error(`실행기 정리 실패: ${error.message}`); }
+    fs.rmSync(runTmp, {recursive: true, force: true}); // tmux 소켓 폴더도 이 안에 있다
+  }
 }
 // 폴더를 만들기 전에 정리 처리기를 먼저 등록한다: 만든 직후 시작 단계에서 예외가 나도 폴더가 남지 않는다.
 process.on('exit', cleanup);

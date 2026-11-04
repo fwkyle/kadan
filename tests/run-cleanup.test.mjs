@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {stopChild} from './helpers/child-cleanup.mjs';
+import {sweepRun, ownership} from './helpers/run-sweep.mjs';
 
 // 실행기(tests/run.mjs)가 실행별 임시 폴더와 자기 tmux 서버를 성공·실패·중단(SIGINT) 모두에서 정리하는지 본다.
 // 가짜 시험 파일이 TMPDIR 아래에 폴더를 만들고 tmux 서버를 띄운 뒤 그 값을 info 파일에 적는다.
@@ -100,4 +101,120 @@ fs.mkdirSync = function (p, ...rest) {
   const {runTmp} = JSON.parse(fs.readFileSync(info, 'utf8'));
   assert.match(path.basename(runTmp), /^kadan-run-/);
   assert.equal(fs.existsSync(runTmp), false, '시작 단계 예외 뒤에도 실행별 폴더가 지워졌다');
+});
+
+// 2026-11-04: 시험 파일이 띄운 격리 tmux 서버·자식이 실행 폴더를 지운 뒤 부모 1로 남았다(11개). 실행기가 끝날 때
+// 자기 runTmp 소속만 끄는지 본다. 여기의 tmux 호출은 모두 -L/-S이고, 실행별 TMUX_TMPDIR 안이 아니면 건너뛴다(실패 닫힘).
+const runTmux = /\/kadan-run-[^/]+\/tmux$/.test(process.env.TMUX_TMPDIR ?? '');
+const skipLeak = skip || !runTmux;
+
+function leakFixture(t, body = '') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-leak-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const info = path.join(dir, 'info.json'), outside = path.join(dir, 'outside.sock');
+  const file = path.join(dir, 'leak.test.mjs');
+  // 정리 없이 끝나는 시험: 실행별 TMUX_TMPDIR 아래 -L 서버, 실행 폴더 밖 -S 서버, 분리된 sleep 자식.
+  fs.writeFileSync(file, `import test from 'node:test';import fs from 'node:fs';
+import {spawn, spawnSync} from 'node:child_process';
+test('leak', () => {
+  if (!/\\/kadan-run-[^/]+\\/tmux$/.test(process.env.TMUX_TMPDIR ?? '')) throw new Error('실행별 TMUX_TMPDIR 아님');
+  const name = 'leak-' + process.pid;
+  spawnSync('tmux', ['-u', '-L', name, 'new-session', '-d', 'sleep 300']);
+  spawnSync('tmux', ['-u', '-S', ${JSON.stringify(outside)}, 'new-session', '-d', 'sleep 300']);
+  const pid = args => Number(spawnSync('tmux', [...args, 'display', '-p', '#{pid}'], {encoding: 'utf8'}).stdout);
+  const child = spawn('sleep', ['300'], {cwd: process.env.TMPDIR, detached: true, stdio: 'ignore'}); child.unref();
+  fs.writeFileSync(${JSON.stringify(info)}, JSON.stringify({tmpdir: process.env.TMPDIR,
+    pids: [pid(['-L', name]), pid(['-S', ${JSON.stringify(outside)}]), child.pid]}));
+  ${body}
+});`);
+  return {file, info};
+}
+const leakedPids = info => JSON.parse(fs.readFileSync(info, 'utf8')).pids;
+
+test('실행기 그물: 정리 없이 끝난 시험의 tmux 서버(폴더 안·밖 소켓)와 분리된 자식을 끝에 끈다', {skip: skipLeak}, async t => {
+  const {file, info} = leakFixture(t);
+  const result = spawnSync(process.execPath, [runner, file], {encoding: 'utf8', env: nestedEnv()});
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const pids = leakedPids(info);
+  assert.equal(pids.length, 3); assert.ok(pids.every(pid => pid > 1), JSON.stringify(pids));
+  for (const pid of pids) assert.equal(await waitFor(() => !alive(pid)), true, `PID ${pid}가 남았다`);
+  assert.match(result.stderr, /실행기 정리: tmux 소켓 \d+개 종료, 남은 소속 프로세스 \d+개 종료/);
+});
+
+for (const [signal, code] of [['SIGTERM', 143], ['SIGHUP', 129]]) {
+  test(`실행기 그물: ${signal}로 중단해도 새는 서버와 자식을 끈다`, {skip: skipLeak}, async t => {
+    const {file, info} = leakFixture(t, 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);');
+    const child = await run(file, nestedEnv());
+    t.after(() => stopChild(child));
+    const done = exited(child);
+    assert.equal(await waitFor(() => fs.existsSync(info), 20_000), true, '가짜 시험이 시작했다');
+    child.kill(signal);
+    assert.equal((await done).code, code);
+    const {tmpdir} = JSON.parse(fs.readFileSync(info, 'utf8'));
+    assert.equal(fs.existsSync(tmpdir), false, '실행별 폴더가 지워졌다');
+    for (const pid of leakedPids(info)) assert.equal(await waitFor(() => !alive(pid)), true, `PID ${pid}가 남았다`);
+  });
+}
+
+test('실행기 그물: 다른 실행 폴더의 서버·자식은 살려 두고, 자기 폴더 것만 끈다', {skip: skipLeak}, async t => {
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-a-')), b = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-b-'));
+  const socket = path.join(b, 'tmux-test', 'srv');
+  fs.mkdirSync(path.dirname(socket));
+  const tmuxB = (...args) => spawnSync('tmux', ['-u', '-S', socket, ...args],
+    {encoding: 'utf8', env: {...nestedEnv(), TMPDIR: b}});
+  const sleeper = spawn('sleep', ['300'], {cwd: b, detached: true, stdio: 'ignore', env: {...process.env, TMPDIR: b}});
+  sleeper.unref();
+  t.after(() => {
+    if (alive(sleeper.pid)) process.kill(sleeper.pid, 'SIGKILL');
+    console.error(`격리 소켓 kill-server: ${socket}`); tmuxB('kill-server');
+    for (const dir of [a, b]) fs.rmSync(dir, {recursive: true, force: true});
+  });
+  assert.equal(tmuxB('new-session', '-d', 'sleep 300').status, 0);
+  const server = Number(tmuxB('display', '-p', '#{pid}').stdout);
+  assert.ok(server > 1 && sleeper.pid > 1);
+  const swept = sweepRun(a);
+  assert.deepEqual([swept.sockets, swept.signaled], [[], []], '다른 폴더 것은 대상이 아니다');
+  assert.equal(alive(server) && alive(sleeper.pid), true, '두 번째 실행 폴더의 서버·자식이 살아 있다');
+  const own = sweepRun(b);
+  assert.deepEqual(own.sockets, [socket]);
+  assert.equal(await waitFor(() => !alive(server) && !alive(sleeper.pid)), true, '자기 폴더 것은 끈다');
+});
+
+test('실행기 그물: 소속을 확인 못 한 도우미·운영 소켓(-L kadan)·번호가 재사용된 프로세스는 끄지 않는다', () => {
+  const runTmp = '/private/tmp/kadan-run-AbCdEf', at = 'Wed Nov  4 02:22:02 2026';
+  const rows = [
+    {pid: 900001, identity: `${at} kadan-watch:kadan-qa-1`}, // 이름이 바뀐 도우미: cwd를 모름
+    {pid: 900002, identity: `${at} kadan-watch:kadan-qa-2`}, // cwd가 다른 폴더
+    {pid: 900003, identity: `${at} tmux -u -L kadan -f /x/tmux.conf new-session TMPDIR=${runTmp}`}, // 운영 소켓
+    {pid: 900004, identity: `${at} sleep 300 TMPDIR=/private/tmp/kadan-run-AbCdEfX`}, // 이름이 겹치는 다른 폴더
+    {pid: 900005, identity: `${at} kadan-watch:kadan-qa-3`}, // cwd가 이 폴더: 대상
+    {pid: 900006, identity: `${at} sleep 300 TMPDIR=/tmp/kadan-run-AbCdEf`}, // /tmp 표기: 대상
+    {pid: 900007, identity: `${at} node /tmp/kadan-run-AbCdEf/x.mjs`}, // 조회 사이에 번호가 재사용됨
+  ];
+  const cwds = new Map([[900002, '/private/tmp/other'], [900003, runTmp],
+    [900005, `${runTmp}/kadan-handover-background-x`]]);
+  const sent = [];
+  const swept = sweepRun(runTmp, {
+    list: () => rows, cwds: () => cwds, sleep: () => {}, graceMs: 0,
+    check: pid => rows.filter(r => r.pid === pid).map(r => (r.pid === 900007 ? {...r, identity: `${at} 다른 명령`} : r)),
+    signal: (pid, sig) => sent.push([pid, sig]), killServer: () => { throw new Error('소켓 없음'); },
+  });
+  assert.deepEqual(swept.signaled, [900005, 900006]);
+  assert.deepEqual(sent.map(([pid]) => pid).filter((pid, i, all) => all.indexOf(pid) === i), [900005, 900006]);
+  assert.equal(ownership(rows[2], runTmp, {cwd: runTmp}), null, '운영 소켓 줄은 어떤 근거로도 대상이 아니다');
+  const noCwd = sweepRun(runTmp, {list: () => rows, cwds: () => { throw new Error('lsof 실패'); },
+    check: pid => rows.filter(r => r.pid === pid), signal: () => {}, killServer: () => {},
+    sleep: () => {}, graceMs: 0});
+  assert.deepEqual(noCwd.signaled, [900006, 900007], 'cwd 조회가 실패하면 명령줄 근거만 쓴다(900005는 끄지 않는다)');
+  assert.deepEqual(sweepRun('kadan-run-AbCdEf').skipped, ['실행 폴더가 절대경로가 아님']);
+});
+
+test('실행기 그물(정적): kill-server는 -S 절대경로나 실행기 자기 소켓에만 쓰고 운영 이름 kadan을 넣지 않는다', () => {
+  for (const file of [runner, new URL('./helpers/run-sweep.mjs', import.meta.url).pathname]) {
+    const source = fs.readFileSync(file, 'utf8');
+    const lines = source.split('\n').filter(line => line.includes("'kill-server'"));
+    assert.ok(lines.length >= 1, file);
+    for (const line of lines) assert.match(line, /'-S', socket|'-L', env\.KADAN_SOCKET/, `${file}: ${line.trim()}`);
+    assert.doesNotMatch(source, /['"]-L['"],\s*['"]kadan['"]/, file);
+  }
 });

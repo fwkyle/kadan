@@ -37,8 +37,10 @@ export function claudeSettingsBody(script = HOOK_SCRIPT) {
 }
 
 // 같은 내용이면 다시 쓰지 않는다. 돌려주는 값: {path, changed}.
-export function writeClaudeSettings(home = ledgerHome(), script = HOOK_SCRIPT) {
-  const file = claudeSettingsPath(home), body = claudeSettingsBody(script);
+// home 기본값을 매개변수에 두지 않는다: 기본 매개변수는 본문보다 먼저 평가돼, home을 준 호출에서도
+// 시험 홈 가드(ledgerHome)를 거쳤다(2026-10-19 감사 DEF-TEST-002). 실제로 쓸 때만 원장 위치를 읽는다.
+export function writeClaudeSettings(home, script = HOOK_SCRIPT) {
+  const file = claudeSettingsPath(home ?? ledgerHome()), body = claudeSettingsBody(script);
   if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === body) return {path: file, changed: false};
   fs.mkdirSync(path.dirname(file), {recursive: true});
   fs.writeFileSync(file, body, {mode: 0o600});
@@ -73,11 +75,12 @@ function afterExecutable(cmd, head) {
 // claude 실행 명령이고, 설정 파일이 있고, 이미 --settings가 없으면 실행 파일 바로 뒤에 `--settings <파일>`을 끼운다.
 // 끝에 붙이지 않는 이유: 끝에는 위치 인자(프롬프트)가 올 수 있다. 판단할 수 없는 명령은 그대로 둔다.
 // warn(메시지): 설정 파일이 있는데도 훅을 붙이지 못할 때 부른다(조용히 빠지지 않게). 기본은 알리지 않는다.
-export function withStopHook(cmd, home = ledgerHome(), warn = () => {}) {
+// home은 claude 명령으로 확인하고 낱말을 나눈 뒤에만 읽는다 — codex 등 바로 돌아가는 명령은 원장 위치를 읽지 않는다.
+export function withStopHook(cmd, home, warn = () => {}) {
   if (typeof cmd !== 'string' || launchIdentityOf(cmd).harness !== 'claude') return cmd;
   const words = commandWords(cmd);
   if (!words?.length) return cmd;
-  const file = claudeSettingsPath(home);
+  const file = claudeSettingsPath(home ?? ledgerHome());
   if (!fs.existsSync(file)) return cmd;
   if (words.some(word => word === SETTINGS_FLAG || word.startsWith(`${SETTINGS_FLAG}=`))) return cmd;
   let head = 0;
