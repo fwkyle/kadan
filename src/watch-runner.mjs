@@ -30,6 +30,7 @@ import {
   accumulateTiming,
 } from "./watch-cycle.mjs";
 import { USER_RECIPIENT } from "./hierarchy.mjs";
+import { applyDutyRoute } from "./night-duty.mjs";
 import { runDailyHierarchyPrune } from "./watch-prune.mjs";
 import { createOcxRefresher, codexBasis, ocxAlertLine } from "./ocx-refresh.mjs";
 import { spawnSync } from "node:child_process";
@@ -140,6 +141,7 @@ export async function runWatch({
   pruneHierarchy = null,
   // 나이트 모드 끝 시각 확인. ({entries, now}) => 끝 사건 또는 null. 켠 적이 없으면 아무것도 읽지 않는다. 없으면 하지 않는다.
   checkNightExpiry = null,
+  readNightDuty = null,
   idleMs = 15 * 60 * 1_000,
   userNotify = false,
   // 카단 tmux 서버 아래 프로세스·메모리 경보(process-watch.mjs). 이 간격보다 자주 ps를 부르지 않는다. 0이면 매 주기.
@@ -793,6 +795,8 @@ export async function runWatch({
     const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)
       && !changes.notify.some(n => n.id === a.id)).map(a => nextAlerts.find(n => n.id === a.id));
     let alertIdentity = null;
+    let nightDuty;
+    const nightDutyOnce = () => nightDuty ??= (() => { try { return readNightDuty({entries, now:cycleAt}); } catch { return null; } })();
     const workOfAlert = alert => workKeyOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []), works);
     const repoOf = alert => repoOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []));
     for (const alert of [...changes.notify, ...retryAlerts]) {
@@ -805,7 +809,7 @@ export async function runWatch({
         continue;
       }
       const message = `[감시sh ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
-      const route = explainAlertRoute(
+      const baseRoute = explainAlertRoute(
         alert,
         routes,
         // 조회 실패(observationError)는 사망이 아니라 모름이다 — 생존 검사를 건너뛴다.
@@ -813,6 +817,10 @@ export async function runWatch({
         superRole,
         parents
       );
+      // 나이트런 당번 경로(PR F): 사용자로 갈 놀고 있음 2단·정체만 당번으로 돌린다. 스냅샷은 필요한 첫 경보에서 주기당 한 번만 만든다.
+      const route = baseRoute.recipient === USER_RECIPIENT && readNightDuty && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
+        ? applyDutyRoute({route: baseRoute, alert, night: nightDutyOnce(), liveSessions: observationError ? null : roles.liveSessions})
+        : baseRoute;
       const recipient=route.recipient;
       let target = "stdout";
       const failureRecipient = failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);

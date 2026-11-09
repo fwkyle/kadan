@@ -8,10 +8,11 @@ import {
 } from '../night.mjs';
 import {buildNightNote, noteLine} from '../night-note.mjs';
 import {picksCommand} from '../night-picks.mjs';
+import {readDefaultDuty, setDefaultDuty, clearDefaultDuty, dutyPath, NO_DUTY} from '../night-duty.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../night-repo-policy.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running] [--allow <소유자/이름>]…] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running] [--allow <소유자/이름>]… [--duty <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | duty [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
@@ -19,6 +20,7 @@ function describeOn(state, now, missing) {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
     startedAt: on.t, until: on.until, untilLocal: clock(untilMs), remainingMinutes: Math.max(0, Math.round((untilMs - now) / 60_000)),
     level: on.level ?? '기본', onlyRunning: on.onlyRunning === true, allow: on.allow ?? [],
+    duty: on.duty ?? null, dutySource: on.dutySource ?? 'none', ...(on.dutyNote ? {dutyNote: on.dutyNote} : {}),
     to: on.to ?? [], delivered: on.delivered ?? [], missing,
   };
 }
@@ -51,6 +53,7 @@ export function nightOriginalText(result) {
   if (!run?.text) return '켠 적이 없습니다. 원문이 없습니다.';
   return [`--- ${result?.on ? '지금 켜진' : '마지막'} 위임 원문 (${run.by}${run.viaChat ? ', kyle 채팅을 옮겨 적음' : ''}) ---`, run.text,
     ...(run.quote ? ['--- kyle 채팅 원문 ---', run.quote] : []),
+    ...(result?.on ? [`--- 당번: ${result.duty ?? '당번 없음'}${result.dutyNote ? ` (${result.dutyNote})` : ''} ---`] : []),
     `--- ${result?.on ? `끝: ${result.untilLocal}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
 }
 
@@ -67,6 +70,24 @@ function repoLines(info) {
     `${name}: 적용값 deployBranch ${e.deployBranch.value ?? '(비어 있음)'} [${from(e.deployBranch)}], 나이트런 중 자동 머지(nightMerge) ${e.nightMerge.value ?? '(비어 있음=허용)'} [${from(e.nightMerge)}]`,
     `${name}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''}${v.exceptBranch ? `, ${v.exceptBranch}으로 가는 PR만 보류` : ''})`,
   ];
+}
+
+// `night duty`: 기본 당번 보기·저장·지우기. 쓰기는 나이트런 중 역할 세션에서 night-guard가 거절한다. 원장은 읽지 않는다.
+function dutyCommand(args, flags, {home, by, deps}) {
+  const [name, extra] = args, usage = 'kadan night duty [<슈퍼감독> | --clear]';
+  if (extra !== undefined) throw new Error(`당번 이름은 하나만 줄 수 있습니다. ${usage}`);
+  const now = (deps.now ?? Date.now)();
+  if (flags.clear !== undefined) {
+    if (flags.clear !== true || name !== undefined) throw new Error(`--clear는 이름 없이 혼자 씁니다. ${usage}`);
+    const r = clearDefaultDuty(home, {by, now});
+    return `기본 당번 지움 (이전 ${r.before ?? '없음'})`;
+  }
+  if (name === undefined) {
+    const cur = readDefaultDuty(home);
+    return [`기본 당번: ${cur.duty ?? '없음'}${cur.at ? ` (${cur.at}, ${cur.by})` : ''}`, ...(cur.corrupt ? [`경고: ${cur.corrupt}`] : []), `저장 파일: ${dutyPath(home)}`].join('\n');
+  }
+  const r = setDefaultDuty(home, {duty: name, by, now});
+  return `기본 당번 저장: ${r.duty} (이전 ${r.before ?? '없음'}). 켤 때 --level 자동이면 이 슈퍼감독이 당번이 됩니다`;
 }
 
 const flagText = v => (typeof v === 'string' ? v : undefined);
@@ -103,6 +124,7 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
   if (flags.help || !sub) return USAGE;
   if (sub === 'repo') return repoCommand(rest, flags, {home, by, deps});
+  if (sub === 'duty') return dutyCommand(rest, flags, {home, by, deps});
   if (sub === 'picks') return picksCommand(flags, {home, deps});
   const now = (deps.now ?? Date.now)();
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
@@ -168,20 +190,52 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
     allow = [...new Set(keys)];
   }
 
+  // --duty: 자동 단계의 당번 슈퍼감독. 이름은 --duty <이름>, 안 쓰려면 --duty 없음, 안 주면 저장된 기본 당번이다(자동 고르기 없음).
+  const dutyFlag = flags.duty;
+  if (dutyFlag !== undefined) {
+    if (typeof dutyFlag !== 'string' || !dutyFlag.trim()) throw new Error(`--duty에는 슈퍼감독 이름 하나 또는 ${NO_DUTY}가 필요합니다. ${USAGE}`);
+    if (dutyFlag !== NO_DUTY && level !== '자동') throw new Error('--duty <이름>은 --level 자동과 함께만 쓸 수 있습니다');
+  }
+  const explicit = typeof dutyFlag === 'string' && dutyFlag !== NO_DUTY ? dutyFlag : null;
+
   const until = resolveEnd({until: flags.until, for: flags.for}, now);
   const works = deps.readWorks ? deps.readWorks() : new WorkStore(home).list();
   const {to, unreachable} = nightTargets({works, entries, by});
-  const message = buildNightMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, onlyRunning, allow});
+  let duty = explicit, dutySource = 'flag', dutyNote;
+  if (!duty && dutyFlag === undefined && level === '자동') {
+    const saved = readDefaultDuty(home);
+    duty = saved.duty; dutySource = 'default';
+    if (saved.corrupt) dutyNote = `기본 당번 파일을 읽지 못함(${saved.corrupt}) — 당번 없음`;
+  }
+  if (duty) {
+    const why = !isSupervisorActor(duty) ? '슈퍼감독 이름이 아님' : !to.includes(duty) ? '이번 밤 문구를 받는 슈퍼감독이 아님(열린 업무 없음)' : null;
+    if (why && explicit) throw new Error(`당번 ${duty}을(를) 쓸 수 없습니다(${why}): 켜지 않았습니다`);
+    if (why) { dutyNote = `기본 당번 ${duty} 못 씀(${why}) — 당번 없음`; duty = null; }
+  }
   const send = deps.sendMail ?? sendNightMail(home, by);
-  const delivered = to.map(role => {
+  const attempt = (role, isDuty) => {
+    const message = buildNightMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, onlyRunning, allow, isDuty});
     try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, error: String(error.message).slice(0, 200)}; }
-  });
+  };
+  // 당번에게 먼저 보낸다: 명시한 당번의 우편이 실패하면 아무에게도 켜짐을 알리지 않고 멈추기 위해서다.
+  const results = new Map();
+  if (duty) {
+    const r = attempt(duty, true);
+    results.set(duty, r);
+    if (!r.ok) {
+      if (explicit) throw new Error(`당번 ${duty}에게 우편이 가지 않아 켜지 않았습니다(${r.error ?? '전달 실패'})`);
+      dutyNote = `기본 당번 ${duty} 못 씀(우편 전달 실패) — 당번 없음`; duty = null;
+    }
+  }
+  for (const role of to) if (!results.has(role)) results.set(role, attempt(role, false));
+  const delivered = to.map(role => results.get(role));
+  const dutyFields = level === '자동' ? {duty, dutySource: duty ? dutySource : 'none', ...(dutyNote ? {dutyNote} : {})} : {};
   const event = {
     kind: 'night', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),
-    ...(level ? {level, onlyRunning} : {}), ...(allow ? {allow} : {}),
+    ...(level ? {level, onlyRunning} : {}), ...(allow ? {allow} : {}), ...dutyFields,
     until, to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
   };
   (deps.record ?? (entry => appendLedger(entry, home)))(event);
-  return {on: true, ...(level ? {level, onlyRunning, checklist: AUTO_CHECKLIST} : {}), ...(allow ? {allow} : {}), until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
+  return {on: true, ...(level ? {level, onlyRunning, checklist: AUTO_CHECKLIST} : {}), ...(allow ? {allow} : {}), ...dutyFields, until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
 }
