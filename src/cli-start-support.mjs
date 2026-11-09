@@ -15,7 +15,7 @@ import {
   tmux,
 } from "./floor-tmux.mjs";
 import { die } from "./cli-basics.mjs";
-import { windowSettingBlock, readWindowSetting } from "./window-setting.mjs";
+import { windowSettingBlock, readWindowSetting, insideKadanPane } from "./window-setting.mjs";
 
 // Claude Code는 처음 보는 폴더에서 '폴더 신뢰' 확인 창을 띄우고, 발령의 Enter가 그 창의 "No, exit"를 눌러 역할이 사라진다
 // (2026-10-23). 역할의 작업 폴더가 카단 기록 폴더(KADAN_HOME) 자신이거나 그 안이면 막는다. 안이면 그 기록 폴더 경로를, 아니면 null.
@@ -73,8 +73,7 @@ export function unpinnedWindowWarning({ env = process.env, listBinsFn } = {}) {
 // 카단 tmux pane 안에서 도는 start가 환경변수 창 값을 기계 설정과 다르게 들고 있으면 한 줄로 알린다(동작은 안 바꾼다).
 // 노드 안에서는 서버 전역에서 샌 값과 사람이 친 값을 구분할 수 없어 경고만 한다. TMUX는 "<소켓경로>,<서버pid>,<세션>" 꼴이다.
 export function inheritedWindowWarning({ env = process.env, home, socket } = {}) {
-  if (!env.TMUX || !env.KADAN_WINDOW) return null;
-  if (path.basename(String(env.TMUX).split(",")[0]) !== socket) return null;
+  if (!env.KADAN_WINDOW || !insideKadanPane(env, socket)) return null;
   let setting;
   try { setting = readWindowSetting(home); } catch { return null; }
   if (!setting || setting.window === env.KADAN_WINDOW) return null;
@@ -251,6 +250,7 @@ export function buildStartLedgerEntry({
     role,
     session,
     by: resolveLedgerBy({ env }),
+    ...serverRestoreStartFields(env, {cmd, reused}),
     ...describeStartCmd(cmd),
     ...(cwd ? { cwd } : {}),
     ...(evidence.panePid ? { panePid: evidence.panePid } : {}),
@@ -270,6 +270,15 @@ export function buildStartLedgerEntry({
     ...(typeof reused === "boolean" ? { reused } : {}),
     ...(evidence.outputLog ? { outputLog: evidence.outputLog } : {}),
   };
+}
+
+// 자동 복원 자식 CLI가 받은 연결 정보만 새 start에 남긴다. 다른 start·재사용에는 붙이지 않는다.
+export function serverRestoreStartFields(env, {cmd, reused} = {}) {
+  const id = env.KADAN_SERVER_RESTORE_ID, previous = env.KADAN_SERVER_RESTORE_OF;
+  if (!cmd || reused === true || env.KADAN_ROLE !== 'autostart'
+    || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(id ?? '')
+    || !/^[\da-f]{64}$/i.test(previous ?? '')) return {};
+  return {reason: 'server-restore', serverRestoreId: id, serverRestoreOf: previous};
 }
 
 // 종료 전에 그 역할이 받았지만 done이 없는 카드를 센다. 화면은 stop과 함께 사라지므로

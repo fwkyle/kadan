@@ -33,7 +33,7 @@
 - `kadan tree`의 `monitoring`, `GET /api/cards`(요약 응답)의 `center.monitoring`, 판의 감시 영역은 같은 `watch-overview.mjs` 계산을 사용한다.
 - 원본은 중앙 실행·업무 카드, 직속 관계 JSON, 현재 KADAN_HOME의 실행 원장, OS 프로세스다. 실제 감시·AI 보고·대시보드가 `buildWatchScope`와 `buildSupervisorScope`를 함께 사용한다. 대시보드는 읽기 전용 조회 결과이며 별도의 설정 원본이 아니다. `checkedAt`은 조회 시각이다.
 - 카단의 감시기는 전역 프로세스 하나다. 판마다 감시기를 새로 띄우지 않고, 이 감시기의 판별 대상과 상신 경로를 보여준다.
-- 디코 다리 세션 `kadan-디코`(`discord watch --to-mail`)는 `kadan-watch`처럼 역할이 아니라 start 기록과 실행 카드가 없어 판별 대상이 아니다. 죽음·멈춤·놀고 있음 경보가 나지 않는다(`tests/discord-mail.test.mjs` 7번이 대상 선정으로 확인). 감시기·다리·대시보드·비서 4개를 되살리는 것은 감시기가 아니라 launchd 주기 `kadan up --hidden --auto`다. 감시기는 AI 역할을 자동 재시작하지 않는다.
+- 디코 다리 세션 `kadan-디코`(`discord watch --to-mail`)는 `kadan-watch`처럼 역할이 아니라 start 기록과 실행 카드가 없어 판별 대상이 아니다. 죽음·멈춤·놀고 있음 경보가 나지 않는다(`tests/discord-mail.test.mjs` 7번이 대상 선정으로 확인). 감시기·다리·대시보드·비서 4개를 되살리는 것은 감시기가 아니라 launchd 주기 `kadan up --hidden --auto`다. 감시기는 AI 역할을 자동 재시작하지 않는다. 별도로 `up --auto`는 매 정상 주기에 `server-sessions.json`을 저장하고, 서버 전체 손실에서만 그 목록의 감독을 같은 대화로 복원한다. 죽음 경보로 후보를 고르지 않는다. 부팅 시각이 관찰보다 늦거나 관찰이 없고/10분 넘게 낡았으면 수동 확인 알림만 하며, 기반 실행은 계속된다([조건·끄기](decisions.md#서버-전체-손실의-감독-복원-2026-11-09)).
 
 ## 확인하는 것
 

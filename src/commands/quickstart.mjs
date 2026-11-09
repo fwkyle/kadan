@@ -9,6 +9,8 @@ import {prepareTransfer, acceptTransfer, transferStatus} from '../adopt-transfer
 import {notifyAdoption} from '../adopt-notice.mjs';
 import {startAdoptMonitor} from '../adopt-monitor.mjs';
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { defaultProfilePath } from "../watch-profile.mjs";
 import { readWatchProcesses } from "../watch-overview.mjs";
@@ -18,8 +20,11 @@ import { floor } from "../floor.mjs";
 import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
 import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
-import { appendLedger, ledgerHome } from "../ledger.mjs";
-import { tmux, paneState, captureTail } from "../floor-tmux.mjs";
+import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
+import { readActiveHierarchy } from "../hierarchy-register.mjs";
+import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
+import { launchServerRole, sendRestoreNotice, systemBootTime } from "../server-restore-runtime.mjs";
+import { tmux, paneState, captureTail, wrapNoTmux, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
@@ -43,6 +48,7 @@ export function cmdInit(_argv, flags) {
 export function cmdUp(_argv, flags) {
   if (flags.help) {
     console.log("사용법: kadan up [--cmd <실행기 명령>] [--port 8790] [--hidden] [--no-prompt] [--auto]  (비서 세션 + 대시보드 세션, 기본 감시 프로필이 있으면 감시기, 디코 비밀값이 있으면 다리)");
+    console.log("  --auto는 server-sessions.json의 10분 이내 생존 감독만 복원한다. 관찰 이후 재부팅·기록 없음은 알림만, 60분 상한. server-restore.off로 끈다");
     console.log("  --auto: launchd가 1분마다 부르는 자동 실행. 사람이 kadan stop으로 끈 대상·1시간 3번 상한에 걸린 대상은 건너뛰고, 바뀐 것이 있을 때만 출력한다. --auto 없이 친 up은 그 멈춤을 모두 푼다");
     return;
   }
@@ -56,7 +62,20 @@ export function cmdUp(_argv, flags) {
     if (auto) return;
     die("다른 kadan up이 돌고 있습니다(자동 실행일 수 있음). 잠시 뒤 다시 치세요", 1);
   }
-  try { runUpOnce({ home, flags, auto }); } finally { release(); }
+  try {
+    // 서버 없음 신호는 기반 세션을 하나라도 만들기 전에, revive 잠금 안에서 딱 한 번 읽는다.
+    if (!auto) return runUpOnce({home, flags, auto});
+    runServerRestoreCycle({home,
+      listSessions: () => tmux(['list-sessions', '-F', '#{session_name}'], undefined, {timeout: 5000}),
+      runBase: ({deferNotices}) => runUpOnce({home, flags, auto, deferNotices}),
+      read: () => readSystemLedger(home),
+      hierarchy: readActiveHierarchy, bootTime: systemBootTime,
+      projectsDir: path.join(os.homedir(), '.claude', 'projects')}, {
+      startRole: (item, id) => launchServerRole({home, item, id}),
+      send: (role, message) => sendRestoreNotice({home, role, message}),
+      record: entry => appendLedger(entry, home), notify: reviveOps(home).notify,
+    });
+  } finally { release(); }
 }
 
 // 되살리기 보조: 어떤 세션이 어떤 상태인지 묻고, 죽은 창을 치우고, 원장·알림을 남긴다.
@@ -86,20 +105,22 @@ function reviveOps(home) {
     notify: (message, { ring = false, key } = {}) => {
       const result = notifyUser(message, spawnSync, { kind: "revive", ring, ...(ring ? {} : { systemFallback: false }), ...(key ? { key, dedupWindowMs: 60 * 60 * 1000 } : {}) });
       if (result.error) console.error(`알림 실패: ${result.error}`);
-      return { via: result.via, reason: result.discord?.reason ?? (result.via === "none" ? "디코 알림 설정 없음 또는 실패" : "") };
+      return { via: result.via, error: result.error,
+        reason: result.discord?.reason ?? (result.via === "none" ? "디코 알림 설정 없음 또는 실패" : "") };
     },
     record: (entry) => { // 다리가 오류로 멈춘 적이 있으면 그 마지막 이유(시각·오류 코드)를 사건에 같이 남긴다.
       const exit = entry.target === BRIDGE_ROLE ? readBridgeExit(home) : null;
-      try { appendLedger({ ...entry, ...(exit ? { lastExit: { at: exit.at, kind: exit.kind, status: exit.status, code: exit.code } } : {}), t: new Date().toISOString() }, home); } catch (error) { console.error(`원장 기록 실패: ${error.message}`); } },
+      try { appendLedger({ ...entry, ...(exit ? { lastExit: { at: exit.at, kind: exit.kind, status: exit.status, code: exit.code } } : {}), t: entry.t ?? new Date().toISOString() }, home); } catch (error) { console.error(`원장 기록 실패: ${error.message}`); } },
   };
 }
 
 // 결과 문자열을 되살리기 결과로 옮긴다. blocked/locked 접두어는 막힘, 그 밖에 시작하지 않은 것은 실패로 본다.
 const reviveResult = (value) => value === "started" || value === "restored" ? "started" : value === "reused" ? "reused" : /^(blocked|locked)/.test(value ?? "") || value === "blocked" ? "blocked" : "failed";
 
-function runUpOnce({ home, flags, auto }) {
+function runUpOnce({ home, flags, auto, deferNotices }) {
   const tmuxFloor = floor.name === "tmux";
-  const ops = tmuxFloor ? reviveOps(home) : null;
+  const baseOps = tmuxFloor ? reviveOps(home) : null;
+  const ops = deferNotices ? deferNotices(baseOps) : baseOps;
   if (tmuxFloor && !auto) clearForUp(home);
   const prepared = tmuxFloor ? prepareRevive({ home, auto, ops }) : { skip: new Set(), pending: new Map(), lines: [] };
   const lines = [...prepared.lines];
@@ -146,7 +167,10 @@ function runUpOnce({ home, flags, auto }) {
       if (!auto) { console.error(`비서 대화 복원 정보 저장 확인 필요: ${error.message}`); process.exitCode = 1; }
     }
   }
-  if (auto) for (const line of changedOutput(home, lines)) console.log(`[${new Date().toISOString()}] ${line}`);
+  // 손상 상태는 prepareRevive가 이미 한 번 알렸다. 출력 중복 기록으로 손상 파일에 쓰지 않는다.
+  if (auto) for (const line of prepared.corrupt ? lines : changedOutput(home, lines)) {
+    console.log(`[${new Date().toISOString()}] ${line}`);
+  }
 }
 
 // 감시기·다리 세션은 프로세스가 죽어도 마지막 화면이 남게 한다(2026-10-16). `up`이 그 화면을 저장하고 치운 뒤 다시 띄운다.
@@ -156,13 +180,13 @@ const KEEP_DEAD_PANE = (session) => [";", "set-option", "-t", `=${session}:`, "r
 function startWatchSession(home) {
   const session = sessionName("watch");
   const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
-  const env = ["-e", `KADAN_HOME=${home}`, ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
+  const env = ["-e", `KADAN_HOME=${home}`, "-e", paneSocketEnv(), ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
   return ensureWatch({
     profileExists: () => fs.existsSync(defaultProfilePath(home)),
     running: () => readWatchProcesses(spawnSync, watchProcessName(home)),
     alive: () => floor.alive(session),
     create: () => {
-      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, `'${node}' '${cli}' watch`, ...KEEP_DEAD_PANE(session)]);
+      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, wrapNoTmux(`'${node}' '${cli}' watch`), ...KEEP_DEAD_PANE(session)]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });
@@ -201,12 +225,12 @@ export function readBridgeStatus(home) { return bridgeStatus(bridgeDeps(home)); 
 function startBridgeSession(home) {
   const session = sessionName(BRIDGE_ROLE);
   const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
-  const env = ["-e", `KADAN_HOME=${home}`, ...BRIDGE_ENV.filter((k) => process.env[k]).flatMap((k) => ["-e", `${k}=${process.env[k]}`])];
+  const env = ["-e", `KADAN_HOME=${home}`, "-e", paneSocketEnv(), ...BRIDGE_ENV.filter((k) => process.env[k]).flatMap((k) => ["-e", `${k}=${process.env[k]}`])];
   return ensureBridge({
     ...bridgeDeps(home),
     create: () => {
       const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env,
-        `'${node}' '${cli}' discord watch --to-mail`, ...KEEP_DEAD_PANE(session)]);
+        wrapNoTmux(`'${node}' '${cli}' discord watch --to-mail`), ...KEEP_DEAD_PANE(session)]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });
