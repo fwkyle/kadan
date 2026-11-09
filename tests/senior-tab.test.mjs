@@ -384,6 +384,36 @@ test('R3: 로티 실행 파일 첫 인자 가드 — status|workspace|terminal|r
   }
 });
 
+test('R3: JSON으로 못 쓰는 첫 인자(BigInt·순환 객체·toJSON 예외)도 TypeError가 아니라 ROTTIE_ARGV_REJECTED 안내 문구다', () => {
+  const selfRef = {name: 'loop'}; selfRef.self = selfRef;
+  const badJson = {toJSON() { throw new Error('toJSON 실패'); }};
+  const rejected = error => error instanceof RottieFloorError && error.code === 'ROTTIE_ARGV_REJECTED'
+    && error.effect === 'none' && error.exitCode === 2 && error.message.includes('받은 값: ');
+  const unjsonable = [[[10n], '10n'], [[selfRef], '[Circular'], [[badJson], 'toJSON'], [[Symbol('s')], 'Symbol(s)']];
+  for (const [argv, shown] of unjsonable) {
+    assert.throws(() => assertRottieArgv(argv), error => rejected(error) && error.message.includes(shown));
+  }
+  // 기존 표시는 그대로다.
+  for (const [argv, shown] of [[['statu'], '"statu"'], [[null], 'null'], [[], 'null']]) {
+    assert.throws(
+      () => assertRottieArgv(argv),
+      error => rejected(error) && error.message.includes(`받은 값: ${shown})`),
+    );
+  }
+  const bin = process.env.KADAN_ROTTIE_BIN, allow = process.env.KADAN_ALLOW_FAKE_ROTTIE;
+  process.env.KADAN_ROTTIE_BIN = '/fake/rottie'; process.env.KADAN_ALLOW_FAKE_ROTTIE = '1';
+  try {
+    let spawns = 0;
+    const fake = () => { spawns++; return {status: 0, stdout: '{"ok":true,"result":{}}', stderr: ''}; };
+    for (const argv of [[10n], [selfRef]]) assert.throws(() => runRottie(argv, fake), rejected);
+    assert.equal(spawns, 0);
+  } finally {
+    if (bin === undefined) delete process.env.KADAN_ROTTIE_BIN; else process.env.KADAN_ROTTIE_BIN = bin;
+    if (allow === undefined) delete process.env.KADAN_ALLOW_FAKE_ROTTIE;
+    else process.env.KADAN_ALLOW_FAKE_ROTTIE = allow;
+  }
+});
+
 test('R3: 가드를 붙인 다른 호출 곳(adopt rottieQuery)도 잘못된 첫 인자는 실행하지 않는다', async () => {
   const {rottieQuery} = await import('../src/adopt-process.mjs');
   let spawns = 0;
