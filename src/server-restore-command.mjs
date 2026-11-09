@@ -103,7 +103,12 @@ export function findClaudeRestore({start, projectsDir, now}) {
 }
 
 export function restoreCommand({start, projectsDir, now = Date.now()}) {
-  if (!start.cwd || !fs.statSync(start.cwd).isDirectory()) throw new Error('작업 폴더 없음');
+  try {
+    if (!start.cwd || !fs.statSync(start.cwd).isDirectory()) throw new Error('작업 폴더 없음');
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw new Error('작업 폴더 없음');
+    throw error;
+  }
   const parsed = parseRestoreCommand(start.cmd);
   const transcript = !parsed.id ? findClaudeRestore({start, projectsDir, now}) : null;
   const id = parsed.id ?? transcript.id;

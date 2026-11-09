@@ -9,11 +9,12 @@ import {rottieConnectivity} from './floor-tmux.mjs';
 export const restoreStartDigest = entry => createHash('sha256').update(JSON.stringify(entry)).digest('hex');
 const cli = new URL('./cli.mjs', import.meta.url).pathname;
 
-export function systemUptime({platform = process.platform, run = spawnSync, now = Date.now()} = {}) {
-  if (platform !== 'darwin') return os.uptime();
+export function systemBootTime({platform = process.platform, run = spawnSync, now = Date.now(),
+  uptime = os.uptime} = {}) {
+  if (platform !== 'darwin') return now - uptime() * 1000;
   const result = run('sysctl', ['-n', 'kern.boottime'], {encoding: 'utf8', timeout: 5000});
   const seconds = result.status === 0 && String(result.stdout).match(/\bsec\s*=\s*(\d+)/)?.[1];
-  return seconds ? now / 1000 - Number(seconds) : NaN;
+  return seconds ? Number(seconds) * 1000 : NaN;
 }
 
 export function restoreEnvironment({home, setting, connected, env = process.env}) {
@@ -35,11 +36,11 @@ export function launchServerRole({home, item, id, env = process.env, run = spawn
   const index = entries.indexOf(last);
   if (!last || restoreStartDigest(last) !== restoreStartDigest(item.start)
     || entries.slice(index + 1).some(e => (e.session === item.session || e.role === item.role)
-      && e.kind === 'stop')) {
+      && e.kind === 'stop' && (!item.observedAt || !Number.isFinite(Date.parse(e.t))
+        || Date.parse(e.t) > Date.parse(item.observedAt)))) {
     throw new Error('복원 준비 뒤 역할 상태 변경');
   }
-  // 준비 전에 있던 죽음 경보는 후보에서 제외했다. 새 감시기가 이번 손실을 다시 기록한 것은
-  // 수동 종료가 아니다. 새 start·stop만 재확인하여 복원을 스스로 취소하지 않는다.
+  // 죽음 경보는 생존 근거가 아니다. 준비 뒤 새 start·관찰 뒤 stop만 재확인한다.
   const setting = window(); // 손상 설정은 숨김으로 추정하지 않는다.
   let connected = false;
   if (setting?.window === 'rottie') {

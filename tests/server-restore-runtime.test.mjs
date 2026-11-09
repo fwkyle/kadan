@@ -6,10 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {launchServerRole, restoreEnvironment, restoreStartDigest, sendRestoreNotice,
-  systemUptime} from '../src/server-restore-runtime.mjs';
+  systemBootTime} from '../src/server-restore-runtime.mjs';
 import {buildStartLedgerEntry} from '../src/cli-start-support.mjs';
 import {appendLedger, readSystemLedger, readMailLedger} from '../src/ledger.mjs';
 import {acquireReviveLock} from '../src/revive.mjs';
+import {writeServerSessions} from '../src/server-sessions.mjs';
 import {tmuxClientEnv} from '../src/floor-tmux.mjs';
 
 const ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -105,13 +106,14 @@ test('autostart 명의 send는 task 없이 한 번, 실패는 재전송하지 �
   assert.equal(calls, 1);
 });
 
-test('macOS 가동 시간은 sysctl 조회 결과에서 계산, 오류는 NaN', () => {
+test('macOS 부팅 시각은 sysctl, 다른 OS는 uptime으로 계산, 오류는 NaN', () => {
   const now = 1_800_000;
-  assert.equal(systemUptime({platform: 'darwin', now, run: (_bin, args) => {
+  assert.equal(systemBootTime({platform: 'darwin', now, run: (_bin, args) => {
     assert.deepEqual(args, ['-n', 'kern.boottime']);
     return {status: 0, stdout: '{ sec = 1200, usec = 0 }'};
-  }}), 600);
-  assert.ok(Number.isNaN(systemUptime({platform: 'darwin', run: () => ({status: 1})})));
+  }}), 1_200_000);
+  assert.equal(systemBootTime({platform: 'linux', now, uptime: () => 600}), 1_200_000);
+  assert.ok(Number.isNaN(systemBootTime({platform: 'darwin', run: () => ({status: 1})})));
 });
 
 // 실제 CLI·SQLite를 통과한다. tmux·sysctl은 가짜 실행 파일이고 AI·로티·포트·알림은 열지 않는다.
@@ -148,6 +150,7 @@ else if (args.includes('capture-pane')) console.log('fake idle');
     floor: 'tmux', roleProfile: 'conductor', cwd: dir, panePid: '111',
     cmd: `codex resume ${ID} --model test 'FIRST_PROMPT_MUST_NOT_REPEAT'`};
   appendLedger(start, home);
+  writeServerSessions(home, [start.session], Date.now() - 1000);
   const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home,
     KADAN_WINDOW: 'none', KADAN_WINDOW_FORCE: '1', KADAN_FLOOR: 'tmux', KADAN_ALT_CHECK_MS: '0',
     KADAN_NOTIFY: 'off', KADAN_TEST_NOTIFY_SINK: path.join(dir, 'notices.jsonl')};
@@ -205,17 +208,17 @@ test('CLI: 기반 세션 생성으로 서버가 생겨도 최초 서버 없음 �
   assert.equal(readSystemLedger(f.home).filter(e => e.kind === 'revive' && e.reason === 'server-loss').length, 1);
 });
 
-test('CLI: 끄는 파일은 감독 복원 0, 서버 조회 오류는 기반 생성도 0', () => {
+test('CLI: 끄는 파일·서버 조회 오류는 감독 복원 0, 조회 오류에도 정상 종료', () => {
   const disabled = fakeCliFixture();
   fs.writeFileSync(path.join(disabled.home, 'server-restore.off'), '');
   assert.equal(disabled.invoke().status, 0);
   assert.equal(readSystemLedger(disabled.home).filter(e => e.kind === 'start').length, 1);
-  assert.equal(fs.existsSync(disabled.calls), false);
+  assert.equal(fs.existsSync(disabled.calls), true);
   const denied = fakeCliFixture();
   fs.writeFileSync(path.join(denied.dir, 'bin', 'tmux'),
     '#!/usr/bin/env node\nconsole.error("Permission denied"); process.exit(1);\n', {mode: 0o755});
   const result = denied.invoke();
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, 0);
   assert.match(result.stderr, /서버 존재 조회 실패/);
   assert.equal(fs.existsSync(denied.created), false);
   assert.equal(readSystemLedger(denied.home).filter(e => e.kind === 'start').length, 1);

@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {prepareServerRestore, finishServerRestore, settleServerRestore,
+import {prepareServerRestore, finishServerRestore,
   restoreCandidates, serverState} from '../src/server-restore.mjs';
 import {restoreCommand, parseRestoreCommand} from '../src/server-restore-command.mjs';
+import {runServerRestoreCycle} from '../src/server-restore-cycle.mjs';
+import {writeServerSessions} from '../src/server-sessions.mjs';
 import {commandWords} from '../src/ai-identity.mjs';
 
 const NOW = Date.parse('2026-11-09T00:00:00Z');
@@ -25,7 +27,10 @@ function fixture() {
   });
   const entries = [start('test-super', 'super'), start()];
   const options = {home, now: NOW, id: OTHER, projectsDir, listSessions: () => MISSING,
-    read: () => entries, hierarchy: () => ({}), uptime: () => 3600};
+    read: () => entries, hierarchy: () => ({}), bootTime: () => NOW - 3600_000};
+  const snapshot = (now = NOW - 1000, sessions = entries.map(e => e.session)) =>
+    writeServerSessions(home, sessions, now);
+  snapshot();
   const calls = {starts: [], sends: [], notices: [], records: []};
   const ops = {
     startRole: (item, id) => { calls.starts.push({item, id}); return {hidden: false}; },
@@ -40,60 +45,148 @@ function fixture() {
     fs.utimesSync(file, mtime / 1000, mtime / 1000);
     return file;
   };
-  return {home, cwd, projectsDir, start, entries, options, calls, ops, transcript};
+  return {home, cwd, projectsDir, start, entries, options, calls, ops, transcript, snapshot};
 }
 
-test('서버 없음: 직전 슈퍼·감독만 같은 대화로 시작, 사건 1개·알림 1통·역할 안내 각각 1통', () => {
+test('서버 없음: 관찰된 감독만 복원, 시작 전 1통·결과 1통·역할 안내 각각 1통', () => {
   const f = fixture();
   f.entries.push(f.start('감독이라는이름-worker', 'worker'), f.start('test-review', 'reviewer'));
   f.entries.push(f.start('비서', 'secretary'));
-  const plan = prepareServerRestore(f.options);
-  const event = finishServerRestore(plan, f.ops);
+  f.snapshot();
+  const original = f.ops.startRole;
+  f.ops.startRole = (...args) => {
+    assert.deepEqual(f.calls.notices, ['서버 통째 종료 감지 — 감독 2명 복원 시작']);
+    return original(...args);
+  };
+  const event = finishServerRestore(prepareServerRestore(f.options), f.ops);
   assert.deepEqual(f.calls.starts.map(x => x.item.role), ['test-super', 'test-lead']);
   assert.ok(f.calls.starts.every(x => !x.item.command.includes('옛 첫 지시') && x.id === OTHER));
-  assert.deepEqual([f.calls.records.length, f.calls.notices.length, f.calls.sends.length], [1, 1, 2]);
+  assert.deepEqual([f.calls.records.length, f.calls.notices.length, f.calls.sends.length], [1, 2, 2]);
+  assert.equal(event.candidateBasis, 'server-sessions-snapshot');
   assert.equal(event.by, 'autostart');
   assert.equal(event.reason, 'server-loss');
   assert.equal(event.restoreId, OTHER);
   assert.ok(f.calls.sends.every(x => x.message.includes('직전 명령')));
 });
 
-test('서버 있음: 감독 세션 하나가 없어도 원장·대화 조회, 복원, 알림 0', () => {
-  const f = fixture();
-  f.options.listSessions = () => ({status: 0, stdout: 'kadan-test-super'});
-  f.options.read = () => assert.fail('정상 주기에 원장 읽음');
-  assert.equal(prepareServerRestore(f.options), null);
-  finishServerRestore(null, f.ops);
+test('present + 손상 복원 상태: 기반 실행, 원장 조회 0, 매 주기 관찰 갱신·0600', () => {
+  const f = fixture(); let base = 0, lists = 0;
+  fs.writeFileSync(path.join(f.home, 'server-restore-state.json'), '{"attemptedAt":"bad"}');
+  for (const now of [NOW, NOW + 60_000]) {
+    const result = runServerRestoreCycle({...f.options, now,
+      listSessions: () => { lists++; return {status: 0, stdout: 'kadan-test-super\npersonal\n'}; },
+      read: () => assert.fail('정상 주기 원장 조회'),
+      runBase: ({serverLoss}) => { assert.equal(serverLoss, false); base++; return 'base-result'; },
+    }, f.ops);
+    assert.equal(result, 'base-result');
+    const file = path.join(f.home, 'server-sessions.json');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file)),
+      {observedAt: new Date(now).toISOString(), sessions: ['kadan-test-super']});
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  }
+  assert.equal(base, 2); assert.equal(lists, 2);
   assert.equal(f.calls.starts.length + f.calls.notices.length, 0);
 });
 
-test('재부팅 5분·시간 불명: 시작 0, 후보와 수동 안내 알림 1통', () => {
-  for (const uptime of [300, NaN, -1]) {
-    const f = fixture(); f.options.uptime = () => uptime;
-    finishServerRestore(prepareServerRestore(f.options), f.ops);
-    assert.equal(f.calls.starts.length, 0);
-    assert.equal(f.calls.notices.length, 1);
-    assert.match(f.calls.notices[0], /수동:/);
+test('missing + 원장 예외: 기반 결과 유지, 사유 사건·중복 방지 키 알림 1통', () => {
+  const f = fixture(); let base = 0; const keys = [];
+  const notify = f.ops.notify;
+  f.ops.notify = (message, options) => { keys.push(options.key); notify(message); };
+  for (let cycle = 0; cycle < 2; cycle++) {
+    assert.equal(runServerRestoreCycle({...f.options,
+      runBase: ({serverLoss}) => { assert.equal(serverLoss, true); base++; return 17; },
+      read: () => { assert.equal(base, cycle + 1); throw new Error('database is locked'); },
+    }, f.ops), 17);
   }
+  assert.equal(base, 2);
+  assert.equal(f.calls.notices.length, 1, '같은 사유는 OS 알림도 1시간에 한 번');
+  assert.match(keys[0], /^server-restore-error-/);
+  assert.equal(f.calls.records[0].reason, 'server-restore-error');
+  assert.equal(f.calls.records[0].detail, '복원 원장 조회 실패');
+  f.snapshot(NOW + 3600_000);
+  runServerRestoreCycle({...f.options, now: NOW + 3600_000, runBase: () => {},
+    read: () => { throw new Error('database is locked'); }}, f.ops);
+  assert.equal(f.calls.notices.length, 2); assert.equal(keys[0], keys[1]);
 });
 
-test('사람 stop·죽음 경보 뒤에는 복원하지 않고, 새 start 뒤에는 다시 후보', () => {
+test('unknown: 기반만 실행, 스냅숏 불변·복원·알림 없음, stderr 한 줄', () => {
+  for (const result of [{status: 1, stderr: 'Permission denied'}, {status: null, error: new Error('timeout')},
+    {status: 1, stderr: 'no server running on x\nother error'}]) {
+    const f = fixture(), warnings = [];
+    const file = path.join(f.home, 'server-sessions.json'), before = fs.readFileSync(file, 'utf8');
+    let base = 0;
+    runServerRestoreCycle({...f.options, listSessions: () => result,
+      read: () => assert.fail('unknown 원장 조회'), warn: line => warnings.push(line),
+      runBase: ({serverLoss}) => { assert.equal(serverLoss, false); base++; },
+    }, f.ops);
+    assert.equal(base, 1); assert.equal(warnings.length, 1);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    assert.equal(f.calls.starts.length + f.calls.notices.length, 0);
+  }
+  assert.equal(serverState({status: 1,
+    stderr: 'error connecting to /tmp/fake (No such file or directory)'}), 'missing');
+});
+
+test('관찰 뒤 재부팅·부팅 시각 불명: 시작 0, 수동 안내 1통', () => {
+  for (const boot of [NOW - 500, NaN, -1]) {
+    const f = fixture(); f.options.bootTime = () => boot;
+    finishServerRestore(prepareServerRestore(f.options), f.ops);
+    assert.equal(f.calls.starts.length, 0); assert.equal(f.calls.notices.length, 1);
+    assert.match(f.calls.notices[0], /부팅|수동/);
+  }
+  // 부팅 후 15분이 지나 로그인해도, 부팅 전 관찰은 오래된 기록이므로 복원하지 않는다.
+  const f = fixture(); f.snapshot(NOW - 20 * 60_000);
+  f.options.bootTime = () => NOW - 15 * 60_000;
+  finishServerRestore(prepareServerRestore(f.options), f.ops);
+  assert.equal(f.calls.starts.length, 0); assert.match(f.calls.notices[0], /관찰 이후 재부팅/);
+  assert.match(f.calls.notices[0], /수동:/);
+});
+
+test('거짓 죽음 경보는 무시, 관찰에 없는 오래된 명시 resume 감독은 제외', () => {
   const f = fixture();
-  f.entries.push({kind: 'stop', session: 'kadan-test-lead', by: '사람'});
   f.entries.push({kind: 'alert', role: 'test-super', alertKind: '죽음'});
-  assert.deepEqual(restoreCandidates(f.entries), []);
-  f.entries.push(f.start());
-  assert.deepEqual(restoreCandidates(f.entries).map(x => x.start.role), ['test-lead']);
+  f.entries.push(f.start('test-old', 'conductor', {t: '2026-10-15T00:00:00Z'}));
+  finishServerRestore(prepareServerRestore(f.options), f.ops);
+  assert.deepEqual(f.calls.starts.map(x => x.item.role), ['test-super', 'test-lead']);
+});
+
+test('관찰 이후 stop만 제외, 이전 stop은 생존 관찰이 우선', () => {
+  const f = fixture();
+  f.entries.push({kind: 'stop', session: 'kadan-test-lead', t: new Date(NOW).toISOString()});
+  f.entries.push({kind: 'stop', role: 'test-super', t: new Date(NOW - 2000).toISOString()});
+  finishServerRestore(prepareServerRestore(f.options), f.ops);
+  assert.deepEqual(f.calls.starts.map(x => x.item.role), ['test-super']);
 });
 
 test('프로필 없는 옛 start는 관계표의 자식 유무로 판정, 명시 worker·비서는 제외', () => {
   const f = fixture();
-  const entries = [f.start('root', undefined), f.start('middle', undefined), f.start('leaf', undefined),
-    f.start('worker', 'worker'), f.start('비서', undefined)];
-  for (const entry of entries) if (!['worker'].includes(entry.role)) delete entry.roleProfile;
+  const entries = [f.start('root'), f.start('middle'), f.start('leaf'),
+    f.start('worker', 'worker'), f.start('비서')];
+  for (const entry of entries) if (entry.role !== 'worker') delete entry.roleProfile;
   const parents = {root: '@user', middle: 'root', leaf: 'middle', worker: 'root', '비서': '@user', child: '비서'};
-  assert.deepEqual(restoreCandidates(entries, parents).map(x => [x.start.role, x.profile]),
+  const snapshot = f.snapshot(NOW - 1000, entries.map(e => e.session));
+  assert.deepEqual(restoreCandidates(entries, parents, snapshot).map(x => [x.start.role, x.profile]),
     [['root', 'super'], ['middle', 'conductor']]);
+});
+
+test('시작 기록 없는 관찰 세션은 건너뜀 목록에 표시', () => {
+  const f = fixture(); f.snapshot(NOW - 1000, ['kadan-test-no-start']);
+  finishServerRestore(prepareServerRestore(f.options), f.ops);
+  assert.equal(f.calls.starts.length, 0);
+  assert.match(f.calls.notices[0], /test-no-start: skipped.*시작 기록 없음/);
+});
+
+test('스냅숏 없음·10분 초과·손상: 시작 없이 수동 확인 알림만', () => {
+  for (const kind of ['missing', 'stale', 'corrupt']) {
+    const f = fixture(), file = path.join(f.home, 'server-sessions.json');
+    if (kind === 'missing') fs.renameSync(file, `${file}.saved`);
+    if (kind === 'stale') f.snapshot(NOW - 600_001);
+    if (kind === 'corrupt') fs.writeFileSync(file, 'bad');
+    if (kind !== 'stale') f.options.read = () => assert.fail('유효한 관찰 없이 원장 읽음');
+    finishServerRestore(prepareServerRestore(f.options), f.ops);
+    assert.equal(f.calls.starts.length, 0); assert.equal(f.calls.notices.length, 1);
+    assert.match(f.calls.notices[0], /수동/);
+  }
 });
 
 test('revive stopped·손상 상태는 복원하지 않는다', () => {
@@ -102,51 +195,25 @@ test('revive stopped·손상 상태는 복원하지 않는다', () => {
     JSON.stringify({targets: {'test-lead': {state: 'stopped'}}}));
   finishServerRestore(prepareServerRestore(f.options), f.ops);
   assert.deepEqual(f.calls.starts.map(x => x.item.role), ['test-super']);
-  const g = fixture();
-  fs.writeFileSync(path.join(g.home, 'revive-state.json'), 'broken');
+  const g = fixture(); fs.writeFileSync(path.join(g.home, 'revive-state.json'), 'broken');
   finishServerRestore(prepareServerRestore(g.options), g.ops);
   assert.equal(g.calls.starts.length, 0);
 });
 
-test('복원 중 죽어도 예약된 60분 상한 보존, 서버가 있으면 다음 주기는 아무것도 안 함', () => {
-  const f = fixture();
-  prepareServerRestore(f.options); // 시작 직전 예약 이후 프로세스 종료를 흉내 낸다.
-  settleServerRestore(f.home, () => ({status: 0})); // 기반 프로세스가 서버를 다시 만든 뒤 두 번째 손실
-  f.options.now += 60_000;
-  finishServerRestore(prepareServerRestore(f.options), f.ops);
-  assert.equal(f.calls.starts.length, 0);
-  assert.match(f.calls.notices[0], /60분/);
-  f.options.listSessions = () => ({status: 0});
+test('시작 전 예약으로 60분 상한 보존, 같은 스냅숏은 중복 처리하지 않음', () => {
+  const f = fixture(); prepareServerRestore(f.options);
   assert.equal(prepareServerRestore(f.options), null);
-  f.options.listSessions = () => MISSING;
-  f.options.now = NOW + 3600_000;
+  f.options.now += 60_000; f.snapshot(NOW + 59_000);
+  finishServerRestore(prepareServerRestore(f.options), f.ops);
+  assert.equal(f.calls.starts.length, 0); assert.match(f.calls.notices[0], /60분/);
+  f.options.now = NOW + 3600_000; f.snapshot(NOW + 3599_000);
   assert.equal(prepareServerRestore(f.options).attempted, true);
 });
 
-test('서버 없음이 계속되면 같은 손실의 기록·알림은 한 번만', () => {
-  const f = fixture(); f.options.uptime = () => 300;
-  finishServerRestore(prepareServerRestore(f.options), f.ops);
-  finishServerRestore(prepareServerRestore({...f.options, now: NOW + 60_000}), f.ops);
-  assert.equal(f.calls.records.length, 1);
-  assert.equal(f.calls.notices.length, 1);
-  settleServerRestore(f.home, () => ({status: 0}));
-  finishServerRestore(prepareServerRestore({...f.options, now: NOW + 120_000}), f.ops);
-  assert.equal(f.calls.records.length, 2, '서버 재생성을 확인한 뒤 다른 손실은 새 사건');
-});
-
-test('끄는 파일이면 조회도 안 함, 조회 오류면 기반 작업까지 진행할 수 없게 throw', () => {
-  const f = fixture();
-  fs.writeFileSync(path.join(f.home, 'server-restore.off'), '');
-  f.options.listSessions = () => assert.fail('꺼진 복원 조회');
+test('끄는 파일이면 복원 준비를 건너뜀', () => {
+  const f = fixture(); fs.writeFileSync(path.join(f.home, 'server-restore.off'), '');
+  f.options.read = () => assert.fail('꺼진 복원 조회');
   assert.equal(prepareServerRestore(f.options), null);
-  const g = fixture();
-  for (const result of [{status: 1, stderr: 'Permission denied'}, {status: null, error: new Error('timeout')},
-    {status: 1, stderr: 'no server running on x\nother error'}]) {
-    g.options.listSessions = () => result;
-    assert.throws(() => prepareServerRestore(g.options), /조회 실패/);
-  }
-  assert.equal(serverState({status: 1,
-    stderr: 'error connecting to /tmp/fake (No such file or directory)'}), 'missing');
 });
 
 test('명시 resume ID·옵션은 보존하고 위치 프롬프트는 제거, 알 수 없는 문법은 거절', () => {
@@ -184,9 +251,11 @@ test('cwd 없음·codex 대화 ID 없음·Claude 일치 없음은 항목별 건�
   const f = fixture();
   f.entries[0].cwd += '-gone'; f.entries[1].cmd = 'codex --model test';
   f.entries.push(f.start('test-no-match', 'conductor', {cmd: 'claude --model test'}));
+  f.snapshot();
   finishServerRestore(prepareServerRestore(f.options), f.ops);
   assert.equal(f.calls.starts.length, 0);
   assert.equal(f.calls.records[0].results.filter(x => x.result === 'skipped').length, 3);
+  assert.equal(f.calls.records[0].results[0].reason, '작업 폴더 없음');
 });
 
 test('시작 실패는 재시도하지 않고 다음 역할 계속, 우편 실패는 시작 성공을 뒤집지 않음', () => {
@@ -200,16 +269,29 @@ test('시작 실패는 재시도하지 않고 다음 역할 계속, 우편 실�
   finishServerRestore(prepareServerRestore(f.options), f.ops);
   assert.equal(f.calls.starts.length, 2);
   assert.deepEqual(f.calls.records[0].results.map(x => x.result), ['failed', 'started']);
-  assert.match(f.calls.notices[0], /kadan attach 'test-lead'/);
-  assert.match(f.calls.notices[0], /전달 실패/);
+  assert.match(f.calls.notices.at(-1), /kadan attach 'test-lead'/);
+  assert.match(f.calls.notices.at(-1), /전달 실패/);
 });
 
 test('기반 실행 실패·원장 쓰기 실패는 성공으로 숨기지 않는다', () => {
   const f = fixture();
-  finishServerRestore(prepareServerRestore(f.options), {...f.ops, baseError: true});
+  assert.throws(() => runServerRestoreCycle({...f.options,
+    runBase: () => { throw new Error('base failed'); },
+    read: () => assert.fail('기반 실패 뒤 복원 시작')}, f.ops), /base failed/);
   assert.equal(f.calls.starts.length, 0);
   const g = fixture();
   assert.throws(() => finishServerRestore(prepareServerRestore(g.options), {...g.ops,
     record: () => { throw new Error('disk'); }}), /disk/);
-  assert.equal(g.calls.notices.length, 0);
+  assert.equal(g.calls.notices.length, 1, '시작 전 안내만 있고 성공 결과 안내는 없음');
+});
+
+test('missing + 상한 상태 손상·사유 원장 쓰기 실패에도 기반 결과 유지와 오류 통지', () => {
+  const f = fixture(), warnings = [];
+  fs.writeFileSync(path.join(f.home, 'server-restore-state.json'), '{"attemptedAt":"bad"}');
+  const result = runServerRestoreCycle({...f.options, runBase: () => 'base-ok',
+    warn: line => warnings.push(line)}, {...f.ops, record: () => { throw new Error('disk'); }});
+  assert.equal(result, 'base-ok'); assert.equal(f.calls.starts.length, 0);
+  assert.equal(f.calls.notices.length, 1);
+  assert.match(f.calls.notices[0], /서버 복원 상한 상태 손상/);
+  assert.deepEqual(warnings, ['서버 복원 실패 사유 원장 기록 실패']);
 });

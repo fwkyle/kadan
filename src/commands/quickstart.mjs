@@ -22,8 +22,8 @@ import { readBridgeExit } from "../discord-bridge-exit.mjs";
 import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
 import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
-import { prepareServerRestore, finishServerRestore, settleServerRestore } from "../server-restore.mjs";
-import { launchServerRole, sendRestoreNotice, systemUptime } from "../server-restore-runtime.mjs";
+import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
+import { launchServerRole, sendRestoreNotice, systemBootTime } from "../server-restore-runtime.mjs";
 import { tmux, paneState, captureTail, wrapNoTmux, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -48,7 +48,7 @@ export function cmdInit(_argv, flags) {
 export function cmdUp(_argv, flags) {
   if (flags.help) {
     console.log("사용법: kadan up [--cmd <실행기 명령>] [--port 8790] [--hidden] [--no-prompt] [--auto]  (비서 세션 + 대시보드 세션, 기본 감시 프로필이 있으면 감시기, 디코 비밀값이 있으면 다리)");
-    console.log("  --auto는 서버 전체 손실 때만 직전 감독의 같은 대화를 복원한다. 재부팅 10분·60분 상한 적용, server-restore.off로 끈다");
+    console.log("  --auto는 server-sessions.json의 10분 이내 생존 감독만 복원한다. 관찰 이후 재부팅·기록 없음은 알림만, 60분 상한. server-restore.off로 끈다");
     console.log("  --auto: launchd가 1분마다 부르는 자동 실행. 사람이 kadan stop으로 끈 대상·1시간 3번 상한에 걸린 대상은 건너뛰고, 바뀐 것이 있을 때만 출력한다. --auto 없이 친 up은 그 멈춤을 모두 푼다");
     return;
   }
@@ -64,22 +64,17 @@ export function cmdUp(_argv, flags) {
   }
   try {
     // 서버 없음 신호는 기반 세션을 하나라도 만들기 전에, revive 잠금 안에서 딱 한 번 읽는다.
-    const restore = auto ? prepareServerRestore({home,
-      listSessions: () => tmux(['list-sessions'], undefined, {timeout: 5000}),
+    if (!auto) return runUpOnce({home, flags, auto});
+    runServerRestoreCycle({home,
+      listSessions: () => tmux(['list-sessions', '-F', '#{session_name}'], undefined, {timeout: 5000}),
+      runBase: ({serverLoss}) => runUpOnce({home, flags, auto, serverLoss}),
       read: () => readSystemLedger(home),
-      hierarchy: readActiveHierarchy, uptime: systemUptime,
-      projectsDir: path.join(os.homedir(), '.claude', 'projects')}) : null;
-    let baseError = false;
-    try { runUpOnce({ home, flags, auto, serverLoss: Boolean(restore) }); }
-    catch (error) { baseError = true; throw error; }
-    finally {
-      finishServerRestore(restore, {
-        baseError, startRole: (item, id) => launchServerRole({home, item, id}),
-        send: (role, message) => sendRestoreNotice({home, role, message}),
-        record: entry => appendLedger(entry, home), notify: reviveOps(home).notify,
-      });
-      if (restore) settleServerRestore(home, () => tmux(['list-sessions'], undefined, {timeout: 5000}));
-    }
+      hierarchy: readActiveHierarchy, bootTime: systemBootTime,
+      projectsDir: path.join(os.homedir(), '.claude', 'projects')}, {
+      startRole: (item, id) => launchServerRole({home, item, id}),
+      send: (role, message) => sendRestoreNotice({home, role, message}),
+      record: entry => appendLedger(entry, home), notify: reviveOps(home).notify,
+    });
   } finally { release(); }
 }
 
