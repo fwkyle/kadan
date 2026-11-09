@@ -7,10 +7,11 @@ import {
   nightState, nightTargets, resolveEnd, buildNightMessage, sendNightMail, finishNight, readDecisionEvents, clock, AUTO_CHECKLIST,
 } from '../night.mjs';
 import {buildNightNote, noteLine} from '../night-note.mjs';
+import {picksCommand} from '../night-picks.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../night-repo-policy.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running] [--allow <소유자/이름>]…] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan night on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level 자동 [--only-running] [--allow <소유자/이름>]…] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
@@ -102,6 +103,7 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
   if (flags.help || !sub) return USAGE;
   if (sub === 'repo') return repoCommand(rest, flags, {home, by, deps});
+  if (sub === 'picks') return picksCommand(flags, {home, deps});
   const now = (deps.now ?? Date.now)();
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
   const state = nightState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);

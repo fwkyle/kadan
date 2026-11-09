@@ -19,7 +19,7 @@ import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
 import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
 import { appendLedger, ledgerHome } from "../ledger.mjs";
-import { tmux, paneState, captureTail } from "../floor-tmux.mjs";
+import { tmux, paneState, captureTail, wrapNoTmux, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
@@ -156,13 +156,13 @@ const KEEP_DEAD_PANE = (session) => [";", "set-option", "-t", `=${session}:`, "r
 function startWatchSession(home) {
   const session = sessionName("watch");
   const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
-  const env = ["-e", `KADAN_HOME=${home}`, ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
+  const env = ["-e", `KADAN_HOME=${home}`, "-e", paneSocketEnv(), ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
   return ensureWatch({
     profileExists: () => fs.existsSync(defaultProfilePath(home)),
     running: () => readWatchProcesses(spawnSync, watchProcessName(home)),
     alive: () => floor.alive(session),
     create: () => {
-      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, `'${node}' '${cli}' watch`, ...KEEP_DEAD_PANE(session)]);
+      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, wrapNoTmux(`'${node}' '${cli}' watch`), ...KEEP_DEAD_PANE(session)]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });
@@ -201,12 +201,12 @@ export function readBridgeStatus(home) { return bridgeStatus(bridgeDeps(home)); 
 function startBridgeSession(home) {
   const session = sessionName(BRIDGE_ROLE);
   const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
-  const env = ["-e", `KADAN_HOME=${home}`, ...BRIDGE_ENV.filter((k) => process.env[k]).flatMap((k) => ["-e", `${k}=${process.env[k]}`])];
+  const env = ["-e", `KADAN_HOME=${home}`, "-e", paneSocketEnv(), ...BRIDGE_ENV.filter((k) => process.env[k]).flatMap((k) => ["-e", `${k}=${process.env[k]}`])];
   return ensureBridge({
     ...bridgeDeps(home),
     create: () => {
       const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env,
-        `'${node}' '${cli}' discord watch --to-mail`, ...KEEP_DEAD_PANE(session)]);
+        wrapNoTmux(`'${node}' '${cli}' discord watch --to-mail`), ...KEEP_DEAD_PANE(session)]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });

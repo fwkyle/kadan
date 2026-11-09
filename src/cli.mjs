@@ -220,7 +220,7 @@ export const COMMANDS = {
   night: (argv,flags) => {
     const result=nightCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
-    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):(argv[0]==='note'||argv[0]==='repo')?result:JSON.stringify(result,null,2));
+    console.log(argv[0]==='status'&&flags.text===true?nightOriginalText(result):(argv[0]==='note'||argv[0]==='repo'||(argv[0]==='picks'&&typeof result==='string'))?result:JSON.stringify(result,null,2));
   },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
@@ -307,7 +307,7 @@ export function main(argv) {
     console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
     process.exit(1);
   }
-  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running']} : command === 'merge-gate' ? {booleans: ['json']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'night' ? {booleans: ['text','only-running','json']} : command === 'merge-gate' ? {booleans: ['json']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptWindowForCommand(command, process.env, ledgerHome(), {socket: currentSocket()});
