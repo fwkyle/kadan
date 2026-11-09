@@ -80,8 +80,13 @@ export function acceptTransfer({home, id, flags, floor, env = process.env, inspe
     }
   }
   // Exclusive receipt prevents duplicate closes, including an interrupted or ambiguous close.
-  write(path.join(dir, 'accepted.json'), {role: request.role, conversation: currentId,
-    summary: flags.summary, at: new Date().toISOString()});
+  try {
+    write(path.join(dir, 'accepted.json'), {role: request.role, conversation: currentId,
+      summary: flags.summary, at: new Date().toISOString()});
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    throw new Error(`이미 인수 기록이 있습니다. 기록은 덮어쓰지 않습니다. kadan adopt status ${id} 로 상태를 확인하세요.`);
+  }
   record({kind: 'adopt', phase: 'accepted', adoptionId: id, role: request.role, session: request.session,
     by: request.role, sourceTerminalId: request.source?.terminalId ?? null});
   let result = {id, status: 'accepted', source: 'retained', reason: '자동 종료할 원본 Rottie 탭 없음'};
