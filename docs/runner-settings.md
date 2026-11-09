@@ -400,8 +400,8 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 `conversation` 두 종류(코드의 일반 함수 둘):
 
-- `{"kind":"open-file","pattern":"<정규식, 캡처 그룹 1개>"}` — pane 프로세스 트리가 열어 둔 파일 이름에서 ID를 뽑는다(`lsof`). 서로 다른 ID가 0개·2개 이상이면 거절.
-- `{"kind":"pid-json","path":"~/…/{pid}.json","field":"sessionId","match":{"tmux":"{tmux}"}}` — 프로세스 트리의 PID별 JSON 파일에서 필드를 읽는다. `match`는 파일의 값이 이 역할의 tmux 자리(`세션:@창.%자리`)와 같은지 대조한다(다른 세션의 대화를 집지 않게). 파일이 0개·여러 개거나 값이 없으면 거절.
+- `{"kind":"open-file","pattern":"<정규식, 캡처 그룹 1개>"}` — pane 안의 실행기 본체 사슬(뿌리 프로세스 1개와 그 아래로 하나씩 이어진 같은 실행기 프로세스, [`kadan restart` 자세히](commands.md#kadan-restart-자세히))이 열어 둔 파일 이름에서 ID를 뽑는다(`lsof`). 자식 도구가 연 파일은 보지 않는다. 서로 다른 ID가 0개·2개 이상이면 거절.
+- `{"kind":"pid-json","path":"~/…/{pid}.json","field":"sessionId","match":{"tmux":"{tmux}"}}` — 본체 사슬의 **뿌리 PID 하나**로 `{pid}`를 채운 JSON 파일 한 개에서 필드를 읽는다. 자식 도구·하위 에이전트의 PID 파일은 보지 않는다. `match`는 그 파일의 값이 이 역할의 tmux 자리(`세션:@창.%자리`)와 같은지 대조한다(다른 세션의 대화를 집지 않게). 파일이 없거나 읽히지 않거나, `match` 값이 다르거나, 필드 값이 없으면 거절.
 - 공통 선택 칸 `evidence`(open-file): 저장 여부와 무관하게 대화 ID를 드러내는 다른 파일(lock 등)의 정규식 목록(캡처 그룹 1개). 본체 사슬에서 서로 다른 ID가 둘 이상 보이면 restart가 거절한다. codex는 `thread-writer-locks/<ID>.lock`.
 - 공통 선택 칸 `stored`: 다시 열 대화의 저장 파일(`~/…/*/{conversation}.jsonl`, 한 칸에 `*` 허용). 없으면 "아직 저장되지 않음"으로 거절 — restart가 끄기 전에 막는다.
 
