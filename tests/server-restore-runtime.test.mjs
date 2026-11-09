@@ -223,3 +223,36 @@ test('CLI: 끄는 파일·서버 조회 오류는 감독 복원 0, 조회 오류
   assert.equal(fs.existsSync(denied.created), false);
   assert.equal(readSystemLedger(denied.home).filter(e => e.kind === 'start').length, 1);
 });
+
+test('CLI: 후보 없음·off는 기존 기반 알림 경로와 실제 notice를 유지', () => {
+  for (const kind of ['empty', 'off']) {
+    const f = fakeCliFixture();
+    fs.writeFileSync(path.join(f.home, 'revive-state.json'), JSON.stringify({targets: {}}));
+    if (kind === 'off') fs.writeFileSync(path.join(f.home, 'server-restore.off'), '');
+    else {
+      const start = readSystemLedger(f.home).find(e => e.kind === 'start');
+      appendLedger({...start, roleProfile: 'worker'}, f.home);
+    }
+    const result = f.invoke();
+    assert.equal(result.status, 0, result.stderr);
+    const events = readSystemLedger(f.home).filter(e => e.kind === 'revive');
+    assert.equal(events.length, 2);
+    assert.ok(events.every(e => e.notice === 'none' && !e.noticeSummary));
+    assert.equal(fs.existsSync(f.env.KADAN_TEST_NOTIFY_SINK), false, '기존 조용한 알림은 OS 울림 없음');
+  }
+});
+
+test('CLI: 기반 상태 손상 울림은 감독 복원 요약과 별도로 전달', () => {
+  const f = fakeCliFixture();
+  fs.writeFileSync(path.join(f.home, 'revive-state.json'), 'broken');
+  const result = f.invoke();
+  assert.equal(result.status, 0, result.stderr);
+  const notices = fs.readFileSync(f.env.KADAN_TEST_NOTIFY_SINK, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(notices.length, 2);
+  assert.match(notices[0].message, /revive-state.json.*손상/);
+  assert.match(notices[1].message, /직전 감독 세션: kadan-test-recovery-lead/);
+  assert.equal(readSystemLedger(f.home).filter(e => e.kind === 'start').length, 1);
+  assert.equal(fs.readFileSync(path.join(f.home, 'revive-state.json'), 'utf8'), 'broken');
+  assert.equal(f.invoke().status, 0, '손상 상태와 같은 스냅숏의 다음 주기도 안전하게 건너뜀');
+  assert.equal(fs.readFileSync(f.env.KADAN_TEST_NOTIFY_SINK, 'utf8').trim().split('\n').length, 2);
+});

@@ -5,7 +5,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {readReviveState} from './revive.mjs';
 import {restoreCommand} from './server-restore-command.mjs';
-import {readServerSessions} from './server-sessions.mjs';
+import {readServerSessions, describeLostSessions} from './server-sessions.mjs';
 
 export const RESTORE_WINDOW_MS = 60 * 60 * 1000;
 export const RESTORE_NOTICE = '서버 통째 종료 뒤 자동 복원됨. ' +
@@ -70,14 +70,16 @@ function writeState(home, state) {
 }
 
 // 최초 관찰이 missing인 주기에서만, 기반 프로세스를 실행한 뒤 호출한다.
-export function prepareServerRestore({home, read, hierarchy, bootTime, projectsDir,
+export function prepareServerRestore({home, read, hierarchy, bootTime, projectsDir, loss = {},
   now = Date.now(), id = randomUUID()}) {
   if (fs.existsSync(path.join(home, 'server-restore.off'))) return null;
-  const saved = readState(home);
   const observed = readServerSessions(home, now);
-  if (saved?.snapshotKey === observed.key) return null;
-  const plan = {id, now, items: [], attempted: false, blocked: observed.reason};
+  Object.assign(loss, {observedAt: observed.snapshot?.observedAt ?? null,
+    observedSessions: observed.snapshot?.sessions ?? [], supervisorSessions: null});
+  const plan = {id, now, items: [], attempted: false, blocked: observed.reason, loss};
   if (!observed.snapshot || observed.reason === '세션 관찰 시각이 미래') {
+    const saved = readState(home);
+    if (saved?.snapshotKey === observed.key) return null;
     writeState(home, {attemptedAt: saved?.attemptedAt ?? 0, id, snapshotKey: observed.key});
     return plan;
   }
@@ -88,7 +90,13 @@ export function prepareServerRestore({home, read, hierarchy, bootTime, projectsD
   } catch {
     throw Object.assign(new Error('복원 원장 조회 실패'), {restoreReason: '복원 원장 조회 실패'});
   }
-  const candidates = restoreCandidates(entries, hierarchy(entries) ?? {}, observed.snapshot);
+  const parents = hierarchy(entries) ?? {};
+  // 수동 복원을 위한 직전 생존 목록은 그 뒤 stop·상한에 걸려도 보존한다. 명령·본문은 담지 않는다.
+  loss.supervisorSessions = restoreCandidates(entries.filter(e => e.kind !== 'stop'), parents, observed.snapshot)
+    .filter(item => item.start).map(item => item.session);
+  const saved = readState(home);
+  if (saved?.snapshotKey === observed.key) return null;
+  const candidates = restoreCandidates(entries, parents, observed.snapshot);
   if (!candidates.length && !observed.reason) return null;
   const reviveState = readReviveState(home);
   const last = Math.max(saved?.attemptedAt ?? 0, ...entries
@@ -119,10 +127,10 @@ export function prepareServerRestore({home, read, hierarchy, bootTime, projectsD
   // 먼저 예약한다. 시작 중 프로세스가 죽어도 다음 손실에서 상한을 잃지 않는다.
   writeState(home, {attemptedAt: attempted ? now : (saved?.attemptedAt ?? 0), id,
     snapshotKey: observed.key});
-  return {id, now, items, attempted, blocked};
+  return {id, now, items, attempted, blocked, loss};
 }
 
-export function finishServerRestore(plan, {startRole, send, notify, record}) {
+export function finishServerRestore(plan, {startRole, send, notify, record}, baseNotices) {
   if (!plan) return null;
   const count = plan.items.filter(item => !item.result).length;
   if (count) notify(`서버 통째 종료 감지 — 감독 ${count}명 복원 시작`, {ring: true});
@@ -148,7 +156,9 @@ export function finishServerRestore(plan, {startRole, send, notify, record}) {
     }
     results.push(result);
   }
-  const message = ['tmux 서버 전체 손실 복원 결과', ...results.map(item =>
+  const baseResults = baseNotices?.lines() ?? [];
+  const message = ['tmux 서버 전체 손실 복원 결과', describeLostSessions(plan.loss ?? {}),
+    ...(baseResults.length ? [`기반: ${baseResults.join(' / ')}`] : []), ...results.map(item =>
     `${item.role}: ${item.result}${item.reason ? ` (${item.reason})` : ''}` +
     `${item.hidden ? ` · kadan attach '${item.role}'로 열기` : ''}` +
     `${item.mail === 'failed' ? ' · 복원 안내 전달 실패, 직전 명령 완료 여부 직접 확인' : ''}` +
@@ -157,9 +167,11 @@ export function finishServerRestore(plan, {startRole, send, notify, record}) {
   // 원장 쓰기 실패를 숨긴 채 성공 알림을 보내지 않는다. 손실당 결과 사건 하나만 남긴다.
   const event = {kind: 'revive', reason: 'server-loss', by: 'autostart', restoreId: plan.id,
     t: new Date(plan.now).toISOString(), attempted: plan.attempted,
-    candidateBasis: 'server-sessions-snapshot', blocked: plan.blocked, results};
+    candidateBasis: 'server-sessions-snapshot', blocked: plan.blocked, results,
+    ...plan.loss, baseResults};
   record(event);
-  notify(message, {ring: true});
+  const receipt = notify(message, {ring: true});
+  baseNotices?.flush({id: plan.id, receipt});
   return event;
 }
 

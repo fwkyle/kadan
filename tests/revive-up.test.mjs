@@ -90,9 +90,11 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
 
     // 5) revive 사건은 대상마다 남고(by autostart), 다리·감시기는 start 사건으로 기록되지 않는다
     const kinds = revives().filter(e => e.target);
-    assert.deepEqual(kinds.map(e => e.notice),
-      ['server-loss-summary', 'server-loss-summary', 'server-loss-summary', 'none'],
-      '서버 손실 때는 요약으로 모으고, 개별 기반 되살림은 기존 조용한 알림 유지');
+    assert.deepEqual(kinds.map(e => e.notice), ['system', 'system', 'system', 'none'],
+      '서버 손실 요약의 실제 알림 결과를 연결하고, 개별 기반 되살림은 기존 조용한 알림 유지');
+    const summary = revives().find(e => e.reason === 'server-loss');
+    assert.ok(kinds.slice(0, 3).every(e => e.noticeSummary === summary.restoreId));
+    assert.equal(summary.baseResults.length, 3);
     assert.deepEqual(kinds.map(e => [e.target, e.result, e.by]), [['비서', 'started', 'autostart'], ['대시보드', 'started', 'autostart'], ['디코', 'started', 'autostart'], ['디코', 'started', 'autostart']]);
     assert.equal(kinds.at(-1).reason, 'pane 죽음');
     assert.match(kinds.at(-1).screenPath, /revive\/디코-/);

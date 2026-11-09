@@ -3,7 +3,8 @@ import {createHash} from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {serverState, prepareServerRestore, finishServerRestore} from './server-restore.mjs';
-import {writeServerSessions} from './server-sessions.mjs';
+import {writeServerSessions, readServerSessions, describeLostSessions} from './server-sessions.mjs';
+import {bufferBaseNotices} from './server-restore-notices.mjs';
 
 export function runServerRestoreCycle({listSessions, runBase, warn = console.error, ...options}, ops) {
   options.now ??= Date.now();
@@ -11,7 +12,10 @@ export function runServerRestoreCycle({listSessions, runBase, warn = console.err
   try { observation = listSessions(); } catch { observation = null; }
   const state = serverState(observation);
   // 서버 관찰 외 모든 복원 준비는 기존 기반 실행 뒤다. 기반 오류는 원래대로 전달한다.
-  const result = runBase({serverLoss: state === 'missing'});
+  const baseNotices = state === 'missing' ? bufferBaseNotices(warn) : null;
+  let result;
+  try { result = runBase({serverLoss: state === 'missing', deferNotices: baseNotices?.wrap}); }
+  catch (error) { baseNotices?.flush(); throw error; }
   if (state === 'unknown') {
     warn('tmux 서버 존재 조회 실패 — 기반 실행만 수행, 감독 복원·세션 저장 건너뜀');
     return result;
@@ -19,27 +23,39 @@ export function runServerRestoreCycle({listSessions, runBase, warn = console.err
   if (state === 'present') {
     try {
       writeServerSessions(options.home, String(observation.stdout ?? '').split('\n'), options.now);
-    } catch { warn('서버 세션 목록 저장 실패 — 기존 기반 실행 결과 유지'); }
+    } catch {
+      const previous = readServerSessions(options.home, options.now).snapshot;
+      reportRestoreError({restoreReason: '서버 세션 목록 저장 실패'}, options, ops, warn, {
+        observedAt: previous?.observedAt ?? null, observedSessions: previous?.sessions ?? [],
+        supervisorSessions: null,
+      });
+    }
     return result;
   }
-  try { finishServerRestore(prepareServerRestore(options), ops); }
-  catch (error) {
-    // 오류 원문에는 명령·비밀값이 섞일 수 있다. 알려진 사유와 시스템 코드만 통지한다.
-    const reason = error?.restoreReason ?? (error?.code ? `복원 처리 실패 (${error.code})` : '복원 처리 실패');
-    const key = 'server-restore-error-' + createHash('sha256').update(reason).digest('hex');
-    try {
-      ops.record({kind: 'revive', reason: 'server-restore-error', by: 'autostart',
-        t: new Date(options.now ?? Date.now()).toISOString(), result: 'skipped', detail: reason});
-    } catch { warn('서버 복원 실패 사유 원장 기록 실패'); }
-    let notify = true;
-    try { notify = claimErrorNotice(options.home, key, options.now); }
-    catch { warn('서버 복원 오류 알림 중복 방지 저장 실패'); }
-    if (notify) {
-      try { ops.notify(`감독 자동 복원 건너뜀: ${reason}. 수동 확인 필요`, {ring: true, key}); }
-      catch { warn('서버 복원 실패 알림 전달 실패'); }
-    }
-  }
+  const loss = {};
+  try { finishServerRestore(prepareServerRestore({...options, loss}), ops, baseNotices); }
+  catch (error) { reportRestoreError(error, options, ops, warn, loss); }
+  finally { baseNotices?.flush(); }
   return result;
+}
+
+function reportRestoreError(error, options, ops, warn, loss) {
+  // 오류 원문에는 명령·비밀값이 섞일 수 있다. 알려진 사유와 시스템 코드만 통지한다.
+  const reason = error?.restoreReason ?? (error?.code ? `복원 처리 실패 (${error.code})` : '복원 처리 실패');
+  const key = 'server-restore-error-' + createHash('sha256').update(reason).digest('hex');
+  try {
+    ops.record({kind: 'revive', reason: 'server-restore-error', by: 'autostart',
+      t: new Date(options.now ?? Date.now()).toISOString(), result: 'skipped', detail: reason, ...loss});
+  } catch { warn('서버 복원 실패 사유 원장 기록 실패'); }
+  let notify = true;
+  try { notify = claimErrorNotice(options.home, key, options.now); }
+  catch { warn('서버 복원 오류 알림 중복 방지 저장 실패'); }
+  if (notify) {
+    try {
+      ops.notify(`감독 자동 복원 건너뜀: ${reason}. 수동 확인 필요\n${describeLostSessions(loss)}`, {ring: true, key});
+    }
+    catch { warn('서버 복원 실패 알림 전달 실패'); }
+  }
 }
 
 // 기존 notifyUser의 키 중복 제거는 디코 전송에만 적용된다. OS 알림도 한 시간 한 번으로 제한한다.

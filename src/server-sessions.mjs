@@ -31,3 +31,13 @@ export function readServerSessions(home, now) {
     : now - observed > SNAPSHOT_MAX_AGE_MS ? '세션 관찰 기록이 10분보다 오래됨' : null;
   return {snapshot, key: snapshot.observedAt, reason};
 }
+
+export function describeLostSessions(loss) {
+  if (Array.isArray(loss.supervisorSessions)) {
+    return `직전 감독 세션: ${loss.supervisorSessions.join(', ') || '없음'}`;
+  }
+  if (loss.observedSessions?.length) {
+    return `직전 관찰 세션(역할 종류 확인 불가): ${loss.observedSessions.join(', ')}`;
+  }
+  return '직전 감독 세션: 확인 불가(관찰 기록 없음 또는 손상)';
+}

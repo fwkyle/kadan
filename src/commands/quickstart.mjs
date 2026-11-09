@@ -67,7 +67,7 @@ export function cmdUp(_argv, flags) {
     if (!auto) return runUpOnce({home, flags, auto});
     runServerRestoreCycle({home,
       listSessions: () => tmux(['list-sessions', '-F', '#{session_name}'], undefined, {timeout: 5000}),
-      runBase: ({serverLoss}) => runUpOnce({home, flags, auto, serverLoss}),
+      runBase: ({deferNotices}) => runUpOnce({home, flags, auto, deferNotices}),
       read: () => readSystemLedger(home),
       hierarchy: readActiveHierarchy, bootTime: systemBootTime,
       projectsDir: path.join(os.homedir(), '.claude', 'projects')}, {
@@ -105,22 +105,22 @@ function reviveOps(home) {
     notify: (message, { ring = false, key } = {}) => {
       const result = notifyUser(message, spawnSync, { kind: "revive", ring, ...(ring ? {} : { systemFallback: false }), ...(key ? { key, dedupWindowMs: 60 * 60 * 1000 } : {}) });
       if (result.error) console.error(`알림 실패: ${result.error}`);
-      return { via: result.via, reason: result.discord?.reason ?? (result.via === "none" ? "디코 알림 설정 없음 또는 실패" : "") };
+      return { via: result.via, error: result.error,
+        reason: result.discord?.reason ?? (result.via === "none" ? "디코 알림 설정 없음 또는 실패" : "") };
     },
     record: (entry) => { // 다리가 오류로 멈춘 적이 있으면 그 마지막 이유(시각·오류 코드)를 사건에 같이 남긴다.
       const exit = entry.target === BRIDGE_ROLE ? readBridgeExit(home) : null;
-      try { appendLedger({ ...entry, ...(exit ? { lastExit: { at: exit.at, kind: exit.kind, status: exit.status, code: exit.code } } : {}), t: new Date().toISOString() }, home); } catch (error) { console.error(`원장 기록 실패: ${error.message}`); } },
+      try { appendLedger({ ...entry, ...(exit ? { lastExit: { at: exit.at, kind: exit.kind, status: exit.status, code: exit.code } } : {}), t: entry.t ?? new Date().toISOString() }, home); } catch (error) { console.error(`원장 기록 실패: ${error.message}`); } },
   };
 }
 
 // 결과 문자열을 되살리기 결과로 옮긴다. blocked/locked 접두어는 막힘, 그 밖에 시작하지 않은 것은 실패로 본다.
 const reviveResult = (value) => value === "started" || value === "restored" ? "started" : value === "reused" ? "reused" : /^(blocked|locked)/.test(value ?? "") || value === "blocked" ? "blocked" : "failed";
 
-function runUpOnce({ home, flags, auto, serverLoss = false }) {
+function runUpOnce({ home, flags, auto, deferNotices }) {
   const tmuxFloor = floor.name === "tmux";
-  const ops = tmuxFloor ? reviveOps(home) : null;
-  // 전체 손실 알림 한 통에 모은다. 기반 프로세스별 revive 기록·화면 출력은 그대로 보존한다.
-  if (serverLoss) ops.notify = () => ({via: 'server-loss-summary'});
+  const baseOps = tmuxFloor ? reviveOps(home) : null;
+  const ops = deferNotices ? deferNotices(baseOps) : baseOps;
   if (tmuxFloor && !auto) clearForUp(home);
   const prepared = tmuxFloor ? prepareRevive({ home, auto, ops }) : { skip: new Set(), pending: new Map(), lines: [] };
   const lines = [...prepared.lines];
@@ -167,7 +167,10 @@ function runUpOnce({ home, flags, auto, serverLoss = false }) {
       if (!auto) { console.error(`비서 대화 복원 정보 저장 확인 필요: ${error.message}`); process.exitCode = 1; }
     }
   }
-  if (auto) for (const line of changedOutput(home, lines)) console.log(`[${new Date().toISOString()}] ${line}`);
+  // 손상 상태는 prepareRevive가 이미 한 번 알렸다. 출력 중복 기록으로 손상 파일에 쓰지 않는다.
+  if (auto) for (const line of prepared.corrupt ? lines : changedOutput(home, lines)) {
+    console.log(`[${new Date().toISOString()}] ${line}`);
+  }
 }
 
 // 감시기·다리 세션은 프로세스가 죽어도 마지막 화면이 남게 한다(2026-10-16). `up`이 그 화면을 저장하고 치운 뒤 다시 띄운다.

@@ -10,6 +10,7 @@ import {restoreCommand, parseRestoreCommand} from '../src/server-restore-command
 import {runServerRestoreCycle} from '../src/server-restore-cycle.mjs';
 import {writeServerSessions} from '../src/server-sessions.mjs';
 import {commandWords} from '../src/ai-identity.mjs';
+import {finishRevive} from '../src/revive.mjs';
 
 const NOW = Date.parse('2026-11-09T00:00:00Z');
 const ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -294,4 +295,112 @@ test('missing + 상한 상태 손상·사유 원장 쓰기 실패에도 기반 �
   assert.equal(f.calls.notices.length, 1);
   assert.match(f.calls.notices[0], /서버 복원 상한 상태 손상/);
   assert.deepEqual(warnings, ['서버 복원 실패 사유 원장 기록 실패']);
+});
+
+// 실제 finishRevive를 통과하여 보관된 조용한 알림과 기반 사건의 대응도 검증한다.
+function baseRevival(f, {ring = false} = {}) {
+  const notices = [], records = [];
+  const runBase = ({deferNotices}) => {
+    const original = {
+      notify: (message, options) => { notices.push({message, ...options}); return {via: 'discord'}; },
+      record: entry => records.push(entry),
+    };
+    const ops = deferNotices ? deferNotices(original) : original;
+    if (ring) {
+      ops.notify('감시기가 1시간 상한에 걸렸습니다', {ring: true});
+      assert.equal(notices.length, 1, '울림은 복원 판단 전에 즉시 전달');
+    }
+    finishRevive({home: f.home, now: NOW, ops,
+      pending: new Map(['비서', '대시보드'].map(target => [target, {count: 1, reason: '세션 없음'}])),
+      results: {비서: 'started', 대시보드: 'started'}});
+    return 'base-ok';
+  };
+  return {runBase, notices, records};
+}
+
+test('후보 0·off·같은 관찰: 요약 없이 기존 기반 알림·실제 영수증을 보존', () => {
+  for (const kind of ['empty', 'off', 'same']) {
+    const f = fixture();
+    if (kind === 'empty') { f.entries.splice(0, 2, f.start('test-worker', 'worker')); f.snapshot(); }
+    if (kind === 'off') fs.writeFileSync(path.join(f.home, 'server-restore.off'), '');
+    if (kind === 'same') prepareServerRestore(f.options);
+    const base = baseRevival(f);
+    assert.equal(runServerRestoreCycle({...f.options, runBase: base.runBase}, f.ops), 'base-ok');
+    assert.equal(base.notices.length, 2, kind);
+    assert.ok(base.notices.every(n => n.ring === false));
+    assert.deepEqual(base.records.map(e => [e.target, e.notice, e.noticeSummary]),
+      [['비서', 'discord', undefined], ['대시보드', 'discord', undefined]]);
+    assert.equal(f.calls.notices.length, 0);
+  }
+});
+
+test('계획 있음: 기반 울림은 따로, 조용한 기반 결과는 요약과 실제 알림 결과에 연결', () => {
+  for (const receipt of [{via: 'system'}, {via: 'none', reason: '알림 불가'}]) {
+    const f = fixture(), base = baseRevival(f, {ring: true});
+    f.ops.notify = message => { f.calls.notices.push(message); return receipt; };
+    runServerRestoreCycle({...f.options, runBase: base.runBase}, f.ops);
+    assert.equal(base.notices.length, 1, '울림 외 기반 알림은 결과 요약에 포함');
+    assert.equal(f.calls.notices.length, 2);
+    assert.match(f.calls.notices[1], /기반: 비서가 꺼져 있어 다시 띄웠습니다/);
+    assert.match(f.calls.notices[1], /대시보드가 꺼져 있어 다시 띄웠습니다/);
+    assert.equal(f.calls.notices[1].split('\n').filter(line => line.startsWith('기반:')).length, 1);
+    assert.equal(f.calls.records[0].baseResults.length, 2);
+    assert.ok(base.records.every(e => e.notice === receipt.via && e.noticeSummary === OTHER));
+    assert.equal(base.records[0].noticeReason, receipt.reason);
+  }
+});
+
+test('요약 전송 예외가 나면 보관한 기반 알림을 그대로 보내고 가짜 요약 영수증을 남기지 않음', () => {
+  const f = fixture(), base = baseRevival(f);
+  f.ops.notify = message => {
+    if (message.startsWith('tmux 서버 전체')) throw new Error('notify failed');
+    f.calls.notices.push(message);
+  };
+  runServerRestoreCycle({...f.options, runBase: base.runBase}, f.ops);
+  assert.equal(base.notices.length, 2);
+  assert.ok(base.records.every(e => e.notice === 'discord' && e.noticeSummary === undefined));
+});
+
+test('처리 오류·낡은 관찰·재부팅에도 직전 감독 세션 이름을 알림과 사건에 보존', () => {
+  for (const kind of ['error', 'stale', 'reboot']) {
+    const f = fixture();
+    f.entries.push(f.start('test-worker', 'worker')); f.snapshot();
+    if (kind === 'error') fs.writeFileSync(path.join(f.home, 'server-restore-state.json'), 'bad');
+    if (kind === 'stale') f.snapshot(NOW - 600_001);
+    if (kind === 'reboot') f.options.bootTime = () => NOW - 500;
+    runServerRestoreCycle({...f.options, runBase: () => {}}, f.ops);
+    assert.equal(f.calls.starts.length, 0);
+    const event = f.calls.records[0];
+    assert.deepEqual(event.supervisorSessions, ['kadan-test-super', 'kadan-test-lead']);
+    assert.match(f.calls.notices[0], /직전 감독 세션: kadan-test-super, kadan-test-lead/);
+    assert.ok(!event.supervisorSessions.includes('kadan-test-worker'));
+    f.snapshot(NOW, ['kadan-비서']);
+    assert.deepEqual(event.supervisorSessions, ['kadan-test-super', 'kadan-test-lead']);
+  }
+});
+
+test('원장 오류로 종류를 모르면 스냅숏의 세션 이름만 보존하고 감독이라고 추측하지 않음', () => {
+  const f = fixture();
+  runServerRestoreCycle({...f.options, runBase: () => {},
+    read: () => { throw new Error('locked'); }}, f.ops);
+  assert.equal(f.calls.records[0].supervisorSessions, null);
+  assert.deepEqual(f.calls.records[0].observedSessions, ['kadan-test-super', 'kadan-test-lead']);
+  assert.match(f.calls.notices[0], /역할 종류 확인 불가.*kadan-test-super, kadan-test-lead/);
+  assert.doesNotMatch(f.calls.notices[0], /--resume|옛 첫 지시/);
+});
+
+test('present 스냅숏 쓰기 실패: 기반 실행 유지, 오류 사건과 한 시간 한 번 알림', () => {
+  const f = fixture(); let base = 0;
+  const file = path.join(f.home, 'server-sessions.json');
+  fs.renameSync(file, `${file}.saved`);
+  fs.mkdirSync(file); // rename 대상이 디렉터리라 쓰기 실패. 권한·실제 디스크 장애 없이 재현.
+  for (const now of [NOW, NOW + 60_000]) {
+    assert.equal(runServerRestoreCycle({...f.options, now,
+      listSessions: () => ({status: 0, stdout: 'kadan-test-lead\n'}),
+      runBase: () => { base++; return 'base-ok'; }}, f.ops), 'base-ok');
+  }
+  assert.equal(base, 2); assert.equal(f.calls.notices.length, 1);
+  assert.match(f.calls.notices[0], /서버 세션 목록 저장 실패/);
+  assert.equal(f.calls.records.length, 2);
+  assert.ok(f.calls.records.every(e => e.reason === 'server-restore-error'));
 });
