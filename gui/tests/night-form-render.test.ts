@@ -49,3 +49,11 @@ test("양식: 나이트런 켜짐이면 지우지 않고 막아 둔 채 이유�
   assert.match(html, /나이트런 켜짐 동안 바꿀 수 없음/);
   assert.match(html, /disabled=""/);
 });
+
+test("양식: 저장 성공 기록이 있으면 다시 그려도 '저장했습니다 · HH:MM'이 보인다", () => {
+  const { rememberSaved, forgetSaved } = req("./src/night-form.ts");
+  rememberSaved("o/a", new Date(2026, 10, 4, 14, 7));
+  assert.match(render({}, false), /저장했습니다 · 14:07/);
+  forgetSaved("o/a");
+  assert.doesNotMatch(render({}, false), /저장했습니다/);
+});

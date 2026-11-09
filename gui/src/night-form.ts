@@ -39,6 +39,24 @@ export const canSave = (change: NightChange) =>
   (change.deployBranch !== undefined || change.nightMerge !== undefined) && problemOf(change) === null;
 
 // 저장 전 확인 줄. 카단 설정이 비어 있던 칸을 채우면 연결 문서 값보다 우선하게 된다는 점을 함께 말한다.
+// 조사 '으로/로': 끝 글자가 받침 있는 한글이면 '으로', 받침 없음·ㄹ받침·한글이 아니면 '로'.
+export function euro(word: string): string {
+  const code = (word.trim().slice(-1).codePointAt(0) ?? 0) - 0xac00;
+  if (code < 0 || code > 11171) return "로";
+  const final = code % 28;
+  return final === 0 || final === 8 ? "로" : "으로";
+}
+
+// 저장 성공 기록: 저장 뒤 화면 자료를 다시 읽으면 양식이 새로 그려지므로, 줄(github)별 마지막 저장 시각을 양식 바깥에 둔다.
+const savedAt = new Map<string, string>();
+export const rememberSaved = (github: string, at: Date = new Date()) =>
+  void savedAt.set(github, `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`);
+export const forgetSaved = (github: string) => void savedAt.delete(github);
+export const savedNote = (github: string): string | null => {
+  const at = savedAt.get(github);
+  return at ? `저장했습니다 · ${at}` : null;
+};
+
 export function confirmText(line: NightLine, change: NightChange): string {
   const s = saved(line), parts: string[] = [], notes: string[] = [];
   const show = (v: string | null) => v ?? "카단 설정 없음";
@@ -52,7 +70,7 @@ export function confirmText(line: NightLine, change: NightChange): string {
     const card = line.effective.nightMerge;
     if (s.merge === null && card.from === "ontology") notes.push(`나이트런 중 자동 머지는 카단 설정으로 덮어씀 → 연결 문서 값(${card.value})보다 우선`);
   }
-  return `${line.github}: ${parts.join(", ")}로 바꿉니다${notes.length ? ` (${notes.join("; ")})` : ""}`;
+  return `${line.github}: ${parts.join(", ")}${euro(parts[parts.length - 1])} 바꿉니다${notes.length ? ` (${notes.join("; ")})` : ""}`;
 }
 
 // 칸 옆 안내: 카단 설정이 비어 있고 연결 문서 값이 있을 때만.

@@ -656,7 +656,8 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .dw-side li a { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 6px 8px; border-radius: 5px; text-decoration: none; color: inherit; }
 .dw-side li a:hover { background: var(--ds-color-action-soft); }
 .dw-side li a[aria-current] { background: var(--ds-color-action-soft); color: var(--ds-color-action); font-weight: 600; }
-.dw-side-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; word-break: keep-all; }
+.dw-side-name { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dw-side-badge, .dw-side li a > .st-night-badge { flex: 0 0 auto; }
 .dw-side-badge { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dw-side-super { flex-basis: 100%; font-weight: 400; color: var(--ds-color-muted); overflow-wrap: anywhere; word-break: keep-all; }
 .dw-side-note { font-size: 12px; color: var(--ds-color-muted); }
