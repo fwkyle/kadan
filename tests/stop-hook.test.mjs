@@ -82,6 +82,25 @@ test('spool 조회: 같은 역할·발령 뒤·같은 카드만 증거로 친다
 
 const CLAUDE = 'claude --model claude-fable-5-1 --effort high';
 
+// DEF-TEST-002(2026-10-19 감사): 기본 매개변수 home = ledgerHome()이 본문보다 먼저 평가돼, codex 명령처럼 바로 돌아갈 경로에서도
+// 시험 홈 가드가 던졌다. 원장 위치가 없는 시험 환경을 만들어 home이 실제로 필요할 때만 읽는지 본다.
+test('stop-hook 홈: codex 명령·home을 준 설정 쓰기는 원장 위치를 읽지 않는다', t => {
+  const saved = {home: process.env.KADAN_HOME, lite: process.env.KADAN_LITE_HOME};
+  t.after(() => {
+    process.env.KADAN_HOME = saved.home;
+    if (saved.lite === undefined) delete process.env.KADAN_LITE_HOME; else process.env.KADAN_LITE_HOME = saved.lite;
+  });
+  delete process.env.KADAN_HOME; delete process.env.KADAN_LITE_HOME;
+  assert.equal(withStopHook('codex --model m'), 'codex --model m');
+  assert.equal(withStopHook('cat'), 'cat');
+  // 가드가 실제로 켜져 있는지: claude 명령에서 home을 안 주면 그때만 원장 위치를 읽고 가드가 던진다.
+  assert.throws(() => withStopHook(CLAUDE), /시험 중 원장 위치 없음/);
+  const home = tmp();
+  assert.equal(writeClaudeSettings(home).path, claudeSettingsPath(home));
+  assert.equal(withStopHook(CLAUDE, home),
+    `claude --settings '${claudeSettingsPath(home)}' --model claude-fable-5-1 --effort high`);
+});
+
 test('claude 주입: 설정 파일이 있을 때만, 실행 파일 바로 뒤에 한 번만 끼운다', () => {
   const home = tmp();
   assert.equal(withStopHook(CLAUDE, home), CLAUDE); // 파일 없음 = 지금과 똑같다
