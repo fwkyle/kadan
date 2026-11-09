@@ -44,14 +44,15 @@ export function ensureTmuxConf(home = ledgerHome()) {
 
 // tmux 서버를 처음 만든 클라이언트의 환경이 서버 전역 환경으로 복사된다. 창 선택 값이 그 뒤 모든 세션에 새지 않게
 // 클라이언트로 넘기는 환경에서 뺀다(2026-11-02). 이 프로세스 자신의 판단(effectiveWindow)은 process.env를 그대로 쓴다.
-export const TMUX_CLIENT_ENV_STRIP = ["KADAN_WINDOW", "KADAN_ROTTIE_BIN", "KADAN_WINDOW_FORCE", "KADAN_PANE_SOCKET"];
+export const TMUX_CLIENT_ENV_STRIP = ["KADAN_WINDOW", "KADAN_ROTTIE_BIN", "KADAN_WINDOW_FORCE",
+  "KADAN_PANE_SOCKET", "KADAN_SERVER_RESTORE_ID", "KADAN_SERVER_RESTORE_OF"];
 export function tmuxClientEnv(env = process.env) {
   const clean = { ...env };
   for (const name of TMUX_CLIENT_ENV_STRIP) delete clean[name];
   return clean;
 }
 
-export function tmux(args, input = undefined) {
+export function tmux(args, input = undefined, options = {}) {
   assertNotLiveFloor();
   const conf = tmuxConfPath();
   const prefixArgs = fs.existsSync(conf) ? ["-f", conf] : [];
@@ -60,6 +61,7 @@ export function tmux(args, input = undefined) {
     input,
     encoding: "utf8",
     env: tmuxClientEnv(),
+    ...(options.timeout ? {timeout: options.timeout} : {}),
   });
 }
 

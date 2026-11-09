@@ -9,6 +9,8 @@ import {prepareTransfer, acceptTransfer, transferStatus} from '../adopt-transfer
 import {notifyAdoption} from '../adopt-notice.mjs';
 import {startAdoptMonitor} from '../adopt-monitor.mjs';
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { defaultProfilePath } from "../watch-profile.mjs";
 import { readWatchProcesses } from "../watch-overview.mjs";
@@ -18,7 +20,10 @@ import { floor } from "../floor.mjs";
 import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
 import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
-import { appendLedger, ledgerHome } from "../ledger.mjs";
+import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
+import { readActiveHierarchy } from "../hierarchy-register.mjs";
+import { prepareServerRestore, finishServerRestore, settleServerRestore } from "../server-restore.mjs";
+import { launchServerRole, sendRestoreNotice, systemUptime } from "../server-restore-runtime.mjs";
 import { tmux, paneState, captureTail, wrapNoTmux, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -43,6 +48,7 @@ export function cmdInit(_argv, flags) {
 export function cmdUp(_argv, flags) {
   if (flags.help) {
     console.log("사용법: kadan up [--cmd <실행기 명령>] [--port 8790] [--hidden] [--no-prompt] [--auto]  (비서 세션 + 대시보드 세션, 기본 감시 프로필이 있으면 감시기, 디코 비밀값이 있으면 다리)");
+    console.log("  --auto는 서버 전체 손실 때만 직전 감독의 같은 대화를 복원한다. 재부팅 10분·60분 상한 적용, server-restore.off로 끈다");
     console.log("  --auto: launchd가 1분마다 부르는 자동 실행. 사람이 kadan stop으로 끈 대상·1시간 3번 상한에 걸린 대상은 건너뛰고, 바뀐 것이 있을 때만 출력한다. --auto 없이 친 up은 그 멈춤을 모두 푼다");
     return;
   }
@@ -56,7 +62,25 @@ export function cmdUp(_argv, flags) {
     if (auto) return;
     die("다른 kadan up이 돌고 있습니다(자동 실행일 수 있음). 잠시 뒤 다시 치세요", 1);
   }
-  try { runUpOnce({ home, flags, auto }); } finally { release(); }
+  try {
+    // 서버 없음 신호는 기반 세션을 하나라도 만들기 전에, revive 잠금 안에서 딱 한 번 읽는다.
+    const restore = auto ? prepareServerRestore({home,
+      listSessions: () => tmux(['list-sessions'], undefined, {timeout: 5000}),
+      read: () => readSystemLedger(home),
+      hierarchy: readActiveHierarchy, uptime: systemUptime,
+      projectsDir: path.join(os.homedir(), '.claude', 'projects')}) : null;
+    let baseError = false;
+    try { runUpOnce({ home, flags, auto, serverLoss: Boolean(restore) }); }
+    catch (error) { baseError = true; throw error; }
+    finally {
+      finishServerRestore(restore, {
+        baseError, startRole: (item, id) => launchServerRole({home, item, id}),
+        send: (role, message) => sendRestoreNotice({home, role, message}),
+        record: entry => appendLedger(entry, home), notify: reviveOps(home).notify,
+      });
+      if (restore) settleServerRestore(home, () => tmux(['list-sessions'], undefined, {timeout: 5000}));
+    }
+  } finally { release(); }
 }
 
 // 되살리기 보조: 어떤 세션이 어떤 상태인지 묻고, 죽은 창을 치우고, 원장·알림을 남긴다.
@@ -97,9 +121,11 @@ function reviveOps(home) {
 // 결과 문자열을 되살리기 결과로 옮긴다. blocked/locked 접두어는 막힘, 그 밖에 시작하지 않은 것은 실패로 본다.
 const reviveResult = (value) => value === "started" || value === "restored" ? "started" : value === "reused" ? "reused" : /^(blocked|locked)/.test(value ?? "") || value === "blocked" ? "blocked" : "failed";
 
-function runUpOnce({ home, flags, auto }) {
+function runUpOnce({ home, flags, auto, serverLoss = false }) {
   const tmuxFloor = floor.name === "tmux";
   const ops = tmuxFloor ? reviveOps(home) : null;
+  // 전체 손실 알림 한 통에 모은다. 기반 프로세스별 revive 기록·화면 출력은 그대로 보존한다.
+  if (serverLoss) ops.notify = () => ({via: 'server-loss-summary'});
   if (tmuxFloor && !auto) clearForUp(home);
   const prepared = tmuxFloor ? prepareRevive({ home, auto, ops }) : { skip: new Set(), pending: new Map(), lines: [] };
   const lines = [...prepared.lines];
