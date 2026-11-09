@@ -55,31 +55,34 @@ test('1. 조건을 하나씩 거짓으로 바꾸면 수신자가 사용자로 �
 });
 
 // ---- 2~5. 감시 한 주기 통합 ----
-async function cycles({nightEntries, rosterLive = true, dutyRole = 'b-슈퍼감독', userNotify = true} = {}) {
+async function cycles({nightEntries, rosterLive = true, dutyRole = 'b-슈퍼감독', userNotify = true, workers = ['a-작업자'], reader = null, failDuty = false, dutyInTable = true} = {}) {
   const controller = new AbortController(), sent = [], records = [], notifications = [], snapshots = [];
   let cycle = 0;
   const t = '2026-11-09T13:00:00Z';
   // 정체를 내는 대상은 부모가 사용자인 작업자다(수신자 계산이 @user가 되는 가장 작은 모양). 덮어쓰기는 수신자만 보므로 같은 경로다.
-  const worker = 'a-작업자';
+  const worker = workers[0];
   const entries = [
-    {kind: 'start', role: worker, session: `kadan-${worker}`, panePid: 1, t},
+    ...workers.map((w, i) => ({kind: 'start', role: w, session: `kadan-${w}`, panePid: 10 + i, t})),
     ...(rosterLive ? [{kind: 'start', role: dutyRole, session: `kadan-${dutyRole}`, panePid: 2, t, roleProfile: 'super'}] : []),
-    {kind: 'send', role: worker, taskId: 'c1', t},
+    ...workers.map((w, i) => ({kind: 'send', role: w, taskId: `c${i}`, t})),
     ...nightEntries,
   ];
-  const cards = [{id: 'c1', key: 'r/c1', role: worker, status: 'assigned', workType: 'execution', activity: 'running', activityRole: worker, activityAt: t}];
-  const sessions = [{session: `kadan-${worker}`, pid: 1}, ...(rosterLive ? [{session: `kadan-${dutyRole}`, pid: 2}] : [])];
+  const cards = workers.map((w, i) => ({id: `c${i}`, key: `r/c${i}`, role: w, status: 'assigned', workType: 'execution', activity: 'running', activityRole: w, activityAt: t}));
+  const sessions = [...workers.map((w, i) => ({session: `kadan-${w}`, pid: 10 + i})), ...(rosterLive ? [{session: `kadan-${dutyRole}`, pid: 2}] : [])];
   await runWatch({
-    floor: {list: () => sessions, read: s => (s === `kadan-${worker}` ? 'same screen' : 'healthy')},
+    floor: {list: () => sessions, read: s => (workers.some(w => s === `kadan-${w}`) ? 'same screen' : 'healthy')},
     readEntries: () => entries, readCards: () => cards, readWorks: () => [], readDecisions: () => [], record: e => records.push(e),
-    sendAlert: (role, message) => sent.push({role, message}),
-    parents: new Map([[worker, U], [dutyRole, U]]), routes: new Map(), superRole: null,
+    sendAlert: (role, message) => {
+      sent.push({role, message});
+      if (failDuty && role === dutyRole) throw Object.assign(new Error('가짜 전달 실패'), {delivery: 'not-sent'});
+    },
+    parents: new Map([...workers.map(w => [w, U]), ...(dutyInTable ? [[dutyRole, U]] : [])]), routes: new Map(), superRole: null,
     intervalMs: 60_000, stallN: 2, stallAfterMs: 0, signal: controller.signal, userNotify,
-    readNightDuty: ({entries: es, now}) => {
+    readNightDuty: reader ?? (({entries: es, now}) => {
       const last = [...es].reverse().find(e => e.kind === 'night');
       snapshots.push(now);
       return {on: last?.phase === 'on', level: last?.level ?? '기본', duty: last?.duty ?? null};
-    },
+    }),
     print: () => {}, now: () => T0 + cycle * 60_000,
     sleep: async () => { if (++cycle >= 6) controller.abort(); },
     spawn: (cmd, args) => { if (cmd === 'osascript') notifications.push(args); return {status: 0, stdout: ''}; },
@@ -179,8 +182,8 @@ test('6. 기본 당번: 자동 단계에서 쓰고(default), 기본 단계·--du
   assert.equal(f.night()[0].dutySource, 'default');
   f.run(['off']);
   const basic = f.run(['on', '밤'], {});
-  assert.equal(basic.duty, undefined);
-  assert.equal(f.night().at(-1).duty, undefined);
+  assert.equal(basic.duty, null);
+  assert.equal(f.night().at(-1).duty, null);
   f.run(['off']);
   const none = f.run(['on', '밤'], {level: '자동', duty: '없음'});
   assert.equal(none.duty, null);
@@ -259,4 +262,57 @@ test('8. 당번 우편의 지침: 15분·[나이트 보류]·restart는 본인 �
   const g = fixture();
   g.run(['on', '밤'], {level: '자동'});
   for (const s of g.sent) for (const line of DUTY_LINES) assert.ok(!s.message.includes(line.slice(0, 20)));
+});
+
+// ---- 검수 반영(exec-30008157) ----
+test('P1-F 일반 반복문: 당번이 관계표에 없어도 당번 전달이 확실히 실패하면 사용자가 전달실패를 받는다', async () => {
+  const r = await cycles({nightEntries: [on()], failDuty: true, dutyInTable: false});
+  assert.ok(r.sent.some(x => x.role === 'b-슈퍼감독'), '당번에게 먼저 시도');
+  // 사용자 알림은 sendAlert 콜백이 아니라 사용자 알림 경로(notifyUser)로 나가므로 원장 전달 기록으로 본다.
+  const failure = r.records.filter(x => x.alertKind === '전달실패');
+  assert.ok(failure.length > 0 && failure.every(x => x.recipient === U && x.delivered === true), JSON.stringify(r.records.map(x => [x.alertKind, x.recipient, x.delivered])));
+  assert.ok(r.records.some(x => x.alertKind === '정체' && x.recipient === 'b-슈퍼감독' && x.delivered === false));
+});
+
+test('P2-C 읽기가 던져도 같은 주기에 경보가 여러 건이면 읽기 호출은 1회, 경보는 사용자로', async () => {
+  const calls = [];
+  const r = await cycles({nightEntries: [on()], workers: ['a-작업자', 'c-작업자'], reader: ({now}) => { calls.push(now); throw new Error('읽기 실패'); }});
+  const stalls = r.records.filter(x => x.alertKind === '정체');
+  assert.ok(stalls.length >= 2);
+  assert.ok(stalls.every(x => x.route.basis !== '당번'));
+  assert.equal(calls.length, new Set(calls).size, '주기당 최대 1회');
+});
+
+test('P2-D 결정 저장소 읽기: 엄격한 읽기는 던지고 기존 읽기는 [] 그대로', async () => {
+  const {readDecisionEvents, readDecisionEventsStrict} = await import('../src/night.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-duty-corrupt-'));
+  fs.writeFileSync(path.join(home, 'kadan.sqlite'), 'not a database');
+  fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'}));
+  assert.deepEqual(readDecisionEvents(home), []);
+  assert.throws(() => readDecisionEventsStrict(home));
+});
+
+test('P2-I 기본 당번 쓰기는 사람만: 역할 행위자는 꺼져 있어도 거절, 파일 그대로, 보기는 성공', () => {
+  const f = fixture();
+  f.run(['duty', 'b-슈퍼감독']);
+  const before = fs.readFileSync(dutyPath(f.home), 'utf8');
+  assert.throws(() => f.run(['duty', 'a-슈퍼감독'], {}, 'a-슈퍼감독'), /사람만/);
+  assert.throws(() => f.run(['duty'], {clear: true}, 'a-슈퍼감독'), /사람만/);
+  assert.equal(fs.readFileSync(dutyPath(f.home), 'utf8'), before);
+  assert.match(f.run(['duty'], {}, 'a-슈퍼감독'), /기본 당번: b-슈퍼감독/);
+});
+
+test('6가. 기본 단계 on 사건에도 duty null·dutySource none', () => {
+  const f = fixture();
+  f.run(['on', '밤'], {});
+  const [ev] = f.night();
+  assert.equal(ev.duty, null);
+  assert.equal(ev.dutySource, 'none');
+});
+
+test('8. 요약: 감시 AI 경로의 당번 경보(id 없이 requestId)도 센다', () => {
+  const ai = rid => ({kind: 'alert', by: 'watch', source: 'watch-ai', requestId: rid, alertKind: '정체', role: 'a-슈퍼감독', recipient: 'b-슈퍼감독',
+    route: {recipient: 'b-슈퍼감독', basis: '당번'}, delivered: true, t: new Date(T0 + 60_000).toISOString()});
+  const r = summary([ai('r1'), ai('r1'), ai('r2'), dutyAlert('s1')]);
+  assert.match(r.text, /당번이 받은 경보 3건/);
 });

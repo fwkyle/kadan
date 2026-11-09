@@ -71,7 +71,7 @@
 | 계정 전환 재시작 | 사람 → 고른 Claude 역할 | `kadan claude refresh --yes --role <역할>[,…]`: 직전 idle 확인 + 끄기 바로 앞 재확인(화면 idle·사람 입력 보호, 남는 틈 수 ms) 뒤 `restartRole`(accountRefresh)로 같은 대화 resume. 카드가 있어도 `--force` 없이 켜고 stop·start에 `accountRefresh`·`pendingTasks`를 남긴다(`forced` 아님) → [명령](commands.md) | 우편 세대·카드 책임·감시 발령을 `restart`와 똑같이 이어받는다(하류는 `forced`가 아니라 `restart:true`·`restartOf`를 읽는다) | 첫 실패에서 멈춘다(재확인 건너뜀은 실패 아님). 역할 세션 안에서는 거절 |
 | 한도 화면 깨움 | 사람·역할 → 한도에 멈춘 Claude 역할 | `kadan claude refresh --nudge [--role <역할>[,…]]`: 기존 한도 판정, 직전 화면·생존·PID 재확인 → 화면 끝 한도 메뉴에만 Escape 한 번 → 닫힘·빈 입력창 확인 → 기존 send로 이어가기 우편 → 기본 8초 뒤 화면 확인 → [한도 대응](../skills/kadan-super/references/claude-limit.md) | 깨움 / 건너뜀(이유) / 그대로 한도. 계정 변경·업무 완료의 증명은 아님 | send에 nudge·escaped 표시만 추가, stop/start 없음. 메뉴 불확실·상태 변경은 건너뜀. 사람 입력·복사모드 보호 유지. 자동 감시 실행 없음, tmux 전용 |
 | 재부팅 뒤 역할 복원 | Rottie → 기존 카단 역할 | `recovery inspect`로 원본 탭·시작 세대를 확인하고 `recovery restore`로 같은 역할·대화·tmux 연결을 복원 → [복원](recovery.md) | 새 탭과 다음 복원 정보를 저장한다. 교체·직접 종료한 역할은 제외 | 기존 관계표를 유지하며 감시기·카드·프롬프트는 재전송하지 않는다 |
-| 감시 경보 | 감시기 → 직속 상위(최상위면 사용자 OS 알림. 나이트런 자동 단계로 당번을 켠 동안만, 사용자로 갈 `놀고 있음` 2단·`정체`는 당번 슈퍼감독에게 간다). 관계표 밖 역할은 살아 있는 route → 같은 판 감독 → super → `@user` | 자동 | 해소 우편은 없다. 원장 기록과 감시 출력만 | 경보를 받으면 행동 전에 `GET /api/dashboard/status?super=<슈퍼감독>`으로 지금 상태를 읽는다 |
+| 감시 경보 | 감시기 → 직속 상위(최상위면 사용자 OS 알림. 나이트런 자동 단계로 당번을 켠 동안만, 사용자로 갈 `놀고 있음` 2단·`정체`(감시 AI 정체 보고 포함)는 당번 슈퍼감독에게 간다. 당번 전달이 실패하면 사용자에게 간다). 관계표 밖 역할은 살아 있는 route → 같은 판 감독 → super → `@user` | 자동 | 해소 우편은 없다. 원장 기록과 감시 출력만 | 경보를 받으면 행동 전에 `GET /api/dashboard/status?super=<슈퍼감독>`으로 지금 상태를 읽는다 |
 
 `mail`은 우편 전용이며 `--execution`을 연결해도 발령으로 바뀌지 않는다. `dispatch`는 명시 카드가 필수다.
 기존 `kadan send`는 호환을 유지한다. 기존 `send --execution`은 수신자의 배정 카드이고

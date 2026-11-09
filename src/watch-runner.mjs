@@ -795,8 +795,12 @@ export async function runWatch({
     const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)
       && !changes.notify.some(n => n.id === a.id)).map(a => nextAlerts.find(n => n.id === a.id));
     let alertIdentity = null;
-    let nightDuty;
-    const nightDutyOnce = () => nightDuty ??= (() => { try { return readNightDuty({entries, now:cycleAt}); } catch { return null; } })();
+    let nightDuty, nightDutyRead = false;
+    // 실패(null)도 이 주기 동안 캐시한다: 읽기가 던져도 주기당 한 번만 부른다.
+    const nightDutyOnce = () => {
+      if (!nightDutyRead) { nightDutyRead = true; try { nightDuty = readNightDuty({entries, now:cycleAt}); } catch { nightDuty = null; } }
+      return nightDuty;
+    };
     const workOfAlert = alert => workKeyOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []), works);
     const repoOf = alert => repoOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []));
     for (const alert of [...changes.notify, ...retryAlerts]) {
@@ -823,7 +827,8 @@ export async function runWatch({
         : baseRoute;
       const recipient=route.recipient;
       let target = "stdout";
-      const failureRecipient = failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
+      // 당번은 사용자 대신 받는 자리다: 당번 전달이 확실히 실패하면 상신 대상은 원래 수신자(사용자)다. 관계표에 당번이 없어도 같다.
+      const failureRecipient = route.basis === '당번' ? USER_RECIPIENT : failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
       let delivered = false, held = false;
       if (recipient) {
         if (retry && !recordAlert(record, {...alert,route,held:false}, recipient, false)) {

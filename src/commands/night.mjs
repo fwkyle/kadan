@@ -77,6 +77,8 @@ function dutyCommand(args, flags, {home, by, deps}) {
   const [name, extra] = args, usage = 'kadan night duty [<슈퍼감독> | --clear]';
   if (extra !== undefined) throw new Error(`당번 이름은 하나만 줄 수 있습니다. ${usage}`);
   const now = (deps.now ?? Date.now)();
+  // 쓰기(저장·지우기)는 사람만 한다: 행위자가 역할이면 나이트런이 꺼져 있어도 거절한다. 보기는 누구나.
+  if ((name !== undefined || flags.clear !== undefined) && !isUserActor(by)) throw new Error(`기본 당번 저장·지우기는 사람만 할 수 있습니다(행위자: ${by})`);
   if (flags.clear !== undefined) {
     if (flags.clear !== true || name !== undefined) throw new Error(`--clear는 이름 없이 혼자 씁니다. ${usage}`);
     const r = clearDefaultDuty(home, {by, now});
@@ -229,7 +231,7 @@ export function nightCommand(args, flags, {home, by, deps = {}}) {
   }
   for (const role of to) if (!results.has(role)) results.set(role, attempt(role, false));
   const delivered = to.map(role => results.get(role));
-  const dutyFields = level === '자동' ? {duty, dutySource: duty ? dutySource : 'none', ...(dutyNote ? {dutyNote} : {})} : {};
+  const dutyFields = {duty, dutySource: duty ? dutySource : 'none', ...(dutyNote ? {dutyNote} : {})};
   const event = {
     kind: 'night', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),

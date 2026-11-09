@@ -13,6 +13,8 @@ import {waitingLetters} from './mailbox-queries.mjs';
 import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
 import {explainAlertRoute,failureEscalation} from './watch.mjs';
+import {nightDutySnapshot,readDecisionEventsStrict} from './night.mjs';
+import {applyDutyRoute,DUTY_BASIS} from './night-duty.mjs';
 
 export const WATCH_VERDICTS = ['진행중','입력대기','실행완료','응답장애','정체','죽음','모름','조정'];
 export const WATCH_AI_TIMEOUT_MS = 300_000;
@@ -85,7 +87,7 @@ function currentRequest(request,cards,entries,parents,works=[]) {
 }
 
 export class WatchReports {
-  constructor({home, floor, send, now=Date.now, readEntries, readCards, readWorks, record, readRequest}) {
+  constructor({home, floor, send, now=Date.now, readEntries, readCards, readWorks, record, readRequest, readNightDuty}) {
     Object.assign(this,{home:path.resolve(home),floor,send,now});
     this.readEntries = readEntries ?? (() => readLedger(this.home));
     // 일반 읽기는 호출 기록의 큰 필드(parents·routes)를 뺀다. 읽기를 주입해도 원본 단건 조회는 항상 저장소에서 한다. 저장소에 없으면 받은 기록을 그대로 쓴다.
@@ -93,6 +95,8 @@ export class WatchReports {
     this.readCards = readCards ?? (() => new CardStore(this.home).listWatch());
     this.readWorks = readWorks ?? (() => new WorkStore(this.home).list());
     this.record = record ?? (e => appendLedger(e,this.home));
+    // 나이트런 당번 경로용 상태 읽기. 실제 전달은 `kadan watch-report` 프로세스에서 일어나므로 기본값을 여기에 둔다.
+    this.readNightDuty = readNightDuty ?? (({entries,now}) => nightDutySnapshot(entries,readDecisionEventsStrict(this.home),now));
   }
   fullRequest(request) {
     return request&&!Array.isArray(request.routes)&&this.readRequest?(this.readRequest(request.requestId)??request):request;
@@ -180,14 +184,22 @@ export class WatchReports {
     const {requestId} = request, {verdict} = report;
     const live=new Set(this.floor.list().filter(x=>x.alive!==false).map(x=>x.session));
     const routes=new Map(request.routes);
-    const route=explainAlertRoute({id:request.key,role:request.role},routes,live,request.superRole,parents),recipient=route.recipient;
+    let route=explainAlertRoute({id:request.key,role:request.role},routes,live,request.superRole,parents);
+    // 나이트런 당번 경로: 사용자로 갈 '정체' 보고만 당번으로 돌린다(조정·죽음·응답장애·모름·입력 대기는 그대로). 상태를 못 읽으면 사용자 유지.
+    if (route.recipient==='@user'&&verdict==='정체'&&!report.idleWithoutAsk) {
+      let night=null;
+      try { night=this.readNightDuty({entries:this.entries(),now:this.now()}); } catch { night=null; }
+      route=applyDutyRoute({route,alert:{kind:'정체',role:request.role},night,liveSessions:live});
+    }
+    const recipient=route.recipient;
     let delivery='no-recipient',escalation=null,held=false;
     if (recipient) {
       try { this.send(recipient,message); delivery='sent'; }
       catch(error) {
         delivery=error.delivery??'unknown';
         held=isNotificationHold(error);
-        const upper=failureEscalation(recipient,routes,live,request.superRole,parents);
+        // 당번 전달이 확실히 실패하면 원래 수신자(사용자)에게 올린다.
+        const upper=route.basis===DUTY_BASIS?'@user':failureEscalation(recipient,routes,live,request.superRole,parents);
         if (!held&&delivery==='not-sent'&&upper&&upper!==recipient&&recipient!=='@user') {
           try { this.send(upper,`[${watchAILabel(request.source)}] 보고 전달 실패 · ${recipient}에게 전달하지 못했습니다. ${message}`); escalation={recipient:upper,delivery:'sent'}; }
           catch(e) { escalation={recipient:upper,delivery:e.delivery??'unknown'}; }

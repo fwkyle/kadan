@@ -43,6 +43,9 @@ export function resolveEnd({until, for: span}, now) {
   return new Date(end).toISOString();
 }
 
+// 당번 스냅숏 전용 엄격한 읽기: 읽기 실패를 []로 바꾸지 않고 던진다(상태를 모르면 사용자 경로를 유지하려고). 다른 호출자는 위 함수를 그대로 쓴다.
+export const readDecisionEventsStrict = home => readStream(home, 'decisions/events.jsonl', {optional: true});
+
 export const readDecisionEvents = home => {
   try { return readStream(home, 'decisions/events.jsonl', {optional: true}); } catch { return []; }
 };

@@ -92,7 +92,7 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     .map(body => body.slice(HELD_PREFIX.length).trim().split('\n')[0].slice(0, 100));
   const tally = tallyNotes(entries.filter(e => e?.kind === 'night-note' && inWindow(e)));
   // 당번이 받은 경보: 나이트 구간의 alert 사건 중 수신 근거가 '당번'인 것을 경보 id당 한 번씩 센다(새 사건 종류 없음).
-  const dutyAlerts = new Set(entries.filter(e => e?.kind === 'alert' && e.route?.basis === DUTY_BASIS && e.delivered === true && inWindow(e)).map(e => e.id ?? `${e.alertKind}:${e.role}:${e.t}`)).size;
+  const dutyAlerts = new Set(entries.filter(e => e?.kind === 'alert' && e.route?.basis === DUTY_BASIS && e.delivered === true && inWindow(e)).map(e => e.id ?? e.requestId ?? `${e.alertKind}:${e.role}:${e.t}`)).size;
   const counts = {...decisions, restarts, mails: sends.length, held: held.length, dutyAlerts, ...tally.counts};
 
   // 알림 상한 안에 제목·기간·집계가 모두 들어가야 한다. 넘치면 원문 표시를 먼저 줄이고, 그래도 넘치면 보류 상세를 뺀다(건수는 남는다).
