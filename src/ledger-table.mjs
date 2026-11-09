@@ -13,11 +13,16 @@ export function ledgerView(entries,home,domain='all',state=null){
 }
 const kinds={dispatch:'작업 발령','mail-cancel':'질문 취소',start:'세션 시작',send:'메시지 전달',done:'실행 결과',stop:'세션 종료',plan:'카드 계획',alert:'감시 알림',handover:'담당 인계','mail-read':'우편 확인','hierarchy-loaded':'책임 관계 읽음','hierarchy-prune':'관계표 자동 정리','progress-judgment':'진행 판단','watch-scope':'감시 대상 설정',
  // 2026-09-24 실측: 이름이 없어 원문(watch-cycle 등)으로 보이던 종류.
- 'watch-cycle':'감시 순회','watch-mail-reminder':'우편 재알림','queue-resume':'입력 대기 재개','watch-judgment':'감시 판정','runner-settings':'실행 모델 변경',window:'창 다시 붙임','watch-mail-held':'우편 전달 보류','rate-limit-retry':'한도 재시도',advice:'자문','send-failed':'전송 실패'};
+ 'watch-cycle':'감시 순회','watch-mail-reminder':'우편 재알림','queue-resume':'입력 대기 재개','watch-judgment':'감시 판정','runner-settings':'실행 모델 변경',window:'창 다시 붙임','watch-mail-held':'우편 전달 보류','rate-limit-retry':'한도 재시도',advice:'자문',
+ 'send-failed':'전송 실패'};
 // 감시가 주기적으로 남기는 일상 기록. 기록 화면은 기본으로 숨기고 체크로 다시 본다(알림·AI 호출은 계속 보인다).
 const watchRoutineKinds=new Set(['watch-cycle','watch-scope','hierarchy-loaded','watch-mail-reminder']);
 // 사고: 실패한 실행, 해소 전 감시 알림, 사유에 실패·오류·거절이 있는 기록.
-export const isIncident=entry=>entry?.kind==='done'&&entry.result==='failed'||entry?.kind==='alert'&&entry.resolved!==true||entry?.kind==='send-failed'||entry?.replyFinalRejected===true||/fail|error|reject|실패|오류|거부/i.test(String(entry?.reason??''));
+export const isIncident=entry=>entry?.kind==='done'&&entry.result==='failed'
+ ||entry?.kind==='alert'&&entry.resolved!==true
+ ||entry?.kind==='send-failed'
+ ||entry?.replyFinalRejected===true
+ ||/fail|error|reject|실패|오류|거부/i.test(String(entry?.reason??''));
 // 사건순 기록 거르기: 종류(사고만)·카드·역할·날짜(서울 기준 하루).
 export function filterLedgerRows(rows,{kind='',card='',role='',date=''}={}){
  const id=card.split('/').at(-1);

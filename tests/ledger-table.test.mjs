@@ -76,7 +76,8 @@ test('09-24 감시 일상 기록은 기본으로 숨기고 체크로 다시 보�
 });
 
 test('send-failed 기록은 전송 실패로 보이고 사고만 거르기에 잡히며 정상 send는 잡히지 않는다',()=>{
- const failed={kind:'send-failed',t:'2020-09-08T06:00:01Z',by:'sender',role:'recipient'},ok={kind:'send',t:'2020-09-08T06:00:02Z',by:'sender',role:'recipient'};
+ const failed={kind:'send-failed',t:'2020-09-08T06:00:01Z',by:'sender',role:'recipient'};
+ const ok={kind:'send',t:'2020-09-08T06:00:02Z',by:'sender',role:'recipient'};
  assert.match(renderLedgerTable([failed]),/전송 실패/);
  assert.equal(isIncident(failed),true);assert.equal(isIncident(ok),false);
  assert.deepEqual(filterLedgerRows([failed,ok],{kind:'incident'}),[failed]);
