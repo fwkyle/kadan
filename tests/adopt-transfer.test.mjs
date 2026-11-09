@@ -73,8 +73,27 @@ test('ambiguous close does not remove or retry; an interrupted acknowledgement c
   other.deps.close = () => { other.calls.push('close'); throw new Error('interrupted'); };
   assert.throws(() => acceptTransfer(other.deps), /interrupted/);
   assert.equal(transferStatus(other.home, other.transfer.id).status, 'accepted-unfinished');
-  assert.throws(() => acceptTransfer(other.deps), /EEXIST/);
+  const receipt = path.join(other.home, 'adoptions', other.transfer.id, 'accepted.json');
+  const before = fs.readFileSync(receipt, 'utf8');
+  assert.throws(() => acceptTransfer(other.deps), error => {
+    assert.match(error.message, /이미 인수 기록이 있습니다/);
+    assert.match(error.message, new RegExp(`kadan adopt status ${other.transfer.id}`));
+    assert.doesNotMatch(error.message, /EEXIST/);
+    return true;
+  });
+  assert.equal(fs.readFileSync(receipt, 'utf8'), before, 'existing receipt is never overwritten');
   assert.equal(other.calls.filter(value => value === 'close').length, 1);
+});
+
+test('a non-EEXIST receipt write error (permission) is not rewritten', () => {
+  const {home, transfer, deps} = fixture();
+  const dir = path.join(home, 'adoptions', transfer.id);
+  fs.chmodSync(dir, 0o500);
+  try {
+    if (process.getuid?.() === 0) return; // root ignores directory modes
+    assert.throws(() => acceptTransfer(deps), error => error.code === 'EACCES'
+      && !/이미 인수 기록/.test(error.message));
+  } finally { fs.chmodSync(dir, 0o700); }
 });
 
 test('source tab selection uses ancestor shell PID, not title; secretary resume cannot close secretary tab', () => {
