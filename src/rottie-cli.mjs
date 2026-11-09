@@ -44,7 +44,9 @@ function describeRottieArg(value) {
 export function assertRottieArgv(argv) {
   if (Array.isArray(argv) && ROTTIE_CLI_VERBS.includes(argv[0])) return;
   throw new RottieFloorError(
-    `로티 실행 파일의 첫 인자는 ${ROTTIE_CLI_VERBS.join("|")} 중 하나여야 한다(받은 값: ${describeRottieArg(argv?.[0] ?? null)}) — 앱이 다시 떠 포커스를 뺏을 수 있어 실행하지 않는다`,
+    `로티 실행 파일의 첫 인자는 ${ROTTIE_CLI_VERBS.join("|")} 중 하나여야 한다`
+      + `(받은 값: ${describeRottieArg(argv?.[0] ?? null)})`
+      + " — 앱이 다시 떠 포커스를 뺏을 수 있어 실행하지 않는다",
     { code: "ROTTIE_ARGV_REJECTED", effect: "none", exitCode: 2 }
   );
 }
