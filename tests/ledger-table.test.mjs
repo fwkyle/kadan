@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {renderActivity} from '../src/decision-wall.mjs';
-import {renderLedgerTable} from '../src/ledger-table.mjs';
+import {renderLedgerTable,isIncident,filterLedgerRows} from '../src/ledger-table.mjs';
 import {renderLogEntry} from '../src/cli.mjs';
 
 const decode=s=>s.replaceAll('&quot;','"').replaceAll('&#39;',"'").replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&amp;','&');
@@ -73,4 +73,11 @@ test('09-24 감시 일상 기록은 기본으로 숨기고 체크로 다시 보�
   assert.match(shown, /5건 · 최신순<\/span>/);
   assert.match(shown, /<td title="watch-cycle">감시 순회<\/td>/);
   assert.match(shown, /name="ledgerRoutine" value="1" checked/);
+});
+
+test('send-failed 기록은 전송 실패로 보이고 사고만 거르기에 잡히며 정상 send는 잡히지 않는다',()=>{
+ const failed={kind:'send-failed',t:'2020-09-08T06:00:01Z',by:'sender',role:'recipient'},ok={kind:'send',t:'2020-09-08T06:00:02Z',by:'sender',role:'recipient'};
+ assert.match(renderLedgerTable([failed]),/전송 실패/);
+ assert.equal(isIncident(failed),true);assert.equal(isIncident(ok),false);
+ assert.deepEqual(filterLedgerRows([failed,ok],{kind:'incident'}),[failed]);
 });
