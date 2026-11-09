@@ -52,14 +52,16 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
     assert.equal(first.status, 0, first.stdout + first.stderr);
     assert.deepEqual(sessions(), ['kadan-대시보드', 'kadan-디코', 'kadan-비서']);
     assert.match(first.stdout, /디코 다리: 다시 띄움\(이번 1시간 1번째\)/);
-    assert.equal(noticeCount(), 0, '조용한 알림은 디코로만 간다 — 디코 설정이 없는 격리 환경에서도 맥 알림 0건');
+    assert.equal(noticeCount(), 1, '첫 서버 손실에는 관찰 기록 없음 수동 확인 1통');
+    assert.match(fs.readFileSync(notices, 'utf8'), /세션 관찰 기록 없음/);
+    assert.equal(revives().filter(e => e.reason === 'server-loss').length, 1);
     await waitFor(lockAlive, '다리 잠금');
 
     // 2) 다 살아 있으면 아무것도 안 한다(출력·알림·세션 변화 0)
     const idle = up('--auto');
     assert.equal(idle.status, 0);
     assert.equal(idle.stdout.trim(), '', `살아 있으면 로그가 없다: ${idle.stdout}`);
-    assert.equal(noticeCount(), 0);
+    assert.equal(noticeCount(), 1, '정상 주기는 알림 추가 없음');
 
     // 3) 다리 프로세스가 죽어 창만 남은 경우(remain-on-exit) → 화면 저장 → 정리 → 재생성
     await killBridge();
@@ -69,7 +71,7 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
     assert.ok(fs.readdirSync(path.join(home, 'revive')).some(f => f.startsWith('디코-')));
     assert.ok(sessions().includes('kadan-디코'));
     await waitFor(lockAlive, '다리 잠금(재생성)');
-    assert.equal(noticeCount(), 0);
+    assert.equal(noticeCount(), 1, '개별 기반 되살림은 맥 알림 추가 없음');
 
     // 4) 사람이 kadan stop 디코 → 자동이 건너뛴다. 명시 up은 멈춤을 풀고 다시 띄운다
     const stoppedPid = Number(fs.readFileSync(path.join(home, 'discord-chat.lock', 'pid'), 'utf8'));
@@ -87,8 +89,12 @@ test('격리 tmux: kadan up --auto가 꺼진 기반 프로세스만 되살리고
     await waitFor(lockAlive, '다리 잠금(명시 up)');
 
     // 5) revive 사건은 대상마다 남고(by autostart), 다리·감시기는 start 사건으로 기록되지 않는다
-    const kinds = revives();
-    assert.ok(kinds.every(e => e.notice === 'none'), '디코로 못 보낸 조용한 알림은 사건에 남는다');
+    const kinds = revives().filter(e => e.target);
+    assert.deepEqual(kinds.map(e => e.notice), ['system', 'system', 'system', 'none'],
+      '서버 손실 요약의 실제 알림 결과를 연결하고, 개별 기반 되살림은 기존 조용한 알림 유지');
+    const summary = revives().find(e => e.reason === 'server-loss');
+    assert.ok(kinds.slice(0, 3).every(e => e.noticeSummary === summary.restoreId));
+    assert.equal(summary.baseResults.length, 3);
     assert.deepEqual(kinds.map(e => [e.target, e.result, e.by]), [['비서', 'started', 'autostart'], ['대시보드', 'started', 'autostart'], ['디코', 'started', 'autostart'], ['디코', 'started', 'autostart']]);
     assert.equal(kinds.at(-1).reason, 'pane 죽음');
     assert.match(kinds.at(-1).screenPath, /revive\/디코-/);

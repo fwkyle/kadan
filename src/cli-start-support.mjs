@@ -250,6 +250,7 @@ export function buildStartLedgerEntry({
     role,
     session,
     by: resolveLedgerBy({ env }),
+    ...serverRestoreStartFields(env, {cmd, reused}),
     ...describeStartCmd(cmd),
     ...(cwd ? { cwd } : {}),
     ...(evidence.panePid ? { panePid: evidence.panePid } : {}),
@@ -269,6 +270,15 @@ export function buildStartLedgerEntry({
     ...(typeof reused === "boolean" ? { reused } : {}),
     ...(evidence.outputLog ? { outputLog: evidence.outputLog } : {}),
   };
+}
+
+// 자동 복원 자식 CLI가 받은 연결 정보만 새 start에 남긴다. 다른 start·재사용에는 붙이지 않는다.
+export function serverRestoreStartFields(env, {cmd, reused} = {}) {
+  const id = env.KADAN_SERVER_RESTORE_ID, previous = env.KADAN_SERVER_RESTORE_OF;
+  if (!cmd || reused === true || env.KADAN_ROLE !== 'autostart'
+    || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(id ?? '')
+    || !/^[\da-f]{64}$/i.test(previous ?? '')) return {};
+  return {reason: 'server-restore', serverRestoreId: id, serverRestoreOf: previous};
 }
 
 // 종료 전에 그 역할이 받았지만 done이 없는 카드를 센다. 화면은 stop과 함께 사라지므로
