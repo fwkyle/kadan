@@ -5,8 +5,10 @@
 // restart와 같은 원칙: 거절할 수 있는 확인은 모두 세션을 만들기 *전에* 끝낸다. 명령 재조립도 restart의 것을 쓴다.
 // 새 대화가 아니므로 시작 안내 우편·비교 모드 예약·프로필·모델 변경은 없다(start 경로를 지나지 않는다).
 // start 사건이 같은 대화 resume으로 읽혀 우편·책임 세대가 이어진다(mail-generation.mjs, docs/hierarchy.md).
-// 감시 발령도 이어진다: start의 reopenOf가 바로 앞에 꺼진 세대의 start 지문과 같으면 감시기가 그 세대의 발령을 잇는다
-// (watch-roles.mjs·watch-role-state.mjs). restartOf는 붙이지 않는다 — 로티 탭 계보와 재시작 집계에 섞지 않는다.
+// 감시 발령도 이어진다: start의 reopenOf가 그 세션의 마지막 start 사건의 지문과 같고 지금 세대가 꺼져 있으면 감시기가
+// 그 세대의 발령을 잇는다(watch-roles.mjs·watch-role-state.mjs). 그래서 reopenOf에는 stop 직전의 마지막 start 사건을 적는다
+// (보통 그 세대를 띄운 start이고, 살아 있는 세션을 다시 연 start가 있었으면 그 start다). 세대를 띄운 start의 지문은 stop의
+// conversationStart에 있다. restartOf는 붙이지 않는다 — 로티 탭 계보와 재시작 집계에 섞지 않는다.
 // 비용: 원장 읽기 2번(처음 고를 때·세션을 만들기 직전 다시 확인), 설정 읽기 1번. 한 번 돌고 끝나는 명령이다.
 // 원장이 10배면 이 두 번의 읽기가 각각 10배가 된다. 일반 start·stop은 이 명령의 잠금을 쓰지 않으므로, 잠금이 아니라
 // 다시 읽기로 "확인하는 사이 다른 세대가 떴다 꺼진" 경우를 막는다.
@@ -53,7 +55,8 @@ export function reopenSource(entries, session, role) {
   }
   if (!start) fail(`${session}을 실제로 띄운 시작 기록(실행 명령)을 찾지 못했다`);
   if (stop.conversationStart !== startDigest(start)) fail(`${session}의 stop 기록에 적힌 대화가 마지막 시작 세대의 것이 아니다 — 다른 세대의 번호로 열지 않는다`);
-  return {stop, start, conversation: stop.conversation};
+  // lastStart: stop 직전의 마지막 start 사건(start와 같거나, 같은 pane을 다시 연 start). 감시기가 대조하는 사건이다.
+  return {stop, start, lastStart: events[lastStart], conversation: stop.conversation};
 }
 
 // 우편 안내용: 지금 꺼져 있고 다시 열 번호가 있는 역할이면 true. 원장을 새로 읽지 않는다.
@@ -81,7 +84,7 @@ export function reopenRole({home, role, session, floor, settings, deps, hidden =
     // 다른 역할의 주소를 정규화 충돌로 여는 일을 막는다(start와 같은 검사).
     sessionOwner(entries, session, role);
     if (floor.alive(session)) fail(`이미 살아 있다: ${session} — 살아 있는 역할은 kadan attach로 열고, 프로그램만 다시 띄우려면 kadan restart를 쓴다`);
-    const {stop, start, conversation} = reopenSource(entries, session, role);
+    const {stop, start, lastStart, conversation} = reopenSource(entries, session, role);
     if (start.floor && start.floor !== 'tmux') fail('tmux 역할 시작 기록이 아니다');
 
     const identity = launchIdentityOf(start.cmd);
@@ -136,8 +139,8 @@ export function reopenRole({home, role, session, floor, settings, deps, hidden =
         ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
         ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
         ...windowFields,
-        // 무엇으로 열었는지: reopen, 어느 세대(start 지문)·어느 stop(시각)의 번호인지.
-        reopenOf: startDigest(start), reopenStopAt: stop.t ?? null, reopenConversation: conversation,
+        // 무엇으로 열었는지: reopen, 어느 세대(그 세대의 마지막 start 사건 지문)·어느 stop(시각)의 번호인지.
+        reopenOf: startDigest(lastStart), reopenStopAt: stop.t ?? null, reopenConversation: conversation,
       });
     } catch (error) {
       // 시작 기록이 없는 세션은 다음 start에서 재사용으로 읽혀 막히고 감시에도 잡히지 않는다. 그래서 방금 만든 것을 닫는다.

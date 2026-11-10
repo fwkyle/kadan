@@ -7,17 +7,18 @@ import {encodeMailValue, decodeMailValue} from './mail-view-store.mjs';
 import {startDigest} from './secretary-resume.mjs';
 
 const verified = new Map();
-// 꺼진 세대의 시작 기록 위치(세션별 마지막 하나). stop이 적고, 그 세션의 다음 새 start가 지운다.
-// kadan reopen의 start가 "바로 앞에 꺼진 그 세대"를 가리키는지 대조하는 데만 쓴다. 행 수는 세션 수를 넘지 않는다.
-// 별도 표로 둔 이유: 이 표를 모르는 옛 프로그램이 같은 상태를 번갈아 써도 서로의 행을 깨뜨리지 않는다(표 모양·meta 판은 그대로).
-const stoppedSchema = `CREATE TABLE IF NOT EXISTS watch_role_stopped (
-  key TEXT PRIMARY KEY, position INTEGER NOT NULL) WITHOUT ROWID;`;
 
-// kadan reopen이 남긴 start가 바로 앞에 꺼진 세대를 가리키는가: start의 reopenOf가 그 세대를 띄운 start의 지문과 같아야 한다.
-// 지문은 reopen이 원장에서 읽은 start로 만든 것(secretary-resume.mjs startDigest)과 같은 계산이다. 전체 훑기(watch-roles.mjs)도 이 함수를 쓴다.
-export function reopenContinues(entry, stoppedStart) {
-  return typeof entry?.reopenOf === 'string' && entry.reopenOf.length > 0 && stoppedStart?.kind === 'start'
-    && stoppedStart.session === entry.session && stoppedStart.role === entry.role && startDigest(stoppedStart) === entry.reopenOf;
+// kadan reopen이 남긴 start가 "바로 앞에 꺼진 그 세대"를 잇는가. 부르는 쪽이 두 가지를 넘긴다:
+//   - lastStart: 그 세션의 문자 그대로 마지막 start 사건(이번 start 바로 앞의 것. 살아 있는 세션을 다시 연 start도 포함)
+//   - 지금 세대가 없다는 사실(stop으로 꺼진 상태)은 부르는 쪽이 먼저 확인한다
+// start의 reopenOf가 그 마지막 start의 지문과 같으면, 그 start와 이번 start 사이에 다른 start가 없었다는 뜻이다
+// (있었다면 마지막 start가 달라진다). 지문은 reopen이 원장에서 읽은 사건으로 만든 것(startDigest)과 같은 계산이다.
+// 따로 적어 두는 상태가 없다: 저장 상태 경로는 sessions 표의 start_position·generation_position만 읽는다. 이 두 칸은
+// reopen을 모르는 옛 프로그램도 같은 규칙으로 갱신하므로(start가 덮고, stop은 세대만 비운다), 옛 프로그램이 사이를 지나가도
+// 낡은 근거가 남지 않는다. 틀리는 방향은 "이어받지 않음"뿐이다. 전체 훑기(watch-roles.mjs)도 이 함수를 쓴다.
+export function reopenContinues(entry, lastStart) {
+  return typeof entry?.reopenOf === 'string' && entry.reopenOf.length > 0 && lastStart?.kind === 'start'
+    && lastStart.session === entry.session && lastStart.role === entry.role && startDigest(lastStart) === entry.reopenOf;
 }
 const schema = `
   CREATE TABLE watch_role_meta (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
@@ -63,17 +64,14 @@ function applyStart(store, meta, entry, position) {
     (generation.floor ?? 'tmux') === (entry.floor ?? 'tmux') &&
     (entry.floor !== 'rottie' || generation.rottieTerminalId === entry.rottieTerminalId);
   const visible = typeof entry.session === 'string' && entry.session.startsWith('kadan-');
-  // 꺼진 뒤의 새 start일 때만 꺼진 세대를 본다(살아 있는 세대를 덮어쓴 start는 reopen이 아니다).
+  // 꺼진 뒤의 새 start일 때만 본다: 지금 세대가 없고(stop이 generation_position을 비웠다) 그 세션의 마지막 start
+  // (start_position, stop이 지우지 않는다)가 reopenOf가 가리키는 사건이어야 한다. 살아 있는 세대를 덮어쓴 start는 reopen이 아니다.
+  // 추가 SQL은 없다(위에서 읽은 행을 쓴다). 그 사건을 못 읽거나 start가 아니면 이어받지 않을 뿐 적용은 계속한다.
   let reopened = false;
-  if (!reused && previous) {
-    const key = store.key(entry.session);
-    if (!generation && entry.reopenOf) {
-      const row = store.prepare('SELECT position FROM watch_role_stopped WHERE key=?').get(key);
-      let stoppedStart = null;
-      try { stoppedStart = row ? store.load(row.position) : null; } catch { /* 못 읽으면 이어받지 않는다 */ }
-      reopened = reopenContinues(entry, stoppedStart);
-    }
-    store.prepare('DELETE FROM watch_role_stopped WHERE key=?').run(key);
+  if (!reused && entry.reopenOf && previous && !previous.generation_position && previous.start_position) {
+    let lastStart = null;
+    try { lastStart = store.load(previous.start_position); } catch { /* 못 읽으면 이어받지 않는다 */ }
+    reopened = reopenContinues(entry, lastStart);
   }
   if (!previous) meta.sessionCount++;
   store.prepare(`INSERT INTO watch_role_sessions VALUES(?,?,?,?,?,1)
@@ -92,13 +90,8 @@ function applyEntry(store, meta, entry, position, taskKey) {
     applyStart(store, meta, entry, position);return true;
   }
   if (entry.kind === 'stop') {
-    // 꺼지는 세대의 시작 위치를 남겨 둔다(다음 start가 reopen이면 대조한다).
-    const key = store.key(entry.session);
-    const live = store.prepare('SELECT generation_position FROM watch_role_sessions WHERE key=?').get(key)?.generation_position;
-    if (live) store.prepare(`INSERT INTO watch_role_stopped VALUES(?,?)
-      ON CONFLICT(key) DO UPDATE SET position=excluded.position`).run(key, live);
     return Boolean(store.prepare('UPDATE watch_role_sessions SET generation_position=NULL WHERE key=?')
-      .run(key).changes);
+      .run(store.key(entry.session)).changes);
   }
   if (entry.kind === 'done' && entry.role) {
     const session = `kadan-${entry.role}`, key = taskKey(entry.taskId, entry.executionKey);
@@ -146,7 +139,6 @@ export function applyWatchRoleState(home, store, info, cards) {
   if (!store) return null;
   if (store.scope !== 'watch') throw new Error('감시 역할 상태는 주소 해석 후 조회가 필요합니다');
   if (!store.prepare("SELECT 1 FROM sqlite_master WHERE name='watch_role_meta'").get()) store.db.exec(schema);
-  if (!store.prepare("SELECT 1 FROM sqlite_master WHERE name='watch_role_stopped'").get()) store.db.exec(stoppedSchema);
   const saved = store.prepare('SELECT value FROM watch_role_meta WHERE id=1').get();
   let meta;
   try {meta = saved ? JSON.parse(saved.value) : null;} catch {meta = null;}
@@ -161,7 +153,7 @@ export function applyWatchRoleState(home, store, info, cards) {
       store.prepare('SELECT count(*) AS n FROM watch_role_dispatches').get().n !== meta.dispatchCount;
   }
   if (rebuilt) {
-    store.db.exec('DELETE FROM watch_role_sessions; DELETE FROM watch_role_dispatches; DELETE FROM watch_role_stopped');
+    store.db.exec('DELETE FROM watch_role_sessions; DELETE FROM watch_role_dispatches');
     meta = {version:1, generation:info.generation, revision:randomUUID(), position:0,
       stateVersion:0, sessionCount:0, dispatchCount:0, nextRank:0, legacyRequired:false};
   }

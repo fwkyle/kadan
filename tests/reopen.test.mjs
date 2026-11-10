@@ -248,9 +248,8 @@ test('거절은 모두 세션을 만들기 전에 끝난다', async t => {
     refused(f, /이미 살아 있다/);
   });
   // 명령 재조립(rebuildResumeCommand)이 거절하는 꼴은 reopen도 거절한다(restart와 같은 한계). 재조립 규칙은 여기서 바꾸지 않는다.
-  await t.test('갈라 연(fork) 지정이 명령 끝이 아닌 시작 명령은 같은 대화를 보장할 수 없어 거절한다', () => {
-    refused(fixture({cmd: `claude --resume ${OTHER} --fork-session --model ${MODEL} --effort low --dangerously-skip-permissions`}),
-      /대화 지정\(resume·fork·continue\)/);
+  await t.test('대화 지정이 둘 이상인 시작 명령은 같은 대화를 보장할 수 없어 거절한다', () => {
+    refused(fixture({cmd: `${CLAUDE} --resume ${OTHER} --resume ${ID}`}), /대화 지정\(resume·fork·continue\)/);
   });
   await t.test('tmux가 아닌 바닥', () => {
     const f = fixture(); f.floor.name = 'herdr';
@@ -305,13 +304,37 @@ test('껐다 열기를 되풀이해도 같은 번호 하나로 이어진다(resu
   assert.equal(f.entries.at(-1).reopenOf, startDigest(reopened));
 });
 
-test('adopt 꼴 시작 명령(끝에 --resume <부모 대화> --fork-session)은 부모 대화가 아니라 stop에 적힌 자기 대화로 연다', () => {
+test('adopt 꼴 시작 명령(--resume <부모 대화> --fork-session)은 끝에 있든 중간에 있든 부모 대화가 아니라 stop에 적힌 자기 대화로 연다', () => {
   const f = fixture({cmd: `${CLAUDE} --resume ${OTHER} --fork-session`});
   f.run();
   const started = f.entries.at(-1);
   assert.equal(started.cmd, `${CLAUDE} --resume ${ID}`, '표의 fork 꼬리와 같은 모양이면 떼고 자기 대화의 resume 꼬리를 붙인다');
   assert.equal(started.conversationRef, ID);
   assert.doesNotMatch(started.cmd, new RegExp(`${OTHER}|--fork-session`));
+  // 명령 중간의 fork 지정도 명령 재조립이 떼어 낸다(재조립 규칙은 restart와 같은 함수다).
+  const middle = fixture({cmd: `claude --resume ${OTHER} --fork-session --model ${MODEL} --effort low --dangerously-skip-permissions`});
+  middle.run();
+  const opened = middle.entries.at(-1);
+  assert.equal(opened.conversationMode, 'resume'); assert.equal(opened.conversationRef, ID);
+  assert.equal(opened.model, MODEL);
+  assert.doesNotMatch(opened.cmd, new RegExp(`${OTHER}|--fork-session`));
+});
+
+test('살아 있는 세션을 다시 연 start가 끼어 있던 역할: reopenOf에는 stop 직전의 마지막 start 사건을 적고, 감시 발령이 이어진다', () => {
+  const observe = entries => collectRoles({list: () => [{session: 'kadan-w', pid: '200', alive: true}], read: () => 'screen'}, entries, null, null)
+    .observations.get('kadan-w').completionDispatches;
+  const f = fixture();
+  // 세대를 띄운 start 뒤에 같은 pane을 다시 연 start(명령 없음, 부른 쪽 작업 폴더)가 있고, 그 뒤 발령을 받고 꺼졌다.
+  const reuse = {kind: 'start', floor: 'tmux', role: 'w', session: 'kadan-w', cwd: '/somewhere/else', panePid: '100', by: 'boss', t: '2026-11-10T00:10:00.000Z'};
+  f.entries.splice(1, 0, reuse, {kind: 'send', role: 'w', session: 'kadan-w', taskId: 'c1', t: '2026-11-10T00:30:00.000Z'});
+  f.run();
+  const started = f.entries.at(-1);
+  assert.equal(started.reopenOf, startDigest(reuse), '감시기가 보는 것과 같은 사건(그 세션의 마지막 start)이다');
+  assert.notEqual(started.reopenOf, startDigest(f.start));
+  assert.equal(f.entries.find(e => e.kind === 'stop').conversationStart, startDigest(f.start), '세대를 띄운 start의 지문은 stop에 있다');
+  assert.equal(started.cwd, f.cwd, '작업 폴더·명령은 세대를 띄운 start의 것이다');
+  assert.equal(started.cmd, `${CLAUDE} --resume ${ID}`);
+  assert.deepEqual([...observe(f.entries).keys()], ['c1']);
 });
 
 test('restart가 끄고 새 세션을 못 만든 경우(stop만 남음)도 그 stop의 번호로 다시 연다', () => {

@@ -19,7 +19,8 @@ import {ownerGenerations, isPreviousOwner} from '../src/owner-generation.mjs';
 
 // kadan reopen으로 다시 연 역할은 같은 대화를 이어 연 같은 정체다. 끄기 전에 받고 끝내지 않은 카드의 발령을
 // kadan restart처럼 이어받아, 감시 대상(buildWatchScope)과 완료 판정용 발령(collectRoles)이 갈라지지 않아야 한다.
-// 이어받는 것은 reopen의 start가 "바로 앞에 꺼진 그 세대"(reopenOf = 그 세대 start의 지문)를 가리킬 때뿐이다.
+// 이어받는 것은 reopen의 start가 "바로 앞에 꺼진 그 세대"를 가리킬 때뿐이다: 지금 세대가 꺼져 있고,
+// reopenOf가 그 세션의 마지막 start 사건의 지문과 같아야 한다. 저장 상태·옛 프로그램 혼용은 watch-reopen-state.test.mjs.
 const ID = '0197aaaa-1111-4222-8333-444455556666';
 const role = 'watchproof', session = `kadan-${role}`;
 const card = {key: 'probe/c1', id: 'c1', repo: 'probe', status: 'assigned', role};
@@ -70,9 +71,11 @@ test('발령을 이어받는 것은 reopenOf가 바로 앞에 꺼진 세대의 s
   const sendB = {...send, taskId: 'c2', executionKey: 'probe/c2', t: '2026-11-10T00:02:20Z'};
   const stopB = {kind: 'stop', role, session, conversationMissing: 'undetermined', t: '2026-11-10T00:02:30Z'};
   assert.deepEqual(dispatches([start, send, stop, b, sendB, stopB, reopened()]), []);
-  // 살아 있는 세션을 다시 연 start(같은 pane PID, 명령 없음)가 끼어 있어도 그 세대를 띄운 start의 지문으로 이어받는다.
+  // 살아 있는 세션을 다시 연 start(같은 pane PID, 명령 없음)가 그 세션의 마지막 start이면, reopen은 그 사건의 지문을 적고
+  // 감시기는 그것으로 잇는다. 세대를 띄운 start의 지문을 적은 start는 마지막 start와 달라 잇지 않는다(틀려도 안 잇는 쪽).
   const reuse = {kind: 'start', role, session, floor: 'tmux', panePid: '100', t: '2026-11-10T00:00:30Z'};
-  assert.deepEqual(dispatches([start, reuse, send, stop, reopened()]), ['probe/c1']);
+  assert.deepEqual(dispatches([start, reuse, send, stop, reopened({reopenOf: startDigest(reuse)})]), ['probe/c1']);
+  assert.deepEqual(dispatches([start, reuse, send, stop, reopened()]), []);
   // 꺼진 적이 없는데(같은 이름의 살아 있는 세대를 덮어쓴 start) reopenOf만 맞는 경우는 이어받지 않는다.
   assert.deepEqual(dispatches([start, send, reopened()]), []);
   // 인계로 넘어간 발령은 후임 것이다: 선임을 가리키는 reopen start가 와도 선임 자리에 발령이 되살아나지 않는다.

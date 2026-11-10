@@ -67,8 +67,9 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
   };
   // 6줄 제한을 없애되, 현재 세대에 실제 발령한 카드와 발령 전 화면을 함께 대조한다.
   const dispatches = captured?.dispatches ?? new Map(), generations = captured?.generations ?? new Map();
-  // 꺼진 세대의 시작 기록(세션별 마지막 하나). kadan reopen의 start가 바로 그 세대를 가리키는지 대조하는 데만 쓴다.
-  const stopped = new Map();
+  // 세션별 문자 그대로 마지막 start 사건(kadan- 세션만, stop이 지우지 않는다). 저장 상태의 start_position과 같은 값이다.
+  // kadan reopen의 start가 바로 앞에 꺼진 세대를 가리키는지 대조하는 데만 쓴다(watch-role-state.mjs reopenContinues).
+  const lastStarts = new Map();
   for (const entry of captured ? [] : entries) {
     if (entry?.kind === 'start') {
       const previous = generations.get(entry.session);
@@ -79,18 +80,19 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
         (previous.floor ?? 'tmux') === (entry.floor ?? 'tmux') &&
         (entry.floor !== 'rottie' || previous.rottieTerminalId === entry.rottieTerminalId);
       if (!reused) {
-        // reopen(꺼진 역할을 같은 대화로 다시 연 새 프로세스)도 같은 정체다. 다만 stop 뒤에 오므로, start의 reopenOf가
-        // 바로 앞에 꺼진 그 세대의 start 지문과 같을 때만 잇는다(reopenContinues). 다른 세대를 가리키면 비운다.
-        const reopened = reopenContinues(entry, previous ? null : stopped.get(entry.session));
-        stopped.delete(entry.session);
+        // reopen(꺼진 역할을 같은 대화로 다시 연 새 프로세스)도 같은 정체다. 다만 stop 뒤에 오므로, 지금 세대가 없고
+        // start의 reopenOf가 그 세션의 마지막 start 지문과 같을 때만 잇는다(reopenContinues). 다른 세대를 가리키면 비운다.
+        const reopened = !previous && reopenContinues(entry, lastStarts.get(entry.session));
         generations.set(entry.session, entry);
         // restart(같은 대화를 다시 연 새 프로세스)는 같은 정체라 발령한 카드를 이어받는다. 그 밖의 새 세대는 비운다.
         if (!((entry.restartOf || reopened) && dispatches.has(entry.session))) dispatches.set(entry.session, new Map());
       }
+      // 판정한 뒤에 갱신한다. 저장 상태처럼 재사용 start도 마지막 start를 덮고, kadan- 세션이 아니면 두지 않는다.
+      if (typeof entry.session === 'string' && entry.session.startsWith('kadan-')) lastStarts.set(entry.session, entry);
+      else lastStarts.delete(entry.session);
       continue;
     }
     if (entry?.kind === 'stop') {
-      if (generations.has(entry.session)) stopped.set(entry.session, generations.get(entry.session));
       generations.delete(entry.session);
       // 종료된 선임도 확정 인계할 수 있다. 발령은 인계에만 남기고 다음 start에서는 비운다.
       continue;
