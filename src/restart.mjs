@@ -157,7 +157,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   catch (error) {
     fail(`기존 ${session}은 종료됐고 새 세션을 만들지 못했다: ${error.message} — 직접 복구: cd ${start.cwd} && ${command}`);
   }
-  const window = deps.openWindow({session, role, panePid: evidence.panePid ?? evidence.rottiePid}) ?? {};
+  const window = deps.openWindow({session, role, cwd: start.cwd, panePid: evidence.panePid ?? evidence.rottiePid}) ?? {};
   deps.record({
     ...buildStartLedgerEntry({floorName: floor.name, role, session, evidence, window: window.method ?? 'hidden',
       rottieTerminalId: window.rottieTerminalId, orcaTerminalHandle: window.orcaTerminalHandle, reused: window.reused,

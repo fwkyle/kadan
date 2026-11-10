@@ -43,8 +43,8 @@ export function restartDeps(home) {
     record: entry => appendLedger(entry, home),
     pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
     closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
-    openWindow: ({ session: name, role: who, panePid }) =>
-      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
+    openWindow: ({ session: name, role: who, cwd, panePid }) =>
+      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, cwd, panePid }) : { method: "manual" },
     beforeStop: session => confirmIdleBeforeStop(session),
     paneInfo,
     processTree,

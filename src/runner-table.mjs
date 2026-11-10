@@ -84,6 +84,9 @@ const slotMatches = (word, templateWord) => templateWord.includes(SENTINEL.conve
     && word.endsWith(templateWord.slice(templateWord.indexOf(SENTINEL.conversation) + SENTINEL.conversation.length))
   : word === templateWord;
 
+const slotValue = (word, templateWord) => word.slice(templateWord.indexOf(SENTINEL.conversation),
+  word.length - (templateWord.length - templateWord.indexOf(SENTINEL.conversation) - SENTINEL.conversation.length));
+
 // 마지막 시작 명령에서 대화 인자만 바꿔 다시 연다: 꼬리가 이미 붙어 있으면(이전 restart) 떼고, 새 ID로 붙인다.
 // 대화를 가리키는 다른 인자(fork·--continue 등)가 남으면 같은 대화를 보장할 수 없어 거절한다.
 export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
@@ -92,14 +95,24 @@ export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   // 카단이 붙인 --no-alt-screen은 꼬리 비교 앞에서 떼고, 호출자가 다시 붙인다(inline-screen.mjs).
   const words = commandWords(typeof oldCmd === 'string' ? oldCmd.trim() : oldCmd)?.filter(word => word !== INLINE_FLAG);
   if (!words?.length) throw new Error('마지막 시작 명령을 읽을 수 없다(셸 결합·주석·확장이 있다)');
-  // 이전 restart가 붙인 resume 꼬리, 또는 대화를 갈라 연 fork 꼬리(adopt 등)면 떼고 현재 대화의 resume 꼬리를 붙인다.
-  // 갈라 연 역할의 "지금 대화"는 원본이 아니라 살아 있는 대화(conversation)이므로 resume으로 바꾸는 것이 맞다.
-  const removable = [tail];
-  if (settings.runners[runner].fork) removable.push(tailOf(settings, runner, 'fork'));
+  // 이전 restart·서버 복원이 붙인 resume 꼬리는 명령 어디에 있든 정확히 1번이면 떼고, 현재 대화의 resume 꼬리를 끝에 붙인다.
+  // 대화 ID 자리는 CONVERSATION_ID를 통과해야 한다(`--resume --옵션`을 대화 지정으로 먹지 않게).
+  // 갈라 연(fork) 꼬리는 끝에 있을 때만 뗀다. 갈라 연 역할의 "지금 대화"는 원본이 아니라 살아 있는 대화(conversation)다.
+  const fits = (at, candidate) => candidate.every((word, i) => slotMatches(words[at + i], word)
+    && (!word.includes(SENTINEL.conversation) || CONVERSATION_ID.test(slotValue(words[at + i], word))));
   let base = words;
-  for (const candidate of removable) {
-    const head = words.slice(0, Math.max(0, words.length - candidate.length));
-    if (words.length >= candidate.length && candidate.every((word, i) => slotMatches(words[head.length + i], word))) { base = head; break; }
+  const fork = settings.runners[runner].fork ? tailOf(settings, runner, 'fork') : null;
+  if (fork && words.length >= fork.length && fits(words.length - fork.length, fork)) base = words.slice(0, words.length - fork.length);
+  else {
+    const found = [];
+    for (let at = 1; at + tail.length <= words.length; at++) if (fits(at, tail)) found.push(at);
+    if (found.length > 1) throw new Error('마지막 시작 명령에 대화 지정(resume·fork·continue)이 둘 이상 있다 — 같은 대화를 보장할 수 없다');
+    // 떼는 resume이 갈라 연(fork)·continue와 섞인 명령이면 표에 없는 모양이라 거절한다.
+    if (found.length === 1 && conversationOf(words.map(shellWord).join(' ')).conversationMode === 'resume')
+      base = [...words.slice(0, found[0]), ...words.slice(found[0] + tail.length)];
+    // 꼬리 첫 낱말(--resume)만 있고 뒤가 대화 ID가 아니면(`--resume --옵션`) 무엇을 가리키는지 알 수 없어 거절한다.
+    else if (!found.length && words.slice(1).includes(tail[0]))
+      throw new Error('마지막 시작 명령에 대화 지정(resume·fork·continue)이 이미 있고 표의 resume 꼬리와 다르다 — 같은 대화를 보장할 수 없다');
   }
   if (conversationOf(base.map(shellWord).join(' ')).conversationMode !== 'new') {
     throw new Error('마지막 시작 명령에 대화 지정(resume·fork·continue)이 이미 있고 표의 resume 꼬리와 다르다 — 같은 대화를 보장할 수 없다');

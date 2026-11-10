@@ -7,9 +7,11 @@ import path from 'node:path';
 import {runnerTemplate, fillTemplate, resumeTail, rebuildResumeCommand, findConversation, checkConversationSpec} from '../src/runner-table.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
 import {launchIdentityOf} from '../src/ai-identity.mjs';
+import {restoreCommand} from '../src/server-restore-command.mjs';
 import {TABLE, settingsWith} from './helpers/runner-table.mjs';
 
 const ID = '0197aaaa-1111-4222-8333-444455556666';
+const NEW = '0197bbbb-1111-4222-8333-444455556666';
 const settings = settingsWith();
 
 test('틀 채우기: 빈 칸은 미지원으로 거절하고, 값이 없는 자리는 만들지 않는다', () => {
@@ -160,4 +162,40 @@ test('설정: 옛 설정(spawn만)은 그대로 읽히고, 표 칸은 선택이�
   const cleared = setRunner(home, {runner: 'codex', table: {resume: null}, ...meta(2)});
   assert.equal(cleared.runners.codex.resume, undefined);
   assert.throws(() => resumeTail(readSettings(home), 'codex'), /미지원/);
+});
+
+const MID = `/opt/x/bin/claude --settings '/opt/x/claude-settings.json' --resume old-id --dangerously-skip-permissions --model claude-opus-5-5 --effort medium`;
+const MID_FIXED = `/opt/x/bin/claude --settings /opt/x/claude-settings.json --dangerously-skip-permissions --model claude-opus-5-5 --effort medium --resume ${ID}`;
+
+test('명령 재조립: 명령 중간의 resume 꼬리도 떼고 끝에 새 대화로 붙인다(실제 cmd 꼴)', () => {
+  const fromMid = rebuildResumeCommand(settings, 'claude', MID, ID);
+  assert.equal(fromMid, MID_FIXED);
+  const atEnd = `/opt/x/bin/claude --settings '/opt/x/claude-settings.json' --dangerously-skip-permissions --model claude-opus-5-5 --effort medium --resume old-id`;
+  assert.equal(rebuildResumeCommand(settings, 'claude', atEnd, ID), fromMid);
+  assert.equal(rebuildResumeCommand(settings, 'claude', fromMid, ID), fromMid);
+  const codexMid = `codex resume old-id -p lite --model gpt-6-sol`;
+  assert.equal(rebuildResumeCommand(settings, 'codex', codexMid, ID), `codex -p lite --model gpt-6-sol resume ${ID}`);
+});
+
+test('명령 재조립: #351 복원 출력(restoreCommand)을 그대로 다시 열 수 있다', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-restore-cwd-'));
+  for (const [cmd, tailed] of [
+    [`claude --model claude-opus-5-5 --effort low --resume ${ID}`, `--resume ${NEW}`],
+    [`codex resume ${ID} --model gpt-6-sol`, `resume ${NEW}`]]) {
+    const {command} = restoreCommand({start: {cwd, cmd, role: 'test-lead', t: new Date().toISOString()}, projectsDir: cwd});
+    const rebuilt = rebuildResumeCommand(settings, cmd.startsWith('codex') ? 'codex' : 'claude', command, NEW);
+    assert.ok(rebuilt.endsWith(tailed), rebuilt);
+    assert.equal(rebuilt.split(' ').filter(word => word === 'resume' || word === '--resume').length, 1, rebuilt);
+    assert.equal(conversationOf(rebuilt).conversationRef, NEW);
+  }
+});
+
+test('명령 재조립: 중간 resume이어도 모호한 대화 지정은 거절한다', () => {
+  const rejects = cmd => assert.throws(() => rebuildResumeCommand(settings, 'claude', cmd, ID), /대화 지정/, cmd);
+  rejects('claude --resume a --model m --resume b');
+  rejects('claude --resume=abc --model m');
+  rejects('claude -r abc --model m');
+  rejects('claude --resume a --continue --model m');
+  rejects('claude --resume a --fork-session --model m');
+  rejects('claude --resume --dangerously-skip-permissions --model m');
 });
