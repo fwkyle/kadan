@@ -218,7 +218,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
   if (req.method === 'GET' && ['/runners/compare', '/runners/compare-report'].includes(url.pathname)) {
    try {
     const result = url.pathname === '/runners/compare' ? compareState(home)
-      : compareReport(home, {since: url.searchParams.get('since') ?? undefined});
+      : compareReport(home, {since: url.searchParams.get('since') ?? undefined,
+        until: url.searchParams.get('until') ?? undefined});
     res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'});
     res.end(JSON.stringify(result));
    } catch (error) {
