@@ -233,3 +233,9 @@ export function findConversation(spec, deps) {
     throw new Error('다시 열 대화가 아직 저장되지 않았다(첫 입력 전일 수 있다) — 기존 세션을 끄지 않는다');
   return id;
 }
+
+// 저장된 대화가 지금도 남아 있는가(꺼진 역할을 다시 열기 전 확인). 표에 stored 칸이 없는 실행기는 확인할 수 없어 null이다.
+export function conversationStored(spec, id, {homeDir = os.homedir(), exists = existsWithGlob} = {}) {
+  if (!spec?.stored) return null;
+  return Boolean(exists(expandHome(spec.stored.replaceAll('{conversation}', id), homeDir)));
+}
