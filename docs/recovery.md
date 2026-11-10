@@ -66,7 +66,8 @@ kadan recovery inspect --batch < 입력.json
 - 실제 출력은 한 줄이다.
 
 묶음 명령 전체가 실패하면 `{"schemaVersion":1,"ok":false,"error":{"message":"…","code":"…"}}`와 종료 코드 1을 낸다.
-`code`는 항상 있다(`code`가 없는 `ok:false`는 묶음을 모르는 옛 카단의 답이다).
+이 JSON에는 `code`가 항상 있다(`code`가 없는 `ok:false`는 묶음을 모르는 옛 카단의 답이다).
+한계: 명령이 조회 처리에 들어가기 전에 예외가 나면(명령 진입부) 표준 출력 없이 표준 오류와 종료 코드 1만 낸다. 단건도 같다.
 
 | `error.code` | 뜻 |
 |---|---|
