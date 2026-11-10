@@ -97,11 +97,11 @@ export function calculateCompareReport({entries, works, cards},
   const cardOf = new Map(cards.map(card => [card.key, card]));
   const outcomes = new Map(cards.map(card => [card.key, card.result?.outcome]));
   const index = runIndex(entries, works), groups = new Map(), mixed = {}, unknown = [];
-  const rowFor = (reviewer, worker, launch) => {
+  const rowFor = (reviewer, worker, launch, difficulty) => {
     const reviewerId = choiceKey(reviewer);
     if (!groups.has(reviewerId)) groups.set(reviewerId, {reviewer: reviewer ?? null, rows: new Map()});
-    const group = groups.get(reviewerId), rowKey = `${choiceKey(worker)}|${launch ?? ''}`;
-    if (!group.rows.has(rowKey)) group.rows.set(rowKey, {worker, launch, presets: new Set(),
+    const group = groups.get(reviewerId), rowKey = `${choiceKey(worker)}|${launch ?? ''}|${difficulty}`;
+    if (!group.rows.has(rowKey)) group.rows.set(rowKey, {worker, launch, difficulty, presets: new Set(),
       samples: 0, independentSamples: 0, completedSamples: 0, firstRoundPasses: 0,
       failed: 0, inProgress: 0, mixed: {}, mixedWorkIds: new Set(), workIds: new Set(), cardIds: new Set(),
       rounds: [], durations: []});
@@ -123,18 +123,23 @@ export function calculateCompareReport({entries, works, cards},
       .filter(run => run?.sends.length);
     if (samples.some(s => s.unknown) || !fixes.every(attributed)) { unknown.push(work.key); continue; }
     const first = samples[0];
+    // 업무의 난이도는 첫 구현 발령에 고정된 값이다(칸이 없으면 보통). 뒤 수정 카드의 값으로 행을 바꾸지 않는다.
+    const difficulty = firstSend.difficulty === 'hard' ? 'hard' : 'normal';
     const labels = new Set([...samples.flatMap(s => s.sends), ...fixes.flatMap(run => run.sends)]
       .map(send => LAUNCH_LABELS[send.launchSource]));
     // 아직 검수 발령이 없는 구현은 다른 검수자가 아니다. 검수자가 정해진 구현끼리만 비교한다.
     const reviewers = samples.map(s => s.reviewer).filter(Boolean);
     const row = rowFor(reviewers[0] ?? null, first.worker,
-      ['명시 명령', '폴백'].filter(label => labels.has(label)).join('·') || null);
+      ['명시 명령', '폴백'].filter(label => labels.has(label)).join('·') || null, difficulty);
     for (const sample of samples) if (sample.send.settingsPreset) row.presets.add(sample.send.settingsPreset);
     const reasons = new Set(samples.flatMap(s => [...s.reasons]));
     if (fixes.some(run => replaced(run, index.starts))) reasons.add('중간 교체');
     if (new Set(reviewers.map(choiceKey)).size > 1) reasons.add('검수자 변경');
     if (new Set([...samples.flatMap(s => s.runSends), ...fixes.flatMap(run => run.sends)]
       .map(send => choiceKey(send.runnerChoice))).size > 1) reasons.add('작업자 변경');
+    // 난이도 올림: 보통으로 시작한 업무에 뒤늦게 어려움 작업자 발령(구현·수정)이 생겼다. 어려움으로 시작한 업무의 보통 수정은 섞임이 아니다.
+    if (difficulty === 'normal' && [...samples.flatMap(s => s.runSends), ...fixes.flatMap(run => run.sends)]
+      .some(send => send.difficulty === 'hard')) reasons.add('난이도 올림');
     if (reasons.size) {
       // 한 조합의 성과로 셀 수 없다. 사유는 한 업무에 여럿일 수 있다.
       for (const reason of reasons) {
@@ -202,10 +207,16 @@ export function formatCompareReport(report) {
   const passes = (group, row) => group.reviewer ? `${row.firstRoundPasses}/${row.completedSamples}` : '검수 없음';
   const lines = [`조합별 성과 (${report.since ?? '처음'} ~ ${report.until ?? report.asOf})`
     + ' — 업무당 1표본, 검수자 묶음 간 순위 없음'];
+  // 어려움 표본이 하나도 없으면 난이도 제목 줄을 만들지 않는다(칸을 안 쓰는 사용자의 출력은 지금과 같다).
+  const hasHard = report.groups.some(group => group.rows.some(row => row.difficulty === 'hard'));
   for (const group of report.groups) {
     lines.push('', `검수자 ${choiceLabel(group.reviewer)}`);
+    for (const level of hasHard ? ['normal', 'hard'] : [null]) {
+    const rows = level ? group.rows.filter(row => (row.difficulty ?? 'normal') === level) : group.rows;
+    if (!rows.length) continue;
+    if (level) lines.push(`난이도 ${level === 'hard' ? '어려움' : '보통'}`);
     lines.push('작업자 | 표본 | 독립 | 첫 왕복 통과 | 왕복 중앙 | 구현 분 중앙 | failed | 진행 중');
-    for (const row of group.rows) {
+    for (const row of rows) {
       lines.push(`${choiceLabel(row.worker)}${row.launch ? ` [${row.launch}]` : ''} | ${row.samples}`
         + ` | ${row.independentSamples} | ${passes(group, row)}`
         + ` | ${number(row.medianRounds)} | ${number(row.medianImplementationMs == null
@@ -213,6 +224,7 @@ export function formatCompareReport(report) {
       lines.push(`  프리셋 ${row.presets.join(', ') || '없음'} · 업무 ${row.workIds.join(', ') || '없음'}`,
         `  섞임 ${counts(row.mixed)}${row.mixedWorkIds.length ? ` · 업무 ${row.mixedWorkIds.join(', ')}` : ''}`,
         `  카드 ${row.cardIds.join(', ') || '없음'}`);
+    }
     }
   }
   if (!report.groups.length) lines.push('', '이 기간에 집계할 발령이 없다.');

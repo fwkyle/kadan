@@ -8,6 +8,14 @@ import { effectiveCardRole } from './handover-state.mjs';
 import { leaseShaFor } from './review-sha.mjs';
 // 카드 센터가 이력으로 판정을 바꾸는 상태: 전환 시각(ready·draft·assigned)과 완료 뒤 변경(assigned·ready).
 const HISTORY_STATUSES = new Set(['assigned','ready','draft']);
+const CLOSED_STATUSES=['done','cancelled','superseded','archived'];
+export const DIFFICULTY_COORDINATION='조율(coordination) 카드에는 난이도를 둘 수 없다 — 작업자 단계 실행 카드에만 뜻이 있다';
+// 난이도 값 검사. 돌려주는 값은 'hard' 또는 null(보통). undefined·null·normal은 칸이 없는 것과 같다.
+export function checkDifficulty(value){
+  if(value===undefined||value===null||value==='normal')return null;
+  if(value==='hard')return 'hard';
+  throw new Error(`난이도는 normal 또는 hard: ${String(value).slice(0,40)}`);
+}
 const slug = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
 // 카드 본문 '읽고 시작할 것'에 적힌 절대경로. 양식의 예시 문구(<>·…)는 세지 않는다.
 export function readFirstPaths(body) {
@@ -118,9 +126,11 @@ export class CardStore {
     assertWritable(this.home);
     return transaction(this.home,fn);
   }
-  create({repo,id,repoPath,sourcePath,title,body,workType='execution',by='사람'}) {
+  create({repo,id,repoPath,sourcePath,title,body,workType='execution',difficulty,by='사람'}) {
     return this.locked(()=>{
       if(!['execution','coordination'].includes(workType))throw new Error('잘못된 카드 종류');
+      const level=checkDifficulty(difficulty);
+      if(level&&workType==='coordination')throw new Error(DIFFICULTY_COORDINATION);
       const key=`${repo}/${id}`,target=this.dir(key),dir=path.join(this.root,`.creating-${randomUUID()}`);
       if(fs.existsSync(target))throw new Error(`카드가 이미 있음: ${key}`);
       if(!path.isAbsolute(repoPath)||!fs.statSync(repoPath).isDirectory())throw new Error('저장소 절대경로 필요');
@@ -131,7 +141,7 @@ export class CardStore {
       fs.writeFileSync(path.join(dir,'card.md'),text,{flag:'wx',mode:0o600});
       fs.mkdirSync(path.join(dir,'evidence'),{mode:0o700});
       const entry={key,repo,id,repoPath,sourcePath:sourcePath??null,title:title||text.match(/^#\s+(.+)$/m)?.[1]||id,
-        status:'draft',workType,artifactLayout:'card-v1',scope:'',board:null,role:null,revision:1,by,at:new Date().toISOString(),note:'중앙 등록',noteKind:'decision'};
+        status:'draft',workType,artifactLayout:'card-v1',scope:'',board:null,role:null,...(level?{difficulty:level}:{}),revision:1,by,at:new Date().toISOString(),note:'중앙 등록',noteKind:'decision'};
       fs.mkdirSync(path.dirname(target),{recursive:true});fs.renameSync(dir,target);
       appendStream(this.home,`cards/${key}/events.jsonl`,entry);
       return this.get(key);
@@ -159,7 +169,7 @@ export class CardStore {
       this.#assertRevision(current,revision,{appendOnly:activityOnly});
       if(!note?.trim())throw new Error('변경 이유/질문/답변을 적어야 한다');
       if(!['decision','question','answer','progress'].includes(noteKind))throw new Error('잘못된 기록 종류');
-      const allowed=new Set(['title','status','scope','board','role','activity','workType','resolutionOwner','nextAction','statusReason','rallyId','rallyTitle','rallyRound','rallyStep','replacedBy','replacedByText','turnOwner']);
+      const allowed=new Set(['title','status','scope','board','role','activity','workType','resolutionOwner','nextAction','statusReason','rallyId','rallyTitle','rallyRound','rallyStep','replacedBy','replacedByText','turnOwner','difficulty']);
       for(const k of Object.keys(patch))if(!allowed.has(k)||!(typeof patch[k]==='string'||patch[k]===null))throw new Error('잘못된 수정 항목');
       const {history,body,path:bodyPath,resultPath,evidenceDir,...previous}=current;
       const next={...previous,...patch,revision:current.revision+1,by,at:new Date().toISOString(),noteKind,note};
@@ -180,6 +190,17 @@ export class CardStore {
         while(target){if(seen.has(target))throw new Error('대체 카드 순환 연결');seen.add(target);target=this.get(target).replacedBy;}
       }else if(next.replacedBy||next.replacedByText){if(patch.replacedBy||patch.replacedByText)throw new Error('후속 연결은 대체 상태에서만 가능합니다');next.replacedBy=null;next.replacedByText=null;}
       if(next.workType!==undefined&&!['execution','coordination'].includes(next.workType))throw new Error('잘못된 카드 종류');
+      // 난이도 칸(2026-11-10 [kyle]): hard일 때만 저장한다. 값을 바꾸는 patch는 닫힌 카드에 못 쓰고, 어느 순서로 만나도 같은 결과가 되도록
+      // 최종 카드(next)로 조율·검수 단계를 검사한다.
+      if(Object.hasOwn(patch,'difficulty')){
+        const level=checkDifficulty(patch.difficulty);
+        if(CLOSED_STATUSES.includes(current.status))throw new Error(`닫힌 카드의 난이도는 바꿀 수 없다: ${current.status}`);
+        if(level)next.difficulty=level;else delete next.difficulty;
+      }
+      if(next.difficulty){
+        if(next.workType==='coordination')throw new Error(DIFFICULTY_COORDINATION);
+        if(next.rallyStep==='review')throw new Error('검수 단계 카드에는 난이도 hard를 둘 수 없다 — 작업자 단계(구현·수정·조사)에만 뜻이 있다. 검수 단계로 바꾸려면 먼저 --difficulty normal');
+      }
       if(!['draft','ready','assigned','hold','done','cancelled','superseded','archived'].includes(next.status))throw new Error('잘못된 카드 상태');
       if(['ready','assigned'].includes(next.status)&&!next.scope?.trim())throw new Error('발령 가능한 범위를 먼저 적어야 한다');
       if(next.status==='assigned'&&(!slug(next.board)||!slug(next.role)))throw new Error('판과 담당 역할이 필요하다');

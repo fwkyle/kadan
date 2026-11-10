@@ -13,6 +13,7 @@ import { CardStore } from "./card-store.mjs";
 import { resolveWorkMail } from "./work-mail.mjs";
 import { inspectCardSendIdentity } from "./ai-identity.mjs";
 import { inspectDispatchRunnerGuard } from "./dispatch-runner-guard.mjs";
+import { readSettings } from "./runner-settings.mjs";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -125,7 +126,7 @@ export function guardedSend({
   if (expectedPid != null) assertSessionPid(expectedPid, currentPid, session);
   // 카드 연결 전송은 현재 세대의 AI 신원(등록 실행기+모델)이 확인될 때만 전달한다.
   // 일반 우편·질문·답장은 taskId가 없으므로 이 경계를 거치지 않는다.
-  let cardIdentity, runnerGuard;
+  let cardIdentity, runnerGuard, cardDifficulty = null, difficultyMismatch = false;
   if (taskId != null) {
     const identity = inspectCardSendIdentity({ entries, session, currentPid });
     if (!identity.ok) {
@@ -142,6 +143,9 @@ export function guardedSend({
     // 카드 단계가 요구하는 프로필도 함께 넘긴다 — 작업자로 띄운 세션에 검수 카드를 보내지 못하게(2026-10-02 [kyle]).
     const phase = inferCardPhaseProfile({ home, role, taskId, mailContext, entries, cards });
     const phaseProfile = phase?.source === "execution-phase" ? phase.profile : undefined;
+    // 발령 기록의 난이도: 발령 순간의 카드 값을 고정한다. 받는 쪽이 작업자 프로필일 때만 적고, 카드를 못 찾았으면 적지 않는다.
+    // 카드는 위 카드 단계 대조가 이미 찾은 것이다(새 조회 없음).
+    if (phase?.cardDifficulty === "hard" && guardProfile === "worker") cardDifficulty = "hard";
     runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, phaseProfile, allowOldRunner });
     if (runnerGuard.result === "reject") {
       const error = new Error(runnerGuard.message);
@@ -150,6 +154,16 @@ export function guardedSend({
       throw error;
     }
     if (runnerGuard.warning) console.error(runnerGuard.warning);
+    // 어려움 카드를 어려운 일 세션이 아닌 작업자에게 보낸다: 막지 않고 경고와 기록만 남긴다. 어려운 일 자리를 안 쓰면(비어 있으면) 정상이라 조용하다.
+    // 이 경로(어려움 카드 + 보통 세션)에서만 설정 파일 하나를 읽는다. 발령 검사의 판정·문구는 건드리지 않는다.
+    if (cardDifficulty === "hard" && identity.launch.difficulty !== "hard") {
+      let slotFilled = false;
+      try { const settings = readSettings(home); slotFilled = Boolean(settings?.presets?.[settings.activePreset]?.roles?.["worker-hard"]); } catch { /* 설정을 못 읽으면 경고하지 않는다 */ }
+      if (slotFilled) {
+        difficultyMismatch = true;
+        console.error(`경고: 어려움 카드(${taskId})를 어려운 일 작업자가 아닌 ${session}에 보낸다 — 조치: kadan start <새 역할> --profile worker --difficulty hard로 새 작업자를 띄워 보내라 (발령은 그대로 간다)`);
+      }
+    }
   }
   if (mailContext?.replyTo) resolveReplyContext();
 
@@ -210,6 +224,8 @@ export function guardedSend({
         runner: cardIdentity.harness, model: cardIdentity.model,
       },
       launchSource: cardIdentity.launch.launchSource ?? null,
+      ...(cardDifficulty ? {difficulty: cardDifficulty} : {}),
+      ...(difficultyMismatch ? {difficultyMismatch: true} : {}),
       ...(cardIdentity.launch.reviewFor ? {reviewFor: cardIdentity.launch.reviewFor} : {}),
     } : {}),
     ...(originalTaskId!==taskId?{rawTaskId:originalTaskId}:{}),

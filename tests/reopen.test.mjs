@@ -397,7 +397,9 @@ test('난이도: reopen으로 연 어려운 일 세션은 worker-hard 자리와 
   const check = hard => inspectDispatchRunnerGuard({home: f.home, role: f.role, session: f.session, profile: 'worker',
     phaseProfile: 'worker', identity, readSettingsFn: () => ({...settingsWith(), revision: 7, activePreset: 'B', presets: {B: {roles: roles(hard)}}})});
   const same = check(MODEL);
-  assert.notEqual(same.result, 'reject', JSON.stringify(same));
+  // 실측: 실행기·모델은 자리와 같고 resume 꼬리 때문에 명령 글자만 달라 경고 한 줄이 붙는다(평소 restart와 같은 기존 동작).
+  assert.deepEqual([same.result, same.code], ['warn', 'effort-or-args'], JSON.stringify(same));
+  assert.match(same.warning, /어려운 일 작업자 자리/);
   const other = check('claude-opus-5-5');
   assert.equal(other.result, 'reject'); assert.equal(other.code, 'runner-or-model');
   assert.match(other.message, /어려운 일 작업자 자리/);

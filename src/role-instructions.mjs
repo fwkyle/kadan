@@ -205,7 +205,10 @@ export function inferCardPhaseProfile({home,role,taskId,mailContext,entries=read
   try {
     const context=facts(home,entries,{taskId,mailContext,infer:true,cards});
     // 이 카드를 못 찾으면 그 역할의 다른 카드 단계로 대신 정하지 않는다
-    return context.card ? phaseProfile({role,entries,context}) : null;
+    if (!context.card) return null;
+    const phase=phaseProfile({role,entries,context});
+    // 발령 기록의 난이도: 이미 찾은 카드의 값을 그대로 돌려준다(새 조회 없음). hard일 때만 붙는다.
+    return phase&&context.card.difficulty==='hard' ? {...phase,cardDifficulty:'hard'} : phase;
   } catch { return null; }
 }
 
