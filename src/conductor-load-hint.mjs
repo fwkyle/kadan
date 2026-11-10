@@ -15,9 +15,11 @@ const NAMES_SHOWN = 3;
 // 업무는 우편을 받은 감독이 나중에 만들어 진행 중 업무 수가 늦게 잡힌다. 그래서 최근 맡긴 우편 수로도 기준을 본다(기준 개수의 몇 배부터인가).
 export const RECENT_MAIL_FACTOR = 2;
 
-// 새 맥락 우편: 발령(taskId)·답장·--raw·감시 알림·자동 생성 우편이 아닌 것.
+// 새 맥락 우편: 발령(taskId)·답장·--raw·감시 알림·자동 생성 우편이 아닌 것. 이번 우편을 거르는 조건(send.mjs의 newContext)과 같아야 한다.
+// --raw 전송은 전송 기록에 남는 지침 미적용 사유(explicit-raw)와 창 전달 읽음(deliveredRead, raw 전용)으로 가린다. 원장은 고치지 않는다.
+const isRawSend = e => e.roleInstructions?.reason === 'explicit-raw' || e.deliveredRead === true;
 const isContextMail = e => e?.kind === 'send' && !e.taskId && !e.replyTo && e.replyFinal !== true
-  && e.notificationOnly !== true && !e.systemGenerated;
+  && e.notificationOnly !== true && !e.systemGenerated && !isRawSend(e);
 
 // 받는 역할의 프로필. 시작 기록의 프로필이 먼저고, 없으면 이번 전송이 정한 프로필(receiptProfile),
 // 그것도 없으면(보관 경로의 옛 역할) 전송 경로와 같은 추론 규칙을 쓴다. 이름으로 추측하지 않는다.

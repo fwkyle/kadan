@@ -114,7 +114,8 @@ test('인계된 업무는 이어받은 감독으로 센다', () => {
   const scenario = {
     sender: 'lh-슈퍼', roles: [['lh-슈퍼', 'super'], ['lh-감독', 'conductor'], ['lh-감독2', 'conductor']],
     works: [['r/w1', 'lh-감독'], ['r/w2', 'lh-감독'], ['r/w3', 'lh-감독2']],
-    ledger: [{kind: 'handover', phase: 'transferred', from: 'lh-감독', to: 'lh-감독2', t: new Date(Date.now() + 1000).toISOString()}],
+    // 인계 시각은 자식이 업무를 다 만든 뒤에 정한다(부모가 미리 정하면 준비가 느릴 때 업무 생성보다 앞선다).
+    handovers: [['lh-감독', 'lh-감독2']],
   };
   const heir = mail({...scenario, argv: ['lh-감독2', '새 일']});
   assert.match(heir.stderr.at(-1), /받는 감독 lh-감독2: 진행 중 업무 3건/);
@@ -136,6 +137,21 @@ test('최근 24시간 새 우편 수: 슈퍼가 맡긴 새 우편만 세고 답�
     ],
   }));
   assert.match(r.stderr.at(-1), /새 우편 4통\(이번 포함\)/);
+});
+
+test('과거 --raw 전송은 새 우편 수에 세지 않는다: raw 5통 뒤 일반 우편 1통이면 1통이고 기준 문장이 없다', () => {
+  const raws = Array.from({length: 5}, (_, i) => [['lh-감독', `원문 ${i + 1}`], {raw: true}]);
+  const r = mail(base(['open', 'open'], {before: raws}));
+  assert.equal(r.status, 0, r.stderr.join('\n'));
+  assert.equal(r.stderr.filter(line => HINT.test(line)).length, 1, r.stderr.join('\n'));
+  assert.match(r.stderr.at(-1), /진행 중 업무 2건.*새 우편 1통\(이번 포함\)$/);
+  // 대조: 같은 자리에 일반 우편 5통이면 6통째에 문장이 붙는다(실제 전송 기록으로 센다).
+  const plain = Array.from({length: 5}, (_, i) => [['lh-감독', `맥락 ${i + 1}`], {}]);
+  const piled = mail(base(['open', 'open'], {before: plain}));
+  assert.match(piled.stderr.at(-1), /새 우편 6통\(이번 포함\) — 기준 도달\(최근 새 우편 6통 ≥ 기준의 2배 6통\)/);
+  // 섞여도 일반 우편만 센다. 질문(--expect-reply)은 센다.
+  const mixed = mail(base(['open', 'open'], {before: [...raws.slice(0, 3), ...plain.slice(0, 2), [['lh-감독', '질문?'], {'expect-reply': true}]]}));
+  assert.match(mixed.stderr.at(-1), /새 우편 4통\(이번 포함\)$/);
 });
 
 test('업무 조회가 던져도 전송 결과·종료 코드·stdout은 그대로이고 안내만 빠진다', () => {

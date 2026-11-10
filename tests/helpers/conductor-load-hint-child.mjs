@@ -35,6 +35,10 @@ for (const [key, owner, status = 'open'] of scenario.works ?? []) {
   if (status === 'hold') store.change(key, 'update', {status: 'hold'}, {revision: work.revision, by: owner, note: '보류'});
 }
 for (const entry of scenario.ledger ?? []) appendLedger(entry, home);
+// 인계: [넘긴 역할, 받은 역할]. 시각은 업무를 다 만든 뒤 여기서 정한다(업무 생성보다 앞서면 인계가 적용되지 않는다).
+for (const [from, to] of scenario.handovers ?? []) {
+  appendLedger({kind: 'handover', phase: 'transferred', from, to, t: new Date().toISOString()}, home);
+}
 // 과거 우편: [받는 역할, 보낸 역할, 몇 시간 전, 덧붙일 필드]
 for (const [role, by, hoursAgo, extra = {}] of scenario.mails ?? []) {
   appendLedger({kind: 'send', role, session: `kadan-${role}`, by, mailId: `old-${Math.random()}`,
@@ -46,4 +50,11 @@ if (scenario.corruptWork) appendStream(home, 'works/r/bad/events.jsonl', {key: '
 
 process.env.KADAN_ROLE = scenario.sender ?? '';
 if (scenario.deliveryExit) process.env.KADAN_MAIL_DELIVERY_EXIT = '1';
+// 앞서 실제 전송 경로로 보내 둘 우편: [argv, flags]. 그 출력은 버리고 마지막 우편의 출력만 남긴다.
+if (scenario.before?.length) {
+  const log = console.log, error = console.error;
+  console.log = console.error = () => {};
+  try { for (const [argv, flags = {}] of scenario.before) send.cmdMail(argv, flags); }
+  finally { console.log = log; console.error = error; }
+}
 send[scenario.command ?? 'cmdMail'](scenario.argv, scenario.flags ?? {});
