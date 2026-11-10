@@ -21,7 +21,10 @@ export const SETTINGS_FILE = 'runner-settings.json';
 // start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
 export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'conductor', super:'super'};
 // 설정에 값을 둘 수 있는 역할. watch·senior는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
-export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain'];
+export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain', 'worker-hard'];
+// 어려운 일 작업자 자리(2026-11-10 [kyle] 난이도 칸 PR 1). 세션의 roleProfile은 계속 worker이고, 선택 칸이라 비어 있으면 작업자와 같다.
+// 폴백 목록은 두지 않는다. 이 자리를 쓰는 시작(start --difficulty hard)만 시작 기록에 difficulty: 'hard'를 남긴다.
+export const HARD_ROLE = 'worker-hard';
 // 감시 AI는 scripts/watch-judge.sh가, 시니어는 scripts/senior.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
@@ -92,7 +95,9 @@ export function runnerChoices(settings, runner, {readCodexModels = () => JSON.pa
 }
 
 // 정책 차단(block)에 걸린 항목. roles가 없으면 전역 차단, 있으면 그 역할만.
-export const findBlocked = (settings, role, model) => (settings.blocked ?? []).find(b => b.model === model && (!b.roles || b.roles.includes(role)));
+// worker-hard 자리는 worker 역할로 막은 모델도 막힌다.
+export const findBlocked = (settings, role, model) => (settings.blocked ?? []).find(b => b.model === model
+  && (!b.roles || b.roles.includes(role) || (role === HARD_ROLE && b.roles.includes('worker'))));
 
 // 시니어 목록의 모양 검사: 1..SENIOR_MAX명, 같은 실행기+모델 중복 없음. 저장(setSeniors)과 호출(kadan senior)이 같이 쓴다.
 export function assertSeniorShape(list) {
@@ -134,6 +139,8 @@ export function checkChoice(settings, role, {runner, model, effort}, options, {c
 export function checkFamilies(roles, families = DEFAULT_FAMILIES) {
   const worker = modelFamily(roles.worker?.model, families), reviewer = modelFamily(roles.reviewer?.model, families);
   if (worker && worker === reviewer) throw new Error(`작업자와 검수자가 같은 계열(${worker})이다 — 자기 검수가 된다`);
+  const hard = modelFamily(roles[HARD_ROLE]?.model, families);
+  if (hard && hard === reviewer) throw new Error(`어려운 일 작업자와 검수자가 같은 계열(${hard})이다 — 자기 검수가 된다`);
 }
 
 // 1순위끼리는 거절한다. 작업자 후보에 다른 계열 검수자가 없는 경우는 경고로 돌려준다.
@@ -142,7 +149,7 @@ export function checkPresetFamilies(preset, families = DEFAULT_FAMILIES) {
   checkFamilies(preset.roles, families);
   const candidates = role => [preset.roles?.[role], ...(preset.fallback?.[role] ?? [])].filter(Boolean);
   const reviewers = candidates('reviewer').map(item => modelFamily(item.model, families));
-  return candidates('worker').flatMap(item => {
+  return [...candidates('worker'), ...candidates(HARD_ROLE)].flatMap(item => {
     const family = modelFamily(item.model, families);
     return family && reviewers.some(other => other && other !== family) ? []
       : [`작업자 후보 ${item.model}에 맞는 다른 계열 검수자 없음 — 검수자 후보를 추가하세요`];
@@ -156,6 +163,14 @@ export function launchFor(settings, profile, preset = settings?.activePreset) {
   const value = role && settings?.presets[preset].roles[role];
   if (!value) return null;
   return {cmd: fill(settings, value), role, preset, revision: settings.revision, ...value};
+}
+
+// 어려운 일 작업자 자리로 만든 실행 명령. 자리가 비어 있으면 null — 호출부가 작업자 값으로 내려간다.
+export function launchForHard(settings, preset = settings?.activePreset) {
+  if (settings && !Object.hasOwn(settings.presets, preset)) throw new Error(`없는 프리셋: ${preset}`);
+  const value = settings?.presets[preset].roles[HARD_ROLE];
+  if (!value) return null;
+  return {cmd: fill(settings, value), role: HARD_ROLE, preset, revision: settings.revision, ...value};
 }
 
 function fill(settings, value) {
@@ -516,12 +531,20 @@ export function removePreset(home, {name, ...meta}) {
 }
 
 // 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
-export function setRole(home, {role, runner, model, effort, preset, ...meta}) {
+export function setRole(home, {role, runner, model, effort, preset, clear = false, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
+  if (clear && role !== HARD_ROLE) throw new Error(`--clear는 ${HARD_ROLE} 자리에만 쓴다 — 다른 역할은 비울 수 없다`);
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
     assertComparePresetMutable(next, name);
+    if (clear) {
+      if (!Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name}`);
+      const was = next.presets[name].roles[role] ?? null;
+      if (!was) throw new Error('바뀐 것 없음 — 이미 비어 있다');
+      delete next.presets[name].roles[role];
+      return {preset: name, role, before: was, after: null};
+    }
     ensurePreset(next, name);
     const value = {runner, model, ...(effort != null ? {effort} : {})};
     checkChoice(next, role, value, readCodexModels ? {readCodexModels} : {});
@@ -559,6 +582,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
   // 시니어는 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
   if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
     throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
+  if (role === HARD_ROLE) throw new Error('어려운 일 작업자 자리는 폴백이 없다 — 비어 있으면 작업자와 같다');
   if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 등록된 시니어(최대 2명)가 동등하게 함께 불린다(docs/senior.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;

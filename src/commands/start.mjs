@@ -2,7 +2,7 @@
 import { startRoleProfile } from "../role-instructions.mjs";
 import { reviewerLaunch } from "../reviewer-launch.mjs";
 import { pickCompareLaunch } from "../runner-compare.mjs";
-import { launchFor, launchForFallback, readSettings, PROFILE_ROLES } from "../runner-settings.mjs";
+import { launchFor, launchForFallback, launchForHard, readSettings, PROFILE_ROLES } from "../runner-settings.mjs";
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
@@ -47,7 +47,7 @@ function readAlternateOn(session) {
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--for 작업자역할] [--no-prompt]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--difficulty normal|hard] [--for 작업자역할] [--no-prompt]");
   const insideHome = workdirInsideHome(process.cwd(), ledgerHome());
   if (insideHome) die(workdirInsideHomeMessage(insideHome), 2);
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
@@ -77,6 +77,16 @@ export function cmdStart(argv, flags) {
   const roleProfile = startRoleProfile({home:ledgerHome(),role,profile:flags.profile,previous:reusing?lastStartFor(session):null,reusing});
   const hiddenPolicy = inspectHiddenStartPolicy({ floorName: floor.name, hidden: Boolean(flags.hidden), roleProfile, reusing });
   if (!hiddenPolicy.ok) die(hiddenPolicy.message, 2);
+  // --difficulty hard: 어려운 일 작업자 자리(worker-hard)로 새 작업자를 띄운다. normal은 옵션이 없는 것과 같다.
+  if (flags.difficulty !== undefined && !["normal", "hard"].includes(flags.difficulty))
+    die("--difficulty에는 normal 또는 hard가 필요하다", 2);
+  const hard = flags.difficulty === "hard";
+  if (hard) {
+    if (reusing) die("--difficulty hard는 작업자를 새로 띄울 때만 쓴다 — 살아 있는 세션은 바꾸지 않는다", 2);
+    if (roleProfile !== "worker") die("--difficulty hard는 --profile worker에서만 쓴다", 2);
+    if (flags.cmd !== undefined || flags.fallback !== undefined || flags.for !== undefined)
+      die("--difficulty hard는 --cmd·--fallback·--for와 함께 쓸 수 없다", 2);
+  }
   let reviewSelection = null;
   if (flags.for !== undefined) {
     if (typeof flags.for !== "string" || !flags.for.trim()) die("--for에는 작업자 역할이 필요하다", 2);
@@ -92,10 +102,14 @@ export function cmdStart(argv, flags) {
     } catch (error) { die(error.message, 2); }
   }
   // 실행 모델 설정이 있으면 --cmd 없이도 역할 기본 명령을 채운다. 다른 명령은 이유를 남긴다(2026-09-23 [kyle] 승인 1단계).
-  let launch = null;
+  let launch = null, hardLaunch = null;
   if (!reusing && Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) {
     try {
-      launch = reviewSelection ?? (roleProfile === 'worker' && flags.cmd === undefined
+      if (hard) {
+        hardLaunch = launchForHard(readSettings(ledgerHome()));
+        if (!hardLaunch) console.error("어려운 일 작업자 자리가 비어 있어 보통 작업자로 띄운다");
+      }
+      launch = reviewSelection ?? hardLaunch ?? (roleProfile === 'worker' && flags.cmd === undefined
         && flags.fallback === undefined ? pickCompareLaunch(ledgerHome(), role)
           : launchFor(readSettings(ledgerHome()), roleProfile));
     }
@@ -137,6 +151,7 @@ export function cmdStart(argv, flags) {
     }
     console.error(`검수자 선택: ${reviewSelection.model} — ${reviewSelection.reviewFor.reason}`);
   }
+  if (useSettings && hardLaunch) launchRecord.difficulty = "hard";
   if (useSettings && launch.compareMode) {
     launchRecord.compareMode = true;
     launchRecord.pickId = launch.pickId;

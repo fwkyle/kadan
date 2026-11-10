@@ -444,3 +444,50 @@ test('정지 훅 설정이 있는 홈: 설정 명령의 --settings가 한 번만
   assert.match(start.cmd, /--effort high /); assert.match(start.cmd, new RegExp(`--resume ${ID}$`));
   assert.equal(start.conversationMode, 'resume');
 });
+
+// 난이도 칸 PR 1: 어려운 일 작업자 세션의 시작 기록(difficulty: hard)은 restart가 이어 적는다.
+const HARD = 'claude --model claude-opus-5-5 --effort max --dangerously-skip-permissions';
+// 앞선 시험이 홈에 정지 훅 설정을 남기면 명령 앞에 --settings가 붙는다. 순서와 무관하게 비교하려고 떼어 본다.
+const bare = cmd => cmd.replace(/ --settings '[^']*'/, '');
+const hardRoles = () => ({worker: {runner: 'claude', model: 'claude-sonnet-5-5', effort: 'high'},
+  'worker-hard': {runner: 'claude', model: 'claude-opus-5-5', effort: 'max'}});
+
+test('난이도: 평소 restart는 앞 시작 기록의 difficulty를 새 시작 기록에 이어 적고, 없으면 칸을 만들지 않는다', () => {
+  const hard = fixture({extra: {difficulty: 'hard'}});
+  hard.run({});
+  assert.equal(hard.entries.at(-1).difficulty, 'hard');
+  const plain = fixture();
+  plain.run({});
+  assert.equal('difficulty' in plain.entries.at(-1), false);
+});
+
+test('난이도: --model-from-settings는 어려운 일 세션이면 worker-hard 값을, 보통 세션이면 worker 값을 쓴다', () => {
+  const hard = fixture({extra: {difficulty: 'hard'}});
+  const receipt = hard.run(OPTION, settingsOf(hardRoles()));
+  const start = hard.entries.at(-1);
+  assert.equal(bare(start.cmd), `${HARD} --resume ${ID}`);
+  assert.equal(start.difficulty, 'hard'); assert.equal(receipt.modelFromSettings.model, 'claude-opus-5-5');
+  assert.deepEqual(start.runnerChoice, {runner: 'claude', model: 'claude-opus-5-5', effort: 'max'});
+  const plain = fixture();
+  plain.run(OPTION, settingsOf(hardRoles()));
+  assert.equal(bare(plain.entries.at(-1).cmd), `${NEW} --resume ${ID}`);
+});
+
+test('난이도: 어려운 일 자리가 비어 있으면 --model-from-settings는 작업자 값을 쓰고 difficulty는 이어 적는다', () => {
+  const f = fixture({extra: {difficulty: 'hard'}});
+  f.run(OPTION, settingsOf());
+  assert.equal(bare(f.entries.at(-1).cmd), `${NEW} --resume ${ID}`);
+  assert.equal(f.entries.at(-1).difficulty, 'hard');
+});
+
+test('난이도: 재시작한 어려운 일 세션은 다음 발령 검사를 예외 없이 통과한다', () => {
+  const f = fixture({extra: {difficulty: 'hard'}});
+  const settings = settingsOf(hardRoles());
+  f.run(OPTION, settings);
+  const identity = inspectCardSendIdentity({entries: f.entries, session: f.session, currentPid: '200'});
+  const verdict = inspectDispatchRunnerGuard({home: f.home, role: f.role, session: f.session, profile: 'worker',
+    phaseProfile: 'worker', identity, readSettingsFn: () => settings});
+  // 실행기·모델은 어려운 일 자리와 같다. resume 꼬리 때문에 경고 한 줄이 붙는 것은 평소 restart와 같은 기존 동작이다.
+  assert.deepEqual([verdict.result, verdict.code], ['warn', 'effort-or-args'], JSON.stringify(verdict));
+  assert.match(verdict.warning, /어려운 일 작업자 자리/);
+});

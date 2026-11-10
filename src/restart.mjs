@@ -12,7 +12,7 @@ import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
 import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
 import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec, swapModelSlots} from './runner-table.mjs';
-import {launchFor} from './runner-settings.mjs';
+import {launchFor, launchForHard} from './runner-settings.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
@@ -184,6 +184,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       cmd: command, cwd: start.cwd}),
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
+    ...(start.difficulty ? {difficulty: start.difficulty} : {}),
     // 설정에서 값을 가져온 재시작: 설정 칸은 kadan start --profile과 같은 이름으로 남긴다. launchSource는 적지 않는다 —
     // 명령이 설정 틀 그대로가 아니라 옛 명령에서 모델·강도 값만 바꾼 것이기 때문이다.
     ...(swap ? {
@@ -211,7 +212,8 @@ function settingsLaunch({start, settings, harness}) {
   if (start.compareMode) fail(`비교 모드로 띄운 역할은 ${option}로 모델을 바꾸지 않는다 — 비교 보고서의 귀속(프리셋·예약)이 중간에 바뀐다`);
   if (!profile)
     fail(`이 역할은 시작 기록에 프로필이 없어 설정에서 모델을 정할 수 없다 — ${option} 없이 다시 띄우거나 kadan start --profile로 새로 띄운다`);
-  const launch = launchFor(settings, profile);
+  // 어려운 일 작업자(시작 기록 difficulty: hard)는 어려운 일 자리 값을 쓴다. 자리가 비면 작업자 값이다.
+  const launch = (start.difficulty === 'hard' && profile === 'worker' ? launchForHard(settings) : null) ?? launchFor(settings, profile);
   if (!launch) fail(`실행 모델 설정(활성 프리셋 ${settings.activePreset})에 ${profile} 역할 값이 없다 — 설정에서 모델을 정할 수 없다`);
   const want = launchIdentityOf(launch.cmd);
   if (!want.ok) fail(`설정 명령에서 등록 실행기·모델을 읽지 못했다(${want.reason})`);
