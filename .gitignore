@@ -14,3 +14,6 @@ docs/daily/
 # maintainer-local agent instructions are not part of the public repo
 AGENTS.md
 CLAUDE.md
+
+# public site build output (npm run build:site)
+site-dist/
