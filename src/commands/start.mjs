@@ -18,6 +18,7 @@ import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { briefStartedRole } from "../start-brief.mjs";
+import { reuseOfFor } from "../role-conversation.mjs";
 import {
   requireWindowChoice,
   inspectHiddenStartPolicy,
@@ -195,6 +196,8 @@ export function cmdStart(argv, flags) {
   }
 
   const pid = evidence.panePid;
+  // 살아 있는 세션을 다시 연 기록에는 그 세대를 띄운 start의 지문을 적는다(없으면 적지 않는다). 위에서 읽은 원장을 쓴다.
+  const reuseOf = reusing ? reuseOfFor(startEntries, session, pid) : null;
   let method = floor.name === "herdr" ? "manual" : "hidden";
   let rottieTerminalId;
   let orcaTerminalHandle;
@@ -238,7 +241,7 @@ export function cmdStart(argv, flags) {
       reused,
       cmd: startedCmd,
       cwd: process.cwd(),
-    }), ...(alternateOn === null ? {} : { alternateOn }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
+    }), ...(reuseOf ? { reuseOf } : {}), ...(alternateOn === null ? {} : { alternateOn }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
   } catch (error) {
     // 시작 기록이 없는 세션은 다음 start에서 재사용으로 읽혀 막히고 감시에도 잡히지 않는다(2026-10-08).
     // 방금 만든 세션만 닫는다. 재사용한 세션은 남의 세대라 건드리지 않는다.

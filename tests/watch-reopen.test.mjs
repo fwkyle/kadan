@@ -24,7 +24,9 @@ import {ownerGenerations, isPreviousOwner} from '../src/owner-generation.mjs';
 const ID = '0197aaaa-1111-4222-8333-444455556666';
 const role = 'watchproof', session = `kadan-${role}`;
 const card = {key: 'probe/c1', id: 'c1', repo: 'probe', status: 'assigned', role};
-const start = {kind: 'start', role, session, floor: 'tmux', panePid: '100', cmd: 'codex --model test-model', t: '2026-11-10T00:00:00Z'};
+// 세션을 실제로 띄운 start에는 출력 기록 경로가 있다(감시기는 이런 값이 있는 기록만 발령을 잇는 근거로 쓴다).
+const start = {kind: 'start', role, session, floor: 'tmux', panePid: '100', cmd: 'codex --model test-model',
+  outputLog: '/fixture/out/kadan-watchproof/gen-a/manifest.json', t: '2026-11-10T00:00:00Z'};
 const send = {kind: 'send', role, session, taskId: 'c1', executionKey: card.key, t: '2026-11-10T00:01:00Z'};
 const stop = {kind: 'stop', role, session, conversation: ID, conversationStart: startDigest(start), t: '2026-11-10T00:02:00Z'};
 const reopened = (extra = {}) => ({...start, panePid: '200', cmd: `codex --model test-model resume ${ID}`,
@@ -73,9 +75,15 @@ test('발령을 이어받는 것은 reopenOf가 바로 앞에 꺼진 세대의 s
   assert.deepEqual(dispatches([start, send, stop, b, sendB, stopB, reopened()]), []);
   // 살아 있는 세션을 다시 연 start(같은 pane PID, 명령 없음)가 그 세션의 마지막 start이면, reopen은 그 사건의 지문을 적고
   // 감시기는 그것으로 잇는다. 세대를 띄운 start의 지문을 적은 start는 마지막 start와 달라 잇지 않는다(틀려도 안 잇는 쪽).
-  const reuse = {kind: 'start', role, session, floor: 'tmux', panePid: '100', t: '2026-11-10T00:00:30Z'};
+  const reuse = {kind: 'start', role, session, floor: 'tmux', panePid: '100', reuseOf: startDigest(start), t: '2026-11-10T00:00:30Z'};
   assert.deepEqual(dispatches([start, reuse, send, stop, reopened({reopenOf: startDigest(reuse)})]), ['probe/c1']);
   assert.deepEqual(dispatches([start, reuse, send, stop, reopened()]), []);
+  // 세대를 구분하는 값(reuseOf)이 없는 옛 재사용 기록이 마지막 start이면, 지문이 맞아도 잇지 않는다.
+  const {reuseOf: _none, ...legacy} = reuse;
+  assert.deepEqual(dispatches([start, legacy, send, stop, reopened({reopenOf: startDigest(legacy)})]), []);
+  // 출력 기록 경로 없이 띄운 세션도 마찬가지다.
+  const {outputLog: _log, ...bare} = start;
+  assert.deepEqual(dispatches([bare, send, stop, reopened({reopenOf: startDigest(bare)})]), []);
   // 꺼진 적이 없는데(같은 이름의 살아 있는 세대를 덮어쓴 start) reopenOf만 맞는 경우는 이어받지 않는다.
   assert.deepEqual(dispatches([start, send, reopened()]), []);
   // 인계로 넘어간 발령은 후임 것이다: 선임을 가리키는 reopen start가 와도 선임 자리에 발령이 되살아나지 않는다.

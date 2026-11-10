@@ -18,7 +18,21 @@ const verified = new Map();
 // 낡은 근거가 남지 않는다. 틀리는 방향은 "이어받지 않음"뿐이다. 전체 훑기(watch-roles.mjs)도 이 함수를 쓴다.
 export function reopenContinues(entry, lastStart) {
   return typeof entry?.reopenOf === 'string' && entry.reopenOf.length > 0 && lastStart?.kind === 'start'
-    && lastStart.session === entry.session && lastStart.role === entry.role && startDigest(lastStart) === entry.reopenOf;
+    && lastStart.session === entry.session && lastStart.role === entry.role
+    && generationDistinct(lastStart) && startDigest(lastStart) === entry.reopenOf;
+}
+
+// 지문은 사건의 본문만 본다. 그래서 근거가 되는 start는 "다른 세대의 start와 본문이 같을 수 없는" 기록이어야 한다.
+// 세대를 구분하는 값은 둘뿐이다:
+//   - outputLog: 세션을 만들 때 붙는 출력 기록 경로(만들 때마다 새 UUID 폴더). 세션을 실제로 띄운 start에 있다.
+//   - reuseOf: 살아 있는 세션을 다시 연 start(명령·출력 기록 경로 없음)가 적는, 그 세대를 띄운 start의 지문.
+//     위 outputLog가 있는 start를 가리킬 때만 적는다(role-conversation.mjs reuseOfFor).
+// 둘 다 없는 start(이 칸이 생기기 전의 재사용 기록, 출력 기록을 붙이지 못한 세션)는 역할·PID·작업 폴더·기록 시각이 같으면
+// 다른 세대의 기록과 본문이 같아질 수 있다. 확신할 수 없으므로 근거로 쓰지 않는다(이어받지 않는다).
+// kadan reopen도 같은 함수로 "감시가 이어지는가"를 안내한다.
+export function generationDistinct(start) {
+  const filled = value => typeof value === 'string' && value.length > 0;
+  return filled(start?.outputLog) || filled(start?.reuseOf);
 }
 const schema = `
   CREATE TABLE watch_role_meta (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);

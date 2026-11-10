@@ -288,6 +288,9 @@ test('실제 CLI: 살아 있는 세션을 다시 연 start가 끼어 있어도 r
   assert.equal(starts.length, 3);
   const [launched, reused, again3] = starts;
   assert.equal(reused.cmd, undefined, '다시 연 start에는 명령이 없다');
+  assert.equal(typeof launched.outputLog, 'string', '세션을 띄운 start에는 출력 기록 경로가 있다');
+  assert.equal(reused.outputLog, undefined);
+  assert.equal(reused.reuseOf, startDigest(launched), '다시 연 start는 그 세대를 띄운 start의 지문을 품는다');
   assert.equal(String(reused.panePid), String(launched.panePid), '같은 pane이다');
   assert.equal(stop.conversation, A);
   assert.equal(stop.conversationStart, startDigest(launched), '세대를 띄운 start의 지문은 stop에 있다');
@@ -305,4 +308,29 @@ test('실제 CLI: 살아 있는 세션을 다시 연 start가 끼어 있어도 r
   // 대조: 원장 전체를 훑는 경로도 같다.
   const full = collectRoles({list: () => live, read: () => '›'}, readLedger(), null, cards, {hookHome: s.home}).observations.get(session);
   assert.deepEqual([...full.completionDispatches.keys()], ['card-r1']);
+});
+
+// 세대를 구분하는 값(출력 기록 경로)이 없는 시작 기록으로 뜬 역할: 다시 열기는 되지만, 감시기는 그 기록으로 발령을 잇지 않는다.
+// 명령은 "감시가 이어진다"고 말하지 않고, 다시 발령하거나 확정하라고 안내한다.
+test('실제 CLI: 마지막 시작 기록에 세대를 구분하는 값이 없으면 reopen은 감시 발령이 이어지지 않는다고 알린다', {skip}, t => {
+  const s = setup(t, 'bare');
+  const role = 'barecase', session = `kadan-${role}`;
+  const cmd = `${s.fake} --model test-model -c e=low`;
+  const created = tmuxFloor.create({session, role, cwd: s.work, cmd: `env HOLD=${s.lock(A)},${s.rollout(A)} ${cmd}`});
+  const {outputLog: _dropped, ...evidence} = created;
+  appendLedger({kind: 'start', floor: 'tmux', role, session, cwd: s.work, cmd, roleProfile: 'worker', by: 'test', ...evidence});
+  until(() => fs.existsSync(s.ready), '가짜 실행기가 파일을 열었다');
+  appendLedger({kind: 'send', role, session, taskId: 'card-b1', bytes: 1, digest: 'b', by: 'test'});
+  assert.equal(kadan('stop', role).status, 0);
+  const reopened = kadan('reopen', role);
+  assert.equal(reopened.status, 0, reopened.stdout + reopened.stderr);
+  assert.match(reopened.stdout, /^다시 열림: kadan-barecase /);
+  assert.match(reopened.stderr, /미확정 카드 1건: card-b1 — .*감시 발령은 이어지지 않는다\. 이어서 시킬 일이면 다시 발령하고, 이미 끝난 일이면 kadan done barecase/);
+  assert.doesNotMatch(reopened.stderr, /감시가 이어진다/);
+  const cards = [];
+  const reader = createWatchMailReader(s.home, null, {readCards: () => cards});
+  const entries = reader.project(reader.readEntries(), cards);
+  const live = [{session, pid: String(tmuxFloor.pid(session)), alive: true}];
+  const seen = collectRoles({list: () => live, read: () => '›'}, entries, null, cards, {hookHome: s.home}).observations.get(session);
+  assert.deepEqual([...seen.completionDispatches.keys()], [], '감시기도 발령을 잇지 않는다');
 });

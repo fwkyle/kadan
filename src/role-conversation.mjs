@@ -35,6 +35,22 @@ export function launchStart(events) {
   return null;
 }
 
+// 살아 있는 세션을 다시 연 start(kadan start를 한 번 더 친 기록)에 적을 reuseOf: 그 세대를 띄운 start의 지문. 없으면 null.
+// Why: 다시 연 start에는 명령·출력 기록 경로가 없어, 서로 다른 두 세대의 그런 기록이 역할·PID·작업 폴더·기록 시각까지 같으면
+// 본문(=지문)이 같아진다. 그 세대를 띄운 start의 지문을 한 칸으로 품으면 세대가 다를 때 본문이 반드시 달라진다.
+// 그 보장은 띄운 start의 본문이 유일할 때만 성립하므로, 출력 기록 경로(outputLog — 만들 때마다 새 UUID)가 있는 start일 때만 적는다.
+// 띄운 start를 못 찾거나, 그 PID가 지금 pane PID와 다르거나, outputLog가 없으면 적지 않는다(감시기는 그런 기록으로 발령을 잇지 않는다).
+// events는 부르는 쪽이 이미 읽은 원장이다(추가 읽기 없음).
+export function reuseOfFor(events, session, livePid) {
+  const own = events.filter(e => e.session === session);
+  // 마지막 start 뒤에 stop이 적혀 있으면 원장상 꺼진 세대다. 살아 있는 pane이 그 세대인지 알 수 없으니 적지 않는다.
+  if (own.slice(own.findLastIndex(e => e.kind === 'start') + 1).some(e => e.kind === 'stop')) return null;
+  const start = launchStart(own);
+  if (!start || livePid == null || String(pidOf(start)) !== String(livePid)) return null;
+  if (typeof start.outputLog !== 'string' || !start.outputLog) return null;
+  return startDigest(start);
+}
+
 // 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 던진다(restart는 그 문장으로 거절한다).
 // 실행기 본체 사슬(뿌리 1개 + 그 아래로 하나씩 이어지는 맞는 프로세스)이 연 파일만 후보다. 자식 도구나 같은 실행기의
 // 하위 에이전트가 연 대화를 집지 않는다. pid-json은 뿌리 본체의 PID 파일만, open-file은 사슬 전체가 연 파일을 본다.

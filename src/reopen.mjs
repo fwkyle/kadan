@@ -22,6 +22,7 @@ import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
 import {sessionOwner} from './session-ownership.mjs';
 import {launchStart} from './role-conversation.mjs';
+import {generationDistinct} from './watch-role-state.mjs';
 import {TARGETS} from './revive.mjs';
 
 const fail = message => { throw new Error(message); };
@@ -162,6 +163,8 @@ export function reopenRole({home, role, session, floor, settings, deps, hidden =
     let registration = null;
     try { registration = deps.register({role, cmd: command, roleProfile: start.roleProfile ?? null}); } catch { /* 등록 실패는 다시 열기를 막지 않는다 */ }
     return {role, session, conversation, command, harness, model, cwd: start.cwd, roleProfile: start.roleProfile ?? null,
-      panePid: evidence.panePid ?? null, window: window.method ?? 'hidden', storedChecked: stored !== null, registration, pending};
+      panePid: evidence.panePid ?? null, window: window.method ?? 'hidden', storedChecked: stored !== null, registration, pending,
+      // 감시기가 이 start로 발령을 이을 수 있는가(감시기와 같은 함수). 아니면 명령이 "감시가 이어진다"고 말하지 않는다.
+      watchContinues: generationDistinct(lastStart)};
   });
 }

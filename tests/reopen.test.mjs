@@ -23,6 +23,7 @@ function fixture({cmd = CLAUDE, role = 'w', profile = 'worker', stop = {}, withS
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-reopen-cwd-'));
   const session = `kadan-${role}`;
   const start = {kind: 'start', floor: 'tmux', role, session, cmd, cwd, panePid: '100', roleProfile: profile, by: 'boss',
+    outputLog: path.join(home, 'out', session, 'gen-a', 'manifest.json'),
     launchSource: 'settings', settingsPreset: 'B', compareMode: true, pickId: 'pick-1', t: '2026-11-10T00:00:00.000Z'};
   const entries = [start];
   if (withStop) entries.push({kind: 'stop', role, session, by: 'boss', conversation: ID, conversationStart: startDigest(start),
@@ -325,7 +326,8 @@ test('살아 있는 세션을 다시 연 start가 끼어 있던 역할: reopenOf
     .observations.get('kadan-w').completionDispatches;
   const f = fixture();
   // 세대를 띄운 start 뒤에 같은 pane을 다시 연 start(명령 없음, 부른 쪽 작업 폴더)가 있고, 그 뒤 발령을 받고 꺼졌다.
-  const reuse = {kind: 'start', floor: 'tmux', role: 'w', session: 'kadan-w', cwd: '/somewhere/else', panePid: '100', by: 'boss', t: '2026-11-10T00:10:00.000Z'};
+  const reuse = {kind: 'start', floor: 'tmux', role: 'w', session: 'kadan-w', cwd: '/somewhere/else', panePid: '100', by: 'boss',
+    reuseOf: startDigest(f.start), t: '2026-11-10T00:10:00.000Z'};
   f.entries.splice(1, 0, reuse, {kind: 'send', role: 'w', session: 'kadan-w', taskId: 'c1', t: '2026-11-10T00:30:00.000Z'});
   f.run();
   const started = f.entries.at(-1);
@@ -335,6 +337,25 @@ test('살아 있는 세션을 다시 연 start가 끼어 있던 역할: reopenOf
   assert.equal(started.cwd, f.cwd, '작업 폴더·명령은 세대를 띄운 start의 것이다');
   assert.equal(started.cmd, `${CLAUDE} --resume ${ID}`);
   assert.deepEqual([...observe(f.entries).keys()], ['c1']);
+});
+
+test('감시기가 이을 수 있는 근거인지 돌려준다: 세대를 구분하는 값이 없는 기록이 마지막 start이면 watchContinues가 거짓이다', () => {
+  const observe = entries => collectRoles({list: () => [{session: 'kadan-w', pid: '200', alive: true}], read: () => 'screen'}, entries, null, null)
+    .observations.get('kadan-w').completionDispatches;
+  assert.equal(fixture().run().watchContinues, true, '출력 기록 경로가 있는 start');
+  // (가) reuseOf 칸이 생기기 전의 재사용 기록이 마지막 start.
+  const legacy = fixture();
+  legacy.entries.splice(1, 0, {kind: 'start', floor: 'tmux', role: 'w', session: 'kadan-w', cwd: '/somewhere/else', panePid: '100', by: 'boss', t: '2026-11-10T00:10:00.000Z'},
+    {kind: 'send', role: 'w', session: 'kadan-w', taskId: 'c1', t: '2026-11-10T00:30:00.000Z'});
+  const reopened = legacy.run();
+  assert.equal(reopened.watchContinues, false);
+  assert.equal(reopened.conversation, ID, '다시 열기 자체는 된다(대화·작업 폴더는 그대로)');
+  assert.equal(observe(legacy.entries).size, 0, '감시기도 같은 판정으로 발령을 잇지 않는다');
+  // (나) 출력 기록 경로 없이 띄운 세션.
+  const bare = fixture();
+  delete bare.entries[0].outputLog;
+  bare.entries[1].conversationStart = startDigest(bare.entries[0]);
+  assert.equal(bare.run().watchContinues, false);
 });
 
 test('restart가 끄고 새 세션을 못 만든 경우(stop만 남음)도 그 stop의 번호로 다시 연다', () => {
