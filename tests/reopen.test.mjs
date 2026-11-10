@@ -10,6 +10,7 @@ import {createMailGenerations} from '../src/mail-generation.mjs';
 import {ownerGenerations, isPreviousOwner} from '../src/owner-generation.mjs';
 import {runnerChoices} from '../src/runner-settings.mjs';
 import {stopConversationFields} from '../src/role-conversation.mjs';
+import {collectRoles} from '../src/watch-roles.mjs';
 import {settingsWith, TABLE} from './helpers/runner-table.mjs';
 
 // 가짜 바닥으로 reopen 본체의 순서와 거절을 시험한다. 실제 tmux·CLI 왕복은 stop-reopen-tmux.test.mjs.
@@ -82,6 +83,19 @@ test('우편·책임 세대가 이어진다: reopen의 start는 세대 경계가
   const fresh = createMailGenerations();
   control.forEach((entry, index) => fresh.apply(entry, index));
   assert.equal(fresh.isPrevious('w', 0), true);
+});
+
+test('감시 발령은 이어받지 않는다: 같은 대화를 kadan start --cmd로 다시 연 것과 같고, restart(restartOf)와 다르다', () => {
+  const observe = entries => collectRoles({list: () => [{session: 'kadan-w', pid: '200', alive: true}], read: () => 'screen'}, entries, null, null)
+    .observations.get('kadan-w').completionDispatches;
+  const f = fixture();
+  // 끄기 전에 받은 카드(c1)가 끝나지 않은 채로 꺼졌다가 다시 열린다.
+  f.entries.splice(1, 0, {kind: 'send', role: 'w', session: 'kadan-w', taskId: 'c1', t: '2026-11-10T00:30:00.000Z'});
+  f.run();
+  assert.equal(observe(f.entries).size, 0, 'reopen 뒤에는 끄기 전 발령을 감시 발령으로 세지 않는다');
+  // 대조: 같은 start에 restartOf가 있어도 사이에 stop이 있으면 이어받지 않는다(이어받기는 restart의 연속 구간에서만 생긴다).
+  const manual = [...f.entries.slice(0, -1), {...f.entries.at(-1), reopenOf: undefined, reopenStopAt: undefined, reopenConversation: undefined}];
+  assert.equal(observe(manual).size, 0, '사람이 같은 resume 명령으로 직접 연 start와 같다');
 });
 
 test('거절은 모두 세션을 만들기 전에 끝난다', async t => {

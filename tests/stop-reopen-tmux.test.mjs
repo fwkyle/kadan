@@ -16,6 +16,11 @@ const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
 // 가짜 실행기·자식은 부모(창 안 프로세스)가 사라지면 스스로 끝난다.
 const WATCH_PARENT = "const pp=process.ppid;setInterval(()=>{try{process.kill(pp,0)}catch{process.exit(0)}},200);";
 const wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// 조건이 참이 될 때까지 최대 20초 기다린다(부하가 높을 때 가짜 실행기가 늦게 뜬다). 끝내 안 되면 무엇을 기다렸는지 밝히고 실패한다.
+function until(check, what) {
+  for (let i = 0; i < 400 && !check(); i++) wait(50);
+  assert.ok(check(), `기다렸지만 되지 않음: ${what}`);
+}
 
 function setup(t, name) {
   const home = ledgerHome();
@@ -63,8 +68,7 @@ function launch(env, {fake, ready, work}, session, role) {
   const cmd = `${fake} --model test-model -c e=low`;
   const created = tmuxFloor.create({session, role, cwd: work, cmd: `env ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ')} ${cmd}`});
   appendLedger({kind: 'start', floor: 'tmux', role, session, cwd: work, cmd, roleProfile: 'worker', by: 'test', ...created});
-  for (let i = 0; i < 100 && !(fs.existsSync(ready) && (!env.CHILD_FILES || fs.existsSync(ready + '.child'))); i++) wait(50);
-  assert.ok(fs.existsSync(ready), '가짜 실행기가 파일을 열었다');
+  until(() => fs.existsSync(ready) && (!env.CHILD_FILES || fs.existsSync(ready + '.child')), '가짜 실행기가 파일을 열었다');
   return created;
 }
 const kadan = (...args) => spawnSync(process.execPath, [cli, ...args], {encoding: 'utf8',
@@ -98,7 +102,7 @@ test('실제 CLI: 시작 → stop(원장에 번호) → reopen(같은 번호·�
   assert.match(reopened.stderr, /대화 파일이 남아 있는지는 확인하지 못했다/, '이 시험 설정에는 stored 칸이 없다');
   assert.equal(tmuxFloor.alive('kadan-roundcase'), true);
   assert.notEqual(String(tmuxFloor.pid('kadan-roundcase')), String(created.panePid), '새 프로세스다');
-  for (let i = 0; i < 100 && !fs.existsSync(s.ready + '.resumed'); i++) wait(50);
+  until(() => fs.existsSync(s.ready + '.resumed'), '다시 연 가짜 실행기가 resume 표시를 남겼다');
   const resumed = JSON.parse(fs.readFileSync(s.ready + '.resumed', 'utf8'));
   assert.equal(resumed.id, A, '가짜 실행기가 같은 대화 번호로 떴다');
   assert.equal(fs.realpathSync(resumed.cwd), fs.realpathSync(s.work), '같은 작업 폴더다');
@@ -120,7 +124,7 @@ test('실제 CLI: 시작 → stop(원장에 번호) → reopen(같은 번호·�
   assert.notEqual(twice.status, 0);
   assert.match(twice.stderr, /이미 살아 있다/);
   // 다시 연 세대를 끄면 같은 번호가 다시 남는다(가짜 실행기가 resume으로 그 대화 파일을 열었다).
-  for (let i = 0; i < 100 && !fs.existsSync(s.ready); i++) wait(50);
+  until(() => fs.existsSync(s.ready), '다시 연 가짜 실행기가 대화 파일을 열었다');
   const again = kadan('stop', 'roundcase');
   assert.equal(again.status, 0, again.stdout + again.stderr);
   const lastStop = of('kadan-roundcase').findLast(e => e.kind === 'stop');
