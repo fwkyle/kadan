@@ -7,6 +7,7 @@ import path from "node:path";
 import { dashboardFixture } from "./helpers/dashboard-fixture.mjs";
 import { howToData } from "../src/dashboard-how-to.mjs";
 import { createWallServer } from "../src/wall.mjs";
+import { renderCardDocument } from "../src/card-content.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => fs.readFileSync(new URL(p, root), "utf8");
@@ -90,6 +91,12 @@ test("길잡이 재료: 문서의 HTML은 글자로만 보이고 문서 링크�
   assert.doesNotMatch(data.html, /href="[^"]*\.md/);
   assert.match(data.html, /<a href="https:\/\/example\.com\/a" target="_blank" rel="noopener noreferrer">밖<\/a>/);
   assert.doesNotMatch(data.html, new RegExp(dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "설치 경로 노출");
+});
+
+test("문서 렌더러: 카드 레코드에 함수가 아닌 link 칸이 있어도 기존 링크 표시를 쓴다", () => {
+  const html = renderCardDocument("[안내](docs/a.md)", { path: "/repo/card.md", link: "https://example.com" });
+  assert.match(html, /class="dw-document-reference"/);
+  assert.match(html, /안내 <code>docs\/a\.md<\/code>/);
 });
 
 test("길잡이 재료: 실제 문서의 아홉 항목이 제목으로 그려진다", () => {
