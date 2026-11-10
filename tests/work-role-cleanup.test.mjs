@@ -24,12 +24,12 @@ function world({profiles = {}, extraOpenWork = null} = {}) {
   mk('repo/w');
   const roles = {'작업A': 'worker', '검수B': 'reviewer', ...profiles};
   const change = (key, action, fields) => store.change(key, action, fields, {revision: store.get(key).revision, by: '감독', note: '확인'});
-  const link = (key, role) => {
+  const link = (key, role, t = FUTURE, tDone = FUTURE) => {
     change(key, 'execute', {title: `실행 ${role}`, body: '본문', phase: 'implementation', round: '1'});
     const ex = store.get(key).executions.at(-1).key, id = ex.split('/')[1];
     cards.update(ex, {status: 'assigned', role, board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(ex).revision, note: '배정', by: '감독'});
-    appendLedger({kind: 'send', by: '감독', role, taskId: id, executionKey: ex, digest: `${role}-${id}`, t: FUTURE}, home);
-    appendLedger({kind: 'done', by: role, role, taskId: id, executionKey: ex, result: 'ok', t: FUTURE}, home);
+    appendLedger({kind: 'send', by: '감독', role, taskId: id, executionKey: ex, digest: `${role}-${id}`, t}, home);
+    appendLedger({kind: 'done', by: role, role, taskId: id, executionKey: ex, result: 'ok', t: tDone}, home);
     return {ex, id};
   };
   const pids = {}, alive = {}, stopped = [], screens = {};
@@ -44,7 +44,7 @@ function world({profiles = {}, extraOpenWork = null} = {}) {
   const floor = {name: 'tmux', alive: s => alive[s] === true, pid: s => pids[s], read: s => screens[s], assertHumanIdle: () => {},
     stop: s => { stopped.push(s); alive[s] = false; }};
   const stopCalls = [];
-  const stopRole = input => { stopCalls.push(input.role); return {ok: true, session: input.session, entry: {conversation: `conv-${input.role}`}}; };
+  const stopRole = input => { try { input.beforeStop?.(); } catch (error) { return {ok: false, code: 1, message: error.message}; } stopCalls.push(input.role); return {ok: true, session: input.session, entry: {conversation: `conv-${input.role}`}}; };
   const done = () => change('repo/w', 'complete', {result: '근거'});
   return {home, store, floor, pids, alive, screens, stopped, stopCalls, stopRole, done, change, mk, link, cards};
 }
@@ -118,7 +118,7 @@ test('끄지 않음: 판정 뒤 끄기 직전에 세션이 다른 프로세스�
   w.floor.pid = s => { calls += 1; return calls >= 2 && s === 'kadan-작업A' ? '777' : pid(s); };
   const out = run(w);
   assert.deepEqual(w.stopCalls, ['검수B']);
-  assert.match(out.skipped.find(s => s.role === '작업A').reason, /프로세스가 바뀜/);
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, /다른 프로세스|프로세스가 바뀜/);
 });
 
 test('끄지 않음: 판정 뒤 끄기 직전에 다른 열린 업무가 생기면(역할마다 다시 읽음) 그 역할은 끄지 않는다', () => {
@@ -239,4 +239,106 @@ test('실제 stopRole로 끄면 stop 사건이 원장에 남는다(가짜 바닥
   const stops = readLedger(w.home).filter(e => e.kind === 'stop');
   assert.equal(stops.length, 2);
   assert.ok(stops.every(e => 'conversation' in e || 'conversationMissing' in e));
+});
+
+// ---- 독립검수 F1~F3 수정 (PR #378) ----
+const realStop = async () => (await import('../src/role-stop.mjs')).stopRole;
+const T = m => `2999-${m}`; // 시각을 직접 정해 세대 경계를 만든다
+const startOf = (w, role, extra = {}) => appendLedger({kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'echo', cwd: w.home, panePid: '100', roleProfile: 'worker', by: '감독', ...extra}, w.home);
+// F1 순서: 발령·done → stop → 같은 이름으로 다시 start → 옛 업무 마감
+const reuse = (w, extra) => { appendLedger({kind: 'stop', role: '작업A', session: 'kadan-작업A', by: '감독', t: T('03-01T00:00:00Z')}, w.home); startOf(w, '작업A', {t: T('06-01T00:00:00Z'), ...extra}); };
+
+test('F1: 같은 이름을 새 대화로 다시 쓴 세션은 이 업무와 무관하니 끄지 않는다', () => {
+  const w = world(); w.done(); reuse(w, {conversationMode: 'new'});
+  const out = run(w);
+  assert.deepEqual(w.stopCalls, ['검수B']);
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, /발령을 받은 대화 세대가 아님/);
+});
+
+for (const [name, extra] of [['kadan reopen(resume)', {conversationMode: 'resume', reopenOf: 'x'}], ['kadan restart', {restartOf: 'x'}]]) {
+  test(`F1: ${name}으로 같은 대화를 이은 세션은 대상이다`, () => {
+    const w = world(); w.done(); reuse(w, extra);
+    run(w);
+    assert.deepEqual(w.stopCalls.sort(), ['검수B', '작업A']);
+  });
+}
+
+test('F1: fork·새 대화로 뜬 세션은 끊긴 세대라 끄지 않는다', () => {
+  for (const mode of ['fork', 'new']) {
+    const w = world(); w.done(); reuse(w, {conversationMode: mode});
+    run(w);
+    assert.deepEqual(w.stopCalls, ['검수B'], mode);
+  }
+});
+
+test('F1: 새 대화 세션이 이 업무의 새 실행을 받았다면(지금 세대 안의 발령) 대상이다', () => {
+  const w = world({profiles: {}}); // 옛 실행 없이 새 세대에서 처음 받는다
+  reuse(w, {conversationMode: 'new'});
+  w.link('repo/w', '작업A', T('07-01T00:00:00Z'), T('07-02T00:00:00Z'));
+  w.done();
+  run(w);
+  assert.ok(w.stopCalls.includes('작업A'));
+});
+
+const handover = (w, from, to, key, t = T('02-01T00:00:00Z')) =>
+  appendLedger({kind: 'handover', phase: 'transferred', from, to, taskIds: [key.split('/')[1]], t}, w.home);
+
+test('F2: 이번 업무의 실행이 후임에게 인계됐으면 대상은 후임이고 선임 이름은 대상이 아니다', () => {
+  const w = world();
+  startOf(w, '후임'); w.alive['kadan-후임'] = true; w.pids['kadan-후임'] = '100'; w.screens['kadan-후임'] = IDLE;
+  const ex = w.store.get('repo/w').executions.find(x => w.cards.get(x.key).role === '작업A').key;
+  handover(w, '작업A', '후임', ex);
+  w.done();
+  run(w);
+  assert.deepEqual(w.stopCalls.sort(), ['검수B', '후임']);
+});
+
+test('F2: 다른 열린 업무의 실행을 인계받은 후임이 이번 업무도 맡았으면 후임을 끄지 않는다', () => {
+  const w = world({extraOpenWork: '작업A'});
+  startOf(w, '후임'); w.alive['kadan-후임'] = true; w.pids['kadan-후임'] = '100'; w.screens['kadan-후임'] = IDLE;
+  const mine = w.store.get('repo/w').executions.find(x => w.cards.get(x.key).role === '작업A').key;
+  const other = w.store.get('repo/other').executions[0].key;
+  handover(w, '작업A', '후임', mine); handover(w, '작업A', '후임', other);
+  w.done();
+  const out = run(w);
+  assert.ok(!w.stopCalls.includes('후임'));
+  assert.match(out.skipped.find(s => s.role === '후임').reason, /다른 열린 업무 repo\/other/);
+});
+
+// F3: 실제 stopRole로, 대화 번호 조회(lookup) 도중 상황을 바꾼다.
+const withLookup = (w, change) => async input => (await realStop())({...input, lookup: () => { change(input.role); return {conversationMissing: 'timeout'}; }});
+const wrap = fn => input => { let r; fn(input).then(x => { r = x; }); return r; };
+const syncStop = (w, change) => input => {
+  // stopRole은 동기 함수다. 동적 import를 피하려고 모듈을 미리 불러 둔다.
+  return realStopSync({...input, lookup: () => { change(input.role); return {conversationMissing: 'timeout'}; }});
+};
+const {stopRole: realStopSync} = await import('../src/role-stop.mjs');
+
+test('F3: 조회 도중 같은 세션에 새 업무의 실행이 발령되면 끄지 않고 stop 사건도 남기지 않는다', () => {
+  const w = world(); w.done();
+  const out = run(w, {stopRole: syncStop(w, role => {
+    if (role === '작업A') appendLedger({kind: 'send', by: '감독', role: '작업A', taskId: 'late-1', digest: 'late-1', t: T('09-01T00:00:00Z')}, w.home);
+  })});
+  assert.deepEqual(w.stopped, ['kadan-검수B']);
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, /미확정 카드 1건/);
+  assert.equal(readLedger(w.home).filter(e => e.kind === 'stop' && e.session === 'kadan-작업A').length, 0);
+});
+
+test('F3: 조회 도중 화면이 응답 생성 중으로 바뀌면 끄지 않는다', () => {
+  const w = world(); w.done();
+  const out = run(w, {stopRole: syncStop(w, role => { if (role === '작업A') w.screens['kadan-작업A'] = '✢ Grooving… (32s · ↓ 1.7k tokens)\n❯ \n'; })});
+  assert.deepEqual(w.stopped, ['kadan-검수B']);
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, /응답 생성 중/);
+});
+
+test('F3: 끄기 직전 확인 함수가 던지면 끄지 않는다 / 인자가 없는 stopRole 호출은 예전과 같다', () => {
+  const w = world(); w.done();
+  const base = {role: '작업A', session: 'kadan-작업A', home: w.home, floor: w.floor, log: () => {}, warn: () => {}, lookup: () => ({conversationMissing: 'timeout'})};
+  const refused = realStopSync({...base, beforeStop: () => { throw new Error('확인 실패'); }});
+  assert.equal(refused.ok, false); assert.match(refused.message, /확인 실패/);
+  assert.deepEqual(w.stopped, []);
+  assert.equal(readLedger(w.home).filter(e => e.kind === 'stop').length, 0);
+  const plain = realStopSync(base);
+  assert.equal(plain.ok, true);
+  assert.deepEqual(w.stopped, ['kadan-작업A']);
 });

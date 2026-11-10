@@ -126,3 +126,26 @@ test('실제 CLI: work complete가 두 세션을 끄고(stop에 번호), stdout�
   assert.equal(tmuxFloor.alive('kadan-wcreview'), false);
   kadan('stop', 'wcworker');
 });
+
+test('실제 CLI(F1): 같은 이름을 새 대화로 다시 쓴 세션은 옛 업무를 마감해도 꺼지지 않는다', {skip}, t => {
+  const s = setup(t, 'reuse');
+  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-reuserole', 'reuserole');
+  const home = ledgerHome(), store = new WorkStore(home), cards = new CardStore(home);
+  store.create({key: 'repo/old', title: '옛 업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'wcboss', repoPath: s.work});
+  store.change('repo/old', 'execute', {title: 'x', body: '본문', phase: 'implementation', round: '1'}, {revision: 1, by: 'wcboss', note: '발령'});
+  const key = store.get('repo/old').executions[0].key, id = key.split('/')[1];
+  cards.update(key, {status: 'assigned', role: 'reuserole', board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(key).revision, note: '배정', by: 'wcboss'});
+  appendLedger({kind: 'send', by: 'wcboss', role: 'reuserole', taskId: id, executionKey: key, digest: 'r' + id});
+  appendLedger({kind: 'done', by: 'reuserole', role: 'reuserole', taskId: id, executionKey: key, result: 'ok'});
+  assert.equal(kadan('stop', 'reuserole').status, 0);
+  wait(30);
+  fs.rmSync(s.ready, {force: true});
+  launch({HOLD: `${s.lock(B)},${s.rollout(B)}`}, s, 'kadan-reuserole', 'reuserole'); // 같은 이름, 새 대화
+  const done = spawnSync(process.execPath, [cli, 'work', 'complete', 'repo/old', '--revision', String(store.get('repo/old').revision), '--result', '근거', '--note', '확인'],
+    {encoding: 'utf8', env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: 'wcboss'}});
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(JSON.parse(done.stdout).status, 'done');
+  assert.equal(tmuxFloor.alive('kadan-reuserole'), true, '새 대화 세션은 살아 있어야 한다');
+  assert.match(done.stderr, /reuserole — 이 업무의 발령을 받은 대화 세대가 아님 · 끄려면 kadan stop reuserole/);
+  kadan('stop', 'reuserole');
+});
