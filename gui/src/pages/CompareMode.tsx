@@ -141,7 +141,7 @@ export function CompareMode({settings}: {settings: Settings}) {
             <td>{row.firstRoundPasses}/{row.completedSamples}</td><td>{number(row.medianRounds)}</td>
             <td>{number(row.medianImplementationMs == null ? null : row.medianImplementationMs / 60000)}</td>
             <td>{row.failed}</td><td>{row.inProgress}</td>
-            <td>{reasons(row.mixed)}<Links ids={row.mixedWorkIds} work /></td>
+            <td>{reasons(row.mixed)}{row.mixedWorkIds.length > 0 && <Links ids={row.mixedWorkIds} work />}</td>
             <td><Links ids={row.workIds} work /></td><td><Links ids={row.cardIds} /></td>
           </tr>)}</tbody></table>
         </div>
