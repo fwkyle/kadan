@@ -13,6 +13,7 @@ import {withEffectiveOwner} from './handover-state.mjs';
 import {WorkStore} from './work-store.mjs';
 import {notifyUser} from './user-notify.mjs';
 import {summarizeNight, HELD_PREFIX} from './night-summary.mjs';
+import {DUTY_LINES} from './night-duty.mjs';
 
 export const DEFAULT_MS = 8 * 60 * 60_000;
 export const MAX_MS = 12 * 60 * 60_000;
@@ -42,6 +43,9 @@ export function resolveEnd({until, for: span}, now) {
   return new Date(end).toISOString();
 }
 
+// 당번 스냅숏 전용 엄격한 읽기: 읽기 실패를 []로 바꾸지 않고 던진다(상태를 모르면 사용자 경로를 유지하려고). 다른 호출자는 위 함수를 그대로 쓴다.
+export const readDecisionEventsStrict = home => readStream(home, 'decisions/events.jsonl', {optional: true});
+
 export const readDecisionEvents = home => {
   try { return readStream(home, 'decisions/events.jsonl', {optional: true}); } catch { return []; }
 };
@@ -62,6 +66,12 @@ export function nightState(entries, decisionEvents, now) {
   if (inputAt !== null && inputAt <= untilMs) return {on: false, start: last, pending: {phase: 'ended-by-input', endedAt: inputAt}, last};
   if (untilMs <= now) return {on: false, start: last, pending: {phase: 'expired', endedAt: untilMs}, last};
   return {on: true, start: last, pending: null, last};
+}
+
+// 감시기 한 주기용 스냅샷: 당번 경로가 보는 세 칸만. 끝났지만 요약 전(pending)이면 꺼짐이다.
+export function nightDutySnapshot(entries, decisionEvents, now) {
+  const state = nightState(entries, decisionEvents, now);
+  return {on: state.on, level: state.start?.level ?? '기본', duty: state.on ? (state.start?.duty ?? null) : null};
 }
 
 // 열린 업무의 책임 감독에서 가장 가까운 슈퍼감독을 모아 중복을 뺀다. 관계표를 못 읽으면 이름을 추측하지 않고 실패한다.
@@ -110,7 +120,7 @@ export const AUTO_CHECKLIST = [
 
 // 슈퍼감독에게 가는 우편 본문. 고정 줄 3개 + 사용자 문구. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이라고 밝힌다.
 // level이 '자동'이면 고정 줄이 (4)~(9)까지 늘고, onlyRunning이면 새 일감 금지 줄이 붙는다. level이 없으면 지금과 같다.
-export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onlyRunning, allow}) {
+export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onlyRunning, allow, isDuty}) {
   const auto = level === '자동';
   const extra = auto ? [...AUTO_LINES, ...[`(10) ${onlyRunning ? ONLY_RUNNING_LINE : PICKS_LINE}`]] : [];
   return [
@@ -120,6 +130,7 @@ export function buildNightMessage({text, quote, viaChat, by, untilMs, level, onl
     `(2) 보류 대상은 밤중에 decision request를 새로 올리지 말고 보류로 남깁니다: kadan mail 사람 "${HELD_PREFIX} <한 줄>". 아침 요약에 모입니다.`,
     '(3) 위임 범위 안의 일은 결정 요청을 올리지 말고 스스로 처리합니다.',
     ...extra,
+    ...(auto && isDuty ? DUTY_LINES : []),
     ...(auto && allow?.length ? [`나이트런 중 자동 머지 허용(--allow): ${allow.join(', ')} — 관문이 정책 보류(night-merge-forbidden·deploy-branch)만 풀어 줍니다. 그 밖의 관문 조건은 그대로입니다.`] : []),
     `kyle 추가 문구: ${text}`,
     ...(viaChat ? [`kyle 채팅 원문(${by}이(가) 옮겨 적음): ${quote}`] : []),

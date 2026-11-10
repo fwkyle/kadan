@@ -3,6 +3,7 @@
 import {stripStoredHeader} from './mail-header.mjs';
 import {isUserActor,isSupervisorActor} from './actors.mjs';
 import {tallyNotes, cleanNoteText} from './night-note.mjs';
+import {DUTY_BASIS} from './night-duty.mjs';
 
 export const HELD_PREFIX = '[나이트 보류]';
 // 알림 한 통의 글자 수 상한. 요약 글(summary.text)이 이 안에 들어오게 만든다.
@@ -90,7 +91,9 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     .map(e => stripStoredHeader(readBody(e.digest), e)).filter(body => typeof body === 'string' && body.startsWith(HELD_PREFIX))
     .map(body => body.slice(HELD_PREFIX.length).trim().split('\n')[0].slice(0, 100));
   const tally = tallyNotes(entries.filter(e => e?.kind === 'night-note' && inWindow(e)));
-  const counts = {...decisions, restarts, mails: sends.length, held: held.length, ...tally.counts};
+  // 당번이 받은 경보: 나이트 구간의 alert 사건 중 수신 근거가 '당번'인 것을 경보 id당 한 번씩 센다(새 사건 종류 없음).
+  const dutyAlerts = new Set(entries.filter(e => e?.kind === 'alert' && e.route?.basis === DUTY_BASIS && e.delivered === true && inWindow(e)).map(e => e.id ?? e.requestId ?? `${e.alertKind}:${e.role}:${e.t}`)).size;
+  const counts = {...decisions, restarts, mails: sends.length, held: held.length, dutyAlerts, ...tally.counts};
 
   // 알림 상한 안에 제목·기간·집계가 모두 들어가야 한다. 넘치면 원문 표시를 먼저 줄이고, 그래도 넘치면 보류 상세를 뺀다(건수는 남는다).
   const render = (quoteLimit, showHeld, listN = 0) => {
@@ -103,7 +106,8 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     lines.push(start.viaChat
       ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan night status --text, 원장)`
       : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan night status --text, 원장)`);
-    lines.push(`나이트 모드 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase})`);
+    // 당번 이름(없으면 "당번 없음")은 제목 줄 끝에 둔다. 줄이기 단계에서 빼지 않는다. 위임·허용 줄이 앞 줄이라는 기존 읽는 쪽 약속은 지킨다.
+    lines.push(`나이트 모드 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase}) · ${start.duty ? `당번 ${fold(start.duty, 60)}` : '당번 없음'}`);
     const night = [];
     if (decisions.answered) night.push(`결정 답 ${decisions.answered}건`);
     if (decisions.chatRegistered) night.push(`채팅 등록 ${decisions.chatRegistered}건`);
@@ -111,6 +115,7 @@ export function summarizeNight({start, phase, endedAt, entries, decisionEvents, 
     if (restarts) night.push(`재시작 ${restarts}건`);
     if (sends.length) night.push(`우편 ${sends.length}건`);
     if (held.length) night.push(`보류로 남긴 것 ${held.length}건`);
+    if (dutyAlerts) night.push(`당번이 받은 경보 ${dutyAlerts}건`);
     // night-note 기록이 있으면 전체 "없음"이라 쓰지 않고, 비어 있는 기존 집계(결정 답·우편·재시작)만 좁혀 없음으로 쓴다.
     const noNight = tally.total ? '- 결정 답·우편·재시작 없음 (아래 "기록한 일" 참고)' : '- 밤사이 처리한 일 없음';
     lines.push('밤사이 생긴 일', night.length ? `- ${night.join(' · ')}` : noNight);
