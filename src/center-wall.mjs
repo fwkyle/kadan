@@ -214,7 +214,7 @@ export function askMessage({unit,text,context}) {
 export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedgerIncremental(home))}={}) {
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
- return {token,async handle(req,res,url) {
+ return {token,async handle(req,res,url,cache={}) {
   if (req.method === 'GET' && ['/runners/compare', '/runners/compare-report'].includes(url.pathname)) {
    try {
     const result = url.pathname === '/runners/compare' ? compareState(home)
@@ -230,8 +230,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
   }
   if (req.method === 'GET' && url.pathname === '/api/autopilot/repos') {
    try {
+    const body = JSON.stringify(listRepos(home, works.list()));
     res.writeHead(200, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'});
-    res.end(JSON.stringify(listRepos(home, works.list())));
+    res.end(body);
+    cache.remember?.(body, 'application/json; charset=utf-8'); // 오류(409)는 기억하지 않는다
    } catch (error) {
     res.writeHead(409, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
     res.end(autopilotRepoHttpMessage(error));
