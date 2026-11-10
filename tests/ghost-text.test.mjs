@@ -225,7 +225,9 @@ const NOTICE_FOOTERS = [
   // 목록에 없던 알림 줄(지어낸 문구)도 같은 결과여야 한다.
   [PATH_LINE, OPUS_STATUS, MODE_LINE, right("✔ 지어낸 새 알림 · /something to apply")],
 ];
-const MODE_ONLY_FOOTERS = [[`${MODE_LINE}   ${UPDATE_NOTICE}`], [MODE_LINE], [MODE_LINE, right(COMPACT_NOTICE)]];
+const MANY_NOTICES = [right(UPDATE_NOTICE), right(COMPACT_NOTICE),
+  ...[1, 2, 3, 4].map(n => right(`✔ 지어낸 알림 ${n} · /something to apply`))];
+const MODE_ONLY_FOOTERS =[[`${MODE_LINE}   ${UPDATE_NOTICE}`], [MODE_LINE], [MODE_LINE, right(COMPACT_NOTICE)]];
 const DIM_BODY = `${E}[2m  도구 출력의 흐린 줄${E}[0m`;
 const claudeScreen = (input, footer, body = ["⏺ ok", DIM_BODY]) =>
   [HISTORY, "", ...body, RULE, input, RULE, ...footer].join("\n");
@@ -270,6 +272,16 @@ test("codex도 모델 이름에 기대지 않는다: 지어낸 모델 이름에�
 
 test("상태 줄 없이 권한 줄만 남은 바닥글: 추천 문구만 빠진다", () => {
   assertGhostRemoved(MODE_ONLY_FOOTERS);
+});
+
+test("알림 줄이 더 붙어 바닥글이 6·7·8줄이어도 추천 문구만 빠진다(9줄부터는 보존)", () => {
+  const base = [PATH_LINE, OPUS_STATUS, MODE_LINE];
+  assertGhostRemoved([3, 4, 5].map(extra => [...base, ...MANY_NOTICES.slice(0, extra)]));
+  const nine = [...base, ...MANY_NOTICES.slice(0, 6)];
+  const ansi = claudeScreen(CLAUDE_GHOST, nine);
+  const out = splitGhostText(ansi);
+  assert.equal(out.judge, plainOf(ansi));
+  assert.equal(out.ghost, "");
 });
 
 test("기존 상태 줄(Opus·Sonnet·Haiku)은 그대로 통과한다", () => {
@@ -326,8 +338,9 @@ test("입력칸이 아닌 곳은 그대로 둔다: 가로줄 없는 인용·들�
     // 바닥글이 한 줄도 없다
     [RULE, quote, RULE].join("\n"),
     [RULE, quote, RULE, "", ""].join("\n"),
-    // 바닥글이 5줄을 넘는다(입력칸이 화면 끝에 있지 않다)
-    [RULE, quote, RULE, ...footer, right(UPDATE_NOTICE), right(COMPACT_NOTICE), "  이어지는 본문"].join("\n"),
+    // 바닥글이 8줄을 넘는다(입력칸이 화면 끝에 있지 않다)
+    [RULE, quote, RULE, ...footer, ...MANY_NOTICES.slice(0, 6)].join("\n"),
+    [RULE, quote, RULE, ...footer, ...MANY_NOTICES.slice(0, 6), "  이어지는 본문", "  더 이어지는 본문"].join("\n"),
   ]) {
     const out = splitGhostText(ansi);
     assert.equal(out.judge, plainOf(ansi), ansi);

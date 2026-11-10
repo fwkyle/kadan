@@ -9,7 +9,8 @@ const INPUT_LINE = /^\s*[❯›>]/u;
 // claude 입력칸은 화면 첫 칸에서 시작한다. 본문 속 인용·도구 출력은 들여쓰기가 있어 여기에 걸리지 않는다.
 const CLAUDE_INPUT = /^❯/u;
 const CLAUDE_RULE = /^─{3,}\s*$/u;
-const CLAUDE_FOOTER_MAX = 5;
+// 바닥글 줄 수 상한은 "입력칸이 화면 끝에 있다"만 확인한다. 관찰한 최대 5줄(경로·상태 줄·권한 줄·알림 2줄)에 여유 3줄.
+const CLAUDE_FOOTER_MAX = 8;
 const CODEX_STATUS = /^\s+\S+ (?:none|minimal|low|medium|high|xhigh|max|default) · (?:~\/|\/).+$/u;
 const CODEX_SHORTCUTS = /^\s+(?:← for agents · )?\? for shortcuts(?:\s+⚠ .+)?$/u;
 
@@ -77,7 +78,7 @@ const plain = row => row.map(cell => cell.char).join("");
 
 // 실측 claude: 두 가로줄 사이 ❯ + 바닥글. codex: › + 상태/단축키 바닥글(#180).
 // 마지막 기호가 이 모양이 아니면 앞선 본문에서 다른 후보를 찾지 않고 보존한다.
-// claude는 구조만 본다(2026-11-10): 첫 칸의 ❯, 바로 위아래가 첫 칸에서 시작하는 가로줄, 그 아래 바닥글 1~5줄이 화면 끝.
+// claude는 구조만 본다(2026-11-10): 첫 칸의 ❯, 바로 위아래가 첫 칸에서 시작하는 가로줄, 그 아래 바닥글 1~8줄이 화면 끝.
 // 바닥글의 글자(모델 표시·알림 문구·상태 줄 유무)는 보지 않는다. 사용자·버전마다 달라서, 목록에 없는 모델 이름이나
 // 알림 줄이 뜨면 추천 문구가 사람 입력으로 남았다(쉬는 역할의 restart 거절).
 function composerIndex(lines) {
