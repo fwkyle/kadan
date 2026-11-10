@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {commandWords} from './ai-identity.mjs';
-import {conversationOf, conversationDesignations} from './conversation-ref.mjs';
+import {conversationOf, conversationDesignations, walkKnownOptions} from './conversation-ref.mjs';
 import {INLINE_FLAG} from './inline-screen.mjs';
 
 // listModels: 실행기가 자기 모델 목록을 내는 명령 틀(자리 없음). 화면의 '목록 불러오기'를 누를 때만 실행한다.
@@ -87,9 +87,8 @@ const slotMatches = (word, templateWord, mark = SENTINEL.conversation) => templa
 const slotValue = (word, templateWord, mark = SENTINEL.conversation) => word.slice(templateWord.indexOf(mark),
   word.length - (templateWord.length - templateWord.indexOf(mark) - mark.length));
 
-// 명령 낱말에서 spawn 틀의 한 자리(모델 또는 강도)를 찾는다. 옵션 이름을 코드에 두지 않으려고 틀을 표식 값으로 채워
-// 자리를 찾는다(tailOf와 같은 방식). 값 낱말이 옵션 꼴(-로 시작)이 아니면 틀에서 그 앞에 있는 낱말(옵션 이름)과
-// 붙어 있는 한 쌍으로만 찾는다. 첫 일치만 보지 않고 일치한 자리를 모두 돌려준다 — 몇 번 있는지는 호출자가 판정한다.
+// spawn 틀의 한 자리(모델 또는 강도). 옵션 이름을 코드에 두지 않으려고 틀을 표식 값으로 채워 읽는다(tailOf와 같은 방식).
+// 값 낱말이 옵션 꼴(-로 시작)이 아니면 틀에서 그 앞에 있는 낱말이 옵션 이름(lead)이고, 옵션 꼴이면 `--이름=값` 한 낱말이다.
 function templateSlot(runner, template, key) {
   const mark = SENTINEL[key];
   const at = template.flatMap((word, i) => word.includes(mark) ? [i] : []);
@@ -98,38 +97,86 @@ function templateSlot(runner, template, key) {
   if (at.length > 1 || word.split(mark).length !== 2) throw new Error(`${runner}.spawn 틀에 ${key} 자리가 여러 번 있어 자리를 정할 수 없다`);
   const other = SENTINEL[key === 'model' ? 'effort' : 'model'];
   if (word.includes(other)) throw new Error(`${runner}.spawn 틀의 한 낱말에 모델과 강도 자리가 함께 있어 자리를 가를 수 없다`);
-  return {word, mark, lead: !word.startsWith('-') && at[0] > 0 ? template[at[0] - 1] : null};
+  const lead = word.startsWith('-') ? null : template[at[0] - 1];
+  if (lead !== null && !lead?.startsWith('-')) throw new Error(`${runner}.spawn 틀의 ${key} 자리 앞에 옵션 이름이 없어 자리를 정할 수 없다`);
+  return {word, mark, lead};
 }
-const slotHits = (words, slot) => words.flatMap((word, j) =>
-  slotMatches(word, slot.word, slot.mark) && (slot.lead == null || words[j - 1] === slot.lead) ? [j] : []);
+// 걷기 결과의 **옵션 자리**에서만 찾는다: 틀의 옵션 이름과 같고 그 값 낱말이 틀의 값 모양과 맞는 옵션.
+// 다른 옵션의 값 자리에 있는 낱말은 걷기에서 옵션으로 나오지 않으므로 후보가 아니다(PR #362 재검수 N2).
+const slotHits = (words, options, slot) => options.filter(option => slot.lead === null
+  ? option.inline && slotMatches(words[option.at], slot.word, slot.mark)
+  : !option.inline && option.name === slot.lead && option.valueAt != null && slotMatches(words[option.valueAt], slot.word, slot.mark));
+const slotWordAt = option => option.valueAt ?? option.at;
+const WALK_REASONS = {'unknown-runner': '옵션 표가 없는 실행기', 'unknown-option': '카단이 모르는 옵션',
+  'bare-word': '옵션 자리가 아닌 낱말(하위 명령·첫 프롬프트 등)', 'double-dash': '`--` 뒤 입력'};
+function walkOrThrow(words) {
+  const walked = walkKnownOptions(words.map(shellWord).join(' '));
+  if (!walked.ok) {
+    throw new Error(`마지막 시작 명령을 끝까지 해석하지 못했다(${WALK_REASONS[walked.reason]}: ${walked.word}) — `
+      + '모델 자리를 확실히 가릴 수 없어 바꾸지 않는다');
+  }
+  return walked.options;
+}
 
-// restart --model-from-settings: 명령에서 모델·강도 자리의 **값만** 바꾼다(2026-11-10, PR #362 재검수 N1).
-// 실행 파일·다른 옵션과 그 값·낱말 순서·권한 옵션의 있고 없음은 건드리지 않으므로 구조상 바뀔 수 없다.
-// - 모델 자리는 정확히 1번, 찾은 값이 expectModel(시작 기록에서 읽은 모델)과 같아야 한다. 아니면 자리를 잘못 짚은 것일 수 있어 거절한다.
-// - 강도 자리는 0번 또는 1번. effort 값이 있고 자리가 있으면 값을 바꾸고, 자리가 없으면 틀의 강도 낱말을 모델 자리 바로 뒤에 넣는다
-//   (틀에 강도 자리가 없는 실행기는 넣지 않는다). effort 값이 없으면 옛 강도 자리는 그대로 둔다.
+// restart --model-from-settings: 명령에서 모델·강도 자리의 **값만** 바꾼다(2026-11-10, PR #362 재검수 N1·N2).
+// command는 평소 restart 명령(옛 명령 + 현재 대화의 resume 꼬리)이다. 꼬리를 뗀 낱말을 conversation-ref의 옵션 표로
+// 처음부터 끝까지 걸어 옵션과 값을 가른 뒤, 옵션 자리에서만 모델·강도 자리를 찾는다. 끝까지 해석되지 않으면 바꾸지 않는다.
+// 실행 파일·다른 옵션과 그 값·낱말 순서·권한 옵션의 있고 없음은 건드리지 않는다.
+// - 모델 자리는 정확히 1번, 찾은 값이 expectModel(시작 기록에서 읽은 모델)과 같아야 한다.
+// - 강도 자리는 0번 또는 1번. effort 값이 있고 자리가 있으면 값을 바꾸고, 자리가 없으면 틀의 강도 낱말을 모델 자리의 값 바로 뒤에 넣는다
+//   (옵션과 그 값이 끝난 자리라 다른 옵션과 값 사이를 가르지 않는다. 틀에 강도 자리가 없는 실행기는 넣지 않는다).
+//   effort 값이 없으면 옛 강도 자리는 그대로 둔다.
+// - 바꾼 뒤 같은 걷기로 다시 해석해, 옵션 자리가 옛 것과 같고(넣은 강도 자리만 예외) 모델·강도 값 말고 모든 낱말이 같은지 확인한다.
 // 돌려주는 값: {command, previous: {model, effort(없으면 null)}}.
 export function swapModelSlots(settings, runner, command, {model, effort, expectModel}) {
-  const words = commandWords(command);
+  const all = commandWords(command), tail = resumeTail(settings, runner);
   const template = commandWords(fillTemplate(runnerTemplate(settings, runner, 'spawn'),
     {model: SENTINEL.model, effort: SENTINEL.effort, conversation: SENTINEL.conversation, prompt: 'P', cwd: '/'}));
-  if (!words?.length || !template) throw new Error(`명령 또는 ${runner}.spawn 틀을 낱말로 읽을 수 없다`);
+  if (!all || all.length <= tail.length || !template) throw new Error(`명령 또는 ${runner}.spawn 틀을 낱말로 읽을 수 없다`);
+  const words = all.slice(0, -tail.length);
+  const options = walkOrThrow(words);
   const modelSlot = templateSlot(runner, template, 'model'), effortSlot = templateSlot(runner, template, 'effort');
   if (!modelSlot) throw new Error(`${runner}.spawn 틀에 {model} 자리가 없다`);
-  const modelAt = slotHits(words, modelSlot), effortAt = effortSlot ? slotHits(words, effortSlot) : [];
-  if (modelAt.length !== 1)
-    throw new Error(`마지막 시작 명령에서 모델 자리를 ${modelAt.length}번 찾았다(정확히 1번이어야 한다) — 설정 틀과 다른 꼴이라 모델을 바꾸지 않는다`);
-  if (effortAt.length > 1) throw new Error(`마지막 시작 명령에서 강도 자리를 ${effortAt.length}번 찾았다 — 어느 것을 바꿀지 정할 수 없다`);
-  const previous = {model: slotValue(words[modelAt[0]], modelSlot.word, modelSlot.mark),
-    effort: effortAt.length ? slotValue(words[effortAt[0]], effortSlot.word, effortSlot.mark) : null};
+  const modelHits = slotHits(words, options, modelSlot), effortHits = effortSlot ? slotHits(words, options, effortSlot) : [];
+  if (modelHits.length !== 1)
+    throw new Error(`마지막 시작 명령에서 모델 자리를 ${modelHits.length}번 찾았다(정확히 1번이어야 한다) — 설정 틀과 다른 꼴이라 모델을 바꾸지 않는다`);
+  if (effortHits.length > 1) throw new Error(`마지막 시작 명령에서 강도 자리를 ${effortHits.length}번 찾았다 — 어느 것을 바꿀지 정할 수 없다`);
+  const modelAt = slotWordAt(modelHits[0]), effortAt = effortHits.length ? slotWordAt(effortHits[0]) : -1;
+  const previous = {model: slotValue(words[modelAt], modelSlot.word, modelSlot.mark),
+    effort: effortAt >= 0 ? slotValue(words[effortAt], effortSlot.word, effortSlot.mark) : null};
   if (previous.model !== expectModel)
     throw new Error(`모델 자리에서 읽은 값(${previous.model})이 시작 기록의 모델(${expectModel})과 다르다 — 자리를 잘못 짚었을 수 있어 바꾸지 않는다`);
   const next = [...words];
-  next[modelAt[0]] = modelSlot.word.replace(modelSlot.mark, model);
-  if (effort && effortAt.length) next[effortAt[0]] = effortSlot.word.replace(effortSlot.mark, effort);
-  else if (effort && effortSlot)
-    next.splice(modelAt[0] + 1, 0, ...(effortSlot.lead == null ? [] : [effortSlot.lead]), effortSlot.word.replace(effortSlot.mark, effort));
-  return {command: next.map(shellWord).join(' '), previous};
+  next[modelAt] = modelSlot.word.replace(modelSlot.mark, model);
+  let inserted = [];
+  if (effort && effortAt >= 0) next[effortAt] = effortSlot.word.replace(effortSlot.mark, effort);
+  else if (effort && effortSlot) {
+    inserted = [...(effortSlot.lead === null ? [] : [effortSlot.lead]), effortSlot.word.replace(effortSlot.mark, effort)];
+    next.splice(modelAt + 1, 0, ...inserted);
+  }
+  assertOnlySlotsChanged({before: words, after: next, options, changed: [modelAt, effortAt], insertAt: modelAt + 1, inserted});
+  return {command: [...next, ...all.slice(-tail.length)].map(shellWord).join(' '), previous};
+}
+
+// 바꾼 명령을 같은 걷기로 다시 해석해 스스로 확인한다. 넣은 강도 낱말을 빼면 낱말 수·옵션 자리(이름·위치·값 위치)가 옛 것과 같고,
+// 모델·강도 값 낱말 말고는 모든 낱말이 같아야 한다. 넣은 강도는 새 걷기에서 옵션 자리 하나로 읽혀야 한다.
+function assertOnlySlotsChanged({before, after, options, changed, insertAt, inserted}) {
+  const differ = () => { throw new Error('모델·강도 말고 다른 낱말이나 옵션 자리가 달라진다 — 바꾸지 않는다'); };
+  const again = walkOrThrow(after);
+  const back = at => at >= insertAt + inserted.length ? at - inserted.length : at;
+  const isInserted = at => at >= insertAt && at < insertAt + inserted.length;
+  if (inserted.length && !again.some(option => option.at === insertAt
+    && (option.valueAt ?? option.at) === insertAt + inserted.length - 1)) differ();
+  const rest = again.filter(option => !isInserted(option.at));
+  if (rest.length !== options.length || after.length !== before.length + inserted.length) differ();
+  rest.forEach((option, i) => {
+    const old = options[i];
+    if (option.name !== old.name || option.inline !== old.inline || back(option.at) !== old.at
+      || (option.valueAt == null ? old.valueAt != null : back(option.valueAt) !== old.valueAt)) differ();
+  });
+  after.forEach((word, at) => {
+    if (!isInserted(at) && !changed.includes(back(at)) && word !== before[back(at)]) differ();
+  });
 }
 
 // 마지막 시작 명령에서 대화 인자만 바꿔 다시 연다: 꼬리가 이미 붙어 있으면(이전 restart) 떼고, 새 ID로 붙인다.

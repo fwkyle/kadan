@@ -116,9 +116,9 @@ test('거절은 모두 끄기 전이다: 프로필 없음·설정 값 없음·�
     ['비교 모드 start', fixture({extra: {compareMode: true, settingsPreset: 'B', pickId: 'p1'}}), undefined, /비교 모드/],
     ['다른 대화 지정', fixture({cmd: `${OLD} --continue`}), undefined, /대화 지정/],
     // 모델 자리는 정확히 1번, 읽은 값이 시작 기록의 모델과 같아야 한다. 강도 자리는 많아야 1번이다.
-    ['모델 자리 0번(틀과 다른 꼴)', fixture({cmd: 'claude -m claude-haiku-5-5 --effort low'}), undefined, /모델 자리를 0번 찾았다/],
+    ['모델 자리 0번(틀과 다른 꼴 --model=값)', fixture({cmd: 'claude --model=claude-haiku-5-5 --effort low'}), undefined, /모델 자리를 0번 찾았다/],
     ['모델 자리 2번', fixture({cmd: `claude --model claude-haiku-5-5 ${OLD.replace(/^claude /, '')}`}), undefined, /모델 자리를 2번 찾았다/],
-    ['읽은 값이 시작 기록의 모델과 다름', fixture({cmd: 'claude --model other-model --effort low -m claude-haiku-5-5'}), undefined,
+    ['읽은 값이 시작 기록의 모델과 다름', fixture({cmd: 'claude --model other-model --effort low --model=claude-haiku-5-5'}), undefined,
       /읽은 값\(other-model\)이 시작 기록의 모델\(claude-haiku-5-5\)과 다르다/],
     ['강도 자리 2번', fixture({cmd: `${OLD} --effort high`}), undefined, /강도 자리를 2번 찾았다/],
   ];
@@ -282,6 +282,82 @@ test('강도 자리: 옛 명령에 없으면 모델 자리 뒤에 넣고, 설정
     openFiles: [`/h/.gemini/antigravity-cli/conversations/${ID}.db`]});
   agy.run(OPTION, settingsOf({worker: {runner: 'agy', model: 'gemini-new', effort: 'high'}}));
   assert.equal(agy.entries.at(-1).cmd, `agy --model gemini-new --dangerously-skip-permissions --conversation ${ID}`);
+});
+
+// 재검수 2의 N2: 낱말 모양만 보고 자리를 찾으면 다른 옵션의 값(`--append-system-prompt`의 값 '--effort')을 강도 옵션으로 오인해
+// 그 뒤 낱말(`--allowedTools`)을 강도 값으로 덮어썼다. 지금은 옵션 표로 끝까지 걸어 옵션 자리에서만 찾는다.
+test('N2: 다른 옵션의 값이 강도 옵션 이름과 같아도 그 값과 뒤 옵션은 그대로이고, 강도는 모델 자리 뒤에 새로 들어간다', () => {
+  const f = fixture({cmd: "claude --model claude-haiku-5-5 --append-system-prompt '--effort' --allowedTools Read"});
+  const receipt = f.run();
+  assert.equal(f.entries.at(-1).cmd,
+    `claude --model claude-sonnet-5-5 --effort high --append-system-prompt --effort --allowedTools Read --resume ${ID}`);
+  assert.equal(receipt.modelFromSettings.previousEffort, null);
+  assert.equal(f.entries.at(-1).previousEffort, undefined);
+});
+
+// N2 인접: 다른 옵션의 값이 '--model'인 꼴은 여기까지 오기 전에 기존 신원 판독(launchIdentityOf)이 모델을 못 읽어 거절한다.
+// 끄지 않으므로 그 옵션의 값이 바뀌지 않는다.
+test('N2 인접: 다른 옵션의 값이 --model인 명령은 끄기 전에 거절한다(값이 바뀌지 않는다)', () => {
+  const f = fixture({cmd: "claude --append-system-prompt '--model' --model claude-haiku-5-5 --effort low"});
+  assert.throws(() => f.run(), /등록 실행기·모델을 읽지 못했다/);
+  assert.deepEqual(f.log, []);
+});
+
+test('끝까지 해석되지 않는 명령은 끄기 전에 거절한다: 모르는 옵션·맨 낱말·`--`', () => {
+  const cases = [
+    ['모르는 옵션', fixture({cmd: `${OLD} --some-unknown-flag`}), /카단이 모르는 옵션: --some-unknown-flag/],
+    // N2 인접: 다른 옵션의 값 '--effort' 뒤의 일반 글자 low는 강도 값이 아니라 맨 낱말이다. 바꾸지 않고 거절한다.
+    ['값 뒤의 맨 낱말', fixture({cmd: "claude --append-system-prompt '--effort' low --model claude-haiku-5-5"}),
+      /옵션 자리가 아닌 낱말\(하위 명령·첫 프롬프트 등\): low/],
+    ['값처럼 보이는 맨 낱말', fixture({cmd: 'claude --append-system-prompt --model X --model claude-haiku-5-5 --effort low'}),
+      /옵션 자리가 아닌 낱말\(하위 명령·첫 프롬프트 등\): X/],
+    ['첫 프롬프트', fixture({cmd: `${OLD} hello`}), /옵션 자리가 아닌 낱말\(하위 명령·첫 프롬프트 등\): hello/],
+    ['`--` 뒤 입력', fixture({cmd: `${OLD} -- hello`}), /`--`/],
+  ];
+  for (const [name, f, pattern] of cases) {
+    assert.throws(() => f.run(), error => {
+      assert.match(error.message, pattern, name);
+      return true;
+    }, name);
+    assert.deepEqual(f.log, [], name);
+    assert.equal(f.entries.length, 1, name);
+  }
+  // 모든 거절 문구에 같은 뜻이 붙는다.
+  assert.throws(() => fixture({cmd: `${OLD} --some-unknown-flag`}).run(), /모델 자리를 확실히 가릴 수 없어 바꾸지 않는다/);
+  // 옵션 표가 없는 실행기는 restart의 대화 다시 열기 자체가 먼저 거절한다. 걷기 함수의 그 갈래는 아래 걷기 함수 시험이 본다.
+});
+
+test('표에 있는 옵션은 값에 공백·기호가 있어도 그대로 보존된다', () => {
+  const f = fixture({cmd: `${OLD} --add-dir '/work/path with spaces' --append-system-prompt 'literal; text' --allowedTools Read`});
+  f.run();
+  assert.equal(f.entries.at(-1).cmd,
+    `${NEW} --add-dir '/work/path with spaces' --append-system-prompt 'literal; text' --allowedTools Read --resume ${ID}`);
+});
+
+test('끝 fork 꼴(갈라 연 역할)도 살아 있는 대화로 resume하며 모델·강도만 바뀐다', () => {
+  const f = fixture({cmd: `${OLD} --resume 0197bbbb-1111-4222-8333-444455556666 --fork-session`});
+  f.run();
+  assert.equal(f.entries.at(-1).cmd, `${NEW} --resume ${ID}`);
+});
+
+test('걷기 함수: 옵션 자리와 값 자리를 가르고, 기존 판정 함수의 결과는 그대로다', async () => {
+  const {walkKnownOptions, startConversationCertainty, conversationOf} = await import('../src/conversation-ref.mjs');
+  assert.deepEqual(walkKnownOptions("/opt/bin/claude --model m --append-system-prompt '--effort' --verbose --add-dir=/x"), {ok: true,
+    harness: 'claude', options: [
+      {at: 1, name: '--model', valueAt: 2, inline: false},
+      {at: 3, name: '--append-system-prompt', valueAt: 4, inline: false},
+      {at: 5, name: '--verbose', valueAt: null, inline: false},
+      {at: 6, name: '--add-dir', valueAt: null, inline: true},
+    ]});
+  assert.deepEqual(walkKnownOptions('claude --model m --resume x'), {ok: false, word: '--resume', reason: 'unknown-option'});
+  assert.deepEqual(walkKnownOptions('codex -p lite resume x'), {ok: false, word: 'resume', reason: 'bare-word'});
+  assert.deepEqual(walkKnownOptions('omo --model m'), {ok: false, word: 'omo', reason: 'unknown-runner'});
+  // 값 낱말이 없는 끝 옵션은 예전처럼 '새 대화로 확실함'이다(판정 불변).
+  for (const [cmd, certainty] of [['claude --model m --effort low', 'new'], ['claude --model', 'new'], ['claude --model m hello', 'unknown'],
+    ['claude --model m -- x', 'unknown'], ['claude --model m --resume x', 'resume'], ['codex -p lite --model m fork x', 'fork'],
+    ['claude --verbose=1', 'unknown'], ['omo --model m', 'unknown'], ['agy --model m --dangerously-skip-permissions', 'new']])
+    assert.equal(startConversationCertainty(cmd), certainty, cmd);
+  assert.deepEqual(conversationOf('claude --model m --resume x'), {conversationMode: 'resume', conversationRef: 'x'});
 });
 
 // PR #362 검수 F2: 역할 말고 낱말이 더 있으면 역할 선택·세션 조회 전에 사용법 오류로 끝난다. 실제 명령줄 경로(cmdRestart)를 지난다.
