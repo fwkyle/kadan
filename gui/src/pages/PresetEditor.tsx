@@ -1,9 +1,20 @@
 import {useContext, useEffect, useId, useState} from 'react';
 import {save} from '../resource';
 import {AppContext, ErrorMessage} from '../ui';
-import {presetSaveFields, presetStamp, stagePreset} from '../preset-draft';
+import {HARD_ROLE, clearPreset, presetSaveFields, presetStamp, stagePreset} from '../preset-draft';
 import {RunnerForm} from './RunnerForm';
-import type {RunnersData, Settings} from './Runners';
+import type {Choice, RunnersData, Settings} from './Runners';
+
+// 어려운 일 작업자 자리: 폴백 목록이 없고, 비우면 작업자와 같은 값으로 띄운다. 비우기도 저장 전까지는 변경안이다.
+export function HardSlot({draft, clear}: {draft: Settings; clear: () => void}) {
+  const value = draft.presets[draft.activePreset].roles[HARD_ROLE] as Choice | undefined;
+  return <div className="action-form">
+    <p>{value ? `지금 값: ${[value.runner, value.model, value.effort].filter(Boolean).join(' / ')}`
+      : '비어 있음 — 작업자와 같은 값으로 띄웁니다'}</p>
+    <p className="muted">어려움 카드를 맡길 작업자를 <code>kadan start 역할 --profile worker --difficulty hard</code>로 띄울 때 쓰는 값입니다. 대체 후보는 없습니다.</p>
+    <button type="button" disabled={!value} onClick={clear}>비우기</button>
+  </div>;
+}
 
 export function PresetEditor({data, settings}: {data: RunnersData; settings: Settings}) {
   const context = useContext(AppContext), id = useId();
@@ -33,8 +44,9 @@ export function PresetEditor({data, settings}: {data: RunnersData; settings: Set
         <summary>{label} 바꾸기</summary>
         {role !== 'senior' && <RunnerForm data={data} settings={draft} role={role}
           stage={(r, f, c, op) => setDraft(stagePreset(draft, r, f, c, op))} />}
-        <RunnerForm data={data} settings={draft} role={role} fallback
-          stage={(r, f, c, op) => setDraft(stagePreset(draft, r, f, c, op))} />
+        {role === HARD_ROLE ? <HardSlot draft={draft} clear={() => setDraft(clearPreset(draft, HARD_ROLE))} />
+          : <RunnerForm data={data} settings={draft} role={role} fallback
+            stage={(r, f, c, op) => setDraft(stagePreset(draft, r, f, c, op))} />}
       </details>)}
     </fieldset>
     {conflict && <p className="warning">다른 곳에서 이 프리셋이 바뀌었습니다. 최신 값을 불러온 뒤 다시 고르세요.</p>}

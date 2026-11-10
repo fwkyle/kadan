@@ -17,7 +17,7 @@ const executionModelCache = new WeakMap();
 export const pick = (value, keys) =>
   Object.fromEntries(keys.map((key) => [key, value[key] ?? null]));
 const rowFields =
-  "key workKey workType id kind repo title originalTitle state stateLabel stored board owner at reportAt reportLabel model modelTitle effort purpose scope summary next turnLabel turnReason turnSource flowLabel flowTitle flowPhase rallyStep healthKind healthLabel healthReason signalAt signalLabel revision parentWorkKey bucket workMs workBasis waitMs closeMs reworks profile modelState".split(
+  "key workKey workType id kind repo title originalTitle state stateLabel stored board owner at reportAt reportLabel model modelTitle effort purpose scope summary next turnLabel turnReason turnSource flowLabel flowTitle flowPhase rallyStep difficulty healthKind healthLabel healthReason signalAt signalLabel revision parentWorkKey bucket workMs workBasis waitMs closeMs reworks profile modelState".split(
     " ",
   );
 // 카드별 작업 시간·실제 모델. 원장 색인을 수집당 한 번만 만든다(요청·화면마다 다시 계산하지 않는다).

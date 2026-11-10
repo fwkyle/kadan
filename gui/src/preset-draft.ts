@@ -1,7 +1,11 @@
 import type { Choice, Settings } from './pages/Runners';
 
+// 어려운 일 작업자 자리: 선택 칸이라 비울 수 있고 폴백 목록이 없다(서버 SETTINGS_ROLES의 worker-hard).
+export const HARD_ROLE = 'worker-hard';
+
 // 여러 칸을 고쳐도 서버에는 보내지 않는다. 프리셋 저장 때 한 요청으로 보낸다.
 export function stagePreset(settings: Settings, role: string, fallback: boolean, value: Choice, op: string) {
+  if (fallback && role === HARD_ROLE) throw new Error('어려운 일 작업자는 대체 후보가 없습니다.');
   const next = structuredClone(settings);
   const preset = next.presets[next.activePreset];
   const choice: Choice = {runner: value.runner, model: value.model,
@@ -25,6 +29,14 @@ export function stagePreset(settings: Settings, role: string, fallback: boolean,
     if (role === 'senior') preset.roles.senior = list;
     else preset.fallback = {...preset.fallback, [role]: list};
   }
+  return next;
+}
+
+// 비우기: 칸 자체를 지운다(빈 값·빈 객체를 남기지 않는다). 저장 전까지는 변경안일 뿐이다.
+export function clearPreset(settings: Settings, role: string) {
+  if (role !== HARD_ROLE) throw new Error('비울 수 없는 역할입니다.');
+  const next = structuredClone(settings);
+  delete next.presets[next.activePreset].roles[role];
   return next;
 }
 

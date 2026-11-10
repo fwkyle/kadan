@@ -3,6 +3,9 @@ import { save } from "../resource";
 import { listOf, ownPart } from "../runner-draft";
 import { AppContext, ErrorMessage } from "../ui";
 import type { Choice, Settings, RunnersData } from "./Runners";
+// 서버와 같다: 작업자 역할로 막은 모델은 어려운 일 작업자 자리에서도 막힌다.
+const blocks = (b: { roles?: string[] }, role: string) =>
+  !b.roles || b.roles.includes(role) || (role === "worker-hard" && b.roles.includes("worker"));
 const label = (c: Choice) => [c.runner, c.model, c.effort].filter(Boolean).join(" / ");
 export function RunnerForm({
   data,
@@ -66,7 +69,7 @@ export function RunnerForm({
   const favorites = settings.favorites || [];
   const blockedFor = (model: string) =>
     settings.blocked?.find(
-      (b) => b.model === model && (!b.roles || b.roles.includes(role)),
+      (b) => b.model === model && blocks(b, role),
     );
   // 즐겨찾기로 세 칸을 함께 채운다. 프리셋 저장 전까지는 화면의 변경안이다.
   const pick = (fav: Choice) => {
@@ -229,7 +232,7 @@ export function RunnerForm({
               {spec?.models.map((m) => {
                 const blocked = settings.blocked?.find(
                   (b) =>
-                    b.model === m.model && (!b.roles || b.roles.includes(role)),
+                    b.model === m.model && blocks(b, role),
                 );
                 return (
                   <option
