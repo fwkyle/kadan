@@ -29,16 +29,89 @@ export function readWatchProcesses(spawn=spawnSync,name='kadan-watch'){
  }
  return processes;
 }
+// 원장 색인. Why: 판마다 원장 사건 배열 전체를 세 번씩 걸러 내 비용이 판 수 × 사건 수였다(판 63개 × 11.7만 건).
+// 원장을 한 번만 훑어 이 파일이 쓰는 사건만 역할별로 묶어 두고, 판마다 그 묶음만 본다.
+// 담는 것은 원장에서 뽑은 값뿐이다. 프로세스·관계 파일·살아 있는 역할·시각에 달린 값은 조회 때마다 계산한다.
+const DAY_MS=24*60*60_000,RECENT_ALERTS=3;
+const AI_SOURCES=['worker','supervisor-health'],AI_COUNTS=['requests','reported','timeouts','failed','offline'];
+const AI_CALL_COUNT=new Map([['reported',1],['timeout',2],['call-failed',3],['report-missing',3],
+ ['report-incomplete',3],['report-error',3],['network',4],['slept',4]]);
+function buildLedgerIndex(entries){
+ const index={entries,length:entries.length,broken:false,cycles:[],hierarchyLoaded:[],
+  activity:new Map(),lastChecked:new Map(),alerts:new Map()};
+ const addAlert=(name,seq,entry)=>{
+  let recent=index.alerts.get(name);
+  if(!recent)index.alerts.set(name,recent=[]);
+  recent.push({seq,entry});
+  if(recent.length>RECENT_ALERTS)recent.shift(); // 이름마다 마지막 몇 개만 있으면 판의 마지막 몇 개를 고를 수 있다.
+ };
+ for(let seq=0;seq<entries.length;seq++){
+  const e=entries[seq];
+  if(e?.broken){index.broken=true;break;} // 깨진 원장은 색인을 쓰지 않는다(모름).
+  switch(e?.kind){
+   case 'watch-cycle':index.cycles.push(e);break;
+   case 'hierarchy-loaded':index.hierarchyLoaded.push(e);break;
+   case 'alert':
+    addAlert(e.role,seq,e);
+    if(e.recipient!==e.role)addAlert(e.recipient,seq,e);
+    break;
+   case 'watch-ai-report': // 원장 순서로 마지막 접수 보고의 시각. 시각이 없으면 앞 보고로 내려가지 않는다.
+    if(e.source==='supervisor-health'&&e.accepted)index.lastChecked.set(e.role,e.t);
+    break;
+   case 'watch-ai-request':case 'watch-ai-call':{
+    const group=e.source==='supervisor-health'?1:e.source==='stall'||e.source==='progress'?0:-1;
+    const count=e.kind==='watch-ai-request'?0:AI_CALL_COUNT.get(e.reason);
+    const time=Date.parse(e.t);
+    if(group<0||count===undefined||Number.isNaN(time))break;
+    // 원장 순서는 시각 순서가 아니다. 시각을 담아 두고 24시간 창은 조회 때 거른다.
+    let calls=index.activity.get(e.role);
+    if(!calls)index.activity.set(e.role,calls={times:[],slots:[]});
+    calls.times.push(time);calls.slots.push(group*AI_COUNTS.length+count);
+    break;
+   }
+  }
+ }
+ return index;
+}
+// 색인은 한 세대만 든다. 원장 읽기는 사건을 고치지 않고 버전마다 새 배열을 주므로 같은 배열·같은 길이면 같은 원장이다.
+let ledgerIndex=null,ledgerIndexBuilds=0;
+function ledgerIndexFor(entries){
+ if(ledgerIndex?.entries!==entries||ledgerIndex.length!==entries.length){
+  ledgerIndex=buildLedgerIndex(entries);ledgerIndexBuilds++;
+ }
+ return ledgerIndex;
+}
+// 시험·진단용: 색인을 만든 횟수(= 원장을 훑은 횟수)와 지금 색인의 사건 수.
+export function watchLedgerIndexInfo(){return {builds:ledgerIndexBuilds,length:ledgerIndex?.length??null};}
+function aiActivityFor(index,names,now){
+ const counts=new Array(AI_SOURCES.length*AI_COUNTS.length).fill(index?0:null);
+ if(index)for(const name of names){
+  const calls=index.activity.get(name);
+  if(!calls)continue;
+  for(let i=0;i<calls.times.length;i++){
+   if(calls.times[i]>=now-DAY_MS&&calls.times[i]<=now)counts[calls.slots[i]]++;
+  }
+ }
+ return AI_SOURCES.map((source,group)=>({source,label:watchAILabel(source),
+  ...Object.fromEntries(AI_COUNTS.map((key,i)=>[key,counts[group*AI_COUNTS.length+i]]))}));
+}
+function recentAlertsFor(index,names){
+ const picked=new Map(); // 원장 순번 → 사건. 역할과 수신자가 둘 다 이 판이어도 한 번만 든다.
+ for(const name of names)for(const {seq,entry} of index.alerts.get(name)??[])picked.set(seq,entry);
+ return [...picked].sort((a,b)=>a[0]-b[0]).slice(-RECENT_ALERTS).map(([,e])=>({at:e.t,role:e.role??null,
+  kind:e.alertKind,recipient:e.recipient,route:e.route??null,delivered:e.delivered??null,resolved:e.resolved===true}));
+}
 export function watchOverview({center,entries,works=[],processes,processError=null,readFile=file=>fs.readFileSync(file,'utf8'),now=Date.now(),profilePath=null}){
  const result={checkedAt:new Date(now).toISOString(),process:{state:processError?'unknown':processes.length===1?'running':processes.length?'duplicate':'absent',instances:processes,error:processError},configuration:{state:'unknown'},cycle:{state:'unknown',reason:'감시 주기 완료 기록 없음 — 프로세스 생존과 구분'},boards:[],profilePath};
  let parents=null;
  const worker=processes.length===1?processes[0]:null;
- const ledgerKnown=Array.isArray(entries)&&!entries.some(e=>e?.broken);
- result.cycle=cycleStatus(ledgerKnown?entries:null,worker,now);
+ const index=Array.isArray(entries)?ledgerIndexFor(entries):null;
+ const ledgerKnown=!!index&&!index.broken;
+ result.cycle=cycleStatus(ledgerKnown?index.cycles:null,worker,now);
  if(!ledgerKnown)result.configuration={state:'unknown',reason:'원장을 읽을 수 없습니다'};
  else if(!worker||processError)result.configuration={state:'unknown',reason:'단일 감시 프로세스를 확인할 수 없습니다'};
  else {
-  const loaded=entries.filter(e=>e.kind==='hierarchy-loaded'&&Number(e.pid)===worker.pid).at(-1);
+  const loaded=index.hierarchyLoaded.findLast(e=>Number(e.pid)===worker.pid);
   const time=Date.parse(loaded?.t),started=Date.parse(worker.startedAt);
   if(!loaded)result.configuration={state:'missing',reason:'현재 감시기와 연결된 직속 관계 반영 기록 없음'};
   else if(!Number.isFinite(time)||!Number.isFinite(started)||time<started||time>now)result.configuration={state:'unknown',reason:'감시기 시작 시각과 관계 반영 기록 불일치'};
@@ -58,15 +131,6 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   catch{Object.assign(result.configuration,{state:'unknown',reason:'감시 대상 카드를 읽거나 검증할 수 없습니다'});}
  }
  const live=new Set((center.roles??[]).filter(r=>r.life?.state==='alive'&&r.life?.pidState==='match').map(r=>'kadan-'+r.role));
- const aiActivity=names=>['worker','supervisor-health'].map(source=>{
-  const events=ledgerKnown?entries.filter(e=>names.has(e.role)&&Date.parse(e.t)>=now-24*60*60_000&&Date.parse(e.t)<=now&&
-    (source==='supervisor-health'?e.source===source:['stall','progress'].includes(e.source))):null;
-  const count=fn=>events?events.filter(fn).length:null;
-  return {source,label:watchAILabel(source),requests:count(e=>e.kind==='watch-ai-request'),
-   reported:count(e=>e.kind==='watch-ai-call'&&e.reason==='reported'),timeouts:count(e=>e.kind==='watch-ai-call'&&e.reason==='timeout'),
-   failed:count(e=>e.kind==='watch-ai-call'&&['call-failed','report-missing','report-incomplete','report-error'].includes(e.reason)),
-   offline:count(e=>e.kind==='watch-ai-call'&&['network','slept'].includes(e.reason))};
- });
  const cardList=center.cards??center.boards.flatMap(b=>b.cards);
  const identity=taskIdentity(Array.isArray(cardList)?cardList:[]);
  for(const board of center.boards){
@@ -79,12 +143,12 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
    route:parents?.has(role)&&center.runtimeKnown?hierarchyRoute(role,parents,live):null,
    recipientKnown:!!(parents?.has(role)&&center.runtimeKnown),scope:supervisors.has(role)?'supervisor-health':'card',
    observer:watchAILabel(supervisors.has(role)?'supervisor-health':'worker'),
-   ...(supervisors.has(role)?{checkIntervalMinutes:60,lastCheckedAt:entries.findLast(e=>e.kind==='watch-ai-report'&&e.role===role&&e.source==='supervisor-health'&&e.accepted)?.t??null}: {})}));
+   ...(supervisors.has(role)?{checkIntervalMinutes:60,lastCheckedAt:index.lastChecked.get(role)??null}: {})}));
   const missing=roles.filter(r=>r.registered===false).map(r=>r.role);
   const state=!ledgerKnown?'unknown':result.process.state==='absent'?'absent':result.process.state==='duplicate'?'duplicate':!scope?'unknown':!roles.length?'not-required':missing.length?'incomplete':'configured';
   result.boards.push({name:board.name,state,roles:orderWatchRoles(roles),missingRoles:missing,registeredRoles:scope?roles.filter(r=>r.registered).length:null,totalRoles:scope?roles.length:null,
-   aiActivity:scope?aiActivity(names):aiActivity(new Set()).map(a=>({...a,requests:null,reported:null,timeouts:null,failed:null,offline:null})),
-  recentAlerts:ledgerKnown?entries.filter(e=>e.kind==='alert'&&(names.has(e.role)||names.has(e.recipient))).slice(-3).map(e=>({at:e.t,role:e.role??null,kind:e.alertKind,recipient:e.recipient,route:e.route??null,delivered:e.delivered??null,resolved:e.resolved===true})):null});
+   aiActivity:aiActivityFor(scope?index:null,names,now),
+  recentAlerts:ledgerKnown?recentAlertsFor(index,names):null});
  }
  // 감시기가 쓰는 route/--super 이름이 살아 있는 세션인지(주기 기록의 설정 + 지금 살아 있는 역할). 모르면 경고하지 않는다.
  const cs=result.cycle?.settings;
