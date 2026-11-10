@@ -3,7 +3,7 @@ import path from 'node:path';
 import {isUserActor} from './actors.mjs';
 import {randomUUID} from 'node:crypto';
 import {assertWritable,storageMode,storageSnapshot,transaction,readStream,appendStream,listStreams} from './storage.mjs';
-import {CardStore} from './card-store.mjs';
+import {CardStore, checkDifficulty} from './card-store.mjs';
 import {buildCardCenter} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
@@ -83,8 +83,9 @@ export class WorkStore {
     let executionKey=fields.execution;
     if(action==='execute'){
      required(fields.title,'실행 제목',200);required(fields.body,'실행 지시');
+     if(checkDifficulty(fields.difficulty)&&fields.phase==='review')throw new Error('검수 실행에는 난이도 hard를 둘 수 없다 — 작업자 단계(implementation·fix·research) 실행에만 뜻이 있다');
      // 한 번 끝낸 실행 ID를 재사용하지 않는다. 발령은 기존 card/send 명령으로 한다.
-     const card=store.create({repo:old.repo,id:`exec-${randomUUID()}`,repoPath:old.repoPath,title:fields.title,body:fields.body,by});executionKey=card.key;
+     const card=store.create({repo:old.repo,id:`exec-${randomUUID()}`,repoPath:old.repoPath,title:fields.title,body:fields.body,difficulty:fields.difficulty,by});executionKey=card.key;
     }else store.get(executionKey);
     const other=registered.find(w=>w.key!==key&&w.executions.some(x=>x.key===executionKey));
     if(other)throw new Error(`다른 업무에 연결된 실행: ${other.key}`);

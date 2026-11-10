@@ -6,7 +6,7 @@ import type {Choice, Settings} from './Runners';
 import './CompareMode.css';
 
 type ReportRow = {
-  worker?: Choice; launch: string | null; presets: string[]; samples: number;
+  worker?: Choice; launch: string | null; difficulty?: 'normal' | 'hard'; presets: string[]; samples: number;
   independentSamples: number; completedSamples: number; firstRoundPasses: number;
   medianRounds: number | null; medianImplementationMs: number | null;
   failed: number; inProgress: number; mixed: Record<string, number>; mixedWorkIds: string[];
@@ -136,7 +136,7 @@ export function CompareMode({settings}: {settings: Settings}) {
             {['작업자', '프리셋', '표본', '독립', '첫 왕복 통과', '왕복 중앙',
               '구현 분 중앙', 'failed', '진행 중', '섞임', '업무', '카드'].map(text => <th key={text}>{text}</th>)}
           </tr></thead><tbody>{group.rows.map((row, i) => <tr key={i}>
-            <th>{choice(row.worker)}{row.launch && <><br />[{row.launch}]</>}</th>
+            <th>{choice(row.worker)}{row.launch && <><br />[{row.launch}]</>}{row.difficulty === 'hard' && <><br />[어려움]</>}</th>
             <td>{row.presets.join(', ') || '없음'}</td><td>{row.samples}</td><td>{row.independentSamples}</td>
             <td>{group.reviewer ? `${row.firstRoundPasses}/${row.completedSamples}` : '검수 없음'}</td>
             <td>{number(row.medianRounds)}</td>
