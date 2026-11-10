@@ -189,7 +189,9 @@ export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   if (!words?.length) throw new Error('마지막 시작 명령을 읽을 수 없다(셸 결합·주석·확장이 있다)');
   // 이전 restart·서버 복원이 붙인 resume 꼬리는 명령 어디에 있든, 판정 해석기(conversation-ref)가 대화 지정으로 본 자리가
   // 정확히 하나이고 표의 꼬리와 같은 모양이면 떼고, 현재 대화의 resume 꼬리를 끝에 붙인다. 옵션 값 안의 낱말은 해석기가 건너뛴다.
-  // 대화 ID 자리는 CONVERSATION_ID를 통과해야 한다. 갈라 연(fork) 꼬리는 끝에 있을 때만 뗀다.
+  // 대화 ID 자리는 CONVERSATION_ID를 통과해야 한다. 갈라 연(fork) 꼬리도 명령 어디에 있든(adopt는 그 뒤에 모델·강도·권한 옵션을
+  // 붙인다) 표의 fork 꼬리와 같은 모양이 한 벌이고, 해석기가 본 대화 지정이 모두 그 한 벌 안에 있을 때만 뗀다.
+  // 쌍과 떨어진 fork 표시, 한 벌 밖의 다른 지정(resume 하나 더·continue·값 없는 resume), 표와 다른 꼴은 떼지 않고 아래에서 거절한다.
   const reject = why => { throw new Error(`마지막 시작 명령에 대화 지정(resume·fork·continue)이 ${why} — 같은 대화를 보장할 수 없다`); };
   const fits = (at, candidate) => at >= 0 && at + candidate.length <= words.length
     && candidate.every((word, i) => slotMatches(words[at + i], word)
@@ -198,9 +200,10 @@ export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   const slot = item => offset + item.at;
   let base = words;
   const fork = settings.runners[runner].fork ? tailOf(settings, runner, 'fork') : null;
-  const forkAt = fork ? words.length - fork.length : -1;
-  if (fork && fits(forkAt, fork) && items.some(item => item.kind === 'pair' && slot(item) === forkAt)) {
-    base = words.slice(0, forkAt);
+  const forkStarts = fork ? items.filter(item => item.kind === 'pair' && fits(slot(item), fork)).map(slot) : [];
+  const forkAt = forkStarts.length === 1 ? forkStarts[0] : -1;
+  if (forkAt >= 0 && items.every(item => slot(item) >= forkAt && slot(item) + item.length <= forkAt + fork.length)) {
+    base = [...words.slice(0, forkAt), ...words.slice(forkAt + fork.length)];
   } else if (items.length > 1) reject('둘 이상 있다');
   else if (items.length === 1) {
     const [item] = items;

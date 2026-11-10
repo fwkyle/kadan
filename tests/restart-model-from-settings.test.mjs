@@ -9,7 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {restartRole} from '../src/restart.mjs';
 import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
-import {inspectCardSendIdentity} from '../src/ai-identity.mjs';
+import {inspectCardSendIdentity, commandWords} from '../src/ai-identity.mjs';
+import {adoptCommand} from '../src/adopt.mjs';
 import {TABLE, settingsWith} from './helpers/runner-table.mjs';
 
 const ID = '0197aaaa-1111-4222-8333-444455556666';
@@ -338,6 +339,45 @@ test('끝 fork 꼴(갈라 연 역할)도 살아 있는 대화로 resume하며 �
   const f = fixture({cmd: `${OLD} --resume 0197bbbb-1111-4222-8333-444455556666 --fork-session`});
   f.run();
   assert.equal(f.entries.at(-1).cmd, `${NEW} --resume ${ID}`);
+});
+
+// adopt로 들어온 감독: 시작 명령이 adoptCommand의 실제 출력이라 fork 꼬리가 앞·중간에 있고 뒤에 모델·강도·권한 옵션이 붙는다.
+// 프로세스 인자는 ps가 보이는 모양(따옴표 없음)이고, 살아 있는 대화(ID)는 원본(ORIGIN)과 다르다.
+const ORIGIN = '0197cccc-1111-4222-8333-444455556666';
+const adoptedClaude = () => fixture({profile: 'conductor',
+  cmd: adoptCommand({harness: 'claude', id: ORIGIN, model: 'claude-opus-5-5', effort: 'high', permissionArgs: ['--permission-mode', 'bypassPermissions']}),
+  processArgs: `claude --resume ${ORIGIN} --fork-session --model claude-opus-5-5 --effort high --permission-mode bypassPermissions`});
+
+test('adopt 꼴(중간 fork 꼬리 + 권한 옵션): 옵션 없는 restart가 살아 있는 대화로 resume하고 다른 옵션은 그대로다', () => {
+  const f = adoptedClaude();
+  f.run({});
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
+  const start = f.entries.at(-1);
+  assert.equal(start.cmd, `claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions --resume ${ID}`);
+  assert.equal(start.conversationMode, 'resume'); assert.equal(start.restartConversation, ID);
+  assert.equal(start.model, 'claude-opus-5-5'); assert.equal(start.modelFromSettings, undefined);
+  assert.ok(!start.cmd.includes(ORIGIN));
+});
+
+test('adopt 꼴 + 옵션: 모델·강도만 설정값으로 바뀌고 권한 옵션은 그대로이며 같은 대화 resume이다(claude·codex)', () => {
+  const f = adoptedClaude();
+  f.run(OPTION, settingsOf({conductor: {runner: 'claude', model: 'claude-sonnet-5-5', effort: 'max'}}));
+  const start = f.entries.at(-1);
+  assert.equal(start.cmd, `claude --model claude-sonnet-5-5 --effort max --permission-mode bypassPermissions --resume ${ID}`);
+  assert.equal(start.conversationMode, 'resume'); assert.equal(start.restartConversation, ID);
+  assert.equal(start.previousModel, 'claude-opus-5-5'); assert.equal(start.previousEffort, 'high');
+  assert.equal(start.roleProfile, 'conductor');
+  // codex: 권한 인자는 `-c 키=값` 쌍이다(src/adopt-permissions.mjs). 강도 자리(-c model_reasoning_effort=…)만 바뀐다.
+  const permissions = ['-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"'];
+  const codex = fixture({profile: 'conductor', openFiles: ROLLOUT,
+    cmd: adoptCommand({harness: 'codex', id: ORIGIN, model: 'gpt-6-sol', effort: 'low', permissionArgs: permissions}),
+    processArgs: `codex fork ${ORIGIN} --model gpt-6-sol -c model_reasoning_effort=low -c approval_policy="never" -c sandbox_mode="danger-full-access"`});
+  codex.run(OPTION, settingsOf({conductor: {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}}));
+  const next = codex.entries.at(-1);
+  assert.deepEqual(commandWords(next.cmd).filter(word => word !== '--no-alt-screen'),
+    ['codex', '--model', 'gpt-6-astra', '-c', 'model_reasoning_effort=high', ...permissions, 'resume', ID], next.cmd);
+  assert.equal(next.conversationMode, 'resume'); assert.equal(next.restartConversation, ID);
+  assert.equal(next.previousModel, 'gpt-6-sol'); assert.equal(next.previousEffort, 'low');
 });
 
 test('걷기 함수: 옵션 자리와 값 자리를 가르고, 기존 판정 함수의 결과는 그대로다', async () => {
