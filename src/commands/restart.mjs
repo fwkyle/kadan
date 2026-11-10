@@ -36,15 +36,16 @@ export function confirmIdleBeforeStop(session, base = floor) {
 }
 
 // restartRole이 쓰는 실제 의존성. `kadan claude refresh --yes`도 같은 것을 쓴다(복제하지 않는다).
-export function restartDeps(home) {
-  const choice = requireWindowChoice();
+// windowDeps는 시험용 주입(가짜 창 실행기 spawnFn 등)이다. 동작은 바꾸지 않는다.
+export function restartDeps(home, { env = process.env, windowDeps = {} } = {}) {
+  const choice = requireWindowChoice(env);
   return {
     read: () => readLedger(home),
     record: entry => appendLedger(entry, home),
     pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
     closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
-    openWindow: ({ session: name, role: who, panePid }) =>
-      process.platform === "darwin" ? openStartedWindow(name, process.platform, { choice, role: who, panePid }) : { method: "manual" },
+    openWindow: ({ session: name, role: who, cwd, panePid }) =>
+      process.platform === "darwin" ? openStartedWindow(name, process.platform, { ...windowDeps, choice, role: who, cwd, panePid }) : { method: "manual" },
     beforeStop: session => confirmIdleBeforeStop(session),
     paneInfo,
     processTree,

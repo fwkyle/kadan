@@ -482,3 +482,13 @@ test('일반 restart는 재확인을 부르지 않는다 — 동작 무변경', 
   f.run();
   assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
 });
+
+test('restart는 로티 탭을 셸 폴더가 아니라 마지막 start의 작업 폴더로 연다', () => {
+  const f = fixture({files: claudeFiles});
+  const opened = [];
+  f.deps.openWindow = options => { opened.push(options); return {method: 'manual'}; };
+  assert.notEqual(path.resolve(f.dir), process.cwd());
+  f.run();
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].cwd, f.dir);
+});

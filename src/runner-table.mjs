@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {commandWords} from './ai-identity.mjs';
-import {conversationOf} from './conversation-ref.mjs';
+import {conversationOf, conversationDesignations} from './conversation-ref.mjs';
 import {INLINE_FLAG} from './inline-screen.mjs';
 
 // listModels: 실행기가 자기 모델 목록을 내는 명령 틀(자리 없음). 화면의 '목록 불러오기'를 누를 때만 실행한다.
@@ -84,6 +84,9 @@ const slotMatches = (word, templateWord) => templateWord.includes(SENTINEL.conve
     && word.endsWith(templateWord.slice(templateWord.indexOf(SENTINEL.conversation) + SENTINEL.conversation.length))
   : word === templateWord;
 
+const slotValue = (word, templateWord) => word.slice(templateWord.indexOf(SENTINEL.conversation),
+  word.length - (templateWord.length - templateWord.indexOf(SENTINEL.conversation) - SENTINEL.conversation.length));
+
 // 마지막 시작 명령에서 대화 인자만 바꿔 다시 연다: 꼬리가 이미 붙어 있으면(이전 restart) 떼고, 새 ID로 붙인다.
 // 대화를 가리키는 다른 인자(fork·--continue 등)가 남으면 같은 대화를 보장할 수 없어 거절한다.
 export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
@@ -92,20 +95,35 @@ export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   // 카단이 붙인 --no-alt-screen은 꼬리 비교 앞에서 떼고, 호출자가 다시 붙인다(inline-screen.mjs).
   const words = commandWords(typeof oldCmd === 'string' ? oldCmd.trim() : oldCmd)?.filter(word => word !== INLINE_FLAG);
   if (!words?.length) throw new Error('마지막 시작 명령을 읽을 수 없다(셸 결합·주석·확장이 있다)');
-  // 이전 restart가 붙인 resume 꼬리, 또는 대화를 갈라 연 fork 꼬리(adopt 등)면 떼고 현재 대화의 resume 꼬리를 붙인다.
-  // 갈라 연 역할의 "지금 대화"는 원본이 아니라 살아 있는 대화(conversation)이므로 resume으로 바꾸는 것이 맞다.
-  const removable = [tail];
-  if (settings.runners[runner].fork) removable.push(tailOf(settings, runner, 'fork'));
+  // 이전 restart·서버 복원이 붙인 resume 꼬리는 명령 어디에 있든, 판정 해석기(conversation-ref)가 대화 지정으로 본 자리가
+  // 정확히 하나이고 표의 꼬리와 같은 모양이면 떼고, 현재 대화의 resume 꼬리를 끝에 붙인다. 옵션 값 안의 낱말은 해석기가 건너뛴다.
+  // 대화 ID 자리는 CONVERSATION_ID를 통과해야 한다. 갈라 연(fork) 꼬리는 끝에 있을 때만 뗀다.
+  const reject = why => { throw new Error(`마지막 시작 명령에 대화 지정(resume·fork·continue)이 ${why} — 같은 대화를 보장할 수 없다`); };
+  const fits = (at, candidate) => at >= 0 && at + candidate.length <= words.length
+    && candidate.every((word, i) => slotMatches(words[at + i], word)
+      && (!word.includes(SENTINEL.conversation) || CONVERSATION_ID.test(slotValue(words[at + i], word))));
+  const {offset, items} = conversationDesignations(words.map(shellWord).join(' '));
+  const slot = item => offset + item.at;
   let base = words;
-  for (const candidate of removable) {
-    const head = words.slice(0, Math.max(0, words.length - candidate.length));
-    if (words.length >= candidate.length && candidate.every((word, i) => slotMatches(words[head.length + i], word))) { base = head; break; }
+  const fork = settings.runners[runner].fork ? tailOf(settings, runner, 'fork') : null;
+  const forkAt = fork ? words.length - fork.length : -1;
+  if (fork && fits(forkAt, fork) && items.some(item => item.kind === 'pair' && slot(item) === forkAt)) {
+    base = words.slice(0, forkAt);
+  } else if (items.length > 1) reject('둘 이상 있다');
+  else if (items.length === 1) {
+    const [item] = items;
+    if (item.kind !== 'pair' || !fits(slot(item), tail)) reject('이미 있고 표의 resume 꼬리와 다르다');
+    base = [...words.slice(0, slot(item)), ...words.slice(slot(item) + tail.length)];
   }
+  if (base.includes('--')) reject('이미 있고 `--` 뒤 입력이 남아 위치를 옮길 수 없다');
   if (conversationOf(base.map(shellWord).join(' ')).conversationMode !== 'new') {
     throw new Error('마지막 시작 명령에 대화 지정(resume·fork·continue)이 이미 있고 표의 resume 꼬리와 다르다 — 같은 대화를 보장할 수 없다');
   }
   const next = [...base, ...tail.map(word => word.replace(SENTINEL.conversation, conversation))];
-  return next.map(shellWord).join(' ');
+  const result = next.map(shellWord).join(' ');
+  const check = conversationOf(result);
+  if (check.conversationMode !== 'resume' || check.conversationRef !== conversation) reject('다시 만든 명령에서 현재 대화로 읽히지 않는다');
+  return result;
 }
 
 // 모델 목록 명령의 표준 출력: 줄마다 첫 낱말이 모델 id다. 이름 규칙에 맞지 않는 줄·빈 줄·중복은 버린다.

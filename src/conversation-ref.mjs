@@ -19,28 +19,31 @@ const CLAUDE_VALUE_OPTIONS = new Set(['--add-dir', '--agent', '--agents', '--all
   '--setting-sources', '--settings', '--system-prompt', '--system-prompt-snapshot', '--tools']);
 const NEW = {conversationMode: 'new'};
 
-function claudeConversation(args) {
+function claudeConversation(args, sink) {
   let ref = null, fork = false, cont = false;
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (token === '--') break;
     const inline = token.match(/^(?:--resume|-r)=(.+)$/);
-    if (inline) ref = inline[1];
-    else if ((token === '--resume' || token === '-r') && args[i + 1] && !args[i + 1].startsWith('-')) ref = args[++i];
+    if (inline) { ref = inline[1]; sink?.push({at: i, length: 1, kind: 'inline'}); }
+    else if ((token === '--resume' || token === '-r') && args[i + 1] && !args[i + 1].startsWith('-')) {
+      sink?.push({at: i, length: 2, kind: 'pair', flag: token}); ref = args[++i];
+    } else if (token === '--resume' || token === '-r') sink?.push({at: i, length: 1, kind: 'bare'});
     else if (CLAUDE_VALUE_OPTIONS.has(token.split('=')[0]) && token.startsWith('--') || CLAUDE_VALUE_OPTIONS.has(token)) {
       if (!token.includes('=')) i += 1; // --opt=값은 한 낱말, --opt 값은 다음 낱말까지 건너뛴다.
-    } else if (token === '--fork-session') fork = true;
-    else if (token === '--continue' || token === '-c') cont = true; // 이 폴더의 가장 최근 대화를 이어 연다(대화 ID 없음)
+    } else if (token === '--fork-session') { fork = true; sink?.push({at: i, length: 1, kind: 'fork'}); }
+    else if (token === '--continue' || token === '-c') { cont = true; sink?.push({at: i, length: 1, kind: 'continue'}); } // 이 폴더의 가장 최근 대화를 이어 연다(대화 ID 없음)
   }
   if (!ref && !cont) return NEW;
   return {conversationMode: fork ? 'fork' : 'resume', ...(ref ? {conversationRef: ref} : {})};
 }
 
-function codexConversation(args) {
+function codexConversation(args, sink) {
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (token === 'resume' || token === 'fork') {
       const ref = args[i + 1];
+      sink?.push({at: i, length: ref && !ref.startsWith('-') ? 2 : 1, kind: ref && !ref.startsWith('-') ? 'pair' : 'bare', flag: token});
       return ref && !ref.startsWith('-') ? {conversationMode: token, conversationRef: ref} : NEW;
     }
     if (!token.startsWith('-')) return NEW; // 다른 하위 명령이거나 첫 프롬프트
@@ -56,7 +59,7 @@ function codexConversation(args) {
 // agy 1.3.5 `agy --help`: `--conversation <ID>`(ID로 이어 열기)·`-c/--continue`(가장 최근). fork 옵션은 도움말에 없다(2026-10-14 실측).
 // devin 3000.11.3 `devin --help`: `-r/--resume [<ID>]`·`-c/--continue`. fork는 확인하지 못했다.
 // 두 실행기는 값을 받는 옵션을 건너뛰는 목록이 없다 — 옵션 값이 정확히 `--conversation`/`--resume` 낱말이면 잘못 읽는다(따옴표 안 입력은 한 낱말이라 안전).
-function plainResume(args, {flags, continueFlags}) {
+function plainResume(args, {flags, continueFlags}, sink) {
   let ref = null, cont = false;
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
@@ -64,23 +67,36 @@ function plainResume(args, {flags, continueFlags}) {
     const eq = token.indexOf('=');
     const name = eq > 0 && token.startsWith('--') ? token.slice(0, eq) : token;
     if (flags.includes(name)) {
-      if (eq > 0 && token.startsWith('--')) ref = token.slice(eq + 1);
-      else if (args[i + 1] && !args[i + 1].startsWith('-')) ref = args[++i];
-    } else if (continueFlags.includes(token)) cont = true;
+      if (eq > 0 && token.startsWith('--')) { ref = token.slice(eq + 1); sink?.push({at: i, length: 1, kind: 'inline'}); }
+      else if (args[i + 1] && !args[i + 1].startsWith('-')) { sink?.push({at: i, length: 2, kind: 'pair', flag: token}); ref = args[++i]; }
+      else sink?.push({at: i, length: 1, kind: 'bare'});
+    } else if (continueFlags.includes(token)) { cont = true; sink?.push({at: i, length: 1, kind: 'continue'}); }
   }
   if (!ref && !cont) return NEW;
   return {conversationMode: 'resume', ...(ref ? {conversationRef: ref} : {})};
 }
 
-export function conversationOf(cmd) {
+function resolve(cmd, sink) {
   const normalized = normalizeAiCommand(cmd);
   if (!normalized) return NEW;
   const {harness, args} = normalized;
-  if (harness === 'claude') return claudeConversation(args);
-  if (harness === 'codex') return codexConversation(args);
-  if (harness === 'agy') return plainResume(args, {flags: ['--conversation'], continueFlags: ['--continue', '-c']});
-  if (harness === 'devin') return plainResume(args, {flags: ['--resume', '-r'], continueFlags: ['--continue', '-c']});
+  if (harness === 'claude') return claudeConversation(args, sink);
+  if (harness === 'codex') return codexConversation(args, sink);
+  if (harness === 'agy') return plainResume(args, {flags: ['--conversation'], continueFlags: ['--continue', '-c']}, sink);
+  if (harness === 'devin') return plainResume(args, {flags: ['--resume', '-r'], continueFlags: ['--continue', '-c']}, sink);
   return NEW;
+}
+
+export function conversationOf(cmd) { return resolve(cmd); }
+
+// 같은 해석기가 대화 지정으로 본 낱말 자리들. at은 실행기 이름 뒤 낱말(args) 기준 위치, offset은 args 앞 낱말 수다.
+// kind: pair(플래그+값 두 낱말)·inline(--flag=값)·bare(값 없는 플래그)·fork·continue. 옵션 값 안의 낱말은 해석기가 건너뛰므로 나오지 않는다.
+export function conversationDesignations(cmd) {
+  const normalized = normalizeAiCommand(cmd);
+  const words = commandWords(typeof cmd === 'string' ? cmd.trim() : cmd);
+  const items = [];
+  resolve(cmd, items);
+  return {offset: normalized && words ? words.length - normalized.args.length : 0, items};
 }
 
 // 첫 안내(start-brief)용 확신 판정: 'new' | 'fork' | 'resume' | 'unknown'.
