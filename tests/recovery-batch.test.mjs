@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {inspectRecovery, inspectRecoveryBatch, recoveryBatchOutput, recoveryErrorKind} from '../src/recovery.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
@@ -27,11 +27,13 @@ const entries = [
   start('garbled', 'tab-garbled'),
   start('badeffort', 'tab-badeffort', {cmd: 'claude --effort nonsense'}),
   start('lost', 'tab-lost', {cmd: 'claude --resume x', restoredFrom: 'nowhere'}),
+  start('loop', 'tab-loop-1', {cmd: 'claude --resume x', restoredFrom: 'tab-loop-2'}),
+  start('loop', 'tab-loop-2', {cmd: 'claude --resume x', restoredFrom: 'tab-loop-1'}),
   {kind: 'window', session: 'kadan-ghost', panePid: '20', rottieTerminalId: 'tab-ghost'},
 ];
 const tmuxOk = stdout => ({status: 0, stdout, stderr: ''});
 const paneLines = {'kadan-ok': ['20\t0\t111'], 'kadan-many': ['20\t0\t1', '21\t0\t1'], 'kadan-garbled': ['x\t0\t1'],
-  'kadan-badeffort': ['20\t0\t5'], 'kadan-lost': ['20\t0\t6']};
+  'kadan-badeffort': ['20\t0\t5'], 'kadan-lost': ['20\t0\t6'], 'kadan-loop': ['20\t0\t7']};
 // 가짜 tmux: 단건의 세션별 조회와 묶음의 전체 조회에 같은 서버 상태를 답한다. 부른 횟수를 센다.
 function fakeTmux(mode = 'ok') {
   const calls = [];
@@ -78,6 +80,7 @@ const TABLE = [
   [{terminal: 'tab-new', panePid: '20'}, 'refused', /관찰한 카단 pane과 시작 기록이 다릅니다/],
   [{terminal: 'tab-badeffort'}, 'refused', /저장된 Claude 추론 강도/],
   [{terminal: 'tab-lost'}, 'refused', /추론 강도의 원본 역할 기록/],
+  [{terminal: 'tab-loop-2'}, 'refused', /추론 강도 복원 기록이 순환/],
   [{terminal: 'tab-garbled'}, 'unavailable', /pane 정보를 확인하지 못했습니다/],
   [{terminal: ''}, 'invalid', /탭 ID가 필요합니다/],
   [{terminal: 'tab-ok', socketPath: '/other/tmux-1/kadan'}, 'invalid', /tmux 서버 경로가 다릅니다/],
@@ -236,4 +239,28 @@ test('실제 명령: 묶음은 한 줄 JSON·종료 코드 0, 단건은 kind만 
   const restore = JSON.parse(cli(['restore', '--context', '{}']).stdout);
   assert.deepEqual(Object.keys(restore.error), ['message']);
   assert.deepEqual(Object.keys(JSON.parse(cli(['nothing']).stdout).error), ['message']);
+});
+
+// 부모가 표준 입력을 늦게 쓰거나 늦게 닫아도 "입력 없음"으로 끝내지 않고 끝까지 읽는다.
+test('표준 입력이 늦게 오거나 늦게 닫혀도 묶음 입력을 끝까지 읽는다', async () => {
+  const real = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'batch-slow-'));
+  createDatabase(real); writeStorageMarker(real, 'sqlite');
+  appendLedger(start('slow', 'tab-slow', {cwd: real}), real);
+  const text = JSON.stringify({schemaVersion: 1, items: [{terminal: 'tab-slow'}, {terminal: 'tab-none'}]});
+  const slow = plan => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, 'recovery', 'inspect', '--batch'],
+      {env: {...process.env, KADAN_HOME: real}, stdio: ['pipe', 'pipe', 'pipe']});
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.on('error', reject);
+    child.on('close', status => resolve({status, stdout}));
+    plan(child.stdin);
+  });
+  const late = await slow(stdin => setTimeout(() => stdin.end(text), 1500));
+  const lateClose = await slow(stdin => { stdin.write(text.slice(0, 20));
+    setTimeout(() => stdin.write(text.slice(20)), 800); setTimeout(() => stdin.end(), 1600); });
+  for (const output of [late, lateClose]) {
+    assert.equal(output.status, 0, output.stdout);
+    assert.deepEqual(JSON.parse(output.stdout).results.map(row => row.ok ? 'ok' : row.error.kind), ['ok', 'refused']);
+  }
 });

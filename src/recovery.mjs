@@ -1,6 +1,7 @@
 // Rottie owns conversation references; Kadan owns role generations and tmux creation.
 import fs from 'node:fs';
 import path from 'node:path';
+import tty from 'node:tty';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {ledgerHome, readSystemLedger, readRecoveryLedger, appendLedger} from './ledger.mjs';
@@ -336,11 +337,14 @@ export function inspectRecoveryBatch(input, deps = {}) {
   });
 }
 
-// 표준 입력이 터미널이면 기다리지 않는다(Rottie의 명령 시간 상한 안에 답해야 한다).
-function readBatchInput(read = () => (process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8'))) {
+// 표준 입력이 터미널이면 기다리지 않는다. 파이프면 부모가 닫을 때까지 끝까지 읽는다.
+// process.stdin을 건드리지 않는다: 건드리면 파이프가 기다리지 않는 방식으로 바뀌어, 부모가 조금 늦게 쓰거나
+// 늦게 닫을 때 읽기가 EAGAIN으로 실패한다(늦은 입력 시험이 이 경우를 고정한다).
+function readBatchInput(read = () => (tty.isatty(0) ? '' : fs.readFileSync(0, 'utf8'))) {
   let text;
-  try { text = read(); } catch { text = ''; }
-  if (!text.trim()) batchFail('묶음 조회 입력(표준 입력 JSON)이 없습니다.', 'batch-invalid');
+  try { text = read(); }
+  catch (error) { batchFail(`묶음 조회 입력(표준 입력)을 읽지 못했습니다: ${error.message}`, 'batch-invalid'); }
+  if (typeof text !== 'string' || !text.trim()) batchFail('묶음 조회 입력(표준 입력 JSON)이 없습니다.', 'batch-invalid');
   try { return JSON.parse(text); }
   catch { return batchFail('묶음 조회 입력이 JSON이 아닙니다.', 'batch-invalid'); }
 }
