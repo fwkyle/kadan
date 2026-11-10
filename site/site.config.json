@@ -4,6 +4,6 @@
   "enSummary": "Kadan runs AI coding CLIs such as Claude Code and Codex as named roles in tmux: a conductor, workers and reviewers. Hand over the conversation you already have, let the roles build and review, and step into any real terminal whenever you want. Zero runtime dependencies (Node.js built-ins + tmux). The interface and docs are currently in Korean.",
   "repoUrl": "https://github.com/fwkyle/kadan",
   "analyticsToken": "",
-  "hiddenUseCases": ["일이 쌓이면 감독을 나눈다"],
-  "howToExclude": ["일이 쌓이면 감독을 나눈다"]
+  "hiddenUseCases": [],
+  "howToExclude": []
 }

@@ -33,8 +33,22 @@ export function loadConfig(overrides = {}) {
 }
 
 // "## 제목" 구획 가운데 제목이 목록에 있는 것을 뺀다. 빠진 제목을 함께 돌려준다(시험이 원본에 있는지 본다).
+// 코드 울타리(``` · ~~~) 안의 "## "는 예제 글자라 구획으로 세지 않는다. 닫는 규칙은 렌더러와 같다.
+export function splitSections(markdown) {
+  const parts = [[]];
+  let fence = null;
+  for (const line of markdown.split("\n")) {
+    const mark = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) { if (line.trim().startsWith(fence)) fence = null; }
+    else if (mark) fence = mark[1];
+    else if (line.startsWith("## ")) parts.push([]);
+    parts.at(-1).push(line);
+  }
+  return parts.map((lines) => lines.join("\n"));
+}
+
 export function dropSections(markdown, titles = []) {
-  const [head, ...sections] = markdown.split(/^(?=## )/m);
+  const [head, ...sections] = splitSections(markdown);
   const hidden = new Set(titles);
   const dropped = [];
   const kept = sections.filter((section) => {
@@ -43,7 +57,7 @@ export function dropSections(markdown, titles = []) {
     dropped.push(title);
     return false;
   });
-  return { text: head + kept.join(""), dropped };
+  return { text: [head, ...kept].join("\n"), dropped };
 }
 
 // 글 안의 링크: 사이트의 다른 쪽은 상대 경로, 저장소 문서는 GitHub 공개 주소, 밖의 주소는 기존 표시(새 탭).
@@ -87,8 +101,9 @@ function renderMarkdownPage(page, config) {
 // 홈의 미리 보기: 숨기지 않은 유즈케이스 앞의 세 개. 유즈케이스 쪽과 같은 원본·같은 숨김 목록을 쓴다.
 function useCasePreview(config) {
   const { text } = dropSections(read("site/pages/use-cases.md"), config.hiddenUseCases ?? []);
-  return text.split(/^## /m).slice(1, 4).map((section) => {
-    const [title, ...lines] = section.split("\n");
+  return splitSections(text).slice(1, 4).map((section) => {
+    const [heading, ...lines] = section.split("\n");
+    const title = heading.slice(3);
     const when = lines.map((line) => line.match(/^- \*\*이런 때\*\*: (.+)$/)?.[1]).find(Boolean) ?? "";
     return `    <a class="card" href="use-cases.html"><strong>${escapeHtml(title.trim())}</strong><span>${escapeHtml(when)}</span></a>`;
   }).join("\n");

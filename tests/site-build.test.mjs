@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PAGES, buildSite, dropSections, loadConfig } from "../scripts/build-site.mjs";
+import { PAGES, buildSite, dropSections, loadConfig, splitSections } from "../scripts/build-site.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => fs.readFileSync(new URL(p, root), "utf8");
@@ -69,24 +69,51 @@ test("사이트 빌드: 통계 토큰이 비면 밖으로 부르는 것이 0개,
   assert.equal(loadConfig().analyticsToken, "", "저장소의 토큰은 비워 둔다");
 });
 
-test("사이트 빌드: 자리만 둔 '감독 나누기'는 길잡이와 유즈케이스 어디에도 공개되지 않고, 설정을 비우면 다시 나온다", () => {
+test("사이트 빌드: 설정의 숨김 목록에 제목을 넣으면 길잡이 항목과 유즈케이스가 공개 빌드에서 빠진다", () => {
+  // 지금은 숨기는 것이 없다. 감독 나누기도 실제 명령과 함께 공개된다.
   const config = loadConfig();
-  assert.deepEqual(config.howToExclude, [SPLIT]);
-  assert.deepEqual(config.hiddenUseCases, [SPLIT]);
-  // 빼는 대상이 원본에 실제로 있어야 한다(제목이 바뀌면 조용히 공개되지 않게 여기서 알린다).
-  for (const [file, key] of [["docs/how-to.md", "howToExclude"], ["site/pages/use-cases.md", "hiddenUseCases"]]) {
-    assert.deepEqual(dropSections(read(file), config[key]).dropped, config[key], file);
-  }
-  const hidden = build();
-  assert.doesNotMatch(hidden.all, /감독을 나눈/);
-  assert.doesNotMatch(hidden.all, /자리만 둔다|머지된 뒤 채운다/);
-  assert.equal(hidden.html["how-to.html"].match(/<h2 id=/g).length, 10, "Why·읽는 법 + 항목 여덟 개");
-  assert.equal(hidden.html["use-cases.html"].match(/<h2 id=/g).length, 7);
-
-  const shown = build({ hiddenUseCases: [], howToExclude: [] });
+  assert.deepEqual(config.howToExclude, []);
+  assert.deepEqual(config.hiddenUseCases, []);
+  const shown = build();
   assert.match(shown.html["use-cases.html"], /감독을 나눈다<\/h2>/);
   assert.match(shown.html["how-to.html"], /감독을 나눈다<\/h2>/);
+  assert.equal(shown.html["how-to.html"].match(/<h2 id=/g).length, 11, "Why·읽는 법 + 항목 아홉 개");
   assert.equal(shown.html["use-cases.html"].match(/<h2 id=/g).length, 8);
+  for (const file of ["how-to.html", "use-cases.html"])
+    assert.ok(shown.html[file].includes("<code>kadan limit set conductor-works &lt;개수&gt;</code>"), file);
+  // 작업 중 문장이 공개 쪽 어디에도 없다.
+  assert.doesNotMatch(shown.all, /장치 PR|자리만|머지된 뒤 채운다|확정/);
+
+  // 숨김 장치: 제목을 넣으면 그 구획만 빠진다. 빼는 대상이 원본에 실제로 있어야 한다.
+  const titles = { howToExclude: [SPLIT], hiddenUseCases: [SPLIT] };
+  for (const [file, key] of [["docs/how-to.md", "howToExclude"], ["site/pages/use-cases.md", "hiddenUseCases"]])
+    assert.deepEqual(dropSections(read(file), titles[key]).dropped, titles[key], file);
+  const hidden = build(titles);
+  assert.doesNotMatch(hidden.all, /감독을 나눈|conductor-works/);
+  assert.equal(hidden.html["how-to.html"].match(/<h2 id=/g).length, 10);
+  assert.equal(hidden.html["use-cases.html"].match(/<h2 id=/g).length, 7);
+  // 원본에 없는 제목은 아무것도 빼지 않고, 빠진 것이 없다고 알려 준다.
+  assert.deepEqual(dropSections(read("docs/how-to.md"), ["없는 제목"]).dropped, []);
+});
+
+test("사이트 빌드: 코드 울타리 안의 '## 제목'은 구획이 아니다", () => {
+  const text = "# T\n\n## Keep\n```md\n## Hidden\nexample\n```\nafter keep\n\n## Hidden\nreal hidden\n\n~~~\n## End\n~~~\n\n## End\nend\n";
+  const result = dropSections(text, ["Hidden"]);
+  assert.deepEqual(result.dropped, ["Hidden"]);
+  assert.equal(result.text, "# T\n\n## Keep\n```md\n## Hidden\nexample\n```\nafter keep\n\n## End\nend\n");
+  assert.deepEqual(splitSections(text).map((part) => part.split("\n")[0]), ["# T", "## Keep", "## Hidden", "## End"]);
+  // 아무것도 빼지 않으면 글이 그대로다.
+  assert.equal(dropSections(text, []).text, text);
+  assert.equal(dropSections(read("docs/how-to.md"), []).text, read("docs/how-to.md"));
+});
+
+test("사이트 빌드: 길잡이의 세 길 표가 사이트에서도 표로 그려지고 그림마다 크기를 적는다", () => {
+  const { html } = build();
+  assert.equal(html["how-to.html"].match(/<div class="dw-document-table">/g).length, 1);
+  assert.equal(html["how-to.html"].match(/<tr>/g).length, 4);
+  const images = html["index.html"].match(/<img\b[^>]*>/g);
+  assert.equal(images.length, 2);
+  for (const image of images) assert.match(image, /\swidth="\d+" height="\d+"/, image);
 });
 
 test("사이트 빌드: 글의 HTML은 글자로만 나오고 설정값도 태그가 되지 않는다", () => {
