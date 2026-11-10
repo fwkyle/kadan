@@ -2,6 +2,19 @@
 // (래퍼 `kadan-claude`가 실행기를 exec하거나 자식을 낳는다). 비서 복원과 restart가 같은 걸음을 쓴다.
 import {spawnSync} from 'node:child_process';
 
+// Unix 시각(ms). lstart는 초 단위이며 로케일을 고정해 날짜 해석이 환경에 따라 달라지지 않게 한다.
+export function processStartedAt(pid, run = spawnSync) {
+  if (!/^[1-9]\d*$/.test(String(pid))) throw new Error('프로세스 시작 시각 조회 실패');
+  const result = run('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    encoding: 'utf8', timeout: 2000, env: {...process.env, LC_ALL: 'C'},
+  });
+  const startedAt = Date.parse(result.stdout?.trim() ?? '');
+  if (result.status !== 0 || !Number.isFinite(startedAt)) {
+    throw new Error('프로세스 시작 시각 조회 실패');
+  }
+  return startedAt;
+}
+
 // panePid와 그 모든 자손 PID(문자열). ps를 못 읽으면 던진다 — 추측해서 일부만 돌려주지 않는다.
 export function descendantPids(panePid, run = spawnSync) {
   const ps = run('ps', ['-axo', 'pid=,ppid='], {encoding: 'utf8', timeout: 2000});

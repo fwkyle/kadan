@@ -181,7 +181,7 @@ function existsWithGlob(pattern) {
   return true;
 }
 
-// deps: pids(그 역할 pane의 자손 PID 목록), openFiles(), readJson(경로), tmuxLocation, homeDir, exists(경로 패턴)
+// deps: pids, openFiles(), readJson(경로), processStartedAt(pid)(Unix ms), tmuxLocation, homeDir, exists(패턴)
 // 0개·여러 개·형식 불일치는 모두 거절한다. "가장 최근" 같은 추측은 없다.
 export function findConversation(spec, deps) {
   checkConversationSpec(spec);
@@ -203,12 +203,24 @@ export function findConversation(spec, deps) {
       const file = expandHome(spec.path.replaceAll('{pid}', pid), homeDir);
       let json;
       try { json = deps.readJson(file); } catch { continue; }
-      if (json && typeof json === 'object') found.push({file, json});
+      if (json && typeof json === 'object') found.push({file, json, pid});
     }
     if (found.length === 0) throw new Error('이 역할의 프로세스에 묶인 대화 정보 파일이 없다');
     if (found.length > 1) throw new Error(`대화 정보 파일이 ${found.length}개라 하나로 확정할 수 없다`);
-    const {json} = found[0];
+    const {json, file, pid} = found[0];
+    let startedAt;
+    try { startedAt = deps.processStartedAt(pid); }
+    catch { throw new Error('프로세스 시작 시각을 확인할 수 없다 — 기존 세션을 끄지 않는다'); }
+    if (!Number.isFinite(startedAt) || startedAt <= 0) {
+      throw new Error('프로세스 시작 시각을 확인할 수 없다 — 기존 세션을 끄지 않는다');
+    }
+    const mtime = fs.statSync(file).mtimeMs;
+    // ps lstart가 초 아래를 버리므로 같은 초는 허용한다. 이전 초의 파일은 재사용 PID의 낡은 파일이다.
+    if (!Number.isFinite(mtime) || Math.floor(mtime / 1000) < Math.floor(startedAt / 1000)) {
+      throw new Error('낡은 대화 정보 파일이다 — 현재 프로세스가 시작되기 전에 쓰였다');
+    }
     for (const [key, template] of Object.entries(spec.match ?? {})) {
+      if (!Object.hasOwn(json, key)) continue;
       const expected = template.replaceAll('{tmux}', deps.tmuxLocation ?? '');
       if (typeof json[key] !== 'string' || json[key] !== expected)
         throw new Error(`대화 정보 파일의 ${key} 값이 이 역할의 자리와 다르거나 없다 — 다른 세션의 대화일 수 있다`);

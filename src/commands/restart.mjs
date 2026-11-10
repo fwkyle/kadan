@@ -9,7 +9,7 @@ import { currentRottieWindow } from "../restore.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole } from "../restart.mjs";
 import { readStatusLine } from "../watch-status-line.mjs";
-import { processTree, openFilesOf } from "../process-tree.mjs";
+import { processTree, openFilesOf, processStartedAt } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import { pendingCardsFor, closeStartedWindow, openStartedWindow, requireWindowChoice } from "../cli-start-support.mjs";
 
@@ -49,6 +49,7 @@ export function restartDeps(home, { env = process.env, windowDeps = {} } = {}) {
     beforeStop: session => confirmIdleBeforeStop(session),
     paneInfo,
     processTree,
+    processStartedAt,
     openFiles: openFilesOf,
     readJson: file => JSON.parse(fs.readFileSync(file, "utf8")),
   };
