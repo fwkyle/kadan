@@ -133,6 +133,31 @@ test('한글·이모지·자동 줄바꿈·표·박스·본문 흐림은 입력�
   assert.equal(out.view, out.plain.replace('hint실제 글tail', '(추천 문구: hint)실제 글(추천 문구: tail)'));
 });
 
+// 2026-11-10 사건의 세 화면 꼴(줄 배치만 실물, 글자는 지어낸 것)을 실제 tmux로 다시 그린다.
+test('새 바닥글 꼴(새 모델 상태 줄·알림 줄·권한 줄만): 입력칸의 추천만 빠지고 친 글은 남는다', async () => {
+  const mode = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents';
+  const update = '✔ Update installed · /restart to apply';
+  // [바닥글 줄들, 화면이 다 그려졌는지 확인할 마지막 줄의 글자]
+  const footers = {
+    'new-model': [['  ~/Dev/example[main]', '  Fable 5.2 | effort:high | ctx:37%', mode], '2 agents'],
+    notices: [['  ~/Dev/example[main]', '  Opus 5.5 | effort:medium | ctx:26%', mode,
+      `${' '.repeat(40)}${update}`, `${' '.repeat(31)}Conversation compacted (ctrl+o for the summary)`], 'for the summary)'],
+    'mode-only': [[`${mode}   ${update}`], '/restart to apply'],
+  };
+  for (const [name, [lines, ready]] of Object.entries(footers)) {
+    const draw = input => fixedScreen(name, ['\x1b[2m흐린 본문\x1b[0m', '────────────────────', input,
+      '────────────────────', ...lines].join('\r\n'), ready, 120);
+    const ghost = await draw('❯ \x1b[2mTry\x1b[0m \x1b[2mhello\x1b[0m');
+    assert.equal(ghost.captured, ghost.plain.replace('❯ Try hello', '❯ '), name);
+    assert.equal(ghost.view, ghost.plain.replace('Try hello', '(추천 문구: Try hello)'), name);
+    assert.equal(readStatusLine(ghost.captured).kind, 'idle', name);
+    const typed = await draw('❯ hello typed');
+    assert.equal(typed.captured, typed.plain, name);
+    assert.equal(typed.view, typed.plain, name);
+    assert.equal(readStatusLine(typed.captured).kind, 'unknown', name);
+  }
+});
+
 test('#180 codex 두 줄 바닥글: 본문 인용 보존, 입력칸만 추천 표시', async () => {
   const out = await fixedScreen('codex-footer', [
     '\x1b[2m› 흐린 본문 인용\x1b[0m', '',
