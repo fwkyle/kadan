@@ -267,3 +267,17 @@ test('F2: 원격이 꺼져 있으면 Cloudflare 표시 헤더가 있어도 지�
     assert.match(JSON.parse(res.text).token, /^[a-f0-9]{48}$/);
   } finally { app.close(); }
 });
+
+test('autopilot/repos 응답 기억은 로컬과 원격이 섞이지 않는다', async () => {
+  const certs = await certsServer();
+  const app = await start({remote: config, certs, cacheSec: 30});
+  try {
+    const local = await app.call('GET', '/api/autopilot/repos');
+    assert.equal(local.status, 200);
+    assert.equal((await app.call('GET', '/api/autopilot/repos')).headers['x-kadan-cache'], 'hit', '로컬은 두 번째부터 기억');
+    const remote = await app.remoteCall('GET', '/api/autopilot/repos');
+    assert.equal(remote.status, 200);
+    assert.equal(remote.headers['x-kadan-cache'], undefined, '원격 첫 조회는 로컬 기억을 쓰지 않는다');
+    assert.equal((await app.remoteCall('GET', '/api/autopilot/repos')).headers['x-kadan-cache'], 'hit', '원격은 자기 기억을 쓴다');
+  } finally { app.close(); certs.server.close(); }
+});
