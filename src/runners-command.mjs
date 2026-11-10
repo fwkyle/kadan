@@ -11,9 +11,10 @@ export function runnersCommand([action, role, model, extra], flags, {home, by, r
   flags = {...flags, _model: model};
   if (flags.help || !action) return RUNNERS_USAGE + '\n'
     + 'kadan runners compare on --presets A,B --revision N --reason 이유 | compare off --revision N --reason 이유'
-    + ' | compare show | report [--since ISO] [--json]';
+    + ' | compare show | report [--since ISO] [--until ISO] [--json]'
+    + ' (모드와 무관하게 발령의 실제 조합별 성과. 기간을 안 주면 최근 14일)';
   if (action === 'report') {
-    const report = compareReport(home, {since: flags.since});
+    const report = compareReport(home, {since: flags.since, until: flags.until});
     return flags.json ? report : formatCompareReport(report);
   }
   if (action === 'compare') {
