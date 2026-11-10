@@ -8,9 +8,10 @@ import {spawnSync} from 'node:child_process';
 import {createWallServer} from '../src/wall.mjs';
 import {DEFAULT_FAMILIES, readSettings} from '../src/runner-settings.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
+import {appendStream} from '../src/storage.mjs';
 import {compareReport} from '../src/compare-report.mjs';
 
-test('비교 화면: CLI와 같은 검사·사건·보고서, 출처·토큰·버전 보호', async () => {
+test('비교 화면: CLI와 같은 검사·사건·보고서, 출처·토큰·버전 보호, 꺼진 뒤에도 조합별 성과', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'compare-screen-'));
   const choice = model => ({runner: 'codex', model});
   const roles = {worker: choice('gpt-test'), reviewer: choice('claude-test')};
@@ -51,14 +52,17 @@ test('비교 화면: CLI와 같은 검사·사건·보고서, 출처·토큰·�
     const state = await (await fetch(base + '/runners/compare')).json();
     assert.deepEqual(state.picks, {A: 1, B: 1});
     const report = await (await fetch(base + '/runners/compare-report')).json();
-    assert.equal(report.groups.length, 2);
-    const stripTime = ({asOf, ...rest}) => rest;
+    assert.equal(report.groups.length, 0, '예약만으로는 행을 만들지 않는다');
+    assert.deepEqual(report.reservationsWithoutStart, ['A', 'B']);
+    // 기본 기간(최근 14일)의 시작은 조회 시각에서 나오므로 함께 뺀다.
+    const stripTime = ({asOf, since, ...rest}) => rest;
     assert.deepEqual(stripTime(report), stripTime(compareReport(home)));
     const cli = spawnSync(process.execPath, [new URL('../src/cli.mjs', import.meta.url).pathname,
       'runners', 'report', '--json'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
     assert.equal(cli.status, 0, cli.stderr);
     assert.deepEqual(stripTime(report), stripTime(JSON.parse(cli.stdout)));
     assert.equal((await fetch(base + '/runners/compare-report?since=bad')).status, 409);
+    assert.equal((await fetch(base + '/runners/compare-report?until=bad')).status, 409);
     assert.equal((await post({presets: '["B","A"]'})).status, 200);
     assert.deepEqual(readSettings(home).compare.presets, ['B', 'A']);
     assert.notEqual(readSettings(home).compare.enabledAt, epoch);
@@ -66,6 +70,38 @@ test('비교 화면: CLI와 같은 검사·사건·보고서, 출처·토큰·�
     assert.equal(readSettings(home).compare.enabled, false);
     assert.deepEqual(readLedger(home).filter(e => e.kind === 'runner-settings').map(e => e.action),
       ['compare', 'compare', 'compare']);
+    // 비교가 꺼진 뒤의 발령(예약·비교 표시 없음)도 결과 보기에 실제 조합 행으로 나온다.
+    const fable = {runner: 'claude', model: 'claude-test', effort: 'medium'};
+    const sol = {runner: 'codex', model: 'gpt-test', effort: 'high'};
+    const send = (id, role, extra) => appendLedger({kind: 'send', taskId: id, executionKey: `test/${id}`,
+      workKey: 'test/off', role, compareMode: false, pickId: null, settingsPreset: 'B', ...extra}, home);
+    send('impl', 'test-off-worker', {runnerChoice: fable, launchSource: 'settings'});
+    appendLedger({kind: 'done', taskId: 'impl', executionKey: 'test/impl', role: 'test-off-worker',
+      result: 'ok'}, home);
+    send('review', 'test-off-reviewer', {runnerChoice: sol, launchSource: 'review-for',
+      reviewFor: {role: 'test-off-worker'}});
+    appendLedger({kind: 'done', taskId: 'review', executionKey: 'test/review', role: 'test-off-reviewer',
+      result: 'ok'}, home);
+    appendStream(home, 'works/test/off/events.jsonl', {key: 'test/off', status: 'done', executions: [
+      {key: 'test/impl', phase: 'implementation', round: 1}, {key: 'test/review', phase: 'review', round: 1}]});
+    appendStream(home, 'cards/test/review/events.jsonl', {key: 'test/review', result: {outcome: 'pass'}});
+    const off = await (await fetch(base + '/runners/compare-report')).json();
+    assert.equal(off.groups.length, 1);
+    assert.deepEqual(off.groups[0].reviewer, sol);
+    const [row] = off.groups[0].rows;
+    assert.deepEqual([row.worker, row.launch, row.presets, row.independentSamples, row.firstRoundPasses],
+      [fable, null, ['B'], 1, 1]);
+    assert.deepEqual(off.unknown, {count: 0, workIds: [], unlinkedCards: []});
+    assert.ok(Date.parse(off.asOf) - Date.parse(off.since) <= 14 * 86400000);
+    // 화면 코드가 읽는 칸 이름이 응답에 실제로 있다(옛 칸 이름으로 빈칸을 그리지 않게).
+    const screen = fs.readFileSync(new URL('../gui/src/pages/CompareMode.tsx', import.meta.url), 'utf8');
+    for (const key of [...screen.matchAll(/\brow\.(\w+)/g)].map(m => m[1])) assert.ok(key in row, `row.${key}`);
+    for (const key of [...screen.matchAll(/\breport\.(\w+)/g)].map(m => m[1])) assert.ok(key in off, `report.${key}`);
+    for (const key of [...screen.matchAll(/report\.unknown\.(\w+)/g)].map(m => m[1])) {
+      assert.ok(key in off.unknown, `report.unknown.${key}`);
+    }
+    assert.match(screen, /<h3>조합별 성과<\/h3>/);
+    assert.doesNotMatch(screen, /비교 결과|혼합 군|제외 사유/);
   } finally {
     await new Promise(r => server.close(r));
     const listeners = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'], {encoding: 'utf8'});

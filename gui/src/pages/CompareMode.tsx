@@ -6,20 +6,20 @@ import type {Choice, Settings} from './Runners';
 import './CompareMode.css';
 
 type ReportRow = {
-  preset: string; worker?: Choice; picks: number; starts: number; samples: number;
+  worker?: Choice; launch: string | null; presets: string[]; samples: number;
   independentSamples: number; completedSamples: number; firstRoundPasses: number;
   medianRounds: number | null; medianImplementationMs: number | null;
-  failed: number; inProgress: number; excluded: Record<string, number>;
+  failed: number; inProgress: number; mixed: Record<string, number>; mixedWorkIds: string[];
   workIds: string[]; cardIds: string[];
 };
 type Report = {
-  asOf: string; since: string | null;
-  groups: {reviewer?: Choice; rows: ReportRow[]}[];
-  excluded: Record<string, number>; reservationsWithoutStart: string[];
-  mixed: {workId: string; presets: string[]; cardIds: string[]}[];
+  asOf: string; since: string | null; until: string | null;
+  groups: {reviewer: Choice | null; rows: ReportRow[]}[];
+  mixed: Record<string, number>; reservationsWithoutStart: string[];
+  unknown: {count: number; workIds: string[]; unlinkedCards: string[]};
 };
-const choice = (value?: Choice) => value
-  ? [value.runner, value.model, value.effort].filter(Boolean).join(' / ') : '확인 필요';
+const choice = (value?: Choice | null) => value
+  ? [value.runner, value.model, value.effort ?? '강도 미기록'].join(' / ') : '검수 발령 없음';
 const number = (value: number | null) => value == null ? '—' : String(Math.round(value * 100) / 100);
 const reasons = (value: Record<string, number>) => Object.entries(value)
   .map(([name, count]) => `${name} ${count}`).join(' · ') || '없음';
@@ -119,35 +119,38 @@ export function CompareMode({settings}: {settings: Settings}) {
       {conflict && <p className="warning">비교 설정이나 프리셋 목록이 바뀌었습니다. 현재 목록을 불러온 뒤 다시 고르세요.</p>}
       <ErrorMessage error={error} />
     </>}
-    <h3>비교 결과</h3>
-    <p>결과 보기 버튼을 누른 시점의 기록입니다. 업무당 1표본이며 검수자 묶음 사이의 순위는 매기지 않습니다.</p>
+    <h3>조합별 성과</h3>
+    <p>비교 모드가 꺼져 있어도, 어떤 방식으로 띄웠든 최근 14일 발령을 실제 작업자·검수자 조합
+      (실행기 / 모델 / 강도)별로 묶어 보입니다. 결과 보기 버튼을 누른 시점의 기록이며,
+      업무당 1표본이고 검수자 묶음 사이의 순위는 매기지 않습니다.</p>
     <button type="button" disabled={loading} onClick={() => void loadReport()}>
       {loading ? '결과 읽는 중…' : '결과 보기'}</button>
     <ErrorMessage error={reportError} />
     {report && <>
-      <p>조회 시각: {report.asOf} · 기간: {report.since ?? '기록 없음'} 이후</p>
-      {!report.groups.length && <p>아직 비교 기록이 없습니다.</p>}
+      <p>조회 시각: {report.asOf} · 기간: {report.since ?? '처음'} ~ {report.until ?? '지금'}</p>
+      {!report.groups.length && <p>이 기간에 집계할 발령이 없습니다.</p>}
       {report.groups.map((group, index) => <section key={index}>
         <h4>검수자 {choice(group.reviewer)}</h4>
         <div className="table-scroll" tabIndex={0} role="region" aria-label={`검수자 ${choice(group.reviewer)} 결과 표`}>
           <table><thead><tr>
-            {['프리셋 / 작업자', '예약', '시작', '표본', '독립', '첫 왕복 통과', '왕복 중앙',
-              '구현 분 중앙', 'failed', '진행 중', '제외 사유', '업무', '카드'].map(text => <th key={text}>{text}</th>)}
+            {['작업자', '프리셋', '표본', '독립', '첫 왕복 통과', '왕복 중앙',
+              '구현 분 중앙', 'failed', '진행 중', '섞임', '업무', '카드'].map(text => <th key={text}>{text}</th>)}
           </tr></thead><tbody>{group.rows.map((row, i) => <tr key={i}>
-            <th>{row.preset}<br />{choice(row.worker)}</th>
-            <td>{row.picks}</td><td>{row.starts}</td><td>{row.samples}</td><td>{row.independentSamples}</td>
+            <th>{choice(row.worker)}{row.launch && <><br />[{row.launch}]</>}</th>
+            <td>{row.presets.join(', ') || '없음'}</td><td>{row.samples}</td><td>{row.independentSamples}</td>
             <td>{row.firstRoundPasses}/{row.completedSamples}</td><td>{number(row.medianRounds)}</td>
             <td>{number(row.medianImplementationMs == null ? null : row.medianImplementationMs / 60000)}</td>
-            <td>{row.failed}</td><td>{row.inProgress}</td><td>{reasons(row.excluded)}</td>
+            <td>{row.failed}</td><td>{row.inProgress}</td>
+            <td>{reasons(row.mixed)}<Links ids={row.mixedWorkIds} work /></td>
             <td><Links ids={row.workIds} work /></td><td><Links ids={row.cardIds} /></td>
           </tr>)}</tbody></table>
         </div>
       </section>)}
-      <p>제외 사유 (업무 수): {reasons(report.excluded)}</p>
-      <h4>혼합 군 ({report.mixed.length})</h4>
-      {report.mixed.map(work => <div key={work.workId}>
-        <Links ids={[work.workId]} work /><p>프리셋: {work.presets.join(' · ')}</p><Links ids={work.cardIds} />
-      </div>)}
+      <p>섞임 사유 (업무 수): {reasons(report.mixed)}</p>
+      <h4>귀속 불명 ({report.unknown.count})</h4>
+      <p>발령에 실제 조합이나 띄운 방식이 남지 않았거나 검수 연결을 확정하지 못한 업무입니다. 추정해서 세지 않습니다.
+        업무에 연결되지 않은 발령 카드: {report.unknown.unlinkedCards.length}건</p>
+      <Links ids={report.unknown.workIds} work />
       <p>예약만 있고 시작 없음: {report.reservationsWithoutStart.length}건 (시작 중인지 실패했는지는 미확인)</p>
     </>}
   </section>;
