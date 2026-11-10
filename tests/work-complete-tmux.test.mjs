@@ -201,4 +201,44 @@ test('실제 CLI: 인계 상태 파일이 있으면(진행 중이든 모양을 �
   assert.equal(tmuxFloor.alive('kadan-ha'), true);
   assert.match(done.stderr, /ha — 인계 상태를 읽지 못함/);
   kadan('stop', 'ha');
+  fs.rmSync(path.join(dir, 'x.json'), {force: true}); // 홈은 이 파일의 시험이 함께 쓴다 — 다음 시험에 남기지 않는다
+});
+
+// 4차 검수 T1: 실제 `kadan start`가 만든 start 기록의 모양으로 확인한다.
+const realStart = (s, role) => {
+  fs.rmSync(s.ready, {force: true});
+  const r = boss('start', role, '--profile', 'worker', '--cmd', `${s.fake} --model test-model -c e=low`);
+  until(() => fs.existsSync(s.ready), '가짜 실행기가 떴다');
+  return r;
+};
+
+test('실제 CLI(T1): 살아 있는 세션에 kadan start를 다시 친 재사용 기록이 낀 보통 세션은 마감 뒤 꺼진다', {skip}, t => {
+  const s = setup(t, 'reuse3');
+  realStart(s, 'ta');
+  const w = workFixture(s, 'repo/reuse3');
+  w.finish('ta', w.execute('ta', 'assign-dispatch').id);
+  boss('start', 'ta', '--profile', 'worker'); // 이미 살아 있음 → 재사용 기록
+  const starts = of('kadan-ta').filter(e => e.kind === 'start');
+  assert.equal(starts.length, 2);
+  assert.equal(starts[1].cmd, undefined, '재사용 기록에는 명령이 없다');
+  assert.equal(starts[1].reuseOf, startDigest(starts[0]), 'reuseOf는 띄운 start의 지문이다');
+  const done = w.complete();
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(tmuxFloor.alive('kadan-ta'), false, done.stderr);
+  assert.equal(JSON.parse(done.stdout).roleCleanup.closed.length, 1);
+});
+
+test('실제 CLI(T1): 실제 start 기록 모양(명령·출력 기록 경로·같은 PID)의 새 시작 기록이 stop 없이 뒤에 있으면 옛 발령으로 끄지 않는다', {skip}, t => {
+  const s = setup(t, 'pidreuse');
+  realStart(s, 'tb');
+  const w = workFixture(s, 'repo/pidreuse');
+  w.finish('tb', w.execute('tb', 'assign-dispatch').id);
+  const real = of('kadan-tb').find(e => e.kind === 'start');
+  const {t: _t, ...shape} = real; // 실제 CLI가 만든 기록의 칸 그대로, 출력 기록 경로만 새 세대의 것
+  appendLedger({...shape, outputLog: real.outputLog.replace(/[^/]+(?=\/manifest\.json$)/, 'new-generation')});
+  const done = w.complete();
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(tmuxFloor.alive('kadan-tb'), true, '새 프로세스로 보이는 start 기록이 있으면 옛 세대 발령으로 끄지 않는다');
+  assert.match(done.stderr, /tb — 이 업무의 발령을 받은 대화 세대가 아님/);
+  kadan('stop', 'tb');
 });

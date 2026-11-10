@@ -10,6 +10,7 @@ import {CardStore} from '../src/card-store.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {closeWorkRoles} from '../src/work-role-cleanup.mjs';
 import {workCommand} from '../src/work-command.mjs';
+import {startDigest} from '../src/secretary-resume.mjs';
 
 // Why: 업무 마감 때 작업자·검수자를 함께 끄는 코어(work-role-cleanup)와 CLI 연결(work-command)을 가짜 바닥·가짜 원장으로 시험한다.
 // 실물(tmux) 왕복은 격리 소켓 증거로 따로 남긴다.
@@ -449,17 +450,37 @@ test('S2: 잘못된 참조 문자열(reopenOf: 숫자·객체·true)이어도 �
   }
 });
 
-test('S2: stop 없이 같은 PID로 다시 기록된 start는 재사용으로 무시하고 보통 세션은 꺼진다 / PID가 다르면 끄지 않는다', () => {
-  const w = world(); startOf(w, '작업A'); w.done(); // 같은 pane PID 100의 재사용 기록
+// T1(4차 검수): "재사용 기록"으로 무시하는 것은 모양이 모두 확인될 때뿐이다 — 명령 없음 · 같은 pane PID · reuseOf가 띄운 start의 지문과 같음.
+const firstStart = w => readLedger(w.home).find(e => e.kind === 'start' && e.role === '작업A');
+const reuseRec = (w, extra = {}) => appendLedger({kind: 'start', floor: 'tmux', role: '작업A', session: 'kadan-작업A', cwd: w.home, panePid: '100', roleProfile: 'worker', by: '감독',
+  reuseOf: startDigest(firstStart(w)), ...extra}, w.home);
+
+test('T1: 모양이 맞는 재사용 기록(명령 없음·같은 PID·reuseOf 일치)이 낀 보통 세션은 여전히 꺼진다', () => {
+  const w = world(); reuseRec(w); w.done();
   run(w);
   assert.ok(w.stopCalls.includes('작업A'));
-  const w2 = world(); startOf(w2, '작업A', {panePid: '200'}); w2.pids['kadan-작업A'] = '200'; w2.done(); // PID가 다른 새 start(stop 없음)
-  run(w2);
-  assert.ok(!w2.stopCalls.includes('작업A'));
 });
 
-test('S2: stop 없이 같은 PID로 기록된 새 대화(재사용 기록에 resume·모름)도 첫 start가 새 대화면 꺼진다 — 판정은 첫 start 기준', () => {
-  const w = world(); startOf(w, '작업A', {cmd: 'codex resume abc'}); w.done();
+for (const [name, extra, cmd] of [
+  ['reuseOf가 다른 세대를 가리킴', {reuseOf: 'f'.repeat(64)}],
+  ['reuseOf가 없음(옛 재사용 기록)', {reuseOf: undefined}],
+  ['명령이 있음 = 새로 띄운 프로세스가 같은 PID를 받음', {cmd: 'codex --model m', outputLog: '/o/kadan-작업A/g2/manifest.json', conversationMode: 'new', alternateOn: 0}],
+  ['PID가 다름', {panePid: '200'}],
+]) {
+  test(`T1: 재사용 기록 모양이 아니면(${name}) 새 시작으로 보고 옛 발령으로 끄지 않는다`, () => {
+    const w = world(); reuseRec(w, extra);
+    if (extra.panePid) w.pids['kadan-작업A'] = extra.panePid;
+    w.done();
+    const out = run(w);
+    assert.ok(!w.stopCalls.includes('작업A'));
+    assert.ok(out.skipped.some(s => s.role === '작업A'));
+  });
+}
+
+test('T1: 새 프로세스가 같은 PID를 받은 start 뒤에 새 업무 발령이 있으면 그 start 기준으로 대상이다', () => {
+  const w = world(); reuseRec(w, {cmd: 'codex --model m', outputLog: '/o/g2/manifest.json', conversationMode: 'new', t: T('06-01T00:00:00Z')});
+  w.link('repo/w', '작업A', T('07-01T00:00:00Z'), T('07-02T00:00:00Z'));
+  w.done();
   run(w);
   assert.ok(w.stopCalls.includes('작업A'));
 });

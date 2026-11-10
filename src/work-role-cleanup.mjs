@@ -24,6 +24,7 @@ import { stopRole as defaultStopRole } from "./role-stop.mjs";
 import { confirmIdleBeforeStop } from "./commands/restart.mjs";
 import { floor as defaultFloor } from "./floor.mjs";
 import { startConversationCertainty } from "./conversation-ref.mjs";
+import { startDigest } from "./secretary-resume.mjs";
 
 const STOPPABLE_PROFILES = new Set(["worker", "reviewer"]);
 const finiteTime = t => Number.isFinite(Date.parse(t));
@@ -55,18 +56,23 @@ function isDispatch(e, identity, key, role) {
 }
 
 // 끄는 대상은 "띄운 뒤 한 번도 꺼졌다 켜지지 않았고, 이어 연 것이 아닌" 세션뿐이다.
-// 그 세션의 마지막 "띄운 start"를 구한다: stop 뒤의 start는 새로 띄운 것이고, stop 없이 다시 기록된 start는 그 start와 pane PID가 같을 때만
-// 살아 있는 세션 재사용으로 무시한다(다르거나 모르면 UNKNOWN). 이어 연 표시(restartOf·reopenOf·restoredFrom·secretaryResumeSource)가 있거나
-// 새 대화로 확실하지 않은 start(resume·모름)는 NO다.
+// 그 세션의 마지막 "띄운 start"를 구한다: stop 뒤의 start는 새로 띄운 것이다. stop 없이 다시 기록된 start는 "살아 있는 세션 재사용 기록"의
+// 모양이 모두 확인될 때만 무시한다 — 명령(cmd)이 없고, pane PID가 띄운 start와 같고, reuseOf가 띄운 start의 지문과 같을 때(start.mjs·reuseOfFor가 남기는 모양).
+// 그 밖의 start(명령이 있음, PID가 다름, reuseOf가 다른 세대를 가리킴)는 새 시작 기록이라 그 start가 새 "띄운 start"가 되고 이후 판정은 그 start 기준이다.
+// reuseOf가 없는 재사용 기록은 모양을 확인할 수 없어 새 시작으로 보며, 명령이 없는 start는 띄운 방법을 알 수 없어 끄지 않는다(launchedFresh → UNKNOWN).
+// stop 뒤 첫 start도 내용으로 본다(명령이 없거나 이어 연 표시가 있으면 launchedFresh가 거른다).
+function isReuseRecord(e, launch) {
+  const pid = e.panePid ?? e.rottiePid, first = launch.panePid ?? launch.rottiePid;
+  return !str(e.cmd) && str(String(pid ?? "")) && String(pid) === String(first) && str(e.reuseOf) && e.reuseOf === startDigest(launch);
+}
 function launchStart(entries, role) {
   let launch = null, index = -1;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
     if (e?.kind === "stop" && (e.role === role || e.session === `kadan-${role}`)) { launch = null; continue; }
     if (e?.kind !== "start" || e.role !== role) continue;
-    if (!launch) { launch = e; index = i; continue; }
-    const pid = e.panePid ?? e.rottiePid, first = launch.panePid ?? launch.rottiePid;
-    if (!str(String(pid ?? "")) || !str(String(first ?? "")) || String(pid) !== String(first)) return { state: UNKNOWN };
+    if (launch && isReuseRecord(e, launch)) continue;
+    launch = e; index = i;
   }
   return launch ? { state: YES, start: launch, index } : { state: UNKNOWN };
 }
