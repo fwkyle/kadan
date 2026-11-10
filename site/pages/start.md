@@ -10,8 +10,10 @@
 - **macOS 또는 Linux**: Linux에서는 창을 자동으로 열지 않고, 붙는 명령을 알려 줍니다.
 
 ```bash
-node -v    # v24 이상
-tmux -V    # tmux 3.x
+# v24 이상
+node -v
+# tmux 3.x
+tmux -V
 ```
 
 ## AI에게 설치 맡기기
@@ -33,9 +35,12 @@ https://github.com/fwkyle/kadan/blob/main/docs/ai-install.md
 ```bash
 git clone https://github.com/fwkyle/kadan.git
 cd kadan
-npm --prefix gui ci   # 대시보드 화면 빌드에 필요한 패키지 (카단 본체는 의존성 0개)
-npm run build:gui     # 대시보드 화면 빌드
-npm link              # kadan 명령을 PATH에 등록
+# 대시보드 화면 빌드에 필요한 패키지 (카단 본체는 의존성 0개)
+npm --prefix gui ci
+# 대시보드 화면 빌드
+npm run build:gui
+# kadan 명령을 PATH에 등록
+npm link
 kadan --help
 ```
 
@@ -44,8 +49,10 @@ kadan --help
 ## 처음 설정
 
 ```bash
-kadan init                                            # 처음 한 번: node·tmux 확인, 스킬 연결, 비서용 AI CLI 선택
-kadan runners init --reason "처음 시작용 기본 프리셋"   # 역할별 실행기 기본 틀
+# 처음 한 번: node·tmux 확인, 스킬 연결, 비서용 AI CLI 선택
+kadan init
+# 역할별 실행기 기본 틀
+kadan runners init --reason "처음 시작용 기본 프리셋"
 ```
 
 `claude`와 `codex`가 둘 다 있으면 `kadan init`은 `codex`를 비서로 고릅니다. 다른 쪽을 쓰려면 `kadan init --runner claude`처럼 다시 실행합니다.

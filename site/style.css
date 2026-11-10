@@ -33,9 +33,9 @@ a { color: var(--action); text-underline-offset: 3px; }
 a:focus-visible, .button:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
 img { max-width: 100%; height: auto; }
 code { font-family: var(--mono); font-size: 0.875em; background: var(--code); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
-/* 명령은 줄을 접지 않는다(복사해 쓰는 글자라서). 길면 상자 안에서만 옆으로 밀린다. */
-pre { margin: 1rem 0; padding: 1rem; background: var(--term); color: var(--term-text); border-radius: 8px; white-space: pre; overflow-x: auto; word-break: normal; overflow-wrap: normal; line-height: 1.6; }
-pre code { background: none; padding: 0; font-size: 0.8125rem; overflow-wrap: normal; }
+/* 긴 명령은 상자 안에서 접힌다(옆으로 밀리거나 잘리지 않는다). 설명은 명령 윗줄에 따로 적는다. */
+pre { margin: 1rem 0; padding: 1rem; background: var(--term); color: var(--term-text); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; line-height: 1.6; }
+pre code { background: none; padding: 0; font-size: 0.8125rem; }
 
 .skip { position: absolute; left: 1rem; top: -4rem; padding: 0.5rem 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; z-index: 10; }
 .skip:focus { top: 0.5rem; }
