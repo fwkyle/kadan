@@ -8,6 +8,7 @@ import {taskIdentity} from './task-identity.mjs';
 import {automaticReviewCommand} from './automatic-review-command.mjs';
 import {DecisionStore} from './decisions.mjs';
 import {latestPassReview} from './merge-check.mjs';
+import {closeWorkRoles} from './work-role-cleanup.mjs';
 
 const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 
@@ -46,7 +47,21 @@ export function workCommand(args,flags,context){
  try{result=workCommandInner(args,flags,context);}
  finally{if(STATUS_ACTIONS.has(args[0])&&args[1]&&!flags.help)refreshWorkStatus(context.home,args[1]);}
  closeChatDecisions(args,flags,context,turnBefore,result);
- return result;
+ return closeRolesAfterComplete(args,flags,context,result);
+}
+
+// 마감이 기록된 뒤에만 그 업무의 작업자·검수자를 끈다(CLI가 closeRoles를 넘길 때만 — 대시보드 마감은 거치지 않는다).
+// 끄기가 어떻게 되든 마감 결과는 그대로이고, 끄기 결과는 roleCleanup 칸으로 더하기만 한다. 사람이 읽는 줄은 stderr.
+function closeRolesAfterComplete([action],flags,context,result){
+ if(action!=='complete'||flags.help||typeof context.closeRoles!=='function'||result?.status!=='done')return result;
+ try{
+  const cleanup=context.closeRoles({home:context.home,work:result,keep:flags['keep-roles']===true});
+  for(const line of cleanup.lines)process.stderr.write(`${line}\n`);
+  return {...result,roleCleanup:cleanup};
+ }catch(error){
+  process.stderr.write(`역할 끄기 실패(업무 마감은 기록됨): ${error.message}\n`);
+  return {...result,roleCleanup:{error:error.message}};
+ }
 }
 
 // 후속 행동이 성공하면 그 업무에 열린 채팅 결정(decision request --chat)을 닫는다. 업무 쓰기가 끝난 뒤 별도 트랜잭션이고,
@@ -70,7 +85,7 @@ function workCommandInner(args,flags,context){
  const [action='list',key]=args,store=new WorkStore(home);
  if(flags.help&&action.startsWith('auto-'))return 'kadan work auto-configure <업무키> --revision N --implementation 원본카드키 --review 검수원본키 --worker 작업자 --reviewer 검수자 [--notify 감독 --deadline 기존시한 --next-block] | auto-show <업무키> | auto-report <업무키> --execution 현재실행키 --outcome implemented|pass|changes|exception [--result-file 기존절대경로] | auto-step <업무키> | auto-run <업무키> [--interval 초]. 상세: docs/automatic-review.md';
  if(action.startsWith('auto-'))return automaticReviewCommand(args,flags,context);
- if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] | list | show <키> | update <키> --revision N --note 이유 [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete/cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
+ if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] | list | show <키> | update <키> --revision N --note 이유 [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
  if(action==='list'){const works=store.list().filter(w=>(!flags.repo||w.repo===flags.repo)&&(!flags.status||w.status===flags.status)),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions})=>({key,title,owner,status,revision,executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
  if(action==='show'){const work=store.get(key);return {...work,...operationsFlowSummaries(home,[work]).get(key),latestPassReviewSha:latestPassReview(home,work)};}
  if(action==='create'){

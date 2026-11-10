@@ -14,6 +14,7 @@ import { CardStore } from "./card-store.mjs";
 import { cardCommand } from "./card-command.mjs";
 import { hierarchyCommand } from "./hierarchy-prune.mjs";
 import { workCommand } from "./work-command.mjs";
+import { closeWorkRoles } from "./work-role-cleanup.mjs";
 import { slotCommand } from "./review-slots.mjs";
 import { mergeCheck, formatMergeCheck } from "./merge-check.mjs";
 import { mergeGateCommand } from "./merge-gate.mjs";
@@ -199,6 +200,7 @@ export const COMMANDS = {
   hierarchy:(args,flags)=>console.log(JSON.stringify(hierarchyCommand(args,flags,{home:ledgerHome(),floor}),null,2)),
   work:async(args,flags)=>printWorkResult(args,await workCommand(args,flags,{
     home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
+    closeRoles:input=>closeWorkRoles({...input,floor,callerRole:process.env.KADAN_ROLE||resolveLedgerBy({env:process.env}),warn:line=>console.error(line)}),
     send:({role,pid,message,taskId,workKey,executionKey,roleProfile,transmit})=>guardedSend({
       floor:{...floor,send:(name,text,options)=>transmit(()=>floor.send(name,text,options))},
       session:sessionName(role),role,message,taskId,roleProfile,recordedPid:pid,
@@ -309,7 +311,7 @@ export function main(argv) {
     console.error(`모르는 명령: ${command}\n\n${formatShortHelp()}`);
     process.exit(1);
   }
-  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'autopilot' ? {booleans: ['text','json']} : command === 'merge-gate' ? {booleans: ['json']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : command === 'restart' ? {booleans: RESTART_BOOLEANS} : undefined);
+  const { flags, rest: args } = parseFlags(rest, command === 'discord' && rest[0] === 'send' ? {booleans: ['quiet']} : command === 'autopilot' ? {booleans: ['text','json']} : command === 'merge-gate' ? {booleans: ['json']} : command === 'claude' ? {booleans: ['json','no-accounts','yes']} : command === 'decision' ? {booleans: ['chat']} : command === 'restart' ? {booleans: RESTART_BOOLEANS} : command === 'work' ? {booleans: ['keep-roles']} : undefined);
   try {
     // 환경변수에 없는 창 선택·로티 경로는 기계 설정으로 채운다. window 명령은 둘을 따로 보여 주려고, 도움말은 홈을 읽을 이유가 없어 건너뛴다.
     if (command !== 'window' && command !== 'help' && !flags.help) adoptWindowForCommand(command, process.env, ledgerHome(), {socket: currentSocket()});

@@ -56,7 +56,7 @@ description: Supervisor (conductor) only — workers and reviewers must not use 
 
 - 합격 뒤에는 필요한 통합·승인된 환경 적용·실물 확인을 이어간다. 같은 근거의 추가 검수를 만들지 않는다.
 - 책임 owner는 전체 완료조건과 근거가 충족되면 `work complete`한다. 남은 일이 있으면 다음 행동·담당·대기 대상과 깨움 경로를 연결한다. 보고 수신이나 실행 DONE은 업무 최종 완료가 아니다.
-- 결과·done 확정 뒤 남은 담당 일이 없는 소유 역할은 [종료·정리](references/cleanup.md)에 따라 종료한다. 확정은 역할 종료 때까지 미루지 않는다.
+- 결과·done 확정 뒤 남은 담당 일이 없는 소유 역할은 [종료·정리](references/cleanup.md)에 따라 종료한다(`kadan work complete`가 그 업무의 작업자·검수자를 마감 뒤 대신 끈다). 확정은 역할 종료 때까지 미루지 않는다.
 
 ## 판단과 안전 경계
 
