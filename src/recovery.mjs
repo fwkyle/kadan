@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {ledgerHome, readSystemLedger, appendLedger} from './ledger.mjs';
+import {ledgerHome, readSystemLedger, readRecoveryLedger, appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {tmuxFloor, tmux, buildRottieCreateArgv, parseRottieCreateResult} from './floor-tmux.mjs';
 import {currentRottieWindow} from './restore.mjs';
@@ -88,7 +88,7 @@ function livePane(session, run = tmux) {
 
 export function inspectRecovery(flags, deps = {}) {
   const home = deps.home || ledgerHome();
-  const entries = deps.entries || readSystemLedger(home);
+  const entries = deps.entries || readRecoveryLedger(home);
   const terminalId = flags.terminal;
   if (typeof terminalId !== 'string' || !terminalId) fail('원본 Rottie 탭 ID가 필요합니다.');
   const sessions = [...new Set(entries.filter(e => e.rottieTerminalId === terminalId).map(e => e.session))];
