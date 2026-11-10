@@ -8,7 +8,8 @@
 
 - 항목마다 같은 순서의 네 줄이다: **말 한마디**(AI나 디스코드에 말로 시키는 길, 없으면 화면에서 누르는 곳), **명령 한 줄**, **주의**, **자세한 문서**. 고를 길이 여럿이면 주의 아래에 표로 나눈다.
 - `<역할>`은 세션 이름에서 `kadan-`을 뺀 부분이다. 세션 `kadan-my-app-감독`의 역할은 `my-app-감독`이다(지어낸 이름).
-- 모든 옵션은 [명령어 사전](commands.md)에 있다. 대시보드 메뉴 **길잡이**도 이 문서를 그대로 보여 준다.
+- 모든 옵션은 [명령어 사전](commands.md)에 있다.
+- 이 문서는 대시보드 메뉴 **길잡이**와 공개 소개 사이트에 그대로 실린다. 그래서 작업 중인 문장이나 내부 사정은 적지 않는다.
 
 ## 하던 대화를 카단으로 옮기기
 
@@ -41,9 +42,9 @@
 ## 모델·프리셋 바꾸기
 
 - **말 한마디**: 없음. 화면에서는 대시보드 **실행 모델 설정**에서 역할별 값을 고치고 **프리셋 저장**, 또는 프리셋 전환.
-- **명령 한 줄**: `kadan runners set worker --runner <실행기> --model <모델> --effort <강도> --revision <N> --reason "<이유>"` — 프리셋을 통째로 바꿀 때는 `kadan runners preset <이름> --revision <N> --reason "<이유>"`
-- **주의**: 지금 값과 `--revision`에 넣을 숫자는 `kadan runners show`로 본다. 바꿔도 이미 떠 있는 세션은 그대로이고 다음에 띄우는 역할부터 적용된다. 검수자는 작업자와 다른 계열 모델이어야 저장된다.
-- **자세한 문서**: [실행 모델 설정](runner-settings.md)
+- **명령 한 줄**: `kadan runners set worker --runner <실행기> --model <모델> --effort <강도> --revision <N> --reason "<이유>"` — 프리셋을 통째로 바꿀 때는 `kadan runners preset <이름> --revision <N> --reason "<이유>"`. 이미 떠 있는 역할은 이어서 `kadan restart <역할> --model-from-settings --reason "<이유>"`
+- **주의**: 지금 값과 `--revision`에 넣을 숫자는 `kadan runners show`로 본다(저장할 때마다 1씩 오른다). 바꿔도 이미 떠 있는 세션은 그대로이고 다음에 띄우는 역할부터 적용된다. 떠 있는 역할은 `kadan restart <역할> --model-from-settings`로 같은 대화를 이어 연 채 모델·강도만 설정값으로 바꾼다. 이 옵션 없이 다시 띄우면 원래 모델 그대로다. 한 번에 한 역할이고, 실행기까지 바뀌면 거절되니 `kadan stop <역할>` 다음에 `kadan start <역할> --profile <프로필>`로 새로 띄운다(대화는 이어지지 않는다). 검수자는 작업자와 다른 계열 모델이어야 저장된다.
+- **자세한 문서**: [실행 모델 설정](runner-settings.md), [살아 있는 역할에 반영하기](runner-settings.md#설정을-바꾼-뒤-살아-있는-역할에-반영하기), [모델을 한꺼번에 바꾸는 절차](../skills/kadan-super/references/model-switch.md)
 
 ## 비교 모드 켜고 끄기
 
