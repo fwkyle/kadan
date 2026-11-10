@@ -562,3 +562,80 @@ test('restart는 로티 탭을 셸 폴더가 아니라 마지막 start의 작업
   assert.equal(opened.length, 1);
   assert.equal(opened[0].cwd, f.dir);
 });
+
+// ---- PR #360 검수 F1: 안전 지점 확인은 마지막 원장 읽기 뒤, floor.stop 바로 앞이다 ----
+// 수정 전에는 확인 → 원장 다시 읽기 → 끄기 순서라, 읽는 동안 응답을 시작하거나 사람이 입력한 역할을 껐다.
+// 지연은 실제로 기다리지 않고, 끄기 전 마지막 deps.read 안에서 화면·입력 상태를 바꾸는 것으로 재현한다.
+const IDLE_SCREEN = '›', WORKING_SCREEN = '• Working (1s • esc to interrupt)';
+function racePair(target) {
+  const make = () => target === 'secretary' ? secretaryFixture() : fixture({files: claudeFiles, pending: ['card-x']});
+  const run = (f, flags) => target === 'secretary'
+    ? restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags, floor: f.floor, settings: null, deps: f.deps})
+    : f.run(flags);
+  return {make, run};
+}
+// 끄기 전까지 deps.read가 몇 번 불리는지 먼저 세고(정상 실행), 새 fixture에서 그 마지막 읽기 때 상태를 바꾼다.
+function readsBeforeStop(target, flags) {
+  const {make, run} = racePair(target);
+  const f = make();
+  let reads = 0, atStop = null;
+  const read = f.deps.read, stop = f.floor.stop;
+  f.deps.read = () => { reads++; return read(); };
+  f.floor.stop = (...args) => { atStop ??= reads; return stop(...args); };
+  run(f, flags);
+  return atStop;
+}
+for (const target of ['role', 'secretary']) {
+  for (const change of ['working', 'human']) {
+    test(`F1: ${target} — 끄기 전 마지막 원장 읽기 도중 ${change}로 바뀌면 끄지 않고 거절한다`, async () => {
+      const {confirmIdleBeforeStop} = await import('../src/commands/restart.mjs');
+      const last = readsBeforeStop(target, {});
+      assert.ok(last >= 1);
+      const {make, run} = racePair(target);
+      const f = make();
+      let reads = 0, busy = false, stops = 0;
+      const read = f.deps.read, stop = f.floor.stop;
+      f.deps.read = () => { if (++reads === last) busy = true; return read(); };
+      f.deps.beforeStop = () => confirmIdleBeforeStop('fixture', {
+        read: () => busy && change === 'working' ? WORKING_SCREEN : IDLE_SCREEN,
+        assertHumanIdle: () => { if (busy && change === 'human') throw Object.assign(new Error('active'), {code: 'KADAN_HUMAN_ACTIVE'}); }});
+      f.floor.stop = (...args) => { stops++; return stop(...args); };
+      assert.throws(() => run(f, {}), /끄지 않았다/);
+      assert.equal(stops, 0, '끄기 0회');
+      assert.equal(f.entries.some(e => e.kind === 'stop'), false, '원장 stop 없음');
+      assert.equal(f.entries.filter(e => e.kind === 'start').length, 1, '새 start 없음');
+    });
+  }
+}
+
+test('F1: accountRefresh도 마지막 원장 읽기 도중 working으로 바뀌면 STATE_CHANGED_CODE 건너뜀으로 끝나고 끄지 않는다', () => {
+  const last = readsBeforeStop('role', {accountRefresh: true});
+  const f = fixture({files: claudeFiles, pending: ['card-x']});
+  let reads = 0, busy = false;
+  const read = f.deps.read;
+  f.deps.read = () => { if (++reads === last) busy = true; return read(); };
+  f.setBeforeStop(() => { if (busy) throw new Error('working: 응답 생성 중'); });
+  assert.throws(() => f.run({accountRefresh: true, force: true}),
+    error => error.code === STATE_CHANGED_CODE && /건너뜀: 확인 뒤 상태 바뀜\(working/.test(error.message));
+  assert.equal(f.log.some(([kind]) => kind === 'stop' || kind === 'create' || kind === 'record'), false);
+  assert.equal(f.entries.length, 1);
+});
+
+test('F1 호출 순서: 원장 읽기 → 확인 → stop이고, 확인과 stop 사이에 다른 dep·바닥 호출이 없다(일반·비서)', () => {
+  for (const target of ['role', 'secretary']) {
+    const {make, run} = racePair(target);
+    const f = make();
+    const trace = [];
+    for (const [owner, label] of [[f.deps, 'deps'], [f.floor, 'floor']]) {
+      for (const [name, fn] of Object.entries(owner)) {
+        if (typeof fn !== 'function') continue;
+        owner[name] = (...args) => { trace.push(`${label}.${name}`); return fn(...args); };
+      }
+    }
+    run(f, {});
+    const confirmAt = trace.indexOf('deps.beforeStop'), stopAt = trace.indexOf('floor.stop');
+    assert.equal(trace.filter(name => name === 'deps.beforeStop').length, 1, target);
+    assert.equal(stopAt, confirmAt + 1, `${target}: 확인 바로 다음이 stop — ${trace.join(' → ')}`);
+    assert.ok(trace.lastIndexOf('deps.read', confirmAt) >= 0 && !trace.slice(confirmAt, stopAt).includes('deps.read'), target);
+  }
+});

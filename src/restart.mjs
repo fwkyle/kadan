@@ -64,7 +64,10 @@ function restartGeneration(entries, role) {
 }
 
 // 끄기 → stop 원장. restart:true·restartOf로 우편·책임 세대를 이어간다.
-function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh}) {
+// 순서: 원장 다시 읽기 → 세대·PID·소유 검사 → 안전 지점 확인(confirm) → floor.stop.
+// 원장 읽기는 원장 크기에 비례해 오래 걸릴 수 있어 확인 **앞**에 둔다(PR #360 검수 F1: 확인 뒤에 읽으면 그 사이 응답을 시작한 역할을 껐다).
+// 확인과 floor.stop 사이에는 아무 단계도 두지 않는다. 남는 틈은 확인이 끝나고 floor.stop이 실제로 세션을 죽이기까지뿐이며 없앨 수 없다.
+function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh, confirm = null}) {
   const latest = deps.read();
   const current = restartGeneration(latest, role);
   if (!generation || !current || current.count !== generation.count
@@ -72,6 +75,7 @@ function stopForRestart({role, session, floor, entries, deps, generation, forced
     fail('대화를 확인한 뒤 역할 세대가 바뀌었습니다 — 새 상태를 확인하고 다시 시도하세요');
   }
   assertSessionOwner(sessionOwner(latest, session, role), floor.pid(session));
+  if (confirm) confirm();
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
   deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
@@ -143,15 +147,15 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
 
-  // 3) 여기까지 거절 사유가 없다. 끄기 바로 앞에서 한 번 더 확인한다(화면 idle + 사람 입력 보호).
-  // 위 확인(대화 찾기 등)이 오래 걸려 그 사이 응답이 시작되거나 사람이 입력했을 수 있어서다(검수 F1).
-  // 남는 틈은 이 확인과 kill-session 사이 수 ms뿐이고 없앨 수 없다. 모든 restart가 확인하고 --force만 건너뛴다(계정 전환은 건너뛰지 않는다).
-  if (accountRefresh || !force) confirmBeforeStop(session, deps, accountRefresh);
+  // 3) 여기까지 거절 사유가 없다. 안전 지점 확인(화면 idle + 사람 입력 보호)은 stopForRestart 안에서, 원장 다시 읽기와
+  // 세대·PID·소유 검사가 끝난 뒤 floor.stop 바로 앞에서 한다. 위 확인(대화 찾기 등)과 원장 읽기가 오래 걸려 그 사이
+  // 응답이 시작되거나 사람이 입력했을 수 있어서다. 모든 restart가 확인하고 --force만 건너뛴다(계정 전환은 --force여도 확인한다).
+  const confirm = accountRefresh || !force ? () => confirmBeforeStop(session, deps, accountRefresh) : null;
   // 이제 끄고 같은 정체로 다시 띄운다.
   const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
   const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
   stopForRestart({role, session, floor, entries, deps, generation,
-    forced: force ? pending : null, pending, reason, refresh});
+    forced: force ? pending : null, pending, reason, refresh, confirm});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -184,9 +188,10 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
     // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
     if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
-    // 비서도 같은 안전 지점 확인을 한다 — confirmIdleBeforeStop은 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다.
-    if (!force) confirmBeforeStop(session, deps, false);
-    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason});
+    // 비서도 같은 안전 지점 확인을 같은 자리(stopForRestart 안, floor.stop 바로 앞)에서 한다 — confirmIdleBeforeStop은
+    // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
+    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
+      confirm: force ? null : () => confirmBeforeStop(session, deps, false)});
     return {pending: open, previous: startDigest(start)};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
