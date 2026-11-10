@@ -568,7 +568,11 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  if(request.method==='GET'&&url.searchParams.has('fresh'))clear();
  if (request.method === 'GET'&&!url.pathname.startsWith('/api/operations-flow')) {const hit=cached(cacheUrl);if(hit){response.writeHead(200,{'content-type':hit.type,'cache-control':'no-store','x-kadan-cache':'hit'});response.end(hit.body);return;}}
     if (home && handleOperationsFlow(home,request,response,url,{cached:()=>cached(cacheUrl),remember:(body,type)=>remember(cacheUrl,body,type)})) return;
-    if (centerHandler && await centerHandler.handle(request,response,url)) { clear(); return; }
+    if (centerHandler && await centerHandler.handle(request,response,url,{remember:(body,type)=>remember(cacheUrl,body,type)})) {
+      // 조회(GET)는 읽기만 하므로 응답 캐시·공유 수집을 비우지 않는다. 쓰기(POST)는 실패해도 비운다.
+      if (request.method !== 'GET') clear();
+      return;
+    }
     // 수집이 오래 걸려 줄이 밀리면 화면은 이미 시간 초과로 연결을 끊은 뒤다. 새 수집을 시작하기 전에 양보해
     // 끊긴 연결을 알아채고, 아무도 기다리지 않는 요청은 계산하지 않는다(2026-10-14: 11~41초 응답이 겹쳐 쌓였다).
     // 응답 쪽 연결이 실제로 닫혔을 때(소켓 파괴·응답 close)만 건너뛴다. 읽기 쪽만 끝난 연결은 응답을 기다릴 수 있어 건너뛰지 않는다.
