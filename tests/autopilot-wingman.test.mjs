@@ -132,14 +132,14 @@ function fixture(readWorksRoles = ['a-슈퍼감독', 'b-슈퍼감독']) {
   appendLedger({kind: 'hierarchy-loaded', path: file, hash: 'x', by: 'watch'}, home);
   for (const r of ['a-슈퍼감독', 'b-슈퍼감독']) appendLedger({kind: 'start', role: r, session: `kadan-${r}`, roleProfile: 'super'}, home);
   const sent = [];
-  let failFor = null;
+  let failFor = null, failDelivery = 'not-sent';
   const works = [{key: 'a/w1', status: 'open', owner: 'a-감독', executions: []}, {key: 'b/w2', status: 'open', owner: 'b-감독', executions: []}];
   const deps = {
     now: () => T0, readWorks: () => works, notify: () => {},
-    sendMail: (role, message) => { sent.push({role, message}); return failFor === role ? {ok: false, error: '실패'} : {ok: true, mailId: `m-${role}`}; },
+    sendMail: (role, message) => { sent.push({role, message}); return failFor === role ? {ok: false, error: '실패', ...(failDelivery ? {delivery: failDelivery} : {})} : {ok: true, mailId: `m-${role}`}; },
   };
   const run = (args, flags = {}, by = '사람') => autopilotCommand(args, flags, {home, by, deps});
-  return {home, sent, run, fail: role => { failFor = role; }, autopilot: () => readLedger(home).filter(e => e.kind === 'autopilot')};
+  return {home, sent, run, fail: (role, ...delivery) => { failFor = role; failDelivery = delivery.length ? delivery[0] : 'not-sent'; }, autopilot: () => readLedger(home).filter(e => e.kind === 'autopilot')};
 }
 
 test('6. 명시 --wingman: Autopilot 단계에서 Wingman이 되고 on 사건·status·Wingman 우편에 보인다', () => {
@@ -204,6 +204,43 @@ test('6. 기본 Wingman이 대상 밖이거나 우편이 실패하면 켜지되 
   assert.equal(r2.wingman, null);
   assert.match(r2.wingmanNote, /우편 전달 실패/);
   assert.ok(r2.delivered.some(d => d.role === 'a-슈퍼감독' && d.ok), '다른 슈퍼감독에게는 간다');
+});
+
+// 불변식(2026-11-10): 감독이 켜짐 우편을 받았을 수 있으면 원장은 켜짐이다. 확실히 안 간 경우(not-sent)만 멈춘다.
+test('6. 명시 --wingman 우편 결과: 전달됨·기록 실패와 불명확은 켜짐(Wingman 유지·전달 불명확), 확실히 안 감은 멈춤', () => {
+  for (const [delivery, on] of [['sent', true], ['unknown', true], [undefined, true], ['not-sent', false]]) {
+    const f = fixture();
+    f.fail('b-슈퍼감독', delivery);
+    if (!on) {
+      assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', wingman: 'b-슈퍼감독'}), /우편이 가지 않아 켜지 않았습니다/, String(delivery));
+      assert.equal(f.autopilot().length, 0);
+      assert.equal(f.sent.length, 1, '다른 슈퍼감독에게 보내지 않는다');
+      continue;
+    }
+    const r = f.run(['on', '밤'], {level: 'autopilot', wingman: 'b-슈퍼감독'});
+    assert.equal(r.wingman, 'b-슈퍼감독', String(delivery));
+    assert.equal(r.wingmanSource, 'flag');
+    assert.match(r.wingmanNote, /전달 불명확/);
+    const [ev] = f.autopilot();
+    assert.equal(ev.phase, 'on');
+    assert.equal(ev.wingman, 'b-슈퍼감독');
+    assert.match(ev.wingmanNote, /전달 불명확/);
+    assert.ok(f.sent.some(s => s.role === 'a-슈퍼감독'), '다른 슈퍼감독에게도 간다');
+    assert.equal(f.run(['status']).on, true);
+  }
+});
+
+test('6. 기본 Wingman 우편 결과도 같은 규칙: 전달됨·기록 실패와 불명확은 Wingman 유지, 확실히 안 감은 Wingman 없음', () => {
+  for (const [delivery, kept] of [['sent', true], ['unknown', true], ['not-sent', false]]) {
+    const f = fixture();
+    f.run(['wingman', 'b-슈퍼감독']);
+    f.fail('b-슈퍼감독', delivery);
+    const r = f.run(['on', '밤'], {level: 'autopilot'});
+    assert.equal(f.autopilot().length, 1, delivery);
+    assert.equal(r.wingman, kept ? 'b-슈퍼감독' : null, delivery);
+    assert.equal(r.wingmanSource, kept ? 'default' : 'none');
+    assert.match(r.wingmanNote, kept ? /전달 불명확/ : /우편 전달 실패/);
+  }
 });
 
 test('6. autopilot wingman: 보기·저장·지우기, 슈퍼감독 이름 꼴만, 두 이름·--clear와 이름은 오류', () => {

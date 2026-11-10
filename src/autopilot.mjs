@@ -14,6 +14,7 @@ import {WorkStore} from './work-store.mjs';
 import {notifyUser} from './user-notify.mjs';
 import {summarizeAutopilot, HELD_PREFIX} from './autopilot-summary.mjs';
 import {WINGMAN_LINES} from './autopilot-wingman.mjs';
+import {MAIL_DELIVERY_EXIT_ENV, mailDeliveryOf} from './mail-delivery-exit.mjs';
 import {MODE, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL, DECISION_PREFIX, ALLOW_LABEL} from './autopilot-terms.mjs';
 
 export const DEFAULT_MS = 8 * 60 * 60_000;
@@ -139,11 +140,14 @@ export function buildAutopilotMessage({text, quote, viaChat, by, untilMs, level,
 }
 
 // kadan mail로 한 슈퍼감독에게 보낸다. 실패해도 던지지 않고 결과를 돌려준다.
-export function sendAutopilotMail(home, from) {
+// 실패면 delivery(not-sent|sent|unknown)를 함께 준다: 종료 코드로만 정하고 오류 문구는 맞춰 보지 않는다(src/mail-delivery-exit.mjs).
+// error 글은 사람이 읽는 사유일 뿐 판정에 쓰지 않는다. spawn은 시험용 주입이다.
+export function sendAutopilotMail(home, from, spawn = spawnSync) {
   return (role, message) => {
-    const r = spawnSync(process.execPath, [CLI, 'mail', role, message],
-      {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: from}, encoding: 'utf8', timeout: 20_000});
-    if (r.status !== 0) return {ok: false, error: String(r.stderr || r.stdout || '').trim().slice(0, 200)};
+    const r = spawn(process.execPath, [CLI, 'mail', role, message],
+      {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: from, [MAIL_DELIVERY_EXIT_ENV]: '1'}, encoding: 'utf8', timeout: 20_000});
+    const delivery = mailDeliveryOf(r);
+    if (delivery !== 'ok') return {ok: false, delivery, error: String(r.stderr || r.stdout || r.error?.message || r.signal || '').trim().slice(0, 200)};
     let mailId = null;
     try { mailId = JSON.parse(r.stdout.trim().split('\n').at(-1)).mailId ?? null; } catch { /* 영수증 모양을 모르면 mailId 없이 둔다 */ }
     return {ok: true, mailId};

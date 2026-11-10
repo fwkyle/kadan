@@ -25,6 +25,7 @@ import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { isPeerSuperMail } from "../peer-mail.mjs";
 import { humanIdleMsFor, isStorableMailHold } from "../notification-guard.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
+import {mailFailureExitCode} from '../mail-delivery-exit.mjs';
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -184,7 +185,8 @@ function deliverMessage(argv, flags, command) {
       throw error;
     }
   } catch (error) {
-    die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, error.exitCode || 1);
+    // 종료 코드는 기본 error.exitCode || 1이다. KADAN_MAIL_DELIVERY_EXIT=1로 부른 쪽만 전달 상태별 코드(4·5)를 받는다.
+    die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, mailFailureExitCode(error));
   }
   console.log(
     `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${receipt.session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})` +

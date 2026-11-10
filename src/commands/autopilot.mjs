@@ -222,16 +222,24 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const send = deps.sendMail ?? sendAutopilotMail(home, by);
   const attempt = (role, isWingman) => {
     const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, allow, isWingman});
-    try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, error: String(error.message).slice(0, 200)}; }
+    // 던진 오류도 결과로 바꾼다. 전달 상태를 모르는 실패는 unknown(갔을 수 있음)이다.
+    try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, delivery: error.delivery ?? 'unknown', error: String(error.message).slice(0, 200)}; }
   };
-  // Wingman에게 먼저 보낸다: 명시한 Wingman의 우편이 실패하면 아무에게도 켜짐을 알리지 않고 멈추기 위해서다.
+  // Wingman에게 먼저 보낸다. 불변식: Wingman이 켜짐 우편을 받았을 수 있으면 원장은 켜짐이다(2026-11-10).
+  // 확실히 안 간 경우(not-sent)만 지금처럼 멈춘다(명시면 아무에게도 알리지 않고 실패, 기본이면 Wingman 없이 켬).
+  // 전달됨·기록 실패(sent)·불명확(unknown, 시간 초과·전달 상태 없는 실패 포함)은 켜고 Wingman을 유지하며 wingmanNote에 남긴다.
   const results = new Map();
   if (wingman) {
     const r = attempt(wingman, true);
     results.set(wingman, r);
     if (!r.ok) {
-      if (explicit) throw new Error(`Wingman ${wingman}에게 우편이 가지 않아 켜지 않았습니다(${r.error ?? '전달 실패'})`);
-      wingmanNote = `기본 Wingman ${wingman} 못 씀(우편 전달 실패) — Wingman 없음`; wingman = null;
+      const delivery = r.delivery ?? 'unknown';
+      if (delivery === 'not-sent') {
+        if (explicit) throw new Error(`Wingman ${wingman}에게 우편이 가지 않아 켜지 않았습니다(${r.error ?? '전달 실패'})`);
+        wingmanNote = `기본 Wingman ${wingman} 못 씀(우편 전달 실패) — Wingman 없음`; wingman = null;
+      } else {
+        wingmanNote = `Wingman ${wingman} 우편 전달 불명확(${delivery === 'sent' ? '전달됨·기록 실패' : '갔는지 모름'}) — Wingman 유지`;
+      }
     }
   }
   for (const role of to) if (!results.has(role)) results.set(role, attempt(role, false));
