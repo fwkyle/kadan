@@ -42,7 +42,8 @@ kadan slot release <자리경로>
 | 명령 | 하는 일 |
 |---|---|
 | `kadan limit run <rust\|install\|build> -- <명령...>` | 그 종류의 자리가 비어 있을 때만 명령을 돌린다. 차 있으면 쥔 쪽을 알리며 기다린다. 종료 코드는 명령의 것을 그대로 돌려준다 |
-| `kadan limit status` | 종류별 동시 개수와 지금 쥔 쪽 |
+| `kadan limit status` | 종류별 동시 개수와 지금 쥔 쪽, 감독 업무 기준 개수(`conductorOpenWorks`) |
+| `kadan limit set conductor-works <0 이상의 정수>` | 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수를 바꾼다(기본 3, 0이면 안내 문장 끔). 그 밖의 값은 종료 코드 2 |
 
 | 종류 | 기본 동시 개수 | 대상 |
 |---|---|---|
@@ -59,8 +60,10 @@ kadan slot release <자리경로>
 `$KADAN_HOME/resource-limits.json`은 선택이다. 없으면 아래 기본값을 쓴다.
 
 ```json
-{"reviewSlots": 4, "leaseMaxHours": 12, "limits": {"rust": 1, "install": 2, "build": 2}}
+{"reviewSlots": 4, "leaseMaxHours": 12, "limits": {"rust": 1, "install": 2, "build": 2}, "conductorOpenWorks": 3}
 ```
+
+`conductorOpenWorks`는 슈퍼감독이 일반감독에게 일을 맡길 때 나오는 안내의 기준 개수다([업무 맥락 전달](flows.md)). 이 키만 `kadan limit set conductor-works <N>`으로 쓴다: 다른 키는 그대로 두고, 파일이 없으면 이 키만 든 파일을 만들며, 파일이 깨져 있으면 덮어쓰지 않고 거절한다. 읽을 때 파일이 깨졌거나 값이 0 이상의 정수가 아니면 기본 3으로 본다(우편 전송을 막지 않는다).
 
 ## 수용한 위험
 
