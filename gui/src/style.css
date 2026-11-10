@@ -700,3 +700,15 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .st-autopilot-confirm { flex-basis: 100%; margin: 0; text-wrap: pretty; }
 .st-autopilot-confirm button { margin-left: 8px; }
 .st-autopilot-clear { flex-basis: 100%; color: var(--ds-color-muted); }
+/* 길잡이(#how-to): 문서 한 장을 읽는 화면. 한국어 줄바꿈은 공용 규칙(keep-all + break-word)을 따른다. */
+.howto-view { max-width: 820px; word-break: keep-all; overflow-wrap: break-word; }
+.howto-view h1 { text-wrap: balance; }
+.howto-source { color: var(--ds-color-muted); font-size: 12px; }
+.howto-view .prose { overflow-wrap: break-word; }
+.howto-view .prose h3 { margin: 28px 0 8px; padding-top: 14px; border-top: 1px solid var(--ds-color-border); font-size: 16px; text-wrap: balance; }
+.howto-view .prose p, .howto-view .prose li { line-height: 1.7; text-wrap: pretty; }
+.howto-view .prose li { margin: 4px 0; }
+.howto-view .prose ul, .howto-view .prose ol { padding-left: 20px; }
+@media (max-width: 799px) { .howto-view { padding: 0 14px 20px; } }
+/* 위쪽 메뉴가 아홉 개가 되어 800~900px 폭에서 이름이 글자 단위로 접혔다. 이름은 한 줄로 두고 메뉴 줄을 넘긴다. */
+@media (min-width: 800px) { .dw-top > nav { flex-wrap: wrap; min-width: 0; row-gap: 0; } .dw-top > nav a { white-space: nowrap; } }

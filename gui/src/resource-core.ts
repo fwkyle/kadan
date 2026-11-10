@@ -10,6 +10,8 @@ export type ResourceOptions = {
   pollMs?: number;
   deadlineMs?: number;
   staleMs?: number;
+  // false면 숨겼던 탭을 다시 볼 때 자동으로 다시 읽지 않는다(기본은 다시 읽는다). 길잡이처럼 고정 문서용.
+  refreshOnResume?: boolean;
 };
 type Listener = () => void;
 // 2026-10-14 격리 측정(원장 사본, 부하 평균 50): 개선 전 동시 조회 p95 61초, 개선 후 최악 13초.
@@ -80,7 +82,10 @@ export class Resource<T> {
     const resumed = visible && !this.visible;
     this.visible = visible;
     if (!visible) this.cancel();
-    if (resumed && this.subscribed) void this.refresh();
+    // 재표시 갱신을 끈 자료도, 숨기는 바람에 첫 조회가 취소돼 보여 줄 자료가 없으면 읽는다.
+    const reload =
+      this.options.refreshOnResume !== false || !this.state.updatedAt;
+    if (resumed && this.subscribed && reload) void this.refresh();
     else this.schedule();
   }
   cancel() {
