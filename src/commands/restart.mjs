@@ -7,7 +7,7 @@ import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
 import { readSettings } from "../runner-settings.mjs";
-import { restartRole } from "../restart.mjs";
+import { restartRole, MODEL_FROM_SETTINGS } from "../restart.mjs";
 import { readStatusLine } from "../watch-status-line.mjs";
 import { processTree, openFilesOf, processStartedAt } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
@@ -61,7 +61,10 @@ export function cliRestartFlags(flags) {
   return rest;
 }
 
-export const RESTART_USAGE = "사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>]";
+export const RESTART_USAGE = "사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>] [--model-from-settings]\n" +
+  "  --model-from-settings: 원래 모델 대신 지금 실행 모델 설정(그 역할 프로필의 활성 프리셋)의 모델·강도로, 같은 대화를 이어 연다";
+// 값을 받지 않는 restart 전용 옵션(뒤 낱말을 값으로 먹지 않게 한다).
+export const RESTART_BOOLEANS = [MODEL_FROM_SETTINGS];
 
 export function cmdRestart(argv, flags) {
   flags = cliRestartFlags(flags);
@@ -91,6 +94,7 @@ export function cmdRestart(argv, flags) {
   if (canonical !== role) die(`역할 이름이 정확하지 않다('${role}'는 정규화하면 '${canonical}') — 정확한 이름으로 다시 실행한다`);
   if (flags.reason !== undefined && (typeof flags.reason !== "string" || !flags.reason.trim())) die("--reason에는 이유 글자가 필요하다(화면에서는 필수)");
   if (flags["expect-pid"] !== undefined && !/^\d+$/.test(String(flags["expect-pid"]))) die("--expect-pid는 pane PID 숫자다");
+  if (flags[MODEL_FROM_SETTINGS] !== undefined && flags[MODEL_FROM_SETTINGS] !== true) die(`--${MODEL_FROM_SETTINGS}는 값을 받지 않는다`);
   const home = ledgerHome();
   const session = sessionName(role);
   const deps = restartDeps(home);
@@ -98,5 +102,13 @@ export function cmdRestart(argv, flags) {
   try { result = restartRole({ home, role, session, flags, floor, settings: readSettings(home), deps }); }
   catch (error) { die(error.message); }
   if (result.pending.length) console.error(`${result.forced ? "--force: 안전 지점 확인 없이, " : ""}끝나지 않은 카드 ${result.pending.length}건은 그대로 이어진다: ${result.pending.join(", ")}`);
+  const swap = result.modelFromSettings;
+  if (swap) {
+    const shown = (model, effort) => `${model} · ${effort ?? "강도 없음"}`;
+    const basis = `설정 revision ${swap.revision}, 프리셋 ${swap.preset}`;
+    console.log(swap.changed
+      ? `설정 반영: ${shown(swap.previousModel, swap.previousEffort)} → ${shown(swap.model, swap.effort)} (${basis})`
+      : `설정과 같음: 바뀐 것 없음 — ${shown(swap.model, swap.effort)} (${basis})`);
+  }
   console.log(`다시 띄움: ${session} (${result.harness ?? "?"} ${result.model ?? "?"}, 대화 ${result.conversation ?? "?"}, pane PID ${result.panePid ?? "?"}, 창: ${result.window})`);
 }

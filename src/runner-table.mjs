@@ -78,14 +78,57 @@ export function tailOf(settings, runner, key) {
   return tail;
 }
 
-const slotMatches = (word, templateWord) => templateWord.includes(SENTINEL.conversation)
-  ? word.length > templateWord.length - SENTINEL.conversation.length
-    && word.startsWith(templateWord.slice(0, templateWord.indexOf(SENTINEL.conversation)))
-    && word.endsWith(templateWord.slice(templateWord.indexOf(SENTINEL.conversation) + SENTINEL.conversation.length))
+const slotMatches = (word, templateWord, mark = SENTINEL.conversation) => templateWord.includes(mark)
+  ? word.length > templateWord.length - mark.length
+    && word.startsWith(templateWord.slice(0, templateWord.indexOf(mark)))
+    && word.endsWith(templateWord.slice(templateWord.indexOf(mark) + mark.length))
   : word === templateWord;
 
-const slotValue = (word, templateWord) => word.slice(templateWord.indexOf(SENTINEL.conversation),
-  word.length - (templateWord.length - templateWord.indexOf(SENTINEL.conversation) - SENTINEL.conversation.length));
+const slotValue = (word, templateWord, mark = SENTINEL.conversation) => word.slice(templateWord.indexOf(mark),
+  word.length - (templateWord.length - templateWord.indexOf(mark) - mark.length));
+
+// 명령 낱말에서 spawn 틀의 모델·강도 자리를 찾아 값을 읽고, 그 자리를 뺀 나머지 낱말을 돌려준다.
+// 옵션 이름을 코드에 두지 않으려고 틀을 표식 값으로 채워 자리를 찾는다(tailOf와 같은 방식). 낱말 순서는 보지 않는다.
+// 값 낱말이 옵션 꼴(-로 시작)이 아니면 틀에서 그 앞에 있는 낱말(옵션 이름)과 붙어 있는 한 쌍으로만 찾는다.
+function splitModelSlots(settings, runner, words) {
+  const template = commandWords(fillTemplate(runnerTemplate(settings, runner, 'spawn'),
+    {model: SENTINEL.model, effort: SENTINEL.effort, conversation: SENTINEL.conversation, prompt: 'P', cwd: '/'}));
+  if (!template) throw new Error(`${runner}.spawn 틀을 낱말로 읽을 수 없다`);
+  const rest = [...words], found = {};
+  template.forEach((templateWord, i) => {
+    const keys = ['model', 'effort'].filter(key => templateWord.includes(SENTINEL[key]));
+    if (!keys.length) return;
+    if (keys.length > 1) throw new Error(`${runner}.spawn 틀의 한 낱말에 모델과 강도 자리가 함께 있어 자리를 가를 수 없다`);
+    const [key] = keys, mark = SENTINEL[key];
+    const lead = !templateWord.startsWith('-') && i > 0 ? template[i - 1] : null;
+    const at = rest.findIndex((word, j) => slotMatches(word, templateWord, mark) && (lead == null || rest[j - 1] === lead));
+    if (at < 0) return;
+    found[key] = slotValue(rest[at], templateWord, mark);
+    rest.splice(lead == null ? at : at - 1, lead == null ? 1 : 2);
+  });
+  return {found, rest};
+}
+
+const ENV_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const executableAt = words => words.findIndex(word => !ENV_WORD.test(word));
+
+// restart --model-from-settings: 옛 명령을 설정 명령으로 바꿀 때 조용히 사라질 낱말(leftover)과 옛 모델·강도 값을 돌려준다.
+// oldWords·newWords는 대화 꼬리와 카단이 붙이는 인자(인라인 화면·정지 훅 설정)를 뗀 낱말이다.
+// 실행 파일은 경로만 다르면 같은 것으로 본다(launchIdentityOf·matchesAiProcess가 읽는 방식). 이름이 다르면 남는 낱말이다.
+export function modelSwapLeftover(settings, runner, oldWords, newWords) {
+  const old = splitModelSlots(settings, runner, oldWords), next = splitModelSlots(settings, runner, newWords);
+  const leftover = old.rest, kept = next.rest;
+  const oldExec = executableAt(leftover), newExec = executableAt(kept);
+  if (oldExec >= 0 && newExec >= 0 && leftover[oldExec].split('/').pop() === kept[newExec].split('/').pop()) {
+    leftover.splice(oldExec, 1);
+    kept.splice(newExec, 1);
+  }
+  for (const word of kept) {
+    const at = leftover.indexOf(word);
+    if (at >= 0) leftover.splice(at, 1);
+  }
+  return {previous: old.found, leftover};
+}
 
 // 마지막 시작 명령에서 대화 인자만 바꿔 다시 연다: 꼬리가 이미 붙어 있으면(이전 restart) 떼고, 새 ID로 붙인다.
 // 대화를 가리키는 다른 인자(fork·--continue 등)가 남으면 같은 대화를 보장할 수 없어 거절한다.
