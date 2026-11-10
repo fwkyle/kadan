@@ -229,3 +229,29 @@ function settingsSwap({settings, harness, model, launch, kept}) {
   return {changed: launch.model !== model || effortChanged, command, oldEffort: previous.effort,
     previousModel: launch.model !== model ? model : null, previousEffort: effortChanged ? previous.effort : null};
 }
+
+// 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
+function restartSecretary({home, role, session, floor, force, reason, expectPid, deps}) {
+  // 확인·체크포인트·끄기는 잠금 안에서, 다시 열기는 resumeSecretary의 잠금 안에서 한다(둘 사이에 kadan up이 끼어들어도 한 번만 열린다).
+  const {pending, previous} = withRecoveryLock(home, session, () => {
+    const entries = deps.read();
+    const start = ensureReady({role, session, floor, entries, deps, expectPid});
+    const generation = restartGeneration(entries, role);
+    const open = guardRunning({role, entries, deps});
+    const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
+    // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
+    if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
+    // 비서도 같은 안전 지점 확인을 같은 자리(stopForRestart 안, floor.stop 바로 앞)에서 한다 — confirmIdleBeforeStop은
+    // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
+    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
+      confirm: force ? null : () => confirmBeforeStop(session, deps, false)});
+    return {pending: open, previous: startDigest(start)};
+  });
+  // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
+  const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
+    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
+  if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
+  const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
+  return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,
+    model: latest?.model ?? null, panePid: latest?.panePid ?? null, forced: force, pending, window: latest?.window ?? 'hidden'};
+}
