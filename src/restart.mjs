@@ -8,10 +8,10 @@
 // 순서가 안전의 전부다: 거절할 수 있는 모든 확인(대화 ID·저장 여부·명령 재조립·실행 중 보호)을 기존 세션을 끄기 *전에* 끝낸다.
 import fs from 'node:fs';
 import {startDigest, withRecoveryLock, checkpointSecretary, resumeSecretary} from './secretary-resume.mjs';
-import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
-import {executorChain} from './process-tree.mjs';
+import {launchIdentityOf} from './ai-identity.mjs';
 import {conversationOf} from './conversation-ref.mjs';
-import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
+import {runnerTemplate, rebuildResumeCommand, checkConversationSpec} from './runner-table.mjs';
+import {confirmPaneConversation} from './role-conversation.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
@@ -67,7 +67,7 @@ function restartGeneration(entries, role) {
 // 순서: 원장 다시 읽기 → 세대·PID·소유 검사 → 안전 지점 확인(confirm) → floor.stop.
 // 원장 읽기는 원장 크기에 비례해 오래 걸릴 수 있어 확인 **앞**에 둔다(PR #360 검수 F1: 확인 뒤에 읽으면 그 사이 응답을 시작한 역할을 껐다).
 // 확인과 floor.stop 사이에는 아무 단계도 두지 않는다. 남는 틈은 확인이 끝나고 floor.stop이 실제로 세션을 죽이기까지뿐이며 없앨 수 없다.
-function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh, confirm = null}) {
+function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh, confirm = null, conversation = {}}) {
   const latest = deps.read();
   const current = restartGeneration(latest, role);
   if (!generation || !current || current.count !== generation.count
@@ -78,7 +78,7 @@ function stopForRestart({role, session, floor, entries, deps, generation, forced
   if (confirm) confirm();
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
-  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
+  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...conversation, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
     ...(!refresh && pending.length ? {pendingTasks: pending} : {}),
     ...(refresh ? {accountRefresh: true, pendingTasks: refresh.pending, ...(refresh.reasonNote ? {reasonNote: refresh.reasonNote} : {}), ...(refresh.accountSlot != null ? {accountSlot: refresh.accountSlot} : {})} : {}), ...windowFields});
   return windowFields;
@@ -132,16 +132,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (insideHome) fail(workdirInsideHomeMessage(insideHome));
 
   // 1) 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 끄지 않고 거절한다.
-  const pane = deps.paneInfo(session);
-  if (String(pane.panePid) !== String(start.panePid)) fail('tmux pane PID가 시작 기록과 다르다');
-  // 실행기 본체 사슬(뿌리 1개 + 그 아래로 하나씩 이어지는 맞는 프로세스)이 연 파일만 후보다. 자식 도구나 같은 실행기의
-  // 하위 에이전트가 연 대화를 집지 않는다. 뿌리가 둘이거나 사슬이 갈리거나 못 찾으면 거절한다.
-  const chain = executorChain(deps.processTree(start.panePid), args => matchesAiProcess(args, harness, model));
-  if (!chain) fail(`${harness} 실행기 본체 프로세스를 하나의 사슬로 정할 수 없다(없거나 여러 개·갈림) — 대화 파일의 주인을 확인할 수 없어 거절한다`);
-  // pid-json은 뿌리 본체의 PID 파일만, open-file은 사슬 전체가 연 파일을 본다.
-  const conversation = findConversation(spec, {pids: [chain.root], openFiles: () => deps.openFiles(chain.pids),
-    readJson: deps.readJson, processStartedAt: deps.processStartedAt,
-    tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
+  // kadan stop도 같은 함수로 찾는다(role-conversation.mjs — 본체 사슬이 연 파일만 후보다).
+  const conversation = confirmPaneConversation({session, start, harness, model, spec, deps});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
   const command = withStopHook(withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation)));
   const again = launchIdentityOf(command), mode = conversationOf(command);
@@ -156,7 +148,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
   const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
   stopForRestart({role, session, floor, entries, deps, generation,
-    forced: force ? pending : null, pending, reason, refresh, confirm});
+    forced: force ? pending : null, pending, reason, refresh, confirm,
+    conversation: {conversation, conversationStart: startDigest(start)}});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -192,7 +185,7 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     // 비서도 같은 안전 지점 확인을 같은 자리(stopForRestart 안, floor.stop 바로 앞)에서 한다 — confirmIdleBeforeStop은
     // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
     stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
-      confirm: force ? null : () => confirmBeforeStop(session, deps, false)});
+      confirm: force ? null : () => confirmBeforeStop(session, deps, false), conversation: {conversationSkipped: 'infrastructure'}});
     return {pending: open, previous: startDigest(start)};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).

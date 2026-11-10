@@ -14,9 +14,10 @@ const validRole = role => typeof role === 'string' && /^[\p{L}\p{N}_-]+$/u.test(
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 export class Handover {
-  constructor({ home, floor, readEntries, record, start, send, closeWindow = () => ({}),
+  // stopFields(역할): 선임을 끄기 직전에 stop 사건에 더할 칸(대화 번호 등)을 돌려준다. 던지지 않아야 한다.
+  constructor({ home, floor, readEntries, record, start, send, closeWindow = () => ({}), stopFields = () => ({}),
     env = process.env, now = Date.now, sleep = pause, watchAlive = pid => { try { process.kill(Number(pid), 0); return true; } catch { return false; } } }) {
-    Object.assign(this, { home, floor, readEntries, record, start, send, closeWindow, env, now, sleep, watchAlive });
+    Object.assign(this, { home, floor, readEntries, record, start, send, closeWindow, stopFields, env, now, sleep, watchAlive });
     this.dir = path.join(home, 'handovers');
   }
   entries() {
@@ -184,9 +185,16 @@ export class Handover {
         s.phase = 'transferred'; this.save(s);
       }
       if (s.phase === 'transferred') {
-        if (this.floor.alive(session(s.from))) { this.sourceIdentity(s); this.floor.stop(session(s.from)); }
+        // 끄기 직전에 선임의 대화 번호를 찾아 stop 사건에 남긴다(못 찾아도 끈다). 이미 꺼져 있으면 찾을 수 없다.
+        let found = { conversationMissing: 'session-gone' };
+        if (this.floor.alive(session(s.from))) {
+          this.sourceIdentity(s);
+          try { found = this.stopFields(s.from); } catch { found = { conversationMissing: 'error' }; }
+          this.sourceIdentity(s);
+          this.floor.stop(session(s.from));
+        }
         if (this.floor.alive(session(s.from))) throw new Error('선임 종료 미확인: 후임 활성화 보류');
-        this.record({ kind: 'stop', role: s.from, session: session(s.from), handoverId: id,
+        this.record({ kind: 'stop', role: s.from, session: session(s.from), handoverId: id, ...found,
           ...this.closeWindow(this.lastStart(s.from)) });
         s.phase = 'stopped'; this.save(s);
       }
