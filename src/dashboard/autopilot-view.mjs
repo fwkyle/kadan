@@ -1,7 +1,7 @@
-// PR3: 나이트런 상태 띠와 머지 요청 줄 정보. 읽기 전용이다.
+// PR3: Autopilot 상태 띠와 머지 요청 줄 정보. 읽기 전용이다.
 // 원장 전체를 다시 읽지 않는다: 대시보드가 이미 증분으로 읽은 snapshot.entries·snapshot.decisions·snapshot.center만 쓴다.
 // GitHub를 부르지 않고 카드·온톨로지 파일을 직접 읽지 않는다.
-import { nightState } from "../night.mjs";
+import { autopilotState } from "../autopilot.mjs";
 import { stage } from "../review-flow.mjs";
 import { normalizeSha, sameCommit } from "../review-sha.mjs";
 import { registeredCenterWorks } from "../center-wall.mjs";
@@ -9,27 +9,27 @@ import { prNumbers } from "../dashboard-kanban.mjs";
 
 const date = (value) => Date.parse(value) || 0;
 
-// 원장 뒤에서부터 마지막 night 사건 하나를 찾는다(복사 없음, watchNightExpiry와 같은 방식).
-// nightState는 마지막 night 사건만 보므로 그 하나만 넘겨도 결과가 같다.
-function lastNightEntry(entries) {
-  for (let i = entries.length - 1; i >= 0; i--) if (entries[i]?.kind === "night") return entries[i];
+// 원장 뒤에서부터 마지막 autopilot 사건 하나를 찾는다(복사 없음, watchAutopilotExpiry와 같은 방식).
+// autopilotState는 마지막 autopilot 사건만 보므로 그 하나만 넘겨도 결과가 같다.
+function lastAutopilotEntry(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i]?.kind === "autopilot") return entries[i];
   return null;
 }
 
-// 스냅샷의 결정은 이벤트 줄이 아니라 '최신 상태'다. nightState가 보는 것은 "답한 이벤트의 answer.by·at"뿐이라
+// 스냅샷의 결정은 이벤트 줄이 아니라 '최신 상태'다. autopilotState가 보는 것은 "답한 이벤트의 answer.by·at"뿐이라
 // 답한 결정(status answered)을 그대로 이벤트처럼 넘긴다. 다른 점 하나: 사람이 답한 뒤 취소된 결정은 최신 상태가 cancelled라
 // 이벤트에 있던 '답함'이 사라진다(디코 자유 답을 요청자가 취소하는 드문 경우). 그때는 꺼짐 판정이 늦을 수 있다 — 표시 전용이라 관문은 아니다.
 const asEvents = (decisions) => decisions.filter((d) => d?.status === "answered");
 
-// 나이트런 상태 띠 재료. on: true/false, 모르면 null(원장·결정 기록을 못 읽음).
-export function nightStrip(snapshot, now = Date.now()) {
+// Autopilot 상태 띠 재료. on: true/false, 모르면 null(원장·결정 기록을 못 읽음).
+export function autopilotStrip(snapshot, now = Date.now()) {
   if (snapshot.ledgerLines === null || !Array.isArray(snapshot.entries)) return { on: null, reason: "원장을 읽지 못함" };
   if (snapshot.decisionError) return { on: null, reason: "결정 기록을 읽지 못함" };
-  const last = lastNightEntry(snapshot.entries);
-  const state = nightState(last ? [last] : [], asEvents(snapshot.decisions ?? []), now);
+  const last = lastAutopilotEntry(snapshot.entries);
+  const state = autopilotState(last ? [last] : [], asEvents(snapshot.decisions ?? []), now);
   if (state.on) {
     const s = state.start;
-    return { on: true, since: s.t ?? null, until: s.until ?? null, level: s.level ?? null, onlyRunning: s.onlyRunning === true };
+    return { on: true, since: s.t ?? null, until: s.until ?? null, level: s.level ?? null };
   }
   // 꺼짐. 끝난 기록이 있으면 마지막 시작~끝을 함께 준다(끝 사건이 아직 없는 pending이면 끝 시각만).
   const ended = state.pending
@@ -43,7 +43,7 @@ export function nightStrip(snapshot, now = Date.now()) {
 // ---- 머지 요청 줄 ----
 // 업무에 연결된 review 단계 실행 중 낡지 않은 pass·changes 판정(src/merge-check.mjs currentReviews와 같은 규칙).
 // 같은 함수를 그대로 쓰면 카드 목록·원장을 다시 읽어야 해서(상주 경로 비용) 이미 만든 center.cards로 같은 계산을 한다.
-// 같은 결과인지는 tests/dashboard-night-view.test.mjs가 mergeCheck와 맞춰 본다.
+// 같은 결과인지는 tests/dashboard-autopilot-view.test.mjs가 mergeCheck와 맞춰 본다.
 export function reviewsOfWork(center, work) {
   const picks = [];
   (work?.executions ?? []).forEach((link, index) => {

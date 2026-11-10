@@ -8,10 +8,10 @@ import {spawnSync} from 'node:child_process';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
-import {nightCommand} from '../src/commands/night.mjs';
-import {nightState, resolveEnd, watchNightExpiry, DEFAULT_MS} from '../src/night.mjs';
-import {summarizeNight, NOTICE_LIMIT} from '../src/night-summary.mjs';
-import {MAX_TEXT, nightOriginalText} from '../src/commands/night.mjs';
+import {autopilotCommand} from '../src/commands/autopilot.mjs';
+import {autopilotState, resolveEnd, watchAutopilotExpiry, DEFAULT_MS} from '../src/autopilot.mjs';
+import {summarizeAutopilot, NOTICE_LIMIT} from '../src/autopilot-summary.mjs';
+import {MAX_TEXT, autopilotOriginalText} from '../src/commands/autopilot.mjs';
 import {readLedgerIncremental} from '../src/ledger-incremental.mjs';
 import {appendStream, createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -23,7 +23,7 @@ const HOUR = 3600_000;
 const iso = ms => new Date(ms).toISOString();
 
 function fixture({hierarchy = true} = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-'));
   const table = {'a-슈퍼감독': '@user', 'a-감독': 'a-슈퍼감독', 'b-슈퍼감독': '@user', 'b-감독': 'b-슈퍼감독'};
   if (hierarchy) {
     const file = path.join(home, 'hierarchy.json');
@@ -45,8 +45,8 @@ function fixture({hierarchy = true} = {}) {
     sendMail: (role, message) => { sent.push({role, message}); return {ok: true, mailId: `mail-${sent.length}`}; },
     notify: (message, opts) => notes.push({message, opts}),
   };
-  const run = (args, flags = {}, by = '사람') => nightCommand(args, flags, {home, by, deps});
-  return {home, works, sent, notes, deps, run, setNow: ms => { clock = ms; }, entries: () => readLedger(home).filter(e => e.kind === 'night')};
+  const run = (args, flags = {}, by = '사람') => autopilotCommand(args, flags, {home, by, deps});
+  return {home, works, sent, notes, deps, run, setNow: ms => { clock = ms; }, entries: () => readLedger(home).filter(e => e.kind === 'autopilot')};
 }
 
 test('끝 시각: 기본 8시간, --for, --until(지난 시각은 다음 날), 상한 12시간', () => {
@@ -73,7 +73,7 @@ test('사람 명의는 바로 켠다: 원장 사건 모양, 열린 업무의 슈
   assert.equal(f.sent.length, 2);
   assert.deepEqual(f.sent.map(s => s.role), ['a-슈퍼감독', 'b-슈퍼감독']);
   for (const s of f.sent) {
-    assert.match(s.message, /\[나이트 모드\] kyle이 취침 중/);
+    assert.match(s.message, /\[Autopilot\] kyle이 취침 중/);
     assert.match(s.message, /새 권한이 아니라/);
     assert.match(s.message, /\(1\) 되돌리기 어려운 것\(운영 데이터 변경·삭제, push 정책, 외부 공개, 새 의존성\)/);
     assert.match(s.message, /\(2\) 보류 대상은 밤중에 decision request를 새로 올리지 말고/);
@@ -156,15 +156,15 @@ test('off: 끝 사건과 요약을 한 번 쓰고 받은 슈퍼에게 종료 우
   assert.equal(r.on, false);
   assert.equal(r.phase, 'off');
   assert.match(r.summary, /kyle 위임: "문구"/);
-  assert.match(r.summary, /night off로 껐음/);
+  assert.match(r.summary, /autopilot off로 껐음/);
   const events = f.entries();
   assert.deepEqual(events.map(e => e.phase), ['on', 'off']);
   assert.equal(events[1].reason, '일어남');
   assert.equal(events[1].startedAt, iso(T0));
   assert.equal(f.notes.length, 1);
-  assert.equal(f.notes[0].opts.kind, 'night-summary');
+  assert.equal(f.notes[0].opts.kind, 'autopilot-summary');
   assert.deepEqual(f.sent.map(s => s.role), ['a-슈퍼감독', 'b-슈퍼감독']);
-  assert.match(f.sent[0].message, /\[나이트 모드 종료\] kyle이 껐음/);
+  assert.match(f.sent[0].message, /\[Autopilot 종료\] kyle이 껐음/);
   assert.throws(() => f.run(['off']), /이미 꺼져 있습니다/);
   assert.equal(f.entries().length, 2);
   assert.equal(f.run(['status']).on, false);
@@ -174,7 +174,7 @@ test('끝 시각 만료: 감시기 한 주기에 expired 한 번, 두 번째 주
   const f = fixture();
   f.run(['on', '문구'], {for: '1h'});
   f.sent.length = 0;
-  const cycle = now => { f.setNow(now); return watchNightExpiry({entries: readLedger(f.home), now, home: f.home, deps: f.deps}); };
+  const cycle = now => { f.setNow(now); return watchAutopilotExpiry({entries: readLedger(f.home), now, home: f.home, deps: f.deps}); };
   assert.equal(cycle(T0 + 30 * 60_000), null); // 아직 켜짐
   assert.equal(f.entries().length, 1);
   const done = cycle(T0 + 61 * 60_000);
@@ -187,10 +187,10 @@ test('끝 시각 만료: 감시기 한 주기에 expired 한 번, 두 번째 주
   assert.equal(f.notes.length, 1);
   assert.equal(f.sent.length, 2); // 종료 우편도 슈퍼마다 한 번
   // 켠 적이 없는 홈에서는 원장을 더 읽지도 않는다
-  assert.equal(watchNightExpiry({entries: [], now: T0, home: f.home, deps: {readEntries: () => { throw new Error('읽으면 안 됨'); }}}), null);
+  assert.equal(watchAutopilotExpiry({entries: [], now: T0, home: f.home, deps: {readEntries: () => { throw new Error('읽으면 안 됨'); }}}), null);
 });
 
-test('만료된 켜짐이 마무리되지 않은 채 night on을 치면 먼저 expired를 쓰고 새로 켠다', () => {
+test('만료된 켜짐이 마무리되지 않은 채 autopilot on을 치면 먼저 expired를 쓰고 새로 켠다', () => {
   const f = fixture();
   f.run(['on', '옛 문구'], {for: '1h'});
   f.setNow(T0 + 3 * HOUR);
@@ -204,9 +204,9 @@ test('만료된 켜짐이 마무리되지 않은 채 night on을 치면 먼저 e
 });
 
 test('kyle 새 입력: 켜진 뒤 사람 명의 결정 답이 있으면 ended-by-input, 역할 명의·켜기 전 답은 아니다', () => {
-  const on = {kind: 'night', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: '사람', text: 't', to: []};
+  const on = {kind: 'autopilot', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: '사람', text: 't', to: []};
   const answer = (by, at) => ({id: 'd1', status: 'answered', answer: {by, at: iso(at), text: 'ok'}});
-  const state = events => nightState([on], events, T0 + HOUR);
+  const state = events => autopilotState([on], events, T0 + HOUR);
   assert.equal(state([]).on, true);
   assert.equal(state([answer('a-감독', T0 + 1000)]).on, true);
   assert.equal(state([answer('사람', T0 - 1000)]).on, true); // 켜기 전의 답
@@ -214,34 +214,34 @@ test('kyle 새 입력: 켜진 뒤 사람 명의 결정 답이 있으면 ended-by
   assert.equal(ended.on, false);
   assert.deepEqual(ended.pending, {phase: 'ended-by-input', endedAt: T0 + 1000});
   // 끝 시각 뒤의 답은 만료가 먼저다
-  const late = nightState([on], [answer('사람', T0 + 9 * HOUR)], T0 + 10 * HOUR);
+  const late = autopilotState([on], [answer('사람', T0 + 9 * HOUR)], T0 + 10 * HOUR);
   assert.equal(late.pending.phase, 'expired');
 });
 
-test('실제 결정 답(DecisionStore.answer)이 켜진 나이트 모드를 끄고 요약을 한 번 보낸다', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-decision-'));
+test('실제 결정 답(DecisionStore.answer)이 켜진 Autopilot을 끄고 요약을 한 번 보낸다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-decision-'));
   new CardStore(home).create({repo: 'repo', id: 'card-a', repoPath: home, body: '# 시험'});
   const store = new DecisionStore(home, {notify: () => {}, userNotify: () => null});
   const d = store.request('repo/card-a', {question: '합칠까요?', options: ['합침', '보류'], recommendation: '합침',
     reason: '확인\n- PR: https://github.com/o/r/pull/7'}, 'a-슈퍼감독');
   const start = Date.now() - 60_000;
-  appendLedger({kind: 'night', phase: 'on', t: iso(start), until: iso(start + 8 * HOUR), by: '사람', text: '자러 감', to: [], delivered: []}, home);
+  appendLedger({kind: 'autopilot', phase: 'on', t: iso(start), until: iso(start + 8 * HOUR), by: '사람', text: '자러 감', to: [], delivered: []}, home);
   assert.throws(() => store.answer(d.id, {revision: 1, text: '합침'}, 'a-감독'), /사람 명의/); // 거절된 답은 켜짐을 건드리지 않는다
-  assert.deepEqual(readLedger(home).filter(e => e.kind === 'night').map(e => e.phase), ['on']);
+  assert.deepEqual(readLedger(home).filter(e => e.kind === 'autopilot').map(e => e.phase), ['on']);
   store.answer(d.id, {revision: 1, text: '합침', choice: '합침'}, '사람');
-  const events = readLedger(home).filter(e => e.kind === 'night');
+  const events = readLedger(home).filter(e => e.kind === 'autopilot');
   assert.deepEqual(events.map(e => e.phase), ['on', 'ended-by-input']);
   assert.equal(events[1].summary.counts.answered, 1);
   assert.equal(events[1].summary.counts.mergeAnswered, 1);
   assert.match(events[1].summary.text, /kyle의 새 입력으로 꺼짐/);
   store.answer(d.id, {revision: 1, text: '합침', choice: '합침'}, '사람'); // 같은 답을 다시 해도 끝 사건은 늘지 않는다
-  assert.equal(readLedger(home).filter(e => e.kind === 'night').length, 2);
+  assert.equal(readLedger(home).filter(e => e.kind === 'autopilot').length, 2);
 });
 
-const baseOn = (extra = {}) => ({kind: 'night', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: '사람', text: '자러 감', to: ['a-슈퍼감독'], delivered: [], ...extra});
+const baseOn = (extra = {}) => ({kind: 'autopilot', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: '사람', text: '자러 감', to: ['a-슈퍼감독'], delivered: [], ...extra});
 const decision = (id, status, extra) => ({id, card: 'r/c', requestedBy: 'a-슈퍼감독', question: '질문', options: ['a', 'b'], recommendation: 'a', reason: 'r', status, ...extra});
 const summarize = ({start = baseOn(), phase = 'off', end = T0 + 4 * HOUR, entries = [], decisionEvents = [], bodies = {}} = {}) =>
-  summarizeNight({start, phase, endedAt: end, entries, decisionEvents, readBody: d => bodies[d] ?? null});
+  summarizeAutopilot({start, phase, endedAt: end, entries, decisionEvents, readBody: d => bodies[d] ?? null});
 
 test('요약 집계: 답과 취소를 나누고, 같은 결정의 후속 기록·구간 밖은 세지 않는다', () => {
   const at = ms => iso(T0 + ms);
@@ -285,14 +285,14 @@ test('요약: 재시작·우편·보류 집계, 대리 위임 원문이 첫 줄,
     {kind: 'stop', restart: true, t: t(HOUR)},
     {kind: 'stop', restart: true, t: t(10 * HOUR)}, // 구간 밖
     {kind: 'stop', t: t(HOUR)}, // 재시작이 아닌 종료
-    {kind: 'send', mailId: 'night-1', role: 'a-슈퍼감독', t: t(1)}, // 나이트 모드가 보낸 우편
+    {kind: 'send', mailId: 'autopilot-1', role: 'a-슈퍼감독', t: t(1)}, // Autopilot이 보낸 우편
     {kind: 'send', mailId: 'm2', role: 'a-감독', t: t(HOUR)},
     {kind: 'send', mailId: 'm3', role: '사람', digest: 'held1', t: t(2 * HOUR)},
     {kind: 'send', mailId: 'm4', role: '사람', digest: 'plain', t: t(2 * HOUR)},
   ];
-  const start = baseOn({viaChat: true, by: 'a-슈퍼감독', quote: '다 알아서 승인해', delivered: [{role: 'a-슈퍼감독', mailId: 'night-1'}]});
-  const s = summarize({start, entries, bodies: {held1: '[나이트 보류] 운영 DB 마이그레이션\n자세히', plain: '안녕'}});
-  assert.equal(s.text.split('\n')[0], '대리 위임: a-슈퍼감독이(가) kyle의 채팅 말을 옮겨 적었습니다 — "다 알아서 승인해" (전체 원문: kadan night status --text, 원장)');
+  const start = baseOn({viaChat: true, by: 'a-슈퍼감독', quote: '다 알아서 승인해', delivered: [{role: 'a-슈퍼감독', mailId: 'autopilot-1'}]});
+  const s = summarize({start, entries, bodies: {held1: '[Autopilot 보류] 운영 DB 마이그레이션\n자세히', plain: '안녕'}});
+  assert.equal(s.text.split('\n')[0], '대리 위임: a-슈퍼감독이(가) kyle의 채팅 말을 옮겨 적었습니다 — "다 알아서 승인해" (전체 원문: kadan autopilot status --text, 원장)');
   assert.equal(s.counts.restarts, 1);
   assert.equal(s.counts.mails, 3);
   assert.equal(s.counts.held, 1);
@@ -302,13 +302,13 @@ test('요약: 재시작·우편·보류 집계, 대리 위임 원문이 첫 줄,
 
   const empty = summarize({});
   assert.match(empty.text, /밤사이 처리한 일 없음/);
-  assert.equal(empty.text.split('\n')[0], 'kyle 위임: "자러 감" (전체: kadan night status --text, 원장)');
+  assert.equal(empty.text.split('\n')[0], 'kyle 위임: "자러 감" (전체: kadan autopilot status --text, 원장)');
 });
 
-test('CLI: 일반감독의 night on은 거절되고, status는 읽기만 한다', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-cli-'));
+test('CLI: 일반감독의 autopilot on은 거절되고, status는 읽기만 한다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-cli-'));
   const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
-  const run = (args, role) => spawnSync(process.execPath, [cli, 'night', ...args],
+  const run = (args, role) => spawnSync(process.execPath, [cli, 'autopilot', ...args],
     {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
   const denied = run(['on', '문구'], 'a-감독');
   assert.notEqual(denied.status, 0);
@@ -319,7 +319,7 @@ test('CLI: 일반감독의 night on은 거절되고, status는 읽기만 한다'
   const noQuote = run(['on', '문구'], 'a-슈퍼감독');
   assert.notEqual(noQuote.status, 0);
   assert.match(noQuote.stderr, /채팅 원문/);
-  assert.equal(readLedger(home).filter(e => e.kind === 'night').length, 0);
+  assert.equal(readLedger(home).filter(e => e.kind === 'autopilot').length, 0);
 });
 
 test('감시기는 주기마다 끝 시각 확인을 한 번 부르고, 그 확인이 던져도 감시는 계속된다', async () => {
@@ -331,9 +331,9 @@ test('감시기는 주기마다 끝 시각 확인을 한 번 부르고, 그 확�
   console.error = (...x) => errors.push(x.join(' '));
   try {
     await assert.rejects(() => runWatch({
-      floor: {list: () => [], read: () => ''}, readEntries: () => [{kind: 'night', phase: 'on'}], readCards: () => [],
+      floor: {list: () => [], read: () => ''}, readEntries: () => [{kind: 'autopilot', phase: 'on'}], readCards: () => [],
       intervalMs: 60_000, stallN: 100, parents: new Map(), routes: new Map(), superRole: null,
-      checkNightExpiry: ({entries, now}) => { calls.push({n: entries.length, now}); if (calls.length === 2) throw new Error('잠금'); },
+      checkAutopilotExpiry: ({entries, now}) => { calls.push({n: entries.length, now}); if (calls.length === 2) throw new Error('잠금'); },
       now: clock, record: () => {}, sendAlert: () => {}, print: () => {},
       spawn: cmd => {
         if (cmd === 'sleep' && ++cycle === times.length) throw end;
@@ -345,7 +345,7 @@ test('감시기는 주기마다 끝 시각 확인을 한 번 부르고, 그 확�
   } finally { console.error = realError; }
   assert.deepEqual(calls.map(c => c.now), times);
   assert.equal(calls[0].n, 1);
-  assert.equal(errors.filter(e => e.includes('나이트 모드 끝 시각 확인 실패')).length, 1);
+  assert.equal(errors.filter(e => e.includes('Autopilot 끝 시각 확인 실패')).length, 1);
 });
 
 test('F1: 미만료 주기는 추가 원장·결정 이력 읽기가 0회이고, 꺼짐·켠 적 없음도 0회', () => {
@@ -354,32 +354,32 @@ test('F1: 미만료 주기는 추가 원장·결정 이력 읽기가 0회이고,
   let reads = 0;
   const counting = {...f.deps, readEntries: () => { reads++; return []; }, readDecisions: () => { reads++; return []; }};
   const entries = readLedger(f.home);
-  for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchNightExpiry({entries, now: T0 + ms, home: f.home, deps: counting}), null);
+  for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchAutopilotExpiry({entries, now: T0 + ms, home: f.home, deps: counting}), null);
   assert.equal(reads, 0);
-  // 마지막 night 사건이 끝 사건이면(꺼짐) 만료 시각이 지나도 읽지 않는다
+  // 마지막 autopilot 사건이 끝 사건이면(꺼짐) 만료 시각이 지나도 읽지 않는다
   f.run(['off']);
   const after = readLedger(f.home);
-  assert.equal(watchNightExpiry({entries: after, now: T0 + 20 * HOUR, home: f.home, deps: counting}), null);
-  assert.equal(watchNightExpiry({entries: [], now: T0, home: f.home, deps: counting}), null);
+  assert.equal(watchAutopilotExpiry({entries: after, now: T0 + 20 * HOUR, home: f.home, deps: counting}), null);
+  assert.equal(watchAutopilotExpiry({entries: [], now: T0, home: f.home, deps: counting}), null);
   assert.equal(reads, 0);
   // 배열을 복사하지 않고 인덱스 역순으로 훑는다(코드 대조)
-  const src = fs.readFileSync(new URL('../src/night.mjs', import.meta.url), 'utf8');
-  const body = src.slice(src.indexOf('export function watchNightExpiry'));
+  const src = fs.readFileSync(new URL('../src/autopilot.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export function watchAutopilotExpiry'));
   assert.ok(!/\.reverse\(\)|\[\.\.\.entries\]|\.slice\(|\.filter\(/.test(body), '감시기 확인에서 배열 복사 금지');
 });
 
 test('F1: 실제 저장 계층(JSONL·SQLite)에서 미만료 주기의 추가 읽기가 0회', () => {
   for (const backend of ['sqlite']) {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), `kadan-night-${backend}-`));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `kadan-autopilot-${backend}-`));
     if (backend === 'sqlite') { createDatabase(home); writeStorageMarker(home, 'sqlite'); }
-    appendLedger({kind: 'night', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);
+    appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);
     appendStream(home, 'decisions/events.jsonl', {id: 'x', status: 'open'});
     const entries = readLedger(home);
     const files = [], queries = [];
     const readFile = fs.readFileSync, prepare = DatabaseSync.prototype.prepare;
     fs.readFileSync = function (file, ...rest) { if (String(file).startsWith(home) && String(file).endsWith('events.jsonl')) files.push(String(file)); return readFile.call(this, file, ...rest); };
     DatabaseSync.prototype.prepare = function (sql, ...rest) { if (/FROM events WHERE stream=\?/s.test(sql)) queries.push(sql); return prepare.call(this, sql, ...rest); };
-    try { for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchNightExpiry({entries, now: T0 + ms, home}), null); }
+    try { for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchAutopilotExpiry({entries, now: T0 + ms, home}), null); }
     finally { fs.readFileSync = readFile; DatabaseSync.prototype.prepare = prepare; }
     assert.equal(files.length + queries.length, 0, `${backend}: 추가 읽기 ${files.length + queries.length}회`);
   }
@@ -388,15 +388,15 @@ test('F1: 실제 저장 계층(JSONL·SQLite)에서 미만료 주기의 추가 �
 test('F1: 결정 답 경로의 마무리가 실패했어도 끝 시각에 감시기가 ended-by-input으로 한 번만 끝낸다', () => {
   const f = fixture();
   f.run(['on', '문구'], {for: '2h'});
-  // kyle의 답이 있었지만 settleNight가 실패해 끝 사건이 없는 상태
+  // kyle의 답이 있었지만 settleAutopilot가 실패해 끝 사건이 없는 상태
   const decisions = [{id: 'd1', status: 'answered', answer: {by: '사람', at: iso(T0 + HOUR), text: 'ok'}}];
   const deps = {...f.deps, readDecisions: () => decisions};
   f.setNow(T0 + 90 * 60_000);
-  assert.equal(watchNightExpiry({entries: readLedger(f.home), now: T0 + 90 * 60_000, home: f.home, deps}), null); // 아직 끝 시각 전: 감시기는 결정 이력을 보지 않는다
-  const done = watchNightExpiry({entries: readLedger(f.home), now: T0 + 2 * HOUR, home: f.home, deps});
+  assert.equal(watchAutopilotExpiry({entries: readLedger(f.home), now: T0 + 90 * 60_000, home: f.home, deps}), null); // 아직 끝 시각 전: 감시기는 결정 이력을 보지 않는다
+  const done = watchAutopilotExpiry({entries: readLedger(f.home), now: T0 + 2 * HOUR, home: f.home, deps});
   assert.equal(done.phase, 'ended-by-input');
   assert.equal(done.endedAt, iso(T0 + HOUR));
-  assert.equal(watchNightExpiry({entries: readLedger(f.home), now: T0 + 3 * HOUR, home: f.home, deps}), null);
+  assert.equal(watchAutopilotExpiry({entries: readLedger(f.home), now: T0 + 3 * HOUR, home: f.home, deps}), null);
   assert.deepEqual(f.entries().map(e => e.phase), ['on', 'ended-by-input']);
   assert.equal(f.notes.length, 1);
 });
@@ -410,10 +410,10 @@ test('F2: 2,200자 원문은 켜지고, 끝날 때 알림이 1,800자 이하에 
   f.run(['off'], {}, '사람');
   const message = f.notes[0].message;
   assert.ok(message.length <= NOTICE_LIMIT, `알림 ${message.length}자`);
-  assert.match(message, /나이트 모드 요약 \(/);
+  assert.match(message, /Autopilot 요약 \(/);
   assert.match(message, /밤사이 생긴 일/);
   assert.match(message, /위임으로 대신 처리한 일/);
-  assert.match(message, /kadan night status/);
+  assert.match(message, /kadan autopilot status/);
   assert.equal(message.split('\n')[0].startsWith('대리 위임: '), true);
 });
 
@@ -429,16 +429,16 @@ test('F2: 4,001자는 거절하고 원장에 쓰지 않는다', () => {
 });
 
 test('F2: 줄바꿈 원문도 대리 위임 표시는 한 줄이고, 보류가 많아도 집계는 잘리지 않는다', () => {
-  const start = {kind: 'night', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true,
+  const start = {kind: 'autopilot', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true,
     quote: '첫 줄\n둘째 줄\n\n셋째 줄', text: 't', to: [], delivered: []};
-  const s = summarizeNight({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null});
+  const s = summarizeAutopilot({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null});
   const lines = s.text.split('\n');
   assert.match(lines[0], /^대리 위임: .*"첫 줄 둘째 줄 셋째 줄"/);
-  assert.match(lines[1], /^나이트 모드 요약 \(/);
+  assert.match(lines[1], /^Autopilot 요약 \(/);
   // 보류 200건(각 100자) + 긴 원문: 상한 안에서 제목·집계는 남고 보류 상세만 줄어든다
   const entries = Array.from({length: 200}, (_, i) => ({kind: 'send', mailId: `m${i}`, role: '사람', digest: `h${i}`, t: iso(T0 + 1000 + i)}));
-  const big = summarizeNight({start: {...start, quote: 'ㄱ'.repeat(4000)}, phase: 'off', endedAt: T0 + HOUR, entries, decisionEvents: [],
-    readBody: () => `[나이트 보류] ${'ㅂ'.repeat(120)}`});
+  const big = summarizeAutopilot({start: {...start, quote: 'ㄱ'.repeat(4000)}, phase: 'off', endedAt: T0 + HOUR, entries, decisionEvents: [],
+    readBody: () => `[Autopilot 보류] ${'ㅂ'.repeat(120)}`});
   assert.ok(big.text.length <= NOTICE_LIMIT, `${big.text.length}자`);
   assert.match(big.text, /보류로 남긴 것 200건/);
   assert.match(big.text, /위임으로 대신 처리한 일\n- 없음$/);
@@ -447,17 +447,17 @@ test('F2: 줄바꿈 원문도 대리 위임 표시는 한 줄이고, 보류가 �
 test('F3: 꺼진 뒤 status가 마지막 켜짐의 원문을 보인다(줄바꿈 유지), 사람 명의·켠 적 없음도 확인', () => {
   const f = fixture();
   assert.deepEqual(f.run(['status']), {on: false, last: null}); // 켠 적 없음
-  assert.match(nightOriginalText(f.run(['status'])), /켠 적이 없습니다/);
+  assert.match(autopilotOriginalText(f.run(['status'])), /켠 적이 없습니다/);
   const quote = '첫 줄\n둘째 줄';
   f.run(['on', '대리', '위임'], {quote, for: '6h'}, 'a-슈퍼감독');
   const on = f.run(['status']);
-  assert.equal(nightOriginalText(on).includes('첫 줄\n둘째 줄'), true);
+  assert.equal(autopilotOriginalText(on).includes('첫 줄\n둘째 줄'), true);
   f.setNow(T0 + HOUR);
   f.run(['off'], {}, '사람');
   const off = f.run(['status']);
   assert.equal(off.on, false);
   assert.deepEqual(off.last, {phase: 'off', t: iso(T0 + HOUR), startedAt: iso(T0), endedAt: iso(T0 + HOUR), by: 'a-슈퍼감독', viaChat: true, text: '대리 위임', quote});
-  const shown = nightOriginalText(off);
+  const shown = autopilotOriginalText(off);
   assert.match(shown, /마지막 위임 원문 \(a-슈퍼감독, kyle 채팅을 옮겨 적음\)/);
   assert.ok(shown.includes('대리 위임') && shown.includes('첫 줄\n둘째 줄'));
   // 사람 명의(원문 quote 없음): 문구만, quote 칸 없음. 새로 켜면 마지막 켜짐이 바뀐다
@@ -469,7 +469,7 @@ test('F3: 꺼진 뒤 status가 마지막 켜짐의 원문을 보인다(줄바꿈
   assert.equal(human.text, '사람 문구');
   assert.equal(human.viaChat, false);
   assert.ok(!('quote' in human));
-  assert.ok(!nightOriginalText(f.run(['status'])).includes('kyle 채팅 원문'));
+  assert.ok(!autopilotOriginalText(f.run(['status'])).includes('kyle 채팅 원문'));
   // 만료 뒤 마무리 전: 끝 시각이 보인다
   f.setNow(T0 + 4 * HOUR);
   f.run(['on', '만료 문구'], {for: '1h'}, '사람');
@@ -480,25 +480,25 @@ test('F3: 꺼진 뒤 status가 마지막 켜짐의 원문을 보인다(줄바꿈
   assert.equal(pending.last.text, '만료 문구');
 });
 
-test('#247 뒤: 증분 읽기(SQLite) entries에도 night 사건이 그대로 있고, 미만료·꺼짐 주기는 추가 읽기 0회', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-incr-'));
+test('#247 뒤: 증분 읽기(SQLite) entries에도 autopilot 사건이 그대로 있고, 미만료·꺼짐 주기는 추가 읽기 0회', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-incr-'));
   createDatabase(home); writeStorageMarker(home, 'sqlite');
-  appendLedger({kind: 'night', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);
+  appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: '위임', t: iso(T0), until: iso(T0 + 8 * HOUR), to: []}, home);
   appendStream(home, 'decisions/events.jsonl', {id: 'x', status: 'open'});
   const entries = readLedgerIncremental(home); // 감시기의 cycleReads가 쓰는 읽기
-  assert.ok(entries.some(e => e.kind === 'night' && e.phase === 'on'), '증분 entries에 night 사건이 있어야 한다');
+  assert.ok(entries.some(e => e.kind === 'autopilot' && e.phase === 'on'), '증분 entries에 autopilot 사건이 있어야 한다');
   const queries = [];
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function (sql, ...rest) { queries.push(sql); return prepare.call(this, sql, ...rest); };
   try {
-    for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchNightExpiry({entries, now: T0 + ms, home}), null);
-    assert.equal(watchNightExpiry({entries: [], now: T0, home}), null);
+    for (const ms of [HOUR, 2 * HOUR, 3 * HOUR]) assert.equal(watchAutopilotExpiry({entries, now: T0 + ms, home}), null);
+    assert.equal(watchAutopilotExpiry({entries: [], now: T0, home}), null);
   } finally { DatabaseSync.prototype.prepare = prepare; }
   assert.equal(queries.length, 0, `추가 SQL ${queries.length}회`);
 });
 
 test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 --text에서만 그대로 보인다', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-json-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-json-'));
   const table = {'a-슈퍼감독': '@user', 'a-감독': 'a-슈퍼감독', 'b-슈퍼감독': '@user', 'b-감독': 'b-슈퍼감독'};
   const file = path.join(home, 'h.json');
   fs.writeFileSync(file, JSON.stringify(table));
@@ -508,7 +508,7 @@ test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 
   const bin = path.join(home, 'bin'), osLog = path.join(home, 'osascript.log');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'osascript'), `#!/bin/sh\necho "$2" >> ${JSON.stringify(osLog)}\n`, {mode: 0o755});
-  const run = (args, role) => spawnSync(process.execPath, [cli, 'night', ...args],
+  const run = (args, role) => spawnSync(process.execPath, [cli, 'autopilot', ...args],
     {env: {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
   const json = (args, role = '사람') => { const r = run(args, role); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); }; // stdout 전체가 JSON이어야 한다
   assert.deepEqual(json(['status']), {on: false, last: null});
@@ -540,7 +540,7 @@ test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 
 });
 
 test('F4: 종료 알림의 원문 안내는 status --text를 가리킨다', () => {
-  const start = {kind: 'night', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true, quote: 'q', text: 't', to: [], delivered: []};
-  assert.match(summarizeNight({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan night status --text/);
-  assert.match(summarizeNight({start: {...start, viaChat: false}, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan night status --text/);
+  const start = {kind: 'autopilot', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true, quote: 'q', text: 't', to: [], delivered: []};
+  assert.match(summarizeAutopilot({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan autopilot status --text/);
+  assert.match(summarizeAutopilot({start: {...start, viaChat: false}, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan autopilot status --text/);
 });

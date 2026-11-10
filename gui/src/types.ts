@@ -184,7 +184,7 @@ export type Summary = Stamp & {
   secretary?: boolean | null; // 비서가 살아 있나. null = 세션 상태 모름
   decisions: number | null;
   waiting: number | null;
-  night?: import("./night-repos").NightStrip; // 나이트런 상태(서버가 이미 읽은 원장·결정으로 계산)
+  autopilot?: import("./autopilot-repos").AutopilotStrip; // Autopilot 상태(서버가 이미 읽은 원장·결정으로 계산)
   sidebar?: { repo: string; decisions: number | null; merges: number | null; super: string | null }[]; // 사이드 탭 재료
   counts: { work: number | null; executions: number; unlinked: number };
   errors: string[];
