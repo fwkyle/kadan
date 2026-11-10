@@ -139,6 +139,7 @@ export function reopenRole({home, role, session, floor, settings, deps, hidden =
           cmd: command, cwd: start.cwd}),
         ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
         ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
+        ...(start.difficulty ? {difficulty: start.difficulty} : {}),
         ...windowFields,
         // 무엇으로 열었는지: reopen, 어느 세대(그 세대의 마지막 start 사건 지문)·어느 stop(시각)의 번호인지.
         reopenOf: startDigest(lastStart), reopenStopAt: stop.t ?? null, reopenConversation: conversation,
