@@ -1,0 +1,51 @@
+name: pages
+# 공개 소개 사이트를 GitHub Pages에 올린다. PR에서는 돌지 않는다(빌드 검증은 ci의 npm test가 한다).
+# 저장소 Settings > Pages > Source가 "GitHub Actions"여야 한다. 꺼져 있으면 deploy 작업이 실패한다(404, Pages를 켜라는 안내).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/how-to.md"
+      - "docs/architecture.svg"
+      - "docs/work-flow.svg"
+      - "scripts/build-site.mjs"
+      - "src/card-content.mjs"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run build:site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site-dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -26,22 +26,39 @@ function items(markdown) {
     .filter((item) => !NOT_ITEMS.has(item.title));
 }
 
-test("길잡이 문서: 항목 아홉 개가 같은 순서의 네 줄이고 단순한 Markdown만 쓴다", () => {
+test("길잡이 문서: 항목 아홉 개가 같은 순서의 네 줄이고, 표는 주의 바로 아래에만 둔다", () => {
   const doc = read("docs/how-to.md");
   assert.match(doc, /^# .+\n\n## Why\n/, "맨 위에 제목과 Why가 있어야 한다");
   const list = items(doc);
   assert.equal(list.length, 9, "항목 수: " + list.map((item) => item.title).join(" / "));
-  for (const item of list)
+  for (const item of list) {
+    // 표 줄을 빼면 항목마다 같은 순서의 네 줄이다.
     assert.deepEqual(
-      item.lines.map((line) => line.match(/^- \*\*(.+?)\*\*: \S/)?.[1] ?? "형식 밖: " + line),
+      item.lines.filter((line) => !line.startsWith("|"))
+        .map((line) => line.match(/^- \*\*(.+?)\*\*: \S/)?.[1] ?? "형식 밖: " + line),
       LABELS,
       item.title,
     );
+    // 표는 '주의' 줄 바로 아래에 한 덩어리로만 온다(고를 길을 나눌 때). 머리줄·구분줄·내용 줄 순서다.
+    const table = item.lines.map((line, n) => (line.startsWith("|") ? n : -1)).filter((n) => n >= 0);
+    if (!table.length) continue;
+    assert.deepEqual(table, table.map((_, n) => 3 + n), item.title + ": 표의 자리");
+    assert.match(item.lines[4], /^\|( --- \|)+$/, item.title + ": 표 구분줄");
+    const columns = item.lines[3].split("|").length;
+    for (const n of table) {
+      assert.match(item.lines[n], /^\| .+ \|$/, item.title);
+      assert.equal(item.lines[n].split("|").length, columns, item.title + ": 칸 수");
+    }
+  }
+  // 1번 항목은 세 길을 표로 나눈다(대화 옮기기 안내의 세 길과 같은 명령).
+  const ways = list[0].lines.filter((line) => line.startsWith("| `"));
+  assert.deepEqual(ways.map((line) => line.match(/^\| `kadan (\w+)/)[1]), ["adopt", "start", "handover"]);
+  assert.doesNotMatch(doc, /장치 PR|자리만 둔다/, "작업 중 문장");
   // 옛 명령 이름을 되살리지 않는다(Autopilot으로 바뀜).
   assert.doesNotMatch(doc, /kadan night/);
-  // 공개 사이트 변환과 GitHub 보기를 위해 표·코드 울타리·HTML 태그를 쓰지 않는다.
+  // 공개 사이트 변환과 GitHub 보기를 위해 코드 울타리·HTML 태그·들여 쓴 줄(중첩 목록)을 쓰지 않는다.
   // `<역할>` 같은 자리표시는 백틱 안에만 둔다(밖에 두면 GitHub에서 사라진다).
-  assert.doesNotMatch(doc, /^\s*\|/m, "표를 쓰지 않는다");
+  assert.doesNotMatch(doc, /^[ \t]+\S/m, "들여 쓴 줄을 쓰지 않는다(렌더러가 중첩 목록을 한 겹으로 그린다)");
   assert.doesNotMatch(doc, /^\s*(```|~~~)/m, "코드 울타리를 쓰지 않는다");
   assert.doesNotMatch(doc.replace(/`[^`\n]+`/g, ""), /[<>]/, "백틱 밖의 꺾쇠");
   assert.doesNotMatch(doc, /\/Users\//, "내부 절대경로");
@@ -157,4 +174,8 @@ test("길잡이 API: 기본 위치의 문서를 읽어 화면 재료를 준다",
   assert.equal(body.title, "상황별 길잡이");
   assert.equal(body.error, null);
   assert.equal((body.html.match(/<h3>/g) || []).length, 11);
+  // 1번 항목의 세 길은 표 하나(머리줄 + 세 줄)로 그려진다.
+  assert.equal((body.html.match(/<div class="dw-document-table">/g) || []).length, 1);
+  assert.equal((body.html.match(/<tr>/g) || []).length, 4);
+  assert.match(body.html, /<code>kadan limit set conductor-works &lt;개수&gt;<\/code>/);
 });
