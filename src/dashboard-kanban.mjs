@@ -64,6 +64,7 @@ function marksOf(row, { byCard, byWork }) {
   if (row.bucket === "stale") marks.push({ kind: "stale", label: "오래된 미확정" });
   if (row.state === "hold") marks.push({ kind: "hold", label: "일시정지" });
   if (row.state === "archived") marks.push({ kind: "archived", label: "보류" });
+  if (row.difficulty === "hard") marks.push({ kind: "hard", label: "어려움" });
   return marks;
 }
 
@@ -174,6 +175,7 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
       state: row.state,
       stateLabel: statusLabel(row.state),
       healthLabel: row.healthLabel || "",
+      ...(row.difficulty === "hard" ? { difficulty: "hard" } : {}),
       workKey: work?.key ?? null,
       workTitle: work?.title ?? null,
       marks: [...marksOf(row, { byCard, byWork: workDecided }), ...prMarks(attached)],

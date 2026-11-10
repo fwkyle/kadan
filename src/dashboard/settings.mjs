@@ -7,6 +7,7 @@ import {
   readSettings,
   runnerChoices,
   launchFor,
+  launchForHard,
   watchJudgeCommand,
   explainCommand,
   PROFILE_ROLES,
@@ -109,6 +110,13 @@ export function runnersData(snapshot, url, stamp) {
       }
     }),
   );
+  // 어려운 일 작업자 자리는 값이 있을 때만 명령을 채운다(비어 있으면 작업자와 같다).
+  if (settings.presets[settings.activePreset].roles["worker-hard"])
+    try {
+      commands["worker-hard"] = launchForHard(settings)?.cmd || "미설정";
+    } catch (error) {
+      commands["worker-hard"] = "모름: " + error.message;
+    }
   commands.watch =
     watchJudgeCommand(settings.presets[settings.activePreset].roles.watch) ||
     "미설정 — 감시 프로필의 KADAN_JUDGE_MODEL 사용";
