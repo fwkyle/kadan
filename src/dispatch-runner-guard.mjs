@@ -25,7 +25,7 @@
 //   카드 단계를 모름·세션 프로필이 작업자/검수자가 아님      → 기존 동작 그대로
 // 폴백 — 2026-10-02 [kyle]. 기본값과 실행기·모델이 달라도 지금 설정의 그 프로필 폴백 목록 중 하나와 같으면
 // 통과 + 경고 한 줄(폴백 번호), send 기록에 fallbackIndex를 남긴다. 어느 것과도 다르면 기존처럼 거절.
-import { readSettings, launchFor, launchForFallback, PROFILE_ROLES } from "./runner-settings.mjs";
+import { readSettings, launchFor, launchForFallback, launchForHard, PROFILE_ROLES } from "./runner-settings.mjs";
 import { withoutInlineScreen } from "./inline-screen.mjs";
 import { launchIdentityOf } from "./ai-identity.mjs";
 
@@ -53,9 +53,10 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     : { result: "reject", code, message: lines.join("\n") };
   const mismatch = GUARDED_PROFILES.includes(phaseProfile) && phaseProfile !== profile;
   const target = mismatch ? phaseProfile : profile;
-  const command = `kadan stop ${role} 뒤 kadan start ${role} --profile ${target}로 새로 띄워 보내라`;
-
-  let expected, settings;
+  // 어려운 일 세션(시작 기록 difficulty: hard)은 어려운 일 자리 하나와만 대조한다. 자리가 비면 작업자 값이다.
+  const hardSession = identity.launch?.difficulty === "hard" && profile === "worker" && target === "worker";
+  const command = `kadan stop ${role} 뒤 kadan start ${role} --profile ${target}${hardSession ? " --difficulty hard" : ""}로 새로 띄워 보내라`;
+  let expected, settings, slotName = `${profile} 기본값`;
   try {
     settings = readSettingsFn(home);
     if (!settings) {
@@ -63,7 +64,9 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
       return { result: "skip", reason: "no-settings" };
     }
     const preset = identity.launch?.compareMode ? identity.launch.settingsPreset : settings.activePreset;
-    expected = launchFor(settings, target, preset);
+    expected = hardSession ? launchForHard(settings, preset) : null;
+    if (expected) slotName = "어려운 일 작업자 자리";
+    else expected = launchFor(settings, target, preset);
     if (identity.launch?.compareMode && !expected) throw new Error(`비교 프리셋 ${preset}의 역할 값 없음`);
   } catch (error) {
     return stop("settings-unreadable", [
@@ -86,19 +89,19 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   if (!want.ok) {
     return {
       result: "warn", code: "expected-unreadable",
-      warning: `경고: ${profile} 기본값 명령에서 실행기·모델을 읽지 못해 ${session}과(와) 대조하지 못했다: ${shorten(expected.cmd)}`,
+      warning: `경고: ${slotName} 명령에서 실행기·모델을 읽지 못해 ${session}과(와) 대조하지 못했다: ${shorten(expected.cmd)}`,
       ledger: { result: "warn", code: "expected-unreadable", settingsRevision: expected.revision },
     };
   }
   if (!identity.harness || !identity.model || typeof identity.launch?.cmd !== "string") {
     return {
       result: "warn", code: "session-unknown",
-      warning: `경고: ${session}의 시작 기록·실행 모델을 몰라 ${profile} 기본값과 대조하지 못했다`,
+      warning: `경고: ${session}의 시작 기록·실행 모델을 몰라 ${slotName}과 대조하지 못했다`,
       ledger: { result: "warn", code: "session-unknown", settingsRevision: expected.revision },
     };
   }
   if (want.harness !== identity.harness || want.model !== identity.model) {
-    const fallback = !identity.launch?.compareMode && matchingFallback(settings, target, identity);
+    const fallback = !identity.launch?.compareMode && !hardSession && matchingFallback(settings, target, identity);
     if (fallback) {
       return {
         result: "warn", code: "fallback",
@@ -107,7 +110,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
       };
     }
     return stop("runner-or-model", [
-      `카드 발령 거절: 옛 실행기·모델 세션이다 — 지금 ${profile} 기본값 = ${shownValue(expected)} (설정 revision ${expected.revision})`,
+      `카드 발령 거절: 옛 실행기·모델 세션이다 — 지금 ${slotName} = ${shownValue(expected)} (설정 revision ${expected.revision})`,
       `이 세션(${session}) 값 = ${have}${startInfo}`,
       `조치: ${command} (의도한 예외면 --allow-old-runner "<이유>")`,
     ], expected.revision);
@@ -120,7 +123,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     ], expected.revision);
     return {
       result: "warn", code: "effort-or-args",
-      warning: `경고: ${session}의 강도·실행 인자가 지금 ${profile} 기본값과 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,
+      warning: `경고: ${session}의 강도·실행 인자가 지금 ${slotName}${slotName.endsWith('자리') ? '와' : '과'} 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,
       ledger: { result: "warn", code: "effort-or-args", settingsRevision: expected.revision },
     };
   }

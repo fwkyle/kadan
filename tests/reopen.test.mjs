@@ -13,19 +13,21 @@ import {runnerChoices} from '../src/runner-settings.mjs';
 import {stopConversationFields} from '../src/role-conversation.mjs';
 import {collectRoles} from '../src/watch-roles.mjs';
 import {settingsWith, TABLE} from './helpers/runner-table.mjs';
+import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
+import {inspectCardSendIdentity} from '../src/ai-identity.mjs';
 
 // 가짜 바닥으로 reopen 본체의 순서와 거절을 시험한다. 실제 tmux·CLI 왕복은 stop-reopen-tmux.test.mjs.
 const ID = '0197aaaa-1111-4222-8333-444455556666', OTHER = '0197bbbb-1111-4222-8333-444455556666';
 const MODEL = 'claude-haiku-5-5';
 const CLAUDE = `claude --model ${MODEL} --effort low --dangerously-skip-permissions`;
 
-function fixture({cmd = CLAUDE, role = 'w', profile = 'worker', stop = {}, withStop = true} = {}) {
+function fixture({cmd = CLAUDE, role = 'w', profile = 'worker', stop = {}, withStop = true, startExtra = {}} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-reopen-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-reopen-cwd-'));
   const session = `kadan-${role}`;
   const start = {kind: 'start', floor: 'tmux', role, session, cmd, cwd, panePid: '100', roleProfile: profile, by: 'boss',
     outputLog: generationLog(session, 1),
-    launchSource: 'settings', settingsPreset: 'B', compareMode: true, pickId: 'pick-1', t: '2026-11-10T00:00:00.000Z'};
+    launchSource: 'settings', settingsPreset: 'B', compareMode: true, pickId: 'pick-1', t: '2026-11-10T00:00:00.000Z', ...startExtra};
   const entries = [start];
   if (withStop) entries.push({kind: 'stop', role, session, by: 'boss', conversation: ID, conversationStart: startDigest(start),
     t: '2026-11-10T01:00:00.000Z', ...stop});
@@ -374,4 +376,29 @@ test('reopenSource·canReopen: 우편 안내가 쓰는 판정은 원장 배열�
   assert.equal(canReopen([], 'kadan-none', 'none'), false);
   assert.equal(canReopen(fixture({role: '비서'}).entries, 'kadan-비서', '비서'), false);
   assert.notEqual(OTHER, ID);
+});
+
+// 난이도 칸 PR 1: reopen도 앞 세대의 difficulty를 이어 적어야 어려운 일 작업자가 다음 발령에서 거절되지 않는다.
+test('난이도: reopen이 앞 시작 기록의 difficulty를 이어 적고, 없던 역할에는 칸을 만들지 않는다', () => {
+  const hard = fixture({startExtra: {difficulty: 'hard'}});
+  hard.run();
+  assert.equal(hard.entries.at(-1).difficulty, 'hard');
+  const plain = fixture();
+  plain.run();
+  assert.equal('difficulty' in plain.entries.at(-1), false);
+});
+
+test('난이도: reopen으로 연 어려운 일 세션은 worker-hard 자리와 대조된다(같으면 거절 아님, 자리 값이 다르면 거절)', () => {
+  const f = fixture({startExtra: {difficulty: 'hard'}});
+  f.run();
+  const identity = inspectCardSendIdentity({entries: f.entries, session: f.session, currentPid: '200'});
+  const roles = hard => ({worker: {runner: 'claude', model: 'claude-sonnet-5-5', effort: 'high'},
+    'worker-hard': {runner: 'claude', model: hard, effort: 'low'}});
+  const check = hard => inspectDispatchRunnerGuard({home: f.home, role: f.role, session: f.session, profile: 'worker',
+    phaseProfile: 'worker', identity, readSettingsFn: () => ({...settingsWith(), revision: 7, activePreset: 'B', presets: {B: {roles: roles(hard)}}})});
+  const same = check(MODEL);
+  assert.notEqual(same.result, 'reject', JSON.stringify(same));
+  const other = check('claude-opus-5-5');
+  assert.equal(other.result, 'reject'); assert.equal(other.code, 'runner-or-model');
+  assert.match(other.message, /어려운 일 작업자 자리/);
 });

@@ -17,7 +17,7 @@
 | 필드 | 뜻 |
 | --- | --- |
 | `revision` | 저장할 때마다 1씩 오른다. 읽은 revision과 다르면 저장을 거부한다 |
-| `activePreset`, `presets.<이름>.roles` | 역할(`worker`·`reviewer`·`conductor`·`super`·`watch`)별 `{runner, model, effort}`. `watch`는 감시 AI다 |
+| `activePreset`, `presets.<이름>.roles` | 역할(`worker`·`reviewer`·`conductor`·`super`·`watch`)별 `{runner, model, effort}`. `watch`는 감시 AI다. `worker-hard`는 선택 칸인 [어려운 일 작업자 자리](#어려운-일-작업자-자리)다 |
 | `presets.<이름>.fallback.<역할>` | 1순위가 막혔을 때 내려갈 순서 목록 `[{runner, model, effort}]`. 1번부터 센다 |
 | `runners.<실행기>.spawn` | 실행 명령 틀. `{model}`·`{effort}`를 채운다 |
 | `runners.<실행기>.resume`·`fork`·`exec`·`version`·`update`·`listModels`·`conversation` | 선택 칸. [실행기 명령 표](#실행기-명령-표) |
@@ -48,6 +48,7 @@ kadan runners favorite --set '<실행기>:<모델>[:<강도>],…' --revision N 
 kadan start <역할> --profile worker          # --cmd 없이: 설정의 명령으로 띄운다
 kadan start <역할> --profile worker --cmd '<명령>' --reason <이유>   # 설정과 다른 명령
 kadan start <역할> --profile worker --fallback 2 --reason <이유>   # 2번 폴백으로 띄운다
+kadan start <역할> --profile worker --difficulty hard   # 어려운 일 작업자 자리의 명령으로 띄운다([어려운 일 작업자 자리](#어려운-일-작업자-자리))
 ```
 
 - 역할은 실행기·모델·추론 강도 세 값으로 정한다. 실행기가 명령 틀을 정하고, 모델·강도가 틀을 채운다.
@@ -230,6 +231,23 @@ kadan runners import fast.json --replace --revision N --reason <이유>  # 기�
 - 저장은 `change()` 경로(revision 대조, `--reason` 필수)이고 원장에는 `preset-import` 한 줄이 남으며 revision은 1 오른다. 고친 프리셋만 계열 검사하므로 다른 프리셋의 기존 충돌 때문에 저장이 막히지 않는다. 새 프리셋은 별도로 활성화해야 하고, 활성 프리셋을 `--replace`하면 다음 발령부터 새 값이 쓰인다.
 - 시험: `tests/runner-export.test.mjs`(격리 홈 두 개, 가짜 실행기·가짜 codex 목록).
 
+## 어려운 일 작업자 자리
+
+감독이 어려운 일을 더 센 모델의 작업자에게 맡기려면 지금까지는 `--cmd "<명령 전체>"`로 띄우고 카드를 보낼 때마다 `--allow-old-runner "<이유>"`를 붙여야 했다. 프리셋의 역할 값에 선택 칸 하나, `worker-hard`를 두어 이 예외 없이 보낼 수 있게 한다(2026-11-10 [kyle] 승인, 난이도 칸 PR 1).
+
+```sh
+kadan runners set worker-hard --runner <실행기> --model <모델> --effort <강도> --revision N --reason <이유>
+kadan runners set worker-hard --clear --revision N --reason <이유>   # 비운다(이미 비어 있으면 "바뀐 것 없음"으로 거절)
+kadan start <역할> --profile worker --difficulty hard                 # 자리의 명령으로 새 작업자를 띄운다
+```
+
+- **칸을 비워 두면 아무것도 달라지지 않는다.** `--difficulty hard`를 줘도 칸이 비어 있으면 stderr에 한 줄("어려운 일 작업자 자리가 비어 있어 보통 작업자로 띄운다")만 내고 옵션이 없을 때와 똑같이 뜬다(비교 모드면 돌려 고르기 포함). 시작 기록에 `difficulty`를 남기지 않는다.
+- 값 검사는 작업자와 같다(실행기·모델·강도·정책 차단). `worker`로 막은 모델은 이 자리에도 막히고, 검수자 1순위와 같은 계열이면 저장을 거절한다. 후보 경고(`checkPresetFamilies`)에도 작업자 후보로 들어간다. 폴백 목록은 없다(`runners fallback worker-hard`는 거절). 비교 모드 잠금은 `roles` 통째 비교라 그대로 따라온다.
+- `kadan runners show`는 이 자리의 값과 채워질 명령을 보인다(비어 있으면 "비어 있음 — 작업자와 같다"). 프리셋 내보내기·가져오기에 실린다. 세션의 `roleProfile`은 계속 `worker`다.
+- `start --difficulty`는 `normal`(옵션이 없는 것과 같다)·`hard`만 받는다. `hard`는 작업자를 **새로 띄울 때만** 쓴다 — 살아 있는 세션 재사용, 다른 프로필, `--cmd`·`--fallback`·`--for`와 함께면 종료 코드 2로 거절한다.
+- 자리는 늘 **활성 프리셋**에서 읽는다. 자리가 채워져 있으면 비교 모드여도 돌려 고르기(`compare-pick`)를 만들지 않고, start 기록에 `launchSource: "settings"`·`settingsRevision`·`settingsPreset`·`runnerChoice`와 `difficulty: "hard"`를 남긴다(`compareMode`·`pickId`는 없다). `launchSource`에 새 값을 만들지 않는다.
+- 발령 검사와 `restart`가 이 기록을 읽는 방법은 아래 [옛 세션 발령 막기](#옛-세션-발령-막기)·[설정을 바꾼 뒤 살아 있는 역할에 반영하기](#설정을-바꾼-뒤-살아-있는-역할에-반영하기)에 있다. 인계(handover)로 만드는 후임 시작은 `--difficulty`를 넘기지 않으므로 어려운 일 작업자를 인계하면 후임은 보통 작업자 기본값과 대조된다(PR 1은 확인만 했고 고치지 않았다).
+
 ## 옛 세션 발령 막기
 
 작업자·검수자 기본값이 바뀐 뒤에도 옛 실행기·모델로 떠 있던 세션에 새 카드가 가는 일이 반복됐다(2026-09-23 grok→opus, 09-29 opus→sonnet). 기억에 기댄 규칙은 놓치므로 카드를 보내는 순간 세션과 지금 기본값을 대조한다(2026-09-29 [kyle] 승인).
@@ -253,6 +271,7 @@ kadan runners import fast.json --replace --revision N --reason <이유>  # 기�
 | 설정 파일이 깨졌다 | 거절(`settings-unreadable`). 예외 이유로만 통과 |
 | 시작 기록이 없다·명령이 없다·모델을 모른다 | **기존 AI 신원 경계(`KADAN_AI_IDENTITY_UNVERIFIED`)가 먼저 거절한다.** 새 경계가 기존 경계를 약하게 만들지 않는다(2026-09-29 감독 결정). 이 검사 자체는 그 자리에서 경고만 한다(`session-unknown`, 대조할 세션 값이 없음) — 실제로는 위 신원 경계에 막혀 여기까지 오지 않는다 |
 
+- **어려운 일 세션**: 세션 값을 고른 시작 기록에 `difficulty: "hard"`가 있고 카드 단계가 작업자이면 기대값은 활성 프리셋의 `worker-hard` 하나다(자리가 비어 있으면 작업자 값). 기록에 `difficulty`가 없는 세션은 지금과 똑같이 작업자 기본값과만 대조한다 — 두 값 중 하나면 통과시키지 않는다. 어려운 일 세션에는 작업자 폴백 대조를 적용하지 않는다. 거절·경고 문구에 "어려운 일 작업자 자리"가 보이고, 조치 안내에 `--difficulty hard`가 붙는다. 재사용으로 붙은 빈 시작 기록에서는 `difficulty`를 읽지 않는다.
 - 옛 세션을 새로 띄워 보내려면 `kadan stop <역할>` 뒤 `kadan start <역할> --profile worker|reviewer`. 살아 있는 세션에 `start`만 다시 부르면 재사용일 뿐이라 옛 명령이 그대로다.
 - 강도는 start 기록에 따로 없고 명령 안에 있다. 실행기별 어댑터를 만들지 않으려고 "기본값 명령과 세션 명령의 문자열이 다른가"로만 본다. 그래서 강도 말고 다른 실행 인자·경로 접두·`kadan-<실행기>` 래퍼가 달라도 같은 경고가 나온다(막지는 않는다).
 - 모델 이름은 문자열로 비교한다. 별명(`--model opus`)으로 띄운 세션은 설정의 `claude-opus-5-5`와 다르게 보여 거절된다 — 의도한 세션이면 예외 이유로 보낸다.
@@ -270,6 +289,7 @@ kadan runners import fast.json --replace --revision N --reason <이유>  # 기�
 
 - `--model-from-settings`는 그 역할의 마지막 시작 기록에 있는 프로필(`roleProfile`)과 지금 활성 프리셋의 **모델·강도 값만** 가져온다. 모델·강도만 바꾸고 다른 옵션은 그대로 둔다: 옛 시작 명령의 실행 파일·다른 옵션·낱말 순서가 그대로이고, 권한 옵션이 없던 역할에 권한 옵션이 붙지 않는다. 프로필이 없는 옛 기록·설정에 값이 없는 역할·실행기가 달라지는 경우·비교 모드로 띄운 역할·비서, 그리고 옛 명령에서 모델 자리를 하나로 정할 수 없는 경우는 끄기 전에 거절한다. 명령에 카단이 아는 옵션만 있을 때 바꾼다. 모르는 옵션이 있으면 거절한다(옵션과 값을 확실히 가를 수 없으면 다른 옵션의 값을 건드릴 수 있어서다). 설정과 모델·강도가 이미 같으면 평소 restart와 같다. 자세한 순서와 원장 칸은 [`kadan restart` 자세히](commands.md#kadan-restart-자세히).
 - 명령줄 전용이다. 한 번에 한 역할이고, 역할마다 끄기 직전 안전 지점 확인(화면이 쉬는 중·최근 사람 입력 없음)을 지난다. 자기 자신은 restart할 수 없다.
+- 어려운 일 작업자(시작 기록 `difficulty: "hard"`)는 restart가 `difficulty`를 새 시작 기록에 이어 적고(안 그러면 다음 발령에서 거절된다), `--model-from-settings`는 활성 프리셋의 `worker-hard` 값(비어 있으면 작업자 값)을 쓴다.
 - 실행 중인 세션 안에서 `/model`로 바꾼 값은 시작 기록에 없다. 그 역할을 옵션 없이 restart하면 원래 모델로 돌아간다.
 - 이 옵션으로 다시 띄운 작업자·검수자는 새 시작 기록의 모델이 설정값이라 아래 발령 경계에서 옛 세션으로 거절되지 않는다. resume 꼬리 때문에 명령 글자가 기본값과 달라 `effort-or-args` 경고 한 줄은 붙는다(평소 restart와 같다).
 - 여러 역할을 한꺼번에 바꾸는 순서(설정 → 재시작 → 확인 → 되돌리기)와 `/model`로 바꿨을 때 카단 기록에 남지 않는 것은 [모델을 한꺼번에 바꾸기](../skills/kadan-super/references/model-switch.md)에 모았다.
