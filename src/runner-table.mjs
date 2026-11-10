@@ -112,7 +112,9 @@ function splitModelSlots(settings, runner, words) {
 const ENV_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const executableAt = words => words.findIndex(word => !ENV_WORD.test(word));
 
-// restart --model-from-settings: 옛 명령을 설정 명령으로 바꿀 때 조용히 사라질 낱말(leftover)과 옛 모델·강도 값을 돌려준다.
+// restart --model-from-settings: 옛 명령을 설정 명령으로 바꿀 때 조용히 사라질 낱말(leftover)과 조용히 새로 붙을 낱말(added),
+// 옛 모델·강도 값을 돌려준다. 양쪽을 다 본다 — 설정 명령에만 있는 권한 옵션이 모델을 바꾸면서 붙으면 안 된다(PR #362 검수 F1).
+// 모델·강도 자리는 양쪽에서 먼저 빼므로, 옛 명령에 없던 강도 자리가 설정 때문에 생기는 것(또는 그 반대)은 차이로 세지 않는다.
 // oldWords·newWords는 대화 꼬리와 카단이 붙이는 인자(인라인 화면·정지 훅 설정)를 뗀 낱말이다.
 // 실행 파일은 경로만 다르면 같은 것으로 본다(launchIdentityOf·matchesAiProcess가 읽는 방식). 이름이 다르면 남는 낱말이다.
 export function modelSwapLeftover(settings, runner, oldWords, newWords) {
@@ -123,11 +125,13 @@ export function modelSwapLeftover(settings, runner, oldWords, newWords) {
     leftover.splice(oldExec, 1);
     kept.splice(newExec, 1);
   }
+  const added = [];
   for (const word of kept) {
     const at = leftover.indexOf(word);
     if (at >= 0) leftover.splice(at, 1);
+    else added.push(word);
   }
-  return {previous: old.found, leftover};
+  return {previous: old.found, leftover, added};
 }
 
 // 마지막 시작 명령에서 대화 인자만 바꿔 다시 연다: 꼬리가 이미 붙어 있으면(이전 restart) 떼고, 새 ID로 붙인다.

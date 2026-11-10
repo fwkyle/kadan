@@ -112,9 +112,10 @@ test('거절은 모두 끄기 전이다: 프로필 없음·설정 값 없음·�
     ['설정 대상이 아닌 프로필', fixture({profile: 'secretary'}), undefined, /역할 값이 없다/],
     ['실행기 다름', fixture(), codexWorker, /실행기\(codex\)가 이 역할의 실행기\(claude\)와 다르다/],
     ['비교 모드 start', fixture({extra: {compareMode: true, settingsPreset: 'B', pickId: 'p1'}}), undefined, /비교 모드/],
-    ['남는 옵션', fixture({cmd: `${OLD} --add-dir /x`}), undefined, /--add-dir \/x.*손으로 준 옵션/s],
+    ['남는 옵션', fixture({cmd: `${OLD} --add-dir /x`}), undefined, /옛 명령에만 있는 옵션: --add-dir \/x/],
     ['다른 대화 지정', fixture({cmd: `${OLD} --continue`}), undefined, /대화 지정/],
-    ['다른 이름의 실행 파일', fixture({cmd: OLD.replace(/^claude/, '/opt/bin/kadan-claude'), processArgs: OLD}), undefined, /kadan-claude.*손으로 준 옵션/s],
+    ['다른 이름의 실행 파일', fixture({cmd: OLD.replace(/^claude/, '/opt/bin/kadan-claude'), processArgs: OLD}), undefined,
+      /설정 명령에만 있는 옵션: claude \/ 옛 명령에만 있는 옵션: \/opt\/bin\/kadan-claude/],
   ];
   for (const [name, f, settings, pattern] of cases) {
     assert.throws(() => f.run(OPTION, settings ?? settingsOf()), pattern, name);
@@ -204,6 +205,76 @@ test('설정과 같고 손으로 준 옵션이 있으면 거절하지 않고 옛
   assert.equal(start.cmd, `${OLD} --add-dir /x --resume ${ID}`);
   assert.equal(receipt.modelFromSettings.changed, false);
   assert.equal(start.launchSource, undefined); assert.equal(start.modelFromSettings, true); assert.equal(start.settingsRevision, 7);
+});
+
+// PR #362 검수 F1: 설정 명령에만 있는 옵션(권한 건너뛰기 등)이 모델을 바꾸면서 조용히 붙으면 안 된다.
+const BARE = 'claude --model claude-haiku-5-5 --effort low';
+test('양방향 대조: 설정 명령에만 있는 옵션이 있으면 끄기 전에 거절하고, 어느 쪽에만 있는지 보여 준다', () => {
+  const added = fixture({cmd: BARE});
+  assert.throws(() => added.run(), error => {
+    assert.match(error.message, /설정 명령에만 있는 옵션: --dangerously-skip-permissions/);
+    assert.doesNotMatch(error.message, /옛 명령에만 있는 옵션/);
+    assert.match(error.message, /권한·옵션이 달라 설정 명령으로 바꾸지 않는다/);
+    return true;
+  });
+  const both = fixture({cmd: `${BARE} --add-dir /x`});
+  assert.throws(() => both.run(),
+    /설정 명령에만 있는 옵션: --dangerously-skip-permissions \/ 옛 명령에만 있는 옵션: --add-dir \/x/);
+  const removed = fixture({cmd: `${OLD} --add-dir /x`});
+  assert.throws(() => removed.run(), error => {
+    assert.match(error.message, /옛 명령에만 있는 옵션: --add-dir \/x/);
+    assert.doesNotMatch(error.message, /설정 명령에만 있는 옵션/);
+    return true;
+  });
+  for (const f of [added, both, removed]) {
+    assert.deepEqual(f.log, []);
+    assert.equal(f.entries.length, 1);
+  }
+});
+
+test('양방향 대조: 설정과 모델·강도가 같으면 옛 명령을 그대로 써서 설정 명령에만 있는 옵션이 붙지 않는다', () => {
+  const same = settingsOf({worker: {runner: 'claude', model: 'claude-haiku-5-5', effort: 'low'}});
+  const f = fixture({cmd: BARE});
+  f.run(OPTION, same);
+  const start = f.entries.at(-1);
+  assert.equal(start.cmd, `${BARE} --resume ${ID}`);
+  assert.equal(start.launchSource, undefined); assert.equal(start.modelFromSettings, true);
+});
+
+test('양방향 대조: 강도 자리만 새로 생기는 것은 허용한다(옛 명령에 강도 없음 → 설정 강도)', () => {
+  const f = fixture({cmd: 'claude --model claude-haiku-5-5 --dangerously-skip-permissions'});
+  f.run();
+  const start = f.entries.at(-1);
+  assert.equal(start.cmd, `${NEW} --resume ${ID}`);
+  assert.equal(start.previousModel, 'claude-haiku-5-5'); assert.equal(start.previousEffort, undefined);
+});
+
+// PR #362 검수 F2: 역할 말고 낱말이 더 있으면 역할 선택·세션 조회 전에 사용법 오류로 끝난다. 실제 명령줄 경로(cmdRestart)를 지난다.
+test('명령줄: 여분 위치 인자는 세션 조회 전에 거절하고, 정상 꼴은 역할을 그대로 고른다', async () => {
+  const {floor} = await import('../src/floor.mjs');
+  const {parseFlags} = await import('../src/cli-basics.mjs');
+  const {cmdRestart, RESTART_BOOLEANS} = await import('../src/commands/restart.mjs');
+  const saved = {alive: floor.alive, exit: process.exit, error: console.error};
+  const tryRestart = argv => {
+    let entered = null;
+    const messages = [];
+    floor.alive = session => { entered = session; throw new Error('FAKE_SESSION_BOUNDARY'); };
+    process.exit = code => { throw new Error(`EXIT ${code}`); };
+    console.error = message => messages.push(String(message));
+    try {
+      const parsed = parseFlags(argv, {booleans: RESTART_BOOLEANS});
+      assert.throws(() => cmdRestart(parsed.rest, parsed.flags), /EXIT/);
+    } finally { floor.alive = saved.alive; process.exit = saved.exit; console.error = saved.error; }
+    return {entered, messages: messages.join('\n')};
+  };
+  for (const argv of [['w', '--model-from-settings', 'x'], ['--model-from-settings', 'x', 'w'], ['a', 'b']]) {
+    const result = tryRestart(argv);
+    assert.equal(result.entered, null, argv.join(' '));
+    assert.match(result.messages, /역할은 하나만 받는다/, argv.join(' '));
+    assert.match(result.messages, /사용법: kadan restart/, argv.join(' '));
+  }
+  for (const argv of [['--model-from-settings', 'w'], ['w', '--model-from-settings'], ['w']])
+    assert.equal(tryRestart(argv).entered, 'kadan-w', argv.join(' '));
 });
 
 // 격리 홈에 정지 훅 설정 파일을 만든다(파일이 남으므로 이 파일의 마지막 시험으로 둔다). 운영 홈은 이 파일이 있어

@@ -70,6 +70,8 @@ export function cmdRestart(argv, flags) {
   flags = cliRestartFlags(flags);
   const role = argv[0];
   if (!role) die(RESTART_USAGE);
+  // 역할 말고 낱말이 더 있으면(값 없는 옵션에 붙인 값 포함) 어느 것이 역할인지 추측하지 않는다 — 역할 선택·세션 조회 전에 끝낸다.
+  if (argv.length > 1) die(`역할은 하나만 받는다(받은 낱말: ${argv.join(" ")})\n${RESTART_USAGE}`);
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
   // 화면(대시보드 '다시 띄우기')에서 온 값은 옵션 재해석을 막기 위해 인자가 아니라 환경변수로 들어온다(2026-10-15 2라운드).
   // 읽은 즉시 이 프로세스의 환경에서 지운다(3라운드): 지우지 않으면 마지막 역할 재시작 때 새 tmux 서버·새 역할 환경에

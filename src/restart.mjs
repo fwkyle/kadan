@@ -187,9 +187,9 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
     // 설정에서 온 재시작: kadan start --profile의 설정 칸과 같은 이름으로 남겨 발령 기록·발령 경계가 그대로 읽는다.
-    // 손으로 준 옵션이 남은 채(모델·강도가 이미 같아 옛 명령 유지) 다시 띄운 경우는 설정 명령 그대로가 아니라 launchSource를 적지 않는다.
+    // 모델·강도가 이미 같아 옛 명령을 유지했는데 다른 옵션이 설정 명령과 다르면 설정 명령 그대로가 아니라 launchSource를 적지 않는다.
     ...(swap ? {
-      ...(swap.kept.length ? {} : {launchSource: 'settings'}),
+      ...(swap.differs ? {} : {launchSource: 'settings'}),
       modelFromSettings: true, settingsRevision: launch.revision, settingsPreset: launch.preset,
       runnerChoice: {runner: launch.runner, model: launch.model, ...(launch.effort ? {effort: launch.effort} : {})},
       ...(swap.previousModel ? {previousModel: swap.previousModel} : {}),
@@ -223,20 +223,22 @@ function settingsLaunch({start, settings, harness}) {
   return {...launch, model: want.model};
 }
 
-// 옛 명령을 설정 명령으로 바꿔도 되는지 본다. 옛 명령의 다른 옵션을 조용히 버리지 않는다: 모델·강도 자리를 빼고
-// 설정 명령에 없는 낱말이 남으면 거절한다. kept는 옛 명령에 현재 대화 꼬리를 붙인 평소 restart 명령이다.
-// 모델·강도가 이미 설정과 같으면 옛 명령을 그대로 쓰므로 버려지는 낱말이 없다. 그때는 거절하지 않고 남은 낱말만 돌려준다.
+// 옛 명령을 설정 명령으로 바꿔도 되는지 본다. 모델·강도 자리를 빼고 양쪽을 대조해, 옛 명령에만 있는 낱말(조용히 버려짐)이나
+// 설정 명령에만 있는 낱말(조용히 붙음 — 권한 옵션 등)이 하나라도 있으면 거절한다. kept는 옛 명령에 현재 대화 꼬리를 붙인
+// 평소 restart 명령이다. 모델·강도가 이미 설정과 같으면 옛 명령을 그대로 쓰므로 버려지거나 붙는 낱말이 없다. 그때는 거절하지 않는다.
 function settingsSwap({settings, harness, model, launch, kept}) {
   const strip = words => wordsWithoutStopHook(words.filter(word => word !== INLINE_FLAG));
   const oldWords = strip(commandWords(kept).slice(0, -resumeTail(settings, harness).length));
-  const {previous, leftover} = modelSwapLeftover(settings, harness, oldWords, strip(commandWords(launch.cmd)));
+  const {previous, leftover, added} = modelSwapLeftover(settings, harness, oldWords, strip(commandWords(launch.cmd)));
   const oldEffort = previous.effort ?? null, newEffort = launch.effort ?? null;
   const changed = launch.model !== model || oldEffort !== newEffort;
-  if (changed && leftover.length) {
-    fail(`마지막 시작 명령에 설정 명령에 없는 낱말이 남는다: ${leftover.join(' ')} — `
-      + `손으로 준 옵션이 있어 설정 명령으로 바꾸지 않는다(설정 명령: ${launch.cmd})`);
+  const differs = leftover.length + added.length > 0;
+  if (changed && differs) {
+    const sides = [added.length ? `설정 명령에만 있는 옵션: ${added.join(' ')}` : null,
+      leftover.length ? `옛 명령에만 있는 옵션: ${leftover.join(' ')}` : null].filter(Boolean).join(' / ');
+    fail(`${sides} — 권한·옵션이 달라 설정 명령으로 바꾸지 않는다(설정 명령: ${launch.cmd})`);
   }
-  return {changed, oldEffort, kept: leftover, previousModel: launch.model !== model ? model : null,
+  return {changed, oldEffort, differs, previousModel: launch.model !== model ? model : null,
     previousEffort: oldEffort !== newEffort ? oldEffort : null};
 }
 
