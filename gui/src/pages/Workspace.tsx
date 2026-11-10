@@ -56,7 +56,7 @@ const baseColumns: Column[] = [
     label: "카드 · 목적",
     render: (row) => (
       <>
-        <CardLink row={row} />
+        <CardLink row={row} />{row.difficulty === "hard" && <> <span className="kb-mark">어려움</span></>}
         <small title={row.purpose || row.summary}>{row.id || row.key}</small>
       </>
     ),
@@ -725,7 +725,7 @@ function Grouped({
             <article className="work-tile" key={row.key} data-fresh={`tile:${row.key}:${row.state}:${row.healthKind ?? ""}`}>
               <Health row={row} />
               <h3>
-                <a href={cardUrl(row.key)}>{row.title}</a>
+                <a href={cardUrl(row.key)}>{row.title}</a>{row.difficulty === "hard" && <> <span className="kb-mark">어려움</span></>}
               </h3>
               <p>{row.turnLabel}</p>
               <small>{row.reviewLabel || row.flowLabel}</small>

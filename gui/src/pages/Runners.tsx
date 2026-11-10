@@ -1,11 +1,11 @@
 import { useContext, useState } from "react";
 import { save, useResource } from "../resource";
-import { fallbackLabels } from "../runner-draft";
 import type { Stamp } from "../types";
 import { PresetEditor } from "./PresetEditor";
 import { PresetManager } from "./PresetManager";
 import { CompareMode } from "./CompareMode";
 import { RunnerTables } from "./RunnerTables";
+import { RunnerSummary } from "./RunnerSummary";
 import {
   ActionForm,
   AppContext,
@@ -96,58 +96,7 @@ export default function Runners() {
             활성 프리셋 <strong>{data.settings.activePreset}</strong> · 버전{" "}
             {data.settings.revision}
           </p>
-          <div className="table-scroll runners-summary">
-            <table>
-              <thead>
-                <tr>
-                  <th>역할</th>
-                  <th>지금 값</th>
-                  <th>대체 후보 (순서대로)</th>
-                  <th>발령 때 채워질 명령</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(data.roles).map(([role, label]) => {
-                  const current = data.settings!.presets[
-                    data.settings!.activePreset
-                  ].roles[role] as Choice | undefined;
-                  return (
-                    <tr key={role}>
-                      <th>{label}</th>
-                      <td>
-                        {role === "senior"
-                          ? fallbackLabels(data.settings!, role).join(" + ") ||
-                            "미설정"
-                          : current
-                            ? [current.runner, current.model, current.effort]
-                                .filter(Boolean)
-                                .join(" / ")
-                            : "미설정"}
-                      </td>
-                      <td>
-                        {role === "senior" ? (
-                          "없음 (등록된 시니어 전원에게 동시에 묻습니다)"
-                        ) : fallbackLabels(data.settings!, role).length ? (
-                          <ol>
-                            {fallbackLabels(data.settings!, role).map(
-                              (text, i) => (
-                                <li key={i}>{text}</li>
-                              ),
-                            )}
-                          </ol>
-                        ) : (
-                          "없음"
-                        )}
-                      </td>
-                      <td>
-                        <code>{data.commands[role]}</code>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <RunnerSummary data={data} />
           <CompareMode settings={data.settings} />
           {!readOnly && (
             <>

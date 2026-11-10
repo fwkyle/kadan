@@ -125,7 +125,7 @@ export default function Detail({ card, url }: { card: string; url: URL }) {
             {data.row.board || data.row.repo} · 버전 {data.revision}
           </div>
           <h2>{data.title}</h2>
-          <Health row={data.row} />
+          <Health row={data.row} />{data.row.difficulty === "hard" && <> <span className="kb-mark">어려움</span></>}
           <p>{data.row.healthReason}</p>
           <Freshness collectedAt={data.collectedAt} {...resource} footer={false} />
           {data.reviewFlow && <ReviewFlow key={data.reviewFlow.id} flow={data.reviewFlow} selected={data.key} />}

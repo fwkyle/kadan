@@ -38,6 +38,7 @@ export type Row = {
   flowTitle?: string;
   flowPhase?: string;
   rallyStep?: string;
+  difficulty?: 'hard' | null; // hard인 카드만 값이 온다
   turnLabel?: string;
   turnReason?: string;
   parentWorkKey?: string;

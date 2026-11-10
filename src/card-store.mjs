@@ -8,7 +8,8 @@ import { effectiveCardRole } from './handover-state.mjs';
 import { leaseShaFor } from './review-sha.mjs';
 // 카드 센터가 이력으로 판정을 바꾸는 상태: 전환 시각(ready·draft·assigned)과 완료 뒤 변경(assigned·ready).
 const HISTORY_STATUSES = new Set(['assigned','ready','draft']);
-const CLOSED_STATUSES=['done','cancelled','superseded','archived'];
+// 난이도 변경을 막는 닫힌 상태. 보류(archived)는 닫힌 것이 아니라 되살릴 수 있는 상태라 뺀다(docs/card-center.md).
+const CLOSED_STATUSES=['done','cancelled','superseded'];
 export const DIFFICULTY_COORDINATION='조율(coordination) 카드에는 난이도를 둘 수 없다 — 작업자 단계 실행 카드에만 뜻이 있다';
 // 난이도 값 검사. 돌려주는 값은 'hard' 또는 null(보통). undefined·null·normal은 칸이 없는 것과 같다.
 export function checkDifficulty(value){

@@ -30,7 +30,7 @@ import { sidebarRepos, repoOfRow, repoOfDecision, answeredMergesToday, alertsOfR
 
 // 현황·전략 맵 화면이 읽지 않는 행 칸(gui/src/pages/Status.tsx·StrategyMap.tsx·stopped.ts·strategy-map.ts 기준, 2026-10-14 조사).
 // 업무 목록·상세는 자기 주소(workspace·detail)에서 이 칸을 받는다. ?super= 응답은 pick으로 따로 고르므로 영향이 없다.
-const UNUSED_ROW_FIELDS = new Set("workKey workType originalTitle stored reportAt modelTitle scope turnReason turnSource flowTitle rallyStep parentWorkKey workMs workBasis waitMs closeMs reworks modelState reviewLabel".split(" "));
+const UNUSED_ROW_FIELDS = new Set("workKey workType originalTitle stored reportAt modelTitle scope turnReason turnSource flowTitle rallyStep difficulty parentWorkKey workMs workBasis waitMs closeMs reworks modelState reviewLabel".split(" "));
 const slimRow = (row) => Object.fromEntries(Object.entries(row).filter(([key]) => !UNUSED_ROW_FIELDS.has(key)));
 // 흐름 확인 칸은 앞 20건만 싣고 나머지는 flow-unconfirmed 주소에서 페이지로 받는다.
 export const FLOW_PREVIEW = 20;

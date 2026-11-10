@@ -56,7 +56,7 @@ export function workspaceModel(center,briefs) {
   stored:c.status,board:c.board||'',owner:c.role||'',at:c.at||null,reportAt,
    model:running.short,effort:running.effort,modelTitle:running.title,
    purpose:clip(purpose.text),flowLabel:flow.linked?flow.label:(c.workType==='coordination'?'관리·조율':''),flowPhase:flow.linked?(flow.older?`최신 ${flow.group.round}라운드 · ${flow.phase}`:flow.phase):'',flowTitle:flow.group?.title||'',
-   rallyStep:c.rallyStep||'',turnLabel:turn.label,turnOwner:turn.owner,turnReason:turn.reason,turnSource:turn.source,turnAt:turn.at,turnBy:turn.by,
+   rallyStep:c.rallyStep||'',...(c.difficulty==='hard'?{difficulty:'hard'}:{}),turnLabel:turn.label,turnOwner:turn.owner,turnReason:turn.reason,turnSource:turn.source,turnAt:turn.at,turnBy:turn.by,
    reportState,reportLabel:reportState==='unknown'?'보고 확인 불가':reportState==='none'?'보고 없음':timeLabel(reportAt),
    next:clip(c.nextAction||brief?.next||''),nextOwner:c.resolutionOwner||'',
    summary:clip(brief?.summary||''),scope:clip(c.scope),workType:c.workType||'execution',revision:c.revision};

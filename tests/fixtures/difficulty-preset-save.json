@@ -1,0 +1,45 @@
+{
+  "_설명": "어려운 일 작업자 줄: 화면 초안(gui/tests/hard-slot.test.ts)이 만드는 /runners/preset-save 본문과, 서버(tests/dashboard-difficulty.test.mjs)가 그 본문을 받아 만드는 설정을 같은 글자로 고정한다. 한쪽을 고치면 다른 쪽 시험도 함께 본다. 모델 이름은 모두 가짜.",
+  "settings": {
+    "empty": {
+      "revision": 3,
+      "activePreset": "A",
+      "presets": {"A": {"label": "시험", "roles": {"worker": {"runner": "codex", "model": "gpt-test"}, "reviewer": {"runner": "codex", "model": "claude-test"}}}}
+    },
+    "filled": {
+      "revision": 3,
+      "activePreset": "A",
+      "presets": {"A": {"label": "시험", "roles": {"worker": {"runner": "codex", "model": "gpt-test"}, "reviewer": {"runner": "codex", "model": "claude-test"}, "worker-hard": {"runner": "codex", "model": "gpt-hard"}}}}
+    }
+  },
+  "cases": [
+    {
+      "name": "건드리지 않음 — 빈 자리에서 작업자만 고침",
+      "from": "empty",
+      "edit": {"op": "set", "role": "worker", "choice": {"runner": "codex", "model": "gpt-test2"}},
+      "fields": {"preset": "A", "revision": "3", "reason": "시험", "value": "{\"label\":\"시험\",\"roles\":{\"worker\":{\"runner\":\"codex\",\"model\":\"gpt-test2\"},\"reviewer\":{\"runner\":\"codex\",\"model\":\"claude-test\"}}}"},
+      "expectHard": null
+    },
+    {
+      "name": "건드리지 않음 — 값이 있는 자리에서 작업자만 고침",
+      "from": "filled",
+      "edit": {"op": "set", "role": "worker", "choice": {"runner": "codex", "model": "gpt-test2"}},
+      "fields": {"preset": "A", "revision": "3", "reason": "시험", "value": "{\"label\":\"시험\",\"roles\":{\"worker\":{\"runner\":\"codex\",\"model\":\"gpt-test2\"},\"reviewer\":{\"runner\":\"codex\",\"model\":\"claude-test\"},\"worker-hard\":{\"runner\":\"codex\",\"model\":\"gpt-hard\"}}}"},
+      "expectHard": {"runner": "codex", "model": "gpt-hard"}
+    },
+    {
+      "name": "값을 넣음",
+      "from": "empty",
+      "edit": {"op": "set", "role": "worker-hard", "choice": {"runner": "codex", "model": "gpt-hard"}},
+      "fields": {"preset": "A", "revision": "3", "reason": "시험", "value": "{\"label\":\"시험\",\"roles\":{\"worker\":{\"runner\":\"codex\",\"model\":\"gpt-test\"},\"reviewer\":{\"runner\":\"codex\",\"model\":\"claude-test\"},\"worker-hard\":{\"runner\":\"codex\",\"model\":\"gpt-hard\"}}}"},
+      "expectHard": {"runner": "codex", "model": "gpt-hard"}
+    },
+    {
+      "name": "비움",
+      "from": "filled",
+      "edit": {"op": "clear", "role": "worker-hard"},
+      "fields": {"preset": "A", "revision": "3", "reason": "시험", "value": "{\"label\":\"시험\",\"roles\":{\"worker\":{\"runner\":\"codex\",\"model\":\"gpt-test\"},\"reviewer\":{\"runner\":\"codex\",\"model\":\"claude-test\"}}}"},
+      "expectHard": null
+    }
+  ]
+}
