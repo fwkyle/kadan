@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Module, { createRequire } from "node:module";
 
-// PR3b 나이트런 정책 양식을 실제 React 소스 서버 렌더로 확인한다(숨김·잠금·처음 상태).
+// PR3b Autopilot 정책 양식을 실제 React 소스 서버 렌더로 확인한다(숨김·잠금·처음 상태).
 // 화면 자료(useResource·save)와 이동(navigation)만 가짜로 바꾸고 RestartRole·StrategyMap·ui는 진짜 소스를 쓴다(decision-link-render와 같은 방식).
 const root = path.resolve(import.meta.dirname, "..");
 const req = createRequire(path.join(root, "package.json"));
@@ -26,13 +26,13 @@ for (const ext of [".ts", ".tsx"]) M._extensions[ext] = (module, filename) => {
   const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
   module._compile(code, filename);
 };
-const NightPolicyForm = req("./src/NightPolicyForm.tsx").default;
+const AutopilotPolicyForm = req("./src/AutopilotPolicyForm.tsx").default;
 const { AppContext } = req("./src/ui.tsx");
 const line = { github: "o/a", repo: "a", settings: { deployBranch: null, nightMerge: null }, verdict: { action: "merge", reason: "allowed" },
   effective: { deployBranch: { value: "main", from: "ontology" }, nightMerge: { value: null, from: null } } };
-const render = (context: object, nightOn: boolean | null) => renderToStaticMarkup(React.createElement(AppContext.Provider,
+const render = (context: object, autopilotOn: boolean | null) => renderToStaticMarkup(React.createElement(AppContext.Provider,
   { value: { token: "fake-token", readOnly: false, draft: () => {}, notice: () => {}, ...context } },
-  React.createElement(NightPolicyForm, { line, nightOn })));
+  React.createElement(AutopilotPolicyForm, { line, autopilotOn })));
 
 test("양식: 원격 읽기 전용이면 아무것도 그리지 않는다", () => assert.equal(render({ readOnly: true }, false), ""));
 test("양식: 처음엔 저장이 꺼져 있고 연결 문서 값 안내·지우기 안내가 보인다. 칸은 비어 있다(연결 문서 값으로 채우지 않음)", () => {
@@ -41,17 +41,17 @@ test("양식: 처음엔 저장이 꺼져 있고 연결 문서 값 안내·지우
   assert.match(html, /연결 문서 값: main/);
   assert.match(html, /<option value="" selected="">\(그대로\)<\/option>|<option value="">\(그대로\)<\/option>/);
   assert.doesNotMatch(html, /value="main"/);
-  assert.match(html, /kadan night repo o\/a --clear deployBranch\|nightMerge/);
+  assert.match(html, /kadan autopilot repo o\/a --clear deployBranch\|nightMerge/);
   assert.doesNotMatch(html, /밤 머지/);
 });
-test("양식: 나이트런 켜짐이면 지우지 않고 막아 둔 채 이유를 보인다", () => {
+test("양식: Autopilot 켜짐이면 지우지 않고 막아 둔 채 이유를 보인다", () => {
   const html = render({}, true);
-  assert.match(html, /나이트런 켜짐 동안 바꿀 수 없음/);
+  assert.match(html, /Autopilot 켜짐 동안 바꿀 수 없음/);
   assert.match(html, /disabled=""/);
 });
 
 test("양식: 저장 성공 기록이 있으면 다시 그려도 '저장했습니다 · HH:MM'이 보인다", () => {
-  const { rememberSaved, forgetSaved } = req("./src/night-form.ts");
+  const { rememberSaved, forgetSaved } = req("./src/autopilot-form.ts");
   rememberSaved("o/a", new Date(2026, 10, 4, 14, 7));
   assert.match(render({}, false), /저장했습니다 · 14:07/);
   forgetSaved("o/a");
