@@ -62,7 +62,7 @@ export function cliRestartFlags(flags) {
 }
 
 export const RESTART_USAGE = "사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>] [--model-from-settings]\n" +
-  "  --model-from-settings: 원래 모델 대신 지금 실행 모델 설정(그 역할 프로필의 활성 프리셋)의 모델·강도로, 같은 대화를 이어 연다";
+  "  --model-from-settings: 원래 모델 대신 지금 실행 모델 설정(그 역할 프로필의 활성 프리셋)의 모델·강도로, 같은 대화를 이어 연다(다른 옵션은 그대로)";
 // 값을 받지 않는 restart 전용 옵션(뒤 낱말을 값으로 먹지 않게 한다).
 export const RESTART_BOOLEANS = [MODEL_FROM_SETTINGS];
 

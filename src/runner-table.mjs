@@ -87,51 +87,49 @@ const slotMatches = (word, templateWord, mark = SENTINEL.conversation) => templa
 const slotValue = (word, templateWord, mark = SENTINEL.conversation) => word.slice(templateWord.indexOf(mark),
   word.length - (templateWord.length - templateWord.indexOf(mark) - mark.length));
 
-// 명령 낱말에서 spawn 틀의 모델·강도 자리를 찾아 값을 읽고, 그 자리를 뺀 나머지 낱말을 돌려준다.
-// 옵션 이름을 코드에 두지 않으려고 틀을 표식 값으로 채워 자리를 찾는다(tailOf와 같은 방식). 낱말 순서는 보지 않는다.
-// 값 낱말이 옵션 꼴(-로 시작)이 아니면 틀에서 그 앞에 있는 낱말(옵션 이름)과 붙어 있는 한 쌍으로만 찾는다.
-function splitModelSlots(settings, runner, words) {
+// 명령 낱말에서 spawn 틀의 한 자리(모델 또는 강도)를 찾는다. 옵션 이름을 코드에 두지 않으려고 틀을 표식 값으로 채워
+// 자리를 찾는다(tailOf와 같은 방식). 값 낱말이 옵션 꼴(-로 시작)이 아니면 틀에서 그 앞에 있는 낱말(옵션 이름)과
+// 붙어 있는 한 쌍으로만 찾는다. 첫 일치만 보지 않고 일치한 자리를 모두 돌려준다 — 몇 번 있는지는 호출자가 판정한다.
+function templateSlot(runner, template, key) {
+  const mark = SENTINEL[key];
+  const at = template.flatMap((word, i) => word.includes(mark) ? [i] : []);
+  if (!at.length) return null;
+  const word = template[at[0]];
+  if (at.length > 1 || word.split(mark).length !== 2) throw new Error(`${runner}.spawn 틀에 ${key} 자리가 여러 번 있어 자리를 정할 수 없다`);
+  const other = SENTINEL[key === 'model' ? 'effort' : 'model'];
+  if (word.includes(other)) throw new Error(`${runner}.spawn 틀의 한 낱말에 모델과 강도 자리가 함께 있어 자리를 가를 수 없다`);
+  return {word, mark, lead: !word.startsWith('-') && at[0] > 0 ? template[at[0] - 1] : null};
+}
+const slotHits = (words, slot) => words.flatMap((word, j) =>
+  slotMatches(word, slot.word, slot.mark) && (slot.lead == null || words[j - 1] === slot.lead) ? [j] : []);
+
+// restart --model-from-settings: 명령에서 모델·강도 자리의 **값만** 바꾼다(2026-11-10, PR #362 재검수 N1).
+// 실행 파일·다른 옵션과 그 값·낱말 순서·권한 옵션의 있고 없음은 건드리지 않으므로 구조상 바뀔 수 없다.
+// - 모델 자리는 정확히 1번, 찾은 값이 expectModel(시작 기록에서 읽은 모델)과 같아야 한다. 아니면 자리를 잘못 짚은 것일 수 있어 거절한다.
+// - 강도 자리는 0번 또는 1번. effort 값이 있고 자리가 있으면 값을 바꾸고, 자리가 없으면 틀의 강도 낱말을 모델 자리 바로 뒤에 넣는다
+//   (틀에 강도 자리가 없는 실행기는 넣지 않는다). effort 값이 없으면 옛 강도 자리는 그대로 둔다.
+// 돌려주는 값: {command, previous: {model, effort(없으면 null)}}.
+export function swapModelSlots(settings, runner, command, {model, effort, expectModel}) {
+  const words = commandWords(command);
   const template = commandWords(fillTemplate(runnerTemplate(settings, runner, 'spawn'),
     {model: SENTINEL.model, effort: SENTINEL.effort, conversation: SENTINEL.conversation, prompt: 'P', cwd: '/'}));
-  if (!template) throw new Error(`${runner}.spawn 틀을 낱말로 읽을 수 없다`);
-  const rest = [...words], found = {};
-  template.forEach((templateWord, i) => {
-    const keys = ['model', 'effort'].filter(key => templateWord.includes(SENTINEL[key]));
-    if (!keys.length) return;
-    if (keys.length > 1) throw new Error(`${runner}.spawn 틀의 한 낱말에 모델과 강도 자리가 함께 있어 자리를 가를 수 없다`);
-    const [key] = keys, mark = SENTINEL[key];
-    const lead = !templateWord.startsWith('-') && i > 0 ? template[i - 1] : null;
-    const at = rest.findIndex((word, j) => slotMatches(word, templateWord, mark) && (lead == null || rest[j - 1] === lead));
-    if (at < 0) return;
-    found[key] = slotValue(rest[at], templateWord, mark);
-    rest.splice(lead == null ? at : at - 1, lead == null ? 1 : 2);
-  });
-  return {found, rest};
-}
-
-const ENV_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const executableAt = words => words.findIndex(word => !ENV_WORD.test(word));
-
-// restart --model-from-settings: 옛 명령을 설정 명령으로 바꿀 때 조용히 사라질 낱말(leftover)과 조용히 새로 붙을 낱말(added),
-// 옛 모델·강도 값을 돌려준다. 양쪽을 다 본다 — 설정 명령에만 있는 권한 옵션이 모델을 바꾸면서 붙으면 안 된다(PR #362 검수 F1).
-// 모델·강도 자리는 양쪽에서 먼저 빼므로, 옛 명령에 없던 강도 자리가 설정 때문에 생기는 것(또는 그 반대)은 차이로 세지 않는다.
-// oldWords·newWords는 대화 꼬리와 카단이 붙이는 인자(인라인 화면·정지 훅 설정)를 뗀 낱말이다.
-// 실행 파일은 경로만 다르면 같은 것으로 본다(launchIdentityOf·matchesAiProcess가 읽는 방식). 이름이 다르면 남는 낱말이다.
-export function modelSwapLeftover(settings, runner, oldWords, newWords) {
-  const old = splitModelSlots(settings, runner, oldWords), next = splitModelSlots(settings, runner, newWords);
-  const leftover = old.rest, kept = next.rest;
-  const oldExec = executableAt(leftover), newExec = executableAt(kept);
-  if (oldExec >= 0 && newExec >= 0 && leftover[oldExec].split('/').pop() === kept[newExec].split('/').pop()) {
-    leftover.splice(oldExec, 1);
-    kept.splice(newExec, 1);
-  }
-  const added = [];
-  for (const word of kept) {
-    const at = leftover.indexOf(word);
-    if (at >= 0) leftover.splice(at, 1);
-    else added.push(word);
-  }
-  return {previous: old.found, leftover, added};
+  if (!words?.length || !template) throw new Error(`명령 또는 ${runner}.spawn 틀을 낱말로 읽을 수 없다`);
+  const modelSlot = templateSlot(runner, template, 'model'), effortSlot = templateSlot(runner, template, 'effort');
+  if (!modelSlot) throw new Error(`${runner}.spawn 틀에 {model} 자리가 없다`);
+  const modelAt = slotHits(words, modelSlot), effortAt = effortSlot ? slotHits(words, effortSlot) : [];
+  if (modelAt.length !== 1)
+    throw new Error(`마지막 시작 명령에서 모델 자리를 ${modelAt.length}번 찾았다(정확히 1번이어야 한다) — 설정 틀과 다른 꼴이라 모델을 바꾸지 않는다`);
+  if (effortAt.length > 1) throw new Error(`마지막 시작 명령에서 강도 자리를 ${effortAt.length}번 찾았다 — 어느 것을 바꿀지 정할 수 없다`);
+  const previous = {model: slotValue(words[modelAt[0]], modelSlot.word, modelSlot.mark),
+    effort: effortAt.length ? slotValue(words[effortAt[0]], effortSlot.word, effortSlot.mark) : null};
+  if (previous.model !== expectModel)
+    throw new Error(`모델 자리에서 읽은 값(${previous.model})이 시작 기록의 모델(${expectModel})과 다르다 — 자리를 잘못 짚었을 수 있어 바꾸지 않는다`);
+  const next = [...words];
+  next[modelAt[0]] = modelSlot.word.replace(modelSlot.mark, model);
+  if (effort && effortAt.length) next[effortAt[0]] = effortSlot.word.replace(effortSlot.mark, effort);
+  else if (effort && effortSlot)
+    next.splice(modelAt[0] + 1, 0, ...(effortSlot.lead == null ? [] : [effortSlot.lead]), effortSlot.word.replace(effortSlot.mark, effort));
+  return {command: next.map(shellWord).join(' '), previous};
 }
 
 // 마지막 시작 명령에서 대화 인자만 바꿔 다시 연다: 꼬리가 이미 붙어 있으면(이전 restart) 떼고, 새 ID로 붙인다.

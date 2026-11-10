@@ -8,14 +8,13 @@
 // 순서가 안전의 전부다: 거절할 수 있는 모든 확인(대화 ID·저장 여부·명령 재조립·실행 중 보호)을 기존 세션을 끄기 *전에* 끝낸다.
 import fs from 'node:fs';
 import {startDigest, withRecoveryLock, checkpointSecretary, resumeSecretary} from './secretary-resume.mjs';
-import {commandWords, launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
+import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
 import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
-import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec, resumeTail,
-  modelSwapLeftover} from './runner-table.mjs';
+import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec, swapModelSlots} from './runner-table.mjs';
 import {launchFor} from './runner-settings.mjs';
-import {withInlineScreen, INLINE_FLAG} from './inline-screen.mjs';
-import {withStopHook, wordsWithoutStopHook} from './stop-hook-settings.mjs';
+import {withInlineScreen} from './inline-screen.mjs';
+import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
 import {sessionOwner, assertSessionOwner} from './session-ownership.mjs';
 
@@ -153,13 +152,12 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
     readJson: deps.readJson, processStartedAt: deps.processStartedAt,
     tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
-  // --model-from-settings면 바탕 명령만 설정 명령으로 바꾼다. 위 프로세스·대화 찾기는 옛 모델 기준(프로세스 인자는 옛 명령 그대로),
-  // 아래 다시 만든 명령의 확인은 새 모델 기준이다.
+  // --model-from-settings면 그 명령에서 모델·강도 자리의 값만 설정값으로 바꾼다(다른 옵션·순서·실행 파일은 옛 그대로).
+  // 위 프로세스·대화 찾기는 옛 모델 기준(프로세스 인자는 옛 명령 그대로), 아래 다시 만든 명령의 확인은 새 모델 기준이다.
   const kept = rebuildResumeCommand(settings, harness, start.cmd, conversation);
   const swap = launch ? settingsSwap({settings, harness, model, launch, kept}) : null;
   const expectedModel = swap?.changed ? launch.model : model;
-  const rebuilt = swap?.changed ? rebuildResumeCommand(settings, harness, launch.cmd, conversation) : kept;
-  const command = withStopHook(withInlineScreen(rebuilt));
+  const command = withStopHook(withInlineScreen(swap?.changed ? swap.command : kept));
   const again = launchIdentityOf(command), mode = conversationOf(command);
   if (!again.ok || again.harness !== harness || again.model !== expectedModel)
     fail(swap?.changed ? '다시 만든 명령의 실행기·모델이 설정값과 다르다' : '다시 만든 명령의 실행기·모델이 원본과 다르다');
@@ -186,10 +184,9 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       cmd: command, cwd: start.cwd}),
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
-    // 설정에서 온 재시작: kadan start --profile의 설정 칸과 같은 이름으로 남겨 발령 기록·발령 경계가 그대로 읽는다.
-    // 모델·강도가 이미 같아 옛 명령을 유지했는데 다른 옵션이 설정 명령과 다르면 설정 명령 그대로가 아니라 launchSource를 적지 않는다.
+    // 설정에서 값을 가져온 재시작: 설정 칸은 kadan start --profile과 같은 이름으로 남긴다. launchSource는 적지 않는다 —
+    // 명령이 설정 틀 그대로가 아니라 옛 명령에서 모델·강도 값만 바꾼 것이기 때문이다.
     ...(swap ? {
-      ...(swap.differs ? {} : {launchSource: 'settings'}),
       modelFromSettings: true, settingsRevision: launch.revision, settingsPreset: launch.preset,
       runnerChoice: {runner: launch.runner, model: launch.model, ...(launch.effort ? {effort: launch.effort} : {})},
       ...(swap.previousModel ? {previousModel: swap.previousModel} : {}),
@@ -206,7 +203,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       previousModel: model, previousEffort: swap.oldEffort, revision: launch.revision, preset: launch.preset}} : {})};
 }
 
-// --model-from-settings의 바탕 명령: 마지막 start의 프로필 + 지금 활성 프리셋(kadan start --profile이 띄우는 것과 같은 명령).
+// --model-from-settings가 쓸 설정값: 마지막 start의 프로필 + 지금 활성 프리셋의 모델·강도. 설정 명령(cmd)은 실행기 확인에만 쓴다.
 // 프로필을 추측하지 않고, 대화를 이어 열 수 없는 실행기 교체와 비교 보고서 귀속이 바뀌는 비교 모드 세션은 거절한다.
 function settingsLaunch({start, settings, harness}) {
   const option = `--${MODEL_FROM_SETTINGS}`;
@@ -220,50 +217,15 @@ function settingsLaunch({start, settings, harness}) {
   if (!want.ok) fail(`설정 명령에서 등록 실행기·모델을 읽지 못했다(${want.reason})`);
   if (want.harness !== harness)
     fail(`설정의 ${profile} 실행기(${want.harness})가 이 역할의 실행기(${harness})와 다르다 — 실행기가 바뀌면 같은 대화를 이어 열 수 없다`);
-  return {...launch, model: want.model};
+  return launch;
 }
 
-// 옛 명령을 설정 명령으로 바꿔도 되는지 본다. 모델·강도 자리를 빼고 양쪽을 대조해, 옛 명령에만 있는 낱말(조용히 버려짐)이나
-// 설정 명령에만 있는 낱말(조용히 붙음 — 권한 옵션 등)이 하나라도 있으면 거절한다. kept는 옛 명령에 현재 대화 꼬리를 붙인
-// 평소 restart 명령이다. 모델·강도가 이미 설정과 같으면 옛 명령을 그대로 쓰므로 버려지거나 붙는 낱말이 없다. 그때는 거절하지 않는다.
+// kept(옛 명령에 현재 대화 꼬리를 붙인 평소 restart 명령)에서 모델·강도 자리의 값만 설정값으로 바꾼다.
+// 설정에 강도 값이 없으면 강도는 비교·교체 대상이 아니다. 모델·강도가 이미 같으면 kept를 그대로 쓴다(changed false).
 function settingsSwap({settings, harness, model, launch, kept}) {
-  const strip = words => wordsWithoutStopHook(words.filter(word => word !== INLINE_FLAG));
-  const oldWords = strip(commandWords(kept).slice(0, -resumeTail(settings, harness).length));
-  const {previous, leftover, added} = modelSwapLeftover(settings, harness, oldWords, strip(commandWords(launch.cmd)));
-  const oldEffort = previous.effort ?? null, newEffort = launch.effort ?? null;
-  const changed = launch.model !== model || oldEffort !== newEffort;
-  const differs = leftover.length + added.length > 0;
-  if (changed && differs) {
-    const sides = [added.length ? `설정 명령에만 있는 옵션: ${added.join(' ')}` : null,
-      leftover.length ? `옛 명령에만 있는 옵션: ${leftover.join(' ')}` : null].filter(Boolean).join(' / ');
-    fail(`${sides} — 권한·옵션이 달라 설정 명령으로 바꾸지 않는다(설정 명령: ${launch.cmd})`);
-  }
-  return {changed, oldEffort, differs, previousModel: launch.model !== model ? model : null,
-    previousEffort: oldEffort !== newEffort ? oldEffort : null};
-}
-
-// 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
-function restartSecretary({home, role, session, floor, force, reason, expectPid, deps}) {
-  // 확인·체크포인트·끄기는 잠금 안에서, 다시 열기는 resumeSecretary의 잠금 안에서 한다(둘 사이에 kadan up이 끼어들어도 한 번만 열린다).
-  const {pending, previous} = withRecoveryLock(home, session, () => {
-    const entries = deps.read();
-    const start = ensureReady({role, session, floor, entries, deps, expectPid});
-    const generation = restartGeneration(entries, role);
-    const open = guardRunning({role, entries, deps});
-    const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
-    // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
-    if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
-    // 비서도 같은 안전 지점 확인을 같은 자리(stopForRestart 안, floor.stop 바로 앞)에서 한다 — confirmIdleBeforeStop은
-    // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
-    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
-      confirm: force ? null : () => confirmBeforeStop(session, deps, false)});
-    return {pending: open, previous: startDigest(start)};
-  });
-  // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
-  const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
-    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
-  if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
-  const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
-  return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,
-    model: latest?.model ?? null, panePid: latest?.panePid ?? null, forced: force, pending, window: latest?.window ?? 'hidden'};
+  const effort = launch.effort || null;
+  const {command, previous} = swapModelSlots(settings, harness, kept, {model: launch.model, effort, expectModel: model});
+  const effortChanged = effort != null && previous.effort !== effort;
+  return {changed: launch.model !== model || effortChanged, command, oldEffort: previous.effort,
+    previousModel: launch.model !== model ? model : null, previousEffort: effortChanged ? previous.effort : null};
 }

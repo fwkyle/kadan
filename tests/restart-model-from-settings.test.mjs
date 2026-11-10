@@ -1,4 +1,5 @@
 // kadan restart --model-from-settings: 마지막 start의 프로필과 지금 활성 프리셋 값으로 모델·강도만 바꿔 같은 대화를 이어 연다.
+// 옛 명령에서 모델·강도 자리의 값만 바꾼다. 실행 파일·다른 옵션·낱말 순서는 옛 그대로다(PR #362 재검수 N1 뒤 설계).
 // 가짜 바닥·가짜 프로세스만 쓴다(실제 tmux·실행기 없음). 설정도 시험용 가짜 값이다.
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
@@ -9,7 +10,7 @@ import path from 'node:path';
 import {restartRole} from '../src/restart.mjs';
 import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
 import {inspectCardSendIdentity} from '../src/ai-identity.mjs';
-import {settingsWith} from './helpers/runner-table.mjs';
+import {TABLE, settingsWith} from './helpers/runner-table.mjs';
 
 const ID = '0197aaaa-1111-4222-8333-444455556666';
 const OLD = 'claude --model claude-haiku-5-5 --effort low --dangerously-skip-permissions';
@@ -61,7 +62,8 @@ test('옵션 + 설정 모델이 다름: 새 명령의 모델·강도가 설정�
   assert.equal(start.model, 'claude-sonnet-5-5'); assert.equal(start.harness, 'claude');
   assert.equal(start.conversationMode, 'resume'); assert.equal(start.restartConversation, ID);
   assert.equal(start.roleProfile, 'worker');
-  assert.equal(start.launchSource, 'settings'); assert.equal(start.modelFromSettings, true);
+  // launchSource는 적지 않는다: 명령이 설정 틀 그대로가 아니라 옛 명령에서 값만 바꾼 것이다.
+  assert.equal(start.launchSource, undefined); assert.equal(start.modelFromSettings, true);
   assert.equal(start.settingsRevision, 7); assert.equal(start.settingsPreset, 'B');
   assert.deepEqual(start.runnerChoice, {runner: 'claude', model: 'claude-sonnet-5-5', effort: 'high'});
   assert.equal(start.previousModel, 'claude-haiku-5-5'); assert.equal(start.previousEffort, 'low');
@@ -98,13 +100,13 @@ test('codex: 옵션 이름·값이 한 낱말로 붙는 강도 자리도 설정 
   assert.equal(start.previousModel, 'gpt-6-sol'); assert.equal(start.previousEffort, 'low');
 });
 
-test('두 번째 restart: 이전 restart가 붙인 resume 꼬리가 있어도 설정 명령으로 바꾼다', () => {
+test('두 번째 restart: 이전 restart가 붙인 resume 꼬리가 있어도 모델·강도를 바꾼다', () => {
   const f = fixture({cmd: `${OLD} --resume ${ID}`});
   f.run();
   assert.equal(f.entries.at(-1).cmd, `${NEW} --resume ${ID}`);
 });
 
-test('거절은 모두 끄기 전이다: 프로필 없음·설정 값 없음·실행기 다름·비교 모드·남는 옵션·잘못된 옵션 값', () => {
+test('거절은 모두 끄기 전이다: 프로필 없음·설정 값 없음·실행기 다름·비교 모드·자리를 정할 수 없음·잘못된 옵션 값', () => {
   const codexWorker = settingsOf({worker: {runner: 'codex', model: 'gpt-6-1-sol', effort: 'high'}});
   const cases = [
     ['프로필 없음', fixture({profile: null}), undefined, /시작 기록에 프로필이 없어/],
@@ -112,10 +114,13 @@ test('거절은 모두 끄기 전이다: 프로필 없음·설정 값 없음·�
     ['설정 대상이 아닌 프로필', fixture({profile: 'secretary'}), undefined, /역할 값이 없다/],
     ['실행기 다름', fixture(), codexWorker, /실행기\(codex\)가 이 역할의 실행기\(claude\)와 다르다/],
     ['비교 모드 start', fixture({extra: {compareMode: true, settingsPreset: 'B', pickId: 'p1'}}), undefined, /비교 모드/],
-    ['남는 옵션', fixture({cmd: `${OLD} --add-dir /x`}), undefined, /옛 명령에만 있는 옵션: --add-dir \/x/],
     ['다른 대화 지정', fixture({cmd: `${OLD} --continue`}), undefined, /대화 지정/],
-    ['다른 이름의 실행 파일', fixture({cmd: OLD.replace(/^claude/, '/opt/bin/kadan-claude'), processArgs: OLD}), undefined,
-      /설정 명령에만 있는 옵션: claude \/ 옛 명령에만 있는 옵션: \/opt\/bin\/kadan-claude/],
+    // 모델 자리는 정확히 1번, 읽은 값이 시작 기록의 모델과 같아야 한다. 강도 자리는 많아야 1번이다.
+    ['모델 자리 0번(틀과 다른 꼴)', fixture({cmd: 'claude -m claude-haiku-5-5 --effort low'}), undefined, /모델 자리를 0번 찾았다/],
+    ['모델 자리 2번', fixture({cmd: `claude --model claude-haiku-5-5 ${OLD.replace(/^claude /, '')}`}), undefined, /모델 자리를 2번 찾았다/],
+    ['읽은 값이 시작 기록의 모델과 다름', fixture({cmd: 'claude --model other-model --effort low -m claude-haiku-5-5'}), undefined,
+      /읽은 값\(other-model\)이 시작 기록의 모델\(claude-haiku-5-5\)과 다르다/],
+    ['강도 자리 2번', fixture({cmd: `${OLD} --effort high`}), undefined, /강도 자리를 2번 찾았다/],
   ];
   for (const [name, f, settings, pattern] of cases) {
     assert.throws(() => f.run(OPTION, settings ?? settingsOf()), pattern, name);
@@ -135,13 +140,15 @@ test('거절: 비서와 계정 전환 재시작에는 쓸 수 없다(끄기 0회
   assert.deepEqual([secretary.log, refresh.log], [[], []]);
 });
 
-test('통과: 손으로 되살린 꼴(절대경로 실행 파일·카단 정지 훅 설정·중간 --resume·순서 다름)', () => {
+test('손으로 되살린 꼴(절대경로 실행 파일·카단 정지 훅 설정·중간 --resume·순서 다름): 순서·실행 파일은 그대로, 모델·강도만 바뀐다', () => {
   const hand = `/opt/tools/bin/claude --settings '/h/.kadan/stop-hook/claude-settings.json' --resume ${ID} `
     + '--dangerously-skip-permissions --model claude-haiku-5-5 --effort low';
   const f = fixture({cmd: hand});
   f.run();
   const start = f.entries.at(-1);
-  assert.equal(start.cmd, `${NEW} --resume ${ID}`);
+  // 중간의 --resume만 평소 restart처럼 끝으로 옮겨진다. 나머지 낱말은 옛 순서 그대로다.
+  assert.equal(start.cmd, '/opt/tools/bin/claude --settings /h/.kadan/stop-hook/claude-settings.json --dangerously-skip-permissions '
+    + `--model claude-sonnet-5-5 --effort high --resume ${ID}`);
   assert.equal(start.previousModel, 'claude-haiku-5-5'); assert.equal(start.previousEffort, 'low');
 });
 
@@ -153,7 +160,7 @@ test('설정 모델·강도가 옛 것과 같으면 평소 restart와 같은 명
   const start = f.entries.at(-1);
   assert.equal(start.cmd, plain.entries.at(-1).cmd);
   assert.equal(start.previousModel, undefined); assert.equal(start.previousEffort, undefined);
-  assert.equal(start.settingsRevision, 7); assert.equal(start.launchSource, 'settings');
+  assert.equal(start.settingsRevision, 7); assert.equal(start.launchSource, undefined);
   assert.equal(receipt.modelFromSettings.changed, false);
 });
 
@@ -197,7 +204,7 @@ test('명령줄: --model-from-settings는 값을 먹지 않는 옵션이고 사�
   assert.match(RESTART_USAGE, /--model-from-settings/);
 });
 
-test('설정과 같고 손으로 준 옵션이 있으면 거절하지 않고 옛 명령을 유지한다(버려지는 낱말 없음) — launchSource는 적지 않는다', () => {
+test('설정과 같고 손으로 준 옵션이 있으면 옛 명령을 그대로 유지한다', () => {
   const same = settingsOf({worker: {runner: 'claude', model: 'claude-haiku-5-5', effort: 'low'}});
   const f = fixture({cmd: `${OLD} --add-dir /x`});
   const receipt = f.run(OPTION, same);
@@ -207,32 +214,50 @@ test('설정과 같고 손으로 준 옵션이 있으면 거절하지 않고 옛
   assert.equal(start.launchSource, undefined); assert.equal(start.modelFromSettings, true); assert.equal(start.settingsRevision, 7);
 });
 
-// PR #362 검수 F1: 설정 명령에만 있는 옵션(권한 건너뛰기 등)이 모델을 바꾸면서 조용히 붙으면 안 된다.
+// PR #362 검수 F1·재검수 N1 뒤의 기대. 앞 라운드에는 "설정 명령에만 있는 옵션·옛 명령에만 있는 옵션·다른 이름의 실행 파일"을
+// 낱말 묶음 대조로 거절했다. 그 대조는 어느 값이 어느 옵션에 붙었는지 보지 못했다(N1). 지금은 옛 명령에서 모델·강도 값만 바꾸므로
+// 다른 옵션은 구조상 바뀌지 않는다. 그래서 아래 경우는 거절이 아니라 통과이고, 옵션이 옛 그대로인지를 단언한다.
 const BARE = 'claude --model claude-haiku-5-5 --effort low';
-test('양방향 대조: 설정 명령에만 있는 옵션이 있으면 끄기 전에 거절하고, 어느 쪽에만 있는지 보여 준다', () => {
-  const added = fixture({cmd: BARE});
-  assert.throws(() => added.run(), error => {
-    assert.match(error.message, /설정 명령에만 있는 옵션: --dangerously-skip-permissions/);
-    assert.doesNotMatch(error.message, /옛 명령에만 있는 옵션/);
-    assert.match(error.message, /권한·옵션이 달라 설정 명령으로 바꾸지 않는다/);
-    return true;
-  });
-  const both = fixture({cmd: `${BARE} --add-dir /x`});
-  assert.throws(() => both.run(),
-    /설정 명령에만 있는 옵션: --dangerously-skip-permissions \/ 옛 명령에만 있는 옵션: --add-dir \/x/);
-  const removed = fixture({cmd: `${OLD} --add-dir /x`});
-  assert.throws(() => removed.run(), error => {
-    assert.match(error.message, /옛 명령에만 있는 옵션: --add-dir \/x/);
-    assert.doesNotMatch(error.message, /설정 명령에만 있는 옵션/);
-    return true;
-  });
-  for (const f of [added, both, removed]) {
-    assert.deepEqual(f.log, []);
-    assert.equal(f.entries.length, 1);
-  }
+const SWAPPED = 'claude --model claude-sonnet-5-5 --effort high';
+test('권한 옵션이 없던 역할에는 설정 틀에 그 옵션이 있어도 붙지 않는다(모델·강도만 바뀐다)', () => {
+  const f = fixture({cmd: BARE});
+  f.run();
+  assert.equal(f.entries.at(-1).cmd, `${SWAPPED} --resume ${ID}`);
 });
 
-test('양방향 대조: 설정과 모델·강도가 같으면 옛 명령을 그대로 써서 설정 명령에만 있는 옵션이 붙지 않는다', () => {
+test('손으로 준 옵션은 그대로 남고 모델·강도만 바뀐다', () => {
+  const f = fixture({cmd: `${OLD} --add-dir /x`});
+  f.run();
+  assert.equal(f.entries.at(-1).cmd, `${NEW} --add-dir /x --resume ${ID}`);
+  const bare = fixture({cmd: `${BARE} --add-dir /x`});
+  bare.run();
+  assert.equal(bare.entries.at(-1).cmd, `${SWAPPED} --add-dir /x --resume ${ID}`);
+});
+
+test('래퍼 실행 파일은 래퍼 그대로다', () => {
+  const f = fixture({cmd: OLD.replace(/^claude/, '/opt/bin/kadan-claude'), processArgs: OLD});
+  f.run();
+  assert.equal(f.entries.at(-1).cmd, `${NEW.replace(/^claude/, '/opt/bin/kadan-claude')} --resume ${ID}`);
+});
+
+// 재검수 N1: 옵션에 붙은 값이 설정 틀과 서로 뒤바뀐 꼴. 낱말 묶음으로는 차이가 없어 설정 명령(값이 뒤바뀐 것)으로 다시 띄웠다.
+test('N1: 다른 옵션의 값이 설정 틀과 달라도 옛 값 그대로다(허용·금지 도구가 뒤바뀌지 않는다)', () => {
+  const spawn = 'claude --model {model} --effort {effort} --allowedTools Edit --disallowedTools Read';
+  const settings = {...settingsOf(), runners: {...structuredClone(TABLE),
+    claude: {...structuredClone(TABLE.claude), spawn, resume: `${spawn} --resume {conversation}`, fork: undefined}}};
+  const f = fixture({cmd: `${BARE} --allowedTools Read --disallowedTools Edit`});
+  f.run(OPTION, settings);
+  assert.equal(f.entries.at(-1).cmd, `${SWAPPED} --allowedTools Read --disallowedTools Edit --resume ${ID}`);
+});
+
+test('codex: 모델과 강도 값만 바뀌고 다른 -c 이름=값은 그대로다', () => {
+  const f = fixture({cmd: `${OLD_CODEX} -c sandbox_mode=read-only`, openFiles: ROLLOUT});
+  f.run(OPTION, settingsOf({worker: {runner: 'codex', model: 'gpt-6-1-sol', effort: 'high'}}));
+  assert.equal(f.entries.at(-1).cmd,
+    `codex -p lite --model gpt-6-1-sol -c model_reasoning_effort=high -c sandbox_mode=read-only resume ${ID} --no-alt-screen`);
+});
+
+test('설정과 모델·강도가 같으면 옛 명령 그대로다(설정 틀에만 있는 옵션이 붙지 않는다)', () => {
   const same = settingsOf({worker: {runner: 'claude', model: 'claude-haiku-5-5', effort: 'low'}});
   const f = fixture({cmd: BARE});
   f.run(OPTION, same);
@@ -241,12 +266,22 @@ test('양방향 대조: 설정과 모델·강도가 같으면 옛 명령을 그�
   assert.equal(start.launchSource, undefined); assert.equal(start.modelFromSettings, true);
 });
 
-test('양방향 대조: 강도 자리만 새로 생기는 것은 허용한다(옛 명령에 강도 없음 → 설정 강도)', () => {
-  const f = fixture({cmd: 'claude --model claude-haiku-5-5 --dangerously-skip-permissions'});
-  f.run();
-  const start = f.entries.at(-1);
-  assert.equal(start.cmd, `${NEW} --resume ${ID}`);
+test('강도 자리: 옛 명령에 없으면 모델 자리 뒤에 넣고, 설정에 강도가 없으면 옛 강도를 두고, 틀에 강도 자리가 없으면 넣지 않는다', () => {
+  const inserted = fixture({cmd: 'claude --dangerously-skip-permissions --model claude-haiku-5-5 --add-dir /x'});
+  inserted.run();
+  const start = inserted.entries.at(-1);
+  assert.equal(start.cmd, `claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high --add-dir /x --resume ${ID}`);
   assert.equal(start.previousModel, 'claude-haiku-5-5'); assert.equal(start.previousEffort, undefined);
+
+  const noEffort = fixture();
+  noEffort.run(OPTION, settingsOf({worker: {runner: 'claude', model: 'claude-sonnet-5-5'}}));
+  assert.equal(noEffort.entries.at(-1).cmd, `claude --model claude-sonnet-5-5 --effort low --dangerously-skip-permissions --resume ${ID}`);
+  assert.equal(noEffort.entries.at(-1).previousEffort, undefined);
+
+  const agy = fixture({cmd: 'agy --model gemini-old --dangerously-skip-permissions',
+    openFiles: [`/h/.gemini/antigravity-cli/conversations/${ID}.db`]});
+  agy.run(OPTION, settingsOf({worker: {runner: 'agy', model: 'gemini-new', effort: 'high'}}));
+  assert.equal(agy.entries.at(-1).cmd, `agy --model gemini-new --dangerously-skip-permissions --conversation ${ID}`);
 });
 
 // PR #362 검수 F2: 역할 말고 낱말이 더 있으면 역할 선택·세션 조회 전에 사용법 오류로 끝난다. 실제 명령줄 경로(cmdRestart)를 지난다.
