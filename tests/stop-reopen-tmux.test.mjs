@@ -9,6 +9,9 @@ import {tmuxFloor, tmux} from '../src/floor-tmux.mjs';
 import {settingsWith} from './helpers/runner-table.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
 import {reopenRole} from '../src/reopen.mjs';
+import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
+import {watchRoleState} from '../src/watch-role-facts.mjs';
+import {collectRoles} from '../src/watch-roles.mjs';
 
 // 실제 tmux·ps·lsof·CLI로 "끌 때 대화 번호 남기기 → 그 번호로 다시 열기" 왕복을 확인한다.
 // 실행기는 가짜 Node 스크립트이고(실제 AI 없음), 격리 홈·격리 tmux 서버만 쓴다(restart-tmux.test.mjs와 같은 틀).
@@ -264,4 +267,42 @@ test('실제 CLI: 미확정 카드가 남은 역할을 reopen하면 stderr에 �
   assert.doesNotMatch(reopened.stdout, /미확정/);
   const start = of('kadan-pendcase').findLast(e => e.kind === 'start');
   assert.equal(start.reopenOf, startDigest(of('kadan-pendcase').find(e => e.kind === 'start')));
+});
+
+// 살아 있는 세션에 `kadan start <역할>`을 한 번 더 치면 명령 없는 start가 하나 더 기록된다(같은 pane PID).
+// reopen은 reopenOf에 "stop 직전 그 세션의 마지막 start 기록"을 적고, 감시기는 자기가 아는 마지막 start와 대조해 발령을 잇는다.
+test('실제 CLI: 살아 있는 세션을 다시 연 start가 끼어 있어도 reopen 뒤 감시 발령이 이어진다(reopenOf = stop 직전 마지막 start)', {skip}, t => {
+  const s = setup(t, 'reuse');
+  const role = 'reusecase', session = `kadan-${role}`;
+  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, session, role);
+  const again = run(s.work, 'start', role, '--hidden');
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /이미 살아 있음: kadan-reusecase/);
+  appendLedger({kind: 'send', role, session, taskId: 'card-r1', bytes: 1, digest: 'r', by: 'test'});
+  assert.equal(kadan('stop', role).status, 0);
+  fs.rmSync(s.ready, {force: true});
+  const reopened = kadan('reopen', role);
+  assert.equal(reopened.status, 0, reopened.stdout + reopened.stderr);
+  assert.match(reopened.stderr, /미확정 카드 1건: card-r1 — 감시가 이어진다/);
+  const events = of(session), starts = events.filter(e => e.kind === 'start'), stop = events.find(e => e.kind === 'stop');
+  assert.equal(starts.length, 3);
+  const [launched, reused, again3] = starts;
+  assert.equal(reused.cmd, undefined, '다시 연 start에는 명령이 없다');
+  assert.equal(String(reused.panePid), String(launched.panePid), '같은 pane이다');
+  assert.equal(stop.conversation, A);
+  assert.equal(stop.conversationStart, startDigest(launched), '세대를 띄운 start의 지문은 stop에 있다');
+  assert.equal(again3.reopenOf, startDigest(reused), 'reopenOf는 stop 직전 마지막 start 기록이다');
+  assert.equal(again3.reopenConversation, A);
+  assert.equal(fs.realpathSync(again3.cwd), fs.realpathSync(s.work), '작업 폴더는 세대를 띄운 start의 것이다');
+  // 감시기가 같은 홈을 읽는다(실제 저장 상태 경로): 끄기 전에 받은 발령이 다시 연 세대에 이어진다.
+  const cards = [];
+  const reader = createWatchMailReader(s.home, null, {readCards: () => cards});
+  const entries = reader.project(reader.readEntries(), cards);
+  assert.ok(watchRoleState(entries, cards), '저장 상태 경로가 쓰였다');
+  const live = [{session, pid: String(tmuxFloor.pid(session)), alive: true}];
+  const seen = collectRoles({list: () => live, read: () => '›'}, entries, null, cards, {hookHome: s.home}).observations.get(session);
+  assert.deepEqual([...seen.completionDispatches.keys()], ['card-r1']);
+  // 대조: 원장 전체를 훑는 경로도 같다.
+  const full = collectRoles({list: () => live, read: () => '›'}, readLedger(), null, cards, {hookHome: s.home}).observations.get(session);
+  assert.deepEqual([...full.completionDispatches.keys()], ['card-r1']);
 });
