@@ -8,6 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {STATE_CHANGED_CODE} from '../src/restart.mjs';
 import {confirmIdleBeforeStop} from '../src/commands/restart.mjs';
+import {splitGhostText} from '../src/ghost-text.mjs';
 import {buildPreview, previewRow, runRefresh, formatRefreshResult, screenEnd, parseRoleList, HUMAN_ONLY_MESSAGE, formatPreview, previewJson, readAccounts, claudeLimitMatch, claudeScreenTail, scrubText} from '../src/claude-refresh.mjs';
 
 const SCREENS = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-screens.json', import.meta.url), 'utf8'));
@@ -482,6 +483,28 @@ test('끄기 직전 확인(confirmIdleBeforeStop): idle+사람 없음만 통과,
   assert.throws(() => confirmIdleBeforeStop('s', mk(IDLE, active)), /입력 중/);
   assert.throws(() => confirmIdleBeforeStop('s', mk(IDLE, new Error('x'))), /판정 불가/);
   assert.throws(() => confirmIdleBeforeStop('s', {read: () => IDLE}), /판정 불가/);
+});
+
+// 2026-11-10 사건: 쉬는 역할의 입력칸에 흐린 제안 문구만 있었는데 바닥글을 못 알아봐 "입력 대기 화면이 아님"으로 거절됐다.
+// 바닥의 read는 판정용 화면(splitGhostText의 judge)을 주므로 같은 경로로 넣는다. 줄 배치만 실물이고 글자는 지어낸 것이다.
+test('끄기 직전 확인: 새 바닥글 꼴 + 흐린 제안 문구는 통과, 사람이 친 글·응답 생성 중은 거절', () => {
+  const E = '\x1b', RULE = '─'.repeat(20), PATH = '  ~/Dev/example[main]', OPUS = '  Opus 5.5 | effort:medium | ctx:26%';
+  const MODE = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents';
+  const UPDATE = '✔ Update installed · /restart to apply', COMPACT = 'Conversation compacted (ctrl+o for the summary)';
+  const right = text => ' '.repeat(40) + text;
+  const footers = {
+    '새 모델 상태 줄': [PATH, '  Fable 5.2 | effort:high | ctx:37%', MODE],
+    '알림 줄 두 개': [PATH, OPUS, MODE, right(UPDATE), right(COMPACT)],
+    '권한 줄만': [`${MODE}   ${UPDATE}`],
+  };
+  const screen = (input, footer, body = ['⏺ ok', '']) => splitGhostText([...body, RULE, input, RULE, ...footer].join('\n')).judge;
+  const mk = text => ({read: () => text, assertHumanIdle: () => {}});
+  const ghost = `❯ ${E}[2m지어낸${E}[0m ${E}[2m제안${E}[0m ${E}[2m문구${E}[0m`;
+  for (const [name, footer] of Object.entries(footers)) {
+    assert.doesNotThrow(() => confirmIdleBeforeStop('s', mk(screen(ghost, footer))), name);
+    assert.throws(() => confirmIdleBeforeStop('s', mk(screen('❯ 사람이 친 글', footer))), /판정 불가: 입력 대기 화면이 아님/, name);
+    assert.throws(() => confirmIdleBeforeStop('s', mk(screen(ghost, footer, ['✢ Grooving… (32s · ↓ 1.7k tokens)', '']))), /working/, name);
+  }
 });
 
 test('다시 켠 뒤 화면: 안정되면 그때 읽고(ready), 30초 안에 안 되면 시간 초과 화면을 싣는다 — 이메일은 가린다', () => {
