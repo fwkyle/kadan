@@ -29,3 +29,11 @@ export function prepareOutputLog(session, home, {compressed = true, split = true
   const shell = split && compressed ? '/bin/bash -o pipefail' : '/bin/sh';
   return {manifestPath, command: `exec ${shell} -c ${shellQuote(program)}`};
 }
+
+// start 기록의 outputLog가 "그 세션을 만들 때 새로 생긴 세대 폴더"의 manifest 경로인가.
+// prepareOutputLog가 만드는 꼴(…/<만든 시각>-<UUID>/manifest.json)만 참이다. UUID가 들어가므로 세대마다 다른 값이다.
+// 세대별 폴더 방식 이전의 기록은 세션 이름으로만 정해지는 고정 경로(…/out/<세션>.log.gz)라 같은 이름의 두 세대가 같은 값을 가진다 — 거짓이다.
+const GENERATION_DIR = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isGenerationOutputLog(value) {
+  return typeof value === 'string' && path.basename(value) === 'manifest.json' && GENERATION_DIR.test(path.basename(path.dirname(value)));
+}

@@ -27,6 +27,7 @@ import { humanIdleMsFor, isStorableMailHold } from "../notification-guard.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
 import {mailFailureExitCode} from '../mail-delivery-exit.mjs';
 import {printConductorLoadHint} from '../conductor-load-hint.mjs';
+import {canReopen} from '../reopen.mjs';
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -110,7 +111,7 @@ function deliverMessage(argv, flags, command) {
   }
 
   // 전송 함수를 부르기 전에 난 실패는 위치상 안 간 것이다(KADAN_MAIL_DELIVERY_EXIT 종료 코드 판정용).
-  let receipt, turnClaim = null, entries, sendCalled = false, loadHint = () => {};
+  let receipt, turnClaim = null, entries, sendCalled = false, loadHint = () => {}, reopenHint = () => {};
   try {
     // 기존 send만 --execution의 발령 추론을 유지한다. mail은 연결 주소로만 사용하며,
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
@@ -129,6 +130,14 @@ function deliverMessage(argv, flags, command) {
     const recipient=mailContext.currentRecipient||role,session=sessionName(recipient);
     const by = resolveLedgerBy({env:process.env});
     const owner = sessionOwner(entries, session, recipient);
+    // 받는 역할이 꺼져 있고(현재 세대 시작 기록 없음) stop 기록에 다시 열 대화 번호가 있으면, 보관·실패 결과는 그대로 두고
+    // 다시 여는 명령 한 줄만 stderr에 더한다. 이미 읽은 원장 배열만 보고, 살아 있는 수신자에게는 아무 계산도 하지 않는다.
+    reopenHint = () => {
+      try {
+        if (!owner.start && canReopen(entries, session, recipient))
+          console.error(`받는 역할 ${recipient}은(는) 꺼져 있습니다 — 같은 대화로 다시 열기: kadan reopen ${recipient}`);
+      } catch { /* 안내는 선택이다 */ }
+    };
     // 바로 넣을 수 없어 보관할 수 있는 우편: 발령(--task)·--raw는 보관하지 않는다.
     const storable = taskId == null && flags.raw !== true;
     // 슈퍼감독이 일반감독에게 새 일을 맡길 때만 받는 감독의 업무 수를 stderr 마지막 줄로 보인다(답장·발령·--raw 제외).
@@ -148,6 +157,7 @@ function deliverMessage(argv, flags, command) {
       console.log(JSON.stringify({...stored, wake:'watch-required',
         note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
       loadHint();
+      reopenHint();
     };
     const expectedPid=recordedPid(owner.start);
     // 일반 우편도 현재 세대의 시작 PID가 없으면 기존 보관·감시기 안내 경로를 쓴다.
@@ -193,6 +203,7 @@ function deliverMessage(argv, flags, command) {
       throw error;
     }
   } catch (error) {
+    reopenHint();
     // 종료 코드는 기본 error.exitCode || 1이다. KADAN_MAIL_DELIVERY_EXIT=1로 부른 쪽만 전달 상태별 코드(3·4·5)를 받는다.
     die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, mailFailureExitCode(error, process.env, {beforeSend: !sendCalled}));
   }
