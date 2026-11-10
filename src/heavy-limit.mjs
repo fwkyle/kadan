@@ -9,7 +9,7 @@ import {randomUUID} from 'node:crypto';
 
 export const DEFAULT_LIMITS = {rust: 1, install: 2, build: 2};
 export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, limits: DEFAULT_LIMITS};
-export const LIMIT_USAGE = 'kadan limit run <rust|install|build> -- <명령...> | status. 종류별 동시 개수는 기본 rust 1·install 2·build 2이고 $KADAN_HOME/resource-limits.json의 limits로 바꾼다. rust는 CARGO_BUILD_JOBS=2를 붙인다(이미 지정·-j/--jobs가 있으면 그대로). 상세: docs/review-slots.md';
+export const LIMIT_USAGE = 'kadan limit run <rust|install|build> -- <명령...> | status | set conductor-works <0 이상의 정수>. 종류별 동시 개수는 기본 rust 1·install 2·build 2이고 $KADAN_HOME/resource-limits.json의 limits로 바꾼다. rust는 CARGO_BUILD_JOBS=2를 붙인다(이미 지정·-j/--jobs가 있으면 그대로). set conductor-works는 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수(기본 3, 0이면 안내 문장 끔)를 같은 파일에 적는다. 상세: docs/review-slots.md';
 const CARGO_JOBS = '2';
 
 // 설정 파일은 선택이다. 없으면 기본값을 쓴다 (2026-10-02 [kyle]: 손잡이를 늘리지 않는다).
@@ -18,6 +18,41 @@ export function readResourceConfig(home) {
   if (!fs.existsSync(file)) return DEFAULT_CONFIG;
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
   return {...DEFAULT_CONFIG, ...value, limits: {...DEFAULT_LIMITS, ...(value.limits ?? {})}};
+}
+
+// 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수. 슈퍼감독이 맡기는 순간의 안내 한 줄이 쓴다(conductor-load-hint.mjs).
+// 파일이 없거나 깨졌거나 값이 이상하면 기본값으로 읽는다: 이 값 때문에 우편 전송이 막히면 안 된다. 0은 "기준 문장 끔"이다.
+export const DEFAULT_CONDUCTOR_OPEN_WORKS = 3;
+const validThreshold = value => Number.isInteger(value) && value >= 0;
+export function readConductorOpenWorks(home) {
+  try {
+    const value = readResourceConfig(home).conductorOpenWorks;
+    return validThreshold(value) ? value : DEFAULT_CONDUCTOR_OPEN_WORKS;
+  } catch { return DEFAULT_CONDUCTOR_OPEN_WORKS; }
+}
+
+// 다른 키(모르는 키 포함)는 그대로 두고 이 키만 바꾼다. 파일이 없으면 이 키만 든 새 파일을 만든다.
+// 깨진 파일은 덮어쓰지 않고 거절한다(남이 적어 둔 값을 잃지 않게). 쓰기는 임시 파일 → rename, 0600.
+export function setConductorOpenWorks(home, raw) {
+  const value = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : raw;
+  if (!validThreshold(value) || !Number.isSafeInteger(value)) {
+    const error = new Error(`기준 개수는 0 이상의 정수만 받는다: ${raw ?? '(없음)'}`);
+    error.exitCode = 2;
+    throw error;
+  }
+  const file = path.join(home, 'resource-limits.json');
+  let current = {};
+  if (fs.existsSync(file)) {
+    try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { current = null; }
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      throw new Error(`${file}을 읽지 못해 쓰지 않았다. 파일을 고치거나 치운 뒤 다시 한다`);
+    }
+  }
+  fs.mkdirSync(home, {recursive: true});
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({...current, conductorOpenWorks: value}, null, 2) + '\n', {mode: 0o600});
+  fs.renameSync(tmp, file);
+  return value;
 }
 
 export function processAlive(pid) {
@@ -131,7 +166,11 @@ export async function limitCommand(args, {home, env = process.env}) {
   if (!action || action === '--help') return LIMIT_USAGE;
   if (action === 'status') {
     const limits = readResourceConfig(home).limits;
-    return {limits, holders: limitHolders(home)};
+    return {limits, holders: limitHolders(home), conductorOpenWorks: readConductorOpenWorks(home)};
+  }
+  if (action === 'set') {
+    if (kind !== 'conductor-works' || args.length !== 3) { const error = new Error(LIMIT_USAGE); error.exitCode = 2; throw error; }
+    return {conductorOpenWorks: setConductorOpenWorks(home, args[2])};
   }
   if (action !== 'run') throw new Error(LIMIT_USAGE);
   const split = args.indexOf('--');

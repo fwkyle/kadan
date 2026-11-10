@@ -11,6 +11,7 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 // - `window`: 하위 명령 없음(사용법 출력)·`show`만 통과. `set`·`unset`과 모르는 것은 거절.
 // - `runners`: 하위 명령 없음(사용법)·`show`·`report`·`compare show`·`--out` 없는 `export`만 통과.
 //   `set`·`runner`·`model`·`block`·`preset`·`import`·`fallback`·`favorite`·`init`·`compare on|off`·`export --out`은 거절.
+// - `limit`: `run`·`status`·사용법은 통과. `set`(기준 개수 등 기계 설정 쓰기)은 거절.
 // - `stop`: 기반 프로세스(TARGETS = 비서·대시보드·디코·watch)만 거절. 작업자·검수자 세션 종료는 감독의 정상 정리라 통과.
 // - `restart`: `--force`만 거절.
 // - `autopilot wingman`: 인자 없음(보기)만 통과. 이름 저장·`--clear`는 거절.
@@ -31,6 +32,8 @@ export function guardedReason(command, args = [], flags = {}) {
   if (command === 'stop' && TARGETS.includes(first)) return `stop ${first}`;
   if (command === 'window' && first !== undefined && first !== 'show') return `window ${first}`;
   if (command === 'runners' && !runnersIsReadOnly(args, flags)) return `runners ${first}`;
+  // `limit`: 실행(run)·보기(status)는 통과. 기계 설정을 바꾸는 `set`만 거절한다.
+  if (command === 'limit' && first === 'set') return 'limit set';
   if (command === 'autopilot' && first === 'on' && flags.level === LEVEL_FULL) return `autopilot on --level ${LEVEL_FULL}`;
   // `autopilot repo`: 인자 없음·list·show만 읽기다. 저장소 이름 뒤 값(쓰기)과 모르는 모양은 거절한다.
   if (command === 'autopilot' && first === 'repo' && ![undefined, 'list', 'show'].includes(args[1])) return `autopilot repo ${args[1]}`;
