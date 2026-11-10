@@ -709,6 +709,19 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .howto-view .prose p, .howto-view .prose li { line-height: 1.7; text-wrap: pretty; }
 .howto-view .prose li { margin: 4px 0; }
 .howto-view .prose ul, .howto-view .prose ol { padding-left: 20px; }
-@media (max-width: 799px) { .howto-view { padding: 0 14px 20px; } }
+.howto-view .dw-document-table { margin: 8px 0 12px; border: 1px solid var(--ds-color-border); border-radius: 6px; }
+.howto-view .dw-document-table table { width: 100%; border-collapse: collapse; }
+.howto-view .dw-document-table th, .howto-view .dw-document-table td { padding: 8px 10px; border-bottom: 1px solid var(--ds-color-border); text-align: left; vertical-align: top; line-height: 1.6; }
+.howto-view .dw-document-table th { background: var(--ds-color-action-soft); font-size: 12px; white-space: nowrap; }
+.howto-view .dw-document-table tr:last-child td { border-bottom: 0; }
+@media (max-width: 799px) {
+  .howto-view { padding: 0 14px 20px; }
+  .howto-view .dw-document-table thead { display: none; }
+  .howto-view .dw-document-table table, .howto-view .dw-document-table tbody, .howto-view .dw-document-table tr, .howto-view .dw-document-table td { display: block; }
+  .howto-view .dw-document-table td { border-bottom: 0; padding: 3px 10px; }
+  .howto-view .dw-document-table td:first-child { padding-top: 10px; font-weight: 600; }
+  .howto-view .dw-document-table td:last-child { padding-bottom: 10px; }
+  .howto-view .dw-document-table tr + tr { border-top: 1px solid var(--ds-color-border); }
+}
 /* 위쪽 메뉴가 아홉 개가 되어 800~900px 폭에서 이름이 글자 단위로 접혔다. 이름은 한 줄로 두고 메뉴 줄을 넘긴다. */
 @media (min-width: 800px) { .dw-top > nav { flex-wrap: wrap; min-width: 0; row-gap: 0; } .dw-top > nav a { white-space: nowrap; } }

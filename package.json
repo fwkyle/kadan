@@ -25,6 +25,7 @@
     "dev:gui": "npm --prefix gui run dev --",
     "build:gui": "npm --prefix gui run build",
     "test:gui": "npm --prefix gui test",
+    "build:site": "node scripts/build-site.mjs",
     "prepack": "npm run build:gui",
     "check:public": "node scripts/check-public-strings.mjs",
     "setup:hooks": "node scripts/install-git-hooks.mjs",
