@@ -18,7 +18,7 @@ import { paneInfo } from "./commands/restart.mjs";
 // 반환: {ok: false, message, code} — 끄지 않았다. {ok: true, session, windowIncomplete, entry} — 껐고 기록했다.
 // {ok: false, stopped: true, error} — 세션은 껐지만 창 정리·기록에서 예외가 났다(호출자가 다시 던지거나 보고한다).
 // log는 stdout, warn은 stderr 줄이다. lookup은 시험에서 가짜 조회를 넣는 자리다.
-export function stopRole({ role, session, home, floor = defaultFloor, log = console.log, warn = console.error,
+export function stopRole({ role, session, home, floor = defaultFloor, log = console.log, warn = console.error, beforeStop = null,
   lookup = input => stopConversationFields({ ...input, deps: lookupDeps({ paneInfo }) }) }) {
   const infrastructure = TARGETS.includes(role);
   // 기반 프로세스 4개의 stop은 `kadan up --auto`와 같은 잠금 아래에서 돈다. 안 그러면 끄는 도중 자동 실행이 세션이 없는 것을 보고 되살린다.
@@ -50,6 +50,8 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
     if (marked && readReviveState(home).targets?.[role]?.state !== "stopped") throw new Error("표시가 저장되지 않았다");
   } catch (error) { return refuse(`자동 되살리기 멈춤 표시 실패: ${error.message} — 끄지 않았습니다`); }
   try {
+    // 선택: 끄기 직전 확인(업무 마감의 끄기만 넘긴다). 대화 번호 조회가 끝난 뒤라 그 사이의 변화를 잡는다. 던지면 끄지 않는다.
+    if (beforeStop) beforeStop();
     assertSessionOwner(owner, floor.pid(session), { infrastructure });
     floor.stop(session);
   } catch (error) {
