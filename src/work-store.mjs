@@ -8,6 +8,7 @@ import {buildCardCenter} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
 import {readWatchWorkSummaries} from './work-watch-summary.mjs';
+import {parseWaitUntil,WAIT_UNTIL_FORMAT} from './wait-until.mjs';
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 끝이 아니다(status-labels.mjs·docs/card-center.md).
@@ -68,11 +69,25 @@ export class WorkStore {
    const next={...old,executions:old.executions.map(x=>({...x})),mailRefs:[...old.mailRefs],revision:old.revision+1,at:new Date().toISOString(),by,note,action};
    if(['done','cancelled'].includes(old.status)&&action!=='reopen')throw new Error('종료한 업무입니다. 이유를 남기고 다시 열어주세요');
    if(action==='update'){
-    for(const [field,value] of Object.entries(fields)){
+    const {waitUntil,...plain}=fields;
+    for(const [field,value] of Object.entries(plain)){
      if(!['title','goal','scope','acceptance','owner','board','progress','nextAction','turnOwner','status'].includes(field)||typeof value!=='string'||value.length>12000)throw new Error('잘못된 업무 수정 항목');
      next[field]=value.trim();
     }
     if(Object.hasOwn(fields,'turnOwner')){next.turnAt=next.at;next.turnBy=by;}
+    // 대기 시각(보류와 별개의 칸): 열린 업무 하나가 그 시각까지 감독의 할 일이 아니게 한다. 틀리는 방향은 조용함이라 쓸 때도 엄격하다.
+    // 차례를 실제로 다른 값으로 넘기거나 업무가 open을 벗어나면 대기는 끝난다(새 차례 주인의 할 일을 가리지 않게). 그 밖의 수정은 그대로 둔다.
+    if(next.status!=='open'||(Object.hasOwn(plain,'turnOwner')&&next.turnOwner!==old.turnOwner)){delete next.waitUntil;delete next.waitUntilSetAt;}
+    if(waitUntil!==undefined){
+     if(typeof waitUntil!=='string')throw Object.assign(new Error(`--wait-until은 시각 값이 필요합니다. ${WAIT_UNTIL_FORMAT}`),{exitCode:2});
+     if(waitUntil.trim()==='none'){delete next.waitUntil;delete next.waitUntilSetAt;}
+     else{
+      if(next.status!=='open')throw Object.assign(new Error('대기 시각은 열린(open) 업무에만 적을 수 있습니다'),{exitCode:2});
+      const at=parseWaitUntil(waitUntil,Date.parse(next.at));
+      if(!at.ok)throw Object.assign(new Error(`${at.reason}. ${WAIT_UNTIL_FORMAT}`),{exitCode:2});
+      next.waitUntil=at.iso;next.waitUntilSetAt=next.at;
+     }
+    }
     // 같은 이름으로 다시 지정해도 책임이 이 시각에 다시 붙은 사건이다(세대 판정, handover-state.mjs). 다른 수정은 올리지 않는다.
     if(Object.hasOwn(fields,'owner'))next.ownerAssignedAt=next.at;
     for(const field of ['title','goal','scope','acceptance','owner'])required(next[field],field,['title','owner'].includes(field)?200:12000);
@@ -104,13 +119,13 @@ export class WorkStore {
     if(!(isUserActor(by)||by===effectiveWorkOwner(current,readLedger(this.home))))throw new Error('책임 감독 또는 사용자가 업무의 최종 결과를 확인해야 합니다');
     if(action==='reopen'){
      if(!['done','cancelled'].includes(old.status))throw new Error('종료한 업무만 다시 열 수 있습니다');
-     next.status='open';next.result='';next.turnOwner=old.owner;next.turnAt=next.at;next.turnBy=by;
+     next.status='open';next.result='';next.turnOwner=old.owner;delete next.waitUntil;delete next.waitUntilSetAt;next.turnAt=next.at;next.turnBy=by;
     }else{
      const cards=new CardStore(this.home).list(),entries=readLedger(this.home);
      const center=buildCardCenter({cards,entries,tree:[],runtimeKnown:false});
      const unresolved=old.executions.filter(x=>{const card=center.cards.find(c=>c.key===x.key);return !card||card.ambiguous||!closableExecution(card);});
      if(unresolved.length)throw new Error(`끝나지 않은 실행 ${unresolved.length}건: ${unresolved.slice(0,3).map(x=>remainingText(x,center.cards.find(c=>c.key===x.key))).join(', ')}${unresolved.length>3?` 외 ${unresolved.length-3}건`:''}. 실행을 마치거나 취소하고, 담당을 바꿨다면 명시 인계 또는 완료 확정(kadan done)을 한 뒤 업무 결과를 확인하세요`);
-     next.result=required(fields.result,'최종 결과와 확인 근거');next.status=action==='complete'?'done':'cancelled';next.turnOwner='';
+     next.result=required(fields.result,'최종 결과와 확인 근거');next.status=action==='complete'?'done':'cancelled';next.turnOwner='';delete next.waitUntil;delete next.waitUntilSetAt;
     }
    }else throw new Error('알 수 없는 업무 변경');
    appendStream(this.home,keyStream(key),next);return this.get(key);

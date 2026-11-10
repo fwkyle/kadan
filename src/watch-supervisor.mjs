@@ -31,6 +31,8 @@ export function waitingExcluder(waits, parents) {
     if (w.mailId) mails.set(id, [...(mails.get(id) ?? []), { mailId: w.mailId, asker: w.asker, answerer: w.answerer }]);
   }
   const excluded = (taskId, role) => (byId.get(taskId) ?? []).some(a => a !== role && !(parents.has(a) && isDescendant(a, role, parents)));
+  // 업무 대기 시각(answerer @wait-until)은 그 업무 자신의 할 일만 가린다. 그 업무에 이은 하위 요청 우편(linkedWorkIds)까지는 가리지 않는다.
+  excluded.linked = (taskId, role) => (byId.get(taskId) ?? []).some(a => a !== "@wait-until" && a !== role && !(parents.has(a) && isDescendant(a, role, parents)));
   excluded.userWait = taskId => (byId.get(taskId) ?? []).includes("@user");
   excluded.answers = (taskId, role) => (byId.get(taskId) ?? []).includes(role);
   // role이 답할 질문 우편(우편 ID·질문자). 답 대기가 우편이 아닌 것(사용자 결정 등)이면 비어 있다.
@@ -69,7 +71,13 @@ function outsideTurnValue(work, parents, cards) {
 // 단 assigned라도 endedKeys()에 든 실행(끝났거나 담당 세션이 없음)은 진행 중으로 세지 않는다. endedKeys는 처음 필요할 때 한 번만 계산한다.
 // 할 일은 지금 차례(turnOwner)인 역할의 것이다(2026-10-16 [kyle]). 차례가 관계표에 없으면 책임 감독(owner)에게 둔다.
 // owner만 보면 하위 감독 차례인 업무가 상위의 할 일로 세어지고 정작 차례인 쪽에는 가지 않았다.
-export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set()) {
+// 대기 시각이 막 지나 다시 할 일이 된 업무 표시(문구 한 구절용, 판정은 그대로). 값은 업무 기록의 ISO 시각이다.
+function expiredWaitMark(work, now) {
+  const until = Date.parse(work?.waitUntil);
+  if (!Number.isFinite(now) || work?.status !== "open" || !Number.isFinite(until) || until > now || now - until > 24 * 60 * 60 * 1000) return {};
+  return { waitedUntil: new Date(until).toISOString() };
+}
+export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set(), now = null) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
   let ended = null;
   const inProgress = x => {
@@ -82,7 +90,7 @@ export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
     .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
       const turnValue = outsideTurnValue(w, parents, cards);
-      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}) }; });
+      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}), ...expiredWaitMark(w, now) }; });
 }
 
 export function assessSupervisorIdle(
@@ -168,7 +176,7 @@ export function assessSupervisorIdle(
   }
   const requests = peerResponsibilities(peerEntries, parents, works, cards);
   const waiting = (id, role) => excluded(id, role)
-    || requests.find(r => r.taskId === id)?.linkedWorkIds.some(key => excluded(key, role));
+    || requests.find(r => r.taskId === id)?.linkedWorkIds.some(key => excluded.linked(key, role));
   // 묻힌 일의 연결 id(요청 우편이 이은 워크)까지 같은 판정을 쓴다.
   const linked = (id, check) => check(id) || Boolean(requests.find(r => r.taskId === id)?.linkedWorkIds.some(check));
   waiting.userWait = id => linked(id, excluded.userWait);
@@ -182,7 +190,7 @@ export function assessSupervisorIdle(
   // 발령 이력이 있는가는 세대 필터 전 원본 기준이다. 이전 세대 발령을 뺐다고 그 plan을 미발령 할 일로 되살리지 않는다.
   const all = [...entries, ...idleWorkEntries(works, cards, parents,
     // 원장 전체(executionEntries)를 모르면 끝난 실행을 가릴 수 없어 예전처럼 둔다.
-    () => executionEntries ? endedExecutionKeys({ cards, entries: executionEntries, liveSessions: liveRoleSessions, now }) : new Set()), ...requests];
+    () => executionEntries ? endedExecutionKeys({ cards, entries: executionEntries, liveSessions: liveRoleSessions, now }) : new Set(), now), ...requests];
   alerts.push(...assessHierarchyIdle(
     all.filter(current),
     roleStates, now, idleMs, parents, waiting,
@@ -219,7 +227,7 @@ function ownReason(entry, role, answers, questions) {
     const asked = questions(id, role).slice(0, 3);
     return { id, reason: "답할 질문", ...(asked.length ? { questions: asked.map(m => ({ mailId: m.mailId, asker: m.asker ?? null })) } : {}) };
   }
-  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례", ...(entry.turnValue ? { turnValue: entry.turnValue, workRevision: entry.workRevision } : {}) };
+  return { id, reason: entry.kind === "plan" ? "미발령 계획" : "내 차례", ...(entry.turnValue ? { turnValue: entry.turnValue, workRevision: entry.workRevision } : {}), ...(entry.waitedUntil ? { waitedUntil: entry.waitedUntil } : {}) };
 }
 
 const BODY_ITEMS = 5;
@@ -240,13 +248,19 @@ export function idleOwnText(alert) {
 
 // 차례 칸의 관계표 밖 글 값 안내 두 줄(B4b). 첫 항목 하나만 안내한다. 값은 이미 40자에서 잘려 있다.
 export function idleTurnHint(alert) {
+  const waited = alert?.idleItems?.ownWhy?.find(w => w.waitedUntil && w.id?.startsWith("work:"));
+  const lines = waited ? [`대기 시각(${hhmmLocal(waited.waitedUntil)})이 지나 ${waited.id.slice(5)} 업무가 다시 할 일이 되었습니다.`] : [];
+  return [...lines, ...idleTurnValueHint(alert)];
+}
+const hhmmLocal = iso => new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+function idleTurnValueHint(alert) {
   const item = alert?.idleItems?.ownWhy?.find(w => w.turnValue && w.id?.startsWith("work:"));
   if (!item) return [];
   const work = shellQuote(item.id.slice(5));
   // 저장소는 오래된 화면의 쓰기를 거절하므로(revision 검사) 감시기가 아는 현재 revision을 명령에 채운다. 그 사이 바뀌면 거절되어 work show로 새 값을 본다.
   const revision = Number.isInteger(item.workRevision) ? item.workRevision : "<revision>";
   return [`차례 칸 값 '${item.turnValue}'는 관계표에 없어 책임 감독에게 계속 갑니다.`,
-    `사용자 답을 기다리면 \`--turn-owner @user\`, 밖에서 기다리면 \`kadan work update ${work} --revision ${revision} --status hold --next-action '…' --note '외부 대기'\`로 멈추세요. 거절되면 \`kadan work show ${work}\`로 새 revision을 보세요.`];
+    `사용자 답을 기다리면 \`--turn-owner @user\`, 밖에서 기다리면 \`kadan work update ${work} --revision ${revision} --status hold --next-action '…' --note '외부 대기'\`로 멈추세요. 거절되면 \`kadan work show ${work}\`로 새 revision을 보세요. 시각이 정해진 대기(24시간 안)는 \`--wait-until <ISO 시각>\`으로 그때까지만 조용히 둘 수 있습니다(보류는 끝나는 시각이 없는 멈춤).`];
 }
 
 // 1단 본인 창 글에만 붙는 등록 명령 꼴(2026-10-22). 말로만 기다리면 감시가 답 대기로 못 알아보고 '놀고 있음'을 되풀이한다.

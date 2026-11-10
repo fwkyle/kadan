@@ -1,4 +1,5 @@
 // 현황 화면과 ?super= 거름망(DS-1-impl: dashboard-api.mjs에서 옮김).
+import { showCycleWaits } from "../wait-until.mjs";
 import { registeredCenterWorks } from "../center-wall.mjs";
 import { isExecution } from "../human-brief.mjs";
 import { boardProgressCounts } from "../board-progress.mjs";
@@ -91,7 +92,7 @@ export function statusData(snapshot, url, stamp, m) {
     const myAlerts = (allAlerts?.items ?? []).filter((a) => mine(a.recipient));
     // 사용자 대기로 뺀 업무도 같은 범위(업무 담당이 이 슈퍼감독 아래)만 싣는다. 다른 판 목록은 내보내지 않는다(PR #254 수정 2).
     const myWorkKeys = new Set(statusWorks.filter((w) => mine(w.owner)).map((w) => String(w.key).replace(/^work:/, "")));
-    const myUserTurnWaits = (snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits ?? []).filter((x) => myWorkKeys.has(x.work));
+    const myUserTurnWaits = showCycleWaits(snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits).filter((x) => myWorkKeys.has(x.work));
     return {
       ...stamp,
       super: superFilter,
@@ -147,7 +148,7 @@ export function statusData(snapshot, url, stamp, m) {
     processes: snapshot.processes ?? null,
     workError: m.workError,
     // 차례 칸 때문에 사용자 대기로 뺀 업무(최근 감시 주기 기준). 새 키만 더한다(2026-10-23 놀고 있음 PR-1 수정 1).
-    userTurnWaits: snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits ?? [],
+    userTurnWaits: showCycleWaits(snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits),
     executionCount: m.cards.filter(isExecution).length,
     waitingQuestions: (() => {
       try { return letters(snapshot).filter(letter => letter.replyStatus === "waiting").length; }

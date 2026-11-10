@@ -1,3 +1,4 @@
+import {waitUntilLabel} from './wait-until.mjs';
 import {workHealth,executionHealth,renderExecutionHealth} from './dashboard-execution.mjs';
 import {escapeHtml as e} from './card-content.mjs';
 import {cardTurn} from './card-turn.mjs';
@@ -44,9 +45,10 @@ export function workDashboardModel(works,center,entries,summaries=new Map()){
   const stage=closed?(active.length?'종료 후 미종료 실행 · 확인 필요':workState[w.status]):w.status==='hold'?'일시정지':!executions.length?'실행 준비':!active.length?'감독 최종 확인':(latest.length?latest:active).map(x=>workPhases[x.phase]).filter((x,i,a)=>a.indexOf(x)===i).join(' · ');
   const letters=readLetters(w);
   const summary=summaries.get(w.key),followup=summary?.followup;
+  const waitLabel=waitUntilLabel(w);
   return {...w,...workHealth(w,executions),...summary,key:`work:${w.key}`,workKey:w.key,kind:'work',workType:'business',originalTitle:w.title,state:closed?w.status:w.status==='hold'?'hold':'running',stateLabel:workState[w.status],stored:w.status,
    purpose:w.goal,flowLabel:round?`${roundLabel} · ${followup?.label||stage}`:stage,flowPhase:`실행 ${ended.length}/${executions.length}건 종료${active.length?' · 남은 실행 '+active.length+'건':''}${!closed?' · 업무는 미완료':''}`,flowTitle:w.title,
-   turnLabel:followup?.owner==='@user'?'사용자':followup?.owner||turn,turnReason:followup?followup.next:explicit?'업무에 명시한 현재 차례':active.length?'각 실행의 차례 기록·전달·진행 보고 기준':'책임 감독이 결과를 확인할 차례',turnSource:followup?'실행·후속 근거':closed?'업무 종료':explicit?'차례 기록':!active.length?'책임 감독':owners.length>1?'병렬 진행':'실행별 근거',
+   turnLabel:followup?.owner==='@user'?'사용자':followup?.owner||turn,waitLabel,turnReason:(followup?followup.next:explicit?'업무에 명시한 현재 차례':active.length?'각 실행의 차례 기록·전달·진행 보고 기준':'책임 감독이 결과를 확인할 차례')+(waitLabel?` · ${waitLabel}(그때까지 놀고 있음 알림 없음)`:''),turnSource:[followup?'실행·후속 근거':closed?'업무 종료':explicit?'차례 기록':!active.length?'책임 감독':owners.length>1?'병렬 진행':'실행별 근거',waitLabel].filter(Boolean).join(' · '),
    next:followup?.next||w.nextAction||(!active.length&&executions.length?'약속한 결과와 완료 조건을 감독이 확인':'다음 행동 미기록'),summary:w.progress,reportAt:w.at,reportLabel:short(w.at),
    executions,active,ended,letters,round,at:new Date(Math.max(Date.parse(w.at)||0,lastChild,...letters.map(x=>Date.parse(x.t)||0))).toISOString()};
  });
