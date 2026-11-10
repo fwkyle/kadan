@@ -313,3 +313,67 @@ test('statusProgress: 시계 증가=진행, 같은 시계·처음 본 화면·�
  assert.deepEqual(statusProgress(null,300),{status:null,moving:false});
  assert.equal(statusProgress(codexIdle,300).status.kind,'idle');
 });
+
+// ---- PR #374 검수 F1: 일하는 표시를 찾는 범위 ----
+// 화면 끝 14줄에 더해, 그 14줄 안의 마지막 입력 줄 위로 10줄까지는 항상 본다. 범위는 넓어지기만 한다.
+const bottom14 = screen => {
+  const lines = screen.split('\n');
+  while (lines.length && lines.at(-1).trim() === '') lines.pop();
+  return lines.slice(-14).join('\n');
+};
+const SPINNER = '✢ Grooving… (32s · ↓ 1.7k tokens)';
+const RULE40 = '─'.repeat(40);
+const longFooter = (input, gap, count, top = [SPINNER]) =>
+  [...top, ...Array(gap).fill(''), RULE40, input, RULE40, ...Array.from({length: count}, (_, i) => `  알림 ${i + 1}`)].join('\n');
+
+test('F1: 바닥글 8줄이어도 입력 줄 위 10줄 안의 회전 줄·도구 실행 줄은 working이다', () => {
+  for (const gap of [1, 2, 3, 4, 8]) {
+    assert.deepEqual(readStatusLine(longFooter('❯ ', gap, 8)), {kind: 'working', tool: 'claude', clockSec: 32}, `빈 줄 ${gap}`);
+    assert.equal(readStatusLine(longFooter('❯ 친 글', gap, 8)).kind, 'working', `친 글 · 빈 줄 ${gap}`);
+    assert.equal(readStatusLine(longFooter('❯ ', gap, 8, ['  ⎿  Running… (4s)'])).kind, 'working', `도구 줄 · 빈 줄 ${gap}`);
+  }
+  // 입력 줄 위 10번째 줄까지 본다(회전 줄 + 빈 줄 8 + 가로줄 = 10줄). 그 밖은 지금처럼 보지 않는다.
+  assert.equal(readStatusLine(longFooter('❯ ', 9, 8)).kind, 'idle');
+  // codex 입력 줄도 같다.
+  const codex = gap => ['• Working (5m 12s • esc to interrupt)', ...Array(gap).fill(''), '› Ask Codex to do anything', '',
+    ...Array.from({length: 9}, (_, i) => `  줄 ${i + 1}`)].join('\n');
+  assert.deepEqual(readStatusLine(codex(4)), {kind: 'working', tool: 'codex', clockSec: 312});
+});
+
+test('F1: 입력 줄을 못 찾은 화면과 14줄 밖의 입력 줄은 예전과 똑같이 동작한다', () => {
+  // 화면 끝 14줄 안에 입력 줄이 없으면 회전 줄이 15번째에 있어도 찾지 않는다.
+  const noInput = [SPINNER, ...Array.from({length: 14}, (_, i) => `본문 ${i + 1}`)].join('\n');
+  assert.equal(readStatusLine(noInput).kind, 'unknown');
+  // 입력 줄이 14줄 밖이면 idle로도 working으로도 읽지 않는다.
+  const farInput = [SPINNER, RULE40, '❯ ', RULE40, ...Array.from({length: 14}, (_, i) => `본문 ${i + 1}`)].join('\n');
+  assert.equal(readStatusLine(farInput).kind, 'unknown');
+});
+
+test('F1: 범위는 넓어지기만 한다 — 화면 끝 14줄만 본 판정과 다르면 그것은 working뿐이다', () => {
+  const pad = Array.from({length: 12}, (_, i) => `앞선 본문 ${i + 1}`);
+  const samples = [codexWorking('5m 12s'), codexWorkingQueued, codexIdle, reconnecting('5m 12s'), claudeIdle,
+    claudeWorkingReal('✢', '32s'), claudeWorkingReal('·', '1m 02s'), withoutSpinner(claudeWorkingReal('✢', '32s')),
+    toolOnly('4s'), toolOnly('1m 10s')];
+  let widened = 0;
+  const check = (screen, label) => {
+    const now = readStatusLine(screen), before = readStatusLine(bottom14(screen));
+    if (now.kind === before.kind) { assert.deepEqual(now, before, label); return; }
+    assert.equal(now.kind, 'working', label);
+    widened += 1;
+  };
+  // 기존 실측 표본: 그대로, 그리고 위에 본문을 붙여 화면이 길어져도 판정이 같다.
+  for (const [i, sample] of samples.entries()) {
+    assert.deepEqual(readStatusLine(sample), readStatusLine(bottom14(sample)), `표본 ${i}`);
+    assert.deepEqual(readStatusLine([...pad, sample].join('\n')), readStatusLine(sample), `표본 ${i} + 본문`);
+  }
+  // 합성 격자: 입력 3종 × 빈 줄 0~12 × 바닥글 0~10줄 × 회전 줄 있음/없음.
+  for (const input of ['❯ ', '❯ 친 글', '  본문 줄']) {
+    for (let gap = 0; gap <= 12; gap++) {
+      for (let count = 0; count <= 10; count++) {
+        check(longFooter(input, gap, count), `회전 · ${input} · 빈 줄 ${gap} · 바닥글 ${count}`);
+        check(longFooter(input, gap, count, ['✻ Cogitated for 3m 44s']), `완료 · ${input} · 빈 줄 ${gap} · 바닥글 ${count}`);
+      }
+    }
+  }
+  assert.ok(widened > 0, '넓어진 칸이 하나는 있어야 한다');
+});

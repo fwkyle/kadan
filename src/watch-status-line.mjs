@@ -10,6 +10,12 @@ import { anyStopWordInBottom } from "./watch-stop-phrases.mjs";
 export const IDLE_STOP_AFTER_MS = 4 * 60_000;
 
 const BOTTOM_LINES = 14;
+// 일하는 표시는 화면 끝 14줄에 더해, 그 14줄 안의 마지막 입력 줄 위로 이만큼은 항상 찾는다(범위는 넓어지기만 한다).
+// 입력칸 아래 바닥글이 길면(8줄까지 입력칸으로 본다 — ghost-text.mjs) 끝 14줄이 입력 줄 위를 거의 못 봐서, 회전 줄이 남은
+// 화면이 idle로 읽혔다(PR #374 검수 F1). 바닥글 3줄인 보통 화면에서 끝 14줄은 입력 줄 위 9줄(14 − 바닥글 3 − 아래 가로줄 1
+// − 입력 줄 1)을 본다. 실측 사본(바닥글 3~4줄)은 8~9줄이다. 그보다 좁아지지 않게 10으로 둔다.
+const ABOVE_INPUT_LINES = 10;
+const INPUT_SYMBOL = /^\s*[❯›>]/u;
 const CLOCK_TEXT = /^(?:(\d+)h\s+)?(?:(\d+)m\s+)?(\d+)s$/u;
 // codex 0.163: `• Working (5m 12s • esc to interrupt)` 뒤에 `· 1 background terminal running …`이 붙을 수 있다.
 const CODEX_WORKING = /^\s*•\s*Working\s*\(([^()•]*?)\s*•[^()]*esc to interrupt/iu;
@@ -30,23 +36,30 @@ export function parseClock(text) {
   return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3]);
 }
 
-function bottomLines(screenText) {
+// 끝의 빈 줄을 뗀 화면 전체 줄.
+function screenLines(screenText) {
   if (typeof screenText !== "string") return [];
   const lines = screenText.split("\n");
   while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
-  return lines.slice(-BOTTOM_LINES);
+  return lines;
 }
 
 // kind: working(일하는 표시 있음) | idle(일하는 표시 없음 + 빈 입력창) | unknown(그 밖)
 // clockSec: 일하는 줄의 경과 시계(초). 읽지 못하면 null.
 export function readStatusLine(screenText) {
-  const lines = bottomLines(screenText);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const codex = CODEX_WORKING.exec(lines[i]);
-    const claude = codex ? null : CLAUDE_WORKING.exec(lines[i]) ?? CLAUDE_TOOL_RUNNING.exec(lines[i]);
+  const all = screenLines(screenText);
+  const bottomStart = Math.max(0, all.length - BOTTOM_LINES);
+  // 끝 14줄 안의 마지막 입력 기호 줄(글이 있어도 된다). 없으면 예전과 똑같이 끝 14줄만 본다.
+  const anchor = all.findLastIndex((line, i) => i >= bottomStart && INPUT_SYMBOL.test(line));
+  const workStart = anchor < 0 ? bottomStart : Math.min(bottomStart, Math.max(0, anchor - ABOVE_INPUT_LINES));
+  for (let i = all.length - 1; i >= workStart; i--) {
+    const codex = CODEX_WORKING.exec(all[i]);
+    const claude = codex ? null : CLAUDE_WORKING.exec(all[i]) ?? CLAUDE_TOOL_RUNNING.exec(all[i]);
     const hit = codex ?? claude;
     if (hit) return { kind: "working", tool: codex ? "codex" : "claude", clockSec: parseClock(hit[1]) };
   }
+  // idle 판정의 빈 입력 줄은 예전처럼 끝 14줄에서만 찾는다.
+  const lines = all.slice(bottomStart);
   const input = lines.findLast((line) => CODEX_INPUT.test(line) || CLAUDE_INPUT.test(line));
   if (input != null) return { kind: "idle", tool: CODEX_INPUT.test(input) ? "codex" : "claude", clockSec: null };
   return { kind: "unknown", tool: null, clockSec: null };
