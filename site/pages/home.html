@@ -1,0 +1,134 @@
+<section class="hero">
+  <div class="hero-text">
+    <p class="eyebrow">kadan · 카단</p>
+    <h1>{{title}}</h1>
+    <p class="lede">{{lede}}</p>
+    <p class="actions">
+      <a class="button primary" href="start.html">5분 만에 시작하기</a>
+      <a class="button" href="{{repoUrl}}">GitHub에서 보기</a>
+    </p>
+    <p class="en" lang="en">{{enSummary}}</p>
+  </div>
+
+  <figure class="team" aria-labelledby="team-caption">
+    <div class="team-human">
+      <strong>사용자</strong>
+      <span>말로 맡기고, 결정만 합니다</span>
+    </div>
+    <p class="team-link">맡기기 · 보고 받기</p>
+    <div class="pane">
+      <p class="pane-screen">› 일을 나눠 작업자에게 맡김<br>› 결과를 검수자에게 넘김</p>
+      <p class="pane-status"><span>kadan-my-app-감독</span><em>AI 터미널</em></p>
+    </div>
+    <p class="team-link">발령 · 완료 보고</p>
+    <div class="pane-row">
+      <div class="pane">
+        <p class="pane-screen">› 코드를 고치는 중<br>KADAN:DONE card-1 ok</p>
+        <p class="pane-status"><span>kadan-my-app-작업자</span><em>AI 터미널</em></p>
+      </div>
+      <div class="pane">
+        <p class="pane-screen">› 고치지 않고 확인만<br>› 통과 · 지적 0건</p>
+        <p class="pane-status"><span>kadan-my-app-검수자</span><em>AI 터미널</em></p>
+      </div>
+    </div>
+    <ul class="team-side">
+      <li><strong>감시기</strong> 멈춤·끊김·완료를 지켜보고 위 담당에게 알립니다</li>
+      <li><strong>기록</strong> 모든 사건이 뒤에만 덧붙습니다</li>
+      <li><strong><code>kadan attach &lt;역할&gt;</code></strong> 사람은 어느 터미널이든 직접 들어갑니다</li>
+    </ul>
+    <figcaption id="team-caption">
+      여기서 팀은 사람이 아닙니다. 감독·작업자·검수자 모두 tmux 터미널 하나씩에서 도는 AI CLI입니다.
+      화면 속 글과 <code>my-app</code>은 지어낸 예시입니다.
+    </figcaption>
+  </figure>
+</section>
+
+<section class="band">
+  <h2>맡기고, 지켜보고, 끼어듭니다</h2>
+  <dl class="points">
+    <div>
+      <dt>역할로 나눠 맡깁니다</dt>
+      <dd>감독이 일을 나누고, 작업자가 만들고, 검수자가 따로 확인합니다. 만든 AI와 확인하는 AI가 다릅니다.</dd>
+    </div>
+    <div>
+      <dt>지켜보다가 알려 줍니다</dt>
+      <dd>멈춤·끊김·완료를 감시해 위 담당에게 알립니다. 완료는 AI가 화면에 직접 낸 완료 표시로만 인정합니다.</dd>
+    </div>
+    <div>
+      <dt>언제든 직접 들어갑니다</dt>
+      <dd>숨은 자동 실행이 아니라 실제 터미널 화면입니다. <code>kadan attach</code>로 들어가 바로 입력할 수 있습니다.</dd>
+    </div>
+    <div>
+      <dt>기록은 지우지 않고, 합치는 일은 사람이 승인합니다</dt>
+      <dd>모든 사건은 뒤에만 덧붙는 기록에 남고, main에 합치는 일과 배포는 사용자 승인이 필요합니다.</dd>
+    </div>
+  </dl>
+  <p class="fineprint">터미널에서 도는 AI CLI라면 그대로 씁니다. 본체 의존성 0개(Node.js 내장 기능 + tmux).</p>
+</section>
+
+<section class="band">
+  <h2>누가 누구와 무엇을 주고받나</h2>
+  <p>
+    사용자가 요청하면 슈퍼감독이 일반감독에게 일을 넘기고, 일반감독이 작업자에게 맡겨 만들게 한 뒤 검수자에게 따로 확인을 맡깁니다.
+    감시기는 멈춘 역할이 있으면 그 위 담당에게 알립니다.
+  </p>
+  <figure class="diagram">
+    <a href="assets/architecture.svg">
+      <img src="assets/architecture.svg" width="1300" height="800" loading="lazy"
+        alt="카단 구조: 사용자와 저장소별 슈퍼감독이 직접 대화하고, 대시보드·비서·디스코드는 보조 창구다. 슈퍼감독, 일반감독, 작업자·검수자가 발령·보고·질문·결정·우편을 주고받는다. 감시기가 경보를 보내고 모든 사건이 기록에 덧붙으며, 사람은 kadan attach로 어느 역할이든 직접 들어간다.">
+    </a>
+    <figcaption>그림을 누르면 크게 열립니다. 역할 이름과 소통 경로의 원본은 <a href="{{repoUrl}}/blob/main/docs/flows.md">흐름 지도</a>입니다.</figcaption>
+  </figure>
+</section>
+
+<section class="band">
+  <h2>한 업무가 끝나기까지</h2>
+  <p>
+    업무 카드 한 장이 만들어져 마감되기까지의 순서입니다. 따로 하는 검수가 불합격이면 다음 라운드로 구현에 돌아가고,
+    main에 합치는 일은 사용자가 승인해야 진행됩니다.
+  </p>
+  <figure class="diagram">
+    <a href="assets/work-flow.svg">
+      <img src="assets/work-flow.svg" loading="lazy"
+        alt="카단 한 업무의 생애: 업무 카드, 발령, 구현, 독립 검수, PR, 사용자 승인, 머지·재시작, 정리·마감.">
+    </a>
+    <figcaption>그림을 누르면 크게 열립니다.</figcaption>
+  </figure>
+</section>
+
+<section class="band rules">
+  <div>
+    <h2>카단이 지키는 것</h2>
+    <ul>
+      <li><strong>살아 있는지 확인하고 보냅니다.</strong> 메시지를 넣기 직전에 그 터미널이 살아 있는지 확인하고, 아니면 보내지 않습니다.</li>
+      <li><strong>모호하면 멈춥니다.</strong> 원인을 모르는 실패는 다시 시도하지 않고 멈춰서 알립니다.</li>
+      <li><strong>자기 것만 끕니다.</strong> 카단이 만든 세션만 끌 수 있고, 개인 tmux 세션과 섞지 않습니다.</li>
+      <li><strong>완료는 완료 표시로만.</strong> AI가 화면에 직접 낸 <code>KADAN:DONE</code> 줄로만 완료를 알립니다. 표시 없이 멈춘 것은 "조용함"으로 알리기만 합니다.</li>
+      <li><strong>지난 기록을 고치지 않습니다.</strong> 사건은 뒤에만 덧붙입니다.</li>
+      <li><strong>합치는 일은 사람이 승인합니다.</strong> main에 합치는 일과 운영 배포는 사용자의 승인이 필요합니다.</li>
+    </ul>
+  </div>
+  <div>
+    <h2>카단이 하지 않는 것</h2>
+    <ul>
+      <li><strong>AI마다 연결 계층을 만들지 않습니다.</strong> 터미널 안에 띄운 CLI를 그대로 씁니다.</li>
+      <li><strong>감시기가 AI 역할을 멋대로 다시 띄우지 않습니다.</strong> 멈춘 역할은 알리고, 다시 띄울지는 감독이나 사람이 정합니다.</li>
+      <li><strong>숨겨서 돌리지 않습니다.</strong> 대화형 화면 그대로 띄워, 사람이 보고 끼어들 수 있게 합니다.</li>
+    </ul>
+    <p class="fineprint">규칙의 원문은 <a href="{{repoUrl}}/blob/main/docs/design.md">설계 원칙</a>에 있습니다.</p>
+  </div>
+</section>
+
+<section class="band">
+  <h2>이런 때 씁니다</h2>
+  <div class="cards">
+{{useCasePreview}}
+  </div>
+  <p><a href="use-cases.html">유즈케이스 모두 보기</a></p>
+</section>
+
+<section class="band closing">
+  <h2>이미 쓰는 AI에게 설치부터 맡겨 보세요</h2>
+  <p>설치 안내 주소를 AI에게 주면 됩니다. 직접 설치하는 명령도 같은 쪽에 있습니다.</p>
+  <p class="actions"><a class="button primary" href="start.html">시작하기</a></p>
+</section>

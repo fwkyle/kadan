@@ -1,0 +1,9 @@
+{
+  "title": "AI 팀에 코딩을 맡기고, 필요할 때 끼어드세요",
+  "lede": "하던 Claude Code·Codex 대화를 그대로 감독으로 이어받아, 만드는 일과 확인하는 일을 서로 다른 AI에게 나눠 맡깁니다. 카단이 멈춤과 완료를 지켜보고, 사람은 언제든 실제 터미널에 들어가 직접 말할 수 있습니다.",
+  "enSummary": "Kadan runs AI coding CLIs such as Claude Code and Codex as named roles in tmux: a conductor, workers and reviewers. Hand over the conversation you already have, let the roles build and review, and step into any real terminal whenever you want. Zero runtime dependencies (Node.js built-ins + tmux). The interface and docs are currently in Korean.",
+  "repoUrl": "https://github.com/fwkyle/kadan",
+  "analyticsToken": "",
+  "hiddenUseCases": ["일이 쌓이면 감독을 나눈다"],
+  "howToExclude": ["일이 쌓이면 감독을 나눈다"]
+}
