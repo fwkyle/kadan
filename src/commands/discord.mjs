@@ -1,14 +1,14 @@
 // kadan discord watch [--once] [--interval 초] [--to-mail [역할]] | send [텍스트] [--reply-to 메시지ID | --thread 스레드ID] [--edit 메시지ID] [--quiet] | thread <스레드ID> [--rename 이름] [--archive] | check
 // #비서 채널과 등록한 레포 포럼 스레드의 대화(3단계). watch는 새 메시지를 JSON 한 줄씩 표준 출력으로 낸다(비서가 감시 도구로 구독). 판단은 비서가 한다.
 // 예외: --to-mail(다리)은 레포 포럼 스레드의 결정 요청 답(선택지와 안 맞는 글은 자유 답)을 정해진 규칙으로 기록하고(discord-decision.mjs),
-// #비서 본문의 정확한 문구('잘게'·'일어남' 등)에만 사람 명의로 나이트런을 켜고 끈다(discord-night.mjs). 우편 모드에서만 한다.
+// #비서 본문의 정확한 문구('잘게'·'일어남' 등)에만 사람 명의로 Autopilot을 켜고 끈다(discord-autopilot.mjs). 우편 모드에서만 한다.
 // 조회·답변만 한다: 발령·결정 승인·머지는 이 명령이 하지 않는다. 설명은 docs/discord-chat.md.
 import fs from 'node:fs';
 import {ledgerHome} from '../ledger.mjs';
 import {die} from '../cli-basics.mjs';
 import {createMailOut} from '../discord-mail.mjs';
 import {createDecisionAnswerer} from '../discord-decision.mjs';
-import {createNightWordHandler} from '../discord-night.mjs';
+import {createAutopilotWordHandler} from '../discord-autopilot.mjs';
 import {SECRETARY} from '../mailbox.mjs';
 import {writeBridgeExit} from '../discord-bridge-exit.mjs';
 import {createChat, runWatch, sendText, editThread, checkChat, DEFAULT_INTERVAL_S} from '../discord-chat.mjs';
@@ -39,9 +39,9 @@ export async function cmdDiscord(argv, flags, {home = ledgerHome(), env = proces
       if (toMail) {
         const mailOut = createMailOut({home, to: toMail, log: err});
         const decide = createDecisionAnswerer({home, chat, env, log: err});
-        const nightWord = createNightWordHandler({home, chat, env, log: err});
-        emit = async line => {             // 결정 답·나이트 한 마디로 끝난 글(true)은 우편으로 보내지 않는다. {note}는 어느 결정인지 특정 안 된 글이라 머리에 적어 보낸다
-          const done = (await nightWord(line)) || await decide(line);
+        const autopilotWord = createAutopilotWordHandler({home, chat, env, log: err});
+        emit = async line => {             // 결정 답·Autopilot 한 마디로 끝난 글(true)은 우편으로 보내지 않는다. {note}는 어느 결정인지 특정 안 된 글이라 머리에 적어 보낸다
+          const done = (await autopilotWord(line)) || await decide(line);
           return done === true ? undefined : mailOut(line, done || {});
         };
       }

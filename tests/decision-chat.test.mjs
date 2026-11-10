@@ -10,8 +10,8 @@ import {appendStream,readStream} from '../src/storage.mjs';
 import {DecisionStore,decisionCommand,CHAT_OPTIONS} from '../src/decisions.mjs';
 import {workCommand} from '../src/work-command.mjs';
 import {appendLedger,readLedger} from '../src/ledger.mjs';
-import {nightState} from '../src/night.mjs';
-import {summarizeNight} from '../src/night-summary.mjs';
+import {autopilotState} from '../src/autopilot.mjs';
+import {summarizeAutopilot} from '../src/autopilot-summary.mjs';
 import {renderDecisions} from '../src/decision-wall.mjs';
 process.env.KADAN_NOTIFY='off';
 const SUPER='a-슈퍼감독';
@@ -138,7 +138,7 @@ test('자동 닫기용 by는 채팅 결정에만 통하고, 사람이 답하면 
   assert.equal(closed.cancelledBy,SUPER);assert.equal(closed.cancelReason,'kyle 채팅 답: 진행해');
 });
 
-test('나이트 요약: 채팅 등록은 따로 세고 자동 닫힘·요청자 닫힘은 취소로 세지 않는다. 채팅 닫힘은 밤을 끄지 않고 사람 답만 끈다',()=>{
+test('Autopilot 요약: 채팅 등록은 따로 세고 자동 닫힘·요청자 닫힘은 취소로 세지 않는다. 채팅 닫힘은 밤을 끄지 않고 사람 답만 끈다',()=>{
   const T0=Date.parse('2026-10-23T14:00:00.000Z'),H=3600_000,iso=ms=>new Date(ms).toISOString();
   const row={card:null,chat:true,work:'repo/w1',requestedBy:SUPER,question:'?',options:['a','b'],recommendation:'a',reason:'r',to:'@user'};
   const evs=[
@@ -148,13 +148,13 @@ test('나이트 요약: 채팅 등록은 따로 세고 자동 닫힘·요청자 
     {...row,id:'c2',revision:2,status:'cancelled',cancelledBy:SUPER,cancelledAt:iso(T0+2*H),cancelReason:'kyle 채팅 답: 응'},
     {...row,id:'c3',revision:1,status:'open',at:iso(T0-H)}, // 켜지기 전 등록은 세지 않는다
   ];
-  const start={kind:'night',phase:'on',t:iso(T0),until:iso(T0+8*H),by:'사람',text:'자러 감',to:[],delivered:[]};
-  const s=summarizeNight({start,phase:'off',endedAt:T0+4*H,entries:[],decisionEvents:evs,readBody:()=>null});
+  const start={kind:'autopilot',phase:'on',t:iso(T0),until:iso(T0+8*H),by:'사람',text:'자러 감',to:[],delivered:[]};
+  const s=summarizeAutopilot({start,phase:'off',endedAt:T0+4*H,entries:[],decisionEvents:evs,readBody:()=>null});
   assert.equal(s.counts.chatRegistered,2);assert.equal(s.counts.cancelledByHuman,0);assert.equal(s.counts.cancelledBySuper,0);
   assert.match(s.text,/채팅 등록 2건/);assert.doesNotMatch(s.text,/취소한 결정|대신 닫은 결정/);
-  assert.equal(nightState([start],evs,T0+3*H).on,true,'채팅 닫힘은 밤을 끄지 않는다');
+  assert.equal(autopilotState([start],evs,T0+3*H).on,true,'채팅 닫힘은 밤을 끄지 않는다');
   const human={...row,id:'c4',revision:2,status:'answered',answer:{by:'사람',text:'ok',at:iso(T0+3*H)}};
-  assert.equal(nightState([start],[...evs,human],T0+3*H).pending.phase,'ended-by-input','사람 명의 답만 밤을 끈다');
+  assert.equal(autopilotState([start],[...evs,human],T0+3*H).pending.phase,'ended-by-input','사람 명의 답만 밤을 끈다');
 });
 
 test('대시보드 결정 화면: 채팅 꼬리표와 업무·경과 시간을 보이고 깨진 카드 링크(?card=null)를 만들지 않는다',()=>{

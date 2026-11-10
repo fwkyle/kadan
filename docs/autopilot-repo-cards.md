@@ -1,22 +1,22 @@
-# 나이트런 중 자동 머지 정책: 카단 설정과 온톨로지 폴더
+# Autopilot 중 자동 머지 정책: 카단 설정과 온톨로지 폴더
 
 ## Why
 
-저장소마다 "배포 브랜치가 무엇이고, 나이트런 중 자동 머지를 해도 되는가"를 카단이 알아야 자동 단계의 머지 관문이 판정할 수 있다. 이 값의 원본은 카단 자체 설정이다. 그래서 카단을 내려받아 쓰는 누구나 같은 방식으로 쓴다. 저장소·계정·기기 같은 사실을 마크다운 문서로 적어 두는 사람은 그 문서를 카단의 고정 폴더 `$KADAN_HOME/ontology/`에 두면 빈 칸을 채운다(선택). 폴더 이름이 "카드"가 아니라 "온톨로지"인 이유는 나중에 다른 종류(account·device·rule) 문서도 이 폴더에서 읽게 하려는 것이다. 지금 판정에 쓰는 것은 `type: project`뿐이다.
+저장소마다 "배포 브랜치가 무엇이고, Autopilot 중 자동 머지를 해도 되는가"를 카단이 알아야 Autopilot 단계의 머지 관문이 판정할 수 있다. 이 값의 원본은 카단 자체 설정이다. 그래서 카단을 내려받아 쓰는 누구나 같은 방식으로 쓴다. 저장소·계정·기기 같은 사실을 마크다운 문서로 적어 두는 사람은 그 문서를 카단의 고정 폴더 `$KADAN_HOME/ontology/`에 두면 빈 칸을 채운다(선택). 폴더 이름이 "카드"가 아니라 "온톨로지"인 이유는 나중에 다른 종류(account·device·rule) 문서도 이 폴더에서 읽게 하려는 것이다. 지금 판정에 쓰는 것은 `type: project`뿐이다.
 
 ## 카단 설정(원본)
 
-저장소(GitHub `소유자/이름`, 소문자, 끝 `.git`·`/` 제거)마다 칸 두 개를 `$KADAN_HOME/night-repo-policy.json`에 둔다. 칸은 따로 둘 수 있다.
+저장소(GitHub `소유자/이름`, 소문자, 끝 `.git`·`/` 제거)마다 칸 두 개를 `$KADAN_HOME/autopilot-repo-policy.json`에 둔다. 칸은 따로 둘 수 있다.
 
 | 칸 | 값 | 뜻 |
 |---|---|---|
-| `deployBranch` | 브랜치 이름 또는 `없음` | 이 브랜치로 가는 PR은 나이트런 중 자동 머지 안 함. `없음`은 어떤 브랜치도 아니다 |
-| `nightMerge` | `허용` · `금지` | `금지`면 이 저장소는 나이트런 중 자동 머지 안 함. 비어 있으면 허용으로 본다 |
+| `deployBranch` | 브랜치 이름 또는 `없음` | 이 브랜치로 가는 PR은 Autopilot 중 자동 머지 안 함. `없음`은 어떤 브랜치도 아니다 |
+| `nightMerge` | `허용` · `금지` | `금지`면 이 저장소는 Autopilot 중 자동 머지 안 함. 비어 있으면 허용으로 본다 |
 
 ```
-kadan night repo <소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지   # 둘 중 하나만 줘도 된다
-kadan night repo <소유자/이름> --clear deployBranch|nightMerge                       # 칸 하나 지우기
-kadan night repo list | show <소유자/이름>                                            # 읽기
+kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지   # 둘 중 하나만 줘도 된다
+kadan autopilot repo <소유자/이름> --clear deployBranch|nightMerge                       # 칸 하나 지우기
+kadan autopilot repo list | show <소유자/이름>                                            # 읽기
 ```
 
 ## 온톨로지 폴더(선택, 폴더가 없으면 빈 것)
@@ -64,11 +64,11 @@ night_merge: 금지 (허용 | 금지. 칸이 없으면 허용)
 2. `nightMerge`가 `금지` → 보류(`night-merge-forbidden`)
 3. `deployBranch`가 비어 있음 → 보류(`setup-needed`)
 4. 대상 브랜치 == `deployBranch` → 보류(`deploy-branch`)
-5. 그 밖 → 나이트런 중 자동 머지(`allowed`)
+5. 그 밖 → Autopilot 중 자동 머지(`allowed`)
 
-`kadan night on --level 자동 --allow <소유자/이름> --quote "<kyle 원문>"`은 그날 밤에 한해 2번(`night-merge-forbidden`)과 4번(`deploy-branch`) 보류만 푼다. 0·1·3번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
+`kadan autopilot on --level autopilot --allow <소유자/이름> --quote "<kyle 원문>"`은 그날 밤에 한해 2번(`night-merge-forbidden`)과 4번(`deploy-branch`) 보류만 푼다. 0·1·3번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
 
 관문 입력 예시(세 칸을 `jq`로 합쳐 stdin으로 넘긴다; 파일 목록은 이름을 바꾼 옛 경로까지 받으려고 REST를 쓴다):
 `jq -n --argjson pr "$(gh pr view N --json url,number,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,changedFiles)" --argjson files "$(gh api --paginate --slurp repos/<소유자>/<이름>/pulls/N/files)" --argjson requiredChecks "$(gh pr checks N --required --json name,state,bucket)" --argjson repo "$(gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed)" '{pr:$pr,files:$files,requiredChecks:$requiredChecks,repo:$repo}' | kadan merge-gate <업무>`
 
-예전 `kadan night source`(외부 폴더 등록)는 없어졌다. 정책 파일에 남은 `cards` 칸은 읽지도 쓰지도 않고 지우지도 않는다.
+예전 `kadan autopilot source`(외부 폴더 등록)는 없어졌다. 정책 파일에 남은 `cards` 칸은 읽지도 쓰지도 않고 지우지도 않는다.

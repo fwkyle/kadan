@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {guardedSend} from '../src/cli.mjs';
 import {mailHeaderLine, stripStoredHeader} from '../src/mail-header.mjs';
-import {summarizeNight} from '../src/night-summary.mjs';
+import {summarizeAutopilot} from '../src/autopilot-summary.mjs';
 import {escalationMessage} from '../src/watch-mail.mjs';
 import {mailboxLetters} from '../src/mailbox-state.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
@@ -88,22 +88,22 @@ test('저장 전용 우편함: 본문에 머리말, bytes는 사용자 본문 �
   assert.equal(entry.bytes, Buffer.byteLength('저장 본문'));
 });
 
-const nightStart = {t: '2026-10-27T00:00:00Z', by: 'qa-night-super'};
-const nightArgs = (h, entries) => ({start: nightStart, phase: 'off', endedAt: Date.parse('2026-10-27T08:00:00Z'), entries,
+const autopilotStart = {t: '2026-10-27T00:00:00Z', by: 'qa-autopilot-super'};
+const autopilotArgs = (h, entries) => ({start: autopilotStart, phase: 'off', endedAt: Date.parse('2026-10-27T08:00:00Z'), entries,
   decisionEvents: [], readBody: d => readMailBody(d, h)});
 
 test('F1: 실제 Mailbox.send로 저장한 보류(머리말 있음)와 머리말 없는 옛 보류가 모두 아침 요약에 남는다', () => {
   const h = home();
-  new Mailbox(h, '사람').send({by: 'qa-night-super', message: '[나이트 보류] 운영 DB 마이그레이션'});
+  new Mailbox(h, '사람').send({by: 'qa-autopilot-super', message: '[Autopilot 보류] 운영 DB 마이그레이션'});
   const entries = readLedger(h).map(e => ({...e, t: '2026-10-27T03:00:00Z'}));
   assert.equal(entries[0].header, true);
   // 머리말 표지가 없는 옛 보류 우편: 본문 그대로 저장
   const {createHash} = awaitedCrypto;
-  const old = '[나이트 보류] 옛 편지', digest = createHash('sha256').update(old).digest('hex');
+  const old = '[Autopilot 보류] 옛 편지', digest = createHash('sha256').update(old).digest('hex');
   fs.mkdirSync(path.join(h, 'mail'), {recursive: true});
   fs.writeFileSync(path.join(h, 'mail', `${digest}.txt`), old);
   entries.push({kind: 'send', mailId: 'old', role: '사람', by: 'x', digest, t: '2026-10-27T02:00:00Z'});
-  const summary = summarizeNight(nightArgs(h, entries));
+  const summary = summarizeAutopilot(autopilotArgs(h, entries));
   assert.equal(summary.counts.held, 2);
 });
 
