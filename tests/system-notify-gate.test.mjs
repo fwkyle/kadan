@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {systemNotify, notifyUser, SYSTEM_NOTIFY_REFUSED, SYSTEM_NOTIFY_SINK_FAILED} from '../src/user-notify.mjs';
-import {finishNight} from '../src/night.mjs';
+import {finishAutopilot} from '../src/autopilot.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
 
 // 시험이 kyle 맥에 진짜 알림을 띄우지 못하게 하는 관문(2026-10-23). 진짜 spawnSync는 부르지 않는다 — 거절되는지만 본다.
@@ -34,14 +34,14 @@ test('notifyUser: off + 진짜 spawnSync는 result.error에 거절 문구가 들
   assert.equal(r.via, 'system');
 });
 
-test('나이트 끝 처리: 기본 알림(가짜 notify 없음)이 거절돼도 끝 사건 기록은 남는다', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-gate-'));
+test('Autopilot 끝 처리: 기본 알림(가짜 notify 없음)이 거절돼도 끝 사건 기록은 남는다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-gate-'));
   const t = Date.now() - 60_000;
-  appendLedger({kind: 'night', phase: 'on', t: new Date(t).toISOString(), until: new Date(t + 3600_000).toISOString(),
+  appendLedger({kind: 'autopilot', phase: 'on', t: new Date(t).toISOString(), until: new Date(t + 3600_000).toISOString(),
     by: '사람', text: '자러 감', to: [], delivered: []}, home);
-  const event = finishNight({home, by: '사람', phase: 'off', reason: null});
+  const event = finishAutopilot({home, by: '사람', phase: 'off', reason: null});
   assert.equal(event.phase, 'off');
-  assert.deepEqual(readLedger(home).filter(e => e.kind === 'night').map(e => e.phase), ['on', 'off']);
+  assert.deepEqual(readLedger(home).filter(e => e.kind === 'autopilot').map(e => e.phase), ['on', 'off']);
 });
 
 const tmpSink = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-sink-')), 'notices.log');

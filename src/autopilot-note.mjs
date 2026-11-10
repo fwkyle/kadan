@@ -1,14 +1,15 @@
-// 나이트 기록(`night-note`): 켜진 동안 대신 정한 것·보류·관문 판정·머지·시작한 일감을 한 줄씩 남긴다.
-// `night` 종류와 따로 둔다: night 사건에 phase를 더하면 nightState의 "마지막 night 사건" 계산이 꺼짐으로 읽힌다.
+// Autopilot 기록(`autopilot-note`): 켜진 동안 대신 정한 것·보류·관문 판정·머지·시작한 일감을 한 줄씩 남긴다.
+// `autopilot` 종류와 따로 둔다: autopilot 사건에 phase를 더하면 autopilotState의 "마지막 autopilot 사건" 계산이 꺼짐으로 읽힌다.
 // 새 권한이 아니다. 판정하지 않고 적기만 한다. 관문 판정(gate)과 실제 머지(merge)는 서로 다른 사건이다.
-import {normalizeGithub} from './night-repo-policy.mjs';
+import {normalizeGithub} from './autopilot-repo-policy.mjs';
+import {DECISION_PREFIX, MODE} from './autopilot-terms.mjs';
 
 export const NOTE_KINDS = ['decision', 'hold', 'gate', 'merge', 'start'];
 export const HOLD_KINDS = ['decision', 'gate', 'deploy-repo'];
 export const VERDICTS = ['pass', 'reject'];
 export const NOTE_TEXT_LIMIT = 200;
-export const DECISION_PREFIX = '[나이트 결정]';
-const USAGE = `kadan night note ${NOTE_KINDS.join('|')} "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind ${HOLD_KINDS.join('|')}] [--verdict ${VERDICTS.join('|')}]`;
+export {DECISION_PREFIX};
+const USAGE = `kadan autopilot note ${NOTE_KINDS.join('|')} "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind ${HOLD_KINDS.join('|')}] [--verdict ${VERDICTS.join('|')}]`;
 
 // 공백류(줄바꿈·탭)는 공백 하나로 접고 남은 제어 문자(C0·DEL·C1: ESC·NUL·backspace 등)는 지운다.
 // 아침 요약과 CLI 출력이 화면 제어 문자로 깨지지 않게 저장 전과 요약 직전에 같은 함수를 거친다.
@@ -37,8 +38,8 @@ export function normalizePrKey(pr) {
   return repo ? `${repo}${pr.slice(i)}` : pr;
 }
 
-// 입력을 검사해 원장에 쓸 사건을 만든다. 나이트가 켜져 있는지는 부르는 쪽이 먼저 본다.
-export function buildNightNote({words, flags, by, now}) {
+// 입력을 검사해 원장에 쓸 사건을 만든다. Autopilot이 켜져 있는지는 부르는 쪽이 먼저 본다.
+export function buildAutopilotNote({words, flags, by, now}) {
   const [noteKind, ...rest] = words;
   if (!NOTE_KINDS.includes(noteKind)) throw new Error(`종류는 ${NOTE_KINDS.join('|')} 중 하나여야 합니다. ${USAGE}`);
   const text = foldNoteText(rest.join(' '));
@@ -54,7 +55,7 @@ export function buildNightNote({words, flags, by, now}) {
     if (!VERDICTS.includes(verdict)) throw new Error(`gate에는 --verdict ${VERDICTS.join('|')}가 필요합니다. ${USAGE}`);
   } else if (verdict) throw new Error(`--verdict는 gate에만 쓸 수 있습니다. ${USAGE}`);
   return {
-    kind: 'night-note', noteKind, text,
+    kind: 'autopilot-note', noteKind, text,
     ...(holdKind ? {holdKind} : {}), ...(verdict ? {verdict} : {}),
     ...(work ? {work} : {}), ...(pr ? {pr: normalizePrKey(pr)} : {}), ...(sha ? {sha} : {}),
     ...(reason ? {reason: foldNoteText(reason)} : {}),
@@ -63,10 +64,10 @@ export function buildNightNote({words, flags, by, now}) {
 }
 
 const LABEL = {hold: '보류', gate: '관문', merge: '머지', start: '시작'};
-// 명령이 보여 주는 한 줄. 결정은 접두 `[나이트 결정]`을 붙인다.
-export const noteLine = event => (event.noteKind === 'decision' ? `${DECISION_PREFIX} ${event.text}` : `[나이트 ${LABEL[event.noteKind]}] ${event.text}`);
+// 명령이 보여 주는 한 줄. 결정은 접두 `[Autopilot 결정]`을 붙인다.
+export const noteLine = event => (event.noteKind === 'decision' ? `${DECISION_PREFIX} ${event.text}` : `[${MODE} ${LABEL[event.noteKind]}] ${event.text}`);
 
-// 아침 요약용 집계. notes는 구간 안 night-note 사건. 같은 PR의 관문 통과·머지는 한 번으로 센다(pr가 없으면 사건마다).
+// 아침 요약용 집계. notes는 구간 안 autopilot-note 사건. 같은 PR의 관문 통과·머지는 한 번으로 센다(pr가 없으면 사건마다).
 export function tallyNotes(notes) {
   const by = kind => notes.filter(n => n.noteKind === kind);
   const distinct = list => new Set(list.map((n, i) => normalizePrKey(n.pr) || `#${i}`)).size;

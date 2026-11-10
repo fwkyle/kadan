@@ -3,7 +3,7 @@
 // 키 전달은 floor-tmux의 sendHumanKeys 하나로만 한다(board는 tmux 키 전송 명령을 직접 만들지 않는다).
 // 비용(상주 화면): 터미널 칸 포커스 중 tick 200ms에 읽기 2번(약 초당 10번), 포커스 밖은 1.5초에 2번, 칸이 꺼지면 그 칸의 조회는 0.
 //   설명 칸은 켜진 때만 고를 때(0.4초 가라앉은 뒤)와 15초 이상 간격으로 GET 1번. 사이드바 summary는 켜진 때만 15초 이상 간격.
-//   슈퍼감독 현황·나이트런 정책은 시작과 r 때만. 원장·카드는 (대시보드가 꺼졌을 때의 시작·r 한 번 말고는) 읽지 않으므로 데이터가 10배여도 tick 비용은 같다.
+//   슈퍼감독 현황·Autopilot 정책은 시작과 r 때만. 원장·카드는 (대시보드가 꺼졌을 때의 시작·r 한 번 말고는) 읽지 않으므로 데이터가 10배여도 tick 비용은 같다.
 import { floor } from "../floor.mjs";
 import { sendHumanKeys, HUMAN_KEYS_PASTE_LABEL } from "../floor-tmux.mjs";
 import { DEFAULT_PORT, readConfig } from "../quickstart.mjs";
@@ -36,7 +36,7 @@ export function boardPort(flags, home = ledgerHome()) {
 export function createBoard(deps) {
   const { fetchJson, term, toSession, local, listSessions, now = Date.now, schedule = setTimeout, cancel = clearTimeout } = deps;
   const read = deps.readScreen ?? readScreen, pidOf = deps.panePid ?? readPanePid, send = deps.sendKeys ?? sendHumanKeys;
-  const data = { supers: [], summary: null, nightRepos: null, sessions: new Set(), dashboard: "확인 중" };
+  const data = { supers: [], summary: null, autopilotRepos: null, sessions: new Set(), dashboard: "확인 중" };
   const desc = new Map(); // 역할 → {status, at}
   const parser = createInputParser();
   const panes = { side: true, desc: true, term: true };
@@ -47,7 +47,7 @@ export function createBoard(deps) {
 
   const rebuild = () => {
     entries = buildEntries({ supers: data.supers, sessions: data.sessions, summary: data.summary,
-      nightRepos: data.nightRepos, toSession });
+      autopilotRepos: data.autopilotRepos, toSession });
   };
   const draw = () => {
     if (!term.active || closed) return;
@@ -84,9 +84,9 @@ export function createBoard(deps) {
     try {
       if (full) { data.supers = (await loadSupers({ fetchJson, local })).supers; desc.clear(); }
       if (full || panes.side) {
-        const dash = await loadDashboard({ fetchJson, night: full });
+        const dash = await loadDashboard({ fetchJson, autopilot: full });
         data.summary = dash.summary;
-        if (full) data.nightRepos = dash.nightRepos;
+        if (full) data.autopilotRepos = dash.autopilotRepos;
         data.dashboard = dash.summary ? "연결됨" : "연결 안 됨 (뱃지 ?)";
       }
       readSessions(); lastSummaryAt = now(); rebuild(); draw();

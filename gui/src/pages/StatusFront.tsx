@@ -5,7 +5,7 @@ export type FrontData = {
   repos: { repo: string; decisions: number | null; merges: number | null; stuck: number }[];
   decisions: { id: string; repo: string; merge: boolean; requestedBy: string | null; title: string; at?: string | null; mergeInfo?: MergeInfo }[] | null;
 };
-// 머지 요청 줄 정보(서버 src/dashboard/night-view.mjs). 결정 글·검수 기록에 있는 것만 담는다.
+// 머지 요청 줄 정보(서버 src/dashboard/autopilot-view.mjs). 결정 글·검수 기록에 있는 것만 담는다.
 export type MergeInfo = {
   prs: string[]; work: string | null; reviewSha: string | null; review: string; match: string | null;
   head: string | null; ci: string | null; ciAt: string | null;

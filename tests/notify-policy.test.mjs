@@ -150,9 +150,9 @@ test('종류 대조는 여러 줄 notifyUser 호출도 읽는다', () => {
   assert.ok(!KNOWN_KINDS.includes('review-unregistered'));              // 이런 종류가 소스에 생기면 아래 대조 시험이 실패한다
 });
 
-test('나이트 모드 아침 요약(night-summary)은 새 글 대상이다', () => {
-  assert.deepEqual(postPolicy({kind: 'night-summary', key: 'night-summary:x'}), {post: true});
-  assert.ok(KNOWN_KINDS.includes('night-summary'));
+test('Autopilot 아침 요약(autopilot-summary)은 새 글 대상이다', () => {
+  assert.deepEqual(postPolicy({kind: 'autopilot-summary', key: 'autopilot-summary:x'}), {post: true});
+  assert.ok(KNOWN_KINDS.includes('autopilot-summary'));
 });
 
 // 새 알림 종류를 코드에 쓰면 정책(KNOWN_KINDS)과 문서 표에 올리게 한다. 필수 조치 알림이 조용히 빠지는 것을 막는다.

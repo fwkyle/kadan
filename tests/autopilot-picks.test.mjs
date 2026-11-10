@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {nightCommand} from '../src/commands/night.mjs';
+import {autopilotCommand} from '../src/commands/autopilot.mjs';
 import {CardStore} from '../src/card-store.mjs';
-import {buildNightMessage, AUTO_CHECKLIST} from '../src/night.mjs';
-import {collectPicks} from '../src/night-picks.mjs';
+import {buildAutopilotMessage, AUTO_CHECKLIST} from '../src/autopilot.mjs';
+import {collectPicks} from '../src/autopilot-picks.mjs';
 
 // 가짜 TODO 파일·격리 홈만 쓴다. 서버·tmux·운영 홈에 닿지 않는다.
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
@@ -45,10 +45,10 @@ const TODO = [
 ].join('\n');
 
 function fixture() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-night-picks-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-picks-'));
   const todo = path.join(home, 'TODO.md');
   fs.writeFileSync(todo, TODO);
-  const run = (flags, deps = {}) => nightCommand(['picks'], flags, {home, by: '사람', deps});
+  const run = (flags, deps = {}) => autopilotCommand(['picks'], flags, {home, by: '사람', deps});
   return {home, todo, run};
 }
 const titles = rows => rows.map(r => r.title);
@@ -124,15 +124,15 @@ test('7. 명령 전후로 TODO 내용·수정 시각과 홈 파일 목록이 그
   assert.deepEqual(fs.readdirSync(f.home).sort(), before.files);
 });
 
-test('8. 자동 단계 지침에 night picks가 있고 --only-running에서는 없다', () => {
-  const args = {text: '밤', quote: '', viaChat: false, by: '사람', untilMs: Date.parse('2026-11-04T22:00:00Z'), level: '자동'};
-  const auto = buildNightMessage({...args, onlyRunning: false});
-  assert.match(auto, /\(10\) 새 일감은 `kadan night picks --todo/);
+test('8. Autopilot 단계 지침에 autopilot picks가 있고 --only-running에서는 없다', () => {
+  const args = {text: '밤', quote: '', viaChat: false, by: '사람', untilMs: Date.parse('2026-11-04T22:00:00Z'), level: 'autopilot'};
+  const auto = buildAutopilotMessage({...args, onlyRunning: false});
+  assert.match(auto, /\(10\) 새 일감은 `kadan autopilot picks --todo/);
   assert.match(auto, /밤 일감 후보\(가\)와 미배정 ready 카드\(라\)에서만/);
   assert.match(auto, /건너뜀\(나\)·후보\(다\) 항목은 시작하지 않습니다/);
   assert.match(AUTO_CHECKLIST.join('\n'), /\(가\) 후보가 되고, 미배정 ready 카드는 \(라\)/);
-  const only = buildNightMessage({...args, onlyRunning: true});
-  assert.doesNotMatch(only, /night picks/);
+  const only = buildAutopilotMessage({...args, onlyRunning: true});
+  assert.doesNotMatch(only, /autopilot picks/);
   assert.match(only, /\(10\) 새 일감을 시작하지 않습니다/);
 });
 
@@ -170,11 +170,11 @@ test('CLI: 꺼진 상태에서도 동작하고 --json은 네 묶음 키를 낸�
   const f = fixture();
   const env = {...process.env, KADAN_HOME: f.home, KADAN_WINDOW: 'none'};
   delete env.TMUX;
-  const ok = spawnSync(process.execPath, [CLI, 'night', 'picks', '--todo', f.todo, '--json'], {env, encoding: 'utf8'});
+  const ok = spawnSync(process.execPath, [CLI, 'autopilot', 'picks', '--todo', f.todo, '--json'], {env, encoding: 'utf8'});
   assert.equal(ok.status, 0, ok.stderr);
   const json = JSON.parse(ok.stdout);
   assert.deepEqual(Object.keys(json).sort(), ['candidates', 'picks', 'readyCards', 'skipped', 'unreadable']);
   assert.equal(json.picks.length, 1);
-  const bad = spawnSync(process.execPath, [CLI, 'night', 'picks'], {env, encoding: 'utf8'});
+  const bad = spawnSync(process.execPath, [CLI, 'autopilot', 'picks'], {env, encoding: 'utf8'});
   assert.equal(bad.status, 2);
 });

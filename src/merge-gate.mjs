@@ -1,14 +1,14 @@
-// 나이트런 중 자동 머지 관문: 슈퍼감독이 넘긴 gh JSON(stdin)으로 PR 하나의 통과/거절을 판정한다.
+// Autopilot 중 자동 머지 관문: 슈퍼감독이 넘긴 gh JSON(stdin)으로 PR 하나의 통과/거절을 판정한다.
 // 카단은 GitHub를 부르지 않는다. 판정만 하고 머지는 하지 않는다 — 머지는 슈퍼감독이 통과를 보고 직접 한다.
-// 거절 이유는 모두 모아 보인다. 나이트런이 켜져 있으면 `night-note gate` 한 줄만 남긴다(새 사건 종류 없음).
+// 거절 이유는 모두 모아 보인다. Autopilot이 켜져 있으면 `autopilot-note gate` 한 줄만 남긴다(새 사건 종류 없음).
 // 10배 점검: 명령 한 번에 카드 목록·원장·온톨로지를 한 번 읽는다. 상주 경로가 아니다.
 import {WorkStore} from './work-store.mjs';
 import {appendLedger, readLedger} from './ledger.mjs';
 import {mergeCheck} from './merge-check.mjs';
 import {normalizeSha} from './review-sha.mjs';
-import {nightState, readDecisionEvents} from './night.mjs';
-import {buildNightNote} from './night-note.mjs';
-import {decideNightMerge, gitOriginGithub, normalizeGithub} from './night-repo-policy.mjs';
+import {autopilotState, readDecisionEvents} from './autopilot.mjs';
+import {buildAutopilotNote} from './autopilot-note.mjs';
+import {decideNightMerge, gitOriginGithub, normalizeGithub} from './autopilot-repo-policy.mjs';
 
 // 소문자 40자리만 인정한다. 공백·대문자를 맞춰 주지 않는다(애매하면 거절).
 const FULL_SHA = /^[0-9a-f]{40}$/;
@@ -25,7 +25,7 @@ export const FORBIDDEN_PATHS = [
   'CI·비밀: .github/workflows/**, *.plist, .env*, *.pem, *.key',
   '의존성: package.json, package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, yarn.lock, bun.lock*, Cargo.lock, go.sum, poetry.lock, Pipfile.lock, uv.lock',
   '규칙 문서: CLAUDE.md, AGENTS.md (어느 폴더든)',
-  '관문과 판정 재료: src/merge-gate.mjs, src/merge-check.mjs, src/review-sha.mjs, src/review-flow.mjs, src/night*.mjs, src/commands/night.mjs',
+  '관문과 판정 재료: src/merge-gate.mjs, src/merge-check.mjs, src/review-sha.mjs, src/review-flow.mjs, src/autopilot*.mjs, src/commands/autopilot.mjs',
 ];
 
 // 금지 경로면 그 무리 이름, 아니면 null.
@@ -36,7 +36,7 @@ export function forbiddenGroup(file) {
   if (base.endsWith('.plist') || base.startsWith('.env') || base.endsWith('.pem') || base.endsWith('.key')) return 'CI·비밀';
   if (base === 'package.json' || LOCK_FILES.includes(base) || base.startsWith('bun.lock')) return '의존성';
   if (base === 'claude.md' || base === 'agents.md') return '규칙 문서';
-  if (['src/merge-gate.mjs', 'src/merge-check.mjs', 'src/review-sha.mjs', 'src/review-flow.mjs', 'src/commands/night.mjs'].includes(lower) || /^src\/night[^/]*\.mjs$/.test(lower)) return '관문 판정 재료';
+  if (['src/merge-gate.mjs', 'src/merge-check.mjs', 'src/review-sha.mjs', 'src/review-flow.mjs', 'src/commands/autopilot.mjs'].includes(lower) || /^src\/autopilot[^/]*\.mjs$/.test(lower)) return '관문 판정 재료';
   return null;
 }
 
@@ -143,14 +143,14 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   if (!mergeMethod) reject('허용된 머지 방식 없음(mergeCommitAllowed·squashMergeAllowed·rebaseMergeAllowed 모두 false)');
   // 7. 저장소 정책 (+ --allow)
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
-  const state = nightState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);
+  const state = autopilotState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);
   const allow = state.on ? (state.start.allow ?? []) : [];
   let policy = null, allowApplied = null;
   if (github) {
     policy = decideNightMerge(home, {github, baseBranch: pr.baseRefName});
     if (policy.action !== 'merge') {
       if (ALLOW_RELEASES.includes(policy.reason) && allow.includes(github)) allowApplied = policy.reason;
-      else reject(`저장소 정책이 나이트런 중 자동 머지를 안 함(${policy.reason})${ALLOW_RELEASES.includes(policy.reason) ? ` — night on --allow ${github}로 풀 수 있음` : ''}`);
+      else reject(`저장소 정책이 Autopilot 중 자동 머지를 안 함(${policy.reason})${ALLOW_RELEASES.includes(policy.reason) ? ` — autopilot on --allow ${github}로 풀 수 있음` : ''}`);
     }
   }
 
@@ -159,12 +159,12 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   // 통과일 때만 그대로 칠 명령을 낸다(거절이면 내지 않는다). mergeMethod가 있고 github이 읽혔을 때만 통과가 가능하다.
   const mergeCommand = verdict === 'pass' ? `gh pr merge ${pr.number} --${mergeMethod} --match-head-commit ${head} -R ${github}` : null;
   const result = {verdict, reasons, work: workKey, pr: prRef, head: pr.headRefOid, reviewSha: review?.reviewSha ?? null,
-    review: review?.review?.key ?? null, reviewResult: review?.result ?? null, mergeMethod: verdict === 'pass' ? mergeMethod : null, mergeCommand, policy, allowApplied, allow, nightOn: state.on, recorded: false};
+    review: review?.review?.key ?? null, reviewResult: review?.result ?? null, mergeMethod: verdict === 'pass' ? mergeMethod : null, mergeCommand, policy, allowApplied, allow, autopilotOn: state.on, recorded: false};
   if (state.on) {
     const text = verdict === 'pass' ? `관문 통과${allowApplied ? ` (kyle 허용 --allow로 ${allowApplied} 보류를 풂)` : ''}` : `관문 거절: ${reasons[0]}`;
     const flags = {verdict, work: workKey, reason: verdict === 'pass' ? (allowApplied ? `allow:${allowApplied}` : '모든 조건 충족') : reasons.join(' / '),
       ...(prRef ? {pr: prRef} : {}), ...(normalizeSha(head) ? {sha: head} : {})};
-    (deps.record ?? (entry => appendLedger(entry, home)))(buildNightNote({words: ['gate', text], flags, by, now}));
+    (deps.record ?? (entry => appendLedger(entry, home)))(buildAutopilotNote({words: ['gate', text], flags, by, now}));
     result.recorded = true;
   }
   return result;
@@ -172,11 +172,11 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
 
 export function formatMergeGate(r) {
   const lines = [r.verdict === 'pass' ? '관문: 통과' : '관문: 거절', `PR: ${r.pr ?? '(저장소 모름)'}`, `PR head: ${r.head}`, `검수 SHA: ${r.reviewSha ?? '-'}${r.review ? ` (${r.review})` : ''}`];
-  if (r.policy) lines.push(`저장소 정책: ${r.policy.action === 'merge' ? '나이트런 중 자동 머지' : `보류(${r.policy.reason})`}`);
+  if (r.policy) lines.push(`저장소 정책: ${r.policy.action === 'merge' ? 'Autopilot 중 자동 머지' : `보류(${r.policy.reason})`}`);
   if (r.allowApplied) lines.push(`kyle 허용(--allow)으로 ${r.allowApplied} 보류를 풂`);
   for (const reason of r.reasons) lines.push(`!! ${reason}`);
-  lines.push(r.recorded ? '관문 기록을 남겼습니다(night note gate).' : '기록 없음(나이트런 꺼짐)');
-  if (r.verdict === 'pass') lines.push(`머지는 하지 않았습니다. 아래 명령을 그대로 치세요(방식을 바꾸지 않습니다): ${r.mergeCommand}`, `그 뒤: kadan night note merge … --pr ${r.pr} --sha <mergeCommit>`);
+  lines.push(r.recorded ? '관문 기록을 남겼습니다(autopilot note gate).' : '기록 없음(Autopilot 꺼짐)');
+  if (r.verdict === 'pass') lines.push(`머지는 하지 않았습니다. 아래 명령을 그대로 치세요(방식을 바꾸지 않습니다): ${r.mergeCommand}`, `그 뒤: kadan autopilot note merge … --pr ${r.pr} --sha <mergeCommit>`);
   return lines.join('\n');
 }
 

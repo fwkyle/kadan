@@ -37,10 +37,10 @@ test('가벼운 요약은 본문을 읽지 않고 전체 화면 수집과 같은
       appendStream(f.home, 'decisions/events.jsonl', {...d, revision: d.revision + 1, status: 'cancelled'});
     },
     () => { live = []; },
-    // 나이트런(PR3 검수): 켜짐 → 끝 시각 지남 → 꺼짐 기록. 빠른 경로와 전체 경로가 같은 night 값을 낸다.
-    () => appendLedger({kind: 'night', phase: 'on', by: '사람', text: 'x', level: '자동', onlyRunning: false,
+    // Autopilot(PR3 검수): 켜짐 → 끝 시각 지남 → 꺼짐 기록. 빠른 경로와 전체 경로가 같은 autopilot 값을 낸다.
+    () => appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'x', level: 'autopilot', onlyRunning: false,
       until: new Date(Date.now() + 3600_000).toISOString(), t: new Date().toISOString()}, f.home),
-    () => appendLedger({kind: 'night', phase: 'off', startedAt: new Date().toISOString(),
+    () => appendLedger({kind: 'autopilot', phase: 'off', startedAt: new Date().toISOString(),
       endedAt: new Date().toISOString(), t: new Date().toISOString()}, f.home),
   ];
   for (const change of changes) {
@@ -130,17 +130,17 @@ test('응답 캐시는 UTF-8 총 바이트·개수 한도를 지키며 큰 응�
   cache.clear(); assert.deepEqual(cache.info(), {entries: 0, bytes: 0});
 });
 
-test('요약의 night: 현황을 보지 않아도 새 night 사건이 다음 조회에 반영된다', () => {
+test('요약의 autopilot: 현황을 보지 않아도 새 autopilot 사건이 다음 조회에 반영된다', () => {
   const f = dashboardFixture({count: 2});
   const read = createDashboardSummaryReader(f.home, {listSessions: () => []});
-  assert.deepEqual(read().night, {on: false, last: null});
-  appendLedger({kind: 'night', phase: 'on', by: '사람', text: 'x', level: '자동', onlyRunning: false,
+  assert.deepEqual(read().autopilot, {on: false, last: null});
+  appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'x', level: 'autopilot', onlyRunning: false,
     until: new Date(Date.now() + 3600_000).toISOString(), t: new Date().toISOString()}, f.home);
-  assert.equal(read().night.on, true);
-  assert.equal(read().night.level, '자동');
-  // 사람이 켠 뒤 답한 결정이 있으면 꺼짐(전체 경로와 같은 nightState 판정).
+  assert.equal(read().autopilot.on, true);
+  assert.equal(read().autopilot.level, 'autopilot');
+  // 사람이 켠 뒤 답한 결정이 있으면 꺼짐(전체 경로와 같은 autopilotState 판정).
   const d = f.decisions.list().find(x => x.status === 'open');
   assert.ok(d, '열린 결정이 있어야 한다');
   f.decisions.answer(d.id, {revision: d.revision, text: '응', choice: d.options[0]}, '사람');
-  assert.equal(read().night.on, false);
+  assert.equal(read().autopilot.on, false);
 });

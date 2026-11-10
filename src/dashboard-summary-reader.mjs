@@ -8,7 +8,7 @@ import {withMailboxView, mailboxWaitingCount} from './mail-view.mjs';
 import {buildTree} from './cli-tree.mjs';
 import {createTreeInputCache} from './dashboard-tree-inputs.mjs';
 import {sidebarRepos} from './dashboard/repo-view.mjs';
-import {nightStrip} from './dashboard/night-view.mjs';
+import {autopilotStrip} from './dashboard/autopilot-view.mjs';
 
 export function createDashboardSummaryReader(home, {listSessions, runtime = null, now = Date.now}) {
   const stores = createWatchStoreReaders(home);
@@ -57,8 +57,8 @@ export function createDashboardSummaryReader(home, {listSessions, runtime = null
     return {collectedAt: new Date(now()), runtime, secretary,
       decisions: decisions?.filter(d => d.status === 'open').length ?? null,
       waiting, counts: countCache.value,
-      // 나이트런 상태(PR3 검수): 이미 이어 읽은 원장 사건·결정만 쓴다. 뒤에서부터 마지막 night 사건 하나만 찾는다(재읽기·model 계산 없음).
-      night: nightStrip({entries, ledgerLines: entries.length, decisions, decisionError: decisions === null ? 'error' : null}, now()),
+      // Autopilot 상태(PR3 검수): 이미 이어 읽은 원장 사건·결정만 쓴다. 뒤에서부터 마지막 autopilot 사건 하나만 찾는다(재읽기·model 계산 없음).
+      autopilot: autopilotStrip({entries, ledgerLines: entries.length, decisions, decisionError: decisions === null ? 'error' : null}, now()),
       sidebar: sidebarCache.value, errors};
   };
 }

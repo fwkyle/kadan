@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
-import { badgesOf, buildEntries, cellWidth, fit, nightFor, nightWord, reduceKey } from "../src/board-model.mjs";
+import { badgesOf, buildEntries, cellWidth, fit, autopilotFor, autopilotWord, reduceKey } from "../src/board-model.mjs";
 import { cropAnsi, describeLines, layoutPanes, renderFrame, termWindow } from "../src/board-view.mjs";
 import { createTerminal, SCREEN_SEQUENCES } from "../src/board-tui.mjs";
 import { loadDashboard, loadSuperStatus, loadSupers, readPanePid, readScreen } from "../src/board-data.mjs";
@@ -12,7 +12,7 @@ const strip = (text) => text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
 const toSession = (role) => `kadan-${role}`;
 const line = (repo, reason, exceptBranch = null) => ({ github: `o/${repo}`, repo, verdict: { action: "x", reason, exceptBranch } });
 const summary = {
-  night: { on: true },
+  autopilot: { on: true },
   sidebar: [{ repo: "a", decisions: 2, merges: 1 }, { repo: "b", decisions: 0, merges: 3 }, { repo: "c", decisions: null, merges: null }],
 };
 
@@ -25,28 +25,28 @@ test("문자 폭: 한글·이모지는 2칸, 결합 문자는 0칸이고 fit이 
   assert.equal(fit("가나다라마", 7), "가나다…");
 });
 
-test("🌙 판정 문구·합산: 화면(night-repos.ts badgeOf)과 같고 모르면 ?, 줄이 없으면 -, 다르면 섞임", () => {
-  assert.equal(nightWord(line("a", "allowed")), "함");
-  assert.equal(nightWord(line("a", "allowed", "main")), "안 함(배포 브랜치 main)");
-  assert.equal(nightWord(line("a", "night-merge-forbidden")), "금지");
-  assert.equal(nightWord(line("a", "뭔가 새 판정")), "판정 모름");
-  const night = { repos: [line("a", "allowed"), line("b", "allowed"), line("c", "night-merge-forbidden")] };
-  assert.equal(nightFor(null, ["a"]), "?");
-  assert.equal(nightFor(night, null), "?");
-  assert.equal(nightFor(night, ["zzz"]), "-");
-  assert.equal(nightFor(night, ["a", "b"]), "함");
-  assert.equal(nightFor(night, ["a", "c"]), "섞임");
+test("🌙 판정 문구·합산: 화면(autopilot-repos.ts badgeOf)과 같고 모르면 ?, 줄이 없으면 -, 다르면 섞임", () => {
+  assert.equal(autopilotWord(line("a", "allowed")), "함");
+  assert.equal(autopilotWord(line("a", "allowed", "main")), "안 함(배포 브랜치 main)");
+  assert.equal(autopilotWord(line("a", "night-merge-forbidden")), "금지");
+  assert.equal(autopilotWord(line("a", "뭔가 새 판정")), "판정 모름");
+  const autopilot = { repos: [line("a", "allowed"), line("b", "allowed"), line("c", "night-merge-forbidden")] };
+  assert.equal(autopilotFor(null, ["a"]), "?");
+  assert.equal(autopilotFor(autopilot, null), "?");
+  assert.equal(autopilotFor(autopilot, ["zzz"]), "-");
+  assert.equal(autopilotFor(autopilot, ["a", "b"]), "함");
+  assert.equal(autopilotFor(autopilot, ["a", "c"]), "섞임");
 });
 
 test("슈퍼감독 판정·합산: 저장소 뱃지를 슈퍼감독 단위로 더하고 모르면 0이 아니라 ?, 세션 없음은 alive false", () => {
   const supers = [{ role: "x", repos: ["a", "b"] }, { role: "y", repos: null }, { role: "z", repos: ["a", "c"] }, { role: "w", repos: ["nope"] }];
-  const entries = buildEntries({ supers, sessions: new Set(["kadan-x", "kadan-y"]), summary, nightRepos: null, toSession });
+  const entries = buildEntries({ supers, sessions: new Set(["kadan-x", "kadan-y"]), summary, autopilotRepos: null, toSession });
   assert.deepEqual(entries.map((e) => [e.role, e.alive, e.decisions, e.merges]),
     [["x", true, 2, 4], ["y", true, null, null], ["z", false, null, null], ["w", false, null, null]]);
   assert.equal(badgesOf(entries[0]), "⚑2 ⇡4 🌙?");
   assert.equal(badgesOf(entries[1]), "⚑? ⇡? 🌙?");
-  const down = buildEntries({ supers: [{ role: "x", repos: ["a"] }], sessions: new Set(["kadan-x"]), summary: null, nightRepos: null, toSession });
-  assert.deepEqual([down[0].alive, down[0].decisions, down[0].nightOn], [true, null, false]);
+  const down = buildEntries({ supers: [{ role: "x", repos: ["a"] }], sessions: new Set(["kadan-x"]), summary: null, autopilotRepos: null, toSession });
+  assert.deepEqual([down[0].alive, down[0].decisions, down[0].autopilotOn], [true, null, false]);
 });
 
 test("목록 키 전이: 선택은 범위 안에 머물고 Enter는 살아 있는 줄에서만 터미널 포커스, 1 2 3은 칸 토글", () => {
@@ -100,7 +100,7 @@ test("칸 배치: 켜진 칸만 놓고, 터미널 칸이 너무 좁아지면 설
 test("화면: 모든 줄이 터미널 폭에 정확히 맞고, 선택·회색·터미널 포커스 표시가 구분된다", () => {
   const entries = buildEntries({
     supers: [{ role: "kadan-슈퍼감독", repos: ["a", "b"] }, { role: "긴-이름-".repeat(8), repos: ["c"] }, { role: "z", repos: null }],
-    sessions: new Set(["kadan-kadan-슈퍼감독"]), summary, nightRepos: { repos: [line("a", "allowed"), line("b", "allowed")] }, toSession,
+    sessions: new Set(["kadan-kadan-슈퍼감독"]), summary, autopilotRepos: { repos: [line("a", "allowed"), line("b", "allowed")] }, toSession,
   });
   const term = { lines: ["첫 줄", "\x1b[32m초록\x1b[0m"], paneWidth: 200, paneHeight: 2, cursor: { x: 2, y: 1 } };
   const panes = { side: true, desc: true, term: true };
@@ -174,7 +174,7 @@ test("터미널 복구: enter 뒤 restore가 raw 모드·커서·원래 화면·
   assert.deepEqual(raw.raws, [true, true]);
 });
 
-test("슈퍼감독 출처·대시보드 값·설명 조회: 실패한 것만 null이고 night 정책은 요청할 때만 읽는다", async () => {
+test("슈퍼감독 출처·대시보드 값·설명 조회: 실패한 것만 null이고 autopilot 정책은 요청할 때만 읽는다", async () => {
   const status = { supervisors: { items: [{ super: "s1", repos: ["a"] }, { super: "s2", repos: [] }] } };
   const ok = await loadSupers({ fetchJson: async (p) => { assert.equal(p, "/api/dashboard/status"); return status; }, local: () => assert.fail("로컬 금지") });
   assert.deepEqual(ok, { supers: [{ role: "s1", repos: ["a"] }, { role: "s2", repos: null }], source: "dashboard" });
@@ -183,10 +183,10 @@ test("슈퍼감독 출처·대시보드 값·설명 조회: 실패한 것만 nul
   const none = await loadSupers({ fetchJson: async () => { throw new Error("x"); }, local: () => { throw new Error("y"); } });
   assert.deepEqual(none, { supers: [], source: "none" });
   const seen = [];
-  const fetchJson = async (p) => { seen.push(p); if (p === "/api/night/repos") throw new Error("down"); return { ok: p }; };
-  assert.deepEqual(await loadDashboard({ fetchJson }), { summary: { ok: "/api/dashboard/summary" }, nightRepos: null });
+  const fetchJson = async (p) => { seen.push(p); if (p === "/api/autopilot/repos") throw new Error("down"); return { ok: p }; };
+  assert.deepEqual(await loadDashboard({ fetchJson }), { summary: { ok: "/api/dashboard/summary" }, autopilotRepos: null });
   seen.length = 0;
-  await loadDashboard({ fetchJson, night: false });
+  await loadDashboard({ fetchJson, autopilot: false });
   assert.deepEqual(seen, ["/api/dashboard/summary"]);
   seen.length = 0;
   assert.deepEqual(await loadSuperStatus({ fetchJson, role: "역할 a" }), { ok: "/api/dashboard/status?super=%EC%97%AD%ED%95%A0%20a" });
@@ -227,7 +227,7 @@ function harness({ alive = true, sendKeys, fetchJson } = {}) {
       log.fetch.push(p);
       if (p === "/api/dashboard/status") return { supervisors: { items: [{ super: "a", repos: ["a"] }, { super: "b", repos: ["b"] }] } };
       if (p === "/api/dashboard/summary") return summary;
-      if (p === "/api/night/repos") return { repos: [] };
+      if (p === "/api/autopilot/repos") return { repos: [] };
       return { works: [], rows: [], decisions: [], alerts: { count: 0, items: [] }, recent: [] };
     }),
     toSession, local: () => [], listSessions: () => (alive ? ["kadan-a", "kadan-b"] : []),
@@ -251,7 +251,7 @@ test("컨트롤러: 시작하면 목록·뱃지를 읽고, 터미널 칸은 고�
   const h = harness();
   await h.board.open();
   assert.deepEqual(h.board.state.entries.map((e) => [e.role, e.alive, e.decisions]), [["a", true, 2], ["b", true, 0]]);
-  assert.deepEqual(h.log.fetch.filter((p) => p !== "/api/dashboard/status?super=a"), ["/api/dashboard/status", "/api/dashboard/summary", "/api/night/repos"]);
+  assert.deepEqual(h.log.fetch.filter((p) => p !== "/api/dashboard/status?super=a"), ["/api/dashboard/status", "/api/dashboard/summary", "/api/autopilot/repos"]);
   await h.fire(1500);
   assert.deepEqual(h.log.read, ["kadan-a"]);
   assert.ok(h.timers.size >= 1);

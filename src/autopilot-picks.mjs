@@ -1,4 +1,4 @@
-// kadan night picks — 밤 일감 후보 읽기. 설계: docs/daily/research/2026-11-02_나이트-모드-단계화.md 6절.
+// kadan autopilot picks — 밤 일감 후보 읽기. 설계: docs/daily/research/2026-11-02_나이트-모드-단계화.md 6절.
 // 읽기만 한다: TODO 파일·카드·원장에 쓰지 않는다. 형식만 보고(의미 판단은 슈퍼감독 몫) 흐린 항목을 이유와 함께 걸러 낸다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -95,7 +95,7 @@ export function formatPicks(r) {
 // 인자 검사 포함. `--todo`가 없거나 절대경로가 아니면 종료 코드 2.
 export function picksCommand(flags, {home, deps = {}}) {
   const raw = flags.todo === undefined ? [] : Array.isArray(flags.todo) ? flags.todo : [flags.todo];
-  const usage = 'kadan night picks --todo <절대경로> [--todo …] [--json]';
+  const usage = 'kadan autopilot picks --todo <절대경로> [--todo …] [--json]';
   if (!raw.length || raw.some(v => typeof v !== 'string' || !v)) throw Object.assign(new Error(`--todo가 필요합니다(TODO 파일 절대경로). ${usage}`), {exitCode: 2});
   const relative = raw.find(v => !path.isAbsolute(v));
   if (relative) throw Object.assign(new Error(`--todo는 절대경로여야 합니다: ${relative}. ${usage}`), {exitCode: 2});

@@ -10,13 +10,13 @@ import {WorkStore} from '../src/work-store.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {cardCommand} from '../src/card-command.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
-import {setRepoPolicy} from '../src/night-repo-policy.mjs';
+import {setRepoPolicy} from '../src/autopilot-repo-policy.mjs';
 import {mergeGate, mergeGateCommand, forbiddenGroup} from '../src/merge-gate.mjs';
 
-// Why: 나이트런 중 PR을 밤에 머지해도 되는지 코드가 판정한다. 하나라도 애매하면 거절(아침으로 보류)이어야 한다.
+// Why: Autopilot 중 PR을 밤에 머지해도 되는지 코드가 판정한다. 하나라도 애매하면 거절(아침으로 보류)이어야 한다.
 const H = 'a'.repeat(40), OTHER = 'b'.repeat(40), GH = 'acme/app';
 
-function fixture({policy = {deployBranch: '없음', nightMerge: '허용'}, night = null} = {}) {
+function fixture({policy = {deployBranch: '없음', nightMerge: '허용'}, autopilot = null} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-merge-gate-'));
   const repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-mg-repo-')));
   assert.equal(spawnSync('git', ['-C', repoDir, 'init', '--quiet'], {encoding: 'utf8'}).status, 0);
@@ -24,7 +24,7 @@ function fixture({policy = {deployBranch: '없음', nightMerge: '허용'}, night
   const store = new WorkStore(home), cards = new CardStore(home);
   store.create({key: 'repo/w', title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: '감독', repoPath: repoDir});
   if (policy) setRepoPolicy(home, {repo: GH, ...policy, by: 'test', record: () => {}});
-  if (night) appendLedger({kind: 'night', phase: 'on', by: '사람', text: '자자', viaChat: false, until: new Date(Date.now() + 3_600_000).toISOString(), to: [], delivered: [], t: new Date().toISOString(), ...night}, home);
+  if (autopilot) appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: '자자', viaChat: false, until: new Date(Date.now() + 3_600_000).toISOString(), to: [], delivered: [], t: new Date().toISOString(), ...autopilot}, home);
   let round = 0;
   const review = (outcome, sha) => {
     round++;
@@ -43,14 +43,14 @@ function fixture({policy = {deployBranch: '없음', nightMerge: '허용'}, night
   const REPO = {mergeCommitAllowed: true, squashMergeAllowed: true, rebaseMergeAllowed: true};
   const input = (o = {}) => JSON.stringify({pr: o.pr ?? pr(), repo: Object.hasOwn(o, 'repo') ? o.repo : REPO, files: Object.hasOwn(o, 'files') ? o.files : F('src/a.mjs'), ...(Object.hasOwn(o, 'requiredChecks') ? (o.requiredChecks === undefined ? {} : {requiredChecks: o.requiredChecks}) : {requiredChecks: PASS})});
   const gate = (raw = input(), deps = {}) => mergeGate('repo/w', raw, {home, by: '슈퍼', deps: {origin: () => GH, ...deps}});
-  const notes = () => readLedger(home).filter(e => e.kind === 'night-note');
+  const notes = () => readLedger(home).filter(e => e.kind === 'autopilot-note');
   return {home, store, review, pr, input, gate, notes, F};
 }
 
 const good = f => { f.review('pass', H); return f; };
 
-test('1. 모든 조건이 맞으면 통과하고, 나이트런이 켜져 있으면 gate pass를 남긴다', () => {
-  const f = good(fixture({night: {}}));
+test('1. 모든 조건이 맞으면 통과하고, Autopilot이 켜져 있으면 gate pass를 남긴다', () => {
+  const f = good(fixture({autopilot: {}}));
   const r = f.gate();
   assert.equal(r.verdict, 'pass'); assert.deepEqual(r.reasons, []);
   assert.equal(r.pr, `${GH}#7`);
@@ -59,17 +59,17 @@ test('1. 모든 조건이 맞으면 통과하고, 나이트런이 켜져 있으�
   assert.equal(n.noteKind, 'gate'); assert.equal(n.verdict, 'pass'); assert.equal(n.pr, `${GH}#7`); assert.equal(n.sha, H); assert.equal(n.work, 'repo/w');
 });
 
-test('1. 나이트런이 꺼져 있으면 판정만 하고 기록하지 않는다', () => {
+test('1. Autopilot이 꺼져 있으면 판정만 하고 기록하지 않는다', () => {
   const f = good(fixture());
   const r = f.gate();
   assert.equal(r.verdict, 'pass'); assert.equal(r.recorded, false);
   assert.equal(f.notes().length, 0);
   const out = mergeGateCommand(['repo/w'], {}, {home: f.home, by: '슈퍼', stdin: () => f.input(), deps: {origin: () => GH}});
-  assert.match(out.text, /기록 없음\(나이트런 꺼짐\)/);
+  assert.match(out.text, /기록 없음\(Autopilot 꺼짐\)/);
 });
 
-test('1. 거절도 나이트런이 켜져 있으면 gate reject를 한 줄 남긴다', () => {
-  const f = good(fixture({night: {}}));
+test('1. 거절도 Autopilot이 켜져 있으면 gate reject를 한 줄 남긴다', () => {
+  const f = good(fixture({autopilot: {}}));
   const r = f.gate(f.input({pr: f.pr({isDraft: true})}));
   assert.equal(r.verdict, 'reject');
   assert.equal(f.notes()[0].verdict, 'reject');
@@ -130,7 +130,7 @@ test('5. 파일 수가 changedFiles와 다르면(3,000개 초과로 잘린 경�
 
 test('6. 금지 경로는 무리마다 거절하고, src/cli.mjs만 바뀐 PR은 막지 않는다', () => {
   const f = good(fixture());
-  for (const p of ['.github/workflows/x.yml', 'package.json', 'sub/CLAUDE.md', 'src/night-guard.mjs', 'src/merge-gate.mjs', '.env.local', 'bun.lockb', 'a/AGENTS.md', 'x.pem']) {
+  for (const p of ['.github/workflows/x.yml', 'package.json', 'sub/CLAUDE.md', 'src/autopilot-guard.mjs', 'src/merge-gate.mjs', '.env.local', 'bun.lockb', 'a/AGENTS.md', 'x.pem']) {
     const r = f.gate(f.input({pr: f.pr({changedFiles: 2}), files: f.F('src/a.mjs', p)}));
     assert.equal(r.verdict, 'reject', p); assert.ok(r.reasons.some(x => x.includes('금지 경로')), p);
   }
@@ -161,31 +161,31 @@ test('9. 정책 night-merge-forbidden·deploy-branch는 --allow가 없으면 거
     const none = good(fixture({policy}));
     const r0 = none.gate();
     assert.equal(r0.verdict, 'reject', why); assert.ok(r0.reasons.some(x => x.includes(why)));
-    const allowed = good(fixture({policy, night: {allow: [GH]}}));
+    const allowed = good(fixture({policy, autopilot: {allow: [GH]}}));
     const r1 = allowed.gate();
     assert.equal(r1.verdict, 'pass', why); assert.equal(r1.allowApplied, why);
     assert.match(mergeGateCommand(['repo/w'], {}, {home: allowed.home, by: '슈퍼', stdin: () => allowed.input(), deps: {origin: () => GH}}).text, /kyle 허용\(--allow\)/);
-    const wrongKey = good(fixture({policy, night: {allow: ['other/repo']}}));
+    const wrongKey = good(fixture({policy, autopilot: {allow: ['other/repo']}}));
     assert.equal(wrongKey.gate().verdict, 'reject', `${why} 다른 키`);
   }
 });
 
-test('9. allow가 있어도 나이트런이 꺼져 있으면 허용은 없다', () => {
-  const f = good(fixture({policy: {deployBranch: '없음', nightMerge: '금지'}, night: {allow: [GH], until: new Date(Date.now() - 1000).toISOString(), t: new Date(Date.now() - 7_200_000).toISOString()}}));
+test('9. allow가 있어도 Autopilot이 꺼져 있으면 허용은 없다', () => {
+  const f = good(fixture({policy: {deployBranch: '없음', nightMerge: '금지'}, autopilot: {allow: [GH], until: new Date(Date.now() - 1000).toISOString(), t: new Date(Date.now() - 7_200_000).toISOString()}}));
   assert.equal(f.gate().verdict, 'reject');
 });
 
 test('9. allow는 다른 조건(검수·검사)을 풀지 않는다', () => {
-  const f = fixture({policy: {deployBranch: 'main', nightMerge: '허용'}, night: {allow: [GH]}});
+  const f = fixture({policy: {deployBranch: 'main', nightMerge: '허용'}, autopilot: {allow: [GH]}});
   assert.equal(f.gate().verdict, 'reject');
 });
 
 test('10. 정책 setup-needed(값 없음)·정책 파일 손상은 allow가 있어도 거절한다', () => {
-  const unset = good(fixture({policy: null, night: {allow: [GH]}}));
+  const unset = good(fixture({policy: null, autopilot: {allow: [GH]}}));
   const r = unset.gate();
   assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('setup-needed')));
-  const broken = good(fixture({night: {allow: [GH]}}));
-  fs.writeFileSync(path.join(broken.home, 'night-repo-policy.json'), '{손상');
+  const broken = good(fixture({autopilot: {allow: [GH]}}));
+  fs.writeFileSync(path.join(broken.home, 'autopilot-repo-policy.json'), '{손상');
   const r2 = broken.gate();
   assert.equal(r2.verdict, 'reject'); assert.ok(r2.reasons.some(x => x.includes('setup-needed')));
 });
@@ -231,7 +231,7 @@ test('F2. 대문자 head·앞뒤 공백 head는 맞춰 주지 않고 거절한�
 
 test('F3. rename의 옛 경로가 금지 경로면 거절하고, 옛 경로가 없는 rename도 거절한다', () => {
   const f = good(fixture());
-  for (const old of ['.github/workflows/x.yml', 'package.json', 'src/night-guard.mjs']) {
+  for (const old of ['.github/workflows/x.yml', 'package.json', 'src/autopilot-guard.mjs']) {
     const r = f.gate(f.input({files: [{filename: 'docs/moved.txt', status: 'renamed', previous_filename: old}]}));
     assert.equal(r.verdict, 'reject', old); assert.ok(r.reasons.some(x => x.includes('금지 경로')), old);
   }
@@ -258,7 +258,7 @@ test('F3. 맨 위 files가 없으면 사용 오류(종료 코드 2)다', () => {
 });
 
 test('F4. 관문 기록의 PR 키는 소문자로 정규화되어 대소문자 다른 머지 기록과 짝지어진다', () => {
-  const f = good(fixture({night: {}}));
+  const f = good(fixture({autopilot: {}}));
   f.gate(f.input({pr: f.pr({url: `https://github.com/ACME/App/pull/7`})}));
   assert.equal(f.notes()[0].pr, 'acme/app#7');
 });

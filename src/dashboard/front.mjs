@@ -16,7 +16,7 @@ const firstLine = (text) => String(text ?? "").split(/\r?\n/).find((l) => l.trim
 const cut = (text, n) => (text.length > n ? text.slice(0, n - 1) + "…" : text);
 
 // decisions: 열린 결정 목록(null이면 읽지 못함). stoppedRows: 막힌·오래된 미확정 실행 행.
-// mergeInfo: 머지 요청 결정 하나의 줄 정보를 돌려주는 함수(PR3, night-view.mjs). 없으면 줄 정보를 싣지 않는다.
+// mergeInfo: 머지 요청 결정 하나의 줄 정보를 돌려주는 함수(PR3, autopilot-view.mjs). 없으면 줄 정보를 싣지 않는다.
 export function frontStrip({ decisions, stoppedRows, mergeInfo = null }) {
   // 결정 기록을 못 읽었으면(null) 결정·머지 수는 0이 아니라 모름(null)이다.
   const unknown = decisions === null;
