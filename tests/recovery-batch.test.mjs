@@ -6,8 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {inspectRecovery, inspectRecoveryBatch, recoveryBatchOutput, recoveryErrorKind} from '../src/recovery.mjs';
-import {appendLedger} from '../src/ledger.mjs';
-import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {appendLedger, readSystemLedger, readLedger} from '../src/ledger.mjs';
+import {createDatabase, writeStorageMarker, appendRow, transaction} from '../src/storage.mjs';
+import {storageObservation} from '../src/storage-observation.mjs';
 
 const CLI = path.resolve(import.meta.dirname, '../src/cli.mjs');
 const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'batch-'));
@@ -263,4 +264,48 @@ test('표준 입력이 늦게 오거나 늦게 닫혀도 묶음 입력을 끝까
     assert.equal(output.status, 0, output.stdout);
     assert.deepEqual(JSON.parse(output.stdout).results.map(row => row.ok ? 'ok' : row.error.kind), ['ok', 'refused']);
   }
+});
+
+// 탭을 못 찾을 때도 좁은 읽기 한 번뿐이다. 우편·작업 영역을 일부러 망가뜨려 두면 전체 읽기는 반드시 실패하므로,
+// 조회가 전체 읽기로 떨어지는 길이 있으면 이 시험에서 문구나 읽기 횟수가 달라진다.
+test('탭을 못 찾거나 교체·종료된 탭도 좁은 읽기 한 번만 하고 전체 읽기로 떨어지지 않는다', () => {
+  const real = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'batch-narrow-'));
+  createDatabase(real); writeStorageMarker(real, 'sqlite');
+  appendLedger(start('gone', 'tab-gone', {cwd: real}), real);
+  appendLedger({kind: 'stop', role: 'gone', session: 'kadan-gone'}, real);
+  appendLedger(start('moved', 'tab-before', {cwd: real}), real);
+  appendLedger({kind: 'window', role: 'moved', session: 'kadan-moved', panePid: '20',
+    rottieTerminalId: 'tab-after'}, real);
+  transaction(real, db => {
+    appendRow(db, 'mail/events.jsonl', {kind: 'send', role: 'x', _ledgerOrder: 900});
+    appendRow(db, 'tasks/events.jsonl', {kind: 'done', role: 'x', _ledgerOrder: 2});
+  });
+  assert.throws(() => readSystemLedger(real), /도메인 원장/);
+  assert.throws(() => readLedger(real), /도메인 원장/);
+  const reads = () => storageObservation(real).read.count;
+  const cases = [['tab-unknown', /확인하지 못했습니다/], ['tab-before', /교체됐을/], ['tab-gone', /직접 종료한/]];
+  for (const [terminal, message] of cases) {
+    const before = reads();
+    assert.throws(() => inspectRecovery({terminal}, {home: real, tmux: fakeTmux('none').run}),
+      error => recoveryErrorKind(error) === 'refused' && message.test(error.message));
+    assert.equal(reads() - before, 1, `${terminal}: 읽기 한 번`);
+  }
+  const before = reads();
+  const items = [...cases, ...cases].map(([terminal]) => ({terminal}));
+  const results = inspectRecoveryBatch({schemaVersion: 1, items}, {home: real, tmux: fakeTmux('none').run});
+  assert.equal(reads() - before, 1, '묶음 6개도 읽기 한 번');
+  assert.deepEqual(results.map(row => row.error.kind), Array(6).fill('refused'));
+  // 실제 명령(진입부 포함)도 망가진 영역을 건드리지 않고 같은 거절을 낸다.
+  const env = {...process.env, KADAN_HOME: real};
+  for (const [terminal, message] of cases) {
+    const out = spawnSync(process.execPath, [CLI, 'recovery', 'inspect', '--terminal', terminal],
+      {encoding: 'utf8', env});
+    assert.equal(out.status, 1);
+    assert.match(JSON.parse(out.stdout).error.message, message);
+    assert.equal(out.stderr, '');
+  }
+  const batched = spawnSync(process.execPath, [CLI, 'recovery', 'inspect', '--batch'], {encoding: 'utf8', env,
+    input: JSON.stringify({schemaVersion: 1, items: cases.map(([terminal]) => ({terminal}))})});
+  assert.deepEqual(JSON.parse(batched.stdout).results.map(row => row.error.kind), ['refused', 'refused', 'refused']);
+  assert.equal(batched.stderr, '');
 });
