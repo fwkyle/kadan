@@ -1,5 +1,5 @@
 import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
-import {appendDomainLedger,readLedgerState,projectLedger} from './ledger-domains.mjs';
+import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -96,6 +96,30 @@ export function findMailBySourceKeyAny(home,sourceKey) {
 }
 export function readSystemLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home,{domain:'system'}),'system');
+}
+// 복원 조회(recovery inspect)용 좁은 읽기: 시스템 영역 조회 가운데 start·stop·window만 같은 순서·같은 모양으로 낸다.
+// Rottie가 15초마다 탭 수만큼 부르므로 원장 네 영역을 다 읽고 검증하지 않는다(2026-11-10 실측: 전체 약 1초).
+// 그래서 전체 읽기가 잡던 원장 손상(순번·연결)은 여기서 보고하지 않는다. 복원 실행(restore)은 전체 읽기 그대로다.
+// 원장이 10배면: 종류는 SQL에서 거르지만 색인이 없어 시스템 영역의 모든 행을 한 번씩 본다(걸리는 시간이 행 수에 비례).
+// 사건 종류를 앞머리에서 읽는다: 저장되는 사건은 {"t":"<24자 시각>","kind":"<종류>" 로 시작한다(appendDomainLedger).
+// 앞머리가 정확히 그 모양이고 그 구간에 따옴표·역슬래시가 없을 때만 앞머리를 믿고, 아니면 JSON을 해석한다(결과는 같다).
+// 이유: 감시AI 호출 기록 약 4천 건이 건당 2만 자라, 종류 하나 보려고 모두 해석하면 조회의 절반 이상이 거기서 든다.
+const RECOVERY_KIND = (() => {
+  const plain = part => `instr(${part},'"')=0 AND instr(${part},char(92))=0`;
+  const kindEnd = `instr(substr(payload,41,64),'"')`;
+  const head = `substr(payload,1,6)='{"t":"' AND substr(payload,31,10)='","kind":"' AND ${kindEnd}>1`
+    + ` AND ${plain('substr(payload,7,24)')} AND instr(substr(payload,41,${kindEnd}-1),char(92))=0`;
+  return `CASE WHEN ${head} THEN substr(payload,41,${kindEnd}-1) ELSE json_extract(payload,'$.kind') END`;
+})();
+export function readRecoveryLedger(home = ledgerHome()) {
+  if (storageMode(home) === 'none') return [];
+  return storageSnapshot(home,db => {
+    const read = db.prepare(`SELECT payload FROM events WHERE stream=?`
+      + ` AND ${RECOVERY_KIND} IN ('start','stop','window') ORDER BY seq`);
+    const rows = stream => read.all(stream).map(row => JSON.parse(row.payload));
+    const project = domainProjector('system');
+    return [...project.legacy(rows('ledger.jsonl')),...project.rows(rows(ledgerStreams.system))];
+  });
 }
 // 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.
 // requestId 글자 포함(instr)으로 먼저 걸러 해당 줄만 해석한다. 저장소가 없으면 null.

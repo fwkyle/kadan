@@ -141,6 +141,36 @@ test("숨긴 화면·구독 종료는 취소하고 다시 열면 갱신한다", 
   assert.equal(resource.subscribed, false);
   assert.equal(count, hidden + 1);
 });
+test("재표시 갱신을 끈 자료는 탭을 다시 봐도 읽지 않고, 수동 읽기와 첫 조회 복구는 한다", async () => {
+  let count = 0;
+  const options = { pollMs: 0, staleMs: 300_000, refreshOnResume: false };
+  const resource = new Resource(() => Promise.resolve(++count), options);
+  const stop = resource.subscribe(() => {});
+  await wait();
+  assert.equal(count, 1);
+  resource.setVisible(false);
+  resource.setVisible(true);
+  await wait(20);
+  assert.equal(count, 1, "탭 재표시로 다시 읽었다");
+  await resource.refresh(true);
+  assert.equal(count, 2, "수동 다시 읽기는 된다");
+  stop();
+  // 첫 조회가 끝나기 전에 숨겨 취소됐으면, 다시 볼 때 한 번 읽어 빈 화면으로 남지 않는다.
+  let late = 0;
+  const pending = deferred<number>();
+  const cancelled = new Resource(
+    () => (++late === 1 ? pending.promise : Promise.resolve(late)),
+    options,
+  );
+  const stopCancelled = cancelled.subscribe(() => {});
+  await wait();
+  cancelled.setVisible(false);
+  cancelled.setVisible(true);
+  await wait();
+  assert.equal(late, 2);
+  assert.equal(cancelled.getSnapshot().data, 2);
+  stopCancelled();
+});
 test("구독 취소 후 살아난 요청도 새 요청과 섞이지 않는다", async () => {
   const old = deferred<number>();
   let count = 0;
