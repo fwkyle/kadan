@@ -92,7 +92,8 @@ function livePane(session, run = tmux) {
 }
 
 function onePane(lines) {
-  if (lines.length !== 1) fail('여러 pane의 카단 역할은 자동 복원하지 않습니다.', REFUSED);
+  // 지금 화면 상태일 뿐이라(pane을 닫으면 달라진다) 거절로 답하지 않는다: 종류는 unavailable이다.
+  if (lines.length !== 1) fail('여러 pane의 카단 역할은 자동 복원하지 않습니다.');
   const [pid, dead, created] = lines[0].split('\t');
   if (!/^\d+$/.test(pid) || !['0', '1'].includes(dead) || !/^\d+$/.test(created)) {
     fail('카단 pane 정보를 확인하지 못했습니다.');
@@ -156,8 +157,12 @@ export function inspectRecovery(flags, deps = {}) {
   const pane = (deps.livePane || (name => livePane(name, deps.tmux)))(session);
   const launch = launchIdentityOf(start.cmd);
   const effort = effortOf(start, entries);
-  if (flags['pane-pid'] && (!pane || pane.dead || pane.pid !== String(start.panePid))) {
-    fail('관찰한 카단 pane과 시작 기록이 다릅니다.', REFUSED);
+  if (flags['pane-pid']) {
+    // pane을 못 찾았거나(tmux 서버·세션 없음) 죽어 있으면 지금 상태일 뿐이라 unavailable이다. tmux 서버가 통째로
+    // 사라진 때가 바로 Rottie에 저장된 역할 정보가 필요한 때다. 살아 있는 pane의 PID가 다를 때만 확정된 거절이다.
+    const observed = '관찰한 카단 pane과 시작 기록이 다릅니다.';
+    if (!pane || pane.dead) fail(observed);
+    if (pane.pid !== String(start.panePid)) fail(observed, REFUSED);
   }
   return {
     version: 1, ...server, role: start.role, session, cwd: start.cwd, terminalId,

@@ -26,6 +26,8 @@ const entries = [
   {...start('named', 'tab-named'), session: 'kadan-other-name'},
   start('many', 'tab-many'),
   start('garbled', 'tab-garbled'),
+  start('pidoff', 'tab-pidoff'),
+  start('deadpane', 'tab-deadpane'),
   start('badeffort', 'tab-badeffort', {cmd: 'claude --effort nonsense'}),
   start('lost', 'tab-lost', {cmd: 'claude --resume x', restoredFrom: 'nowhere'}),
   start('loop', 'tab-loop-1', {cmd: 'claude --resume x', restoredFrom: 'tab-loop-2'}),
@@ -34,7 +36,8 @@ const entries = [
 ];
 const tmuxOk = stdout => ({status: 0, stdout, stderr: ''});
 const paneLines = {'kadan-ok': ['20\t0\t111'], 'kadan-many': ['20\t0\t1', '21\t0\t1'], 'kadan-garbled': ['x\t0\t1'],
-  'kadan-badeffort': ['20\t0\t5'], 'kadan-lost': ['20\t0\t6'], 'kadan-loop': ['20\t0\t7']};
+  'kadan-badeffort': ['20\t0\t5'], 'kadan-lost': ['20\t0\t6'], 'kadan-loop': ['20\t0\t7'],
+  'kadan-pidoff': ['77\t0\t8'], 'kadan-deadpane': ['20\t1\t9']};
 // 가짜 tmux: 단건의 세션별 조회와 묶음의 전체 조회에 같은 서버 상태를 답한다. 부른 횟수를 센다.
 function fakeTmux(mode = 'ok') {
   const calls = [];
@@ -76,9 +79,12 @@ const TABLE = [
   [{terminal: 'tab-ok', session: 'kadan-else'}, 'refused', /역할 주소가 다릅니다/],
   [{terminal: 'tab-ok', cwd: '/elsewhere'}, 'refused', /작업 폴더가 다릅니다/],
   [{terminal: 'tab-ok', panePid: '99'}, 'refused', /pane PID가 다릅니다/],
-  [{terminal: 'tab-many'}, 'refused', /여러 pane/],
+  [{terminal: 'tab-many'}, 'unavailable', /여러 pane/],
   [{terminal: 'tab-swapped-missing'}, 'refused', /확인하지 못했습니다/],
-  [{terminal: 'tab-new', panePid: '20'}, 'refused', /관찰한 카단 pane과 시작 기록이 다릅니다/],
+  // 관찰한 pane 불일치: pane이 없거나 죽어 있으면 지금 상태일 뿐(unavailable), 살아 있는데 PID가 다르면 확정된 거절.
+  [{terminal: 'tab-new', panePid: '20'}, 'unavailable', /관찰한 카단 pane과 시작 기록이 다릅니다/],
+  [{terminal: 'tab-deadpane', panePid: '20'}, 'unavailable', /관찰한 카단 pane과 시작 기록이 다릅니다/],
+  [{terminal: 'tab-pidoff', panePid: '20'}, 'refused', /관찰한 카단 pane과 시작 기록이 다릅니다/],
   [{terminal: 'tab-badeffort'}, 'refused', /저장된 Claude 추론 강도/],
   [{terminal: 'tab-lost'}, 'refused', /추론 강도의 원본 역할 기록/],
   [{terminal: 'tab-loop-2'}, 'refused', /추론 강도 복원 기록이 순환/],
@@ -308,4 +314,23 @@ test('탭을 못 찾거나 교체·종료된 탭도 좁은 읽기 한 번만 하
     input: JSON.stringify({schemaVersion: 1, items: cases.map(([terminal]) => ({terminal}))})});
   assert.deepEqual(JSON.parse(batched.stdout).results.map(row => row.error.kind), ['refused', 'refused', 'refused']);
   assert.equal(batched.stderr, '');
+});
+
+// tmux 서버가 통째로 없을 때가 Rottie에 저장된 역할 정보가 필요한 때다. 그때 panePid를 보낸 항목을 거절로 답하지 않는다.
+test('tmux 서버가 없을 때 panePid를 보낸 항목은 unavailable이고 살아 있는 pane의 PID만 다르면 refused다', () => {
+  const observed = '관찰한 카단 pane과 시작 기록이 다릅니다.';
+  const items = [{terminal: 'tab-ok', panePid: '20'}, {terminal: 'tab-pidoff', panePid: '20'}, {terminal: 'tab-ok'},
+    {terminal: 'tab-stopped', panePid: '20'}];
+  const gone = batch(items, 'none').results;
+  assert.deepEqual(gone.map(row => row.ok ? 'ok' : row.error.kind), ['unavailable', 'unavailable', 'ok', 'refused']);
+  assert.deepEqual([gone[0].error.message, gone[1].error.message], [observed, observed]);
+  const live = batch(items).results;
+  assert.deepEqual(live.map(row => row.ok ? 'ok' : row.error.kind), ['ok', 'refused', 'ok', 'refused']);
+  assert.equal(live[1].error.message, observed);
+  for (const mode of ['none', 'ok']) {
+    for (const [index, item] of items.entries()) {
+      const rows = mode === 'none' ? gone : live;
+      assert.deepEqual(rows[index], {terminal: item.terminal, ...single(toFlags(item), mode)}, `${mode} ${index}`);
+    }
+  }
 });
