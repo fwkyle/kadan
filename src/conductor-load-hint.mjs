@@ -12,6 +12,8 @@ import {readConductorOpenWorks} from './heavy-limit.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NAMES_SHOWN = 3;
+// 업무는 우편을 받은 감독이 나중에 만들어 진행 중 업무 수가 늦게 잡힌다. 그래서 최근 맡긴 우편 수로도 기준을 본다(기준 개수의 몇 배부터인가).
+export const RECENT_MAIL_FACTOR = 2;
 
 // 새 맥락 우편: 발령(taskId)·답장·--raw·감시 알림·자동 생성 우편이 아닌 것.
 const isContextMail = e => e?.kind === 'send' && !e.taskId && !e.replyTo && e.replyFinal !== true
@@ -25,7 +27,8 @@ function recipientProfile({home, entries, recipient, profiles, receiptProfile}) 
   return inferDispatchProfile({home, role: recipient, entries}).profile;
 }
 
-// 한 줄 문장(순수 함수). threshold가 0이면 기준 문장만 뺀다.
+// 한 줄 문장(순수 함수). 기준 문장은 진행 중 업무 수 ≥ 기준 개수 또는 최근 새 우편 수 ≥ 기준 개수 × RECENT_MAIL_FACTOR일 때 붙고,
+// 어느 조건으로 붙었는지 괄호에 적는다. threshold가 0이면 두 조건 모두 문장을 뺀다(수 표시는 유지).
 export function formatLoadHint({recipient, open, hold, recentMails, threshold}) {
   const names = open.slice(0, NAMES_SHOWN).join(', ') + (open.length > NAMES_SHOWN ? ` 외 ${open.length - NAMES_SHOWN}건` : '');
   const parts = [
@@ -33,8 +36,13 @@ export function formatLoadHint({recipient, open, hold, recentMails, threshold}) 
     `보류 ${hold}건`,
     `최근 24시간 슈퍼감독이 맡긴 새 우편 ${recentMails}통(이번 포함)`,
   ];
-  const rule = threshold > 0 && open.length >= threshold
-    ? ` — 기준 ${threshold}개 이상: 고칠 파일이 겹치지 않으면 새 감독을 띄워 맡긴다(kyle 승인 불필요)`
+  const mailLimit = threshold * RECENT_MAIL_FACTOR;
+  const reasons = threshold > 0 ? [
+    open.length >= threshold ? `진행 중 업무 ${open.length}건 ≥ 기준 ${threshold}개` : null,
+    recentMails >= mailLimit ? `최근 새 우편 ${recentMails}통 ≥ 기준의 ${RECENT_MAIL_FACTOR}배 ${mailLimit}통` : null,
+  ].filter(Boolean) : [];
+  const rule = reasons.length
+    ? ` — 기준 도달(${reasons.join(', ')}): 고칠 파일이 겹치지 않으면 새 감독을 띄워 맡긴다(kyle 승인 불필요)`
     : '';
   return parts.join(' · ') + rule;
 }
