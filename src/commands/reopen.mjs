@@ -6,10 +6,12 @@ import { currentSocket } from "../floor-tmux.mjs";
 import { readSettings, runnerChoices } from "../runner-settings.mjs";
 import { registerRoleManually, registerStartedRole } from "../hierarchy-register.mjs";
 import { reopenRole } from "../reopen.mjs";
+import { taskIdentity } from "../task-identity.mjs";
+import { CardStore } from "../card-store.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import {
   requireWindowChoice, inspectHiddenStartPolicy, inspectRottieStartPreflight, openStartedWindow,
-  unpinnedWindowWarning, inheritedWindowWarning,
+  unpinnedWindowWarning, inheritedWindowWarning, pendingCardsFor,
 } from "../cli-start-support.mjs";
 
 export const REOPEN_USAGE = "사용법: kadan reopen <역할> [--hidden]";
@@ -21,6 +23,7 @@ export function reopenDeps(home, { env = process.env, hidden = false, windowDeps
     read: () => readLedger(home),
     record: entry => appendLedger(entry, home),
     modelChoices: (settings, runner) => runnerChoices(settings, runner),
+    pendingCards: (entries, who) => pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), who),
     windowPolicy: ({ roleProfile }) => {
       const preflight = inspectRottieStartPreflight({ env, floorName: floor.name, hidden });
       if (!preflight.ok) throw new Error(preflight.message);
@@ -64,6 +67,8 @@ export function cmdReopen(argv, flags) {
   console.log(`다시 열림: ${session} (${result.harness} ${result.model}, 대화 ${result.conversation}, pane PID ${result.panePid ?? "?"}, 창: ${result.window}${
     result.window === "manual" ? ` — 직접: ${floor.attach(session)}` : ""})`);
   if (!result.storedChecked) console.error(`대화 파일이 남아 있는지는 확인하지 못했다(${result.harness} 설정에 stored 칸 없음) — 화면에서 같은 대화가 이어졌는지 확인하라: kadan read ${role}`);
+  // 끄기 전에 받고 끝내지 않은 카드가 있으면 알린다(stderr). 발령은 이어받으므로 감시가 계속된다.
+  if (result.pending.length) console.error(`미확정 카드 ${result.pending.length}건: ${result.pending.join(", ")} — 감시가 이어진다. 이미 끝난 일이면 kadan done ${role} <카드id> <ok|failed>로 확정한다`);
   const registration = result.registration;
   if (registration?.registered) console.log(`감시 등록: ${role} → ${registration.parent}`);
   else if (registration?.hierarchyPath && registration.reason !== "이미 등록됨") console.error(`감시 등록 안 됨(${registration.reason}) — 알림 수신자를 직접 확인하라`);

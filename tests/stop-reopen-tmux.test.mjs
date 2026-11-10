@@ -8,6 +8,7 @@ import {ledgerHome, appendLedger, readLedger} from '../src/ledger.mjs';
 import {tmuxFloor, tmux} from '../src/floor-tmux.mjs';
 import {settingsWith} from './helpers/runner-table.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
+import {reopenRole} from '../src/reopen.mjs';
 
 // 실제 tmux·ps·lsof·CLI로 "끌 때 대화 번호 남기기 → 그 번호로 다시 열기" 왕복을 확인한다.
 // 실행기는 가짜 Node 스크립트이고(실제 AI 없음), 격리 홈·격리 tmux 서버만 쓴다(restart-tmux.test.mjs와 같은 틀).
@@ -176,4 +177,91 @@ test('실제 CLI: 없는 세션의 stop과 실행기가 아닌 세션의 stop은
   assert.equal(help.status, 0);
   assert.match(help.stdout, /사용법: kadan reopen/);
   assert.equal(tmuxFloor.alive('kadan-shellcase'), false, '--help는 아무것도 열지 않는다');
+});
+
+// ---- 검수 재현(PR #371 F1·F2·F4 안내)을 같은 조건으로 고정한다: 실제 tmux, 실제 CLI의 일반 start·stop, 가짜 실행기 대신 sleep ----
+const CLAUDE_CMD = 'claude --model claude-haiku-5-5 --effort low --dangerously-skip-permissions';
+const run = (cwd, ...args) => spawnSync(process.execPath, [cli, ...args], {encoding: 'utf8', cwd, timeout: 60_000,
+  env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: '', KADAN_ALT_CHECK_MS: '0'}});
+
+// 번호를 남기고 꺼진 역할 하나를 원장에 만든다(실제 실행기는 띄우지 않는다).
+function stoppedRole(s, role) {
+  const session = `kadan-${role}`;
+  appendLedger({kind: 'start', floor: 'tmux', role, session, panePid: '100', cwd: s.work, cmd: CLAUDE_CMD, by: 'test'});
+  const prior = readLedger().findLast(e => e.kind === 'start' && e.role === role);
+  appendLedger({kind: 'stop', role, session, conversation: A, conversationStart: startDigest(prior), by: 'test'});
+  return session;
+}
+// reopen 본체를 실제 tmux 바닥으로 돌린다. 만들 세션의 명령만 sleep으로 바꾼다(실제 AI를 부르지 않는다).
+function reopenInProcess(s, role, session, deps) {
+  const created = [];
+  const floor = {...tmuxFloor, create: options => { const evidence = tmuxFloor.create({...options, cmd: 'sleep 60'}); created.push(evidence.panePid); return evidence; }};
+  const call = () => reopenRole({home: s.home, role, session, floor, settings: settingsWith(), deps: {
+    read: () => readLedger(), record: entry => appendLedger(entry), modelChoices: () => new Map([['claude-haiku-5-5', ['low']]]),
+    windowPolicy: () => ({}), openWindow: () => ({method: 'manual'}), register() {}, pendingCards: () => [],
+    exists: () => true, homeDir: s.home, ...deps}});
+  return {created, call};
+}
+
+test('검수 F1 재현: 기록 실패 정리는 그사이 일반 start가 같은 이름으로 띄운 세션을 끄지 않는다', {skip}, t => {
+  const s = setup(t, 'f1');
+  for (const replace of [false, true]) {
+    const role = `cleanup${replace ? 'swap' : 'same'}`, session = stoppedRole(s, role);
+    let replacementPid = null;
+    const {created, call} = reopenInProcess(s, role, session, {
+      record: () => { throw new Error('injected record failure'); },
+      openWindow: () => {
+        if (!replace) return {method: 'manual'};
+        // 창을 여는 사이 방금 만든 프로세스가 사라지고, 일반 CLI start가 같은 이름으로 새 프로세스를 만든다.
+        tmuxFloor.stop(session);
+        const next = run(s.work, 'start', role, '--cmd', 'sleep 60', '--hidden', '--no-prompt');
+        assert.equal(next.status, 0, next.stdout + next.stderr);
+        replacementPid = String(tmuxFloor.pid(session));
+        return {method: 'manual'};
+      }});
+    if (!replace) {
+      assert.throws(call, /시작 기록 실패 — 방금 만든 .*을 닫았다/);
+      assert.equal(tmuxFloor.alive(session), false, '대조: 교체가 없으면 이번 호출이 만든 세션을 닫는다');
+    } else {
+      assert.throws(call, /시작 기록 실패 — .*닫지 않았다\(직접 확인\)/);
+      assert.notEqual(replacementPid, String(created[0]));
+      assert.equal(tmuxFloor.alive(session), true, '일반 start가 띄운 세션은 살아 있다');
+      assert.equal(String(tmuxFloor.pid(session)), replacementPid);
+      assert.equal(String(readLedger().findLast(e => e.kind === 'start' && e.role === role).panePid), replacementPid);
+    }
+  }
+});
+
+test('검수 F2 재현: 확인하는 사이 일반 start·stop으로 새 세대가 떴다 꺼지면 옛 세대 대화로 열지 않는다', {skip}, t => {
+  const s = setup(t, 'f2');
+  const role = 'stalecase', session = stoppedRole(s, role);
+  const {created, call} = reopenInProcess(s, role, session, {
+    windowPolicy: () => {
+      for (const args of [['start', role, '--cmd', 'sleep 60', '--hidden', '--no-prompt'], ['stop', role]]) {
+        const done = run(s.work, ...args);
+        assert.equal(done.status, 0, done.stdout + done.stderr);
+      }
+      assert.equal(readLedger().findLast(e => e.kind === 'stop' && e.role === role).conversationMissing, 'not-ai-runner');
+      return {};
+    }});
+  assert.throws(call, /확인하는 사이 kadan-stalecase의 역할 세대가 바뀌었다/);
+  assert.deepEqual(created, [], '세션을 만들지 않는다');
+  assert.equal(tmuxFloor.alive(session), false);
+  assert.equal(readLedger().some(e => e.role === role && e.reopenOf), false, 'reopen의 start 기록도 없다');
+});
+
+test('실제 CLI: 미확정 카드가 남은 역할을 reopen하면 stderr에 카드와 "감시가 이어진다"를 알린다(stdout·종료 코드는 그대로)', {skip}, t => {
+  const s = setup(t, 'pend');
+  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-pendcase', 'pendcase');
+  appendLedger({kind: 'send', role: 'pendcase', session: 'kadan-pendcase', taskId: 'card-p1', bytes: 1, digest: 'p', by: 'test'});
+  const stopped = kadan('stop', 'pendcase');
+  assert.equal(stopped.status, 0, stopped.stdout + stopped.stderr);
+  assert.match(stopped.stdout, /^미확정 카드 1건: card-p1 /);
+  const reopened = kadan('reopen', 'pendcase');
+  assert.equal(reopened.status, 0, reopened.stdout + reopened.stderr);
+  assert.match(reopened.stderr, /미확정 카드 1건: card-p1 — 감시가 이어진다\. 이미 끝난 일이면 kadan done pendcase <카드id> <ok\|failed>로 확정한다/);
+  assert.match(reopened.stdout, /^다시 열림: kadan-pendcase /);
+  assert.doesNotMatch(reopened.stdout, /미확정/);
+  const start = of('kadan-pendcase').findLast(e => e.kind === 'start');
+  assert.equal(start.reopenOf, startDigest(of('kadan-pendcase').find(e => e.kind === 'start')));
 });

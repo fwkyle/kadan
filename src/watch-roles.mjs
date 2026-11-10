@@ -5,6 +5,7 @@ import { doneEvidence } from "./done-evidence.mjs";
 import {readSpool} from './stop-hook-spool.mjs';
 import {ledgerHome} from './ledger.mjs';
 import {watchRoleState} from './watch-role-facts.mjs';
+import {reopenContinues} from './watch-role-state.mjs';
 
 export function shortDigest(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -66,6 +67,8 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
   };
   // 6줄 제한을 없애되, 현재 세대에 실제 발령한 카드와 발령 전 화면을 함께 대조한다.
   const dispatches = captured?.dispatches ?? new Map(), generations = captured?.generations ?? new Map();
+  // 꺼진 세대의 시작 기록(세션별 마지막 하나). kadan reopen의 start가 바로 그 세대를 가리키는지 대조하는 데만 쓴다.
+  const stopped = new Map();
   for (const entry of captured ? [] : entries) {
     if (entry?.kind === 'start') {
       const previous = generations.get(entry.session);
@@ -76,13 +79,18 @@ export function collectRoles(selectedFloor, entries, monitoredSessions = null, c
         (previous.floor ?? 'tmux') === (entry.floor ?? 'tmux') &&
         (entry.floor !== 'rottie' || previous.rottieTerminalId === entry.rottieTerminalId);
       if (!reused) {
+        // reopen(꺼진 역할을 같은 대화로 다시 연 새 프로세스)도 같은 정체다. 다만 stop 뒤에 오므로, start의 reopenOf가
+        // 바로 앞에 꺼진 그 세대의 start 지문과 같을 때만 잇는다(reopenContinues). 다른 세대를 가리키면 비운다.
+        const reopened = reopenContinues(entry, previous ? null : stopped.get(entry.session));
+        stopped.delete(entry.session);
         generations.set(entry.session, entry);
         // restart(같은 대화를 다시 연 새 프로세스)는 같은 정체라 발령한 카드를 이어받는다. 그 밖의 새 세대는 비운다.
-        if (!(entry.restartOf && dispatches.has(entry.session))) dispatches.set(entry.session, new Map());
+        if (!((entry.restartOf || reopened) && dispatches.has(entry.session))) dispatches.set(entry.session, new Map());
       }
       continue;
     }
     if (entry?.kind === 'stop') {
+      if (generations.has(entry.session)) stopped.set(entry.session, generations.get(entry.session));
       generations.delete(entry.session);
       // 종료된 선임도 확정 인계할 수 있다. 발령은 인계에만 남기고 다음 start에서는 비운다.
       continue;

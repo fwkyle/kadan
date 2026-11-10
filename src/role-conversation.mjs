@@ -66,15 +66,23 @@ export function budgetedRun(budgetMs, {run = spawnSync, now = Date.now} = {}) {
     if (result?.error?.code === 'ETIMEDOUT') throw expired();
     return result;
   };
-  return {run: budgeted, state, check: () => { if (deadline - now() <= 0) throw expired(); }};
+  // left(): 남은 시간(ms). 다 썼으면 던진다. check(): 다 썼으면 던지기만 한다.
+  const left = () => { const ms = deadline - now(); if (ms <= 0) throw expired(); return ms; };
+  return {run: budgeted, state, left, check: () => { left(); }};
 }
 
 // stop이 쓰는 실제 조회 묶음. paneInfo는 tmux 바닥의 것을 부르는 쪽이 넘긴다.
+// 조회의 모든 프로세스 호출(tmux·ps·lsof)이 같은 예산을 나눠 쓴다: 첫 단계인 tmux 호출도 남은 시간까지만 기다린다.
 export function lookupDeps({paneInfo, budgetMs = STOP_LOOKUP_BUDGET_MS} = {}) {
   const budget = budgetedRun(budgetMs);
   return {
     budget,
-    paneInfo: session => { budget.check(); return paneInfo(session); },
+    paneInfo: session => {
+      const timeout = Math.max(1, Math.floor(budget.left()));
+      try { return paneInfo(session, {timeout}); }
+      // tmux가 예산을 다 쓰고 끊겼으면 "못 찾음(시간 초과)"로 읽히게 표시한다(paneInfo는 이유 없는 오류를 던진다).
+      catch (error) { budget.check(); throw error; }
+    },
     processTree: pid => processTree(pid, budget.run),
     openFiles: pids => openFilesOf(pids, budget.run),
     processStartedAt: pid => processStartedAt(pid, budget.run),

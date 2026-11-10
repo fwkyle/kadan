@@ -28,17 +28,18 @@ function fixture({cmd = CLAUDE, role = 'w', profile = 'worker', stop = {}, withS
   if (withStop) entries.push({kind: 'stop', role, session, by: 'boss', conversation: ID, conversationStart: startDigest(start),
     t: '2026-11-10T01:00:00.000Z', ...stop});
   const log = [];
-  let alive = false;
-  const floor = {name: 'tmux', alive: () => alive, pid: () => '200', stop: s => { log.push(['stop', s]); alive = false; },
-    create: options => { log.push(['create', options]); alive = true; return {panePid: '200'}; }};
+  let alive = false, currentPid = '200';
+  const floor = {name: 'tmux', alive: () => alive, pid: () => currentPid, stop: s => { log.push(['stop', s, currentPid]); alive = false; },
+    create: options => { log.push(['create', options]); alive = true; currentPid = '200'; return {panePid: '200'}; }};
   const deps = {read: () => entries, record: entry => { log.push(['record', entry.kind]); entries.push({t: '2026-11-10T02:00:00.000Z', ...entry}); },
     modelChoices: () => new Map([[MODEL, ['low']], ['gpt-6-sol', ['low']]]),
     windowPolicy: () => ({}), openWindow: input => { log.push(['window', input.cwd]); return {method: 'manual'}; },
     register: input => { log.push(['register', input.role]); return {registered: false, reason: '이미 등록됨'}; },
-    exists: () => true, homeDir: home};
+    pendingCards: () => [], exists: () => true, homeDir: home};
   const run = ({settings = settingsWith(), hidden = false} = {}) => reopenRole({home, role, session, floor, settings, deps, hidden});
   const created = () => log.some(([kind]) => kind === 'create');
-  return {home, cwd, role, session, start, entries, log, floor, deps, run, created, setAlive: value => { alive = value; }};
+  return {home, cwd, role, session, start, entries, log, floor, deps, run, created, setAlive: value => { alive = value; },
+    setPid: value => { currentPid = value; }};
 }
 
 test('reopen은 마지막 stop의 번호로 같은 대화·작업 폴더·실행기·모델·프로필로 다시 연다', () => {
@@ -85,17 +86,85 @@ test('우편·책임 세대가 이어진다: reopen의 start는 세대 경계가
   assert.equal(fresh.isPrevious('w', 0), true);
 });
 
-test('감시 발령은 이어받지 않는다: 같은 대화를 kadan start --cmd로 다시 연 것과 같고, restart(restartOf)와 다르다', () => {
+test('감시 발령을 이어받는다: reopen이 실제로 남긴 start는 끄기 전에 받고 끝내지 않은 카드의 발령을 restart처럼 잇는다', () => {
   const observe = entries => collectRoles({list: () => [{session: 'kadan-w', pid: '200', alive: true}], read: () => 'screen'}, entries, null, null)
     .observations.get('kadan-w').completionDispatches;
   const f = fixture();
   // 끄기 전에 받은 카드(c1)가 끝나지 않은 채로 꺼졌다가 다시 열린다.
   f.entries.splice(1, 0, {kind: 'send', role: 'w', session: 'kadan-w', taskId: 'c1', t: '2026-11-10T00:30:00.000Z'});
   f.run();
-  assert.equal(observe(f.entries).size, 0, 'reopen 뒤에는 끄기 전 발령을 감시 발령으로 세지 않는다');
-  // 대조: 같은 start에 restartOf가 있어도 사이에 stop이 있으면 이어받지 않는다(이어받기는 restart의 연속 구간에서만 생긴다).
+  assert.deepEqual([...observe(f.entries).keys()], ['c1'], 'reopen 뒤에도 끄기 전 발령이 감시 발령으로 남는다');
+  assert.equal(f.entries.at(-1).restartOf, undefined, 'restartOf를 붙여서가 아니라 reopenOf로 이어받는다');
+  // 대조: 같은 resume 명령을 사람이 kadan start --cmd로 직접 연 start(reopenOf 없음)는 예전 그대로 새로 센다.
   const manual = [...f.entries.slice(0, -1), {...f.entries.at(-1), reopenOf: undefined, reopenStopAt: undefined, reopenConversation: undefined}];
-  assert.equal(observe(manual).size, 0, '사람이 같은 resume 명령으로 직접 연 start와 같다');
+  assert.equal(observe(manual).size, 0);
+});
+
+test('다시 연 역할에 미확정 카드가 있으면 그 목록을 돌려준다(명령이 stderr로 안내한다)', () => {
+  const f = fixture();
+  const seen = [];
+  f.deps.pendingCards = (entries, role) => { seen.push([entries.length, role]); return ['card-a', 'card-b']; };
+  assert.deepEqual(f.run().pending, ['card-a', 'card-b']);
+  assert.deepEqual(seen, [[2, 'w']], '세션을 만들기 직전에 다시 읽은 원장으로 한 번 센다');
+  assert.deepEqual(fixture().run().pending, []);
+});
+
+// 검수 F1: 기록 실패 정리는 이번 호출이 만든 세션일 때만 끈다(잠긴 규칙 4).
+test('기록 실패 정리: 그사이 같은 이름으로 뜬 다른 프로세스는 끄지 않는다', () => {
+  for (const replaced of [false, true, 'unknown']) {
+    const f = fixture();
+    f.deps.record = () => { throw new Error('injected ledger failure'); };
+    f.deps.openWindow = () => {
+      // 창을 여는 사이 방금 만든 프로세스(200)가 사라지고 같은 이름에 다른 프로세스(999)가 떴다.
+      if (replaced === true) f.setPid('999');
+      if (replaced === 'unknown') f.floor.pid = () => { throw new Error('tmux 조회 실패'); };
+      return {method: 'manual'};
+    };
+    const killed = () => f.log.filter(([kind]) => kind === 'stop').map(([, , pid]) => pid);
+    if (replaced === false) {
+      assert.throws(() => f.run(), /시작 기록 실패 — 방금 만든 kadan-w을 닫았다: injected ledger failure/);
+      assert.deepEqual(killed(), ['200'], '대조: 교체가 없으면 이번 호출이 만든 세션만 닫는다');
+    } else {
+      assert.throws(() => f.run(), /시작 기록 실패 — .*닫지 않았다.*직접 확인.*injected ledger failure/s);
+      assert.deepEqual(killed(), [], '이번 호출이 만들지 않았거나 확인할 수 없는 세션은 끄지 않는다');
+    }
+  }
+});
+
+// 검수 F2: 확인하는 사이 새 세대가 떴다 꺼지면 옛 세대 대화로 열지 않는다.
+test('세션을 만들기 직전 원장을 다시 읽어, 처음 고른 세대가 마지막 세대가 아니면 거절한다', () => {
+  const newer = cwd => [
+    {kind: 'start', floor: 'tmux', role: 'w', session: 'kadan-w', cmd: 'sleep 60', cwd, panePid: '300', t: '2026-11-10T01:10:00.000Z'},
+    {kind: 'stop', role: 'w', session: 'kadan-w', conversationMissing: 'not-ai-runner', t: '2026-11-10T01:20:00.000Z'}];
+  // (가) 사전 확인 도중 일반 start·stop으로 B세대가 생겼다 사라졌다(번호 없는 stop).
+  const f = fixture();
+  let reads = 0;
+  const read = f.deps.read;
+  f.deps.read = () => { reads++; return read(); };
+  f.deps.windowPolicy = () => { f.entries.push(...newer(f.cwd)); return {}; };
+  assert.throws(() => f.run(), /확인하는 사이 .*세대가 바뀌었다/);
+  assert.equal(f.created(), false);
+  assert.equal(reads, 2, '원장 읽기는 두 번이다(처음 고를 때·만들기 직전)');
+  // (나) B세대가 같은 번호를 남기고 꺼졌어도(다른 세대의 stop) 처음 고른 세대가 아니므로 거절한다.
+  const g = fixture();
+  g.deps.windowPolicy = () => {
+    const [start] = newer(g.cwd);
+    const again = {...start, cmd: g.start.cmd};
+    g.entries.push(again, {kind: 'stop', role: 'w', session: 'kadan-w', conversation: ID, conversationStart: startDigest(again), t: '2026-11-10T01:20:00.000Z'});
+    return {};
+  };
+  assert.throws(() => g.run(), /확인하는 사이 .*세대가 바뀌었다/);
+  assert.equal(g.created(), false);
+  // (다) 같은 세대에 stop이 하나 더 붙은 경우(다른 stop)도 처음 고른 stop이 아니므로 거절한다.
+  const h = fixture();
+  h.deps.windowPolicy = () => { h.entries.push({...h.entries[1], t: '2026-11-10T01:30:00.000Z', handoverId: 'x'}); return {}; };
+  assert.throws(() => h.run(), /확인하는 사이 .*세대가 바뀌었다/);
+  assert.equal(h.created(), false);
+  // 대조: 그 역할과 상관없는 사건이 더해진 것은 거절 사유가 아니다.
+  const ok = fixture();
+  ok.deps.windowPolicy = () => { ok.entries.push({kind: 'start', role: 'other', session: 'kadan-other', panePid: '9', t: '2026-11-10T01:10:00.000Z'}); return {}; };
+  ok.run();
+  assert.equal(ok.created(), true);
 });
 
 test('거절은 모두 세션을 만들기 전에 끝난다', async t => {
@@ -215,6 +284,7 @@ test('시작 기록을 못 남기면 방금 만든 세션만 닫고 실패한다
   f.deps.record = () => { throw new Error('disk full'); };
   assert.throws(() => f.run(), /시작 기록 실패 — 방금 만든 kadan-w을 닫았다: disk full/);
   assert.deepEqual(f.log.map(([kind]) => kind), ['create', 'window', 'stop']);
+  assert.equal(f.log.at(-1)[2], '200', '닫은 것은 이번 호출이 만든 pane이다');
 });
 
 test('껐다 열기를 되풀이해도 같은 번호 하나로 이어진다(resume 꼬리가 겹치지 않는다)', () => {

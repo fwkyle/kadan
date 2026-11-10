@@ -14,8 +14,10 @@ import { die, sessionName } from "../cli-basics.mjs";
 import { pendingCardsFor, closeStartedWindow, openStartedWindow, requireWindowChoice } from "../cli-start-support.mjs";
 
 // 이 세션의 pane PID와 tmux 자리(`세션:@창.%자리`). claude의 세션 파일 tmux 필드와 같은 모양이다.
-export function paneInfo(session) {
-  const result = tmux(["-N", "list-panes", "-s", "-t", `=${session}:`, "-F", "#{pane_pid}\t#{session_name}:#{window_id}.#{pane_id}"]);
+// timeout(ms)은 kadan stop의 대화 조회만 넘긴다(남은 예산). restart는 넘기지 않아 예전과 같다.
+export function paneInfo(session, { timeout } = {}) {
+  const result = tmux(["-N", "list-panes", "-s", "-t", `=${session}:`, "-F", "#{pane_pid}\t#{session_name}:#{window_id}.#{pane_id}"],
+    undefined, timeout ? { timeout } : {});
   const lines = result.status === 0 ? result.stdout.trim().split("\n") : [];
   if (lines.length !== 1 || !lines[0]) throw new Error("tmux pane을 하나로 확인하지 못했다");
   const [panePid, location] = lines[0].split("\t");

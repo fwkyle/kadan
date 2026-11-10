@@ -2,11 +2,14 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import cp from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import {ledgerHome, appendLedger, readLedger} from '../src/ledger.mjs';
 import {stopRole} from '../src/role-stop.mjs';
-import {stopConversationFields, budgetedRun, launchStart, MISSING_REASONS} from '../src/role-conversation.mjs';
+import {stopConversationFields, budgetedRun, launchStart, lookupDeps, MISSING_REASONS} from '../src/role-conversation.mjs';
+import {paneInfo} from '../src/commands/restart.mjs';
 import {processTree} from '../src/process-tree.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
 import {Handover} from '../src/handover.mjs';
@@ -79,6 +82,52 @@ test('조회가 시간 상한을 넘으면 "timeout"으로 적고 끈다 — 실
   // 상한이 이미 지났으면 프로세스를 띄우지도 않는다.
   assert.throws(() => budget.run('lsof', []), error => error.reason === 'timeout');
   assert.equal(seen.length, 1);
+});
+
+// 검수 F3: 끌 때 조회의 첫 단계인 tmux 호출(pane 확인)에도 남은 예산이 timeout으로 넘어가야 한다.
+// 실제 조회 묶음(lookupDeps + paneInfo)을 쓰고, 프로세스 실행만 가짜로 바꿔 고정 지연을 넣는다(실제 부하·실제 tmux 없음).
+test('tmux 조회가 늦어도 예산 안에서 포기하고 끈다 — tmux 호출에 남은 예산이 timeout으로 넘어간다', () => {
+  const original = cp.spawnSync;
+  const calls = [];
+  let delayMs = 0;
+  // 실제 spawnSync처럼 timeout이 있으면 그 시간까지만 기다리고 ETIMEDOUT으로 끝낸다. 없으면 지연을 다 기다린다.
+  cp.spawnSync = (executable, args, options = {}) => {
+    calls.push({executable, timeout: options.timeout ?? null});
+    if (executable === 'tmux' && args.includes('list-panes')) {
+      const limit = options.timeout ?? Infinity;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(delayMs, limit));
+      return delayMs > limit ? {status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawnSync tmux ETIMEDOUT'), {code: 'ETIMEDOUT'})}
+        : {status: 0, stdout: '100\tkadan-x:@1.%1\n', stderr: ''};
+    }
+    if (executable === 'ps') return {status: 0, stdout: '', stderr: ''};
+    throw new Error(`예상 밖 프로세스: ${executable}`);
+  };
+  syncBuiltinESMExports();
+  try {
+    const BUDGET = 300;
+    for (const injected of [0, 1500]) {
+      delayMs = injected; calls.length = 0;
+      const f = fixture({cmd: CLAUDE});
+      const began = performance.now();
+      const result = f.run({lookup: input => stopConversationFields({...input, readSettings: () => settingsWith(),
+        deps: lookupDeps({paneInfo, budgetMs: BUDGET})})});
+      const elapsed = performance.now() - began;
+      assert.equal(result.ok, true);
+      assert.deepEqual(f.calls.at(-1), ['stop', f.session], '조회가 늦어도 끈다');
+      const tmuxCall = calls.find(call => call.executable === 'tmux');
+      assert.ok(tmuxCall, 'pane 확인은 실제 tmux 호출 경로를 지난다');
+      assert.ok(Number.isFinite(tmuxCall.timeout) && tmuxCall.timeout > 0 && tmuxCall.timeout <= BUDGET,
+        `tmux 호출의 timeout은 남은 예산이어야 한다(받은 값 ${tmuxCall.timeout})`);
+      if (injected) {
+        assert.equal(f.stops()[0].conversationMissing, 'timeout');
+        assert.ok(elapsed < injected, `예산(${BUDGET}ms) 근처에서 포기해야 한다 — 걸린 시간 ${Math.round(elapsed)}ms, 주입한 지연 ${injected}ms`);
+        assert.equal(calls.some(call => call.executable === 'ps'), false, '예산이 끝난 뒤에는 다음 조회를 띄우지 않는다');
+      }
+    }
+  } finally {
+    cp.spawnSync = original;
+    syncBuiltinESMExports();
+  }
 });
 
 test('조회 함수 자체가 던져도(예상 밖 오류) 끄기는 진행한다', () => {
