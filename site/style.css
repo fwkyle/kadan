@@ -124,6 +124,8 @@ main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
 .map > ol > li > a { padding: 0.3rem 0.6rem; color: var(--text); font-size: 0.9375rem; font-weight: 700; }
 .map > ol > li > a:hover { background: var(--soft); }
 .map > ol > li > a[aria-current] { background: var(--term-bar); color: var(--term-bar-text); }
+/* 채운 줄 위에서는 강조색 테두리가 바탕에 묻혀서, 포커스 테두리를 글자색으로 그린다. */
+.map > ol > li > a[aria-current]:focus-visible { outline-color: var(--term-bar-text); }
 .map li ol { margin: 0.3rem 0 0 0.6rem; border-left: 1px solid var(--border); }
 .map li ol a { padding: 0.25rem 0.6rem 0.25rem 0.8rem; color: var(--muted); font-size: 0.875rem; }
 .map li ol a:hover { color: var(--text); }
