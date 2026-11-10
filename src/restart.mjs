@@ -11,13 +11,15 @@ import {startDigest, withRecoveryLock, checkpointSecretary, resumeSecretary} fro
 import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
 import {executorChain} from './process-tree.mjs';
 import {conversationOf} from './conversation-ref.mjs';
-import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec} from './runner-table.mjs';
+import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec, swapModelSlots} from './runner-table.mjs';
+import {launchFor} from './runner-settings.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
 import {sessionOwner, assertSessionOwner} from './session-ownership.mjs';
 
 const SECRETARY = '비서';
+export const MODEL_FROM_SETTINGS = 'model-from-settings';
 // 계정 전환 재시작에서 끄기 직전 재확인이 "상태가 바뀌었다"며 막았다는 표시. 실패가 아니라 건너뜀이다(claude-refresh가 읽는다).
 export const STATE_CHANGED_CODE = 'KADAN_REFRESH_STATE_CHANGED';
 const fail = message => { throw new Error(message); };
@@ -106,6 +108,12 @@ export function restartRole({home, role, session, flags = {}, floor, settings, d
   const reasonNote = accountRefresh ? given : null;
   const expectPid = flags['expect-pid'] ?? flags.expectPid ?? null;
   if (accountRefresh && role === SECRETARY) fail('비서는 계정 전환 재시작 대상이 아니다');
+  // --model-from-settings(2026-11-10 [kyle]): 값 없는 옵션이다. 비서(체크포인트 경로)·계정 전환 재시작과는 함께 쓰지 않는다.
+  const fromSettings = flags[MODEL_FROM_SETTINGS];
+  if (fromSettings !== undefined && fromSettings !== true) fail(`--${MODEL_FROM_SETTINGS}는 값을 받지 않는다`);
+  if (fromSettings && accountRefresh) fail(`계정 전환 재시작과 --${MODEL_FROM_SETTINGS}는 함께 쓸 수 없다`);
+  if (fromSettings && role === SECRETARY)
+    fail(`비서는 --${MODEL_FROM_SETTINGS} 대상이 아니다 — 비서는 실행 모델 설정의 역할이 아니고 별도 체크포인트 경로로 다시 열린다`);
   if (role === SECRETARY) return restartSecretary({home, role, session, floor, force: flags.force === true, reason, expectPid, deps});
   return withRecoveryLock(home, session, () => restartLocked({home, role, session, flags, floor, settings, deps, reason, reasonNote, expectPid}));
 }
@@ -130,6 +138,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (!fs.statSync(start.cwd).isDirectory()) fail('역할 작업 폴더를 찾을 수 없다');
   const insideHome = workdirInsideHome(start.cwd, home);
   if (insideHome) fail(workdirInsideHomeMessage(insideHome));
+  const launch = flags[MODEL_FROM_SETTINGS] === true ? settingsLaunch({start, settings, harness}) : null;
 
   // 1) 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 끄지 않고 거절한다.
   const pane = deps.paneInfo(session);
@@ -143,9 +152,15 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
     readJson: deps.readJson, processStartedAt: deps.processStartedAt,
     tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
-  const command = withStopHook(withInlineScreen(rebuildResumeCommand(settings, harness, start.cmd, conversation)));
+  // --model-from-settings면 그 명령에서 모델·강도 자리의 값만 설정값으로 바꾼다(다른 옵션·순서·실행 파일은 옛 그대로).
+  // 위 프로세스·대화 찾기는 옛 모델 기준(프로세스 인자는 옛 명령 그대로), 아래 다시 만든 명령의 확인은 새 모델 기준이다.
+  const kept = rebuildResumeCommand(settings, harness, start.cmd, conversation);
+  const swap = launch ? settingsSwap({settings, harness, model, launch, kept}) : null;
+  const expectedModel = swap?.changed ? launch.model : model;
+  const command = withStopHook(withInlineScreen(swap?.changed ? swap.command : kept));
   const again = launchIdentityOf(command), mode = conversationOf(command);
-  if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
+  if (!again.ok || again.harness !== harness || again.model !== expectedModel)
+    fail(swap?.changed ? '다시 만든 명령의 실행기·모델이 설정값과 다르다' : '다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
 
   // 3) 여기까지 거절 사유가 없다. 안전 지점 확인(화면 idle + 사람 입력 보호)은 stopForRestart 안에서, 원장 다시 읽기와
@@ -169,13 +184,50 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       cmd: command, cwd: start.cwd}),
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
+    // 설정에서 값을 가져온 재시작: 설정 칸은 kadan start --profile과 같은 이름으로 남긴다. launchSource는 적지 않는다 —
+    // 명령이 설정 틀 그대로가 아니라 옛 명령에서 모델·강도 값만 바꾼 것이기 때문이다.
+    ...(swap ? {
+      modelFromSettings: true, settingsRevision: launch.revision, settingsPreset: launch.preset,
+      runnerChoice: {runner: launch.runner, model: launch.model, ...(launch.effort ? {effort: launch.effort} : {})},
+      ...(swap.previousModel ? {previousModel: swap.previousModel} : {}),
+      ...(swap.previousEffort ? {previousEffort: swap.previousEffort} : {}),
+    } : {}),
     restartOf: startDigest(start), restartConversation: conversation,
     ...(reason ? {reason} : {}),
     ...(force ? {forced: true, forcedTasks: pending} : {}),
     ...(refresh ? {accountRefresh: true, pendingTasks: pending, ...(reasonNote ? {reasonNote} : {})} : pending.length ? {pendingTasks: pending} : {}),
   });
-  return {role, session, conversation, command, harness, model, panePid: evidence.panePid ?? null, forced: force, accountRefresh, pending,
-    window: window.method ?? 'hidden'};
+  return {role, session, conversation, command, harness, model: expectedModel, panePid: evidence.panePid ?? null,
+    forced: force, accountRefresh, pending, window: window.method ?? 'hidden',
+    ...(swap ? {modelFromSettings: {changed: swap.changed, model: launch.model, effort: launch.effort ?? null,
+      previousModel: model, previousEffort: swap.oldEffort, revision: launch.revision, preset: launch.preset}} : {})};
+}
+
+// --model-from-settings가 쓸 설정값: 마지막 start의 프로필 + 지금 활성 프리셋의 모델·강도. 설정 명령(cmd)은 실행기 확인에만 쓴다.
+// 프로필을 추측하지 않고, 대화를 이어 열 수 없는 실행기 교체와 비교 보고서 귀속이 바뀌는 비교 모드 세션은 거절한다.
+function settingsLaunch({start, settings, harness}) {
+  const option = `--${MODEL_FROM_SETTINGS}`;
+  const profile = start.roleProfile;
+  if (start.compareMode) fail(`비교 모드로 띄운 역할은 ${option}로 모델을 바꾸지 않는다 — 비교 보고서의 귀속(프리셋·예약)이 중간에 바뀐다`);
+  if (!profile)
+    fail(`이 역할은 시작 기록에 프로필이 없어 설정에서 모델을 정할 수 없다 — ${option} 없이 다시 띄우거나 kadan start --profile로 새로 띄운다`);
+  const launch = launchFor(settings, profile);
+  if (!launch) fail(`실행 모델 설정(활성 프리셋 ${settings.activePreset})에 ${profile} 역할 값이 없다 — 설정에서 모델을 정할 수 없다`);
+  const want = launchIdentityOf(launch.cmd);
+  if (!want.ok) fail(`설정 명령에서 등록 실행기·모델을 읽지 못했다(${want.reason})`);
+  if (want.harness !== harness)
+    fail(`설정의 ${profile} 실행기(${want.harness})가 이 역할의 실행기(${harness})와 다르다 — 실행기가 바뀌면 같은 대화를 이어 열 수 없다`);
+  return launch;
+}
+
+// kept(옛 명령에 현재 대화 꼬리를 붙인 평소 restart 명령)에서 모델·강도 자리의 값만 설정값으로 바꾼다.
+// 설정에 강도 값이 없으면 강도는 비교·교체 대상이 아니다. 모델·강도가 이미 같으면 kept를 그대로 쓴다(changed false).
+function settingsSwap({settings, harness, model, launch, kept}) {
+  const effort = launch.effort || null;
+  const {command, previous} = swapModelSlots(settings, harness, kept, {model: launch.model, effort, expectModel: model});
+  const effortChanged = effort != null && previous.effort !== effort;
+  return {changed: launch.model !== model || effortChanged, command, oldEffort: previous.effort,
+    previousModel: launch.model !== model ? model : null, previousEffort: effortChanged ? previous.effort : null};
 }
 
 // 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
