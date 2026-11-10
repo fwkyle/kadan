@@ -117,6 +117,8 @@ test('claude: 같은 이름·작업 폴더·옵션으로 대화 인자만 바꿔
   assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
   const [stop, start] = f.entries.slice(1);
   assert.equal(stop.kind, 'stop'); assert.equal(stop.restart, true);
+  // restart의 stop에도 kadan stop과 같은 칸으로 확정한 대화와 그 세대가 남는다.
+  assert.equal(stop.conversation, ID); assert.equal(stop.conversationStart, startDigest(f.entries[0]));
   assert.equal(start.kind, 'start');
   assert.equal(start.cmd, `${CLAUDE} --resume ${ID}`);
   assert.equal(start.cwd, f.dir); assert.equal(start.session, 'kadan-w'); assert.equal(start.role, 'w');
@@ -337,6 +339,7 @@ test('비서: restart와 kadan up(stop 없이 사라진 뒤 복원)이 같은 �
   const sameHome = e => JSON.parse(JSON.stringify(e).replaceAll(a.home, '<H>').replaceAll(b.home, '<H>'));
   assert.deepEqual(sameHome(shape(restartStart)), sameHome(shape(upStart)));
   assert.equal(b.entries.find(e => e.kind === 'stop').restart, true);
+  assert.equal(b.entries.find(e => e.kind === 'stop').conversationSkipped, 'infrastructure', '비서는 대화 번호 대상이 아니다(재개 정보가 따로 있다)');
   assert.equal(restartStart.secretaryResumeSource, startDigest(b.entries[0]));
   const generations = createMailGenerations();
   b.entries.forEach((e, i) => generations.apply(e, i));

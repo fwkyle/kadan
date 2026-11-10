@@ -4,8 +4,37 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {taskIdentity} from './task-identity.mjs';
 import {encodeMailValue, decodeMailValue} from './mail-view-store.mjs';
+import {startDigest} from './secretary-resume.mjs';
+import {isGenerationOutputLog} from './output-log.mjs';
 
 const verified = new Map();
+
+// kadan reopen이 남긴 start가 "바로 앞에 꺼진 그 세대"를 잇는가. 부르는 쪽이 두 가지를 넘긴다:
+//   - lastStart: 그 세션의 문자 그대로 마지막 start 사건(이번 start 바로 앞의 것. 살아 있는 세션을 다시 연 start도 포함)
+//   - 지금 세대가 없다는 사실(stop으로 꺼진 상태)은 부르는 쪽이 먼저 확인한다
+// start의 reopenOf가 그 마지막 start의 지문과 같으면, 그 start와 이번 start 사이에 다른 start가 없었다는 뜻이다
+// (있었다면 마지막 start가 달라진다). 지문은 reopen이 원장에서 읽은 사건으로 만든 것(startDigest)과 같은 계산이다.
+// 따로 적어 두는 상태가 없다: 저장 상태 경로는 sessions 표의 start_position·generation_position만 읽는다. 이 두 칸은
+// reopen을 모르는 옛 프로그램도 같은 규칙으로 갱신하므로(start가 덮고, stop은 세대만 비운다), 옛 프로그램이 사이를 지나가도
+// 낡은 근거가 남지 않는다. 틀리는 방향은 "이어받지 않음"뿐이다. 전체 훑기(watch-roles.mjs)도 이 함수를 쓴다.
+export function reopenContinues(entry, lastStart) {
+  return typeof entry?.reopenOf === 'string' && entry.reopenOf.length > 0 && lastStart?.kind === 'start'
+    && lastStart.session === entry.session && lastStart.role === entry.role
+    && generationDistinct(lastStart) && startDigest(lastStart) === entry.reopenOf;
+}
+
+// 지문은 사건의 본문만 본다. 그래서 근거가 되는 start는 "다른 세대의 start와 본문이 같을 수 없는" 기록이어야 한다.
+// 세대를 구분하는 값은 둘뿐이다:
+//   - outputLog: 세션을 만들 때 붙는 세대별 출력 기록 경로(만들 때마다 새 UUID 폴더, output-log.mjs). 세션을 실제로 띄운 start에 있다.
+//     세대별 폴더 방식 이전의 고정 경로(…/out/<세션>.log.gz)는 같은 이름의 세대끼리 같아서 인정하지 않는다.
+//   - reuseOf: 살아 있는 세션을 다시 연 start(명령·출력 기록 경로 없음)가 적는, 그 세대를 띄운 start의 지문.
+//     위 outputLog가 있는 start를 가리킬 때만 적는다(role-conversation.mjs reuseOfFor).
+// 둘 다 없는 start(이 칸이 생기기 전의 재사용 기록, 출력 기록을 붙이지 못했거나 옛 고정 경로로 뜬 세션)는 역할·PID·작업 폴더·기록 시각이 같으면
+// 다른 세대의 기록과 본문이 같아질 수 있다. 확신할 수 없으므로 근거로 쓰지 않는다(이어받지 않는다).
+// kadan reopen도 같은 함수로 "감시가 이어지는가"를 안내한다.
+export function generationDistinct(start) {
+  return isGenerationOutputLog(start?.outputLog) || (typeof start?.reuseOf === 'string' && start.reuseOf.length > 0);
+}
 const schema = `
   CREATE TABLE watch_role_meta (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
   CREATE TABLE watch_role_sessions (
@@ -50,13 +79,22 @@ function applyStart(store, meta, entry, position) {
     (generation.floor ?? 'tmux') === (entry.floor ?? 'tmux') &&
     (entry.floor !== 'rottie' || generation.rottieTerminalId === entry.rottieTerminalId);
   const visible = typeof entry.session === 'string' && entry.session.startsWith('kadan-');
+  // 꺼진 뒤의 새 start일 때만 본다: 지금 세대가 없고(stop이 generation_position을 비웠다) 그 세션의 마지막 start
+  // (start_position, stop이 지우지 않는다)가 reopenOf가 가리키는 사건이어야 한다. 살아 있는 세대를 덮어쓴 start는 reopen이 아니다.
+  // 추가 SQL은 없다(위에서 읽은 행을 쓴다). 그 사건을 못 읽거나 start가 아니면 이어받지 않을 뿐 적용은 계속한다.
+  let reopened = false;
+  if (!reused && entry.reopenOf && previous && !previous.generation_position && previous.start_position) {
+    let lastStart = null;
+    try { lastStart = store.load(previous.start_position); } catch { /* 못 읽으면 이어받지 않는다 */ }
+    reopened = reopenContinues(entry, lastStart);
+  }
   if (!previous) meta.sessionCount++;
   store.prepare(`INSERT INTO watch_role_sessions VALUES(?,?,?,?,?,1)
     ON CONFLICT(key) DO UPDATE SET start_position=excluded.start_position,
       generation_position=excluded.generation_position,dispatch_ready=1`)
     .run(store.key(entry.session), encodeMailValue(entry.session), previous?.rank ?? position,
       visible ? position : null, reused ? previous.generation_position : position);
-  if (!reused && !(entry.restartOf && previous?.dispatch_ready)) {
+  if (!reused && !((entry.restartOf || reopened) && previous?.dispatch_ready)) {
     meta.dispatchCount -= store.prepare('DELETE FROM watch_role_dispatches WHERE session_key=?')
       .run(store.key(entry.session)).changes;
   }
