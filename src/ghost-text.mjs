@@ -6,10 +6,13 @@ const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/y;
 const CONTROL_STRING = /\x1b[PX^_][\s\S]*?\x1b\\/y;
 const ESCAPE = /\x1b[ -/]*[0-~]/y;
 const INPUT_LINE = /^\s*[❯›>]/u;
-const RULE = /^\s*─{3,}\s*$/u;
-const CLAUDE_STATUS = /^\s+(?:Haiku|Sonnet|Opus) \S+ \| effort:\w+(?: \| .*)?$/u;
-const CLAUDE_FOOTER = /^\s+(?:(?:~\/|\/).+|⏵⏵ .+|Advisor Tool \(experimental\).+|Ctrl\+Y to paste deleted text)$/u;
-const CODEX_STATUS = /^\s+\S+ (?:none|minimal|low|medium|high|xhigh|max|default) · (?:~\/|\/).+$/u;
+// claude 입력칸은 화면 첫 칸에서 시작한다. 본문 속 인용·도구 출력은 들여쓰기가 있어 여기에 걸리지 않는다.
+const CLAUDE_INPUT = /^❯/u;
+const CLAUDE_RULE = /^─{3,}\s*$/u;
+// 바닥글 줄 수 상한은 "입력칸이 화면 끝에 있다"만 확인한다. 관찰한 최대 5줄(경로·상태 줄·권한 줄·알림 2줄)에 여유 3줄.
+const CLAUDE_FOOTER_MAX = 8;
+// codex 상태 줄은 "모델 낱말 + 강도 낱말 + ` · ` + 경로" 구조만 본다. 두 낱말의 글자(이름·강도 목록)는 보지 않는다.
+const CODEX_STATUS = /^\s+\S+ \S+ · (?:~\/|\/).+$/u;
 const CODEX_SHORTCUTS = /^\s+(?:← for agents · )?\? for shortcuts(?:\s+⚠ .+)?$/u;
 
 // 색(38/48/58)의 채널과 콜론 하위 매개변수는 독립 SGR 2(흐림)가 아니다.
@@ -74,17 +77,19 @@ function cells(line, state) {
 
 const plain = row => row.map(cell => cell.char).join("");
 
-// 실측 claude: 두 가로줄 사이 ❯ + 상태 바닥글. codex: › + 상태/단축키 바닥글(#180).
+// 실측 claude: 두 가로줄 사이 ❯ + 바닥글. codex: › + 상태/단축키 바닥글(#180).
 // 마지막 기호가 이 모양이 아니면 앞선 본문에서 다른 후보를 찾지 않고 보존한다.
+// claude는 구조만 본다(2026-11-10): 첫 칸의 ❯, 바로 위아래가 첫 칸에서 시작하는 가로줄, 그 아래 바닥글 1~8줄이 화면 끝.
+// 바닥글의 글자(모델 표시·알림 문구·상태 줄 유무)는 보지 않는다. 사용자·버전마다 달라서, 목록에 없는 모델 이름이나
+// 알림 줄이 뜨면 추천 문구가 사람 입력으로 남았다(쉬는 역할의 restart 거절).
 function composerIndex(lines) {
   const index = lines.findLastIndex(line => INPUT_LINE.test(line));
   if (index < 0) return -1;
   const footer = lines.slice(index + 1).filter(line => line.trim() !== "");
-  if (/^\s*❯/u.test(lines[index]) && RULE.test(lines[index - 1] ?? "") &&
-      RULE.test(lines[index + 1] ?? "")) {
-    const below = footer.slice(1);
-    if (below.length <= 5 && below.some(line => CLAUDE_STATUS.test(line)) &&
-        below.every(line => CLAUDE_STATUS.test(line) || CLAUDE_FOOTER.test(line))) return index;
+  if (CLAUDE_INPUT.test(lines[index]) && CLAUDE_RULE.test(lines[index - 1] ?? "") &&
+      CLAUDE_RULE.test(lines[index + 1] ?? "")) {
+    const below = footer.length - 1;
+    if (below >= 1 && below <= CLAUDE_FOOTER_MAX) return index;
   }
   if (/^\s*›/u.test(lines[index]) && lines[index + 1]?.trim() === "" &&
       CODEX_STATUS.test(footer[0] ?? "") &&
