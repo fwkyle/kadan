@@ -401,7 +401,10 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 `conversation` 두 종류(코드의 일반 함수 둘):
 
 - `{"kind":"open-file","pattern":"<정규식, 캡처 그룹 1개>"}` — pane 안의 실행기 본체 사슬(뿌리 프로세스 1개와 그 아래로 하나씩 이어진 같은 실행기 프로세스, [`kadan restart` 자세히](commands.md#kadan-restart-자세히))이 열어 둔 파일 이름에서 ID를 뽑는다(`lsof`). 자식 도구가 연 파일은 보지 않는다. 서로 다른 ID가 0개·2개 이상이면 거절.
-- `{"kind":"pid-json","path":"~/…/{pid}.json","field":"sessionId","match":{"tmux":"{tmux}"}}` — 본체 사슬의 **뿌리 PID 하나**로 `{pid}`를 채운 JSON 파일 한 개에서 필드를 읽는다. 자식 도구·하위 에이전트의 PID 파일은 보지 않는다. `match`는 그 파일의 값이 이 역할의 tmux 자리(`세션:@창.%자리`)와 같은지 대조한다(다른 세션의 대화를 집지 않게). 파일이 없거나 읽히지 않거나, `match` 값이 다르거나, 필드 값이 없으면 거절.
+- `{"kind":"pid-json","path":"~/…/{pid}.json","field":"sessionId","match":{"tmux":"{tmux}"}}` — 본체 사슬의 **뿌리 PID 하나**로 `{pid}`를 채운 JSON 파일 한 개에서 필드를 읽는다. 자식 도구·하위 에이전트의 PID 파일은 보지 않는다.
+  `match`는 파일에 있는 키만 틀 값과 대조하고, 없는 키는 건너뛴다. 예를 들어 `tmux`가 있으면 이 역할의 자리(`세션:@창.%자리`)와 같아야 한다.
+  키 유무와 관계없이 **파일 수정 시각 ≥ 살아 있는 뿌리 프로세스 시작 시각**이어야 한다. `ps lstart`가 초 단위이므로 같은 초는 허용하며, 이전 초의 파일은 재사용 PID의 낡은 파일로 거절한다.
+  시작 시각을 확인하지 못하거나, 파일이 없거나 읽히지 않거나, 있는 `match` 값이 다르거나, 대화 ID 필드가 없으면 거절한다. 운영 설정의 기존 `match`는 수정할 필요가 없다.
 - 공통 선택 칸 `evidence`(open-file): 저장 여부와 무관하게 대화 ID를 드러내는 다른 파일(lock 등)의 정규식 목록(캡처 그룹 1개). 본체 사슬에서 서로 다른 ID가 둘 이상 보이면 restart가 거절한다. codex는 `thread-writer-locks/<ID>.lock`.
 - 공통 선택 칸 `stored`: 다시 열 대화의 저장 파일(`~/…/*/{conversation}.jsonl`, 한 칸에 `*` 허용). 없으면 "아직 저장되지 않음"으로 거절 — restart가 끄기 전에 막는다.
 
@@ -410,7 +413,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 | 실행기 | resume | 대화 ID 출처 | 비고 |
 | --- | --- | --- | --- |
 | codex 0.155 | `… resume {conversation}` | 열린 `sessions/…/rollout-…-<ID>.jsonl` | **lock 파일(`thread-writer-locks`)은 ID를 고르는 데는 쓰지 않고 `evidence`로 다른 ID 흔적을 잡는 데만 쓴다.** 첫 입력 전에는 lock만 열려 있고 그 ID로 resume이 되는지 미실측이라, rollout이 열려야(=저장돼야) 찾아 restart가 첫 입력 전 세션을 끄지 않는다 |
-| claude 2.1.299 | `… --resume {conversation}` | `~/.claude/sessions/<PID>.json`의 `sessionId` + `tmux` 일치 + `~/.claude/projects/*/<ID>.jsonl` 저장 확인 | 문서에 없는 내부 파일이라 버전이 바뀌면 모양이 달라질 수 있다. `/clear` 뒤에는 ID가 바뀌며 이 파일이 현재 값이다. 첫 입력 전에는 기록이 없어 거절 |
+| claude 2.1.299 | `… --resume {conversation}` | `~/.claude/sessions/<PID>.json`의 `sessionId` + 파일 시각 ≥ 프로세스 시작 + `tmux`가 있으면 일치 + `~/.claude/projects/*/<ID>.jsonl` 저장 확인 | 문서에 없는 내부 파일이라 버전이 바뀌면 모양이 달라질 수 있다. `/clear` 뒤에는 ID가 바뀌며 이 파일이 현재 값이다. 첫 입력 전에는 기록이 없어 거절 |
 | agy 1.3.5 | `… --conversation {conversation}` | 열린 `antigravity-cli/conversations/<ID>.db` | 모델 이름에 강도가 들어 있어(`gemini-3.8-flash-low`) `{effort}`·`--effort`는 틀에 넣지 않았다(옵션은 존재하므로 필요하면 틀 한 줄로 추가). 이어 열 때 직전 프로세스의 presence 잠금이 남으면 "Conversation already open" 경고가 뜰 수 있으나 대화는 복원됐다 |
 | omo 5.1.32 | `… --session {conversation}` (실측: 같은 대화 복원) | **칸 비움** | ID가 `~/.omo/agent/sessions/<폴더>/session-holders/<ID>/<PID>.json`의 **폴더 이름**이라 두 찾기 방식에 맞지 않는다. 대화 jsonl은 열려 있지 않다. 필요하면 세 번째 방식을 따로 결정 |
 | devin 3000.11.3 | `… --resume {conversation}` | **칸 비움** | 첫 입력 전 resume 가능 여부를 실측하지 못해 비웠다. fork·exec JSON도 비움. `swe-2-max` 등 모델 목록은 건드리지 않았다 |
