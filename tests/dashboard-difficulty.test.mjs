@@ -141,6 +141,9 @@ test('칸반 표시: hard 행에만 어려움 표시가 붙고 다른 표시 뒤
   const cards = Object.fromEntries(result.boards.flatMap(b => b.lines.flatMap(l => l.cards)).map(c => [c.key, c.marks.map(m => m.label)]));
   assert.deepEqual(cards['r/a'], ['일시정지', '어려움']);
   assert.deepEqual(cards['r/b'], ['일시정지']);
+  const all = Object.fromEntries(result.boards.flatMap(b => b.lines.flatMap(l => l.cards)).map(c => [c.key, c]));
+  assert.equal(all['r/a'].difficulty, 'hard');
+  assert.equal(Object.hasOwn(all['r/b'], 'difficulty'), false, '보통 카드에는 키가 없다');
 });
 
 test('N1: 보류(archived) 카드의 난이도는 바꿀 수 있고, done·cancelled·superseded는 여전히 거절한다', () => {

@@ -175,6 +175,7 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
       state: row.state,
       stateLabel: statusLabel(row.state),
       healthLabel: row.healthLabel || "",
+      ...(row.difficulty === "hard" ? { difficulty: "hard" } : {}),
       workKey: work?.key ?? null,
       workTitle: work?.title ?? null,
       marks: [...marksOf(row, { byCard, byWork: workDecided }), ...prMarks(attached)],

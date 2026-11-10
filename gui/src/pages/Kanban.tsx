@@ -6,7 +6,7 @@ import { CardLink, ErrorMessage, Freshness, Loading, Pulse, time } from "../ui";
 type Mark = { kind: string; label: string };
 type KanbanCard = {
   key: string; title: string; role: string; stateLabel: string; healthLabel: string;
-  workTitle: string | null; marks: Mark[]; since: string | null;
+  workTitle: string | null; marks: Mark[]; since: string | null; difficulty?: "hard";
   supervisor?: string; phaseLabel?: string; // 프로젝트별 보기에서만 온다
 };
 type KanbanLine = { key: string; label: string; count: number; hidden: number; cards: KanbanCard[] };
