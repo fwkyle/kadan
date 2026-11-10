@@ -66,7 +66,8 @@ for (const scenario of ['unchanged', 'pid-only', 'record-and-pid', 'record-same-
       assert.equal(f.log.filter(([kind]) => kind === 'stop').length, 1);
     } else {
       assert.throws(() => f.run(), /PID|세대|다른 프로세스/);
-      assert.deepEqual(f.log, []);
+      // 이제 일반 restart도 끄기 직전 확인(beforeStop)을 부른다. 끄기·만들기는 0회여야 한다.
+      assert.deepEqual(f.log.filter(([kind]) => kind !== 'beforeStop'), []);
     }
   });
 }
@@ -80,7 +81,7 @@ test('restart는 대화 준비 뒤 PID가 바뀌어도 기존 세션을 끄지 �
     return value;
   };
   assert.throws(()=>f.run(),e=>e.code==='KADAN_PID_MISMATCH');
-  assert.deepEqual(f.log,[]);
+  assert.deepEqual(f.log.filter(([kind])=>kind!=='beforeStop'),[]);
 });
 
 test('대시보드 node 명령은 AI 대화 resume 대상이 아니므로 restart 대신 stop 후 up을 쓴다', () => {
@@ -93,7 +94,7 @@ test('claude: 같은 이름·작업 폴더·옵션으로 대화 인자만 바꿔
   const f = fixture({files: claudeFiles});
   const receipt = f.run();
   assert.equal(receipt.conversation, ID);
-  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
   const [stop, start] = f.entries.slice(1);
   assert.equal(stop.kind, 'stop'); assert.equal(stop.restart, true);
   assert.equal(start.kind, 'start');
@@ -131,7 +132,6 @@ test('거절은 모두 기존 세션을 끄기 전에 일어난다(stop·create 
     'claude tmux 필드 없음': fixture({files: {'.claude/sessions/150.json': {sessionId: ID}, [`.claude/projects/-x/${ID}.jsonl`]: {}}}),
     'claude 대화 파일 없음': fixture({}),
     'claude 첫 입력 전(기록 미저장)': fixture({files: {'.claude/sessions/150.json': {sessionId: ID, tmux: 'kadan-w:@3.%3'}}}),
-    '끝나지 않은 카드': fixture({files: claudeFiles, pending: ['card-1']}),
     'resume --continue 명령': fixture({cmd: `${CLAUDE} --continue`, files: claudeFiles}),
   };
   for (const [name, f] of Object.entries(cases)) {
@@ -139,7 +139,6 @@ test('거절은 모두 기존 세션을 끄기 전에 일어난다(stop·create 
     assert.deepEqual(f.log, [], name);
     assert.equal(f.entries.length, 1, name);
   }
-  assert.throws(() => cases['끝나지 않은 카드'].run(), /카드-?|card-1/);
 });
 
 test('표에 칸이 없는 실행기는 미지원으로 거절한다(conversation·resume 빈 칸)', () => {
@@ -160,6 +159,57 @@ test('--force: 끝나지 않은 카드가 있어도 진행하고 stop·start 기
   const [stop, start] = f.entries.slice(1);
   assert.equal(stop.forced, true); assert.deepEqual(stop.forcedTasks, ['card-1', 'card-2']);
   assert.equal(start.forced, true); assert.deepEqual(start.forcedTasks, ['card-1', 'card-2']);
+  assert.deepEqual(stop.pendingTasks, ['card-1', 'card-2']); assert.deepEqual(start.pendingTasks, ['card-1', 'card-2']);
+});
+
+// 2026-11-10 [kyle] "카드있을때 리스타트할수도있자나": 옛 단언(끝나지 않은 카드가 있으면 거절)을 일부러 뒤집었다.
+// restart는 대화·우편 세대·카드 책임을 이어받아 카드가 끊기지 않으므로, 거절 대신 끄기 직전 안전 지점 확인(beforeStop)을 건다.
+test('카드 있음 + 쉬는 중이면 진행하고, stop·start에 pendingTasks가 남고 forced는 없다', () => {
+  const f = fixture({files: claudeFiles, pending: ['card-1', 'card-2']});
+  const receipt = f.run();
+  assert.equal(receipt.forced, false);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
+  const [stop, start] = f.entries.slice(1);
+  for (const entry of [stop, start]) {
+    assert.deepEqual(entry.pendingTasks, ['card-1', 'card-2']);
+    assert.equal(entry.forced, undefined); assert.equal(entry.forcedTasks, undefined); assert.equal(entry.accountRefresh, undefined);
+  }
+});
+
+test('카드 있음 + 응답 중(beforeStop이 던짐)이면 끄기 전에 거절한다 — stop·create 0회, 원장 무변화', () => {
+  const f = fixture({files: claudeFiles, pending: ['card-1']});
+  f.setBeforeStop(() => { throw new Error('working: 응답 생성 중'); });
+  assert.throws(() => f.run(), error => /응답 생성 중\(또는 최근 사람 입력\)이라 끄지 않았다/.test(error.message) && /--force/.test(error.message)
+    && error.code !== STATE_CHANGED_CODE);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop']);
+  assert.equal(f.entries.length, 1);
+});
+
+test('--force + 응답 중이면 안전 지점 확인을 건너뛰고 진행하며 forced·forcedTasks·pendingTasks가 남는다', () => {
+  const f = fixture({files: claudeFiles, pending: ['card-1']});
+  f.setBeforeStop(() => { throw new Error('working: 응답 생성 중'); });
+  f.run({force: true});
+  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
+  const [stop, start] = f.entries.slice(1);
+  for (const entry of [stop, start]) {
+    assert.equal(entry.forced, true); assert.deepEqual(entry.forcedTasks, ['card-1']); assert.deepEqual(entry.pendingTasks, ['card-1']);
+  }
+});
+
+test('beforeStop 장치가 없으면 일반 restart도 끄기 전에 실패 닫힘이고, --force는 장치 없이도 진행한다', () => {
+  const f = fixture({files: claudeFiles});
+  delete f.deps.beforeStop;
+  assert.throws(() => f.run(), /beforeStop/);
+  assert.equal(f.log.length, 0);
+  f.run({force: true});
+  assert.equal(f.log.some(([kind]) => kind === 'create'), true);
+});
+
+test('카드 없음 + 쉬는 중이면 진행하고 pendingTasks 칸이 없다(빈 배열을 쓰지 않는다)', () => {
+  const f = fixture({files: claudeFiles});
+  f.run();
+  const [stop, start] = f.entries.slice(1);
+  assert.equal('pendingTasks' in stop, false); assert.equal('pendingTasks' in start, false);
 });
 
 test('--reason: stop·start 두 사건에 다듬은 이유를 남기고, 없으면 칸 자체가 없다', () => {
@@ -188,7 +238,7 @@ test('회복 잠금 디렉터리가 남아 있으면 거절하고, 사람이 지
 test('--expect-pid: 지금 세대와 같으면 진행하고, 다르면 끄기 전에 거절한다 — 같은 요청을 두 번내면 두 번째는 거절', () => {
   const f = fixture({files: claudeFiles});
   f.run({'expect-pid': '100'});
-  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
   // 첫 실행 뒤 원장의 최신 시작은 pane PID 200이다. 옛 화면의 세대 표시(100)로 다시내면 두 번 재시작이 되므로 거절한다.
   assert.throws(() => f.run({'expect-pid': '100'}), /세대와 다르다/);
   assert.equal(f.log.filter(([kind]) => kind === 'stop').length, 1, '두 번째 요청은 기존 세션을 끄지 않는다');
@@ -247,7 +297,7 @@ function secretaryFixture() {
   const floor = {name: 'tmux', alive: () => Boolean(pane), pid: () => pane?.pid,
     stop: () => { calls.push('stop'); pane = null; }, create: o => { calls.push(o); pane = {pid: '30'}; return {panePid: '30'}; }};
   const deps = {read: () => entries, record: e => entries.push(e), findTranscript: () => transcript, pendingCards: () => [],
-    closeWindow: () => ({}), openWindow: () => ({method: 'manual'})};
+    closeWindow: () => ({}), openWindow: () => ({method: 'manual'}), beforeStop: () => {}};
   return {home, entries, floor, deps, calls, setPane: v => { pane = v; }};
 }
 
@@ -270,13 +320,30 @@ test('비서: restart와 kadan up(stop 없이 사라진 뒤 복원)이 같은 �
   assert.equal(generations.isPrevious('비서', 0), false);
 });
 
-test('비서: 체크포인트를 못 만들면 끄지 않고 거절하고, 끝나지 않은 카드도 막는다', () => {
+test('비서: 체크포인트를 못 만들면 끄지 않고 거절한다', () => {
   const f = secretaryFixture();
   assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null,
     deps: {...f.deps, findTranscript: () => { throw new Error('비서 대화 파일을 하나로 확인하지 못했습니다.'); }}}), /하나로 확인/);
-  assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null,
-    deps: {...f.deps, pendingCards: () => ['c9']}}), /c9/);
   assert.deepEqual(f.calls, []);
+});
+
+// 옛 단언(비서도 끝나지 않은 카드가 있으면 거절)을 2026-11-10 [kyle] 결정으로 뒤집었다. 대신 비서도 끄기 직전 안전 지점 확인을 한다.
+// confirmIdleBeforeStop은 화면 상태 줄만 읽어 claude·codex 모두 판정하므로 실행기에 묶이지 않는다.
+test('비서: 카드가 있어도 진행하고 pendingTasks를 남기며, 응답 중이면 끄기 전에 거절하고, --force는 확인을 건너뛴다', () => {
+  const run = (f, flags = {}) => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags, floor: f.floor, settings: null, deps: f.deps});
+  const ok = secretaryFixture();
+  ok.deps.pendingCards = () => ['c9'];
+  run(ok);
+  const [stop] = ok.entries.filter(e => e.kind === 'stop'), start = ok.entries.filter(e => e.kind === 'start').at(-1);
+  assert.deepEqual(stop.pendingTasks, ['c9']); assert.deepEqual(start.pendingTasks, ['c9']);
+  assert.equal(stop.forced, undefined); assert.equal(start.forced, undefined);
+  const busy = secretaryFixture();
+  busy.deps.pendingCards = () => ['c9'];
+  busy.deps.beforeStop = () => { throw new Error('working: 응답 생성 중'); };
+  assert.throws(() => run(busy), /끄지 않았다/);
+  assert.deepEqual(busy.calls, []); assert.equal(busy.entries.length, 1);
+  run(busy, {force: true});
+  assert.equal(busy.entries.filter(e => e.kind === 'start').at(-1).forced, true);
 });
 
 const ROLLOUT = id => `/h/.codex/sessions/2026/10/14/rollout-2026-10-14T16-35-00-${id}.jsonl`;
@@ -333,7 +400,6 @@ test('비서: restart 뒤에도 감시 발령·우편·책임이 이어지고, -
   const f = secretaryFixture();
   f.entries.push({kind: 'send', role: '비서', session: 'kadan-비서', taskId: 'sc1', t: '2026-10-14T00:01:00Z'});
   f.deps.pendingCards = () => ['sc1'];
-  assert.throws(() => restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {}, floor: f.floor, settings: null, deps: f.deps}), /sc1/);
   restartRole({home: f.home, role: '비서', session: 'kadan-비서', flags: {force: true}, floor: f.floor, settings: null, deps: f.deps});
   const start = f.entries.filter(e => e.kind === 'start').at(-1);
   assert.equal(start.restartOf, startDigest(f.entries[0]));
@@ -406,11 +472,11 @@ test('accountRefresh: 계정 번호를 못 읽으면 accountSlot 칸이 없고, 
   assert.deepEqual(stop.pendingTasks, []); assert.equal(start.accountRefresh, true);
 });
 
-test('일반 restart는 그대로다: 카드가 있으면 거절, --force일 때만 forced, accountRefresh 문자열 값은 켜지 않는다', () => {
-  const blocked = fixture({files: claudeFiles, pending: ['card-1']});
-  assert.throws(() => blocked.run({}), /끝나지 않은 카드 1건/);
-  assert.throws(() => blocked.run({accountRefresh: 'true'}), /끝나지 않은 카드 1건/);
-  assert.deepEqual(blocked.log, []);
+test('일반 restart: --force일 때만 forced, accountRefresh 문자열 값은 켜지 않는다(카드가 있어도 거절은 없음, 2026-11-10)', () => {
+  const plain = fixture({files: claudeFiles, pending: ['card-1']});
+  plain.run({accountRefresh: 'true'});
+  assert.equal(plain.entries[1].accountRefresh, undefined); assert.equal(plain.entries[1].forced, undefined);
+  assert.deepEqual(plain.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
   const forced = fixture({files: claudeFiles, pending: ['card-1']});
   forced.run({force: true});
   const [stop, start] = forced.entries.slice(1);
@@ -476,11 +542,15 @@ test('accountRefresh인데 재확인 장치가 없으면 끄지 않는다', () =
   assert.equal(f.log.length, 0);
 });
 
-test('일반 restart는 재확인을 부르지 않는다 — 동작 무변경', () => {
+// 옛 단언(일반 restart는 재확인을 부르지 않는다)을 2026-11-10 [kyle] 결정으로 뒤집었다 — 이제 --force만 재확인을 건너뛴다.
+test('일반 restart도 재확인을 한 번 부르고, --force는 부르지 않는다', () => {
   const f = fixture({files: claudeFiles});
-  f.setBeforeStop(() => { throw new Error('부르면 안 됨'); });
   f.run();
-  assert.deepEqual(f.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['beforeStop', 'stop', 'record', 'create', 'record']);
+  const g = fixture({files: claudeFiles});
+  g.setBeforeStop(() => { throw new Error('부르면 안 됨'); });
+  g.run({force: true});
+  assert.deepEqual(g.log.map(([kind]) => kind), ['stop', 'record', 'create', 'record']);
 });
 
 test('restart는 로티 탭을 셸 폴더가 아니라 마지막 start의 작업 폴더로 연다', () => {
