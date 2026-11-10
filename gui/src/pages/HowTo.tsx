@@ -3,9 +3,13 @@ import { DocumentContent, ErrorMessage, Loading } from "../ui";
 
 type HowToData = { title: string | null; html: string | null; error: string | null };
 
-// 길잡이: docs/how-to.md를 읽기 전용으로 보인다. 들어올 때 한 번만 읽고 주기 조회는 없다.
+// 길잡이: docs/how-to.md를 읽기 전용으로 보인다. 들어올 때 한 번만 읽고 주기 조회도, 탭 재표시 조회도 없다.
 export default function HowTo() {
-  const resource = useResource<HowToData>("how-to", { pollMs: 0, staleMs: 300_000 });
+  const resource = useResource<HowToData>("how-to", {
+    pollMs: 0,
+    staleMs: 300_000,
+    refreshOnResume: false,
+  });
   const data = resource.data;
   return (
     <section className="howto-view">
