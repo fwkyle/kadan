@@ -14,14 +14,28 @@ export function parseWaitUntil(value, now) {
   return { ok: true, at, iso: new Date(at).toISOString() };
 }
 
-// 읽을 때: 업무 기록이 지금 대기 중인가. 업무가 open이 아님·값 없음·해석 불가·이미 지남·지금부터 24시간 초과·
-// 적은 시각이 없거나 해석 불가·적은 시각부터 24시간 초과면 모두 대기 중이 아니다(손으로 고친 기록·옛 프로그램이 영원한 침묵을 만들지 못한다).
-export function activeWaitUntil(work, now) {
+// 읽을 때: 대기 기록이 앞뒤가 맞는가(상태 open, 두 시각 해석 가능, 적은 시각 < 대기 시각, 적은 시각부터 24시간 이내).
+// 적은 시각이 대기 시각과 같거나 뒤인 기록은 정상 명령으로는 만들 수 없는 모순이라 대기가 아니다(손으로 고친 기록이 침묵을 만들지 못한다).
+function waitRecord(work) {
   if (work?.status !== 'open' || typeof work.waitUntil !== 'string' || typeof work.waitUntilSetAt !== 'string') return null;
   const until = Date.parse(work.waitUntil), setAt = Date.parse(work.waitUntilSetAt);
-  if (!Number.isFinite(until) || !Number.isFinite(setAt) || !Number.isFinite(now)) return null;
-  if (until <= now || until - now > WAIT_UNTIL_MAX_MS || until - setAt > WAIT_UNTIL_MAX_MS) return null;
-  return until;
+  if (!Number.isFinite(until) || !Number.isFinite(setAt) || setAt >= until || until - setAt > WAIT_UNTIL_MAX_MS) return null;
+  return { until, setAt };
+}
+
+// 지금 대기 중인가. 대기 중이 아닌 경우: 업무가 open이 아님·값 없음·해석 불가·모순된 기록·적은 시각이 지금보다 미래(시계가 뒤로 간 경우 포함)·
+// 이미 지남·지금부터 24시간 초과. 모르면 대기 중이 아니다(알리는 쪽).
+export function activeWaitUntil(work, now) {
+  const rec = waitRecord(work);
+  if (!rec || !Number.isFinite(now) || rec.setAt > now) return null;
+  if (rec.until <= now || rec.until - now > WAIT_UNTIL_MAX_MS) return null;
+  return rec.until;
+}
+
+// 앞뒤가 맞는 대기 기록이 지금 막 끝난 경우의 종료 시각(ms). 놀고 있음 계산은 이 시각부터 멈춘 것으로 센다(대기한 시간은 멈춘 시간이 아니다).
+export function expiredWaitUntil(work, now) {
+  const rec = waitRecord(work);
+  return rec && Number.isFinite(now) && rec.setAt <= now && rec.until <= now ? rec.until : null;
 }
 
 // 감시 목록 항목: userTurnWaitList와 같은 꼴({work, tag})에 waitUntil(ISO)을 더한다.

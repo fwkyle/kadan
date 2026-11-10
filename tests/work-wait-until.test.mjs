@@ -61,9 +61,10 @@ test('실제 CLI로 적은 대기 시각: 그 전에는 놀고 있음이 없고,
     assert.ok(Number.isFinite(Date.parse(saved.waitUntilSetAt)));
     // 감시기가 쓰는 읽기에도 칸이 그대로 올라온다.
     assert.equal(t.store.listWatch()[0].waitUntil,saved.waitUntil);
-    const r=await simulate({home:t.home,base,minutes:45});
+    const r=await simulate({home:t.home,base,minutes:60});
     assert.ok(r.idle.length>0,'시각이 지나면 놀고 있음이 난다');
-    assert.ok(Math.min(...r.idleMinutes)>=30,`대기 중(30분 전)에는 경보 없음: ${r.idleMinutes}`);
+    // 대기한 30분은 멈춘 시간이 아니다: 만료(30분)부터 15분 뒤에야 1단이 난다.
+    assert.ok(Math.min(...r.idleMinutes)>=45,`대기 중과 만료 직후에는 경보 없음: ${r.idleMinutes}`);
     assert.match(r.nudges[0].msg,/대기 시각\(\d\d:\d\d\)이 지나/,'본인 창 안내에 대기 시각이 지났다는 구절');
     // 대기 중인 동안 주기 기록(대시보드 자료)에는 항목이 실린다. 지난 뒤에는 빠진다.
     const during=r.cycles.find(c=>c.minute===5);
@@ -219,4 +220,90 @@ test('/api/dashboard/status: 대기 시각 항목은 HH:MM까지 대기 글과 �
   assert.equal(status.userTurnWaits.length,1);
   assert.match(status.userTurnWaits[0].waitLabel,/^\d\d:\d\d까지 대기$/);
   assert.equal(status.userTurnWaits[0].waitUntil,future);
+});
+
+const stageOf=e=>String(e.id??e.alertId??'').endsWith(':상위')||e.stage===2?2:1;
+const stages=r=>r.idle.map(e=>({minute:e.minute,stage:e.stage??stageOf(e)}));
+
+// R1: 정상 명령만으로, 대기한 시간이 멈춘 시간으로 세어지지 않는다. 만료 → 평소 유예 뒤 1단(본인) → 계속 멈추면 2단(상위).
+test('R1: 40분 대기 만료 뒤 대기 종료 시각부터 센다 — 1단(본인, 대기 시각 구절)이 먼저, 2단(상위)이 그 뒤',async()=>{
+  const t=setup();
+  try{
+    const base=Date.now();
+    assert.equal(t.update('repo/w1','--wait-until',iso(base+40*MIN)).status,0);
+    const r=await simulate({home:t.home,base,minutes:100});
+    const s=stages(r),first1=s.find(x=>x.stage===1),first2=s.find(x=>x.stage===2);
+    assert.ok(first1&&first2,JSON.stringify(s));
+    assert.ok(first1.minute>=55,`1단은 만료(40)+유예(15) 뒤: ${first1.minute}`);
+    assert.ok(first2.minute>first1.minute&&first2.minute>=70,`2단은 1단 뒤(만료+30분 이후): ${first2.minute}`);
+    assert.equal(r.nudges[0].role,'p-감독','1단은 본인(감독)에게');
+    assert.ok(r.nudges[0].minute>=55&&r.nudges[0].minute<first2.minute);
+    assert.match(r.nudges[0].msg,/대기 시각\(\d\d:\d\d\)이 지나/);
+    assert.equal(r.nudges.filter(n=>n.minute<55).length,0,'만료 전·직후에 안내 없음');
+  }finally{t.done();}
+});
+
+test('R1: 대기 전에 이미 경보가 떠 있던 업무도 같은 순서(풀림 → 만료 뒤 1단 → 2단)',async()=>{
+  const t=setup();
+  try{
+    const base=Date.now();
+    const r=await simulate({home:t.home,base,minutes:110,onMinute:m=>{
+      if(m===18){const x=t.update('repo/w1','--wait-until',iso(base+40*MIN));assert.equal(x.status,0,x.stderr);}
+    }});
+    const s=stages(r);
+    assert.ok(s.some(x=>x.minute<18&&x.stage===1),'대기 전 1단');
+    assert.equal(s.filter(x=>x.minute>=19&&x.minute<55).length,0,'대기 중·만료 직후 경보 없음');
+    const after=s.filter(x=>x.minute>=55);
+    assert.equal(after[0].stage,1,'만료 뒤 첫 경보는 1단');
+    assert.ok(after.some(x=>x.stage===2),'계속 멈추면 2단');
+  }finally{t.done();}
+});
+
+// 대조: 같은 감독의 다른 업무로 이미 2단까지 가 있었다면, 대기 업무가 만료돼 들어와도 그 경보의 시간·수신자는 그대로다.
+test('R1 대조: 다른 업무의 기존 2단 경보 시간은 대기 업무가 만료돼 들어와도 그대로다',async()=>{
+  const t=setup(['repo/w1','repo/w2']);
+  try{
+    const base=Date.now();
+    const plain=await simulate({home:t.home,base,minutes:70});
+    assert.equal(t.update('repo/w1','--wait-until',iso(base+40*MIN)).status,0);
+    const mixed=await simulate({home:t.home,base,minutes:70});
+    // w2는 처음부터 할 일이라 경보 시작·2단 시점이 w1이 없을 때와 같다.
+    const only2=await (async()=>{const x=setup(['repo/w2']);try{return await simulate({home:x.home,base,minutes:70});}finally{x.done();}})();
+    // 업무를 만든 실제 시각이 몇 ms 달라 주기(1분) 경계에서 최대 1분 어긋날 수 있다. 단계·수신자는 같아야 한다.
+    const early=r=>stages(r).filter(x=>x.minute<40),at2=r=>stages(r).find(x=>x.stage===2);
+    assert.deepEqual(early(mixed).map(x=>x.stage),early(only2).map(x=>x.stage));
+    assert.ok(early(mixed).every((x,i)=>Math.abs(x.minute-early(only2)[i].minute)<=1));
+    assert.ok(Math.abs(at2(mixed).minute-at2(only2).minute)<=1&&at2(mixed).minute<40,'2단은 w1 만료(40분) 전에 이미 간다');
+    const recipients=r=>[...new Set(r.idle.map(e=>e.recipient??e.role??e.session))];
+    assert.deepEqual(recipients(mixed),recipients(only2));
+    assert.ok(plain.idle.length>0);
+  }finally{t.done();}
+});
+
+// R2: 모순되거나 지금보다 미래인 적은 시각의 기록은 대기 중이 아니다(알리는 쪽). 화면 표시도 같은 함수라 대기로 보이지 않는다.
+test('R2: 적은 시각이 미래·대기 시각보다 뒤·같음·시계 역행이면 평소 경보, 화면에도 대기가 안 보인다',async()=>{
+  const base=Date.now(),at=iso(base);
+  const mk=(waitUntil,waitUntilSetAt)=>({status:'open',waitUntil:iso(waitUntil),waitUntilSetAt:iso(waitUntilSetAt)});
+  const cases={
+    '적은 시각이 지금보다 미래(실행 내내)':mk(base+23*60*MIN,base+22*60*MIN),
+    '적은 시각이 대기 시각보다 뒤':mk(base+40*MIN,base+45*MIN),
+    '적은 시각이 대기 시각과 같음':mk(base+40*MIN,base+40*MIN),
+  };
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-wait-until-r2-'));
+  try{
+    for(const [name,extra] of Object.entries(cases)){
+      const work={key:'repo/w1',repo:'repo',id:'w1',title:'t',goal:'g',owner:'p-감독',ownedAt:at,at,revision:1,history:[],
+        executions:[{key:'repo/e1',phase:'implementation',round:1}],...extra};
+      assert.equal(activeWaitUntil(work,base),null,name);
+      assert.equal(waitUntilLabel(work,base),'',`${name}: 화면 표시`);
+      const r=await simulate({home,base,minutes:25,works:()=>[work]});
+      assert.ok(r.idle.length>0,`${name}: 놀고 있음이 난다`);
+    }
+    assert.equal(activeWaitUntil(mk(base+40*MIN,base+5*MIN),base),null,'적은 시각이 5분 뒤(지금보다 미래)');
+    // 시계 역행: 정상으로 적은 기록이, 시계가 적은 시각보다 뒤로 가면 대기가 아니다.
+    const ok=mk(base+40*MIN,base+10*MIN);
+    assert.notEqual(activeWaitUntil({...ok},base+10*MIN),null);
+    assert.equal(activeWaitUntil({...ok},base+9*MIN),null,'시계 역행');
+    assert.equal(waitUntilLabel({...ok},base+9*MIN),'');
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
 });

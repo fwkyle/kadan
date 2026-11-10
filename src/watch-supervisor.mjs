@@ -1,4 +1,5 @@
 import { workEntries, currentResponsibility, turnState } from "./handover-state.mjs";
+import { expiredWaitUntil } from "./wait-until.mjs";
 import { isUserActor } from "./actors.mjs";
 import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
@@ -71,11 +72,12 @@ function outsideTurnValue(work, parents, cards) {
 // 단 assigned라도 endedKeys()에 든 실행(끝났거나 담당 세션이 없음)은 진행 중으로 세지 않는다. endedKeys는 처음 필요할 때 한 번만 계산한다.
 // 할 일은 지금 차례(turnOwner)인 역할의 것이다(2026-10-16 [kyle]). 차례가 관계표에 없으면 책임 감독(owner)에게 둔다.
 // owner만 보면 하위 감독 차례인 업무가 상위의 할 일로 세어지고 정작 차례인 쪽에는 가지 않았다.
-// 대기 시각이 막 지나 다시 할 일이 된 업무 표시(문구 한 구절용, 판정은 그대로). 값은 업무 기록의 ISO 시각이다.
+// 대기 시각이 지나 다시 할 일이 된 업무: 멈춤 시작 시각은 대기 종료 시각 이후로 잡고(대기한 시간은 멈춘 시간이 아니다),
+// 지난 지 24시간 안이면 본인 창 글에 한 구절을 붙이는 표시(waitedUntil)도 단다. 판정의 다른 기준은 그대로다.
 function expiredWaitMark(work, now) {
-  const until = Date.parse(work?.waitUntil);
-  if (!Number.isFinite(now) || work?.status !== "open" || !Number.isFinite(until) || until > now || now - until > 24 * 60 * 60 * 1000) return {};
-  return { waitedUntil: new Date(until).toISOString() };
+  const until = expiredWaitUntil(work, now);
+  if (until === null) return {};
+  return { waitEnd: until, ...(now - until <= 24 * 60 * 60 * 1000 ? { waitedUntil: new Date(until).toISOString() } : {}) };
 }
 export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set(), now = null) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
@@ -90,7 +92,10 @@ export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
     .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
       const turnValue = outsideTurnValue(w, parents, cards);
-      return { kind: "send", role, taskId: `work:${w.key}`, t: w.at, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}), ...expiredWaitMark(w, now) }; });
+      const { waitEnd, ...waited } = expiredWaitMark(w, now);
+      // 할 일이 생긴 시각(t)은 기록 시각과 대기 종료 시각 중 늦은 쪽이다. 같은 감독의 다른 업무·카드의 시각은 건드리지 않는다.
+      const t = waitEnd !== undefined && !(Date.parse(w.at) >= waitEnd) ? new Date(waitEnd).toISOString() : w.at;
+      return { kind: "send", role, taskId: `work:${w.key}`, t, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}), ...waited }; });
 }
 
 export function assessSupervisorIdle(
