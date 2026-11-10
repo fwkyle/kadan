@@ -22,6 +22,55 @@ AI 대화를 Rottie 터미널에서 이어 열도록 한다.
 Rottie가 탭마다 자주 부르므로 조회는 원장에서 시작·종료·창 연결 기록만 읽는다.
 원장 전체의 순번·연결 검증은 하지 않으며, 그 검증은 전체를 읽는 복원 실행이 한다.
 
+## 조회 실패의 종류와 묶음 조회
+
+조회(`inspect`)가 실패하면 `error.kind`로 실패의 종류를 알린다. 문구(`message`)는 사람이 읽고, 종류는 Rottie가 읽는다.
+`restore`·`report`의 출력에는 이 칸이 없다.
+
+| `error.kind` | 뜻 | 예 |
+|---|---|---|
+| `refused` | 카단이 이 원장으로 판단해서 거절했다. Rottie는 저장한 역할 정보를 지워도 된다. | 아래 목록 |
+| `unavailable` | 판단할 수 없었다. 저장한 역할 정보를 유지하고 다음에 다시 묻는다. | 아래 목록 |
+| `invalid` | 그 입력이 잘못됐다. | 아래 목록 |
+
+- `refused`: 역할 교체, 직접 종료, 시작 기록 없음·불완전, 역할 주소·작업 폴더·pane PID 불일치, 여러 pane,
+  관찰한 pane과 시작 기록이 다름, 추론 강도 기록 오류.
+- `unavailable`: tmux 조회 일시 실패, pane 정보를 못 읽음, 원장 저장소가 없는 홈, 그 밖에 분류하지 않은 모든 오류.
+- `invalid`: 탭 ID 없음, 칸 형식 오류, 다른 tmux 서버의 `socketPath`.
+- 분류하지 않은 오류의 기본값은 `unavailable`이다. 모르는 실패를 거절로 내지 않는다.
+- `socketPath`(단건은 `--socket-path`)는 원장을 보기 전에 대조한다. 다른 카단 서버의 탭은 이 원장에 없으므로
+  "교체됨"이 아니라 `invalid`("카단 tmux 서버 경로가 다릅니다")로 답한다.
+- 추론 강도 기록 오류는 원장만으로 정해지지만 tmux 조회 뒤에 확인한다. tmux 조회가 실패한 회차에는 `unavailable`로 나간다.
+
+탭 여러 개는 한 번에 묻는다. 원장과 살아 있는 pane 목록을 한 번씩만 읽는다.
+
+```
+kadan recovery inspect --batch < 입력.json
+입력: {"schemaVersion":1,"items":[{"terminal":"<탭 ID>","session":"…","cwd":"…","panePid":"…","socketPath":"…"}]}
+출력: {"schemaVersion":1,"ok":true,"results":[
+  {"terminal":"…","ok":true,"result":{…단건 result와 같은 객체…}},
+  {"terminal":"…","ok":false,"error":{"message":"…","kind":"refused"}}]}
+```
+
+- 항목의 칸은 단건 인자와 같은 뜻이고 `terminal`만 필수다. 값은 모두 문자열이며 `null`이나 없는 칸은 주지 않은 것으로 본다.
+- 항목은 32개까지다. 결과는 입력 순서 그대로이고, 같은 탭이 두 번 들어오면 두 번 답한다.
+  `terminal`이 문자열이 아닌 항목은 결과의 `terminal`이 `null`이다.
+- 항목이 실패해도 명령은 종료 코드 0이다. 각 항목의 `result`·문구·종류는 같은 입력을 단건으로 물었을 때와 같다.
+- tmux 목록 조회가 일시 실패하면 pane 확인이 필요했던 항목만 `unavailable`이고, 원장만으로 거절이 확정된 항목은 `refused` 그대로다.
+  tmux 서버나 세션이 없는 것은 실패가 아니다(`sessionCreated: null`).
+- 실제 출력은 한 줄이다.
+
+묶음 명령 전체가 실패하면 `{"schemaVersion":1,"ok":false,"error":{"message":"…","code":"…"}}`와 종료 코드 1을 낸다.
+`code`는 항상 있다(`code`가 없는 `ok:false`는 묶음을 모르는 옛 카단의 답이다).
+
+| `error.code` | 뜻 |
+|---|---|
+| `batch-invalid` | 표준 입력이 없거나 JSON이 아니거나 모양이 다르다 |
+| `batch-too-many` | 항목이 32개를 넘는다 |
+| `not-tmux` | 바닥이 tmux가 아니다 |
+| `store-unreadable` | 원장을 읽지 못했다(저장소가 없는 홈 포함). 항목을 거절로 답하지 않는다 |
+| `internal` | 그 밖의 오류 |
+
 복원 정보에는 저장소·tmux 서버·역할·작업 폴더·원본 탭·시작 기록 지문을 담는다.
 재부팅으로 tmux가 사라졌으면 기존 tmux 생성 경로에 Rottie의 정확한 대화 복원 명령을
 전달하고 원장에 새 시작 기록을 추가한다. 역할 프로필과 기존 관계표를 유지한다.
