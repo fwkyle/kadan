@@ -1,0 +1,150 @@
+/* 카단 공개 사이트. 색·글씨 기준은 대시보드(docs/design-system.md)와 같은 값에서 시작한다.
+   웹폰트·외부 자원 없음(시스템 글꼴). 터미널 조각은 tmux 상태줄 모양을 빌려 "AI 터미널"임을 보인다. */
+:root {
+  --page: #f5f6f7; --surface: #ffffff; --text: #202724; --muted: #536159;
+  --border: #cbd5ce; --action: #21684e; --on-action: #ffffff; --soft: #eef5f1;
+  --human: #fef3c7; --human-line: #b45309; --human-text: #5b3a06;
+  --term: #17211d; --term-text: #dfe9e3; --term-dim: #9db3a7; --term-bar: #21684e; --term-bar-text: #ffffff;
+  --code: #edf1ee;
+  --ui: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "D2Coding", monospace;
+  --measure: 46rem; --wide: 70rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #111715; --surface: #19211e; --text: #e4ebe7; --muted: #a3b3aa;
+    --border: #34423b; --action: #7fd0ab; --on-action: #0d1a14; --soft: #1e2d27;
+    --human: #3a2c0c; --human-line: #d99a2b; --human-text: #f6dfa8;
+    --term: #0b100e; --term-bar: #2b7d5f; --code: #222c28;
+  }
+}
+
+* { box-sizing: border-box; }
+html { font-size: 100%; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--text);
+  font-family: var(--ui); font-size: 1rem; line-height: 1.7;
+  word-break: keep-all; overflow-wrap: break-word;
+}
+h1, h2, h3, h4, figcaption, dt { text-wrap: balance; }
+p, li, dd { text-wrap: pretty; }
+h1, h2, h3 { line-height: 1.3; letter-spacing: -0.015em; }
+a { color: var(--action); text-underline-offset: 3px; }
+a:focus-visible, .button:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+img { max-width: 100%; height: auto; }
+code { font-family: var(--mono); font-size: 0.875em; background: var(--code); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+/* 긴 명령은 상자 안에서 접힌다(옆으로 밀리거나 잘리지 않는다). 설명은 명령 윗줄에 따로 적는다.
+   word-break는 body의 keep-all을 그대로 물려받는다: 명령 속 한국어 낱말은 띄어쓰기에서만 접히고, 긴 주소는 anywhere로 접힌다. */
+pre { margin: 1rem 0; padding: 1rem; background: var(--term); color: var(--term-text); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+pre code { background: none; padding: 0; font-size: 0.8125rem; }
+
+.skip { position: absolute; left: 1rem; top: -4rem; padding: 0.5rem 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; z-index: 10; }
+.skip:focus { top: 0.5rem; }
+
+/* 머리줄 */
+.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1.5rem; max-width: var(--wide); margin: 0 auto; padding: 1rem 1.25rem; }
+.brand { font-family: var(--mono); font-weight: 700; font-size: 1.0625rem; color: var(--text); text-decoration: none; white-space: nowrap; }
+.brand span { font-family: var(--ui); font-weight: 400; color: var(--muted); font-size: 0.875rem; }
+.top nav { display: flex; flex-wrap: wrap; gap: 0 0.25rem; margin-left: auto; }
+.top nav a { display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 0.6rem; color: var(--muted); text-decoration: none; font-size: 0.9375rem; white-space: nowrap; border-bottom: 2px solid transparent; }
+.top nav a:hover { color: var(--text); }
+.top nav a[aria-current] { color: var(--action); border-bottom-color: var(--action); font-weight: 600; }
+
+main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
+.bottom { max-width: var(--wide); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.875rem; }
+
+/* 버튼 */
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.5rem 0; }
+.button { display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0.4rem 1.1rem; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font-weight: 600; text-decoration: none; }
+.button:hover { background: var(--soft); }
+.button.primary { background: var(--action); border-color: var(--action); color: var(--on-action); }
+.button.primary:hover { filter: brightness(1.08); background: var(--action); }
+
+/* 홈 첫 화면 */
+.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 3rem; align-items: center; padding: 2.5rem 0 3.5rem; }
+.eyebrow { margin: 0 0 0.75rem; font-family: var(--mono); font-size: 0.875rem; color: var(--action); }
+.hero h1 { margin: 0; font-size: clamp(2rem, 1.2rem + 3.2vw, 3.25rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.2; }
+.lede { margin: 1.25rem 0 0; font-size: 1.125rem; color: var(--text); max-width: 34rem; }
+.en { margin: 0; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.875rem; color: var(--muted); max-width: 34rem; word-break: normal; }
+
+/* 팀 그림: 사람 한 칸 + AI 터미널 세 칸 */
+.team { margin: 0; }
+.team-human { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; padding: 0.75rem 1rem; background: var(--human); border: 2px solid var(--human-line); border-radius: 8px; color: var(--human-text); }
+.team-human strong { font-size: 1.0625rem; }
+.team-human span { font-size: 0.875rem; }
+.team-link { margin: 0 0 0 1.5rem; padding: 0.3rem 0 0.3rem 0.9rem; border-left: 2px solid var(--border); font-size: 0.8125rem; color: var(--muted); }
+.pane { background: var(--term); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.pane p { margin: 0; }
+.pane-screen { padding: 0.7rem 0.9rem; font-family: var(--mono); font-size: 0.8125rem; line-height: 1.7; color: var(--term-text); min-height: 4.2rem; }
+.pane-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 0.75rem; padding: 0.2rem 0.9rem; background: var(--term-bar); color: var(--term-bar-text); font-family: var(--mono); font-size: 0.75rem; }
+.pane-status em { font-family: var(--ui); font-style: normal; font-weight: 600; white-space: nowrap; }
+.pane-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.team-side { list-style: none; margin: 1rem 0 0; padding: 0.75rem 1rem; border: 1px dashed var(--border); border-radius: 8px; font-size: 0.875rem; color: var(--muted); }
+.team-side li + li { margin-top: 0.3rem; }
+.team-side strong { color: var(--text); margin-right: 0.4rem; }
+.team figcaption { margin-top: 0.75rem; font-size: 0.875rem; color: var(--muted); text-wrap: pretty; }
+
+/* 홈 구획 */
+.band { padding: 2.75rem 0; border-top: 1px solid var(--border); }
+.band h2 { margin: 0 0 1rem; font-size: 1.5rem; }
+.band > p { max-width: var(--measure); }
+.points { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem 2.5rem; margin: 0; }
+.points dt { font-weight: 700; font-size: 1.0625rem; }
+.points dd { margin: 0.35rem 0 0; color: var(--muted); }
+.fineprint { margin-top: 1.5rem; font-size: 0.875rem; color: var(--muted); }
+/* 문서의 그림은 밝은 바탕으로 그려져 있어, 어두운 화면에서도 밝은 틀 안에 둔다. */
+.diagram { margin: 1.5rem 0 0; }
+.diagram > a { display: block; padding: 0.5rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; }
+.diagram img { display: block; width: 100%; }
+.diagram figcaption { margin-top: 0.5rem; font-size: 0.875rem; color: var(--muted); }
+.rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2.5rem; }
+.rules ul { margin: 0; padding-left: 1.1rem; }
+.rules li + li { margin-top: 0.6rem; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+.card { display: flex; flex-direction: column; gap: 0.5rem; padding: 1.1rem 1.2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); text-decoration: none; }
+.card:hover { border-color: var(--action); }
+.card strong { font-size: 1.0625rem; line-height: 1.4; }
+.card span { color: var(--muted); font-size: 0.9375rem; }
+.closing { text-align: left; }
+
+/* 글 쪽 */
+.prose { max-width: var(--measure); padding-top: 2rem; }
+.prose h1 { margin: 0 0 1rem; font-size: clamp(1.75rem, 1.3rem + 1.8vw, 2.375rem); font-weight: 800; letter-spacing: -0.025em; }
+.prose h2 { margin: 2.75rem 0 0.75rem; padding-top: 1.5rem; border-top: 1px solid var(--border); font-size: 1.375rem; scroll-margin-top: 1rem; }
+.prose h3 { margin: 1.75rem 0 0.5rem; font-size: 1.125rem; }
+.prose ul, .prose ol { padding-left: 1.2rem; }
+.prose li + li { margin-top: 0.55rem; }
+.prose blockquote { margin: 1rem 0; padding: 0.25rem 1rem; border-left: 3px solid var(--border); color: var(--muted); }
+.toc { margin: 1.25rem 0 0; padding: 0.9rem 1.1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 0.9375rem; }
+.toc ol { margin: 0; padding-left: 1.3rem; columns: 2; column-gap: 2rem; }
+.toc li { break-inside: avoid; }
+.toc li + li { margin-top: 0.3rem; }
+/* 글 안의 표와 중첩 목록: 좁은 화면에서는 표가 자기 상자 안에서만 옆으로 밀리고, 쪽 전체는 밀리지 않는다. */
+.prose li > ul, .prose li > ol { margin: 0.45rem 0 0; }
+.dw-document-table { max-width: 100%; margin: 1rem 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+.dw-document-table table { width: 100%; border-collapse: collapse; font-size: 0.9375rem; }
+.dw-document-table th, .dw-document-table td { min-width: 9rem; padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.dw-document-table th { background: var(--soft); white-space: nowrap; }
+.dw-document-table tr:last-child td { border-bottom: 0; }
+
+@media (max-width: 860px) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 2rem; padding: 1.5rem 0 2.5rem; }
+  .rules, .points { grid-template-columns: minmax(0, 1fr); }
+  .cards { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .top { padding: 0.75rem 1rem; }
+  .top nav { margin-left: -0.45rem; }
+  .top nav a { padding: 0 0.45rem; font-size: 0.8125rem; }
+  main { padding: 0 1rem 2.5rem; }
+  .pane-row { grid-template-columns: minmax(0, 1fr); }
+  .toc ol { columns: 1; }
+  /* 좁은 화면에서는 표의 한 줄을 세로로 쌓는다(첫 칸이 그 줄의 제목). 옆으로 밀리지 않는다. */
+  .dw-document-table thead { display: none; }
+  .dw-document-table table, .dw-document-table tbody, .dw-document-table tr, .dw-document-table td { display: block; }
+  .dw-document-table td { min-width: 0; border-bottom: 0; padding: 0.25rem 0.9rem; }
+  .dw-document-table td:first-child { padding-top: 0.8rem; font-weight: 600; }
+  .dw-document-table td:last-child { padding-bottom: 0.8rem; }
+  .dw-document-table tr + tr { border-top: 1px solid var(--border); }
+  .band { padding: 2rem 0; }
+}
