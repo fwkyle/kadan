@@ -15,6 +15,7 @@ import {readLedgerIncremental} from '../src/ledger-incremental.mjs';
 import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
 import {taskIdentity, taskConnectionError} from '../src/task-identity.mjs';
 import {watchRoleState} from '../src/watch-role-facts.mjs';
+import {ownerGenerations, isPreviousOwner} from '../src/owner-generation.mjs';
 
 // kadan reopen으로 다시 연 역할은 같은 대화를 이어 연 같은 정체다. 끄기 전에 받고 끝내지 않은 카드의 발령을
 // kadan restart처럼 이어받아, 감시 대상(buildWatchScope)과 완료 판정용 발령(collectRoles)이 갈라지지 않아야 한다.
@@ -52,6 +53,10 @@ test('reopen 전후로 감시 판정이 같다: 감시 대상·완료 판정용 
   assert.deepEqual(before, {scopeTasks: 1, dispatches: ['probe/c1'], doneMarker: {taskId: 'c1', result: 'ok'},
     status: 'idle', missingStart: [], idle: []});
   assert.deepEqual(after, before, '다시 연 뒤에도 같은 카드의 완료 문구를 알아보고 경보가 없다');
+  // 놀고 있음(감독의 할 일 계산, watch-supervisor.mjs)과 대시보드 상태는 발령 상태가 아니라 책임 세대를 본다.
+  // reopen의 start는 같은 대화 resume이라 그 세대 경계가 생기지 않는다: 끄기 전에 붙은 책임이 전후로 같은 세대다.
+  for (const entries of [[start, send], [start, send, stop, reopened()]])
+    assert.equal(isPreviousOwner(ownerGenerations(entries), role, send.t), false);
 });
 
 test('발령을 이어받는 것은 reopenOf가 바로 앞에 꺼진 세대의 start를 가리킬 때뿐이다', () => {
