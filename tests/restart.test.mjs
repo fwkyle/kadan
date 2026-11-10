@@ -35,6 +35,7 @@ function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {},
     // 실행기 본체(150)와 자식 도구(extraTree)를 args로 가른다. 파일은 프로세스별로 든다.
     processTree: () => [{pid: '100', ppid: '1', args: '-zsh'}, {pid: '150', ppid: '100', args: entries.findLast(e => e.kind === 'start').cmd}, ...extraTree],
     openFiles: pids => pids.flatMap(p => held[p] ?? []),
+    processStartedAt: () => 1000,
     readJson: f => JSON.parse(fs.readFileSync(f, 'utf8')), homeDir};
   let beforeStop = () => {};
   deps.beforeStop = session => { log.push(['beforeStop', session]); beforeStop(session); };
@@ -42,6 +43,25 @@ function fixture({cmd = CLAUDE, role = 'w', cwd, profile = 'worker', files = {},
   return {home, dir, entries, log, run, session, role, deps, floor, homeDir, setBeforeStop: fn => { beforeStop = fn; }};
 }
 const claudeFiles = {'.claude/sessions/150.json': {sessionId: ID, tmux: 'kadan-w:@3.%3'}, [`.claude/projects/-x/${ID}.jsonl`]: {}};
+
+test('pid-json: restart는 뿌리 시작 시각을 조회하고 tmux 없는 새 파일만 이어 연다', () => {
+  for (const stale of [false, true]) {
+    const files = structuredClone(claudeFiles);
+    delete files['.claude/sessions/150.json'].tmux;
+    const f = fixture({files});
+    fs.utimesSync(path.join(f.homeDir, '.claude/sessions/150.json'), 2000, 2000);
+    const queried = [];
+    f.deps.processStartedAt = pid => { queried.push(pid); return stale ? 3000000 : 1000000; };
+    if (stale) {
+      assert.throws(() => f.run(), /낡은 대화 정보 파일/);
+      assert.deepEqual(f.log, []);
+    } else {
+      f.run();
+      assert.match(f.entries.at(-1).cmd, new RegExp(`--resume ${ID}$`));
+    }
+    assert.deepEqual(queried, ['150']);
+  }
+});
 
 for (const scenario of ['unchanged', 'pid-only', 'record-and-pid', 'record-same-pid', 'stop-only']) {
   test(`대화 확인 중 재시작 대상 세대: ${scenario}`, () => {
@@ -129,7 +149,10 @@ test('거절은 모두 기존 세션을 끄기 전에 일어난다(stop·create 
   const cases = {
     'codex 첫 입력 전(lock만)': fixture({cmd: CODEX, openFiles: [`/h/.codex/thread-writer-locks/${ID}.lock`]}),
     'claude tmux 자리 불일치': fixture({files: {'.claude/sessions/150.json': {sessionId: ID, tmux: 'kadan-x:@9.%9'}, [`.claude/projects/-x/${ID}.jsonl`]: {}}}),
-    'claude tmux 필드 없음': fixture({files: {'.claude/sessions/150.json': {sessionId: ID}, [`.claude/projects/-x/${ID}.jsonl`]: {}}}),
+    // #348의 누락 키는 허용하지만, 있는 키의 잘못된 값은 계속 거절한다.
+    'claude tmux 필드 null': fixture({files: {
+      '.claude/sessions/150.json': {sessionId: ID, tmux: null}, [`.claude/projects/-x/${ID}.jsonl`]: {},
+    }}),
     'claude 대화 파일 없음': fixture({}),
     'claude 첫 입력 전(기록 미저장)': fixture({files: {'.claude/sessions/150.json': {sessionId: ID, tmux: 'kadan-w:@3.%3'}}}),
     'resume --continue 명령': fixture({cmd: `${CLAUDE} --continue`, files: claudeFiles}),
