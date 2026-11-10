@@ -45,14 +45,11 @@ function ensureReady({role, session, floor, entries, deps, expectPid}) {
   return start;
 }
 
-// accountRefresh(계정 전환 재시작, 2026-10-23 [kyle] "카드 있어도 다시 켜")만 끝나지 않은 카드 거절을 건너뛴다.
-// 호출한 쪽(claude refresh --yes)이 입력창 비어 있음·응답 생성 중 아님을 직전에 확인한 뒤에만 이 플래그를 준다.
-function guardRunning({role, entries, force, accountRefresh = false, deps}) {
-  const pending = deps.pendingCards(entries, role);
-  if (pending.length && !force && !accountRefresh) {
-    fail(`${role}에 끝나지 않은 카드 ${pending.length}건이 있다: ${pending.join(', ')} — 사람이 확인했으면 --force로 다시 실행한다`);
-  }
-  return pending;
+// 끝나지 않은 카드가 있어도 거절하지 않는다(2026-11-10 [kyle] "카드있을때 리스타트할수도있자나"). restart는 같은 대화·우편 세대·
+// 카드 책임·감시 발령을 이어받아 카드가 끊기지 않는다. 대신 끄기 바로 앞에서 화면이 쉬는 중인지 확인한다(confirmBeforeStop).
+// 목록은 원장 stop·start의 pendingTasks로 남기려고 돌려주기만 한다.
+function guardRunning({role, entries, deps}) {
+  return deps.pendingCards(entries, role);
 }
 
 // append-only 원장에서는 같은 PID·내용의 새 start도 역할 내 순번으로 구별한다.
@@ -67,7 +64,10 @@ function restartGeneration(entries, role) {
 }
 
 // 끄기 → stop 원장. restart:true·restartOf로 우편·책임 세대를 이어간다.
-function stopForRestart({role, session, floor, entries, deps, generation, forced, reason, refresh}) {
+// 순서: 원장 다시 읽기 → 세대·PID·소유 검사 → 안전 지점 확인(confirm) → floor.stop.
+// 원장 읽기는 원장 크기에 비례해 오래 걸릴 수 있어 확인 **앞**에 둔다(PR #360 검수 F1: 확인 뒤에 읽으면 그 사이 응답을 시작한 역할을 껐다).
+// 확인과 floor.stop 사이에는 아무 단계도 두지 않는다. 남는 틈은 확인이 끝나고 floor.stop이 실제로 세션을 죽이기까지뿐이며 없앨 수 없다.
+function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh, confirm = null}) {
   const latest = deps.read();
   const current = restartGeneration(latest, role);
   if (!generation || !current || current.count !== generation.count
@@ -75,17 +75,21 @@ function stopForRestart({role, session, floor, entries, deps, generation, forced
     fail('대화를 확인한 뒤 역할 세대가 바뀌었습니다 — 새 상태를 확인하고 다시 시도하세요');
   }
   assertSessionOwner(sessionOwner(latest, session, role), floor.pid(session));
+  if (confirm) confirm();
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
   deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
+    ...(!refresh && pending.length ? {pendingTasks: pending} : {}),
     ...(refresh ? {accountRefresh: true, pendingTasks: refresh.pending, ...(refresh.reasonNote ? {reasonNote: refresh.reasonNote} : {}), ...(refresh.accountSlot != null ? {accountSlot: refresh.accountSlot} : {})} : {}), ...windowFields});
   return windowFields;
 }
 
-function confirmBeforeStop(session, deps) {
-  if (typeof deps.beforeStop !== 'function') fail('끄기 직전 재확인 장치(deps.beforeStop)가 없어 계정 전환 재시작을 하지 않는다');
+// 끄기 직전 안전 지점 확인. 모든 restart가 쓴다(--force만 건너뜀). 계정 전환 재시작은 기존 '건너뜀' 코드·문구를 그대로 쓴다.
+function confirmBeforeStop(session, deps, accountRefresh) {
+  if (typeof deps.beforeStop !== 'function') fail(`끄기 직전 재확인 장치(deps.beforeStop)가 없어 ${accountRefresh ? '계정 전환 ' : ''}재시작을 하지 않는다`);
   try { deps.beforeStop(session); }
   catch (error) {
+    if (!accountRefresh) fail(`응답 생성 중(또는 최근 사람 입력)이라 끄지 않았다 — 잠시 뒤 다시 하거나, 사람이 확인했으면 --force (확인 결과: ${error?.message ?? error})`);
     const stale = new Error(`건너뜀: 확인 뒤 상태 바뀜(${error?.message ?? error})`);
     stale.code = STATE_CHANGED_CODE;
     throw stale;
@@ -112,7 +116,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const entries = deps.read();
   const start = ensureReady({role, session, floor, entries, deps, expectPid});
   const generation = restartGeneration(entries, role);
-  const pending = guardRunning({role, entries, force, accountRefresh, deps});
+  const pending = guardRunning({role, entries, deps});
 
   const identity = launchIdentityOf(start.cmd);
   if (!identity.ok) fail(`마지막 시작 명령에서 등록 실행기·모델을 읽지 못했다(${identity.reason})`);
@@ -144,15 +148,15 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   if (!again.ok || again.harness !== harness || again.model !== model) fail('다시 만든 명령의 실행기·모델이 원본과 다르다');
   if (mode.conversationMode !== 'resume' || mode.conversationRef !== conversation) fail('다시 만든 명령이 같은 대화 resume으로 읽히지 않는다');
 
-  // 3) 여기까지 거절 사유가 없다. 계정 전환 재시작이면 끄기 바로 앞에서 한 번 더 확인한다(화면 idle + 사람 입력 보호).
-  // 위 확인(대화 찾기 등)이 오래 걸려 그 사이 응답이 시작되거나 사람이 입력했을 수 있어서다(검수 F1).
-  // 남는 틈은 이 확인과 kill-session 사이 수 ms뿐이고 없앨 수 없다. 일반 restart는 이 확인을 하지 않는다.
-  if (accountRefresh) confirmBeforeStop(session, deps);
+  // 3) 여기까지 거절 사유가 없다. 안전 지점 확인(화면 idle + 사람 입력 보호)은 stopForRestart 안에서, 원장 다시 읽기와
+  // 세대·PID·소유 검사가 끝난 뒤 floor.stop 바로 앞에서 한다. 위 확인(대화 찾기 등)과 원장 읽기가 오래 걸려 그 사이
+  // 응답이 시작되거나 사람이 입력했을 수 있어서다. 모든 restart가 확인하고 --force만 건너뛴다(계정 전환은 --force여도 확인한다).
+  const confirm = accountRefresh || !force ? () => confirmBeforeStop(session, deps, accountRefresh) : null;
   // 이제 끄고 같은 정체로 다시 띄운다.
   const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
   const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
   stopForRestart({role, session, floor, entries, deps, generation,
-    forced: force ? pending : null, reason, refresh});
+    forced: force ? pending : null, pending, reason, refresh, confirm});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -168,7 +172,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
     restartOf: startDigest(start), restartConversation: conversation,
     ...(reason ? {reason} : {}),
     ...(force ? {forced: true, forcedTasks: pending} : {}),
-    ...(refresh ? {accountRefresh: true, pendingTasks: pending, ...(reasonNote ? {reasonNote} : {})} : {}),
+    ...(refresh ? {accountRefresh: true, pendingTasks: pending, ...(reasonNote ? {reasonNote} : {})} : pending.length ? {pendingTasks: pending} : {}),
   });
   return {role, session, conversation, command, harness, model, panePid: evidence.panePid ?? null, forced: force, accountRefresh, pending,
     window: window.method ?? 'hidden'};
@@ -181,16 +185,19 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     const entries = deps.read();
     const start = ensureReady({role, session, floor, entries, deps, expectPid});
     const generation = restartGeneration(entries, role);
-    const open = guardRunning({role, entries, force, deps});
+    const open = guardRunning({role, entries, deps});
     const checkpoint = checkpointSecretary({home, floor, read: deps.read, ...(deps.findTranscript ? {findTranscript: deps.findTranscript} : {})});
     // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
     if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
-    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, reason});
+    // 비서도 같은 안전 지점 확인을 같은 자리(stopForRestart 안, floor.stop 바로 앞)에서 한다 — confirmIdleBeforeStop은
+    // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
+    stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
+      confirm: force ? null : () => confirmBeforeStop(session, deps, false)});
     return {pending: open, previous: startDigest(start)};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
   const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
-    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
+    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다')});
   if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
   const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
   return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,

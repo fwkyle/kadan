@@ -51,7 +51,7 @@ const ri=process.argv.indexOf('resume');if(ri>0&&process.argv[ri+1]){const id=pr
 const child=process.env.IS_SAME_CHILD==='1';
 if(process.env.SPAWN_SAME)cp.spawn(process.execPath,[__filename,'--model','test-model','-c','e=low'],{env:{...process.env,HOLD:process.env.SAME_HOLD,SPAWN_SAME:'',IS_SAME_CHILD:'1'},stdio:'ignore'});
 if(process.env.CHILD_FILES)cp.spawn(process.execPath,[${JSON.stringify(path.join(dir, 'child.js'))},...process.env.CHILD_FILES.split(',')],{stdio:'ignore'});
-fs.writeFileSync(${JSON.stringify(ready)}+(child?'.child':''),'ok');${WATCH_PARENT}`, {mode: 0o700});
+if(!child)console.log('›');fs.writeFileSync(${JSON.stringify(ready)}+(child?'.child':''),'ok');${WATCH_PARENT}`, {mode: 0o700});
   const settings = settingsWith({codex: {
     spawn: `${fake} --model {model} -c e={effort}`, resume: `${fake} --model {model} -c e={effort} resume {conversation}`,
     conversation: {kind: 'open-file', pattern: '/sessions/.+/rollout-[0-9T-]+-([0-9a-f-]{36})\\.jsonl$',
@@ -120,12 +120,7 @@ test('실제 CLI: 환경변수로 온 이유 --force·--·줄바꿈은 이유로
   assert.notEqual(argvInject.status, 0, '빈 --reason은 거절');
   assert.match(argvInject.stderr, /이유/);
   assert.equal(stops(), 0);
-  // (1) 이유 '--force'는 강제가 아니라 이유다 — 끝나지 않은 카드 보호가 그대로 걸린다
-  const forced = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
-    env: env({KADAN_RESTART_REASON: '--force', KADAN_RESTART_EXPECT_PID: String(created.panePid)})});
-  assert.notEqual(forced.status, 0);
-  assert.match(forced.stderr, /끝나지 않은 카드/);
-  assert.equal(stops(), 0, '강제 재시작 0회');
+  // (1) 이유 '--force'는 강제가 아니라 이유다 — 아래 맨 끝에서 확인한다(2026-11-10부터 카드 거절이 없어져 성공하는 경로라 마지막에 둔다).
   // (2) 이유 '--'는 옵션 끝 표시가 아니다 — 세대 대조가 그대로 걸린다
   const dashes = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
     env: env({KADAN_RESTART_REASON: '--', KADAN_RESTART_EXPECT_PID: '999999'})});
@@ -150,6 +145,15 @@ test('실제 CLI: 환경변수로 온 이유 --force·--·줄바꿈은 이유로
     env: env({KADAN_RESTART_REASON: '   ', KADAN_RESTART_EXPECT_PID: String(created.panePid)})});
   assert.notEqual(emptyReason.status, 0);
   assert.match(emptyReason.stderr, /이유/);
+  // (1) 이유 '--force'는 강제가 아니라 이유다. 옛 단언은 "끝나지 않은 카드로 거절"이었으나 2026-11-10 [kyle] 결정으로 카드는 거절 사유가 아니다.
+  // 이유 글자가 --force로 읽혔다면 forced가 남았을 것이다 — 일반 restart(안전 지점 확인 거침)로 진행하고 forced는 없어야 한다.
+  const forced = spawnSync(process.execPath, [cli, 'restart', 'injcase'], {encoding: 'utf8',
+    env: env({KADAN_RESTART_REASON: '--force', KADAN_RESTART_EXPECT_PID: String(created.panePid)})});
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.equal(stops(), 1, '카드가 있어도 쉬는 중이면 진행');
+  assert.doesNotMatch(forced.stderr, /--force: /);
+  const stop = readLedger().find(e => e.session === 'kadan-injcase' && e.kind === 'stop');
+  assert.equal(stop.reason, '--force'); assert.equal(stop.forced, undefined); assert.deepEqual(stop.pendingTasks, ['inj-1']);
 });
 
 test('실제 CLI: 환경변수로 온 이유는 원문 그대로 원장에 남는다(줄바꿈 포함)', {skip}, t => {

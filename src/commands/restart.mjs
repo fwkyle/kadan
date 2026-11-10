@@ -22,8 +22,8 @@ function paneInfo(session) {
   return { panePid, location };
 }
 
-// 계정 전환 재시작이 끄기 바로 앞에서 부른다: 화면을 다시 읽어 idle이고, 사람이 최근 입력하지 않았을 때만 통과한다.
-// 하나라도 아니면 던져서 끄지 않는다. 일반 restart는 부르지 않는다.
+// restart가 끄기 바로 앞에서 부른다: 화면을 다시 읽어 idle이고, 사람이 최근 입력하지 않았을 때만 통과한다.
+// 하나라도 아니면 던져서 끄지 않는다. 모든 restart가 끄기 직전에 부른다(--force만 건너뜀).
 export function confirmIdleBeforeStop(session, base = floor) {
   const screen = base.read(session);
   if (typeof screen !== "string") throw new Error("판정 불가: 화면을 읽지 못함");
@@ -97,6 +97,6 @@ export function cmdRestart(argv, flags) {
   let result;
   try { result = restartRole({ home, role, session, flags, floor, settings: readSettings(home), deps }); }
   catch (error) { die(error.message); }
-  if (result.forced) console.error(`--force: 끝나지 않은 카드 ${result.pending.length}건을 두고 다시 띄웠다: ${result.pending.join(", ")}`);
+  if (result.pending.length) console.error(`${result.forced ? "--force: 안전 지점 확인 없이, " : ""}끝나지 않은 카드 ${result.pending.length}건은 그대로 이어진다: ${result.pending.join(", ")}`);
   console.log(`다시 띄움: ${session} (${result.harness ?? "?"} ${result.model ?? "?"}, 대화 ${result.conversation ?? "?"}, pane PID ${result.panePid ?? "?"}, 창: ${result.window})`);
 }
