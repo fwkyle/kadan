@@ -199,3 +199,18 @@ test('명령 재조립: 중간 resume이어도 모호한 대화 지정은 거절
   rejects('claude --resume a --fork-session --model m');
   rejects('claude --resume --dangerously-skip-permissions --model m');
 });
+
+test('명령 재조립: 옵션 값 안의 resume 낱말은 대화 지정으로 세지 않는다(검수 F1)', () => {
+  assert.equal(rebuildResumeCommand(settings, 'codex', 'codex --profile resume --model m', ID), `codex --profile resume --model m resume ${ID}`);
+  assert.equal(rebuildResumeCommand(settings, 'claude', `claude --append-system-prompt '--resume' --model m`, ID),
+    `claude --append-system-prompt --resume --model m --resume ${ID}`);
+  assert.equal(rebuildResumeCommand(settings, 'claude', `claude --append-system-prompt resume --resume ${NEW} --model m`, ID),
+    `claude --append-system-prompt resume --model m --resume ${ID}`);
+});
+
+test('명령 재조립: `--` 뒤 입력이나 값이 빠진 옵션이 있으면 거절한다(검수 F2)', () => {
+  for (const [runner, cmd] of [['claude', 'claude --resume old -- hello'], ['codex', 'codex resume old -- hello'],
+    ['agy', 'agy --conversation old -- hello'], ['claude', 'claude --resume old --append-system-prompt']]) {
+    assert.throws(() => rebuildResumeCommand(settings, runner, cmd, ID), /대화 지정/, cmd);
+  }
+});
