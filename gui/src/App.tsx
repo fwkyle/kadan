@@ -32,7 +32,8 @@ const Status = lazy(() => import("./pages/Status")),
   Operations = lazy(() => import("./pages/Operations")),
   Create = lazy(() => import("./pages/Create")),
   StrategyMap = lazy(() => import("./pages/StrategyMap")),
-  Kanban = lazy(() => import("./pages/Kanban"));
+  Kanban = lazy(() => import("./pages/Kanban")),
+  HowTo = lazy(() => import("./pages/HowTo"));
 const Mailbox = lazy(() =>
     import("./pages/Records").then((m) => ({ default: m.Mailbox })),
   ),
@@ -51,12 +52,13 @@ const links = [
   ["mailbox", "우편함"],
   ["ledger", "기록"],
   ["kanban", "칸반"],
+  ["how-to", "길잡이"],
   ["runs", "실행 이력"],
   ["operations-flow", "워크 진행 이력"],
   ["work-create", "새 워크"],
   ["card-create", "카드 추가"],
 ];
-const primaryLinks = links.slice(0, 8);
+const primaryLinks = links.slice(0, 9);
 export default function App() {
   const href = useLocation(),
     url = useMemo(() => new URL(href), [href]),
@@ -129,6 +131,8 @@ export default function App() {
       <Runs url={url} />
     ) : view === "kanban" ? (
       <Kanban url={url} />
+    ) : view === "how-to" ? (
+      <HowTo />
     ) : view === "runner-settings" ? (
       <Runners />
     ) : view === "operations-flow" ? (

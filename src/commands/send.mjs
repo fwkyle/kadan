@@ -26,6 +26,7 @@ import { isPeerSuperMail } from "../peer-mail.mjs";
 import { humanIdleMsFor, isStorableMailHold } from "../notification-guard.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
 import {mailFailureExitCode} from '../mail-delivery-exit.mjs';
+import {printConductorLoadHint} from '../conductor-load-hint.mjs';
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -109,7 +110,7 @@ function deliverMessage(argv, flags, command) {
   }
 
   // 전송 함수를 부르기 전에 난 실패는 위치상 안 간 것이다(KADAN_MAIL_DELIVERY_EXIT 종료 코드 판정용).
-  let receipt, turnClaim = null, entries, sendCalled = false;
+  let receipt, turnClaim = null, entries, sendCalled = false, loadHint = () => {};
   try {
     // 기존 send만 --execution의 발령 추론을 유지한다. mail은 연결 주소로만 사용하며,
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
@@ -130,6 +131,10 @@ function deliverMessage(argv, flags, command) {
     const owner = sessionOwner(entries, session, recipient);
     // 바로 넣을 수 없어 보관할 수 있는 우편: 발령(--task)·--raw는 보관하지 않는다.
     const storable = taskId == null && flags.raw !== true;
+    // 슈퍼감독이 일반감독에게 새 일을 맡길 때만 받는 감독의 업무 수를 stderr 마지막 줄로 보인다(답장·발령·--raw 제외).
+    // 영수증을 다 낸 뒤에 부른다. 조회 실패는 전송 결과·종료 코드를 바꾸지 않는다.
+    loadHint = receiptProfile => printConductorLoadHint({home: ledgerHome(), entries, by, recipient, receiptProfile,
+      newContext: storable && flags['reply-to'] === undefined && flags['reply-final'] !== true});
     // 슈퍼 간 우편만 감시기 알림과 같은 입력 보호를 붙인다(2026-10-13 [kyle]). 보관·실패 규칙은 모든 우편이 같다.
     // herdr에서는 이 보호(대기 화면 안정 검사 기본 30초·슈퍼감독 창 2분, 응답 중 거부)가 일반 우편(응답 중에도 입력 대기열에 넣음)보다 엄격하다.
     // 모두에게 붙이면 응답 중인 수신자 앞 즉시 전달이 사라져 '바로 넣기 vs 저장 우선'(kyle 미결정)을 바꾸므로 붙이지 않았다.
@@ -142,6 +147,7 @@ function deliverMessage(argv, flags, command) {
       });
       console.log(JSON.stringify({...stored, wake:'watch-required',
         note:'우편 보관됨. 감시기가 안전한 입력 대기 때 알립니다. 저장은 착수·완료가 아닙니다.'}));
+      loadHint();
     };
     const expectedPid=recordedPid(owner.start);
     // 일반 우편도 현재 세대의 시작 PID가 없으면 기존 보관·감시기 안내 경로를 쓴다.
@@ -205,6 +211,7 @@ function deliverMessage(argv, flags, command) {
     const hint=doneHintFor(pending);
     if(hint)console.log(hint);
   }
+  loadHint(receipt.roleProfile);
 }
 
 // 비서와 사람 앞 우편은 지금처럼 저장 전용이다(받는 세션이 없다).

@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | 전체 흐름(역할·소통·감시 한 장) | [흐름 지도](flows.md) | [그림 안내서](kadan-guide.html) |
 | AI에게 설치 맡기기(AI가 읽고 따르는 절차) | [AI용 설치 안내](ai-install.md) | — |
+| 하고 싶은 일에서 명령 한 줄 찾기 | [상황별 길잡이](how-to.md) | 대시보드 메뉴 **길잡이** |
 | 명령어 전체와 옵션 | [명령어 사전](commands.md) | — |
 | 전체 구조·원장 관계·개편 경계 | [구조 기준](architecture.md) | 문서 안 구조도 |
 | 작업·우편 원장과 역할 inbox | [원장 계약](mail-task-ledgers.md), [우편함 명령](secretary-mailbox.md) | — |
