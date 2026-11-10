@@ -3,7 +3,7 @@
 import {stripStoredHeader} from './mail-header.mjs';
 import {isUserActor,isSupervisorActor} from './actors.mjs';
 import {tallyNotes, cleanNoteText} from './autopilot-note.mjs';
-import {WINGMAN_BASIS, HELD_PREFIX, ALLOW_LABEL} from './autopilot-terms.mjs';
+import {WINGMAN_BASIS, HELD_PREFIX, ALLOW_LABEL, MODE, WINGMAN, NO_WINGMAN} from './autopilot-terms.mjs';
 
 export {HELD_PREFIX};
 // 알림 한 통의 글자 수 상한. 요약 글(summary.text)이 이 안에 들어오게 만든다.
@@ -107,7 +107,7 @@ export function summarizeAutopilot({start, phase, endedAt, entries, decisionEven
       ? `대리 위임: ${start.by}이(가) kyle의 채팅 말을 옮겨 적었습니다 — "${fold(start.quote, quoteLimit)}" (전체 원문: kadan autopilot status --text, 원장)`
       : `kyle 위임: "${fold(start.text, quoteLimit)}" (전체: kadan autopilot status --text, 원장)`);
     // Wingman 이름(없으면 "Wingman 없음")은 제목 줄 끝에 둔다. 줄이기 단계에서 빼지 않는다. 위임·허용 줄이 앞 줄이라는 기존 읽는 쪽 약속은 지킨다.
-    lines.push(`Autopilot 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase}) · ${start.wingman ? `Wingman ${fold(start.wingman, 60)}` : 'Wingman 없음'}`);
+    lines.push(`${MODE} 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase}) · ${WINGMAN} ${start.wingman ? fold(start.wingman, 60) : NO_WINGMAN}`);
     const autopilot = [];
     if (decisions.answered) autopilot.push(`결정 답 ${decisions.answered}건`);
     if (decisions.chatRegistered) autopilot.push(`채팅 등록 ${decisions.chatRegistered}건`);

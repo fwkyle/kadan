@@ -102,7 +102,7 @@ test('2·3. 자동 + Wingman이면 사용자로 갈 정체는 Wingman 창으로 
   assert.equal(r.snapshots.length, new Set(r.snapshots).size, '주기당 스냅샷 한 번');
 });
 
-test('4·5. Wingman 세션이 없으면, 꺼짐이면, 기본 단계면 지금처럼 사용자로 간다', async () => {
+test('4·5. Wingman 세션이 없으면, 꺼짐이면, Cruise 단계면 지금처럼 사용자로 간다', async () => {
   for (const [name, opts] of Object.entries({
     'Wingman 세션 없음': {autopilotEntries: [on()], rosterLive: false},
     '꺼짐(off 사건)': {autopilotEntries: [on(), {kind: 'autopilot', phase: 'off', by: '사람', t: new Date(T0 - 1000).toISOString()}]},
@@ -171,7 +171,7 @@ test('6. 명시 --wingman 오류: --level 없음, 대상 밖, 슈퍼감독 아�
   assert.equal(f.autopilot().length, 0);
 });
 
-test('6. 기본 Wingman: Autopilot 단계에서 쓰고(default), 기본 단계·--wingman 없음에서는 쓰지 않는다', () => {
+test('6. 기본 Wingman: Autopilot 단계에서 쓰고(default), Cruise 단계·--wingman 없음에서는 쓰지 않는다', () => {
   const f = fixture();
   assert.match(f.run(['wingman', 'b-슈퍼감독']), /기본 Wingman 저장: b-슈퍼감독/);
   assert.equal(fs.statSync(wingmanPath(f.home)).mode & 0o777, 0o600);
@@ -339,7 +339,7 @@ test('P2-I 기본 Wingman 쓰기는 사람만: 역할 행위자는 꺼져 있어
   assert.match(f.run(['wingman'], {}, 'a-슈퍼감독'), /기본 Wingman: b-슈퍼감독/);
 });
 
-test('6가. 기본 단계 on 사건에도 wingman null·wingmanSource none', () => {
+test('6가. Cruise 단계 on 사건에도 wingman null·wingmanSource none', () => {
   const f = fixture();
   f.run(['on', '밤'], {});
   const [ev] = f.autopilot();

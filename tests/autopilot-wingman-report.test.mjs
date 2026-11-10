@@ -46,7 +46,7 @@ test('1. Autopilot 단계 + Wingman 생존 + 정체 AMBER → Wingman 1통, 사�
   assert.equal(alert.delivered, true);
 });
 
-test('2. 조정·응답장애·모름 verdict와 Autopilot 꺼짐·기본 단계는 사용자 그대로', () => {
+test('2. 조정·응답장애·모름 verdict와 Autopilot 꺼짐·Cruise 단계는 사용자 그대로', () => {
   for (const verdict of ['조정', '응답장애', '모름']) {
     const f = fixture();
     f.report(verdict);

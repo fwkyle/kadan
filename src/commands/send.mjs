@@ -108,7 +108,8 @@ function deliverMessage(argv, flags, command) {
     console.log(JSON.stringify(receipt));return;
   }
 
-  let receipt, turnClaim = null, entries;
+  // 전송 함수를 부르기 전에 난 실패는 위치상 안 간 것이다(KADAN_MAIL_DELIVERY_EXIT 종료 코드 판정용).
+  let receipt, turnClaim = null, entries, sendCalled = false;
   try {
     // 기존 send만 --execution의 발령 추론을 유지한다. mail은 연결 주소로만 사용하며,
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
@@ -163,6 +164,7 @@ function deliverMessage(argv, flags, command) {
     turnClaim = claimTurnReturn(ledgerHome(), turnPlan);
     const outgoing = turnClaim ? message + turnReturnTail(turnClaim) : message;
     try {
+      sendCalled = true;
       receipt = guardedSend({
         floor,
         session,
@@ -185,8 +187,8 @@ function deliverMessage(argv, flags, command) {
       throw error;
     }
   } catch (error) {
-    // 종료 코드는 기본 error.exitCode || 1이다. KADAN_MAIL_DELIVERY_EXIT=1로 부른 쪽만 전달 상태별 코드(4·5)를 받는다.
-    die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, mailFailureExitCode(error));
+    // 종료 코드는 기본 error.exitCode || 1이다. KADAN_MAIL_DELIVERY_EXIT=1로 부른 쪽만 전달 상태별 코드(3·4·5)를 받는다.
+    die(error.delivery==="sent"?`전달은 됐지만 기록 반영 실패: ${error.message}. 자동 재시도하지 마세요`:error.message, mailFailureExitCode(error, process.env, {beforeSend: !sendCalled}));
   }
   console.log(
     `${floor.name === "tmux" ? "키 전송됨" : "전달됨"}: ${receipt.session} (${receipt.bytes}B, 지문 ${receipt.digest}, 우편ID ${receipt.mailId})` +
