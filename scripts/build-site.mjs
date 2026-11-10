@@ -16,7 +16,8 @@ export const PAGES = [
   { file: "index.html", nav: "홈", source: "site/pages/home.html" },
   { file: "start.html", nav: "시작하기", source: "site/pages/start.md", base: "" },
   { file: "use-cases.html", nav: "유즈케이스", source: "site/pages/use-cases.md", base: "", drop: "hiddenUseCases" },
-  { file: "how-to.html", nav: "상황별 길잡이", source: "docs/how-to.md", base: "docs", drop: "howToExclude" },
+  // 길잡이의 머리말 두 구획(문서의 목적·읽는 법)은 본문에만 두고 지도·목차에는 아홉 항목만 올린다.
+  { file: "how-to.html", nav: "상황별 길잡이", source: "docs/how-to.md", base: "docs", drop: "howToExclude", mapSkip: ["Why", "읽는 법"] },
   { file: "docs.html", nav: "문서", source: "site/pages/docs.md", base: "" },
 ];
 const PAGE_FILES = new Set(PAGES.map((page) => page.file));
@@ -86,18 +87,44 @@ const LABELED_LIST = new RegExp(`<ul>((?:${LABELED_ITEM.source})+)</ul>`, "g");
 const labelLists = (html) => html.replace(LABELED_LIST, (_, items) =>
   `<dl class="facts">${items.replace(LABELED_ITEM, "<dt>$1</dt><dd>$2</dd>")}</dl>`);
 
+// 본문 속 짧은 명령(인라인 code): 낱말(띄어쓰기 사이)마다 묶어, 한 줄에 들어가는 낱말은 그 안에서 줄이 바뀌지 않게 한다.
+// `--model`이 `--`/`model`로 갈라지던 것을 막는다. 한 줄보다 긴 낱말만 그 안에서 접힌다(스타일의 code .w).
+// 글자는 하나도 더하거나 바꾸지 않아 복사한 명령이 그대로다. 여러 줄 명령 상자(pre)는 건드리지 않는다.
+const wordWrapCode = (html) => html.split(/(<pre[\s\S]*?<\/pre>)/).map((part) => (part.startsWith("<pre")
+  ? part
+  : part.replace(/<code>([^<]*)<\/code>/g, (_, inner) =>
+    `<code>${inner.split(/( +)/).map((word) => (word.trim() ? `<span class="w">${word}</span>` : word)).join("")}</code>`))).join("");
+
+// 구획 주소(id)는 순번이 아니라 제목에서 만든다. 그래서 숨김 목록이나 구획 순서가 바뀌어도 같은 제목은 같은 주소다.
+// 규칙: 영문은 소문자로, 글자·숫자가 아닌 것(공백·괄호·가운뎃점·따옴표 등)의 이어짐은 "-" 하나로, 앞뒤의 "-"는 뗀다.
+// 남는 글자가 없으면 "section". 이미 쓴 주소(같은 쪽의 같은 제목, 틀이 쓰는 id)와 겹치면 뒤에 -2, -3 …을 붙인다.
+export const RESERVED_IDS = ["main", "team-caption"];
+export function sectionId(title, taken) {
+  const base = String(title).normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "section";
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+  taken.add(id);
+  return id;
+}
+const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+const unescapeHtml = (text) => text.replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => ENTITIES[entity]);
+
 // 글 쪽 하나를 그리고 구획 목록(sections)을 함께 돌려준다. 사이트 지도와 "이 쪽의 목차"가 이 목록에서 만들어진다.
-// 구획 이름은 렌더러가 이스케이프한 글자에서 태그만 걷어 낸 것이라 그대로 넣어도 된다.
+// 구획 이름(label)은 렌더러가 이스케이프한 글자에서 태그만 걷어 낸 것이라 그대로 넣어도 된다.
+// page.mapSkip에 적은 제목은 본문에는 그대로 두고 지도·목차에서만 뺀다(map: false).
 function renderMarkdownPage(page, config) {
   const { text } = dropSections(read(page.source), config[page.drop] ?? []);
   const head = text.match(/^﻿?#\s+(.+)\r?\n/);
   const title = head ? head[1].trim() : page.nav;
   const sections = [];
+  const taken = new Set(RESERVED_IDS);
   const rendered = renderCardDocument(head ? text.slice(head[0].length) : text, { link: siteLink(config, page.base) });
-  const body = labelLists(liftHeadings(rendered))
+  const body = wordWrapCode(labelLists(liftHeadings(rendered)))
     .replace(/<h2>(.*?)<\/h2>/g, (_, inner) => {
-      const id = `s${sections.length + 1}`;
-      sections.push({ id, label: inner.replace(/<[^>]+>/g, "") });
+      const label = inner.replace(/<[^>]+>/g, "");
+      const plain = unescapeHtml(label);
+      const id = sectionId(plain, taken);
+      sections.push({ id, label, map: !(page.mapSkip ?? []).includes(plain) });
       return `<h2 id="${id}">${inner}</h2>`;
     });
   return { title, sections, body: `<article class="prose"><h1>${escapeHtml(title)}</h1>${body}</article>` };
@@ -134,11 +161,21 @@ const footer = (config) => `<footer class="bottom">
 <p>카단은 Apache-2.0 라이선스의 오픈소스입니다. <a href="${escapeHtml(config.repoUrl)}">GitHub 저장소</a></p>
 </footer>`;
 
-// 홈의 몸통: 위쪽 메뉴 + 한 단.
-function homeBody(page, { body }, config) {
+// 좁은 화면의 머리줄: 이름 + 접히는 메뉴(details). 홈과 글 쪽이 같은 것을 쓴다.
+const menuBar = (page, contents) => `<header class="bar">
+${BRAND}
+<details class="menu">
+<summary><span>메뉴</span></summary>
+${siteMap(page, contents)}
+</details>
+</header>`;
+
+// 홈의 몸통: 넓은 화면은 위쪽 메뉴, 좁은 화면은 글 쪽과 같은 접히는 메뉴 + 한 단(소개 배치).
+function homeBody(page, { body }, contents, config) {
   const nav = PAGES.map((item) =>
     `<a href="${item.file}"${item.file === page.file ? ' aria-current="page"' : ""}>${escapeHtml(item.nav)}</a>`).join("");
-  return `<header class="top">
+  return `${menuBar(page, contents)}
+<header class="top">
 ${BRAND}
 <nav aria-label="쪽 이동">${nav}</nav>
 </header>
@@ -153,7 +190,7 @@ ${footer(config)}`;
 function siteMap(current, contents) {
   const groups = PAGES.map((page) => {
     const here = page.file === current.file;
-    const items = (contents.get(page.file).sections ?? [])
+    const items = (contents.get(page.file).sections ?? []).filter((section) => section.map)
       .map(({ id, label }) => `<li><a href="${here ? "" : page.file}#${id}">${label}</a></li>`).join("");
     return `<li${here ? ' class="here"' : ""}><a href="${page.file}"${here ? ' aria-current="page"' : ""}>${escapeHtml(page.nav)}</a>`
       + `${items ? `<ol>${items}</ol>` : ""}</li>`;
@@ -164,21 +201,16 @@ function siteMap(current, contents) {
 // 글 쪽의 몸통: 왼쪽 사이트 지도 · 가운데 본문 · 오른쪽 "이 쪽의 목차". 좁은 화면에서는 지도가 접히는 메뉴(details)가 된다.
 function docsBody(page, { body, sections }, contents, config) {
   const map = siteMap(page, contents);
-  const toc = sections.length > 1
+  const listed = sections.filter((section) => section.map);
+  const toc = listed.length > 1
     ? `<nav class="toc" aria-label="이 쪽의 목차"><p>이 쪽의 목차</p><ol>${
-      sections.map(({ id, label }) => `<li><a href="#${id}">${label}</a></li>`).join("")}</ol></nav>`
+      listed.map(({ id, label }) => `<li><a href="#${id}">${label}</a></li>`).join("")}</ol></nav>`
     : "";
   const at = PAGES.indexOf(page);
   const step = (item, rel, label) => item
     ? `<a class="${rel}" rel="${rel}" href="${item.file}"><span>${label}</span><strong>${escapeHtml(item.nav)}</strong></a>`
     : "";
-  return `<header class="bar">
-${BRAND}
-<details class="menu">
-<summary><span>메뉴</span></summary>
-${map}
-</details>
-</header>
+  return `${menuBar(page, contents)}
 <div class="frame">
 <aside class="side">
 ${BRAND}
@@ -227,7 +259,7 @@ export function buildSite({ outDir = path.join(ROOT, "site-dist"), config: overr
     [page.file, page.source.endsWith(".md") ? renderMarkdownPage(page, config) : renderHome(config)]));
   for (const page of PAGES) {
     const content = contents.get(page.file);
-    const inner = content.sections ? docsBody(page, content, contents, config) : homeBody(page, content, config);
+    const inner = content.sections ? docsBody(page, content, contents, config) : homeBody(page, content, contents, config);
     fs.writeFileSync(path.join(outDir, page.file), layout(page, content.title, inner, config));
   }
   fs.copyFileSync(path.join(ROOT, "site/style.css"), path.join(outDir, "style.css"));

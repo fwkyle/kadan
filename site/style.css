@@ -8,7 +8,7 @@
   --code: #edf1ee;
   --ui: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "D2Coding", monospace;
-  --measure: 46rem; --wide: 70rem; --read: 38rem;
+  --measure: 46rem; --wide: 75.5rem; --mid: 58.5rem; --read: 38rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -37,12 +37,15 @@ code { font-family: var(--mono); font-size: 0.875em; background: var(--code); pa
    word-break는 body의 keep-all을 그대로 물려받는다: 명령 속 한국어 낱말은 띄어쓰기에서만 접히고, 긴 주소는 anywhere로 접힌다. */
 pre { margin: 1rem 0; padding: 1rem; background: var(--term); color: var(--term-text); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
 pre code { background: none; padding: 0; font-size: 0.8125rem; }
+/* 본문 속 짧은 명령의 낱말 하나(빌드가 묶는다): 한 줄에 들어가면 통째로 다음 줄로 넘어가고, 한 줄보다 길 때만 그 안에서 접힌다. */
+code .w { display: inline-block; max-width: 100%; }
 
 .skip { position: absolute; left: 1rem; top: -4rem; padding: 0.5rem 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; z-index: 10; }
 .skip:focus { top: 0.5rem; }
 
 /* 머리줄 */
-.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1.5rem; max-width: var(--wide); margin: 0 auto; padding: 1rem 1.25rem; }
+/* 홈의 머리줄. 이름(kadan)이 글 쪽의 옆 칸 이름과 같은 자리에 오게 안쪽 여백을 맞춘다. 좁은 화면에서는 글 쪽과 같은 메뉴 줄(.bar)을 쓴다. */
+.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1.5rem; max-width: var(--wide); margin: 0 auto; padding: 1rem 1.5rem 0.5rem 2.1rem; }
 .brand { font-family: var(--mono); font-weight: 700; font-size: 1.0625rem; color: var(--text); text-decoration: none; white-space: nowrap; }
 .brand span { font-family: var(--ui); font-weight: 400; color: var(--muted); font-size: 0.875rem; }
 .top nav { display: flex; flex-wrap: wrap; gap: 0 0.25rem; margin-left: auto; }
@@ -50,8 +53,9 @@ pre code { background: none; padding: 0; font-size: 0.8125rem; }
 .top nav a:hover { color: var(--text); }
 .top nav a[aria-current] { color: var(--action); border-bottom-color: var(--action); font-weight: 600; }
 
-main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
-.bottom { max-width: var(--wide); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.875rem; }
+main { max-width: var(--wide); margin: 0 auto; padding: 0 1.5rem 3rem; }
+.home { font-size: 1.0625rem; }
+.bottom { max-width: var(--wide); margin: 0 auto; padding: 1.5rem 1.5rem 3rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.875rem; }
 
 /* 버튼 */
 .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.5rem 0; }
@@ -110,7 +114,7 @@ main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
 /* 문서 틀: 왼쪽 사이트 지도 · 가운데 본문 · 오른쪽 "이 쪽의 목차". 틀 전체를 화면 가운데에 둔다.
    폭이 줄면 목차가 먼저 빠지고(1200px 아래), 그다음 지도가 접히는 메뉴가 된다(800px 아래). 스크립트 없이 움직인다. */
 .bar { display: none; }
-.frame { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr) 13rem; column-gap: 3rem; max-width: 75.5rem; margin: 0 auto; padding: 0 1.5rem; }
+.frame { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr) 13rem; column-gap: 3rem; max-width: var(--wide); margin: 0 auto; padding: 0 1.5rem; }
 .side { position: sticky; top: 0; align-self: start; height: 100vh; height: 100dvh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; margin-left: -0.25rem; padding: 1.4rem 1.25rem 2rem 0.25rem; border-right: 1px solid var(--border); }
 .side .brand { display: inline-block; margin: 0 0 1.4rem 0.6rem; }
 .side-foot { margin: 2rem 0 0 0.6rem; font-size: 0.8125rem; }
@@ -159,8 +163,9 @@ main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
 .prose li + li { margin-top: 0.55rem; }
 .prose blockquote { margin: 1rem 0; padding: 0.25rem 1rem; border-left: 3px solid var(--border); color: var(--muted); }
 /* "이름표: 내용" 목록: 이름표를 왼쪽 칸에 모아 장면마다 같은 자리에서 읽힌다. 좁은 화면에서는 이름표가 내용 위로 올라간다. */
-.facts { display: grid; grid-template-columns: fit-content(9rem) minmax(0, 1fr); gap: 0.85rem 1.25rem; margin: 1.1rem 0; }
-.facts dt { padding-top: 0.2em; color: var(--action); font-size: 0.875rem; font-weight: 700; line-height: 1.5; }
+/* 이름표 칸은 적어도 5.5rem이라, 표를 사이에 두고 갈라진 목록(길잡이 1번)도 내용이 같은 자리에서 시작한다. */
+.facts { display: grid; grid-template-columns: minmax(5.5rem, max-content) minmax(0, 1fr); gap: 0.85rem 1.25rem; margin: 1.1rem 0; }
+.facts dt { max-width: 9rem; padding-top: 0.2em; color: var(--action); font-size: 0.875rem; font-weight: 700; line-height: 1.5; }
 .facts dd { margin: 0; }
 /* 글 안의 표와 중첩 목록: 좁은 화면에서는 표가 자기 상자 안에서만 옆으로 밀리고, 쪽 전체는 밀리지 않는다. */
 .prose li > ul, .prose li > ol { margin: 0.45rem 0 0; }
@@ -172,7 +177,9 @@ main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
 
 @media (max-width: 1199px) {
   /* 두 단: 오른쪽 목차가 빠지고, 지금 쪽의 구획은 왼쪽 지도에 펼친다. */
-  .frame { grid-template-columns: 15rem minmax(0, 1fr); column-gap: 2.5rem; max-width: 58.5rem; }
+  .frame { grid-template-columns: 15rem minmax(0, 1fr); column-gap: 2.5rem; max-width: var(--mid); }
+  /* 홈도 같은 폭의 기둥에 둔다(홈과 글 쪽을 오갈 때 이름의 자리가 같다). */
+  .top, main, .bottom { max-width: var(--mid); }
   .toc { display: none; }
   .side .here > ol { display: block; }
 }
@@ -199,14 +206,14 @@ main { max-width: var(--wide); margin: 0 auto; padding: 0 1.25rem 3rem; }
   /* 메뉴는 한 화면에 들어오게 쪽 다섯 개와 지금 쪽의 구획만 편다. 다른 쪽의 구획은 그 쪽에 가서 본다. */
   .menu .map li:not(.here) > ol { display: none; }
   .frame { display: block; padding: 0 1.25rem; }
-  .side { display: none; }
+  .side, .top { display: none; }
+  main { padding: 0 1.25rem 3rem; }
+  .bottom { padding-left: 1.25rem; padding-right: 1.25rem; }
   .col { padding-top: 1.75rem; }
 }
 @media (max-width: 560px) {
-  .top { padding: 0.75rem 1rem; }
-  .top nav { margin-left: -0.45rem; }
-  .top nav a { padding: 0 0.45rem; font-size: 0.8125rem; }
   main { padding: 0 1rem 2.5rem; }
+  .bottom { padding-left: 1rem; padding-right: 1rem; }
   .pane-row { grid-template-columns: minmax(0, 1fr); }
   .frame { padding: 0 1rem; }
   .facts { grid-template-columns: minmax(0, 1fr); row-gap: 0.2rem; }
