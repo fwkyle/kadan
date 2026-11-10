@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {reopenRole, reopenSource, canReopen} from '../src/reopen.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
+import {generationLog} from './helpers/generation-log.mjs';
 import {createMailGenerations} from '../src/mail-generation.mjs';
 import {ownerGenerations, isPreviousOwner} from '../src/owner-generation.mjs';
 import {runnerChoices} from '../src/runner-settings.mjs';
@@ -23,7 +24,7 @@ function fixture({cmd = CLAUDE, role = 'w', profile = 'worker', stop = {}, withS
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-reopen-cwd-'));
   const session = `kadan-${role}`;
   const start = {kind: 'start', floor: 'tmux', role, session, cmd, cwd, panePid: '100', roleProfile: profile, by: 'boss',
-    outputLog: path.join(home, 'out', session, 'gen-a', 'manifest.json'),
+    outputLog: generationLog(session, 1),
     launchSource: 'settings', settingsPreset: 'B', compareMode: true, pickId: 'pick-1', t: '2026-11-10T00:00:00.000Z'};
   const entries = [start];
   if (withStop) entries.push({kind: 'stop', role, session, by: 'boss', conversation: ID, conversationStart: startDigest(start),

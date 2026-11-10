@@ -12,6 +12,9 @@ import {encodeMailValue} from '../src/mail-view-store.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
 import {buildStartLedgerEntry} from '../src/cli-start-support.mjs';
 import {reuseOfFor} from '../src/role-conversation.mjs';
+import {prepareOutputLog, isGenerationOutputLog} from '../src/output-log.mjs';
+import {outputLogPath} from '../src/floor-tmux.mjs';
+import {generationLog, legacyLog} from './helpers/generation-log.mjs';
 import {createDatabase, writeStorageMarker, appendStream} from '../src/storage.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
@@ -26,7 +29,7 @@ const cards = ['c1', 'c2'].map(id => ({key: `probe/${id}`, id, repo: 'probe', st
 let serial = 0;
 const stamp = (kind, values = {}) => ({kind, t: new Date(Date.UTC(2026, 10, 10, 0, 0, ++serial)).toISOString(), ...values});
 const launch = (role, pid) => stamp('start', {role, session: `kadan-${role}`, floor: 'tmux', panePid: String(pid), cmd: 'codex --model test-model',
-  outputLog: `/fixture/out/kadan-${role}/gen-${serial + 1}/manifest.json`});
+  outputLog: generationLog(`kadan-${role}`, serial + 1)});
 const send = (role, id) => stamp('send', {role, session: `kadan-${role}`, taskId: id, executionKey: `probe/${id}`});
 const stop = start => stamp('stop', {role: start.role, session: start.session, conversationStart: startDigest(start)});
 // reopen이 남기는 start: reopenOf는 stop 직전의 마지막 start 사건(last)의 지문이다.
@@ -213,15 +216,15 @@ const both = events => {
 };
 const sendOf = (id, t) => ({kind: 'send', role: 'w', session: 'kadan-w', taskId: id, executionKey: `probe/${id}`, t});
 const stopAt = t => ({kind: 'stop', role: 'w', session: 'kadan-w', t});
-const reopenOf = (last, t) => build({pid: '300', cmd: `${CMD} resume ${ID}`, outputLog: '/fixture/out/C/manifest.json', t,
+const reopenOf = (last, t) => build({pid: '300', cmd: `${CMD} resume ${ID}`, outputLog: generationLog('kadan-w', 1003), t,
   extra: {reopenOf: startDigest(last), conversationMode: 'resume'}});
 
 test('N1: 두 세대의 재사용 start가 PID·기록 시각까지 같아도, 옛 세대를 가리키는 reopen은 다른 세대의 발령을 잇지 않는다', () => {
   const SAME_T = '2026-11-10T00:01:00.000Z';
-  const a1 = build({pid: '100', cmd: CMD, outputLog: '/fixture/out/A/manifest.json', t: '2026-11-10T00:00:00.000Z'});
+  const a1 = build({pid: '100', cmd: CMD, outputLog: generationLog('kadan-w', 1001), t: '2026-11-10T00:00:00.000Z'});
   const ra = buildReuse([a1], {pid: '100', t: SAME_T});
   const first = [a1, ra, sendOf('c1', '2026-11-10T00:02:00.000Z'), stopAt('2026-11-10T00:03:00.000Z')];
-  const b1 = build({pid: '100', cmd: CMD, outputLog: '/fixture/out/B/manifest.json', t: '2026-11-10T00:00:30.000Z'});
+  const b1 = build({pid: '100', cmd: CMD, outputLog: generationLog('kadan-w', 1002), t: '2026-11-10T00:00:30.000Z'});
   const rb = buildReuse([...first, b1], {pid: '100', t: SAME_T});
   const second = [b1, rb, sendOf('c2', '2026-11-10T00:04:00.000Z'), stopAt('2026-11-10T00:05:00.000Z')];
   // 재현 조건이 맞는지: reuseOf를 빼면 두 재사용 기록의 본문은 글자 그대로 같다(지난 판에서 지문이 같아지던 이유).
@@ -242,8 +245,8 @@ test('N1: 두 세대의 재사용 start가 PID·기록 시각까지 같아도, �
 
 test('N1: reuseOf 칸이 없는 옛 재사용 start가 마지막 start이면, 지문이 맞아도 잇지 않는다(본문이 같은 다른 세대와 구분할 수 없다)', () => {
   const SAME_T = '2026-11-10T00:01:00.000Z';
-  const a1 = build({pid: '100', cmd: CMD, outputLog: '/fixture/out/A/manifest.json', t: '2026-11-10T00:00:00.000Z'});
-  const b1 = build({pid: '100', cmd: CMD, outputLog: '/fixture/out/B/manifest.json', t: '2026-11-10T00:00:30.000Z'});
+  const a1 = build({pid: '100', cmd: CMD, outputLog: generationLog('kadan-w', 1001), t: '2026-11-10T00:00:00.000Z'});
+  const b1 = build({pid: '100', cmd: CMD, outputLog: generationLog('kadan-w', 1002), t: '2026-11-10T00:00:30.000Z'});
   // 옛 프로그램이 남긴 재사용 기록 둘: reuseOf가 없어 본문이 같다.
   const ra = build({pid: '100', t: SAME_T}), rb = build({pid: '100', t: SAME_T});
   assert.equal(startDigest(ra), startDigest(rb));
@@ -265,7 +268,7 @@ test('N1: 출력 기록 경로가 없는 채로 띄운 세션은 본문이 같�
   assert.deepEqual(both(events), {stored: [], full: []});
   assert.equal(reuseOfFor([a1], 'kadan-w', '100'), null, '띄운 start에 구분하는 값이 없으면 reuseOf도 적지 않는다');
   // reuseOf를 적지 않는 다른 경우: 띄운 start를 못 찾음, PID가 다름, 세션이 이미 꺼짐.
-  const launched = build({pid: '100', cmd: CMD, outputLog: '/fixture/out/A/manifest.json', t: SAME_T});
+  const launched = build({pid: '100', cmd: CMD, outputLog: generationLog('kadan-w', 1001), t: SAME_T});
   assert.equal(reuseOfFor([launched], 'kadan-w', '100'), startDigest(launched));
   assert.equal(reuseOfFor([launched], 'kadan-w', '999'), null);
   assert.equal(reuseOfFor([launched], 'kadan-other', '100'), null);
@@ -274,6 +277,26 @@ test('N1: 출력 기록 경로가 없는 채로 띄운 세션은 본문이 같�
   // 재사용 기록 뒤에 또 다시 연 기록: 같은 세대를 띄운 start를 가리킨다.
   const again = buildReuse([launched], {pid: '100', t: '2026-11-10T00:01:00.000Z'});
   assert.equal(reuseOfFor([launched, again], 'kadan-w', '100'), startDigest(launched));
+});
+
+test('N1: 세대별 폴더 방식 이전의 고정 출력 기록 경로는 세대를 구분하지 못한다 — 그런 기록으로는 잇지 않고 reuseOf도 적지 않는다', () => {
+  // 실제 형식 대조: 지금 세션을 만들 때 생기는 경로는 인정하고, 옛 고정 경로는 인정하지 않는다.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-output-form-'));
+  const real = [prepareOutputLog('kadan-w', home).manifestPath, prepareOutputLog('kadan-w', home).manifestPath];
+  assert.notEqual(real[0], real[1], '같은 세션 이름이라도 만들 때마다 다른 경로다');
+  for (const value of real) assert.equal(isGenerationOutputLog(value), true, value);
+  for (const value of [outputLogPath('kadan-w', home), outputLogPath('kadan-w', home, false), legacyLog('kadan-w'),
+    '/fixture/out/kadan-w/gen-a/manifest.json', '', null, undefined, 7]) assert.equal(isGenerationOutputLog(value), false, String(value));
+  assert.equal(outputLogPath('kadan-w', home), outputLogPath('kadan-w', home), '옛 경로는 세션 이름으로만 정해진다');
+  // 옛 고정 경로로 뜬 같은 이름의 두 세대: PID·기록 시각까지 같으면 띄운 start의 본문이 같다.
+  const SAME_T = '2026-11-10T00:00:00.000Z';
+  const a1 = build({pid: '100', cmd: CMD, outputLog: legacyLog('kadan-w'), t: SAME_T});
+  const b1 = build({pid: '100', cmd: CMD, outputLog: legacyLog('kadan-w'), t: SAME_T});
+  assert.equal(startDigest(a1), startDigest(b1));
+  const events = [a1, sendOf('c1', '2026-11-10T00:02:00.000Z'), stopAt('2026-11-10T00:03:00.000Z'),
+    b1, sendOf('c2', '2026-11-10T00:04:00.000Z'), stopAt('2026-11-10T00:05:00.000Z'), reopenOf(a1, '2026-11-10T00:10:00.000Z')];
+  assert.deepEqual(both(events), {stored: [], full: []});
+  assert.equal(reuseOfFor([a1], 'kadan-w', '100'), null, '옛 고정 경로로 뜬 세대의 재사용 기록에는 reuseOf를 적지 않는다');
 });
 
 // ---- 실제 SQLite 감시 조회 상태(createWatchMailReader) ----
@@ -297,7 +320,7 @@ function realSetup() {
   const query = sql => { const db = new DatabaseSync(ledgerViewPath(home)); try { return db.prepare(sql).all(); } finally { db.close(); } };
   // A 시작 → c1 발령 → A 종료까지 감시기가 읽은 상태를 만든다. 돌려주는 것은 원장에 실제로 적힌 A의 start다.
   appendLedger({kind: 'start', role, session, floor: 'tmux', panePid: '100', cmd: 'codex --model test-model',
-    outputLog: path.join(home, 'out', session, 'gen-a', 'manifest.json')}, home);
+    outputLog: generationLog(session, 1)}, home);
   appendLedger({kind: 'send', role, session, taskId: 'c1', executionKey: 'probe/c1'}, home);
   const started = readLedger(home).findLast(entry => entry.kind === 'start');
   appendLedger({kind: 'stop', role, session, conversationStart: startDigest(started)}, home);

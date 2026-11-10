@@ -9,6 +9,7 @@ import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
 import {executorChain, processTree, openFilesOf, processStartedAt} from './process-tree.mjs';
 import {findConversation, checkConversationSpec} from './runner-table.mjs';
 import {startDigest} from './secretary-resume.mjs';
+import {isGenerationOutputLog} from './output-log.mjs';
 
 // stop 사건의 conversationMissing에 적는 낱말. 여기 없는 값은 쓰지 않는다(오류 문장을 원장에 옮기지 않는다).
 export const MISSING_REASONS = ['no-start', 'not-ai-runner', 'unsupported', 'non-tmux', 'pane-changed',
@@ -38,8 +39,8 @@ export function launchStart(events) {
 // 살아 있는 세션을 다시 연 start(kadan start를 한 번 더 친 기록)에 적을 reuseOf: 그 세대를 띄운 start의 지문. 없으면 null.
 // Why: 다시 연 start에는 명령·출력 기록 경로가 없어, 서로 다른 두 세대의 그런 기록이 역할·PID·작업 폴더·기록 시각까지 같으면
 // 본문(=지문)이 같아진다. 그 세대를 띄운 start의 지문을 한 칸으로 품으면 세대가 다를 때 본문이 반드시 달라진다.
-// 그 보장은 띄운 start의 본문이 유일할 때만 성립하므로, 출력 기록 경로(outputLog — 만들 때마다 새 UUID)가 있는 start일 때만 적는다.
-// 띄운 start를 못 찾거나, 그 PID가 지금 pane PID와 다르거나, outputLog가 없으면 적지 않는다(감시기는 그런 기록으로 발령을 잇지 않는다).
+// 그 보장은 띄운 start의 본문이 유일할 때만 성립하므로, 세대별 출력 기록 경로(outputLog — 만들 때마다 새 UUID 폴더)가 있는 start일 때만 적는다.
+// 띄운 start를 못 찾거나, 그 PID가 지금 pane PID와 다르거나, outputLog가 없거나 옛 고정 경로이면 적지 않는다(감시기는 그런 기록으로 발령을 잇지 않는다).
 // events는 부르는 쪽이 이미 읽은 원장이다(추가 읽기 없음).
 export function reuseOfFor(events, session, livePid) {
   const own = events.filter(e => e.session === session);
@@ -47,7 +48,7 @@ export function reuseOfFor(events, session, livePid) {
   if (own.slice(own.findLastIndex(e => e.kind === 'start') + 1).some(e => e.kind === 'stop')) return null;
   const start = launchStart(own);
   if (!start || livePid == null || String(pidOf(start)) !== String(livePid)) return null;
-  if (typeof start.outputLog !== 'string' || !start.outputLog) return null;
+  if (!isGenerationOutputLog(start.outputLog)) return null;
   return startDigest(start);
 }
 

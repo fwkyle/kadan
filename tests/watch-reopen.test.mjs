@@ -9,6 +9,7 @@ import {buildWatchScope} from '../src/watch-scope.mjs';
 import {assessMissingStartReports} from '../src/watch-start-report.mjs';
 import {assessIdleStop, readStatusLine} from '../src/watch-status-line.mjs';
 import {startDigest} from '../src/secretary-resume.mjs';
+import {generationLog} from './helpers/generation-log.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {readLedgerIncremental} from '../src/ledger-incremental.mjs';
@@ -26,7 +27,7 @@ const role = 'watchproof', session = `kadan-${role}`;
 const card = {key: 'probe/c1', id: 'c1', repo: 'probe', status: 'assigned', role};
 // 세션을 실제로 띄운 start에는 출력 기록 경로가 있다(감시기는 이런 값이 있는 기록만 발령을 잇는 근거로 쓴다).
 const start = {kind: 'start', role, session, floor: 'tmux', panePid: '100', cmd: 'codex --model test-model',
-  outputLog: '/fixture/out/kadan-watchproof/gen-a/manifest.json', t: '2026-11-10T00:00:00Z'};
+  outputLog: generationLog('kadan-watchproof', 1), t: '2026-11-10T00:00:00Z'};
 const send = {kind: 'send', role, session, taskId: 'c1', executionKey: card.key, t: '2026-11-10T00:01:00Z'};
 const stop = {kind: 'stop', role, session, conversation: ID, conversationStart: startDigest(start), t: '2026-11-10T00:02:00Z'};
 const reopened = (extra = {}) => ({...start, panePid: '200', cmd: `codex --model test-model resume ${ID}`,
