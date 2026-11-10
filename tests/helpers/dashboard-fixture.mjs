@@ -11,7 +11,7 @@ import { appendLedger, readLedger, saveMailBody } from "../../src/ledger.mjs";
 import { createDatabase, writeStorageMarker } from "../../src/storage.mjs";
 import { createWallServer } from "../../src/wall.mjs";
 
-export function dashboardFixture({ mode = "sqlite", count = 55 } = {}) {
+export function dashboardFixture({ mode = "sqlite", count = 55, howToFile } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-react-"));
   if (mode === "sqlite") {
     createDatabase(home);
@@ -140,6 +140,7 @@ export function dashboardFixture({ mode = "sqlite", count = 55 } = {}) {
     notify,
     gui: true,
     cacheSec: 0,
+    ...(howToFile ? { howToFile } : {}),
   });
   return {
     home,

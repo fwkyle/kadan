@@ -22,7 +22,8 @@ function inline(text,source) {
   html+=escapeHtml(text.slice(last,m.index));const t=m[0];
   if(t.startsWith('`'))html+=`<code>${escapeHtml(t.slice(1,-1))}</code>`;
   else if(t.startsWith('**'))html+=`<strong>${escapeHtml(t.slice(2,-2))}</strong>`;
-  else {const link=t.match(/^(!?)\[([^\]]+)\]\((.+)\)$/);html+=(link[1]?'이미지: ':'')+documentLink(link[2],link[3],source);}
+  // source.link가 있으면 그 문서 종류의 링크 표시를 쓴다(길잡이: 저장소 문서 경로를 글자로).
+  else {const link=t.match(/^(!?)\[([^\]]+)\]\((.+)\)$/);html+=(link[1]?'이미지: ':'')+(source.link??documentLink)(link[2],link[3],source);}
   last=m.index+t.length;
  }
  return html+escapeHtml(text.slice(last));
