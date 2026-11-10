@@ -123,7 +123,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     ], expected.revision);
     return {
       result: "warn", code: "effort-or-args",
-      warning: `경고: ${session}의 강도·실행 인자가 지금 ${slotName}과 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,
+      warning: `경고: ${session}의 강도·실행 인자가 지금 ${slotName}${slotName.endsWith('자리') ? '와' : '과'} 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,
       ledger: { result: "warn", code: "effort-or-args", settingsRevision: expected.revision },
     };
   }

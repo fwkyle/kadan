@@ -266,3 +266,47 @@ test('대시보드: 프리셋 저장이 worker-hard 값을 지우지 않고, 실
     console.log(`검증 서버 종료: PID ${process.pid}, 127.0.0.1:${port}, lsof LISTEN 없음`);
   }
 });
+
+// 검수 F1: 가져오기·화면 프리셋 저장이 fallback.worker-hard를 저장하면 show가 깨졌다.
+test('가져오기: fallback.worker-hard는 전체 거절하고 설정·원장이 그대로, 정상 프리셋은 성공한다', () => {
+  const f = makeHome();
+  const file = path.join(f.home, 'runner-settings.json');
+  const before = fs.readFileSync(file);
+  const data = exportPreset(f.home, {name: 'A'});
+  const bad = structuredClone(data);
+  bad.preset.fallback = {'worker-hard': [choice('gpt-other')]};
+  assert.throws(() => importPreset(f.home, {data: bad, as: 'C', ...f.meta()}), /파일 형식 오류: 어려운 일 작업자 자리는 폴백이 없다/);
+  assert.throws(() => importPreset(f.home, {data: bad, as: 'A', replace: true, ...f.meta()}), /폴백이 없다/);
+  assert.deepEqual(fs.readFileSync(file), before); assert.equal(f.records.length, 0);
+  importPreset(f.home, {data, as: 'C', ...f.meta()});
+  assert.deepEqual(readSettings(f.home).presets.C.roles['worker-hard'], choice('gpt-hard'));
+  assert.equal(runnersCommand(['show'], {}, f).launch['worker-hard'] != null, true);
+});
+
+test('화면 프리셋 저장: fallback.worker-hard는 거절되고 설정이 그대로, 정상 저장은 성공한다', async () => {
+  const f = makeHome();
+  const file = path.join(f.home, 'runner-settings.json');
+  const server = createWallServer(() => ({center: null, entries: readLedger(f.home), tree: [],
+    ledgerLines: 0, collectedAt: new Date()}), {home: f.home, cacheSec: 0});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port, base = `http://127.0.0.1:${port}`;
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    const post = (preset, revision) => fetch(base + '/runners/preset-save', {method: 'POST',
+      headers: {'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', origin: base},
+      body: new URLSearchParams({token, preset: 'A', value: JSON.stringify(preset), revision: String(revision), reason: '화면 저장'})});
+    const bad = structuredClone(readSettings(f.home).presets.A);
+    bad.fallback = {'worker-hard': [choice('gpt-other')]};
+    const before = fs.readFileSync(file);
+    assert.equal((await post(bad, 1)).status, 409);
+    assert.deepEqual(fs.readFileSync(file), before);
+    const good = structuredClone(readSettings(f.home).presets.A); good.label = '정상';
+    assert.equal((await post(good, 1)).status, 200);
+    assert.equal(readSettings(f.home).presets.A.fallback?.['worker-hard'], undefined);
+  } finally {
+    await new Promise(r => server.close(r));
+    const l = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'], {encoding: 'utf8'});
+    assert.equal(l.stdout.trim(), '');
+    console.log(`검증 서버 종료: PID ${process.pid}, 127.0.0.1:${port}, lsof LISTEN 없음`);
+  }
+});

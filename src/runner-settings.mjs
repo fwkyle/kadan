@@ -577,12 +577,16 @@ export function setSeniors(home, {items, preset, ...meta}) {
 }
 
 // 역할의 폴백 순서 목록 전체를 바꾼다(3단계). 항목마다 1순위와 같은 선택지·강도·정책 검사를 하고, 계열 확인은 공통 경로가 맡는다.
+// 어려운 일 작업자 자리는 폴백 목록을 두지 않는다. 저장(setFallback)과 가져오기가 같은 판단·문구를 쓴다.
+export function assertNoHardFallback(role) {
+  if (role === HARD_ROLE) throw new Error('어려운 일 작업자 자리는 폴백이 없다 — 비어 있으면 작업자와 같다');
+}
 export function setFallback(home, {role, items, preset, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   // 시니어는 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
   if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
     throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
-  if (role === HARD_ROLE) throw new Error('어려운 일 작업자 자리는 폴백이 없다 — 비어 있으면 작업자와 같다');
+  assertNoHardFallback(role);
   if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 등록된 시니어(최대 2명)가 동등하게 함께 불린다(docs/senior.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
