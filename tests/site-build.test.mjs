@@ -25,13 +25,12 @@ test("사이트 빌드: 다섯 쪽이 메뉴 순서대로 나오고 설정의 �
   const { html, outDir } = build();
   assert.deepEqual(PAGES.map((page) => page.nav), ["홈", "시작하기", "유즈케이스", "상황별 길잡이", "문서"]);
   const config = loadConfig();
-  for (const page of PAGES) {
-    assert.match(html[page.file], /^<!doctype html>\n<html lang="ko">/);
-    const nav = html[page.file].match(/<nav aria-label="쪽 이동">(.*?)<\/nav>/)[1];
-    assert.deepEqual(attrs(nav, "a", "href"), PAGES.map((p) => p.file));
-    assert.equal(nav.match(/aria-current="page"/g).length, 1);
-  }
+  for (const page of PAGES) assert.match(html[page.file], /^<!doctype html>\n<html lang="ko">/);
+  // 홈은 위쪽 메뉴로 다섯 쪽에 간다. 글 쪽의 길(사이트 지도)은 아래 시험이 본다.
   const home = html["index.html"];
+  const nav = home.match(/<nav aria-label="쪽 이동">(.*?)<\/nav>/)[1];
+  assert.deepEqual(attrs(nav, "a", "href"), PAGES.map((p) => p.file));
+  assert.deepEqual(nav.match(/<a href="([^"]+)" aria-current="page"/g), [`<a href="index.html" aria-current="page"`]);
   assert.ok(home.includes(`<h1>${config.title}</h1>`));
   assert.ok(home.includes(config.lede));
   assert.match(home, /<p class="en" lang="en">Kadan runs AI coding CLIs/);
@@ -44,6 +43,84 @@ test("사이트 빌드: 다섯 쪽이 메뉴 순서대로 나오고 설정의 �
   const start = html["start.html"];
   assert.ok(start.indexOf("AI에게 설치 맡기기") > 0 && start.indexOf("AI에게 설치 맡기기") < start.indexOf("직접 설치하기"));
   assert.ok(fs.existsSync(path.join(outDir, "style.css")));
+});
+
+// 사이트 지도 하나를 [{ file, current, nav, items: [{ href, label }] }]로 읽는다. 묶음 제목의 주소에는 #이 없고 구획의 주소에는 있다.
+const readMap = (map) =>
+  [...map.matchAll(/<li(?: class="here")?><a href="([^"#]+)"( aria-current="page")?>([^<]*)<\/a>(?:<ol>(.*?)<\/ol>)?<\/li>/g)]
+    .map(([whole, file, current, nav, list = ""]) => ({
+      file, nav, current: Boolean(current), here: whole.startsWith('<li class="here">'),
+      items: [...list.matchAll(/<li><a href="([^"]*)">([^<]*)<\/a><\/li>/g)].map(([, href, label]) => ({ href, label })),
+    }));
+// 원본 글의 구획 제목(숨김 목록을 뺀 것). 지금 제목에는 이스케이프될 글자가 없어 그대로 견준다.
+const sourceTitles = (page, config) => page.source.endsWith(".md")
+  ? splitSections(dropSections(read(page.source), config[page.drop] ?? []).text).slice(1).map((part) => part.split("\n")[0].slice(3).trim())
+  : [];
+
+test("사이트 빌드: 글 쪽의 사이트 지도·이 쪽의 목차는 원본 글의 구획에서 만들어지고 지금 쪽을 표시한다", () => {
+  const { html } = build();
+  const config = loadConfig();
+  const docs = PAGES.filter((page) => page.source.endsWith(".md"));
+  assert.equal(docs.length, 4);
+  assert.doesNotMatch(html["index.html"], /class="map"|class="frame"/, "홈은 틀을 바꾸지 않았다");
+  for (const page of docs) {
+    const text = html[page.file];
+    assert.doesNotMatch(text, /쪽 이동/, page.file);
+    // 같은 지도가 두 번 들어간다: 좁은 화면의 접히는 메뉴(details) 안과 넓은 화면의 옆 칸.
+    const maps = [...text.matchAll(/<nav class="map" aria-label="사이트 지도">(.*?)<\/nav>/g)].map((m) => m[1]);
+    assert.equal(maps.length, 2, page.file);
+    assert.equal(maps[0], maps[1]);
+    assert.match(text, /<details class="menu">\n<summary><span>메뉴<\/span><\/summary>\n<nav class="map"/);
+    assert.doesNotMatch(text, /<details[^>]*\sopen/, "메뉴는 접힌 채로 나온다");
+    assert.match(text, /<aside class="side">\n<a class="brand" href="index\.html">.*\n<nav class="map"/);
+    assert.doesNotMatch(maps[0], /\sid=/, "두 번 들어가므로 id를 달지 않는다");
+
+    const groups = readMap(maps[0]);
+    assert.deepEqual(groups.map((group) => [group.file, group.nav]), PAGES.map((p) => [p.file, p.nav]));
+    assert.deepEqual(groups.filter((group) => group.current).map((group) => group.file), [page.file]);
+    assert.deepEqual(groups.filter((group) => group.here).map((group) => group.file), [page.file]);
+    assert.equal(maps[0].match(/aria-current/g).length, 1);
+    for (const [index, group] of groups.entries()) {
+      const titles = sourceTitles(PAGES[index], config);
+      assert.deepEqual(group.items.map((item) => item.label), titles, `${page.file} → ${group.file}`);
+      // 지금 쪽의 구획은 쪽 안 주소(#s1), 다른 쪽의 구획은 그 쪽의 해당 구획(파일#s1)으로 간다.
+      const prefix = group.file === page.file ? "" : group.file;
+      assert.deepEqual(group.items.map((item) => item.href), titles.map((_, at) => `${prefix}#s${at + 1}`));
+    }
+
+    // 이 쪽의 목차: 본문 위 상자가 아니라 본문 밖(뒤)에 하나, 자기 구획 전부.
+    const toc = text.match(/<nav class="toc" aria-label="이 쪽의 목차"><p>이 쪽의 목차<\/p><ol>(.*?)<\/ol><\/nav>/);
+    assert.ok(toc, page.file);
+    assert.equal(text.match(/class="toc"/g).length, 1);
+    assert.ok(text.indexOf('class="toc"') > text.indexOf("</main>"), "목차는 본문 밖에 있다");
+    assert.deepEqual([...toc[1].matchAll(/<li><a href="#(s\d+)">([^<]*)<\/a><\/li>/g)].map((m) => [m[1], m[2]]),
+      sourceTitles(page, config).map((title, at) => [`s${at + 1}`, title]));
+    // 구획 제목마다 목차가 가리키는 id가 본문에 하나씩 있다.
+    assert.deepEqual(attrs(text.slice(text.indexOf("<main"), text.indexOf("</main>")), "h2", "id"),
+      sourceTitles(page, config).map((_, at) => `s${at + 1}`));
+
+    // 본문 건너뛰기 링크가 맨 앞이고 그 대상이 있다. 이전·다음 쪽은 메뉴 순서를 따른다.
+    assert.match(text, /<body>\n<a class="skip" href="#main">본문으로 건너뛰기<\/a>/);
+    assert.equal(text.match(/<main id="main">/g).length, 1);
+    const at = PAGES.indexOf(page);
+    const pager = text.match(/<nav class="pager" aria-label="이전·다음 쪽">(.*?)<\/nav>/)[1];
+    assert.deepEqual(attrs(pager, "a", "href"), [PAGES[at - 1], PAGES[at + 1]].filter(Boolean).map((p) => p.file));
+  }
+});
+
+test("사이트 빌드: 줄마다 '이름표: 내용'인 목록만 두 칸(dl)으로 그리고 글자는 그대로 둔다", () => {
+  const { html } = build();
+  const useCases = html["use-cases.html"];
+  assert.equal(useCases.match(/<dl class="facts">/g).length, 8, "장면 여덟 개");
+  const labels = [...useCases.matchAll(/<dt>([^<]*)<\/dt>/g)].map((m) => m[1]);
+  assert.deepEqual(labels, Array.from({ length: 8 }, () => ["이런 때", "이렇게", "알아 둘 것", "더 읽기"]).flat());
+  assert.ok(useCases.includes("<dt>이런 때</dt><dd>AI와 한참 이야기하던 일이 커졌습니다."));
+  assert.doesNotMatch(useCases, /<dd>: |<li><strong>이런 때/, "이름표 뒤의 쌍점만 빠진다");
+  // 이름표로 시작하지 않는 줄이 섞인 목록(길잡이의 읽는 법)은 목록 그대로다.
+  assert.match(html["how-to.html"], /<ul><li>항목마다 같은 순서의 네 줄이다/);
+  // 원본의 글자가 빠지지 않았다: 장면마다 네 줄의 내용이 그대로 들어 있다.
+  for (const line of read("site/pages/use-cases.md").split("\n").filter((l) => l.startsWith("- **이런 때**: ")))
+    assert.ok(useCases.includes(`<dd>${line.slice("- **이런 때**: ".length).replaceAll('"', "&quot;")}</dd>`), line);
 });
 
 test("사이트 빌드: 통계 토큰이 비면 밖으로 부르는 것이 0개, 토큰을 주면 Cloudflare 스크립트 하나뿐", () => {
@@ -88,8 +165,13 @@ test("사이트 빌드: 설정의 숨김 목록에 제목을 넣으면 길잡이
   const titles = { howToExclude: [SPLIT], hiddenUseCases: [SPLIT] };
   for (const [file, key] of [["docs/how-to.md", "howToExclude"], ["site/pages/use-cases.md", "hiddenUseCases"]])
     assert.deepEqual(dropSections(read(file), titles[key]).dropped, titles[key], file);
+  // 숨기지 않으면 다른 쪽의 사이트 지도에도 그 항목이 있다(시작하기 쪽에서 유즈케이스·길잡이의 해당 구획으로 간다).
+  for (const target of ["use-cases.html#s6", "how-to.html#s11"])
+    assert.ok(shown.html["start.html"].includes(`<li><a href="${target}">${SPLIT}</a></li>`), target);
   const hidden = build(titles);
+  // 숨기면 본문뿐 아니라 모든 쪽의 사이트 지도·목차에서도 빠진다(전체 결과에 그 글자가 없다).
   assert.doesNotMatch(hidden.all, /감독을 나눈|conductor-works/);
+  assert.doesNotMatch(hidden.html["start.html"], /use-cases\.html#s8|how-to\.html#s11/, "지도의 항목 수도 함께 준다");
   assert.equal(hidden.html["how-to.html"].match(/<h2 id=/g).length, 10);
   assert.equal(hidden.html["use-cases.html"].match(/<h2 id=/g).length, 7);
   // 원본에 없는 제목은 아무것도 빼지 않고, 빠진 것이 없다고 알려 준다.
@@ -127,9 +209,10 @@ test("사이트 빌드: 글의 HTML은 글자로만 나오고 설정값도 태�
 
 test("사이트 빌드: 안쪽 링크는 모두 상대 경로이고 가리키는 쪽·그림·구획이 결과에 있다", () => {
   const { html, outDir } = build();
+  const idsOf = Object.fromEntries(PAGES.map((page) => [page.file, new Set(attrs(html[page.file], "\\w+", "id"))]));
+  let crossPage = 0;
   for (const page of PAGES) {
     const text = html[page.file];
-    const ids = new Set(attrs(text, "\\w+", "id"));
     const targets = [...attrs(text, "a", "href"), ...attrs(text, "link", "href"), ...attrs(text, "img", "src")];
     assert.ok(targets.length > 5, page.file);
     for (const target of targets) {
@@ -137,9 +220,12 @@ test("사이트 빌드: 안쪽 링크는 모두 상대 경로이고 가리키는
       assert.doesNotMatch(target, /^\//, `${page.file}: 루트 기준 경로는 하위 경로에서 깨진다 — ${target}`);
       const [file, anchor] = target.split("#");
       if (file) assert.ok(fs.existsSync(path.join(outDir, file)), `${page.file}: 없는 파일 ${target}`);
-      else assert.ok(ids.has(anchor), `${page.file}: 없는 구획 ${target}`);
+      // 구획 주소는 같은 쪽이든 다른 쪽이든(사이트 지도) 가리키는 쪽에 그 id가 있어야 한다.
+      if (anchor !== undefined) assert.ok(idsOf[file || page.file]?.has(anchor), `${page.file}: 없는 구획 ${target}`);
+      if (file && anchor !== undefined) crossPage++;
     }
   }
+  assert.ok(crossPage > 50, "사이트 지도가 다른 쪽의 구획으로 가는 링크를 낸다");
 });
 
 test("사이트 빌드: 문서 링크는 저장소 공개 주소로 열리고 가리키는 파일이 저장소에 있다", () => {

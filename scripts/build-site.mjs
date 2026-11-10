@@ -11,7 +11,7 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const ANALYTICS_SRC = "https://static.cloudflareinsights.com/beacon.min.js";
 const ASSETS = ["docs/architecture.svg", "docs/work-flow.svg"];
 
-// 위 메뉴 순서 그대로다. base는 그 글 안의 상대 링크가 기준으로 삼는 저장소 폴더다.
+// 홈의 위 메뉴와 글 쪽의 사이트 지도가 이 순서 그대로다. base는 그 글 안의 상대 링크가 기준으로 삼는 저장소 폴더다.
 export const PAGES = [
   { file: "index.html", nav: "홈", source: "site/pages/home.html" },
   { file: "start.html", nav: "시작하기", source: "site/pages/start.md", base: "" },
@@ -79,23 +79,28 @@ function siteLink(config, base) {
 // 본문 글자는 모두 이스케이프되어 있어 여기 걸리는 것은 렌더러가 만든 태그뿐이다.
 const liftHeadings = (html) => html.replace(/<(\/?)h([3-6])>/g, (_, slash, level) => `<${slash}h${level - 1}>`);
 
+// 줄마다 "**이름표**: 내용"으로 시작하는 목록은 이름표와 내용 두 칸(dl)으로 그린다. 글자는 그대로 두고 모양만 바꾼다.
+// 한 줄이라도 그 꼴이 아니면 목록 그대로 둔다. 대시보드는 렌더러를 바로 쓰므로 달라지지 않는다.
+const LABELED_ITEM = /<li><strong>([^<]+)<\/strong>: ((?:(?!<\/?li>)[\s\S])*)<\/li>/g;
+const LABELED_LIST = new RegExp(`<ul>((?:${LABELED_ITEM.source})+)</ul>`, "g");
+const labelLists = (html) => html.replace(LABELED_LIST, (_, items) =>
+  `<dl class="facts">${items.replace(LABELED_ITEM, "<dt>$1</dt><dd>$2</dd>")}</dl>`);
+
+// 글 쪽 하나를 그리고 구획 목록(sections)을 함께 돌려준다. 사이트 지도와 "이 쪽의 목차"가 이 목록에서 만들어진다.
+// 구획 이름은 렌더러가 이스케이프한 글자에서 태그만 걷어 낸 것이라 그대로 넣어도 된다.
 function renderMarkdownPage(page, config) {
   const { text } = dropSections(read(page.source), config[page.drop] ?? []);
   const head = text.match(/^﻿?#\s+(.+)\r?\n/);
   const title = head ? head[1].trim() : page.nav;
-  let count = 0;
-  const toc = [];
-  const body = liftHeadings(renderCardDocument(head ? text.slice(head[0].length) : text, { link: siteLink(config, page.base) }))
+  const sections = [];
+  const rendered = renderCardDocument(head ? text.slice(head[0].length) : text, { link: siteLink(config, page.base) });
+  const body = labelLists(liftHeadings(rendered))
     .replace(/<h2>(.*?)<\/h2>/g, (_, inner) => {
-      const id = `s${++count}`;
-      toc.push(`<li><a href="#${id}">${inner}</a></li>`);
+      const id = `s${sections.length + 1}`;
+      sections.push({ id, label: inner.replace(/<[^>]+>/g, "") });
       return `<h2 id="${id}">${inner}</h2>`;
     });
-  const nav = toc.length > 3 ? `<nav class="toc" aria-label="이 쪽의 목차"><ol>${toc.join("")}</ol></nav>` : "";
-  // 목차는 머리말 문단 다음, 첫 구획 앞에 둔다.
-  const at = body.indexOf("<h2 ");
-  const withNav = at < 0 ? body : body.slice(0, at) + nav + body.slice(at);
-  return { title, body: `<article class="prose"><h1>${escapeHtml(title)}</h1>${withNav}</article>` };
+  return { title, sections, body: `<article class="prose"><h1>${escapeHtml(title)}</h1>${body}</article>` };
 }
 
 // 홈의 미리 보기: 숨기지 않은 유즈케이스 앞의 세 개. 유즈케이스 쪽과 같은 원본·같은 숨김 목록을 쓴다.
@@ -124,9 +129,74 @@ function renderHome(config) {
   return { title: null, body };
 }
 
-function layout(page, { title, body }, config) {
+const BRAND = `<a class="brand" href="index.html">kadan <span>카단</span></a>`;
+const footer = (config) => `<footer class="bottom">
+<p>카단은 Apache-2.0 라이선스의 오픈소스입니다. <a href="${escapeHtml(config.repoUrl)}">GitHub 저장소</a></p>
+</footer>`;
+
+// 홈의 몸통: 위쪽 메뉴 + 한 단.
+function homeBody(page, { body }, config) {
   const nav = PAGES.map((item) =>
     `<a href="${item.file}"${item.file === page.file ? ' aria-current="page"' : ""}>${escapeHtml(item.nav)}</a>`).join("");
+  return `<header class="top">
+${BRAND}
+<nav aria-label="쪽 이동">${nav}</nav>
+</header>
+<main id="main" class="home">
+${body}
+</main>
+${footer(config)}`;
+}
+
+// 사이트 지도: 쪽이 묶음 제목이고 그 아래가 그 쪽의 구획이다. 손으로 적은 목록이 아니라 그려진 쪽들(contents)에서 만든다.
+// 같은 지도를 넓은 화면의 옆 칸과 좁은 화면의 접히는 메뉴 두 곳에 넣는다(화면 폭에 따라 한쪽만 보인다). 그래서 id를 달지 않는다.
+function siteMap(current, contents) {
+  const groups = PAGES.map((page) => {
+    const here = page.file === current.file;
+    const items = (contents.get(page.file).sections ?? [])
+      .map(({ id, label }) => `<li><a href="${here ? "" : page.file}#${id}">${label}</a></li>`).join("");
+    return `<li${here ? ' class="here"' : ""}><a href="${page.file}"${here ? ' aria-current="page"' : ""}>${escapeHtml(page.nav)}</a>`
+      + `${items ? `<ol>${items}</ol>` : ""}</li>`;
+  }).join("");
+  return `<nav class="map" aria-label="사이트 지도"><ol>${groups}</ol></nav>`;
+}
+
+// 글 쪽의 몸통: 왼쪽 사이트 지도 · 가운데 본문 · 오른쪽 "이 쪽의 목차". 좁은 화면에서는 지도가 접히는 메뉴(details)가 된다.
+function docsBody(page, { body, sections }, contents, config) {
+  const map = siteMap(page, contents);
+  const toc = sections.length > 1
+    ? `<nav class="toc" aria-label="이 쪽의 목차"><p>이 쪽의 목차</p><ol>${
+      sections.map(({ id, label }) => `<li><a href="#${id}">${label}</a></li>`).join("")}</ol></nav>`
+    : "";
+  const at = PAGES.indexOf(page);
+  const step = (item, rel, label) => item
+    ? `<a class="${rel}" rel="${rel}" href="${item.file}"><span>${label}</span><strong>${escapeHtml(item.nav)}</strong></a>`
+    : "";
+  return `<header class="bar">
+${BRAND}
+<details class="menu">
+<summary><span>메뉴</span></summary>
+${map}
+</details>
+</header>
+<div class="frame">
+<aside class="side">
+${BRAND}
+${map}
+<p class="side-foot"><a href="${escapeHtml(config.repoUrl)}">GitHub 저장소</a></p>
+</aside>
+<div class="col">
+<main id="main">
+${body}
+</main>
+<nav class="pager" aria-label="이전·다음 쪽">${step(PAGES[at - 1], "prev", "이전")}${step(PAGES[at + 1], "next", "다음")}</nav>
+${footer(config)}
+</div>
+${toc}
+</div>`;
+}
+
+function layout(page, title, inner, config) {
   // 통계 토큰이 비면 스크립트를 넣지 않는다. 사이트가 밖으로 부르는 것은 이 한 줄뿐이다.
   const analytics = config.analyticsToken
     ? `<script defer src="${ANALYTICS_SRC}" data-cf-beacon='${escapeHtml(JSON.stringify({ token: config.analyticsToken }))}'></script>\n`
@@ -143,16 +213,7 @@ function layout(page, { title, body }, config) {
 </head>
 <body>
 <a class="skip" href="#main">본문으로 건너뛰기</a>
-<header class="top">
-<a class="brand" href="index.html">kadan <span>카단</span></a>
-<nav aria-label="쪽 이동">${nav}</nav>
-</header>
-<main id="main"${page.file === "index.html" ? ' class="home"' : ""}>
-${body}
-</main>
-<footer class="bottom">
-<p>카단은 Apache-2.0 라이선스의 오픈소스입니다. <a href="${escapeHtml(config.repoUrl)}">GitHub 저장소</a></p>
-</footer>
+${inner}
 ${analytics}</body>
 </html>
 `;
@@ -161,9 +222,13 @@ ${analytics}</body>
 export function buildSite({ outDir = path.join(ROOT, "site-dist"), config: overrides = {} } = {}) {
   const config = loadConfig(overrides);
   fs.mkdirSync(path.join(outDir, "assets"), { recursive: true });
+  // 쪽마다 한 번씩만 그린다. 사이트 지도는 이렇게 그려 둔 결과에서 만들어서 원본을 다시 읽지 않는다.
+  const contents = new Map(PAGES.map((page) =>
+    [page.file, page.source.endsWith(".md") ? renderMarkdownPage(page, config) : renderHome(config)]));
   for (const page of PAGES) {
-    const content = page.source.endsWith(".md") ? renderMarkdownPage(page, config) : renderHome(config);
-    fs.writeFileSync(path.join(outDir, page.file), layout(page, content, config));
+    const content = contents.get(page.file);
+    const inner = content.sections ? docsBody(page, content, contents, config) : homeBody(page, content, config);
+    fs.writeFileSync(path.join(outDir, page.file), layout(page, content.title, inner, config));
   }
   fs.copyFileSync(path.join(ROOT, "site/style.css"), path.join(outDir, "style.css"));
   for (const asset of ASSETS) fs.copyFileSync(path.join(ROOT, asset), path.join(outDir, "assets", path.basename(asset)));
