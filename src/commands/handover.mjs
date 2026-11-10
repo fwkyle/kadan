@@ -10,6 +10,9 @@ import { sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { closeStartedWindow } from "../cli-start-support.mjs";
 import { windowSettingBlock } from "../window-setting.mjs";
+import { readSettings } from "../runner-settings.mjs";
+import { stopConversationFields, lookupDeps } from "../role-conversation.mjs";
+import { paneInfo } from "./restart.mjs";
 
 export function createHandoverRunner() {
   const operation = new Handover({ home: ledgerHome(), floor, readEntries: readLedger,
@@ -30,6 +33,9 @@ export function createHandoverRunner() {
     send: (role,message,expectedPid) => guardedSend({floor,session:sessionName(role),role,message,env:operation.env,
       recordedPid:expectedPid ?? recordedPid(lastStartFor(sessionName(role)))}),
     closeWindow: lastStart => closeStartedWindow(lastStart,{print:console.error}),
+    // 선임을 끄기 직전: kadan stop과 같은 방법으로 대화 번호를 찾아 stop 사건에 남긴다(role-conversation.mjs).
+    stopFields: role => stopConversationFields({session:sessionName(role), entries:readLedger(), floorName:floor.name,
+      readSettings:() => readSettings(ledgerHome()), deps:lookupDeps({paneInfo})}),
   });
   return new HandoverRunner(operation, {notify:(target,message) => {
     if (target.transport === "mailbox") return new SecretaryMailbox(ledgerHome()).send({

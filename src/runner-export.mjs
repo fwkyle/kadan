@@ -5,7 +5,7 @@ import path from 'node:path';
 import {NAME_PATTERN} from './runner-table.mjs';
 import {assertComparePresetMutable} from './compare-policy.mjs';
 import {
-  EXPLAIN_MAX_ATTEMPTS, SETTINGS_ROLES, assertSeniorShape, change, checkChoice, checkNewPresetName,
+  EXPLAIN_MAX_ATTEMPTS, SETTINGS_ROLES, assertNoHardFallback, assertSeniorShape, change, checkChoice, checkNewPresetName,
   findBlocked, readSettings, runnerChoices, seniorList,
 } from './runner-settings.mjs';
 
@@ -157,6 +157,7 @@ function readExport(data) {
     // 알려진 역할 이름(형식이 정한 고정 이름)만 그대로 쓰고, 모르는 키는 위치 번호로만 알린다.
     if (!SETTINGS_ROLES.includes(role)) throw new Error(`파일 형식 오류: 모르는 역할 fallback[${i}]`);
     if (role === 'senior') throw new Error('파일 형식 오류: 대체 후보를 둘 수 없는 역할 fallback.senior');
+    try { assertNoHardFallback(role); } catch (error) { throw new Error(`파일 형식 오류: ${error.message}`); }
     if (!Array.isArray(list)) throw new Error(`파일 형식 오류: fallback.${role}은 목록이어야 한다`);
     if (role === 'explain' && list.length + 1 > EXPLAIN_MAX_ATTEMPTS) throw new Error(`파일 형식 오류: 설명 AI 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지다`);
     if (list.length) {

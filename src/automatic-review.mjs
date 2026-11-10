@@ -132,7 +132,9 @@ export class AutomaticReview {
    '이어 자기 화면 마지막 줄에 완료 마커를 출력한다. 형식: KADAN:DONE <카드id> <ok 또는 failed>. 새 실행ID는 이 중앙 카드의 ID다.'].filter(Boolean).join('\n\n');
   const next=this.works.change(s.key,'execute',{title:`자동 ${s.phase} ${s.round}라운드`,body,phase:s.phase,round:s.round},{revision:w.revision,by:this.by,note:'명시 설정한 구현·검수 자동 전달'});
   const link=next.executions.at(-1),created=this.cards.get(link.key);
-  const card=this.cards.update(link.key,{status:'assigned',scope:w.scope,board:w.board,role,rallyId:w.id,rallyTitle:w.title.slice(0,160),rallyRound:String(s.round),rallyStep:s.phase},{revision:created.revision,by:this.by,note:'기존 원본 기준과 자동 전달 설정으로 배정'});
+  // 구현·수정 실행은 자동 설정이 가리키는 원본 작업 카드의 '지금' 난이도를 이어받는다(감독이 블록 사이에 올릴 수 있다). 검수 실행에는 적지 않는다.
+  const level=s.phase==='review'?null:this.cards.get(s.references.implementation.key,{body:false}).difficulty;
+  const card=this.cards.update(link.key,{status:'assigned',scope:w.scope,board:w.board,role,rallyId:w.id,rallyTitle:w.title.slice(0,160),rallyRound:String(s.round),rallyStep:s.phase,...(level==='hard'?{difficulty:'hard'}:{})},{revision:created.revision,by:this.by,note:'기존 원본 기준과 자동 전달 설정으로 배정'});
   appendLedger({kind:'plan',board:w.board,...taskIdentity(this.cards.list()).write(card.key),by:this.by},this.home);
   return this.save(s,{status:'ready',links:next.executions,report:null,current:{key:card.key,role,stamp:cardStamp(card),path:card.path},claim:null});
  }

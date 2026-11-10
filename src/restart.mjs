@@ -8,11 +8,11 @@
 // 순서가 안전의 전부다: 거절할 수 있는 모든 확인(대화 ID·저장 여부·명령 재조립·실행 중 보호)을 기존 세션을 끄기 *전에* 끝낸다.
 import fs from 'node:fs';
 import {startDigest, withRecoveryLock, checkpointSecretary, resumeSecretary} from './secretary-resume.mjs';
-import {launchIdentityOf, matchesAiProcess} from './ai-identity.mjs';
-import {executorChain} from './process-tree.mjs';
+import {launchIdentityOf} from './ai-identity.mjs';
 import {conversationOf} from './conversation-ref.mjs';
-import {runnerTemplate, rebuildResumeCommand, findConversation, checkConversationSpec, swapModelSlots} from './runner-table.mjs';
-import {launchFor} from './runner-settings.mjs';
+import {runnerTemplate, rebuildResumeCommand, checkConversationSpec, swapModelSlots} from './runner-table.mjs';
+import {launchFor, launchForHard} from './runner-settings.mjs';
+import {confirmPaneConversation} from './role-conversation.mjs';
 import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirInsideHomeMessage} from './cli-start-support.mjs';
@@ -69,7 +69,7 @@ function restartGeneration(entries, role) {
 // 순서: 원장 다시 읽기 → 세대·PID·소유 검사 → 안전 지점 확인(confirm) → floor.stop.
 // 원장 읽기는 원장 크기에 비례해 오래 걸릴 수 있어 확인 **앞**에 둔다(PR #360 검수 F1: 확인 뒤에 읽으면 그 사이 응답을 시작한 역할을 껐다).
 // 확인과 floor.stop 사이에는 아무 단계도 두지 않는다. 남는 틈은 확인이 끝나고 floor.stop이 실제로 세션을 죽이기까지뿐이며 없앨 수 없다.
-function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh, confirm = null}) {
+function stopForRestart({role, session, floor, entries, deps, generation, forced, pending = [], reason, refresh, confirm = null, conversation = {}}) {
   const latest = deps.read();
   const current = restartGeneration(latest, role);
   if (!generation || !current || current.count !== generation.count
@@ -80,7 +80,7 @@ function stopForRestart({role, session, floor, entries, deps, generation, forced
   if (confirm) confirm();
   floor.stop(session);
   const windowFields = deps.closeWindow(entries, session) ?? {};
-  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
+  deps.record({...buildStopLedgerEntry({role, session}), restart: true, ...conversation, ...(reason ? {reason} : {}), ...(forced ? {forced: true, forcedTasks: forced} : {}),
     ...(!refresh && pending.length ? {pendingTasks: pending} : {}),
     ...(refresh ? {accountRefresh: true, pendingTasks: refresh.pending, ...(refresh.reasonNote ? {reasonNote: refresh.reasonNote} : {}), ...(refresh.accountSlot != null ? {accountSlot: refresh.accountSlot} : {})} : {}), ...windowFields});
   return windowFields;
@@ -141,16 +141,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const launch = flags[MODEL_FROM_SETTINGS] === true ? settingsLaunch({start, settings, harness}) : null;
 
   // 1) 지금 이 pane이 실제로 연 대화를 표의 방식으로 확정한다. 확정 못 하면 끄지 않고 거절한다.
-  const pane = deps.paneInfo(session);
-  if (String(pane.panePid) !== String(start.panePid)) fail('tmux pane PID가 시작 기록과 다르다');
-  // 실행기 본체 사슬(뿌리 1개 + 그 아래로 하나씩 이어지는 맞는 프로세스)이 연 파일만 후보다. 자식 도구나 같은 실행기의
-  // 하위 에이전트가 연 대화를 집지 않는다. 뿌리가 둘이거나 사슬이 갈리거나 못 찾으면 거절한다.
-  const chain = executorChain(deps.processTree(start.panePid), args => matchesAiProcess(args, harness, model));
-  if (!chain) fail(`${harness} 실행기 본체 프로세스를 하나의 사슬로 정할 수 없다(없거나 여러 개·갈림) — 대화 파일의 주인을 확인할 수 없어 거절한다`);
-  // pid-json은 뿌리 본체의 PID 파일만, open-file은 사슬 전체가 연 파일을 본다.
-  const conversation = findConversation(spec, {pids: [chain.root], openFiles: () => deps.openFiles(chain.pids),
-    readJson: deps.readJson, processStartedAt: deps.processStartedAt,
-    tmuxLocation: pane.location, homeDir: deps.homeDir, exists: deps.exists});
+  // kadan stop도 같은 함수로 찾는다(role-conversation.mjs — 본체 사슬이 연 파일만 후보다).
+  const conversation = confirmPaneConversation({session, start, harness, model, spec, deps});
   // 2) 마지막 시작 명령에서 대화 인자만 바꾼다. 실행기·모델이 그대로이고 같은 대화(resume)로 읽혀야 한다.
   // --model-from-settings면 그 명령에서 모델·강도 자리의 값만 설정값으로 바꾼다(다른 옵션·순서·실행 파일은 옛 그대로).
   // 위 프로세스·대화 찾기는 옛 모델 기준(프로세스 인자는 옛 명령 그대로), 아래 다시 만든 명령의 확인은 새 모델 기준이다.
@@ -171,7 +163,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   const slot = Number.isInteger(flags.accountSlot) ? flags.accountSlot : null;
   const refresh = accountRefresh ? {pending, reasonNote, accountSlot: slot} : null;
   stopForRestart({role, session, floor, entries, deps, generation,
-    forced: force ? pending : null, pending, reason, refresh, confirm});
+    forced: force ? pending : null, pending, reason, refresh, confirm,
+    conversation: {conversation, conversationStart: startDigest(start)}});
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
@@ -184,6 +177,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       cmd: command, cwd: start.cwd}),
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
+    ...(start.difficulty ? {difficulty: start.difficulty} : {}),
     // 설정에서 값을 가져온 재시작: 설정 칸은 kadan start --profile과 같은 이름으로 남긴다. launchSource는 적지 않는다 —
     // 명령이 설정 틀 그대로가 아니라 옛 명령에서 모델·강도 값만 바꾼 것이기 때문이다.
     ...(swap ? {
@@ -211,7 +205,8 @@ function settingsLaunch({start, settings, harness}) {
   if (start.compareMode) fail(`비교 모드로 띄운 역할은 ${option}로 모델을 바꾸지 않는다 — 비교 보고서의 귀속(프리셋·예약)이 중간에 바뀐다`);
   if (!profile)
     fail(`이 역할은 시작 기록에 프로필이 없어 설정에서 모델을 정할 수 없다 — ${option} 없이 다시 띄우거나 kadan start --profile로 새로 띄운다`);
-  const launch = launchFor(settings, profile);
+  // 어려운 일 작업자(시작 기록 difficulty: hard)는 어려운 일 자리 값을 쓴다. 자리가 비면 작업자 값이다.
+  const launch = (start.difficulty === 'hard' && profile === 'worker' ? launchForHard(settings) : null) ?? launchFor(settings, profile);
   if (!launch) fail(`실행 모델 설정(활성 프리셋 ${settings.activePreset})에 ${profile} 역할 값이 없다 — 설정에서 모델을 정할 수 없다`);
   const want = launchIdentityOf(launch.cmd);
   if (!want.ok) fail(`설정 명령에서 등록 실행기·모델을 읽지 못했다(${want.reason})`);
@@ -244,7 +239,7 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     // 비서도 같은 안전 지점 확인을 같은 자리(stopForRestart 안, floor.stop 바로 앞)에서 한다 — confirmIdleBeforeStop은
     // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
     stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
-      confirm: force ? null : () => confirmBeforeStop(session, deps, false)});
+      confirm: force ? null : () => confirmBeforeStop(session, deps, false), conversation: {conversationSkipped: 'infrastructure'}});
     return {pending: open, previous: startDigest(start)};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
