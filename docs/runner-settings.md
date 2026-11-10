@@ -292,6 +292,7 @@ kadan start <역할> --profile worker --difficulty hard                 # 자리
 - 어려운 일 작업자(시작 기록 `difficulty: "hard"`)는 restart가 `difficulty`를 새 시작 기록에 이어 적고(안 그러면 다음 발령에서 거절된다), `--model-from-settings`는 활성 프리셋의 `worker-hard` 값(비어 있으면 작업자 값)을 쓴다.
 - 실행 중인 세션 안에서 `/model`로 바꾼 값은 시작 기록에 없다. 그 역할을 옵션 없이 restart하면 원래 모델로 돌아간다.
 - 이 옵션으로 다시 띄운 작업자·검수자는 새 시작 기록의 모델이 설정값이라 아래 발령 경계에서 옛 세션으로 거절되지 않는다. resume 꼬리 때문에 명령 글자가 기본값과 달라 `effort-or-args` 경고 한 줄은 붙는다(평소 restart와 같다).
+- 여러 역할을 한꺼번에 바꾸는 순서(설정 → 재시작 → 확인 → 되돌리기)와 `/model`로 바꿨을 때 카단 기록에 남지 않는 것은 [모델을 한꺼번에 바꾸기](../skills/kadan-super/references/model-switch.md)에 모았다.
 
 ## 작업자에 맞춰 검수자 시작하기
 
