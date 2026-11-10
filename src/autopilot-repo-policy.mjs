@@ -1,5 +1,5 @@
-// 저장소별 나이트런 중 자동 머지 정책(PR C1). 자동 단계에서 관문을 통과한 PR을 저장소마다 머지할지 보류할지 정한다.
-// 원본은 카단 자체 설정(KADAN_HOME/night-repo-policy.json)이다: 저장소(GitHub `소유자/이름`, 소문자·끝 `.git`·`/` 제거)마다
+// 저장소별 Autopilot 중 자동 머지 정책(PR C1). Autopilot 단계에서 관문을 통과한 PR을 저장소마다 머지할지 보류할지 정한다.
+// 원본은 카단 자체 설정(KADAN_HOME/autopilot-repo-policy.json)이다: 저장소(GitHub `소유자/이름`, 소문자·끝 `.git`·`/` 제거)마다
 // `deployBranch`(브랜치 이름 또는 `없음`)와 `nightMerge`(`허용`|`금지`)를 따로 둘 수 있다. 허용 저장소 목록은 두지 않는다(2026-11-02 kyle).
 // 문서 원본은 카단 안의 고정 폴더 `$KADAN_HOME/ontology/`다(2026-11-03 kyle): 하위 폴더와 링크를 따라가며 `.md`를 모으고,
 // 앞머리 `type: project`인 문서만 판정에 쓴다. 칸마다 카단 설정 값이 있으면 그것이 이기고, 없으면 온톨로지 문서의 값을 쓴다.
@@ -13,7 +13,7 @@ import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {acquireDirLock} from './dir-lock.mjs';
 
-export const POLICY_FILE = 'night-repo-policy.json';
+export const POLICY_FILE = 'autopilot-repo-policy.json';
 export const NIGHT_MERGE_VALUES = ['허용', '금지'];
 export const NO_BRANCH = '없음';
 export const CLEAR_FIELDS = ['deployBranch', 'nightMerge'];
@@ -35,13 +35,13 @@ export function normalizeGithub(raw) {
 export const policyPath = home => path.join(home, POLICY_FILE);
 
 // 사람용 문구(message, CLI에서는 경로 포함)와 HTTP용 문구(httpMessage, 파일 이름과 오류 종류만)를 한 곳에서 나눈다.
-export class NightRepoPolicyError extends Error {
+export class AutopilotRepoPolicyError extends Error {
   constructor(message, httpMessage = message) { super(message); this.httpMessage = httpMessage; }
 }
 
-// night repo HTTP 경로에서 나가는 오류 문구는 여기서 한 곳으로 정한다: httpMessage가 있으면 그것, 없으면 error.message 없이 고정 문구.
-export const nightRepoHttpMessage = error =>
-  error?.httpMessage ?? `나이트런 저장소 정책 처리 실패(${error?.code ?? '알 수 없음'})`;
+// autopilot repo HTTP 경로에서 나가는 오류 문구는 여기서 한 곳으로 정한다: httpMessage가 있으면 그것, 없으면 error.message 없이 고정 문구.
+export const autopilotRepoHttpMessage = error =>
+  error?.httpMessage ?? `Autopilot 저장소 정책 처리 실패(${error?.code ?? '알 수 없음'})`;
 
 const validDeployBranch = v => typeof v === 'string' && BRANCH_WORD.test(v);
 const validNightMerge = v => NIGHT_MERGE_VALUES.includes(v);
@@ -78,25 +78,25 @@ export function readPolicy(home) {
       if (!isObj(value.legacy)) throw new Error('모양이 다름');
       for (const [key, e] of Object.entries(value.legacy)) { if (!LEGACY_VALUES.includes(e?.value)) throw new Error('모양이 다름'); addLegacy(key, e); }
     }
-    // 예전 `cards` 칸(night source)은 판정에 쓰지 않는다. 지우지도 않고 그대로 보존해 다시 쓴다.
+    // 예전 `cards` 칸(autopilot source)은 판정에 쓰지 않는다. 지우지도 않고 그대로 보존해 다시 쓴다.
     return {repos, legacy, rawCards: value.cards, corrupt: null};
   } catch (error) {
     // 원격 GET에도 나가는 문구라 OS 오류 문장(절대 경로 포함)을 쓰지 않는다: 파일 이름과 오류 코드만.
     const detail = error.code ?? (error instanceof SyntaxError ? 'JSON 구문 오류' : error.message);
-    return {...empty(), corrupt: `나이트런 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
+    return {...empty(), corrupt: `Autopilot 저장소 정책 파일 손상: ${POLICY_FILE} (${detail})`};
   }
 }
 
 // 쓰기는 한 곳이다: 잠금 → 읽기 → mutate(current) → 임시 파일 + rename. mutate가 {repos, event, result}를 돌려준다.
 function updatePolicy(home, mutate, {record}) {
   fs.mkdirSync(home, {recursive: true, mode: 0o700});
-  const lock = path.join(home, '.night-repo-policy-lock');
-  if (!acquireDirLock(lock)) throw new NightRepoPolicyError('나이트런 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
+  const lock = path.join(home, '.autopilot-repo-policy-lock');
+  if (!acquireDirLock(lock)) throw new AutopilotRepoPolicyError('Autopilot 저장소 정책 저장 중: 잠시 뒤 다시 확인하세요');
   try {
     const current = readPolicy(home);
     if (current.corrupt) {
       const advice = '파일을 확인한 뒤 고치거나 .trash/로 옮기세요. 읽기는 hold로 봅니다';
-      throw new NightRepoPolicyError(`${current.corrupt} (${policyPath(home)}) — ${advice}`, `${current.corrupt} — ${advice}`);
+      throw new AutopilotRepoPolicyError(`${current.corrupt} (${policyPath(home)}) — ${advice}`, `${current.corrupt} — ${advice}`);
     }
     const next = mutate(current);
     const file = policyPath(home), tmp = `${file}.${process.pid}.tmp`;
@@ -112,13 +112,13 @@ const pick = e => ({deployBranch: e?.deployBranch ?? null, nightMerge: e?.nightM
 // 저장소 하나의 칸을 바꾼다. deployBranch·nightMerge는 비어 있으면(undefined·'') 그대로 두고, clear로 칸을 지운다(한 번에 하나).
 export function setRepoPolicy(home, {repo, deployBranch, nightMerge, clear, by, now = () => new Date().toISOString(), record}) {
   const key = normalizeGithub(repo);
-  if (!key) throw new NightRepoPolicyError(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${repo ?? '(없음)'}`);
+  if (!key) throw new AutopilotRepoPolicyError(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${repo ?? '(없음)'}`);
   const set = v => v !== undefined && v !== null && v !== '';
-  if (set(deployBranch) && !validDeployBranch(deployBranch)) throw new NightRepoPolicyError(`deployBranch는 브랜치 이름 또는 ${NO_BRANCH}이어야 합니다: ${deployBranch}`);
-  if (set(nightMerge) && !validNightMerge(nightMerge)) throw new NightRepoPolicyError(`nightMerge는 ${NIGHT_MERGE_VALUES.join('|')} 중 하나여야 합니다: ${nightMerge}`);
-  if (set(clear) && !CLEAR_FIELDS.includes(clear)) throw new NightRepoPolicyError(`지울 칸은 ${CLEAR_FIELDS.join('|')} 중 하나여야 합니다: ${clear}`);
-  if (!set(deployBranch) && !set(nightMerge) && !set(clear)) throw new NightRepoPolicyError('바꿀 칸이 없습니다: --deploy-branch, --night-merge, --clear 중 하나가 필요합니다');
-  if (set(clear) && ((clear === 'deployBranch' && set(deployBranch)) || (clear === 'nightMerge' && set(nightMerge)))) throw new NightRepoPolicyError(`같은 칸을 바꾸면서 지울 수 없습니다: ${clear}`);
+  if (set(deployBranch) && !validDeployBranch(deployBranch)) throw new AutopilotRepoPolicyError(`deployBranch는 브랜치 이름 또는 ${NO_BRANCH}이어야 합니다: ${deployBranch}`);
+  if (set(nightMerge) && !validNightMerge(nightMerge)) throw new AutopilotRepoPolicyError(`nightMerge는 ${NIGHT_MERGE_VALUES.join('|')} 중 하나여야 합니다: ${nightMerge}`);
+  if (set(clear) && !CLEAR_FIELDS.includes(clear)) throw new AutopilotRepoPolicyError(`지울 칸은 ${CLEAR_FIELDS.join('|')} 중 하나여야 합니다: ${clear}`);
+  if (!set(deployBranch) && !set(nightMerge) && !set(clear)) throw new AutopilotRepoPolicyError('바꿀 칸이 없습니다: --deploy-branch, --night-merge, --clear 중 하나가 필요합니다');
+  if (set(clear) && ((clear === 'deployBranch' && set(deployBranch)) || (clear === 'nightMerge' && set(nightMerge)))) throw new AutopilotRepoPolicyError(`같은 칸을 바꾸면서 지울 수 없습니다: ${clear}`);
   return updatePolicy(home, current => {
     const before = pick(current.repos[key]), after = {...before};
     if (set(deployBranch)) after.deployBranch = deployBranch;
@@ -128,7 +128,7 @@ export function setRepoPolicy(home, {repo, deployBranch, nightMerge, clear, by, 
     if (after.deployBranch === null && after.nightMerge === null) delete repos[key];
     else repos[key] = {...(after.deployBranch !== null ? {deployBranch: after.deployBranch} : {}), ...(after.nightMerge !== null ? {nightMerge: after.nightMerge} : {}), at, by};
     return {repos, result: {repo: key, ...after, at, by, before},
-      event: {kind: 'night-repo-policy', repo: key, before, after, by, t: at}};
+      event: {kind: 'autopilot-repo-policy', repo: key, before, after, by, t: at}};
   }, {record});
 }
 
@@ -414,4 +414,4 @@ export function listRepos(home, works = [], {origin = gitOriginGithub, limits} =
 
 // 아침 요약용(C2 관문이 그 밤에 본 저장소 줄을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
 export const setupNeededLines = infos => infos.filter(i => i.verdict.reason === 'setup-needed' && i.github)
-  .map(i => `설정 필요: ${i.github} — 나이트런 중 자동 머지 안 함(kadan night repo ${i.github} --deploy-branch <브랜치|없음>)`);
+  .map(i => `설정 필요: ${i.github} — Autopilot 중 자동 머지 안 함(kadan autopilot repo ${i.github} --deploy-branch <브랜치|없음>)`);

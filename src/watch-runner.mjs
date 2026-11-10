@@ -30,7 +30,7 @@ import {
   accumulateTiming,
 } from "./watch-cycle.mjs";
 import { USER_RECIPIENT } from "./hierarchy.mjs";
-import { applyDutyRoute } from "./night-duty.mjs";
+import { applyWingmanRoute, WINGMAN_BASIS } from "./autopilot-wingman.mjs";
 import { runDailyHierarchyPrune } from "./watch-prune.mjs";
 import { createOcxRefresher, codexBasis, ocxAlertLine } from "./ocx-refresh.mjs";
 import { spawnSync } from "node:child_process";
@@ -139,9 +139,9 @@ export async function runWatch({
   loadHierarchy = null,
   // 하루 한 번 관계표 정리. ({file, now}) => 정리 결과. 없으면(--hierarchy 없음·끔) 정리도 기록도 하지 않는다.
   pruneHierarchy = null,
-  // 나이트 모드 끝 시각 확인. ({entries, now}) => 끝 사건 또는 null. 켠 적이 없으면 아무것도 읽지 않는다. 없으면 하지 않는다.
-  checkNightExpiry = null,
-  readNightDuty = null,
+  // Autopilot 끝 시각 확인. ({entries, now}) => 끝 사건 또는 null. 켠 적이 없으면 아무것도 읽지 않는다. 없으면 하지 않는다.
+  checkAutopilotExpiry = null,
+  readAutopilotWingman = null,
   idleMs = 15 * 60 * 1_000,
   userNotify = false,
   // 카단 tmux 서버 아래 프로세스·메모리 경보(process-watch.mjs). 이 간격보다 자주 ps를 부르지 않는다. 0이면 매 주기.
@@ -280,8 +280,8 @@ export async function runWatch({
     if (pruneHierarchy && hierarchyPath && !ledgerError) {
       runDailyHierarchyPrune({entries, now:cycleAt, file:hierarchyPath, prune:pruneHierarchy, record});
     }
-    if (checkNightExpiry && !ledgerError) {
-      try { checkNightExpiry({entries, now:cycleAt}); } catch (error) { console.error(`나이트 모드 끝 시각 확인 실패(다음 주기에 다시 본다): ${error.message}`); }
+    if (checkAutopilotExpiry && !ledgerError) {
+      try { checkAutopilotExpiry({entries, now:cycleAt}); } catch (error) { console.error(`Autopilot 끝 시각 확인 실패(다음 주기에 다시 본다): ${error.message}`); }
     }
     if (loadHierarchy) {
       try {
@@ -795,11 +795,11 @@ export async function runWatch({
     const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)
       && !changes.notify.some(n => n.id === a.id)).map(a => nextAlerts.find(n => n.id === a.id));
     let alertIdentity = null;
-    let nightDuty, nightDutyRead = false;
+    let autopilotWingman, autopilotWingmanRead = false;
     // 실패(null)도 이 주기 동안 캐시한다: 읽기가 던져도 주기당 한 번만 부른다.
-    const nightDutyOnce = () => {
-      if (!nightDutyRead) { nightDutyRead = true; try { nightDuty = readNightDuty({entries, now:cycleAt}); } catch { nightDuty = null; } }
-      return nightDuty;
+    const autopilotWingmanOnce = () => {
+      if (!autopilotWingmanRead) { autopilotWingmanRead = true; try { autopilotWingman = readAutopilotWingman({entries, now:cycleAt}); } catch { autopilotWingman = null; } }
+      return autopilotWingman;
     };
     const workOfAlert = alert => workKeyOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []), works);
     const repoOf = alert => repoOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []));
@@ -821,14 +821,14 @@ export async function runWatch({
         superRole,
         parents
       );
-      // 나이트런 당번 경로(PR F): 사용자로 갈 놀고 있음 2단·정체만 당번으로 돌린다. 스냅샷은 필요한 첫 경보에서 주기당 한 번만 만든다.
-      const route = baseRoute.recipient === USER_RECIPIENT && readNightDuty && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
-        ? applyDutyRoute({route: baseRoute, alert, night: nightDutyOnce(), liveSessions: observationError ? null : roles.liveSessions})
+      // Autopilot Wingman 경로(PR F): 사용자로 갈 놀고 있음 2단·정체만 Wingman으로 돌린다. 스냅샷은 필요한 첫 경보에서 주기당 한 번만 만든다.
+      const route = baseRoute.recipient === USER_RECIPIENT && readAutopilotWingman && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
+        ? applyWingmanRoute({route: baseRoute, alert, autopilot: autopilotWingmanOnce(), liveSessions: observationError ? null : roles.liveSessions})
         : baseRoute;
       const recipient=route.recipient;
       let target = "stdout";
-      // 당번은 사용자 대신 받는 자리다: 당번 전달이 확실히 실패하면 상신 대상은 원래 수신자(사용자)다. 관계표에 당번이 없어도 같다.
-      const failureRecipient = route.basis === '당번' ? USER_RECIPIENT : failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
+      // Wingman은 사용자 대신 받는 자리다: Wingman 전달이 확실히 실패하면 상신 대상은 원래 수신자(사용자)다. 관계표에 Wingman이 없어도 같다.
+      const failureRecipient = route.basis === WINGMAN_BASIS ? USER_RECIPIENT : failureEscalation(recipient, routes, observationError ? null : roles.liveSessions, superRole, parents);
       let delivered = false, held = false;
       if (recipient) {
         if (retry && !recordAlert(record, {...alert,route,held:false}, recipient, false)) {

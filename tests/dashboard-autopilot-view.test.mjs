@@ -12,25 +12,25 @@ import { cardCommand } from "../src/card-command.mjs";
 import { readLedger } from "../src/ledger.mjs";
 import { buildCardCenter } from "../src/card-center.mjs";
 import { mergeCheck } from "../src/merge-check.mjs";
-import { nightState } from "../src/night.mjs";
-import { nightStrip, prHeadOf, ciLineOf, reviewsOfWork, judgeHead, mergeLineInfo } from "../src/dashboard/night-view.mjs";
+import { autopilotState } from "../src/autopilot.mjs";
+import { autopilotStrip, prHeadOf, ciLineOf, reviewsOfWork, judgeHead, mergeLineInfo } from "../src/dashboard/autopilot-view.mjs";
 import { frontStrip } from "../src/dashboard/front.mjs";
 
-// Why: PR3 나이트런 띠가 스냅샷(최신 상태 결정)으로도 night status와 같은 켜짐/꺼짐을 내는지,
+// Why: PR3 Autopilot 띠가 스냅샷(최신 상태 결정)으로도 autopilot status와 같은 켜짐/꺼짐을 내는지,
 // 머지 줄의 검수 SHA·커밋 같음 판정이 merge-check와 같은 결과인지 확인한다.
 const NOW = Date.parse("2026-11-03T12:00:00.000Z");
 const iso = (ms) => new Date(ms).toISOString();
-const on = { kind: "night", phase: "on", by: "사람", text: "자라", t: iso(NOW - 3600_000), until: iso(NOW + 3600_000), level: "자동", onlyRunning: false };
+const on = { kind: "autopilot", phase: "on", by: "사람", text: "자라", t: iso(NOW - 3600_000), until: iso(NOW + 3600_000), level: "autopilot" };
 const answer = (at, by = "사람") => ({ id: "d1", status: "answered", to: "@user", answer: { by, at: iso(at), text: "응" } });
 const snap = (entries, decisions = [], over = {}) => ({ entries, ledgerLines: entries.length, decisions, decisionError: null, ...over });
 
-test("nightStrip: 켜짐 — nightState(이벤트)와 같은 결과, 단계·끝 시각을 싣는다", () => {
-  const strip = nightStrip(snap([{ kind: "x" }, on, { kind: "y" }]), NOW);
-  assert.deepEqual(strip, { on: true, since: on.t, until: on.until, level: "자동", onlyRunning: false });
-  assert.equal(nightState([on], [], NOW).on, true);
+test("autopilotStrip: 켜짐 — autopilotState(이벤트)와 같은 결과, 단계·끝 시각을 싣는다", () => {
+  const strip = autopilotStrip(snap([{ kind: "x" }, on, { kind: "y" }]), NOW);
+  assert.deepEqual(strip, { on: true, since: on.t, until: on.until, level: "autopilot" });
+  assert.equal(autopilotState([on], [], NOW).on, true);
 });
 
-test("nightStrip: 스냅샷 결정(최신 상태)과 이벤트 줄이 같은 판정 — 켜진 뒤 사람 답, 켜지기 전 답, 기계 답, 끝 시각 지남", () => {
+test("autopilotStrip: 스냅샷 결정(최신 상태)과 이벤트 줄이 같은 판정 — 켜진 뒤 사람 답, 켜지기 전 답, 기계 답, 끝 시각 지남", () => {
   const events = (list) => list.map((d) => ({ status: d.status, answer: d.answer }));
   const cases = [
     [[answer(NOW - 1800_000)], false],          // 켜진 뒤 사람이 답함 → 꺼짐
@@ -39,20 +39,20 @@ test("nightStrip: 스냅샷 결정(최신 상태)과 이벤트 줄이 같은 판
     [[{ id: "d2", status: "open", to: "@user" }], true],
   ];
   for (const [decisions, wantOn] of cases) {
-    assert.equal(nightState([on], events(decisions), NOW).on, wantOn);
-    assert.equal(nightStrip(snap([on], decisions), NOW).on, wantOn);
+    assert.equal(autopilotState([on], events(decisions), NOW).on, wantOn);
+    assert.equal(autopilotStrip(snap([on], decisions), NOW).on, wantOn);
   }
-  const expired = nightStrip(snap([{ ...on, until: iso(NOW - 60_000) }]), NOW);
+  const expired = autopilotStrip(snap([{ ...on, until: iso(NOW - 60_000) }]), NOW);
   assert.equal(expired.on, false);
   assert.equal(expired.last.phase, "expired");
 });
 
-test("nightStrip: 켠 적 없음·끝 사건 있음·읽기 실패(모름)", () => {
-  assert.deepEqual(nightStrip(snap([{ kind: "x" }]), NOW), { on: false, last: null });
-  const off = { kind: "night", phase: "off", startedAt: on.t, endedAt: iso(NOW - 600_000), t: iso(NOW - 600_000) };
-  assert.deepEqual(nightStrip(snap([on, off]), NOW), { on: false, last: { since: on.t, endedAt: off.endedAt, phase: "off" } });
-  assert.equal(nightStrip({ entries: [], ledgerLines: null, decisions: [] }, NOW).on, null);
-  assert.equal(nightStrip(snap([on], [], { decisionError: "손상" }), NOW).on, null);
+test("autopilotStrip: 켠 적 없음·끝 사건 있음·읽기 실패(모름)", () => {
+  assert.deepEqual(autopilotStrip(snap([{ kind: "x" }]), NOW), { on: false, last: null });
+  const off = { kind: "autopilot", phase: "off", startedAt: on.t, endedAt: iso(NOW - 600_000), t: iso(NOW - 600_000) };
+  assert.deepEqual(autopilotStrip(snap([on, off]), NOW), { on: false, last: { since: on.t, endedAt: off.endedAt, phase: "off" } });
+  assert.equal(autopilotStrip({ entries: [], ledgerLines: null, decisions: [] }, NOW).on, null);
+  assert.equal(autopilotStrip(snap([on], [], { decisionError: "손상" }), NOW).on, null);
 });
 
 test("결정 글에서 PR head·CI 줄은 적혀 있을 때만 읽는다", () => {
@@ -78,7 +78,7 @@ test("frontStrip: 머지 요청에만 mergeInfo를 싣고, 안 주면 모양이 
 // ---- merge-check와 맞춰 보기(진짜 카드·업무·검수 보고) ----
 const A = "a".repeat(40), B = "b".repeat(40);
 function fixture() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-night-view-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-autopilot-view-"));
   const repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kadan-nv-repo-")));
   assert.equal(spawnSync("git", ["-C", repoDir, "init", "--quiet"], { encoding: "utf8" }).status, 0);
   createDatabase(home); writeStorageMarker(home, "sqlite");

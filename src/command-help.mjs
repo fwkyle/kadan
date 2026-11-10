@@ -59,11 +59,11 @@ export const GROUPS = [
     ["card", "중앙 카드 다루기"],
     ["dispatch", "카드를 역할에게 발령하기"],
     ["decision", "사람의 결정 요청하기"],
-    ["night", "자는 동안 위임 켜고 끄기"],
+    ["autopilot", "자는 동안 위임 켜고 끄기"],
     ["senior", "시니어에게 결정 자문 받기"],
     ["slot", "검수용 작업 폴더 빌려 쓰기"],
     ["merge-check", "머지 직전 검수 커밋과 PR head 나란히 보기"],
-    ["merge-gate", "나이트런 중 자동 머지 관문 판정하기"],
+    ["merge-gate", "Autopilot 중 자동 머지 관문 판정하기"],
   ]],
   ["우편", [
     ["mail", "역할에게 메시지 보내기"],

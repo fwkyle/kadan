@@ -83,7 +83,8 @@ test('정상 요청은 정해진 CLI 한 개를 사람 명의·--force 없이 �
 });
 
 test('CLI 거절 메시지는 그대로 화면에 나오고, 상한 초과는 중단 사유를 보인다', async () => {
-  const cliRefusal = 'w에 끝나지 않은 카드 2건이 있다: a, b — 사람이 확인했으면 --force로 다시 실행한다';
+  // 2026-11-10: 카드 때문에 거절하지 않는다. 화면에 그대로 보여야 하는 거절은 이제 끄기 직전 안전 지점 확인(응답 중)이다.
+  const cliRefusal = '응답 생성 중(또는 최근 사람 입력)이라 끄지 않았다 — 잠시 뒤 다시 하거나, 사람이 확인했으면 --force (확인 결과: working: 응답 생성 중)';
   await assert.rejects(
     restartRoleDefault({role: 'w', reason: 'r', expectPid: '1', run: async () => { throw Object.assign(new Error('exit 1'), {stderr: cliRefusal + '\n'}); }}),
     error => error.message === cliRefusal, 'stderr의 CLI 메시지를 그대로 보인다');

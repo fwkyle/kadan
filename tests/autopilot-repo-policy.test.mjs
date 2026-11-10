@@ -6,21 +6,21 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
-import {nightCommand} from '../src/commands/night.mjs';
-import {nightGuard} from '../src/night-guard.mjs';
+import {autopilotCommand} from '../src/commands/autopilot.mjs';
+import {autopilotGuard} from '../src/autopilot-guard.mjs';
 import {createCenterHandler} from '../src/center-wall.mjs';
-import {summarizeNight} from '../src/night-summary.mjs';
+import {summarizeAutopilot} from '../src/autopilot-summary.mjs';
 import {
   readPolicy, setRepoPolicy, normalizeGithub, parseRemote, parseDeployBranch, loadOntology, evaluateGithub, decideNightMerge,
   listRepos, policyPath, setupNeededLines,
-} from '../src/night-repo-policy.mjs';
+} from '../src/autopilot-repo-policy.mjs';
 
 // 격리 홈·임시 문서 폴더만 쓴다. 운영 홈·실제 개인 폴더·포트·GitHub에 닿지 않는다. 역할 이름·저장소 이름도 시험용이다.
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const write = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), {recursive: true}); fs.writeFileSync(path.join(root, rel), text); };
 const card = (dir, name, front, {raw} = {}) => write(dir, `${name}.md`, raw ?? `---\nid: project/${name}\ntype: project\n${front}\n---\n\n## Why\n본문\n`);
-const nightOn = home => appendLedger({kind: 'night', phase: 'on', by: '사람', text: '시험', viaChat: false,
+const autopilotOn = home => appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: '시험', viaChat: false,
   until: new Date(Date.now() + 3600_000).toISOString(), to: [], delivered: [], t: new Date().toISOString()}, home);
 const home0 = () => tmp('kadan-repo-policy-');
 const set = (home, repo, fields = {}) => setRepoPolicy(home, {repo, by: '사람', ...fields});
@@ -80,9 +80,9 @@ test('설정 쓰기: 칸 일부만 바꾸고, --clear로 칸을 지우고, 원�
   set(home, 'acme/site', {clear: 'nightMerge', record});
   assert.equal(readPolicy(home).repos['acme/site'].nightMerge, null);
   assert.deepEqual(records.map(r => [r.kind, r.repo, r.before, r.after]), [
-    ['night-repo-policy', 'acme/site', {deployBranch: null, nightMerge: null}, {deployBranch: 'main', nightMerge: '금지'}],
-    ['night-repo-policy', 'acme/site', {deployBranch: 'main', nightMerge: '금지'}, {deployBranch: 'main', nightMerge: '허용'}],
-    ['night-repo-policy', 'acme/site', {deployBranch: 'main', nightMerge: '허용'}, {deployBranch: 'main', nightMerge: null}]]);
+    ['autopilot-repo-policy', 'acme/site', {deployBranch: null, nightMerge: null}, {deployBranch: 'main', nightMerge: '금지'}],
+    ['autopilot-repo-policy', 'acme/site', {deployBranch: 'main', nightMerge: '금지'}, {deployBranch: 'main', nightMerge: '허용'}],
+    ['autopilot-repo-policy', 'acme/site', {deployBranch: 'main', nightMerge: '허용'}, {deployBranch: 'main', nightMerge: null}]]);
   set(home, 'acme/site', {clear: 'deployBranch'});
   assert.deepEqual(readPolicy(home).repos, {}); // 두 칸 다 비면 줄이 사라진다
   assert.equal((fs.statSync(policyPath(home)).mode & 0o777), 0o600);
@@ -147,7 +147,7 @@ test('5. 예전 merge|hold 저장값(맨 이름 키 포함)은 legacy로만 보�
   assert.deepEqual(verdictOf(home, 'acme/old', 'main'), ['hold', 'setup-needed']); // 예전 merge는 무시
   const out = listRepos(home, [], {origin: () => null});
   assert.deepEqual(out.legacy, [{name: 'acme/old', value: 'merge', at: 't', by: '사람'}, {name: 'site', value: 'hold', at: 't', by: '사람'}]);
-  assert.match(nightCommand(['repo', 'list'], {}, {home, by: '사람', deps: {readWorks: () => [], origin: () => null}}), /옛 형식 저장값\(판정에 쓰지 않음\): site = hold/);
+  assert.match(autopilotCommand(['repo', 'list'], {}, {home, by: '사람', deps: {readWorks: () => [], origin: () => null}}), /옛 형식 저장값\(판정에 쓰지 않음\): site = hold/);
   set(home, 'acme/new', {deployBranch: 'main'});
   const file = JSON.parse(fs.readFileSync(policyPath(home), 'utf8'));
   assert.equal(file.version, 2);
@@ -177,7 +177,7 @@ test('정책: 읽기 권한 오류·임시 파일 쓰기 실패 문구에도 절
   fs.chmodSync(policyPath(home), 0o000);
   try {
     const {corrupt} = readPolicy(home);
-    assert.match(corrupt, /night-repo-policy\.json \(EACCES\)/);
+    assert.match(corrupt, /autopilot-repo-policy\.json \(EACCES\)/);
     assert.ok(!corrupt.includes(home), corrupt);
   } finally { fs.chmodSync(policyPath(home), 0o600); }
 });
@@ -244,48 +244,48 @@ test('목록: 설정 키·온톨로지 문서 키·업무 저장소(git origin)�
     if (row.verdict.exceptBranch) assert.deepEqual(verdictOf(home, row.github, row.verdict.exceptBranch), ['hold', 'deploy-branch']);
   }
   assert.deepEqual(setupNeededLines(out.repos.concat(evaluateGithub(home, 'acme/ok-none'))),
-    ['설정 필요: acme/site — 나이트런 중 자동 머지 안 함(kadan night repo acme/site --deploy-branch <브랜치|없음>)', '설정 필요: acme/ok-none — 나이트런 중 자동 머지 안 함(kadan night repo acme/ok-none --deploy-branch <브랜치|없음>)']);
+    ['설정 필요: acme/site — Autopilot 중 자동 머지 안 함(kadan autopilot repo acme/site --deploy-branch <브랜치|없음>)', '설정 필요: acme/ok-none — Autopilot 중 자동 머지 안 함(kadan autopilot repo acme/ok-none --deploy-branch <브랜치|없음>)']);
 });
 
-test('nightGuard: 켜짐+역할 세션의 night repo 쓰기는 거절, 읽기는 통과, 꺼짐·사람은 통과. night source는 더 이상 규칙이 없다', () => {
+test('autopilotGuard: 켜짐+역할 세션의 autopilot repo 쓰기는 거절, 읽기는 통과, 꺼짐·사람은 통과. autopilot source는 더 이상 규칙이 없다', () => {
   const home = tmp('kadan-repo-guard-');
   const env = {KADAN_ROLE: 'a-작업자'};
-  const call = (args, flags = {}, e = env) => nightGuard({command: 'night', args, flags, home, env: e});
+  const call = (args, flags = {}, e = env) => autopilotGuard({command: 'autopilot', args, flags, home, env: e});
   call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}); // 꺼져 있으면 통과
-  nightOn(home);
-  assert.throws(() => call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}), error => error.exitCode === 2 && /night repo acme\/kadan/.test(error.message));
+  autopilotOn(home);
+  assert.throws(() => call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}), error => error.exitCode === 2 && /autopilot repo acme\/kadan/.test(error.message));
   for (const args of [['repo'], ['repo', 'list'], ['repo', 'show', 'acme/kadan'], ['source']]) call(args); // source는 명령 쪽에서 모르는 하위 명령 오류가 난다
   call(['repo', 'acme/kadan'], {'deploy-branch': 'main'}, {}); // 사람(역할 없음)
 });
 
-test('CLI 실행: 설정 저장, night source는 없어짐, 켜짐+역할 세션은 종료 2·저장 안 됨, 읽기는 통과, 예전 merge|hold는 거절', () => {
+test('CLI 실행: 설정 저장, autopilot source는 없어짐, 켜짐+역할 세션은 종료 2·저장 안 됨, 읽기는 통과, 예전 merge|hold는 거절', () => {
   const home = tmp('kadan-repo-cli2-');
   const onto = tmp('kadan-onto-');
   card(onto, 'site', 'remote: acme/site\ndeploy_branch: main');
   link(home, onto);
   const run = (argv, role) => spawnSync(process.execPath, [CLI, ...argv], {
     env: {...process.env, KADAN_HOME: home, KADAN_WINDOW: 'none', KADAN_ROLE: role ?? ''}, encoding: 'utf8', timeout: 20_000});
-  for (const argv of [['night', 'source'], ['night', 'source', '--cards', onto], ['night', 'source', '--clear']]) {
+  for (const argv of [['autopilot', 'source'], ['autopilot', 'source', '--cards', onto], ['autopilot', 'source', '--clear']]) {
     const gone = run(argv);
     assert.equal(gone.status, 1, argv.join(' '));
-    assert.match(gone.stderr, /알 수 없는 night 명령/);
+    assert.match(gone.stderr, /알 수 없는 autopilot 명령/);
   }
   assert.ok(!fs.existsSync(policyPath(home)));
-  const saved = run(['night', 'repo', 'Acme/Site', '--night-merge', '금지']);
+  const saved = run(['autopilot', 'repo', 'Acme/Site', '--night-merge', '금지']);
   assert.equal(saved.status, 0, saved.stderr);
   assert.match(saved.stdout, /nightMerge 금지/);
   assert.match(saved.stdout, /온톨로지 문서 notes\/site\.md/);
   assert.ok(!saved.stdout.includes(onto) && !saved.stdout.includes(home));
-  assert.match(saved.stdout, /최종 판정 나이트런 중 자동 머지 안 함 \(night-merge-forbidden\)/);
-  assert.equal(run(['night', 'repo', 'acme/site', 'hold']).status, 1); // 예전 merge|hold 쓰기는 없다
-  assert.equal(run(['night', 'repo', 'acme/site', '--deploy-branch']).status, 1); // 값 없음
-  nightOn(home);
+  assert.match(saved.stdout, /최종 판정 Autopilot 중 자동 머지 안 함 \(night-merge-forbidden\)/);
+  assert.equal(run(['autopilot', 'repo', 'acme/site', 'hold']).status, 1); // 예전 merge|hold 쓰기는 없다
+  assert.equal(run(['autopilot', 'repo', 'acme/site', '--deploy-branch']).status, 1); // 값 없음
+  autopilotOn(home);
   const before = fs.readFileSync(policyPath(home), 'utf8');
-  const denied = run(['night', 'repo', 'acme/kadan', '--deploy-branch', 'main'], 'a-작업자');
+  const denied = run(['autopilot', 'repo', 'acme/kadan', '--deploy-branch', 'main'], 'a-작업자');
   assert.equal(denied.status, 2, denied.stderr);
-  assert.match(denied.stderr, /나이트 모드가 켜져 있어/);
+  assert.match(denied.stderr, /Autopilot이 켜져 있어/);
   assert.equal(fs.readFileSync(policyPath(home), 'utf8'), before);
-  assert.equal(run(['night', 'repo', 'list'], 'a-작업자').status, 0);
+  assert.equal(run(['autopilot', 'repo', 'list'], 'a-작업자').status, 0);
 });
 
 function fakeReq(method, pathname, {body = '', remote = false, origin, host = '127.0.0.1:1'} = {}) {
@@ -301,7 +301,7 @@ async function call(handler, req) {
 }
 const form = (handler, fields) => new URLSearchParams({token: handler.token, ...fields}).toString();
 
-test('7. API: GET 모양(원문 예)·절대 경로 없음, POST는 칸 일부만 바꾸고 기존 거절(토큰·출처·원격 405·나이트 켜짐 409)은 그대로', async () => {
+test('7. API: GET 모양(원문 예)·절대 경로 없음, POST는 칸 일부만 바꾸고 기존 거절(토큰·출처·원격 405·Autopilot 켜짐 409)은 그대로', async () => {
   const home = tmp('kadan-repo-api-');
   const onto = tmp('kadan-onto-');
   card(onto, 'shop', 'remote: Acme/Shop (비공개)\ndeploy_branch: main');
@@ -309,7 +309,7 @@ test('7. API: GET 모양(원문 예)·절대 경로 없음, POST는 칸 일부�
   write(onto, 'account.md', '---\ntype: account\nremote: acme/shop\nnight_merge: 금지\n---\n'); // 다른 type은 영향 없음
   link(home, onto);
   const handler = createCenterHandler(home);
-  const get = JSON.parse((await call(handler, fakeReq('GET', '/api/night/repos'))).body);
+  const get = JSON.parse((await call(handler, fakeReq('GET', '/api/autopilot/repos'))).body);
   assert.deepEqual(Object.keys(get), ['corrupt', 'repos', 'legacy', 'sources', 'unreadable']);
   assert.deepEqual(get.sources, {ontology: {exists: true, files: 3, projects: 2, unreadable: 0}});
   const shop = get.repos.find(r => r.github === 'acme/shop');
@@ -322,8 +322,8 @@ test('7. API: GET 모양(원문 예)·절대 경로 없음, POST는 칸 일부�
     [['acme/admin', 'night-merge-forbidden'], ['acme/web', 'night-merge-forbidden']]);
   assert.ok(!JSON.stringify(get).includes(onto) && !JSON.stringify(get).includes(home));
 
-  const post = (fields, opts) => call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, fields), ...opts}));
-  assert.equal((await call(handler, fakeReq('POST', '/api/night/repos', {body: new URLSearchParams({repo: 'acme/site', deployBranch: 'main'}).toString()}))).status, 403); // 토큰 없음
+  const post = (fields, opts) => call(handler, fakeReq('POST', '/api/autopilot/repos', {body: form(handler, fields), ...opts}));
+  assert.equal((await call(handler, fakeReq('POST', '/api/autopilot/repos', {body: new URLSearchParams({repo: 'acme/site', deployBranch: 'main'}).toString()}))).status, 403); // 토큰 없음
   assert.equal((await post({repo: 'acme/site', deployBranch: 'main'}, {origin: 'http://evil.example'})).status, 403);
   assert.equal((await post({repo: 'acme/site', deployBranch: 'main'}, {remote: true})).status, 405);
   assert.deepEqual(readPolicy(home).repos, {});
@@ -333,11 +333,11 @@ test('7. API: GET 모양(원문 예)·절대 경로 없음, POST는 칸 일부�
   for (const bad of [{repo: 'acme/site', nightMerge: 'merge'}, {repo: 'site', deployBranch: 'main'}, {repo: 'acme/site', deployBranch: 'a b'}, {repo: 'acme/site'}]) {
     assert.equal((await post(bad)).status, 409, JSON.stringify(bad));
   }
-  assert.equal((await call(handler, fakeReq('POST', '/api/night/sources', {body: form(handler, {cards: '/x'})}))).handled, false); // 연결 바꾸기는 API로 열지 않는다
-  nightOn(home);
+  assert.equal((await call(handler, fakeReq('POST', '/api/autopilot/sources', {body: form(handler, {cards: '/x'})}))).handled, false); // 연결 바꾸기는 API로 열지 않는다
+  autopilotOn(home);
   const blocked = await post({repo: 'acme/site', deployBranch: 'dev'});
   assert.equal(blocked.status, 409);
-  assert.match(blocked.body, /나이트가 켜진 동안은 바꿀 수 없음/);
+  assert.match(blocked.body, /Autopilot이 켜진 동안은 바꿀 수 없음/);
   assert.equal(readPolicy(home).repos['acme/site'].deployBranch, 'main');
 });
 
@@ -345,25 +345,25 @@ test('POST 오류 응답에는 절대 경로·OS 원문이 없다(손상 파일,
   const home = tmp('kadan-repo-post-corrupt-');
   fs.writeFileSync(policyPath(home), '{bad');
   const handler = createCenterHandler(home);
-  const r = await call(handler, fakeReq('POST', '/api/night/repos', {body: form(handler, {repo: 'acme/app', deployBranch: 'main'})}));
+  const r = await call(handler, fakeReq('POST', '/api/autopilot/repos', {body: form(handler, {repo: 'acme/app', deployBranch: 'main'})}));
   assert.equal(r.status, 409);
   assert.ok(!r.body.includes(home), r.body);
-  assert.match(r.body, /night-repo-policy\.json[\s\S]*JSON 구문 오류/);
+  assert.match(r.body, /autopilot-repo-policy\.json[\s\S]*JSON 구문 오류/);
   assert.equal(fs.readFileSync(policyPath(home), 'utf8'), '{bad');
   const home2 = tmp('kadan-repo-post-eisdir-');
   fs.mkdirSync(`${policyPath(home2)}.${process.pid}.tmp`);
   const handler2 = createCenterHandler(home2);
-  const r2 = await call(handler2, fakeReq('POST', '/api/night/repos', {body: form(handler2, {repo: 'acme/app', deployBranch: 'main'})}));
+  const r2 = await call(handler2, fakeReq('POST', '/api/autopilot/repos', {body: form(handler2, {repo: 'acme/app', deployBranch: 'main'})}));
   assert.equal(r2.status, 409);
-  assert.equal(r2.body, '나이트런 저장소 정책 처리 실패(EISDIR)');
+  assert.equal(r2.body, 'Autopilot 저장소 정책 처리 실패(EISDIR)');
 });
 
 test('아침 요약: 배포 저장소 보류 PR이 근거 파일과 함께 따로 보인다', () => {
   const T0 = Date.parse('2026-11-03T14:00:00.000Z');
-  const start = {kind: 'night', phase: 'on', by: '사람', text: '밤', viaChat: false, t: new Date(T0).toISOString(), until: new Date(T0 + 8 * 3600_000).toISOString(), to: [], delivered: []};
-  const hold = {kind: 'night-note', noteKind: 'hold', text: '사이트 PR 보류', by: 'a-감독', t: new Date(T0 + 60_000).toISOString(),
+  const start = {kind: 'autopilot', phase: 'on', by: '사람', text: '밤', viaChat: false, t: new Date(T0).toISOString(), until: new Date(T0 + 8 * 3600_000).toISOString(), to: [], delivered: []};
+  const hold = {kind: 'autopilot-note', noteKind: 'hold', text: '사이트 PR 보류', by: 'a-감독', t: new Date(T0 + 60_000).toISOString(),
     holdKind: 'deploy-repo', pr: 'site#7', reason: 'vercel.json'};
-  const s = summarizeNight({start, phase: 'expired', endedAt: T0 + 8 * 3600_000, entries: [hold], decisionEvents: [], readBody: () => null});
+  const s = summarizeAutopilot({start, phase: 'expired', endedAt: T0 + 8 * 3600_000, entries: [hold], decisionEvents: [], readBody: () => null});
   assert.match(s.text, /배포 저장소 보류[^\n]*site#7[^\n]*근거: vercel\.json/);
   assert.equal(s.counts.noteHolds['deploy-repo'], 1);
 });
@@ -442,7 +442,7 @@ test('F1. 반대 대조: 정상 금지 문서는 hold, night_merge 칸이 정말
 });
 
 test('F3. 문서의 예시를 그대로 복사하면 의도대로 판정된다(night_merge 금지 → 보류)', () => {
-  const doc = fs.readFileSync(new URL('../docs/night-repo-cards.md', import.meta.url), 'utf8');
+  const doc = fs.readFileSync(new URL('../docs/autopilot-repo-cards.md', import.meta.url), 'utf8');
   const example = /```\n(---\n[\s\S]*?\n---)\n```/.exec(doc)[1].replace('github.com/소유자/이름', 'github.com/acme/app');
   const dir = tmp('kadan-f3-'), home = home0();
   write(dir, 'app.md', example + '\n');

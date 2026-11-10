@@ -37,10 +37,10 @@ export async function loadSupers({ fetchJson, local }) {
 }
 
 // 대시보드 값 읽기. 하나라도 실패하면 그 값만 null(뱃지 ?)이고 나머지는 그대로 쓴다.
-export async function loadDashboard({ fetchJson, night = true }) {
+export async function loadDashboard({ fetchJson, autopilot = true }) {
   const settle = async (path) => { try { return await fetchJson(path); } catch { return null; } };
-  const [summary, nightRepos] = await Promise.all([settle("/api/dashboard/summary"), night ? settle("/api/night/repos") : null]);
-  return { summary, nightRepos };
+  const [summary, autopilotRepos] = await Promise.all([settle("/api/dashboard/summary"), autopilot ? settle("/api/autopilot/repos") : null]);
+  return { summary, autopilotRepos };
 }
 
 // 설명 칸의 출처: 감독 AI가 쓰는 조회. 원장을 다시 읽지 않는다. 실패는 null(모름).

@@ -25,7 +25,7 @@ import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
 import { letters, pick, compact, page } from "./shared.mjs";
 import { frontStrip } from "./front.mjs";
-import { nightStrip, mergeLineInfo, mergeContext } from "./night-view.mjs";
+import { autopilotStrip, mergeLineInfo, mergeContext } from "./autopilot-view.mjs";
 import { sidebarRepos, repoOfRow, repoOfDecision, answeredMergesToday, alertsOfRepo } from "./repo-view.mjs";
 
 // 현황·전략 맵 화면이 읽지 않는 행 칸(gui/src/pages/Status.tsx·StrategyMap.tsx·stopped.ts·strategy-map.ts 기준, 2026-10-14 조사).
@@ -133,8 +133,8 @@ export function statusData(snapshot, url, stamp, m) {
     endedWorks: { ...endedWorks, total: endedWorks.done + endedWorks.cancelled, included: allWorks },
     // 첫 화면 '내 앞' 띠: 저장소별 결정·머지 요청·막힘 수와 열린 결정 첫 줄.
     front: frontStrip({ decisions: repoDecisions, stoppedRows: repoRows.filter((r) => r.bucket === "stuck" || r.bucket === "stale"), mergeInfo: (d) => mergeLineInfo(snapshot, d, mergeCtx) }),
-    // 나이트런 상태 띠(PR3): 이미 읽은 원장 사건·결정만 쓴다(원장 전체를 다시 읽지 않음).
-    night: nightStrip(snapshot),
+    // Autopilot 상태 띠(PR3): 이미 읽은 원장 사건·결정만 쓴다(원장 전체를 다시 읽지 않음).
+    autopilot: autopilotStrip(snapshot),
     repo,
     sidebar,
     ...(repo ? { repoView: { mergedToday: answeredMergesToday(snapshot.decisionError ? null : snapshot.decisions ?? [], repo) } } : {}),

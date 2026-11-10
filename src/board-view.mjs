@@ -110,7 +110,7 @@ function sideLine(entry, selected, width) {
   const fitted = fit(fit(`${selected ? "▶" : " "} ${entry.role}`, nameWidth) + fit(tail, width - nameWidth), width);
   if (selected) return `${INVERSE}${fitted}${RESET}`;
   if (!entry.alive) return `${DIM}${fitted}${RESET}`;
-  return entry.nightOn ? fitted.replace(/🌙\S+/, (m) => `${BOLD_YELLOW}${m}${RESET}`) : fitted;
+  return entry.autopilotOn ? fitted.replace(/🌙\S+/, (m) => `${BOLD_YELLOW}${m}${RESET}`) : fitted;
 }
 
 const KEYS_LIST = "↑↓ 고르기 · Enter/Tab 터미널 입력 · 1 사이드바 2 설명 3 터미널 켜고 끄기 · r 새로 읽기 · q 끝";
