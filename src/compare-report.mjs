@@ -70,14 +70,16 @@ function sampleOf(execution, work, index, outcomes, picks) {
   const firstPass = matched.find(e => outcomes.get(e.key) === 'pass' && index.runs.get(e.key)?.done);
   const used = firstPass ? matched.filter(e => Number(e.round) <= Number(firstPass.round)) : matched;
   const runs = [run, ...used.map(e => index.runs.get(e.key))];
-  const reviewerChoices = new Set(used.map(e => choiceKey(index.runs.get(e.key).sends[0].runnerChoice)));
+  // 같은 실행을 다른 조합으로 다시 보낸 것도 조합 변경이다. 첫 발령만이 아니라 모든 발령을 본다.
+  const reviewerChoices = new Set(runs.slice(1).flatMap(r => r.sends).map(s => choiceKey(s.runnerChoice)));
   const reasons = new Set();
   if (runs.some(r => replaced(r, index.starts))) reasons.add('중간 교체');
   if (reviewerChoices.size > 1) reasons.add('검수자 변경');
+  if (new Set(run.sends.map(s => choiceKey(s.runnerChoice))).size > 1) reasons.add('작업자 변경');
   return {workKey: work.key, key: execution.key, worker: send.runnerChoice, send, reasons,
     // 검수 발령이 아직 없으면 검수자는 비운다(예약에 적힌 검수자가 있을 때만 그 값).
     reviewer: used.length ? runs[1].sends[0].runnerChoice : picks.get(send.pickId)?.reviewer ?? null,
-    sends: runs.flatMap(r => r.sends),
+    sends: runs.flatMap(r => r.sends), runSends: run.sends,
     unknown: !runs.every(attributed) || (reviews.length > 0 && !matched.length),
     failed: run.done?.result === 'failed',
     rounds: relativeRounds(execution.round, firstPass?.round),
@@ -110,9 +112,9 @@ export function calculateCompareReport({entries, works, cards},
     const implementations = executions.filter(e => e.phase === 'implementation');
     const firstSend = implementations.map(e => index.runs.get(e.key)?.sends[0]).filter(Boolean)
       .sort((a, b) => time(a) - time(b))[0];
-    // 읽은 범위 앞에서 만들어져 담당까지 정해진 구현이 있으면 기간 전에 시작한 업무다(그 발령은 읽지 않았다).
+    // 읽은 범위 앞에서 실제로 발령된 구현이 있으면 기간 전에 시작한 업무다(읽기 모듈이 원장에서 확인한 값).
     const startedBefore = implementations.some(e => !index.runs.get(e.key)?.sends.length
-      && cardOf.get(e.key)?.createdBeforeWindow && cardOf.get(e.key).role);
+      && cardOf.get(e.key)?.sentBeforeWindow);
     // 업무의 기간 포함 여부는 첫 구현 발령 시각으로 정한다. 업무당 독립 표본은 늘 하나다.
     if (!firstSend || startedBefore || !inWindow(firstSend)) continue;
     const samples = implementations.map(e => sampleOf(e, work, index, outcomes, picks)).filter(Boolean);
@@ -123,14 +125,16 @@ export function calculateCompareReport({entries, works, cards},
     const first = samples[0];
     const labels = new Set([...samples.flatMap(s => s.sends), ...fixes.flatMap(run => run.sends)]
       .map(send => LAUNCH_LABELS[send.launchSource]));
-    const row = rowFor(first.reviewer, first.worker,
+    // 아직 검수 발령이 없는 구현은 다른 검수자가 아니다. 검수자가 정해진 구현끼리만 비교한다.
+    const reviewers = samples.map(s => s.reviewer).filter(Boolean);
+    const row = rowFor(reviewers[0] ?? null, first.worker,
       ['명시 명령', '폴백'].filter(label => labels.has(label)).join('·') || null);
     for (const sample of samples) if (sample.send.settingsPreset) row.presets.add(sample.send.settingsPreset);
     const reasons = new Set(samples.flatMap(s => [...s.reasons]));
     if (fixes.some(run => replaced(run, index.starts))) reasons.add('중간 교체');
-    if (new Set(samples.map(s => choiceKey(s.reviewer))).size > 1) reasons.add('검수자 변경');
-    if (new Set([...samples.map(s => s.worker), ...fixes.map(run => run.sends[0].runnerChoice)]
-      .map(choiceKey)).size > 1) reasons.add('작업자 변경');
+    if (new Set(reviewers.map(choiceKey)).size > 1) reasons.add('검수자 변경');
+    if (new Set([...samples.flatMap(s => s.runSends), ...fixes.flatMap(run => run.sends)]
+      .map(send => choiceKey(send.runnerChoice))).size > 1) reasons.add('작업자 변경');
     if (reasons.size) {
       // 한 조합의 성과로 셀 수 없다. 사유는 한 업무에 여럿일 수 있다.
       for (const reason of reasons) {
@@ -194,6 +198,8 @@ export function compareReport(home, {since, until, now = () => new Date()} = {})
 export function formatCompareReport(report) {
   const number = value => value == null ? '—' : String(Math.round(value * 100) / 100);
   const counts = value => Object.entries(value).map(([name, n]) => `${name} ${n}`).join(' · ') || '없음';
+  // 검수 발령이 없는 묶음의 0/N은 검수 실패율이 아니다. 통과 칸을 숫자 대신 말로 보인다.
+  const passes = (group, row) => group.reviewer ? `${row.firstRoundPasses}/${row.completedSamples}` : '검수 없음';
   const lines = [`조합별 성과 (${report.since ?? '처음'} ~ ${report.until ?? report.asOf})`
     + ' — 업무당 1표본, 검수자 묶음 간 순위 없음'];
   for (const group of report.groups) {
@@ -201,7 +207,7 @@ export function formatCompareReport(report) {
     lines.push('작업자 | 표본 | 독립 | 첫 왕복 통과 | 왕복 중앙 | 구현 분 중앙 | failed | 진행 중');
     for (const row of group.rows) {
       lines.push(`${choiceLabel(row.worker)}${row.launch ? ` [${row.launch}]` : ''} | ${row.samples}`
-        + ` | ${row.independentSamples} | ${row.firstRoundPasses}/${row.completedSamples}`
+        + ` | ${row.independentSamples} | ${passes(group, row)}`
         + ` | ${number(row.medianRounds)} | ${number(row.medianImplementationMs == null
           ? null : row.medianImplementationMs / 60000)} | ${row.failed} | ${row.inProgress}`);
       lines.push(`  프리셋 ${row.presets.join(', ') || '없음'} · 업무 ${row.workIds.join(', ') || '없음'}`,

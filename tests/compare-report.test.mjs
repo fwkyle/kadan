@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {compareFixture, choice} from './helpers/compare-fixture.mjs';
 import {calculateCompareReport, compareReport, formatCompareReport, relativeRounds} from '../src/compare-report.mjs';
 import {readCompareData, ORDER_SLACK_MS, REPORT_SQL, REPORT_HEAD_SQL, REPORT_PROBE_SQL,
-  REPORT_FIRST_SQL} from '../src/compare-report-data.mjs';
+  REPORT_FIRST_SQL, REPORT_EARLIER_SEND_SQL} from '../src/compare-report-data.mjs';
 import {PICK_COUNT_SQL} from '../src/runner-compare.mjs';
 import {readSettings} from '../src/runner-settings.mjs';
 import {appendStream, storageSnapshot, storageTransaction, storageVersion} from '../src/storage.mjs';
@@ -104,6 +104,9 @@ test('비교가 꺼진 발령도 집계하고, 검수 발령이 아직 없으면
   assert.equal(report.unknown.count, 0);
   assert.match(formatCompareReport(report), /^조합별 성과[^\n]*\n\n검수자 codex\/gpt-one\/high/);
   assert.match(formatCompareReport(report), /검수자 검수 발령 없음/);
+  // 검수 없는 묶음의 통과 칸은 0/N이 아니라 말로 보인다(JSON 숫자 칸은 그대로).
+  assert.match(formatCompareReport(report), /codex\/claude-one\/medium \| 1 \| 1 \| 검수 없음 \|/);
+  assert.equal(waiting.rows[0].firstRoundPasses, 0);
 });
 
 test('귀속 불명: runnerChoice나 띄운 방식이 없는 발령·연결 안 된 발령은 추정하지 않는다', () => {
@@ -347,6 +350,7 @@ test('SQLite 범위 조회와 실제 report CLI: 기간 앞 원장을 읽지 않
   assert.equal(data.entries.some(e => e.kind === 'old-unrelated'), false);
   assert.deepEqual(data.works.map(w => w.key).sort(), ['test/swapped', 'test/work']);
   assert.equal(readCompareData(f.home).afterRowid, 0, '기간이 없으면 처음부터');
+  assert.equal(data.earlierLookups, 0, '기간 안에서 시작한 업무뿐이면 하한 앞을 다시 보지 않는다');
   assert.deepEqual(rows(compareReport(f.home, {since: epoch})).flatMap(r => r.workIds),
     ['test/swapped', 'test/work']);
   storageSnapshot(f.home, db => {
@@ -378,17 +382,21 @@ test('SQLite 범위 조회와 실제 report CLI: 기간 앞 원장을 읽지 않
   assert.equal(storageVersion(f.home), before);
 });
 
-test('기간 앞에서 시작한 업무는 그 발령을 읽지 않고도 표본에서 뺀다', () => {
-  for (const assigned of [true, false]) {
+test('기간 앞에서 실제로 발령된 업무만 뺀다: 담당만 정한 미발령·취소 카드는 정상 업무를 숨기지 않는다', () => {
+  // sent: 기간 앞에서 실제 발령 / assigned: 담당만 정하고 발령 안 함(취소) / draft: 초안
+  for (const kind of ['sent', 'assigned', 'draft']) {
     const f = compareFixture(), fake = fixture();
     const first = fake.add({passRound: null}), second = fake.add({round: 2});
     const early = new Set([first.key, first.reviewKey]);
     storageTransaction(f.home, () => {
-      // 첫 구현 카드는 기간 앞에 만들어졌다. 담당이 정해졌으면 발령된 것으로 본다.
-      appendStream(f.home, `cards/${first.key}/events.jsonl`,
-        {key: first.key, status: assigned ? 'done' : 'draft', role: assigned ? first.workerRole : null});
+      appendStream(f.home, `cards/${first.key}/events.jsonl`, {key: first.key,
+        status: {sent: 'done', assigned: 'cancelled', draft: 'draft'}[kind],
+        role: kind === 'draft' ? null : first.workerRole});
+      // 같은 구간의 다른 실행 발령은 이 카드의 발령이 아니다.
+      f.record({kind: 'send', taskId: 'other', executionKey: 'test/other', role: 'test-other',
+        t: stamp(-30 * 24 * 60)});
       for (const entry of fake.data.entries) {
-        if (assigned && early.has(entry.executionKey)) f.record({...entry, t: stamp(-30 * 24 * 60)});
+        if (kind === 'sent' && early.has(entry.executionKey)) f.record({...entry, t: stamp(-30 * 24 * 60)});
       }
       f.record({kind: 'start', role: 'test-old', cmd: 'fake', t: stamp(-29 * 24 * 60)});
       for (const entry of fake.data.entries) {
@@ -402,10 +410,63 @@ test('기간 앞에서 시작한 업무는 그 발령을 읽지 않고도 표본
     const data = readCompareData(f.home, {since: epoch});
     assert.ok(data.afterRowid > 0);
     assert.equal(data.entries.some(e => e.executionKey === first.key), false, '기간 앞 발령은 읽지 않는다');
+    assert.equal(data.cards.some(card => card.sentBeforeWindow), kind === 'sent', kind);
+    assert.equal(data.earlierLookups, 1, '읽은 범위에 발령이 없는 옛 구현 실행만 확인한다');
     const report = compareReport(f.home, {since: epoch});
-    assert.equal(rows(report).length, assigned ? 0 : 1, assigned ? '기간 전 시작' : '발령 안 된 초안');
+    assert.equal(rows(report).length, kind === 'sent' ? 0 : 1, kind);
+    if (kind !== 'sent') assert.equal(rows(report)[0].independentSamples, 1, kind);
     assert.equal(report.unknown.count, 0);
+    storageSnapshot(f.home, db => {
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${REPORT_EARLIER_SEND_SQL}`)
+        .all(1, data.afterRowid, first.key, 'x').map(r => r.detail);
+      const ranged = /SEARCH events USING INTEGER PRIMARY KEY \(rowid>\? AND rowid<\?\)/;
+      assert.ok(plan.some(line => ranged.test(line)), plan);
+      assert.equal(plan.some(line => /SCAN events/.test(line)), false);
+    });
   }
+});
+
+test('같은 실행을 다른 조합으로 다시 보내면 섞임, 같은 조합으로 다시 보내면 표본', () => {
+  const resend = (target, change) => {
+    const f = fixture(), run = f.add({compare: false});
+    const original = target === 'worker' ? run.send
+      : f.data.entries.find(e => e.executionKey === run.reviewKey && e.kind === 'send');
+    const role = `test-next-${target}`, runnerChoice = {...original.runnerChoice, ...change};
+    // 새 역할로 넘긴다(첫 역할은 다시 띄우지 않음). 실제 완료도 새 역할이 한다.
+    f.data.entries.push({kind: 'start', role, cmd: 'fake', runnerChoice, t: stamp(target === 'worker' ? 2 : 13)},
+      {...original, role, runnerChoice, t: stamp(target === 'worker' ? 3 : 14)});
+    f.data.entries.find(e => e.executionKey === original.executionKey && e.kind === 'done').role = role;
+    // --for 없는 단일 검수 연결에서도 같아야 한다.
+    if (target === 'worker') {
+      delete f.data.entries.find(e => e.executionKey === run.reviewKey && e.kind === 'send').reviewFor;
+    }
+    return calculateCompareReport(f.data);
+  };
+  for (const [target, reason] of [['worker', '작업자 변경'], ['reviewer', '검수자 변경']]) {
+    for (const change of [{model: 'other-model'}, {effort: 'max'}]) {
+      const report = resend(target, change);
+      assert.deepEqual(report.mixed, {[reason]: 1}, `${target} ${JSON.stringify(change)}`);
+      assert.deepEqual(rows(report).map(r => [r.independentSamples, r.firstRoundPasses, r.mixedWorkIds]),
+        [[0, 0, ['test/work']]]);
+    }
+    const same = resend(target, {});
+    assert.deepEqual(same.mixed, {}, `${target} 같은 조합`);
+    assert.deepEqual(rows(same).map(r => [r.independentSamples, r.firstRoundPasses]), [[1, 1]]);
+  }
+  // 검수 뒤 같은 작업자에게 다음 구현을 보냈고 그 검수가 아직 없으면, 검수자 변경이 아니라 진행 중이다.
+  const next = fixture();
+  next.add({passRound: null, role: 'test-next', compare: false});
+  next.add({round: 2, role: 'test-next', compare: false, review: false, pending: true});
+  const waiting = calculateCompareReport(next.data);
+  assert.deepEqual(waiting.mixed, {});
+  assert.deepEqual(waiting.groups.map(g => [g.reviewer?.model, g.rows[0].independentSamples, g.rows[0].inProgress]),
+    [['claude-one', 1, 1]]);
+  // 수정(fix) 실행의 재발령도 같다.
+  const f = fixture();
+  f.add({passRound: null, role: 'test-fix', compare: false});
+  const fix = f.add({phase: 'fix', round: 2, role: 'test-fix', compare: false});
+  f.data.entries.push({...fix.send, role: 'test-fix-next', runnerChoice: choice('gpt-two'), t: stamp(5)});
+  assert.deepEqual(calculateCompareReport(f.data).mixed, {'작업자 변경': 1});
 });
 
 test('report는 비교 설정이 없어도 기존 업무 스트림의 마지막 상태로 진행 중 여부를 읽는다', () => {

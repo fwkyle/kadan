@@ -101,6 +101,7 @@ test('비교 화면: CLI와 같은 검사·사건·보고서, 출처·토큰·�
       assert.ok(key in off.unknown, `report.unknown.${key}`);
     }
     assert.match(screen, /<h3>조합별 성과<\/h3>/);
+    assert.match(screen, /group\.reviewer \? `\$\{row\.firstRoundPasses\}\/\$\{row\.completedSamples\}` : '검수 없음'/);
     assert.doesNotMatch(screen, /비교 결과|혼합 군|제외 사유/);
   } finally {
     await new Promise(r => server.close(r));

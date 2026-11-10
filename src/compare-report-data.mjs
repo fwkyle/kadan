@@ -15,6 +15,13 @@ export const REPORT_PROBE_SQL = `SELECT rowid, json_extract(payload,'$.t') AS t 
   WHERE rowid >= ? AND stream IN (${MAIN}) AND json_extract(payload,'$.t') IS NOT NULL
   ORDER BY rowid LIMIT 1`;
 export const REPORT_FIRST_SQL = 'SELECT rowid FROM events WHERE stream = ? AND seq = 1';
+// 하한 앞에 그 실행의 실제 발령이 있는가. 카드가 만들어진 행부터 하한까지만 훑고 첫 발령에서 멈춘다.
+export const REPORT_EARLIER_SEND_SQL = `SELECT rowid FROM events NOT INDEXED
+  WHERE rowid > ? AND rowid <= ? AND stream IN (${MAIN}) AND json_extract(payload,'$.kind') = 'send'
+    AND json_extract(payload,'$.taskId') IS NOT NULL
+    AND (json_extract(payload,'$.executionKey') = ?
+      OR (json_extract(payload,'$.executionKey') IS NULL AND json_extract(payload,'$.taskId') = ?))
+  ORDER BY rowid LIMIT 1`;
 // 원장 순서와 사건 시각이 어긋날 수 있는 폭. 2026-11-10 운영 원장의 발령 스트림 최대 역전은 약 5.6분이었다.
 export const ORDER_SLACK_MS = 60 * 60 * 1000;
 
@@ -35,7 +42,7 @@ export function lowerRowid(db, sinceMs) {
 export function readCompareData(home, {since} = {}) {
   return storageSnapshot(home, db => {
     const entries = [], works = [], cards = [], workKeys = new Set();
-    if (!db) return {entries, works, cards, afterRowid: 0};
+    if (!db) return {entries, works, cards, afterRowid: 0, earlierLookups: 0};
     const afterRowid = lowerRowid(db, since == null ? NaN : Date.parse(since));
     const sent = new Set();
     for (const row of db.prepare(REPORT_SQL).iterate(afterRowid)) {
@@ -48,19 +55,28 @@ export function readCompareData(home, {since} = {}) {
     }
     // 기간 앞에 만들어진 업무도 발령의 workKey로 직접 읽는다. 전체 카드 목록은 읽지 않는다.
     const head = db.prepare(REPORT_HEAD_SQL), first = db.prepare(REPORT_FIRST_SQL);
+    const earlier = db.prepare(REPORT_EARLIER_SEND_SQL);
+    let earlierLookups = 0;
     for (const key of workKeys) {
       const row = head.get(`works/${key}/events.jsonl`), work = row && JSON.parse(row.payload);
       if (!work?.executions?.some(e => sent.has(e.key) || sent.has(e.key.split('/').at(-1)))) continue;
       works.push(work);
+      // 업무 하나에 기간 전 발령이 하나만 확인되면 그 업무는 표본이 아니다. 나머지 실행은 더 찾지 않는다.
+      let found = false;
       for (const execution of work.executions) {
         const stream = `cards/${execution.key}/events.jsonl`, card = head.get(stream);
         if (!card) continue;
-        // 읽은 범위에 발령이 없는 구현이 기간 앞에서 만들어졌는지: 기간 전에 시작한 업무를 가려내는 근거.
-        const early = afterRowid > 0 && execution.phase === 'implementation' && !sent.has(execution.key)
-          && (first.get(stream)?.rowid ?? Infinity) <= afterRowid;
-        cards.push({...JSON.parse(card.payload), ...(early ? {createdBeforeWindow: true} : {})});
+        // 읽은 범위에 발령이 없는 구현이 하한 앞에서 실제로 발령됐는지 원장에서 확인한다(기간 전 시작 업무).
+        // 카드 생성·담당 지정은 발령의 근거가 아니다. 미발령·취소 카드가 정상 업무를 숨기면 안 된다.
+        const id = execution.key.split('/').at(-1), created = first.get(stream)?.rowid;
+        const check = !found && afterRowid > 0 && execution.phase === 'implementation'
+          && created < afterRowid && !sent.has(execution.key) && !sent.has(id);
+        if (check) earlierLookups++;
+        const early = check && Boolean(earlier.get(created, afterRowid, execution.key, id));
+        found ||= early;
+        cards.push({...JSON.parse(card.payload), ...(early ? {sentBeforeWindow: true} : {})});
       }
     }
-    return {entries, works, cards, afterRowid};
+    return {entries, works, cards, afterRowid, earlierLookups};
   });
 }

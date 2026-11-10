@@ -138,7 +138,8 @@ export function CompareMode({settings}: {settings: Settings}) {
           </tr></thead><tbody>{group.rows.map((row, i) => <tr key={i}>
             <th>{choice(row.worker)}{row.launch && <><br />[{row.launch}]</>}</th>
             <td>{row.presets.join(', ') || '없음'}</td><td>{row.samples}</td><td>{row.independentSamples}</td>
-            <td>{row.firstRoundPasses}/{row.completedSamples}</td><td>{number(row.medianRounds)}</td>
+            <td>{group.reviewer ? `${row.firstRoundPasses}/${row.completedSamples}` : '검수 없음'}</td>
+            <td>{number(row.medianRounds)}</td>
             <td>{number(row.medianImplementationMs == null ? null : row.medianImplementationMs / 60000)}</td>
             <td>{row.failed}</td><td>{row.inProgress}</td>
             <td>{reasons(row.mixed)}{row.mixedWorkIds.length > 0 && <Links ids={row.mixedWorkIds} work />}</td>
