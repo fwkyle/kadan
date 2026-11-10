@@ -29,6 +29,7 @@
 | 업무와 실행 | [업무 카드](business-work.md) | — |
 | 중앙 카드 | [카드 안내](card-center.md) | — |
 | 책임과 보고 경로 | [책임 관계](hierarchy.md) | — |
+| 하던 대화를 카단 감독으로 옮기기 | [대화 옮기기 안내](adopt.md) | — |
 | 담당 인계 | [인계 안내](handover.md) | — |
 | 사용자 결정 | [결정 기록](decisions.md) | — |
 | 사용자 알림(디스코드·시스템 알림) | [사용자 알림](user-notify.md) | — |
