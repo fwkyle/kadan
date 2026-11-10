@@ -11,7 +11,8 @@ const CLAUDE_INPUT = /^❯/u;
 const CLAUDE_RULE = /^─{3,}\s*$/u;
 // 바닥글 줄 수 상한은 "입력칸이 화면 끝에 있다"만 확인한다. 관찰한 최대 5줄(경로·상태 줄·권한 줄·알림 2줄)에 여유 3줄.
 const CLAUDE_FOOTER_MAX = 8;
-const CODEX_STATUS = /^\s+\S+ (?:none|minimal|low|medium|high|xhigh|max|default) · (?:~\/|\/).+$/u;
+// codex 상태 줄은 "모델 낱말 + 강도 낱말 + ` · ` + 경로" 구조만 본다. 두 낱말의 글자(이름·강도 목록)는 보지 않는다.
+const CODEX_STATUS = /^\s+\S+ \S+ · (?:~\/|\/).+$/u;
 const CODEX_SHORTCUTS = /^\s+(?:← for agents · )?\? for shortcuts(?:\s+⚠ .+)?$/u;
 
 // 색(38/48/58)의 채널과 콜론 하위 매개변수는 독립 SGR 2(흐림)가 아니다.

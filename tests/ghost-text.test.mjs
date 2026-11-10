@@ -316,6 +316,79 @@ test("새 바닥글 꼴에서도 응답 생성 중 화면(회전 줄·도구 실
   }
 });
 
+// PR #374 검수 F1: 바닥글이 길면 회전 줄이 화면 끝 14줄 밖으로 밀려, 추천 문구만 지워진 화면이 idle로 읽혔다.
+// 검수자 표(회전 줄과 입력칸 사이 빈 줄 1~4개 × 바닥글 5·8줄 × 추천·친 글·섞인 입력)를 그대로 옮긴다.
+test("검수 F1: 바닥글이 길어도 회전 줄이 보이는 화면은 working이다(빈 줄 1~4 × 바닥글 5·8줄 × 입력 3종)", () => {
+  const spinner = "✢ Grooving… (32s · ↓ 1.7k tokens)";
+  const tip = "  ⎿  Tip: 지어낸 도움말 줄";
+  const mixed = `${E}[39m❯ 실제입력${E}[2m추천${E}[0m`;
+  const footers = [5, 8].map(count => Array.from({ length: count }, (_, i) => `  알림 ${i + 1}`));
+  for (const footer of footers) {
+    for (const blanks of [1, 2, 3, 4]) {
+      for (const body of [[spinner, ...Array(blanks).fill("")], [spinner, tip, ...Array(blanks).fill("")]]) {
+        for (const input of [CLAUDE_GHOST, CLAUDE_EMPTY, CLAUDE_TYPED, mixed]) {
+          const ansi = [...body, RULE, input, RULE, ...footer].join("\n");
+          const { judge } = splitGhostText(ansi);
+          const label = `바닥글 ${footer.length}줄 · 빈 줄 ${blanks} · ${body.length - blanks}줄 본문 · ${plainOf(input)}`;
+          assert.deepEqual(readStatusLine(judge), { kind: "working", tool: "claude", clockSec: 32 }, label);
+          // 친 글은 지워지지 않는다.
+          if (input === CLAUDE_TYPED) assert.ok(judge.includes("hello typed"), label);
+          if (input === mixed) assert.ok(judge.includes("실제입력"), label);
+        }
+      }
+    }
+  }
+});
+
+test("검수 F1 반대 방향: 회전 줄이 없는 쉬는 화면은 바닥글 1·3·5·8줄 모두 idle 그대로다", () => {
+  const done = "✻ Cogitated for 3m 44s";
+  for (const count of [1, 3, 5, 8]) {
+    const footer = Array.from({ length: count }, (_, i) => `  알림 ${i + 1}`);
+    for (const blanks of [1, 4]) {
+      const { judge } = splitGhostText([done, ...Array(blanks).fill(""), RULE, CLAUDE_GHOST, RULE, ...footer].join("\n"));
+      assert.equal(readStatusLine(judge).kind, "idle", `바닥글 ${count}줄 · 빈 줄 ${blanks}`);
+    }
+  }
+  // 사건 세 시점의 바닥글 꼴도 그대로 idle이다.
+  for (const footer of [NOTICE_FOOTERS[0], ...MODE_ONLY_FOOTERS]) {
+    assert.equal(readStatusLine(splitGhostText(claudeScreen(CLAUDE_GHOST, footer)).judge).kind, "idle", footer.join(" / "));
+  }
+});
+
+// PR #374 검수 F2: codex 상태 줄은 "모델 낱말 + 강도 낱말 + ` · ` + 경로" 구조만 본다(강도 낱말 목록 없음).
+test("검수 F2: codex 상태 줄의 강도 낱말이 무엇이든 같은 결과이고, 구조가 다른 줄은 상태 줄이 아니다", () => {
+  const build = (input, status) => [HISTORY, "", "⏺ ok", input, "", status].join("\n");
+  for (const status of ["  unknown-model future-effort · /tmp/example", "  zorvex-9 ultra · ~/Dev/example · Context 32% used",
+    "  GPT-6.1-Sol default · /tmp/example", "  gpt-6.1-sol xhigh · ~/Dev/example"]) {
+    const ghost = splitGhostText(build(CODEX_GHOST, status));
+    assert.equal(ghost.judge.split("\n").at(-3), "›", status);
+    assert.equal(ghost.ghost, "Ask Codex to do anything", status);
+    assert.equal(readStatusLine(ghost.judge).kind, "idle", status);
+    const typed = splitGhostText(build(CODEX_TYPED, status));
+    assert.equal(typed.judge, plainOf(build(CODEX_TYPED, status)), status);
+    assert.equal(typed.ghost, "", status);
+    // 단축키 줄이 붙은 두 줄 바닥글도 같다.
+    const two = splitGhostText(`${build(CODEX_GHOST, status)}\n  ? for shortcuts`);
+    assert.equal(two.ghost, "Ask Codex to do anything", status);
+  }
+  const quote = `${E}[2m› 본문 인용${E}[0m`;
+  for (const line of ["  한낱말 · /tmp/example", "  세 낱말 이상 줄 · /tmp/example", "  model effort · 경로아님",
+    "  model effort /tmp/example", "model effort · /tmp/example", "  model  effort · /tmp/example"]) {
+    const ansi = build(quote, line);
+    const out = splitGhostText(ansi);
+    assert.equal(out.judge, plainOf(ansi), line);
+    assert.equal(out.ghost, "", line);
+  }
+  // 상태 줄 꼴이어도 codex 입력칸의 다른 조건(다음 줄 빈 줄, 바닥글 1~2줄)이 어긋나면 보존한다.
+  for (const ansi of [[quote, "  model effort · /tmp/example"].join("\n"),
+    [quote, "", "  model effort · /tmp/example", "  이어지는 본문"].join("\n"),
+    [quote, "", "  model effort · /tmp/example", "  ? for shortcuts", "  한 줄 더"].join("\n")]) {
+    const out = splitGhostText(ansi);
+    assert.equal(out.judge, plainOf(ansi), ansi);
+    assert.equal(out.ghost, "", ansi);
+  }
+});
+
 test("입력칸이 아닌 곳은 그대로 둔다: 가로줄 없는 인용·들여쓴 인용·선택 메뉴·바닥글 없음·바닥글 6줄 이상", () => {
   const quote = `${E}[2m❯ 본문 인용${E}[0m`;
   const footer = [PATH_LINE, OPUS_STATUS, MODE_LINE];

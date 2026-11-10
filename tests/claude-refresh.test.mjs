@@ -505,6 +505,16 @@ test('끄기 직전 확인: 새 바닥글 꼴 + 흐린 제안 문구는 통과, 
     assert.throws(() => confirmIdleBeforeStop('s', mk(screen('❯ 사람이 친 글', footer))), /판정 불가: 입력 대기 화면이 아님/, name);
     assert.throws(() => confirmIdleBeforeStop('s', mk(screen(ghost, footer, ['✢ Grooving… (32s · ↓ 1.7k tokens)', '']))), /working/, name);
   }
+  // PR #374 검수 F1: 바닥글 8줄 + 회전 줄과 입력칸 사이 빈 줄 3·4개면 회전 줄이 화면 끝 14줄 밖이다. 그래도 거절한다.
+  const eight = Array.from({length: 8}, (_, i) => `  알림 ${i + 1}`);
+  for (const blanks of [1, 2, 3, 4]) {
+    for (const body of [['✢ Grooving… (32s · ↓ 1.7k tokens)'], ['✢ Grooving… (32s · ↓ 1.7k tokens)', '  ⎿  Tip: 지어낸 도움말 줄']]) {
+      const text = screen(ghost, eight, [...body, ...Array(blanks).fill('')]);
+      assert.throws(() => confirmIdleBeforeStop('s', mk(text)), /working: 응답 생성 중/, `빈 줄 ${blanks} · 본문 ${body.length}줄`);
+    }
+    // 회전 줄이 없는 같은 화면은 통과한다(쉬는 역할을 다시 막지 않는다).
+    assert.doesNotThrow(() => confirmIdleBeforeStop('s', mk(screen(ghost, eight, ['✻ Cogitated for 3m 44s', ...Array(blanks).fill('')]))), `쉬는 화면 · 빈 줄 ${blanks}`);
+  }
 });
 
 test('다시 켠 뒤 화면: 안정되면 그때 읽고(ready), 30초 안에 안 되면 시간 초과 화면을 싣는다 — 이메일은 가린다', () => {
