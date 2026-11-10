@@ -149,3 +149,52 @@ test('실제 CLI(F1): 같은 이름을 새 대화로 다시 쓴 세션은 옛 �
   assert.match(done.stderr, /reuserole — 이 업무의 발령을 받은 대화 세대가 아님 · 끄려면 kadan stop reuserole/);
   kadan('stop', 'reuserole');
 });
+
+// 공통: 역할 하나를 띄우고, 그 역할에 실행 하나를 발령·done한 업무를 만든다.
+function oneRoleWork(t, name, role, workKey) {
+  const s = setup(t, name);
+  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, `kadan-${role}`, role);
+  const home = ledgerHome(), store = new WorkStore(home), cards = new CardStore(home);
+  store.create({key: workKey, title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'wcboss', repoPath: s.work});
+  store.change(workKey, 'execute', {title: 'x', body: '본문', phase: 'implementation', round: '1'}, {revision: 1, by: 'wcboss', note: '발령'});
+  const key = store.get(workKey).executions[0].key, id = key.split('/')[1];
+  cards.update(key, {status: 'assigned', role, board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(key).revision, note: '배정', by: 'wcboss'});
+  appendLedger({kind: 'send', by: 'wcboss', role, taskId: id, executionKey: key, digest: 'd' + id});
+  appendLedger({kind: 'done', by: role, role, taskId: id, executionKey: key, result: 'ok'});
+  const complete = () => spawnSync(process.execPath, [cli, 'work', 'complete', workKey, '--revision', String(store.get(workKey).revision), '--result', '근거', '--note', '확인'],
+    {encoding: 'utf8', env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: 'wcboss'}});
+  return {s, home, store, key, complete};
+}
+
+test('실제 CLI(R1): 새 대화로 다시 쓴 이름에 옛 실행 주소의 일반 우편만 있으면 마감해도 꺼지지 않는다', {skip}, t => {
+  const w = oneRoleWork(t, 'r1', 'r1role', 'repo/r1');
+  assert.equal(kadan('stop', 'r1role').status, 0);
+  wait(30);
+  fs.rmSync(w.s.ready, {force: true});
+  launch({HOLD: `${w.s.lock(B)},${w.s.rollout(B)}`}, w.s, 'kadan-r1role', 'r1role');
+  const mail = kadan('mail', 'r1role', '--execution', w.key, '옛 실행에 대한 일반 질문');
+  assert.equal(mail.status, 0, mail.stdout + mail.stderr);
+  const general = of('kadan-r1role').filter(e => e.kind === 'send' && e.executionKey === w.key && !e.taskId);
+  assert.ok(general.length >= 1, '실행 주소만 붙고 taskId가 없는 일반 우편이 원장에 남았다');
+  const done = w.complete();
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(tmuxFloor.alive('kadan-r1role'), true);
+  assert.match(done.stderr, /r1role — 이 업무의 발령을 받은 대화 세대가 아님/);
+  kadan('stop', 'r1role');
+});
+
+test('실제 CLI(R2): 진행 중인 인계(prepared)에 묶인 역할은 마감해도 꺼지지 않고, 끝난 인계면 꺼진다', {skip}, t => {
+  const w = oneRoleWork(t, 'r2', 'r2role', 'repo/r2');
+  const dir = path.join(w.home, 'handovers'); fs.mkdirSync(dir, {recursive: true});
+  fs.writeFileSync(path.join(dir, 'h.json'), JSON.stringify({id: 'h', phase: 'prepared', from: 'r2role', to: 'r2next'}));
+  const done = w.complete();
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(tmuxFloor.alive('kadan-r2role'), true);
+  assert.match(done.stderr, /r2role — 진행 중인 인계에 묶여 있음/);
+  // 인계가 끝난 뒤 업무를 다시 열고 마감하면 꺼진다(정상 방향).
+  fs.writeFileSync(path.join(dir, 'h.json'), JSON.stringify({id: 'h', phase: 'complete', from: 'r2role', to: 'r2next'}));
+  w.store.change('repo/r2', 'reopen', {}, {revision: w.store.get('repo/r2').revision, by: 'wcboss', note: '재개'});
+  const again = w.complete();
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.equal(tmuxFloor.alive('kadan-r2role'), false);
+});

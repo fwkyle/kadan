@@ -342,3 +342,110 @@ test('F3: 끄기 직전 확인 함수가 던지면 끄지 않는다 / 인자가 
   assert.equal(plain.ok, true);
   assert.deepEqual(w.stopped, ['kadan-작업A']);
 });
+
+// ---- 재검수 R1~R3: 끄려면 "증명"돼야 한다. 모름·읽기 실패·모양이 다름은 끄지 않는다 ----
+const oldKey = w => w.store.get('repo/w').executions.find(x => w.cards.get(x.key).role === '작업A').key;
+const sendTo = (w, extra) => appendLedger({kind: 'send', by: '감독', role: '작업A', digest: `x${Math.random()}`, t: T('08-01T00:00:00Z'), ...extra}, w.home);
+// 새 대화로 다시 쓴 세션에, 옛 실행 주소가 붙은 우편(발령이 아닌 것)만 쌓인 상태.
+function reusedWith(extra) {
+  const w = world(); w.done(); reuse(w, {conversationMode: 'new'});
+  const key = oldKey(w); sendTo(w, {executionKey: key, ...(typeof extra === 'function' ? extra(key) : extra)});
+  return w;
+}
+const skipsA = (w, pattern = /발령을 받은 대화 세대가 아님/) => {
+  const out = run(w);
+  assert.ok(!w.stopCalls.includes('작업A'), '작업A를 끄면 안 된다');
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, pattern);
+};
+
+test('R1: 실행 주소만 붙은 일반 우편은 발령이 아니다', () => skipsA(reusedWith({})));
+for (const [name, extra] of [
+  ['답장', {replyTo: 'm1'}], ['최종 답장', {replyFinal: true}], ['알림', {notificationOnly: true}],
+  ['--raw 전달 읽음', {deliveredRead: true}],  ['메일함 전송', {transport: 'mailbox', mailKind: 'report'}], ['전달이 확정 아님', {keyDelivery: 'unknown'}],
+]) {
+  test(`R1: taskId가 풀려도 ${name}은 발령이 아니다`, () => {
+    const w = reusedWith(key => ({taskId: key.split('/')[1], ...extra}));
+    skipsA(w, /발령을 받은 대화 세대가 아님|미확정 카드/);
+  });
+}
+for (const [name, extra, pattern] of [
+  ['시작 시각이 해석 불가', {t: 'not-a-date'}, /시작 시각을 확정할 수 없음/],
+  ['시작 시각이 비어 있음', {t: ''}, /시작 시각을 확정할 수 없음/],
+  ['resume만 적고 이어짐 증거(reopenOf·restartOf)가 없음', {conversationMode: 'resume', t: T('06-01T00:00:00Z')}, /발령을 받은 대화 세대가 아님/],
+]) {
+  test(`R3: 새 세대 ${name} → 끄지 않는다`, () => {
+    const w = world(); w.done();
+    appendLedger({kind: 'stop', role: '작업A', session: 'kadan-작업A', by: '감독', t: T('03-01T00:00:00Z')}, w.home);
+    startOf(w, '작업A', {conversationMode: 'new', ...extra});
+    skipsA(w, pattern);
+  });
+}
+test('R3: 이어짐이 증명된 start(reopenOf·restartOf)는 그대로 대상이다', () => {
+  for (const extra of [{reopenOf: 'abc'}, {restartOf: 'abc'}]) {
+    const w = world(); w.done(); reuse(w, extra);
+    run(w);
+    assert.ok(w.stopCalls.includes('작업A'), JSON.stringify(extra));
+  }
+});
+
+test('호출 역할을 알 수 없으면(빈 값) 아무것도 끄지 않는다', () => {
+  const w = world(); w.done();
+  const out = run(w, {callerRole: ''});
+  assert.deepEqual(w.stopCalls, []);
+  assert.equal(out.skipped.length, 2);
+  assert.match(out.skipped[0].reason, /부른 역할을 알 수 없음/);
+});
+
+test('보류(hold) 업무의 실행에 배정된 역할도 다른 열린 업무로 보호한다', () => {
+  const w = world({extraOpenWork: '작업A'});
+  w.store.change('repo/other', 'update', {status: 'hold'}, {revision: w.store.get('repo/other').revision, by: '감독', note: '보류'});
+  w.done();
+  run(w);
+  assert.ok(!w.stopCalls.includes('작업A'));
+});
+
+// R2: 진행 중인 인계
+const stateFile = (w, name, body) => {
+  const dir = path.join(w.home, 'handovers'); fs.mkdirSync(dir, {recursive: true});
+  fs.writeFileSync(path.join(dir, name), typeof body === 'string' ? body : JSON.stringify(body));
+};
+for (const phase of ['preparing', 'prepared', 'accepted', 'routes-pending', 'transferred', 'stopped', 'activation-pending']) {
+  test(`R2: 인계 단계 ${phase}에 묶인 선임·후임은 끄지 않는다`, () => {
+    for (const side of ['from', 'to']) {
+      const w = world();
+      stateFile(w, 'h1.json', {id: 'h1', phase, from: side === 'from' ? '작업A' : '다른선임', to: side === 'to' ? '작업A' : '다른후임'});
+      w.done();
+      const out = run(w);
+      assert.ok(!w.stopCalls.includes('작업A'), `${phase}/${side}`);
+      assert.match(out.skipped.find(s => s.role === '작업A').reason, /진행 중인 인계/);
+    }
+  });
+}
+test('R2: 끝난 인계(complete·aborted)와 인수 근거 파일은 막지 않는다', () => {
+  const w = world();
+  stateFile(w, 'a.json', {id: 'a', phase: 'complete', from: '작업A', to: 'x'});
+  stateFile(w, 'b.json', {id: 'b', phase: 'aborted', from: '작업A', to: 'y'});
+  stateFile(w, 'c.json', {receipt: '근거'});
+  w.done(); run(w);
+  assert.ok(w.stopCalls.includes('작업A'));
+});
+test('R2: 인계 상태 파일을 읽지 못하면(깨진 JSON·phase 모양 이상) 끄지 않는다', () => {
+  for (const body of ['{깨짐', {id: 'z', phase: 7}]) {
+    const w = world(); stateFile(w, 'bad.json', body); w.done();
+    const out = run(w);
+    assert.deepEqual(w.stopCalls, []);
+    assert.match(out.skipped[0].reason, /인계 상태를 읽지 못함/);
+  }
+});
+test('R2: 원장에 prepared만 있고 complete·aborted가 없는 인계도 막는다', () => {
+  const w = world(); w.done();
+  appendLedger({kind: 'handover', phase: 'prepared', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w.home);
+  run(w);
+  assert.ok(!w.stopCalls.includes('작업A'));
+  appendLedger({kind: 'handover', phase: 'complete', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w.home);
+  const w2 = world(); w2.done();
+  appendLedger({kind: 'handover', phase: 'prepared', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w2.home);
+  appendLedger({kind: 'handover', phase: 'complete', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w2.home);
+  run(w2);
+  assert.ok(w2.stopCalls.includes('작업A'));
+});

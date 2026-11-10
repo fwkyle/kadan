@@ -11,6 +11,8 @@
 //
 // 비용: 역할 N개마다 판정을 두 번(고르기 + 끄기 직전) 한다. 판정 한 번 = 원장 1회 + 업무 목록 1회 + 카드 읽기
 // (업무 수 × 실행 수) + 세대 계산(원장 길이에 비례). 원장이 10배면 역할마다 판정 시간도 약 10배다. 역할은 보통 2~4개.
+import fs from "node:fs";
+import path from "node:path";
 import { CardStore } from "./card-store.mjs";
 import { WorkStore } from "./work-store.mjs";
 import { readLedger } from "./ledger.mjs";
@@ -18,7 +20,6 @@ import { taskIdentity } from "./task-identity.mjs";
 import { sessionOwner, assertSessionOwner } from "./session-ownership.mjs";
 import { pendingCardsFor } from "./cli-start-support.mjs";
 import { withEffectiveOwner, effectiveCardRole } from "./handover-state.mjs";
-import { createMailGenerations } from "./mail-generation.mjs";
 import { TARGETS } from "./revive.mjs";
 import { stopRole as defaultStopRole } from "./role-stop.mjs";
 import { confirmIdleBeforeStop } from "./commands/restart.mjs";
@@ -26,35 +27,98 @@ import { floor as defaultFloor } from "./floor.mjs";
 
 const STOPPABLE_PROFILES = new Set(["worker", "reviewer"]);
 const finiteTime = t => Number.isFinite(Date.parse(t));
+// 세 값: YES(증명됨) / NO(아님이 확인됨) / UNKNOWN(모름·읽기 실패·모양이 다름). 끄기는 전부 YES일 때만이다.
+const YES = "yes", NO = "no", UNKNOWN = "unknown";
 
-// 업무의 실행 카드마다 [카드, 확정 인계를 반영한 현재 담당]. 읽기 실패는 던진다(호출자가 "끄지 않음"으로 처리).
+// 업무의 실행 카드마다 [카드, 확정 인계를 반영한 현재 담당]. 카드가 없으면 모름이라 던진다(호출자가 "끄지 않음"으로 처리).
 function assignments(work, cards, entries, identity) {
   const out = [];
   for (const link of work.executions) {
     const card = cards.get(link.key);
-    if (!card) continue;
+    if (!card) throw new Error(`실행 카드를 읽지 못함: ${link.key}`);
     const role = effectiveCardRole(card, entries, identity);
     if (typeof role === "string" && role.trim()) out.push({ key: link.key, card, role: role.trim() });
   }
   return out;
 }
 
-// 이 역할이 이 실행을 "받은" 시각들: 그 역할 앞으로 간 발령(send)과, 그 역할이 인계받은 확정 인계 시각.
-function receivedTimes(entries, identity, key, role) {
-  const times = [];
-  for (const e of entries) {
-    if (e.kind === "send" && e.role === role && (e.executionKey === key || (e.taskId && identity.resolve(e.taskId).key === key))) times.push(e.t);
-    if (e.kind === "handover" && e.phase === "transferred" && e.to === role
-      && e.taskIds?.some(id => { const found = identity.resolve(id); return found.state === "resolved" && found.key === key; })) times.push(e.t);
+// R1: "실제 발령"만 근거다. 발령 명령이 남기는 send = 카드 발령의 taskId가 이 업무의 실행으로 풀리는 것.
+// 기준은 pendingCardsFor/openTaskIds의 발령 판정(kind send + taskId + 연결 오류 없음)에서 가져오되 가장 좁게 줄였다:
+// executionKey만 붙은 일반 우편·답장·알림(notificationOnly)·전달 읽음(--raw)·자동 생성 우편·메일함 전송·전달이 확정 아닌 것은 세지 않는다.
+function isDispatch(e, identity, key) {
+  if (e?.kind !== "send" || typeof e.role !== "string" || typeof e.taskId !== "string" || !finiteTime(e.t)) return false;
+  if (e.notificationOnly || e.deliveredRead || e.replyTo || e.replyFinal || e.expectReply || e.systemGenerated
+    || e.transport === "mailbox" || e.mailKind || e.header) return false;
+  if (e.keyDelivery !== undefined && e.keyDelivery !== "sent") return false;
+  if (e.executionKey !== undefined && e.executionKey !== key) return false;
+  const found = identity.resolve(e.taskId);
+  return found.state === "resolved" && found.key === key;
+}
+function isTransferTo(e, identity, key, role) {
+  return e?.kind === "handover" && e.phase === "transferred" && e.to === role && finiteTime(e.t)
+    && Array.isArray(e.taskIds) && e.taskIds.some(id => { const found = identity.resolve(id); return found.state === "resolved" && found.key === key; });
+}
+
+// R3: 이 역할의 지금 세대 시작(경계)을 원장에서 직접 구한다. 이어짐은 증명될 때만 이어진 것으로 본다:
+// 같은 pane PID로 다시 기록된 start(살아 있는 세션 재사용), 또는 restartOf·reopenOf·restoredFrom·secretaryResumeSource가 문자열로 있는 start.
+// 칸 없는 `conversationMode: resume`만으로는, --inherit-mail만으로는 이어졌다고 보지 않는다(경계로 본다 → 더 적게 끈다).
+// 경계 시각(start.t)이 없거나 해석할 수 없으면 모름이다.
+const proven = v => typeof v === "string" && v.trim() !== "";
+function currentGenerationStart(entries, role) {
+  let gen = null, last = null;
+  entries.forEach((e, index) => {
+    if (e?.kind === "stop" && (e.role === role || e.session === `kadan-${role}`)) { last = null; return; } // 끈 뒤의 start는 살아 있는 세션 재사용이 아니다
+    if (e?.kind !== "start" || e.role !== role) return;
+    const pid = e.panePid ?? e.rottiePid, lastPid = last && (last.panePid ?? last.rottiePid);
+    const same = last && pid != null && String(pid).trim() !== "" && String(pid) === String(lastPid);
+    const continued = same || proven(e.restartOf) || proven(e.reopenOf) || proven(e.restoredFrom) || proven(e.secretaryResumeSource);
+    if (!gen || !continued) gen = { index, t: e.t };
+    last = e;
+  });
+  return gen;
+}
+
+function dispatchedInCurrentGeneration(entries, identity, mine, role) {
+  const gen = currentGenerationStart(entries, role);
+  if (!gen || !finiteTime(gen.t)) return UNKNOWN;
+  const from = Date.parse(gen.t);
+  const proof = entries.some((e, index) => index > gen.index && Date.parse(e?.t) >= from
+    && mine.some(a => (isDispatch(e, identity, a.key) && e.role === role) || isTransferTo(e, identity, a.key, role)));
+  return proof ? YES : NO;
+}
+
+// R2: 이 역할이 선임이든 후임이든 끝나지 않은 인계가 없다. 인계 상태는 `<home>/handovers/*.json`(상태 파일, phase)에서 읽고,
+// 끝난 단계는 complete·aborted뿐이다(handover.mjs의 겹침 검사·hierarchy-prune.mjs와 같은 기준). 원장 사건(prepared 이후 complete/aborted 없음)도 함께 본다.
+// 폴더가 없으면 인계가 없는 것이고, 파일을 읽거나 해석하지 못하면 모름이다.
+function noPendingHandover(home, entries, role) {
+  const dir = path.join(home, "handovers");
+  let names = [];
+  try { names = fs.readdirSync(dir).filter(n => n.endsWith(".json")); }
+  catch (error) { if (error.code !== "ENOENT") return UNKNOWN; }
+  for (const name of names) {
+    let state;
+    try { state = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")); } catch { return UNKNOWN; }
+    if (!state || typeof state !== "object") return UNKNOWN;
+    if (!("id" in state) && !("phase" in state)) continue; // 인수 근거(receipt) 파일
+    if (typeof state.phase !== "string") return UNKNOWN;
+    if (["complete", "aborted"].includes(state.phase)) continue;
+    if (state.from === role || state.to === role) return NO;
   }
-  return times.filter(finiteTime);
+  const open = new Map();
+  for (const e of entries) {
+    if (e?.kind !== "handover" || typeof e.handoverId !== "string") continue;
+    if (["complete", "aborted"].includes(e.phase)) open.delete(e.handoverId);
+    else open.set(e.handoverId, e);
+  }
+  return [...open.values()].some(e => e.from === role || e.to === role) ? NO : YES;
 }
 
 // 한 역할을 지금 끌 수 있는가. 끌 수 없으면 {skip: 이유}, 이미 꺼져 있으면 {already}, 끌 수 있으면 {pid}.
-// 던지는 것은 모두 "확인 불가"라 호출자가 끄지 않는다. 매번 최신 원장·카드·업무·화면을 읽는다.
+// 던지는 것은 모두 "확인 불가"라 호출자가 끄지 않는다. 매번 최신 원장·카드·업무·화면을 읽는다. beforeStop도 이 함수를 다시 부른다.
 function evaluate({ home, role, session, work, callerRole, floor }) {
+  if (typeof callerRole !== "string" || !callerRole.trim()) return { skip: "이 명령을 부른 역할을 알 수 없음" };
   if (TARGETS.includes(role)) return { skip: "기반 프로세스는 대상이 아님" };
-  if (callerRole && role === callerRole) return { skip: "이 명령을 부른 역할 자신" };
+  if (role === callerRole) return { skip: "이 명령을 부른 역할 자신" };
   if (!floor.alive(session)) return { already: true };
   const entries = readLedger(home);
   if (entries.some(e => e.broken)) return { skip: "원장 손상: 인계 상태를 읽지 못함" };
@@ -64,18 +128,19 @@ function evaluate({ home, role, session, work, callerRole, floor }) {
     return { skip: owner.start.roleProfile ? `역할 프로필이 ${owner.start.roleProfile}(작업자·검수자가 아님)` : "역할 프로필 기록 없음" };
   }
   const cards = new CardStore(home), identity = taskIdentity(cards.listSummaries());
-  // 이 업무의 발령을 받은 지금 세대인가(F1). 이름이 같아도 새 대화로 다시 뜬 세션은 이 업무와 무관하다.
   const mine = assignments(work, cards, entries, identity).filter(a => a.role === role);
   if (!mine.length) return { skip: "이 업무의 현재 담당이 아님(인계 반영)" };
-  const generations = createMailGenerations();
-  entries.forEach((e, index) => generations.apply(e, index));
-  const inCurrentGeneration = mine.some(a => receivedTimes(entries, identity, a.key, role).some(t => !generations.isPreviousAt(role, t)));
-  if (!inCurrentGeneration) return { skip: "이 업무의 발령을 받은 대화 세대가 아님" };
-  // 다른 열린 업무(F2): 원문 담당과 인계 반영 담당 어느 쪽이든 이 역할이면 보호한다.
+  const handover = noPendingHandover(home, entries, role);
+  if (handover !== YES) return { skip: handover === NO ? "진행 중인 인계에 묶여 있음" : "인계 상태를 읽지 못함" };
+  const generation = dispatchedInCurrentGeneration(entries, identity, mine, role);
+  if (generation !== YES) return { skip: generation === NO ? "이 업무의 발령을 받은 대화 세대가 아님" : "대화 세대의 시작 시각을 확정할 수 없음" };
+  // 다른 열린 업무: 종료(done·cancelled)가 아닌 모든 업무(보류 포함)를 본다. 카드를 못 읽으면 모름이라 끄지 않는다.
   for (const other of new WorkStore(home).list()) {
-    if (other.key === work.key || other.status !== "open") continue;
-    if (other.executions.some(x => { const card = cards.get(x.key); return card && (card.role === role || effectiveCardRole(card, entries, identity) === role); })) {
-      return { skip: `다른 열린 업무 ${other.key}의 실행에 배정됨` };
+    if (other.key === work.key || ["done", "cancelled"].includes(other.status)) continue;
+    for (const x of other.executions) {
+      const card = cards.get(x.key);
+      if (!card) return { skip: `다른 열린 업무 ${other.key}의 실행 카드를 읽지 못함` };
+      if (card.role === role || effectiveCardRole(card, entries, identity) === role) return { skip: `다른 열린 업무 ${other.key}의 실행에 배정됨` };
     }
   }
   const pending = pendingCardsFor(identity.project(entries), role);
