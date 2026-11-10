@@ -6,8 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {runnerTemplate, fillTemplate, resumeTail, rebuildResumeCommand, findConversation, checkConversationSpec} from '../src/runner-table.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
-import {launchIdentityOf} from '../src/ai-identity.mjs';
+import {launchIdentityOf, commandWords} from '../src/ai-identity.mjs';
 import {restoreCommand} from '../src/server-restore-command.mjs';
+import {adoptCommand} from '../src/adopt.mjs';
+import {readConversationPermissions} from '../src/adopt-permissions.mjs';
 import {TABLE, settingsWith} from './helpers/runner-table.mjs';
 
 const ID = '0197aaaa-1111-4222-8333-444455556666';
@@ -238,7 +240,8 @@ test('명령 재조립: 중간 resume이어도 모호한 대화 지정은 거절
   rejects('claude --resume=abc --model m');
   rejects('claude -r abc --model m');
   rejects('claude --resume a --continue --model m');
-  rejects('claude --resume a --fork-session --model m');
+  // 떨어진 fork 표시(쌍과 fork 사이에 다른 옵션). 붙어 있는 한 벌(`--resume a --fork-session --model m`)은 아래 adopt 꼴 시험에서 받는다.
+  rejects('claude --resume a --model m --fork-session');
   rejects('claude --resume --dangerously-skip-permissions --model m');
 });
 
@@ -255,4 +258,68 @@ test('명령 재조립: `--` 뒤 입력이나 값이 빠진 옵션이 있으면 
     ['agy', 'agy --conversation old -- hello'], ['claude', 'claude --resume old --append-system-prompt']]) {
     assert.throws(() => rebuildResumeCommand(settings, runner, cmd, ID), /대화 지정/, cmd);
   }
+});
+
+// adopt 꼴: 갈라 연(fork) 꼬리가 명령 앞·중간에 있고 그 뒤에 모델·강도·권한 옵션이 붙는다. 명령은 adoptCommand의 실제 출력이다.
+const ORIGIN = '0197cccc-1111-4222-8333-444455556666';
+
+test('명령 재조립: 실제 adopt 꼴(claude)의 중간 fork 꼬리를 떼고 살아 있는 대화로 resume한다', () => {
+  const adopted = adoptCommand({harness: 'claude', id: ORIGIN, model: 'claude-opus-5-5[1m]', effort: 'high',
+    permissionArgs: ['--permission-mode', 'bypassPermissions']});
+  assert.equal(adopted,
+    `claude --resume ${ORIGIN} --fork-session --model 'claude-opus-5-5[1m]' --effort high '--permission-mode' 'bypassPermissions'`);
+  const rebuilt = rebuildResumeCommand(settings, 'claude', adopted, ID);
+  // fork 꼬리만 사라지고 모델·강도·권한 옵션은 그대로다. 원본 대화가 아니라 살아 있는 대화로 이어 연다.
+  assert.equal(rebuilt, `claude --model 'claude-opus-5-5[1m]' --effort high --permission-mode bypassPermissions --resume ${ID}`);
+  assert.deepEqual(conversationOf(rebuilt), {conversationMode: 'resume', conversationRef: ID});
+  assert.equal(launchIdentityOf(rebuilt).model, 'claude-opus-5-5[1m]');
+  assert.equal(rebuildResumeCommand(settings, 'claude', rebuilt, ID), rebuilt);
+  // 운영 기록의 꼴: 래퍼 경로와 정지 훅 설정이 앞에 있다.
+  const live = `/opt/x/bin/claude --settings '/opt/x/claude-settings.json' --resume ${ORIGIN} --fork-session`
+    + ` --model claude-opus-5-5 --effort max '--permission-mode' 'bypassPermissions'`;
+  assert.equal(rebuildResumeCommand(settings, 'claude', live, ID),
+    `/opt/x/bin/claude --settings /opt/x/claude-settings.json --model claude-opus-5-5 --effort max --permission-mode bypassPermissions --resume ${ID}`);
+  // 권한 옵션이 없는 adopt 출력도 같다.
+  assert.equal(rebuildResumeCommand(settings, 'claude', adoptCommand({harness: 'claude', id: ORIGIN, model: 'm'}), ID),
+    `claude --model m --resume ${ID}`);
+});
+
+test('명령 재조립: 실제 adopt 꼴(codex)의 앞 fork 꼬리를 떼고 살아 있는 대화로 resume한다', () => {
+  // 권한 인자는 adopt가 원본 대화에서 읽는 실제 꼴이다(src/adopt-permissions.mjs readConversationPermissions).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-adopt-fork-'));
+  const transcript = path.join(dir, 'rollout.jsonl');
+  const sandbox = {type: 'workspace-write', writable_roots: ['/tmp/a b'], network_access: false,
+    exclude_tmpdir_env_var: true, exclude_slash_tmp: true};
+  fs.writeFileSync(transcript, `${JSON.stringify({type: 'turn_context', payload: {approval_policy: 'on-request', sandbox_policy: sandbox}})}\n`);
+  for (const args of [readConversationPermissions(transcript, 'codex').args,
+    ['-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"'], []]) {
+    const adopted = adoptCommand({harness: 'codex', id: ORIGIN, model: 'gpt-6-sol', effort: 'high', permissionArgs: args});
+    assert.ok(adopted.startsWith(`codex fork ${ORIGIN} --model gpt-6-sol -c model_reasoning_effort=high`), adopted);
+    const rebuilt = rebuildResumeCommand(settings, 'codex', adopted, ID);
+    assert.deepEqual(commandWords(rebuilt),
+      ['codex', '--model', 'gpt-6-sol', '-c', 'model_reasoning_effort=high', ...args, 'resume', ID], rebuilt);
+    assert.deepEqual(conversationOf(rebuilt), {conversationMode: 'resume', conversationRef: ID});
+    assert.equal(rebuildResumeCommand(settings, 'codex', rebuilt, ID), rebuilt);
+  }
+});
+
+test('명령 재조립: fork 꼬리 한 벌이 아니면(떨어짐·다른 지정 병존·표와 다른 꼴) 계속 거절한다', () => {
+  const noFork = settingsWith({claude: {...TABLE.claude, fork: undefined}});
+  const adopted = adoptCommand({harness: 'claude', id: ORIGIN, model: 'm', permissionArgs: ['--permission-mode', 'plan']});
+  assert.throws(() => rebuildResumeCommand(noFork, 'claude', adopted, ID), /대화 지정/);
+  for (const [runner, cmd] of [
+    ['claude', `claude --resume ${ORIGIN} --model m --fork-session`], // 떨어진 fork 표시
+    ['claude', `claude --resume ${ORIGIN} --fork-session --model m --resume ${NEW}`], // fork 한 벌 + resume 하나 더
+    ['claude', `claude --resume ${NEW} --model m --resume ${ORIGIN} --fork-session`],
+    ['claude', `claude --resume ${ORIGIN} --fork-session --continue --model m`],
+    ['claude', `claude --continue --resume ${ORIGIN} --fork-session --model m`],
+    ['claude', `claude --resume=${ORIGIN} --fork-session --model m`], // 표와 다른 꼴
+    ['claude', `claude -r ${ORIGIN} --fork-session --model m`],
+    ['claude', `claude --resume ${ORIGIN} --fork-session --model m --fork-session`], // 떠도는 fork 표시 하나 더
+    ['claude', `claude --resume --model m --resume ${ORIGIN} --fork-session`], // 값 없는 --resume이 따로 있다
+    ['claude', `claude --resume ${ORIGIN} --fork-session --model m -- hello`], // `--` 뒤 입력
+    ['codex', `codex fork ${ORIGIN} --model m resume ${NEW}`],
+    ['codex', `codex fork ${ORIGIN} --model m -- hello`],
+    ['codex', 'codex fork --model m'],
+  ]) assert.throws(() => rebuildResumeCommand(settings, runner, cmd, ID), /대화 지정/, cmd);
 });

@@ -175,7 +175,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
    `pid-json`의 `match`는 없는 키는 건너뛰고 있는 키는 틀 값과 같아야 한다. 키 유무와 관계없이
    파일 수정 시각이 살아 있는 뿌리 프로세스 시작 시각 이상이어야 한다(`ps lstart`가 초 단위라 같은 초는 허용).
    낡은 파일이나 시작 시각 조회 실패는 끄기 전에 거절한다. 기존 운영 `runner-settings.json` 수정은 필요 없다.
-4. 마지막 `start`의 명령에서 대화 인자만 바꾼다(`resume` 틀의 꼬리). 실행기·모델이 같고 같은 대화(resume)로 읽혀야 한다. 갈라 연 명령(`adopt`의 `--fork-session` 등)은 표에 `fork` 틀이 있으면 그 꼬리를 떼고 살아 있는 대화로 resume한다.
+4. 마지막 `start`의 명령에서 대화 인자만 바꾼다(`resume` 틀의 꼬리). 실행기·모델이 같고 같은 대화(resume)로 읽혀야 한다. 갈라 연 명령(`adopt`의 `--resume <ID> --fork-session`·`codex fork <ID>`)은 표에 `fork` 틀이 있으면 그 꼬리를 떼고 살아 있는 대화(갈라 연 뒤의 지금 대화, 원본 아님)로 resume한다. 꼬리는 명령 끝이 아니어도 된다 — `adopt`는 그 뒤에 모델·강도·권한 옵션을 붙이며, 그 옵션들은 그대로 남는다. 떼는 조건은 표의 `fork` 꼬리와 같은 모양이 한 벌이고 명령의 대화 지정이 모두 그 한 벌 안에 있는 것이다. 쌍과 떨어진 `--fork-session`, 한 벌 말고 더 있는 대화 지정(`--resume` 하나 더·`--continue`·값 없는 `--resume`), 표와 다른 꼴(`--resume=<ID>`·`-r <ID>`), `--` 뒤 입력이 있으면 끄기 전에 "대화 지정" 문구로 거절한다.
 5. `stop`(`restart: true` 표시) → 같은 작업 폴더에서 새 명령으로 시작 → 기계 창 설정(`KADAN_WINDOW`)대로 창을 연다 → `start`에 `restartOf`(옛 start의 지문)·`restartConversation`을 적는다. `restartOf`는 `restoredFrom`처럼 새 세대가 아니다(우편·책임·감시 발령을 이어받음).
 
 - 비서 복원 명령의 `--model`·`-c`는 키마다 시작 명령의 것이 이기고 대화의 옵션은 빈 키만 채운다([복원 규칙](recovery.md#로그인-때-비서-대화-복원)).
