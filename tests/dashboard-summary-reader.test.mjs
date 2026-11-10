@@ -38,7 +38,7 @@ test('가벼운 요약은 본문을 읽지 않고 전체 화면 수집과 같은
     },
     () => { live = []; },
     // Autopilot(PR3 검수): 켜짐 → 끝 시각 지남 → 꺼짐 기록. 빠른 경로와 전체 경로가 같은 autopilot 값을 낸다.
-    () => appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'x', level: 'autopilot', onlyRunning: false,
+    () => appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'x', level: 'autopilot',
       until: new Date(Date.now() + 3600_000).toISOString(), t: new Date().toISOString()}, f.home),
     () => appendLedger({kind: 'autopilot', phase: 'off', startedAt: new Date().toISOString(),
       endedAt: new Date().toISOString(), t: new Date().toISOString()}, f.home),
@@ -134,7 +134,7 @@ test('요약의 autopilot: 현황을 보지 않아도 새 autopilot 사건이 �
   const f = dashboardFixture({count: 2});
   const read = createDashboardSummaryReader(f.home, {listSessions: () => []});
   assert.deepEqual(read().autopilot, {on: false, last: null});
-  appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'x', level: 'autopilot', onlyRunning: false,
+  appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'x', level: 'autopilot',
     until: new Date(Date.now() + 3600_000).toISOString(), t: new Date().toISOString()}, f.home);
   assert.equal(read().autopilot.on, true);
   assert.equal(read().autopilot.level, 'autopilot');

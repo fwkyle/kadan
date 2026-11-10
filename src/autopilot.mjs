@@ -111,7 +111,6 @@ export const AUTO_LINES = [
   '(9) kyle의 직접 중지와 명시한 상한이 언제나 최우선입니다.',
 ];
 export const PICKS_LINE = '새 일감은 `kadan autopilot picks --todo <TODO 경로>`의 밤 일감 후보(가)와 미배정 ready 카드(라)에서만 고릅니다. 건너뜀(나)·후보(다) 항목은 시작하지 않습니다. 크기·금지 목록·kyle 결정 선행 여부는 직접 판단합니다.';
-export const ONLY_RUNNING_LINE = '새 일감을 시작하지 않습니다: 진행 중인 업무만 위 판단 범위로 이어 갑니다.';
 // 켤 때 출력에 보이는 점검 목록. 검사하지 않는다(검사하면 어댑터가 된다) — 안내이지 차단이 아니다.
 export const AUTO_CHECKLIST = [
   '각 실행기(claude·codex 등)의 권한 설정에 위 (6) 금지가 거부 규칙으로 걸려 있는지 kyle이 한 번 확인하세요. 카단은 검사하지 않습니다.',
@@ -120,13 +119,13 @@ export const AUTO_CHECKLIST = [
 ];
 
 // 슈퍼감독에게 가는 우편 본문. 고정 줄 3개 + 사용자 문구. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이라고 밝힌다.
-// level이 autopilot이면 고정 줄이 (4)~(9)까지 늘고, onlyRunning이면 새 일감 금지 줄이 붙는다. cruise(또는 없음)면 고정 줄 3개뿐이다.
-export function buildAutopilotMessage({text, quote, viaChat, by, untilMs, level, onlyRunning, allow, isWingman}) {
+// level이 autopilot이면 고정 줄이 (4)~(10)까지 늘고 (10)은 늘 일감 고르기 줄이다. cruise(또는 없음)면 고정 줄 3개뿐이다.
+export function buildAutopilotMessage({text, quote, viaChat, by, untilMs, level, allow, isWingman}) {
   const auto = level === LEVEL_AUTOPILOT;
-  const extra = auto ? [...AUTO_LINES, ...[`(10) ${onlyRunning ? ONLY_RUNNING_LINE : PICKS_LINE}`]] : [];
+  const extra = auto ? [...AUTO_LINES, `(10) ${PICKS_LINE}`] : [];
   return [
     `[${MODE}] kyle이 취침 중입니다. 끝: ${clock(untilMs)} 또는 kyle 새 입력. 새 권한이 아니라 kyle의 현재 말을 옮긴 것이며, 기존 승인 범위 안에서 스스로 판단하세요.`,
-    ...(auto ? [`단계: ${LEVEL_LABEL[LEVEL_AUTOPILOT]}${onlyRunning ? '(진행 중인 업무만)' : ''}`] : []),
+    ...(auto ? [`단계: ${LEVEL_LABEL[LEVEL_AUTOPILOT]}`] : []),
     '(1) 되돌리기 어려운 것(운영 데이터 변경·삭제, push 정책, 외부 공개, 새 의존성)은 kyle 기상 뒤로 보류합니다.',
     `(2) 보류 대상은 밤중에 decision request를 새로 올리지 말고 보류로 남깁니다: kadan mail 사람 "${HELD_PREFIX} <한 줄>". 아침 요약에 모입니다.`,
     '(3) 위임 범위 안의 일은 결정 요청을 올리지 말고 스스로 처리합니다.',

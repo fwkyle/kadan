@@ -223,15 +223,15 @@ test('Autopilot 단계 지침 (5)번 줄에 autopilot note 안내가 있고 줄 
   const f = fixture({level: 'autopilot'});
   const sent = [];
   f.deps.sendMail = (role, message) => { sent.push(message); return {ok: true, mailId: 'm'}; };
-  f.run(['on', '밤'], {level: 'autopilot', 'only-running': true});
+  f.run(['on', '밤'], {level: 'autopilot'});
   assert.match(sent[0], /kadan autopilot note/);
-  assert.match(sent[0], /\(10\) 새 일감을 시작하지 않습니다/);
+  assert.match(sent[0], /\(10\) 새 일감은 `kadan autopilot picks/);
   assert.match(sent[0], /위 \(1\)~\(10\) 줄/);
 });
 
 test('CLI 입구: Autopilot 단계 켜짐 홈에서 역할 세션의 autopilot note가 autopilotGuard를 통과해 기록된다', () => {
   const f = fixture();
-  appendLedger({...startEvent, level: 'autopilot', onlyRunning: false,
+  appendLedger({...startEvent, level: 'autopilot',
     t: new Date().toISOString(), until: new Date(Date.now() + 3600_000).toISOString()}, f.home);
   const env = {...process.env, KADAN_HOME: f.home, KADAN_WINDOW: 'none', KADAN_ROLE: 'a-감독'};
   const r = spawnSync(process.execPath, [CLI, 'autopilot', 'note', 'decision', '입구 통과', '--work', 'a/w1'], {env, encoding: 'utf8', timeout: 20_000});

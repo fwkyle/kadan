@@ -29,7 +29,7 @@ export function autopilotStrip(snapshot, now = Date.now()) {
   const state = autopilotState(last ? [last] : [], asEvents(snapshot.decisions ?? []), now);
   if (state.on) {
     const s = state.start;
-    return { on: true, since: s.t ?? null, until: s.until ?? null, level: s.level ?? null, onlyRunning: s.onlyRunning === true };
+    return { on: true, since: s.t ?? null, until: s.until ?? null, level: s.level ?? null };
   }
   // 꺼짐. 끝난 기록이 있으면 마지막 시작~끝을 함께 준다(끝 사건이 아직 없는 pending이면 끝 시각만).
   const ended = state.pending

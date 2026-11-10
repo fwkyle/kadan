@@ -33,18 +33,18 @@ function fixture() {
   return {home, sent, run, autopilot};
 }
 
-test('--level autopilot: on 사건에 level·onlyRunning, status, Autopilot 단계 문구, 점검 목록', () => {
+test('--level autopilot: on 사건에 level, status, Autopilot 단계 문구, 점검 목록(onlyRunning 칸 없음)', () => {
   const f = fixture();
   const r = f.run(['on', '밤 위임'], {level: 'autopilot'});
   assert.equal(r.level, 'autopilot');
-  assert.equal(r.onlyRunning, false);
+  assert.equal('onlyRunning' in r, false);
   assert.equal(r.checklist.length, 3);
   const [on] = f.autopilot();
   assert.equal(on.level, 'autopilot');
-  assert.equal(on.onlyRunning, false);
+  assert.equal('onlyRunning' in on, false);
   const s = f.run(['status']);
   assert.equal(s.level, 'autopilot');
-  assert.equal(s.onlyRunning, false);
+  assert.equal('onlyRunning' in s, false);
   const msg = f.sent[0].message;
   assert.match(msg, /단계: Autopilot/);
   assert.match(msg, /묻기 전에 스스로 찾습니다/);
@@ -88,14 +88,23 @@ test('--level 없이 켜면 cruise로 기록하고 문구는 고정 줄 3개뿐(
   }
 });
 
-test('--only-running: 새 일감 금지 줄이 붙고, --level autopilot 없이는 거절', () => {
+test('--only-running은 없앴다: 모르는 옵션으로 종료 코드 2 거절, 켜지지 않고 우편 0통', () => {
+  for (const flags of [{'only-running': true}, {level: 'autopilot', 'only-running': true}, {level: 'autopilot', 'only-running': '밤'}]) {
+    const f = fixture();
+    assert.throws(() => f.run(['on', '밤'], flags), error => error.exitCode === 2 && /모르는 옵션: --only-running/.test(error.message));
+    assert.equal(f.autopilot().length, 0);
+    assert.equal(f.sent.length, 0);
+  }
+});
+
+test('CLI 입구: autopilot on --only-running은 종료 코드 2, 원장에 켜짐 없음', () => {
   const f = fixture();
-  assert.throws(() => f.run(['on', '밤'], {'only-running': true}), /--level autopilot과 함께만/);
+  const env = {...process.env, KADAN_HOME: f.home, KADAN_WINDOW: 'none'};
+  delete env.KADAN_ROLE;
+  const r = spawnSync(process.execPath, [CLI, 'autopilot', 'on', '--level', 'autopilot', '--only-running', '밤'], {env, encoding: 'utf8', timeout: 20_000});
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /모르는 옵션: --only-running/);
   assert.equal(f.autopilot().length, 0);
-  f.run(['on', '밤'], {level: 'autopilot', 'only-running': true});
-  assert.equal(f.autopilot()[0].onlyRunning, true);
-  assert.match(f.sent[0].message, /\(10\) 새 일감을 시작하지 않습니다/);
-  assert.equal(f.run(['status']).onlyRunning, true);
 });
 
 test('--allow: Autopilot 단계·kyle 원문·올바른 키가 있어야 하고, on 사건과 status에 정규화한 허용이 남는다', () => {

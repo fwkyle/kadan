@@ -13,14 +13,15 @@ import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} f
 import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL} from '../autopilot-terms.mjs';
 
 export const MAX_TEXT = 4000;
-const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level cruise | --level autopilot [--only-running] [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'discord-message']);
+const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level cruise | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, untilMs = Date.parse(on.until);
   return {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
     startedAt: on.t, until: on.until, untilLocal: clock(untilMs), remainingMinutes: Math.max(0, Math.round((untilMs - now) / 60_000)),
-    level: on.level ?? LEVEL_CRUISE, onlyRunning: on.onlyRunning === true, allow: on.allow ?? [],
+    level: on.level ?? LEVEL_CRUISE, allow: on.allow ?? [],
     wingman: on.wingman ?? null, wingmanSource: on.wingmanSource ?? 'none', ...(on.wingmanNote ? {wingmanNote: on.wingmanNote} : {}),
     to: on.to ?? [], delivered: on.delivered ?? [], missing,
   };
@@ -150,6 +151,10 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const actor = isUserActor(by) ? 'human' : isSupervisorActor(by) ? 'super' : null;
   if (!actor) throw new Error('Autopilot은 사람 또는 슈퍼감독만 켜고 끕니다');
 
+  // on이 받는 옵션. 그 밖(없앤 --only-running 포함)은 모르는 옵션으로 거절한다. 마무리·기록 전에 본다.
+  const unknown = sub === 'on' ? Object.keys(flags).find(name => !ON_FLAGS.has(name)) : undefined;
+  if (unknown) throw Object.assign(new Error(`autopilot on이 모르는 옵션: --${unknown}. ${USAGE}`), {exitCode: 2});
+
   // 끝났는데 기록이 없는 켜짐(시각 만료·kyle의 새 입력)은 먼저 마무리한다. 이 마무리가 요약을 한 번 보낸다.
   let settled = null;
   if (state.pending) settled = finishAutopilot({home, by, deps});
@@ -178,8 +183,6 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   if (level !== LEVEL_FULL && !LEVELS.includes(level)) throw new Error(`--level은 ${LEVELS.join('|')}만 쓸 수 있습니다. ${USAGE}`);
   if (level === LEVEL_FULL) throw Object.assign(new Error(`--level ${LEVEL_FULL}(${LEVEL_LABEL[LEVEL_FULL]})은 아직 구현하지 않았습니다`), {exitCode: 2});
   const auto = level === LEVEL_AUTOPILOT;
-  const onlyRunning = flags['only-running'] === true;
-  if (onlyRunning && !auto) throw new Error('--only-running은 --level autopilot과 함께만 쓸 수 있습니다');
 
   // --allow: 그날 밤에만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. Autopilot 단계에서만, 값마다 올바른 키, kyle 원문 필수.
   let allow;
@@ -218,7 +221,7 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   }
   const send = deps.sendMail ?? sendAutopilotMail(home, by);
   const attempt = (role, isWingman) => {
-    const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, onlyRunning, allow, isWingman});
+    const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, allow, isWingman});
     try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, error: String(error.message).slice(0, 200)}; }
   };
   // Wingman에게 먼저 보낸다: 명시한 Wingman의 우편이 실패하면 아무에게도 켜짐을 알리지 않고 멈추기 위해서다.
@@ -237,9 +240,9 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const event = {
     kind: 'autopilot', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),
-    level, ...(auto ? {onlyRunning} : {}), ...(allow ? {allow} : {}), ...wingmanFields,
+    level, ...(allow ? {allow} : {}), ...wingmanFields,
     until, to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
   };
   (deps.record ?? (entry => appendLedger(entry, home)))(event);
-  return {on: true, level, ...(auto ? {onlyRunning, checklist: AUTO_CHECKLIST} : {}), ...(allow ? {allow} : {}), ...wingmanFields, until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
+  return {on: true, level, ...(auto ? {checklist: AUTO_CHECKLIST} : {}), ...(allow ? {allow} : {}), ...wingmanFields, until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
 }

@@ -15,7 +15,7 @@ export function AutopilotBand({ autopilot }: { autopilot?: AutopilotStrip | null
   if (!autopilot) return null;
   let text: string;
   if (autopilot.on === null) text = `Autopilot 상태 모름${autopilot.reason ? ` (${autopilot.reason})` : ""}`;
-  else if (autopilot.on) text = `Autopilot 켜짐${autopilot.level ? ` · 단계 ${LEVEL_LABEL[autopilot.level] ?? autopilot.level}${autopilot.onlyRunning ? "(진행 중인 업무만)" : ""}` : ""} · ${time(autopilot.since)} 시작 · ${time(autopilot.until)}까지`;
+  else if (autopilot.on) text = `Autopilot 켜짐${autopilot.level ? ` · 단계 ${LEVEL_LABEL[autopilot.level] ?? autopilot.level}` : ""} · ${time(autopilot.since)} 시작 · ${time(autopilot.until)}까지`;
   else if (autopilot.last) text = `Autopilot 꺼짐 · 마지막 ${time(autopilot.last.since)} ~ ${time(autopilot.last.endedAt)}${END_TEXT[autopilot.last.phase] ? ` (${END_TEXT[autopilot.last.phase]})` : ""}`;
   else text = "Autopilot 꺼짐 · 켠 기록이 없습니다";
   return <p id="status-autopilot" className={"st-autopilot" + (autopilot.on ? " st-autopilot-on" : "")} role="status"><span aria-hidden="true">🌙</span> {text}</p>;

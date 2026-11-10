@@ -20,13 +20,13 @@ import { frontStrip } from "../src/dashboard/front.mjs";
 // 머지 줄의 검수 SHA·커밋 같음 판정이 merge-check와 같은 결과인지 확인한다.
 const NOW = Date.parse("2026-11-03T12:00:00.000Z");
 const iso = (ms) => new Date(ms).toISOString();
-const on = { kind: "autopilot", phase: "on", by: "사람", text: "자라", t: iso(NOW - 3600_000), until: iso(NOW + 3600_000), level: "autopilot", onlyRunning: false };
+const on = { kind: "autopilot", phase: "on", by: "사람", text: "자라", t: iso(NOW - 3600_000), until: iso(NOW + 3600_000), level: "autopilot" };
 const answer = (at, by = "사람") => ({ id: "d1", status: "answered", to: "@user", answer: { by, at: iso(at), text: "응" } });
 const snap = (entries, decisions = [], over = {}) => ({ entries, ledgerLines: entries.length, decisions, decisionError: null, ...over });
 
 test("autopilotStrip: 켜짐 — autopilotState(이벤트)와 같은 결과, 단계·끝 시각을 싣는다", () => {
   const strip = autopilotStrip(snap([{ kind: "x" }, on, { kind: "y" }]), NOW);
-  assert.deepEqual(strip, { on: true, since: on.t, until: on.until, level: "autopilot", onlyRunning: false });
+  assert.deepEqual(strip, { on: true, since: on.t, until: on.until, level: "autopilot" });
   assert.equal(autopilotState([on], [], NOW).on, true);
 });
 
