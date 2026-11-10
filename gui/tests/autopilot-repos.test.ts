@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sourceLabel, badgeOf, badgeTitle, groupByRepo, headFacts, sidebarBadge, type NightLine } from "../src/night-repos.ts";
+import { sourceLabel, badgeOf, badgeTitle, groupByRepo, headFacts, sidebarBadge, type AutopilotLine } from "../src/autopilot-repos.ts";
 
 const eff = { deployBranch: { value: null, from: null }, nightMerge: { value: null, from: null } };
-const line = (github: string, repo: string | null, verdict: NightLine["verdict"], effective = eff): NightLine => ({ github, repo, effective, verdict });
+const line = (github: string, repo: string | null, verdict: AutopilotLine["verdict"], effective = eff): AutopilotLine => ({ github, repo, effective, verdict });
 const allowed = { action: "merge", reason: "allowed" };
 const except = { action: "merge", reason: "deploy-branch", exceptBranch: "main" };
 const forbidden = { action: "hold", reason: "night-merge-forbidden" };
@@ -23,11 +23,11 @@ test("모르는 판정은 '함'으로 꾸미지 않는다", () => {
   assert.equal(badgeOf(line("o/a", "a", { action: "merge", reason: "" })).text, "판정 모름");
 });
 
-test("나이트런 켜짐/꺼짐/모름 설명: 글자는 그대로, 설명만 다르다", () => {
+test("Autopilot 켜짐/꺼짐/모름 설명: 글자는 그대로, 설명만 다르다", () => {
   const badge = badgeOf(line("o/a", "a", forbidden));
-  assert.equal(badgeTitle(true, badge), "나이트런 켜짐 · 자동 머지: 금지");
-  assert.equal(badgeTitle(false, badge), "나이트런 꺼짐 · 켜지면 자동 머지: 금지");
-  assert.equal(badgeTitle(null, badge), "나이트런 상태 모름 · 켜지면 자동 머지: 금지");
+  assert.equal(badgeTitle(true, badge), "Autopilot 켜짐 · 자동 머지: 금지");
+  assert.equal(badgeTitle(false, badge), "Autopilot 꺼짐 · 켜지면 자동 머지: 금지");
+  assert.equal(badgeTitle(null, badge), "Autopilot 상태 모름 · 켜지면 자동 머지: 금지");
   assert.ok(!/밤 머지/.test(badgeTitle(true, badge)));
 });
 
@@ -40,7 +40,7 @@ test("저장소 조인: repo 이름이 대소문자까지 같을 때만. Rottie�
 });
 
 test("우산 저장소: 모두 같으면 '문구 N개', 다르면 '섞임', 하나면 그 문구, 없으면 null", () => {
-  const three = (v: NightLine["verdict"][]) => v.map((x, i) => line(`o/m${i}`, "umbrella_demo", x));
+  const three = (v: AutopilotLine["verdict"][]) => v.map((x, i) => line(`o/m${i}`, "umbrella_demo", x));
   assert.equal(sidebarBadge(three([forbidden, forbidden, forbidden]))!.text, "금지 3개");
   const mixed = sidebarBadge(three([forbidden, allowed, setup]))!;
   assert.equal(mixed.text, "섞임");

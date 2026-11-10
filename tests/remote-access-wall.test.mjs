@@ -153,7 +153,7 @@ const WRITE_PATHS = ['/ask', '/secretary/start', '/roles/restart', '/cards/updat
   '/runners/compare', '/runners/set', '/runners/preset-save', '/runners/preset', '/runners/fallback', '/runners/favorite',
   '/runners/preset-add', '/runners/preset-rename', '/runners/preset-remove', '/runners/preset-import', '/runners/preset-export',
   '/runners/runner', '/runners/model-add',
-  '/runners/model-remove', '/runners/models-list', '/api/night/repos',
+  '/runners/model-remove', '/runners/models-list', '/api/autopilot/repos',
   ...['create', 'update', 'link', 'unlink', 'execute', 'mail', 'complete', 'cancel', 'reopen'].map(x => '/works/' + x)];
 
 test('쓰기 경로 목록이 서버의 POST 허용 목록과 같다', () => {

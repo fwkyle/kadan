@@ -202,7 +202,7 @@ export default function App() {
             setTheme(next);
           }}>테마: {THEME_LABEL[theme]}</button>
         </header>
-        <RepoSidebar url={url} repo={repo} view={view} repos={summary.data?.sidebar} night={summary.data?.night} failed={Boolean(summary.error) && !summary.data?.sidebar} />
+        <RepoSidebar url={url} repo={repo} view={view} repos={summary.data?.sidebar} autopilot={summary.data?.autopilot} failed={Boolean(summary.error) && !summary.data?.sidebar} />
         <main id="main-content" tabIndex={-1} {...mainScroll}>
           {(view === "ledger" || view === "runs") && <nav className="record-tabs" aria-label="기록 종류">
             <a href="#ledger" aria-current={view === "ledger" ? "page" : undefined}>활동 기록</a>

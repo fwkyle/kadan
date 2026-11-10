@@ -33,9 +33,9 @@ export function fit(text, width) {
   return out + " ".repeat(Math.max(0, width - used));
 }
 
-// ---- 🌙 나이트런 중 자동 머지 글자 ----
-// gui/src/night-repos.ts의 badgeOf와 같은 대응이다(TypeScript라 가져올 수 없어 문구만 맞춘다).
-export function nightWord(line) {
+// ---- 🌙 Autopilot 중 자동 머지 글자 ----
+// gui/src/autopilot-repos.ts의 badgeOf와 같은 대응이다(TypeScript라 가져올 수 없어 문구만 맞춘다).
+export function autopilotWord(line) {
   const { reason, exceptBranch } = line?.verdict ?? {};
   if (reason === "allowed") return exceptBranch ? `안 함(배포 브랜치 ${exceptBranch})` : "함";
   if (reason === "night-merge-forbidden") return "금지";
@@ -44,10 +44,10 @@ export function nightWord(line) {
 }
 
 // 슈퍼감독의 저장소들에 걸린 줄을 한 글자로 접는다. 모르면 "?", 줄이 없으면 "-", 서로 다르면 "섞임".
-export function nightFor(nightRepos, repos) {
-  if (!nightRepos || !Array.isArray(nightRepos.repos) || !repos?.length) return "?";
+export function autopilotFor(autopilotRepos, repos) {
+  if (!autopilotRepos || !Array.isArray(autopilotRepos.repos) || !repos?.length) return "?";
   const set = new Set(repos);
-  const words = nightRepos.repos.filter((l) => l.repo && set.has(l.repo)).map(nightWord);
+  const words = autopilotRepos.repos.filter((l) => l.repo && set.has(l.repo)).map(autopilotWord);
   if (!words.length) return "-";
   return words.every((w) => w === words[0]) ? words[0] : "섞임";
 }
@@ -55,7 +55,7 @@ export function nightFor(nightRepos, repos) {
 // ---- 목록 만들기 ----
 // supers: [{role, repos|null}], sessions: 살아 있는 tmux 세션 이름 Set, summary: /api/dashboard/summary 응답 또는 null
 // 뱃지 합산: sidebar는 저장소 단위라 그 슈퍼감독의 저장소들 수를 더한다. 저장소를 모르거나 값이 null이면 0이 아니라 null(?)이다.
-export function buildEntries({ supers, sessions, summary, nightRepos, toSession }) {
+export function buildEntries({ supers, sessions, summary, autopilotRepos, toSession }) {
   const byRepo = new Map((summary?.sidebar ?? []).map((r) => [r.repo, r]));
   const sum = (repos, key) => {
     if (!summary || !repos?.length) return null;
@@ -74,8 +74,8 @@ export function buildEntries({ supers, sessions, summary, nightRepos, toSession 
       alive: sessions.has(session),
       decisions: sum(repos, "decisions"),
       merges: sum(repos, "merges"),
-      night: nightFor(nightRepos, repos),
-      nightOn: summary?.night?.on === true,
+      autopilot: autopilotFor(autopilotRepos, repos),
+      autopilotOn: summary?.autopilot?.on === true,
     };
   });
 }
@@ -85,7 +85,7 @@ export function badgesOf(entry) {
   const count = (mark, n) => { if (n === null) parts.push(`${mark}?`); else if (n > 0) parts.push(`${mark}${n}`); };
   count("⚑", entry.decisions);
   count("⇡", entry.merges);
-  parts.push(`🌙${entry.night}`);
+  parts.push(`🌙${entry.autopilot}`);
   return parts.join(" ");
 }
 
