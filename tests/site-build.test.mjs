@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PAGES, RESERVED_IDS, buildSite, dropSections, loadConfig, sectionId, splitSections } from "../scripts/build-site.mjs";
+import {
+  PAGES, RESERVED_IDS, assertUniqueSectionIds, buildSite, dropSections, loadConfig, renderMarkdown, sectionId, splitSections,
+} from "../scripts/build-site.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => fs.readFileSync(new URL(p, root), "utf8");
@@ -59,10 +61,8 @@ const sourceTitles = (page, config) => page.source.endsWith(".md")
   ? splitSections(dropSections(read(page.source), config[page.drop] ?? []).text).slice(1).map((part) => part.split("\n")[0].slice(3).trim())
   : [];
 // 그 쪽의 구획들: 제목, 제목에서 만든 주소, 지도·목차에 올리는지(mapSkip에 없는 것).
-const sourceSections = (page, config) => {
-  const taken = new Set(RESERVED_IDS);
-  return sourceTitles(page, config).map((title) => ({ title, id: sectionId(title, taken), listed: !(page.mapSkip ?? []).includes(title) }));
-};
+const sourceSections = (page, config) =>
+  sourceTitles(page, config).map((title) => ({ title, id: sectionId(title), listed: !(page.mapSkip ?? []).includes(title) }));
 
 test("사이트 빌드: 글 쪽의 사이트 지도·이 쪽의 목차는 원본 글의 구획에서 만들어지고 지금 쪽을 표시한다", () => {
   const { html } = build();
@@ -137,21 +137,39 @@ test("사이트 빌드: 줄마다 '이름표: 내용'인 목록만 두 칸(dl)�
     assert.ok(useCases.includes(`<dd>${line.slice("- **이런 때**: ".length).replaceAll('"', "&quot;")}</dd>`), line);
 });
 
-test("사이트 빌드: 구획 주소는 제목에서 만든 고정 이름이고 쪽 안에서 겹치지 않는다", () => {
-  const ids = (titles, taken = new Set(RESERVED_IDS)) => titles.map((title) => sectionId(title, taken));
-  // 공백·괄호·가운뎃점·따옴표·꺾쇠는 "-" 하나로, 영문은 소문자로, 한글·숫자·붙임표는 그대로.
-  assert.deepEqual(ids(["밤에 맡기기 (Autopilot)", "감시기·대시보드 갱신하기", "작업자-검수자 왕복", "Why", "Node.js 24 이상"]),
-    ["밤에-맡기기-autopilot", "감시기-대시보드-갱신하기", "작업자-검수자-왕복", "why", "node-js-24-이상"]);
-  assert.deepEqual(ids([`Q&A "따옴표" <역할> 쓰기`, "  앞뒤 공백  ", "…!?", "(*)"]), ["q-a-따옴표-역할-쓰기", "앞뒤-공백", "section", "section-2"]);
-  // 같은 제목이 또 나오면 뒤에 번호가 붙고, 틀이 쓰는 id(건너뛰기 대상 main 등)와도 겹치지 않는다.
-  assert.deepEqual(ids(["끄기", "끄기", "끄기", "Main", "main", "Team Caption"]), ["끄기", "끄기-2", "끄기-3", "main-2", "main-3", "team-caption-2"]);
-  // 자모가 풀린 글자(NFD)로 적혀도 같은 주소다.
-  assert.equal(sectionId("끄기".normalize("NFD"), new Set()), "끄기");
-  // 순서가 바뀌거나 다른 제목이 빠져도 같은 제목은 같은 주소다.
-  assert.deepEqual(ids(["가", "나", "다"]).slice(1), ids(["나", "다"]));
-  assert.deepEqual(ids(["다", "가"]).sort(), ids(["가", "다"]).sort());
+test("사이트 빌드: 구획 주소는 제목에서만 만든다(순서·숨김과 무관)", () => {
+  // 공백·괄호·가운뎃점·따옴표·꺾쇠는 "-" 하나로, 영문은 소문자로, 한글·숫자·붙임표는 그대로. 기대값은 손으로 적은 값이다.
+  const expected = {
+    "밤에 맡기기 (Autopilot)": "밤에-맡기기-autopilot",
+    "감시기·대시보드 갱신하기": "감시기-대시보드-갱신하기",
+    "작업자-검수자 왕복": "작업자-검수자-왕복",
+    "Why": "why",
+    "Node.js 24 이상": "node-js-24-이상",
+    [`Q&A "따옴표" <역할> 쓰기`]: "q-a-따옴표-역할-쓰기",
+    "  앞뒤 공백  ": "앞뒤-공백",
+    "…!?": "section",
+    // 틀이 쓰는 id와 같아지는 제목은 -2가 붙는다. 이것도 제목만으로 정해진다.
+    "Main": "main-2",
+    "Team Caption": "team-caption-2",
+  };
+  for (const [title, id] of Object.entries(expected)) assert.equal(sectionId(title), id, title);
+  assert.deepEqual(RESERVED_IDS, ["main", "team-caption"]);
+  // 자모가 풀린 글자(NFD)로 적혀도 같은 주소다. 같은 제목은 몇 번을 물어도 같은 주소다(번호가 붙지 않는다).
+  assert.equal(sectionId("끄기".normalize("NFD")), "끄기");
+  assert.deepEqual([sectionId("끄기"), sectionId("끄기"), sectionId("끄기")], ["끄기", "끄기", "끄기"]);
 
-  // 실제 빌드: 모든 쪽에서 id가 겹치지 않고, 순번 주소(#s1…)는 남아 있지 않다.
+  // 겹치지 않는 글: 숨기거나 순서를 바꿔도 "제목 → 주소" 대응이 그대로다(주소 묶음이 아니라 제목별로 견준다).
+  const pairsOf = (markdown, options) => Object.fromEntries(
+    [...renderMarkdown(markdown, { source: "시험.md", ...options }).body.matchAll(/<h2 id="([^"]+)">([^<]*)<\/h2>/g)].map((m) => [m[2], m[1]]));
+  const part = { 사과: "## 사과\n사과 본문\n", 배: "## 배\n배 본문\n", 밤: "## 밤에 맡기기 (Autopilot)\n밤 본문\n" };
+  const doc = (...keys) => "# 시험\n\n" + keys.map((key) => part[key]).join("\n");
+  assert.deepEqual(pairsOf(doc("사과", "배", "밤")), { 사과: "사과", 배: "배", "밤에 맡기기 (Autopilot)": "밤에-맡기기-autopilot" });
+  assert.deepEqual(pairsOf(doc("사과", "배", "밤"), { hidden: ["사과"] }), { 배: "배", "밤에 맡기기 (Autopilot)": "밤에-맡기기-autopilot" });
+  assert.deepEqual(pairsOf(doc("사과", "배", "밤"), { hidden: ["배"] }), { 사과: "사과", "밤에 맡기기 (Autopilot)": "밤에-맡기기-autopilot" });
+  assert.deepEqual(pairsOf(doc("밤", "배", "사과")), { 사과: "사과", 배: "배", "밤에 맡기기 (Autopilot)": "밤에-맡기기-autopilot" });
+  assert.deepEqual(pairsOf(doc("배", "밤", "사과"), { hidden: ["밤에 맡기기 (Autopilot)"] }), { 사과: "사과", 배: "배" });
+
+  // 실제 빌드: 모든 쪽에서 id가 겹치지 않고, 순번 주소(#s1…)와 순서 번호는 남아 있지 않다.
   const { html, all } = build();
   for (const page of PAGES) {
     const found = attrs(html[page.file], "\\w+", "id");
@@ -167,6 +185,40 @@ test("사이트 빌드: 구획 주소는 제목에서 만든 고정 이름이고
   assert.match(html["how-to.html"], /<h2 id="why">Why<\/h2>/);
   assert.match(html["how-to.html"], /<h2 id="읽는-법">읽는 법<\/h2>/);
   assert.doesNotMatch(all, /<li><a href="[^"]*#(?:why|읽는-법)">/, "지도·목차에는 없다");
+});
+
+test("사이트 빌드: 한 쪽에서 두 구획의 주소가 겹치면 어느 제목인지 알리며 빌드가 멈춘다", () => {
+  const doc = (...titles) => "# 시험\n\n" + titles.map((title, at) => `## ${title}\n본문 ${at + 1}\n`).join("\n");
+  const build1 = (markdown, options) => () => renderMarkdown(markdown, { source: "docs/시험.md", ...options });
+  // 오류에는 원본 파일, 겹친 두 제목, 겹친 주소가 그대로 나온다(문서를 고치는 사람이 무엇을 바꿀지 알게).
+  const stops = (run, first, second, id) => assert.throws(run, (error) => {
+    assert.ok(error.message.startsWith("docs/시험.md: "), error.message);
+    assert.ok(error.message.includes(`"${first}"`) && error.message.includes(`"${second}"`), error.message);
+    assert.ok(error.message.includes(`#${id} `), error.message);
+    return true;
+  });
+  // 서로 다른 제목이 같은 주소가 되는 경우(공백과 붙임표) — 어느 순서로 적어도 멈춘다.
+  stops(build1(doc("A B", "A-B")), "A B", "A-B", "a-b");
+  stops(build1(doc("A-B", "가", "A B")), "A-B", "A B", "a-b");
+  // 같은 제목이 두 번.
+  stops(build1(doc("끄기", "켜기", "끄기")), "끄기", "끄기", "끄기");
+  // 숨긴 구획과 겹쳐도 멈춘다(검사는 숨김보다 먼저, 원본 전체에 대해 한다). 숨김으로 충돌을 가릴 수 없다.
+  stops(build1(doc("A B", "A-B"), { hidden: ["A B"] }), "A B", "A-B", "a-b");
+  stops(build1(doc("A B", "A-B"), { hidden: ["A-B"] }), "A B", "A-B", "a-b");
+  stops(build1(doc("끄기", "끄기"), { hidden: ["끄기"] }), "끄기", "끄기", "끄기");
+  // 글자가 하나도 남지 않는 제목이 둘, 틀의 id를 피해 붙인 -2가 다른 제목과 겹치는 경우.
+  stops(build1(doc("…!?", "(*)")), "…!?", "(*)", "section");
+  stops(build1(doc("Main", "Main 2")), "Main", "Main 2", "main-2");
+  // 대소문자·따옴표만 다른 제목도 같은 주소다.
+  stops(build1(doc("Autopilot 켜기", 'autopilot "켜기"')), "Autopilot 켜기", 'autopilot "켜기"', "autopilot-켜기");
+
+  // 검사 함수만 따로: 겹치지 않으면 조용하고, 실제 다섯 쪽의 원본(숨김 전)은 겹치지 않는다.
+  assert.doesNotThrow(() => assertUniqueSectionIds("x.md", ["사과", "배", "Main", "밤에 맡기기 (Autopilot)"]));
+  for (const page of PAGES.filter((p) => p.source.endsWith(".md")))
+    assert.doesNotThrow(() => assertUniqueSectionIds(page.source, sourceTitles(page, {})), page.source);
+  // 실제 원본에 겹치는 제목이 생기면 사이트 빌드 자체가 이 문구로 실패한다(숨김 설정으로도 피할 수 없다).
+  const real = read("site/pages/use-cases.md");
+  stops(() => renderMarkdown(real + "\n## 검수만  받기!\n덧붙인 구획\n", { source: "docs/시험.md", hidden: ["검수만 받기"] }), "검수만 받기", "검수만  받기!", "검수만-받기");
 });
 
 test("사이트 빌드: 본문 속 명령은 낱말마다 묶되 글자는 그대로이고, 여러 줄 명령 상자는 건드리지 않는다", () => {
@@ -228,7 +280,7 @@ test("사이트 빌드: 설정의 숨김 목록에 제목을 넣으면 길잡이
   for (const [file, key] of [["docs/how-to.md", "howToExclude"], ["site/pages/use-cases.md", "hiddenUseCases"]])
     assert.deepEqual(dropSections(read(file), titles[key]).dropped, titles[key], file);
   // 숨기지 않으면 다른 쪽의 사이트 지도에도 그 항목이 있다(시작하기 쪽에서 유즈케이스·길잡이의 해당 구획으로 간다).
-  const splitId = sectionId(SPLIT, new Set());
+  const splitId = sectionId(SPLIT);
   assert.equal(splitId, "일이-쌓이면-감독을-나눈다");
   for (const target of [`use-cases.html#${splitId}`, `how-to.html#${splitId}`])
     assert.ok(shown.html["start.html"].includes(`<li><a href="${target}">${SPLIT}</a></li>`), target);

@@ -95,40 +95,61 @@ const wordWrapCode = (html) => html.split(/(<pre[\s\S]*?<\/pre>)/).map((part) =>
   : part.replace(/<code>([^<]*)<\/code>/g, (_, inner) =>
     `<code>${inner.split(/( +)/).map((word) => (word.trim() ? `<span class="w">${word}</span>` : word)).join("")}</code>`))).join("");
 
-// 구획 주소(id)는 순번이 아니라 제목에서 만든다. 그래서 숨김 목록이나 구획 순서가 바뀌어도 같은 제목은 같은 주소다.
+// 구획 주소(id)는 순번이 아니라 제목에서만 만든다. 그래서 숨김 목록이나 구획 순서가 바뀌어도 같은 제목은 같은 주소다.
 // 규칙: 영문은 소문자로, 글자·숫자가 아닌 것(공백·괄호·가운뎃점·따옴표 등)의 이어짐은 "-" 하나로, 앞뒤의 "-"는 뗀다.
-// 남는 글자가 없으면 "section". 이미 쓴 주소(같은 쪽의 같은 제목, 틀이 쓰는 id)와 겹치면 뒤에 -2, -3 …을 붙인다.
+// 남는 글자가 없으면 "section". 틀이 쓰는 id(RESERVED_IDS)와 같으면 뒤에 -2를 붙인다(이것도 제목만으로 정해진다).
+// 문서 순서에 따라 달라지는 번호는 붙이지 않는다. 한 쪽에서 주소가 겹치면 아래 검사가 빌드를 멈춘다.
 export const RESERVED_IDS = ["main", "team-caption"];
-export function sectionId(title, taken) {
+export function sectionId(title) {
   const base = String(title).normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "section";
-  let id = base;
-  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
-  taken.add(id);
-  return id;
+  return RESERVED_IDS.includes(base) ? `${base}-2` : base;
+}
+
+// 한 쪽 안에서 두 구획의 주소가 겹치면 빌드를 멈춘다. 같은 제목이 두 번 나오는 경우와, 서로 다른 제목이 같은 주소가 되는
+// 경우("A B"와 "A-B") 모두다. 번호를 붙여 넘어가면 순서나 숨김이 바뀔 때 공유된 주소가 다른 구획을 가리키게 된다.
+export function assertUniqueSectionIds(source, titles) {
+  const seen = new Map();
+  for (const title of titles) {
+    const id = sectionId(title);
+    if (seen.has(id)) {
+      throw new Error(`${source}: 구획 제목 "${seen.get(id)}"와(과) "${title}"의 주소가 둘 다 #${id} 입니다. `
+        + "한 쪽 안에서는 구획 주소가 겹칠 수 없습니다(숨긴 구획 포함). 둘 중 한 제목을 바꿔 주세요.");
+    }
+    seen.set(id, title);
+  }
 }
 const ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
 const unescapeHtml = (text) => text.replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => ENTITIES[entity]);
+// 그려진 구획 제목(h2)의 글자: 태그를 걷고 이스케이프를 푼 것. 주소와 지도·목차의 이름이 여기서 나온다.
+const headingText = (inner) => unescapeHtml(inner.replace(/<[^>]+>/g, ""));
 
-// 글 쪽 하나를 그리고 구획 목록(sections)을 함께 돌려준다. 사이트 지도와 "이 쪽의 목차"가 이 목록에서 만들어진다.
+// 글(markdown) 하나를 그리고 구획 목록(sections)을 함께 돌려준다. 사이트 지도와 "이 쪽의 목차"가 이 목록에서 만들어진다.
 // 구획 이름(label)은 렌더러가 이스케이프한 글자에서 태그만 걷어 낸 것이라 그대로 넣어도 된다.
-// page.mapSkip에 적은 제목은 본문에는 그대로 두고 지도·목차에서만 뺀다(map: false).
-function renderMarkdownPage(page, config) {
-  const { text } = dropSections(read(page.source), config[page.drop] ?? []);
-  const head = text.match(/^﻿?#\s+(.+)\r?\n/);
-  const title = head ? head[1].trim() : page.nav;
+// hidden에 적은 제목의 구획은 통째로 빼고, mapSkip에 적은 제목은 본문에는 그대로 두고 지도·목차에서만 뺀다(map: false).
+// 주소 충돌 검사는 숨김보다 먼저, 원본 전체에 대해 한다. 숨긴 구획과 겹치는 것도 잡아야 숨김을 풀 때 빌드가 갑자기 깨지지 않는다.
+export function renderMarkdown(markdown, { source = "글", hidden = [], mapSkip = [], link, fallbackTitle = "" } = {}) {
+  const body = (md) => md.replace(/^\uFEFF?#\s+.+\r?\n/, "");
+  const render = (md) => wordWrapCode(labelLists(liftHeadings(renderCardDocument(body(md), { link }))));
+  const { text, dropped } = dropSections(markdown, hidden);
+  const html = render(text);
+  const whole = dropped.length ? render(markdown) : html;
+  assertUniqueSectionIds(source, [...whole.matchAll(/<h2>(.*?)<\/h2>/g)].map(([, inner]) => headingText(inner)));
+
+  const head = text.match(/^\uFEFF?#\s+(.+)\r?\n/);
+  const title = head ? head[1].trim() : fallbackTitle;
   const sections = [];
-  const taken = new Set(RESERVED_IDS);
-  const rendered = renderCardDocument(head ? text.slice(head[0].length) : text, { link: siteLink(config, page.base) });
-  const body = wordWrapCode(labelLists(liftHeadings(rendered)))
-    .replace(/<h2>(.*?)<\/h2>/g, (_, inner) => {
-      const label = inner.replace(/<[^>]+>/g, "");
-      const plain = unescapeHtml(label);
-      const id = sectionId(plain, taken);
-      sections.push({ id, label, map: !(page.mapSkip ?? []).includes(plain) });
-      return `<h2 id="${id}">${inner}</h2>`;
-    });
-  return { title, sections, body: `<article class="prose"><h1>${escapeHtml(title)}</h1>${body}</article>` };
+  const article = html.replace(/<h2>(.*?)<\/h2>/g, (_, inner) => {
+    const plain = headingText(inner);
+    const id = sectionId(plain);
+    sections.push({ id, label: inner.replace(/<[^>]+>/g, ""), map: !mapSkip.includes(plain) });
+    return `<h2 id="${id}">${inner}</h2>`;
+  });
+  return { title, sections, body: `<article class="prose"><h1>${escapeHtml(title)}</h1>${article}</article>` };
 }
+
+const renderMarkdownPage = (page, config) => renderMarkdown(read(page.source), {
+  source: page.source, hidden: config[page.drop] ?? [], mapSkip: page.mapSkip ?? [], link: siteLink(config, page.base), fallbackTitle: page.nav,
+});
 
 // 홈의 미리 보기: 숨기지 않은 유즈케이스 앞의 세 개. 유즈케이스 쪽과 같은 원본·같은 숨김 목록을 쓴다.
 function useCasePreview(config) {
