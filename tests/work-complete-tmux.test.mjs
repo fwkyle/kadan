@@ -57,7 +57,7 @@ const ri=process.argv.indexOf('resume');
 if(ri>0&&process.argv[ri+1]){const id=process.argv[ri+1];const base=__dirname;for(const f of [base+'/codex-home/thread-writer-locks/'+id+'.lock',base+'/codex-home/sessions/2026/11/10/rollout-2026-11-10T16-35-00-'+id+'.jsonl'])try{fs.openSync(f,'r')}catch{}
 fs.writeFileSync(${JSON.stringify(ready)}+'.resumed',JSON.stringify({id,cwd:process.cwd(),argv:process.argv.slice(2)}));}
 if(process.env.CHILD_FILES)cp.spawn(process.execPath,[${JSON.stringify(path.join(dir, 'child.js'))},...process.env.CHILD_FILES.split(',')],{stdio:'ignore'});
-console.log('›');fs.writeFileSync(${JSON.stringify(ready)},'ok');${WATCH_PARENT}`, {mode: 0o700});
+if(process.stdin.isTTY)process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',()=>process.stdout.write('\\x1b[2J\\x1b[H› \\n'));console.log('›');fs.writeFileSync(${JSON.stringify(ready)},'ok');${WATCH_PARENT}`, {mode: 0o700});
   const settings = settingsWith({codex: {
     spawn: `${fake} --model {model} -c e={effort}`, resume: `${fake} --model {model} -c e={effort} resume {conversation}`,
     models: [{model: 'test-model', efforts: ['low']}],
@@ -81,120 +81,124 @@ const of = session => readLedger().filter(e => e.session === session);
 const skip = spawnSync('tmux', ['-V']).status !== 0;
 
 
+
+
 import {WorkStore} from '../src/work-store.mjs';
-import {CardStore} from '../src/card-store.mjs';
 
-test('실제 CLI: work complete가 두 세션을 끄고(stop에 번호), stdout은 JSON만이며, reopen으로 하나를 다시 연다', {skip}, t => {
-  const s = setup(t, 'wc');
-  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-wcworker', 'wcworker');
-  fs.rmSync(s.ready, {force: true});
-  launch({HOLD: `${s.lock(B)},${s.rollout(B)}`}, s, 'kadan-wcreview', 'wcreview');
-  const home = ledgerHome(), store = new WorkStore(home), cards = new CardStore(home);
-  store.create({key: 'repo/wc', title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'wcboss', repoPath: s.work});
-  for (const role of ['wcworker', 'wcreview']) {
-    store.change('repo/wc', 'execute', {title: role, body: '본문', phase: 'implementation', round: '1'}, {revision: store.get('repo/wc').revision, by: 'wcboss', note: '발령'});
-    const key = store.get('repo/wc').executions.at(-1).key, id = key.split('/')[1];
-    cards.update(key, {status: 'assigned', role, board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(key).revision, note: '배정', by: 'wcboss'});
-    appendLedger({kind: 'send', by: 'wcboss', role, taskId: id, executionKey: key, digest: role + id});
-    appendLedger({kind: 'done', by: role, role, taskId: id, executionKey: key, result: 'ok'});
-  }
-  const args = ['work', 'complete', 'repo/wc', '--revision', String(store.get('repo/wc').revision), '--result', '근거', '--note', '확인'];
-  const env = {KADAN_ROLE: 'wcboss'};
-  const run = extra => spawnSync(process.execPath, [cli, ...args, ...extra], {encoding: 'utf8', env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', ...env}});
-  // --keep-roles: 아무것도 끄지 않는다(그리고 마감은 기록된다).
-  const kept = run(['--keep-roles']);
-  assert.equal(kept.status, 0, kept.stdout + kept.stderr);
-  assert.equal(JSON.parse(kept.stdout).status, 'done');
-  assert.match(kept.stderr, /꺼졌을 역할 2개\(--keep-roles: 끄지 않음\)/);
-  assert.equal(tmuxFloor.alive('kadan-wcworker'), true); assert.equal(tmuxFloor.alive('kadan-wcreview'), true);
-  if (process.env.WC_EVIDENCE_DIR) fs.writeFileSync(path.join(process.env.WC_EVIDENCE_DIR, 'work-complete-keep-roles.txt'), 'STDOUT:\n' + kept.stdout + '\nSTDERR:\n' + kept.stderr);
-  // 마감된 업무를 다시 열고 이번엔 끈다.
-  store.change('repo/wc', 'reopen', {}, {revision: store.get('repo/wc').revision, by: 'wcboss', note: '재개'});
-  args[args.indexOf('--revision') + 1] = String(store.get('repo/wc').revision);
-  const done = run([]);
-  assert.equal(done.status, 0, done.stdout + done.stderr);
-  const json = JSON.parse(done.stdout);
-  assert.equal(json.status, 'done'); assert.equal(json.roleCleanup.closed.length, 2);
-  assert.match(done.stderr, new RegExp(`끈 역할 2개: .*wcworker\\(대화 ${A} — 다시 열기: kadan reopen wcworker\\)`));
-  assert.equal(tmuxFloor.alive('kadan-wcworker'), false); assert.equal(tmuxFloor.alive('kadan-wcreview'), false);
-  assert.equal(of('kadan-wcworker').findLast(e => e.kind === 'stop').conversation, A);
-  assert.equal(of('kadan-wcreview').findLast(e => e.kind === 'stop').conversation, B);
-  if (process.env.WC_EVIDENCE_DIR) fs.writeFileSync(path.join(process.env.WC_EVIDENCE_DIR, 'work-complete-closed.txt'), 'STDOUT:\n' + done.stdout + '\nSTDERR(2>&1 뒤쪽):\n' + done.stderr);
-  const reopened = kadan('reopen', 'wcworker');
-  assert.equal(reopened.status, 0, reopened.stdout + reopened.stderr);
-  assert.equal(tmuxFloor.alive('kadan-wcworker'), true);
-  assert.equal(tmuxFloor.alive('kadan-wcreview'), false);
-  kadan('stop', 'wcworker');
-});
+// Why: 업무 마감 때 작업자·검수자를 함께 끄는 일을 실제 CLI 자식 프로세스·격리 홈·격리 tmux·가짜 실행기로 확인한다.
+// 발령과 done은 appendLedger로 흉내 내지 않고 실제 명령(work execute --assign --dispatch · dispatch --task · send --task · done)으로 만든다
+// (3차 검수 S1: 가짜 발령 기록을 쓴 시험이 실제 발령의 header 표시를 놓쳤다).
+const BOSS = 'wcboss';
+const bossEnv = () => ({...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: BOSS}); // setup()이 격리 소켓을 정한 뒤에 읽는다
+const cliAs = (env, ...args) => spawnSync(process.execPath, [cli, ...args], {encoding: 'utf8', env});
+const boss = (...args) => { const r = cliAs(bossEnv(), ...args); assert.equal(r.status, 0, args.join(' ') + '\n' + r.stdout + r.stderr); return r; };
+const asRole = (role, ...args) => cliAs({...bossEnv(), KADAN_ROLE: role}, ...args);
 
-test('실제 CLI(F1): 같은 이름을 새 대화로 다시 쓴 세션은 옛 업무를 마감해도 꺼지지 않는다', {skip}, t => {
-  const s = setup(t, 'reuse');
-  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, 'kadan-reuserole', 'reuserole');
-  const home = ledgerHome(), store = new WorkStore(home), cards = new CardStore(home);
-  store.create({key: 'repo/old', title: '옛 업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'wcboss', repoPath: s.work});
-  store.change('repo/old', 'execute', {title: 'x', body: '본문', phase: 'implementation', round: '1'}, {revision: 1, by: 'wcboss', note: '발령'});
-  const key = store.get('repo/old').executions[0].key, id = key.split('/')[1];
-  cards.update(key, {status: 'assigned', role: 'reuserole', board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(key).revision, note: '배정', by: 'wcboss'});
-  appendLedger({kind: 'send', by: 'wcboss', role: 'reuserole', taskId: id, executionKey: key, digest: 'r' + id});
-  appendLedger({kind: 'done', by: 'reuserole', role: 'reuserole', taskId: id, executionKey: key, result: 'ok'});
-  assert.equal(kadan('stop', 'reuserole').status, 0);
-  wait(30);
-  fs.rmSync(s.ready, {force: true});
-  launch({HOLD: `${s.lock(B)},${s.rollout(B)}`}, s, 'kadan-reuserole', 'reuserole'); // 같은 이름, 새 대화
-  const done = spawnSync(process.execPath, [cli, 'work', 'complete', 'repo/old', '--revision', String(store.get('repo/old').revision), '--result', '근거', '--note', '확인'],
-    {encoding: 'utf8', env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: 'wcboss'}});
-  assert.equal(done.status, 0, done.stdout + done.stderr);
-  assert.equal(JSON.parse(done.stdout).status, 'done');
-  assert.equal(tmuxFloor.alive('kadan-reuserole'), true, '새 대화 세션은 살아 있어야 한다');
-  assert.match(done.stderr, /reuserole — 이 업무의 발령을 받은 대화 세대가 아님 · 끄려면 kadan stop reuserole/);
-  kadan('stop', 'reuserole');
-});
-
-// 공통: 역할 하나를 띄우고, 그 역할에 실행 하나를 발령·done한 업무를 만든다.
-function oneRoleWork(t, name, role, workKey) {
-  const s = setup(t, name);
-  launch({HOLD: `${s.lock(A)},${s.rollout(A)}`}, s, `kadan-${role}`, role);
-  const home = ledgerHome(), store = new WorkStore(home), cards = new CardStore(home);
-  store.create({key: workKey, title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'wcboss', repoPath: s.work});
-  store.change(workKey, 'execute', {title: 'x', body: '본문', phase: 'implementation', round: '1'}, {revision: 1, by: 'wcboss', note: '발령'});
-  const key = store.get(workKey).executions[0].key, id = key.split('/')[1];
-  cards.update(key, {status: 'assigned', role, board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(key).revision, note: '배정', by: 'wcboss'});
-  appendLedger({kind: 'send', by: 'wcboss', role, taskId: id, executionKey: key, digest: 'd' + id});
-  appendLedger({kind: 'done', by: role, role, taskId: id, executionKey: key, result: 'ok'});
-  const complete = () => spawnSync(process.execPath, [cli, 'work', 'complete', workKey, '--revision', String(store.get(workKey).revision), '--result', '근거', '--note', '확인'],
-    {encoding: 'utf8', env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: 'wcboss'}});
-  return {s, home, store, key, complete};
+// 업무를 만들고 실행을 하나씩 발령하는 도우미. via: 'assign-dispatch' | 'dispatch' | 'send'
+function workFixture(s, workKey) {
+  const body = path.join(s.dir, 'body.md');
+  fs.writeFileSync(body, '# 실행\n## Why\n격리 검증\n## 읽고 시작할 것\n- ' + cli + '\n');
+  boss('work', 'create', workKey, '--title', '업무', '--goal', '결과', '--scope', '범위', '--acceptance', '조건', '--owner', BOSS, '--repo-path', s.work, '--board', 'b');
+  const store = () => new WorkStore(ledgerHome());
+  let round = 0;
+  const execute = (role, via) => {
+    round += 1;
+    const args = ['work', 'execute', workKey, '--revision', String(store().get(workKey).revision), '--phase', 'implementation', '--round', String(round),
+      '--title', 'e' + round, '--body-file', body, '--note', '발령', '--assign', role];
+    if (via === 'assign-dispatch') args.push('--dispatch', '시작하라');
+    const key = JSON.parse(boss(...args).stdout).card.key, id = key.split('/')[1];
+    if (via === 'dispatch') boss('dispatch', role, '--task', id, '--work', workKey, '--execution', key, '시작하라');
+    if (via === 'send') boss('send', role, '--task', id, '--work', workKey, '--execution', key, '시작하라');
+    return {key, id};
+  };
+  const finish = (role, id) => { const r = asRole(role, 'done', role, id, 'ok'); assert.equal(r.status, 0, r.stdout + r.stderr); };
+  const complete = (...extra) => cliAs(bossEnv(), 'work', 'complete', workKey, '--revision', String(store().get(workKey).revision), '--result', '근거', '--note', '확인', ...extra);
+  return {execute, finish, complete, store};
 }
+const roleLaunch = (s, role, env) => { fs.rmSync(s.ready, {force: true}); return launch(env, s, 'kadan-' + role, role); };
 
-test('실제 CLI(R1): 새 대화로 다시 쓴 이름에 옛 실행 주소의 일반 우편만 있으면 마감해도 꺼지지 않는다', {skip}, t => {
-  const w = oneRoleWork(t, 'r1', 'r1role', 'repo/r1');
-  assert.equal(kadan('stop', 'r1role').status, 0);
-  wait(30);
-  fs.rmSync(w.s.ready, {force: true});
-  launch({HOLD: `${w.s.lock(B)},${w.s.rollout(B)}`}, w.s, 'kadan-r1role', 'r1role');
-  const mail = kadan('mail', 'r1role', '--execution', w.key, '옛 실행에 대한 일반 질문');
-  assert.equal(mail.status, 0, mail.stdout + mail.stderr);
-  const general = of('kadan-r1role').filter(e => e.kind === 'send' && e.executionKey === w.key && !e.taskId);
-  assert.ok(general.length >= 1, '실행 주소만 붙고 taskId가 없는 일반 우편이 원장에 남았다');
+test('실제 CLI: 세 발령 경로(work execute --assign --dispatch · dispatch --task · send --task)로 일한 보통 작업자·검수자가 마감 뒤 꺼지고 stop에 대화 번호가 남는다', {skip}, t => {
+  const s = setup(t, 'three');
+  roleLaunch(s, 'wa', {HOLD: s.lock(A) + ',' + s.rollout(A)});
+  roleLaunch(s, 'wb', {HOLD: s.lock(B) + ',' + s.rollout(B)});
+  roleLaunch(s, 'wc', {HOLD: ''});
+  const w = workFixture(s, 'repo/three');
+  for (const [role, via] of [['wa', 'assign-dispatch'], ['wb', 'dispatch'], ['wc', 'send']]) w.finish(role, w.execute(role, via).id);
+  // --keep-roles: 마감은 기록되고 아무것도 끄지 않는다.
+  const kept = w.complete('--keep-roles');
+  assert.equal(kept.status, 0, kept.stdout + kept.stderr);
+  assert.match(kept.stderr, /꺼졌을 역할 3개\(--keep-roles: 끄지 않음\)/);
+  for (const r of ['wa', 'wb', 'wc']) assert.equal(tmuxFloor.alive('kadan-' + r), true);
+  if (process.env.WC_EVIDENCE_DIR) fs.writeFileSync(path.join(process.env.WC_EVIDENCE_DIR, 'real-keep-roles.txt'), 'STDOUT:\n' + kept.stdout + '\nSTDERR:\n' + kept.stderr);
+  w.store().change('repo/three', 'reopen', {}, {revision: w.store().get('repo/three').revision, by: BOSS, note: '재개'});
   const done = w.complete();
   assert.equal(done.status, 0, done.stdout + done.stderr);
-  assert.equal(tmuxFloor.alive('kadan-r1role'), true);
-  assert.match(done.stderr, /r1role — 이 업무의 발령을 받은 대화 세대가 아님/);
-  kadan('stop', 'r1role');
+  assert.equal(JSON.parse(done.stdout).status, 'done', 'stdout은 JSON 한 덩어리다');
+  assert.equal(JSON.parse(done.stdout).roleCleanup.closed.length, 3);
+  for (const r of ['wa', 'wb', 'wc']) assert.equal(tmuxFloor.alive('kadan-' + r), false, r);
+  assert.equal(of('kadan-wa').findLast(e => e.kind === 'stop').conversation, A);
+  assert.equal(of('kadan-wb').findLast(e => e.kind === 'stop').conversation, B);
+  if (process.env.WC_EVIDENCE_DIR) fs.writeFileSync(path.join(process.env.WC_EVIDENCE_DIR, 'real-three-paths-closed.txt'), 'STDOUT:\n' + done.stdout + '\nSTDERR:\n' + done.stderr);
+  // 실제 발령이 남긴 모양: 세 경로 모두 taskId·dispatchId·header가 붙은 send다.
+  const sends = readLedger().filter(e => e.kind === 'send' && e.taskId && ['kadan-wa', 'kadan-wb', 'kadan-wc'].includes(e.session));
+  assert.equal(sends.length, 3); assert.ok(sends.every(e => e.dispatchId && e.header === true && e.keyDelivery === 'sent'));
+  const reopened = kadan('reopen', 'wa');
+  assert.equal(reopened.status, 0, reopened.stdout + reopened.stderr);
+  assert.equal(tmuxFloor.alive('kadan-wa'), true);
+  kadan('stop', 'wa');
 });
 
-test('실제 CLI(R2): 진행 중인 인계(prepared)에 묶인 역할은 마감해도 꺼지지 않고, 끝난 인계면 꺼진다', {skip}, t => {
-  const w = oneRoleWork(t, 'r2', 'r2role', 'repo/r2');
-  const dir = path.join(w.home, 'handovers'); fs.mkdirSync(dir, {recursive: true});
-  fs.writeFileSync(path.join(dir, 'h.json'), JSON.stringify({id: 'h', phase: 'prepared', from: 'r2role', to: 'r2next'}));
+test('실제 CLI: kadan restart·kadan reopen으로 다시 띄운 세션은 마감해도 남고 이유가 나온다', {skip}, t => {
+  const s = setup(t, 'cont');
+  roleLaunch(s, 'ra', {HOLD: s.lock(A) + ',' + s.rollout(A)});
+  roleLaunch(s, 'rb', {HOLD: s.lock(B) + ',' + s.rollout(B)});
+  const w = workFixture(s, 'repo/cont');
+  w.finish('ra', w.execute('ra', 'assign-dispatch').id);
+  w.finish('rb', w.execute('rb', 'assign-dispatch').id);
+  const restarted = kadan('restart', 'rb'); // 같은 대화로 프로그램만 다시 띄운다
+  assert.equal(restarted.status, 0, restarted.stdout + restarted.stderr);
+  // reopen: 끈 뒤 같은 대화로 다시 연다.
+  assert.equal(kadan('stop', 'ra').status, 0);
+  fs.rmSync(s.ready, {force: true});
+  const reopened = kadan('reopen', 'ra');
+  assert.equal(reopened.status, 0, reopened.stdout + reopened.stderr);
+  until(() => fs.existsSync(s.ready), '다시 연 가짜 실행기가 떴다');
   const done = w.complete();
   assert.equal(done.status, 0, done.stdout + done.stderr);
-  assert.equal(tmuxFloor.alive('kadan-r2role'), true);
-  assert.match(done.stderr, /r2role — 진행 중인 인계에 묶여 있음/);
-  // 인계가 끝난 뒤 업무를 다시 열고 마감하면 꺼진다(정상 방향).
-  fs.writeFileSync(path.join(dir, 'h.json'), JSON.stringify({id: 'h', phase: 'complete', from: 'r2role', to: 'r2next'}));
-  w.store.change('repo/r2', 'reopen', {}, {revision: w.store.get('repo/r2').revision, by: 'wcboss', note: '재개'});
-  const again = w.complete();
-  assert.equal(again.status, 0, again.stdout + again.stderr);
-  assert.equal(tmuxFloor.alive('kadan-r2role'), false);
+  assert.equal(tmuxFloor.alive('kadan-ra'), true, 'reopen으로 이은 세션은 남는다');
+  assert.match(done.stderr, /ra — 다시 띄우거나 이어 연 세션 — 직접 끄려면 kadan stop · 끄려면 kadan stop ra/);
+  assert.equal(tmuxFloor.alive('kadan-rb'), true, 'restart로 다시 띄운 세션도 남는다');
+  assert.match(done.stderr, /rb — 다시 띄우거나 이어 연 세션/);
+  kadan('stop', 'ra'); kadan('stop', 'rb');
+});
+
+test('실제 CLI: 같은 이름을 새 대화로 다시 쓰면(옛 업무 마감) 남고, 일반 우편만 받은 새 대화도 남는다', {skip}, t => {
+  const s = setup(t, 'reuse2');
+  roleLaunch(s, 'ua', {HOLD: s.lock(A) + ',' + s.rollout(A)});
+  const w = workFixture(s, 'repo/reuse2');
+  w.finish('ua', w.execute('ua', 'assign-dispatch').id);
+  assert.equal(kadan('stop', 'ua').status, 0);
+  wait(30);
+  roleLaunch(s, 'ua', {HOLD: s.lock(B) + ',' + s.rollout(B)}); // 같은 이름, 새 대화
+  const mail = kadan('mail', 'ua', '--execution', w.store().get('repo/reuse2').executions[0].key, '옛 실행에 대한 일반 질문');
+  assert.equal(mail.status, 0, mail.stdout + mail.stderr);
+  const done = w.complete();
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(tmuxFloor.alive('kadan-ua'), true);
+  assert.match(done.stderr, /ua — 이 업무의 발령을 받은 대화 세대가 아님/);
+  kadan('stop', 'ua');
+});
+
+test('실제 CLI: 인계 상태 파일이 있으면(진행 중이든 모양을 알 수 없든) 마감해도 남는다', {skip}, t => {
+  const s = setup(t, 'hand');
+  roleLaunch(s, 'ha', {HOLD: s.lock(A) + ',' + s.rollout(A)});
+  const w = workFixture(s, 'repo/hand');
+  w.finish('ha', w.execute('ha', 'assign-dispatch').id);
+  const dir = path.join(ledgerHome(), 'handovers'); fs.mkdirSync(dir, {recursive: true});
+  fs.writeFileSync(path.join(dir, 'x.json'), JSON.stringify({id: 'x', phase: 'complete'})); // 참가자(from·to)가 빠진 불완전한 파일
+  const done = w.complete();
+  assert.equal(done.status, 0, done.stdout + done.stderr);
+  assert.equal(tmuxFloor.alive('kadan-ha'), true);
+  assert.match(done.stderr, /ha — 인계 상태를 읽지 못함/);
+  kadan('stop', 'ha');
 });

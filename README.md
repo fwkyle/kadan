@@ -96,7 +96,7 @@ kadan doctor        # 막힌 곳이 있으면 한 번에 점검 (읽기 전용)
 - 끝낼 때는 `kadan stop 비서`, `kadan stop 대시보드`.
 - 감시기·대시보드 프로그램을 갱신한 뒤에는 `kadan stop watch`, `kadan stop 대시보드` 후
   `kadan up --hidden`으로 다시 켠다. `restart`는 AI 역할의 대화를 이어 여는 명령이다.
-- 끝난 작업자·검수자는 `kadan stop <역할>`로 꺼도 된다. 끌 때 대화 번호가 기록에 남고, 필요하면 `kadan reopen <역할>`로 같은 대화를 다시 연다. 업무를 `kadan work complete`로 마감하면 그 업무의 작업자·검수자가 함께 꺼진다(남기려면 `--keep-roles`).
+- 끝난 작업자·검수자는 `kadan stop <역할>`로 꺼도 된다. 끌 때 대화 번호가 기록에 남고, 필요하면 `kadan reopen <역할>`로 같은 대화를 다시 연다. 업무를 `kadan work complete`로 마감하면 띄운 뒤 한 번도 꺼졌다 켜지지 않은 그 업무의 작업자·검수자가 함께 꺼진다(다시 띄웠거나 이어 열었거나 인계에 관련된 세션은 남고, `--keep-roles`로 모두 남긴다).
 - 자주 쓰는 옵션: `kadan up --cmd 'claude' --port 8800 --no-prompt`
 
 ## 하던 대화를 카단으로 옮기기

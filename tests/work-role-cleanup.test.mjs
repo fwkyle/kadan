@@ -28,14 +28,14 @@ function world({profiles = {}, extraOpenWork = null} = {}) {
     change(key, 'execute', {title: `실행 ${role}`, body: '본문', phase: 'implementation', round: '1'});
     const ex = store.get(key).executions.at(-1).key, id = ex.split('/')[1];
     cards.update(ex, {status: 'assigned', role, board: 'b', scope: '범위', rallyId: 'r', rallyTitle: 'r', rallyRound: '1', rallyStep: 'implementation'}, {revision: cards.get(ex).revision, note: '배정', by: '감독'});
-    appendLedger({kind: 'send', by: '감독', role, taskId: id, executionKey: ex, digest: `${role}-${id}`, t}, home);
+    appendLedger({kind: 'send', by: '감독', role, taskId: id, executionKey: ex, digest: `${role}-${id}`, t, header: true, keyDelivery: 'sent', dispatchId: `d-${id}`}, home);
     appendLedger({kind: 'done', by: role, role, taskId: id, executionKey: ex, result: 'ok', t: tDone}, home);
     return {ex, id};
   };
   const pids = {}, alive = {}, stopped = [], screens = {};
   for (const [role, profile] of Object.entries(roles)) {
     pids[`kadan-${role}`] = '100'; alive[`kadan-${role}`] = true; screens[`kadan-${role}`] = IDLE;
-    const start = {kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'echo', cwd: home, panePid: '100', by: '감독'};
+    const start = {kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'codex --model m', cwd: home, panePid: '100', by: '감독'};
     if (profile) start.roleProfile = profile;
     appendLedger(start, home);
     link('repo/w', role);
@@ -108,7 +108,7 @@ test('끄지 않음: 세션 소유 확인 실패(시작 PID와 현재 PID가 다
   w.pids['kadan-작업A'] = '999';
   const out = run(w);
   assert.deepEqual(w.stopCalls, ['검수B']);
-  assert.match(out.skipped.find(s => s.role === '작업A').reason, /다른 프로세스/);
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, /다시 띄우거나 이어 연 세션/);
 });
 
 test('끄지 않음: 판정 뒤 끄기 직전에 세션이 다른 프로세스로 바뀌면 끄지 않는다', () => {
@@ -118,7 +118,7 @@ test('끄지 않음: 판정 뒤 끄기 직전에 세션이 다른 프로세스�
   w.floor.pid = s => { calls += 1; return calls >= 2 && s === 'kadan-작업A' ? '777' : pid(s); };
   const out = run(w);
   assert.deepEqual(w.stopCalls, ['검수B']);
-  assert.match(out.skipped.find(s => s.role === '작업A').reason, /다른 프로세스|프로세스가 바뀜/);
+  assert.match(out.skipped.find(s => s.role === '작업A').reason, /다시 띄우거나 이어 연 세션|프로세스가 바뀜/);
 });
 
 test('끄지 않음: 판정 뒤 끄기 직전에 다른 열린 업무가 생기면(역할마다 다시 읽음) 그 역할은 끄지 않는다', () => {
@@ -244,7 +244,7 @@ test('실제 stopRole로 끄면 stop 사건이 원장에 남는다(가짜 바닥
 // ---- 독립검수 F1~F3 수정 (PR #378) ----
 const realStop = async () => (await import('../src/role-stop.mjs')).stopRole;
 const T = m => `2999-${m}`; // 시각을 직접 정해 세대 경계를 만든다
-const startOf = (w, role, extra = {}) => appendLedger({kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'echo', cwd: w.home, panePid: '100', roleProfile: 'worker', by: '감독', ...extra}, w.home);
+const startOf = (w, role, extra = {}) => appendLedger({kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'codex --model m', cwd: w.home, panePid: '100', roleProfile: 'worker', by: '감독', ...extra}, w.home);
 // F1 순서: 발령·done → stop → 같은 이름으로 다시 start → 옛 업무 마감
 const reuse = (w, extra) => { appendLedger({kind: 'stop', role: '작업A', session: 'kadan-작업A', by: '감독', t: T('03-01T00:00:00Z')}, w.home); startOf(w, '작업A', {t: T('06-01T00:00:00Z'), ...extra}); };
 
@@ -256,10 +256,11 @@ test('F1: 같은 이름을 새 대화로 다시 쓴 세션은 이 업무와 무�
 });
 
 for (const [name, extra] of [['kadan reopen(resume)', {conversationMode: 'resume', reopenOf: 'x'}], ['kadan restart', {restartOf: 'x'}]]) {
-  test(`F1: ${name}으로 같은 대화를 이은 세션은 대상이다`, () => {
+  test(`범위 좁힘: ${name}으로 이은 세션은 남기고 kadan stop 안내를 낸다`, () => {
     const w = world(); w.done(); reuse(w, extra);
-    run(w);
-    assert.deepEqual(w.stopCalls.sort(), ['검수B', '작업A']);
+    const out = run(w);
+    assert.deepEqual(w.stopCalls, ['검수B']);
+    assert.match(out.skipped.find(s => s.role === '작업A').reason, /다시 띄우거나 이어 연 세션 — 직접 끄려면 kadan stop/);
   });
 }
 
@@ -283,14 +284,15 @@ test('F1: 새 대화 세션이 이 업무의 새 실행을 받았다면(지금 �
 const handover = (w, from, to, key, t = T('02-01T00:00:00Z')) =>
   appendLedger({kind: 'handover', phase: 'transferred', from, to, taskIds: [key.split('/')[1]], t}, w.home);
 
-test('F2: 이번 업무의 실행이 후임에게 인계됐으면 대상은 후임이고 선임 이름은 대상이 아니다', () => {
+test('범위 좁힘: 확정 인계로 받은 후임도, 인계한 선임 이름도 끄지 않는다', () => {
   const w = world();
   startOf(w, '후임'); w.alive['kadan-후임'] = true; w.pids['kadan-후임'] = '100'; w.screens['kadan-후임'] = IDLE;
   const ex = w.store.get('repo/w').executions.find(x => w.cards.get(x.key).role === '작업A').key;
   handover(w, '작업A', '후임', ex);
   w.done();
-  run(w);
-  assert.deepEqual(w.stopCalls.sort(), ['검수B', '후임']);
+  const out = run(w);
+  assert.deepEqual(w.stopCalls, ['검수B']);
+  assert.match(out.skipped.find(s => s.role === '후임').reason, /인계에 관련된 세션|발령을 받은 대화 세대가 아님/);
 });
 
 test('F2: 다른 열린 업무의 실행을 인계받은 후임이 이번 업무도 맡았으면 후임을 끄지 않는다', () => {
@@ -300,9 +302,8 @@ test('F2: 다른 열린 업무의 실행을 인계받은 후임이 이번 업무
   const other = w.store.get('repo/other').executions[0].key;
   handover(w, '작업A', '후임', mine); handover(w, '작업A', '후임', other);
   w.done();
-  const out = run(w);
+  run(w);
   assert.ok(!w.stopCalls.includes('후임'));
-  assert.match(out.skipped.find(s => s.role === '후임').reason, /다른 열린 업무 repo\/other/);
 });
 
 // F3: 실제 stopRole로, 대화 번호 조회(lookup) 도중 상황을 바꾼다.
@@ -380,14 +381,6 @@ for (const [name, extra, pattern] of [
     skipsA(w, pattern);
   });
 }
-test('R3: 이어짐이 증명된 start(reopenOf·restartOf)는 그대로 대상이다', () => {
-  for (const extra of [{reopenOf: 'abc'}, {restartOf: 'abc'}]) {
-    const w = world(); w.done(); reuse(w, extra);
-    run(w);
-    assert.ok(w.stopCalls.includes('작업A'), JSON.stringify(extra));
-  }
-});
-
 test('호출 역할을 알 수 없으면(빈 값) 아무것도 끄지 않는다', () => {
   const w = world(); w.done();
   const out = run(w, {callerRole: ''});
@@ -417,35 +410,69 @@ for (const phase of ['preparing', 'prepared', 'accepted', 'routes-pending', 'tra
       w.done();
       const out = run(w);
       assert.ok(!w.stopCalls.includes('작업A'), `${phase}/${side}`);
-      assert.match(out.skipped.find(s => s.role === '작업A').reason, /진행 중인 인계/);
+      assert.match(out.skipped.find(s => s.role === '작업A').reason, /인계에 관련된 세션/);
     }
   });
 }
-test('R2: 끝난 인계(complete·aborted)와 인수 근거 파일은 막지 않는다', () => {
+test('R2: 끝난 인계 상태 파일과 모양이 맞는 인수 근거 파일만 있으면(원장 인계 사건 없음) 막지 않는다', () => {
   const w = world();
   stateFile(w, 'a.json', {id: 'a', phase: 'complete', from: '작업A', to: 'x'});
   stateFile(w, 'b.json', {id: 'b', phase: 'aborted', from: '작업A', to: 'y'});
-  stateFile(w, 'c.json', {receipt: '근거'});
+  stateFile(w, 'c.json', {taskIds: [], evidencePaths: ['/x'], nextAction: '다음'});
   w.done(); run(w);
   assert.ok(w.stopCalls.includes('작업A'));
 });
-test('R2: 인계 상태 파일을 읽지 못하면(깨진 JSON·phase 모양 이상) 끄지 않는다', () => {
-  for (const body of ['{깨짐', {id: 'z', phase: 7}]) {
+
+test('S3: 읽지 못하거나 모양을 알 수 없는 인계 파일이 하나라도 있으면 아무도 끄지 않는다', () => {
+  for (const body of ['{깨짐', {id: 'z', phase: 7}, {id: 'z', phase: 'complete'}, {id: 'z', phase: 'complete', from: {}, to: 'x'},
+    [], {아무거나: 1}, {taskIds: [], evidencePaths: [], nextAction: '', phase: 'x'}]) {
     const w = world(); stateFile(w, 'bad.json', body); w.done();
     const out = run(w);
-    assert.deepEqual(w.stopCalls, []);
+    assert.deepEqual(w.stopCalls, [], JSON.stringify(body));
     assert.match(out.skipped[0].reason, /인계 상태를 읽지 못함/);
   }
 });
-test('R2: 원장에 prepared만 있고 complete·aborted가 없는 인계도 막는다', () => {
-  const w = world(); w.done();
-  appendLedger({kind: 'handover', phase: 'prepared', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w.home);
+test('원장에 그 역할이 관련된 인계 사건이 start 뒤에 있으면 끝난 인계(complete)여도 끄지 않는다', () => {
+  for (const phases of [['prepared'], ['prepared', 'complete'], ['prepared', 'aborted']]) {
+    const w = world(); w.done();
+    for (const phase of phases) appendLedger({kind: 'handover', phase, handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w.home);
+    run(w);
+    assert.ok(!w.stopCalls.includes('작업A'), phases.join());
+  }
+});
+
+test('S2: 잘못된 참조 문자열(reopenOf: 숫자·객체·true)이어도 이어 연 표시로 보고 끄지 않는다', () => {
+  for (const extra of [{reopenOf: 123}, {reopenOf: {}}, {restartOf: true}, {restoredFrom: 'x'}, {secretaryResumeSource: 'x'}, {inheritMail: true}]) {
+    const w = world(); w.done(); reuse(w, extra);
+    run(w);
+    assert.ok(!w.stopCalls.includes('작업A'), JSON.stringify(extra));
+  }
+});
+
+test('S2: stop 없이 같은 PID로 다시 기록된 start는 재사용으로 무시하고 보통 세션은 꺼진다 / PID가 다르면 끄지 않는다', () => {
+  const w = world(); startOf(w, '작업A'); w.done(); // 같은 pane PID 100의 재사용 기록
   run(w);
-  assert.ok(!w.stopCalls.includes('작업A'));
-  appendLedger({kind: 'handover', phase: 'complete', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w.home);
-  const w2 = world(); w2.done();
-  appendLedger({kind: 'handover', phase: 'prepared', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w2.home);
-  appendLedger({kind: 'handover', phase: 'complete', handoverId: 'hh', from: '작업A', to: '신입', taskIds: []}, w2.home);
+  assert.ok(w.stopCalls.includes('작업A'));
+  const w2 = world(); startOf(w2, '작업A', {panePid: '200'}); w2.pids['kadan-작업A'] = '200'; w2.done(); // PID가 다른 새 start(stop 없음)
   run(w2);
-  assert.ok(w2.stopCalls.includes('작업A'));
+  assert.ok(!w2.stopCalls.includes('작업A'));
+});
+
+test('S2: stop 없이 같은 PID로 기록된 새 대화(재사용 기록에 resume·모름)도 첫 start가 새 대화면 꺼진다 — 판정은 첫 start 기준', () => {
+  const w = world(); startOf(w, '작업A', {cmd: 'codex resume abc'}); w.done();
+  run(w);
+  assert.ok(w.stopCalls.includes('작업A'));
+});
+
+test('모름: 띄운 start의 명령을 알 수 없거나 resume이면(새 대화로 확실하지 않으면) 끄지 않는다', () => {
+  for (const cmd of ['echo', 'codex resume abc', 'codex --unknown-option x', '']) {
+    const w = world();
+    // 같은 세션의 첫 start를 바꿀 수 없으니 stop 뒤에 새 명령으로 다시 띄운 것으로 만든다.
+    appendLedger({kind: 'stop', role: '작업A', session: 'kadan-작업A', by: '감독', t: T('03-01T00:00:00Z')}, w.home);
+    startOf(w, '작업A', {cmd, t: T('04-01T00:00:00Z')});
+    w.link('repo/w', '작업A', T('05-01T00:00:00Z'), T('05-02T00:00:00Z'));
+    w.done();
+    run(w);
+    assert.ok(!w.stopCalls.includes('작업A'), cmd);
+  }
 });
