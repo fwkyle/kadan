@@ -7,9 +7,11 @@ import path from 'node:path';
 import {runnerTemplate, fillTemplate, resumeTail, rebuildResumeCommand, findConversation, checkConversationSpec} from '../src/runner-table.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
 import {launchIdentityOf} from '../src/ai-identity.mjs';
+import {restoreCommand} from '../src/server-restore-command.mjs';
 import {TABLE, settingsWith} from './helpers/runner-table.mjs';
 
 const ID = '0197aaaa-1111-4222-8333-444455556666';
+const NEW = '0197bbbb-1111-4222-8333-444455556666';
 const settings = settingsWith();
 
 test('틀 채우기: 빈 칸은 미지원으로 거절하고, 값이 없는 자리는 만들지 않는다', () => {
@@ -98,25 +100,67 @@ function jsonFixture(files) {
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const claude = TABLE.claude.conversation;
 
-test('pid-json: 프로세스 트리의 파일에서 sessionId를 읽되 tmux 자리가 같아야 하고, 없거나 다르면 거절한다', () => {
+test('pid-json: #348 뒤 tmux 없는 파일도 새 프로세스가 썼으면 받아들인다', () => {
+  const homeDir = jsonFixture({200: {
+    pid: 200, sessionId: ID, cwd: '/work', startedAt: 'ignored', procStart: 'ignored', status: 'idle',
+  }});
+  const file = path.join(homeDir, '.claude/sessions/200.json');
+  fs.utimesSync(file, 2000, 2000);
+  assert.equal(findConversation(claude, {
+    pids: ['200'], readJson: read, homeDir, exists: () => true,
+    processStartedAt: () => 1999000,
+  }), ID);
+});
+
+test('pid-json: 재사용 PID의 낡은 파일은 tmux 유무와 무관하게 거절한다', () => {
+  for (const extra of [{}, {tmux: 'a:@1.%1'}]) {
+    const homeDir = jsonFixture({200: {sessionId: ID, ...extra}});
+    fs.utimesSync(path.join(homeDir, '.claude/sessions/200.json'), 1000, 1000);
+    assert.throws(() => findConversation(claude, {
+      pids: ['200'], readJson: read, homeDir, tmuxLocation: 'a:@1.%1', exists: () => true,
+      processStartedAt: () => 2000000,
+    }), /낡은 대화 정보 파일/);
+  }
+});
+
+test('pid-json: 있는 tmux 자리는 같아야 하고, 다르거나 PID 파일이 없으면 거절한다', () => {
   const homeDir = jsonFixture({200: {sessionId: ID, tmux: 'kadan-w:@3.%3'}});
   fs.mkdirSync(path.join(homeDir, '.claude/projects/-tmp'), {recursive: true});
   fs.writeFileSync(path.join(homeDir, `.claude/projects/-tmp/${ID}.jsonl`), '{}');
-  const deps = {pids: ['100', '200'], readJson: read, tmuxLocation: 'kadan-w:@3.%3', homeDir};
+  const deps = {pids: ['100', '200'], readJson: read, tmuxLocation: 'kadan-w:@3.%3', homeDir,
+    processStartedAt: () => 1000};
   assert.equal(findConversation(claude, deps), ID);
   assert.throws(() => findConversation(claude, {...deps, tmuxLocation: 'kadan-other:@9.%9'}), /다른 세션의 대화/);
   assert.throws(() => findConversation(claude, {...deps, pids: ['100']}), /파일이 없다/);
 });
 
-test('pid-json: tmux 필드가 없거나 파일이 여러 개면 거절하고, 저장된 기록이 없으면 끄기 전에 거절한다', () => {
+test('pid-json: #348의 없는 tmux는 건너뛰되 저장 여부·파일 개수·ID 검사는 유지한다', () => {
+  const base = {pids: ['200'], readJson: read, tmuxLocation: 'a:@1.%1', processStartedAt: () => 1000};
   const noTmux = jsonFixture({200: {sessionId: ID}});
-  assert.throws(() => findConversation(claude, {pids: ['200'], readJson: read, tmuxLocation: 'a:@1.%1', homeDir: noTmux}), /tmux 값이/);
+  assert.throws(() => findConversation(claude, {...base, homeDir: noTmux}), /저장되지 않았다/);
   const two = jsonFixture({200: {sessionId: ID, tmux: 'a:@1.%1'}, 201: {sessionId: ID, tmux: 'a:@1.%1'}});
   assert.throws(() => findConversation(claude, {pids: ['200', '201'], readJson: read, tmuxLocation: 'a:@1.%1', homeDir: two}), /2개라/);
   const unsaved = jsonFixture({200: {sessionId: ID, tmux: 'a:@1.%1'}});
-  assert.throws(() => findConversation(claude, {pids: ['200'], readJson: read, tmuxLocation: 'a:@1.%1', homeDir: unsaved}), /저장되지 않았다/);
+  assert.throws(() => findConversation(claude, {...base, homeDir: unsaved}), /저장되지 않았다/);
   const badId = jsonFixture({200: {sessionId: 'a b', tmux: 'a:@1.%1'}});
-  assert.throws(() => findConversation(claude, {pids: ['200'], readJson: read, tmuxLocation: 'a:@1.%1', homeDir: badId}), /안전하지/);
+  assert.throws(() => findConversation(claude, {...base, homeDir: badId}), /안전하지/);
+});
+
+test('pid-json: 시작 시각 불명은 거절하고 초 단위 경계는 보존한다', () => {
+  const homeDir = jsonFixture({200: {sessionId: ID}});
+  const file = path.join(homeDir, '.claude/sessions/200.json');
+  const deps = {pids: ['200'], readJson: read, homeDir, exists: () => true};
+  for (const value of [undefined, null, NaN, 0, Infinity, '2000000']) {
+    assert.throws(() => findConversation(claude, {...deps, processStartedAt: () => value}), /시작 시각/);
+  }
+  assert.throws(() => findConversation(claude, deps), /시작 시각/);
+  assert.throws(() => findConversation(claude, {
+    ...deps, processStartedAt: () => { throw new Error('ps failed'); },
+  }), /시작 시각/);
+  fs.utimesSync(file, 2000, 2000);
+  assert.equal(findConversation(claude, {...deps, processStartedAt: () => 2000999}), ID);
+  fs.utimesSync(file, 1999.999, 1999.999);
+  assert.throws(() => findConversation(claude, {...deps, processStartedAt: () => 2000000}), /낡은/);
 });
 
 test('표 검증: 모양이 틀린 conversation 칸은 저장 전에 거절한다', () => {
@@ -160,4 +204,55 @@ test('설정: 옛 설정(spawn만)은 그대로 읽히고, 표 칸은 선택이�
   const cleared = setRunner(home, {runner: 'codex', table: {resume: null}, ...meta(2)});
   assert.equal(cleared.runners.codex.resume, undefined);
   assert.throws(() => resumeTail(readSettings(home), 'codex'), /미지원/);
+});
+
+const MID = `/opt/x/bin/claude --settings '/opt/x/claude-settings.json' --resume old-id --dangerously-skip-permissions --model claude-opus-5-5 --effort medium`;
+const MID_FIXED = `/opt/x/bin/claude --settings /opt/x/claude-settings.json --dangerously-skip-permissions --model claude-opus-5-5 --effort medium --resume ${ID}`;
+
+test('명령 재조립: 명령 중간의 resume 꼬리도 떼고 끝에 새 대화로 붙인다(실제 cmd 꼴)', () => {
+  const fromMid = rebuildResumeCommand(settings, 'claude', MID, ID);
+  assert.equal(fromMid, MID_FIXED);
+  const atEnd = `/opt/x/bin/claude --settings '/opt/x/claude-settings.json' --dangerously-skip-permissions --model claude-opus-5-5 --effort medium --resume old-id`;
+  assert.equal(rebuildResumeCommand(settings, 'claude', atEnd, ID), fromMid);
+  assert.equal(rebuildResumeCommand(settings, 'claude', fromMid, ID), fromMid);
+  const codexMid = `codex resume old-id -p lite --model gpt-6-sol`;
+  assert.equal(rebuildResumeCommand(settings, 'codex', codexMid, ID), `codex -p lite --model gpt-6-sol resume ${ID}`);
+});
+
+test('명령 재조립: #351 복원 출력(restoreCommand)을 그대로 다시 열 수 있다', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-restore-cwd-'));
+  for (const [cmd, tailed] of [
+    [`claude --model claude-opus-5-5 --effort low --resume ${ID}`, `--resume ${NEW}`],
+    [`codex resume ${ID} --model gpt-6-sol`, `resume ${NEW}`]]) {
+    const {command} = restoreCommand({start: {cwd, cmd, role: 'test-lead', t: new Date().toISOString()}, projectsDir: cwd});
+    const rebuilt = rebuildResumeCommand(settings, cmd.startsWith('codex') ? 'codex' : 'claude', command, NEW);
+    assert.ok(rebuilt.endsWith(tailed), rebuilt);
+    assert.equal(rebuilt.split(' ').filter(word => word === 'resume' || word === '--resume').length, 1, rebuilt);
+    assert.equal(conversationOf(rebuilt).conversationRef, NEW);
+  }
+});
+
+test('명령 재조립: 중간 resume이어도 모호한 대화 지정은 거절한다', () => {
+  const rejects = cmd => assert.throws(() => rebuildResumeCommand(settings, 'claude', cmd, ID), /대화 지정/, cmd);
+  rejects('claude --resume a --model m --resume b');
+  rejects('claude --resume=abc --model m');
+  rejects('claude -r abc --model m');
+  rejects('claude --resume a --continue --model m');
+  rejects('claude --resume a --fork-session --model m');
+  rejects('claude --resume --dangerously-skip-permissions --model m');
+});
+
+test('명령 재조립: 옵션 값 안의 resume 낱말은 대화 지정으로 세지 않는다(검수 F1)', () => {
+  assert.equal(rebuildResumeCommand(settings, 'codex', 'codex --profile resume --model m', ID), `codex --profile resume --model m resume ${ID}`);
+  assert.equal(rebuildResumeCommand(settings, 'claude', `claude --append-system-prompt '--resume' --model m`, ID),
+    `claude --append-system-prompt --resume --model m --resume ${ID}`);
+  assert.equal(rebuildResumeCommand(settings, 'claude', `claude --append-system-prompt resume --resume ${NEW} --model m`, ID),
+    `claude --append-system-prompt resume --model m --resume ${ID}`);
+});
+
+test('명령 재조립: `--` 뒤 입력이나 값이 빠진 옵션이 있으면 거절한다(검수 F2)', () => {
+  for (const [runner, cmd] of [['claude', 'claude --resume old -- hello'], ['codex', 'codex resume old -- hello'],
+    ['agy', 'agy --conversation old -- hello'], ['claude', 'claude --resume old --append-system-prompt']]) {
+    assert.throws(() => rebuildResumeCommand(settings, runner, cmd, ID), /대화 지정/, cmd);
+  }
 });
