@@ -110,21 +110,39 @@ const CERTAIN_NEW = {
   devin: {value: new Set(['--model', '--permission-mode', '--respect-workspace-trust']), flag: new Set()},
 };
 
+// 같은 표로 실행기 이름 뒤 낱말을 처음부터 끝까지 걷는다(restart --model-from-settings가 옵션과 값을 가르는 데 쓴다).
+// 성공: {ok: true, harness, options: [{at, name, valueAt, inline}]} — at·valueAt은 명령 전체 낱말 기준 위치다.
+//   `--opt 값`은 valueAt이 값 낱말 위치(값 낱말이 없으면 null), `--opt=값`은 inline true이고 valueAt은 null, 값 없는 옵션은 valueAt null.
+// 실패: {ok: false, word, reason} — 표가 없는 실행기, 표에 없는 옵션, 옵션 자리가 아닌 맨 낱말(하위 명령·첫 프롬프트), `--`.
+// 대화 지정(--resume 등)은 표에 없어 실패한다. 부르는 쪽이 대화 꼬리를 먼저 뗀다.
+export function walkKnownOptions(cmd) {
+  const normalized = normalizeAiCommand(cmd);
+  const spec = normalized && CERTAIN_NEW[normalized.harness];
+  if (!spec) return {ok: false, word: normalized?.harness ?? null, reason: 'unknown-runner'};
+  const words = commandWords(typeof cmd === 'string' ? cmd.trim() : cmd), args = normalized.args;
+  const offset = words.length - args.length, options = [];
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === '--') return {ok: false, word: token, reason: 'double-dash'};
+    if (!token.startsWith('-')) return {ok: false, word: token, reason: 'bare-word'};
+    const long = token.startsWith('--'), eq = token.indexOf('=');
+    const inline = long && eq > 0, name = inline ? token.slice(0, eq) : token;
+    if (spec.value.has(name)) {
+      options.push({at: offset + i, name, valueAt: inline || i + 1 >= args.length ? null : offset + i + 1, inline});
+      if (!inline) i += 1;
+      continue;
+    }
+    if (spec.flag.has(name) && !inline) { options.push({at: offset + i, name, valueAt: null, inline: false}); continue; }
+    return {ok: false, word: token, reason: 'unknown-option'};
+  }
+  return {ok: true, harness: normalized.harness, options};
+}
+
 export function startConversationCertainty(cmd) {
   const normalized = normalizeAiCommand(cmd);
   const spec = normalized && CERTAIN_NEW[normalized.harness];
   if (!spec) return 'unknown';
   const mode = conversationOf(cmd).conversationMode;
   if (mode === 'resume' || mode === 'fork') return mode;
-  const args = normalized.args;
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-    if (!token.startsWith('-') || token === '--') return 'unknown';
-    const long = token.startsWith('--'), eq = token.indexOf('=');
-    const name = long && eq > 0 ? token.slice(0, eq) : token;
-    if (spec.value.has(name)) { if (!(long && eq > 0)) i += 1; continue; }
-    if (spec.flag.has(name) && !(long && eq > 0)) continue;
-    return 'unknown';
-  }
-  return 'new';
+  return walkKnownOptions(cmd).ok ? 'new' : 'unknown';
 }
