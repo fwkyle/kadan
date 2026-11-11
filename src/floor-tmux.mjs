@@ -417,6 +417,12 @@ export function wrapNoTmux(cmd) {
   return `unset TMUX TMUX_PANE; ${cmd || 'exec "${SHELL:-/bin/sh}" -l'}`;
 }
 
+// 감시기·다리처럼 원장 start 없이 도는 기반 세션의 명령 앞에 붙인다: 이미 떠 있는 tmux 서버에 남은 역할·창 환경을 자식이 물려받지 않게 하고
+// 창 값을 launchd 되살리기와 같은 값(none + force)으로 고정한다. 운영 tmux 서버의 전역 환경은 건드리지 않는다.
+export function wrapInfraEnv(cmd) {
+  return `unset TMUX TMUX_PANE KADAN_ROLE KADAN_RESTART_REASON KADAN_RESTART_EXPECT_PID; export KADAN_WINDOW=none KADAN_WINDOW_FORCE=1; ${cmd}`;
+}
+
 // 카단 pane 표시: 이 pane이 카단 소켓에서 떴다는 사실을 TMUX 대신 이 값으로 안다(window-setting.insideKadanPane).
 export const paneSocketEnv = (socket = currentSocket()) => `KADAN_PANE_SOCKET=${socket}`;
 

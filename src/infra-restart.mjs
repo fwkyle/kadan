@@ -9,15 +9,19 @@ export const INFRA_RESTART_TARGETS = ['watch', '대시보드'];
 // 역할 세션이 부른 재시작은 대상마다 1시간에 이만큼까지. 되살리기의 1시간 3번 상한(history)과 따로 센다(restarts).
 export const ROLE_RESTART_CAP = 3;
 export const RESTART_VERIFY_MS = 30_000;
+// 살아남은 것을 본 뒤 이만큼 기다려 같은 프로세스가 아직 살아 있어야 성공이다(성공 보고 직후 죽는 경합을 잡는다).
+export const RESTART_STABLE_MS = 3_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // deps: stop(target) · start(target) → 'started'|'restored'|'reused'|… · verify(target, sinceMs) → boolean · notify(message, opts) · record(entry) · lock(opts)
 // byRole: 부른 역할 이름(역할 세션이면) 또는 null(사람). now: 시각 함수.
 // 반환 {ok, code, result, message}. 던지지 않는다. 재시도하지 않는다.
-export async function restartInfra({ home, target, byRole = null, deps, now = Date.now, waitMs = RESTART_VERIFY_MS, pollMs = 500 }) {
+export async function restartInfra({ home, target, byRole = null, deps, now = Date.now, waitMs = RESTART_VERIFY_MS, pollMs = 500, stableMs = RESTART_STABLE_MS }) {
   const label = REVIVE_LABELS[target];
   if (!INFRA_RESTART_TARGETS.includes(target)) return { ok: false, code: 2, result: 'refused', message: `재시작은 감시기(watch)와 대시보드만 합니다(받은 대상: ${target})` };
+  // 이 명령을 부른 프로세스가 대상 세션 안에서 돌면 끄는 순간 명령도 같이 죽는다: 끄기 전에 거절한다(판정 불가면 거절하지 않는다).
+  if (deps.insideTarget?.(target) === true) return { ok: false, code: 1, result: 'refused', message: `${label} 세션 안에서 부른 명령이라 거절합니다 — 끄면 이 명령도 같이 죽습니다. 다른 터미널에서 kadan restart ${target}를 치세요` };
   const release = (deps.lock ?? acquireReviveLock)(home, { waitMs: lockWaitMs(), onReclaim: reclaimLog, onLegacy: legacyLog });
   if (!release) return { ok: false, code: 1, result: 'refused', message: `자동 되살리기(kadan up --auto)가 실행 중이라 재시작하지 않았습니다. 잠시 뒤 다시 kadan restart ${target}를 치세요` };
   try {
@@ -55,8 +59,16 @@ export async function restartInfra({ home, target, byRole = null, deps, now = Da
     const deadline = Date.now() + waitMs;
     let alive = false;
     for (;;) {
-      try { alive = await deps.verify(target, sinceMs); } catch { alive = false; }
-      if (alive || Date.now() >= deadline) break;
+      let first = null;
+      try { first = await deps.verify(target, sinceMs); } catch { first = null; }
+      if (first) {
+        await sleep(stableMs);
+        let second = null;
+        try { second = await deps.verify(target, sinceMs); } catch { second = null; }
+        alive = Boolean(second) && String(first) === String(second);   // 같은 프로세스가 안정 구간 뒤에도 살아 있어야 한다
+        break;
+      }
+      if (Date.now() >= deadline) break;
       await sleep(pollMs);
     }
     if (!alive) return fail('unverified', `${Math.round(waitMs / 1000)}초 안에 살아난 것을 보지 못함`);

@@ -75,6 +75,9 @@ export function cmdRestart(argv, flags) {
   flags = cliRestartFlags(flags);
   const role = argv[0];
   if (!role) die(RESTART_USAGE);
+  // 화면 '다시 띄우기'가 넘기는 환경값(KADAN_RESTART_*)이 있는 감시기·대시보드 호출은 끄기 전에 거절한다(대시보드가 자기 자신을 끄는 길 차단, 세대 대조·이유를 버리지 않는다).
+  if (INFRA_RESTART_TARGETS.includes(role) && (process.env.KADAN_RESTART_REASON !== undefined || process.env.KADAN_RESTART_EXPECT_PID !== undefined))
+    die(`화면에서는 감시기·대시보드를 다시 띄울 수 없습니다 — 터미널에서 \`kadan restart ${role}\`를 치세요(옵션 없이)`, 2);
   // 역할 말고 낱말이 더 있으면(값 없는 옵션에 붙인 값 포함) 어느 것이 역할인지 추측하지 않는다 — 역할 선택·세션 조회 전에 끝낸다.
   if (argv.length > 1) die(`역할은 하나만 받는다(받은 낱말: ${argv.join(" ")})\n${RESTART_USAGE}`);
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);

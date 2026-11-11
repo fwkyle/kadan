@@ -33,6 +33,28 @@ export function callWithoutExit(fn, exit = process) {
   try { return fn(); } finally { exit.exit = real; }
 }
 
+// 이 프로세스가 대상 세션의 pane 프로세스 아래에서 돌고 있는지: true/false, 판정 못 하면 null.
+export function insideSession(target, { pidOf = (s) => floor.pid(s), alive = (s) => floor.alive(s), parentOf = defaultParentOf, self = process.pid } = {}) {
+  try {
+    const session = sessionName(target);
+    if (!alive(session)) return false;
+    const pane = Number(pidOf(session));
+    if (!Number.isInteger(pane) || pane <= 0) return null;
+    for (let pid = self, hops = 0; pid > 1 && hops < 64; hops++) {
+      if (pid === pane) return true;
+      const parent = parentOf(pid);
+      if (!Number.isInteger(parent)) return null;
+      pid = parent;
+    }
+    return false;
+  } catch { return null; }
+}
+function defaultParentOf(pid) {
+  const r = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" });
+  const n = Number(String(r.stdout ?? "").trim());
+  return r.status === 0 && Number.isInteger(n) ? n : NaN;
+}
+
 export function infraDeps(home) {
   const ops = reviveOps(home);
   const flags = {};
@@ -52,16 +74,18 @@ export function infraDeps(home) {
       callWithoutExit(() => cmdStart([DASHBOARD_ROLE], { cmd, hidden: true }));
       return "started";
     },
+    insideTarget: (target) => insideSession(target),
+    // 살아 있으면 프로세스 표식(같은 표식이 안정 구간 뒤에도 보여야 성공), 아니면 null.
     verify: async (target) => {
       const session = sessionName(target);
-      if (!floor.alive(session)) return false;
-      if (target === "watch") return readWatchProcesses(spawnSync, watchProcessName(home)).length > 0;
+      if (!floor.alive(session)) return null;
+      if (target === "watch") { const procs = readWatchProcesses(spawnSync, watchProcessName(home)); return procs.length ? procs.map((p) => p.pid).sort().join(",") : null; }
       try {
         const base = `http://127.0.0.1:${port}`;
         const status = await fetch(`${base}/api/dashboard/status`, { signal: AbortSignal.timeout(3000) });
         const page = await fetch(`${base}/`, { signal: AbortSignal.timeout(3000) });
-        return status.ok && page.status !== 503;
-      } catch { return false; }
+        return status.ok && page.status !== 503 ? String(floor.pid(session)) : null;
+      } catch { return null; }
     },
     notify: (message, opts) => ops.notify(message, opts),
     record: (entry) => appendLedger(entry, home),

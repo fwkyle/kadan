@@ -94,8 +94,8 @@ kadan doctor        # 막힌 곳이 있으면 한 번에 점검 (읽기 전용)
 - `kadan up`이 대시보드 주소를 알려 줍니다. 기본은 http://127.0.0.1:8790 입니다.
 - 비서는 카단 스킬을 알고 있어서, 원하는 일을 말하면 감독·작업자를 대신 꾸려 줍니다.
 - 끝낼 때는 `kadan stop 비서`, `kadan stop 대시보드`.
-- 감시기·대시보드 프로그램을 갱신한 뒤에는 `kadan stop watch`, `kadan stop 대시보드` 후
-  `kadan up --hidden`으로 다시 켠다. `restart`는 AI 역할의 대화를 이어 여는 명령이다.
+- 감시기·대시보드 프로그램을 갱신한 뒤에는 `kadan restart watch`, `kadan restart 대시보드`(끄고 같은 명령 안에서 다시 띄워 확인,
+  Autopilot 중 역할 세션도 가능, 화면 버튼에서는 안 됨)나 `kadan stop` 후 `kadan up --hidden`으로 다시 켠다. 그 밖의 `restart <역할>`은 AI 역할의 대화를 이어 여는 명령이다.
 - 끝난 작업자·검수자는 `kadan stop <역할>`로 꺼도 된다. 끌 때 대화 번호가 기록에 남고, 필요하면 `kadan reopen <역할>`로 같은 대화를 다시 연다. 업무를 `kadan work complete`로 마감하면 띄운 뒤 한 번도 꺼졌다 켜지지 않은 그 업무의 작업자·검수자가 함께 꺼진다(다시 띄웠거나 이어 열었거나 인계에 관련된 세션은 남고, `--keep-roles`로 모두 남긴다).
 - 자주 쓰는 옵션: `kadan up --cmd 'claude' --port 8800 --no-prompt`
 

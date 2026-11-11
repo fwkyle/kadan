@@ -24,7 +24,7 @@ import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
 import { launchServerRole, sendRestoreNotice, systemBootTime } from "../server-restore-runtime.mjs";
-import { tmux, paneState, captureTail, wrapNoTmux, paneSocketEnv } from "../floor-tmux.mjs";
+import { tmux, paneState, captureTail, wrapNoTmux, wrapInfraEnv, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
@@ -186,7 +186,7 @@ export function startWatchSession(home) {
     running: () => readWatchProcesses(spawnSync, watchProcessName(home)),
     alive: () => floor.alive(session),
     create: () => {
-      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, wrapNoTmux(`'${node}' '${cli}' watch`), ...KEEP_DEAD_PANE(session)]);
+      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, wrapInfraEnv(`'${node}' '${cli}' watch`), ...KEEP_DEAD_PANE(session)]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });

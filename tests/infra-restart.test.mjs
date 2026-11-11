@@ -8,7 +8,10 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {restartInfra, ROLE_RESTART_CAP} from '../src/infra-restart.mjs';
 import {readReviveState, writeReviveState, prepareRevive, acquireReviveLock} from '../src/revive.mjs';
 import {autopilotGuard, guardedReason} from '../src/autopilot-guard.mjs';
-import {normalizeForRevive, callWithoutExit} from '../src/commands/infra-restart.mjs';
+import {normalizeForRevive, callWithoutExit, insideSession} from '../src/commands/infra-restart.mjs';
+import {wrapInfraEnv} from '../src/floor-tmux.mjs';
+import {spawnSync} from 'node:child_process';
+import {summarizeAutopilot} from '../src/autopilot-summary.mjs';
 
 // 가짜 끄기·시작·생존 확인·알림만 쓴다. 운영 홈·tmux·창·알림에 닿지 않는다.
 const T0 = Date.parse('2026-11-11T03:00:00.000Z');
@@ -22,7 +25,7 @@ function world({startResult = 'started', startThrows = null, alive = true, home 
     notify: (message, opts) => { notices.push({message, opts}); },
     record: (entry) => { records.push(entry); appendLedger(entry, home); },
   };
-  const run = (target, byRole = null, extra = {}) => restartInfra({home, target, byRole, deps, now: () => T0, waitMs: 20, pollMs: 5, ...extra});
+  const run = (target, byRole = null, extra = {}) => restartInfra({home, target, byRole, deps, now: () => T0, waitMs: 20, pollMs: 5, stableMs: 5, ...extra});
   return {home, calls, notices, records, deps, run};
 }
 
@@ -198,4 +201,99 @@ test('10 시작 명령이 die()로 프로세스를 끝내려 해도 오류로 �
   const rel = acquireReviveLock(w.home, {waitMs: 0});
   assert.equal(typeof rel, 'function');
   rel();
+});
+
+const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
+
+test('11 화면 버튼: 감시기·대시보드는 HTTP 처리부와 CLI 둘 다 아무것도 끄기 전에 거절한다', async () => {
+  const {createWallServer} = await import('../src/wall.mjs');
+  const home = newHome();
+  appendLedger({kind: 'start', floor: 'tmux', role: '대시보드', session: 'kadan-대시보드', panePid: '100', cwd: home, cmd: 'node', by: 'test'}, home);
+  let calls = 0;
+  const server = createWallServer(() => ({center: null, entries: [], tree: [], ledgerLines: 0, collectedAt: new Date()}), {home, cacheSec: 0, restart: () => { calls++; return Promise.resolve({output: 'x'}); }});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    for (const role of ['대시보드', 'watch']) {
+      const r = await fetch(base + '/roles/restart', {method: 'POST', redirect: 'manual', headers: {'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', origin: base},
+        body: new URLSearchParams({token, role, reason: '느려서', expectPid: '100'})});
+      assert.equal(r.status, 409, role);
+      assert.match(await r.text(), /화면에서는 감시기·대시보드를 다시 띄울 수 없습니다/);
+    }
+    assert.equal(calls, 0, '요청이 restart를 한 번도 실행하지 않는다');
+    assert.equal((await fetch(base)).status, 200, '서버는 그대로 응답한다');
+  } finally { server.close(); }
+  // CLI: 화면이 넘기는 환경값이 있으면 floor를 보기 전에 거절한다(끄지 않는다)
+  for (const target of ['watch', '대시보드']) {
+    const r = spawnSync(process.execPath, [CLI, 'restart', target], {env: {...process.env, KADAN_HOME: home, KADAN_RESTART_REASON: '이유', KADAN_RESTART_EXPECT_PID: '1', KADAN_ROLE: ''}, encoding: 'utf8', timeout: 30000});
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /화면에서는 감시기·대시보드를 다시 띄울 수 없습니다/);
+  }
+});
+
+test('12 자기 세션 안에서 부른 재시작은 끄기 전에 거절하고, 판정 못 하면 거절하지 않는다', async () => {
+  const chain = new Map([[500, 400], [400, 300], [300, 1]]);
+  assert.equal(insideSession('대시보드', {pidOf: () => 400, alive: () => true, parentOf: pid => chain.get(pid), self: 500}), true);
+  assert.equal(insideSession('대시보드', {pidOf: () => 999, alive: () => true, parentOf: pid => chain.get(pid), self: 500}), false);
+  assert.equal(insideSession('대시보드', {pidOf: () => 400, alive: () => false, parentOf: pid => chain.get(pid), self: 500}), false);
+  assert.equal(insideSession('대시보드', {pidOf: () => 400, alive: () => true, parentOf: () => NaN, self: 500}), null);
+  const w = world();
+  w.deps.insideTarget = () => true;
+  const r = await w.run('대시보드', 'a-감독');
+  assert.equal(r.ok, false);
+  assert.equal(r.result, 'refused');
+  assert.match(r.message, /세션 안에서 부른 명령/);
+  assert.equal(w.calls.length, 0, '끄지 않았다');
+  w.deps.insideTarget = () => null;
+  assert.equal((await w.run('대시보드', 'a-감독')).ok, true, '판정 불가는 거절하지 않는다');
+});
+
+test('13 새 기반 세션 환경은 자식 쪽에서 고정된다: 서버 전역 환경에 이전 역할·창 값이 남아도 새 프로세스에는 안 들어간다', (t) => {
+  if (spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux 없음');
+  const socket = `kadan-env-${process.pid}`, out = path.join(newHome(), 'env.txt');
+  const tmux = (...a) => spawnSync('tmux', ['-u', '-L', socket, ...a], {encoding: 'utf8', env: {...process.env, TMUX: '', TMUX_PANE: ''}});
+  try {
+    tmux('new-session', '-d', '-s', 'seed', 'sleep 30');
+    tmux('set-environment', '-g', 'KADAN_ROLE', 'qa-old-caller');
+    tmux('set-environment', '-g', 'KADAN_WINDOW', 'rottie');
+    const cmd = wrapInfraEnv(`printf '%s|%s|%s' "$KADAN_ROLE" "$KADAN_WINDOW" "$KADAN_WINDOW_FORCE" > '${out}'`);
+    const bare = path.join(path.dirname(out), 'bare.txt');
+    tmux('new-session', '-d', '-s', 'bare', `printf '%s|%s' "$KADAN_ROLE" "$KADAN_WINDOW" > '${bare}'`);   // 수정 전 모양: 서버 환경이 그대로 들어간다
+    tmux('new-session', '-d', '-s', 'clean', cmd);
+    for (let i = 0; i < 40 && !(fs.existsSync(out) && fs.existsSync(bare)); i++) spawnSync('sleep', ['0.1']);
+    assert.equal(fs.readFileSync(bare, 'utf8'), 'qa-old-caller|rottie', '대조: 고정하지 않으면 이전 값이 들어간다');
+    assert.equal(fs.readFileSync(out, 'utf8'), '|none|1');
+  } finally { spawnSync('tmux', ['-u', '-L', socket, 'kill-server']); }
+});
+
+test('14 성공 직후 죽는 감시기: 안정 구간 뒤 표식이 바뀌거나 사라지면 모름(unverified)으로 끝낸다', async () => {
+  const w = world();
+  let n = 0;
+  w.deps.verify = async () => (++n === 1 ? 'pid-1' : null);   // 첫 확인은 살아 있고, 안정 구간 뒤에는 죽음
+  const dead = await w.run('watch', 'a-감독');
+  assert.equal(dead.ok, false);
+  assert.equal(dead.result, 'unverified');
+  assert.equal(w.notices.length, 1);
+  const w2 = world();
+  let k = 0;
+  w2.deps.verify = async () => (++k === 1 ? 'pid-1' : 'pid-2');   // 다른 프로세스로 바뀜
+  assert.equal((await w2.run('watch', null)).result, 'unverified');
+  const w3 = world();
+  w3.deps.verify = async () => 'pid-1';
+  assert.equal((await w3.run('watch', null)).ok, true);
+});
+
+test('15 Autopilot 요약의 재시작 수: 감시기 revive(reason restart 성공)와 AI 역할 restart를 세고 대시보드는 한 번만 센다', () => {
+  const start = {kind: 'autopilot', phase: 'on', t: new Date(T0).toISOString(), by: '사람', text: 't', to: [], delivered: []};
+  const at = ms => new Date(T0 + ms).toISOString();
+  const entries = [
+    {kind: 'revive', target: 'watch', reason: 'restart', result: 'started', by: 'a-감독', t: at(1000)},
+    {kind: 'revive', target: 'watch', reason: 'restart', result: 'failed', by: 'a-감독', t: at(2000)},
+    {kind: 'stop', role: '대시보드', restart: true, reason: 'infra-restart', t: at(3000)},
+    {kind: 'revive', target: '대시보드', reason: 'restart', result: 'started', by: 'a-감독', t: at(3500)},
+    {kind: 'stop', role: 'w', restart: true, t: at(4000)},
+  ];
+  const s = summarizeAutopilot({start, phase: 'off', endedAt: T0 + 10_000, entries, decisionEvents: [], readBody: () => null});
+  assert.equal(s.counts.restarts, 3);
 });

@@ -279,6 +279,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     if(!/^[\p{L}\p{N}_-]+$/u.test(role))throw new Error('다시 띄울 역할 이름이 올바르지 않다');
     if(!reason)throw new Error('다시 띄우는 이유를 적어 주세요');
     if(!/^\d+$/.test(expectPid))throw new Error('이 역할의 지금 세대 표시(pane PID 숫자)가 없다 — 화면을 새로 읽은 뒤 다시 시도하세요');
+    // 감시기·대시보드는 화면에서 다시 띄우지 않는다: 대시보드가 자기 세션을 끄면 이 요청을 처리하던 프로세스도 같이 죽는다(2026-11-11 검수). 터미널의 `kadan restart <대상>`만 쓴다.
+    if(role==='watch'||role==='대시보드')throw new Error(`화면에서는 감시기·대시보드를 다시 띄울 수 없습니다 — 대시보드가 자기 자신을 끄게 됩니다. 터미널에서 \`kadan restart ${role}\`를 치세요`);
     // 별칭('-역할'·'역할-' 등)은 같은 세션을 가리켜도 거절한다 — 최근 시작이 기록한 정확한 이름만 받는다(2026-10-15 2라운드).
     const latest=readLedgerIncremental(home).findLast(x=>x.kind==='start'&&x.session===sessionName(role));
     if(!latest||latest.role!==role)throw new Error('역할 이름이 최근 시작 기록과 다르다 — 목록을 새로 읽고 정확한 이름으로 다시 시도하세요');
