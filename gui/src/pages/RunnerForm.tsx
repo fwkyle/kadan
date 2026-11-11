@@ -135,7 +135,7 @@ export function RunnerForm({
           stage(role, fallback, choice, op);
           setDirty(false);
           context.draft(id, false);
-          context.notice("변경안에 반영했습니다. 프리셋 저장을 눌러 적용하세요.");
+          context.notice("변경안에 반영했습니다. 표 아래 저장을 눌러 적용하세요.");
         } catch (e) {
           setError(e instanceof Error ? e.message : "저장 실패");
         } finally {

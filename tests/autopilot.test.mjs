@@ -367,7 +367,7 @@ test('CLI: 일반감독의 autopilot on은 거절되고, status는 읽기만 한
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-cli-'));
   const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
   const run = (args, role) => spawnSync(process.execPath, [cli, 'autopilot', ...args],
-    {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
+    {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_TEST_NOTIFY_SINK: path.join(home, 'notify-sink.log'), KADAN_WINDOW: 'none'}, encoding: 'utf8'});
   const denied = run(['on', '문구'], 'a-감독');
   assert.notEqual(denied.status, 0);
   assert.match(denied.stderr, /사람 또는 슈퍼감독만/);
@@ -551,7 +551,7 @@ test('F4: 실제 CLI의 status stdout 전체가 JSON이고, 원문 줄바꿈은 
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'osascript'), `#!/bin/sh\necho "$2" >> ${JSON.stringify(osLog)}\n`, {mode: 0o755});
   const run = (args, role) => spawnSync(process.execPath, [cli, 'autopilot', ...args],
-    {env: {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_WINDOW: 'none'}, encoding: 'utf8'});
+    {env: {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KADAN_HOME: home, KADAN_ROLE: role, KADAN_NOTIFY: 'off', KADAN_TEST_NOTIFY_SINK: path.join(home, 'notify-sink.log'), KADAN_WINDOW: 'none'}, encoding: 'utf8'});
   const json = (args, role = '사람') => { const r = run(args, role); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); }; // stdout 전체가 JSON이어야 한다
   assert.deepEqual(json(['status']), {on: false, last: null});
   assert.match(run(['status', '--text'], '사람').stdout, /켠 적이 없습니다/);
@@ -633,4 +633,65 @@ test('알림이 던지지 않고 error를 돌려주는 실패(notifyUser의 최�
     f.deps.notify = () => ok;
     assert.equal('warnings' in f.run(['off']), false, JSON.stringify(ok));
   }
+});
+
+test('autopilot summary: 끝난 구간·켜진 중·기록 없음·옛 끝 사건을 원장에서 다시 계산하고, 저장도 새 사건도 만들지 않는다', () => {
+  const none = fixture();
+  assert.match(none.run(['summary']), /켠 적이 없음/);
+  assert.deepEqual(none.run(['summary'], {json: true}).state, 'none');
+  assert.equal(none.entries().length, 0);
+
+  const f = fixture();
+  f.run(['on', '문구'], {});
+  appendLedger({kind: 'autopilot-note', noteKind: 'hold', text: '보류 하나', by: 'a-감독', holdKind: 'gate', t: iso(T0 + 1000)}, f.home);
+  f.setNow(T0 + HOUR);
+  const running = f.run(['summary'], {json: true});
+  assert.equal(running.state, 'running');
+  assert.match(running.text, /아직 켜져 있음 — 지금까지/);
+  assert.match(f.run(['summary']), /^\(켜져 있는 중: 지금까지의 요약\)/);
+  f.notes.length = 0;
+  const off = f.run(['off']);
+  f.notes.length = 0;
+  const before = readLedger(f.home).length;
+  const ended = f.run(['summary'], {json: true});
+  assert.equal(ended.state, 'ended');
+  assert.equal(ended.phase, 'off');
+  assert.equal(ended.startedAt, iso(T0));
+  assert.equal(ended.text, off.summary, '끌 때 낸 요약과 다시 계산한 요약이 같다');
+  assert.equal(ended.counts.noteHolds.gate, 1);
+  assert.equal(readLedger(f.home).length, before, '새 사건 없음');
+  assert.equal(f.notes.length, 0, '알림도 없음');
+
+  // 옛 끝 사건(요약 칸이 담긴 것)도 같은 결과: 칸을 읽지 않고 다시 계산한다
+  const old = fixture();
+  old.run(['on', '문구'], {});
+  appendLedger({kind: 'autopilot-note', noteKind: 'hold', text: '보류 하나', by: 'a-감독', holdKind: 'gate', t: iso(T0 + 1000)}, old.home);
+  appendLedger({kind: 'autopilot', phase: 'off', by: '사람', startedAt: iso(T0), endedAt: iso(T0 + HOUR), t: iso(T0 + HOUR),
+    summary: {counts: {}, text: '옛 요약 글(읽지 않는다)'}}, old.home);
+  old.setNow(T0 + 2 * HOUR);
+  const oldOut = old.run(['summary'], {json: true});
+  assert.equal(oldOut.state, 'ended');
+  assert.doesNotMatch(oldOut.text, /옛 요약 글/);
+  
+  assert.equal(oldOut.counts.noteHolds.gate, 1);
+
+  // 명시한 끝 시각이 지났지만 끝 사건이 아직 없으면 그 시각까지의 끝난 구간
+  const timed = fixture();
+  timed.run(['on', '문구'], {for: '1h'});
+  timed.setNow(T0 + 3 * HOUR);
+  const expired = timed.run(['summary'], {json: true});
+  assert.equal(expired.state, 'ended');
+  assert.equal(expired.phase, 'expired');
+  assert.equal(expired.endedAt, iso(T0 + HOUR));
+});
+
+test('autopilot summary는 켜진 동안 역할 세션에서도 쓸 수 있다(가드의 읽기 허용), 알림 실패 경고에 다시 보는 길이 들어 있다', async () => {
+  const {guardedReason} = await import('../src/autopilot-guard.mjs');
+  assert.equal(guardedReason('autopilot', ['summary'], {}), null);
+  assert.equal(guardedReason('autopilot', ['summary'], {json: true}), null);
+  const f = fixture();
+  f.run(['on', '문구'], {});
+  f.deps.notify = () => ({via: 'system', error: '시험 알림 실패'});
+  const r = f.run(['off']);
+  assert.ok(r.warnings.some(w => w.includes('kadan autopilot summary')), JSON.stringify(r.warnings));
 });

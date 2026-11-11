@@ -19,7 +19,7 @@ const stamp = ms => {
   const d = new Date(ms), p = n => String(n).padStart(2, '0');
   return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 };
-const REASON = {off: 'autopilot off로 껐음', expired: '끝 시각이 되어 꺼짐', 'ended-by-input': 'kyle의 새 입력으로 꺼짐'};
+const REASON = {running: '아직 켜져 있음 — 지금까지', off: 'autopilot off로 껐음', expired: '끝 시각이 되어 꺼짐', 'ended-by-input': 'kyle의 새 입력으로 꺼짐'};
 
 // 결정 이력(같은 id의 여러 revision)에서 구간 안의 답·취소를 id당 한 번씩만 센다.
 function countDecisions(events, startMs, endMs) {
