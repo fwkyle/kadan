@@ -57,6 +57,7 @@ import { currentSocket } from "./floor-tmux.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner, userTurnWaitList, effectiveCardRole } from "./handover-state.mjs";
+import { waitUntilList } from "./wait-until.mjs";
 import {waitingLetters} from './mailbox-queries.mjs';
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
@@ -581,9 +582,14 @@ export async function runWatch({
         userTurnWaits = userTurnWaitList(works, cards);
         for (const w of userTurnWaits) waits.push({ ids: [`work:${w.work}`], answerer: "@user" });
       }
+      // 업무 대기 시각(--wait-until)이 남은 열린 업무도 그 시각까지 감독의 할 일이 아니다. 이미 읽은 업무 목록의 칸 하나를 보므로 새 읽기는 없다.
+      // 시각이 지나면 항목이 저절로 빠져 기존 놀고 있음이 평소대로 난다. answerer를 따로 둬 사용자 답 대기(@user)로 세지 않는다.
+      // kind:'wait-until'은 놀고 있음 계산에만 쓴다: 그 업무에 걸린 실행의 정체 판정·AI 입력에는 싣지 않는다(아래 progressWaits).
+      if (cards && decisionsNow !== null) for (const w of waitUntilList(works, cycleAt)) { userTurnWaits.push(w); waits.push({ ids: [`work:${w.work}`], answerer: "@wait-until", kind: "wait-until" }); }
       // 결정 목록을 못 읽었으면 결정 대기를 모른 채 거르는 것이라 waits 전체를 못 읽은 것으로 본다(아무것도 빼지 않는다).
       waitsRead = decisionsNow !== null;
     } catch { waits = []; userTurnWaits = []; waitsRead = false; }
+    const progressWaits = waits.filter(w => w.kind !== "wait-until");
     const identityNow=taskIdentity(cards??[]);
     let waitingKeys=new Set();
     if(cards&&!observationError){
@@ -592,7 +598,7 @@ export async function runWatch({
       });
       // 명확히 연결된 답 대기에 걸린 실행은 정체·입력대기 판정(progress)에서만 뺀다. 화면 오류·세션 죽음 경로(stall·생존 경보)와 그 감독의 다른 실행은 그대로다.
       const projected=identityNow.project(entries);
-      waitingKeys=waitingCardKeys(cards,works,waits,waitsRead,card=>effectiveCardRole(card,projected,identityNow));
+      waitingKeys=waitingCardKeys(cards,works,progressWaits,waitsRead,card=>effectiveCardRole(card,projected,identityNow));
       if(waitingKeys.size){
         // 걸리기 전의 비정상 보고는 풀어 둔다: 답이 온 뒤에도 재개하지 않으면 새 비정상으로 다시 알린다(재알림 묶음은 이 풀림 앞뒤를 가른다).
         for(const report of latestWatchReports(entries))
@@ -651,7 +657,7 @@ export async function runWatch({
       if(candidate.source==='progress'){
         // 걸러지지 않아 AI를 부르는 실행에는 그 실행에 걸린 답 대기와, 알림을 받을 상위 감독이 올린 열린 결정을 문맥으로 싣는다(거름 근거가 아니다).
         const card=(cards??[]).find(c=>c.key===taskIdentity(cards??[]).resolve(candidate.taskId).key);
-        if(card)Object.assign(input,waitFields(waits,waitsRead,card,candidate.taskId,works,role),decisionFields(decisionsNow,
+        if(card)Object.assign(input,waitFields(progressWaits,waitsRead,card,candidate.taskId,works,role),decisionFields(decisionsNow,
           // 실제 전달 경로(살아 있는 상위로 올림)가 고르는 수신 감독의 결정을 싣는다. 직속 감독 세션이 꺼져 있어도 같다.
           explainAlertRoute({id:`progress:${role}:${candidate.taskId??''}`,role},routes,roles.liveSessions,superRole,parents).recipient));
       }
