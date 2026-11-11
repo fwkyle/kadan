@@ -64,20 +64,27 @@ function closeRolesAfterComplete([action],flags,context,result){
  }
 }
 
-// 후속 행동이 성공하면 그 업무에 열린 채팅 결정(decision request --chat)을 닫는다. 업무 쓰기가 끝난 뒤 별도 트랜잭션이고,
+// 후속 행동이 성공하면 그 업무에 열린 채팅 결정(decision request --chat) 가운데 규칙이 허락한 것만 닫는다. 업무 쓰기가 끝난 뒤 별도 트랜잭션이고,
 // 닫기가 실패해도 업무 명령은 실패시키지 않는다(stderr 한 줄). 대상은 같은 업무의 채팅 결정뿐이다.
-const CHAT_CLOSE={execute:['후속 발령으로 자동 닫힘','work execute'],turn:['차례 변경으로 자동 닫힘','work update --turn-owner'],complete:['업무 완료로 자동 닫힘','work complete']};
+// 규칙(차례 변경은 kyle이 답했다는 근거가 아니다): execute는 부른 역할이 요청한 결정만, complete는 모두, 차례 변경은 닫지 않는다.
+// 닫지 않고 남긴 열린 결정은 stderr에 한 줄씩 알린다(stdout·종료 코드는 그대로).
+const CHAT_CLOSE={execute:['후속 발령으로 자동 닫힘','work execute','requester'],turn:['차례 변경으로 자동 닫힘','work update --turn-owner','none'],complete:['업무 완료로 자동 닫힘','work complete','all']};
 // 차례 변경은 저장 전 값과 저장 결과가 실제로 다를 때만 센다. 같은 값 재저장·차례 해제 없이 비운 채 재저장은 닫지 않는다.
 function turnOwnerOf([action,key],flags,{home}){
  if(action!=='update'||flags['turn-owner']===undefined||!key||flags.help)return null;
  try{return new WorkStore(home).get(key)?.turnOwner??'';}catch{return null;}
 }
-function closeChatDecisions([action,key],flags,{home},turnBefore,result){
+function closeChatDecisions([action,key],flags,{home,by},turnBefore,result){
  const turnChanged=turnBefore!==null&&(result?.turnOwner??'')!==turnBefore;
  const kind=action==='update'?(turnChanged?'turn':null):action;
  if(!CHAT_CLOSE[kind]||!key||flags.help)return;
- try{new DecisionStore(home).closeChatForWork(key,...CHAT_CLOSE[kind]);}
- catch(error){process.stderr.write(`채팅 결정 자동 닫기 실패(업무 명령은 성공): ${error.message}\n`);}
+ try{
+  const [reason,via,rule]=CHAT_CLOSE[kind],{kept}=new DecisionStore(home).closeChatForWork(key,reason,via,{rule,by});
+  for(const d of kept){
+   const q=String(d.question).replace(/\s+/g,' ').slice(0,40);
+   process.stderr.write(`열린 채팅 결정 유지(${via}는 요청자 ${d.requestedBy}의 결정을 닫지 않음): ${d.id.slice(0,8)} · ${q} · 답을 받았으면 kadan decision cancel ${d.id} --revision ${d.revision} --reason "kyle 채팅 답: <원문>"\n`);
+  }
+ }catch(error){process.stderr.write(`채팅 결정 자동 닫기 실패(업무 명령은 성공): ${error.message}\n`);}
 }
 
 function workCommandInner(args,flags,context){

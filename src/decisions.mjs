@@ -154,11 +154,15 @@ export class DecisionStore {
   freeAnswer=d.status==='answered'&&d.answer.source==='discord'&&!d.answer.choice&&by===d.requestedBy;
   if((d.status!=='open'&&!freeAnswer)||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString(),...(via?{cancelledVia:via}:{}),...(freeAnswer?{cancelledAnswer:true}:{})});});this.announce('cancel',cancelled);
   if(freeAnswer)this.threadNote(cancelled,'기타 답 기록 취소됨');return cancelled;}
- // 업무 명령(execute·turn-owner update·complete)이 성공한 뒤, 같은 업무의 열린 채팅 결정만 닫는다. 카드 결정은 건드리지 않는다.
+ // 업무 명령(execute·turn-owner update·complete)이 성공한 뒤, 같은 업무의 열린 채팅 결정 가운데 규칙이 허락한 것만 닫는다.
+ // 카드 결정은 건드리지 않는다. 닫을 대상을 거르는 자리는 `shouldClose` 한 곳이다(조건을 더할 때 여기만 고친다).
+ // rule: 'requester' = 부른 역할(by)이 요청한 결정만, 'all' = 모두, 'none' = 하나도 닫지 않음. 닫지 않고 남긴 열린 결정도 돌려준다.
  // 닫힌 건수의 취소마다 따로 잠근다(업무 쓰기와 같은 트랜잭션에 넣지 않는다). 만료는 만들지 않는다.
- closeChatForWork(work,reason,via){const key=String(work).replace(/^work:/,'');const closed=[];
-  for(const d of this.list())if(d.status==='open'&&d.chat===true&&d.work===key)closed.push(this.cancel(d.id,{revision:d.revision,reason,via},AUTO_BY));
-  return closed;}
+ closeChatForWork(work,reason,via,{rule='all',by}={}){const key=String(work).replace(/^work:/,'');const closed=[],kept=[];
+  const shouldClose=d=>rule==='all'||(rule==='requester'&&by!==undefined&&d.requestedBy===by);
+  for(const d of this.list())if(d.status==='open'&&d.chat===true&&d.work===key)
+   (shouldClose(d)?closed.push(this.cancel(d.id,{revision:d.revision,reason,via},AUTO_BY)):kept.push(d));
+  return {closed,kept};}
 }
 export function decisionCommand(args,flags,{home,by,notify}){
  const s=new DecisionStore(home,{notify}),[cmd,key]=args;
