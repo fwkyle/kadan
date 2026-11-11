@@ -100,7 +100,7 @@ test('요청자 본인의 work execute와 모든 work complete는 이유 문구�
   }
 });
 
-test('차례 변경은 요청자 본인이 해도 닫지 않고 남긴 결정마다 stderr 한 줄을 낸다. 같은 값 재저장은 조용하다',()=>{
+test('차례 변경은 요청자 본인이 해도 닫지 않고 남긴 결정마다 stderr 한 줄을 낸다. 같은 값 재저장도 안내한다',()=>{
   for(const by of ['a-감독',SUPER,'사람']){
     const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
     const {result,lines}=turn(f,by,'b-감독');
@@ -109,8 +109,8 @@ test('차례 변경은 요청자 본인이 해도 닫지 않고 남긴 결정마
     assert.equal(lines.length,1);
     assert.ok(lines[0].includes(d.id.slice(0,8))&&lines[0].includes(SUPER)&&lines[0].includes('합칠까요?'),lines[0]);
     assert.ok(lines[0].includes(`kadan decision cancel ${d.id} --revision 1 --reason`),lines[0]);
-    assert.equal(turn(f,by,'b-감독',2).lines.length,0,'같은 값 재저장은 차례 변경이 아니라 안내도 없다');
-    assert.equal(turn(f,by,'',3).lines.length,1,'차례 해제는 변경이다(닫지 않고 안내)');
+    assert.equal(turn(f,by,'b-감독',2).lines.length,1,'같은 값 재저장도 열린 결정이 남아 있으면 안내한다');
+    assert.equal(turn(f,by,'',3).lines.length,1,'차례 해제도 안내한다(닫지 않음)');
     assert.equal(f.store.get(d.id).status,'open');
   }
 });
@@ -132,7 +132,64 @@ test('다른 역할의 work execute는 닫지 않고 stderr로 알린다. 요청
   assert.deepEqual(done.lines,[]);
 });
 
-test('대시보드 폼(WorkStore.change)과 우편 차례 되돌림은 closeChatDecisions를 거치지 않아 채팅 결정을 닫지 않는다',()=>{
+test('F1: 차례 외 update·link·cancel·reopen도 열린 채팅 결정이 남으면 안내하고, cancel은 완료처럼 모두 닫는다. 읽기 명령은 조용하다',()=>{
+  const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
+  let rev=1;const w=(args,flags,by='a-감독')=>{const out=capture(()=>workCommand(args,{revision:rev,note:'시험',...flags},{home:f.home,by}));rev=f.works.get('repo/w1').revision;return out;};
+  for(const flags of [{progress:'2/10'},{'next-action':'다음'},{owner:'b-감독'}]){
+    const out=w(['update','repo/w1'],flags);
+    assert.equal(out.lines.length,1,JSON.stringify(flags));assert.ok(out.lines[0].includes(d.id.slice(0,8)),out.lines[0]);
+    assert.equal(f.store.get(d.id).status,'open');
+  }
+  for(const args of [['list'],['show','repo/w1']]){
+    const lines=capture(()=>workCommand(args,{},{home:f.home,by:'a-감독'})).lines;assert.deepEqual(lines,[],args[0]);
+  }
+  const cancelled=w(['cancel','repo/w1'],{result:'취소: 근거'},'사람');
+  assert.deepEqual(cancelled.lines,[]);
+  const after=f.store.get(d.id);
+  assert.equal(after.status,'cancelled');assert.equal(after.cancelReason,'업무 취소로 자동 닫힘');assert.equal(after.cancelledBy,'자동');assert.equal(after.cancelledVia,'work cancel');
+  assert.deepEqual(w(['reopen','repo/w1'],{},'사람').lines,[],'열린 결정이 없으면 reopen도 조용하다');
+  const e=f.store.request(null,{question:'다시 연 뒤 질문',work:'repo/w1',chat:true},SUPER);
+  const again=w(['cancel','repo/w1'],{result:'취소: 근거'},'사람');
+  assert.deepEqual(again.lines,[]);assert.equal(f.store.get(e.id).status,'cancelled','사람 명의 취소도 요청자와 무관하게 닫는다');
+  w(['reopen','repo/w1'],{},'사람');
+  const g=f.store.request(null,{question:'세 번째',work:'repo/w1',chat:true},SUPER);
+  assert.equal(w(['update','repo/w1'],{progress:'3'}).lines.length,1);assert.equal(f.store.get(g.id).status,'open');
+});
+
+test('F2: 실행만 등록되고 배정이 실패해도 업무에 쓴 것이 있으면 안내하고 닫지 않으며 원래 오류를 그대로 던진다. 아무것도 안 쓴 실패는 조용하다',()=>{
+  const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
+  const body=path.join(f.home,'body-read.md');fs.writeFileSync(body,`## 읽고 시작할 것\n\n- ${f.body} — 시험\n`);
+  const lines=[],write=process.stderr.write;process.stderr.write=s=>{lines.push(String(s));return true;};
+  let error;try{workCommand(['execute','repo/w1'],{revision:1,phase:'implementation',round:1,title:'구현','body-file':body,note:'x',assign:'invalid/role'},{home:f.home,by:SUPER});}catch(e){error=e;}finally{process.stderr.write=write;}
+  assert.ok(error,'원래 오류가 그대로 던져진다');assert.match(error.message,/이미 등록됐다/);
+  assert.ok(f.works.get('repo/w1').revision>1,'업무에 실행이 등록됐다');
+  assert.equal(f.store.get(d.id).status,'open','실패한 명령은 요청자 본인이어도 닫지 않는다');
+  assert.equal(lines.length,1);assert.ok(lines[0].includes(d.id.slice(0,8)),lines[0]);
+  const quiet=capture(()=>{try{workCommand(['update','repo/w1'],{revision:99,note:'x',progress:'1'},{home:f.home,by:'a-감독'});}catch{}});
+  assert.deepEqual(quiet.lines,[],'업무를 쓰지 못한 실패는 안내하지 않는다');
+});
+
+test('결정 목록을 읽지 못하면 결과는 그대로 두고 확인 방법 한 줄을 낸다. 안내는 5줄 + 외 N건이다',()=>{
+  const f=fixture();for(let i=0;i<7;i++)f.store.request(null,{question:`질문 ${i}`,work:'repo/w1',chat:true},SUPER);
+  const many=capture(()=>workCommand(['update','repo/w1'],{revision:1,note:'x',progress:'1'},{home:f.home,by:'a-감독'}));
+  assert.equal(many.lines.length,6);assert.match(many.lines[5],/외 2건/);
+  appendStream(f.home,'decisions/events.jsonl','bad');
+  const broken=capture(()=>workCommand(['update','repo/w1'],{revision:2,note:'x',progress:'2'},{home:f.home,by:'a-감독'}));
+  assert.equal(broken.result.progress,'2','업무 명령 결과는 그대로');
+  assert.equal(broken.lines.length,1);assert.match(broken.lines[0],/열린 채팅 결정을 확인하지 못했습니다.*kadan decision list --status open/);
+});
+
+test('F3: 안내 문구는 부른 쪽에 맞춘다. 요청자·사람에게는 닫는 명령, 그 밖의 역할에게는 요청자 또는 kyle만 닫을 수 있다고 알린다',()=>{
+  const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
+  const other=turn(f,'a-감독','b-감독').lines[0];
+  assert.match(other,new RegExp(`요청자\\(${SUPER}\\) 또는 kyle만 닫을 수 있습니다 — kyle 답을 받았으면 ${SUPER}가 닫습니다: kadan decision cancel ${d.id} --revision 1`));
+  const own=turn(f,SUPER,'c-감독',2).lines[0];
+  assert.ok(own.includes(`답을 받았으면 kadan decision cancel ${d.id} --revision 1`)&&!own.includes('만 닫을 수'),own);
+  const human=turn(f,'사람','d-감독',3).lines[0];
+  assert.ok(!human.includes('만 닫을 수'),human);
+});
+
+test('대시보드 폼(WorkStore.change)과 우편 차례 되돌림은 업무 명령 경로를 거치지 않아 채팅 결정을 닫지 않는다',()=>{
   const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
   f.works.change('repo/w1','update',{turnOwner:'b-감독'},{revision:1,by:'사람',note:'폼 저장'});
   f.works.changeTurnOwner('repo/w1',()=>({turnOwner:'a-감독',by:'b-감독',note:'차례 되돌림'}));
@@ -162,7 +219,7 @@ test('업무 명령이 실패하면 닫지 않고, 닫기가 실패해도 업무
   const lines=[],write=process.stderr.write;process.stderr.write=s=>{lines.push(String(s));return true;};
   let result;try{result=workCommand(['complete','repo/w1'],{revision:2,result:'끝: 근거',note:'완료'},{home:f.home,by:'사람'});}finally{process.stderr.write=write;}
   assert.equal(result.status,'done','닫기 실패가 업무 명령을 깨뜨리지 않는다');
-  assert.equal(lines.length,1);assert.match(lines[0],/채팅 결정 자동 닫기 실패/);
+  assert.equal(lines.length,1);assert.match(lines[0],/열린 채팅 결정을 확인하지 못했습니다/);
 });
 
 test('자동 닫기용 by는 채팅 결정에만 통하고, 사람이 답하면 요청자에게 직접 라우팅한다',()=>{
