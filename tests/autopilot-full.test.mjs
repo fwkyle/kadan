@@ -682,3 +682,38 @@ test('R4 채팅 결정(--chat)도 --reversible·--not-prohibited를 받고 같�
   code2(() => w.request({question: '다른 질문입니다'}), /보류·관문 거절 기록/);
   code2(() => w.request({question: '운영 배포를 할까요?'}), /낱말 때문에 막혔으면 kyle 답을 기다립니다|보류·관문 거절 기록/);
 });
+
+// (C) 확인 경로 줄의 PR 주소만 낱말 거름에서 뺀다. 그 밖은 전부 그대로 거른다.
+test('(C) 낱말 거름: 이유의 `- 라벨: PR 주소` 줄은 풀리고, 그 밖의 모든 자리는 계속 막힌다', () => {
+  const PR = 'https://github.com/o/r/pull/12';
+  const ok = {question: '이 순서로 갈까요?', options: ['예', '아니오'], recommendation: '예'};
+  const gated = reason => gatedDecisionText({...ok, reason});
+  // 풀리는 꼴: 줄 전체가 `- 라벨: 주소 하나`
+  assert.equal(gated(`- PR: ${PR}`), false);
+  assert.equal(gated(`- 확인 경로: ${PR}`), false);
+  assert.equal(gated(`요약 한 줄\n- PR: ${PR}\n- 확인 경로 없음: 시험`), false);
+  // 여전히 막히는 꼴
+  assert.equal(gated(`- PR: ${PR} 머지 가능`), true, '주소 뒤에 글이 더 있음');
+  assert.equal(gated(`- 머지할 PR: ${PR}`), true, '라벨의 낱말');
+  assert.equal(gated(`- PR: ${PR}\n머지해도 될까요`), true, '이유의 다른 줄');
+  assert.equal(gated(`PR ${PR}`), true, '라벨 없는 줄');
+  assert.equal(gated(`- 두 PR: ${PR} ${PR}`), true, '주소가 둘');
+  assert.equal(gated(`- PR: ${PR}/files`), true, '다른 모양의 주소');
+  assert.equal(gated(`- 설명 (${PR}): ${PR}`), true, '라벨 안의 주소');
+  assert.equal(gated(`- PR: #12`), true, '#숫자는 풀지 않음');
+  assert.equal(gated(`- PR: https://github.com/o/r/pull/12 #12`), true);
+  assert.equal(gatedDecisionText({...ok, question: `${PR} 볼까요?`, reason: '- 확인 경로 없음: 시험'}), true, '질문의 주소');
+  assert.equal(gatedDecisionText({...ok, recommendation: PR, reason: '- 확인 경로 없음: 시험'}), true, '추천의 주소');
+  assert.equal(gatedDecisionText({...ok, options: [PR, '아니오'], reason: '- 확인 경로 없음: 시험'}), true, '선택지의 주소');
+  assert.equal(gated(`- PR: https://example.com/o/r/pull/12 배포`), true, '다른 낱말은 그대로');
+  // 낱말 목록은 하나도 빼지 않았다
+  for (const word of ['관문', '머지', '배포', '운영', '삭제', 'merge-gate', 'night-merge', 'force', 'DB']) assert.equal(gated(`- ${word}: ${PR}`), true, word);
+});
+
+test('(C) PR을 확인 경로로 적은 결정이 요청되고 자격 시각에 진행된다', () => {
+  const w = world({decideAfter: '30m'});
+  const d = w.request({reason: '- PR: https://github.com/o/r/pull/12'});
+  const r = w.proceed(d.id, {at: Date.parse(d.at) + 31 * MIN});
+  assert.equal(r.already, false);
+  assert.ok(w.store.get(d.id).proceeded);
+});

@@ -17,7 +17,13 @@ const GATED = new RegExp([
   '관문', '머지', '금지 목록', '정책', '보류', '배포', '운영', '삭제', '영구', '강제', '비밀', '결제', '권한', '설정', '인증', '계정', '유료', '증액', '초기화',
   '\\b(?:merge|deploy\\w*|prod\\w*|force|push|secret\\w*|token|credential\\w*|password|billing|payment|rm|drop|delete|truncate|DB|sudo|chmod|schema|migration)\\b',
 ].join('|'), 'i');
-export const gatedDecisionText = d => [d?.question, d?.reason, d?.recommendation, ...(Array.isArray(d?.options) ? d.options : [])]
+// 확인 경로 줄의 주소(가장 좁은 예외): 이유(reason) 안에서 줄 전체가 `- <라벨>: <PR 주소 하나>` 꼴일 때 그 PR 주소 토큰만 거름에서 뺀다.
+// 결정 요청은 확인 경로 줄을 요구하므로(src/decisions.mjs assertVerifyPath) PR을 확인 경로로 적은 결정이 통째로 막히던 것을 푼다.
+// 라벨과 그 줄의 나머지(주소 뒤에 글이 더 있는 줄 포함), 질문·추천·선택지, 이유의 다른 줄은 모두 그대로 거른다. `#숫자`와 낱말 목록은 풀지 않는다.
+// 이 예외는 주소 모양만 본다: 선언의 진위와 결정의 의미는 여전히 코드가 검증하지 못한다.
+const VERIFY_LINE_PR = /^([ \t]*-[ \t]*[^:\n]+:[ \t]*)https?:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+[ \t]*$/gm;
+const withoutVerifyLinks = reason => reason.replace(VERIFY_LINE_PR, '$1');
+export const gatedDecisionText = d => [d?.question, typeof d?.reason === 'string' ? withoutVerifyLinks(d.reason) : d?.reason, d?.recommendation, ...(Array.isArray(d?.options) ? d.options : [])]
   .filter(x => typeof x === 'string').some(x => GATED.test(x));
 
 // (가) 기록 대조. entries는 원장(못 읽었으면 null → 막는다). 반환: 풀리지 않은 보류·거절 기록 목록, 읽지 못했으면 null.
