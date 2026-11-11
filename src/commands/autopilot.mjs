@@ -4,7 +4,7 @@ import {appendLedger, readLedger} from '../ledger.mjs';
 import {isUserActor, isSupervisorActor} from '../actors.mjs';
 import {WorkStore} from '../work-store.mjs';
 import {
-  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, clock, hasEnd, NO_END_TEXT, AUTO_CHECKLIST,
+  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, clock, endOf, NO_END_TEXT, AUTO_CHECKLIST,
 } from '../autopilot.mjs';
 import {buildAutopilotNote, noteLine} from '../autopilot-note.mjs';
 import {picksCommand} from '../autopilot-picks.mjs';
@@ -17,7 +17,7 @@ const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wi
 const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
-  const on = state.start, ended = hasEnd(on), untilMs = ended ? Date.parse(on.until) : null;
+  const on = state.start, end = endOf(on), ended = end.kind === 'at', untilMs = ended ? end.ms : null;
   return {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
     startedAt: on.t, until: ended ? on.until : null, untilLocal: ended ? clock(untilMs) : NO_END_TEXT,

@@ -216,13 +216,16 @@ test('끝 시각 없는 켜짐: 24시간·30일 뒤에도 켜짐. until 칸이 �
     assert.equal(state.on, true, `${ms}ms 뒤`);
     assert.equal(state.pending, null);
   }
-  const nullEnd = {...noEnd, until: null};
-  assert.equal(autopilotState([nullEnd], T0 + 30 * 24 * HOUR).on, true); // null도 끝 없음
-  for (const until of ['', 'abc', 'NaN', 12345678, {}]) {
+  // 원장에서 끝 없음은 칸이 없을 때뿐이다. 칸이 있는데 ISO 문자열이 아니면 전부 꺼짐(만료)이다 — null·숫자 9999·문자열 아님 포함.
+  for (const until of [null, '', 'abc', 'NaN', 12345678, 9999, 0, true, {}, [], '2026-11-12', '9999']) {
     const state = autopilotState([{...noEnd, until}], T0 + HOUR);
     assert.equal(state.on, false, `until=${JSON.stringify(until)}`);
-    assert.equal(state.pending.phase, 'expired');
+    assert.equal(state.pending.phase, 'expired', `until=${JSON.stringify(until)}`);
+    // 감시기 한 주기와 대시보드 재료도 같은 판정이다
+    assert.equal(watchAutopilotExpiry({entries: [{...noEnd, until}], now: T0 + HOUR, home: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-until-')), deps: {
+      readEntries: () => [{...noEnd, until}], readDecisions: () => [], record: () => {}, notify: () => {}, sendMail: () => ({ok: true}), readBody: () => null}})?.phase, 'expired', `감시기 until=${JSON.stringify(until)}`);
   }
+  assert.equal(autopilotState([{...noEnd, until: iso(T0 + 30 * 24 * HOUR)}], T0 + 29 * 24 * HOUR).on, true); // 먼 미래 ISO는 켜짐
   // 명시한 끝 시각은 그 시각에 만료
   const timed = {...noEnd, until: iso(T0 + 2 * HOUR)};
   assert.equal(autopilotState([timed], T0 + HOUR).on, true);
@@ -288,7 +291,8 @@ test('off: 끝 사건이 먼저 남는다 — 요약·알림·우편이 던지�
   assert.deepEqual(f.entries().map(e => e.phase), ['on', 'off']);
   assert.equal(f.entries()[1].reason, '직접 끔');
   assert.equal('warnings' in f.entries()[1], false); // 원장에는 쓰지 않는다
-  assert.match(f.entries()[1].summary.text, /요약을 만들지 못했습니다/);
+  assert.equal('summary' in f.entries()[1], false); // 끝 사건에는 요약을 담지 않는다(요약은 뒤에 알림·반환값으로)
+  assert.match(r.summary, /요약을 만들지 못했습니다/);
   assert.equal(f.run(['status']).on, false);
 });
 
@@ -581,4 +585,52 @@ test('F4: 종료 알림의 원문 안내는 status --text를 가리킨다', () =
   const start = {kind: 'autopilot', phase: 'on', t: iso(T0), until: iso(T0 + 8 * HOUR), by: 'a-슈퍼감독', viaChat: true, quote: 'q', text: 't', to: [], delivered: []};
   assert.match(summarizeAutopilot({start, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan autopilot status --text/);
   assert.match(summarizeAutopilot({start: {...start, viaChat: false}, phase: 'off', endedAt: T0 + HOUR, entries: [], decisionEvents: [], readBody: () => null}).text, /kadan autopilot status --text/);
+});
+
+test('끝 사건 먼저: 요약 입력(결정 이력·우편 본문)을 읽는 순간 이미 꺼짐으로 읽히고, 알림·우편 때도 그렇다', () => {
+  for (const how of ['off', 'expired']) {
+    const f = fixture();
+    f.run(['on', '문구'], how === 'off' ? {} : {for: '1h'});
+    appendLedger({kind: 'send', role: '사람', digest: 'dg', mailId: 'm1', t: iso(T0 + 1000)}, f.home);
+    const seen = [];
+    const probe = label => { seen.push([label, autopilotState(readLedger(f.home), T0 + 2 * HOUR).on]); };
+    f.deps.readDecisions = () => { probe('decisions'); return []; };
+    f.deps.readBody = () => { probe('body'); return null; };
+    f.deps.notify = () => { probe('notify'); };
+    f.deps.sendMail = () => { probe('mail'); return {ok: true}; };
+    f.setNow(T0 + 2 * HOUR);
+    if (how === 'off') f.run(['off']); else watchAutopilotExpiry({entries: readLedger(f.home), now: T0 + 2 * HOUR, home: f.home, deps: f.deps});
+    assert.deepEqual(seen.map(x => x[0]).slice(0, 3), ['decisions', 'body', 'notify'], how);
+    assert.ok(seen.length >= 3 && seen.every(([, on]) => on === false), `${how}: ${JSON.stringify(seen)}`);
+  }
+});
+
+test('끝 사건 기록 자체가 실패하면 꺼지지 않은 것이다: 던지고(종료 코드 1) 요약·알림·우편은 시작하지 않는다', () => {
+  const f = fixture();
+  f.run(['on', '문구'], {});
+  f.sent.length = 0;
+  f.deps.record = () => { throw new Error('디스크 가득 참'); };
+  let touched = false;
+  f.deps.readDecisions = () => { touched = true; return []; };
+  assert.throws(() => f.run(['off']), error => error.exitCode === 1 && /끝 사건을 원장에 기록하지 못해 Autopilot이 꺼지지 않았습니다: 디스크 가득 참/.test(error.message));
+  assert.equal(touched, false);
+  assert.equal(f.notes.length, 0);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.run(['status']).on, true);
+});
+
+test('알림이 던지지 않고 error를 돌려주는 실패(notifyUser의 최종 전달 실패)도 warnings로 오르고, 정상·디코 실패 뒤 시스템 알림 성공은 오르지 않는다', () => {
+  const failing = fixture();
+  failing.run(['on', '문구'], {});
+  failing.deps.notify = () => ({via: 'system', error: '시험 알림 기록 실패'});
+  const r = failing.run(['off']);
+  assert.equal(r.on, false);
+  assert.ok(r.warnings.some(w => /요약 알림을 보내지 못했습니다: 시험 알림 기록 실패/.test(w)), JSON.stringify(r.warnings));
+  assert.deepEqual(failing.entries().map(e => e.phase), ['on', 'off']);
+  for (const ok of [{via: 'discord'}, {via: 'system', error: null, discord: {outcome: 'failed'}}, undefined]) {
+    const f = fixture();
+    f.run(['on', '문구'], {});
+    f.deps.notify = () => ok;
+    assert.equal('warnings' in f.run(['off']), false, JSON.stringify(ok));
+  }
 });

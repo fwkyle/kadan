@@ -209,3 +209,15 @@ test('11 일어남: 요약 알림이 실패해도 끝 사건이 남아 꺼지고
     assert.match(w.posts().at(-1).content, /^Autopilot 끔\(끝 기록 완료\) — 단, 요약 알림을 보내지 못했습니다/);
   } finally { await fake.close(); }
 });
+
+test('12 일어남: 알림이 던지지 않고 error를 돌려줘도 답 글이 성공이라 하지 않고 실패를 드러낸다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake, {deps: {readWorks: () => [{key: 'a/w1', status: 'open', owner: 'a-감독', executions: []}],
+      sendMail: () => ({ok: true}), notify: () => ({via: 'system', error: '시험 알림 기록 실패'})}});
+    await w.handler(w.say('잘게'));
+    await w.handler(w.say('일어남'));
+    assert.deepEqual(w.autopilots().map(e => e.phase), ['on', 'off']);
+    assert.match(w.posts().at(-1).content, /^Autopilot 끔\(끝 기록 완료\) — 단, 요약 알림을 보내지 못했습니다: 시험 알림 기록 실패/);
+  } finally { await fake.close(); }
+});
