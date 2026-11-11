@@ -21,8 +21,8 @@ const GATED = new RegExp([
 // 결정 요청은 확인 경로 줄을 요구하므로(src/decisions.mjs assertVerifyPath) PR을 확인 경로로 적은 결정이 통째로 막히던 것을 푼다.
 // 라벨과 그 줄의 나머지(주소 뒤에 글이 더 있는 줄 포함), 질문·추천·선택지, 이유의 다른 줄은 모두 그대로 거른다. `#숫자`와 낱말 목록은 풀지 않는다.
 // 이 예외는 주소 모양만 본다: 선언의 진위와 결정의 의미는 여전히 코드가 검증하지 못한다.
-// 판정 근거: 소유자·저장소는 GitHub 이름 글자(영문·숫자·-·_·.)만 허용해, `?`·`#`·`;`·`%`·`@`·`:`가 든 꼴은 PR 경로가 아니라 쿼리·조각으로 읽히므로 풀지 않는다. 주소 끝에도 쿼리·조각·추가 경로를 허용하지 않는다.
-const VERIFY_LINE_PR = /^([ \t]*-[ \t]*[^:\n]+:[ \t]*)https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+[ \t]*$/gm;
+// 판정 근거: 소유자·저장소는 영문·숫자로 시작하고 그 뒤는 GitHub 이름 글자(영문·숫자·-·_·.)만 허용해(`.`·`..`처럼 점으로 시작하는 조각은 경로 정리로 PR 경로가 아니게 되므로 풀지 않는다), `?`·`#`·`;`·`%`·`@`·`:`가 든 꼴은 PR 경로가 아니라 쿼리·조각으로 읽히므로 풀지 않는다. 주소 끝에도 쿼리·조각·추가 경로를 허용하지 않는다.
+const VERIFY_LINE_PR = /^([ \t]*-[ \t]*[^:\n]+:[ \t]*)https?:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\/pull\/\d+[ \t]*$/gm;
 const withoutVerifyLinks = reason => reason.replace(VERIFY_LINE_PR, '$1');
 export const gatedDecisionText = d => [d?.question, typeof d?.reason === 'string' ? withoutVerifyLinks(d.reason) : d?.reason, d?.recommendation, ...(Array.isArray(d?.options) ? d.options : [])]
   .filter(x => typeof x === 'string').some(x => GATED.test(x));

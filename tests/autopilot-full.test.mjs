@@ -740,3 +740,13 @@ test('(C-r2) 주소 예외 경계: 실제 PR 경로만 풀리고 쿼리·조각�
     'https://github.com@evil.example/o/r/pull/12', 'https://evil.example/github.com/o/r/pull/12'])
     assert.equal(gated(url), asQuestion(url), url);
 });
+
+// (C-r3) 점만으로 된 조각(`.`·`..`)은 경로 정리로 PR 경로가 아니게 되므로, 이름은 영문·숫자로 시작해야 풀린다.
+test('(C-r3) 주소 예외: 소유자·저장소 조각은 영문·숫자로 시작해야 하고, 점·밑줄·하이픈 시작은 풀지 않는다', () => {
+  const ok = {question: '이 순서로 갈까요?', options: ['예', '아니오'], recommendation: '예'};
+  const gated = url => gatedDecisionText({...ok, reason: `- PR: ${url}`});
+  for (const url of ['https://github.com/o/./pull/12', 'https://github.com/o/../pull/12', 'https://github.com/./r/pull/12', 'https://github.com/../r/pull/12',
+    'https://github.com/o/.../pull/12', 'https://github.com/o/.git/pull/12', 'https://github.com/-x/r/pull/12', 'https://github.com/o/-x/pull/12',
+    'https://github.com/_x/r/pull/12', 'https://github.com/o/_x/pull/12']) assert.equal(gated(url), true, url);
+  for (const url of ['https://github.com/o/r/pull/12', 'https://github.com/re.po-x/a_b.c/pull/12']) assert.equal(gated(url), false, url);
+});
