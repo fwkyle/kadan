@@ -53,3 +53,7 @@ export const presetSaveFields = (settings: Settings, reason: string) => ({
 // 복사 원본 선택: 고른 이름이 최신 목록에 없으면(이름 바꾸기·삭제 뒤) 활성 프리셋, 그것도 없으면 첫 이름으로 맞춘다.
 export const pickCopySource = (names: string[], active: string, chosen: string) =>
   names.includes(chosen) ? chosen : names.includes(active) ? active : (names[0] ?? '');
+
+// 바꾸는 이유를 비워 두면 화면이 채워 보낸다(서버는 이유가 필수다). 적었으면 그 글을 그대로 쓴다.
+export const reasonFor = (typed: string, labels: string[]) =>
+  typed.trim() || `대시보드 표에서 변경: ${labels.join(', ') || '실행 모델'}`;

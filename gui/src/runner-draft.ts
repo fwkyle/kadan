@@ -34,3 +34,21 @@ export const fallbackLabels = (settings: Part, role: string) =>
     };
     return [runner, model, effort].filter(Boolean).join(" / ");
   });
+
+// 기본 실행 모델 칸에서 실행기만 바꾸고 모델을 안 고른 역할(초안에 모델이 빈 값으로 들어간다). 저장 전에 화면이 막는 데 쓴다.
+export const emptyModelRoles = (draft: Part, roles: string[]) =>
+  roles.filter((role) => {
+    const value = draft.presets[draft.activePreset]?.roles[role] as
+      | { model?: string }
+      | unknown[]
+      | undefined;
+    return Boolean(value) && !Array.isArray(value) && !(value as { model?: string }).model;
+  });
+
+// 저장된 값과 초안이 다른 역할(기본 실행 모델 또는 대체 후보·시니어 목록이 다른 것). 표에서 고친 줄을 가리키는 데 쓴다.
+export const changedRoles = (saved: Part, draft: Part, roles: string[]) =>
+  roles.filter(
+    (role) =>
+      ownPart(saved, role, false) !== ownPart(draft, role, false) ||
+      ownPart(saved, role, true) !== ownPart(draft, role, true),
+  );
