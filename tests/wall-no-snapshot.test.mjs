@@ -8,7 +8,7 @@ import path from 'node:path';
 import {createWallServer} from '../src/wall.mjs';
 import {dashboardData} from '../src/dashboard-api.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
-import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {createDatabase, writeStorageMarker, appendStream} from '../src/storage.mjs';
 import {initSettings, setRole} from '../src/runner-settings.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {createRunnerSettingsHistory} from '../src/runner-settings-history.mjs';
@@ -82,7 +82,7 @@ test('전후 본문이 같다: 설정 없음·설정 있음(변경 이력 10건 
   }
 });
 
-test('변경 이력은 다른 프로세스가 쓴 새 사건도 다음 호출에 보이고 처음 10건과 이어 읽은 결과가 전체 읽기와 같다', () => {
+test('변경 이력은 새로 덧붙인 사건을 다음 호출에 이어 읽고, 처음 10건과 이어 읽은 결과가 전체 읽기와 같다 (같은 프로세스에서 덧붙임)', () => {
   const home = sqliteHome(); seedSettings(home, 12);
   const read = createRunnerSettingsHistory(home);
   const expected = () => readLedger(home).filter(e => e.kind === 'runner-settings').slice(-10);
@@ -199,4 +199,89 @@ test('원격이 켜진 서버에서 세 주소는 Access 토큰 없는 외부 Ho
       assert.equal(await call(url, {host: HOST, 'cf-access-jwt-assertion': sign(key)}), 200, url + ' 유효한 토큰');
     }
   } finally { server.close(); certs.close(); }
+});
+
+// ── 변경 이력 읽기: DB 파일 교체 경계(검수 exec-d2605ed2) ──
+const histFixture = (name, reason) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-hist-' + name + '-'));
+  createDatabase(home); writeStorageMarker(home, 'sqlite');
+  appendLedger({kind: 'runner-settings', action: 'set', revision: 1, reason}, home);
+  return home;
+};
+const reasons = list => list.map(e => e.reason);
+// fs.statSync가 DB 파일을 볼 때마다 부른다(시험 안에서만 바꾸고 끝나면 되돌린다).
+const watchDbStat = (file, onStat) => {
+  const real = fs.statSync; let n = 0;
+  fs.statSync = function (target, ...args) { if (target === file) onStat(++n); return real.call(this, target, ...args); };
+  return {count: () => n, stop: () => { fs.statSync = real; }};
+};
+const swapIn = (home, replacementHome, graveyard) => {
+  const file = path.join(home, 'kadan.sqlite');
+  fs.renameSync(file, path.join(graveyard, 'old-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.sqlite'));
+  fs.renameSync(path.join(replacementHome, 'kadan.sqlite'), file);
+};
+
+test('최근 변경 읽기: 연결을 연 뒤·식별값을 재기 전에 DB 파일이 바뀌어도 옛 이력이 남지 않는다', () => {
+  // 읽기 한 번에 DB 파일 stat이 몇 번인지 센다(교체 없이). 마지막 stat이 읽은 뒤의 식별값 대조다.
+  const calibHome = histFixture('calib', 'x');
+  const calib = watchDbStat(path.join(calibHome, 'kadan.sqlite'), () => {});
+  try { createRunnerSettingsHistory(calibHome)(); } finally { calib.stop(); }
+  const stats = calib.count();
+  assert.ok(stats >= 2, '읽기 전·후 식별값 대조가 있다');
+  const a = histFixture('a', 'old-A'), b = histFixture('b', 'replacement-B');
+  const grave = path.join(a, '.old'); fs.mkdirSync(grave);
+  const read = createRunnerSettingsHistory(a);
+  const w = watchDbStat(path.join(a, 'kadan.sqlite'), n => { if (n === stats) swapIn(a, b, grave); });
+  let first;
+  try { first = read(); } finally { w.stop(); }
+  assert.deepEqual(reasons(first), ['replacement-B'], '교체가 확인되면 버리고 새 DB에서 다시 읽는다');
+  for (let i = 0; i < 3; i++) assert.deepEqual(reasons(read()), ['replacement-B'], '그 뒤 요청에도 옛 이력이 남지 않는다');
+  assert.deepEqual(reasons(readLedger(a).filter(e => e.kind === 'runner-settings')), ['replacement-B']);
+});
+
+test('최근 변경 읽기: 읽는 도중 또 바뀌면 오류로 끝나고, 다음 요청은 새 DB를 읽는다 / 이어 읽기 길도 같은 보호를 받는다', () => {
+  const calibHome = histFixture('calib2', 'x');
+  const calib = watchDbStat(path.join(calibHome, 'kadan.sqlite'), () => {});
+  try { createRunnerSettingsHistory(calibHome)(); } finally { calib.stop(); }
+  const stats = calib.count();
+  const a = histFixture('a2', 'old-A'), b = histFixture('b2', 'B'), c = histFixture('c2', 'C');
+  const grave = path.join(a, '.old'); fs.mkdirSync(grave);
+  const read = createRunnerSettingsHistory(a);
+  // 읽기 두 번(처음·재시도)의 대조 stat마다 교체한다.
+  const w = watchDbStat(path.join(a, 'kadan.sqlite'), n => { if (n === stats) swapIn(a, b, grave); else if (n === stats * 2) swapIn(a, c, grave); });
+  try { assert.throws(() => read(), /읽는 도중 바뀜/); } finally { w.stop(); }
+  assert.deepEqual(reasons(read()), ['C'], '실패 뒤 다음 요청은 지금 DB를 읽는다');
+  // 이어 읽기 길: A 상태를 기억한 뒤 새 사건이 들어온 DB 파일이 읽는 도중 교체돼도 옛 이력과 새 사건을 섞지 않는다.
+  const a2 = histFixture('a3', 'old'), b2 = histFixture('b3', 'new-B');
+  const grave2 = path.join(a2, '.old'); fs.mkdirSync(grave2);
+  const read2 = createRunnerSettingsHistory(a2);
+  assert.deepEqual(reasons(read2()), ['old']);
+  appendLedger({kind: 'runner-settings', action: 'set', revision: 2, reason: 'old-2'}, a2);
+  const w2 = watchDbStat(path.join(a2, 'kadan.sqlite'), n => { if (n === stats) swapIn(a2, b2, grave2); });
+  let got;
+  try { got = read2(); } finally { w2.stop(); }
+  assert.deepEqual(reasons(got), ['new-B']);
+  assert.deepEqual(reasons(read2()), ['new-B']);
+});
+
+test('최근 변경 읽기 대조: 요청 사이 교체(끝 순번 감소)·옛 흐름+새 흐름 순서·읽기 실패 뒤 다음 요청', () => {
+  const a = histFixture('a4', 'A1'), b = histFixture('b4', 'B-only');
+  const grave = path.join(a, '.old'); fs.mkdirSync(grave);
+  appendLedger({kind: 'runner-settings', action: 'set', revision: 2, reason: 'A2'}, a);
+  const read = createRunnerSettingsHistory(a);
+  assert.deepEqual(reasons(read()), ['A1', 'A2']);
+  swapIn(a, b, grave); // 요청 사이 교체: 끝 순번이 줄어든다
+  assert.deepEqual(reasons(read()), ['B-only']);
+  // 옛 흐름(ledger.jsonl)의 사건은 system 흐름 사건보다 앞에 온다
+  const c = histFixture('c4', 'sys-1');
+  appendStream(c, 'ledger.jsonl', {kind: 'runner-settings', action: 'set', revision: 0, reason: 'legacy-1'});
+  const readC = createRunnerSettingsHistory(c);
+  assert.deepEqual(reasons(readC()), ['legacy-1', 'sys-1']);
+  assert.deepEqual(reasons(readC()), reasons(readLedger(c).filter(e => e.kind === 'runner-settings')));
+  // 읽기 실패 뒤 다음 요청: DB 파일이 잠깐 없으면 오류, 돌아오면 정상
+  const file = path.join(c, 'kadan.sqlite'), hidden = path.join(grave, 'hidden.sqlite');
+  fs.renameSync(file, hidden);
+  assert.throws(() => readC());
+  fs.renameSync(hidden, file);
+  assert.deepEqual(reasons(readC()), ['legacy-1', 'sys-1']);
 });

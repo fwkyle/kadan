@@ -22,22 +22,30 @@ function rows(db, stream, {after = null, limitNewest = false} = {}) {
 }
 
 // 반환 함수는 오래된 것부터 최대 10건(공유 수집의 entries와 같은 순서)을 돌려준다.
+// 기억하는 값(state)은 같은 DB 파일 세대에서 읽은 식별값과 사건뿐이다: 읽기 전·후에 파일 식별값을 재서 다르면(읽는 도중 DB가 교체됨)
+// 그 결과를 버리고 한 번 더 읽고, 또 다르면 오류로 끝낸다(src/ledger-incremental.mjs의 rebuild와 같은 방식).
 export function createRunnerSettingsHistory(home) {
   let state = null;
+  const readOnce = (identity) => storageSnapshot(home, db => {
+    // 읽기 스냅샷 한 번 안에서 끝 순번과 사건을 함께 읽어, 그 사이 들어온 사건이 겹치거나 빠지지 않게 한다.
+    const head = db.prepare('SELECT seq FROM heads WHERE stream=?').get(ledgerStreams.system)?.seq ?? 0;
+    if (!state || state.identity !== identity || head < state.seq) {
+      return {identity, seq: head, legacy: rows(db, LEGACY, {limitNewest: true}),
+        system: rows(db, ledgerStreams.system, {limitNewest: true})};
+    }
+    if (head === state.seq) return state;
+    return {...state, seq: head, system: [...state.system, ...rows(db, ledgerStreams.system, {after: state.seq})].slice(-KEEP)};
+  });
   return () => {
     if (storageMode(home) === 'none') return [];
-    // 읽기 스냅샷 한 번 안에서 끝 순번과 사건을 함께 읽어, 그 사이 들어온 사건이 겹치거나 빠지지 않게 한다.
-    return storageSnapshot(home, db => {
+    for (let attempt = 0; attempt < 2; attempt++) {
       const identity = databaseIdentity(home);
-      const head = db.prepare('SELECT seq FROM heads WHERE stream=?').get(ledgerStreams.system)?.seq ?? 0;
-      if (!state || state.identity !== identity || head < state.seq) {
-        state = {identity, seq: head, legacy: rows(db, LEGACY, {limitNewest: true}),
-          system: rows(db, ledgerStreams.system, {limitNewest: true})};
-      } else if (head > state.seq) {
-        state.system = [...state.system, ...rows(db, ledgerStreams.system, {after: state.seq})].slice(-KEEP);
-        state.seq = head;
-      }
+      const next = readOnce(identity);
+      if (databaseIdentity(home) !== identity) continue;
+      state = next;
       return [...state.legacy, ...state.system].slice(-KEEP);
-    });
+    }
+    state = null;
+    throw new Error('원장 DB 파일이 읽는 도중 바뀜: 잠시 뒤 다시 시도');
   };
 }
