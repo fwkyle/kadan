@@ -96,6 +96,8 @@ export type Decision = {
   reason: string;
   reasonHtml?: string;
   recommendation: string;
+  reversible?: string; // 요청할 때 붙은 '되돌리는 방법'(완전자율에서 추천대로 진행할 자격 표시)
+  proceeded?: { by: string; at: string; recommendation: string; reversible: string }; // 완전자율이 추천대로 진행했다는 기록(결정은 열려 있다)
   requestedBy: string;
   at: string;
   options: string[];

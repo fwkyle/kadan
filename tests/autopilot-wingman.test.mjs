@@ -159,7 +159,7 @@ test('6. 명시 --wingman: Autopilot 단계에서 Wingman이 되고 on 사건·s
 
 test('6. 명시 --wingman 오류: --level 없음, 대상 밖, 슈퍼감독 아님, 값 없음, 두 개, 우편 실패', () => {
   const f = fixture();
-  assert.throws(() => f.run(['on', '밤'], {wingman: 'b-슈퍼감독'}), /--level autopilot과 함께/);
+  assert.throws(() => f.run(['on', '밤'], {wingman: 'b-슈퍼감독'}), /--level autopilot 이상과 함께/);
   assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', wingman: 'z-슈퍼감독'}), /쓸 수 없습니다/);
   assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', wingman: 'a-감독'}), /슈퍼감독 이름이 아님/);
   assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', wingman: true}), /--wingman에는/);

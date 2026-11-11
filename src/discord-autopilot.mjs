@@ -49,7 +49,7 @@ export function createAutopilotWordHandler({home, chat, env = process.env, log =
     }
     if (word.kind === 'bypass') {
       markHandled(home, line.id);
-      await post(`${LEVEL_LABEL[LEVEL_FULL]}은 아직 없습니다. 켜지 않았습니다`);
+      await post(`${LEVEL_LABEL[LEVEL_FULL]}은 디코로는 켤 수 없습니다 — 터미널에서 kadan autopilot on "<문구>" --level ${LEVEL_FULL} 로 켜세요. 켜지 않았습니다`);
       return true;
     }
     if (word.kind === 'on') {   // 켠 뒤 처리 표시 전에 죽었다면 원장에 이 글 id가 이미 있다 → 다시 켜지 않는다

@@ -1,7 +1,7 @@
 // PR3: Autopilot 상태 띠와 머지 요청 줄 정보. 읽기 전용이다.
 // 원장 전체를 다시 읽지 않는다: 대시보드가 이미 증분으로 읽은 snapshot.entries·snapshot.center만 쓴다.
 // GitHub를 부르지 않고 카드·온톨로지 파일을 직접 읽지 않는다.
-import { autopilotState } from "../autopilot.mjs";
+import { autopilotState, storedDecideAfterMs } from "../autopilot.mjs";
 import { stage } from "../review-flow.mjs";
 import { normalizeSha, sameCommit } from "../review-sha.mjs";
 import { registeredCenterWorks } from "../center-wall.mjs";
@@ -23,7 +23,7 @@ export function autopilotStrip(snapshot, now = Date.now()) {
   const state = autopilotState(last ? [last] : [], now);
   if (state.on) {
     const s = state.start;
-    return { on: true, since: s.t ?? null, until: s.until ?? null, level: s.level ?? null };
+    return { on: true, since: s.t ?? null, until: s.until ?? null, level: s.level ?? null, ...(s.level === "full" ? { decideAfterMs: storedDecideAfterMs(s) } : {}) };
   }
   // 꺼짐. 끝난 기록이 있으면 마지막 시작~끝을 함께 준다(끝 사건이 아직 없는 pending이면 끝 시각만).
   const ended = state.pending

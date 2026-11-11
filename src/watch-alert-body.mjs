@@ -1,4 +1,5 @@
 // 감시 경보 본문·해소 알림·경보 기록 (HW-3-impl: watch-runner.mjs에서 옮김)
+import { proceedHint } from "./decision-proceed.mjs";
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
 import { phraseAction } from "./watch-stop-phrases.mjs";
@@ -247,6 +248,8 @@ export function itemizedAlert(alert, clock, ctx = null) {
   const own = idle ? idleOwnText(alert) : "";
   const register = idle && alert.stage !== 2 ? idleRegisterHint(alert, ctx ?? {}) : "";
   const turnHint = idle && alert.stage !== 2 ? idleTurnHint(alert) : [];
+  // 완전자율: 대기 시간이 지나 추천대로 진행할 수 있는 결정(이 역할이 요청한 것)을 안내한다. 쓰는 것은 이 역할이다(감시기는 쓰지 않는다).
+  const proceedHints = (ctx?.proceedable ?? []).slice(0, 3).map(proceedHint);
   let basis = "", todo = WATCH_ALERT_FOOTER;
   if (idle) {
     basis = `${idleCountsText(alert)}, ${alert.idleMinutes}분간 화면 변화 없음`
@@ -258,5 +261,5 @@ export function itemizedAlert(alert, clock, ctx = null) {
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
   return [`[감시sh ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,
-    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), ...turnHint, `할 일: ${todo}`].join("\n");
+    ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), ...turnHint, ...proceedHints, `할 일: ${todo}`].join("\n");
 }

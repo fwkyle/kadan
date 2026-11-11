@@ -99,7 +99,7 @@ test('4 잘게 바이패스 … → 켜지지 않고 거절을 답한다', async
     const w = await world(fake);
     assert.equal(await w.handler(w.say('잘게 바이패스 07:00까지')), true);
     assert.deepEqual(w.autopilots(), []);
-    assert.match(w.posts().at(-1).content, /완전자율은 아직 없습니다/);
+    assert.match(w.posts().at(-1).content, /완전자율은 디코로는 켤 수 없습니다 — 터미널에서/);
   } finally { await fake.close(); }
 });
 
