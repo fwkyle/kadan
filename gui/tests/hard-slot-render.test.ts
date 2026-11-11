@@ -63,13 +63,27 @@ test("요약표: 값이 있으면 다른 역할처럼 값·명령이 보이고 �
   assert.doesNotMatch(html, /작업자와 같음/);
 });
 
+// 표 줄의 편집 칸은 처음엔 모두 닫혀 있다. 서버 렌더 시험은 initialOpen으로 열린 상태를 그린다.
+const editor = (data: ReturnType<typeof dataOf>, initialOpen: string[] = []) =>
+  render(React.createElement(PresetEditor, { data, settings: data.settings, initialOpen }));
+
+test("표 편집기: 처음엔 모든 편집 칸이 닫혀 있고 줄마다 바꾸기 버튼만 있다(저장 줄도 없다)", () => {
+  const data = dataOf("empty");
+  const html = editor(data);
+  assert.equal([...html.matchAll(/>바꾸기<\/button>/g)].length, Object.keys(roles).length);
+  assert.doesNotMatch(html, /기본 실행 모델|대체 후보 순서|비우기|\(저장 전\)|바꾼 것|runner-save-row|되돌리기/);
+  assert.match(html, /비어 있음 — 작업자와 같음/, "표의 기존 줄 글자는 그대로");
+  assert.match(html, /작업자와 같은 명령으로 띄웁니다/);
+  assert.doesNotMatch(html, /undefined|NaN/);
+});
+
 test("편집 칸: 값이 없으면 비어 있음 안내와 꺼진 비우기 버튼, 폴백 칸은 없다", () => {
   const data = dataOf("empty");
-  const html = render(React.createElement(PresetEditor, { data, settings: data.settings }));
+  const html = editor(data, ["worker-hard", "reviewer"]);
   assert.match(html, /어려운 일 작업자 바꾸기/);
   assert.match(html, /비어 있음 — 작업자와 같은 값으로 띄웁니다/);
   assert.match(html, /<button type="button" disabled="">비우기<\/button>/);
-  // 폴백 칸("대체 후보 순서" 제목)은 시니어를 뺀 나머지 6개 역할 중 어려운 일을 뺀 5개에만 있다.
+  // 폴백 칸("대체 후보 순서" 제목)은 어려운 일 자리에 없고 다른 역할에는 있다.
   const hard = html.slice(html.indexOf("어려운 일 작업자 바꾸기"), html.indexOf("검수자 바꾸기"));
   assert.doesNotMatch(hard, /대체 후보 순서/);
   assert.match(hard, /기본 실행 모델/);
@@ -77,8 +91,33 @@ test("편집 칸: 값이 없으면 비어 있음 안내와 꺼진 비우기 버�
 });
 
 test("편집 칸: 값이 있으면 지금 값과 켜진 비우기 버튼이 보인다", () => {
-  const data = dataOf("filled");
-  const html = render(React.createElement(PresetEditor, { data, settings: data.settings }));
+  const html = editor(dataOf("filled"), ["worker-hard"]);
   assert.match(html, /지금 값: codex \/ gpt-hard/);
   assert.match(html, /<button type="button">비우기<\/button>/);
+});
+
+test("편집 칸: 시니어는 기본 실행 모델 없이 등록 목록만 연다", () => {
+  const html = editor(dataOf("empty"), ["senior"]);
+  assert.match(html, /등록된 시니어/);
+  assert.doesNotMatch(html, /기본 실행 모델/);
+});
+
+test("비교 모드 잠금: 경고가 보이고 바꾸기 버튼이 모두 꺼진다", () => {
+  const data = dataOf("empty");
+  const settings = { ...data.settings, compare: { enabled: true, presets: [data.settings.activePreset], enabledAt: null } };
+  const html = render(React.createElement(PresetEditor, { data: { ...data, settings }, settings }));
+  assert.match(html, /비교 모드 중 — 먼저 끄기/);
+  assert.equal([...html.matchAll(/class="row-edit"[^>]*disabled=""/g)].length, Object.keys(roles).length);
+});
+
+test("읽기 전용 표(RunnerSummary)에는 바꾸기 버튼·저장 줄이 없다", () => {
+  const html = render(React.createElement(RunnerSummary, { data: dataOf("filled") }));
+  assert.doesNotMatch(html, /바꾸기|runner-save-row|\(저장 전\)/);
+});
+
+test("요약 글: 초안 설정을 주면 초안 값으로 말한다(표의 '바꿀 값' 계산에 쓴다)", () => {
+  const data = dataOf("filled");
+  const draft = { ...data.settings, presets: { ...data.settings.presets, [data.settings.activePreset]: { ...data.settings.presets[data.settings.activePreset], roles: { ...data.settings.presets[data.settings.activePreset].roles, worker: { runner: "codex", model: "gpt-test2", effort: "high" } } } } };
+  assert.equal(summaryCells(data, "worker").value, "codex / gpt-test");
+  assert.equal(summaryCells(data, "worker", draft).value, "codex / gpt-test2 / high");
 });

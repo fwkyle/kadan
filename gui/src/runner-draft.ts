@@ -34,3 +34,11 @@ export const fallbackLabels = (settings: Part, role: string) =>
     };
     return [runner, model, effort].filter(Boolean).join(" / ");
   });
+
+// 저장된 값과 초안이 다른 역할(기본 실행 모델 또는 대체 후보·시니어 목록이 다른 것). 표에서 고친 줄을 가리키는 데 쓴다.
+export const changedRoles = (saved: Part, draft: Part, roles: string[]) =>
+  roles.filter(
+    (role) =>
+      ownPart(saved, role, false) !== ownPart(draft, role, false) ||
+      ownPart(saved, role, true) !== ownPart(draft, role, true),
+  );

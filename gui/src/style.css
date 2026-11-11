@@ -156,6 +156,18 @@ td small { display: block; margin-top: 2px; }
 .action-form label { margin-bottom: 12px; }
 .action-form label > input:not([type=checkbox]):not([type=radio]) { width: 100%; }
 .action-form fieldset > button { margin-top: 6px; }
+/* 실행 모델 설정 표: 줄에서 바로 고치기. 편집 칸은 줄 바로 아래 전체 폭, 좁은 화면에서도 보이는 폭 안에 둔다. */
+.runners-summary .row-edit { margin-top: 4px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+.runners-summary tr.is-changed > th, .runners-summary tr.is-changed > td { background: #fff8e1; }
+.runners-summary .pending-mark { color: #8a5a00; font-size: 12px; white-space: nowrap; }
+.runners-summary .runner-edit-row > td { padding: 0; background: #f6f8f6; }
+.runner-edit { position: sticky; left: 0; box-sizing: border-box; width: 100%; max-width: calc(100vw - 34px); padding: 6px 12px 10px; }
+.runner-edit fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.runner-edit legend { padding: 0; font-weight: 600; font-size: 13px; }
+.runner-edit .toolbar select { max-width: 100%; }
+.runner-save-row { margin: 10px 0 16px; padding: 10px 12px; border: 1px solid #b07712; border-radius: 8px; background: #fff8e1; }
+.runner-save-row p { margin: 0 0 6px; }
+.runner-save-row button { margin-right: 6px; white-space: nowrap; }
 .error, .warning { padding: 18px; border: 1px solid #b07712; background: #fff0d0; border-radius: 7px; margin-bottom: 20px; overflow-wrap: anywhere; }
 .error button { margin-left: 12px; }
 .empty { padding: 25px 0; color: var(--ds-color-muted); }
