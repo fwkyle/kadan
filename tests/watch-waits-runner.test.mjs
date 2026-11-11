@@ -60,7 +60,7 @@ test('F2: 직속 감독 세션이 꺼져 있으면 실제 전달 경로가 고�
 const ap=(over={})=>({on:true,level:'full',startedAt:stamp(0),decideAfterMs:30*60_000,...over});
 const hold30=(args,minute)=>args.source==='progress'&&args.role==='w1'&&minute===30;
 const progressCalls=async(extra,decisionOver)=>{
- const decisions=minute=>minute>=32?[decision({card:'r/w2',reversible:'브랜치를 지운다',...decisionOver})]:[];
+ const decisions=minute=>minute>=32?[decision({card:'r/w2',reversible:'브랜치를 지운다',notProhibited:{by:'top',at:stamp(0)},...decisionOver})]:[];
  const {calls,records}=await simulate({until:40,decisions,hold:hold30,releaseAt:33,...extra});
  return {progress:calls.filter(c=>c.source==='progress').map(c=>[c.minute,c.role]),records};
 };
@@ -89,7 +89,7 @@ test('완전자율 W3: 진행 기록이 붙은 결정은 스냅샷 없이도 더
 });
 test('완전자율 W4: 주기마다 스냅샷은 한 번만 읽는다(결정이 여럿이어도 새 읽기는 결정 수에 비례하지 않는다)',async()=>{
  let reads=0;
- const decisions=minute=>minute>=32?Array.from({length:50},(_,i)=>decision({card:'r/w2',work:'w'+i,reversible:'x'})).map((d,i)=>({...d,id:'d'+i,card:'r/w2'})):[];
+ const decisions=minute=>minute>=32?Array.from({length:50},(_,i)=>decision({card:'r/w2',work:'w'+i,reversible:'x',notProhibited:{by:'top',at:stamp(0)}})).map((d,i)=>({...d,id:'d'+i,card:'r/w2'})):[];
  await simulate({until:40,decisions,hold:hold30,releaseAt:33,readAutopilotWingman:()=>{reads++;return ap();}});
  // 8개 주기(32~39분)에서 결정 50개를 판정해도 읽기는 주기당 최대 1번(경보 경로의 Wingman 읽기를 합쳐도 주기 수 이하)
  assert.ok(reads<=8*2,'읽기 '+reads+'번');

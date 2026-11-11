@@ -17,6 +17,8 @@ import {proceedEligibility, gatedDecisionText, releasedFromWait} from '../src/de
 import {atLeast, levelRank, LEVELS} from '../src/autopilot-terms.mjs';
 import {autopilotStrip} from '../src/dashboard/autopilot-view.mjs';
 import {itemizedAlert} from '../src/watch-alert-body.mjs';
+import {holdBlocks, holdReason, mayProceed, PROHIBITED_SUMMARY} from '../src/decision-proceed.mjs';
+import {CardStore} from '../src/card-store.mjs';
 
 // 가짜 시계·가짜 우편·가짜 알림만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다. 역할 이름도 시험용이다.
 const H = 3_600_000, MIN = 60_000;
@@ -38,8 +40,12 @@ function world({decideAfter, level = 'full', on = true, onAt = Date.now() - 1000
   const turnOn = (flags = {}, by = '사람', at = onAt) => autopilotCommand(['on', '밤 위임'], {level, ...(decideAfter ? {'decide-after': decideAfter} : {}), ...flags}, {home, by, deps: deps(at)});
   if (on) turnOn();
   const events = () => readStream(home, 'decisions/events.jsonl', {optional: true});
-  const request = (over = {}) => store.request(null, {chat: true, work: 'a/w1', question: '이 순서로 갈까요?', options: ['예', '아니오'],
-    recommendation: '예', reason: '- 확인 경로 없음: 시험', reversible: '브랜치를 지운다', ...over}, SUPER);
+  const request = (over = {}) => {
+    const input = {chat: true, work: 'a/w1', question: '이 순서로 갈까요?', options: ['예', '아니오'],
+      recommendation: '예', reason: '- 확인 경로 없음: 시험', reversible: '브랜치를 지운다', notProhibited: true, ...over};
+    if (input.reversible === undefined && !('notProhibited' in over)) delete input.notProhibited;
+    return store.request(null, input, SUPER);
+  };
   const proceed = (id, {at, by = SUPER, revision} = {}) => {
     const rev = revision ?? store.get(id).revision;
     return decisionCommand(['proceed', id], {revision: rev}, {home, by, now: () => at, notify: (...x) => answers.push(x), userNotify: (...x) => notifyVia(...x)});
@@ -205,7 +211,7 @@ test('(3) proceed 거절: 꺼짐·낮은 단계·닫힌 결정·--reversible 없
 
 test('(3) 추천안 없음·머지/관문 결정은 자격이 없고, 요청할 때 --reversible을 줄 수 없다', () => {
   const ap = {on: true, level: 'full', startedAt: '2026-11-02T00:00:00.000Z', decideAfterMs: 30 * MIN};
-  const base = {status: 'open', at: '2026-11-02T01:00:00.000Z', reversible: '되돌린다', recommendation: '예', question: '순서?', reason: 'r', options: ['예', '아니오']};
+  const base = {status: 'open', at: '2026-11-02T01:00:00.000Z', reversible: '되돌린다', notProhibited: {by: SUPER, at: '2026-11-02T00:30:00.000Z'}, recommendation: '예', question: '순서?', reason: 'r', options: ['예', '아니오']};
   const now = Date.parse('2026-11-02T05:00:00.000Z');
   assert.equal(proceedEligibility(base, ap, now).ok, true);
   assert.match(proceedEligibility({...base, recommendation: ''}, ap, now).reasons.join(), /추천안이 없었습니다/);
@@ -216,7 +222,7 @@ test('(3) 추천안 없음·머지/관문 결정은 자격이 없고, 요청할 
   }
   assert.equal(gatedDecisionText({question: '순서?', reason: '- 확인 경로 없음: 시험', options: ['예', '아니오'], recommendation: '예'}), false);
   const w = world();
-  assert.throws(() => w.request({question: 'https://github.com/o/r/pull/9 머지할까요?'}), /--reversible은 머지·관문/);
+  assert.throws(() => w.request({question: 'https://github.com/o/r/pull/9 머지할까요?'}), /--reversible을 받지 않았습니다/);
   assert.throws(() => w.request({reversible: ' '}), /--reversible/);
   assert.throws(() => w.request({reversible: true}), /--reversible/);
   // 같은 질문을 다른 --reversible로 다시 올리면 기존 요청 취소를 요구한다
@@ -266,7 +272,7 @@ test('(5) 통과: 결정은 열린 채 진행 기록이 덧붙고, 알림 1회·
   const now = w.store.get(d.id);
   assert.equal(now.status, 'open', '결정을 닫지 않는다');
   assert.equal(now.revision, d.revision + 1);
-  assert.deepEqual(now.proceeded, {by: SUPER, at: new Date(at).toISOString(), recommendation: '예', reversible: '브랜치를 지운다'});
+  assert.deepEqual(now.proceeded, {by: SUPER, at: new Date(at).toISOString(), recommendation: '예', reversible: '브랜치를 지운다', notProhibited: d.notProhibited});
   assert.equal(w.events().length, 2, '새 사건 하나만 덧붙는다');
   assert.equal(w.user.length, 1, '사용자 알림 1회');
   assert.match(w.user[0][0], /추천대로 진행함/);
@@ -282,11 +288,11 @@ test('(5) 통과: 결정은 열린 채 진행 기록이 덧붙고, 알림 1회·
   const again = withNotify(() => w.proceed(d.id, {at: at + MIN, revision: d.revision}));
   assert.equal(again.already, true);
   assert.deepEqual([w.events().length, w.ledger().length, w.user.length], [eventsBefore, ledgerBefore, 1]);
-  // 직속 슈퍼감독도 부를 수 있다
+  // 요청자가 슈퍼감독이면 본인만 진행한다(위쪽 슈퍼감독은 거절: 아래 R2-F2 시험)
   const w2 = world({decideAfter: '30m'});
   const d2 = w2.request();
-  const r2 = w2.proceed(d2.id, {at: Date.parse(d2.at) + 31 * MIN, by: UP});
-  assert.equal(r2.decision.proceeded.by, UP, '진행한 역할이 by다(사용자 행위자 아님)');
+  const r2 = w2.proceed(d2.id, {at: Date.parse(d2.at) + 31 * MIN, by: SUPER});
+  assert.equal(r2.decision.proceeded.by, SUPER, '진행한 역할이 by다(사용자 행위자 아님)');
   // 알림 실패는 경고로 드러내고 진행 기록은 남는다
   const w3 = world({decideAfter: '30m'});
   w3.hook.impl = () => { throw new Error('디코 죽음'); };
@@ -337,7 +343,7 @@ test('(6) 진행 뒤 사람 답은 정상 답으로 기록되고, 추천과 다�
 // (7) 감시기 재료 -------------------------------------------------------------------------------------------------------
 test('(7) 자격 판정 한 함수: 시간 전은 대기, 지나면 풀림, 진행 기록은 풀림, 읽기 실패·--reversible 없음은 대기 유지', () => {
   const ap = {on: true, level: 'full', startedAt: '2026-11-02T00:00:00.000Z', decideAfterMs: 2 * H};
-  const d = {id: 'd1', revision: 3, status: 'open', at: '2026-11-02T01:00:00.000Z', recommendation: '예', reversible: '되돌림', question: 'q', reason: 'r', options: ['예', '아니오']};
+  const d = {id: 'd1', revision: 3, status: 'open', at: '2026-11-02T01:00:00.000Z', recommendation: '예', reversible: '되돌림', notProhibited: {by: SUPER, at: '2026-11-02T00:30:00.000Z'}, question: 'q', reason: 'r', options: ['예', '아니오']};
   const at = ms => Date.parse(d.at) + ms;
   assert.equal(releasedFromWait(d, ap, at(119 * MIN)), false);
   assert.equal(releasedFromWait(d, ap, at(120 * MIN)), true);
@@ -357,7 +363,7 @@ test('(7) 본인 창 안내: 진행할 수 있는 결정의 명령 한 줄이 �
   const alert = {id: 'a1', kind: '놀고 있음', stage: 1, role: SUPER, session: `kadan-${SUPER}`, idleMinutes: 15, counts: {}};
   const d = {id: 'dec-1234', revision: 4};
   const withHint = itemizedAlert(alert, '10:00', {proceedable: [d]});
-  assert.match(withHint, /대기 시간이 지나 추천대로 진행할 수 있습니다: `kadan decision proceed dec-1234 --revision 4`/);
+  assert.match(withHint, /대기 시간이 지났습니다. 진행할 수 있는지 확인: `kadan decision proceed dec-1234 --revision 4`/);
   assert.doesNotMatch(itemizedAlert(alert, '10:00', {}), /decision proceed/);
   assert.doesNotMatch(itemizedAlert(alert, '10:00', {proceedable: []}), /decision proceed/);
 });
@@ -435,4 +441,174 @@ test('결정 이력 검증: 모양이 틀린 reversible·proceeded는 손상으�
   const d2 = w2.request();
   w2.store.write({...d2, revision: d2.revision + 1, reversible: 7});
   assert.throws(() => w2.store.list(), /결정 이력 손상/);
+});
+
+// ===== 2라운드(검수 지적 F1~F3) =====
+const hold = (w, over = {}) => appendLedger({kind: 'autopilot-note', noteKind: 'hold', holdKind: 'gate', work: 'a/w1', text: '확인 필요', by: SUPER, t: new Date().toISOString(), ...over}, w.home);
+const code2 = (fn, re) => assert.throws(fn, error => error.exitCode === 2 && re.test(error.message));
+
+test('R2-F1 검수의 네 재현: 요청 단계에서 모두 거절된다(보류 기록이 없어도 낱말이, 있으면 기록이)', () => {
+  const questions = ['#123 넣을까요?', '운영 서버에 새 버전을 배포할까요?', '운영 DB의 고객 테이블을 백업 없이 영구 삭제할까요?', '정책 보류 항목을 진행할까요?'];
+  for (const question of questions) {
+    const w = world();
+    code2(() => w.request({question}), /--reversible을 받지 않았습니다.*낱말 때문에 막혔으면 kyle 답을 기다립니다/);
+    hold(w);                                       // 검수 재현과 같이 업무에 보류 기록이 걸린 상태
+    code2(() => w.request({question}), /--reversible을 받지 않았습니다/);
+    assert.equal(w.events().length, 0, '거절된 요청은 아무것도 저장하지 않는다');
+  }
+});
+
+test('R2-F1 진행 단계: 보류·관문 거절 기록이 걸린 업무의 결정과 낱말이 든 결정은 자격이 없다(요청 단계를 우회한 이력 포함)', () => {
+  // 요청은 깨끗했는데 그 뒤에 업무에 보류 기록이 생긴 경우
+  const w = world();
+  const d = w.request();
+  hold(w, {holdKind: 'deploy-repo', pr: 'o/r#9'});
+  refusal(() => w.proceed(d.id, {at: Date.parse(d.at) + 3 * H}), '풀리지 않은 보류·관문 거절 기록');
+  assert.equal('proceeded' in w.store.get(d.id), false);
+  // 요청 단계를 거치지 않고 쓴 이력(예전 코드·손으로 쓴 이력)이라도 진행 단계가 낱말로 거절한다
+  for (const question of ['#123 넣을까요?', '운영 서버에 새 버전을 배포할까요?', '운영 DB의 고객 테이블을 백업 없이 영구 삭제할까요?', '정책 보류 항목을 진행할까요?']) {
+    const x = world();
+    const base = x.request();
+    x.store.write({...base, id: `legacy-${question.length}`, revision: 1, question});
+    refusal(() => x.proceed(`legacy-${question.length}`, {at: Date.parse(base.at) + 3 * H, revision: 1}), '낱말 때문에 막혔으면 kyle 답을 기다립니다');
+  }
+});
+
+test('R2-F1 (가) 기록 대조: 같은 업무·같은 PR의 관문 통과나 머지로만 풀리고, 다른 업무·다른 PR은 영향이 없다', () => {
+  const w = world();
+  const ok = () => w.request({question: `질문 ${Math.random()}`});
+  hold(w, {pr: 'o/r#1'});
+  code2(() => ok(), /보류·관문 거절 기록이 1건/);
+  appendLedger({kind: 'autopilot-note', noteKind: 'gate', verdict: 'pass', work: 'a/w1', pr: 'o/r#2', text: 'x', by: SUPER, t: new Date().toISOString()}, w.home);
+  code2(() => ok(), /보류·관문 거절 기록/);               // 다른 PR의 통과로는 안 풀린다
+  appendLedger({kind: 'autopilot-note', noteKind: 'merge', work: 'work:a/w1', pr: 'O/R#1', text: 'x', by: SUPER, t: new Date().toISOString()}, w.home);
+  ok();                                                       // 같은 PR의 머지(대소문자·work: 접두 정규화)로 풀림
+  hold(w, {noteKind: 'gate', verdict: 'reject', holdKind: undefined, pr: 'o/r#3'});
+  code2(() => ok(), /보류·관문 거절 기록/);
+  appendLedger({kind: 'autopilot-note', noteKind: 'gate', verdict: 'pass', work: 'a/w1', pr: 'o/r#3', text: 'x', by: SUPER, t: new Date().toISOString()}, w.home);
+  ok();
+  hold(w, {holdKind: 'decision'});                           // PR 없는 결정 보류는 PR 없는 통과·머지로만 풀린다
+  code2(() => ok(), /보류·관문 거절 기록/);
+  hold(w, {work: 'other/w9', holdKind: 'gate'});            // 다른 업무의 보류는 이 업무에 영향이 없다 → 위 결정 보류만 남아 있음
+  assert.equal(holdBlocks(w.ledger(), 'other/w9').length, 1);
+  assert.equal(holdBlocks(w.ledger(), 'a/w1').length, 1);
+  assert.equal(holdBlocks(null, 'a/w1'), null);
+  assert.equal(holdBlocks(w.ledger(), undefined), null);
+  assert.match(holdReason(null), /대조할 수 없습니다/);
+  assert.equal(holdReason([]), null);
+});
+
+test('R2-F1 업무가 없는 결정은 --reversible을 받지 않는다', () => {
+  const w = world();
+  new CardStore(w.home).create({repo: 'repo', id: 'card-a', repoPath: w.home, body: '# 시험'});
+  code2(() => w.store.request('repo/card-a', {question: '순서?', options: ['예', '아니오'], recommendation: '예', reason: '- 확인 경로 없음: 시험', work: '없음', reversible: '되돌린다', notProhibited: true}, SUPER), /업무가 없는 결정은 보류·관문 거절 기록을 대조할 수 없습니다/);
+  // 표시 없는 평소 카드 결정은 그대로 올라간다
+  const plain = w.store.request('repo/card-a', {question: '순서?', options: ['예', '아니오'], recommendation: '예', reason: '- 확인 경로 없음: 시험', work: '없음'}, SUPER);
+  assert.equal(plain.status, 'open');
+});
+
+test('R2-F1 (나) 선언: --not-prohibited 없이는 --reversible을 받지 않고 요지를 보이며, 저장 모양과 알림에 요청자 선언이 남는다', () => {
+  const w = world({decideAfter: '30m'});
+  code2(() => w.request({notProhibited: undefined}), new RegExp(`--not-prohibited.*${PROHIBITED_SUMMARY}`));
+  code2(() => w.request({reversible: undefined, notProhibited: true}), /--reversible과 함께만/);
+  code2(() => w.request({notProhibited: 'yes'}), /값 없는 옵션/);
+  assert.equal(w.events().length, 0);
+  const d = w.request();
+  assert.equal(d.notProhibited.by, SUPER);
+  assert.ok(Number.isFinite(Date.parse(d.notProhibited.at)));
+  // 선언이 없던 이력(예전 형식)은 지나도 진행하지 않는다
+  const legacy = {...d, id: 'legacy-decl', revision: 1}; delete legacy.notProhibited;
+  w.store.write(legacy);
+  refusal(() => w.proceed('legacy-decl', {at: Date.parse(d.at) + 3 * H, revision: 1}), '--not-prohibited');
+  // 진행 알림·요약 기록에 요청자 선언이 보인다
+  withNotify(() => w.proceed(d.id, {at: Date.parse(d.at) + 31 * MIN}));
+  assert.match(w.user[0][0], /요청자 선언: a-슈퍼감독 금지 목록에 닿지 않음/);
+  assert.match(w.ledger().find(e => e.kind === 'autopilot-note').text, /요청자 선언/);
+  assert.deepEqual(decisionCommand(['show', d.id], {}, {home: w.home, by: '사람'}).proceeded.notProhibited, d.notProhibited);
+});
+
+test('R2-F1 평소 결정(--reversible·선언 없음)은 기준과 같고, CLI 입구가 --not-prohibited를 값 없는 옵션으로 읽는다', async () => {
+  const w = world({on: false});
+  const plain = w.request({reversible: undefined, question: '표시 없는 질문입니다'});
+  assert.equal('reversible' in plain || 'notProhibited' in plain, false);
+  const { spawnSync } = await import('node:child_process');
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const env = {...process.env, KADAN_HOME: w.home, KADAN_NOTIFY: 'off', KADAN_ROLE: SUPER};
+  const run = extra => spawnSync(process.execPath, [cli, 'decision', 'request', '--chat', '--work', 'a/w1', '--question', '이 순서로 갈까요?', '--option', '예', '--option', '아니오', '--recommend', '예', '--reason', '- 확인 경로 없음: 시험', '--reversible', '브랜치를 지운다', ...extra], {env, encoding: 'utf8'});
+  const refused = run([]);
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /--not-prohibited/);
+  const ok = run(['--not-prohibited']);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(JSON.parse(ok.stdout).notProhibited.by, SUPER);
+});
+
+test('R2-F2 직속 한정: 요청자가 슈퍼감독이면 본인뿐이고, 위쪽·옆 슈퍼감독·사용자 행위자는 거절', () => {
+  const w = world({decideAfter: '30m'});
+  const d = w.request();
+  const at = Date.parse(d.at) + 31 * MIN;
+  for (const by of [UP, OTHER, '사람', 'a-감독']) {
+    refusal(() => w.proceed(d.id, {at, by}), '가장 가까운 슈퍼감독만 진행할 수 있습니다');
+  }
+  assert.equal('proceeded' in w.store.get(d.id), false);
+  // 일반 단위: 요청자가 슈퍼감독이 아니면 관계표에서 가장 가까운 슈퍼감독 하나만(그 위는 거절), 관계표를 못 읽으면 본인만
+  const parents = new Map([['a-감독', 'a-슈퍼감독'], ['a-슈퍼감독', 't-슈퍼감독'], ['t-슈퍼감독', '@user']]);
+  const dd = {requestedBy: 'a-감독'};
+  assert.equal(mayProceed('a-감독', dd, parents), true);
+  assert.equal(mayProceed('a-슈퍼감독', dd, parents), true);
+  assert.equal(mayProceed('t-슈퍼감독', dd, parents), false);
+  assert.equal(mayProceed('a-슈퍼감독', dd, null), false);
+  assert.equal(mayProceed('a-감독', dd, null), true);
+  assert.equal(mayProceed('', dd, parents), false);
+  // 추가 사용자 이름에 요청 역할을 등록해도 사용자 행위자는 진행하지 못한다(검수 조건부 관찰)
+  const saved = process.env.KADAN_USER_NAMES;
+  process.env.KADAN_USER_NAMES = SUPER;
+  try { assert.equal(mayProceed(SUPER, {requestedBy: SUPER}, parents), false); } finally { if (saved === undefined) delete process.env.KADAN_USER_NAMES; else process.env.KADAN_USER_NAMES = saved; }
+});
+
+test('R2-F3 잠금 안에서 다시 확인: 잠금을 기다리는 사이 꺼졌거나 다시 켜지면 거절하고 아무것도 쓰지 않는다', () => {
+  const asOf = (w, d) => Date.parse(d.at) + 31 * MIN;
+  const prepare = () => {
+    const w = world({decideAfter: '30m'});
+    const d = w.request();
+    const at = asOf(w, d);
+    const first = autopilotWingmanSnapshot(w.ledger(), at);       // 명령이 잠금 밖에서 먼저 읽은 상태: 켜짐
+    assert.equal(first.on, true);
+    return {w, d, at, first};
+  };
+  const waitInLock = (w, between) => {                            // 잠금을 얻기 직전 다른 쓰기가 끼어든다(검수의 경합 재현과 같은 순서)
+    const real = w.store.locked.bind(w.store);
+    w.store.locked = fn => { between(); return real(fn); };
+  };
+  const tryProceed = ({w, d, at, first}) => () => w.store.proceed(d.id, {revision: d.revision}, SUPER, {now: () => at, expectStartedAt: first.startedAt});
+  // (1) 잠금 대기 중 off
+  const a = prepare();
+  waitInLock(a.w, () => autopilotCommand(['off'], {}, {home: a.w.home, by: '사람', deps: {now: () => a.at - 1, sendMail: () => ({ok: true}), notify: () => {}}}));
+  refusal(tryProceed(a), 'Autopilot이 꺼져 있습니다');
+  assert.equal('proceeded' in a.w.store.get(a.d.id), false);
+  assert.equal(a.w.ledger().filter(e => e.kind === 'autopilot-note').length, 0);
+  // (2) 잠금 대기 중 off 뒤 재켜기(켜짐 구간이 바뀜) — 새 구간 시작부터 세므로 시간 전이기도 하지만 구간 변경이 이유에 들어간다
+  const b = prepare();
+  waitInLock(b.w, () => {
+    const deps = {now: () => b.at - 2, sendMail: () => ({ok: true}), notify: () => {}};
+    autopilotCommand(['off'], {}, {home: b.w.home, by: '사람', deps});
+    autopilotCommand(['on', '다시'], {level: 'full', 'decide-after': '30m'}, {home: b.w.home, by: '사람', deps: {...deps, now: () => b.at - 1}});
+  });
+  refusal(tryProceed(b), '켜짐 구간이 바뀌었습니다');
+  // (3) 잠금 대기 중 단계가 낮아진 재켜기
+  const c = prepare();
+  waitInLock(c.w, () => {
+    const deps = {now: () => c.at - 2, sendMail: () => ({ok: true}), notify: () => {}};
+    autopilotCommand(['off'], {}, {home: c.w.home, by: '사람', deps});
+    autopilotCommand(['on', '낮게'], {level: 'cruise'}, {home: c.w.home, by: '사람', deps: {...deps, now: () => c.at - 1}});
+  });
+  refusal(tryProceed(c), '완전자율이 아닙니다');
+  // (4) 대조: 끼어드는 일이 없으면 같은 호출이 통과한다
+  const ok = prepare();
+  assert.equal(tryProceed(ok)().already, false);
+  // (5) 시계도 잠금 안에서 읽는다: 명령을 받은 뒤 잠금 안에서 읽은 시각이 대기 시간 전이면 거절
+  const t = prepare();
+  let clock = t.at;
+  waitInLock(t.w, () => { clock = Date.parse(t.d.at) + 5 * MIN; });
+  refusal(() => t.w.store.proceed(t.d.id, {revision: t.d.revision}, SUPER, {now: () => clock, expectStartedAt: t.first.startedAt}), '대기 시간 전입니다');
 });
