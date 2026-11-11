@@ -12,6 +12,8 @@ import {WorkStore} from '../src/work-store.mjs';
 const MIN = 60_000;
 const SUPER = 'p-슈퍼감독';
 const parents = new Map([['p-작업자', 'p-감독'], ['p-감독', SUPER], [SUPER, '@user']]);
+// 자격이 생긴 순간의 1회 안내(진행자격)는 놀고 있음 안내와 따로 센다(watch-proceed-notice.mjs).
+const NOTICE = /추천대로 진행할 수 있습니다/;
 const iso = ms => new Date(ms).toISOString();
 
 function setup(owner = SUPER) {
@@ -25,7 +27,7 @@ const declared = base => ({reversible: '브랜치를 지운다', notProhibited: 
 
 async function simulate({home, base, minutes, decisions, ap, idleMs = 15 * MIN, tree = parents}) {
   const starts = [...tree.keys()].map((role, i) => ({kind: 'start', role, session: 'kadan-' + role, panePid: i + 1, t: iso(base)}));
-  const records = [], nudges = [], alerts = [], controller = new AbortController();
+  const records = [], nudges = [], notices = [], alerts = [], controller = new AbortController();
   let minute = 0, reads = 0;
   const entries = [...starts, {kind: 'send', role: 'p-작업자', taskId: 'e1', t: iso(base)}, {kind: 'done', role: 'p-작업자', taskId: 'e1', result: 'ok', t: iso(base)}];
   const cards = [{key: 'repo/e1', id: 'e1', status: 'done', activity: 'done', workType: 'execution', role: 'p-작업자', board: 'p', at: iso(base), runs: []}];
@@ -35,12 +37,12 @@ async function simulate({home, base, minutes, decisions, ap, idleMs = 15 * MIN, 
     floor: {list: () => starts.map(s => ({session: s.session, pid: s.panePid})), read: () => 'frozen screen', alive: () => true},
     readEntries: () => entries, readCards: () => cards, readWorks, readDecisions: () => decisions(minute),
     ...(ap ? {readAutopilotWingman: () => { reads++; return ap; }} : {}),
-    sendAlert: (role, msg) => { alerts.push({minute, role, msg}); }, sendNudge: (role, msg) => { nudges.push({minute, role, msg}); },
+    sendAlert: (role, msg) => { alerts.push({minute, role, msg}); }, sendNudge: (role, msg) => { (NOTICE.test(msg) ? notices : nudges).push({minute, role, msg}); },
     record: e => { records.push({...e, minute}); entries.push({...e, t: iso(base + minute * MIN)}); },
     print: () => {}, spawn: () => ({status: 0, stdout: ''}),
     sleep: async () => { if (++minute >= minutes) controller.abort(); }});
   const idle = records.filter(e => e.kind === 'alert' && !e.resolved && e.alertKind === '놀고 있음');
-  return {records, nudges, alerts, idle, reads, firstIdle: idle.length ? Math.min(...idle.map(e => e.minute)) : null};
+  return {records, nudges, notices, alerts, idle, reads, firstIdle: idle.length ? Math.min(...idle.map(e => e.minute)) : null};
 }
 const full = base => ({on: true, level: 'full', startedAt: iso(base), decideAfterMs: 30 * MIN});
 
@@ -57,6 +59,7 @@ test('F4: 대기 내내 화면이 멈춰도 자격 시각(30분) 뒤 유예(15�
     assert.match(r.nudges[0].msg, /진행할 수 있는지 확인: `kadan decision proceed dec-1 --revision 1`/);
     assert.ok(r.idle.some(e => e.id.endsWith(':상위') && e.minute > r.firstIdle), '계속 멈추면 2단(상위)');
     assert.ok(r.reads <= 90 * 2, `주기당 스냅샷 읽기 ${r.reads}번`);
+    assert.deepEqual(r.notices.map(n => [n.role, n.minute]), [[SUPER, 30]], '자격 시각(30분)에 요청한 역할에게 1회 따로 안내');
   } finally { t.done(); }
 });
 
@@ -104,6 +107,7 @@ test('F5: R이 C의 업무 결정을 요청 — 자격 전 모두 대기, 자격
     const r = await simulate({home: t.home, base, minutes: 100, tree, ap: full(base), decisions: () => [decisionOf(base, declared(base))]});
     assert.ok(r.firstIdle >= 45 && r.firstIdle <= 46, `자격 시각(30분)+유예(15분) 전에는 R·C 모두 대기: ${r.firstIdle}`);
     assert.deepEqual(toRole(r, C), [], '업무 책임 감독 C에게는 놀고 있음 안내가 없다(할 수 있는 것이 없다)');
+    assert.deepEqual(r.notices.map(n => [n.role, n.minute]), [[R, 30]], '자격 시각(30분)에 R에게만 1회 따로 안내, C에게는 없음');
     const mine = toRole(r, R);
     assert.ok(mine.length > 0 && mine[0].minute === r.firstIdle, 'R에게 1단');
     assert.match(mine[0].msg, /진행할 수 있는지 확인: `kadan decision proceed dec-1 --revision 1`/);
