@@ -84,7 +84,7 @@
 AI 역할의 `stop`은 현재 세대의 시작 기록·원본 역할·PID를 대조한다. 기반 프로세스 넷은
 성공한 `revive`가 최신 생애 기록이거나 시작 PID가 없을 때 기존 종료 방식을 유지한다.
 최신 start에 PID가 있는 비서는 일반 검사를 받으며, 이름 충돌은 예외 없이 거절한다.
-감시기·대시보드 갱신은 `kadan stop watch`, `kadan stop 대시보드` 후 `kadan up --hidden`이다.
+감시기·대시보드 갱신은 `kadan restart watch`, `kadan restart 대시보드`(끄고 같은 명령 안에서 다시 띄움, Autopilot 중 역할 세션도 가능) 또는 `kadan stop watch`, `kadan stop 대시보드` 후 `kadan up --hidden`이다.
 AI 대화 resume용 `restart`는 node 대시보드를 지원하지 않는다. → [소유 규칙](design.md)
 
 위 일반 우편의 보관에는 인계 전 주소로 온 슈퍼 간 답장도 포함된다. 현재 책임자는

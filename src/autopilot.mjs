@@ -99,14 +99,15 @@ export const COMMON_LINES = [
     + ' 관문이 거절한 머지, `--allow` 없이 정책이 보류한 저장소의 머지, 태그 push·수동 배포 명령(`--allow`는 자동 머지만 풉니다), 배포·외부 공개 효과가 있는 그 밖의 push·PR;'
     + ' 카단 밖의 사람·서비스로 가는 글; 카단 저장소의 새 의존성(다른 저장소의 의존성 변경 PR은 머지하지 않고 결정 요청으로 올립니다);'
     + ' 계정·권한·인증과 시스템 설정 변경(kadan window·runners·watch-profile·~/.claude·규칙 원본 포함);'
-    + ' 감시기·대시보드 종료·재시작과 restart --force; 이 장치의 지침·금지 목록·단계 정의를 켜진 동안 바꾸는 것; 기기 전체 부하 시험.',
+    + ' 감시기·대시보드를 끄고 끝내는 것(`kadan restart watch|대시보드`처럼 끄고 다시 띄우는 한 명령은 허용)과 restart --force; 이 장치의 지침·금지 목록·단계 정의를 켜진 동안 바꾸는 것; 기기 전체 부하 시험.',
   `(3) 위 중 카단 명령(restart --force, stop watch|대시보드, window set|unset, runners set|runner|model, autopilot on --level ${LEVEL_FULL})은 켜진 동안 역할 세션에서 코드가 거절합니다.`
     + ' 셸·gh로 직접 하는 행위는 코드가 막지 못하므로 이 문구와 끌 때의 요약(사후 드러냄)으로만 다룹니다.',
   '(4) 머지 요청을 받으면 관문이 첫 행동입니다. 머지는 관문을 통과한 PR만 합니다: gh로 PR 정보·파일 목록(REST, 이름을 바꾼 옛 경로 포함)·필수 검사를 받아 `jq`로 {pr,files,requiredChecks,repo(gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed)} 하나로 합쳐 `kadan merge-gate <업무>`에 넘기고(종료 코드 0이 통과; 입력 예시는 docs/commands.md),'
     + ' 통과하면 관문이 내준 머지 명령(`gh pr merge … --match-head-commit … -R …`)을 그대로 치고(방식을 바꾸지 않습니다) 뒤 `mergeCommit`을 조회해 `kadan autopilot note merge "<한 줄>" --pr <소유자/이름>#<번호> --sha <mergeCommit>`으로 남깁니다.'
     + ` 거절이면 그 PR만 \`${HELD_PREFIX}\`(\`kadan autopilot note hold --hold-kind gate\`, 정책 보류면 \`deploy-repo\`)로 남기고 이유를 요청한 감독에게 돌려준 뒤 나머지 일은 계속합니다.`
     + ' 감독이 풀 수 없는 거절(금지 경로·정책 보류·필수 검사 없음 등)은 보류 기록에 더해 결정 요청으로도 올립니다. 관문을 낮추거나 우회해 머지하지 않습니다.'
-    + ' 머지한 PR이 상주 프로세스(감시기·대시보드·디코 다리·비서)에 닿으면 머지 직후 kyle에게 `kadan mail 사람 "재시작 필요: <프로세스> (<PR>)"` 한 줄을 보냅니다. 재시작은 kyle이 합니다.',
+    + ' 머지한 PR이 상주 프로세스에 닿으면 순서는 머지 → 로컬 main 갱신 → (화면이 바뀌었으면 `npm run build:gui`) → `kadan restart watch|대시보드` → 살아났는지 확인입니다.'
+    + ' 재시작 명령이 실패했거나 대상이 디코 다리·비서이면 kyle에게 `kadan mail 사람 "재시작 필요: <프로세스> (<PR>)"` 한 줄을 보내고, 디코 다리·비서 재시작은 kyle이 합니다.',
   '(5) kyle의 직접 중지와 명시한 상한이 언제나 최우선입니다.',
 ];
 // Autopilot 단계부터 더해지는 줄(Cruise에는 없다).

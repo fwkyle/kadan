@@ -11,6 +11,8 @@ import { restartRole, MODEL_FROM_SETTINGS } from "../restart.mjs";
 import { readStatusLine } from "../watch-status-line.mjs";
 import { processTree, openFilesOf, processStartedAt } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
+import { cmdRestartInfra } from "./infra-restart.mjs";
+import { INFRA_RESTART_TARGETS } from "../infra-restart.mjs";
 import { pendingCardsFor, closeStartedWindow, openStartedWindow, requireWindowChoice } from "../cli-start-support.mjs";
 
 // 이 세션의 pane PID와 tmux 자리(`세션:@창.%자리`). claude의 세션 파일 tmux 필드와 같은 모양이다.
@@ -64,6 +66,7 @@ export function cliRestartFlags(flags) {
 }
 
 export const RESTART_USAGE = "사용법: kadan restart <역할> [--force] [--reason <이유>] [--expect-pid <pane PID>] [--model-from-settings]\n" +
+  "       kadan restart watch|대시보드  (감시기·대시보드를 끄고 같은 명령 안에서 다시 띄운 뒤 살아났는지 확인. 옵션 없음, Autopilot 중 역할 세션에서도 가능)\n" +
   "  --model-from-settings: 원래 모델 대신 지금 실행 모델 설정(그 역할 프로필의 활성 프리셋)의 모델·강도로, 같은 대화를 이어 연다(다른 옵션은 그대로)";
 // 값을 받지 않는 restart 전용 옵션(뒤 낱말을 값으로 먹지 않게 한다).
 export const RESTART_BOOLEANS = [MODEL_FROM_SETTINGS];
@@ -75,6 +78,8 @@ export function cmdRestart(argv, flags) {
   // 역할 말고 낱말이 더 있으면(값 없는 옵션에 붙인 값 포함) 어느 것이 역할인지 추측하지 않는다 — 역할 선택·세션 조회 전에 끝낸다.
   if (argv.length > 1) die(`역할은 하나만 받는다(받은 낱말: ${argv.join(" ")})\n${RESTART_USAGE}`);
   if (floor.name !== "tmux") die("restart는 tmux 바닥에서만 쓴다", 2);
+  // 기반 프로세스 중 감시기·대시보드만: 끄고 같은 명령 안에서 다시 띄운다(AI 역할 restart와 다른 길, 비서는 그대로 AI 역할 길).
+  if (INFRA_RESTART_TARGETS.includes(role)) return cmdRestartInfra(role, flags);
   // 화면(대시보드 '다시 띄우기')에서 온 값은 옵션 재해석을 막기 위해 인자가 아니라 환경변수로 들어온다(2026-10-15 2라운드).
   // 읽은 즉시 이 프로세스의 환경에서 지운다(3라운드): 지우지 않으면 마지막 역할 재시작 때 새 tmux 서버·새 역할 환경에
   // 남아 후속 CLI의 명시 옵션을 덮어쓴다(재검수 실측). 자식(tmux 서버·세션)을 만들기 전에 지워야 한다.

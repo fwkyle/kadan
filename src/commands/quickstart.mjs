@@ -79,7 +79,7 @@ export function cmdUp(_argv, flags) {
 }
 
 // 되살리기 보조: 어떤 세션이 어떤 상태인지 묻고, 죽은 창을 치우고, 원장·알림을 남긴다.
-function reviveOps(home) {
+export function reviveOps(home) {
   const sessionOf = (target) => sessionName(target);
   return {
     sessionOf,
@@ -177,7 +177,7 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
 const KEEP_DEAD_PANE = (session) => [";", "set-option", "-t", `=${session}:`, "remain-on-exit", "on"];
 
 // 감시기는 역할이 아니라 원장 기록 없이 tmux 세션 kadan-watch에서 돈다(사람이 띄우던 방식 그대로).
-function startWatchSession(home) {
+export function startWatchSession(home) {
   const session = sessionName("watch");
   const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
   const env = ["-e", `KADAN_HOME=${home}`, "-e", paneSocketEnv(), ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
