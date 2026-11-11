@@ -4,7 +4,7 @@ import {appendLedger, readLedger} from '../ledger.mjs';
 import {isUserActor, isSupervisorActor} from '../actors.mjs';
 import {WorkStore} from '../work-store.mjs';
 import {
-  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, readDecisionEvents, clock, endOf, NO_END_TEXT, AUTO_CHECKLIST,
+  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, readDecisionEvents, clock, endOf, NO_END_TEXT, AUTO_CHECKLIST, parseDecideAfter, storedDecideAfterMs, decideAfterText,
 } from '../autopilot.mjs';
 import {buildAutopilotNote, noteLine} from '../autopilot-note.mjs';
 import {summarizeAutopilot} from '../autopilot-summary.mjs';
@@ -12,11 +12,11 @@ import {readMailBody} from '../ledger.mjs';
 import {picksCommand} from '../autopilot-picks.mjs';
 import {readDefaultWingman, setDefaultWingman, clearDefaultWingman, wingmanPath, NO_WINGMAN} from '../autopilot-wingman.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../autopilot-repo-policy.mjs';
-import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL} from '../autopilot-terms.mjs';
+import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL, atLeast} from '../autopilot-terms.mjs';
 
 export const MAX_TEXT = 4000;
-const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'discord-message']);
-const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'decide-after', 'discord-message']);
+const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음] | --level full [--allow …] [--wingman …] [--decide-after 2h(기본 2h, 30m~24h)]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, end = endOf(on), ended = end.kind === 'at', untilMs = ended ? end.ms : null;
@@ -25,6 +25,7 @@ function describeOn(state, now, missing) {
     startedAt: on.t, until: ended ? on.until : null, untilLocal: ended ? clock(untilMs) : NO_END_TEXT,
     remainingMinutes: ended ? Math.max(0, Math.round((untilMs - now) / 60_000)) : null,
     level: on.level ?? LEVEL_CRUISE, allow: on.allow ?? [],
+    ...(atLeast(on.level, LEVEL_FULL) ? {decideAfterMs: storedDecideAfterMs(on), decideAfter: storedDecideAfterMs(on) == null ? '값 없음/깨짐 — 추천대로 넘어가지 않음' : decideAfterText(storedDecideAfterMs(on))} : {}),
     wingman: on.wingman ?? null, wingmanSource: on.wingmanSource ?? 'none', ...(on.wingmanNote ? {wingmanNote: on.wingmanNote} : {}),
     to: on.to ?? [], delivered: on.delivered ?? [], missing,
   };
@@ -94,7 +95,7 @@ function wingmanCommand(args, flags, {home, by, deps}) {
     return [`기본 Wingman: ${cur.wingman ?? '없음'}${cur.at ? ` (${cur.at}, ${cur.by})` : ''}`, ...(cur.corrupt ? [`경고: ${cur.corrupt}`] : []), `저장 파일: ${wingmanPath(home)}`].join('\n');
   }
   const r = setDefaultWingman(home, {wingman: name, by, now});
-  return `기본 Wingman 저장: ${r.wingman} (이전 ${r.before ?? '없음'}). 켤 때 --level autopilot이면 이 슈퍼감독이 Wingman이 됩니다`;
+  return `기본 Wingman 저장: ${r.wingman} (이전 ${r.before ?? '없음'}). 켤 때 --level autopilot 이상이면 이 슈퍼감독이 Wingman이 됩니다`;
 }
 
 const flagText = v => (typeof v === 'string' ? v : undefined);
@@ -207,11 +208,16 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   if (viaChat && !quote) throw new Error('슈퍼감독이 켤 때는 kyle의 채팅 원문이 필요합니다: kyle이 말한 그대로 --quote "<원문>"으로 옮기세요');
   if (flags['discord-message'] !== undefined && (typeof flags['discord-message'] !== 'string' || !flags['discord-message'])) throw new Error('--discord-message는 디코 글 id 하나여야 합니다');
 
-  // 단계: 없으면 cruise(켜진 모든 단계의 고정 줄만, 원장에도 cruise로 적는다). full(완전자율)은 아직 구현하지 않는다.
+  // 단계: 없으면 cruise(켜진 모든 단계의 고정 줄만, 원장에도 cruise로 적는다). 단계는 순서라 위 단계는 아래 단계를 모두 포함한다(atLeast).
   const level = flags.level ?? LEVEL_CRUISE;
-  if (level !== LEVEL_FULL && !LEVELS.includes(level)) throw new Error(`--level은 ${LEVELS.join('|')}만 쓸 수 있습니다. ${USAGE}`);
-  if (level === LEVEL_FULL) throw Object.assign(new Error(`--level ${LEVEL_FULL}(${LEVEL_LABEL[LEVEL_FULL]})은 아직 구현하지 않았습니다`), {exitCode: 2});
-  const auto = level === LEVEL_AUTOPILOT;
+  if (!LEVELS.includes(level)) throw new Error(`--level은 ${LEVELS.join('|')}만 쓸 수 있습니다. ${USAGE}`);
+  const auto = atLeast(level, LEVEL_AUTOPILOT), full = atLeast(level, LEVEL_FULL);
+  // --decide-after: 완전자율에서만. 기본 2시간을 켤 때 정해 on 사건에 저장한다(하한 30분·상한 24시간, 벗어나면 종료 코드 2).
+  let decideAfterMs;
+  if (flags['decide-after'] !== undefined && !full) throw Object.assign(new Error(`--decide-after는 --level ${LEVEL_FULL}과 함께만 쓸 수 있습니다`), {exitCode: 2});
+  if (full) {
+    try { decideAfterMs = parseDecideAfter(flags['decide-after']); } catch (error) { throw Object.assign(error, {exitCode: 2}); }
+  }
 
   // --allow: 이번 켜짐 동안만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. 켜진 모든 단계(Cruise 포함)에서 받는다. 값마다 올바른 키, kyle 원문 필수.
   let allow;
@@ -229,7 +235,7 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const wingmanFlag = flags.wingman;
   if (wingmanFlag !== undefined) {
     if (typeof wingmanFlag !== 'string' || !wingmanFlag.trim()) throw new Error(`--wingman에는 슈퍼감독 이름 하나 또는 ${NO_WINGMAN}가 필요합니다. ${USAGE}`);
-    if (wingmanFlag !== NO_WINGMAN && !auto) throw new Error('--wingman <이름>은 --level autopilot과 함께만 쓸 수 있습니다');
+    if (wingmanFlag !== NO_WINGMAN && !auto) throw new Error('--wingman <이름>은 --level autopilot 이상과 함께만 쓸 수 있습니다');
   }
   const explicit = typeof wingmanFlag === 'string' && wingmanFlag !== NO_WINGMAN ? wingmanFlag : null;
 
@@ -249,7 +255,7 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   }
   const send = deps.sendMail ?? sendAutopilotMail(home, by);
   const attempt = (role, isWingman) => {
-    const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: until ? Date.parse(until) : null, level, allow, isWingman});
+    const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: until ? Date.parse(until) : null, level, allow, isWingman, decideAfterMs});
     // 던진 오류도 결과로 바꾼다. 전달 상태를 모르는 실패는 unknown(갔을 수 있음)이다.
     try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, delivery: error.delivery ?? 'unknown', error: String(error.message).slice(0, 200)}; }
   };
@@ -276,9 +282,9 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const event = {
     kind: 'autopilot', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),
-    level, ...(allow ? {allow} : {}), ...wingmanFields,
+    level, ...(full ? {decideAfterMs} : {}), ...(allow ? {allow} : {}), ...wingmanFields,
     ...(until ? {until} : {}), to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
   };
   (deps.record ?? (entry => appendLedger(entry, home)))(event);
-  return {on: true, level, checklist: AUTO_CHECKLIST, ...(allow ? {allow} : {}), ...wingmanFields, until: until ?? null, untilLocal: until ? clock(Date.parse(until)) : NO_END_TEXT, to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
+  return {on: true, level, ...(full ? {decideAfterMs, decideAfter: decideAfterText(decideAfterMs)} : {}), checklist: AUTO_CHECKLIST, ...(allow ? {allow} : {}), ...wingmanFields, until: until ?? null, untilLocal: until ? clock(Date.parse(until)) : NO_END_TEXT, to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
 }

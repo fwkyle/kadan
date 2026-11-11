@@ -193,7 +193,7 @@ const historyItem=d=>{
  const cancelled=d.status==='cancelled'?`<p>취소 이유: ${e(d.cancelReason||'모름')}${d.cancelledBy?` (${e(d.cancelledBy)})`:''}</p>`:'';
  return `<article class="dh-item" id="decision-${e(d.id)}"><div class="dh-meta">${badge}${d.answer?.at?`<span>${e(time(d.answer.at))}</span>`:''}</div><h3>${e(title)}</h3>${answer}${delivery}${cancelled}`+
   `<p class="dh-meta">${d.chat===true?`<span class="dc-chat">채팅</span> <span>업무 ${e(d.work)}</span>`:`<a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`}<span>요청자 ${e(d.requestedBy)} · ${e(time(d.at))}</span></p>`+
-  `<details><summary>원문 보기</summary>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><strong>추천: ${e(d.recommendation)}</strong></p><p style="white-space:pre-wrap">${linked(d.reason)}</p></details></article>`;
+  `<details><summary>원문 보기</summary>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><strong>추천: ${e(d.recommendation)}</strong></p>${d.proceeded?`<p>추천대로 진행함 (${e(d.proceeded.at)}, ${e(d.proceeded.by)}) — 되돌리는 방법: ${e(d.proceeded.reversible)}</p>`:''}<p style="white-space:pre-wrap">${linked(d.reason)}</p></details></article>`;
 };
 const renderDecisionHistory=past=>{
  const sorted=past.slice().sort((a,b)=>String(b.answer?.at||b.at||'').localeCompare(String(a.answer?.at||a.at||'')));

@@ -68,11 +68,11 @@ test('--level autopilot: on 사건에 level, status, Autopilot 단계 문구, �
   assert.doesNotMatch(msg, /아침|취침|기상|밤중/);
 });
 
-test('--level full: 종료 코드 2로 거절하고 켜지지 않는다', () => {
+test('--level full은 이제 켜진다(자세한 시험은 autopilot-full.test.mjs)', () => {
   const f = fixture();
-  assert.throws(() => f.run(['on', '밤'], {level: 'full'}), error => error.exitCode === 2 && /full/.test(error.message));
-  assert.equal(f.autopilot().length, 0);
-  assert.equal(f.sent.length, 0);
+  const r = f.run(['on', '밤'], {level: 'full'});
+  assert.equal(r.level, 'full');
+  assert.equal(f.autopilot()[0].level, 'full');
 });
 
 test('--level 없이 켜면 cruise로 기록하고 문구는 켜진 모든 단계의 고정 줄 5개뿐(--level cruise와 같다, 일감 고르기 줄 없음)', () => {
@@ -151,7 +151,7 @@ test('--allow 없이 켜면 status의 allow는 빈 목록이고 on 사건에 all
 });
 
 test('알 수 없는 --level 값은 거절한다', () => {
-  assert.throws(() => fixture().run(['on', '밤'], {level: '기본'}), /--level은 cruise\|autopilot만/);
+  assert.throws(() => fixture().run(['on', '밤'], {level: '기본'}), /--level은 cruise\|autopilot\|full만/);
 });
 
 const GUARDED = [

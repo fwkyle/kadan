@@ -58,6 +58,7 @@ import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner, userTurnWaitList, effectiveCardRole } from "./handover-state.mjs";
 import { waitUntilList } from "./wait-until.mjs";
+import { releasedFromWait, proceedEligibility } from "./decision-proceed.mjs";
 import {waitingLetters} from './mailbox-queries.mjs';
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
@@ -496,6 +497,13 @@ export async function runWatch({
     // 결정 목록은 순회마다 한 번만 읽는다. 설명 AI·답 대기 계산·감시AI 입력이 같은 결과를 쓴다. 못 읽으면 null(없음 []과 구분).
     let decisionsNow = null;
     try { decisionsNow = decisionList(readDecisions()); } catch { decisionsNow = null; }
+    // 완전자율 스냅샷은 필요한 첫 결정에서 주기당 한 번만 만든다(실패도 캐시). 결정 수에 비례해 새로 읽는 것은 없다: 위에서 이미 읽은 결정 목록과 이 스냅샷 하나만 쓴다.
+    let autopilotWingman, autopilotWingmanRead = false;
+    const autopilotWingmanOnce = () => {
+      if (!autopilotWingmanRead) { autopilotWingmanRead = true; try { autopilotWingman = readAutopilotWingman({entries, now:cycleAt}); } catch { autopilotWingman = null; } }
+      return autopilotWingman;
+    };
+    const proceedable = [];
     if (explain && !observationError && cards) {
       try { if (decisionsNow === null) throw new Error('결정 목록 읽기 실패'); explain.tick({cards, entries, readEntries, decisions: decisionsNow, liveSessions: roles.liveSessions, now: cycleAt}); }
       catch (error) { print(`[watch] 설명 AI 점검 실패: ${error.message}`); }
@@ -574,7 +582,16 @@ export async function runWatch({
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
       const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
-      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push({ ...item(d.card ?? null, null, d.work ?? null, "@user"), kind: "decision", ref: d.id });
+      // 완전자율: 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 결정은 답 대기로 세지 않는다(그 결정이 막던 일이 다시 요청한 감독의 할 일이다).
+      // 자격 판정은 decision-proceed의 함수 하나이고, 값을 읽지 못하면(스냅샷 없음) 계속 답 대기다. 감시기는 결정·원장을 쓰지 않는다.
+      const releasedDecision = d => {
+        if (d.proceeded) return true;
+        if (typeof d.reversible !== "string" || !readAutopilotWingman) return false;
+        if (!releasedFromWait(d, autopilotWingmanOnce(), cycleAt)) return false;
+        proceedable.push(d);
+        return true;
+      };
+      for (const d of decisionsNow ?? []) if (d?.status === "open" && !releasedDecision(d) && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push({ ...item(d.card ?? null, null, d.work ?? null, "@user"), kind: "decision", ref: d.id });
       for (const l of waitingLetters(entries))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), kind: "mail", ref: l.mailId, mailId: l.mailId, asker: l.currentSender || l.by });
       // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.
@@ -774,7 +791,7 @@ export async function runWatch({
       const message = `[감시sh ${clockTime(cycleAt)}] ${buildIdleNudge(alert)}`;
       let target = alert.role, held = false, delivered = false;
       try {
-        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt), { parents, profiles: superProfiles(entries), cards, works }));
+        (sendNudge ?? sendAlert)(alert.role, itemizedAlert(alert, clockTime(cycleAt), { parents, profiles: superProfiles(entries), cards, works, proceedable: proceedable.filter(d => d.requestedBy === alert.role) }));
         delivered = true;
         deliveredRecipients.add(alert.role);
       } catch (error) {
@@ -801,12 +818,6 @@ export async function runWatch({
     const retryAlerts = [...pendingAlerts.values()].filter(a => !observationError && sourceIds.has(a.id)
       && !changes.notify.some(n => n.id === a.id)).map(a => nextAlerts.find(n => n.id === a.id));
     let alertIdentity = null;
-    let autopilotWingman, autopilotWingmanRead = false;
-    // 실패(null)도 이 주기 동안 캐시한다: 읽기가 던져도 주기당 한 번만 부른다.
-    const autopilotWingmanOnce = () => {
-      if (!autopilotWingmanRead) { autopilotWingmanRead = true; try { autopilotWingman = readAutopilotWingman({entries, now:cycleAt}); } catch { autopilotWingman = null; } }
-      return autopilotWingman;
-    };
     const workOfAlert = alert => workKeyOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []), works);
     const repoOf = alert => repoOfAlert(alert, alertIdentity ??= taskIdentity(cards ?? []));
     for (const alert of [...changes.notify, ...retryAlerts]) {
