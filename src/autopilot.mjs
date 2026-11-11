@@ -11,7 +11,7 @@ import {superProfiles, nearestSuper} from './super-role.mjs';
 import {readActiveHierarchy} from './hierarchy-register.mjs';
 import {withEffectiveOwner} from './handover-state.mjs';
 import {WorkStore} from './work-store.mjs';
-import {notifyUser} from './user-notify.mjs';
+import {notifyUser, SYSTEM_NOTIFY_REFUSED} from './user-notify.mjs';
 import {summarizeAutopilot, HELD_PREFIX} from './autopilot-summary.mjs';
 import {WINGMAN_LINES} from './autopilot-wingman.mjs';
 import {MAIL_DELIVERY_EXIT_ENV, mailDeliveryOf} from './mail-delivery-exit.mjs';
@@ -49,20 +49,27 @@ export const readDecisionEvents = home => {
   try { return readStream(home, 'decisions/events.jsonl', {optional: true}); } catch { return []; }
 };
 
-// 끝 시각 칸이 있는 켜짐인지. 칸이 없거나 null이면 끝 시각 없음(직접 끌 때까지)이다.
-export const hasEnd = on => on?.until !== undefined && on?.until !== null;
+// 원장 on 사건의 끝 시각 칸. 칸이 **없을 때만**(`'until' in event`가 거짓) 끝 없음(직접 끌 때까지)이다.
+// 칸이 있으면 값이 ISO 문자열일 때만 끝 시각으로 인정하고, null·빈 문자열·숫자·문자열 아님·해석 불가는 꺼짐(만료)이다(권한이 늘지 않는 쪽).
+// status 응답의 `until: null`(표시용)과 이 원장 칸은 다르다. 상태·감시기·대시보드가 모두 이 함수 하나로 가른다.
+const ISO_END = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+export const hasEnd = on => on != null && Object.hasOwn(on, 'until');
+export function endOf(on) {
+  if (!hasEnd(on)) return {kind: 'none', ms: null};
+  const ms = typeof on.until === 'string' && ISO_END.test(on.until) ? Date.parse(on.until) : NaN;
+  return Number.isFinite(ms) ? {kind: 'at', ms} : {kind: 'broken', ms: null};
+}
 
 // 마지막 autopilot 사건이 `on`이면 켠 사건 하나로 상태를 가른다. 결정 저장소는 보지 않는다(결정 답은 Autopilot을 끄지 않는다).
 // on:true = 켜짐. pending = 이미 끝났는데 아직 원장에 끝 사건이 없는 것({phase, endedAt(ms)}).
-// 꺼짐 조건은 둘뿐이다: off, 명시한 끝 시각. `until` 칸이 없으면 끝 없음(NaN 비교에 기대지 않는 명시 분기),
-// 칸이 있는데 해석할 수 없으면 꺼짐(만료로 처리: 권한이 늘지 않는 쪽).
+// 꺼짐 조건은 둘뿐이다: off, 명시한 끝 시각. 끝 시각 칸 판정은 endOf 한 곳이다(칸 없음 = 끝 없음, 칸이 있는데 ISO가 아니면 꺼짐).
 export function autopilotState(entries, now) {
   const last = [...entries].reverse().find(e => e?.kind === 'autopilot') ?? null;
   if (last?.phase !== 'on') return {on: false, start: null, pending: null, last};
-  if (!hasEnd(last)) return {on: true, start: last, pending: null, last};
-  const untilMs = Date.parse(last.until);
-  if (!Number.isFinite(untilMs)) return {on: false, start: last, pending: {phase: 'expired', endedAt: now}, last};
-  if (untilMs <= now) return {on: false, start: last, pending: {phase: 'expired', endedAt: untilMs}, last};
+  const end = endOf(last);
+  if (end.kind === 'none') return {on: true, start: last, pending: null, last};
+  if (end.kind === 'broken') return {on: false, start: last, pending: {phase: 'expired', endedAt: now}, last};
+  if (end.ms <= now) return {on: false, start: last, pending: {phase: 'expired', endedAt: end.ms}, last};
   return {on: true, start: last, pending: null, last};
 }
 
@@ -177,8 +184,10 @@ function defaultDeps(home, deps = {}) {
 }
 
 // 끝났는데 기록이 없는 켜짐(명시한 끝 시각이 지남)이나 지금 끄는 것(off)을 한 번만 마무리한다.
-// 끄기는 유일한 정지 수단이라 끝 사건 기록이 요약·알림·우편보다 앞서고 그것들에 기대지 않는다:
-// 요약을 못 만들면 그 사실을 적은 요약 칸으로 끝 사건을 먼저 남기고, 알림·우편 실패는 끝 사건 뒤에 모아 `warnings`로 돌려준다(원장에는 쓰지 않는다).
+// 끄기는 유일한 정지 수단이라 **끝 사건을 가장 먼저** 원장에 적는다: 결정 이력 읽기·요약 계산·알림·우편은 그 뒤에 하고, 그것들이 느리거나 실패하거나 프로세스가 죽어도 꺼진 상태다.
+// 끝 사건에는 요약을 담지 않는다(append-only라 나중에 못 채운다). 요약은 끝 사건 시각까지를 구간으로 뒤에 계산해 알림·반환값으로만 내보내고,
+// 원장에서는 같은 기록으로 다시 계산할 수 있다. 옛 끝 사건의 `summary` 칸은 그대로 읽힌다.
+// 끝 사건 기록 자체가 실패하면 꺼지지 않은 것이므로 던진다(종료 코드·답 문구에 드러난다). 그 뒤 요약·알림·우편의 실패는 `warnings`로 돌려준다(원장에는 쓰지 않는다).
 // 이미 마무리됐거나 아직 켜져 있으면 null. phase를 주면(off) 지금 끄는 것이다.
 export function finishAutopilot({home, by, phase = null, reason = null, deps: given}) {
   const deps = defaultDeps(home, given);
@@ -188,6 +197,14 @@ export function finishAutopilot({home, by, phase = null, reason = null, deps: gi
     const end = state.pending ?? (phase && state.on ? {phase, endedAt: now} : null);
     if (!end) return null;
     const start = state.start, warnings = [];
+    const event = {
+      kind: 'autopilot', phase: end.phase, by,
+      startedAt: start.t, endedAt: new Date(end.endedAt).toISOString(), ...(reason ? {reason} : {}),
+      t: new Date(now).toISOString(),
+    };
+    try { deps.record(event); } catch (error) {
+      throw Object.assign(new Error(`끝 사건을 원장에 기록하지 못해 Autopilot이 꺼지지 않았습니다: ${String(error?.message ?? error).slice(0, 200)}`), {exitCode: 1, cause: error});
+    }
     let summary;
     try {
       summary = summarizeAutopilot({start, phase: end.phase, endedAt: end.endedAt, entries, decisionEvents: deps.readDecisions(), readBody: deps.readBody});
@@ -195,15 +212,12 @@ export function finishAutopilot({home, by, phase = null, reason = null, deps: gi
       warnings.push(`요약을 만들지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}`);
       summary = {counts: {}, text: `${MODE} 요약을 만들지 못했습니다(끝 사건은 기록했습니다): ${String(error?.message ?? error).slice(0, 200)}`};
     }
-    const event = {
-      kind: 'autopilot', phase: end.phase, by,
-      startedAt: start.t, endedAt: new Date(end.endedAt).toISOString(), ...(reason ? {reason} : {}),
-      summary: {counts: summary.counts, text: summary.text}, t: new Date(now).toISOString(),
-    };
-    deps.record(event);
     try {
-      deps.notify(summary.text, {kind: 'autopilot-summary', key: `autopilot-summary:${start.t}`});
-    } catch (error) { warnings.push(`요약 알림을 보내지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}`); /* 알림 실패는 기록(본체)을 되돌리지 않는다 */ }
+      const notice = deps.notify(summary.text, {kind: 'autopilot-summary', key: `autopilot-summary:${start.t}`});
+      // notifyUser는 최종 전달 실패를 던지지 않고 `error` 칸으로 돌려준다(디코 실패 뒤 시스템 알림이 전달되면 error는 비어 있다).
+      // KADAN_NOTIFY=off 시험 관문의 거절 문구는 운영에 없는 값이라 실패로 세지 않는다.
+      if (notice && typeof notice === 'object' && notice.error && notice.error !== SYSTEM_NOTIFY_REFUSED) warnings.push(`요약 알림을 보내지 못했습니다: ${String(notice.error).slice(0, 200)}`);
+    } catch (error) { warnings.push(`요약 알림을 보내지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}`); }
     // 이미 쓰인 문구를 근거로 슈퍼가 계속 움직이지 않게 같은 우편 경로로 종료를 알린다. 읽음은 요구하지 않는다. 실패는 끝 사건을 되돌리지 않고 warnings로 드러낸다.
     const send = deps.sendMail ?? sendAutopilotMail(home, by);
     for (const target of start.to ?? []) {
@@ -212,7 +226,7 @@ export function finishAutopilot({home, by, phase = null, reason = null, deps: gi
         if (r && r.ok === false) warnings.push(`종료 우편이 ${target}에게 가지 않았습니다(${r.delivery ?? '알 수 없음'})`);
       } catch (error) { warnings.push(`종료 우편이 ${target}에게 가지 않았습니다: ${String(error?.message ?? error).slice(0, 100)}`); }
     }
-    return warnings.length ? {...event, warnings} : event;
+    return {...event, summary: {counts: summary.counts, text: summary.text}, ...(warnings.length ? {warnings} : {})};
   });
 }
 // 감시기 한 주기의 확인 한 가지. 주기에서 이미 읽은 entries만 본다: 뒤에서부터 마지막 autopilot 사건을 찾아(복사·추가 읽기 없음)
@@ -222,7 +236,9 @@ export function watchAutopilotExpiry({entries, now, home, deps}) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
     if (e?.kind !== 'autopilot') continue;
-    if (e.phase !== 'on' || !hasEnd(e) || now < Date.parse(e.until)) return null;
+    if (e.phase !== 'on') return null;
+    const end = endOf(e);
+    if (end.kind === 'none' || (end.kind === 'at' && now < end.ms)) return null;
     return finishAutopilot({home, by: 'watch', deps: {...deps, now: () => now}});
   }
   return null;
