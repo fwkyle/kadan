@@ -14,7 +14,7 @@ export const LEVEL_LABEL: Record<string, string> = { cruise: "Cruise", autopilot
 export type AutopilotRepos = { corrupt: string | null; repos: AutopilotLine[]; legacy: { name: string; value?: string }[] };
 // 서버가 이미 읽은 원장·결정으로 센 Autopilot 상태(src/dashboard/autopilot-view.mjs). on이 null이면 모름.
 export type AutopilotStrip = {
-  on: boolean | null; reason?: string; since?: string | null; until?: string | null; level?: string | null;
+  on: boolean | null; reason?: string; since?: string | null; until?: string | null; level?: string | null; decideAfterMs?: number | null;
   last?: { since: string | null; endedAt: string | null; phase: string } | null;
 };
 export type BadgeKind = "allow" | "except" | "forbid" | "setup" | "unknown";

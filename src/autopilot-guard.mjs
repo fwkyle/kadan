@@ -4,6 +4,7 @@
 import {ledgerHome, readLedger} from './ledger.mjs';
 import {autopilotState} from './autopilot.mjs';
 import {TARGETS} from './revive.mjs';
+import {INFRA_RESTART_TARGETS} from './infra-restart.mjs';
 import {LEVEL_FULL} from './autopilot-terms.mjs';
 
 // 허용 목록 방식(2026-11-02 PR #327 검수 F2): 막을 쓰기 목록이 아니라 읽기만 하는 하위 명령 목록이다.
@@ -13,6 +14,7 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 //   `set`·`runner`·`model`·`block`·`preset`·`import`·`fallback`·`favorite`·`init`·`compare on|off`·`export --out`은 거절.
 // - `limit`: `run`·`status`·사용법은 통과. `set`(기준 개수 등 기계 설정 쓰기)은 거절.
 // - `stop`: 기반 프로세스(TARGETS = 비서·대시보드·디코·watch)만 거절. 작업자·검수자 세션 종료는 감독의 정상 정리라 통과.
+// - `restart watch|대시보드`: 통과(끄고 같은 명령 안에서 다시 띄운다). `restart --force`는 그대로 거절.
 // - `restart`: `--force`만 거절.
 // - `autopilot wingman`: 인자 없음(보기)만 통과. 이름 저장·`--clear`는 거절.
 // - `autopilot summary`·`status`·`picks`: 읽기 전용이라 통과(목록에 없는 것만 거절하는 것이 아니라 위 쓰기 항목만 거절한다).
@@ -51,7 +53,11 @@ export function autopilotGuard({command, args, flags, home, env = process.env, n
   const where = home ?? ledgerHome();
   const state = autopilotState(entries ?? readLedger(where), now);
   if (!state.on) return;
-  const error = new Error(`Autopilot이 켜져 있어 역할 세션에서는 \`kadan ${what}\`를 쓸 수 없습니다. kyle이 직접 치거나 Autopilot을 끈 뒤 하세요`);
+  const base = `Autopilot이 켜져 있어 역할 세션에서는 \`kadan ${what}\`를 쓸 수 없습니다. kyle이 직접 치거나 Autopilot을 끈 뒤 하세요`;
+  // 기반 프로세스를 끄고 끝내는 것은 막는다(자리를 비운 동안 끄고 못 살리면 아무도 못 본다). 감시기·대시보드는 끄고 다시 띄우는 한 명령이 있다.
+  const infra = command === 'stop' && TARGETS.includes(args?.[0]);
+  const hint = infra ? ` — 기반 프로세스를 끄고 끝내면 자리를 비운 동안 아무도 못 봅니다.${INFRA_RESTART_TARGETS.includes(args[0]) ? ` 다시 띄우려면 \`kadan restart ${args[0]}\`(끄고 같은 명령 안에서 다시 띄웁니다)를 쓰세요` : ' 이 대상은 역할 세션이 재시작할 수 없습니다'}` : '';
+  const error = new Error(base + hint);
   error.exitCode = 2;
   throw error;
 }

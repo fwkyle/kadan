@@ -79,7 +79,7 @@ function expiredWaitMark(work, now) {
   if (until === null) return {};
   return { waitEnd: until, ...(now - until <= 24 * 60 * 60 * 1000 ? { waitedUntil: new Date(until).toISOString() } : {}) };
 }
-export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set(), now = null) {
+export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set(), now = null, releases = []) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
   let ended = null;
   const inProgress = x => {
@@ -94,7 +94,10 @@ export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set
       const turnValue = outsideTurnValue(w, parents, cards);
       const { waitEnd, ...waited } = expiredWaitMark(w, now);
       // 할 일이 생긴 시각(t)은 기록 시각과 대기 종료 시각 중 늦은 쪽이다. 같은 감독의 다른 업무·카드의 시각은 건드리지 않는다.
-      const t = waitEnd !== undefined && !(Date.parse(w.at) >= waitEnd) ? new Date(waitEnd).toISOString() : w.at;
+      // 답 대기에서 풀린 결정(완전자율)의 풀린 시각도 같은 방식으로 멈춤의 시작이 된다: 그래야 본인 안내(1단)가 2단보다 먼저 간다.
+      const released = Math.max(waitEnd ?? -Infinity, ...releases.filter(r => r.work === w.key && Number.isFinite(r.at)).map(r => r.at));
+      const start = Number.isFinite(released) && !(Date.parse(w.at) >= released) ? released : undefined;
+      const t = start !== undefined ? new Date(start).toISOString() : w.at;
       return { kind: "send", role, taskId: `work:${w.key}`, t, ownedAt: since, ...(turnValue ? { turnValue, workRevision: w.revision } : {}), ...waited }; });
 }
 
@@ -105,7 +108,7 @@ export function assessSupervisorIdle(
   idleMs,
   ledgerError = null,
   parents = new Map(),
-  { works = [], cards = [], waits = [], peerEntries = entries, ownTurn = null, executionEntries = null, liveRoleSessions = null } = {}
+  { works = [], cards = [], waits = [], decisionReleases = [], peerEntries = entries, ownTurn = null, executionEntries = null, liveRoleSessions = null } = {}
 ) {
   const excluded = waitingExcluder(waits, parents);
   if (ledgerError) {
@@ -195,7 +198,7 @@ export function assessSupervisorIdle(
   // 발령 이력이 있는가는 세대 필터 전 원본 기준이다. 이전 세대 발령을 뺐다고 그 plan을 미발령 할 일로 되살리지 않는다.
   const all = [...entries, ...idleWorkEntries(works, cards, parents,
     // 원장 전체(executionEntries)를 모르면 끝난 실행을 가릴 수 없어 예전처럼 둔다.
-    () => executionEntries ? endedExecutionKeys({ cards, entries: executionEntries, liveSessions: liveRoleSessions, now }) : new Set(), now), ...requests];
+    () => executionEntries ? endedExecutionKeys({ cards, entries: executionEntries, liveSessions: liveRoleSessions, now }) : new Set(), now, decisionReleases), ...requests];
   alerts.push(...assessHierarchyIdle(
     all.filter(current),
     roleStates, now, idleMs, parents, waiting,

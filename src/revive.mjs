@@ -15,7 +15,7 @@ export const REVIVE_WINDOW_MS = 60 * 60 * 1000;
 const SCREEN_LINES = 200;
 
 const stateFile = (home) => path.join(home, 'revive-state.json');
-const emptyState = () => ({ targets: {}, history: {}, blocked: {}, lastResult: {}, lastOutput: '' });
+const emptyState = () => ({ targets: {}, history: {}, blocked: {}, lastResult: {}, restarts: {}, lastOutput: '' });
 
 // 파일이 없으면 빈 상태. 있는데 깨졌으면 빈 상태에 corrupt:true를 붙인다 — 빈 상태로 읽으면 kyle의 멈춤 표시를 잃고 끈 것을 되살린다.
 export function readReviveState(home) {
@@ -35,11 +35,12 @@ export function readReviveState(home) {
 const isPlain = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 function validShape(v) {
   if (!isPlain(v)) return false;
-  for (const key of ['targets', 'history', 'blocked', 'lastResult']) if (key in v && !isPlain(v[key])) return false;
+  for (const key of ['targets', 'history', 'blocked', 'lastResult', 'restarts']) if (key in v && !isPlain(v[key])) return false;
   if ('lastOutput' in v && typeof v.lastOutput !== 'string') return false;
   if ('targets' in v && !Object.values(v.targets).every((t) => isPlain(t) && typeof t.state === 'string')) return false;
   if ('history' in v && !Object.values(v.history).every((h) => Array.isArray(h) && h.every(Number.isFinite))) return false;
   if ('blocked' in v && !Object.values(v.blocked).every(isPlain)) return false;
+  if ('restarts' in v && !Object.values(v.restarts).every((h) => Array.isArray(h) && h.every(Number.isFinite))) return false;
   return true;
 }
 export function writeReviveState(home, state) {

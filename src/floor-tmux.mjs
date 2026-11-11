@@ -417,6 +417,17 @@ export function wrapNoTmux(cmd) {
   return `unset TMUX TMUX_PANE; ${cmd || 'exec "${SHELL:-/bin/sh}" -l'}`;
 }
 
+// 감시기·다리처럼 원장 start 없이 도는 기반 세션의 명령 앞에 붙인다: 이미 떠 있는 tmux 서버에 남은 역할·창 환경을 자식이 물려받지 않게 하고
+// 창 값을 launchd 되살리기와 같은 값(none + force)으로 고정한다. 운영 tmux 서버의 전역 환경은 건드리지 않는다.
+// keepRole: 세션 환경(-e)으로 자기 역할 값을 받는 세션(대시보드)은 KADAN_ROLE을 지우지 않는다.
+export function wrapInfraEnv(cmd, { keepRole = false } = {}) {
+  return `unset TMUX TMUX_PANE ${keepRole ? "" : "KADAN_ROLE "}KADAN_RESTART_REASON KADAN_RESTART_EXPECT_PID KADAN_RESTART_SCREEN_PID; export KADAN_WINDOW=none KADAN_WINDOW_FORCE=1; ${cmd}`;
+}
+
+// 재시작·자동 되살리기가 만드는 대시보드 세션만 자식 쪽 환경을 고정한다. 사람이 친 `kadan up`(창을 여는 경로)과 다른 역할은 지금 동작 그대로.
+let cleanInfraDashboard = false;
+export const setCleanInfraDashboard = (on) => { cleanInfraDashboard = Boolean(on); };
+
 // 카단 pane 표시: 이 pane이 카단 소켓에서 떴다는 사실을 TMUX 대신 이 값으로 안다(window-setting.insideKadanPane).
 export const paneSocketEnv = (socket = currentSocket()) => `KADAN_PANE_SOCKET=${socket}`;
 
@@ -438,7 +449,7 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd, home }) {
     "-e",
     paneSocketEnv(),
     ...inlineScreenEnv(cmd).flatMap(value => ["-e", value]),
-    wrapNoTmux(cmd),
+    cleanInfraDashboard && session === "kadan-대시보드" ? wrapInfraEnv(cmd, { keepRole: true }) : wrapNoTmux(cmd),
   ];
 }
 

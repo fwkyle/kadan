@@ -104,6 +104,13 @@ export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs =
 }
 function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
+// 대시보드 세션이 실행할 명령과 포트. `kadan up`(되살리기 포함)과 `kadan restart 대시보드`가 같은 출처를 쓴다.
+export function dashboardCommand({ home, flags = {}, cliPath, nodePath = process.execPath }) {
+ const port = String(flags.port ?? readConfig(home).port ?? DEFAULT_PORT);
+ if (!/^\d+$/.test(port) || Number(port) > 65535) throw new Error('--port는 0부터 65535까지의 정수여야 한다');
+ return { port, cmd: `${quote(nodePath)} ${quote(cliPath)} dashboard --port ${port}` };
+}
+
 // skip: 건너뛸 대상 역할 이름 집합(`kadan up --auto`가 멈춤 상태·상한에 걸린 대상을 뺀다). 사람이 친 up은 비워 둔다.
 export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = process.execPath,
  log = console.log, sessionName, restoreSecretary, startWatch, startBridge, skip = new Set(), dashboardBuild } = {}) {
@@ -111,8 +118,7 @@ export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = proc
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
  if (!runner) throw new Error('비서를 띄울 실행기가 없습니다. kadan init 또는 kadan up --cmd <명령>');
- const port = String(flags.port ?? config.port ?? DEFAULT_PORT);
- if (!/^\d+$/.test(port) || Number(port) > 65535) throw new Error('--port는 0부터 65535까지의 정수여야 한다');
+ const { port, cmd: dashboardCmd } = dashboardCommand({ home, flags, cliPath, nodePath });
  const out = { runner, port, secretary: null, dashboard: null };
 
  const secretarySession = sessionName(SECRETARY_ROLE);
@@ -134,7 +140,7 @@ export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = proc
  const dashboardSession = sessionName(DASHBOARD_ROLE);
  if (skip.has(DASHBOARD_ROLE)) out.dashboard = 'skipped';
  else if (floor.alive(dashboardSession)) { out.dashboard = 'reused'; log(`대시보드 이미 살아 있음: ${dashboardSession}`); }
- else { start([DASHBOARD_ROLE], { cmd: `${quote(nodePath)} ${quote(cliPath)} dashboard --port ${port}`, hidden: true }); out.dashboard = 'started'; }
+ else { start([DASHBOARD_ROLE], { cmd: dashboardCmd, hidden: true }); out.dashboard = 'started'; }
 
  if (startWatch && !skip.has('watch')) {
   try { out.watch = startWatch(); } catch (error) { out.watch = 'failed'; log(`감시기 시작 실패: ${error.message}`); }

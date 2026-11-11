@@ -24,8 +24,10 @@ const REASON = {running: '아직 켜져 있음 — 지금까지', off: 'autopilo
 // 결정 이력(같은 id의 여러 revision)에서 구간 안의 답·취소를 id당 한 번씩만 센다.
 function countDecisions(events, startMs, endMs) {
   const inWindow = at => { const ms = Date.parse(at); return ms >= startMs && ms <= endMs; };
-  const answered = new Map(), cancelled = new Map(), chatRegistered = new Set();
+  const answered = new Map(), cancelled = new Map(), chatRegistered = new Set(), proceeded = new Set();
   for (const e of events) {
+    // 완전자율이 추천대로 진행한 결정: 진행 기록(proceeded)이 구간 안에 붙은 결정을 id당 한 번 센다(결정은 닫히지 않으므로 답·취소와 따로 센다).
+    if (e?.proceeded && inWindow(e.proceeded.at)) proceeded.add(e.id);
     if (e?.status === 'answered' && inWindow(e.answer?.at) && !answered.has(e.id)) answered.set(e.id, e);
     // 채팅 결정(--chat)의 닫힘은 취소로 세지 않는다. 등록만 "채팅 등록 N건"으로 따로 센다.
     if (e?.chat === true) { if (e.revision === 1 && inWindow(e.at)) chatRegistered.add(e.id); continue; }
@@ -36,6 +38,7 @@ function countDecisions(events, startMs, endMs) {
   const bySuper = [...cancelled.values()].filter(e => isSupervisorActor(e.cancelledBy));
   return {
     answered: answered.size,
+    proceeded: proceeded.size,
     chatRegistered: chatRegistered.size,
     cancelledByHuman: byHuman.length,
     cancelledBySuper: bySuper.length,
@@ -83,7 +86,8 @@ export function summarizeAutopilot({start, phase, endedAt, entries, decisionEven
   const startMs = Date.parse(start.t);
   const inWindow = e => { const ms = Date.parse(e.t); return ms >= startMs && ms <= endedAt; };
   const decisions = countDecisions(decisionEvents, startMs, endedAt);
-  const restarts = entries.filter(e => e?.kind === 'stop' && e.restart === true && inWindow(e)).length;
+  // AI 역할의 restart(stop+restart:true)와 감시기·대시보드 재시작(revive reason=restart 성공). 대시보드 재시작의 stop 줄(reason infra-restart)은 revive 줄과 겹치므로 세지 않는다.
+  const restarts = entries.filter(e => inWindow(e) && ((e?.kind === 'stop' && e.restart === true && e.reason !== 'infra-restart') || (e?.kind === 'revive' && e.reason === 'restart' && e.result === 'started'))).length;
   const delivered = new Set((start.delivered ?? []).map(d => d.mailId).filter(Boolean));
   const sends = entries.filter(e => e?.kind === 'send' && inWindow(e) && !delivered.has(e.mailId));
   // 보류: 사람 우편함으로 간 `[Autopilot 보류] <한 줄>` 편지. 본문은 원장이 아니라 옆 파일에 있다.
@@ -110,6 +114,7 @@ export function summarizeAutopilot({start, phase, endedAt, entries, decisionEven
     lines.push(`${MODE} 요약 (${stamp(startMs)} ~ ${stamp(endedAt)}, ${REASON[phase] ?? phase}) · ${WINGMAN} ${start.wingman ? fold(start.wingman, 60) : NO_WINGMAN}`);
     const autopilot = [];
     if (decisions.answered) autopilot.push(`결정 답 ${decisions.answered}건`);
+    if (decisions.proceeded) autopilot.push(`추천대로 진행한 결정 ${decisions.proceeded}건`);
     if (decisions.chatRegistered) autopilot.push(`채팅 등록 ${decisions.chatRegistered}건`);
     if (decisions.cancelledByHuman) autopilot.push(`사람이 취소한 결정 ${decisions.cancelledByHuman}건`);
     if (restarts) autopilot.push(`재시작 ${restarts}건`);

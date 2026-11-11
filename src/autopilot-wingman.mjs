@@ -6,7 +6,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {USER_RECIPIENT} from './hierarchy.mjs';
 import {isSupervisorActor} from './actors.mjs';
-import {NO_WINGMAN, WINGMAN_BASIS, LEVEL_AUTOPILOT, HELD_PREFIX} from './autopilot-terms.mjs';
+import {NO_WINGMAN, WINGMAN_BASIS, LEVEL_AUTOPILOT, HELD_PREFIX, atLeast} from './autopilot-terms.mjs';
 
 export {NO_WINGMAN, WINGMAN_BASIS};
 
@@ -48,7 +48,7 @@ export function clearDefaultWingman(home, {by, now = Date.now()}) {
 // autopilot: {on, level, wingman} 한 주기 스냅샷(없으면 꺼짐). liveSessions: 살아 있는 세션 이름들, null이면 조회 실패(모름 → 바꾸지 않음).
 export function applyWingmanRoute({route, alert, autopilot, liveSessions}) {
   if (route?.recipient !== USER_RECIPIENT) return route;
-  if (!autopilot?.on || autopilot.level !== LEVEL_AUTOPILOT || !autopilot.wingman) return route;
+  if (!autopilot?.on || !atLeast(autopilot.level, LEVEL_AUTOPILOT) || !autopilot.wingman) return route;
   if (!((alert.kind === '놀고 있음' && alert.stage === 2) || alert.kind === '정체')) return route;
   if (autopilot.wingman === alert.role) return route;
   if (liveSessions == null || !new Set(liveSessions).has(`kadan-${autopilot.wingman}`)) return route;
