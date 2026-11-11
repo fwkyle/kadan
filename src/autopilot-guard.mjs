@@ -15,6 +15,7 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 // - `stop`: 기반 프로세스(TARGETS = 비서·대시보드·디코·watch)만 거절. 작업자·검수자 세션 종료는 감독의 정상 정리라 통과.
 // - `restart`: `--force`만 거절.
 // - `autopilot wingman`: 인자 없음(보기)만 통과. 이름 저장·`--clear`는 거절.
+// - `autopilot summary`·`status`·`picks`: 읽기 전용이라 통과(목록에 없는 것만 거절하는 것이 아니라 위 쓰기 항목만 거절한다).
 // - `autopilot repo`: 인자 없음·`list`·`show`만 통과. `autopilot repo <저장소> …`(쓰기)는 거절(저장소 이름이 list·show면 읽기로 본다).
 // 거절 검사는 `--help`와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하던 길이 샜다, F1).
 function runnersIsReadOnly(args, flags) {

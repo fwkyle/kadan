@@ -4,9 +4,11 @@ import {appendLedger, readLedger} from '../ledger.mjs';
 import {isUserActor, isSupervisorActor} from '../actors.mjs';
 import {WorkStore} from '../work-store.mjs';
 import {
-  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, clock, endOf, NO_END_TEXT, AUTO_CHECKLIST,
+  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, readDecisionEvents, clock, endOf, NO_END_TEXT, AUTO_CHECKLIST,
 } from '../autopilot.mjs';
 import {buildAutopilotNote, noteLine} from '../autopilot-note.mjs';
+import {summarizeAutopilot} from '../autopilot-summary.mjs';
+import {readMailBody} from '../ledger.mjs';
 import {picksCommand} from '../autopilot-picks.mjs';
 import {readDefaultWingman, setDefaultWingman, clearDefaultWingman, wingmanPath, NO_WINGMAN} from '../autopilot-wingman.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../autopilot-repo-policy.mjs';
@@ -14,7 +16,7 @@ import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL} from '..
 
 export const MAX_TEXT = 4000;
 const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'discord-message']);
-const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, end = endOf(on), ended = end.kind === 'at', untilMs = ended ? end.ms : null;
@@ -124,6 +126,31 @@ function repoCommand(args, flags, {home, by, deps}) {
     ...repoLines(evaluateGithub(home, saved.repo))].join('\n');
 }
 
+// `autopilot summary`: 가장 최근 켜짐 구간의 요약을 원장에서 다시 계산한다(읽기 전용: 저장·새 사건 없음, 원장 한 번 읽기).
+// 끝난 구간 = 마지막 `on`과 그 뒤 첫 끝 사건(끝 사건의 옛 `summary` 칸은 읽지 않고 다시 계산하므로 옛·새 끝 사건이 같은 경로다).
+// 켜져 있으면 지금까지, 명시한 끝 시각이 지났지만 아직 끝 사건이 없으면 그 시각까지로 본다. 켠 적이 없으면 그 사실을 말하고 정상 종료한다.
+function summaryCommand(flags, {home, deps}) {
+  const now = (deps.now ?? Date.now)();
+  const entries = (deps.readEntries ?? (() => readLedger(home)))();
+  const state = autopilotState(entries, now);
+  let startIndex = -1;
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i]?.kind === 'autopilot' && entries[i].phase === 'on') { startIndex = i; break; }
+  const none = {state: 'none', text: '요약할 켜짐 구간이 없습니다(켠 적이 없음)'};
+  if (startIndex < 0) return flags.json === true ? none : none.text;
+  const start = entries[startIndex];
+  const endEvent = entries.slice(startIndex + 1).find(e => e?.kind === 'autopilot' && e.phase !== 'on') ?? null;
+  let phase, endedAt, kind;
+  if (endEvent) { kind = 'ended'; phase = endEvent.phase; endedAt = Date.parse(endEvent.endedAt ?? endEvent.t); }
+  else if (state.pending) { kind = 'ended'; phase = state.pending.phase; endedAt = state.pending.endedAt; }
+  else { kind = 'running'; phase = 'running'; endedAt = now; }
+  if (!Number.isFinite(endedAt)) endedAt = Date.parse(endEvent?.t) || now;
+  const decisionEvents = (deps.readDecisions ?? (() => readDecisionEvents(home)))();
+  const summary = summarizeAutopilot({start, phase, endedAt, entries, decisionEvents, readBody: deps.readBody ?? (digest => readMailBody(digest, home))});
+  const head = kind === 'running' ? '(켜져 있는 중: 지금까지의 요약)' : '(가장 최근에 끝난 구간의 요약, 원장에서 다시 계산)';
+  if (flags.json !== true) return `${head}\n${summary.text}`;
+  return {state: kind, phase, startedAt: start.t, endedAt: new Date(endedAt).toISOString(), counts: summary.counts, text: summary.text};
+}
+
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.
 export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
@@ -131,6 +158,7 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   if (sub === 'repo') return repoCommand(rest, flags, {home, by, deps});
   if (sub === 'wingman') return wingmanCommand(rest, flags, {home, by, deps});
   if (sub === 'picks') return picksCommand(flags, {home, deps});
+  if (sub === 'summary') return summaryCommand(flags, {home, deps});
   const now = (deps.now ?? Date.now)();
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
   const state = autopilotState(entries, now);

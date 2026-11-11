@@ -11,7 +11,7 @@ import {superProfiles, nearestSuper} from './super-role.mjs';
 import {readActiveHierarchy} from './hierarchy-register.mjs';
 import {withEffectiveOwner} from './handover-state.mjs';
 import {WorkStore} from './work-store.mjs';
-import {notifyUser, SYSTEM_NOTIFY_REFUSED} from './user-notify.mjs';
+import {notifyUser} from './user-notify.mjs';
 import {summarizeAutopilot, HELD_PREFIX} from './autopilot-summary.mjs';
 import {WINGMAN_LINES} from './autopilot-wingman.mjs';
 import {MAIL_DELIVERY_EXIT_ENV, mailDeliveryOf} from './mail-delivery-exit.mjs';
@@ -157,6 +157,7 @@ export function sendAutopilotMail(home, from, spawn = spawnSync) {
   };
 }
 
+const SEE_AGAIN = ' (다시 보려면 `kadan autopilot summary`)';
 const REASON_TEXT = {off: 'kyle이 껐음', expired: '끝 시각이 지났음', 'ended-by-input': 'kyle의 새 입력이 있었음'};
 const lockPath = home => path.join(home, 'autopilot.lock');
 function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -209,15 +210,14 @@ export function finishAutopilot({home, by, phase = null, reason = null, deps: gi
     try {
       summary = summarizeAutopilot({start, phase: end.phase, endedAt: end.endedAt, entries, decisionEvents: deps.readDecisions(), readBody: deps.readBody});
     } catch (error) {
-      warnings.push(`요약을 만들지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}`);
+      warnings.push(`요약을 만들지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}${SEE_AGAIN}`);
       summary = {counts: {}, text: `${MODE} 요약을 만들지 못했습니다(끝 사건은 기록했습니다): ${String(error?.message ?? error).slice(0, 200)}`};
     }
     try {
       const notice = deps.notify(summary.text, {kind: 'autopilot-summary', key: `autopilot-summary:${start.t}`});
       // notifyUser는 최종 전달 실패를 던지지 않고 `error` 칸으로 돌려준다(디코 실패 뒤 시스템 알림이 전달되면 error는 비어 있다).
-      // KADAN_NOTIFY=off 시험 관문의 거절 문구는 운영에 없는 값이라 실패로 세지 않는다.
-      if (notice && typeof notice === 'object' && notice.error && notice.error !== SYSTEM_NOTIFY_REFUSED) warnings.push(`요약 알림을 보내지 못했습니다: ${String(notice.error).slice(0, 200)}`);
-    } catch (error) { warnings.push(`요약 알림을 보내지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}`); }
+      if (notice && typeof notice === 'object' && notice.error) warnings.push(`요약 알림을 보내지 못했습니다: ${String(notice.error).slice(0, 200)}${SEE_AGAIN}`);
+    } catch (error) { warnings.push(`요약 알림을 보내지 못했습니다: ${String(error?.message ?? error).slice(0, 200)}${SEE_AGAIN}`); }
     // 이미 쓰인 문구를 근거로 슈퍼가 계속 움직이지 않게 같은 우편 경로로 종료를 알린다. 읽음은 요구하지 않는다. 실패는 끝 사건을 되돌리지 않고 warnings로 드러낸다.
     const send = deps.sendMail ?? sendAutopilotMail(home, by);
     for (const target of start.to ?? []) {
