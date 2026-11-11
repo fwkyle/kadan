@@ -10,6 +10,7 @@ import {serveDashboard} from './dashboard-static.mjs';
 import {howToData} from './dashboard-how-to.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
 import {DecisionStore} from './decisions.mjs';
+import {createRunnerSettingsHistory} from './runner-settings-history.mjs';
 import {loadRemoteConfig, createRemoteGate, judgeRequest, sameOrigin, decisionToken, remoteOriginOk, remoteAudit} from './remote-access.mjs';
 import {centerSummary} from './center-summary.mjs';
 import { renderCenterWall, createCenterHandler, prepareCenterWall } from "./center-wall.mjs";
@@ -452,12 +453,16 @@ ${refresh===0?'':`setTimeout(()=>location.reload(),${refresh*1000});`}
 
 // 결정 목록이 필요한 응답: 현황·결정·요약(내 결정 건수)·상세·칸반과 서버가 그리는 중앙 화면. 그 밖(/api/cards, 우편·기록·작업 목록 등)은 읽지 않는다.
 const DECISION_ROUTES=new Set(['status','decisions','summary','detail','kanban']);
+// 공유 수집(스냅숏) 없이 답하는 화면: 응답에 쓰는 값이 설정 파일·최근 변경 10건·결정 목록·시각뿐이다(docs/dashboard-read-cost.md).
+const NO_SNAPSHOT_ROUTES=new Set(['runners','create','decisions']);
+// 공유 수집으로 답하지 않는 GET. 이 조회들은 12초 뒤 미리 수집을 걸지 않는다(걸어도 다음 요청이 쓰지 않는 수집이다).
+const NO_SNAPSHOT_GETS=new Set(['/runners/compare','/runners/compare-report','/api/autopilot/repos','/api/operations-flow','/api/operations-flow/mail']);
 export function needsDecisions(url){
   if(url.pathname.startsWith('/api/dashboard/'))return DECISION_ROUTES.has(url.pathname.slice('/api/dashboard/'.length));
   return !url.pathname.startsWith('/api/')&&url.searchParams.get('legacy')!=='1';
 }
 
-export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,
+export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,runtime=null,
   gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary,loadListSnapshot,
   loadLedger,loadMail,howToFile} = {}) {
   const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{})}):null;
@@ -467,6 +472,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  const remoteGate=centerHandler?createRemoteGate(remote===undefined?loadRemoteConfig(home):remote,remoteOptions):null;
  const decisionSecret=randomBytes(32); // 결정 전용 token용 비밀. 프로세스 안에만 둔다.
  const cache=createResponseCache();
+ const runnerHistory=home?createRunnerSettingsHistory(home):null;
  let sharedSnapshot=null;
  // 두 단계 loader는 DB 입력만 확보하고 닫은 뒤 OS 조회·상태 계산을 한다.
  // 기존 함수 loader는 호출자가 DB 읽기/계산을 나누지 않은 호환 경로다.
@@ -533,6 +539,25 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
         response.end(JSON.stringify(howToData(howToFile?{file:howToFile}:{})));return;
       }
       if(url.pathname==='/api/dashboard/session'){response.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});response.end(JSON.stringify(remoteView?{token:'',readOnly:true,...(request.kadanDecisionToken?{decisionToken:request.kadanDecisionToken}:{})}:{token:centerHandler.token}));return;}
+      // 수집 없이 답하는 화면(runners·create·decisions): 작은 snapshot을 만들어 같은 sendDashboardData로 답한다. 위의 접근·원격 판정을 이미 지났다.
+      // collectedAt은 이 응답을 만든 시각이다. ?fresh는 지금까지처럼 응답 캐시와 공유 수집을 비운다.
+      const route=url.pathname.slice('/api/dashboard/'.length);
+      if(NO_SNAPSHOT_ROUTES.has(route)){
+        if(url.searchParams.has('fresh'))clear();
+        try{
+          const small={home,collectedAt:new Date(now()),runtime,error:null,centerError:null};
+          if(route==='runners')small.entries=runnerHistory();
+          if(route==='decisions'){
+            try{small.decisions=new DecisionStore(home).list();small.decisionError=null;}
+            catch(error){small.decisionError=error.message;small.decisions=[];}
+          }
+          sendDashboardData(small,url,response);
+        }catch(error){
+          response.writeHead(error.status||503,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});
+          response.end('저장소 확인 불가: '+error.message);
+        }
+        return;
+      }
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
     const separateRead = url.pathname === '/api/dashboard/ledger' ? loadLedger
@@ -561,7 +586,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     const readSnapshot = listRequest ? loadListSnapshot : loadSnapshot;
     const snapshotMatches = () => sharedSnapshot?.loader === readSnapshot && cacheSec
       && now() - sharedSnapshot.at < cacheSec * 1000;
-    if(request.method==='GET'&&cacheSec&&centerHandler){
+    if(request.method==='GET'&&cacheSec&&centerHandler&&!NO_SNAPSHOT_GETS.has(url.pathname)){
       clearTimeout(warming);warming=null;
       warming=setTimeout(()=>warm(readSnapshot),warmAfterMs);warming.unref?.();
     }
