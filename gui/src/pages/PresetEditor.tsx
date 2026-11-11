@@ -4,7 +4,7 @@ import {AppContext, ErrorMessage} from '../ui';
 import {
   HARD_ROLE, clearPreset, presetSaveFields, presetStamp, reasonFor, stagePreset,
 } from '../preset-draft';
-import {changedRoles} from '../runner-draft';
+import {changedRoles, emptyModelRoles} from '../runner-draft';
 import {RunnerForm} from './RunnerForm';
 import {summaryCells} from './RunnerSummary';
 import type {Choice, RunnersData, Settings} from './Runners';
@@ -43,6 +43,9 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   const conflict = dirty && presetStamp(settings) !== base;
   const frozen = busy || conflict || locked;
   const changed = changedRoles(settings, draft, Object.keys(data.roles));
+  // 모델을 안 고른 초안은 서버까지 보내지 않고 저장 줄에서 알린다.
+  const unpicked = emptyModelRoles(draft, Object.keys(data.roles)).map(role => data.roles[role] ?? role);
+  const blocked = frozen || unpicked.length > 0;
   useEffect(() => {
     context.draft(id, dirty || busy);
     return () => context.draft(id, false);
@@ -116,9 +119,9 @@ export function PresetEditor({data, settings, initialOpen = []}: {
         </tbody>
       </table>
     </div>
-    {dirty && <form className="action-form runner-save-row" onSubmit={async event => {
+    {dirty && <div className="runner-save-bar"><form className="runner-save-row" onSubmit={async event => {
       event.preventDefault();
-      if (frozen) return;
+      if (blocked) return;
       setBusy(true); setError(null);
       try {
         const labels = changed.map(role => data.roles[role] ?? role);
@@ -129,16 +132,19 @@ export function PresetEditor({data, settings, initialOpen = []}: {
       } catch (e) { setError(e instanceof Error ? e.message : '저장 실패'); }
       finally { setBusy(false); }
     }}>
-      <p><strong>{changed.length ? `바꾼 것 ${changed.length}줄` : '바꾼 것 있음'} — 아직 저장 전</strong></p>
-      <p className="muted">지금 쓰는 프리셋 <strong>{settings.activePreset}</strong>에 저장됩니다.
-        다음 발령부터 적용되고 열린 창은 그대로입니다.</p>
-      {conflict && <p className="warning">다른 곳에서 이 프리셋이 바뀌었습니다. 되돌리기로 최신 값을 불러온 뒤 다시 고르세요.</p>}
-      <label>바꾸는 이유 (선택)<input maxLength={500} value={reason} disabled={busy}
-        placeholder="비우면 바꾼 역할 이름으로 채웁니다" onChange={event => setReason(event.target.value)} /></label>
-      <button className="primary" disabled={frozen}>{busy ? '저장 중…' : '저장'}</button>
+      <p className="save-title"><strong>{changed.length ? `바꾼 것 ${changed.length}줄` : '바꾼 것 있음'} — 아직 저장 전</strong></p>
+      <button className="primary" disabled={blocked}>{busy ? '저장 중…' : '저장'}</button>
       <button type="button" disabled={busy} onClick={discard}>되돌리기</button>
-    </form>}
-    <ErrorMessage error={error} />
+      <p className="muted save-note">프리셋 <strong>{settings.activePreset}</strong>에 저장됩니다. 다음 발령부터 적용되고 열린 창은 그대로입니다.</p>
+      {conflict && <p className="save-warn">다른 곳에서 이 프리셋이 바뀌었습니다. 되돌리기로 최신 값을 불러온 뒤 다시 고르세요.</p>}
+      {unpicked.length > 0 && <p className="save-warn">{unpicked.map(label => `${label}: 모델을 고르세요`).join(' · ')}</p>}
+      <details className="save-reason"><summary>바꾸는 이유 적기 (선택)</summary>
+        <input aria-label="바꾸는 이유" maxLength={500} value={reason} disabled={busy}
+          placeholder="비우면 바꾼 역할 이름으로 채웁니다" onChange={event => setReason(event.target.value)} />
+      </details>
+    </form>
+    <ErrorMessage error={error} /></div>}
+    {!dirty && <ErrorMessage error={error} />}
     {warnings.map(message => <p className="warning" key={message}>{message}</p>)}
   </div>;
 }

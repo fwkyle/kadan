@@ -121,3 +121,10 @@ test("요약 글: 초안 설정을 주면 초안 값으로 말한다(표의 '바
   assert.equal(summaryCells(data, "worker").value, "codex / gpt-test");
   assert.equal(summaryCells(data, "worker", draft).value, "codex / gpt-test2 / high");
 });
+
+test("요약 글: 모델을 안 고른 초안은 빈 글자가 아니라 안 골랐다고 말한다", () => {
+  const data = dataOf("filled");
+  const preset = data.settings.presets[data.settings.activePreset];
+  const draft = { ...data.settings, presets: { ...data.settings.presets, [data.settings.activePreset]: { ...preset, roles: { ...preset.roles, worker: { runner: "claude", model: "" } } } } };
+  assert.equal(summaryCells(data, "worker", draft).value, "claude / (모델 안 골랐음)");
+});

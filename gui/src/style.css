@@ -165,9 +165,16 @@ td small { display: block; margin-top: 2px; }
 .runner-edit fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .runner-edit legend { padding: 0; font-weight: 600; font-size: 13px; }
 .runner-edit .toolbar select { max-width: 100%; }
-.runner-save-row { margin: 10px 0 16px; padding: 10px 12px; border: 1px solid #b07712; border-radius: 8px; background: #fff8e1; }
-.runner-save-row p { margin: 0 0 6px; }
-.runner-save-row button { margin-right: 6px; white-space: nowrap; }
+/* 저장 줄은 고치는 동안 화면 아래(main 스크롤 영역의 바닥, 맨 아래 '새로 읽기' 줄 바로 위)에 붙는다. */
+.runner-save-bar { position: sticky; bottom: 0; z-index: 6; margin: 10px 0 0; padding: 8px 12px; border: 1px solid #b07712; border-radius: 8px; background: #fff8e1; box-shadow: 0 -3px 8px rgba(0, 0, 0, .14); }
+.runner-save-bar .error { margin: 6px 0 0; padding: 8px 10px; max-height: 20vh; overflow: auto; }
+.runner-save-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.runner-save-row > p, .runner-save-row > details { margin: 0; }
+.runner-save-row .save-title { flex: 1 1 140px; min-width: 0; }
+.runner-save-row .save-note, .runner-save-row .save-warn, .runner-save-row .save-reason { flex-basis: 100%; font-size: 12px; }
+.runner-save-row .save-warn { color: #7a3d00; font-weight: 600; }
+.runner-save-row .save-reason input { width: 100%; margin-top: 4px; }
+.runner-save-row button { white-space: nowrap; }
 .error, .warning { padding: 18px; border: 1px solid #b07712; background: #fff0d0; border-radius: 7px; margin-bottom: 20px; overflow-wrap: anywhere; }
 .error button { margin-left: 12px; }
 .empty { padding: 25px 0; color: var(--ds-color-muted); }

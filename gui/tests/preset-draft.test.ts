@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {clearPreset, pickCopySource, presetSaveFields, presetStamp, reasonFor, stagePreset} from '../src/preset-draft.ts';
-import {changedRoles} from '../src/runner-draft.ts';
+import {changedRoles, emptyModelRoles} from '../src/runner-draft.ts';
 
 test('여러 역할·폴백 편집은 로컬 변경안이고 저장 요청 하나에 전부 담긴다', () => {
   const settings = {revision: 7, activePreset: 'A', presets: {A: {roles: {
@@ -73,4 +73,19 @@ test('바꾸는 이유: 비우면 바꾼 역할 이름으로 채우고, 적으�
   assert.equal(reasonFor('   ', ['작업자']), '대시보드 표에서 변경: 작업자');
   assert.equal(reasonFor('한도 때문에', ['작업자']), '한도 때문에');
   assert.equal(reasonFor('', []), '대시보드 표에서 변경: 실행 모델');
+});
+
+test('모델을 안 고른 초안: 실행기만 바꾼 역할을 짚고, 모델을 고르면 풀린다. 목록 역할·비어 있는 자리는 해당 없음', () => {
+  const settings = {revision: 1, activePreset: 'A', presets: {A: {roles: {
+    worker: {runner: 'codex', model: 'gpt-test'}, senior: [{runner: 'codex', model: 'gpt-s'}],
+  }}}};
+  const roles = ['worker', 'worker-hard', 'reviewer', 'senior'];
+  assert.deepEqual(emptyModelRoles(settings, roles), [], '저장된 값은 모두 모델이 있다');
+  const unpicked = stagePreset(settings, 'worker', false, {runner: 'claude', model: '', effort: ''}, 'add');
+  assert.deepEqual(emptyModelRoles(unpicked, roles), ['worker']);
+  const newRole = stagePreset(settings, 'reviewer', false, {runner: 'claude', model: ''}, 'add');
+  assert.deepEqual(emptyModelRoles(newRole, roles), ['reviewer'], '없던 자리에 실행기만 고른 것도 막는다');
+  const picked = stagePreset(unpicked, 'worker', false, {runner: 'claude', model: 'claude-test', effort: 'low'}, 'add');
+  assert.deepEqual(emptyModelRoles(picked, roles), []);
+  assert.deepEqual(emptyModelRoles(clearPreset({...settings, presets: {A: {roles: {'worker-hard': {runner: 'codex', model: 'x'}}}}}, 'worker-hard'), roles), [], '비운 자리는 모델 빈 값이 아니다');
 });
