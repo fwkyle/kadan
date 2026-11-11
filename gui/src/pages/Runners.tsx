@@ -96,11 +96,16 @@ export default function Runners() {
             활성 프리셋 <strong>{data.settings.activePreset}</strong> · 버전{" "}
             {data.settings.revision}
           </p>
-          <RunnerSummary data={data} />
+          {readOnly ? (
+            <RunnerSummary data={data} />
+          ) : (
+            <PresetEditor data={data} settings={data.settings} />
+          )}
           <CompareMode settings={data.settings} />
           {!readOnly && (
             <>
-          <h2>모델·대체 후보 변경</h2>
+          <details>
+            <summary>대체 후보·감시 AI·시니어·설명 AI 안내</summary>
           <p className="muted">
             대체 후보(폴백)는 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
             전환은 없습니다. 검수자 시작 시 작업자를 지정한 경우에는 다른 계열의 첫 후보를 고릅니다.
@@ -122,7 +127,8 @@ export default function Runners() {
             {data.explain?.maxAttempts ?? 2}개, 시도당 75초 상한). 이 칸이 비어 있거나 고른 실행기에
             exec 틀이 없으면 아무것도 하지 않고, 칸을 채운 시점 이후의 사건만 다룹니다.
           </p>
-          <PresetEditor data={data} settings={data.settings} />
+          </details>
+          <h2>프리셋·즐겨찾기·실행기 관리</h2>
           <PresetManager settings={data.settings} />
           <Favorites settings={data.settings} />
           <RunnerTables catalog={data.catalog} revision={data.settings.revision} />
