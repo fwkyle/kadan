@@ -39,19 +39,18 @@ async function world(fake, extra = {}) {
   return {home, handler, say, autopilots, posts, sent, errs, secretaryMail};
 }
 
-test('1 잘게 → on 사건 1줄(사람 명의·글 id·cruise·8시간), 조용한 답 1통, 비서 우편 0통', async () => {
+test('1 잘게 → on 사건 1줄(사람 명의·글 id·cruise·끝 시각 없음), 조용한 답 1통, 비서 우편 0통', async () => {
   const fake = await startFakeDiscord();
   try {
     const w = await world(fake);
     const line = w.say('잘게');
-    const before = Date.now();
     assert.equal(await w.handler(line), true);
     const [on] = w.autopilots();
     assert.deepEqual([on.phase, on.by, on.discordMessageId, on.level, on.viaChat], ['on', '사람', line.id, 'cruise', false]);
-    assert.ok(Math.abs(Date.parse(on.until) - (before + 8 * 3600_000)) < 60_000);
+    assert.equal('until' in on, false, '끝 시각 기본값 없음');
     assert.match(on.text, /디코 한 마디로 켬: "잘게"/);
     assert.equal(w.posts().length, 1);
-    assert.match(w.posts()[0].content, /^Autopilot 켬: Cruise · \d\d:\d\d까지 · 슈퍼감독 1명에게 전달 · 끄려면 '일어남'$/);
+    assert.match(w.posts()[0].content, /^Autopilot 켬: Cruise · 끝 없음\(직접 끌 때까지\) · 슈퍼감독 1명에게 전달 · 끄려면 '일어남'$/);
     assert.equal(w.posts()[0]._body.flags, 4096, '조용히');
     assert.equal(w.secretaryMail().length, 0);
   } finally { await fake.close(); }
@@ -89,7 +88,7 @@ test('3 일어남 → off, 꺼져 있을 때는 오류를 답하고 우편 0통'
     await w.handler(w.say('잘게'));
     await w.handler(w.say('일어남'));
     assert.deepEqual(w.autopilots().map(e => e.phase), ['on', 'off']);
-    assert.match(w.posts().at(-1).content, /^Autopilot 끔 — 아침 요약은 슈퍼감독 우편·알림으로 갑니다$/);
+    assert.match(w.posts().at(-1).content, /^Autopilot 끔 — 요약은 슈퍼감독 우편·알림으로 갑니다$/);
     assert.equal(w.secretaryMail().length, 0);
   } finally { await fake.close(); }
 });
@@ -119,9 +118,12 @@ test('5 잘게요·잘게 자동으로·공백 두 칸·범위 밖 시각은 일
     const w2 = await world(fake);
     assert.equal(await w2.handler(w2.say('잘게 99:99까지')), true, '문구 모양은 맞고 시각이 틀리면 켜지 않고 이유를 답한다');
     assert.match(w2.posts().at(-1).content, /HH:MM 꼴/);
-    assert.equal(await w2.handler(w2.say('잘게 13시간')), true);
+    assert.equal(await w2.handler(w2.say('잘게 0시간')), true);
     assert.deepEqual(w2.autopilots(), []);
-    assert.match(w2.posts().at(-1).content, /최대 12시간/);
+    assert.match(w2.posts().at(-1).content, /뒤여야 합니다|꼴/);
+    const w3 = await world(fake);
+    assert.equal(await w3.handler(w3.say('잘게 13시간')), true, '12시간 상한은 없다');
+    assert.equal(w3.autopilots().length, 1);
   } finally { await fake.close(); }
 });
 
@@ -192,5 +194,18 @@ test('10 답 글 올리기가 실패해도 on 사건은 남는다', async () => 
     assert.equal(await w.handler(w.say('잘게')), true);
     assert.equal(w.autopilots().length, 1);
     assert.ok(w.errs.some(e => /응답 글을 못 올렸다/.test(e)));
+  } finally { await fake.close(); }
+});
+
+test('11 일어남: 요약 알림이 실패해도 끝 사건이 남아 꺼지고, 답 글에 실패가 드러난다', async () => {
+  const fake = await startFakeDiscord();
+  try {
+    const w = await world(fake, {deps: {readWorks: () => [{key: 'a/w1', status: 'open', owner: 'a-감독', executions: []}],
+      sendMail: () => ({ok: true}), notify: () => { throw new Error('알림 실패 주입'); }}});
+    await w.handler(w.say('잘게'));
+    assert.equal(w.autopilots().length, 1);
+    await w.handler(w.say('일어남'));
+    assert.deepEqual(w.autopilots().map(e => e.phase), ['on', 'off'], '끝 사건이 원장에 남았다');
+    assert.match(w.posts().at(-1).content, /^Autopilot 끔\(끝 기록 완료\) — 단, 요약 알림을 보내지 못했습니다/);
   } finally { await fake.close(); }
 });

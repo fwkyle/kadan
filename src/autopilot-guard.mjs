@@ -1,8 +1,8 @@
 // Autopilot이 켜진 동안 역할 세션(KADAN_ROLE 있음)이 부르면 거절하는 카단 명령 목록. 설계 갈래 A.
 // 한계: KADAN_ROLE은 스스로 밝히는 값이라 `env -u KADAN_ROLE kadan …`로 우회된다. 이 거절은 실수 방지이지 보안 경계가 아니고,
-// 아침 사후 드러냄(요약)과 짝이다. 꺼져 있거나 사람이 직접 치면 동작은 그대로다.
+// 끌 때의 요약(사후 드러냄)과 짝이다. 꺼져 있거나 사람이 직접 치면 동작은 그대로다.
 import {ledgerHome, readLedger} from './ledger.mjs';
-import {autopilotState, readDecisionEvents} from './autopilot.mjs';
+import {autopilotState} from './autopilot.mjs';
 import {TARGETS} from './revive.mjs';
 import {LEVEL_FULL} from './autopilot-terms.mjs';
 
@@ -43,12 +43,12 @@ export function guardedReason(command, args = [], flags = {}) {
 }
 
 // 거절하면 exitCode 2로 던진다. 원장은 거절 대상일 때만, 역할 세션일 때만 한 번 읽는다(entries를 주면 재사용).
-export function autopilotGuard({command, args, flags, home, env = process.env, now = Date.now(), entries, decisionEvents}) {
+export function autopilotGuard({command, args, flags, home, env = process.env, now = Date.now(), entries}) {
   const what = guardedReason(command, args, flags);
   if (!what || !String(env.KADAN_ROLE ?? '').trim()) return;
   // home을 안 주면 여기서야 읽는다: 거절 대상·역할 세션이 아니면 홈을 건드리지 않는다(--help·홈 없는 시험도 그대로).
   const where = home ?? ledgerHome();
-  const state = autopilotState(entries ?? readLedger(where), decisionEvents ?? readDecisionEvents(where), now);
+  const state = autopilotState(entries ?? readLedger(where), now);
   if (!state.on) return;
   const error = new Error(`Autopilot이 켜져 있어 역할 세션에서는 \`kadan ${what}\`를 쓸 수 없습니다. kyle이 직접 치거나 Autopilot을 끈 뒤 하세요`);
   error.exitCode = 2;

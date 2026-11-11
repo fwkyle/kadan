@@ -412,6 +412,6 @@ export function listRepos(home, works = [], {origin = gitOriginGithub, limits} =
   return {corrupt: null, repos, legacy, sources, unreadable};
 }
 
-// 아침 요약용(C2 관문이 그 밤에 본 저장소 줄을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
+// 요약용(C2 관문이 켜진 동안 본 저장소 줄을 넘겨 부른다): 기본값을 못 정해 보류한 저장소의 안내 줄.
 export const setupNeededLines = infos => infos.filter(i => i.verdict.reason === 'setup-needed' && i.github)
   .map(i => `설정 필요: ${i.github} — Autopilot 중 자동 머지 안 함(kadan autopilot repo ${i.github} --deploy-branch <브랜치|없음>)`);

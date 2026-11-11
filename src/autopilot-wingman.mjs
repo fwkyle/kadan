@@ -30,7 +30,7 @@ function writeWingman(home, body) {
   fs.renameSync(tmp, file);
 }
 
-// 저장할 때는 슈퍼감독 역할 이름 꼴인지만 본다. 살아 있는지·이번 밤 대상인지는 켤 때 본다.
+// 저장할 때는 슈퍼감독 역할 이름 꼴인지만 본다. 살아 있는지·이번 켜짐의 대상인지는 켤 때 본다.
 export function setDefaultWingman(home, {wingman, by, now = Date.now()}) {
   if (typeof wingman !== 'string' || !isSupervisorActor(wingman)) throw new Error(`Wingman은 슈퍼감독 역할 이름이어야 합니다(받은 값: ${typeof wingman === 'string' ? wingman : '없음'})`);
   const before = readDefaultWingman(home).wingman;

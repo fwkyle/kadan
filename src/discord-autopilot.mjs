@@ -1,6 +1,6 @@
 // 디코 한 마디로 Autopilot 켜고 끄기 — 다리(kadan discord watch --to-mail)의 정해진 규칙 코드다. 비서(AI)가 아니다.
 // #비서 채널 본문 글이 아래 문구와 정확히 같을 때만 사람 명의로 `autopilotCommand`를 부른다. 그 밖의 글은 건드리지 않는다(비서 우편으로 간다).
-// 설계: docs/daily/research/2026-11-02_나이트-모드-단계화.md 8절. 결정 답(discord-decision.mjs)과 같은 늦은 글·처리 표시 규칙을 쓴다.
+// 단계표: docs/autopilot-levels.md. 결정 답(discord-decision.mjs)과 같은 늦은 글·처리 표시 규칙을 쓴다.
 // 반환(handle): true면 이 글은 여기서 끝났다(우편으로 보내지 않는다), false면 일반 글이다.
 import {autopilotCommand} from './commands/autopilot.mjs';
 import {userActorNames} from './actors.mjs';
@@ -60,14 +60,14 @@ export function createAutopilotWordHandler({home, chat, env = process.env, log =
     let reply;
     try {
       if (word.kind === 'off') {
-        autopilotCommand(['off'], {}, run);
-        reply = 'Autopilot 끔 — 아침 요약은 슈퍼감독 우편·알림으로 갑니다';
+        const r = autopilotCommand(['off'], {}, run);
+        reply = r.warnings?.length ? cut(`Autopilot 끔(끝 기록 완료) — 단, ${r.warnings.join(' / ')}`, 300) : 'Autopilot 끔 — 요약은 슈퍼감독 우편·알림으로 갑니다';
       } else {
         const flags = {'discord-message': line.id, level: word.auto ? LEVEL_AUTOPILOT : LEVEL_CRUISE,
           ...(word.hours ? {for: `${word.hours}h`} : {}), ...(word.until ? {until: word.until} : {})};
         const r = autopilotCommand(['on', `디코 한 마디로 켬: "${String(line.content).trim()}"`], flags, run);
         const ok = (r.delivered ?? []).filter(d => d.ok !== false).length;
-        reply = `${MODE} 켬: ${LEVEL_LABEL[word.auto ? LEVEL_AUTOPILOT : LEVEL_CRUISE]} · ${r.untilLocal.slice(6)}까지 · 슈퍼감독 ${ok}명에게 전달 · 끄려면 '일어남'`;
+        reply = `${MODE} 켬: ${LEVEL_LABEL[word.auto ? LEVEL_AUTOPILOT : LEVEL_CRUISE]} · ${r.until ? `${r.untilLocal.slice(6)}까지` : r.untilLocal} · 슈퍼감독 ${ok}명에게 전달 · 끄려면 '일어남'`;
       }
     } catch (error) {
       reply = cut(`켜지 않았습니다: ${error.message}`, 300);

@@ -138,9 +138,9 @@ test('요약의 autopilot: 현황을 보지 않아도 새 autopilot 사건이 �
     until: new Date(Date.now() + 3600_000).toISOString(), t: new Date().toISOString()}, f.home);
   assert.equal(read().autopilot.on, true);
   assert.equal(read().autopilot.level, 'autopilot');
-  // 사람이 켠 뒤 답한 결정이 있으면 꺼짐(전체 경로와 같은 autopilotState 판정).
+  // 사람이 켠 뒤 결정에 답해도 켜짐이 그대로다(결정 답은 Autopilot을 끄지 않는다).
   const d = f.decisions.list().find(x => x.status === 'open');
   assert.ok(d, '열린 결정이 있어야 한다');
   f.decisions.answer(d.id, {revision: d.revision, text: '응', choice: d.options[0]}, '사람');
-  assert.equal(read().autopilot.on, false);
+  assert.equal(read().autopilot.on, true);
 });

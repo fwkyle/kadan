@@ -1,4 +1,4 @@
-// kadan autopilot picks — 밤 일감 후보 읽기. 설계: docs/daily/research/2026-11-02_나이트-모드-단계화.md 6절.
+// kadan autopilot picks — 일감 후보 읽기. 설계: docs/daily/research/2026-11-02_나이트-모드-단계화.md 6절.
 // 읽기만 한다: TODO 파일·카드·원장에 쓰지 않는다. 형식만 보고(의미 판단은 슈퍼감독 몫) 흐린 항목을 이유와 함께 걸러 낸다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,9 +84,9 @@ export function formatPicks(r) {
   const section = (head, rows, empty = '  (없음)') => [head, ...(rows.length ? rows : [empty])];
   return [
     '읽기 전용, 쓰지 않음(TODO 파일·카드·원장). 크기·금지 목록·kyle 결정 선행 여부는 슈퍼감독이 판단합니다.',
-    ...section(`(가) 밤 일감 후보 ${r.picks.length}건`, r.picks.map(row)),
+    ...section(`(가) 일감 후보 ${r.picks.length}건`, r.picks.map(row)),
     ...section(`(나) 흐려서 건너뜀 ${r.skipped.length}건`, r.skipped.map(x => `${row(x)} — ${x.reasons.join('; ')}`)),
-    ...section(`(다) [밤 허용 후보] ${r.candidates.length}건 (아침에 kyle이 볼 것, 밤 일감 아님)`, r.candidates.map(row)),
+    ...section(`(다) [밤 허용 후보] ${r.candidates.length}건 (kyle이 볼 것, 일감으로 시작하지 않음)`, r.candidates.map(row)),
     ...section(`(라) 미배정 ready 카드 ${r.readyCards.length}건`, r.readyCards.map(c => `  ${c.key} ${c.title} (${c.repo})`)),
     ...(r.unreadable.length ? section(`읽지 못함 ${r.unreadable.length}건`, r.unreadable.map(u => `  ${u.file} — ${u.reason}`)) : []),
   ].join('\n');

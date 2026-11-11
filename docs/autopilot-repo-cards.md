@@ -66,7 +66,7 @@ night_merge: 금지 (허용 | 금지. 칸이 없으면 허용)
 4. 대상 브랜치 == `deployBranch` → 보류(`deploy-branch`)
 5. 그 밖 → Autopilot 중 자동 머지(`allowed`)
 
-`kadan autopilot on --level autopilot --allow <소유자/이름> --quote "<kyle 원문>"`은 그날 밤에 한해 2번(`night-merge-forbidden`)과 4번(`deploy-branch`) 보류만 푼다. 0·1·3번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
+`kadan autopilot on --level autopilot --allow <소유자/이름> --quote "<kyle 원문>"`은 이번 켜짐 동안에 한해 2번(`night-merge-forbidden`)과 4번(`deploy-branch`) 보류만 푼다. 0·1·3번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
 
 관문 입력 예시(세 칸을 `jq`로 합쳐 stdin으로 넘긴다; 파일 목록은 이름을 바꾼 옛 경로까지 받으려고 REST를 쓴다):
 `jq -n --argjson pr "$(gh pr view N --json url,number,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,changedFiles)" --argjson files "$(gh api --paginate --slurp repos/<소유자>/<이름>/pulls/N/files)" --argjson requiredChecks "$(gh pr checks N --required --json name,state,bucket)" --argjson repo "$(gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed)" '{pr:$pr,files:$files,requiredChecks:$requiredChecks,repo:$repo}' | kadan merge-gate <업무>`

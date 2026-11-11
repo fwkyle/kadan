@@ -36,7 +36,7 @@ import {compareState, setCompare} from './runner-compare.mjs';
 import {compareReport} from './compare-report.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
-import {autopilotState, readDecisionEvents} from './autopilot.mjs';
+import {autopilotState} from './autopilot.mjs';
 import {listRepos, setRepoPolicy, AutopilotRepoPolicyError, autopilotRepoHttpMessage} from './autopilot-repo-policy.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const e=htmlEscape;
@@ -267,7 +267,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     // 이 경로의 오류 문구는 공통 catch로 넘기지 않고 여기서 정한다(error.message는 내보내지 않음).
     try{
      // Autopilot이 켜진 동안은 거절한다: 역할 세션이 curl로 대시보드를 거쳐 CLI 거절(autopilot-guard)을 우회하는 길을 막는다.
-     if(autopilotState(readLedgerIncremental(home),readDecisionEvents(home),Date.now()).on)throw new AutopilotRepoPolicyError('Autopilot이 켜진 동안은 바꿀 수 없음');
+     if(autopilotState(readLedgerIncremental(home),Date.now()).on)throw new AutopilotRepoPolicyError('Autopilot이 켜진 동안은 바꿀 수 없음');
      const saved_=setRepoPolicy(home,{repo:String(f.repo||''),deployBranch:String(f.deployBranch||''),nightMerge:String(f.nightMerge||''),by:'사람',record:entry=>appendLedger(entry,home)});
      saved('/',{repo:saved_.repo,deployBranch:saved_.deployBranch,nightMerge:saved_.nightMerge});
     }catch(error){fail(409,autopilotRepoHttpMessage(error))}

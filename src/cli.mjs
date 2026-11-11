@@ -224,6 +224,8 @@ export const COMMANDS = {
     const result=autopilotCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});
     // 기본 출력은 JSON 한 덩어리다(다른 명령처럼 스크립트·대시보드가 읽는다). 줄바꿈 그대로의 원문은 status --text에서만 낸다.
     console.log(argv[0]==='status'&&flags.text===true?autopilotOriginalText(result):(argv[0]==='note'||argv[0]==='repo'||argv[0]==='wingman'||(argv[0]==='picks'&&typeof result==='string'))?result:JSON.stringify(result,null,2));
+    // 끄기는 끝 사건이 먼저 기록돼 꺼진 상태로 남는다. 요약·알림·우편이 실패했으면 그 사실을 종료 코드 1로도 드러낸다.
+    if (Array.isArray(result?.warnings)&&result.warnings.length) process.exitCode=1;
   },
   senior: async (argv,flags) => {
     const result=await seniorCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env})});

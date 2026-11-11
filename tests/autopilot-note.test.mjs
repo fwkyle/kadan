@@ -7,7 +7,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {autopilotCommand} from '../src/commands/autopilot.mjs';
-import {autopilotState, finishAutopilot, AUTO_LINES} from '../src/autopilot.mjs';
+import {autopilotState, finishAutopilot, COMMON_LINES} from '../src/autopilot.mjs';
 import {summarizeAutopilot, NOTICE_LIMIT} from '../src/autopilot-summary.mjs';
 import {buildAutopilotNote} from '../src/autopilot-note.mjs';
 
@@ -30,7 +30,7 @@ function fixture({level = null} = {}) {
   };
   const run = (args, flags = {}, by = '사람') => autopilotCommand(args, flags, {home, by, deps});
   const notes = () => readLedger(home).filter(e => e.kind === 'autopilot-note');
-  const on = () => run(['on', '밤 위임'], level ? {level} : {});
+  const on = () => run(['on', '위임'], {...(level ? {level} : {}), for: '8h'});
   return {home, run, notes, on, tick: ms => { now += ms; }, deps};
 }
 
@@ -86,14 +86,14 @@ test('함정 회귀: autopilot-note가 많아도 autopilotState 켜짐·꺼짐 �
   f.on();
   for (let i = 0; i < 5; i++) f.run(['note', 'decision', `결정 ${i}`]);
   const entries = readLedger(f.home);
-  assert.equal(autopilotState(entries, [], T0 + 1000).on, true);
+  assert.equal(autopilotState(entries, T0 + 1000).on, true);
   // 끝 시각이 지나면 autopilot-note가 뒤에 있어도 꺼짐(만료 대기)으로 읽힌다.
-  const after = autopilotState(entries, [], T0 + 9 * 3600_000);
+  const after = autopilotState(entries, T0 + 9 * 3600_000);
   assert.equal(after.on, false);
   assert.equal(after.pending?.phase, 'expired');
   // 끄고 나면 autopilot-note가 마지막 사건이어도 꺼짐이다.
   f.run(['off']);
-  assert.equal(autopilotState(readLedger(f.home), [], T0 + 1000).on, false);
+  assert.equal(autopilotState(readLedger(f.home), T0 + 1000).on, false);
 });
 
 const startEvent = {kind: 'autopilot', phase: 'on', by: '사람', text: '밤', viaChat: false, t: new Date(T0).toISOString(), until: new Date(T0 + 8 * 3600_000).toISOString(), to: [], delivered: []};
@@ -123,7 +123,7 @@ test('요약: 종류별 줄(결정 3·보류 3종·관문 2·머지 1·시작 2)
   assert.match(s.text, /배포 저장소 보류[^\n]*x\/site#7/);
   assert.match(s.text, /관문 통과 1건 · 거절 1건/);
   assert.match(s.text, /kadan#1[^\n]*abc1234/);
-  assert.match(s.text, /시작한 밤 일감 2건/);
+  assert.match(s.text, /시작한 일감 2건/);
 });
 
 test('요약: 구간 밖 autopilot-note는 세지 않는다', () => {
@@ -218,15 +218,15 @@ test('끝 사건에 autopilot-note 집계가 담긴다(finishAutopilot 경로)',
   assert.match(end.summary.text, /대신 정한 결정 1건/);
 });
 
-test('Autopilot 단계 지침 (5)번 줄에 autopilot note 안내가 있고 줄 번호는 그대로다', () => {
-  assert.ok(AUTO_LINES.some(l => /kadan autopilot note/.test(l)));
+test('고정 줄 (1)번에 autopilot note 안내가 있고, autopilot 단계는 (6)번 일감 줄까지 이어진다', () => {
+  assert.ok(COMMON_LINES.some(l => /kadan autopilot note/.test(l)));
   const f = fixture({level: 'autopilot'});
   const sent = [];
   f.deps.sendMail = (role, message) => { sent.push(message); return {ok: true, mailId: 'm'}; };
   f.run(['on', '밤'], {level: 'autopilot'});
   assert.match(sent[0], /kadan autopilot note/);
-  assert.match(sent[0], /\(10\) 새 일감은 `kadan autopilot picks/);
-  assert.match(sent[0], /위 \(1\)~\(10\) 줄/);
+  assert.match(sent[0], /\(6\) 새 일감은 `kadan autopilot picks/);
+  assert.match(sent[0], /위 \(1\)~\(6\) 줄/);
 });
 
 test('CLI 입구: Autopilot 단계 켜짐 홈에서 역할 세션의 autopilot note가 autopilotGuard를 통과해 기록된다', () => {
@@ -296,9 +296,9 @@ test('F3 통과 PR도 거절·머지처럼 목록에 보이고, 길면 줄이기
 
 test('F4 기록이 있는 밤에는 처리한 일 없음 같은 전체 없음 문구를 쓰지 않고 칸만 좁혀 없음으로 쓴다', () => {
   const s = summarize([note(0, 'decision', '결정')]);
-  assert.doesNotMatch(s.text, /밤사이 처리한 일 없음/);
+  assert.doesNotMatch(s.text, /켜진 동안 처리한 일 없음/);
   assert.match(s.text, /결정 답·우편·재시작 없음/);
   assert.match(s.text, /대신 정한 결정 1건/);
   // 기록도 없으면 옛 문구 그대로
-  assert.match(summarize([]).text, /밤사이 처리한 일 없음/);
+  assert.match(summarize([]).text, /켜진 동안 처리한 일 없음/);
 });
