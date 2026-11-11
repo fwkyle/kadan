@@ -78,6 +78,14 @@ export function proceedEligibility(d, ap, now) {
   return {ok: reasons.length === 0, already: false, reasons};
 }
 
+// 답 대기에서 풀린 시각(ms): 진행 기록이 있으면 그 시각, 아니면 자격이 생긴 시각 max(요청 시각, 켜짐 구간 시작) + 대기 시간. 계산할 수 없으면 null.
+// 놀고 있음 계산은 이 시각부터 멈춤을 센다(대기한 시간은 멈춘 시간이 아니다: 업무 대기 시각 --wait-until과 같은 방식).
+export function releaseTime(d, ap) {
+  if (d?.proceeded) { const at = Date.parse(d.proceeded.at); return Number.isFinite(at) ? at : null; }
+  const at = Math.max(Date.parse(d?.at), Date.parse(ap?.startedAt)) + ap?.decideAfterMs;
+  return Number.isFinite(at) ? at : null;
+}
+
 // 감시기용: 이 결정을 더 이상 "답 대기"로 세지 않을지. 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 열린 결정이다.
 export const releasedFromWait = (d, ap, now) => d?.status === 'open' && (Boolean(d.proceeded) || proceedEligibility(d, ap, now).ok);
 

@@ -58,7 +58,7 @@ import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
 import { withEffectiveOwner, userTurnWaitList, effectiveCardRole } from "./handover-state.mjs";
 import { waitUntilList } from "./wait-until.mjs";
-import { releasedFromWait, proceedEligibility } from "./decision-proceed.mjs";
+import { releasedFromWait, proceedEligibility, releaseTime } from "./decision-proceed.mjs";
 import {waitingLetters} from './mailbox-queries.mjs';
 import { claudeSettingsPath } from "./stop-hook-settings.mjs";
 import { codexStopHookTrust, assessStopHookTrust } from "./stop-hook-codex-trust.mjs";
@@ -504,6 +504,7 @@ export async function runWatch({
       return autopilotWingman;
     };
     const proceedable = [];
+    const decisionReleases = []; // 답 대기에서 풀린 결정의 업무 키와 풀린 시각: 놀고 있음이 그 시각부터 멈춤을 센다
     if (explain && !observationError && cards) {
       try { if (decisionsNow === null) throw new Error('결정 목록 읽기 실패'); explain.tick({cards, entries, readEntries, decisions: decisionsNow, liveSessions: roles.liveSessions, now: cycleAt}); }
       catch (error) { print(`[watch] 설명 AI 점검 실패: ${error.message}`); }
@@ -585,10 +586,14 @@ export async function runWatch({
       // 완전자율: 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 결정은 답 대기로 세지 않는다(그 결정이 막던 일이 다시 요청한 감독의 할 일이다).
       // 자격 판정은 decision-proceed의 함수 하나이고, 값을 읽지 못하면(스냅샷 없음) 계속 답 대기다. 감시기는 결정·원장을 쓰지 않는다.
       const releasedDecision = d => {
-        if (d.proceeded) return true;
-        if (typeof d.reversible !== "string" || !readAutopilotWingman) return false;
-        if (!releasedFromWait(d, autopilotWingmanOnce(), cycleAt)) return false;
-        proceedable.push(d);
+        const ap = d.proceeded ? null : autopilotWingmanOnce();
+        if (!d.proceeded) {
+          if (typeof d.reversible !== "string" || !readAutopilotWingman) return false;
+          if (!releasedFromWait(d, ap, cycleAt)) return false;
+          proceedable.push(d);
+        }
+        const at = releaseTime(d, ap);
+        if (at !== null) for (const work of d.work ? [d.work] : (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === d.card)).map(w => w.key)) decisionReleases.push({ work, at });
         return true;
       };
       for (const d of decisionsNow ?? []) if (d?.status === "open" && !releasedDecision(d) && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push({ ...item(d.card ?? null, null, d.work ?? null, "@user"), kind: "decision", ref: d.id });
@@ -635,7 +640,7 @@ export async function runWatch({
       idleMs,
       ledgerError,
       parents,
-      { works, cards: cards ?? [], waits, peerEntries: observationError ? [] : mailEntries, ownTurn,
+      { works, cards: cards ?? [], waits, decisionReleases, peerEntries: observationError ? [] : mailEntries, ownTurn,
         executionEntries: observationError || !cards ? null : entries, liveRoleSessions: observationError ? null : roles.liveSessions }
     );
     const supervisorCheck=supervisorScope&&!observationError

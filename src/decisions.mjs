@@ -213,7 +213,7 @@ export class DecisionStore {
 }
 export function decisionCommand(args,flags,{home,by,notify,now,userNotify}){
  const s=new DecisionStore(home,{notify,userNotify}),[cmd,key]=args;
- if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 [--reversible 되돌리는방법한줄 --not-prohibited] | request --chat --work <업무주소> --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음) | proceed <ID> --revision N (완전자율에서 대기 시간이 지난 --reversible을 붙인 결정만 추천대로 진행함 기록. 결정은 닫지 않음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
+ if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 [--reversible 되돌리는방법한줄 --not-prohibited(둘은 함께만 준다)] | request --chat --work <업무주소> --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음) | proceed <ID> --revision N (완전자율에서 대기 시간이 지난 --reversible을 붙인 결정만 추천대로 진행함 기록. 결정은 닫지 않음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
  if(cmd==='request'&&flags.chat){
   if(key)throw new Error('--chat 결정은 카드키 없이 --work <업무주소>로 등록');
   const d=s.request(null,{question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,work:flags.work,chat:true,reversible:flags.reversible,notProhibited:flags['not-prohibited']},by);
