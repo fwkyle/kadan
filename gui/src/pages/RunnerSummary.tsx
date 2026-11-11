@@ -1,12 +1,12 @@
 import { fallbackLabels } from "../runner-draft";
 import { HARD_ROLE } from "../preset-draft";
-import type { Choice, RunnersData } from "./Runners";
+import type { Choice, RunnersData, Settings } from "./Runners";
 
-const text = (c: Choice) => [c.runner, c.model, c.effort].filter(Boolean).join(" / ");
+// 모델을 아직 안 고른 초안은 빈 글자로 두지 않고 그렇다고 말한다.
+const text = (c: Choice) => [c.runner, c.model || "(모델 안 골랐음)", c.effort].filter(Boolean).join(" / ");
 
 // 요약표 한 줄의 글. 어려운 일 작업자는 값이 없는 것이 기본이라 "미설정" 대신 "작업자와 같음"으로 말한다.
-export function summaryCells(data: RunnersData, role: string) {
-  const settings = data.settings!;
+export function summaryCells(data: RunnersData, role: string, settings: Settings = data.settings!) {
   const current = settings.presets[settings.activePreset].roles[role] as Choice | undefined;
   const fallbacks = fallbackLabels(settings, role);
   if (role === "senior")
