@@ -189,6 +189,30 @@ test('F3: 안내 문구는 부른 쪽에 맞춘다. 요청자·사람에게는 �
   assert.ok(!human.includes('만 닫을 수'),human);
 });
 
+test('R2-F1: 자동 왕복 명령(auto-*)은 결과가 비동기라 안내도 닫기도 하지 않는다. 실패해도, 업무를 써도 조용하다',async()=>{
+  const f=fixture();const key='repo/auto';
+  f.works.create({key,title:'자동',goal:'목표',scope:'범위',acceptance:'조건',owner:'a-감독',repoPath:f.home,board:'repo-board'});
+  for(const id of ['impl','rev']){const c=f.cards.create({repo:'repo',id,repoPath:f.home,body:`# ${id}`});f.cards.update(c.key,{status:'ready',scope:'시험'},{revision:1,note:'승인'});}
+  for(const [role,pid] of [['w-작업자','10001'],['w-검수자','10002'],['a-감독','10003']])appendLedger({kind:'start',role,session:`kadan-${role}`,floor:'tmux',panePid:pid,cmd:'codex --model test-model'},f.home);
+  const d=f.store.request(null,{question:'자동 중에?',work:key,chat:true},SUPER);
+  const pids={'w-작업자':'10001','w-검수자':'10002','a-감독':'10003'};
+  const floor={name:'tmux',alive:n=>!!pids[n.slice(6)],pid:n=>pids[n.slice(6)],read:()=>'',send:()=>({})};
+  const ctx={home:f.home,by:'a-감독',floor,observeDone:()=>null,send:()=>({})};
+  const call=async(args,flags)=>{const lines=[],write=process.stderr.write;process.stderr.write=x=>{lines.push(String(x));return true;};
+    let error;try{await workCommand(args,flags,ctx);}catch(e){error=e;}finally{process.stderr.write=write;}return {lines,error};};
+  const bad=await call(['auto-configure',key],{revision:99,implementation:'repo/impl',review:'repo/rev',worker:'w-작업자',reviewer:'w-검수자',notify:'a-감독'});
+  assert.ok(bad.error);assert.deepEqual(bad.lines,[],'revision 불일치: 아무것도 쓰지 못한 실패는 조용하다');
+  const zero=await call(['auto-run',key],{interval:0});
+  assert.match(zero.error.message,/0\.1~60초/);assert.deepEqual(zero.lines,[],'interval 0 실패도 조용하다');
+  const ok=await call(['auto-configure',key],{revision:f.works.get(key).revision,implementation:'repo/impl',review:'repo/rev',worker:'w-작업자',reviewer:'w-검수자',notify:'a-감독'});
+  assert.equal(ok.error,undefined,ok.error?.message);const revBefore=f.works.get(key).revision;
+  assert.deepEqual(ok.lines,[],'업무를 쓴 auto-*도 안내하지 않는다');
+  const run=await call(['auto-run',key],{interval:0.1});
+  assert.deepEqual(run.lines,[],'auto-run도 안내하지 않는다');
+  assert.ok(f.works.get(key).revision>revBefore,'auto-run이 업무에 실행을 써도(실제 쓰기) 조용하다');
+  assert.equal(f.store.get(d.id).status,'open','auto-*는 결정을 닫지 않는다');
+});
+
 test('대시보드 폼(WorkStore.change)과 우편 차례 되돌림은 업무 명령 경로를 거치지 않아 채팅 결정을 닫지 않는다',()=>{
   const f=fixture();const d=f.store.request(null,{...chatInput,chat:true},SUPER);
   f.works.change('repo/w1','update',{turnOwner:'b-감독'},{revision:1,by:'사람',note:'폼 저장'});

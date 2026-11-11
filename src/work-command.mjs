@@ -72,10 +72,12 @@ function closeRolesAfterComplete([action],flags,context,result){
 // 규칙(차례 변경은 kyle이 답했다는 근거가 아니다): execute는 부른 역할이 요청한 결정만, complete·cancel은 모두, 그 밖은 닫지 않는다.
 // 명령이 실패해도 업무에 쓴 것이 있으면(revision이 달라짐) 알리되 닫지는 않는다. 읽기 명령은 내지 않는다.
 const CHAT_CLOSE={execute:['후속 발령으로 자동 닫힘','requester'],complete:['업무 완료로 자동 닫힘','all'],cancel:['업무 취소로 자동 닫힘','all']};
-const READ_ACTIONS=new Set(['list','show','auto-show']);
+// 안내·닫기 대상이 아닌 명령: 읽기(list·show)와 create, 그리고 자동 왕복(auto-*). auto-*는 프로그램·작업자가 부르고 결과가 비동기라 안내를 읽는 감독이 없다.
+const READ_ACTIONS=new Set(['list','show']);
+const skipsChat=action=>READ_ACTIONS.has(action)||action==='create'||String(action).startsWith('auto-');
 const NOTICE_MAX=5;
 function revisionOf([action='list',key],flags,{home}){
- if(READ_ACTIONS.has(action)||action==='create'||!key||flags.help)return null;
+ if(skipsChat(action)||!key||flags.help)return null;
  try{return new WorkStore(home).get(key)?.revision??null;}catch{return null;}
 }
 function chatNotice(d,via,by){
@@ -87,7 +89,7 @@ function chatNotice(d,via,by){
   :`${head} · 요청자(${d.requestedBy}) 또는 kyle만 닫을 수 있습니다 — kyle 답을 받았으면 ${d.requestedBy}가 닫습니다: ${command}`;
 }
 function chatDecisionsAfter([action='list',key],flags,{home,by},revisionBefore,failure){
- if(READ_ACTIONS.has(action)||action==='create'||!key||flags.help)return;
+ if(skipsChat(action)||!key||flags.help)return;
  if(failure){ // 실패한 명령은 업무에 쓴 것이 있을 때만 알린다
   let after=null;try{after=new WorkStore(home).get(key)?.revision??null;}catch{}
   if(after===null||after===revisionBefore)return;
