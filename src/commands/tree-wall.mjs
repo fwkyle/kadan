@@ -221,7 +221,7 @@ export function cmdWall(_argv, flags) {
   const home = ledgerHome();
   const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
   const server = createWallServer(createWallSnapshotLoader(runtime, {summaryBodies:true}),
-    {home,cacheSec,gui:true,loadSummary,
+    {home,cacheSec,gui:true,loadSummary,runtime,
     loadLedger:createDashboardLedgerReader(home, {runtime}),
     loadMail:createDashboardMailReader(home, {runtime}),
     loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly:true,summaryBodies:true})});
