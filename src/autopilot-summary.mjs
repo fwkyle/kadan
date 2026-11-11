@@ -83,7 +83,8 @@ export function summarizeAutopilot({start, phase, endedAt, entries, decisionEven
   const startMs = Date.parse(start.t);
   const inWindow = e => { const ms = Date.parse(e.t); return ms >= startMs && ms <= endedAt; };
   const decisions = countDecisions(decisionEvents, startMs, endedAt);
-  const restarts = entries.filter(e => e?.kind === 'stop' && e.restart === true && inWindow(e)).length;
+  // AI 역할의 restart(stop+restart:true)와 감시기·대시보드 재시작(revive reason=restart 성공). 대시보드 재시작의 stop 줄(reason infra-restart)은 revive 줄과 겹치므로 세지 않는다.
+  const restarts = entries.filter(e => inWindow(e) && ((e?.kind === 'stop' && e.restart === true && e.reason !== 'infra-restart') || (e?.kind === 'revive' && e.reason === 'restart' && e.result === 'started'))).length;
   const delivered = new Set((start.delivered ?? []).map(d => d.mailId).filter(Boolean));
   const sends = entries.filter(e => e?.kind === 'send' && inWindow(e) && !delivered.has(e.mailId));
   // 보류: 사람 우편함으로 간 `[Autopilot 보류] <한 줄>` 편지. 본문은 원장이 아니라 옆 파일에 있다.

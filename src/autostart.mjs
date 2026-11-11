@@ -56,6 +56,15 @@ ${vars.join('\n')}
 const STALE_FIX = 'kadan autostart remove → kadan autostart install → launchctl 재적재 (status는 고치지 않는다)';
 const unxml = (s) => s.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
 
+// 설치된 plist의 WorkingDirectory(launchd가 `kadan up --auto`를 부르는 폴더). 없거나 못 읽으면 null. 읽기만 한다.
+export function installedWorkingDirectory(userHome = os.homedir()) {
+  try {
+    const text = fs.readFileSync(autostartPath(userHome), 'utf8');
+    const value = text.match(/<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/)?.[1];
+    return value ? unxml(value) : null;
+  } catch { return null; }
+}
+
 // 설치된 plist에 적힌 node·cli·KADAN_ROTTIE_BIN 경로를 읽기만 한다. 쓸 수 없는 것만 돌려준다.
 // reason 없음 = 파일이 없다. node·Rottie는 실행 권한(X_OK), cli는 node가 읽는 스크립트라 읽기(R_OK)만 본다.
 // node·cli 값을 못 읽으면(plist가 아님·ProgramArguments 없음·빈 값) 정상으로 넘기지 않고 NO_REQUIRED_ARG로 알린다. Rottie 키가 없는 것은 정상이다.

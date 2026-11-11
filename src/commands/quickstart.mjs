@@ -24,7 +24,7 @@ import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
 import { launchServerRole, sendRestoreNotice, systemBootTime } from "../server-restore-runtime.mjs";
-import { tmux, paneState, captureTail, wrapNoTmux, paneSocketEnv } from "../floor-tmux.mjs";
+import { tmux, paneState, captureTail, wrapNoTmux, wrapInfraEnv, setCleanInfraDashboard, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
@@ -79,7 +79,7 @@ export function cmdUp(_argv, flags) {
 }
 
 // 되살리기 보조: 어떤 세션이 어떤 상태인지 묻고, 죽은 창을 치우고, 원장·알림을 남긴다.
-function reviveOps(home) {
+export function reviveOps(home) {
   const sessionOf = (target) => sessionName(target);
   return {
     sessionOf,
@@ -118,6 +118,7 @@ function reviveOps(home) {
 const reviveResult = (value) => value === "started" || value === "restored" ? "started" : value === "reused" ? "reused" : /^(blocked|locked)/.test(value ?? "") || value === "blocked" ? "blocked" : "failed";
 
 function runUpOnce({ home, flags, auto, deferNotices }) {
+  if (auto) setCleanInfraDashboard(true);   // 자동 되살리기가 만드는 대시보드만 자식 쪽 환경 고정(사람이 친 up은 그대로)
   const tmuxFloor = floor.name === "tmux";
   const baseOps = tmuxFloor ? reviveOps(home) : null;
   const ops = deferNotices ? deferNotices(baseOps) : baseOps;
@@ -177,7 +178,7 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
 const KEEP_DEAD_PANE = (session) => [";", "set-option", "-t", `=${session}:`, "remain-on-exit", "on"];
 
 // 감시기는 역할이 아니라 원장 기록 없이 tmux 세션 kadan-watch에서 돈다(사람이 띄우던 방식 그대로).
-function startWatchSession(home) {
+export function startWatchSession(home) {
   const session = sessionName("watch");
   const node = process.execPath, cli = new URL("../cli.mjs", import.meta.url).pathname;
   const env = ["-e", `KADAN_HOME=${home}`, "-e", paneSocketEnv(), ...(process.env.KADAN_SOCKET ? ["-e", `KADAN_SOCKET=${process.env.KADAN_SOCKET}`] : [])];
@@ -186,7 +187,7 @@ function startWatchSession(home) {
     running: () => readWatchProcesses(spawnSync, watchProcessName(home)),
     alive: () => floor.alive(session),
     create: () => {
-      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, wrapNoTmux(`'${node}' '${cli}' watch`), ...KEEP_DEAD_PANE(session)]);
+      const result = tmux(["new-session", "-d", "-s", session, "-c", new URL("../..", import.meta.url).pathname, ...env, wrapInfraEnv(`'${node}' '${cli}' watch`), ...KEEP_DEAD_PANE(session)]);
       if (result.status !== 0) throw new Error((result.stderr || "tmux new-session 실패").trim());
     },
   });
