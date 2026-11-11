@@ -1,8 +1,9 @@
 // Why: 감시/우편 사건 때문에 바뀌지 않은 카드·업무 이력을 다시 읽지 않는다.
 // 처음에는 heads의 카드·업무 흐름을 모두 읽어 (흐름 이름 → 순번)을 기억하고, 그 뒤에는 새 사건(rowid > 직전)이 가리킨 흐름만 다시 읽는다.
 // 새 사건이 없으면 heads·events 줄을 읽지 않는다(마지막 사건 번호 한 줄만 확인한다). 돌려주는 세 문자열은 매번 전체를 읽던 때와 같다.
-// 원장이 10배여도 변경 없는 호출은 마지막 사건 번호 확인과 카드 파일 stat뿐이고, 변경 있는 호출은 새 사건 수에 비례한다.
-// (해시는 그 종류의 흐름이 바뀐 호출에서만 기억한 표로 다시 만든다. 그 비용은 카드·업무 수에 비례하고 DB는 읽지 않는다.)
+// 원장이 10배여도 변경 없는 호출은 마지막 사건 번호 확인과 카드 파일 stat뿐이다. 새 사건 범위 읽기는 새 사건 수에 비례한다.
+// 카드·업무 흐름이 바뀐 호출은 그 종류의 기억한 표를 복사·정렬·해시한다: 카드(또는 업무) 수 C에 대해 O(C log C)의 CPU가 들고
+// DB는 읽지 않는다(10배 자료에서의 절대 시간은 재지 않았다).
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {databaseIdentity, storageMode, storageSnapshot} from './storage.mjs';
@@ -73,8 +74,9 @@ export function createDashboardDataVersions(home, {now = () => Date.now()} = {})
 
   return {
     read() {
-      if (storageMode(home) === 'none') {state = null;return {all: null, cards: null, works: null};}
+      // 저장소 설정 확인이 던져도 기억을 버린다(다음 호출이 전체를 읽게).
       try {
+        if (storageMode(home) === 'none') {state = null;return {all: null, cards: null, works: null};}
         return storageSnapshot(home, db => {
           const fileIdentity = databaseIdentity(home);
           const rowid = db.prepare('SELECT max(rowid) AS v FROM events').get().v ?? 0;

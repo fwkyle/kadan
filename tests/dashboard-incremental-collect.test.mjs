@@ -391,6 +391,33 @@ test('저장소가 없는 홈은 지금처럼 빈 결과이고, 저장소가 생
   assert.equal(briefs.read(KEYS).get(k1).brief.title, '첫');
 });
 
+test('저장소 설정 확인이 실패해도 기억을 버리고, 설정을 되돌린 뒤 첫 호출은 전체를 다시 읽는다', () => {
+  const home = newHome(), [k1] = KEYS, marker = path.join(home, 'storage.json');
+  appendStream(home, `cards/${k1}/events.jsonl`, {revision: 1});
+  appendStream(home, `cards/${k1}/briefs.jsonl`, {key: k1, sourceHash: 'a', title: '첫'});
+  const versions = createDashboardDataVersions(home, {now: clock()});
+  const briefs = createDashboardBriefReader(home, {now: clock()});
+  const first = versions.read();
+  assert.equal(briefs.read([k1]).get(k1).brief.title, '첫');
+  assert.equal(versions.info().streams, 1);assert.equal(briefs.info().streams, 1);
+  const before = {versions: versions.info().full, briefs: briefs.info().full};
+  // 저장소 선택 기록을 읽을 수 없게 만든다: storageMode가 DB를 열기도 전에 던진다.
+  const saved = fs.readFileSync(marker, 'utf8');
+  fs.writeFileSync(marker, '{잘못된 JSON');
+  assert.throws(() => storageMode(home), SyntaxError);
+  assert.throws(() => versions.read(), SyntaxError);
+  assert.throws(() => briefs.read([k1]), SyntaxError);
+  assert.equal(versions.info().streams, 0, '버전 기억을 버렸다');
+  assert.equal(briefs.info().streams, 0, '설명 기억을 버렸다');
+  assert.equal(versions.info().full, before.versions);assert.equal(briefs.info().full, before.briefs);
+  fs.writeFileSync(marker, saved);
+  assert.deepEqual(versions.read(), first);
+  assert.deepEqual(versions.read(), oracleVersions(home));
+  assert.equal(briefs.read([k1]).get(k1).brief.title, '첫');
+  assert.equal(versions.info().full, before.versions + 1, '설정을 되돌린 뒤 첫 호출이 전체 읽기');
+  assert.equal(briefs.info().full, before.briefs + 1, '설정을 되돌린 뒤 첫 호출이 전체 확인');
+});
+
 test('10분 안전망: 사건 없이 heads만 달라진 변경은 다음 전체 읽기 때 기준과 다시 같아진다', () => {
   const home = newHome(), now = clock(), [k1, k2] = KEYS;
   for (const key of [k1, k2]) {
