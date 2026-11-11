@@ -1,5 +1,7 @@
 import "./helpers/isolated-home.mjs";
 import test from 'node:test';
+import {spawn} from 'node:child_process';
+import {notifyUser, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -304,6 +306,44 @@ test('(5) 통과: 결정은 열린 채 진행 기록이 덧붙고, 알림 1회·
   w4.hook.impl = () => ({error: '전달 실패'});
   const d4 = w4.request();
   assert.match(withNotify(() => w4.proceed(d4.id, {at: Date.parse(d4.at) + 31 * MIN})).warnings.join(), /알림을 보내지 못했습니다: 전달 실패/);
+});
+
+// 갈아 끼운 알림 함수가 아니라 실제 notifyUser → 게시 정책(postPolicy)을 지나 '보냄'에 이르는지 본다. 디코는 따로 띄운 가짜 웹훅이다.
+test('(5b) 진행 알림은 실제 게시 정책을 지나 새 글로 나가고, 정책이 건너뛰면 경고가 난다', async () => {
+  resetDiscordBlock();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-full-hook-'));
+  const logFile = path.join(dir, 'requests.jsonl');
+  const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
+  const child = spawn(process.execPath, [helper, logFile, JSON.stringify([{status: 200, body: {id: 'D1', channel_id: 'C1'}}])], {stdio: ['ignore', 'pipe', 'inherit']});
+  try {
+    const port = await new Promise(resolve => child.stdout.once('data', d => resolve(Number(String(d).match(/PORT (\d+)/)[1]))));
+    const envFile = path.join(dir, 'secret.env');
+    fs.writeFileSync(envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:${port}/api/webhooks/111/FAKETOKEN-abc123\nDISCORD_USER_ID="424242424242"\n`);
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: envFile};
+    const w = world({decideAfter: '30m'});
+    w.hook.impl = (m, o) => notifyUser(m, () => ({status: 0}), {...o, home: w.home, env});
+    const d = w.request();
+    const r = withNotify(() => w.proceed(d.id, {at: Date.parse(d.at) + 31 * MIN}));
+    assert.equal(r.warnings, undefined, `경고 없음: ${r.warnings}`);
+    const sent = fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    assert.equal(sent.length, 1, '디코 요청 1회');
+    assert.match(JSON.parse(sent[0].body).content, /추천대로 진행함/);
+    assert.deepEqual(JSON.parse(sent[0].body).allowed_mentions, {parse: []}, '조용히(멘션 없음)');
+    const log = fs.readFileSync(path.join(w.home, NOTIFY_LOG_FILE), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    assert.ok(log.some(e => e.kind === 'decision-proceed' && e.outcome === 'sent'), JSON.stringify(log));
+    // 정책이 모르는 종류로 건너뛰는 경우는 경고로 드러난다(진행 기록은 남는다).
+    const w2 = world({decideAfter: '30m'});
+    w2.hook.impl = (m, o) => notifyUser(m, () => ({status: 0}), {...o, kind: 'decision-unknown', home: w2.home, env});
+    const d2 = w2.request();
+    const r2 = withNotify(() => w2.proceed(d2.id, {at: Date.parse(d2.at) + 31 * MIN}));
+    assert.match(r2.warnings.join(), /나갔다는 표시가 없습니다/);
+    assert.ok(w2.store.get(d2.id).proceeded);
+    // KADAN_NOTIFY=off는 경고 없이 넘어간다.
+    const w3 = world({decideAfter: '30m'});
+    const d3 = w3.request();
+    const prev = process.env.KADAN_NOTIFY; process.env.KADAN_NOTIFY = 'off';
+    try { assert.equal(w3.proceed(d3.id, {at: Date.parse(d3.at) + 31 * MIN}).warnings, undefined); } finally { process.env.KADAN_NOTIFY = prev; }
+  } finally { child.kill('SIGTERM'); }
 });
 
 // (6) 진행 뒤 사람 답 --------------------------------------------------------------------------------------------------

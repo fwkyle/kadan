@@ -200,6 +200,7 @@ export class DecisionStore {
    const repo=(saved.card??saved.work??'').split('/')[0],tag=`[${repo}]`;
    const r=this.userNotify(`${tag} ${line}. 늦게라도 다른 답을 주면 그 답이 우선합니다: ${decisionLink(this.home,saved.id)}`,{kind:'decision-proceed',key:`decision:${saved.id}:proceed`,tagRepo:repo,...(saved.work?{work:saved.work}:{repo,forumKey:`${repo}/__decisions__`,forumTitle:`${tag} 결정`})});
    if(r&&typeof r==='object'&&r.error)warnings.push(`kyle 알림을 보내지 못했습니다: ${String(r.error).slice(0,200)}`);
+   else if(!proceedNotified(r))warnings.push(`kyle 알림이 나갔다는 표시가 없습니다(${String(r?.discord?.reason??r?.discord?.outcome??'결과 없음').slice(0,120)}). 진행 기록은 남았습니다`);
   }
  }catch(error){warnings.push(`kyle 알림을 보내지 못했습니다: ${String(error?.message??error).slice(0,200)}`);}
  try{appendLedger(buildAutopilotNote({words:['decision',line],flags:saved.work?{work:saved.work}:{},by,now:now_}),this.home);}
@@ -216,6 +217,9 @@ export class DecisionStore {
    (shouldClose(d)?closed.push(this.cancel(d.id,{revision:d.revision,reason,via},AUTO_BY)):kept.push(d));
   return {closed,kept};}
 }
+// 진행 알림이 나갔는지: 디코에 새로 올렸거나(posted), 같은 키로 이미 보냈거나(duplicate), 디코 설정이 없어 맥 알림으로 갔을 때(via system, error 없음)만 참이다.
+// 정책 건너뜀(skipped)·보내지 않음(via none)·결과 없음은 '나갔다는 표시 없음'이다.
+const proceedNotified=r=>Boolean(r&&typeof r==='object'&&!r.skipped&&(r.posted===true||r.duplicate===true||(r.via==='system'&&!r.error)));
 export function decisionCommand(args,flags,{home,by,notify,now,userNotify}){
  const s=new DecisionStore(home,{notify,userNotify}),[cmd,key]=args;
  if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 [--reversible 되돌리는방법한줄 --not-prohibited(둘은 함께만 준다)] | request --chat --work <업무주소> --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음) | proceed <ID> --revision N (완전자율에서 대기 시간이 지난 --reversible을 붙인 결정만 추천대로 진행함 기록. 결정은 닫지 않음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';

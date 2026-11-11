@@ -129,8 +129,10 @@ test('경보 글이 아무리 많아도 결정 요청 메시지 기록은 밀려
 // notifyUser( 호출의 인자 범위를 괄호 짝으로 찾아(여러 줄 가능) 그 안의 kind 값을 모은다. 문자열 속 괄호는 따옴표 안이면 건너뛴다.
 function callKinds(text) {
   const kinds = [];
-  for (let at = text.indexOf('notifyUser('); at !== -1; at = text.indexOf('notifyUser(', at + 1)) {
-    let depth = 0, quote = null, i = at + 'notifyUser'.length;
+  // notifyUser( 뿐 아니라 this.userNotify( 같은 메서드 호출도 찾는다(DecisionStore는 userNotify로 감싸 부른다).
+  for (const m of text.matchAll(/(?:notifyUser|userNotify)\(/g)) {
+    const at = m.index;
+    let depth = 0, quote = null, i = at + m[0].length - 1;
     for (; i < text.length; i++) {
       const c = text[i];
       if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
@@ -148,6 +150,15 @@ test('종류 대조는 여러 줄 notifyUser 호출도 읽는다', () => {
   const fake = "notifyUser(\n  `경보 ${f(x)}`,\n  spawn,\n  {\n    key: 'k',\n    kind: 'review-unregistered',\n  },\n);\nnotifyUser('a', s, {kind: 'alert'});";
   assert.deepEqual(callKinds(fake), ['review-unregistered', 'alert']);
   assert.ok(!KNOWN_KINDS.includes('review-unregistered'));              // 이런 종류가 소스에 생기면 아래 대조 시험이 실패한다
+});
+
+test('종류 대조는 this.userNotify( 메서드 호출의 종류도 읽는다', () => {
+  assert.deepEqual(callKinds("const r = this.userNotify(`${tag} 글`, {kind:'decision-proceed', key: 'k'});"), ['decision-proceed']);
+});
+
+test('추천대로 진행 알림(decision-proceed)은 새 글 대상이다', () => {
+  assert.deepEqual(postPolicy({kind: 'decision-proceed', key: 'decision:x:proceed'}), {post: true});
+  assert.ok(KNOWN_KINDS.includes('decision-proceed'));
 });
 
 test('Autopilot 아침 요약(autopilot-summary)은 새 글 대상이다', () => {
