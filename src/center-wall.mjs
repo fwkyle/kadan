@@ -175,7 +175,7 @@ export async function startSecretaryDefault({cli=new URL('./cli.mjs',import.meta
 //   화면은 28초에 '진행 중'으로 답하고, 자식은 최종 상한 120초까지 돌게 한다. 120초 근거: 실측 왕복 1-2초의 60배
 //   이상이고 검수가 주입한 60초 지연보다 길다. 이 상한은 영구 정지한 자식의 정리 장치이지 화면 응답이 아니다.
 export async function restartRoleDefault({role,reason,expectPid,cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile),responseTimeout=28_000}={}) {
- const settled=run(process.execPath,[cli,'restart',role],{env:{...env,KADAN_ROLE:'',KADAN_RESTART_REASON:reason,KADAN_RESTART_EXPECT_PID:String(expectPid)},encoding:'utf8',timeout:120_000}).then(
+ const settled=run(process.execPath,[cli,'restart',role],{env:{...env,KADAN_ROLE:'',KADAN_RESTART_REASON:reason,KADAN_RESTART_EXPECT_PID:String(expectPid),KADAN_RESTART_SCREEN_PID:String(process.pid)},encoding:'utf8',timeout:120_000}).then(
   ({stdout})=>({output:String(stdout||'').trim().split('\n').slice(0,6).join('\n')}),
   error=>{throw error.killed&&!error.stderr
    ?new Error('최종 상한 120초를 넘겨 자식을 중단했다 — 역할 상태와 회복 잠금을 확인하세요')

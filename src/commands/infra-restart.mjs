@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { floor } from "../floor.mjs";
+import { setCleanInfraDashboard } from "../floor-tmux.mjs";
 import { appendLedger, ledgerHome } from "../ledger.mjs";
 import { sessionName, die } from "../cli-basics.mjs";
 import { restartInfra, INFRA_RESTART_TARGETS } from "../infra-restart.mjs";
@@ -71,6 +72,7 @@ export function infraDeps(home) {
       normalizeForRevive();
       if (target === "watch") return startWatchSession(home);
       const { cmd } = dashboardCommand({ home, flags, cliPath: CLI });
+      setCleanInfraDashboard(true);   // 재시작이 만드는 대시보드만 자식 쪽 환경 고정(사람의 up 경로는 안 건드림)
       callWithoutExit(() => cmdStart([DASHBOARD_ROLE], { cmd, hidden: true }));
       return "started";
     },

@@ -226,7 +226,7 @@ test('11 화면 버튼: 감시기·대시보드는 HTTP 처리부와 CLI 둘 다
   } finally { server.close(); }
   // CLI: 화면이 넘기는 환경값이 있으면 floor를 보기 전에 거절한다(끄지 않는다)
   for (const target of ['watch', '대시보드']) {
-    const r = spawnSync(process.execPath, [CLI, 'restart', target], {env: {...process.env, KADAN_HOME: home, KADAN_RESTART_REASON: '이유', KADAN_RESTART_EXPECT_PID: '1', KADAN_ROLE: ''}, encoding: 'utf8', timeout: 30000});
+    const r = spawnSync(process.execPath, [CLI, 'restart', target], {env: {...process.env, KADAN_HOME: home, KADAN_RESTART_REASON: '이유', KADAN_RESTART_EXPECT_PID: '1', KADAN_RESTART_SCREEN_PID: String(process.pid), KADAN_ROLE: ''}, encoding: 'utf8', timeout: 30000});
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, /화면에서는 감시기·대시보드를 다시 띄울 수 없습니다/);
   }
@@ -296,4 +296,30 @@ test('15 Autopilot 요약의 재시작 수: 감시기 revive(reason restart 성�
   ];
   const s = summarizeAutopilot({start, phase: 'off', endedAt: T0 + 10_000, entries, decisionEvents: [], readBody: () => null});
   assert.equal(s.counts.restarts, 3);
+});
+
+test('16 재시작·자동 되살리기의 대시보드 세션만 자식 쪽 환경을 고정하고, 사람 up·다른 역할은 그대로다', async () => {
+  const {buildTmuxCreateArgv, setCleanInfraDashboard} = await import('../src/floor-tmux.mjs');
+  const cmdOf = argv => argv.at(-1);
+  try {
+    setCleanInfraDashboard(false);
+    assert.doesNotMatch(cmdOf(buildTmuxCreateArgv({session: 'kadan-대시보드', role: '대시보드', cwd: '/x', cmd: 'node cli dashboard', home: '/h'})), /KADAN_WINDOW=none/, '사람이 친 up은 그대로');
+    setCleanInfraDashboard(true);
+    const dash = cmdOf(buildTmuxCreateArgv({session: 'kadan-대시보드', role: '대시보드', cwd: '/x', cmd: 'node cli dashboard', home: '/h'}));
+    assert.match(dash, /unset TMUX TMUX_PANE KADAN_RESTART_REASON KADAN_RESTART_EXPECT_PID KADAN_RESTART_SCREEN_PID; export KADAN_WINDOW=none KADAN_WINDOW_FORCE=1; node cli dashboard/);
+    assert.doesNotMatch(dash, /KADAN_ROLE /, '대시보드 자기 역할 값(-e)은 지우지 않는다');
+    const other = buildTmuxCreateArgv({session: 'kadan-w', role: 'w', cwd: '/x', cmd: 'claude', home: '/h'});
+    assert.doesNotMatch(cmdOf(other), /KADAN_WINDOW=none/, '다른 역할은 그대로');
+    assert.ok(buildTmuxCreateArgv({session: 'kadan-대시보드', role: '대시보드', cwd: '/x', cmd: 'c', home: '/h'}).includes('KADAN_ROLE=대시보드'));
+  } finally { setCleanInfraDashboard(false); }
+});
+
+test('17 화면 요청 판정은 그 호출 하나의 표식(부모 pid)이 맞을 때만: 세션에 남은 옛 KADAN_RESTART_* 값에는 속지 않는다', () => {
+  const home = newHome();
+  const run = extra => spawnSync(process.execPath, [CLI, 'restart', 'watch', '--bogus'], {env: {...process.env, KADAN_HOME: home, KADAN_ROLE: '', KADAN_RESTART_REASON: '옛 이유', KADAN_RESTART_EXPECT_PID: '777', ...extra}, encoding: 'utf8', timeout: 30000});
+  const stale = run({KADAN_RESTART_SCREEN_PID: '1'});          // 옛 표식: 내 부모 pid와 다르다
+  assert.doesNotMatch(stale.stderr, /화면에서는 감시기·대시보드를 다시 띄울 수 없습니다/);
+  const screen = run({KADAN_RESTART_SCREEN_PID: String(process.pid)});   // 이 호출의 부모(이 시험 프로세스)가 붙인 표식
+  assert.equal(screen.status, 2);
+  assert.match(screen.stderr, /화면에서는 감시기·대시보드를 다시 띄울 수 없습니다/);
 });

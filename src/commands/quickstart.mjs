@@ -24,7 +24,7 @@ import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
 import { launchServerRole, sendRestoreNotice, systemBootTime } from "../server-restore-runtime.mjs";
-import { tmux, paneState, captureTail, wrapNoTmux, wrapInfraEnv, paneSocketEnv } from "../floor-tmux.mjs";
+import { tmux, paneState, captureTail, wrapNoTmux, wrapInfraEnv, setCleanInfraDashboard, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
@@ -118,6 +118,7 @@ export function reviveOps(home) {
 const reviveResult = (value) => value === "started" || value === "restored" ? "started" : value === "reused" ? "reused" : /^(blocked|locked)/.test(value ?? "") || value === "blocked" ? "blocked" : "failed";
 
 function runUpOnce({ home, flags, auto, deferNotices }) {
+  if (auto) setCleanInfraDashboard(true);   // 자동 되살리기가 만드는 대시보드만 자식 쪽 환경 고정(사람이 친 up은 그대로)
   const tmuxFloor = floor.name === "tmux";
   const baseOps = tmuxFloor ? reviveOps(home) : null;
   const ops = deferNotices ? deferNotices(baseOps) : baseOps;
