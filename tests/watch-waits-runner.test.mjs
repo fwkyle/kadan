@@ -64,9 +64,9 @@ const progressCalls=async(extra,decisionOver)=>{
  const {calls,records}=await simulate({until:40,decisions,hold:hold30,releaseAt:33,...extra});
  return {progress:calls.filter(c=>c.source==='progress').map(c=>[c.minute,c.role]),records};
 };
-test('완전자율 W1: 대기 시간(30분)이 지난 --reversible 결정은 답 대기에서 빠져 w2 작업이 평소대로 호출된다',async()=>{
+test('완전자율 W1: 대기 시간(30분)이 지난 --reversible 결정은 사용자 답 대기에서 빠져 요청한 역할의 할 일이 된다(진행 기록 전까지 그 카드의 정체 판정은 계속 쉰다)',async()=>{
  const {progress,records}=await progressCalls({readAutopilotWingman:()=>ap()});
- assert.deepEqual(progress.map(c=>c[1]),['w1','w2']);
+ assert.deepEqual(progress.map(c=>c[1]),['w1']);
  assert.equal(records.some(e=>e.kind==='decision'||e.kind==='autopilot-note'),false,'감시기는 결정·원장 기록을 쓰지 않는다');
 });
 test('완전자율 W2: 대기 시간 전(60분 설정)·낮은 단계·꺼짐·--reversible 없음·읽기 실패는 계속 답 대기',async()=>{

@@ -205,11 +205,16 @@ export class DecisionStore {
  try{appendLedger(buildAutopilotNote({words:['decision',line],flags:saved.work?{work:saved.work}:{},by,now:now_}),this.home);}
  catch(error){warnings.push(`요약 기록(autopilot note)을 남기지 못했습니다: ${String(error?.message??error).slice(0,200)}`);}
  return {already:false,decision:saved,...(warnings.length?{warnings}:{})};}
- // 업무 명령(execute·turn-owner update·complete)이 성공한 뒤, 같은 업무의 열린 채팅 결정만 닫는다. 카드 결정은 건드리지 않는다.
+ // 업무 명령(execute·turn-owner update·complete)이 성공한 뒤, 같은 업무의 열린 채팅 결정 가운데 규칙이 허락한 것만 닫는다.
+ // 카드 결정은 건드리지 않는다. 닫을 대상을 거르는 자리는 `shouldClose` 한 곳이다(조건을 더할 때 여기만 고친다).
+ // rule: 'requester' = 부른 역할(by)이 요청한 결정만, 'all' = 모두, 'none' = 하나도 닫지 않음. 닫지 않고 남긴 열린 결정도 돌려준다.
  // 닫힌 건수의 취소마다 따로 잠근다(업무 쓰기와 같은 트랜잭션에 넣지 않는다). 만료는 만들지 않는다.
- closeChatForWork(work,reason,via){const key=String(work).replace(/^work:/,'');const closed=[];
-  for(const d of this.list())if(d.status==='open'&&d.chat===true&&d.work===key)closed.push(this.cancel(d.id,{revision:d.revision,reason,via},AUTO_BY));
-  return closed;}
+ closeChatForWork(work,reason,via,{rule='all',by}={}){const key=String(work).replace(/^work:/,'');const closed=[],kept=[];
+  // 진행 기록이 붙은 결정(완전자율이 추천대로 진행함)은 요청자 본인의 work execute로 자동 취소하지 않는다: 늦은 사람 답을 받을 수 있어야 한다. 완료·취소(rule all)는 그대로 닫는다.
+  const shouldClose=d=>rule==='all'||(rule==='requester'&&by!==undefined&&d.requestedBy===by&&!d.proceeded);
+  for(const d of this.list())if(d.status==='open'&&d.chat===true&&d.work===key)
+   (shouldClose(d)?closed.push(this.cancel(d.id,{revision:d.revision,reason,via},AUTO_BY)):kept.push(d));
+  return {closed,kept};}
 }
 export function decisionCommand(args,flags,{home,by,notify,now,userNotify}){
  const s=new DecisionStore(home,{notify,userNotify}),[cmd,key]=args;

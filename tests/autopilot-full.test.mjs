@@ -612,3 +612,33 @@ test('R2-F3 잠금 안에서 다시 확인: 잠금을 기다리는 사이 꺼졌
   waitInLock(t.w, () => { clock = Date.parse(t.d.at) + 5 * MIN; });
   refusal(() => t.w.store.proceed(t.d.id, {revision: t.d.revision}, SUPER, {now: () => clock, expectStartedAt: t.first.startedAt}), '대기 시간 전입니다');
 });
+
+// ===== 4라운드: 자동 닫힘과의 접점 =====
+test('R4 자동 닫힘: 진행 기록이 붙은 채팅 결정은 요청자 본인의 work execute로 취소되지 않고, 완료·취소(rule all)는 그대로 닫는다', () => {
+  const w = world({decideAfter: '30m'});
+  const d = w.request();
+  const plain = w.request({question: '진행 기록이 없는 다른 질문입니다', reversible: undefined});
+  w.proceed(d.id, {at: Date.parse(d.at) + 31 * MIN});
+  // 요청자 본인의 execute(rule requester): 진행 기록이 있는 결정은 남기고, 없는 결정은 평소처럼 닫는다
+  const r1 = w.store.closeChatForWork('a/w1', '업무 execute', 'work execute', {rule: 'requester', by: SUPER});
+  assert.deepEqual(r1.kept.map(x => x.id), [d.id]);
+  assert.deepEqual(r1.closed.map(x => x.id), [plain.id]);
+  assert.equal(w.store.get(d.id).status, 'open');
+  // 다른 역할의 execute는 원래부터 닫지 않는다
+  assert.equal(w.store.closeChatForWork('a/w1', 'x', 'work execute', {rule: 'requester', by: OTHER}).closed.length, 0);
+  // 완료·취소(rule all)는 진행 기록이 있어도 닫는다
+  const r2 = w.store.closeChatForWork('a/w1', '업무 완료', 'work complete', {rule: 'all'});
+  assert.deepEqual(r2.closed.map(x => x.id), [d.id]);
+  assert.equal(w.store.get(d.id).status, 'cancelled');
+  assert.ok(w.store.get(d.id).proceeded, '진행 기록은 취소된 이력에도 남는다');
+});
+
+test('R4 채팅 결정(--chat)도 --reversible·--not-prohibited를 받고 같은 기록 대조·낱말 거름이 걸린다', () => {
+  const w = world();
+  const d = w.request();                     // world.request는 chat:true
+  assert.equal(d.chat, true);
+  assert.ok(d.reversible && d.notProhibited);
+  hold(w);
+  code2(() => w.request({question: '다른 질문입니다'}), /보류·관문 거절 기록/);
+  code2(() => w.request({question: '운영 배포를 할까요?'}), /낱말 때문에 막혔으면 kyle 답을 기다립니다|보류·관문 거절 기록/);
+});

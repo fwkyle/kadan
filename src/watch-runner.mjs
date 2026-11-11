@@ -594,9 +594,16 @@ export async function runWatch({
         }
         const at = releaseTime(d, ap);
         if (at !== null) for (const work of d.work ? [d.work] : (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === d.card)).map(w => w.key)) decisionReleases.push({ work, at });
-        return true;
+        // 자격만 생기고 진행 기록은 아직 없으면 그 결정은 "요청한 역할이 처리할 차례"다(진행 권한은 요청한 역할뿐): 답할 역할(answerer)을 요청한 역할로 둔다.
+        // 기존 질문 우편의 방식 그대로라 요청한 역할에게는 본인 차례(1단 + 명령 줄)가 되고, 업무 책임 감독에게는 계속 대기다.
+        // 요청한 역할이 관계표에 없으면 맡길 곳이 없어 진행 기록이 붙을 때까지 책임 감독의 할 일로 둔다(아래 한계: 결과 파일).
+        return d.proceeded || !parents.has(d.requestedBy) ? "free" : "duty";
       };
-      for (const d of decisionsNow ?? []) if (d?.status === "open" && !releasedDecision(d) && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) waits.push({ ...item(d.card ?? null, null, d.work ?? null, "@user"), kind: "decision", ref: d.id });
+      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) {
+        const released = releasedDecision(d);
+        if (released === "free") continue;
+        waits.push({ ...item(d.card ?? null, null, d.work ?? null, released === "duty" ? d.requestedBy : "@user"), kind: "decision", ref: d.id });
+      }
       for (const l of waitingLetters(entries))
         if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), kind: "mail", ref: l.mailId, mailId: l.mailId, asker: l.currentSender || l.by });
       // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.
