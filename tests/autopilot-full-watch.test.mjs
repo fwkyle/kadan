@@ -13,7 +13,7 @@ const MIN = 60_000;
 const SUPER = 'p-슈퍼감독';
 const parents = new Map([['p-작업자', 'p-감독'], ['p-감독', SUPER], [SUPER, '@user']]);
 // 자격이 생긴 순간의 1회 안내(진행자격)는 놀고 있음 안내와 따로 센다(watch-proceed-notice.mjs).
-const NOTICE = /추천대로 진행할 수 있습니다/;
+const NOTICE = /대기 시간이 지났습니다\. 진행할 수 있는지 확인하세요/;
 const iso = ms => new Date(ms).toISOString();
 
 function setup(owner = SUPER) {

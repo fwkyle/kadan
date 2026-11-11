@@ -27,7 +27,7 @@ const cut = (text, n) => {
 };
 
 export const proceedNoticeMessage = (decision, clock) =>
-  [`[감시sh ${clock}] 답 없는 결정의 대기 시간이 지나 추천대로 진행할 수 있습니다(안내 1회).`,
+  [`[감시sh ${clock}] 답 없는 결정의 대기 시간이 지났습니다. 진행할 수 있는지 확인하세요(안내 1회).`,
     `질문: ${cut(decision.question, 100)}`, `추천: ${cut(decision.recommendation, 100)}`, proceedHint(decision)].join('\n');
 
 // 상태는 감시기가 쥔다: state = {seeded, keys:Set}. 처음 후보가 생길 때 한 번만 이미 읽은 원장(entries)에서 채우고,

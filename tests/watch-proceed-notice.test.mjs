@@ -36,7 +36,7 @@ async function cycles({cycles: n = 3, startAt, decisions, ap = apOf(), entries =
   }), error => error === stop);
   return {sent, records};
 }
-const notices = sent => sent.filter(m => /추천대로 진행할 수 있습니다/.test(m.message));
+const notices = sent => sent.filter(m => /대기 시간이 지났습니다\. 진행할 수 있는지 확인하세요/.test(m.message));
 const noticeRecords = records => records.filter(r => r.alertKind === PROCEED_NOTICE_KIND);
 // 업무 차례 칸이 사용자인 업무(답 대기로 가려지는 경우): 안내는 이것과 무관하게 나간다.
 const userTurnWork = {key: 'a/w1', status: 'open', executions: [], owner: REQ, turnOwner: '사람', turnAt: new Date(T0).toISOString(), at: new Date(T0).toISOString()};

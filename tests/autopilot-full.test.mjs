@@ -717,3 +717,26 @@ test('(C) PR을 확인 경로로 적은 결정이 요청되고 자격 시각에 
   assert.equal(r.already, false);
   assert.ok(w.store.get(d.id).proceeded);
 });
+
+// (C-r2) 주소 예외는 실제 PR 경로 하나만 푼다: 소유자·저장소는 GitHub 이름 글자(영문·숫자·-·_·.)만, 쿼리·조각·추가 경로 없음.
+test('(C-r2) 주소 예외 경계: 실제 PR 경로만 풀리고 쿼리·조각·이상한 소유자/저장소·호스트 변형은 이전처럼 거른다', () => {
+  const ok = {question: '이 순서로 갈까요?', options: ['예', '아니오'], recommendation: '예'};
+  const gated = url => gatedDecisionText({...ok, reason: `- PR: ${url}`});
+  const asQuestion = url => gatedDecisionText({...ok, question: url, reason: '- 확인 경로 없음: 시험'});   // 예외가 없는 자리 = 예외 이전의 판정
+  assert.equal(gated('https://github.com/o/r/pull/12'), false, '풀리는 것');
+  assert.equal(gated('https://github.com/my-org_1/re.po-x/pull/7'), false, 'GitHub 이름 글자');
+  assert.equal(gated('http://github.com/o/r/pull/12'), false);
+  const blocked = [
+    'https://github.com/o/r#123/pull/12', 'https://github.com/o/#123/pull/12', 'https://github.com/o/r?delete/pull/12',
+    'https://github.com/o/r/pull/12#123', 'https://github.com/o/r/pull/12?delete',
+    'https://github.com/o?x/r/pull/12', 'https://github.com/o/r?x/pull/12', 'https://github.com/o;x/r/pull/12', 'https://github.com/o/r;x/pull/12',
+    'https://github.com/o%23/r/pull/12', 'https://github.com/o/r%23/pull/12', 'https://github.com/o@x/r/pull/12', 'https://github.com/o/r@x/pull/12',
+    'https://github.com/o:x/r/pull/12', 'https://github.com/o/r:x/pull/12', 'https://github.com/o/r/pull/12/files', 'https://github.com/o/r/extra/pull/12',
+    'https://github.com/o/r/pull/12/',
+  ];
+  for (const url of blocked) assert.equal(gated(url), true, url);
+  // 호스트 변형: 예외가 바꾸지 않는다(예외 없는 자리의 판정과 같다). 낱말·#숫자 거름은 그대로다.
+  for (const url of ['https://github.com:443/o/r/pull/12', 'https://x@github.com/o/r/pull/12', 'https://github.com.evil.example/o/r/pull/12',
+    'https://github.com@evil.example/o/r/pull/12', 'https://evil.example/github.com/o/r/pull/12'])
+    assert.equal(gated(url), asQuestion(url), url);
+});
