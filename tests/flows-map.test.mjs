@@ -80,3 +80,10 @@ test('일시정지 중 작업 감지가 흐름 지도·감시 문서·명령 문
   for (const text of ['holdCheck', '멈춤 확인', '미확인(세션 없음)', 'work update --status hold'])
     assert.ok(commands.includes(text), `commands.md에 ${text} 없음`);
 });
+
+test('상수로 이름을 정한 경보(오래된미확정·진행자격)도 흐름 지도 경보 표에 있다', () => {
+  const table = section('4\\. 감시가 잡는 것');
+  for (const file of ['watch-stale-notice.mjs', 'watch-proceed-notice.mjs'])
+    for (const [, kind] of read('src/' + file).matchAll(/_NOTICE_KIND\s*=\s*['"]([^'"]+)['"]/g))
+      assert.ok(table.includes('`' + kind + '`'), `흐름 지도 4절에 ${kind} 없음`);
+});
