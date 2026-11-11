@@ -320,15 +320,6 @@ test('P2-C 읽기가 던져도 같은 주기에 경보가 여러 건이면 읽�
   assert.equal(calls.length, new Set(calls).size, '주기당 최대 1회');
 });
 
-test('P2-D 결정 저장소 읽기: 엄격한 읽기는 던지고 기존 읽기는 [] 그대로', async () => {
-  const {readDecisionEvents, readDecisionEventsStrict} = await import('../src/autopilot.mjs');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-wingman-corrupt-'));
-  fs.writeFileSync(path.join(home, 'kadan.sqlite'), 'not a database');
-  fs.writeFileSync(path.join(home, 'storage.json'), JSON.stringify({version: 1, backend: 'sqlite'}));
-  assert.deepEqual(readDecisionEvents(home), []);
-  assert.throws(() => readDecisionEventsStrict(home));
-});
-
 test('P2-I 기본 Wingman 쓰기는 사람만: 역할 행위자는 꺼져 있어도 거절, 파일 그대로, 보기는 성공', () => {
   const f = fixture();
   f.run(['wingman', 'b-슈퍼감독']);

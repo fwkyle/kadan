@@ -84,7 +84,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 21 | `discord-decision.mjs` `post` (`기록됨…`·`이미 답변됨`·`늦게 받은 답`) | 대화(봇) | 새 글 | 조용히 | **범위 밖**(표만) | 채팅 답 기록 확인이다. 결정 마감의 일부 |
 | 22 | `discord-mail.mjs`·`discord-route.mjs` (#184) | 우편 다리 | 디코→우편 방향, 디코에 쓰지 않음 | 해당 없음 | **범위 밖** | 방향이 반대다 |
 | 23 | `thread-archive.mjs` 보관·재개 | 채널 조작 | 메시지 없음 | 없음 | **범위 밖** | 해결 글 보관은 다음 단계 |
-| 24 | `autopilot.mjs` `finishAutopilot` (Autopilot 끝: `autopilot off`·끝 시각·kyle 새 입력) | `autopilot-summary` | 새 글(멘션 없음) | 조용히 | **새 글 유지** | 켜진 한 번에 한 통, kyle이 기상 뒤 밤사이 일을 한 번에 보려는 요약이다. 디코 설정이 없으면 OS 알림. 요약은 원장 `autopilot` 끝 사건에도 남는다 |
+| 24 | `autopilot.mjs` `finishAutopilot` (Autopilot 끝: `autopilot off`·명시한 끝 시각) | `autopilot-summary` | 새 글(멘션 없음) | 조용히 | **새 글 유지** | 켜진 한 번에 한 통, kyle이 돌아와 켜진 동안의 일을 한 번에 보려는 요약이다. 디코 설정이 없으면 OS 알림. 끝 사건은 요약 없이 먼저 원장에 남고(옛 끝 사건의 요약 칸은 그대로 읽힌다), 요약은 이 알림으로 한 번 간다. 못 받았으면 `kadan autopilot summary`가 원장에서 다시 계산한다 |
 | 25 | 경보 `프로세스` (라우팅 `process-memory`, `watch-runner.mjs`) | `alert`, alertKind `프로세스` | 새 글 | 울림 | **새 글 유지**(b) | 맥이 메모리 고갈로 멈추기 전에 kyle이 조치할 수 있는 장애다. 중복 막기 키에 넘은 기준 집합이 들어가(`alert:process:memory:<등급>:<기준>:<집합이 바뀐 시각>`) 집합이 바뀔 때만 다시 간다 |
 
 판단 필요 요약: 7번 자원·관계표 경보(유지), 13번 사용자 우편(안 보냄), 16번 `postThreadNote`(유지). 코드가 지금 적용한 값은 위 표 그대로이며, 바꾸려면 `notify-policy.mjs` 한 곳만 고친다.

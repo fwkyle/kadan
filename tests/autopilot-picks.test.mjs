@@ -124,16 +124,18 @@ test('7. 명령 전후로 TODO 내용·수정 시각과 홈 파일 목록이 그
   assert.deepEqual(fs.readdirSync(f.home).sort(), before.files);
 });
 
-test('8. Autopilot 단계 지침 (10)은 늘 autopilot picks 일감 고르기 줄이다', () => {
+test('8. Autopilot 단계 지침 (6)은 늘 autopilot picks 일감 고르기 줄이다', () => {
   const args = {text: '밤', quote: '', viaChat: false, by: '사람', untilMs: Date.parse('2026-11-04T22:00:00Z'), level: 'autopilot'};
   const auto = buildAutopilotMessage(args);
-  assert.match(auto, /\(10\) 새 일감은 `kadan autopilot picks --todo/);
-  assert.match(auto, /밤 일감 후보\(가\)와 미배정 ready 카드\(라\)에서만/);
+  assert.match(auto, /\(6\) 새 일감은 `kadan autopilot picks --todo/);
+  assert.match(auto, /`\[밤 허용\]` 후보\(가\)와 미배정 ready 카드\(라\)에서만/);
   assert.match(auto, /건너뜀\(나\)·후보\(다\) 항목은 시작하지 않습니다/);
   assert.match(AUTO_CHECKLIST.join('\n'), /\(가\) 후보가 되고, 미배정 ready 카드는 \(라\)/);
-  // 없앤 onlyRunning을 넘겨도 (10)은 일감 고르기 줄이다.
+  // 없앤 onlyRunning을 넘겨도 (6)은 일감 고르기 줄이다.
   assert.equal(buildAutopilotMessage({...args, onlyRunning: true}), auto);
   assert.doesNotMatch(auto, /새 일감을 시작하지 않습니다|진행 중인 업무만/);
+  // Cruise에는 일감 고르기 줄이 없다
+  assert.doesNotMatch(buildAutopilotMessage({...args, level: 'cruise'}), /\(6\)|kadan autopilot picks/);
 });
 
 test('9. CommonMark 코드 블록: 긴 울타리 안의 짧은 울타리·물결 안의 백틱·닫히지 않은 블록은 예시다', () => {

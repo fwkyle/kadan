@@ -12,7 +12,7 @@ export {DECISION_PREFIX};
 const USAGE = `kadan autopilot note ${NOTE_KINDS.join('|')} "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind ${HOLD_KINDS.join('|')}] [--verdict ${VERDICTS.join('|')}]`;
 
 // 공백류(줄바꿈·탭)는 공백 하나로 접고 남은 제어 문자(C0·DEL·C1: ESC·NUL·backspace 등)는 지운다.
-// 아침 요약과 CLI 출력이 화면 제어 문자로 깨지지 않게 저장 전과 요약 직전에 같은 함수를 거친다.
+// 끌 때의 요약과 CLI 출력이 화면 제어 문자로 깨지지 않게 저장 전과 요약 직전에 같은 함수를 거친다.
 export const cleanNoteText = value => String(value ?? '').replace(/\s+/g, ' ').replace(/\p{Cc}/gu, '').trim();
 
 // 정리한 뒤 글자 200개에서 자른다(adopt message 규칙과 같게 `…`을 붙인다).
@@ -67,7 +67,7 @@ const LABEL = {hold: '보류', gate: '관문', merge: '머지', start: '시작'}
 // 명령이 보여 주는 한 줄. 결정은 접두 `[Autopilot 결정]`을 붙인다.
 export const noteLine = event => (event.noteKind === 'decision' ? `${DECISION_PREFIX} ${event.text}` : `[${MODE} ${LABEL[event.noteKind]}] ${event.text}`);
 
-// 아침 요약용 집계. notes는 구간 안 autopilot-note 사건. 같은 PR의 관문 통과·머지는 한 번으로 센다(pr가 없으면 사건마다).
+// 요약용 집계. notes는 구간 안 autopilot-note 사건. 같은 PR의 관문 통과·머지는 한 번으로 센다(pr가 없으면 사건마다).
 export function tallyNotes(notes) {
   const by = kind => notes.filter(n => n.noteKind === kind);
   const distinct = list => new Set(list.map((n, i) => normalizePrKey(n.pr) || `#${i}`)).size;

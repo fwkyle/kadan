@@ -57,7 +57,7 @@
 
 - **말 한마디**: 디스코드 #비서 채널에 `잘게`(끌 때는 `일어남`). `잘게 3시간`, `잘게 07:30까지`, `잘게 자동`도 받는다.
 - **명령 한 줄**: `kadan autopilot on "<맡기는 말>" --for 8h` — 끌 때는 `kadan autopilot off`, 지금 상태는 `kadan autopilot status --text`
-- **주의**: 새 권한을 주는 것이 아니다. 감독들은 이미 승인된 범위 안에서만 일한다. 기본 8시간, 최대 12시간이고 `kadan autopilot off`·끝 시각·사람이 새로 답한 결정 중 먼저 온 것으로 꺼진다. 단계를 안 주면 Cruise이고, 스스로 찾아 진행하는 단계는 `--level autopilot`이다.
+- **주의**: 새 권한을 주는 것이 아니다. 감독들은 이미 승인된 범위 안에서만 일한다. 끝 시각은 기본이 없고 `kadan autopilot off`·디코 `일어남`·명시한 끝 시각으로만 꺼진다(사람이 결정에 답해도 꺼지지 않는다). 단계를 안 주면 Cruise(관문 통과 PR 머지까지)이고, 새 일감까지 찾아 시작하는 단계는 `--level autopilot`이다. 끄면 요약이 가고, 못 받았으면 `kadan autopilot summary`로 다시 본다.
 - **자세한 문서**: [결정 기록의 밤 위임](decisions.md#밤-위임-autopilot-2026-10-23), [디스코드 한 마디](discord-chat.md#autopilot-한-마디-잘게일어남), [저장소별 자동 머지 정책](autopilot-repo-cards.md)
 
 ## 결정 답하기

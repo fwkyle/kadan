@@ -9,7 +9,7 @@ import {appendLedger, readLedger} from '../src/ledger.mjs';
 import {autopilotCommand} from '../src/commands/autopilot.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {autopilotGuard, guardedReason} from '../src/autopilot-guard.mjs';
-import {AUTO_CHECKLIST} from '../src/autopilot.mjs';
+import {AUTO_CHECKLIST, COMMON_LINES, PICKS_LINE} from '../src/autopilot.mjs';
 
 // 가짜 시계·가짜 우편만 쓴다. 운영 홈·우편·디코·OS 알림에 닿지 않는다. 역할 이름도 시험용이다.
 const T0 = Date.parse('2026-11-02T14:00:00.000Z');
@@ -47,8 +47,9 @@ test('--level autopilot: on 사건에 level, status, Autopilot 단계 문구, �
   assert.equal('onlyRunning' in s, false);
   const msg = f.sent[0].message;
   assert.match(msg, /단계: Autopilot/);
-  assert.match(msg, /묻기 전에 스스로 찾습니다/);
-  assert.match(msg, /\[Autopilot 결정\]/);
+  assert.match(msg, /묻기 전에 저장소·결정 이력·TODO·docs·카드를 먼저 봅니다/);
+  assert.match(msg, /답을 기다리는 동안 그 일만 멈추고 다른 일은 계속합니다/);
+  assert.doesNotMatch(msg, /\[Autopilot 결정\]|추천안으로 진행/);
   assert.match(msg, /영구 삭제/);
   assert.match(msg, /코드가 막지 못하므로/);
   // 13. 머지는 관문 뒤에만: 옛 "아침으로 보류" 문구가 사라지고 관문·머지 명령이 들어 있다.
@@ -61,8 +62,10 @@ test('--level autopilot: on 사건에 level, status, Autopilot 단계 문구, �
   assert.match(AUTO_CHECKLIST.join('\n'), /merge-gate[\s\S]*관문이 내준 머지 명령 그대로/);
   assert.match(msg, /관문이 내준 머지 명령\(`gh pr merge … --match-head-commit … -R …`\)을 그대로 치고/);
   assert.doesNotMatch(msg, /새 일감을 시작하지 않습니다/);
-  assert.match(msg, /위 \(1\)~\(10\) 줄/);
-  assert.match(msg, /\(10\) 새 일감은 `kadan autopilot picks --todo/);
+  assert.match(msg, /위 \(1\)~\(6\) 줄/);
+  assert.match(msg, /\(6\) 새 일감은 `kadan autopilot picks --todo/);
+  assert.match(msg, /재시작 필요/);
+  assert.doesNotMatch(msg, /아침|취침|기상|밤중/);
 });
 
 test('--level full: 종료 코드 2로 거절하고 켜지지 않는다', () => {
@@ -72,20 +75,29 @@ test('--level full: 종료 코드 2로 거절하고 켜지지 않는다', () => 
   assert.equal(f.sent.length, 0);
 });
 
-test('--level 없이 켜면 cruise로 기록하고 문구는 고정 줄 3개뿐(--level cruise와 같다)', () => {
+test('--level 없이 켜면 cruise로 기록하고 문구는 켜진 모든 단계의 고정 줄 5개뿐(--level cruise와 같다, 일감 고르기 줄 없음)', () => {
   for (const flags of [{}, {level: 'cruise'}]) {
     const f = fixture();
-    const r = f.run(['on', '밤 위임'], flags);
+    const r = f.run(['on', '위임'], flags);
     assert.equal(r.level, 'cruise');
-    assert.equal('checklist' in r, false);
+    assert.equal(r.checklist.length, 3);
     const [on] = f.autopilot();
     assert.equal(on.level, 'cruise');
+    assert.equal('until' in on, false);
     assert.equal('onlyRunning' in on, false);
     const msg = f.sent[0].message;
-    assert.doesNotMatch(msg, /단계:|\(4\)/);
-    assert.match(msg, /위 \(1\)~\(2\) 줄/);
+    assert.match(msg, /단계: Cruise/);
+    assert.match(msg, /\(1\) 결정 요청은 평소와 같은 기준으로 올립니다/);
+    assert.match(msg, /\(2\) 어떤 근거로도 하지 않는 것/);
+    assert.match(msg, /kadan merge-gate/);
+    assert.match(msg, /\(5\) kyle의 직접 중지/);
+    assert.match(msg, /위 \(1\)~\(5\) 줄/);
+    assert.doesNotMatch(msg, /\(6\)|kadan autopilot picks|새 일감은/);
+    assert.doesNotMatch(msg, /decision request를 새로 올리지|결정 요청을 올리지 말고|추천안으로 진행/);
     assert.equal(f.run(['status']).level, 'cruise');
   }
+  assert.equal(COMMON_LINES.length, 5);
+  assert.match(PICKS_LINE, /미배정 ready 카드/);
 });
 
 test('--only-running은 없앴다: 모르는 옵션으로 종료 코드 2 거절, 켜지지 않고 우편 0통', () => {
@@ -107,10 +119,10 @@ test('CLI 입구: autopilot on --only-running은 종료 코드 2, 원장에 켜�
   assert.equal(f.autopilot().length, 0);
 });
 
-test('--allow: Autopilot 단계·kyle 원문·올바른 키가 있어야 하고, on 사건과 status에 정규화한 허용이 남는다', () => {
+test('--allow: 켜진 모든 단계(Cruise 포함)에서 받고 kyle 원문·올바른 키가 있어야 하며, on 사건과 status에 정규화한 허용이 남는다', () => {
   const f = fixture();
   const q = '이번엔 승인';
-  assert.throws(() => f.run(['on', '밤'], {allow: 'acme/app', quote: q}), /--allow는 --level autopilot과 함께만/);
+  assert.throws(() => f.run(['on', '밤'], {allow: 'acme/app'}), /--quote/); // cruise에서도 받되 kyle 원문이 필요하다
   assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', allow: 'acme/app'}), /--quote/);
   assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', allow: 'acme/app'}, '사람'), /--quote/);
   assert.throws(() => f.run(['on', '밤'], {level: 'autopilot', allow: true, quote: q}), /--allow에는 GitHub 소유자\/이름/);
@@ -122,6 +134,13 @@ test('--allow: Autopilot 단계·kyle 원문·올바른 키가 있어야 하고,
   assert.deepEqual(f.autopilot()[0].allow, ['acme/app', 'foo/bar']);
   assert.deepEqual(f.run(['status']).allow, ['acme/app', 'foo/bar']);
   assert.match(f.sent[0].message, /머지 허용\(--allow\): acme\/app, foo\/bar/);
+  // Cruise에서도 --allow가 저장되고 우편에 실린다
+  const c = fixture();
+  const rc = c.run(['on', '자리 비움'], {allow: 'Acme/App', quote: q});
+  assert.equal(rc.level, 'cruise');
+  assert.deepEqual(c.autopilot()[0].allow, ['acme/app']);
+  assert.match(c.sent[0].message, /머지 허용\(--allow\): acme\/app/);
+  assert.doesNotMatch(c.sent[0].message, /kadan autopilot picks/);
 });
 
 test('--allow 없이 켜면 status의 allow는 빈 목록이고 on 사건에 allow가 없다', () => {
@@ -161,9 +180,9 @@ const GUARDED = [
 
 test('켜진 동안 역할 세션의 보호 명령은 거절, 사람·꺼짐·읽기 명령은 통과', () => {
   const f = fixture();
-  f.run(['on', '밤'], {level: 'autopilot'});
+  f.run(['on', '밤'], {level: 'autopilot', for: '8h'});
   const entries = readLedger(f.home);
-  const base = {home: f.home, now: T0 + 1000, entries, decisionEvents: []};
+  const base = {home: f.home, now: T0 + 1000, entries};
   for (const [command, args, flags] of GUARDED) {
     assert.throws(() => autopilotGuard({...base, command, args, flags, env: {KADAN_ROLE: 'a-작업'}}),
       error => error.exitCode === 2 && /Autopilot이 켜져 있어/.test(error.message), `${command} ${args}`);

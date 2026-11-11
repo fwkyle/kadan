@@ -1,12 +1,14 @@
-// kadan autopilot on/off/status — Autopilot 명령. 설계: docs/daily/research/2026-10-23_나이트-모드.md
+// kadan autopilot on/off/status — Autopilot 명령. 단계표: docs/autopilot-levels.md. 설계: docs/daily/research/2026-10-23_나이트-모드.md
 // 새 권한이 아니다: kyle의 현재 말을 기록하고 슈퍼감독에게 나눠 줄 뿐, 승인·머지·결정 답은 대신하지 않는다.
 import {appendLedger, readLedger} from '../ledger.mjs';
 import {isUserActor, isSupervisorActor} from '../actors.mjs';
 import {WorkStore} from '../work-store.mjs';
 import {
-  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, readDecisionEvents, clock, AUTO_CHECKLIST,
+  autopilotState, autopilotTargets, resolveEnd, buildAutopilotMessage, sendAutopilotMail, finishAutopilot, readDecisionEvents, clock, endOf, NO_END_TEXT, AUTO_CHECKLIST,
 } from '../autopilot.mjs';
 import {buildAutopilotNote, noteLine} from '../autopilot-note.mjs';
+import {summarizeAutopilot} from '../autopilot-summary.mjs';
+import {readMailBody} from '../ledger.mjs';
 import {picksCommand} from '../autopilot-picks.mjs';
 import {readDefaultWingman, setDefaultWingman, clearDefaultWingman, wingmanPath, NO_WINGMAN} from '../autopilot-wingman.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../autopilot-repo-policy.mjs';
@@ -14,13 +16,14 @@ import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL} from '..
 
 export const MAX_TEXT = 4000;
 const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'discord-message']);
-const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h] [--quote "<kyle 원문>"] [--level cruise | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
-  const on = state.start, untilMs = Date.parse(on.until);
+  const on = state.start, end = endOf(on), ended = end.kind === 'at', untilMs = ended ? end.ms : null;
   return {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
-    startedAt: on.t, until: on.until, untilLocal: clock(untilMs), remainingMinutes: Math.max(0, Math.round((untilMs - now) / 60_000)),
+    startedAt: on.t, until: ended ? on.until : null, untilLocal: ended ? clock(untilMs) : NO_END_TEXT,
+    remainingMinutes: ended ? Math.max(0, Math.round((untilMs - now) / 60_000)) : null,
     level: on.level ?? LEVEL_CRUISE, allow: on.allow ?? [],
     wingman: on.wingman ?? null, wingmanSource: on.wingmanSource ?? 'none', ...(on.wingmanNote ? {wingmanNote: on.wingmanNote} : {}),
     to: on.to ?? [], delivered: on.delivered ?? [], missing,
@@ -56,7 +59,7 @@ export function autopilotOriginalText(result) {
   return [`--- ${result?.on ? '지금 켜진' : '마지막'} 위임 원문 (${run.by}${run.viaChat ? ', kyle 채팅을 옮겨 적음' : ''}) ---`, run.text,
     ...(run.quote ? ['--- kyle 채팅 원문 ---', run.quote] : []),
     ...(result?.on ? [`--- Wingman: ${result.wingman ?? 'Wingman 없음'}${result.wingmanNote ? ` (${result.wingmanNote})` : ''} ---`] : []),
-    `--- ${result?.on ? `끝: ${result.untilLocal}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
+    `--- ${result?.on ? `끝: ${result.until ? result.untilLocal : '직접 끌 때까지'}` : `${run.startedAt} ~ ${run.endedAt ?? '끝 시각 미기록'}`} ---`].join('\n');
 }
 
 // 저장소 정책 한 줄 묶음을 사람이 읽는 줄로. 온톨로지 문서는 ontology/ 기준 상대 경로만 보인다(절대 경로 없음).
@@ -123,6 +126,31 @@ function repoCommand(args, flags, {home, by, deps}) {
     ...repoLines(evaluateGithub(home, saved.repo))].join('\n');
 }
 
+// `autopilot summary`: 가장 최근 켜짐 구간의 요약을 원장에서 다시 계산한다(읽기 전용: 저장·새 사건 없음, 원장 한 번 읽기).
+// 끝난 구간 = 마지막 `on`과 그 뒤 첫 끝 사건(끝 사건의 옛 `summary` 칸은 읽지 않고 다시 계산하므로 옛·새 끝 사건이 같은 경로다).
+// 켜져 있으면 지금까지, 명시한 끝 시각이 지났지만 아직 끝 사건이 없으면 그 시각까지로 본다. 켠 적이 없으면 그 사실을 말하고 정상 종료한다.
+function summaryCommand(flags, {home, deps}) {
+  const now = (deps.now ?? Date.now)();
+  const entries = (deps.readEntries ?? (() => readLedger(home)))();
+  const state = autopilotState(entries, now);
+  let startIndex = -1;
+  for (let i = entries.length - 1; i >= 0; i--) if (entries[i]?.kind === 'autopilot' && entries[i].phase === 'on') { startIndex = i; break; }
+  const none = {state: 'none', text: '요약할 켜짐 구간이 없습니다(켠 적이 없음)'};
+  if (startIndex < 0) return flags.json === true ? none : none.text;
+  const start = entries[startIndex];
+  const endEvent = entries.slice(startIndex + 1).find(e => e?.kind === 'autopilot' && e.phase !== 'on') ?? null;
+  let phase, endedAt, kind;
+  if (endEvent) { kind = 'ended'; phase = endEvent.phase; endedAt = Date.parse(endEvent.endedAt ?? endEvent.t); }
+  else if (state.pending) { kind = 'ended'; phase = state.pending.phase; endedAt = state.pending.endedAt; }
+  else { kind = 'running'; phase = 'running'; endedAt = now; }
+  if (!Number.isFinite(endedAt)) endedAt = Date.parse(endEvent?.t) || now;
+  const decisionEvents = (deps.readDecisions ?? (() => readDecisionEvents(home)))();
+  const summary = summarizeAutopilot({start, phase, endedAt, entries, decisionEvents, readBody: deps.readBody ?? (digest => readMailBody(digest, home))});
+  const head = kind === 'running' ? '(켜져 있는 중: 지금까지의 요약)' : '(가장 최근에 끝난 구간의 요약, 원장에서 다시 계산)';
+  if (flags.json !== true) return `${head}\n${summary.text}`;
+  return {state: kind, phase, startedAt: start.t, endedAt: new Date(endedAt).toISOString(), counts: summary.counts, text: summary.text};
+}
+
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.
 export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
@@ -130,9 +158,10 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   if (sub === 'repo') return repoCommand(rest, flags, {home, by, deps});
   if (sub === 'wingman') return wingmanCommand(rest, flags, {home, by, deps});
   if (sub === 'picks') return picksCommand(flags, {home, deps});
+  if (sub === 'summary') return summaryCommand(flags, {home, deps});
   const now = (deps.now ?? Date.now)();
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
-  const state = autopilotState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);
+  const state = autopilotState(entries, now);
 
   if (sub === 'status') {
     if (state.on) return describeOn(state, now, missingSupers(home, entries, state.start));
@@ -155,16 +184,16 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const unknown = sub === 'on' ? Object.keys(flags).find(name => !ON_FLAGS.has(name)) : undefined;
   if (unknown) throw Object.assign(new Error(`autopilot on이 모르는 옵션: --${unknown}. ${USAGE}`), {exitCode: 2});
 
-  // 끝났는데 기록이 없는 켜짐(시각 만료·kyle의 새 입력)은 먼저 마무리한다. 이 마무리가 요약을 한 번 보낸다.
+  // 끝났는데 기록이 없는 켜짐(명시한 끝 시각이 지남)은 먼저 마무리한다. 이 마무리가 요약을 한 번 보낸다.
   let settled = null;
   if (state.pending) settled = finishAutopilot({home, by, deps});
 
   if (sub === 'off') {
-    if (settled) return {on: false, already: settled.phase, summary: settled.summary.text};
+    if (settled) return {on: false, already: settled.phase, summary: settled.summary.text, ...(settled.warnings ? {warnings: settled.warnings} : {})};
     if (!state.on) throw new Error('이미 꺼져 있습니다');
     const event = finishAutopilot({home, by, phase: 'off', reason: typeof flags.reason === 'string' ? flags.reason : null, deps});
     if (!event) throw new Error('이미 꺼져 있습니다');
-    return {on: false, phase: event.phase, summary: event.summary.text};
+    return {on: false, phase: event.phase, summary: event.summary.text, ...(event.warnings ? {warnings: event.warnings} : {})};
   }
 
   if (state.on) throw new Error(`이미 켜져 있습니다 — 문구는 덮어쓰지 않습니다. 바꾸려면 autopilot off 뒤 다시 켜세요. ${JSON.stringify(describeOn(state, now, null))}`);
@@ -178,16 +207,15 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   if (viaChat && !quote) throw new Error('슈퍼감독이 켤 때는 kyle의 채팅 원문이 필요합니다: kyle이 말한 그대로 --quote "<원문>"으로 옮기세요');
   if (flags['discord-message'] !== undefined && (typeof flags['discord-message'] !== 'string' || !flags['discord-message'])) throw new Error('--discord-message는 디코 글 id 하나여야 합니다');
 
-  // 단계: 없으면 cruise(고정 줄 3개만, 원장에도 cruise로 적는다). full(완전자율)은 아직 구현하지 않는다.
+  // 단계: 없으면 cruise(켜진 모든 단계의 고정 줄만, 원장에도 cruise로 적는다). full(완전자율)은 아직 구현하지 않는다.
   const level = flags.level ?? LEVEL_CRUISE;
   if (level !== LEVEL_FULL && !LEVELS.includes(level)) throw new Error(`--level은 ${LEVELS.join('|')}만 쓸 수 있습니다. ${USAGE}`);
   if (level === LEVEL_FULL) throw Object.assign(new Error(`--level ${LEVEL_FULL}(${LEVEL_LABEL[LEVEL_FULL]})은 아직 구현하지 않았습니다`), {exitCode: 2});
   const auto = level === LEVEL_AUTOPILOT;
 
-  // --allow: 그날 밤에만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. Autopilot 단계에서만, 값마다 올바른 키, kyle 원문 필수.
+  // --allow: 이번 켜짐 동안만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. 켜진 모든 단계(Cruise 포함)에서 받는다. 값마다 올바른 키, kyle 원문 필수.
   let allow;
   if (flags.allow !== undefined) {
-    if (!auto) throw new Error('--allow는 --level autopilot과 함께만 쓸 수 있습니다');
     const keys = (Array.isArray(flags.allow) ? flags.allow : [flags.allow]).map(v => {
       const key = typeof v === 'string' ? normalizeGithub(v) : null;
       if (!key) throw new Error(`--allow에는 GitHub 소유자/이름 값이 필요합니다(받은 값: ${typeof v === 'string' ? v : '없음'}). ${USAGE}`);
@@ -215,13 +243,13 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
     if (saved.corrupt) wingmanNote = `기본 Wingman 파일을 읽지 못함(${saved.corrupt}) — Wingman 없음`;
   }
   if (wingman) {
-    const why = !isSupervisorActor(wingman) ? '슈퍼감독 이름이 아님' : !to.includes(wingman) ? '이번 밤 문구를 받는 슈퍼감독이 아님(열린 업무 없음)' : null;
+    const why = !isSupervisorActor(wingman) ? '슈퍼감독 이름이 아님' : !to.includes(wingman) ? '이번 문구를 받는 슈퍼감독이 아님(열린 업무 없음)' : null;
     if (why && explicit) throw new Error(`Wingman ${wingman}을(를) 쓸 수 없습니다(${why}): 켜지 않았습니다`);
     if (why) { wingmanNote = `기본 Wingman ${wingman} 못 씀(${why}) — Wingman 없음`; wingman = null; }
   }
   const send = deps.sendMail ?? sendAutopilotMail(home, by);
   const attempt = (role, isWingman) => {
-    const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: Date.parse(until), level, allow, isWingman});
+    const message = buildAutopilotMessage({text, quote, viaChat, by, untilMs: until ? Date.parse(until) : null, level, allow, isWingman});
     // 던진 오류도 결과로 바꾼다. 전달 상태를 모르는 실패는 unknown(갔을 수 있음)이다.
     try { return {role, ...send(role, message)}; } catch (error) { return {role, ok: false, delivery: error.delivery ?? 'unknown', error: String(error.message).slice(0, 200)}; }
   };
@@ -249,8 +277,8 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
     kind: 'autopilot', phase: 'on', by, text, ...(quote ? {quote} : {}), viaChat,
     ...(flags['discord-message'] ? {discordMessageId: flags['discord-message']} : {}),
     level, ...(allow ? {allow} : {}), ...wingmanFields,
-    until, to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
+    ...(until ? {until} : {}), to, delivered, ...(unreachable.length ? {unreachable} : {}), t: new Date(now).toISOString(),
   };
   (deps.record ?? (entry => appendLedger(entry, home)))(event);
-  return {on: true, level, ...(auto ? {checklist: AUTO_CHECKLIST} : {}), ...(allow ? {allow} : {}), ...wingmanFields, until, untilLocal: clock(Date.parse(until)), to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
+  return {on: true, level, checklist: AUTO_CHECKLIST, ...(allow ? {allow} : {}), ...wingmanFields, until: until ?? null, untilLocal: until ? clock(Date.parse(until)) : NO_END_TEXT, to, delivered, ...(unreachable.length ? {unreachable} : {}), ...(settled ? {previousEnded: settled.phase} : {})};
 }

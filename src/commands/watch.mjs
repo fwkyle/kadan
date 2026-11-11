@@ -22,7 +22,7 @@ import { createSweepDiagnostics, createSweepPolicy } from "../watch-sweep-policy
 import { createLedgerArraySweep } from "../watch-sweep.mjs";
 import { createSweepRunner } from "../watch-sweep-run.mjs";
 import { pruneHierarchy } from "../hierarchy-prune.mjs";
-import { watchAutopilotExpiry, autopilotWingmanSnapshot, readDecisionEventsStrict } from "../autopilot.mjs";
+import { watchAutopilotExpiry, autopilotWingmanSnapshot } from "../autopilot.mjs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -288,7 +288,7 @@ export function cmdWatch(argv, flags) {
       : null,
     checkAutopilotExpiry: ({entries, now}) => watchAutopilotExpiry({entries, now, home: ledgerHome()}),
     // Wingman 경로용 스냅샷. 사용자로 갈 놀고 있음 2단·정체 경보가 있는 주기에만 불린다(주기당 최대 1회, 결정 저장소 읽기 포함).
-    readAutopilotWingman: ({entries, now}) => autopilotWingmanSnapshot(entries, readDecisionEventsStrict(ledgerHome()), now),
+    readAutopilotWingman: ({entries, now}) => autopilotWingmanSnapshot(entries, now),
     idleMs: idleMinutes * 60 * 1_000,
     userNotify: flags["user-notify"] === true,
     judgeCmd: flags["judge-cmd"] || null,

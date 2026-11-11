@@ -344,3 +344,22 @@ test('M4. src/·docs/·README.md에 --squash 고정 문구가 남지 않는다(�
   const hits = files.flatMap(p => fs.readFileSync(p, 'utf8').split('\n').map((l, i) => [p, i + 1, l]).filter(([, , l]) => /gh pr merge[^`\n]*--squash/.test(l)));
   assert.deepEqual(hits.map(([p, i]) => `${p}:${i}`), []);
 });
+
+test('L1. Cruise(끝 시각 없음)에서도 관문이 같이 돈다: --allow 저장·반영, --allow 없는 정책 보류 저장소는 거절(가짜 저장소 이름)', () => {
+  for (const policy of [{deployBranch: '없음', nightMerge: '금지'}, {deployBranch: 'main', nightMerge: '허용'}]) {
+    const why = policy.nightMerge === '금지' ? 'night-merge-forbidden' : 'deploy-branch';
+    const held = good(fixture({policy, autopilot: {level: 'cruise', until: undefined}}));
+    const r0 = held.gate();
+    assert.equal(r0.verdict, 'reject', why);
+    assert.equal(r0.autopilotOn, true, '끝 시각 없는 Cruise도 켜짐');
+    assert.ok(r0.reasons.some(x => x.includes(why)));
+    const allowed = good(fixture({policy, autopilot: {level: 'cruise', until: undefined, allow: [GH]}}));
+    const r1 = allowed.gate();
+    assert.equal(r1.verdict, 'pass', why);
+    assert.equal(r1.allowApplied, why);
+    assert.equal(allowed.notes().at(-1).noteKind, 'gate'); // 켜진 모든 단계에서 gate 기록
+  }
+  // 정책이 허용하는 저장소는 allow 없이 Cruise에서도 통과
+  const open = good(fixture({autopilot: {level: 'cruise', until: undefined}}));
+  assert.equal(open.gate().verdict, 'pass');
+});

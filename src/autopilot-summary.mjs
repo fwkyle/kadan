@@ -1,4 +1,4 @@
-// Autopilot 아침 요약. 켜진 동안(시작~끝)의 결정 저장소·원장 기록을 세어 글 한 덩어리로 만든다.
+// Autopilot 요약(꺼질 때 한 번). 켜진 동안(시작~끝)의 결정 저장소·원장 기록을 세어 글 한 덩어리로 만든다.
 // 순수 함수다: 읽기는 부르는 쪽이 한다. 장치는 판정하지 않고 센 것만 적는다 — 모르는 것(실제 머지)은 모른다고 적는다.
 import {stripStoredHeader} from './mail-header.mjs';
 import {isUserActor,isSupervisorActor} from './actors.mjs';
@@ -19,7 +19,7 @@ const stamp = ms => {
   const d = new Date(ms), p = n => String(n).padStart(2, '0');
   return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 };
-const REASON = {off: 'autopilot off로 껐음', expired: '끝 시각이 되어 꺼짐', 'ended-by-input': 'kyle의 새 입력으로 꺼짐'};
+const REASON = {running: '아직 켜져 있음 — 지금까지', off: 'autopilot off로 껐음', expired: '끝 시각이 되어 꺼짐', 'ended-by-input': 'kyle의 새 입력으로 꺼짐'};
 
 // 결정 이력(같은 id의 여러 revision)에서 구간 안의 답·취소를 id당 한 번씩만 센다.
 function countDecisions(events, startMs, endMs) {
@@ -74,7 +74,7 @@ function noteLines(t, listN) {
     list('머지', t.merges, n => item(`${ref(n)} ${n.text}`.trim()));
     if (c.unmerged) { lines.push(`- 통과 후 머지 미확인 ${c.unmerged}건 — 관문은 통과했지만 같은 PR의 머지 기록이 없음(머지 못 했거나 기록 누락)`); list('미확인', t.unmerged, n => item(`${n.pr}${n.sha ? ` ${n.sha.slice(0, 7)}` : ''}`)); }
   } else lines.push('- 관문·머지 기록 없음 — 기록 없이 한 머지는 GitHub에서 확인');
-  if (c.starts) { lines.push(`- 시작한 밤 일감 ${c.starts}건`); list('일감', t.starts, n => item(`${n.work ? `${n.work} ` : ''}${n.text}`)); }
+  if (c.starts) { lines.push(`- 시작한 일감 ${c.starts}건`); list('일감', t.starts, n => item(`${n.work ? `${n.work} ` : ''}${n.text}`)); }
   return lines;
 }
 
@@ -117,8 +117,8 @@ export function summarizeAutopilot({start, phase, endedAt, entries, decisionEven
     if (held.length) autopilot.push(`보류로 남긴 것 ${held.length}건`);
     if (wingmanAlerts) autopilot.push(`Wingman이 받은 경보 ${wingmanAlerts}건`);
     // autopilot-note 기록이 있으면 전체 "없음"이라 쓰지 않고, 비어 있는 기존 집계(결정 답·우편·재시작)만 좁혀 없음으로 쓴다.
-    const noAutopilot = tally.total ? '- 결정 답·우편·재시작 없음 (아래 "기록한 일" 참고)' : '- 밤사이 처리한 일 없음';
-    lines.push('밤사이 생긴 일', autopilot.length ? `- ${autopilot.join(' · ')}` : noAutopilot);
+    const noAutopilot = tally.total ? '- 결정 답·우편·재시작 없음 (아래 "기록한 일" 참고)' : '- 켜진 동안 처리한 일 없음';
+    lines.push('켜진 동안 생긴 일', autopilot.length ? `- ${autopilot.join(' · ')}` : noAutopilot);
     if (showHeld) for (const item of held.slice(0, HELD_LISTED)) lines.push(`  · 보류: ${item}`);
     if (showHeld && held.length > HELD_LISTED) lines.push(`  · 그 밖 ${held.length - HELD_LISTED}건`);
     if (decisions.mergeAnswered || decisions.mergeCancelled)

@@ -13,7 +13,7 @@ import {waitingLetters} from './mailbox-queries.mjs';
 import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
 import {explainAlertRoute,failureEscalation} from './watch.mjs';
-import {autopilotWingmanSnapshot,readDecisionEventsStrict} from './autopilot.mjs';
+import {autopilotWingmanSnapshot} from './autopilot.mjs';
 import {applyWingmanRoute,WINGMAN_BASIS} from './autopilot-wingman.mjs';
 
 export const WATCH_VERDICTS = ['진행중','입력대기','실행완료','응답장애','정체','죽음','모름','조정'];
@@ -96,7 +96,7 @@ export class WatchReports {
     this.readWorks = readWorks ?? (() => new WorkStore(this.home).list());
     this.record = record ?? (e => appendLedger(e,this.home));
     // Autopilot Wingman 경로용 상태 읽기. 실제 전달은 `kadan watch-report` 프로세스에서 일어나므로 기본값을 여기에 둔다.
-    this.readAutopilotWingman = readAutopilotWingman ?? (({entries,now}) => autopilotWingmanSnapshot(entries,readDecisionEventsStrict(this.home),now));
+    this.readAutopilotWingman = readAutopilotWingman ?? (({entries,now}) => autopilotWingmanSnapshot(entries,now));
   }
   fullRequest(request) {
     return request&&!Array.isArray(request.routes)&&this.readRequest?(this.readRequest(request.requestId)??request):request;

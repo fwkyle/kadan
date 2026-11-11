@@ -6,7 +6,7 @@ import {WorkStore} from './work-store.mjs';
 import {appendLedger, readLedger} from './ledger.mjs';
 import {mergeCheck} from './merge-check.mjs';
 import {normalizeSha} from './review-sha.mjs';
-import {autopilotState, readDecisionEvents} from './autopilot.mjs';
+import {autopilotState} from './autopilot.mjs';
 import {buildAutopilotNote} from './autopilot-note.mjs';
 import {decideNightMerge, gitOriginGithub, normalizeGithub} from './autopilot-repo-policy.mjs';
 
@@ -19,7 +19,7 @@ export const ALLOW_RELEASES = ['night-merge-forbidden', 'deploy-branch'];
 
 const LOCK_FILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'cargo.lock', 'go.sum', 'poetry.lock', 'pipfile.lock', 'uv.lock'];
 // 금지 경로는 경로 이름만으로 본다(저장소 이름으로 나누지 않는다). diff를 못 보므로 의존성 파일은 바뀐 것만으로 보류한다.
-// 일부러 src/cli.mjs는 넣지 않았다: 대부분의 카단 PR이 이 파일을 건드려 넣으면 거의 모든 PR이 아침으로 밀린다.
+// 일부러 src/cli.mjs는 넣지 않았다: 대부분의 카단 PR이 이 파일을 건드려 넣으면 거의 모든 PR이 머지되지 않고 결정 요청으로 올라간다.
 // 판정 논리는 merge-gate.mjs에 따로 있고, cli 연결을 바꾸는 PR도 같은 커밋 검수 PASS가 있어야 통과한다.
 export const FORBIDDEN_PATHS = [
   'CI·비밀: .github/workflows/**, *.plist, .env*, *.pem, *.key',
@@ -44,7 +44,7 @@ export function forbiddenGroup(file) {
 const FILE_STATUSES = ['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'];
 const NEEDS_OLD_PATH = ['renamed', 'copied'];
 const REPO_FLAGS = ['mergeCommitAllowed', 'squashMergeAllowed', 'rebaseMergeAllowed'];
-// 머지 방식 고르는 순서: kyle 규칙 "main 머지는 머지 커밋"이 근거라 머지 커밋 → squash → rebase 순이다. 밤에는 사람이 없어 슈퍼감독의 기억에 맡기지 않고 입력(repo)에서 고른다.
+// 머지 방식 고르는 순서: kyle 규칙 "main 머지는 머지 커밋"이 근거라 머지 커밋 → squash → rebase 순이다. 자리를 비운 동안은 사람이 없어 슈퍼감독의 기억에 맡기지 않고 입력(repo)에서 고른다.
 export function pickMergeMethod(repo) {
   if (repo.mergeCommitAllowed) return 'merge';
   if (repo.squashMergeAllowed) return 'squash';
@@ -92,7 +92,7 @@ function parseInput(raw) {
   return {pr, files, requiredChecks: checks ?? null, repo};
 }
 
-// deps(시험용 주입): now, origin(repoPath → 소유자/이름), readEntries, readDecisions, record.
+// deps(시험용 주입): now, origin(repoPath → 소유자/이름), readEntries, record.
 export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   if (typeof workKey !== 'string' || !workKey.includes('/')) throw usageError('업무 키(저장소/업무ID)가 필요합니다');
   const {pr, files, requiredChecks, repo} = parseInput(raw);
@@ -108,7 +108,7 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   if (pr.mergeable !== 'MERGEABLE') reject(`합칠 수 있는 상태가 아님(mergeable ${pr.mergeable})`);
   if (!CLEAN_STATES.includes(pr.mergeStateStatus)) reject(`머지 상태가 CLEAN이 아님(${pr.mergeStateStatus}${pr.mergeStateStatus === 'UNKNOWN' ? ' — 잠시 뒤 다시 부르세요' : ''})`);
   // 2. 필수 검사
-  if (!requiredChecks?.length) reject('필수 검사 없음(브랜치 보호가 없는 저장소는 아침으로 미룸)');
+  if (!requiredChecks?.length) reject('필수 검사 없음(브랜치 보호가 없는 저장소는 머지하지 않고 결정 요청으로 올림)');
   else {
     const bad = requiredChecks.filter(c => c.bucket !== 'pass');
     if (bad.length) reject(`통과하지 않은 필수 검사 ${bad.length}건: ${bad.slice(0, 5).map(c => `${c.name ?? '(이름 없음)'}=${c.bucket ?? c.state ?? '?'}`).join(', ')}`);
@@ -143,7 +143,7 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
   if (!mergeMethod) reject('허용된 머지 방식 없음(mergeCommitAllowed·squashMergeAllowed·rebaseMergeAllowed 모두 false)');
   // 7. 저장소 정책 (+ --allow)
   const entries = (deps.readEntries ?? (() => readLedger(home)))();
-  const state = autopilotState(entries, (deps.readDecisions ?? (() => readDecisionEvents(home)))(), now);
+  const state = autopilotState(entries, now);
   const allow = state.on ? (state.start.allow ?? []) : [];
   let policy = null, allowApplied = null;
   if (github) {

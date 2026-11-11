@@ -27,24 +27,21 @@ const snap = (entries, decisions = [], over = {}) => ({ entries, ledgerLines: en
 test("autopilotStrip: 켜짐 — autopilotState(이벤트)와 같은 결과, 단계·끝 시각을 싣는다", () => {
   const strip = autopilotStrip(snap([{ kind: "x" }, on, { kind: "y" }]), NOW);
   assert.deepEqual(strip, { on: true, since: on.t, until: on.until, level: "autopilot" });
-  assert.equal(autopilotState([on], [], NOW).on, true);
+  assert.equal(autopilotState([on], NOW).on, true);
 });
 
-test("autopilotStrip: 스냅샷 결정(최신 상태)과 이벤트 줄이 같은 판정 — 켜진 뒤 사람 답, 켜지기 전 답, 기계 답, 끝 시각 지남", () => {
-  const events = (list) => list.map((d) => ({ status: d.status, answer: d.answer }));
-  const cases = [
-    [[answer(NOW - 1800_000)], false],          // 켜진 뒤 사람이 답함 → 꺼짐
-    [[answer(NOW - 7200_000)], true],           // 켜지기 전 답 → 영향 없음
-    [[answer(NOW - 1800_000, "감독")], true],   // 사람이 아닌 답 → 영향 없음
-    [[{ id: "d2", status: "open", to: "@user" }], true],
-  ];
-  for (const [decisions, wantOn] of cases) {
-    assert.equal(autopilotState([on], events(decisions), NOW).on, wantOn);
-    assert.equal(autopilotStrip(snap([on], decisions), NOW).on, wantOn);
+test("autopilotStrip: 결정 답은 영향이 없다 — 켜짐·끝 시각 없음·끝 시각 지남·깨진 끝 시각", () => {
+  for (const decisions of [[answer(NOW - 1800_000)], [answer(NOW - 1800_000, "감독")], [{ id: "d2", status: "open", to: "@user" }]]) {
+    assert.equal(autopilotStrip(snap([on], decisions), NOW).on, true);
   }
+  const noEnd = { ...on };
+  delete noEnd.until;
+  assert.deepEqual(autopilotStrip(snap([noEnd]), NOW + 30 * 86400_000), { on: true, since: on.t, until: null, level: "autopilot" });
+  assert.equal(autopilotState([noEnd], NOW + 30 * 86400_000).on, true);
   const expired = autopilotStrip(snap([{ ...on, until: iso(NOW - 60_000) }]), NOW);
   assert.equal(expired.on, false);
   assert.equal(expired.last.phase, "expired");
+  assert.equal(autopilotStrip(snap([{ ...on, until: "깨짐" }]), NOW).on, false);
 });
 
 test("autopilotStrip: 켠 적 없음·끝 사건 있음·읽기 실패(모름)", () => {
@@ -52,7 +49,8 @@ test("autopilotStrip: 켠 적 없음·끝 사건 있음·읽기 실패(모름)",
   const off = { kind: "autopilot", phase: "off", startedAt: on.t, endedAt: iso(NOW - 600_000), t: iso(NOW - 600_000) };
   assert.deepEqual(autopilotStrip(snap([on, off]), NOW), { on: false, last: { since: on.t, endedAt: off.endedAt, phase: "off" } });
   assert.equal(autopilotStrip({ entries: [], ledgerLines: null, decisions: [] }, NOW).on, null);
-  assert.equal(autopilotStrip(snap([on], [], { decisionError: "손상" }), NOW).on, null);
+  // 결정 기록을 못 읽어도 켜짐 판정에는 쓰지 않는다
+  assert.equal(autopilotStrip(snap([on], [], { decisionError: "손상" }), NOW).on, true);
 });
 
 test("결정 글에서 PR head·CI 줄은 적혀 있을 때만 읽는다", () => {
