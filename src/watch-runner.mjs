@@ -4,6 +4,7 @@ import {createProcessCollections} from './process-collections.mjs';
 import { ledgerHome } from "./ledger.mjs";
 import { isNotificationHold } from './notification-guard.mjs';
 import { runStaleNotices, STALE_NOTICE_EVERY_MS } from './watch-stale-notice.mjs';
+import { runProceedNotices } from './watch-proceed-notice.mjs';
 import { MailWatch } from "./watch-mail.mjs";
 import { taskIdentity, taskConnectionError } from "./task-identity.mjs";
 import { doneMarkerOf } from "./done-marker.mjs";
@@ -245,6 +246,7 @@ export async function runWatch({
   const pendingNudges = new Map();
   let lastStaleNoticeAt = 0;
   const pendingStaleHeld = [];
+  const proceedNoticeState = {seeded: false, keys: new Set()}, pendingProceedHeld = [];
   let hierarchyHash = null;
   let scopeSignature = null;
   const queuedAI = new Map();
@@ -824,6 +826,16 @@ export async function runWatch({
           print(`[감시sh ${clockTime(cycleAt)}] 오래된 미확정 재안내: 보냄 ${out.sent} · 미룸 ${out.held} · 실패 ${out.failed} · 받는 쪽 모름 ${out.unknownRecipient}`);
         }
       } catch (error) { print(`[감시sh ${clockTime(cycleAt)}] 오래된 미확정 재안내 실패: ${error.message}`); }
+    }
+    // 완전자율: 대기 시간이 지나 진행할 자격이 생긴 결정을 요청한 역할에게 따로 1회 알린다(놀고 있음·답 대기 가림과 무관).
+    // 주기가 이미 만든 proceedable·스냅샷·관찰한 세션만 쓰고 새 읽기는 없다. 후보가 없으면 아무것도 하지 않는다.
+    if (proceedable.length && !observationError) {
+      try {
+        const out = runProceedNotices({proceedable, ap: autopilotWingmanOnce(), parents, liveSessions: roles.liveSessions, entries,
+          state: proceedNoticeState, pendingHeld: pendingProceedHeld, clock: clockTime(cycleAt), record,
+          send: (role, message) => (sendNudge ?? sendAlert)(role, message)});
+        if (out.sent || out.held || out.failed) print(`[감시sh ${clockTime(cycleAt)}] 추천대로 진행 자격 안내: 보냄 ${out.sent} · 미룸 ${out.held} · 실패 ${out.failed}`);
+      } catch (error) { print(`[감시sh ${clockTime(cycleAt)}] 추천대로 진행 자격 안내 실패: ${error.message}`); }
     }
     // 이전 주기에 보류된 1단 알림. 이번 주기의 새 보류는 다음 주기에 다시 본다.
     const heldNudges = new Map(pendingNudges);

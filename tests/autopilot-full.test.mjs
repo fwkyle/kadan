@@ -1,5 +1,7 @@
 import "./helpers/isolated-home.mjs";
 import test from 'node:test';
+import {spawn} from 'node:child_process';
+import {notifyUser, resetDiscordBlock, NOTIFY_LOG_FILE} from '../src/user-notify.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -304,6 +306,44 @@ test('(5) 통과: 결정은 열린 채 진행 기록이 덧붙고, 알림 1회·
   w4.hook.impl = () => ({error: '전달 실패'});
   const d4 = w4.request();
   assert.match(withNotify(() => w4.proceed(d4.id, {at: Date.parse(d4.at) + 31 * MIN})).warnings.join(), /알림을 보내지 못했습니다: 전달 실패/);
+});
+
+// 갈아 끼운 알림 함수가 아니라 실제 notifyUser → 게시 정책(postPolicy)을 지나 '보냄'에 이르는지 본다. 디코는 따로 띄운 가짜 웹훅이다.
+test('(5b) 진행 알림은 실제 게시 정책을 지나 새 글로 나가고, 정책이 건너뛰면 경고가 난다', async () => {
+  resetDiscordBlock();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-autopilot-full-hook-'));
+  const logFile = path.join(dir, 'requests.jsonl');
+  const helper = new URL('./helpers/fake-webhook.mjs', import.meta.url).pathname;
+  const child = spawn(process.execPath, [helper, logFile, JSON.stringify([{status: 200, body: {id: 'D1', channel_id: 'C1'}}])], {stdio: ['ignore', 'pipe', 'inherit']});
+  try {
+    const port = await new Promise(resolve => child.stdout.once('data', d => resolve(Number(String(d).match(/PORT (\d+)/)[1]))));
+    const envFile = path.join(dir, 'secret.env');
+    fs.writeFileSync(envFile, `DISCORD_WEBHOOK_URL=http://127.0.0.1:${port}/api/webhooks/111/FAKETOKEN-abc123\nDISCORD_USER_ID="424242424242"\n`);
+    const env = {KADAN_NOTIFY: '', KADAN_NOTIFY_ENV_FILE: envFile};
+    const w = world({decideAfter: '30m'});
+    w.hook.impl = (m, o) => notifyUser(m, () => ({status: 0}), {...o, home: w.home, env});
+    const d = w.request();
+    const r = withNotify(() => w.proceed(d.id, {at: Date.parse(d.at) + 31 * MIN}));
+    assert.equal(r.warnings, undefined, `경고 없음: ${r.warnings}`);
+    const sent = fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    assert.equal(sent.length, 1, '디코 요청 1회');
+    assert.match(JSON.parse(sent[0].body).content, /추천대로 진행함/);
+    assert.deepEqual(JSON.parse(sent[0].body).allowed_mentions, {parse: []}, '조용히(멘션 없음)');
+    const log = fs.readFileSync(path.join(w.home, NOTIFY_LOG_FILE), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    assert.ok(log.some(e => e.kind === 'decision-proceed' && e.outcome === 'sent'), JSON.stringify(log));
+    // 정책이 모르는 종류로 건너뛰는 경우는 경고로 드러난다(진행 기록은 남는다).
+    const w2 = world({decideAfter: '30m'});
+    w2.hook.impl = (m, o) => notifyUser(m, () => ({status: 0}), {...o, kind: 'decision-unknown', home: w2.home, env});
+    const d2 = w2.request();
+    const r2 = withNotify(() => w2.proceed(d2.id, {at: Date.parse(d2.at) + 31 * MIN}));
+    assert.match(r2.warnings.join(), /나갔다는 표시가 없습니다/);
+    assert.ok(w2.store.get(d2.id).proceeded);
+    // KADAN_NOTIFY=off는 경고 없이 넘어간다.
+    const w3 = world({decideAfter: '30m'});
+    const d3 = w3.request();
+    const prev = process.env.KADAN_NOTIFY; process.env.KADAN_NOTIFY = 'off';
+    try { assert.equal(w3.proceed(d3.id, {at: Date.parse(d3.at) + 31 * MIN}).warnings, undefined); } finally { process.env.KADAN_NOTIFY = prev; }
+  } finally { child.kill('SIGTERM'); }
 });
 
 // (6) 진행 뒤 사람 답 --------------------------------------------------------------------------------------------------
@@ -641,4 +681,72 @@ test('R4 채팅 결정(--chat)도 --reversible·--not-prohibited를 받고 같�
   hold(w);
   code2(() => w.request({question: '다른 질문입니다'}), /보류·관문 거절 기록/);
   code2(() => w.request({question: '운영 배포를 할까요?'}), /낱말 때문에 막혔으면 kyle 답을 기다립니다|보류·관문 거절 기록/);
+});
+
+// (C) 확인 경로 줄의 PR 주소만 낱말 거름에서 뺀다. 그 밖은 전부 그대로 거른다.
+test('(C) 낱말 거름: 이유의 `- 라벨: PR 주소` 줄은 풀리고, 그 밖의 모든 자리는 계속 막힌다', () => {
+  const PR = 'https://github.com/o/r/pull/12';
+  const ok = {question: '이 순서로 갈까요?', options: ['예', '아니오'], recommendation: '예'};
+  const gated = reason => gatedDecisionText({...ok, reason});
+  // 풀리는 꼴: 줄 전체가 `- 라벨: 주소 하나`
+  assert.equal(gated(`- PR: ${PR}`), false);
+  assert.equal(gated(`- 확인 경로: ${PR}`), false);
+  assert.equal(gated(`요약 한 줄\n- PR: ${PR}\n- 확인 경로 없음: 시험`), false);
+  // 여전히 막히는 꼴
+  assert.equal(gated(`- PR: ${PR} 머지 가능`), true, '주소 뒤에 글이 더 있음');
+  assert.equal(gated(`- 머지할 PR: ${PR}`), true, '라벨의 낱말');
+  assert.equal(gated(`- PR: ${PR}\n머지해도 될까요`), true, '이유의 다른 줄');
+  assert.equal(gated(`PR ${PR}`), true, '라벨 없는 줄');
+  assert.equal(gated(`- 두 PR: ${PR} ${PR}`), true, '주소가 둘');
+  assert.equal(gated(`- PR: ${PR}/files`), true, '다른 모양의 주소');
+  assert.equal(gated(`- 설명 (${PR}): ${PR}`), true, '라벨 안의 주소');
+  assert.equal(gated(`- PR: #12`), true, '#숫자는 풀지 않음');
+  assert.equal(gated(`- PR: https://github.com/o/r/pull/12 #12`), true);
+  assert.equal(gatedDecisionText({...ok, question: `${PR} 볼까요?`, reason: '- 확인 경로 없음: 시험'}), true, '질문의 주소');
+  assert.equal(gatedDecisionText({...ok, recommendation: PR, reason: '- 확인 경로 없음: 시험'}), true, '추천의 주소');
+  assert.equal(gatedDecisionText({...ok, options: [PR, '아니오'], reason: '- 확인 경로 없음: 시험'}), true, '선택지의 주소');
+  assert.equal(gated(`- PR: https://example.com/o/r/pull/12 배포`), true, '다른 낱말은 그대로');
+  // 낱말 목록은 하나도 빼지 않았다
+  for (const word of ['관문', '머지', '배포', '운영', '삭제', 'merge-gate', 'night-merge', 'force', 'DB']) assert.equal(gated(`- ${word}: ${PR}`), true, word);
+});
+
+test('(C) PR을 확인 경로로 적은 결정이 요청되고 자격 시각에 진행된다', () => {
+  const w = world({decideAfter: '30m'});
+  const d = w.request({reason: '- PR: https://github.com/o/r/pull/12'});
+  const r = w.proceed(d.id, {at: Date.parse(d.at) + 31 * MIN});
+  assert.equal(r.already, false);
+  assert.ok(w.store.get(d.id).proceeded);
+});
+
+// (C-r2) 주소 예외는 실제 PR 경로 하나만 푼다: 소유자·저장소는 GitHub 이름 글자(영문·숫자·-·_·.)만, 쿼리·조각·추가 경로 없음.
+test('(C-r2) 주소 예외 경계: 실제 PR 경로만 풀리고 쿼리·조각·이상한 소유자/저장소·호스트 변형은 이전처럼 거른다', () => {
+  const ok = {question: '이 순서로 갈까요?', options: ['예', '아니오'], recommendation: '예'};
+  const gated = url => gatedDecisionText({...ok, reason: `- PR: ${url}`});
+  const asQuestion = url => gatedDecisionText({...ok, question: url, reason: '- 확인 경로 없음: 시험'});   // 예외가 없는 자리 = 예외 이전의 판정
+  assert.equal(gated('https://github.com/o/r/pull/12'), false, '풀리는 것');
+  assert.equal(gated('https://github.com/my-org_1/re.po-x/pull/7'), false, 'GitHub 이름 글자');
+  assert.equal(gated('http://github.com/o/r/pull/12'), false);
+  const blocked = [
+    'https://github.com/o/r#123/pull/12', 'https://github.com/o/#123/pull/12', 'https://github.com/o/r?delete/pull/12',
+    'https://github.com/o/r/pull/12#123', 'https://github.com/o/r/pull/12?delete',
+    'https://github.com/o?x/r/pull/12', 'https://github.com/o/r?x/pull/12', 'https://github.com/o;x/r/pull/12', 'https://github.com/o/r;x/pull/12',
+    'https://github.com/o%23/r/pull/12', 'https://github.com/o/r%23/pull/12', 'https://github.com/o@x/r/pull/12', 'https://github.com/o/r@x/pull/12',
+    'https://github.com/o:x/r/pull/12', 'https://github.com/o/r:x/pull/12', 'https://github.com/o/r/pull/12/files', 'https://github.com/o/r/extra/pull/12',
+    'https://github.com/o/r/pull/12/',
+  ];
+  for (const url of blocked) assert.equal(gated(url), true, url);
+  // 호스트 변형: 예외가 바꾸지 않는다(예외 없는 자리의 판정과 같다). 낱말·#숫자 거름은 그대로다.
+  for (const url of ['https://github.com:443/o/r/pull/12', 'https://x@github.com/o/r/pull/12', 'https://github.com.evil.example/o/r/pull/12',
+    'https://github.com@evil.example/o/r/pull/12', 'https://evil.example/github.com/o/r/pull/12'])
+    assert.equal(gated(url), asQuestion(url), url);
+});
+
+// (C-r3) 점만으로 된 조각(`.`·`..`)은 경로 정리로 PR 경로가 아니게 되므로, 이름은 영문·숫자로 시작해야 풀린다.
+test('(C-r3) 주소 예외: 소유자·저장소 조각은 영문·숫자로 시작해야 하고, 점·밑줄·하이픈 시작은 풀지 않는다', () => {
+  const ok = {question: '이 순서로 갈까요?', options: ['예', '아니오'], recommendation: '예'};
+  const gated = url => gatedDecisionText({...ok, reason: `- PR: ${url}`});
+  for (const url of ['https://github.com/o/./pull/12', 'https://github.com/o/../pull/12', 'https://github.com/./r/pull/12', 'https://github.com/../r/pull/12',
+    'https://github.com/o/.../pull/12', 'https://github.com/o/.git/pull/12', 'https://github.com/-x/r/pull/12', 'https://github.com/o/-x/pull/12',
+    'https://github.com/_x/r/pull/12', 'https://github.com/o/_x/pull/12']) assert.equal(gated(url), true, url);
+  for (const url of ['https://github.com/o/r/pull/12', 'https://github.com/re.po-x/a_b.c/pull/12']) assert.equal(gated(url), false, url);
 });

@@ -76,6 +76,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 13 | `commands/send.mjs:91` 사용자 우편함 편지 | `mail` (+`work`) | 새 글(업무 있으면 업무 글) | 조용히 | **안 보냄**, 업무 글이 있으면 상태 메시지만 고침 — 판단 필요, 추천=안 보냄 | 완료·검수·진행 보고가 여기로 온다. kyle이 정할 일은 결정 요청(14번)으로 가야 한다. 편지 자체는 우편함에 그대로 있다 |
 | 14 | `decisions.mjs:102` 결정 요청 | `decision-request` | 새 글(업무 글 또는 레포 `결정` 글) | 울림 | **새 글 유지**(a) | kyle만 정한다 |
 | 15 | `decisions.mjs` 답변·취소 | `decision-answer`·`decision-cancel` | 요청 글 고쳐 쓰기. 글을 못 찾을 때만 새 메시지 | 조용히 | **고쳐 쓰기 유지**(a의 마감) | 해결됨 표시. 새 메시지는 원래 글이 지워졌을 때뿐이다 |
+| 15a | `decisions.mjs` `proceed` (완전자율이 추천대로 진행) | `decision-proceed` | 새 글(업무 글 또는 레포 `결정` 글). 못 보냈거나 정책이 건너뛰면 `kadan decision proceed` 출력에 경고 | 조용히 | **새 글**(a의 후속, 결정 답·취소와 같은 수준) | kyle이 자리를 비운 동안 추천대로 진행된 일을 알 수 있어야 한다. 알림 실패로 진행 기록을 되돌리지는 않는다. `KADAN_NOTIFY=off`는 경고 없이 넘어간다 |
 | 16 | `decisions.mjs:29` `postThreadNote` (`kadan discord send --thread --quiet`) | 해당 없음(`notifyUser` 우회) | 새 글 | 조용히 | **그대로**(이번 정책 코드 밖) — 판단 필요, 추천=유지 | kyle의 채팅 자유 답을 취소했다는 결정 글 안의 한 줄이다. 결정(a)의 일부라 새 글 목록에 두되, 다음 단계에서 요청 글 고쳐 쓰기로 합칠 수 있다 |
 | 17 | `user-notify.mjs` `refreshWorkStatus` 호출: `work-command.mjs:43`(update·execute·complete·cancel·reopen), `commands/done.mjs:17`, 정책 안 보냄 경로 | `status` | 글이 있으면 상태 메시지 고쳐 쓰기. **글이 없는 열린 업무는 첫 상태 글과 상태 메시지를 업무당 한 번 만든다**(멘션 없이 조용히). 끝난 업무는 만들지 않는다 | 없음 | **고쳐 쓰기 + 업무당 첫 글 1번** | 발령·완료·검수·진행은 이 한 메시지로 보인다. 업무당 1번 새 글은 카드가 허용한 예외다(PR #192 검수 F2) |
 | 18 | `user-notify.mjs` `syncStatus` 복구 | `status` | 상태 메시지가 지워졌으면 같은 글에 새 상태 메시지 1개, 글이 지워졌으면 새 글 1개 | 조용히 | **그대로** | 지워진 것을 되살리는 복구라 업무당 1개다 |
