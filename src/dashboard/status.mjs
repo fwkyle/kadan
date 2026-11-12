@@ -24,7 +24,8 @@ import { effectiveWorkOwner, withEffectiveOwner } from "../handover-state.mjs";
 import { previousGenerationExecutions, previousGenerationWorks } from "../watch-scope.mjs";
 import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
-import { letters, pick, compact, page } from "./shared.mjs";
+import { nextTimeBoundary } from "../wall-snapshot-cache.mjs";
+import { letters, pick, compact, page, piece, earlier, staleBoundary } from "./shared.mjs";
 import { frontStrip } from "./front.mjs";
 import { autopilotStrip, mergeLineInfo, mergeContext } from "./autopilot-view.mjs";
 import { sidebarRepos, repoOfRow, repoOfDecision, answeredMergesToday, alertsOfRepo } from "./repo-view.mjs";
@@ -38,14 +39,29 @@ export const FLOW_PREVIEW = 20;
 
 // 같은 이름을 새 대화가 다시 쓰기 전에 그 이름에 붙은 열린 업무·발령. 놀고 있음 할 일에서는 빠지지만 여기서 건수로 보인다.
 // 관계표나 원장을 모르면 null(모름). 새 세대가 넘겨받으려면 기존 재배정·인계 명령을 쓴다(docs/hierarchy.md).
+// 입력(관계표·원장 사건·등록된 업무·카드)이 직전과 같으면 다시 계산하지 않는다. 시각은 읽지 않는다. 실패한 계산은 기억하지 않는다.
 function previousGenerationItems(snapshot, m) {
   if (!m.hierarchy || snapshot.ledgerLines === null) return null;
   try {
-    const parents = new Map(Object.entries(m.hierarchy)), entries = snapshot.entries ?? [];
-    const works = (registeredCenterWorks(snapshot).works ?? []).map((w) => withEffectiveOwner(w, entries));
-    return [...previousGenerationWorks(works, entries, parents, m.cards), ...previousGenerationExecutions(m.cards, entries, parents, works)];
+    const entries = snapshot.entries ?? [], registered = registeredCenterWorks(snapshot).works ?? [];
+    return piece("previous-generation", [m.hierarchy, entries, entries.length, registered, m.cards], () => {
+      const parents = new Map(Object.entries(m.hierarchy));
+      const works = registered.map((w) => withEffectiveOwner(w, entries));
+      return [...previousGenerationWorks(works, entries, parents, m.cards), ...previousGenerationExecutions(m.cards, entries, parents, works)];
+    });
   } catch { return null; }
 }
+// 카드를 실행 묶음으로 나누는 계산(오래된 미확정 목록·판 진행 수)이 값을 바꾸는 다음 시각.
+// (1) 카드에 적힌 시각이 지금보다 뒤였다가 지나는 때(nextTimeBoundary) (2) 확인 필요 실행의 마지막 신호가 24시간이 되는 때.
+// (2)는 행(m.rows)의 signalAt으로 구한다. 행이 계산된 뒤(m.builtAt) 카드 시각 경계를 이미 지났으면 행의 신호가 지금 계산과
+// 다를 수 있으므로 기억하지 않는다(같은 수집 결과를 cacheSec 동안 다시 쓰는 요청에서만 생긴다).
+const bucketTimes = (m) => ({
+  until: (now) => {
+    const crossed = nextTimeBoundary(m.cards, m.builtAt);
+    if (crossed !== null && crossed <= now) return now;
+    return earlier(nextTimeBoundary(m.cards, now), staleBoundary(m.rows, now));
+  },
+});
 const previousSummary = (items) => items && ({
   works: items.filter((i) => i.kind === "work").length, executions: items.filter((i) => i.kind === "execution").length, items: items.slice(0, 20),
 });
@@ -59,7 +75,10 @@ export function statusData(snapshot, url, stamp, m) {
   // 상단 띠의 나머지 세 질문. 세션 상태·원장을 모르면 null이다(dashboard-band.mjs).
   const live = liveSessions(snapshot.center);
   // 화면에는 최근 20건만 보이지만 슈퍼감독별 묶기는 열린 경보 전부로 센다.
-  const allAlerts = snapshot.ledgerLines === null ? null : openAlerts(snapshot.entries || [], { limit: Infinity });
+  // 열린 경보·슈퍼감독 프로필·답을 기다리는 질문 수는 원장 사건 배열만 읽는다(시각 없음). 배열이 같으면 다시 훑지 않는다.
+  const ledger = snapshot.entries || [];
+  const allAlerts = snapshot.ledgerLines === null ? null
+    : piece("open-alerts", [ledger, ledger.length], () => openAlerts(ledger, { limit: Infinity }));
   const alerts = allAlerts && { count: allAlerts.count, items: allAlerts.items.slice(0, 20) };
   const statusRows = m.rows
     .filter(
@@ -76,7 +95,8 @@ export function statusData(snapshot, url, stamp, m) {
     )
     .map(compact);
   // 원장을 못 읽으면 프로필을 모르므로 예전 기준(상위가 @user)으로 돌아간다(super-role.mjs).
-  const profiles = snapshot.ledgerLines === null ? null : superProfiles(snapshot.entries || []);
+  const profiles = snapshot.ledgerLines === null ? null
+    : piece("super-profiles", [ledger, ledger.length], () => superProfiles(ledger));
   const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles });
   // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
   // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
@@ -115,6 +135,12 @@ export function statusData(snapshot, url, stamp, m) {
   // 사이드 탭 목록(sidebar)은 거르기 전 전체로 만든다(저장소를 고른 뒤에도 다른 저장소로 옮길 수 있어야 한다).
   const repo = url.searchParams.get("repo") || null;
   const mergeCtx = mergeContext(snapshot);
+  const boards = snapshot.center.boards;
+  const staleCards = piece("stale-cards", [m.cards, m.rows],
+    () => m.cards.filter((c) => isExecution(c) && executionBucket(c) === "stale"), bucketTimes(m));
+  // 판마다 읽는 것은 그 판의 카드 배열뿐이다(판 객체는 수집마다 새로 만들지만 카드 배열은 카드 상태와 함께 유지된다).
+  const boardCounts = piece("board-counts", [m.cards, m.rows, ...boards.map((b) => b.cards)],
+    () => boards.map((b) => boardProgressCounts(b, { buckets: true })), bucketTimes(m));
   const sidebar = sidebarRepos({ rows: m.rows, decisions: openDecisions, supervisors });
   const inRepo = (r) => !repo || repoOfRow(r) === repo;
   const repoRows = statusRows.filter(inRepo), repoWorksAll = statusWorks.filter(inRepo);
@@ -139,9 +165,7 @@ export function statusData(snapshot, url, stamp, m) {
     repo,
     sidebar,
     ...(repo ? { repoView: { mergedToday: answeredMergesToday(snapshot.decisionError ? null : snapshot.decisions ?? [], repo) } } : {}),
-    cleanupRequest: staleCleanupRequest(
-      m.cards.filter((c) => isExecution(c) && executionBucket(c) === "stale"),
-    ),
+    cleanupRequest: staleCleanupRequest(staleCards),
     rows: repoRows.map(slimRow),
     resources: snapshot.resources,
     resourceError: snapshot.resourceError,
@@ -151,13 +175,16 @@ export function statusData(snapshot, url, stamp, m) {
     userTurnWaits: showCycleWaits(snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits),
     executionCount: m.cards.filter(isExecution).length,
     waitingQuestions: (() => {
-      try { return letters(snapshot).filter(letter => letter.replyStatus === "waiting").length; }
+      try {
+        return piece("waiting-questions", [snapshot.entries, snapshot.entries?.length, snapshot.ledgerLines === null],
+          () => letters(snapshot).filter(letter => letter.replyStatus === "waiting").length);
+      }
       catch { return null; }
     })(),
-    boards: snapshot.center.boards.map((b) => ({
+    boards: boards.map((b, i) => ({
       name: b.name,
       state: b.state,
-      ...boardProgressCounts(b, { buckets: true }),
+      ...boardCounts[i],
       // 끝난 판은 이름과 건수만 보인다(Status.tsx). 감시 영역 HTML은 열린 판에만 싣는다.
       ...(b.state === "done" ? {} : { watchHtml: renderWatchOverview(snapshot.center, b) }),
     })),
