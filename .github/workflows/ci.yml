@@ -28,7 +28,9 @@ jobs:
           node-version: 24
       - name: install tmux (ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: |
+          command -v tmux >/dev/null || (sudo apt-get update && sudo apt-get install -y tmux)
+          tmux -V
       - name: install tmux (macos)
         if: runner.os == 'macOS'
         run: brew install tmux
