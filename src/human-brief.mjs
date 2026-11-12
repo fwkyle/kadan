@@ -106,6 +106,8 @@ export class Scribe {
 }
 const scribe=new Scribe();
 let briefReader = null;
+// 시험·측정이 읽은 줄 수를 확인하는 값. 아직 읽은 적이 없으면 null.
+export const humanBriefReaderInfo = () => briefReader?.read.info() ?? null;
 export function readHumanBriefInputs(home,keys){
  let stored = new Map(), readError = null;
  if (home) {
