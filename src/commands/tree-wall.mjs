@@ -100,7 +100,7 @@ function readWallData(runtime, listOnly, summaryBodies) {
   catch(error){workError=error;}
   const briefInputs=readHumanBriefInputs(home,cards.map(c=>c.key));
   let operationsInputs=null,operationsInputsError=null,decisions=[],decisionError=null;
-  try{decisions=new DecisionStore(home).list();}catch(error){decisionError=error.message;}
+  try{decisions=new DecisionStore(home).list({dashboard:true});}catch(error){decisionError=error.message;}
   if(registeredWorks)try{
     operationsInputs=readOperationsFlowInputs(home,registeredWorks,{cards,ledgerState,decisions,decisionError});
   }catch(error){operationsInputsError=error.message;}
