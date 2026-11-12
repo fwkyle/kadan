@@ -30,7 +30,7 @@ import {createDashboardStoreReader} from '../dashboard-store-reader.mjs';
 import { createDashboardSummaryReader } from "../dashboard-summary-reader.mjs";
 import {readHumanBriefInputs} from '../human-brief.mjs';
 import {readOperationsFlowInputs} from '../operations-flow.mjs';
-import {DecisionStore} from '../decisions.mjs';
+import {dashboardDecisionList} from '../decisions.mjs';
 import {createDashboardLedgerReader} from '../dashboard-ledger-reader.mjs';
 import {createDashboardMailReader} from '../dashboard-mail-reader.mjs';
 
@@ -100,7 +100,7 @@ function readWallData(runtime, listOnly, summaryBodies) {
   catch(error){workError=error;}
   const briefInputs=readHumanBriefInputs(home,cards.map(c=>c.key));
   let operationsInputs=null,operationsInputsError=null,decisions=[],decisionError=null;
-  try{decisions=new DecisionStore(home).list();}catch(error){decisionError=error.message;}
+  try{decisions=dashboardDecisionList(home);}catch(error){decisionError=error.message;}
   if(registeredWorks)try{
     operationsInputs=readOperationsFlowInputs(home,registeredWorks,{cards,ledgerState,decisions,decisionError});
   }catch(error){operationsInputsError=error.message;}

@@ -41,6 +41,24 @@ function eventReader(home,state=readLedgerState(home)){
  return predicate=>rows.filter(predicate);
 }
 
+// 업무마다 감시 호출 사건 전체를 다시 거르지 않게, 실행 주소별 감시 호출 수를 한 번만 센다(업무 수 × 감시 호출 수 → 감시 호출 수).
+// 작업 주소가 없는 호출과 주소를 풀지 못한 호출은 어느 실행에도 세지 않는다(바꾸기 전 식 `keys.has(resolve(...).key)`와 같다).
+export function watchCallCounts(watchCalls,identity){
+ const counts=new Map();
+ for(const e of watchCalls){
+  if(!e.taskId)continue;
+  const key=identity.resolve(e.taskId,e.executionKey).key;
+  if(key!==undefined)counts.set(key,(counts.get(key)??0)+1);
+ }
+ return counts;
+}
+// 실행마다 그 업무의 연결 사건을 다시 훑지 않게, 주소가 모호한(같은 카드 ID가 여러 저장소에 있는) 사건의 작업 ID를 업무마다 한 번만 모은다.
+export function ambiguousTaskIds(events,identity){
+ const ids=new Set();
+ for(const e of events)if(identity.resolve(e.taskId,e.executionKey).state==='ambiguous')ids.add(e.taskId);
+ return ids;
+}
+
 function workAt(home,key){
  if(!validKey(key))throw failure('업무 주소는 저장소/업무ID입니다.',400);
  const work=new WorkStore(home).get(key);
@@ -128,6 +146,7 @@ function followupContext(home,snapshot={}){
    return result;
   };
   context.byAddress=index(context.sendDone,e=>[e.executionKey,e.taskId]);
+  context.watchCallsByKey=watchCallCounts(context.watchCalls,context.identity);
   context.transfersByKey=index(context.transfers,e=>Array.isArray(e.taskIds)
    ?e.taskIds.map(id=>context.identity.resolve(id).key):[null]);
   context.decisions=sources.decisions;context.error=sources.error;}
@@ -153,7 +172,9 @@ function followupFor(home,work,executions,context,now=stamp()){
  const decisions=context.decisions.filter(d=>d.work===work.key||work.executions.some(c=>c.key===d.card));
  const followup=workFollowup(work,executions,{automatic,decisions,error});
  const identity=context.identity||taskIdentity(context.cards||[]),keys=new Set(work.executions.map(x=>x.key));
- const linkedWatchCalls=context.watchCalls?context.watchCalls.filter(e=>e.taskId&&keys.has(identity.resolve(e.taskId,e.executionKey).key)).length:null;
+ // 목록(operationsFlowSummaries)은 문맥에서 한 번 센 표를 더한다. 표가 없는 문맥(상세·시험)은 예전처럼 직접 거른다.
+ const linkedWatchCalls=context.watchCallsByKey?[...keys].reduce((n,key)=>n+(context.watchCallsByKey.get(key)??0),0)
+  :context.watchCalls?context.watchCalls.filter(e=>e.taskId&&keys.has(identity.resolve(e.taskId,e.executionKey).key)).length:null;
  const workFacts=workFactsOf(work),opened=workFacts.opened,ended=workFacts.ended;
  const terminal=['done','cancelled'].includes(work.status);
  const cycles=Math.max(0,...work.executions.filter(c=>['implementation','fix','review'].includes(c.phase)).map(c=>Number(c.round)||0));
@@ -184,6 +205,7 @@ export function operationsFlowSummaries(home,works,snapshot={}){
     for(const key of keys)for(const e of context.transfersByKey.get(key)??[])handovers.add(e);
     records={events:[...events].sort((a,b)=>a.seq-b.seq),handovers:[...handovers].sort((a,b)=>a.seq-b.seq)};
     records.ordered=[...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq);
+    records.ambiguousIds=ambiguousTaskIds(records.events,context.identity);
     records.byExecution=new Map();
     for(const e of workEntries(records.ordered,context.identity)) {
      if(e.taskConnection?.state!=='resolved'||!e.role)continue;
@@ -245,7 +267,9 @@ function executionModel(home,link,cardHeads,records,sharedIdentity=null,historie
   const facts=entry.facts;
   if(!facts.n||!facts.contiguous||!facts.keyConsistent||facts.firstKey!==link.key)throw failure('실행 이력 확인 필요');
   const card=facts.last,identity=sharedIdentity||taskIdentity(cardHeads);
-  const ambiguous=records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
+  // 목록은 업무마다 한 번 모은 집합을 본다. 집합이 없는 호출(상세·시험)은 예전처럼 직접 훑는다.
+  const ambiguous=records?.ambiguousIds?records.ambiguousIds.has(card.id)
+   :records?.events.some(e=>identity.resolve(e.taskId,e.executionKey).state==='ambiguous'&&e.taskId===card.id)??false;
   const runs=new Map(),sent=new Map(),seen=new Set();
   const ordered=records?(records.ordered??[...records.events,...records.handovers].sort((a,b)=>a.seq-b.seq)):[];
   const own=records?.byExecution?.get(card.key)??(records?.byExecution?[]:

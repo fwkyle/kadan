@@ -7,6 +7,7 @@ import {statusLabel,isEnded} from './status-labels.mjs';
 import {EXPLAIN_BY} from './actors.mjs';
 import {BRIEF_STAGES,buildExplainInput,explainInputHash,decisionsByCard} from './explain-input.mjs';
 import {createDashboardBriefReader} from './dashboard-brief-reader.mjs';
+import {dashboardDecisionRows} from './dashboard-decisions.mjs';
 import {listFactsOf,progressQuery} from './card-list-facts.mjs';
 
 export const isExecution=c=>c.workType!=='coordination';
@@ -116,7 +117,8 @@ export function readHumanBriefInputs(home,keys){
   catch {readError = '설명 기록을 읽을 수 없습니다';}
  }
  // 결정 기록은 설명 AI 줄의 신선도 판단에만 쓴다. 못 읽으면 결정 없는 입력으로 보고, 설명 AI 줄은 낡은 것으로 숨는다.
- let decisions=new Map();if(home)try{decisions=decisionsByCard(readStream(home,'decisions/events.jsonl',{optional:true}));}catch{}
+ // 결정 흐름은 바뀌었을 때만 DB에서 다시 읽는다(dashboard-decisions.mjs).
+ let decisions=new Map();if(home)try{decisions=decisionsByCard(dashboardDecisionRows(home));}catch{}
  return {stored,readError,decisions};
 }
 export function buildHumanBrief(center,home,inputs){
