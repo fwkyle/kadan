@@ -9,7 +9,7 @@ import {sendVersionedJson} from './versioned-response.mjs';
 import {serveDashboard} from './dashboard-static.mjs';
 import {howToData} from './dashboard-how-to.mjs';
 import {handleOperationsFlow} from './operations-flow.mjs';
-import {dashboardDecisionList} from './decisions.mjs';
+import {DecisionStore} from './decisions.mjs';
 import {createRunnerSettingsHistory} from './runner-settings-history.mjs';
 import {loadRemoteConfig, createRemoteGate, judgeRequest, sameOrigin, decisionToken, remoteOriginOk, remoteAudit} from './remote-access.mjs';
 import {centerSummary} from './center-summary.mjs';
@@ -548,7 +548,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
           const small={home,collectedAt:new Date(now()),runtime,error:null,centerError:null};
           if(route==='runners')small.entries=runnerHistory();
           if(route==='decisions'){
-            try{small.decisions=dashboardDecisionList(home);small.decisionError=null;}
+            try{small.decisions=new DecisionStore(home).list({dashboard:true});small.decisionError=null;}
             catch(error){small.decisionError=error.message;small.decisions=[];}
           }
           sendDashboardData(small,url,response);
@@ -617,7 +617,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       snapshot.home=home;
       // 결정 목록은 쓰는 응답에서만 읽는다(2026-10-14: 모든 요청이 매번 읽고 있었다).
       if(needsDecisions(url)&&(reused||typeof readSnapshot==='function')){
-        try{snapshot.decisions=dashboardDecisionList(home);snapshot.decisionError=null;}
+        try{snapshot.decisions=new DecisionStore(home).list({dashboard:true});snapshot.decisionError=null;}
         catch(error){snapshot.decisionError=error.message;snapshot.decisions=[];}
       }
     }

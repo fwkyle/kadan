@@ -16,7 +16,7 @@ import {taskIdentity} from '../src/task-identity.mjs';
 import {
   operationsFlowSummaries, operationsFlowDetail, operationsFlowIndex, watchCallCounts, ambiguousTaskIds,
 } from '../src/operations-flow.mjs';
-import {DecisionStore, dashboardDecisionList} from '../src/decisions.mjs';
+import {DecisionStore} from '../src/decisions.mjs';
 import {
   createDashboardDecisionsReader, dashboardDecisionRows, dashboardDecisionsInfo,
 } from '../src/dashboard-decisions.mjs';
@@ -256,6 +256,8 @@ function decisionHome() {
   return {home, cards, store};
 }
 const plain = v => JSON.parse(JSON.stringify(v));
+// 대시보드(수집·응답)가 쓰는 읽기. 결정을 쓰는 길은 인자 없는 list()·get()을 쓴다.
+const dashboardDecisionList = home => new DecisionStore(home).list({dashboard: true});
 // 바꾸기 전 읽기(오라클): DecisionStore.list()와 설명 입력의 decisionsByCard(readStream(...)).
 const oracleList = home => new DecisionStore(home).list();
 const oracleByCard = home => decisionsByCard(readStream(home, STREAM, {optional: true}));

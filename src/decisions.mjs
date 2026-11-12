@@ -54,14 +54,13 @@ export function withoutAuditFields(d){
  const {remote,...answer}=d.answer;return {...d,answer};
 }
 // 저장된 줄에서 결정마다 마지막 상태를 고른다. 형식이나 순번이 어긋난 줄이 하나라도 있으면 '결정 이력 손상'이다.
-export function latestDecisions(rows){
+function latestDecisions(rows){
  const latest=new Map();for(const e of rows){
   const old=latest.get(e.id);if(!Array.isArray(e.options)||e.options.length<2||!e.options.every(x=>typeof x==='string')||typeof e.question!=='string'||typeof e.reason!=='string'||(e.chat!==undefined&&e.chat!==true)||(e.chat===true?(e.card!==null||typeof e.work!=='string'):typeof e.card!=='string')||(e.work!==undefined&&typeof e.work!=='string')||(e.reversible!==undefined&&(typeof e.reversible!=='string'||!e.reversible.trim()))||(e.notProhibited!==undefined&&(!e.notProhibited||typeof e.notProhibited.by!=='string'||typeof e.notProhibited.at!=='string'))||(e.proceeded!==undefined&&(!e.proceeded||typeof e.proceeded.by!=='string'||typeof e.proceeded.at!=='string'||typeof e.proceeded.recommendation!=='string'||typeof e.proceeded.reversible!=='string'))||!supervisor(e.requestedBy)||(e.status==='answered'&&typeof e.answer?.text!=='string')||(e.answer?.source!==undefined&&e.answer.source!=='discord')||(e.answer?.messageId!==undefined&&typeof e.answer.messageId!=='string')||!e.id||e.to!=='@user'||e.revision!==(old?.revision??0)+1||!['open','answered','cancelled'].includes(e.status))throw new Error('결정 이력 손상');latest.set(e.id,e);
  }return [...latest.values()];}
-// 대시보드 읽기 전용 목록. 결정 기록이 바뀌지 않았으면 DB를 다시 읽지 않고 직전 목록(같은 배열, 얼려 있음)을 돌려준다.
-// 결정을 쓰는 길의 revision 확인은 이 함수가 아니라 늘 DB를 읽는 DecisionStore의 list()·get()을 쓴다.
+// 대시보드 읽기 전용 목록(list({dashboard:true})). 결정 기록이 바뀌지 않았으면 DB를 다시 읽지 않고 직전 목록(같은 배열, 얼려 있음)을 돌려준다.
 const dashboardLists=new WeakMap();
-export function dashboardDecisionList(home){
+function dashboardDecisionList(home){
  const rows=dashboardDecisionRows(home);
  let list=dashboardLists.get(rows);
  if(!list){list=Object.freeze(latestDecisions(rows));dashboardLists.set(rows,list);}
@@ -72,7 +71,12 @@ export class DecisionStore {
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'send',role,message],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'사람'},encoding:'utf8',timeout:15000});
   if(r.status!==0)throw new Error('통지 실패/불확실: 요청자 화면과 우편 원장을 확인하세요');
  });}
- list(){return latestDecisions(readStream(this.home,'decisions/events.jsonl',{optional:true}));}
+ // 인자 없이 부르면 늘 DB를 읽는다. 결정을 쓰는 길(요청·답변·취소·추천대로 진행)의 revision 확인은 이 갈래만 쓴다.
+ // dashboard:true는 대시보드(수집·응답) 읽기 전용이다: 결정 기록이 바뀌었을 때만 DB를 다시 읽는다(dashboard-decisions.mjs).
+ list({dashboard=false}={}){
+  if(dashboard)return dashboardDecisionList(this.home);
+  return latestDecisions(readStream(this.home,'decisions/events.jsonl',{optional:true}));
+ }
  get(id){const d=this.list().find(d=>d.id===id);if(!d)throw new Error('결정 요청 없음');return d;}
  write(d){appendStream(this.home,'decisions/events.jsonl',d);return d;}
  locked(fn){assertWritable(this.home);return transaction(this.home,fn);}
