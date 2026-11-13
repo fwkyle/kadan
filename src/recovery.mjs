@@ -277,6 +277,9 @@ function restoreLocked(flags, deps) {
       cmd: launch.launch, cwd: context.cwd}),
     ...launch.extra,
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
+    // 어려운 일 작업자 표시는 복원 대상 세대의 것을 그대로 잇는다(restart·reopen과 같다). 이 칸이 빠지면 발령 검사가
+    // 이 세션을 보통 작업자 기본값과 대조해 "옛 세션"으로 거절한다. 실행 명령의 모델·강도는 바꾸지 않는다.
+    ...(start.difficulty ? {difficulty: start.difficulty} : {}),
     ...(resumedIdentity.ok ? {
       harness: resumedIdentity.harness, model: resumedIdentity.model,
     } : {}),
