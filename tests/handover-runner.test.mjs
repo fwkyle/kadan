@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { Handover } from '../src/handover.mjs';
 import { HandoverRunner } from '../src/handover-runner.mjs';
 import { guardedSend } from '../src/cli.mjs';
+import { registerStartedRole } from '../src/hierarchy-register.mjs';
 
 function fixture(options = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-handover-runner-'));
@@ -18,6 +19,9 @@ function fixture(options = {}) {
   const rows = ['old','child','upper'].map((role,i) =>
     ({kind:'start',role,session:`kadan-${role}`,panePid:String(i+10),floor:'tmux',cmd:'cat',cwd:home}));
   rows.push({kind:'send',role:'old',taskId:'existing-task'});
+  // 실제 흐름과 같게: 감시기가 관계표를 이미 읽고 있고, 후임을 띄우면 실제 등록 코드가 후임 줄을 넣는다(아래 start).
+  rows.push({kind:'hierarchy-loaded',path:hierarchy,pid:process.pid,
+    hash:createHash('sha256').update(fs.readFileSync(hierarchy)).digest('hex')});
   const live = new Map(rows.filter(e=>e.kind==='start').map(e=>[`kadan-${e.role}`,e.panePid]));
   const sent = [], stopped = [], notifications = [], spawns = [];
   let clock = Date.parse('2026-09-09T00:00:00Z');
@@ -27,7 +31,11 @@ function fixture(options = {}) {
     send:(s,message)=>{sent.push({session:s,message});if(options.activationFails&&message.includes('인계 전환 완료'))throw new Error('send uncertain');}};
   const h = new Handover({home,floor,env:{KADAN_ROLE:'upper',KADAN_HOME:home,PRIVATE_TOKEN:'runner-canary'},
     readEntries:()=>rows,record:e=>rows.push(e),now:()=>clock,watchAlive:()=>!options.watchDead,
-    start:role=>{live.set(`kadan-${role}`,'30');rows.push({kind:'start',role,session:`kadan-${role}`,panePid:'30'});},
+    start:role=>{
+      live.set(`kadan-${role}`,'30');rows.push({kind:'start',role,session:`kadan-${role}`,panePid:'30'});
+      const registered=registerStartedRole({role,creator:h.env.KADAN_ROLE,cmd:'cat',home,entries:rows});
+      assert.equal(registered.registered,true,registered.reason);
+    },
     send:(role,message,pid)=>guardedSend({floor,session:`kadan-${role}`,role,message,recordedPid:pid || live.get(`kadan-${role}`),
       env:{KADAN_HOME:home},readEntries:()=>rows,record:e=>rows.push(e),saveBody:()=>{}}),
     sleep:ms=>{assert.ok(!fs.existsSync(path.join(home,'handovers','.lock')) || options.busyLock);clock+=ms;f.onSleep?.(clock-Date.parse('2026-09-09T00:00:00Z'));},
@@ -58,6 +66,11 @@ function fixture(options = {}) {
   f.loaded = () => rows.push({kind:'hierarchy-loaded',path:hierarchy,pid:process.pid,
     hash:createHash('sha256').update(fs.readFileSync(hierarchy)).digest('hex')});
   f.flow = () => {if(h.status(f.s.id).phase==='prepared')f.accept();else f.loaded();};
+  // 다른 판의 등록·정리처럼 관계표 파일 전체를 다시 쓴다.
+  f.edit = change => {
+    const next=JSON.parse(fs.readFileSync(hierarchy,'utf8'));change(next);
+    fs.writeFileSync(hierarchy,JSON.stringify(next,null,2)+'\n');
+  };
   return f;
 }
 
@@ -98,7 +111,7 @@ for(const change of ['context','receipt','task','hierarchy','successor-dead','ol
       if(change==='context')fs.appendFileSync(f.context,'변경');
       if(change==='receipt')fs.appendFileSync(f.receipt,' ');
       if(change==='task')f.rows.push({kind:'send',role:'old',taskId:'new-task'});
-      if(change==='hierarchy')fs.appendFileSync(f.hierarchy,' ');
+      if(change==='hierarchy')f.edit(t=>{t.old='upper';t.child='old';});
       if(change==='successor-dead')f.live.delete('kadan-old-next');
       if(change==='old-pid')f.live.set('kadan-old','99');
     }
@@ -106,6 +119,20 @@ for(const change of ['context','receipt','task','hierarchy','successor-dead','ol
   const result=f.runner.run(f.s.id);assert.equal(result.status,'failed');assert.ok(result.error.message);
   assert.equal(f.stopped.length,0);assert.equal(f.rows.filter(e=>e.phase==='transferred').length,0);
   assert.equal(f.notifications.length,1);
+});
+
+test('대기 중 다른 판이 관계표에 줄을 붙여도 runner는 전환을 끝내고 그 줄을 남긴다',()=>{
+  const f=fixture();f.begin();let step=0;
+  f.onSleep=()=>{
+    if(f.h.status(f.s.id).phase==='prepared'){f.accept();f.edit(t=>{t.other='upper';});return;}
+    step++;
+    if(step===1)f.edit(t=>{t['other-worker']='other';}); // 전환을 쓴 뒤, 감시기가 읽기 전
+    if(step===2)f.loaded();
+  };
+  const result=f.runner.run(f.s.id);assert.equal(result.status,'complete');
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.hierarchy,'utf8')),
+    {'old-next':'upper',child:'old-next',upper:'@user',other:'upper','other-worker':'other'});
+  assert.deepEqual(f.stopped,[{session:'kadan-old',pid:'10'}]);
 });
 
 test('같은 인계의 중복 launch/run은 첫 실행 파일/통지에 손대지 않는다',()=>{

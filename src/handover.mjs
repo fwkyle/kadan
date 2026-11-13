@@ -7,11 +7,81 @@ import { createHash, randomUUID } from 'node:crypto';
 import { parseHierarchy } from './hierarchy.mjs';
 import { openTaskIds } from './handover-state.mjs';
 import {startRoleProfile} from './role-instructions.mjs';
+import { withHierarchyLock } from './hierarchy-lock.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const session = role => `kadan-${role}`;
 const validRole = role => typeof role === 'string' && /^[\p{L}\p{N}_-]+$/u.test(role);
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// 역할 이름은 아무 JSON 키나 된다(__proto__·constructor·toString도 관계표가 받는다). 그래서
+// 줄을 읽을 때는 그 표의 자기 줄만 본다: `역할 in 표`·표[역할]은 물려받은 속성을 줄로 잘못 읽는다.
+// 새 표는 [역할, 상위] 목록에서 만든다: next[역할] = 상위로 담으면 __proto__ 줄이 조용히 사라진다.
+const parentOf = (table, role) => (Object.hasOwn(table, role) ? table[role] : undefined);
+
+// 관계표는 모든 판이 함께 쓰는 파일이다. 인계는 자기 줄만 대조하고 바꾼다:
+// 선임 줄, 준비 때 선임 아래 있던 하위 줄, 후임 줄. 다른 판이 붙이거나 정리한 줄은 보지도 고치지도 않는다.
+// 준비 때 선임의 상위·하위는 준비 스냅샷(originalHierarchy)에서 읽는다. 옛 상태 파일에도 있는 칸이다.
+function preparedRoutes(s) {
+  const original = JSON.parse(s.originalHierarchy);
+  return { fromParent: parentOf(original, s.from),
+    children: Object.keys(original).filter(role => original[role] === s.from) };
+}
+
+// 쓰기 전 대조: 전환해도 되면 null, 안 되면 이유를 돌려준다.
+// 선임의 하위가 정리로 빠진 것, 후임 자신의 줄(상위가 무엇이든), 후임 아래 새 하위는 막지 않는다.
+export function routeBlock(table, s) {
+  const { fromParent, children } = preparedRoutes(s);
+  if (!Object.hasOwn(table, s.from)) return '선임 줄이 없음';
+  const parent = parentOf(table, s.from);
+  if (parent !== fromParent) return `선임 상위가 ${fromParent}에서 ${parent}(으)로 바뀜`;
+  const prepared = new Set(children);
+  for (const [role, parent] of Object.entries(table)) {
+    if (prepared.has(role)) {
+      if (parent !== s.from) return `선임 하위 ${role}의 상위가 ${parent}(으)로 바뀜`;
+    } else if (parent === s.from && role !== s.to) return `준비 뒤 선임 아래 새 하위 ${role}`;
+  }
+  return null;
+}
+
+// 전환: 선임 줄 자리에 후임 줄 하나(상위 = 선임의 상위)를 두고, 선임을 상위로 둔 줄만 후임으로 바꾼다.
+// 후임이 시작할 때 등록된 줄은 먼저 뺀다. 남기면 같은 이름이 두 번 나오고, 선임 아래 등록됐다면 자기 자신을 가리킨다.
+// routes는 abort가 이 줄들만 되돌릴 때 쓰는 쓰기 직전 값이다.
+export function transferRoutes(table, s) {
+  const routes = { fromParent: parentOf(table, s.from), toBefore: parentOf(table, s.to) ?? null, children: [] };
+  const rows = [];
+  for (const [role, parent] of Object.entries(table)) {
+    if (role === s.to) continue;
+    if (role === s.from) { rows.push([s.to, routes.fromParent]); continue; }
+    if (parent === s.from) routes.children.push(role);
+    rows.push([role, parent === s.from ? s.to : parent]);
+  }
+  return { next: Object.fromEntries(rows), routes };
+}
+
+// 쓰기 뒤 대조: 이 인계의 줄이 전환된 그대로면 null, 누가 되돌렸거나 바꿨으면 이유를 돌려준다.
+export function transferredBlock(table, s, routes) {
+  if (Object.hasOwn(table, s.from)) return '선임 줄이 다시 생김';
+  if (parentOf(table, s.to) !== routes.fromParent) return `후임 상위가 ${routes.fromParent}이(가) 아님`;
+  const moved = routes.children.find(role => Object.hasOwn(table, role) && table[role] !== s.to);
+  return moved ? `옮긴 하위 ${moved}의 상위가 바뀜` : null;
+}
+
+// 원복: 전환 때 바꾼 줄만 되돌린다. 전환 뒤 후임 아래 새로 생긴 줄과 다른 판의 줄은 그대로 둔다.
+export function revertRoutes(table, s, routes) {
+  const moved = new Set(routes.children), rows = [];
+  for (const [role, parent] of Object.entries(table)) {
+    if (role === s.to) {
+      rows.push([s.from, routes.fromParent]);
+      if (routes.toBefore != null) rows.push([s.to, routes.toBefore]);
+    } else rows.push([role, moved.has(role) && parent === s.to ? s.from : parent]);
+  }
+  return Object.fromEntries(rows);
+}
+
+// 관계표 잠금을 기다리는 횟수와 간격. 남의 등록은 수 ms만 쥐므로 잠깐이면 된다(등록 쪽도 2초를 기다린다).
+const ROUTE_LOCK_TRIES = 20;
+const ROUTE_LOCK_POLL_MS = 100;
 
 export class Handover {
   // stopFields(역할): 선임을 끄기 직전에 stop 사건에 더할 칸(대화 번호 등)을 돌려준다. 던지지 않아야 한다.
@@ -68,6 +138,26 @@ export class Handover {
     const value = JSON.parse(text); parseHierarchy(value);
     return { text, value, hash: hash(text) };
   }
+  // 전환 때 남긴 쓰기 직전 값. 이 칸이 없는 옛 routes-pending 상태는 준비 스냅샷에서 이끈다
+  // (옛 코드는 후임 줄이 있으면 전환을 쓰지 못했으므로 그때 후임 줄은 없었다).
+  routes(s) { return s.routes ?? { ...preparedRoutes(s), toBefore: null }; }
+  // 관계표 읽기·대조·쓰기는 등록·정리와 같은 잠금(hierarchy-register.lock) 안에서만 한다. 잠금은 그 동안만 쥔다.
+  // 경로는 실제 경로로 푼다: 링크 경로로 이름을 바꾸면 링크 자체가 파일로 바뀌고, 잠금 폴더도 달라질 수 있다.
+  hierarchyLocked(s, run) {
+    const file = fs.realpathSync(s.hierarchy);
+    for (let attempt = 1; ; attempt++) {
+      try { return withHierarchyLock(file, () => run(file)); }
+      catch (cause) {
+        if (cause.code !== 'HIERARCHY_LOCKED') throw cause;
+        if (attempt >= ROUTE_LOCK_TRIES) {
+          const error = new Error('관계표 쓰기 잠금을 얻지 못함: 관계표는 그대로, 선임 보존. ' +
+            '남은 hierarchy-register.lock을 확인하고 같은 명령으로 다시 시도', { cause });
+          error.code = 'HIERARCHY_LOCKED'; throw error;
+        }
+        this.sleep(ROUTE_LOCK_POLL_MS);
+      }
+    }
+  }
   begin(from, { to, cmd, cwd, hierarchy, context, atBoundary = false, sourceEnded = false }) {
     return this.locked(() => {
       if (!atBoundary) throw new Error('--at-boundary 필요: 선임의 새 발령을 멈춘 카드 경계에서만 시작');
@@ -89,7 +179,8 @@ export class Handover {
       if (!context || !path.isAbsolute(context) || !fs.statSync(context).isFile())
         throw new Error('--context에 현재 승인/작업 기준 파일 절대경로 필요');
       const graph = this.graph(hierarchy);
-      if (!(from in graph.value) || to in graph.value) throw new Error('선임 관계가 없거나 후임 관계가 이미 있음');
+      if (!Object.hasOwn(graph.value, from) || Object.hasOwn(graph.value, to))
+        throw new Error('선임 관계가 없거나 후임 관계가 이미 있음');
       for (const name of fs.readdirSync(this.dir).filter(n => n.endsWith('.json'))) {
         const other = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
         if (!['complete', 'aborted'].includes(other.phase) && [other.from, other.to].some(r => [from, to].includes(r)))
@@ -160,26 +251,58 @@ export class Handover {
           throw new Error('선임 미완료 카드 변경: 선임 보존, 재인계 필요');
       }
       if (s.phase === 'accepted') {
-        const g = this.graph(s.hierarchy);
-        if (g.hash !== s.originalHash) throw new Error('관계표가 준비 후 변경됨: 선임 보존');
-        const next = Object.fromEntries(Object.entries(g.value).map(([role, parent]) =>
-          [role === s.from ? s.to : role, parent === s.from ? s.to : parent]));
-        parseHierarchy(next);
-        const text = JSON.stringify(next, null, 2) + '\n';
-        s.routesHash = hash(text); s.phase = 'routes-pending'; this.save(s);
-        const tmp = `${s.hierarchy}.${id}.tmp`; fs.writeFileSync(tmp, text, { mode: 0o600 }); fs.renameSync(tmp, s.hierarchy);
+        // 잠금 안에서 지금 파일을 다시 읽어 이 인계의 줄만 대조하고 바꾼다. 준비 뒤 다른 판이 붙인 줄은 그대로 남는다.
+        // 잠금을 못 얻으면 routes-pending을 저장하기 전에 실패한다.
+        this.hierarchyLocked(s, file => {
+          const g = this.graph(file);
+          const block = routeBlock(g.value, s);
+          if (block) throw new Error(`관계표가 준비 후 변경됨(${block}): 선임 보존`);
+          const { next, routes } = transferRoutes(g.value, s);
+          parseHierarchy(next);
+          const text = JSON.stringify(next, null, 2) + '\n';
+          s.routes = routes; s.routesHash = hash(text); s.phase = 'routes-pending'; this.save(s);
+          const tmp = `${file}.${id}.tmp`;
+          fs.writeFileSync(tmp, text, { mode: 0o600 }); fs.renameSync(tmp, file);
+        });
       }
       if (s.phase === 'routes-pending') {
-        if (this.graph(s.hierarchy).hash !== s.routesHash) throw new Error('인계 관계표 변경: 선임 보존');
+        const file = fs.realpathSync(s.hierarchy), routes = this.routes(s);
+        // 감시기 사건에는 경로·지문·PID만 있다. 그래서 "인계가 직접 읽어 이 인계의 줄이 전환된 상태임을 확인한 내용"의
+        // 지문을 모아 두고(routeHashes), 살아 있는 감시기가 같은 파일에서 그중 하나를 읽은 사건이 있어야 넘어간다.
+        // 전환 뒤 다른 판이 줄을 붙이면 감시기는 새 지문을 적으므로, 기다리는 동안 파일을 다시 읽어 지문을 더한다.
+        // 다시 부른 finish가 이어가도록 새 지문은 상태 파일에 남긴다.
+        const confirmed = new Set([s.routesHash, ...(s.routeHashes ?? [])]);
+        const confirm = () => {
+          const text = fs.readFileSync(file, 'utf8'), seen = hash(text);
+          if (confirmed.has(seen)) return;
+          const value = JSON.parse(text); parseHierarchy(value);
+          const block = transferredBlock(value, s, routes);
+          if (block) throw new Error(`인계 관계표 변경(${block}): 선임 보존`);
+          confirmed.add(seen); s.routeHashes = [...confirmed]; this.save(s);
+        };
+        // 감시기가 적는 경로와 인계 상태의 경로는 링크 때문에 글자가 다를 수 있다. 실제 경로로 같은 파일인지 본다.
+        const same = new Map();
+        const sameFile = recorded => {
+          if (!same.has(recorded)) {
+            let real = null;
+            try { real = fs.realpathSync(recorded); } catch { /* 없는 경로는 같은 파일이 아니다 */ }
+            same.set(recorded, real === file);
+          }
+          return same.get(recorded);
+        };
+        const loaded = () => this.entries().some(e => e.kind === 'hierarchy-loaded' && confirmed.has(e.hash) &&
+          typeof e.path === 'string' && sameFile(e.path) && this.watchAlive(e.pid));
         const started = this.now();
-        const loaded = () => this.entries().some(e => e.kind === 'hierarchy-loaded' && e.path === s.hierarchy && e.hash === s.routesHash && this.watchAlive(e.pid));
-        while (!loaded()) {
+        for (;;) {
+          confirm();
+          if (loaded()) break;
           if (this.now() - started >= timeout * 1000) return { ...s, waiting: 'watch 관계표 반영 확인 대기; 선임 유지' };
           this.sleep(200);
         }
         this.identity(s.to, s.newPid); this.sourceIdentity(s);
-        if (this.graph(s.hierarchy).hash !== s.routesHash || hash(fs.readFileSync(s.context)) !== s.contextHash ||
-            hash(fs.readFileSync(s.receipt)) !== s.receiptHash) throw new Error('대기 중 관계/승인/근거 변경: 선임 보존');
+        confirm();
+        if (hash(fs.readFileSync(s.context)) !== s.contextHash || hash(fs.readFileSync(s.receipt)) !== s.receiptHash)
+          throw new Error('대기 중 승인/근거 변경: 선임 보존');
         if (JSON.stringify(openTaskIds(this.entries(), s.from)) !== JSON.stringify(s.taskIds)) throw new Error('대기 중 카드 변경: 선임 보존');
         this.record({ kind: 'handover', phase: 'transferred', handoverId: id, from: s.from, to: s.to, taskIds: s.taskIds });
         s.phase = 'transferred'; this.save(s);
@@ -220,11 +343,23 @@ export class Handover {
       if (s.phase === 'aborted') return s;
       if (['transferred','stopped','activation-pending','complete'].includes(s.phase)) throw new Error('책임 이전 후 abort 불가: 현재 후임으로 복구');
       this.sourceIdentity(s);
-      const g = this.graph(s.hierarchy);
-      if (g.hash !== s.originalHash) {
-        if (s.phase !== 'routes-pending' || g.hash !== s.routesHash) throw new Error('관계표 충돌: 자동 원복 금지');
-        const tmp = `${s.hierarchy}.${id}.abort`; fs.writeFileSync(tmp, s.originalHierarchy, {mode:0o600}); fs.renameSync(tmp,s.hierarchy);
-      }
+      // 전환을 쓰기 전(routes-pending 앞)이면 인계가 관계표를 고친 적이 없다. 다른 판이 줄을 붙였어도 건드리지 않는다.
+      if (s.phase === 'routes-pending') this.hierarchyLocked(s, file => {
+        const g = this.graph(file), routes = this.routes(s);
+        const changed = transferredBlock(g.value, s, routes);
+        if (!changed) {
+          // 전환 때 바꾼 줄만 되돌린다. 되돌린 표가 깨지면(예: 줄이 없던 후임 아래 새 하위) 쓰지 않는다.
+          const next = revertRoutes(g.value, s, routes);
+          try { parseHierarchy(next); }
+          catch (cause) { throw new Error(`관계표 충돌(${cause.message}): 자동 원복 금지`, { cause }); }
+          const tmp = `${file}.${id}.abort`;
+          fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file);
+        } else if (routeBlock(g.value, s)) throw new Error(`관계표 충돌(${changed}): 자동 원복 금지`);
+        // 선임·하위 줄이 준비 때 그대로여도 후임 줄이 전환 직전 값과 다르면 누가 손댄 것이다.
+        else if ((parentOf(g.value, s.to) ?? null) !== routes.toBefore)
+          throw new Error(`관계표 충돌(후임 줄이 전환 직전 값 ${routes.toBefore ?? '없음'}이(가) 아님): 자동 원복 금지`);
+        // 그 밖은 이 인계의 줄이 모두 쓰기 직전 그대로다: 전환을 쓰기 전에 멈춘 것이라 되돌릴 것이 없다.
+      });
       s.phase = 'aborted'; this.save(s);
       this.record({ kind: 'handover', phase:'aborted', handoverId:id, from:s.from,to:s.to });
       return {...s, warning:'후임은 자동 삭제하지 않음. watch 원복 확인 뒤 선임 재개; 후임의 역할/작업 상태를 확인해 따로 정리'};
