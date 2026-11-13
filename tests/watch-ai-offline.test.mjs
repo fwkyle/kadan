@@ -76,6 +76,8 @@ test('인터넷 없음은 깨어 있는 동안 3번 이어질 때만 알리고, 
  assert.equal((await watchWith(['slept','slept','slept','slept'])).alerts.length,0);
  // 두 번 실패한 뒤 맥북이 잠들었다 깨면 세던 횟수를 버린다 — 깬 뒤 한 번 더 실패해도 알리지 않는다.
  assert.equal((await watchWith(['network','network','network'],{gapAt:2})).alerts.length,0);
- // 다른 호출 실패는 예전처럼 바로 알린다.
- assert.equal((await watchWith(['call-failed'])).alerts.length,1);
+ // 다른 호출 실패도 한 번은 알리지 않는다(이어질 때만 올린다: tests/watch-ai-tool-failure.test.mjs).
+ const once=await watchWith(['call-failed']);
+ assert.equal(once.alerts.length,0);
+ assert.ok(once.prints.some(m=>m.includes('점검 도구 오류(기록만)')&&m.includes('call-failed')),once.prints.join('\n'));
 });
