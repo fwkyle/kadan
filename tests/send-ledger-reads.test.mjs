@@ -16,7 +16,8 @@ function run(scenario) {
 }
 
 // 경우별 전체 읽기 횟수. 보관 경우의 우편함 읽기 1회는 Mailbox가 쓰기 직전 스스로 하는 읽기다.
-for (const [scenario, total] of [['plain', 2], ['store', 2], ['reply', 3], ['work', 2], ['peer', 2]]) {
+// storework: 업무에 연결한 우편의 보관도 준비 읽기 1회 + 우편함 읽기 1회다(연결 확인이 우편함 조회를 다시 읽지 않는다).
+for (const [scenario, total] of [['plain', 2], ['store', 2], ['storework', 2], ['reply', 3], ['work', 2], ['peer', 2]]) {
   test(`우편 한 통의 원장 읽기 횟수: ${scenario}`, () => {
     const result = run(scenario);
     assert.equal(result.outcome, 'ok', result.logs.join('\n'));

@@ -64,6 +64,18 @@ export function readMailBody(digestValue, home = ledgerHome()) {
 export function readLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home));
 }
+// 우편 전송 길(send·mail·dispatch) 전용 통합 조회. readLedger와 똑같이 원장 전체를 읽고 검증한다(손상 감지가 같다).
+// 다른 점은 결과에서 전송 길이 읽지 않는 감시 사건 여섯 종류를 뺀다는 것 하나다. 나머지 줄의 내용과 순서는 readLedger와 같다.
+// 이 여섯 종류가 통합 조회 결과의 절반 가까이를 차지한다(2026-11-13 실측: 91MB 중 약 43MB).
+// 우편 재알림(watch-mail-reminder)은 우편함의 세대 판정(mail-rule.mjs)이 읽으므로 빼지 않는다.
+// 전송 길의 코드가 아래 종류를 읽게 되면 이 목록에서 빼야 한다(tests/send-ledger-narrow.test.mjs가 소비 모듈을 지킨다).
+// 어차피 버릴 줄이므로 감시 사건의 큰 본문(관계표·경로표·순회 시간표)은 SQL에서 먼저 뺀다(영역 조회와 같은 규칙).
+// 원장이 10배면 읽는 줄 수와 메모리도 10배다(전체를 읽고 검증하는 구조는 그대로다).
+export const SEND_UNUSED_KINDS = Object.freeze(['watch-cycle','watch-ai-request','watch-ai-call','watch-ai-report','watch-scope','watch-ai-retired']);
+export function readSendLedger(home = ledgerHome()) {
+  const unused = new Set(SEND_UNUSED_KINDS);
+  return projectLedger(readLedgerState(home,{slimWatch:true})).filter(entry => !unused.has(entry?.kind));
+}
 export function readTaskLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home,{domain:'tasks'}),'tasks');
 }

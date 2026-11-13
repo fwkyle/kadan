@@ -128,10 +128,11 @@ export function validateDomainStreams(streams,legacy = []) {
 // 'ledger.jsonl'은 파일이 아니라 SQLite 안의 옛 원장 사건 영역(스트림) 이름이다.
 const legacyRows = home => readStream(home,'ledger.jsonl',{optional:true});
 
-export function readLedgerState(home,{domain=null}={}) {
+// slimWatch: 통합 조회에서도 감시 사건의 큰 본문을 뺀다(영역 조회와 같은 규칙). 줄 수·순서·검증은 그대로다.
+export function readLedgerState(home,{domain=null,slimWatch=false}={}) {
   return storageSnapshot(home,() => {
     const legacy = legacyRows(home);
-    const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true,slim:stream!==ledgerStreams.system?null:(domain&&domain!=='system'?slimWatchForDomain:slimWatchRequest)})]));
+    const streams = new Map(Object.values(ledgerStreams).map(stream => [stream,readStream(home,stream,{optional:true,slim:stream!==ledgerStreams.system?null:(slimWatch||domain&&domain!=='system'?slimWatchForDomain:slimWatchRequest)})]));
     const ordered = validateDomainStreams(streams,legacy);
     return {legacy,streams,ordered};
   });
