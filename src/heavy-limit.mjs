@@ -4,9 +4,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {processStartedAt} from './process-tree.mjs';
 
 export const DEFAULT_LIMITS = {rust: 1, install: 2, build: 2};
 export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, limits: DEFAULT_LIMITS};
@@ -62,18 +61,44 @@ export function processAlive(pid) {
   catch (error) { if (error.code === 'ESRCH') return false; return true; }
 }
 
-// 잠금 주인의 상태. PID가 살아 있어도 그 프로세스가 잠금을 잡은 시각(since)보다 뒤에 시작됐으면 원래 주인이 아니다
-// (재부팅·PID 재사용) — 'pid-reused'이고 죽은 잠금으로 본다. ps의 시작 시각은 초 아래를 버리므로 2초 여유를 둔다.
-// 모르면 살아 있다고 본다(since 없음·해석 불가·시작 시각 조회 실패): 잘못 남긴 잠금은 자리 하나가 줄 뿐이지만
-// 잘못 회수하면 무거운 명령이 겹친다. 시작 시각은 PID가 살아 있을 때만 묻는다(죽은 PID에는 ps를 부르지 않는다).
-const START_SLACK_MS = 2000;
-export function lockOwnerState(lock, {startedAt = processStartedAt} = {}) {
+// 프로세스의 시작 표지: 번호(PID)가 같아도 다른 프로세스면 달라지고, 같은 프로세스면 벽시계를 고쳐도 변하지 않는 값이다.
+// Linux: 부팅 식별값 + 부팅 뒤 틱으로 센 시작 시각(/proc/<pid>/stat의 22번째 칸). 벽시계를 쓰지 않는다.
+//   Linux의 `ps lstart`는 "부팅 시각 + 시작 틱"으로 계산돼 시계가 앞으로 보정되면 살아 있는 프로세스의 값도 같이 밀리므로 쓰지 않는다.
+// 그 밖(macOS): 커널이 프로세스를 만들 때 저장해 둔 시작 시각을 ps가 그대로 찍는다. 시간대에 따라 글자가 달라지지 않게 UTC로 읽는다.
+// 읽지 못하거나 모양이 다르면 null이다.
+const LINUX_TOKEN = /^linux:[0-9a-f-]{8,64}:\d+$/i;
+const PS_TOKEN = /^ps:[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}$/;
+const tokenMethod = token => (LINUX_TOKEN.test(token) ? 'linux' : PS_TOKEN.test(token) ? 'ps' : null);
+export function processStartToken(pid, {platform = process.platform, readFile = fs.readFileSync, run = spawnSync} = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  let token = null;
+  try {
+    if (platform === 'linux') {
+      const stat = readFile(`/proc/${pid}/stat`, 'utf8');
+      // 둘째 칸(명령 이름)은 괄호 안에 공백·괄호를 담을 수 있어 마지막 ')' 뒤부터 센다. 그 뒤 20번째 값이 22번째 칸이다.
+      const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+      token = `linux:${readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`;
+    } else {
+      const result = run('ps', ['-o', 'lstart=', '-p', String(pid)],
+        {encoding: 'utf8', timeout: 2000, env: {...process.env, LC_ALL: 'C', TZ: 'UTC'}});
+      if (result.status === 0) token = `ps:${String(result.stdout ?? '').trim()}`;
+    }
+  } catch { return null; }
+  return token && tokenMethod(token) ? token : null;
+}
+
+// 잠금 주인의 상태. 잠금에는 잡을 때 읽은 주인의 시작 표지(startToken)가 있다. PID가 살아 있어도 지금 그 PID의 표지가
+// 다르면 번호만 같은 다른 프로세스다(재부팅·PID 재사용) — 'pid-reused'이고 죽은 잠금으로 본다.
+// 모르면 살아 있다고 본다(표지 없는 옛 잠금·모양이 다른 표지·지금 표지를 못 읽음·읽는 방법이 다름): 잘못 남긴 잠금은
+// 자리 하나가 줄 뿐이지만 잘못 회수하면 무거운 명령이 겹친다. 표지는 PID가 살아 있고 잠금에 표지가 있을 때만 읽는다.
+export function lockOwnerState(lock, {startToken = processStartToken} = {}) {
   if (!processAlive(lock?.pid)) return 'dead';
-  const since = typeof lock.since === 'string' ? Date.parse(lock.since) : NaN;
-  if (!Number.isFinite(since)) return 'alive';
-  let started;
-  try { started = startedAt(lock.pid); } catch { return 'alive'; }
-  return Number.isFinite(started) && started > since + START_SLACK_MS ? 'pid-reused' : 'alive';
+  const method = typeof lock.startToken === 'string' ? tokenMethod(lock.startToken) : null;
+  if (!method) return 'alive';
+  let current = null;
+  try { current = startToken(lock.pid); } catch { return 'alive'; }
+  if (typeof current !== 'string' || tokenMethod(current) !== method) return 'alive';
+  return current === lock.startToken ? 'alive' : 'pid-reused';
 }
 
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -140,7 +165,7 @@ export function limitEnv(kind, command, env = process.env) {
   return jobs ? env : {...env, CARGO_BUILD_JOBS: CARGO_JOBS};
 }
 
-const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 잠금보다 늦게 시작)'};
+const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 시작 표지 다름)'};
 const describe = holders => holders
   .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''} ${(h.command ?? []).join(' ')}`.trim()).join('; ');
 
@@ -148,7 +173,9 @@ const describe = holders => holders
 export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit'} = {}) {
   if (!command.length) throw new Error('실행할 명령 필요: kadan limit run <종류> -- <명령...>');
   capOf(home, kind);
-  const holder = {pid: process.pid, kind, command, cwd, since: new Date().toISOString()};
+  const token = processStartToken(process.pid);
+  const holder = {pid: process.pid, kind, command, cwd, since: new Date().toISOString(),
+    ...(token ? {startToken: token} : {})};
   let file = null, child = null;
   const release = () => { try { if (file && readJson(file)?.pid === process.pid) fs.rmSync(file, {force: true}); } catch {} };
   // 신호 처리는 잠금을 잡기 전에 건다. 잡은 직후·명령 시작 전에 신호가 와도 잠금을 풀고 끝낸다.
@@ -160,13 +187,20 @@ export async function runLimited(home, kind, command, {cwd = process.cwd(), env 
   for (const signal of signals) process.on(signal, onSignal);
   process.on('exit', release);
   try {
-    file = tryAcquireLimit(home, kind, holder);
+    // 한 바퀴(회수 시도 + 바로 뒤의 대기 줄) 안에서는 같은 PID의 시작 표지를 한 번만 읽는다.
+    const oncePerPid = () => {
+      const seen = new Map();
+      return {startToken: pid => { if (!seen.has(pid)) seen.set(pid, processStartToken(pid)); return seen.get(pid); }};
+    };
+    let lookup = oncePerPid();
+    file = tryAcquireLimit(home, kind, holder, lookup);
     let shown = '';
     while (!file) {
-      const now = describe(limitHolders(home, kind));
+      const now = describe(limitHolders(home, kind, lookup));
       if (now !== shown) { log(`대기: ${kind} 자리 모두 사용 중 — ${now}`); shown = now; }
       await sleep(pollMs);
-      file = tryAcquireLimit(home, kind, holder);
+      lookup = oncePerPid();
+      file = tryAcquireLimit(home, kind, holder, lookup);
     }
     child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio});
     return await new Promise(resolve => {

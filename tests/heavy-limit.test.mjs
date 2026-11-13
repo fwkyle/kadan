@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {limitEnv, limitHolders, lockOwnerState, tryAcquireLimit} from '../src/heavy-limit.mjs';
+import {limitEnv, limitHolders, lockOwnerState, processStartToken, tryAcquireLimit} from '../src/heavy-limit.mjs';
 import {processStartedAt} from '../src/process-tree.mjs';
 import {stopChild} from './helpers/child-cleanup.mjs';
 
@@ -116,17 +116,47 @@ test('rust는 CARGO_BUILD_JOBS=2를 붙이되 -j·기존 값은 존중한다; �
   assert.match(unknown.stderr, /알 수 없는 종류: video/);
 });
 
-// PID 재사용: 잠금의 PID가 살아 있어도, 그 프로세스가 잠금을 잡은 시각(since)보다 뒤에 시작됐으면 원래 주인이 아니다
-// (재부팅 뒤 같은 번호를 다른 프로세스가 받은 경우 등). 아래 시험의 주인 PID는 이 시험 프로세스 자신이다.
+// PID 재사용: 잠금에는 잡을 때 읽은 주인의 시작 표지(startToken)가 있다. PID가 살아 있어도 지금 그 PID의 표지가 다르면
+// 번호만 같은 다른 프로세스다(재부팅 뒤 같은 번호를 다른 프로세스가 받은 경우 등). 아래 시험의 주인 PID는 이 시험 프로세스 자신이다.
 const iso = ms => new Date(ms).toISOString();
 const writeLock = (home, name, value) => {
   fs.mkdirSync(path.join(home, 'limits'), {recursive: true});
   fs.writeFileSync(path.join(home, 'limits', name), JSON.stringify(value));
 };
+const myToken = processStartToken(process.pid);
+// 모양은 맞고 값만 다른 표지(= 다른 프로세스의 것): 끝 숫자(연도 또는 시작 틱)를 하나 올린다.
+const otherToken = token => token.replace(/\d+$/, n => String(Number(n) + 1));
+const deadPid = () => Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], {encoding: 'utf8'}).stdout.trim());
+// Linux /proc 모형: stat의 22번째 칸(부팅 뒤 틱으로 센 시작 시각)과 부팅 식별값.
+const BOOT = '11111111-2222-3333-4444-555555555555';
+const procFiles = ({ticks = '987654', boot = BOOT, comm = 'node (x) y'} = {}) => file => {
+  if (file === '/proc/sys/kernel/random/boot_id') return `${boot}\n`;
+  if (file === '/proc/4321/stat') return `4321 (${comm}) S 1 4321 4321 0 -1 4194304 100 0 0 0 5 3 0 0 20 0 11 0 ${ticks} 1000000 500\n`;
+  throw Object.assign(new Error('ENOENT'), {code: 'ENOENT'});
+};
+const noPs = () => assert.fail('Linux에서는 ps를 부르지 않는다');
+const linuxToken = files => processStartToken(4321, {platform: 'linux', readFile: files, run: noPs});
 
-test('PID 재사용: 주인 PID가 살아 있어도 잠금보다 늦게 시작한 프로세스면 회수해 자리를 잡는다', async () => {
+test('시작 표지: 실제 limit run이 잠금에 자기 표지를 적고, 다른 프로세스가 다시 읽어도 같은 값이다', async () => {
+  assert.match(myToken, /^(linux|ps):./);
+  assert.equal(processStartToken(process.pid), myToken);
+  const home = freshHome(), release = path.join(home, 'release');
+  const job = start(home, 'rust', node(`
+    const fs = require('fs');
+    const wait = () => fs.existsSync(${JSON.stringify(release)}) ? process.exit(0) : setTimeout(wait, 25);
+    wait();`));
+  await until(() => lockCount(home) === 1);
+  const [held] = limitHolders(home, 'rust');
+  assert.equal(held.pid, job.child.pid);
+  assert.equal(held.startToken, processStartToken(job.child.pid));
+  assert.equal(held.state, 'alive');
+  fs.writeFileSync(release, '');
+  assert.equal((await job.done).code, 0);
+});
+
+test('PID 재사용: 주인 PID가 살아 있어도 시작 표지가 다르면 회수해 자리를 잡는다', async () => {
   const home = freshHome();
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(processStartedAt(process.pid) - 3600_000)});
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now()), startToken: otherToken(myToken)});
   const [seen] = limitHolders(home, 'rust');
   assert.equal(seen.state, 'pid-reused'); assert.equal(seen.alive, false);
   const result = await start(home, 'rust', node('process.exit(0)')).done;
@@ -135,9 +165,9 @@ test('PID 재사용: 주인 PID가 살아 있어도 잠금보다 늦게 시작�
   assert.equal(lockCount(home), 0);
 });
 
-test('같은 PID라도 잠금을 잡은 시각이 프로세스 시작 뒤면 살아 있는 주인이다: 잡지 못하고 기다린다', async () => {
+test('시작 표지가 같으면 살아 있는 주인이다: 잡지 못하고 기다린다', async () => {
   const home = freshHome(), mark = path.join(home, 'ran');
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now())});
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now()), startToken: myToken});
   assert.equal(limitHolders(home, 'rust')[0].state, 'alive');
   const waiting = start(home, 'rust', node(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x')`));
   await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
@@ -149,53 +179,67 @@ test('같은 PID라도 잠금을 잡은 시각이 프로세스 시작 뒤면 살
   assert.equal(fs.existsSync(mark), true);
 });
 
-test('잠금을 잡은 시각이 프로세스 시작과 같은 초(ps는 초 아래를 버린다)면 살아 있는 주인이다', () => {
+test('시계 보정: 판정은 잠금 시각(since)과 벽시계를 보지 않는다 — 표지가 같으면 살아 있는 주인이다', () => {
   const home = freshHome(), started = processStartedAt(process.pid);
-  for (const since of [started, started + 999]) {
-    writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(since)});
-    assert.equal(limitHolders(home, 'rust')[0].state, 'alive', iso(since));
-    assert.equal(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust', since: iso(Date.now())}), null);
+  // 잠금을 잡은 뒤 시계가 앞으로 5초·1시간 보정된 것처럼 since가 프로세스 시작보다 이르게 보여도 회수하지 않는다.
+  for (const since of [iso(started - 5000), iso(started - 3600_000), iso(Date.now() + 3600_000), undefined]) {
+    writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since, startToken: myToken});
+    assert.equal(limitHolders(home, 'rust')[0].state, 'alive', String(since));
+    assert.equal(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust'}), null);
   }
+  // Linux: 표지는 부팅 식별값과 부팅 뒤 틱뿐이라, 벽시계가 바뀌어 ps의 시작 시각이 밀려도 그대로다(ps를 부르지 않는다).
+  const recorded = linuxToken(procFiles());
+  assert.equal(recorded, `linux:${BOOT}:987654`);
+  const owner = {pid: process.pid, since: iso(started), startToken: recorded};
+  assert.equal(lockOwnerState(owner, {startToken: () => linuxToken(procFiles())}), 'alive');
+  // 재부팅 뒤 같은 번호를 받은 다른 프로세스(부팅 식별값이 다름), 같은 부팅 안의 PID 재사용(시작 틱이 다름)은 회수 대상이다.
+  const rebooted = linuxToken(procFiles({boot: '99999999-2222-3333-4444-555555555555'}));
+  assert.equal(lockOwnerState(owner, {startToken: () => rebooted}), 'pid-reused');
+  assert.equal(lockOwnerState(owner, {startToken: () => linuxToken(procFiles({ticks: '987655'}))}), 'pid-reused');
 });
 
-test('주인 판정: 2초 여유 안은 살아 있음, 모르면(조회 실패·since 없음·해석 불가) 살아 있음, 죽은 PID에는 시작 시각을 묻지 않는다', () => {
-  const since = Date.parse('2026-01-01T00:00:00.000Z');
-  const state = (lock, startedAt) => lockOwnerState(lock, {startedAt});
-  const mine = {pid: process.pid, since: iso(since)};
-  assert.equal(state(mine, () => since - 60_000), 'alive');
-  assert.equal(state(mine, () => since), 'alive');
-  assert.equal(state(mine, () => since + 2000), 'alive');
-  assert.equal(state(mine, () => since + 2001), 'pid-reused');
-  assert.equal(state(mine, () => { throw new Error('프로세스 시작 시각 조회 실패'); }), 'alive');
-  assert.equal(state(mine, () => NaN), 'alive');
+test('주인 판정: 모르면 살아 있음(표지 없음·모양 이상·못 읽음·방법 다름), 죽은 PID에는 표지를 읽지 않는다', () => {
   let asked = 0;
-  const count = () => { asked++; return since + 3600_000; };
-  assert.equal(state({pid: process.pid}, count), 'alive');
-  assert.equal(state({pid: process.pid, since: '어제쯤'}, count), 'alive');
-  assert.equal(state({pid: process.pid, since: 1767225600000}, count), 'alive');
-  const dead = Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], {encoding: 'utf8'}).stdout.trim());
-  assert.equal(state({pid: dead, since: iso(since)}, count), 'dead');
-  assert.equal(state({since: iso(since)}, count), 'dead');
+  const count = () => { asked++; return otherToken(myToken); };
+  for (const startToken of [undefined, null, '', 42, 'ps:garbage', 'linux:not-a-boot-id', 'Fri Nov 13 03:51:27 2026']) {
+    assert.equal(lockOwnerState({pid: process.pid, startToken}, {startToken: count}), 'alive', String(startToken));
+  }
+  const dead = deadPid();
+  assert.equal(lockOwnerState({pid: dead, startToken: myToken}, {startToken: count}), 'dead');
+  assert.equal(lockOwnerState({startToken: myToken}, {startToken: count}), 'dead');
   assert.equal(asked, 0);
+  const mine = {pid: process.pid, startToken: myToken};
+  assert.equal(lockOwnerState(mine, {startToken: () => { throw new Error('ps 시간 초과'); }}), 'alive');
+  for (const current of [null, undefined, '', 'ps:garbage', 42]) {
+    assert.equal(lockOwnerState(mine, {startToken: () => current}), 'alive', String(current));
+  }
+  // 적힌 표지와 지금 읽는 방법이 다르면 비교하지 않는다.
+  const foreign = myToken.startsWith('ps:') ? `linux:${BOOT}:987654` : 'ps:Fri Nov 13 03:51:27 2026';
+  assert.equal(lockOwnerState(mine, {startToken: () => foreign}), 'alive');
 });
 
-test('시작 시각 조회가 실패하면 회수하지 않는다(주입)', () => {
-  const home = freshHome();
-  const old = {pid: process.pid, kind: 'rust', since: iso(processStartedAt(process.pid) - 3600_000)};
-  writeLock(home, 'rust-1.lock', old);
-  const failing = {startedAt: () => { throw new Error('ps 시간 초과'); }};
-  assert.equal(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust'}, failing), null);
-  assert.equal(limitHolders(home, 'rust', failing)[0].state, 'alive');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8')).since, old.since);
+test('시작 표지 읽기: 실패·이상한 출력은 null이고, 명령 이름에 공백·괄호가 있어도 시작 틱을 바로 읽는다', () => {
+  const ps = result => processStartToken(4321, {platform: 'darwin', readFile: () => assert.fail('파일을 읽지 않는다'), run: () => result});
+  assert.equal(ps({status: 0, stdout: 'Fri Nov 13 03:51:27 2026    \n'}), 'ps:Fri Nov 13 03:51:27 2026');
+  assert.equal(ps({status: 0, stdout: 'Tue Nov  3 03:51:27 2026\n'}), 'ps:Tue Nov  3 03:51:27 2026');
+  for (const result of [{status: 1, stdout: ''}, {status: 0, stdout: ''}, {status: 0, stdout: 'not-a-date'},
+    {status: null, stdout: '', error: Object.assign(new Error('timeout'), {code: 'ETIMEDOUT'})}, {status: 0}]) {
+    assert.equal(ps(result), null, JSON.stringify(result));
+  }
+  assert.equal(processStartToken(4321, {platform: 'darwin', run: () => { throw new Error('spawn 실패'); }}), null);
+  assert.equal(linuxToken(procFiles({comm: 'a) S 1 2 (b'})), `linux:${BOOT}:987654`);
+  assert.equal(linuxToken(procFiles({ticks: 'x'})), null);
+  assert.equal(linuxToken(procFiles({boot: ''})), null);
+  assert.equal(linuxToken(() => { throw new Error('EACCES'); }), null);
+  for (const pid of [0, -1, 1.5, '4321', null]) assert.equal(processStartToken(pid, {run: noPs, readFile: noPs}), null);
 });
 
 test('표시: status와 대기 줄이 죽은 PID와 PID 재사용을 구분해 보인다', async () => {
-  const home = freshHome(), started = processStartedAt(process.pid);
-  const dead = Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], {encoding: 'utf8'}).stdout.trim());
+  const home = freshHome(), dead = deadPid();
   // rust는 자리가 하나다. 2·3번 잠금 파일은 자리 밖이라 회수되지 않고 표시만 된다.
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now())});
-  writeLock(home, 'rust-2.lock', {pid: process.pid, kind: 'rust', since: iso(started - 3600_000)});
-  writeLock(home, 'rust-3.lock', {pid: dead, kind: 'rust', since: iso(started - 3600_000)});
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: myToken});
+  writeLock(home, 'rust-2.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: otherToken(myToken)});
+  writeLock(home, 'rust-3.lock', {pid: dead, kind: 'rust', since: iso(Date.now()), startToken: myToken});
   const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
   assert.equal(status.status, 0, status.stderr);
   const holders = Object.fromEntries(JSON.parse(status.stdout).holders.map(h => [h.lock, h]));
@@ -204,8 +248,29 @@ test('표시: status와 대기 줄이 죽은 PID와 PID 재사용을 구분해 �
   const waiting = start(home, 'rust', node('process.exit(0)'));
   await until(() => /대기/.test(waiting.out.stderr));
   assert.match(waiting.out.stderr, new RegExp(`rust-1\\.lock pid ${process.pid} `));
-  assert.match(waiting.out.stderr, new RegExp(`rust-2\\.lock pid ${process.pid}\\(PID 재사용: 잠금보다 늦게 시작\\)`));
+  assert.match(waiting.out.stderr, new RegExp(`rust-2\\.lock pid ${process.pid}\\(PID 재사용: 시작 표지 다름\\)`));
   assert.match(waiting.out.stderr, new RegExp(`rust-3\\.lock pid ${dead}\\(죽음\\)`));
   fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
   assert.equal((await waiting.done).code, 0);
+});
+
+// ps를 쓰는 OS에서만: 호출을 적고 진짜 ps로 넘기는 가짜 ps를 PATH 앞에 둔다. Linux는 /proc 파일만 읽어 ps 호출이 없다.
+test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽는다', {skip: process.platform === 'linux'}, async () => {
+  const home = freshHome(), bin = path.join(home, 'bin'), calls = path.join(home, 'ps-calls.txt');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexec /bin/ps "$@"\n`, {mode: 0o755});
+  // 같은 주인이 자리 둘을 다 쥔 모양: 한 바퀴에 잠금 둘을 보지만 PID는 하나다.
+  for (const name of ['build-1.lock', 'build-2.lock']) writeLock(home, name, {pid: process.pid, kind: 'build', since: iso(Date.now()), startToken: myToken});
+  const child = spawn(process.execPath, [cli, 'limit', 'run', 'build', '--', ...node('process.exit(0)')],
+    {env: {...process.env, KADAN_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`}});
+  children.add(child);
+  let stderr = '';
+  child.stderr.on('data', d => { stderr += d; });
+  const done = new Promise(resolve => child.on('close', resolve));
+  await until(() => /대기: build 자리 모두 사용 중/.test(stderr));
+  // 첫 바퀴가 끝난 시점: 회수 시도가 잠금 둘, 대기 줄이 잠금 둘을 봤지만 주인 PID의 ps 호출은 한 번이다(다음 바퀴는 2초 뒤).
+  const asked = fs.readFileSync(calls, 'utf8').split('\n').filter(line => line.endsWith(`-p ${process.pid}`));
+  assert.equal(asked.length, 1, fs.readFileSync(calls, 'utf8'));
+  for (const name of ['build-1.lock', 'build-2.lock']) fs.renameSync(path.join(home, 'limits', name), path.join(home, `released-${name}`));
+  assert.equal(await done, 0);
 });
