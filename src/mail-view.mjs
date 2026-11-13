@@ -197,7 +197,7 @@ export function withWatchMailboxViews(home, read, readCards = null, metrics = nu
   });
 }
 
-function mailboxView(home, db, info, source, domain, cards, metrics) {
+export function mailboxView(home, db, info, source, domain, cards, metrics) {
   const key = `${path.resolve(home)}:${domain ?? ''}`;
   if (!db) return {store:null, info:{...info, mailCount:0, mailStateVersion:0, mailGeneration:null}};
   if (domain && metaGet(db, 'legacyBad')) throw new Error('과거 원장 손상: 도메인 조회 불가');

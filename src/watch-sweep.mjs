@@ -1,12 +1,156 @@
 // Why: 감시가 RAM에 이어 붙인 상태가 처음부터 다시 만든 상태와 같은지 가끔 확인한다. 증분 상태의 안전망이다.
-// 대상 둘: (1) 원장 배열 (2) 역할·발령 상태표(watch_role_*). 사건을 쌓지 않는다: 들고 있는 배열은 조각으로 지문을 만들고,
-// 원본은 하나의 고정 읽기 snapshot에서 조각씩 흘려 읽어 같은 지문을 만든다. 상태표는 정식 reducer를 임시 DB에 처음부터 적용한 지문과 비교한다.
+// 원장 배열과 감시 투영·완료·우편·역할·업무 상태를 비교한다. 원본을 고정된 읽기 시점에서 읽고,
+// 기존 감시 투영을 공유하지 않는 임시 메모리 DB에 정식 reducer를 처음부터 적용한다.
 // 원장 사건만 본다. tmux·PID·화면은 읽지 않는다. 사이마다 이벤트 루프에 양보해 감시 한 바퀴를 막지 않는다.
 import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
+import {openDatabase, databaseIdentity} from './storage.mjs';
+import {domainProjector, createUniqueDone, completionTaskShortId} from './ledger-domains.mjs';
+import {sourceViewValues} from './ledger-view.mjs';
+import {isWatchRoutine} from './ledger-table.mjs';
+import {isMailTransfer} from './mail-routing.mjs';
+import {mailboxView} from './mail-view.mjs';
+import {applyWatchRoleState} from './watch-role-state.mjs';
+import {applyWatchWorkState} from './watch-work-state.mjs';
 
 const yieldLoop = () => new Promise(resolve => setImmediate(resolve));
 export const ARRAY_KEY = 'ledger-array';
 export const ROLE_STATE_KEY = 'role-state';
+export const WATCH_STATE_KEYS = ['projection-state', 'completion-state', 'mail-state', ROLE_STATE_KEY, 'work-state'];
+
+export function resetWatchSweep(reader, keys) {
+  if (keys.includes(ARRAY_KEY)) reader.resetIncremental();
+  if (keys.some(key => WATCH_STATE_KEYS.includes(key) && key !== ROLE_STATE_KEY)) {
+    reader.sweepAccess.states.reset();
+  } else if (keys.includes(ROLE_STATE_KEY)) reader.sweepAccess.roleState.reset();
+}
+
+const addresses = cards => JSON.stringify(cards.map(card => ({key: card.key, id: card.id})));
+const metadata = (db, table, where = 'id=1') => {
+  const row = db.prepare(`SELECT value FROM ${table} WHERE ${where}`).get();
+  return row ? JSON.parse(row.value) : null;
+};
+const baseInfo = db => Object.fromEntries(db.prepare(
+  "SELECT key,value FROM meta WHERE key IN ('generation','position')",
+).all().map(row => [row.key, row.key === 'position' ? Number(row.value) : row.value]));
+
+// 두 읽기 연결을 pass가 끝날 때까지 고정한다. 현재 투영/하위 reducer를 먼저 실행하지 않는다.
+export function openWatchStateSnapshot(home, file, readCards) {
+  const cards = readCards();
+  if (!Array.isArray(cards)) return null;
+  const sourceIdentity = databaseIdentity(home);
+  const db = new DatabaseSync(file, {readOnly: true});
+  let source;
+  const close = () => {
+    try { source?.close(); } finally { db.close(); }
+  };
+  try {
+    db.exec('BEGIN');
+    const base = baseInfo(db);
+    const projection = metadata(db, 'watch_mail_projection');
+    if (!projection) throw new Error('감시 투영 메타가 없어 전체 대조를 확정할 수 없습니다');
+    if (!Number.isSafeInteger(projection.position) || projection.position < 0 ||
+        projection.position > base.position) throw new Error('감시 투영 대조 위치가 손상됐습니다');
+    // 원문 캐시는 다음 순회의 사건까지 앞서 있을 수 있다. 비교 prefix는 감시 투영의 적용 위치다.
+    const info = {...base, position: projection.position};
+    source = openDatabase(home, {readOnly: true});
+    source.exec('BEGIN');source.prepare('SELECT 1 FROM events LIMIT 1').get();
+    const cardsKey = addresses(cards), revision = projection.revision;
+    const signature = createHash('sha256').update(cardsKey).digest('hex');
+    return {
+      db, source, info, cards: cards.map(card => ({key: card.key, id: card.id})), close,
+      // 새 사건은 같은 prefix의 비교를 무효로 하지 않는다. 주소/세대/투영 교체는 무효다.
+      current() {
+        if (addresses(readCards()) !== cardsKey || projection.signature !== signature ||
+            projection.generation !== base.generation || databaseIdentity(home) !== sourceIdentity) return false;
+        const current = new DatabaseSync(file, {readOnly: true});
+        try {
+          current.exec('BEGIN');
+          return baseInfo(current).generation === info.generation &&
+            metadata(current, 'watch_mail_projection')?.revision === revision;
+        } finally { current.close(); }
+      },
+    };
+  } catch (error) { close();throw error; }
+}
+
+const stateGroups = [
+  {key: 'projection-state', tables: ["views WHERE domain='watch'"],
+    meta: 'watch_mail_projection', fields: ['version', 'signature', 'position', 'count']},
+  {key: 'completion-state', tables: ['watch_mail_completions'],
+    meta: 'watch_mail_projection', fields: ['completed']},
+  {key: 'mail-state', tables: ['mail_current', 'mail_refs', 'mail_ids', 'mail_sender_roles',
+    'mail_transfers', 'mail_reminders', 'mail_done_refs', 'mail_generation', 'mail_cards', 'mail_role_counts']
+    .map(table => `${table} WHERE domain='watch'`), meta: 'mail_view_meta', where: "domain='watch'",
+    fields: ['version', 'actors', 'position', 'count', 'stateVersion']},
+  {key: ROLE_STATE_KEY, tables: ['watch_role_sessions', 'watch_role_dispatches'],
+    meta: 'watch_role_meta', fields: ['version', 'position', 'stateVersion', 'sessionCount',
+      'dispatchCount', 'nextRank', 'legacyRequired']},
+  {key: 'work-state', tables: ['watch_work_last', 'watch_work_sent', 'watch_work_transfers'],
+    meta: 'watch_work_meta', fields: ['version', 'position', 'stateVersion', 'lastCount',
+      'sentCount', 'transferCount', 'legacyRequired']},
+];
+
+async function stateDigests(db, chunkRows, yieldNow) {
+  const result = {};
+  for (const group of stateGroups) {
+    const hash = createHash('sha256'), meta = metadata(db, group.meta, group.where);
+    hash.update(JSON.stringify(group.fields.map(field => meta?.[field])));
+    let count = 0, chunk = 0;
+    for (const table of group.tables) {
+      hash.update(table);
+      const name = table.split(' ')[0];
+      const order = db.prepare(`PRAGMA table_info(${name})`).all().filter(col => col.pk)
+        .sort((a, b) => a.pk - b.pk).map(col => col.name).join(',');
+      for (const row of db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).iterate()) {
+        hash.update(JSON.stringify(row)).update('\n');count++;
+        if (++chunk === chunkRows) { chunk = 0;await yieldNow(); }
+      }
+    }
+    result[group.key] = {digest: hash.digest('hex'), count};
+    await yieldNow();
+  }
+  return result;
+}
+
+// 원장이 10배면 시간·임시 DB도 N에 비례한다. 원문은 복사하지 않고 위치만 저장하며 조각마다 양보한다.
+export async function replayWatchStates(snapshot, chunkRows, yieldNow) {
+  const db = new DatabaseSync(':memory:');
+  const home = '#watch-sweep-independent';
+  try {
+    db.exec(`CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT);
+      CREATE TABLE source_rows (position INTEGER PRIMARY KEY,stream TEXT,seq INTEGER,payload TEXT,
+        short_task TEXT,transfer INTEGER);
+      CREATE INDEX source_task ON source_rows(short_task,position);
+      CREATE INDEX source_transfer ON source_rows(transfer,position);
+      CREATE TABLE views (domain TEXT,position INTEGER,routine INTEGER,PRIMARY KEY(domain,position));`);
+    const insertSource = db.prepare('INSERT INTO source_rows VALUES(?,?,?,NULL,?,?)');
+    const insertView = db.prepare("INSERT INTO views VALUES('',?,?)");
+    const projector = domainProjector(null), unique = createUniqueDone();
+    const query = snapshot.db.prepare(`SELECT position,stream,seq FROM source_rows
+      WHERE position>? AND position<=? ORDER BY position LIMIT ?`);
+    let position = 0;
+    do {
+      const rows = query.all(position, snapshot.info.position, chunkRows);
+      const values = sourceViewValues(snapshot.source, rows);
+      for (const [index, row] of rows.entries()) {
+        const value = values[index];
+        insertSource.run(row.position, row.stream, row.seq, completionTaskShortId(value),
+          Number(isMailTransfer(value) && Array.isArray(value.taskIds)));
+        const entry = (row.stream === 'ledger.jsonl' ? projector.legacy([value]) : projector.rows([value]))[0];
+        if (entry && unique(entry)) insertView.run(row.position, Number(isWatchRoutine(value)));
+      }
+      position = rows.at(-1)?.position ?? snapshot.info.position;
+      const info = {...snapshot.info, position};
+      // 모든 reducer는 새 DB의 원본 기반 views만 읽는다. 운영의 projected.store는 넘기지 않는다.
+      const projected = mailboxView(home, db, info, snapshot.source, 'watch', snapshot.cards);
+      applyWatchRoleState(home, projected.store, projected.info, snapshot.cards);
+      applyWatchWorkState(home, projected.store, projected.info, snapshot.cards);
+      await yieldNow();
+    } while (position < snapshot.info.position);
+    return await stateDigests(db, chunkRows, yieldNow);
+  } finally { db.close(); }
+}
 
 export function createLedgerArraySweep({access, chunkRows = 500, yieldNow = yieldLoop}) {
   async function digestArray(entries) {
@@ -76,6 +220,23 @@ export function createLedgerArraySweep({access, chunkRows = 500, yieldNow = yiel
       detail: `역할·발령 상태표 지문이 처음부터 다시 적용한 값과 다름(위치 ${live.position})`}]};
   }
 
+  async function watchStates() {
+    const snapshot = access.states.open();
+    if (!snapshot) return {status: 'match', diffs: [], note: '감시 투영 상태 없음'};
+    try {
+      const live = await stateDigests(snapshot.db, chunkRows, yieldNow);
+      const replayed = await replayWatchStates(snapshot, chunkRows, yieldNow);
+      if (!snapshot.current()) return {status: 'moved', position: snapshot.info.position};
+      const diffs = stateGroups.filter(group => live[group.key].digest !== replayed[group.key].digest)
+        .map(({key}) => ({key, fingerprint: createHash('sha256')
+          .update(`${live[key].digest}|${replayed[key].digest}`).digest('hex').slice(0, 12),
+        detail: `저장 상태 ${live[key].count}행 / 원본 독립 재생 ${replayed[key].count}행`}));
+      return {status: diffs.length ? 'diff' : 'match', diffs, statePosition: snapshot.info.position,
+        stateDigests: {live, replayed}, roleStateDigest: live[ROLE_STATE_KEY].digest,
+        roleStateReplayDigest: replayed[ROLE_STATE_KEY].digest};
+    } finally { snapshot.close(); }
+  }
+
   // 같은 pass 결과 모양으로 합친다: error > moved > diff > match. diff는 키별로 모두 담는다.
   function merge(results) {
     const diffs = results.flatMap(result => result.diffs ?? []);
@@ -110,11 +271,12 @@ export function createLedgerArraySweep({access, chunkRows = 500, yieldNow = yiel
     // 전체 대조. 결과: match | diff(교체 가능) | moved(비교 중 바뀜) | error(구분 불가).
     async full() {
       const results = [];
-      for (const check of [ledgerArray, roleState]) {
+      for (const check of [ledgerArray, access.states ? watchStates : roleState]) {
         try { results.push(await check()); }
         catch (error) {
           results.push({status: 'error', error: error?.message ?? String(error),
-            errorKey: check === roleState ? ROLE_STATE_KEY : 'ledger-source', diffs: []});
+            errorKey: check === watchStates ? 'watch-state' : check === roleState ? ROLE_STATE_KEY : 'ledger-source',
+            diffs: []});
         }
       }
       return merge(results);
