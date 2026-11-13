@@ -274,7 +274,7 @@ export function runIdleRoles({home, floor, now = Date.now(), dryRun = false, dep
   return report;
 }
 
-export function formatReport(report, now = Date.now()) {
+export function formatReport(report) {
   if (report.unsupported) return [`${report.unsupported} 바닥에서는 정리 후보를 고르지 않는다(tmux 바닥만)`];
   const lines = [`기준 ${report.hours}시간 · 살아 있는 역할 세션 ${report.live}개 · 화면이 기준 넘게 그대로인 세션 ${report.stale}개 · 정리 후보 ${report.candidates.length}개` +
     (report.dryRun ? ' · --dry-run(보내지 않음, 상태 파일도 쓰지 않음)' : '') + (report.off ? ` · ${IDLE_ROLES_OFF} 있음(자동 실행은 우편을 보내지 않고 화면 표본만 쌓는다)` : '')];
