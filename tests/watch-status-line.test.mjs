@@ -463,3 +463,42 @@ test('잠든 공백은 표시가 이어진 시간에 더하지 않는다', () =>
   assert.equal(step(8 * 3_600_000).alerts.length, 0, '여덟 시간 잠들었다 깬 주기');
   assert.equal(states.get('kadan-worker').backgroundMs, 9 * 60_000);
 });
+
+test('codex 기다리는 줄의 시계가 주기마다 늘어도 같은 표시로 이어 센다(상한에 닿는다)', () => {
+  const ticking = minute => codexWaitingBackground.replace('5m 12s', `${minute}m 12s`);
+  assert.equal(backgroundMarker(ticking(3)).line, backgroundMarker(ticking(47)).line, '비교 값에 시계가 없다');
+  const alerts = idleRun(Array.from({length: graceMin + 2}, (_, minute) => ticking(minute)));
+  assert.equal(alerts.slice(0, graceMin).flat().length, 0);
+  assert.equal(alerts[graceMin].length, 1, '30분에 멈춤');
+  assert.equal(alerts[graceMin][0].backgroundMs, BACKGROUND_GRACE_MS);
+});
+
+test('멈춤 후보에서 잠깐 빠지는 주기가 끼어도 표시가 이어진 시간을 다시 세지 않는다', () => {
+  const screen = claudeBackground(claudeBackgroundLine());
+  let states = new Map();
+  const out = [];
+  for (let minute = 0; minute <= graceMin + 1; minute++) {
+    // 10·11·20분 주기에는 알림 밀림 등으로 멈춤 후보에서 빠진다.
+    const excluded = [10, 11, 20].includes(minute) ? new Set(['kadan-worker']) : new Set();
+    const result = assessIdleStop(states, observe(screen), {elapsedMs: 60_000, intervalMs: 60_000, tasks: [task], entries: [], excludedSessions: excluded});
+    states = result.states; out.push(result);
+  }
+  assert.equal(out.slice(0, graceMin).flatMap(r => r.alerts).length, 0);
+  assert.equal(out[10].held.size, 0, '빠진 주기에는 늦추는 세션으로도 세지 않는다');
+  assert.equal(states.get('kadan-worker').backgroundMs, (graceMin + 1) * 60_000, '이어 센다');
+  // 빠졌던 주기 뒤 빈 입력창 4분을 다시 채운 다음, 상한을 넘겼으므로 멈춤이 난다.
+  assert.equal(out[graceMin].alerts.length, 1);
+});
+
+test('더 새 턴이 표시 없이 끝났으면 위쪽의 옛 표시는 읽지 않는다', () => {
+  const older = claudeBackgroundLine('Churned');
+  const newerPlain = ['⏺ 앞 턴의 답.', '', older, '', '⏺ 다음 턴의 답. 백그라운드 작업이 끝났다.', '', claudeIdle].join('\n');
+  assert.equal(backgroundMarker(newerPlain), null);
+  const newerMarked = ['⏺ 앞 턴의 답.', '', older, '', '⏺ 다음 턴의 답.', '', claudeBackground(claudeBackgroundLine('Cooked', '1 shell'))].join('\n');
+  assert.equal(backgroundMarker(newerMarked).line, claudeBackgroundLine('Cooked', '1 shell'));
+  // 답 본문의 "… for …" 문장은 턴 요약 줄이 아니다: 그 위의 표시를 가리지 않는다.
+  const prose = [older, '', '⏺ Waiting for the build to finish.', '', ...claudeIdle.split('\n').slice(2)].join('\n');
+  assert.equal(backgroundMarker(prose).line, older);
+  const afterMin = IDLE_STOP_AFTER_MS / 60_000;
+  assert.equal(idleRun(Array(afterMin + 1).fill(newerPlain)).at(-1).length, 1, '옛 표시만 있는 화면은 지금처럼 4분에 멈춤');
+});

@@ -35,7 +35,9 @@ const CODEX_INPUT = /^\s*›\s*(?:Ask Codex to do anything)?\s*$/u;
 // codex: 입력칸 위의 `  2 background terminals running · /ps to view · /stop to close` 단독 줄, 또는
 //        `• Waiting for background terminal (5m 12s • esc to interrupt) · 1 background terminal running · …` 줄 끝.
 // 실행기 문구가 바뀌어 못 읽으면 표시 없음으로 본다(지금처럼 멈춤이 나는 쪽).
-const CLAUDE_BACKGROUND = /^\s*[✻✶✳✢✽·*⏺]\s+\S+\s+for\s.*·\s*(\d+)\s+shells?\s+still\s+running\s*$/u;
+// 끝난 턴 요약 줄(`✻ Cooked for 24s …`). 가장 아래의 요약 줄만 지금 턴의 것이다: 그 줄에 표시가 없으면 더 위의 옛 표시는 읽지 않는다.
+const CLAUDE_TURN_SUMMARY = /^\s*[✻✶✳✢✽]\s+\S+\s+for\s+\S/u;
+const CLAUDE_BACKGROUND = /^\s*[✻✶✳✢✽]\s+\S+\s+for\s.*·\s*(\d+)\s+shells?\s+still\s+running\s*$/u;
 const CODEX_BACKGROUND = /(?:^\s*|·\s*)(\d+)\s+background\s+terminals?\s+running\b/u;
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 
@@ -76,15 +78,20 @@ export function readStatusLine(screenText) {
 }
 
 // 화면 아래쪽(일하는 표시를 찾는 것과 같은 범위)의 백그라운드 셸 표시. 없으면 null.
-// line: 표시가 있는 줄(앞뒤 공백 뗌). 같은 표시가 이어지는지 비교하는 데 쓴다. count: 표시에 적힌 개수.
+// line: 표시가 있는 줄(앞뒤 공백 뗌, 움직이는 경과 시계 괄호는 뺌). 같은 표시가 이어지는지 비교하는 데 쓴다. count: 표시에 적힌 개수.
 export function backgroundMarker(screenText) {
   const all = screenLines(screenText);
   const bottomStart = Math.max(0, all.length - BOTTOM_LINES);
   const anchor = all.findLastIndex((line, i) => i >= bottomStart && INPUT_SYMBOL.test(line));
   const start = anchor < 0 ? bottomStart : Math.min(bottomStart, Math.max(0, anchor - ABOVE_INPUT_LINES));
   for (let i = all.length - 1; i >= start; i--) {
-    const hit = CLAUDE_BACKGROUND.exec(all[i]) ?? CODEX_BACKGROUND.exec(all[i]);
-    if (hit) return { line: all[i].trim(), count: Number(hit[1]) };
+    const codex = CODEX_BACKGROUND.exec(all[i]);
+    // codex의 기다리는 줄은 `(5m 12s • esc to interrupt)` 시계가 주기마다 바뀐다. 비교 값에서 빼지 않으면 매번 새 표시로 읽혀 상한에 닿지 못한다.
+    if (codex) return { line: all[i].replace(/\([^()]*esc to interrupt[^()]*\)/iu, "").trim(), count: Number(codex[1]) };
+    if (CLAUDE_TURN_SUMMARY.test(all[i])) {
+      const claude = CLAUDE_BACKGROUND.exec(all[i]);
+      return claude ? { line: all[i].trim(), count: Number(claude[1]) } : null;
+    }
   }
   return null;
 }
@@ -163,11 +170,13 @@ export function assessIdleStop(previousStates, observations, {
     const sameScreen = candidate && previous?.digest === current.digest;
     const idleMs = !candidate ? 0 : sameScreen ? (previous.idleMs ?? 0) + (slept ? 0 : elapsedMs) : 0;
     // 같은 표시 줄이 이어진 시간. 처음 본 주기는 0이고, 줄이 바뀌면(새 턴이 끝남) 다시 센다. 잠든 공백은 더하지 않는다.
-    const marker = candidate ? backgroundMarker(current.screen) : null;
+    // 빈 입력창에 표시가 있는 동안은 계속 센다: 알림 밀림·큐 처리처럼 멈춤 후보에서 잠깐 빠지는 주기가 끼어도 다시 0부터 세지 않는다
+    // (다시 세면 상한이 없어진다). 일하는 중이 되거나 표시가 사라지면 그때 버린다.
+    const marker = task != null && status?.kind === "idle" ? backgroundMarker(current.screen) : null;
     const backgroundMs = !marker ? 0 : previous?.backgroundLine === marker.line ? (previous.backgroundMs ?? 0) + (slept ? 0 : elapsedMs) : 0;
     states.set(session, { idleMs, digest: candidate ? current.digest : null,
       ...(marker ? { backgroundLine: marker.line, backgroundMs } : {}) });
-    if (marker && backgroundMs < backgroundGraceMs) { held.add(session); continue; }
+    if (candidate && marker && backgroundMs < backgroundGraceMs) { held.add(session); continue; }
     if (candidate && idleMs >= afterMs) {
       alerts.push({
         id: `idle-stop:${session}:${current.digest}`,
