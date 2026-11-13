@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {limitEnv, limitHolders} from '../src/heavy-limit.mjs';
+import {limitEnv, limitHolders, lockOwnerState, tryAcquireLimit} from '../src/heavy-limit.mjs';
+import {processStartedAt} from '../src/process-tree.mjs';
 import {stopChild} from './helpers/child-cleanup.mjs';
 
 const children = new Set();
@@ -113,4 +114,98 @@ test('rust는 CARGO_BUILD_JOBS=2를 붙이되 -j·기존 값은 존중한다; �
   const unknown = await start(home, 'video', node('0')).done;
   assert.equal(unknown.code, 1);
   assert.match(unknown.stderr, /알 수 없는 종류: video/);
+});
+
+// PID 재사용: 잠금의 PID가 살아 있어도, 그 프로세스가 잠금을 잡은 시각(since)보다 뒤에 시작됐으면 원래 주인이 아니다
+// (재부팅 뒤 같은 번호를 다른 프로세스가 받은 경우 등). 아래 시험의 주인 PID는 이 시험 프로세스 자신이다.
+const iso = ms => new Date(ms).toISOString();
+const writeLock = (home, name, value) => {
+  fs.mkdirSync(path.join(home, 'limits'), {recursive: true});
+  fs.writeFileSync(path.join(home, 'limits', name), JSON.stringify(value));
+};
+
+test('PID 재사용: 주인 PID가 살아 있어도 잠금보다 늦게 시작한 프로세스면 회수해 자리를 잡는다', async () => {
+  const home = freshHome();
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(processStartedAt(process.pid) - 3600_000)});
+  const [seen] = limitHolders(home, 'rust');
+  assert.equal(seen.state, 'pid-reused'); assert.equal(seen.alive, false);
+  const result = await start(home, 'rust', node('process.exit(0)')).done;
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /대기/);
+  assert.equal(lockCount(home), 0);
+});
+
+test('같은 PID라도 잠금을 잡은 시각이 프로세스 시작 뒤면 살아 있는 주인이다: 잡지 못하고 기다린다', async () => {
+  const home = freshHome(), mark = path.join(home, 'ran');
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now())});
+  assert.equal(limitHolders(home, 'rust')[0].state, 'alive');
+  const waiting = start(home, 'rust', node(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x')`));
+  await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
+  assert.doesNotMatch(waiting.out.stderr, /죽음|PID 재사용/);
+  assert.equal(fs.existsSync(mark), false);
+  // 시험이 만든 격리 홈의 잠금을 치워 자리를 내준다(주인이 일을 끝낸 것과 같다).
+  fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
+  assert.equal((await waiting.done).code, 0);
+  assert.equal(fs.existsSync(mark), true);
+});
+
+test('잠금을 잡은 시각이 프로세스 시작과 같은 초(ps는 초 아래를 버린다)면 살아 있는 주인이다', () => {
+  const home = freshHome(), started = processStartedAt(process.pid);
+  for (const since of [started, started + 999]) {
+    writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(since)});
+    assert.equal(limitHolders(home, 'rust')[0].state, 'alive', iso(since));
+    assert.equal(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust', since: iso(Date.now())}), null);
+  }
+});
+
+test('주인 판정: 2초 여유 안은 살아 있음, 모르면(조회 실패·since 없음·해석 불가) 살아 있음, 죽은 PID에는 시작 시각을 묻지 않는다', () => {
+  const since = Date.parse('2026-01-01T00:00:00.000Z');
+  const state = (lock, startedAt) => lockOwnerState(lock, {startedAt});
+  const mine = {pid: process.pid, since: iso(since)};
+  assert.equal(state(mine, () => since - 60_000), 'alive');
+  assert.equal(state(mine, () => since), 'alive');
+  assert.equal(state(mine, () => since + 2000), 'alive');
+  assert.equal(state(mine, () => since + 2001), 'pid-reused');
+  assert.equal(state(mine, () => { throw new Error('프로세스 시작 시각 조회 실패'); }), 'alive');
+  assert.equal(state(mine, () => NaN), 'alive');
+  let asked = 0;
+  const count = () => { asked++; return since + 3600_000; };
+  assert.equal(state({pid: process.pid}, count), 'alive');
+  assert.equal(state({pid: process.pid, since: '어제쯤'}, count), 'alive');
+  assert.equal(state({pid: process.pid, since: 1767225600000}, count), 'alive');
+  const dead = Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], {encoding: 'utf8'}).stdout.trim());
+  assert.equal(state({pid: dead, since: iso(since)}, count), 'dead');
+  assert.equal(state({since: iso(since)}, count), 'dead');
+  assert.equal(asked, 0);
+});
+
+test('시작 시각 조회가 실패하면 회수하지 않는다(주입)', () => {
+  const home = freshHome();
+  const old = {pid: process.pid, kind: 'rust', since: iso(processStartedAt(process.pid) - 3600_000)};
+  writeLock(home, 'rust-1.lock', old);
+  const failing = {startedAt: () => { throw new Error('ps 시간 초과'); }};
+  assert.equal(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust'}, failing), null);
+  assert.equal(limitHolders(home, 'rust', failing)[0].state, 'alive');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8')).since, old.since);
+});
+
+test('표시: status와 대기 줄이 죽은 PID와 PID 재사용을 구분해 보인다', async () => {
+  const home = freshHome(), started = processStartedAt(process.pid);
+  const dead = Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], {encoding: 'utf8'}).stdout.trim());
+  // rust는 자리가 하나다. 2·3번 잠금 파일은 자리 밖이라 회수되지 않고 표시만 된다.
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now())});
+  writeLock(home, 'rust-2.lock', {pid: process.pid, kind: 'rust', since: iso(started - 3600_000)});
+  writeLock(home, 'rust-3.lock', {pid: dead, kind: 'rust', since: iso(started - 3600_000)});
+  const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
+  assert.equal(status.status, 0, status.stderr);
+  const holders = Object.fromEntries(JSON.parse(status.stdout).holders.map(h => [h.lock, h]));
+  assert.deepEqual(['rust-1.lock', 'rust-2.lock', 'rust-3.lock'].map(name => [holders[name].state, holders[name].alive]),
+    [['alive', true], ['pid-reused', false], ['dead', false]]);
+  const waiting = start(home, 'rust', node('process.exit(0)'));
+  await until(() => /대기/.test(waiting.out.stderr));
+  assert.match(waiting.out.stderr, new RegExp(`rust-1\\.lock pid ${process.pid} `));
+  assert.match(waiting.out.stderr, new RegExp(`rust-2\\.lock pid ${process.pid}\\(PID 재사용: 잠금보다 늦게 시작\\)`));
+  assert.match(waiting.out.stderr, new RegExp(`rust-3\\.lock pid ${dead}\\(죽음\\)`));
+  fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
+  assert.equal((await waiting.done).code, 0);
 });

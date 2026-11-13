@@ -1,11 +1,12 @@
 // 무거운 명령 동시 실행 제한. 카단 폴더의 잠금 파일로 기계 전체에서 종류별 동시 개수를 막는다.
 // 왜: 병렬 에이전트가 설치·빌드·러스트 빌드를 한꺼번에 돌려 부하 75·스왑 25GB까지 갔다 (2026-10-02 [kyle]).
-// 데몬·서비스 없이 잠금 파일만 쓴다. 죽은 PID의 잠금은 다음 사람이 회수한다.
+// 데몬·서비스 없이 잠금 파일만 쓴다. 죽은 PID의 잠금과, PID를 다른 프로세스가 다시 받은 잠금은 다음 사람이 회수한다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {processStartedAt} from './process-tree.mjs';
 
 export const DEFAULT_LIMITS = {rust: 1, install: 2, build: 2};
 export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, limits: DEFAULT_LIMITS};
@@ -61,6 +62,20 @@ export function processAlive(pid) {
   catch (error) { if (error.code === 'ESRCH') return false; return true; }
 }
 
+// 잠금 주인의 상태. PID가 살아 있어도 그 프로세스가 잠금을 잡은 시각(since)보다 뒤에 시작됐으면 원래 주인이 아니다
+// (재부팅·PID 재사용) — 'pid-reused'이고 죽은 잠금으로 본다. ps의 시작 시각은 초 아래를 버리므로 2초 여유를 둔다.
+// 모르면 살아 있다고 본다(since 없음·해석 불가·시작 시각 조회 실패): 잘못 남긴 잠금은 자리 하나가 줄 뿐이지만
+// 잘못 회수하면 무거운 명령이 겹친다. 시작 시각은 PID가 살아 있을 때만 묻는다(죽은 PID에는 ps를 부르지 않는다).
+const START_SLACK_MS = 2000;
+export function lockOwnerState(lock, {startedAt = processStartedAt} = {}) {
+  if (!processAlive(lock?.pid)) return 'dead';
+  const since = typeof lock.since === 'string' ? Date.parse(lock.since) : NaN;
+  if (!Number.isFinite(since)) return 'alive';
+  let started;
+  try { started = startedAt(lock.pid); } catch { return 'alive'; }
+  return Number.isFinite(started) && started > since + START_SLACK_MS ? 'pid-reused' : 'alive';
+}
+
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -95,22 +110,24 @@ function capOf(home, kind) {
   return cap;
 }
 
-export function limitHolders(home, kind) {
+// alive는 잠금이 살아 있는지(state가 alive)다. state는 alive·dead·pid-reused 중 하나다.
+export function limitHolders(home, kind, deps) {
   const dir = limitDir(home);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter(name => /\.lock$/.test(name) && (!kind || name.startsWith(`${kind}-`)))
     .map(name => ({lock: name, ...(readJson(path.join(dir, name)) ?? {})}))
-    .map(h => ({...h, alive: processAlive(h.pid)}));
+    .map(h => { const state = lockOwnerState(h, deps); return {...h, alive: state === 'alive', state}; });
 }
 
-// 빈 자리 하나를 잡는다. 죽은 PID의 잠금은 회수한다. 못 잡으면 null.
-export function tryAcquireLimit(home, kind, holder) {
+// 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금은 회수한다. 못 잡으면 null.
+export function tryAcquireLimit(home, kind, holder, deps) {
   const cap = capOf(home, kind);
   for (let n = 1; n <= cap; n++) {
     const file = lockFile(home, kind, n);
     if (createExclusive(file, holder)) return file;
     const current = readJson(file);
-    if (current && !processAlive(current.pid) && reclaim(file) && createExclusive(file, holder)) return file;
+    const stale = current && lockOwnerState(current, deps) !== 'alive';
+    if (stale && reclaim(file) && createExclusive(file, holder)) return file;
   }
   return null;
 }
@@ -123,7 +140,9 @@ export function limitEnv(kind, command, env = process.env) {
   return jobs ? env : {...env, CARGO_BUILD_JOBS: CARGO_JOBS};
 }
 
-const describe = holders => holders.map(h => `${h.lock} pid ${h.pid}${h.alive ? '' : '(죽음)'} ${h.since ?? ''} ${(h.command ?? []).join(' ')}`.trim()).join('; ');
+const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 잠금보다 늦게 시작)'};
+const describe = holders => holders
+  .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''} ${(h.command ?? []).join(' ')}`.trim()).join('; ');
 
 // 자리가 날 때까지 기다렸다가 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다. 종료 코드는 명령의 것을 돌려준다.
 export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit'} = {}) {

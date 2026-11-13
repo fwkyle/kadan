@@ -42,7 +42,7 @@ kadan slot release <자리경로>
 | 명령 | 하는 일 |
 |---|---|
 | `kadan limit run <rust\|install\|build> -- <명령...>` | 그 종류의 자리가 비어 있을 때만 명령을 돌린다. 차 있으면 쥔 쪽을 알리며 기다린다. 종료 코드는 명령의 것을 그대로 돌려준다 |
-| `kadan limit status` | 종류별 동시 개수와 지금 쥔 쪽, 감독 업무 기준 개수(`conductorOpenWorks`) |
+| `kadan limit status` | 종류별 동시 개수와 지금 쥔 쪽(잠금마다 `state`: `alive`·`dead`·`pid-reused`), 감독 업무 기준 개수(`conductorOpenWorks`) |
 | `kadan limit set conductor-works <0 이상의 정수>` | 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수를 바꾼다(기본 3, 0이면 안내 문장 끔). 그 밖의 값은 종료 코드 2 |
 
 | 종류 | 기본 동시 개수 | 대상 |
@@ -53,6 +53,7 @@ kadan slot release <자리경로>
 
 - `rust`는 `CARGO_BUILD_JOBS=2`를 환경 변수로 붙인다. 이미 그 변수가 있거나 명령에 `-j`·`--jobs`가 있으면 그대로 둔다. 인자에 `-j 2`를 끼우지 않는 이유는 `cargo test -- …`처럼 인자 위치가 중요한 명령을 깨뜨릴 수 있어서다.
 - 잠금은 `$KADAN_HOME/limits/<종류>-N.lock`이다. 명령이 실패하거나 중단돼도(SIGINT·SIGTERM·SIGHUP은 명령에 전달) 잠금을 푼다. 강제 종료로 남은 잠금은 PID가 죽었으면 다음 사람이 회수한다.
+- 잠금의 PID가 살아 있어도 그 프로세스가 잠금을 잡은 시각(`since`)보다 2초 넘게 늦게 시작했으면, 재부팅이나 PID 재사용으로 번호만 같은 다른 프로세스다. 이 잠금도 회수한다. `kadan limit status`의 `state`와 대기 줄은 `(죽음)`과 `(PID 재사용: 잠금보다 늦게 시작)`을 구분해 보인다. 시작 시각을 읽지 못하거나 `since`가 없으면 살아 있는 것으로 보고 회수하지 않는다.
 - `--` 뒤의 인자는 카단 옵션으로 해석하지 않고 명령에 그대로 넘긴다.
 
 ## 설정
