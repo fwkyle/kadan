@@ -39,7 +39,8 @@ const CODEX_INPUT = /^\s*›\s*(?:Ask Codex to do anything)?\s*$/u;
 //        (경과 시계 괄호 바로 뒤에 표시가 붙고, 그 아래에 다른 `•` 줄이 없다).
 // 실행기 문구가 바뀌어 못 읽으면 표시 없음으로 본다(지금처럼 멈춤이 나는 쪽).
 const CLAUDE_BACKGROUND = /^[✻✶✳✢✽]\s+\S+\s+for\s+[^·]+·\s*done\s[^·]*·\s*(\d+)\s+shells?\s+still\s+running\s*$/u;
-const CODEX_BACKGROUND_LINE = /^\s+(\d+)\s+background\s+terminals?\s+running\s+·\s+\/ps\b/u;
+// 실제 화면의 단독 줄은 모두 빈 줄 아래, 들여쓰기 2칸, 꼬리 전체였다. 그 모양만 읽는다(답 본문에 이어 적은 인용·잘린 인용은 표시가 아니다).
+const CODEX_BACKGROUND_LINE = /^ {2}(\d+)\s+background\s+terminals?\s+running\s+·\s+\/ps to view\s+·\s+\/stop to close\s*$/u;
 const CODEX_BACKGROUND_HEADER = /^•\s+\S.*\((?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc to interrupt\)\s*·\s*(\d+)\s+background\s+terminals?\s+running\b/iu;
 const BLANK_OR_RULE = /^[\s─━]*$/u;
 // claude가 요약 줄과 입력 줄 사이에 띄우는 세션 평가 설문 두 줄(실제 화면에서 확인한 문구 그대로). 답 본문이 아니라 화면 요소다.
@@ -95,7 +96,8 @@ export function backgroundMarker(screenText) {
   let above = anchor - 1;
   while (above >= start && (BLANK_OR_RULE.test(all[above]) || CLAUDE_SURVEY.test(all[above]))) above--;
   if (above >= start) {
-    const hit = CLAUDE_BACKGROUND.exec(all[above]) ?? CODEX_BACKGROUND_LINE.exec(all[above]);
+    const hit = CLAUDE_BACKGROUND.exec(all[above])
+      ?? (above === 0 || !all[above - 1].trim() ? CODEX_BACKGROUND_LINE.exec(all[above]) : null);
     if (hit) return { line: all[above].trim(), count: Number(hit[1]) };
   }
   // codex 상태 머리줄: 입력 줄 위에서 가장 아래의 `•` 줄만 본다(그 아래의 딸린 줄은 허용). 더 위의 `•` 줄은 지나간 글이다.
@@ -186,7 +188,9 @@ export function assessIdleStop(previousStates, observations, {
     const backgroundMs = !marker ? 0 : previous?.backgroundLine === marker.line ? (previous.backgroundMs ?? 0) + (slept ? 0 : elapsedMs) : 0;
     states.set(session, { idleMs, digest: candidate ? current.digest : null,
       ...(marker ? { backgroundLine: marker.line, backgroundMs } : {}) });
-    if (candidate && marker && backgroundMs < backgroundGraceMs) { held.add(session); continue; }
+    // held는 멈춤 후보 여부와 무관하게 "빈 입력창 + 표시 + 상한 전"이다. 후보에서 한 주기 빠진 사이(알림 밀림 등)에
+    // 밀려 있던 정체 판정·진행 점검이 유예 안에서 나가지 않게 한다. 후보가 아닌 주기에는 어차피 멈춤이 나지 않는다.
+    if (marker && backgroundMs < backgroundGraceMs) { held.add(session); continue; }
     if (candidate && idleMs >= afterMs) {
       alerts.push({
         id: `idle-stop:${session}:${current.digest}`,

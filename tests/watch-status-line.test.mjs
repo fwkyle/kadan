@@ -484,7 +484,7 @@ test('멈춤 후보에서 잠깐 빠지는 주기가 끼어도 표시가 이어�
     states = result.states; out.push(result);
   }
   assert.equal(out.slice(0, graceMin).flatMap(r => r.alerts).length, 0);
-  assert.equal(out[10].held.size, 0, '빠진 주기에는 늦추는 세션으로도 세지 않는다');
+  assert.ok(out[10].held.has('kadan-worker'), '빠진 주기에도 유예 세션이다(정체 판정·진행 점검을 계속 뺀다)');
   assert.equal(states.get('kadan-worker').backgroundMs, (graceMin + 1) * 60_000, '이어 센다');
   // 빠졌던 주기 뒤 빈 입력창 4분을 다시 채운 다음, 상한을 넘겼으므로 멈춤이 난다.
   assert.equal(out[graceMin].alerts.length, 1);
@@ -517,6 +517,16 @@ test('표시는 실행기 상태 줄 자리에서만 읽는다: 답 본문·인�
     ['claude done 구간이 없는 줄', claudeBackground('✻ Churned for 6m 29s · 2 shells still running')],
     ['입력 줄이 없는 화면', [claudeBackgroundLine(), '', '  본문'].join('\n')],
   ]) assert.equal(backgroundMarker(screen), null, name);
+  // 인용이 답의 마지막 줄이어도 상태 줄 자리의 모양(빈 줄 아래, 들여쓰기 2칸, 꼬리 전체)이 아니면 읽지 않는다.
+  const full = '2 background terminals running · /ps to view · /stop to close';
+  for (const [name, screen] of [
+    ['codex 본문 줄 바로 아래에 이어 적은 상태 줄 전체', quoted('  ' + full)],
+    ['codex 4칸 들여 쓴 상태 줄 전체', ['• 답을 마쳤다.', '', '    ' + full, ...codexBox].join('\n')],
+    ['codex 꼬리가 다른 줄', ['• 답을 마쳤다.', '', '  2 background terminals running · /ps 로 본다.', ...codexBox].join('\n')],
+    ['codex 꼬리 뒤에 글이 더 있는 줄', ['• 답을 마쳤다.', '', '  ' + full + ' 라고 나온다.', ...codexBox].join('\n')],
+  ]) assert.equal(backgroundMarker(screen), null, name);
+  // 알려진 한계: 상태 줄 전체를 글자 그대로, 같은 들여쓰기로, 답의 마지막 문단에 혼자 옮기면 화면 글자만으로는 가를 수 없다(30분 늦춤).
+  assert.equal(backgroundMarker(['• 답을 마쳤다.', '', '  ' + full, ...codexBox].join('\n')).count, 2);
   // 같은 자리의 진짜 표시는 그대로 읽는다(대조).
   assert.equal(backgroundMarker(claudeBackground(claudeBackgroundLine())).count, 2);
   assert.equal(backgroundMarker(codexBackground).count, 2);

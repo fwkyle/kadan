@@ -20,8 +20,8 @@ export const codexWaiting = ['• Waiting for background terminal (5m 12s • es
 
 // screen(분): 작업자 화면. live(분): 작업자 세션이 살아 있는가. 받은 알림을 [분, 받는 역할, 종류]로 돌려준다.
 // ai: 가짜 감시 AI를 주면 감시 AI를 켠 상태로 돈다. bossIdle: 감독들도 빈 입력창에서 쉰다(기본은 일하는 중).
-// ledger: 앞 실행이 돌려준 원장을 주고 from을 올리면 감시기 재시작이다.
-async function watch({from = 0, until, screen, live = () => true, ai = null, bossIdle = false, ledger = null}) {
+// ledger: 앞 실행이 돌려준 원장을 주고 from을 올리면 감시기 재시작이다. hold(분): 그 주기에 작업자 창의 알림이 밀리는 중인가(복사 모드 등).
+async function watch({from = 0, until, screen, live = () => true, ai = null, bossIdle = false, ledger = null, hold = null}) {
   const epoch = Date.parse('2026-09-09T00:00:00Z'), t = new Date(epoch).toISOString(), controller = new AbortController();
   const entries = ledger ?? [...ROLES.map((role, i) => ({kind: 'start', role, session: `kadan-${role}`, panePid: i + 1, t})),
     {kind: 'send', role: WORKER, session: `kadan-${WORKER}`, taskId: 'a', executionKey: 'r/a', by: BOSS, t}];
@@ -33,6 +33,7 @@ async function watch({from = 0, until, screen, live = () => true, ai = null, bos
     await runWatch({
       signal: controller.signal, intervalMs: 60_000, stallN: 5, stallAfterMs: 300_000, parents, routes: new Map(), superRole: TOP,
       now: () => epoch + minute * 60_000, ...(ai ? {judgeCmd: 'fake', ai} : {}),
+      ...(hold ? {holdTracker: {beginCycle() {}, endCycle() {}, alerts: () => [], isHeld: role => role === WORKER && hold(minute)}} : {}),
       floor: {list: () => ROLES.map((role, i) => ({session: `kadan-${role}`, pid: i + 1})).filter(item => item.session !== `kadan-${WORKER}` || live(minute)),
         // 감독들은 일하는 중(시계가 움직임)이라 감독 쪽 경보는 나지 않는다.
         read: session => session === `kadan-${WORKER}` ? screen(minute)
@@ -129,12 +130,28 @@ test('F1: 유예 중인 세션은 진행 점검 AI도 부르지 않고, 유예�
   assert.deepEqual(out.sent, [[55, BOSS, '멈춤']]);
 });
 
+// 유예 도중 한 주기만 멈춤 후보에서 빠져도(알림이 밀리는 창 등) 밀려 있던 진행 점검·정체 판정이 유예 안에서 나가지 않는다.
+test('F1: 유예 도중 한 주기만 멈춤 후보에서 빠져도 진행 점검·정체 판정을 부르지 않는다', async () => {
+  const calls = [];
+  let minuteNow = 0;
+  const working = minute => `✻ Working… (${minute}m 0s · esc to interrupt)\n\n${claudeBox(0).join('\n')}`;
+  const tracked = {reports: {retire: () => {}}, run: async options => { calls.push([options.source, options.role, minuteNow]); return {ok: true, reason: 'reported'}; }};
+  const out = await watch({until: 70, ai: tracked, hold: minute => minute === 40,
+    screen: minute => { minuteNow = minute; return minute < 25 ? working(minute) : claudeBackground; }});
+  const inGrace = calls.filter(([, role, minute]) => role === WORKER && minute >= 25 && minute < 55);
+  assert.deepEqual(inGrace, [], `유예(25~55분) 안의 감시 AI 호출: ${JSON.stringify(inGrace)}`);
+  assert.ok(calls.some(([source, role, minute]) => source === 'progress' && role === WORKER && minute >= 55), '유예가 끝난 뒤에는 부른다');
+  assert.deepEqual(out.sent.filter(([, , kind]) => kind !== '기타'), [[55, BOSS, '멈춤']]);
+});
+
 // 검수 지적 F2: 대화 본문에 인용된 표시 문구는 실행기 상태 줄이 아니다. 실제로 멈춘 역할의 멈춤을 늦추지 않는다.
 const codexBox = ['', '', '› Ask Codex to do anything', '', '  model medium · ~/work · main · Context 63% used'];
 const quoted = line => ['• 답을 마쳤다.', line, ...codexBox].join('\n');
 for (const [name, screen] of [
   ['codex 답 본문의 문장 중간', quoted('  문서 인용 · 2 background terminals running 문자열을 예로 설명했다.')],
   ['codex 답 본문의 글머리 줄', quoted('• 상태 줄에는 · 2 background terminals running 처럼 보인다.')],
+  ['codex 답 본문의 마지막 줄에 상태 줄 전체를 이어 적음', quoted('  2 background terminals running · /ps to view · /stop to close')],
+  ['codex 답의 마지막 문단에 상태 줄 앞부분만 옮김', ['• 답을 마쳤다.', '', '  2 background terminals running · /ps 로 본다.', ...codexBox].join('\n')],
   ['claude 답 본문에 들여 쓴 요약 줄', ['⏺ 예를 들면 이렇게 보인다.', '  ✻ Churned for 6m 29s · done 10:59 AM · 2 shells still running', '', '✻ Cogitated for 12s · done 11:02 AM', '', ...claudeBox(0)].join('\n')],
   ['claude 요약 줄 아래에 답 본문이 더 있음', ['✻ Churned for 6m 29s · done 10:59 AM · 2 shells still running', '', '⏺ 백그라운드 작업이 끝나 결과를 정리했다.', '', ...claudeBox(0)].join('\n')],
 ]) {
