@@ -227,6 +227,8 @@ test('시작 표지 읽기: 실패·이상한 출력은 null이고, 명령 이�
     assert.equal(ps(result), null, JSON.stringify(result));
   }
   assert.equal(processStartToken(4321, {platform: 'darwin', run: () => { throw new Error('spawn 실패'); }}), null);
+  // Linux·macOS가 아닌 OS는 표지를 만들지 않는다(ps도 /proc도 읽지 않는다).
+  assert.equal(processStartToken(4321, {platform: 'freebsd', run: noPs, readFile: noPs}), null);
   assert.equal(linuxToken(procFiles({comm: 'a) S 1 2 (b'})), `linux:${BOOT}:987654`);
   assert.equal(linuxToken(procFiles({ticks: 'x'})), null);
   assert.equal(linuxToken(procFiles({boot: ''})), null);
@@ -254,8 +256,8 @@ test('표시: status와 대기 줄이 죽은 PID와 PID 재사용을 구분해 �
   assert.equal((await waiting.done).code, 0);
 });
 
-// ps를 쓰는 OS에서만: 호출을 적고 진짜 ps로 넘기는 가짜 ps를 PATH 앞에 둔다. Linux는 /proc 파일만 읽어 ps 호출이 없다.
-test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽는다', {skip: process.platform === 'linux'}, async () => {
+// ps를 쓰는 macOS에서만: 호출을 적고 진짜 ps로 넘기는 가짜 ps를 PATH 앞에 둔다. Linux는 /proc 파일만 읽어 ps 호출이 없다.
+test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽는다', {skip: process.platform !== 'darwin'}, async () => {
   const home = freshHome(), bin = path.join(home, 'bin'), calls = path.join(home, 'ps-calls.txt');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexec /bin/ps "$@"\n`, {mode: 0o755});
@@ -268,9 +270,10 @@ test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽�
   child.stderr.on('data', d => { stderr += d; });
   const done = new Promise(resolve => child.on('close', resolve));
   await until(() => /대기: build 자리 모두 사용 중/.test(stderr));
-  // 첫 바퀴가 끝난 시점: 회수 시도가 잠금 둘, 대기 줄이 잠금 둘을 봤지만 주인 PID의 ps 호출은 한 번이다(다음 바퀴는 2초 뒤).
+  // 한 바퀴에 회수 시도가 잠금 둘, 대기 줄이 잠금 둘을 본다. 바퀴마다 한 번만 읽으면 1번, 잠금마다 읽으면 4번이다.
+  // 시험 프로세스가 느려 다음 바퀴(2초 뒤)를 한두 번 넘겨 봐도 3번을 넘지 않는다.
   const asked = fs.readFileSync(calls, 'utf8').split('\n').filter(line => line.endsWith(`-p ${process.pid}`));
-  assert.equal(asked.length, 1, fs.readFileSync(calls, 'utf8'));
+  assert.ok(asked.length >= 1 && asked.length <= 3, fs.readFileSync(calls, 'utf8'));
   for (const name of ['build-1.lock', 'build-2.lock']) fs.renameSync(path.join(home, 'limits', name), path.join(home, `released-${name}`));
   assert.equal(await done, 0);
 });

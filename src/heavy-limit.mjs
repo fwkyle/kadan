@@ -64,8 +64,8 @@ export function processAlive(pid) {
 // 프로세스의 시작 표지: 번호(PID)가 같아도 다른 프로세스면 달라지고, 같은 프로세스면 벽시계를 고쳐도 변하지 않는 값이다.
 // Linux: 부팅 식별값 + 부팅 뒤 틱으로 센 시작 시각(/proc/<pid>/stat의 22번째 칸). 벽시계를 쓰지 않는다.
 //   Linux의 `ps lstart`는 "부팅 시각 + 시작 틱"으로 계산돼 시계가 앞으로 보정되면 살아 있는 프로세스의 값도 같이 밀리므로 쓰지 않는다.
-// 그 밖(macOS): 커널이 프로세스를 만들 때 저장해 둔 시작 시각을 ps가 그대로 찍는다. 시간대에 따라 글자가 달라지지 않게 UTC로 읽는다.
-// 읽지 못하거나 모양이 다르면 null이다.
+// macOS: 커널이 프로세스를 만들 때 저장해 둔 시작 시각을 ps가 그대로 찍는다. 시간대에 따라 글자가 달라지지 않게 UTC로 읽는다.
+// 그 밖의 OS는 ps 값이 시계 보정에 안전한지 확인하지 않아 표지를 만들지 않는다. 읽지 못하거나 모양이 다르면 null이다.
 const LINUX_TOKEN = /^linux:[0-9a-f-]{8,64}:\d+$/i;
 const PS_TOKEN = /^ps:[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}$/;
 const tokenMethod = token => (LINUX_TOKEN.test(token) ? 'linux' : PS_TOKEN.test(token) ? 'ps' : null);
@@ -78,7 +78,7 @@ export function processStartToken(pid, {platform = process.platform, readFile = 
       // 둘째 칸(명령 이름)은 괄호 안에 공백·괄호를 담을 수 있어 마지막 ')' 뒤부터 센다. 그 뒤 20번째 값이 22번째 칸이다.
       const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
       token = `linux:${readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`;
-    } else {
+    } else if (platform === 'darwin') {
       const result = run('ps', ['-o', 'lstart=', '-p', String(pid)],
         {encoding: 'utf8', timeout: 2000, env: {...process.env, LC_ALL: 'C', TZ: 'UTC'}});
       if (result.status === 0) token = `ps:${String(result.stdout ?? '').trim()}`;
