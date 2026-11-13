@@ -20,15 +20,18 @@ const SELF_RESOLVING_HOLDS = new Set([
 export const holdPosts = alert => postPolicy({kind: 'alert', alertKind: '알림밀림', holdCode: alert?.holdCode}).post;
 
 // notifyUser를 부르는 모든 종류(kind). 새 종류를 쓰면 여기와 docs/user-notify.md 표에 올려야 한다(tests/notify-policy.test.mjs가 소스와 대조한다).
-export const KNOWN_KINDS = ['alert', 'alert-resolved', 'decision-request', 'decision-answer', 'decision-cancel', 'decision-proceed', 'revive', 'mail', 'handover', 'autopilot-summary'];
+export const KNOWN_KINDS = ['alert', 'alert-update', 'alert-resolved', 'decision-request', 'decision-answer', 'decision-cancel', 'decision-proceed', 'revive', 'mail', 'handover', 'autopilot-summary'];
 
 // 반환 {post:true} 또는 {post:false, reason}. opts: notifyUser의 opts(kind, key, alertKind, holdCode).
 export function postPolicy(opts = {}) {
   const kind = opts.kind ?? null;
   if (kind && DECISION.test(kind)) return {post: true};
   // 경보 해결 표시는 올렸던 글을 고치는 일이다. 고칠 글(hasPost)이 없으면 새 글을 만들지 않는다.
-  if (kind === 'alert-resolved') return opts.hasPost === true ? {post: true} : {post: false, reason: '고칠 경보 글 없음'};
+  // 열린 경보 글의 내용 고치기(alert-update: 같은 사고의 등급·기준이 바뀜)도 같다. 새 글을 만들지 않는다.
+  if (kind === 'alert-resolved' || kind === 'alert-update') return opts.hasPost === true ? {post: true} : {post: false, reason: '고칠 경보 글 없음'};
   if (kind === 'alert') {
+    // 프로세스·메모리 경보에서 보조 기준(python·node 개수)만 넘은 AMBER는 대시보드에만 둔다. 같은 사고가 RED(합계·큰 프로세스)가 되면 그때 새 글이 간다.
+    if (opts.alertKind === '프로세스' && opts.level === 'AMBER') return {post: false, reason: '프로세스 개수 기준만 넘음(AMBER)은 대시보드에만'};
     // 겹알림은 감독에게 간 같은 경보의 사본이다(최상위로 올라간 경보가 아니다). alertKind는 알림밀림처럼 스스로 풀리는 종류를 가린다.
     if (opts.overlap === true) return {post: false, reason: '감독에게 간 경보의 겹알림'};
     if (opts.alertKind === '알림밀림' && SELF_RESOLVING_HOLDS.has(opts.holdCode)) return {post: false, reason: `알림밀림(${opts.holdCode})은 5번 뒤 스스로 풀리는 입력 보호`};

@@ -56,6 +56,14 @@ test('정책 표: 새 글은 결정·최상위 경보·되살리기 멈춤뿐이
   for (const kind of ['mail', 'handover', '새종류', undefined]) assert.equal(postPolicy({kind}).post, false, String(kind));
   assert.equal(postPolicy({kind: 'alert-resolved'}).post, false);
   assert.equal(postPolicy({kind: 'alert-resolved', hasPost: true}).post, true);
+  // 프로세스·메모리 경보: 개수 기준만 넘은 AMBER는 안 보내고 RED는 보낸다. 다른 경보의 AMBER는 그대로 보낸다.
+  assert.equal(postPolicy({kind: 'alert', alertKind: '프로세스', level: 'AMBER'}).post, false);
+  assert.match(postPolicy({kind: 'alert', alertKind: '프로세스', level: 'AMBER'}).reason, /AMBER/);
+  assert.equal(postPolicy({kind: 'alert', alertKind: '프로세스', level: 'RED'}).post, true);
+  assert.equal(postPolicy({kind: 'alert', alertKind: '멈춤', level: 'AMBER'}).post, true);
+  // 열린 경보 글 고치기는 고칠 글이 있을 때만이다.
+  assert.equal(postPolicy({kind: 'alert-update'}).post, false);
+  assert.equal(postPolicy({kind: 'alert-update', hasPost: true}).post, true);
 });
 
 test('안 보내는 종류는 디코 호출 0건·맥 알림 0건이고 notify-log에는 policy-skip 한 줄이 남는다', async () => {
@@ -112,6 +120,40 @@ test('경보 글은 풀릴 때 같은 메시지를 ✅ 해결됨으로 고치고
     assert.equal(none.discord.outcome, 'policy-skip');
     assert.equal(w.requests().length, 2);
     assert.equal(w.osCalls.length, 0);
+  } finally { w.stop(); }
+});
+
+test('열린 경보 글 고치기(alert-update)는 같은 메시지만 고친다: 멘션·맥 알림 없음, 글이 없으면 0건, 반복해도 고쳐진다', async () => {
+  const w = await world();
+  try {
+    const post = 'alert:process:memory:1000';
+    // AMBER로 열린 사고는 같은 키로 건너뛰어도 키를 쓰지 않는다 → 나중 RED가 새 글로 나간다.
+    const amber = notifyUser('개수', w.spawnFake, {kind: 'alert', ring: true, key: post, alertKind: '프로세스', level: 'AMBER', decision: {id: post}, home: w.home, env: w.env});
+    assert.equal(amber.discord.outcome, 'policy-skip');
+    assert.equal(w.requests().length, 0);
+    const red = notifyUser('합계', w.spawnFake, {kind: 'alert', ring: true, key: post, alertKind: '프로세스', level: 'RED', decision: {id: post}, home: w.home, env: w.env});
+    assert.equal(red.posted, true);
+    assert.deepEqual(JSON.parse(w.requests()[0].body).allowed_mentions, {users: ['424242424242']});
+    // 같은 사고 키는 시간 창 없이 막힌다(11분 뒤에도 중복).
+    const later = notifyUser('합계', w.spawnFake, {kind: 'alert', ring: true, key: post, alertKind: '프로세스', level: 'RED', decision: {id: post}, home: w.home, env: w.env, now: () => Date.now() + 11 * 60_000});
+    assert.equal(later.duplicate, true);
+    for (const edit of ['[감시sh 10:01] 개수만', '[감시sh 10:02] 다시 합계']) {
+      const r = notifyUser(edit, w.spawnFake, {kind: 'alert-update', systemFallback: false, decision: {id: post, edit}, home: w.home, env: w.env});
+      assert.equal(r.discord.outcome, 'sent');
+      const last = w.requests().at(-1), body = JSON.parse(last.body);
+      assert.match(last.url, /\/messages\/M1/);
+      assert.equal(body.content, edit);
+      assert.deepEqual(body.allowed_mentions, {parse: []});
+    }
+    assert.equal(w.requests().length, 3, '새 글 1 + 고치기 2');
+    const none = notifyUser('x', w.spawnFake, {kind: 'alert-update', systemFallback: false, decision: {id: 'alert:process:memory:2000', edit: 'x'}, home: w.home, env: w.env});
+    assert.equal(none.discord.outcome, 'policy-skip');
+    assert.equal(w.requests().length, 3);
+    assert.equal(w.osCalls.length, 0);
+    // 풀리면 같은 글이 해결됨으로 고쳐진다(고친 적이 있어도).
+    const done = notifyUser('해결됨', w.spawnFake, {kind: 'alert-resolved', systemFallback: false, decision: {id: post, edit: '✅ 해결됨'}, home: w.home, env: w.env});
+    assert.equal(done.discord.outcome, 'sent');
+    assert.match(w.requests().at(-1).url, /\/messages\/M1/);
   } finally { w.stop(); }
 });
 
