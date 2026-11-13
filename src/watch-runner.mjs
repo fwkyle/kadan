@@ -50,7 +50,7 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
-import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
+import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
 import { readSettings } from "./runner-settings.mjs";
@@ -760,6 +760,14 @@ export async function runWatch({
     try {
       stopHookAlerts = assessStopHookTrust({ enabled: fs.existsSync(claudeSettingsPath(ledgerHome())), trust: codexStopHookTrust() });
     } catch { /* 신뢰 확인 실패가 감시를 멈추지 않는다 */ }
+    // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation)의 완료후보는, 그 실행에 감독이 답을 기다리는 등록(결정·질문 우편)이
+    // 있는 동안 내지 않는다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다). 답이 닫히면 그때 난다. 업무 대기 시각은 실행을 가리지 않는다.
+    // 종료 메모가 '실행 중'인 기존 완료후보 경로는 바꾸지 않는다. 이미 계산한 waits와 scope만 쓴다.
+    // 관계표에 없는 담당은 누가 기다리는 감독인지 모르므로 미루지 않는다.
+    const answerWait = waitingExcluder(waits, parents);
+    const confirmationDeferred = alert => alert.kind === '완료후보' && (scope?.entries ?? []).some(e => e.awaitsConfirmation && e.role === alert.role && parents.has(e.role)
+      && (identityNow.resolve(alert.taskId).key ?? alert.taskId) === (e.executionKey ?? e.taskId)
+      && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role))));
     const nextAlerts = [
       ...processAlerts,
       ...(observationError ? [] : stopHookAlerts),
@@ -768,7 +776,7 @@ export async function runWatch({
       ...(aiStoreError ? [aiStoreError] : []),
       // 429 재개가 예약된 세션의 '한도' 경보는 새로 알리지 않는다. 다만 이미 알린 경보는 화면에 429가 남아 있는 동안
       // 통지 없이 그대로 이월한다 — 숨기면 dedup이 해소로 보고 '한도 → 해소됨'이 깜빡였다(2026-10-05 점검 보고서 2-M2).
-      ...roleAlerts.filter(a=>!(a.kind==='한도'&&(retrySessions.has(a.session)||rateLimitRetry.alerts?.some(r=>r.session===a.session)))),
+      ...roleAlerts.filter(a=>!(a.kind==='한도'&&(retrySessions.has(a.session)||rateLimitRetry.alerts?.some(r=>r.session===a.session)))&&!confirmationDeferred(a)),
       ...activeAlerts.filter(a=>a.kind==='한도'&&retrySessions.has(a.session)&&roleAssessment.alerts.some(r=>r.id===a.id)),
       // 큐대기 상태 추적은 그대로 두고 경보만 거른다 — 배너 경로가 조용해지면 쌓인 시간으로 큐대기가 이어받는다.
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),

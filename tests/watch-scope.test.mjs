@@ -44,6 +44,26 @@ test('현재 send 이후 담당자의 유효 waiting은 화면·AI 대상에서 
   assert(buildWatchScope([{...waiting,...invalid}],[send],parents).sessions.has('kadan-p-작업자'));
  }
 });
+test('결과를 등록한 실행은 waiting이어도 감시에 남고, 재발령 전 결과·남이 등록한 결과·감독이 그 뒤 고친 카드는 예전처럼 제외한다',()=>{
+ const later='2026-09-08T00:05:00Z',after='2026-09-08T00:06:00Z';
+ const result={at:later,by:card.role,outcome:'changes'};
+ const waiting={...card,activity:'waiting',activityRole:card.role,activityAt:after,at:after,by:card.role,result};
+ const kept=buildWatchScope([waiting],[send],parents);
+ assert.deepEqual([...kept.sessions],['kadan-p-작업자']);
+ assert.equal(kept.entries[0].awaitsConfirmation,true);
+ // 결과 등록이 먼저든 대기 메모가 먼저든 같다.
+ assert.equal(buildWatchScope([{...waiting,activityAt:t,at:later}],[send],parents).sessions.size,1);
+ const again={...send,t:'2026-09-08T00:10:00Z'};
+ for(const [name,changed,entries] of [
+  ['재발령 전의 옛 결과',{activityAt:'2026-09-08T00:11:00Z',at:'2026-09-08T00:11:00Z'},[send,again]],
+  ['담당이 아닌 사람이 등록한 결과',{result:{...result,by:'p-감독'}},[send]],
+  ['결과 시각을 읽을 수 없음',{result:{...result,at:'invalid'}},[send]],
+  ['결과 없음',{result:undefined},[send]],
+  ['결과 등록 뒤 감독이 카드를 고침',{at:'2026-09-08T00:07:00Z',by:'p-감독'},[send]],
+ ]) assert.equal(buildWatchScope([{...waiting,...changed}],entries,parents).sessions.size,0,name);
+ // 대기 표시가 아닌 실행에는 표시를 붙이지 않는다(기존 경로 그대로).
+ assert.equal(buildWatchScope([{...waiting,activity:'running'}],[send],parents).entries[0].awaitsConfirmation,undefined);
+});
 test('waiting 뒤 실제 새 send는 감시를 복귀시키고 옛 waiting이나 우편과 구분한다',()=>{
  const waiting={...card,activity:'waiting',activityRole:card.role,activityAt:t};
  const again={...send,t:'2026-09-08T00:01:00Z'};

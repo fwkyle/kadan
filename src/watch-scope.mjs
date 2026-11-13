@@ -4,6 +4,17 @@ import {peerResponsibilities} from './peer-mail.mjs';
 import {ownerGenerations,isPreviousOwner} from './owner-generation.mjs';
 import {watchScopeFacts, watchScopeGenerations, watchSentTasks} from './watch-scope-facts.mjs';
 
+// 담당이 이번 발령 뒤에 결과를 등록했고 원장 done은 아직 없는 실행인가. 결과를 등록한 실행의 '대기 중'은
+// 답을 기다리는 것이 아니라 감독의 확정을 기다리는 것이라, 대기 표시로 감시에서 빼지 않는다.
+// 종료 메모를 '대기 중'으로 남긴 실행이 감시 범위에서 빠져 완료후보·놀고 있음이 둘 다 나지 않던 구멍을 메운다.
+// 결과 등록 뒤 다른 사람(감독)이 카드를 고쳤으면 이미 본 것이라 예전처럼 대기로 둔다. 재발령 전의 옛 결과는 세지 않는다.
+// 카드의 마지막 기록 하나만 보므로, 감독이 고친 뒤 담당이 다시 기록하면 다시 확정 대기로 센다(알리는 쪽으로 틀린다).
+export function resultAwaitsConfirmation(card, role, sent) {
+  const at = Date.parse(card.result?.at);
+  if (card.result?.by !== role || !(at >= Date.parse(sent.t))) return false;
+  return card.by === role || !(Date.parse(card.at) > at);
+}
+
 // previous를 주면 이전 세대 소속이라 거른 발령을 거기 담는다(대시보드 "이전 세대 업무" 건수, owner-generation.mjs).
 function activeExecutions(cards, entries, parents, works, excludeWaiting, previous = null) {
   if (entries.some(entry => entry?.broken)) throw new Error('감시 대상 원장 읽기 실패');
@@ -31,8 +42,11 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
     if (!sent || !['resolved','unregistered'].includes(sent.taskConnection?.state)) continue;
     // 새 세대가 시작되기 전에 이 이름에 붙은 책임은 새 세션의 할 일이 아니다. 인계·재배정으로 새 세대 뒤에 붙었으면 현재 세대다.
     if (isPreviousOwner(generations, role, Object.hasOwn(sent, 'ownedAt') ? sent.ownedAt : sent.t)) { previous?.push({kind:'execution', key:card.key, role}); continue; }
-    if (excludeWaiting && card.activity === 'waiting' && card.activityRole === role && Date.parse(card.activityAt) >= Date.parse(sent.t)) continue;
-    tasks.push({kind:'send', role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), t:sent.t, ...(Object.hasOwn(sent,'ownedAt')?{ownedAt:sent.ownedAt}:{})});
+    const waiting = card.activity === 'waiting' && card.activityRole === role && Date.parse(card.activityAt) >= Date.parse(sent.t);
+    const awaitsConfirmation = waiting && resultAwaitsConfirmation(card, role, sent);
+    if (excludeWaiting && waiting && !awaitsConfirmation) continue;
+    tasks.push({kind:'send', role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), t:sent.t, ...(Object.hasOwn(sent,'ownedAt')?{ownedAt:sent.ownedAt}:{}),
+      ...(awaitsConfirmation?{awaitsConfirmation:true}:{})});
   }
   return tasks;
 }

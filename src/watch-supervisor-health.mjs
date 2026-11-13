@@ -20,7 +20,9 @@ export function observationContext(role, observation, entries, cards, tasks, dec
   return {
     ...(decisions===undefined?{}:decisionFields(decisions,role)),
     process:{alive:observation.alive,pid:observation.pid,expectedPid:observation.expectedPid},
-    tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,scope:c.scope?.slice(0,1000)})),
+    // 담당이 결과를 등록했는지도 싣는다. activity만 보면 결과를 등록하고 확정을 기다리는 실행이 '아직 일하는 중'으로 읽힌다.
+    tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,
+      ...(c.result?.at?{resultReportedAt:c.result.at,resultOutcome:c.result.outcome}:{}),scope:c.scope?.slice(0,1000)})),
     responsibilities:tasks.filter(e => e.role === role),
     recentTaskEvents:workEntries(entries,identity).filter(e => e.kind === 'done' && (e.role === role || e.by === role))
       .slice(-12).map(e => ({at:e.t,kind:e.kind,role:e.role,by:e.by,taskId:e.taskId,executionKey:e.executionKey,result:e.result})),
