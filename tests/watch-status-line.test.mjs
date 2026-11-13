@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {assessRoles} from '../src/watch.mjs';
 import {NotifyHoldTracker} from '../src/watch-notify-hold.mjs';
 import {changeDigest} from '../src/watch-roles.mjs';
-import {parseClock, readStatusLine, isWorkingMoving, assessIdleStop, hasOpenQuestion, IDLE_STOP_AFTER_MS}
-  from '../src/watch-status-line.mjs';
+import {parseClock, readStatusLine, isWorkingMoving, assessIdleStop, hasOpenQuestion, IDLE_STOP_AFTER_MS,
+  backgroundMarker, BACKGROUND_GRACE_MS} from '../src/watch-status-line.mjs';
 
 // 아래 화면 조각은 감시AI 관찰 자료(~/.kadan/watch-ai/*/input.txt)의 실제 화면 아래쪽을 줄이고 경로를 지운 것이다.
 // 표본 위치·모양 표는 카드 result.md에 있다.
@@ -376,4 +376,90 @@ test('F1: 범위는 넓어지기만 한다 — 화면 끝 14줄만 본 판정과
     }
   }
   assert.ok(widened > 0, '넓어진 칸이 하나는 있어야 한다');
+});
+
+// ---- 백그라운드 셸 표시: 상한까지 멈춤을 늦춘다 ----
+// 표시 줄은 감시AI 관찰 자료의 실제 화면에서 확인한 모양이다(숫자·낱말만 바꿈).
+const claudeBackgroundLine = (verb = 'Churned', shells = '2 shells') => `✻ ${verb} for 6m 29s · done 10:59 AM · ${shells} still running`;
+const claudeBackground = line => claudeIdle.replace('✻ Cogitated for 3m 44s · done 1:16 PM', line);
+const codexBackground = ['─ Worked for 17m 42s ─────────────────', '', '  2 background terminals running · /ps to view · /stop to close', '', '',
+  '› Ask Codex to do anything', '', '  gpt-6-astra medium · ~/Dev/kadan-lite · main · Context 63% used · 258K window'].join('\n');
+const codexWaitingBackground = ['• Waiting for background terminal (5m 12s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close',
+  '', '', '› Ask Codex to do anything', '', '  gpt-6-astra medium · ~/Dev/kadan-lite · main · Context 63% used · 258K window'].join('\n');
+const graceMin = BACKGROUND_GRACE_MS / 60_000;
+
+test('백그라운드 표시를 읽는다: claude 끝난 턴 요약 줄, codex 단독 줄·기다리는 줄. 표시가 없거나 모양이 다르면 null', () => {
+  assert.equal(graceMin, 30);
+  assert.deepEqual(backgroundMarker(claudeBackground(claudeBackgroundLine())), {line: claudeBackgroundLine(), count: 2});
+  assert.equal(backgroundMarker(claudeBackground(claudeBackgroundLine('Cooked', '1 shell'))).count, 1);
+  assert.equal(backgroundMarker(claudeBackground('✻ Cooked for 24s · done 오후 7:41 · 3 shells still running')).count, 3);
+  assert.equal(backgroundMarker(codexBackground).count, 2);
+  assert.equal(backgroundMarker(codexWaitingBackground).count, 1);
+  for (const none of [claudeIdle, codexIdle, claudeBackground('✻ Churned for 6m 29s · done 10:59 AM · 2 tasks in background'),
+    claudeBackground('  본문에서 2 shells still running 이라고 말함'), null, '']) assert.equal(backgroundMarker(none), null);
+  // 화면 위쪽으로 밀려난 옛 표시는 보지 않는다(일하는 표시를 찾는 범위와 같다).
+  assert.equal(backgroundMarker([claudeBackgroundLine(), ...Array(30).fill('  본문 줄'), claudeIdle].join('\n')), null);
+});
+
+test('백그라운드 표시가 이어지는 동안 30분 전에는 멈춤 0건, 30분에 1건과 표시 시간·개수', () => {
+  for (const [name, screen, tool] of [['claude', claudeBackground(claudeBackgroundLine()), 'claude'], ['codex 단독 줄', codexBackground, 'codex'],
+    ['codex 기다리는 줄', codexWaitingBackground, 'codex']]) {
+    const alerts = idleRun(Array(graceMin + 3).fill(screen));
+    assert.equal(alerts.slice(0, graceMin).flat().length, 0, `${name}: 29분째 주기까지 0건`);
+    const [alert] = alerts[graceMin];
+    assert.equal(alert.kind, '멈춤', name);
+    assert.equal(alert.backgroundMs, BACKGROUND_GRACE_MS, name);
+    assert.equal(alert.tool, tool);
+    assert.ok(alert.backgroundCount >= 1);
+    assert.equal(alerts[graceMin + 2][0].id, alert.id, `${name}: 같은 화면이면 같은 경보(다시 알리지 않는다)`);
+  }
+});
+
+test('백그라운드 표시로 늦추는 세션을 held로 돌려주고, 상한이 지나면 held에서 뺀다', () => {
+  let states = new Map();
+  const heldAt = [];
+  for (let minute = 0; minute <= graceMin; minute++) {
+    const result = assessIdleStop(states, observe(codexBackground), {elapsedMs: 60_000, intervalMs: 60_000, tasks: [task], entries: []});
+    states = result.states;
+    heldAt.push(result.held.has('kadan-worker'));
+  }
+  assert.ok(heldAt.slice(0, graceMin).every(Boolean), '상한 전에는 늦추는 중');
+  assert.equal(heldAt[graceMin], false, '상한이 지나면 늦추지 않는다');
+  assert.equal(assessIdleStop(new Map(), observe(codexIdle), {elapsedMs: 60_000, intervalMs: 60_000, tasks: [task], entries: []}).held.size, 0, '표시 없음');
+});
+
+test('표시가 사라지면 그때부터 4분, 표시 줄이 바뀌면(새 턴이 끝남) 30분을 다시 센다', () => {
+  const afterMin = IDLE_STOP_AFTER_MS / 60_000;
+  const gone = idleRun([...Array(10).fill(claudeBackground(claudeBackgroundLine())), ...Array(afterMin + 1).fill(claudeIdle)]);
+  assert.equal(gone.slice(0, 10 + afterMin).flat().length, 0);
+  assert.equal(gone.at(-1).length, 1);
+  assert.equal(gone.at(-1)[0].backgroundMs, undefined, '표시가 없으면 표시 시간도 없다');
+  const changed = idleRun([...Array(20).fill(claudeBackground(claudeBackgroundLine('Churned'))), ...Array(graceMin + 1).fill(claudeBackground(claudeBackgroundLine('Cooked')))]);
+  assert.equal(changed.slice(0, 20 + graceMin).flat().length, 0, '바뀐 줄부터 다시 30분');
+  assert.equal(changed.at(-1).length, 1);
+});
+
+test('표시 문구가 바뀌어 못 읽으면 지금처럼 4분에 멈춤이 난다(놓치지 않는 쪽)', () => {
+  const afterMin = IDLE_STOP_AFTER_MS / 60_000;
+  const unknown = claudeBackground('✻ Churned for 6m 29s · done 10:59 AM · 2 background jobs active');
+  const alerts = idleRun(Array(afterMin + 1).fill(unknown));
+  assert.equal(alerts.at(-1).length, 1);
+  assert.equal(alerts.at(-1)[0].backgroundMs, undefined);
+});
+
+test('표시가 있어도 정당한 대기 제외와 일하는 중 판정은 그대로다', () => {
+  const n = graceMin + 5, screen = claudeBackground(claudeBackgroundLine());
+  assert.equal(idleRun(Array(n).fill(screen), {observe: {doneMarker: {taskId: 'c1', result: 'ok'}}}).flat().length, 0, '완료후보');
+  assert.equal(idleRun(Array(n).fill(screen), {options: {tasks: []}}).flat().length, 0, '감시 범위 밖');
+  // codex가 실제로 일하는 줄(Working … esc to interrupt)에 붙은 표시는 일하는 중이다: 멈춤 후보가 아니다.
+  assert.equal(idleRun(Array.from({length: n}, (_, i) => codexWorkingBackground(`${i}m 00s`))).flat().length, 0);
+});
+
+test('잠든 공백은 표시가 이어진 시간에 더하지 않는다', () => {
+  const screen = claudeBackground(claudeBackgroundLine());
+  let states = new Map();
+  const step = elapsedMs => { const result = assessIdleStop(states, observe(screen), {elapsedMs, intervalMs: 60_000, tasks: [task], entries: []}); states = result.states; return result; };
+  for (let i = 0; i < 10; i++) step(60_000);
+  assert.equal(step(8 * 3_600_000).alerts.length, 0, '여덟 시간 잠들었다 깬 주기');
+  assert.equal(states.get('kadan-worker').backgroundMs, 9 * 60_000);
 });

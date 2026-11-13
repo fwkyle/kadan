@@ -70,6 +70,10 @@ function watchAIErrorBody(alert) {
   return `점검 도구 오류 — 감시기가 ${alert.role} ${what} 점검을 끝내지 못함(${happened}${repeated(alert)}) · ${target} · 할 일: ${todo}`;
 }
 
+// 멈춤 경보에 붙는 백그라운드 셸 표시 시간. 표시가 상한을 넘겨 이어진 경우에만 값이 있다(끝나지 않는 서버를 띄워 둔 것일 수 있다).
+const backgroundNote = (alert) => Number.isFinite(alert.backgroundMs)
+  ? `, 백그라운드 셸 표시 ${Math.floor(alert.backgroundMs / 60_000)}분째(${alert.backgroundCount ?? "?"}개 — 끝나지 않는 백그라운드일 수 있음)` : "";
+
 export function formatAlertBody(alert) {
   if (alert.kind === "감시AI오류") return watchAIErrorBody(alert);
   if (alert.kind === "프로세스") return alert.text ?? "카단 tmux 프로세스 메모리 기준 초과";
@@ -146,7 +150,7 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "멈춤") {
     const minutes = Math.floor((alert.idleMs ?? 0) / 60_000);
-    return `일하는 표시 없이 멈춤 ${alert.session} (빈 입력창 ${minutes}분째, 미완료 실행 있음·답 기다리는 질문 없음 — 감독 확인 필요)`;
+    return `일하는 표시 없이 멈춤 ${alert.session} (빈 입력창 ${minutes}분째${backgroundNote(alert)}, 미완료 실행 있음·답 기다리는 질문 없음 — 감독 확인 필요)`;
   }
   if (alert.kind === "정체") {
     const judged = alert.judgeVerdict ? `, 판정 ${alertLabel(alert.judgeVerdict)}` : "";
@@ -269,7 +273,7 @@ export function itemizedAlert(alert, clock, ctx = null) {
     if (alert.stage !== 2) todo = `판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
   } else if (alert.kind === "정체") basis = `지문 무변화 ${alert.count}회`;
   else if (alert.kind === "일시정지중작업") basis = `카드 ${alert.cardKey ?? alert.taskId}가 일시정지인데 화면이 ${alert.streak ?? 2}순회 연속 일하는 중`;
-  else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째, 미완료 실행 있음·답 기다리는 질문 없음`;
+  else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째${backgroundNote(alert)}, 미완료 실행 있음·답 기다리는 질문 없음`;
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
   return [`[감시sh ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,

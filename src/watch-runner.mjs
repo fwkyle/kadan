@@ -587,7 +587,11 @@ export async function runWatch({
       : assessHoldWorking(holdWorkingStates,roles.observations,cards,{now:cycleAt,alerted:holdWorkingAlerted,
           isHeld:role=>holdTracker?.isHeld(role)??false,supervisors:new Set(parents.values())});
     holdWorkingStates=holdWorking.states;
-    const idleStopSessions=new Set(idleStopAssessment.alerts.map(a=>a.session));
+    // 백그라운드 셸 표시로 멈춤을 늦추는 중인 세션(held)도 화면이 그대로라서 나는 정체 후보(경보·정체 판정 AI)에서 뺀다.
+    // 멈춤이 4분에 먼저 나가 5분의 정체를 대신하던 자리라, 멈춤만 늦추면 정체가 그 자리를 채운다. 상한이 지나면 멈춤이 나가고
+    // 정체는 지금처럼 멈춤 세션에서 빠진다. 죽음·끊김·한도·완료후보는 이 집합과 무관하다.
+    const backgroundHeld=idleStopAssessment.held??new Set();
+    const idleStopSessions=new Set([...idleStopAssessment.alerts.map(a=>a.session),...backgroundHeld]);
     let stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
@@ -722,7 +726,7 @@ export async function runWatch({
       const candidates=new Map(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>[a.session,a]));
       // 경보 뒤 화면이 움직여도 정상이라고 추측하지 않는다. 다음 허용 시각에 AI가 다시 확인한다.
       for(const report of latestWatchReports(entries)) {
-        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen&&!answerWaitSessions.has(report.session))
+        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen&&!answerWaitSessions.has(report.session)&&!backgroundHeld.has(report.session))
           candidates.set(report.session,report);
       }
       for(const candidate of candidates.values()){
