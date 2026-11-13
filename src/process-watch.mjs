@@ -186,17 +186,50 @@ export function exceededSignals(snapshot, thresholds, sustained, sustainedKinds)
 }
 
 const gb = (megabytes) => (megabytes / 1024).toFixed(1) + "G";
-const SIGNAL_LABEL = { total: "합계", process: "큰 프로세스", python: "python 개수", node: "node 개수" };
+const SIGNAL_LABEL = { total: "합계", process: "큰 프로세스", python: "python 프로세스 수", node: "node 프로세스 수" };
 
-// 사용자에게 가는 한 줄. PID·이름·RSS만 담는다.
+// 세션 수와 그 아래 프로세스 수를 나눠 적는다. 프로세스 수만 적으면 세션 수로 읽힌다(2026-11-13 [kyle]).
+// 서버 직속 묶음은 세션이 아니라서 세션 수에서 뺀다.
+const sessionCount = (snapshot) => snapshot.sessions.filter((group) => group.session !== DIRECT_GROUP).length;
+const TODO_STOP = "가장 큰 세션을 대시보드 '프로세스·메모리'에서 확인하고 필요 없으면 kadan stop <역할>";
+
+// 사용자에게 가는 결론 한 줄: 숫자 / 기준 · 어디 · 할 일. 가장 급한 기준 하나(합계 > 큰 프로세스 > 개수)로 시작한다.
+// sustained: 오래 넘은 프로세스 [{pid, name, rssMb, session, minutes}](큰 것부터). 세션·PID 목록 전체는 alertText에 남는다.
+export function alertHeadline(snapshot, signals, thresholds, sustained = []) {
+  const [main, ...rest] = signals;
+  const also = rest.length ? ` · 함께 넘은 기준: ${rest.map((signal) => SIGNAL_LABEL[signal]).join(", ")}` : "";
+  const sessions = `카단 세션 ${sessionCount(snapshot)}개`;
+  if (main === "total") {
+    const top = snapshot.sessions[0];
+    const where = top ? ` · 가장 큰 세션 ${top.session} ${gb(top.rssMb)}` : "";
+    return `메모리 ${gb(snapshot.rssMb)} / 기준 ${thresholds.totalGb}G (${sessions} · 그 아래 프로세스 ${snapshot.count}개)`
+      + `${where}${also} · 할 일: ${TODO_STOP}`;
+  }
+  if (main === "process") {
+    const proc = sustained[0] ?? snapshot.biggest[0];
+    const more = sustained.length > 1 ? ` 외 ${sustained.length - 1}개` : "";
+    const lasted = proc?.minutes != null ? ` (${proc.minutes}분째)` : "";
+    const what = proc ? `${proc.name}#${proc.pid} ${gb(proc.rssMb)}` : "큰 프로세스";
+    const where = proc?.session ? ` · 세션 ${proc.session}` : "";
+    return `프로세스 ${what}${more} / 기준 ${thresholds.processGb}G${lasted}${where}${also}`
+      + " · 할 일: 그 세션이 필요한 일을 하는지 확인하고 아니면 kadan stop <역할>";
+  }
+  const most = snapshot.sessions.reduce(
+    (best, group) => ((group.kinds?.[main] ?? 0) > (best?.kinds[main] ?? 0) ? group : best), null);
+  const where = most ? ` · 가장 많은 세션 ${most.session} ${most.kinds[main]}개` : "";
+  return `${sessions} · 그 아래 ${main} 프로세스 ${snapshot.kinds[main]}개 / 기준 ${thresholds[main]}개${where}${also}`
+    + " · 할 일: 급하지 않음, 끝난 역할 세션을 kadan stop <역할>으로 정리";
+}
+
+// 세부 한 줄(원장의 경보 기록 text). PID·이름·RSS만 담는다.
 export function alertText(snapshot, signals) {
   const sessions = snapshot.sessions.slice(0, TOP_SESSIONS).map((group) => {
     const big = group.big.map((proc) => `${proc.name}#${proc.pid} ${gb(proc.rssMb)}`).join(", ");
-    return `${group.session} ${gb(group.rssMb)}(${group.count}개: ${big})`;
+    return `${group.session} ${gb(group.rssMb)}(프로세스 ${group.count}개: ${big})`;
   });
   const leak = snapshot.leak ? ` · 24시간 넘게 남은 작은 프로세스 ${snapshot.leak}개` : "";
-  return `카단 tmux 프로세스 ${snapshot.count}개·${gb(snapshot.rssMb)} · 넘은 기준: ${signals
-    .map((signal) => SIGNAL_LABEL[signal]).join(", ")} · 상위 세션 ${sessions.join(" / ")}${leak}`;
+  return `메모리 ${gb(snapshot.rssMb)} · 카단 세션 ${sessionCount(snapshot)}개 · 그 아래 프로세스 ${snapshot.count}개`
+    + ` · 넘은 기준: ${signals.map((signal) => SIGNAL_LABEL[signal]).join(", ")} · 상위 세션 ${sessions.join(" / ")}${leak}`;
 }
 
 // 경보 열기·닫기. 닫힐 때는 기준을 다시 넘지 않는 주기가 3번 이어져야 닫는다(자원 경보와 같은 깜빡임 방지).
@@ -220,7 +253,9 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
     const aged = restoreByAge && proc.ageSec != null && proc.ageSec * 1000 >= sustainMs;
     bigSince[proc.pid] = priorSince?.[proc.pid] ?? (aged ? at - sustainMs : at);
   }
-  const sustained = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs).map((proc) => proc.pid);
+  const sustainedProcs = bigNow.filter((proc) => at - bigSince[proc.pid] >= sustainMs)
+    .map((proc) => ({ ...proc, minutes: Math.floor((at - bigSince[proc.pid]) / 60_000) }));
+  const sustained = sustainedProcs.map((proc) => proc.pid);
   // 개수 기준: 대상 집합이 계속 바뀌므로 종류별로 '처음 넘은 시각' 하나만 둔다. 한 번이라도 내려가면 지운다.
   // 재시작 뒤 첫 성공 수집(표 없음)에서 복원한 열린 경보에 그 종류 신호가 있으면, 이미 10분 넘게 유지된 것이라 시계를 채운다.
   const priorCount = previousState?.countSince;
@@ -240,9 +275,11 @@ export function assessProcesses(previousState, result, thresholds, at = 0) {
       kind: "프로세스",
       level: signals.includes("total") || signals.includes("process") ? "RED" : "AMBER",
       signals,
+      headline: alertHeadline(result, signals, thresholds, sustainedProcs),
       text: alertText(result, signals),
-      // 기준 집합이 바뀐 시각. 알림 중복 막기 키에 들어가 A→B→A 전이마다 키가 달라진다.
-      since: previous && previous.signals.join() === signals.join() && previous.since != null ? previous.since : at,
+      // 경보가 열린 시각(한 사고의 시작). 열려 있는 동안 등급·기준 집합이 바뀌어도 그대로이고, 닫혔다가 다시 열리면 새 시각이다.
+      // 알림 중복 막기 키와 글 장부 id에 들어가 한 사고가 글 하나로 묶인다. 원장에 적혀 재시작 뒤에도 같은 값으로 복원된다.
+      since: previous?.since ?? at,
     };
   } else if (previous) {
     normalCycles = (previousState?.normalCycles ?? 0) + 1;
