@@ -17,6 +17,7 @@ import {
   watchAILabel,
 } from "./watch-report.mjs";
 import { OFFLINE_REASONS } from "./watch-ai.mjs";
+import { aiFailureRuns, targetFailureDue, allFailureDue } from "./watch-ai-failures.mjs";
 import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
@@ -236,6 +237,17 @@ export async function runWatch({
   const pendingAlerts = new Map(seeded.active.filter(a => a.held).map(a => [a.id, a]));
   const workerChecks = new Map();
   const judgeFailures = new Map();
+  // 점검 도구 전체 장애 경보(여러 대상이 잇달아 실패). 세션이 없는 경보라 대상별 경보와 따로 둔다. 성공한 점검이 하나라도 오면 닫는다.
+  const TOOL_DOWN_ID = "ai-call:all";
+  let toolDownAlert = null;
+  // 감시 보고 저장소 정리가 연속으로 실패한 주기 수. 한 주기 실패는 알리지 않는다(원장 잠금 3주기 규칙과 같은 기준).
+  let aiStoreFailures = 0;
+  // 재시작 뒤에도 이미 올린 점검 도구 경보는 열린 채로 둔다(같은 id라 다시 알리지 않는다). 다음에 성공한 점검이 닫는다.
+  // 감시 AI를 끄고 띄웠으면 닫아 줄 점검이 없으므로 복원하지 않는다(예전처럼 첫 주기에 닫힌다).
+  if (judgeCmd) for (const a of seeded.active) if (a.kind === "감시AI오류" && a.id?.startsWith("ai-call:")) {
+    if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
+    else if (a.session) judgeFailures.set(a.id.slice("ai-call:".length), a);
+  }
   // 감시 AI가 인터넷 없음으로 실패한 연속 횟수(호출 대상별). 깨어 있는 동안 3번 이어질 때만 알린다(잠긴 규칙 3, 2026-10-07).
   const offlineFailures = new Map();
   const progressWatch = new ProgressWatch();
@@ -323,8 +335,9 @@ export async function runWatch({
       if(!currentAI(job)||result.reason==='cancelled')continue;
       for(const recipient of result.deliveredRecipients||[])aiRecipients.add(recipient);
       if(result.deliveredRecipients?.length)print(`[${watchAILabel(job.candidate.source)}] ${job.candidate.role} 보고 전달 → ${result.deliveredRecipients.join(', ')} (호출 ${result.requestId})`);
-      const failure=reason=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
+      const failure=(reason,run=null)=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
         session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason,
+        ...(run?{failCount:run.count,failMinutes:Math.floor((cycleAt-run.since)/60_000)}:{}),
         ...(result.verdict?{judgeVerdict:result.verdict,judgeDeliveredTo:result.deliveredRecipients??[]}:{})});
       // 인터넷 없음·잠자기는 알리지 않고 다음 정기 점검에 다시 부른다. 이전 알림은 그대로 둔다(성공해야 풀린다).
       if(OFFLINE_REASONS.has(result.reason)){
@@ -334,8 +347,34 @@ export async function runWatch({
         continue;
       }
       offlineFailures.delete(job.key);
-      if(result.ok)judgeFailures.delete(job.key);
-      else failure(result.reason);
+      if(result.ok){
+        // 건너뛴 점검(책임이 사라져 요청을 만들지 않음)은 성공한 점검이 아니다. 열린 경보를 닫지 않는다.
+        if(!result.skipped){judgeFailures.delete(job.key);toolDownAlert=null;}
+        continue;
+      }
+      // 점검 도구 실패(watch-ai-failures.mjs): 한 번은 원장의 호출 기록과 감시 출력에만 남기고 사람에게 보내지 않는다.
+      // 같은 대상에서 이어지거나 여러 대상이 잇달아 실패할 때만 올린다. 횟수는 이미 읽은 원장의 호출 기록에서 센다.
+      // 호출 기록 없이 실패한 점검(준비·저장 단계 오류)은 같은 종류의 기록을 여기서 남겨 같은 방식으로 센다.
+      const unrecorded=[];
+      if(!result.requestId){
+        const call={kind:'watch-ai-call',by:'watch',requestId:null,role:job.candidate.role,session:job.candidate.session,
+          source:job.candidate.source,taskId:job.candidate.taskId??null,reason:result.reason,t:new Date(cycleAt).toISOString()};
+        // 기록에 실패해도 이번 실패는 센다. 기록 오류가 나머지 결과 처리를 끊지 않게 한다.
+        try{record(call);}catch(error){print(`[watch] 점검 호출 기록 실패: ${error.message}`);}
+        unrecorded.push(call);
+      }
+      const runs=aiFailureRuns(mailEntries,cycleAt,unrecorded),run=runs.target(job.key);
+      // 문제 판정이 기록됐는데 전달 기록이 없으면 도구 실패만이 아니다(문제 판정이 아무에게도 안 갔을 수 있다). 지금처럼 바로 알린다.
+      const undelivered=result.verdict&&!normalWatchVerdict(result.verdict)&&!result.deliveredRecipients?.length;
+      if(undelivered)failure(result.reason);
+      else if(allFailureDue(runs.all,cycleAt)){
+        // 전체 장애 경보가 열려 있는 동안은 대상별 경보를 따로 올리지 않는다(같은 장애를 두 번 알리지 않는다).
+        toolDownAlert??={id:TOOL_DOWN_ID,kind:'감시AI오류',level:'AMBER',role:'점검 도구',reason:'tool-down',lastReason:result.reason,
+          failCount:runs.all.count,failTargets:runs.all.targets.size,failMinutes:Math.floor((cycleAt-runs.all.since)/60_000)};
+      }
+      // 이미 열린 대상별 경보는 사유가 바뀌어도 그대로 둔다(이어지는 장애에서 사유만 바뀔 때 다시 알리지 않는다).
+      else if(targetFailureDue(run,cycleAt)&&!toolDownAlert){if(!judgeFailures.has(job.key))failure(result.reason,run);}
+      else print(`[감시sh ${clockTime(cycleAt)}] 점검 도구 오류(기록만) ${job.candidate.role}: ${result.reason}, 연속 ${run.count}회 — 사람에게 알리지 않음`);
     }
     if(!observationError) {
       for(const [role,job] of queuedAI)if(!currentAI(job))queuedAI.delete(role);
@@ -351,8 +390,10 @@ export async function runWatch({
       try {
         ai?.reports.retire(entries,cards,parents,works);
         ai?.reports.retryHeld?.(entries,parents);
+        aiStoreFailures=0;
       }
-      catch { aiStoreError={id:'watch-ai:store',kind:'감시AI오류',level:'AMBER',role:'감시 보고 저장소',reason:'report-error'}; }
+      // 한 주기 실패는 알리지 않고 다음 주기에 다시 한다. 3주기 연속이면 알린다.
+      catch { if(++aiStoreFailures>=3)aiStoreError={id:'watch-ai:store',kind:'감시AI오류',level:'AMBER',role:'감시 보고 저장소',reason:'report-error'}; }
       for (const [key,failure] of judgeFailures) if (!observedSessions.has(failure.session)) judgeFailures.delete(key);
       for (const key of offlineFailures.keys()) if (!observedSessions.has(`kadan-${key.split(':')[1]}`)) offlineFailures.delete(key);
       // 대상 제외는 사망/회복이 아니다. 이전 비교·AI 결과와 알림을 조용히 퇴역시킨다.
@@ -800,6 +841,7 @@ export async function runWatch({
       ...(!observationError && holdTracker ? holdTracker.alerts() : []),
       ...reportAlerts,
       ...judgeFailures.values(),
+      ...(toolDownAlert ? [toolDownAlert] : []),
       ...roles.screenAlerts.filter(a=>!supervisorScope?.sessions.has(a.session)),
       ...supervisorCheck.alerts,
       // 유휴 판정은 작업자뿐 아니라 감독 세션(상위가 있는 감독·최상위 감독)에도 닿는다.
