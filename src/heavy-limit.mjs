@@ -1,10 +1,10 @@
 // 무거운 명령 동시 실행 제한. 카단 폴더의 잠금 파일로 기계 전체에서 종류별 동시 개수를 막는다.
 // 왜: 병렬 에이전트가 설치·빌드·러스트 빌드를 한꺼번에 돌려 부하 75·스왑 25GB까지 갔다 (2026-10-02 [kyle]).
-// 데몬·서비스 없이 잠금 파일만 쓴다. 죽은 PID의 잠금은 다음 사람이 회수한다.
+// 데몬·서비스 없이 잠금 파일만 쓴다. 죽은 PID의 잠금과, PID를 다른 프로세스가 다시 받은 잠금은 다음 사람이 회수한다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 
 export const DEFAULT_LIMITS = {rust: 1, install: 2, build: 2};
@@ -61,6 +61,46 @@ export function processAlive(pid) {
   catch (error) { if (error.code === 'ESRCH') return false; return true; }
 }
 
+// 프로세스의 시작 표지: 번호(PID)가 같아도 다른 프로세스면 달라지고, 같은 프로세스면 벽시계를 고쳐도 변하지 않는 값이다.
+// Linux: 부팅 식별값 + 부팅 뒤 틱으로 센 시작 시각(/proc/<pid>/stat의 22번째 칸). 벽시계를 쓰지 않는다.
+//   Linux의 `ps lstart`는 "부팅 시각 + 시작 틱"으로 계산돼 시계가 앞으로 보정되면 살아 있는 프로세스의 값도 같이 밀리므로 쓰지 않는다.
+// macOS: 커널이 프로세스를 만들 때 저장해 둔 시작 시각을 ps가 그대로 찍는다. 시간대에 따라 글자가 달라지지 않게 UTC로 읽는다.
+// 그 밖의 OS는 ps 값이 시계 보정에 안전한지 확인하지 않아 표지를 만들지 않는다. 읽지 못하거나 모양이 다르면 null이다.
+const LINUX_TOKEN = /^linux:[0-9a-f-]{8,64}:\d+$/i;
+const PS_TOKEN = /^ps:[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}$/;
+const tokenMethod = token => (LINUX_TOKEN.test(token) ? 'linux' : PS_TOKEN.test(token) ? 'ps' : null);
+export function processStartToken(pid, {platform = process.platform, readFile = fs.readFileSync, run = spawnSync} = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  let token = null;
+  try {
+    if (platform === 'linux') {
+      const stat = readFile(`/proc/${pid}/stat`, 'utf8');
+      // 둘째 칸(명령 이름)은 괄호 안에 공백·괄호를 담을 수 있어 마지막 ')' 뒤부터 센다. 그 뒤 20번째 값이 22번째 칸이다.
+      const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+      token = `linux:${readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`;
+    } else if (platform === 'darwin') {
+      const result = run('ps', ['-o', 'lstart=', '-p', String(pid)],
+        {encoding: 'utf8', timeout: 2000, env: {...process.env, LC_ALL: 'C', TZ: 'UTC'}});
+      if (result.status === 0) token = `ps:${String(result.stdout ?? '').trim()}`;
+    }
+  } catch { return null; }
+  return token && tokenMethod(token) ? token : null;
+}
+
+// 잠금 주인의 상태. 잠금에는 잡을 때 읽은 주인의 시작 표지(startToken)가 있다. PID가 살아 있어도 지금 그 PID의 표지가
+// 다르면 번호만 같은 다른 프로세스다(재부팅·PID 재사용) — 'pid-reused'이고 죽은 잠금으로 본다.
+// 모르면 살아 있다고 본다(표지 없는 옛 잠금·모양이 다른 표지·지금 표지를 못 읽음·읽는 방법이 다름): 잘못 남긴 잠금은
+// 자리 하나가 줄 뿐이지만 잘못 회수하면 무거운 명령이 겹친다. 표지는 PID가 살아 있고 잠금에 표지가 있을 때만 읽는다.
+export function lockOwnerState(lock, {startToken = processStartToken} = {}) {
+  if (!processAlive(lock?.pid)) return 'dead';
+  const method = typeof lock.startToken === 'string' ? tokenMethod(lock.startToken) : null;
+  if (!method) return 'alive';
+  let current = null;
+  try { current = startToken(lock.pid); } catch { return 'alive'; }
+  if (typeof current !== 'string' || tokenMethod(current) !== method) return 'alive';
+  return current === lock.startToken ? 'alive' : 'pid-reused';
+}
+
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -95,22 +135,24 @@ function capOf(home, kind) {
   return cap;
 }
 
-export function limitHolders(home, kind) {
+// alive는 잠금이 살아 있는지(state가 alive)다. state는 alive·dead·pid-reused 중 하나다.
+export function limitHolders(home, kind, deps) {
   const dir = limitDir(home);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter(name => /\.lock$/.test(name) && (!kind || name.startsWith(`${kind}-`)))
     .map(name => ({lock: name, ...(readJson(path.join(dir, name)) ?? {})}))
-    .map(h => ({...h, alive: processAlive(h.pid)}));
+    .map(h => { const state = lockOwnerState(h, deps); return {...h, alive: state === 'alive', state}; });
 }
 
-// 빈 자리 하나를 잡는다. 죽은 PID의 잠금은 회수한다. 못 잡으면 null.
-export function tryAcquireLimit(home, kind, holder) {
+// 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금은 회수한다. 못 잡으면 null.
+export function tryAcquireLimit(home, kind, holder, deps) {
   const cap = capOf(home, kind);
   for (let n = 1; n <= cap; n++) {
     const file = lockFile(home, kind, n);
     if (createExclusive(file, holder)) return file;
     const current = readJson(file);
-    if (current && !processAlive(current.pid) && reclaim(file) && createExclusive(file, holder)) return file;
+    const stale = current && lockOwnerState(current, deps) !== 'alive';
+    if (stale && reclaim(file) && createExclusive(file, holder)) return file;
   }
   return null;
 }
@@ -123,13 +165,17 @@ export function limitEnv(kind, command, env = process.env) {
   return jobs ? env : {...env, CARGO_BUILD_JOBS: CARGO_JOBS};
 }
 
-const describe = holders => holders.map(h => `${h.lock} pid ${h.pid}${h.alive ? '' : '(죽음)'} ${h.since ?? ''} ${(h.command ?? []).join(' ')}`.trim()).join('; ');
+const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 시작 표지 다름)'};
+const describe = holders => holders
+  .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''} ${(h.command ?? []).join(' ')}`.trim()).join('; ');
 
 // 자리가 날 때까지 기다렸다가 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다. 종료 코드는 명령의 것을 돌려준다.
 export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit'} = {}) {
   if (!command.length) throw new Error('실행할 명령 필요: kadan limit run <종류> -- <명령...>');
   capOf(home, kind);
-  const holder = {pid: process.pid, kind, command, cwd, since: new Date().toISOString()};
+  const token = processStartToken(process.pid);
+  const holder = {pid: process.pid, kind, command, cwd, since: new Date().toISOString(),
+    ...(token ? {startToken: token} : {})};
   let file = null, child = null;
   const release = () => { try { if (file && readJson(file)?.pid === process.pid) fs.rmSync(file, {force: true}); } catch {} };
   // 신호 처리는 잠금을 잡기 전에 건다. 잡은 직후·명령 시작 전에 신호가 와도 잠금을 풀고 끝낸다.
@@ -141,13 +187,20 @@ export async function runLimited(home, kind, command, {cwd = process.cwd(), env 
   for (const signal of signals) process.on(signal, onSignal);
   process.on('exit', release);
   try {
-    file = tryAcquireLimit(home, kind, holder);
+    // 한 바퀴(회수 시도 + 바로 뒤의 대기 줄) 안에서는 같은 PID의 시작 표지를 한 번만 읽는다.
+    const oncePerPid = () => {
+      const seen = new Map();
+      return {startToken: pid => { if (!seen.has(pid)) seen.set(pid, processStartToken(pid)); return seen.get(pid); }};
+    };
+    let lookup = oncePerPid();
+    file = tryAcquireLimit(home, kind, holder, lookup);
     let shown = '';
     while (!file) {
-      const now = describe(limitHolders(home, kind));
+      const now = describe(limitHolders(home, kind, lookup));
       if (now !== shown) { log(`대기: ${kind} 자리 모두 사용 중 — ${now}`); shown = now; }
       await sleep(pollMs);
-      file = tryAcquireLimit(home, kind, holder);
+      lookup = oncePerPid();
+      file = tryAcquireLimit(home, kind, holder, lookup);
     }
     child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio});
     return await new Promise(resolve => {
