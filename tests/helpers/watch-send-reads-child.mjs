@@ -58,6 +58,7 @@ const {floor} = await src('floor.mjs');
 const watch = await src('commands/watch.mjs');
 const {guardedSend} = await src('cli-guarded-send.mjs');
 const {lastStartFor, recordedPid, sessionName} = await src('cli-basics.mjs');
+const {startDigest} = await src('secretary-resume.mjs');
 const {NotifyHoldTracker} = await src('watch-notify-hold.mjs');
 const {DatabaseSync} = await import('node:sqlite');
 const role = 'fixture-검수자', session = sessionName(role);
@@ -76,10 +77,12 @@ appendLedger({kind:'send', role, session, message:'old',
   instructions:{mode:'full', profile:'reviewer', templateDigest:'old'}}, home);
 if (['reuse', 'reopen', 'restart'].includes(scenario)) {
   const original = readLedger(home).findLast(e => e.kind === 'start' && e.role === role);
+  const link = startDigest(original);
+  if (!/^[a-f0-9]{64}$/.test(link)) throw new Error('시작 기록 연결 지문이 아님');
   if (scenario !== 'reuse') appendLedger({kind:'stop', role, session}, home);
-  addStart(scenario === 'reuse' ? {reuseOf:original.t, reused:true} :
-    scenario === 'reopen' ? {reopen:true, reopenOf:original.t, conversationMode:'resume'} :
-      {restart:true, restartOf:original.t, conversationMode:'resume'});
+  addStart(scenario === 'reuse' ? {reuseOf:link, reused:true} :
+    scenario === 'reopen' ? {reopen:true, reopenOf:link, conversationMode:'resume'} :
+      {restart:true, restartOf:link, conversationMode:'resume'});
 }
 if (scenario === 'stopped') appendLedger({kind:'stop', role, session}, home);
 if (scenario === 'old') {
