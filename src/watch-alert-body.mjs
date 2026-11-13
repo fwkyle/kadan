@@ -73,7 +73,8 @@ function watchAIErrorBody(alert) {
 
 export function formatAlertBody(alert) {
   if (alert.kind === "감시AI오류") return watchAIErrorBody(alert);
-  if (alert.kind === "프로세스") return alert.text ?? "카단 tmux 프로세스 메모리 기준 초과";
+  // 사용자에게는 결론 한 줄(headline)만 간다. 세션·PID 목록 전체(text)는 원장의 경보 기록에 남는다. 복원한 경보에는 headline이 없다.
+  if (alert.kind === "프로세스") return alert.headline ?? alert.text ?? "카단 세션 아래 프로세스 메모리 기준 초과";
   if (alert.kind === "입력큐") {
     return `입력 큐 대기 ${alert.session} (${alert.line})`;
   }
