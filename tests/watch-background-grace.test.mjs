@@ -88,15 +88,19 @@ test('감시 AI를 켠 상태: 유예 30분 동안 화면이 그대로라서 부
   assert.ok(typed.calls.some(([source, role]) => source === 'stall' && role === WORKER), JSON.stringify(typed.calls));
 });
 
-// 아래 셋은 이번 변경이 바꾸지 않는 것을 그대로 적어 둔다(유예는 멈춤과 화면이 그대로라서 나는 정체만 늦춘다).
-test('감시 AI를 켠 60분: 정체 판정 호출은 없고, 진행 점검(running 실행의 주기 점검)은 유예와 무관하게 그대로 불린다', async () => {
+test('감시 AI를 켠 60분: 유예 30분 동안 정체 판정도 진행 점검도 부르지 않고, 유예가 끝나면 진행 점검은 지금처럼 불린다', async () => {
   const calls = [];
-  const ai = {reports: {retire: () => {}}, run: async options => { calls.push([options.source, options.role]); return {ok: true, reason: 'reported'}; }};
-  const out = await watch({until: 61, screen: () => claudeBackground, ai});
+  let minuteNow = 0;
+  const ai = {reports: {retire: () => {}}, run: async options => { calls.push([options.source, options.role, minuteNow]); return {ok: true, reason: 'reported'}; }};
+  const out = await watch({until: 61, screen: minute => { minuteNow = minute; return claudeBackground; }, ai});
   assert.deepEqual(calls.filter(([source]) => source === 'stall'), []);
-  assert.ok(calls.some(([source, role]) => source === 'progress' && role === WORKER), '진행 점검은 이 변경의 범위 밖이라 그대로다');
+  const progress = calls.filter(([source, role]) => source === 'progress' && role === WORKER).map(([, , minute]) => minute);
+  assert.deepEqual(progress.filter(minute => minute < 30), [], `유예 안의 진행 점검: ${JSON.stringify(progress)}`);
+  assert.ok(progress.some(minute => minute >= 30), `유예 뒤의 진행 점검: ${JSON.stringify(progress)}`);
   assert.deepEqual(out.sent, [[30, BOSS, '멈춤']]);
 });
+
+// 아래 둘은 이번 변경이 바꾸지 않는 것을 그대로 적어 둔다.
 
 test('감독도 빈 입력창에서 쉬면 놀고 있음은 그대로 간다: 15분 감독 본인, 30분 상위(유예와 무관)', async () => {
   const out = await watch({until: 61, screen: () => claudeBackground, bossIdle: true});
@@ -110,3 +114,33 @@ test('감시기 재시작: 표시가 이어진 시간을 0부터 다시 세어, 
   assert.deepEqual(second.sent, [[65, BOSS, '멈춤']]);
   assert.match(second.messages[0].message, /백그라운드 셸 표시 30분째/u);
 });
+
+// 검수 지적 F1: 유예 30분 동안에는 감시 AI의 진행 점검도 그 세션을 부르지 않는다(정상 대기를 "카드 미완인데 입력 대기"로 올리지 않게).
+// 작업자가 25분까지 일하다가 백그라운드 표시가 있는 빈 입력창으로 돌아온다. 진행 점검의 30분 주기는 표시의 시작과 무관하게 돈다.
+test('F1: 유예 중인 세션은 진행 점검 AI도 부르지 않고, 유예가 끝나면 지금처럼 부른다', async () => {
+  const calls = [];
+  let minuteNow = 0;
+  const working = minute => `✻ Working… (${minute}m 0s · esc to interrupt)\n\n${claudeBox(0).join('\n')}`;
+  const tracked = {reports: {retire: () => {}}, run: async options => { calls.push([options.source, options.role, minuteNow]); return {ok: true, reason: 'reported'}; }};
+  const out = await watch({until: 70, screen: minute => { minuteNow = minute; return minute < 25 ? working(minute) : claudeBackground; }, ai: tracked});
+  const progress = calls.filter(([source, role]) => source === 'progress' && role === WORKER).map(([, , minute]) => minute);
+  assert.deepEqual(progress.filter(minute => minute >= 25 && minute < 55), [], `유예(25~55분) 안의 진행 점검 호출: ${JSON.stringify(progress)}`);
+  assert.ok(progress.some(minute => minute >= 55), `유예가 끝난 뒤에는 부른다: ${JSON.stringify(progress)}`);
+  assert.deepEqual(out.sent, [[55, BOSS, '멈춤']]);
+});
+
+// 검수 지적 F2: 대화 본문에 인용된 표시 문구는 실행기 상태 줄이 아니다. 실제로 멈춘 역할의 멈춤을 늦추지 않는다.
+const codexBox = ['', '', '› Ask Codex to do anything', '', '  model medium · ~/work · main · Context 63% used'];
+const quoted = line => ['• 답을 마쳤다.', line, ...codexBox].join('\n');
+for (const [name, screen] of [
+  ['codex 답 본문의 문장 중간', quoted('  문서 인용 · 2 background terminals running 문자열을 예로 설명했다.')],
+  ['codex 답 본문의 글머리 줄', quoted('• 상태 줄에는 · 2 background terminals running 처럼 보인다.')],
+  ['claude 답 본문에 들여 쓴 요약 줄', ['⏺ 예를 들면 이렇게 보인다.', '  ✻ Churned for 6m 29s · done 10:59 AM · 2 shells still running', '', '✻ Cogitated for 12s · done 11:02 AM', '', ...claudeBox(0)].join('\n')],
+  ['claude 요약 줄 아래에 답 본문이 더 있음', ['✻ Churned for 6m 29s · done 10:59 AM · 2 shells still running', '', '⏺ 백그라운드 작업이 끝나 결과를 정리했다.', '', ...claudeBox(0)].join('\n')],
+]) {
+  test(`F2: 표시가 아닌 글(${name})은 멈춤을 늦추지 않는다 — 지금처럼 4분`, async () => {
+    const out = await watch({until: 20, screen: () => screen});
+    assert.deepEqual(out.sent, [[4, BOSS, '멈춤']]);
+    assert.doesNotMatch(out.messages[0].message, /백그라운드 셸 표시/u);
+  });
+}

@@ -496,9 +496,37 @@ test('더 새 턴이 표시 없이 끝났으면 위쪽의 옛 표시는 읽지 �
   assert.equal(backgroundMarker(newerPlain), null);
   const newerMarked = ['⏺ 앞 턴의 답.', '', older, '', '⏺ 다음 턴의 답.', '', claudeBackground(claudeBackgroundLine('Cooked', '1 shell'))].join('\n');
   assert.equal(backgroundMarker(newerMarked).line, claudeBackgroundLine('Cooked', '1 shell'));
-  // 답 본문의 "… for …" 문장은 턴 요약 줄이 아니다: 그 위의 표시를 가리지 않는다.
+  // 요약 줄 아래에 답 본문이 더 있으면 그 요약 줄은 지금 턴의 것이 아니다: 표시로 읽지 않는다(입력 줄 바로 위 자리만 본다).
   const prose = [older, '', '⏺ Waiting for the build to finish.', '', ...claudeIdle.split('\n').slice(2)].join('\n');
-  assert.equal(backgroundMarker(prose).line, older);
+  assert.equal(backgroundMarker(prose), null);
   const afterMin = IDLE_STOP_AFTER_MS / 60_000;
   assert.equal(idleRun(Array(afterMin + 1).fill(newerPlain)).at(-1).length, 1, '옛 표시만 있는 화면은 지금처럼 4분에 멈춤');
+});
+
+test('표시는 실행기 상태 줄 자리에서만 읽는다: 답 본문·인용에 같은 문구가 있어도 표시가 아니다', () => {
+  const codexBox = ['', '', '› Ask Codex to do anything', '', '  gpt-6-astra medium · ~/Dev/kadan-lite · main · Context 63% used · 258K window'];
+  const quoted = line => ['• 답을 마쳤다.', line, ...codexBox].join('\n');
+  for (const [name, screen] of [
+    ['codex 문장 중간의 인용', quoted('  문서 인용 · 2 background terminals running 문자열을 예로 설명했다.')],
+    ['codex 글머리 줄의 인용', quoted('• 상태 줄에는 · 2 background terminals running 처럼 보인다.')],
+    ['codex 숫자로 시작하지만 상태 줄 꼬리가 없는 줄', quoted('  2 background terminals running 이라고 적혀 있었다.')],
+    ['codex 상태 줄 모양이지만 그 아래에 본문이 더 있음', ['  2 background terminals running · /ps to view · /stop to close', '• 위 줄은 예시다.', ...codexBox].join('\n')],
+    ['codex 머리줄 모양이지만 시계 괄호가 없음', quoted('• Waiting for background terminal · 1 background terminal running · /ps to view')],
+    ['codex 머리줄 아래에 다른 글머리 줄이 있음', [codexWaitingBackground.split('\n')[0], '• 그 뒤에 이어진 답.', ...codexBox].join('\n')],
+    ['claude 들여 쓴 요약 줄', claudeIdle.replace('✻ Cogitated for 3m 44s · done 1:16 PM', '  ' + claudeBackgroundLine())],
+    ['claude done 구간이 없는 줄', claudeBackground('✻ Churned for 6m 29s · 2 shells still running')],
+    ['입력 줄이 없는 화면', [claudeBackgroundLine(), '', '  본문'].join('\n')],
+  ]) assert.equal(backgroundMarker(screen), null, name);
+  // 같은 자리의 진짜 표시는 그대로 읽는다(대조).
+  assert.equal(backgroundMarker(claudeBackground(claudeBackgroundLine())).count, 2);
+  assert.equal(backgroundMarker(codexBackground).count, 2);
+  assert.equal(backgroundMarker(codexWaitingBackground).count, 1);
+  // claude가 요약 줄과 입력 줄 사이에 띄우는 세션 평가 설문(화면 요소)은 건너뛰고 읽는다.
+  const survey = claudeBackground(claudeBackgroundLine() + '\n\n● How is Claude doing this session? (optional)\n  1: Bad    2: Fine   3: Good   0: Dismiss');
+  assert.equal(backgroundMarker(survey).count, 2);
+  // 설문 모양이 아닌 `●` 줄은 답 본문으로 본다.
+  assert.equal(backgroundMarker(claudeBackground(claudeBackgroundLine() + '\n\n● 다른 글머리 줄')), null);
+  // codex 머리줄 아래에 딸린 줄(들여 쓴 줄)이 있어도 읽는다.
+  const withDetail = [codexWaitingBackground.split('\n')[0], '  └ npm test 실행 중', ...codexBox].join('\n');
+  assert.equal(backgroundMarker(withDetail).count, 1);
 });

@@ -31,14 +31,19 @@ const CLAUDE_WORKING = /^\s*[✻✶✳✢✽·*⏺]\s+\S+(?:…|\.\.\.)\s*\(([^(
 const CLAUDE_TOOL_RUNNING = /^\s*⎿\s+Running(?:…|\.\.\.)\s*\(([^()·]*?)\s*(?:·|\))/u;
 const CODEX_INPUT = /^\s*›\s*(?:Ask Codex to do anything)?\s*$/u;
 // 백그라운드 셸 표시(감시AI 관찰 자료의 실제 화면에서 확인한 모양만 둔다. 추측으로 넣지 않는다).
-// claude: 끝난 턴 요약 줄 끝의 `✻ Cooked for 24s · done 7:41 PM · 3 shells still running`.
-// codex: 입력칸 위의 `  2 background terminals running · /ps to view · /stop to close` 단독 줄, 또는
-//        `• Waiting for background terminal (5m 12s • esc to interrupt) · 1 background terminal running · …` 줄 끝.
+// 표시는 실행기가 상태를 찍는 자리에서만 읽는다. 답 본문·인용·예시에 같은 글자가 있어도 표시가 아니다(애매하면 표시가 아닌 쪽 = 지금처럼 멈춤).
+// claude: 끝난 턴 요약 줄 `✻ Cooked for 24s · done 7:41 PM · 3 shells still running`. 줄 첫 칸에서 시작하고(답 본문은 들여 쓴다)
+//         `· done …` 구간이 있으며, 그 줄과 입력 줄 사이에는 빈 줄·가로줄만 있다(지금 턴의 요약 줄이다).
+// codex: 입력칸 바로 위의 단독 상태 줄 `  2 background terminals running · /ps to view · /stop to close`(숫자로 시작, 꼬리가 `· /ps`로 이어짐,
+//        입력 줄까지 빈 줄뿐), 또는 줄 첫 칸의 상태 머리줄 `• Waiting for background terminal (5m 12s • esc to interrupt) · 1 background terminal running · …`
+//        (경과 시계 괄호 바로 뒤에 표시가 붙고, 그 아래에 다른 `•` 줄이 없다).
 // 실행기 문구가 바뀌어 못 읽으면 표시 없음으로 본다(지금처럼 멈춤이 나는 쪽).
-// 끝난 턴 요약 줄(`✻ Cooked for 24s …`). 가장 아래의 요약 줄만 지금 턴의 것이다: 그 줄에 표시가 없으면 더 위의 옛 표시는 읽지 않는다.
-const CLAUDE_TURN_SUMMARY = /^\s*[✻✶✳✢✽]\s+\S+\s+for\s+\S/u;
-const CLAUDE_BACKGROUND = /^\s*[✻✶✳✢✽]\s+\S+\s+for\s.*·\s*(\d+)\s+shells?\s+still\s+running\s*$/u;
-const CODEX_BACKGROUND = /(?:^\s*|·\s*)(\d+)\s+background\s+terminals?\s+running\b/u;
+const CLAUDE_BACKGROUND = /^[✻✶✳✢✽]\s+\S+\s+for\s+[^·]+·\s*done\s[^·]*·\s*(\d+)\s+shells?\s+still\s+running\s*$/u;
+const CODEX_BACKGROUND_LINE = /^\s+(\d+)\s+background\s+terminals?\s+running\s+·\s+\/ps\b/u;
+const CODEX_BACKGROUND_HEADER = /^•\s+\S.*\((?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc to interrupt\)\s*·\s*(\d+)\s+background\s+terminals?\s+running\b/iu;
+const BLANK_OR_RULE = /^[\s─━]*$/u;
+// claude가 요약 줄과 입력 줄 사이에 띄우는 세션 평가 설문 두 줄(실제 화면에서 확인한 문구 그대로). 답 본문이 아니라 화면 요소다.
+const CLAUDE_SURVEY = /^● How is Claude doing this session\?|^\s+1: Bad\s+2: Fine\s+3: Good\s+0: Dismiss\s*$/u;
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 
 // `12s` `5m 12s` `1h 02m 03s`를 초로. 다른 모양은 null이다.
@@ -82,16 +87,23 @@ export function readStatusLine(screenText) {
 export function backgroundMarker(screenText) {
   const all = screenLines(screenText);
   const bottomStart = Math.max(0, all.length - BOTTOM_LINES);
+  // 입력 줄이 있어야 "상태 줄 자리"를 안다. 없으면 읽지 않는다.
   const anchor = all.findLastIndex((line, i) => i >= bottomStart && INPUT_SYMBOL.test(line));
-  const start = anchor < 0 ? bottomStart : Math.min(bottomStart, Math.max(0, anchor - ABOVE_INPUT_LINES));
-  for (let i = all.length - 1; i >= start; i--) {
-    const codex = CODEX_BACKGROUND.exec(all[i]);
-    // codex의 기다리는 줄은 `(5m 12s • esc to interrupt)` 시계가 주기마다 바뀐다. 비교 값에서 빼지 않으면 매번 새 표시로 읽혀 상한에 닿지 못한다.
-    if (codex) return { line: all[i].replace(/\([^()]*esc to interrupt[^()]*\)/iu, "").trim(), count: Number(codex[1]) };
-    if (CLAUDE_TURN_SUMMARY.test(all[i])) {
-      const claude = CLAUDE_BACKGROUND.exec(all[i]);
-      return claude ? { line: all[i].trim(), count: Number(claude[1]) } : null;
-    }
+  if (anchor < 0) return null;
+  const start = Math.min(bottomStart, Math.max(0, anchor - ABOVE_INPUT_LINES));
+  // 입력 줄 바로 위(빈 줄·가로줄·세션 평가 설문을 건너뛴 첫 줄): claude 끝난 턴 요약 줄 또는 codex 단독 상태 줄.
+  let above = anchor - 1;
+  while (above >= start && (BLANK_OR_RULE.test(all[above]) || CLAUDE_SURVEY.test(all[above]))) above--;
+  if (above >= start) {
+    const hit = CLAUDE_BACKGROUND.exec(all[above]) ?? CODEX_BACKGROUND_LINE.exec(all[above]);
+    if (hit) return { line: all[above].trim(), count: Number(hit[1]) };
+  }
+  // codex 상태 머리줄: 입력 줄 위에서 가장 아래의 `•` 줄만 본다(그 아래의 딸린 줄은 허용). 더 위의 `•` 줄은 지나간 글이다.
+  for (let i = anchor - 1; i >= start; i--) {
+    if (!/^•\s/u.test(all[i])) continue;
+    const hit = CODEX_BACKGROUND_HEADER.exec(all[i]);
+    // 경과 시계 괄호는 주기마다 바뀐다. 비교 값에서 빼지 않으면 매번 새 표시로 읽혀 상한에 닿지 못한다.
+    return hit ? { line: all[i].replace(/\([^()]*esc to interrupt[^()]*\)/iu, "").trim(), count: Number(hit[1]) } : null;
   }
   return null;
 }
