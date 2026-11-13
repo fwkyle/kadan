@@ -9,6 +9,7 @@ import {composeRoleInstructions,readRoleInstructionsConfig} from './role-instruc
 import {composeMailInstructions} from './mail-instructions.mjs';
 import {mailRuleField} from './mail-rule.mjs';
 import {mailHeaderLine} from './mail-header.mjs';
+import {collectGarbage} from './memory-release.mjs';
 
 export const SECRETARY='비서';
 const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -39,8 +40,10 @@ export class Mailbox {
   if(Buffer.byteLength(message)>64*1024)throw new Error('우편은 64KiB 이내로 작성하세요');
   // 원장 읽기·연결 확인은 잠금 밖에서 먼저 하고, 잠금 안에서는 기록만 한다.
   const prepare=()=>{
+   // 연결 확인은 방금 읽은 우편함 조회를 그대로 쓴다(같은 조회를 한 번 더 읽지 않는다). 그 사이 원장이 바뀌면 잠금 안에서 다시 계산한다.
    const entries=readMailboxEntries(this.home);mailboxLetters(entries,this.role);
-   const context=resolveWorkMail(this.home,{workKey,executionKey,replyTo,by,role:this.role,expectReply,replyFinal});
+   collectGarbage(); // 읽기가 버린 줄과 위 검증이 만든 우편 목록을 업무·카드 조회 전에 거둔다
+   const context=resolveWorkMail(this.home,{workKey,executionKey,replyTo,by,role:this.role,expectReply,replyFinal},{entries});
    readRoleInstructionsConfig(this.home);
    return context;
   };

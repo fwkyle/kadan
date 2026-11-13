@@ -94,7 +94,7 @@ export function startRoleProfile({home,role,profile,previous,reusing=false}) {
 function facts(home,entries,{taskId,mailContext={},infer=false,cards:providedCards}) {
   const unavailable=[];
   const read=(label,fn,fallback)=>{try{return fn();}catch(error){unavailable.push(`${label}: ${error.message}`);return fallback;}};
-  const works=infer?read('업무 조회',()=>new WorkStore(home).list(),[]):[];
+  const works=infer?read('업무 조회',()=>new WorkStore(home).listLatest(),[]):[];
   const cards=providedCards?[...providedCards]:read('카드 조회',()=>new CardStore(home).listSummaries(),[]),identity=taskIdentity(cards);
   const {workKey,executionKey}=mailContext;
   let card=executionKey ? read('연결 실행',()=>new CardStore(home).get(executionKey),null) : null;

@@ -16,7 +16,7 @@ import { planTurnReturn, claimTurnReturn, turnReturnTail, turnReturnReceipt, rev
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floor } from "../floor.mjs";
-import { ledgerHome, readLedger, resolveLedgerBy } from "../ledger.mjs";
+import { ledgerHome, readSendLedger, resolveLedgerBy } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -29,6 +29,7 @@ import {mailFailureExitCode} from '../mail-delivery-exit.mjs';
 import {printConductorLoadHint} from '../conductor-load-hint.mjs';
 import {canReopen} from '../reopen.mjs';
 import {stdinBodyConflict} from '../stdin-body.mjs';
+import {collectGarbage} from '../memory-release.mjs';
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -120,7 +121,7 @@ function deliverMessage(argv, flags, command) {
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
     // 준비 단계의 파생 계산(발령 추론·우편 연결·슈퍼 간 판정·마지막 시작·완료 안내)은 이 읽기 하나를 같이 쓴다.
     // 전송 직전 소유·답장 수신자 판정은 이 값을 넘기지 않고 guardedSend가 새로 읽는다(#311 F2: 준비와 전송 사이의 세대 교체).
-    entries = readLedger();
+    entries = readSendLedger();
     let taskId=flags.task;
     if(command === 'send' && taskId==null){
       const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true,entries});
@@ -154,6 +155,7 @@ function deliverMessage(argv, flags, command) {
     if (peer && flags.raw) throw new Error('슈퍼 간 우편은 입력 보호를 거쳐 전달하거나 보관해 안전하게 알립니다. --raw 없이 보내세요');
     const store = reason => {
       console.error(`바로 넣지 못해 보관했습니다: ${reason}`);
+      collectGarbage(); // 보관이 우편 영역을 새로 읽기 전에, 끝난 읽기(전송 직전 재읽기 등)의 메모리를 거둔다
       const stored = new Mailbox(ledgerHome(), recipient).send({
         by, message, category:flags['mail-kind'] || 'report', ...mailContext,
       });
@@ -182,6 +184,8 @@ function deliverMessage(argv, flags, command) {
       raw: flags.raw === true, keepTurn: flags['keep-turn'] === true});
     turnClaim = claimTurnReturn(ledgerHome(), turnPlan);
     const outgoing = turnClaim ? message + turnReturnTail(turnClaim) : message;
+    // 전송 직전 재읽기는 지금처럼 새로 읽는다(#311 F2). 그 전에 준비 단계의 조회(업무 목록·우편 목록)가 남긴 것을 거둔다.
+    collectGarbage();
     try {
       sendCalled = true;
       receipt = guardedSend({
@@ -195,6 +199,7 @@ function deliverMessage(argv, flags, command) {
         allowOldRunner:flags["allow-old-runner"],
         recordedPid: expectedPid,
         busyMail: true,
+        readEntries: readSendLedger,
         ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session,entries))}} : {}),
       });
     } catch (error) {

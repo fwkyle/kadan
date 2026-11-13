@@ -22,8 +22,10 @@ registerHooks({load(url, context, nextLoad) {
   const result = nextLoad(url, context);
   let source = String(result.source);
   if (url.endsWith('/src/ledger-domains.mjs')) {
-    source = source.replace('export function readLedgerState(home,{domain=null}={}) {',
-      'export function readLedgerState(home,{domain=null}={}) { globalThis.kadanCountRead(domain);');
+    // 인자 모양이 바뀌어도 입구를 찾는다. 못 찾으면 0번으로 세지 않고 멈춘다.
+    const entry = /export function readLedgerState\(home,\{domain=null[^)]*\}=\{\}\) \{/;
+    if (!entry.test(source)) throw new Error('readLedgerState 입구를 찾지 못함');
+    source = source.replace(entry, found => `${found} globalThis.kadanCountRead(domain);`);
   }
   // 준비 단계와 guardedSend 사이에 일을 끼워 넣는 시험용 자리. 코드 모양이 바뀌어 못 찾으면 조용히 넘기지 않고 멈춘다.
   if (url.endsWith('/src/commands/send.mjs')) {
@@ -54,7 +56,12 @@ if (scenario === 'peer') {
   process.env.KADAN_ROLE = '슈퍼A';
   argv = ['슈퍼B', '본문'];
 }
-if (scenario === 'work') {
+if (scenario === 'storework') {
+  // 업무에 연결한 우편을 보관하는 경우: 우편함 저장이 연결을 확인하려고 같은 우편함 조회를 한 번 더 읽지 않는다.
+  appendLedger({kind: 'start', role: 'nopid', session: 'kadan-nopid'}, home);
+  argv = ['nopid', '본문'];
+}
+if (scenario === 'work' || scenario === 'storework') {
   const {WorkStore} = await src('work-store.mjs');
   new WorkStore(home).create({key: 'r/w1', title: 't', goal: 'g', scope: 's', acceptance: 'a', owner: 'sender', repoPath: home, by: 'sender'});
   flags.work = 'r/w1';

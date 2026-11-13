@@ -5,6 +5,7 @@ import {readMailboxLedger,readLedger} from './ledger.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {isUserActor} from './actors.mjs';
 import {effectiveCardRole} from './handover-state.mjs';
+import {collectGarbage} from './memory-release.mjs';
 
 // --task는 발령, --work/--execution은 우편의 연결 주소다. 원문에서 대상을 추측하지 않는다.
 // --execution만 썼는데 그 주소가 수신 역할에 발령된 중앙 카드이면 카드 없는 발령이 되어
@@ -24,7 +25,10 @@ export function resolveWorkMail(home,{workKey,executionKey,replyTo,taskId,by,rol
  if(replyFinal&&expectReply)throw new Error('최종 답변은 다시 답변을 요청하지 않습니다');
  const replyFlags={...(expectReply?{expectReply:true}:{}),...(replyFinal?{replyFinal:true}:{})};
  if(!workKey&&!executionKey&&!replyTo&&!taskId)return replyFlags;
- const works=new WorkStore(home).list(),cards=snapshot.cards??new CardStore(home).listSummaries(),entries=snapshot.entries??readMailboxLedger(home);
+ const works=new WorkStore(home).listLatest(),cards=snapshot.cards??new CardStore(home).listSummaries();
+ // 넘겨받은 조회가 없으면 우편 영역을 새로 읽는다(전송 직전·기록 직전 답장 수신자 재확인). 그 전에 앞선 읽기가 남긴 것을 거둔다.
+ if(!snapshot.entries)collectGarbage();
+ const entries=snapshot.entries??readMailboxLedger(home);
  if(entries.some(x=>x.broken))throw new Error('원장 손상: 우편 연결 확인 불가');
  if(taskId){const identity=taskIdentity(cards);identity.write(taskId,executionKey);const found=identity.resolve(taskId,executionKey);if(!found.card&&works.some(w=>w.id===taskId||w.key===taskId))throw new Error('업무 ID는 실행 발령에 쓰지 않습니다. 업무 안에 새 실행을 등록하세요');if(found.card){executionKey=found.key;}}
  let parent;
