@@ -117,13 +117,17 @@ test('실제 왕복: 쉼(가짜 시계) → 후보 우편이 직속 감독 창�
   assert.equal(sends[0].role, 'idleboss');
   assert.match(readMailBody(sends[0].digest, s.home), /끄기: kadan stop idlecase$/m);
   // 감독 창에 우편이 들어갔다. 사용자 알림은 하나도 나가지 않았다.
-  // 가짜 실행기는 입력을 읽지 않아, 터미널이 되돌려 찍는 양이 OS의 입력 대기열 크기에서 끊긴다(macOS 약 1KB, Linux 약 4KB — 격리 실측 2026-11-13).
-  // 많이 찍히는 OS에서는 우편 첫 줄이 보이는 화면 밖으로 밀린다(Ubuntu CI에서 보이는 화면만 읽던 단언이 실패했다).
+  // 가짜 실행기는 입력을 읽지 않아, 터미널이 되돌려 찍는 양이 OS마다 다른 크기에서 끊긴다(macOS 격리 실측 2026-11-13: 9,332바이트 중 1,022바이트).
+  // 많이 찍히면 우편 첫 줄이 보이는 화면 밖으로 밀린다. 보이는 화면만 읽던 단언은 Ubuntu CI에서 실패했다.
   // 그래서 위로 밀린 줄까지 읽고, 창을 6행으로 줄여 어느 OS에서든 "첫 줄이 화면 밖"인 조건으로 확인한다.
   until(() => paneHistory('kadan-idleboss').includes('[정리 후보]'), '감독 창에 후보 우편이 찍혔다',
     () => ` — 보이는 화면 ${tmuxFloor.read('kadan-idleboss').length}자, 기록 ${paneHistory('kadan-idleboss').length}자, 기록 끝: ${JSON.stringify(paneHistory('kadan-idleboss').slice(-200))}`);
   // 찍히는 도중에는 첫 줄이 잠깐 보일 수 있어, 밀려 나갈 때까지 기다린다. 이 조건(첫 줄이 화면 밖)에서도 위 확인이 통과한 것이다.
   until(() => !tmuxFloor.read('kadan-idleboss').includes('[정리 후보]'), '우편 첫 줄이 보이는 화면(6행) 밖으로 밀렸다');
+  // OS별로 실제 얼마나 찍히는지 시험 로그에 남긴다(위 원인 설명의 근거. 판정에는 쓰지 않는다).
+  wait(500);
+  const echoed = paneHistory('kadan-idleboss');
+  console.error(`감독 창에 찍힌 양(${process.platform}): ${Buffer.byteLength(echoed)}바이트, ${echoed.split('\n').length}줄 / 보낸 우편 ${sends[0].bytes ?? '?'}바이트`);
   assert.equal(fs.existsSync(process.env.KADAN_TEST_NOTIFY_SINK), false, '사용자 알림 없음');
 
   // 한 시간 뒤: 여전히 후보지만 다시 보내지 않는다(근거는 위 우편).
