@@ -52,6 +52,18 @@ export function accumulateTiming(window, sample) {
  return add(next, sample);
 }
 
+// 표본 배열 없이 마지막 값과 기록 구간의 최대·실패 횟수만 고정 크기로 보관한다.
+export function accumulateMachineMemory(window, sample) {
+ const next = window ?? {last: null, max: null, failures: 0};
+ if (!sample.known) { next.last = null; next.failures++; return next; }
+ const last = Object.fromEntries(['segmentPct', 'pagePct', 'pressure', 'swapUsedMb']
+  .map(key => [key, round1(sample[key])]));
+ next.last = last;
+ next.max = Object.fromEntries(Object.entries(last).map(([key, value]) =>
+  [key, Math.max(next.max?.[key] ?? value, value)]));
+ return next;
+}
+
 const ms = value => {const t = Date.parse(value); return Number.isFinite(t) ? t : null;};
 
 // 현재 감시기(worker) 기준 마지막 주기와 최근 24시간 공백. 기록이 하나도 없으면 unknown이며 0으로 꾸미지 않는다.
