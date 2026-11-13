@@ -2,6 +2,7 @@
 // 원장이 10배여도 숫자 슬롯과 관측 횟수는 순회·재생 횟수에만 비례하고 행마다 관측하지 않는다.
 export const WATCH_METRIC_COUNT_MAX = 999_999;
 export const WATCH_METRIC_MEMORY_MAX = 999_999.9;
+export const WATCH_METRIC_DURATION_MAX = 999_999.9;
 const fields = {
   raw: ['full', 'generation', 'retreat', 'reset'],
   projection: ['full', 'address', 'generation', 'invalid', 'count'],
@@ -60,6 +61,14 @@ export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsag
     count(component, name) {
       if (!fields[component]?.includes(name)) { failure(); return; }
       increment(replay[component], name);
+    },
+    sweepSlice(ms) {
+      if (!Number.isFinite(ms) || ms < 0) { failure();return; }
+      const sweep = replay.sweep;
+      sweep.slices ??= 0;
+      increment(sweep, 'slices');
+      sweep.maxSliceMs = Math.max(sweep.maxSliceMs ?? 0,
+        Math.min(WATCH_METRIC_DURATION_MAX, Math.round(ms * 10) / 10));
     },
     sample() {
       increment(processMemory, 'samples');

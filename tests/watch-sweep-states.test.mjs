@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {spawnSync} from 'node:child_process';
+import {createDatabase, writeStorageMarker, appendStream} from '../src/storage.mjs';
 import {appendLedger} from '../src/ledger.mjs';
 import {ledgerViewPath} from '../src/ledger-view-store.mjs';
 import {withLedgerView} from '../src/ledger-view.mjs';
@@ -13,7 +14,9 @@ import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
 import {createLedgerArraySweep, resetWatchSweep} from '../src/watch-sweep.mjs';
 import {createSweepPolicy} from '../src/watch-sweep-policy.mjs';
 import {createSweepRunner} from '../src/watch-sweep-run.mjs';
-import {createWatchReplayMetrics} from '../src/watch-replay-metrics.mjs';
+import {createWatchReplayMetrics, WATCH_METRIC_COUNT_MAX,
+  WATCH_METRIC_MEMORY_MAX, WATCH_METRIC_DURATION_MAX} from '../src/watch-replay-metrics.mjs';
+import {buildCycleEntry} from '../src/watch-cycle.mjs';
 
 const at = '2026-01-01T00:00:00Z';
 const worker = 'fixture-sweep-worker', boss = 'fixture-sweep-boss';
@@ -249,4 +252,164 @@ test('기존 역할 재생 접근점도 기존 투영 손상을 입력으로 공
     SELECT position FROM watch_role_dispatches LIMIT 1)`);
   const replayed = await s.reader.sweepAccess.roleState.replay({...live, upTo: live.position});
   assert.equal(replayed.digest, live.digest);
+});
+
+const actorFixture = () => setup([send, {kind: 'mail-read', mailId: send.mailId,
+  role: worker, by: 'fixture-human', t: at}]);
+async function actorTest(run) {
+  const previous = process.env.KADAN_USER_NAMES;
+  process.env.KADAN_USER_NAMES = '';
+  try { await run(); }
+  finally {
+    if (previous === undefined) delete process.env.KADAN_USER_NAMES;
+    else process.env.KADAN_USER_NAMES = previous;
+  }
+}
+function noActorReset(result) {
+  assert.ok(['match', 'moved'].includes(result.status), JSON.stringify(result));
+  const policy = createSweepPolicy({diagnostics: {rows: () => [], append() {}}});
+  assert.equal(policy.record(result).replace, false);
+  assert.equal(policy.holding(), false);
+}
+
+test('F1: 다른 사용자 설정의 별도 정식 조회는 손상·초기화·보류가 아니다', async () => actorTest(async () => {
+  for (const actors of ['', 'fixture-human']) {
+    const s = actorFixture();
+    let changed = false;
+    const script = `import {withMailboxView} from ${JSON.stringify(new URL('../src/mail-view.mjs', import.meta.url).href)};
+      withMailboxView(process.argv[1],()=>{},{domain:'watch',cards:JSON.parse(process.argv[2])});`;
+    const result = await s.sweep({yieldNow: async () => {
+      if (!changed) {
+        changed = true;
+        const child = spawnSync(process.execPath, ['--input-type=module', '-e', script, s.home,
+          JSON.stringify(s.cards)], {encoding: 'utf8', env: {...process.env,
+          KADAN_USER_NAMES: actors, KADAN_HOME: s.home}});
+        assert.equal(child.status, 0, child.stderr);
+      }
+    }}).full();
+    noActorReset(result);
+    s.reader.readEntries();
+    assert.equal((await s.sweep().full()).status, 'match');
+  }
+}));
+
+test('F1: snapshot 뒤 사용자 설정과 정상 상태가 바뀌면 moved다', async () => actorTest(async () => {
+  const s = actorFixture(), open = s.reader.sweepAccess.states.open;
+  let opened = false, changed = false;
+  s.reader.sweepAccess.states.open = () => { opened = true;return open(); };
+  const result = await s.sweep({yieldNow: async () => {
+    if (opened && !changed) {
+      changed = true;process.env.KADAN_USER_NAMES = 'fixture-human';s.reader.readEntries();
+    }
+  }}).full();
+  assert.equal(result.status, 'moved');
+  noActorReset(result);
+}));
+
+test('F1: 환경만 바뀌어도 재생은 저장된 사용자 집합을 사용한다', async () => actorTest(async () => {
+  const s = actorFixture(), open = s.reader.sweepAccess.states.open;
+  let opened = false;
+  s.reader.sweepAccess.states.open = () => { opened = true;return open(); };
+  const result = await s.sweep({yieldNow: async () => {
+    if (opened) process.env.KADAN_USER_NAMES = 'fixture-human';
+  }}).full();
+  assert.equal(result.status, 'match');
+  noActorReset(result);
+}));
+
+test('F1: 같은 사용자 집합의 손상은 잡고, 집합 전환 중 손상은 다음 대조에서 잡는다',
+  async () => actorTest(async () => {
+    const s = actorFixture();
+    s.edit("UPDATE mail_current SET read=1 WHERE domain='watch'");
+    assert.deepEqual((await s.sweep().full()).diffs.map(diff => diff.key), ['mail-state']);
+    const open = s.reader.sweepAccess.states.open;
+    let opened = false, changed = false;
+    s.reader.sweepAccess.states.open = () => { opened = true;return open(); };
+    const during = await s.sweep({yieldNow: async () => {
+      if (opened && !changed) {
+        changed = true;process.env.KADAN_USER_NAMES = 'fixture-human';s.reader.readEntries();
+        s.edit("UPDATE mail_current SET read=0 WHERE domain='watch'");
+      }
+    }}).full();
+    assert.equal(during.status, 'moved');
+    noActorReset(during);
+    assert.deepEqual((await s.sweep().full()).diffs.map(diff => diff.key), ['mail-state']);
+  }));
+
+test('F1: 우편 사용자 메타가 없거나 해석할 수 없으면 diff 대신 moved다', async () => {
+  for (const sql of ["DELETE FROM mail_view_meta WHERE domain='watch'",
+    "UPDATE mail_view_meta SET value=json_set(value,'$.actors','invalid') WHERE domain='watch'",
+    "UPDATE mail_view_meta SET value='invalid' WHERE domain='watch'"]) {
+    const s = actorFixture();s.edit(sql);
+    const result = await s.sweep().full();
+    assert.equal(result.status, 'moved');
+    noActorReset(result);
+  }
+});
+
+test('F2: 우편 80/800개 뒤 인계는 단독 조각이며 최장 시간·조각 수가 주기 기록에 남는다', async () => {
+  for (const count of [80, 800]) {
+    const s = setup([]);
+    for (let index = 0; index < count; index++) appendStream(s.home, 'ledger.jsonl', {
+      kind: 'send', role: worker, by: boss, mailId: `fixture-cost-${index}`, t: at,
+    });
+    appendStream(s.home, 'ledger.jsonl', {kind: 'handover', phase: 'transferred', from: worker,
+      to: 'fixture-cost-next', taskIds: [], handoverId: 'fixture-cost-transfer', t: at});
+    s.reader.readEntries();
+    const prepare = DatabaseSync.prototype.prepare;
+    let inserted = [], handoverRows, updated = 0, observed;
+    DatabaseSync.prototype.prepare = function (sql) {
+      const statement = prepare.call(this, sql);
+      if (sql.startsWith('INSERT INTO source_rows VALUES') ||
+          sql.startsWith('UPDATE mail_current SET recipient_key')) {
+        const run = statement.run.bind(statement);
+        statement.run = (...args) => {
+          const result = run(...args);
+          if (sql.startsWith('INSERT INTO source_rows')) inserted.push(args[0]);
+          else { handoverRows = [...inserted];updated += Number(result.changes); }
+          return result;
+        };
+      }
+      return statement;
+    };
+    const metrics = createWatchReplayMetrics();
+    try {
+      const engine = s.sweep({chunkRows: 20, yieldNow: async () => { inserted = []; }});
+      const runner = createSweepRunner({engine, metrics, policy: {
+        record(result) { observed = result;return {replace: false}; }, holding: () => false, alerts: () => [],
+      }, reset() { assert.fail('정상 자료를 초기화하지 않는다'); }});
+      runner.tick();await runner.idle();
+    } finally { DatabaseSync.prototype.prepare = prepare; }
+    assert.equal(observed.status, 'match');
+    assert.deepEqual(handoverRows, [count + 1]);
+    assert.equal(updated, count);
+    const cycle = buildCycleEntry({pid: 1, timing: metrics.snapshot()});
+    const sweep = cycle.timing.replay.sweep;
+    assert.ok(sweep.slices > 0);
+    assert.ok(Number.isFinite(sweep.maxSliceMs) && sweep.maxSliceMs >= 0);
+    assert.equal(sweep.full, 1);
+    console.log(JSON.stringify({fixtureLetters: count, updated, status: observed.status,
+      handoverRows, maxSliceMs: sweep.maxSliceMs, slices: sweep.slices}));
+  }
+});
+
+test('F2: 최장 시간은 누산하지 않고 최대를 유지하며 고정 크기 계측은 1KiB 이하다', () => {
+  const metrics = createWatchReplayMetrics({memoryUsage: () => ({
+    rss: Number.MAX_VALUE, heapUsed: Number.MAX_VALUE, heapTotal: Number.MAX_VALUE,
+  })});
+  metrics.sweepSlice(12.34);metrics.sweepSlice(7.1);
+  assert.equal(metrics.snapshot().replay.sweep.maxSliceMs, 12.3);
+  assert.equal(metrics.snapshot().replay.sweep.slices, 2);
+  metrics.sweepSlice(Number.MAX_VALUE);metrics.sample();
+  assert.equal(metrics.snapshot().replay.sweep.maxSliceMs, WATCH_METRIC_DURATION_MAX);
+  const largest = value => typeof value === 'number' ? WATCH_METRIC_COUNT_MAX :
+    Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, largest(entry)]));
+  const worst = largest(metrics.snapshot());
+  for (const name of ['last', 'max']) for (const key of ['rss', 'heapUsed', 'heapTotal']) {
+    worst.processMemory[name][key] = WATCH_METRIC_MEMORY_MAX;
+  }
+  worst.replay.sweep.maxSliceMs = WATCH_METRIC_DURATION_MAX;
+  assert.ok(Buffer.byteLength(JSON.stringify(worst)) <= 1024);
+  metrics.clear();
+  assert.equal(metrics.snapshot().replay.sweep.slices, undefined);
 });

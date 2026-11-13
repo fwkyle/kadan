@@ -14,14 +14,14 @@ import {createMailViewStore, encodeMailValue, decodeMailValue, storedMailLetter,
   mailStateSelect, previousMailExpression} from './mail-view-store.mjs';
 
 const verified = new Map();
-const canAct = (by, role) => by === role || isUserActor(by);
+const canAct = (by, role, env) => by === role || isUserActor(by, env);
 const reminderPart = value => JSON.stringify([value]).slice(1, -1);
-const exemptRecipient = role => Number(role !== '비서' && !isUserActor(role));
+const exemptRecipient = (role, env) => Number(role !== '비서' && !isUserActor(role, env));
 const addRole = (store, key, value, count, rank) => store.prepare(`INSERT INTO mail_role_counts
   VALUES(?,?,?,?,?) ON CONFLICT(domain,key) DO UPDATE SET refs=refs+excluded.refs,
   first_rank=min(first_rank,excluded.first_rank)`).run(store.scope, key, encodeMailValue(value), count, rank);
 
-function transfer(store, entry, position) {
+function transfer(store, entry, position, actorEnv) {
   if (!isMailTransfer(entry)) return false;
   const {scope, prepare, key} = store, {from, to} = entry;
   if (typeof from !== 'string' || !from.trim() || typeof to !== 'string' || !to.trim() || from === to) {
@@ -36,7 +36,7 @@ function transfer(store, entry, position) {
   prepare('INSERT INTO mail_transfers VALUES(?,?,?,?)').run(scope, id, from, to);
   prepare(`UPDATE mail_current SET recipient_key=?,recipient_value=?,recipient_reminder=?,
     exempt_recipient=?,since=? WHERE domain=? AND recipient_key=?`)
-    .run(key(to), encodeMailValue(to), reminderPart(to), exemptRecipient(to), position, scope, key(from));
+    .run(key(to), encodeMailValue(to), reminderPart(to), exemptRecipient(to, actorEnv), position, scope, key(from));
   prepare(`INSERT OR IGNORE INTO mail_sender_roles
     SELECT domain,position,?,?,? FROM mail_current WHERE domain=? AND sender_key=?`)
     .run(key(to), encodeMailValue(to), position, scope, key(from));
@@ -51,7 +51,7 @@ function transfer(store, entry, position) {
   return true;
 }
 
-function addLetter(store, entry, position) {
+function addLetter(store, entry, position, actorEnv) {
   const {scope, prepare, key, ref, state} = store;
   const parent = ref('mail_refs', entry.replyTo), source = parent ? state(parent) : null;
   const late = source && prepare(`SELECT 1 FROM mail_sender_roles
@@ -65,7 +65,7 @@ function addLetter(store, entry, position) {
     entry.mailId ? Number(entry.deliveredRead === true) : null,
     Number(entry.expectReply === true),
     Number(entry.notificationOnly === true || entry.systemGenerated === 'task-completion'),
-    Number(entry.transport === 'mailbox' && isSimplifiedMail(entry)), exemptRecipient(recipient),
+    Number(entry.transport === 'mailbox' && isSimplifiedMail(entry)), exemptRecipient(recipient, actorEnv),
     Number(entry.keyDelivery != null), Number.isFinite(time) ? time : null, reminderPart(entry.mailId),
     entry.expectReply === true ? 'waiting' : 'not-requested', null, Number(entry.by === 'watch'),
     key(entry.mailId || entry.digest),
@@ -88,19 +88,19 @@ function addLetter(store, entry, position) {
   }
 }
 
-function applyMail(store, entry, position, completionReply) {
+function applyMail(store, entry, position, completionReply, actorEnv) {
   const {scope, prepare, ref, state, load} = store;
-  if (entry.kind === 'send') addLetter(store, entry, position);
+  if (entry.kind === 'send') addLetter(store, entry, position, actorEnv);
   if (entry.kind === 'mail-read' || entry.kind === 'mail-cancel') {
     const parentAt = ref('mail_ids', entry.mailId), owner = parentAt ? state(parentAt) : null;
     if (!owner) return false;
     const recipient = decodeMailValue(owner.recipient_value), sender = decodeMailValue(owner.sender_value);
     if (entry.role !== recipient) return false;
-    if (entry.kind === 'mail-read' && canAct(entry.by, recipient)) {
+    if (entry.kind === 'mail-read' && canAct(entry.by, recipient, actorEnv)) {
       return Boolean(prepare('UPDATE mail_current SET ack=1,read=1 WHERE domain=? AND position=? AND ack=0')
         .run(scope, parentAt).changes);
     }
-    if (entry.kind === 'mail-cancel' && owner.expected && canAct(entry.by, sender) &&
+    if (entry.kind === 'mail-cancel' && owner.expected && canAct(entry.by, sender, actorEnv) &&
       owner.reply_status === 'waiting') {
       prepare("UPDATE mail_current SET reply_status='cancelled' WHERE domain=? AND position=?").run(scope, parentAt);
       return true;
@@ -114,7 +114,7 @@ function applyMail(store, entry, position, completionReply) {
     const valid = entry.systemGenerated === 'task-completion' ? completionReply(entry, parent)
       : parent && entry.workKey === parent.workKey && entry.executionKey === parent.executionKey;
     if (parent !== entry && owner.expected && decodeMailValue(reply.recipient_value) === sender &&
-      canAct(entry.by, recipient) && valid && owner.reply_status === 'waiting') {
+      canAct(entry.by, recipient, actorEnv) && valid && owner.reply_status === 'waiting') {
       prepare(`UPDATE mail_current SET reply_status='answered',final_reply=?
         WHERE domain=? AND position=?`).run(position, scope, parentAt);
       return true;
@@ -123,7 +123,7 @@ function applyMail(store, entry, position, completionReply) {
   return false;
 }
 
-function applyState(store, info, actors, cold, metrics) {
+function applyState(store, info, actors, cold, metrics, actorEnv) {
   const {prepare, scope} = store;
   let meta = store.metadata(), rebuilt = !meta || meta.version !== 1 ||
     meta.generation !== info.generation || meta.actors !== actors ||
@@ -151,7 +151,7 @@ function applyState(store, info, actors, cold, metrics) {
       for (const {position} of rows) {
         const entry = store.load(position);
         if (entry == null || entry.broken) throw new Error('원장 손상: 우편 상태 확인 불가');
-        if (transfer(store, entry, position)) meta.stateVersion = position;
+        if (transfer(store, entry, position, actorEnv)) meta.stateVersion = position;
         generations.apply(entry, position);
         if (entry.kind === 'start' || entry.kind === 'stop') meta.stateVersion = position;
         for (const [key, time] of firstReminderSent([entry])) {
@@ -163,7 +163,7 @@ function applyState(store, info, actors, cold, metrics) {
           prepare('INSERT OR IGNORE INTO mail_done_refs VALUES(?,?,?)')
             .run(scope, store.key(entry.completionMailId), position);
         }
-        if (applyMail(store, entry, position, completionReply)) meta.stateVersion = position;
+        if (applyMail(store, entry, position, completionReply, actorEnv)) meta.stateVersion = position;
         if (entry.kind === 'send') meta.count++;
         meta.position = position;applied++;
       }
@@ -197,7 +197,7 @@ export function withWatchMailboxViews(home, read, readCards = null, metrics = nu
   });
 }
 
-export function mailboxView(home, db, info, source, domain, cards, metrics) {
+export function mailboxView(home, db, info, source, domain, cards, metrics, userNames = null) {
   const key = `${path.resolve(home)}:${domain ?? ''}`;
   if (!db) return {store:null, info:{...info, mailCount:0, mailStateVersion:0, mailGeneration:null}};
   if (domain && metaGet(db, 'legacyBad')) throw new Error('과거 원장 손상: 도메인 조회 불가');
@@ -205,9 +205,10 @@ export function mailboxView(home, db, info, source, domain, cards, metrics) {
   const projection = domain === 'watch' ? applyWatchMailProjection(home, db, source, info, cards, metrics) : null;
   if (projection) info = projection.info;
   const store = createMailViewStore(db, source, domain, projection ?? undefined);
-  const actors = JSON.stringify([...new Set(userActorNames())].sort());
+  const actors = JSON.stringify([...new Set(userNames ?? userActorNames())].sort());
+  const actorEnv = userNames === null ? process.env : {KADAN_USER_NAMES: userNames.join(',')};
   const previous = store.metadata(), stamp = JSON.stringify([info.generation, actors, previous?.revision]);
-  const value = applyState(store, info, actors, verified.get(key) !== stamp, metrics);
+  const value = applyState(store, info, actors, verified.get(key) !== stamp, metrics, actorEnv);
   // 콜백 실패나 바깥 commit 실패 뒤에도 source/cursor 재확인이 먼저 실행된다.
   verified.delete(key);verified.set(key, JSON.stringify([info.generation, actors, value.mailGeneration]));
   while (verified.size > 8) verified.delete(verified.keys().next().value);
