@@ -233,3 +233,32 @@ test('S1: the automatic attach path stays silent on failure (no repeated stderr 
   } finally { console.error = original; }
   assert.deepEqual(lines, []);
 });
+
+// ---- PR #407 2차: 자동 실패는 같은 원인이면 처음 한 번만, 이유와 함께 남는다 ----
+test('R1: the automatic attach failure keeps its concrete reason and is logged once per cause across cycles', async () => {
+  const {attachFailureLine} = await import('../src/secretary-tab.mjs');
+  const {changedOutput} = await import('../src/revive.mjs');
+  const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'r1-'));
+  const cycle = async (fake, entries = inheritedHidden()) => {
+    const result = await attachWith(entries, fake, e => entries.push(e));
+    const line = attachFailureLine(result);
+    return {result, logged: changedOutput(home, line ? [line] : [])};
+  };
+  const failing = () => fakeRottie({create: null});
+  const first = await cycle(failing());
+  assert.equal(first.result.attached, false);
+  assert.match(first.result.detail, /ROTTIE_FAIL/);          // 구체 오류 코드를 버리지 않는다
+  assert.equal(first.logged.length, 1);
+  assert.match(first.logged[0], /비서 로티 탭 붙이기 실패.*ROTTIE_FAIL/);
+  for (let i = 0; i < 2; i++) assert.deepEqual((await cycle(failing())).logged, []); // 같은 원인 반복은 0줄
+  const entries = inheritedHidden();
+  const ok = await cycle(fakeRottie(), entries);              // 성공 → 같은 줄을 지움
+  assert.equal(ok.result.attached, true); assert.deepEqual(ok.logged, []);
+  assert.equal((await cycle(fakeRottie(), entries)).result.reason, 'has-tab'); // 중복 탭 없음
+  assert.equal((await cycle(failing())).logged.length, 1);    // 성공 뒤 다시 실패하면 다시 한 번
+  const other = await cycle(fakeRottie({create: 'x', show: shownState('unknown')}));
+  assert.match(other.logged[0], /tab-unknown|알 수 없/);       // 원인이 바뀌면 다시 한 번
+  // 정상 건너뜀(탭 있음·로티 없음·설정 none)은 줄이 없다
+  for (const reason of ['has-tab', 'rottie-unavailable', 'setting-not-rottie', 'generation-unclear', 'env-window-none'])
+    assert.equal(attachFailureLine({attached: false, reason}), null, reason);
+});

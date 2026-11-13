@@ -31,7 +31,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 import { cmdStart } from "./start.mjs";
 import { checkpointSecretary, resumeSecretary, withRecoveryLock } from "../secretary-resume.mjs";
-import { openSecretaryTab, attachHiddenSecretary } from "../secretary-tab.mjs";
+import { openSecretaryTab, attachHiddenSecretary, attachFailureLine } from "../secretary-tab.mjs";
 import { dashboardBuild } from "../dashboard-static.mjs";
 
 export function cmdInit(_argv, flags) {
@@ -165,6 +165,7 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
         home, floor, session: sessionOfSecretary, readEntries: () => readSystemLedger(home),
         record: entry => appendLedger(entry, home) }));
       if (attached.attached) lines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}`);
+      else { const failure = attachFailureLine(attached); if (failure) lines.push(failure); } // 같은 줄은 changedOutput이 한 번만 남긴다
     } catch { /* 복원이 진행 중이면 다음 주기에 다시 본다 */ }
   }
   // 자동 실행은 비서를 새로 띄우거나 복원했을 때만 대화 복원 정보를 갱신한다(매분 프로세스 조회를 하지 않는다).

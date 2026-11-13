@@ -51,9 +51,13 @@ export function openSecretaryTab({home, env = process.env, auto = false, quiet =
       connect: bin => rottieConnectivity({bin, spawnFn}),
       show: terminalId => showRottieWindow({bin: setting.rottieBin, terminalId, spawnFn})});
     if (!plan.open) return {window: 'hidden', reason: plan.reason};
+    // 조용한 호출(자동 주기)은 화면에 찍지 않고 열기 함수의 구체 이유(로티 오류 코드)만 모아 돌려준다.
+    const notes = [];
     const opened = open(session, platform, {choice: {kind: 'rottie'}, rottieBin: setting.rottieBin, spawnFn,
-      role, cwd, panePid, ...(quiet ? {warn: () => {}} : {})});
-    if (!opened?.rottieTerminalId) return {window: 'hidden', reason: 'open-failed'};
+      role, cwd, panePid, ...(quiet ? {warn: message => notes.push(String(message))} : {})});
+    if (!opened?.rottieTerminalId) {
+      return {window: 'hidden', reason: 'open-failed', ...(notes.length ? {detail: notes.join('; ')} : {})};
+    }
     if (plan.replace && plan.replace.state !== '없음') {
       // 죽은 옛 탭은 한 번 지워 본다. 실패해도 알리기만 한다(restore와 같다).
       try { removeRottieWindow({bin: setting.rottieBin, terminalId: plan.replace.terminalId, spawnFn}); } catch { /* 목록에 종료됨으로 남을 뿐 */ }
@@ -90,11 +94,23 @@ export function attachHiddenSecretary({home, floor, session, readEntries, record
     if (!start || entries.slice(entries.lastIndexOf(start) + 1).some(e => e.session === session && e.kind === 'stop')
       || String(floor.pid(session)) !== String(start.panePid)) return {attached: false, reason: 'generation-unclear'};
     const result = open({home, env, auto, quiet: true, entries, session, role: start.role, cwd: start.cwd, panePid: start.panePid});
-    if (result.window !== 'rottie') return {attached: false, reason: result.reason};
+    if (result.window !== 'rottie') {
+      return {attached: false, reason: result.reason, ...(result.detail ? {detail: result.detail} : {})};
+    }
     record({kind: 'window', role: start.role, session, rottieTerminalId: result.rottieTerminalId,
       panePid: start.panePid, by: 'autostart'});
     return {attached: true, rottieTerminalId: result.rottieTerminalId};
   } catch (error) {
     return {attached: false, reason: `error: ${error.message}`};
   }
+}
+
+// 자동 주기에서 사람이 알아야 하는 실패만 한 줄로 만든다. 정상 건너뜀(탭 있음·로티 없음·설정 none 등)은 null.
+// 이 줄은 `up --auto`의 changedOutput(revive-state.json의 lastOutput)을 지나므로 같은 원인은 처음 한 번만 autostart.log에 남고,
+// 성공이나 다른 원인이 오면 다시 한 번 남는다. 상태가 파일이라 감시기·up 재시작·launchd 새 프로세스에도 유지된다.
+export function attachFailureLine(result) {
+  if (!result || result.attached) return null;
+  const reportable = result.reason === 'open-failed' || result.reason === 'tab-unknown'
+    || String(result.reason).startsWith('error:');
+  return reportable ? `비서 로티 탭 붙이기 실패: ${result.detail ?? result.reason}` : null;
 }
