@@ -117,7 +117,7 @@ kadan work auto-report repo/work-id --execution repo/exec-현재UUID \
 
 ```sh
 kadan card report repo/execution-id --revision <최신 revision> --outcome implemented   # 1. 결과 파일 등록
-kadan mail <직속 감독> --execution repo/execution-id '<완료 통지 1회>'                 # 2. 완료 통지
+kadan mail <직속 감독> --execution repo/execution-id '<완료 통지 1회>' </dev/null     # 2. 완료 통지
 kadan done <작업자 역할> <카드id> ok                                                  # 3. 감독이 done 확정
 kadan work execute repo/work-id --revision <업무 revision> --phase review --round <N> \
   --title <제목> --body-file <지시문> --note <이유> --assign <검수자> --dispatch '<지시>'  # 4. 검수 실행 생성·연결·발령
