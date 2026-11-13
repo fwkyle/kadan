@@ -9,7 +9,6 @@ import {composeRoleInstructions,readRoleInstructionsConfig} from './role-instruc
 import {composeMailInstructions} from './mail-instructions.mjs';
 import {mailRuleField} from './mail-rule.mjs';
 import {mailHeaderLine} from './mail-header.mjs';
-import {collectGarbage} from './memory-release.mjs';
 
 export const SECRETARY='비서';
 const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -42,7 +41,6 @@ export class Mailbox {
   const prepare=()=>{
    // 연결 확인은 방금 읽은 우편함 조회를 그대로 쓴다(같은 조회를 한 번 더 읽지 않는다). 그 사이 원장이 바뀌면 잠금 안에서 다시 계산한다.
    const entries=readMailboxEntries(this.home);mailboxLetters(entries,this.role);
-   collectGarbage(); // 읽기가 버린 줄과 위 검증이 만든 우편 목록을 업무·카드 조회 전에 거둔다
    const context=resolveWorkMail(this.home,{workKey,executionKey,replyTo,by,role:this.role,expectReply,replyFinal},{entries});
    readRoleInstructionsConfig(this.home);
    return context;

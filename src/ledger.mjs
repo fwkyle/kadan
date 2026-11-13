@@ -2,7 +2,6 @@ import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
-import {collectGarbage} from './memory-release.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
 // 원장 — 바닥과 무관한 append-only 사건. 저장 backend는 공통 저장 경계가 선택한다.
 import fs from "node:fs";
@@ -71,14 +70,11 @@ export function readLedger(home = ledgerHome()) {
 // 우편 재알림(watch-mail-reminder)은 우편함의 세대 판정(mail-rule.mjs)이 읽으므로 빼지 않는다.
 // 전송 길의 코드가 아래 종류를 읽게 되면 이 목록에서 빼야 한다(tests/send-ledger-narrow.test.mjs가 소비 모듈을 지킨다).
 // 어차피 버릴 줄이므로 감시 사건의 큰 본문(관계표·경로표·순회 시간표)은 SQL에서 먼저 뺀다(영역 조회와 같은 규칙).
-// 읽은 직후 수거를 한 번 일으킨다: 버린 줄과 검증용 묶음이 다음 읽기·조회와 함께 메모리에 남지 않게 한다(src/memory-release.mjs).
 // 원장이 10배면 읽는 줄 수와 메모리도 10배다(전체를 읽고 검증하는 구조는 그대로다).
 export const SEND_UNUSED_KINDS = Object.freeze(['watch-cycle','watch-ai-request','watch-ai-call','watch-ai-report','watch-scope','watch-ai-retired']);
 export function readSendLedger(home = ledgerHome()) {
   const unused = new Set(SEND_UNUSED_KINDS);
-  const entries = projectLedger(readLedgerState(home,{slimWatch:true})).filter(entry => !unused.has(entry?.kind));
-  collectGarbage();
-  return entries;
+  return projectLedger(readLedgerState(home,{slimWatch:true})).filter(entry => !unused.has(entry?.kind));
 }
 export function readTaskLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home,{domain:'tasks'}),'tasks');

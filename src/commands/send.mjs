@@ -29,7 +29,6 @@ import {mailFailureExitCode} from '../mail-delivery-exit.mjs';
 import {printConductorLoadHint} from '../conductor-load-hint.mjs';
 import {canReopen} from '../reopen.mjs';
 import {stdinBodyConflict} from '../stdin-body.mjs';
-import {collectGarbage} from '../memory-release.mjs';
 
 export function cmdSend(argv, flags) {
   return deliverMessage(argv, flags, 'send');
@@ -155,7 +154,6 @@ function deliverMessage(argv, flags, command) {
     if (peer && flags.raw) throw new Error('슈퍼 간 우편은 입력 보호를 거쳐 전달하거나 보관해 안전하게 알립니다. --raw 없이 보내세요');
     const store = reason => {
       console.error(`바로 넣지 못해 보관했습니다: ${reason}`);
-      collectGarbage(); // 보관이 우편 영역을 새로 읽기 전에, 끝난 읽기(전송 직전 재읽기 등)의 메모리를 거둔다
       const stored = new Mailbox(ledgerHome(), recipient).send({
         by, message, category:flags['mail-kind'] || 'report', ...mailContext,
       });
@@ -184,8 +182,6 @@ function deliverMessage(argv, flags, command) {
       raw: flags.raw === true, keepTurn: flags['keep-turn'] === true});
     turnClaim = claimTurnReturn(ledgerHome(), turnPlan);
     const outgoing = turnClaim ? message + turnReturnTail(turnClaim) : message;
-    // 전송 직전 재읽기는 지금처럼 새로 읽는다(#311 F2). 그 전에 준비 단계의 조회(업무 목록·우편 목록)가 남긴 것을 거둔다.
-    collectGarbage();
     try {
       sendCalled = true;
       receipt = guardedSend({

@@ -10,7 +10,6 @@ import {appendLedger, readLedger, readSendLedger, SEND_UNUSED_KINDS} from '../sr
 import {SLIM_DROPPABLE} from '../src/ledger-domains.mjs';
 import {Mailbox, mailboxLetters} from '../src/mailbox.mjs';
 import {WorkStore} from '../src/work-store.mjs';
-import {collectGarbage} from '../src/memory-release.mjs';
 
 const freshHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-send-read-'));
 const start = (home, role, panePid, extra = {}) => appendLedger({kind: 'start', role, session: `kadan-${role}`, panePid, ...extra}, home);
@@ -123,10 +122,4 @@ test('WorkStore.listLatest: list와 같은 업무·같은 순서이고 history�
   } finally { db.close(); }
   assert.throws(() => store.list(), /업무 이력 손상/);
   assert.throws(() => store.listLatest(), /업무 이력 손상/);
-});
-
-test('collectGarbage: 여러 번 불러도 던지지 않고, 수거 함수를 전역에 남기지 않는다', () => {
-  const had = typeof globalThis.gc;
-  collectGarbage(); collectGarbage();
-  assert.equal(typeof globalThis.gc, had);
 });
