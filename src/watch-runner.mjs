@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import {createWatchReplayMetrics, watchMetric} from './watch-replay-metrics.mjs';
 import {watchResourceStats, memoryMegabytes} from './watch-resource-stats.mjs';
 import {createProcessCollections} from './process-collections.mjs';
 import { ledgerHome } from "./ledger.mjs";
@@ -173,9 +174,11 @@ export async function runWatch({
   reads = null,
   cpuUsage = previous => process.cpuUsage(previous),
   memoryUsage = () => process.memoryUsage(),
+  metrics = null,
 }) {
   if (judgeCmd && !ai) throw new Error("감시AI 보고 실행기가 필요합니다");
   assertSingleWatch(spawn, watchProcessName(process.env.KADAN_HOME || process.env.KADAN_LITE_HOME));
+  metrics ??= createWatchReplayMetrics({memoryUsage});
   // 기록 쓰기·알림 전송은 여러 단계에서 불리고 원장 잠금이나 바닥 전송을 기다릴 수 있다.
   // 단계 구간과 별도로 호출 수·총시간·최대시간을 모은다.
   const io = {record:ioCounter(), send:ioCounter()};
@@ -308,6 +311,7 @@ export async function runWatch({
     } catch (error) {
       ledgerError = error;
     }
+    watchMetric(metrics, 'sample');
     const ledgerReadAt=measure();
     if (!alertsSeeded && !ledgerError) {
       // 기기 경보는 위의 전용 경로만 맡는다. 일반 경보의 승급·AI·해소 경로에는 넣지 않는다.
@@ -1128,6 +1132,7 @@ export async function runWatch({
     };
     timingWindow=accumulateTiming(timingWindow,sample);
     reads?.end?.(); // 다음 주기 시작까지 원장 전체 사본을 쥐지 않는다.
+    watchMetric(metrics, 'sample');
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
@@ -1141,18 +1146,21 @@ export async function runWatch({
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
           screens:screenCache.info(),
           collections:watchResourceStats({mail:mailWatch,explain,restoredChecked,userPosts}),
-          memoryMb:roundAll(memoryMegabytes(memory)),window:timingWindow};
+          memoryMb:roundAll(memoryMegabytes(memory)),window:timingWindow,
+          ...watchMetric(metrics, 'snapshot')};
         record(buildCycleEntry({runtime,timing,pid: process.pid, hierarchyPath, hierarchyHash, judge: Boolean(judgeCmd), profile: profilePath, intervalMs, routes, superRole,
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError, userTurnWaits}));
         // 기록에 성공한 뒤에만 비운다. 잠금으로 실패하면 모은 주기를 다음 기록에 이어 싣는다.
         timingWindow=null;
         machineWindow=null;
+        watchMetric(metrics, 'clear');
         lastCycleRecordedAt = cycleAt;
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
     }
     lastCycleAt = cycleAt;
     lockFailures = 0;
     } catch (error) {
+      watchMetric(metrics, 'sample');
       if (!isDatabaseBusy(error)) throw error;
       lockFailures++;
       print(`[watch] 원장 잠금으로 이번 주기를 건너뜀 (${lockFailures}/3): ${error.message}`);

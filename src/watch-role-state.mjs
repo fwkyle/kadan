@@ -1,6 +1,7 @@
 // Why: 화면 관측에 쓰는 세대·발령을 새 사건만으로 갱신한다. 원본과 완료 판단은 그대로 둔다.
 // 10배 과거: 최초/주소 변경 재생은 N, 정상 적용은 새 사건, 읽기는 현재 세대의 발령 수다.
 import path from 'node:path';
+import {beginWatchReplay} from './watch-replay-metrics.mjs';
 import {randomUUID} from 'node:crypto';
 import {taskIdentity} from './task-identity.mjs';
 import {encodeMailValue, decodeMailValue} from './mail-view-store.mjs';
@@ -150,7 +151,7 @@ function applyEntry(store, meta, entry, position, taskKey) {
   return false;
 }
 
-export function applyWatchRoleState(home, store, info, cards) {
+export function applyWatchRoleState(home, store, info, cards, metrics = null) {
   if (!store) return null;
   if (store.scope !== 'watch') throw new Error('감시 역할 상태는 주소 해석 후 조회가 필요합니다');
   if (!store.prepare("SELECT 1 FROM sqlite_master WHERE name='watch_role_meta'").get()) store.db.exec(schema);
@@ -163,39 +164,45 @@ export function applyWatchRoleState(home, store, info, cards) {
     !['position','stateVersion','sessionCount','dispatchCount','nextRank']
       .every(name => Number.isSafeInteger(meta[name]) && meta[name] >= 0) ||
     meta.position > info.position || meta.stateVersion > meta.position;
+  const invalid = rebuilt;
   if (!rebuilt && verified.get(key) !== stamp(meta)) {
     rebuilt = store.prepare('SELECT count(*) AS n FROM watch_role_sessions').get().n !== meta.sessionCount ||
       store.prepare('SELECT count(*) AS n FROM watch_role_dispatches').get().n !== meta.dispatchCount;
   }
-  if (rebuilt) {
-    store.db.exec('DELETE FROM watch_role_sessions; DELETE FROM watch_role_dispatches');
-    meta = {version:1, generation:info.generation, revision:randomUUID(), position:0,
-      stateVersion:0, sessionCount:0, dispatchCount:0, nextRank:0, legacyRequired:false};
-  }
-  let identity;
-  const taskKey = (id, executionKey) => {
-    const found = (identity ??= taskIdentity(cards)).resolve(id, executionKey);
-    return found.state === 'resolved' ? found.key : found.state === 'unregistered' ? id : null;
-  };
-  const before = meta.position;let applied = 0;
-  while (true) {
-    const rows = store.prepare(`SELECT position FROM views WHERE domain='watch'
-      AND position>? AND position<=? ORDER BY position LIMIT 256`).all(meta.position, info.position);
-    if (!rows.length) break;
-    for (const {position} of rows) {
-      const entry = store.load(position);
-      if (entry == null || entry.broken) throw new Error('원장 손상: 감시 역할 상태 조회 불가');
-      if (applyEntry(store, meta, entry, position, taskKey)) meta.stateVersion = position;
-      meta.position = position;applied++;
+  const finishReplay = rebuilt ? beginWatchReplay(metrics, 'role',
+    !invalid ? 'count' : typeof meta?.generation === 'string' && meta.generation !== info.generation
+      ? 'generation' : 'invalid') : null;
+  try {
+    if (rebuilt) {
+      store.db.exec('DELETE FROM watch_role_sessions; DELETE FROM watch_role_dispatches');
+      meta = {version:1, generation:info.generation, revision:randomUUID(), position:0,
+        stateVersion:0, sessionCount:0, dispatchCount:0, nextRank:0, legacyRequired:false};
     }
-    store.clear();
-  }
-  meta.position = info.position;
-  if (rebuilt || applied || before !== meta.position) {
-    store.prepare(`INSERT INTO watch_role_meta VALUES(1,?)
-      ON CONFLICT(id) DO UPDATE SET value=excluded.value`).run(JSON.stringify(meta));
-  }
-  verified.delete(key);verified.set(key, stamp(meta));
-  while (verified.size > 8) verified.delete(verified.keys().next().value);
-  return {...meta, applied, rebuilt};
+    let identity;
+    const taskKey = (id, executionKey) => {
+      const found = (identity ??= taskIdentity(cards)).resolve(id, executionKey);
+      return found.state === 'resolved' ? found.key : found.state === 'unregistered' ? id : null;
+    };
+    const before = meta.position;let applied = 0;
+    while (true) {
+      const rows = store.prepare(`SELECT position FROM views WHERE domain='watch'
+        AND position>? AND position<=? ORDER BY position LIMIT 256`).all(meta.position, info.position);
+      if (!rows.length) break;
+      for (const {position} of rows) {
+        const entry = store.load(position);
+        if (entry == null || entry.broken) throw new Error('원장 손상: 감시 역할 상태 조회 불가');
+        if (applyEntry(store, meta, entry, position, taskKey)) meta.stateVersion = position;
+        meta.position = position;applied++;
+      }
+      store.clear();
+    }
+    meta.position = info.position;
+    if (rebuilt || applied || before !== meta.position) {
+      store.prepare(`INSERT INTO watch_role_meta VALUES(1,?)
+        ON CONFLICT(id) DO UPDATE SET value=excluded.value`).run(JSON.stringify(meta));
+    }
+    verified.delete(key);verified.set(key, stamp(meta));
+    while (verified.size > 8) verified.delete(verified.keys().next().value);
+    return {...meta, applied, rebuilt};
+  } finally { finishReplay?.(); }
 }

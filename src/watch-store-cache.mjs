@@ -1,6 +1,7 @@
 // Why: 감시 요약도 매 순회 과거 이력을 검증했다. 시작에는 전체를 검증하고 이후에는 새 revision만 읽는다.
 // 10배 과거 이력에서도 정상 조회는 heads 수와 새 사건에 비례한다. 카드 이력은 유한한 판정 요약으로 둔다.
 import path from 'node:path';
+import {beginWatchReplay} from './watch-replay-metrics.mjs';
 import {createHash} from 'node:crypto';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
@@ -12,7 +13,7 @@ const OPEN = new Set(['assigned', 'ready', 'draft']);
 const errorFor = kind => new Error(kind === 'cards' ? '카드 이력 손상' : '업무 이력 손상');
 
 // reader는 감시 프로세스 하나가 소유한다. 전역 홈별 Map을 만들지 않아 임시 홈도 계속 남지 않는다.
-function reader(home, kind, store) {
+function reader(home, kind, store, metrics) {
   let state = null;
   const stats = {full: 0, changed: 0, unchanged: 0, rows: 0};
   const pattern = kind === 'cards' ? 'cards/*/*/events.jsonl' : 'works/*/events.jsonl';
@@ -71,15 +72,18 @@ function reader(home, kind, store) {
       if (bad.n) throw errorFor(kind);
     }
     if (!state) {
-      if (kind === 'cards') state = {identity, prints, ...initialCards(db, heads)};
-      else {
-        const rows = store.listWatch();
-        state = {identity, prints, seqs: new Map(heads.map(h => [h.stream, h.seq])),
-          rows: new Map(rows.map(row => [row.key, row])), list: rows};
-      }
-      stats.full++;
-      stats.rows += heads.reduce((n, h) => n + h.seq, 0);
-      return state.list;
+      const finishReplay = beginWatchReplay(metrics, 'stores', kind);
+      try {
+        if (kind === 'cards') state = {identity, prints, ...initialCards(db, heads)};
+        else {
+          const rows = store.listWatch();
+          state = {identity, prints, seqs: new Map(heads.map(h => [h.stream, h.seq])),
+            rows: new Map(rows.map(row => [row.key, row])), list: rows};
+        }
+        stats.full++;
+        stats.rows += heads.reduce((n, h) => n + h.seq, 0);
+        return state.list;
+      } finally { finishReplay?.(); }
     }
     const changed = heads.filter(h => h.seq !== state.seqs.get(h.stream));
     if (!changed.length) { stats.unchanged++; state.prints = prints; return state.list; }
@@ -134,9 +138,9 @@ function reader(home, kind, store) {
   };
 }
 
-export function createWatchStoreReaders(home) {
+export function createWatchStoreReaders(home, metrics = null) {
   return {
-    cards: reader(home, 'cards', new CardStore(home)),
-    works: reader(home, 'works', new WorkStore(home)),
+    cards: reader(home, 'cards', new CardStore(home), metrics),
+    works: reader(home, 'works', new WorkStore(home), metrics),
   };
 }

@@ -98,7 +98,8 @@ test('순회 계측은 기존 주기 사건에만 기록하며 잠든 시간과 
   cpuUsage:previous=>previous?{user:2500,system:1500}:{user:0,system:0},memoryUsage:()=>({rss:100*2**20,heapUsed:25*2**20}),
   sleep:async()=>{throw stop;},sendAlert:()=>{},intervalMs:60000}),e=>e===stop);
  const cycles=records.filter(e=>e.kind==='watch-cycle');assert.equal(cycles.length,1);
- const {stages,window,...timing}=cycles[0].timing;
+ const {stages,window,replay,processMemory,...timing}=cycles[0].timing;
+ assert.equal(replay.raw.full,0);assert.equal(processMemory.samples,2);
  // 기존 네 구간은 그대로 남고, 나머지(otherMs)는 단계별 합과 같다.
  assert.deepEqual(timing,{totalMs:110,ledgerMs:10,prepareMs:10,screenMs:10,otherMs:80,observedSessions:1,
   cpuMs:{user:2.5,system:1.5},record:{count:0,ms:0,maxMs:0},send:{count:0,ms:0,maxMs:0},

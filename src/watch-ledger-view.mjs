@@ -1,5 +1,6 @@
 // Why: SQL에서 검증한 사건을 RAM validator와 여러 원장 배열로 다시 보관하지 않는다.
 // SQL은 새 위치만 읽는다. 단일 전체 배열의 보관과 새 사건 때 참조 복사는 아직 과거 크기에 비례한다.
+import {beginWatchReplay} from './watch-replay-metrics.mjs';
 import {domainProjector} from './ledger-domains.mjs';
 import {sourceViewValues} from './ledger-view.mjs';
 
@@ -42,8 +43,8 @@ export function readWatchRows(store, projector, after, upTo, limit = 256) {
   return {entries, skipped, rows: rows.length, last: rows.length ? rows.at(-1).position : after};
 }
 
-export function createWatchLedgerView() {
-  let state = null;
+export function createWatchLedgerView(metrics = null) {
+  let state = null, resetPending = false;
   const projector = domainProjector(null);
   const view = (store, info) => {
     if (store && store.scope !== '') throw new Error('감시 사건은 원문 조회 영역이 필요합니다');
@@ -51,24 +52,31 @@ export function createWatchLedgerView() {
     const total = counts ? JSON.parse(counts)['']?.total ?? 0 : 0;
     const previous = state?.generation === info.generation && state.position <= info.position ? state : null;
     if (previous?.position === info.position && previous.entries.length + previous.skipped === total) return previous.entries;
-    const added = [];
-    let position = previous?.position ?? 0, skipped = previous?.skipped ?? 0;
-    if (store) {
-      while (true) {
-        const chunk = readWatchRows(store, projector, position, info.position);
-        if (!chunk.rows) break;
-        added.push(...chunk.entries);skipped += chunk.skipped;position = chunk.last;
+    const finishReplay = !previous ? beginWatchReplay(metrics, 'raw',
+      state ? state.generation !== info.generation ? 'generation' : 'retreat'
+        : resetPending ? 'reset' : 'initial') : null;
+    try {
+      const added = [];
+      let position = previous?.position ?? 0, skipped = previous?.skipped ?? 0;
+      if (store) {
+        while (true) {
+          const chunk = readWatchRows(store, projector, position, info.position);
+          if (!chunk.rows) break;
+          added.push(...chunk.entries);skipped += chunk.skipped;position = chunk.last;
+        }
       }
-    }
-    const entries = previous && !added.length ? previous.entries : (previous?.entries ?? []).concat(added);
-    if (entries.length + skipped !== total) throw new Error('감시 사건 조회 개수 불일치');
-    // 바깥 commit이 실패해도 이 배열은 검증된 원본 prefix다. 다음 조회의 세대/끝 위치를 다시 확인한다.
-    state = {generation:info.generation, position:info.position, entries, skipped};
-    return entries;
+      const entries = previous && !added.length ? previous.entries : (previous?.entries ?? []).concat(added);
+      if (entries.length + skipped !== total) throw new Error('감시 사건 조회 개수 불일치');
+      // 바깥 commit이 실패해도 이 배열은 검증된 원본 prefix다. 다음 조회의 세대/끝 위치를 다시 확인한다.
+      state = {generation:info.generation, position:info.position, entries, skipped};
+      resetPending = false;
+      return entries;
+    } finally { finishReplay?.(); }
   };
   // 정기 대조용: 지금 들고 있는 증분 상태(불변 배열)와, 처음부터 다시 만들기 위한 초기화.
   view.peek = () => state && {generation:state.generation, position:state.position, entries:state.entries, skipped:state.skipped};
-  view.reset = () => { state = null; };
+  // reset 원인은 여기서 보관하고, 실제 다음 전체 읽기를 시작할 때 한 번 센다.
+  view.reset = () => { state = null; resetPending = true; };
   view.projector = projector;
   return view;
 }
