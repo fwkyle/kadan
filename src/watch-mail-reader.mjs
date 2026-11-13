@@ -1,5 +1,6 @@
 // Why: 감시의 우편 후보·답변 대기·최근 문맥을 같은 원장 수집의 상태표에서 읽는다.
 // 10배 과거에도 후보 보관은 현재 미확인/답 대기 수와 역할당 12개다. 원장 배열은 아직 남는다.
+import {beginWatchInitial} from './watch-replay-metrics.mjs';
 import {withWatchMailboxViews, mailReminderCandidates, mailWaitingLetters,
   mailRecentLetters} from './mail-view.mjs';
 import {rememberMailboxQueries} from './mailbox-queries.mjs';
@@ -77,55 +78,59 @@ const scratchStoreOf = (real, db) => ({scope: 'watch', db, key: value => real.ke
   clear: () => real.clear?.(), prepare: sql => /\bFROM views\b/u.test(sql) ? real.prepare(sql) : db.prepare(sql)});
 
 export function createWatchMailReader(home, readEntries = null,
-  {readCards = null, readWorks = null, readRoles = () => []} = {}) {
+  {readCards = null, readWorks = null, readRoles = () => [], metrics = null} = {}) {
   const snapshots = new WeakMap();
-  const ledger = createWatchLedgerView();
+  const ledger = createWatchLedgerView(metrics);
   const projectMemo = createProjectionMemo();
-  let last = null;
+  let last = null, firstRead = true;
   return {
     readEntries() {
-      const roles = [...new Set(readRoles())].sort(), roleKey = JSON.stringify(roles);
-      // 조회 DB 잠금 다음 원본 snapshot. 실제 전송/OS 조회 전에 두 트랜잭션을 닫는다.
-      const value = withWatchMailboxViews(home, ({raw, projected, cards}) => {
-        let works = null;
-        try { works = readWorks?.() ?? null; } catch { /* 기존 readWorks 오류 경계에서 보고한다. */ }
-        const entries = readEntries ? readEntries() : ledger(raw.store, raw.info);
-        const roleState = !readEntries && projected &&
-          applyWatchRoleState(home, projected.store, projected.info, cards);
-        const roleStateKey = roleState &&
-          JSON.stringify([roleState.generation, roleState.revision, roleState.stateVersion]);
-        const roleFacts = roleStateKey && last?.roleStateKey === roleStateKey &&
-          last.cards === cards && sameRoleCards(last.roleFacts, cards) ? last.roleFacts :
-          roleState && !roleState.legacyRequired ? captureWatchRoleState(projected.store, cards) : null;
-        const state = !readEntries && projected &&
-          applyWatchWorkState(home, projected.store, projected.info, cards);
-        const factsKey = state && JSON.stringify([state.generation, state.revision, state.stateVersion]);
-        const scopeFacts = factsKey && last?.factsKey === factsKey &&
-          last.cards === cards && last.works === works && sameWatchCards(last.scopeFacts, cards) ? last.scopeFacts :
-          state && !state.legacyRequired ? captureWatchScopeFacts(projected.store, cards, works, entries) : null;
-        const key = stateKey(raw.info), projectedKey = stateKey(projected?.info);
-        const sameRaw = last?.key === key, sameRoles = last?.roleKey === roleKey;
-        const queries = (view, previous, same, withRecent = false) =>
-          same && (!withRecent || sameRoles) ? previous : {
-          waiting:same ? previous.waiting : mailWaitingLetters(view.store),
-          recent:new Map(withRecent ? roles.map(role => [role, mailRecentLetters(view.store, role)]) : []),
-        };
-        return {raw:entries, key, projectedKey, cards, works, factsKey, scopeFacts, roleKey, roleStateKey, roleFacts,
-          letters:sameRaw ? last.letters : mailReminderCandidates(raw.store),
-          rawQueries:queries(raw, last?.rawQueries, sameRaw, true),
-          projectedQueries:projected ? queries(projected, last?.projectedQueries,
-            last?.projectedKey === projectedKey && Boolean(last?.projectedQueries)) : null};
-      }, readCards);
-      // commit 실패 때는 이전 정상 후보로 대체하지 않는다.
-      if (last?.raw === value.raw && last.key === value.key && last.projectedKey === value.projectedKey &&
-          last.cards === value.cards && last.works === value.works && last.factsKey === value.factsKey &&
-          last.scopeFacts === value.scopeFacts && last.roleKey === roleKey &&
-          last.roleFacts === value.roleFacts && last.roleStateKey === value.roleStateKey) return last.entries;
-      // 이미 내준 수집의 판정은 뒤의 설정·카드 주소 변화로 바꾸지 않는다.
-      const entries = snapshots.has(value.raw) ? value.raw.slice() : value.raw;
-      rememberMailboxQueries(entries, value.rawQueries);
-      last = {...value, entries};snapshots.set(entries, last);
-      return entries;
+      const finishInitial = firstRead ? beginWatchInitial(metrics) : null;
+      firstRead = false;
+      try {
+        const roles = [...new Set(readRoles())].sort(), roleKey = JSON.stringify(roles);
+        // 조회 DB 잠금 다음 원본 snapshot. 실제 전송/OS 조회 전에 두 트랜잭션을 닫는다.
+        const value = withWatchMailboxViews(home, ({raw, projected, cards}) => {
+          let works = null;
+          try { works = readWorks?.() ?? null; } catch { /* 기존 readWorks 오류 경계에서 보고한다. */ }
+          const entries = readEntries ? readEntries() : ledger(raw.store, raw.info);
+          const roleState = !readEntries && projected &&
+            applyWatchRoleState(home, projected.store, projected.info, cards, metrics);
+          const roleStateKey = roleState &&
+            JSON.stringify([roleState.generation, roleState.revision, roleState.stateVersion]);
+          const roleFacts = roleStateKey && last?.roleStateKey === roleStateKey &&
+            last.cards === cards && sameRoleCards(last.roleFacts, cards) ? last.roleFacts :
+            roleState && !roleState.legacyRequired ? captureWatchRoleState(projected.store, cards) : null;
+          const state = !readEntries && projected &&
+            applyWatchWorkState(home, projected.store, projected.info, cards, metrics);
+          const factsKey = state && JSON.stringify([state.generation, state.revision, state.stateVersion]);
+          const scopeFacts = factsKey && last?.factsKey === factsKey &&
+            last.cards === cards && last.works === works && sameWatchCards(last.scopeFacts, cards) ? last.scopeFacts :
+            state && !state.legacyRequired ? captureWatchScopeFacts(projected.store, cards, works, entries) : null;
+          const key = stateKey(raw.info), projectedKey = stateKey(projected?.info);
+          const sameRaw = last?.key === key, sameRoles = last?.roleKey === roleKey;
+          const queries = (view, previous, same, withRecent = false) =>
+            same && (!withRecent || sameRoles) ? previous : {
+            waiting:same ? previous.waiting : mailWaitingLetters(view.store),
+            recent:new Map(withRecent ? roles.map(role => [role, mailRecentLetters(view.store, role)]) : []),
+          };
+          return {raw:entries, key, projectedKey, cards, works, factsKey, scopeFacts, roleKey, roleStateKey, roleFacts,
+            letters:sameRaw ? last.letters : mailReminderCandidates(raw.store),
+            rawQueries:queries(raw, last?.rawQueries, sameRaw, true),
+            projectedQueries:projected ? queries(projected, last?.projectedQueries,
+              last?.projectedKey === projectedKey && Boolean(last?.projectedQueries)) : null};
+        }, readCards, metrics);
+        // commit 실패 때는 이전 정상 후보로 대체하지 않는다.
+        if (last?.raw === value.raw && last.key === value.key && last.projectedKey === value.projectedKey &&
+            last.cards === value.cards && last.works === value.works && last.factsKey === value.factsKey &&
+            last.scopeFacts === value.scopeFacts && last.roleKey === roleKey &&
+            last.roleFacts === value.roleFacts && last.roleStateKey === value.roleStateKey) return last.entries;
+        // 이미 내준 수집의 판정은 뒤의 설정·카드 주소 변화로 바꾸지 않는다.
+        const entries = snapshots.has(value.raw) ? value.raw.slice() : value.raw;
+        rememberMailboxQueries(entries, value.rawQueries);
+        last = {...value, entries};snapshots.set(entries, last);
+        return entries;
+      } finally { finishInitial?.(); }
     },
     // 정기 대조(watch-sweep.mjs)가 쓰는 읽기 전용 접근. 증분 상태를 들여다보고 처음부터 다시 만들 때만 쓴다.
     sweepAccess: {
@@ -146,7 +151,8 @@ export function createWatchMailReader(home, readEntries = null,
         catch (error) { source.close();throw error; }
         return {
           readChunk: (after, upTo, projector, limit) => withWatchMailboxViews(home,
-            ({raw}) => readWatchRows({prepare: sql => raw.store.prepare(sql), source}, projector, after, upTo, limit)),
+            ({raw}) => readWatchRows({prepare: sql => raw.store.prepare(sql), source},
+              projector, after, upTo, limit), null, metrics),
           close() { try { source.exec('ROLLBACK'); } finally { source.close(); } },
         };
       },
@@ -166,19 +172,19 @@ export function createWatchMailReader(home, readEntries = null,
         // 저렴한 대조: 행 수와 기록된 계수. 상태 행 유실을 매 바퀴 가까운 주기로 잡는다.
         counts: () => withWatchMailboxViews(home, ({projected, cards}) => {
           if (!projected || !cards) return null;
-          const live = applyWatchRoleState(home, projected.store, projected.info, cards);
+          const live = applyWatchRoleState(home, projected.store, projected.info, cards, metrics);
           const db = projected.store;
           const count = table => db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n;
           return live && {sessions: count('watch_role_sessions'), metaSessions: live.sessionCount,
             dispatches: count('watch_role_dispatches'), metaDispatches: live.dispatchCount};
-        }, readCards),
+        }, readCards, metrics),
         live: () => withWatchMailboxViews(home, ({projected, cards}) => {
           if (!projected || !cards) return null;
-          const live = applyWatchRoleState(home, projected.store, projected.info, cards);
+          const live = applyWatchRoleState(home, projected.store, projected.info, cards, metrics);
           const meta = roleMetaOf(projected.store.db);
           return live && meta && {position: meta.position, generation: meta.generation, digest: roleStateDigest(projected.store.db, meta),
             cardsKey: JSON.stringify(cards.map(card => [card.key, card.id])), cards};
-        }, readCards),
+        }, readCards, metrics),
         // 지문 비교용 재생: 조각(위치 범위)마다 한 번씩 정식 reducer를 이어서 적용한다.
         async replay({upTo, generation, cards, chunkPositions = 2000, yieldNow}) {
           const scratch = new DatabaseSync(':memory:'), scratchHome = `${home}#sweep-role-state`;
@@ -189,7 +195,7 @@ export function createWatchMailReader(home, readEntries = null,
               withWatchMailboxViews(home, ({projected}) => {
                 if (!projected) throw new Error('역할 상태 재생에 조회 영역이 없습니다');
                 applyWatchRoleState(scratchHome, scratchStoreOf(projected.store, scratch), {generation, position}, cards);
-              }, readCards);
+              }, readCards, metrics);
               await yieldNow?.();
             }
             const meta = roleMetaOf(scratch);
@@ -197,7 +203,9 @@ export function createWatchMailReader(home, readEntries = null,
           } finally { scratch.close(); }
         },
         // 교체: 상태표 메타를 지워 다음 읽기가 처음부터 다시 만들게 한다(원장·조회 DB는 건드리지 않는다).
-        reset: () => withWatchMailboxViews(home, ({projected}) => { projected?.store.db.exec('DELETE FROM watch_role_meta'); }, readCards),
+        reset: () => withWatchMailboxViews(home, ({projected}) => {
+          projected?.store.db.exec('DELETE FROM watch_role_meta');
+        }, readCards, metrics),
       },
       // 조회 DB가 적용한 영역별 마지막 순번과 원본 stream 끝 순번. 같은 snapshot에서 함께 읽는다.
       streamCursors: () => withLedgerView(home, (cache, info, source) => {

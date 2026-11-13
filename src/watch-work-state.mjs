@@ -1,6 +1,7 @@
 // Why: 감시 책임 계산의 발령·완료·확정 인계를 같은 SQL 적용 위치에서 유지한다.
 // 정상 적용은 새 사건만 읽는다. 인계는 해당 담당/실행의 마지막 사실만 합치며 원본은 보존한다.
 import path from 'node:path';
+import {beginWatchReplay} from './watch-replay-metrics.mjs';
 import {randomUUID} from 'node:crypto';
 import {taskIdentity} from './task-identity.mjs';
 import {encodeMailValue, decodeMailValue} from './mail-view-store.mjs';
@@ -68,7 +69,7 @@ function transfer(store, meta, entry, position, identity) {
   }
 }
 
-export function applyWatchWorkState(home, store, info, cards) {
+export function applyWatchWorkState(home, store, info, cards, metrics = null) {
   if (!store) return null;
   if (store.scope !== 'watch') throw new Error('감시 책임은 주소 해석 후 조회가 필요합니다');
   if (!store.prepare("SELECT 1 FROM sqlite_master WHERE name='watch_work_meta'").get()) store.db.exec(schema);
@@ -82,53 +83,59 @@ export function applyWatchWorkState(home, store, info, cards) {
     !['position','stateVersion','lastCount','sentCount','transferCount']
       .every(name => Number.isSafeInteger(meta[name]) && meta[name] >= 0) ||
     meta.position > info.position || meta.stateVersion > meta.position;
+  const invalid = rebuilt;
   if (!rebuilt && verified.get(key) !== stamp(meta)) {
     rebuilt = store.prepare('SELECT count(*) AS n FROM watch_work_last').get().n !== meta.lastCount ||
       store.prepare('SELECT count(*) AS n FROM watch_work_sent').get().n !== meta.sentCount ||
       store.prepare('SELECT count(*) AS n FROM watch_work_transfers').get().n !== meta.transferCount;
   }
-  if (rebuilt) {
-    store.db.exec('DELETE FROM watch_work_last; DELETE FROM watch_work_sent; DELETE FROM watch_work_transfers');
-    meta = {version:1, generation:info.generation, revision:randomUUID(), position:0,
-      stateVersion:0, lastCount:0, sentCount:0, transferCount:0, legacyRequired:false};
-  }
-  const before = meta.position;
-  let identity = null, applied = 0;
-  while (true) {
-    const rows = store.prepare(`SELECT position FROM views WHERE domain='watch'
-      AND position>? AND position<=? ORDER BY position LIMIT 256`).all(meta.position, info.position);
-    if (!rows.length) break;
-    for (const {position} of rows) {
-      const entry = store.load(position);
-      if (entry == null || entry.broken) throw new Error('원장 손상: 감시 책임 조회 불가');
-      if (entry.kind === 'handover' && entry.phase === 'transferred') {
-        // 옛 잘못된 목록의 오류/적용 범위는 기존 책임 계산에 맡긴다.
-        if (entry.taskIds != null && !Array.isArray(entry.taskIds)) meta.legacyRequired = true;
-        else {
-          identity ??= taskIdentity(cards);
-          transfer(store, meta, entry, position, identity);
-        }
-        meta.stateVersion = position;
-      } else if (['send','done'].includes(entry.kind) && entry.role && entry.taskId &&
-          entry.transport !== 'mailbox') {
-        putLast(store, meta, entry, position);meta.stateVersion = position;
-      }
-      if (entry.kind === 'send' && entry.taskId && entry.transport !== 'mailbox') {
-        meta.sentCount += store.prepare('INSERT OR IGNORE INTO watch_work_sent VALUES(?)')
-          .run(store.key(entry.executionKey || entry.taskId)).changes;
-        meta.stateVersion = position;
-      }
-      if (entry.kind === 'start' || entry.kind === 'stop') meta.stateVersion = position;
-      meta.position = position;applied++;
+  const finishReplay = rebuilt ? beginWatchReplay(metrics, 'work',
+    !invalid ? 'count' : typeof meta?.generation === 'string' && meta.generation !== info.generation
+      ? 'generation' : 'invalid') : null;
+  try {
+    if (rebuilt) {
+      store.db.exec('DELETE FROM watch_work_last; DELETE FROM watch_work_sent; DELETE FROM watch_work_transfers');
+      meta = {version:1, generation:info.generation, revision:randomUUID(), position:0,
+        stateVersion:0, lastCount:0, sentCount:0, transferCount:0, legacyRequired:false};
     }
-    store.clear();
-  }
-  meta.position = info.position;
-  if (rebuilt || applied || before !== meta.position) {
-    store.prepare(`INSERT INTO watch_work_meta VALUES(1,?)
-      ON CONFLICT(id) DO UPDATE SET value=excluded.value`).run(JSON.stringify(meta));
-  }
-  verified.delete(key);verified.set(key, stamp(meta));
-  while (verified.size > 8) verified.delete(verified.keys().next().value);
-  return {...meta, applied, rebuilt};
+    const before = meta.position;
+    let identity = null, applied = 0;
+    while (true) {
+      const rows = store.prepare(`SELECT position FROM views WHERE domain='watch'
+        AND position>? AND position<=? ORDER BY position LIMIT 256`).all(meta.position, info.position);
+      if (!rows.length) break;
+      for (const {position} of rows) {
+        const entry = store.load(position);
+        if (entry == null || entry.broken) throw new Error('원장 손상: 감시 책임 조회 불가');
+        if (entry.kind === 'handover' && entry.phase === 'transferred') {
+          // 옛 잘못된 목록의 오류/적용 범위는 기존 책임 계산에 맡긴다.
+          if (entry.taskIds != null && !Array.isArray(entry.taskIds)) meta.legacyRequired = true;
+          else {
+            identity ??= taskIdentity(cards);
+            transfer(store, meta, entry, position, identity);
+          }
+          meta.stateVersion = position;
+        } else if (['send','done'].includes(entry.kind) && entry.role && entry.taskId &&
+            entry.transport !== 'mailbox') {
+          putLast(store, meta, entry, position);meta.stateVersion = position;
+        }
+        if (entry.kind === 'send' && entry.taskId && entry.transport !== 'mailbox') {
+          meta.sentCount += store.prepare('INSERT OR IGNORE INTO watch_work_sent VALUES(?)')
+            .run(store.key(entry.executionKey || entry.taskId)).changes;
+          meta.stateVersion = position;
+        }
+        if (entry.kind === 'start' || entry.kind === 'stop') meta.stateVersion = position;
+        meta.position = position;applied++;
+      }
+      store.clear();
+    }
+    meta.position = info.position;
+    if (rebuilt || applied || before !== meta.position) {
+      store.prepare(`INSERT INTO watch_work_meta VALUES(1,?)
+        ON CONFLICT(id) DO UPDATE SET value=excluded.value`).run(JSON.stringify(meta));
+    }
+    verified.delete(key);verified.set(key, stamp(meta));
+    while (verified.size > 8) verified.delete(verified.keys().next().value);
+    return {...meta, applied, rebuilt};
+  } finally { finishReplay?.(); }
 }

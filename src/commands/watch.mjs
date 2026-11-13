@@ -1,5 +1,6 @@
 // kadan watch와 감시 편지 보내기 (HW-3-impl: cli.mjs에서 옮김)
 import { captureRuntimeVersion } from "../runtime-version.mjs";
+import {createWatchReplayMetrics} from '../watch-replay-metrics.mjs';
 import { WatchAI } from "../watch-ai.mjs";
 import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
@@ -252,16 +253,18 @@ export function cmdWatch(argv, flags) {
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
-  const stores = createWatchStoreReaders(ledgerHome());
+  const metrics = createWatchReplayMetrics();
+  const stores = createWatchStoreReaders(ledgerHome(), metrics);
   let mailRoles = [];
   const mailReader = createWatchMailReader(ledgerHome(), null, {
-    readCards:stores.cards.read, readWorks:stores.works.read, readRoles:() => mailRoles,
+    readCards:stores.cards.read, readWorks:stores.works.read, readRoles:() => mailRoles, metrics,
   });
   const reads=cycleReads({readEntries:mailReader.readEntries,readCards:stores.cards.read,
     readWorks:stores.works.read,version:()=>storageVersion(ledgerHome())});
   const record=entry => appendLedger({ ...entry, t: new Date().toISOString() });
   const sweepPolicy=createSweepPolicy({diagnostics:createSweepDiagnostics(path.join(ledgerHome(),'diagnostics'))});
-  const sweepRunner=createSweepRunner({engine:createLedgerArraySweep({access:mailReader.sweepAccess}),policy:sweepPolicy,
+  const sweepRunner=createSweepRunner({
+    engine:createLedgerArraySweep({access:mailReader.sweepAccess}),policy:sweepPolicy, metrics,
     reset:keys=>{ if(keys.includes('ledger-array'))mailReader.resetIncremental(); if(keys.includes('role-state'))mailReader.sweepAccess.roleState.reset(); },onError:error=>console.error(`[watch] 정기 대조 실패: ${error.message}`)});
   const holdTracker=new NotifyHoldTracker({record});
   const senders=createWatchSenders(reads.readEntries,{tracker:holdTracker});
@@ -269,6 +272,7 @@ export function cmdWatch(argv, flags) {
   const collections = createProcessCollections();
   if(processName!=='kadan-watch')console.log(`감시 프로세스 이름: ${processName}`);
   return runWatch({
+    metrics,
     machineMemory: createMachineMemoryWatch(),
     collections,
     runtime:captureRuntimeVersion(),
