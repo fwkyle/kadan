@@ -29,6 +29,7 @@ SQLite에서는 같은 `kadan.sqlite` 안의 스트림을 구분한다. 별도 D
 - `readTaskLedger(home)`는 계획·발령·완료 사건, `readSystemLedger(home)`는 시스템 사건을 반환한다. 과거 겸용 `send`는 작업 조회에서 `dispatch`로 읽으며 과거 원문은 바꾸지 않는다.
 - `readMailLedger(home)`는 우편 사건에 더해 책임 계산용 확정 `handover/transferred`와 `completionMailId`가 있는 `done`을 원래 저장 순서로 반환한다. 완료 근거는 짧은 실행 ID와 정식 주소가 섞인 자동 결과 우편도 원본 발령에 대한 유효한 최종 답변인지 검증하는 데 사용한다. `done`은 작업 원장, 확정 인계는 시스템 원장에 각각 한 번만 저장하며 우편 원장에 사본을 저장하지 않는다.
 - `readLedger(home)`는 기존 호출자를 위한 통합 호환 조회다. 작업 발령은 기존 `send` 형태로 한 번 노출하며 새 `dispatch`를 중복 노출하지 않는다. 원장별 건수를 더한 값은 호환 조회 건수와 다를 수 있다.
+- `readSendLedger(home)`는 우편 전송 길(`send`·`mail`·`dispatch`) 전용 통합 조회다. `readLedger`와 똑같이 원장 전체를 읽고 검증하며(손상 감지가 같다), 결과에서 전송 길이 읽지 않는 감시 사건 여섯 종류(`watch-cycle`·`watch-ai-request`·`watch-ai-call`·`watch-ai-report`·`watch-scope`·`watch-ai-retired`)만 뺀다. 나머지 줄의 내용과 순서는 같다. 우편함 세대 판정이 읽는 `watch-mail-reminder`는 남긴다. 전송 길의 코드가 뺀 종류를 읽게 되면 목록(`SEND_UNUSED_KINDS`)에서 빼야 하고, `tests/send-ledger-narrow.test.mjs`가 소비 모듈을 지킨다.
 - 과거 기록은 원래 순서, 신규 기록은 전체 저장 순번으로 읽는다. 사건 시각을 기준으로 원장을 다시 정렬하지 않는다. 화면의 최신순은 이 순서의 역순이다.
 - 완료 중복 처리는 기존 조회 규칙을 유지하며 원시 사건은 보존한다. 분리 조회는 과거 이력을 이미 새 저장소로 옮겼다는 뜻이 아니다.
 

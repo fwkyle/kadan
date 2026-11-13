@@ -165,7 +165,8 @@ export function guardedSend({
       }
     }
   }
-  if (mailContext?.replyTo) resolveReplyContext();
+  // 위에서 읽은 원장은 여기까지만 쓴다. 답장 수신자 재확인이 우편 영역을 새로 읽으므로, 그 전에 놓아 두 읽기가 함께 남지 않게 한다.
+  if (mailContext?.replyTo) { entries = null; resolveReplyContext(); }
 
   let receipt;
   try {

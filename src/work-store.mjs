@@ -37,6 +37,12 @@ export class WorkStore {
   if(storageMode(this.home)==='none')return [];
   return listStreams(this.home,'works/').filter(s=>s.endsWith('/events.jsonl')).map(s=>this.get(s.slice(6,-13)));
  });}
+ // list()와 같은 업무를 같은 순서·같은 이력 검증으로 읽되, 업무마다 최신 판만 남긴다(history를 붙이지 않는다).
+ // 이력을 쓰지 않는 호출(우편 연결 확인·역할 지침)용이다: 판마다 업무 전체가 들어 있어 이력까지 붙들면 업무 수×판 수만큼 메모리가 든다.
+ listLatest(){return storageSnapshot(this.home,()=>{
+  if(storageMode(this.home)==='none')return [];
+  return listStreams(this.home,'works/').filter(s=>s.endsWith('/events.jsonl')).map(s=>{const {history,...latest}=this.get(s.slice(6,-13));return latest;});
+ });}
  // 감시 전용 요약: 판정에 필요한 이력만 남긴다. 상세 화면·변경 기록은 기존 list/get을 쓴다.
  listWatch(){
   return storageMode(this.home)==='none'?this.list():readWatchWorkSummaries(this.home,keyStream);

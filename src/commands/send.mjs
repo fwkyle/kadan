@@ -16,7 +16,7 @@ import { planTurnReturn, claimTurnReturn, turnReturnTail, turnReturnReceipt, rev
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floor } from "../floor.mjs";
-import { ledgerHome, readLedger, resolveLedgerBy } from "../ledger.mjs";
+import { ledgerHome, readSendLedger, resolveLedgerBy } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -120,7 +120,7 @@ function deliverMessage(argv, flags, command) {
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
     // 준비 단계의 파생 계산(발령 추론·우편 연결·슈퍼 간 판정·마지막 시작·완료 안내)은 이 읽기 하나를 같이 쓴다.
     // 전송 직전 소유·답장 수신자 판정은 이 값을 넘기지 않고 guardedSend가 새로 읽는다(#311 F2: 준비와 전송 사이의 세대 교체).
-    entries = readLedger();
+    entries = readSendLedger();
     let taskId=flags.task;
     if(command === 'send' && taskId==null){
       const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true,entries});
@@ -195,6 +195,7 @@ function deliverMessage(argv, flags, command) {
         allowOldRunner:flags["allow-old-runner"],
         recordedPid: expectedPid,
         busyMail: true,
+        readEntries: readSendLedger,
         ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session,entries))}} : {}),
       });
     } catch (error) {
