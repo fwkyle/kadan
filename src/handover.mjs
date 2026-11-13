@@ -14,12 +14,17 @@ const session = role => `kadan-${role}`;
 const validRole = role => typeof role === 'string' && /^[\p{L}\p{N}_-]+$/u.test(role);
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+// 역할 이름은 아무 JSON 키나 된다(__proto__·constructor·toString도 관계표가 받는다). 그래서
+// 줄을 읽을 때는 그 표의 자기 줄만 본다: `역할 in 표`·표[역할]은 물려받은 속성을 줄로 잘못 읽는다.
+// 새 표는 [역할, 상위] 목록에서 만든다: next[역할] = 상위로 담으면 __proto__ 줄이 조용히 사라진다.
+const parentOf = (table, role) => (Object.hasOwn(table, role) ? table[role] : undefined);
+
 // 관계표는 모든 판이 함께 쓰는 파일이다. 인계는 자기 줄만 대조하고 바꾼다:
 // 선임 줄, 준비 때 선임 아래 있던 하위 줄, 후임 줄. 다른 판이 붙이거나 정리한 줄은 보지도 고치지도 않는다.
 // 준비 때 선임의 상위·하위는 준비 스냅샷(originalHierarchy)에서 읽는다. 옛 상태 파일에도 있는 칸이다.
 function preparedRoutes(s) {
   const original = JSON.parse(s.originalHierarchy);
-  return { fromParent: original[s.from],
+  return { fromParent: parentOf(original, s.from),
     children: Object.keys(original).filter(role => original[role] === s.from) };
 }
 
@@ -28,7 +33,8 @@ function preparedRoutes(s) {
 export function routeBlock(table, s) {
   const { fromParent, children } = preparedRoutes(s);
   if (!Object.hasOwn(table, s.from)) return '선임 줄이 없음';
-  if (table[s.from] !== fromParent) return `선임 상위가 ${fromParent}에서 ${table[s.from]}(으)로 바뀜`;
+  const parent = parentOf(table, s.from);
+  if (parent !== fromParent) return `선임 상위가 ${fromParent}에서 ${parent}(으)로 바뀜`;
   const prepared = new Set(children);
   for (const [role, parent] of Object.entries(table)) {
     if (prepared.has(role)) {
@@ -42,35 +48,35 @@ export function routeBlock(table, s) {
 // 후임이 시작할 때 등록된 줄은 먼저 뺀다. 남기면 같은 이름이 두 번 나오고, 선임 아래 등록됐다면 자기 자신을 가리킨다.
 // routes는 abort가 이 줄들만 되돌릴 때 쓰는 쓰기 직전 값이다.
 export function transferRoutes(table, s) {
-  const routes = { fromParent: table[s.from], toBefore: table[s.to] ?? null, children: [] };
-  const next = {};
+  const routes = { fromParent: parentOf(table, s.from), toBefore: parentOf(table, s.to) ?? null, children: [] };
+  const rows = [];
   for (const [role, parent] of Object.entries(table)) {
     if (role === s.to) continue;
-    if (role === s.from) { next[s.to] = routes.fromParent; continue; }
+    if (role === s.from) { rows.push([s.to, routes.fromParent]); continue; }
     if (parent === s.from) routes.children.push(role);
-    next[role] = parent === s.from ? s.to : parent;
+    rows.push([role, parent === s.from ? s.to : parent]);
   }
-  return { next, routes };
+  return { next: Object.fromEntries(rows), routes };
 }
 
 // 쓰기 뒤 대조: 이 인계의 줄이 전환된 그대로면 null, 누가 되돌렸거나 바꿨으면 이유를 돌려준다.
 export function transferredBlock(table, s, routes) {
   if (Object.hasOwn(table, s.from)) return '선임 줄이 다시 생김';
-  if (table[s.to] !== routes.fromParent) return `후임 상위가 ${routes.fromParent}이(가) 아님`;
+  if (parentOf(table, s.to) !== routes.fromParent) return `후임 상위가 ${routes.fromParent}이(가) 아님`;
   const moved = routes.children.find(role => Object.hasOwn(table, role) && table[role] !== s.to);
   return moved ? `옮긴 하위 ${moved}의 상위가 바뀜` : null;
 }
 
 // 원복: 전환 때 바꾼 줄만 되돌린다. 전환 뒤 후임 아래 새로 생긴 줄과 다른 판의 줄은 그대로 둔다.
 export function revertRoutes(table, s, routes) {
-  const moved = new Set(routes.children), next = {};
+  const moved = new Set(routes.children), rows = [];
   for (const [role, parent] of Object.entries(table)) {
     if (role === s.to) {
-      next[s.from] = routes.fromParent;
-      if (routes.toBefore != null) next[s.to] = routes.toBefore;
-    } else next[role] = moved.has(role) && parent === s.to ? s.from : parent;
+      rows.push([s.from, routes.fromParent]);
+      if (routes.toBefore != null) rows.push([s.to, routes.toBefore]);
+    } else rows.push([role, moved.has(role) && parent === s.to ? s.from : parent]);
   }
-  return next;
+  return Object.fromEntries(rows);
 }
 
 // 관계표 잠금을 기다리는 횟수와 간격. 남의 등록은 수 ms만 쥐므로 잠깐이면 된다(등록 쪽도 2초를 기다린다).
@@ -173,7 +179,8 @@ export class Handover {
       if (!context || !path.isAbsolute(context) || !fs.statSync(context).isFile())
         throw new Error('--context에 현재 승인/작업 기준 파일 절대경로 필요');
       const graph = this.graph(hierarchy);
-      if (!(from in graph.value) || to in graph.value) throw new Error('선임 관계가 없거나 후임 관계가 이미 있음');
+      if (!Object.hasOwn(graph.value, from) || Object.hasOwn(graph.value, to))
+        throw new Error('선임 관계가 없거나 후임 관계가 이미 있음');
       for (const name of fs.readdirSync(this.dir).filter(n => n.endsWith('.json'))) {
         const other = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
         if (!['complete', 'aborted'].includes(other.phase) && [other.from, other.to].some(r => [from, to].includes(r)))
@@ -348,7 +355,10 @@ export class Handover {
           const tmp = `${file}.${id}.abort`;
           fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file);
         } else if (routeBlock(g.value, s)) throw new Error(`관계표 충돌(${changed}): 자동 원복 금지`);
-        // 그 밖은 선임 줄이 준비 때 그대로다: 전환을 쓰기 전에 멈춘 것이라 되돌릴 것이 없다.
+        // 선임·하위 줄이 준비 때 그대로여도 후임 줄이 전환 직전 값과 다르면 누가 손댄 것이다.
+        else if ((parentOf(g.value, s.to) ?? null) !== routes.toBefore)
+          throw new Error(`관계표 충돌(후임 줄이 전환 직전 값 ${routes.toBefore ?? '없음'}이(가) 아님): 자동 원복 금지`);
+        // 그 밖은 이 인계의 줄이 모두 쓰기 직전 그대로다: 전환을 쓰기 전에 멈춘 것이라 되돌릴 것이 없다.
       });
       s.phase = 'aborted'; this.save(s);
       this.record({ kind: 'handover', phase:'aborted', handoverId:id, from:s.from,to:s.to });

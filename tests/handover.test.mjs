@@ -7,38 +7,43 @@ import { createHash } from 'node:crypto';
 import { Handover } from '../src/handover.mjs';
 import { openTaskIds, workEntries } from '../src/handover-state.mjs';
 import { buildTree, guardedSend } from '../src/cli.mjs';
-import { registerStartedRole } from '../src/hierarchy-register.mjs';
+import { registerRoleManually, registerStartedRole } from '../src/hierarchy-register.mjs';
 const sha=x=>createHash('sha256').update(x).digest('hex');
 const DEAD_WATCH=999;
 // 실제 흐름과 같게 만든 틀: 감시기가 관계표를 이미 읽고 있고(hierarchy-loaded), 후임을 띄우면 실제 등록 코드가
 // 인계를 부른 역할(비서)을 상위로 후임 줄을 관계표에 넣는다. 선임의 상위(@user)와 등록 상위(비서)는 일부러 다르다.
 // options.link면 인계에는 링크 경로를 주고 감시기 사건에는 직접 경로를 적는다(운영의 ~/.kadan-lite ↔ ~/.kadan).
+// options.from·to로 선임·후임 이름을 바꾼다. 표는 [역할, 상위] 목록에서 만든다(객체 글자로 쓰면 __proto__ 줄을 못 만든다).
+// options.noRegister면 후임 줄을 등록하지 않는다(사람이 역할 없이 인계를 불러 등록이 건너뛰어진 경우).
 function fixture(options={}) {
+ const from=options.from??'p-감독',to=options.to??'p-감독-2';
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-handover-'));
  const hierarchy=path.join(home,'parents.json'),context=path.join(home,'context.md');
- fs.writeFileSync(hierarchy,JSON.stringify({'비서':'@user','p-감독':'@user','p-작업자':'p-감독','else-감독':'@user'}));
+ fs.writeFileSync(hierarchy,JSON.stringify(Object.fromEntries(
+  [['비서','@user'],[from,'@user'],['p-작업자',from],['else-감독','@user']])));
  fs.writeFileSync(context,'승인된 범위와 현재 카드');
  let statePath=hierarchy;
  if(options.link){const link=`${home}-link`;fs.symlinkSync(home,link);statePath=path.join(link,'parents.json');}
- const rows=[{kind:'start',role:'p-감독',session:'kadan-p-감독',panePid:10,floor:'tmux',cmd:'codex',cwd:home},
-  {kind:'send',role:'p-감독',session:'kadan-p-감독',taskId:'card-a',by:'사람'},
-  {kind:'send',role:'p-작업자',session:'kadan-p-작업자',taskId:'card-b',by:'p-감독'},
+ const rows=[{kind:'start',role:from,session:`kadan-${from}`,panePid:10,floor:'tmux',cmd:'codex',cwd:home},
+  {kind:'send',role:from,session:`kadan-${from}`,taskId:'card-a',by:'사람'},
+  {kind:'send',role:'p-작업자',session:'kadan-p-작업자',taskId:'card-b',by:from},
   {kind:'hierarchy-loaded',path:hierarchy,hash:sha(fs.readFileSync(hierarchy)),pid:100}];
- const live=new Map([['kadan-p-감독',10],['kadan-p-작업자',20]]);
+ const live=new Map([[`kadan-${from}`,10],['kadan-p-작업자',20]]);
  const sends=[],stops=[],sleeps=[];const env={KADAN_ROLE:'비서'};
- const f={home,hierarchy,statePath,context,rows,live,sends,stops,sleeps,env};
+ const f={home,hierarchy,statePath,context,rows,live,sends,stops,sleeps,env,from,to};
  const h=new Handover({home,env,readEntries:()=>rows,record:e=>rows.push(e),sleep:ms=>sleeps.push(ms),
   watchAlive:pid=>{f.onWatchAlive?.();return pid!==DEAD_WATCH},
   floor:{name:'tmux',alive:s=>live.has(s),pid:s=>live.get(s),stop:s=>{stops.push(s);if(!options.stopFails)live.delete(s)}},
   start:(role,cmd,cwd)=>{
    if(options.startFails)throw new Error('start failed');
    live.set(`kadan-${role}`,30);rows.push({kind:'start',role,session:`kadan-${role}`,panePid:30,cmd,cwd});
+   if(options.noRegister)return;
    const registered=registerStartedRole({role,creator:env.KADAN_ROLE,cmd,home,entries:rows});
    assert.equal(registered.registered,true,registered.reason);
   },
   send:(role,message)=>{sends.push({role,message});if(options.activationFails&&message.startsWith('인계 전환'))throw new Error('send uncertain')}
  });
- const begin=()=>h.begin('p-감독',{to:'p-감독-2',hierarchy:statePath,context,atBoundary:true});
+ const begin=()=>h.begin(from,{to,hierarchy:statePath,context,atBoundary:true});
  const accept=s=>{env.KADAN_ROLE=s.to;const r=path.join(home,'receipt.json');fs.writeFileSync(r,JSON.stringify({taskIds:s.taskIds,evidencePaths:[context],nextAction:'기존 card-a 확인 후 card-b 검수'}));return h.accept(s.id,r)};
  // 감시기가 지금 파일을 읽었다는 사건. 경로·PID만 바꿔 넣을 수 있다.
  const loaded=(s,{at=hierarchy,pid=100}={})=>rows.push({kind:'hierarchy-loaded',path:at,hash:sha(fs.readFileSync(hierarchy)),pid});
@@ -236,6 +241,72 @@ test('routes 대기 중 abort: 관련 줄이 다른 값이면 자동 원복을 �
  fs.writeFileSync(f.hierarchy,prepared);const inode=fs.statSync(f.hierarchy).ino;
  assert.equal(f.h.abort(s.id).phase,'aborted');
  assert.equal(fs.readFileSync(f.hierarchy,'utf8'),prepared);assert.equal(fs.statSync(f.hierarchy).ino,inode);
+});
+test('routes 대기 중 abort: 선임·하위 줄은 준비 때 모양인데 후임 줄이 전환 직전 값과 다르면 거절한다',()=>{
+ // 누가 선임·하위 줄은 되돌리고 후임 줄만 다른 상위로 바꿨다. 쓰기 전에 멈춘 것이 아니므로 취소 성공으로 끝내지 않는다.
+ const f=fixture();const s=f.accepted();const prepared=f.table();f.h.finish(s.id,{timeout:0});
+ f.edit(t=>{t['p-감독']='@user';t['p-작업자']='p-감독';t['p-감독-2']='else-감독';});
+ const conflict=fs.readFileSync(f.hierarchy,'utf8'),inode=fs.statSync(f.hierarchy).ino;
+ assert.throws(()=>f.h.abort(s.id),/관계표 충돌.*후임.*자동 원복 금지/);
+ assert.equal(f.h.status(s.id).phase,'routes-pending');
+ assert.equal(fs.readFileSync(f.hierarchy,'utf8'),conflict);assert.equal(fs.statSync(f.hierarchy).ino,inode);
+ // 후임 줄이 빠진 것도 전환 직전 값(비서)과 다르다.
+ f.edit(t=>{delete t['p-감독-2'];});assert.throws(()=>f.h.abort(s.id),/관계표 충돌.*후임.*자동 원복 금지/);
+ // 후임 줄까지 전환 직전 값이면 되돌릴 것이 없다.
+ f.edit(t=>{t['p-감독-2']='비서';});assert.equal(f.h.abort(s.id).phase,'aborted');assert.deepEqual(lines(f.table()),lines(prepared));
+});
+// 관계표의 역할 이름은 아무 JSON 키나 된다(parseHierarchy가 허용한다). 새 표를 next[역할]=상위로 담으면 __proto__ 줄이
+// 조용히 사라지고, `역할 in 표`·표[역할]은 물려받은 속성(constructor·toString)을 줄로 잘못 읽는다(PR #402 검수 P1).
+const lines=t=>Object.entries(t).sort(([a],[b])=>a<b?-1:a>b?1:0);
+const own=(t,role)=>Object.hasOwn(t,role)?t[role]:undefined;
+test('남의 줄 이름이 __proto__·constructor여도 전환·원복 뒤 그대로 남는다',()=>{
+ for(const end of ['complete','abort']){
+  const f=fixture();
+  for(const role of ['__proto__','constructor']){
+   const added=registerRoleManually({role,parent:'else-감독',home:f.home,entries:f.rows});
+   assert.equal(added.registered,true,added.reason);
+  }
+  const s=f.accepted();const before=f.table();
+  assert.equal(own(before,'__proto__'),'else-감독');assert.equal(own(before,'constructor'),'else-감독');
+  f.h.finish(s.id,{timeout:0});
+  assert.equal(own(f.table(),'__proto__'),'else-감독',`전환 뒤(${end})`);
+  assert.equal(own(f.table(),'constructor'),'else-감독',`전환 뒤(${end})`);
+  if(end==='abort'){assert.equal(f.h.abort(s.id).phase,'aborted');assert.deepEqual(lines(f.table()),lines(before));}
+  else{
+   f.loaded(s);assert.equal(f.h.finish(s.id,{timeout:0}).phase,'complete');
+   assert.deepEqual(lines(f.table()),lines(Object.fromEntries([['비서','@user'],['p-감독-2','@user'],['p-작업자','p-감독-2'],
+    ['else-감독','@user'],['__proto__','else-감독'],['constructor','else-감독']])));
+  }
+ }
+});
+for(const names of [{from:'__proto__'},{from:'constructor',to:'__proto__'},{to:'toString'},{from:'toString',to:'constructor'}])
+ test(`선임·후임 이름이 ${names.from??'(보통)'}·${names.to??'(보통)'}여도 전환하고 abort가 되돌린다`,()=>{
+  for(const end of ['complete','abort']){
+   const f=fixture(names);const s=f.accepted();const before=f.table();
+   assert.equal(own(before,f.from),'@user');assert.equal(own(before,f.to),'비서');
+   assert.equal(f.h.finish(s.id,{timeout:0}).phase,'routes-pending');
+   const moved=Object.fromEntries([['비서','@user'],[f.to,'@user'],['p-작업자',f.to],['else-감독','@user']]);
+   assert.deepEqual(lines(f.table()),lines(moved),`전환 뒤(${end})`);
+   assert.equal(Object.hasOwn(f.table(),f.from),false);
+   if(end==='abort'){assert.equal(f.h.abort(s.id).phase,'aborted');assert.deepEqual(lines(f.table()),lines(before));}
+   else{
+    f.loaded(s);assert.equal(f.h.finish(s.id,{timeout:0}).phase,'complete');
+    assert.deepEqual(lines(f.table()),lines(moved));assert.deepEqual(f.stops,[`kadan-${f.from}`]);
+   }
+  }
+ });
+for(const to of ['__proto__','toString']) test(`줄이 없던 후임의 이름이 ${to}여도 "줄 없음"으로 읽고 abort가 줄 없이 되돌린다`,()=>{
+ // 표[역할]로 읽으면 줄이 없는데도 물려받은 속성(객체·함수)이 전환 직전 값으로 잡힌다.
+ for(const shape of ['전환된 모양','쓰기 전 모양']){
+  const f=fixture({to,noRegister:true});const s=f.accepted();
+  const before=f.table(),prepared=fs.readFileSync(f.hierarchy,'utf8');assert.equal(Object.hasOwn(before,to),false);
+  f.h.finish(s.id,{timeout:0});
+  assert.equal(own(f.table(),to),'@user');assert.equal(f.h.status(s.id).routes.toBefore,null);
+  // 쓰기 전 모양: 상태만 routes-pending이고 파일은 쓰기 전 그대로(후임 줄 없음)인 경우.
+  if(shape==='쓰기 전 모양')fs.writeFileSync(f.hierarchy,prepared);
+  assert.equal(f.h.abort(s.id).phase,'aborted',shape);
+  assert.deepEqual(lines(f.table()),lines(before),shape);assert.equal(Object.hasOwn(f.table(),to),false,shape);
+ }
 });
 test('09-07 선임 자기 종료와 선임 종료실패는 후임 활성화로 넘어가지 않는다',()=>{
  const f=fixture({stopFails:true});const s=f.begin();f.accept(s);f.env.KADAN_ROLE=s.from;
