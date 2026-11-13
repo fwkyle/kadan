@@ -33,13 +33,17 @@ syncBuiltinESMExports();
 
 // 가짜 시계. 저장 모듈이 적는 시각(new Date())은 실제 시각이라, 가짜 시계를 실제보다 한 시간 앞에서 시작해
 // 저장된 시각이 모두 과거가 되게 한다. 시각을 직접 정해 넣는 사건만 미래일 수 있다.
+// 시험 사이에서도 시계는 뒤로 가지 않는다: 카드 사실을 적용한 시계의 최고점은 프로세스에 하나라, 앞 시험이 며칠 뒤까지
+// 간 시계를 다음 시험이 되돌리면 그 시험 전체가 시계 역행 구간(기억을 쓰지 않는 구간)에서 돈다. 역행은 시험 안에서만 일부러 만든다.
+let clockFloor = 0;
 function withClock(fn) {
   const real = Date.now;
-  let t = real() + 3_600_000;
+  let t = Math.max(real() + 3_600_000, clockFloor + 60_000), highest = t;
+  const move = value => { t = value; if (t > highest) highest = t; };
   Date.now = () => t;
   const list = floor.list;
-  try { return fn({now: () => t, tick: ms => { t += ms; }, set: value => { t = value; }}); }
-  finally { Date.now = real; floor.list = list; dashboardPieces.enable(true); }
+  try { return fn({now: () => t, tick: ms => move(t + ms), set: move}); }
+  finally { Date.now = real; floor.list = list; dashboardPieces.enable(true); clockFloor = highest; }
 }
 const iso = ms => new Date(ms).toISOString();
 
@@ -130,20 +134,20 @@ function urlsOf(f) {
 const usesList = url => /\/(workspace|detail)(\?|$)/.test(url);
 // 같은 수집 결과를 내용은 그대로, 객체만 새로 만든다(수집 결과에 묶인 기억을 건너뛰게). getter는 부르지 않고 옮긴다.
 const copyOf = snapshot => Object.defineProperties({}, Object.getOwnPropertyDescriptors(snapshot));
-function bodies(f, {full, list}) {
+function bodies(f, {full, list}, urls = urlsOf(f)) {
   const out = new Map();
-  for (const url of urlsOf(f)) {
+  for (const url of urls) {
     try { out.set(url, JSON.stringify(dashboardData(usesList(url) ? list : full, new URL(url, 'http://127.0.0.1')))); }
     catch (error) { out.set(url, `오류 ${error.status ?? 503} ${error.message}`); }
   }
   return out;
 }
 // 기억을 켠 계산과 끈 계산(같은 수집 결과의 사본, 같은 시각)이 모든 주소에서 글자까지 같다.
-function assertSame(f, snapshots, label) {
-  const withMemo = bodies(f, snapshots);
+function assertSame(f, snapshots, label, urls = urlsOf(f)) {
+  const withMemo = bodies(f, snapshots, urls);
   dashboardPieces.enable(false);
   let plain;
-  try { plain = bodies(f, {full: copyOf(snapshots.full), list: copyOf(snapshots.list)}); }
+  try { plain = bodies(f, {full: copyOf(snapshots.full), list: copyOf(snapshots.list)}, urls); }
   finally { dashboardPieces.enable(true); }
   for (const [url, body] of withMemo) assert.equal(body, plain.get(url), `${label}: ${url}`);
   return withMemo;
@@ -509,16 +513,122 @@ test('슈퍼감독 프로필: 시작 기록의 프로필이 바뀌면 슈퍼감�
   assert.deepEqual(supers(assertSame(f, f.collect(), '다시 일반감독')), [SUPER]);
 }));
 
-test('시계가 뒤로 가면 기억을 쓰지 않는다', () => withClock(clock => {
+// 상세 화면은 이력에서 카드 사실을 다시 만들어 "사실을 적용한 시계의 최고점"을 그 요청 시각까지 올린다.
+// 최고점을 수집 시각에 묶어 두려는 시험은 상세를 뺀 주소만 부른다.
+const NO_DETAIL = f => urlsOf(f).filter(url => !url.includes('/detail'));
+
+test('시계가 조각을 계산한 시각보다 뒤로 가면(사실을 적용한 시각보다는 뒤) 그 조각을 다시 계산해 기억한다', () => withClock(clock => {
   const f = fixture(clock);
-  const snapshots = f.collect();
-  assertSame(f, snapshots, '처음');
-  const before = misses(['rows', 'briefs']);
-  clock.tick(-5000);
-  assertSame(f, {full: copyOf(snapshots.full), list: copyOf(snapshots.list)}, '시계가 뒤로 감');
-  const after = misses(['rows', 'briefs']);
-  assert.equal(after.rows, before.rows + 1);
-  assert.equal(after.briefs, before.briefs + 1);
+  const snapshots = f.collect(); // 카드 사실을 적용한 시계의 최고점 = 지금
+  clock.tick(100_000);
+  assertSame(f, snapshots, '처음', NO_DETAIL(f));
+  const before = dashboardPieces.counts();
+  clock.tick(-50_000); // 조각을 계산한 시각보다 50초 앞, 사실을 적용한 시각보다는 50초 뒤
+  const copy = {full: copyOf(snapshots.full), list: copyOf(snapshots.list)};
+  assertSame(f, copy, '시계가 뒤로 감', NO_DETAIL(f));
+  const after = dashboardPieces.counts();
+  for (const name of ['rows', 'briefs']) assert.equal(after[name].miss, before[name].miss + 1, name);
+  // 다시 계산한 값은 그 시각 기준으로 기억돼 다음 요청이 쓴다.
+  clock.tick(1000);
+  assertSame(f, {full: copyOf(copy.full), list: copyOf(copy.list)}, '1초 뒤', NO_DETAIL(f));
+  const later = dashboardPieces.counts();
+  assert.ok(later.rows.hit > after.rows.hit, '재사용했다');
+  assert.equal(later.rows.miss, after.rows.miss, '다시 계산하지 않았다');
+}));
+
+// ── 시계 역행 구간(PR #393 수정 1차) ──
+// 카드의 "지금보다 뒤인 시각" 목록(futureTimes)은 사건을 적용하던 시계 기준이다. 서버가 켜진 채 시계가 그 시각보다
+// 뒤로 가면 이미 과거로 처리한 보고 시각이 다시 미래가 되는데 다음 시각 경계에는 잡히지 않는다.
+// 그 구간에서는 조각 기억을 읽지도 쓰지도 않아야 한다. 기준은 늘 같은 시각의 기억 끈 계산이다.
+// 독립검수의 재현: 기준 시각 O에서 배정 −20초 · 활동 시작 −5초 · 일반 진행 메모 +10초 · 감독 메모 +30초.
+function rollbackFixture(clock, {supervisorMemoAt = 30_000} = {}) {
+  const f = fixture(clock), key = f.executions[6], role = '역행작업자', O = clock.now() + 60_000;
+  f.start(role);
+  const card = f.cards.get(key, {body: false});
+  const row = (revision, at, extra) => appendStream(f.home, `cards/${key}/events.jsonl`, {...card, ...extra, revision, at: iso(O + at)});
+  const assigned = {status: 'assigned', role, board: '역행판', scope: '격리 시험', rallyId: 'r-rollback', rallyTitle: '역행 묶음',
+    rallyRound: '1', rallyStep: 'implementation'};
+  row(card.revision + 1, -20_000, {...assigned, by: '감독', noteKind: 'decision', note: '배정'});
+  appendLedger({t: iso(O - 20_000), kind: 'send', role, taskId: key, executionKey: key, by: '감독', bytes: 1, digest: 'r', preview: '발령'}, f.home);
+  const running = {...assigned, activity: 'running', activityAt: iso(O - 5000), activityRole: role};
+  row(card.revision + 2, -5000, {...running, by: role, noteKind: 'progress', note: '시작'});
+  row(card.revision + 3, 10_000, {...running, by: role, noteKind: 'progress', note: '일반 진행 메모'});
+  row(card.revision + 4, supervisorMemoAt, {...running, by: '감독', noteKind: 'decision', note: '감독 메모'});
+  const executions = '/api/dashboard/workspace?collection=executions&state=all';
+  // 실행 목록의 실행 흐름 이름과 현황 화면의 판 진행 수(이 카드만 든 판).
+  const view = map => {
+    const board = json(map, status).boards.find(b => b.name === '역행판').counts;
+    return `${json(map, executions).rows.find(r => r.key === key).healthLabel} / 작업중 ${board.running} · 막힘 ${board.stuck}`;
+  };
+  const at = (offset, label, {collectOnly = false} = {}) => {
+    clock.set(O + offset);
+    const snapshots = f.collect();
+    return collectOnly ? null : view(assertSame(f, snapshots, label));
+  };
+  return {f, key, O, at, view, executions};
+}
+const RUNNING = '작업중 / 작업중 1 · 막힘 0', CHECK = '보고 확인 필요 / 작업중 0 · 막힘 1';
+const slots = () => [...dashboardPieces.values()];
+const sameSlots = (a, b) => a.length === b.length && a.every(([name, value], i) => b[i][0] === name && b[i][1] === value);
+
+test('시계 역행 1(검수 재현): O+100초에 수집한 뒤 시계가 O로 가면 O·O+15초·O+30초가 기억 끈 계산과 같다', () => withClock(clock => {
+  const {f, at} = rollbackFixture(clock);
+  assert.equal(at(100_000, 'O+100초'), RUNNING);
+  const stored = slots(), counted = hits(HEAVY);
+  assert.equal(at(0, 'O(100초 역행)'), CHECK);
+  assert.equal(at(15_000, 'O+15초'), RUNNING, '일반 진행 메모 시각(+10초)이 지나면 작업중');
+  assert.equal(at(30_000, 'O+30초'), RUNNING);
+  // 역행 구간에서는 기억을 읽지도 쓰지도 않았다.
+  assert.deepEqual(hits(HEAVY), counted);
+  assert.ok(sameSlots(slots(), stored), '역행 구간에서 기억이 바뀌지 않았다');
+  // 시계가 예전 최고점을 다시 지나면 평소대로 돈다(사건 없는 다음 수집은 재사용).
+  assert.equal(at(101_000, 'O+101초'), RUNNING);
+  const before = hits(['rows', 'briefs', 'workspace-rows']);
+  assert.equal(at(116_000, 'O+116초'), RUNNING);
+  const after = hits(['rows', 'briefs', 'workspace-rows']);
+  for (const name of Object.keys(before)) assert.ok(after[name] > before[name], `다시 재사용: ${name}`);
+}));
+
+test('시계 역행 2: 조각을 한 번도 부르지 않고 수집만 앞서 있었어도 역행 구간에서 기억 끈 계산과 같다', () => withClock(clock => {
+  const {at} = rollbackFixture(clock);
+  at(100_000, '', {collectOnly: true}); // 수집만(미리 수집·화면 재료 없는 주소처럼)
+  assert.deepEqual(slots(), [], '조각은 아직 한 번도 계산되지 않았다');
+  assert.equal(at(0, 'O'), CHECK);
+  assert.equal(at(15_000, 'O+15초'), RUNNING);
+  assert.deepEqual(slots(), [], '역행 구간에서 기억하지 않았다');
+}));
+
+test('시계 역행 3: 역행 구간에서 처음 계산되는 조각도 기억하지 않는다', () => withClock(clock => {
+  const {f, key, O, executions} = rollbackFixture(clock);
+  const label = snapshot => JSON.parse(JSON.stringify(dashboardData(snapshot, new URL(executions, 'http://127.0.0.1'))))
+    .rows.find(r => r.key === key).healthLabel;
+  const plain = snapshot => {
+    dashboardPieces.enable(false);
+    try { return label(copyOf(snapshot)); } finally { dashboardPieces.enable(true); }
+  };
+  clock.set(O + 100_000);
+  dashboardData(f.collect().full, new URL(status, 'http://127.0.0.1')); // 업무를 뺀 행(rows-executions)은 부르지 않는다
+  assert.ok(dashboardPieces.values().has('rows') && !dashboardPieces.values().has('rows-executions'));
+  const seen = [];
+  for (const offset of [0, 15_000]) {
+    clock.set(O + offset);
+    const {list} = f.collect();
+    seen.push([label(list), plain(list)]);
+  }
+  assert.deepEqual(seen, [['보고 확인 필요', '보고 확인 필요'], ['작업중', '작업중']]);
+  assert.ok(!dashboardPieces.values().has('rows-executions'), '역행 구간에서 처음 계산한 조각을 기억하지 않았다');
+}));
+
+test('시계 역행 4: 역행 구간에서 계산한 값은 구간이 끝난 뒤 재사용되지 않는다', () => withClock(clock => {
+  // 감독 메모를 먼 미래(+1000초)에 둔다: 구간 안에서 구한 다음 시각 경계가 구간이 끝난 뒤까지 닿는 경우다.
+  const {at} = rollbackFixture(clock, {supervisorMemoAt: 1_000_000});
+  const first = at(100_000, 'O+100초');
+  const stored = slots();
+  const inside = at(5000, 'O+5초(역행 구간)');
+  assert.notEqual(inside, first, '역행 구간의 값은 다르다(진행 메모가 다시 미래)');
+  const afterInside = slots();
+  assert.equal(at(101_000, 'O+101초(구간 끝난 뒤)'), first);
+  assert.ok(sameSlots(afterInside, stored), '역행 구간에서 기억을 쓰지 않았다');
 }));
 
 test('기억한 값을 화면이 고쳐 쓰지 않는다: 모든 화면을 거친 뒤에도 조각 값이 그대로이고 행·관계표는 얼려 있다', () => withClock(clock => {

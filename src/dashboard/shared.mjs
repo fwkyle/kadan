@@ -14,6 +14,7 @@ import { readMailBody } from "../ledger.mjs";
 import { mailboxLetters } from "../mailbox.mjs";
 import { mailStatus, listPageSize } from "../dashboard-inbox.mjs";
 import { buildCardWorktimes, modelUnknownLabel } from "../card-worktime.mjs";
+import { listFactsClockHigh } from "../card-list-facts.mjs";
 
 const modelCache = new WeakMap();
 const executionModelCache = new WeakMap();
@@ -26,20 +27,24 @@ const executionModelCache = new WeakMap();
 // until(계산 시각, 값): 값이 달라질 수 있는 가장 이른 시각(ms). 그 시각부터는 입력이 같아도 다시 계산한다.
 // 시계가 계산 시각보다 앞으로 돌아가도 다시 계산한다. 원장 밖 입력(역할 생존 목록·감시 현황·설정·결과 파일)을 읽는
 // 계산은 조각에 넣지 않는다. 한 조각이 기억하는 것은 최신 한 벌뿐이라 원장이 커져도 기억 크기는 한 세대 몫이다.
+// 시계 역행 구간: 지금 시계가 이 프로세스에서 카드 사실을 적용한 시계의 최고점(listFactsClockHigh)보다 앞이면
+// 기억을 읽지도 쓰지도 않는다(기억을 끈 계산과 같은 길). 카드의 "지금보다 뒤인 시각" 목록은 적용 시각 기준이라
+// 그 구간에서는 다음 시각 경계를 믿을 수 없다. 최고점은 조각을 부른 시각이 아니라 사실을 적용한 쪽에서 얻는다:
+// 수집은 조각 없이도 돌기 때문이다(미리 수집·화면 재료 없는 주소). 시계가 최고점을 다시 지나면 평소대로 돈다.
 const pieces = new Map();
 const pieceCounts = {};
 let piecesOn = true;
 const sameInputs = (a, b, same) =>
   a.length === b.length && a.every((value, i) => (same?.[i] ?? Object.is)(value, b[i]));
 export function piece(name, inputs, compute, { until = null, same = null } = {}) {
-  // hit: 재사용, miss: 기억을 켠 채 계산, off: 기억을 끈 계산.
+  // hit: 재사용, miss: 기억을 켠 채 계산, off: 기억 없이 계산(끈 경우와 시계 역행 구간).
   const counts = (pieceCounts[name] ??= { hit: 0, miss: 0, off: 0 });
-  if (!piecesOn) {
+  const now = Date.now();
+  if (!piecesOn || now < listFactsClockHigh()) {
     counts.off++;
     return compute();
   }
-  const now = Date.now(),
-    hit = pieces.get(name);
+  const hit = pieces.get(name);
   if (hit && now >= hit.at && (hit.until === null || now < hit.until) && sameInputs(hit.inputs, inputs, same)) {
     counts.hit++;
     return hit.value;
