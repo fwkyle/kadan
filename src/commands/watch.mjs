@@ -112,6 +112,35 @@ export function watchMailHold(role,{selectedFloor=floor,readStart=lastStartFor,t
   return held;
 }
 
+// 주기 시작의 배열을 고정하지 않는다. 매 호출에서 새 사건을 따라잡고, guardedSend도 전송 직전에 다시 확인한다.
+// 전체 읽기를 추가하지 않지만, 기존 감시 배열의 보관·새 사건 때 참조 복사는 여전히 과거 크기에 비례한다.
+export function createWatchSenders(readEntries, {selectedFloor=floor, tracker=null, send=guardedSend}={}) {
+  const readStart = session => lastStartFor(session, readEntries());
+  const sendFresh = args => send({...args, readEntries});
+  const options = {selectedFloor, tracker, readStart, send:sendFresh};
+  return {
+    sendAlert: (role, message, extra) => sendWatchMessage(role, message, {...options, ...extra}),
+    sendNudge: (role, message) => sendWatchNudge(role, message, options),
+    sendMailReminder: (role, message, expectedPid) =>
+      sendWatchMailReminder(role, message, expectedPid, options),
+    mailHold: role => watchMailHold(role, options),
+    resume429: (role, message, expectedPid) => {
+      const session = sessionName(role);
+      if (String(recordedPid(readStart(session))) !== String(expectedPid)) {
+        throw new Error('429 재개 세대 변경');
+      }
+      sendFresh({floor:selectedFloor, session, role, message, source:'watch', recordedPid:expectedPid});
+    },
+    sendQueueEnter: typeof selectedFloor.sendEnter === 'function' ? (role, expectedPid) => {
+      const session = sessionName(role);
+      if (String(recordedPid(readStart(session))) !== String(expectedPid)) {
+        throw new Error('입력 큐 재개 세대 변경');
+      }
+      return selectedFloor.sendEnter(session);
+    } : null,
+  };
+}
+
 export function cmdWatch(argv, flags) {
   const usage =
     "사용법: kadan watch [--profile <JSON파일>] [--interval 초] [--stall 횟수] [--stall-after 분] [--start-report-after 분] " +
@@ -234,6 +263,7 @@ export function cmdWatch(argv, flags) {
   const sweepRunner=createSweepRunner({engine:createLedgerArraySweep({access:mailReader.sweepAccess}),policy:sweepPolicy,
     reset:keys=>{ if(keys.includes('ledger-array'))mailReader.resetIncremental(); if(keys.includes('role-state'))mailReader.sweepAccess.roleState.reset(); },onError:error=>console.error(`[watch] 정기 대조 실패: ${error.message}`)});
   const holdTracker=new NotifyHoldTracker({record});
+  const senders=createWatchSenders(reads.readEntries,{tracker:holdTracker});
   const processName=watchProcessName(ledgerHome());
   const collections = createProcessCollections();
   if(processName!=='kadan-watch')console.log(`감시 프로세스 이름: ${processName}`);
@@ -255,21 +285,8 @@ export function cmdWatch(argv, flags) {
     record,
     holdTracker,
     sweepTick: () => sweepRunner.tick(),
-    sendAlert: (role,message,extra)=>sendWatchMessage(role,message,{tracker:holdTracker,...extra}),
-    sendNudge: (role,message)=>sendWatchNudge(role,message,{tracker:holdTracker}),
-    sendMailReminder: (role,message,expectedPid)=>sendWatchMailReminder(role,message,expectedPid,{tracker:holdTracker}),
-    mailHold: role=>watchMailHold(role,{tracker:holdTracker}),
-    resume429: (role,message,expectedPid) => {
-      const session=sessionName(role);
-      if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('429 재개 세대 변경');
-      guardedSend({floor,session,role,message,source:'watch',recordedPid:expectedPid});
-    },
-    sendQueueEnter: typeof floor.sendEnter==='function' ? (role,expectedPid) => {
-      const session=sessionName(role);
-      if(String(recordedPid(lastStartFor(session)))!==String(expectedPid))throw new Error('입력 큐 재개 세대 변경');
-      return floor.sendEnter(session);
-    } : null,
-    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:(role,message,extra)=>sendWatchMessage(role,message,{tracker:holdTracker,...extra}),readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
+    ...senders,
+    ai: flags['judge-cmd'] ? new WatchAI({home:ledgerHome(),floor,send:senders.sendAlert,readEntries:reads.readEntries,readCards:reads.readCards,readWorks:reads.readWorks}) : null,
     explain: new ExplainAI({home:ledgerHome(),print:console.log,collections}),
     hierarchyPath: flags.hierarchy ? path.resolve(flags.hierarchy) : null,
     profilePath: profileFile,
