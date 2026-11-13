@@ -8,6 +8,9 @@ import { anyStopWordInBottom } from "./watch-stop-phrases.mjs";
 
 // (b) 멈춤 경보의 코드 기본값. 감시 주기 60초, 정체 기본 5분보다 짧게 둔다. 프로필 키는 더하지 않는다.
 export const IDLE_STOP_AFTER_MS = 4 * 60_000;
+// 백그라운드 셸 표시가 있는 빈 입력창을 정당한 대기로 보는 상한. 시험·빌드를 백그라운드로 기다리는 역할의 헛경보를 줄이되,
+// 끝나지 않는 백그라운드(띄워 둔 서버 등)를 영원히 가리지 않게 이 시간이 지나면 지금처럼 멈춤을 낸다.
+export const BACKGROUND_GRACE_MS = 30 * 60_000;
 
 const BOTTOM_LINES = 14;
 // 일하는 표시는 화면 끝 14줄에 더해, 그 14줄 안의 마지막 입력 줄 위로 이만큼은 항상 찾는다(범위는 넓어지기만 한다).
@@ -27,6 +30,21 @@ const CLAUDE_WORKING = /^\s*[✻✶✳✢✽·*⏺]\s+\S+(?:…|\.\.\.)\s*\(([^(
 // 시계가 늘면 (a) 일하는 중, 아니면 (c) 애매함이다. 이 줄이 있으면 빈 입력창만 보고 idle로 확정하지 않는다.
 const CLAUDE_TOOL_RUNNING = /^\s*⎿\s+Running(?:…|\.\.\.)\s*\(([^()·]*?)\s*(?:·|\))/u;
 const CODEX_INPUT = /^\s*›\s*(?:Ask Codex to do anything)?\s*$/u;
+// 백그라운드 셸 표시(감시AI 관찰 자료의 실제 화면에서 확인한 모양만 둔다. 추측으로 넣지 않는다).
+// 표시는 실행기가 상태를 찍는 자리에서만 읽는다. 답 본문·인용·예시에 같은 글자가 있어도 표시가 아니다(애매하면 표시가 아닌 쪽 = 지금처럼 멈춤).
+// claude: 끝난 턴 요약 줄 `✻ Cooked for 24s · done 7:41 PM · 3 shells still running`. 줄 첫 칸에서 시작하고(답 본문은 들여 쓴다)
+//         `· done …` 구간이 있으며, 그 줄과 입력 줄 사이에는 빈 줄·가로줄만 있다(지금 턴의 요약 줄이다).
+// codex: 입력칸 바로 위의 단독 상태 줄 `  2 background terminals running · /ps to view · /stop to close`(숫자로 시작, 꼬리가 `· /ps`로 이어짐,
+//        입력 줄까지 빈 줄뿐), 또는 줄 첫 칸의 상태 머리줄 `• Waiting for background terminal (5m 12s • esc to interrupt) · 1 background terminal running · …`
+//        (경과 시계 괄호 바로 뒤에 표시가 붙고, 그 아래에 다른 `•` 줄이 없다).
+// 실행기 문구가 바뀌어 못 읽으면 표시 없음으로 본다(지금처럼 멈춤이 나는 쪽).
+const CLAUDE_BACKGROUND = /^[✻✶✳✢✽]\s+\S+\s+for\s+[^·]+·\s*done\s[^·]*·\s*(\d+)\s+shells?\s+still\s+running\s*$/u;
+// 실제 화면의 단독 줄은 모두 빈 줄 아래, 들여쓰기 2칸, 꼬리 전체였다. 그 모양만 읽는다(답 본문에 이어 적은 인용·잘린 인용은 표시가 아니다).
+const CODEX_BACKGROUND_LINE = /^ {2}(\d+)\s+background\s+terminals?\s+running\s+·\s+\/ps to view\s+·\s+\/stop to close\s*$/u;
+const CODEX_BACKGROUND_HEADER = /^•\s+\S.*\((?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc to interrupt\)\s*·\s*(\d+)\s+background\s+terminals?\s+running\b/iu;
+const BLANK_OR_RULE = /^[\s─━]*$/u;
+// claude가 요약 줄과 입력 줄 사이에 띄우는 세션 평가 설문 두 줄(실제 화면에서 확인한 문구 그대로). 답 본문이 아니라 화면 요소다.
+const CLAUDE_SURVEY = /^● How is Claude doing this session\?|^\s+1: Bad\s+2: Fine\s+3: Good\s+0: Dismiss\s*$/u;
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 
 // `12s` `5m 12s` `1h 02m 03s`를 초로. 다른 모양은 null이다.
@@ -63,6 +81,33 @@ export function readStatusLine(screenText) {
   const input = lines.findLast((line) => CODEX_INPUT.test(line) || CLAUDE_INPUT.test(line));
   if (input != null) return { kind: "idle", tool: CODEX_INPUT.test(input) ? "codex" : "claude", clockSec: null };
   return { kind: "unknown", tool: null, clockSec: null };
+}
+
+// 화면 아래쪽(일하는 표시를 찾는 것과 같은 범위)의 백그라운드 셸 표시. 없으면 null.
+// line: 표시가 있는 줄(앞뒤 공백 뗌, 움직이는 경과 시계 괄호는 뺌). 같은 표시가 이어지는지 비교하는 데 쓴다. count: 표시에 적힌 개수.
+export function backgroundMarker(screenText) {
+  const all = screenLines(screenText);
+  const bottomStart = Math.max(0, all.length - BOTTOM_LINES);
+  // 입력 줄이 있어야 "상태 줄 자리"를 안다. 없으면 읽지 않는다.
+  const anchor = all.findLastIndex((line, i) => i >= bottomStart && INPUT_SYMBOL.test(line));
+  if (anchor < 0) return null;
+  const start = Math.min(bottomStart, Math.max(0, anchor - ABOVE_INPUT_LINES));
+  // 입력 줄 바로 위(빈 줄·가로줄·세션 평가 설문을 건너뛴 첫 줄): claude 끝난 턴 요약 줄 또는 codex 단독 상태 줄.
+  let above = anchor - 1;
+  while (above >= start && (BLANK_OR_RULE.test(all[above]) || CLAUDE_SURVEY.test(all[above]))) above--;
+  if (above >= start) {
+    const hit = CLAUDE_BACKGROUND.exec(all[above])
+      ?? (above === 0 || !all[above - 1].trim() ? CODEX_BACKGROUND_LINE.exec(all[above]) : null);
+    if (hit) return { line: all[above].trim(), count: Number(hit[1]) };
+  }
+  // codex 상태 머리줄: 입력 줄 위에서 가장 아래의 `•` 줄만 본다(그 아래의 딸린 줄은 허용). 더 위의 `•` 줄은 지나간 글이다.
+  for (let i = anchor - 1; i >= start; i--) {
+    if (!/^•\s/u.test(all[i])) continue;
+    const hit = CODEX_BACKGROUND_HEADER.exec(all[i]);
+    // 경과 시계 괄호는 주기마다 바뀐다. 비교 값에서 빼지 않으면 매번 새 표시로 읽혀 상한에 닿지 못한다.
+    return hit ? { line: all[i].replace(/\([^()]*esc to interrupt[^()]*\)/iu, "").trim(), count: Number(hit[1]) } : null;
+  }
+  return null;
 }
 
 // (a) 일하는 중: 일하는 표시가 있고 시계가 지난 주기와 다르다(늘었거나 새 턴으로 줄었다).
@@ -110,12 +155,17 @@ export function hasOpenQuestion(entries, role, sinceIso) {
 //  - 큐 배너: 큐 줄이 있으면 제외. 사람이 입력창에 쓴 글이 있으면 idle이 아니다
 //  - 입력 보호·알림밀림: 입력창 글자와 무관하게(복사 모드·최근 사람 입력 등) 알림 전달이 밀린 역할은
 //    NotifyHoldTracker.isHeld로 호출한 쪽이 excludedSessions에 넣는다(검수 F2)
+//  - 백그라운드 셸 표시: 같은 표시 줄이 이어지는 동안 backgroundGraceMs(30분)까지는 멈춤을 내지 않는다. 지나면 지금처럼 내고
+//    표시가 이어진 시간을 경보에 싣는다. 표시가 사라지면 화면이 바뀐 것이라 빈 입력창 시간은 그때부터 다시 센다.
+//    표시가 이어진 시간은 감시기 메모리에서만 센다(재시작하면 0부터).
+// held: 백그라운드 표시로 멈춤을 늦추는 중인 세션(호출한 쪽이 같은 화면의 정체 후보에서 빼는 데 쓴다).
 export function assessIdleStop(previousStates, observations, {
   elapsedMs, intervalMs, afterMs = IDLE_STOP_AFTER_MS, tasks = [], entries = [],
-  excludedSessions = new Set(), queuedLine = () => null,
+  excludedSessions = new Set(), queuedLine = () => null, backgroundGraceMs = BACKGROUND_GRACE_MS,
 }) {
   const states = new Map();
   const alerts = [];
+  const held = new Set();
   const slept = elapsedMs > intervalMs * 3;
   const taskOf = new Map(tasks.map((task) => [`kadan-${task.role}`, task]));
   for (const [session, current] of observations) {
@@ -131,7 +181,16 @@ export function assessIdleStop(previousStates, observations, {
       !hasOpenQuestion(entries, task.role, task.t);
     const sameScreen = candidate && previous?.digest === current.digest;
     const idleMs = !candidate ? 0 : sameScreen ? (previous.idleMs ?? 0) + (slept ? 0 : elapsedMs) : 0;
-    states.set(session, { idleMs, digest: candidate ? current.digest : null });
+    // 같은 표시 줄이 이어진 시간. 처음 본 주기는 0이고, 줄이 바뀌면(새 턴이 끝남) 다시 센다. 잠든 공백은 더하지 않는다.
+    // 빈 입력창에 표시가 있는 동안은 계속 센다: 알림 밀림·큐 처리처럼 멈춤 후보에서 잠깐 빠지는 주기가 끼어도 다시 0부터 세지 않는다
+    // (다시 세면 상한이 없어진다). 일하는 중이 되거나 표시가 사라지면 그때 버린다.
+    const marker = task != null && status?.kind === "idle" ? backgroundMarker(current.screen) : null;
+    const backgroundMs = !marker ? 0 : previous?.backgroundLine === marker.line ? (previous.backgroundMs ?? 0) + (slept ? 0 : elapsedMs) : 0;
+    states.set(session, { idleMs, digest: candidate ? current.digest : null,
+      ...(marker ? { backgroundLine: marker.line, backgroundMs } : {}) });
+    // held는 멈춤 후보 여부와 무관하게 "빈 입력창 + 표시 + 상한 전"이다. 후보에서 한 주기 빠진 사이(알림 밀림 등)에
+    // 밀려 있던 정체 판정·진행 점검이 유예 안에서 나가지 않게 한다. 후보가 아닌 주기에는 어차피 멈춤이 나지 않는다.
+    if (marker && backgroundMs < backgroundGraceMs) { held.add(session); continue; }
     if (candidate && idleMs >= afterMs) {
       alerts.push({
         id: `idle-stop:${session}:${current.digest}`,
@@ -141,8 +200,9 @@ export function assessIdleStop(previousStates, observations, {
         session,
         idleMs,
         tool: status.tool,
+        ...(marker ? { backgroundMs, backgroundCount: marker.count } : {}),
       });
     }
   }
-  return { states, alerts };
+  return { states, alerts, held };
 }
