@@ -87,3 +87,10 @@ test('상수로 이름을 정한 경보(오래된미확정·진행자격)도 흐
     for (const [, kind] of read('src/' + file).matchAll(/_NOTICE_KIND\s*=\s*['"]([^'"]+)['"]/g))
       assert.ok(table.includes('`' + kind + '`'), `흐름 지도 4절에 ${kind} 없음`);
 });
+
+test('로그인 뒤 비서 복원 행이 로티 탭 붙이기 판정을 담는다', () => {
+  const row = section('3\\. 어떻게 주고받나').split('\n').find(l => l.startsWith('| 로그인 뒤 비서 복원'));
+  assert.ok(row, '3절에 로그인 뒤 비서 복원 행이 없음');
+  for (const text of ['기계 설정이 rottie', '로티가 살아 있으면', 'up --auto'])
+    assert.ok(row.includes(text), `비서 복원 행에 "${text}" 없음`);
+});

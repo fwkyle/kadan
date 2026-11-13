@@ -31,6 +31,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 import { cmdStart } from "./start.mjs";
 import { checkpointSecretary, resumeSecretary, withRecoveryLock } from "../secretary-resume.mjs";
+import { openSecretaryTab, attachHiddenSecretary, attachFailureLine } from "../secretary-tab.mjs";
 import { dashboardBuild } from "../dashboard-static.mjs";
 
 export function cmdInit(_argv, flags) {
@@ -144,7 +145,8 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
     // 1분마다 도는 자동 실행은 바뀐 것이 있을 때만 출력한다. 화면 빌드 경고는 사람이 친 up에만 낸다.
     ...(auto ? {} : { dashboardBuild }),
     ...(tmuxFloor ? {
-      restoreSecretary: startNew => resumeSecretary({home, floor, startNew}),
+      restoreSecretary: startNew => resumeSecretary({home, floor, startNew,
+        openTab: tab => openSecretaryTab({home, auto, ...tab})}),
       startWatch: () => startWatchSession(home),
       startBridge: () => startBridgeSession(home),
     } : {}),
@@ -155,6 +157,17 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
       watch: reviveResult(result.watch), 디코: reviveResult(result.bridge) } }));
   }
   if (result.secretaryError && !auto) process.exitCode = 1;
+  // 로티 없이 숨김으로 뜬 비서에 로티가 뜬 뒤 탭을 한 번 붙인다(자동 주기만). 실패는 기록·출력하지 않는다.
+  if (auto && tmuxFloor && result.secretary === "reused") {
+    try {
+      const sessionOfSecretary = sessionName("비서");
+      const attached = withRecoveryLock(home, "kadan-비서", () => attachHiddenSecretary({
+        home, floor, session: sessionOfSecretary, readEntries: () => readSystemLedger(home),
+        record: entry => appendLedger(entry, home) }));
+      if (attached.attached) lines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}`);
+      else { const failure = attachFailureLine(attached); if (failure) lines.push(failure); } // 같은 줄은 changedOutput이 한 번만 남긴다
+    } catch { /* 복원이 진행 중이면 다음 주기에 다시 본다 */ }
+  }
   // 자동 실행은 비서를 새로 띄우거나 복원했을 때만 대화 복원 정보를 갱신한다(매분 프로세스 조회를 하지 않는다).
   const refresh = auto ? ["started", "restored"].includes(result.secretary) : result.secretary !== "blocked" && result.secretary !== "skipped";
   if (tmuxFloor && refresh) {
