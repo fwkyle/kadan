@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  MACHINE_MEMORY_KEYS, MACHINE_MEMORY_LIMITS, parseMachineMemory, readMachineMemory,
+  MACHINE_MEMORY_KEYS, MACHINE_MEMORY_LIMITS, MACHINE_MEMORY_RECOVERY_GAP_MS,
+  parseMachineMemory, readMachineMemory,
   assessMachineMemory, topMachineProcesses, machineMemoryBody, createMachineMemoryWatch,
 } from '../src/watch-machine-memory.mjs';
 import {accumulateMachineMemory} from '../src/watch-cycle.mjs';
@@ -20,6 +21,8 @@ const raw = ({segments = 900, limit = 1000, pages = 200, pageLimit = 1000, press
 ].join('\n');
 const sample = pct => parseMachineMemory(raw({segments: pct * 10}));
 const missing = {known: false, reason: 'read'};
+const without = (output, ...keys) => output.split('\n')
+  .filter(line => !keys.some(key => line.startsWith(key + ':'))).join('\n');
 const assessed = (pct, state = {}) => assessMachineMemory(state, sample(pct), 1000);
 
 test('패닉 끝점·저녁 두 음성 표본·경계·페이지 축을 각각 판정한다', () => {
@@ -78,10 +81,9 @@ test('sysctl 한 번·여섯 키·2초 상한으로 읽고 macOS가 아니면 �
   assert.equal(calls[0][2].maxBuffer, 16384);
 });
 
-test('키 없음·숫자 아님·0 한도·음수·알 수 없는 압박·실패·시간 초과는 모름이다', () => {
-  for (const output of [raw().split('\n').slice(1).join('\n'), raw({limit: 0}), raw({pageLimit: 0}),
-    raw({segments: 'NaN'}), raw({pages: -1}), raw({pressure: 0}), raw({pressure: 3}),
-    raw({pressure: 8}), raw({pageLimit: 'Infinity'}), raw().replace('7498.31M', 'NaNM'),
+test('공간 키 없음·숫자 아님·0 한도·음수는 공간 모름, 실행 실패·시간 초과는 전체 모름이다', () => {
+  for (const output of [raw().split('\n').slice(0, 4).join('\n'), raw({limit: 0}), raw({pageLimit: 0}),
+    raw({segments: 'NaN'}), raw({pages: -1}), raw({pageLimit: 'Infinity'}),
     raw() + '\nvm.compressor.segment.limit: 1000']) {
     assert.equal(parseMachineMemory(output).known, false, output);
   }
@@ -157,7 +159,7 @@ test('주기 집계는 마지막·최대·실패 횟수만 보관하고 고정 �
 });
 
 // 가짜 원장·화면·AI 단계와 가짜 시계만 쓴다. 실제 프로세스·알림·메모리 압박은 만들지 않는다.
-async function run(samples, {failure = false, old = []} = {}) {
+async function run(samples, {failure = false, old = [], times = null} = {}) {
   let cycle = 0, clock = 0;
   const order = [], records = [], notices = [], roleMails = [], calls = [];
   const controller = new AbortController();
@@ -180,7 +182,7 @@ async function run(samples, {failure = false, old = []} = {}) {
     record: e => records.push(e), sendAlert: (...args) => roleMails.push(args),
     parents: new Map([['worker', 'boss'], ['boss', '@user']]), superRole: 'boss',
     ai: {run: () => calls.push('ai')}, judgeCmd: 'fake', print: () => {}, intervalMs: 1000, stallN: 2,
-    now: () => 1_000_000 + cycle * 60_000, measure: () => clock,
+    now: () => times?.[cycle] ?? 1_000_000 + cycle * 60_000, measure: () => clock,
     sleep: async () => { if (++cycle >= samples.length) controller.abort(); },
   });
   return {order, records, notices, roleMails, calls};
@@ -224,4 +226,89 @@ test('기기 경보의 과거 원장 기록은 일반 승급·해소·AI 경로�
   assert.deepEqual(out.notices, []);
   assert.deepEqual(out.roleMails, []);
   assert.deepEqual(out.calls, []);
+});
+
+test('F1: 검수 재현 — 압박 단계만 모름이어도 세그먼트100%는 울린다', () => {
+  const notices = [], records = [];
+  const watch = createMachineMemoryWatch({read: () => parseMachineMemory(raw({segments: 1000, pressure: 8})),
+    spawn: () => ({status: 1}), notify: (...args) => {
+      notices.push(args); return {via: 'system', error: null};
+    }});
+  watch.tick({now: 1, record: e => records.push(e)});
+  assert.equal(notices.length, 1);
+  assert.match(notices[0][0], /압박 단계 모름/);
+  assert.equal(records[0].stage, 2);
+});
+
+test('F2: 검수 재현 — 24시간 공백을 넘어 회복 한 번씩을 이어 세지 않는다', async () => {
+  const out = await run([sample(97), sample(79), sample(79)],
+    {times: [1_000_000, 1_060_000, 87_400_000]});
+  assert.equal(out.records.filter(e => e.kind === 'alert' && e.resolved).length, 0);
+});
+
+test('F1: 압박·스왑의 모름은 공간 울림을 막지 않고 본문·기록에서 모름으로 남는다', () => {
+  for (const output of [raw({pressure: 0}), raw({pressure: 3}), raw({pressure: 8}),
+    without(raw(), MACHINE_MEMORY_KEYS[0]), without(raw(), 'vm.swapusage'),
+    raw().replace('7498.31M', 'NaNM')]) {
+    const parsed = parseMachineMemory(output);
+    assert.equal(parsed.known, true);
+    const alert = assessMachineMemory({}, parsed, 1).alert;
+    assert.equal(alert.stage, 1);
+    const body = machineMemoryBody(alert);
+    assert.match(body, /압박 단계 모름|스왑 모름/);
+    const summary = accumulateMachineMemory(null, parsed);
+    assert.equal(summary.failures, 0, '보조 값만 모르면 공간 읽기 실패로 세지 않는다');
+    if (parsed.pressure === null) assert.equal(summary.last.pressure, null);
+    if (parsed.swapUsedMb === null) assert.equal(summary.last.swapUsedMb, null);
+  }
+});
+
+test('F1: 공간 한 축이 위급이면 울리고, 한 축만 낮으면 회복으로 세지 않는다', () => {
+  for (const output of [without(raw({segments: 970}), 'vm.compressor.pages_compressed'),
+    without(raw({pages: 970}), 'vm.compressor.segment.total')]) {
+    const parsed = parseMachineMemory(output);
+    assert.equal(parsed.known, false);
+    assert.equal(assessMachineMemory({}, parsed, 1).alert.stage, 2);
+    const summary = accumulateMachineMemory(null, parsed);
+    assert.equal(summary.failures, 1);
+    assert.equal(summary.last.segmentPct === null || summary.last.pagePct === null, true);
+    assert.equal(summary.max.segmentPct === null || summary.max.pagePct === null, true);
+  }
+  const open = assessMachineMemory({}, sample(97), 1).state;
+  const recovering = assessMachineMemory(open, sample(79), 2).state;
+  for (const output of [without(raw({segments: 500}), 'vm.compressor.pages_compressed'),
+    without(raw({pages: 500}), 'vm.compressor.segment.total'),
+    without(raw(), 'vm.compressor.segment.total', 'vm.compressor.pages_compressed')]) {
+    const unknown = assessMachineMemory(recovering, parseMachineMemory(output), 3);
+    assert.equal(unknown.alert, undefined);
+    assert.equal(unknown.resolved, undefined);
+    assert.equal(unknown.state.normalCycles, 0);
+    assert.equal(assessMachineMemory(unknown.state, sample(79), 4).resolved, undefined);
+  }
+});
+
+test('F1: sysctl의 일부 키 누락 종료1에서도 읽힌 공간 97%를 버리지 않는다', () => {
+  for (const output of [without(raw({segments: 970}), MACHINE_MEMORY_KEYS[0]),
+    without(raw({segments: 970}), 'vm.compressor.pages_compressed')]) {
+    const parsed = readMachineMemory(() => ({status: 1, stdout: output}), 'darwin');
+    assert.equal(assessMachineMemory({}, parsed, 1).alert.stage, 2);
+  }
+});
+
+test('F2: 회복 10분 경계·공백 뒤 첫 관측·단계 상승을 구분한다', () => {
+  assert.equal(MACHINE_MEMORY_RECOVERY_GAP_MS, 600_000);
+  const open = assessMachineMemory({}, sample(97), 1_000_000).state;
+  const once = assessMachineMemory(open, sample(79), 1_060_000).state;
+  assert.ok(assessMachineMemory(once, sample(79), 1_660_000).resolved, '정확히 10분은 이어 센다');
+  const afterGap = assessMachineMemory(once, sample(79), 1_660_001);
+  assert.equal(afterGap.resolved, undefined);
+  assert.equal(afterGap.state.normalCycles, 1);
+  assert.ok(assessMachineMemory(afterGap.state, sample(79), 1_720_001).resolved);
+  const same = assessMachineMemory(once, sample(97), 87_400_000);
+  assert.equal(same.alert, undefined);
+  assert.equal(same.state.since, open.since);
+  const critical = assessMachineMemory({}, sample(90), 1_000_000).state;
+  const raised = assessMachineMemory(critical, sample(97), 87_400_000);
+  assert.equal(raised.alert.stage, 2);
+  assert.equal(raised.alert.since, critical.since);
 });

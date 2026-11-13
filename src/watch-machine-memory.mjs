@@ -5,6 +5,8 @@ import {notifyUser} from './user-notify.mjs';
 // XNU vm_compressor.c의 공간 부족선은 약 98%. 90/97/80은 실측으로 최적화한 값이 아니다.
 // 공개 근거: apple-oss-distributions/xnu f6217f8, vm_compressor.c:903,918.
 export const MACHINE_MEMORY_LIMITS = Object.freeze({critical: 90, imminent: 97, recovery: 80});
+// 정상 순회 간격 약190초는 허용하되 잠자기·감시 중단을 넘어 회복을 이어 세지 않는다.
+export const MACHINE_MEMORY_RECOVERY_GAP_MS = 10 * 60_000;
 export const MACHINE_MEMORY_KEYS = Object.freeze([
   'kern.memorystatus_vm_pressure_level',
   'vm.swapusage',
@@ -22,26 +24,24 @@ export function parseMachineMemory(output) {
   for (const line of String(output).split('\n')) {
     const match = line.match(/^([^:]+):\s*(.*)$/);
     if (!match) continue;
-    if (values.has(match[1])) return unknown('invalid');
-    values.set(match[1], match[2]);
+    values.set(match[1], values.has(match[1]) ? null : match[2]);
   }
-  if (MACHINE_MEMORY_KEYS.some(key => !values.has(key))) return unknown('missing-key');
   const integer = key => {
     const raw = values.get(key);
     const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
     return Number.isSafeInteger(value) ? value : NaN;
   };
-  const pressure = integer(MACHINE_MEMORY_KEYS[0]);
-  if (![1, 2, 4].includes(pressure)) return unknown('pressure');
+  const rawPressure = integer(MACHINE_MEMORY_KEYS[0]);
+  const pressure = [1, 2, 4].includes(rawPressure) ? rawPressure : null;
   const [segments, segmentLimit, pages, pageLimit] = MACHINE_MEMORY_KEYS.slice(2).map(integer);
-  if (![segments, segmentLimit, pages, pageLimit].every(Number.isFinite)
-      || segmentLimit <= 0 || pageLimit <= 0) return unknown('invalid');
-  const swap = values.get('vm.swapusage').match(/\bused\s*=\s*(\d+(?:\.\d+)?)([KMGT])\b/);
-  if (!swap) return unknown('swap');
-  const swapUsedMb = Number(swap[1]) * ({K: 1 / 1024, M: 1, G: 1024, T: 1024 ** 2}[swap[2]]);
-  if (!Number.isFinite(swapUsedMb)) return unknown('swap');
-  return {known: true, segmentPct: segments / segmentLimit * 100,
-    pagePct: pages / pageLimit * 100, pressure, swapUsedMb};
+  const ratio = (used, limit) => Number.isFinite(used) && Number.isFinite(limit) && limit > 0
+    ? used / limit * 100 : null;
+  const segmentPct = ratio(segments, segmentLimit), pagePct = ratio(pages, pageLimit);
+  const swap = values.get('vm.swapusage')?.match(/\bused\s*=\s*(\d+(?:\.\d+)?)([KMGT])\b/);
+  const swapMb = swap ? Number(swap[1]) * ({K: 1 / 1024, M: 1, G: 1024, T: 1024 ** 2}[swap[2]]) : NaN;
+  // known은 두 공간 축을 모두 읽었는가다. 보조 값은 각각 null(모름)일 수 있다.
+  return {known: segmentPct !== null && pagePct !== null, segmentPct, pagePct, pressure,
+    swapUsedMb: Number.isFinite(swapMb) ? swapMb : null};
 }
 
 export function readMachineMemory(spawn = spawnSync, platform = process.platform) {
@@ -50,25 +50,33 @@ export function readMachineMemory(spawn = spawnSync, platform = process.platform
     const result = spawn('/usr/sbin/sysctl', MACHINE_MEMORY_KEYS, {
       encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024, env: {...process.env, LC_ALL: 'C'},
     });
-    if (result.error || result.status !== 0) return unknown(result.error?.code === 'ETIMEDOUT' ? 'timeout' : 'read');
-    return parseMachineMemory(result.stdout);
+    if (result.error || result.signal || result.status == null) {
+      return unknown(result.error?.code === 'ETIMEDOUT' ? 'timeout' : 'read');
+    }
+    const sample = parseMachineMemory(result.stdout);
+    // 없는 키로 종료1이어도 성공한 다른 키의 출력은 쓴다. 완전한 출력의 원인 불명 실패는 모름이다.
+    const complete = [sample.segmentPct, sample.pagePct, sample.pressure, sample.swapUsedMb]
+      .every(Number.isFinite);
+    return result.status === 0 || !complete ? sample : unknown('read');
   } catch { return unknown('read'); }
 }
 
 export function assessMachineMemory(state, sample, now) {
-  // 모름은 회복으로 세지 않으며, 정상-모름-정상을 연속 두 번으로 잇지도 않는다.
-  if (!sample.known) return {state: {...state, normalCycles: 0}};
-  const usage = Math.max(sample.segmentPct, sample.pagePct);
+  const usage = Math.max(...[sample.segmentPct, sample.pagePct].filter(Number.isFinite));
   const stage = usage >= MACHINE_MEMORY_LIMITS.imminent ? 2
     : usage >= MACHINE_MEMORY_LIMITS.critical ? 1 : 0;
   if (stage) {
     const next = {...state, since: state.since ?? now,
-      stage: Math.max(state.stage ?? 0, stage), normalCycles: 0};
+      stage: Math.max(state.stage ?? 0, stage), normalCycles: 0, lastRecoveryAt: null};
     return {state: next, ...(stage > (state.stage ?? 0) ? {alert: {...next, sample}} : {})};
   }
-  const normalCycles = usage < MACHINE_MEMORY_LIMITS.recovery ? (state.normalCycles ?? 0) + 1 : 0;
+  // 한 축만 낮은 것은 회복 근거가 아니다. 보지 못한 축이 높을 수 있다.
+  if (!sample.known) return {state: {...state, normalCycles: 0, lastRecoveryAt: null}};
+  const consecutive = state.normalCycles > 0 && Number.isFinite(state.lastRecoveryAt)
+    && now >= state.lastRecoveryAt && now - state.lastRecoveryAt <= MACHINE_MEMORY_RECOVERY_GAP_MS;
+  const normalCycles = usage < MACHINE_MEMORY_LIMITS.recovery ? (consecutive ? state.normalCycles + 1 : 1) : 0;
   if (state.since != null && normalCycles >= 2) return {state: {}, resolved: state};
-  return {state: state.since == null ? {} : {...state, normalCycles}};
+  return {state: state.since == null ? {} : {...state, normalCycles, lastRecoveryAt: normalCycles ? now : null}};
 }
 
 // 울릴 때만 기기 전체를 한 번 읽는다. 명령줄 인자·PID는 수집하지 않는다.
@@ -93,14 +101,15 @@ export function topMachineProcesses(spawn = spawnSync) {
 }
 
 export function machineMemoryBody({stage, sample}, processes = []) {
-  const usage = Math.max(sample.segmentPct, sample.pagePct);
-  const axis = sample.segmentPct >= sample.pagePct ? '세그먼트' : '보관 페이지';
-  const pressure = {1: '정상', 2: '경고', 4: '위급'}[sample.pressure];
+  const usage = Math.max(...[sample.segmentPct, sample.pagePct].filter(Number.isFinite));
+  const axis = (sample.segmentPct ?? -Infinity) >= (sample.pagePct ?? -Infinity) ? '세그먼트' : '보관 페이지';
+  const pressure = {1: '정상', 2: '경고', 4: '위급'}[sample.pressure] ?? '모름';
+  const swap = Number.isFinite(sample.swapUsedMb) ? `${(sample.swapUsedMb / 1024).toFixed(1)}G 사용` : '모름';
   const biggest = processes.length ? ` 큰 프로세스: ${processes
     .map(p => `${p.name} ${(p.rssMb / 1024).toFixed(1)}G`).join(', ')}.` : '';
   return `맥 메모리 ${stage === 2 ? '고갈 임박' : '위급'}: 압축 메모리 공간 ${usage.toFixed(1)}% 사용(${axis}). `
     + '100%가 되면 맥이 멈추고 재부팅될 수 있다(11/13 사례). 메모리를 많이 쓰는 앱을 닫아라. '
-    + `스왑 ${(sample.swapUsedMb / 1024).toFixed(1)}G 사용, 압박 단계 ${pressure}.${biggest}`;
+    + `스왑 ${swap}, 압박 단계 ${pressure}.${biggest}`;
 }
 
 // 이 경보의 사고 기억은 프로세스 안에만 둔다. 재시작·재부팅 뒤 첫 위급은 다시 울린다.

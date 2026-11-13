@@ -55,12 +55,13 @@ export function accumulateTiming(window, sample) {
 // 표본 배열 없이 마지막 값과 기록 구간의 최대·실패 횟수만 고정 크기로 보관한다.
 export function accumulateMachineMemory(window, sample) {
  const next = window ?? {last: null, max: null, failures: 0};
- if (!sample.known) { next.last = null; next.failures++; return next; }
+ if (!sample.known) next.failures++; // 공간 축을 하나라도 못 읽은 관측만 센다.
  const last = Object.fromEntries(['segmentPct', 'pagePct', 'pressure', 'swapUsedMb']
-  .map(key => [key, round1(sample[key])]));
- next.last = last;
+  .map(key => [key, Number.isFinite(sample[key]) ? round1(sample[key]) : null]));
+ next.last = Object.values(last).some(value => value !== null) ? last : null;
+ if (!next.last) return next;
  next.max = Object.fromEntries(Object.entries(last).map(([key, value]) =>
-  [key, Math.max(next.max?.[key] ?? value, value)]));
+  [key, value === null ? next.max?.[key] ?? null : Math.max(next.max?.[key] ?? value, value)]));
  return next;
 }
 
