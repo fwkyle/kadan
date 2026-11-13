@@ -83,6 +83,7 @@ test('Rottie first: the secretary launches exactly the saved command, even from 
     assert.equal(f.calls[0].cmd, saved);
     assert.equal(current.cmd, saved);
     assert.equal('optionCarry' in current, false);
+    assert.equal('difficulty' in current, false);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, 'secretary-resume.json'))).startDigest,
       startDigest(current));
   }
