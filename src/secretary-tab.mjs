@@ -15,11 +15,13 @@ export const TAB_CALL_TIMEOUT_MS = 5000; // 로티 호출 한 번의 상한. 1�
 const bounded = (run = spawnSync) => (bin, args, options) => run(bin, args, {...options, timeout: TAB_CALL_TIMEOUT_MS});
 
 // 열지 말지만 정한다(읽기 전용). 이유 낱말은 시험·로그용이다.
-// auto: launchd가 부른 `up --auto`. 이때만 KADAN_WINDOW=none+FORCE를 "로티가 없을 수 있다"로 읽는다.
-// 사람이 셸에서 정한 KADAN_WINDOW=none은 FORCE가 있어도 존중한다.
+// auto: `kadan up --auto`로 불렸다(launchd 전용 인자). 이때만 KADAN_WINDOW=none(FORCE 유무 무관)을 "로티가 없을 수 있다"로 읽는다.
+// `--auto` 없이 사람이 셸에서 정한 KADAN_WINDOW=none은 FORCE가 있어도 존중한다. 사람이 셸에서 `kadan up --auto`를 직접 치면 launchd와 구별되지 않아 같은 취급이다.
 export function planSecretaryTab({env = process.env, auto = false, setting, entries, session, connect, show}) {
   if (setting?.window !== 'rottie' || !setting.rottieBin) return {open: false, reason: 'setting-not-rottie'};
-  const forced = env.KADAN_WINDOW === 'none' && auto && Boolean(env.KADAN_WINDOW_FORCE);
+  // `up --auto`는 launchd만 부른다. 운영에 깔린 옛 plist는 KADAN_WINDOW=none만 있고 FORCE가 없으므로 FORCE는 보지 않는다
+  // (2026-11-13 실측: FORCE를 요구해 보조 경로가 운영에서 한 번도 안 돌았다). `--auto` 없는 사람의 none은 그대로 존중한다.
+  const forced = env.KADAN_WINDOW === 'none' && auto;
   if (env.KADAN_WINDOW && env.KADAN_WINDOW !== 'rottie' && !forced) {
     return {open: false, reason: `env-window-${env.KADAN_WINDOW}`};
   }
@@ -105,12 +107,16 @@ export function attachHiddenSecretary({home, floor, session, readEntries, record
   }
 }
 
-// 자동 주기에서 사람이 알아야 하는 실패만 한 줄로 만든다. 정상 건너뜀(탭 있음·로티 없음·설정 none 등)은 null.
+// 자동 주기에서 사람이 알아야 하는 실패·건너뜀만 한 줄로 만든다. 정상 건너뜀(탭 있음·로티 없음·설정 none 등)은 null.
 // 이 줄은 `up --auto`의 changedOutput(revive-state.json의 lastOutput)을 지나므로 같은 원인은 처음 한 번만 autostart.log에 남고,
 // 성공이나 다른 원인이 오면 다시 한 번 남는다. 상태가 파일이라 감시기·up 재시작·launchd 새 프로세스에도 유지된다.
 export function attachFailureLine(result) {
   if (!result || result.attached) return null;
-  const reportable = result.reason === 'open-failed' || result.reason === 'tab-unknown'
-    || String(result.reason).startsWith('error:');
+  const reason = String(result.reason);
+  if (reason.startsWith('env-window-')) {
+    return `비서 로티 탭 붙이기 건너뜀: KADAN_WINDOW=${reason.slice('env-window-'.length)}라 자동 연결하지 않음`;
+  }
+  if (reason === 'rottie-unavailable') return '비서 로티 탭 붙이기 건너뜀: 로티가 응답하지 않음(켜지면 자동으로 붙임)';
+  const reportable = reason === 'open-failed' || reason === 'tab-unknown' || reason.startsWith('error:');
   return reportable ? `비서 로티 탭 붙이기 실패: ${result.detail ?? result.reason}` : null;
 }
