@@ -101,6 +101,21 @@ Rottie의 자동 복원 설정이 켜져 있고 프로젝트가 열려 있을 �
 
 Claude 역할의 명시 `--effort`도 조회·복원한다. 초기 복원 버전에서 빠진 값은 같은 역할과 폴더의 정확한 `restoredFrom` 시작 기록에서만 보완한다. 누락·변조된 추론 강도로 실행하지 않는다. 일반 `/effort` 실행 중 변경값은 수집하지 않는다.
 
+복원으로 새 세션을 만들 때 그 세대의 시작 기록에 있던 값을 잃지 않게 잇는다. 규칙은 보존뿐이다.
+
+- **Stop 훅**: Claude 역할이면 지금 저장 폴더의 `--settings <설정 파일>`을 다시 붙인다(`kadan start`·`restart`·`reopen`과 같은 처리). 옛 명령의 경로를 옮기지 않는다. 설정 파일이 없으면 붙이지 않는다.
+- **이어 주는 옵션**: Claude의 `--permission-mode <값>`·`--dangerously-skip-permissions`·`--allow-dangerously-skip-permissions`, Codex의 `-p`/`--profile`과 `-c`/`--config <키=값>`.
+- **언제 잇나**: 시작 기록에는 있는데 Rottie가 준 복원 명령에 없을 때만, 기록된 값 그대로 명령 끝에 띄어 쓴 꼴(`-c 값`)로 더한다. 시작 기록에 없던 값은 붙이지 않고, 복원 명령에 이미 있는 값은 바꾸지도 덧붙이지도 않는다(값이 달라도 그대로 둔다).
+- **"이미 있다"의 기준**: 표기와 상관없이 본다 — `-c 값`·`-c값`·`-c=값`·`--config 값`·`--config=값`, 프로필도 같다. Claude 권한은 한 묶음이라 복원 명령에 권한 옵션이 하나라도 있거나, 세션이 할 수 있는 일을 좁히는 옵션(`--restricted`·`--safe-mode`·`--bare`·`--tools`·`--allowedTools`·`--disallowedTools`·`--permission-prompts`)이 있으면 더하지 않는다. Codex 설정 값은 키의 첫 마디로 묶는다(`a={…}`와 `a.b=…`는 같은 설정). 승인(`approval…`)과 샌드박스(`sandbox…`) 키는 각각 한 묶음이고, 같은 설정을 바꾸는 전용 옵션(`--sandbox`·`--ask-for-approval`·`--dangerously-bypass-approvals-and-sandbox`·`--model`·`--enable`/`--disable` 등)이 복원 명령에 있으면 그 묶음도 이미 있는 것으로 본다.
+- **프로필이 다르면**: 복원 명령의 프로필이 시작 기록과 다르면(시작 기록에 없던 프로필이 생긴 경우와 `-c profile=…` 포함) 그 프로필이 무엇을 정하는지 알 수 없으므로 설정 값을 하나도 얹지 않는다(`profile-differs`).
+- **제한과 함께 쓰던 권한**: 그 세대가 권한을 카단이 잇지 않는 옵션(`--restricted`·`--disallowedTools`·`--sandbox`·`--ask-for-approval` 등)으로도 정하고 있었는데 복원 명령에 그 옵션이 없으면, 권한 값만 따로 잇지 않는다(`restriction-lost`). 제한 없이 권한만 이으면 그 세대가 돌던 것보다 넓게 뜨기 때문이다.
+- **같은 키의 반복**: 시작 기록에 같은 설정 키가 여러 번 있으면 적힌 순서대로 모두 잇는다(Codex는 나중 값이 이긴다).
+- **어느 기록을 보나**: 복원 대상 세대의 시작 기록 하나만 본다. 그 세대의 명령에 있으면 잇고, 없으면 없는 것이 답이다. 더 옛 세대를 거슬러 찾지 않는다 — 그 사이에 프로필을 바꿨거나 권한을 좁힌 세대가 있으면 옛 값을 되살리게 되기 때문이다. 그래서 이미 옵션을 잃고 떠 있는 세대는 복원으로 되찾지 못한다. `kadan restart`도 마지막 시작 명령을 바탕으로 다시 띄우므로 Stop 훅만 다시 붙고 잃은 옵션은 돌아오지 않는다. 필요한 옵션을 넣은 명령으로 직접 다시 띄워야 한다.
+- **잇지 않는 경우**: 모르면 잇지 않는다. 시작 명령이나 복원 명령에 **카단이 아는 옵션 표에 없는 옵션이 하나라도 있거나**(값을 받는지, 권한·설정을 바꾸는지 알 수 없다), 낱말로 읽지 못하거나, 짧은 옵션 묶음(`-xc`)·값 없는 옵션에 붙은 `=값`·값이 빠진 옵션처럼 읽지 못하는 꼴이 있거나, 값이 허용 목록 밖이거나, 프로필이 두 번 있거나 권한 값이 서로 다르게 두 번 있으면 아무것도 더하지 않는다. 역할은 Rottie가 준 명령 그대로 열리고, 표준 오류에 경고 한 줄이 나간다. 옵션 표는 `claude --help`·`codex resume --help`에서 옮긴 것이라, 실행기에 새 옵션이 생기면 표에 넣기 전까지 그 옵션이 든 명령에는 잇지 않는다.
+- **기록**: 새 시작 기록에 `optionCarry`가 남는다. `added`면 `optionCarryKeys`에 이은 옵션 이름(값은 `cmd`에 있다), `skipped`면 `optionCarryReason`에 이유 낱말(`original-unreadable`·`original-ambiguous`·`command-ambiguous`·`command-dashed`·`profile-differs`·`restriction-lost`·`quote-failed`·`internal`)이 있다. 이을 것이 없었으면 칸이 없다.
+
+실행기·모델·추론 강도·비서 대화의 대조는 Rottie가 준 원래 명령으로 하고, 위에서 만든 명령은 세션 실행과 시작 기록에만 쓴다. 살아 있는 pane을 다시 잇는 경우에는 명령을 만들지 않는다.
+
 ## 비서에게 복원 예외 전달
 
 기본 복원은 Rottie 코드가 맡는다. `kadan recovery report --report <JSON>`은 실패하거나

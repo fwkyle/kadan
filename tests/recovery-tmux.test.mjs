@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {ledgerHome, appendLedger, readSystemLedger} from '../src/ledger.mjs';
 import {tmuxFloor, tmux} from '../src/floor-tmux.mjs';
 import {inspectRecovery, restoreRecovery} from '../src/recovery.mjs';
+import {writeClaudeSettings, claudeSettingsPath} from '../src/stop-hook-settings.mjs';
 
 // kill-server가 돌아와도 리눅스에서는 옛 서버가 소켓을 정리하는 중일 수 있다
 // (CI의 'server exited unexpectedly'). 서버가 정말 없다는 응답이 올 때까지 기다린다.
@@ -81,4 +82,54 @@ setInterval(() => {}, 1000);
       'rottie-bin': bin, 'allow-reuse': 'false'}), /교체되거나/);
     context = receipt.context;
   }
+});
+
+test('real tmux: the restored process receives the hook settings and the original permission mode', {
+  skip: spawnSync('tmux', ['-V']).status !== 0,
+}, t => {
+  const home = ledgerHome();
+  const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR};
+  process.env.KADAN_SOCKET = `recovery-argv-${process.pid}`;
+  process.env.TMUX_TMPDIR = home;
+  t.after(() => {
+    killServerAndWait(); // Only this test-owned named server.
+    for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const bin = path.join(home, 'fixture-rottie-argv');
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const args=process.argv.slice(2);
+if(args[0] !== 'terminal' || args[1] !== 'create')process.exit(2);
+console.log(JSON.stringify({ok:true,result:{terminal:{id:'terminal-'+process.pid}}}));
+`, {mode: 0o700});
+  const cwd = path.join(home, 'workspace-argv'); fs.mkdirSync(cwd);
+  const tools = path.join(home, 'argv-tools'); fs.mkdirSync(tools);
+  const claude = path.join(tools, 'claude'), dump = path.join(tools, 'argv.json');
+  // 가짜 실행기: 받은 인자를 그대로 파일에 남기고 살아 있는다.
+  fs.writeFileSync(claude, `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(dump)}, JSON.stringify(process.argv.slice(2)));
+setInterval(() => {}, 1000);
+`, {mode: 0o700});
+  writeClaudeSettings(home, '/fixture/stop-hook.sh');
+  const before = '11111111-1111-4111-8111-111111111111', after = '22222222-2222-4222-8222-222222222222';
+  const originalCommand = `'${claude}' --resume ${before} --fork-session --model fixture-model --effort high`
+    + " '--permission-mode' 'bypassPermissions'";
+  const resumeCommand = `'${claude}' '--resume' '${after}' '--model' 'fixture-model' '--effort' 'high'`;
+  const original = tmuxFloor.create({session: 'kadan-keeper', role: 'keeper', cwd, cmd: originalCommand});
+  appendLedger({kind: 'start', floor: 'tmux', role: 'keeper', session: 'kadan-keeper',
+    cwd, cmd: originalCommand, roleProfile: 'conductor', by: 'supervisor', ...original,
+    rottieTerminalId: 'original-argv'});
+  const context = inspectRecovery({terminal: 'original-argv', 'pane-pid': original.panePid});
+  assert.equal(killServerAndWait().status, 0);
+  fs.rmSync(dump, {force: true});
+  restoreRecovery({context: JSON.stringify(context), command: `exec ${resumeCommand}`,
+    'rottie-bin': bin, 'allow-reuse': 'false'});
+  const deadline = Date.now() + 5000;
+  while (!fs.existsSync(dump) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(dump, 'utf8')), ['--settings', claudeSettingsPath(home),
+    '--resume', after, '--model', 'fixture-model', '--effort', 'high', '--permission-mode', 'bypassPermissions']);
+  const start = readSystemLedger().filter(e => e.kind === 'start' && e.role === 'keeper').at(-1);
+  assert.equal(start.optionCarry, 'added');
+  assert.deepEqual(start.optionCarryKeys, ['permission-mode']);
 });
