@@ -46,8 +46,15 @@ export function emptyListFacts() {
   };
 }
 
+// 이 프로세스에서 카드 사실을 적용한 시계의 최고점. futureTimes는 적용 시각보다 뒤인 시각만 담는다.
+// 그래서 시계가 이 값보다 앞에 있는 동안(시계 역행)에는 이미 과거로 처리한 시각이 다시 미래일 수 있고,
+// futureTimes로 구한 "다음 시각 경계"(nextTimeBoundary)에 그 시각이 빠진다. 사실은 프로세스 메모리에만 있다.
+let appliedClockHigh = -Infinity;
+export const listFactsClockHigh = () => appliedClockHigh;
+
 // row: 새 사건, previousRow: 바로 앞 원래 행(없으면 null), now: 미래 시각 판정 기준(적용 시각).
 export function advanceListFacts(previous, previousRow, row, now = Date.now(), {bounded = false} = {}) {
+  if (now > appliedClockHigh) appliedClockHigh = now;
   const facts = {...(previous ?? emptyListFacts())};
   const first = !previousRow, index = facts.n;
   facts.n = index + 1;
