@@ -18,10 +18,13 @@ const HOUR = 60 * 60 * 1000;
 const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
 const WATCH_PARENT = "const pp=process.ppid;setInterval(()=>{try{process.kill(pp,0)}catch{process.exit(0)}},200);";
 const wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-function until(check, what) {
+// detail(): 끝내 안 됐을 때 실패 문구에 덧붙일 관찰값(왜 안 됐는지 로그만으로 알 수 있게).
+function until(check, what, detail = () => '') {
   for (let i = 0; i < 400 && !check(); i++) wait(50);
-  assert.ok(check(), `기다렸지만 되지 않음: ${what}`);
+  assert.ok(check(), `기다렸지만 되지 않음: ${what}${detail()}`);
 }
+// 창에 찍힌 글 전체(위로 밀려 올라간 줄 포함). 보이는 화면만 읽으면 긴 우편의 첫 줄은 화면 밖으로 밀려 있을 수 있다.
+const paneHistory = session => tmux(['capture-pane', '-p', '-S', '-', '-t', `=${session}:`]).stdout ?? '';
 
 function setup(t, name) {
   const home = ledgerHome();
@@ -83,6 +86,8 @@ test('실제 왕복: 쉼(가짜 시계) → 후보 우편이 직속 감독 창�
   fs.writeFileSync(hierarchy, JSON.stringify({idleboss: '@user', idlecase: 'idleboss'}));
   appendLedger({kind: 'hierarchy-loaded', path: hierarchy, hash: 'x', by: 'watch'}, s.home);
   launch(s, 'idleboss', 'conductor');
+  // 감독 창을 6행으로 줄인다: 받은 우편의 첫 줄이 어느 OS에서든 보이는 화면 밖으로 밀리게 한다(아래 도착 확인 참고).
+  assert.equal(tmux(['resize-window', '-t', '=kadan-idleboss:', '-x', '80', '-y', '6']).status, 0);
   const created = launch(s, 'idlecase', 'worker', {HOLD: `${s.lock},${s.rollout}`});
   const now = Date.now();
 
@@ -112,7 +117,13 @@ test('실제 왕복: 쉼(가짜 시계) → 후보 우편이 직속 감독 창�
   assert.equal(sends[0].role, 'idleboss');
   assert.match(readMailBody(sends[0].digest, s.home), /끄기: kadan stop idlecase$/m);
   // 감독 창에 우편이 들어갔다. 사용자 알림은 하나도 나가지 않았다.
-  until(() => tmuxFloor.read('kadan-idleboss').includes('[정리 후보]'), '감독 창에 후보 우편이 보인다');
+  // 가짜 실행기는 입력을 읽지 않아, 터미널이 되돌려 찍는 양이 OS의 입력 대기열 크기에서 끊긴다(macOS 약 1KB, Linux 약 4KB — 격리 실측 2026-11-13).
+  // 많이 찍히는 OS에서는 우편 첫 줄이 보이는 화면 밖으로 밀린다(Ubuntu CI에서 보이는 화면만 읽던 단언이 실패했다).
+  // 그래서 위로 밀린 줄까지 읽고, 창을 6행으로 줄여 어느 OS에서든 "첫 줄이 화면 밖"인 조건으로 확인한다.
+  until(() => paneHistory('kadan-idleboss').includes('[정리 후보]'), '감독 창에 후보 우편이 찍혔다',
+    () => ` — 보이는 화면 ${tmuxFloor.read('kadan-idleboss').length}자, 기록 ${paneHistory('kadan-idleboss').length}자, 기록 끝: ${JSON.stringify(paneHistory('kadan-idleboss').slice(-200))}`);
+  // 찍히는 도중에는 첫 줄이 잠깐 보일 수 있어, 밀려 나갈 때까지 기다린다. 이 조건(첫 줄이 화면 밖)에서도 위 확인이 통과한 것이다.
+  until(() => !tmuxFloor.read('kadan-idleboss').includes('[정리 후보]'), '우편 첫 줄이 보이는 화면(6행) 밖으로 밀렸다');
   assert.equal(fs.existsSync(process.env.KADAN_TEST_NOTIFY_SINK), false, '사용자 알림 없음');
 
   // 한 시간 뒤: 여전히 후보지만 다시 보내지 않는다(근거는 위 우편).

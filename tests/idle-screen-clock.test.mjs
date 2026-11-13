@@ -76,6 +76,18 @@ test('화면을 못 읽은 세션은 시각이 없고 상태에서도 빠진다.
   assert.equal(third.clocks.get('kadan-a').since, 9000);
 });
 
+test('쉬는 화면이 아니라고 한 화면(pause)은 시계를 세지 않는다 — 지문이 같아도 매번 지금부터이고, 이유가 풀리면 그때부터 센다', () => {
+  const marked = screen => screen.includes('still running') ? '백그라운드 셸' : null;
+  const busy = claude({body: ['✻ Cooked for 24s · done 7:41 PM · 2 shells still running', '']});
+  const first = observeScreens({previous: {}, live: [live('kadan-a')], read: () => busy, now: 1000, pause: marked});
+  const second = observeScreens({previous: first.sessions, live: [live('kadan-a')], read: () => busy, now: 5000, pause: marked});
+  assert.deepEqual(second.clocks.get('kadan-a'), {since: 5000, paused: '백그라운드 셸'});
+  assert.equal(second.sessions['kadan-a'].since, 5000);
+  // 같은 글자인데 이유가 풀린 경우(판독이 달라진 경우)에도 멈췄던 시각 뒤부터 센다.
+  const third = observeScreens({previous: second.sessions, live: [live('kadan-a')], read: () => busy, now: 9000});
+  assert.deepEqual(third.clocks.get('kadan-a'), {since: 5000});
+});
+
 test('상태의 시각이 미래이거나 모양이 다르면 다시 센다', () => {
   const digest = screenDigest(claude());
   const cases = [{identity: '100:1', digest, since: 99_999}, {identity: '100:1', digest, since: 'x'}, {identity: '100:1', digest: '', since: 1}, null];

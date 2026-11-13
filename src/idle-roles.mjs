@@ -7,12 +7,15 @@
 //    끝나지 않은 카드가 없고(일반감독은 책임진 끝나지 않은 업무도 없고), 아래 "빼는 조건"에 하나도 걸리지 않는 역할.
 //  - 빼는 조건: 슈퍼감독·비서·기반 프로세스·프로필 기록 없음, 열린 사용자 결정, 답 대기(보냈거나 받을 차례), 안 읽은 보관 우편,
 //    진행 중 인계, 업무의 차례, 살아 있는 하위가 있는 감독, 응답 생성 중·최근 사람 입력, 살아 있는 상위 없음(kyle을 울리지 않는다).
+//  - 백그라운드 셸·터미널 표시가 있는 화면은 일하는 화면이다(감시가 정당한 대기로 보는 것과 같은 판독, watch-status-line.mjs
+//    backgroundMarker). 표시가 있는 동안은 쉼 시계를 세지 않는다: 표시가 사라진 때부터 기준 시간을 센다.
+//  - 후보마다 화면을 한 번 더 읽어 확인한다. 표본 때와 본문이 달라졌으면 후보가 아니고 쉼 시각을 이번 실행 시각으로 다시 센다.
 //  - 다시 열 수 없는 세션은 빼지 않고 줄에 "reopen 불가(이유)"로 적는다.
 //  - 끄기 파일(idle-roles.off)은 우편만 막는다. 화면 표본은 계속 쌓여, 켜기 전에 --dry-run으로 목록을 먼저 볼 수 있다.
 //  - 같은 역할은 기준 시간에 한 번만 알린다. 근거는 보낸 우편이다: 원장의 send(보낸 쪽 idle-roles) 본문에서 역할을 다시 읽는다.
 //    전달 여부가 불명확했던 시도만 상태 파일에 적어 한 시간마다 되풀이하지 않는다.
 //
-// 비용(한 번 실행): 살아 있는 세션마다 화면 읽기 1번 + 상태 파일 1번. 기준 시간을 넘긴 세션이 하나도 없으면 여기서 끝난다(원장을 읽지 않는다).
+// 비용(한 번 실행): 살아 있는 세션마다 화면 읽기 1번 + 상태 파일 1번. 다른 조건을 모두 통과한 역할만 화면을 한 번 더 읽는다. 기준 시간을 넘긴 세션이 하나도 없으면 여기서 끝난다(원장을 읽지 않는다).
 // 넘긴 세션이 있으면 원장 읽기 1번 + 카드 요약 1번 + 업무 목록 1번 + 결정 목록 1번 + 관계표 1번, 보낼 우편마다 우편 명령 1번(그 안에서 원장 1번).
 // 원장이 10배면 그 읽기들이 약 10배다(지금 약 1초 → 약 10초). 그래서 감시 주기 안에서 돌지 않고 한 시간에 한 번만 돈다.
 import fs from 'node:fs';
@@ -29,14 +32,15 @@ import {TARGETS} from './revive.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 import {readActiveHierarchy} from './hierarchy-register.mjs';
 import {hierarchyRoute, isDescendant, USER_RECIPIENT} from './hierarchy.mjs';
-import {confirmIdleBeforeStop, paneInfo} from './commands/restart.mjs';
+import {confirmIdleScreen, paneInfo} from './commands/restart.mjs';
 import {stopConversationFields, lookupDeps, launchStart} from './role-conversation.mjs';
 import {launchIdentityOf} from './ai-identity.mjs';
 import {runnerTemplate} from './runner-table.mjs';
 import {readSettings} from './runner-settings.mjs';
 import {sendAutopilotMail} from './autopilot.mjs';
 import {readIdleHours, IDLE_ROLES_OFF, idleRolesOff} from './idle-roles-setting.mjs';
-import {observeScreens, readIdleState, writeIdleState} from './idle-screen-clock.mjs';
+import {observeScreens, readIdleState, writeIdleState, screenDigest} from './idle-screen-clock.mjs';
+import {backgroundMarker} from './watch-status-line.mjs';
 
 export {IDLE_ROLES_OFF, idleRolesOff};
 export const IDLE_ROLES_SENDER = 'idle-roles';
@@ -48,6 +52,11 @@ const CANDIDATE_PROFILES = new Set(['worker', 'reviewer', 'conductor']);
 const SESSION_PREFIX = 'kadan-';
 const STOP_LINE = /끄기: kadan stop (\S+)\s*$/gmu;
 const OPEN_WORK = work => !['done', 'cancelled'].includes(work.status);
+// 쉼 시계를 세지 않을 화면: 감시와 같은 함수로 읽은 백그라운드 셸·터미널 표시가 있다. 새 판독 규칙을 만들지 않는다.
+function pauseReason(screen) {
+  const marker = backgroundMarker(screen);
+  return marker ? `백그라운드 셸 ${marker.count}개 실행 중` : null;
+}
 
 // 한 시간 문: 마지막 실행에서 한 시간이 지났을 때만 참이다. 상태 파일 하나만 읽는다. 끄기 파일이 있어도 돈다(화면 표본은 쌓는다).
 export function idleRolesDue(home, now = Date.now()) {
@@ -122,7 +131,19 @@ function evaluate(ctx, {role, session}, deps) {
   }
   const route = hierarchyRoute(role, ctx.parents, ctx.liveSessions);
   if (!route || route.recipient === USER_RECIPIENT) return {skip: '살아 있는 상위 감독이 없음(사용자에게는 알리지 않음)'};
-  try { deps.confirmIdle(session); } catch (error) { return {skip: error.message}; }
+  // 마지막 확인: 표본 뒤(원장을 읽는 동안) 달라졌을 수 있어 화면을 한 번 더 읽는다. 읽은 화면 하나로 본문 변화와 입력 대기를 함께 본다.
+  let screen = null;
+  try { screen = deps.floor.read(session); } catch { /* 아래에서 읽지 못함으로 처리 */ }
+  if (typeof screen !== 'string' || screen.trim() === '') {
+    delete ctx.sessions[session]; // 표본 때 못 읽은 세션과 같게: 다음에 읽히면 그때부터 센다
+    return {skip: '판정 불가: 화면을 읽지 못함'};
+  }
+  const digest = screenDigest(screen);
+  if (digest !== ctx.sessions[session]?.digest) {
+    ctx.sessions[session] = {...ctx.sessions[session], digest, since: ctx.now};
+    return {skip: '확인하는 사이 화면이 바뀜(쉼 시각을 다시 센다)'};
+  }
+  try { deps.confirmIdle(session, screen); } catch (error) { return {skip: error.message}; }
   return {profile, recipient: route.recipient};
 }
 
@@ -192,7 +213,7 @@ export function defaultDeps(home, floor) {
     hierarchy: entries => readActiveHierarchy(entries),
     settings: () => readSettings(home),
     hours: () => readIdleHours(home).hours,
-    confirmIdle: session => confirmIdleBeforeStop(session, floor),
+    confirmIdle: (session, screen) => confirmIdleScreen(screen, session, floor),
     lookup: input => stopConversationFields({...input, deps: lookupDeps({paneInfo})}),
     readBody: digest => readMailBody(digest, home),
     sendMail: sendAutopilotMail(home, IDLE_ROLES_SENDER),
@@ -201,11 +222,12 @@ export function defaultDeps(home, floor) {
 
 // 한 번 실행. dryRun이면 화면·원장을 읽기만 하고 상태 파일도 우편도 쓰지 않는다.
 // 반환: {hours, live, stale, candidates:[{role, profile, since, recipient, reopen, notifiedAt?}], skipped:[{role, reason}],
-//        mails:[{to, roles, message, sent, delivery?, error?}], held:[{to, roles}] (상한에 걸려 다음 실행으로 미룬 묶음), off}.
+//        mails:[{to, roles, message, sent, delivery?, error?}], held:[{to, roles}] (상한에 걸려 다음 실행으로 미룬 묶음),
+//        paused:[{role, reason}] (쉼 시계를 세지 않은 역할), off}.
 export function runIdleRoles({home, floor, now = Date.now(), dryRun = false, deps = defaultDeps(home, floor)}) {
   const off = idleRolesOff(home);
   const hours = deps.hours();
-  const report = {hours, live: 0, stale: 0, candidates: [], skipped: [], mails: [], held: [], off, dryRun};
+  const report = {hours, live: 0, stale: 0, candidates: [], skipped: [], mails: [], held: [], paused: [], off, dryRun};
   // 화면 표본은 tmux 바닥에서만 잰다. 다른 바닥은 후보를 고르지 않는다.
   if (floor.name !== 'tmux') return {...report, unsupported: floor.name};
   const state = readIdleState(home);
@@ -214,7 +236,8 @@ export function runIdleRoles({home, floor, now = Date.now(), dryRun = false, dep
     .map(item => ({...item, role: item.session.slice(SESSION_PREFIX.length)}))
     .filter(item => !TARGETS.includes(item.role));
   report.live = live.length;
-  const {sessions, clocks} = observeScreens({previous: state.sessions, live, read: session => floor.read(session), now});
+  const {sessions, clocks} = observeScreens({previous: state.sessions, live, read: session => floor.read(session), now, pause: pauseReason});
+  report.paused = live.filter(item => clocks.get(item.session)?.paused).map(item => ({role: item.role, reason: clocks.get(item.session).paused}));
   const attempts = Object.fromEntries(Object.entries(state.attempts ?? {}).filter(([, at]) => Number.isFinite(at) && now - at < hours * HOUR_MS));
   const save = extra => { if (!dryRun) writeIdleState(home, {lastRunAt: now, sessions, attempts, ...extra}); };
 
@@ -225,7 +248,7 @@ export function runIdleRoles({home, floor, now = Date.now(), dryRun = false, dep
   if (!stale.length) { save({candidates: [], candidatesAt: now}); return report; }
 
   let ctx;
-  try { ctx = gather({home, deps, live}); }
+  try { ctx = {...gather({home, deps, live}), sessions, now}; }
   catch (error) {
     report.skipped = stale.map(item => ({role: item.role, reason: `확인 불가: ${error.message}`}));
     save({candidates: [], candidatesAt: now});
@@ -287,6 +310,10 @@ export function formatReport(report) {
   if (report.skipped.length) {
     lines.push('', `화면은 그대로지만 후보가 아닌 역할 ${report.skipped.length}개:`);
     for (const item of report.skipped) lines.push(`  ${item.role} — ${item.reason}`);
+  }
+  if (report.paused.length) {
+    lines.push('', `쉼 시계를 세지 않는 역할 ${report.paused.length}개:`);
+    for (const item of report.paused) lines.push(`  ${item.role} — ${item.reason}`);
   }
   return lines;
 }

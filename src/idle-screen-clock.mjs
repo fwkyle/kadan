@@ -6,6 +6,7 @@
 //    입력칸 모양을 확인하지 못한 화면은 아무것도 빼지 않는다(덜 고르는 쪽).
 //  - 모르면 "방금 바뀜"이다: 처음 본 세션, 프로세스가 바뀐 세션, 상태 파일이 없거나 깨진 경우는 모두 지금부터 다시 센다.
 //    화면을 읽지 못한 세션은 시각을 내지 않고(후보에서 빠진다) 상태에서도 지운다.
+//  - 호출자가 "이 화면은 쉬는 화면이 아니다"라고 한 화면(pause: 백그라운드 셸 표시 등)은 시계를 세지 않는다 — 매번 지금부터다.
 //  - 정밀도는 표본 주기(1시간)다. 표본 사이에 바뀌었다가 같은 글자로 돌아온 화면은 못 본다.
 // 비용: 살아 있는 세션마다 화면 읽기 1번(호출자가 넘긴 read) + 상태 파일 읽기·쓰기 1번. 원장을 읽지 않는다.
 // 세션이 10배면 화면 읽기도 10배다. 상태 파일은 살아 있는 세션 수만큼의 줄이고 매번 통째로 다시 쓴다(사라진 세션의 줄은 없어진다).
@@ -65,8 +66,9 @@ export function writeIdleState(home, state) {
 const validEntry = e => e && typeof e === 'object' && typeof e.digest === 'string' && e.digest && Number.isFinite(e.since);
 
 // live: [{session, pid, created}] (바닥의 살아 있는 세션). read(session): 화면 글자(못 읽으면 빈 글자·예외).
-// 반환: {sessions: 다음 상태의 세션 줄(살아 있고 읽힌 세션만), clocks: Map<session, {since}|{unknown: 이유}>}. 파일을 쓰지 않는다.
-export function observeScreens({previous = {}, live, read, now}) {
+// pause(screen): 시계를 세지 않을 이유(글자) 또는 null. 이유가 있으면 그 세션의 시각은 지금이고 clocks에 paused로 남는다.
+// 반환: {sessions: 다음 상태의 세션 줄(살아 있고 읽힌 세션만), clocks: Map<session, {since, paused?}|{unknown: 이유}>}. 파일을 쓰지 않는다.
+export function observeScreens({previous = {}, live, read, now, pause = () => null}) {
   const sessions = {}, clocks = new Map();
   for (const item of live) {
     const {session} = item;
@@ -76,10 +78,11 @@ export function observeScreens({previous = {}, live, read, now}) {
     const digest = screenDigest(screen);
     const identity = `${item.pid ?? ''}:${item.created ?? ''}`;
     const before = previous[session];
-    const same = validEntry(before) && before.identity === identity && before.digest === digest && before.since <= now;
+    const paused = pause(screen);
+    const same = !paused && validEntry(before) && before.identity === identity && before.digest === digest && before.since <= now;
     const since = same ? before.since : now;
     sessions[session] = {identity, digest, since};
-    clocks.set(session, {since});
+    clocks.set(session, paused ? {since, paused} : {since});
   }
   return {sessions, clocks};
 }

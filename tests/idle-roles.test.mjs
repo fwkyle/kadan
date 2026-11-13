@@ -13,6 +13,7 @@ import {runIdleRoles, defaultDeps, idleRolesDue, claimIdleRolesRun, formatReport
   IDLE_ROLES_OFF, IDLE_ROLES_SENDER, MAX_MAILS_PER_RUN, SWEEP_INTERVAL_MS} from '../src/idle-roles.mjs';
 import {readIdleState, idleStatePath} from '../src/idle-screen-clock.mjs';
 import {claimIdleRolesGate, runIdleRolesGate} from '../src/commands/idle-roles.mjs';
+import {backgroundMarker} from '../src/watch-status-line.mjs';
 
 // Why: 정리 후보 고르기는 "모르면 후보가 아니다"와 "아무것도 끄지 않는다"가 전부다. 가짜 바닥·가짜 시계와 실제 저장소(원장·업무·카드·우편)로
 // 후보 조건, 빼는 조건 하나씩, 같은 후보를 기준 시간에 한 번만 알리는 것, 상한·끄기 파일·--dry-run·한 시간 문을 시험한다.
@@ -377,4 +378,85 @@ test('보낸 쪽 이름이 같은 다른 우편·다른 보낸 쪽의 같은 문
   w.run(Date.now());
   assert.equal(w.sent.length, 1);
   assert.match(w.sent[0].message, /kadan stop 작업A$/m);
+});
+
+// ---- PR #405 검수 발견(F1·F2)의 회귀 ----
+// 화면 표본은 감시 쪽 시험(tests/watch-status-line.test.mjs)이 쓰는 실제 화면 모양과 같다(숫자·낱말만 바꿈).
+const RULE = '─'.repeat(60);
+const claudeScreen = line => ['⏺ 결과를 등록했습니다.', '', line, '', RULE, '❯ ', RULE, '  ~/Dev/example', '  Claude high | ctx:10%'].join('\n');
+const codexScreen = line => ['─ Worked for 17m 42s ─────────────────', '', line, '', '', '›', '', '  gpt-example medium · ~/Dev/example · main · Context 63% used'].join('\n');
+const CLAUDE_BG = '✻ Cooked for 24s · done 7:41 PM · 2 shells still running';
+const CODEX_BG = '  2 background terminals running · /ps to view · /stop to close';
+
+for (const [name, screen] of [['claude', claudeScreen(CLAUDE_BG)], ['codex', codexScreen(CODEX_BG)]]) {
+  test(`F1 ${name}: 백그라운드 셸 표시가 있는 화면은 13시간 그대로여도 정리 후보가 아니다(감시와 같은 판독)`, () => {
+    assert.equal(backgroundMarker(screen)?.count, 2, '감시가 읽는 표시와 같은 화면이다');
+    const w = world();
+    w.screens['kadan-작업A'] = screen;
+    w.settle();
+    let reads = 0;
+    const report = runIdleRoles({home: w.home, floor: w.floor, now: Date.now(),
+      deps: {...w.deps, readEntries: () => { reads++; return readLedger(w.home); }}});
+    assert.deepEqual(roles(report), ['검수B'], '표시가 없는 검수B만 후보다');
+    assert.equal(w.sent.length, 1);
+    assert.doesNotMatch(w.sent[0].message, /kadan stop 작업A/);
+    assert.deepEqual(report.paused, [{role: '작업A', reason: '백그라운드 셸 2개 실행 중'}], '시계를 세지 않은 이유가 보고에 남는다');
+    assert.match(formatReport(report).join('\n'), /쉼 시계를 세지 않는 역할 1개:\n {2}작업A — 백그라운드 셸 2개 실행 중/);
+  });
+}
+
+test('F1: 표시가 있는 동안은 쉼 시계가 시작하지 않는다 — 표시만 있는 세션뿐이면 원장도 읽지 않고, 표시가 사라진 뒤부터 센다', () => {
+  const w = world();
+  for (const session of Object.keys(w.screens)) w.screens[session] = claudeScreen(CLAUDE_BG);
+  w.settle();
+  let reads = 0;
+  const deps = {...w.deps, readEntries: () => { reads++; return readLedger(w.home); }};
+  const during = runIdleRoles({home: w.home, floor: w.floor, now: Date.now(), deps});
+  assert.equal(during.stale, 0);
+  assert.equal(reads, 0, '표시가 있는 세션은 기준을 넘긴 세션으로 세지 않는다');
+  assert.equal(during.paused.length, 4);
+  // 셸이 끝나 표시가 사라졌다(끝난 턴 요약 줄만 남음). 시계는 이때부터다.
+  for (const session of Object.keys(w.screens)) w.screens[session] = claudeScreen('✻ Cooked for 24s · done 7:41 PM');
+  const after = runIdleRoles({home: w.home, floor: w.floor, now: Date.now() + HOUR, deps});
+  assert.equal(after.stale, 0, '표시가 있던 13시간은 쉼으로 치지 않는다');
+  const later = runIdleRoles({home: w.home, floor: w.floor, now: Date.now() + 14 * HOUR, deps});
+  assert.deepEqual(roles(later), ['검수B', '작업A'], '표시가 사라진 뒤 기준 시간이 지나면 후보다');
+});
+
+test('F1 대조: 같은 끝난 화면에서 셸 표시만 없으면 후보다', () => {
+  const w = world();
+  w.screens['kadan-작업A'] = claudeScreen('✻ Cooked for 24s · done 7:41 PM');
+  w.settle();
+  assert.deepEqual(roles(w.run(Date.now())), ['검수B', '작업A']);
+});
+
+test('F2: 표본 뒤 마지막 확인에서 새 본문을 읽으면 후보에서 빼고 쉼 시각을 그 실행 시각으로 다시 센다', () => {
+  const w = world();
+  const before = claudeScreen('✻ Cooked for 24s · done 7:41 PM'), after = before.replace('결과를 등록했습니다', '방금 새 답을 끝냈습니다');
+  w.screens['kadan-작업A'] = before;
+  w.settle();
+  let caseReads = 0;
+  const baseRead = w.floor.read;
+  w.floor.read = session => session !== 'kadan-작업A' ? baseRead(session) : ++caseReads === 1 ? before : after;
+  const now = Date.now();
+  const report = w.run(now);
+  assert.equal(caseReads, 2, '표본 1번 + 마지막 확인 1번');
+  assert.deepEqual(roles(report), ['검수B']);
+  assert.match(skipOf(report, '작업A'), /확인하는 사이 화면이 바뀜/);
+  assert.doesNotMatch(w.sent[0].message, /kadan stop 작업A/);
+  assert.equal(readIdleState(w.home).sessions['kadan-작업A'].since, now, '상태 파일의 쉼 시각이 이번 실행 시각이다');
+  // 그 뒤 화면이 그대로면 13시간 전이 아니라 이번 시각부터 12시간을 센다.
+  w.floor.read = session => session === 'kadan-작업A' ? after : baseRead(session);
+  assert.ok(!roles(w.run(now + 11 * HOUR)).includes('작업A'));
+  assert.ok(roles(w.run(now + 13 * HOUR)).includes('작업A'));
+});
+
+test('F2: 마지막 확인에서 화면을 읽지 못하면 후보가 아니다', () => {
+  const w = world(); w.settle();
+  let caseReads = 0;
+  const baseRead = w.floor.read;
+  w.floor.read = session => { if (session === 'kadan-작업A' && ++caseReads > 1) throw new Error('읽기 실패'); return baseRead(session); };
+  const report = w.run(Date.now());
+  assert.match(skipOf(report, '작업A'), /판정 불가: 화면을 읽지 못함/);
+  assert.deepEqual(roles(report), ['검수B']);
 });

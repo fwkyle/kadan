@@ -29,7 +29,11 @@ export function paneInfo(session, { timeout } = {}) {
 // restart가 끄기 바로 앞에서 부른다: 화면을 다시 읽어 idle이고, 사람이 최근 입력하지 않았을 때만 통과한다.
 // 하나라도 아니면 던져서 끄지 않는다. 모든 restart가 끄기 직전에 부른다(--force만 건너뜀).
 export function confirmIdleBeforeStop(session, base = floor) {
-  const screen = base.read(session);
+  confirmIdleScreen(base.read(session), session, base);
+}
+
+// 이미 읽은 화면으로 같은 판정을 한다. 화면을 한 번만 읽고 다른 판정(화면 지문 등)과 같이 써야 하는 호출자용이다(idle-roles.mjs).
+export function confirmIdleScreen(screen, session, base = floor) {
   if (typeof screen !== "string") throw new Error("판정 불가: 화면을 읽지 못함");
   const kind = readStatusLine(screen).kind;
   if (kind === "working") throw new Error("working: 응답 생성 중");
