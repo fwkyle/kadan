@@ -86,7 +86,9 @@ export function statusProgress(screen, previousClockSec) {
 }
 
 // 답을 기다리는 질문 우편이 그 발령 뒤에 있는가. 있으면 작업자는 정당하게 기다리는 중이다.
-export function hasOpenQuestion(entries, role, sinceIso) {
+// unreadable: 우편 상태를 못 읽었을 때의 답. 멈춤 경보는 기본값(true, 올리지 않는다)을 쓰고,
+// 확정 대기 실행의 정체를 가릴 때는 false를 넘긴다(못 읽었으면 가리지 않는다).
+export function hasOpenQuestion(entries, role, sinceIso, unreadable = true) {
   const since = Date.parse(sinceIso);
   try {
     return waitingLetters(entries, role).some(
@@ -97,8 +99,8 @@ export function hasOpenQuestion(entries, role, sinceIso) {
         (!Number.isFinite(since) || Date.parse(letter.t) >= since)
     );
   } catch {
-    // 우편 상태를 못 읽으면 정당한 대기일 수 있으니 경보를 올리지 않는다.
-    return true;
+    // 우편 상태를 못 읽으면 정당한 대기일 수 있으니 (기본값으로는) 경보를 올리지 않는다.
+    return unreadable;
   }
 }
 

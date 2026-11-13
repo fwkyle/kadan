@@ -17,6 +17,7 @@ import {buildSupervisorScope, buildWatchScope} from '../src/watch-scope.mjs';
 import {watchScopeFacts} from '../src/watch-scope-facts.mjs';
 import {observationContext} from '../src/watch-supervisor-health.mjs';
 import {buildWatchPrompt} from '../src/watch-ai.mjs';
+import {hasOpenQuestion} from '../src/watch-status-line.mjs';
 
 // 끝난 실행을 감독이 모른 채 쉬는 경우의 재현. 실제 카드·업무 저장소(결과 등록·진행 보고)를 거치고,
 // 감시 주기는 가짜 시계·가짜 화면으로 돌린다. 원장·카드·업무 읽기는 감시 명령(src/commands/watch.mjs)과 같은 배선이다.
@@ -252,15 +253,19 @@ test('F1 대조: 발령한 감독·상위 감독·사용자가 결과 등록 뒤
 });
 
 // 검수 지적 F2: 결과 등록 뒤 담당이 감독에게 질문을 보내고 답을 기다린다. 화면은 완료 표시·일하는 표시·오류가 없는 빈 입력창이다.
-const askBoss = env => appendLedger({kind: 'send', transport: 'mailbox', mailId: 'q-rev', by: REV, role: BOSS, expectReply: true, executionKey: KEY, workKey: WORK, t: new Date().toISOString()}, env.home);
+// 감독 창으로 전달된 질문 우편의 원장 줄 모양이다(실행 연결·답 요청, 우편함 보관이 아닌 창 전달).
+const askBoss = env => appendLedger({kind: 'send', mailId: 'q-rev', by: REV, role: BOSS, session: `kadan-${BOSS}`, keyDelivery: 'sent', expectReply: true, executionKey: KEY, workKey: WORK, t: new Date().toISOString()}, env.home);
 const stallCounter = () => { const calls = []; return {calls, ai: {reports: {retire: () => {}}, run: async options => { calls.push([options.source, options.role]); return {ok: true, reason: 'reported'}; }}}; };
 
-test('F2: 답을 기다리는 담당은 정체로 알리지 않고 정체 판정 AI도 부르지 않는다. 답할 감독의 본인 차례는 그대로 간다', async () => {
+test('F2: 답을 기다리는 담당은 정체로 알리지 않는다. 답할 감독의 본인 차례는 그대로 간다', async () => {
   const quiet = setup(); askBoss(quiet);
   assert.deepEqual((await watch(quiet, {until: 60, screens: {[REV]: () => IDLE}})).alerts, [[15, BOSS, '놀고 있음'], [30, TOP, '놀고 있음']]);
+});
+
+test('F2: 감시 AI를 켠 상태에서도 답을 기다리는 담당에 대한 정체 판정 AI 호출이 없다', async () => {
   const withAI = setup(), counter = stallCounter(); askBoss(withAI);
   await watch(withAI, {until: 60, screens: {[REV]: () => IDLE}, ai: counter.ai});
-  assert.deepEqual(counter.calls.filter(([source, role]) => role === REV), [], '담당에 대한 감시 AI 호출 없음');
+  assert.deepEqual(counter.calls.filter(([, role]) => role === REV), [], '담당에 대한 감시 AI 호출 없음');
 });
 
 test('F2 회귀: 답을 기다리는 담당이어도 세션 죽음은 가리지 않는다', async () => {
@@ -295,4 +300,10 @@ test('F3: 재발령 전 담당의 결과는 감시 AI 입력에 지금 결과로
     assert.equal(task.resultReportedAt, undefined, `${role}: 옛 결과 시각을 싣지 않는다`);
     assert.equal(task.resultOutcome, undefined, `${role}: 옛 판정을 싣지 않는다`);
   }
+});
+
+test('F2: 우편 상태를 못 읽으면 질문 답 대기로 보지 않는다(정체를 가리지 않는 쪽)', () => {
+  const unreadable = new Proxy([], {get() { throw new Error('우편 읽기 실패'); }});
+  assert.equal(hasOpenQuestion(unreadable, REV, new Date().toISOString()), true, '멈춤 경보의 기본값은 그대로(올리지 않음)');
+  assert.equal(hasOpenQuestion(unreadable, REV, new Date().toISOString(), false), false, '확정 대기 실행의 정체는 가리지 않는다');
 });

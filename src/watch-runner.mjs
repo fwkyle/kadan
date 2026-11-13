@@ -626,7 +626,9 @@ export async function runWatch({
     //  - 담당이 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
     // 끊김·한도·화면 읽기 실패·세션 죽음은 가리지 않는다. 그 역할의 다른 실행이 감시에 있으면 가리지 않는다. 업무 대기 시각은 실행을 가리지 않는다.
     // 종료 메모가 '실행 중'인 기존 경로는 바꾸지 않는다. 관계표에 없는 담당은 누가 기다리는 감독인지 몰라 감독의 답 대기로 보지 않는다.
-    // 이미 계산한 waits·scope와 이미 읽은 원장만 쓴다.
+    // 우편 상태를 못 읽으면 담당의 질문 답 대기로 보지 않는다(가리지 않는 쪽).
+    // 이미 계산한 waits·scope와 이미 읽은 원장만 쓴다. 더해지는 일: 답 대기 표를 한 번 더 만들고, 감시 범위 항목을 두 번 훑고,
+    // 확정 대기 실행마다 답 대기 우편 목록(같은 수집에서 만들어 둔 요약)을 한 번 조회한다.
     const answerWait = waitingExcluder(waits, parents);
     const supervisorWaits = e => parents.has(e.role) && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role)));
     const settledSessions = settled => {
@@ -635,7 +637,7 @@ export async function runWatch({
       return new Set([...byRole].filter(([, ok]) => ok).map(([role]) => `kadan-${role}`));
     };
     const supervisorWaitSessions = settledSessions(supervisorWaits);
-    const answerWaitSessions = settledSessions(e => supervisorWaits(e) || hasOpenQuestion(mailEntries, e.role, e.t));
+    const answerWaitSessions = settledSessions(e => supervisorWaits(e) || hasOpenQuestion(mailEntries, e.role, e.t, false));
     stallAlerts = stallAlerts.filter(a => !(a.id.startsWith('stall:') && answerWaitSessions.has(a.session)));
     const identityNow=taskIdentity(cards??[]);
     let waitingKeys=new Set();
