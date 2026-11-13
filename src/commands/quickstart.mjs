@@ -23,6 +23,7 @@ import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, cl
 import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
+import { claimIdleRolesGate, runIdleRolesGate } from "./idle-roles.mjs";
 import { launchServerRole, sendRestoreNotice, systemBootTime } from "../server-restore-runtime.mjs";
 import { tmux, paneState, captureTail, wrapNoTmux, wrapInfraEnv, setCleanInfraDashboard, paneSocketEnv } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
@@ -62,6 +63,8 @@ export function cmdUp(_argv, flags) {
     if (auto) return;
     die("다른 kadan up이 돌고 있습니다(자동 실행일 수 있음). 잠시 뒤 다시 치세요", 1);
   }
+  // 정리 후보 알림(한 시간에 한 번): 잠금 안에서는 차례만 잡고, 잠금을 푼 뒤에 돈다(몇 초 걸리는 조회·우편이 잠금을 붙들지 않게).
+  let idleRolesTurn = false;
   try {
     // 서버 없음 신호는 기반 세션을 하나라도 만들기 전에, revive 잠금 안에서 딱 한 번 읽는다.
     if (!auto) return runUpOnce({home, flags, auto});
@@ -75,7 +78,9 @@ export function cmdUp(_argv, flags) {
       send: (role, message) => sendRestoreNotice({home, role, message}),
       record: entry => appendLedger(entry, home), notify: reviveOps(home).notify,
     });
+    idleRolesTurn = claimIdleRolesGate(home);
   } finally { release(); }
+  if (idleRolesTurn) runIdleRolesGate(home);
 }
 
 // 되살리기 보조: 어떤 세션이 어떤 상태인지 묻고, 죽은 창을 치우고, 원장·알림을 남긴다.

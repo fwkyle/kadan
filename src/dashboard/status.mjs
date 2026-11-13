@@ -27,6 +27,7 @@ import { superProfiles } from "../super-role.mjs";
 import { nextTimeBoundary } from "../wall-snapshot-cache.mjs";
 import { letters, pick, compact, page, piece, earlier, staleBoundary } from "./shared.mjs";
 import { frontStrip } from "./front.mjs";
+import { idleRolesSummary } from "../idle-roles-setting.mjs";
 import { autopilotStrip, mergeLineInfo, mergeContext } from "./autopilot-view.mjs";
 import { sidebarRepos, repoOfRow, repoOfDecision, answeredMergesToday, alertsOfRepo } from "./repo-view.mjs";
 
@@ -174,6 +175,8 @@ export function statusData(snapshot, url, stamp, m) {
     // 차례 칸 때문에 사용자 대기로 뺀 업무(최근 감시 주기 기준). 새 키만 더한다(2026-10-23 놀고 있음 PR-1 수정 1).
     userTurnWaits: showCycleWaits(snapshot.center?.monitoring?.cycle?.settings?.userTurnWaits),
     executionCount: m.cards.filter(isExecution).length,
+    // 쉬는 역할 정리 후보 수(마지막 실행 기준, 작은 상태 파일 하나만 읽는다). 모르면 null.
+    idleCandidates: (() => { try { return idleRolesSummary(snapshot.home).candidates; } catch { return null; } })(),
     waitingQuestions: (() => {
       try {
         return piece("waiting-questions", [snapshot.entries, snapshot.entries?.length, snapshot.ledgerLines === null],

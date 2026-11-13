@@ -21,6 +21,7 @@ import { TABLE_KEYS } from "../runner-table.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
 import { seniorCommandLabel } from "../senior.mjs";
 import { describeWindowSetting } from "../window-setting.mjs";
+import { idleRolesSummary } from "../idle-roles-setting.mjs";
 
 export function createData(snapshot, url, stamp) {
   return { ...stamp, form: createForm(url.searchParams.get("kind")) };
@@ -72,6 +73,7 @@ export function runnersData(snapshot, url, stamp) {
     return {
       ...stamp,
       window,
+      idleRoles: idleRolesSummary(snapshot.home),
       settings: null,
       catalog: {},
       roles: RUNNER_ROLE_LABELS,
@@ -129,6 +131,8 @@ export function runnersData(snapshot, url, stamp) {
   return {
     ...stamp,
     window,
+    // 쉬는 역할 정리 후보: 기준 시간(설정값)과 마지막 실행의 후보 수.
+    idleRoles: idleRolesSummary(snapshot.home),
     settings,
     catalog,
     commands,

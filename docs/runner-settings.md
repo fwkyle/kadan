@@ -26,6 +26,7 @@
 | `families` | 모델 이름 앞머리로 계열을 읽는 규칙 |
 | `blocked` | 정책으로 막은 모델과 적용 역할 |
 | `favorites` | 화면에서 한 번에 고르는 조합 목록 `[{runner, model, effort}]`. 발령은 읽지 않는다 |
+| `idleRoleHours` | 선택 칸. 쉬는 역할을 정리 후보로 보는 기준 시간(1~168, 없으면 12). 실행 모델과 무관하지만 같은 revision·이유 기록 방식을 쓰려고 이 파일에 둔다. `kadan idle-roles set`·대시보드로 바꾼다 → [쉬는 역할 정리 후보](idle-roles.md) |
 
 ## 명령
 

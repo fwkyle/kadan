@@ -78,6 +78,7 @@ import { cmdStop, STOP_USAGE } from "./commands/stop.mjs";
 import { cmdRestore } from "./commands/restore.mjs";
 import { cmdRestart, RESTART_USAGE, RESTART_BOOLEANS } from "./commands/restart.mjs";
 import { cmdReopen, REOPEN_USAGE } from "./commands/reopen.mjs";
+import { cmdIdleRoles } from "./commands/idle-roles.mjs";
 import { cmdClaude } from "./commands/claude.mjs";
 import { cmdWindow, WINDOW_USAGE } from "./commands/window.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
@@ -281,6 +282,7 @@ export const COMMANDS = {
   restore: cmdRestore,
   restart: cmdRestart,
   reopen: cmdReopen,
+  'idle-roles': cmdIdleRoles,
   claude: cmdClaude,
   window: cmdWindow,
   notify: cmdNotify,
