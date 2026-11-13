@@ -5,7 +5,7 @@ import {launchFor, launchForFallback, readSettings, runnerChoices, PROFILE_ROLES
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const stamp=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 export const RUNNER_ROLE_LABELS={worker:'작업자','worker-hard':'어려운 일 작업자',reviewer:'검수자',conductor:'일반감독',super:'슈퍼감독',watch:'감시 AI',senior:'시니어',explain:'설명 AI'};
-const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델','model-remove':'모델 뺌',block:'정책 차단',fallback:'폴백 순서',favorite:'즐겨찾기'};
+const actionLabels={init:'처음 만듦',set:'역할 값',preset:'프리셋 전환',runner:'실행기 틀',model:'실측 모델','model-remove':'모델 뺌',block:'정책 차단',fallback:'폴백 순서',favorite:'즐겨찾기','idle-hours':'쉬는 역할 기준 시간'};
 export const FALLBACK_WHEN='내려가는 조건: 원인이 확인된 막힘(쿼터·429·로그인 실패·모델 이름 오류)만. 원인을 모르면 멈추고 보고. 내리기 전에 감시기 ocx 새로고침 결과를 본다';
 const APPLY_NOTE='다음 발령부터 적용, 떠 있는 세션은 그대로';
 
@@ -18,6 +18,7 @@ function describe(x){
  const from=x.action==='fallback'||x.action==='favorite'?numbered(x.before):x.action==='set'?choice(x.before):x.action==='preset'?x.before:x.action==='runner'?x.before?.spawn:x.action==='model'||x.action==='model-remove'?x.before&&`${x.before.model} (${(x.before.efforts??[]).join(',')})`:null;
  const to=x.action==='fallback'||x.action==='favorite'?numbered(x.after)??'비움':x.action==='set'?choice(x.after):x.action==='preset'?x.after:x.action==='runner'?x.after?.spawn:x.action==='model'?x.after&&`${x.after.model} (${(x.after.efforts??[]).join(',')})`
   :x.action==='model-remove'?'목록에서 뺌':x.action==='block'?x.after&&`${x.after.model} 차단 (${x.after.roles?.map(r=>RUNNER_ROLE_LABELS[r]??r).join(',')||'모든 역할'})`:x.action==='init'?`revision ${x.revision}`:null;
+ if(x.action==='idle-hours')return {what:actionLabels[x.action],change:`${x.before==null?'기본값':x.before+'시간'} → ${x.after}시간`};
  return {what:[actionLabels[x.action]??x.action,what].filter(Boolean).join(' · '),change:`${from??'없음'} → ${to??'모름'}`};
 }
 

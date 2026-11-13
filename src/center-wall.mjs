@@ -33,6 +33,7 @@ import {readLedgerIncremental} from './ledger-incremental.mjs';
 import {addPreset,changedRunnerFields,editFallback,readSettings,removePreset,removeRunnerModel,renamePreset,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {compareState, setCompare} from './runner-compare.mjs';
+import {setIdleHours} from './idle-roles-setting.mjs';
 import {compareReport} from './compare-report.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
@@ -244,7 +245,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     '/ask','/secretary/start','/roles/restart','/cards/update','/cards/create','/decisions/answer',
     '/runners/compare','/runners/set','/runners/preset-save','/runners/preset','/runners/fallback','/runners/favorite',
     '/runners/preset-add','/runners/preset-rename','/runners/preset-remove','/runners/preset-import','/runners/preset-export',
-    '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list','/api/autopilot/repos',
+    '/runners/runner','/runners/model-add','/runners/model-remove','/runners/models-list','/runners/idle-hours','/api/autopilot/repos',
     ...['create','update','link','unlink','execute','mail','complete','cancel','reopen'].map(x=>'/works/'+x),
   ].includes(url.pathname))return false;
   const fail=(status,message)=>{res.writeHead(status,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store'});res.end(message)};
@@ -383,6 +384,7 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
       : url.pathname === '/runners/fallback' ? fallback()
       : url.pathname === '/runners/favorite' ? favorite()
       : url.pathname === '/runners/runner' ? runnerEdit()
+      : url.pathname === '/runners/idle-hours' ? setIdleHours(home, {hours: f.hours, ...meta})
       : url.pathname === '/runners/model-add' ? modelAdd()
       : url.pathname === '/runners/model-remove'
         ? removeRunnerModel(home, {runner: f.runner, model: f.model, ...meta})

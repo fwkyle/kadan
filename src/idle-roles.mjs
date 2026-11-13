@@ -35,10 +35,10 @@ import {launchIdentityOf} from './ai-identity.mjs';
 import {runnerTemplate} from './runner-table.mjs';
 import {readSettings} from './runner-settings.mjs';
 import {sendAutopilotMail} from './autopilot.mjs';
-import {readIdleHours} from './idle-roles-setting.mjs';
+import {readIdleHours, IDLE_ROLES_OFF, idleRolesOff} from './idle-roles-setting.mjs';
 import {observeScreens, readIdleState, writeIdleState} from './idle-screen-clock.mjs';
 
-export const IDLE_ROLES_OFF = 'idle-roles.off';
+export {IDLE_ROLES_OFF, idleRolesOff};
 export const IDLE_ROLES_SENDER = 'idle-roles';
 export const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 export const MAX_MAILS_PER_RUN = 5;
@@ -48,8 +48,6 @@ const CANDIDATE_PROFILES = new Set(['worker', 'reviewer', 'conductor']);
 const SESSION_PREFIX = 'kadan-';
 const STOP_LINE = /끄기: kadan stop (\S+)\s*$/gmu;
 const OPEN_WORK = work => !['done', 'cancelled'].includes(work.status);
-
-export const idleRolesOff = home => fs.existsSync(path.join(home, IDLE_ROLES_OFF));
 
 // 한 시간 문: 마지막 실행에서 한 시간이 지났을 때만 참이다. 상태 파일 하나만 읽는다. 끄기 파일이 있어도 돈다(화면 표본은 쌓는다).
 export function idleRolesDue(home, now = Date.now()) {

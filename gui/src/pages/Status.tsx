@@ -50,6 +50,8 @@ function ProcessTable({processes}: {processes?: ProcessData | null}) {
 type StatusData = Stamp & {
   rows: Row[]; works: Row[]; repo?: string | null; autopilot?: AutopilotStrip; sidebar?: {repo: string}[]; repoView?: {mergedToday: {id: string; prs: number[]; at: string}[] | null}; endedWorks?: {done: number; cancelled: number; total: number; included: boolean}; front?: FrontData; cleanupRequest: string; executionCount: number;
   waitingQuestions: number | null;
+  // 쉬는 역할 정리 후보 수(마지막 실행 기준). 모르면 null 또는 없음.
+  idleCandidates?: number | null;
   live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml?: string}[];
   watchHtml: string;
@@ -192,7 +194,7 @@ export default function Status({url}: {url: URL}) {
       <OtherGithub res={autopilotRes} known={(data.sidebar ?? []).map(r => r.repo)} on={data.autopilot?.on ?? null}/>
       <details id="status-more" className="st-fold st-more-fold"><summary>전체 현황 더 보기</summary>
       <p className="st-band-more" role="group" aria-label="나머지 요약">
-        {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
+        {[["#status-running",data.workError ? "모름" : open.length,"열린 워크"],["?mailView=to-reply#mailbox",data.waitingQuestions ?? "모름","답을 기다리는 질문"],["#runner-settings",data.idleCandidates ?? "모름","쉬는 역할 정리 후보"]].map(([href,n,label]) => <a key={href} className="st-mini" href={String(href)}><span className="st-num">{n}</span><span className="st-lbl">{label}</span></a>)}
       </p>
       <details id="status-live" className="st-fold st-live-fold"><summary>살아 있는 담당 {data.live === null ? "모름" : data.live.length + "명"} · 모델 보기</summary>
       <ul id="status-live-list" className="st-live" aria-label="살아 있는 담당과 모델">

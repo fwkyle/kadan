@@ -53,6 +53,17 @@ export type RunnersData = Stamp & {
     }
   >;
   history: unknown[];
+  // 쉬는 역할 정리 후보: 기준 시간(설정값)과 마지막 실행이 고른 후보 수. 후보 수를 모르면 null이다.
+  idleRoles?: {
+    hours: number;
+    source: "setting" | "default";
+    min: number;
+    max: number;
+    defaultHours: number;
+    mailOff: boolean;
+    lastRunAt: string | null;
+    candidates: number | null;
+  };
   // 감시 AI는 이 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 자동으로 차례로 시도한다.
   watch?: { runner: string; maxAttempts: number };
   // 시니어는 안전 허용 목록의 실행기에서 최대 max명을 등록하고, 질문하면 전원에게 동시에 묻는다.
@@ -162,6 +173,46 @@ export default function Runners() {
               }}
             />
           </details>
+          {data.idleRoles && (
+            <details id="idle-roles">
+              <summary>
+                쉬는 역할 알림 기준 {data.idleRoles.hours}시간 · 정리 후보{" "}
+                {data.idleRoles.candidates === null ? "모름" : data.idleRoles.candidates + "개"}
+              </summary>
+              <p className="muted">
+                화면이 이 시간 넘게 그대로이고 맡은 일이 없는 역할을 정리 후보로 골라, 그 역할의 직속 상위 감독에게
+                우편으로 알립니다. 카단은 아무것도 끄지 않고, 끌지는 받은 감독이 정합니다. 같은 역할은 이 시간이 지나도
+                그대로일 때 다시 알립니다. 기본값은 {data.idleRoles.defaultHours}시간입니다
+                {data.idleRoles.source === "default" ? "(지금 기본값 사용 중)" : ""}.
+                {data.idleRoles.mailOff ? " 지금은 끄기 파일(idle-roles.off)이 있어 우편을 보내지 않습니다." : ""}
+              </p>
+              <ActionForm
+                revision={data.settings.revision}
+                spec={{
+                  action: "/runners/idle-hours",
+                  title: "쉬는 역할 알림 기준 시간",
+                  fields: [
+                    {
+                      name: "hours",
+                      label: `기준 시간(${data.idleRoles.min}~${data.idleRoles.max}시간)`,
+                      value: String(data.idleRoles.hours),
+                      type: "number",
+                      options: null,
+                      required: true,
+                    },
+                    {
+                      name: "reason",
+                      label: "바꾸는 이유",
+                      value: "",
+                      type: "text",
+                      options: null,
+                      required: true,
+                    },
+                  ],
+                }}
+              />
+            </details>
+          )}
             </>
           )}
           <details>
