@@ -72,6 +72,22 @@ test('Rottie first: login reuses restored pane and checkpoint advances to its ge
   assert.equal(f.calls.filter(c => typeof c === 'object').length, 1);
 });
 
+test('Rottie first: the secretary launches exactly the saved command, even from a bare Rottie command', () => {
+  for (const fromRottie of [null, "'/tools/codex' 'resume' 'exact-conversation'"]) {
+    const f = fixture(); f.setPane(null);
+    const command = fromRottie ?? f.checkpoint.command;
+    const saved = savedSecretaryCommand(f.home, f.context, command);
+    restoreRecovery({context: JSON.stringify(f.context), command, 'rottie-bin': '/fixture/rottie'}, f.recoveryDeps);
+    const current = f.entries.findLast(e => e.kind === 'start');
+    // 복원이 옵션을 잇는 단계는 비서의 저장된 명령을 바꾸지 않는다(이미 시작 명령의 옵션이 들어 있다).
+    assert.equal(f.calls[0].cmd, saved);
+    assert.equal(current.cmd, saved);
+    assert.equal('optionCarry' in current, false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, 'secretary-resume.json'))).startDigest,
+      startDigest(current));
+  }
+});
+
 test('unknown/replaced/stopped/corrupt conversations never create a fresh secretary', () => {
   for (const kind of ['missing', 'replaced', 'stopped', 'changed-dialogue', 'wrong-command']) {
     const f = fixture(); f.setPane(null);
