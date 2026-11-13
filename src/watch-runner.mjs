@@ -30,6 +30,7 @@ import {
   timedCall,
   roundAll,
   accumulateTiming,
+  accumulateMachineMemory,
 } from "./watch-cycle.mjs";
 import { USER_RECIPIENT } from "./hierarchy.mjs";
 import { applyWingmanRoute, WINGMAN_BASIS } from "./autopilot-wingman.mjs";
@@ -155,6 +156,7 @@ export async function runWatch({
   userNotify = false,
   // 카단 tmux 서버 아래 프로세스·메모리 경보(process-watch.mjs). 이 간격보다 자주 ps를 부르지 않는다. 0이면 매 주기.
   processEveryMs = 60_000,
+  machineMemory = null,
   judgeCmd = null,
   ai = null,
   // 설명 AI(explain-ai.mjs). 감시 AI가 아니다: brief 줄만 쓰고 판정·알림을 하지 않으며 감시 순회를 기다리게 하지 않는다. 없으면 하지 않는다.
@@ -242,15 +244,14 @@ export async function runWatch({
   const holdWorkingAlerted = new Set();
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
-  const seeded = seedAlertState(readEntries());
-  let activeAlerts = seeded.active;
-  let processState = { processAlert: seeded.active.find(a => a.id === "process:memory") ?? null, normalCycles: 0 };
+  // 복원용 첫 원장 읽기도 기기 메모리 관측·울림 뒤로 둔다.
+  let alertsSeeded = false;
+  let activeAlerts = [];
+  let processState = { processAlert: null, normalCycles: 0 };
   let lastProcessAt = -Infinity;
-  const alertRecipients = seeded.recipients;
-  // 재시작 뒤에도 이미 경보한 hold는 열린 채로 둔다(같은 id라 중복 제거로 새 알림 없음, 해소 없음).
-  for (const a of seeded.active) if (a.id.startsWith('hold-working:')) holdWorkingAlerted.add(a.id.slice('hold-working:'.length));
+  const alertRecipients = new Map();
   const deliveryFailures = new Map();
-  const pendingAlerts = new Map(seeded.active.filter(a => a.held).map(a => [a.id, a]));
+  const pendingAlerts = new Map();
   const workerChecks = new Map();
   const judgeFailures = new Map();
   // 점검 도구 전체 장애 경보(여러 대상이 잇달아 실패). 세션이 없는 경보라 대상별 경보와 따로 둔다. 성공한 점검이 하나라도 오면 닫는다.
@@ -258,12 +259,6 @@ export async function runWatch({
   let toolDownAlert = null;
   // 감시 보고 저장소 정리가 연속으로 실패한 주기 수. 한 주기 실패는 알리지 않는다(원장 잠금 3주기 규칙과 같은 기준).
   let aiStoreFailures = 0;
-  // 재시작 뒤에도 이미 올린 점검 도구 경보는 열린 채로 둔다(같은 id라 다시 알리지 않는다). 다음에 성공한 점검이 닫는다.
-  // 감시 AI를 끄고 띄웠으면 닫아 줄 점검이 없으므로 복원하지 않는다(예전처럼 첫 주기에 닫힌다).
-  if (judgeCmd) for (const a of seeded.active) if (a.kind === "감시AI오류" && a.id?.startsWith("ai-call:")) {
-    if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
-    else if (a.session) judgeFailures.set(a.id.slice("ai-call:".length), a);
-  }
   // 감시 AI가 인터넷 없음으로 실패한 연속 횟수(호출 대상별). 깨어 있는 동안 3번 이어질 때만 알린다(잠긴 규칙 3, 2026-10-07).
   const offlineFailures = new Map();
   const progressWatch = new ProgressWatch();
@@ -283,6 +278,7 @@ export async function runWatch({
   let lockFailures = 0;
   // 주기 기록은 5분에 한 번이라, 그 사이 주기들의 시간을 합계·최대로 모아 함께 남긴다.
   let timingWindow = null;
+  let machineWindow = null;
   const screenCache = createWatchScreenCache({now});
 
   // 이번 주기에 차례 칸 때문에 사용자 대기로 뺀 업무(주기 기록에 남는다).
@@ -297,6 +293,13 @@ export async function runWatch({
     reads?.begin();
     holdTracker?.beginCycle();
     io.record.reset(); io.send.reset();
+    // 원장·화면·AI보다 먼저 재고 그 자리에서 사용자에게만 울린다. 60초 거름 없음.
+    let machineReadAt = began;
+    if (machineMemory) {
+      const machineSample = machineMemory.tick({now: cycleAt, record});
+      machineWindow = accumulateMachineMemory(machineWindow, machineSample);
+      machineReadAt = measure();
+    }
     let entries = [], mailEntries = [];
     let ledgerError = null;
     try {
@@ -306,6 +309,23 @@ export async function runWatch({
       ledgerError = error;
     }
     const ledgerReadAt=measure();
+    if (!alertsSeeded && !ledgerError) {
+      // 기기 경보는 위의 전용 경로만 맡는다. 일반 경보의 승급·AI·해소 경로에는 넣지 않는다.
+      const seeded = seedAlertState(entries);
+      activeAlerts = seeded.active.filter(a => a.id !== 'machine:memory');
+      processState = {processAlert: activeAlerts.find(a => a.id === 'process:memory') ?? null, normalCycles: 0};
+      for (const [id, recipient] of seeded.recipients) if (id !== 'machine:memory') alertRecipients.set(id, recipient);
+      for (const a of activeAlerts) {
+        if (a.held) pendingAlerts.set(a.id, a);
+        if (a.id.startsWith('hold-working:')) holdWorkingAlerted.add(a.id.slice('hold-working:'.length));
+        // 감시 AI를 켠 경우에만 미해소 점검 오류도 복원한다. 성공한 다음 점검이 닫는다.
+        if (judgeCmd && a.kind === '감시AI오류' && a.id.startsWith('ai-call:')) {
+          if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
+          else if (a.session) judgeFailures.set(a.id.slice('ai-call:'.length), a);
+        }
+      }
+      alertsSeeded = true;
+    }
     const sweepState = !ledgerError && sweepTick ? sweepTick() : {holding:false, alerts:[]};
     let hierarchyError = null;
     // 정리를 읽기 앞에 둬서, 줄이 바뀌면 같은 주기의 hierarchy-loaded가 새 표를 읽는다.
@@ -1096,16 +1116,27 @@ export async function runWatch({
     const finished=measure();
     const cpu=cpuUsage(cpuAtStart);
     // 주기 사건 자신의 기록 쓰기는 이 시간에 들어가지 않는다(쓰기 전에 계산한다).
-    const sample={totalMs:finished-began,ledgerMs:ledgerReadAt-began,prepareMs:preparedAt-ledgerReadAt,screenMs:observedAt-preparedAt,otherMs:finished-observedAt,
-      stages:roundAll(stages),cpuMs:roundAll({user:cpu.user/1000,system:cpu.system/1000}),
-      ...(reads?{reads:reads.stats()}:{}),record:io.record.stats(),send:io.send.stats()};
+    const sample = {
+      totalMs: finished - began,
+      ...(machineMemory ? {machineMs: machineReadAt - began} : {}),
+      ledgerMs: ledgerReadAt - machineReadAt,
+      prepareMs: preparedAt - ledgerReadAt,
+      screenMs: observedAt - preparedAt,
+      otherMs: finished - observedAt,
+      stages: roundAll(stages), cpuMs: roundAll({user: cpu.user / 1000, system: cpu.system / 1000}),
+      ...(reads ? {reads: reads.stats()} : {}), record: io.record.stats(), send: io.send.stats(),
+    };
     timingWindow=accumulateTiming(timingWindow,sample);
     reads?.end?.(); // 다음 주기 시작까지 원장 전체 사본을 쥐지 않는다.
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
       try {
         const memory=memoryUsage();
-        const timing={totalMs:sample.totalMs,ledgerMs:sample.ledgerMs,prepareMs:sample.prepareMs,screenMs:sample.screenMs,otherMs:sample.otherMs,
+        const timing = {
+          totalMs: sample.totalMs,
+          ...(machineMemory ? {machineMs: sample.machineMs, machineMemory: machineWindow} : {}),
+          ledgerMs: sample.ledgerMs, prepareMs: sample.prepareMs,
+          screenMs: sample.screenMs, otherMs: sample.otherMs,
           observedSessions:[...roles.observations.values()].filter(r=>r.alive).length,
           stages:sample.stages,cpuMs:sample.cpuMs,...(sample.reads?{reads:sample.reads}:{}),record:sample.record,send:sample.send,
           screens:screenCache.info(),
@@ -1115,6 +1146,7 @@ export async function runWatch({
           sessions: scope ? [...scope.sessions] : null, supervisorSessions: supervisorScope ? [...supervisorScope.sessions] : null, ok: !observationError && !mailError, userTurnWaits}));
         // 기록에 성공한 뒤에만 비운다. 잠금으로 실패하면 모은 주기를 다음 기록에 이어 싣는다.
         timingWindow=null;
+        machineWindow=null;
         lastCycleRecordedAt = cycleAt;
       } catch (error) { console.error(`감시 주기 기록 실패: ${error.message}`); }
     }

@@ -30,6 +30,7 @@ import path from "node:path";
 import { floor } from "../floor.mjs";
 import { appendLedger, ledgerHome } from "../ledger.mjs";
 import { runWatch } from "../watch-runner.mjs";
+import {createMachineMemoryWatch} from '../watch-machine-memory.mjs';
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { HUMAN_IDLE_MS, forcedIdleMsFor, humanIdleMsFor } from "../notification-guard.mjs";
@@ -268,6 +269,7 @@ export function cmdWatch(argv, flags) {
   const collections = createProcessCollections();
   if(processName!=='kadan-watch')console.log(`감시 프로세스 이름: ${processName}`);
   return runWatch({
+    machineMemory: createMachineMemoryWatch(),
     collections,
     runtime:captureRuntimeVersion(),
     floor,
