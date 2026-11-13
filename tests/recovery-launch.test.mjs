@@ -113,7 +113,7 @@ test('an ambiguous or unreadable original adds nothing, is marked, and the role 
     assert.match(f.warnings[0], /잇지 못했다/);
   }
   // 셸 결합이 든 시작 명령은 낱말로 읽지 못한다.
-  const direct = recoveryLaunch({command: rottieClaude(), start: {cmd: 'claude --model opus; true'}, entries: []});
+  const direct = recoveryLaunch({command: rottieClaude(), start: {cmd: 'claude --model opus; true'}});
   assert.deepEqual(direct.extra, {optionCarry: 'skipped', optionCarryReason: 'original-unreadable'});
   assert.equal(direct.launch, rottieClaude());
 });
@@ -130,24 +130,75 @@ test('a permission word inside an option value or after -- is not an option', ()
   }
 });
 
-test('an earlier recovery that lost the option is repaired from the exact previous tab only', () => {
+// 보충의 기준은 복원 대상 세대(바로 앞 start) 하나다. 그 세대에 없는 값을 더 옛 세대에서 찾아 되살리지 않는다.
+test('a generation without the option is the answer: nothing older is brought back', () => {
   const f = fixture(FORKED);
   f.entries[0].rottieTerminalId = 'first';
   f.entries.push({...f.entries[0], rottieTerminalId: 'old', panePid: '21', restoredFrom: 'first',
     cmd: `'/tools/claude' '--resume' '${NOW}' '--model' 'opus' '--effort' 'medium'`});
-  const repaired = f.restore(rottieClaude());
-  assert.deepEqual(commandWords(repaired.launched).slice(-2), ['--permission-mode', 'bypassPermissions']);
-  assert.equal(repaired.start.optionCarry, 'added');
+  const {launched, start} = f.restore(rottieClaude());
+  assert.deepEqual(commandWords(launched), ['/tools/claude', ...hookWords(f), '--resume', NOW,
+    '--model', 'opus', '--effort', 'medium']);
+  assert.equal('optionCarry' in start, false);
+  assert.deepEqual(f.warnings, []);
+});
 
-  const broken = fixture(FORKED);
-  broken.entries[0].rottieTerminalId = 'first';
-  broken.entries[0].role = 'someone-else';
-  broken.entries.push({...broken.entries[0], role: 'lead', rottieTerminalId: 'old', panePid: '21',
-    restoredFrom: 'first', cmd: `'/tools/claude' '--resume' '${NOW}' '--model' 'opus' '--effort' 'medium'`});
-  const {launched, start} = broken.restore(rottieClaude());
-  assert.equal(commandWords(launched).includes('--permission-mode'), false);
-  assert.equal(start.optionCarryReason, 'chain-unresolved');
-  assert.equal(broken.warnings.length, 1);
+test('a changed profile stays the boundary on the next recovery', () => {
+  const original = 'codex --model fixture-model -p previous -c approval_policy=never';
+  for (const second of [rottieCodex('-p', 'current'), rottieCodex()]) {
+    const f = fixture(original);
+    const first = f.restore(rottieCodex('-p', 'current'));
+    assert.equal(first.start.optionCarryReason, 'profile-differs');
+    const next = f.restore(second, first.receipt.terminalId);
+    const words = commandWords(next.launched);
+    assert.equal(words.some(word => word.includes('approval_policy')), false, second);
+    assert.equal(words.includes('previous'), false, second);
+    // 바로 앞 세대가 쓰던 프로필은 그 세대의 값이므로 빠졌으면 잇는다.
+    assert.equal(words.filter(word => word === 'current').length, 1, second);
+  }
+});
+
+test('a generation that narrowed claude permissions is not followed by an older bypass', () => {
+  const f = fixture('claude --model opus --effort medium --permission-mode bypassPermissions');
+  const first = f.restore(rottieClaude('--restricted'));
+  assert.equal(commandWords(first.launched).includes('bypassPermissions'), false);
+  const next = f.restore(rottieClaude(), first.receipt.terminalId);
+  assert.equal(commandWords(next.launched).some(word => /permission/.test(word)), false);
+  assert.equal('optionCarry' in next.start, false);
+});
+
+// 바로 앞 세대가 권한을 좁히는 옵션과 넓히는 옵션을 함께 쓰고 있었는데 복원 명령에 좁히는 쪽이 없으면,
+// 넓히는 쪽만 이으면 그 세대보다 넓게 뜬다. 카단은 좁히는 옵션을 잇지 않으므로 이 경우 아무것도 더하지 않는다.
+test('a grant is not carried without the restriction it ran with', () => {
+  for (const [original, command] of [
+    ['claude --model opus --effort medium --disallowedTools Bash --permission-mode bypassPermissions', rottieClaude()],
+    ['claude --model opus --effort medium --restricted --dangerously-skip-permissions', rottieClaude()],
+    ['codex --model fixture-model -s read-only -c approval_policy=never', rottieCodex()],
+    ['codex --model fixture-model --ask-for-approval on-request -c sandbox_mode=danger-full-access', rottieCodex()],
+  ]) {
+    const f = fixture(original);
+    const {launched, start} = f.restore(command);
+    const words = commandWords(launched);
+    assert.equal(words.some(word => /permission|approval_policy|sandbox_mode/.test(word)), false, original);
+    assert.equal(start.optionCarryReason, 'restriction-lost', original);
+    assert.equal(f.warnings.length, 1);
+  }
+  // 복원 명령이 좁히는 옵션을 갖고 있으면(Rottie가 옮겼으면) 전과 같다: 그 묶음은 이미 있고, 나머지만 잇는다.
+  const kept = fixture('codex --model fixture-model -s read-only -c approval_policy=never')
+    .restore(rottieCodex('-s', 'read-only'));
+  assert.deepEqual(commandWords(kept.launched).slice(-2), ['-c', 'approval_policy=never']);
+  assert.deepEqual(kept.start.optionCarryKeys, ['c:approval_policy']);
+});
+
+test('an unchanged profile keeps its own recorded settings across recoveries', () => {
+  const f = fixture('codex --model fixture-model -p previous -c approval_policy=never');
+  const first = f.restore(rottieCodex('-p', 'previous'));
+  assert.deepEqual(commandWords(first.launched).slice(-2), ['-c', 'approval_policy=never']);
+  const next = f.restore(rottieCodex('-p', 'previous'), first.receipt.terminalId);
+  assert.equal(next.launched, first.launched);
+  // Rottie가 프로필까지 잃은 다음 복원에서도 바로 앞 세대의 값만 그대로 잇는다.
+  const bare = f.restore(rottieCodex(), next.receipt.terminalId);
+  assert.deepEqual(commandWords(bare.launched).slice(-4), ['-p', 'previous', '-c', 'approval_policy=never']);
 });
 
 test('the next recovery generation keeps one hook and the same permission', () => {

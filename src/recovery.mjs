@@ -247,7 +247,7 @@ function restoreLocked(flags, deps) {
   // 새로 만들 세션의 실행 명령: 원본 세대가 쓰던 권한·프로필·설정 값과 Stop 훅을 잇는다. 위·아래의 검사는 모두
   // Rottie가 준 원래 명령(command)으로 하고, 이 문자열은 세션 만들기와 start 기록에만 쓴다. 살아 있는 pane을
   // 다시 잇는 경우에는 만들지 않는다. 요청 표시(claim)를 남기기 전에 계산한다(이 계산은 던지지 않는다).
-  const launch = pane ? null : recoveryLaunch({command, start, entries, home,
+  const launch = pane ? null : recoveryLaunch({command, start, home,
     warn: deps.warn || (message => console.error(message))});
   const dir = path.join(home, 'recovery');
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});

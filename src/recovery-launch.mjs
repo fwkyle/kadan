@@ -71,7 +71,8 @@ const CODEX_TOUCHES = {
 const CLAUDE_TOUCHES = Object.fromEntries(['--restricted', '--safe-mode', '--bare', '--allowedTools', '--allowed-tools',
   '--disallowedTools', '--disallowed-tools', '--tools', '--permission-prompts'].map(name => [name, ['permission']]));
 const TOUCHES = {claude: CLAUDE_TOUCHES, codex: CODEX_TOUCHES};
-const CHAIN_LIMIT = 16;
+// 세션 권한을 정하는 묶음. 이 묶음의 값은 그 세대가 함께 쓰던 제한 없이 따로 잇지 않는다.
+const PERMISSION_GROUPS = new Set(['permission', 'c:sandbox', 'c:approval']);
 
 function harnessOf(words) {
   let head = 0;
@@ -93,9 +94,10 @@ function splitOption(token, table) {
 }
 
 // 명령 하나에서 이어 줄 옵션을 읽는다.
-// 반환: {ok, harness, items:[{group, key, value, words}], present(묶음 이름), dashed} 또는 {ok:false, reason}.
+// 반환: {ok, harness, items:[{group, key, value, words}], present·touched(묶음 이름), dashed} 또는 {ok:false, reason}.
 // 표에 없는 옵션·읽지 못하는 꼴·값이 빠진 옵션이 하나라도 있으면 ok:false다(ambiguous). 값을 꼭 받는 옵션의 값 자리와
 // `--` 뒤(프롬프트)는 옵션으로 읽지 않는다. present에는 같은 설정을 바꾸는 전용 옵션(--sandbox 등)의 묶음도 든다.
+// touched는 그 가운데 카단이 잇지 않는 옵션(전용 옵션·좁히는 옵션)이 건드린 묶음만이다.
 export function readCarryOptions(command, expected) {
   const words = commandWords(command);
   if (!words?.length) return {ok: false, reason: 'unreadable'};
@@ -103,7 +105,7 @@ export function readCarryOptions(command, expected) {
   const carry = CARRY[harness], table = OPTIONS[harness];
   if (!carry || !table || (expected && harness !== expected)) return {ok: false, reason: 'unreadable'};
   const bad = {ok: false, reason: 'ambiguous'};
-  const items = [], present = new Set();
+  const items = [], present = new Set(), touched = new Set();
   let dashed = false;
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
@@ -118,7 +120,7 @@ export function readCarryOptions(command, expected) {
       const value = inline ?? args[i + 1];
       if (typeof value !== 'string') return bad;
       if (inline === undefined) i += 1;
-      for (const group of TOUCHES[harness][name] ?? []) present.add(group);
+      for (const group of TOUCHES[harness][name] ?? []) { present.add(group); touched.add(group); }
       if (!valueSpec) continue;
       if (!value || value.startsWith('-') || !valueSpec.valid(value)) return bad;
       const key = valueSpec.config ? value.split('=')[0] : null;
@@ -146,32 +148,17 @@ export function readCarryOptions(command, expected) {
       continue;
     }
     if (!table.flag.has(name)) return bad;
-    for (const group of TOUCHES[harness][name] ?? []) present.add(group);
+    for (const group of TOUCHES[harness][name] ?? []) { present.add(group); touched.add(group); }
   }
-  return {ok: true, harness, items, present, dashed};
+  return {ok: true, harness, items, present, touched, dashed};
 }
 
-// 복원 대상 세대가 실제로 쓰던 값. 복원으로 이어진 세대(restoredFrom)는 같은 세대의 연속이므로,
-// 앞선 복원이 잃은 값은 정확한 이전 탭의 시작 기록에서 찾는다. 가까운 세대의 값이 이긴다.
-// 고리가 끊기거나 읽지 못하면 아무것도 잇지 않는다.
-function originalOptions(start, entries, harness) {
-  const found = new Map(), seen = new Set();
-  let current = start;
-  for (let depth = 0; current; depth++) {
-    if (seen.has(current) || depth >= CHAIN_LIMIT) return {ok: false, reason: 'chain-unresolved'};
-    seen.add(current);
-    const read = readCarryOptions(current.cmd, harness);
-    if (!read.ok) return {ok: false, reason: `original-${read.reason}`};
-    // 이 세대에서 처음 보는 묶음만 받는다(더 가까운 세대가 이미 가진 묶음은 그대로 둔다).
-    const fresh = new Set(read.items.map(item => item.group).filter(group => !found.has(group)));
-    for (const group of fresh) found.set(group, read.items.filter(item => item.group === group));
-    if (!current.restoredFrom) break;
-    const previous = entries.filter(e => e.kind === 'start' && e.session === current.session
-      && e.role === current.role && e.cwd === current.cwd && e.rottieTerminalId === current.restoredFrom);
-    if (previous.length !== 1) return {ok: false, reason: 'chain-unresolved'};
-    current = previous[0];
-  }
-  return {ok: true, items: [...found.values()].flat()};
+// 복원 대상 세대(바로 앞 start)가 쓰던 값. 기준은 이 한 세대다 — 그 세대의 명령에 있으면 잇고, 없으면 없는 것이 답이다.
+// 더 옛 세대를 거슬러 찾지 않는다: 그 사이에 프로필을 바꿨거나 권한을 좁힌 세대가 있으면 옛 값을 되살리게 된다.
+function originalOptions(start, harness) {
+  const read = readCarryOptions(start?.cmd, harness);
+  return read.ok ? {ok: true, items: read.items, touched: read.touched}
+    : {ok: false, reason: `original-${read.reason}`};
 }
 
 // 양쪽 모두 `-p`/`--profile` 하나씩이고 이름이 같을 때만 같은 프로필이다(`-c profile=…`은 비교하지 않는다).
@@ -185,9 +172,9 @@ function sameProfile(nowItems, originItems) {
 const REASONS = {
   'original-unreadable': '원본 시작 명령을 읽지 못함',
   'original-ambiguous': '원본 시작 명령의 옵션 자리가 애매함',
-  'chain-unresolved': '복원으로 이어진 이전 시작 기록을 하나로 확인하지 못함',
   'command-ambiguous': '복원 명령의 옵션 자리가 애매함',
   'profile-differs': '복원 명령의 프로필이 원본과 다름',
+  'restriction-lost': '원본이 함께 쓰던 권한 제한 옵션이 복원 명령에 없음',
   'command-dashed': '복원 명령에 `--` 뒤 입력이 있어 옵션 자리를 정하지 못함',
   'quote-failed': '이어 줄 값을 안전하게 인용하지 못함',
 };
@@ -195,7 +182,7 @@ const REASONS = {
 // 반환: {launch, extra}. launch는 세션을 만들고 start에 기록할 명령, extra는 start 기록에 더할 칸이다.
 //   extra.optionCarry: 'added'(optionCarryKeys에 이은 옵션 이름) | 'skipped'(optionCarryReason에 정해진 이유 낱말)
 // 이을 것이 없으면(원본에 없거나 복원 명령에 이미 있으면) extra는 비어 있다. 검사는 호출자가 원래 명령으로 한다.
-export function recoveryLaunch({command, start, entries, home, warn = () => {}}) {
+export function recoveryLaunch({command, start, home, warn = () => {}}) {
   const skip = reason => {
     warn(`경고: 복원 명령에 원본 세대의 옵션을 잇지 못했다(${REASONS[reason] ?? reason})`
       + ' — Rottie가 준 명령 그대로 연다');
@@ -209,12 +196,16 @@ export function recoveryLaunch({command, start, entries, home, warn = () => {}})
     const now = readCarryOptions(command, harness);
     // claude가 이을 것은 권한 한 묶음뿐이다. 복원 명령에 이미 있으면 원본을 읽을 필요도 없다.
     if (harness === 'claude' && now.ok && now.present.has('permission')) return {launch: hooked(command, home, warn), extra: {}};
-    const origin = originalOptions(start, entries, harness);
+    const origin = originalOptions(start, harness);
     if (origin.ok && !origin.items.length) return {launch: hooked(command, home, warn), extra: {}};
     if (!origin.ok) return skip(origin.reason);
     if (!now.ok) return skip(`command-${now.reason}`);
     const missing = origin.items.filter(item => !now.present.has(item.group));
     if (!missing.length) return {launch: hooked(command, home, warn), extra: {}};
+    // 그 세대가 권한 묶음을 카단이 잇지 않는 옵션(--restricted, --sandbox 등)으로도 정하고 있었는데 복원 명령에 그 묶음이
+    // 없으면, 남은 권한 값만 이으면 그 세대가 돌던 것보다 넓어질 수 있다. 권한 값을 이으려던 경우라면 아무것도 더하지 않는다.
+    const lost = [...origin.touched].some(group => PERMISSION_GROUPS.has(group) && !now.present.has(group));
+    if (lost && missing.some(item => PERMISSION_GROUPS.has(item.group))) return skip('restriction-lost');
     // 복원 명령이 원본과 다른 프로필을 쓰면 그 프로필이 무엇을 정하는지 카단은 모른다. 옛 설정 값을 얹지 않는다.
     if (now.present.has('profile') && !sameProfile(now.items, origin.items)) return skip('profile-differs');
     if (now.dashed) return skip('command-dashed');
