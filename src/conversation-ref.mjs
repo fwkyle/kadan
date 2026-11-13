@@ -6,13 +6,13 @@ import {commandWords, normalizeAiCommand} from './ai-identity.mjs';
 
 // codex 0.155.0 `codex --help`·`codex resume --help`의 값을 받는 옵션(2026-10-13 실측). -i/--image는 값을 여러 개 받아
 // 하위 명령 낱말을 삼킬 수 있어 목록에 넣지 않는다(만나면 판단 불가 → new).
-const CODEX_VALUE_OPTIONS = new Set(['-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env',
+export const CODEX_VALUE_OPTIONS = new Set(['-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env',
   '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval']);
-const CODEX_FLAG_OPTIONS = new Set(['--strict-config', '--oss', '--approve-for-me', '--dangerously-bypass-approvals-and-sandbox',
+export const CODEX_FLAG_OPTIONS = new Set(['--strict-config', '--oss', '--approve-for-me', '--dangerously-bypass-approvals-and-sandbox',
   '--dangerously-bypass-hook-trust', '--worktree', '--search', '--no-alt-screen']);
 // claude 2.1.296 `claude --help`에서 값이 꼭 있는 옵션(<값>)이다(2026-10-13 실측). 값은 건너뛰어 그 낱말을 옵션으로 읽지 않는다.
 // 값이 선택인 옵션([값]: --resume·--debug·--worktree 등)과 목록 밖 옵션은 값 없는 옵션으로 본다.
-const CLAUDE_VALUE_OPTIONS = new Set(['--add-dir', '--agent', '--agents', '--allowedTools', '--allowed-tools', '--append-system-prompt',
+export const CLAUDE_VALUE_OPTIONS = new Set(['--add-dir', '--agent', '--agents', '--allowedTools', '--allowed-tools', '--append-system-prompt',
   '--autocompact', '--betas', '--debug-file', '--disallowedTools', '--disallowed-tools', '--effort', '--environment', '--fallback-model',
   '--file', '--input-format', '--json-schema', '--max-budget-usd', '--mcp-config', '--model', '-n', '--name', '--output-format',
   '--permission-mode', '--permission-prompts', '--plugin-dir', '--plugin-url', '--remote-control-session-name-prefix', '--session-id',

@@ -33,34 +33,52 @@ const ALERT_LABELS = {
 };
 const alertLabel = (kind) => ALERT_LABELS[kind] ?? kind;
 
-// 감시AI오류 알림은 누가·무엇을·무슨 일·대상 문제 여부·할 일을 한 줄로 쓴다(2026-10-17 [kyle]). 기계 키는 바꾸지 않는다.
-// 실패한 점검은 정해진 주기에 다시 불린다: 작업 점검은 화면이 바뀌면 5분, 같으면 30분, 감독 응답 점검은 1시간 뒤(watch-runner workerCheck·SUPERVISOR_CHECK_MS).
+// 감시AI오류 알림은 무엇이·무슨 일·대상 상태·할 일을 한 줄로 쓴다(2026-10-17 [kyle]). 기계 키는 바꾸지 않는다.
+// 앞머리는 대상이 아니라 도구로 시작한다(2026-11-13): "<역할> 점검에 실패"로 시작하면 대상이 멈췄다는 뜻으로 읽혔다.
+// 대상 상태는 원장에 기록된 판정(judgeVerdict)이 있을 때만 말하고, 없으면 모른다고 쓴다. 점검 AI가 진단 기록에 남긴 글은 근거로 읽지 않는다.
+// 한 번 실패는 알리지 않는다(watch-ai-failures.mjs). 여기까지 온 것은 이어진 실패이거나, 전달 기록이 없는 문제 판정이다.
 const AI_ERROR_REASONS = {
-  timeout: ["시간 안에 답이 없었음", "없음, 정해진 주기에 다시 점검함"],
-  "report-missing": ["결과를 기록하지 못함", "없음, 정해진 주기에 다시 점검함"],
-  "call-failed": ["점검 AI를 부르지 못함", "반복되면 점검 기록 폴더 확인"],
+  timeout: ["시간 안에 답이 없었음", "점검 기록 폴더와 점검 AI 설정 확인"],
+  "report-missing": ["점검 결과가 기록되지 않음", "점검 기록 폴더와 점검 AI 설정 확인"],
+  "call-failed": ["점검 AI를 부르지 못함", "점검 기록 폴더와 점검 AI 설정 확인"],
   network: ["인터넷 연결이 3번 연속 안 돼 점검하지 못함", "인터넷 연결 확인"],
-  "report-incomplete": ["결과는 기록됐지만 알림 전달 기록이 끝나지 않음", "반복되면 점검 기록 폴더 확인"],
-  "report-error": ["결과를 저장하는 중 오류가 남", "반복되면 점검 기록 폴더 확인"],
+  "report-incomplete": ["결과는 기록됐지만 알림 전달 기록이 끝나지 않음", "점검 기록 폴더 확인"],
+  "report-error": ["결과를 저장하는 중 오류가 남", "점검 기록 폴더 확인"],
 };
+const UNKNOWN_REASON = ["점검 상태를 알 수 없음", "점검 기록 폴더 확인"];
+const TARGET_UNKNOWN = "대상 상태는 모름(대상이 멈췄다는 뜻이 아님)";
 
 // 문제 판정을 따로 보고했다는 말은 실제 전달 기록이 있을 때만 쓴다.
 const abnormalDelivery = (to) => Array.isArray(to) && to.length
   ? `(문제 판정은 ${to.join(", ")}에게 따로 보고됨)`
   : "(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨)";
+const repeated = (alert) => Number.isInteger(alert.failCount)
+  ? `, 연속 ${alert.failCount}회${Number.isInteger(alert.failMinutes) ? `·${alert.failMinutes}분째` : ""}` : "";
 
 function watchAIErrorBody(alert) {
-  const [happened, todo] = AI_ERROR_REASONS[alert.reason] ?? ["점검 상태를 알 수 없음", "반복되면 점검 기록 폴더 확인"];
+  if (alert.id === "watch-ai:store") return "점검 도구 오류 — 감시 보고 저장소 정리가 연속으로 실패 · 대상들의 상태와는 무관 · 할 일: 원장 잠금·저장소 상태 확인";
+  if (alert.reason === "tool-down") {
+    const [last] = AI_ERROR_REASONS[alert.lastReason] ?? UNKNOWN_REASON;
+    return `점검 도구 오류 — 감시기의 점검이 여러 대상(${alert.failTargets ?? "?"}개)에서 잇달아 실패(마지막: ${last}${repeated(alert)}) · ${TARGET_UNKNOWN} · 할 일: 점검 기록 폴더와 점검 AI 설정 확인`;
+  }
+  const [happened, todo] = AI_ERROR_REASONS[alert.reason] ?? UNKNOWN_REASON;
   const what = alert.source === "supervisor-health" ? "응답 상태" : alert.source ? "작업 진행" : "상태";
-  const judged = alert.judgeVerdict
-    ? ` · 점검 AI 판단: ${alert.judgeVerdict}${normalWatchVerdict(alert.judgeVerdict) ? "(정상으로 보임)" : abnormalDelivery(alert.judgeDeliveredTo)}`
-    : "";
-  return `감시기의 점검 AI가 ${alert.role} ${what} 점검에 실패 — ${happened} · ${alert.role}에 문제가 있는지는 모름(점검 도구 문제) · 할 일: ${todo}${judged}`;
+  // 기록된 판정이 있을 때만 대상 상태를 말한다. "정상으로 보였음"은 판정 낱말이 정상이고 알리라는 판정이 아닐 때만 쓴다:
+  // 낱말이 정상(입력대기)이어도 알릴 문제로 기록된 판정(judgeNotify)은 문제 판정으로 적는다.
+  const target = !alert.judgeVerdict ? TARGET_UNKNOWN
+    : normalWatchVerdict(alert.judgeVerdict) && !alert.judgeNotify ? `대상은 정상으로 보였음(기록된 판정: ${alert.judgeVerdict})`
+      : `기록된 판정: ${alert.judgeVerdict}${alert.judgeNotify && normalWatchVerdict(alert.judgeVerdict) ? " — 알릴 문제로 기록됨" : ""}${abnormalDelivery(alert.judgeDeliveredTo)}`;
+  return `점검 도구 오류 — 감시기가 ${alert.role} ${what} 점검을 끝내지 못함(${happened}${repeated(alert)}) · ${target} · 할 일: ${todo}`;
 }
+
+// 멈춤 경보에 붙는 백그라운드 셸 표시 시간. 표시가 상한을 넘겨 이어진 경우에만 값이 있다(끝나지 않는 서버를 띄워 둔 것일 수 있다).
+const backgroundNote = (alert) => Number.isFinite(alert.backgroundMs)
+  ? `, 백그라운드 셸 표시 ${Math.floor(alert.backgroundMs / 60_000)}분째(${alert.backgroundCount ?? "?"}개 — 끝나지 않는 백그라운드일 수 있음)` : "";
 
 export function formatAlertBody(alert) {
   if (alert.kind === "감시AI오류") return watchAIErrorBody(alert);
-  if (alert.kind === "프로세스") return alert.text ?? "카단 tmux 프로세스 메모리 기준 초과";
+  // 사용자에게는 결론 한 줄(headline)만 간다. 세션·PID 목록 전체(text)는 원장의 경보 기록에 남는다. 복원한 경보에는 headline이 없다.
+  if (alert.kind === "프로세스") return alert.headline ?? alert.text ?? "카단 세션 아래 프로세스 메모리 기준 초과";
   if (alert.kind === "입력큐") {
     return `입력 큐 대기 ${alert.session} (${alert.line})`;
   }
@@ -134,7 +152,7 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "멈춤") {
     const minutes = Math.floor((alert.idleMs ?? 0) / 60_000);
-    return `일하는 표시 없이 멈춤 ${alert.session} (빈 입력창 ${minutes}분째, 미완료 실행 있음·답 기다리는 질문 없음 — 감독 확인 필요)`;
+    return `일하는 표시 없이 멈춤 ${alert.session} (빈 입력창 ${minutes}분째${backgroundNote(alert)}, 미완료 실행 있음·답 기다리는 질문 없음 — 감독 확인 필요)`;
   }
   if (alert.kind === "정체") {
     const judged = alert.judgeVerdict ? `, 판정 ${alertLabel(alert.judgeVerdict)}` : "";
@@ -174,6 +192,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.reason !== undefined ? {reason:alert.reason} : {}),
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
+      ...(alert.judgeNotify ? {judgeNotify:true} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
       ...(alert.kind === "프로세스" ? {signals:alert.signals,text:alert.text,...(alert.since!==undefined?{since:alert.since}:{})} : {}),
       ...(alert.kind === "훅신뢰" ? {hookTrustState:alert.state,hookTrustText:alert.text} : {}),
@@ -209,6 +228,7 @@ export function seedAlertState(entries) {
       id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
       ...(e.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:e.judgeDeliveredTo} : {}),
+      ...(e.judgeNotify ? {judgeNotify:true} : {}),
       ...(e.signals !== undefined ? {signals:e.signals,text:e.text,...(e.since!==undefined?{since:e.since}:{})} : {}),
       ...(e.holdCode !== undefined ? {holdCode:e.holdCode} : {}),   // 알림밀림 사유(재시작 뒤에도 사유 변화 판정이 같도록)
     });
@@ -257,7 +277,7 @@ export function itemizedAlert(alert, clock, ctx = null) {
     if (alert.stage !== 2) todo = `판을 확인하고 다음 행동을 정하라. 이대로 ${alert.idleMinutes}분 더 멈추면 상위에게 알린다.`;
   } else if (alert.kind === "정체") basis = `지문 무변화 ${alert.count}회`;
   else if (alert.kind === "일시정지중작업") basis = `카드 ${alert.cardKey ?? alert.taskId}가 일시정지인데 화면이 ${alert.streak ?? 2}순회 연속 일하는 중`;
-  else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째, 미완료 실행 있음·답 기다리는 질문 없음`;
+  else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째${backgroundNote(alert)}, 미완료 실행 있음·답 기다리는 질문 없음`;
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
   return [`[감시sh ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,

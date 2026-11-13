@@ -133,11 +133,11 @@ test('watch 순회에서 큐 배너는 AI 판정 없이 Enter를 보내고 timeo
   assert.equal(enters.length,1);
   assert.ok(records.some(e=>e.kind==='queue-resume'&&e.action==='sent'&&e.keyDelivery==='sent'&&e.inputAcceptance==='unconfirmed'));
   assert.ok(records.some(e=>e.kind==='queue-resume'&&e.action==='transition'));
-  // 판정 AI timeout은 작업자 응답 장애가 아니라 감시AI 오류로 분리된다.
-  // 수신자는 작업자의 감독이 아니라 @user(OS 알림 + watch 출력)다(2026-10-05) — 감독 우편(sendAlert)으로는 가지 않는다.
-  const timeoutPrints=prints.filter(m=>m.includes('점검에 실패'));
-  assert.ok(timeoutPrints.some(m=>m.includes('시간 안에 답이 없었음')&&m.includes('worker에 문제가 있는지는 모름')),prints.join('\n'));
-  assert.ok(records.some(e=>e.kind==='alert'&&e.alertKind==='감시AI오류'&&e.recipient==='@user'&&e.delivered===true));
+  // 판정 AI timeout은 작업자 응답 장애가 아니라 점검 도구 오류로 분리된다. 짧은 시간 안의 실패는 기록만 하고 사람에게 알리지 않는다
+  // (이어질 때만 @user로 올린다: tests/watch-ai-tool-failure.test.mjs). 감독 우편(sendAlert)으로도 가지 않는다.
+  assert.ok(prints.some(m=>m.includes('점검 도구 오류(기록만) worker: timeout')),prints.join('\n'));
+  assert.ok(records.some(e=>e.kind==='watch-ai-call'&&e.role==='worker'&&e.reason==='timeout'));
+  assert.ok(!records.some(e=>e.kind==='alert'&&e.alertKind==='감시AI오류'));
   assert.ok(!alerts.some(([,m])=>typeof m==='string'&&m.includes('시간 초과')));
   assert.ok(!alerts.some(([,m])=>typeof m==='string'&&m.includes('대답을 못 함')));
 });

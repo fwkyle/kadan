@@ -10,7 +10,7 @@
 
 | 알림 | 부르는 곳 | 중복 막기 키 | 휴대폰 |
 |---|---|---|---|
-| **감시 경보의 `@user` 전달** | `watch-runner.mjs` | `alert:<경보 id>:<단계>` (10분 창) | **울림**(멘션) |
+| **감시 경보의 `@user` 전달** | `watch-runner.mjs` | `alert:<경보 id>:<단계>` (10분 창). `프로세스` 경보만 `alert:process:memory:<열린 시각>`(창 없음, 한 사고 1번) | **울림**(멘션) |
 | **RED·죽음 경보의 사용자 겹알림** | `watch-runner.mjs` | `alert:<경보 id>:<단계>:겹알림` (10분 창) | 새 글 정책으로 **안 보냄**(옛 동작: 울림) |
 | **감시 AI의 사용자 경보**(직행·상신. RED 사용자 사본은 안 보냄)와 일반 감시기의 `@user` 전달 | `commands/watch.mjs` `sendWatchMessage` (`watch-report.mjs` `WatchReports.deliver`가 부름) | 없음 | **울림**(멘션) |
 | 인계 사용자 통지 | `commands/handover.mjs` | 없음 | 조용히 |
@@ -54,6 +54,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 - 결정: 답변·취소 때 요청 글을 `✅ 해결됨 — …`으로 고쳐 쓴다(기존 그대로, 시험으로 보인다).
 - 강화(이번): (b)로 사용자에게 올라간 경보 글도 그 경보가 풀리면(`changes.resolved`) 같은 방식으로 `✅ 해결됨 — <경보 해소 문구>`로 고쳐 쓴다. 글 id는 결정과 같은 장부(`notify-threads.json`의 `decisions`, 항목 id `alert:<경보 id>:<시각>`)에 둔다. 발생마다 새 항목이라 같은 경보가 다시 떠도 새 글이 막히지 않는다. 장부에 그 글 기록이 없으면 **아무것도 보내지 않는다**(`policy-skip`). 기록은 있는데 메시지가 지워졌으면(404) 결정과 같은 방식으로 해결 문구를 조용한 새 메시지로 올린다. 이 강화는 `watch-runner`의 `@user` 전달(1·3번)에만 붙었다. 전달 실패 승격(`sendAlert(failureRecipient, …)`)과 되살리기 멈춤(10번)은 풀림 사건이 없거나 경보 id가 없어 대상 밖이다. 풀릴 때 맥 알림도 없다. 장부의 보존 한도는 나눠져 있다: 결정 요청 기록은 최근 500건, 경보 글 기록(`alert:` 항목)은 따로 최근 200건이다. 경보가 아무리 많아도 결정 요청 기록은 밀려나지 않는다. 기본 채널로 가던 사용자 경보는 이제 결정 경로(`sendDefaultDecision`, 상태 잠금)를 지나므로 잠금 대기가 생긴다.
 - 한계: 감시 프로세스가 재시작되면 메모리에 둔 경보 id → 글 항목 연결이 사라져 그 글은 고쳐지지 않는다(다음 단계에서 장부에서 되찾기).
+- 예외: `프로세스` 경보는 글 항목 id가 사고 키(`alert:process:memory:<열린 시각>`)라서, 재시작 뒤에도 장부에서 같은 글을 찾아 고친다(변화·해결 모두).
 
 ### 전수 표
 
@@ -66,7 +67,7 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 3 | `commands/watch.mjs` `sendWatchMessage('@user')` | `alert` (감시 AI 직행·일반 감시기 전달) | 새 글 | 울림 | **새 글 유지**(b) | 라우팅이 `@user`로 정한 경보다 |
 | 4 | `watch-report.mjs` `deliver` RED 사용자 사본 | `alert` + `overlap` | 새 글 | 울림 | **안 보냄** | 2번과 같은 사본 |
 | 5 | 경보 `알림밀림` (라우팅 `notify-held`) | `alert`, alertKind `알림밀림` + holdCode | 새 글 | 울림 | **사유별**: 사람 입력 보호처럼 스스로 풀리는 사유(`KADAN_HUMAN_ACTIVE`·`KADAN_HUMAN_ACTIVITY_UNKNOWN`·`KADAN_PANE_INPUT_PENDING`·`KADAN_PANE_INPUT_UNKNOWN`)만 **안 보냄**. 신뢰 승인 화면(`KADAN_HERDR_TRUST_PROMPT`·tmux의 폴더 신뢰 확인 창 `KADAN_TRUST_PROMPT`)·herdr 준비 안 됨·스크롤·상태 모름·**tmux 모드(`KADAN_PANE_IN_MODE`)**·사유를 모르는 밀림은 **새 글 유지**(b). 같은 밀림의 사유가 '안 보냄'에서 '새 글' 사유로 **바뀌면 그 변화에 1번** 보낸다(감시기 변화 판정 `dedupAlerts`가 게시 대상 여부 변화를 새 경보로 본다). 같은 사유 반복은 10분 중복 막기 그대로 | 입력 보호는 5번 뒤 force로 풀리지만 신뢰 승인 화면은 force로도 안 풀려 kyle이 승인해야 한다(검수 F1). 시계 모드 같은 tmux 모드는 force의 cancel로 안 풀릴 수 있고 정책은 강제 전후를 구분하지 못해 모르면 보낸다(2라운드 F2). 사유 변화는 경보 id를 바꾸지 않고(원장·열린 경보 목록 의미 유지) 변화 판정에만 넣어, 전환 때 `alert` 원장 줄이 한 줄 더 생긴다(2라운드 F1) |
-| 6 | 경보 `감시AI오류` (`judge-failure`) | `alert`, alertKind `감시AI오류` | 새 글 | 울림 | **새 글 유지**(b) | 감시 AI 호출 설정은 운영자(kyle)만 고친다 |
+| 6 | 경보 `감시AI오류` (`judge-failure`) | `alert`, alertKind `감시AI오류` | 새 글 | 울림 | **새 글 유지**(b). 다만 경보 자체가 한 번 실패로는 생기지 않는다(2026-11-13): 같은 대상에서 이어지거나 여러 대상이 잇달아 실패할 때만 감시기가 올린다 → [감시 안내](watch-overview.md#감시sh가-직접-알리는-것) | 감시 AI 호출 설정은 운영자(kyle)만 고친다. 한 번 실패는 할 일이 없어 부르지 않는다 |
 | 7 | 경보 `자원`(recipient 명시), `hierarchy:unreadable` | `alert` | 새 글 | 울림 | **새 글 유지**(b) — 판단 필요, 추천=유지 | 관계표를 못 읽으면 감독 사슬이 없다. 자원 경보는 recipient를 감시기가 정한 대로 따른다(현재 `@user`로만 오는 것을 코드에서 확인하지 못함) |
 | 8 | 경보 `훅신뢰` (**PR #191 `kyle/feat/stop-hook`, 아직 합쳐지지 않음**) | `alert`, alertKind `훅신뢰` | (합쳐지면) `@user` 전용 라우팅 → 1번 길로 새 글 | 울림 | **진행 중 PR의 새 종류, 새 글 유지 제안**(b) | 기계의 codex 훅 신뢰는 kyle만 승인한다. 상태가 같으면 한 번만 나간다. 이 PR은 #191을 합치지 않았다. 합쳐질 때 `postPolicy`는 바꿀 필요가 없다(`alert` 기본이 유지) |
 | 9 | `watch-runner.mjs` 경보 해소(`changes.resolved`) | `alert-resolved` | (이번 신규) 올렸던 글 고쳐 쓰기 | 없음 | **고쳐 쓰기만** | 해결됨 강화. 글을 못 찾으면 보내지 않음 |
@@ -86,7 +87,8 @@ kyle이 디코에서 볼 것과 안 볼 것을 구분하지 못했다. 발령·�
 | 22 | `discord-mail.mjs`·`discord-route.mjs` (#184) | 우편 다리 | 디코→우편 방향, 디코에 쓰지 않음 | 해당 없음 | **범위 밖** | 방향이 반대다 |
 | 23 | `thread-archive.mjs` 보관·재개 | 채널 조작 | 메시지 없음 | 없음 | **범위 밖** | 해결 글 보관은 다음 단계 |
 | 24 | `autopilot.mjs` `finishAutopilot` (Autopilot 끝: `autopilot off`·명시한 끝 시각) | `autopilot-summary` | 새 글(멘션 없음) | 조용히 | **새 글 유지** | 켜진 한 번에 한 통, kyle이 돌아와 켜진 동안의 일을 한 번에 보려는 요약이다. 디코 설정이 없으면 OS 알림. 끝 사건은 요약 없이 먼저 원장에 남고(옛 끝 사건의 요약 칸은 그대로 읽힌다), 요약은 이 알림으로 한 번 간다. 못 받았으면 `kadan autopilot summary`가 원장에서 다시 계산한다 |
-| 25 | 경보 `프로세스` (라우팅 `process-memory`, `watch-runner.mjs`) | `alert`, alertKind `프로세스` | 새 글 | 울림 | **새 글 유지**(b) | 맥이 메모리 고갈로 멈추기 전에 kyle이 조치할 수 있는 장애다. 중복 막기 키에 넘은 기준 집합이 들어가(`alert:process:memory:<등급>:<기준>:<집합이 바뀐 시각>`) 집합이 바뀔 때만 다시 간다 |
+| 25 | 경보 `프로세스` (라우팅 `process-memory`, `watch-runner.mjs`) | `alert`, alertKind `프로세스` + level | 새 글 | 울림 | **RED만 새 글**(b), 한 사고에 1번. 개수 기준만 넘은 **AMBER는 안 보냄**(대시보드에만) | 맥이 메모리 고갈로 멈추기 전에 kyle이 조치할 수 있는 장애다. 중복 막기 키와 글 장부 id가 사고(경보가 열린 시각) 하나로 묶인다(`alert:process:memory:<열린 시각>`, 시간 창 없음). 열린 동안 RED↔AMBER·기준 집합이 바뀌면 26번으로 그 글만 고친다. AMBER로 열린 사고가 RED가 되면 그때 1번 간다(건너뛴 AMBER는 키를 쓰지 않는다). 닫혔다 다시 열리면 새 글이다. 2026-11-06~11-13 실측: 전이마다 새 글이라 8일 동안 70건(RED 37·AMBER 33)이 갔고, 같은 기록을 새 규칙에 대면 8건이다 |
+| 26 | `watch-runner.mjs` 열린 `프로세스` 경보의 변화 | `alert-update` | (이번 신규) 그 사고의 글 고쳐 쓰기 | 없음 | **고쳐 쓰기만** | 같은 사고의 지금 상태를 한 글에 둔다. 글이 없으면 보내지 않고, 고치기가 실패해도 맥 알림으로 대신하지 않는다 |
 
 판단 필요 요약: 7번 자원·관계표 경보(유지), 13번 사용자 우편(안 보냄), 16번 `postThreadNote`(유지). 코드가 지금 적용한 값은 위 표 그대로이며, 바꾸려면 `notify-policy.mjs` 한 곳만 고친다.
 
@@ -224,7 +226,7 @@ kadan secrets unset discord
 
 ## 중복 막기
 
-키·길(`discord`)·결과(`sent`/`uncertain`/`failed`/`config-error`)·사유 코드만 `$KADAN_HOME/notify-log.jsonl`에 한 줄씩 덧붙인다(권한 0600). 주소·ID·본문은 적지 않는다. `decision request`처럼 한 번 도는 CLI도 이 파일로 프로세스를 넘어 중복을 막는다. 경보 키는 같은 id가 해소됐다가 다시 뜰 수 있어서 10분 창 안에서만 중복으로 본다. 결정·우편 id는 한 번뿐이라 창이 없다.
+키·길(`discord`)·결과(`sent`/`uncertain`/`failed`/`config-error`)·사유 코드만 `$KADAN_HOME/notify-log.jsonl`에 한 줄씩 덧붙인다(권한 0600). 주소·ID·본문은 적지 않는다. `decision request`처럼 한 번 도는 CLI도 이 파일로 프로세스를 넘어 중복을 막는다. 경보 키는 같은 id가 해소됐다가 다시 뜰 수 있어서 10분 창 안에서만 중복으로 본다. 결정·우편 id는 한 번뿐이라 창이 없다. `프로세스` 경보의 키는 사고(열린 시각)마다 하나라서 창 없이 본다 — 몇 시간 열려 있어도 한 번만 간다.
 
 한계: 확인과 기록 사이에 틈이 있어, 같은 키를 **동시에** 두 프로세스가 부르면 둘 다 보낼 수 있다. 결정·우편은 한 번만 부르고, 경보는 감시기 한 프로세스(`assertSingleWatch`)가 보내므로 현재 경로에서는 일어나지 않는다.
 

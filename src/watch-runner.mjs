@@ -17,6 +17,7 @@ import {
   watchAILabel,
 } from "./watch-report.mjs";
 import { OFFLINE_REASONS } from "./watch-ai.mjs";
+import { aiFailureRuns, targetFailureDue, allFailureDue } from "./watch-ai-failures.mjs";
 import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
@@ -50,13 +51,14 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
-import { assessSupervisorIdle, buildIdleNudge } from "./watch-supervisor.mjs";
+import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
 import { readSettings } from "./runner-settings.mjs";
 import { currentSocket } from "./floor-tmux.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
+import { readDecisions as readUserPosts } from "./notify-threads.mjs";
 import { withEffectiveOwner, userTurnWaitList, effectiveCardRole } from "./handover-state.mjs";
 import { waitUntilList } from "./wait-until.mjs";
 import { releasedFromWait, proceedEligibility, releaseTime } from "./decision-proceed.mjs";
@@ -96,6 +98,10 @@ export function workKeyOfAlert(alert, identity, works) {
 }
 
 // 경보가 가리키는 카드·실행 키의 앞부분이 레포다. 키를 모르면 undefined — 추측해서 붙이지 않는다.
+// 프로세스·메모리 경보의 알림 중복 막기 키이자 디코 글 장부 id. 등급·기준 집합이 아니라 경보가 열린 시각(since)으로 묶어
+// 열려 있는 동안 RED↔AMBER를 오가도 같은 글이다. 닫혔다 다시 열리면 since가 달라 새 글이 된다.
+export const processPostKey = alert => `alert:${alert.id}:${alert.since ?? ""}`;
+
 export function repoOfAlert(alert, identity) {
   if (!alert?.taskId) return undefined;
   const key = identity.resolve(alert.taskId).key ?? alert.taskId;
@@ -176,10 +182,21 @@ export async function runWatch({
   const sendToRole = sendAlert;
   // 사용자에게 올라간 경보의 디코 글을 해결 때 '✅ 해결됨'으로 고치려고, 경보 id → 글 장부 id(발생마다 새 id)를 둔다.
   const userPosts = new Map();
-  sendAlert = (role, message, key, work, repo, alertKind, alertId, holdCode) => {
+  // 그 글 장부 id로 올린 디코 글이 있는가. 장부를 못 읽으면 없는 것으로 본다(새 글 길의 중복 막기 키가 다시 막는다).
+  const hasUserPost = post => { try { return Boolean(readUserPosts(ledgerHome())[post]); } catch { return false; } };
+  sendAlert = (role, message, key, work, repo, alertKind, alertId, holdCode, level) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
-    const post = alertId ? `alert:${alertId}:${now()}` : undefined;
-    const sent = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, dedupWindowMs: ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})});
+    // 프로세스·메모리 경보는 한 사고(경보가 열린 시각)가 글 하나다. 키가 곧 글 장부 id라서 재시작 뒤에도 같은 글을 찾는다.
+    const episode = alertKind === "프로세스";
+    const post = alertId ? (episode ? key : `alert:${alertId}:${now()}`) : undefined;
+    if (episode && hasUserPost(post)) {
+      // 이 사고의 글이 이미 있다: 등급·기준이 바뀌어도 그 글만 고친다(새 글·멘션·맥 알림 없음).
+      notifyUser(message, spawn, {kind: "alert-update", tagRepo: repo, systemFallback: false, decision: {id: post, edit: message}});
+      return;
+    }
+    // 사고 키는 한 번뿐이라 시간 창 없이 막는다. 다른 경보는 같은 id가 풀렸다 다시 뜰 수 있어 10분 창만 본다.
+    const sent = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, level,
+      dedupWindowMs: episode ? undefined : ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})});
     const errorText = sent.error;
     // 이번에 실제로 올린 메시지만 연결한다. 중복·정책 안 보냄 반환은 기존 연결(처음 올린 글)을 덮어쓰지 않는다.
     if (!errorText && post && sent.posted === true) userPosts.set(alertId, {post, work, repo});
@@ -236,6 +253,17 @@ export async function runWatch({
   const pendingAlerts = new Map(seeded.active.filter(a => a.held).map(a => [a.id, a]));
   const workerChecks = new Map();
   const judgeFailures = new Map();
+  // 점검 도구 전체 장애 경보(여러 대상이 잇달아 실패). 세션이 없는 경보라 대상별 경보와 따로 둔다. 성공한 점검이 하나라도 오면 닫는다.
+  const TOOL_DOWN_ID = "ai-call:all";
+  let toolDownAlert = null;
+  // 감시 보고 저장소 정리가 연속으로 실패한 주기 수. 한 주기 실패는 알리지 않는다(원장 잠금 3주기 규칙과 같은 기준).
+  let aiStoreFailures = 0;
+  // 재시작 뒤에도 이미 올린 점검 도구 경보는 열린 채로 둔다(같은 id라 다시 알리지 않는다). 다음에 성공한 점검이 닫는다.
+  // 감시 AI를 끄고 띄웠으면 닫아 줄 점검이 없으므로 복원하지 않는다(예전처럼 첫 주기에 닫힌다).
+  if (judgeCmd) for (const a of seeded.active) if (a.kind === "감시AI오류" && a.id?.startsWith("ai-call:")) {
+    if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
+    else if (a.session) judgeFailures.set(a.id.slice("ai-call:".length), a);
+  }
   // 감시 AI가 인터넷 없음으로 실패한 연속 횟수(호출 대상별). 깨어 있는 동안 3번 이어질 때만 알린다(잠긴 규칙 3, 2026-10-07).
   const offlineFailures = new Map();
   const progressWatch = new ProgressWatch();
@@ -323,9 +351,10 @@ export async function runWatch({
       if(!currentAI(job)||result.reason==='cancelled')continue;
       for(const recipient of result.deliveredRecipients||[])aiRecipients.add(recipient);
       if(result.deliveredRecipients?.length)print(`[${watchAILabel(job.candidate.source)}] ${job.candidate.role} 보고 전달 → ${result.deliveredRecipients.join(', ')} (호출 ${result.requestId})`);
-      const failure=reason=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
+      const failure=(reason,run=null)=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
         session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason,
-        ...(result.verdict?{judgeVerdict:result.verdict,judgeDeliveredTo:result.deliveredRecipients??[]}:{})});
+        ...(run?{failCount:run.count,failMinutes:Math.floor((cycleAt-run.since)/60_000)}:{}),
+        ...(result.verdict?{judgeVerdict:result.verdict,judgeDeliveredTo:result.deliveredRecipients??[],...(result.judgeNotify?{judgeNotify:true}:{})}:{})});
       // 인터넷 없음·잠자기는 알리지 않고 다음 정기 점검에 다시 부른다. 이전 알림은 그대로 둔다(성공해야 풀린다).
       if(OFFLINE_REASONS.has(result.reason)){
         const count=result.reason==='network'?(offlineFailures.get(job.key)??0)+1:0;
@@ -334,8 +363,36 @@ export async function runWatch({
         continue;
       }
       offlineFailures.delete(job.key);
-      if(result.ok)judgeFailures.delete(job.key);
-      else failure(result.reason);
+      if(result.ok){
+        // 건너뛴 점검(책임이 사라져 요청을 만들지 않음)은 성공한 점검이 아니다. 열린 경보를 닫지 않는다.
+        if(!result.skipped){judgeFailures.delete(job.key);toolDownAlert=null;}
+        continue;
+      }
+      // 점검 도구 실패(watch-ai-failures.mjs): 한 번은 원장의 호출 기록과 감시 출력에만 남기고 사람에게 보내지 않는다.
+      // 같은 대상에서 이어지거나 여러 대상이 잇달아 실패할 때만 올린다. 횟수는 이미 읽은 원장의 호출 기록에서 센다.
+      // 호출 기록 없이 실패한 점검(준비·저장 단계 오류)은 같은 종류의 기록을 여기서 남겨 같은 방식으로 센다.
+      const unrecorded=[];
+      if(!result.requestId){
+        const call={kind:'watch-ai-call',by:'watch',requestId:null,role:job.candidate.role,session:job.candidate.session,
+          source:job.candidate.source,taskId:job.candidate.taskId??null,reason:result.reason,t:new Date(cycleAt).toISOString()};
+        // 기록에 실패해도 이번 실패는 센다. 기록 오류가 나머지 결과 처리를 끊지 않게 한다.
+        try{record(call);}catch(error){print(`[watch] 점검 호출 기록 실패: ${error.message}`);}
+        unrecorded.push(call);
+      }
+      const runs=aiFailureRuns(mailEntries,cycleAt,unrecorded),run=runs.target(job.key);
+      // 알리라는 판정이 기록됐는데 전달 기록이 없으면 도구 실패만이 아니다(문제 판정이 아무에게도 안 갔을 수 있다). 지금처럼 바로 알린다.
+      // 판정 낱말만 보지 않는다: 낱말이 정상(입력대기)이어도 보고 저장소가 알릴 문제로 기록한 판정(judgeNotify)은 여기에 든다.
+      // 낱말이 비정상이면 알림 표시가 없어도 든다(애매하면 올리는 쪽).
+      const undelivered=result.verdict&&(result.judgeNotify===true||!normalWatchVerdict(result.verdict))&&!result.deliveredRecipients?.length;
+      if(undelivered)failure(result.reason);
+      else if(allFailureDue(runs.all,cycleAt)){
+        // 전체 장애 경보가 열려 있는 동안은 대상별 경보를 따로 올리지 않는다(같은 장애를 두 번 알리지 않는다).
+        toolDownAlert??={id:TOOL_DOWN_ID,kind:'감시AI오류',level:'AMBER',role:'점검 도구',reason:'tool-down',lastReason:result.reason,
+          failCount:runs.all.count,failTargets:runs.all.targets.size,failMinutes:Math.floor((cycleAt-runs.all.since)/60_000)};
+      }
+      // 이미 열린 대상별 경보는 사유가 바뀌어도 그대로 둔다(이어지는 장애에서 사유만 바뀔 때 다시 알리지 않는다).
+      else if(targetFailureDue(run,cycleAt)&&!toolDownAlert){if(!judgeFailures.has(job.key))failure(result.reason,run);}
+      else print(`[감시sh ${clockTime(cycleAt)}] 점검 도구 오류(기록만) ${job.candidate.role}: ${result.reason}, 연속 ${run.count}회 — 사람에게 알리지 않음`);
     }
     if(!observationError) {
       for(const [role,job] of queuedAI)if(!currentAI(job))queuedAI.delete(role);
@@ -351,8 +408,10 @@ export async function runWatch({
       try {
         ai?.reports.retire(entries,cards,parents,works);
         ai?.reports.retryHeld?.(entries,parents);
+        aiStoreFailures=0;
       }
-      catch { aiStoreError={id:'watch-ai:store',kind:'감시AI오류',level:'AMBER',role:'감시 보고 저장소',reason:'report-error'}; }
+      // 한 주기 실패는 알리지 않고 다음 주기에 다시 한다. 3주기 연속이면 알린다.
+      catch { if(++aiStoreFailures>=3)aiStoreError={id:'watch-ai:store',kind:'감시AI오류',level:'AMBER',role:'감시 보고 저장소',reason:'report-error'}; }
       for (const [key,failure] of judgeFailures) if (!observedSessions.has(failure.session)) judgeFailures.delete(key);
       for (const key of offlineFailures.keys()) if (!observedSessions.has(`kadan-${key.split(':')[1]}`)) offlineFailures.delete(key);
       // 대상 제외는 사망/회복이 아니다. 이전 비교·AI 결과와 알림을 조용히 퇴역시킨다.
@@ -546,8 +605,12 @@ export async function runWatch({
       : assessHoldWorking(holdWorkingStates,roles.observations,cards,{now:cycleAt,alerted:holdWorkingAlerted,
           isHeld:role=>holdTracker?.isHeld(role)??false,supervisors:new Set(parents.values())});
     holdWorkingStates=holdWorking.states;
-    const idleStopSessions=new Set(idleStopAssessment.alerts.map(a=>a.session));
-    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
+    // 백그라운드 셸 표시로 멈춤을 늦추는 중인 세션(held)도 화면이 그대로라서 나는 정체 후보(경보·정체 판정 AI)에서 뺀다.
+    // 멈춤이 4분에 먼저 나가 5분의 정체를 대신하던 자리라, 멈춤만 늦추면 정체가 그 자리를 채운다. 상한이 지나면 멈춤이 나가고
+    // 정체는 지금처럼 멈춤 세션에서 빠진다. 죽음·끊김·한도·완료후보는 이 집합과 무관하다.
+    const backgroundHeld=idleStopAssessment.held??new Set();
+    const idleStopSessions=new Set([...idleStopAssessment.alerts.map(a=>a.session),...backgroundHeld]);
+    let stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
@@ -621,6 +684,28 @@ export async function runWatch({
       waitsRead = decisionsNow !== null;
     } catch { waits = []; userTurnWaits = []; waitsRead = false; }
     const progressWaits = waits.filter(w => w.kind !== "wait-until");
+    // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation) 가운데 답 대기가 등록된 것은 화면이 멈춰 있는 것이 정상이다.
+    //  - 감독의 답 대기(사용자 결정·감독이 물은 질문 우편): 완료후보·멈춤·정체를 내지 않는다. 답이 닫히면 그때 난다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다).
+    //  - 담당이 그 실행으로 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
+    // 답 대기는 실행별로 본다. 실행 ID가 있는 완료후보는 그 실행의 답 대기만 대조하고, 실행을 특정할 수 없는 세션 단위 경보(멈춤·정체)는
+    // 그 역할이 맡은 모든 실행이 답 대기일 때만 가린다. 한 실행의 질문이나 실행을 특정하지 않은 일반 질문이 다른 실행의 감시를 가리지 않는다
+    // (어느 실행의 대기인지 모르면 가리지 않는다).
+    // 끊김·한도·화면 읽기 실패·세션 죽음은 가리지 않는다. 업무 대기 시각은 실행을 가리지 않는다.
+    // 종료 메모가 '실행 중'인 기존 경로는 바꾸지 않는다. 관계표에 없는 담당은 누가 기다리는 감독인지 몰라 감독의 답 대기로 보지 않는다.
+    // 답 대기 목록을 못 읽었으면(waits가 빈 목록) 아무것도 가리지 않는다.
+    // 이미 계산한 waits·scope만 쓴다. 더해지는 일: 답 대기 표를 한 번 더 만들고, 감시 범위 항목을 두 번 훑으며 확정 대기 실행마다 답 대기 목록을 한 번 훑는다.
+    const answerWait = waitingExcluder(waits, parents);
+    const supervisorWaits = e => parents.has(e.role) && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role)));
+    // 담당이 그 실행에 연결해 보낸 질문 우편이 답을 기다리는가. 실행 연결이 없는 질문은 세지 않는다.
+    const workerAsks = e => waits.some(w => w.kind === 'mail' && w.asker === e.role && [e.taskId, e.executionKey].some(id => id && w.ids.includes(id)));
+    const settledSessions = settled => {
+      const byRole = new Map();
+      for (const e of scope?.entries ?? []) byRole.set(e.role, (byRole.get(e.role) ?? true) && Boolean(e.awaitsConfirmation) && settled(e));
+      return new Set([...byRole].filter(([, ok]) => ok).map(([role]) => `kadan-${role}`));
+    };
+    const supervisorWaitSessions = settledSessions(supervisorWaits);
+    const answerWaitSessions = settledSessions(e => supervisorWaits(e) || workerAsks(e));
+    stallAlerts = stallAlerts.filter(a => !(a.id.startsWith('stall:') && answerWaitSessions.has(a.session)));
     const identityNow=taskIdentity(cards??[]);
     let waitingKeys=new Set();
     if(cards&&!observationError){
@@ -637,7 +722,10 @@ export async function runWatch({
             record({kind:'watch-ai-retired',by:'watch',key:report.key,requestId:report.requestId,source:report.source,role:report.role,reason:'waiting-for-answer'});
       }
       const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
-        enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session)),waiting:waitingKeys});
+        // 백그라운드 셸 표시로 멈춤을 늦추는 세션은 그 유예 동안 진행 점검도 부르지 않는다. 그 화면을 본 점검이 '입력대기'로
+        // 보고하면 보고 저장소가 "카드 미완인데 입력 대기"로 감독에게 올려, 늦춘 헛경보가 다른 이름으로 나간다.
+        // 점검의 시간 상태는 그대로라 유예가 끝나면 지금처럼 불린다.
+        enabled:Boolean(judgeCmd),blockedSessions:new Set([...stallAlerts.map(a=>a.session),...backgroundHeld]),waiting:waitingKeys});
       if(progress) invokeAI(progress);
     }
     // 놀고 있음 계산을 감독 정기 확인보다 먼저 한다: 같은 순회의 본인 차례(ownTurn)를 정기 확인이 그대로 재사용한다(원장을 다시 읽지 않는다).
@@ -663,7 +751,7 @@ export async function runWatch({
       const candidates=new Map(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>[a.session,a]));
       // 경보 뒤 화면이 움직여도 정상이라고 추측하지 않는다. 다음 허용 시각에 AI가 다시 확인한다.
       for(const report of latestWatchReports(entries)) {
-        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen)
+        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen&&!answerWaitSessions.has(report.session)&&!backgroundHeld.has(report.session))
           candidates.set(report.session,report);
       }
       for(const candidate of candidates.values()){
@@ -678,6 +766,8 @@ export async function runWatch({
       if(!currentAI(job))continue;
       // 대기열에 들어간 뒤 답 대기가 생긴 progress 작업도 실행 직전에 같은 기준으로 뺀다(stall·감독 관찰은 유지).
       if(job.candidate.source==='progress'&&waitingKeys.has(identityNow.resolve(job.candidate.taskId).key))continue;
+      // 대기열에 들어간 뒤 백그라운드 유예가 시작된 progress 작업도 실행 직전에 뺀다.
+      if(job.candidate.source==='progress'&&backgroundHeld.has(job.candidate.session))continue;
       const {candidate}=job,seen=roles.observations.get(candidate.session);
       if(!seen?.alive||!seen.screen)continue;
       const check=candidate.source==='supervisor-health'?null:workerCheck(candidate,seen);
@@ -760,6 +850,17 @@ export async function runWatch({
     try {
       stopHookAlerts = assessStopHookTrust({ enabled: fs.existsSync(claudeSettingsPath(ledgerHome())), trust: codexStopHookTrust() });
     } catch { /* 신뢰 확인 실패가 감시를 멈추지 않는다 */ }
+    // 감독의 답 대기가 등록된 확정 대기 실행의 완료후보·멈춤은 답이 닫힐 때까지 내지 않는다.
+    // 완료후보는 실행 ID가 있으니 그 실행의 답 대기만 본다(같은 역할의 다른 실행과 무관하다). 멈춤은 실행을 특정할 수 없어
+    // 그 역할의 모든 실행에 감독의 답 대기가 있을 때만(supervisorWaitSessions) 미룬다.
+    const candidateEntry = alert => (scope?.entries ?? []).find(e => e.role === alert.role
+      && (identityNow.resolve(alert.taskId).key ?? alert.taskId) === (e.executionKey ?? e.taskId));
+    const confirmationDeferred = alert => {
+      if (alert.kind === '멈춤') return supervisorWaitSessions.has(alert.session);
+      if (alert.kind !== '완료후보') return false;
+      const entry = candidateEntry(alert);
+      return Boolean(entry?.awaitsConfirmation) && supervisorWaits(entry);
+    };
     const nextAlerts = [
       ...processAlerts,
       ...(observationError ? [] : stopHookAlerts),
@@ -768,11 +869,11 @@ export async function runWatch({
       ...(aiStoreError ? [aiStoreError] : []),
       // 429 재개가 예약된 세션의 '한도' 경보는 새로 알리지 않는다. 다만 이미 알린 경보는 화면에 429가 남아 있는 동안
       // 통지 없이 그대로 이월한다 — 숨기면 dedup이 해소로 보고 '한도 → 해소됨'이 깜빡였다(2026-10-05 점검 보고서 2-M2).
-      ...roleAlerts.filter(a=>!(a.kind==='한도'&&(retrySessions.has(a.session)||rateLimitRetry.alerts?.some(r=>r.session===a.session)))),
+      ...roleAlerts.filter(a=>!(a.kind==='한도'&&(retrySessions.has(a.session)||rateLimitRetry.alerts?.some(r=>r.session===a.session)))&&!confirmationDeferred(a)),
       ...activeAlerts.filter(a=>a.kind==='한도'&&retrySessions.has(a.session)&&roleAssessment.alerts.some(r=>r.id===a.id)),
       // 큐대기 상태 추적은 그대로 두고 경보만 거른다 — 배너 경로가 조용해지면 쌓인 시간으로 큐대기가 이어받는다.
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
-      ...idleStopAssessment.alerts,
+      ...idleStopAssessment.alerts.filter(a=>!confirmationDeferred(a)),
       ...holdWorking.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
@@ -780,6 +881,7 @@ export async function runWatch({
       ...(!observationError && holdTracker ? holdTracker.alerts() : []),
       ...reportAlerts,
       ...judgeFailures.values(),
+      ...(toolDownAlert ? [toolDownAlert] : []),
       ...roles.screenAlerts.filter(a=>!supervisorScope?.sessions.has(a.session)),
       ...supervisorCheck.alerts,
       // 유휴 판정은 작업자뿐 아니라 감독 세션(상위가 있는 감독·최상위 감독)에도 닿는다.
@@ -877,7 +979,9 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}${alert.kind === "프로세스" ? `:${(alert.signals ?? []).join("+")}:${alert.since ?? ""}` : ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
+          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)),
+            alert.kind === "프로세스" ? processPostKey(alert) : `alert:${alert.id}:${alert.level ?? ""}`,
+            workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode, alert.level);
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {
@@ -944,7 +1048,9 @@ export async function runWatch({
       pendingAlerts.delete(alert.id);
       if (alert.kind === "감시AI오류") { recordAlert(record,alert,null,false,true); }
       // 사용자에게 새 글로 올라갔던 경보가 풀리면 그 글을 '✅ 해결됨'으로 고친다(새 글 아님). 글을 못 찾으면 아무것도 보내지 않는다.
-      const posted = userPosts.get(alert.id);
+      // 프로세스 경보의 글은 사고 키로 장부에서 되찾는다(재시작으로 메모리의 연결이 사라져도 고친다).
+      const posted = userPosts.get(alert.id)
+        ?? (alert.kind === "프로세스" && hasUserPost(processPostKey(alert)) ? {post: processPostKey(alert)} : null);
       if (posted) {
         userPosts.delete(alert.id);
         notifyUser(`[감시sh ${clockTime(cycleAt)}] 해결됨 — ${resolvedBody(alert)}`, spawn, {kind: "alert-resolved", work: posted.work, tagRepo: posted.repo, systemFallback: false,

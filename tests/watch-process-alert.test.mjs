@@ -45,13 +45,16 @@ test('프로세스 경보: 열림 → 같은 상태 반복 없음 → 기준 집
     },
   }), error => error === stop);
   const mine = notified.filter(m => /프로세스/.test(m));
-  // 열림 1번 + 집합이 바뀐 1번. 같은 상태의 반복(2번째 주기)은 없다.
+  // 디코 설정이 없는 길(맥 알림)은 정책·중복 막기를 거치지 않아 예전처럼 전이마다 간다: 열림 1번 + 집합이 바뀐 1번. 같은 상태의 반복은 없다.
   assert.equal(mine.length, 2, JSON.stringify(mine));
   assert.deepEqual(sent, [], 'AI 역할에게는 아무것도 보내지 않는다');
-  assert.match(mine[0], /node#300 13\.0G/);
-  assert.match(mine[1], /node 개수/);
+  assert.match(mine[0], /메모리 13\.0G \/ 기준 12G \(카단 세션 1개 · 그 아래 프로세스 3개\) · 가장 큰 세션 s 13\.0G/);
+  assert.match(mine[1], /함께 넘은 기준: .*node 프로세스 수/);
+  assert(mine.every(m => !/tmux 프로세스/.test(m)));
   const alerts = records.filter(r => r.kind === 'alert' && r.alertKind === '프로세스');
   assert.deepEqual(alerts.map(r => !!r.resolved), [false, false, true], '열림, 집합 바뀜, 닫힘');
+  assert.match(alerts[0].text, /상위 세션 s 13\.0G\(프로세스 2개: node#300 13\.0G/, '세션·PID 목록 전체는 원장 text에 남는다');
+  assert.equal(alerts[0].since, alerts[1].since, '한 사고 내내 같은 시각');
   const mineCalls = psCalls.filter(c => c.includes('rss='));
   assert.equal(mineCalls.length, samples.length, '주기마다 ps 1회');
   assert(mineCalls.every(c => c.includes('comm=') && !/args|command/.test(c)));
