@@ -49,7 +49,7 @@ import {
   disconnectKind,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
-import { assessIdleStop, IDLE_STOP_AFTER_MS, hasOpenQuestion } from "./watch-status-line.mjs";
+import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
 import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
@@ -664,21 +664,25 @@ export async function runWatch({
     const progressWaits = waits.filter(w => w.kind !== "wait-until");
     // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation) 가운데 답 대기가 등록된 것은 화면이 멈춰 있는 것이 정상이다.
     //  - 감독의 답 대기(사용자 결정·감독이 물은 질문 우편): 완료후보·멈춤·정체를 내지 않는다. 답이 닫히면 그때 난다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다).
-    //  - 담당이 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
-    // 끊김·한도·화면 읽기 실패·세션 죽음은 가리지 않는다. 그 역할의 다른 실행이 감시에 있으면 가리지 않는다. 업무 대기 시각은 실행을 가리지 않는다.
+    //  - 담당이 그 실행으로 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
+    // 답 대기는 실행별로 본다. 실행 ID가 있는 완료후보는 그 실행의 답 대기만 대조하고, 실행을 특정할 수 없는 세션 단위 경보(멈춤·정체)는
+    // 그 역할이 맡은 모든 실행이 답 대기일 때만 가린다. 한 실행의 질문이나 실행을 특정하지 않은 일반 질문이 다른 실행의 감시를 가리지 않는다
+    // (어느 실행의 대기인지 모르면 가리지 않는다).
+    // 끊김·한도·화면 읽기 실패·세션 죽음은 가리지 않는다. 업무 대기 시각은 실행을 가리지 않는다.
     // 종료 메모가 '실행 중'인 기존 경로는 바꾸지 않는다. 관계표에 없는 담당은 누가 기다리는 감독인지 몰라 감독의 답 대기로 보지 않는다.
-    // 우편 상태를 못 읽으면 담당의 질문 답 대기로 보지 않는다(가리지 않는 쪽).
-    // 이미 계산한 waits·scope와 이미 읽은 원장만 쓴다. 더해지는 일: 답 대기 표를 한 번 더 만들고, 감시 범위 항목을 두 번 훑고,
-    // 확정 대기 실행마다 답 대기 우편 목록(같은 수집에서 만들어 둔 요약)을 한 번 조회한다.
+    // 답 대기 목록을 못 읽었으면(waits가 빈 목록) 아무것도 가리지 않는다.
+    // 이미 계산한 waits·scope만 쓴다. 더해지는 일: 답 대기 표를 한 번 더 만들고, 감시 범위 항목을 두 번 훑으며 확정 대기 실행마다 답 대기 목록을 한 번 훑는다.
     const answerWait = waitingExcluder(waits, parents);
     const supervisorWaits = e => parents.has(e.role) && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role)));
+    // 담당이 그 실행에 연결해 보낸 질문 우편이 답을 기다리는가. 실행 연결이 없는 질문은 세지 않는다.
+    const workerAsks = e => waits.some(w => w.kind === 'mail' && w.asker === e.role && [e.taskId, e.executionKey].some(id => id && w.ids.includes(id)));
     const settledSessions = settled => {
       const byRole = new Map();
       for (const e of scope?.entries ?? []) byRole.set(e.role, (byRole.get(e.role) ?? true) && Boolean(e.awaitsConfirmation) && settled(e));
       return new Set([...byRole].filter(([, ok]) => ok).map(([role]) => `kadan-${role}`));
     };
     const supervisorWaitSessions = settledSessions(supervisorWaits);
-    const answerWaitSessions = settledSessions(e => supervisorWaits(e) || hasOpenQuestion(mailEntries, e.role, e.t, false));
+    const answerWaitSessions = settledSessions(e => supervisorWaits(e) || workerAsks(e));
     stallAlerts = stallAlerts.filter(a => !(a.id.startsWith('stall:') && answerWaitSessions.has(a.session)));
     const identityNow=taskIdentity(cards??[]);
     let waitingKeys=new Set();
@@ -819,8 +823,17 @@ export async function runWatch({
     try {
       stopHookAlerts = assessStopHookTrust({ enabled: fs.existsSync(claudeSettingsPath(ledgerHome())), trust: codexStopHookTrust() });
     } catch { /* 신뢰 확인 실패가 감시를 멈추지 않는다 */ }
-    // 감독의 답 대기가 등록된 확정 대기 실행(위 supervisorWaitSessions)의 완료후보·멈춤은 답이 닫힐 때까지 내지 않는다.
-    const confirmationDeferred = alert => (alert.kind === '완료후보' || alert.kind === '멈춤') && supervisorWaitSessions.has(alert.session);
+    // 감독의 답 대기가 등록된 확정 대기 실행의 완료후보·멈춤은 답이 닫힐 때까지 내지 않는다.
+    // 완료후보는 실행 ID가 있으니 그 실행의 답 대기만 본다(같은 역할의 다른 실행과 무관하다). 멈춤은 실행을 특정할 수 없어
+    // 그 역할의 모든 실행에 감독의 답 대기가 있을 때만(supervisorWaitSessions) 미룬다.
+    const candidateEntry = alert => (scope?.entries ?? []).find(e => e.role === alert.role
+      && (identityNow.resolve(alert.taskId).key ?? alert.taskId) === (e.executionKey ?? e.taskId));
+    const confirmationDeferred = alert => {
+      if (alert.kind === '멈춤') return supervisorWaitSessions.has(alert.session);
+      if (alert.kind !== '완료후보') return false;
+      const entry = candidateEntry(alert);
+      return Boolean(entry?.awaitsConfirmation) && supervisorWaits(entry);
+    };
     const nextAlerts = [
       ...processAlerts,
       ...(observationError ? [] : stopHookAlerts),

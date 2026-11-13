@@ -17,7 +17,6 @@ import {buildSupervisorScope, buildWatchScope} from '../src/watch-scope.mjs';
 import {watchScopeFacts} from '../src/watch-scope-facts.mjs';
 import {observationContext} from '../src/watch-supervisor-health.mjs';
 import {buildWatchPrompt} from '../src/watch-ai.mjs';
-import {hasOpenQuestion} from '../src/watch-status-line.mjs';
 
 // 끝난 실행을 감독이 모른 채 쉬는 경우의 재현. 실제 카드·업무 저장소(결과 등록·진행 보고)를 거치고,
 // 감시 주기는 가짜 시계·가짜 화면으로 돌린다. 원장·카드·업무 읽기는 감시 명령(src/commands/watch.mjs)과 같은 배선이다.
@@ -302,8 +301,76 @@ test('F3: 재발령 전 담당의 결과는 감시 AI 입력에 지금 결과로
   }
 });
 
-test('F2: 우편 상태를 못 읽으면 질문 답 대기로 보지 않는다(정체를 가리지 않는 쪽)', () => {
-  const unreadable = new Proxy([], {get() { throw new Error('우편 읽기 실패'); }});
-  assert.equal(hasOpenQuestion(unreadable, REV, new Date().toISOString()), true, '멈춤 경보의 기본값은 그대로(올리지 않음)');
-  assert.equal(hasOpenQuestion(unreadable, REV, new Date().toISOString(), false), false, '확정 대기 실행의 정체는 가리지 않는다');
+
+// 재검수 지적 F4·F5: 같은 역할이 실행을 둘 맡았을 때 답 대기는 실행별로 본다.
+// 둘째 실행(exec-2)도 결과 등록 + waiting이다. 화면의 완료 표시는 첫 실행(exec-1) 것이다.
+const KEY2 = 'repo/exec-2';
+function addSecondExecution(env) {
+  const {home, cards, works} = env;
+  cards.create({repo: 'repo', id: 'exec-2', repoPath: home, body: '# exec-2', by: BOSS});
+  works.change(WORK, 'link', {execution: KEY2, phase: 'review', round: 2}, {revision: works.get(WORK).revision, by: BOSS, note: '실행 연결'});
+  const ready = cards.update(KEY2, {status: 'ready', scope: '범위'}, {revision: 1, by: BOSS, note: '승인'});
+  cards.update(KEY2, {status: 'assigned', role: REV, board: 'p', rallyId: 'w1', rallyTitle: '묶음', rallyRound: '2', rallyStep: 'review'}, {revision: ready.revision, by: BOSS, note: '발령'});
+  appendLedger({kind: 'send', role: REV, session: `kadan-${REV}`, taskId: 'exec-2', executionKey: KEY2, by: BOSS, t: new Date().toISOString()}, home);
+  const step = (activity, text) => cards.update(KEY2, {activity}, {revision: cards.get(KEY2).revision, by: REV, noteKind: 'progress', note: text});
+  step('running', '시작');
+  fs.writeFileSync(cards.get(KEY2).resultPath, '# 결과\n');
+  cards.report(KEY2, {revision: cards.get(KEY2).revision, outcome: 'changes', by: REV});
+  step('waiting', '종료 기록');
+  return env;
+}
+// 창으로 전달된 질문 우편. execution을 주지 않으면 실행을 특정하지 않은 일반 질문이다.
+const ask = (env, {by, to, id, execution = null}) => appendLedger({kind: 'send', mailId: id, by, role: to, session: `kadan-${to}`, keyDelivery: 'sent', expectReply: true,
+  ...(execution ? {executionKey: execution, workKey: WORK} : {}), t: new Date().toISOString()}, env.home);
+const completionOf = (out, id) => out.messages.filter(m => m.message.includes('끝난 것 같음') && m.message.includes(id));
+
+test('F4: 감독이 첫 실행에만 답 대기를 걸었으면 그 실행의 완료후보는 조용하다. 둘째 실행 때문에 다시 울리지 않는다', async () => {
+  const env = addSecondExecution(setup());
+  ask(env, {by: BOSS, to: TOP, id: 'q-boss-a', execution: KEY});
+  const out = await watch(env, {until: 60});
+  assert.deepEqual(completionOf(out, 'exec-1'), [], '답 대기 중인 첫 실행의 완료후보는 나가지 않는다');
+  // 답 대기가 없는 둘째 실행은 감독의 본인 차례로 그대로 간다.
+  assert.ok(out.messages.some(m => m.role === BOSS && m.via === 'nudge' && m.message.includes('exec-2')), '둘째 실행의 본인 차례 알림');
+});
+
+test('F4 대조: 답 대기가 없는 둘째 실행의 완료 표시가 화면에 있으면 그 완료후보는 그대로 난다', async () => {
+  const env = addSecondExecution(setup());
+  ask(env, {by: BOSS, to: TOP, id: 'q-boss-a', execution: KEY});
+  const out = await watch(env, {until: 60, screens: {[REV]: () => doneScreen.replace('exec-1', 'exec-2')}});
+  assert.equal(completionOf(out, 'exec-2').length, 1);
+});
+
+test('F5: 담당이 첫 실행으로만 질문했으면 질문 없는 둘째 실행의 정체 감시는 가리지 않는다', async () => {
+  const env = addSecondExecution(setup());
+  ask(env, {by: REV, to: BOSS, id: 'q-rev-a', execution: KEY});
+  const out = await watch(env, {until: 20, screens: {[REV]: () => IDLE}});
+  assert.ok(out.alerts.some(m => m[1] === BOSS && m[2] === '정체'), JSON.stringify(out.alerts));
+  const counter = stallCounter(), withAI = addSecondExecution(setup());
+  ask(withAI, {by: REV, to: BOSS, id: 'q-rev-a', execution: KEY});
+  await watch(withAI, {until: 20, screens: {[REV]: () => IDLE}, ai: counter.ai});
+  assert.ok(counter.calls.some(([source, role]) => source === 'stall' && role === REV), '감시 AI를 켜면 정체 판정이 불린다');
+});
+
+test('F5: 실행을 특정하지 않은 일반 질문은 어느 실행의 대기인지 몰라 정체 감시를 가리지 않는다', async () => {
+  const two = addSecondExecution(setup());
+  ask(two, {by: REV, to: BOSS, id: 'q-rev-general'});
+  assert.ok((await watch(two, {until: 20, screens: {[REV]: () => IDLE}})).alerts.some(m => m[2] === '정체'), '실행 둘');
+  const one = setup();
+  ask(one, {by: REV, to: BOSS, id: 'q-rev-general'});
+  assert.ok((await watch(one, {until: 20, screens: {[REV]: () => IDLE}})).alerts.some(m => m[2] === '정체'), '실행 하나여도 같다');
+});
+
+test('F5 대조: 두 실행 모두에 담당의 질문이 걸려 있으면(모든 실행이 정당한 대기) 정체를 내지 않는다', async () => {
+  const env = addSecondExecution(setup());
+  ask(env, {by: REV, to: BOSS, id: 'q-rev-a', execution: KEY});
+  ask(env, {by: REV, to: BOSS, id: 'q-rev-b', execution: KEY2});
+  const out = await watch(env, {until: 20, screens: {[REV]: () => IDLE}});
+  assert.equal(out.alerts.some(m => m[2] === '정체' || m[2] === '멈춤'), false, JSON.stringify(out.alerts));
+});
+
+test('F5 회귀: 한 실행에만 감독의 답 대기가 걸려 있으면 화면에 표시가 없는 담당의 멈춤은 가리지 않는다', async () => {
+  const env = addSecondExecution(setup());
+  ask(env, {by: BOSS, to: TOP, id: 'q-boss-a', execution: KEY});
+  const out = await watch(env, {until: 20, screens: {[REV]: () => IDLE}});
+  assert.ok(out.alerts.some(m => m[1] === BOSS && m[2] === '멈춤'), JSON.stringify(out.alerts));
 });
