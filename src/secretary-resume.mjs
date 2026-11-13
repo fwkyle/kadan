@@ -155,8 +155,10 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
   return checkpoint;
 }
 
+// openTab({entries, session, role, cwd, panePid})은 로티 탭을 열고 {window, rottieTerminalId, ...}를 돌려준다(던지지 않음).
+// 세션을 먼저 만든 뒤에만 부르고, 탭이 안 열려도(없음·실패·시간 초과) 시작은 성공이며 숨김으로 기록한다.
 export function resumeSecretary({home, floor, startNew, read = () => readSystemLedger(home),
-  record = entry => appendLedger(entry, home), startExtra = {}} = {}) {
+  record = entry => appendLedger(entry, home), startExtra = {}, openTab = null} = {}) {
   return withRecoveryLock(home, 'kadan-비서', () => {
     if (floor.alive('kadan-비서')) return 'reused';
     const entries = read();
@@ -171,9 +173,14 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
     const command = withInlineScreen(savedCommand); // 옛 체크포인트에도 인라인 화면을 붙인다
     const evidence = floor.create({session: start.session, role: start.role,
       cwd: saved.cwd, cmd: command});
+    let tab = null;
+    try { tab = openTab?.({entries, session: start.session, role: start.role, cwd: saved.cwd,
+      panePid: evidence.panePid}) ?? null; } catch { /* 탭을 못 열어도 시작은 성공(숨김) */ }
+    const tabOpened = tab?.window === 'rottie' && Boolean(tab.rottieTerminalId);
     record({...buildStartLedgerEntry({floorName: 'tmux', role: start.role, session: start.session,
-      evidence, window: 'hidden', cmd: command, cwd: saved.cwd,
-      rottieTerminalId: window?.rottieTerminalId}), roleProfile: start.roleProfile || 'secretary',
+      evidence, window: tabOpened ? 'rottie' : 'hidden', cmd: command, cwd: saved.cwd,
+      rottieTerminalId: tabOpened ? tab.rottieTerminalId : window?.rottieTerminalId}),
+      ...(tabOpened ? {rottieBundleId: tab.rottieBundleId, rottieConnect: tab.rottieConnect} : {}), roleProfile: start.roleProfile || 'secretary',
       by: start.by || '사람', secretaryResumeSource: saved.startDigest,
       secretaryConversation: saved.conversation, ...startExtra});
     // Same conversation, new pane generation. Preserve the checkpoint if UI startup is later.

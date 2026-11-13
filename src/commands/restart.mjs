@@ -6,6 +6,7 @@ import { floor } from "../floor.mjs";
 import { appendLedger, ledgerHome, readLedger } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { currentRottieWindow } from "../restore.mjs";
+import { openSecretaryTab } from "../secretary-tab.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole, MODEL_FROM_SETTINGS } from "../restart.mjs";
 import { readStatusLine } from "../watch-status-line.mjs";
@@ -54,6 +55,7 @@ export function restartDeps(home, { env = process.env, windowDeps = {} } = {}) {
     closeWindow: (entries, name) => floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(entries, name), { print: console.error }) : {},
     openWindow: ({ session: name, role: who, cwd, panePid }) =>
       process.platform === "darwin" ? openStartedWindow(name, process.platform, { ...windowDeps, choice, role: who, cwd, panePid }) : { method: "manual" },
+    openSecretaryTab: tab => openSecretaryTab({home, env, ...(windowDeps.secretaryTab ?? {}), ...tab}),
     beforeStop: session => confirmIdleBeforeStop(session),
     paneInfo,
     processTree,
