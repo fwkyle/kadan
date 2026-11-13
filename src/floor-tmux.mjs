@@ -353,6 +353,7 @@ function waitForClientDefault(session, tries = 12) {
 
 export function openWindow(session, platform = process.platform, deps = {}) {
   const choice = deps.choice;
+  const warn = deps.warn ?? console.error; // 자동 주기 호출은 조용히(같은 실패 줄이 매 주기 쌓이지 않게)
   if (choice?.error || platform !== "darwin" || choice?.kind === "none") {
     return { method: "manual" };
   }
@@ -377,11 +378,11 @@ export function openWindow(session, platform = process.platform, deps = {}) {
       result = create(`kadan-${session}-${deps.panePid ?? "unknown"}-${deps.conflictKeySuffix}`);
     }
     if (!result.ok) {
-      console.error(`창 rottie 실패: ${result.code}`);
+      warn(`창 rottie 실패: ${result.code}`);
       return null;
     }
     if (!waitForClient(session)) {
-      console.error("창 rottie: 패널은 만들어졌으나 tmux 클라이언트 미접속");
+      warn("창 rottie: 패널은 만들어졌으나 tmux 클라이언트 미접속");
       return null;
     }
     return { method: "rottie", rottieTerminalId: result.id };
@@ -397,11 +398,11 @@ export function openWindow(session, platform = process.platform, deps = {}) {
     spawnFn,
   });
   if (!result.ok) {
-    console.error(`창 orca 실패: ${result.code}`);
+    warn(`창 orca 실패: ${result.code}`);
     return null;
   }
   if (!waitForClient(session)) {
-    console.error("창 orca: 탭은 만들어졌으나 tmux 클라이언트 미접속");
+    warn("창 orca: 탭은 만들어졌으나 tmux 클라이언트 미접속");
     return null;
   }
   return {

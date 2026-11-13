@@ -8,6 +8,8 @@ import {rottieConnectivity, showRottieWindow, removeRottieWindow, openWindow} fr
 import {currentRottieWindow} from './restore.mjs';
 
 const ALIVE_STATES = new Set(['running', 'created']);
+// 로티가 "이 탭은 끝났다"고 확정해 주는 상태만 교체한다. unknown·빈 값·처음 보는 값은 모르는 것이라 열지 않는다.
+const DEAD_STATES = new Set(['exited']);
 export const TAB_CALL_TIMEOUT_MS = 5000; // 로티 호출 한 번의 상한. 1분마다 도는 길이라 짧게 둔다.
 
 const bounded = (run = spawnSync) => (bin, args, options) => run(bin, args, {...options, timeout: TAB_CALL_TIMEOUT_MS});
@@ -28,9 +30,10 @@ export function planSecretaryTab({env = process.env, auto = false, setting, entr
   // 이을 탭이 있으면 그 탭이 살아 있는지 로티에 묻는다. 모르면 열지 않는다(탭 둘이 되는 쪽이 틀린 방향).
   const shown = show(current.rottieTerminalId);
   if (shown.ok) {
-    return ALIVE_STATES.has(shown.state)
-      ? {open: false, reason: 'tab-alive', connection}
-      : {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: shown.state}};
+    if (ALIVE_STATES.has(shown.state)) return {open: false, reason: 'tab-alive', connection};
+    return DEAD_STATES.has(shown.state)
+      ? {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: shown.state}}
+      : {open: false, reason: 'tab-unknown', connection};
   }
   return shown.code === 'ROTTIE_TERMINAL_NOT_FOUND'
     ? {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: '없음'}}
@@ -38,7 +41,7 @@ export function planSecretaryTab({env = process.env, auto = false, setting, entr
 }
 
 // 탭 하나를 열고 결과를 돌려준다. 던지지 않는다. 열지 않았거나 실패하면 {window: 'hidden'}이다.
-export function openSecretaryTab({home, env = process.env, auto = false, entries, session, role, cwd, panePid,
+export function openSecretaryTab({home, env = process.env, auto = false, quiet = false, entries, session, role, cwd, panePid,
   platform = process.platform, run = spawnSync, readSetting = readWindowSetting, open = openWindow}) {
   try {
     if (platform !== 'darwin') return {window: 'hidden', reason: 'not-darwin'};
@@ -49,7 +52,7 @@ export function openSecretaryTab({home, env = process.env, auto = false, entries
       show: terminalId => showRottieWindow({bin: setting.rottieBin, terminalId, spawnFn})});
     if (!plan.open) return {window: 'hidden', reason: plan.reason};
     const opened = open(session, platform, {choice: {kind: 'rottie'}, rottieBin: setting.rottieBin, spawnFn,
-      role, cwd, panePid});
+      role, cwd, panePid, ...(quiet ? {warn: () => {}} : {})});
     if (!opened?.rottieTerminalId) return {window: 'hidden', reason: 'open-failed'};
     if (plan.replace && plan.replace.state !== '없음') {
       // 죽은 옛 탭은 한 번 지워 본다. 실패해도 알리기만 한다(restore와 같다).
@@ -63,6 +66,13 @@ export function openSecretaryTab({home, env = process.env, auto = false, entries
   }
 }
 
+function inheritsOnlyOldTab(entries, session) {
+  const own = entries.filter(e => e.session === session);
+  const start = own.findLast(e => e.kind === 'start');
+  return start?.window === 'hidden' && Boolean(start.rottieTerminalId)
+    && !own.slice(own.lastIndexOf(start) + 1).some(e => e.kind === 'window' && e.rottieTerminalId);
+}
+
 // 로티 없이 숨김으로 뜬 비서에 로티가 뜬 뒤 탭을 한 번 붙인다(`up --auto` 주기에서). 탭 기록이 이미 있으면 아무것도 하지 않는다
 // (사람이 닫은 탭을 다시 열지 않는다). 성공하면 window 사건 하나만 남기고, 실패는 아무것도 기록하지 않는다.
 // readEntries는 함수다: 기계 설정이 rottie일 때만 원장을 읽어, 로티를 안 쓰는 기계는 매분 원장을 읽지 않는다.
@@ -71,11 +81,15 @@ export function attachHiddenSecretary({home, floor, session, readEntries, record
   try {
     if (readSetting(home)?.window !== 'rottie') return {attached: false, reason: 'setting-not-rottie'};
     const entries = readEntries();
-    if (currentRottieWindow(entries, session)) return {attached: false, reason: 'has-tab'};
+    // 이어받은 옛 탭 ID(숨김으로 뜬 세대에 남은 것)는 탭이 있다는 뜻이 아니다. 로티에 물어 닫힌 탭이면 붙인다.
+    // 이 세대에 실제로 연결한 탭(start가 rottie이거나 그 뒤 window 사건)은 사람이 닫았어도 다시 열지 않는다.
+    if (currentRottieWindow(entries, session) && !inheritsOnlyOldTab(entries, session)) {
+      return {attached: false, reason: 'has-tab'};
+    }
     const start = entries.findLast(e => e.kind === 'start' && e.session === session);
     if (!start || entries.slice(entries.lastIndexOf(start) + 1).some(e => e.session === session && e.kind === 'stop')
       || String(floor.pid(session)) !== String(start.panePid)) return {attached: false, reason: 'generation-unclear'};
-    const result = open({home, env, auto, entries, session, role: start.role, cwd: start.cwd, panePid: start.panePid});
+    const result = open({home, env, auto, quiet: true, entries, session, role: start.role, cwd: start.cwd, panePid: start.panePid});
     if (result.window !== 'rottie') return {attached: false, reason: result.reason};
     record({kind: 'window', role: start.role, session, rottieTerminalId: result.rottieTerminalId,
       panePid: start.panePid, by: 'autostart'});

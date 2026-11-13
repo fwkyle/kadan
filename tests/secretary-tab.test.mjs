@@ -171,3 +171,65 @@ test('aux: a hidden secretary gets one tab after Rottie appears; failures write 
   assert.equal(attachHiddenSecretary({home: 'h', floor: {pid: () => '99'}, session: 'kadan-비서', readSetting: () => SETTING,
     readEntries: () => hidden, record: () => {}, open: () => ({window: 'rottie', rottieTerminalId: 'X'})}).reason, 'generation-unclear');
 });
+
+// ---- PR #407 검수 수정(F1·F2·S1): 0621837에서 실패하는 재현 ----
+const realOpen = async () => {
+  const {openWindow} = await import('../src/floor-tmux.mjs');
+  return (s, p, d) => openWindow(s, p, {...d, waitForClient: () => true});
+};
+const shownState = state => ({ok: true, result: {terminal: {state}}});
+
+test('F1: an unknown/empty/unrecognized tab state never opens a new tab (only a confirmed exited tab is replaced)', async () => {
+  const open = await realOpen();
+  for (const state of ['unknown', '', 'weird-new-state']) {
+    const fake = fakeRottie({show: shownState(state)});
+    const result = openSecretaryTab({...ctx, entries: withTab.entries, run: fake.run, open});
+    assert.equal(result.window, 'hidden', state);
+    const verbs = fake.calls.map(c => c.args.slice(0, 2).join(' '));
+    assert.deepEqual(verbs, ['status --json', 'terminal show'], `${state}: create/remove 0회`);
+  }
+  const exited = fakeRottie({show: shownState('exited')});
+  assert.equal(openSecretaryTab({...ctx, entries: withTab.entries, run: exited.run, open}).window, 'rottie');
+});
+
+const inheritedHidden = () => [{kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30', window: 'hidden',
+  rottieTerminalId: 'old'}];
+const attachWith = async (entries, fake, record) => {
+  const open = await realOpen();
+  return attachHiddenSecretary({home: 'h', floor: {pid: () => '30'}, session: 'kadan-비서', readEntries: () => entries,
+    record, readSetting: () => SETTING,
+    open: c => openSecretaryTab({...c, env: {KADAN_WINDOW: 'rottie'}, platform: 'darwin', readSetting: () => SETTING, run: fake.run, open})});
+};
+
+test('F2: a hidden generation that inherited a gone/exited old tab id is still attached, once', async () => {
+  for (const show of [null, shownState('exited')]) { // null = 로티가 NOT_FOUND로 답함
+    const entries = inheritedHidden(), recorded = [];
+    const fake = fakeRottie({show});
+    const result = await attachWith(entries, fake, e => { recorded.push(e); entries.push(e); });
+    assert.equal(result.attached, true);
+    assert.deepEqual([recorded[0].kind, recorded[0].rottieTerminalId], ['window', 'new']);
+    assert.equal(currentRottieWindow(entries, 'kadan-비서').rottieTerminalId, 'new');
+    const again = await attachWith(entries, fakeRottie(), e => recorded.push(e));
+    assert.equal(again.reason, 'has-tab'); assert.equal(recorded.length, 1);
+  }
+});
+
+test('F2: inherited id whose tab is alive/unknown is left alone; a tab of the current generation the human closed is not reopened', async () => {
+  for (const state of ['running', 'unknown']) {
+    const recorded = [];
+    const r = await attachWith(inheritedHidden(), fakeRottie({show: shownState(state)}), e => recorded.push(e));
+    assert.equal(r.attached, false, state); assert.equal(recorded.length, 0);
+  }
+  const current = [{kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30', window: 'rottie', rottieTerminalId: 'mine'}];
+  const fake = fakeRottie(); // 현재 세대 탭이 NOT_FOUND(사람이 닫음)여도 다시 열지 않는다
+  const r = await attachWith(current, fake, () => assert.fail('기록하면 안 된다'));
+  assert.equal(r.reason, 'has-tab'); assert.equal(fake.calls.length, 0);
+});
+
+test('S1: the automatic attach path stays silent on failure (no repeated stderr line)', async () => {
+  const lines = [], original = console.error; console.error = line => lines.push(line);
+  try {
+    for (let i = 0; i < 2; i++) await attachWith(inheritedHidden(), fakeRottie({create: null}), () => assert.fail('실패는 기록 없음'));
+  } finally { console.error = original; }
+  assert.deepEqual(lines, []);
+});
