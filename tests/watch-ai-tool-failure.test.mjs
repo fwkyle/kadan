@@ -39,7 +39,12 @@ async function watch(env, {from = 0, until, outcome = () => 'ok', ai: fakeAI = n
   const userNotes = [], roleMessages = [], prints = [], counts = env.counts ??= new Map();
   let minute = from;
   const clock = () => epoch + minute * 60_000, iso = () => new Date(clock()).toISOString();
-  const record = entry => appendLedger({...entry, t: entry.t ?? iso()}, home);
+  // breakDelivery가 켜진 동안은 보고의 전달과 전달 기록 쓰기가 실패한다(판정 기록은 이미 원장에 남은 뒤다).
+  let breakDelivery = false;
+  const record = entry => {
+    if (breakDelivery && entry.kind === 'watch-ai-delivery') throw new Error('전달 기록 쓰기 실패');
+    return appendLedger({...entry, t: entry.t ?? iso()}, home);
+  };
   let mailRoles = [];
   const mailReader = createWatchMailReader(home, null, {readCards: () => cards, readWorks: () => [], readRoles: () => mailRoles});
   const reads = cycleReads({readEntries: mailReader.readEntries, readCards: () => cards, readWorks: () => [], version: () => storageVersion(home)});
@@ -48,7 +53,10 @@ async function watch(env, {from = 0, until, outcome = () => 'ok', ai: fakeAI = n
     read: session => session === `kadan-${REV}` ? `⏺ 작업 ${letters(minute)}\n\n✻ Working… (${minute}m 0s · esc to interrupt)\n\n${IDLE}`
       : `⏺ 기다리는 중 ${letters(Math.floor(minute / 60))}\n\n${IDLE}`};
   const ai = fakeAI ?? new WatchAI({home, now: clock, readCards: () => cards, readWorks: () => [], floor, record,
-    send: (role, message) => roleMessages.push({role, message, minute}),
+    send: (role, message) => {
+      if (breakDelivery) throw Object.assign(new Error('전달 실패'), {delivery: 'not-sent'});
+      roleMessages.push({role, message, minute});
+    },
     spawn: async (_command, options) => {
       const id = options.env.KADAN_JUDGE_REQUEST;
       const request = readLedger(home).find(e => e.kind === 'watch-ai-request' && e.requestId === id);
@@ -58,6 +66,12 @@ async function watch(env, {from = 0, until, outcome = () => 'ok', ai: fakeAI = n
       // 정상 판정: 일하는 작업자는 진행중, 기다리는 감독은 입력대기.
       if (result === 'ok') { ai.reports.submit(id, request.source === 'progress' ? '진행중' : '입력대기', '정상'); return {status: 0, stdout: ''}; }
       if (result === 'missing') return {status: 0, stdout: '입력대기'}; // 판정은 정했지만 보고 명령이 끝나지 못했다
+      // 판정은 원장에 기록됐지만 전달과 전달 기록이 끝나지 못했다. verdict를 주면 그 판정으로, 없으면 입력대기로 보고한다.
+      if (result?.undelivered) {
+        breakDelivery = true;
+        try { ai.reports.submit(id, result.undelivered, '판정 이유'); } catch { /* 전달 기록 실패 */ } finally { breakDelivery = false; }
+        return {status: 0, stdout: ''};
+      }
       if (result === 'failed') return {status: 1, stdout: ''};
       return {status: null, error: {code: 'ETIMEDOUT'}};
     }});
@@ -172,4 +186,26 @@ test('감시 보고 저장소 정리 실패는 한 주기면 조용하고 3주�
   const out = await watch(setup(), {until: 20, ai: failing([3, 4, 5])});
   assert.equal(out.userNotes.length, 1);
   assert.match(out.userNotes[0].text, /점검 도구 오류 — 감시 보고 저장소 정리가 연속으로 실패/u);
+});
+
+// 검수 지적: 판정 낱말은 정상(입력대기)이어도, 진행 중 카드의 담당이 묻지 않고 입력 대기면 보고 저장소가 '알릴 문제'로 기록한다.
+// 그 전달 기록이 끝나지 못한 것은 도구 실패만이 아니다: 문제 판정이 아무에게도 안 갔을 수 있어 한 번이어도 바로 올린다.
+test('알리라고 기록된 판정(입력대기 + 질문 없음)의 전달 기록이 미완이면 한 번이어도 바로 올리고, 정상으로 보였다고 쓰지 않는다', async () => {
+  const out = await watch(setup(), {until: 45, outcome: ({key, n}) => key === PROGRESS && n === 1 ? {undelivered: '입력대기'} : 'ok'});
+  const report = out.ledger.find(e => e.kind === 'watch-ai-report' && e.role === REV);
+  assert.equal(report.verdict, '입력대기');
+  assert.equal(report.notify, true, '보고 저장소가 알릴 문제로 기록했다');
+  assert.equal(report.idleWithoutAsk, true);
+  assert.ok(out.calls.includes(`${PROGRESS}=report-incomplete`), JSON.stringify(out.calls));
+  assert.equal(out.userNotes.length, 1, JSON.stringify(out.userNotes));
+  const [note] = out.userNotes;
+  assert.match(note.text, /점검 도구 오류 — /u);
+  assert.match(note.text, /기록된 판정: 입력대기 — 알릴 문제로 기록됨\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\)/u);
+  assert.ok(!note.text.includes('정상으로 보였음') && !note.text.includes('대상 상태는 모름'), note.text);
+});
+
+test('대조: 같은 실패에서 판정이 정체여도 바로 올린다(기존 예외 경로)', async () => {
+  const out = await watch(setup(), {until: 45, outcome: ({key, n}) => key === PROGRESS && n === 1 ? {undelivered: '정체'} : 'ok'});
+  assert.equal(out.userNotes.length, 1);
+  assert.match(out.userNotes[0].text, /기록된 판정: 정체\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\)/u);
 });

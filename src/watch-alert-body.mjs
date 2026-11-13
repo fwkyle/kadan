@@ -63,10 +63,11 @@ function watchAIErrorBody(alert) {
   }
   const [happened, todo] = AI_ERROR_REASONS[alert.reason] ?? UNKNOWN_REASON;
   const what = alert.source === "supervisor-health" ? "응답 상태" : alert.source ? "작업 진행" : "상태";
-  // 기록된 판정이 있을 때만 대상 상태를 말한다.
+  // 기록된 판정이 있을 때만 대상 상태를 말한다. "정상으로 보였음"은 판정 낱말이 정상이고 알리라는 판정이 아닐 때만 쓴다:
+  // 낱말이 정상(입력대기)이어도 알릴 문제로 기록된 판정(judgeNotify)은 문제 판정으로 적는다.
   const target = !alert.judgeVerdict ? TARGET_UNKNOWN
-    : normalWatchVerdict(alert.judgeVerdict) ? `대상은 정상으로 보였음(기록된 판정: ${alert.judgeVerdict})`
-      : `기록된 판정: ${alert.judgeVerdict}${abnormalDelivery(alert.judgeDeliveredTo)}`;
+    : normalWatchVerdict(alert.judgeVerdict) && !alert.judgeNotify ? `대상은 정상으로 보였음(기록된 판정: ${alert.judgeVerdict})`
+      : `기록된 판정: ${alert.judgeVerdict}${alert.judgeNotify && normalWatchVerdict(alert.judgeVerdict) ? " — 알릴 문제로 기록됨" : ""}${abnormalDelivery(alert.judgeDeliveredTo)}`;
   return `점검 도구 오류 — 감시기가 ${alert.role} ${what} 점검을 끝내지 못함(${happened}${repeated(alert)}) · ${target} · 할 일: ${todo}`;
 }
 
@@ -190,6 +191,7 @@ export function recordAlert(record, alert, recipient, delivered, resolved = fals
       ...(alert.reason !== undefined ? {reason:alert.reason} : {}),
       ...(alert.judgeVerdict !== undefined ? {judgeVerdict:alert.judgeVerdict} : {}),
       ...(alert.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:alert.judgeDeliveredTo} : {}),
+      ...(alert.judgeNotify ? {judgeNotify:true} : {}),
       ...(alert.judgeReason !== undefined ? {judgeReason:alert.judgeReason} : {}),
       ...(alert.kind === "프로세스" ? {signals:alert.signals,text:alert.text,...(alert.since!==undefined?{since:alert.since}:{})} : {}),
       ...(alert.kind === "훅신뢰" ? {hookTrustState:alert.state,hookTrustText:alert.text} : {}),
@@ -225,6 +227,7 @@ export function seedAlertState(entries) {
       id: e.id, ...(e.held ? {held:true} : {}), kind: e.alertKind, level: e.level, role: e.role, session: e.session, taskId: e.taskId,
       verdict: e.verdict, reason: e.reason, judgeVerdict: e.judgeVerdict, judgeReason: e.judgeReason,
       ...(e.judgeDeliveredTo !== undefined ? {judgeDeliveredTo:e.judgeDeliveredTo} : {}),
+      ...(e.judgeNotify ? {judgeNotify:true} : {}),
       ...(e.signals !== undefined ? {signals:e.signals,text:e.text,...(e.since!==undefined?{since:e.since}:{})} : {}),
       ...(e.holdCode !== undefined ? {holdCode:e.holdCode} : {}),   // 알림밀림 사유(재시작 뒤에도 사유 변화 판정이 같도록)
     });

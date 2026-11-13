@@ -338,7 +338,7 @@ export async function runWatch({
       const failure=(reason,run=null)=>judgeFailures.set(job.key,{id:`ai-call:${job.key}`,kind:'감시AI오류',level:'AMBER',role:job.candidate.role,
         session:job.candidate.session,taskId:job.candidate.taskId,source:job.candidate.source,reason,
         ...(run?{failCount:run.count,failMinutes:Math.floor((cycleAt-run.since)/60_000)}:{}),
-        ...(result.verdict?{judgeVerdict:result.verdict,judgeDeliveredTo:result.deliveredRecipients??[]}:{})});
+        ...(result.verdict?{judgeVerdict:result.verdict,judgeDeliveredTo:result.deliveredRecipients??[],...(result.judgeNotify?{judgeNotify:true}:{})}:{})});
       // 인터넷 없음·잠자기는 알리지 않고 다음 정기 점검에 다시 부른다. 이전 알림은 그대로 둔다(성공해야 풀린다).
       if(OFFLINE_REASONS.has(result.reason)){
         const count=result.reason==='network'?(offlineFailures.get(job.key)??0)+1:0;
@@ -364,8 +364,10 @@ export async function runWatch({
         unrecorded.push(call);
       }
       const runs=aiFailureRuns(mailEntries,cycleAt,unrecorded),run=runs.target(job.key);
-      // 문제 판정이 기록됐는데 전달 기록이 없으면 도구 실패만이 아니다(문제 판정이 아무에게도 안 갔을 수 있다). 지금처럼 바로 알린다.
-      const undelivered=result.verdict&&!normalWatchVerdict(result.verdict)&&!result.deliveredRecipients?.length;
+      // 알리라는 판정이 기록됐는데 전달 기록이 없으면 도구 실패만이 아니다(문제 판정이 아무에게도 안 갔을 수 있다). 지금처럼 바로 알린다.
+      // 판정 낱말만 보지 않는다: 낱말이 정상(입력대기)이어도 보고 저장소가 알릴 문제로 기록한 판정(judgeNotify)은 여기에 든다.
+      // 낱말이 비정상이면 알림 표시가 없어도 든다(애매하면 올리는 쪽).
+      const undelivered=result.verdict&&(result.judgeNotify===true||!normalWatchVerdict(result.verdict))&&!result.deliveredRecipients?.length;
       if(undelivered)failure(result.reason);
       else if(allFailureDue(runs.all,cycleAt)){
         // 전체 장애 경보가 열려 있는 동안은 대상별 경보를 따로 올리지 않는다(같은 장애를 두 번 알리지 않는다).

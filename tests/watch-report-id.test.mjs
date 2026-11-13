@@ -136,6 +136,11 @@ test('기록된 판정이 있을 때만 대상 상태를 말한다: 정상이면
  assert.match(formatAlertBody({...base,judgeVerdict:'실행완료'}),/ · 대상은 정상으로 보였음\(기록된 판정: 실행완료\) · 할 일: /);
  assert.match(formatAlertBody({...base,judgeVerdict:'정체'}),/ · 기록된 판정: 정체\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\) · 할 일: /);
  for(const verdict of ['실행완료','정체'])assert.ok(!formatAlertBody({...base,judgeVerdict:verdict}).includes('대상 상태는 모름'));
+ // 낱말은 정상이어도 알릴 문제로 기록된 판정은 정상으로 보였다고 쓰지 않는다.
+ const notified=formatAlertBody({...base,judgeVerdict:'입력대기',judgeNotify:true});
+ assert.match(notified,/ · 기록된 판정: 입력대기 — 알릴 문제로 기록됨\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\) · 할 일: /);
+ assert.ok(!notified.includes('정상으로 보였음'));
+ assert.match(formatAlertBody({...base,judgeVerdict:'정체',judgeNotify:true}),/ · 기록된 판정: 정체\(판정은 기록됐지만/);
 });
 
 test('R1: 인자가 원장에 있는 다른 요청이면 환경·폴더 값이 덮지 않는다(역할 교차)',()=>{

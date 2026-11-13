@@ -100,7 +100,10 @@ export class WatchAI {
       ...(settingsError?{settingsError}:{}),...(previous?{previousRequestId:previous.requestId,previousReason:previous.reason}:{})};
     this.reports.record(call);
     const d=receipt?.delivery;
-    return {ok:reason==='reported',reason,requestId:request.requestId,...(receipt?.report?{verdict:receipt.report.verdict}:{}),
+    // judgeNotify: 기록된 판정이 사람에게 알리라고 한 것인가. 판정 낱말이 정상(입력대기)이어도 보고 저장소가 알릴 문제로
+    // 기록한 경우(진행 중 카드의 담당이 묻지 않고 입력 대기)가 있어, 낱말만으로는 조용히 해도 되는지 알 수 없다.
+    return {ok:reason==='reported',reason,requestId:request.requestId,
+      ...(receipt?.report?{verdict:receipt.report.verdict,judgeNotify:receipt.report.notify===true||receipt.report.idleWithoutAsk===true}:{}),
       deliveredRecipients:[...(d?.delivery==='sent'?[d.recipient]:[]),...(d?.escalation?.delivery==='sent'?[d.escalation.recipient]:[])]};
   }
 }
