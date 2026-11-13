@@ -101,6 +101,17 @@ Rottie의 자동 복원 설정이 켜져 있고 프로젝트가 열려 있을 �
 
 Claude 역할의 명시 `--effort`도 조회·복원한다. 초기 복원 버전에서 빠진 값은 같은 역할과 폴더의 정확한 `restoredFrom` 시작 기록에서만 보완한다. 누락·변조된 추론 강도로 실행하지 않는다. 일반 `/effort` 실행 중 변경값은 수집하지 않는다.
 
+복원으로 새 세션을 만들 때 그 세대의 시작 기록에 있던 값을 잃지 않게 잇는다. 규칙은 보존뿐이다.
+
+- **Stop 훅**: Claude 역할이면 지금 저장 폴더의 `--settings <설정 파일>`을 다시 붙인다(`kadan start`·`restart`·`reopen`과 같은 처리). 옛 명령의 경로를 옮기지 않는다. 설정 파일이 없으면 붙이지 않는다.
+- **이어 주는 옵션**: Claude의 `--permission-mode <값>`·`--dangerously-skip-permissions`·`--allow-dangerously-skip-permissions`, Codex의 `-p`/`--profile`과 `-c`/`--config <키=값>`.
+- **언제 잇나**: 시작 기록에는 있는데 Rottie가 준 복원 명령에 없을 때만, 기록된 값 그대로 명령 끝에 더한다. 시작 기록에 없던 값은 붙이지 않고, 복원 명령에 이미 있는 값은 바꾸지 않는다. Claude 권한은 한 묶음으로 보아 복원 명령에 권한 옵션이 하나라도 있으면 더하지 않는다. Codex 설정 값은 키마다 따로 본다.
+- **어느 기록을 보나**: 복원 대상 세대의 시작 기록. 그 기록이 앞선 복원(`restoredFrom`)으로 만들어졌고 값이 없으면 같은 역할·폴더의 정확한 이전 탭 시작 기록까지만 거슬러 본다.
+- **잇지 않는 경우**: 시작 명령을 낱말로 읽지 못하거나, 이어 줄 옵션이 값을 받는지 모르는 옵션 바로 뒤에 있거나, 값이 허용 목록 밖이거나, 같은 옵션이 다른 값으로 두 번 있거나, 이전 탭 기록을 하나로 확인하지 못하면 아무것도 더하지 않는다. 역할은 Rottie가 준 명령 그대로 열리고, 표준 오류에 경고 한 줄이 나간다.
+- **기록**: 새 시작 기록에 `optionCarry`가 남는다. `added`면 `optionCarryKeys`에 이은 옵션 이름(값은 `cmd`에 있다), `skipped`면 `optionCarryReason`에 이유 낱말(`original-unreadable`·`original-ambiguous`·`chain-unresolved`·`command-ambiguous`·`command-dashed`·`quote-failed`·`internal`)이 있다. 이을 것이 없었으면 칸이 없다.
+
+실행기·모델·추론 강도·비서 대화의 대조는 Rottie가 준 원래 명령으로 하고, 위에서 만든 명령은 세션 실행과 시작 기록에만 쓴다. 살아 있는 pane을 다시 잇는 경우에는 명령을 만들지 않는다.
+
 ## 비서에게 복원 예외 전달
 
 기본 복원은 Rottie 코드가 맡는다. `kadan recovery report --report <JSON>`은 실패하거나

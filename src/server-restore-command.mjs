@@ -7,7 +7,8 @@ import {dedupeResumeCommand, quoteWord, serializeWords} from './codex-option-mer
 const UUID = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i;
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 // 값 개수가 확실한 옵션만 보존한다. 가변 개수·선택 값·실행 방식 변경 옵션은 자동 복원하지 않는다.
-const OPTIONS = {
+// 로티 탭 복원의 옵션 잇기(recovery-launch.mjs)도 값 자리를 가릴 때 이 목록을 쓴다.
+export const RESTORE_OPTIONS = {
   claude: {
     value: new Set(['--model', '--effort', '--agent', '--name', '-n', '--permission-mode',
       '--append-system-prompt', '--system-prompt', '--settings', '--setting-sources']),
@@ -25,7 +26,7 @@ const OPTIONS = {
 export function parseRestoreCommand(command) {
   const words = commandWords(command);
   const harness = words?.[0]?.split('/').pop()?.replace(/^kadan-/, '');
-  const spec = OPTIONS[harness];
+  const spec = RESTORE_OPTIONS[harness];
   if (!spec) throw new Error('복원 명령의 실행기·인자 경계 불명');
   let args = words.slice(1), id = null;
   if (harness === 'codex') {
