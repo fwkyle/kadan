@@ -4,11 +4,37 @@
 // 바꾸지 않는다. 읽을 수 없거나 애매하면 잇지 않고 그 사실만 알린다. 이 모듈은 던지지 않는다.
 import {commandWords} from './ai-identity.mjs';
 import {quoteWord} from './codex-option-merge.mjs';
-import {RESTORE_OPTIONS} from './server-restore-command.mjs';
+import {CLAUDE_VALUE_OPTIONS, CODEX_VALUE_OPTIONS, CODEX_FLAG_OPTIONS} from './conversation-ref.mjs';
 import {PERMISSION_MODES} from './adopt-permissions.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 
-const PROFILE = {group: 'profile', key: 'profile', valid: v => /^[\w.-]+$/.test(v)};
+// 실행기가 받는 옵션 표. 값을 꼭 받는 옵션은 대화 지정 해석기(conversation-ref.mjs)의 도움말 실측 표를 같이 쓴다.
+// 표에 없는 옵션이 하나라도 있으면 그 명령은 읽지 못한 것으로 본다 — 모르는 옵션 뒤의 낱말이 값인지 옵션인지,
+// 그 옵션이 권한·설정을 바꾸는지 알 수 없기 때문이다. 모르면 잇지 않는다.
+//   claude 2.1.323 `claude --help`: 값 없는 옵션과 값이 선택인 옵션([값])을 옮겼다. 짧은 옵션에 값을 붙여 쓴 꼴은 읽지 않는다.
+//   codex 0.166.0 `codex resume --help`: 짧은 옵션은 `-c 값`·`-c값`·`-c=값`을 모두 받는다(긴 옵션은 `--config 값`·`--config=값`).
+//   -i/--image는 값을 여러 개 받아 표에 넣지 않는다. 짧은 옵션 묶음(`-xc`)도 읽지 않는다.
+const OPTIONS = {
+  claude: {
+    value: CLAUDE_VALUE_OPTIONS,
+    optional: new Set(['--resume', '-r', '--debug', '-d', '--cloud', '--from-pr', '--prompt-suggestions',
+      '--remote-control', '--teleport', '--worktree', '-w']),
+    flag: new Set(['--ax-screen-reader', '--bg', '--bare', '--brief', '--chrome', '-c', '--continue', '--desktop',
+      '--disable-slash-commands', '--exclude-dynamic-system-prompt-sections', '--fork-session',
+      '--forward-subagent-text', '--ide', '--include-hook-events', '--include-partial-messages', '--no-chrome',
+      '--no-session-persistence', '-p', '--print', '--replay-user-messages', '--restricted', '--strict-mcp-config',
+      '--safe-mode', '--tmux', '--verbose']),
+    attached: false,
+  },
+  codex: {
+    value: CODEX_VALUE_OPTIONS,
+    optional: new Set(),
+    flag: new Set([...CODEX_FLAG_OPTIONS, '--last', '--all', '--include-non-interactive', '--no-daemon']),
+    attached: true,
+  },
+};
+
+const PROFILE = {group: 'profile', key: 'profile', once: true, valid: v => /^[\w.-]+$/.test(v)};
 const CONFIG = {config: true, valid: v => /^[A-Za-z_][\w.-]*=/.test(v)};
 // 이어 줄 옵션. 값 꼴은 여기서 다시 확인한다. 묶음(group)이 복원 명령에 이미 있으면 그 묶음은 건드리지 않는다.
 const CARRY = {
@@ -21,17 +47,30 @@ const CARRY = {
       '--allow-dangerously-skip-permissions': {group: 'permission', key: 'allow-skip-permissions'},
     },
   },
-  codex: {
-    value: {
-      '-p': PROFILE, '--profile': PROFILE,
-      // 설정 값은 키(`k=v`의 k)마다 따로 본다: 복원 명령에 없는 키만 잇는다.
-      '-c': CONFIG, '--config': CONFIG,
-    },
-    flag: {},
-  },
+  codex: {value: {'-p': PROFILE, '--profile': PROFILE, '-c': CONFIG, '--config': CONFIG}, flag: {}},
 };
-// 값을 받지 않는다고 아는 옵션. 서버 복원의 허용 목록에 대화 지정 표시를 더한다(claude의 -c는 --continue다).
-const PLAIN_FLAGS = {claude: ['--fork-session', '--continue', '-c'], codex: []};
+// codex 설정 값의 묶음은 키의 첫 마디다. 넓은 키(`a={…}`)와 좁은 키(`a.b=…`)가 같은 설정을 바꾸므로 한 묶음으로 본다.
+// 승인·샌드박스는 키 이름이 여럿이라 앞머리로 묶는다.
+function configGroup(key) {
+  const top = key.split('.')[0];
+  if (top === 'profile') return 'profile';
+  if (top.startsWith('sandbox')) return 'c:sandbox';
+  if (top.startsWith('approval')) return 'c:approval';
+  return `c:${top}`;
+}
+// 같은 설정을 바꾸는 전용 옵션. 복원 명령에 이것이 있으면 그 묶음의 설정 값은 이미 있는 것이다.
+const CODEX_TOUCHES = {
+  '-s': ['c:sandbox'], '--sandbox': ['c:sandbox'], '--add-dir': ['c:sandbox'],
+  '-a': ['c:approval'], '--ask-for-approval': ['c:approval'], '--approve-for-me': ['c:approval'],
+  '--dangerously-bypass-approvals-and-sandbox': ['c:sandbox', 'c:approval'],
+  '-m': ['c:model'], '--model': ['c:model'],
+  '--oss': ['c:model_provider', 'c:oss_provider'], '--local-provider': ['c:model_provider', 'c:oss_provider'],
+  '--enable': ['c:features'], '--disable': ['c:features'], '--search': ['c:web_search', 'c:tools'],
+};
+// 세션이 할 수 있는 일을 정하는 claude 옵션. 복원 명령에 이것이 있으면 권한 옵션을 더하지 않는다.
+const CLAUDE_TOUCHES = Object.fromEntries(['--restricted', '--safe-mode', '--bare', '--allowedTools', '--allowed-tools',
+  '--disallowedTools', '--disallowed-tools', '--tools', '--permission-prompts'].map(name => [name, ['permission']]));
+const TOUCHES = {claude: CLAUDE_TOUCHES, codex: CODEX_TOUCHES};
 const CHAIN_LIMIT = 16;
 
 function harnessOf(words) {
@@ -41,57 +80,75 @@ function harnessOf(words) {
   return {harness: name, args: words.slice(head + 1)};
 }
 
-// 명령 하나에서 이어 줄 옵션을 읽는다. 반환: {ok, harness, items:[{group, key, words}]} 또는 {ok:false, reason}.
-// 믿지 않는 경우는 하나다: 이어 줄 옵션 낱말이 "값을 받는지 모르는 옵션" 바로 뒤에 있으면 그 낱말이 옵션인지
-// 앞 옵션의 값인지 알 수 없다. 값을 받는다고 아는 옵션의 값 자리와 `--` 뒤(프롬프트)는 처음부터 읽지 않는다.
+// 옵션 낱말 하나를 이름과 붙여 쓴 값으로 가른다. 읽지 못하는 꼴이면 null.
+function splitOption(token, table) {
+  if (token.startsWith('--')) {
+    const eq = token.indexOf('=');
+    return eq > 0 ? {name: token.slice(0, eq), inline: token.slice(eq + 1)} : {name: token};
+  }
+  if (token.length === 2) return {name: token};
+  const name = token.slice(0, 2), rest = token.slice(2);
+  if (!table.attached || !table.value.has(name)) return null;
+  return {name, inline: rest.startsWith('=') ? rest.slice(1) : rest};
+}
+
+// 명령 하나에서 이어 줄 옵션을 읽는다.
+// 반환: {ok, harness, items:[{group, key, value, words}], present(묶음 이름), dashed} 또는 {ok:false, reason}.
+// 표에 없는 옵션·읽지 못하는 꼴·값이 빠진 옵션이 하나라도 있으면 ok:false다(ambiguous). 값을 꼭 받는 옵션의 값 자리와
+// `--` 뒤(프롬프트)는 옵션으로 읽지 않는다. present에는 같은 설정을 바꾸는 전용 옵션(--sandbox 등)의 묶음도 든다.
 export function readCarryOptions(command, expected) {
   const words = commandWords(command);
   if (!words?.length) return {ok: false, reason: 'unreadable'};
   const {harness, args} = harnessOf(words);
-  const carry = CARRY[harness], known = RESTORE_OPTIONS[harness];
-  if (!carry || !known || (expected && harness !== expected)) return {ok: false, reason: 'unreadable'};
-  const plain = new Set([...known.flag, ...PLAIN_FLAGS[harness]]);
-  const start = harness === 'codex' && args[0] === 'resume' ? (args[1]?.startsWith('-') ? 1 : 2) : 0;
-  const items = new Map();
-  let afterUnknown = false;
-  for (let i = start; i < args.length; i++) {
-    const token = args[i], unsure = afterUnknown;
-    afterUnknown = false;
-    if (token === '--') return {ok: true, harness, items: [...items.values()], dashed: true};
-    if (!token.startsWith('-')) continue;
-    const eq = token.startsWith('--') ? token.indexOf('=') : -1;
-    const name = eq > 0 ? token.slice(0, eq) : token;
-    const valueSpec = carry.value[name], flagSpec = carry.flag[name];
-    if (valueSpec || flagSpec) {
-      if (unsure) return {ok: false, reason: 'ambiguous'};
-      let spec = flagSpec, taken = [token];
-      if (valueSpec) {
-        const value = eq > 0 ? token.slice(eq + 1) : args[i + 1];
-        if (typeof value !== 'string' || !value || value.startsWith('-') || !valueSpec.valid(value)) {
-          return {ok: false, reason: 'ambiguous'};
-        }
-        if (eq < 0) { taken = [token, value]; i += 1; }
-        spec = valueSpec.config
-          ? {group: `c:${value.split('=')[0]}`, key: `c:${value.split('=')[0]}`} : valueSpec;
-        spec = {...spec, value};
-      } else if (eq > 0) return {ok: false, reason: 'ambiguous'};
-      const seen = items.get(spec.key);
-      // 같은 옵션이 다른 값으로 두 번 있으면 어느 쪽이 실제 값인지 정하지 않는다.
-      if (seen && seen.value !== spec.value) return {ok: false, reason: 'ambiguous'};
-      if (!seen) items.set(spec.key, {group: spec.group, key: spec.key, value: spec.value, words: taken});
+  const carry = CARRY[harness], table = OPTIONS[harness];
+  if (!carry || !table || (expected && harness !== expected)) return {ok: false, reason: 'unreadable'};
+  const bad = {ok: false, reason: 'ambiguous'};
+  const items = [], present = new Set();
+  let dashed = false;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === '--') { dashed = true; break; }
+    if (!token.startsWith('-') || token === '-') continue;
+    const option = splitOption(token, table);
+    if (!option) return bad;
+    const {name, inline} = option;
+    const valueSpec = carry.value[name];
+    if (valueSpec || table.value.has(name)) {
+      // 값을 꼭 받는 옵션의 다음 낱말은 `-`로 시작해도 그 옵션의 값이다(프롬프트 글이 옵션으로 읽히지 않게).
+      const value = inline ?? args[i + 1];
+      if (typeof value !== 'string') return bad;
+      if (inline === undefined) i += 1;
+      for (const group of TOUCHES[harness][name] ?? []) present.add(group);
+      if (!valueSpec) continue;
+      if (!value || value.startsWith('-') || !valueSpec.valid(value)) return bad;
+      const key = valueSpec.config ? value.split('=')[0] : null;
+      // 이을 때는 띄어 쓴 꼴(`-c 값`)로 적는다. 값은 그대로이고, 카단의 다른 판독(서버 손실 복원·대화 지정)이
+      // 붙여 쓴 짧은 옵션을 읽지 못하기 때문이다.
+      const item = valueSpec.config ? {group: configGroup(key), key: `c:${key}`, value, words: [name, value]}
+        : {group: valueSpec.group, key: valueSpec.key, value, words: [name, value]};
+      // 한 번만 쓰는 옵션이 두 번 있거나(프로필), 권한 값이 서로 다르면 어느 쪽이 실제 값인지 정하지 않는다.
+      const same = items.find(seen => seen.key === item.key);
+      if (same && !valueSpec.config && (valueSpec.once || same.value !== item.value)) return bad;
+      if (!same || valueSpec.config) items.push(item);
+      present.add(item.group);
       continue;
     }
-    if (eq > 0 || plain.has(name)) continue;
-    // 값을 꼭 받는 옵션의 다음 낱말은 `-`로 시작해도 그 옵션의 값이다(프롬프트 글이 옵션으로 읽히지 않게).
-    if (known.value.has(name)) { i += 1; continue; }
-    // --resume은 값 없이도 쓰인다. 다음 낱말이 옵션 꼴이면 값이 아니라 옵션으로 읽는다.
-    if (harness === 'claude' && ['--resume', '-r'].includes(name)) {
-      if (args[i + 1] !== undefined && !args[i + 1].startsWith('-')) i += 1;
+    if (table.optional.has(name)) {
+      // 값이 선택인 옵션(--resume 등): 다음 낱말이 옵션 꼴이면 값이 아니라 옵션으로 읽는다.
+      if (inline === undefined && args[i + 1] !== undefined && !args[i + 1].startsWith('-')) i += 1;
       continue;
     }
-    afterUnknown = true;
+    if (inline !== undefined) return bad;
+    const flagSpec = carry.flag[name];
+    if (flagSpec) {
+      if (!items.some(seen => seen.key === flagSpec.key)) items.push({...flagSpec, words: [token]});
+      present.add(flagSpec.group);
+      continue;
+    }
+    if (!table.flag.has(name)) return bad;
+    for (const group of TOUCHES[harness][name] ?? []) present.add(group);
   }
-  return {ok: true, harness, items: [...items.values()], dashed: false};
+  return {ok: true, harness, items, present, dashed};
 }
 
 // 복원 대상 세대가 실제로 쓰던 값. 복원으로 이어진 세대(restoredFrom)는 같은 세대의 연속이므로,
@@ -117,11 +174,20 @@ function originalOptions(start, entries, harness) {
   return {ok: true, items: [...found.values()].flat()};
 }
 
+// 양쪽 모두 `-p`/`--profile` 하나씩이고 이름이 같을 때만 같은 프로필이다(`-c profile=…`은 비교하지 않는다).
+function sameProfile(nowItems, originItems) {
+  const [a, ...restA] = nowItems.filter(item => item.group === 'profile');
+  const [b, ...restB] = originItems.filter(item => item.group === 'profile');
+  return Boolean(a && b) && !restA.length && !restB.length && a.key === 'profile' && b.key === 'profile'
+    && a.value === b.value;
+}
+
 const REASONS = {
   'original-unreadable': '원본 시작 명령을 읽지 못함',
   'original-ambiguous': '원본 시작 명령의 옵션 자리가 애매함',
   'chain-unresolved': '복원으로 이어진 이전 시작 기록을 하나로 확인하지 못함',
   'command-ambiguous': '복원 명령의 옵션 자리가 애매함',
+  'profile-differs': '복원 명령의 프로필이 원본과 다름',
   'command-dashed': '복원 명령에 `--` 뒤 입력이 있어 옵션 자리를 정하지 못함',
   'quote-failed': '이어 줄 값을 안전하게 인용하지 못함',
 };
@@ -142,14 +208,15 @@ export function recoveryLaunch({command, start, entries, home, warn = () => {}})
     if (!CARRY[harness]) return {launch: hooked(command, home, warn), extra: {}};
     const now = readCarryOptions(command, harness);
     // claude가 이을 것은 권한 한 묶음뿐이다. 복원 명령에 이미 있으면 원본을 읽을 필요도 없다.
-    if (harness === 'claude' && now.ok && now.items.length) return {launch: hooked(command, home, warn), extra: {}};
+    if (harness === 'claude' && now.ok && now.present.has('permission')) return {launch: hooked(command, home, warn), extra: {}};
     const origin = originalOptions(start, entries, harness);
     if (origin.ok && !origin.items.length) return {launch: hooked(command, home, warn), extra: {}};
     if (!origin.ok) return skip(origin.reason);
     if (!now.ok) return skip(`command-${now.reason}`);
-    const present = new Set(now.items.map(item => item.group));
-    const missing = origin.items.filter(item => !present.has(item.group));
+    const missing = origin.items.filter(item => !now.present.has(item.group));
     if (!missing.length) return {launch: hooked(command, home, warn), extra: {}};
+    // 복원 명령이 원본과 다른 프로필을 쓰면 그 프로필이 무엇을 정하는지 카단은 모른다. 옛 설정 값을 얹지 않는다.
+    if (now.present.has('profile') && !sameProfile(now.items, origin.items)) return skip('profile-differs');
     if (now.dashed) return skip('command-dashed');
     const added = missing.flatMap(item => item.words);
     const quoted = added.map(quoteWord);

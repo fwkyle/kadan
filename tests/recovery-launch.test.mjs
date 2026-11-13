@@ -181,10 +181,10 @@ test('a later restart can rebuild the recorded command and keeps what was carrie
       'resume', NEXT]);
 });
 
-test('wrapper executable and the inline value spelling are carried as written', () => {
+test('wrapper executable and the inline value spelling are carried with the same value', () => {
   const f = fixture('/tools/kadan-claude --model opus --effort medium --permission-mode=acceptEdits');
   const {launched, start} = f.restore(rottieClaude());
-  assert.deepEqual(commandWords(launched).slice(-1), ['--permission-mode=acceptEdits']);
+  assert.deepEqual(commandWords(launched).slice(-2), ['--permission-mode', 'acceptEdits']);
   assert.deepEqual(start.optionCarryKeys, ['permission-mode']);
 });
 
@@ -208,10 +208,11 @@ test('codex profile and settings are carried per key and never overwritten', () 
   assert.deepEqual(launchIdentityOf(all.start.cmd), {ok: true, harness: 'codex', model: 'fixture-model'});
   assert.deepEqual(commandWords(all.start.cmd).slice(0, 3), ['/tools/codex', 'resume', NOW]);
 
-  const partial = fixture(original).restore(rottieCodex('-c', 'model_reasoning_effort=low', '--profile', 'other'));
+  const partial = fixture(original).restore(
+    rottieCodex('-c', 'model_reasoning_effort=low', '--profile', 'fixture-profile'));
   const words = commandWords(partial.launched);
   assert.equal(words.includes('model_reasoning_effort=high'), false);
-  assert.equal(words.includes('fixture-profile'), false);
+  assert.equal(words.filter(word => word === 'fixture-profile').length, 1);
   assert.deepEqual(words.slice(-2), ['--config', 'approval_policy=never']);
   assert.deepEqual(partial.start.optionCarryKeys, ['c:approval_policy']);
 
@@ -226,6 +227,153 @@ test('codex settings in an unsafe or unknown position are not carried', () => {
     const f = fixture(original);
     const {launched, start} = f.restore(rottieCodex());
     assert.equal(launched, rottieCodex(), original);
+    assert.equal(start.optionCarryReason, 'original-ambiguous', original);
+  }
+});
+
+// 복원 명령에 이미 있는 값은 어떤 표기든 "있음"이다. 옛 값을 뒤에 덧붙이면 나중 값이 이겨 권한이 넓어진다.
+const WRITTEN = {
+  spaced: (flag, value) => [flag, value],
+  attached: (flag, value) => [`${flag}${value}`],
+  equals: (flag, value) => [`${flag}=${value}`],
+};
+
+test('an approval or sandbox setting already in the restore command is kept in every spelling', () => {
+  for (const [key, old, kept] of [
+    ['approval_policy', 'never', '"on-request"'],
+    ['sandbox_mode', 'danger-full-access', '"read-only"'],
+  ]) {
+    for (const [spelling, write] of Object.entries(WRITTEN)) {
+      for (const flag of spelling === 'attached' ? ['-c'] : ['-c', '--config']) {
+        const f = fixture(`codex --model fixture-model -c ${key}=${old}`);
+        const command = rottieCodex(...write(flag, `${key}=${kept}`));
+        const {launched, start} = f.restore(command);
+        assert.equal(launched, command, `${flag} ${spelling} ${key}`);
+        assert.equal('optionCarry' in start, false, `${flag} ${spelling} ${key}`);
+      }
+    }
+  }
+});
+
+test('a profile already in the restore command is kept in every spelling', () => {
+  for (const [spelling, write] of Object.entries(WRITTEN)) {
+    for (const flag of spelling === 'attached' ? ['-p'] : ['-p', '--profile']) {
+      const f = fixture('codex -p previous --model fixture-model');
+      const command = rottieCodex(...write(flag, 'current'));
+      const {launched, start} = f.restore(command);
+      assert.equal(launched, command, `${flag} ${spelling}`);
+      assert.equal('optionCarry' in start, false, `${flag} ${spelling}`);
+    }
+  }
+});
+
+test('attached and equals spellings in the original start are read as the same option', () => {
+  const original = "codex -pfixture-profile --model fixture-model '-cmodel_reasoning_effort=\"high\"'"
+    + ' --config=approval_policy=never';
+  const f = fixture(original);
+  const {launched, start} = f.restore(rottieCodex());
+  // 값은 그대로, 표기는 띄어 쓴 꼴로 적는다 — 기록된 명령을 카단의 다른 판독이 읽을 수 있어야 한다.
+  assert.deepEqual(commandWords(launched).slice(5), ['-p', 'fixture-profile', '-c', 'model_reasoning_effort="high"',
+    '--config', 'approval_policy=never']);
+  assert.deepEqual(start.optionCarryKeys, ['profile', 'c:model_reasoning_effort', 'c:approval_policy']);
+  assert.deepEqual(parseRestoreCommand(start.cmd).options.slice(-6), commandWords(launched).slice(5));
+  assert.deepEqual(conversationOf(start.cmd), {conversationMode: 'resume', conversationRef: NOW});
+  assert.deepEqual(launchIdentityOf(start.cmd), {ok: true, harness: 'codex', model: 'fixture-model'});
+  // 같은 원본이라도 복원 명령이 그 키를 다른 표기로 이미 갖고 있으면 더하지 않는다.
+  const kept = fixture(original).restore(rottieCodex('-c=approval_policy="on-request"', '--profile=fixture-profile'));
+  assert.deepEqual(commandWords(kept.launched).slice(-2), ['-c', 'model_reasoning_effort="high"']);
+  assert.deepEqual(kept.start.optionCarryKeys, ['c:model_reasoning_effort']);
+});
+
+test('a dedicated option or a wider or narrower key for the same setting counts as present', () => {
+  for (const [original, present] of [
+    ['-c sandbox_mode=danger-full-access', ['--sandbox', 'read-only']],
+    ['-c sandbox_mode=danger-full-access', ['-sread-only']],
+    ['-c approval_policy=never', ['--ask-for-approval', 'on-request']],
+    ['-c approval_policy=never', ['-a=on-request']],
+    ['-c sandbox_workspace_write.network_access=true', ['-c', 'sandbox_workspace_write={network_access=false}']],
+    ["-c 'sandbox_workspace_write={network_access=true}'", ['-c', 'sandbox_workspace_write.network_access=false']],
+    ['-c sandbox_workspace_write.network_access=true', ['-c', 'sandbox_mode="read-only"']],
+    ['-c features.fixture=true', ['--disable', 'fixture']],
+    ['-c model=other-model', []],
+  ]) {
+    const f = fixture(`codex --model fixture-model ${original}`);
+    const command = rottieCodex(...present);
+    const {launched, start} = f.restore(command);
+    assert.equal(launched, command, `${original} | ${present.join(' ')}`);
+    assert.equal('optionCarry' in start, false, `${original} | ${present.join(' ')}`);
+  }
+});
+
+test('a different profile in the restore command gets no old settings layered on top', () => {
+  const original = 'codex -p previous --model fixture-model -c sandbox_mode=danger-full-access -c approval_policy=never';
+  for (const present of [['-p', 'current'], ['-pcurrent'], ['--profile=current'], ['-c', 'profile="current"']]) {
+    const f = fixture(original);
+    const command = rottieCodex(...present);
+    const {launched, start} = f.restore(command);
+    assert.equal(launched, command, present.join(' '));
+    assert.equal(start.optionCarryReason, 'profile-differs', present.join(' '));
+    assert.equal(f.warnings.length, 1);
+  }
+  // 원본에 프로필이 없었는데 복원 명령에 생긴 경우도 같다.
+  const none = fixture('codex --model fixture-model -c approval_policy=never').restore(rottieCodex('-p', 'current'));
+  assert.equal(none.launched, rottieCodex('-p', 'current'));
+  assert.equal(none.start.optionCarryReason, 'profile-differs');
+  // 같은 프로필이면 그 위에 빠진 설정 값만 잇는다.
+  const same = fixture(original).restore(rottieCodex('--profile', 'previous'));
+  assert.deepEqual(commandWords(same.launched).slice(-4), ['-c', 'sandbox_mode=danger-full-access', '-c', 'approval_policy=never']);
+});
+
+test('a restore command that already narrows what claude may do gets no permission added', () => {
+  for (const present of [['--restricted'], ['--safe-mode'], ['--bare'], ['--tools', 'default'],
+    ['--disallowedTools', 'Bash'], ['--allowed-tools=Read'], ['--permission-prompts', 'none']]) {
+    const f = fixture(FORKED);
+    const {launched, start} = f.restore(rottieClaude(...present));
+    assert.equal(commandWords(launched).includes('bypassPermissions'), false, present.join(' '));
+    assert.equal('optionCarry' in start, false, present.join(' '));
+  }
+});
+
+test('a repeated setting key in the original is carried in its written order', () => {
+  const f = fixture('codex --model fixture-model -c fixture_key=1 -c fixture_key=2');
+  const {launched, start} = f.restore(rottieCodex());
+  assert.deepEqual(commandWords(launched).slice(-4), ['-c', 'fixture_key=1', '-c', 'fixture_key=2']);
+  assert.deepEqual(start.optionCarryKeys, ['c:fixture_key', 'c:fixture_key']);
+});
+
+test('one unknown or unparsable option anywhere means nothing is added', () => {
+  const codexOriginal = 'codex -p fixture-profile --model fixture-model -c approval_policy=never';
+  for (const extra of [['--mystery'], ['--mystery=1'], ['-x'], ['-xc', 'approval_policy=never'], ['--search=1'],
+    ['-i', 'picture.png'], ['-c'], ['--config']]) {
+    const f = fixture(codexOriginal);
+    const command = `${rottieCodex()} ${extra.map(w => `'${w}'`).join(' ')}`;
+    const {launched, start} = f.restore(command);
+    assert.equal(launched, command, extra.join(' '));
+    assert.equal(start.optionCarry, 'skipped', extra.join(' '));
+    assert.equal(start.optionCarryReason, 'command-ambiguous', extra.join(' '));
+    assert.equal(f.warnings.length, 1);
+  }
+  for (const original of ['codex --model fixture-model -c approval_policy=never --mystery',
+    'codex --mystery=1 --model fixture-model -p fixture-profile', 'codex --model fixture-model -xp fixture-profile',
+    'codex --model fixture-model -p fixture-profile -i picture.png']) {
+    const f = fixture(original);
+    const {launched, start} = f.restore(rottieCodex());
+    assert.equal(launched, rottieCodex(), original);
+    assert.equal(start.optionCarryReason, 'original-ambiguous', original);
+  }
+  const claudeOriginal = 'claude --model opus --effort medium --permission-mode bypassPermissions';
+  for (const extra of [['--mystery'], ['-nlabel'], ['--dangerously-skip-permissions=false']]) {
+    const f = fixture(claudeOriginal);
+    const command = `${rottieClaude()} ${extra.map(w => `'${w}'`).join(' ')}`;
+    const {launched, start} = f.restore(command);
+    assert.equal(commandWords(launched).includes('bypassPermissions'), false, extra.join(' '));
+    assert.equal(start.optionCarryReason, 'command-ambiguous', extra.join(' '));
+  }
+  for (const original of ['claude --model opus --effort medium --dangerously-skip-permissions --mystery',
+    'claude --mystery --model opus --effort medium --permission-mode bypassPermissions']) {
+    const f = fixture(original);
+    const {launched, start} = f.restore(rottieClaude());
+    assert.equal(commandWords(launched).some(w => /permission/.test(w)), false, original);
     assert.equal(start.optionCarryReason, 'original-ambiguous', original);
   }
 });
