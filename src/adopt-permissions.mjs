@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const modes = ['default', 'acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+export const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
 export const shellArg = value => `'${String(value).replace(/'/g, "'\\''")}'`;
 
 export function conversationFile({harness, id, cwd = process.cwd(), userHome = os.homedir(),
@@ -45,7 +45,7 @@ export function readConversationPermissions(file, harness) {
     }
   }
   if (harness === 'claude') {
-    if (!modes.includes(mode)) throw new Error('원본 대화의 현재 권한 모드를 확인하지 못했습니다.');
+    if (!PERMISSION_MODES.includes(mode)) throw new Error('원본 대화의 현재 권한 모드를 확인하지 못했습니다.');
     if (mode === 'default') mode = 'manual';
     return {args: ['--permission-mode', mode], mode, sessionId, lastUser};
   }

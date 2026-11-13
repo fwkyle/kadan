@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assessProcesses, collectProcesses, exceededSignals, parseEtime, parsePs, processThresholds, DEFAULT_THRESHOLDS, DIRECT_GROUP, createProcessCache,
+  alertHeadline, alertText, assessProcesses, collectProcesses, exceededSignals, parseEtime, parsePs, processThresholds, DEFAULT_THRESHOLDS, DIRECT_GROUP, createProcessCache,
 } from '../src/process-watch.mjs';
 
 const MB = 1024; // ps rss는 KB
@@ -183,16 +183,53 @@ test('F3: 정상 → 수집 실패 → 정상 → 실패 → 정상은 정상 �
   r = assessProcesses(r.state, snap(), t); assert.equal(r.alerts.length, 0, '이어진 3번째 정상');
 });
 
-test('F2 바탕: 기준 집합이 바뀐 시각(since)은 전이마다 달라지고 같은 상태에서는 유지된다', () => {
+test('사고 시작 시각(since)은 열린 동안 등급·기준 집합이 바뀌어도 같고, 닫혔다 다시 열리면 새 시각이다', () => {
   const t = DEFAULT_THRESHOLDS;
-  const A = snap({rssMb: 13 * 1024}), B = snap({rssMb: 13 * 1024, kinds: {python: 0, node: 40}});
-  let r = assessProcesses(null, A, t, 1000); const a1 = r.alerts[0].since;
-  r = assessProcesses(r.state, A, t, 2000); assert.equal(r.alerts[0].since, a1, '같은 상태는 유지');
-  r = assessProcesses(r.state, B, t, 3000); // node 개수는 10분 지속 뒤에야 신호가 된다
+  const A = snap({rssMb: 13 * 1024}), B = snap({rssMb: 13 * 1024, kinds: {python: 0, node: 40}}), C = snap({kinds: {python: 0, node: 40}});
+  let r = assessProcesses(null, A, t, 1000);
+  const seen = [[r.alerts[0].level, r.alerts[0].signals.join('+'), r.alerts[0].since]];
+  const step = (sample, at) => { r = assessProcesses(r.state, sample, t, at); seen.push([r.alerts[0].level, r.alerts[0].signals.join('+'), r.alerts[0].since]); };
+  step(A, 2000);
+  step(B, 3000); // node 개수는 10분 지속 뒤에야 신호가 된다
   const T = 3000 + 10 * 60_000;
-  r = assessProcesses(r.state, B, t, T); const b = r.alerts[0].since;
-  r = assessProcesses(r.state, A, t, T + 1000); const a2 = r.alerts[0].since;
-  assert.deepEqual([a1, b, a2], [1000, T, T + 1000]);
+  step(B, T); step(C, T + 1000); step(B, T + 2000); step(C, T + 3000);
+  assert.deepEqual(seen, [['RED', 'total', 1000], ['RED', 'total', 1000], ['RED', 'total', 1000], ['RED', 'total+node', 1000],
+    ['AMBER', 'node', 1000], ['RED', 'total+node', 1000], ['AMBER', 'node', 1000]], 'RED↔AMBER를 오가도 같은 사고');
+  for (let i = 1; i <= 3; i++) r = assessProcesses(r.state, snap(), t, T + 3000 + i * 1000);
+  assert.deepEqual(r.alerts, [], '정상 3주기 뒤 닫힘');
+  r = assessProcesses(r.state, A, t, T + 9000);
+  assert.equal(r.alerts[0].since, T + 9000, '닫힌 뒤 다시 열리면 새 사고');
+});
+
+test('결론 한 줄: 신호별로 숫자/기준으로 시작하고 세션 수와 프로세스 수를 나눠 적는다', () => {
+  const t = DEFAULT_THRESHOLDS;
+  const sessions = [
+    {session: 'kadan-a', count: 200, rssMb: 9 * 1024, kinds: {python: 0, node: 34}, big: [{pid: 7, name: 'node', rssMb: 2150}]},
+    {session: 'kadan-b', count: 60, rssMb: 4 * 1024, kinds: {python: 2, node: 3}, big: [{pid: 8, name: 'claude', rssMb: 400}]},
+    {session: DIRECT_GROUP, count: 4, rssMb: 512, kinds: {python: 0, node: 0}, big: []},
+  ];
+  const base = {count: 264, rssMb: 13.5 * 1024, leak: 0, kinds: {python: 2, node: 37}, sessions, biggest: [{pid: 7, name: 'node', rssMb: 2150, session: 'kadan-a'}]};
+  const total = alertHeadline(base, ['total', 'node'], t);
+  assert.match(total, /^메모리 13\.5G \/ 기준 12G \(카단 세션 2개 · 그 아래 프로세스 264개\) · 가장 큰 세션 kadan-a 9\.0G · 함께 넘은 기준: node 프로세스 수 · 할 일: /);
+  const proc = alertHeadline(base, ['process'], t, [{pid: 7, name: 'node', rssMb: 2150, session: 'kadan-a', minutes: 12}, {pid: 9, name: 'node', rssMb: 1100, session: 'kadan-b', minutes: 10}]);
+  assert.match(proc, /^프로세스 node#7 2\.1G 외 1개 \/ 기준 1G \(12분째\) · 세션 kadan-a · 할 일: /);
+  const count = alertHeadline(base, ['node'], t);
+  assert.match(count, /^카단 세션 2개 · 그 아래 node 프로세스 37개 \/ 기준 30개 · 가장 많은 세션 kadan-a 34개 · 할 일: /);
+  const detail = alertText(base, ['total', 'node']);
+  assert.match(detail, /^메모리 13\.5G · 카단 세션 2개 · 그 아래 프로세스 264개 · 넘은 기준: 합계, node 프로세스 수 · 상위 세션 kadan-a 9\.0G\(프로세스 200개: node#7 2\.1G\)/);
+  for (const line of [total, proc, count, detail]) {
+    assert(!/tmux 프로세스/.test(line), line);
+    assert(!line.includes('\n'), '한 줄');
+  }
+  for (const line of [total, proc, count]) assert.match(line, /kadan stop/, '할 일은 구체 행동');
+});
+
+test('경보에는 결론 한 줄(headline)과 세부(text)가 따로 있고, 큰 프로세스 결론에는 넘은 시간이 들어간다', () => {
+  const proc = {pid: 9, name: 'node', rssMb: 1100, session: 'a'};
+  const s = snap({biggest: [proc]});
+  const r = assessProcesses(assessProcesses(null, s, DEFAULT_THRESHOLDS, 0).state, s, DEFAULT_THRESHOLDS, 12 * 60_000);
+  assert.match(r.alerts[0].headline, /^프로세스 node#9 1\.1G \/ 기준 1G \(12분째\) · 세션 a · 할 일: /);
+  assert.match(r.alerts[0].text, /상위 세션 a 1\.0G\(프로세스 10개: node#1 0\.1G\)/);
 });
 
 test('F4: since가 원장 줄에 적히고 복원되며, 같은 표본 재평가에도 같은 since·같은 알림 키 재료', async () => {

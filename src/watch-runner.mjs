@@ -58,6 +58,7 @@ import { readSettings } from "./runner-settings.mjs";
 import { currentSocket } from "./floor-tmux.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
+import { readDecisions as readUserPosts } from "./notify-threads.mjs";
 import { withEffectiveOwner, userTurnWaitList, effectiveCardRole } from "./handover-state.mjs";
 import { waitUntilList } from "./wait-until.mjs";
 import { releasedFromWait, proceedEligibility, releaseTime } from "./decision-proceed.mjs";
@@ -97,6 +98,10 @@ export function workKeyOfAlert(alert, identity, works) {
 }
 
 // 경보가 가리키는 카드·실행 키의 앞부분이 레포다. 키를 모르면 undefined — 추측해서 붙이지 않는다.
+// 프로세스·메모리 경보의 알림 중복 막기 키이자 디코 글 장부 id. 등급·기준 집합이 아니라 경보가 열린 시각(since)으로 묶어
+// 열려 있는 동안 RED↔AMBER를 오가도 같은 글이다. 닫혔다 다시 열리면 since가 달라 새 글이 된다.
+export const processPostKey = alert => `alert:${alert.id}:${alert.since ?? ""}`;
+
 export function repoOfAlert(alert, identity) {
   if (!alert?.taskId) return undefined;
   const key = identity.resolve(alert.taskId).key ?? alert.taskId;
@@ -177,10 +182,21 @@ export async function runWatch({
   const sendToRole = sendAlert;
   // 사용자에게 올라간 경보의 디코 글을 해결 때 '✅ 해결됨'으로 고치려고, 경보 id → 글 장부 id(발생마다 새 id)를 둔다.
   const userPosts = new Map();
-  sendAlert = (role, message, key, work, repo, alertKind, alertId, holdCode) => {
+  // 그 글 장부 id로 올린 디코 글이 있는가. 장부를 못 읽으면 없는 것으로 본다(새 글 길의 중복 막기 키가 다시 막는다).
+  const hasUserPost = post => { try { return Boolean(readUserPosts(ledgerHome())[post]); } catch { return false; } };
+  sendAlert = (role, message, key, work, repo, alertKind, alertId, holdCode, level) => {
     if (role !== USER_RECIPIENT) return sendToRole(role, message);
-    const post = alertId ? `alert:${alertId}:${now()}` : undefined;
-    const sent = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, dedupWindowMs: ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})});
+    // 프로세스·메모리 경보는 한 사고(경보가 열린 시각)가 글 하나다. 키가 곧 글 장부 id라서 재시작 뒤에도 같은 글을 찾는다.
+    const episode = alertKind === "프로세스";
+    const post = alertId ? (episode ? key : `alert:${alertId}:${now()}`) : undefined;
+    if (episode && hasUserPost(post)) {
+      // 이 사고의 글이 이미 있다: 등급·기준이 바뀌어도 그 글만 고친다(새 글·멘션·맥 알림 없음).
+      notifyUser(message, spawn, {kind: "alert-update", tagRepo: repo, systemFallback: false, decision: {id: post, edit: message}});
+      return;
+    }
+    // 사고 키는 한 번뿐이라 시간 창 없이 막는다. 다른 경보는 같은 id가 풀렸다 다시 뜰 수 있어 10분 창만 본다.
+    const sent = notifyUser(message, spawn, {kind: "alert", ring: true, key, work, tagRepo: repo, alertKind, holdCode, level,
+      dedupWindowMs: episode ? undefined : ALERT_DEDUP_WINDOW_MS, ...(post ? {decision: {id: post}} : {})});
     const errorText = sent.error;
     // 이번에 실제로 올린 메시지만 연결한다. 중복·정책 안 보냄 반환은 기존 연결(처음 올린 글)을 덮어쓰지 않는다.
     if (!errorText && post && sent.posted === true) userPosts.set(alertId, {post, work, repo});
@@ -963,7 +979,9 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}${alert.kind === "프로세스" ? `:${(alert.signals ?? []).join("+")}:${alert.since ?? ""}` : ""}`, workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode);
+          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)),
+            alert.kind === "프로세스" ? processPostKey(alert) : `alert:${alert.id}:${alert.level ?? ""}`,
+            workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode, alert.level);
           delivered = true;
           target = recipient;
           if (!alertRecipients.has(alert.id)) {
@@ -1030,7 +1048,9 @@ export async function runWatch({
       pendingAlerts.delete(alert.id);
       if (alert.kind === "감시AI오류") { recordAlert(record,alert,null,false,true); }
       // 사용자에게 새 글로 올라갔던 경보가 풀리면 그 글을 '✅ 해결됨'으로 고친다(새 글 아님). 글을 못 찾으면 아무것도 보내지 않는다.
-      const posted = userPosts.get(alert.id);
+      // 프로세스 경보의 글은 사고 키로 장부에서 되찾는다(재시작으로 메모리의 연결이 사라져도 고친다).
+      const posted = userPosts.get(alert.id)
+        ?? (alert.kind === "프로세스" && hasUserPost(processPostKey(alert)) ? {post: processPostKey(alert)} : null);
       if (posted) {
         userPosts.delete(alert.id);
         notifyUser(`[감시sh ${clockTime(cycleAt)}] 해결됨 — ${resolvedBody(alert)}`, spawn, {kind: "alert-resolved", work: posted.work, tagRepo: posted.repo, systemFallback: false,
