@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  MACHINE_MEMORY_KEYS, MACHINE_MEMORY_LIMITS, MACHINE_MEMORY_RECOVERY_GAP_MS,
+  MACHINE_MEMORY_KEYS, MACHINE_MEMORY_LIMITS, MACHINE_MEMORY_RECOVERY_GAP_MS, MACHINE_MEMORY_MAX_PCT,
   parseMachineMemory, readMachineMemory,
   assessMachineMemory, topMachineProcesses, machineMemoryBody, createMachineMemoryWatch,
 } from '../src/watch-machine-memory.mjs';
@@ -18,7 +18,7 @@ const raw = ({segments = 900, limit = 1000, pages = 200, pageLimit = 1000, press
   'vm.swapusage: total = 9216.00M  used = 7498.31M  free = 1717.69M  (encrypted)',
   `vm.compressor.segment.total: ${segments}`, `vm.compressor.segment.limit: ${limit}`,
   `vm.compressor.pages_compressed: ${pages}`, `vm.compressor.pages_compressed_limit: ${pageLimit}`,
-].join('\n');
+].join('\n') + '\n';
 const sample = pct => parseMachineMemory(raw({segments: pct * 10}));
 const missing = {known: false, reason: 'read'};
 const without = (output, ...keys) => output.split('\n')
@@ -88,7 +88,9 @@ test('공간 키 없음·숫자 아님·0 한도·음수는 공간 모름, 실�
     assert.equal(parseMachineMemory(output).known, false, output);
   }
   for (const result of [{status: 1, stdout: raw()}, {status: null, error: {code: 'ETIMEDOUT'}},
-    {status: null, signal: 'SIGTERM'}, {status: 0, stdout: ''}]) {
+    {status: null, signal: 'SIGTERM'}, {status: 0, signal: 'SIGTERM', stdout: raw({segments: 1000})},
+    {status: 0, error: {code: 'ENOBUFS'}, stdout: raw({segments: 1000})},
+    {status: 0, error: {code: 'ENOENT'}, stdout: raw({segments: 1000})}, {status: 0, stdout: ''}]) {
     assert.equal(readMachineMemory(() => result, 'darwin').known, false);
   }
   assert.equal(readMachineMemory(() => { throw Error('no sysctl'); }, 'darwin').known, false);
@@ -311,4 +313,55 @@ test('F2: 회복 10분 경계·공백 뒤 첫 관측·단계 상승을 구분한
   const raised = assessMachineMemory(critical, sample(97), 87_400_000);
   assert.equal(raised.alert.stage, 2);
   assert.equal(raised.alert.since, critical.since);
+});
+
+test('F3a: 종료0·키 누락 종료1만 쓰고 종료2 이상은 위급·회복 모두 버린다', () => {
+  const open = assessMachineMemory({}, sample(97), 0).state;
+  const once = assessMachineMemory(open, sample(79), 1).state;
+  for (const status of [0, 1, 2, 3, 137]) for (const pct of [40, 100]) {
+    const stdout = without(raw({segments: pct * 10}), MACHINE_MEMORY_KEYS[0]);
+    const parsed = readMachineMemory(() => ({status, stdout}), 'darwin');
+    const initial = assessMachineMemory({}, parsed, 2);
+    const recovering = assessMachineMemory(once, parsed, 2);
+    assert.equal(parsed.known, status < 2);
+    assert.equal(Boolean(initial.alert), status < 2 && pct === 100);
+    assert.equal(Boolean(recovering.resolved), status < 2 && pct === 40);
+    if (status >= 2) assert.equal(recovering.state.normalCycles, 0);
+  }
+});
+
+test('F3b: 잘린 한도 숫자는 버리고 온전한 반대 축의 위급만 살린다', () => {
+  const open = assessMachineMemory({}, sample(97), 0).state;
+  const once = assessMachineMemory(open, sample(79), 1).state;
+  for (const pct of [40, 97]) {
+    const complete = without(raw({segments: pct * 10}), MACHINE_MEMORY_KEYS[0]);
+    const stdout = complete.slice(0, complete.lastIndexOf('1000') + 1);
+    const parsed = readMachineMemory(() => ({status: 1, stdout}), 'darwin');
+    assert.equal(parsed.pagePct, null);
+    assert.equal(parsed.segmentPct, pct);
+    assert.equal(parsed.recoveryAllowed, false);
+    assert.equal(assessMachineMemory({}, parsed, 2).alert?.stage, pct === 97 ? 2 : undefined);
+    assert.equal(assessMachineMemory(once, parsed, 2).resolved, undefined);
+  }
+});
+
+test('F3: 150% 방어선·숫자 뒤 손상·중복·미완결 보조 줄을 구분한다', () => {
+  assert.equal(MACHINE_MEMORY_MAX_PCT, 150);
+  for (const pct of [101, 150]) assert.equal(assessed(pct).alert.stage, 2);
+  for (const output of [raw({segments: 400, pageLimit: 1}), raw({segments: 400, pages: 1501}),
+    raw({segments: 400}).replace('pages_compressed_limit: 1000', 'pages_compressed_limit: 1broken'),
+    raw({segments: 400}) + 'vm.compressor.pages_compressed_limit: 1\n']) {
+    const parsed = parseMachineMemory(output);
+    assert.equal(parsed.pagePct, null);
+    assert.equal(assessMachineMemory({}, parsed, 1).alert, undefined);
+  }
+  const validOpposite = parseMachineMemory(raw({segments: 970, pageLimit: 1}));
+  assert.equal(assessMachineMemory({}, validOpposite, 1).alert.stage, 2);
+  const tail = parseMachineMemory(raw({segments: 790, pages: 790}) + 'vm.swapusage: total = 8');
+  assert.equal(tail.known, true);
+  assert.equal(tail.swapUsedMb, null);
+  const open = assessMachineMemory({}, sample(97), 0).state;
+  const once = assessMachineMemory(open, sample(79), 1).state;
+  assert.equal(assessMachineMemory(once, tail, 2).resolved, undefined);
+  assert.equal(assessMachineMemory(once, tail, 2).state.normalCycles, 0);
 });
