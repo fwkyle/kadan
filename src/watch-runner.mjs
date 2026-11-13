@@ -605,7 +605,11 @@ export async function runWatch({
       : assessHoldWorking(holdWorkingStates,roles.observations,cards,{now:cycleAt,alerted:holdWorkingAlerted,
           isHeld:role=>holdTracker?.isHeld(role)??false,supervisors:new Set(parents.values())});
     holdWorkingStates=holdWorking.states;
-    const idleStopSessions=new Set(idleStopAssessment.alerts.map(a=>a.session));
+    // 백그라운드 셸 표시로 멈춤을 늦추는 중인 세션(held)도 화면이 그대로라서 나는 정체 후보(경보·정체 판정 AI)에서 뺀다.
+    // 멈춤이 4분에 먼저 나가 5분의 정체를 대신하던 자리라, 멈춤만 늦추면 정체가 그 자리를 채운다. 상한이 지나면 멈춤이 나가고
+    // 정체는 지금처럼 멈춤 세션에서 빠진다. 죽음·끊김·한도·완료후보는 이 집합과 무관하다.
+    const backgroundHeld=idleStopAssessment.held??new Set();
+    const idleStopSessions=new Set([...idleStopAssessment.alerts.map(a=>a.session),...backgroundHeld]);
     let stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
@@ -718,7 +722,10 @@ export async function runWatch({
             record({kind:'watch-ai-retired',by:'watch',key:report.key,requestId:report.requestId,source:report.source,role:report.role,reason:'waiting-for-answer'});
       }
       const progress=progressWatch.select({cards,entries,observations:workerObservations,now:cycleAt,
-        enabled:Boolean(judgeCmd),blockedSessions:new Set(stallAlerts.map(a=>a.session)),waiting:waitingKeys});
+        // 백그라운드 셸 표시로 멈춤을 늦추는 세션은 그 유예 동안 진행 점검도 부르지 않는다. 그 화면을 본 점검이 '입력대기'로
+        // 보고하면 보고 저장소가 "카드 미완인데 입력 대기"로 감독에게 올려, 늦춘 헛경보가 다른 이름으로 나간다.
+        // 점검의 시간 상태는 그대로라 유예가 끝나면 지금처럼 불린다.
+        enabled:Boolean(judgeCmd),blockedSessions:new Set([...stallAlerts.map(a=>a.session),...backgroundHeld]),waiting:waitingKeys});
       if(progress) invokeAI(progress);
     }
     // 놀고 있음 계산을 감독 정기 확인보다 먼저 한다: 같은 순회의 본인 차례(ownTurn)를 정기 확인이 그대로 재사용한다(원장을 다시 읽지 않는다).
@@ -744,7 +751,7 @@ export async function runWatch({
       const candidates=new Map(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>[a.session,a]));
       // 경보 뒤 화면이 움직여도 정상이라고 추측하지 않는다. 다음 허용 시각에 AI가 다시 확인한다.
       for(const report of latestWatchReports(entries)) {
-        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen&&!answerWaitSessions.has(report.session))
+        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen&&!answerWaitSessions.has(report.session)&&!backgroundHeld.has(report.session))
           candidates.set(report.session,report);
       }
       for(const candidate of candidates.values()){
@@ -759,6 +766,8 @@ export async function runWatch({
       if(!currentAI(job))continue;
       // 대기열에 들어간 뒤 답 대기가 생긴 progress 작업도 실행 직전에 같은 기준으로 뺀다(stall·감독 관찰은 유지).
       if(job.candidate.source==='progress'&&waitingKeys.has(identityNow.resolve(job.candidate.taskId).key))continue;
+      // 대기열에 들어간 뒤 백그라운드 유예가 시작된 progress 작업도 실행 직전에 뺀다.
+      if(job.candidate.source==='progress'&&backgroundHeld.has(job.candidate.session))continue;
       const {candidate}=job,seen=roles.observations.get(candidate.session);
       if(!seen?.alive||!seen.screen)continue;
       const check=candidate.source==='supervisor-health'?null:workerCheck(candidate,seen);
