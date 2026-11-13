@@ -26,7 +26,8 @@ test('plan: a human-chosen KADAN_WINDOW=none stays none, launchd-forced none is 
   assert.equal(planSecretaryTab({...base, env: none}).open, false);
   assert.equal(planSecretaryTab({...base, env: {...none, KADAN_WINDOW_FORCE: '1'}}).open, false); // 사람이 FORCE로 고정한 none
   assert.equal(planSecretaryTab({...base, env: {...none, KADAN_WINDOW_FORCE: '1'}, auto: true}).open, true); // launchd
-  assert.equal(planSecretaryTab({...base, env: none, auto: true}).open, false); // FORCE 없는 none은 자동 주기여도 존중
+  assert.equal(planSecretaryTab({...base, env: none, auto: true}).open, true); // 옛 plist(FORCE 없음)도 `--auto`면 launchd 꼴
+  assert.equal(planSecretaryTab({...base, env: none, auto: false}).open, false); // `--auto` 없는 사람의 none은 그대로 존중
   assert.equal(planSecretaryTab({...base, env: {KADAN_WINDOW: 'orca'}}).open, false);
   let called = false;
   planSecretaryTab({...base, env: none, connect: () => { called = true; return ok; }});
@@ -259,6 +260,53 @@ test('R1: the automatic attach failure keeps its concrete reason and is logged o
   const other = await cycle(fakeRottie({create: 'x', show: shownState('unknown')}));
   assert.match(other.logged[0], /tab-unknown|알 수 없/);       // 원인이 바뀌면 다시 한 번
   // 정상 건너뜀(탭 있음·로티 없음·설정 none)은 줄이 없다
-  for (const reason of ['has-tab', 'rottie-unavailable', 'setting-not-rottie', 'generation-unclear', 'env-window-none'])
+  for (const reason of ['has-tab', 'setting-not-rottie', 'generation-unclear', 'tab-alive', 'not-darwin'])
     assert.equal(attachFailureLine({attached: false, reason}), null, reason);
+});
+
+// ---- 운영 plist 꼴: FORCE 없는 옛 설치 (`KADAN_WINDOW=none`만 있음, `up --hidden --auto`) ----
+const attachAs = async (entries, fake, record, {env, auto = true} = {}) => {
+  const open = await realOpen();
+  return attachHiddenSecretary({home: 'h', floor: {pid: () => '30'}, session: 'kadan-비서', readEntries: () => entries,
+    record, readSetting: () => SETTING, auto,
+    open: c => openSecretaryTab({...c, env, platform: 'darwin', readSetting: () => SETTING, run: fake.run, open})});
+};
+const hiddenNoTab = () => [{kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30', window: 'hidden'}];
+
+test('old launchd plist (none, no FORCE) with --auto attaches exactly one tab; the new plist shape still does', async () => {
+  for (const env of [{KADAN_WINDOW: 'none'}, {KADAN_WINDOW: 'none', KADAN_WINDOW_FORCE: '1'}]) {
+    const entries = hiddenNoTab(), recorded = [], fake = fakeRottie();
+    const first = await attachAs(entries, fake, e => { recorded.push(e); entries.push(e); }, {env});
+    assert.equal(first.attached, true, JSON.stringify(env));
+    assert.equal(recorded.filter(e => e.kind === 'window').length, 1);
+    assert.equal(fake.calls.filter(c => c.args[1] === 'create').length, 1);
+    assert.equal((await attachAs(entries, fakeRottie(), e => recorded.push(e), {env})).reason, 'has-tab');
+    assert.equal(recorded.length, 1);
+  }
+});
+
+test('a human-typed none (no --auto) never attaches, with or without FORCE', async () => {
+  for (const env of [{KADAN_WINDOW: 'none'}, {KADAN_WINDOW: 'none', KADAN_WINDOW_FORCE: '1'}]) {
+    const fake = fakeRottie();
+    const result = await attachAs(hiddenNoTab(), fake, () => assert.fail('기록하면 안 된다'), {env, auto: false});
+    assert.deepEqual([result.attached, result.reason], [false, 'env-window-none']);
+    assert.equal(fake.calls.length, 0, '열지 않기로 한 판정은 로티를 부르지 않는다');
+  }
+});
+
+test('skips on this path are no longer silent: the first cause is logged once through the #407 route', async () => {
+  const {attachFailureLine} = await import('../src/secretary-tab.mjs');
+  const {changedOutput} = await import('../src/revive.mjs');
+  const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'skip-'));
+  const cycle = async (env, fake) => {
+    const result = await attachAs(hiddenNoTab(), fake, () => {}, {env});
+    const line = attachFailureLine(result);
+    return changedOutput(home, line ? [line] : []);
+  };
+  const orca = await cycle({KADAN_WINDOW: 'orca'}, fakeRottie());
+  assert.equal(orca.length, 1); assert.match(orca[0], /KADAN_WINDOW=orca/);
+  assert.deepEqual(await cycle({KADAN_WINDOW: 'orca'}, fakeRottie()), []);   // 같은 원인 반복 0줄
+  const down = await cycle({KADAN_WINDOW: 'none'}, fakeRottie({status: false}));
+  assert.equal(down.length, 1); assert.match(down[0], /로티/);                // 원인이 바뀌면 다시 한 번
+  assert.deepEqual(await cycle({KADAN_WINDOW: 'none'}, fakeRottie({status: false})), []);
 });
