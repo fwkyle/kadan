@@ -56,7 +56,8 @@ const cardUpdate = ({cards}, patch, note) => cards.update(KEY, patch, {revision:
 const workUpdate = ({works}, fields, note) => works.change(WORK, 'update', fields, {revision: works.get(WORK).revision, by: BOSS, note});
 
 // from분부터 until분까지 1분 주기로 돈다. hooks[분]으로 중간에 상태를 바꾼다. 같은 epoch로 다시 부르면 감시기 재시작이다.
-async function watch(env, {from = 0, until, epoch = Date.now() + 1_000, screens = {}, hooks = {}, decisions = () => []} = {}) {
+// live(역할, 분): 그 역할의 세션이 살아 있는가. ai: 가짜 감시 AI({reports, run})를 주면 감시 AI를 켠 상태로 돈다.
+async function watch(env, {from = 0, until, epoch = Date.now() + 1_000, screens = {}, hooks = {}, decisions = () => [], live = () => true, ai = null} = {}) {
   const {home} = env, stores = createWatchStoreReaders(home), controller = new AbortController();
   let mailRoles = [];
   const mailReader = createWatchMailReader(home, null, {readCards: stores.cards.read, readWorks: stores.works.read, readRoles: () => mailRoles});
@@ -70,7 +71,8 @@ async function watch(env, {from = 0, until, epoch = Date.now() + 1_000, screens 
     await runWatch({
       signal: controller.signal, intervalMs: 60_000, stallN: 5, stallAfterMs: 300_000, parents, routes: new Map(), superRole: TOP,
       now: () => epoch + minute * 60_000,
-      floor: {list: () => [TOP, BOSS, REV].map((role, i) => ({session: `kadan-${role}`, pid: i + 1})),
+      ...(ai ? {judgeCmd: 'fake', ai} : {}),
+      floor: {list: () => [TOP, BOSS, REV].map((role, i) => ({session: `kadan-${role}`, pid: i + 1})).filter(item => live(item.session.slice(6), minute)),
         read: session => screen[session.slice(6)](minute)},
       readEntries: reads.readEntries, readMailLetters: mailReader.letters, projectEntries: mailReader.project, reads,
       rememberObservedRoles: roles => { mailRoles = roles; },
@@ -83,7 +85,8 @@ async function watch(env, {from = 0, until, epoch = Date.now() + 1_000, screens 
     });
   } finally { os.loadavg = load; }
   // 전달된 알림을 [분, 받는 역할, 종류]로 줄인다. 해소 안내는 뺀다.
-  const kindOf = m => m.message.includes('놀고 있음') ? '놀고 있음' : m.message.includes('끝난 것 같음') ? '완료후보' : m.message.includes('해소됨') ? '해소' : '기타';
+  const kindOf = m => m.message.includes('놀고 있음') ? '놀고 있음' : m.message.includes('끝난 것 같음') ? '완료후보' : m.message.includes('해소됨') ? '해소'
+    : m.message.includes('화면이 멈춤') ? '정체' : m.message.includes('일하는 표시 없이 멈춤') ? '멈춤' : m.message.includes('세션 종료 의심') ? '죽음' : '기타';
   const sent = messages.map(m => [m.minute, m.role, kindOf(m)]);
   return {epoch, messages, sent, alerts: sent.filter(m => m[2] !== '해소')};
 }
@@ -231,4 +234,65 @@ test('운영과 같은 읽기 경로(범위 사실 묶음)에서도 확정 대�
   assert.ok(watchScopeFacts(entries, cards), '범위 사실 묶음을 쓰는 갈래여야 한다');
   const scope = buildWatchScope(cards, entries, parents, works);
   assert.deepEqual(scope.entries.map(e => [e.role, e.executionKey, e.awaitsConfirmation]), [[REV, KEY, true]]);
+});
+
+// 검수 지적 F1: 감독의 처리와 다른 역할의 기록을 구분한다.
+const note = (env, by, text = '상태 확인') => env.cards.update(KEY, {}, {revision: env.cards.get(KEY).revision, by, noteKind: 'progress', note: text});
+
+test('F1: 감독이 아닌 다른 역할이 카드에 메모를 남겨도 확정 대기 실행은 감시에 남는다', async () => {
+  const env = setup(); note(env, 'p-observer');
+  assert.deepEqual((await watch(env, {until: 60})).alerts, LADDER);
+});
+
+test('F1 대조: 발령한 감독·상위 감독·사용자가 결과 등록 뒤 카드를 고쳤으면 조용하다', async () => {
+  for (const by of [BOSS, TOP, '사람']) {
+    const env = setup(); note(env, by, '결과 확인');
+    assert.deepEqual((await watch(env, {until: 60})).sent, [], by);
+  }
+});
+
+// 검수 지적 F2: 결과 등록 뒤 담당이 감독에게 질문을 보내고 답을 기다린다. 화면은 완료 표시·일하는 표시·오류가 없는 빈 입력창이다.
+const askBoss = env => appendLedger({kind: 'send', transport: 'mailbox', mailId: 'q-rev', by: REV, role: BOSS, expectReply: true, executionKey: KEY, workKey: WORK, t: new Date().toISOString()}, env.home);
+const stallCounter = () => { const calls = []; return {calls, ai: {reports: {retire: () => {}}, run: async options => { calls.push([options.source, options.role]); return {ok: true, reason: 'reported'}; }}}; };
+
+test('F2: 답을 기다리는 담당은 정체로 알리지 않고 정체 판정 AI도 부르지 않는다. 답할 감독의 본인 차례는 그대로 간다', async () => {
+  const quiet = setup(); askBoss(quiet);
+  assert.deepEqual((await watch(quiet, {until: 60, screens: {[REV]: () => IDLE}})).alerts, [[15, BOSS, '놀고 있음'], [30, TOP, '놀고 있음']]);
+  const withAI = setup(), counter = stallCounter(); askBoss(withAI);
+  await watch(withAI, {until: 60, screens: {[REV]: () => IDLE}, ai: counter.ai});
+  assert.deepEqual(counter.calls.filter(([source, role]) => role === REV), [], '담당에 대한 감시 AI 호출 없음');
+});
+
+test('F2 회귀: 답을 기다리는 담당이어도 세션 죽음은 가리지 않는다', async () => {
+  const env = setup(); askBoss(env);
+  const out = await watch(env, {until: 20, screens: {[REV]: () => IDLE}, live: (role, minute) => role !== REV || minute < 5});
+  assert.ok(out.alerts.some(m => m[2] === '죽음'), JSON.stringify(out.alerts));
+});
+
+test('F2 대조: 질문이 없으면 결과만 등록하고 멈춘 담당은 지금처럼 감독에게 알린다', async () => {
+  const out = await watch(setup(), {until: 20, screens: {[REV]: () => IDLE}});
+  assert.deepEqual(out.alerts, [[4, BOSS, '멈춤'], [15, BOSS, '놀고 있음']]);
+});
+
+test('그 실행에 사용자 결정이 열려 있는 동안은 화면에 완료 표시가 없어도 담당의 멈춤·정체를 알리지 않는다', async () => {
+  const decision = {id: 'd2', status: 'open', card: KEY, requestedBy: BOSS, question: '머지할까', options: ['예', '아니오'], at: new Date().toISOString()};
+  const out = await watch(setup(), {until: 40, decisions: () => [decision], screens: {[REV]: () => IDLE}});
+  assert.deepEqual(out.sent, []);
+});
+
+// 검수 지적 F3: 다른 담당으로 재발령한 카드에 남은 옛 결과를 지금 담당의 결과로 알려 주지 않는다.
+test('F3: 재발령 전 담당의 결과는 감시 AI 입력에 지금 결과로 실리지 않는다', () => {
+  const env = setup({finalActivity: null}), REV2 = 'p-rev2', lineage = new Map([...parents, [REV2, BOSS]]);
+  appendLedger({kind: 'start', role: REV2, session: `kadan-${REV2}`, panePid: 4, t: new Date().toISOString()}, env.home);
+  env.cards.update(KEY, {role: REV2}, {revision: env.cards.get(KEY).revision, by: BOSS, note: '다른 검수자로 재발령'});
+  appendLedger({kind: 'send', role: REV2, session: `kadan-${REV2}`, taskId: 'exec-1', executionKey: KEY, by: BOSS, t: new Date().toISOString()}, env.home);
+  env.cards.update(KEY, {activity: 'running'}, {revision: env.cards.get(KEY).revision, by: REV2, noteKind: 'progress', note: '시작'});
+  const readers = createWatchStoreReaders(env.home), cards = readers.cards.read(), entries = readLedger(env.home);
+  assert.equal(env.cards.get(KEY).result.by, REV, '카드에는 옛 담당의 결과가 남아 있다');
+  for (const [role, scope] of [[BOSS, buildSupervisorScope(cards, entries, lineage, readers.works.read())], [REV2, buildWatchScope(cards, entries, lineage, readers.works.read())]]) {
+    const task = observationContext(role, {alive: true, pid: 2, expectedPid: 2}, entries, cards, scope.entries).tasks.find(t => t.id === 'exec-1');
+    assert.equal(task.activity, 'running', role);
+    assert.equal(task.resultReportedAt, undefined, `${role}: 옛 결과 시각을 싣지 않는다`);
+    assert.equal(task.resultOutcome, undefined, `${role}: 옛 판정을 싣지 않는다`);
+  }
 });

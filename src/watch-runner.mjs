@@ -48,7 +48,7 @@ import {
   disconnectKind,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
-import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
+import { assessIdleStop, IDLE_STOP_AFTER_MS, hasOpenQuestion } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
 import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
@@ -547,7 +547,7 @@ export async function runWatch({
           isHeld:role=>holdTracker?.isHeld(role)??false,supervisors:new Set(parents.values())});
     holdWorkingStates=holdWorking.states;
     const idleStopSessions=new Set(idleStopAssessment.alerts.map(a=>a.session));
-    const stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
+    let stallAlerts=eligibleStallAlerts(roleAssessment.alerts,roleStates,stallAfterMs).filter(a=>!retrySessions.has(a.session)&&!queueSessions.has(a.session)&&!(a.id.startsWith('stall:')&&idleStopSessions.has(a.session)));
     let reportAlerts=[];
     const workerCheck=(candidate,seen)=>{
       const responsibility=watchResponsibility(candidate.role,cards??[],entries,parents,candidate.source,works);
@@ -621,6 +621,22 @@ export async function runWatch({
       waitsRead = decisionsNow !== null;
     } catch { waits = []; userTurnWaits = []; waitsRead = false; }
     const progressWaits = waits.filter(w => w.kind !== "wait-until");
+    // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation) 가운데 답 대기가 등록된 것은 화면이 멈춰 있는 것이 정상이다.
+    //  - 감독의 답 대기(사용자 결정·감독이 물은 질문 우편): 완료후보·멈춤·정체를 내지 않는다. 답이 닫히면 그때 난다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다).
+    //  - 담당이 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
+    // 끊김·한도·화면 읽기 실패·세션 죽음은 가리지 않는다. 그 역할의 다른 실행이 감시에 있으면 가리지 않는다. 업무 대기 시각은 실행을 가리지 않는다.
+    // 종료 메모가 '실행 중'인 기존 경로는 바꾸지 않는다. 관계표에 없는 담당은 누가 기다리는 감독인지 몰라 감독의 답 대기로 보지 않는다.
+    // 이미 계산한 waits·scope와 이미 읽은 원장만 쓴다.
+    const answerWait = waitingExcluder(waits, parents);
+    const supervisorWaits = e => parents.has(e.role) && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role)));
+    const settledSessions = settled => {
+      const byRole = new Map();
+      for (const e of scope?.entries ?? []) byRole.set(e.role, (byRole.get(e.role) ?? true) && Boolean(e.awaitsConfirmation) && settled(e));
+      return new Set([...byRole].filter(([, ok]) => ok).map(([role]) => `kadan-${role}`));
+    };
+    const supervisorWaitSessions = settledSessions(supervisorWaits);
+    const answerWaitSessions = settledSessions(e => supervisorWaits(e) || hasOpenQuestion(mailEntries, e.role, e.t));
+    stallAlerts = stallAlerts.filter(a => !(a.id.startsWith('stall:') && answerWaitSessions.has(a.session)));
     const identityNow=taskIdentity(cards??[]);
     let waitingKeys=new Set();
     if(cards&&!observationError){
@@ -663,7 +679,7 @@ export async function runWatch({
       const candidates=new Map(stallAlerts.filter(a=>a.id.startsWith('stall:')).map(a=>[a.session,a]));
       // 경보 뒤 화면이 움직여도 정상이라고 추측하지 않는다. 다음 허용 시각에 AI가 다시 확인한다.
       for(const report of latestWatchReports(entries)) {
-        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen)
+        if(report.source==='stall'&&!normalWatchVerdict(report.verdict)&&workerObservations.get(report.session)?.screen&&!answerWaitSessions.has(report.session))
           candidates.set(report.session,report);
       }
       for(const candidate of candidates.values()){
@@ -760,14 +776,8 @@ export async function runWatch({
     try {
       stopHookAlerts = assessStopHookTrust({ enabled: fs.existsSync(claudeSettingsPath(ledgerHome())), trust: codexStopHookTrust() });
     } catch { /* 신뢰 확인 실패가 감시를 멈추지 않는다 */ }
-    // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation)의 완료후보는, 그 실행에 감독이 답을 기다리는 등록(결정·질문 우편)이
-    // 있는 동안 내지 않는다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다). 답이 닫히면 그때 난다. 업무 대기 시각은 실행을 가리지 않는다.
-    // 종료 메모가 '실행 중'인 기존 완료후보 경로는 바꾸지 않는다. 이미 계산한 waits와 scope만 쓴다.
-    // 관계표에 없는 담당은 누가 기다리는 감독인지 모르므로 미루지 않는다.
-    const answerWait = waitingExcluder(waits, parents);
-    const confirmationDeferred = alert => alert.kind === '완료후보' && (scope?.entries ?? []).some(e => e.awaitsConfirmation && e.role === alert.role && parents.has(e.role)
-      && (identityNow.resolve(alert.taskId).key ?? alert.taskId) === (e.executionKey ?? e.taskId)
-      && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role))));
+    // 감독의 답 대기가 등록된 확정 대기 실행(위 supervisorWaitSessions)의 완료후보·멈춤은 답이 닫힐 때까지 내지 않는다.
+    const confirmationDeferred = alert => (alert.kind === '완료후보' || alert.kind === '멈춤') && supervisorWaitSessions.has(alert.session);
     const nextAlerts = [
       ...processAlerts,
       ...(observationError ? [] : stopHookAlerts),
@@ -780,7 +790,7 @@ export async function runWatch({
       ...activeAlerts.filter(a=>a.kind==='한도'&&retrySessions.has(a.session)&&roleAssessment.alerts.some(r=>r.id===a.id)),
       // 큐대기 상태 추적은 그대로 두고 경보만 거른다 — 배너 경로가 조용해지면 쌓인 시간으로 큐대기가 이어받는다.
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
-      ...idleStopAssessment.alerts,
+      ...idleStopAssessment.alerts.filter(a=>!confirmationDeferred(a)),
       ...holdWorking.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),

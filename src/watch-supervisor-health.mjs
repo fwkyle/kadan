@@ -5,6 +5,7 @@ import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
 import {statusProgress} from './watch-status-line.mjs';
 import {changeDigest} from './watch-roles.mjs';
 import {decisionFields} from './watch-waits.mjs';
+import {resultOfDispatch} from './watch-scope.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
@@ -16,13 +17,16 @@ const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목
 // decisions: 이번 순회에 한 번 읽은 결정 목록(못 읽었으면 null, 안 넘기면 결정 필드를 싣지 않는다).
 export function observationContext(role, observation, entries, cards, tasks, decisions) {
   const identity=taskIdentity(cards);
-  const ids = new Set(tasks.filter(e => e.role === role).map(e => e.taskId));
+  const own = tasks.filter(e => e.role === role);
+  const ids = new Set(own.map(e => e.taskId));
+  // 지금 담당(감독의 항목이면 subject)이 이번 발령 뒤에 등록한 결과만 지금 결과다. 재발령 전 담당이 남긴 결과는 싣지 않는다.
+  const currentResult = c => own.some(e => e.taskId === identity.taskIdFor(c) && resultOfDispatch(c, e.subject ?? e.role, e));
   return {
     ...(decisions===undefined?{}:decisionFields(decisions,role)),
     process:{alive:observation.alive,pid:observation.pid,expectedPid:observation.expectedPid},
     // 담당이 결과를 등록했는지도 싣는다. activity만 보면 결과를 등록하고 확정을 기다리는 실행이 '아직 일하는 중'으로 읽힌다.
     tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,
-      ...(c.result?.at?{resultReportedAt:c.result.at,resultOutcome:c.result.outcome}:{}),scope:c.scope?.slice(0,1000)})),
+      ...(currentResult(c)?{resultReportedAt:c.result.at,resultOutcome:c.result.outcome}:{}),scope:c.scope?.slice(0,1000)})),
     responsibilities:tasks.filter(e => e.role === role),
     recentTaskEvents:workEntries(entries,identity).filter(e => e.kind === 'done' && (e.role === role || e.by === role))
       .slice(-12).map(e => ({at:e.t,kind:e.kind,role:e.role,by:e.by,taskId:e.taskId,executionKey:e.executionKey,result:e.result})),

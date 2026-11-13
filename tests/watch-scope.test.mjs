@@ -61,6 +61,16 @@ test('결과를 등록한 실행은 waiting이어도 감시에 남고, 재발령
   ['결과 없음',{result:undefined},[send]],
   ['결과 등록 뒤 감독이 카드를 고침',{at:'2026-09-08T00:07:00Z',by:'p-감독'},[send]],
  ]) assert.equal(buildWatchScope([{...waiting,...changed}],entries,parents).sessions.size,0,name);
+ // 카드를 고친 사람이 그 실행을 처리할 사람(발령한 역할·상위 감독·업무 책임 감독·사용자)이 아니면 감독의 처리가 아니다: 감시에 남는다.
+ const touched={...waiting,at:'2026-09-08T00:07:00Z'};
+ assert.equal(buildWatchScope([{...touched,by:'p-다른역할'}],[send],parents).sessions.size,1,'관계 없는 역할의 기록');
+ assert.equal(buildWatchScope([{...touched,by:'p-감독'}],[send],new Map()).sessions.size,1,'관계표가 없으면 누가 감독인지 모른다');
+ for(const [name,by,entries,works] of [
+  ['상위의 상위 감독','p-슈퍼감독',[send],[]],
+  ['발령한 역할(관계표 밖)','q-발령자',[{...send,by:'q-발령자'}],[]],
+  ['업무 책임 감독(관계표 밖)','q-책임',[send],[{key:'r/w',status:'open',owner:'q-책임',executions:[{key:card.key}]}]],
+  ['사용자','사람',[send],[]],
+ ]) assert.equal(buildWatchScope([{...touched,by}],entries,parents,works).sessions.size,0,name);
  // 대기 표시가 아닌 실행에는 표시를 붙이지 않는다(기존 경로 그대로).
  assert.equal(buildWatchScope([{...waiting,activity:'running'}],[send],parents).entries[0].awaitsConfirmation,undefined);
 });
