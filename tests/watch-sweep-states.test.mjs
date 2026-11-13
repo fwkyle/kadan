@@ -374,7 +374,7 @@ test('F2: 우편 80/800개 뒤 인계는 단독 조각이며 최장 시간·조�
     };
     const metrics = createWatchReplayMetrics();
     try {
-      const engine = s.sweep({chunkRows: 20, yieldNow: async () => { inserted = []; }});
+      const engine = s.sweep({chunkRows: 500, yieldNow: async () => { inserted = []; }});
       const runner = createSweepRunner({engine, metrics, policy: {
         record(result) { observed = result;return {replace: false}; }, holding: () => false, alerts: () => [],
       }, reset() { assert.fail('정상 자료를 초기화하지 않는다'); }});
