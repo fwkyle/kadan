@@ -82,7 +82,7 @@ const plain = row => row.map(cell => cell.char).join("");
 // claude는 구조만 본다(2026-11-10): 첫 칸의 ❯, 바로 위아래가 첫 칸에서 시작하는 가로줄, 그 아래 바닥글 1~8줄이 화면 끝.
 // 바닥글의 글자(모델 표시·알림 문구·상태 줄 유무)는 보지 않는다. 사용자·버전마다 달라서, 목록에 없는 모델 이름이나
 // 알림 줄이 뜨면 추천 문구가 사람 입력으로 남았다(쉬는 역할의 restart 거절).
-function composerIndex(lines) {
+export function composerIndex(lines) {
   const index = lines.findLastIndex(line => INPUT_LINE.test(line));
   if (index < 0) return -1;
   const footer = lines.slice(index + 1).filter(line => line.trim() !== "");
