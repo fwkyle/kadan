@@ -103,30 +103,44 @@ test('프롬프트에 요청 ID가 없고, 가짜 판정기 왕복은 reported',
  assert.ok(!input.includes(result.requestId));
 });
 
-test('감시AI오류 알림은 사유마다 다섯 가지를 쉬운 말로 보여 주고 내부어를 쓰지 않는다',()=>{
+test('감시AI오류 알림은 도구 오류로 시작하고 사유마다 무슨 일·대상 상태·할 일을 쉬운 말로 보여 준다',()=>{
  const base={kind:'감시AI오류',role:'비서',source:'supervisor-health'};
  const expected={
-  timeout:['시간 안에 답이 없었음','없음, 정해진 주기에 다시 점검함'],
-  'report-missing':['결과를 기록하지 못함','없음, 정해진 주기에 다시 점검함'],
-  'call-failed':['점검 AI를 부르지 못함','반복되면 점검 기록 폴더 확인'],
+  timeout:['시간 안에 답이 없었음','점검 기록 폴더와 점검 AI 설정 확인'],
+  'report-missing':['점검 결과가 기록되지 않음','점검 기록 폴더와 점검 AI 설정 확인'],
+  'call-failed':['점검 AI를 부르지 못함','점검 기록 폴더와 점검 AI 설정 확인'],
   network:['인터넷 연결이 3번 연속 안 돼','인터넷 연결 확인'],
-  'report-incomplete':['알림 전달 기록이 끝나지 않음','반복되면 점검 기록 폴더 확인'],
-  'report-error':['결과를 저장하는 중 오류','반복되면 점검 기록 폴더 확인'],
+  'report-incomplete':['알림 전달 기록이 끝나지 않음','점검 기록 폴더 확인'],
+  'report-error':['결과를 저장하는 중 오류','점검 기록 폴더 확인'],
  };
  for(const [reason,[happened,todo]] of Object.entries(expected)){
   const body=formatAlertBody({...base,reason});
-  for(const part of ['감시기의 점검 AI가','비서 응답 상태','점검에 실패',happened,'비서에 문제가 있는지는 모름(점검 도구 문제)',`할 일: ${todo}`])
+  assert.ok(body.startsWith('점검 도구 오류 — '),`앞머리는 대상이 아니라 도구다: ${body}`);
+  for(const part of ['감시기가 비서 응답 상태 점검을 끝내지 못함',happened,'대상 상태는 모름(대상이 멈췄다는 뜻이 아님)',`할 일: ${todo}`])
    assert.ok(body.includes(part),`${reason}: ${part} / ${body}`);
-  assert.ok(!/감독 관찰AI|작업 감시AI|작업 상태 판정과 별개|점검 필요/.test(body),body);
-  assert.ok(!body.includes('점검 AI 판단'));
+  assert.ok(!/감독 관찰AI|작업 감시AI|작업 상태 판정과 별개|점검 필요|점검에 실패/.test(body),body);
+  // 기록된 판정이 없으면 대상이 정상이라고도, 판정이 있다고도 쓰지 않는다.
+  assert.ok(!body.includes('정상으로 보였음')&&!body.includes('기록된 판정'),body);
  }
+ // 이어진 실패는 횟수와 시간을 함께 보인다.
+ assert.match(formatAlertBody({...base,reason:'report-missing',failCount:2,failMinutes:61}),/점검 결과가 기록되지 않음, 연속 2회·61분째\)/);
+ // 도구 전체 장애와 저장소 정리 실패는 특정 대상 이름으로 시작하지 않는다.
+ assert.match(formatAlertBody({kind:'감시AI오류',id:'ai-call:all',role:'점검 도구',reason:'tool-down',lastReason:'timeout',failCount:4,failTargets:3,failMinutes:32}),
+  /^점검 도구 오류 — 감시기의 점검이 여러 대상\(3개\)에서 잇달아 실패\(마지막: 시간 안에 답이 없었음, 연속 4회·32분째\) · 대상 상태는 모름/);
+ assert.match(formatAlertBody({kind:'감시AI오류',id:'watch-ai:store',role:'감시 보고 저장소',reason:'report-error'}),/^점검 도구 오류 — 감시 보고 저장소 정리가 연속으로 실패/);
  assert.match(formatAlertBody({...base,source:'progress',role:'worker',reason:'timeout'}),/worker 작업 진행 점검/);
 });
 
-test('report-incomplete에 판정이 있으면 점검 AI 판단이 붙는다',()=>{
+test('기록된 판정이 있을 때만 대상 상태를 말한다: 정상이면 정상으로 보였음, 문제면 전달 여부',()=>{
  const base={kind:'감시AI오류',role:'비서',source:'supervisor-health',reason:'report-incomplete'};
- assert.match(formatAlertBody({...base,judgeVerdict:'실행완료'}),/점검 AI 판단: 실행완료\(정상으로 보임\)$/);
- assert.match(formatAlertBody({...base,judgeVerdict:'정체'}),/점검 AI 판단: 정체\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\)$/);
+ assert.match(formatAlertBody({...base,judgeVerdict:'실행완료'}),/ · 대상은 정상으로 보였음\(기록된 판정: 실행완료\) · 할 일: /);
+ assert.match(formatAlertBody({...base,judgeVerdict:'정체'}),/ · 기록된 판정: 정체\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\) · 할 일: /);
+ for(const verdict of ['실행완료','정체'])assert.ok(!formatAlertBody({...base,judgeVerdict:verdict}).includes('대상 상태는 모름'));
+ // 낱말은 정상이어도 알릴 문제로 기록된 판정은 정상으로 보였다고 쓰지 않는다.
+ const notified=formatAlertBody({...base,judgeVerdict:'입력대기',judgeNotify:true});
+ assert.match(notified,/ · 기록된 판정: 입력대기 — 알릴 문제로 기록됨\(판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\) · 할 일: /);
+ assert.ok(!notified.includes('정상으로 보였음'));
+ assert.match(formatAlertBody({...base,judgeVerdict:'정체',judgeNotify:true}),/ · 기록된 판정: 정체\(판정은 기록됐지만/);
 });
 
 test('R1: 인자가 원장에 있는 다른 요청이면 환경·폴더 값이 덮지 않는다(역할 교차)',()=>{
@@ -183,12 +197,12 @@ test('R3: 불일치 인자의 원문은 ID 모양일 때만 남고 나머지는 
 
 test('R2: 문제 판정은 전달 근거가 있을 때만 따로 보고됨이라고 쓴다',()=>{
  const base={kind:'감시AI오류',role:'비서',source:'supervisor-health',reason:'report-incomplete',judgeVerdict:'정체'};
- assert.match(formatAlertBody({...base,judgeDeliveredTo:['p-감독']}),/문제 판정은 p-감독에게 따로 보고됨\)$/);
+ assert.match(formatAlertBody({...base,judgeDeliveredTo:['p-감독']}),/문제 판정은 p-감독에게 따로 보고됨\) · 할 일: /);
  for(const none of [[],undefined]){
   const body=formatAlertBody({...base,judgeDeliveredTo:none});
-  assert.match(body,/판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\)$/);assert.ok(!body.includes('따로 보고됨'));
+  assert.match(body,/판정은 기록됐지만 따로 전달됐는지는 확인 안 됨\) · 할 일: /);assert.ok(!body.includes('따로 보고됨'));
  }
- assert.match(formatAlertBody({...base,judgeVerdict:'실행완료'}),/\(정상으로 보임\)$/);
+ assert.match(formatAlertBody({...base,judgeVerdict:'실행완료'}),/대상은 정상으로 보였음\(기록된 판정: 실행완료\)/);
 });
 
 test('R2: 전달이 시작되지 않은 문제 판정은 결과에 전달 수신자가 비어 있다',async()=>{
@@ -201,5 +215,5 @@ test('R2: 전달이 시작되지 않은 문제 판정은 결과에 전달 수신
  const result=await ai.run({judgeCmd:'fake',source:'stall',role:'p-작업자',parents,input:{}});
  assert.equal(result.reason,'report-incomplete');assert.equal(result.verdict,'정체');assert.deepEqual(result.deliveredRecipients,[]);
  assert.match(formatAlertBody({kind:'감시AI오류',role:'p-작업자',source:'stall',reason:result.reason,judgeVerdict:result.verdict,
-  judgeDeliveredTo:result.deliveredRecipients}),/확인 안 됨\)$/);
+  judgeDeliveredTo:result.deliveredRecipients}),/확인 안 됨\) · 할 일: /);
 });
