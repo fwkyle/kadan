@@ -179,7 +179,7 @@ export default function Runners() {
                 쉬는 역할 알림 기준 {data.idleRoles.hours}시간 · 정리 후보{" "}
                 {data.idleRoles.candidates === null ? "모름" : data.idleRoles.candidates + "개"}
               </summary>
-              <p className="muted">
+              <p className="muted" style={{ wordBreak: "keep-all", overflowWrap: "break-word", textWrap: "pretty" }}>
                 화면이 이 시간 넘게 그대로이고 맡은 일이 없는 역할을 정리 후보로 골라, 그 역할의 직속 상위 감독에게
                 우편으로 알립니다. 카단은 아무것도 끄지 않고, 끌지는 받은 감독이 정합니다. 같은 역할은 이 시간이 지나도
                 그대로일 때 다시 알립니다. 기본값은 {data.idleRoles.defaultHours}시간입니다
@@ -190,7 +190,7 @@ export default function Runners() {
                 revision={data.settings.revision}
                 spec={{
                   action: "/runners/idle-hours",
-                  title: "쉬는 역할 알림 기준 시간",
+                  title: "기준 시간 저장",
                   fields: [
                     {
                       name: "hours",
