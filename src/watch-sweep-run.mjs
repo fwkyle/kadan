@@ -15,7 +15,7 @@ export function createSweepRunner({engine, policy, reset, now = Date.now, interv
   const startFull = reason => {
     schedule.ran(now());
     const finishReplay = beginWatchReplay(metrics, 'sweep', 'full');
-    running = engine.full().then(result => {
+    running = engine.full({onSlice: ms => watchMetric(metrics, 'sweepSlice', ms)}).then(result => {
       const outcome = policy.record(result);
       if (['moved', 'error'].includes(result.status)) watchMetric(metrics, 'count', 'sweep', result.status);
       // 교체: 같은 고정 snapshot에서 원본이 검증됐고 비교 중 위치가 바뀌지 않은 diff만, 진단 기록이 된 뒤에 증분 상태를 버려 다시 만든다.

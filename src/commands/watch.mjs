@@ -20,7 +20,7 @@ import { createWatchStoreReaders } from "../watch-store-cache.mjs";
 import { createWatchMailReader } from "../watch-mail-reader.mjs";
 import { parseHierarchy } from "../hierarchy.mjs";
 import { createSweepDiagnostics, createSweepPolicy } from "../watch-sweep-policy.mjs";
-import { createLedgerArraySweep } from "../watch-sweep.mjs";
+import { createLedgerArraySweep, resetWatchSweep } from "../watch-sweep.mjs";
 import { createSweepRunner } from "../watch-sweep-run.mjs";
 import { pruneHierarchy } from "../hierarchy-prune.mjs";
 import { watchAutopilotExpiry, autopilotWingmanSnapshot } from "../autopilot.mjs";
@@ -265,7 +265,8 @@ export function cmdWatch(argv, flags) {
   const sweepPolicy=createSweepPolicy({diagnostics:createSweepDiagnostics(path.join(ledgerHome(),'diagnostics'))});
   const sweepRunner=createSweepRunner({
     engine:createLedgerArraySweep({access:mailReader.sweepAccess}),policy:sweepPolicy, metrics,
-    reset:keys=>{ if(keys.includes('ledger-array'))mailReader.resetIncremental(); if(keys.includes('role-state'))mailReader.sweepAccess.roleState.reset(); },onError:error=>console.error(`[watch] 정기 대조 실패: ${error.message}`)});
+    reset:keys=>resetWatchSweep(mailReader,keys),
+    onError:error=>console.error(`[watch] 정기 대조 실패: ${error.message}`)});
   const holdTracker=new NotifyHoldTracker({record});
   const senders=createWatchSenders(reads.readEntries,{tracker:holdTracker});
   const processName=watchProcessName(ledgerHome());

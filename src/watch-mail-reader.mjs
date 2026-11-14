@@ -7,14 +7,15 @@ import {rememberMailboxQueries} from './mailbox-queries.mjs';
 import {taskIdentity, taskConnectionError, projectedCompletionKey} from './task-identity.mjs';
 import {createWatchLedgerView, readWatchRows} from './watch-ledger-view.mjs';
 import {withLedgerView} from './ledger-view.mjs';
+import {ledgerViewPath} from './ledger-view-store.mjs';
 import {domainProjector} from './ledger-domains.mjs';
 import {openDatabase, storageMode} from './storage.mjs';
-import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {applyWatchWorkState} from './watch-work-state.mjs';
 import {captureWatchScopeFacts, rememberWatchScopeFacts, sameWatchCards} from './watch-scope-facts.mjs';
 import {applyWatchRoleState} from './watch-role-state.mjs';
 import {captureWatchRoleState, rememberWatchRoleState, sameRoleCards} from './watch-role-facts.mjs';
+import {openWatchStateSnapshot, replayWatchStates} from './watch-sweep.mjs';
 
 const stateKey = info => info && JSON.stringify([
   info.mailGeneration, info.mailStateVersion, info.mailCount,
@@ -60,23 +61,24 @@ function createProjectionMemo() {
   };
 }
 
-// 역할·발령 상태표(watch_role_*)의 내용 지문. 위치·세대·revision은 빼고 상태 행과 계수만 본다.
+// 역할·발령 상태표의 행·계수·적용 위치 지문. 무작위 revision과 부모 세대는 제외한다.
 function roleStateDigest(db, meta) {
   const hash = createHash('sha256');
-  const rows = sql => db.prepare(sql).all();
-  hash.update(JSON.stringify(rows('SELECT key,value,rank,start_position,generation_position,dispatch_ready FROM watch_role_sessions ORDER BY key')));
-  hash.update(JSON.stringify(rows('SELECT session_key,task_key,task_value,position,rank,overlay FROM watch_role_dispatches ORDER BY session_key,task_key')));
-  hash.update(JSON.stringify([meta.stateVersion, meta.sessionCount, meta.dispatchCount, meta.nextRank, meta.legacyRequired]));
+  hash.update(JSON.stringify(['version', 'position', 'stateVersion', 'sessionCount', 'dispatchCount',
+    'nextRank', 'legacyRequired'].map(field => meta[field])));
+  for (const [table, order] of [['watch_role_sessions', 'key'],
+    ['watch_role_dispatches', 'session_key,task_key']]) {
+    hash.update(table);
+    for (const row of db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).iterate()) {
+      hash.update(JSON.stringify(row)).update('\n');
+    }
+  }
   return hash.digest('hex');
 }
 const roleMetaOf = db => {
   const saved = db.prepare('SELECT value FROM watch_role_meta WHERE id=1').get();
   return saved ? JSON.parse(saved.value) : null;
 };
-// 정식 reducer(applyWatchRoleState)를 그대로 쓰되 상태 행만 임시 메모리 DB에 쌓는다. 위치→사건 조회는 실제 조회 영역을 읽는다.
-const scratchStoreOf = (real, db) => ({scope: 'watch', db, key: value => real.key(value), load: position => real.load(position),
-  clear: () => real.clear?.(), prepare: sql => /\bFROM views\b/u.test(sql) ? real.prepare(sql) : db.prepare(sql)});
-
 export function createWatchMailReader(home, readEntries = null,
   {readCards = null, readWorks = null, readRoles = () => [], metrics = null} = {}) {
   const snapshots = new WeakMap();
@@ -134,6 +136,14 @@ export function createWatchMailReader(home, readEntries = null,
     },
     // 정기 대조(watch-sweep.mjs)가 쓰는 읽기 전용 접근. 증분 상태를 들여다보고 처음부터 다시 만들 때만 쓴다.
     sweepAccess: {
+      // 읽기 전용 연결로 현재 상태를 고정한다. 대조 전에 reducer를 적용해 손상을 숨기지 않는다.
+      states: {
+        open: () => !readCards || storageMode(home) === 'none' ? null :
+          openWatchStateSnapshot(home, ledgerViewPath(home), readCards),
+        reset: () => withLedgerView(home, db => {
+          db?.exec('DELETE FROM watch_mail_projection');
+        }),
+      },
       peek: () => ledger.peek(),
       newProjector: () => domainProjector(null),
       info: () => withLedgerView(home, (cache, info) => ({generation:info.generation, position:info.position})),
@@ -150,9 +160,9 @@ export function createWatchMailReader(home, readEntries = null,
         try { source.exec('BEGIN'); source.prepare('SELECT 1 FROM events LIMIT 1').get(); }
         catch (error) { source.close();throw error; }
         return {
-          readChunk: (after, upTo, projector, limit) => withWatchMailboxViews(home,
-            ({raw}) => readWatchRows({prepare: sql => raw.store.prepare(sql), source},
-              projector, after, upTo, limit), null, metrics),
+          readChunk: (after, upTo, projector, limit) => withLedgerView(home,
+            db => readWatchRows({prepare: sql => db.prepare(sql), source},
+              projector, after, upTo, limit)),
           close() { try { source.exec('ROLLBACK'); } finally { source.close(); } },
         };
       },
@@ -185,22 +195,16 @@ export function createWatchMailReader(home, readEntries = null,
           return live && meta && {position: meta.position, generation: meta.generation, digest: roleStateDigest(projected.store.db, meta),
             cardsKey: JSON.stringify(cards.map(card => [card.key, card.id])), cards};
         }, readCards, metrics),
-        // 지문 비교용 재생: 조각(위치 범위)마다 한 번씩 정식 reducer를 이어서 적용한다.
-        async replay({upTo, generation, cards, chunkPositions = 2000, yieldNow}) {
-          const scratch = new DatabaseSync(':memory:'), scratchHome = `${home}#sweep-role-state`;
+        // 기존 접근점도 원본에서 만든 독립 투영으로 재생한다.
+        async replay({upTo, cards, chunkPositions = 2000, yieldNow}) {
+          const snapshot = openWatchStateSnapshot(home, ledgerViewPath(home), () => cards);
+          if (!snapshot) return null;
           try {
-            let position = 0;
-            while (position < upTo) {
-              position = Math.min(upTo, position + chunkPositions);
-              withWatchMailboxViews(home, ({projected}) => {
-                if (!projected) throw new Error('역할 상태 재생에 조회 영역이 없습니다');
-                applyWatchRoleState(scratchHome, scratchStoreOf(projected.store, scratch), {generation, position}, cards);
-              }, readCards, metrics);
-              await yieldNow?.();
-            }
-            const meta = roleMetaOf(scratch);
-            return meta && {digest: roleStateDigest(scratch, meta), position: meta.position};
-          } finally { scratch.close(); }
+            if (snapshot.info.position !== upTo) return null;
+            const result = await replayWatchStates(snapshot, chunkPositions,
+              yieldNow ?? (() => new Promise(resolve => setImmediate(resolve))));
+            return {digest: result['role-state'].digest, position: upTo};
+          } finally { snapshot.close(); }
         },
         // 교체: 상태표 메타를 지워 다음 읽기가 처음부터 다시 만들게 한다(원장·조회 DB는 건드리지 않는다).
         reset: () => withWatchMailboxViews(home, ({projected}) => {
