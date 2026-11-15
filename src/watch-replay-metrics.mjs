@@ -11,6 +11,7 @@ const fields = {
   work: ['full', 'generation', 'invalid', 'count'],
   stores: ['cards', 'works'],
   sweep: ['full', 'replace', 'moved', 'error'],
+  prune: ['count', 'ms', 'fullReads'],
 };
 const emptyReplay = () => ({...Object.fromEntries(Object.entries(fields)
   .map(([key, names]) => [key, Object.fromEntries(names.map(name => [name, 0]))])), initial: 0});
@@ -61,6 +62,15 @@ export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsag
     count(component, name) {
       if (!fields[component]?.includes(name)) { failure(); return; }
       increment(replay[component], name);
+    },
+    prune(ms, fullReads) {
+      if (!Number.isFinite(ms) || ms < 0 || !Number.isSafeInteger(fullReads) || fullReads < 0) {
+        failure();return;
+      }
+      increment(replay.prune, 'count');
+      replay.prune.ms = Math.min(WATCH_METRIC_DURATION_MAX,
+        Math.round((replay.prune.ms + ms) * 10) / 10);
+      replay.prune.fullReads = Math.min(WATCH_METRIC_COUNT_MAX, replay.prune.fullReads + fullReads);
     },
     sweepSlice(ms) {
       if (!Number.isFinite(ms) || ms < 0) { failure();return; }

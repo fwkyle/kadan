@@ -101,9 +101,12 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
   return {total:parents.size, removeCount:remove.length, retainCount:retain.length, reasons, remove, retain, next};
 }
 
-export function readPruneSnapshot(home) {
-  return storageSnapshot(home, () => ({entries:readLedger(home), cards:new CardStore(home).listSummaries(),
-    works:new WorkStore(home).list(), version:storageVersion(home)}));
+export function readPruneSnapshot(home, onFullRead = null) {
+  return storageSnapshot(home, () => {
+    onFullRead?.();
+    return {entries:readLedger(home), cards:new CardStore(home).listSummaries(),
+      works:new WorkStore(home).list(), version:storageVersion(home)};
+  });
 }
 
 function assertNoOpenHandover(home, file) {
@@ -120,8 +123,13 @@ function assertNoOpenHandover(home, file) {
 }
 
 export function pruneHierarchy({home, floor, file, apply = false, now = Date.now,
-  readSnapshot = () => readPruneSnapshot(home)}) {
-  const initial = readSnapshot();
+  onFullRead = null, readSnapshot = () => readPruneSnapshot(home, onFullRead),
+  readCurrentSnapshot = null}) {
+  // 감시기는 파일을 이미 안다. 잠금 안에서 최신 목록을 얻는 길만 사전 전체 읽기를 생략한다.
+  // CLI·미리보기·파일 미지정의 기본 읽기와 판정은 그대로 둔다.
+  const useCurrent = Boolean(apply && file && readCurrentSnapshot);
+  const currentRead = useCurrent ? readCurrentSnapshot : readSnapshot;
+  const initial = useCurrent ? null : readSnapshot();
   const target = file ?? activeHierarchyPath(initial.entries);
   if (typeof target !== 'string' || !path.isAbsolute(target)) throw new Error('관계표 절대경로를 확인할 수 없음');
   const resolved = fs.realpathSync(target);
@@ -139,7 +147,11 @@ export function pruneHierarchy({home, floor, file, apply = false, now = Date.now
   // 따라서 열린 인계를 확인한 직후 새 인계가 끼어들거나, 동시에 등록한 줄이 사라지지 않는다.
   return new Handover({home}).locked(() => withHierarchyLock(resolved, () => {
     assertNoOpenHandover(home, resolved);
-    const current = inspect(readSnapshot());
+    const current = inspect(currentRead());
+    if (useCurrent &&
+        (!Number.isSafeInteger(current.snapshot.version) || current.snapshot.version < 0)) {
+      throw new Error('정리 목록의 원장 버전을 확인할 수 없음: 적용하지 않음');
+    }
     if (!file && fs.realpathSync(activeHierarchyPath(current.snapshot.entries)) !== resolved) throw new Error('활성 관계표 변경: 새로 미리 보세요');
     if (!current.plan.removeCount) return result(current, false);
     const trash = path.join(home, '.trash');
