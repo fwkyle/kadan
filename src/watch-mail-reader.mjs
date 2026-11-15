@@ -22,18 +22,16 @@ const stateKey = info => info && JSON.stringify([
 ]);
 const project = (entries, cards) => taskIdentity(cards).project(entries).filter(e => !taskConnectionError(e));
 
-// 같은 카드 배열에서 원문이 앞 수집의 뒤로 이어 붙은 것이면 새 사건만 해석해 이어 붙인다(별칭 뒤 최초 완료 규칙 포함).
+// SQL 투영 revision이 같고 원문이 이어지면 새 사건만 해석한다(별칭 뒤 최초 완료 규칙 포함).
+// 안전한 주소 추가만 SQL revision을 보존한다. 다른 프로세스의 전체 재생도 같은 revision으로 구분한다.
 // 앞 수집과 이어짐이 확인되지 않으면 처음부터 다시 해석한다. 결과는 project()와 같다.
 function createProjectionMemo() {
   let memo = null;
-  // 카드 객체가 제자리에서 바뀔 수 있으므로 배열 동일성이 아니라 주소 해석에 쓰는 key·id 내용을 비교한다.
-  const sameCards = (previous, cards) => previous.length === cards.length &&
-    previous.every(([key, id], index) => key === cards[index].key && id === cards[index].id);
   const extends_ = (previous, entries) => entries.length >= previous.raw.length &&
     (previous.raw.length === 0 || (entries[0] === previous.raw[0] &&
       entries[previous.raw.length - 1] === previous.raw[previous.raw.length - 1]));
-  return (entries, cards) => {
-    if (memo && sameCards(memo.addresses, cards) && extends_(memo, entries)) {
+  return (entries, cards, generation) => {
+    if (memo && memo.generation === generation && extends_(memo, entries)) {
       if (entries.length === memo.raw.length) return memo.out.slice(); // 이미 내준 배열에 상태표가 붙어 있으므로 새 배열을 준다
       const added = [], identity = taskIdentity(cards);
       for (let index = memo.raw.length; index < entries.length; index++) {
@@ -44,7 +42,7 @@ function createProjectionMemo() {
         }
         if (!taskConnectionError(entry)) added.push(entry);
       }
-      memo = {addresses:memo.addresses, raw:entries, seen:memo.seen, out:memo.out.concat(added)};
+      memo = {generation, raw:entries, seen:memo.seen, out:memo.out.concat(added)};
       return memo.out;
     }
     const identity = taskIdentity(cards), seen = new Set(), out = [];
@@ -56,7 +54,7 @@ function createProjectionMemo() {
       }
       if (!taskConnectionError(entry)) out.push(entry);
     }
-    memo = {addresses:cards.map(card => [card.key, card.id]), raw:entries, seen, out};
+    memo = {generation, raw:entries, seen, out};
     return out;
   };
 }
@@ -117,6 +115,8 @@ export function createWatchMailReader(home, readEntries = null,
             recent:new Map(withRecent ? roles.map(role => [role, mailRecentLetters(view.store, role)]) : []),
           };
           return {raw:entries, key, projectedKey, cards, works, factsKey, scopeFacts, roleKey, roleStateKey, roleFacts,
+            projectionGeneration:projected?.info.generation,
+            addresses:cards?.map(card => [card.key, card.id]),
             letters:sameRaw ? last.letters : mailReminderCandidates(raw.store),
             rawQueries:queries(raw, last?.rawQueries, sameRaw, true),
             projectedQueries:projected ? queries(projected, last?.projectedQueries,
@@ -231,9 +231,14 @@ export function createWatchMailReader(home, readEntries = null,
     project(entries, cards) {
       const value = snapshots.get(entries);
       // 그 사이 카드가 바뀌면 받은 카드로 예전과 똑같이 해석한다. 다른 시점 SQL 상태를 섞지 않는다.
-      if (!value?.projectedQueries || value.cards !== cards) return project(entries, cards);
+      // 바깥에서 주입한 원문은 SQL 참조 색인이 증명한 자료가 아니므로 전체 해석한다.
+      if (readEntries || !value?.projectedQueries || value.cards !== cards ||
+          value.addresses.length !== cards.length ||
+          !value.addresses.every(([key, id], index) => key === cards[index].key && id === cards[index].id)) {
+        return project(entries, cards);
+      }
       if (!value.projected) {
-        value.projected = projectMemo(entries, cards);
+        value.projected = projectMemo(entries, cards, value.projectionGeneration);
         rememberMailboxQueries(value.projected, value.projectedQueries);
         rememberWatchScopeFacts(value.projected, cards, value.scopeFacts);
         rememberWatchRoleState(value.projected, cards, value.roleFacts);

@@ -5,7 +5,7 @@ export const WATCH_METRIC_MEMORY_MAX = 999_999.9;
 export const WATCH_METRIC_DURATION_MAX = 999_999.9;
 const fields = {
   raw: ['full', 'generation', 'retreat', 'reset'],
-  projection: ['full', 'address', 'generation', 'invalid', 'count'],
+  projection: ['full', 'address', 'generation', 'invalid', 'count', 'skipped'],
   mail: ['full', 'generation', 'actors', 'invalid', 'count'],
   role: ['full', 'generation', 'invalid', 'count'],
   work: ['full', 'generation', 'invalid', 'count'],

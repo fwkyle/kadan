@@ -32,14 +32,9 @@ const fixture = metrics => {
   return {home, reader, setCards: value => { cards = value; }, cards: () => cards};
 };
 const zero = () => createWatchReplayMetrics().snapshot().replay;
-const addressReplay = () => ({...zero(),
-  projection: {full: 1, address: 1, generation: 0, invalid: 0, count: 0},
-  mail: {full: 1, generation: 1, actors: 0, invalid: 0, count: 0},
-  role: {full: 1, generation: 1, invalid: 0, count: 0},
-  work: {full: 1, generation: 1, invalid: 0, count: 0},
-});
+const addressSkip = () => ({...zero(), projection: {...zero().projection, skipped: 1}});
 
-test('최초 적재만 initial, metadata·평소 append는 0, 주소 추가·순서 변경은 연쇄 이유를 구분한다', () => {
+test('최초 적재만 initial, metadata·평소 append는 0, 안전한 주소 추가·순서 변경은 skipped다', () => {
   const metrics = createWatchReplayMetrics({memoryUsage});
   const f = fixture(metrics);
   f.reader.readEntries();
@@ -53,11 +48,11 @@ test('최초 적재만 initial, metadata·평소 append는 0, 주소 추가·순
   assert.deepEqual(metrics.snapshot().replay, zero());
   f.setCards([...f.cards(), {key: 'fixture/unrelated', id: 'unrelated'}]);
   f.reader.readEntries();
-  assert.deepEqual(metrics.snapshot().replay, addressReplay());
+  assert.deepEqual(metrics.snapshot().replay, addressSkip());
   metrics.clear();
   f.setCards([...f.cards()].reverse());
   f.reader.readEntries();
-  assert.deepEqual(metrics.snapshot().replay, addressReplay());
+  assert.deepEqual(metrics.snapshot().replay, addressSkip());
 });
 
 test('원본 캐시 새 세대와 명시 reset은 raw의 다른 이유이며 대조 교체도 별도로 센다', async () => {
@@ -107,7 +102,7 @@ test('최초 구성 이후의 계수 불일치와 잘못된 상태 메타는 각
   });
   f.reader.readEntries();
   assert.deepEqual(metrics.snapshot().replay.projection,
-    {full: 1, address: 0, generation: 0, invalid: 0, count: 1});
+    {full: 1, address: 0, generation: 0, invalid: 0, count: 1, skipped: 0});
   metrics.clear();
   change(db => {
     db.exec("UPDATE watch_role_meta SET value='{}'; UPDATE watch_work_meta SET value='{}'");
