@@ -6,7 +6,7 @@ import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
 import { createProcessCollections } from "../process-collections.mjs";
 import { notifyUser, watchProcessName } from "../watch-system.mjs";
-import { storageVersion } from "../storage.mjs";
+import { storageSnapshot, storageVersion } from "../storage.mjs";
 import { PROFILE_FILE } from "../watch-cycle.mjs";
 import {
   defaultProfilePath,
@@ -141,6 +141,20 @@ export function createWatchSenders(readEntries, {selectedFloor=floor, tracker=nu
       return selectedFloor.sendEnter(session);
     } : null,
   };
+}
+
+// 10배 원장도 추가 전체 읽기는 0이다. 기존 배열 보관과 정리 판정 순회는 과거 건수에 비례한다.
+export function createWatchPruner(reads, {home = ledgerHome(), selectedFloor = floor} = {}) {
+  return ({file, now, onFullRead}) => pruneHierarchy({home, floor:selectedFloor, file,
+    apply:true, now:() => now, onFullRead,
+    // 두 잠금을 잡은 뒤 호출된다. 세 목록과 version을 같은 읽기 시점에서 맞춘다.
+    readCurrentSnapshot:() => storageSnapshot(home, () => ({
+      entries:reads.readEntries(),
+      // 기존 listSummaries에는 파생된 카드 이력이 없다. 정리의 표시 상태 판정을 보존한다.
+      cards:reads.readCards().map(({watchHistorySummary, ...card}) => card),
+      works:reads.readWorks(), version:storageVersion(home),
+    })),
+  });
 }
 
 export function cmdWatch(argv, flags) {
@@ -308,7 +322,7 @@ export function cmdWatch(argv, flags) {
       return { parents, path: path.resolve(flags.hierarchy), hash: createHash("sha256").update(text).digest("hex") };
     } : null,
     pruneHierarchy: flags.hierarchy && prune !== "off"
-      ? ({file, now}) => pruneHierarchy({home: ledgerHome(), floor, file, apply: true, now: () => now})
+      ? createWatchPruner(reads)
       : null,
     checkAutopilotExpiry: ({entries, now}) => watchAutopilotExpiry({entries, now, home: ledgerHome()}),
     // Wingman 경로용 스냅샷. 사용자로 갈 놀고 있음 2단·정체 경보가 있는 주기에만 불린다(주기당 최대 1회, 결정 저장소 읽기 포함).

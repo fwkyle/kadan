@@ -334,7 +334,8 @@ export async function runWatch({
     let hierarchyError = null;
     // 정리를 읽기 앞에 둬서, 줄이 바뀌면 같은 주기의 hierarchy-loaded가 새 표를 읽는다.
     if (pruneHierarchy && hierarchyPath && !ledgerError) {
-      runDailyHierarchyPrune({entries, now:cycleAt, file:hierarchyPath, prune:pruneHierarchy, record});
+      runDailyHierarchyPrune({entries, now:cycleAt, file:hierarchyPath, prune:pruneHierarchy,
+        record, metrics, measure});
     }
     if (checkAutopilotExpiry && !ledgerError) {
       try { checkAutopilotExpiry({entries, now:cycleAt}); } catch (error) { console.error(`Autopilot 끝 시각 확인 실패(다음 주기에 다시 본다): ${error.message}`); }
