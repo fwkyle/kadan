@@ -13,7 +13,10 @@ import { mailboxLetters } from "../mailbox-state.mjs";
 import { unreadForRole } from "../mail-generation.mjs";
 import { roleNameWarning } from "../role-name.mjs";
 import { conversationOf } from "../conversation-ref.mjs";
-import { tmux, currentSocket } from "../floor-tmux.mjs";
+import { tmux, currentSocket, sendTmuxTrustKey, readTrustScreen } from "../floor-tmux.mjs";
+import { autoAcceptTrust } from "../trust-accept.mjs";
+import { normalizeAiCommand } from "../ai-identity.mjs";
+import { startConversationCertainty } from "../conversation-ref.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -308,6 +311,26 @@ export function cmdStart(argv, flags) {
   } else if (registration.hierarchyPath && registration.reason !== "이미 등록됨") {
     // 관계표를 찾았는데도 못 적은 경우만 알린다. 관계표가 없는 환경은 정상이다.
     console.error(`감시 등록 안 됨(${registration.reason}) — 알림 수신자를 직접 확인하라`);
+  }
+  // 이번 start가 새로 만든 tmux claude 세션의 폴더 신뢰 창만, 조건이 모두 맞을 때 통과한다(조건·한계: docs/architecture.md).
+  // 재사용·restart·reopen(이 함수를 거치지 않음)·이어 연 대화·herdr·codex는 지금처럼 멈춘다. 결과는 start 기록 뒤에 별도 trust 사건으로 남긴다.
+  if (!reusing && floor.name === "tmux" && startedCmd && normalizeAiCommand(startedCmd)?.harness === "claude"
+    && startConversationCertainty(startedCmd) === "new" && pid != null) {
+    const trust = autoAcceptTrust({
+      workdir: process.cwd(), home: ledgerHome(), expectedPid: pid,
+      read: () => readTrustScreen(session),
+      key: name => sendTmuxTrustKey(session, name, { expectedPid: pid }),
+      alive: () => floor.alive(session), pid: () => floor.pid(session),
+      tries: Number(process.env.KADAN_TRUST_TRIES) || undefined, intervalMs: Number(process.env.KADAN_TRUST_INTERVAL_MS) || undefined,
+    });
+    if (trust) {
+      try {
+        appendLedger({ kind: "trust", role, session, by: resolveLedgerBy({ env: process.env }), cwd: process.cwd(),
+          result: trust.result, reason: trust.reason, keys: trust.keys, ...(trust.path ? { screenPath: trust.path } : {}) });
+      } catch (error) { console.error(`폴더 신뢰 기록 실패: ${error.message}`); }
+      console.log(trust.result === "accepted" ? `폴더 신뢰 확인 후 통과: ${session} (${trust.path})`
+        : `폴더 신뢰 창 자동 통과 안 함(${trust.result}: ${trust.reason}) — 창에서 경로를 확인하고 직접 고른다`);
+    }
   }
   // 새로 만든 AI 세션이면 프로필 지침이 붙은 첫 안내를 한 번 보낸다. 못 보내도 start는 성공이다(start-brief.mjs).
   // 이번 start가 만든 세대(PID·로티 터미널)를 대기 전에 고정하고, 보내기 직전 현재 세대와 비교한다.

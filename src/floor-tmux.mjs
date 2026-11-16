@@ -522,6 +522,27 @@ export function sendTmuxKey(session, key, { expectedPid, run = tmuxOut, humanIdl
   return { keyDelivery: 'sent', inputAcceptance: 'unconfirmed' };
 }
 
+// 폴더 신뢰 창 통과 전용 키 한 개(Down·Enter만). `kadan start`가 새로 만든 세션에서만 쓴다(src/trust-accept.mjs) —
+// 우편·알림·발령이 지나는 sendTmux에는 키 절차를 넣지 않는다. 키마다 직전에 세션·pane PID·기록보기 모드·사람 입력을 다시 확인한다.
+export const TRUST_KEYS = new Set(["Down", "Enter"]);
+export function sendTmuxTrustKey(session, key, { expectedPid, run = tmuxOut, humanIdleMs } = {}) {
+  if (!/^kadan-[^\s:.]+$/u.test(session) || !TRUST_KEYS.has(key)) throw new Error("신뢰 창 키는 카단 세션 이름과 Down·Enter만 허용한다");
+  if (!expectedPid) throw new Error("신뢰 창 키 전송에는 기록된 pane PID가 필요하다");
+  run(["has-session", "-t", `=${session}`]);
+  const state = String(run(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}"])).trim();
+  if (state !== `${expectedPid}|0`) throw new Error("신뢰 창 키 전송 직전 pane PID 불일치 또는 죽은 화면");
+  checkPaneMode(session, run);
+  checkHumanIdle(session, run, { humanIdleMs });
+  try { run(["send-keys", "-t", `=${session}:`, key]); }
+  catch (error) { error.delivery = "unknown"; throw error; }
+  return { keyDelivery: "sent" };
+}
+
+// 신뢰 창 판정용 화면 읽기: 줄바꿈으로 잘린 경로를 이어 붙이려고 -J로 읽는다(checkTrustPrompt와 같은 방식). 실패하면 던진다.
+export function readTrustScreen(session, { run = tmuxOut } = {}) {
+  return String(run(["capture-pane", "-p", "-J", "-t", `=${session}:`]));
+}
+
 // 사람 보호는 이것 하나다(2026-10-17 [kyle] 결정). 화면 모양(프롬프트·자리표시자·테두리·바닥글)을 읽어
 // 미제출 글을 판정하던 장치는 실행기 업데이트마다 빈 입력창을 오판해 발령과 알림을 막아 없앴다.
 // 창에 붙은 사람이 humanIdleMs 안에 키를 눌렀으면 보류한다. 붙은 client가 없으면 통과한다.
@@ -717,7 +738,7 @@ const TRUST_CONFIRM_REST = /^[·•\-–—]*(?:esc(?:to(?:cancel)?)?)?$/iu;
 const TRUST_PROMPT_TAIL_LINES = 60;
 // capture-pane -p는 제어 시퀀스를 내지 않지만, 재생·기록 화면 끝에는 터미널 응답 찌꺼기(`ESC[?1;2;4c` 등)가 줄 하나로 붙어 있었다(사고 화면 파일).
 // 그런 줄이 '맨 끝 줄'을 가로채 모달을 놓치지 않게 제어 시퀀스를 먼저 걷는다.
-const CONTROL_SEQUENCES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|P[\s\S]*?\x1b\\|[()][A-Za-z0-9]|[78=>])|[\x00-\x08\x0b-\x1f\x7f]/gu;
+export const CONTROL_SEQUENCES =/\x1b(?:\[[0-?]*[ -/]*[@-~]|P[\s\S]*?\x1b\\|[()][A-Za-z0-9]|[78=>])|[\x00-\x08\x0b-\x1f\x7f]/gu;
 export function hasTrustPrompt(screen) {
   if (typeof screen !== "string") return false;
   const lines = screen.replace(CONTROL_SEQUENCES, "").split("\n").map(line => line.replace(/\s+/gu, "")).filter(Boolean).slice(-TRUST_PROMPT_TAIL_LINES);
