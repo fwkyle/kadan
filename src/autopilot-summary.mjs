@@ -33,7 +33,8 @@ function countDecisions(events, startMs, endMs) {
     if (e?.chat === true) { if (e.revision === 1 && inWindow(e.at)) chatRegistered.add(e.id); continue; }
     if (e?.status === 'cancelled' && inWindow(e.cancelledAt) && !cancelled.has(e.id)) cancelled.set(e.id, e);
   }
-  const merge = e => PR_URL.test([e.question, e.reason, e.recommendation, ...(e.options ?? [])].join('\n'));
+  const merge = e => e.bundle !== true
+    && PR_URL.test([e.question, e.reason, e.recommendation, ...(e.options ?? [])].join('\n'));
   const byHuman = [...cancelled.values()].filter(e => !isSupervisorActor(e.cancelledBy));
   const bySuper = [...cancelled.values()].filter(e => isSupervisorActor(e.cancelledBy));
   return {

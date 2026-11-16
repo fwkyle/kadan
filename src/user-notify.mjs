@@ -316,7 +316,7 @@ function sendDefaultDecision({home, webhook, content, allowedMentions, deadline,
 // readFailed로 표시해 결과 사유에 '최신 상태 확인 실패'를 남긴다(요청 유실이 오래된 요청 한 줄보다 나쁘다).
 // 돌려주는 값: {content, allowedMentions, resolved(기록에 남길 '해결 메시지' 표시), readFailed?, skip?}
 function planDecision(home, decision, content, allowedMentions) {
-  const plan = {content, allowedMentions, resolved: Boolean(decision?.edit)};
+  const plan = {content, allowedMentions, resolved: decision?.resolved ?? Boolean(decision?.edit)};
   if (!decision || decision.edit) return plan;
   if (readDecisions(home)[decision.id]?.resolved) return {...plan, skip: {outcome: 'resolved-skip', attempts: 0, reason: '이미 해결 메시지를 보냄'}};
   if (typeof decision.latest !== 'function') return plan;
@@ -336,7 +336,7 @@ function editDecision({home, decision, post, forum, resumeWith = (threadId, atte
   if (!known || known.forum !== forum) return null;
   const r = resumeWith(known.threadId, () => post({threadId: known.threadId ?? undefined, messageId: known.messageId, content: decision.edit, allowedMentions: {parse: []}}));
   if (r.outcome === 'failed' && r.status === 404) return null;
-  if (r.outcome === 'sent') setDecision(home, decision.id, {...known, resolved: true});
+  if (r.outcome === 'sent') setDecision(home, decision.id, {...known, resolved: decision.resolved ?? true});
   return r;
 }
 

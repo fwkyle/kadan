@@ -1,6 +1,7 @@
 // 답 대기와 열린 결정을 감시에 알려 주는 순수 함수 모음 (2026-11-02, 감독이 kyle 결정을 기다리는 동안의 정체 알림 반복 방지).
 // 파일·원장을 읽지 않는다. 순회마다 한 번 읽은 결정 목록과 waits를 받아 메모리에서만 거른다.
 import {taskIdentity} from './task-identity.mjs';
+import {unansweredKeys} from './decision-bundle.mjs';
 
 // 결정 목록을 못 읽은 것(null)과 열린 결정이 없는 것([])을 구분한다.
 export const decisionList = raw => Array.isArray(raw) ? raw : null;
@@ -10,7 +11,9 @@ export function openDecisionContext(decisions, requester) {
   if (decisions === null) return null;
   if (!requester) return [];
   return decisions.filter(d => d?.status === 'open' && d.requestedBy === requester).map(d => ({
-    id: d.id, question: String(d.question ?? '').slice(0, 200), options: d.options, recommendation: d.recommendation,
+    id: d.id, question: String(d.question ?? '').slice(0, 200),
+    ...(d.bundle === true ? {bundle: true, progress: `답 ${Object.keys(d.answered).length}/${d.itemKeys.length}`,
+      unansweredKeys: unansweredKeys(d)} : {options: d.options, recommendation: d.recommendation}),
     at: d.at, work: d.work ?? null, card: d.card ?? null
   }));
 }

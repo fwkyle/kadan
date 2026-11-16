@@ -16,6 +16,7 @@ import {DEFAULT_PORT} from './quickstart.mjs';
 import {readDecisions} from './notify-threads.mjs';
 import {loadRemoteConfig} from './remote-access.mjs';
 import {dashboardDecisionRows} from './dashboard-decisions.mjs';
+import {assertBundleRow, bundleProgress} from './decision-bundle.mjs';
 const supervisor=isSupervisorActor;
 const human=by=>isUserActor(by);
 const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
@@ -54,8 +55,10 @@ export function withoutAuditFields(d){
  const {remote,...answer}=d.answer;return {...d,answer};
 }
 // 저장된 줄에서 결정마다 마지막 상태를 고른다. 형식이나 순번이 어긋난 줄이 하나라도 있으면 '결정 이력 손상'이다.
-function latestDecisions(rows){
+export function latestDecisions(rows){
  const latest=new Map();for(const e of rows){
+  if(e.bundle!==undefined){assertBundleRow(e,latest.get(e.id));latest.set(e.id,e);continue;}
+  if(latest.get(e.id)?.bundle===true)throw new Error('결정 이력 손상');
   const old=latest.get(e.id);if(!Array.isArray(e.options)||e.options.length<2||!e.options.every(x=>typeof x==='string')||typeof e.question!=='string'||typeof e.reason!=='string'||(e.chat!==undefined&&e.chat!==true)||(e.chat===true?(e.card!==null||typeof e.work!=='string'):typeof e.card!=='string')||(e.work!==undefined&&typeof e.work!=='string')||(e.reversible!==undefined&&(typeof e.reversible!=='string'||!e.reversible.trim()))||(e.notProhibited!==undefined&&(!e.notProhibited||typeof e.notProhibited.by!=='string'||typeof e.notProhibited.at!=='string'))||(e.proceeded!==undefined&&(!e.proceeded||typeof e.proceeded.by!=='string'||typeof e.proceeded.at!=='string'||typeof e.proceeded.recommendation!=='string'||typeof e.proceeded.reversible!=='string'))||!supervisor(e.requestedBy)||(e.status==='answered'&&typeof e.answer?.text!=='string')||(e.answer?.source!==undefined&&e.answer.source!=='discord')||(e.answer?.messageId!==undefined&&typeof e.answer.messageId!=='string')||!e.id||e.to!=='@user'||e.revision!==(old?.revision??0)+1||!['open','answered','cancelled'].includes(e.status))throw new Error('결정 이력 손상');latest.set(e.id,e);
  }return [...latest.values()];}
 // 대시보드 읽기 전용 목록(list({dashboard:true})). 결정 기록이 바뀌지 않았으면 DB를 다시 읽지 않고 직전 목록(같은 배열, 얼려 있음)을 돌려준다.
@@ -127,6 +130,21 @@ export class DecisionStore {
  // 답변·취소는 원래 요청 메시지를 고친다(상태를 맨 위에). 원래 메시지를 못 찾을 때만 질문 앞부분·사유가 든 새 메시지를 보낸다.
  announce(kind,d){
   if(process.env.KADAN_NOTIFY==='off'||d.chat===true)return null; // 채팅 질문은 kyle이 이미 채팅으로 받았다: 등록·닫힘 알림을 보내지 않는다(중복 멘션 방지).
+  if(d.bundle===true){
+   const repo=d.repo,link=decisionLink(this.home,d.id),tag=`[${repo}]`;
+   const state=x=>x.status==='cancelled'?'취소됨':x.status==='answered'?'해결됨':'답 대기';
+   const content=x=>fitDiscord(`${tag} 결정 ${state(x)}: ${x.question}\n${bundleProgress(x)}`,`답하러 가기: ${link}`);
+   const resolved=d.status!=='open',message=content(d);
+   const decision=kind==='request'
+    ?{id:d.id,latest:()=>this.get(d.id),resolvedContent:content,resolvedShort:content}
+    :{id:d.id,edit:message,resolved};
+   try{return this.userNotify(message,{
+    kind:`decision-${kind}`,key:`decision:${d.id}:${kind}:${d.revision}`,tagRepo:repo,
+    ...(d.work?{work:d.work}:{repo,forumKey:`${repo}/__decisions__`,forumTitle:`${tag} 결정`}),
+    decision,discord:userId=>({mention:kind==='request',
+     content:kind==='request'?fitDiscord(`<@${userId}> ${message}`):message}),
+   });}catch{return null;}
+  }
   const cut=(t,n)=>{t=String(t).replace(/\s+/g,' ').trim();return t.length>n?t.slice(0,n-1)+'…':t;};
   const repo=d.card.split('/')[0],tag=`[${repo}]`;
   const link=decisionLink(this.home,d.id),where=link.startsWith('https://')?'열어서':'맥에서'; // 공개 주소 링크는 맥 밖(폰)에서 열린다
@@ -164,7 +182,9 @@ export class DecisionStore {
   }
   if(source!==undefined&&source!=='discord')throw new Error('알 수 없는 답변 출처');
   if(messageId!==undefined&&(typeof messageId!=='string'||!messageId))throw new Error('디코 글 id 형식 오류');
-  const d=this.get(id);choice=choice||null;text=required(typeof text==='string'&&text.trim()?text:choice,'답변 또는 선택');
+  const d=this.get(id);
+  if(d.bundle===true)throw new Error('여러 항목 결정은 항목별 답이 필요합니다. 대시보드에서 확인하세요.');
+  choice=choice||null;text=required(typeof text==='string'&&text.trim()?text:choice,'답변 또는 선택');
   if(choice&&!d.options.includes(choice))throw new Error('선택지가 일치하지 않음');
   if(d.status==='answered'&&d.answer.text===text&&d.answer.choice===choice)return d;
   if(d.status!=='open'||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경: 다시 확인');
@@ -184,7 +204,10 @@ export class DecisionStore {
  }
  // 디코 자유 답(choice 없음)은 관계없는 말이 답으로 굳을 수 있어 그 결정의 요청자만 answered 상태에서도 취소할 수 있다(2026-10-16 PR #173 검수).
  // 기록은 고치지 않고 취소 사건을 뒤에 쌓는다. 선택지 답과 디코 밖의 답은 지금처럼 취소하지 못한다. 취소하면 그 스레드에 조용한 글을 단다.
- cancel(id,{revision,reason,via},by){let freeAnswer=false;const cancelled=this.locked(()=>{const d=this.get(id);if(!human(by)&&by!==d.requestedBy&&!(by===AUTO_BY&&d.chat===true))throw new Error('요청자 또는 사용자만 취소');
+ cancel(id,{revision,reason,via},by){let freeAnswer=false;const cancelled=this.locked(()=>{
+  const d=this.get(id);
+  if(d.bundle===true)throw new Error('여러 항목 결정 취소는 이 버전에서 지원하지 않습니다');
+  if(!human(by)&&by!==d.requestedBy&&!(by===AUTO_BY&&d.chat===true))throw new Error('요청자 또는 사용자만 취소');
   freeAnswer=d.status==='answered'&&d.answer.source==='discord'&&!d.answer.choice&&by===d.requestedBy;
   if((d.status!=='open'&&!freeAnswer)||Number(revision)!==d.revision)throw new Error('요청 상태/버전 변경');return this.write({...d,status:'cancelled',revision:d.revision+1,cancelReason:required(reason,'취소 이유'),cancelledBy:by,cancelledAt:new Date().toISOString(),...(via?{cancelledVia:via}:{}),...(freeAnswer?{cancelledAnswer:true}:{})});});this.announce('cancel',cancelled);
   if(freeAnswer)this.threadNote(cancelled,'기타 답 기록 취소됨');return cancelled;}
@@ -195,6 +218,7 @@ export class DecisionStore {
   // 판정은 쓰기 잠금 안에서 다시 읽는다(검수 F3): Autopilot 켜짐 구간·단계·대기 시간·경과 시간·부른 쪽의 권한·업무의 보류 기록을 잠금 안의 원장에서 새로 읽고,
   // 잠금을 기다리는 사이 꺼졌거나 다시 켜졌으면(켜짐 구간 시작이 바뀌었으면) 거절한다. 시계도 잠금 안에서 다시 읽는다.
   const d=this.get(id);
+  if(d.bundle===true)throw Object.assign(new Error('여러 항목 결정은 항목별 답이 필요합니다'),{exitCode:2});
   if(d.proceeded){already=true;return d;}
   at=now();
   let rows=null;try{rows=readLedger(this.home);if(rows.some(e=>e?.broken))rows=null;}catch{rows=null;}

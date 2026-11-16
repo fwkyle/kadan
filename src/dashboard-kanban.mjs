@@ -31,6 +31,7 @@ const time = (value) => (Number.isFinite(Date.parse(value)) ? Date.parse(value) 
 // 번호 뒤에 숫자·영문자가 이어지면 PR 주소가 아니다.
 const PR_URL = /(?:^|[\s(\[<"'])(?:https?:\/\/)?(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)(?![0-9A-Za-z])/gi;
 export function prNumbers(decision) {
+  if (decision?.bundle === true) return [];
   const text = `${decision?.question ?? ""}\n${decision?.reason ?? ""}`;
   return [...new Set([...text.matchAll(PR_URL)].map((m) => m[1]))];
 }
@@ -136,7 +137,7 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
   const standKeyOf = (d) => {
     const w = d.work ? workByKey.get(bareWork(d.work)) ?? null : null;
     if (shown.has(d.card) || (w && rowsOfWork.has(w.key))) return null;
-    return w ? "work:" + bareWork(w.key) : d.card;
+    return w ? "work:" + bareWork(w.key) : d.bundle === true ? `decision:${d.id}` : d.card;
   };
   // 줄은 결정 묶음 단위로 정한다. 한 카드에 함께 걸린 결정들(업무 결정이 여러 카드로 퍼진 것 포함)을 이어 붙인 연결 요소가
   // 한 묶음이다. 묶음의 결정이 모두 머지 요청이면 묶음의 모든 카드가 머지 요청, 하나라도 아니면 모두 kyle 확인 필요다.
@@ -199,24 +200,27 @@ export function buildKanban({ rows = [], works = [], decisions = [], hierarchy =
     const src = lookupByKey.get(d.card) ?? null;
     if (!stand.has(key)) {
       const parent = src?.owner && parents ? parents.get(src.owner) : null;
-      const owner = w ? w.owner || null : parent && parent !== "@user" ? parent : null;
+      const owner = w ? w.owner || null : d.bundle === true ? d.requestedBy
+        : parent && parent !== "@user" ? parent : null;
       // 프로젝트 판 키. 업무가 있으면 업무의 repo만 보고(비면 저장소 모름), 업무가 없을 때만 출처 카드의 repo를 본다.
       // 카드 칸(repo)은 main과 같게 출처 카드 값을 그대로 둔다.
       stand.set(key, {
         owner,
-        projectRepo: w ? w.repo || "" : src?.repo || "",
+        projectRepo: d.bundle === true ? d.repo : w ? w.repo || "" : src?.repo || "",
         card: {
           key,
-          title: w ? w.title || bareWork(w.key) : src?.title || d.card || bareWork(d.work),
-          role: w ? w.owner || "" : src?.owner || "",
-          repo: src?.repo || "",
+          title: w ? w.title || bareWork(w.key) : d.bundle === true ? d.question
+            : src?.title || d.card || bareWork(d.work),
+          role: w ? w.owner || "" : d.bundle === true ? d.requestedBy : src?.owner || "",
+          repo: d.bundle === true ? d.repo : src?.repo || "",
           board: src?.board || "",
           state: w ? "work" : src?.state ?? "",
-          stateLabel: w ? "업무" : src ? statusLabel(src.state) : "카드 기록 없음",
+          stateLabel: w ? "업무" : d.bundle === true ? "결정" : src ? statusLabel(src.state) : "카드 기록 없음",
           healthLabel: "",
           workKey: w?.key ?? null,
           workTitle: w?.title ?? null,
-          marks: [{ kind: "decision", label: w ? "결정 대기(업무)" : "결정 대기(카드)" }],
+          marks: [{ kind: "decision", label: w ? "결정 대기(업무)"
+            : d.bundle === true ? "묶음 결정" : "결정 대기(카드)" }],
           decisionIds: [],
           signalAt: null,
           at: d.at || null,

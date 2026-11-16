@@ -4,6 +4,7 @@ import {openDatabase,storageMode,storagePath} from './storage.mjs';
 import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {DecisionStore} from './decisions.mjs';
+import {readDecisionDetail} from './decision-detail.mjs';
 import {BriefStore} from './human-brief.mjs';
 import {ledgerStreams,validateDomainEvent,validateDomainStreams} from './ledger-domains.mjs';
 import {verifyWatchContexts} from './watch-request-context.mjs';
@@ -38,7 +39,11 @@ export function verifyStorage(home){
   db.exec('COMMIT');
   const cards=new CardStore(home).list();const keys=new Set(cards.map(c=>c.key));
   validateWorks(home,keys);
- for(const d of new DecisionStore(home).list())if(d.chat!==true&&!keys.has(d.card))throw new Error('결정이 가리키는 카드 없음: '+d.card);for(const c of cards)new BriefStore(home).read(c.key);
+  for(const d of new DecisionStore(home).list()){
+   if(d.bundle===true)readDecisionDetail(home,d.id);
+   else if(d.chat!==true&&!keys.has(d.card))throw new Error('결정이 가리키는 카드 없음: '+d.card);
+  }
+  for(const c of cards)new BriefStore(home).read(c.key);
   return {backend:'sqlite',path:storagePath(home),integrity:'ok',streams:heads.size,events:events.length,cards:cards.length};
  }catch(e){if(db.isTransaction)db.exec('ROLLBACK');throw e}finally{db.close()}
 }

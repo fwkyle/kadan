@@ -66,6 +66,7 @@ const minutes = ms => Math.max(1, Math.ceil(ms / 60_000));
 // 반환: {ok, already, reasons[]}. already면(진행 기록이 이미 있음) ok는 false이고 reasons는 비어 있다.
 // 시계는 max(결정 요청 시각, 지금 켜짐 구간의 시작 시각)부터다: 완전자율을 켜는 순간 묵은 결정이 한꺼번에 넘어가지 않는다.
 export function proceedEligibility(d, ap, now) {
+  if (d?.bundle === true) return {ok: false, already: false, reasons: ['여러 항목 결정은 항목별 답이 필요합니다']};
   if (d?.proceeded) return {ok: false, already: true, reasons: []};
   const reasons = [];
   if (!ap?.on) reasons.push('Autopilot이 꺼져 있습니다');
@@ -94,7 +95,8 @@ export function releaseTime(d, ap) {
 }
 
 // 감시기용: 이 결정을 더 이상 "답 대기"로 세지 않을지. 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 열린 결정이다.
-export const releasedFromWait = (d, ap, now) => d?.status === 'open' && (Boolean(d.proceeded) || proceedEligibility(d, ap, now).ok);
+export const releasedFromWait = (d, ap, now) => d?.bundle !== true && d?.status === 'open'
+  && (Boolean(d.proceeded) || proceedEligibility(d, ap, now).ok);
 
 // 감시기가 이미 읽은 결정 목록에서 대기 시간이 지난 것(진행 기록 전)만 골라 안내 한 줄 재료로 준다.
 export const proceedableNow = (decisions, ap, now) => (decisions ?? []).filter(d => d?.status === 'open' && !d.proceeded && proceedEligibility(d, ap, now).ok);

@@ -28,11 +28,13 @@ export function frontStrip({ decisions, stoppedRows, mergeInfo = null }) {
   const items = [];
   for (const d of decisions ?? []) {
     if (d.status !== "open") continue;
-    const repo = repoOfKey(d.card ?? d.work);
+    const repo = d.bundle === true ? d.repo : repoOfKey(d.card ?? d.work);
     const merge = isMergeRequest(d);
     slot(repo)[merge ? "merges" : "decisions"] += 1;
     items.push({ id: d.id, repo, merge, requestedBy: d.requestedBy ?? null, at: d.at ?? null,
       title: cut(d.questionTitle ?? firstLine(d.question), 120),
+      ...(d.bundle === true ? {bundle: true, itemCount: d.itemKeys.length,
+        answeredCount: Object.keys(d.answered).length} : {}),
       ...(merge && mergeInfo ? { mergeInfo: mergeInfo(d) } : {}) });
   }
   for (const row of stoppedRows) slot(row.repo || repoOfKey(row.key)).stuck += 1;

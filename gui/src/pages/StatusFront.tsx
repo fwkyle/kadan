@@ -3,7 +3,9 @@ import { time } from "../ui";
 // 서버(src/dashboard/front.mjs)가 센 값을 그대로 그린다. 접기와 상관없이 늘 보인다.
 export type FrontData = {
   repos: { repo: string; decisions: number | null; merges: number | null; stuck: number }[];
-  decisions: { id: string; repo: string; merge: boolean; requestedBy: string | null; title: string; at?: string | null; mergeInfo?: MergeInfo }[] | null;
+  decisions: { id: string; repo: string; merge: boolean; requestedBy: string | null;
+    title: string; at?: string | null; mergeInfo?: MergeInfo; bundle?: boolean;
+    itemCount?: number; answeredCount?: number }[] | null;
 };
 // 머지 요청 줄 정보(서버 src/dashboard/autopilot-view.mjs). 결정 글·검수 기록에 있는 것만 담는다.
 export type MergeInfo = {
@@ -38,8 +40,9 @@ export function FrontLists({decisions, showRepo}: {decisions: FrontData["decisio
     {items.length === 0 ? <p className="st-front-empty">{empty}</p> : <ul className="st-front-decs">{items.map(d => <li key={d.id} className="st-front-dec">
       <span className="st-front-tag">{d.merge ? "머지 요청" : "결정"}{showRepo ? " · " + d.repo : ""}</span>
       <span>{d.title}</span>
+      {d.bundle && <small>항목 {d.itemCount}개 · 답 {d.answeredCount}개</small>}
       <MergeDetail d={d} now={now()}/>
-      <a href={"#decision-" + encodeURIComponent(d.id)}>답하기</a>
+      <a href={"#decision-" + encodeURIComponent(d.id)}>{d.bundle ? "답하러 가기" : "답하기"}</a>
     </li>)}</ul>}
   </section>;
   return <>

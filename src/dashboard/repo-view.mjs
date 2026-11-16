@@ -4,7 +4,7 @@ import { isMergeRequest, prNumbers } from "../dashboard-kanban.mjs";
 import { repoOfKey, UNKNOWN_REPO } from "./front.mjs";
 
 export const repoOfRow = (row) => row.repo || repoOfKey(row.key);
-export const repoOfDecision = (d) => repoOfKey(d.card ?? d.work);
+export const repoOfDecision = (d) => d.bundle === true ? d.repo : repoOfKey(d.card ?? d.work);
 
 // 사이드 탭 목록: 행(워크·카드, 끝난 것 포함)과 열린 결정 키의 첫 마디 합집합.
 // decisions가 null(결정 기록을 못 읽음)이면 결정·머지 수는 0이 아니라 모름(null)이다.

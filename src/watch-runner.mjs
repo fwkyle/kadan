@@ -679,6 +679,7 @@ export async function runWatch({
       // 완전자율: 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 결정은 답 대기로 세지 않는다(그 결정이 막던 일이 다시 요청한 감독의 할 일이다).
       // 자격 판정은 decision-proceed의 함수 하나이고, 값을 읽지 못하면(스냅샷 없음) 계속 답 대기다. 감시기는 결정·원장을 쓰지 않는다.
       const releasedDecision = d => {
+        if (d.bundle === true) return false;
         const ap = d.proceeded ? null : autopilotWingmanOnce();
         if (!d.proceeded) {
           if (typeof d.reversible !== "string" || !readAutopilotWingman) return false;
@@ -692,7 +693,8 @@ export async function runWatch({
         // 요청한 역할이 관계표에 없으면 맡길 곳이 없어 진행 기록이 붙을 때까지 책임 감독의 할 일로 둔다(아래 한계: 결과 파일).
         return d.proceeded || !parents.has(d.requestedBy) ? "free" : "duty";
       };
-      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) {
+      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string"
+        || ((d.chat === true || d.bundle === true) && typeof d.work === "string"))) {
         const released = releasedDecision(d);
         if (released === "free") continue;
         waits.push({ ...item(d.card ?? null, null, d.work ?? null, released === "duty" ? d.requestedBy : "@user"), kind: "decision", ref: d.id });

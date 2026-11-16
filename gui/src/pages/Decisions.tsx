@@ -94,12 +94,15 @@ function PastDecisions({newest}: {newest: boolean}) {
   const resource = useResource<Stamp & {items: Decision[]; page: number; pages: number; total: number}>(`decisions?past=1&page=${page}${newest ? "&sort=newest" : ""}`), data = resource.data;
   return <>
     <ErrorMessage error={resource.error}/>
-    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}{d.chat ? <p className="decision-meta"><span className="chat-tag">채팅</span>{d.work && <span className="chat-work">업무 {d.work}</span>}</p> : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}</article>)}
+    {!data ? <Loading/> : data.items.map(d=>d.bundle
+      ? <BundleDecision key={d.id} decision={d}/>
+      : <article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}{d.chat ? <p className="decision-meta"><span className="chat-tag">채팅</span>{d.work && <span className="chat-work">업무 {d.work}</span>}</p> : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}</article>)}
     {data && data.pages > 1 && <p><button disabled={page <= 1} onClick={()=>setPage(page-1)}>이전</button> {data.page}/{data.pages}쪽 · {data.total}건 <button disabled={page >= data.pages} onClick={()=>setPage(page+1)}>다음</button></p>}
   </>;
 }
 function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Decision; draft: (id: string, dirty: boolean)=>void; folded: boolean; onToggleFold: (id: string)=>void}) {
   const onDirtyChange = useCallback((dirty: boolean)=>draft(decision.id,dirty), [draft,decision.id]);
+  if (decision.bundle) return <BundleDecision decision={decision}/>;
   // 접어도 본문은 숨기기만 한다. 쓰던 메모와 고른 선택지가 남는다.
   return <article id={"decision-"+decision.id} data-fresh={`decision:${decision.id}:${decision.status}`} className={folded ? "folded" : undefined}>
     <div className="decision-meta"><span className="requester">요청 {decision.requestedBy}</span>{decision.proceeded && <span className="chat-tag" title={`되돌리는 방법: ${decision.proceeded.reversible}`}>추천대로 진행함 · {time(decision.proceeded.at)} · {decision.proceeded.by}</span>}{decision.chat ? <><span className="chat-tag">채팅</span><span className="chat-work">업무 {decision.work}</span></> : <CardLink row={{key:decision.card ?? "",title:decision.card ?? ""}}/>}<time>{time(decision.at)}{decision.chat && chatAge(decision.at, Date.now()) ? " · " + chatAge(decision.at, Date.now()) : ""}</time><button type="button" className="decision-fold" aria-expanded={!folded} aria-controls={"decision-body-"+decision.id} onClick={()=>onToggleFold(decision.id)}>{folded ? "펼치기" : "접기"}</button></div>
@@ -124,5 +127,24 @@ function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Dec
     }}/>
     <p className="decision-note">답변 전달을 누를 때만 보냅니다. 요청한 {decision.requestedBy}에게 한 번 알립니다.</p>
     </div>
+  </article>;
+}
+
+// PR 1은 묶음 목록을 안전하게 보여 주는 단계다. 단일 답 양식을 만들지 않는다.
+export function BundleDecision({decision}: {decision: Decision}) {
+  return <article className="decision-bundle" id={"decision-" + decision.id}
+    data-fresh={`decision:${decision.id}:${decision.status}`}>
+    <div className="decision-meta">
+      <span className="requester">요청 {decision.requestedBy}</span>
+      <span>{decision.repo}</span><time>{time(decision.at)}</time>
+    </div>
+    <h2>{decision.questionTitle ?? decision.question}</h2>
+    {decision.questionHtml && <div className="decision-question">
+      <DocumentContent html={decision.questionHtml}/>
+    </div>}
+    <p>항목 {decision.itemKeys?.length ?? 0}개 · 답 {Object.keys(decision.answered ?? {}).length}개</p>
+    {decision.status !== "open" && <p>
+      {decision.status === "answered" ? "답변 완료" : "취소"} {decision.cancelReason}
+    </p>}
   </article>;
 }

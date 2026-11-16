@@ -64,11 +64,13 @@ export function judgeHead(reviews, headSha) {
 // 결정 글에 적힌 PR head: "head: <sha>"·"head SHA <sha>"·"headRefOid=<sha>" 꼴만. 7~40자리 16진이 아니면 모른다.
 const HEAD_PATTERN = /\b(?:head(?:\s*sha|\s*커밋)?|headRefOid)\b[\s:=`'"(]*([0-9a-f]{7,40})\b/i;
 export function prHeadOf(decision) {
+  if (decision?.bundle === true) return null;
   const text = `${decision?.question ?? ""}\n${decision?.reason ?? ""}`;
   return normalizeSha(HEAD_PATTERN.exec(text)?.[1]);
 }
 // 결정 글에 적힌 CI 줄: 'CI'가 든 첫 줄을 그대로(해석하지 않음). 기록 시각과 함께 보이고 현재 상태는 확인하지 않는다.
 export function ciLineOf(decision) {
+  if (decision?.bundle === true) return null;
   const text = `${decision?.question ?? ""}\n${decision?.reason ?? ""}`;
   const line = text.split(/\r?\n/).find((l) => /\bCI\b/.test(l));
   return line ? line.trim().slice(0, 160) : null;

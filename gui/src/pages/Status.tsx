@@ -219,7 +219,21 @@ export default function Status({url}: {url: URL}) {
       </section>
       <section id="status-decisions" className="st-section">
         <header className="st-sec-head"><h2>내 결정 대기</h2><span className="st-cnt st-cnt-attn">{data.decisions?.length ?? "모름"}건</span><span className="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>
-        {data.decisions === null ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p> : data.decisions.length ? <><ul className="st-decisions">{data.decisions.slice(0,3).map(d => <li className="st-dec-row" key={d.id} data-fresh={`decision:${d.id}`}><span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span><small>{d.requestedBy} · 추천 {d.recommendation}</small><a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>답하기</a></li>)}</ul><p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p></> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
+        {data.decisions === null
+          ? <p className="st-error" role="alert">결정 기록을 읽지 못했습니다.</p>
+          : data.decisions.length ? <>
+            <ul className="st-decisions">{data.decisions.slice(0,3).map(d =>
+              <li className="st-dec-row" key={d.id} data-fresh={`decision:${d.id}`}>
+                <span className="st-dec-title">{d.questionTitle ?? d.question.split(/\n/)[0]}</span>
+                <small>{d.requestedBy} · {d.bundle
+                  ? `항목 ${d.itemKeys?.length ?? 0}개 · 답 ${Object.keys(d.answered ?? {}).length}개`
+                  : `추천 ${d.recommendation}`}</small>
+                <a className="st-dec-answer" href={"#decision-"+encodeURIComponent(d.id)}>
+                  {d.bundle ? "답하러 가기" : "답하기"}
+                </a>
+              </li>)}</ul>
+            <p><a href="#decisions">결정 대기 {data.decisions.length}건 모두 보기</a></p>
+          </> : <p className="st-empty">기다리는 결정이 없습니다.</p>}
       </section>
       <section id="status-attention" className="st-section">
         <header className="st-sec-head"><h2>지금 막힌 것</h2><span className={"st-cnt" + (stoppedCount ? " st-cnt-attn" : "")}>{stoppedCount}건</span><span className="st-hint">멈춘 카드를 이유별로 묶었습니다. 실패는 기록 확인, 담당 세션 없음은 감독 재확인, 오래된 미확정은 감독 정리가 필요합니다. <a href="?collection=executions&amp;state=all#dashboard">작업 표에서 보기</a></span></header>

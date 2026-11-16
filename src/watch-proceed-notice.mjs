@@ -42,6 +42,7 @@ export function runProceedNotices({proceedable, ap, parents, liveSessions, entri
     try { record(rec); } catch { pendingHeld.push(rec); }
   }
   for (const decision of proceedable) {
+    if (decision.bundle === true) continue;
     const key = proceedNoticeKey(decision, ap), role = decision.requestedBy;
     if (state.keys.has(key)) continue;
     if (typeof role !== 'string' || !parents?.has(role) || !liveSessions.has(`kadan-${role}`)) { result.skipped++; continue; }

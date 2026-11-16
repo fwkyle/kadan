@@ -6,6 +6,7 @@ import {renderSecretaryQuestions,renderUpcoming,mailboxAwaitingReply} from './da
 import {renderBoardProgress} from './board-progress.mjs';
 import {splitQuestion} from './decision-wall.mjs';
 import {listFactsOf} from './card-list-facts.mjs';
+import {bundleProgress} from './decision-bundle.mjs';
 
 const stamp=x=>Number.isFinite(Date.parse(x))?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'모름';
 const ago=(x,now)=>{const t=Date.parse(x);if(!Number.isFinite(t))return '시각 모름';const m=Math.max(0,Math.round((now-t)/60_000));return m<60?m+'분 전':m<48*60?Math.floor(m/60)+'시간 전':Math.floor(m/1440)+'일 전';};
@@ -61,7 +62,9 @@ export function renderDashboardStatus({runtime=null,center,works,workError=null,
  const mini=(href,num,label)=>`<a class="st-mini" href="${href}"><span class="st-num">${num}</span><span class="st-lbl">${label}</span></a>`;
  // 현황에서 바로 결정으로 간다. 제목 규칙은 결정 화면과 같다(2026-09-24 UX 검토: 결정 화면만 보게 되는 구조).
  const openDecisions=decisionError?null:decisions.filter(d=>d.status==='open');
- const decisionRow=d=>`<li class="st-dec-row"><span class="st-dec-title">${e(splitQuestion(d.question)[0])}</span><small>${e(d.requestedBy)} · 추천 ${e(d.recommendation)}</small><a class="st-dec-answer" href="#decision-${encodeURIComponent(d.id)}">답하기</a></li>`;
+ const decisionRow=d=>`<li class="st-dec-row"><span class="st-dec-title">${e(splitQuestion(d.question)[0])}</span>`+
+  `<small>${e(d.requestedBy)} · ${d.bundle===true?e(bundleProgress(d)):`추천 ${e(d.recommendation)}`}</small>`+
+  `<a class="st-dec-answer" href="#decision-${encodeURIComponent(d.id)}">${d.bundle===true?'답하러 가기':'답하기'}</a></li>`;
  const decisionSection=`<section id="status-decisions" class="st-section"><header class="st-sec-head"><h2>내 결정 대기</h2><span class="st-cnt st-cnt-attn">${openDecisions===null?'모름':openDecisions.length+'건'}</span><span class="st-hint">슈퍼감독이 요청한 결정입니다. 답하기를 누르면 결정 화면에서 바로 답합니다.</span></header>${openDecisions===null?`<p class="st-error" role="alert">결정 기록을 읽지 못했습니다${decisionError?': '+e(decisionError):'.'}</p>`:openDecisions.length?`<ul class="st-decisions">${openDecisions.map(decisionRow).join('')}</ul>`:'<p class="st-empty">기다리는 결정이 없습니다.</p>'}</section>`;
  const chip=(kind,href,num,label)=>`<a class="st-chip st-c-${kind}" href="${href}"><span class="st-num">${num}</span><span class="st-lbl">${label}</span></a>`;
  const list=items=>items.length<=8?items.map(executionCard).join(''):items.slice(0,8).map(executionCard).join('')+`<details class="st-fold"><summary>나머지 ${items.length-8}장</summary>${items.slice(8).map(executionCard).join('')}</details>`;

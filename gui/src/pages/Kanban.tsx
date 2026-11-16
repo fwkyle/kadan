@@ -19,7 +19,9 @@ type KanbanData = Stamp & {
 function Card({ card, line, project }: { card: KanbanCard; line: string; project: boolean }) {
   return (
     <li className={"kb-card kb-line-" + line} data-fresh={`kb:${card.key}:${line}:${card.marks.map((m) => m.label).join("+")}`}>
-      <strong className="kb-title"><CardLink row={card} /></strong>
+      <strong className="kb-title">{card.key.startsWith("decision:")
+        ? <a href={"#decision-" + encodeURIComponent(card.key.slice(9))}>{card.title}</a>
+        : <CardLink row={card} />}</strong>
       <small className="kb-meta">
         <Pulse at={card.since} />담당 {card.role || "미배정"} · {card.stateLabel} · {card.since ? time(card.since) : "시각 모름"}
       </small>

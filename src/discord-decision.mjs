@@ -8,7 +8,7 @@
 // {note}면 우편으로 보내되 머리에 note를 적는다(열린 결정이 여럿이라 어느 결정인지 특정 안 됨).
 import fs from 'node:fs';
 import path from 'node:path';
-import {DecisionStore} from './decisions.mjs';
+import {DecisionStore, decisionLink} from './decisions.mjs';
 import {readDecisions} from './notify-threads.mjs';
 import {userActorNames} from './actors.mjs';
 import {sendText} from './discord-chat.mjs';
@@ -70,6 +70,11 @@ export function createDecisionAnswerer({home, chat, env = process.env, log = () 
   };
   const stateText = d => (d.status === 'answered' ? `이미 답변됨: ${cut(d.answer.choice ?? d.answer.text, 100)}` : '이미 취소됨');
   const settled = async (line, d) => { if (!await post(line, `${stateText(d)} (결정 ${d.id.slice(0, 8)}) — 기록을 바꾸지 않았습니다.`, true)) return false; markHandled(home, line.id); return true; };
+  const bundleLink = async (line, d) => {
+    if (!await post(line, `여러 항목 결정은 대시보드에서 확인하세요: ${decisionLink(home, d.id)}`, true)) return false;
+    markHandled(home, line.id);
+    return true;
+  };
 
   async function record(line, d, choice) {      // choice가 null이면 자유 답(text)으로 기록한다
     const content = String(line.content ?? '').trim();
@@ -122,15 +127,18 @@ export function createDecisionAnswerer({home, chat, env = process.env, log = () 
     // 답장인데 이 스레드의 결정 요청 메시지를 가리키지 않으면(경보·상태 글, 다른 스레드의 결정, 모르는 메시지) 결정 답이 아니다. (나)로 내려가지 않는다.
     if (line.replyTo && !target) return false;
     if (target) {
+      if (target.bundle === true) return bundleLink(line, target);
       if (target.status !== 'open') return settled(line, target);
       return record(line, target, matchChoice(target.options, line.content));
     }
     // (나) 답장은 아니지만 이 스레드에 요청 메시지가 있는 열린 결정이 정확히 하나
-    const open = here.filter(d => d.status === 'open');
+    const open = here.filter(d => d.status === 'open' && d.bundle !== true);
     if (open.length === 1) {
       return record(line, open[0], matchChoice(open[0].options, line.content));        // 맞지 않는 글은 자유 답
     }
     if (open.length > 1) return {note: `열린 결정 ${open.length}개 — 어느 결정인지 특정 안 됨`};
+    const bundle = here.find(d => d.status === 'open' && d.bundle === true);
+    if (bundle) return bundleLink(line, bundle);
     return false;
   };
 }
