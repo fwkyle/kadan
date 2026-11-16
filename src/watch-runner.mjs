@@ -21,6 +21,7 @@ import { OFFLINE_REASONS } from "./watch-ai.mjs";
 import { aiFailureRuns, targetFailureDue, allFailureDue } from "./watch-ai-failures.mjs";
 import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
+import { intendedStop } from "./lifecycle-tail.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
 import { decisionList, decisionFields, waitFields, waitingCardKeys } from "./watch-waits.mjs";
 import { assessMissingStartReports, alertedStartReports } from "./watch-start-report.mjs";
@@ -470,7 +471,9 @@ export async function runWatch({
     // (응답 시간은 watch-ai-call의 durationMs에 따로 남는다).
     const stages={};let lapAt=observedAt;
     const lap=name=>{const at=measure();stages[name]=at-lapAt;lapAt=at;};
-    const workerObservations = scope ? new Map([...roles.observations].filter(([s])=>scope.sessions.has(s))) : roles.observations;
+    const scoped = scope ? [...roles.observations].filter(([s])=>scope.sessions.has(s)) : [...roles.observations];
+    // 죽은 세션만 확인한다: 일부러 끈 것이면 작업자 감시도 죽음 경보를 내지 않는다(감독 점검과 같은 판정).
+    const workerObservations = new Map(scoped.map(([s,o]) => o.alive===false && intendedStop(entries,s) ? [s,{...o,stoppedOnPurpose:true}] : [s,o]));
     const retrySessions = observationError || !scope || sweepState.holding ? new Set() : rateLimitRetry.tick({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
       fresh:(session,seen,taskId,fingerprint)=> {
