@@ -5,6 +5,8 @@
 // 비용: 원장 읽기 2번(소유 확인·창 정리)은 예전과 같고, 대화 찾기는 앞의 읽기를 다시 쓴다.
 import { taskIdentity } from "./task-identity.mjs";
 import { CardStore } from "./card-store.mjs";
+import { WorkStore } from "./work-store.mjs";
+import { withEffectiveOwner } from "./handover-state.mjs";
 import { floor as defaultFloor } from "./floor.mjs";
 import { appendLedger, readLedger } from "./ledger.mjs";
 import { currentRottieWindow } from "./restore.mjs";
@@ -15,10 +17,20 @@ import { pendingCardsFor, buildStopLedgerEntry, closeStartedWindow } from "./cli
 import { stopConversationFields, lookupDeps } from "./role-conversation.mjs";
 import { paneInfo } from "./commands/restart.mjs";
 
+const OWNED_WORKS_MAX = 20;
+// 이 역할이 현재 owner인 열린 업무 키. 끄면 주인 없는 업무가 되므로 알린다(막지 않는다). 못 읽으면 알리지 않고 끈다.
+function ownedOpenWorks(role, entries, readWorks) {
+  try {
+    return readWorks().map(w => withEffectiveOwner(w, entries)).filter(w => w.status === "open" && w.owner === role)
+      .map(w => w.key).sort();
+  } catch { return []; }
+}
+
 // 반환: {ok: false, message, code} — 끄지 않았다. {ok: true, session, windowIncomplete, entry} — 껐고 기록했다.
 // {ok: false, stopped: true, error} — 세션은 껐지만 창 정리·기록에서 예외가 났다(호출자가 다시 던지거나 보고한다).
 // log는 stdout, warn은 stderr 줄이다. lookup은 시험에서 가짜 조회를 넣는 자리다.
 export function stopRole({ role, session, home, floor = defaultFloor, log = console.log, warn = console.error, beforeStop = null,
+  readWorks = () => new WorkStore(home).listWatch(),
   lookup = input => stopConversationFields({ ...input, deps: lookupDeps({ paneInfo }) }) }) {
   const infrastructure = TARGETS.includes(role);
   // 기반 프로세스 4개의 stop은 `kadan up --auto`와 같은 잠금 아래에서 돈다. 안 그러면 끄는 도중 자동 실행이 세션이 없는 것을 보고 되살린다.
@@ -36,6 +48,10 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
   const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), role);
   if (pending.length > 0) {
     log(`미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`);
+  }
+  const owned = infrastructure ? [] : ownedOpenWorks(role, entries, readWorks);
+  if (owned.length > 0) {
+    log(`이 역할이 owner인 열린 업무 ${owned.length}건: ${owned.slice(0, OWNED_WORKS_MAX).join(", ")}${owned.length > OWNED_WORKS_MAX ? " 외" : ""} — 끄면 주인 없는 업무가 된다`);
   }
   // 끄기 앞에서 대화 번호를 찾는다. 조회는 던지지 않게 만들어져 있지만, 끄기가 조회 때문에 막히지 않도록 한 번 더 감싼다.
   let conversation;
@@ -60,7 +76,8 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
   }
   try {
     const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(home), session), { print: warn }) : {};
-    const entry = { ...buildStopLedgerEntry({ role, session }), ...conversation, ...windowFields };
+    const entry = { ...buildStopLedgerEntry({ role, session }), ...conversation, ...windowFields,
+      ...(owned.length > 0 ? { ownedOpenWorks: owned.slice(0, OWNED_WORKS_MAX) } : {}) };
     appendLedger(entry, home);
     if (windowFields.rottieWindowClosed === false || windowFields.rottieWindowRemoved === false) {
       warn(`세션은 종료됨: ${session} · 로티 탭 정리 미완료: ${windowFields.rottieTerminalId} — ${windowFields.rottieWindowError ?? windowFields.rottieRemoveError}`);
