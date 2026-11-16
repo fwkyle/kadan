@@ -23,6 +23,10 @@
 `storage`(`memory` 또는 `temporary`)와 JS에 남은 `retainedEntries`가 표시된다.
 표본 크기는 직렬화 크기이며 V8 힙 측정값이 아니다.
 
+macOS가 메모리를 압축하면 RSS에는 그 압축분이 빠질 수 있다. 주기 기록의
+`timing.processMemory.top`에서 MEM·CMPRS와 같은 순간의 힙·표본 나이를 함께 비교한다.
+구간 최저 힙은 `minHeapUsed`다. null·실패와 수집 제한은 [주기 기록 설명](watch-overview.md)을 따른다.
+
 10배 이력에서는 같은 키 조회 수의 JS 보관량을 제한한다. 처음 원장을 복원하는 시간과 임시 DB 공간은
 키 수에 비례한다. 감시기가 다른 이유로 전체 원장·이력을 보관하거나 순회하는 비용은 별도 개선 대상이다.
 

@@ -43,17 +43,20 @@ test('5순회 최대·마지막 값과 쓰기 실패 보존·성공 뒤 비우�
   assert.equal(cycles.length, 2);
   assert.deepEqual(cycles[0].timing.processMemory, {
     last: {rss: 900, heapUsed: 800, heapTotal: 900},
-    max: {rss: 900, heapUsed: 800, heapTotal: 900}, samples: 4, failures: 0,
+    max: {rss: 900, heapUsed: 800, heapTotal: 900}, minHeapUsed: 700,
+    samples: 4, failures: 0, top: null, topFailures: 0,
   });
   assert.equal(cycles[0].timing.replay.projection.full, 2);
   assert.deepEqual(cycles[1].timing.processMemory, {
     last: {rss: 500, heapUsed: 400, heapTotal: 500},
-    max: {rss: 1100, heapUsed: 1000, heapTotal: 1100}, samples: 10, failures: 0,
+    max: {rss: 1100, heapUsed: 1000, heapTotal: 1100}, minHeapUsed: 400,
+    samples: 10, failures: 0, top: null, topFailures: 0,
   });
   assert.equal(cycles[1].timing.replay.projection.full, 5);
   assert.equal(cycles[1].timing.replay.sweep.moved, 5, '순회 사이 관측도 다음 기록에 포함한다');
   assert.equal(cycles[1].timing.memoryMb.rss, 500);
-  assert.deepEqual(result.after.processMemory, {last: null, max: null, samples: 0, failures: 0});
+  assert.deepEqual(result.after.processMemory, {last: null, max: null, minHeapUsed: null,
+    samples: 0, failures: 0, top: null, topFailures: 0});
   assert.equal(result.after.replay.projection.full, 0);
 });
 

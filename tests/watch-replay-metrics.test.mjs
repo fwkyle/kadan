@@ -125,7 +125,8 @@ test('선택 계수기가 없는 공유 우편 뷰는 결과가 같고 계수/�
   const plain = withMailboxView(f.home, read);
   assert.deepEqual(withMailboxView(f.home, read, {metrics}), plain);
   assert.deepEqual(metrics.snapshot(), {replay: zero(),
-    processMemory: {last: null, max: null, samples: 0, failures: 0}});
+    processMemory: {last: null, max: null, minHeapUsed: null,
+      samples: 0, failures: 0, top: null, topFailures: 0}});
 });
 
 test('사용자 actor 집합 변경은 원본과 해석 우편의 actors 이유로만 센다', () => {
@@ -172,14 +173,18 @@ test('계측기가 던져도 원장 결과는 같고 failures에 남기며 메�
   }});
   watchMetric(metrics, 'sample'); fail = true; watchMetric(metrics, 'sample');
   assert.deepEqual(metrics.snapshot().processMemory, {last: null,
-    max: {rss: 600, heapUsed: 350, heapTotal: 480}, samples: 2, failures: 1});
+    max: {rss: 600, heapUsed: 350, heapTotal: 480}, minHeapUsed: 350,
+    samples: 2, failures: 1, top: null, topFailures: 0});
 });
 
 test('고정 필드와 상한 숫자를 모두 직렬화해도 두 칸은 1KiB 이하이고 주기 기록은 자리표다', () => {
   const metrics = createWatchReplayMetrics({memoryUsage: () => ({
     rss: Number.MAX_VALUE, heapUsed: Number.MAX_VALUE, heapTotal: Number.MAX_VALUE,
-  })});
+  }), top: {snapshot: () => ({top: {mem: WATCH_METRIC_MEMORY_MAX,
+    cmprs: WATCH_METRIC_MEMORY_MAX, heapUsed: WATCH_METRIC_MEMORY_MAX, ageMs: 599999},
+  topFailures: WATCH_METRIC_COUNT_MAX})}});
   metrics.sample();
+  metrics.sweepSlice(Number.MAX_VALUE);
   assert.deepEqual(metrics.snapshot().processMemory.last,
     {rss: WATCH_METRIC_MEMORY_MAX, heapUsed: WATCH_METRIC_MEMORY_MAX, heapTotal: WATCH_METRIC_MEMORY_MAX});
   const largest = value => typeof value === 'number' ? WATCH_METRIC_COUNT_MAX
@@ -188,6 +193,12 @@ test('고정 필드와 상한 숫자를 모두 직렬화해도 두 칸은 1KiB �
   for (const key of ['last', 'max']) for (const name of ['rss', 'heapUsed', 'heapTotal']) {
     worst.processMemory[key][name] = WATCH_METRIC_MEMORY_MAX;
   }
+  worst.processMemory.minHeapUsed = WATCH_METRIC_MEMORY_MAX;
+  for (const name of ['mem', 'cmprs', 'heapUsed']) {
+    worst.processMemory.top[name] = WATCH_METRIC_MEMORY_MAX;
+  }
+  worst.replay.sweep.maxSliceMs = WATCH_METRIC_MEMORY_MAX;
+  worst.replay.prune.ms = WATCH_METRIC_MEMORY_MAX;
   assert.ok(Buffer.byteLength(JSON.stringify(worst)) <= 1024);
   const f = fixture();
   appendLedger({kind: 'watch-cycle', by: 'watch', timing: worst, t: '2026-01-01T00:01:00Z'}, f.home);
@@ -195,4 +206,22 @@ test('고정 필드와 상한 숫자를 모두 직렬화해도 두 칸은 1KiB �
   assert.equal(row.kind, 'watch-cycle');
   assert.equal(Object.hasOwn(row, 'timing'), false);
   assert.deepEqual(Object.keys(row).filter(key => key !== '_ledgerOrder').sort(), ['by', 'kind', 't']);
+});
+
+test('구간 최저 힙은 last/max와 같은 표본이며 실패 때 보존하고 clear 뒤 초기화된다', () => {
+  let value = 350;
+  const metrics = createWatchReplayMetrics({memoryUsage: () => ({
+    rss: bytes(600), heapUsed: bytes(value), heapTotal: bytes(480),
+  })});
+  for (value of [350, 450, 200, 300, NaN]) metrics.sample();
+  const memory = metrics.snapshot().processMemory;
+  assert.equal(memory.minHeapUsed, 200);
+  assert.equal(memory.max.heapUsed, 450);
+  assert.equal(memory.last.heapUsed, null);
+  assert.equal(memory.failures, 1);
+  assert.equal(memory.samples, 5);
+  metrics.clear();
+  assert.equal(metrics.snapshot().processMemory.minHeapUsed, null);
+  value = 500; metrics.sample();
+  assert.equal(metrics.snapshot().processMemory.minHeapUsed, 500);
 });
