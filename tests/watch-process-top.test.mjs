@@ -61,7 +61,7 @@ test('절대경로·C 로케일·파이프 상한·unref와 구간당 한 번을
   assert.equal(args[2].env.LC_ALL, 'C');
   assert.deepEqual(args[2].stdio, ['ignore', 'pipe', 'ignore']);
   assert.equal(child.unrefs, 1); assert.equal(child.pipeUnrefs, 1);
-  assert.equal([...f.timers][0].ms, 5000); assert.equal([...f.timers][0].unrefs, 1);
+  assert.equal([...f.timers][0].ms, 20000); assert.equal([...f.timers][0].unrefs, 1);
   f.finish();
   assert.equal(f.timers.size, 0);
   f.at(300999); f.top.clear(); f.top.sample();

@@ -73,7 +73,7 @@ export function createWatchProcessTop({
         });
         child.unref();
         child.stdout.unref?.();
-        timer = setTimer(() => { fail(); kill(); }, 5000);
+        timer = setTimer(() => { fail(); kill(); }, 20000);
         timer.unref?.();
         stopActive = () => { settled = true; clearTimer(timer); kill(); };
       } catch { fail(); kill(); }
