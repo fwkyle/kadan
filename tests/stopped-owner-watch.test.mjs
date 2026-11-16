@@ -116,3 +116,34 @@ test('업무 목록을 못 읽어도 끈다', () => {
     readWorks: () => {throw new Error('x');}, log: () => {}, warn: () => {}, lookup: () => ({conversationMissing: 'undetermined'})});
   assert.equal(result.ok, true);
 });
+
+// 검수 재현(exec-62bf4611): 감시가 넘기는 entries는 카드 주소 재해석으로 앞부분이 빠지고 새 start가 붙어 길이가 같아질 수 있다.
+// 순번 캐시는 이때 새 start를 건너뛰어 진짜 죽음을 숨겼다.
+async function collisionRun(collision) {
+  let cycle=0;const end=Error('end'),records=[];
+  const noise={kind:'send',role:'worker',taskId:'other',t};
+  const initial=[...starts,noise,
+    {kind:'send',role:'worker',taskId:'task',executionKey:card.key,t},
+    {kind:'done',role:'worker',taskId:'task',executionKey:card.key,t},stop()];
+  const extraCard={id:'other',key:'repo/other',status:'done',workType:'execution'};
+  const rows=()=>cycle===0?initial:[...initial,restart];
+  const cards=()=>[card,extraCard,...(cycle>0&&collision?[{...extraCard,key:'another/other'}]:[])];
+  const load=os.loadavg;os.loadavg=()=>[0,0,0];
+  try {
+    await assert.rejects(()=>runWatch({
+      floor:{list:()=>starts.filter(s=>s.role!=='boss').map(s=>({session:s.session,pid:s.panePid})),read:()=> '정상 대기'},
+      readEntries:rows,readCards:cards,readWorks:()=>[work],parents,superRole:'old',routes:new Map(),
+      intervalMs:60000,stallN:2,now:()=>epoch+cycle*60000,sendAlert:()=>{},record:e=>records.push({...e,cycle}),print:()=>{},
+      spawn:cmd=>{if(cmd==='sleep'&&++cycle===3)throw end;return {status:0,stdout:''};},
+    }),e=>e===end);
+  } finally {os.loadavg=load;}
+  return records.filter(e=>e.kind==='alert'&&e.id==='supervisor-health:kadan-boss');
+}
+test('통합 대조: 카드 별칭이 그대로면 재시작 후 죽음이 난다',async()=>{
+ const alerts=await collisionRun(false);
+ assert.ok(alerts.some(e=>e.alertKind==='죽음'));
+});
+test('통합 회귀: 카드 별칭 충돌 후에도 재시작 후 죽음이 나야 한다',async()=>{
+ const alerts=await collisionRun(true);
+ assert.ok(alerts.some(e=>e.alertKind==='죽음'),'원장 재해석으로 길이가 같아져 새 start 누락; 실제 runWatch 죽음 경보 0건');
+});

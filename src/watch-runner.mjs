@@ -21,7 +21,7 @@ import { OFFLINE_REASONS } from "./watch-ai.mjs";
 import { aiFailureRuns, targetFailureDue, allFailureDue } from "./watch-ai-failures.mjs";
 import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
-import { LifecycleTail } from "./lifecycle-tail.mjs";
+import { intendedStop } from "./lifecycle-tail.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
 import { decisionList, decisionFields, waitFields, waitingCardKeys } from "./watch-waits.mjs";
 import { assessMissingStartReports, alertedStartReports } from "./watch-start-report.mjs";
@@ -266,8 +266,7 @@ export async function runWatch({
   // 감시 AI가 인터넷 없음으로 실패한 연속 횟수(호출 대상별). 깨어 있는 동안 3번 이어질 때만 알린다(잠긴 규칙 3, 2026-10-07).
   const offlineFailures = new Map();
   const progressWatch = new ProgressWatch();
-  const lifecycle = new LifecycleTail();
-  const supervisorHealth = new SupervisorHealth(lifecycle);
+  const supervisorHealth = new SupervisorHealth();
   let lastCycleAt = now();
   let lastCycleRecordedAt = null;
   // 감독 본인에게 보낼 놀고 있음 1단 알림 중 사람이 그 창에서 입력 중이라 미룬 것. 경보가 열려 있는 동안 다음 주기에 다시 시도한다.
@@ -474,7 +473,7 @@ export async function runWatch({
     const lap=name=>{const at=measure();stages[name]=at-lapAt;lapAt=at;};
     const scoped = scope ? [...roles.observations].filter(([s])=>scope.sessions.has(s)) : [...roles.observations];
     // 죽은 세션만 확인한다: 일부러 끈 것이면 작업자 감시도 죽음 경보를 내지 않는다(감독 점검과 같은 판정).
-    const workerObservations = new Map(scoped.map(([s,o]) => o.alive===false && lifecycle.intendedStop(entries,s) ? [s,{...o,stoppedOnPurpose:true}] : [s,o]));
+    const workerObservations = new Map(scoped.map(([s,o]) => o.alive===false && intendedStop(entries,s) ? [s,{...o,stoppedOnPurpose:true}] : [s,o]));
     const retrySessions = observationError || !scope || sweepState.holding ? new Set() : rateLimitRetry.tick({
       observations:workerObservations, tasks:scope.entries, entries, now:cycleAt,
       fresh:(session,seen,taskId,fingerprint)=> {
