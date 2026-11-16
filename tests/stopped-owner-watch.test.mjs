@@ -52,15 +52,15 @@ test('아래 감독을 stop해도 상위(top)가 사라지면 top의 죽음 경�
   assert.ok((await bossAlerts([stop()], {live: ['worker'], session: 'top'})).some(e => e.alertKind === '죽음'));
 });
 
-// 끈 작업자(끝나지 않은 카드가 있음)의 경보는 다른 곳(작업자 감시 watch.mjs)에서 난다. 이 PR이 고치는 감독 건강 점검과 다른 지점이라
-// 고치지 않고 지금 동작만 고정한다: 작업자는 stop 뒤에도 죽음 경보가 난다.
-test('특성: 일부러 끈 작업자도 죽음 경보가 난다(감독 건강 점검과 다른 지점, 이 PR에서 안 고침)', async () => {
-  let cycle = 0;const end = Error('end'), records = [], rows = [...starts, {kind: 'send', role: 'worker', taskId: 'task', t},
-    {kind: 'stop', role: 'worker', session: 'kadan-worker', by: 'boss', t: later}];
+// 끈 작업자(끝나지 않은 카드가 있음)도 같은 규칙이다. 작업자가 살아 있다가 사라지는 전환에서만 죽음이 나므로 첫 주기는 살아 있다.
+async function workerDeath(extra) {
+  let cycle = 0;const end = Error('end'), records = [],
+    rows = [...starts, {kind: 'send', role: 'worker', taskId: 'task', t}, ...extra];
   const load = os.loadavg;os.loadavg = () => [0, 0, 0];
   try {
     await assert.rejects(() => runWatch({
-      floor: {list: () => starts.filter(s => s.role !== 'worker' || cycle < 1).map(s => ({session: s.session, pid: s.panePid})), read: () => '정상 대기'},
+      floor: {list: () => starts.filter(s => s.role !== 'worker' || cycle < 1).map(s => ({session: s.session,
+        pid: s.role === 'worker' ? rows.findLast(e => e.kind === 'start' && e.session === s.session).panePid : s.panePid})), read: () => '정상 대기'},
       readEntries: () => rows, readCards: () => [{...card, status: 'assigned', activity: 'running'}], readWorks: () => [], parents,
       superRole: 'old', routes: new Map(), intervalMs: 60000, stallN: 2, now: () => epoch + cycle * 60000, sendAlert: () => {},
       record: e => records.push(e), print: () => {},
@@ -70,7 +70,22 @@ test('특성: 일부러 끈 작업자도 죽음 경보가 난다(감독 건강 �
       },
     }), e => e === end);
   } finally {os.loadavg = load;}
-  assert.ok(records.some(e => e.kind === 'alert' && e.id === 'death:kadan-worker' && e.alertKind === '죽음'));
+  return records.filter(e => e.kind === 'alert' && e.id === 'death:kadan-worker');
+}
+const workerStop = extra => ({kind: 'stop', role: 'worker', session: 'kadan-worker', by: 'boss', t: later, ...extra});
+const workerStart = {kind: 'start', role: 'worker', session: 'kadan-worker', panePid: 9, t: '2026-11-16T00:02:00.000Z'};
+test('일부러 끈 작업자·검수자는 죽음 경보를 내지 않는다', async () => {
+  assert.deepEqual(await workerDeath([workerStop()]), []);
+});
+test('stop 없이 사라진 작업자는 죽음 경보가 난다', async () => {
+  assert.ok((await workerDeath([])).some(e => e.alertKind === '죽음'));
+});
+test('작업자: restart: true인 stop 뒤 start가 없으면 죽음 경보가 난다', async () => {
+  assert.ok((await workerDeath([workerStop({restart: true})])).some(e => e.alertKind === '죽음'));
+});
+// 새 세대가 시작된 뒤 다시 발령받은 카드여야 새 세션의 책임이다(이전 세대의 발령은 이어지지 않는다).
+test('작업자: stop 뒤 다시 start했다가 사라지면 죽음 경보가 난다', async () => {
+  assert.ok((await workerDeath([workerStop(), workerStart, {kind: 'send', role: 'worker', taskId: 'task', t: '2026-11-16T00:02:30.000Z'}])).some(e => e.alertKind === '죽음'));
 });
 
 function stopFixture(role, works) {

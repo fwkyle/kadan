@@ -6,6 +6,7 @@ import {statusProgress} from './watch-status-line.mjs';
 import {changeDigest} from './watch-roles.mjs';
 import {decisionFields} from './watch-waits.mjs';
 import {resultOfDispatch} from './watch-scope.mjs';
+import {LifecycleTail} from './lifecycle-tail.mjs';
 // 감독의 정상 대기는 멈춤이 아니다. 시간·오류 지속 후보만 고르고 판단은 감시ai가 한다.
 export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
@@ -48,26 +49,10 @@ function sameAsJudgedNormal(entries, session, screen, now) {
   return REUSABLE_VERDICTS.has(report?.verdict) && changeDigest(screen) === request.observationDigest;
 }
 
-// 세션별 마지막 수명 사건(start·stop). 원장 꼬리만 이어 읽는다: 처음 한 번만 앞에서부터 훑고 이후는 새로 붙은 사건만 본다.
-// 원장이 10배면 처음 한 번의 훑기만 10배이고 주기마다 드는 비용은 그대로다. 죽은 세션이 범위에 있을 때만 부른다.
-// 일부러 끈 것 = 마지막 수명 사건이 stop이고 restart: true가 아니다. 그 뒤 start가 있으면(reopen 포함) 마지막이 start라 해당 없다.
-class LifecycleTail {
-  last = new Map();
-  scanned = 0;
-  intendedStop(entries, session) {
-    if (entries.length < this.scanned) { this.last.clear();this.scanned = 0; }
-    for (; this.scanned < entries.length; this.scanned++) {
-      const e = entries[this.scanned];
-      if (e?.kind === 'start' || e?.kind === 'stop') this.last.set(e.session, e);
-    }
-    const e = this.last.get(session);
-    return e?.kind === 'stop' && e.restart !== true;
-  }
-}
-
 export class SupervisorHealth {
   states = new Map();
-  lifecycle = new LifecycleTail();
+  // 일부러 끈 세션 판정(작업자 감시와 같은 인스턴스를 넘기면 원장 꼬리를 한 번만 읽는다).
+  constructor(lifecycle = new LifecycleTail()) { this.lifecycle = lifecycle; }
   started(session,screen,now) {
     const state=this.states.get(session);
     if(!state)return;
