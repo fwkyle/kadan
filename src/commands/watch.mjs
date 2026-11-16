@@ -1,6 +1,7 @@
 // kadan watch와 감시 편지 보내기 (HW-3-impl: cli.mjs에서 옮김)
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import {createWatchReplayMetrics} from '../watch-replay-metrics.mjs';
+import {createWatchProcessTop} from '../watch-process-top.mjs';
 import { WatchAI } from "../watch-ai.mjs";
 import { ExplainAI } from "../explain-ai.mjs";
 import { cycleReads } from "../watch-reads.mjs";
@@ -267,7 +268,7 @@ export function cmdWatch(argv, flags) {
   const stopWatch=()=>watchController.abort();
   process.once('SIGTERM',stopWatch);process.once('SIGINT',stopWatch);
   // 한 주기 안에서 원장이 바뀌지 않았으면 전체 읽기를 재사용한다. 감시AI 보고도 같은 읽기를 쓴다.
-  const metrics = createWatchReplayMetrics();
+  const metrics = createWatchReplayMetrics({top: createWatchProcessTop()});
   const stores = createWatchStoreReaders(ledgerHome(), metrics);
   let mailRoles = [];
   const mailReader = createWatchMailReader(ledgerHome(), null, {
