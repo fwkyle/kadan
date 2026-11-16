@@ -396,7 +396,9 @@ test('F2: 우편 80/800개 뒤 인계는 단독 조각이며 최장 시간·조�
 test('F2: 최장 시간은 누산하지 않고 최대를 유지하며 고정 크기 계측은 1KiB 이하다', () => {
   const metrics = createWatchReplayMetrics({memoryUsage: () => ({
     rss: Number.MAX_VALUE, heapUsed: Number.MAX_VALUE, heapTotal: Number.MAX_VALUE,
-  })});
+  }), top: {clear() {}, snapshot: () => ({top: {mem: WATCH_METRIC_MEMORY_MAX,
+    cmprs: WATCH_METRIC_MEMORY_MAX, heapUsed: WATCH_METRIC_MEMORY_MAX, ageMs: 599999},
+  topFailures: WATCH_METRIC_COUNT_MAX})}});
   metrics.sweepSlice(12.34);metrics.sweepSlice(7.1);
   assert.equal(metrics.snapshot().replay.sweep.maxSliceMs, 12.3);
   assert.equal(metrics.snapshot().replay.sweep.slices, 2);
@@ -408,7 +410,12 @@ test('F2: 최장 시간은 누산하지 않고 최대를 유지하며 고정 크
   for (const name of ['last', 'max']) for (const key of ['rss', 'heapUsed', 'heapTotal']) {
     worst.processMemory[name][key] = WATCH_METRIC_MEMORY_MAX;
   }
+  worst.processMemory.minHeapUsed = WATCH_METRIC_MEMORY_MAX;
+  for (const key of ['mem', 'cmprs', 'heapUsed']) {
+    worst.processMemory.top[key] = WATCH_METRIC_MEMORY_MAX;
+  }
   worst.replay.sweep.maxSliceMs = WATCH_METRIC_DURATION_MAX;
+  worst.replay.prune.ms = WATCH_METRIC_DURATION_MAX;
   assert.ok(Buffer.byteLength(JSON.stringify(worst)) <= 1024);
   metrics.clear();
   assert.equal(metrics.snapshot().replay.sweep.slices, undefined);

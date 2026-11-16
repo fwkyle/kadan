@@ -15,7 +15,7 @@ const fields = {
 };
 const emptyReplay = () => ({...Object.fromEntries(Object.entries(fields)
   .map(([key, names]) => [key, Object.fromEntries(names.map(name => [name, 0]))])), initial: 0});
-const emptyMemory = () => ({last: null, max: null, samples: 0, failures: 0});
+const emptyMemory = () => ({last: null, max: null, minHeapUsed: null, samples: 0, failures: 0});
 const increment = (target, key) => { target[key] = Math.min(WATCH_METRIC_COUNT_MAX, target[key] + 1); };
 
 // 선택 계수기를 주지 않은 공유 뷰는 아무 관측도 하지 않는다. 계측 실패는 판정 경계를 넘지 않는다.
@@ -39,7 +39,7 @@ export function beginWatchInitial(metrics) {
   return () => watchMetric(metrics, 'endInitial');
 }
 
-export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsage()} = {}) {
+export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsage(), top = null} = {}) {
   let replay = emptyReplay(), processMemory = emptyMemory();
   let initializing = false, initialSeen = false;
   const failure = () => increment(processMemory, 'failures');
@@ -48,6 +48,8 @@ export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsag
   };
   return {
     failure,
+    sampleTop() { top?.sample(); },
+    stop() { top?.stop(); },
     beginInitial() { initial(); initializing = true; },
     endInitial() { initializing = false; },
     replay(component, reason) {
@@ -91,6 +93,9 @@ export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsag
         }));
         if (Object.values(last).some(value => value === null)) failure();
         processMemory.last = Object.values(last).some(value => value !== null) ? last : null;
+        if (last.heapUsed !== null) {
+          processMemory.minHeapUsed = Math.min(processMemory.minHeapUsed ?? last.heapUsed, last.heapUsed);
+        }
         if (processMemory.last) {
           processMemory.max = Object.fromEntries(Object.entries(last).map(([key, value]) =>
             [key, value === null ? processMemory.max?.[key] ?? null
@@ -98,7 +103,9 @@ export function createWatchReplayMetrics({memoryUsage = () => process.memoryUsag
         }
       } catch { processMemory.last = null; failure(); }
     },
-    snapshot: () => ({replay: structuredClone(replay), processMemory: structuredClone(processMemory)}),
-    clear() { replay = emptyReplay(); processMemory = emptyMemory(); },
+    snapshot: () => ({replay: structuredClone(replay), processMemory: {
+      ...structuredClone(processMemory), ...(top?.snapshot() ?? {top: null, topFailures: 0}),
+    }}),
+    clear() { replay = emptyReplay(); processMemory = emptyMemory(); top?.clear(); },
   };
 }

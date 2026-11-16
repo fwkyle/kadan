@@ -1141,6 +1141,7 @@ export async function runWatch({
     watchMetric(metrics, 'sample');
     // 주기 완료 증거. 프로세스 생존과 구분해 대시보드가 마지막 주기·설정·공백을 읽는다.
     if (cycleRecordDue(lastCycleRecordedAt, cycleAt)) {
+      watchMetric(metrics, 'sampleTop');
       try {
         const memory=memoryUsage();
         const timing = {
@@ -1177,6 +1178,7 @@ export async function runWatch({
     try {await sleep(intervalMs,signal);}
     catch(error) {if(!signal?.aborted)throw error;}
   }} finally {
+    watchMetric(metrics, 'stop');
     queuedAI.clear();
     try {
       await explain?.stop();
