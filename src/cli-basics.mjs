@@ -122,7 +122,8 @@ export function parseFlags(argv, {booleans = []} = {}) {
           ? [...flags[name], value]
           : [flags[name], value];
       } else {
-        flags[name] = value;
+        // `flags['__proto__'] = v`는 값이 객체가 아니면 속성을 만들지 않고 사라진다. 자기 속성으로 정의해 Object.keys(flags)에 보이게 한다.
+        Object.defineProperty(flags, name, {value, writable: true, enumerable: true, configurable: true});
       }
     } else {
       rest.push(arg);
