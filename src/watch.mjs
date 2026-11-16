@@ -234,8 +234,10 @@ export function assessRoles(
       stallCount = (previous.stallCount ?? 0) + 1;
     }
 
+    // 일부러 끈 세션(stoppedOnPurpose: 마지막 수명 사건이 restart 아닌 stop)은 죽음이 아니다. 러너가 죽은 세션에만 붙인다.
     const deathActive =
       !alive &&
+      current.stoppedOnPurpose !== true &&
       (previous?.alive === true || previous?.deathActive === true);
     const state = {
       ...current,
