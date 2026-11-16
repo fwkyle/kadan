@@ -2,6 +2,7 @@
 import { createForm } from "../dashboard-forms.mjs";
 import { decisionContent } from "../decision-wall.mjs";
 import { withoutAuditFields } from "../decisions.mjs";
+import { decisionBodyContent } from "../decision-body.mjs";
 import { page } from "./shared.mjs";
 import {
   readSettings,
@@ -39,7 +40,7 @@ export function decisionsData(snapshot, url, stamp) {
   // ?id=<결정 ID>: 알림 링크가 연 결정 하나의 상태. 없으면 item이 null이다.
   if (url.searchParams.has("id")) {
     const found = all.find((d) => d.id === url.searchParams.get("id"));
-    return { ...stamp, item: found ? withContent(found) : null };
+    return { ...stamp, item: found ? {...withContent(found), ...decisionBodyContent(snapshot.home, found)} : null };
   }
   if (url.searchParams.get("past") === "1") {
     const sign = url.searchParams.get("sort") === "newest" ? -1 : 1, at = (d) => Date.parse(d.at);

@@ -91,6 +91,11 @@ export type Decision = {
   work?: string;
   revision: number;
   question: string;
+  body?: {bytes: number; sha256: string};
+  bodyText?: string;
+  bodyError?: string;
+  replyTo?: string;
+  replyDelivery?: {status: string; role: string; error?: string};
   questionTitle?: string;
   questionHtml?: string;
   reason: string;
