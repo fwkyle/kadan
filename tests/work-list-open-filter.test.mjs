@@ -76,3 +76,16 @@ test('CLI: --open은 종료 0, 모르는 플래그는 종료 2와 이름, --open
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /--opne/u);
 });
+
+test('CLI: --__proto__·--constructor 같은 객체 기본 이름도 모르는 플래그로 거절한다', () => {
+  const home = fixture();
+  const cli = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), 'work', 'list', ...args], {
+    encoding: 'utf8', env: {...process.env, KADAN_HOME: home, KADAN_SOCKET: `t-${process.pid}`, KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off'},
+  });
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    const run = cli(`--${name}`);
+    assert.equal(run.status, 2, `${name}: ${run.stdout}`);
+    assert.match(run.stderr, new RegExp(`--${name}`, 'u'));
+  }
+  assert.equal(cli('--open').status, 0, '정상 플래그는 그대로');
+});
