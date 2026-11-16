@@ -102,13 +102,24 @@ function chatDecisionsAfter([action='list',key],flags,{home,by},revisionBefore,f
  }catch(error){process.stderr.write(`열린 채팅 결정을 확인하지 못했습니다(${error.message}): \`kadan decision list --status open\`으로 확인\n`);}
 }
 
+// work list가 아는 플래그. 모르는 플래그는 조용히 무시하면 잘못 거른 목록을 사실로 믿게 되므로 이름을 적어 거절한다(종료 코드 2).
+// --open은 끝나지 않은 업무(open·hold). open만 보려면 --status open.
+const LIST_FLAGS=new Set(['repo','status','open','help']),UNFINISHED=new Set(['open','hold']);
+function listWorks(store,flags){
+ const unknown=Object.keys(flags).filter(name=>!LIST_FLAGS.has(name));
+ if(unknown.length)throw Object.assign(new Error(`work list가 모르는 플래그: ${unknown.map(name=>`--${name}`).join(', ')} (쓸 수 있는 것: --repo, --status, --open)`),{exitCode:2});
+ if(flags.open!==undefined&&flags.open!==true)throw Object.assign(new Error('--open은 값 없이 씁니다(끝나지 않은 업무 = open·hold)'),{exitCode:2});
+ if(flags.open&&flags.status!==undefined)throw Object.assign(new Error('--open과 --status는 함께 쓸 수 없습니다(--open = open·hold, 한 상태만 보려면 --status)'),{exitCode:2});
+ return store.list().filter(w=>(!flags.repo||w.repo===flags.repo)&&(!flags.status||w.status===flags.status)&&(!flags.open||UNFINISHED.has(w.status)));
+}
+
 function workCommandInner(args,flags,context){
  const {home,by}=context;
  const [action='list',key]=args,store=new WorkStore(home);
  if(flags.help&&action.startsWith('auto-'))return 'kadan work auto-configure <업무키> --revision N --implementation 원본카드키 --review 검수원본키 --worker 작업자 --reviewer 검수자 [--notify 감독 --deadline 기존시한 --next-block] | auto-show <업무키> | auto-report <업무키> --execution 현재실행키 --outcome implemented|pass|changes|exception [--result-file 기존절대경로] | auto-step <업무키> | auto-run <업무키> [--interval 초]. 상세: docs/automatic-review.md';
  if(action.startsWith('auto-'))return automaticReviewCommand(args,flags,context);
- if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] | list | show <키> | update <키> --revision N --note 이유 [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
- if(action==='list'){const works=store.list().filter(w=>(!flags.repo||w.repo===flags.repo)&&(!flags.status||w.status===flags.status)),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions})=>({key,title,owner,status,revision,executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
+ if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] | list [--repo 저장소] [--status open|hold|done|cancelled | --open (끝나지 않은 업무 = open·hold, --status와 함께 쓰지 않음)] | show <키> | update <키> --revision N --note 이유 [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
+ if(action==='list'){const works=listWorks(store,flags),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions})=>({key,title,owner,status,revision,executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
  if(action==='show'){const work=store.get(key);return {...work,...operationsFlowSummaries(home,[work]).get(key),latestPassReviewSha:latestPassReview(home,work)};}
  if(action==='create'){
   const work=store.create({key,title:flags.title,goal:flags.goal,scope:flags.scope,acceptance:flags.acceptance,owner:flags.owner,repoPath:flags['repo-path'],board:flags.board,by});
