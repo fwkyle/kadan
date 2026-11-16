@@ -16,6 +16,17 @@ function peerClassifier(entries, parents) {
   };
 }
 
+// 비서가 --expect-reply로 물은 질문은 받는 감독(시작 기록의 프로필이 super·conductor)의 답할 책임이다.
+// 받는 쪽이 비서인 질문과 프로필을 모르는 역할은 그대로 제외한다(모르면 안 함). 비서 자신은 책임자가 되지 않는다.
+function secretaryAskClassifier(entries) {
+  let profiles;
+  return (from, to) => {
+    if (from !== '비서' || !to || to === '비서') return false;
+    profiles ??= superProfiles(entries);
+    return ['super', 'conductor'].includes(profiles.get(to));
+  };
+}
+
 export function isPeerSuperMail(entries, parents, from, to) {
   return peerClassifier(entries, parents)(from, to);
 }
@@ -25,8 +36,9 @@ export function peerResponsibilities(entries, parents, works = [], cards = []) {
   const questions = waitingLetters(entries);
   // 과거가10배여도 한 호출 안에서는 프로필을 한 번만 읽는다. 호출 사이의 입력 변경은 다시 읽는다.
   const isPeer = peerClassifier(entries, parents);
+  const isSecretaryAsk = secretaryAskClassifier(entries);
   return questions.filter(q => !q.notificationOnly && !q.systemGenerated && q.mailId
-    && isPeer(q.currentSender, q.currentRecipient)
+    && (isPeer(q.currentSender, q.currentRecipient) || isSecretaryAsk(q.currentSender, q.currentRecipient))
     && parents.has(q.currentRecipient)).flatMap(q => {
     const original = works.find(w => w.key === q.workKey
       || (q.executionKey && w.executions?.some(e => e.key === q.executionKey)));
