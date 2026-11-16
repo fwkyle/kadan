@@ -21,7 +21,7 @@ const SELECT_MARK = /^\s*❯/u;
 export function readTrustSelection(screen) {
   const rows = String(screen).replace(CONTROL_SEQUENCES, "").split("\n").filter(line => squash(line));
   const confirm = rows.findLastIndex(line => squash(line).includes(ENTER_TO_CONFIRM));
-  if (confirm < 0) return { path: null, selected: null };
+  if (confirm < 0) return { path: null, pathAmbiguous: false, selected: null };
   let from = 0;
   for (let i = confirm - 1; i >= 0; i--) {
     const flat = squash(rows[i]);
@@ -30,13 +30,14 @@ export function readTrustSelection(screen) {
   const yes = rows.findLastIndex((line, i) => i >= from && i < confirm && squash(line).replace(/^❯/u, "").startsWith(YES));
   const no = yes < 0 ? -1 : rows.findLastIndex((line, i) => i >= from && i < yes && squash(line).replace(/^❯/u, "").startsWith(NO));
   const question = no < 0 ? -1 : rows.findLastIndex((line, i) => i >= from && i < no && squash(line).includes(QUESTION));
-  if (question < 0) return { path: null, selected: null };
+  if (question < 0) return { path: null, pathAmbiguous: false, selected: null };
   const marked = rows.map((line, i) => (i > question && i < confirm && SELECT_MARK.test(line) ? i : -1)).filter(i => i >= 0);
   const selected = marked.length === 1 ? (marked[0] === yes ? "yes" : marked[0] === no ? "no" : null) : null;
   const workspace = rows.findLastIndex((line, i) => i >= from && i < question && squash(line) === WORKSPACE);
-  const next = workspace < 0 ? null : rows[workspace + 1];
-  // 경로 줄은 질문 줄 앞에 있어야 하고, 앞뒤 공백만 걷는다. 일부만 보이면 아래 실경로 비교에서 다르다고 나온다.
-  return { path: next !== undefined && next !== null && workspace + 1 < question ? next.trim() : null, selected };
+  // `Accessing workspace:`와 질문 사이의 비지 않은 줄이 정확히 한 줄일 때만 그 줄이 경로다. 두 줄 이상이면 모호한 것이라
+  // 줄을 이어 붙여 맞추지 않는다(이어 붙이기는 정확 일치를 흐린다). 앞뒤 공백만 걷고, 일부만 보이면 실경로 비교에서 다르다고 나온다.
+  const between = workspace < 0 ? 0 : question - workspace - 1;
+  return { path: between === 1 ? rows[workspace + 1].trim() : null, pathAmbiguous: between > 1, selected };
 }
 
 // 화면의 경로와 start의 작업 폴더가 실제 경로(realpath)로 정확히 같을 때만 true. `~` 축약은 이 계정의 홈으로만 푼다.
@@ -51,8 +52,8 @@ export function sameWorkspace(screenPath, workdir, { realpath = fs.realpathSync,
 const sleepMs = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // 반환: 신뢰 창을 못 봤으면 null(원장에 아무것도 남기지 않는다). 봤으면 { result: accepted|skipped|failed, reason, keys, path? }.
-// keys는 실제로 보낸 키 목록이다. deps: read(화면 문자열, 실패하면 던짐) · key(키 이름) · alive() · pid() — 모두 이번 세션 하나에 묶여 있다.
-export function autoAcceptTrust({ workdir, home, expectedPid, read, key, alive, pid, sleep = sleepMs,
+// keys는 실제로 보낸 키 목록이다. deps: read(화면 문자열, 실패하면 던짐) · key(키 이름) · paneLive()(같은 세션·같은 pane PID·pane_dead=0이면 true, 조회 실패·종료면 false) — 모두 이번 세션 하나에 묶여 있다.
+export function autoAcceptTrust({ workdir, home, read, key, paneLive, sleep = sleepMs,
   tries = 10, intervalMs = 500, enterTries = 8, realpath, homeDir } = {}) {
   // 1. 창이 뜰 때까지 기다린다. 신뢰 창이 보이면 바로, 신뢰 창이 아닌 화면이 두 번 연속 같으면 신뢰 창이 없는 것으로 보고 끝낸다.
   let screen = null, last = null;
@@ -73,6 +74,7 @@ export function autoAcceptTrust({ workdir, home, expectedPid, read, key, alive, 
   shownPath = parsed.path;
 
   if (fs.existsSync(path.join(home, AUTO_TRUST_OFF))) return outcome("skipped", "switch-off");
+  if (parsed.pathAmbiguous) return outcome("skipped", "path-ambiguous");
   if (!parsed.path) return outcome("skipped", "path-unreadable");
   if (!sameWorkspace(parsed.path, workdir, { ...(realpath ? { realpath } : {}), ...(homeDir ? { home: homeDir } : {}) })) {
     return outcome("skipped", "path-mismatch");
@@ -107,14 +109,18 @@ export function autoAcceptTrust({ workdir, home, expectedPid, read, key, alive, 
     if (selected === null) return outcome("failed", "screen-changed");
   }
 
-  // 3. 방금 읽은 화면이 Yes 선택·신뢰 창 맨 끝이다. 이때만 Enter를 보낸다.
+  // 3. Yes가 처음부터 선택돼 있었든 Down으로 옮겼든, Enter 직전에 화면을 한 번 더 읽어 같은 경로·맨 끝 신뢰 창·단일 Yes를 확인한다.
+  if (reread() !== "yes") return outcome("failed", "screen-changed");
   const refused = send("Enter");
   if (refused) return refused;
   for (let i = 0; i < enterTries; i++) {
     sleep(300);
-    if (!alive() || String(pid()) !== String(expectedPid)) return outcome("failed", "pane-dead");
     let text;
     try { text = read(); } catch { return outcome("failed", "screen-unreadable"); }
+    // 마지막 화면을 읽은 뒤에도 같은 세션·같은 PID·살아 있는 pane인지 본다(remain-on-exit로 죽은 pane이 같은 PID로 남을 수 있다).
+    let live = false;
+    try { live = paneLive() === true; } catch { live = false; }
+    if (!live) return outcome("failed", "pane-dead");
     if (typeof text === "string" && text.trim() && !hasTrustPrompt(text)) return outcome("accepted", downs > 0 ? "down-enter" : "enter");
   }
   return outcome("failed", "prompt-remains");

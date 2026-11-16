@@ -317,10 +317,13 @@ export function cmdStart(argv, flags) {
   if (!reusing && floor.name === "tmux" && startedCmd && normalizeAiCommand(startedCmd)?.harness === "claude"
     && startConversationCertainty(startedCmd) === "new" && pid != null) {
     const trust = autoAcceptTrust({
-      workdir: process.cwd(), home: ledgerHome(), expectedPid: pid,
+      workdir: process.cwd(), home: ledgerHome(),
       read: () => readTrustScreen(session),
       key: name => sendTmuxTrustKey(session, name, { expectedPid: pid }),
-      alive: () => floor.alive(session), pid: () => floor.pid(session),
+      paneLive: () => {
+        const state = tmux(["display-message", "-p", "-t", `=${session}:`, "#{pane_pid}|#{pane_dead}"]);
+        return state.status === 0 && state.stdout.trim() === `${pid}|0`;
+      },
       tries: Number(process.env.KADAN_TRUST_TRIES) || undefined, intervalMs: Number(process.env.KADAN_TRUST_INTERVAL_MS) || undefined,
     });
     if (trust) {

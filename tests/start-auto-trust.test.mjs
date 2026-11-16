@@ -32,15 +32,15 @@ const PERMISSION = ['Do you want to run this command?', '❯ 1. Yes', '  2. No',
 const LOGIN = ['Select login method:', '❯ 1. Claude account', '  2. Anthropic Console account', 'Enter to confirm'].join('\n');
 
 // 화면 상태 기계: Down은 선택을 옮기고, Yes에서 Enter면 입력창, No에서 Enter면 pane이 죽는다.
-function fakePane(first, {stuck = false, vanishAfterDown = false, dieAfterEnter = false, refuse = null, promptStays = false} = {}) {
-  const state = {screen: first, keys: [], alive: true, selected: 'no', reads: 0};
+function fakePane(first, {stuck = false, vanishAfterDown = false, dieAfterEnter = false, refuse = null, promptStays = false, dieOnFinalRead = false} = {}) {
+  const state = {screen: first, keys: [], atKey: [], alive: true, selected: 'no', reads: 0};
   const shown = () => WORK; // 이 시험의 Down 뒤 화면은 같은 경로로 다시 그린다
   return {state, deps: {
-    workdir: WORK, home: HOME, expectedPid: 4242,
-    read: () => { state.reads += 1; return state.screen; },
+    workdir: WORK, home: HOME,
+    read: () => { state.reads += 1; if (dieOnFinalRead && state.keys.includes('Enter')) state.alive = false; return state.screen; },
     key: name => {
       if (refuse) throw Object.assign(new Error('거절'), refuse);
-      state.keys.push(name);
+      state.keys.push(name); state.atKey.push({name, reads: state.reads});
       if (name === 'Down') {
         if (!stuck) state.selected = state.selected === 'no' ? 'yes' : 'no';
         state.screen = vanishAfterDown ? INPUT_BOX : trustScreen({shown: shown(), selected: state.selected});
@@ -49,7 +49,7 @@ function fakePane(first, {stuck = false, vanishAfterDown = false, dieAfterEnter 
         else if (!promptStays) state.screen = INPUT_BOX;
       }
     },
-    alive: () => state.alive, pid: () => 4242, sleep: () => {}, tries: 4, intervalMs: 1, enterTries: 3,
+    paneLive: () => state.alive, sleep: () => {}, tries: 4, intervalMs: 1, enterTries: 3,
   }};
 }
 const run = (screen, opts, patch = {}) => {
@@ -72,6 +72,33 @@ test('성공: 이미 Yes가 선택돼 있으면 Enter만 보낸다', () => {
   const result = autoAcceptTrust(pane.deps);
   assert.deepEqual(pane.state.keys, ['Enter']);
   assert.equal(result.result, 'accepted');
+  // 처음부터 Yes여도 Enter 직전에 화면을 한 번 더 읽는다(첫 읽기 + 직전 재확인 = 2회).
+  assert.deepEqual(pane.state.atKey, [{name: 'Enter', reads: 2}]);
+});
+
+test('중단: 처음부터 Yes인데 Enter 직전 재확인에서 선택이 바뀌었거나 창이 사라졌으면 Enter 0개', () => {
+  for (const next of [trustScreen({selected: 'no'}), INPUT_BOX, trustScreen({shown: path.dirname(WORK), selected: 'yes'})]) {
+    const pane = fakePane(trustScreen({selected: 'yes'}));
+    let n = 0;
+    const result = autoAcceptTrust({...pane.deps, read: () => (++n === 1 ? trustScreen({selected: 'yes'}) : next)});
+    assert.deepEqual(pane.state.keys, []);
+    assert.deepEqual([result.result, result.reason], ['failed', 'screen-changed']);
+  }
+});
+
+test('키 0개(SPLIT_PATH): 경로가 두 줄 이상이면 첫 줄이 실제 경로여도 멈춘다 — 줄을 이어 붙이지 않는다', () => {
+  for (const shown of [`${WORK}\n /other`, `${WORK}\n${WORK}`, `${WORK}/\n ${WORK}`]) {
+    const {result, keys} = run(trustScreen({shown}));
+    assert.deepEqual(keys, [], shown);
+    assert.deepEqual([result.result, result.reason], ['skipped', 'path-ambiguous'], shown);
+  }
+  assert.deepEqual(readTrustSelection(trustScreen({shown: `${WORK}\n /other`})).pathAmbiguous, true);
+});
+
+test('중단(DEATH_DURING_READ): Enter 뒤 마지막 읽기 도중 pane이 죽으면 accepted로 기록하지 않는다', () => {
+  const {result, keys} = run(trustScreen(), {dieOnFinalRead: true});
+  assert.deepEqual(keys, ['Down', 'Enter']);
+  assert.deepEqual([result.result, result.reason], ['failed', 'pane-dead']);
 });
 
 test('성공: 공백이 빠진 사고 원본 꼴도 같은 절차로 통과한다(경로가 맞을 때)', () => {
@@ -174,8 +201,8 @@ test('화면을 못 읽거나 신뢰 창이 끝내 안 뜨면 null이고 키는 
 });
 
 test('readTrustSelection·sameWorkspace: 선택·경로 읽기와 ~ 풀기', () => {
-  assert.deepEqual(readTrustSelection(trustScreen({selected: 'yes'})), {path: WORK, selected: 'yes'});
-  assert.deepEqual(readTrustSelection(trustScreen()), {path: WORK, selected: 'no'});
+  assert.deepEqual(readTrustSelection(trustScreen({selected: 'yes'})), {path: WORK, pathAmbiguous: false, selected: 'yes'});
+  assert.deepEqual(readTrustSelection(trustScreen()), {path: WORK, pathAmbiguous: false, selected: 'no'});
   assert.equal(sameWorkspace('~/proj', '/home/ax/proj', {home: '/home/ax', realpath: p => p}), true);
   assert.equal(sameWorkspace('~/proj', '/home/ay/proj', {home: '/home/ax', realpath: p => p}), false);
   assert.equal(sameWorkspace('proj', '/home/ax/proj', {home: '/home/ax', realpath: p => p}), false);
@@ -280,4 +307,33 @@ test('격리 tmux: codex·이어 연 claude 대화는 신뢰 창이 떠 있어�
   }
   assert.deepEqual(readKeys(log), []);
   assert.equal(readLedger(w.home).filter(e => e.kind === 'trust').length, 0);
+});
+
+test('격리 tmux(CLI_SPLIT_PATH): 경로가 두 줄이면 첫 줄이 작업 폴더여도 키 0개, path-ambiguous', t => {
+  if (!hasTmux()) return t.skip('tmux 없음');
+  const w = world(t, 'd');
+  const log = writeFakeClaude(w, {shown: '%CWD%\n/other'});
+  const r = w.kadan(w.work, 'start', 'trust-g', '--hidden', '--cmd', 'claude', '--reason', 'auto trust test', '--no-prompt');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(readKeys(log), []);
+  assert.deepEqual(readLedger(w.home).filter(e => e.kind === 'trust').map(e => [e.result, e.reason, e.keys]), [['skipped', 'path-ambiguous', []]]);
+  assert.doesNotMatch(r.stdout, /폴더 신뢰 확인 후 통과/);
+});
+
+test('격리 tmux(CLI_DEAD_PANE): Enter 뒤 프로세스가 끝나 remain-on-exit로 같은 PID의 죽은 pane이 남으면 failed(pane-dead)', t => {
+  if (!hasTmux()) return t.skip('tmux 없음');
+  const w = world(t, 'e');
+  const log = writeFakeClaude(w, {shown: '%CWD%'});
+  const file = path.join(w.bin, 'claude');
+  let body = fs.readFileSync(file, 'utf8');
+  body = body.replace("const fs = require('fs');", "const fs = require('fs');\nrequire('child_process').spawnSync('tmux', ['-L', process.env.KADAN_SOCKET, 'set-option', '-w', 'remain-on-exit', 'on']);");
+  body = body.replace("process.stdout.write('\\x1bc─────\\n❯ \\n─────\\n  ? for shortcuts\\n');", "process.stdout.write('\\x1bcREADY\\n'); process.exit(0);");
+  fs.writeFileSync(file, body);
+  const r = w.kadan(w.work, 'start', 'trust-h', '--hidden', '--cmd', 'claude', '--reason', 'auto trust test', '--no-prompt');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(w.tmux('display-message', '-p', '-t', '=kadan-trust-h:', '#{pane_pid}|#{pane_dead}').stdout, /\|1/, '죽은 pane이 남아야 시험이 성립한다');
+  assert.deepEqual(readKeys(log), ['Down', 'Enter']);
+  const trust = readLedger(w.home).filter(e => e.kind === 'trust');
+  assert.deepEqual(trust.map(e => [e.result, e.reason]), [['failed', 'pane-dead']]);
+  assert.doesNotMatch(r.stdout, /폴더 신뢰 확인 후 통과/);
 });
