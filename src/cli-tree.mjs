@@ -6,7 +6,7 @@ import { boardFromRole } from "./board.mjs";
 import { recordedPid } from "./cli-basics.mjs";
 import { startDisplay } from "./cli-family.mjs";
 
-function roleFromSession(session) {
+export function roleFromSession(session) {
   return typeof session === "string" && session.startsWith("kadan-")
     ? session.slice("kadan-".length)
     : session;

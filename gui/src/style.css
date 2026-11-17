@@ -170,6 +170,13 @@ td small { display: block; margin-top: 2px; }
 .runner-save-bar .error { margin: 6px 0 0; padding: 8px 10px; max-height: 20vh; overflow: auto; }
 .runner-save-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .runner-save-row > p, .runner-save-row > details { margin: 0; }
+/* 실행 모델 화면 아래쪽: 드물게 쓰는 관리 항목을 접어 두는 고급 설정 묶음. 한국어는 낱말 중간에서 끊지 않는다. */
+.runner-advanced { margin: 22px 0 12px; min-width: 0; word-break: keep-all; overflow-wrap: break-word; }
+.runner-advanced > summary { font-weight: 600; text-wrap: balance; }
+.runner-advanced[open] > summary { margin-bottom: 4px; }
+.runner-advanced[open] { padding-left: 15px; border-left: 2px solid #c5d4ca; }
+.runner-advanced h3, .runner-advanced h4 { text-wrap: balance; }
+.runner-advanced p { text-wrap: pretty; }
 .runner-save-row .save-title { flex: 1 1 140px; min-width: 0; }
 .runner-save-row .save-note, .runner-save-row .save-warn, .runner-save-row .save-reason { flex-basis: 100%; font-size: 12px; }
 .runner-save-row .save-warn { color: #7a3d00; font-weight: 600; }

@@ -28,7 +28,7 @@ const TABLE_LABELS: [string, string][] = [
 export function RunnerTables({ catalog, revision }: { catalog: RunnerCatalog; revision: number }) {
   return (
     <>
-      <h2>실행기 모델·명령 표</h2>
+      <h3>실행기 모델·명령 표</h3>
       <p className="muted">
         실행기마다 고를 수 있는 모델을 등록·삭제하고, 다시 열기·한 번 호출 같은 명령 표를 고칩니다. 쓰고 있는 모델은 지울 수 없습니다.
       </p>
@@ -110,7 +110,7 @@ function Models({ name, spec, revision }: { name: string; spec: RunnerCatalog[st
         <input required maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
       </label>
       {noReason && <p className="muted">이유를 적으면 삭제·등록할 수 있습니다.</p>}
-      <h3>등록된 모델</h3>
+      <h4>등록된 모델</h4>
       <ul>
         {spec.models.map((m) => (
           <li key={m.model}>
@@ -189,7 +189,7 @@ function TableForm({ name, spec, revision }: { name: string; spec: RunnerCatalog
   const alertError = (m: string) => setLocal(m);
   return (
     <form className="action-form" onSubmit={submit}>
-      <h3>명령 표 (빈 칸으로 저장하면 그 칸을 지웁니다)</h3>
+      <h4>명령 표 (빈 칸으로 저장하면 그 칸을 지웁니다)</h4>
       <fieldset disabled={busy}>
         <label>
           대화형 실행(spawn) — {"{model}"} 필수
