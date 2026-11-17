@@ -140,8 +140,13 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
 // 읽지 못하는 폴백 항목은 건너뛴다 — 맞는 항목이 없으면 기존처럼 거절이다.
 // profile에는 작업자·검수자 프로필 또는 HARD_ROLE(어려운 일 작업자 자리의 목록)을 준다.
 function matchingFallback(settings, profile, identity) {
+  // 대체 후보는 1순위 기대값과 같은 활성 프리셋의 목록을 본다. 작업자·어려운 일 폴백은 시작 때 활성 프리셋으로 뜨고,
+  // 꺼진 뒤 남은 settings.compare.presets만으로 세션의 옛 프리셋을 고르면 활성 프리셋을 바꾼 뒤 옛 후보가 통과한다.
+  // 예외 하나: 비교 모드가 지금 켜져 있을 때 `start --for`로 뜬 검수자는 compareMode 표시 없이 그 비교 프리셋이 시작 기록에 남으므로 그 프리셋 목록을 본다.
   const sessionPreset = identity.launch?.settingsPreset;
-  const preset = settings.compare?.presets?.includes(sessionPreset) ? sessionPreset : settings.activePreset;
+  const compareReviewer = profile === "reviewer" && settings.compare?.enabled === true
+    && settings.compare.presets?.includes(sessionPreset);
+  const preset = compareReviewer ? sessionPreset : settings.activePreset;
   const count = settings.presets[preset]?.fallback?.[profile === HARD_ROLE ? HARD_ROLE : PROFILE_ROLES[profile]]?.length ?? 0;
   for (let index = 1; index <= count; index++) {
     let fallback;
