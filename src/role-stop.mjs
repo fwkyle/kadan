@@ -2,6 +2,7 @@
 // (업무 마감 때 함께 끄기)가 한 세션의 실패로 멈추지 않게 한다. `kadan stop`의 출력·종료 코드·순서는 예전과 같다:
 // 소유 확인 → 대화 번호 찾기 → 멈춤 표시 → 소유 재확인 → 끄기 → 창 정리 → 원장 기록.
 // 대화 번호 찾기는 끄기 앞에서 하고, 못 찾아도 끈다(role-conversation.mjs). 찾는 동안 pane이 바뀌면 끄기 직전 소유 재확인이 막는다.
+// 자기 세션을 끄는 경우(selfStop이 참)만 끄기부터의 뒷부분을 분리된 프로세스에 넘긴다(self-stop.mjs). 순서·출력·기록은 같다.
 // 비용: 원장 읽기 2번(소유 확인·창 정리)은 예전과 같고, 대화 찾기는 앞의 읽기를 다시 쓴다.
 import { taskIdentity } from "./task-identity.mjs";
 import { CardStore } from "./card-store.mjs";
@@ -28,8 +29,10 @@ function ownedOpenWorks(role, entries, readWorks) {
 
 // 반환: {ok: false, message, code} — 끄지 않았다. {ok: true, session, windowIncomplete, entry} — 껐고 기록했다.
 // {ok: false, stopped: true, error} — 세션은 껐지만 창 정리·기록에서 예외가 났다(호출자가 다시 던지거나 보고한다).
+// {ok: true, session, handedOff: true, logPath} — 자기 세션이라 끄기부터를 분리된 프로세스에 넘겼다(selfStop 때만).
 // log는 stdout, warn은 stderr 줄이다. lookup은 시험에서 가짜 조회를 넣는 자리다.
 export function stopRole({ role, session, home, floor = defaultFloor, log = console.log, warn = console.error, beforeStop = null,
+  selfStop = null,
   readWorks = () => new WorkStore(home).listWatch(),
   lookup = input => stopConversationFields({ ...input, deps: lookupDeps({ paneInfo }) }) }) {
   const infrastructure = TARGETS.includes(role);
@@ -57,6 +60,9 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
   let conversation;
   try { conversation = lookup({ session, entries, floorName: floor.name, infrastructure, readSettings: () => readSettings(home) }); }
   catch { conversation = { conversationMissing: "error" }; }
+  // 자기 세션 판정은 프로세스 조상으로 한다(self-stop.mjs). 끄기 앞의 거절이 모두 끝난 뒤, 표시를 저장하기 전에 한다.
+  let self = false;
+  try { self = Boolean(selfStop?.isSelf(floor.pid(session))); } catch { self = false; }
   // 순서: 멈춤 표시를 먼저 저장하고 그다음 세션을 끈다. 끄기가 실패하면 표시를 이전 상태로 되돌린다
   // (세션이 그대로 살아 있으니 "끈 것"이 아니다. 오류는 사람이 본다).
   let marked = null;
@@ -65,6 +71,28 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
     // 마지막 안전장치: 저장한 표시를 다시 읽어 이 대상이 실제로 stopped인지 확인한다. 아니면 끄지 않는다(끈 것이 되살아나는 일을 막는다).
     if (marked && readReviveState(home).targets?.[role]?.state !== "stopped") throw new Error("표시가 저장되지 않았다");
   } catch (error) { return refuse(`자동 되살리기 멈춤 표시 실패: ${error.message} — 끄지 않았습니다`); }
+  const shared = { role, session, home, floor, owner, infrastructure, marked, conversation, owned, log, warn };
+  if (self) {
+    // 끄는 순간 이 프로세스도 함께 죽는다. 끄기부터의 뒷부분은 pane 밖의 분리된 프로세스가 한다(앞쪽은 곧 끝난다).
+    let handed;
+    try {
+      const by = buildStopLedgerEntry({ role, session }).by; // 명령을 친 쪽. 넘겨받은 프로세스도 같은 값을 기록한다.
+      handed = selfStop.handoff({ role, session, home, owner, infrastructure, marked, conversation, owned, by });
+    } catch (error) {
+      if (marked) { try { unmarkStopped(home, role, marked); } catch { /* 표시를 못 되돌려도 오류는 알린다 */ } }
+      return refuse(`자기 세션 종료를 넘기지 못했습니다: ${error.message} — 끄지 않았습니다`);
+    }
+    release();
+    log(`자기 세션 종료를 분리된 프로세스로 넘김(기록: ${handed.logPath})`);
+    return { ok: true, session, handedOff: true, logPath: handed.logPath };
+  }
+  return stopTail({ ...shared, beforeStop, refuse, release });
+}
+
+// 끄기 → 창 정리 → 원장 기록. 끄기가 실패하면 멈춤 표시를 되돌린다. 앞쪽 stopRole과 넘겨받은 프로세스가 같은 코드를 쓴다.
+// refuse(message)는 끄지 않았다는 결과를 만들고 잠금을 푼다. release()는 끝난 뒤 잠금을 푼다.
+export function stopTail({ role, session, home, floor, owner, infrastructure, marked, conversation, owned, log, warn,
+  beforeStop = null, refuse, release, env = process.env }) {
   try {
     // 선택: 끄기 직전 확인(업무 마감의 끄기만 넘긴다). 대화 번호 조회가 끝난 뒤라 그 사이의 변화를 잡는다. 던지면 끄지 않는다.
     if (beforeStop) beforeStop();
@@ -76,7 +104,7 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
   }
   try {
     const windowFields = floor.name === "tmux" ? closeStartedWindow(currentRottieWindow(readLedger(home), session), { print: warn }) : {};
-    const entry = { ...buildStopLedgerEntry({ role, session }), ...conversation, ...windowFields,
+    const entry = { ...buildStopLedgerEntry({ role, session, env }), ...conversation, ...windowFields,
       ...(owned.length > 0 ? { ownedOpenWorks: owned.slice(0, OWNED_WORKS_MAX) } : {}) };
     appendLedger(entry, home);
     if (windowFields.rottieWindowClosed === false || windowFields.rottieWindowRemoved === false) {
