@@ -9,14 +9,23 @@ import {RunnerForm} from './RunnerForm';
 import {summaryCells} from './RunnerSummary';
 import type {Choice, RunnersData, Settings} from './Runners';
 
-// 어려운 일 작업자 자리: 폴백 목록이 없고, 비우면 작업자와 같은 값으로 띄운다. 비우기도 저장 전까지는 변경안이다.
+// 어려운 일 작업자 자리의 값이 정해져 있는가(모델까지 골랐는가). 대체 후보 칸은 이때만 연다.
+export const hardReady = (draft: Settings) =>
+  Boolean((draft.presets[draft.activePreset].roles[HARD_ROLE] as Choice | undefined)?.model);
+
+// 어려운 일 작업자 자리: 비우면 작업자와 같은 값으로 띄운다. 값이 있어야 대체 후보를 둘 수 있고, 비우면 대체 후보도 함께 지운다.
+// 비우기도 저장 전까지는 변경안이다.
 export function HardSlot({draft, clear}: {draft: Settings; clear: () => void}) {
   const value = draft.presets[draft.activePreset].roles[HARD_ROLE] as Choice | undefined;
+  const count = draft.presets[draft.activePreset].fallback?.[HARD_ROLE]?.length ?? 0;
   return <div className="action-form">
     <p>{value ? `지금 값: ${[value.runner, value.model, value.effort].filter(Boolean).join(' / ')}`
       : '비어 있음 — 작업자와 같은 값으로 띄웁니다'}</p>
-    <p className="muted">어려움 카드를 맡길 작업자를 <code>kadan start 역할 --profile worker --difficulty hard</code>로 띄울 때 쓰는 값입니다. 대체 후보는 없습니다.</p>
-    <button type="button" disabled={!value} onClick={clear}>비우기</button>
+    <p className="muted">어려움 카드를 맡길 작업자를 <code>kadan start 역할 --profile worker --difficulty hard</code>로 띄울 때 쓰는 값입니다.
+      {hardReady(draft)
+        ? ' 대체 후보는 아래에서 고르고, 번호로 띄웁니다: --difficulty hard --fallback 번호. 비우면 대체 후보도 함께 지워집니다.'
+        : ' 값을 정하면 대체 후보 칸이 열립니다. 값이 비어 있으면 작업자와 같아 따로 후보를 둘 수 없습니다.'}</p>
+    <button type="button" disabled={!value} onClick={clear}>비우기{count ? ` (대체 후보 ${count}개도 지움)` : ''}</button>
   </div>;
 }
 
@@ -107,9 +116,9 @@ export function PresetEditor({data, settings, initialOpen = []}: {
                       <legend>{label} 바꾸기</legend>
                       {role !== 'senior' && <RunnerForm key={`${reset}:${role}:base`} data={data} settings={draft}
                         role={role} stage={stage} />}
-                      {role === HARD_ROLE ? <HardSlot draft={draft} clear={() => setDraft(clearPreset(draft, HARD_ROLE))} />
-                        : <RunnerForm key={`${reset}:${role}:fallback`} data={data} settings={draft} role={role}
-                          fallback stage={stage} />}
+                      {role === HARD_ROLE && <HardSlot draft={draft} clear={() => setDraft(clearPreset(draft, HARD_ROLE))} />}
+                      {(role !== HARD_ROLE || hardReady(draft)) && <RunnerForm key={`${reset}:${role}:fallback`} data={data}
+                        settings={draft} role={role} fallback stage={stage} />}
                     </fieldset>
                   </div>
                 </td>

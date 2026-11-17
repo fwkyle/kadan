@@ -23,7 +23,8 @@ export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'c
 // 설정에 값을 둘 수 있는 역할. watch·senior는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
 export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain', 'worker-hard'];
 // 어려운 일 작업자 자리(2026-11-10 [kyle] 난이도 칸 PR 1). 세션의 roleProfile은 계속 worker이고, 선택 칸이라 비어 있으면 작업자와 같다.
-// 폴백 목록은 두지 않는다. 이 자리를 쓰는 시작(start --difficulty hard)만 시작 기록에 difficulty: 'hard'를 남긴다.
+// 대체 후보(fallback['worker-hard'])는 작업자와 같은 규칙으로 두되, 자리가 비어 있으면 둘 수 없다(2026-11-17 [kyle]).
+// 이 자리나 그 대체 후보로 띄우는 시작(start --difficulty hard [--fallback N])만 시작 기록에 difficulty: 'hard'를 남긴다.
 export const HARD_ROLE = 'worker-hard';
 // 감시 AI는 scripts/watch-judge.sh가, 시니어는 scripts/senior.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
@@ -180,10 +181,13 @@ function fill(settings, value) {
 }
 
 // 활성 프리셋 역할의 N번째(1부터) 폴백으로 실행 명령을 만든다. 자동으로 고르지 않고 번호를 받은 경우에만 쓴다.
+// profile에 HARD_ROLE을 주면 어려운 일 작업자 자리의 대체 후보를 읽는다. 자리가 비어 있으면 작업자 목록으로 내려가지 않고 거절한다.
 export function launchForFallback(settings, profile, n, preset = settings?.activePreset) {
-  const role = PROFILE_ROLES[profile];
+  const role = profile === HARD_ROLE ? HARD_ROLE : PROFILE_ROLES[profile];
   if (!role || !settings) throw new Error('폴백 발령에는 실행 모델 설정과 역할 프로필이 필요하다');
   if (!Object.hasOwn(settings.presets, preset)) throw new Error(`없는 프리셋: ${preset}`);
+  if (role === HARD_ROLE && !settings.presets[preset].roles[HARD_ROLE])
+    throw new Error('어려운 일 작업자 자리가 비어 있어 대체 후보를 쓸 수 없다 — 먼저 kadan runners set worker-hard로 자리를 채운다');
   const list = settings.presets[preset].fallback?.[role] ?? [];
   const index = Number(n);
   if (!Number.isInteger(index) || index < 1 || index > list.length)
@@ -543,7 +547,10 @@ export function setRole(home, {role, runner, model, effort, preset, clear = fals
       const was = next.presets[name].roles[role] ?? null;
       if (!was) throw new Error('바뀐 것 없음 — 이미 비어 있다');
       delete next.presets[name].roles[role];
-      return {preset: name, role, before: was, after: null};
+      // 1순위 없이 대체 후보만 남기지 않는다: 같은 변경(한 번의 revision)에서 목록도 지우고, 지운 목록은 기록에 남긴다.
+      const droppedFallback = next.presets[name].fallback?.[role] ?? null;
+      if (droppedFallback) delete next.presets[name].fallback[role];
+      return {preset: name, role, before: was, after: null, ...(droppedFallback ? {fallbackBefore: droppedFallback} : {})};
     }
     ensurePreset(next, name);
     const value = {runner, model, ...(effort != null ? {effort} : {})};
@@ -577,16 +584,17 @@ export function setSeniors(home, {items, preset, ...meta}) {
 }
 
 // 역할의 폴백 순서 목록 전체를 바꾼다(3단계). 항목마다 1순위와 같은 선택지·강도·정책 검사를 하고, 계열 확인은 공통 경로가 맡는다.
-// 어려운 일 작업자 자리는 폴백 목록을 두지 않는다. 저장(setFallback)과 가져오기가 같은 판단·문구를 쓴다.
-export function assertNoHardFallback(role) {
-  if (role === HARD_ROLE) throw new Error('어려운 일 작업자 자리는 폴백이 없다 — 비어 있으면 작업자와 같다');
+// 어려운 일 작업자 자리가 비어 있으면 그 대체 후보 목록을 둘 수 없다(1순위 없이 후보만 남지 않게).
+// 저장(setFallback)과 가져오기(readExport)가 같은 판단·문구를 쓴다. 목록을 비우는 것은 언제나 허용한다.
+export function assertHardFallbackHasSlot(hasSlot, list) {
+  if (!hasSlot && list?.length)
+    throw new Error('어려운 일 작업자 자리가 비어 있어 대체 후보를 둘 수 없다 — 먼저 자리를 채운다(비어 있으면 작업자와 같다)');
 }
 export function setFallback(home, {role, items, preset, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
   // 시니어는 한 번 부르고 실패하면 실패로 끝낸다(fail closed). 아무도 읽지 않을 목록을 저장하지 않는다.
   if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
     throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
-  assertNoHardFallback(role);
   if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 등록된 시니어(최대 2명)가 동등하게 함께 불린다(docs/senior.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
@@ -594,6 +602,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
     const name = preset ?? next.activePreset;
     if (!Object.hasOwn(next.presets, name)) throw new Error(`없는 프리셋: ${name}`);
     const list = items.map(({runner, model, effort}) => ({runner, model, ...(effort != null && effort !== '' ? {effort} : {})}));
+    if (role === HARD_ROLE) assertHardFallbackHasSlot(Boolean(next.presets[name].roles[HARD_ROLE]), list);
     list.forEach((item, i) => {
       try { checkChoice(next, role, item, readCodexModels ? {readCodexModels} : {}); }
       catch (error) { throw new Error(`폴백 ${i + 1}번: ${error.message}`); }
