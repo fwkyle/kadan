@@ -555,3 +555,93 @@ test('시간 상한(F2): 관문도 /mcp를 넣기 전에 남은 시간을 본다
   assert.deepEqual(mid.keys, ['paste'], 'Enter 직전에 끝났으면 /mcp의 Enter는 나가지 않는다');
   assert.deepEqual([midGate.ok, midGate.why, midGate.timeout], [false, 'deadline', true]);
 });
+
+// ---- 수정 2(재검수 2라운드) 회귀 시험 ----
+
+test('시간 상한(F2): 화면을 다시 읽는 동안 상한이 끝나면 그 키를 보내지 않는다 — 검사는 키 명령 바로 앞이다', () => {
+  // 마감 10000, 시작 9990. 화면 읽기는 외부 tmux 호출이라 시간이 든다: n번째 화면 읽기에서 시계가 마감으로 넘어간다.
+  const attempt = expireAtCapture => {
+    let clock = 9990, captures = 0, buffer = '', text = '';
+    const keys = [];
+    const run = (args, input) => {
+      switch (args[0]) {
+        case 'capture-pane':
+          captures += 1;
+          if (captures === expireAtCapture) clock = 10_000;
+          else if (expireAtCapture == null) clock += 1;
+          return `› ${text}\n\n  fake low · ~/fake/out\n`;
+        case 'display-message': return args.at(-1) === '#{pane_in_mode}' ? '0' : '123|0';
+        case 'load-buffer': buffer = input; return '';
+        case 'paste-buffer': text = buffer; keys.push({key: 'paste', at: clock}); return '';
+        case 'send-keys': keys.push({key: args.at(-1), at: clock}); return '';
+        default: return '';
+      }
+    };
+    let error = null;
+    try { sendLine({session: 'senior-fake', panePid: '123', deadlineAt: 10_000}, ASK_LINE, {run, now: () => clock, spawn: noSleepSpawn, keyGapS: '0'}); }
+    catch (thrown) { error = {code: thrown.code, why: thrown.why, stage: thrown.stage, delivery: thrown.delivery}; }
+    return {keys, error};
+  };
+  // 대조: 화면 읽기가 마감 전에 끝나면 붙여넣기와 Enter가 나간다.
+  const fine = attempt(null);
+  assert.equal(fine.error, null);
+  assert.deepEqual(fine.keys.map(k => k.key), ['paste', 'Enter']);
+  assert.ok(fine.keys.every(k => k.at < 10_000));
+  // 붙여넣기 직전 화면(신뢰 창 확인 뒤 두 번째 화면 읽기)을 읽는 동안 끝났다: 붙여넣기 0회.
+  const paste = attempt(2);
+  assert.deepEqual(paste.keys, [], '화면을 읽고 나니 상한이 지났으면 붙여넣기를 보내지 않는다');
+  assert.deepEqual(paste.error, {code: 'KADAN_SENIOR_KEY_WITHHELD', why: 'deadline', stage: 'paste', delivery: 'not-sent'});
+  // Enter 직전 화면(세 번째 화면 읽기)을 읽는 동안 끝났다: Enter 0회.
+  const enter = attempt(3);
+  assert.deepEqual(enter.keys.map(k => k.key), ['paste'], '화면을 읽고 나니 상한이 지났으면 Enter를 보내지 않는다');
+  assert.deepEqual([enter.error?.why, enter.error?.stage], ['deadline', 'enter']);
+});
+
+test('세션 조회 분류: tmux가 "없다"고 확정한 문구만 세션 없음이고, 접속 권한 오류 같은 실패는 조회 실패다(끝남으로 적지 않는다)', () => {
+  const cases = [
+    ['서버 없음', 'no server running on /fake/socket', 'no-session'],
+    ['소켓 파일 없음', 'error connecting to /fake/socket (No such file or directory)', 'no-session'],
+    ['세션 없음', "can't find session: senior-fake", 'no-session'],
+    ['접속 권한 오류', 'error connecting to /fake/socket (Permission denied)', 'query-failed'],
+    ['접속 거부', 'error connecting to /fake/socket (Connection refused)', 'query-failed'],
+    ['그 밖의 실패', 'query failed: timeout', 'query-failed'],
+  ];
+  for (const [name, stderr, want] of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ksq-'));
+    const record = {session: 'senior-fake', socket: 'isolated-fake', dir, askId: 'fixture', panePid: '123'};
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(record));
+    const run = Object.assign(() => { throw new Error('키·종료 명령은 없어야 한다'); },
+      {socket: record.socket, try: () => ({status: 1, stdout: '', stderr})});
+    assert.deepEqual(confirmOwn(record, run), {own: false, why: want}, name);
+    assert.deepEqual(killOwn(dir, {run}), {killed: false, why: want}, name);
+    const after = readRecord(dir);
+    if (want === 'no-session') assert.ok(after.endedAt, `${name}: 없는 세션은 끝난 것으로 적는다`);
+    else assert.deepEqual([after.endedAt, after.killSkipped], [undefined, 'query-failed'], `${name}: 확인하지 못한 세션을 끝난 것으로 적지 않는다`);
+    // 자리 수를 세는 목록 조회도 같다: 없다고 확정되면 0개, 그 밖의 실패는 0개로 꾸미지 않고 던진다.
+    if (want === 'no-session' && name !== '세션 없음') assert.deepEqual(listSeniorSessions(run), [], name);
+    if (want === 'query-failed') assert.throws(() => listSeniorSessions(run), /세션 목록 조회 실패/, name);
+  }
+});
+
+test('TERM이 tmux 호출 도중에 오면(같은 프로세스 묶음이라 그 tmux 호출도 신호로 죽는다) 죽은 세션이 아니라 중단으로 읽는다', async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'kst-'));
+  const seat = {session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000};
+  const working = line => `› ${line}\n\n• Working (1s • esc to interrupt)\n\n› \n\n  fake low · ~/fake/out\n`;
+  const deps = fake => ({run: fake.run, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
+  // 질문을 넣은 뒤 폴링 중: 살아 있는지 묻는 tmux 호출이 신호로 죽었다(종료 코드 없음, signal만 있음).
+  const alive = scripted({afterEnter: working});
+  const aliveTry = alive.run.try;
+  alive.run.try = args => alive.keys.includes('Enter') && args[0] === 'display-message'
+    ? {status: null, signal: 'SIGTERM', stdout: '', stderr: ''} : aliveTry(args);
+  assert.deepEqual(await askSeat(seat, deps(alive)), {reason: 'interrupted', detail: 'SIGTERM'});
+  // 화면을 읽는 tmux 호출이 신호로 죽었다.
+  const killed = () => Object.assign(new Error('tmux capture-pane 실패'), {signal: 'SIGTERM'});
+  const capture = scripted({afterEnter: () => { throw killed(); }});
+  assert.deepEqual(await askSeat(seat, deps(capture)), {reason: 'interrupted', detail: 'SIGTERM'});
+  // 대조: 신호 없이 세션이 사라졌으면 지금처럼 죽은 세션이다.
+  const gone = scripted({afterEnter: working});
+  const goneTry = gone.run.try;
+  gone.run.try = args => gone.keys.includes('Enter') && args[0] === 'display-message'
+    ? {status: 1, stdout: '', stderr: "can't find session: senior-fake"} : goneTry(args);
+  assert.deepEqual(await askSeat(seat, deps(gone)), {reason: 'call-failed', detail: 'pane-dead'});
+});

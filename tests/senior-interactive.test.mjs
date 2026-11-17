@@ -36,7 +36,9 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = 'interactive', plan = {}, al
   for (const dir of [repo, bin, log]) fs.mkdirSync(dir);
   fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nexec '${process.execPath}' '${FAKE}' "$@"\n`, {mode: 0o755});
   const tmuxLog = path.join(home, 'tmux-calls.log');
-  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${tmuxLog}'\nexec '${REAL_TMUX}' "$@"\n`, {mode: 0o755});
+  // slow-tmux 파일이 있는 동안은 tmux 호출마다 0.5초 늦춘다(작은 지연 주입: 신호가 tmux 호출 도중에 오는 경우를 만든다).
+  const slowTmux = path.join(home, 'slow-tmux');
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${tmuxLog}'\n[ -e '${slowTmux}' ] && sleep 0.5\nexec '${REAL_TMUX}' "$@"\n`, {mode: 0o755});
   const planFile = path.join(home, 'plan.json');
   fs.writeFileSync(planFile, JSON.stringify({log, default: {}, models: {}, ...plan}));
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [{id: 'codex', spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"'}]}));
@@ -64,7 +66,7 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = 'interactive', plan = {}, al
     try { return fs.readFileSync(path.join(log, `${model}.${kind}`), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); }
     catch { return []; }
   };
-  return {home, repo, env, tmux, run, log, tmuxLog, fakeLog, advices: () => readLedger(home).filter(e => e.kind === 'advice'),
+  return {home, repo, env, tmux, run, log, tmuxLog, fakeLog, slowTmux, advices: () => readLedger(home).filter(e => e.kind === 'advice'),
     sessions: () => listSeniorSessions(tmux).map(row => row.name)};
 }
 
@@ -241,5 +243,22 @@ test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 
   // 관문의 /mcp만 들어갔고 질문 줄은 누구에게도 가지 않았다.
   for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), ['/mcp']);
   assert.deepEqual(f.advices().map(e => e.reason), ['timeout', 'timeout']);
+  assert.deepEqual(f.sessions(), []);
+});
+
+test('감싼 프로세스: 상한의 TERM이 tmux 호출 도중에 와도(그 tmux 호출이 같이 죽는다) 죽은 세션으로 읽지 않고 칸은 timeout으로 남는다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
+  t.after(() => fs.rmSync(f.slowTmux, {force: true}));
+  // 폴링 간격을 아주 짧게 두고 tmux 호출을 0.5초씩 늦추면, 감싼 프로세스는 거의 늘 tmux 호출 안에 있다.
+  const pending = f.run({timeout: '60'}, {sessionTiming: {...TIMING, pollMs: 10},
+    spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})}).then(() => assert.fail('실패해야 한다'), e => e);
+  for (let i = 0; i < 400 && f.fakeLog('gpt-6-astra', 'submitted').length < 2; i++) await new Promise(r => setTimeout(r, 25));
+  fs.writeFileSync(f.slowTmux, '');
+  const error = await pending;
+  fs.rmSync(f.slowTmux, {force: true});
+  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE]);
+  assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
+  const [entry] = f.advices();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(entry.evidencePath, 'outcome.json'), 'utf8')), {reason: 'interrupted', detail: 'SIGTERM'});
   assert.deepEqual(f.sessions(), []);
 });
