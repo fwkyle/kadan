@@ -210,6 +210,10 @@ td small { display: block; margin-top: 2px; }
 .st-reason-fold summary { color: #8a4b0f; }
 .st-reason-fold p { margin: 6px 0 0; white-space: pre-line; color: var(--ds-color-text); }
 .decision-page { max-width: 880px; margin: 0 auto; padding: 22px; background: white; border: 1px solid #d8ded8; border-radius: 9px; }
+.decision-original { min-width: 0; max-width: 100%; word-break: keep-all; overflow-wrap: break-word; }
+.decision-original summary { cursor: pointer; text-wrap: balance; }
+.decision-original pre { box-sizing: border-box; min-width: 0; max-width: 100%; white-space: pre-wrap;
+  word-break: keep-all; overflow-wrap: break-word; text-wrap: pretty; }
 .dw-shell[data-view=decisions] > main { padding-top: 0; }
 .decision-page h1 { font-size: 18px; margin: 0 0 18px; }
 .decision-page > p { color: var(--ds-color-muted); margin-bottom: 12px; }

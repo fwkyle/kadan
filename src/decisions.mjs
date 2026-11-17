@@ -16,6 +16,8 @@ import {DEFAULT_PORT} from './quickstart.mjs';
 import {readDecisions} from './notify-threads.mjs';
 import {loadRemoteConfig} from './remote-access.mjs';
 import {dashboardDecisionRows} from './dashboard-decisions.mjs';
+import {loadDecisionBodyFile, writeDecisionBody, decisionBodyContent} from './decision-body.mjs';
+import {isKnownRole} from './commands/send.mjs';
 const supervisor=isSupervisorActor;
 const human=by=>isUserActor(by);
 const UUID=/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
@@ -70,6 +72,8 @@ export class DecisionStore {
  constructor(home,{notify,userNotify,threadNote}={}){this.home=home;this.threadNote=threadNote??((d,text)=>postThreadNote(home,d,text));this.userNotify=userNotify??((message,opts)=>notifyUser(message,spawnSync,{home,...opts}));this.dir=path.join(home,'decisions');this.notify=notify??((role,message)=>{
   const r=spawnSync(process.execPath,[new URL('./cli.mjs',import.meta.url).pathname,'send',role,message],{env:{...process.env,KADAN_HOME:home,KADAN_ROLE:'사람'},encoding:'utf8',timeout:15000});
   if(r.status!==0)throw new Error('통지 실패/불확실: 요청자 화면과 우편 원장을 확인하세요');
+  // 보관 영수증은 새 replyTo의 결과에만 쓴다. 기존 delivery의 뜻은 바꾸지 않는다.
+  try{return JSON.parse(r.stdout.trim().split('\n').at(-1));}catch{return undefined;}
  });}
  // 인자 없이 부르면 늘 DB를 읽는다. 결정을 쓰는 길(요청·답변·취소·추천대로 진행)의 revision 확인은 이 갈래만 쓴다.
  // dashboard:true는 대시보드(수집·응답) 읽기 전용이다: 결정 기록이 바뀌었을 때만 DB를 다시 읽는다(dashboard-decisions.mjs).
@@ -81,13 +85,28 @@ export class DecisionStore {
  write(d){appendStream(this.home,'decisions/events.jsonl',d);return d;}
  locked(fn){assertWritable(this.home);return transaction(this.home,fn);}
  // work: 결정이 막고 있는 업무. 카드가 그 업무의 실행이 아니어도(조사 카드 등) 감시·후속 표시가 업무를 답 대기로 알아보게 한다(2026-10-07 [kyle]).
- request(card,{question,options,recommendation,reason,work,chat,reversible,notProhibited},by){let created=false;const saved=this.locked(()=>{
+ request(card,{
+  question,options,recommendation,reason,work,chat,reversible,notProhibited,bodyFile,replyTo,
+ },by){
+ let created=false;const saved=this.locked(()=>{
   if(!supervisor(by))throw new Error('사용자 결정 요청은 슈퍼감독만 작성');
+  const body=bodyFile===undefined?undefined:loadDecisionBodyFile(bodyFile);
+  if(replyTo!==undefined){
+   replyTo=required(replyTo,'원 질문 감독');
+   const rows=readLedger(this.home);
+   if(rows.some(e=>e?.broken))throw new Error('원장 손상: 원 질문 감독을 확인할 수 없습니다');
+   if(!/[\p{L}\p{N}\p{Extended_Pictographic}_]/u.test(replyTo)
+     ||!isKnownRole(rows,readActiveHierarchy(rows),replyTo))throw new Error(`알 수 없는 역할: ${replyTo}`);
+  }
   chat=chat===true;if(chat&&card!=null)throw new Error('--chat 결정은 카드 없이 업무로만 등록');
   const c=chat?null:new CardStore(this.home).get(card);this.list();
-  if(chat){if(work===undefined||String(work).trim()==='없음')throw new Error('--chat 결정은 --work <업무주소> 필요');}
+  if(chat){if(work===undefined||String(work).trim()==='없음')throw new Error('--chat 결정은 --work <업무주소> 필요\n업무와 무관한 결정은 관련 카드 키 + --work 없음으로 등록');}
   if(work!==undefined&&String(work).trim()==='없음')work=undefined;
-  else if(work!==undefined){work=required(work,'업무 주소').replace(/^work:/,'');if(new WorkStore(this.home).get(work).status!=='open')throw new Error('열린 업무만 연결');}
+  else if(work!==undefined){
+   work=required(work,'업무 주소').replace(/^work:/,'');
+   const status=new WorkStore(this.home).get(work).status;
+   if(status!=='open'&&!(chat&&status==='done'))throw new Error('열린 업무만 연결');
+  }
   else if(!chat){
    // 업무 밖 카드의 결정은 막는 업무를 밝혀야 저장한다(2026-10-08 [kyle]: 지침만으로는 --work 누락이 반복돼 감독이 15분마다 깨워졌다).
    const open=new WorkStore(this.home).list().filter(w=>w.status==='open');
@@ -98,8 +117,14 @@ export class DecisionStore {
   if(chat){ // 선택지를 안 주면 고정 선택지, 이유를 안 주면 고정 문구, 확인 경로가 없으면 '확인 경로 없음: 채팅 질문' 줄을 채운다.
    if(options===undefined){options=[...CHAT_OPTIONS];recommendation??=CHAT_OPTIONS[0];}
    reason=required(reason??'kyle에게 채팅으로 물은 질문','추천 이유/사용자 판단 필요 이유');
-   try{assertVerifyPath(question,reason)}catch{reason=`${reason}\n${CHAT_VERIFY_LINE}`}
-  }else{reason=required(reason,'추천 이유/사용자 판단 필요 이유');assertVerifyPath(question,reason);}
+   try{assertVerifyPath(question,reason)}catch{
+    reason=`${reason}\n${body?`- 확인 경로: ${body.file}`:CHAT_VERIFY_LINE}`;
+   }
+  }else{
+   reason=required(reason,'추천 이유/사용자 판단 필요 이유');
+   if(body){try{assertVerifyPath(question,reason)}catch{reason=`${reason}\n- 확인 경로: ${body.file}`;}}
+   assertVerifyPath(question,reason);
+  }
   if(!Array.isArray(options))options=options===undefined?options:[options];
   if(!Array.isArray(options)||options.length<2||options.length>4)throw new Error('선택지 2~4개 필요');
   options=options.map(x=>required(x,'선택지'));if(new Set(options).size!==options.length||!options.includes(recommendation))throw new Error('중복 없는 선택지와 일치하는 추천 필요');
@@ -117,8 +142,18 @@ export class DecisionStore {
    if(gatedDecisionText({question,reason,recommendation,options}))refuse(`금지 목록·관문·정책에 닿을 수 있는 낱말이 있습니다(${WORD_HINT})`);
   }
   const existing=this.list().find(d=>d.status==='open'&&d.requestedBy===by&&d.question===question&&(chat?d.chat===true&&d.work===work:d.card===card));
+  if(existing&&((existing.body?.sha256??null)!==(body?.sha256??null)
+    ||(existing.replyTo??null)!==(replyTo??null)))throw new Error('같은 질문의 다른 내용: 기존 요청을 취소한 뒤 새 요청');
   if(existing){if(JSON.stringify(existing.options)!==JSON.stringify(options)||existing.reason!==reason||existing.recommendation!==recommendation||(existing.reversible??null)!==(reversible??null)||Boolean(existing.notProhibited)!==Boolean(notProhibited))throw new Error('같은 질문의 다른 내용: 기존 요청을 취소한 뒤 새 요청');return existing;}
-  created=true;return this.write({id:randomUUID(),revision:1,card:chat?null:card,...(chat?{chat:true}:{}),...(work?{work}:{}),...(reversible?{reversible,notProhibited:{by,at:new Date().toISOString()}}:{}),to:'@user',requestedBy:by,question,options,recommendation,reason,status:'open',at:new Date().toISOString()});
+  created=true;
+  const d=this.write({
+   id:randomUUID(),revision:1,card:chat?null:card,...(chat?{chat:true}:{}),...(work?{work}:{}),
+   ...(reversible?{reversible,notProhibited:{by,at:new Date().toISOString()}}:{}),
+   to:'@user',requestedBy:by,question,options,recommendation,reason,status:'open',at:new Date().toISOString(),
+   ...(body?{body:{bytes:body.bytes,sha256:body.sha256}}:{}),...(replyTo?{replyTo}:{}),
+  });
+  if(body)writeDecisionBody(this.home,d,body);
+  return d;
  });
  if(created)this.announce('request',saved);return saved;}
  // 사용자 알림(디스코드 → 시스템 알림). 결정은 이미 저장된 뒤에 부르고, 알림이 실패해도 던지지 않는다(2026-10-14 [kyle]).
@@ -172,15 +207,29 @@ export class DecisionStore {
  });
  if(!newlyAnswered)return saved;
  const d=saved;
-  let delivery;try{
+  let delivery,replyDelivery,role,receipt;
+  const late=d.proceeded&&(choice??text)!==d.recommendation?` 추천대로 이미 진행됨 — 되돌리는 방법: ${d.proceeded.reversible}.`:'';
+  const message=`[kyle] 결정 답변 ${id} / ${d.chat===true?`업무 ${d.work}`:`카드 ${d.card}`}: ${text}${choice?` (선택: ${choice})`:''}.${late} decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`;
+  try{
    const rows=readLedger(this.home);if(rows.some(e=>e?.broken))throw new Error('원장 손상');
-   const role=d.chat===true?d.requestedBy:effectiveCardRole({key:d.card,role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows,new CardStore(this.home).list());
-   const late=d.proceeded&&(choice??text)!==d.recommendation?` 추천대로 이미 진행됨 — 되돌리는 방법: ${d.proceeded.reversible}.`:'';
-   this.notify(role,`[kyle] 결정 답변 ${id} / ${d.chat===true?`업무 ${d.work}`:`카드 ${d.card}`}: ${text}${choice?` (선택: ${choice})`:''}.${late} decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`);
+   role=d.chat===true?d.requestedBy:effectiveCardRole({key:d.card,role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows,new CardStore(this.home).list());
+   receipt=this.notify(role,message);
    delivery={status:'sent',role};
-  }catch(error){delivery={status:'failed',error:error.message};}
+  }catch(error){delivery={status:'failed',...(d.replyTo&&role?{role}:{}),error:error.message};}
+  if(d.replyTo){
+   if(d.replyTo===role)replyDelivery={...delivery,
+    ...(receipt?.status==='stored'?{status:'stored'}:{}),role:d.replyTo};
+   else try{
+    const reply=this.notify(d.replyTo,`${message}\n원 질문: ${d.question.split(/\r?\n/)[0]}`);
+    replyDelivery={status:reply?.status==='stored'?'stored':'sent',role:d.replyTo};
+   }catch(error){replyDelivery={status:'failed',role:d.replyTo,error:error.message};}
+  }
   this.announce('answer',d);
-  return this.locked(()=>{const current=this.get(id);if(current.revision!==saved.revision)throw new Error('통지 이후 결정 변경: 현재 상태 확인 필요');return this.write({...current,revision:current.revision+1,delivery});});
+  return this.locked(()=>{
+   const current=this.get(id);
+   if(current.revision!==saved.revision)throw new Error('통지 이후 결정 변경: 현재 상태 확인 필요');
+   return this.write({...current,revision:current.revision+1,delivery,...(replyDelivery?{replyDelivery}:{})});
+  });
  }
  // 디코 자유 답(choice 없음)은 관계없는 말이 답으로 굳을 수 있어 그 결정의 요청자만 answered 상태에서도 취소할 수 있다(2026-10-16 PR #173 검수).
  // 기록은 고치지 않고 취소 사건을 뒤에 쌓는다. 선택지 답과 디코 밖의 답은 지금처럼 취소하지 못한다. 취소하면 그 스레드에 조용한 글을 단다.
@@ -241,10 +290,18 @@ export function decisionCommand(args,flags,{home,by,notify,now,userNotify}){
  if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 [--reversible 되돌리는방법한줄 --not-prohibited(둘은 함께만 준다)] | request --chat --work <업무주소> --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음) | proceed <ID> --revision N (완전자율에서 대기 시간이 지난 --reversible을 붙인 결정만 추천대로 진행함 기록. 결정은 닫지 않음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
  if(cmd==='request'&&flags.chat){
   if(key)throw new Error('--chat 결정은 카드키 없이 --work <업무주소>로 등록');
-  const d=s.request(null,{question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,work:flags.work,chat:true,reversible:flags.reversible,notProhibited:flags['not-prohibited']},by);
+  const d=s.request(null,{
+   question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,
+   work:flags.work,chat:true,reversible:flags.reversible,notProhibited:flags['not-prohibited'],
+   bodyFile:flags['body-file'],replyTo:flags['reply-to'],
+  },by);
   return {...d,chatCloseCommand:`kadan decision cancel ${d.id} --revision ${d.revision} --reason "kyle 채팅 답: <원문>"`};
  }
- if(cmd==='request')return s.request(key,{question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,work:flags.work,reversible:flags.reversible,notProhibited:flags['not-prohibited']},by);
+ if(cmd==='request')return s.request(key,{
+  question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,
+  work:flags.work,reversible:flags.reversible,notProhibited:flags['not-prohibited'],
+  bodyFile:flags['body-file'],replyTo:flags['reply-to'],
+ },by);
  if(cmd==='proceed'){
   // 명령을 받을 때의 켜짐 구간 시작을 기억해 두고, 잠금 안에서 다시 읽은 값과 다르면 거절한다.
   const first=(now??Date.now)(),rows=readLedger(home);
@@ -252,7 +309,7 @@ export function decisionCommand(args,flags,{home,by,notify,now,userNotify}){
   return s.proceed(key,{revision:flags.revision},by,{now:now??Date.now,expectStartedAt:autopilotWingmanSnapshot(rows,first).startedAt});
  }
  if(cmd==='list')return s.list().filter(d=>!flags.status||d.status===flags.status);
- if(cmd==='show')return s.get(key);
+ if(cmd==='show'){const d=s.get(key);return {...d,...decisionBodyContent(home,d)};}
  if(cmd==='answer')return s.answer(key,{revision:flags.revision,text:flags.text,choice:flags.choice},by);
  if(cmd==='cancel')return s.cancel(key,{revision:flags.revision,reason:flags.reason},by);
  throw new Error('알 수 없는 decision 명령');

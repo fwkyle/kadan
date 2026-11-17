@@ -86,7 +86,13 @@ function LinkedDecision({id}: {id: string}) {
   if (outcome === "loading" || outcome === "open") return null;
   return <aside className="decision-linked" id={"decision-"+id} role="status">
     {outcome === "unknown" ? <p>이 링크의 결정을 찾을 수 없습니다. 이미 정리됐거나 주소가 잘못됐을 수 있습니다.</p>
-      : <><h2>{item!.questionTitle ?? item!.question}</h2><p>{outcome === "answered" ? "이미 답한 결정입니다." : "취소된 결정입니다."} {item!.answer?.text || item!.cancelReason}</p><p>{time(item!.answer?.at || item!.at)}</p></>}
+      : <>
+        <h2>{item!.questionTitle ?? item!.question}</h2>
+        <p>{outcome === "answered" ? "이미 답한 결정입니다." : "취소된 결정입니다."}
+          {" "}{item!.answer?.text || item!.cancelReason}</p>
+        <p>{time(item!.answer?.at || item!.at)}</p>
+        <DecisionBody decision={item!}/>
+      </>}
   </aside>;
 }
 function PastDecisions({newest}: {newest: boolean}) {
@@ -94,7 +100,18 @@ function PastDecisions({newest}: {newest: boolean}) {
   const resource = useResource<Stamp & {items: Decision[]; page: number; pages: number; total: number}>(`decisions?past=1&page=${page}${newest ? "&sort=newest" : ""}`), data = resource.data;
   return <>
     <ErrorMessage error={resource.error}/>
-    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}><h3>{d.questionTitle ?? d.question}</h3>{d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}<p>{d.answer?.text || d.cancelReason}</p><p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"} · 전달 {d.delivery?.status || "미기록"}</p>{d.delivery?.error && <p className="error">{d.delivery.error}</p>}{d.chat ? <p className="decision-meta"><span className="chat-tag">채팅</span>{d.work && <span className="chat-work">업무 {d.work}</span>}</p> : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}</article>)}
+    {!data ? <Loading/> : data.items.map(d=><article className="work-tile" key={d.id}>
+      <h3>{d.questionTitle ?? d.question}</h3>
+      {d.questionHtml && <div className="decision-question"><DocumentContent html={d.questionHtml}/></div>}
+      <DecisionBody decision={d}/>
+      <p>{d.answer?.text || d.cancelReason}</p>
+      <p>{time(d.answer?.at || d.at)} · {d.status === "answered"?"답변 완료":"취소"}
+        {" · "}전달 {d.delivery?.status || "미기록"}</p>
+      {d.delivery?.error && <p className="error">{d.delivery.error}</p>}
+      {d.chat ? <p className="decision-meta"><span className="chat-tag">채팅</span>
+        {d.work && <span className="chat-work">업무 {d.work}</span>}</p>
+        : <CardLink row={{key:d.card ?? "",title:"관련 카드"}}/>}
+    </article>)}
     {data && data.pages > 1 && <p><button disabled={page <= 1} onClick={()=>setPage(page-1)}>이전</button> {data.page}/{data.pages}쪽 · {data.total}건 <button disabled={page >= data.pages} onClick={()=>setPage(page+1)}>다음</button></p>}
   </>;
 }
@@ -107,6 +124,7 @@ function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Dec
     {folded && <p className="decision-folded-note">접어 둔 결정 · 추천안: {decision.recommendation}</p>}
     <div className="decision-body" id={"decision-body-"+decision.id} hidden={folded}>
     {decision.questionHtml && <div className="decision-question"><DocumentContent html={decision.questionHtml}/></div>}
+    <DecisionBody decision={decision}/>
     <div className="decision-recommendation">
       <p className="recommendation-heading"><span className="recommendation-badge">추천안</span><strong>{decision.recommendation}</strong></p>
       <div className="reason"><span>추천 이유</span>{decision.reasonHtml ? <DocumentContent html={decision.reasonHtml}/> : <p>{decision.reason}</p>}</div>
@@ -122,7 +140,31 @@ function DecisionRequest({decision, draft, folded, onToggleFold}: {decision: Dec
       const delivery=result.result.delivery;
       if(delivery?.status!=="sent") alert("답변은 저장됐지만 전달 상태를 확인해야 합니다: "+(delivery?.error || delivery?.status || "모름"));
     }}/>
-    <p className="decision-note">답변 전달을 누를 때만 보냅니다. 요청한 {decision.requestedBy}에게 한 번 알립니다.</p>
+    <p className="decision-note">{decision.replyTo
+      ? `메모는 ${decision.replyTo}에게 그대로 전달됩니다`
+      : `답변 전달을 누를 때만 보냅니다. 요청한 ${decision.requestedBy}에게 한 번 알립니다.`}</p>
     </div>
   </article>;
+}
+
+// 원문 조회는 답 양식의 형제다. 조회/접기로 기존 ActionForm을 교체하지 않는다.
+export function DecisionBody({decision}: {decision: Decision}) {
+  const [open, setOpen] = useState(false);
+  if (!decision.body) return null;
+  return <details className="decision-original" open={open}
+    onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>질문 원문 보기</summary>
+    {open && <DecisionBodyText id={decision.id}/>}
+  </details>;
+}
+
+function DecisionBodyText({id}: {id: string}) {
+  const resource = useResource<Stamp & {item: Decision | null}>(
+    `decisions?id=${encodeURIComponent(id)}`, {pollMs: 0});
+  const item = resource.data?.item;
+  if (resource.error) return <ErrorMessage error={resource.error}/>;
+  if (!resource.data) return <p>질문 원문을 불러오는 중입니다.</p>;
+  if (!item || item.bodyError || item.bodyText === undefined)
+    return <p role="alert">{item?.bodyError || "질문 원문을 읽지 못했습니다."}</p>;
+  return <pre>{item.bodyText}</pre>;
 }
