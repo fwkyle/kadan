@@ -67,7 +67,7 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --nig
 - `--deploy-branch <브랜치>`: 그 브랜치로 가는 PR만 자동 머지에서 빠진다(`deploy-branch` 보류).
 - `--deploy-branch 없음`: 배포 브랜치가 따로 없다는 값이다. 어떤 브랜치도 보류되지 않는다.
 - 값이 비어 있음(카단 설정·온톨로지 문서 모두): `setup-needed` 보류다. `없음`과 다르다.
-- `--night-merge`는 비어 있으면 허용으로 읽는다. `금지`일 때만 `night-merge-forbidden` 보류다. 허용을 분명히 남기려고 위 명령처럼 함께 준다.
+- `--night-merge`를 생략하면 기존 설정을 유지하고, 설정에 없는 칸은 온톨로지 값을 따른다. 두 원본 모두 값이 없을 때만 허용으로 읽는다. `금지`일 때만 `night-merge-forbidden` 보류다. 허용을 분명히 남기려고 위 명령처럼 함께 준다.
 
 (c) **관문의 나머지 조건.** 새 규칙이 아니라 `src/merge-gate.mjs`가 이미 보는 것이다.
 
@@ -112,7 +112,7 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --nig
 | `PR 주소의 번호(…)와 pr.number(…)가 다름`·`PR 주소에서 저장소를 읽지 못함(…)` | 감독이 풀 수 있음 | 같은 PR을 조회해 입력을 다시 만든다 |
 | `PR 저장소(…)가 업무 저장소(…)와 다름` | 감독이 풀 수 있음 | 그 PR 저장소의 업무로 다시 요청한다. 맞는 업무가 없으면 결정 요청으로 올린다 |
 | `허용된 머지 방식 없음(mergeCommitAllowed·squashMergeAllowed·rebaseMergeAllowed 모두 false)` | 결정 요청 | 저장소 설정 변경이라 사용자 결정 뒤에만 한다 |
-| `저장소 정책이 Autopilot 중 자동 머지를 안 함(setup-needed)` | 결정 요청 | 사용자가 위 (b)를 친다. 둘 다 없는 `deployBranch`가 원인이다 |
+| `저장소 정책이 Autopilot 중 자동 머지를 안 함(setup-needed)` | 결정 요청 | 먼저 `kadan autopilot repo list`·`show <소유자/이름>`로 원인을 확인해 결정 요청에 적는다. 원인별로 다르다. 두 원본(카단 설정·온톨로지 문서) 모두 배포 브랜치 값이 없음 → 사용자가 위 (b)를 친다. 정책 파일 손상 → 파일을 고치거나 옮기는 것은 사용자 결정이다. 온톨로지 읽기 실패 → 읽기 실패 내용을 확인해 결정 요청으로 올린다. 배포 브랜치는 정해졌는데 PR 대상 브랜치를 모름 → 관문 입력의 `pr.baseRefName`을 다시 받는다. 어느 경우든 `setup-needed`는 `--allow`로 풀리지 않는다. 판정 순서는 [Autopilot 저장소 정책](autopilot-repo-cards.md#합치기와-판정) |
 | `저장소 정책이 Autopilot 중 자동 머지를 안 함(night-merge-forbidden)` · `(deploy-branch)` | 결정 요청 | 사용자가 정책을 바꾸거나, 이번 켜짐 동안만 `autopilot on --allow <소유자/이름>`(사용자 원문 `--quote` 필요)으로 푼다. 이 문구에는 `— autopilot on --allow …로 풀 수 있음`이 붙는다 |
 
 `autopilot note hold`의 `--hold-kind`는 관문 거절이면 `gate`, 정책 보류면 `deploy-repo`다(고정 줄 (4)).
