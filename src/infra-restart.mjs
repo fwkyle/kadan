@@ -26,7 +26,11 @@ export async function restartInfra({ home, target, byRole = null, deps, now = Da
   if (!release) return { ok: false, code: 1, result: 'refused', message: `자동 되살리기(kadan up --auto)가 실행 중이라 재시작하지 않았습니다. 잠시 뒤 다시 kadan restart ${target}를 치세요` };
   try {
     const refuse = (message) => ({ ok: false, code: 1, result: 'refused', message });
-    if (!byRole) recoverCorruptState(home, now());   // 사람이 친 명령: 깨진 상태 파일은 .trash로 옮기고 새로 시작(up과 같다)
+    // 사람이 친 명령: 깨진 상태 파일은 휴지통으로 옮기고 새로 시작(up과 같다). 옮기지 못하면 원본 그대로 두고 거절한다(던지지 않는다).
+    if (!byRole) {
+      try { recoverCorruptState(home, now()); }
+      catch (error) { return refuse(`깨진 상태 파일(revive-state.json)을 휴지통으로 옮기지 못해 ${label}를 재시작하지 않았습니다(파일 그대로): ${error.message}`); }
+    }
     const state = readReviveState(home);
     if (state.corrupt) return refuse(`자동 되살리기 상태 파일(revive-state.json)이 손상돼 ${label}를 재시작하지 않았습니다. kyle이 kadan up으로 확인하세요`);
     const mark = state.targets[target];

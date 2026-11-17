@@ -81,6 +81,7 @@ import { cmdReopen, REOPEN_USAGE } from "./commands/reopen.mjs";
 import { cmdIdleRoles } from "./commands/idle-roles.mjs";
 import { cmdClaude } from "./commands/claude.mjs";
 import { cmdWindow, WINDOW_USAGE } from "./commands/window.mjs";
+import { cmdTrash, TRASH_USAGE } from "./commands/trash.mjs";
 import { cmdNotify } from "./commands/notify.mjs";
 import { cmdStopHook } from "./commands/stop-hook.mjs";
 import { cmdSecrets } from "./commands/secrets.mjs";
@@ -285,6 +286,7 @@ export const COMMANDS = {
   'idle-roles': cmdIdleRoles,
   claude: cmdClaude,
   window: cmdWindow,
+  trash: cmdTrash,
   notify: cmdNotify,
   "stop-hook": cmdStopHook,
   secrets: cmdSecrets,
@@ -302,7 +304,7 @@ export function adoptWindowForCommand(command, env, home, {socket, warn} = {}) {
   return adoptMachineWindow(env, home, opts);
 }
 
-const HELP_ONLY={window:WINDOW_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE,reopen:REOPEN_USAGE};
+const HELP_ONLY={window:WINDOW_USAGE,trash:TRASH_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE,reopen:REOPEN_USAGE};
 
 export function main(argv) {
   const [command, ...rest] = argv;

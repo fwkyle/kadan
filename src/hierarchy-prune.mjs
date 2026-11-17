@@ -14,6 +14,7 @@ import { storageSnapshot, storageTransaction, storageVersion } from './storage.m
 import { taskIdentity, taskConnectionError, taskEventKey } from './task-identity.mjs';
 import { effectiveWorkOwner, workEntries } from './handover-state.mjs';
 import { isEnded } from './status-labels.mjs';
+import { trashTarget } from './trash-dir.mjs';
 
 // 죽음 알림 처리 시간으로 입증된 값은 없다. 보수적인 기본 유예 시간이다.
 export const PRUNE_GRACE_MS = 24 * 60 * 60_000;
@@ -122,7 +123,7 @@ function assertNoOpenHandover(home, file) {
   }
 }
 
-export function pruneHierarchy({home, floor, file, apply = false, now = Date.now,
+export function pruneHierarchy({home, floor, file, apply = false, now = Date.now, env = process.env,
   onFullRead = null, readSnapshot = () => readPruneSnapshot(home, onFullRead),
   readCurrentSnapshot = null}) {
   // 감시기는 파일을 이미 안다. 잠금 안에서 최신 목록을 얻는 길만 사전 전체 읽기를 생략한다.
@@ -154,10 +155,9 @@ export function pruneHierarchy({home, floor, file, apply = false, now = Date.now
     }
     if (!file && fs.realpathSync(activeHierarchyPath(current.snapshot.entries)) !== resolved) throw new Error('활성 관계표 변경: 새로 미리 보세요');
     if (!current.plan.removeCount) return result(current, false);
-    const trash = path.join(home, '.trash');
-    fs.mkdirSync(trash, {recursive:true, mode:0o700});
+    // 백업은 사본이다(원본을 남긴다). 휴지통 자리만 trash-dir가 정하고, 쓰기는 wx(덮어쓰지 않음) 그대로다. 못 쓰면 적용하지 않는다.
     const stamp = new Date(now()).toISOString().replace(/[:.]/g, '-');
-    const backup = path.join(trash, `${path.basename(resolved)}.before-prune-${stamp}-${randomUUID()}`);
+    const backup = trashTarget(home, `${path.basename(resolved)}.before-prune-${stamp}-${randomUUID()}`, {env, now, mode:0o700});
     fs.writeFileSync(backup, current.original, {flag:'wx', mode:0o600});
     // SQLite는 마지막 확인과 파일 교체 동안 새 발령·카드 변경이 끼어들지 못하게 한다.
     // version==null은 저장소 없는 홈이다. 그때는 저장소를 다시 읽어 달라졌으면 중단한다.
