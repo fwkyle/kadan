@@ -143,12 +143,16 @@ export function listSeniorSessions(run) {
   });
 }
 
+// tmux가 '그런 세션·서버가 없다'고 답한 것과 그 밖의 조회 실패를 가른다. 뒤쪽은 세션이 있는지조차 모르는 것이다.
+const GONE = /can't find (?:session|window|pane)|no server running|No such file or directory|error connecting to/iu;
+const queryMiss = result => GONE.test(String(result.stderr ?? '')) ? 'no-session' : 'query-failed';
+
 // 같은 확인: 이 소켓의 그 이름 세션이 기록과 같은 생성 식별값·호출 폴더·pane PID를 갖고 있을 때만 자기 것이다.
 export function confirmOwn(record, run) {
   if (record.socket !== run.socket) return {own: false, why: 'socket-differs'};
   const format = '#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}';
   const result = run.try(['display-message', '-p', '-t', `=${record.session}:`, format]);
-  if (result.status !== 0) return {own: false, why: 'no-session'};
+  if (result.status !== 0) return {own: false, why: queryMiss(result)};
   const [pid, ask, dir] = result.stdout.replace(/\n$/u, '').split('\t');
   if (ask !== record.askId || dir !== record.dir) return {own: false, why: 'generation-differs'};
   if (String(pid) !== String(record.panePid)) return {own: false, why: 'pid-differs'};
@@ -205,26 +209,70 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
   // codex는 심볼릭 링크가 낀 작업 폴더를 거부한다(scripts/senior.sh와 같은 이유). 실제 경로로 넘긴다.
   const argv = codexArgv({out: fs.realpathSync(out), model: call.model, effort: call.effort});
   run(['new-session', '-d', '-s', session, '-x', '150', '-y', '50', '-c', out, paneCommand({gate, argv})]);
+  // 여기서부터 실패하면 방금 만든 세션을 치운다. 어디까지 했는지를 적어 두고, 치우기 전에 아는 만큼 견준다(discardSeat).
+  const made = {session, askId, dir, panePid: null, dirOption: 'none', askOption: 'none', recorded: false};
   try {
     const panePid = run(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']).trim();
     if (!/^\d+$/u.test(panePid)) throw new Error(`시니어 세션의 pane PID를 읽지 못했다: ${session}`);
+    made.panePid = panePid;
+    made.dirOption = 'tried';
     run(['set-option', '-t', `=${session}:`, '@kadan_senior_dir', dir]);
+    made.dirOption = 'set';
+    made.askOption = 'tried';
     run(['set-option', '-t', `=${session}:`, '@kadan_senior_ask', askId]);
+    made.askOption = 'set';
     const expiresAt = deadlineAt + reapMarginMs;
     const record = {askId, session, socket: run.socket, home, dir, out, gate, panePid, ownerPid, model: call.model,
       marker: markerOf(call.token), line: ASK_LINE, createdAt: new Date(now()).toISOString(), deadlineAt, expiresAt,
       timing: call.timing ?? SESSION_TIMING};
     writeRecord(dir, record);
+    made.recorded = true;
     // 예약 종료: 상한과 여유가 지나면 tmux 서버가 같은 확인 함수(reap → killOwn)를 부른다. 이름만으로 끄지 않는다.
     const delay = Math.max(1, Math.ceil((expiresAt - now()) / 1000));
     const reap = `${quote(node)} ${quote(SESSION_ENTRY)} reap ${quote(dir)}`;
     run(['run-shell', '-b', '-d', String(delay), '-t', `=${session}:`, reap]);
     return {...record, index};
   } catch (error) {
-    // 기록을 다 쓰지 못한 세션은 방금 이 잠금 안에서 이 이름(새 askId)으로 만든 것이라 이름으로 끈다.
-    if (!killOwn(dir, {run, reason: 'partial-create'}).killed) run.try(['kill-session', '-t', `=${session}`]);
+    const cleanup = discardSeat(made, run);
+    error.seatCleanup = cleanup;
+    if (!cleanup.killed && cleanup.why !== 'no-session') {
+      error.message += ` — 만든 세션 ${session}은 끄지 않았다(${cleanup.why}): 자기 것인지 확인하지 못했다`;
+    }
     throw error;
   }
+}
+
+// 만들다 만 세션의 정리. 같은 이름은 소유 근거가 아니다 — 확인이 틀리거나 불명확하면 끄지 않고 이유를 남긴다.
+//  - 기록을 쓴 뒤: 다른 길과 같은 확인(killOwn)만 쓴다. 거절되면 그대로 둔다(이유는 기록의 killSkipped).
+//  - 기록을 쓰기 전: 방금 읽은 pane PID와, 그때까지 붙인 세션 옵션(호출 폴더·askId)을 다시 읽어 같을 때만 끈다.
+//    PID를 읽지 못했으면 견줄 것이 없어 끄지 않는다. 그 세션은 문이 열리지 않은 대기 셸이라 60초 뒤 스스로 끝난다.
+// 끄지 않은 이유는 호출 폴더의 create-cleanup.json에 남긴다(기록이 없는 단계라 session.json에는 적을 수 없다).
+function discardSeat(made, run) {
+  const {session, dir} = made;
+  if (made.recorded) return killOwn(dir, {run, reason: 'partial-create'});
+  const leave = why => {
+    const note = {session, socket: run.socket, askId: made.askId, why, at: new Date().toISOString()};
+    const text = JSON.stringify(note, null, 1) + '\n';
+    try { fs.writeFileSync(path.join(dir, 'create-cleanup.json'), text, {mode: 0o600}); }
+    catch { /* 근거 기록 실패가 판정을 바꾸지 않는다 */ }
+    return {killed: false, why};
+  };
+  if (made.panePid == null) return leave('pid-unknown');
+  const format = '#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}';
+  const result = run.try(['display-message', '-p', '-t', `=${session}:`, format]);
+  // 세션이 이미 없으면 치울 것이 없다. 그 밖의 조회 실패는 있는지조차 모르는 것이라 끄지 않는다.
+  if (result.status !== 0) {
+    return queryMiss(result) === 'no-session' ? {killed: false, why: 'no-session'} : leave('query-failed');
+  }
+  const [pid, ask, optionDir] = result.stdout.replace(/\n$/u, '').split('\t');
+  if (String(pid) !== String(made.panePid)) return leave('pid-differs');
+  // 옵션은 붙이기 전이면 비어 있어야 하고, 붙였으면 그 값이어야 한다. 붙이다 실패했으면 둘 중 하나다.
+  const fits = (value, state, want) =>
+    state === 'none' ? value === '' : state === 'set' ? value === want : value === '' || value === want;
+  if (!fits(ask ?? '', made.askOption, made.askId) || !fits(optionDir ?? '', made.dirOption, dir)) {
+    return leave('generation-differs');
+  }
+  return run.try(['kill-session', '-t', `=${session}`]).status === 0 ? {killed: true} : leave('kill-failed');
 }
 
 // 자리 확보: 짧은 생성 잠금 안에서 청소 → 현재 수 → `현재 + 이번 전원 ≤ 4` → 이번 전원의 세션 만들기를 한 묶음으로 한다.
@@ -265,17 +313,21 @@ function paneAlive(run, seat) {
 
 // 한 줄을 넣는다. 바닥의 sendTmux(붙여넣기 → PID 재확인 → Enter)를 그대로 쓰되 전용 소켓 실행 함수와 기대 pane PID를 넘기고,
 // 그 실행 함수의 키 명령 직전에 화면을 새로 읽어 검사한다. 허용하는 키는 붙여넣기와 Enter뿐이다.
-export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spawn = spawnSync} = {}) {
+// 시간 상한(호출 시작부터 잰 절대 마감 seat.deadlineAt)도 키 명령 직전마다 다시 본다: 끝났으면 그 키를 보내지 않는다(why: deadline).
+export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spawn = spawnSync, now = Date.now} = {}) {
+  const expired = () => Number.isFinite(seat.deadlineAt) && now() >= seat.deadlineAt;
   const deny = (stage, why) => {
     const withheld = `시니어 세션에 키를 보내지 않는다(${stage}: ${why})`;
     return fail('KADAN_SENIOR_KEY_WITHHELD', withheld, {stage, why, withheld});
   };
   const guarded = (args, input) => {
     if (args[0] === 'paste-buffer') {
+      if (expired()) throw deny('paste', 'deadline');
       const verdict = composerReady(captureSeat(run, seat.session));
       if (!verdict.ok) throw deny('paste', verdict.why);
     } else if (args[0] === 'send-keys') {
       if (args.at(-1) !== 'Enter') throw deny('key', `허용하지 않은 키 ${args.at(-1)}`);
+      if (expired()) throw deny('enter', 'deadline');
       const verdict = composerHolds(captureSeat(run, seat.session), text);
       if (!verdict.ok) throw deny('enter', verdict.why);
     }
@@ -322,6 +374,7 @@ export function outsideGit(out, {spawn = spawnSync} = {}) {
 
 // 질문 넣기 전 관문(전원 준비의 일부). codex를 띄우고 빈 입력칸을 기다린 뒤 `/mcp`로 연결된 서버 이름을 읽어 허용 목록과 견준다.
 // 하나라도 아니면 질문을 넣지 않는다(모델 호출 0회). 반환: {ok, why?, note?, connected?}. 던지지 않는다.
+// 시간 상한이 준비 중에 끝났으면 `/mcp`도 넣지 않고 {ok: false, why: 'deadline', timeout: true}로 끝낸다.
 export async function passGate(seat, {run, home, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
   spawn = spawnSync}) {
   const evidence = {};
@@ -331,6 +384,8 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
     catch { /* 근거 기록 실패가 판정을 바꾸지 않는다 */ }
     return verdict;
   };
+  const expired = () => now() >= seat.deadlineAt;
+  const late = during => ({ok: false, why: 'deadline', timeout: true, note: `시간 상한이 끝났다(${during})`});
   const untilScreen = async (limitMs, check) => {
     const until = Math.min(now() + limitMs, seat.deadlineAt);
     for (;;) {
@@ -351,9 +406,14 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
     // 빈 입력칸이 보일 때까지만 기다린다. 업데이트 선택 창·번호 선택 창이 떠 있으면 끝내 키 0회로 실패한다.
     let ready = await untilScreen(timing.startupMs, composerReady);
     if (ready.ok) { await sleep(timing.settleMs); ready = await untilScreen(0, composerReady); }
+    // 죽은 세션은 상한과 무관하게 죽은 것이다. 그 밖에 상한이 지났으면 무엇을 기다리다 끝났든 timeout이다.
+    if (expired() && ready.why !== 'pane-dead') return done(late(ready.ok ? 'before-mcp' : `startup:${ready.why}`));
     if (!ready.ok) return done({ok: false, why: `startup:${ready.why}`});
-    try { sendLine(seat, '/mcp', {run, keyGapS: timing.keyGapS, spawn}); }
-    catch (error) { return done({ok: false, why: `key:${keyWhy(error)}`, note: error.message}); }
+    try { sendLine(seat, '/mcp', {run, keyGapS: timing.keyGapS, spawn, now}); }
+    catch (error) {
+      if (error.why === 'deadline') return done(late(`mcp-${error.stage}`));
+      return done({ok: false, why: `key:${keyWhy(error)}`, note: error.message});
+    }
     // 출력은 한 번 찍히고 바뀌지 않는다. 완전한 구간이 보이면 그 자리에서 판정하고, 연결 중·모르는 줄이면 다시 묻지 않고 거절한다.
     const block = await untilScreen(timing.mcpMs, screen => {
       const read = readMcpBlock(screen);
@@ -361,7 +421,7 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
       const back = composerReady(screen);
       return back.ok ? read : {ok: false, why: `mcp-not-closed:${back.why}`};
     });
-    if (!block.ok) return done({ok: false, why: block.why});
+    if (!block.ok) return done(expired() && block.why !== 'pane-dead' ? late(block.why) : {ok: false, why: block.why});
     evidence.connected = block.connected; evidence.disabled = block.disabled;
     const verdict = gateVerdict(block.connected, readAllow(home));
     return done(verdict.ok ? {ok: true} : {...verdict, note: gateNote(home, verdict)});
@@ -382,11 +442,17 @@ export function readAnswerFile(file, marker) {
 
 // 질문 한 줄을 넣고 끝을 기다린다. 반환: {reason: ok|empty|limit|timeout|call-failed, detail?, answer?}. 던지지 않는다.
 // ok는 (1) 답 파일이 답 후보이고 (2) 질문을 넣은 뒤 화면이 일하는 표시를 거쳐 (3) 다시 빈 입력칸으로 쉴 때만이다.
+// 이미 제출한 호출은 같은 폴링에서 완성된 답이 timeout보다 먼저다. 제출 전에 상한이 끝났으면 새 입력 없이 timeout이다.
 // 처음의 쉬는 화면이나 /mcp 출력 상태를 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
 export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
   spawn = spawnSync}) {
-  try { sendLine(seat, seat.line, {run, keyGapS: timing.keyGapS, spawn}); }
-  catch (error) { return {reason: 'call-failed', detail: `key:${keyWhy(error)} — ${error.message}`}; }
+  // 상한이 이미 끝났으면 아무것도 넣지 않는다. 넣는 도중(붙여넣기 직전·Enter 직전)에 끝나도 그 키는 나가지 않는다.
+  if (now() >= seat.deadlineAt) return {reason: 'timeout', detail: 'deadline:before-ask'};
+  try { sendLine(seat, seat.line, {run, keyGapS: timing.keyGapS, spawn, now}); }
+  catch (error) {
+    if (error.why === 'deadline') return {reason: 'timeout', detail: `deadline:${error.stage}`};
+    return {reason: 'call-failed', detail: `key:${keyWhy(error)} — ${error.message}`};
+  }
   const submittedAt = now();
   const answerFile = path.join(seat.out, 'result.txt');
   let sawWorking = false, idle = 0;

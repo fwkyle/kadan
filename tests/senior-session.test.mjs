@@ -440,6 +440,8 @@ test('부분 생성 실패 정리(F1): 기록이 있는 세션은 소유 확인�
   // 정리 때 세션 조회가 실패했다: 확인하지 못한 세션을 이름만으로 끄지 않는다.
   session = breakCreate(s, isReap, () => {}, {failQuery: true});
   assert.deepEqual(s.sessions(), [session], '조회가 실패하면 남아 있어야 한다');
+  assert.equal(readRecord(s.lastDir()).killSkipped, 'query-failed');
+  assert.equal(readRecord(s.lastDir()).endedAt, undefined, '확인하지 못한 세션을 끝난 것으로 적지 않는다');
   drop(session);
 });
 

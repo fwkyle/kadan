@@ -247,7 +247,11 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     const blocked = gates.some(gate => !gate.ok);
     calls.forEach((call, index) => {
       const gate = gates[index];
-      if (!gate.ok) call.refused = {detail: `isolation:${gate.why}`, ...(gate.note ? {note: gate.note} : {})};
+      // 관문 도중 시간 상한이 끝난 칸은 timeout이다(새 입력 없이 끝남). 그 밖의 관문 실패는 call-failed다.
+      if (gate.timeout) call.refused = {reason: 'timeout', detail: 'deadline:gate', ...(gate.note ? {note: gate.note} : {})};
+      else if (!gate.ok) call.refused = {detail: `isolation:${gate.why}`, ...(gate.note ? {note: gate.note} : {})};
+      // 함께 부른 쪽이 걸려 질문을 넣지 않는 칸: 그 사이 상한까지 지났으면 timeout, 아니면 지금처럼 call-failed다.
+      else if (blocked && now() >= started + timeoutS * 1000) call.refused = {reason: 'timeout', detail: 'deadline:before-ask'};
       else if (blocked) call.refused = {detail: 'isolation:peer-gate-failed', note: '함께 부른 시니어의 관문이 통과하지 못해 질문을 넣지 않았다'};
     });
     if (blocked) calls.forEach(closeSeat);
@@ -259,7 +263,9 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   // 판정은 그 프로세스가 쓴 outcome.json의 낱말이다. 판정 없이 끝났으면 상한 표시가 있을 때만 timeout, 아니면 call-failed다.
   const callSession = async call => {
     if (call.refused) return {reason: 'call-failed', ...call.refused, stderr: [call.refused.detail, call.refused.note].filter(Boolean).join('\n')};
-    const left = Math.max(1000, started + timeoutS * 1000 - now());
+    // 시간 상한은 호출 시작부터 잰다. 준비·관문이 끝났을 때 이미 지났으면 질문 프로세스를 띄우지 않는다(남은 시간을 올려 잡지 않는다).
+    const left = started + timeoutS * 1000 - now();
+    if (left <= 0) return {reason: 'timeout', detail: 'deadline:before-ask', stderr: 'deadline:before-ask'};
     const result = await spawn(sessionRunCommand(call.dir), {input: '', timeout: left + SESSION_GRACE_MS, reportComplete: () => false, env: {...env, KADAN_HOME: home}});
     const outcome = readOutcome(call.dir);
     const timedOut = result.error?.code === 'ETIMEDOUT' || String(result.stderr ?? '').includes('KADAN_JUDGE_TIMEOUT=1');
