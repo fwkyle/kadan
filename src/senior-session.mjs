@@ -264,7 +264,10 @@ function paneAlive(run, seat) {
 // 한 줄을 넣는다. 바닥의 sendTmux(붙여넣기 → PID 재확인 → Enter)를 그대로 쓰되 전용 소켓 실행 함수와 기대 pane PID를 넘기고,
 // 그 실행 함수의 키 명령 직전에 화면을 새로 읽어 검사한다. 허용하는 키는 붙여넣기와 Enter뿐이다.
 export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spawn = spawnSync} = {}) {
-  const deny = (stage, why) => fail('KADAN_SENIOR_KEY_WITHHELD', `시니어 세션에 키를 보내지 않는다(${stage}: ${why})`, {stage, why});
+  const deny = (stage, why) => {
+    const withheld = `시니어 세션에 키를 보내지 않는다(${stage}: ${why})`;
+    return fail('KADAN_SENIOR_KEY_WITHHELD', withheld, {stage, why, withheld});
+  };
   const guarded = (args, input) => {
     if (args[0] === 'paste-buffer') {
       const verdict = composerReady(captureSeat(run, seat.session));
@@ -279,7 +282,16 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
   // sendTmux는 붙여넣기와 Enter 사이를 `sleep 1`로 띄운다. 그 간격만 주입할 수 있게 한다(시험용).
   const sleeper = (command, args, options) =>
     command === 'sleep' ? spawn('sleep', [String(keyGapS)]) : spawn(command, args, options);
-  return sendTmux(seat.session, text, {run: guarded, expectedPid: seat.panePid, spawn: sleeper});
+  try { return sendTmux(seat.session, text, {run: guarded, expectedPid: seat.panePid, spawn: sleeper}); }
+  catch (error) {
+    // sendTmux는 붙여넣기 명령을 부르기 전에 '시도함'으로 적는다. 여기서 멈춘 것은 그 명령이 나가기 전이므로 바로잡는다.
+    if (error.code === 'KADAN_SENIOR_KEY_WITHHELD') {
+      const pasted = error.stage === 'enter';
+      error.delivery = pasted ? 'unknown' : 'not-sent';
+      error.message = `${error.withheld}${pasted ? ' — 본문은 붙었고 Enter는 보내지 않았다. 다시 넣지 않는다' : ''}`;
+    }
+    throw error;
+  }
 }
 
 function readAllow(home) {

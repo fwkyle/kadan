@@ -7,7 +7,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawn, spawnSync} from 'node:child_process';
 import {ASK_LINE, SESSION_ENTRY, SESSION_TIMING, askSeat, closeSeat, codexArgv, confirmOwn, killOwn, listSeniorSessions,
-  openSeats, passGate, readRecord, readSeniorMode, seniorSocket, seniorTmux, sweepEnded} from '../src/senior-session.mjs';
+  openSeats, passGate, readRecord, readSeniorMode, sendLine, seniorSocket, seniorTmux, sweepEnded} from '../src/senior-session.mjs';
 import {markerOf, markerParts} from '../src/senior-screen.mjs';
 
 // 시니어 대화형 세션(2026-11-17 설계): 진짜 codex 없이 가짜 대화형 화면(tests/helpers/fake-codex-tui.mjs)을 격리 소켓에 띄운다.
@@ -139,6 +139,12 @@ test('키 조건 (가): 시작 화면이 업데이트 선택 창·번호 선택 
     assert.equal(gate.ok, false, startup);
     assert.match(gate.why, /^startup:/, startup);
     assert.equal(s.keys('m1').any, 0, `${startup}: 키 0회`);
+    // 관문의 기다림과 별개로, 한 줄 넣기 자체도 붙여넣기 직전 검사에서 멈춘다(붙여넣기도 Enter도 나가지 않는다).
+    for (const line of ['/mcp', ASK_LINE]) {
+      assert.throws(() => sendLine(seat, line, {run: s.run, keyGapS: '0.1'}),
+        error => error.code === 'KADAN_SENIOR_KEY_WITHHELD' && error.stage === 'paste' && error.delivery === 'not-sent', startup);
+    }
+    assert.equal(s.keys('m1').any, 0, `${startup}: 직접 넣어도 키 0회`);
     closeSeat(seat, s.deps);
   }
 });
