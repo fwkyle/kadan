@@ -312,12 +312,21 @@ export function captureSeat(run, session) {
 }
 
 // 세션의 pane이 기록한 그 프로세스로 살아 있는가. 반환: {alive: true} | {alive: false, signal?}.
-// signal이 있으면 세션이 죽은 것이 아니라 묻는 tmux 호출이 신호로 죽은 것이다 — 감싼 프로세스가 상한에 걸리면
-// TERM이 프로세스 묶음 전체에 가서, 그때 돌던 tmux 호출도 같이 죽는다(2026-11-17 리눅스 CI에서 call-failed로 오판).
+// 감싼 프로세스가 상한에 걸리면 TERM이 프로세스 묶음 전체에 가서, 그때 돌던 tmux 호출도 같이 끝난다. 그 한 번의 답은 믿을 수 없다:
+//  - 진짜 tmux 클라이언트는 TERM을 받으면 종료 코드 0·출력 없이 끝난다(tmux 3.6a 관찰) — 답만 보면 죽은 세션과 같다.
+//    2026-11-17 리눅스 CI에서 이 답을 pane-dead로 읽어 칸이 timeout이 아니라 call-failed로 남았다.
+//  - 신호로 죽은 호출(signal이 있음)은 세션이 아니라 묻는 쪽이 죽은 것이다.
+// 그래서 살아 있다는 답이 아니면 한 번 더 묻고, 그래도 아닐 때만 죽은 것으로 본다. 신호는 한 번만 오므로 다시 물으면 제 답이 나오고,
+// 중단은 다음 대기에서 신호 처리기가 적는다.
 function paneAlive(run, seat) {
-  const result = run.try(['display-message', '-p', '-t', `=${seat.session}:`, '#{pane_pid}|#{pane_dead}']);
+  const ask = () => run.try(['display-message', '-p', '-t', `=${seat.session}:`, '#{pane_pid}|#{pane_dead}']);
+  const alive = result => result.status === 0 && result.stdout.trim() === `${seat.panePid}|0`;
+  let result = ask();
   if (result.signal) return {alive: false, signal: result.signal};
-  return {alive: result.status === 0 && result.stdout.trim() === `${seat.panePid}|0`};
+  if (alive(result)) return {alive: true};
+  result = ask();
+  if (result.signal) return {alive: false, signal: result.signal};
+  return {alive: alive(result)};
 }
 // 던져진 오류가 '신호로 죽은 tmux 호출'이면 그 신호 이름. sendTmux가 정리 실패를 묶어 던진 경우도 본다.
 const signalOf = error => error?.signal ?? error?.errors?.find(inner => inner?.signal)?.signal ?? null;

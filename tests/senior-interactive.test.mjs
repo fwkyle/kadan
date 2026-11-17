@@ -248,9 +248,9 @@ test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 
 });
 
 // 감싼 프로세스가 상한에 걸리면 TERM은 프로세스 묶음 전체에 간다. 그때 돌던 tmux 호출이 어떻게 끝나든 칸은 timeout이어야 한다.
-//  - killed: 그 호출이 신호로 죽는다(종료 코드 없음).
-//  - trap: 진짜 tmux 클라이언트처럼 TERM을 받아 스스로 끝난다(종료 코드 0·출력 없음) — 리눅스 CI에서 call-failed로 남았던 경우.
-for (const mode of ['killed', 'trap']) {
+// trap: 진짜 tmux 클라이언트처럼 TERM을 받아 스스로 끝난다(종료 코드 0·출력 없음) — 리눅스 CI에서 call-failed로 남았던 경우.
+// (그 호출이 신호로 죽는 경우는 tests/senior-session.test.mjs의 단위 시험이 본다. macOS CI 시간을 아끼려고 여기서는 하나만 돌린다.)
+for (const mode of ['trap']) {
   test(`감싼 프로세스: 상한의 TERM이 tmux 호출 도중에 와도 죽은 세션으로 읽지 않고 칸은 timeout으로 남는다 (${mode})`, {skip}, async t => {
     const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
     t.after(() => fs.rmSync(f.slowTmux, {force: true}));
