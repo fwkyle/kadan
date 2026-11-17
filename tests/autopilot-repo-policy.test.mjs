@@ -288,6 +288,56 @@ test('CLI 실행: 설정 저장, autopilot source는 없어짐, 켜짐+역할 �
   assert.equal(run(['autopilot', 'repo', 'list'], 'a-작업자').status, 0);
 });
 
+test('별칭: --auto-merge는 --night-merge와 같은 저장·원장 기록, 함께 주면 종료 2, 값 없음·잘못된 값 거절, 켜진 동안 역할 세션은 똑같이 거절', () => {
+  const run = (home, argv, role) => spawnSync(process.execPath, [CLI, ...argv], {
+    env: {...process.env, KADAN_HOME: home, KADAN_WINDOW: 'none', KADAN_ROLE: role ?? ''}, encoding: 'utf8', timeout: 20_000});
+  // 시각·고유값을 뺀 정책 원장 줄 모양과 저장 결과(시각 칸 제외)만 견준다.
+  const shape = home => ({
+    saved: Object.fromEntries(Object.entries(readPolicy(home).repos['acme/site']).filter(([k]) => k !== 'at')),
+    ledger: readLedger(home).filter(e => e.kind === 'autopilot-repo-policy').map(({repo, before, after, by}) => ({repo, before, after, by})),
+  });
+  const homes = {new: tmp('kadan-alias-new-'), old: tmp('kadan-alias-old-')};
+  for (const value of ['금지', '허용']) {
+    assert.equal(run(homes.new, ['autopilot', 'repo', 'acme/site', '--auto-merge', value]).status, 0);
+    assert.equal(run(homes.old, ['autopilot', 'repo', 'acme/site', '--night-merge', value]).status, 0);
+    assert.deepEqual(shape(homes.new), shape(homes.old), value);
+  }
+  assert.equal(shape(homes.new).saved.nightMerge, '허용'); // 같은 저장 칸(nightMerge)
+  assert.equal(shape(homes.new).ledger.length, 2);
+  // 새 이름으로 쓴 결과가 같은 출력(저장 줄·판정 줄)으로 보이고 사용법은 새 이름을 먼저, 옛 이름도 받는다고 알린다.
+  const usage = run(homes.new, ['autopilot', 'repo']).stdout;
+  assert.match(usage, /--auto-merge 허용\|금지 \(옛 이름 --night-merge도 받음\)/);
+  assert.ok(usage.indexOf('--auto-merge') < usage.indexOf('--night-merge'));
+  // 둘 다 주면 거절(종료 2), 어느 쪽 값도 저장되지 않는다. 순서를 바꿔도 같고, 값이 같아도 거절한다.
+  const home = tmp('kadan-alias-both-');
+  for (const argv of [['--auto-merge', '금지', '--night-merge', '허용'], ['--night-merge', '허용', '--auto-merge', '금지'], ['--auto-merge', '허용', '--night-merge', '허용']]) {
+    const both = run(home, ['autopilot', 'repo', 'acme/site', ...argv]);
+    assert.equal(both.status, 2, argv.join(' '));
+    assert.match(both.stderr, /함께 줄 수 없습니다/);
+  }
+  assert.ok(!fs.existsSync(policyPath(home)));
+  assert.equal(readLedger(home).filter(e => e.kind === 'autopilot-repo-policy').length, 0);
+  // 값 없음·잘못된 값·값 둘은 옛 플래그와 똑같이 거절된다.
+  for (const flag of ['--auto-merge', '--night-merge']) {
+    const none = run(home, ['autopilot', 'repo', 'acme/site', flag]);
+    assert.equal(none.status, 1, flag);
+    assert.match(none.stderr, new RegExp(`${flag}에는 값이 하나 필요`));
+    const bad = run(home, ['autopilot', 'repo', 'acme/site', flag, 'merge']);
+    assert.equal(bad.status, 1, flag);
+    assert.match(bad.stderr, /허용\|금지/);
+    assert.equal(run(home, ['autopilot', 'repo', 'acme/site', flag, '허용', '금지']).status, 1, flag); // 값 둘: 예전 merge|hold 쓰기 거절과 같은 길
+  }
+  assert.ok(!fs.existsSync(policyPath(home)));
+  // 켜진 동안 역할 세션은 새 이름으로도 옛 이름과 똑같이 거절된다(위치 인자 기준 거절이라 플래그와 무관). 저장은 그대로다.
+  autopilotOn(home);
+  assert.equal(run(home, ['autopilot', 'repo', 'acme/kadan', '--deploy-branch', 'main'], 'a-작업자').status, 2);
+  const outputs = ['--auto-merge', '--night-merge'].map(flag => run(home, ['autopilot', 'repo', 'acme/kadan', flag, '허용'], 'a-작업자'));
+  for (const denied of outputs) { assert.equal(denied.status, 2, denied.stderr); assert.match(denied.stderr, /Autopilot이 켜져 있어/); }
+  assert.equal(outputs[0].stderr, outputs[1].stderr);
+  assert.ok(!fs.existsSync(policyPath(home)));
+  assert.equal(run(home, ['autopilot', 'repo', 'list'], 'a-작업자').status, 0);
+});
+
 function fakeReq(method, pathname, {body = '', remote = false, origin, host = '127.0.0.1:1'} = {}) {
   const chunks = body ? [Buffer.from(body)] : [];
   return {method, url: pathname, headers: {host, 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', ...(origin ? {origin} : {})}, kadanRemote: remote || undefined,

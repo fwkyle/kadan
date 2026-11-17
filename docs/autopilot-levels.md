@@ -61,13 +61,13 @@ kyle이 자리를 비울 때 켜는 Autopilot을 "켜고 끄는 스위치"로 �
 (b) **저장소 정책.** 사용자가 사람 셸에서 한 번 친다.
 
 ```
-kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용
+kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --auto-merge 허용
 ```
 
 - `--deploy-branch <브랜치>`: 그 브랜치로 가는 PR만 자동 머지에서 빠진다(`deploy-branch` 보류).
 - `--deploy-branch 없음`: 배포 브랜치가 따로 없다는 값이다. 어떤 브랜치도 보류되지 않는다.
 - 값이 비어 있음(카단 설정·온톨로지 문서 모두): `setup-needed` 보류다. `없음`과 다르다.
-- `--night-merge`를 생략하면 기존 설정을 유지하고, 설정에 없는 칸은 온톨로지 값을 따른다. 두 원본 모두 값이 없을 때만 허용으로 읽는다. `금지`일 때만 `night-merge-forbidden` 보류다. 허용을 분명히 남기려고 위 명령처럼 함께 준다.
+- `--auto-merge`(옛 이름 `--night-merge`도 같은 뜻으로 받는다. 둘을 함께 주면 종료 코드 2로 거절)를 생략하면 기존 설정을 유지하고, 설정에 없는 칸은 온톨로지 값을 따른다. 두 원본 모두 값이 없을 때만 허용으로 읽는다. `금지`일 때만 `night-merge-forbidden` 보류다. 허용을 분명히 남기려고 위 명령처럼 함께 준다.
 
 (c) **관문의 나머지 조건.** 새 규칙이 아니라 `src/merge-gate.mjs`가 이미 보는 것이다.
 
@@ -83,7 +83,7 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --nig
 ### 누가 하나
 
 - **브랜치 보호·CI 도입·저장소 설정은 저장소 설정 변경이다.** 고정 줄 (2)의 "계정·권한·인증과 시스템 설정 변경"에 걸리는 것으로 다룬다. 슈퍼감독이 스스로 만들지 않고 결정 요청으로 올리며 사용자 결정 뒤에 진행한다(감독이 풀 수 없는 거절은 결정 요청으로도 올린다는 기존 줄, `skills/kadan-super/SKILL.md`의 "Autopilot이 켜진 동안"). CI 파일(`.github/workflows/**`)을 넣는 PR은 금지 경로라서 그 PR 자체는 자동 머지되지 않고 사용자 승인 머지로 간다.
-- **저장소 정책 쓰기는 사용자만 한다.** 켜진 동안 역할 세션에서 치면 코드(`src/autopilot-guard.mjs`)가 거절하고, 읽기(`autopilot repo`·`list`·`show`)만 통한다. 거절 문구는 다음과 같다.
+- **저장소 정책 쓰기는 사용자만 한다.** 켜진 동안 역할 세션에서 치면 코드(`src/autopilot-guard.mjs`)가 거절하고, 읽기(`autopilot repo`·`list`·`show`)만 통한다. 사용자가 슈퍼감독에게 이 명령을 대신 치라고 명시로 요청하면 슈퍼감독이 사람 명의로 칠 수 있고, 그때 사용자 원문을 Autopilot 기록(`kadan autopilot note decision …` 등 기존 기록 경로)에 남긴다. 역할 세션 거절 장치는 그대로다(새 권한을 코드로 만들지 않는다). 거절 문구는 다음과 같다.
 
   ```
   Autopilot이 켜져 있어 역할 세션에서는 `kadan autopilot repo <소유자/이름>`를 쓸 수 없습니다. kyle이 직접 치거나 Autopilot을 끈 뒤 하세요
@@ -121,12 +121,12 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --nig
 
 ```
 저장소 <소유자/이름>을 Autopilot 중 자동 머지에 넣으려면 아래를 사람 셸에서 한 번 쳐 주세요.
-kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용
+kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --auto-merge 허용
 바뀌는 것: 이 저장소의 배포 브랜치와 자동 머지 허용이 카단 설정에 저장됩니다(다른 저장소와 저장소 설정은 그대로).
 이 저장소에 필수 검사가 걸린 브랜치 보호가 없으면 위 명령만으로는 자동 머지되지 않습니다.
 ```
 
-`--night-merge`는 옛 이름 그대로 쓴다(이름 별칭은 별도 업무).
+옛 이름 `--night-merge`도 같은 뜻으로 받는다(저장 칸 `nightMerge`·온톨로지 `night_merge`·보류 이유 `night-merge-forbidden`은 그대로).
 
 ## 운영 순서 (옛·새 프로그램이 섞이는 기간)
 
