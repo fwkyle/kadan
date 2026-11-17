@@ -23,7 +23,7 @@ env.KADAN_NOTIFY = 'off';
 delete env.KADAN_TEST_NOTIFY_SINK; // 시험 파일이 필요할 때 스스로 넣는다
 env.KADAN_ALT_CHECK_MS ??= '0'; // 시작 뒤 풀스크린 확인의 기다림을 끈다(전용 시험만 켠다)
 if (isDefaultHome(env.KADAN_HOME)) delete env.KADAN_HOME; // 운영 홈 값은 지운다
-for (const name of ['KADAN_ROLE', 'KADAN_ROTTIE_BIN', 'KADAN_LITE_SOCKET', 'KADAN_LITE_HOME',
+for (const name of ['KADAN_ROLE', 'KADAN_ROTTIE_BIN', 'KADAN_TRASH_DIR', 'KADAN_LITE_SOCKET', 'KADAN_LITE_HOME',
   'KADAN_ALLOW_LIVE_FLOOR', 'KADAN_ALLOW_FAKE_ROTTIE']) {
   delete env[name];
 }

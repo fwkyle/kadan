@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { moveToTrash } from './trash-dir.mjs';
 
 export const AUTOSTART_LABEL = 'dev.kadan.up';
 export const START_INTERVAL_S = 60;
@@ -87,7 +88,7 @@ export function staleAutostartPaths(plistText) {
 // 경고 한 항목을 사람이 읽는 말로 바꾼다. 출력하는 쪽(quickstart.mjs)이 쓴다.
 export const describeStale = (s) => s.reason === NO_REQUIRED_ARG ? `${s.what}: ${NO_REQUIRED_ARG}` : `${s.what}=${s.path} (${s.reason ?? '없음'})`;
 
-// show: 만들 파일을 보여 주기만 한다. install: 없을 때만 쓴다(다른 내용이 있으면 remove 먼저). remove: 지우지 않고 .trash로 옮긴다.
+// show: 만들 파일을 보여 주기만 한다. install: 없을 때만 쓴다(다른 내용이 있으면 remove 먼저). remove: 지우지 않고 휴지통(기본 $KADAN_HOME/.trash)으로 옮긴다.
 export function autostartCommand(action, { home, cli, node = process.execPath, cwd = process.cwd(), env = process.env, userHome = os.homedir(), now = new Date() } = {}) {
   const file = autostartPath(userHome);
   const content = autostartPlist({ node, cli, cwd, env, logPath: path.join(home, 'autostart.log') });
@@ -110,10 +111,9 @@ export function autostartCommand(action, { home, cli, node = process.execPath, c
   }
   if (action === 'remove') {
     if (!exists) return { file, installed: false, changed: false };
-    const trash = path.join(home, '.trash', 'autostart-' + now.toISOString().replace(/[:.]/g, '-'));
-    fs.mkdirSync(trash, { recursive: true });
-    fs.renameSync(file, path.join(trash, path.basename(file)));
-    return { file, installed: false, changed: true, movedTo: path.join(trash, path.basename(file)) };
+    // 옮기지 못하면 던진다. 설치 파일(plist)은 그대로 남는다.
+    const movedTo = moveToTrash(home, file, path.join('autostart-' + now.toISOString().replace(/[:.]/g, '-'), path.basename(file)), { env, now });
+    return { file, installed: false, changed: true, movedTo };
   }
   throw new Error('사용법: kadan autostart show|status|install|remove');
 }

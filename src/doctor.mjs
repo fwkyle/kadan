@@ -8,6 +8,7 @@ import {legacyTrace, storageMode, storageSnapshot} from './storage.mjs';
 import {readSystemLedger} from './ledger.mjs';
 import {dashboardBuild, DASHBOARD_BUILD_COMMAND} from './dashboard-static.mjs';
 import {readReviveState, TARGETS, REVIVE_LABELS} from './revive.mjs';
+import {describeTrash} from './trash-dir.mjs';
 import {inspectSecretaryCheckpoint} from './secretary-resume.mjs';
 import {autostartCommand, describeStale} from './autostart.mjs';
 import {readWindowSetting} from './window-setting.mjs';
@@ -67,7 +68,7 @@ function checkStorage({home}) {
 function checkBase({home, probes}) {
   const state = readReviveState(home);
   if (state.corrupt) {
-    return result('blocked', 'revive-state.json이 깨져 자동 되살리기가 멈춘다', 'kadan up  (깨진 파일은 .trash로 옮기고 새로 시작한다)');
+    return result('blocked', 'revive-state.json이 깨져 자동 되살리기가 멈춘다', `kadan up  (깨진 파일은 ${describeTrash(home)}로 옮기고 새로 시작한다)`);
   }
   const rows = [];
   for (const target of TARGETS) {

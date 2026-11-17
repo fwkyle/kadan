@@ -362,7 +362,8 @@ test('F4: 상태 파일이 깨졌으면 --auto는 모두 건너뛰고 울림 1�
   assert.equal(readReviveState(home).corrupt, undefined);
   // 사람이 친 stop도 깨진 파일을 옮기고 새로 표시한다
   fs.writeFileSync(file, '[1,2');
-  assert.ok(markStopped(home, '디코'));
+  // 앞의 up과 같은 밀리초면 옮긴 파일 이름이 같다. 휴지통은 같은 이름을 덮지 않고 거절하므로 시각을 1ms 뒤로 준다.
+  assert.ok(markStopped(home, '디코', {now: Date.now() + 1}));
   assert.equal(readReviveState(home).targets.디코.state, 'stopped');
   assert.ok(recoverCorruptState(home) === null);
 });
