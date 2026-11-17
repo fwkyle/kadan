@@ -10,6 +10,7 @@
 //   - handover: 사슬 위 start 이후~다음 start 이전에 그 역할로 들어온 handover의 from 역할이 그 시점에 가진 마지막 start (거기서 다시 거슬러 올라감)
 // 이름이 같아도 위 연결이 없으면 남이다. 새 독립 start는 빈 목록에서 시작한다.
 import { startDigest } from "./secretary-resume.mjs";
+import { roleFromSession } from "./cli-tree.mjs";
 
 export const LINEAGE_LIMIT = 10;
 
@@ -47,8 +48,8 @@ export function buildLineage(entries) {
   const seenHandover = new Set();
   entries.forEach((entry, order) => {
     if (entry?.kind === "start") {
-      // 이름 재사용 안내(start.mjs)와 같은 옛 session 해석. 교체 계보의 role 판정은 바꾸지 않는다.
-      const role = entry.role ?? entry.session?.replace(/^kadan-/, "");
+      // tree와 같은 함수·규칙으로 이름을 읽는다. 교체 계보의 role 판정은 바꾸지 않는다.
+      const role = entry.role || roleFromSession(entry.session);
       if (role && !firstStartedAt.has(role)) {
         const t = entry.t;
         firstStartedAt.set(role, typeof t === "string" && Number.isFinite(Date.parse(t)) ? t : null);

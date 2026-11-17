@@ -77,7 +77,7 @@ test('tree 기억: 같은 사건의 두 번째 요약과 무관한 사건 추가
   assert.equal(wallCache.stats().lineage.miss, before.miss + 1);
 }));
 
-test('가짜 홈의 실제 kadan tree 명령: 값과 null을 모두 내보낸다(서버·tmux 호출 없음)', () => fixture(home => {
+function cliSummary(home, liveSessions = sessions) {
   const preload = path.join(home, 'fake-floor.mjs');
   const cli = new URL('../src/cli.mjs', import.meta.url);
   const floorModule = new URL('../src/floor.mjs', import.meta.url);
@@ -89,15 +89,42 @@ test('가짜 홈의 실제 kadan tree 명령: 값과 null을 모두 내보낸다
     `childProcess.spawnSync = (cmd, ...args) => cmd === 'tmux'\n` +
     `  ? { status: 1, stdout: '', stderr: 'fixture: tmux disabled' } : spawn(cmd, ...args);\n` +
     `syncBuiltinESMExports();\n` +
-    `floor.list = () => ${JSON.stringify(sessions)};\n`);
+    `floor.list = () => ${JSON.stringify(liveSessions)};\n`);
   const result = spawnSync(process.execPath, ['--import', preload, cli.pathname, 'tree'], {
     env: { ...process.env, KADAN_HOME: home, KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off' },
     encoding: 'utf8', timeout: 20_000,
   });
   assert.equal(result.status, 0, result.stderr);
-  const live = JSON.parse(result.stdout).liveRoles;
+  return JSON.parse(result.stdout);
+}
+
+test('가짜 홈의 실제 kadan tree 명령: 값과 null을 모두 내보낸다(서버·tmux 호출 없음)', () => fixture(home => {
+  const live = cliSummary(home).liveRoles;
   assert.equal(live.find(r => r.role === first.role).firstStartedAt, first.t);
   assert.equal(live.find(r => r.role === '시각-기록없음').firstStartedAt, null);
   console.log(`가짜 KADAN_HOME: ${home}`);
   console.log(`kadan tree liveRoles 원문: ${JSON.stringify(live)}`);
 }));
+
+const firstTime = '2036-11-17T00:01:00Z';
+for (const sample of [
+  { name: '빈 role + 뒤 정상 start', role: '', t: firstTime, later: true, expected: firstTime },
+  { name: '빈 role의 첫 날짜 오류 + 뒤 정상 start', role: '', t: 'invalid', later: true, expected: null },
+  { name: '빈 role start 하나만', role: '', t: firstTime, later: false, expected: firstTime },
+  { name: 'role 없음 대조', role: undefined, t: firstTime, later: true, expected: firstTime },
+  { name: 'role null 대조', role: null, t: firstTime, later: true, expected: firstTime },
+]) {
+  test(`F1 실제 CLI: ${sample.name}`, () => fixture(home => {
+    const role = 'fixture-empty-role';
+    const session = `kadan-${role}`;
+    appendLedger({ kind: 'start', role: sample.role, session, t: sample.t, panePid: 101 }, home);
+    if (sample.later) {
+      appendLedger({ kind: 'start', role, session, t: '2036-11-17T00:09:00Z', panePid: 102 }, home);
+    }
+    const live = cliSummary(home, [{ session, pid: sample.later ? 102 : 101, alive: true }]).liveRoles;
+    const got = live.find(r => r.role === role);
+    console.log(`F1 실제 CLI: ${JSON.stringify({ name: sample.name, home, expected: sample.expected, got })}`);
+    assert.equal(got.firstStartedAt, sample.expected);
+    assert.deepEqual(got.supersedes, []);
+  }));
+}
