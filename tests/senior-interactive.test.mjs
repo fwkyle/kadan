@@ -20,7 +20,8 @@ const FAKE = new URL('./helpers/fake-codex-tui.mjs', import.meta.url).pathname;
 const SENIOR = new URL('../src/senior.mjs', import.meta.url).href;
 const REAL_TMUX = spawnSync('which', ['tmux'], {encoding: 'utf8'}).stdout.trim();
 const skip = !REAL_TMUX;
-const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 10_000, mcpMs: 2500, submitGraceMs: 1200, keyGapS: '0.2'};
+// 여유는 넉넉히 둔다: CI는 시험 파일을 병렬로 돌려 가짜 화면이 늦게 그릴 수 있다. 기다리는 값은 정상 경로의 시간을 늘리지 않는다.
+const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.6'};
 const models = ['gpt-6-astra', 'gpt-6-sol'].map(slug => ({slug, supported_reasoning_levels: ['low', 'high'].map(effort => ({effort}))}));
 const readCodexModels = () => ({models});
 const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, SOL = {runner: 'codex', model: 'gpt-6-sol', effort: 'low'};
@@ -207,7 +208,7 @@ await seniorCommand(['qa/card-a'], {question: '바꿀까?', timeout: '120'}, {ho
 test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프로세스가 TERM을 받으면 자기 세션을 끄고 나가며 칸은 timeout으로 남는다', {skip}, async t => {
   const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
   // 기존 호출 프로세스(runJudgeProcess)의 상한만 짧게 준다: 상한에 걸리면 감싼 프로세스 묶음에 TERM이 간다.
-  const error = await f.run({timeout: '60'}, {spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 2500})})
+  const error = await f.run({timeout: '60'}, {spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})})
     .then(() => assert.fail('실패해야 한다'), e => e);
   assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
   const [entry] = f.advices();

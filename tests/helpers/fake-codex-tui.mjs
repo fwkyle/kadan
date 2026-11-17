@@ -14,7 +14,7 @@ const DEFAULTS = {
   afterPasteOn: 'ask',        // mcp | ask — 어느 붙여넣기에서 바뀌는가
   answer: 'ok',               // ok | marker-only | marker-twice | none | partial | working-forever | instant | limit | capacity
                               // | limit-in-answer | exit | big | symlink
-  workMs: 400,
+  workMs: 1200,
 };
 
 const arg = name => { const at = process.argv.indexOf(name); return at > 0 ? process.argv[at + 1] : null; };

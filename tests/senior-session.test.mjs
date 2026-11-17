@@ -15,7 +15,8 @@ import {markerOf, markerParts} from '../src/senior-screen.mjs';
 const FAKE = new URL('./helpers/fake-codex-tui.mjs', import.meta.url).pathname;
 const REAL_TMUX = spawnSync('which', ['tmux'], {encoding: 'utf8'}).stdout.trim();
 const skip = !REAL_TMUX;
-const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 10_000, mcpMs: 2500, submitGraceMs: 1200, keyGapS: '0.2'};
+// 여유는 넉넉히 둔다: CI는 시험 파일을 병렬로 돌려 가짜 화면이 늦게 그릴 수 있다. 기다리는 값은 정상 경로의 시간을 늘리지 않는다.
+const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.6'};
 const TOKEN = '0a1b2c3d';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let seq = 0;
@@ -201,7 +202,8 @@ test('관문: 허용 목록 없음·목록 밖 이름·/mcp 못 읽음·out이 g
     const bad = setup(t, {default: plan});
     bad.allow(['codex_worktrees', 'fixture-a']);
     const [seat] = bad.open();
-    const gate = await passGate(seat, bad.deps);
+    // 잘린 출력은 상한까지 기다린 뒤 거절한다(여기서는 상한을 짧게 준다). 나머지 둘은 보자마자 거절한다.
+    const gate = await passGate(seat, {...bad.deps, timing: {...TIMING, mcpMs: 1500}});
     assert.equal(gate.ok, false); assert.equal(gate.why, why);
     assert.deepEqual(bad.keys('m1').submitted, ['/mcp']);
     closeSeat(seat, bad.deps);
@@ -242,7 +244,7 @@ test('ok 오판 막기: 옛 답 파일이 있으면 부르지 않고, 일하는 
   assert.deepEqual(old.sessions(), []);
   const s = setup(t, {default: {answer: 'working-forever'}});
   s.allow(['codex_worktrees', 'fixture-a']);
-  const [seat] = s.open(1, {deadlineAt: Date.now() + 4000});
+  const [seat] = s.open(1, {deadlineAt: Date.now() + 9000});
   assert.deepEqual(await passGate(seat, s.deps), {ok: true});
   // 답 파일은 이미 완성된 표지를 갖고 있지만 화면이 계속 일하는 중이다.
   assert.deepEqual(await askSeat(seat, s.deps), {reason: 'timeout', detail: 'deadline'});

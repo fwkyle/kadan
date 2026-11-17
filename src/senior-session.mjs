@@ -89,7 +89,9 @@ export function seniorTmux({socket, home, env = process.env, spawn = spawnSync})
 }
 
 // 실행 꼴은 코드에 고정한다(실행기 표의 spawn 틀은 작업자용이라 쓰지 않는다). -s·-a는 반드시 준다(사용자 기본값이 더 넓을 수 있다).
-// codex 설정 폴더(CODEX_HOME)는 건드리지 않는다. 업데이트 확인 끄기 -c는 듣는지 확인하지 못했다 — 실제 방어는 키 조건이다.
+// codex 설정 폴더(CODEX_HOME)는 건드리지 않는다. 업데이트 확인 끄기 -c는 로그인 안 된 시험 홈에서 선택 창을 막는 것을 관찰했다
+// (2026-11-17, codex 0.166: 옵션 없이 2회 모두 창이 뜨고 옵션을 주면 2회 모두 안 뜸). 로그인된 사용자 설정에서는 확인하지 못했다.
+// 실제 방어는 여전히 키 조건이다.
 export function codexArgv({out, model, effort}) {
   if (!/^[A-Za-z0-9._\/\-\[\]]+$/u.test(String(model))) throw new Error(`시니어 모델 형식 오류: ${model}`);
   if (!/^[A-Za-z0-9._-]+$/u.test(String(effort))) throw new Error(`시니어 강도 형식 오류: ${effort}`);
@@ -333,7 +335,10 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
     const until = Math.min(now() + limitMs, seat.deadlineAt);
     for (;;) {
       if (!paneAlive(run, seat)) return {ok: false, why: 'pane-dead'};
-      const verdict = check(evidence.screen = captureSeat(run, seat.session));
+      // 살아 있음을 본 직후에 세션(마지막 세션이면 서버까지)이 사라지면 화면 읽기가 던진다. 그것도 죽은 pane이다.
+      let screen;
+      try { screen = captureSeat(run, seat.session); } catch { return {ok: false, why: 'pane-dead'}; }
+      const verdict = check(evidence.screen = screen);
       if (verdict.ok || verdict.final) return verdict;
       if (now() >= until) return {ok: false, why: verdict.why};
       await sleep(Math.min(timing.pollMs, 500));
