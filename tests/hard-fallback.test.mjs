@@ -15,6 +15,7 @@ import {exportPreset, importPreset} from '../src/runner-export.mjs';
 import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
 import {readLedger} from '../src/ledger.mjs';
 import {createWallServer} from '../src/wall.mjs';
+import {runnersData} from '../src/dashboard/settings.mjs';
 
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 const choice = (model, effort = 'high') => ({runner: 'codex', model, effort});
@@ -307,4 +308,12 @@ test('화면 프리셋 저장: 자리와 대체 후보를 함께 저장하고, �
     assert.equal(l.stdout.trim(), '');
     console.log(`검증 서버 종료: PID ${process.pid}, 127.0.0.1:${port}, lsof LISTEN 없음`);
   }
+});
+
+test('대시보드 설정 응답: 어려운 일 대체 후보 목록이 settings에 그대로 실리고 자리 명령도 채워진다', () => {
+  const f = makeHome({hardFallback: [choice('gpt-hard-2')]});
+  const data = runnersData({home: f.home, entries: []}, new URL('http://127.0.0.1/'), {});
+  assert.deepEqual(data.settings.presets.A.fallback['worker-hard'], [choice('gpt-hard-2')]);
+  assert.match(data.commands['worker-hard'], /--model gpt-hard/);
+  assert.equal(data.roles['worker-hard'], '어려운 일 작업자');
 });
