@@ -16,7 +16,7 @@ const FAKE = new URL('./helpers/fake-codex-tui.mjs', import.meta.url).pathname;
 const REAL_TMUX = spawnSync('which', ['tmux'], {encoding: 'utf8'}).stdout.trim();
 const skip = !REAL_TMUX;
 // 여유는 넉넉히 둔다: CI는 시험 파일을 병렬로 돌려 가짜 화면이 늦게 그릴 수 있다. 기다리는 값은 정상 경로의 시간을 늘리지 않는다.
-const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.6'};
+const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.3'};
 const TOKEN = '0a1b2c3d';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let seq = 0;
@@ -132,7 +132,7 @@ test('정상: 관문을 지나 한 줄을 넣고 일하는 표시 뒤 빈 입력
 });
 
 test('키 조건 (가): 시작 화면이 업데이트 선택 창·번호 선택 창이면 키를 하나도 보내지 않고 관문에서 끝난다', {skip}, async t => {
-  for (const startup of ['update', 'choice']) {
+  await Promise.all(['update', 'choice'].map(async startup => {
     const s = setup(t, {default: {startup}});
     s.allow(['codex_worktrees', 'fixture-a']);
     const [seat] = s.open();
@@ -147,76 +147,93 @@ test('키 조건 (가): 시작 화면이 업데이트 선택 창·번호 선택 
     }
     assert.equal(s.keys('m1').any, 0, `${startup}: 직접 넣어도 키 0회`);
     closeSeat(seat, s.deps);
-  }
+  }));
 });
 
 test('키 조건 (나): 붙인 뒤 업데이트 선택 창으로 바뀌면 Enter 0회, 자기 한 줄이 정상 입력칸에 있으면 Enter 1회', {skip}, async t => {
   // /mcp를 붙인 직후 창이 바뀐다 → Enter가 나가지 않는다(업데이트가 시작되지 않는다).
-  const a = setup(t, {default: {afterPaste: 'update', afterPasteOn: 'mcp'}});
-  a.allow(['codex_worktrees', 'fixture-a']);
-  const [seatA] = a.open();
-  const gate = await passGate(seatA, a.deps);
-  assert.equal(gate.ok, false);
-  assert.match(gate.why, /^key:(selection-below-composer|composer-not-own-line)$/);
-  assert.equal(a.keys('m1').enter, 0); assert.equal(a.keys('m1').overlayEnter, 0); assert.equal(a.keys('m1').any, 1);
-  closeSeat(seatA, a.deps);
+  const onMcp = async () => {
+    const a = setup(t, {default: {afterPaste: 'update', afterPasteOn: 'mcp'}});
+    a.allow(['codex_worktrees', 'fixture-a']);
+    const [seat] = a.open();
+    const gate = await passGate(seat, a.deps);
+    assert.equal(gate.ok, false);
+    assert.match(gate.why, /^key:(selection-below-composer|composer-not-own-line)$/);
+    assert.equal(a.keys('m1').enter, 0); assert.equal(a.keys('m1').overlayEnter, 0); assert.equal(a.keys('m1').any, 1);
+    closeSeat(seat, a.deps);
+  };
   // 질문 줄을 붙인 직후 창이 바뀐다 → 관문의 Enter 1회(/mcp)만 있고 질문의 Enter는 없다.
-  const b = setup(t, {default: {afterPaste: 'update', afterPasteOn: 'ask'}});
-  b.allow(['codex_worktrees', 'fixture-a']);
-  const [seatB] = b.open();
-  assert.deepEqual(await passGate(seatB, b.deps), {ok: true});
-  const outcome = await askSeat(seatB, b.deps);
-  assert.equal(outcome.reason, 'call-failed');
-  assert.match(outcome.detail, /^key:(selection-below-composer|composer-not-own-line) /);
-  assert.equal(b.keys('m1').enter, 1); assert.equal(b.keys('m1').overlayEnter, 0);
-  assert.deepEqual(b.keys('m1').submitted, ['/mcp']);
-  closeSeat(seatB, b.deps);
+  const onAsk = async () => {
+    const b = setup(t, {default: {afterPaste: 'update', afterPasteOn: 'ask'}});
+    b.allow(['codex_worktrees', 'fixture-a']);
+    const [seat] = b.open();
+    assert.deepEqual(await passGate(seat, b.deps), {ok: true});
+    const outcome = await askSeat(seat, b.deps);
+    assert.equal(outcome.reason, 'call-failed');
+    assert.match(outcome.detail, /^key:(selection-below-composer|composer-not-own-line) /);
+    assert.equal(b.keys('m1').enter, 1); assert.equal(b.keys('m1').overlayEnter, 0);
+    assert.deepEqual(b.keys('m1').submitted, ['/mcp']);
+    closeSeat(seat, b.deps);
+  };
+  await Promise.all([onMcp(), onAsk()]);
 });
 
 test('관문: 허용 목록 없음·목록 밖 이름·/mcp 못 읽음·out이 git 안이면 질문을 넣지 않는다(모델 호출 0회)', {skip}, async t => {
-  // 허용 목록 파일 없음: 거절하고 지금 연결된 이름을 보여 준다. 파일을 스스로 만들지 않는다.
-  const none = setup(t);
-  const [seat1] = none.open();
-  const missing = await passGate(seat1, none.deps);
-  assert.equal(missing.why, 'allow-missing');
-  assert.match(missing.note, /senior-mcp-allow.*codex_worktrees, fixture-a/);
-  assert.equal(fs.existsSync(path.join(none.home, 'senior-mcp-allow')), false);
-  assert.deepEqual(none.keys('m1').submitted, ['/mcp']);
-  closeSeat(seat1, none.deps);
-  // 목록 밖 이름이 연결돼 있다.
-  const extra = setup(t, {default: {mcp: [['codex_worktrees', 'connected', 3], ['fixture-x', 'connected', 2]]}});
-  extra.allow(['codex_worktrees', 'fixture-a']);
-  const [seat2] = extra.open();
-  const outside = await passGate(seat2, extra.deps);
-  assert.equal(outside.why, 'not-allowed'); assert.deepEqual(outside.outside, ['fixture-x']);
-  closeSeat(seat2, extra.deps);
-  // 꺼진 서버·목록에 있는데 안 붙은 서버는 막지 않는다.
-  const off = setup(t, {default: {mcp: [['codex_worktrees', 'connected', 3], ['fixture-x', 'disabled', 0]]}});
-  off.allow(['codex_worktrees', 'fixture-a']);
-  const [seat3] = off.open();
-  assert.deepEqual(await passGate(seat3, off.deps), {ok: true});
-  closeSeat(seat3, off.deps);
-  // /mcp 출력을 못 읽음: 끝줄 없이 잘림 / 모르는 줄 / 아직 연결 중 — 부분 목록으로 통과시키지 않는다.
-  for (const [plan, why] of [[{mcpTail: false}, 'mcp-incomplete'], [{mcpRaw: ['  fixture-a 연결됨']}, 'mcp-unreadable'],
-    [{mcp: [['codex_worktrees', 'connected', 3], ['fixture-a', 'starting', 0]]}, 'mcp-pending']]) {
-    const bad = setup(t, {default: plan});
-    bad.allow(['codex_worktrees', 'fixture-a']);
-    const [seat] = bad.open();
-    // 잘린 출력은 상한까지 기다린 뒤 거절한다(여기서는 상한을 짧게 준다). 나머지 둘은 보자마자 거절한다.
-    const gate = await passGate(seat, {...bad.deps, timing: {...TIMING, mcpMs: 1500}});
-    assert.equal(gate.ok, false); assert.equal(gate.why, why);
-    assert.deepEqual(bad.keys('m1').submitted, ['/mcp']);
-    closeSeat(seat, bad.deps);
-  }
-  // out/이 git 저장소 안: codex를 띄우지도 않는다.
-  const git = setup(t);
-  git.allow(['codex_worktrees', 'fixture-a']);
-  const [seat5] = git.open();
-  assert.equal(spawnSync('git', ['init', '-q', seat5.dir]).status, 0);
-  assert.deepEqual(await passGate(seat5, git.deps), {ok: false, why: 'out-inside-git'});
-  assert.equal(fs.existsSync(path.join(git.log, 'm1.env.json')), false);
-  assert.equal(fs.existsSync(seat5.gate), false);
-  closeSeat(seat5, git.deps);
+  const ALLOW = ['codex_worktrees', 'fixture-a'];
+  const cases = [
+    // 허용 목록 파일 없음: 거절하고 지금 연결된 이름을 보여 준다. 파일을 스스로 만들지 않는다.
+    async () => {
+      const none = setup(t);
+      const [seat] = none.open();
+      const missing = await passGate(seat, none.deps);
+      assert.equal(missing.why, 'allow-missing');
+      assert.match(missing.note, /senior-mcp-allow.*codex_worktrees, fixture-a/);
+      assert.equal(fs.existsSync(path.join(none.home, 'senior-mcp-allow')), false);
+      assert.deepEqual(none.keys('m1').submitted, ['/mcp']);
+      closeSeat(seat, none.deps);
+    },
+    // 목록 밖 이름이 연결돼 있다.
+    async () => {
+      const extra = setup(t, {default: {mcp: [['codex_worktrees', 'connected', 3], ['fixture-x', 'connected', 2]]}});
+      extra.allow(ALLOW);
+      const [seat] = extra.open();
+      const outside = await passGate(seat, extra.deps);
+      assert.equal(outside.why, 'not-allowed'); assert.deepEqual(outside.outside, ['fixture-x']);
+      closeSeat(seat, extra.deps);
+    },
+    // 꺼진 서버·목록에 있는데 안 붙은 서버는 막지 않는다.
+    async () => {
+      const off = setup(t, {default: {mcp: [['codex_worktrees', 'connected', 3], ['fixture-x', 'disabled', 0]]}});
+      off.allow([...ALLOW, 'fixture-not-attached']);
+      const [seat] = off.open();
+      assert.deepEqual(await passGate(seat, off.deps), {ok: true});
+      closeSeat(seat, off.deps);
+    },
+    // /mcp 출력을 못 읽음: 끝줄 없이 잘림 / 모르는 줄 / 아직 연결 중 — 부분 목록으로 통과시키지 않는다.
+    ...[[{mcpTail: false}, 'mcp-incomplete'], [{mcpRaw: ['  fixture-a 연결됨']}, 'mcp-unreadable'],
+      [{mcp: [['codex_worktrees', 'connected', 3], ['fixture-a', 'starting', 0]]}, 'mcp-pending']].map(([plan, why]) => async () => {
+      const bad = setup(t, {default: plan});
+      bad.allow(ALLOW);
+      const [seat] = bad.open();
+      // 잘린 출력은 상한까지 기다린 뒤 거절한다(여기서는 상한을 짧게 준다). 나머지 둘은 보자마자 거절한다.
+      const gate = await passGate(seat, {...bad.deps, timing: {...TIMING, mcpMs: 1500}});
+      assert.equal(gate.ok, false, why); assert.equal(gate.why, why);
+      assert.deepEqual(bad.keys('m1').submitted, ['/mcp'], why);
+      closeSeat(seat, bad.deps);
+    }),
+    // out/이 git 저장소 안: codex를 띄우지도 않는다.
+    async () => {
+      const git = setup(t);
+      git.allow(ALLOW);
+      const [seat] = git.open();
+      assert.equal(spawnSync('git', ['init', '-q', seat.dir]).status, 0);
+      assert.deepEqual(await passGate(seat, git.deps), {ok: false, why: 'out-inside-git'});
+      assert.equal(fs.existsSync(path.join(git.log, 'm1.env.json')), false);
+      assert.equal(fs.existsSync(seat.gate), false);
+      closeSeat(seat, git.deps);
+    },
+  ];
+  await Promise.all(cases.map(run => run()));
 });
 
 test('ok 오판 막기: 표지만·표지 둘·쓰는 중·일하는 표시를 못 봄·링크·크기 초과는 ok가 아니다', {skip}, async t => {

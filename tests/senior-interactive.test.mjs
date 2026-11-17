@@ -21,7 +21,7 @@ const SENIOR = new URL('../src/senior.mjs', import.meta.url).href;
 const REAL_TMUX = spawnSync('which', ['tmux'], {encoding: 'utf8'}).stdout.trim();
 const skip = !REAL_TMUX;
 // 여유는 넉넉히 둔다: CI는 시험 파일을 병렬로 돌려 가짜 화면이 늦게 그릴 수 있다. 기다리는 값은 정상 경로의 시간을 늘리지 않는다.
-const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.6'};
+const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.3'};
 const models = ['gpt-6-astra', 'gpt-6-sol'].map(slug => ({slug, supported_reasoning_levels: ['low', 'high'].map(effort => ({effort}))}));
 const readCodexModels = () => ({models});
 const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, SOL = {runner: 'codex', model: 'gpt-6-sol', effort: 'low'};
@@ -152,19 +152,26 @@ test('관문 교차: 한 명이 관문에서 걸리면 통과한 다른 한 명�
 });
 
 test('허용 목록 파일이 없으면 거절하고 연결된 이름을 보여 준다. 한도·빈 답은 칸마다 상태로 남고 하나라도 답하면 종료 코드 0이다', {skip}, async t => {
-  const none = fixture(t, {seniors: [ASTRA], allow: null});
-  const refused = await none.run().then(() => assert.fail('실패해야 한다'), e => e);
-  assert.match(refused.message, /MCP 허용 목록 파일이 없다: .*senior-mcp-allow — 지금 연결된 MCP: codex_worktrees, fixture-a/);
-  assert.equal(fs.existsSync(path.join(none.home, 'senior-mcp-allow')), false);
-  assert.deepEqual(none.fakeLog('gpt-6-astra', 'submitted'), ['/mcp']);
-  const mixed = fixture(t, {plan: {models: {'gpt-6-astra': {answer: 'limit'}, 'gpt-6-sol': {answer: 'ok'}}}});
-  const r = await mixed.run();
-  assert.deepEqual(r.answers.map(a => [a.model, a.status, a.reason]), [['gpt-6-astra', '한도', 'limit'], ['gpt-6-sol', 'ok', 'ok']]);
-  assert.ok(!('answer' in r.answers[0]));
-  const empty = fixture(t, {seniors: [SOL], plan: {default: {answer: 'marker-only'}}});
-  const failed = await empty.run().then(() => assert.fail('실패해야 한다'), e => e);
-  assert.deepEqual(failed.answers.map(a => [a.reason, a.detail]), [['empty', 'marker-only']]);
-  assert.deepEqual(empty.advices().map(e => [e.reason, e.bytes]), [['empty', 0]]);
+  const noAllow = async () => {
+    const none = fixture(t, {seniors: [ASTRA], allow: null});
+    const refused = await none.run().then(() => assert.fail('실패해야 한다'), e => e);
+    assert.match(refused.message, /MCP 허용 목록 파일이 없다: .*senior-mcp-allow — 지금 연결된 MCP: codex_worktrees, fixture-a/);
+    assert.equal(fs.existsSync(path.join(none.home, 'senior-mcp-allow')), false);
+    assert.deepEqual(none.fakeLog('gpt-6-astra', 'submitted'), ['/mcp']);
+  };
+  const limitAndOk = async () => {
+    const mixed = fixture(t, {plan: {models: {'gpt-6-astra': {answer: 'limit'}, 'gpt-6-sol': {answer: 'ok'}}}});
+    const r = await mixed.run();
+    assert.deepEqual(r.answers.map(a => [a.model, a.status, a.reason]), [['gpt-6-astra', '한도', 'limit'], ['gpt-6-sol', 'ok', 'ok']]);
+    assert.ok(!('answer' in r.answers[0]));
+  };
+  const emptyAnswer = async () => {
+    const empty = fixture(t, {seniors: [SOL], plan: {default: {answer: 'marker-only'}}});
+    const failed = await empty.run().then(() => assert.fail('실패해야 한다'), e => e);
+    assert.deepEqual(failed.answers.map(a => [a.reason, a.detail]), [['empty', 'marker-only']]);
+    assert.deepEqual(empty.advices().map(e => [e.reason, e.bytes]), [['empty', 0]]);
+  };
+  await Promise.all([noAllow(), limitAndOk(), emptyAnswer()]);
 });
 
 test('자리가 모자라면 아무도 부르지 않고(advice 0줄) 입력이 200KB를 넘으면 준비 단계에서 거절한다', {skip}, async t => {
