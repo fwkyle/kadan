@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { scrubSecrets } from './user-notify.mjs';
 import { pidAlive } from './pid-alive.mjs';
+import { moveToTrash, describeTrash } from './trash-dir.mjs';
 
 export const TARGETS = ['비서', '대시보드', '디코', 'watch'];
 export const REVIVE_LABELS = { 비서: '비서', 대시보드: '대시보드', 디코: '디코 다리', watch: '감시기' };
@@ -51,13 +52,11 @@ export function writeReviveState(home, state) {
   fs.renameSync(tmp, file);
 }
 
-// 사람이 친 명령(up·stop)에서만 쓴다: 깨진 상태 파일을 지우지 않고 .trash로 옮기고 새로 시작한다. 옮긴 경로를 돌려준다(없으면 null).
-export function recoverCorruptState(home, now = Date.now()) {
+// 사람이 친 명령(up·stop)에서만 쓴다: 깨진 상태 파일을 지우지 않고 휴지통(기본 $KADAN_HOME/.trash)으로 옮기고 새로 시작한다. 옮긴 경로를 돌려준다(없으면 null).
+// 휴지통 자리는 trash-dir.mjs가 정한다. 옮기지 못하면 던지고, 그 뒤(표시 파일 삭제)는 하지 않는다 — 원본은 그대로 남는다.
+export function recoverCorruptState(home, now = Date.now(), env = process.env) {
   if (!readReviveState(home).corrupt) return null;
-  const dir = path.join(home, '.trash');
-  fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, `revive-state-${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`);
-  fs.renameSync(stateFile(home), dest);
+  const dest = moveToTrash(home, stateFile(home), `revive-state-${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`, { env, now });
   fs.rmSync(path.join(home, 'revive-corrupt.notified'), { force: true });
   return dest;
 }
@@ -199,7 +198,7 @@ export function prepareRevive({ home, auto, now = Date.now(), ops }) {
     let seen = null;
     try { seen = fs.readFileSync(marker, 'utf8'); } catch { /* 처음 */ }
     if (seen !== signature) {
-      ops.notify(`자동 되살리기 상태 파일(revive-state.json)이 손상돼 기반 프로세스를 되살리지 않습니다. 확인 뒤 kadan up(깨진 파일은 .trash로 옮기고 새로 시작).`, { ring: true, key: 'revive-corrupt' });
+      ops.notify(`자동 되살리기 상태 파일(revive-state.json)이 손상돼 기반 프로세스를 되살리지 않습니다. 확인 뒤 kadan up(깨진 파일은 ${describeTrash(home)}로 옮기고 새로 시작).`, { ring: true, key: 'revive-corrupt' });
       try { fs.writeFileSync(marker, signature); } catch { /* 표시 실패 시 다음 회차에 다시 알린다 */ }
       lines.push('자동 되살리기 멈춤: 상태 파일 손상');
     }

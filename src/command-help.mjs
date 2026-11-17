@@ -74,6 +74,7 @@ export const GROUPS = [
   ["설정", [
     ["runners", "역할별 AI와 모델 정하기"],
     ["window", "터미널 창 방식 정하기"],
+    ["trash", "휴지통 위치 정하기"],
     ["notify", "알림 보낼 곳 정하기"],
     ["secrets", "비밀 파일 위치 정하기"],
     ["discord", "디스코드 글 주고받기"],
