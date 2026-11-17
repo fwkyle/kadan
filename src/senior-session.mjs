@@ -34,6 +34,7 @@ export const SESSION_TIMING = {pollMs: 2000, startupMs: 60_000, settleMs: 3000, 
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
 const fail = (code, message, more = {}) => Object.assign(new Error(message), {code, ...more});
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const keyWhy = error => error.why ?? error.code ?? 'send-failed';
 
 // 한 줄(interactive | headless). 파일이 없으면 헤드리스다(PR 1). 호출 시작 때 한 번 읽어 고정하고, 다른 값은 거절한다.
 export function readSeniorMode(home) {
@@ -42,7 +43,8 @@ export function readSeniorMode(home) {
   catch (error) { if (error.code === 'ENOENT') return 'headless'; throw error; }
   const value = text.trim();
   if (value !== 'interactive' && value !== 'headless') {
-    throw new Error(`${SENIOR_MODE_FILE} 값 오류: ${JSON.stringify(value.slice(0, 40))} — interactive 또는 headless 한 줄이어야 한다`);
+    const shown = JSON.stringify(value.slice(0, 40));
+    throw new Error(`${SENIOR_MODE_FILE} 값 오류: ${shown} — interactive 또는 headless 한 줄이어야 한다`);
   }
   return value;
 }
@@ -59,8 +61,8 @@ export function seniorSocket(env = process.env, home) {
 export function assertSeniorSocket(socket, home, env = process.env) {
   if (typeof socket !== 'string' || !/^[A-Za-z0-9._-]+$/u.test(socket)) throw new Error(`시니어 소켓 이름 형식 오류: ${socket}`);
   if (socket === SENIOR_SOCKET && !isDefaultHome(home) && env[ALLOW_LIVE_FLOOR_ENV] !== '1') {
-    throw fail('KADAN_LIVE_FLOOR_DENIED', `KADAN_LIVE_FLOOR_DENIED: 기본이 아닌 KADAN_HOME=${home}으로 운영 시니어 소켓(-L ${SENIOR_SOCKET})에 ` +
-      '닿는 것을 거절한다. KADAN_SOCKET을 격리 이름으로 바꿔라');
+    throw fail('KADAN_LIVE_FLOOR_DENIED', `KADAN_LIVE_FLOOR_DENIED: 기본이 아닌 KADAN_HOME=${home}으로 ` +
+      `운영 시니어 소켓(-L ${SENIOR_SOCKET})에 닿는 것을 거절한다. KADAN_SOCKET을 격리 이름으로 바꿔라`);
   }
 }
 
@@ -74,11 +76,13 @@ export function seniorTmux({socket, home, env = process.env, spawn = spawnSync})
   let conf = null;
   const call = (args, input) => {
     conf ??= ensureTmuxConf(home);
-    return spawn('tmux', ['-u', '-L', socket, '-f', conf, ...args], {input, encoding: 'utf8', env: clientEnv, timeout: 15_000});
+    const options = {input, encoding: 'utf8', env: clientEnv, timeout: 15_000};
+    return spawn('tmux', ['-u', '-L', socket, '-f', conf, ...args], options);
   };
   const run = (args, input) => {
     const result = call(args, input);
-    if (result.status !== 0) throw new Error(`tmux ${args[0]} 실패: ${String(result.stderr || result.error?.message || '').trim()}`);
+    const why = String(result.stderr || result.error?.message || '').trim();
+    if (result.status !== 0) throw new Error(`tmux ${args[0]} 실패: ${why}`);
     return result.stdout;
   };
   return Object.assign(run, {try: call, socket, home});
@@ -97,7 +101,8 @@ export function codexArgv({out, model, effort}) {
 
 // 세션은 모델 없이 먼저 만든다: 대기 셸이 문 파일이 생길 때까지 기다렸다가 그 자리에서 exec로 codex가 된다(pane PID가 바뀌지 않는다).
 // 기록·예약 종료를 건 뒤에야 문을 연다. 문이 60초 안에 안 열리면(부른 쪽이 죽음) 셸이 스스로 끝나 자리를 비운다.
-const WAITER = 'gate=$1; n=0; until [ -e "$gate" ]; do n=$((n+1)); [ "$n" -gt 600 ] && exit 75; sleep 0.1; done; shift; exec "$@"';
+const WAITER = 'gate=$1; n=0; until [ -e "$gate" ]; do n=$((n+1)); [ "$n" -gt 600 ] && exit 75; sleep 0.1; done; ' +
+  'shift; exec "$@"';
 export function paneCommand({gate, argv}) {
   return ['exec', '/bin/sh', '-c', quote(WAITER), 'kadan-senior', quote(gate), 'env',
     ...PANE_ENV_STRIP.flatMap(name => ['-u', name]), ...argv.map(quote)].join(' ');
@@ -114,7 +119,8 @@ function writeRecord(dir, record) {
   fs.writeFileSync(recordPath(dir), JSON.stringify(record, null, 1) + '\n', {mode: 0o600});
 }
 function patchRecord(dir, patch) {
-  try { const record = readRecord(dir); if (record) writeRecord(dir, {...record, ...patch}); } catch { /* 근거 기록 실패가 끄기를 막지 않는다 */ }
+  // 근거 기록 실패가 끄기를 막지 않는다.
+  try { const record = readRecord(dir); if (record) writeRecord(dir, {...record, ...patch}); } catch { /* 위 */ }
 }
 
 function processAlive(pid) {
@@ -138,7 +144,8 @@ export function listSeniorSessions(run) {
 // 같은 확인: 이 소켓의 그 이름 세션이 기록과 같은 생성 식별값·호출 폴더·pane PID를 갖고 있을 때만 자기 것이다.
 export function confirmOwn(record, run) {
   if (record.socket !== run.socket) return {own: false, why: 'socket-differs'};
-  const result = run.try(['display-message', '-p', '-t', `=${record.session}:`, '#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}']);
+  const format = '#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}';
+  const result = run.try(['display-message', '-p', '-t', `=${record.session}:`, format]);
   if (result.status !== 0) return {own: false, why: 'no-session'};
   const [pid, ask, dir] = result.stdout.replace(/\n$/u, '').split('\t');
   if (ask !== record.askId || dir !== record.dir) return {own: false, why: 'generation-differs'};
@@ -154,7 +161,8 @@ export function killOwn(dir, {run, reason = 'done', env = process.env} = {}) {
   const verdict = confirmOwn(record, tmux);
   const at = new Date().toISOString();
   if (!verdict.own) {
-    if (verdict.why === 'no-session') patchRecord(dir, {endedAt: record.endedAt ?? at, endReason: record.endReason ?? reason});
+    const ended = {endedAt: record.endedAt ?? at, endReason: record.endReason ?? reason};
+    if (verdict.why === 'no-session') patchRecord(dir, ended);
     else patchRecord(dir, {killSkipped: verdict.why, killSkippedAt: at, killSkippedReason: reason});
     return {killed: false, why: verdict.why};
   }
@@ -166,7 +174,8 @@ export function killOwn(dir, {run, reason = 'done', env = process.env} = {}) {
 
 // 그 호출이 끝났는가: 끝남 기록이 있거나, 만료 시각이 지났거나, 부른 프로세스가 없다.
 // 프로세스가 '살아 있다'만으로는 주인을 확정하지 않는다(PID 재사용) — 그때는 만료 시각까지 그대로 둔다.
-const callEnded = (record, nowMs) => record.endedAt != null || nowMs > Number(record.expiresAt) || !processAlive(record.ownerPid);
+const callEnded = (record, nowMs) =>
+  record.endedAt != null || nowMs > Number(record.expiresAt) || !processAlive(record.ownerPid);
 
 // 다음 호출 시작 때의 청소. 소켓의 세션 목록에서 출발해 세션 옵션이 가리키는 기록을 찾고, 기록이 맞고 끝난 호출의 것만 끈다.
 // 기록이 없거나 못 읽으면 끄지 않는다. 이름으로 추측하지 않고 advice/ 전체를 훑지 않는다.
@@ -187,7 +196,8 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
   const {dir} = call;
   const out = path.join(dir, 'out');
   fs.mkdirSync(out, {recursive: true, mode: 0o700});
-  if (fs.existsSync(path.join(out, 'result.txt'))) throw new Error(`답 파일이 이미 있다 — 부르지 않는다: ${path.join(out, 'result.txt')}`);
+  const answer = path.join(out, 'result.txt');
+  if (fs.existsSync(answer)) throw new Error(`답 파일이 이미 있다 — 부르지 않는다: ${answer}`);
   const session = `senior-${askId.slice(0, 8)}-${index + 1}`;
   const gate = path.join(dir, 'launch');
   // codex는 심볼릭 링크가 낀 작업 폴더를 거부한다(scripts/senior.sh와 같은 이유). 실제 경로로 넘긴다.
@@ -205,7 +215,8 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
     writeRecord(dir, record);
     // 예약 종료: 상한과 여유가 지나면 tmux 서버가 같은 확인 함수(reap → killOwn)를 부른다. 이름만으로 끄지 않는다.
     const delay = Math.max(1, Math.ceil((expiresAt - now()) / 1000));
-    run(['run-shell', '-b', '-d', String(delay), '-t', `=${session}:`, `${quote(node)} ${quote(SESSION_ENTRY)} reap ${quote(dir)}`]);
+    const reap = `${quote(node)} ${quote(SESSION_ENTRY)} reap ${quote(dir)}`;
+    run(['run-shell', '-b', '-d', String(delay), '-t', `=${session}:`, reap]);
     return {...record, index};
   } catch (error) {
     // 기록을 다 쓰지 못한 세션은 방금 이 잠금 안에서 이 이름(새 askId)으로 만든 것이라 이름으로 끈다.
@@ -217,8 +228,8 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
 // 자리 확보: 짧은 생성 잠금 안에서 청소 → 현재 수 → `현재 + 이번 전원 ≤ 4` → 이번 전원의 세션 만들기를 한 묶음으로 한다.
 // 자리가 모자라면 아무도 부르지 않는다(줄 세우기 없음). 한 세션을 만든 뒤 다음이 실패하면 만든 자기 세션을 끄고 던진다.
 // calls: [{dir, model, effort, token, timing?}]. 반환: seats[] (session.json 기록과 같은 값 + index).
-export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, ownerPid = process.pid, node = process.execPath,
-  reapMarginMs = REAP_MARGIN_MS}) {
+export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, ownerPid = process.pid,
+  node = process.execPath, reapMarginMs = REAP_MARGIN_MS}) {
   const lock = path.join(home, 'senior-seats.lock');
   if (!acquireDirLock(lock)) throw new Error(`시니어 자리 잠금을 얻지 못했다(${lock}) — 다른 호출이 자리를 잡는 중이거나 멈춘 잠금이다`);
   const seats = [];
@@ -229,7 +240,8 @@ export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, 
       throw new Error(`시니어 대화형 자리가 모자란다(지금 ${current}개 + 이번 ${calls.length}명 > ${SENIOR_SEATS}) — 아무도 부르지 않는다. ` +
         '앞선 호출이 끝난 뒤 다시 불러라');
     }
-    for (const [index, call] of calls.entries()) seats.push(createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, node, reapMarginMs}));
+    const shared = {home, run, askId, deadlineAt, now, ownerPid, node, reapMarginMs};
+    for (const [index, call] of calls.entries()) seats.push(createSeat({...shared, call, index}));
     return seats;
   } catch (error) {
     for (const seat of seats) killOwn(seat.dir, {run, reason: 'partial-create'});
@@ -265,7 +277,8 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
     return run(args, input);
   };
   // sendTmux는 붙여넣기와 Enter 사이를 `sleep 1`로 띄운다. 그 간격만 주입할 수 있게 한다(시험용).
-  const sleeper = (command, args, options) => command === 'sleep' ? spawn('sleep', [String(keyGapS)]) : spawn(command, args, options);
+  const sleeper = (command, args, options) =>
+    command === 'sleep' ? spawn('sleep', [String(keyGapS)]) : spawn(command, args, options);
   return sendTmux(seat.session, text, {run: guarded, expectedPid: seat.panePid, spawn: sleeper});
 }
 
@@ -287,17 +300,20 @@ function gateNote(home, verdict) {
 // `out/`이 git 저장소 안이면 codex 내장 worktree 도구가 쓸 수 있다. 저장소 밖일 때만 통과한다.
 export function outsideGit(out, {spawn = spawnSync} = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-  const result = spawn('git', ['-C', out, 'rev-parse', '--is-inside-work-tree'], {encoding: 'utf8', env, timeout: 10_000});
+  const options = {encoding: 'utf8', env, timeout: 10_000};
+  const result = spawn('git', ['-C', out, 'rev-parse', '--is-inside-work-tree'], options);
   if (result.error) return {ok: false, why: 'git-check-failed'};
   return result.status === 0 ? {ok: false, why: 'out-inside-git'} : {ok: true};
 }
 
 // 질문 넣기 전 관문(전원 준비의 일부). codex를 띄우고 빈 입력칸을 기다린 뒤 `/mcp`로 연결된 서버 이름을 읽어 허용 목록과 견준다.
 // 하나라도 아니면 질문을 넣지 않는다(모델 호출 0회). 반환: {ok, why?, note?, connected?}. 던지지 않는다.
-export async function passGate(seat, {run, home, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING, spawn = spawnSync}) {
+export async function passGate(seat, {run, home, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
+  spawn = spawnSync}) {
   const evidence = {};
   const done = verdict => {
-    try { fs.writeFileSync(path.join(seat.dir, 'gate.json'), JSON.stringify({...verdict, ...evidence}, null, 1) + '\n', {mode: 0o600}); }
+    const text = JSON.stringify({...verdict, ...evidence}, null, 1) + '\n';
+    try { fs.writeFileSync(path.join(seat.dir, 'gate.json'), text, {mode: 0o600}); }
     catch { /* 근거 기록 실패가 판정을 바꾸지 않는다 */ }
     return verdict;
   };
@@ -320,7 +336,7 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
     if (ready.ok) { await sleep(timing.settleMs); ready = await untilScreen(0, composerReady); }
     if (!ready.ok) return done({ok: false, why: `startup:${ready.why}`});
     try { sendLine(seat, '/mcp', {run, keyGapS: timing.keyGapS, spawn}); }
-    catch (error) { return done({ok: false, why: `key:${error.why ?? error.code ?? 'send-failed'}`, note: error.message}); }
+    catch (error) { return done({ok: false, why: `key:${keyWhy(error)}`, note: error.message}); }
     // 출력은 한 번 찍히고 바뀌지 않는다. 완전한 구간이 보이면 그 자리에서 판정하고, 연결 중·모르는 줄이면 다시 묻지 않고 거절한다.
     const block = await untilScreen(timing.mcpMs, screen => {
       const read = readMcpBlock(screen);
@@ -350,9 +366,10 @@ export function readAnswerFile(file, marker) {
 // 질문 한 줄을 넣고 끝을 기다린다. 반환: {reason: ok|empty|limit|timeout|call-failed, detail?, answer?}. 던지지 않는다.
 // ok는 (1) 답 파일이 답 후보이고 (2) 질문을 넣은 뒤 화면이 일하는 표시를 거쳐 (3) 다시 빈 입력칸으로 쉴 때만이다.
 // 처음의 쉬는 화면이나 /mcp 출력 상태를 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
-export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING, spawn = spawnSync}) {
+export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
+  spawn = spawnSync}) {
   try { sendLine(seat, seat.line, {run, keyGapS: timing.keyGapS, spawn}); }
-  catch (error) { return {reason: 'call-failed', detail: `key:${error.why ?? error.code ?? 'send-failed'} — ${error.message}`}; }
+  catch (error) { return {reason: 'call-failed', detail: `key:${keyWhy(error)} — ${error.message}`}; }
   const submittedAt = now();
   const answerFile = path.join(seat.out, 'result.txt');
   let sawWorking = false, idle = 0;
@@ -368,7 +385,8 @@ export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, 
         const read = readAnswerFile(answerFile, seat.marker);
         return read.ok ? {reason: 'ok', answer: read.answer} : {reason: 'empty', detail: read.why};
       }
-      if (idle >= timing.idleConfirm && now() - submittedAt > timing.submitGraceMs) return {reason: 'empty', detail: 'no-work-seen'};
+      const waited = now() - submittedAt > timing.submitGraceMs;
+      if (idle >= timing.idleConfirm && waited) return {reason: 'empty', detail: 'no-work-seen'};
     } else idle = 0;
     if (now() >= seat.deadlineAt) return {reason: 'timeout', detail: 'deadline'};
     await sleep(timing.pollMs);
@@ -393,4 +411,5 @@ export function readOutcome(dir) {
 }
 
 // 감싸는 프로세스의 명령(기존 호출 프로세스 runJudgeProcess가 셸로 돌린다). 그 프로세스가 TERM을 받으면 세션을 끄고 나간다.
-export const sessionRunCommand = (dir, node = process.execPath) => `${quote(node)} ${quote(SESSION_ENTRY)} ask ${quote(dir)}`;
+export const sessionRunCommand = (dir, node = process.execPath) =>
+  `${quote(node)} ${quote(SESSION_ENTRY)} ask ${quote(dir)}`;

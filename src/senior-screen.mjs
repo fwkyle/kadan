@@ -33,7 +33,8 @@ export function readComposer(screen) {
   // 입력칸의 글이 길면 codex가 스스로 줄을 감아 다음 줄을 들여 쓴다. 빈 줄을 만나면 입력칸이 끝난다.
   let end = at;
   while (end + 1 < lines.length && /^\s+\S/u.test(lines[end + 1])) end++;
-  const text = [lines[at].replace(/^›\s*/u, ''), ...lines.slice(at + 1, end + 1).map(line => line.trim())].join(' ').trim();
+  const wrapped = lines.slice(at + 1, end + 1).map(line => line.trim());
+  const text = [lines[at].replace(/^›\s*/u, ''), ...wrapped].join(' ').trim();
   const footer = lines.slice(end + 1).filter(line => line !== '');
   const bad = footer.find(line => CHOICE.test(line) || MARKED.test(line) || KEY_HINT.test(line) || !/^\s/u.test(line));
   const why = footer.length > FOOTER_MAX ? 'lines-below-composer' : bad != null ? 'selection-below-composer' : null;
