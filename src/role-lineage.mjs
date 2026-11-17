@@ -39,12 +39,21 @@ function lastBefore(starts, order) {
 }
 
 // 사건을 한 번 훑어 start 구간별 색인을 만들고(비용: 사건 수에 비례), 역할마다 사슬을 올라간다(길이 상한 10).
-// 반환: { chains: Map<역할, [{source, rottieTerminalId, panePid, conversation}]>, current: Map<역할, 마지막 start> }
+// 반환: chains(이전 세대), current(마지막 start), firstStartedAt(이름별 첫 start의 t 또는 null) Map.
 export function buildLineage(entries) {
   const startsByRole = new Map(); // 역할 → [{ entry, order }]
+  const firstStartedAt = new Map();
   const byDigest = new Map(); // 지문 → { entry, role, index }
   const seenHandover = new Set();
   entries.forEach((entry, order) => {
+    if (entry?.kind === "start") {
+      // 이름 재사용 안내(start.mjs)와 같은 옛 session 해석. 교체 계보의 role 판정은 바꾸지 않는다.
+      const role = entry.role ?? entry.session?.replace(/^kadan-/, "");
+      if (role && !firstStartedAt.has(role)) {
+        const t = entry.t;
+        firstStartedAt.set(role, typeof t === "string" && Number.isFinite(Date.parse(t)) ? t : null);
+      }
+    }
     if (entry?.kind === "start" && entry.role) {
       if (!startsByRole.has(entry.role)) startsByRole.set(entry.role, []);
       const list = startsByRole.get(entry.role);
@@ -101,7 +110,7 @@ export function buildLineage(entries) {
     const chain = chainOf(role);
     if (chain.length) chains.set(role, chain);
   }
-  return { chains, current };
+  return { chains, current, firstStartedAt };
 }
 
 // 현재 살아 있는 세대의 값은 옛 세대 목록에서 뺀다(로티가 살아 있는 탭을 지우지 않게).

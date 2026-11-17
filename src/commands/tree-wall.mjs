@@ -161,7 +161,8 @@ function buildWallData(data) {
     const roles = [...new Map(tree.flatMap(b => b.roles).map(r => [r.role, r])).values()];
     const built = wallCache.memo("lineage", version && String(inputs.revision), () => buildLineage(inputs.entries));
     const lineage = lineageFor(built, roles.filter(r => r.life?.state === "alive"));
-    center = { ...cached, roles: roles.map(r => ({ ...r, executionKind: kinds.get(r.role) ?? null, supersedes: lineage.get(r.role) ?? [] })) };
+    center = { ...cached, roles: roles.map(r => ({ ...r, executionKind: kinds.get(r.role) ?? null,
+      supersedes: lineage.get(r.role) ?? [], firstStartedAt: built.firstStartedAt.get(r.role) ?? null })) };
     if(workError)throw workError;
     if(!listOnly)center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
   } catch(error) { centerError=error.message; }
