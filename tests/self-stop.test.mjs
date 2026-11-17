@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {ledgerHome, appendLedger, readLedger} from '../src/ledger.mjs';
 import {stopRole} from '../src/role-stop.mjs';
-import {ancestorsOf, isInPaneTree, readProcessTable, runSelfStopTail, handoffSelfStop} from '../src/self-stop.mjs';
+import {ancestorsOf, isInPaneTree, readProcessTable, runSelfStopTail, handoffSelfStop, selfStopLogPath} from '../src/self-stop.mjs';
 import {markStopped, unmarkStopped, readReviveState} from '../src/revive.mjs';
 
 const table = rows => new Map(rows.map(([pid, ppid, pgid = pid]) => [pid, {ppid, pgid}]));
@@ -34,10 +34,14 @@ test('자기 세션 판정: pane PID의 자손이면 참, 자손이 아니거나
   assert.equal(isInPaneTree(200, {table: null, pid: 300}), false, '표를 못 읽으면 자기 세션으로 보지 않는다(예전 경로)');
 });
 
-test('readProcessTable: ps 출력을 해석하고 해석 못 하면 null', () => {
-  const ok = readProcessTable({spawnFn: () => ({stdout: '  10  1  10\n  11 10  10\n'})});
+test('readProcessTable: ps 출력을 해석하고, 실패·시간 초과·해석 불가는 null이며, 시간 상한을 건다', () => {
+  let seen;
+  const ok = readProcessTable({spawnFn: (...args) => { seen = args; return {status: 0, stdout: '  10  1  10\n  11 10  10\n'}; }});
   assert.deepEqual(ok.get(11), {ppid: 10, pgid: 10});
-  assert.equal(readProcessTable({spawnFn: () => ({stdout: '/x/rottie\n'})}), null);
+  assert.equal(seen[2].timeout, 2000, 'ps에 2초 상한을 건다');
+  assert.equal(readProcessTable({spawnFn: () => ({status: 0, stdout: '/x/rottie\n'})}), null);
+  assert.equal(readProcessTable({spawnFn: () => ({status: 1, stdout: '  10  1  10\n'})}), null, '실패 종료는 모름이다');
+  assert.equal(readProcessTable({spawnFn: () => ({error: Object.assign(new Error('ETIMEDOUT'), {code: 'ETIMEDOUT'}), status: null, stdout: ''})}), null, '시간 초과는 모름이다');
   assert.equal(readProcessTable({spawnFn: () => { throw new Error('없음'); }}), null);
   assert.ok(readProcessTable() instanceof Map, '진짜 ps도 읽힌다');
 });
@@ -64,26 +68,34 @@ test('stopRole: selfStop이 없거나 판정이 거짓이면 예전 경로 그�
   }
 });
 
-test('stopRole: 판정이 참이면 끄지 않고 넘기며, 한 줄만 출력한다 — 앞에서 계산한 값이 그대로 넘어간다', () => {
+test('stopRole: 판정이 참이면 표시도 대화 조회도 끄기도 하지 않고 넘기며 한 줄만 출력한다 — 넘기는 값은 역할뿐이다', () => {
   const role = 'watch', session = 'kadan-watch';
   const home = seed(role, session);
   const floor = fakeFloor();
   const out = [], seen = [];
-  const result = stopRole({role, session, home, floor, log: l => out.push(l),
+  const result = stopRole({role, session, home, floor, log: l => out.push(l), lookup: () => assert.fail('앞쪽은 대화를 조회하지 않는다'),
     selfStop: {isSelf: pane => { seen.push(pane); return true; }, handoff: payload => { seen.push(payload); return {logPath: '/log/x'}; }}});
   assert.equal(result.ok, true); assert.equal(result.handedOff, true); assert.equal(result.logPath, '/log/x');
   assert.equal(floor.stopped, undefined, '앞쪽은 끄지 않는다');
   assert.deepEqual(out, ['자기 세션 종료를 분리된 프로세스로 넘김(기록: /log/x)']);
   assert.equal(seen[0], '500');
-  const payload = seen[1];
-  assert.equal(payload.infrastructure, true);
-  assert.deepEqual(payload.marked, {previous: null}, '멈춤 표시를 저장했고 되돌릴 이전 값을 넘긴다');
-  assert.equal(payload.owner.start.panePid, 500);
-  assert.equal(readReviveState(home).targets.watch.state, 'stopped');
-  assert.equal(readLedger(home).filter(e => e.kind === 'stop' && e.session === session).length, 0, '기록은 끄고 난 뒤 넘겨받은 쪽이 쓴다');
+  assert.deepEqual(seen[1], {role, session, home});
+  assert.equal(readReviveState(home).targets.watch, undefined, '멈춤 표시는 넘겨받은 쪽이 저장한다');
+  assert.equal(readLedger(home).filter(e => e.kind === 'stop' && e.session === session).length, 0);
 });
 
-test('stopRole: 넘기지 못하면 멈춤 표시를 되돌리고 끄지 않는다', () => {
+test('stopRole: 앞쪽의 거절은 넘기기 전에 그대로 난다(시작 기록 없음·PID 다름)', () => {
+  const home = ledgerHome();
+  const handoff = () => assert.fail('거절되면 넘기지 않는다');
+  const selfStop = {isSelf: () => true, handoff};
+  const none = stopRole({role: 'nostart-role', session: 'kadan-nostart-role', home, floor: fakeFloor(), log() {}, selfStop});
+  assert.equal(none.ok, false); assert.match(none.message, /시작 PID 기록 없음/);
+  const home2 = seed('pid-role', 'kadan-pid-role', 777);
+  const diff = stopRole({role: 'pid-role', session: 'kadan-pid-role', home: home2, floor: fakeFloor(), log() {}, selfStop});
+  assert.equal(diff.ok, false); assert.match(diff.message, /다른 프로세스다/);
+});
+
+test('stopRole: 넘기지 못하면 아무것도 바꾸지 않고 거절한다', () => {
   const role = '비서', session = 'kadan-비서';
   const home = seed(role, session);
   const floor = fakeFloor();
@@ -92,29 +104,26 @@ test('stopRole: 넘기지 못하면 멈춤 표시를 되돌리고 끄지 않는�
   assert.equal(result.ok, false);
   assert.match(result.message, /자기 세션 종료를 넘기지 못했습니다: spawn 실패/);
   assert.equal(floor.stopped, undefined);
-  assert.equal(readReviveState(home).targets[role], undefined, '표시가 되돌려졌다');
+  assert.equal(readReviveState(home).targets[role], undefined, '표시를 저장하기 전이라 되돌릴 것도 없다');
 });
 
-function tailBody(role, session, logPath, over = {}) {
-  return {role, session, logPath, parentPid: 2 ** 22 + 12345, infrastructure: true,
-    owner: {role, session, revive: null, start: {panePid: 500}}, marked: {previous: null}, conversation: {conversationMissing: 'test'}, owned: [], by: 'caller-role', ...over};
-}
+// 넘겨받은 쪽: 실제 stopRole을 가짜 바닥 위에서 돌린다(원장·주인 확인·멈춤 표시는 진짜).
+const bodyFor = (over = {}) => ({role: undefined, parentPid: 2 ** 22 + 12345, ...over});
+const tail = (role, session, home, deps, over) =>
+  runSelfStopTail(bodyFor({role, ...over}), {role, session, home}, {waitMs: 50, readTable: () => table([[process.pid, 1, 77], [1, 0]]), ...deps});
+const logOf = (home, session, parentPid = bodyFor().parentPid) => lines(selfStopLogPath(home, session, parentPid));
 
-test('넘겨받은 쪽: 부모가 끝났고 pane 밖이면 끄고 기록하며, 끄기 직전 근거를 로그에 남긴다 (다시 넘기지 않는다)', () => {
+test('넘겨받은 쪽: 부모가 끝났고 pane 밖이면 일반 stop처럼 끄고 기록하며, 끄기 직전 근거를 로그에 남긴다', () => {
   const role = 'watch', session = 'kadan-watch-tail';
   const home = seed(role, session);
-  markStopped(home, role);
-  const logPath = path.join(home, 'tail-ok.log');
   const floor = fakeFloor();
-  // 조상 사슬에 pane(500)이 없는 표
-  const result = runSelfStopTail(tailBody(role, session, logPath), {home, floor, waitMs: 50,
-    readTable: () => table([[process.pid, 1, 77], [1, 0]])});
+  const result = tail(role, session, home, {floor});
   assert.equal(result.ok, true);
   assert.equal(floor.stopped, 1);
   const stop = readLedger(home).findLast(e => e.kind === 'stop' && e.session === session);
-  assert.equal(stop.conversationMissing, 'test');
-  assert.equal(stop.by, 'caller-role', '명령을 친 쪽(by)이 그대로 기록된다');
-  const log = lines(logPath);
+  assert.equal(stop.by, '사람', 'by는 이 프로세스의 환경(KADAN_ROLE)으로 정한다');
+  assert.equal(stop.conversationSkipped, 'infrastructure', '기반 프로세스 여부는 역할로 다시 정한다');
+  const log = logOf(home, session);
   const before = log.find(l => l.step === 'before-stop');
   assert.equal(before.inPaneTree, false); assert.equal(before.pgid, 77); assert.equal(before.panePid, 500);
   assert.equal(log.filter(l => l.step === 'handoff').length, 0, '넘겨받은 쪽은 넘기기를 하지 않는다');
@@ -125,79 +134,86 @@ test('넘겨받은 쪽: 부모가 끝났고 pane 밖이면 끄고 기록하며, 
 test('넘겨받은 쪽: 아직 pane 안이면 끄지 않고 멈춤 표시를 되돌리고 로그에 남긴다', () => {
   const role = 'watch', session = 'kadan-watch-inpane';
   const home = seed(role, session);
-  const marked = markStopped(home, role);
-  const logPath = path.join(home, 'tail-inpane.log');
   const floor = fakeFloor();
-  const result = runSelfStopTail(tailBody(role, session, logPath, {marked}), {home, floor, waitMs: 50,
-    readTable: () => table([[process.pid, 500, 500], [500, 1], [1, 0]])});
+  const result = tail(role, session, home, {floor, readTable: () => table([[process.pid, 500, 500], [500, 1], [1, 0]])});
   assert.equal(result.ok, false);
   assert.equal(floor.stopped, undefined);
   assert.equal(readReviveState(home).targets[role], undefined);
-  const log = lines(logPath);
+  const log = logOf(home, session);
   assert.equal(log.find(l => l.step === 'before-stop').inPaneTree, true);
   assert.match(log.at(-1).message, /아직 pane 안/);
 });
 
-test('넘겨받은 쪽: 앞쪽이 끝나지 않으면 끄지 않고 되돌린다', () => {
-  const role = 'watch', session = 'kadan-watch-parent';
+test('넘겨받은 쪽: ps 표를 못 읽으면 pane 밖으로 보지 않고 끄지 않으며 표시를 되돌리고 로그에 남긴다', () => {
+  const role = 'watch', session = 'kadan-watch-nops';
   const home = seed(role, session);
-  const marked = markStopped(home, role);
-  const logPath = path.join(home, 'tail-parent.log');
   const floor = fakeFloor();
-  const result = runSelfStopTail(tailBody(role, session, logPath, {marked, parentPid: process.ppid}), {home, floor, waitMs: 60});
-  assert.equal(result.ok, false);
-  assert.equal(floor.stopped, undefined);
-  assert.equal(readReviveState(home).targets[role], undefined);
-  assert.match(lines(logPath).at(-1).message, /끝나지 않아 끄지 않았다/);
-});
-
-test('넘겨받은 쪽: 넘긴 뒤 주인 PID가 바뀌면 끄지 않고 표시를 되돌리고 로그에 남긴다', () => {
-  const role = 'watch', session = 'kadan-watch-pidchg';
-  const home = seed(role, session);
-  const marked = markStopped(home, role);
-  const logPath = path.join(home, 'tail-pid.log');
-  const floor = fakeFloor({pid: () => '900'}); // 시작 기록은 500
-  const result = runSelfStopTail(tailBody(role, session, logPath, {marked, owner: {role, session, revive: null, start: {panePid: 500}}}),
-    {home, floor, waitMs: 50, readTable: () => table([[process.pid, 1], [1, 0]])});
+  const result = tail(role, session, home, {floor, readTable: () => null});
   assert.equal(result.ok, false);
   assert.equal(floor.stopped, undefined);
   assert.equal(readReviveState(home).targets[role], undefined, '표시가 되돌려졌다');
   assert.equal(readLedger(home).filter(e => e.kind === 'stop' && e.session === session).length, 0);
-  const log = lines(logPath);
-  assert.match(log.at(-1).message, /다른 프로세스다/);
+  assert.match(logOf(home, session).at(-1).message, /ps 표를 읽지 못해/);
+});
+
+test('넘겨받은 쪽: 앞쪽이 끝나지 않으면 끄지 않는다', () => {
+  const role = 'watch', session = 'kadan-watch-parent';
+  const home = seed(role, session);
+  const floor = fakeFloor();
+  const result = tail(role, session, home, {floor, waitMs: 60}, {parentPid: process.ppid});
+  assert.equal(result.ok, false);
+  assert.equal(floor.stopped, undefined);
+  assert.equal(readReviveState(home).targets[role], undefined);
+  assert.match(logOf(home, session, process.ppid).at(-1).message, /끝나지 않아 끄지 않았다/);
+});
+
+test('넘겨받은 쪽: 명령의 역할과 payload의 역할이 다르거나 앞쪽 PID가 이상하면 아무것도 하지 않는다', () => {
+  const role = 'watch', session = 'kadan-watch-bad';
+  const home = seed(role, session);
+  const floor = fakeFloor();
+  assert.equal(tail(role, session, home, {floor}, {role: 'other'}).ok, false);
+  assert.equal(tail(role, session, home, {floor}, {parentPid: 'x'}).ok, false);
+  assert.equal(tail(role, session, home, {floor}, {parentPid: 1}).ok, false);
+  assert.equal(runSelfStopTail(null, {role, session, home}, {floor}).ok, false);
+  assert.equal(floor.stopped, undefined);
+  assert.equal(readReviveState(home).targets[role], undefined);
+  assert.match(logOf(home, session).at(-1).message, /명령의 역할\(watch\)과 넘겨받은 역할\(other\)이 달라/);
+});
+
+test('넘겨받은 쪽: 원장의 시작 기록이 없거나 PID가 다르면 일반 stop처럼 거절한다 — payload는 믿지 않는다', () => {
+  const home = ledgerHome();
+  const floor = fakeFloor();
+  const none = tail('ghost', 'kadan-ghost', home, {floor});
+  assert.equal(none.ok, false); assert.match(none.message, /시작 PID 기록 없음/);
+  const home2 = seed('pidchg', 'kadan-pidchg', 777);
+  const diff = tail('pidchg', 'kadan-pidchg', home2, {floor});
+  assert.equal(diff.ok, false); assert.match(diff.message, /다른 프로세스다/);
+  assert.equal(floor.stopped, undefined);
 });
 
 test('넘겨받은 쪽: 끄기가 실패하면 표시를 되돌리고 로그에 남긴다', () => {
   const role = 'watch', session = 'kadan-watch-stopfail';
   const home = seed(role, session);
-  const marked = markStopped(home, role);
-  const logPath = path.join(home, 'tail-stopfail.log');
   const floor = fakeFloor({stop() { throw new Error('종료 실패: x'); }});
-  const result = runSelfStopTail(tailBody(role, session, logPath, {marked}), {home, floor, waitMs: 50,
-    readTable: () => table([[process.pid, 1], [1, 0]])});
+  const result = tail(role, session, home, {floor});
   assert.equal(result.ok, false);
   assert.equal(readReviveState(home).targets[role], undefined);
-  assert.match(lines(logPath).find(l => l.step === 'refused').message, /종료 실패: x/);
+  assert.match(logOf(home, session).find(l => l.step === 'done').message, /종료 실패: x/);
 });
 
-test('넘기기: 새 세션으로 떼고 입출력을 로그 파일로 보내며 payload에 시작 기록 전체를 싣지 않는다', () => {
+test('넘기기: 새 세션으로 떼고 입출력을 로그 파일로 보내며, 넘기는 값은 역할과 앞쪽 PID뿐이다', () => {
   const role = 'worker-x', session = 'kadan-worker-x';
   const home = ledgerHome();
-  const owner = {role, session, revive: null, start: {panePid: 500, cmd: 'secret-looking-command', rottieTerminalId: 't'}};
   let call;
-  const result = handoffSelfStop({home, role, session, owner, infrastructure: false, marked: null, conversation: {}, owned: []},
-    {spawnFn: (exe, args, opts) => { call = {exe, args, opts}; return {pid: 4242, unref() {}, on() {}}; }, now: () => 111});
-  assert.equal(result.logPath, path.join(home, 'diagnostics', `self-stop-${session}-111.log`));
+  const result = handoffSelfStop({home, role, session},
+    {spawnFn: (exe, args, opts) => { call = {exe, args, opts}; return {pid: 4242, unref() {}, on() {}}; }});
+  assert.equal(result.logPath, selfStopLogPath(home, session, process.pid));
   assert.equal(call.opts.detached, true);
   assert.equal(typeof call.opts.stdio[1], 'number', '파이프가 아니라 파일 디스크립터다');
   assert.equal(call.opts.stdio[1], call.opts.stdio[2]);
   const flagAt = call.args.indexOf('--self-stop-tail');
-  assert.ok(flagAt > 1);
-  const body = JSON.parse(call.args[flagAt + 1]);
-  assert.equal(body.parentPid, process.pid);
-  assert.deepEqual(body.owner.start, {panePid: 500}, '시작 기록 전체가 아니라 PID만 싣는다');
-  assert.doesNotMatch(call.args[flagAt + 1], /secret-looking-command/);
+  assert.equal(call.args[flagAt - 1], role, '명령 인자의 역할도 같이 간다');
+  assert.deepEqual(JSON.parse(call.args[flagAt + 1]), {role, parentPid: process.pid});
   assert.equal(lines(result.logPath)[0].step, 'handoff');
-  assert.throws(() => handoffSelfStop({home, role, session: 'kadan-nospawn', owner, infrastructure: false, marked: null, conversation: {}, owned: []},
-    {spawnFn: () => ({on() {}, unref() {}})}), /띄우지 못했다/);
+  assert.throws(() => handoffSelfStop({home, role, session: 'kadan-nospawn'}, {spawnFn: () => ({on() {}, unref() {}})}), /띄우지 못했다/);
 });
