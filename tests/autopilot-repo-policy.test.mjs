@@ -310,10 +310,18 @@ test('별칭: --auto-merge는 --night-merge와 같은 저장·원장 기록, 함
   assert.ok(usage.indexOf('--auto-merge') < usage.indexOf('--night-merge'));
   // 둘 다 주면 거절(종료 2), 어느 쪽 값도 저장되지 않는다. 순서를 바꿔도 같고, 값이 같아도 거절한다.
   const home = tmp('kadan-alias-both-');
-  for (const argv of [['--auto-merge', '금지', '--night-merge', '허용'], ['--night-merge', '허용', '--auto-merge', '금지'], ['--auto-merge', '허용', '--night-merge', '허용']]) {
+  for (const argv of [['--auto-merge', '금지', '--night-merge', '허용'], ['--night-merge', '허용', '--auto-merge', '금지'], ['--auto-merge', '허용', '--night-merge', '허용'],
+    ['--auto-merge', '허용', '금지', '--night-merge', '금지']]) { // 마지막: 값이 둘이어도 함께-거절이 먼저(종료 2)
     const both = run(home, ['autopilot', 'repo', 'acme/site', ...argv]);
     assert.equal(both.status, 2, argv.join(' '));
     assert.match(both.stderr, /함께 줄 수 없습니다/);
+  }
+  // 등호 형태(`--이름=값`)는 공통 해석기가 `이름=값`이라는 다른 키로 만들어 위 검사를 지나친다(검수 재현). 쓰기 전에 거절한다: 종료 2, 쓰기 0.
+  for (const argv of [['--night-merge=금지', '--auto-merge', '허용'], ['--auto-merge=금지', '--night-merge', '허용'],
+    ['--night-merge=금지'], ['--auto-merge=허용'], ['--night-merge=금지', '--deploy-branch', 'main'], ['--auto-merge=금지', '--auto-merge', '허용']]) {
+    const eq = run(home, ['autopilot', 'repo', 'acme/site', ...argv]);
+    assert.equal(eq.status, 2, argv.join(' '));
+    assert.match(eq.stderr, /형태는 받지 않습니다/, argv.join(' '));
   }
   assert.ok(!fs.existsSync(policyPath(home)));
   assert.equal(readLedger(home).filter(e => e.kind === 'autopilot-repo-policy').length, 0);
