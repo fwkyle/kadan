@@ -48,7 +48,7 @@ test("요약표: 값이 없는 설정(기본)도 예외 없이 그려지고 어�
   const order = [...html.matchAll(/<th>([^<]+)<\/th><td>/g)].map(m => m[1]);
   assert.deepEqual(order.slice(0, 3), ["작업자", "어려운 일 작업자", "검수자"], "작업자 줄 바로 다음");
   assert.match(html, /비어 있음 — 작업자와 같음/);
-  assert.match(html, /없음 \(폴백 없음\)/);
+  assert.doesNotMatch(html, /폴백 없음/);
   assert.match(html, /작업자와 같은 명령으로 띄웁니다/);
   assert.doesNotMatch(html, /undefined|NaN/);
   assert.deepEqual(summaryCells(data, "worker-hard").fallbacks, []);
@@ -56,11 +56,30 @@ test("요약표: 값이 없는 설정(기본)도 예외 없이 그려지고 어�
   assert.equal(summaryCells(data, "conductor").value, "미설정", "다른 비어 있는 역할은 여전히 미설정");
 });
 
-test("요약표: 값이 있으면 다른 역할처럼 값·명령이 보이고 폴백 칸은 없음", () => {
+test("요약표: 값이 있으면 다른 역할처럼 값·명령이 보이고 대체 후보가 없으면 없음", () => {
   const html = render(React.createElement(RunnerSummary, { data: dataOf("filled") }));
   assert.match(html, /codex \/ gpt-hard/);
   assert.match(html, /<code>codex --model gpt-hard<\/code>/);
-  assert.doesNotMatch(html, /작업자와 같음/);
+  assert.doesNotMatch(html, /작업자와 같음|폴백 없음/);
+  assert.deepEqual(summaryCells(dataOf("filled"), "worker-hard").fallbacks, []);
+  assert.equal(summaryCells(dataOf("filled"), "worker-hard").note, "없음");
+});
+
+// 어려운 일 작업자 대체 후보가 저장돼 있는 설정.
+const withHardFallback = () => {
+  const data = dataOf("filled");
+  const preset = data.settings.presets[data.settings.activePreset];
+  const settings = { ...data.settings, presets: { ...data.settings.presets, [data.settings.activePreset]: { ...preset,
+    fallback: { "worker-hard": [{ runner: "codex", model: "gpt-hard-2", effort: "high" }, { runner: "codex", model: "gpt-test2" }] } } } };
+  return { ...data, settings };
+};
+
+test("요약표: 어려운 일 대체 후보 목록이 순서대로 실제 목록으로 보인다", () => {
+  const data = withHardFallback();
+  assert.deepEqual(summaryCells(data, "worker-hard").fallbacks, ["codex / gpt-hard-2 / high", "codex / gpt-test2"]);
+  const html = render(React.createElement(RunnerSummary, { data }));
+  assert.match(html, /<ol><li>codex \/ gpt-hard-2 \/ high<\/li><li>codex \/ gpt-test2<\/li><\/ol>/);
+  assert.doesNotMatch(html, /폴백 없음|대체 후보는 없/);
 });
 
 // 표 줄의 편집 칸은 처음엔 모두 닫혀 있다. 서버 렌더 시험은 initialOpen으로 열린 상태를 그린다.
@@ -77,7 +96,7 @@ test("표 편집기: 처음엔 모든 편집 칸이 닫혀 있고 줄마다 바�
   assert.doesNotMatch(html, /undefined|NaN/);
 });
 
-test("편집 칸: 값이 없으면 비어 있음 안내와 꺼진 비우기 버튼, 폴백 칸은 없다", () => {
+test("편집 칸: 값이 없으면 비어 있음 안내와 꺼진 비우기 버튼, 대체 후보 칸은 열리지 않는다", () => {
   const data = dataOf("empty");
   const html = editor(data, ["worker-hard", "reviewer"]);
   assert.match(html, /어려운 일 작업자 바꾸기/);
@@ -85,15 +104,30 @@ test("편집 칸: 값이 없으면 비어 있음 안내와 꺼진 비우기 버�
   assert.match(html, /<button type="button" disabled="">비우기<\/button>/);
   // 폴백 칸("대체 후보 순서" 제목)은 어려운 일 자리에 없고 다른 역할에는 있다.
   const hard = html.slice(html.indexOf("어려운 일 작업자 바꾸기"), html.indexOf("검수자 바꾸기"));
-  assert.doesNotMatch(hard, /대체 후보 순서/);
+  assert.doesNotMatch(hard, /대체 후보 순서|대체 후보 추가/);
+  assert.match(hard, /값을 정하면 대체 후보 칸이 열립니다/);
+  assert.doesNotMatch(hard, /대체 후보는 없습니다/);
   assert.match(hard, /기본 실행 모델/);
   assert.match(html.slice(html.indexOf("검수자 바꾸기")), /대체 후보 순서/);
 });
 
-test("편집 칸: 값이 있으면 지금 값과 켜진 비우기 버튼이 보인다", () => {
+test("편집 칸: 값이 있으면 지금 값·켜진 비우기 버튼·다른 역할과 같은 대체 후보 칸이 보인다", () => {
   const html = editor(dataOf("filled"), ["worker-hard"]);
   assert.match(html, /지금 값: codex \/ gpt-hard/);
   assert.match(html, /<button type="button">비우기<\/button>/);
+  const hard = html.slice(html.indexOf("어려운 일 작업자 바꾸기"));
+  assert.match(hard, /대체 후보 순서/);
+  assert.match(hard, /대체 후보 추가/);
+  assert.match(hard, /--difficulty hard --fallback 번호/);
+  assert.doesNotMatch(hard, /대체 후보는 없습니다/);
+});
+
+test("편집 칸: 저장된 대체 후보는 위로·아래로·삭제와 함께 줄지어 보이고, 비우기 단추에 함께 지워짐이 적힌다", () => {
+  const html = editor(withHardFallback(), ["worker-hard"]);
+  const hard = html.slice(html.indexOf("어려운 일 작업자 바꾸기"));
+  assert.match(hard, /<ol><li>codex \/ gpt-hard-2 \/ high /);
+  assert.equal([...hard.matchAll(/value="remove:\d"/g)].length, 2);
+  assert.match(hard, /비우기 \(대체 후보 2개도 지움\)/);
 });
 
 test("편집 칸: 시니어는 기본 실행 모델 없이 등록 목록만 연다", () => {

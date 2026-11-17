@@ -491,3 +491,49 @@ test('난이도: 재시작한 어려운 일 세션은 다음 발령 검사를 �
   assert.deepEqual([verdict.result, verdict.code], ['warn', 'effort-or-args'], JSON.stringify(verdict));
   assert.match(verdict.warning, /어려운 일 작업자 자리/);
 });
+
+// 어려운 일 작업자 자리의 대체 후보로 띄운 세션(difficulty: hard + launchSource: fallback)도 작업자 폴백 세션과 같은 방식으로 다룬다.
+const withFallback = fallback => ({...settingsOf(hardRoles()), presets: {B: {roles: hardRoles(), fallback}}});
+const haiku = {runner: 'claude', model: 'claude-haiku-5-5', effort: 'low'};
+const guardOf = (f, settings) => inspectDispatchRunnerGuard({home: f.home, role: f.role, session: f.session, profile: 'worker',
+  phaseProfile: 'worker', identity: inspectCardSendIdentity({entries: f.entries, session: f.session, currentPid: '200'}),
+  readSettingsFn: () => settings});
+
+test('난이도 폴백: 평소 restart는 명령·difficulty를 그대로 잇고, 다음 발령은 어려운 일 폴백 경고로 통과한다(작업자 폴백 세션과 같은 모양)', () => {
+  const hard = fixture({extra: {difficulty: 'hard', launchSource: 'fallback', fallbackIndex: 1}});
+  const settings = withFallback({'worker-hard': [haiku]});
+  hard.run({}, settings);
+  const start = hard.entries.at(-1);
+  assert.equal(start.difficulty, 'hard');
+  assert.match(start.cmd, /--model claude-haiku-5-5/);
+  const verdict = guardOf(hard, settings);
+  assert.deepEqual([verdict.result, verdict.code], ['warn', 'fallback'], JSON.stringify(verdict));
+  assert.match(verdict.warning, /어려운 일 작업자 자리 폴백 1번/);
+  // 대조군: 작업자 폴백 세션도 같은 방식(difficulty 칸 없음, 작업자 폴백 경고).
+  const plain = fixture({extra: {launchSource: 'fallback', fallbackIndex: 1}});
+  const plainSettings = withFallback({worker: [haiku]});
+  plain.run({}, plainSettings);
+  assert.equal('difficulty' in plain.entries.at(-1), false);
+  const plainVerdict = guardOf(plain, plainSettings);
+  assert.deepEqual([plainVerdict.result, plainVerdict.code], ['warn', 'fallback']);
+  assert.match(plainVerdict.warning, /worker 폴백 1번/);
+});
+
+test('난이도 폴백: --model-from-settings는 어려운 일 폴백 세션을 어려운 일 자리 1순위 값으로 바꾸고 difficulty를 잇는다', () => {
+  const hard = fixture({extra: {difficulty: 'hard', launchSource: 'fallback', fallbackIndex: 1}});
+  const settings = withFallback({'worker-hard': [haiku]});
+  const receipt = hard.run(OPTION, settings);
+  const start = hard.entries.at(-1);
+  assert.equal(bare(start.cmd), `${HARD} --resume ${ID}`);
+  assert.equal(start.difficulty, 'hard');
+  assert.equal(receipt.modelFromSettings.model, 'claude-opus-5-5');
+  assert.equal(receipt.modelFromSettings.previousModel, 'claude-haiku-5-5');
+});
+
+test('난이도 폴백: 보통 세션이 어려운 일 폴백 모델이면 발령은 거절된다(목록을 섞지 않는다)', () => {
+  const plain = fixture();
+  const settings = withFallback({'worker-hard': [haiku]});
+  plain.run({}, settings);
+  const verdict = guardOf(plain, settings);
+  assert.deepEqual([verdict.result, verdict.code], ['reject', 'runner-or-model'], JSON.stringify(verdict));
+});

@@ -63,15 +63,15 @@ test('설정: worker-hard를 채우면 show에 값과 채워질 명령이 보이
   assert.throws(() => runnersCommand(['set', 'worker-hard'], {clear: true, runner: 'codex', ...f.meta()}, f), /함께 쓸 수 없다/);
 });
 
-test('설정: 검수자와 같은 계열·worker로 막은 모델은 저장 거절, 폴백 목록은 만들지 않는다', () => {
+test('설정: 검수자와 같은 계열·worker로 막은 모델은 저장 거절, 자리가 비어 있으면 대체 후보 목록도 거절한다', () => {
   const f = makeHome({active: 'B'});
   const set = model => setRole(f.home, {role: 'worker-hard', runner: 'codex', model, effort: 'high', ...f.meta()});
   assert.throws(() => set('claude-hard'), /어려운 일 작업자와 검수자가 같은 계열\(claude\)/);
   assert.equal(readSettings(f.home).revision, 1);
   blockModel(f.home, {model: 'gpt-other', roles: 'worker', ...f.meta()});
   assert.throws(() => set('gpt-other'), /정책으로 막은 모델/);
-  assert.throws(() => setFallback(f.home, {role: 'worker-hard', items: [choice('gpt-hard')], ...f.meta()}), /폴백이 없다/);
-  assert.throws(() => runnersCommand(['fallback', 'worker-hard'], {set: 'codex:gpt-hard:high', ...f.meta()}, f), /폴백이 없다/);
+  assert.throws(() => setFallback(f.home, {role: 'worker-hard', items: [choice('gpt-hard')], ...f.meta()}), /자리가 비어 있어 대체 후보를 둘 수 없다/);
+  assert.throws(() => runnersCommand(['fallback', 'worker-hard'], {set: 'codex:gpt-hard:high', ...f.meta()}, f), /자리가 비어 있어 대체 후보를 둘 수 없다/);
   set('gpt-hard');
   assert.equal(readSettings(f.home).presets.B.roles['worker-hard'].model, 'gpt-hard');
 });
@@ -215,7 +215,7 @@ test('start --difficulty hard (비교 모드, 자리 빔): 안내 한 줄만 내
   } finally { r.cleanup(); }
 });
 
-test('start --difficulty: normal은 옵션 없음과 같고, 재사용·다른 프로필·--cmd·--fallback·--for·모르는 값은 거절한다', {skip: !hasTmux}, () => {
+test('start --difficulty: normal은 옵션 없음과 같고, 재사용·다른 프로필·--cmd·--for·모르는 값·빈 대체 후보 목록은 거절한다', {skip: !hasTmux}, () => {
   const f = makeHome();
   const r = cliRig('misuse', f.home);
   try {
@@ -229,7 +229,8 @@ test('start --difficulty: normal은 옵션 없음과 같고, 재사용·다른 �
       ['모르는 값', ['hw1', '--hidden', '--no-prompt', '--profile', 'worker', '--difficulty', 'extreme'], /normal 또는 hard/],
       ['다른 프로필', ['hw2', '--hidden', '--no-prompt', '--profile', 'reviewer', '--difficulty', 'hard'], /--profile worker에서만/],
       ['--cmd', ['hw3', '--hidden', '--no-prompt', '--profile', 'worker', '--difficulty', 'hard', '--cmd', 'codex --model gpt-hard --effort high'], /함께 쓸 수 없다/],
-      ['--fallback', ['hw4', '--hidden', '--no-prompt', '--profile', 'worker', '--difficulty', 'hard', '--fallback', '1', '--reason', '시험'], /함께 쓸 수 없다/],
+      // 어려운 일 대체 후보 목록이 비어 있으면 작업자 목록으로 내려가지 않고 거절한다(자세한 경우는 hard-fallback.test.mjs).
+      ['--fallback 목록 없음', ['hw4', '--hidden', '--no-prompt', '--profile', 'worker', '--difficulty', 'hard', '--fallback', '1', '--reason', '시험'], /없는 폴백 번호: 1/],
       ['--for', ['hw5', '--hidden', '--no-prompt', '--profile', 'worker', '--difficulty', 'hard', '--for', 'nw'], /함께 쓸 수 없다/],
     ];
     for (const [name, args, pattern] of bad) {
@@ -267,23 +268,24 @@ test('대시보드: 프리셋 저장이 worker-hard 값을 지우지 않고, 실
   }
 });
 
-// 검수 F1: 가져오기·화면 프리셋 저장이 fallback.worker-hard를 저장하면 show가 깨졌다.
-test('가져오기: fallback.worker-hard는 전체 거절하고 설정·원장이 그대로, 정상 프리셋은 성공한다', () => {
+// 검수 F1: 자리 없이 fallback.worker-hard만 저장되면 show가 깨졌다. 지금은 자리가 있으면 받고, 없으면 거절한다.
+test('가져오기: 자리 없는 fallback.worker-hard는 전체 거절하고 설정·원장이 그대로, 정상 프리셋은 성공한다', () => {
   const f = makeHome();
   const file = path.join(f.home, 'runner-settings.json');
   const before = fs.readFileSync(file);
   const data = exportPreset(f.home, {name: 'A'});
   const bad = structuredClone(data);
+  delete bad.preset.roles['worker-hard'];
   bad.preset.fallback = {'worker-hard': [choice('gpt-other')]};
-  assert.throws(() => importPreset(f.home, {data: bad, as: 'C', ...f.meta()}), /파일 형식 오류: 어려운 일 작업자 자리는 폴백이 없다/);
-  assert.throws(() => importPreset(f.home, {data: bad, as: 'A', replace: true, ...f.meta()}), /폴백이 없다/);
+  assert.throws(() => importPreset(f.home, {data: bad, as: 'C', ...f.meta()}), /파일 형식 오류: 어려운 일 작업자 자리가 비어 있어 대체 후보를 둘 수 없다/);
+  assert.throws(() => importPreset(f.home, {data: bad, as: 'A', replace: true, ...f.meta()}), /대체 후보를 둘 수 없다/);
   assert.deepEqual(fs.readFileSync(file), before); assert.equal(f.records.length, 0);
   importPreset(f.home, {data, as: 'C', ...f.meta()});
   assert.deepEqual(readSettings(f.home).presets.C.roles['worker-hard'], choice('gpt-hard'));
   assert.equal(runnersCommand(['show'], {}, f).launch['worker-hard'] != null, true);
 });
 
-test('화면 프리셋 저장: fallback.worker-hard는 거절되고 설정이 그대로, 정상 저장은 성공한다', async () => {
+test('화면 프리셋 저장: 자리 없는 fallback.worker-hard는 거절되고 설정이 그대로, 정상 저장은 성공한다', async () => {
   const f = makeHome();
   const file = path.join(f.home, 'runner-settings.json');
   const server = createWallServer(() => ({center: null, entries: readLedger(f.home), tree: [],
@@ -296,6 +298,7 @@ test('화면 프리셋 저장: fallback.worker-hard는 거절되고 설정이 �
       headers: {'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', origin: base},
       body: new URLSearchParams({token, preset: 'A', value: JSON.stringify(preset), revision: String(revision), reason: '화면 저장'})});
     const bad = structuredClone(readSettings(f.home).presets.A);
+    delete bad.roles['worker-hard'];
     bad.fallback = {'worker-hard': [choice('gpt-other')]};
     const before = fs.readFileSync(file);
     assert.equal((await post(bad, 1)).status, 409);

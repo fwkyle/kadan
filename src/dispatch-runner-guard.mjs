@@ -25,7 +25,7 @@
 //   카드 단계를 모름·세션 프로필이 작업자/검수자가 아님      → 기존 동작 그대로
 // 폴백 — 2026-10-02 [kyle]. 기본값과 실행기·모델이 달라도 지금 설정의 그 프로필 폴백 목록 중 하나와 같으면
 // 통과 + 경고 한 줄(폴백 번호), send 기록에 fallbackIndex를 남긴다. 어느 것과도 다르면 기존처럼 거절.
-import { readSettings, launchFor, launchForFallback, launchForHard, PROFILE_ROLES } from "./runner-settings.mjs";
+import { readSettings, launchFor, launchForFallback, launchForHard, HARD_ROLE, PROFILE_ROLES } from "./runner-settings.mjs";
 import { withoutInlineScreen } from "./inline-screen.mjs";
 import { launchIdentityOf } from "./ai-identity.mjs";
 
@@ -53,7 +53,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     : { result: "reject", code, message: lines.join("\n") };
   const mismatch = GUARDED_PROFILES.includes(phaseProfile) && phaseProfile !== profile;
   const target = mismatch ? phaseProfile : profile;
-  // 어려운 일 세션(시작 기록 difficulty: hard)은 어려운 일 자리 하나와만 대조한다. 자리가 비면 작업자 값이다.
+  // 어려운 일 세션(시작 기록 difficulty: hard)은 어려운 일 자리와 그 대체 후보 목록하고만 대조한다. 자리가 비면 작업자 값이다.
   const hardSession = identity.launch?.difficulty === "hard" && profile === "worker" && target === "worker";
   const command = `kadan stop ${role} 뒤 kadan start ${role} --profile ${target}${hardSession ? " --difficulty hard" : ""}로 새로 띄워 보내라`;
   let expected, settings, slotName = `${profile} 기본값`;
@@ -101,11 +101,16 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     };
   }
   if (want.harness !== identity.harness || want.model !== identity.model) {
-    const fallback = !identity.launch?.compareMode && !hardSession && matchingFallback(settings, target, identity);
+    // 어려운 일 세션은 어려운 일 자리가 채워져 있을 때만 그 자리의 대체 후보 목록과 대조한다(작업자 목록과 섞지 않는다).
+    // 자리가 비어 기대값이 작업자 값이면 예전처럼 폴백 대조를 하지 않는다. 보통 세션은 작업자·검수자 목록만 본다.
+    const hardSlot = hardSession && slotName === "어려운 일 작업자 자리";
+    const fallback = !identity.launch?.compareMode && (!hardSession || hardSlot)
+      && matchingFallback(settings, hardSlot ? HARD_ROLE : target, identity);
     if (fallback) {
+      const label = hardSlot ? "어려운 일 작업자 자리 폴백" : `${target} 폴백`;
       return {
         result: "warn", code: "fallback",
-        warning: `경고: ${session}은(는) ${target} 폴백 ${fallback.fallbackIndex}번(${shownValue(fallback)})으로 떠 있다 — 기본값(${shownValue(expected)})이 아니다`,
+        warning: `경고: ${session}은(는) ${label} ${fallback.fallbackIndex}번(${shownValue(fallback)})으로 떠 있다 — ${hardSlot ? "어려운 일 작업자 자리 값" : "기본값"}(${shownValue(expected)})이 아니다`,
         ledger: { result: "warn", code: "fallback", fallbackIndex: fallback.fallbackIndex, settingsRevision: expected.revision },
       };
     }
@@ -133,10 +138,16 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
 // 기본값과 다른 세션이 지금 설정의 폴백 목록 중 하나와 실행기·모델이 같으면 그 폴백(번호 포함)을 돌려준다.
 // `kadan start --profile <p> --fallback N`으로 정식으로 띄운 세션을 옛 세션으로 거절하지 않게 한다(2026-10-02 [kyle]).
 // 읽지 못하는 폴백 항목은 건너뛴다 — 맞는 항목이 없으면 기존처럼 거절이다.
+// profile에는 작업자·검수자 프로필 또는 HARD_ROLE(어려운 일 작업자 자리의 목록)을 준다.
 function matchingFallback(settings, profile, identity) {
+  // 대체 후보는 1순위 기대값과 같은 활성 프리셋의 목록을 본다. 작업자·어려운 일 폴백은 시작 때 활성 프리셋으로 뜨고,
+  // 꺼진 뒤 남은 settings.compare.presets만으로 세션의 옛 프리셋을 고르면 활성 프리셋을 바꾼 뒤 옛 후보가 통과한다.
+  // 예외 하나: 비교 모드가 지금 켜져 있을 때 `start --for`로 뜬 검수자는 compareMode 표시 없이 그 비교 프리셋이 시작 기록에 남으므로 그 프리셋 목록을 본다.
   const sessionPreset = identity.launch?.settingsPreset;
-  const preset = settings.compare?.presets?.includes(sessionPreset) ? sessionPreset : settings.activePreset;
-  const count = settings.presets[preset]?.fallback?.[PROFILE_ROLES[profile]]?.length ?? 0;
+  const compareReviewer = profile === "reviewer" && settings.compare?.enabled === true
+    && settings.compare.presets?.includes(sessionPreset);
+  const preset = compareReviewer ? sessionPreset : settings.activePreset;
+  const count = settings.presets[preset]?.fallback?.[profile === HARD_ROLE ? HARD_ROLE : PROFILE_ROLES[profile]]?.length ?? 0;
   for (let index = 1; index <= count; index++) {
     let fallback;
     try { fallback = launchForFallback(settings, profile, index, preset); } catch { continue; }

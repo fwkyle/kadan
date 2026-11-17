@@ -27,12 +27,38 @@ test("비우기는 키를 지운다 — 빈 값·빈 객체를 남기지 않고,
   assert.throws(() => clearPreset(fixture.settings.filled, "worker"), /비울 수 없는/);
 });
 
-test("어려운 일 줄에는 폴백 목록이 생기지 않는다. 다른 역할의 폴백 초안은 그대로다", () => {
-  assert.throws(() => stagePreset(fixture.settings.filled, "worker-hard", true, { runner: "codex", model: "x" }, "add"), /대체 후보가 없/);
-  const draft = stagePreset(fixture.settings.filled, "worker", true, { runner: "codex", model: "gpt-fb" }, "add");
-  assert.deepEqual(Object.keys(draft.presets.A.fallback ?? {}), ["worker"]);
-  assert.equal(draft.presets.A.fallback?.["worker-hard"], undefined);
-  assert.equal(Object.hasOwn(draft.presets.A.roles, "worker-hard"), true);
+test("어려운 일 대체 후보: 값이 있으면 목록이 생기고(작업자 목록은 그대로), 값이 비면 거절한다", () => {
+  const choice = { runner: "codex", model: "gpt-hard-2", effort: "" };
+  const draft = stagePreset(fixture.settings.filled, "worker-hard", true, choice, "add");
+  assert.deepEqual(draft.presets.A.fallback?.["worker-hard"], [{ runner: "codex", model: "gpt-hard-2" }]);
+  assert.equal(draft.presets.A.fallback?.worker, undefined, "작업자 목록은 만들어지지 않는다");
+  assert.deepEqual(draft.presets.A.roles["worker-hard"], { runner: "codex", model: "gpt-hard" }, "1순위는 그대로");
+  assert.throws(() => stagePreset(fixture.settings.empty, "worker-hard", true, choice, "add"), /값이 비어 있어 대체 후보를 둘 수 없/);
+  // 같은 초안에서 자리를 먼저 채우면 대체 후보도 둘 수 있다(저장은 한 번에).
+  const filled = stagePreset(fixture.settings.empty, "worker-hard", false, { runner: "codex", model: "gpt-hard" }, "add");
+  assert.equal(stagePreset(filled, "worker-hard", true, choice, "add").presets.A.fallback?.["worker-hard"]?.length, 1);
+  // 순서·삭제는 다른 역할과 같은 조작이다.
+  const two = stagePreset(draft, "worker-hard", true, { runner: "codex", model: "gpt-hard-3" }, "add");
+  const moved = stagePreset(two, "worker-hard", true, choice, "up:2");
+  assert.deepEqual(moved.presets.A.fallback?.["worker-hard"]?.map((c: { model: string }) => c.model), ["gpt-hard-3", "gpt-hard-2"]);
+  assert.equal(stagePreset(moved, "worker-hard", true, choice, "remove:1").presets.A.fallback?.["worker-hard"]?.length, 1);
+  // 다른 역할의 폴백 초안은 그대로다.
+  const other = stagePreset(fixture.settings.filled, "worker", true, { runner: "codex", model: "gpt-fb" }, "add");
+  assert.deepEqual(Object.keys(other.presets.A.fallback ?? {}), ["worker"]);
+  assert.equal(other.presets.A.fallback?.["worker-hard"], undefined);
+});
+
+test("비우기는 어려운 일 대체 후보 목록도 함께 지우고, 다른 역할의 목록은 남긴다. 목록이 없으면 fallback 칸을 만들지 않는다", () => {
+  const withBoth = stagePreset(
+    stagePreset(fixture.settings.filled, "worker", true, { runner: "codex", model: "gpt-fb" }, "add"),
+    "worker-hard", true, { runner: "codex", model: "gpt-hard-2" }, "add");
+  const cleared = clearPreset(withBoth, "worker-hard");
+  assert.equal(Object.hasOwn(cleared.presets.A.roles, "worker-hard"), false);
+  assert.deepEqual(Object.keys(cleared.presets.A.fallback ?? {}), ["worker"]);
+  const onlyHard = stagePreset(fixture.settings.filled, "worker-hard", true, { runner: "codex", model: "gpt-hard-2" }, "add");
+  assert.equal(Object.hasOwn(clearPreset(onlyHard, "worker-hard").presets.A, "fallback"), false, "빈 fallback 객체를 남기지 않는다");
+  assert.equal(Object.hasOwn(clearPreset(fixture.settings.filled, "worker-hard").presets.A, "fallback"), false);
+  assert.equal(JSON.stringify(withBoth.presets.A.fallback?.["worker-hard"]), '[{"runner":"codex","model":"gpt-hard-2"}]', "원본 초안은 바뀌지 않는다");
 });
 
 test("강도가 있는 값은 그대로 담기고, 강도가 비면 effort 키를 만들지 않는다", () => {
