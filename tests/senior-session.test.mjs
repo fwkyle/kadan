@@ -645,3 +645,25 @@ test('TERM이 tmux 호출 도중에 오면(같은 프로세스 묶음이라 그 
     ? {status: 1, stdout: '', stderr: "can't find session: senior-fake"} : goneTry(args);
   assert.deepEqual(await askSeat(seat, deps(gone)), {reason: 'call-failed', detail: 'pane-dead'});
 });
+
+test('살아 있는지 묻는 조회가 한 번 빈 답으로 끝나도(TERM을 받은 tmux 클라이언트는 종료 코드 0·출력 없이 끝난다) 죽은 세션으로 단정하지 않는다', async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksr-'));
+  const seat = {session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000};
+  fs.writeFileSync(path.join(out, 'result.txt'), `결론: 답\n${markerOf(TOKEN)}\n`);
+  const working = (line, read) => read < 2 ? `› ${line}\n\n• Working (1s • esc to interrupt)\n\n› \n\n  fake low · ~/fake/out\n` : null;
+  const deps = fake => ({run: fake.run, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
+  // 질문을 넣은 뒤 첫 조회 한 번만 빈 답이다: 다시 물으면 살아 있으므로 이어서 답을 받는다.
+  const once = scripted({afterEnter: working});
+  const onceTry = once.run.try;
+  let blanks = 0;
+  once.run.try = args => once.keys.includes('Enter') && args[0] === 'display-message' && blanks++ === 0
+    ? {status: 0, signal: null, stdout: '', stderr: ''} : onceTry(args);
+  assert.deepEqual(await askSeat(seat, deps(once)), {reason: 'ok', answer: '결론: 답'});
+  assert.equal(blanks > 1, true, '빈 답 뒤에 다시 물었다');
+  // 대조: 다시 물어도 빈 답이면 죽은 세션이다.
+  const always = scripted({afterEnter: working});
+  const alwaysTry = always.run.try;
+  always.run.try = args => always.keys.includes('Enter') && args[0] === 'display-message'
+    ? {status: 0, signal: null, stdout: '', stderr: ''} : alwaysTry(args);
+  assert.deepEqual(await askSeat(seat, deps(always)), {reason: 'call-failed', detail: 'pane-dead'});
+});

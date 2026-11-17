@@ -37,8 +37,9 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = 'interactive', plan = {}, al
   fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nexec '${process.execPath}' '${FAKE}' "$@"\n`, {mode: 0o755});
   const tmuxLog = path.join(home, 'tmux-calls.log');
   // slow-tmux 파일이 있는 동안은 tmux 호출마다 0.5초 늦춘다(작은 지연 주입: 신호가 tmux 호출 도중에 오는 경우를 만든다).
+  // 파일 내용이 trap이면 TERM을 받은 호출이 진짜 tmux 클라이언트처럼 끝난다: 종료 코드 0·출력 없음(2026-11-17 tmux 3.6a 관찰).
   const slowTmux = path.join(home, 'slow-tmux');
-  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${tmuxLog}'\n[ -e '${slowTmux}' ] && sleep 0.5\nexec '${REAL_TMUX}' "$@"\n`, {mode: 0o755});
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${tmuxLog}'\nif [ -e '${slowTmux}' ]; then\n  [ "$(cat '${slowTmux}')" = trap ] && trap 'exit 0' TERM\n  sleep 0.5\nfi\nexec '${REAL_TMUX}' "$@"\n`, {mode: 0o755});
   const planFile = path.join(home, 'plan.json');
   fs.writeFileSync(planFile, JSON.stringify({log, default: {}, models: {}, ...plan}));
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [{id: 'codex', spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"'}]}));
@@ -246,19 +247,23 @@ test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 
   assert.deepEqual(f.sessions(), []);
 });
 
-test('감싼 프로세스: 상한의 TERM이 tmux 호출 도중에 와도(그 tmux 호출이 같이 죽는다) 죽은 세션으로 읽지 않고 칸은 timeout으로 남는다', {skip}, async t => {
-  const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
-  t.after(() => fs.rmSync(f.slowTmux, {force: true}));
-  // 폴링 간격을 아주 짧게 두고 tmux 호출을 0.5초씩 늦추면, 감싼 프로세스는 거의 늘 tmux 호출 안에 있다.
-  const pending = f.run({timeout: '60'}, {sessionTiming: {...TIMING, pollMs: 10},
-    spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})}).then(() => assert.fail('실패해야 한다'), e => e);
-  for (let i = 0; i < 400 && f.fakeLog('gpt-6-astra', 'submitted').length < 2; i++) await new Promise(r => setTimeout(r, 25));
-  fs.writeFileSync(f.slowTmux, '');
-  const error = await pending;
-  fs.rmSync(f.slowTmux, {force: true});
-  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE]);
-  assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
-  const [entry] = f.advices();
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(entry.evidencePath, 'outcome.json'), 'utf8')), {reason: 'interrupted', detail: 'SIGTERM'});
-  assert.deepEqual(f.sessions(), []);
-});
+// 감싼 프로세스가 상한에 걸리면 TERM은 프로세스 묶음 전체에 간다. 그때 돌던 tmux 호출이 어떻게 끝나든 칸은 timeout이어야 한다.
+//  - killed: 그 호출이 신호로 죽는다(종료 코드 없음).
+//  - trap: 진짜 tmux 클라이언트처럼 TERM을 받아 스스로 끝난다(종료 코드 0·출력 없음) — 리눅스 CI에서 call-failed로 남았던 경우.
+for (const mode of ['killed', 'trap']) {
+  test(`감싼 프로세스: 상한의 TERM이 tmux 호출 도중에 와도 죽은 세션으로 읽지 않고 칸은 timeout으로 남는다 (${mode})`, {skip}, async t => {
+    const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
+    t.after(() => fs.rmSync(f.slowTmux, {force: true}));
+    // 폴링 간격을 아주 짧게 두고 tmux 호출을 0.5초씩 늦추면, 감싼 프로세스는 거의 늘 tmux 호출 안에 있다.
+    const pending = f.run({timeout: '60'}, {sessionTiming: {...TIMING, pollMs: 10},
+      spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})}).then(() => assert.fail('실패해야 한다'), e => e);
+    for (let i = 0; i < 400 && f.fakeLog('gpt-6-astra', 'submitted').length < 2; i++) await new Promise(r => setTimeout(r, 25));
+    fs.writeFileSync(f.slowTmux, mode);
+    const error = await pending;
+    fs.rmSync(f.slowTmux, {force: true});
+    assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE]);
+    assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
+    assert.deepEqual(f.advices().map(e => e.reason), ['timeout']);
+    assert.deepEqual(f.sessions(), []);
+  });
+}
