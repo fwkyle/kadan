@@ -225,3 +225,21 @@ test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프�
   assert.deepEqual(f.sessions(), []);
   assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE], '다시 넣지 않는다');
 });
+
+test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 질문 프로세스를 띄우지 않고 질문도 넣지 않는다(칸은 timeout)', {skip}, async t => {
+  const f = fixture(t);
+  // 가짜 시계: 두 시니어의 관문 기록(gate.json)이 모두 생긴 순간부터 시계가 1시간 뒤로 넘어간다(상한 60초).
+  const gates = () => { try { return fs.readdirSync(path.join(f.home, 'advice')).flatMap(ask => fs.readdirSync(path.join(f.home, 'advice', ask))
+    .filter(name => fs.existsSync(path.join(f.home, 'advice', ask, name, 'gate.json')))).length; } catch { return 0; } };
+  const now = () => Date.now() + (gates() >= 2 ? 3_600_000 : 0);
+  const launched = [];
+  const error = await f.run({timeout: '60'}, {now, spawn: (command, settings) => { launched.push(command); return runJudgeProcess(command, settings); }})
+    .then(() => assert.fail('실패해야 한다'), e => e);
+  assert.deepEqual(launched, [], '상한이 지난 뒤에는 질문 프로세스를 시작하지 않는다');
+  assert.deepEqual(error.answers.map(a => [a.model, a.reason, a.status, a.detail]), [
+    ['gpt-6-astra', 'timeout', '실패(timeout)', 'deadline:before-ask'], ['gpt-6-sol', 'timeout', '실패(timeout)', 'deadline:before-ask']]);
+  // 관문의 /mcp만 들어갔고 질문 줄은 누구에게도 가지 않았다.
+  for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), ['/mcp']);
+  assert.deepEqual(f.advices().map(e => e.reason), ['timeout', 'timeout']);
+  assert.deepEqual(f.sessions(), []);
+});

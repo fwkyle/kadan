@@ -41,9 +41,10 @@ function setup(t, plan = {}) {
     run.try(['kill-server']);
   });
   const allow = names => fs.writeFileSync(path.join(home, 'senior-mcp-allow'), names.join('\n') + '\n');
+  let last = [];
   const open = (count = 1, more = {}) => {
     const askId = randomUUID();
-    const calls = Array.from({length: count}, (_, index) => {
+    const calls = last = Array.from({length: count}, (_, index) => {
       const dir = path.join(home, 'advice', askId, `${index + 1}-codex-m${index + 1}`);
       fs.mkdirSync(dir, {recursive: true});
       fs.writeFileSync(path.join(dir, 'input.txt'), `질문\n끝 표지 조각: ${markerParts(TOKEN).map(part => JSON.stringify(part)).join(' ')}\n`);
@@ -63,7 +64,7 @@ function setup(t, plan = {}) {
       submitted: fakeLog(model, 'submitted'), overlayEnter: fakeLog(model, 'overlay-enter').length};
   };
   const sessions = () => listSeniorSessions(run).map(row => row.name);
-  return {home, env, run, log, setPlan, allow, open, deps, keys, sessions, tmuxLog,
+  return {home, env, run, log, setPlan, allow, open, deps, keys, sessions, tmuxLog, lastDir: () => last[0].dir,
     envDump: model => JSON.parse(fs.readFileSync(path.join(log, `${model}.env.json`), 'utf8'))};
 }
 
@@ -390,4 +391,165 @@ test('청소: 다음 호출은 기록이 맞고 끝난 자기 세션만 끈다 �
     socket: s.run.socket, askId: 'a', panePid: '1'}));
   assert.deepEqual(sweepEnded({home: s.home, run: s.run}), []);
   assert.ok(s.sessions().includes('senior-elsewhere'));
+});
+
+// ---- 수정 라운드(검수 F1·F2) 회귀 시험 ----
+
+// 생성 마무리 중 실패를 주입한다: at(args)가 참인 첫 명령에서 before(세션 이름)를 부른 뒤 던진다.
+// failQuery면 정리 때의 세션 조회(display-message)가 실패한 것으로 돌려준다. 만든 세션 이름을 돌려준다.
+function breakCreate(s, at, before = () => {}, {failQuery = false} = {}) {
+  let session = null, broke = false;
+  const run = Object.assign((args, input) => {
+    if (args[0] === 'new-session') session = args[args.indexOf('-s') + 1];
+    else if (!broke && session && at(args)) { broke = true; before(session); throw new Error('생성 마무리 실패(주입)'); }
+    return s.run(args, input);
+  }, {
+    try: args => broke && failQuery && args[0] === 'display-message'
+      ? {status: 1, stdout: '', stderr: '조회 실패(주입)'} : s.run.try(args),
+    socket: s.run.socket, home: s.home,
+  });
+  assert.throws(() => s.open(1, {run}), /생성 마무리 실패\(주입\)/);
+  assert.ok(broke, '주입 지점에 닿았다');
+  return session;
+}
+const isReap = args => args[0] === 'run-shell';
+const isSetAsk = args => args[0] === 'set-option' && args.includes('@kadan_senior_ask');
+const cleanupNote = dir => JSON.parse(fs.readFileSync(path.join(dir, 'create-cleanup.json'), 'utf8'));
+
+test('부분 생성 실패 정리(F1): 기록이 있는 세션은 소유 확인이 맞을 때만 끈다 — PID·세대·기록이 바뀌었거나 조회가 실패하면 이름만으로 끄지 않는다', {skip}, t => {
+  const s = setup(t);
+  const drop = name => s.run(['kill-session', '-t', `=${name}`]);
+  // 정상 대조: 예약 등록만 실패하면 방금 만든 자기 세션을 치운다.
+  breakCreate(s, isReap);
+  assert.deepEqual(s.sessions(), []);
+  assert.equal(readRecord(s.lastDir()).endReason, 'partial-create');
+  // 같은 이름의 세션에 다른 프로세스가 들어앉았다(pane PID가 기록과 다르다) → 끄지 않고 이유를 남긴다.
+  let session = breakCreate(s, isReap, name => s.run(['respawn-pane', '-k', '-t', `=${name}:`, 'sleep 600']));
+  assert.deepEqual(s.sessions(), [session], 'PID가 바뀐 세션은 남아 있어야 한다');
+  assert.equal(readRecord(s.lastDir()).killSkipped, 'pid-differs');
+  drop(session);
+  // 생성 식별값(세션 옵션의 askId)이 바뀌었다.
+  session = breakCreate(s, isReap, name => s.run(['set-option', '-t', `=${name}:`, '@kadan_senior_ask', randomUUID()]));
+  assert.deepEqual(s.sessions(), [session], '세대가 바뀐 세션은 남아 있어야 한다');
+  assert.equal(readRecord(s.lastDir()).killSkipped, 'generation-differs');
+  drop(session);
+  // 기록이 못 읽게 바뀌었다: 무엇이 자기 것인지 견줄 근거가 없다.
+  session = breakCreate(s, isReap, () => fs.writeFileSync(path.join(s.lastDir(), 'session.json'), '{깨진 기록'));
+  assert.deepEqual(s.sessions(), [session], '기록을 못 읽으면 남아 있어야 한다');
+  drop(session);
+  // 정리 때 세션 조회가 실패했다: 확인하지 못한 세션을 이름만으로 끄지 않는다.
+  session = breakCreate(s, isReap, () => {}, {failQuery: true});
+  assert.deepEqual(s.sessions(), [session], '조회가 실패하면 남아 있어야 한다');
+  drop(session);
+});
+
+test('부분 생성 실패 정리(F1): 기록을 쓰기 전 단계도 방금 읽은 PID·세대와 견준 뒤에만 끈다', {skip}, t => {
+  const s = setup(t);
+  const drop = name => s.run(['kill-session', '-t', `=${name}`]);
+  // 정상 대조: 옵션 설정이 실패했고 pane은 그대로다 → 방금 읽은 PID와 같으므로 치운다.
+  breakCreate(s, isSetAsk);
+  assert.deepEqual(s.sessions(), []);
+  assert.equal(fs.existsSync(path.join(s.lastDir(), 'session.json')), false);
+  // pane PID를 읽지 못했다: 견줄 PID가 없으므로 끄지 않는다(대기 셸은 문이 안 열려 60초 뒤 스스로 끝난다).
+  let session = breakCreate(s, args => args[0] === 'display-message');
+  assert.deepEqual(s.sessions(), [session], 'PID를 모르는 세션은 남아 있어야 한다');
+  assert.deepEqual([cleanupNote(s.lastDir()).session, cleanupNote(s.lastDir()).why], [session, 'pid-unknown']);
+  drop(session);
+  // 옵션 설정이 실패하는 사이 pane이 바뀌었다.
+  session = breakCreate(s, isSetAsk, name => s.run(['respawn-pane', '-k', '-t', `=${name}:`, 'sleep 600']));
+  assert.deepEqual(s.sessions(), [session], 'PID가 바뀐 세션은 남아 있어야 한다');
+  assert.equal(cleanupNote(s.lastDir()).why, 'pid-differs');
+  drop(session);
+  // 옵션 설정이 실패하는 사이 다른 호출 폴더를 가리키게 바뀌었다.
+  session = breakCreate(s, isSetAsk, name => s.run(['set-option', '-t', `=${name}:`, '@kadan_senior_dir', '/somewhere/else']));
+  assert.deepEqual(s.sessions(), [session], '세대가 바뀐 세션은 남아 있어야 한다');
+  assert.equal(cleanupNote(s.lastDir()).why, 'generation-differs');
+  drop(session);
+  // 정리 때 조회가 실패했다.
+  session = breakCreate(s, isSetAsk, () => {}, {failQuery: true});
+  assert.deepEqual(s.sessions(), [session], '조회가 실패하면 남아 있어야 한다');
+  assert.equal(cleanupNote(s.lastDir()).why, 'query-failed');
+  drop(session);
+});
+
+// tmux 없이 화면을 글로 흉내 낸다(가짜 시계 시험용). 붙여넣은 글은 입력칸에 보이고 Enter를 받으면 제출된다.
+// afterEnter(제출한 줄, 그 뒤 몇 번째 화면 읽기인가) → 화면 글. on(명령 이름)은 시계를 움직이는 자리다.
+function scripted({afterEnter = () => null, on = () => {}} = {}) {
+  const STATUS = '  fake low · ~/fake/out';
+  const keys = [];
+  let buffer = '', text = '', submitted = null, reads = 0;
+  const idle = () => `› ${text}\n\n${STATUS}\n`;
+  const call = (args, input) => {
+    on(args[0]);
+    switch (args[0]) {
+      case 'capture-pane': return (submitted != null ? afterEnter(submitted, reads++) : null) ?? idle();
+      case 'display-message': return args.at(-1) === '#{pane_in_mode}' ? '0' : '123|0';
+      case 'load-buffer': buffer = input; return '';
+      case 'paste-buffer': text = buffer; keys.push('paste'); return '';
+      case 'send-keys': keys.push(args.at(-1)); submitted = text; text = ''; reads = 0; return '';
+      default: return '';
+    }
+  };
+  const run = Object.assign(call, {try: args => ({status: 0, stdout: call(args), stderr: ''}), socket: 'scripted', home: null});
+  return {run, keys};
+}
+const FAST = {...TIMING, pollMs: 1, settleMs: 5, keyGapS: '0', idleConfirm: 2};
+const noSleepSpawn = () => ({status: 0, stdout: '', stderr: ''});
+
+test('시간 상한(F2): 질문은 붙여넣기 직전·Enter 직전에 남은 시간을 다시 본다 — 끝났으면 새 입력 없이 timeout이다', async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksd-'));
+  const seat = {session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000};
+  // 대조: 상한이 충분하면 한 줄을 넣고, 일하는 표시 뒤 쉬는 화면에서 답을 받는다(붙여넣기 1회 + Enter 1회).
+  fs.writeFileSync(path.join(out, 'result.txt'), `결론: 답\n${markerOf(TOKEN)}\n`);
+  const ok = scripted({afterEnter: (line, read) => read < 2 ? `› ${line}\n\n• Working (1s • esc to interrupt)\n\n› \n\n  fake low · ~/fake/out\n` : null});
+  assert.deepEqual(await askSeat(seat, {run: ok.run, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn}),
+    {reason: 'ok', answer: '결론: 답'});
+  assert.deepEqual(ok.keys, ['paste', 'Enter']);
+  // 이미 끝난 호출: 화면이 멀쩡해도 아무것도 넣지 않는다.
+  const late = scripted();
+  const lateOutcome = await askSeat(seat, {run: late.run, now: () => 10_001, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
+  assert.deepEqual(late.keys, [], '상한이 지난 뒤에는 붙여넣기도 Enter도 나가지 않는다');
+  assert.deepEqual(lateOutcome, {reason: 'timeout', detail: 'deadline:before-ask'});
+  // 붙여넣기 직전에 끝났다(전송 준비 중에 시계가 넘어감): 붙여넣기 0회 · Enter 0회.
+  let clock = 9_999;
+  const beforePaste = scripted({on: name => { if (name === 'load-buffer') clock = 10_000; }});
+  const pasteOutcome = await askSeat(seat, {run: beforePaste.run, now: () => clock, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
+  assert.deepEqual(beforePaste.keys, [], '붙여넣기 직전에 끝났으면 붙여넣기도 Enter도 나가지 않는다');
+  assert.deepEqual(pasteOutcome, {reason: 'timeout', detail: 'deadline:paste'});
+  // Enter 직전에 끝났다(붙여넣기와 Enter 사이에 시계가 넘어감): 글은 붙었지만 제출(Enter)은 0회다.
+  clock = 9_999;
+  const beforeEnter = scripted();
+  const tick = () => { clock = 10_000; return {status: 0, stdout: '', stderr: ''}; };
+  const enterOutcome = await askSeat(seat, {run: beforeEnter.run, now: () => clock, sleep: async () => {}, timing: FAST, spawn: tick});
+  assert.deepEqual(beforeEnter.keys, ['paste'], 'Enter 직전에 끝났으면 Enter는 나가지 않는다');
+  assert.deepEqual(enterOutcome, {reason: 'timeout', detail: 'deadline:enter'});
+});
+
+test('시간 상한(F2): 관문도 /mcp를 넣기 전에 남은 시간을 본다 — 준비 중에 끝났으면 키 0회로 timeout이다', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ksg-'));
+  const dir = path.join(home, 'advice', 'ask', '1-codex-m1');
+  fs.mkdirSync(path.join(dir, 'out'), {recursive: true});
+  fs.writeFileSync(path.join(home, 'senior-mcp-allow'), 'codex_worktrees\nfixture-a\n');
+  const seat = {session: 'senior-fake', panePid: '123', dir, out: path.join(dir, 'out'), gate: path.join(dir, 'launch'), deadlineAt: 10_000};
+  const notGit = () => ({status: 128, stdout: '', stderr: 'not a git repository'});
+  const MCP_SCREEN = ['/mcp', '', '🔌  MCP Tools', '', '  • codex_worktrees: connected (3 tools)', '  • fixture-a: connected (1 tool)', '',
+    '  Use /mcp verbose for tools and resources.', '', '', '› ', '', '  fake low · ~/fake/out', ''].join('\n');
+  const afterEnter = line => line === '/mcp' ? MCP_SCREEN : null;
+  // 대조: 상한이 충분하면 /mcp를 넣고 통과한다.
+  const fine = scripted({afterEnter});
+  assert.deepEqual(await passGate(seat, {run: fine.run, home, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: notGit}), {ok: true});
+  assert.deepEqual(fine.keys, ['paste', 'Enter']);
+  // 준비(빈 입력칸 뒤 기다림) 중에 상한이 끝났다: /mcp를 넣지 않는다.
+  let clock = 9_000;
+  const slow = scripted({afterEnter});
+  const gate = await passGate(seat, {run: slow.run, home, now: () => clock, sleep: async () => { clock = 10_000; }, timing: FAST, spawn: notGit});
+  assert.deepEqual(slow.keys, [], '준비 중에 끝났으면 /mcp도 넣지 않는다');
+  assert.deepEqual([gate.ok, gate.why, gate.timeout], [false, 'deadline', true]);
+  // /mcp를 붙인 뒤 Enter 직전에 끝났다: Enter 0회.
+  clock = 9_000;
+  const mid = scripted({afterEnter});
+  const tick = (command, args) => command === 'sleep' ? (clock = 10_000, {status: 0}) : notGit(command, args);
+  const midGate = await passGate(seat, {run: mid.run, home, now: () => clock, sleep: async () => {}, timing: FAST, spawn: tick});
+  assert.deepEqual(mid.keys, ['paste'], 'Enter 직전에 끝났으면 /mcp의 Enter는 나가지 않는다');
+  assert.deepEqual([midGate.ok, midGate.why, midGate.timeout], [false, 'deadline', true]);
 });
