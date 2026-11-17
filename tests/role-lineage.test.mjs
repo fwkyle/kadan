@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { buildTree } from '../src/cli-tree.mjs';
 import { centerSummary } from '../src/center-summary.mjs';
 import { buildCardCenter } from '../src/card-center.mjs';
-import { roleLineage } from '../src/role-lineage.mjs';
+import { buildLineage, lineageFor, roleLineage } from '../src/role-lineage.mjs';
 import { startDigest } from '../src/secretary-resume.mjs';
 
 // 고정 입력. 시험 역할 이름은 운영 이름을 쓰지 않는다.
@@ -17,8 +17,10 @@ function live(entries, roles) {
   const tree = buildTree(entries, alive, []);
   const center = buildCardCenter({ cards: [], entries, tree });
   const nodes = tree.flatMap((b) => b.roles);
-  const lineage = roleLineage(entries, nodes.filter((r) => r.life.state === 'alive'));
-  const flat = nodes.map((r) => ({ ...r, supersedes: lineage.get(r.role) ?? [] }));
+  const built = buildLineage(entries);
+  const lineage = lineageFor(built, nodes.filter((r) => r.life.state === 'alive'));
+  const flat = nodes.map((r) => ({ ...r, supersedes: lineage.get(r.role) ?? [],
+    firstStartedAt: built.firstStartedAt.get(r.role) ?? null }));
   return Object.fromEntries(centerSummary({ ...center, roles: flat }).liveRoles.map((r) => [r.role, r]));
 }
 
@@ -27,6 +29,49 @@ test('restart: 새 start의 restartOf로 옛 start를 찾아 panePid·로티 탭
   const next = start('세대-가', 5, { restartOf: startDigest(old), restartConversation: 'conv-X' });
   const got = live([old, next], ['세대-가'])['세대-가'].supersedes;
   assert.deepEqual(got, [{ source: 'restart', rottieTerminalId: 'term-A', panePid: '101', conversation: 'conv-X' }]);
+});
+
+test('firstStartedAt: 이름이 같으면 새 대화·재시작·복원·재사용 뒤에도 첫 start 시각이다', () => {
+  const first = start('시각-가', 1);
+  const entries = [first,
+    start('시각-나', 2),
+    start('시각-가', 3, { conversationMode: 'new' }),
+    start('시각-가', 4, { conversationMode: 'fork' }),
+    start('시각-가', 5, { conversationMode: 'resume' }),
+    start('시각-가', 6, { restartOf: startDigest(first) }),
+    start('시각-가', 7, { reopenOf: startDigest(first) }),
+    start('시각-가', 8, { reason: 'server-restore' }),
+    start('시각-가', 9, { reason: 'rottie-tab-restore' }),
+    start('시각-가', 10, { reuseOf: startDigest(first) })];
+  const got = live(entries, ['시각-가', '시각-나', '시각-없음']);
+  assert.equal(got['시각-가'].firstStartedAt, first.t);
+  assert.equal(got['시각-나'].firstStartedAt, T(2));
+  assert.equal(got['시각-없음'].firstStartedAt, null);
+});
+
+test('firstStartedAt: 첫 start의 t가 없거나 날짜가 아니면 나중 start로 보충하지 않는다', () => {
+  for (const t of [undefined, null, '', 'not-a-date', 123]) {
+    const got = live([start('시각-잘못', 1, { t }), start('시각-잘못', 2)], ['시각-잘못']);
+    assert.equal(got['시각-잘못'].firstStartedAt, null, String(t));
+  }
+});
+
+test('firstStartedAt: 원장의 첫 사건을 고르고 날짜 문자열은 변환하지 않는다', () => {
+  const t = '2036-11-02T09:01:00+09:00';
+  const entries = [start('시각-순서', 1, { t }), start('시각-순서', 0)];
+  assert.equal(buildLineage(entries).firstStartedAt.get('시각-순서'), t);
+});
+
+test('firstStartedAt: 옛 session 이름도 읽되 supersedes는 role 없는 start를 계속 제외한다', () => {
+  const old = start('시각-옛', 1, { role: undefined, rottieTerminalId: 'legacy-tab' });
+  const current = start('시각-옛', 3, { restartOf: startDigest(old) });
+  const entries = [old, start('시각-명시', 2, { session: 'kadan-시각-다른' }), current];
+  const got = live(entries, ['시각-옛', '시각-명시', '시각-다른']);
+  assert.equal(got['시각-옛'].firstStartedAt, T(1));
+  assert.equal(got['시각-명시'].firstStartedAt, T(2));
+  assert.equal(buildLineage(entries).firstStartedAt.has('시각-다른'), false);
+  assert.deepEqual(got['시각-옛'].supersedes, []);
+  assert.deepEqual(roleLineage(entries), roleLineage(entries.slice(1)));
 });
 
 test('restart: 옛 start에 대화가 적혀 있고 restartConversation이 없으면 옛 값, fork 대화는 쓰지 않는다', () => {
