@@ -2,7 +2,7 @@
 import { startRoleProfile } from "../role-instructions.mjs";
 import { reviewerLaunch } from "../reviewer-launch.mjs";
 import { pickCompareLaunch } from "../runner-compare.mjs";
-import { launchFor, launchForFallback, launchForHard, readSettings, PROFILE_ROLES } from "../runner-settings.mjs";
+import { launchFor, launchForFallback, launchForHard, readSettings, HARD_ROLE, PROFILE_ROLES } from "../runner-settings.mjs";
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { floor } from "../floor.mjs";
@@ -51,7 +51,7 @@ function readAlternateOn(session) {
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--difficulty normal|hard] [--for 작업자역할] [--no-prompt]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--difficulty normal|hard (hard도 --fallback N 가능: 어려운 일 작업자 자리의 대체 후보)] [--for 작업자역할] [--no-prompt]");
   const insideHome = workdirInsideHome(process.cwd(), ledgerHome());
   if (insideHome) die(workdirInsideHomeMessage(insideHome), 2);
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
@@ -88,8 +88,8 @@ export function cmdStart(argv, flags) {
   if (hard) {
     if (reusing) die("--difficulty hard는 작업자를 새로 띄울 때만 쓴다 — 살아 있는 세션은 바꾸지 않는다", 2);
     if (roleProfile !== "worker") die("--difficulty hard는 --profile worker에서만 쓴다", 2);
-    if (flags.cmd !== undefined || flags.fallback !== undefined || flags.for !== undefined)
-      die("--difficulty hard는 --cmd·--fallback·--for와 함께 쓸 수 없다", 2);
+    if (flags.cmd !== undefined || flags.for !== undefined)
+      die("--difficulty hard는 --cmd·--for와 함께 쓸 수 없다", 2);
   }
   let reviewSelection = null;
   if (flags.for !== undefined) {
@@ -111,7 +111,8 @@ export function cmdStart(argv, flags) {
     try {
       if (hard) {
         hardLaunch = launchForHard(readSettings(ledgerHome()));
-        if (!hardLaunch) console.error("어려운 일 작업자 자리가 비어 있어 보통 작업자로 띄운다");
+        // --fallback과 함께면 자리가 비어 있을 때 보통 작업자로 내려가지 않고 아래 폴백 검사가 거절한다.
+        if (!hardLaunch && flags.fallback === undefined) console.error("어려운 일 작업자 자리가 비어 있어 보통 작업자로 띄운다");
       }
       launch = reviewSelection ?? hardLaunch ?? (roleProfile === 'worker' && flags.cmd === undefined
         && flags.fallback === undefined ? pickCompareLaunch(ledgerHome(), role)
@@ -133,7 +134,8 @@ export function cmdStart(argv, flags) {
     if (typeof flags.cmd === "string" || flags.cmd === true) die("--fallback과 --cmd는 함께 쓸 수 없다", 2);
     if (reusing) die(`이미 살아 있음: ${session} — 폴백은 새로 띄울 때만 쓴다`, 2);
     if (!Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) die("폴백 발령에는 --profile worker|reviewer|conductor|super가 필요하다", 2);
-    try { fallback = launchForFallback(readSettings(ledgerHome()), roleProfile, flags.fallback); } catch (error) { die(error.message, 2); }
+    // 어려운 일 작업자는 그 자리의 대체 후보 목록만 읽는다. 작업자 목록으로 내려가지 않는다.
+    try { fallback = launchForFallback(readSettings(ledgerHome()), hard ? HARD_ROLE : roleProfile, flags.fallback); } catch (error) { die(error.message, 2); }
     flags.cmd = fallback.cmd;
   }
   const useSettings = !fallback && launch && !(typeof flags.cmd === "string" && flags.cmd.trim());
@@ -155,7 +157,7 @@ export function cmdStart(argv, flags) {
     }
     console.error(`검수자 선택: ${reviewSelection.model} — ${reviewSelection.reviewFor.reason}`);
   }
-  if (useSettings && hardLaunch) launchRecord.difficulty = "hard";
+  if (hard && (fallback || (useSettings && hardLaunch))) launchRecord.difficulty = "hard";
   if (useSettings && launch.compareMode) {
     launchRecord.compareMode = true;
     launchRecord.pickId = launch.pickId;

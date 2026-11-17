@@ -6,6 +6,7 @@ import type { Choice, RunnersData, Settings } from "./Runners";
 const text = (c: Choice) => [c.runner, c.model || "(모델 안 골랐음)", c.effort].filter(Boolean).join(" / ");
 
 // 요약표 한 줄의 글. 어려운 일 작업자는 값이 없는 것이 기본이라 "미설정" 대신 "작업자와 같음"으로 말한다.
+// 대체 후보는 다른 역할과 같이 저장된 목록을 그대로 보인다(없으면 "없음").
 export function summaryCells(data: RunnersData, role: string, settings: Settings = data.settings!) {
   const current = settings.presets[settings.activePreset].roles[role] as Choice | undefined;
   const fallbacks = fallbackLabels(settings, role);
@@ -14,8 +15,8 @@ export function summaryCells(data: RunnersData, role: string, settings: Settings
   if (role === HARD_ROLE)
     return {
       value: current ? text(current) : "비어 있음 — 작업자와 같음",
-      fallbacks: [],
-      note: "없음 (폴백 없음)",
+      fallbacks,
+      note: "없음",
       command: data.commands[role] ?? "작업자와 같은 명령으로 띄웁니다",
     };
   return { value: current ? text(current) : "미설정", fallbacks, note: "없음", command: data.commands[role] };
