@@ -75,7 +75,9 @@ export type RunnersData = Stamp & {
 export default function Runners() {
   const { readOnly } = useContext(AppContext),
     resource = useResource<RunnersData>("runners"),
-    data = resource.data;
+    data = resource.data,
+    // 열어 둔 고급 설정이 주기 새로고침·저장 뒤에도 닫히지 않도록 이 화면이 직접 들고 있는다.
+    [advancedOpen, setAdvancedOpen] = useState(false);
   return (
     <section>
       <h1>실행 모델 설정</h1>
@@ -112,118 +114,134 @@ export default function Runners() {
           ) : (
             <PresetEditor data={data} settings={data.settings} />
           )}
+          {!readOnly && <PresetSwitch settings={data.settings} />}
           <CompareMode settings={data.settings} />
-          {!readOnly && (
-            <>
-          <details>
-            <summary>대체 후보·감시 AI·시니어·설명 AI 안내</summary>
-          <p className="muted">
-            대체 후보(폴백)는 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
-            전환은 없습니다. 검수자 시작 시 작업자를 지정한 경우에는 다른 계열의 첫 후보를 고릅니다.
-          </p>
-          <p className="muted">
-            감시 AI만 예외입니다. 감시기가 스스로 부르므로, 1순위가 시간 초과·호출
-            실패로 응답하지 못하면 대체 후보를 차례로 자동 시도합니다(1순위 포함 최대{" "}
-            {data.watch?.maxAttempts ?? 3}개, 시도마다 5분 상한). 비워 두면 감시 프로필의
-            KADAN_JUDGE_MODEL을 씁니다.
-          </p>
-          <p className="muted">
-            시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
-            의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 최대{" "}
-            {data.senior?.max ?? 2}명을 등록하면 묻는 즉시 등록된 전원에게 동시에 묻고, 감독은 모델을 고르지 않습니다.
-            대체 후보는 없고, 한도·실패는 재시도 없이 그 시니어 칸에 표시됩니다.
-          </p>
-          <p className="muted">
-            설명 AI는 감시 AI가 아닙니다. 발령·완료·막힘·결정이 생긴 카드의 요약 칸만 채웁니다(1순위 포함 최대{" "}
-            {data.explain?.maxAttempts ?? 2}개, 시도당 75초 상한). 이 칸이 비어 있거나 고른 실행기에
-            exec 틀이 없으면 아무것도 하지 않고, 칸을 채운 시점 이후의 사건만 다룹니다.
-          </p>
-          </details>
-          <h2>프리셋·즐겨찾기·실행기 관리</h2>
-          <PresetManager settings={data.settings} />
-          <Favorites settings={data.settings} />
-          <RunnerTables catalog={data.catalog} revision={data.settings.revision} />
-          <details>
-            <summary>프리셋 전환</summary>
-            <ActionForm
-              revision={data.settings.revision}
-              spec={{
-                action: "/runners/preset",
-                title: "프리셋 전환",
-                fields: [
-                  {
-                    name: "preset",
-                    label: "프리셋",
-                    value: data.settings.activePreset,
-                    type: "select",
-                    options: Object.entries(data.settings.presets).map(
-                      ([name, s]) => [name, s.label || name],
-                    ),
-                    required: true,
-                  },
-                  {
-                    name: "reason",
-                    label: "바꾸는 이유",
-                    value: "",
-                    type: "text",
-                    options: null,
-                    required: true,
-                  },
-                ],
-              }}
-            />
-          </details>
-          {data.idleRoles && (
-            <details id="idle-roles">
-              <summary>
-                쉬는 역할 알림 기준 {data.idleRoles.hours}시간 · 정리 후보{" "}
-                {data.idleRoles.candidates === null ? "모름" : data.idleRoles.candidates + "개"}
-              </summary>
-              <p className="muted" style={{ wordBreak: "keep-all", overflowWrap: "break-word", textWrap: "pretty" }}>
-                화면이 이 시간 넘게 그대로이고 맡은 일이 없는 역할을 정리 후보로 골라, 그 역할의 직속 상위 감독에게
-                우편으로 알립니다. 카단은 아무것도 끄지 않고, 끌지는 받은 감독이 정합니다. 같은 역할은 이 시간이 지나도
-                그대로일 때 다시 알립니다. 기본값은 {data.idleRoles.defaultHours}시간입니다
-                {data.idleRoles.source === "default" ? "(지금 기본값 사용 중)" : ""}.
-                {data.idleRoles.mailOff ? " 지금은 끄기 파일(idle-roles.off)이 있어 우편을 보내지 않습니다." : ""}
-              </p>
-              <ActionForm
-                revision={data.settings.revision}
-                spec={{
-                  action: "/runners/idle-hours",
-                  title: "기준 시간 저장",
-                  fields: [
-                    {
-                      name: "hours",
-                      label: `기준 시간(${data.idleRoles.min}~${data.idleRoles.max}시간)`,
-                      value: String(data.idleRoles.hours),
-                      type: "number",
-                      options: null,
-                      required: true,
-                    },
-                    {
-                      name: "reason",
-                      label: "바꾸는 이유",
-                      value: "",
-                      type: "text",
-                      options: null,
-                      required: true,
-                    },
-                  ],
-                }}
-              />
+          {readOnly ? (
+            <RecentChanges history={data.history} />
+          ) : (
+            <details
+              className="runner-advanced"
+              open={advancedOpen}
+              onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+            >
+              <summary>고급 설정 — 프리셋 · 즐겨찾기 · 실행기 표 · 쉬는 역할 · 최근 변경</summary>
+              <details>
+                <summary>대체 후보·감시 AI·시니어·설명 AI 안내</summary>
+                <p className="muted">
+                  대체 후보(폴백)는 원인이 확인된 쿼터·로그인·모델 오류에만 사용합니다. 자동
+                  전환은 없습니다. 검수자 시작 시 작업자를 지정한 경우에는 다른 계열의 첫 후보를 고릅니다.
+                </p>
+                <p className="muted">
+                  감시 AI만 예외입니다. 감시기가 스스로 부르므로, 1순위가 시간 초과·호출
+                  실패로 응답하지 못하면 대체 후보를 차례로 자동 시도합니다(1순위 포함 최대{" "}
+                  {data.watch?.maxAttempts ?? 3}개, 시도마다 5분 상한). 비워 두면 감시 프로필의
+                  KADAN_JUDGE_MODEL을 씁니다.
+                </p>
+                <p className="muted">
+                  시니어는 작업 결과에 결정할 부분이 있을 때 감독이 <code>kadan senior</code>로
+                  의견을 한 번 묻는 고급 모델입니다(Claude Code 어드바이저와는 다른 기능). 최대{" "}
+                  {data.senior?.max ?? 2}명을 등록하면 묻는 즉시 등록된 전원에게 동시에 묻고, 감독은 모델을 고르지 않습니다.
+                  대체 후보는 없고, 한도·실패는 재시도 없이 그 시니어 칸에 표시됩니다.
+                </p>
+                <p className="muted">
+                  설명 AI는 감시 AI가 아닙니다. 발령·완료·막힘·결정이 생긴 카드의 요약 칸만 채웁니다(1순위 포함 최대{" "}
+                  {data.explain?.maxAttempts ?? 2}개, 시도당 75초 상한). 이 칸이 비어 있거나 고른 실행기에
+                  exec 틀이 없으면 아무것도 하지 않고, 칸을 채운 시점 이후의 사건만 다룹니다.
+                </p>
+              </details>
+              <PresetManager settings={data.settings} />
+              <Favorites settings={data.settings} />
+              <RunnerTables catalog={data.catalog} revision={data.settings.revision} />
+              {data.idleRoles && (
+                <details id="idle-roles">
+                  <summary>
+                    쉬는 역할 알림 기준 {data.idleRoles.hours}시간 · 정리 후보{" "}
+                    {data.idleRoles.candidates === null ? "모름" : data.idleRoles.candidates + "개"}
+                  </summary>
+                  <p className="muted" style={{ wordBreak: "keep-all", overflowWrap: "break-word", textWrap: "pretty" }}>
+                    화면이 이 시간 넘게 그대로이고 맡은 일이 없는 역할을 정리 후보로 골라, 그 역할의 직속 상위 감독에게
+                    우편으로 알립니다. 카단은 아무것도 끄지 않고, 끌지는 받은 감독이 정합니다. 같은 역할은 이 시간이 지나도
+                    그대로일 때 다시 알립니다. 기본값은 {data.idleRoles.defaultHours}시간입니다
+                    {data.idleRoles.source === "default" ? "(지금 기본값 사용 중)" : ""}.
+                    {data.idleRoles.mailOff ? " 지금은 끄기 파일(idle-roles.off)이 있어 우편을 보내지 않습니다." : ""}
+                  </p>
+                  <ActionForm
+                    revision={data.settings.revision}
+                    spec={{
+                      action: "/runners/idle-hours",
+                      title: "기준 시간 저장",
+                      fields: [
+                        {
+                          name: "hours",
+                          label: `기준 시간(${data.idleRoles.min}~${data.idleRoles.max}시간)`,
+                          value: String(data.idleRoles.hours),
+                          type: "number",
+                          options: null,
+                          required: true,
+                        },
+                        {
+                          name: "reason",
+                          label: "바꾸는 이유",
+                          value: "",
+                          type: "text",
+                          options: null,
+                          required: true,
+                        },
+                      ],
+                    }}
+                  />
+                </details>
+              )}
+              <RecentChanges history={data.history} />
             </details>
           )}
-            </>
-          )}
-          <details>
-            <summary>최근 변경</summary>
-            {data.history.map((h, i) => (
-              <JsonValue key={i} value={h} />
-            ))}
-          </details>
         </>
       )}
     </section>
+  );
+}
+function PresetSwitch({ settings }: { settings: Settings }) {
+  return (
+    <details>
+      <summary>프리셋 전환</summary>
+      <ActionForm
+        revision={settings.revision}
+        spec={{
+          action: "/runners/preset",
+          title: "프리셋 전환",
+          fields: [
+            {
+              name: "preset",
+              label: "프리셋",
+              value: settings.activePreset,
+              type: "select",
+              options: Object.entries(settings.presets).map(
+                ([name, s]) => [name, s.label || name],
+              ),
+              required: true,
+            },
+            {
+              name: "reason",
+              label: "바꾸는 이유",
+              value: "",
+              type: "text",
+              options: null,
+              required: true,
+            },
+          ],
+        }}
+      />
+    </details>
+  );
+}
+function RecentChanges({ history }: { history: unknown[] }) {
+  return (
+    <details>
+      <summary>최근 변경</summary>
+      {history.map((h, i) => (
+        <JsonValue key={i} value={h} />
+      ))}
+    </details>
   );
 }
 // 즐겨찾기 관리: 목록 보기와 삭제. 추가는 각 역할의 '이 조합 즐겨찾기' 버튼으로 한다.
