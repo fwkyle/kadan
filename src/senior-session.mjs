@@ -82,7 +82,11 @@ export function seniorTmux({socket, home, env = process.env, spawn = spawnSync})
   const run = (args, input) => {
     const result = call(args, input);
     const why = String(result.stderr || result.error?.message || '').trim();
-    if (result.status !== 0) throw new Error(`tmux ${args[0]} 실패: ${why}`);
+    // signal: 그 tmux 호출이 신호로 죽었다(같은 프로세스 묶음에 TERM이 온 경우). 부른 쪽이 죽은 세션과 가를 수 있게 싣는다.
+    if (result.status !== 0) {
+      const error = new Error(`tmux ${args[0]} 실패: ${why || result.signal || ''}`);
+      throw Object.assign(error, {signal: result.signal ?? null});
+    }
     return result.stdout;
   };
   return Object.assign(run, {try: call, socket, home});
@@ -134,7 +138,7 @@ function processAlive(pid) {
 export function listSeniorSessions(run) {
   const result = run.try(['list-sessions', '-F', '#{session_name}\t#{pane_pid}\t#{@kadan_senior_dir}']);
   if (result.status !== 0) {
-    if (/no server running|No such file or directory|error connecting to/iu.test(String(result.stderr))) return [];
+    if (queryMiss(result) === 'no-session') return [];
     throw new Error(`시니어 소켓 세션 목록 조회 실패: ${String(result.stderr || result.error?.message || '').trim()}`);
   }
   return result.stdout.split('\n').filter(Boolean).map(line => {
@@ -143,9 +147,10 @@ export function listSeniorSessions(run) {
   });
 }
 
-// tmux가 '그런 세션·서버가 없다'고 답한 것과 그 밖의 조회 실패를 가른다. 뒤쪽은 세션이 있는지조차 모르는 것이다.
-const GONE = /can't find (?:session|window|pane)|no server running|No such file or directory|error connecting to/iu;
-const queryMiss = result => GONE.test(String(result.stderr ?? '')) ? 'no-session' : 'query-failed';
+// tmux가 '그런 세션·서버가 없다'고 확정해 답한 문구만 부재로 읽는다: 세션을 못 찾음, 서버 없음, 소켓 파일 없음.
+// 접속 권한 오류·접속 거부·시간 초과 같은 그 밖의 실패는 세션이 있는지조차 모르는 것이다(query-failed).
+const GONE = /can't find session|no server running|error connecting to [^\n]*\(No such file or directory\)/iu;
+function queryMiss(result) { return GONE.test(String(result.stderr ?? '')) ? 'no-session' : 'query-failed'; }
 
 // 같은 확인: 이 소켓의 그 이름 세션이 기록과 같은 생성 식별값·호출 폴더·pane PID를 갖고 있을 때만 자기 것이다.
 export function confirmOwn(record, run) {
@@ -306,10 +311,16 @@ export function captureSeat(run, session) {
   return splitGhostText(run(['capture-pane', '-e', '-p', '-J', '-S', '-400', '-t', `=${session}:`])).judge;
 }
 
+// 세션의 pane이 기록한 그 프로세스로 살아 있는가. 반환: {alive: true} | {alive: false, signal?}.
+// signal이 있으면 세션이 죽은 것이 아니라 묻는 tmux 호출이 신호로 죽은 것이다 — 감싼 프로세스가 상한에 걸리면
+// TERM이 프로세스 묶음 전체에 가서, 그때 돌던 tmux 호출도 같이 죽는다(2026-11-17 리눅스 CI에서 call-failed로 오판).
 function paneAlive(run, seat) {
   const result = run.try(['display-message', '-p', '-t', `=${seat.session}:`, '#{pane_pid}|#{pane_dead}']);
-  return result.status === 0 && result.stdout.trim() === `${seat.panePid}|0`;
+  if (result.signal) return {alive: false, signal: result.signal};
+  return {alive: result.status === 0 && result.stdout.trim() === `${seat.panePid}|0`};
 }
+// 던져진 오류가 '신호로 죽은 tmux 호출'이면 그 신호 이름. sendTmux가 정리 실패를 묶어 던진 경우도 본다.
+const signalOf = error => error?.signal ?? error?.errors?.find(inner => inner?.signal)?.signal ?? null;
 
 // 한 줄을 넣는다. 바닥의 sendTmux(붙여넣기 → PID 재확인 → Enter)를 그대로 쓰되 전용 소켓 실행 함수와 기대 pane PID를 넘기고,
 // 그 실행 함수의 키 명령 직전에 화면을 새로 읽어 검사한다. 허용하는 키는 붙여넣기와 Enter뿐이다.
@@ -321,14 +332,16 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
     return fail('KADAN_SENIOR_KEY_WITHHELD', withheld, {stage, why, withheld});
   };
   const guarded = (args, input) => {
+    // 순서가 중요하다: 화면 읽기(외부 tmux 호출이라 시간이 든다)와 판정을 먼저 끝내고, 남은 시간은 키 명령 바로 앞에서 본다.
+    // 마감 검사와 키 명령 사이에는 아무 호출도 두지 않는다 — 화면을 읽는 동안 끝난 상한도 여기서 걸린다.
     if (args[0] === 'paste-buffer') {
-      if (expired()) throw deny('paste', 'deadline');
       const verdict = composerReady(captureSeat(run, seat.session));
+      if (expired()) throw deny('paste', 'deadline');
       if (!verdict.ok) throw deny('paste', verdict.why);
     } else if (args[0] === 'send-keys') {
       if (args.at(-1) !== 'Enter') throw deny('key', `허용하지 않은 키 ${args.at(-1)}`);
-      if (expired()) throw deny('enter', 'deadline');
       const verdict = composerHolds(captureSeat(run, seat.session), text);
+      if (expired()) throw deny('enter', 'deadline');
       if (!verdict.ok) throw deny('enter', verdict.why);
     }
     return run(args, input);
@@ -389,10 +402,12 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
   const untilScreen = async (limitMs, check) => {
     const until = Math.min(now() + limitMs, seat.deadlineAt);
     for (;;) {
-      if (!paneAlive(run, seat)) return {ok: false, why: 'pane-dead'};
+      const pane = paneAlive(run, seat);
+      if (!pane.alive) return {ok: false, why: pane.signal ? 'interrupted' : 'pane-dead'};
       // 살아 있음을 본 직후에 세션(마지막 세션이면 서버까지)이 사라지면 화면 읽기가 던진다. 그것도 죽은 pane이다.
       let screen;
-      try { screen = captureSeat(run, seat.session); } catch { return {ok: false, why: 'pane-dead'}; }
+      try { screen = captureSeat(run, seat.session); }
+      catch (error) { return {ok: false, why: signalOf(error) ? 'interrupted' : 'pane-dead'}; }
       const verdict = check(evidence.screen = screen);
       if (verdict.ok || verdict.final) return verdict;
       if (now() >= until) return {ok: false, why: verdict.why};
@@ -407,11 +422,13 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
     let ready = await untilScreen(timing.startupMs, composerReady);
     if (ready.ok) { await sleep(timing.settleMs); ready = await untilScreen(0, composerReady); }
     // 죽은 세션은 상한과 무관하게 죽은 것이다. 그 밖에 상한이 지났으면 무엇을 기다리다 끝났든 timeout이다.
-    if (expired() && ready.why !== 'pane-dead') return done(late(ready.ok ? 'before-mcp' : `startup:${ready.why}`));
+    const stopped = why => why === 'pane-dead' || why === 'interrupted';
+    if (expired() && !stopped(ready.why)) return done(late(ready.ok ? 'before-mcp' : `startup:${ready.why}`));
     if (!ready.ok) return done({ok: false, why: `startup:${ready.why}`});
     try { sendLine(seat, '/mcp', {run, keyGapS: timing.keyGapS, spawn, now}); }
     catch (error) {
       if (error.why === 'deadline') return done(late(`mcp-${error.stage}`));
+      if (signalOf(error)) return done({ok: false, why: 'interrupted', note: error.message});
       return done({ok: false, why: `key:${keyWhy(error)}`, note: error.message});
     }
     // 출력은 한 번 찍히고 바뀌지 않는다. 완전한 구간이 보이면 그 자리에서 판정하고, 연결 중·모르는 줄이면 다시 묻지 않고 거절한다.
@@ -421,7 +438,7 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
       const back = composerReady(screen);
       return back.ok ? read : {ok: false, why: `mcp-not-closed:${back.why}`};
     });
-    if (!block.ok) return done(expired() && block.why !== 'pane-dead' ? late(block.why) : {ok: false, why: block.why});
+    if (!block.ok) return done(expired() && !stopped(block.why) ? late(block.why) : {ok: false, why: block.why});
     evidence.connected = block.connected; evidence.disabled = block.disabled;
     const verdict = gateVerdict(block.connected, readAllow(home));
     return done(verdict.ok ? {ok: true} : {...verdict, note: gateNote(home, verdict)});
@@ -440,7 +457,7 @@ export function readAnswerFile(file, marker) {
   return readAnswerText(raw, marker);
 }
 
-// 질문 한 줄을 넣고 끝을 기다린다. 반환: {reason: ok|empty|limit|timeout|call-failed, detail?, answer?}. 던지지 않는다.
+// 질문 한 줄을 넣고 끝을 기다린다. 반환: {reason: ok|empty|limit|timeout|call-failed|interrupted, detail?, answer?}. 던지지 않는다.
 // ok는 (1) 답 파일이 답 후보이고 (2) 질문을 넣은 뒤 화면이 일하는 표시를 거쳐 (3) 다시 빈 입력칸으로 쉴 때만이다.
 // 이미 제출한 호출은 같은 폴링에서 완성된 답이 timeout보다 먼저다. 제출 전에 상한이 끝났으면 새 입력 없이 timeout이다.
 // 처음의 쉬는 화면이나 /mcp 출력 상태를 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
@@ -451,15 +468,23 @@ export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, 
   try { sendLine(seat, seat.line, {run, keyGapS: timing.keyGapS, spawn, now}); }
   catch (error) {
     if (error.why === 'deadline') return {reason: 'timeout', detail: `deadline:${error.stage}`};
+    if (signalOf(error)) return {reason: 'interrupted', detail: signalOf(error)};
     return {reason: 'call-failed', detail: `key:${keyWhy(error)} — ${error.message}`};
   }
   const submittedAt = now();
   const answerFile = path.join(seat.out, 'result.txt');
   let sawWorking = false, idle = 0;
   for (;;) {
-    if (!paneAlive(run, seat)) return {reason: 'call-failed', detail: 'pane-dead'};
+    // tmux 호출이 신호로 죽었으면 세션이 죽은 것이 아니라 이 프로세스가 중단되는 중이다(interrupted — 부른 쪽이 상한 표시와 함께 읽는다).
+    const pane = paneAlive(run, seat);
+    if (pane.signal) return {reason: 'interrupted', detail: pane.signal};
+    if (!pane.alive) return {reason: 'call-failed', detail: 'pane-dead'};
     let screen;
-    try { screen = captureSeat(run, seat.session); } catch { return {reason: 'call-failed', detail: 'pane-dead'}; }
+    try { screen = captureSeat(run, seat.session); }
+    catch (error) {
+      const signal = signalOf(error);
+      return signal ? {reason: 'interrupted', detail: signal} : {reason: 'call-failed', detail: 'pane-dead'};
+    }
     if (limitScreen(screen, now())) return {reason: 'limit', detail: 'limit-screen'};
     if (screenWorking(screen)) { sawWorking = true; idle = 0; }
     else if (composerReady(screen).ok) {
