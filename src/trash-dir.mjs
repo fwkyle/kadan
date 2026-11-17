@@ -4,7 +4,7 @@
 // 읽는 순서는 환경변수 > 기계 설정 > 기본이며 값 하나로 정해진다. 위 값이 잘못되면 아래 값으로 넘어가지 않고 거절한다
 // (조용히 기본 자리로 옮기면 파일이 두 곳에 나뉜다). 매 호출 때 읽고 캐시하지 않아 명령 한 번으로 적용된다.
 // 명시로 정한 자리에는 <자리>/<YYYY-MM-DD>/ 폴더를 붙인다(로컬 날짜). 기본 자리에는 붙이지 않는다.
-// 옮기기는 같은 디스크 안의 rename만 한다. 실패(다른 디스크·같은 이름·권한)하면 복사로 우회하지 않고 던진다 —
+// 옮기기는 같은 디스크 안의 link+unlink만 한다(아래 moveToTrash). 실패(다른 디스크·같은 이름·권한)하면 복사로 우회하지 않고 던진다 —
 // 부르는 쪽은 원본을 건드리는 다음 단계(새 상태 쓰기·표시 파일 삭제·설치 제거)를 하지 않는다.
 // 형식과 원자적 쓰기는 window-setting.mjs와 같은 방식(임시 파일 → rename, 0600)이다.
 import fs from 'node:fs';
@@ -86,7 +86,7 @@ export function describeTrash(home, opts) {
 }
 
 // 놓을 폴더를 만들고 그 안의 이름의 최종 경로를 돌려준다. name은 하위 폴더를 가질 수 있다(autostart-<시각>/파일).
-// 같은 이름이 이미 있으면 거절한다(rename은 같은 이름의 파일을 조용히 덮는다).
+// 같은 이름이 이미 있으면 미리 거절한다(친절한 오류용). 덮어쓰지 않는 보장은 이 검사가 아니라 moveToTrash의 link 연산이 맡는다.
 export function trashTarget(home, name, {env, now, mode} = {}) {
   const {dir} = resolveTrash(home, {env, now});
   const dest = path.join(dir, name);
@@ -99,11 +99,22 @@ export function trashTarget(home, name, {env, now, mode} = {}) {
 function isLink(file) { try { fs.lstatSync(file); return true; } catch { return false; } }
 
 // 파일 하나를 휴지통으로 옮긴다. 옮긴 새 경로를 돌려준다. 실패하면 원본을 그대로 두고 던진다(복사로 우회하지 않는다).
-export function moveToTrash(home, source, name, {env, now, rename = fs.renameSync} = {}) {
+// 덮어쓰지 않는다는 보장은 사전 검사(trashTarget)가 아니라 연산에 둔다: renameSync는 목적지가 있으면 조용히 덮으므로,
+// 검사와 이동 사이에 다른 실행이 같은 이름을 만들면 그 파일이 사라진다. linkSync는 목적지가 있으면 EEXIST로 원자적으로 실패한다.
+// 그래서 linkSync(원본 → 목적지)가 성공한 뒤에만 원본을 unlink한다. unlink가 실패하면 두 곳에 남을 뿐 잃지 않으며 오류로 멈춘다.
+// 일반 파일만 받는다(폴더는 link가 안 되고, 심볼릭 링크는 macOS에서 링크 대상을 따라가므로 거절한다).
+export function moveToTrash(home, source, name, {env, now, link = fs.linkSync, unlink = fs.unlinkSync} = {}) {
   const dest = trashTarget(home, name, {env, now});
-  try { rename(source, dest); } catch (error) {
+  let kind;
+  try { kind = fs.lstatSync(source); } catch (error) { throw new Error(`TRASH_MOVE_FAILED: 원본을 읽지 못했다: ${source} (${error?.code ?? error?.message})`); }
+  if (!kind.isFile()) throw new Error(`TRASH_NOT_FILE: 일반 파일만 옮긴다(폴더·링크는 거절, 원본 그대로): ${source}`);
+  try { link(source, dest); } catch (error) {
+    if (error?.code === 'EEXIST') throw new Error(`TRASH_EXISTS: 같은 이름이 이미 있다(덮어쓰지 않는다, 원본 그대로): ${dest}`);
     if (error?.code === 'EXDEV') throw new Error(`TRASH_CROSS_DEVICE: 휴지통이 다른 디스크라 옮기지 않았다(복사로 우회하지 않는다, 원본 그대로): ${source} → ${dest}`);
     throw new Error(`TRASH_MOVE_FAILED: 옮기지 못했다(원본 그대로): ${source} → ${dest} (${error?.code ?? error?.message})`);
+  }
+  try { unlink(source); } catch (error) {
+    throw new Error(`TRASH_SOURCE_REMAINS: 휴지통에는 넣었지만 원본을 지우지 못했다(두 곳에 남음, 잃지 않음): ${source} / ${dest} (${error?.code ?? error?.message})`);
   }
   return dest;
 }

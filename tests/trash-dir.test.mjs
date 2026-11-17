@@ -24,20 +24,25 @@ const run = (home, args, env = {}) => spawnSync(process.execPath, [cli, ...args]
   env: {PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR,
     KADAN_NOTIFY: 'off', KADAN_HOME: home, ...env}});
 
-// 다른 디스크로 옮기는 실패(EXDEV)를 흉내 낸다: 도착 경로가 prefix 안이면 던진다. 끝나면 되돌린다(비동기 본문도 받는다).
-function withExdev(prefix, body) {
-  const real = fs.renameSync;
-  fs.renameSync = (from, to) => {
-    if (String(to).startsWith(prefix)) throw Object.assign(new Error('cross-device link not permitted'), {code: 'EXDEV'});
-    return real(from, to);
-  };
-  const restore = () => { fs.renameSync = real; };
+// 휴지통으로 옮기는 연산(link)에 끼어든다. before(from, to)가 던지면 그 오류가 연산 결과가 된다. 끝나면 되돌린다(비동기 본문도 받는다).
+function withLink(before, body) {
+  const real = fs.linkSync;
+  fs.linkSync = (from, to) => { before(from, to); return real(from, to); };
+  const restore = () => { fs.linkSync = real; };
   let result;
   try { result = body(); } catch (error) { restore(); throw error; }
   if (typeof result?.then === 'function') return result.finally(restore);
   restore();
   return result;
 }
+// 다른 디스크로 옮기는 실패(EXDEV)를 흉내 낸다: 도착 경로가 prefix 안이면 던진다.
+const withExdev = (prefix, body) => withLink((from, to) => {
+  if (String(to).startsWith(prefix)) throw Object.assign(new Error('cross-device link not permitted'), {code: 'EXDEV'});
+}, body);
+// 사전 검사를 지난 뒤 다른 실행이 같은 이름을 만드는 경쟁을 흉내 낸다: link 직전에 목적지에 파일을 둔다.
+const withRival = (prefix, body, content = 'RIVAL') => withLink((from, to) => {
+  if (String(to).startsWith(prefix)) fs.writeFileSync(to, content);
+}, body);
 
 test('경우표: 환경변수 > 기계 설정 > 기본, 명시 값에만 날짜 폴더', () => {
   const home = tmp('table'), a = tmp('envdir'), b = tmp('setdir');
@@ -277,4 +282,57 @@ test('kadan trash: show·set·clear, --reason 필수, 절대경로만, 0600 파�
   // 도움말은 아무것도 하지 않는다
   assert.match(run(home, ['trash', 'set', dir, '--help']).stdout, /사용법: kadan trash/);
   assert.equal(fs.existsSync(trashSettingPath(home)), false);
+});
+
+test('경쟁: 사전 검사 뒤 같은 이름이 생겨도 덮어쓰지 않고 TRASH_EXISTS, 원본 그대로', () => {
+  const home = tmp('race'), dir = tmp('racedir'), env = {KADAN_TRASH_DIR: dir};
+  const src = path.join(home, 'a.json'), dest = path.join(dir, DAY, 'a.json');
+  fs.writeFileSync(src, 'MINE');
+  withRival(dir, () => assert.throws(() => moveToTrash(home, src, 'a.json', {env, now: () => MORNING}), /TRASH_EXISTS/));
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'RIVAL', '끼어든 기존 파일이 그대로다');
+  assert.equal(fs.readFileSync(src, 'utf8'), 'MINE', '원본 그대로');
+});
+
+test('경쟁: revive 경로는 기존 백업을 덮지 않고 새 상태 파일·notified 삭제도 하지 않는다', () => {
+  const home = tmp('racerevive'), dir = tmp('racerevivedir');
+  const file = path.join(home, 'revive-state.json'), marker = path.join(home, 'revive-corrupt.notified');
+  fs.writeFileSync(file, '{깨짐');
+  fs.writeFileSync(marker, 'sig');
+  const backups = () => fs.readdirSync(path.join(dir, DAY));
+  withRival(dir, () => assert.throws(() => recoverCorruptState(home, MORNING, {KADAN_TRASH_DIR: dir}), /TRASH_EXISTS/));
+  assert.equal(fs.readFileSync(path.join(dir, DAY, backups()[0]), 'utf8'), 'RIVAL', '기존 백업이 그대로다');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{깨짐', '원본 그대로(새 상태 파일을 쓰지 않았다)');
+  assert.equal(readReviveState(home).corrupt, true);
+  assert.equal(fs.existsSync(marker), true, 'notified 파일 유지');
+});
+
+test('경쟁: autostart remove도 기존 파일을 덮지 않고 plist를 그대로 둔다', () => {
+  const root = tmp('raceauto'), dir = tmp('raceautodir');
+  const options = {home: path.join(root, 'kadan'), userHome: root, cli: '/repo/src/cli.mjs', node: '/node/bin/node', cwd: '/work',
+    env: {PATH: '/usr/bin', KADAN_TRASH_DIR: dir}, now: new Date(MORNING)};
+  const plist = path.join(root, 'Library', 'LaunchAgents', AUTOSTART_LABEL + '.plist');
+  autostartCommand('install', options);
+  const rival = path.join(dir, DAY, `autostart-${options.now.toISOString().replace(/[:.]/g, '-')}`, AUTOSTART_LABEL + '.plist');
+  withRival(dir, () => assert.throws(() => autostartCommand('remove', options), /TRASH_EXISTS/));
+  assert.equal(fs.readFileSync(rival, 'utf8'), 'RIVAL');
+  assert.equal(fs.existsSync(plist), true, 'plist 유지');
+});
+
+test('일반 파일이 아니면 거절하고, 원본을 지우지 못하면 두 곳에 남기고 오류로 멈춘다', () => {
+  const home = tmp('kind'), dir = tmp('kinddir'), env = {KADAN_TRASH_DIR: dir};
+  const folder = path.join(home, 'folder'), target = path.join(home, 'target.txt'), link = path.join(home, 'link.txt');
+  fs.mkdirSync(folder);
+  fs.writeFileSync(target, 'T');
+  fs.symlinkSync(target, link);
+  assert.throws(() => moveToTrash(home, folder, 'folder', {env, now: () => MORNING}), /TRASH_NOT_FILE/);
+  assert.throws(() => moveToTrash(home, link, 'link.txt', {env, now: () => MORNING}), /TRASH_NOT_FILE/);
+  assert.equal(fs.existsSync(folder), true);
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true, '링크도 그대로');
+  assert.equal(fs.existsSync(path.join(dir, DAY, 'link.txt')), false);
+  const src = path.join(home, 'keep.json');
+  fs.writeFileSync(src, 'K');
+  const unlink = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); };
+  assert.throws(() => moveToTrash(home, src, 'keep.json', {env, now: () => MORNING, unlink}), /TRASH_SOURCE_REMAINS/);
+  assert.equal(fs.readFileSync(src, 'utf8'), 'K', '원본이 남아 있다');
+  assert.equal(fs.readFileSync(path.join(dir, DAY, 'keep.json'), 'utf8'), 'K', '휴지통에도 있다(잃지 않음)');
 });
