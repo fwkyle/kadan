@@ -48,6 +48,8 @@ export type RunnersData = Stamp & {
     {
       spawn: string;
       needsEffort: boolean;
+      // codex처럼 모델 목록을 파일에서 읽는 실행기. 모델을 직접 등록·삭제하지 않는다.
+      catalog?: boolean;
       error?: string;
       models: { model: string; efforts: string[] }[];
     }

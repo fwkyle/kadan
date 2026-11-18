@@ -22,6 +22,14 @@ export function summaryCells(data: RunnersData, role: string, settings: Settings
   return { value: current ? text(current) : "미설정", fallbacks, note: "없음", command: data.commands[role] };
 }
 
+// 발령 때 채워질 명령은 길어서 표 칸으로 두지 않고 줄마다 접어 둔다. 읽기 전용 화면에서도 같은 길로 본다.
+export const CommandFold = ({ command }: { command: string }) => (
+  <details className="row-command">
+    <summary>발령 명령 보기</summary>
+    <code>{command}</code>
+  </details>
+);
+
 export function RunnerSummary({ data }: { data: RunnersData }) {
   return (
     <div className="table-scroll runners-summary">
@@ -31,7 +39,6 @@ export function RunnerSummary({ data }: { data: RunnersData }) {
             <th>역할</th>
             <th>지금 값</th>
             <th>대체 후보 (순서대로)</th>
-            <th>발령 때 채워질 명령</th>
           </tr>
         </thead>
         <tbody>
@@ -40,7 +47,10 @@ export function RunnerSummary({ data }: { data: RunnersData }) {
             return (
               <tr key={role}>
                 <th>{label}</th>
-                <td>{cells.value}</td>
+                <td>
+                  {cells.value}
+                  <CommandFold command={cells.command} />
+                </td>
                 <td>
                   {cells.fallbacks.length ? (
                     <ol>
@@ -51,9 +61,6 @@ export function RunnerSummary({ data }: { data: RunnersData }) {
                   ) : (
                     cells.note
                   )}
-                </td>
-                <td>
-                  <code>{cells.command}</code>
                 </td>
               </tr>
             );

@@ -65,3 +65,8 @@ export const pickCopySource = (names: string[], active: string, chosen: string) 
 // 바꾸는 이유를 비워 두면 화면이 채워 보낸다(서버는 이유가 필수다). 적었으면 그 글을 그대로 쓴다.
 export const reasonFor = (typed: string, labels: string[]) =>
   typed.trim() || `대시보드 표에서 변경: ${labels.join(', ') || '실행 모델'}`;
+
+// 바꾸기 창에서 새 모델을 등록한 뒤의 변경안. 등록은 설정 버전만 올리므로 고친 다른 줄·대체 후보는 그대로 두고 버전만 이어 쓴다.
+// 역할 줄은 등록한 모델을 고른 변경안으로 만들고, 대체 후보 칸은 '추가'를 눌러야 반영되므로 버전만 올린다.
+export const withRegistered = (draft: Settings, role: string, fallback: boolean, choice: Choice, revision: number) =>
+  fallback ? {...draft, revision} : stagePreset({...draft, revision}, role, false, choice, 'add');
