@@ -348,7 +348,11 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      let items;try{items=editFallback(current.favorites??[],{op,index,item:{runner:f.runner,model:f.model,effort:f.effort||undefined}});}catch(error){throw new Error(error.message.replace('폴백','즐겨찾기'));}
      return setFavorites(home,{items,...meta});
     };
-    const modelAdd=()=>setRunnerModel(home,{runner:f.runner,model:f.model,efforts:f.efforts,...meta});
+    // newOnly=1은 '새 이름만'이다: 같은 이름이 이미 있으면 서버가 설정 잠금 안에서 거절한다. 칸이 없으면 기존처럼 강도 목록을 교체한다.
+    const modelAdd=()=>{
+     if(f.newOnly!==undefined&&f.newOnly!==''&&f.newOnly!=='1')throw new Error('새 이름만 값이 올바르지 않다');
+     return setRunnerModel(home,{runner:f.runner,model:f.model,efforts:f.efforts,newOnly:f.newOnly==='1',...meta});
+    };
     // 표 편집: 화면이 보낸 칸 중 지금 값과 같은 것은 버리고, 바뀐 칸만 공통 함수(setRunner)로 저장한다.
     const runnerEdit=()=>{
      const current=readSettings(home);

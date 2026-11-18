@@ -14,7 +14,7 @@
 | `nightMerge` | `허용` · `금지` | `금지`면 이 저장소는 Autopilot 중 자동 머지 안 함. 비어 있으면 허용으로 본다 |
 
 ```
-kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지   # 둘 중 하나만 줘도 된다
+kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --auto-merge 허용|금지    # 둘 중 하나만 줘도 된다(옛 이름 --night-merge도 받음, 둘을 함께 주면 거절)
 kadan autopilot repo <소유자/이름> --clear deployBranch|nightMerge                       # 칸 하나 지우기
 kadan autopilot repo list | show <소유자/이름>                                            # 읽기
 ```
