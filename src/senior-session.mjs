@@ -14,11 +14,10 @@ import {acquireDirLock} from './dir-lock.mjs';
 import {ensureTmuxConf, sendTmux, tmuxClientEnv} from './floor-tmux.mjs';
 import {splitGhostText} from './ghost-text.mjs';
 import {ALLOW_LIVE_FLOOR_ENV, isDefaultHome} from './live-floor-guard.mjs';
-import {composerHolds, composerReady, gateVerdict, limitScreen, markerOf, parseAllowList, readAnswerText, readMcpBlock,
-  screenWorking, ANSWER_LIMIT_BYTES} from './senior-screen.mjs';
+import {composerHolds, composerReady, limitScreen, markerOf, readAnswerText, screenWorking,
+  ANSWER_LIMIT_BYTES} from './senior-screen.mjs';
 
 export const SENIOR_MODE_FILE = 'senior-mode';
-export const SENIOR_ALLOW_FILE = 'senior-mcp-allow';
 export const SENIOR_SOCKET = 'kadan-senior';
 export const SENIOR_SEATS = 4;
 export const SESSION_ENTRY = fileURLToPath(new URL('./senior-session-run.mjs', import.meta.url));
@@ -28,7 +27,7 @@ export const PANE_ENV_STRIP = ['KADAN_ROLE', 'TMUX', 'TMUX_PANE'];
 export const ASK_LINE = '../input.txt 를 끝까지 읽고 거기 적힌 대로 수행하라.';
 // 예약 종료·기록 만료의 여유. 호출 상한이 지나고 이만큼 뒤에도 남은 자기 세션은 꺼도 된다.
 const REAP_MARGIN_MS = 120_000;
-export const SESSION_TIMING = {pollMs: 2000, startupMs: 60_000, settleMs: 3000, mcpMs: 30_000, submitGraceMs: 30_000,
+export const SESSION_TIMING = {pollMs: 2000, startupMs: 60_000, settleMs: 3000, submitGraceMs: 30_000,
   idleConfirm: 2, keyGapS: '1'};
 
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -370,21 +369,6 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
   }
 }
 
-function readAllow(home) {
-  try { return parseAllowList(fs.readFileSync(path.join(home, SENIOR_ALLOW_FILE), 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-
-function gateNote(home, verdict) {
-  const file = path.join(home, SENIOR_ALLOW_FILE);
-  if (verdict.why === 'allow-missing') {
-    return `MCP 허용 목록 파일이 없다: ${file} — 지금 연결된 MCP: ${verdict.outside.join(', ') || '(없음)'}. ` +
-      '확인한 이름을 한 줄에 하나씩 적어 사람이 만든다(카단이 스스로 저장하지 않는다)';
-  }
-  if (verdict.why === 'not-allowed') return `허용 목록(${file}) 밖의 MCP가 연결돼 있다: ${verdict.outside.join(', ')}`;
-  return null;
-}
-
 // `out/`이 git 저장소 안이면 codex 내장 worktree 도구가 쓸 수 있다. 저장소 밖일 때만 통과한다.
 export function outsideGit(out, {spawn = spawnSync} = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
@@ -394,10 +378,11 @@ export function outsideGit(out, {spawn = spawnSync} = {}) {
   return result.status === 0 ? {ok: false, why: 'out-inside-git'} : {ok: true};
 }
 
-// 질문 넣기 전 관문(전원 준비의 일부). codex를 띄우고 빈 입력칸을 기다린 뒤 `/mcp`로 연결된 서버 이름을 읽어 허용 목록과 견준다.
-// 하나라도 아니면 질문을 넣지 않는다(모델 호출 0회). 반환: {ok, why?, note?, connected?}. 던지지 않는다.
-// 시간 상한이 준비 중에 끝났으면 `/mcp`도 넣지 않고 {ok: false, why: 'deadline', timeout: true}로 끝낸다.
-export async function passGate(seat, {run, home, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
+// 질문 넣기 전 관문(전원 준비의 일부). `out/`이 git 밖이고 codex가 빈 입력칸까지 떴을 때만 통과한다. 키는 보내지 않는다.
+// 아니면 질문을 넣지 않는다(모델 호출 0회). 반환: {ok, why?, note?}. 던지지 않는다.
+// MCP 연결 목록은 보지 않는다(2026-11-18 [kyle]: 사용자 codex 설정 그대로 — 지금 헤드리스 시니어와 같은 수준).
+// 시간 상한이 준비 중에 끝났으면 {ok: false, why: 'deadline', timeout: true}로 끝낸다.
+export async function passGate(seat, {run, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
   spawn = spawnSync}) {
   const evidence = {};
   const done = verdict => {
@@ -432,25 +417,8 @@ export async function passGate(seat, {run, home, now = Date.now, sleep = default
     if (ready.ok) { await sleep(timing.settleMs); ready = await untilScreen(0, composerReady); }
     // 죽은 세션은 상한과 무관하게 죽은 것이다. 그 밖에 상한이 지났으면 무엇을 기다리다 끝났든 timeout이다.
     const stopped = why => why === 'pane-dead' || why === 'interrupted';
-    if (expired() && !stopped(ready.why)) return done(late(ready.ok ? 'before-mcp' : `startup:${ready.why}`));
-    if (!ready.ok) return done({ok: false, why: `startup:${ready.why}`});
-    try { sendLine(seat, '/mcp', {run, keyGapS: timing.keyGapS, spawn, now}); }
-    catch (error) {
-      if (error.why === 'deadline') return done(late(`mcp-${error.stage}`));
-      if (signalOf(error)) return done({ok: false, why: 'interrupted', note: error.message});
-      return done({ok: false, why: `key:${keyWhy(error)}`, note: error.message});
-    }
-    // 출력은 한 번 찍히고 바뀌지 않는다. 완전한 구간이 보이면 그 자리에서 판정하고, 연결 중·모르는 줄이면 다시 묻지 않고 거절한다.
-    const block = await untilScreen(timing.mcpMs, screen => {
-      const read = readMcpBlock(screen);
-      if (!read.ok) return {...read, final: read.why === 'mcp-pending' || read.why === 'mcp-unreadable'};
-      const back = composerReady(screen);
-      return back.ok ? read : {ok: false, why: `mcp-not-closed:${back.why}`};
-    });
-    if (!block.ok) return done(expired() && !stopped(block.why) ? late(block.why) : {ok: false, why: block.why});
-    evidence.connected = block.connected; evidence.disabled = block.disabled;
-    const verdict = gateVerdict(block.connected, readAllow(home));
-    return done(verdict.ok ? {ok: true} : {...verdict, note: gateNote(home, verdict)});
+    if (expired() && !stopped(ready.why)) return done(late(ready.ok ? 'before-ask' : `startup:${ready.why}`));
+    return done(ready.ok ? {ok: true} : {ok: false, why: `startup:${ready.why}`});
   } catch (error) {
     return done({ok: false, why: 'gate-error', note: String(error?.message ?? error)});
   }
@@ -469,7 +437,7 @@ export function readAnswerFile(file, marker) {
 // 질문 한 줄을 넣고 끝을 기다린다. 반환: {reason: ok|empty|limit|timeout|call-failed|interrupted, detail?, answer?}. 던지지 않는다.
 // ok는 (1) 답 파일이 답 후보이고 (2) 질문을 넣은 뒤 화면이 일하는 표시를 거쳐 (3) 다시 빈 입력칸으로 쉴 때만이다.
 // 이미 제출한 호출은 같은 폴링에서 완성된 답이 timeout보다 먼저다. 제출 전에 상한이 끝났으면 새 입력 없이 timeout이다.
-// 처음의 쉬는 화면이나 /mcp 출력 상태를 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
+// 처음의 쉬는 화면을 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
 export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
   spawn = spawnSync}) {
   // 상한이 이미 끝났으면 아무것도 넣지 않는다. 넣는 도중(붙여넣기 직전·Enter 직전)에 끝나도 그 키는 나가지 않는다.

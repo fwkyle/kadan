@@ -241,7 +241,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
         calls: calls.map(call => ({dir: call.dir, model: call.value.model, effort: call.value.effort ?? 'max', token: call.token, timing: sessionTiming}))});
     } catch (error) { detach(); throw error; }
     calls.forEach((call, index) => { call.seat = seats[index]; });
-    const gates = await Promise.all(calls.map(call => passGate(call.seat, {run: sessionRun, home, now, timing: sessionTiming})));
+    const gates = await Promise.all(calls.map(call => passGate(call.seat, {run: sessionRun, now, timing: sessionTiming})));
     const blocked = gates.some(gate => !gate.ok);
     calls.forEach((call, index) => {
       const gate = gates[index];

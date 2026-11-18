@@ -21,7 +21,7 @@ const SENIOR = new URL('../src/senior.mjs', import.meta.url).href;
 const REAL_TMUX = spawnSync('which', ['tmux'], {encoding: 'utf8'}).stdout.trim();
 const skip = !REAL_TMUX;
 // 여유는 넉넉히 둔다: CI는 시험 파일을 병렬로 돌려 가짜 화면이 늦게 그릴 수 있다. 기다리는 값은 정상 경로의 시간을 늘리지 않는다.
-const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, mcpMs: 15_000, submitGraceMs: 4000, keyGapS: '0.3'};
+const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000, submitGraceMs: 4000, keyGapS: '0.3'};
 const models = ['gpt-6-astra', 'gpt-6-sol'].map(slug => ({slug, supported_reasoning_levels: ['low', 'high'].map(effort => ({effort}))}));
 const readCodexModels = () => ({models});
 const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, SOL = {runner: 'codex', model: 'gpt-6-sol', effort: 'low'};
@@ -30,7 +30,7 @@ const BOUND = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --ou
 const digest = text => createHash('sha256').update(text).digest('hex');
 let seq = 0;
 
-function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}, allow = ['codex_worktrees', 'fixture-a']} = {}) {
+function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}} = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ksi-')));
   const repo = path.join(home, 'repo'), bin = path.join(home, 'bin'), log = path.join(home, 'fake-log');
   for (const dir of [repo, bin, log]) fs.mkdirSync(dir);
@@ -52,7 +52,7 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}, allow = ['c
   const raw = JSON.parse(fs.readFileSync(file, 'utf8')); raw.runners.agy.exec = BOUND; fs.writeFileSync(file, JSON.stringify(raw));
   new CardStore(home).create({repo: 'qa', id: 'card-a', repoPath: repo, body: '# 시험 카드\n\n- DB 열 이름을 바꾼다\n'});
   if (mode != null) fs.writeFileSync(path.join(home, 'senior-mode'), `${mode}\n`);
-  if (allow) fs.writeFileSync(path.join(home, 'senior-mcp-allow'), `# 시험용 가짜 이름\n${allow.join('\n')}\n`);
+  // MCP 허용 목록 파일은 만들지 않는다: 질문 전 관문은 연결된 MCP를 보지 않는다(2026-11-18 [kyle]).
   // 부르는 쪽(감독 pane)의 환경처럼 역할·바깥 tmux 값을 넣어 둔다.
   const env = {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: `ki${process.pid}x${++seq}`,
     FAKE_CODEX_PLAN: planFile, KADAN_ROLE: 'qa-슈퍼감독', TMUX: '/tmp/outer-tmux,1,0', TMUX_PANE: '%9', KADAN_SENIOR_TAB: 'on'};
@@ -123,7 +123,8 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
     assert.ok(input.includes(`--- 첨부 ${note} ---\n첨부 내용`));
     assert.ok(record.marker.startsWith('KADAN-SENIOR-END-') && !input.includes(record.marker), '완성된 표지는 input.txt에 없다');
     assert.ok(fs.readFileSync(path.join(a.evidencePath, 'out', 'result.txt'), 'utf8').includes(record.marker));
-    assert.deepEqual(f.fakeLog(a.model, 'submitted'), ['/mcp', ASK_LINE]);
+    assert.deepEqual(f.fakeLog(a.model, 'submitted'), [ASK_LINE], '/mcp는 넣지 않고 질문 한 줄만 들어갔다');
+    assert.equal(fs.existsSync(path.join(f.home, 'senior-mcp-allow')), false, '허용 목록 파일 없이도 질문이 나간다');
     assert.ok(!f.fakeLog(a.model, 'keys').join('').includes(record.marker), '화면 입력에도 완성된 표지가 없다');
     const env = JSON.parse(fs.readFileSync(path.join(f.log, `${a.model}.env.json`), 'utf8'));
     assert.deepEqual([env.KADAN_ROLE, env.TMUX, env.TMUX_PANE, env.KADAN_HOME], [null, null, null, f.home]);
@@ -164,26 +165,27 @@ test('질문 전 기록된 세션을 로티로 읽기 전용 연결하고 탭 �
 });
 
 test('관문 교차: 한 명이 관문에서 걸리면 통과한 다른 한 명에게도 질문 키가 나가지 않고 둘 다 call-failed로 남는다', {skip}, async t => {
-  const f = fixture(t, {plan: {models: {'gpt-6-sol': {mcp: [['codex_worktrees', 'connected', 3], ['fixture-x', 'connected', 1]]}}}});
-  const error = await f.run().then(() => assert.fail('실패해야 한다'), e => e);
+  // 관문에서 걸리는 길은 시작 화면이 업데이트 선택 창인 경우다(키 0회). 연결된 MCP 이름은 이제 관문과 무관하다.
+  const f = fixture(t, {plan: {models: {'gpt-6-sol': {startup: 'update'}}}});
+  const error = await f.run({}, {sessionTiming: {...TIMING, startupMs: 1500}}).then(() => assert.fail('실패해야 한다'), e => e);
   assert.equal(error.exitCode, 1);
-  assert.deepEqual(error.answers.map(a => [a.model, a.reason, a.status, a.detail]), [
-    ['gpt-6-astra', 'call-failed', '실패(call-failed)', 'isolation:peer-gate-failed'], ['gpt-6-sol', 'call-failed', '실패(call-failed)', 'isolation:not-allowed']]);
-  assert.match(error.message, /\[codex\/gpt-6-sol\] 자문 실패\(call-failed\).*허용 목록.*밖의 MCP가 연결돼 있다: fixture-x/);
-  // 둘 다 관문의 /mcp만 받았다. 질문 줄은 누구에게도 가지 않았다(모델 호출 0회).
-  for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), ['/mcp']);
-  assert.deepEqual(f.advices().map(e => [e.model, e.reason, e.detail]).sort(), [['gpt-6-astra', 'call-failed', 'isolation:peer-gate-failed'],
-    ['gpt-6-sol', 'call-failed', 'isolation:not-allowed']]);
+  assert.deepEqual(error.answers.map(a => [a.model, a.reason, a.status]), [
+    ['gpt-6-astra', 'call-failed', '실패(call-failed)'], ['gpt-6-sol', 'call-failed', '실패(call-failed)']]);
+  assert.equal(error.answers[0].detail, 'isolation:peer-gate-failed');
+  assert.match(error.answers[1].detail, /^isolation:startup:/);
+  // 둘 다 키를 한 번도 받지 않았다(/mcp도 질문 줄도 없다 — 모델 호출 0회).
+  for (const model of ['gpt-6-astra', 'gpt-6-sol']) { assert.deepEqual(f.fakeLog(model, 'submitted'), []); assert.equal(f.fakeLog(model, 'keys').length, 0); }
+  assert.deepEqual(f.advices().map(e => [e.model, e.reason]).sort(), [['gpt-6-astra', 'call-failed'], ['gpt-6-sol', 'call-failed']]);
   assert.deepEqual(f.sessions(), []);
 });
 
-test('허용 목록 파일이 없으면 거절하고 연결된 이름을 보여 준다. 한도·빈 답은 칸마다 상태로 남고 하나라도 답하면 종료 코드 0이다', {skip}, async t => {
+test('허용 목록 파일이 없고 모르는 MCP가 연결돼 있어도 질문이 나간다. 한도·빈 답은 칸마다 상태로 남고 하나라도 답하면 종료 코드 0이다', {skip}, async t => {
   const noAllow = async () => {
-    const none = fixture(t, {seniors: [ASTRA], allow: null});
-    const refused = await none.run().then(() => assert.fail('실패해야 한다'), e => e);
-    assert.match(refused.message, /MCP 허용 목록 파일이 없다: .*senior-mcp-allow — 지금 연결된 MCP: codex_worktrees, fixture-a/);
+    const none = fixture(t, {seniors: [ASTRA], plan: {default: {mcp: [['codex_worktrees', 'connected', 3], ['fixture-x', 'connected', 1]]}}});
+    const ok = await none.run();
+    assert.deepEqual(ok.answers.map(a => [a.model, a.status, a.reason]), [['gpt-6-astra', 'ok', 'ok']]);
     assert.equal(fs.existsSync(path.join(none.home, 'senior-mcp-allow')), false);
-    assert.deepEqual(none.fakeLog('gpt-6-astra', 'submitted'), ['/mcp']);
+    assert.deepEqual(none.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE]);
   };
   const limitAndOk = async () => {
     const mixed = fixture(t, {plan: {models: {'gpt-6-astra': {answer: 'limit'}, 'gpt-6-sol': {answer: 'ok'}}}});
@@ -225,8 +227,8 @@ await seniorCommand(['qa/card-a'], {question: '바꿀까?', timeout: '120'}, {ho
   const exited = new Promise(resolve => child.on('close', (code, signal) => resolve({code, signal})));
   t.after(() => child.kill('SIGKILL'));
   // 질문이 들어가 가짜 화면이 일하는 중이 될 때까지 기다린다.
-  for (let i = 0; i < 200 && f.fakeLog('gpt-6-astra', 'submitted').length < 2; i++) await new Promise(r => setTimeout(r, 100));
-  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE]);
+  for (let i = 0; i < 200 && f.fakeLog('gpt-6-astra', 'submitted').length < 1; i++) await new Promise(r => setTimeout(r, 100));
+  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE]);
   assert.equal(f.sessions().length, 1);
   child.kill('SIGTERM');
   assert.deepEqual(await exited, {code: 143, signal: null});
@@ -249,7 +251,7 @@ test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프�
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(entry.evidencePath, 'outcome.json'), 'utf8')), {reason: 'interrupted', detail: 'SIGTERM'});
   assert.equal(readRecord(entry.evidencePath).endReason, 'interrupted', '세션을 끈 것은 감싼 프로세스의 신호 처리기다');
   assert.deepEqual(f.sessions(), []);
-  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE], '다시 넣지 않는다');
+  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE], '다시 넣지 않는다');
 });
 
 test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 질문 프로세스를 띄우지 않고 질문도 넣지 않는다(칸은 timeout)', {skip}, async t => {
@@ -264,8 +266,8 @@ test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 
   assert.deepEqual(launched, [], '상한이 지난 뒤에는 질문 프로세스를 시작하지 않는다');
   assert.deepEqual(error.answers.map(a => [a.model, a.reason, a.status, a.detail]), [
     ['gpt-6-astra', 'timeout', '실패(timeout)', 'deadline:before-ask'], ['gpt-6-sol', 'timeout', '실패(timeout)', 'deadline:before-ask']]);
-  // 관문의 /mcp만 들어갔고 질문 줄은 누구에게도 가지 않았다.
-  for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), ['/mcp']);
+  // 관문은 키를 보내지 않으므로 질문 줄은 누구에게도 가지 않았다.
+  for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), []);
   assert.deepEqual(f.advices().map(e => e.reason), ['timeout', 'timeout']);
   assert.deepEqual(f.sessions(), []);
 });
@@ -280,11 +282,11 @@ for (const mode of ['trap']) {
     // 폴링 간격을 아주 짧게 두고 tmux 호출을 0.5초씩 늦추면, 감싼 프로세스는 거의 늘 tmux 호출 안에 있다.
     const pending = f.run({timeout: '60'}, {sessionTiming: {...TIMING, pollMs: 10},
       spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})}).then(() => assert.fail('실패해야 한다'), e => e);
-    for (let i = 0; i < 400 && f.fakeLog('gpt-6-astra', 'submitted').length < 2; i++) await new Promise(r => setTimeout(r, 25));
+    for (let i = 0; i < 400 && f.fakeLog('gpt-6-astra', 'submitted').length < 1; i++) await new Promise(r => setTimeout(r, 25));
     fs.writeFileSync(f.slowTmux, mode);
     const error = await pending;
     fs.rmSync(f.slowTmux, {force: true});
-    assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), ['/mcp', ASK_LINE]);
+    assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE]);
     assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
     assert.deepEqual(f.advices().map(e => e.reason), ['timeout']);
     assert.deepEqual(f.sessions(), []);
