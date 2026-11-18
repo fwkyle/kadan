@@ -150,18 +150,20 @@ export async function passGateAgy(seat, {run, now = Date.now, sleep = defaultSle
       else if (shown.found) {
         const verdict = trustVerdict(shown);
         if (!verdict.ok) return done({...verdict, why: `startup:${verdict.why}`, note: 'agy 폴더 신뢰 창을 지나지 못했다 — 키를 보내지 않았다'});
-        // Enter 직전 재확인: 같은 pane·PID가 살아 있고, 화면을 다시 읽어 같은 경로·단일 Yes이며, 상한이 남아 있다.
-        const again = readAgyTrust(plainScreen(run, seat.session));
-        if (!again.found || again.path !== shown.path || !trustVerdict(again).ok) return done({ok: false, why: 'startup:trust-screen-changed'});
-        if (!paneAlive(run, seat).alive) return done({ok: false, why: 'startup:pane-dead'});
-        // 바닥의 키 전송(sendTmux)·Claude 신뢰 키(sendTmuxTrustKey)와 같은 확인을 같은 순서로 한다: pane PID·생존 → 기록보기(복사) 모드 →
-        // 사람 입력. 기록보기 중이거나 붙은 사람이 최근에 키를 쳤으면 Enter를 보내지 않고 끝낸다(다시 시도하지 않는다).
+        // Enter 직전 확인은 codex 질문 키(sendTmux의 Enter 직전 → sendLine)와 같은 순서다:
+        // 기록보기(복사) 모드 → 사람 입력 → pane PID·생존 → 화면 재확인(같은 경로·단일 Yes) → 시간 상한 → Enter.
+        // PID·생존을 사람 입력 조회 뒤에 본다: 그 조회 도중 창의 프로세스가 바뀌면 새 프로세스로 Enter가 가지 않게 한다(검수 exec-18bddad5).
+        // 기록보기 중이거나 붙은 사람이 최근에 키를 쳤으면 Enter를 보내지 않고 끝낸다(다시 시도하지 않는다).
         try { checkPaneMode(seat.session, run); checkHumanIdle(seat.session, run); }
         catch (error) {
           if (signalOf(error) || signalOf(error.cause)) return done({ok: false, why: 'startup:interrupted'});
           return done({ok: false, why: `startup:${TRUST_HOLD[error.code] ?? 'trust-check-failed'}`,
             note: `agy 폴더 신뢰 창에 키를 보내지 않았다 — ${error.message}`});
         }
+        const owner = paneAlive(run, seat);
+        if (!owner.alive) return done({ok: false, why: `startup:${owner.signal ? 'interrupted' : 'pane-dead'}`});
+        const again = readAgyTrust(plainScreen(run, seat.session));
+        if (!again.found || again.path !== shown.path || !trustVerdict(again).ok) return done({ok: false, why: 'startup:trust-screen-changed'});
         if (expired()) return done(late('startup:trust'));
         run(['send-keys', '-t', `=${seat.session}:`, 'Enter']);
         trust = evidence.trust = {result: 'accepted', path: shown.path, keys: ['Enter'], at: new Date(now()).toISOString()};

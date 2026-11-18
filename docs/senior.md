@@ -119,7 +119,7 @@ Why: kyle이 gemini 모델(아르곤 등)을 시니어로 다시 쓰고 싶다(2
   1. 화면이 agy 신뢰 창의 구조다(`src/senior-agy-screen.mjs`의 `readAgyTrust` — 첫 줄 `Accessing workspace:`, 경로, 질문, `> Yes, I trust this folder`·`No, exit`, `enter Confirm`, 그 아래 상태 줄 한 줄까지. claude 신뢰 창 판정기를 그대로 쓰지 않는다).
   2. 경로 줄이 정확히 한 줄이고 그 실경로(realpath)가 이 세션의 고정 작업 폴더와 같다.
   3. 선택 표시(`>`)가 정확히 하나이고 Yes 줄에 있다.
-  4. Enter 직전에 화면을 다시 읽어 같은 경로·같은 선택이고, 같은 pane이 기록한 PID로 살아 있고, 그 pane이 기록보기(복사) 모드가 아니며 붙은 사람이 최근에 입력하지 않았고(바닥의 키 전송·claude 신뢰 키와 같은 확인 함수를 같은 순서로 쓴다 — `checkPaneMode`·`checkHumanIdle`), 시간 상한이 남아 있다. 기록보기 중이거나 사람 입력이 감지되면 다시 시도하지 않고 그 칸은 실패다(`trust-pane-in-mode`·`trust-human-active`).
+  4. Enter 직전에 codex 질문 키와 같은 순서로 다시 확인한다: 그 pane이 기록보기(복사) 모드가 아니다 → 붙은 사람이 최근에 입력하지 않았다(바닥의 키 전송과 같은 확인 함수 `checkPaneMode`·`checkHumanIdle`) → 같은 pane이 기록한 PID로 살아 있다 → 화면을 다시 읽어 같은 경로·같은 선택이다 → 시간 상한이 남아 있다. PID·생존을 사람 입력 조회 뒤에 보는 이유는 그 조회 도중 창의 프로세스가 바뀌면 새 프로세스로 Enter가 가지 않게 하려는 것이다. 기록보기 중이거나 사람 입력이 감지되면 다시 시도하지 않고 그 칸은 실패다(`trust-pane-in-mode`·`trust-human-active`).
   5. 끄기 스위치 `$KADAN_HOME/auto-trust.off`가 없다(claude 폴더 신뢰 자동 통과 #418과 같은 스위치).
 
   하나라도 아니면 키 0회로 그 칸은 `실패(call-failed)`(`detail: isolation:startup:trust-…`)이고, 함께 부른 칸도 질문을 받지 않는다. Enter 뒤에는 같은 pane에 정상 빈 입력칸이 뜰 때까지 기다리고, 신뢰 창이 그대로면 더 보내지 않고 실패한다. 지난 사실은 증거 폴더 `gate.json`의 `trust`와 영수증 `note`에 남는다(역할이 아니라 원장 `trust` 사건은 쓰지 않는다).

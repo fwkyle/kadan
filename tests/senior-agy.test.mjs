@@ -273,6 +273,47 @@ test('신뢰 창 Enter 직전 확인: 기록보기(복사) 모드 중이거나 �
   for (const seat of [copy, human, normal]) closeSeat(seat, s.deps);
 });
 
+// 검수 exec-18bddad5: 확인 순서가 codex 질문 키와 같아야 한다 — 사람 입력 조회 뒤에 pane PID·생존을 본다.
+// 조회 도중 프로세스가 바뀌는 순간은 가짜 화면으로 만들 수 없어 tmux 호출을 흉내 낸 실행 함수로 본다.
+test('신뢰 창 Enter 확인 순서: 사람 입력 조회 도중 창의 프로세스가 바뀌면 Enter 0회로 끝나고, 바뀌지 않으면 한 번 보낸다', async () => {
+  const rule = '─'.repeat(60);
+  const idle = [rule, '>', rule, `${'? for shortcuts'.padEnd(40, ' ')}auto · kadan-noexec (Fake Model · medium)  /agents`].join('\n');
+  const gate = async ({swap}) => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ksa-order-')));
+    const trust = ['Accessing workspace:', '', home, '', 'Do you trust the contents of this project?', '',
+      'Fake Antigravity CLI requires permission to read, edit, and execute files here.', '', '> Yes, I trust this folder', '  No, exit', '',
+      '  ↑/↓ Navigate · enter Confirm', `${' '.repeat(40)}auto · Fake Model · medium`].join('\n');
+    let pid = '123', sent = 0;
+    const order = [];
+    const run = args => {
+      if (args[0] === 'capture-pane') return sent ? idle : trust;
+      if (args[0] === 'display-message') {
+        const format = args.at(-1);
+        order.push(format === '#{pane_in_mode}' ? 'mode' : 'pid');
+        return format === '#{pane_in_mode}' ? '0' : `${pid}|0`;
+      }
+      // 사람 입력 조회가 시작되는 순간 그 창의 프로세스가 다른 것으로 바뀐다.
+      if (args[0] === 'list-clients') { order.push('human'); if (swap) pid = '456'; return ''; }
+      if (args[0] === 'send-keys') { order.push('enter'); sent += 1; return ''; }
+      return '';
+    };
+    run.try = args => ({status: 0, stdout: run(args)});
+    const seat = {runner: 'agy', home, dir: home, workdir: home, session: 'senior-fake-1', panePid: '123', gate: path.join(home, 'launch'),
+      deadlineAt: Date.now() + 60_000};
+    const verdict = await passGate(seat, {run, timing: {...TIMING, settleMs: 1, pollMs: 1, startupMs: 200}, sleep: async () => {}});
+    return {verdict, sent, order};
+  };
+  const swapped = await gate({swap: true});
+  assert.equal(swapped.sent, 0, '바뀐 프로세스로 Enter를 보내지 않는다');
+  assert.deepEqual([swapped.verdict.ok, swapped.verdict.why], [false, 'startup:pane-dead']);
+  const normal = await gate({swap: false});
+  assert.equal(normal.sent, 1);
+  assert.equal(normal.verdict.ok, true); assert.equal(normal.verdict.trust.result, 'accepted');
+  // Enter 바로 앞의 확인 순서: 기록보기 모드 → 사람 입력 → pane PID·생존 → Enter(그 사이의 화면 재확인은 화면 읽기라 여기 적히지 않는다).
+  const enter = normal.order.indexOf('enter');
+  assert.deepEqual(normal.order.slice(enter - 3, enter + 1), ['mode', 'human', 'pid', 'enter']);
+});
+
 // 검수 exec-89326673 중요 2: 지금 화면이 쉬고 있어도 답을 읽는 전체 스크롤 캡처에 일하는 표시·선택 창이 있으면 ok가 아니다.
 // 두 캡처 사이에 화면이 바뀌는 순간은 가짜 화면으로 만들기 어려워 tmux 호출을 흉내 낸 실행 함수로 본다.
 test('최종 캡처의 상태: 지금 화면은 빈 입력칸인데 답을 읽은 스크롤 캡처에 일하는 표시·선택 창이 보이면 ok로 받지 않는다', async () => {
