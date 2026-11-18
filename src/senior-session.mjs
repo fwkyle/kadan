@@ -310,8 +310,9 @@ export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, 
 }
 
 // 판정용 화면: 스크롤 기록까지(-S) 색 포함(-e)으로 떠서 입력칸의 흐린 추천 문구를 뺀다. 감긴 줄은 이어 붙인다(-J).
-export function captureSeat(run, session) {
-  return splitGhostText(run(['capture-pane', '-e', '-p', '-J', '-S', '-400', '-t', `=${session}:`])).judge;
+// target: 화면을 읽을 칸. 기본은 세션의 그때 활성 칸이고, 대체 Enter는 방금 확인한 pane id를 넘겨 같은 칸만 읽는다.
+export function captureSeat(run, session, target = `=${session}:`) {
+  return splitGhostText(run(['capture-pane', '-e', '-p', '-J', '-S', '-400', '-t', target])).judge;
 }
 
 // 세션의 pane이 기록한 그 프로세스로 살아 있는가. 반환: {alive: true} | {alive: false, signal?}.
@@ -361,12 +362,14 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
       try { run(['delete-buffer', '-b', name]); }
       catch (cleanup) {
         const combined = new AggregateError([error, cleanup], `${error.message}; 대체 Enter 버퍼 정리도 실패`);
-        throw Object.assign(combined, {code: error.code, stage: error.stage, why: error.why, withheld: error.withheld, signal: error.signal ?? null});
+        // 바깥에서 메시지를 다시 쓸 때 정리 실패가 사라지지 않게 cleanupFailure에도 싣는다.
+        throw Object.assign(combined, {code: error.code, stage: error.stage, why: error.why, withheld: error.withheld,
+          cleanupFailure: cleanup.message, signal: error.signal ?? null});
       }
       throw error;
     }
   };
-  // CR 직전 확인: pane id·PID·생존·기록보기 모드를 한 번의 조회로 보고, 사람 입력·화면(자기 한 줄·선택 창·일하는 표시)·마감을 본다.
+  // CR 직전 확인: pane id·PID·생존·기록보기 모드를 한 번의 조회로 보고(같은 칸의 값이고, PID가 기록과 같아야 그 칸이 codex다), 사람 입력·화면(자기 한 줄·선택 창·일하는 표시)·마감을 본다.
   // 마감 확인이 맨 마지막이고, 그 뒤에는 붙여넣기 명령뿐이다. 반환: 방금 확인한 pane id.
   const recheckBeforeCr = () => {
     try {
@@ -379,7 +382,8 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
       if (mode !== '0') throw deny('enter', 'copy-mode');
       try { checkHumanIdle(seat.session, run); }
       catch (error) { throw deny('enter', error.code === 'KADAN_HUMAN_ACTIVE' ? 'human-active' : 'human-unknown'); }
-      const verdict = composerHolds(captureSeat(run, seat.session), text);
+      // 화면은 방금 확인한 pane id로 읽는다. 세션 이름으로 다시 찾으면 그사이 활성 칸이 바뀌어 다른 칸의 화면을 볼 수 있다.
+      const verdict = composerHolds(captureSeat(run, seat.session, paneId), text);
       if (!verdict.ok) throw deny('enter', verdict.why);
       if (expired()) throw deny('enter', 'deadline');
       return paneId;
@@ -421,7 +425,8 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
     if (error.code === 'KADAN_SENIOR_KEY_WITHHELD') {
       const pasted = error.stage === 'enter';
       error.delivery = pasted ? 'unknown' : 'not-sent';
-      error.message = `${error.withheld}${pasted ? ' — 본문은 붙었고 Enter는 보내지 않았다. 다시 넣지 않는다' : ''}`;
+      error.message = `${error.withheld}${pasted ? ' — 본문은 붙었고 Enter는 보내지 않았다. 다시 넣지 않는다' : ''}` +
+        (error.cleanupFailure ? `; 대체 Enter 버퍼 정리도 실패(${error.cleanupFailure})` : '');
     }
     throw error;
   }
