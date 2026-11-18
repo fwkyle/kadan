@@ -162,6 +162,7 @@ flowchart LR
 | id | 종류 | 행동 | 보는 곳 | 표본 |
 |---|---|---|---|---|
 | `rate-limit-429`·`rate-limit-text` | 한도 | 자동 재개(`rate-limit-terminal`이 빈 입력창 구조를 확인) | 작업자(`rate-limit-text`는 감독도) | codex 429 방치 화면 |
+| `usage-limit` | 한도 | 보고만(`report`) — 자동 재개 없음, 대체 후보가 있으면 경보에 교대 명령 한 줄([사용 한도 교대 안내](rate-limit-retry.md#사용-한도-교대-안내)) | 작업자·검수자 (Claude는 빈 입력창 위 한도 줄 `claudeLimitLine`, codex는 현재 오류 덩어리) | claude `You've hit your session limit · resets 3pm`, codex `■ You've hit your usage limit.` |
 | `no-api-key` | 설정 | 실행기 교체 필요 | 작업자·감독 | 없음 |
 | `auth-token` | 인증 | 실행기 교체 필요 | 작업자·감독 | 없음 |
 | `reconnecting`·`stream-error`·`bad-gateway`·`dns` | 끊김 | 직속 감독 경보 | 작업자(앞 셋은 감독도) | codex `Reconnecting... 2/5`·`Stream disconnected` |

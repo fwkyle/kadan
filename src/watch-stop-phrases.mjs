@@ -3,6 +3,7 @@
 // skills/kadan-super/references/intervention.md 표는 이 목록의 id를 참조한다(원본은 여기, tests/watch-stop-phrases.test.mjs가 어긋남을 잡는다).
 //
 // 행동: auto-resume(자동 재개) | alert-supervisor(직속 감독 경보) | replace-runner(실행기 교체 필요 — 직속 감독에게 올리되 같은 세션 재시도 금지)
+//   | report(보고만 — 실제 한도로 멈춘 화면. 자동 재개 없음, 경보에 대체 후보 교대 명령 한 줄이 붙는다: watch-limit-fallback.mjs)
 // scope: worker(작업자 화면) | supervisor(감독 화면). live: 지금 그려진 상태 줄이라 감시기가 처음 본 주기에도 바로 경보한다
 //   (스크롤백 줄은 처음 본 주기를 기준선으로만 삼는다 — 옛 줄 헛경보 방지).
 // sample: 실제 화면 표본이 있는 근거. '없음'은 문구를 사고표·설치본에서만 확인했고 감시AI 입력 기록에서 못 찾았다는 뜻이다.
@@ -10,8 +11,9 @@
 // 구조로 판정하는 항목(detect)은 마지막 입력창 주변 덩어리만 본다 — 인용·설명·오래된 스크롤 줄을 멈춤으로 읽지 않는다.
 import { terminal429 } from "./watch-rate-limit.mjs";
 import { securityFilterNotice } from "./watch-security-filter.mjs";
+import { claudeLimitLine } from "./claude-limit-line.mjs";
 
-export const STOP_ACTIONS = ["auto-resume", "alert-supervisor", "replace-runner"];
+export const STOP_ACTIONS = ["auto-resume", "alert-supervisor", "replace-runner", "report"];
 
 export const STOP_PHRASES = [
   { id: "rate-limit-429", kind: "한도", action: "auto-resume", scope: ["worker"],
@@ -22,6 +24,12 @@ export const STOP_PHRASES = [
   // 입력창 바로 위 오류 줄 + 빈 입력창 구조로 자동 재개 대상인지 가른다(watch-rate-limit.mjs).
   { id: "rate-limit-terminal", kind: "한도", action: "auto-resume", scope: ["worker"],
     detect: terminal429, sample: "codex 0.163 429 방치 사고 화면" },
+  // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
+  // 줄 맨 앞(표시 기호 하나 허용)이 문구일 때만 읽는다: 문장 중간의 인용·설명은 걸리지 않는다. 읽는 자리는 아래 currentStopPhrases:
+  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄). 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
+  { id: "usage-limit", kind: "한도", action: "report", scope: ["worker"],
+    pattern: /^\s*(?:[■⏺⎿●✗⚠]\s+)?You['’]ve hit your (?:[\w-]+ ){0,2}limit\b/iu,
+    sample: "claude `You've hit your session limit · resets 3pm (Asia/Seoul)` (tests/fixtures/claude-limit-screens.json), codex `■ You've hit your usage limit. Upgrade or try again later.` (tests/helpers/fake-codex-tui.mjs)" },
   { id: "no-api-key", kind: "설정", action: "replace-runner", scope: ["worker", "supervisor"],
     pattern: /No API key/iu, sample: "없음(사고표 E5)" },
   { id: "auth-token", kind: "인증", action: "replace-runner", scope: ["worker", "supervisor"],
@@ -151,6 +159,10 @@ export function currentStopPhrases(screen) {
   collect(currentErrorBlock(screen), WORKER_SIGNATURES);
   // Claude `⏺ API Error:` 덩어리는 절전 중단 낱말만 읽는다(다른 낱말의 판정 범위는 main 그대로).
   collect(currentErrorBlock(screen, { claudeHead: true }), SLEEP_SIGNATURE);
+  // Claude 한도 줄은 `■` 머리줄 덩어리가 아니라 응답 문맥의 맨 줄이다. 빈 입력창 바로 위에 붙은 줄만 읽는 기존 판정(claudeLimitLine)을 쓰고,
+  // 위 낱말(usage-limit)에 맞는 줄만 받는다(`Usage limit reached` 같은 다른 머리말은 이 경보에 넣지 않는다).
+  const claude = claudeLimitLine(screen);
+  if (claude && phraseOfLine(claude.line)?.id === "usage-limit") found.set(lineKey(claude.head.slice(0, 40), claude.line), claude.line);
   return found;
 }
 

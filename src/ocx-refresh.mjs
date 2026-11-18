@@ -93,6 +93,14 @@ export function createOcxRefresher({ record = () => {}, env = process.env, run =
 
 const summary = (entry) => ({ outcome: entry.outcome, exitCode: entry.exitCode ?? null, usage: entry.usage ?? {} });
 
+// 새로 받은 사용량이 '아직 한도'인지: 받기에 성공했고 숫자가 있고 모두 낮은 것은 아닐 때만 true.
+// 실패·시간 초과·없음·숫자 미확인·대상 아님·결과 없음(null)은 모두 false다 — 교대 안내(watch-limit-fallback.mjs)는 이때 붙이지 않는다.
+export function ocxStillLimited(result) {
+  if (result?.outcome !== "ok") return false;
+  const values = [result.usage?.fiveHour, result.usage?.weekly].filter((v) => v !== undefined);
+  return values.length > 0 && !values.every((v) => v < OCX_LOW_USAGE_PERCENT);
+}
+
 // 경보 본문에 붙는 한 줄. 쉬운 말로, 감독이 할 일까지 적는다.
 export function ocxAlertLine(result) {
   const { outcome, exitCode, usage = {}, cached, ageMs } = result;
