@@ -78,16 +78,27 @@ const SLASH_HINT = /^\s+\/[\w-]+\b/u;
 // 또는 바로 위(빈 줄·가로선 건너뜀)가 턴 끝 줄(`✻ Baked for 10s · done …`)이라 턴이 끝난 뒤 처음 나온 시스템 줄일 때.
 // 요약 배너(`⏺ Usage limit reached · continuing automatically at …`)는 한도 줄이 아니라 안내다. claudeLimitLine이 입력창 바로 위의 이 배너를 고르면
 // (배너가 상세 줄보다 아래인 순서 — 2026-11-18 실제 화면), 배너 바로 위(빈 줄·가로선만 건너뜀)의 실측 꼴 상세 줄(`⎿ You've hit your Fable limit · resets …`)을
-// 한도 줄로 쓴다. 상세 줄이 없거나 실측 꼴이 아니면 배너 그대로 돌려줘 예전과 같이 한도로 올리지 않는다(배너만 있는 화면은 정체 경로).
+// 한도 줄로 쓴다(복귀 시각이 같을 때만 — 아래). 상세 줄이 없거나 실측 꼴이 아니거나 시각이 다르면 배너 그대로 돌려줘 예전과 같이 한도로 올리지 않는다(배너만 있는 화면은 정체 경로).
 const CLAUDE_BANNER = /^(?:[⏺⎿●✗⚠]\s+)?Usage limit reached\b/u;
 const LEAD_SYMBOL = /^(?:[⏺⎿●✗⚠]\s+)?/u;
+const clockKey = (clock, meridiem) => `${clock}${meridiem}`.toLowerCase();
+const CLOCK_TIME = /\b(\d{1,2}(?::\d{2})?)\s*([ap]m)\b/giu;
+const CONTINUING_AT = /continuing automatically at\s+(\d{1,2}(?::\d{2})?)\s*([ap]m)\b/giu;
+// 문자열 안 마지막 시각(`Nov 17 at 4pm` → `4pm`). 날짜 부분은 비교하지 않는다.
+const lastClockTime = (text) => { let last = null; for (const m of text.matchAll(CLOCK_TIME)) last = clockKey(m[1], m[2]); return last; };
 function claudeLimitDetail(screen, found) {
   if (!CLAUDE_BANNER.test(found.line)) return found;
   const lines = screen.split("\n");
   let above = found.at - 1;
   while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
   const line = above >= 0 ? lines[above].trim() : "";
-  return CLAUDE_LIMIT_SHAPE.test(line) ? { line, head: line.replace(LEAD_SYMBOL, ""), at: above } : found;
+  if (!CLAUDE_LIMIT_SHAPE.test(line)) return found;
+  // 짝짓기 조건: 상세 줄의 복귀 시각(`resets 11pm`)이 배너 줄과 그 아래 화면(자동 계속 안내 포함)의 `continuing automatically at 11pm`과 같을 때만.
+  // 응답·도구 출력에 인용된 옛 상세 줄(다른 시각)이 무관한 배너와 짝지어 오탐을 만들지 않게 한다. 비교할 시각이 없거나 다르면 짝짓지 않는다.
+  const detailTime = lastClockTime(line.split(/\bresets\s+/iu)[1] ?? "");
+  if (!detailTime) return found;
+  const resumes = new Set([...lines.slice(found.at).join("\n").matchAll(CONTINUING_AT)].map((m) => clockKey(m[1], m[2])));
+  return resumes.has(detailTime) ? { line, head: line.replace(LEAD_SYMBOL, ""), at: above } : found;
 }
 
 function claudeLimitShape(screen, found) {

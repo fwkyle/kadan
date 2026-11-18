@@ -305,3 +305,31 @@ test('기존 음성 표본(Claude f5·f7 인용, codex 우편 미리보기)은 �
   // 실측 두 표본(2.1.308)은 배너가 상세 줄 위에 있는 순서로 그대로 잡힌다.
   for (const name of ['real-2.1.308-bullet', 'real-2.1.308-tmux']) assert.equal(screenDisconnects(fixtures[name]).size, 1, name);
 });
+
+// ---- PR #434 재검수 수정(exec-2821ef91): 상세 줄과 배너는 복귀 시각이 같을 때만 짝짓는다 ----
+test('상세 줄 ↔ 배너 짝짓기: 복귀 시각이 같은 실제 사고 두 순서와 시각 변형(분·날짜 붙은 상세)은 한도 1건', () => {
+  for (const name of ['pos-banner-after-detail', 'pos-banner-before-detail', 'pos-banner-after-detail-minutes', 'pos-banner-after-detail-with-date'])
+    assert.equal(screenDisconnects(incident[name]).size, 1, name);
+});
+
+test('응답·도구 출력에 인용된 옛 상세 줄(다른 시각)은 무관한 배너와 짝지어 한도가 되지 않는다', () => {
+  for (const name of ['neg-response-quote-then-unrelated-banner', 'neg-tool-output-quote-then-unrelated-banner',
+    'neg-detail-and-banner-different-time', 'neg-banner-without-resume-time'])
+    assert.equal(screenDisconnects(incident[name]).size, 0, name);
+  // 검수자 재현 꼴(자동 계속 안내가 없는 화면): 응답이 인용 + 3pm 배너.
+  const quote = "  ⎿  You've hit your Fable limit · resets 11pm (Asia/Seoul)";
+  const bare = (...lines) => `${lines.join('\n')}\n\n${'─'.repeat(120)}\n❯ \n${'─'.repeat(120)}\n  ~/Dev/app[main]\n`;
+  const banner = '⏺ Usage limit reached · continuing automatically at 3pm · esc to cancel';
+  assert.equal(screenDisconnects(bare('⏺ 인용 예시입니다.', quote, '', banner)).size, 0);
+  assert.equal(screenDisconnects(bare('⏺ Bash(cat archived-example.txt)', quote, '', banner)).size, 0);
+});
+
+test('오탐 화면에서는 한도 경보도 교대 안내도 나가지 않고, 실제 사고 화면에서는 둘 다 나간다', async () => {
+  const bad = await run({screenAt: limitFrom(2, incident['neg-response-quote-then-unrelated-banner'])});
+  assert.equal(limitMsgs(bad.sent).length, 0);
+  assert.ok(!bad.sent.some(([, , m]) => m.includes('대체 후보')));
+  const good = await run({screenAt: limitFrom(2, incident['pos-banner-after-detail'])});
+  const msgs = limitMsgs(good.sent);
+  assert.equal(msgs.length, 1);
+  assert.match(msgs[0][2], /대체 후보 1번 있음/);
+});
