@@ -13,13 +13,16 @@ import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
 // 시니어 2명 등록 + 등록된 전원에게 동시에 묻기(2026-10-22 [kyle] 승인). 실제 모델은 부르지 않고 가짜 spawn만 쓴다.
+// 호출 시험은 헤드리스 길(senior-mode headless)의 codex 두 명으로 본다: 헤드리스는 codex 스크립트만 부르고, agy가 등록돼 있으면
+// 아무도 부르지 않는다(2026-11-18 [kyle]). codex + agy 대화창 혼합은 tests/senior-agy-command.test.mjs가 본다.
 const models = [{slug: 'gpt-6-astra', supported_reasoning_levels: ['low', 'high'].map(effort => ({effort}))},
   {slug: 'gpt-6-sol', supported_reasoning_levels: ['low', 'high'].map(effort => ({effort}))}];
 const readCodexModels = () => ({models});
 const BOUND = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}';
-const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, ARGON = {runner: 'agy', model: 'gemini-4-argon-medium'};
+const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, SOL = {runner: 'codex', model: 'gpt-6-sol', effort: 'low'};
+const ARGON = {runner: 'agy', model: 'gemini-4-argon-medium'};
 
-function fixture({seniors = [ASTRA, ARGON]} = {}) {
+function fixture({seniors = [ASTRA, SOL]} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-two-'));
   fs.writeFileSync(path.join(home, 'senior-mode'), 'headless\n');
   const repo = path.join(home, 'repo'); fs.mkdirSync(repo);
@@ -36,16 +39,15 @@ function fixture({seniors = [ASTRA, ARGON]} = {}) {
   const raw = JSON.parse(fs.readFileSync(file, 'utf8')); raw.runners.agy.exec = BOUND; fs.writeFileSync(file, JSON.stringify(raw));
   new CardStore(home).create({repo: 'qa', id: 'card-a', repoPath: repo, body: '# 시험 카드\n'});
   const calls = [];
-  // 가짜 호출: 명령 앞머리로 codex(senior.sh)와 agy(exec 틀)를 가른다. behavior[runner]가 결과를 정한다.
-  const behavior = {codex: {}, agy: {}};
+  // 가짜 호출: 모두 senior.sh다. 모델(KADAN_SENIOR_MODEL)로 두 시니어를 가르고 behavior[모델]이 결과를 정한다.
+  const behavior = {'gpt-6-astra': {}, 'gpt-6-sol': {}};
   const fake = async (command, opts) => {
-    const runner = command.startsWith('agy') ? 'agy' : 'codex';
-    calls.push({runner, command, env: opts.env, cwd: opts.cwd});
-    const b = behavior[runner];
+    const model = opts.env.KADAN_SENIOR_MODEL;
+    calls.push({model, command, env: opts.env, cwd: opts.cwd});
+    const b = behavior[model] ?? {};
     if (b.gate) await b.gate;
     if (b.status) return {status: b.status, stdout: b.stdout ?? '', stderr: b.stderr ?? ''};
-    if (runner === 'agy') return {status: 0, stderr: '', stdout: JSON.stringify({response: '결론: agy 답'})};
-    fs.writeFileSync(path.join(opts.env.KADAN_SENIOR_DIR, 'result.txt'), '결론: codex 답');
+    fs.writeFileSync(path.join(opts.env.KADAN_SENIOR_DIR, 'result.txt'), `결론: ${model} 답`);
     return {status: 0, stderr: '', stdout: ''};
   };
   const run = (flags = {}, more = {}) => seniorCommand(['qa/card-a'], {question: '바꿀까?', ...flags}, {home, by: 'qa-슈퍼감독', env: {PATH: process.env.PATH}, readCodexModels, spawn: fake, ...more});
@@ -97,15 +99,17 @@ test('kadan runners set senior --set: 두 명을 한 번에 등록하고, 3개·
   assert.throws(() => set({set: 'codex:gpt-6-astra:high', runner: 'codex', model: 'gpt-6-sol'}), /함께 쓰지 않는다/);
   const show = runnersCommand(['show'], {}, meta());
   assert.equal(show.launch.senior, seniorCommandLabel([ASTRA, ARGON]));
-  assert.match(show.launch.senior, /gpt-6-astra.*codex exec.* \+ agy exec 틀 · 모델 gemini-4-argon-medium/);
+  assert.match(show.launch.senior, /gpt-6-astra.*codex exec.* \+ agy 대화창 · 모델 gemini-4-argon-medium/);
+  assert.ok(!show.launch.senior.includes('exec 틀'), 'agy는 exec 틀로 부르지 않는다');
 });
 
 test('둘 다 ok: 칸 2개·원장 2줄·같은 askId, 시니어마다 증거 폴더와 adviceId가 따로다', async () => {
   const f = fixture();
   const r = await f.run();
   assert.equal(r.answers.length, 2); assert.equal(f.calls.length, 2);
-  assert.deepEqual(r.answers.map(a => [a.runner, a.model, a.effort, a.status]), [['codex', 'gpt-6-astra', 'high', 'ok'], ['agy', 'gemini-4-argon-medium', 'max', 'ok']]);
-  assert.deepEqual(r.answers.map(a => a.answer), ['결론: codex 답', '결론: agy 답']);
+  assert.deepEqual(r.answers.map(a => [a.runner, a.model, a.effort, a.status]), [['codex', 'gpt-6-astra', 'high', 'ok'], ['codex', 'gpt-6-sol', 'low', 'ok']]);
+  assert.deepEqual(r.answers.map(a => a.answer), ['결론: gpt-6-astra 답', '결론: gpt-6-sol 답']);
+  assert.ok(f.calls.every(call => /senior\.sh'$/.test(call.command)));
   const entries = f.advices();
   assert.equal(entries.length, 2);
   assert.deepEqual(new Set(entries.map(e => e.askId)), new Set([r.askId]));
@@ -113,21 +117,19 @@ test('둘 다 ok: 칸 2개·원장 2줄·같은 askId, 시니어마다 증거 �
   assert.deepEqual(entries.map(e => [e.seniorIndex, e.seniorCount, e.reason]), [[1, 2, 'ok'], [2, 2, 'ok']]);
   assert.deepEqual(r.answers.map(a => a.adviceId).sort(), entries.map(e => e.adviceId).sort());
   const dirs = r.answers.map(a => a.evidencePath);
-  assert.deepEqual(dirs, [path.join(f.home, 'advice', r.askId, '1-codex-gpt-6-astra'), path.join(f.home, 'advice', r.askId, '2-agy-gemini-4-argon-medium')]);
-  assert.equal(f.calls[0].env.KADAN_SENIOR_DIR, dirs[0]); assert.equal(f.calls[1].cwd, dirs[1]);
-  for (const dir of dirs) assert.ok(fs.existsSync(path.join(dir, 'input.txt')) && fs.existsSync(path.join(dir, 'stderr.txt')) && fs.existsSync(path.join(dir, 'exit-code.txt')) || dir === dirs[0]);
-  assert.equal(fs.readFileSync(path.join(dirs[1], 'model.txt'), 'utf8'), 'gemini-4-argon-medium\n', 'agy는 자기 폴더에 자기 model.txt를 쓴다');
-  assert.ok(fs.existsSync(path.join(dirs[1], '.agents/agents/kadan-noexec/agent.md')), '묶기 에이전트 파일도 시니어 폴더 안에 따로 둔다');
+  assert.deepEqual(dirs, [path.join(f.home, 'advice', r.askId, '1-codex-gpt-6-astra'), path.join(f.home, 'advice', r.askId, '2-codex-gpt-6-sol')]);
+  assert.equal(f.calls[0].env.KADAN_SENIOR_DIR, dirs[0]); assert.equal(f.calls[1].env.KADAN_SENIOR_DIR, dirs[1]);
+  for (const dir of dirs) assert.ok(fs.existsSync(path.join(dir, 'input.txt')) && fs.existsSync(path.join(dir, 'stderr.txt')));
   assert.ok(!('answer' in r), '옛 단일 answer 칸은 없다');
 });
 
 test('하나가 429면 그 칸만 한도, 나머지는 답을 돌려주고 재시도 없이(호출 2회) 성공으로 끝난다', async () => {
   for (const [text, where] of [['HTTP 429 Too Many Requests', 'stderr'], ['You hit your Usage Limit', 'stdout'], ['quota exceeded', 'stderr'], ['Rate Limit reached', 'stderr']]) {
     const f = fixture();
-    f.behavior.codex = {status: 1, [where]: text};
+    f.behavior['gpt-6-astra'] = {status: 1, [where]: text};
     const r = await f.run();
-    assert.deepEqual(r.answers.map(a => [a.model, a.status, a.reason]), [['gpt-6-astra', '한도', 'limit'], ['gemini-4-argon-medium', 'ok', 'ok']], text);
-    assert.equal(r.answers[0].answer, undefined); assert.equal(r.answers[1].answer, '결론: agy 답');
+    assert.deepEqual(r.answers.map(a => [a.model, a.status, a.reason]), [['gpt-6-astra', '한도', 'limit'], ['gpt-6-sol', 'ok', 'ok']], text);
+    assert.equal(r.answers[0].answer, undefined); assert.equal(r.answers[1].answer, '결론: gpt-6-sol 답');
     assert.equal(f.calls.length, 2, '재시도 없음');
     assert.deepEqual(f.advices().map(e => e.reason), ['limit', 'ok']);
   }
@@ -136,7 +138,7 @@ test('하나가 429면 그 칸만 한도, 나머지는 답을 돌려주고 재�
 
 test('한도 글이 없는 실패는 한도가 아니라 실패(call-failed)이고, 종료 코드는 0이다(다른 칸이 ok)', async () => {
   const f = fixture();
-  f.behavior.agy = {status: 2, stderr: 'boom'};
+  f.behavior['gpt-6-sol'] = {status: 2, stderr: 'boom'};
   const r = await f.run();
   assert.deepEqual(r.answers.map(a => a.status), ['ok', '실패(call-failed)']);
   assert.equal(f.calls.length, 2);
@@ -144,45 +146,45 @@ test('한도 글이 없는 실패는 한도가 아니라 실패(call-failed)이�
 
 test('둘 다 실패하면 종료 코드 1이고 칸마다 이유와 증거 경로가 오류 글에 있다(재시도 없음)', async () => {
   const f = fixture();
-  f.behavior.codex = {status: 1, stderr: 'rate limit'}; f.behavior.agy = {status: 3, stderr: 'boom'};
+  f.behavior['gpt-6-astra'] = {status: 1, stderr: 'rate limit'}; f.behavior['gpt-6-sol'] = {status: 3, stderr: 'boom'};
   await assert.rejects(f.run(), error => error.exitCode === 1 && /\[codex\/gpt-6-astra\] 자문 실패\(limit\)/.test(error.message)
-    && /\[agy\/gemini-4-argon-medium\] 자문 실패\(call-failed\)/.test(error.message) && error.answers.length === 2 && Boolean(error.askId));
+    && /\[codex\/gpt-6-sol\] 자문 실패\(call-failed\)/.test(error.message) && error.answers.length === 2 && Boolean(error.askId));
   assert.equal(f.calls.length, 2);
   assert.deepEqual(f.advices().map(e => e.reason), ['limit', 'call-failed']);
 });
 
 test('덮어쓰기: 등록된 시니어를 고르면 그 한 명만 부르고, 등록 밖은 등록 목록을 보이는 오류다', async () => {
   const f = fixture();
-  const r = await f.run({model: 'gemini-4-argon-medium'});
-  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].runner, 'agy'); assert.equal(r.answers.length, 1);
+  const r = await f.run({model: 'gpt-6-sol'});
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].model, 'gpt-6-sol'); assert.equal(r.answers.length, 1);
   const r2 = await f.run({runner: 'codex', model: 'gpt-6-astra', effort: 'low'});
   assert.equal(f.calls.length, 2); assert.equal(r2.answers[0].effort, 'low');
-  await assert.rejects(f.run({model: 'gemini-3.8-flash-high'}), /등록된 시니어가 아니다: gemini-3.8-flash-high — 등록된 시니어: codex\/gpt-6-astra\/high, agy\/gemini-4-argon-medium/);
+  await assert.rejects(f.run({model: 'gemini-3.8-flash-high'}), /등록된 시니어가 아니다: gemini-3.8-flash-high — 등록된 시니어: codex\/gpt-6-astra\/high, codex\/gpt-6-sol\/low/);
   await assert.rejects(f.run({runner: 'codex', model: 'gemini-4-argon-medium'}), /등록된 시니어가 아니다/);
   assert.equal(f.calls.length, 2);
 });
 
-test('--effort는 부르는 모델마다 검사한다: 지원하지 않는 강도면 아무도 부르지 않고, 강도 자리가 없는 틀은 무시 안내를 단다', async () => {
+test('--effort는 부르는 모델마다 검사한다: 지원하지 않는 강도면 아무도 부르지 않고, 받으면 부르는 전원의 강도가 바뀐다', async () => {
   const f = fixture();
   await assert.rejects(f.run({effort: 'ultra'}), /지원하지 않는 강도: ultra/);
   assert.equal(f.calls.length, 0); assert.deepEqual(f.advices(), []);
   const r = await f.run({effort: 'low'});
-  assert.equal(f.calls.length, 2); assert.equal(r.answers[0].effort, 'low');
-  assert.match(r.answers[1].note, /--effort는 agy 실행 틀에 강도 자리가 없어 무시했다/);
+  assert.equal(f.calls.length, 2); assert.deepEqual(r.answers.map(a => a.effort), ['low', 'low']);
+  assert.deepEqual(f.calls.map(call => call.env.KADAN_SENIOR_EFFORT), ['low', 'low']);
+  assert.ok(r.answers.every(a => a.note === undefined));
 });
 
-test('준비에서 한 명이 거절되면(agy 틀이 묶기 문법 밖) 아무도 부르지 않고 증거 폴더도 만들지 않는다', async () => {
-  const f = fixture();
-  const file = path.join(f.home, 'runner-settings.json');
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8')); raw.runners.agy.exec = 'agy --model {model} --print {prompt}'; fs.writeFileSync(file, JSON.stringify(raw));
-  await assert.rejects(f.run(), /묶기 문법에 맞지 않는다/);
-  assert.equal(f.calls.length, 0); assert.equal(fs.existsSync(path.join(f.home, 'advice')), false);
+test('헤드리스에서 agy가 함께 등록돼 있으면 codex도 부르지 않고 증거 폴더도 만들지 않는다(agy는 대화창으로만 부른다)', async () => {
+  const f = fixture({seniors: [ASTRA, ARGON]});
+  await assert.rejects(f.run(), /헤드리스 시니어.*codex만 부른다.*agy\/gemini-4-argon-medium.*headless-agy/);
+  await assert.rejects(f.run({model: 'gpt-6-astra'}), /headless-agy/, 'codex만 골라도 같다');
+  assert.equal(f.calls.length, 0); assert.deepEqual(f.advices(), []); assert.equal(fs.existsSync(path.join(f.home, 'advice')), false);
 });
 
 test('동시성: 지연시킨 가짜 호출 둘이 한꺼번에 진행 중이다(시간 단언 없음)', async () => {
   const f = fixture();
   let release; const gate = new Promise(resolve => { release = resolve; });
-  f.behavior.codex = {gate}; f.behavior.agy = {gate};
+  f.behavior['gpt-6-astra'] = {gate}; f.behavior['gpt-6-sol'] = {gate};
   const pending = f.run();
   for (let i = 0; i < 50 && f.calls.length < 2; i++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.length, 2, '첫 호출이 끝나기 전에 둘째도 시작했다');
@@ -228,13 +230,13 @@ test('F1: 등록한 뒤 역할별 block(senior)이 걸리면 전원 거절(호�
   const f = fixture();
   block(f, 'gpt-6-astra', 'senior');
   await rejectedWithoutCalls(f, {}, /시니어 1번\(codex\/gpt-6-astra\): 정책으로 막은 모델.*kadan runners set senior --set/);
-  await rejectedWithoutCalls(f, {model: 'gemini-4-argon-medium'}, /정책으로 막은 모델/); // 차단 안 된 한 명만 골라도 전원 거절
+  await rejectedWithoutCalls(f, {model: 'gpt-6-sol'}, /정책으로 막은 모델/); // 차단 안 된 한 명만 골라도 전원 거절
 });
 
 test('F1: 등록한 뒤 전역 block이 걸리면 호출 0회', async () => {
   const f = fixture();
-  block(f, 'gemini-4-argon-medium', '');
-  await rejectedWithoutCalls(f, {}, /시니어 2번\(agy\/gemini-4-argon-medium\): 정책으로 막은 모델/);
+  block(f, 'gpt-6-sol', '');
+  await rejectedWithoutCalls(f, {}, /시니어 2번\(codex\/gpt-6-sol\): 정책으로 막은 모델/);
 });
 
 test('F1: --model로 차단 항목을 지정해도 호출 0회', async () => {

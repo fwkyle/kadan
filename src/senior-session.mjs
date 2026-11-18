@@ -1,5 +1,6 @@
 // 시니어 대화형 세션. senior-mode에 headless를 명시하면 기존 헤드리스 경로를 사용한다.
 // codex 대화형 화면을 카단 전용 tmux 소켓(`-L kadan-senior`)에 띄워 질문 한 줄을 넣고, 답 파일의 끝 표지와 화면을 보고 끝을 안 뒤 끈다.
+// agy(gemini)도 같은 소켓·같은 자리·같은 끄기 확인을 쓰되 작업 폴더·관문·답 회수가 다르다(실행기별 갈래는 아래 seatKind, agy 쪽은 src/senior-agy.mjs).
 // 역할이 아니다: 원장 start·stop·지침 우편·감시 대상에 들지 않는다. 기록은 호출마다 advice 한 줄과 증거 폴더다.
 // 지키는 것(설계 2026-11-17):
 //  - 키는 두 단계로만 나간다: 붙여넣기 직전에 빈 입력칸, Enter 직전에 '입력칸의 글 = 방금 붙인 자기 한 줄'. 아니면 키 0회로 실패한다.
@@ -16,6 +17,7 @@ import {splitGhostText} from './ghost-text.mjs';
 import {ALLOW_LIVE_FLOOR_ENV, isDefaultHome} from './live-floor-guard.mjs';
 import {composerHolds, composerReady, limitScreen, markerOf, readAnswerText, screenWorking,
   ANSWER_LIMIT_BYTES} from './senior-screen.mjs';
+import {agyArgv, agyAskLine, askSeatAgy, passGateAgy, prepareAgyWorkdir, removeAgyAsk, writeAgyAsk} from './senior-agy.mjs';
 
 export const SENIOR_MODE_FILE = 'senior-mode';
 // 질문이 제출되면 호출 폴더에 이 파일이 생긴다. 부른 쪽(kadan senior)이 이것을 보고 로티 읽기 전용 탭을 연다.
@@ -75,9 +77,10 @@ export function seniorTmux({socket, home, env = process.env, spawn = spawnSync})
   const clientEnv = tmuxClientEnv(env);
   for (const name of PANE_ENV_STRIP) delete clientEnv[name];
   let conf = null;
-  const call = (args, input) => {
+  // more: 그 호출에만 얹는 실행 옵션(전체 스크롤 캡처의 maxBuffer).
+  const call = (args, input, more = {}) => {
     conf ??= ensureTmuxConf(home);
-    const options = {input, encoding: 'utf8', env: clientEnv, timeout: 15_000};
+    const options = {input, encoding: 'utf8', env: clientEnv, timeout: 15_000, ...more};
     return spawn('tmux', ['-u', '-L', socket, '-f', conf, ...args], options);
   };
   const run = (args, input) => {
@@ -172,16 +175,20 @@ export function killOwn(dir, {run, reason = 'done', env = process.env} = {}) {
   const tmux = run ?? seniorTmux({socket: record.socket, home: record.home, env});
   const verdict = confirmOwn(record, tmux);
   const at = new Date().toISOString();
+  // 세션이 없어진 것이 확실할 때만 그 자리가 만든 파일(agy 질문 파일)을 치운다. 끄지 못했거나 모르면 그대로 둔다.
+  const release = () => { try { seatKind(record.runner).release?.(record); } catch { /* 정리 실패가 끄기 결과를 바꾸지 않는다 */ } };
   if (!verdict.own) {
     const ended = {endedAt: record.endedAt ?? at, endReason: record.endReason ?? reason};
-    if (verdict.why === 'no-session') patchRecord(dir, ended);
+    if (verdict.why === 'no-session') { patchRecord(dir, ended); release(); }
     else patchRecord(dir, {killSkipped: verdict.why, killSkippedAt: at, killSkippedReason: reason});
     return {killed: false, why: verdict.why};
   }
   // 끝남을 먼저 적는다: 적은 뒤 끄기 전에 죽어도 다음 호출의 청소가 이 기록으로 끈다.
   patchRecord(dir, {endedAt: record.endedAt ?? at, endReason: record.endReason ?? reason});
   const result = tmux.try(['kill-session', '-t', `=${record.session}`]);
-  return result.status === 0 ? {killed: true} : {killed: false, why: 'kill-failed'};
+  if (result.status !== 0) return {killed: false, why: 'kill-failed'};
+  release();
+  return {killed: true};
 }
 
 // 그 호출이 끝났는가: 끝남 기록이 있거나, 만료 시각이 지났거나, 부른 프로세스가 없다.
@@ -204,17 +211,48 @@ export function sweepEnded({home, run, now = Date.now}) {
   return swept;
 }
 
-function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, node, reapMarginMs}) {
-  const {dir} = call;
-  const out = path.join(dir, 'out');
+// codex 자리: 모델 작업 폴더는 호출 폴더의 out/이고 답은 그 안의 result.txt다.
+function codexSeat({call}) {
+  const out = path.join(call.dir, 'out');
   fs.mkdirSync(out, {recursive: true, mode: 0o700});
   const answer = path.join(out, 'result.txt');
   if (fs.existsSync(answer)) throw new Error(`답 파일이 이미 있다 — 부르지 않는다: ${answer}`);
-  const session = `senior-${askId.slice(0, 8)}-${index + 1}`;
-  const gate = path.join(dir, 'launch');
   // codex는 심볼릭 링크가 낀 작업 폴더를 거부한다(scripts/senior.sh와 같은 이유). 실제 경로로 넘긴다.
   const argv = codexArgv({out: fs.realpathSync(out), model: call.model, effort: call.effort});
-  run(['new-session', '-d', '-s', session, '-x', '150', '-y', '50', '-c', out, paneCommand({gate, argv})]);
+  return {cwd: out, argv, line: ASK_LINE, fields: {out}};
+}
+
+// agy 자리: 작업 폴더는 홈의 고정 폴더(shared — 자리 준비에서 git 밖 확인·에이전트 파일까지 끝난 실제 경로)이고,
+// 모델이 읽을 질문 파일을 자리마다 따로 둔다. 강도는 넘기지 않는다(모델 이름이 정한다).
+function agySeat({call, askId, index, shared}) {
+  if (typeof call.prompt !== 'string' || !call.prompt) throw new Error('agy 시니어 자리에는 질문 글이 필요하다');
+  const argv = agyArgv({model: call.model, readDir: call.readDir ?? null});
+  const askFile = writeAgyAsk(shared, askId, index, call.prompt);
+  return {cwd: shared, argv, line: agyAskLine(askFile), fields: {workdir: shared, askFile}};
+}
+
+// 실행기별 자리 갈래(데이터). 호출·기록(session.json)의 runner 값으로 고른다. 값이 없으면 codex다(이 칸이 생기기 전의 기록·호출).
+//  prepare: 자리 준비 잠금 안에서 실행기마다 한 번(반환값이 plan의 shared) · plan: 자리 하나의 작업 폴더·실행 인자·넣을 한 줄
+//  gate: 질문 넣기 전 관문 · ask: 질문 넣기와 답 회수 · release: 세션이 없어진 뒤 그 자리가 만든 파일 치우기
+// 함수로 둔 이유: 두 모듈이 서로를 가져오므로 모듈을 읽는 시점이 아니라 부르는 시점에 표를 만든다.
+function seatKind(runner = 'codex') {
+  const kinds = {
+    codex: {plan: codexSeat, gate: passGateCodex, ask: askSeatCodex},
+    agy: {prepare: prepareAgyWorkdir, plan: agySeat, gate: passGateAgy, ask: askSeatAgy, release: removeAgyAsk},
+  };
+  if (!Object.hasOwn(kinds, runner)) throw new Error(`시니어 대화형 자리를 만들 수 없는 실행기: ${runner}`);
+  return kinds[runner];
+}
+
+function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, node, reapMarginMs, shared}) {
+  const {dir} = call;
+  const kind = seatKind(call.runner);
+  const plan = kind.plan({call, askId, index, shared});
+  const session = `senior-${askId.slice(0, 8)}-${index + 1}`;
+  const gate = path.join(dir, 'launch');
+  const release = () => { try { kind.release?.({askId, ...plan.fields}); } catch { /* 정리 실패가 원래 오류를 가리지 않는다 */ } };
+  try { run(['new-session', '-d', '-s', session, '-x', '150', '-y', '50', '-c', plan.cwd, paneCommand({gate, argv: plan.argv})]); }
+  catch (error) { release(); throw error; }
   // 여기서부터 실패하면 방금 만든 세션을 치운다. 어디까지 했는지를 적어 두고, 치우기 전에 아는 만큼 견준다(discardSeat).
   const made = {session, askId, dir, panePid: null, dirOption: 'none', askOption: 'none', recorded: false};
   try {
@@ -231,8 +269,9 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
     run(['set-option', '-t', `=${session}:`, '@kadan_senior_ask', askId]);
     made.askOption = 'set';
     const expiresAt = deadlineAt + reapMarginMs;
-    const record = {askId, session, socket: run.socket, home, dir, out, gate, panePid, ownerPid, model: call.model,
-      marker: markerOf(call.token), line: ASK_LINE, createdAt: new Date(now()).toISOString(), deadlineAt, expiresAt,
+    const record = {askId, session, socket: run.socket, home, dir, ...plan.fields, gate, panePid, ownerPid,
+      ...(call.runner ? {runner: call.runner} : {}), model: call.model,
+      marker: markerOf(call.token), line: plan.line, createdAt: new Date(now()).toISOString(), deadlineAt, expiresAt,
       timing: call.timing ?? SESSION_TIMING};
     writeRecord(dir, record);
     made.recorded = true;
@@ -243,6 +282,8 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
     return {...record, index};
   } catch (error) {
     const cleanup = discardSeat(made, run);
+    // 기록을 쓴 뒤의 정리(killOwn)는 그 자리의 파일도 치운다. 기록 전이면 세션을 껐거나 이미 없을 때만 여기서 치운다.
+    if (!made.recorded && (cleanup.killed || cleanup.why === 'no-session')) release();
     error.seatCleanup = cleanup;
     if (!cleanup.killed && cleanup.why !== 'no-session') {
       error.message += ` — 만든 세션 ${session}은 끄지 않았다(${cleanup.why}): 자기 것인지 확인하지 못했다`;
@@ -299,8 +340,18 @@ export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, 
       throw new Error(`시니어 대화형 자리가 모자란다(지금 ${current}개 + 이번 ${calls.length}명 > ${SENIOR_SEATS}) — 아무도 부르지 않는다. ` +
         '앞선 호출이 끝난 뒤 다시 불러라');
     }
-    const shared = {home, run, askId, deadlineAt, now, ownerPid, node, reapMarginMs};
-    for (const [index, call] of calls.entries()) seats.push(createSeat({...shared, call, index}));
+    // 실행기마다 한 번 하는 준비(agy의 고정 작업 폴더: git 밖 확인 → 에이전트 파일)를 세션을 하나도 만들기 전에 끝낸다.
+    // 여기서 걸리면 던져 아무도 부르지 않는다. 잠금 안이라 첫 두 호출이 같은 폴더를 동시에 만들지 않는다.
+    const prepared = new Map();
+    for (const call of calls) {
+      const key = call.runner ?? 'codex';
+      const kind = seatKind(key);
+      if (kind.prepare && !prepared.has(key)) prepared.set(key, kind.prepare(home));
+    }
+    const common = {home, run, askId, deadlineAt, now, ownerPid, node, reapMarginMs};
+    for (const [index, call] of calls.entries()) {
+      seats.push(createSeat({...common, call, index, shared: prepared.get(call.runner ?? 'codex')}));
+    }
     return seats;
   } catch (error) {
     for (const seat of seats) killOwn(seat.dir, {run, reason: 'partial-create'});
@@ -322,7 +373,7 @@ export function captureSeat(run, session) {
 //  - 신호로 죽은 호출(signal이 있음)은 세션이 아니라 묻는 쪽이 죽은 것이다.
 // 그래서 살아 있다는 답이 아니면 한 번 더 묻고, 그래도 아닐 때만 죽은 것으로 본다. 신호는 한 번만 오므로 다시 물으면 제 답이 나오고,
 // 중단은 다음 대기에서 신호 처리기가 적는다.
-function paneAlive(run, seat) {
+export function paneAlive(run, seat) {
   const ask = () => run.try(['display-message', '-p', '-t', `=${seat.session}:`, '#{pane_pid}|#{pane_dead}']);
   const alive = result => result.status === 0 && result.stdout.trim() === `${seat.panePid}|0`;
   let result = ask();
@@ -333,7 +384,7 @@ function paneAlive(run, seat) {
   return {alive: alive(result)};
 }
 // 던져진 오류가 '신호로 죽은 tmux 호출'이면 그 신호 이름. sendTmux가 정리 실패를 묶어 던진 경우도 본다.
-const signalOf = error => error?.signal ?? error?.errors?.find(inner => inner?.signal)?.signal ?? null;
+export function signalOf(error) { return error?.signal ?? error?.errors?.find(inner => inner?.signal)?.signal ?? null; }
 
 // 제출 표지를 읽어 확인한다. 반환: {ok: true} | {ok: false, why}. why: absent(없음) · not-regular-file(링크·폴더 등, lstat) · too-big ·
 // unreadable · bad-json · bad-shape · other-call(이번 호출·이번 자리의 값이 아님). 자식이 쓰는 값(askId·세션·pane PID·호출 폴더)이 부른 쪽의
@@ -365,7 +416,9 @@ export function submittedTabCheck(dir, seat, {run}) {
 // 한 줄을 넣는다. 바닥의 sendTmux(붙여넣기 → PID 재확인 → Enter)를 그대로 쓰되 전용 소켓 실행 함수와 기대 pane PID를 넘기고,
 // 그 실행 함수의 키 명령 직전에 화면을 새로 읽어 검사한다. 허용하는 키는 붙여넣기와 Enter뿐이다.
 // 시간 상한(호출 시작부터 잰 절대 마감 seat.deadlineAt)도 키 명령 직전마다 다시 본다: 끝났으면 그 키를 보내지 않는다(why: deadline).
-export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spawn = spawnSync, now = Date.now} = {}) {
+// judge: 그 실행기 화면의 판정 묶음 {ready(화면), holds(화면, 글), capture(run, 세션)}. 주지 않으면 codex 화면 판정이다.
+export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spawn = spawnSync, now = Date.now,
+  judge = {ready: composerReady, holds: composerHolds, capture: captureSeat}} = {}) {
   const expired = () => Number.isFinite(seat.deadlineAt) && now() >= seat.deadlineAt;
   const deny = (stage, why) => {
     const withheld = `시니어 세션에 키를 보내지 않는다(${stage}: ${why})`;
@@ -375,12 +428,12 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
     // 순서가 중요하다: 화면 읽기(외부 tmux 호출이라 시간이 든다)와 판정을 먼저 끝내고, 남은 시간은 키 명령 바로 앞에서 본다.
     // 마감 검사와 키 명령 사이에는 아무 호출도 두지 않는다 — 화면을 읽는 동안 끝난 상한도 여기서 걸린다.
     if (args[0] === 'paste-buffer') {
-      const verdict = composerReady(captureSeat(run, seat.session));
+      const verdict = judge.ready(judge.capture(run, seat.session));
       if (expired()) throw deny('paste', 'deadline');
       if (!verdict.ok) throw deny('paste', verdict.why);
     } else if (args[0] === 'send-keys') {
       if (args.at(-1) !== 'Enter') throw deny('key', `허용하지 않은 키 ${args.at(-1)}`);
-      const verdict = composerHolds(captureSeat(run, seat.session), text);
+      const verdict = judge.holds(judge.capture(run, seat.session), text);
       if (expired()) throw deny('enter', 'deadline');
       if (!verdict.ok) throw deny('enter', verdict.why);
     }
@@ -414,7 +467,10 @@ export function outsideGit(out, {spawn = spawnSync} = {}) {
 // 아니면 질문을 넣지 않는다(모델 호출 0회). 반환: {ok, why?, note?}. 던지지 않는다.
 // MCP 연결 목록은 보지 않는다(2026-11-18 [kyle]: 사용자 codex 설정 그대로 — 지금 헤드리스 시니어와 같은 수준).
 // 시간 상한이 준비 중에 끝났으면 {ok: false, why: 'deadline', timeout: true}로 끝낸다.
-export async function passGate(seat, {run, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
+// 실행기별 관문은 자리 기록의 runner로 고른다(위 seatKind). 아래는 codex 관문이고 agy 관문은 src/senior-agy.mjs다.
+export function passGate(seat, deps) { return seatKind(seat.runner).gate(seat, deps); }
+
+async function passGateCodex(seat, {run, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
   spawn = spawnSync}) {
   const evidence = {};
   const done = verdict => {
@@ -470,7 +526,11 @@ export function readAnswerFile(file, marker) {
 // ok는 (1) 답 파일이 답 후보이고 (2) 질문을 넣은 뒤 화면이 일하는 표시를 거쳐 (3) 다시 빈 입력칸으로 쉴 때만이다.
 // 이미 제출한 호출은 같은 폴링에서 완성된 답이 timeout보다 먼저다. 제출 전에 상한이 끝났으면 새 입력 없이 timeout이다.
 // 처음의 쉬는 화면을 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
-export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
+// 실행기별 질문·답 회수는 자리 기록의 runner로 고른다. 아래는 codex(답 파일)이고 agy(화면 스크롤)는 src/senior-agy.mjs다.
+// 두 갈래 모두 같은 반환 모양(reason·detail·answer)으로 끝나 영수증·원장이 같은 글을 가리킨다.
+export function askSeat(seat, deps) { return seatKind(seat.runner).ask(seat, deps); }
+
+async function askSeatCodex(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
   spawn = spawnSync, onSubmitted = () => {}}) {
   // 상한이 이미 끝났으면 아무것도 넣지 않는다. 넣는 도중(붙여넣기 직전·Enter 직전)에 끝나도 그 키는 나가지 않는다.
   if (now() >= seat.deadlineAt) return {reason: 'timeout', detail: 'deadline:before-ask'};

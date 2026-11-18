@@ -30,10 +30,11 @@ export const HARD_ROLE = 'worker-hard';
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
 // 시니어가 쓸 수 있는 '안전하게 묶을 수 있는 실행기' 허용 목록(2026-10-20 [kyle]). 쓰기·명령 실행이 막힌다고 확인된 실행기만 넣는다.
-// codex는 scripts/senior.sh가 읽기 전용 샌드박스로 부르고, agy는 실행기 표 exec 틀 + 도구 없는 에이전트(--agent kadan-noexec, src/exec-agent.mjs)로 부른다.
+// codex는 대화창(기본) 또는 scripts/senior.sh(헤드리스)로 부르고, agy는 대화창 + 도구 없는 에이전트(--agent kadan-noexec)로만 부른다
+// (src/senior-agy.mjs — 헤드리스로는 부르지 않는다, 2026-11-18 [kyle]).
 // 설정 저장(runners set senior)과 호출(kadan senior --runner)이 같은 목록·같은 함수로 거절한다.
 export const SENIOR_SAFE_RUNNERS = ['codex', 'agy'];
-// scripts/senior.sh가 직접 부르는 실행기. 그 밖의 허용 실행기는 실행기 표 exec 틀로 부른다.
+// scripts/senior.sh가 직접 부르는 실행기. 헤드리스 길은 이 실행기만 부른다(그 밖의 허용 실행기가 등록돼 있으면 헤드리스 호출은 전원 거절).
 export const SENIOR_SCRIPT_RUNNER = 'codex';
 // 시니어는 최대 2명을 등록하고, 질문하면 등록된 전원에게 동시에 묻는다(2026-10-22 [kyle] 승인). 둘은 폴백이 아니라 동등하다.
 export const SENIOR_MAX = 2;

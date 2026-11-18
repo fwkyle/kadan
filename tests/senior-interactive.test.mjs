@@ -92,9 +92,12 @@ test('명시한 headless는 기존 호출을 쓰고 잘못된 모드는 거절�
   assert.equal(fs.existsSync(path.join(bad.home, 'advice')), false);
 });
 
-test('대화형 길은 codex만: 다른 실행기가 등록돼 있으면 아무도 부르지 않고 세션도 만들지 않는다', async t => {
-  const f = fixture(t, {seniors: [ASTRA, ARGON]});
-  await assert.rejects(() => f.run({}, {spawn: async () => assert.fail('부르면 안 된다')}), /대화형 시니어.*codex만.*agy\/gemini-4-argon-medium/);
+// 대화형 길은 이제 agy도 부른다(codex + agy 혼합 포함) — tests/senior-agy-command.test.mjs. 헤드리스 길은 반대로 agy가 등록돼 있으면
+// 아무도 부르지 않는다.
+test('명시한 headless에서 agy가 등록돼 있으면 codex도 부르지 않고 세션·증거 폴더를 만들지 않는다(agy는 대화창으로만)', async t => {
+  const f = fixture(t, {seniors: [ASTRA, ARGON], mode: 'headless'});
+  await assert.rejects(() => f.run({}, {spawn: async () => assert.fail('부르면 안 된다')}), /헤드리스 시니어.*codex만 부른다.*agy\/gemini-4-argon-medium.*headless-agy/);
+  await assert.rejects(() => f.run({model: 'gpt-6-astra'}, {spawn: async () => assert.fail('부르면 안 된다')}), /headless-agy/);
   assert.deepEqual(f.advices(), []);
   assert.equal(fs.existsSync(path.join(f.home, 'advice')), false);
   assert.equal(fs.existsSync(f.tmuxLog), false);
