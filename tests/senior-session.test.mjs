@@ -418,6 +418,8 @@ const cleanupNote = dir => JSON.parse(fs.readFileSync(path.join(dir, 'create-cle
 
 test('부분 생성 실패 정리(F1): 기록이 있는 세션은 소유 확인이 맞을 때만 끈다 — PID·세대·기록이 바뀌었거나 조회가 실패하면 이름만으로 끄지 않는다', {skip}, t => {
   const s = setup(t);
+  // 마지막 세션을 끈 직후에도 같은 시험 소켓에서 다음 사례를 시작한다.
+  s.run(['start-server', ';', 'set-option', '-s', 'exit-empty', 'off']);
   const drop = name => s.run(['kill-session', '-t', `=${name}`]);
   // 정상 대조: 예약 등록만 실패하면 방금 만든 자기 세션을 치운다.
   breakCreate(s, isReap);
@@ -447,6 +449,8 @@ test('부분 생성 실패 정리(F1): 기록이 있는 세션은 소유 확인�
 
 test('부분 생성 실패 정리(F1): 기록을 쓰기 전 단계도 방금 읽은 PID·세대와 견준 뒤에만 끈다', {skip}, t => {
   const s = setup(t);
+  // 마지막 세션을 끈 직후에도 같은 시험 소켓에서 다음 사례를 시작한다.
+  s.run(['start-server', ';', 'set-option', '-s', 'exit-empty', 'off']);
   const drop = name => s.run(['kill-session', '-t', `=${name}`]);
   // 정상 대조: 옵션 설정이 실패했고 pane은 그대로다 → 방금 읽은 PID와 같으므로 치운다.
   breakCreate(s, isSetAsk);
