@@ -35,7 +35,7 @@ let outcome;
 // 질문이 제출되면 표지 파일을 만든다(부른 쪽이 그때 로티 탭을 연다). 임시 파일에 쓴 뒤 옮겨 반쯤 쓴 파일이 보이지 않게 한다.
 const onSubmitted = () => {
   const file = path.join(dir, SUBMITTED_FILE);
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify({at: new Date().toISOString()}) + '\n', {mode: 0o600});
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({askId: record.askId, session: record.session, panePid: record.panePid, dir, at: new Date().toISOString()}) + '\n', {mode: 0o600});
   fs.renameSync(`${file}.tmp`, file);
 };
 try { outcome = await askSeat(record, {run, onSubmitted}); }

@@ -7,7 +7,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawn, spawnSync} from 'node:child_process';
 import {ASK_LINE, SESSION_ENTRY, SESSION_TIMING, askSeat, closeSeat, codexArgv, confirmOwn, killOwn, listSeniorSessions,
-  openSeats, passGate, readRecord, readSeniorMode, sendLine, seniorSocket, seniorTmux, sweepEnded} from '../src/senior-session.mjs';
+  openSeats, passGate, readRecord, readSeniorMode, readSubmitted, sendLine, seniorSocket, seniorTmux, submittedTabCheck, sweepEnded} from '../src/senior-session.mjs';
 import {markerOf, markerParts} from '../src/senior-screen.mjs';
 
 // 시니어 대화형 세션(2026-11-17 설계): 진짜 codex 없이 가짜 대화형 화면(tests/helpers/fake-codex-tui.mjs)을 격리 소켓에 띄운다.
@@ -174,6 +174,41 @@ test('질문을 제출한 뒤 읽기 전용 탭 같은 작은 클라이언트가
   assert.deepEqual(afterTab.filter(line => /\b(send-keys|paste-buffer|load-buffer)\b/u.test(line)), [], '탭이 붙은 뒤 키 명령 0회');
   closeSeat(seat, s.deps);
   assert.deepEqual(s.sessions(), []);
+});
+
+test('제출 표지: 일반 파일이고 이번 호출·이번 자리의 값이 맞을 때만 믿는다 — 깨진 글·폴더·링크·다른 호출·다른 자리의 표지는 거절하고, 끝난 세션이면 탭을 열지 않는다', {skip}, async t => {
+  const s = setup(t);
+  const [seat, other] = s.open(2);
+  const file = path.join(seat.dir, 'submitted.json');
+  const own = {askId: seat.askId, session: seat.session, panePid: seat.panePid, dir: seat.dir, at: 'x'};
+  const put = value => { fs.rmSync(file, {recursive: true, force: true}); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
+  assert.deepEqual(readSubmitted(seat.dir, seat), {ok: false, why: 'absent'});
+  put(own);
+  assert.deepEqual(readSubmitted(seat.dir, seat), {ok: true});
+  // 같은 이름에 둔 거짓 표지: 모두 거절한다(탭 판정은 표지가 맞을 때만 ok다).
+  put('{"askId": '); assert.equal(readSubmitted(seat.dir, seat).why, 'bad-json');
+  put('[1]'); assert.equal(readSubmitted(seat.dir, seat).why, 'bad-shape');
+  put('x'.repeat(5000)); assert.equal(readSubmitted(seat.dir, seat).why, 'too-big');
+  fs.rmSync(file, {force: true}); fs.mkdirSync(file); assert.equal(readSubmitted(seat.dir, seat).why, 'not-regular-file', '폴더');
+  fs.rmSync(file, {recursive: true, force: true});
+  const real = path.join(s.home, 'real-marker.json'); fs.writeFileSync(real, JSON.stringify(own));
+  fs.symlinkSync(real, file); assert.equal(readSubmitted(seat.dir, seat).why, 'not-regular-file', '내용이 맞는 파일을 가리키는 링크도 거절한다');
+  put({...own, askId: 'other-ask'}); assert.equal(readSubmitted(seat.dir, seat).why, 'other-call');
+  put({...own, session: other.session}); assert.equal(readSubmitted(seat.dir, seat).why, 'other-call', '다른 자리의 세션 이름');
+  put({...own, panePid: String(Number(seat.panePid) + 1)}); assert.equal(readSubmitted(seat.dir, seat).why, 'other-call');
+  put({...own, dir: other.dir}); assert.equal(readSubmitted(seat.dir, seat).why, 'other-call');
+  put({askId: seat.askId, session: seat.session, dir: seat.dir}); assert.equal(readSubmitted(seat.dir, seat).why, 'other-call', 'panePid 없음');
+  // 탭 판정: 표지가 맞고 세션이 살아 있으면 ok, 거짓 표지·끝났다는 판정·없어진 세션이면 아니다.
+  put({...own, askId: 'other-ask'}); assert.deepEqual(submittedTabCheck(seat.dir, seat, {run: s.run}), {ok: false, why: 'other-call'});
+  put(own);
+  assert.deepEqual(submittedTabCheck(seat.dir, seat, {run: s.run}), {ok: true});
+  fs.writeFileSync(path.join(seat.dir, 'outcome.json'), JSON.stringify({reason: 'ok'}));
+  assert.deepEqual(submittedTabCheck(seat.dir, seat, {run: s.run}), {ok: false, why: 'session-ended'}, '자식이 끝났다는 판정을 썼다');
+  fs.rmSync(path.join(seat.dir, 'outcome.json'), {force: true});
+  assert.deepEqual(submittedTabCheck(seat.dir, seat, {run: s.run}), {ok: true});
+  assert.equal(killOwn(seat.dir, {run: s.run, reason: 'test'}).killed, true);
+  assert.deepEqual(submittedTabCheck(seat.dir, seat, {run: s.run}), {ok: false, why: 'session-ended'}, '세션이 없다');
+  killOwn(other.dir, {run: s.run, reason: 'test'});
 });
 
 test('키 조건 (가): 시작 화면이 업데이트 선택 창·번호 선택 창이면 키를 하나도 보내지 않고 관문에서 끝난다', {skip}, async t => {

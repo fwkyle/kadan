@@ -216,6 +216,61 @@ test('탭이 열린 순간 진짜 읽기 전용 클라이언트가 붙어도(tmu
   assert.deepEqual(f.sessions(), []);
 });
 
+// 제출되지 않은 칸(붙인 직후 업데이트 창 → Enter 0회)의 호출 폴더에 거짓 표지를 심는다. 부모는 표지를 읽어 확인하므로 탭을 열지 않는다.
+test('거짓 제출 표지(깨진 글·폴더·링크·다른 호출의 표지)가 있어도 제출되지 않은 칸에는 탭을 열지 않고 이유가 남는다(검수 exec-3258d70f)', {skip}, async t => {
+  const plant = {
+    '깨진 JSON': dir => { fs.writeFileSync(path.join(dir, 'submitted.json'), '{"askId":'); },
+    '폴더': dir => { fs.mkdirSync(path.join(dir, 'submitted.json')); },
+    '링크': dir => {
+      const real = path.join(dir, 'real-marker.json');
+      const record = readRecord(dir);
+      fs.writeFileSync(real, JSON.stringify({askId: record.askId, session: record.session, panePid: record.panePid, dir}));
+      fs.symlinkSync(real, path.join(dir, 'submitted.json'));
+    },
+    '다른 호출의 표지': dir => {
+      const record = readRecord(dir);
+      fs.writeFileSync(path.join(dir, 'submitted.json'), JSON.stringify({askId: 'someone-else', session: record.session, panePid: record.panePid, dir}));
+    },
+  };
+  const reasons = {'깨진 JSON': 'bad-json', '폴더': 'not-regular-file', '링크': 'not-regular-file', '다른 호출의 표지': 'other-call'};
+  for (const [label, doPlant] of Object.entries(plant)) {
+    const f = fixture(t, {seniors: [ASTRA], plan: {default: {afterPaste: 'update', afterPasteOn: 'ask'}}});
+    const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+    const calls = [];
+    const rottie = argv => { calls.push(argv); throw new Error(`${label}: 제출되지 않은 칸에 탭을 만들면 안 된다`); };
+    // 감싼 프로세스를 띄우기 직전에 거짓 표지를 심는다.
+    const spawnWith = (command, settings) => {
+      doPlant(command.replace(/'$/u, '').split(' ').at(-1).replace(/^'/u, ''));
+      return runJudgeProcess(command, settings);
+    };
+    const error = await f.run({timeout: '60'}, {env, rottie, spawn: spawnWith}).then(() => assert.fail(`${label}: 실패해야 한다`), e => e);
+    assert.deepEqual(error.answers.map(a => [a.reason, a.tab, a.tabReason]), [['call-failed', 'skipped', `submitted-mark-${reasons[label]}`]], label);
+    assert.deepEqual(calls, [], `${label}: 로티 탭 생성 0회`);
+    assert.deepEqual(f.fakeLog(ASTRA.model, 'submitted'), [], `${label}: 질문은 제출되지 않았다`);
+    assert.equal(f.advices()[0].tabReason, `submitted-mark-${reasons[label]}`);
+  }
+});
+
+test('탭이 열린 직후 세션이 끝나도(수용한 틈) 열린 탭은 기존 닫기·지우기로 정리되고 호출은 끝난다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA]});
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const calls = [];
+  const rottie = argv => {
+    calls.push(argv[1]);
+    if (argv[1] === 'create') {
+      // 탭을 만드는 순간 세션을 없앤다(판정과 열기 사이에 끝난 것과 같다).
+      for (const name of f.sessions()) f.tmux.try(['kill-session', '-t', `=${name}`]);
+      return {ok: true, result: {terminal: {id: 'term-1', state: 'running', pid: 4242, workspaceId: 'ws-1'}}, runtime: {build: 'b1'}};
+    }
+    if (argv[1] === 'show') throw Object.assign(new Error('없다'), {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'});
+    return {ok: true, result: {}};
+  };
+  const error = await f.run({timeout: '60'}, {env, rottie}).then(() => assert.fail('세션이 없어졌으니 실패해야 한다'), e => e);
+  assert.deepEqual(calls, ['create', 'close', 'show']);
+  assert.deepEqual(error.answers.map(a => [a.reason, a.tab]), [['call-failed', 'closed']]);
+  assert.deepEqual(f.sessions(), []);
+});
+
 test('제출 전에 끝난 칸은 탭을 열지 않는다(not-submitted), 제출 표지를 보기 전에 호출이 끝났으면 열지 않는다(finished-before-open)', {skip}, async t => {
   const calls = [];
   const rottie = argv => { calls.push(argv); throw new Error('이 시험에서는 탭을 만들면 안 된다'); };

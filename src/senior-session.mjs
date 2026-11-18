@@ -335,6 +335,33 @@ function paneAlive(run, seat) {
 // 던져진 오류가 '신호로 죽은 tmux 호출'이면 그 신호 이름. sendTmux가 정리 실패를 묶어 던진 경우도 본다.
 const signalOf = error => error?.signal ?? error?.errors?.find(inner => inner?.signal)?.signal ?? null;
 
+// 제출 표지를 읽어 확인한다. 반환: {ok: true} | {ok: false, why}. why: absent(없음) · not-regular-file(링크·폴더 등, lstat) · too-big ·
+// unreadable · bad-json · bad-shape · other-call(이번 호출·이번 자리의 값이 아님). 자식이 쓰는 값(askId·세션·pane PID·호출 폴더)이 부른 쪽의
+// 자리 기록과 모두 같아야 한다. 있기만 하다고 믿지 않는다 — 깨진 글·폴더·링크·다른 호출의 표지로 탭이 열리지 않게 한다.
+export function readSubmitted(dir, seat) {
+  const file = path.join(dir, SUBMITTED_FILE);
+  let stat;
+  try { stat = fs.lstatSync(file); } catch { return {ok: false, why: 'absent'}; }
+  if (!stat.isFile()) return {ok: false, why: 'not-regular-file'};
+  if (stat.size > 4096) return {ok: false, why: 'too-big'};
+  let value;
+  try { value = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { return {ok: false, why: error instanceof SyntaxError ? 'bad-json' : 'unreadable'}; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {ok: false, why: 'bad-shape'};
+  const same = value.askId === seat.askId && value.session === seat.session && value.dir === seat.dir &&
+    String(value.panePid) === String(seat.panePid) && value.panePid != null;
+  return same ? {ok: true} : {ok: false, why: 'other-call'};
+}
+
+// 탭을 열어도 되는가: 제출 표지가 맞고, 자식이 끝났다는 판정(outcome.json)이 아직 없고, 그 세션의 pane이 기록한 그 프로세스로 살아 있다.
+// 열기 직전 한 번 본다. 그 뒤 세션이 끝나는 틈은 막을 수 없다(열린 탭은 기존 닫기·지우기가 정리한다).
+export function submittedTabCheck(dir, seat, {run}) {
+  const mark = readSubmitted(dir, seat);
+  if (!mark.ok) return mark;
+  if (readOutcome(dir) || !paneAlive(run, seat).alive) return {ok: false, why: 'session-ended'};
+  return {ok: true};
+}
+
 // 한 줄을 넣는다. 바닥의 sendTmux(붙여넣기 → PID 재확인 → Enter)를 그대로 쓰되 전용 소켓 실행 함수와 기대 pane PID를 넘기고,
 // 그 실행 함수의 키 명령 직전에 화면을 새로 읽어 검사한다. 허용하는 키는 붙여넣기와 Enter뿐이다.
 // 시간 상한(호출 시작부터 잰 절대 마감 seat.deadlineAt)도 키 명령 직전마다 다시 본다: 끝났으면 그 키를 보내지 않는다(why: deadline).

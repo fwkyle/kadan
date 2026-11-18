@@ -21,7 +21,7 @@ import {isUserActor} from './actors.mjs';
 import {closeOnSignal, closeSeniorTab, openSeniorTab, seniorAttachCommand, writeTabState} from './senior-tab.mjs';
 import {markerParts} from './senior-screen.mjs';
 import {SESSION_TIMING, killOwn, openSeats, passGate, readOutcome, readSeniorMode, seniorSocket, seniorTmux,
-  SUBMITTED_FILE, sessionRunCommand} from './senior-session.mjs';
+  readSubmitted, sessionRunCommand, submittedTabCheck} from './senior-session.mjs';
 
 export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 등록된 시니어(실행 모델 설정의 senior, 최대 2명) 전원에게 의견을 동시에 한 번 묻는다. 감독은 모델을 고르지 않는다. --runner/--model은 등록된 시니어 중 한 명만 고를 때만 쓰고(--model만 주면 등록 항목을 모델로 찾는다), 등록되지 않은 모델은 거절한다. 한도·실패는 재시도하지 않고 칸마다 상태로 보인다. 하나라도 답하면 종료 코드 0이다. agy는 카드 저장소(git, 안전한 경로)를 읽기 전용 폴더로 받아 읽고, 그렇지 못하면 카드 본문·첨부만 근거로 답한다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
@@ -280,15 +280,29 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     // 시간 상한은 호출 시작부터 잰다. 준비·관문이 끝났을 때 이미 지났으면 질문 프로세스를 띄우지 않는다(남은 시간을 올려 잡지 않는다).
     const left = started + timeoutS * 1000 - now();
     if (left <= 0) return {reason: 'timeout', detail: 'deadline:before-ask', stderr: 'deadline:before-ask'};
-    // 질문 제출 표지가 생기면 그때 탭을 연다(Enter가 받아들여진 뒤라 이 세션에는 더 보낼 키가 없다). 호출이 먼저 끝났으면 열지 않는다.
-    const submitted = path.join(call.dir, SUBMITTED_FILE);
+    // 질문 제출 표지를 읽어 확인하고 세션이 살아 있을 때만 탭을 연다(Enter가 받아들여진 뒤라 이 세션에는 더 보낼 키가 없다).
+    // 표지가 깨졌거나 링크·폴더거나 다른 호출의 것이면 열지 않는다. 호출이 먼저 끝났거나 세션이 이미 없어도 열지 않는다. 답 판정과는 무관하다.
     let tried = false;
-    const watch = setInterval(() => { if (!tried && fs.existsSync(submitted)) { tried = true; openCallTab(call); } }, tabPollMs);
+    const watch = setInterval(() => {
+      if (tried) return;
+      const check = submittedTabCheck(call.dir, call.seat, {run: sessionRun});
+      if (!check.ok) {
+        // 표지가 아직 없거나 믿을 수 없으면 계속 본다. 표지가 맞는데 세션이 끝났으면 더 볼 것이 없다.
+        if (check.why === 'session-ended') { tried = true; call.tab = {tab: 'skipped', tabReason: 'session-ended'}; }
+        return;
+      }
+      tried = true;
+      openCallTab(call);
+    }, tabPollMs);
     let result;
     try {
       result = await spawn(sessionRunCommand(call.dir), {input: '', timeout: left + SESSION_GRACE_MS, reportComplete: () => false, env: {...env, KADAN_HOME: home}});
     } finally { clearInterval(watch); }
-    if (!tried) call.tab = {tab: 'skipped', tabReason: fs.existsSync(submitted) ? 'finished-before-open' : 'not-submitted'};
+    if (!tried) {
+      // 끝까지 열지 않았다: 표지가 맞으면 표지를 보기 전에 끝난 것, 없으면 미제출, 있는데 믿을 수 없으면 그 이유를 남긴다.
+      const last = readSubmitted(call.dir, call.seat);
+      call.tab = {tab: 'skipped', tabReason: last.ok ? 'finished-before-open' : last.why === 'absent' ? 'not-submitted' : `submitted-mark-${last.why}`};
+    }
     const outcome = readOutcome(call.dir);
     const timedOut = result.error?.code === 'ETIMEDOUT' || String(result.stderr ?? '').includes('KADAN_JUDGE_TIMEOUT=1');
     const reason = outcome && outcome.reason !== 'interrupted' ? outcome.reason : timedOut ? 'timeout' : 'call-failed';
