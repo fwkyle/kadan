@@ -155,7 +155,9 @@ test('읽기 전용 탭 같은 작은 클라이언트가 붙어도 세션 크기
   assert.equal(size(), '150x50', '붙은 작은 클라이언트가 창 크기를 바꾸면 안 된다');
   assert.deepEqual(await passGate(seat, s.deps), {ok: true});
   assert.equal(size(), '150x50');
-  assert.deepEqual((await askSeat(seat, s.deps)).reason, 'ok');
+  const outcome = await askSeat(seat, s.deps);
+  const why = () => JSON.stringify({outcome, keys: s.keys('m1'), size: size(), screen: s.run.try(['capture-pane', '-p', '-t', `=${seat.session}:`]).stdout});
+  assert.deepEqual([outcome.reason, outcome.detail], ['ok', undefined], why());
   assert.equal(size(), '150x50', '질문을 넣은 뒤에도 같다');
   assert.deepEqual(s.keys('m1').submitted, [ASK_LINE]);
   assert.equal(s.keys('m1').enter, 1);
