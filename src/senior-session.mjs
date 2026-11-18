@@ -1,4 +1,4 @@
-// 시니어 대화형 세션 — `$KADAN_HOME/senior-mode`가 interactive일 때만 쓰는 길(기본은 헤드리스 그대로).
+// 시니어 대화형 세션. senior-mode에 headless를 명시하면 기존 헤드리스 경로를 사용한다.
 // codex 대화형 화면을 카단 전용 tmux 소켓(`-L kadan-senior`)에 띄워 질문 한 줄을 넣고, 답 파일의 끝 표지와 화면을 보고 끝을 안 뒤 끈다.
 // 역할이 아니다: 원장 start·stop·지침 우편·감시 대상에 들지 않는다. 기록은 호출마다 advice 한 줄과 증거 폴더다.
 // 지키는 것(설계 2026-11-17):
@@ -36,11 +36,11 @@ const fail = (code, message, more = {}) => Object.assign(new Error(message), {co
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const keyWhy = error => error.why ?? error.code ?? 'send-failed';
 
-// 한 줄(interactive | headless). 파일이 없으면 헤드리스다(PR 1). 호출 시작 때 한 번 읽어 고정하고, 다른 값은 거절한다.
+// 호출 시작 시 한 번 읽는다. 설정 파일이 없으면 interactive이고 잘못된 값은 거절한다.
 export function readSeniorMode(home) {
   let text;
   try { text = fs.readFileSync(path.join(home, SENIOR_MODE_FILE), 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return 'headless'; throw error; }
+  catch (error) { if (error.code === 'ENOENT') return 'interactive'; throw error; }
   const value = text.trim();
   if (value !== 'interactive' && value !== 'headless') {
     const shown = JSON.stringify(value.slice(0, 40));

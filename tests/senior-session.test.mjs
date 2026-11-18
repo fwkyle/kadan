@@ -68,9 +68,9 @@ function setup(t, plan = {}) {
     envDump: model => JSON.parse(fs.readFileSync(path.join(log, `${model}.env.json`), 'utf8'))};
 }
 
-test('senior-mode: 파일이 없으면 헤드리스, 한 줄 값만 받고 다른 값은 거절한다', () => {
+test('senior-mode: 파일이 없으면 대화형, 한 줄 값만 받고 다른 값은 거절한다', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ksm-'));
-  assert.equal(readSeniorMode(home), 'headless');
+  assert.equal(readSeniorMode(home), 'interactive');
   for (const [text, want] of [['interactive\n', 'interactive'], ['headless', 'headless'], ['  interactive  \n', 'interactive']]) {
     fs.writeFileSync(path.join(home, 'senior-mode'), text);
     assert.equal(readSeniorMode(home), want);

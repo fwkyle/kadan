@@ -18,7 +18,7 @@ const spawn = (...args) => {
 afterEach(async () => { await Promise.all([...children].map(child => stopChild(child))); });
 import {seniorCommand} from '../src/senior.mjs';
 import {RottieFloorError, assertRottieArgv, runRottie} from '../src/rottie-cli.mjs';
-import {closeSeniorTab} from '../src/senior-tab.mjs';
+import {closeSeniorTab, seniorAttachCommand} from '../src/senior-tab.mjs';
 import {initSettings, setRole} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -34,6 +34,7 @@ const envOn = (extra = {}) => ({PATH: process.env.PATH, KADAN_WINDOW: 'rottie', 
 
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-tab-'));
+  fs.writeFileSync(path.join(home, 'senior-mode'), 'headless\n');
   const repo = path.join(home, 'repo'); fs.mkdirSync(repo);
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [{id: 'codex', spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"'}]}));
   initSettings(home, {by: 'kyle', reason: '시작', record: () => {}});
@@ -63,6 +64,15 @@ function fixture() {
   return {home, repo, calls, rottieFn, spawnFn, run, advices};
 }
 const verbs = calls => calls.map(argv => argv[1]);
+
+test('zsh의 EQUALS 옵션에서도 붙이기 대상이 그대로 전달된다', {skip: !fs.existsSync('/bin/zsh')}, () => {
+  const seat = {socket: 'qa-senior-test', session: 'senior-test-session'};
+  const command = seniorAttachCommand(seat);
+  const script = "setopt EQUALS\nfunction tmux { printf '%s\\n' \"$@\"; }\n" + command;
+  const result = spawnSync('/bin/zsh', ['-fc', script], {encoding: 'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trimEnd().split('\n'), ['-L', seat.socket, 'attach', '-r', '-t', '=' + seat.session]);
+});
 
 test('창이 none이거나 스위치가 off이면 로티를 한 번도 부르지 않고 tab: skipped로 남는다', async () => {
   const f = fixture();

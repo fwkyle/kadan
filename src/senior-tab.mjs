@@ -15,7 +15,7 @@ import {parseRottieCreateEvidence, runRottie} from './rottie-cli.mjs';
 export const SENIOR_TAB_ENV = 'KADAN_SENIOR_TAB';
 export const SENIOR_TAB_DEFAULT_ON = true;
 
-const shellWord = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${String(value).replace(/'/g, "'\\''")}'`;
+const shellWord = value => /^[A-Za-z0-9_@%+:,./-]+$/.test(value) ? value : `'${String(value).replace(/'/g, "'\\''")}'`;
 // 복구 근거: 호출 폴더의 tab.json. create 전에 키를 먼저 쓰고 결과가 나올 때마다 갱신한다(동기). 쓰기 실패는 삼킨다.
 // 사람은 이 key로 로티에서 그 탭을 직접 닫는다. 제목·키로 목록을 뒤져 자동으로 지우지는 않는다.
 export function writeTabState(dir, state) {

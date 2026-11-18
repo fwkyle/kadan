@@ -160,7 +160,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const files = [].concat(flags.file ?? []).filter(f => f !== true);
   if (files.length > FILE_COUNT) throw new Error(`첨부는 ${FILE_COUNT}개까지`);
   assertWritable(home);
-  // 호출 방식은 시작 때 한 번 읽어 고정한다. 파일이 없으면 헤드리스다. 대화형이 실패해도 헤드리스로 넘어가지 않는다.
+  // 호출 방식은 시작 때 한 번 읽어 고정한다. 파일이 없으면 대화형이다. 대화형이 실패해도 헤드리스로 넘어가지 않는다.
   const interactive = readSeniorMode(home) === 'interactive';
   const settings = read();
   const configured = seniorList(settings?.presets?.[settings.activePreset]?.roles?.senior);

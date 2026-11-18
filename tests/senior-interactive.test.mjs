@@ -30,7 +30,7 @@ const BOUND = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --ou
 const digest = text => createHash('sha256').update(text).digest('hex');
 let seq = 0;
 
-function fixture(t, {seniors = [ASTRA, SOL], mode = 'interactive', plan = {}, allow = ['codex_worktrees', 'fixture-a']} = {}) {
+function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}, allow = ['codex_worktrees', 'fixture-a']} = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ksi-')));
   const repo = path.join(home, 'repo'), bin = path.join(home, 'bin'), log = path.join(home, 'fake-log');
   for (const dir of [repo, bin, log]) fs.mkdirSync(dir);
@@ -71,23 +71,21 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = 'interactive', plan = {}, al
     sessions: () => listSeniorSessions(tmux).map(row => row.name)};
 }
 
-test('기본 불변: senior-mode가 없거나 headless면 지금처럼 senior.sh를 부르고 세션을 만들지 않는다. 잘못된 값은 아무도 부르기 전에 거절한다', async t => {
-  for (const mode of [null, 'headless']) {
-    const f = fixture(t, {seniors: [ASTRA], mode});
-    const calls = [];
-    const fake = async (command, opts) => {
-      calls.push(command);
-      fs.writeFileSync(path.join(opts.env.KADAN_SENIOR_DIR, 'result.txt'), '결론: 헤드리스 답');
-      return {status: 0, stderr: '', stdout: ''};
-    };
-    const r = await f.run({}, {spawn: fake});
-    assert.match(calls[0], /senior\.sh'$/);
-    assert.equal(r.answers[0].reason, 'ok'); assert.ok(!('mode' in r.answers[0]));
-    assert.match(r.answers[0].follow, /^tail -F .*diagnostic\.log$/);
-    assert.ok(!('mode' in f.advices()[0]));
-    assert.equal(fs.existsSync(f.tmuxLog), false, '헤드리스 길은 시니어 소켓을 부르지 않는다');
-    assert.equal(fs.existsSync(path.join(r.answers[0].evidencePath, 'session.json')), false);
-  }
+test('명시한 headless는 기존 호출을 쓰고 잘못된 모드는 거절한다', async t => {
+  const f = fixture(t, {seniors: [ASTRA], mode: 'headless'});
+  const calls = [];
+  const fake = async (command, opts) => {
+    calls.push(command);
+    fs.writeFileSync(path.join(opts.env.KADAN_SENIOR_DIR, 'result.txt'), '결론: 헤드리스 답');
+    return {status: 0, stderr: '', stdout: ''};
+  };
+  const r = await f.run({}, {spawn: fake});
+  assert.match(calls[0], /senior\.sh'$/);
+  assert.equal(r.answers[0].reason, 'ok'); assert.ok(!('mode' in r.answers[0]));
+  assert.match(r.answers[0].follow, /^tail -F .*diagnostic\.log$/);
+  assert.ok(!('mode' in f.advices()[0]));
+  assert.equal(fs.existsSync(f.tmuxLog), false, '헤드리스 길은 시니어 소켓을 부르지 않는다');
+  assert.equal(fs.existsSync(path.join(r.answers[0].evidencePath, 'session.json')), false);
   const bad = fixture(t, {seniors: [ASTRA], mode: 'tui'});
   await assert.rejects(() => bad.run({}, {spawn: async () => assert.fail('부르면 안 된다')}), /senior-mode 값 오류/);
   assert.deepEqual(bad.advices(), []);
@@ -116,7 +114,7 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
       ['ok', 'interactive', Buffer.byteLength(a.answer), digest(a.answer), 'skipped', 'window-none']);
     assert.equal(fs.readFileSync(path.join(a.evidencePath, 'result.txt'), 'utf8'), a.answer);
     const record = readRecord(a.evidencePath);
-    assert.equal(a.follow, `tmux -L ${f.tmux.socket} attach -r -t =${record.session}`);
+    assert.equal(a.follow, `tmux -L ${f.tmux.socket} attach -r -t '=${record.session}'`);
     assert.match(record.session, new RegExp(`^senior-${r.askId.slice(0, 8)}-${index + 1}$`));
     // 프롬프트: 저장소 절대경로와 안내 파일 읽기를 적고, '현재 작업 폴더가 저장소' 문구는 쓰지 않는다. 완성된 끝 표지는 없다.
     const input = fs.readFileSync(path.join(a.evidencePath, 'input.txt'), 'utf8');
@@ -159,7 +157,7 @@ test('질문 전 기록된 세션을 로티로 읽기 전용 연결하고 탭 �
   assert.equal(before.verb, 'create');
   assert.deepEqual(before.sessions, [before.record.session]);
   assert.equal(before.submitted.includes(ASK_LINE), false);
-  assert.equal(before.command, `tmux -L ${f.tmux.socket} attach -r -t =${before.record.session}`);
+  assert.equal(before.command, `tmux -L ${f.tmux.socket} attach -r -t '=${before.record.session}'`);
   assert.equal(answer.follow, before.command);
   assert.deepEqual([answer.reason, answer.tab, answer.tabReason], ['ok', 'skipped', 'ROTTIE_WORKSPACE_NOT_OPEN']);
   assert.equal(f.advices()[0].tabReason, answer.tabReason);
