@@ -7,11 +7,11 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {seniorCommand} from '../src/senior.mjs';
-import {initSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
+import {initSettings, readSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
 import {ASK_LINE, SESSION_TIMING, listSeniorSessions, readRecord, seniorSocket, seniorTmux} from '../src/senior-session.mjs';
-import {AGY_WORKDIR, agyAskLine} from '../src/senior-agy.mjs';
+import {AGY_WORKDIR, agyArgv, agyAskLine} from '../src/senior-agy.mjs';
 import {runJudgeProcess} from '../src/watch-ai-process.mjs';
 
 // `kadan senior`의 agy 대화창 길을 처음부터 끝까지(설계 2026-11-18 v2.1): 설정 → 자리(고정 작업 폴더) → 관문(신뢰 창) → 감싼 프로세스 → advice·영수증.
@@ -133,6 +133,45 @@ test('저장소가 git 최상위가 아니면 --add-dir 없이 띄우고 카드 
   assert.deepEqual(f.dump(ARGON.model).argv, ['--model', ARGON.model, '--agent', 'kadan-noexec']);
   const input = fs.readFileSync(path.join(r.answers[0].evidencePath, 'input.txt'), 'utf8');
   assert.match(input, /저장소를 직접 읽을 수 없다/); assert.ok(!input.includes('읽기 전용 폴더로 열려 있다'));
+});
+
+// 검수 exec-89326673 '머지 전 남은 것': 설정 파일을 직접 고쳐 넣은 agy 모델 값이 옵션 모양이면 실행 인자에서 옵션으로 읽힌다
+// (`agy --model --print …` → 헤드리스). 호출 전에 등록 목록 전체를 보고 전원 거절한다.
+test('옵션 모양의 agy 모델 값(--print·-p·--model=x·공백 든 값)은 호출 전에 전원 거절한다(codex 포함 호출 0회). 저장도 받지 않고 정상 이름은 그대로다', {skip}, async t => {
+  const meta = home => ({revision: readSettings(home).revision, by: 'kyle', reason: '시험', record: () => {}, readCodexModels});
+  for (const model of ['--print', '-p', '--model=x', 'gemini fake']) {
+    const f = fixture(t, {seniors: [ASTRA, ARGON], agy: {default: {startup: 'composer'}}});
+    // 저장 명령을 거치지 않고 설정 파일을 직접 고친 경우.
+    const file = path.join(f.home, 'runner-settings.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    raw.presets[raw.activePreset].roles.senior = [ASTRA, {runner: 'agy', model}];
+    fs.writeFileSync(file, JSON.stringify(raw));
+    for (const flags of [{}, {model: 'gpt-6-astra'}, {runner: 'agy', model}]) {
+      const error = await f.run({timeout: '60', ...flags}).then(() => assert.fail(`${model}: 거절해야 한다`), e => e);
+      assert.equal(error.reason, 'senior-model-shape', `${model} ${JSON.stringify(flags)}: ${error.message}`);
+      assert.match(error.message, /시니어 2번: 시니어 agy 모델 값을 쓸 수 없다\(senior-model-shape\)/);
+    }
+    assert.deepEqual(f.commands, [], `${model}: 질문 프로세스 0회`);
+    // 제품이 tmux를 한 번도 부르지 않았다(아래 세션 목록 조회는 시험이 부르는 것이라 그 앞에서 본다).
+    assert.equal(fs.existsSync(f.tmuxLog), false, `${model}: tmux 호출 0회`);
+    assert.deepEqual(f.advices(), []); assert.deepEqual(f.sessions(), []);
+    assert.equal(fs.existsSync(path.join(f.home, 'advice')), false, `${model}: 증거 폴더도 없다`);
+    assert.equal(fs.existsSync(f.workdir), false, `${model}: agy 작업 폴더도 만들지 않는다`);
+    assert.deepEqual(fs.readdirSync(f.log), [], `${model}: codex·agy 어느 쪽도 뜨지 않았다`);
+  }
+  // 저장 쪽: 실행기 모델 목록에는 이름 규칙 안의 값(`--print`)이 들어갈 수 있어도 시니어로는 등록되지 않는다.
+  const s = fixture(t);
+  for (const model of ['--print', '-p']) {
+    setRunnerModel(s.home, {runner: 'agy', model, efforts: '', ...meta(s.home)});
+    assert.throws(() => setSeniors(s.home, {items: [{runner: 'agy', model}], ...meta(s.home)}), error => error.reason === 'senior-model-shape' || /senior-model-shape/.test(error.message));
+    assert.throws(() => setSeniors(s.home, {items: [ASTRA, {runner: 'agy', model}], ...meta(s.home)}), /senior-model-shape/);
+  }
+  assert.deepEqual(readSettings(s.home).presets[readSettings(s.home).activePreset].roles.senior, [ARGON], '저장된 목록은 그대로다');
+  // 정상 이름은 그대로 통과한다. 실행 인자 조립도 같은 검사를 쓴다.
+  for (const good of ['gemini-4-argon-medium', ARGON.model, 'google/gemini-4[1m]']) {
+    assert.deepEqual(agyArgv({model: good}), ['agy', '--model', good, '--agent', 'kadan-noexec'], good);
+  }
+  for (const bad of ['--print', '-p', '--model=x', 'gemini fake', '', null, undefined]) assert.throws(() => agyArgv({model: bad}), /모델 형식/, String(bad));
 });
 
 test('혼합 등록(codex + agy) 정상: 두 칸 모두 답하고 각자 자기 방식(답 파일·화면)으로 회수한다. --model로 한 명만 고를 수 있다', {skip}, async t => {

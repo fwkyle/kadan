@@ -12,6 +12,7 @@ import {spawnSync} from 'node:child_process';
 import {NOEXEC_AGENT, ensureAgentFile, ensureRealDir, isReadDirValue} from './exec-agent.mjs';
 import {checkHumanIdle, checkPaneMode} from './floor-tmux.mjs';
 import {splitGhostText} from './ghost-text.mjs';
+import {isArgvSafeModel} from './runner-settings.mjs';
 import {AUTO_TRUST_OFF, sameWorkspace} from './trust-accept.mjs';
 import {agyComposerHolds, agyComposerReady, agyScreenWorking, findAgyBoundary, readAgyAnswer,
   readAgyTrust} from './senior-agy-screen.mjs';
@@ -25,8 +26,10 @@ const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // 실행 꼴은 코드에 고정한다(실행기 표의 틀을 쓰지 않는다). `--print`·`-p`·`--effort`는 넣지 않는다:
 // 강도는 모델 이름이 정한다(조사: `gemini-4-argon-medium` + `--effort low`는 경고만 내고 medium으로 돌았다).
+// 모델 값은 `--model` 바로 뒤의 인자 하나다. 옵션 모양(`-`로 시작)이면 agy가 옵션으로 읽을 수 있어 여기서도 거절한다
+// (앞 단계 assertSeniorCallable이 호출 전에 같은 검사로 전원 거절한다 — 이 줄은 그 뒤의 마지막 그물이다).
 export function agyArgv({model, readDir = null}) {
-  if (!/^[A-Za-z0-9._\/\-\[\]]+$/u.test(String(model))) throw new Error(`시니어 모델 형식 오류: ${model}`);
+  if (!isArgvSafeModel(model)) throw new Error(`시니어 모델 형식 오류: ${model}`);
   if (readDir != null && !isReadDirValue(readDir)) throw new Error(`시니어 읽기 폴더 형식 오류: ${readDir}`);
   return ['agy', '--model', model, '--agent', NOEXEC_AGENT, ...(readDir ? ['--add-dir', readDir] : [])];
 }
