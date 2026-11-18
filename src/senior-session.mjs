@@ -354,6 +354,17 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
       const verdict = composerHolds(captureSeat(run, seat.session), text);
       if (expired()) throw deny('enter', 'deadline');
       if (!verdict.ok) throw deny('enter', verdict.why);
+      // 읽기 전용 로티 탭이 붙은 세션에서 tmux 3.8의 send-keys는 붙은 클라이언트를 대상으로 잡고 거절한다
+      // ("client is read-only", 3.6은 통과 — 2026-11-18 CI macOS 실패와 3.8 직접 재현). 거절은 키가 나가기 전이므로
+      // 같은 Enter 한 번을 붙여넣기 길로 보낸다(paste-buffer는 3.8에서도 통과한다). 날것의 CR 하나라 입력칸에는 Enter와 같다.
+      try { return run(args, input); }
+      catch (error) {
+        if (!/client is read-only/u.test(String(error?.message))) throw error;
+        if (expired()) throw deny('enter', 'deadline');
+        const name = `kadan-senior-enter-${process.pid}`;
+        run(['load-buffer', '-b', name, '-'], '\r');
+        return run(['paste-buffer', '-d', '-b', name, '-t', args[args.indexOf('-t') + 1]]);
+      }
     }
     return run(args, input);
   };

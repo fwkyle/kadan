@@ -471,7 +471,7 @@ test('부분 생성 실패 정리(F1): 기록을 쓰기 전 단계도 방금 읽
 
 // tmux 없이 화면을 글로 흉내 낸다(가짜 시계 시험용). 붙여넣은 글은 입력칸에 보이고 Enter를 받으면 제출된다.
 // afterEnter(제출한 줄, 그 뒤 몇 번째 화면 읽기인가) → 화면 글. on(명령 이름)은 시계를 움직이는 자리다.
-function scripted({afterEnter = () => null, on = () => {}} = {}) {
+function scripted({afterEnter = () => null, on = () => {}, readOnlySendKeys = false} = {}) {
   const STATUS = '  fake low · ~/fake/out';
   const keys = [];
   let buffer = '', text = '', submitted = null, reads = 0;
@@ -482,8 +482,13 @@ function scripted({afterEnter = () => null, on = () => {}} = {}) {
       case 'capture-pane': return (submitted != null ? afterEnter(submitted, reads++) : null) ?? idle();
       case 'display-message': return args.at(-1) === '#{pane_in_mode}' ? '0' : '123|0';
       case 'load-buffer': buffer = input; return '';
-      case 'paste-buffer': text = buffer; keys.push('paste'); return '';
-      case 'send-keys': keys.push(args.at(-1)); submitted = text; text = ''; reads = 0; return '';
+      case 'paste-buffer':
+        // 날것의 CR 하나는 Enter다(읽기 전용 클라이언트 때문에 send-keys가 거절될 때의 길).
+        if (buffer === '\r') { keys.push('Enter-by-paste'); submitted = text; text = ''; reads = 0; return ''; }
+        text = buffer; keys.push('paste'); return '';
+      case 'send-keys':
+        if (readOnlySendKeys) throw new Error('tmux send-keys 실패: client is read-only');
+        keys.push(args.at(-1)); submitted = text; text = ''; reads = 0; return '';
       default: return '';
     }
   };
@@ -492,6 +497,30 @@ function scripted({afterEnter = () => null, on = () => {}} = {}) {
 }
 const FAST = {...TIMING, pollMs: 1, settleMs: 5, keyGapS: '0', idleConfirm: 2};
 const noSleepSpawn = () => ({status: 0, stdout: '', stderr: ''});
+
+test('읽기 전용 클라이언트 때문에 send-keys가 거절되면 같은 Enter 한 번을 붙여넣기 길로 보내고, 다른 실패는 그대로 던진다(tmux 3.8)', async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksr-'));
+  const seat = {session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000};
+  fs.writeFileSync(path.join(out, 'result.txt'), `결론: 답\n${markerOf(TOKEN)}\n`);
+  const working = (line, read) => read < 2 ? `› ${line}\n\n• Working (1s • esc to interrupt)\n\n› \n\n  fake low · ~/fake/out\n` : null;
+  const ro = scripted({afterEnter: working, readOnlySendKeys: true});
+  assert.deepEqual(await askSeat(seat, {run: ro.run, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn}),
+    {reason: 'ok', answer: '결론: 답'});
+  assert.deepEqual(ro.keys, ['paste', 'Enter-by-paste'], '붙여넣기 1회 + Enter 1회(붙여넣기 길), 다시 보내지 않는다');
+  // 상한이 Enter 직전에 끝났으면 거절돼도 새 키를 보내지 않는다.
+  let clock = 1000;
+  const late = scripted({readOnlySendKeys: true});
+  const tick = () => { clock = 10_000; return {status: 0, stdout: '', stderr: ''}; };
+  const outcome = await askSeat(seat, {run: late.run, now: () => clock, sleep: async () => {}, timing: FAST, spawn: tick});
+  assert.deepEqual(late.keys, ['paste']);
+  assert.deepEqual(outcome, {reason: 'timeout', detail: 'deadline:enter'});
+  // 읽기 전용이 아닌 다른 send-keys 실패는 붙여넣기 길로 돌리지 않는다.
+  const other = scripted({});
+  const failing = Object.assign((args, input) => { if (args[0] === 'send-keys') throw new Error('tmux send-keys 실패: no such session'); return other.run(args, input); }, {try: other.run.try, socket: 'scripted', home: null});
+  const failed = await askSeat(seat, {run: failing, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
+  assert.equal(failed.reason, 'call-failed');
+  assert.deepEqual(other.keys, ['paste'], '다른 실패는 Enter를 대신 보내지 않는다');
+});
 
 test('시간 상한(F2): 질문은 붙여넣기 직전·Enter 직전에 남은 시간을 다시 본다 — 끝났으면 새 입력 없이 timeout이다', async () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksd-'));
