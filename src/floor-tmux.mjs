@@ -559,7 +559,7 @@ function clientTypingState(session, run, at, humanIdleMs) {
   return typed.some(([, activity]) => at - activity * 1000 < humanIdleMs) ? "active" : "idle";
 }
 
-function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
+export function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const at = now ?? Date.now();
   const typing = clientTypingState(session, run, at, humanIdleMs);
