@@ -278,3 +278,30 @@ test('감시기: 지난 429 + 최신 사용 한도 화면은 재개 예약 없�
   assert.equal(msgs.length, 1);
   assert.match(msgs[0][2], /대체 후보 1번 있음/);
 });
+
+// ---- PR #434 재검수 수정(exec-6bc55c39): 2026-11-18 실제 사고 화면 두 순서(요약 배너 ↔ Fable 상세 줄) 모두 한도 ----
+const incident = JSON.parse(fs.readFileSync(new URL('./fixtures/claude-limit-incident-screens.json', import.meta.url), 'utf8'));
+
+test('실제 사고 화면(일반화 표본): 배너가 상세 줄 아래든 위든 한도 1건이고, 한도 줄은 상세 줄이다', () => {
+  for (const name of ['pos-banner-after-detail', 'pos-banner-before-detail']) {
+    const found = [...screenDisconnects(incident[name]).values()];
+    assert.equal(found.length, 1, name);
+    assert.equal(disconnectKind(found[0]), '한도', name);
+    assert.match(found[0], /You've hit your Fable limit · resets 11pm \(Asia\/Seoul\)$/u, name);
+    const alerts = alertsOf('p-작업자', incident[name]).filter(a => a.kind === '한도');
+    assert.equal(alerts.length, 1, `${name}: 감시 경보`);
+  }
+});
+
+test('배너만 있는 화면·배너 위가 맨 문구이거나 다른 문단이 낀 화면은 한도로 올리지 않는다(예전 동작 유지)', () => {
+  for (const name of ['neg-banner-only', 'neg-banner-after-bare-detail', 'neg-banner-detail-separated'])
+    assert.equal(screenDisconnects(incident[name]).size, 0, name);
+});
+
+test('기존 음성 표본(Claude f5·f7 인용, codex 우편 미리보기)은 이번 수정 뒤에도 0건이다', () => {
+  for (const name of ['known-f5-multiline-response', 'known-f7-response-first-line', 'sample-neg-quote-in-reply', 'neg-list-in-response'])
+    assert.equal(screenDisconnects(fixtures[name]).size, 0, name);
+  assert.equal(screenDisconnects(`${mailOf(CODEX_LINE)}\n\n${COMPOSER}`).size, 0);
+  // 실측 두 표본(2.1.308)은 배너가 상세 줄 위에 있는 순서로 그대로 잡힌다.
+  for (const name of ['real-2.1.308-bullet', 'real-2.1.308-tmux']) assert.equal(screenDisconnects(fixtures[name]).size, 1, name);
+});

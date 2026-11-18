@@ -76,6 +76,20 @@ const CLAUDE_LIMIT_BARE = /^(?:[⏺⎿●✗⚠]\s+)?You['’]ve hit your (?:[\w
 const SLASH_HINT = /^\s+\/[\w-]+\b/u;
 
 // 또는 바로 위(빈 줄·가로선 건너뜀)가 턴 끝 줄(`✻ Baked for 10s · done …`)이라 턴이 끝난 뒤 처음 나온 시스템 줄일 때.
+// 요약 배너(`⏺ Usage limit reached · continuing automatically at …`)는 한도 줄이 아니라 안내다. claudeLimitLine이 입력창 바로 위의 이 배너를 고르면
+// (배너가 상세 줄보다 아래인 순서 — 2026-11-18 실제 화면), 배너 바로 위(빈 줄·가로선만 건너뜀)의 실측 꼴 상세 줄(`⎿ You've hit your Fable limit · resets …`)을
+// 한도 줄로 쓴다. 상세 줄이 없거나 실측 꼴이 아니면 배너 그대로 돌려줘 예전과 같이 한도로 올리지 않는다(배너만 있는 화면은 정체 경로).
+const CLAUDE_BANNER = /^(?:[⏺⎿●✗⚠]\s+)?Usage limit reached\b/u;
+const LEAD_SYMBOL = /^(?:[⏺⎿●✗⚠]\s+)?/u;
+function claudeLimitDetail(screen, found) {
+  if (!CLAUDE_BANNER.test(found.line)) return found;
+  const lines = screen.split("\n");
+  let above = found.at - 1;
+  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+  const line = above >= 0 ? lines[above].trim() : "";
+  return CLAUDE_LIMIT_SHAPE.test(line) ? { line, head: line.replace(LEAD_SYMBOL, ""), at: above } : found;
+}
+
 function claudeLimitShape(screen, found) {
   if (CLAUDE_LIMIT_SHAPE.test(found.line)) return true;
   if (!CLAUDE_LIMIT_BARE.test(found.line)) return false;
@@ -205,7 +219,8 @@ export function currentStopPhrases(screen) {
   // Claude 한도 줄은 `■` 머리줄 덩어리가 아니라 응답 문맥의 맨 줄이다. 빈 입력창 바로 위에 붙은 줄만 읽는 기존 판정(claudeLimitLine)을 쓰되,
   // 이 경보 경로에서는 실측 줄 꼴(`… limit · resets <시각> [(지역)]`이 줄 끝까지, 또는 맨 줄 + 바로 아래 슬래시 안내 줄)만 받는다 —
   // 도구 출력·응답 안의 맨 문구와 설명 문장은 한도로 올리지 않는다.
-  const claude = claudeLimitLine(screen);
+  const picked = claudeLimitLine(screen);
+  const claude = picked && claudeLimitDetail(screen, picked);
   if (claude && claudeLimitShape(screen, claude) && phraseOfLine(claude.line)?.id === "usage-limit") {
     found.set(lineKey(claude.head.slice(0, 40), claude.line), claude.line);
   }
