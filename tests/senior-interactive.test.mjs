@@ -113,7 +113,7 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
     assert.equal(a.answer, '결론: 가짜 답이다\n근거: input.txt를 읽었다');
     const entry = advices.find(e => e.adviceId === a.adviceId);
     assert.deepEqual([entry.reason, entry.mode, entry.bytes, entry.digest, entry.tab, entry.tabReason],
-      ['ok', 'interactive', Buffer.byteLength(a.answer), digest(a.answer), 'skipped', 'interactive']);
+      ['ok', 'interactive', Buffer.byteLength(a.answer), digest(a.answer), 'skipped', 'window-none']);
     assert.equal(fs.readFileSync(path.join(a.evidencePath, 'result.txt'), 'utf8'), a.answer);
     const record = readRecord(a.evidencePath);
     assert.equal(a.follow, `tmux -L ${f.tmux.socket} attach -r -t =${record.session}`);
@@ -138,6 +138,31 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
   const calls = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
   assert.ok(calls.length > 20);
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${f.tmux.socket} -f `)), []);
+});
+
+test('질문 전 기록된 세션을 로티로 읽기 전용 연결하고 탭 생성 실패도 자문을 계속한다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA]});
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const attempts = [];
+  const rottie = argv => {
+    const ask = fs.readdirSync(path.join(f.home, 'advice'))[0];
+    const dir = path.join(f.home, 'advice', ask, '1-codex-gpt-6-astra');
+    attempts.push({
+      verb: argv[1], command: argv[argv.indexOf('--command') + 1], record: readRecord(dir),
+      sessions: f.sessions(), submitted: f.fakeLog(ASTRA.model, 'submitted')
+    });
+    throw Object.assign(new Error('시험 탭 생성 실패'), {code: 'ROTTIE_WORKSPACE_NOT_OPEN', effect: 'none'});
+  };
+  const {answers: [answer]} = await f.run({}, {env, rottie});
+  assert.equal(attempts.length, 1);
+  const [before] = attempts;
+  assert.equal(before.verb, 'create');
+  assert.deepEqual(before.sessions, [before.record.session]);
+  assert.equal(before.submitted.includes(ASK_LINE), false);
+  assert.equal(before.command, `tmux -L ${f.tmux.socket} attach -r -t =${before.record.session}`);
+  assert.equal(answer.follow, before.command);
+  assert.deepEqual([answer.reason, answer.tab, answer.tabReason], ['ok', 'skipped', 'ROTTIE_WORKSPACE_NOT_OPEN']);
+  assert.equal(f.advices()[0].tabReason, answer.tabReason);
 });
 
 test('관문 교차: 한 명이 관문에서 걸리면 통과한 다른 한 명에게도 질문 키가 나가지 않고 둘 다 call-failed로 남는다', {skip}, async t => {

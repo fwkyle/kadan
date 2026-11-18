@@ -39,8 +39,13 @@ export function buildSeniorTabCreateArgv({card, adviceId, command, suffix}) {
     '--command', command, '--idempotency-key', `kadan-senior-${adviceId}`, '--json'];
 }
 
-// 반환: {tab: 'opened'|'skipped', tabReason?, rottieTerminalId?, call?}. call(argv)는 닫을 때도 같은 환경으로 로티를 부른다.
-export function openSeniorTab({home, env, card, adviceId, dir, followScript, parentPid = process.pid, rottie, suffix}) {
+export function seniorAttachCommand(seat) {
+  return `tmux -L ${shellWord(seat.socket)} attach -r -t ${shellWord('=' + seat.session)}`;
+}
+
+// 열린 탭은 같은 call(argv)로 닫는다. 생성 여부를 모르면 복구용 키만 남긴다.
+export function openSeniorTab({home, env, card, adviceId, dir, seat, followScript,
+  parentPid = process.pid, rottie, suffix}) {
   try {
     if (!seniorTabEnabled(env)) return {tab: 'skipped', tabReason: 'tab-off'};
     const setting = effectiveWindow(env, home);
@@ -51,7 +56,7 @@ export function openSeniorTab({home, env, card, adviceId, dir, followScript, par
     const runEnv = {...env, KADAN_ROTTIE_BIN: bin, KADAN_HOME: home};
     assertNotLiveRottie(runEnv);
     const call = rottie ?? (argv => runRottie(argv, spawnSync, runEnv));
-    const command = `/bin/bash ${shellWord(followScript)} ${shellWord(dir)} ${parentPid}`;
+    const command = seat ? seniorAttachCommand(seat) : `/bin/bash ${shellWord(followScript)} ${shellWord(dir)} ${parentPid}`;
     // workspace가 로티에 열려 있지 않으면(ROTTIE_WORKSPACE_NOT_OPEN) 새로 추가하지 않고 건너뛴다.
     const argv = buildSeniorTabCreateArgv({card, adviceId, command, suffix});
     const key = argv[argv.indexOf('--idempotency-key') + 1];

@@ -18,7 +18,7 @@ import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
-import {closeOnSignal, closeSeniorTab, openSeniorTab, writeTabState} from './senior-tab.mjs';
+import {closeOnSignal, closeSeniorTab, openSeniorTab, seniorAttachCommand, writeTabState} from './senior-tab.mjs';
 import {markerParts} from './senior-screen.mjs';
 import {SESSION_TIMING, killOwn, openSeats, passGate, readOutcome, readSeniorMode, seniorSocket, seniorTmux,
   sessionRunCommand} from './senior-session.mjs';
@@ -233,8 +233,6 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   // 신호 처리기는 탭·세션을 만들기 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
   const detach = closeOnSignal(() => { calls.forEach(closeTab); calls.forEach(closeSeat); }, undefined, onSignal);
   if (interactive) {
-    // 로티 탭은 대화형 길에서 아직 열지 않는다(읽기 전용 붙이기 탭은 다음 PR). 영수증의 follow 명령으로 사람이 직접 붙어 본다.
-    for (const call of calls) call.opened = call.tab = {tab: 'skipped', tabReason: 'interactive'};
     // 전원 준비: 자리 확보(잠금 안: 청소 → 수 → 전원 세션) → 전원 관문. 자리가 모자라면 여기서 던져 아무도 부르지 않는다.
     // 한 명이라도 관문에서 걸리면 누구에게도 질문을 넣지 않는다(모델 호출 0회). 칸은 모두 call-failed로 남는다.
     let seats;
@@ -255,8 +253,14 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
       else if (blocked) call.refused = {detail: 'isolation:peer-gate-failed', note: '함께 부른 시니어의 관문이 통과하지 못해 질문을 넣지 않았다'};
     });
     if (blocked) calls.forEach(closeSeat);
-  } else for (const call of calls) {
-    call.opened = openSeniorTab({home, env, card, adviceId: call.adviceId, dir: call.dir, followScript, rottie, ...(calls.length > 1 ? {suffix: call.value.model} : {})});
+  }
+  for (const call of calls) {
+    if (call.refused) {
+      call.tab = {tab: 'skipped', tabReason: 'gate-failed'};
+      continue;
+    }
+    call.opened = openSeniorTab({home, env, card, adviceId: call.adviceId, dir: call.dir,
+      seat: call.seat, followScript, rottie, suffix: calls.length > 1 ? call.value.model : undefined});
     call.tab = call.opened.tab === 'opened' ? {tab: 'opened'} : {tab: call.opened.tab, tabReason: call.opened.tabReason};
   }
   // 대화형 호출 하나: 질문 넣기 → 폴링 → 끄기를 프로세스 하나(senior-session-run.mjs)로 감싸 기존 호출 프로세스로 돌린다.
@@ -304,7 +308,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
       ...(effortIgnored ? {note: `--effort는 ${value.runner} 실행 틀에 강도 자리가 없어 무시했다`} : {}),
       ...(interactive ? {mode: 'interactive', ...(result.detail ? {detail: result.detail} : {}), ...(result.note ? {note: result.note} : {})} : {}),
       durationMs: entry.durationMs, evidencePath: dir, ...call.tab,
-      follow: call.seat ? `tmux -L ${call.seat.socket} attach -r -t =${call.seat.session}` : `tail -F ${path.join(dir, 'diagnostic.log')}`,
+      follow: call.seat ? seniorAttachCommand(call.seat) : `tail -F ${path.join(dir, 'diagnostic.log')}`,
       ...(reason === 'ok' ? {answer} : {})};
   };
   let settled;
