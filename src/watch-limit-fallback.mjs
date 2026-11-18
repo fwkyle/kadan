@@ -5,7 +5,7 @@
 // 경보 중복 판정 키(alert.id)에는 넣지 않는다 — 호출부가 경보 객체의 별도 칸으로만 붙인다.
 import { launchIdentityOf } from "./ai-identity.mjs";
 import { HARD_ROLE, PROFILE_ROLES, launchForFallback, modelFamily } from "./runner-settings.mjs";
-import { codexBasis, ocxStillLimited } from "./ocx-refresh.mjs";
+import { codexBasis, generationStart, ocxStillLimited } from "./ocx-refresh.mjs";
 import { phraseOfLine } from "./watch-stop-phrases.mjs";
 
 const SLOT_PROFILES = new Set(["worker", "reviewer"]);
@@ -14,11 +14,6 @@ const MAX_REASON = 80;
 // 명령에 그대로 붙여 넣는 글이라 따옴표·셸 기호·이메일 꼴을 지우고 짧게 줄인다.
 const safeReason = (line) => String(line ?? "")
   .replace(/\S+@\S+/gu, "").replace(/["'`$\\\r\n]/gu, " ").replace(/\s+/gu, " ").trim().slice(0, MAX_REASON);
-
-// 지금 세션을 띄운 start 기록: 그 역할의 마지막 start 중 실제 실행 명령(cmd)이 있는 것. 살아 있는 세션을 재사용한
-// start는 명령이 비어 있어(reuseOf) 기준이 못 된다(dispatch-runner-guard.mjs 머리말과 같은 이유).
-const launchStart = (entries, role) => (entries ?? []).findLast(
-  (e) => e?.kind === "start" && e.role === role && typeof e.cmd === "string" && e.cmd.trim());
 
 const identityOf = (cmd) => { const got = launchIdentityOf(cmd); return got.ok && got.model ? got : null; };
 
@@ -29,7 +24,8 @@ export function limitFallbackLine({ alert, entries, settings, ocx }) {
   // 일시적 429(자동 재개 대상)는 재개 경로가 먼저다 — 교대 안내는 실제 사용 한도 줄과, 재개를 포기한 경보
   // (watch-rate-limit.mjs가 만드는 `rate-limit:` 경보: 명시 한도·재개 3회 소진·재개 전달 실패)에만 붙인다.
   if (phraseOfLine(alert.line)?.id !== "usage-limit" && !String(alert.id ?? "").startsWith("rate-limit:")) return null;
-  const start = launchStart(entries, alert.role);
+  // 지금 세대를 띄운 start(재사용 기록 제외) — ocx 대상 판단(codexBasis)과 같은 기록이다. 명령이 없으면 대조할 수 없어 줄을 붙이지 않는다.
+  const start = generationStart(entries, alert.role);
   const profile = start?.roleProfile;
   // 감독·슈퍼감독·비서 세션, 프로필 기록이 없는 옛 세션에는 붙이지 않는다.
   if (!SLOT_PROFILES.has(profile)) return null;

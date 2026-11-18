@@ -38,6 +38,7 @@ const limitHeadOf = (line) => {
 // 줄 위쪽 덩어리(빈 줄 전까지)나 바로 위 줄이 `⏺ ` 응답/도구 호출이라 응답 안의 글일 수 있음.
 // 알려진 한계(고치지 않음, 판정은 추천이다): 여러 줄 응답·도구 출력 뒤 빈 줄을 건너 나온 문구(F5), 문구로 시작하는 응답 첫 줄
 // `⏺ You've hit your …`(F7)은 한도로 잘못 보일 수 있다. 실제 표본이 2.1.308 이미지 전사 1장뿐이라 규칙을 더 다듬지 않는다.
+// 반환: {line, head, at} — at은 화면(줄 나눔)에서 그 한도 줄의 번호다.
 export function claudeLimitLine(screen) {
   const menu = claudeLimitMenu(screen);
   if (menu) {
@@ -51,7 +52,7 @@ export function claudeLimitLine(screen) {
       const line = above[at];
       const head = line == null ? null : limitHeadOf(line);
       // 실제 메뉴와 정확한 명령이 바로 뒤따른 한도는 앞선 도구 응답의 들여쓰기 문맥과 구분한다.
-      return head && !insideFence(above, at) ? { line: line.trim(), head } : null;
+      return head && !insideFence(above, at) ? { line: line.trim(), head, at } : null;
     }
     return claudeLimitLine(above.join('\n') + '\n❯');
   }
@@ -65,7 +66,7 @@ export function claudeLimitLine(screen) {
     if (RULE_OR_BLANK.test(line) || TURN_DONE.test(line)) continue;
     if (FENCE.test(line) || USER_INPUT_LINE.test(line)) return null;
     const head = limitHeadOf(line);
-    if (head) return precededByResponse(lines, at) || insideFence(lines, at) ? null : { line: line.trim(), head };
+    if (head) return precededByResponse(lines, at) || insideFence(lines, at) ? null : { line: line.trim(), head, at };
     if (RESPONSE_LINE.test(line) || !/^\s+\S/u.test(line)) return null; // 들여쓴 이어진 줄만 건너뛴다
   }
   return null;
