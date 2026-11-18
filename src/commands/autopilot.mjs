@@ -15,8 +15,12 @@ import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} f
 import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL, atLeast} from '../autopilot-terms.mjs';
 
 export const MAX_TEXT = 4000;
+// 저장소 정책의 "Autopilot 중 자동 머지" 명령줄 플래그 이름(2026-11-17 별칭). 새 이름을 먼저 보이고 옛 이름도 같은 뜻으로 받는다.
+// 최종 이름은 사용자가 머지 때 정한다. 저장 칸(nightMerge)·온톨로지 칸(night_merge)·보류 이유(night-merge-forbidden)는 그대로다.
+const AUTO_MERGE_FLAG = 'auto-merge';
+const AUTO_MERGE_FLAG_LEGACY = 'night-merge';
 const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'decide-after', 'discord-message']);
-const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음] | --level full [--allow …] [--wingman …] [--decide-after 2h(기본 2h, 30m~24h)]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --night-merge 허용|금지 | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음] | --level full [--allow …] [--wingman …] [--decide-after 2h(기본 2h, 30m~24h)]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --' + AUTO_MERGE_FLAG + ' 허용|금지 (옛 이름 --' + AUTO_MERGE_FLAG_LEGACY + '도 받음) | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
 function describeOn(state, now, missing) {
   const on = state.start, end = endOf(on), ended = end.kind === 'at', untilMs = ended ? end.ms : null;
@@ -100,11 +104,11 @@ function wingmanCommand(args, flags, {home, by, deps}) {
 
 const flagText = v => (typeof v === 'string' ? v : undefined);
 
-// `autopilot repo`: 읽기(인자 없음·list·show)와 쓰기(<소유자/이름> --deploy-branch/--night-merge/--clear). 원장은 읽지 않고 업무 목록만 읽는다.
+// `autopilot repo`: 읽기(인자 없음·list·show)와 쓰기(<소유자/이름> --deploy-branch/--auto-merge(옛 --night-merge)/--clear). 원장은 읽지 않고 업무 목록만 읽는다.
 function repoCommand(args, flags, {home, by, deps}) {
   const [name, value] = args;
   const works = () => (deps.readWorks ?? (() => new WorkStore(home).list()))();
-  const usage = 'kadan autopilot repo <소유자/이름> [--deploy-branch <브랜치|없음>] [--night-merge 허용|금지] [--clear deployBranch|nightMerge] | list | show <소유자/이름>';
+  const usage = `kadan autopilot repo <소유자/이름> [--deploy-branch <브랜치|없음>] [--${AUTO_MERGE_FLAG} 허용|금지 (옛 이름 --${AUTO_MERGE_FLAG_LEGACY}도 받음)] [--clear deployBranch|nightMerge] | list | show <소유자/이름>`;
   if (name === undefined) return `정책 파일: ${policyPath(home)}\n사용법: ${usage}`;
   const listOpts = deps.origin ? {origin: deps.origin} : {};
   if (name === 'list') {
@@ -119,9 +123,18 @@ function repoCommand(args, flags, {home, by, deps}) {
     if (!normalizeGithub(value)) throw new Error(`저장소 키는 GitHub 소유자/이름이어야 합니다: ${value}`);
     return repoLines(evaluateGithub(home, value)).join('\n');
   }
+  // 새 이름과 옛 이름을 함께 주면 어느 쪽이 이긴다는 조용한 규칙 없이 거절한다(종료 코드 2).
+  const reject = message => { const error = new Error(`${message} ${usage}`); error.exitCode = 2; throw error; };
+  if (flags[AUTO_MERGE_FLAG] !== undefined && flags[AUTO_MERGE_FLAG_LEGACY] !== undefined) {
+    reject(`--${AUTO_MERGE_FLAG}와 옛 이름 --${AUTO_MERGE_FLAG_LEGACY}는 같은 뜻이라 함께 줄 수 없습니다. 하나만 쓰세요.`);
+  }
+  // 공통 해석기는 `--이름=값`을 `이름=값`이라는 다른 키로 만들어 위 검사를 지나친다. 등호 문법은 지원하지 않으므로 두 이름의 등호 형태는 쓰기 전에 거절한다.
+  const equalsKey = Object.keys(flags).find(key => [AUTO_MERGE_FLAG, AUTO_MERGE_FLAG_LEGACY].some(name => key.startsWith(`${name}=`)));
+  if (equalsKey !== undefined) reject(`--${equalsKey.split('=')[0]}=값 형태는 받지 않습니다. 띄어 쓰세요(--${AUTO_MERGE_FLAG} 허용|금지).`);
   if (value !== undefined) throw new Error(`예전 merge|hold 쓰기는 없어졌습니다. ${usage}`);
-  const [deployBranch, nightMerge, clear] = [flagText(flags['deploy-branch']), flagText(flags['night-merge']), flagText(flags.clear)];
-  for (const key of ['deploy-branch', 'night-merge', 'clear']) if (flags[key] !== undefined && typeof flags[key] !== 'string') throw new Error(`--${key}에는 값이 하나 필요합니다. ${usage}`);
+  const autoMergeKey = flags[AUTO_MERGE_FLAG] !== undefined ? AUTO_MERGE_FLAG : AUTO_MERGE_FLAG_LEGACY;
+  const [deployBranch, nightMerge, clear] = [flagText(flags['deploy-branch']), flagText(flags[autoMergeKey]), flagText(flags.clear)];
+  for (const key of ['deploy-branch', autoMergeKey, 'clear']) if (flags[key] !== undefined && typeof flags[key] !== 'string') throw new Error(`--${key}에는 값이 하나 필요합니다. ${usage}`);
   const saved = setRepoPolicy(home, {repo: name, deployBranch, nightMerge, clear, by, record: deps.record ?? (entry => appendLedger(entry, home))});
   return [`저장: ${saved.repo} deployBranch ${saved.deployBranch ?? '(미설정)'}, nightMerge ${saved.nightMerge ?? '(미설정)'} (이전 deployBranch ${saved.before.deployBranch ?? '(미설정)'}, nightMerge ${saved.before.nightMerge ?? '(미설정)'})`,
     ...repoLines(evaluateGithub(home, saved.repo))].join('\n');
