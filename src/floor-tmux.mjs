@@ -475,7 +475,8 @@ function create({ session, role, cwd, cmd }) {
 
 // release: 감시기 알림의 5번째 강제 차례만 쓴다. 복사 모드에서 키를 보내면 tmux가 복사 모드 명령으로 읽으므로
 // 먼저 빠져나온 뒤 다시 확인해, 그래도 모드면 넣지 않는다. 해제했으면 true를 돌려준다.
-function checkPaneMode(session, run, {release = false} = {}) {
+// 내보내는 이유: 시니어 agy 신뢰 창 Enter(src/senior-agy.mjs)가 아래 신뢰 키 경로와 같은 확인을 같은 순서로 쓴다(세션 이름 규칙만 다르다).
+export function checkPaneMode(session, run, {release = false} = {}) {
   let mode;
   try {
     mode = run(["display-message", "-p", "-t", `=${session}:`, "#{pane_in_mode}"]);
@@ -559,7 +560,7 @@ function clientTypingState(session, run, at, humanIdleMs) {
   return typed.some(([, activity]) => at - activity * 1000 < humanIdleMs) ? "active" : "idle";
 }
 
-function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
+export function checkHumanIdle(session, run, {humanIdleMs = HUMAN_IDLE_MS, now} = {}) {
   const deny = (code, message) => { const error = new Error(message); error.code = code; throw error; };
   const at = now ?? Date.now();
   const typing = clientTypingState(session, run, at, humanIdleMs);
