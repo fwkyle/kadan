@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useState } from "react";
 import { save } from "../resource";
-import { afterModelChange, afterRunnerChange, needsEffortPick, sameChoice } from "../effort-keep";
+import { EMPTY_EFFORT_NOTE, afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, sameChoice } from "../effort-keep";
 import { listOf, ownPart } from "../runner-draft";
 import { AppContext, ErrorMessage } from "../ui";
 import { ModelRegister } from "./ModelRegister";
@@ -82,7 +82,12 @@ export function RunnerForm({
   const list = listOf(settings, role) as Choice[];
   // 강도를 비운 채로는 후보로 추가하지 못하고, 지금 값·이미 있는 후보와 같은 것도 추가하지 못한다.
   const current = settings.presets[settings.activePreset].roles[role];
-  const pickEffort = needsEffortPick(spec, choice);
+  // 강도가 필요한지는 서버 checkChoice와 같게 역할 기준으로 본다(설명 AI는 exec 틀). 어느 쪽 문제든 저장·후보 추가를 막는다.
+  const effortSpec = forRole(spec, role);
+  const problem = effortProblem(effortSpec, choice);
+  const pickEffort = problem === "pick";
+  const emptyList = problem === "empty";
+  const effortBlocked = problem !== null;
   const duplicate =
     !fallback || !choice.model
       ? null
@@ -155,8 +160,8 @@ export function RunnerForm({
           setError("모델을 고르세요.");
           return;
         }
-        if (op === "add" && (pickEffort || duplicate)) {
-          setError(pickEffort ? "강도를 고르세요." : duplicate);
+        if (op === "add" && (effortBlocked || duplicate)) {
+          setError(emptyList ? EMPTY_EFFORT_NOTE : pickEffort ? "강도를 고르세요." : duplicate);
           return;
         }
         setBusy(true);
@@ -233,7 +238,7 @@ export function RunnerForm({
             <select
               value={choice.runner}
               onChange={(e) =>
-                change(afterRunnerChange(data.catalog, choice, e.target.value))
+                change(afterRunnerChange(Object.fromEntries(Object.entries(data.catalog).map(([k, v]) => [k, forRole(v, role)!])), choice, e.target.value))
               }
             >
               {runners.map((r) => (
@@ -246,7 +251,7 @@ export function RunnerForm({
             <select
               value={choice.model}
               onChange={(e) =>
-                change(afterModelChange(spec, choice, e.target.value))
+                change(afterModelChange(effortSpec, choice, e.target.value))
               }
             >
               <option value="">모델 고르기</option>
@@ -323,6 +328,7 @@ export function RunnerForm({
             이 모델은 강도를 골라야 합니다. 지금 강도를 이어 쓸 수 없어 비워 두었습니다. 강도 고르기에서 고르세요.
           </p>
         )}
+        {emptyList && <p className="warning">{EMPTY_EFFORT_NOTE}</p>}
         {duplicate && <p className="muted">{duplicate}</p>}
         {choice.model && (
           <p>
@@ -340,7 +346,7 @@ export function RunnerForm({
             </code>
           </p>
         )}
-        {fallback && <button className="primary" value="add" disabled={pickEffort || Boolean(duplicate)}>
+        {fallback && <button className="primary" value="add" disabled={effortBlocked || Boolean(duplicate)}>
           {busy
             ? "저장 중…"
             : role === "senior"
@@ -363,7 +369,7 @@ export function RunnerForm({
     </form>
     {registered && (
       <ModelRegister data={data} runner={choice.runner} revision={settings.revision}
-        currentEffort={choice.effort} done={picked} />
+        currentEffort={choice.effort} effortRequired={effortNeeded(spec, role)} done={picked} />
     )}
     </>
   );

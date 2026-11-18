@@ -78,3 +78,23 @@ test("명령 칸은 표 칸이 아니라 줄마다 접혀 있고, 읽기 전용 
     assert.equal((html.match(/<th>/g) ?? []).length >= 3, true);
   }
 });
+
+test("새 모델 등록 칸: 강도가 필요한 실행기는 강도 목록 필수 안내, 강도를 받지 않는 실행기는 비워도 됨, 등록 버튼은 이름이 있어야 의미가 있다", () => {
+  const agy = render(React.createElement(PresetEditor, { data, settings, initialOpen: ["worker"] }));
+  assert.match(agy, /강도 목록 \(쉼표, 필수 — 이 실행기는 강도가 필요합니다\)/);
+  assert.doesNotMatch(agy, /강도 목록 \(쉼표, 비워도 됨\)/);
+  const plain = { ...data, catalog: { ...catalog, agy: { ...catalog.agy, spawn: "agy --model {model}", needsEffort: false } } };
+  const html = render(React.createElement(PresetEditor, { data: plain, settings: { ...settings, presets: { A: { roles: { ...settings.presets.A.roles, worker: { runner: "agy", model: "m-old" } } } } }, initialOpen: ["worker"] }));
+  assert.match(html, /강도 목록 \(쉼표, 비워도 됨\)/);
+});
+
+test("강도가 필요한 실행기에서 강도 목록이 빈 모델을 고른 줄은 안내가 보인다", () => {
+  const withEmpty = { ...catalog, agy: { ...catalog.agy, models: [...catalog.agy.models, { model: "m-empty", efforts: [] }] } };
+  const s = { ...settings, presets: { A: { roles: { ...settings.presets.A.roles, worker: { runner: "agy", model: "m-empty" } } } } };
+  const html = render(React.createElement(PresetEditor, { data: { ...data, catalog: withEmpty, settings: s }, settings: s, initialOpen: ["worker"] }));
+  assert.match(html, /이 모델은 강도 목록이 비어 있어 이 실행기에서 저장할 수 없습니다 — 고급 설정의 실행기 표에서 강도를 등록하세요/);
+  // 강도를 받지 않는 실행기에서 같은 모델을 고르면(대조군) 안내가 없다.
+  const noEffort = { ...withEmpty, agy: { ...withEmpty.agy, needsEffort: false } };
+  const control = render(React.createElement(PresetEditor, { data: { ...data, catalog: noEffort, settings: s }, settings: s, initialOpen: ["worker"] }));
+  assert.doesNotMatch(control, /강도 목록이 비어 있어/);
+});

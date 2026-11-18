@@ -50,6 +50,8 @@ export type RunnersData = Stamp & {
       needsEffort: boolean;
       // codex처럼 모델 목록을 파일에서 읽는 실행기. 모델을 직접 등록·삭제하지 않는다.
       catalog?: boolean;
+      // 실행기 명령 표(exec 등). 설명 AI의 강도 필요 여부를 서버와 같게 판정하는 데 쓴다.
+      table?: Record<string, string>;
       error?: string;
       models: { model: string; efforts: string[] }[];
     }

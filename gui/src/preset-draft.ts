@@ -70,3 +70,11 @@ export const reasonFor = (typed: string, labels: string[]) =>
 // 역할 줄은 등록한 모델을 고른 변경안으로 만들고, 대체 후보 칸은 '추가'를 눌러야 반영되므로 버전만 올린다.
 export const withRegistered = (draft: Settings, role: string, fallback: boolean, choice: Choice, revision: number) =>
   fallback ? {...draft, revision} : stagePreset({...draft, revision}, role, false, choice, 'add');
+
+// 설정을 다시 읽었을 때 변경안의 버전을 어떻게 받는가. 등록 응답으로 올린 버전보다 낮은 늦은 읽기 결과가 버전을 되돌리면
+// 저장이 "설정이 바뀌었다(409)"로 실패한다(2026-11-18 검수). 버전은 올라가기만 하므로 더 큰 쪽만 받는다.
+// 다른 편집자가 같은 프리셋을 바꾼 경우는 변경안 지문이 달라져 따로 충돌로 알린다.
+export const followSettings = (draft: Settings, settings: Settings): Settings =>
+  ({...draft, revision: Math.max(draft.revision, settings.revision)});
+export const adoptSettings = (draft: Settings, settings: Settings): Settings =>
+  settings.revision < draft.revision ? {...settings, revision: draft.revision} : settings;

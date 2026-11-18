@@ -16,6 +16,9 @@ export const registeredChoice = (
   return {runner, model: model.trim(), effort: needsEffort && listed.includes(currentEffort) ? currentEffort : ''};
 };
 
+// 이미 그 실행기 목록에 있는 이름인가. 기존 서버 경로는 같은 이름이면 강도 목록을 교체해, 그 모델을 쓰는 역할이 서버 검사에 걸린다.
+export const alreadyRegistered = (models: {model: string}[], model: string) => models.some(m => m.model === model.trim());
+
 type Save = (action: string, fields: Record<string, string>, token: string) => Promise<{result: {revision?: number}}>;
 
 // 등록 한 번: 기존 /runners/model-add 호출 → 성공했을 때만 done(고른 선택, 새 설정 버전)을 부른다.
