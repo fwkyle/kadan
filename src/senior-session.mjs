@@ -468,7 +468,7 @@ export function outsideGit(out, {spawn = spawnSync} = {}) {
 // MCP 연결 목록은 보지 않는다(2026-11-18 [kyle]: 사용자 codex 설정 그대로 — 지금 헤드리스 시니어와 같은 수준).
 // 시간 상한이 준비 중에 끝났으면 {ok: false, why: 'deadline', timeout: true}로 끝낸다.
 // 실행기별 관문은 자리 기록의 runner로 고른다(위 seatKind). 아래는 codex 관문이고 agy 관문은 src/senior-agy.mjs다.
-export function passGate(seat, deps) { return seatKind(seat.runner).gate(seat, deps); }
+export async function passGate(seat, deps) { return seatKind(seat.runner).gate(seat, deps); }
 
 async function passGateCodex(seat, {run, now = Date.now, sleep = defaultSleep, timing = SESSION_TIMING,
   spawn = spawnSync}) {
@@ -528,7 +528,7 @@ export function readAnswerFile(file, marker) {
 // 처음의 쉬는 화면을 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
 // 실행기별 질문·답 회수는 자리 기록의 runner로 고른다. 아래는 codex(답 파일)이고 agy(화면 스크롤)는 src/senior-agy.mjs다.
 // 두 갈래 모두 같은 반환 모양(reason·detail·answer)으로 끝나 영수증·원장이 같은 글을 가리킨다.
-export function askSeat(seat, deps) { return seatKind(seat.runner).ask(seat, deps); }
+export async function askSeat(seat, deps) { return seatKind(seat.runner).ask(seat, deps); }
 
 async function askSeatCodex(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
   spawn = spawnSync, onSubmitted = () => {}}) {
