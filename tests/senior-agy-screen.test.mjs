@@ -77,9 +77,11 @@ test('신뢰 창: 조사 화면의 구조일 때만 신뢰 창이고 경로 한 
 });
 
 // 스크롤 기록 꼴: 배너 → 되찍힌 질문 → 생각 줄 → 두 칸 들인 답 → 표지 → (출처 묶음) → 입력칸.
-const history = (answer, {tail = [], question = LINE_ROWS, before = []} = {}) => screen(BANNER, before, RULE, ...question, '',
+// end: 캡처의 끝(입력칸과 바닥글). 기본은 쉬는 빈 입력칸이다.
+const IDLE_END = [RULE, '>', RULE, foot('? for shortcuts')];
+const history = (answer, {tail = [], question = LINE_ROWS, before = [], end = IDLE_END} = {}) => screen(BANNER, before, RULE, ...question, '',
   '○ Thought for 2.0s (fake thinking about the question...)', '● Explored 1 file (AGENTS.md) (ctrl+o to expand)', '', '▸ Thought for 3s, 40 tokens', '',
-  ...answer, ...tail, '', RULE, '>', RULE, foot('? for shortcuts'));
+  ...answer, ...tail, '', ...end);
 const BODY = ['  결론: 그대로 간다', '  근거: 파일을 읽었다', '', '  • 첫째', '  • 둘째'];
 const read = capture => readAgyAnswer(capture, {line: LINE, marker: MARKER});
 
@@ -108,6 +110,23 @@ test('ok 오판 막기: 표지 없음·둘·본문에 인용·단독 줄 아님�
   const big = Array.from({length: 3000}, () => `  ${'가'.repeat(40)}`);
   assert.ok(Buffer.byteLength(big.join('\n')) > ANSWER_LIMIT_BYTES);
   assert.deepEqual(read(history([...big, `  ${MARKER}`])), {ok: false, why: 'answer-too-big'});
+});
+
+// 검수 exec-89326673 중요 2: 끝 판정 때 따로 읽은 '지금 화면'이 쉬고 있었어도, 답을 읽는 캡처가 그 사이에 바뀌어 있을 수 있다.
+test('최종 캡처의 상태: 질문 경계·답·표지가 그대로여도 그 캡처에 일하는 표시·선택 창·글이 든 입력칸이 보이면 답으로 받지 않는다(lost)', () => {
+  const answer = [...BODY, '', `  ${MARKER}`];
+  assert.equal(read(history(answer)).ok, true, '쉬는 빈 입력칸이면 답이다');
+  const cases = [
+    ['바닥글이 esc to cancel', [RULE, '>', RULE, foot('esc to cancel')], 'working'],
+    ['가로줄 위에 일하는 표시', ['⣟  Generating...', RULE, '>', RULE, foot('? for shortcuts')], 'working'],
+    ['입력칸 아래 선택 줄', [RULE, '>', RULE, foot('? for shortcuts'), '> 1. Log in'], 'lines-below-composer'],
+    ['명령 완성 목록', [RULE, '> /permissions', RULE, '> /permissions  Manage tool permissions', '', '  ↑/↓ Navigate · enter Select · tab Complete', foot('esc to cancel')], 'lines-below-composer'],
+    ['글이 든 입력칸', [RULE, '> 누군가 친 글', RULE, foot('')], 'composer-has-text'],
+    ['우리 에이전트가 아닌 바닥글', [RULE, '>', RULE, '? for shortcuts' + ' '.repeat(90) + 'auto · Fake Model · medium'], 'unknown-footer'],
+  ];
+  for (const [label, end, why] of cases) {
+    assert.deepEqual(read(history(answer, {end})), {ok: false, why: `final-capture-not-idle:${why}`, lost: true}, label);
+  }
 });
 
 test('시작 경계: 이번 질문 줄이 정확히 한 번 남아 있어야 한다 — 밀려나 없으면·둘이면·경계 뒤에 다른 입력이 있으면 회수를 믿지 않는다(lost)', () => {

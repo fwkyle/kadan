@@ -8,7 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {SESSION_TIMING, askSeat, closeSeat, listSeniorSessions, openSeats, passGate, readRecord, seniorSocket,
   seniorTmux} from '../src/senior-session.mjs';
-import {AGY_WORKDIR, agyArgv, agyAskLine, prepareAgyWorkdir} from '../src/senior-agy.mjs';
+import {AGY_WORKDIR, agyArgv, agyAskLine, askSeatAgy, prepareAgyWorkdir} from '../src/senior-agy.mjs';
 import {NOEXEC_AGENT_MD} from '../src/exec-agent.mjs';
 import {markerOf, markerParts} from '../src/senior-screen.mjs';
 
@@ -251,6 +251,60 @@ test('고정 작업 폴더: git 저장소 안이면 폴더·에이전트 파일�
   assert.equal(prepareAgyWorkdir(fine.home), fine.workdir);
   assert.equal(prepareAgyWorkdir(fine.home), fine.workdir);
   assert.equal(fs.readFileSync(path.join(fine.workdir, '.agents/agents/kadan-noexec/agent.md'), 'utf8'), NOEXEC_AGENT_MD);
+});
+
+// 검수 exec-89326673 중요 1: 신뢰 창 Enter도 바닥의 키 전송·Claude 신뢰 키와 같은 확인(기록보기 모드·사람 입력)을 거친다.
+test('신뢰 창 Enter 직전 확인: 기록보기(복사) 모드 중이거나 사람 입력이 감지되면 Enter 0회로 끝나고, 정상이면 한 번 보낸다', {skip}, async t => {
+  const s = setup(t, {models: {copy: {startup: 'trust'}, human: {startup: 'trust'}, normal: {startup: 'trust'}}});
+  const [copy, human, normal] = s.open(['copy', 'human', 'normal']);
+  // 사람이 그 창에서 기록보기를 연 경우와, 중계가 남긴 사람 입력 표시(@kadan_human_input)가 방금인 경우.
+  s.run(['copy-mode', '-t', `=${copy.session}:`]);
+  s.run(['set-option', '-t', `=${human.session}:`, '@kadan_human_input', String(Math.floor(Date.now() / 1000))]);
+  const gates = await Promise.all([copy, human, normal].map(seat => passGate(seat, s.deps)));
+  assert.deepEqual(gates.map(gate => [gate.ok, gate.why]), [[false, 'startup:trust-pane-in-mode'], [false, 'startup:trust-human-active'], [true, undefined]]);
+  assert.match(gates[0].note, /키를 보내지 않았다/); assert.match(gates[1].note, /키를 보내지 않았다/);
+  assert.equal(gates[2].trust.result, 'accepted');
+  // tmux로 나간 Enter 명령 수(세션별)와 가짜 화면이 받은 Enter 수.
+  const calls = fs.readFileSync(s.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  const enters = seat => calls.filter(line => line.endsWith(` send-keys -t =${seat.session}: Enter`)).length;
+  assert.deepEqual([enters(copy), enters(human), enters(normal)], [0, 0, 1]);
+  assert.deepEqual([s.keys('copy').any, s.keys('human').any, s.keys('normal').trustEnter.length], [0, 0, 1]);
+  for (const seat of [copy, human]) assert.equal(JSON.parse(fs.readFileSync(path.join(seat.dir, 'gate.json'), 'utf8')).trust, undefined);
+  for (const seat of [copy, human, normal]) closeSeat(seat, s.deps);
+});
+
+// 검수 exec-89326673 중요 2: 지금 화면이 쉬고 있어도 답을 읽는 전체 스크롤 캡처에 일하는 표시·선택 창이 있으면 ok가 아니다.
+// 두 캡처 사이에 화면이 바뀌는 순간은 가짜 화면으로 만들기 어려워 tmux 호출을 흉내 낸 실행 함수로 본다.
+test('최종 캡처의 상태: 지금 화면은 빈 입력칸인데 답을 읽은 스크롤 캡처에 일하는 표시·선택 창이 보이면 ok로 받지 않는다', async () => {
+  const rule = '─'.repeat(60), marker = markerOf(TOKEN);
+  const line = agyAskLine('/fake/home/senior-agy/asks/ask-1.txt');
+  const composer = (hint = '? for shortcuts', text = '') => [rule, `> ${text}`.trimEnd(), rule, `${hint.padEnd(40, ' ')}auto · kadan-noexec (Fake Model · medium)  /agents`];
+  const transcript = end => [rule, `> ${line}`, '', '  결론: 가짜 답이다', '', `  ${marker}`, '', ...end].join('\n');
+  const recover = async end => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ksa-final-'));
+    let stage = 'initial', polls = 0, histories = 0;
+    const run = args => {
+      if (args[0] === 'capture-pane') {
+        if (stage === 'initial') return composer().join('\n');
+        if (stage === 'pasted') return composer('', line).join('\n');
+        return composer(polls++ === 0 ? 'esc to cancel' : '? for shortcuts').join('\n');   // 한 번 일하고 그 뒤로 쉰다
+      }
+      if (args[0] === 'display-message') {
+        const format = args.at(-1);
+        return format === '#{pane_in_mode}' ? '0' : format === '#{pane_pid}|#{pane_dead}' ? '123|0' : '2|50000';
+      }
+      if (args[0] === 'paste-buffer') stage = 'pasted';
+      if (args[0] === 'send-keys') stage = 'submitted';
+      return '';
+    };
+    // 전체 스크롤 캡처: 넣기 전에는 빈 입력칸뿐이고, 끝 판정 때는 시험이 준 끝 화면이 붙어 있다.
+    run.try = args => ({status: 0, stdout: args[0] === 'capture-pane' ? (histories++ === 0 ? composer().join('\n') : transcript(end)) : run(args)});
+    const seat = {home, dir: home, workdir: home, session: 'senior-fake-1', panePid: '123', deadlineAt: Date.now() + 60_000, line, marker};
+    return askSeatAgy(seat, {run, timing: {...TIMING, pollMs: 1, keyGapS: '0', submitGraceMs: 30}, sleep: async () => {}, spawn: () => ({status: 0})});
+  };
+  assert.deepEqual(await recover(composer()), {reason: 'ok', answer: '결론: 가짜 답이다'});
+  assert.deepEqual(await recover(composer('esc to cancel')), {reason: 'call-failed', detail: 'final-capture-not-idle:working'});
+  assert.deepEqual(await recover([...composer(), '> 1. Log in']), {reason: 'call-failed', detail: 'final-capture-not-idle:lines-below-composer'});
 });
 
 test('질문 파일은 자리별이다: 한 호출에서 agy 두 자리를 만들면 서로 다른 파일이고, 한 자리를 만든 뒤 다음이 실패하면 만든 파일도 치운다', {skip}, async t => {

@@ -45,15 +45,22 @@ export function readAgyComposer(screen, agent = NOEXEC_AGENT) {
   return {found: true, text, top, hint, working, settled: why == null, ...(why ? {why} : {})};
 }
 
+// 읽어 둔 입력칸이 '쉬는 빈 입력칸'인가. 반환: null(그렇다) | 아닌 이유 낱말.
+function notIdle(composer) {
+  if (!composer.settled) return composer.why;
+  if (composer.working) return 'working';
+  if (composer.hint !== IDLE_HINT) return composer.hint === '' ? 'composer-has-text' : 'unknown-footer';
+  return null;
+}
+
 // (가) 붙여넣기 직전·끝 판정: 빈 입력칸이다. agy가 바닥글에 `? for shortcuts`를 보일 때만이다 — 글이 든 입력칸·일하는 중·
 // 선택 창에는 이 글이 없다. 첫 기동의 입력칸에는 안내 글(`Auto mode: …`)이 보이지만 바닥글은 같다(빈 칸이다).
 // 생성 중에도 빈 `>`가 보이므로 `>` 줄이 비었다는 것만으로는 통과하지 못한다.
 export function agyComposerReady(screen, agent = NOEXEC_AGENT) {
   const composer = readAgyComposer(screen, agent);
-  if (!composer.found || !composer.settled) return {ok: false, why: composer.why};
-  if (composer.working) return {ok: false, why: 'working'};
-  if (composer.hint !== IDLE_HINT) return {ok: false, why: composer.hint === '' ? 'composer-has-text' : 'unknown-footer'};
-  return {ok: true};
+  if (!composer.found) return {ok: false, why: composer.why};
+  const why = notIdle(composer);
+  return why ? {ok: false, why} : {ok: true};
 }
 
 // (나) Enter 직전: 입력칸의 글이 방금 붙인 자기 한 줄과 같고(공백은 걷고 비교 — 긴 줄은 화면에서 감긴다),
@@ -125,6 +132,8 @@ function tailOnly(lines) {
 }
 
 // 전체 스크롤 기록(`capture-pane -J -S -`) → 답 후보. 답으로 받는 조건:
+//  - 이 캡처 자체가 쉬는 화면이다: 화면 끝이 빈 입력칸이고 일하는 표시·선택 창·글이 든 입력칸이 아니다. 끝 판정 때 따로 읽은
+//    '지금 화면'이 쉬고 있었어도, 답을 읽는 이 캡처에서 다시 본다(두 번 읽는 사이에 화면이 바뀔 수 있다)
 //  - 이번 질문의 시작 경계가 정확히 한 번 남아 있다(없으면 밀려났거나 지워진 것, 둘 이상이면 어느 것이 이번 답인지 모른다)
 //  - 경계 뒤부터 입력칸 위 가로줄까지에서, 이번 표지가 단독 줄로 정확히 한 번이고 다른 곳(본문 속 인용 포함)에는 없다
 //  - 표지 뒤에는 agy의 꼬리만 있다(표지가 답 구간의 마지막 단독 줄이다)
@@ -136,6 +145,8 @@ export function readAgyAnswer(capture, {line, marker, agent = NOEXEC_AGENT}) {
   const lines = screenLines(capture);
   const composer = readAgyComposer(lines.join('\n'), agent);
   if (!composer.found) return {ok: false, why: 'no-composer', lost: true};
+  const busy = notIdle(composer);
+  if (busy) return {ok: false, why: `final-capture-not-idle:${busy}`, lost: true};
   const ends = findAgyBoundary(lines, line, composer.top);
   if (ends.length === 0) return {ok: false, why: 'boundary-lost', lost: true};
   if (ends.length > 1) return {ok: false, why: 'boundary-repeated', lost: true};

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {NOEXEC_AGENT, ensureAgentFile, ensureRealDir, isReadDirValue} from './exec-agent.mjs';
+import {checkHumanIdle, checkPaneMode} from './floor-tmux.mjs';
 import {splitGhostText} from './ghost-text.mjs';
 import {AUTO_TRUST_OFF, sameWorkspace} from './trust-accept.mjs';
 import {agyComposerHolds, agyComposerReady, agyScreenWorking, findAgyBoundary, readAgyAnswer,
@@ -94,6 +95,9 @@ function historyState(run, session) {
 }
 
 export const AGY_JUDGE = {ready: agyComposerReady, holds: agyComposerHolds, capture: captureAgy};
+// 신뢰 창 Enter 직전의 복사 모드·사람 입력 확인이 막았을 때의 이유 낱말(바닥 확인 함수의 오류 코드 → 관문 이유).
+const TRUST_HOLD = {KADAN_PANE_IN_MODE: 'trust-pane-in-mode', KADAN_PANE_MODE_UNKNOWN: 'trust-pane-mode-unknown',
+  KADAN_HUMAN_ACTIVE: 'trust-human-active', KADAN_HUMAN_ACTIVITY_UNKNOWN: 'trust-human-unknown'};
 
 // 질문 넣기 전 관문. 고정 폴더가 git 밖인지는 자리 준비에서 이미 봤다. 여기서는 문을 열고(agy가 뜬다) 빈 입력칸까지 기다린다.
 // 첫 화면이 이 세션 작업 폴더의 신뢰 창이면 조건을 모두 확인한 뒤 Enter를 한 번 보낸다(이 길에서 질문 밖에 나가는 유일한 키).
@@ -147,6 +151,14 @@ export async function passGateAgy(seat, {run, now = Date.now, sleep = defaultSle
         const again = readAgyTrust(plainScreen(run, seat.session));
         if (!again.found || again.path !== shown.path || !trustVerdict(again).ok) return done({ok: false, why: 'startup:trust-screen-changed'});
         if (!paneAlive(run, seat).alive) return done({ok: false, why: 'startup:pane-dead'});
+        // 바닥의 키 전송(sendTmux)·Claude 신뢰 키(sendTmuxTrustKey)와 같은 확인을 같은 순서로 한다: pane PID·생존 → 기록보기(복사) 모드 →
+        // 사람 입력. 기록보기 중이거나 붙은 사람이 최근에 키를 쳤으면 Enter를 보내지 않고 끝낸다(다시 시도하지 않는다).
+        try { checkPaneMode(seat.session, run); checkHumanIdle(seat.session, run); }
+        catch (error) {
+          if (signalOf(error) || signalOf(error.cause)) return done({ok: false, why: 'startup:interrupted'});
+          return done({ok: false, why: `startup:${TRUST_HOLD[error.code] ?? 'trust-check-failed'}`,
+            note: `agy 폴더 신뢰 창에 키를 보내지 않았다 — ${error.message}`});
+        }
         if (expired()) return done(late('startup:trust'));
         run(['send-keys', '-t', `=${seat.session}:`, 'Enter']);
         trust = evidence.trust = {result: 'accepted', path: shown.path, keys: ['Enter'], at: new Date(now()).toISOString()};
