@@ -148,7 +148,9 @@ test('시작 표지: 실제 limit run이 잠금에 자기 표지를 적고, 다�
   await until(() => lockCount(home) === 1);
   const [held] = limitHolders(home, 'rust');
   assert.equal(held.pid, job.child.pid);
-  assert.equal(held.startToken, processStartToken(job.child.pid));
+  // startToken은 출력 허용 목록에 없다. 잠금 파일에 적힌 값을 직접 본다.
+  const saved = JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8'));
+  assert.equal(saved.startToken, processStartToken(job.child.pid));
   assert.equal(held.state, 'alive');
   fs.writeFileSync(release, '');
   assert.equal((await job.done).code, 0);
@@ -276,4 +278,61 @@ test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽�
   assert.ok(asked.length >= 1 && asked.length <= 3, fs.readFileSync(calls, 'utf8'));
   for (const name of ['build-1.lock', 'build-2.lock']) fs.renameSync(path.join(home, 'limits', name), path.join(home, `released-${name}`));
   assert.equal(await done, 0);
+});
+
+// 다른 실행의 명령줄은 대기 안내·status에 나오지 않는다. 옛 형식 잠금(command·cwd 있음)을 읽어도 새지 않아야 한다(허용 목록).
+// 값은 모두 가짜다. 시험은 격리 홈에서만 돈다.
+const LEAK = ['TOKEN', '가짜값', 'PATH=/x', 'pnpm', 'smoke', '/secret/cwd', 'SECRET=', 'extra-field'];
+const noLeak = (text, label) => { for (const word of LEAK) assert.ok(!text.includes(word), `${label}에 ${word}가 나왔다: ${text}`); };
+
+test('옛 형식 잠금: 대기 안내 줄과 status(JSON)에 명령 인자·cwd·모르는 필드가 나오지 않고 이름·PID·시작 시각은 나온다', async () => {
+  const home = freshHome(), since = iso(Date.now());
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since, startToken: myToken,
+    command: ['env', '-i', 'PATH=/x', 'TOKEN=가짜값', 'pnpm', 'smoke'], cwd: '/secret/cwd', extra: 'SECRET=extra-field', role: 'TOKEN=가짜값'});
+  const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
+  assert.equal(status.status, 0, status.stderr);
+  noLeak(status.stdout, 'status');
+  const [held] = JSON.parse(status.stdout).holders;
+  assert.deepEqual(Object.keys(held).sort(), ['alive', 'kind', 'lock', 'pid', 'since', 'state']);
+  assert.deepEqual([held.lock, held.pid, held.kind, held.since, held.state], ['rust-1.lock', process.pid, 'rust', since, 'alive']);
+  const waiting = start(home, 'rust', node('process.exit(0)'));
+  await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
+  noLeak(waiting.out.stderr, '대기 줄');
+  assert.match(waiting.out.stderr, new RegExp(`rust-1\\.lock pid ${process.pid} ${since}`));
+  fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
+  assert.equal((await waiting.done).code, 0);
+});
+
+test('새 잠금: command·cwd를 저장하지 않고, KADAN_ROLE이 있으면 역할만 저장·표시한다', async () => {
+  for (const role of ['kadan-제한기-작업자', undefined]) {
+    const home = freshHome(), release = path.join(home, 'release');
+    const env = {...process.env, KADAN_HOME: home};
+    if (role) env.KADAN_ROLE = role; else delete env.KADAN_ROLE;
+    const child = spawn(process.execPath, [cli, 'limit', 'run', 'build', '--', ...node(`
+      const fs = require('fs');
+      const wait = () => fs.existsSync(${JSON.stringify(release)}) ? process.exit(0) : setTimeout(wait, 25);
+      wait(); // TOKEN=가짜값`)], {env});
+    children.add(child);
+    const done = new Promise(resolve => child.on('close', resolve));
+    await until(() => lockCount(home) === 1);
+    const file = path.join(home, 'limits', 'build-1.lock');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.keys(saved).sort(), ['kind', 'pid', 'since', 'startToken', ...(role ? ['role'] : [])].filter(k => k !== 'startToken' || saved.startToken).sort());
+    assert.equal(saved.role, role);
+    assert.ok(!('command' in saved) && !('cwd' in saved), JSON.stringify(saved));
+    noLeak(fs.readFileSync(file, 'utf8'), '잠금 파일');
+    const [seen] = limitHolders(home, 'build');
+    assert.equal(seen.role, role);
+    fs.writeFileSync(release, '');
+    assert.equal(await done, 0);
+  }
+});
+
+test('허용 목록: 모양이 다른 값(PID·시각·역할·종류)은 버린다', () => {
+  const home = freshHome();
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'TOKEN=가짜값', since: 'TOKEN=가짜값', role: 'a b', startToken: myToken});
+  writeLock(home, 'rust-2.lock', {pid: '123', kind: 'rust', role: 'x'.repeat(200)});
+  const holders = limitHolders(home, 'rust');
+  noLeak(JSON.stringify(holders), 'holders');
+  assert.deepEqual(holders.map(h => Object.keys(h).sort()), [['alive', 'lock', 'pid', 'state'], ['alive', 'kind', 'lock', 'state']]);
 });

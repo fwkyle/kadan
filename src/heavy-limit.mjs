@@ -135,13 +135,28 @@ function capOf(home, kind) {
   return cap;
 }
 
-// alive는 잠금이 살아 있는지(state가 alive)다. state는 alive·dead·pid-reused 중 하나다.
+// 잠금 파일에는 주인 명령의 인자·cwd를 적지 않는다: 명령줄에 토큰이 실리면 남의 세션 기록에 비밀이 남는다(2026-11-18).
+// 잠금에는 아래 모양의 값만 적고, 읽어 내보낼 때도 같은 허용 목록만 통과시킨다(옛 형식 잠금의 command·cwd, 모르는 필드는 버린다).
+const KIND_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const SINCE_RE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,9})?Z$/;
+const ROLE_RE = /^[\w.가-힣-]{1,80}$/u;
+const shown = (value, re) => (typeof value === 'string' && re.test(value) ? value : undefined);
+export function publicHolder(lock, state, raw) {
+  const pid = Number.isSafeInteger(raw?.pid) && raw.pid > 0 ? raw.pid : undefined;
+  const fields = {pid, kind: shown(raw?.kind, KIND_RE), since: shown(raw?.since, SINCE_RE), role: shown(raw?.role, ROLE_RE)};
+  return {lock, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)), alive: state === 'alive', state};
+}
+function lockRecord(holder) {
+  const {pid, kind, since, startToken, role} = holder;
+  return {pid, kind, since, ...(typeof startToken === 'string' ? {startToken} : {}), ...(shown(role, ROLE_RE) ? {role} : {})};
+}
+
+// alive는 잠금이 살아 있는지(state가 alive)다. state는 alive·dead·pid-reused 중 하나다. 돌려주는 값은 허용 목록 필드만이다.
 export function limitHolders(home, kind, deps) {
   const dir = limitDir(home);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter(name => /\.lock$/.test(name) && (!kind || name.startsWith(`${kind}-`)))
-    .map(name => ({lock: name, ...(readJson(path.join(dir, name)) ?? {})}))
-    .map(h => { const state = lockOwnerState(h, deps); return {...h, alive: state === 'alive', state}; });
+    .map(name => { const raw = readJson(path.join(dir, name)); return publicHolder(name, lockOwnerState(raw, deps), raw); });
 }
 
 // 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금은 회수한다. 못 잡으면 null.
@@ -149,10 +164,10 @@ export function tryAcquireLimit(home, kind, holder, deps) {
   const cap = capOf(home, kind);
   for (let n = 1; n <= cap; n++) {
     const file = lockFile(home, kind, n);
-    if (createExclusive(file, holder)) return file;
+    if (createExclusive(file, lockRecord(holder))) return file;
     const current = readJson(file);
     const stale = current && lockOwnerState(current, deps) !== 'alive';
-    if (stale && reclaim(file) && createExclusive(file, holder)) return file;
+    if (stale && reclaim(file) && createExclusive(file, lockRecord(holder))) return file;
   }
   return null;
 }
@@ -166,16 +181,17 @@ export function limitEnv(kind, command, env = process.env) {
 }
 
 const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 시작 표지 다름)'};
+// 대기 줄에는 누가 쥐었는지(잠금 이름·PID·상태·시작 시각·역할)만 쓴다. 명령 인자·cwd는 남의 세션 기록에 남지 않게 뺀다.
 const describe = holders => holders
-  .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''} ${(h.command ?? []).join(' ')}`.trim()).join('; ');
+  .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''}${h.role ? ` 역할 ${h.role}` : ''}`.trim()).join('; ');
 
 // 자리가 날 때까지 기다렸다가 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다. 종료 코드는 명령의 것을 돌려준다.
 export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit'} = {}) {
   if (!command.length) throw new Error('실행할 명령 필요: kadan limit run <종류> -- <명령...>');
   capOf(home, kind);
   const token = processStartToken(process.pid);
-  const holder = {pid: process.pid, kind, command, cwd, since: new Date().toISOString(),
-    ...(token ? {startToken: token} : {})};
+  const holder = {pid: process.pid, kind, since: new Date().toISOString(),
+    ...(token ? {startToken: token} : {}), ...(env.KADAN_ROLE ? {role: env.KADAN_ROLE} : {})};
   let file = null, child = null;
   const release = () => { try { if (file && readJson(file)?.pid === process.pid) fs.rmSync(file, {force: true}); } catch {} };
   // 신호 처리는 잠금을 잡기 전에 건다. 잡은 직후·명령 시작 전에 신호가 와도 잠금을 풀고 끝낸다.
