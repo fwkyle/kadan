@@ -422,7 +422,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 
 ## 시니어
 
-시니어(senior)도 세션이 아니라 일회성 호출이다. 감독이 `kadan senior <카드키> --question …`으로 부르면 codex는 `scripts/senior.sh`가 `codex exec`로, 허용 목록의 agy는 실행기 표 `exec` 틀로 한 번 돌린다(2026-10-05 [kyle] 승인, agy는 아래 [시니어](#시니어) 설정 참고). 슈퍼감독은 값싼 모델로 두고, 작업 결과에 결정할 부분이 있을 때만 여기로 묻는다. 자세한 규칙은 [시니어](senior.md).
+시니어는 감독이 판단을 앞두고 한 번 부르는 자문이다. 기본은 codex 대화창이며 로티에서 읽기 전용으로 볼 수 있다. 기존 호출은 `$KADAN_HOME/senior-mode`에 `headless`를 적어 선택한다. codex는 이때 `scripts/senior.sh`를 쓰고 agy는 헤드리스 모드에서만 실행기 표의 `exec` 틀을 쓴다. [시니어](senior.md)
 
 - 설정: 활성 프리셋의 `roles.senior`는 **최대 2명 목록**(`{runner, model, effort}`)이다(2026-10-22 [kyle] 승인). 옛 단일 객체는 1명 목록으로 읽고 다음 저장 때 목록으로 남는다. 명령은 `kadan runners set senior --set "실행기:모델[:강도],…" --revision N --reason …`(최대 2명, 각 항목은 한 명 등록과 같은 검사, 같은 실행기+모델 중복·3명 이상 거절)이고, 한 명이면 기존 `--runner codex --model … [--effort …]`가 된다(목록이 그 한 명으로 바뀐다). 대시보드는 '실행 모델'의 **시니어** 줄(등록 목록)과 '시니어 바꾸기'(추가·삭제·위로·아래로)다. 값이 없으면 `kadan senior`가 거절한다(기본 모델 없음). 감독이 `kadan senior`를 부르면 **등록된 전원에게 동시에** 묻는다.
 - 실행기는 안전 허용 목록(`SENIOR_SAFE_RUNNERS`, 지금 `codex`·`agy`)에 든 것만 받는다. agy는 실행기 표 `exec` 틀 + 도구 없는 에이전트로 부르며, 카드 저장소(git·안전한 경로)는 코드가 실행 직전에 덧붙이는 `--add-dir`로 읽기 전용으로 읽는다([시니어](senior.md), [agy 묶기](#agy-도구-없는-에이전트-묶기)). 저장(`runners set senior`)과 호출(`kadan senior --runner`)이 같은 검사로 거절한다. 작업자↔검수자 계열 규칙은 적용하지 않고, 정책 차단(`block --roles senior`)은 호출 때 골라 부른 모델에도 적용한다.
@@ -477,7 +477,7 @@ kadan start <역할> --profile worker --fallback 2 --reason "1순위 429 확인"
 | --- | --- |
 | `resume` | `spawn` 틀 **뒤에** 대화 인자를 붙인 모양(`… --resume {conversation}`). 자리: `{model}`·`{effort}`·`{conversation}` |
 | `fork` | 같은 모양으로 대화를 갈라 여는 틀(있으면 restart가 갈라 연 명령을 resume으로 바꾼다) |
-| `exec` | 화면 없이 한 번 호출하는 틀(`{prompt}`가 있으면 인자, 없으면 표준 입력. `{prompt}`는 앞뒤가 공백인 독립 낱말이어야 하고 따옴표·글자에 붙이면 저장 단계에서 거절). **설명 AI가 이 틀로 부른다**([설명 AI](#설명-ai)). 시니어는 codex는 `senior.sh`, 허용 목록의 agy는 이 틀로 부른다. 감시 AI는 그대로 codex만 쓴다. `EXEC_BINDINGS`에 든 실행기(agy)는 틀에 `--agent kadan-noexec`가 있어야 한다 |
+| `exec` | 화면 없이 한 번 호출하는 틀(`{prompt}`가 있으면 인자, 없으면 표준 입력. `{prompt}`는 앞뒤가 공백인 독립 낱말이어야 하고 따옴표·글자에 붙이면 저장 단계에서 거절). **설명 AI가 이 틀로 부른다**([설명 AI](#설명-ai)). 헤드리스 시니어는 codex를 `senior.sh`로, 허용 목록의 agy를 이 틀로 부른다. 감시 AI는 그대로 codex만 쓴다. `EXEC_BINDINGS`에 든 실행기(agy)는 틀에 `--agent kadan-noexec`가 있어야 한다 |
 | `execField` | `exec`의 표준 출력이 JSON일 때 답이 든 필드 이름(`response`·`result`, 점으로 안쪽 필드). 비우면 표준 출력 전체가 답이다. 실행기마다 다른 출력 모양을 코드가 알지 않도록 표에 둔다 |
 | `version`·`update` | 버전 확인·업데이트 명령 문자열. 카단은 실행하지 않는다 |
 | `listModels` | 실행기가 자기 모델 목록을 내는 명령 틀(자리 `{…}` 없음, 예: agy는 `agy models`). 줄마다 **첫 낱말**을 모델 id로 읽고 이름 규칙(영문·숫자·`./-[]`)에 안 맞는 줄·중복은 버린다. 대시보드의 **목록 불러오기** 버튼을 누를 때만 한 번 실행한다(POST·토큰, 20초·256KiB 상한, 넘으면 프로세스 묶음 종료). 결과는 저장하지 않고 설정·원장에도 쓰지 않는다 |

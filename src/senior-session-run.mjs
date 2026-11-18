@@ -4,7 +4,7 @@
 // 판정은 종료 코드·stderr 글이 아니라 outcome.json의 낱말로 넘긴다(경로에 든 숫자가 한도 낱말로 읽히지 않게).
 import fs from 'node:fs';
 import path from 'node:path';
-import {askSeat, closeSeat, killOwn, readRecord, seniorTmux, writeOutcome} from './senior-session.mjs';
+import {SUBMITTED_FILE, askSeat, closeSeat, killOwn, readRecord, seniorTmux, writeOutcome} from './senior-session.mjs';
 
 const [action, dir] = process.argv.slice(2);
 if (!['ask', 'reap'].includes(action) || !dir || !path.isAbsolute(dir)) {
@@ -32,7 +32,13 @@ for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130]]) {
 }
 
 let outcome;
-try { outcome = await askSeat(record, {run}); }
+// 질문이 제출되면 표지 파일을 만든다(부른 쪽이 그때 로티 탭을 연다). 임시 파일에 쓴 뒤 옮겨 반쯤 쓴 파일이 보이지 않게 한다.
+const onSubmitted = () => {
+  const file = path.join(dir, SUBMITTED_FILE);
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify({askId: record.askId, session: record.session, panePid: record.panePid, dir, at: new Date().toISOString()}) + '\n', {mode: 0o600});
+  fs.renameSync(`${file}.tmp`, file);
+};
+try { outcome = await askSeat(record, {run, onSubmitted}); }
 catch (error) { outcome = {reason: 'call-failed', detail: `session-error — ${String(error?.message ?? error)}`}; }
 try {
   // 답은 표지를 뗀 본문만 공통부가 읽는 자리(호출 폴더의 result.txt)에 둔다. advice의 bytes·digest와 영수증 answer가 같은 글을 가리킨다.

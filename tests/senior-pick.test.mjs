@@ -21,6 +21,7 @@ const BOUND = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --ou
 // agy: false면 codex 한 명만 등록한다(옛 단일 설정). 기본은 codex·agy 두 명이다.
 function fixture({agy = true, body = '# 시험 카드\n\n- 열 이름을 바꾼다\n', stored = {}, agyExec = 'agy --model {model} --print {prompt}', repoName = 'repo', git = false, cardRepo = null} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-pick-'));
+  fs.writeFileSync(path.join(home, 'senior-mode'), 'headless\n');
   const repo = path.join(home, repoName); fs.mkdirSync(repo);
   if (git) { // 진짜 git 저장소(커밋 1개). 표식 파일 하나를 둔다.
     const g = (...a) => execFileSync('git', ['-C', repo, ...a], {stdio: 'ignore'});

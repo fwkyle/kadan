@@ -21,6 +21,7 @@ const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, ARGON = {
 
 function fixture({seniors = [ASTRA, ARGON]} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-senior-two-'));
+  fs.writeFileSync(path.join(home, 'senior-mode'), 'headless\n');
   const repo = path.join(home, 'repo'); fs.mkdirSync(repo);
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [{id: 'codex', spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"'}]}));
   const records = [];
