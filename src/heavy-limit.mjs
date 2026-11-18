@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {isRoleName} from './role-name.mjs';
 
 export const DEFAULT_LIMITS = {rust: 1, install: 2, build: 2};
 export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, limits: DEFAULT_LIMITS};
@@ -139,16 +140,15 @@ function capOf(home, kind) {
 // 잠금에는 아래 모양의 값만 적고, 읽어 내보낼 때도 같은 허용 목록만 통과시킨다(옛 형식 잠금의 command·cwd, 모르는 필드는 버린다).
 const KIND_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const SINCE_RE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,9})?Z$/;
-const ROLE_RE = /^[\w.가-힣-]{1,80}$/u;
 const shown = (value, re) => (typeof value === 'string' && re.test(value) ? value : undefined);
 export function publicHolder(lock, state, raw) {
   const pid = Number.isSafeInteger(raw?.pid) && raw.pid > 0 ? raw.pid : undefined;
-  const fields = {pid, kind: shown(raw?.kind, KIND_RE), since: shown(raw?.since, SINCE_RE), role: shown(raw?.role, ROLE_RE)};
+  const fields = {pid, kind: shown(raw?.kind, KIND_RE), since: shown(raw?.since, SINCE_RE), role: isRoleName(raw?.role) ? raw.role : undefined};
   return {lock, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)), alive: state === 'alive', state};
 }
 function lockRecord(holder) {
   const {pid, kind, since, startToken, role} = holder;
-  return {pid, kind, since, ...(typeof startToken === 'string' ? {startToken} : {}), ...(shown(role, ROLE_RE) ? {role} : {})};
+  return {pid, kind, since, ...(typeof startToken === 'string' ? {startToken} : {}), ...(isRoleName(role) ? {role} : {})};
 }
 
 // alive는 잠금이 살아 있는지(state가 alive)다. state는 alive·dead·pid-reused 중 하나다. 돌려주는 값은 허용 목록 필드만이다.

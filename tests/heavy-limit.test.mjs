@@ -331,8 +331,51 @@ test('새 잠금: command·cwd를 저장하지 않고, KADAN_ROLE이 있으면 �
 test('허용 목록: 모양이 다른 값(PID·시각·역할·종류)은 버린다', () => {
   const home = freshHome();
   writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'TOKEN=가짜값', since: 'TOKEN=가짜값', role: 'a b', startToken: myToken});
-  writeLock(home, 'rust-2.lock', {pid: '123', kind: 'rust', role: 'x'.repeat(200)});
+  writeLock(home, 'rust-2.lock', {pid: '123', kind: 'rust', role: 'a=b'});
   const holders = limitHolders(home, 'rust');
   noLeak(JSON.stringify(holders), 'holders');
   assert.deepEqual(holders.map(h => Object.keys(h).sort()), [['alive', 'lock', 'pid', 'state'], ['alive', 'kind', 'lock', 'state']]);
+});
+
+// 역할 이름은 카단이 역할 설정(role-instructions)에서 받는 범위와 같다: 유니코드 문자·숫자·밑줄·하이픈, 길이 제한 없음.
+const lockRecordOf = (home, role) => {
+  assert.ok(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust', since: iso(Date.now()), role}));
+  return JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8'));
+};
+
+test('역할 이름: 유니코드·긴 이름은 저장·표시하고, 명령줄 조각이 될 수 있는 값은 버린다', () => {
+  const good = ['fixture-검수자_2', 'fixture-réviseur-3', 'fixture-レビュー2', `fixture-${'a'.repeat(73)}`];
+  const bad = ['a=b', 'a b', 'a.b', '/etc/passwd', 'a\nb', '--flag=x', ''];
+  for (const role of good) {
+    const home = freshHome();
+    assert.equal(lockRecordOf(home, role).role, role);
+    assert.equal(limitHolders(home, 'rust')[0].role, role);
+  }
+  for (const role of bad) {
+    const home = freshHome();
+    assert.equal(lockRecordOf(home, role).role, undefined, JSON.stringify(role));
+    writeLock(home, 'rust-2.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), role});
+    assert.equal(limitHolders(home, 'rust').find(h => h.lock === 'rust-2.lock').role, undefined, JSON.stringify(role));
+  }
+});
+
+test('역할 이름: 실제 limit run이 유니코드 KADAN_ROLE을 잠금에 적고 대기 줄·status에 보인다', async () => {
+  const home = freshHome(), release = path.join(home, 'release'), role = 'fixture-réviseur-レビュー2';
+  const env = {...process.env, KADAN_HOME: home, KADAN_ROLE: role};
+  const holder = spawn(process.execPath, [cli, 'limit', 'run', 'rust', '--', ...node(`
+    const fs = require('fs');
+    const wait = () => fs.existsSync(${JSON.stringify(release)}) ? process.exit(0) : setTimeout(wait, 25);
+    wait();`)], {env});
+  children.add(holder);
+  const holderDone = new Promise(resolve => holder.on('close', resolve));
+  await until(() => lockCount(home) === 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8')).role, role);
+  const waiting = start(home, 'rust', node('process.exit(0)'));
+  await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
+  assert.match(waiting.out.stderr, new RegExp(`역할 ${role}`, 'u'));
+  const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env, encoding: 'utf8'});
+  assert.equal(JSON.parse(status.stdout).holders[0].role, role);
+  fs.writeFileSync(release, '');
+  assert.equal(await holderDone, 0);
+  assert.equal((await waiting.done).code, 0);
 });
