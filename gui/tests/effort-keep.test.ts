@@ -75,6 +75,7 @@ test('새 모델 등록: 지금 강도를 새 모델이 지원하면 유지, 아
   const fields = modelAddFields('agy', ' m-new ', ' low,high ', 7);
   assert.deepEqual([fields.runner, fields.model, fields.efforts, fields.revision], ['agy', 'm-new', 'low,high', '7']);
   assert.match(fields.reason, /새 모델 등록/);
+  assert.equal(fields.newOnly, '1', '새 모델 등록 칸은 늘 새 이름만 보낸다(서버가 같은 이름이면 거절)');
 });
 
 test('등록 성공: 새 버전과 고른 선택을 알린다. 등록 실패: 알리지 않으므로 변경안은 그대로다', async () => {

@@ -409,8 +409,10 @@ export function setRunner(home, {runner, spawn, table, ...meta}) {
   });
 }
 
-// 목록 파일이 없는 실행기의 실측 모델·강도.
-export function setRunnerModel(home, {runner, model, efforts, ...meta}) {
+// 목록 파일이 없는 실행기의 실측 모델·강도. 같은 이름이면 강도 목록을 교체한다(고급 설정 표의 동작).
+// newOnly면 그 실행기 목록에 같은 이름이 이미 있을 때 거절한다. 이 확인은 설정 잠금 안에서 저장 직전 목록으로 하므로,
+// 화면이 아직 못 읽은 방금 등록과의 경쟁도 닫는다(바꾸기 창의 '새 모델 등록'이 늘 붙인다).
+export function setRunnerModel(home, {runner, model, efforts, newOnly = false, ...meta}) {
   if (typeof model !== 'string' || !VALUE.test(model)) throw new Error('모델 이름 필요');
   const list = String(efforts ?? '').split(',').map(v => v.trim()).filter(Boolean);
   if (list.some(v => !VALUE.test(v))) throw new Error('강도 목록은 쉼표로 구분한 영문');
@@ -419,6 +421,7 @@ export function setRunnerModel(home, {runner, model, efforts, ...meta}) {
     if (!spec) throw new Error(`등록되지 않은 실행기: ${runner}`);
     if (spec.catalog) throw new Error(`${runner}은 모델 목록 파일을 쓴다 — 직접 추가하지 않는다`);
     const before = spec.models.find(m => m.model === model) ?? null;
+    if (newOnly && before) throw new Error(`이미 등록된 모델 — 목록에서 고르세요 (${runner}/${model})`);
     spec.models = [...spec.models.filter(m => m.model !== model), {model, efforts: list}];
     return {runner, before, after: {model, efforts: list}};
   });

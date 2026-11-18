@@ -80,3 +80,67 @@ test('codex처럼 모델 목록 파일을 쓰는 실행기에는 서버도 직�
     assert.equal(fs.readFileSync(path.join(home, 'runner-settings.json'), 'utf8'), before);
   } finally { server.close(); }
 });
+
+// 재검수(2026-11-18): 화면의 "이미 있는 이름" 검사는 화면이 읽은 목록 기준이라, 방금 등록한 이름을 목록을 다시 읽기 전에
+// 또 등록하면 같은 이름의 강도 목록이 교체됐다. 보장은 서버가 한다: newOnly=1이면 설정 잠금 안에서 저장 직전 목록으로 거절한다.
+test('newOnly=1: 방금 등록한 이름을 다시 등록하면 서버가 거절하고 목록·설정·원장이 그대로다. 칸이 없으면 기존 교체 동작', async () => {
+  const home = fixture();
+  const server = createWallServer(() => ({center: null, entries: readLedger(home), tree: [],
+    ledgerLines: 0, collectedAt: new Date()}), {home, cacheSec: 0});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    const add = fields => fetch(base + '/runners/model-add', {method: 'POST',
+      headers: {'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', origin: base},
+      body: new URLSearchParams({token, runner: 'agy', reason: '시험', ...fields})});
+    const models = () => readSettings(home).runners.agy.models;
+    const file = () => fs.readFileSync(path.join(home, 'runner-settings.json'), 'utf8');
+    // 화면이 보내는 그대로: 첫 등록은 새 이름이라 성공한다.
+    const first = await add({model: 'm-twice', efforts: 'low,high', revision: '1', newOnly: '1'});
+    assert.equal(first.status, 200, await first.clone().text());
+    assert.equal((await first.json()).result.revision, 2);
+    // 목록을 다시 읽기 전에 같은 이름·옛 강도 목록으로 또 등록(재검수 재현). 버전은 서버와 같은 2다.
+    const before = file(), ledgerBefore = readLedger(home).length;
+    const again = await add({model: 'm-twice', efforts: 'low', revision: '2', newOnly: '1'});
+    assert.equal(again.status, 409);
+    assert.match(await again.text(), /이미 등록된 모델 — 목록에서 고르세요/);
+    assert.deepEqual(models().find(m => m.model === 'm-twice'), {model: 'm-twice', efforts: ['low', 'high']}, '강도 목록 불변');
+    assert.equal(readSettings(home).revision, 2, 'revision 불변');
+    assert.equal(file(), before, '설정 파일 바이트 불변');
+    assert.equal(readLedger(home).length, ledgerBefore, '원장 불변');
+    // 앞뒤 공백 같은 이름도 아니고 정확히 같은 이름이므로 걸린다. 다른 새 이름은 계속 등록된다.
+    const other = await add({model: 'm-other', efforts: 'low', revision: '2', newOnly: '1'});
+    assert.equal(other.status, 200, await other.clone().text());
+    // 칸 값이 이상하면 조용히 넘기지 않고 거절한다.
+    const bad = await add({model: 'm-bad', efforts: 'low', revision: '3', newOnly: 'yes'});
+    assert.equal(bad.status, 409);
+    assert.match(await bad.text(), /새 이름만 값이 올바르지 않다/);
+    assert.equal(models().some(m => m.model === 'm-bad'), false);
+    // 칸이 없으면 지금처럼 같은 이름의 강도 목록을 교체한다(고급 설정 표의 기존 동작 그대로).
+    const replace = await add({model: 'm-twice', efforts: 'low', revision: '3'});
+    assert.equal(replace.status, 200, await replace.clone().text());
+    assert.deepEqual(models().find(m => m.model === 'm-twice'), {model: 'm-twice', efforts: ['low']});
+    assert.equal(readSettings(home).revision, 4);
+    // newOnly=''도 칸이 없는 것과 같다.
+    const empty = await add({model: 'm-twice', efforts: 'low,high', revision: '4', newOnly: ''});
+    assert.equal(empty.status, 200, await empty.clone().text());
+    assert.deepEqual(models().find(m => m.model === 'm-twice').efforts, ['low', 'high']);
+  } finally { server.close(); }
+});
+
+test('newOnly=1이어도 codex(목록 파일 실행기)는 기존 거절 문구가 먼저 나온다', async () => {
+  const home = fixture();
+  const server = createWallServer(() => ({center: null, entries: [], tree: [], ledgerLines: 0, collectedAt: new Date()}),
+    {home, cacheSec: 0});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    const res = await fetch(base + '/runners/model-add', {method: 'POST',
+      headers: {'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', origin: base},
+      body: new URLSearchParams({token, runner: 'codex', model: 'x-1', efforts: '', reason: '시험', revision: '1', newOnly: '1'})});
+    assert.equal(res.status, 409);
+    assert.match(await res.text(), /모델 목록 파일을 쓴다/);
+  } finally { server.close(); }
+});

@@ -5,6 +5,8 @@ import type {Choice} from './pages/Runners';
 export const modelAddFields = (runner: string, model: string, efforts: string, revision: number) => ({
   runner, model: model.trim(), efforts: efforts.trim(), revision: String(revision),
   reason: `바꾸기 창에서 새 모델 등록: ${runner} / ${model.trim()}`,
+  // 새 이름만: 화면이 아직 못 읽은 방금 등록과 겹쳐도 서버가 같은 이름이면 거절한다(강도 목록 교체 금지).
+  newOnly: '1',
 });
 
 // 등록한 모델을 바로 고른 상태로 돌려준다. 강도는 지금 고른 강도를 새 모델이 지원할 때만 유지하고, 아니면 비워 고르게 한다
