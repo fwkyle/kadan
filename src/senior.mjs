@@ -21,12 +21,14 @@ import {isUserActor} from './actors.mjs';
 import {closeOnSignal, closeSeniorTab, openSeniorTab, seniorAttachCommand, writeTabState} from './senior-tab.mjs';
 import {markerParts} from './senior-screen.mjs';
 import {SESSION_TIMING, killOwn, openSeats, passGate, readOutcome, readSeniorMode, seniorSocket, seniorTmux,
-  sessionRunCommand} from './senior-session.mjs';
+  SUBMITTED_FILE, sessionRunCommand} from './senior-session.mjs';
 
 export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 등록된 시니어(실행 모델 설정의 senior, 최대 2명) 전원에게 의견을 동시에 한 번 묻는다. 감독은 모델을 고르지 않는다. --runner/--model은 등록된 시니어 중 한 명만 고를 때만 쓰고(--model만 주면 등록 항목을 모델로 찾는다), 등록되지 않은 모델은 거절한다. 한도·실패는 재시도하지 않고 칸마다 상태로 보인다. 하나라도 답하면 종료 코드 0이다. agy는 카드 저장소(git, 안전한 경로)를 읽기 전용 폴더로 받아 읽고, 그렇지 못하면 카드 본문·첨부만 근거로 답한다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
+// 대화형 질문 제출 표지를 살피는 간격. 탭은 제출 뒤 이 간격 안에 열린다.
+const TAB_POLL_MS = 100;
 // 실행기 표 exec 틀로 부르는 경로(codex 밖)의 프롬프트 상한. 명령 환경변수로 넘기므로 크기를 막는다.
 export const EXEC_PROMPT_LIMIT_BYTES = 200 * 1024;
 const TIMEOUT_MAX_S = 3600, FILE_LIMIT = 64 * 1024, FILE_COUNT = 5, QUESTION_PREVIEW = 200;
@@ -149,7 +151,7 @@ async function callExec({settings, binding, value, dir, prompt, timeoutS, spawn,
 
 export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProcess, readSettings: read = () => readSettings(home),
   script = DEFAULT_SCRIPT, followScript = FOLLOW_SCRIPT, rottie, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels,
-  sessionTiming = SESSION_TIMING}) {
+  sessionTiming = SESSION_TIMING, tabPollMs = TAB_POLL_MS}) {
   if (flags.help || !argv[0]) return SENIOR_USAGE;
   if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
@@ -254,15 +256,22 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     });
     if (blocked) calls.forEach(closeSeat);
   }
+  // 탭을 연다. 대화형은 질문이 제출된 뒤(아래 callSession), 헤드리스는 호출 전에 연다.
+  const openCallTab = call => {
+    call.opened = openSeniorTab({home, env, card, adviceId: call.adviceId, dir: call.dir,
+      seat: call.seat, followScript, rottie, suffix: calls.length > 1 ? call.value.model : undefined});
+    call.tab = call.opened.tab === 'opened' ? {tab: 'opened'} : {tab: call.opened.tab, tabReason: call.opened.tabReason};
+  };
   for (const call of calls) {
     if (call.refused) {
       // 관문에서 거절된 칸은 탭을 열지 않는다. 시간 초과로 거절된 칸은 이름을 가른다(gate-timeout).
       call.tab = {tab: 'skipped', tabReason: call.refused.reason === 'timeout' ? 'gate-timeout' : 'gate-failed'};
       continue;
     }
-    call.opened = openSeniorTab({home, env, card, adviceId: call.adviceId, dir: call.dir,
-      seat: call.seat, followScript, rottie, suffix: calls.length > 1 ? call.value.model : undefined});
-    call.tab = call.opened.tab === 'opened' ? {tab: 'opened'} : {tab: call.opened.tab, tabReason: call.opened.tabReason};
+    // 대화형 탭은 질문을 제출한 뒤에 연다: 읽기 전용 클라이언트가 붙어 있으면 tmux 3.8의 send-keys Enter가 거절되기 때문이다.
+    // 제출 전에는 '아직 안 열었다'로 두고, 제출 표지(submitted.json)를 보면 callSession이 연다.
+    if (interactive) { call.tab = {tab: 'skipped', tabReason: 'not-submitted'}; continue; }
+    openCallTab(call);
   }
   // 대화형 호출 하나: 질문 넣기 → 폴링 → 끄기를 프로세스 하나(senior-session-run.mjs)로 감싸 기존 호출 프로세스로 돌린다.
   // 판정은 그 프로세스가 쓴 outcome.json의 낱말이다. 판정 없이 끝났으면 상한 표시가 있을 때만 timeout, 아니면 call-failed다.
@@ -271,7 +280,15 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     // 시간 상한은 호출 시작부터 잰다. 준비·관문이 끝났을 때 이미 지났으면 질문 프로세스를 띄우지 않는다(남은 시간을 올려 잡지 않는다).
     const left = started + timeoutS * 1000 - now();
     if (left <= 0) return {reason: 'timeout', detail: 'deadline:before-ask', stderr: 'deadline:before-ask'};
-    const result = await spawn(sessionRunCommand(call.dir), {input: '', timeout: left + SESSION_GRACE_MS, reportComplete: () => false, env: {...env, KADAN_HOME: home}});
+    // 질문 제출 표지가 생기면 그때 탭을 연다(Enter가 받아들여진 뒤라 이 세션에는 더 보낼 키가 없다). 호출이 먼저 끝났으면 열지 않는다.
+    const submitted = path.join(call.dir, SUBMITTED_FILE);
+    let tried = false;
+    const watch = setInterval(() => { if (!tried && fs.existsSync(submitted)) { tried = true; openCallTab(call); } }, tabPollMs);
+    let result;
+    try {
+      result = await spawn(sessionRunCommand(call.dir), {input: '', timeout: left + SESSION_GRACE_MS, reportComplete: () => false, env: {...env, KADAN_HOME: home}});
+    } finally { clearInterval(watch); }
+    if (!tried) call.tab = {tab: 'skipped', tabReason: fs.existsSync(submitted) ? 'finished-before-open' : 'not-submitted'};
     const outcome = readOutcome(call.dir);
     const timedOut = result.error?.code === 'ETIMEDOUT' || String(result.stderr ?? '').includes('KADAN_JUDGE_TIMEOUT=1');
     const reason = outcome && outcome.reason !== 'interrupted' ? outcome.reason : timedOut ? 'timeout' : 'call-failed';

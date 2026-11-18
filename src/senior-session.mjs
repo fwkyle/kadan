@@ -11,13 +11,15 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {acquireDirLock} from './dir-lock.mjs';
-import {checkHumanIdle, ensureTmuxConf, sendTmux, tmuxClientEnv} from './floor-tmux.mjs';
+import {ensureTmuxConf, sendTmux, tmuxClientEnv} from './floor-tmux.mjs';
 import {splitGhostText} from './ghost-text.mjs';
 import {ALLOW_LIVE_FLOOR_ENV, isDefaultHome} from './live-floor-guard.mjs';
 import {composerHolds, composerReady, limitScreen, markerOf, readAnswerText, screenWorking,
   ANSWER_LIMIT_BYTES} from './senior-screen.mjs';
 
 export const SENIOR_MODE_FILE = 'senior-mode';
+// 질문이 제출되면 호출 폴더에 이 파일이 생긴다. 부른 쪽(kadan senior)이 이것을 보고 로티 읽기 전용 탭을 연다.
+export const SUBMITTED_FILE = 'submitted.json';
 export const SENIOR_SOCKET = 'kadan-senior';
 export const SENIOR_SEATS = 4;
 export const SESSION_ENTRY = fileURLToPath(new URL('./senior-session-run.mjs', import.meta.url));
@@ -84,8 +86,7 @@ export function seniorTmux({socket, home, env = process.env, spawn = spawnSync})
     // signal: 그 tmux 호출이 신호로 죽었다(같은 프로세스 묶음에 TERM이 온 경우). 부른 쪽이 죽은 세션과 가를 수 있게 싣는다.
     if (result.status !== 0) {
       const error = new Error(`tmux ${args[0]} 실패: ${why || result.signal || ''}`);
-      // status·stderr: tmux가 돌려준 종료 코드와 표준 오류 원문. 부른 쪽이 문구 일부가 아니라 원문 그대로를 가르는 데 쓴다.
-      throw Object.assign(error, {signal: result.signal ?? null, status: result.status, stderr: why});
+      throw Object.assign(error, {signal: result.signal ?? null});
     }
     return result.stdout;
   };
@@ -310,9 +311,8 @@ export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, 
 }
 
 // 판정용 화면: 스크롤 기록까지(-S) 색 포함(-e)으로 떠서 입력칸의 흐린 추천 문구를 뺀다. 감긴 줄은 이어 붙인다(-J).
-// target: 화면을 읽을 칸. 기본은 세션의 그때 활성 칸이고, 대체 Enter는 방금 확인한 pane id를 넘겨 같은 칸만 읽는다.
-export function captureSeat(run, session, target = `=${session}:`) {
-  return splitGhostText(run(['capture-pane', '-e', '-p', '-J', '-S', '-400', '-t', target])).judge;
+export function captureSeat(run, session) {
+  return splitGhostText(run(['capture-pane', '-e', '-p', '-J', '-S', '-400', '-t', `=${session}:`])).judge;
 }
 
 // 세션의 pane이 기록한 그 프로세스로 살아 있는가. 반환: {alive: true} | {alive: false, signal?}.
@@ -335,9 +335,6 @@ function paneAlive(run, seat) {
 // 던져진 오류가 '신호로 죽은 tmux 호출'이면 그 신호 이름. sendTmux가 정리 실패를 묶어 던진 경우도 본다.
 const signalOf = error => error?.signal ?? error?.errors?.find(inner => inner?.signal)?.signal ?? null;
 
-// tmux 3.8이 읽기 전용 클라이언트 때문에 send-keys를 거절한 것인가. 문구 일부가 아니라 종료 코드 1과 표준 오류 원문이 정확히 같을 때만이다.
-export const isReadOnlyRefusal = error => error?.status === 1 && error?.stderr === 'client is read-only';
-
 // 한 줄을 넣는다. 바닥의 sendTmux(붙여넣기 → PID 재확인 → Enter)를 그대로 쓰되 전용 소켓 실행 함수와 기대 pane PID를 넘기고,
 // 그 실행 함수의 키 명령 직전에 화면을 새로 읽어 검사한다. 허용하는 키는 붙여넣기와 Enter뿐이다.
 // 시간 상한(호출 시작부터 잰 절대 마감 seat.deadlineAt)도 키 명령 직전마다 다시 본다: 끝났으면 그 키를 보내지 않는다(why: deadline).
@@ -346,52 +343,6 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
   const deny = (stage, why) => {
     const withheld = `시니어 세션에 키를 보내지 않는다(${stage}: ${why})`;
     return fail('KADAN_SENIOR_KEY_WITHHELD', withheld, {stage, why, withheld});
-  };
-  // 대체 Enter: 날것의 CR 하나를 붙여넣는다. 일반 Enter와 같은 확인을 CR 바로 앞에서 다시 한다 —
-  // 첫 거절 뒤나 버퍼를 만드는 사이에 화면(업데이트 창 등)·pane 세대·모드·마감이 바뀔 수 있다(2026-11-18 검수 exec-efb5f526).
-  // 확인한 pane id로 붙여넣고(세션 이름이 아니라), 하나라도 아니거나 확인할 수 없으면 CR을 보내지 않는다. 만든 버퍼는 실패해도 지운다.
-  const enterByPaste = () => {
-    if (expired()) throw deny('enter', 'deadline');
-    const name = `kadan-senior-enter-${process.pid}-${seat.session}-${process.hrtime.bigint().toString(36)}`.replace(/[^A-Za-z0-9_-]/gu, '_');
-    run(['load-buffer', '-b', name, '-'], '\r');
-    try {
-      const paneId = recheckBeforeCr();
-      return run(['paste-buffer', '-d', '-b', name, '-t', paneId]);
-    } catch (error) {
-      // 붙여넣기에 성공하면 -d가 버퍼를 지운다. 여기까지 왔으면 CR은 나가지 않았으니 남은 자기 버퍼만 지운다.
-      try { run(['delete-buffer', '-b', name]); }
-      catch (cleanup) {
-        const combined = new AggregateError([error, cleanup], `${error.message}; 대체 Enter 버퍼 정리도 실패`);
-        // 바깥에서 메시지를 다시 쓸 때 정리 실패가 사라지지 않게 cleanupFailure에도 싣는다.
-        throw Object.assign(combined, {code: error.code, stage: error.stage, why: error.why, withheld: error.withheld,
-          cleanupFailure: cleanup.message, signal: error.signal ?? null});
-      }
-      throw error;
-    }
-  };
-  // CR 직전 확인: pane id·PID·생존·기록보기 모드를 한 번의 조회로 보고(같은 칸의 값이고, PID가 기록과 같아야 그 칸이 codex다), 사람 입력·화면(자기 한 줄·선택 창·일하는 표시)·마감을 본다.
-  // 마감 확인이 맨 마지막이고, 그 뒤에는 붙여넣기 명령뿐이다. 반환: 방금 확인한 pane id.
-  const recheckBeforeCr = () => {
-    try {
-      const state = String(run(['display-message', '-p', '-t', `=${seat.session}:`,
-        '#{pane_id}|#{pane_pid}|#{pane_dead}|#{pane_in_mode}'])).trim();
-      const [paneId, pid, dead, mode] = state.split('|');
-      if (!/^%\d+$/u.test(paneId ?? '')) throw deny('enter', 'pane-unknown');
-      if (String(pid) !== String(seat.panePid)) throw deny('enter', 'pid-differs');
-      if (dead !== '0') throw deny('enter', 'pane-dead');
-      if (mode !== '0') throw deny('enter', 'copy-mode');
-      try { checkHumanIdle(seat.session, run); }
-      catch (error) { throw deny('enter', error.code === 'KADAN_HUMAN_ACTIVE' ? 'human-active' : 'human-unknown'); }
-      // 화면은 방금 확인한 pane id로 읽는다. 세션 이름으로 다시 찾으면 그사이 활성 칸이 바뀌어 다른 칸의 화면을 볼 수 있다.
-      const verdict = composerHolds(captureSeat(run, seat.session, paneId), text);
-      if (!verdict.ok) throw deny('enter', verdict.why);
-      if (expired()) throw deny('enter', 'deadline');
-      return paneId;
-    } catch (error) {
-      // 우리가 막은 것은 그대로, 조회 자체가 실패해 확인할 수 없는 것은 막은 것으로 센다(실패 닫힘). 신호로 죽은 호출은 그대로 던진다.
-      if (error.code === 'KADAN_SENIOR_KEY_WITHHELD' || signalOf(error)) throw error;
-      throw deny('enter', 'recheck-failed');
-    }
   };
   const guarded = (args, input) => {
     // 순서가 중요하다: 화면 읽기(외부 tmux 호출이라 시간이 든다)와 판정을 먼저 끝내고, 남은 시간은 키 명령 바로 앞에서 본다.
@@ -405,14 +356,6 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
       const verdict = composerHolds(captureSeat(run, seat.session), text);
       if (expired()) throw deny('enter', 'deadline');
       if (!verdict.ok) throw deny('enter', verdict.why);
-      // 읽기 전용 로티 탭이 붙은 세션에서 tmux 3.8의 send-keys는 붙은 클라이언트를 대상으로 잡고 거절한다
-      // (종료 코드 1, 표준 오류 정확히 `client is read-only` — 3.6은 통과. 2026-11-18 CI macOS 실패와 3.8 직접 재현).
-      // 거절은 키가 나가기 전이므로 같은 Enter 한 번을 붙여넣기 길로 보낸다(paste-buffer는 3.8에서도 통과한다).
-      try { return run(args, input); }
-      catch (error) {
-        if (!isReadOnlyRefusal(error)) throw error;
-        return enterByPaste();
-      }
     }
     return run(args, input);
   };
@@ -425,8 +368,7 @@ export function sendLine(seat, text, {run, keyGapS = SESSION_TIMING.keyGapS, spa
     if (error.code === 'KADAN_SENIOR_KEY_WITHHELD') {
       const pasted = error.stage === 'enter';
       error.delivery = pasted ? 'unknown' : 'not-sent';
-      error.message = `${error.withheld}${pasted ? ' — 본문은 붙었고 Enter는 보내지 않았다. 다시 넣지 않는다' : ''}` +
-        (error.cleanupFailure ? `; 대체 Enter 버퍼 정리도 실패(${error.cleanupFailure})` : '');
+      error.message = `${error.withheld}${pasted ? ' — 본문은 붙었고 Enter는 보내지 않았다. 다시 넣지 않는다' : ''}`;
     }
     throw error;
   }
@@ -502,7 +444,7 @@ export function readAnswerFile(file, marker) {
 // 이미 제출한 호출은 같은 폴링에서 완성된 답이 timeout보다 먼저다. 제출 전에 상한이 끝났으면 새 입력 없이 timeout이다.
 // 처음의 쉬는 화면을 처리 완료로 세지 않는다. 너무 빨리 끝나 일하는 표시를 못 보면 ok로 받지 않는다(오성공 방지).
 export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, timing = seat.timing ?? SESSION_TIMING,
-  spawn = spawnSync}) {
+  spawn = spawnSync, onSubmitted = () => {}}) {
   // 상한이 이미 끝났으면 아무것도 넣지 않는다. 넣는 도중(붙여넣기 직전·Enter 직전)에 끝나도 그 키는 나가지 않는다.
   if (now() >= seat.deadlineAt) return {reason: 'timeout', detail: 'deadline:before-ask'};
   try { sendLine(seat, seat.line, {run, keyGapS: timing.keyGapS, spawn, now}); }
@@ -512,6 +454,8 @@ export async function askSeat(seat, {run, now = Date.now, sleep = defaultSleep, 
     return {reason: 'call-failed', detail: `key:${keyWhy(error)} — ${error.message}`};
   }
   const submittedAt = now();
+  // 질문이 들어갔다(Enter까지 tmux가 받았다). 이 뒤로는 이 세션에 키를 보내지 않는다 — 읽기 전용 탭은 이 알림을 받은 뒤에 붙는다.
+  try { onSubmitted(); } catch { /* 알림은 꾸밈이다: 실패해도 호출은 그대로 간다 */ }
   const answerFile = path.join(seat.out, 'result.txt');
   let sawWorking = false, idle = 0;
   for (;;) {

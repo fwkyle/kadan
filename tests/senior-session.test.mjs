@@ -130,38 +130,50 @@ test('정상: 관문을 지나 한 줄을 넣고 일하는 표시 뒤 빈 입력
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${s.run.socket} -f `)), []);
 });
 
-test('읽기 전용 탭 같은 작은 클라이언트가 붙어도 세션 크기는 그대로이고 질문이 정상 제출된다(검수 exec-276744c7 발견 1)', {skip}, async t => {
+test('질문을 제출한 뒤 읽기 전용 탭 같은 작은 클라이언트가 붙어도 세션 크기는 그대로이고, 붙은 뒤에는 키를 하나도 보내지 않으며 답이 끝까지 온다(tmux 3.8 대응)', {skip}, async t => {
   const s = setup(t);
   const [seat] = s.open();
   const size = () => s.run(['display-message', '-p', '-t', `=${seat.session}:`, '#{window_width}x#{window_height}']).trim();
   assert.equal(size(), '150x50');
-  // 로티 탭을 흉내 낸다: 60x20 PTY(바깥 격리 tmux)에서 `attach -r`를 도는 클라이언트. 로티·운영 tmux·진짜 codex는 쓰지 않는다.
   const outer = `${s.run.socket}-view`;
   const outerEnv = {...process.env}; delete outerEnv.TMUX; delete outerEnv.TMUX_PANE;
   t.after(() => {
     process.stderr.write(`격리 소켓 kill-server: -L ${outer}\n`);
     spawnSync(REAL_TMUX, ['-L', outer, 'kill-server'], {env: outerEnv});
   });
-  const view = spawnSync(REAL_TMUX, ['-L', outer, '-f', '/dev/null', 'new-session', '-d', '-s', 'view', '-x', '60', '-y', '20',
-    `${REAL_TMUX} -L ${s.run.socket} attach -r -t '=${seat.session}'`], {env: outerEnv, encoding: 'utf8'});
-  assert.equal(view.status, 0, view.stderr);
+  assert.deepEqual(await passGate(seat, s.deps), {ok: true});
+  // 로티 탭을 흉내 낸다: 60x20 PTY(바깥 격리 tmux)에서 `attach -r`를 도는 클라이언트. 로티·운영 tmux·진짜 codex는 쓰지 않는다.
+  // 질문이 제출됐다는 알림(onSubmitted)을 받은 순간에만 붙인다 — 제품(kadan senior)이 탭을 여는 시점과 같다.
+  let viewStatus = null;
+  const onSubmitted = () => {
+    fs.appendFileSync(s.tmuxLog, '# TAB-ATTACHED\n'); // 이 줄 뒤의 tmux 호출만 '탭이 붙은 뒤'다
+    viewStatus = spawnSync(REAL_TMUX, ['-L', outer, '-f', '/dev/null', 'new-session', '-d', '-s', 'view', '-x', '60', '-y', '20',
+      `${REAL_TMUX} -L ${s.run.socket} attach -r -t '=${seat.session}'`], {env: outerEnv, encoding: 'utf8'});
+  };
+  const outcome = await askSeat(seat, {...s.deps, onSubmitted});
+  const why = () => JSON.stringify({outcome, keys: s.keys('m1'), size: size(), screen: s.run.try(['capture-pane', '-p', '-t', `=${seat.session}:`]).stdout});
+  assert.equal(viewStatus?.status, 0, viewStatus?.stderr);
+  assert.deepEqual([outcome.reason, outcome.detail], ['ok', undefined], why());
+  assert.deepEqual(s.keys('m1').submitted, [ASK_LINE]);
+  assert.equal(s.keys('m1').enter, 1);
+  // 읽기 전용 클라이언트가 실제로 붙었다(답을 기다리는 동안 붙어 있었다).
   let attached = false;
   for (let i = 0; i < 100 && !attached; i++) {
     attached = s.run.try(['list-clients', '-t', `=${seat.session}:`, '-F', '#{client_readonly}']).stdout.includes('1');
     if (!attached) await sleep(50);
   }
-  assert.ok(attached, '읽기 전용 클라이언트가 붙지 않았다');
-  await sleep(300);
+  assert.ok(attached, `읽기 전용 클라이언트가 붙지 않았다 ${why()}`);
   assert.equal(size(), '150x50', '붙은 작은 클라이언트가 창 크기를 바꾸면 안 된다');
-  assert.deepEqual(await passGate(seat, s.deps), {ok: true});
-  assert.equal(size(), '150x50');
-  const outcome = await askSeat(seat, s.deps);
-  const why = () => JSON.stringify({outcome, keys: s.keys('m1'), size: size(), screen: s.run.try(['capture-pane', '-p', '-t', `=${seat.session}:`]).stdout});
-  assert.deepEqual([outcome.reason, outcome.detail], ['ok', undefined], why());
-  assert.equal(size(), '150x50', '질문을 넣은 뒤에도 같다');
-  assert.deepEqual(s.keys('m1').submitted, [ASK_LINE]);
-  assert.equal(s.keys('m1').enter, 1);
+  // 탭이 붙은 뒤에는 이 세션에 키(send-keys·붙여넣기)를 보내지 않는다. 끝 판정 대기·끄기는 읽기·종료 명령뿐이다.
+  const calls = fs.readFileSync(s.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  const mark = calls.indexOf('# TAB-ATTACHED');
+  assert.ok(mark > 0, '붙인 시점 표시가 있다');
+  assert.ok(calls.slice(0, mark).some(line => / send-keys .*Enter$/u.test(line)), '탭이 붙기 전에 Enter가 나갔다');
+  const afterTab = calls.slice(mark + 1);
+  assert.ok(afterTab.length > 0);
+  assert.deepEqual(afterTab.filter(line => /\b(send-keys|paste-buffer|load-buffer)\b/u.test(line)), [], '탭이 붙은 뒤 키 명령 0회');
   closeSeat(seat, s.deps);
+  assert.deepEqual(s.sessions(), []);
 });
 
 test('키 조건 (가): 시작 화면이 업데이트 선택 창·번호 선택 창이면 키를 하나도 보내지 않고 관문에서 끝난다', {skip}, async t => {
@@ -470,245 +482,28 @@ test('부분 생성 실패 정리(F1): 기록을 쓰기 전 단계도 방금 읽
 });
 
 // tmux 없이 화면을 글로 흉내 낸다(가짜 시계 시험용). 붙여넣은 글은 입력칸에 보이고 Enter를 받으면 제출된다.
-// afterEnter(제출한 줄, 그 뒤 몇 번째 화면 읽기인가) → 화면 글. on(명령 이름, 인자)은 시계·상태를 움직이는 자리다.
-// state: 바깥에서 바꾸는 pane 상태(id·PID·생존·기록보기 모드)와 입력칸 화면 덮어쓰기(screen)·사람 입력(clients).
-// readOnlySendKeys: send-keys를 tmux 3.8의 읽기 전용 거절 그대로(종료 코드 1, 표준 오류 원문 `client is read-only`)로 던진다.
-// calls: 모든 호출의 인자. buffers: 지금 남아 있는 이름 붙은 버퍼. pasteTargets: 붙여넣기 대상.
-const READ_ONLY = stderr => Object.assign(new Error(`tmux send-keys 실패: ${stderr}`), {status: 1, stderr, signal: null});
-function scripted({afterEnter = () => null, on = () => {}, readOnlySendKeys = false, readOnlyStderr = 'client is read-only'} = {}) {
+// afterEnter(제출한 줄, 그 뒤 몇 번째 화면 읽기인가) → 화면 글. on(명령 이름)은 시계를 움직이는 자리다.
+function scripted({afterEnter = () => null, on = () => {}} = {}) {
   const STATUS = '  fake low · ~/fake/out';
-  const keys = [], calls = [], pasteTargets = [];
-  const buffers = new Map();
-  // 칸 둘: %1이 기록한 codex 칸(pid·screen 등은 이 칸 값)이고 %2는 같은 세션의 다른 칸이다. active는 세션 이름이 가리키는 칸이다.
-  // otherScreen: %2의 화면. afterLookup: 세션 이름으로 pane id를 물은 직후에 불린다(확인 도중 활성 칸이 바뀌는 자리).
-  const state = {paneId: '%1', pid: '123', dead: '0', mode: '0', screen: null, clients: '', active: '%1',
-    otherScreen: `› ${ASK_LINE}\n\n  fake low · ~/fake/out\n`, afterLookup: () => {}};
-  let text = '', submitted = null, reads = 0;
+  const keys = [];
+  let buffer = '', text = '', submitted = null, reads = 0;
   const idle = () => `› ${text}\n\n${STATUS}\n`;
-  const bufferName = args => args[args.indexOf('-b') + 1];
   const call = (args, input) => {
-    calls.push(args);
-    on(args[0], args);
+    on(args[0]);
     switch (args[0]) {
-      case 'capture-pane': {
-        const target = args[args.indexOf('-t') + 1];
-        const pane = target.startsWith('%') ? target : state.active;
-        calls.at(-1).pane = pane; // 이 읽기가 실제로 본 칸
-        if (pane === '%2') return state.otherScreen;
-        return state.screen ?? (submitted != null ? afterEnter(submitted, reads++) : null) ?? idle();
-      }
-      case 'display-message': {
-        const format = args.at(-1);
-        if (format === '#{pane_in_mode}') return state.mode;
-        if (format.includes('#{pane_id}')) {
-          const seen = state.active === '%1' ? `${state.paneId}|${state.pid}|${state.dead}|${state.mode}` : '%2|999|0|0';
-          state.afterLookup();
-          return seen;
-        }
-        return `${state.pid}|${state.dead}`;
-      }
-      case 'list-clients': return state.clients;
-      case 'load-buffer': buffers.set(bufferName(args), input); return '';
-      case 'delete-buffer':
-        if (!buffers.delete(bufferName(args))) throw Object.assign(new Error('tmux delete-buffer 실패: no buffer'), {status: 1});
-        return '';
-      case 'paste-buffer': {
-        const name = bufferName(args);
-        if (!buffers.has(name)) throw Object.assign(new Error('tmux paste-buffer 실패: no buffer'), {status: 1});
-        const body = buffers.get(name);
-        if (args.includes('-d')) buffers.delete(name);
-        pasteTargets.push(args[args.indexOf('-t') + 1]);
-        // 날것의 CR 하나는 Enter다(읽기 전용 클라이언트 때문에 send-keys가 거절될 때의 길).
-        if (body === '\r') { keys.push('Enter-by-paste'); submitted = text; text = ''; reads = 0; return ''; }
-        text = body; keys.push('paste'); return '';
-      }
-      case 'send-keys':
-        if (readOnlySendKeys) throw READ_ONLY(readOnlyStderr);
-        keys.push(args.at(-1)); submitted = text; text = ''; reads = 0; return '';
+      case 'capture-pane': return (submitted != null ? afterEnter(submitted, reads++) : null) ?? idle();
+      case 'display-message': return args.at(-1) === '#{pane_in_mode}' ? '0' : '123|0';
+      case 'load-buffer': buffer = input; return '';
+      case 'paste-buffer': text = buffer; keys.push('paste'); return '';
+      case 'send-keys': keys.push(args.at(-1)); submitted = text; text = ''; reads = 0; return '';
       default: return '';
     }
   };
   const run = Object.assign(call, {try: args => ({status: 0, stdout: call(args), stderr: ''}), socket: 'scripted', home: null});
-  return {run, keys, calls, state, pasteTargets, buffers};
+  return {run, keys};
 }
 const FAST = {...TIMING, pollMs: 1, settleMs: 5, keyGapS: '0', idleConfirm: 2};
 const noSleepSpawn = () => ({status: 0, stdout: '', stderr: ''});
-
-test('읽기 전용 클라이언트 때문에 send-keys가 거절되면 같은 Enter 한 번을 붙여넣기 길로 보내고, 다른 실패는 그대로 던진다(tmux 3.8)', async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksr-'));
-  const seat = {session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000};
-  fs.writeFileSync(path.join(out, 'result.txt'), `결론: 답\n${markerOf(TOKEN)}\n`);
-  const working = (line, read) => read < 2 ? `› ${line}\n\n• Working (1s • esc to interrupt)\n\n› \n\n  fake low · ~/fake/out\n` : null;
-  const ro = scripted({afterEnter: working, readOnlySendKeys: true});
-  assert.deepEqual(await askSeat(seat, {run: ro.run, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn}),
-    {reason: 'ok', answer: '결론: 답'});
-  assert.deepEqual(ro.keys, ['paste', 'Enter-by-paste'], '붙여넣기 1회 + Enter 1회(붙여넣기 길), 다시 보내지 않는다');
-  // 상한이 Enter 직전에 끝났으면 거절돼도 새 키를 보내지 않는다.
-  let clock = 1000;
-  const late = scripted({readOnlySendKeys: true});
-  const tick = () => { clock = 10_000; return {status: 0, stdout: '', stderr: ''}; };
-  const outcome = await askSeat(seat, {run: late.run, now: () => clock, sleep: async () => {}, timing: FAST, spawn: tick});
-  assert.deepEqual(late.keys, ['paste']);
-  assert.deepEqual(outcome, {reason: 'timeout', detail: 'deadline:enter'});
-  // 읽기 전용이 아닌 다른 send-keys 실패는 붙여넣기 길로 돌리지 않는다.
-  const other = scripted({});
-  const failing = Object.assign((args, input) => { if (args[0] === 'send-keys') throw new Error('tmux send-keys 실패: no such session'); return other.run(args, input); }, {try: other.run.try, socket: 'scripted', home: null});
-  const failed = await askSeat(seat, {run: failing, now: () => 1000, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(failed.reason, 'call-failed');
-  assert.deepEqual(other.keys, ['paste'], '다른 실패는 Enter를 대신 보내지 않는다');
-});
-
-// tmux 3.8 대체 Enter(붙여넣기 길)도 일반 Enter와 같은 확인을 CR 직전에 다시 한다(2026-11-18 검수 exec-efb5f526 재현):
-// 첫 Enter가 거절된 뒤, 또는 버퍼를 만드는 사이에 상태가 바뀌면 CR을 보내지 않는다.
-// 시계는 호출마다 조금씩 간다: 일이 끝나지 않는 가짜 화면에서도 폴링이 마감에서 끝난다(수정 전 코드에서 무한 반복·메모리 폭주를 막는다).
-const ticking = () => { let t = 1000; return () => (t += 5); };
-const CR_SEAT = out => ({session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000});
-const UPDATE_DIALOG = `› ${ASK_LINE}\n\n  Update available · 0.0.1 → 0.0.2\n\n› 1. Update now (runs \`npm install -g fake-codex\`)\n  2. Skip\n  3. Skip until next version\n\n  enter continue · esc skip\n`;
-const CHOICE_DIALOG = `› ${ASK_LINE}\n\n  Update Model Permissions\n\n› 1. Ask for approval  Read and edit workspace files\n  2. Approve for me\n  3. Full Access\n\n  enter select · esc back\n`;
-// 대체 Enter의 버퍼를 만드는 호출인가(본문 붙여넣기용 버퍼와 가른다).
-const isEnterBuffer = (name, args) => name === 'load-buffer' && args[args.indexOf('-b') + 1].startsWith('kadan-senior-enter-');
-const CR_REFUSALS = [
-  ['업데이트 선택 창', {screen: UPDATE_DIALOG}],
-  ['번호 선택 창', {screen: CHOICE_DIALOG}],
-  ['질문이 다른 글로 바뀜', {screen: '› 다른 글을 적었다\n\n  fake low · ~/fake/out\n'}],
-  ['일하는 표시', {screen: `› ${ASK_LINE}\n\n• Working (1s • esc to interrupt)\n\n  fake low · ~/fake/out\n`}],
-  ['pane PID 123→456', {pid: '456'}],
-  ['pane이 죽음', {dead: '1'}],
-  ['복사 모드', {mode: '1'}],
-  ['사람이 방금 입력함', {clients: () => { const at = Math.floor(Date.now() / 1000); return `${at - 100} ${at}`; }}],
-  ['사람 입력 시각을 모름', {clients: 'not-a-number'}],
-];
-
-test('tmux 3.8 대체 Enter: CR 직전에 pane 세대·모드·사람 입력·화면·마감을 다시 확인하고, 하나라도 아니면 CR 0회·call-failed', async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksc-'));
-  const seat = CR_SEAT(out);
-  // 대조: 아무것도 바뀌지 않으면 CR이 한 번 나가고, 확인한 pane(%1)으로 지정한다(세션 이름이 아니라).
-  const fine = scripted({readOnlySendKeys: true});
-  await askSeat(seat, {run: fine.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.deepEqual(fine.keys, ['paste', 'Enter-by-paste']);
-  assert.deepEqual(fine.pasteTargets, ['=senior-fake:', '%1'], '본문은 세션, CR은 방금 확인한 pane id로 보낸다');
-  assert.equal(fine.buffers.size, 0, '자기 버퍼가 남지 않는다');
-  for (const [label, change] of CR_REFUSALS) {
-    const fake = scripted({readOnlySendKeys: true, on: (name, args) => {
-      // 첫 Enter가 거절된 직후, 대체 버퍼를 만드는 사이에 바뀐다.
-      if (isEnterBuffer(name, args)) for (const [key, value] of Object.entries(change)) fake.state[key] = typeof value === 'function' ? value() : value;
-    }});
-    const outcome = await askSeat(seat, {run: fake.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-    assert.equal(outcome.reason, 'call-failed', `${label}: ${JSON.stringify(outcome)}`);
-    assert.deepEqual(fake.keys, ['paste'], `${label}: CR을 보내지 않는다`);
-    assert.deepEqual(fake.pasteTargets, ['=senior-fake:'], `${label}: 대체 붙여넣기 명령도 나가지 않는다`);
-    assert.equal(fake.buffers.size, 0, `${label}: 만든 CR 버퍼를 지운다`);
-  }
-  // 확인할 수 없으면(pane 조회 실패) 보내지 않는다.
-  const blind = scripted({readOnlySendKeys: true, on: (name, args) => {
-    if (name === 'display-message' && args.at(-1).includes('#{pane_id}')) throw new Error('tmux display-message 실패: server exited unexpectedly');
-  }});
-  const unseen = await askSeat(seat, {run: blind.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(unseen.reason, 'call-failed');
-  assert.deepEqual(blind.keys, ['paste']);
-  assert.equal(blind.buffers.size, 0);
-  // 버퍼를 만드는 사이 마감이 지나면 새 키 없이 timeout이다.
-  let clock = 1000;
-  const slow = scripted({readOnlySendKeys: true, on: (name, args) => { if (isEnterBuffer(name, args)) clock = 10_000; }});
-  const late = await askSeat(seat, {run: slow.run, now: () => clock, sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.deepEqual(late, {reason: 'timeout', detail: 'deadline:enter'});
-  assert.deepEqual(slow.keys, ['paste']);
-  assert.equal(slow.buffers.size, 0);
-});
-
-test('tmux 3.8 대체 Enter: 확인한 칸(pane id)의 화면만 읽고 그 칸에만 보낸다 — 확인 도중 활성 칸이 바뀌어도 다른 칸의 화면으로 통과하지 않는다', async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksp-'));
-  const seat = CR_SEAT(out);
-  // pane id를 대상으로 한 화면 읽기(대체 Enter의 재확인)가 본 칸들. 이후의 일반 폴링은 세션 이름으로 읽으므로 가린다.
-  const pinnedReads = fake => fake.calls.filter(args => args[0] === 'capture-pane' && args.at(-1).startsWith('%')).map(args => args.pane);
-  // 활성 칸이 B(%2)로 바뀐다: 확인한 칸 A(%1)에는 선택 창, B에는 기대한 질문이 있다. 세션 이름으로 읽으면 B를 보고 통과한다.
-  const swapped = scripted({readOnlySendKeys: true});
-  swapped.state.afterLookup = () => { swapped.state.active = '%2'; swapped.state.screen = UPDATE_DIALOG; };
-  const outcome = await askSeat(seat, {run: swapped.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(outcome.reason, 'call-failed', JSON.stringify(outcome));
-  assert.deepEqual(swapped.keys, ['paste'], 'A의 선택 창 앞에서 CR을 보내지 않는다');
-  assert.deepEqual(swapped.pasteTargets, ['=senior-fake:']);
-  assert.deepEqual(pinnedReads(swapped), ['%1'], '확인에 쓴 화면은 확인한 칸(%1)이다');
-  assert.equal(swapped.buffers.size, 0);
-  // 대조: 활성 칸이 바뀌어도 확인한 칸 A의 화면이 정상이면 CR은 그 칸(%1)에만 한 번 나간다.
-  const calm = scripted({readOnlySendKeys: true});
-  calm.state.afterLookup = () => { calm.state.active = '%2'; calm.state.otherScreen = UPDATE_DIALOG; };
-  await askSeat(seat, {run: calm.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.deepEqual(calm.keys, ['paste', 'Enter-by-paste']);
-  assert.deepEqual(calm.pasteTargets, ['=senior-fake:', '%1'], '다른 칸(%2)의 선택 창은 보지 않고 확인한 칸에만 보낸다');
-  assert.deepEqual(pinnedReads(calm), ['%1']);
-});
-
-test('tmux 3.8 대체 Enter: 안전 검사 거절과 버퍼 정리 실패가 함께 나면 실패 상세에 둘 다 남는다', async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksx-'));
-  const seat = CR_SEAT(out);
-  const both = scripted({readOnlySendKeys: true, on: (name, args) => {
-    if (isEnterBuffer(name, args)) both.state.screen = UPDATE_DIALOG;
-    if (name === 'delete-buffer') throw Object.assign(new Error('tmux delete-buffer 실패: gone'), {status: 1, stderr: 'gone'});
-  }});
-  const outcome = await askSeat(seat, {run: both.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(outcome.reason, 'call-failed');
-  assert.deepEqual(both.keys, ['paste'], 'CR 0회');
-  assert.match(outcome.detail, /enter: /u, '안전 검사 거절 이유가 남는다');
-  assert.match(outcome.detail, /버퍼 정리도 실패\(tmux delete-buffer 실패: gone\)/u, '정리 실패 이유도 남는다');
-});
-
-test('tmux 3.8 대체 Enter: 읽기 전용 거절은 tmux 원문(종료 코드 1·`client is read-only`)과 정확히 같을 때만 길을 바꾸고, 다른 실패는 CR 0회', async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'kso-'));
-  const seat = CR_SEAT(out);
-  // 문구가 덧붙은 다른 진단은 읽기 전용 거절이 아니다.
-  for (const stderr of ["can't find client: client is read-only", 'client is read-only (extra)', 'no server running']) {
-    const fake = scripted({readOnlySendKeys: true, readOnlyStderr: stderr});
-    const outcome = await askSeat(seat, {run: fake.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-    assert.equal(outcome.reason, 'call-failed', stderr);
-    assert.deepEqual(fake.keys, ['paste'], stderr);
-    assert.ok(!fake.calls.some(args => args[0] === 'load-buffer' && args.includes('-b') && args[args.indexOf('-b') + 1].startsWith('kadan-senior-enter-')),
-      `${stderr}: 대체 버퍼를 만들지 않는다`);
-  }
-  // 종료 코드가 1이 아니면 같은 문구여도 대체하지 않는다.
-  const code2 = scripted({on: (name, args) => {
-    if (name === 'send-keys') throw Object.assign(new Error('tmux send-keys 실패: client is read-only'), {status: 2, stderr: 'client is read-only'});
-  }});
-  assert.equal((await askSeat(seat, {run: code2.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn})).reason, 'call-failed');
-  assert.deepEqual(code2.keys, ['paste']);
-});
-
-test('tmux 3.8 대체 Enter 버퍼: 호출마다 고유한 이름을 쓰고, 붙여넣기가 실패해도 자기 버퍼를 지운다(남의 버퍼는 건드리지 않는다)', async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksb-'));
-  const seat = CR_SEAT(out);
-  const names = [];
-  const watch = (fake, extra = () => {}) => (name, args) => {
-    if (name === 'load-buffer' && args[args.indexOf('-b') + 1].startsWith('kadan-senior-enter-')) names.push(args[args.indexOf('-b') + 1]);
-    extra(name, args, fake);
-  };
-  // 붙여넣기(대체 CR)가 실패하는 호출: 만든 버퍼를 지운다. 같은 이름이 아닌 사용자 버퍼는 그대로 남는다.
-  const failing = scripted({readOnlySendKeys: true, on: (name, args) => {
-    watch(failing)(name, args);
-    if (name === 'paste-buffer' && args.includes('%1')) throw Object.assign(new Error("tmux paste-buffer 실패: can't find pane: %1"), {status: 1});
-  }});
-  failing.buffers.set('kadan-senior-enter-mine', 'user-owned');
-  const first = await askSeat(seat, {run: failing.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(first.reason, 'call-failed');
-  assert.deepEqual([...failing.buffers.keys()], ['kadan-senior-enter-mine'], '자기 버퍼만 지운다');
-  assert.ok(failing.calls.some(args => args[0] === 'delete-buffer'), '실패 뒤 delete-buffer로 정리한다');
-  // 두 번째 호출은 다른 이름이다(같은 프로세스·같은 자리여도 겹치지 않는다).
-  const again = scripted({readOnlySendKeys: true, on: watch(null)});
-  await askSeat(seat, {run: again.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(names.length, 2);
-  assert.notEqual(names[0], names[1]);
-  for (const name of names) {
-    assert.ok(name.includes(String(process.pid)) && name.includes('senior-fake'), `이름에 호출(PID)과 자리(세션)가 들어간다: ${name}`);
-    assert.match(name, /^[A-Za-z0-9_-]+$/u);
-  }
-  // 정리까지 실패하면 둘 다 보인다.
-  const stuck = scripted({readOnlySendKeys: true, on: (name, args) => {
-    if (name === 'paste-buffer' && args.includes('%1')) throw Object.assign(new Error('tmux paste-buffer 실패: boom'), {status: 1});
-    if (name === 'delete-buffer') throw Object.assign(new Error('tmux delete-buffer 실패: gone'), {status: 1});
-  }});
-  const bad = await askSeat(seat, {run: stuck.run, now: ticking(), sleep: async () => {}, timing: FAST, spawn: noSleepSpawn});
-  assert.equal(bad.reason, 'call-failed');
-  assert.match(bad.detail, /정리도 실패/u);
-});
 
 test('시간 상한(F2): 질문은 붙여넣기 직전·Enter 직전에 남은 시간을 다시 본다 — 끝났으면 새 입력 없이 timeout이다', async () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ksd-'));

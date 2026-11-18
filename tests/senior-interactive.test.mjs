@@ -139,16 +139,22 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${f.tmux.socket} -f `)), []);
 });
 
-test('질문 전 기록된 세션을 로티로 읽기 전용 연결하고 탭 생성 실패도 자문을 계속한다', {skip}, async t => {
+// 탭을 연 순간을 tmux 호출 기록에 남기는 가짜 로티 호출. 그 줄 뒤에 키 명령이 있으면 '탭이 붙은 뒤에 키를 보낸 것'이다.
+const TAB_MARK = '# ROTTIE-CREATE';
+const keyCommands = lines => lines.filter(line => /\b(send-keys|paste-buffer|load-buffer)\b/u.test(line));
+
+test('로티 읽기 전용 탭은 질문을 제출한 뒤에 연다(Enter까지 나간 뒤) — 열린 뒤에는 키 0회이고, 탭 생성 실패도 자문을 계속한다', {skip}, async t => {
   const f = fixture(t, {seniors: [ASTRA]});
   const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
   const attempts = [];
   const rottie = argv => {
+    fs.appendFileSync(f.tmuxLog, `${TAB_MARK}\n`);
     const ask = fs.readdirSync(path.join(f.home, 'advice'))[0];
     const dir = path.join(f.home, 'advice', ask, '1-codex-gpt-6-astra');
     attempts.push({
       verb: argv[1], command: argv[argv.indexOf('--command') + 1], record: readRecord(dir),
-      sessions: f.sessions(), submitted: f.fakeLog(ASTRA.model, 'submitted')
+      sessions: f.sessions(), submittedMark: fs.existsSync(path.join(dir, 'submitted.json')),
+      tmux: fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean)
     });
     throw Object.assign(new Error('시험 탭 생성 실패'), {code: 'ROTTIE_WORKSPACE_NOT_OPEN', effect: 'none'});
   };
@@ -157,11 +163,75 @@ test('질문 전 기록된 세션을 로티로 읽기 전용 연결하고 탭 �
   const [before] = attempts;
   assert.equal(before.verb, 'create');
   assert.deepEqual(before.sessions, [before.record.session]);
-  assert.equal(before.submitted.includes(ASK_LINE), false);
+  assert.equal(before.submittedMark, true, '제출 표지가 있어야 탭을 연다');
+  const beforeTab = before.tmux.slice(0, before.tmux.indexOf(TAB_MARK));
+  assert.ok(beforeTab.some(line => / paste-buffer /u.test(line)), '탭 전에 질문이 붙었다');
+  assert.ok(beforeTab.some(line => / send-keys .*Enter$/u.test(line)), '탭 전에 Enter까지 나갔다');
   assert.equal(before.command, `tmux -L ${f.tmux.socket} attach -r -t '=${before.record.session}'`);
   assert.equal(answer.follow, before.command);
   assert.deepEqual([answer.reason, answer.tab, answer.tabReason], ['ok', 'skipped', 'ROTTIE_WORKSPACE_NOT_OPEN']);
   assert.equal(f.advices()[0].tabReason, answer.tabReason);
+  // 탭을 연 뒤에는 이 세션에 키를 하나도 보내지 않는다.
+  const all = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  assert.deepEqual(keyCommands(all.slice(all.indexOf(TAB_MARK) + 1)), []);
+  assert.deepEqual(f.fakeLog(ASTRA.model, 'submitted'), [ASK_LINE]);
+});
+
+test('탭이 열린 순간 진짜 읽기 전용 클라이언트가 붙어도(tmux 3.8의 send-keys 거절 조건) 답이 끝까지 오고 키는 하나도 더 나가지 않는다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA]});
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const outer = `${f.tmux.socket}-view`;
+  const outerEnv = {...process.env}; delete outerEnv.TMUX; delete outerEnv.TMUX_PANE;
+  t.after(() => {
+    process.stderr.write(`격리 소켓 kill-server: -L ${outer}\n`);
+    spawnSync(REAL_TMUX, ['-L', outer, 'kill-server'], {env: outerEnv});
+  });
+  const calls = [];
+  const clients = [];
+  // 로티를 흉내 낸다: create가 오면 60x20 PTY(바깥 격리 tmux)에서 제품이 만든 attach 명령을 그대로 돈다.
+  const rottie = argv => {
+    calls.push(argv[1]);
+    if (argv[1] === 'create') {
+      fs.appendFileSync(f.tmuxLog, `${TAB_MARK}\n`);
+      const command = argv[argv.indexOf('--command') + 1].replace(/^tmux /u, `${REAL_TMUX} `);
+      const view = spawnSync(REAL_TMUX, ['-L', outer, '-f', '/dev/null', 'new-session', '-d', '-s', 'view', '-x', '60', '-y', '20', command],
+        {env: outerEnv, encoding: 'utf8'});
+      clients.push(view.status);
+      return {ok: true, result: {terminal: {id: 'term-1', state: 'running', pid: 4242, workspaceId: 'ws-1'}}, runtime: {build: 'b1'}};
+    }
+    if (argv[1] === 'show') throw Object.assign(new Error('없다'), {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'});
+    return {ok: true, result: {}};
+  };
+  const {answers: [answer]} = await f.run({}, {env, rottie});
+  assert.deepEqual(clients, [0]);
+  assert.deepEqual([answer.reason, answer.tab, answer.tabReason], ['ok', 'closed', undefined], JSON.stringify(answer));
+  assert.deepEqual(calls, ['create', 'close', 'show']);
+  assert.deepEqual(f.fakeLog(ASTRA.model, 'submitted'), [ASK_LINE]);
+  const all = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  const mark = all.indexOf(TAB_MARK);
+  assert.ok(mark > 0);
+  assert.equal(all.slice(0, mark).filter(line => / send-keys .*Enter$/u.test(line)).length, 1, '탭 전에 Enter가 한 번 나갔다');
+  assert.deepEqual(keyCommands(all.slice(mark + 1)), [], '탭이 붙은 뒤 키 명령 0회');
+  assert.equal(f.advices()[0].tab, 'closed');
+  assert.deepEqual(f.sessions(), []);
+});
+
+test('제출 전에 끝난 칸은 탭을 열지 않는다(not-submitted), 제출 표지를 보기 전에 호출이 끝났으면 열지 않는다(finished-before-open)', {skip}, async t => {
+  const calls = [];
+  const rottie = argv => { calls.push(argv); throw new Error('이 시험에서는 탭을 만들면 안 된다'); };
+  // 붙인 직후 업데이트 창으로 바뀌어 Enter가 나가지 않는다 → 질문은 제출되지 않았다.
+  const refused = fixture(t, {seniors: [ASTRA], plan: {default: {afterPaste: 'update', afterPasteOn: 'ask'}}});
+  const env = {...refused.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const error = await refused.run({timeout: '60'}, {env, rottie}).then(() => assert.fail('실패해야 한다'), e => e);
+  assert.deepEqual(error.answers.map(a => [a.reason, a.tab, a.tabReason]), [['call-failed', 'skipped', 'not-submitted']]);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(refused.fakeLog(ASTRA.model, 'submitted'), []);
+  // 표지를 살피는 간격이 호출보다 길면 호출이 먼저 끝난다: 이미 닫힌 세션에는 탭을 만들지 않는다.
+  const quick = fixture(t, {seniors: [ASTRA]});
+  const quickEnv = {...quick.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const {answers: [done]} = await quick.run({}, {env: quickEnv, rottie, tabPollMs: 3_600_000});
+  assert.deepEqual([done.reason, done.tab, done.tabReason], ['ok', 'skipped', 'finished-before-open']);
+  assert.deepEqual(calls, []);
 });
 
 test('관문 교차: 한 명이 관문에서 걸리면 통과한 다른 한 명에게도 질문 키가 나가지 않고 둘 다 call-failed로 남는다', {skip}, async t => {
