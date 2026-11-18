@@ -165,6 +165,14 @@ td small { display: block; margin-top: 2px; }
 .runner-edit fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .runner-edit legend { padding: 0; font-weight: 600; font-size: 13px; }
 .runner-edit .toolbar select { max-width: 100%; }
+/* 발령 때 채워질 명령은 길어서 표 칸 대신 줄마다 접는다. 좁은 화면에서도 칸 폭 안에서 줄을 바꾼다. */
+.runners-summary .row-command { margin-top: 4px; font-size: 12px; }
+.runners-summary .row-command summary { cursor: pointer; color: var(--ds-color-muted); }
+.runners-summary .row-command code { display: block; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; word-break: keep-all; }
+.model-register { margin: 6px 0 4px; }
+.model-register > summary { cursor: pointer; font-weight: 600; font-size: 13px; text-wrap: balance; }
+.model-register .action-form { word-break: keep-all; overflow-wrap: break-word; }
+.model-register .action-form p { text-wrap: pretty; }
 /* 저장 줄은 고치는 동안 화면 아래(main 스크롤 영역의 바닥, 맨 아래 '새로 읽기' 줄 바로 위)에 붙는다. */
 .runner-save-bar { position: sticky; bottom: 0; z-index: 6; margin: 10px 0 0; padding: 8px 12px; border: 1px solid #b07712; border-radius: 8px; background: #fff8e1; box-shadow: 0 -3px 8px rgba(0, 0, 0, .14); }
 .runner-save-bar .error { margin: 6px 0 0; padding: 8px 10px; max-height: 20vh; overflow: auto; }
