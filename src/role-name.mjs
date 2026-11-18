@@ -13,6 +13,10 @@ export function repoNameFor(cwd, run = execFileSync) {
   } catch { return null; }
 }
 
+// 역할 이름으로 받는 글자 범위(유니코드 문자·숫자·밑줄·하이픈, 길이 제한 없음). 역할 설정 검사와 제한기 잠금의 역할 표시가 같이 쓴다.
+// `=`·공백·점·슬래시·제어 문자처럼 명령줄 조각이 될 수 있는 글자는 받지 않는다.
+export const isRoleName = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
+
 export const roleNameRule = '<레포명>-<역할> 또는 <레포명>-<주제>-<역할> (예: kadan-슈퍼감독, rottie-RH-감독, kadan-역할주소-작업자)';
 
 // 새 이름(과거 start 기록이 없는 이름)만 본다. 비서 프로필은 대상이 아니다. 판단할 수 없으면 경고하지 않는다.

@@ -13,13 +13,13 @@ import {parseHierarchy} from './hierarchy.mjs';
 import {effectiveCardRole,workEntries} from './handover-state.mjs';
 import {shellQuote} from './mail-instructions.mjs';
 import {createMailGenerations} from './mail-generation.mjs';
+import {isRoleName as roleName} from './role-name.mjs';
 
 export const ROLE_PROFILES = ['secretary','super','conductor','worker','reviewer'];
 const root = fileURLToPath(new URL('..',import.meta.url));
 const templateRoot = path.join(root,'skills/kadan-conductor/references/role-templates');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
-const roleName = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
 // 요약 우편 대상(kyle 결정 cc77fcc2, 단계안 'c' 2단계 2026-10-24 슈퍼 승인): 모든 판의 일반감독(conductor)·슈퍼감독(super).
 // 비서·작업자·검수자는 아직 전문이다. 마지막 전달 성공 전문 뒤 3시간이 지나면 전문을 다시 보낸다.
 // 설정·환경변수 스위치는 두지 않는다(되돌리기는 PR 되돌리기). 요약 파일은 템플릿 지문에 들어가지 않으므로
