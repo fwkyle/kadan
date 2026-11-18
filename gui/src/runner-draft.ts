@@ -1,3 +1,4 @@
+import { effortProblem, forRole } from "./effort-keep.ts";
 // 실행 모델 바꾸기 칸이 실제로 고치는 부분만 꺼낸다.
 // 설정 버전은 모델 목록·다른 역할·즐겨찾기만 바뀌어도 오른다. 이 부분이 그대로면 작성 중인 칸이
 // 새 버전으로 이어서 저장해도 남의 변경을 덮지 않는다(2026-09-29 [kyle]: AI가 모델 목록을 넣은 뒤 저장이 조용히 거부됐다).
@@ -52,3 +53,17 @@ export const changedRoles = (saved: Part, draft: Part, roles: string[]) =>
       ownPart(saved, role, false) !== ownPart(draft, role, false) ||
       ownPart(saved, role, true) !== ownPart(draft, role, true),
   );
+
+// 저장 전에 막을 줄: 바꾼 역할 중 강도가 필요한 실행기에서 ① 강도 목록이 있는데 비어 있거나(모델을 바꾸며 지금 강도를 못 이은 경우)
+// ② 모델의 강도 목록 자체가 비어 있는 것. 서버 checkChoice가 어느 쪽도 거절하므로 화면이 미리 막는다.
+export const effortProblems = (
+  draft: Part, roles: string[],
+  catalog: Record<string, {needsEffort: boolean; table?: Record<string, string>; models: {model: string; efforts: string[]}[]}>,
+) => roles.flatMap((role) => {
+  const value = draft.presets[draft.activePreset]?.roles[role] as
+    | {runner?: string; model?: string; effort?: string} | unknown[] | undefined;
+  if (!value || Array.isArray(value)) return [];
+  const choice = value as {runner: string; model: string; effort?: string};
+  const kind = effortProblem(forRole(catalog[choice.runner], role), choice);
+  return kind ? [{role, kind}] : [];
+});
