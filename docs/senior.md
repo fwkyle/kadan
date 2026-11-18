@@ -59,11 +59,12 @@ KADAN_ROLE=<감독> kadan senior <카드키> --question "<질문>" [--file <절�
 
 ## 대화형 방식 (senior-mode)
 
-codex는 헤드리스로도 호출할 수 있다. 대화형을 쓰는 목적은 다른 카단 역할과 같은 방식으로 세션을 띄우고 로티에서 실제 진행을 보는 것이다. agy의 헤드리스 자동 호출(`--print`)이 계정 차단으로 이어졌다는 사례는 원문을 확인하지 못했다. agy는 대화형 지원 대상으로 검토하며 현재 이 모드에서 호출할 수 있는 실행기는 codex다.
+codex는 헤드리스로도 문제없이 호출할 수 있다. 그래도 대화창으로 띄우는 이유는 다른 카단 역할(작업자·감독)과 같은 방식으로 통일하고 로티에서 실제 진행을 보기 위해서다(2026-11-18 [kyle]: "그냥 카단처럼 띄우면 되잖아. 코덱스는 문제없긴 해"). agy는 헤드리스(`--print`) 자동 호출이 계정 차단으로 이어진 사례가 있다고 들어서(원문은 확인하지 못했다) 헤드리스로 부르지 않고 대화창으로만 부르기로 했다. 다만 지금 이 모드에서 호출할 수 있는 실행기는 codex뿐이고, agy 대화형은 아직 없다.
 
 - **모드 선택**. 설정 파일이 없으면 `interactive`다. `$KADAN_HOME/senior-mode`에는 `interactive`와 `headless` 중 하나만 쓴다. 잘못된 값은 호출 전에 거절하고 실패 시 자동 전환은 없다.
 - **지금은 codex만**: 대화형 길에서 codex 밖 실행기(agy)가 등록돼 있으면 아무도 부르지 않고 거절한다. agy를 넣으려면 대화형 agy가 같은 쓰기 시험을 통과해야 한다.
 - **무엇이 도나**: 시니어마다 codex 대화형 화면을 카단 전용 tmux 소켓 `-L kadan-senior`의 세션(`senior-<askId 앞 8자>-<순번>`)으로 띄운다. 프롬프트 전체는 호출 폴더의 `input.txt`(200KB 상한·`scrubForAI`)에 쓰고 화면에는 "`../input.txt`를 끝까지 읽고 적힌 대로 수행하라" 한 줄만 넣는다. 모델은 작업 폴더 `out/`의 `result.txt`에 답을 쓰고 마지막 줄에 끝 표지를 붙인다. 카단은 표지를 뗀 답을 호출 폴더의 `result.txt`에 두고(원장 `bytes`·`digest`와 영수증 `answer`가 같은 글이다) 세션을 끈다.
+- **창 크기는 고정한다**: 세션은 150x50으로 만들고 `window-size manual`을 건다. 로티 읽기 전용 탭(`attach -r`)이 입력은 막아도 크기는 못 막아서, 고정하지 않으면 작은 탭이 붙는 순간 창이 탭 크기로 줄어 codex가 다시 그린다(2026-11-18 검수 실측: 150x50 → 60x20). 붙여넣기 직전 검사는 화면을 한 번만 읽고 아니면 거절하는 그대로다 — 크기가 안 바뀌면 다시 그릴 일이 없어 기다림을 더하지 않았다.
 - **역할이 아니다**: 원장에 `start`·`stop`을 쓰지 않고 지침 우편·관계표·감시 대상에 들지 않는다. 기록은 지금처럼 호출마다 `advice` 한 줄(`mode: "interactive"`가 붙는다)과 증거 폴더다. 시니어 소켓은 자원 감시(`process-watch`)에 잡히지 않는다.
 - **유지하는 것**: 등록된 전원에게 동시에 묻기, 칸별 상태(`ok`·`한도`·`실패(<이유>)`), 감독이 모델을 고르지 않음, 종료 코드(하나라도 답하면 0), 시간 상한(기본 1800초), 준비가 한 명이라도 거절되면 아무도 부르지 않음.
 
@@ -137,11 +138,13 @@ codex는 헤드리스로도 호출할 수 있다. 대화형을 쓰는 목적은 
 Why: kyle이 시니어가 무엇을 읽고 어떻게 고민하는지 화면에서 보고 싶다(2026-10-16 [kyle]). 시니어는 여전히 일회성 호출이고 역할 세션이 아니다.
 
 - **언제 뜨나**: 창 설정이 `rottie`이고(`kadan window`), 로티 실행 파일 경로가 있고, 기본이 아닌 홈이 운영 로티에 닿는 것을 막는 보호(`live-floor-guard`)를 통과하고, 카드의 저장소 폴더(`repoPath`)가 로티에 이미 열려 있을 때. `KADAN_SENIOR_TAB=off`로 끄고 `on`으로 켠다(없으면 켬).
-- **무엇이 뜨나**: `scripts/senior-follow.sh <호출 폴더> <kadan senior의 PID>`가 도는 탭. `diagnostic.log`를 `tail -F`로 보여 주는 읽기 전용이고 입력을 받지 않는다. `exit-code.txt`가 생기거나 부모 PID가 사라지면 스스로 끝난다(TERM으로 죽은 `kadan senior`는 `exit-code.txt`를 남기지 않아서).
+- **무엇이 뜨나**: 방식에 따라 다르다.
+  - **대화형(기본)**: `tmux -L <시니어 소켓> attach -r -t '=<세션>'`이 도는 탭. 시니어 codex 화면을 읽기 전용으로 붙여 보며 입력은 세션에 닿지 않는다(창 크기는 위에서 고정). 세션을 만들어 기록한 뒤, 관문을 통과한 칸에만, 질문을 넣기 전에 연다. 세션이 끝나면 탭 명령도 끝난다.
+  - **헤드리스**(`senior-mode`에 `headless`): `scripts/senior-follow.sh <호출 폴더> <kadan senior의 PID>`가 도는 탭. `diagnostic.log`를 `tail -F`로 보여 주는 읽기 전용이고 입력을 받지 않는다. `exit-code.txt`가 생기거나 부모 PID가 사라지면 스스로 끝난다(TERM으로 죽은 `kadan senior`는 `exit-code.txt`를 남기지 않아서).
 - **역할이 아니다**: `KADAN_ROLE`·`kadan-*` 이름을 쓰지 않고 제목은 `시니어 · <카드키>`(시니어가 둘 이상이면 ` · <모델>`을 덧붙여 탭을 가른다), 멱등 키는 `kadan-senior-<호출ID>`다. `start` 원장 사건을 쓰지 않으므로 `kadan status`·바닥 `list()`·감시기가 잡지 않는다.
 - **탭은 꾸밈이다**: 앱 꺼짐(`ROTTIE_APP_NOT_RUNNING`)·workspace 없음(`ROTTIE_WORKSPACE_NOT_OPEN`)·닫기 실패가 시니어 호출을 실패시키지 않는다. 앱을 띄우거나 workspace를 새로 추가하지 않는다.
 - **닫기**: 성공·실패·시간 초과·TERM/INT 모두 `terminal close`를 부른다(신호 처리기는 create 전에 설치하고, create가 동기라 신호는 id를 받은 뒤 처리된다). 닫은 뒤 `show`가 NOT_FOUND면 사라진 것이고, 그 밖의 오류거나 남아 있으면 자기 탭 id만 `terminal remove`한다.
-- **탭 없이 보려면**: 영수증의 `follow` 줄(`tail -F <호출 폴더>/diagnostic.log`)을 직접 실행한다.
+- **탭 없이 보려면**: 영수증의 `follow` 줄을 직접 실행한다. 대화형은 `tmux -L <시니어 소켓> attach -r -t '=<세션>'`(읽기 전용 붙이기, 세션이 살아 있는 동안만), 헤드리스는 `tail -F <호출 폴더>/diagnostic.log`다.
 
 | 경우 | `tab` | `tabReason` | kyle에게 보이는 것 |
 |---|---|---|---|
@@ -150,6 +153,8 @@ Why: kyle이 시니어가 무엇을 읽고 어떻게 고민하는지 화면에�
 | 로티 경로 없음 | `skipped` | `rottie-bin-missing` | 같음 |
 | 기본 아닌 홈이 운영 로티에 닿음 | `skipped` | `KADAN_LIVE_FLOOR_DENIED` | 같음 |
 | 앱 꺼짐·workspace 없음 등 create 오류 | `skipped` | 로티 오류 코드 | 같음 |
+| 대화형에서 관문이 거절한 칸(한 명이라도 걸려 함께 거절된 칸 포함) | `skipped` | `gate-failed` | 탭 없음. 상세 이유는 영수증·원장 `detail`과 `gate.json` |
+| 대화형에서 관문 도중 시간 상한이 끝난 칸 | `skipped` | `gate-timeout` | 같음 |
 | 열고 정상 닫음 | `closed` | 없음 | 호출 동안만 탭 |
 | 닫은 뒤 목록에 남아 remove함 | `closed` | `removed-after-close` | 호출 동안만 탭 |
 | 생성 응답이 유실·불확실(탭이 생겼을 수 있음). 로티 CLI가 JSON 없이 끝난 모든 경우(종료 코드·신호 무관), 응답 형식 오류, effect `unknown` 오류 | `unknown` | 로티 오류 코드 | 탭이 남을 수 있음. 원장 `tabKey`(`kadan-senior-<호출ID>`)로 사람이 찾는다. 제목·키로 목록을 뒤져 지우지 않는다 |

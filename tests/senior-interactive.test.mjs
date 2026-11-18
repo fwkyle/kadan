@@ -167,7 +167,14 @@ test('질문 전 기록된 세션을 로티로 읽기 전용 연결하고 탭 �
 test('관문 교차: 한 명이 관문에서 걸리면 통과한 다른 한 명에게도 질문 키가 나가지 않고 둘 다 call-failed로 남는다', {skip}, async t => {
   // 관문에서 걸리는 길은 시작 화면이 업데이트 선택 창인 경우다(키 0회). 연결된 MCP 이름은 이제 관문과 무관하다.
   const f = fixture(t, {plan: {models: {'gpt-6-sol': {startup: 'update'}}}});
-  const error = await f.run({}, {sessionTiming: {...TIMING, startupMs: 1500}}).then(() => assert.fail('실패해야 한다'), e => e);
+  // 로티 탭이 켜져 있어도 관문에서 거절된 칸은 탭을 열지 않는다(검수 exec-276744c7 발견 2).
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const rottieCalls = [];
+  const rottie = argv => { rottieCalls.push(argv); throw new Error('관문에서 걸린 칸에는 탭을 만들지 않아야 한다'); };
+  const error = await f.run({}, {env, rottie, sessionTiming: {...TIMING, startupMs: 1500}}).then(() => assert.fail('실패해야 한다'), e => e);
+  assert.deepEqual(rottieCalls, [], '관문 실패 칸에 로티 탭 생성 0회');
+  assert.deepEqual(f.advices().map(e => [e.model, e.tab, e.tabReason]).sort(),
+    [['gpt-6-astra', 'skipped', 'gate-failed'], ['gpt-6-sol', 'skipped', 'gate-failed']]);
   assert.equal(error.exitCode, 1);
   assert.deepEqual(error.answers.map(a => [a.model, a.reason, a.status]), [
     ['gpt-6-astra', 'call-failed', '실패(call-failed)'], ['gpt-6-sol', 'call-failed', '실패(call-failed)']]);
@@ -269,6 +276,24 @@ test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 
   // 관문은 키를 보내지 않으므로 질문 줄은 누구에게도 가지 않았다.
   for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), []);
   assert.deepEqual(f.advices().map(e => e.reason), ['timeout', 'timeout']);
+  assert.deepEqual(f.sessions(), []);
+});
+
+test('시간 상한: 관문 도중 상한이 끝난 칸은 timeout이고 탭을 열지 않으며 탭 이유는 gate-timeout이다(검수 exec-276744c7 발견 2)', {skip}, async t => {
+  const f = fixture(t);
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const rottieCalls = [];
+  const rottie = argv => { rottieCalls.push(argv); throw new Error('관문에서 시간 초과된 칸에는 탭을 만들지 않아야 한다'); };
+  // 가짜 시계: 두 시니어의 문 파일(launch)이 만들어지는 순간(관문 시작)부터 1시간 뒤로 넘어간다 → 관문이 상한을 넘겨 끝난다.
+  const launches = () => { try { return fs.readdirSync(path.join(f.home, 'advice')).flatMap(ask => fs.readdirSync(path.join(f.home, 'advice', ask))
+    .filter(name => fs.existsSync(path.join(f.home, 'advice', ask, name, 'launch')))).length; } catch { return 0; } };
+  const now = () => Date.now() + (launches() >= 1 ? 3_600_000 : 0);
+  const error = await f.run({timeout: '60'}, {now, env, rottie}).then(() => assert.fail('실패해야 한다'), e => e);
+  assert.deepEqual(error.answers.map(a => [a.model, a.reason]), [['gpt-6-astra', 'timeout'], ['gpt-6-sol', 'timeout']]);
+  assert.deepEqual(rottieCalls, [], '관문 시간 초과 칸에 로티 탭 생성 0회');
+  assert.deepEqual(f.advices().map(e => [e.model, e.tab, e.tabReason]).sort(),
+    [['gpt-6-astra', 'skipped', 'gate-timeout'], ['gpt-6-sol', 'skipped', 'gate-timeout']]);
+  for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), []);
   assert.deepEqual(f.sessions(), []);
 });
 

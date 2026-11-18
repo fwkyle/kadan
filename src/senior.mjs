@@ -256,7 +256,8 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   }
   for (const call of calls) {
     if (call.refused) {
-      call.tab = {tab: 'skipped', tabReason: 'gate-failed'};
+      // 관문에서 거절된 칸은 탭을 열지 않는다. 시간 초과로 거절된 칸은 이름을 가른다(gate-timeout).
+      call.tab = {tab: 'skipped', tabReason: call.refused.reason === 'timeout' ? 'gate-timeout' : 'gate-failed'};
       continue;
     }
     call.opened = openSeniorTab({home, env, card, adviceId: call.adviceId, dir: call.dir,

@@ -219,6 +219,9 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
     const panePid = run(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']).trim();
     if (!/^\d+$/u.test(panePid)) throw new Error(`시니어 세션의 pane PID를 읽지 못했다: ${session}`);
     made.panePid = panePid;
+    // 읽기 전용 탭(로티 `attach -r`)이 붙어도 창 크기가 탭 크기로 바뀌지 않게 고정한다. 입력은 막혀도 크기는 안 막힌다:
+    // 150x50 세션이 60x20으로 줄면 codex가 다시 그려 붙여넣기 직전 검사가 정상 호출을 거절할 수 있다(검수 exec-276744c7 실측).
+    run(['set-option', '-t', `=${session}:`, 'window-size', 'manual']);
     made.dirOption = 'tried';
     run(['set-option', '-t', `=${session}:`, '@kadan_senior_dir', dir]);
     made.dirOption = 'set';

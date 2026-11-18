@@ -130,6 +130,38 @@ test('정상: 관문을 지나 한 줄을 넣고 일하는 표시 뒤 빈 입력
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${s.run.socket} -f `)), []);
 });
 
+test('읽기 전용 탭 같은 작은 클라이언트가 붙어도 세션 크기는 그대로이고 질문이 정상 제출된다(검수 exec-276744c7 발견 1)', {skip}, async t => {
+  const s = setup(t);
+  const [seat] = s.open();
+  const size = () => s.run(['display-message', '-p', '-t', `=${seat.session}:`, '#{window_width}x#{window_height}']).trim();
+  assert.equal(size(), '150x50');
+  // 로티 탭을 흉내 낸다: 60x20 PTY(바깥 격리 tmux)에서 `attach -r`를 도는 클라이언트. 로티·운영 tmux·진짜 codex는 쓰지 않는다.
+  const outer = `${s.run.socket}-view`;
+  const outerEnv = {...process.env}; delete outerEnv.TMUX; delete outerEnv.TMUX_PANE;
+  t.after(() => {
+    process.stderr.write(`격리 소켓 kill-server: -L ${outer}\n`);
+    spawnSync(REAL_TMUX, ['-L', outer, 'kill-server'], {env: outerEnv});
+  });
+  const view = spawnSync(REAL_TMUX, ['-L', outer, '-f', '/dev/null', 'new-session', '-d', '-s', 'view', '-x', '60', '-y', '20',
+    `${REAL_TMUX} -L ${s.run.socket} attach -r -t '=${seat.session}'`], {env: outerEnv, encoding: 'utf8'});
+  assert.equal(view.status, 0, view.stderr);
+  let attached = false;
+  for (let i = 0; i < 100 && !attached; i++) {
+    attached = s.run.try(['list-clients', '-t', `=${seat.session}:`, '-F', '#{client_readonly}']).stdout.includes('1');
+    if (!attached) await sleep(50);
+  }
+  assert.ok(attached, '읽기 전용 클라이언트가 붙지 않았다');
+  await sleep(300);
+  assert.equal(size(), '150x50', '붙은 작은 클라이언트가 창 크기를 바꾸면 안 된다');
+  assert.deepEqual(await passGate(seat, s.deps), {ok: true});
+  assert.equal(size(), '150x50');
+  assert.deepEqual((await askSeat(seat, s.deps)).reason, 'ok');
+  assert.equal(size(), '150x50', '질문을 넣은 뒤에도 같다');
+  assert.deepEqual(s.keys('m1').submitted, [ASK_LINE]);
+  assert.equal(s.keys('m1').enter, 1);
+  closeSeat(seat, s.deps);
+});
+
 test('키 조건 (가): 시작 화면이 업데이트 선택 창·번호 선택 창이면 키를 하나도 보내지 않고 관문에서 끝난다', {skip}, async t => {
   await Promise.all(['update', 'choice'].map(async startup => {
     const s = setup(t, {default: {startup}});
