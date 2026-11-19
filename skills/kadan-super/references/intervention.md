@@ -69,7 +69,7 @@ watch의 AMBER·RED는 작업 이상을 확인할 입력 신호다. 화면·PID�
 | 화면 신호 | 뜻 | 처방 | 하면 안 되는 것 |
 |---|---|---|---|
 | `429`, `rate limit`, `exceeded retry limit` (`rate-limit-429`·`rate-limit-text`·`rate-limit-terminal`) | 호출 제한 후보 — 에이전트 실행기와 작업 중 외부 API를 구분 | 일반감독이 해당 호출만 보류·읽기 진단, 새 근거의 제한된 복구는 공통 기준 적용 | 원인 단정, 같은 근거 재호출, 새 ID 순회, 무단 계정·비용 변경 |
-| `You've hit your … limit` (일일·주간·사용 한도, `usage-limit`) | 실제 한도로 멈춤 — 자동 재개 안 함(행동 `report`) | 경보에 대체 후보 명령 한 줄이 붙으면 맡긴 감독이 감독 지침의 한도 교대 절차(후임 시작 → 폴더·브랜치 확인 → 선임 stop)대로 진행한다. 줄이 없으면 보고 | 같은 세션 재시도, 남은 한도 숫자만 보고 미리 교대 |
+| `You've hit your … limit` (일일·주간·사용 한도, `usage-limit`) | 실제 한도로 멈춤 — 자동 재개 안 함(행동 `report`) | 경보에 대체 후보 명령 한 줄이 붙으면 맡긴 감독이 감독 지침의 한도 교대 절차(후임 시작 → 폴더·브랜치 확인 → 선임 stop)대로 진행한다. 줄이 없으면 보고 | 계정 전환 없이 같은 세션 재시도(계정 전환 뒤 원래 세션에 이어가기 1회는 예외 — 경보 안내대로 먼저), 남은 한도 숫자만 보고 미리 교대 |
 | `502`, `unreachable`, `ENOTFOUND`, `stream error`, `Reconnecting...`, `went to sleep mid-response` (`bad-gateway`·`dns`·`stream-error`·`reconnecting`·`sleep-interrupted`·`sse-timeout`·`compact-error`) | 끊김 | 재개 — SKILL.md "끊김을 만나면" 순서 | 새 카드 생성, 무한 재개 |
 | `can't be shown`, `cybersecurity`, `Trusted Access` (`security-filter`) | 안전 필터 차단 — 품질 실패가 아니라 가용성 사건 | 카드 문구에서 공격·위조·적대 어휘를 빼고 재발령. 그래도 막히면 다른 실행기로 교체를 올림 | 카드 failed 처리, 같은 문구 재시도 |
 | `oauth/token`, `Reconnecting 5/5` (`auth-token`·`reconnecting`) | 인증·세션 실패 | 하네스 장애와 실행기 장애를 나눠 확인한 뒤 교체를 올림 | 같은 세션 무한 재연결 대기 |
