@@ -18,14 +18,22 @@ import {
 } from './runner-table.mjs';
 
 export const SETTINGS_FILE = 'runner-settings.json';
-// start --profile 값 → 설정의 역할 키. 비서는 실행 모델 설정 대상이 아니다.
+// start --profile 값 → 설정의 역할 키. 비서는 start --profile 대상이 아니다(아래 SECRETARY_ROLE 자리는 다시 열 때만 쓴다).
 export const PROFILE_ROLES = {worker:'worker', reviewer:'reviewer', conductor:'conductor', super:'super'};
 // 설정에 값을 둘 수 있는 역할. watch·senior는 세션으로 띄우지 않으므로 start --profile 대상(PROFILE_ROLES)이 아니다.
-export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain', 'worker-hard'];
+export const SETTINGS_ROLES = [...Object.values(PROFILE_ROLES), 'watch', 'senior', 'explain', 'worker-hard', 'secretary'];
 // 어려운 일 작업자 자리(2026-11-10 [kyle] 난이도 칸 PR 1). 세션의 roleProfile은 계속 worker이고, 선택 칸이라 비어 있으면 작업자와 같다.
 // 대체 후보(fallback['worker-hard'])는 작업자와 같은 규칙으로 두되, 자리가 비어 있으면 둘 수 없다(2026-11-17 [kyle]).
 // 이 자리나 그 대체 후보로 띄우는 시작(start --difficulty hard [--fallback N])만 시작 기록에 difficulty: 'hard'를 남긴다.
 export const HARD_ROLE = 'worker-hard';
+// 비서 자리(2026-11-19 [kyle]). 선택 칸이고 대체 후보가 없다. 비서를 새로 띄울 때가 아니라 같은 대화로 다시 열 때
+// (restart·up 복원·로티 탭 복원) 저장된 명령의 모델·강도 값만 이 값으로 바꾼다 — secretary-settings.mjs.
+export const SECRETARY_ROLE = 'secretary';
+// 비서를 같은 대화로 다시 여는 길(secretary-resume.json 체크포인트)이 codex 전용이라 이 자리도 codex만 받는다.
+// 손으로 고친 파일에 다른 실행기가 있으면 다시 열 때 그 값을 쓰지 않고 저장된 명령 그대로 연다.
+export const SECRETARY_RUNNER = 'codex';
+// 비울 수 있는 자리(set --clear). 그 밖의 역할은 값을 바꿀 수만 있다.
+export const OPTIONAL_ROLES = [HARD_ROLE, SECRETARY_ROLE];
 // 감시 AI는 scripts/watch-judge.sh가, 시니어는 scripts/senior.sh가 `codex exec`로 부른다. 실행기별 비대화 명령을 만들지 않으려고 codex만 받는다.
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
@@ -138,6 +146,8 @@ export function checkChoice(settings, role, {runner, model, effort}, options, {c
   const choices = runnerChoices(settings, runner, options);
   if (role === 'senior') { assertSeniorRunner(runner); assertSeniorModel({runner, model}); }
   else if (ONE_SHOT_ROLES[role] && runner !== WATCH_RUNNER) throw new Error(`${ONE_SHOT_ROLES[role]}는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — ${role === 'watch' ? 'watch-judge.sh' : 'senior.sh'}가 codex exec로 부른다`);
+  else if (role === SECRETARY_ROLE && runner !== SECRETARY_RUNNER)
+    throw new Error(`비서 자리는 ${SECRETARY_RUNNER} 실행기만 고를 수 있다 — 비서를 같은 대화로 다시 여는 길이 ${SECRETARY_RUNNER} 전용이다`);
   if (!choices.has(model)) throw new Error(`${runner}에서 고를 수 없는 모델: ${model}`);
   const efforts = choices.get(model);
   // 설명 AI는 대화형 spawn 틀이 아니라 한 번 호출(exec) 틀로 부른다. 틀이 없으면 이 실행기는 고를 수 없다.
@@ -552,7 +562,7 @@ export function removePreset(home, {name, ...meta}) {
 // 역할 하나의 값을 바꾼다. 선택지·강도·정책을 검사하고, 계열 확인과 기록은 공통 경로가 맡는다.
 export function setRole(home, {role, runner, model, effort, preset, clear = false, ...meta}) {
   if (!SETTINGS_ROLES.includes(role)) throw new Error(`역할은 ${SETTINGS_ROLES.join('|')}`);
-  if (clear && role !== HARD_ROLE) throw new Error(`--clear는 ${HARD_ROLE} 자리에만 쓴다 — 다른 역할은 비울 수 없다`);
+  if (clear && !OPTIONAL_ROLES.includes(role)) throw new Error(`--clear는 ${OPTIONAL_ROLES.join('·')} 자리에만 쓴다 — 다른 역할은 비울 수 없다`);
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'set'}, next => {
     const name = preset ?? next.activePreset;
@@ -611,6 +621,7 @@ export function setFallback(home, {role, items, preset, ...meta}) {
   if (role === 'explain' && Array.isArray(items) && items.length + 1 > EXPLAIN_MAX_ATTEMPTS)
     throw new Error(`설명 AI는 1순위 포함 최대 ${EXPLAIN_MAX_ATTEMPTS}개 — 대체 후보는 ${EXPLAIN_MAX_ATTEMPTS - 1}개까지`);
   if (role === 'senior') throw new Error('시니어는 폴백이 없다 — 등록된 시니어(최대 2명)가 동등하게 함께 불린다(docs/senior.md)');
+  if (role === SECRETARY_ROLE) throw new Error('비서는 대체 후보가 없다 — 비서 자리는 값 하나만 둔다(docs/runner-settings.md)');
   if (!Array.isArray(items)) throw new Error('폴백 목록 필요');
   const {readCodexModels, ...rest} = meta;
   return change(home, {...rest, action: 'fallback'}, next => {

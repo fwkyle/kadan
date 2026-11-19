@@ -57,7 +57,8 @@ test('폴백 목록 형식과 한 번 조작(추가·삭제·위로·아래로)�
 test('폴백 저장은 항목마다 선택지·강도·정책을 검사하고 이유·revision·중복·변화 없음을 거부한다', () => {
   const f = fixture();
   const set = (role, items, revision = 6, extra = {}) => setFallback(f.home, {role, items, ...f.meta(revision), ...extra});
-  assert.throws(() => set('secretary', []), /역할은/);
+  assert.throws(() => set('butler', []), /역할은/);
+  assert.throws(() => set('secretary', []), /비서는 대체 후보가 없다/);
   assert.throws(() => set('worker', [{runner:'codex', model:'gpt-9-nowhere', effort:'low'}]), /폴백 1번: codex에서 고를 수 없는 모델/);
   assert.throws(() => set('worker', [{runner:'devin', model:'swe-2-max'}, {runner:'codex', model:'zai/glm-5.3', effort:'xhigh'}]), /폴백 2번: .*지원하지 않는 강도/);
   assert.throws(() => set('worker', [{runner:'devin', model:'swe-2-max', effort:'high'}]), /강도를 받지 않는다/);

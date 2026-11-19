@@ -133,9 +133,11 @@ test('거절은 모두 끄기 전이다: 프로필 없음·설정 값 없음·�
   assert.deepEqual(bad.log, []);
 });
 
-test('거절: 비서와 계정 전환 재시작에는 쓸 수 없다(끄기 0회)', () => {
+// 비서는 2026-11-19부터 이 옵션을 받는다(실행 모델 설정의 비서 자리 — tests/secretary-runner-setting.test.mjs).
+// 여기서는 옵션 때문에 따로 거절되지 않고 비서 길(체크포인트)의 판정을 그대로 따르는 것만 본다: codex가 아닌 비서는 끄기 전에 거절된다.
+test('거절: 계정 전환 재시작에는 쓸 수 없고, codex가 아닌 비서는 비서 길에서 거절된다(끄기 0회)', () => {
   const secretary = fixture({role: '비서', profile: 'secretary'});
-  assert.throws(() => secretary.run(), /비서는 --model-from-settings 대상이 아니다/);
+  assert.throws(() => secretary.run(), /이 비서는 기억 유지 restart를 지원하지 않는다/);
   const refresh = fixture();
   assert.throws(() => refresh.run({...OPTION, accountRefresh: true}), /계정 전환 재시작과 --model-from-settings는 함께 쓸 수 없다/);
   assert.deepEqual([secretary.log, refresh.log], [[], []]);
