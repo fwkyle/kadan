@@ -60,11 +60,13 @@ export function limitFallbackLine({ alert, entries, settings, ocx }) {
     if (item && !same(item.got)) found = item;
   }
   if (!found) return null;
-  const command = `kadan start <새 이름> --profile ${profile}${hard ? " --difficulty hard" : ""}`
+  const command = `cd <선임 작업 폴더> && kadan start <새 이름> --profile ${profile}${hard ? " --difficulty hard" : ""}`
     + ` --fallback ${found.n} --reason "한도: ${safeReason(alert.line)}"`;
   const note = profile !== "reviewer" ? ""
     : reviewFor
       ? ` (검수 대상 ${reviewFor.role ?? "작업자"} ${reviewFor.model}(${reviewFor.family})와 다른 계열 ${found.family} 후보 · --for와는 함께 못 씀)`
       : " (검수 대상 작업자와 계열이 같아지지 않는지 확인 · --for와는 함께 못 씀)";
-  return `대체 후보 ${found.n}번 있음 — 옛 세션 정리 뒤 ${command}${note}`;
+  // 순서의 원문은 감독 지침(skills/kadan-conductor/references/role-templates/conductor.md 한도 교대 절차) 한 곳이다 —
+  // 후임을 먼저 띄우고 폴더·브랜치를 확인한 뒤 선임을 끈다(후임 시작이 실패하면 선임을 보존). 여기서는 그 순서를 가리키고 명령 줄만 구체적으로 둔다.
+  return `대체 후보 ${found.n}번 있음 — 감독 지침 한도 교대 절차대로(교대 전 화면 재확인, 계정 전환 뒤면 원래 세션에 이어가기 1회 먼저 → 후임 시작 → 폴더·브랜치 확인 → 선임 stop): ${command}${note}`;
 }

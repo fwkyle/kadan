@@ -26,11 +26,12 @@ const start = (role, value, extra = {}) => ({kind: 'start', role, session: `kada
 const alertOf = (role, line = "■ You've hit your usage limit. Try again at 3:00 PM.") => ({kind: '한도', role, session: `kadan-${role}`, line});
 const STILL = {outcome: 'ok', usage: {fiveHour: 99, weekly: 97}};
 
-test('claude 작업자: 폴백 1번 명령 한 줄(옛 세션 정리 뒤, 이유는 한도 줄)', () => {
+test('claude 작업자: 폴백 1번 명령 한 줄(감독 지침 순서, 이유는 한도 줄)', () => {
   const line = limitFallbackLine({alert: alertOf('w', "You've hit your session limit · resets 3pm (Asia/Seoul)"),
     entries: [start('w', SONNET, {roleProfile: 'worker'})], settings: settings({fallback: {worker: [GPT2]}}), ocx: null});
   // 명령에 붙여 넣는 글이라 아포스트로피는 공백으로 바뀐다.
-  assert.equal(line, '대체 후보 1번 있음 — 옛 세션 정리 뒤 kadan start <새 이름> --profile worker --fallback 1 '
+  assert.equal(line, '대체 후보 1번 있음 — 감독 지침 한도 교대 절차대로(교대 전 화면 재확인, 계정 전환 뒤면 원래 세션에 이어가기 1회 먼저 → 후임 시작 → 폴더·브랜치 확인 → 선임 stop): '
+    + 'cd <선임 작업 폴더> && kadan start <새 이름> --profile worker --fallback 1 '
     + '--reason "한도: You ve hit your session limit · resets 3pm (Asia/Seoul)"');
 });
 
@@ -38,7 +39,7 @@ test('어려운 일 작업자(시작 기록 difficulty hard): --difficulty hard�
   const s = settings({roles: {'worker-hard': GPT}, fallback: {worker: [OPUS], 'worker-hard': [GPT2, OPUS]}});
   const line = limitFallbackLine({alert: alertOf('h'), entries: [start('h', GPT, {roleProfile: 'worker', difficulty: 'hard'})],
     settings: s, ocx: STILL});
-  assert.match(line, /^대체 후보 1번 있음 — 옛 세션 정리 뒤 kadan start <새 이름> --profile worker --difficulty hard --fallback 1 --reason "한도: /);
+  assert.match(line, /^대체 후보 1번 있음 — .*cd <선임 작업 폴더> && kadan start <새 이름> --profile worker --difficulty hard --fallback 1 --reason "한도: /);
   assert.match(limitFallbackLine({alert: alertOf('h'), entries: [start('h', GPT, {roleProfile: 'worker', difficulty: 'hard'})],
     settings: settings({roles: {'worker-hard': GPT}, fallback: {worker: [OPUS]}}), ocx: STILL}) ?? '(없음)', /^\(없음\)$/,
   '어려운 일 목록이 비어 있으면 작업자 목록으로 내려가지 않는다');
@@ -145,4 +146,21 @@ test('경보 본문: fallbackLine이 있으면 ocx 줄 뒤에 붙고, 한도가 
   assert.equal(formatAlertBody(base), "한도 kadan-w (You've hit your session limit)");
   assert.equal(formatAlertBody({...base, fallbackLine: '대체 후보 1번 있음 — X'}), "한도 kadan-w (You've hit your session limit) · 대체 후보 1번 있음 — X");
   assert.equal(formatAlertBody({...base, kind: '끊김', fallbackLine: 'X'}), "끊김 kadan-w (You've hit your session limit)");
+});
+
+test('교대 순서(감독 지침과 같음): 화면 재확인·이어가기 → 후임 start → 폴더·브랜치 확인 → 선임 stop, 선행 정리 문구 없음', () => {
+  const entries = [start('w', SONNET, {roleProfile: 'worker'})];
+  const s = settings({fallback: {worker: [GPT2]}});
+  const reviewerEntries = [start('r', OPUS, {roleProfile: 'reviewer', reviewFor: {role: 'w', model: 'gpt-6.1-sol', family: 'gpt'}})];
+  for (const [role, list, key] of [['w', entries, 'worker'], ['r', reviewerEntries, 'reviewer']]) {
+    const line = limitFallbackLine({alert: alertOf(role), entries: list, settings: settings({fallback: {[key]: key === 'worker' ? [GPT2] : [GPT2, DEEP]}}), ocx: null});
+    assert.ok(line, role);
+    const at = text => line.indexOf(text);
+    assert.ok(at('화면 재확인') >= 0 && at('원래 세션에 이어가기 1회 먼저') > at('화면 재확인'), '재확인 → 이어가기');
+    assert.ok(at('후임 시작') > at('이어가기'), '이어가기 → 후임 시작');
+    assert.ok(at('폴더·브랜치 확인') > at('후임 시작') && at('선임 stop') > at('폴더·브랜치 확인'), '후임 시작 → 확인 → 선임 stop');
+    assert.ok(!line.includes('kadan stop'), '명령 줄에 선임 종료를 앞세우지 않는다');
+    assert.ok(!/옛 세션 정리|선임 정리 뒤|정리 뒤/u.test(line), '선행 정리 문구 없음');
+    assert.match(line, /cd <선임 작업 폴더> && kadan start <새 이름> /u, '선임 작업 폴더에서 start');
+  }
 });

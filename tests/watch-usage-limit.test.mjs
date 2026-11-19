@@ -126,7 +126,7 @@ test('감시기: claude 작업자가 한도로 멈추면 경보 1건에 교대 �
   const r = await run({screenAt: limitFrom(2, fixtures['pos-plain'])});
   const msgs = limitMsgs(r.sent);
   assert.equal(msgs.length, 1);
-  assert.match(msgs[0][2], /한도 kadan-p-작업자 \(You've hit your session limit · resets 3pm \(Asia\/Seoul\)\) · 대체 후보 1번 있음 — 옛 세션 정리 뒤 kadan start <새 이름> --profile worker --fallback 1 --reason "한도: /);
+  assert.match(msgs[0][2], /한도 kadan-p-작업자 \(You've hit your session limit · resets 3pm \(Asia\/Seoul\)\) · 대체 후보 1번 있음 — .*cd <선임 작업 폴더> && kadan start <새 이름> --profile worker --fallback 1 --reason "한도: /);
   assert.equal(r.resumes.length, 0, '자동 재개 없음');
   assert.equal(r.records.filter(e => e.kind === 'rate-limit-retry').length, 0, '재개 예약 기록 없음');
   assert.equal(r.records.filter(e => ['start', 'stop'].includes(e.kind)).length, 0, '감시기는 세션을 띄우거나 끄지 않는다');
