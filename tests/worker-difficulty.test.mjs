@@ -59,7 +59,7 @@ test('설정: worker-hard를 채우면 show에 값과 채워질 명령이 보이
   runnersCommand(['set', 'worker-hard'], {clear: true, ...f.meta()}, f);
   assert.equal(readSettings(f.home).presets.B.roles['worker-hard'], undefined);
   assert.throws(() => runnersCommand(['set', 'worker-hard'], {clear: true, ...f.meta()}, f), /바뀐 것 없음/);
-  assert.throws(() => runnersCommand(['set', 'worker'], {clear: true, ...f.meta()}, f), /worker-hard 자리에만/);
+  assert.throws(() => runnersCommand(['set', 'worker'], {clear: true, ...f.meta()}, f), /worker-hard·secretary 자리에만/);
   assert.throws(() => runnersCommand(['set', 'worker-hard'], {clear: true, runner: 'codex', ...f.meta()}, f), /함께 쓸 수 없다/);
 });
 

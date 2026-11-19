@@ -52,6 +52,56 @@ export function mergeCodexOptions(startArgs, transcriptArgs = []) {
   return [...dedupe([...head, ...transcriptArgs]), ...(dash < 0 ? [] : startArgs.slice(dash))];
 }
 
+const EFFORT_KEY = 'model_reasoning_effort';
+const unquote = value => value.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+// 값이 든 낱말의 자리(at)와 그 낱말에서 값 앞에 붙는 글자(prefix). 한 낱말 꼴은 `--model=값`·`--config=키=값`이다.
+function valueSlot(head, i, take, slot) {
+  const at = i + take - 1, word = head[at];
+  const prefix = slot === 'model' ? (take === 1 ? '--model=' : '') : `${take === 1 ? '--config=' : ''}${EFFORT_KEY}=`;
+  return word.startsWith(prefix) ? {at, prefix, value: word.slice(prefix.length)} : null;
+}
+
+// 모델과 추론 강도 두 키의 **값만** 바꾼다(비서를 다시 열 때 실행 모델 설정값을 입힌다 — secretary-settings.mjs).
+// 키 판정은 위 중복 걷기(optionKey)와 같다. 다른 낱말·순서는 그대로 두고 `--` 뒤(프롬프트)는 손대지 않는다.
+// - 값이 이미 같으면 그 낱말을 건드리지 않는다. 강도는 따옴표를 벗긴 값으로 비교한다.
+// - 키가 없으면 `--` 앞 끝에 한 번 넣는다. effort가 없으면(null) 강도는 보지도 바꾸지도 않는다.
+// - 읽지 못하는 꼴이면 null이다: 같은 키가 둘 이상, 값 낱말이 없음, 붙여 쓴 짧은 옵션(`-m값`·`-c값`), `-c model=…`.
+//   이런 명령에 덧붙이면 같은 옵션이 둘이 되어 실행기가 바로 끝난다.
+// 반환: {args, changed, previous: {model, effort}(없었으면 null), rest(두 키를 뺀 나머지 낱말 — 호출자의 대조용)}
+export function replaceModelOptions(args, {model, effort = null}) {
+  const dash = args.indexOf('--');
+  const head = dash < 0 ? [...args] : args.slice(0, dash), tail = dash < 0 ? [] : args.slice(dash);
+  const found = {model: null, effort: null}, rest = [];
+  for (let i = 0; i < head.length;) {
+    const token = head[i], option = optionKey(head, i);
+    if (!option) {
+      if (/^-[mc]./.test(token)) return null;
+      rest.push(token); i += 1; continue;
+    }
+    if (option.take === 2 && i + 1 >= head.length) return null;
+    const slot = option.key === 'model' ? 'model' : option.key === `c:${EFFORT_KEY}` ? 'effort' : null;
+    if (option.key === 'c:model') return null;
+    if (!slot) { rest.push(...head.slice(i, i + option.take)); i += option.take; continue; }
+    if (found[slot]) return null;
+    found[slot] = valueSlot(head, i, option.take, slot);
+    if (!found[slot]) return null;
+    i += option.take;
+  }
+  const previous = {model: found.model?.value ?? null, effort: found.effort ? unquote(found.effort.value) : null};
+  const next = [...head];
+  let changed = false;
+  if (previous.model !== model) {
+    changed = true;
+    if (found.model) next[found.model.at] = found.model.prefix + model; else next.push('--model', model);
+  }
+  if (effort != null && previous.effort !== effort) {
+    changed = true;
+    const value = JSON.stringify(effort);
+    if (found.effort) next[found.effort.at] = found.effort.prefix + value; else next.push('-c', `${EFFORT_KEY}=${value}`);
+  }
+  return {args: [...next, ...tail], changed, previous, rest: [...rest, ...tail]};
+}
+
 // `codex resume <ID> …` 명령 문자열의 중복 옵션을 걷어 낸다. 읽을 수 없거나 resume 꼴이 아니면 그대로 돌려준다.
 export function dedupeResumeCommand(cmd) {
   const words = commandWords(cmd);

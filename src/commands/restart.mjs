@@ -9,6 +9,7 @@ import { currentRottieWindow } from "../restore.mjs";
 import { openSecretaryTab } from "../secretary-tab.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { restartRole, MODEL_FROM_SETTINGS } from "../restart.mjs";
+import { secretarySkipNote } from "../secretary-settings.mjs";
 import { readStatusLine } from "../watch-status-line.mjs";
 import { processTree, openFilesOf, processStartedAt } from "../process-tree.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
@@ -119,8 +120,15 @@ export function cmdRestart(argv, flags) {
   const session = sessionName(role);
   const deps = restartDeps(home);
   let result;
-  try { result = restartRole({ home, role, session, flags, floor, settings: readSettings(home), deps }); }
+  // 비서는 restartRole이 설정 인자를 쓰지 않고, 다시 열 때 설정을 스스로 읽는다(못 읽으면 저장된 명령 그대로 연다).
+  // 그래서 설정 파일이 깨져 있어도 비서 restart는 여기서 멈추지 않는다.
+  const readRoleSettings = () => {
+    try { return readSettings(home); }
+    catch (error) { if (role === "비서") return null; throw error; }
+  };
+  try { result = restartRole({ home, role, session, flags, floor, settings: readRoleSettings(), deps }); }
   catch (error) { die(error.message); }
+  if (result.settingsSkipped) console.error(`경고: ${secretarySkipNote(result.settingsSkipped)}`);
   if (result.pending.length) console.error(`${result.forced ? "--force: 안전 지점 확인 없이, " : ""}끝나지 않은 카드 ${result.pending.length}건은 그대로 이어진다: ${result.pending.join(", ")}`);
   const swap = result.modelFromSettings;
   if (swap) {

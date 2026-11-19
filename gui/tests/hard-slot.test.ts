@@ -67,3 +67,15 @@ test("강도가 있는 값은 그대로 담기고, 강도가 비면 effort 키�
   const noEffort = stagePreset(fixture.settings.empty, "worker-hard", false, { runner: "codex", model: "gpt-hard", effort: "" }, "add");
   assert.deepEqual(noEffort.presets.A.roles["worker-hard"], { runner: "codex", model: "gpt-hard" });
 });
+
+// 비서 자리(2026-11-19)도 비울 수 있는 선택 칸이다. 대체 후보는 둘 수 없다.
+test("비서 자리: 값을 넣고 비우며(키를 지운다), 대체 후보는 거절한다", () => {
+  const choice = { runner: "codex", model: "gpt-secretary", effort: "medium" };
+  const staged = stagePreset(fixture.settings.empty, "secretary", false, choice, "add");
+  assert.deepEqual(staged.presets.A.roles.secretary, choice);
+  const cleared = clearPreset(staged, "secretary");
+  assert.equal(Object.hasOwn(cleared.presets.A.roles, "secretary"), false);
+  assert.equal(Object.hasOwn(cleared.presets.A, "fallback"), false, "fallback 칸을 만들지 않는다");
+  assert.deepEqual(cleared.presets.A.roles, fixture.settings.empty.presets.A.roles, "다른 역할은 그대로");
+  assert.throws(() => stagePreset(staged, "secretary", true, choice, "add"), /비서 자리에는 대체 후보를 둘 수 없/);
+});
