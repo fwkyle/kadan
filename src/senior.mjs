@@ -191,7 +191,8 @@ export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, 
     `만든 ${row.createdAt ?? '-'}`, `끝 ${row.endReason ?? '-'}`, `남긴 ${row.keptAt ?? '-'}`, row.dir ?? '(호출 폴더 없음)',
     ...(row.action === 'left' ? [`— 끄지 않음: ${CLEANUP_WHY[row.why] ?? `기록과 다름(${row.why})`}`] : []),
     ...(row.tab ? [`— 탭 ${row.tab.tab}${row.tab.tabReason ? `(${row.tab.tabReason})` : ''}${row.tab.tab === 'closed' ? '' : ' · 다음 cleanup이 다시 닫는다'}`] : [])].join('  ');
-  // 세션 없이 남은 탭의 줄: 그 탭의 세션은 이미 없다(내보낼 때 닫지 못했거나 세션이 먼저 사라졌다).
+  // 세션 줄 밖의 탭(표지로 찾은 탭)의 줄. 닫은·닫을 탭은 세션이 없다는 것이 확정된 탭이다(내보낼 때 닫지 못했거나 세션이 먼저 사라졌다).
+  // 둔 탭은 그렇지 않다: 그 이름의 세션이 살아 있거나, 모르거나, 표지·탭 기록을 믿을 수 없다 — 이유를 줄 끝에 보인다.
   const tabLine = row => [`${head[row.action]}  ${row.action === 'tab-left' ? '(세션 줄 밖의 탭)' : '(세션 없음)'}`, `탭 ${row.id ?? '-'}`, row.dir ?? '(호출 폴더 모름)',
     ...(row.action === 'tab-left' ? [`— 닫지 않음: ${tabWhy(row.why)}`] : [])].join('  ');
   const count = action => rows.filter(row => row.action === action).length;

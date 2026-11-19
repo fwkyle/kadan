@@ -36,13 +36,19 @@ function readRegularJson(file) {
   } catch (error) { return {ok: false, why: error.code === 'ELOOP' ? 'not-regular' : 'unreadable'}; }
   try { return {ok: true, value: JSON.parse(text)}; } catch { return {ok: false, why: 'bad-json'}; }
 }
-// 임시 파일에 쓴 뒤 옮긴다: 다른 프로세스가 읽는 순간에 반쯤 쓴 파일이 보이지 않는다. 그 자리에 링크가 있어도 따라가 쓰지 않고
-// 링크 자체를 갈아 끼운다. 임시 파일도 새로 만들 때만 쓴다(이미 있는 이름·링크 위에 쓰지 않는다).
+// 그 자리에 써도 되는가: 아무것도 없거나 정규 파일일 때만이다. 링크·폴더가 있으면 쓰지 않는다(거절).
+function writableSpot(file) {
+  const stat = fs.lstatSync(file, {throwIfNoEntry: false});
+  return !stat || stat.isFile();
+}
+// 임시 파일에 쓴 뒤 옮긴다: 다른 프로세스가 읽는 순간에 반쯤 쓴 파일이 보이지 않는다. 부르는 쪽이 먼저 writableSpot으로 자리를 본다.
+// 임시 파일도 새로 만들 때만 쓴다(이미 있는 이름·링크 위에 쓰지 않는다). 옮기지 못하면 임시 파일을 남기지 않는다.
 function writeAtomic(file, text) {
   const temp = `${file}.${process.pid}.tmp`;
   try { fs.unlinkSync(temp); } catch { /* 없으면 지울 것이 없다 */ }
   fs.writeFileSync(temp, text, {mode: 0o600, flag: 'wx'});
-  fs.renameSync(temp, file);
+  try { fs.renameSync(temp, file); }
+  catch (error) { try { fs.unlinkSync(temp); } catch { /* 이미 없다 */ } throw error; }
 }
 
 // 복구 근거: 호출 폴더의 tab.json. create 전에 키를 먼저 쓰고 결과가 나올 때마다 갱신한다(동기). 쓰기 실패는 삼킨다.
@@ -51,6 +57,7 @@ function writeAtomic(file, text) {
 export function writeTabState(dir, state) {
   try {
     const file = path.join(dir, 'tab.json');
+    if (!writableSpot(file)) return;
     const read = readRegularJson(file);
     if (!read.ok && (read.why === 'not-regular' || read.why === 'too-big')) return;
     const prev = read.ok && read.value && typeof read.value === 'object' && !Array.isArray(read.value) ? read.value : {};
@@ -167,12 +174,17 @@ function readTabState(dir) {
   return {ok: true, state: value.state, id: typeof value.rottieTerminalId === 'string' && value.rottieTerminalId ? value.rottieTerminalId : null};
 }
 
+// 표지 쓰기. 표지 폴더가 진짜 폴더이고 표지 자리에 아무것도 없거나 정규 파일일 때만 쓴다(링크·폴더가 있으면 쓰지 않는다).
 export function rememberOpenTab(home, dir, id) {
   try {
-    const kind = markerFolderKind(home);
-    if (kind === 'not-directory') return;
-    if (kind === 'absent') fs.mkdirSync(path.join(home, OPEN_TABS_DIR), {mode: 0o700});
-    writeAtomic(markerFile(home, dir), JSON.stringify({dir, rottieTerminalId: id, at: new Date().toISOString()}) + '\n');
+    if (markerFolderKind(home) === 'absent') {
+      // 두 호출이 동시에 처음 만들면 늦은 쪽은 '이미 있음'을 받는다. 그것은 실패가 아니다 — 아래에서 폴더 종류를 다시 본다.
+      try { fs.mkdirSync(path.join(home, OPEN_TABS_DIR), {mode: 0o700}); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    if (markerFolderKind(home) !== 'dir') return;
+    const file = markerFile(home, dir);
+    if (!writableSpot(file)) return;
+    writeAtomic(file, JSON.stringify({dir, rottieTerminalId: id, at: new Date().toISOString()}) + '\n');
   } catch { /* 꾸밈이다: 표지를 못 써도 호출·정리는 그대로 간다 */ }
 }
 export function forgetOpenTab(home, dir) {

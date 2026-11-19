@@ -510,7 +510,7 @@ test('닫을 탭 표지: 표지는 실마리일 뿐이다 — 이 홈의 호출 
 });
 
 // 2026-11-19 재검수 발견 1·2와 파일 안전: '모름'을 '끝남'으로 읽지 않는다 — 확실히 확인한 경우에만 탭을 닫고 표지를 지운다.
-test('닫을 탭 표지의 판정: 세션이 있거나 모르면 탭을 두고, 탭 기록을 읽지 못하면 표지를 지우지 않으며, 링크로 된 표지·탭 기록·표지 폴더는 읽지도 쓰지도 않는다', () => {
+test('닫을 탭 표지의 판정: 세션이 있거나 모르면 탭을 두고, 탭 기록을 읽지 못하면 표지를 지우지 않으며, 링크로 된 표지·탭 기록·표지 폴더는 읽지도 쓰지도 않는다', t => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kso-')));
   const folder = path.join(home, OPEN_TABS_DIR);
   const call = (ask, state) => { const dir = path.join(home, 'advice', ask, '1-codex-m'); fs.mkdirSync(dir, {recursive: true}); fs.writeFileSync(path.join(dir, 'tab.json'), JSON.stringify(state)); return dir; };
@@ -560,7 +560,7 @@ test('닫을 탭 표지의 판정: 세션이 있거나 모르면 탭을 두고, 
   writeTabState(linked, {state: 'closed'});
   assert.equal(fs.readFileSync(target, 'utf8'), targetText, '링크 너머의 파일을 고치지 않는다');
   assert.ok(fs.lstatSync(path.join(linked, 'tab.json')).isSymbolicLink()); assert.equal(calls.length, before);
-  // (4) 링크로 된 표지: 따라가 읽지 않는다(그 표지로는 닫지 않는다). 그 자리에 표지를 다시 쓰면 링크 너머가 아니라 링크 자체를 갈아 끼운다.
+  // (4) 링크로 된 표지: 따라가 읽지 않고(그 표지로는 닫지 않는다), 그 자리에 표지를 쓰지도 않는다(링크는 그대로 남고 링크 너머도 그대로다).
   const real = call('ask-real', {state: 'opened', rottieTerminalId: 't-real'});
   const decoy = path.join(home, 'decoy-marker.json'), decoyText = JSON.stringify({dir: real, rottieTerminalId: 't-real'});
   fs.writeFileSync(decoy, decoyText); fs.symlinkSync(decoy, path.join(folder, 'ask-real--1-codex-m.json'));
@@ -569,9 +569,19 @@ test('닫을 탭 표지의 판정: 세션이 있거나 모르면 탭을 두고, 
   assert.equal(calls.length, before, '링크 표지로는 닫지 않는다');
   rememberOpenTab(home, real, 't-real');
   assert.equal(fs.readFileSync(decoy, 'utf8'), decoyText, '링크 너머의 파일을 고치지 않는다');
-  assert.ok(fs.lstatSync(path.join(folder, 'ask-real--1-codex-m.json')).isFile());
-  assert.equal(status()['ask-real--1-codex-m.json'], 'pending');
+  assert.ok(fs.lstatSync(path.join(folder, 'ask-real--1-codex-m.json')).isSymbolicLink(), '링크 자리에는 쓰지 않는다');
+  assert.equal(status()['ask-real--1-codex-m.json'], 'marker-not-regular');
+  // 표지 자리가 폴더여도 쓰지 않고, 임시 파일을 남기지 않는다.
+  const blocked = call('ask-blocked', {state: 'opened', rottieTerminalId: 't-blocked'});
+  fs.mkdirSync(path.join(folder, 'ask-blocked--1-codex-m.json'));
+  rememberOpenTab(home, blocked, 't-blocked');
+  assert.ok(fs.lstatSync(path.join(folder, 'ask-blocked--1-codex-m.json')).isDirectory());
+  assert.equal(status()['ask-blocked--1-codex-m.json'], 'marker-not-regular');
   assert.deepEqual(fs.readdirSync(folder).filter(name => name.endsWith('.tmp')), [], '임시 파일이 남지 않는다');
+  // 정규 파일 표지는 덮어쓴다(같은 탭을 다시 기억해도 하나다).
+  rememberOpenTab(home, one, 't-one'); rememberOpenTab(home, one, 't-one');
+  assert.ok(fs.lstatSync(path.join(folder, 'ask-one--1-codex-m.json')).isFile());
+  fs.unlinkSync(path.join(folder, 'ask-one--1-codex-m.json'));
   // (5) 호출 폴더가 링크를 거쳐 이 홈의 advice/ 밖을 가리키면(글자로는 안쪽) 실제 경로로 보고 거절한다.
   const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kso-out-')));
   fs.mkdirSync(path.join(outside, '1-codex-m')); fs.writeFileSync(path.join(outside, '1-codex-m', 'tab.json'), JSON.stringify({state: 'opened', rottieTerminalId: 't-out'}));
@@ -588,4 +598,16 @@ test('닫을 탭 표지의 판정: 세션이 있거나 모르면 탭을 두고, 
   rememberOpenTab(other, dir, 't-x');
   assert.deepEqual(fs.readdirSync(away), [], '링크 너머 폴더에 표지를 쓰지 않는다');
   assert.deepEqual(listOpenTabs(other).map(row => row.why), ['marker-folder-not-directory']);
+  // 표지 폴더를 두 호출이 동시에 처음 만드는 경우: 늦은 쪽이 '이미 있음'을 받아도 표지를 쓴다(조용히 잃지 않는다).
+  const racing = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kso-')));
+  const first = path.join(racing, 'advice', 'ask-a', '1-codex-m'), second = path.join(racing, 'advice', 'ask-b', '1-codex-m');
+  const mkdir = fs.mkdirSync;
+  t.mock.method(fs, 'mkdirSync', (target, options) => {
+    // 폴더가 없다고 본 직후 다른 호출이 먼저 만들었다.
+    if (target === path.join(racing, OPEN_TABS_DIR)) { mkdir(target, options); rememberOpenTab(racing, second, 't-b'); throw Object.assign(new Error('이미 있다'), {code: 'EEXIST'}); }
+    return mkdir(target, options);
+  });
+  rememberOpenTab(racing, first, 't-a');
+  t.mock.restoreAll();
+  assert.deepEqual(fs.readdirSync(path.join(racing, OPEN_TABS_DIR)).sort(), ['ask-a--1-codex-m.json', 'ask-b--1-codex-m.json']);
 });
