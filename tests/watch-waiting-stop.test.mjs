@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {setImmediate} from 'node:timers/promises';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {appendLedger, readLedger} from '../src/ledger.mjs';
+import {createWatchMailReader} from '../src/watch-mail-reader.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {createWatchStoreReaders} from '../src/watch-store-cache.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
@@ -38,14 +40,14 @@ const waiting = {...running, activity: 'waiting', activityAt: stamp(1), at: stam
 const dispatch = (by = BOSS) => ({kind: 'send', role: WORKER, session: SESSION, taskId: 'qa-task', executionKey: KEY, by, t: stamp(0)});
 
 // screen·card·alive는 분(minute)을 받아 그 순회의 값을 준다. keys: 대기 세션에 닿을 수 있는 모든 입력 길(재개·큐 Enter·알림·넛지).
-async function simulate({screen = () => INCIDENT, card = () => waiting, alive = () => true, until = 14, seed = null, by = BOSS, extra = () => []} = {}) {
+async function simulate({screen = () => INCIDENT, card = () => waiting, alive = () => true, until = 14, seed = null, by = BOSS, extra = () => [], leadAlive = true} = {}) {
   let minute = 0;
   const entries = seed ?? [...starts, dispatch(by)];
   const before = entries.length, sent = [], keys = [], aiCalls = [];
   const controller = new AbortController();
   await runWatch({signal: controller.signal, intervalMs: 60_000, stallN: 2, stallAfterMs: 300_000, idleMs: 15 * 60_000,
     parents, routes: new Map(), superRole: 'qa-top', now: () => epoch + minute * 60_000,
-    floor: {list: () => starts.filter(s => s.role !== WORKER || alive(minute)).map(s => ({session: s.session, pid: s.panePid})),
+    floor: {list: () => starts.filter(s => s.role === WORKER ? alive(minute) : s.role !== LEAD || leadAlive).map(s => ({session: s.session, pid: s.panePid})),
       read: session => session === SESSION ? screen(minute) : `• 맡긴 재판정 결과를 기다립니다. ${minute}분\n\n${COMPOSER}`, alive: () => true},
     readEntries: () => [...entries, ...extra(minute)], readCards: () => [card(minute)], readWorks: () => [],
     resume429: (role, text) => keys.push(['resume429', role, text]),
@@ -283,9 +285,62 @@ test('경보 본문: 실행 키·대기 표시 시각과 사유·정지 줄·감
   assert.equal(formatAlertBody(restored), `대기 표시 중 오류 화면으로 멈춤 ${SESSION} / qa-task (대기 표시; 대기 표시 때문에 정체 감시 밖이었음 — 감독 확인 필요)`);
 });
 
-test('받는 쪽: 발령한 역할이 관계표의 직속 상위와 달라도 직속 상위에게 가고, 본문이 발령한 역할을 밝힌다', async () => {
+test('받는 쪽: 그 실행을 발령한 역할에게 간다(관계표의 직속 상위와 달라도). 발령한 역할의 세션이 없으면 직속 상위에게 간다', async () => {
+  // 사고의 모양: 다른 계열의 감독(LEAD)이 검수자에게 재판정을 맡기고 그 결과를 기다린다. 검수자의 직속 상위는 BOSS다.
   const r = await simulate({by: LEAD, until: 3});
-  assert.deepEqual(r.waitingStops.map(e => e.recipient), [BOSS]);
-  assert.ok(r.sent.find(m => /대기 표시 중/u.test(m.message)).message.includes(`발령 ${LEAD}`));
-  assert.deepEqual(r.sent.filter(m => m.role === LEAD), []);
+  assert.deepEqual(r.waitingStops.map(e => [e.recipient, e.route.basis, e.delivered]), [[LEAD, 'dispatcher', true]]);
+  const mails = r.sent.filter(m => /대기 표시 중/u.test(m.message));
+  assert.deepEqual(mails.map(m => m.role), [LEAD], '기다리는 쪽(발령한 역할)만 받는다');
+  assert.ok(mails[0].message.includes(`발령 ${LEAD}`));
+  // 발령한 역할의 세션이 없으면 죽은 창에 보내지 않고 기존 경로(직속 상위)로 간다. 건너뛴 이유를 기록에 남긴다.
+  const gone = await simulate({by: LEAD, leadAlive: false, until: 3});
+  assert.deepEqual(gone.waitingStops.map(e => [e.recipient, e.delivered]), [[BOSS, true]]);
+  assert.deepEqual(gone.waitingStops[0].route.skipped, [`${LEAD}(발령한 역할 세션 없음)`]);
+  assert.deepEqual(gone.sent.filter(m => /대기 표시 중/u.test(m.message)).map(m => m.role), [BOSS]);
+  // 발령한 역할을 모르면(옛 기록) 직속 상위에게 간다.
+  const unknown = await simulate({by: undefined, until: 3, seed: [...starts, {...dispatch(), by: undefined}]});
+  assert.deepEqual(unknown.waitingStops.map(e => e.recipient), [BOSS]);
+});
+
+test('운영 읽기 경로: 감시 명령이 쓰는 원장·카드 읽기(지난 주기 감시 역할만 준비)로도 대기 세션이 잡혀 발령한 역할에게 간다', async () => {
+  // kadan watch의 배선(commands/watch.mjs)과 같게 잇는다: 카드·업무 캐시 읽기, 그 위의 원장 읽기와 투영, 지난 주기에 감시한 역할 목록.
+  // 대기 역할은 감시 범위 밖이라 그 목록에 들지 않는다. 그래도 발령 기록(보낸 역할 포함)과 세션 시작 기록이 읽혀야 한다.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-waiting-stop-live-'));
+  createDatabase(home); writeStorageMarker(home, 'sqlite');
+  const store = new CardStore(home);
+  const made = store.create({repo: 'qa', id: 'live-task', repoPath: home, body: '# 지시'});
+  store.update(made.key, {status: 'assigned', role: WORKER, board: 'qa', scope: '시험 범위',
+    rallyId: 'rally', rallyTitle: '묶음', rallyRound: '1', rallyStep: 'review'}, {revision: 1, note: '배정'});
+  const began = Date.now() - 120_000, iso = offset => new Date(began + offset).toISOString();
+  for (const s of starts) appendLedger({...s, t: iso(0)}, home);
+  appendLedger({kind: 'send', role: WORKER, session: SESSION, taskId: made.id, executionKey: made.key, by: LEAD, t: iso(1000)}, home);
+  store.update(made.key, {activity: 'waiting'}, {revision: store.get(made.key).revision, note: WAIT_NOTE, noteKind: 'progress', by: WORKER});
+  const stores = createWatchStoreReaders(home);
+  let mailRoles = [];
+  const observedRoles = [];
+  const mailReader = createWatchMailReader(home, null, {readCards: stores.cards.read, readWorks: stores.works.read, readRoles: () => mailRoles});
+  const sent = [], keys = [], aiCalls = [], controller = new AbortController();
+  let cycle = 0;
+  await runWatch({signal: controller.signal, intervalMs: 60_000, stallN: 2, stallAfterMs: 300_000, idleMs: 15 * 60_000,
+    parents, routes: new Map(), superRole: 'qa-top', now: () => Date.now() + cycle * 60_000,
+    floor: {list: () => starts.map(s => ({session: s.session, pid: s.panePid})),
+      read: session => session === SESSION ? INCIDENT : `• 맡긴 재판정 결과를 기다립니다. ${cycle}분\n\n${COMPOSER}`, alive: () => true},
+    readEntries: mailReader.readEntries, readMailLetters: mailReader.letters, projectEntries: mailReader.project,
+    rememberObservedRoles: roles => { mailRoles = roles; observedRoles.push([...roles]); },
+    readCards: stores.cards.read, readWorks: stores.works.read,
+    resume429: (role, text) => keys.push(['resume429', role, text]), sendQueueEnter: session => keys.push(['queue-enter', session]),
+    sendAlert: (role, message) => { sent.push({role, message}); if (role === WORKER) keys.push(['alert', role]); },
+    sendNudge: (role, message) => { sent.push({role, message, nudge: true}); if (role === WORKER) keys.push(['nudge', role]); },
+    judgeCmd: 'fake', ai: {reports: {retire: () => {}}, run: args => { aiCalls.push([args.source, args.role]); return {ok: true}; }},
+    record: e => appendLedger({...e, t: new Date().toISOString()}, home), spawn: () => ({status: 0, stdout: ''}), print: () => {},
+    sleep: async () => { await setImmediate(); if (++cycle >= 4) controller.abort(); }});
+  assert.ok(observedRoles.every(roles => !roles.includes(WORKER)), '대기 역할은 감시한 역할 목록(다음 주기 준비 대상)에 들지 않는다');
+  const alerts = readLedger(home).filter(e => e.kind === 'alert' && e.alertKind === '대기중정지');
+  assert.deepEqual(alerts.map(e => [e.recipient, e.route?.basis, e.delivered, e.taskId, Boolean(e.resolved)]), [[LEAD, 'dispatcher', true, made.id, false]],
+    '4주기 동안 발령한 역할에게 한 번');
+  const mails = sent.filter(m => /대기 표시 중/u.test(m.message));
+  assert.deepEqual(mails.map(m => m.role), [LEAD]);
+  for (const text of [made.key, WAIT_NOTE, CAPACITY, `발령 ${LEAD}`]) assert.ok(mails[0].message.includes(text), text);
+  assert.deepEqual(keys, []);
+  assert.deepEqual(aiCalls.filter(([, role]) => role === WORKER), []);
 });

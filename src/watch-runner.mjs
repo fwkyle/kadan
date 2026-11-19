@@ -1007,10 +1007,19 @@ export async function runWatch({
         superRole,
         parents
       );
+      // 대기 표시 중 정지는 그 실행을 발령한 역할이 결과를 기다리는 쪽이라 그 역할에게 먼저 보낸다(관계표의 직속 상위와
+      // 다를 수 있다: 다른 계열의 감독이 검수자에게 재판정을 맡긴 경우). 발령한 역할을 모르거나 그 세션이 살아 있지 않으면
+      // 기존 경로(직속 상위, 죽었으면 그 위)로 간다. 죽은 세션에 보내 알림이 조용히 사라지지 않게 한다.
+      const waitingDispatcher = alert.kind === '대기중정지' && !observationError
+        && alert.dispatcher && alert.dispatcher !== alert.role ? alert.dispatcher : null;
+      const dispatcherRoute = !waitingDispatcher ? null
+        : roles.liveSessions.has(`kadan-${waitingDispatcher}`)
+          ? {recipient:waitingDispatcher, basis:'dispatcher', skipped:[]}
+          : {...baseRoute, skipped:[`${waitingDispatcher}(발령한 역할 세션 없음)`, ...(baseRoute.skipped ?? [])]};
       // Autopilot Wingman 경로(PR F): 사용자로 갈 놀고 있음 2단·정체만 Wingman으로 돌린다. 스냅샷은 필요한 첫 경보에서 주기당 한 번만 만든다.
-      const route = baseRoute.recipient === USER_RECIPIENT && readAutopilotWingman && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
+      const route = dispatcherRoute ?? (baseRoute.recipient === USER_RECIPIENT && readAutopilotWingman && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
         ? applyWingmanRoute({route: baseRoute, alert, autopilot: autopilotWingmanOnce(), liveSessions: observationError ? null : roles.liveSessions})
-        : baseRoute;
+        : baseRoute);
       const recipient=route.recipient;
       let target = "stdout";
       // Wingman은 사용자 대신 받는 자리다: Wingman 전달이 확실히 실패하면 상신 대상은 원래 수신자(사용자)다. 관계표에 Wingman이 없어도 같다.
