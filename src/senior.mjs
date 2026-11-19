@@ -162,7 +162,8 @@ export const seniorEvictedLine = evicted => `남긴 세션 상한(${SENIOR_KEPT}
 
 const CLEANUP_WHY = {running: '진행 중인 호출', 'no-record': '기록 없음', 'outside-home': '이 홈의 기록이 아님'};
 const TAB_WHY = {'marker-unreadable': '표지를 읽지 못함', 'marker-outside-home': '이 홈의 호출 폴더가 아님', 'marker-name-differs': '표지 이름이 호출 폴더와 다름',
-  'tab-id-differs': '표지의 탭 id가 탭 기록과 다름'};
+  'tab-id-differs': '표지의 탭 id가 탭 기록과 다름', 'other-socket': '다른 소켓의 세션 기록(그 소켓에서 정리한다)',
+  'session-record-missing': '세션 기록을 읽지 못함'};
 // kadan senior cleanup [--dry-run]: 시니어 소켓의 세션을 나열하고, 끝난 호출의 세션 중 기록 대조가 맞는 것만 끈다(로티 탭도 닫는다).
 // 진행 중 호출·기록 없는 세션·대조가 안 되는 세션은 끄지 않고 이유를 보인다. 세션 없이 남은 탭(내보낼 때 못 닫음 등)도 표지로 찾아 닫는다.
 // 세션에 키를 보내지 않는다. 받는 인자는 --dry-run 하나뿐이다: 그 밖의 인자·표기(--dry-run=true 등)는 아무것도 끄지 않고 거절한다 —
@@ -177,7 +178,7 @@ export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, 
   // --dry-run은 파일을 하나도 만들지 않는다(tmux 설정 파일·표지 폴더·잠금 포함).
   const run = seniorTmux({socket: seniorSocket(env, home), home, env, readOnly: dryRun});
   const rows = cleanupSeniorSessions({home, run, dryRun, now, closeTab: dir => closeKeptTab({home, env, dir, rottie}),
-    sweepTabs: ({seen, dryRun: dry}) => sweepOpenTabs({home, env, rottie, seen, dryRun: dry})});
+    sweepTabs: ({seen, dryRun: dry}) => sweepOpenTabs({home, env, rottie, seen, socket: run.socket, dryRun: dry})});
   if (!rows.length) return `남은 시니어 세션이 없다(소켓 ${run.socket})`;
   const head = {closed: '끔', 'would-close': '끌 것', left: '둠', 'tab-closed': '탭 닫음', 'tab-would-close': '탭 닫을 것', 'tab-left': '탭 둠'};
   const isTab = row => row.action.startsWith('tab-');

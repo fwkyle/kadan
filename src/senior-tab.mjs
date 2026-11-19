@@ -127,6 +127,13 @@ function readTabState(dir) {
     return value && typeof value === 'object' ? value : null;
   } catch { return null; }
 }
+// 그 호출의 세션이 뜬 소켓 이름(세션 기록에서 읽는다). 읽지 못하면 null.
+function sessionSocket(dir) {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
+    return typeof value?.socket === 'string' && value.socket ? value.socket : null;
+  } catch { return null; }
+}
 // 닫아 볼 수 있는 자기 탭 id. 없으면 null.
 function closableId(state) {
   return state && RETRYABLE.has(state.state) && typeof state.rottieTerminalId === 'string' && state.rottieTerminalId ? state.rottieTerminalId : null;
@@ -181,7 +188,16 @@ export function closeKeptTab({home, env, dir, rottie}) {
     else {
       const runEnv = {...env, KADAN_ROTTIE_BIN: bin, KADAN_HOME: home};
       assertNotLiveRottie(runEnv);
-      result = closeSeniorTab({call: rottie ?? (argv => runRottie(argv, spawnSync, runEnv)), rottieTerminalId: id});
+      // 닫으려는 탭이 로티에 이미 없으면(사람이 남겨 둔 탭을 보고 직접 닫았거나, 세션이 꺼져 로티가 치웠다) 닫힌 것이다.
+      // 실패로 두면 표지가 영영 남아 정리 때마다 다시 시도한다. 가짜 로티의 답(ROTTIE_TERMINAL_NOT_FOUND)을 기준으로 했다.
+      let gone = false;
+      const inner = rottie ?? (argv => runRottie(argv, spawnSync, runEnv));
+      const call = argv => {
+        try { return inner(argv); }
+        catch (error) { if (argv[1] === 'close' && error?.code === 'ROTTIE_TERMINAL_NOT_FOUND') gone = true; throw error; }
+      };
+      result = closeSeniorTab({call, rottieTerminalId: id});
+      if (gone) result = {tab: 'closed', tabReason: 'already-gone'};
       // 실패해도 탭 id는 tab.json에 그대로 남는다(상태만 close-failed) — 다음에 다시 닫아 본다.
       writeTabState(dir, {state: result.tab, reason: result.tabReason});
     }
@@ -195,13 +211,17 @@ export function closeKeptTab({home, env, dir, rottie}) {
 
 // 정리 명령의 탭 훑기: 표지가 가리키는 탭 가운데 세션 없이 남은 것을 닫는다. seen은 이번 정리가 본 세션들의 호출 폴더다
 // (그 탭은 세션 줄에서 다뤘거나, 살아 있는 세션의 것이라 그대로 둔다). 소켓의 세션 목록에 없는 호출 폴더의 탭이 세션 없이 남은 탭이다.
+// 표지는 홈마다 있고 세션 목록은 소켓마다 있다: 그 호출의 세션 기록(session.json)이 지금 소켓(socket)의 것일 때만 '세션 없음'을 믿는다.
+// 다른 소켓의 기록이거나 기록을 읽지 못하면 그 세션이 살아 있을 수 있으므로 닫지 않고 이유를 보인다(표지는 남는다).
 // dryRun이면 무엇을 닫을지만 돌려주고 표지·탭 기록을 바꾸지 않는다. 반환: 줄마다 {dir, id, action: tab-closed|tab-would-close|tab-left, why?, tab?}.
-export function sweepOpenTabs({home, env, rottie, seen, dryRun = false}) {
+export function sweepOpenTabs({home, env, rottie, seen, socket, dryRun = false}) {
   const rows = [];
   for (const entry of listOpenTabs(home)) {
     if (entry.status === 'stale') { if (!dryRun) { try { fs.unlinkSync(entry.file); } catch { /* 이미 없다 */ } } continue; }
     if (entry.status === 'invalid') { rows.push({dir: entry.dir, id: entry.id, action: 'tab-left', why: entry.why}); continue; }
     if (seen.has(entry.dir)) continue;
+    const owner = sessionSocket(entry.dir);
+    if (owner !== socket) { rows.push({dir: entry.dir, id: entry.id, action: 'tab-left', why: owner == null ? 'session-record-missing' : 'other-socket'}); continue; }
     if (dryRun) { rows.push({dir: entry.dir, id: entry.id, action: 'tab-would-close'}); continue; }
     const tab = closeKeptTab({home, env, dir: entry.dir, rottie});
     rows.push(tab?.tab === 'closed' ? {dir: entry.dir, id: entry.id, action: 'tab-closed', tab}

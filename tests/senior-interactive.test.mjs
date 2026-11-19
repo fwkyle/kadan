@@ -360,6 +360,11 @@ test('남긴 세션을 내보낼 때 탭은 탭 스위치와 무관하게 자기
   assert.match(dry, /탭 닫을 것 {2}\(세션 없음\) {2}탭 old-1 {2}/u); assert.match(dry, /탭 닫을 것 {2}\(세션 없음\) {2}탭 old-2 {2}/u);
   assert.match(dry, /끌 세션 6개, 둘 세션 0개 · 세션 없이 남은 탭: 닫을 것 2개, 둘 것 0개/);
   assert.equal(calls.length, count); assert.deepEqual(markers(), kept); assert.equal(f.sessions().length, 6);
+  // (4-1) 같은 홈을 다른 소켓으로 정리해도 이 소켓의 탭은 닫지 않는다(표지는 홈마다, 세션 목록은 소켓마다다). 살아 있는 세션의 탭도 그대로다.
+  const elsewhere = await cleanup({}, {...base, KADAN_SOCKET: `${f.env.KADAN_SOCKET}o`});
+  assert.match(elsewhere, /끈 세션 0개, 둔 세션 0개 · 세션 없이 남은 탭: 닫음 0개, 남음 3개/);
+  assert.match(elsewhere, /닫지 않음: 다른 소켓의 세션 기록/);
+  assert.equal(calls.length, count); assert.deepEqual(markers(), kept); assert.equal(f.sessions().length, 6);
   // (5) 운영 로티 보호는 그대로다: 기본이 아닌 홈 + 허용 플래그 없음이면 창 none·실행 파일 있음이어도 로티를 부르지 않는다.
   //     세션은 끄고, 닫지 못한 탭은 모두 표지로 남는다.
   const guarded = await cleanup({}, {...f.env, KADAN_WINDOW: 'none', KADAN_ROTTIE_BIN: '/fake/rottie'});
