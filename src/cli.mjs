@@ -8,7 +8,7 @@ import { inboxCommand } from "./mailbox.mjs";
 import { decisionCommand } from "./decisions.mjs";
 import { autopilotCommand, autopilotOriginalText } from "./commands/autopilot.mjs";
 import { autopilotGuard } from "./autopilot-guard.mjs";
-import { seniorCommand, seniorEffortLabel, seniorKeptLine } from "./senior.mjs";
+import { seniorCommand, seniorEffortLabel, seniorEvictedLine, seniorKeptLine } from "./senior.mjs";
 import { runnersCommand } from "./runners-command.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand } from "./card-command.mjs";
@@ -237,6 +237,8 @@ export const COMMANDS = {
     console.log(JSON.stringify({...rest,answers:answers.map(({answer,...receipt})=>receipt)},null,2));
     // 대화형 호출의 세션은 끄지 않고 남긴다. 영수증 바로 아래에 몇 개가 남았고 어떻게 치우는지 알린다.
     if(rest.keptSessions)console.log(seniorKeptLine(rest.keptSessions));
+    // 남긴 세션 상한을 넘겨 오래된 세션을 껐으면 무엇을 껐고 그 탭을 닫았는지도 알린다.
+    if(rest.evicted?.length)console.log(seniorEvictedLine(rest.evicted));
     for(const a of answers)console.log(`\n--- 시니어 ${a.runner}/${a.model}/${seniorEffortLabel(a)} · ${a.status} ---\n${a.answer??'(답 없음 — 증거 폴더 참고)'}`);
   },
   // 옛 이름(2026-10-05 advisor→senior 개명). 이미 떠 있는 감독이 옛 지침대로 불러도 같은 명령이 돈다.

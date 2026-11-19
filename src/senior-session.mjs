@@ -16,7 +16,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {acquireDirLock} from './dir-lock.mjs';
-import {ensureTmuxConf, sendTmux, tmuxClientEnv} from './floor-tmux.mjs';
+import {ensureTmuxConf, sendTmux, tmuxClientEnv, tmuxConfPath} from './floor-tmux.mjs';
 import {splitGhostText} from './ghost-text.mjs';
 import {ALLOW_LIVE_FLOOR_ENV, isDefaultHome} from './live-floor-guard.mjs';
 import {composerHolds, composerReady, limitScreen, markerOf, readAnswerText, screenWorking,
@@ -77,7 +77,8 @@ export function assertSeniorSocket(socket, home, env = process.env) {
 
 // 전용 소켓 실행 함수. 늘 `-L <소켓>`과 카단 tmux 설정(-f)으로 부른다 — 개인 기본 tmux 서버와 사용자 tmux.conf를 쓰지 않는다.
 // run(args, input)은 실패하면 던지고 stdout을 돌려준다(sendTmux의 run 계약). run.try는 결과를 그대로 돌려준다.
-export function seniorTmux({socket, home, env = process.env, spawn = spawnSync}) {
+// readOnly: 조회만 하는 호출(정리 명령의 --dry-run). 설정 파일이 없어도 만들지 않는다 — 조회 명령은 서버를 띄우지 않아 설정이 쓰이지 않는다.
+export function seniorTmux({socket, home, env = process.env, spawn = spawnSync, readOnly = false}) {
   assertSeniorSocket(socket, home, env);
   // tmux 서버는 처음 띄운 클라이언트의 환경을 물려받는다. 역할·바깥 tmux 값을 여기서도 뺀다(pane 명령에서 한 번 더 지운다).
   const clientEnv = tmuxClientEnv(env);
@@ -85,7 +86,7 @@ export function seniorTmux({socket, home, env = process.env, spawn = spawnSync})
   let conf = null;
   // more: 그 호출에만 얹는 실행 옵션(전체 스크롤 캡처의 maxBuffer).
   const call = (args, input, more = {}) => {
-    conf ??= ensureTmuxConf(home);
+    conf ??= !readOnly ? ensureTmuxConf(home) : fs.existsSync(tmuxConfPath(home)) ? tmuxConfPath(home) : '/dev/null';
     const options = {input, encoding: 'utf8', env: clientEnv, timeout: 15_000, ...more};
     return spawn('tmux', ['-u', '-L', socket, '-f', conf, ...args], options);
   };
@@ -250,8 +251,10 @@ const keptOrder = row => String(row.record.keptAt ?? row.record.endedAt ?? row.r
 // 정리 명령의 본체. 끝난 호출이고 대조가 맞는 세션(kept)만 끈다. 진행 중·기록 없음·대조 실패는 그대로 두고 이유를 돌려준다.
 // dryRun이면 무엇을 끌지만 돌려주고 아무것도 바꾸지 않는다(끄기 확인 함수도 부르지 않는다 — 그 함수는 거절 이유를 기록에 적는다).
 // closeTab(호출 폴더): 그 세션의 열린 로티 탭 닫기(부른 쪽이 준다). 반환: 줄마다 {session, dir, …기록 칸, action, why?, tab?}.
-export function cleanupSeniorSessions({home, run, dryRun = false, now = Date.now, closeTab = () => null}) {
-  const sweep = () => seniorSessionStates({home, run, now}).map(row => {
+// sweepTabs({seen, dryRun}): 세션 없이 남은 탭 훑기(부른 쪽이 준다). seen은 이번에 본 세션들의 호출 폴더다. 그 줄들이 뒤에 붙는다.
+export function cleanupSeniorSessions({home, run, dryRun = false, now = Date.now, closeTab = () => null, sweepTabs = () => []}) {
+  const sweep = () => { const rows = sweepSessions(); return [...rows, ...sweepTabs({seen: new Set(rows.map(row => row.dir).filter(Boolean)), dryRun})]; };
+  const sweepSessions = () => seniorSessionStates({home, run, now}).map(row => {
     const {record} = row;
     const info = {session: row.name, dir: row.dir, runner: record ? record.runner ?? 'codex' : null, model: record?.model ?? null,
       createdAt: record?.createdAt ?? null, endReason: record?.endReason ?? null, keptAt: record?.keptAt ?? null};
@@ -406,7 +409,7 @@ export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, 
       const result = killOwn(old.dir, {run, reason: 'evicted'});
       if (result.killed || result.why === 'no-session') {
         over -= 1;
-        try { closeKeptTab(old.dir); } catch { /* 탭은 꾸밈이다 */ }
+        try { closeKeptTab(old.dir, old.name); } catch { /* 탭은 꾸밈이다 */ }
       } else current += 1; // 끄지 못한 세션은 그대로 두고 진행 중 쪽에 센다.
     }
     if (current + calls.length > SENIOR_SEATS) throw short(current);

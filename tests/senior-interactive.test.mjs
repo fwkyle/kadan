@@ -6,11 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawn, spawnSync} from 'node:child_process';
-import {seniorCommand, seniorKeptLine} from '../src/senior.mjs';
+import {seniorCommand, seniorEvictedLine, seniorKeptLine} from '../src/senior.mjs';
 import {initSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
-import {readLedger} from '../src/ledger.mjs';
-import {ASK_LINE, SESSION_TIMING, listSeniorSessions, readRecord, seniorSocket, seniorTmux} from '../src/senior-session.mjs';
+import {appendLedger, readLedger} from '../src/ledger.mjs';
+import {ASK_LINE, SESSION_TIMING, cleanupSeniorSessions, listSeniorSessions, readRecord, seniorSocket, seniorTmux} from '../src/senior-session.mjs';
+import {OPEN_TABS_DIR} from '../src/senior-tab.mjs';
 import {markerOf} from '../src/senior-screen.mjs';
 import {runJudgeProcess} from '../src/watch-ai-process.mjs';
 
@@ -168,6 +169,14 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
   }
   assert.match(dry.stdout, /--dry-run: 아무것도 바꾸지 않았다\. 끌 세션 2개, 둘 세션 0개/);
   assertKept(f, r.answers, ['ok', 'ok']);
+  // 이 명령이 모르는 인자·표기는 아무것도 끄지 않고 거절한다 — --dry-run=true가 실제 정리로 빠지지 않는다(2026-11-19 검수 발견 1).
+  for (const args of [['--dry-run=true'], ['--dry-run', 'true'], ['--dry-run=false'], ['--force'], ['--dry-run', '--all'], ['--dryrun'], ['extra']]) {
+    const bad = cli(args);
+    assert.equal(bad.status, 1, args.join(' '));
+    assert.match(bad.stderr, /--dry-run 하나만 받는다 — 알 수 없는 인자: .*아무것도 끄지 않았다/u, args.join(' '));
+    assert.equal(bad.stdout, '', args.join(' '));
+  }
+  assertKept(f, r.answers, ['ok', 'ok']);
   const denied = cli([], 'qa-작업자');
   assert.equal(denied.status, 1); assert.match(denied.stderr, /감독\(일반감독·슈퍼감독\) 또는 사람 명의로만/);
   assert.equal(f.sessions().length, 2);
@@ -276,12 +285,120 @@ test('탭이 열린 순간 진짜 읽기 전용 클라이언트가 붙어도(tmu
   assert.equal(JSON.parse(fs.readFileSync(tabFile, 'utf8')).state, 'closed');
   assert.deepEqual(f.sessions(), []);
   assert.deepEqual(keyCommands(fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean).slice(mark + 1)), [], '정리까지 키 명령 0회');
-  // 창이 none인 환경에서 정리하면 세션만 끄고 탭은 닫지 않은 이유를 보인다(로티 호출 0회).
+  const markers = () => { try { return fs.readdirSync(path.join(f.home, OPEN_TABS_DIR)); } catch { return []; } };
+  assert.deepEqual(markers(), [], '닫힌 탭의 표지는 지운다');
+  // 로티 실행 파일이 없는 환경에서 정리하면 세션만 끄고 탭은 닫지 못한 이유를 보인다(로티 호출 0회). 표지가 남아 다음 정리가 다시 닫는다.
   const again = await f.run({}, {env, rottie});
   assert.equal(again.answers[0].tab, 'opened');
+  assert.equal(markers().length, 1, '대화형 호출이 탭을 열면 표지를 둔다');
   const before = calls.length;
-  assert.match(await cleanup({}, {env: {...env, KADAN_WINDOW: 'none'}}), /— 탭 close-skipped\(window-none\)/);
-  assert.equal(calls.length, before); assert.deepEqual(f.sessions(), []);
+  const {KADAN_ROTTIE_BIN: bin, ...noBin} = env;
+  assert.match(await cleanup({}, {env: noBin}), /— 탭 close-skipped\(rottie-bin-missing\) · 다음 cleanup이 다시 닫는다/);
+  assert.equal(calls.length, before); assert.deepEqual(f.sessions(), []); assert.equal(markers().length, 1);
+  // 탭 스위치가 꺼져 있고 창 설정이 none이어도, 실행 파일이 있으면 전에 연 자기 탭은 닫는다(세션은 이미 없다 — 표지로 찾는다).
+  const later = await cleanup({}, {env: {...env, KADAN_SENIOR_TAB: 'off', KADAN_WINDOW: 'none'}});
+  assert.match(later, /탭 닫음 {2}\(세션 없음\) {2}탭 term-1 {2}/u);
+  assert.match(later, /끈 세션 0개, 둔 세션 0개 · 세션 없이 남은 탭: 닫음 1개, 남음 0개/);
+  assert.deepEqual(calls.slice(before), ['close', 'show']); assert.deepEqual(markers(), []);
+});
+
+test('남긴 세션을 내보낼 때 탭은 탭 스위치와 무관하게 자기 탭 id로 닫고 결과를 영수증에 싣는다. 닫지 못한 탭은 세션이 없어도 다음 정리 명령이 표지로 찾아 닫는다(검수 발견 2)', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA]});
+  // 검수자 재현과 같은 꼴: 끝난 호출의 세션 6개와 열린 탭 기록을 심는다(표지는 없다 — 제품의 탭 열기 길을 지나지 않은 탭).
+  const seed = n => {
+    const name = `senior-old-${n}`, ask = `ask-old-${n}`, dir = path.join(f.home, 'advice', ask, '1-codex-old');
+    fs.mkdirSync(dir, {recursive: true});
+    f.tmux(['new-session', '-d', '-s', name, 'exec /bin/sleep 300']);
+    f.tmux(['set-option', '-t', `=${name}:`, '@kadan_senior_ask', ask]);
+    f.tmux(['set-option', '-t', `=${name}:`, '@kadan_senior_dir', dir]);
+    const panePid = f.tmux(['display-message', '-p', '-t', `=${name}:`, '#{pane_pid}']).trim();
+    const at = new Date(Date.UTC(2026, 10, 19, 0, n)).toISOString();
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({session: name, dir, runner: 'codex', home: f.home, socket: f.tmux.socket, askId: ask,
+      panePid, ownerPid: process.pid, expiresAt: Date.now() + 600_000, model: 'old', createdAt: at, endedAt: at, keptAt: at, endReason: 'ok'}));
+    fs.writeFileSync(path.join(dir, 'tab.json'), JSON.stringify({state: 'opened', rottieTerminalId: `old-${n}`}));
+    return {name, dir};
+  };
+  const old = [0, 1, 2, 3, 4, 5].map(seed);
+  const base = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const calls = [];
+  let made = 0, failClose = false;
+  const rottie = argv => {
+    if (argv[1] === 'create') return {ok: true, result: {terminal: {id: `new-${++made}`, state: 'running', pid: 4242, workspaceId: 'ws-1'}}, runtime: {build: 'b1'}};
+    calls.push([argv[1], argv[argv.indexOf('--terminal') + 1]]);
+    if (argv[1] === 'close' && failClose) throw Object.assign(new Error('닫기 실패(주입)'), {code: 'ROTTIE_INTERNAL', effect: 'unknown'});
+    if (argv[1] === 'show') throw Object.assign(new Error('없다'), {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'});
+    return {ok: true, result: {}};
+  };
+  const tab = dir => JSON.parse(fs.readFileSync(path.join(dir, 'tab.json'), 'utf8'));
+  const markers = () => { try { return fs.readdirSync(path.join(f.home, OPEN_TABS_DIR)).sort(); } catch { return []; } };
+  const cleanup = (flags, env) => seniorCommand(['cleanup'], flags, {home: f.home, by: 'qa-슈퍼감독', env, rottie});
+  // (1) 탭 스위치를 끈 호출(6 + 1 > 6 → 가장 오래된 old-0을 내보낸다): 스위치는 새 탭을 여는 값이다 — 전에 연 자기 탭은 닫는다.
+  const r1 = await f.run({}, {env: {...base, KADAN_SENIOR_TAB: 'off'}, rottie});
+  assert.deepEqual([r1.answers[0].reason, r1.answers[0].tab, r1.answers[0].tabReason], ['ok', 'skipped', 'tab-off']);
+  assert.deepEqual(r1.evicted, [{session: 'senior-old-0', tab: 'closed'}]);
+  assert.deepEqual(calls, [['close', 'old-0'], ['show', 'old-0']]);
+  assert.equal(tab(old[0].dir).state, 'closed'); assert.ok(!f.sessions().includes('senior-old-0'));
+  assert.equal(seniorEvictedLine(r1.evicted), '남긴 세션 상한(6개)을 넘겨 오래된 세션 1개를 껐다: senior-old-0(탭 닫음)');
+  assert.deepEqual(markers(), []);
+  // (2) 닫기가 실패한 호출(old-1): 결과와 이유를 영수증에 싣고 표지를 남긴다. 세션은 이미 없다.
+  failClose = true;
+  const r2 = await f.run({}, {env: base, rottie});
+  failClose = false;
+  assert.deepEqual(r2.evicted, [{session: 'senior-old-1', tab: 'close-failed', tabReason: 'ROTTIE_INTERNAL'}]);
+  assert.match(seniorEvictedLine(r2.evicted), /senior-old-1\(탭 close-failed: ROTTIE_INTERNAL — 다음 kadan senior cleanup이 다시 닫는다\)/);
+  assert.ok(!f.sessions().includes('senior-old-1'));
+  assert.deepEqual([tab(old[1].dir).state, tab(old[1].dir).rottieTerminalId], ['close-failed', 'old-1'], '탭 id는 남아 다시 닫아 볼 수 있다');
+  assert.deepEqual(markers(), ['ask-old-1--1-codex-old.json', `${r2.askId}--1-codex-gpt-6-astra.json`].sort(), '닫지 못한 탭과 이번에 연 탭의 표지');
+  // (3) 로티 실행 파일이 없는 호출(old-2): 건너뛴 이유를 싣고 표지를 남긴다.
+  const {KADAN_ROTTIE_BIN: bin, ...noBin} = base;
+  const r3 = await f.run({}, {env: noBin, rottie});
+  assert.deepEqual(r3.evicted, [{session: 'senior-old-2', tab: 'close-skipped', tabReason: 'rottie-bin-missing'}]);
+  assert.equal(tab(old[2].dir).state, 'opened'); assert.ok(markers().includes('ask-old-2--1-codex-old.json'));
+  // (4) 미리보기: 세션 없이 남은 탭 둘을 '닫을 것'으로 보이고 아무것도 바꾸지 않는다(로티 호출 0회, 표지·탭 기록 그대로).
+  const count = calls.length, kept = markers();
+  const dry = await cleanup({'dry-run': true}, base);
+  assert.match(dry, /탭 닫을 것 {2}\(세션 없음\) {2}탭 old-1 {2}/u); assert.match(dry, /탭 닫을 것 {2}\(세션 없음\) {2}탭 old-2 {2}/u);
+  assert.match(dry, /끌 세션 6개, 둘 세션 0개 · 세션 없이 남은 탭: 닫을 것 2개, 둘 것 0개/);
+  assert.equal(calls.length, count); assert.deepEqual(markers(), kept); assert.equal(f.sessions().length, 6);
+  // (5) 운영 로티 보호는 그대로다: 기본이 아닌 홈 + 허용 플래그 없음이면 창 none·실행 파일 있음이어도 로티를 부르지 않는다.
+  //     세션은 끄고, 닫지 못한 탭은 모두 표지로 남는다.
+  const guarded = await cleanup({}, {...f.env, KADAN_WINDOW: 'none', KADAN_ROTTIE_BIN: '/fake/rottie'});
+  assert.equal(calls.length, count, '보호에 걸리면 로티 호출 0회');
+  assert.match(guarded, /끈 세션 6개, 둔 세션 0개 · 세션 없이 남은 탭: 닫음 0개, 남음 2개/);
+  assert.match(guarded, /— 탭 close-skipped\(KADAN_LIVE_FLOOR_DENIED\) · 다음 cleanup이 다시 닫는다/);
+  assert.deepEqual(f.sessions(), []);
+  assert.equal(markers().length, 6, 'old-1·old-2와 방금 끈 세션의 열린 탭 넷(old-3·4·5, 둘째 호출의 탭)');
+  // (6) 다음 정리: 세션이 하나도 없어도 표지로 찾아 전부 닫는다(닫기에 실패했던 old-1 포함). 키 명령은 끝까지 새 세션의 질문뿐이다.
+  const done = await cleanup({}, base);
+  assert.match(done, /끈 세션 0개, 둔 세션 0개 · 세션 없이 남은 탭: 닫음 6개, 남음 0개/);
+  assert.deepEqual(calls.slice(count).filter(([verb]) => verb === 'close').map(([, id]) => id).sort(), ['new-1', 'old-1', 'old-2', 'old-3', 'old-4', 'old-5']);
+  assert.deepEqual(markers(), []);
+  assert.deepEqual(old.map(item => tab(item.dir).state), Array(6).fill('closed'));
+  const lines = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  assert.deepEqual([lines.filter(line => / paste-buffer /u.test(line)).length, lines.filter(line => / send-keys /u.test(line)).length], [3, 3]);
+  assert.match(await cleanup({}, base), /남은 시니어 세션이 없다/);
+});
+
+test('정리 명령 --dry-run은 빈 홈에서도 파일을 하나도 만들지 않는다(검수 발견 3)', {skip}, () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kse-')));
+  const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: `ke${process.pid}x${++seq}`, KADAN_ROLE: 'qa-슈퍼감독'};
+  const out = spawnSync(process.execPath, [CLI, 'senior', 'cleanup', '--dry-run'], {env, encoding: 'utf8'});
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /남은 시니어 세션이 없다/);
+  assert.deepEqual(fs.readdirSync(home), [], 'tmux 설정 파일·표지 폴더·잠금 어느 것도 만들지 않는다');
+});
+
+test('영수증의 남긴 세션 수는 호출이 끝나는 시점의 실제 상태다 — 한 칸이 먼저 끝난 뒤 다른 정리가 그 세션을 꺼도 맞다(검수 발견 4)', {skip}, async t => {
+  const f = fixture(t, {plan: {models: {'gpt-6-sol': {workMs: 5000}}}});
+  // 먼저 답한 칸을 원장에 적는 순간 다른 정리가 돈다: 끝난 그 칸의 세션만 끄고 아직 도는 칸은 둔다.
+  let crossed = null;
+  const record = entry => { appendLedger(entry, f.home); crossed ??= cleanupSeniorSessions({home: f.home, run: f.tmux}); };
+  const r = await f.run({timeout: '60'}, {record});
+  assert.deepEqual(r.answers.map(a => [a.model, a.reason]), [['gpt-6-astra', 'ok'], ['gpt-6-sol', 'ok']]);
+  const sessions = r.answers.map(a => readRecord(a.evidencePath).session);
+  assert.deepEqual(Object.fromEntries(crossed.map(row => [row.session, row.action === 'left' ? row.why : row.action])), {[sessions[0]]: 'closed', [sessions[1]]: 'running'});
+  assert.deepEqual(f.sessions(), [sessions[1]]);
+  assert.equal(r.keptSessions, 1, '이미 꺼진 세션을 남겼다고 세지 않는다');
 });
 
 // 제출되지 않은 칸(붙인 직후 업데이트 창 → Enter 0회)의 호출 폴더에 거짓 표지를 심는다. 부모는 표지를 읽어 확인하므로 탭을 열지 않는다.

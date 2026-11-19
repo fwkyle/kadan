@@ -18,7 +18,7 @@ const spawn = (...args) => {
 afterEach(async () => { await Promise.all([...children].map(child => stopChild(child))); });
 import {seniorCommand} from '../src/senior.mjs';
 import {RottieFloorError, assertRottieArgv, runRottie} from '../src/rottie-cli.mjs';
-import {closeSeniorTab, seniorAttachCommand} from '../src/senior-tab.mjs';
+import {OPEN_TABS_DIR, closeKeptTab, closeSeniorTab, listOpenTabs, rememberOpenTab, seniorAttachCommand, sweepOpenTabs} from '../src/senior-tab.mjs';
 import {initSettings, setRole} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -430,4 +430,51 @@ test('R3: 가드를 붙인 다른 호출 곳(adopt rottieQuery)도 잘못된 첫
   const run = () => { spawns++; return {status: 0, stdout: '{}'}; };
   for (const args of [[], ['--version'], ['termnal', 'list']]) assert.throws(() => rottieQuery('/fake/rottie', args, run), /ROTTIE_ARGV_REJECTED/);
   assert.equal(spawns, 0);
+});
+
+// 2026-11-19 검수 발견 2: 내보낼 때 닫지 못한 탭을 세션 없이도 다시 찾으려고 홈에 탭마다 표지 파일을 둔다.
+test('닫을 탭 표지: 표지는 실마리일 뿐이다 — 이 홈의 호출 폴더이고 탭 기록의 id와 같을 때만 닫고, 믿을 수 없는 표지는 닫지 않고 이유를 보인다. 미리보기는 아무것도 바꾸지 않는다', () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kso-')));
+  const folder = path.join(home, OPEN_TABS_DIR);
+  const call = (ask, state) => { const dir = path.join(home, 'advice', ask, '1-codex-m'); fs.mkdirSync(dir, {recursive: true}); fs.writeFileSync(path.join(dir, 'tab.json'), JSON.stringify(state)); return dir; };
+  const good = call('ask-good', {state: 'opened', rottieTerminalId: 't-good'}), failed = call('ask-failed', {state: 'close-failed', rottieTerminalId: 't-failed'});
+  const differs = call('ask-differs', {state: 'opened', rottieTerminalId: 't-real'}), closed = call('ask-closed', {state: 'closed', rottieTerminalId: 't-closed'});
+  const live = call('ask-live', {state: 'opened', rottieTerminalId: 't-live'});
+  rememberOpenTab(home, good, 't-good'); rememberOpenTab(home, failed, 't-failed'); rememberOpenTab(home, differs, 't-other');
+  rememberOpenTab(home, closed, 't-closed'); rememberOpenTab(home, live, 't-live');
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'kso-out-'));
+  fs.writeFileSync(path.join(outside, 'tab.json'), JSON.stringify({state: 'opened', rottieTerminalId: 't-outside'}));
+  fs.writeFileSync(path.join(folder, 'x--outside.json'), JSON.stringify({dir: outside, rottieTerminalId: 't-outside'}));
+  fs.writeFileSync(path.join(folder, 'broken.json'), '{깨진 표지');
+  // 이름이 그 호출 폴더에서 나온 이름이 아닌 표지(다른 표지를 베낀 것)도 믿지 않는다.
+  fs.writeFileSync(path.join(folder, 'copied--name.json'), JSON.stringify({dir: good, rottieTerminalId: 't-good'}));
+  assert.deepEqual(Object.fromEntries(listOpenTabs(home).map(row => [path.basename(row.file), row.status === 'invalid' ? row.why : row.status])), {
+    'ask-good--1-codex-m.json': 'pending', 'ask-failed--1-codex-m.json': 'pending', 'ask-live--1-codex-m.json': 'pending', 'ask-closed--1-codex-m.json': 'stale',
+    'ask-differs--1-codex-m.json': 'tab-id-differs', 'x--outside.json': 'marker-outside-home', 'broken.json': 'marker-unreadable', 'copied--name.json': 'marker-name-differs'});
+  const calls = [];
+  const rottie = argv => { calls.push([argv[1], argv[argv.indexOf('--terminal') + 1]]); if (argv[1] === 'show') throw new RottieFloorError('없다', {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'}); return {ok: true, result: {}}; };
+  const env = {KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1', KADAN_SENIOR_TAB: 'off', KADAN_WINDOW: 'none'};
+  const seen = new Set([live]); // 살아 있는 세션의 탭은 건드리지 않는다
+  const summary = rows => rows.map(row => [path.basename(path.dirname(row.dir ?? '/?/?')), row.action, row.why]).sort();
+  // 미리보기: 닫을 것만 보이고 표지·탭 기록·로티 어느 것도 건드리지 않는다(낡은 표지도 지우지 않는다).
+  const before = fs.readdirSync(folder).sort();
+  const dry = sweepOpenTabs({home, env, rottie, seen, dryRun: true});
+  assert.deepEqual(summary(dry), [['?', 'tab-left', 'marker-unreadable'], ['ask-differs', 'tab-left', 'tab-id-differs'], ['ask-failed', 'tab-would-close', undefined],
+    ['ask-good', 'tab-left', 'marker-name-differs'], ['ask-good', 'tab-would-close', undefined], [path.basename(path.dirname(outside)), 'tab-left', 'marker-outside-home']].sort());
+  assert.deepEqual(calls, []); assert.deepEqual(fs.readdirSync(folder).sort(), before);
+  // 본 실행: 믿을 수 있는 두 탭만 자기 id로 닫는다(닫기에 실패했던 탭 포함). 스위치 off·창 none이어도 닫는다. 낡은 표지는 지우고, 믿을 수 없는 표지는 남긴다.
+  const done = sweepOpenTabs({home, env, rottie, seen});
+  assert.deepEqual(calls.filter(([verb]) => verb === 'close').map(([, id]) => id).sort(), ['t-failed', 't-good']);
+  assert.deepEqual(done.filter(row => row.action === 'tab-closed').length, 2);
+  assert.deepEqual(fs.readdirSync(folder).sort(), ['ask-differs--1-codex-m.json', 'ask-live--1-codex-m.json', 'broken.json', 'copied--name.json', 'x--outside.json']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(outside, 'tab.json'), 'utf8')).state, 'opened', '다른 홈의 탭 기록은 그대로다');
+  // 로티 실행 파일이 없으면 닫지 않고 표지를 만든다(표지 없이 남아 있던 탭도 다음에 찾는다). 운영 로티 보호에 걸려도 같다.
+  const lone = call('ask-lone', {state: 'opened', rottieTerminalId: 't-lone'});
+  assert.deepEqual(closeKeptTab({home, env: {}, dir: lone, rottie}), {tab: 'close-skipped', tabReason: 'rottie-bin-missing'});
+  assert.ok(fs.existsSync(path.join(folder, 'ask-lone--1-codex-m.json')));
+  assert.deepEqual(closeKeptTab({home, env: {KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_WINDOW: 'none'}, dir: lone, rottie}), {tab: 'close-skipped', tabReason: 'KADAN_LIVE_FLOOR_DENIED'});
+  assert.ok(!calls.some(([, id]) => id === 't-lone'), '보호에 걸리면 로티 호출 0회');
+  assert.deepEqual(closeKeptTab({home, env, dir: lone, rottie}), {tab: 'closed'});
+  assert.equal(fs.existsSync(path.join(folder, 'ask-lone--1-codex-m.json')), false);
+  assert.equal(closeKeptTab({home, env, dir: lone, rottie}), null, '닫힌 탭은 다시 닫지 않는다');
 });

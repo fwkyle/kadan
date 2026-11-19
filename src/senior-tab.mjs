@@ -110,28 +110,104 @@ export function closeSeniorTab(opened) {
   }
 }
 
-// 남겨 둔 세션의 탭 닫기. 탭을 연 호출은 이미 끝났으므로 호출 폴더의 tab.json(열림 + 자기 탭 id)으로 다시 닫는다.
-// 여는 길과 같은 조건(탭 스위치·창 설정·로티 실행 파일·운영 로티 보호)을 거친다. 닫을 탭이 없으면 null,
-// 조건이 맞지 않으면 닫지 않고 이유를 돌려준다(close-skipped). 던지지 않는다. 제목·키로 목록을 뒤져 지우지 않는다.
-export function closeKeptTab({home, env, dir, rottie}) {
-  let state;
-  try { state = JSON.parse(fs.readFileSync(path.join(dir, 'tab.json'), 'utf8')); } catch { return null; }
-  const id = state?.state === 'opened' ? state.rottieTerminalId : null;
-  if (typeof id !== 'string' || !id) return null;
+// ---- 닫을 탭 표지 ----
+// 남겨 둔 탭은 연 호출이 끝난 뒤에 닫는다. 그 세션이 이미 없어도(내보낼 때 닫지 못함·재부팅) 다음 정리 명령이 탭을 찾을 수 있게,
+// 홈의 작은 폴더(`senior-open-tabs/`)에 탭마다 표지 파일 하나를 둔다. 원장·advice 폴더 전체를 훑지 않는다.
+//  - 만든다: 대화형 호출이 탭을 열었을 때, 그리고 닫으려다 닫지 못했을 때(건너뜀·실패). 지운다: 닫혔을 때만.
+//  - 파일 하나가 탭 하나라 여러 호출이 동시에 써도 서로 덮어쓰지 않는다(목록 파일 하나를 읽고-고쳐-쓰지 않는다).
+// 표지는 찾는 실마리일 뿐이다: 닫는 탭 id는 그 호출 폴더의 tab.json에서 읽고, 표지의 id와 같을 때만 닫는다.
+export const OPEN_TABS_DIR = 'senior-open-tabs';
+// 다시 닫아 볼 수 있는 탭 상태: 열려 있거나, 닫으려다 실패했다.
+const RETRYABLE = new Set(['opened', 'close-failed']);
+const markerFile = (home, dir) => path.join(home, OPEN_TABS_DIR, `${path.basename(path.dirname(dir))}--${path.basename(dir)}.json`);
+
+function readTabState(dir) {
   try {
-    if (!seniorTabEnabled(env)) return {tab: 'close-skipped', tabReason: 'tab-off'};
-    const setting = effectiveWindow(env, home);
-    if (setting.window.value !== 'rottie') return {tab: 'close-skipped', tabReason: 'window-none'};
-    const bin = setting.rottieBin.value;
-    if (!bin) return {tab: 'close-skipped', tabReason: 'rottie-bin-missing'};
-    const runEnv = {...env, KADAN_ROTTIE_BIN: bin, KADAN_HOME: home};
-    assertNotLiveRottie(runEnv);
-    const closed = closeSeniorTab({call: rottie ?? (argv => runRottie(argv, spawnSync, runEnv)), rottieTerminalId: id});
-    writeTabState(dir, {state: closed.tab, reason: closed.tabReason});
-    return closed;
+    const value = JSON.parse(fs.readFileSync(path.join(dir, 'tab.json'), 'utf8'));
+    return value && typeof value === 'object' ? value : null;
+  } catch { return null; }
+}
+// 닫아 볼 수 있는 자기 탭 id. 없으면 null.
+function closableId(state) {
+  return state && RETRYABLE.has(state.state) && typeof state.rottieTerminalId === 'string' && state.rottieTerminalId ? state.rottieTerminalId : null;
+}
+
+export function rememberOpenTab(home, dir, id) {
+  try {
+    const file = markerFile(home, dir);
+    fs.mkdirSync(path.dirname(file), {recursive: true, mode: 0o700});
+    fs.writeFileSync(file, JSON.stringify({dir, rottieTerminalId: id, at: new Date().toISOString()}) + '\n', {mode: 0o600});
+  } catch { /* 꾸밈이다: 표지를 못 써도 호출·정리는 그대로 간다 */ }
+}
+export function forgetOpenTab(home, dir) {
+  try { fs.unlinkSync(markerFile(home, dir)); } catch { /* 없으면 지울 것이 없다 */ }
+}
+
+// 표지 목록(읽기만 한다). 줄마다 {file, dir, id, status, why?}.
+//  pending — 닫아 볼 탭이다: 호출 폴더가 이 홈의 advice/ 아래이고, 표지 이름이 그 폴더에서 나온 이름이며, tab.json의 탭 id가 표지와 같다
+//  stale   — 이미 닫혔거나 탭 기록이 없다(표지만 남음)
+//  invalid — 믿을 수 없는 표지(깨진 글·다른 홈·이름 불일치·탭 id 불일치). 닫지 않는다
+export function listOpenTabs(home) {
+  const folder = path.join(home, OPEN_TABS_DIR), root = path.join(home, 'advice') + path.sep;
+  let names;
+  try { names = fs.readdirSync(folder).filter(name => name.endsWith('.json')).sort(); } catch { return []; }
+  return names.map(name => {
+    const file = path.join(folder, name);
+    let value;
+    try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {file, dir: null, id: null, status: 'invalid', why: 'marker-unreadable'}; }
+    const dir = typeof value?.dir === 'string' ? value.dir : null, id = typeof value?.rottieTerminalId === 'string' ? value.rottieTerminalId : null;
+    const bad = why => ({file, dir, id, status: 'invalid', why});
+    if (!dir || !path.isAbsolute(dir) || !path.resolve(dir).startsWith(root)) return bad('marker-outside-home');
+    if (markerFile(home, dir) !== file) return bad('marker-name-differs');
+    const state = readTabState(dir);
+    if (!state || !RETRYABLE.has(state.state)) return {file, dir, id, status: 'stale'};
+    if (!id || closableId(state) !== id) return bad('tab-id-differs');
+    return {file, dir, id, status: 'pending'};
+  });
+}
+
+// 남겨 둔 탭 닫기(정리 명령·남긴 세션 내보내기). 탭을 연 호출은 이미 끝났으므로 호출 폴더의 tab.json에 적힌 자기 탭 id로 닫는다.
+// 탭을 여는 스위치(KADAN_SENIOR_TAB)·창 설정과 무관하다: 그 값은 '새 탭을 열지'이고, 전에 연 자기 탭을 치우는 일과는 다르다
+// (카단 pane 안의 감독은 KADAN_WINDOW=none을 물려받는다). 필요한 것은 로티 실행 파일과 운영 로티 보호(기본이 아닌 홈은 거절)뿐이다.
+// 반환: 닫을 탭이 없으면 null, 닫았으면 {tab: 'closed'}, 못 닫았으면 {tab: 'close-skipped'|'close-failed', tabReason}. 던지지 않는다.
+// 닫히면 표지를 지우고, 닫지 못하면 표지를 남겨(없으면 만들어) 다음 정리 명령이 다시 찾게 한다. 제목·키로 목록을 뒤져 지우지 않는다.
+export function closeKeptTab({home, env, dir, rottie}) {
+  const state = readTabState(dir), id = closableId(state);
+  if (!id) { if (state && !RETRYABLE.has(state.state)) forgetOpenTab(home, dir); return null; }
+  let result;
+  try {
+    const bin = effectiveWindow(env, home).rottieBin.value;
+    if (!bin) result = {tab: 'close-skipped', tabReason: 'rottie-bin-missing'};
+    else {
+      const runEnv = {...env, KADAN_ROTTIE_BIN: bin, KADAN_HOME: home};
+      assertNotLiveRottie(runEnv);
+      result = closeSeniorTab({call: rottie ?? (argv => runRottie(argv, spawnSync, runEnv)), rottieTerminalId: id});
+      // 실패해도 탭 id는 tab.json에 그대로 남는다(상태만 close-failed) — 다음에 다시 닫아 본다.
+      writeTabState(dir, {state: result.tab, reason: result.tabReason});
+    }
   } catch (error) {
-    return {tab: 'close-skipped', tabReason: reasonOf(error)};
+    result = {tab: 'close-skipped', tabReason: reasonOf(error)};
   }
+  if (result.tab === 'closed') forgetOpenTab(home, dir);
+  else rememberOpenTab(home, dir, id);
+  return result;
+}
+
+// 정리 명령의 탭 훑기: 표지가 가리키는 탭 가운데 세션 없이 남은 것을 닫는다. seen은 이번 정리가 본 세션들의 호출 폴더다
+// (그 탭은 세션 줄에서 다뤘거나, 살아 있는 세션의 것이라 그대로 둔다). 소켓의 세션 목록에 없는 호출 폴더의 탭이 세션 없이 남은 탭이다.
+// dryRun이면 무엇을 닫을지만 돌려주고 표지·탭 기록을 바꾸지 않는다. 반환: 줄마다 {dir, id, action: tab-closed|tab-would-close|tab-left, why?, tab?}.
+export function sweepOpenTabs({home, env, rottie, seen, dryRun = false}) {
+  const rows = [];
+  for (const entry of listOpenTabs(home)) {
+    if (entry.status === 'stale') { if (!dryRun) { try { fs.unlinkSync(entry.file); } catch { /* 이미 없다 */ } } continue; }
+    if (entry.status === 'invalid') { rows.push({dir: entry.dir, id: entry.id, action: 'tab-left', why: entry.why}); continue; }
+    if (seen.has(entry.dir)) continue;
+    if (dryRun) { rows.push({dir: entry.dir, id: entry.id, action: 'tab-would-close'}); continue; }
+    const tab = closeKeptTab({home, env, dir: entry.dir, rottie});
+    rows.push(tab?.tab === 'closed' ? {dir: entry.dir, id: entry.id, action: 'tab-closed', tab}
+      : {dir: entry.dir, id: entry.id, action: 'tab-left', why: tab ? `${tab.tab}: ${tab.tabReason}` : 'no-open-tab', ...(tab ? {tab} : {})});
+  }
+  return rows;
 }
 
 // 호출 도중(탭 생성 중 포함) TERM/INT를 받으면 탭을 닫고 신호 관례 코드로 나간다. 해제 함수를 돌려준다.
