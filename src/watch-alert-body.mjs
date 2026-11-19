@@ -78,7 +78,7 @@ function waitingStopBasis(alert) {
   const at = new Date(alert.waitingAt);
   const when = Number.isFinite(at.getTime()) ? ` ${at.getMonth() + 1}/${at.getDate()} ${clockTime(at)}` : "";
   const note = alert.waitingNote ? ` "${alert.waitingNote}"` : "";
-  const screen = alert.line ? `; ${alert.dead ? "세션" : "화면"}: ${alert.line}` : "";
+  const screen = alert.line ? `; 화면: ${alert.line}` : "";
   return `대기 표시${when}${note}${screen}; 대기 표시 때문에 정체 감시 밖이었음`;
 }
 
@@ -165,7 +165,7 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "대기중정지") {
     const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";
-    return `대기 표시 중 ${alert.dead ? "세션 종료 의심" : "오류 화면으로 멈춤"} ${alert.session} / ${alert.executionKey ?? alert.taskId}`
+    return `대기 표시 중 오류 화면으로 멈춤 ${alert.session} / ${alert.executionKey ?? alert.taskId}`
       + ` (${waitingStopBasis(alert)}${dispatcher} — 감독 확인 필요)`;
   }
   if (alert.kind === "멈춤") {

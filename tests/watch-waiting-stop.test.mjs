@@ -20,20 +20,37 @@ import {formatAlertBody, itemizedAlert, seedAlertState} from '../src/watch-alert
 
 // 대기 표시(card progress --activity waiting)를 남긴 실행이 이미 아는 오류 화면에 멈췄을 때의 감시.
 // 가짜 시계·가짜 바닥·가짜 전송기·가짜 AI만 쓴다. 역할 이름은 운영 이름이 아닌 가짜다.
-const INCIDENT = JSON.parse(fs.readFileSync(new URL('./fixtures/waiting-capacity-screens.json', import.meta.url), 'utf8')).incident;
+// "기대 결과 표"라고 적은 시험은 발령 카드의 표 한 줄씩이다(판정 기준: main에서는 대기 세션에 관한 경보가 늘 0이다).
+const fixture = name => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
+const INCIDENT = fixture('waiting-capacity-screens.json').incident;
 const CAPACITY = '■ Selected model is at capacity. Please try a different model.';
 const COMPOSER = '› Ask Codex to do anything\n\n  gpt-6.1-sol high · ~/Dev/PROJ · main · Context 41% used\n';
-const errorScreen = (...block) => `• Ran npm test\n  └ ok 12\n    +3 lines\n\n${block.join('\n')}\n\n${COMPOSER}`;
+const TOOL = '• Ran npm test\n  └ 4 passed\n    +2 lines';
+const errorScreen = (...block) => `${TOOL}\n\n${block.join('\n')}\n\n${COMPOSER}`;
 const IDLE = `• 다른 시험이 끝나면 전체 시험을 돌리겠습니다.\n\n${COMPOSER}`;
 const WORKING = `• Ran sleep 60\n\n• Working (3m 10s • esc to interrupt)\n\n${COMPOSER}`;
-const LIMIT_429 = errorScreen('■ exceeded retry limit, last status: 429 Too Many Requests');
+const TERMINAL_429 = '■ Exceeded retry limit, last status: 429 Too Many Requests';
+const LIMIT_429 = errorScreen(TERMINAL_429);
+const FENCED_429 = ['• 장애 로그 설명을 추가했습니다.', '', '```text', TERMINAL_429, '```', '', COMPOSER].join('\n');
+const PAST_429 = [TOOL, '', TERMINAL_429, '', '• 다시 시도해 확인을 끝냈습니다.', '', COMPOSER].join('\n');
+const PARTIAL = {
+  'quoted-capacity': '■ Could not read documentation entry "Selected model is at capacity".',
+  'capacity-planning': '■ Selected model is at capacity planning stage.',
+};
+// tmux가 좁은 창에서 줄을 접는 모양: 칸 수대로 자르고(낱말 중간도), 줄 끝 공백은 화면 읽기(capture-pane -p)에서 사라진다.
+const wrap = (screen, width) => screen.split('\n').flatMap(line => {
+  const chars = [...line], rows = [];
+  for (let at = 0; at < Math.max(chars.length, 1); at += width) rows.push(chars.slice(at, at + width).join('').trimEnd());
+  return rows;
+}).join('\n');
+const WIDTHS = Array.from({length: 71}, (_, index) => 30 + index); // 30~100칸. 입력창 줄(26칸)이 접히지 않는 범위
 
 const epoch = Date.parse('2026-11-18T06:54:00Z');
 const stamp = minute => new Date(epoch + minute * 60_000).toISOString();
-const WORKER = 'qa-reviewer', BOSS = 'qa-boss', LEAD = 'qa-lead', SESSION = `kadan-${WORKER}`;
-const parents = new Map([[WORKER, BOSS], [BOSS, 'qa-top'], ['qa-top', '@user']]);
+const WORKER = 'qa-reviewer', BOSS = 'qa-boss', TOP = 'qa-top', LEAD = 'qa-lead', SESSION = `kadan-${WORKER}`;
+const parents = new Map([[WORKER, BOSS], [BOSS, TOP], [TOP, '@user']]);
 const start = (role, panePid) => ({kind: 'start', role, session: `kadan-${role}`, panePid, harness: 'codex', model: 'm', t: stamp(0)});
-const starts = [start(WORKER, 1), start(BOSS, 2), start('qa-top', 3), start(LEAD, 4)];
+const starts = [start(WORKER, 1), start(BOSS, 2), start(TOP, 3), start(LEAD, 4)];
 const KEY = 'qa/qa-task';
 const running = {id: 'qa-task', key: KEY, role: WORKER, board: 'qa', status: 'assigned', workType: 'execution',
   activity: 'running', activityRole: WORKER, activityAt: stamp(0), at: stamp(0)};
@@ -42,22 +59,22 @@ const waiting = {...running, activity: 'waiting', activityAt: stamp(1), at: stam
 const dispatch = (by = BOSS) => ({kind: 'send', role: WORKER, session: SESSION, taskId: 'qa-task', executionKey: KEY, by, t: stamp(0)});
 
 // screen·card·alive는 분(minute)을 받아 그 순회의 값을 준다. keys: 대기 세션에 닿을 수 있는 모든 입력 길(재개·큐 Enter·알림·넛지).
-// leadPid: 바닥이 돌려주는 발령 역할 창의 PID(원장에 등록된 값은 4). sendFail(role, minute): 그 전송에서 던질 오류(없으면 성공).
+// gone: 창이 없는 역할 이름들. sendFail(role, minute): 그 전송에서 던질 오류(없으면 성공). attempts: 전송 시도(실패 포함).
 async function simulate({screen = () => INCIDENT, card = () => waiting, alive = () => true, until = 14, seed = null, by = BOSS,
-  extra = () => [], leadAlive = true, leadPid = null, sendFail = () => null} = {}) {
+  extra = () => [], gone = [], sendFail = () => null} = {}) {
   let minute = 0;
   const entries = seed ?? [...starts, dispatch(by)];
-  const before = entries.length, sent = [], keys = [], aiCalls = [];
+  const before = entries.length, sent = [], attempts = [], keys = [], aiCalls = [];
   const controller = new AbortController();
   await runWatch({signal: controller.signal, intervalMs: 60_000, stallN: 2, stallAfterMs: 300_000, idleMs: 15 * 60_000,
-    parents, routes: new Map(), superRole: 'qa-top', now: () => epoch + minute * 60_000,
-    floor: {list: () => starts.filter(s => s.role === WORKER ? alive(minute) : s.role !== LEAD || leadAlive)
-      .map(s => ({session: s.session, pid: s.role === LEAD ? leadPid ?? s.panePid : s.panePid})),
+    parents, routes: new Map(), superRole: TOP, now: () => epoch + minute * 60_000,
+    floor: {list: () => starts.filter(s => s.role === WORKER ? alive(minute) : !gone.includes(s.role)).map(s => ({session: s.session, pid: s.panePid})),
       read: session => session === SESSION ? screen(minute) : `• 맡긴 재판정 결과를 기다립니다. ${minute}분\n\n${COMPOSER}`, alive: () => true},
     readEntries: () => [...entries, ...extra(minute)], readCards: () => [card(minute)], readWorks: () => [],
     resume429: (role, text) => keys.push(['resume429', role, text]),
     sendQueueEnter: session => keys.push(['queue-enter', session]),
     sendAlert: (role, message) => {
+      attempts.push([minute, role]);
       const failure = sendFail(role, minute);
       if (failure) throw failure;
       sent.push({minute, role, message}); if (role === WORKER) keys.push(['alert', role]);
@@ -69,122 +86,89 @@ async function simulate({screen = () => INCIDENT, card = () => waiting, alive = 
     sleep: async () => { await setImmediate(); if (++minute >= until) controller.abort(); }});
   const records = entries.slice(before);
   const alerts = records.filter(e => e.kind === 'alert' && e.session === SESSION);
-  return {entries, records, sent, keys, alerts,
+  return {entries, records, sent, attempts, keys, alerts,
     opened: alerts.filter(e => !e.resolved), resolved: alerts.filter(e => e.resolved),
     waitingStops: alerts.filter(e => e.alertKind === '대기중정지' && !e.resolved),
+    stopMails: sent.filter(m => /대기 표시 중/u.test(m.message)),
     workerAI: aiCalls.filter(([, , role]) => role === WORKER), aiCalls,
     retries: records.filter(e => e.kind === 'rate-limit-retry' || e.kind === 'queue-resume')};
 }
 
-test('사고 재현: 대기 표시 + 용량 초과 화면 + 빈 입력창이면 직속 감독에게 경보 1회, 다음 주기에 다시 울리지 않고 키 0·AI 0', async () => {
+test('기대 결과 표 1: 사고 원문 고정본 + 빈 입력창(80칸)이면 경보 1회, 다음 주기 0회, 키 0회, AI 0회', async () => {
+  assert.ok(INCIDENT.split('\n').every(line => [...line].length <= 80), '고정본은 80칸 안이다');
   const r = await simulate();
   assert.equal(r.waitingStops.length, 1, '14주기 동안 경보 기록은 한 번');
-  assert.equal(r.waitingStops[0].recipient, BOSS);
-  assert.equal(r.waitingStops[0].delivered, true);
-  assert.equal(r.waitingStops[0].level, 'AMBER');
-  const mails = r.sent.filter(m => m.role === BOSS && /대기 표시 중/u.test(m.message));
-  assert.equal(mails.length, 1, '감독 창에 들어간 알림도 한 번');
-  assert.equal(mails[0].minute, 0, '정체 시간을 기다리지 않고 처음 본 주기에 알린다');
+  assert.deepEqual([r.waitingStops[0].recipient, r.waitingStops[0].delivered, r.waitingStops[0].level], [BOSS, true, 'AMBER']);
+  assert.deepEqual(r.stopMails.map(m => [m.minute, m.role]), [[0, BOSS]], '정체 시간을 기다리지 않고 처음 본 주기에 한 번');
   const since = new Date(stamp(1)); // 본문은 기계 시간대의 월/일 시:분으로 적는다
   const when = `${since.getMonth() + 1}/${since.getDate()} ${String(since.getHours()).padStart(2, '0')}:${String(since.getMinutes()).padStart(2, '0')}`;
   for (const text of [SESSION, KEY, WAIT_NOTE, CAPACITY, '대기 표시 때문에 정체 감시 밖이었음', `대기 표시 ${when}`])
-    assert.ok(mails[0].message.includes(text), `알림에 "${text}" 없음: ${mails[0].message}`);
+    assert.ok(r.stopMails[0].message.includes(text), `알림에 "${text}" 없음: ${r.stopMails[0].message}`);
   assert.deepEqual(r.resolved, [], '화면이 그대로인 동안 풀리지도 퇴역(감시제외)하지도 않는다');
   assert.deepEqual(r.keys, [], '대기 세션에는 아무 입력도 보내지 않는다');
   assert.deepEqual(r.workerAI, [], '대기 세션을 두고 AI를 부르지 않는다');
   assert.deepEqual(r.retries, [], '자동 재개·큐 재개 기록 없음');
   // 감시기가 다시 떠도(원장에서 열린 경보를 복원) 같은 경보를 다시 보내지 않는다.
   const again = await simulate({seed: r.entries, until: 4});
-  assert.deepEqual(again.waitingStops, []);
-  assert.deepEqual(again.resolved, []);
-  assert.deepEqual(again.sent.filter(m => /대기 표시 중/u.test(m.message)), []);
+  assert.deepEqual([again.waitingStops, again.resolved, again.stopMails], [[], [], []]);
 });
 
-test('정당한 대기 화면(일하는 중·빈 입력창, 정지 문구 없음)은 경보 0·AI 0·키 0', async () => {
-  for (const screen of [IDLE, WORKING]) {
-    const r = await simulate({screen: () => screen, until: 40});
-    assert.deepEqual(r.alerts, [], '대기 세션에 관한 경보 기록이 하나도 없다');
-    assert.deepEqual(r.workerAI, []);
-    assert.deepEqual(r.keys, []);
-    assert.deepEqual(r.retries, []);
+test('기대 결과 표 2: 같은 화면이 55칸·45칸 창에서 접혀도 경보 1회(창 너비가 달라도 같은 경보)', async () => {
+  for (const width of [55, 45]) {
+    const screen = wrap(INCIDENT, width);
+    assert.ok(!screen.includes(CAPACITY), `${width}칸: 사고 문장이 두 줄로 접혀 있다`);
+    const r = await simulate({screen: () => screen, until: 6});
+    assert.equal(r.waitingStops.length, 1, `${width}칸`);
+    assert.deepEqual([r.stopMails.length, r.keys, r.workerAI, r.resolved], [1, [], [], []], `${width}칸`);
+    assert.ok(r.stopMails[0].message.includes(`화면: ${CAPACITY}`), '본문에는 이어 붙인 한 줄을 적는다');
   }
+  // 30~100칸 어느 너비에서도(낱말 중간에서 접혀도) 읽고, 정지 줄과 키가 같다 — 창 크기를 바꿔도 다시 울리지 않는다.
+  const found = WIDTHS.map(width => waitingStopScreen(wrap(INCIDENT, width)));
+  assert.deepEqual(WIDTHS.filter((_, index) => !found[index]), [], '못 읽은 너비');
+  assert.deepEqual([...new Set(found.map(f => `${f.key}\n${f.line}`))], [`${waitingStopScreen(INCIDENT).key}\n${CAPACITY}`]);
+  // 재검수의 실제 tmux 화면 모양(도구 출력 → 빈 줄 → 접힌 문장 → 빈 입력창).
+  for (const rows of [['■ Selected model is at capacity. Please try a different', ' model.'], ['■ Selected model is at capacity. Please try a', ' different model.']])
+    assert.equal(waitingStopScreen(['tool output', '', ...rows, '', '', '› ', ''].join('\n'))?.line, CAPACITY);
+  // 창이 좁아 한 화면이 두 번 바뀌어도(80 → 45 → 80) 경보는 하나다.
+  const resized = await simulate({screen: minute => minute >= 2 && minute < 4 ? wrap(INCIDENT, 45) : INCIDENT, until: 6});
+  assert.deepEqual([resized.waitingStops.length, resized.resolved], [1, []]);
 });
 
-test('정체 판정 AI가 불릴 만한 화면(입력창에 글이 남은 채 그대로)이어도 대기 세션에는 AI를 부르지 않는다', async () => {
-  // 감시 범위 안이었다면 5분 뒤 정체 후보가 되어 작업 감시AI가 불리는 화면이다(빈 입력창이 아니라 멈춤 경보로 가지 않는다).
-  const still = '• 다른 시험이 끝나기를 기다립니다.\n\n› 감독에게 보낼 메모를 쓰는 중';
-  const r = await simulate({screen: () => still, until: 20});
-  assert.deepEqual(r.workerAI, [], '대기 세션을 두고 AI를 불렀다');
-  assert.deepEqual(r.alerts, []);
-  assert.deepEqual(r.keys, []);
-  // 대조: 같은 화면이 감시 범위 안(대기 표시 없음)이면 AI가 실제로 불린다 — 위 0회가 빈 검사가 아님을 보인다.
-  const watched = await simulate({screen: () => still, card: () => running, until: 20});
-  assert.ok(watched.workerAI.some(([, source]) => source === 'stall'), `감시 범위 안에서는 정체 판정 AI가 불려야 한다: ${JSON.stringify(watched.aiCalls)}`);
-});
-
-test('대기 세션의 최종 429 화면은 자동 재개 없이 경보만 한 번', async () => {
+test('기대 결과 표 3: 도구 출력 아래의 최종 429 + 빈 입력창이면 경보 1회, 키 0회(자동 재개 없음)', async () => {
   const r = await simulate({screen: () => LIMIT_429});
-  assert.equal(r.waitingStops.length, 1);
-  assert.equal(r.waitingStops[0].recipient, BOSS);
+  assert.deepEqual([r.waitingStops.length, r.waitingStops[0].recipient], [1, BOSS]);
   assert.deepEqual(r.keys, [], '대기 세션에 재개 문구를 보냈다');
-  assert.deepEqual(r.retries, [], '재개 예약도 만들지 않는다');
+  assert.deepEqual([r.retries, r.workerAI], [[], []], '재개 예약도 AI 호출도 없다');
+  assert.match(r.stopMails[0].message, /429 Too Many Requests/u);
   // 대조: 같은 화면이 감시 범위 안(대기 표시 없음)이면 재개가 실제로 예약·전송된다 — 위 키 0회가 빈 검사가 아님을 보인다.
   const watched = await simulate({screen: () => LIMIT_429, card: () => running, until: 6});
   assert.ok(watched.keys.some(([kind, role]) => kind === 'resume429' && role === WORKER), `감시 범위 안에서는 재개 문구가 가야 한다: ${JSON.stringify(watched.retries.map(e => e.action))}`);
-  assert.deepEqual(r.workerAI, []);
-  assert.match(r.sent.find(m => /대기 표시 중/u.test(m.message)).message, /429 Too Many Requests/u);
 });
 
-// 검수 발견 1(2026-11-19): 대기 경로는 정상 감시의 즉시 경보(currentStopPhrases)와 같은 기준만 쓴다. 자동 재개용 최종 429 판정은
-// 인용하거나 이미 복구된 429도 집으므로 쓰지 않는다.
-const TERMINAL_429 = '■ Exceeded retry limit, last status: 429 Too Many Requests';
-const TOOL = '• Ran npm test\n  └ 4 passed\n    +2 lines';
-const FENCED_429 = ['• 장애 로그 설명을 추가했습니다.', '', '```text', TERMINAL_429, '```', '', COMPOSER].join('\n');
-const PAST_429 = [TOOL, '', TERMINAL_429, '', '• 다시 시도해 확인을 끝냈습니다.', '', COMPOSER].join('\n');
-const LOOSE_429 = `• 시험을 다시 돌립니다.\n${TERMINAL_429}\n\n${COMPOSER}`;
+test('기대 결과 표 4: 정상 작업 중(시계 움직임)·정상 빈 입력창은 경보 0회, AI 0회, 키 0회', async () => {
+  const ticking = minute => `• Ran sleep 60\n\n• Working (${minute + 3}m 10s • esc to interrupt)\n\n${COMPOSER}`;
+  for (const screen of [ticking, () => WORKING, () => IDLE]) {
+    const r = await simulate({screen, until: 40});
+    assert.deepEqual(r.alerts, [], '대기 세션에 관한 경보 기록이 하나도 없다');
+    assert.deepEqual([r.workerAI, r.keys, r.retries], [[], [], []]);
+  }
+  // 감시 범위 안이었다면 정체 판정 AI가 불리는 화면(입력창에 글이 남은 채 그대로)이어도 대기 세션에는 부르지 않는다.
+  const still = '• 다른 시험이 끝나기를 기다립니다.\n\n› 감독에게 보낼 메모를 쓰는 중';
+  const r = await simulate({screen: () => still, until: 20});
+  assert.deepEqual(r.workerAI, [], '대기 세션을 두고 AI를 불렀다');
+  assert.deepEqual([r.alerts, r.keys], [[], []]);
+  const watched = await simulate({screen: () => still, card: () => running, until: 20});
+  assert.ok(watched.workerAI.some(([, source]) => source === 'stall'), `대조: 감시 범위 안에서는 정체 판정 AI가 불려야 한다: ${JSON.stringify(watched.aiCalls)}`);
+});
 
-test('발견 1: 코드 울타리에 인용한 429, 뒤에 정상 응답이 이어진 429, 한 줄 응답 바로 아래의 429는 대기 중 정지가 아니다', async () => {
-  for (const [name, screen] of Object.entries({'fenced-429': FENCED_429, 'past-429': PAST_429, 'loose-429': LOOSE_429})) {
-    assert.equal(screenDisconnects(screen).size, 0, `${name}: 정상 감시의 즉시 경보 기준으로도 정지가 아니다`);
+test('기대 결과 표 5: 코드 울타리 안의 429, 429 뒤에 정상 응답이 이어진 화면은 경보 0회', async () => {
+  for (const [name, screen] of Object.entries({'fenced-429': FENCED_429, 'past-429': PAST_429})) {
     assert.equal(waitingStopScreen(screen), null, name);
     const r = await simulate({screen: () => screen, until: 12});
     assert.deepEqual(r.alerts, [], `${name}: 대기 세션에 관한 경보가 없어야 한다`);
     assert.deepEqual([r.keys, r.workerAI, r.retries], [[], [], []], name);
   }
-});
-
-test('발견 1: 대기 경로가 정지로 보는 화면은 정상 감시의 즉시 경보 기준이 정지로 보는 화면과 같다(더 넓지 않다)', () => {
-  const screens = [INCIDENT, LIMIT_429, FENCED_429, PAST_429, LOOSE_429, IDLE, WORKING,
-    errorScreen('■ stream disconnected before completion'), errorScreen('■ Model is overloaded, retry later', '  └ capacity exceeded'),
-    `x\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n${COMPOSER}`, `${CAPACITY}\n\n› 지금 쓰는 중인 답장`];
-  for (const screen of screens) {
-    const normal = screenDisconnects(screen), found = waitingStopScreen(screen);
-    assert.equal(found !== null, normal.size > 0, screen);
-    if (found) assert.deepEqual([normal.has(found.key), normal.get(found.key)], [true, found.line], screen);
-  }
-  assert.deepEqual(screens.map(s => waitingStopScreen(s) !== null),
-    [true, true, false, false, false, false, false, true, false, true, false]);
-});
-
-// 검수 발견 3: 대기 경보 id는 지금의 정지 줄 하나를 정규화한 값이다. 스크롤 위쪽의 옛 오류가 사라져도 바뀌지 않는다.
-test('발견 3: 같은 429 화면에서 위쪽의 옛 오류가 스크롤 밖으로 나가도 다시 울리지 않는다', async () => {
-  // 검수 재현 그대로: 429 바로 위가 한 줄 응답이고, 맨 위의 다른 옛 오류가 3분에 사라진다. 고치기 전에는 서로 다른 id로 2번 울렸다.
-  const loose = minute => [minute < 3 ? '■ An older unrelated error' : null, '• 직전 답변입니다.', TERMINAL_429, '', COMPOSER]
-    .filter(line => line !== null).join('\n');
-  const first = await simulate({screen: loose, until: 6});
-  assert.deepEqual(first.waitingStops, [], '이 모양은 현재 오류 덩어리가 아니라 알리지 않는다(한 번도, 두 번도 아니다)');
-  assert.deepEqual(first.keys, []);
-  // 현재 오류 덩어리인 429에서 같은 일이 일어나면: 경보 1회, id 하나, 풀림 없음.
-  const block = minute => [minute < 3 ? '■ An older unrelated error' : null, minute < 3 ? '' : null, TOOL, '', TERMINAL_429, '', COMPOSER]
-    .filter(line => line !== null).join('\n');
-  const second = await simulate({screen: block, until: 6});
-  assert.equal(second.waitingStops.length, 1);
-  assert.deepEqual(second.resolved, []);
-  assert.equal(new Set([0, 1, 2, 3, 4, 5].map(minute => waitingStopScreen(block(minute)).key)).size, 1);
-  assert.equal(waitingStopScreen(block(0)).line, TERMINAL_429);
-});
-
-test('본문·코드 울타리·설명에 인용된 문구와 낱말 capacity만 있는 오류는 경보 0', async () => {
+  // 본문·코드 울타리·설명에 인용된 용량 초과 문장, 일하는 표시 위·쓰는 중인 입력창 위의 문장, 낱말 capacity만 있는 오류도 아니다.
   const quoted = [
     `• 화면에 "${CAPACITY}"가 뜨면 감독에게 알린다고 문서에 적었습니다.\n\n${COMPOSER}`,
     `• 예시 화면:\n\n\`\`\`\n${CAPACITY}\n\`\`\`\n\n${COMPOSER}`,
@@ -194,45 +178,133 @@ test('본문·코드 울타리·설명에 인용된 문구와 낱말 capacity만
     errorScreen('■ Model is overloaded, retry later', '  └ capacity exceeded'),
   ];
   for (const screen of quoted) {
-    assert.equal(waitingStopScreen(screen), null, screen);
+    for (const width of [80, 55, 45]) assert.equal(waitingStopScreen(wrap(screen, width)), null, `${width}칸: ${screen}`);
     const r = await simulate({screen: () => screen, until: 3});
-    assert.deepEqual(r.waitingStops, [], screen);
-    assert.deepEqual(r.keys, []);
+    assert.deepEqual([r.waitingStops, r.keys], [[], []], screen);
   }
 });
 
-// 검수 발견 2: 용량 초과는 오류 표시로 시작하는 줄 전체가 그 문장일 때만 정지다.
-test('발견 2: 다른 오류가 인용한 문장, 뒤에 다른 말이 붙은 줄, 앞에 말이 붙은 줄은 용량 초과가 아니다', async () => {
-  const lines = {
-    'quoted-capacity': '■ Could not read documentation entry "Selected model is at capacity".',
-    'capacity-planning': '■ Selected model is at capacity planning stage.',
+test('기대 결과 표 6: 용량 초과 부분 일치 두 반례는 어떤 너비에서도 경보 0회', async () => {
+  const more = {
     'prefix': '■ Note: Selected model is at capacity. Please try a different model.',
     'suffix': '■ Selected model is at capacity. Please try a different model. (see docs)',
     'first-sentence-only': '■ Selected model is at capacity.',
     'no-error-mark': 'Selected model is at capacity. Please try a different model.',
+    'extra-line': `${CAPACITY}\n  └ request id 12ab`,
   };
-  for (const [name, line] of Object.entries(lines)) {
+  for (const [name, line] of Object.entries({...PARTIAL, ...more})) {
     const screen = errorScreen(line);
-    assert.equal(screenDisconnects(screen).size, 0, `${name}: 감시 범위 안에서도 정지 문구가 아니다`);
-    assert.equal(waitingStopScreen(screen), null, name);
-    const r = await simulate({screen: () => screen, until: 12});
-    assert.deepEqual(r.alerts, [], name);
-    assert.deepEqual([r.keys, r.workerAI], [[], []], name);
+    const hits = WIDTHS.filter(width => waitingStopScreen(wrap(screen, width)) || screenDisconnects(wrap(screen, width)).size);
+    assert.deepEqual(hits, [], `${name}: 정지로 읽은 너비(대기 경로·감시 범위 안 둘 다 0이어야 한다)`);
   }
-  // 실제 오류 줄은 그대로 읽는다(들여쓴 이어진 줄·대소문자·다른 오류 표시 포함).
-  for (const line of [CAPACITY, CAPACITY.toUpperCase(), `✕${CAPACITY.slice(1)}`, `${CAPACITY}  `])
-    assert.equal(waitingStopScreen(errorScreen(line))?.line, line.trim(), line);
+  for (const [name, line] of Object.entries(PARTIAL)) for (const width of [80, 55, 45]) {
+    const r = await simulate({screen: () => wrap(errorScreen(line), width), until: 6});
+    assert.deepEqual(r.alerts, [], `${name} ${width}칸`);
+    assert.deepEqual([r.keys, r.workerAI], [[], []], `${name} ${width}칸`);
+  }
+  // 실제 오류 줄은 대소문자·다른 오류 표시·줄 끝 공백이 달라도 같은 한 줄로 읽는다.
+  for (const line of [CAPACITY, CAPACITY.toUpperCase(), `${CAPACITY}  `])
+    assert.equal(waitingStopScreen(errorScreen(line))?.line, CAPACITY, line);
+  assert.equal(waitingStopScreen(errorScreen(`✕${CAPACITY.slice(1)}`))?.line, `✕${CAPACITY.slice(1)}`);
+  // 다른 오류 줄에 딸린 줄이면 그 오류를 읽는다(용량 초과 문장 하나가 덩어리 전체가 아니다).
   assert.equal(waitingStopScreen(errorScreen('■ stream error', `  ${CAPACITY}`))?.line, '■ stream error');
 });
 
-test('발견 2: 용량 초과 문장이 화면 아래에 보여도 시계가 도는 정상 작업은 일하는 중이고 정체 판정 AI를 부르지 않는다', async () => {
-  const session = SESSION;
-  const moving = screenOf => {
-    const assess = (states, screen) => assessRoles(states, new Map([[session,
-      {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen, digest: changeDigest(screen)}]]), 60_000, 60_000, 2);
-    return assess(assess(new Map(), screenOf(1)).states, screenOf(2)).states.get(session).workingMoving;
+test('기대 결과 표 7: 같은 정지 줄에서 위쪽의 옛 오류가 스크롤 밖으로 밀려도 추가 경보 0회', async () => {
+  const scrolled = line => minute => [minute < 3 ? '■ An older unrelated error' : null, minute < 3 ? '' : null, TOOL, '', line, '', COMPOSER]
+    .filter(row => row !== null).join('\n');
+  for (const line of [TERMINAL_429, CAPACITY]) {
+    const r = await simulate({screen: scrolled(line), until: 6});
+    assert.equal(r.waitingStops.length, 1, line);
+    assert.deepEqual(r.resolved, [], line);
+    assert.equal(new Set([0, 1, 2, 3, 4, 5].map(minute => waitingStopScreen(scrolled(line)(minute)).key)).size, 1, line);
+  }
+  // 시계·횟수 숫자만 다른 같은 줄도 같은 경보다.
+  const ticking = await simulate({screen: minute => `x\n• Reconnecting... ${minute % 5}/5 (${minute}m 0${minute % 10}s • esc to interrupt)\n${COMPOSER}`, until: 8});
+  assert.deepEqual([ticking.waitingStops.length, ticking.resolved], [1, []]);
+});
+
+test('기대 결과 표 8: 대기 표시가 풀리거나 실행이 끝나면 경보가 해제된다', async () => {
+  const r = await simulate({card: minute => minute < 3 ? waiting : {...running, activityAt: stamp(3), at: stamp(3)}, until: 8});
+  assert.equal(r.waitingStops.length, 1);
+  assert.deepEqual(r.resolved.map(e => e.alertKind), ['대기중정지']);
+  assert.ok(r.resolved[0].t >= stamp(3), '대기가 풀린 주기에 닫힌다');
+  assert.deepEqual(r.opened.map(e => e.alertKind), ['대기중정지', '끊김'], '풀린 뒤 같은 화면은 정상 감시의 끊김으로 난다');
+  // 실행이 끝나면(done 기록, 카드 종료) 닫힌다.
+  const done = await simulate({extra: minute => minute >= 2 ? [{kind: 'done', role: WORKER, taskId: 'qa-task', executionKey: KEY, result: 'ok', t: stamp(2)}] : [], until: 5});
+  assert.deepEqual([done.waitingStops.length, done.resolved.map(e => e.alertKind)], [1, ['대기중정지']]);
+  const closed = await simulate({card: minute => minute < 2 ? waiting : {...waiting, status: 'done'}, until: 5});
+  assert.deepEqual([closed.waitingStops.length, closed.resolved.map(e => e.alertKind)], [1, ['대기중정지']]);
+  // 화면이 회복되면 닫히고, 다른 정지 줄이 뜨면 새 경보다.
+  const recovered = await simulate({screen: minute => minute < 2 ? INCIDENT : WORKING, until: 6});
+  assert.deepEqual([recovered.waitingStops.length, recovered.resolved.map(e => e.alertKind)], [1, ['대기중정지']]);
+  const changed = await simulate({screen: minute => minute < 2 ? INCIDENT : errorScreen('■ stream disconnected before completion'), until: 6});
+  assert.equal(changed.waitingStops.length, 2);
+  assert.notEqual(changed.waitingStops[0].id, changed.waitingStops[1].id);
+});
+
+test('기대 결과 표 9: #434 한도 화면 3종은 대기 경보 1개 또는 정상 감시 한도 경보 1개이고 겹치지 않는다', async () => {
+  const usage = "■ You've hit your usage limit. Try again at Nov 20th, 2026 3:00 PM.";
+  const screens = {
+    'codex 사용 한도': errorScreen(usage),
+    '사용 한도 + 딸린 용량 초과 줄': errorScreen(usage, `  ${CAPACITY}`),
+    'claude 한도 고정본': fixture('claude-limit-incident-screens.json')['pos-banner-after-detail'],
   };
-  // 검수 재현 'active ticking': 문장을 인용한 응답 아래에서 일하는 시계가 돈다. 기준 커밋과 같이 일하는 중이어야 한다.
+  for (const [name, screen] of Object.entries(screens)) {
+    assert.equal(typeof screen, 'string', name);
+    const held = await simulate({screen: () => screen, until: 4});
+    assert.deepEqual([held.opened.map(e => e.alertKind), held.keys, held.workerAI], [['대기중정지'], [], []], `${name}: 대기 중`);
+    const active = await simulate({screen: () => screen, card: () => running, until: 4});
+    assert.deepEqual([active.opened.map(e => e.alertKind), active.keys], [['한도'], []], `${name}: 감시 범위 안`);
+  }
+});
+
+test('범위 밖(알려진 한계, 요구가 아니라 지금 동작의 기록): 응답 한 줄 바로 아래의 오류, 대기 세션의 죽음', async () => {
+  // 오류 줄 바로 위가 응답 한 줄이면 현재 오류 덩어리 규칙이 인용·설명으로 보아 읽지 않는다(용량 초과·최종 429 둘 다).
+  // 감시 범위 안이면 이 모양의 429는 자동 재개가 받지만 대기 세션에는 자동 재개가 없다.
+  for (const line of [CAPACITY, TERMINAL_429]) {
+    assert.equal(waitingStopScreen(`• 전체 시험을 돌리겠습니다.\n\n${line}\n\n${COMPOSER}`), null, line);
+    assert.equal(waitingStopScreen(`• 직전 답변입니다.\n${line}\n\n${COMPOSER}`), null, line);
+  }
+  // 대기 중 세션이 사라져도 알리지 않는다(이 검사는 살아 있는 세션의 화면만 본다).
+  const died = await simulate({screen: () => IDLE, alive: minute => minute < 2, until: 6});
+  assert.deepEqual([died.alerts, died.keys], [[], []]);
+  // 정지 경보가 열린 채 세션이 사라지면 경보는 닫힌다(화면이 없으면 정지 화면도 없다).
+  const stopped = await simulate({alive: minute => minute < 2, until: 6});
+  assert.deepEqual([stopped.waitingStops.length, stopped.resolved.map(e => e.alertKind)], [1, ['대기중정지']]);
+});
+
+test('대기 경로가 정지로 보는 화면은 정상 감시의 즉시 경보 기준이 정지로 보는 화면과 같다(더 넓지도 좁지도 않다)', () => {
+  const screens = [INCIDENT, wrap(INCIDENT, 55), wrap(INCIDENT, 45), LIMIT_429, FENCED_429, PAST_429, IDLE, WORKING,
+    `• 시험을 다시 돌립니다.\n${TERMINAL_429}\n\n${COMPOSER}`, ...Object.values(PARTIAL).map(line => errorScreen(line)),
+    errorScreen('■ stream disconnected before completion'), `x\n• Reconnecting... 2/5 (9m 34s • esc to interrupt)\n${COMPOSER}`,
+    `${CAPACITY}\n\n› 지금 쓰는 중인 답장`];
+  for (const screen of screens) {
+    const normal = screenDisconnects(screen), found = waitingStopScreen(screen);
+    assert.equal(found !== null, normal.size > 0, screen);
+    if (found) assert.deepEqual([normal.has(found.key), normal.get(found.key)], [true, found.line], screen);
+  }
+  assert.deepEqual(screens.map(s => waitingStopScreen(s) !== null),
+    [true, true, true, true, false, false, false, false, false, false, false, true, true, false]);
+});
+
+test('감시 대상 안 작업자의 용량 초과 화면은 정지 문구(끊김)로 바로 잡히고, 좁은 창에서도 같다', async () => {
+  assert.deepEqual([...screenDisconnects(INCIDENT).values()], [CAPACITY]);
+  assert.equal(disconnectKind(CAPACITY), '끊김');
+  for (const screen of [INCIDENT, wrap(INCIDENT, 45)]) {
+    const r = await simulate({screen: () => screen, card: () => running, until: 6});
+    assert.deepEqual(r.opened.map(e => [e.alertKind, e.recipient]), [['끊김', BOSS]]);
+    assert.deepEqual([r.waitingStops, r.keys, r.retries], [[], [], []], '용량 초과에는 자동 재개를 붙이지 않는다');
+  }
+});
+
+test('용량 초과 문장이 화면 아래에 보여도 시계가 도는 정상 작업은 일하는 중이고 정체 판정 AI를 부르지 않는다', async () => {
+  const moving = screenOf => {
+    const assess = (states, screen) => assessRoles(states, new Map([[SESSION,
+      {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen, digest: changeDigest(screen)}]]), 60_000, 60_000, 2);
+    return assess(assess(new Map(), screenOf(1)).states, screenOf(2)).states.get(SESSION).workingMoving;
+  };
+  // 첫 검수 재현 'active ticking': 문장을 인용한 응답 아래에서 일하는 시계가 돈다. main과 같이 일하는 중이어야 한다.
   const quoted = minute => `• 화면 문구 "Selected model is at capacity."를 문서화하는 중입니다.\n\n• Working (${minute + 1}m 10s • esc to interrupt)\n\n${COMPOSER}`;
   // 진짜 오류 줄이 아래 12줄 안에 남아 있고(지난 오류) 그 아래에서 다시 일하는 화면도 같다: 넓은 검사는 이 문장을 보지 않는다.
   const real = minute => `${TOOL}\n\n${CAPACITY}\n\n• 다시 보내 주셔서 이어갑니다.\n\n• Working (${minute + 1}m 10s • esc to interrupt)\n\n${COMPOSER}`;
@@ -246,24 +318,6 @@ test('발견 2: 용량 초과 문장이 화면 아래에 보여도 시계가 도
   // 대조: 넓은 검사가 원래 보던 낱말(429)은 지금처럼 일하는 중을 거부한다.
   const limited = minute => `${TOOL}\n\n${TERMINAL_429}\n\n• Working (${minute + 1}m 10s • esc to interrupt)\n\n${COMPOSER}`;
   assert.deepEqual([moving(limited), anyStopWordInBottom(limited(1))], [false, true]);
-});
-
-test('지금 규칙의 한계 기록: 오류 줄 바로 위가 한 줄 응답이면 용량 초과 줄을 읽지 않는다(기존 현재 오류 덩어리 규칙 그대로)', () => {
-  const afterResponse = `• 전체 시험을 돌리겠습니다.\n\n${CAPACITY}\n\n${COMPOSER}`;
-  assert.equal(waitingStopScreen(afterResponse), null);
-  // 사고 화면처럼 바로 위가 도구 블록의 들여쓴 줄이면 읽는다.
-  assert.equal(waitingStopScreen(INCIDENT).line, CAPACITY);
-});
-
-test('감시 대상 안 작업자의 용량 초과 화면은 정지 문구(끊김)로 바로 잡힌다', async () => {
-  assert.deepEqual([...screenDisconnects(INCIDENT).values()], [CAPACITY]);
-  assert.equal(disconnectKind(CAPACITY), '끊김');
-  assert.equal(screenDisconnects(`${CAPACITY.toLowerCase()}\n\n${COMPOSER}`).size, 1, '대소문자 무시');
-  const r = await simulate({card: () => running, until: 6});
-  assert.deepEqual(r.opened.map(e => [e.alertKind, e.recipient]), [['끊김', BOSS]]);
-  assert.deepEqual(r.waitingStops, []);
-  assert.deepEqual(r.keys, [], '용량 초과에는 자동 재개를 붙이지 않는다');
-  assert.deepEqual(r.retries, []);
 });
 
 test('감시 범위: sessions·entries는 그대로이고 대기 실행은 waitingSessions로만 나온다', () => {
@@ -286,64 +340,19 @@ test('감시 범위: sessions·entries는 그대로이고 대기 실행은 waiti
   assert.deepEqual([[...kept.sessions], kept.waitingSessions], [[SESSION], []]);
 });
 
-test('대기가 풀리면 대기 경보는 닫히고 정상 감시(끊김·자동 재개 대상)로 돌아온다', async () => {
-  const r = await simulate({card: minute => minute < 3 ? waiting : {...running, activityAt: stamp(3), at: stamp(3)}, until: 8});
-  assert.equal(r.waitingStops.length, 1);
-  assert.deepEqual(r.resolved.map(e => e.alertKind), ['대기중정지']);
-  assert.ok(r.resolved[0].t >= stamp(3), '대기가 풀린 주기에 닫힌다');
-  assert.deepEqual(r.opened.map(e => e.alertKind), ['대기중정지', '끊김']);
-  // 실행이 끝나도(done) 닫힌다.
-  const done = await simulate({extra: minute => minute >= 2 ? [{kind: 'done', role: WORKER, taskId: 'qa-task', executionKey: KEY, result: 'ok', t: stamp(2)}] : [], until: 5});
-  assert.deepEqual(done.resolved.map(e => e.alertKind), ['대기중정지']);
-  assert.equal(done.waitingStops.length, 1);
-});
-
-test('화면이 바뀌면 닫히고, 다른 정지 화면이면 새 경보다. 숫자만 다른 같은 줄은 같은 경보다', async () => {
-  const recovered = await simulate({screen: minute => minute < 2 ? INCIDENT : WORKING, until: 6});
-  assert.equal(recovered.waitingStops.length, 1);
-  assert.deepEqual(recovered.resolved.map(e => e.alertKind), ['대기중정지']);
-  const changed = await simulate({screen: minute => minute < 2 ? INCIDENT : errorScreen('■ stream disconnected before completion'), until: 6});
-  assert.equal(changed.waitingStops.length, 2);
-  assert.notEqual(changed.waitingStops[0].id, changed.waitingStops[1].id);
-  const ticking = await simulate({screen: minute => `x\n• Reconnecting... ${minute % 5}/5 (${minute}m 0${minute % 10}s • esc to interrupt)\n${COMPOSER}`, until: 8});
-  assert.equal(ticking.waitingStops.length, 1);
-  assert.deepEqual(ticking.resolved, []);
-});
-
-test('대기 중 세션이 죽으면(일부러 끈 것 제외) 같은 경보로 한 번 알린다. 처음부터 없던 세션은 알리지 않는다', async () => {
-  const died = await simulate({screen: () => IDLE, alive: minute => minute < 2, until: 8});
-  assert.equal(died.waitingStops.length, 1);
-  assert.equal(died.waitingStops[0].level, 'AMBER');
-  assert.match(died.sent.find(m => /대기 표시 중/u.test(m.message)).message, /세션 종료 의심.*세션 없음 또는 PID 불일치/su);
-  assert.deepEqual(died.keys, []);
-  // kadan stop으로 끈 세션은 죽음이 아니다.
-  const stopped = await simulate({screen: () => IDLE, alive: minute => minute < 2, until: 8,
-    extra: minute => minute >= 2 ? [{kind: 'stop', session: SESSION, role: WORKER, t: stamp(2)}] : []});
-  assert.deepEqual(stopped.waitingStops, []);
-  // 감시 시작 때 이미 없던 세션(묵은 대기 카드)은 울리지 않는다.
-  const never = await simulate({alive: () => false, until: 5});
-  assert.deepEqual(never.alerts, []);
-  // 재시작 뒤 복원된 죽음 경보는 이어 간다(풀림으로 닫지 않는다).
-  const restarted = await simulate({seed: died.entries, alive: () => false, until: 3});
-  assert.deepEqual([restarted.waitingStops, restarted.resolved], [[], []]);
-});
-
-test('판정 함수: 살아 있는 것을 본 세션만 죽음 후보이고, PID가 다른 세션의 화면은 읽지 않는다', () => {
+test('판정 함수: 상태도 원장 읽기도 없다. 살아 있고 PID가 같은 세션의 화면만 본다', () => {
   const entry = {session: SESSION, role: WORKER, taskId: 'qa-task', executionKey: KEY, by: LEAD, card: waiting};
   const seen = over => new Map([[SESSION, {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen: INCIDENT, ...over}]]);
-  const first = assessWaitingStops(null, [entry], seen(), {entries: starts});
-  assert.deepEqual([...first.alive], [SESSION]);
-  assert.equal(first.alerts.length, 1);
-  assert.equal(first.alerts[0].dispatcher, LEAD);
-  assert.equal(first.alerts[0].waitingNote, WAIT_NOTE);
-  const swapped = assessWaitingStops(first, [entry], seen({pid: 9}), {entries: starts});
-  assert.deepEqual(swapped.alerts.map(a => a.dead), [true]);
-  assert.deepEqual(assessWaitingStops(null, [entry], seen({pid: 9}), {entries: starts}).alerts, []);
-  assert.deepEqual(assessWaitingStops(null, [], seen(), {entries: starts}), {alive: new Set(), judged: new Map(), alerts: []});
+  assert.equal(assessWaitingStops.length, 2, '인자는 대기 실행 목록과 이번 순회의 관측 둘뿐이다(원장·지난 상태를 받지 않는다)');
+  const [alert, ...rest] = assessWaitingStops([entry], seen());
+  assert.deepEqual([rest, alert.dispatcher, alert.waitingNote, alert.line, alert.level], [[], LEAD, WAIT_NOTE, CAPACITY, 'AMBER']);
+  assert.deepEqual(assessWaitingStops([entry], seen()), [alert], '같은 입력이면 같은 경보(id 포함)');
+  for (const over of [{pid: 9}, {alive: false}, {screen: null}, {screen: IDLE}]) assert.deepEqual(assessWaitingStops([entry], seen(over)), [], JSON.stringify(over));
+  assert.deepEqual([assessWaitingStops([entry], new Map()), assessWaitingStops([], seen()), assessWaitingStops(undefined, seen())], [[], [], []]);
   // 대기 사유는 그 대기 표시를 만든 보고 한 줄이다. 뒤에 붙은 일반 메모는 사유가 아니다(사유 없이 알린다).
   const memo = {...waiting, at: stamp(5), noteKind: 'decision', note: '감독 메모'};
-  assert.equal(assessWaitingStops(null, [{...entry, card: memo}], seen(), {entries: starts}).alerts[0].waitingNote, '');
-  assert.equal(assessWaitingStops(null, [{...entry, card: {...waiting, noteKind: 'decision'}}], seen(), {entries: starts}).alerts[0].waitingNote, '');
+  assert.equal(assessWaitingStops([{...entry, card: memo}], seen())[0].waitingNote, '');
+  assert.equal(assessWaitingStops([{...entry, card: {...waiting, noteKind: 'decision'}}], seen())[0].waitingNote, '');
 });
 
 test('실제 카드 저장소: 감시기가 읽는 카드 요약(이력 없음)으로도 실행 키·발령한 역할·대기 사유가 경보에 실린다', () => {
@@ -356,10 +365,7 @@ test('실제 카드 저장소: 감시기가 읽는 카드 요약(이력 없음)�
   const entries = [...starts, {kind: 'send', role: WORKER, session: SESSION, taskId: made.id, executionKey: made.key, by: LEAD,
     t: new Date(Date.now() - 60_000).toISOString()}];
   const observed = new Map([[SESSION, {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen: INCIDENT}]]);
-  const alertOf = () => {
-    const scope = buildWatchScope(readers.cards.read(), entries, parents, [], {waiting: true});
-    return assessWaitingStops(null, scope.waitingSessions, observed, {entries}).alerts;
-  };
+  const alertOf = () => assessWaitingStops(buildWatchScope(readers.cards.read(), entries, parents, [], {waiting: true}).waitingSessions, observed);
   assert.deepEqual(alertOf(), [], '대기 표시 전에는 대기 목록에 없다(정상 감시 대상)');
   const reported = store.update(made.key, {activity: 'waiting'}, {revision: store.get(made.key).revision, note: WAIT_NOTE, noteKind: 'progress', by: WORKER});
   const [alert] = alertOf();
@@ -375,7 +381,7 @@ test('실제 카드 저장소: 감시기가 읽는 카드 요약(이력 없음)�
 
 test('경보 본문: 실행 키·대기 표시 시각과 사유·정지 줄·감시 밖이었던 이유를 담고, 복원된 경보(값 없음)도 문장이 깨지지 않는다', () => {
   const entry = {session: SESSION, role: WORKER, taskId: 'qa-task', executionKey: KEY, by: LEAD, card: waiting};
-  const [alert] = assessWaitingStops(null, [entry], new Map([[SESSION, {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen: INCIDENT}]]), {entries: starts}).alerts;
+  const [alert] = assessWaitingStops([entry], new Map([[SESSION, {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen: INCIDENT}]]));
   const body = formatAlertBody(alert);
   assert.match(body, new RegExp(`^대기 표시 중 오류 화면으로 멈춤 ${SESSION} / ${KEY} \\(`, 'u'));
   for (const text of [`"${WAIT_NOTE}"`, `화면: ${CAPACITY}`, '대기 표시 때문에 정체 감시 밖이었음', `발령 ${LEAD}`, '감독 확인 필요']) assert.ok(body.includes(text), text);
@@ -385,124 +391,38 @@ test('경보 본문: 실행 키·대기 표시 시각과 사유·정지 줄·감
   assert.equal(formatAlertBody(restored), `대기 표시 중 오류 화면으로 멈춤 ${SESSION} / qa-task (대기 표시; 대기 표시 때문에 정체 감시 밖이었음 — 감독 확인 필요)`);
 });
 
-test('받는 쪽: 그 실행을 발령한 역할에게 간다(관계표의 직속 상위와 달라도). 발령한 역할의 세션이 없으면 직속 상위에게 간다', async () => {
-  // 사고의 모양: 다른 계열의 감독(LEAD)이 검수자에게 재판정을 맡기고 그 결과를 기다린다. 검수자의 직속 상위는 BOSS다.
-  const r = await simulate({by: LEAD, until: 3});
-  assert.deepEqual(r.waitingStops.map(e => [e.recipient, e.route.basis, e.delivered]), [[LEAD, 'dispatcher', true]]);
-  const mails = r.sent.filter(m => /대기 표시 중/u.test(m.message));
-  assert.deepEqual(mails.map(m => m.role), [LEAD], '기다리는 쪽(발령한 역할)만 받는다');
-  assert.ok(mails[0].message.includes(`발령 ${LEAD}`));
-  // 발령한 역할의 세션이 없으면 죽은 창에 보내지 않고 기존 경로(직속 상위)로 간다. 건너뛴 이유를 기록에 남긴다.
-  const gone = await simulate({by: LEAD, leadAlive: false, until: 3});
-  assert.deepEqual(gone.waitingStops.map(e => [e.recipient, e.delivered]), [[BOSS, true]]);
-  assert.deepEqual(gone.waitingStops[0].route.skipped, [`${LEAD}(발령한 역할 세션 없음 또는 PID 불일치)`]);
-  assert.deepEqual(gone.sent.filter(m => /대기 표시 중/u.test(m.message)).map(m => m.role), [BOSS]);
-  // 발령한 역할을 모르면(옛 기록) 직속 상위에게 간다.
-  const unknown = await simulate({by: undefined, until: 3, seed: [...starts, {...dispatch(), by: undefined}]});
-  assert.deepEqual(unknown.waitingStops.map(e => e.recipient), [BOSS]);
-});
-
-// 검수 발견 4: 발령한 역할의 이름만 살아 있고 창 PID가 원장에 등록된 PID와 다르면 그 창은 다른 프로세스다(전송 보호기가 거절한다).
-const stopMails = r => r.sent.filter(m => /대기 표시 중/u.test(m.message)).map(m => [m.minute, m.role]);
-test('발견 4: 발령한 역할의 창 PID가 등록된 PID와 다르면 처음부터 대기 실행 담당의 직속 상위에게 보낸다', async () => {
-  const r = await simulate({by: LEAD, leadPid: 998, until: 4});
-  assert.deepEqual(r.waitingStops.map(e => [e.recipient, e.delivered, e.route.skipped]),
-    [[BOSS, true, [`${LEAD}(발령한 역할 세션 없음 또는 PID 불일치)`]]]);
-  assert.deepEqual(stopMails(r), [[0, BOSS]], '직속 상위가 첫 주기에 한 번 받고 발령한 역할 창에는 넣지 않는다');
-  assert.deepEqual(r.records.filter(e => e.alertKind === '전달실패'), [], '발령한 역할의 상위로 전달 실패를 올리지 않는다');
-});
-
-test('발견 4: 발령한 역할에게 보내다 실패하면 같은 주기에 직속 상위에게 간다(경보가 열린 채 아무에게도 안 가는 일이 없다)', async () => {
-  const fail = (delivery, code) => Object.assign(new Error('세션 PID 불일치'), delivery ? {delivery} : {}, code ? {code} : {});
-  // 보내기 전에 거절된 실패(not-sent)와 전달 여부를 모르는 실패 모두 직속 상위로 넘긴다.
-  for (const delivery of ['not-sent', null]) {
-    const r = await simulate({by: LEAD, until: 4, sendFail: role => role === LEAD ? fail(delivery) : null});
-    assert.deepEqual(stopMails(r), [[0, BOSS]], String(delivery));
-    assert.deepEqual(r.waitingStops.map(e => [e.recipient, e.delivered, e.route.skipped]),
-      [[BOSS, true, [`${LEAD}(발령한 역할 전달 실패: 세션 PID 불일치)`]]], String(delivery));
-    assert.deepEqual(r.records.filter(e => e.alertKind === '전달실패'), [], String(delivery));
+test('받는 쪽: 감시 범위 안 작업자의 끊김 경보와 같은 경로다(직속 상위, 죽었으면 그 위). 발령한 역할은 본문에만 적는다', async () => {
+  // 같은 정지 화면을 대기 중(대기중정지)과 감시 범위 안(끊김)으로 각각 돌려 받는 사람을 견준다.
+  for (const [name, options, expected] of [['직속 상위가 살아 있음', {}, BOSS], ['발령한 역할이 직속 상위와 다름', {by: LEAD}, BOSS],
+    ['직속 상위 창이 없음', {gone: [BOSS]}, TOP], ['발령한 역할을 모름', {seed: [...starts, {...dispatch(), by: undefined}]}, BOSS]]) {
+    const held = await simulate({...options, until: 3});
+    const active = await simulate({...options, seed: options.seed && [...options.seed], card: () => running, until: 3});
+    assert.deepEqual(held.waitingStops.map(e => [e.recipient, e.delivered]), [[expected, true]], name);
+    assert.deepEqual(active.opened.map(e => [e.alertKind, e.recipient, e.delivered]), [['끊김', expected, true]], name);
+    assert.deepEqual(held.waitingStops[0].route, active.opened[0].route, `${name}: 경로 기록(근거·건너뛴 이유)까지 같다`);
+    assert.deepEqual(held.stopMails.map(m => m.role), [expected], name);
   }
-  // 창에 이미 들어갔다고 확인된 오류(sent)는 받은 것으로 치고 직속 상위에 또 보내지 않는다.
-  const sent = await simulate({by: LEAD, until: 4, sendFail: role => role === LEAD ? fail('sent') : null});
-  assert.deepEqual([stopMails(sent), sent.waitingStops.map(e => e.recipient)], [[], [LEAD]]);
-  // 사람이 그 창에서 입력 중이라 미룬 알림은 직속 상위로 돌리지 않고 다음 주기에 발령한 역할에게 다시 보낸다.
-  const held = await simulate({by: LEAD, until: 4,
-    sendFail: (role, minute) => role === LEAD && minute === 0 ? fail('not-sent', 'KADAN_HUMAN_ACTIVE') : null});
-  assert.deepEqual(stopMails(held), [[1, LEAD]]);
-  assert.deepEqual(held.waitingStops.map(e => [e.recipient, Boolean(e.held), e.delivered]), [[LEAD, true, false], [LEAD, false, false], [LEAD, false, true]]);
+  const led = await simulate({by: LEAD, until: 3});
+  assert.ok(led.stopMails[0].message.includes(`발령 ${LEAD}`));
+  assert.deepEqual(led.attempts.filter(([, role]) => role === LEAD), [], '발령한 역할에게 따로 보내지 않는다');
 });
 
-test('발견 4: 발령한 역할이 직속 상위와 같으면 기존 경로 그대로다(전달 실패는 그 위 상위로 올라간다)', async () => {
-  const r = await simulate({until: 4, sendFail: role => role === BOSS ? Object.assign(new Error('세션 없음'), {delivery: 'not-sent'}) : null});
-  assert.deepEqual(r.waitingStops.map(e => [e.recipient, e.delivered, e.route.basis === 'dispatcher', e.route.skipped ?? []]),
-    [[BOSS, false, false, []]], '직속 상위에게 한 번만 시도한다(발령한 역할로 따로 먼저 보내지 않는다)');
-  const escalated = r.records.filter(e => e.alertKind === '전달실패');
-  assert.deepEqual(escalated.map(e => [e.recipient, e.delivered]), [['qa-top', true]]);
-  assert.match(r.sent.find(m => m.role === 'qa-top').message, /전달실패 대기 표시 중 오류 화면으로 멈춤/u);
-});
-
-// 검수 발견 5: 사라진 세션의 수명 판정은 사라진 것을 처음 본 주기에 한 번만 원장을 읽는다.
-test('발견 5: 대기 세션이 사라진 뒤 원장을 주기마다 다시 훑지 않는다(첫 주기 한 번, 그 뒤 0회)', () => {
-  const entry = {session: SESSION, role: WORKER, taskId: 'qa-task', executionKey: KEY, by: LEAD, card: waiting};
-  const counted = rows => {
-    const counter = {reads: 0};
-    const entries = new Proxy(rows, {get(target, name, receiver) {
-      if (/^\d+$/u.test(String(name))) counter.reads++;
-      return Reflect.get(target, name, receiver);
-    }});
-    return {entries, counter};
-  };
-  const noise = length => Array.from({length}, () => ({kind: 'send'}));
-  const perCycle = [];
-  for (const length of [128, 1280]) {
-    const {entries, counter} = counted([starts[0], ...noise(length)]);
-    let state = {alive: new Set([SESSION]), judged: new Map()};
-    const reads = [];
-    for (let cycle = 0; cycle < 5; cycle++) {
-      const before = counter.reads;
-      const next = assessWaitingStops(state, [entry], new Map(), {entries});
-      assert.deepEqual(next.alerts.map(a => [a.id, a.dead]), [[`waiting-stop:${SESSION}:${KEY}:death`, true]], `주기 ${cycle}: 죽음 경보가 이어진다`);
-      reads.push(counter.reads - before);
-      state = next;
-    }
-    assert.deepEqual(reads, [length + 1, 0, 0, 0, 0], `원장 ${length}건`);
-    perCycle.push(reads);
+test('받는 쪽: 전달 결과를 모르는 실패는 다시 보내지 않고, 보내기 전에 거절된 실패는 기존처럼 그 위 상위로 올라간다', async () => {
+  const fail = delivery => Object.assign(new Error('전달 확인 불가'), delivery ? {delivery} : {});
+  for (const delivery of ['unknown', null]) {
+    const r = await simulate({until: 6, sendFail: role => role === BOSS ? fail(delivery) : null});
+    assert.deepEqual(r.attempts, [[0, BOSS]], `${delivery}: 한 번 시도하고 다시 보내지 않는다(다른 역할로도 보내지 않는다)`);
+    assert.deepEqual(r.waitingStops.map(e => [e.recipient, e.delivered]), [[BOSS, false]], String(delivery));
   }
-  assert.deepEqual(perCycle.map(reads => reads.slice(1)), [[0, 0, 0, 0], [0, 0, 0, 0]], '원장이 10배여도 둘째 주기부터 0회');
-  // 일부러 끈 세션도 한 번만 판정한다: 그 뒤로는 원장을 읽지 않고 조용하다.
-  const stopped = counted([starts[0], ...noise(1280), {kind: 'stop', session: SESSION, role: WORKER}]);
-  let state = {alive: new Set([SESSION]), judged: new Map()};
-  for (let cycle = 0; cycle < 3; cycle++) {
-    state = assessWaitingStops(state, [entry], new Map(), {entries: stopped.entries});
-    assert.deepEqual([state.alerts, [...state.judged]], [[], [[SESSION, 'stopped']]]);
-  }
-  assert.equal(stopped.counter.reads, 1, '마지막 기록(stop) 하나만 읽고 끝');
-  // 재시작 뒤 복원된 죽음 경보는 원장을 읽지 않고 이어 간다.
-  const restored = counted([starts[0], ...noise(1280)]);
-  const active = [{id: `waiting-stop:${SESSION}:${KEY}:death`, kind: '대기중정지'}];
-  const again = assessWaitingStops(null, [entry], new Map(), {entries: restored.entries, active});
-  assert.deepEqual([again.alerts.length, restored.counter.reads, [...again.judged]], [1, 0, [[SESSION, 'dead']]]);
-  // 한 역할에 대기 실행이 둘이어도 한 번만 읽는다.
-  const two = counted([starts[0], ...noise(128)]);
-  const both = assessWaitingStops({alive: new Set([SESSION]), judged: new Map()},
-    [entry, {...entry, taskId: 'qa-other', executionKey: 'qa/qa-other'}], new Map(), {entries: two.entries});
-  assert.deepEqual([both.alerts.length, two.counter.reads], [2, 129]);
-  // 세션이 다시 살아나면 판정을 버린다.
-  const back = assessWaitingStops(state, [entry], new Map([[SESSION, {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen: IDLE}]]), {entries: starts});
-  assert.deepEqual([[...back.alive], [...back.judged], back.alerts], [[SESSION], [], []]);
+  const rejected = await simulate({until: 6, sendFail: role => role === BOSS ? fail('not-sent') : null});
+  assert.deepEqual(rejected.attempts, [[0, BOSS], [0, TOP]]);
+  assert.deepEqual(rejected.records.filter(e => e.alertKind === '전달실패').map(e => [e.recipient, e.delivered]), [[TOP, true]]);
+  // 사람이 그 창에서 입력 중이라 미룬 알림은 같은 사람에게 다음 주기에 다시 보낸다(다른 경보와 같은 규칙).
+  const held = await simulate({until: 6, sendFail: (role, minute) => role === BOSS && minute < 2 ? Object.assign(fail('not-sent'), {code: 'KADAN_HUMAN_ACTIVE'}) : null});
+  assert.deepEqual([held.attempts, held.stopMails.map(m => [m.minute, m.role])], [[[0, BOSS], [1, BOSS], [2, BOSS]], [[2, BOSS]]]);
 });
 
-test('발견 5의 대가: 죽음 경보가 열린 뒤 그 세션을 kadan stop으로 꺼도 경보는 그대로 열려 있다(대기가 풀리거나 실행이 끝나면 닫힌다)', async () => {
-  const stop = {kind: 'stop', session: SESSION, role: WORKER, t: stamp(4)};
-  const r = await simulate({screen: () => IDLE, alive: minute => minute < 2, until: 8, extra: minute => minute >= 4 ? [stop] : []});
-  assert.equal(r.waitingStops.length, 1);
-  assert.deepEqual(r.resolved, []);
-  const closed = await simulate({screen: () => IDLE, alive: minute => minute < 2, until: 8,
-    card: minute => minute < 5 ? waiting : {...waiting, status: 'done'}});
-  assert.deepEqual([closed.waitingStops.length, closed.resolved.map(e => e.alertKind)], [1, ['대기중정지']]);
-});
-
-test('운영 읽기 경로: 감시 명령이 쓰는 원장·카드 읽기(지난 주기 감시 역할만 준비)로도 대기 세션이 잡혀 발령한 역할에게 간다', async () => {
+test('운영 읽기 경로: 감시 명령이 쓰는 원장·카드 읽기(지난 주기 감시 역할만 준비)로도 대기 세션이 잡혀 직속 상위에게 간다', async () => {
   // kadan watch의 배선(commands/watch.mjs)과 같게 잇는다: 카드·업무 캐시 읽기, 그 위의 원장 읽기와 투영, 지난 주기에 감시한 역할 목록.
   // 대기 역할은 감시 범위 밖이라 그 목록에 들지 않는다. 그래도 발령 기록(보낸 역할 포함)과 세션 시작 기록이 읽혀야 한다.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-waiting-stop-live-'));
@@ -522,9 +442,9 @@ test('운영 읽기 경로: 감시 명령이 쓰는 원장·카드 읽기(지난
   const sent = [], keys = [], aiCalls = [], controller = new AbortController();
   let cycle = 0;
   await runWatch({signal: controller.signal, intervalMs: 60_000, stallN: 2, stallAfterMs: 300_000, idleMs: 15 * 60_000,
-    parents, routes: new Map(), superRole: 'qa-top', now: () => Date.now() + cycle * 60_000,
+    parents, routes: new Map(), superRole: TOP, now: () => Date.now() + cycle * 60_000,
     floor: {list: () => starts.map(s => ({session: s.session, pid: s.panePid})),
-      read: session => session === SESSION ? INCIDENT : `• 맡긴 재판정 결과를 기다립니다. ${cycle}분\n\n${COMPOSER}`, alive: () => true},
+      read: session => session === SESSION ? wrap(INCIDENT, 55) : `• 맡긴 재판정 결과를 기다립니다. ${cycle}분\n\n${COMPOSER}`, alive: () => true},
     readEntries: mailReader.readEntries, readMailLetters: mailReader.letters, projectEntries: mailReader.project,
     rememberObservedRoles: roles => { mailRoles = roles; observedRoles.push([...roles]); },
     readCards: stores.cards.read, readWorks: stores.works.read,
@@ -536,11 +456,9 @@ test('운영 읽기 경로: 감시 명령이 쓰는 원장·카드 읽기(지난
     sleep: async () => { await setImmediate(); if (++cycle >= 4) controller.abort(); }});
   assert.ok(observedRoles.every(roles => !roles.includes(WORKER)), '대기 역할은 감시한 역할 목록(다음 주기 준비 대상)에 들지 않는다');
   const alerts = readLedger(home).filter(e => e.kind === 'alert' && e.alertKind === '대기중정지');
-  assert.deepEqual(alerts.map(e => [e.recipient, e.route?.basis, e.delivered, e.taskId, Boolean(e.resolved)]), [[LEAD, 'dispatcher', true, made.id, false]],
-    '4주기 동안 발령한 역할에게 한 번');
+  assert.deepEqual(alerts.map(e => [e.recipient, e.delivered, e.taskId, Boolean(e.resolved)]), [[BOSS, true, made.id, false]], '4주기 동안 직속 상위에게 한 번');
   const mails = sent.filter(m => /대기 표시 중/u.test(m.message));
-  assert.deepEqual(mails.map(m => m.role), [LEAD]);
+  assert.deepEqual(mails.map(m => m.role), [BOSS]);
   for (const text of [made.key, WAIT_NOTE, CAPACITY, `발령 ${LEAD}`]) assert.ok(mails[0].message.includes(text), text);
-  assert.deepEqual(keys, []);
-  assert.deepEqual(aiCalls.filter(([, role]) => role === WORKER), []);
+  assert.deepEqual([keys, aiCalls.filter(([, role]) => role === WORKER)], [[], []]);
 });
