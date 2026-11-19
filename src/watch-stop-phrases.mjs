@@ -189,7 +189,8 @@ export function linesWithFence(screen) {
 // (currentStopPhrases) — 기본값(false)은 main과 같은 판정이라 다른 낱말의 판정 범위는 그대로다.
 // wrappedRows: 좁은 창에서 tmux가 접은 줄은 들여쓰기 없이(낱말 중간에서도) 이어진다. 덩어리 끝에서 위로, 빈 줄 없이 붙은 줄
 // wrappedRows개 안에서 가장 가까운 오류 표시 줄을 머리줄로 삼는다. 용량 초과 문장 판정에만 쓴다(capacityStopLine) —
-// 기본값(0)은 main과 같은 판정이다. 나머지 조건(빈 입력창·바닥글·코드 울타리·위쪽 소개 문단)은 그대로 적용된다.
+// 기본값(0)은 main과 같은 판정이다. 나머지 조건(빈 입력창·바닥글·코드 울타리·위쪽 소개 문단)은 그대로 적용되고,
+// 위쪽 소개 문단은 바로 위 한 줄이 아니라 접힌 줄을 거슬러 올라간 논리 줄로 본다(responseParagraphAt).
 export function currentErrorBlock(screen, { claudeHead = false, afterResponse = false, wrappedRows = 0 } = {}) {
   // tmux는 floor.read에서 추천 문구를 뺀 판정용 화면을 준다. 표시용 readView를 넣지 않는다.
   const rows = linesWithFence(screen);
@@ -228,9 +229,25 @@ export function currentErrorBlock(screen, { claudeHead = false, afterResponse = 
     let above = head - 1;
     while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--; // 빈 줄·가로선 등 장식 줄은 몇 개든 건너뛴다
     const intro = above >= 0 ? lines[above] : "";
-    if ((!afterResponse && /^\s*[•⏺]\s/u.test(intro)) || /[:：]\s*$/u.test(intro)) return null;
+    // 접힌 줄을 이어 붙여 읽을 때(wrappedRows)는 위쪽도 같은 기준으로 논리 줄을 본다: 좁은 창에서는 응답 줄의 끝 조각만
+    // 바로 위 줄에 남고 머리표(`•`)는 그 위 줄에 있다. 한 줄만 보면 접힌 응답의 인용이 현재 오류로 읽힌다(2026-11-19 재검수 2).
+    const response = wrappedRows > 0 ? responseParagraphAt(lines, above) : /^\s*[•⏺]\s/u.test(intro);
+    if ((!afterResponse && response) || /[:：]\s*$/u.test(intro)) return null;
   }
   return { head: lines[head], lines: lines.slice(head, end + 1) };
+}
+
+// lines[at]이 응답 문단의 줄인가: 빈 줄 없이 이어진 줄을 거슬러 올라가 가장 가까운 머리표 줄을 찾는다(접힌 오류 줄을 이어 붙이는 것과
+// 같은 기준 — 빈 줄에서 끊는다). 응답 머리표(`• …`·`⏺ …`)에 닿으면 응답 문단이다. 그 전에 도구 출력 표시(`│ └ ⎿`)·오류 표시·입력창
+// 줄에 닿으면 응답이 아니다: `• Ran …` 아래의 도구 출력은 응답 문단이 아니라서, 그 아래의 오류는 지금처럼 현재 오류로 읽는다.
+const RESPONSE_HEAD = /^\s*[•⏺]\s/u;
+const OTHER_LINE_HEAD = /^\s*[│└⎿■✕×ⓘ›❯]/u;
+function responseParagraphAt(lines, at) {
+  for (; at >= 0 && !RULE_OR_BLANK.test(lines[at]); at--) {
+    if (RESPONSE_HEAD.test(lines[at])) return true;
+    if (OTHER_LINE_HEAD.test(lines[at])) return false;
+  }
+  return false;
 }
 
 // 용량 초과: 현재 오류 덩어리 전체가 두 문장 `Selected model is at capacity. Please try a different model.`일 때만 그 한 줄을 돌려준다.

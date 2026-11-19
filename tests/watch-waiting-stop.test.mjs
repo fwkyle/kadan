@@ -210,6 +210,65 @@ test('기대 결과 표 6: 용량 초과 부분 일치 두 반례는 어떤 너�
   assert.equal(waitingStopScreen(errorScreen('■ stream error', `  ${CAPACITY}`))?.line, '■ stream error');
 });
 
+// 재검수 2(2026-11-19): 정상 답변이 지난 오류를 콜론 없이 바로 아래에 옮겨 적고 빈 입력창이 온 화면. 좁은 창에서는 답변의 끝 조각만
+// 오류 줄 바로 위에 남고 머리표(`•`)는 그 위 줄에 있다. main은 어떤 너비에서도 0회다.
+const QUOTE_HEAD = '• This is the error message copied from the earlier run for reference only.';
+const quoteScreen = (gap, line = CAPACITY) => [QUOTE_HEAD, ...gap, line, '', COMPOSER].join('\n');
+
+test('좁은 창에서 접힌 답변의 인용은 정지가 아니다: 80·55·45칸 모두 0회, 같은 너비의 실제 사고 화면은 1회', async () => {
+  for (const width of [80, 55, 45]) {
+    for (const [name, gap] of [['바로 아래', []], ['빈 줄 하나 건너', ['']]]) {
+      const screen = wrap(quoteScreen(gap), width);
+      if (width < 77) assert.ok(!screen.split('\n')[1].startsWith('•') && !screen.includes(QUOTE_HEAD), `${width}칸: 답변이 접혀 있다`);
+      const active = await simulate({screen: () => screen, card: () => running, until: 4});
+      assert.deepEqual(active.opened.map(e => e.alertKind), [], `${width}칸 ${name}: 실행 중 끊김 0회`);
+      const held = await simulate({screen: () => screen, until: 4});
+      assert.deepEqual([held.alerts, held.keys, held.workerAI], [[], [], []], `${width}칸 ${name}: 대기 중 0회`);
+    }
+    // 양성 대조: 같은 너비의 실제 사고 화면은 실행 중 끊김 1회, 대기 중 대기중정지 1회.
+    const incident = wrap(INCIDENT, width);
+    const active = await simulate({screen: () => incident, card: () => running, until: 4});
+    assert.deepEqual(active.opened.map(e => e.alertKind), ['끊김'], `${width}칸: 실제 사고(실행 중)`);
+    const held = await simulate({screen: () => incident, until: 4});
+    assert.deepEqual(held.opened.map(e => e.alertKind), ['대기중정지'], `${width}칸: 실제 사고(대기 중)`);
+  }
+  // 재검수의 실제 tmux 화면 모양 그대로.
+  for (const rows of [
+    ['• This is the error message copied from the earlier run', ' for reference only.', '■ Selected model is at capacity. Please try a different', ' model.'],
+    ['• This is the error message copied from the e', 'arlier run for reference only.', '■ Selected model is at capacity. Please try a', ' different model.'],
+  ]) assert.equal(screenDisconnects([...rows, '', '', '› ', ''].join('\n')).size, 0, rows[1]);
+});
+
+test('인용 판정은 오류 줄 위의 논리 줄을 본다: 어떤 너비에서도 답변 문단 아래는 0회, 도구 출력 아래는 1회', () => {
+  const read = screen => [waitingStopScreen(screen) !== null, screenDisconnects(screen).size > 0];
+  // 답변이 몇 줄로 접히든(30~100칸), 화면이 스스로 들여써 나눈 여러 줄 답변이든, 그 문단 바로 아래의 문장은 인용이다.
+  const paragraphs = [quoteScreen([]), quoteScreen(['']),
+    ['• This is the error message copied from the earlier run', '  for reference only. It shows what happened at 07:05.', '', CAPACITY, '', COMPOSER].join('\n'),
+    ['⏺ 지난 실행의 오류를 참고로 그대로 옮깁니다', CAPACITY, '', COMPOSER].join('\n')];
+  for (const screen of paragraphs) {
+    const hits = WIDTHS.filter(width => read(wrap(screen, width)).some(Boolean));
+    assert.deepEqual(hits, [], `정지로 읽은 너비: ${screen.split('\n')[0]}`);
+  }
+  // 도구 출력(`• Ran …` 아래의 `│ └` 줄, 그 아래 들여쓴 출력) 바로 아래의 오류는 답변 문단이 아니다: 모든 너비에서 읽는다.
+  const tools = [INCIDENT, errorScreen(CAPACITY), `• Ran date\n  │ if test -e log; then wc -l log; fi\n\n${CAPACITY}\n\n${COMPOSER}`,
+    `⏺ Bash(npm test)\n  ⎿  12 passed\n     and one more line of output\n\n${CAPACITY}\n\n${COMPOSER}`, `tool output\n\n${CAPACITY}\n\n› \n`];
+  for (const screen of tools) {
+    const misses = WIDTHS.filter(width => !read(wrap(screen, width)).every(Boolean));
+    assert.deepEqual(misses, [], `못 읽은 너비: ${screen.split('\n')[0]}`);
+  }
+  // 앞선 다른 오류 줄 바로 아래는 답변 문단이 아니다(그 위가 답변이어도 오류 표시 줄에서 끊는다).
+  assert.deepEqual(read(`• 다시 시도합니다.\n\n■ stream error\n${CAPACITY}\n\n${COMPOSER}`), [true, true]);
+});
+
+test('다른 문구의 판정은 main 그대로다: 접힌 답변 아래의 429는 지금처럼 바로 위 한 줄만 본다', () => {
+  // 논리 줄 판정은 접힌 줄을 이어 붙여 읽는 용량 초과에만 쓴다. 429·끊김 등은 main과 같은 한 줄 판정이라 결과가 달라지지 않는다.
+  // 아래 값은 main 소스와 나란히 돌려 같음을 확인한 것이다(문구 11종 × 화면 모양 10종 × 30~100칸, 차이 0).
+  const sizes = line => [80, 55, 45].map(width => screenDisconnects(wrap(quoteScreen([], line), width)).size);
+  assert.deepEqual(sizes('■ 429 Too Many Requests'), [0, 1, 1], '짧은 오류 줄: 답변이 접히면 main도 읽는다');
+  assert.deepEqual(sizes('■ stream error'), [0, 1, 1]);
+  assert.deepEqual(sizes(TERMINAL_429), [0, 0, 0], '오류 줄 자체가 접히면 main은 읽지 못한다(접힌 줄을 잇는 것은 용량 초과뿐이다)');
+});
+
 test('기대 결과 표 7: 같은 정지 줄에서 위쪽의 옛 오류가 스크롤 밖으로 밀려도 추가 경보 0회', async () => {
   const scrolled = line => minute => [minute < 3 ? '■ An older unrelated error' : null, minute < 3 ? '' : null, TOOL, '', line, '', COMPOSER]
     .filter(row => row !== null).join('\n');
