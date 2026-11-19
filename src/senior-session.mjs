@@ -184,9 +184,13 @@ export function confirmOwn(record, run) {
   const format = '#{session_name}\t#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}';
   const result = run.try(['display-message', '-p', '-t', `=${record.session}:`, format]);
   if (result.status !== 0) return {own: false, why: queryMiss(result)};
-  const [name, pid, ask, dir] = result.stdout.replace(/\n$/u, '').split('\t');
-  // 그 이름의 세션이 없는데 같은 소켓에 다른 세션이 있으면 tmux가 실패하지 않고 다른 세션의 값을 답한다(tmux 3.6a, 2026-11-19 관찰:
-  // 세션을 남겨 두면서 드러났다). 답한 세션의 이름이 다르면 그 세션은 없는 것이다 — '기록과 다름'으로 읽지 않는다.
+  const fields = result.stdout.replace(/\n$/u, '').split('\t');
+  // 칸이 다 오지 않은 답은 세션이 있는지조차 모르는 것이다(신호를 받은 tmux 호출은 종료 코드 0·출력 없이 끝난다 — paneAlive 참고).
+  if (fields.length !== 4) return {own: false, why: 'query-failed'};
+  const [name, pid, ask, dir] = fields;
+  // 서버는 살아 있는데 그 이름의 세션이 없으면 tmux는 실패하지 않고 네 칸이 모두 빈 답을 준다(tmux 3.6a, 2026-11-19 격리 소켓에서
+  // 관찰: 종료 코드 0, 출력은 구분 글자뿐). 전에는 답을 받자마자 세션을 꺼서 서버도 함께 끝났기 때문에 드러나지 않았다.
+  // 세션에는 늘 이름이 있다. 칸이 다 온 답의 이름이 기록과 다르면 그 세션은 없는 것이다 — '기록과 다름'으로 읽지 않는다.
   if (name !== record.session) return {own: false, why: 'no-session'};
   if (ask !== record.askId || dir !== record.dir) return {own: false, why: 'generation-differs'};
   if (String(pid) !== String(record.panePid)) return {own: false, why: 'pid-differs'};

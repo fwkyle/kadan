@@ -793,6 +793,37 @@ test('세션 조회 분류: tmux가 "없다"고 확정한 문구만 세션 없�
   }
 });
 
+// 2026-11-19 격리 소켓에서 관찰(tmux 3.6a): 서버는 살아 있는데 그 이름의 세션이 없으면 조회가 실패하지 않고 네 칸이 모두 빈 답을 준다.
+// 세션을 남겨 두면 같은 소켓에 다른 세션이 늘 있어 이 답이 흔해진다.
+test('세션 조회 분류(종료 코드 0인 답): 칸이 다 온 답의 이름이 다르면 세션 없음, 칸이 모자란 답(출력 없음 포함)은 조회 실패, 이름이 같으면 PID·식별값을 견준다', () => {
+  const cases = [
+    ['서버는 있고 세션이 없음(네 칸 모두 빔)', '\t\t\t\n', 'no-session'],
+    ['다른 세션의 이름', 'senior-other\t123\tfixture\t{dir}\n', 'no-session'],
+    ['출력 없음(신호를 받은 tmux 호출)', '', 'query-failed'],
+    ['칸이 모자람', 'senior-fake\t123\n', 'query-failed'],
+    ['이름은 같고 PID가 다름', 'senior-fake\t999\tfixture\t{dir}\n', 'pid-differs'],
+    ['이름은 같고 식별값이 다름', 'senior-fake\t123\tother\t{dir}\n', 'generation-differs'],
+  ];
+  for (const [name, answer, want] of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ksz-'));
+    const record = {session: 'senior-fake', socket: 'isolated-fake', dir, askId: 'fixture', panePid: '123'};
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(record));
+    const asked = [];
+    const run = Object.assign(() => { throw new Error('키 명령은 없어야 한다'); },
+      {socket: record.socket, try: args => { asked.push(args[0]); return {status: 0, stdout: answer.replace('{dir}', dir), stderr: ''}; }});
+    assert.deepEqual(confirmOwn(record, run), {own: false, why: want}, name);
+    assert.deepEqual(killOwn(dir, {run}), {killed: false, why: want}, name);
+    assert.ok(!asked.includes('kill-session'), `${name}: 끄지 않는다`);
+    const after = readRecord(dir);
+    if (want === 'no-session') assert.deepEqual([Boolean(after.endedAt), after.killSkipped], [true, undefined], `${name}: 없는 세션은 끝난 것으로만 적는다`);
+    else assert.deepEqual([after.endedAt, after.killSkipped], [undefined, want], `${name}: 확인하지 못한 세션을 끝난 것으로 적지 않는다`);
+  }
+  // 네 칸이 모두 맞을 때만 자기 것이다.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ksz-'));
+  const record = {session: 'senior-fake', socket: 'isolated-fake', dir, askId: 'fixture', panePid: '123'};
+  assert.deepEqual(confirmOwn(record, {socket: record.socket, try: () => ({status: 0, stdout: `senior-fake\t123\tfixture\t${dir}\n`, stderr: ''})}), {own: true});
+});
+
 test('TERM이 tmux 호출 도중에 오면(같은 프로세스 묶음이라 그 tmux 호출도 신호로 죽는다) 죽은 세션이 아니라 중단으로 읽는다', async () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'kst-'));
   const seat = {session: 'senior-fake', panePid: '123', line: ASK_LINE, out, marker: markerOf(TOKEN), deadlineAt: 10_000};

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {spawn, spawnSync} from 'node:child_process';
+import {execFileSync, spawn, spawnSync} from 'node:child_process';
 import {seniorCommand, seniorKeptLine} from '../src/senior.mjs';
 import {initSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
@@ -46,7 +46,9 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}} = {}) {
   // slow-tmux 파일이 있는 동안은 tmux 호출마다 0.5초 늦춘다(작은 지연 주입: 신호가 tmux 호출 도중에 오는 경우를 만든다).
   // 파일 내용이 trap이면 TERM을 받은 호출이 진짜 tmux 클라이언트처럼 끝난다: 종료 코드 0·출력 없음(2026-11-17 tmux 3.6a 관찰).
   const slowTmux = path.join(home, 'slow-tmux');
-  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${tmuxLog}'\nif [ -e '${slowTmux}' ]; then\n  [ "$(cat '${slowTmux}')" = trap ] && trap 'exit 0' TERM\n  sleep 0.5\nfi\nexec '${REAL_TMUX}' "$@"\n`, {mode: 0o755});
+  // blind-tmux 파일이 있는 동안은 세션 소유 조회(이름 칸이 든 display-message)가 실패한다(작은 실패 주입: 호출 끝의 확인을 못 하는 경우).
+  const blindTmux = path.join(home, 'blind-tmux');
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${tmuxLog}'\nif [ -e '${blindTmux}' ]; then case "$*" in *display-message*session_name*) echo '조회 실패(주입)' >&2; exit 1;; esac; fi\nif [ -e '${slowTmux}' ]; then\n  [ "$(cat '${slowTmux}')" = trap ] && trap 'exit 0' TERM\n  sleep 0.5\nfi\nexec '${REAL_TMUX}' "$@"\n`, {mode: 0o755});
   const planFile = path.join(home, 'plan.json');
   fs.writeFileSync(planFile, JSON.stringify({log, default: {}, models: {}, ...plan}));
   fs.writeFileSync(path.join(home, 'agent-runners.json'), JSON.stringify({runners: [{id: 'codex', spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"'}]}));
@@ -74,7 +76,7 @@ function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}} = {}) {
     try { return fs.readFileSync(path.join(log, `${model}.${kind}`), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)); }
     catch { return []; }
   };
-  return {home, repo, env, tmux, run, log, tmuxLog, fakeLog, slowTmux, advices: () => readLedger(home).filter(e => e.kind === 'advice'),
+  return {home, repo, env, tmux, run, log, tmuxLog, fakeLog, slowTmux, blindTmux, advices: () => readLedger(home).filter(e => e.kind === 'advice'),
     sessions: () => listSeniorSessions(tmux).map(row => row.name)};
 }
 
@@ -420,6 +422,46 @@ test('자리가 모자라면 아무도 부르지 않고(advice 0줄) 입력이 2
   const files = [1, 2, 3, 4].map(n => { const file = path.join(big.home, `big-${n}.txt`); fs.writeFileSync(file, 'x'.repeat(60_000)); return file; });
   await assert.rejects(() => big.run({file: files}), /프롬프트가 너무 크다/);
   assert.equal(fs.existsSync(path.join(big.home, 'advice')), false);
+});
+
+test('호출 끝에 세션을 확인하지 못하면(조회 실패) 끄지도 탭을 닫지도 않고 남긴 수에만 넣지 않는다 — 살아 있는 세션은 정리 명령이 나중에 끈다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA]});
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const calls = [];
+  const rottie = argv => {
+    calls.push(argv[1]);
+    if (argv[1] === 'show') throw Object.assign(new Error('없다'), {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'});
+    return argv[1] === 'create' ? {ok: true, result: {terminal: {id: 'term-1', state: 'running', pid: 4242, workspaceId: 'ws-1'}}, runtime: {build: 'b1'}} : {ok: true, result: {}};
+  };
+  fs.writeFileSync(f.blindTmux, '');
+  const r = await f.run({}, {env, rottie});
+  const [answer] = r.answers;
+  assert.deepEqual([answer.reason, answer.tab], ['ok', 'opened']);
+  assert.ok(!('keptSessions' in r), '확인하지 못한 세션은 남긴 수에 세지 않는다');
+  assert.deepEqual(calls, ['create'], '탭을 닫지 않았다');
+  const record = readRecord(answer.evidencePath);
+  assert.deepEqual(f.sessions(), [record.session], '세션을 끄지 않았다');
+  assert.deepEqual([record.endReason, Boolean(record.keptAt), record.closedAt, record.killSkipped], ['ok', true, undefined, undefined]);
+  assert.ok(!fs.readFileSync(f.tmuxLog, 'utf8').includes(' kill-session '));
+  // 조회가 되살아나면 정리 명령이 그 세션을 끄고 탭을 닫는다.
+  fs.rmSync(f.blindTmux);
+  assert.match(await seniorCommand(['cleanup'], {}, {home: f.home, by: 'qa-슈퍼감독', env, rottie}), /끈 세션 1개, 둔 세션 0개/);
+  assert.deepEqual(f.sessions(), []); assert.deepEqual(calls, ['create', 'close', 'show']);
+});
+
+test('문을 열지 않은 자리(codex 작업 폴더가 git 안이라 관문이 띄우기 전에 거절)는 남기지 않고 끈다 — 모델이 뜨지 않은 대기 셸이라 남긴 수에도 없다', {skip}, async t => {
+  const f = fixture(t);
+  execFileSync('git', ['-C', f.home, 'init', '-q']);
+  const error = await f.run().then(() => assert.fail('실패해야 한다'), e => e);
+  assert.deepEqual(error.answers.map(a => [a.model, a.reason, a.detail]), [
+    ['gpt-6-astra', 'call-failed', 'isolation:out-inside-git'], ['gpt-6-sol', 'call-failed', 'isolation:out-inside-git']]);
+  assert.deepEqual(f.sessions(), [], '대기 셸을 60초 기다리지 않고 그 자리에서 껐다');
+  assert.equal(error.keptSessions, 0); assert.ok(!error.message.includes('남겼다'));
+  for (const a of error.answers) {
+    const record = readRecord(a.evidencePath);
+    assert.deepEqual([record.closeReason, fs.existsSync(record.gate)], ['not-kept', false]);
+    assert.equal(fs.existsSync(path.join(f.log, `${a.model}.env.json`)), false, '가짜 codex는 뜨지 않았다');
+  }
 });
 
 test('TERM: 도는 중에 신호를 받으면 세션을 끄지 않고 남긴 채(키 0회) 143으로 나가며 advice에 interrupted가 남는다', {skip}, async t => {

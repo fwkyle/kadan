@@ -272,21 +272,30 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   };
   // 대화형 세션은 정상·실패·신호 모두 끄지 않고 남긴다: 기록에 끝남·남긴 시각만 적는다(tmux 호출·키 0회 — 신호 처리기에서도 쓴다).
   // 끝난 이유는 먼저 적은 쪽(감싼 프로세스)의 값이 남는다. 세션이 없는 호출 폴더에는 아무 일도 없다.
-  const keepSeat = (call, reason) => { if (call.seat && call.kept !== false) markKept(call.dir, reason); };
-  // 이 호출의 세션이 남았는가(한 번만 본다): 지금 살아 있고 기록 대조가 맞는다. 문(launch 파일)을 열지 않은 자리는 남은 것으로 치지 않는다 —
-  // 모델이 뜨지 않은 대기 셸이라 60초 뒤 스스로 끝난다(관문이 문을 열기 전에 거절한 경우: codex 작업 폴더가 git 안).
-  const seatKept = call => {
-    if (call.kept != null) return call.kept;
-    try { call.kept = interactive && call.seat != null && fs.existsSync(call.seat.gate) && confirmOwn(call.seat, sessionRun).own; }
-    catch { call.kept = false; }
-    return call.kept;
+  const keepSeat = (call, reason) => { if (call.seat && !['gone', 'unopened'].includes(call.state)) markKept(call.dir, reason); };
+  // 호출 끝의 자리 상태(한 번만 본다).
+  //  kept     — 세션이 살아 있고 기록 대조가 맞다(남긴 세션)
+  //  gone     — 세션이 없다는 것이 확정됐다(pane이 죽어 스스로 사라짐)
+  //  unopened — 문(launch 파일)을 열지 않았다: 모델이 뜨지 않은 대기 셸이다(관문이 띄우기 전에 거절 — codex 작업 폴더가 git 안)
+  //  unknown  — 확인하지 못했다(조회 실패·기록과 다름). 세션이 살아 있을 수 있다
+  //  none     — 세션이 없는 호출(헤드리스)
+  const seatState = call => {
+    if (call.state) return call.state;
+    if (!interactive || !call.seat) return call.state = 'none';
+    if (!fs.existsSync(call.seat.gate)) return call.state = 'unopened';
+    let verdict;
+    try { verdict = confirmOwn(call.seat, sessionRun); } catch { return call.state = 'unknown'; }
+    return call.state = verdict.own ? 'kept' : verdict.why === 'no-session' ? 'gone' : 'unknown';
   };
-  // 남지 않은 호출의 뒷정리: 열린 탭을 닫고, 자리가 만든 파일(agy 질문 파일)을 같은 확인(killOwn)으로 치운다.
-  // 세션이 이미 없으면 끝남만 적고 파일을 치운다. 문을 열지 않은 대기 셸이면 지금 끈다(화면에 볼 것이 없다). 대조가 안 되면 그대로 둔다.
+  // 호출 끝의 뒷정리. 남긴 세션(kept)과 확인하지 못한 세션(unknown)은 세션·탭을 그대로 둔다 — 확인하지 못했다고 끄거나 닫지 않는다.
+  // 없음이 확정된 세션(gone)은 볼 것이 없고 정리 명령도 찾지 못하므로 열린 탭을 닫고 자리가 만든 파일(agy 질문 파일)을 치운다.
+  // 문을 열지 않은 대기 셸(unopened)은 화면에 볼 것이 없어 지금 끈다(두면 60초 뒤 스스로 끝난다). 둘 다 같은 확인(killOwn)을 쓴다.
   const settle = call => {
-    if (seatKept(call)) return;
+    const state = seatState(call);
+    if (state === 'none') return closeTab(call);
+    if (state !== 'gone' && state !== 'unopened') return;
     closeTab(call);
-    if (interactive && call.seat) try { killOwn(call.dir, {run: sessionRun, reason: 'not-kept'}); } catch { /* 정리 실패가 결과를 바꾸지 않는다 */ }
+    try { killOwn(call.dir, {run: sessionRun, reason: 'not-kept'}); } catch { /* 정리 실패가 결과를 바꾸지 않는다 */ }
   };
   // 신호 처리기는 탭·세션을 만들기 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
   // 신호 길은 짧게: 헤드리스는 탭을 닫고, 대화형은 탭·세션을 그대로 둔 채 기록만 적는다(tmux를 부르지 않는다).
@@ -414,8 +423,8 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   finally { detach(); calls.forEach(settle); calls.forEach(call => keepSeat(call, 'closed')); }
   const answers = settled.map((r, i) => r.status === 'fulfilled' ? r.value
     : {adviceId: calls[i].adviceId, runner: calls[i].value.runner, model: calls[i].value.model, ...effortOf(calls[i]), status: statusOf('call-failed'), reason: 'call-failed', evidencePath: calls[i].dir});
-  // 남긴 세션 수는 만든 자리 수가 아니라 호출이 끝날 때 살아 있고 기록 대조가 맞던 수다.
-  const keptSessions = calls.filter(seatKept).length;
+  // 남긴 세션 수는 만든 자리 수가 아니라 호출이 끝날 때 살아 있고 기록 대조가 맞던 수다(확인하지 못한 세션은 세지 않는다).
+  const keptSessions = calls.filter(call => seatState(call) === 'kept').length;
   if (!answers.some(a => a.reason === 'ok')) {
     const error = new Error([...answers.map(a => `${answers.length > 1 ? `[${a.runner}/${a.model}] ` : ''}자문 실패(${a.reason}) — 답은 쓰지 않는다. 증거: ${a.evidencePath}${a.note ? ` — ${a.note}` : ''}`),
       ...(keptSessions ? [seniorKeptLine(keptSessions)] : [])].join('\n'));
