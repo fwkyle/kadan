@@ -6,8 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {spawn, spawnSync} from 'node:child_process';
-import {ASK_LINE, SESSION_ENTRY, SESSION_TIMING, askSeat, closeSeat, codexArgv, confirmOwn, killOwn, listSeniorSessions,
-  openSeats, passGate, readRecord, readSeniorMode, readSubmitted, sendLine, seniorSocket, seniorTmux, submittedTabCheck, sweepEnded} from '../src/senior-session.mjs';
+import {ASK_LINE, SENIOR_KEPT, SESSION_ENTRY, SESSION_TIMING, askSeat, cleanupSeniorSessions, codexArgv, confirmOwn, keepSeat, killOwn, listSeniorSessions,
+  markKept, openSeats, passGate, readRecord, readSeniorMode, readSubmitted, sendLine, seniorSessionStates, seniorSocket, seniorTmux, submittedTabCheck} from '../src/senior-session.mjs';
 import {markerOf, markerParts} from '../src/senior-screen.mjs';
 
 // 시니어 대화형 세션(2026-11-17 설계): 진짜 codex 없이 가짜 대화형 화면(tests/helpers/fake-codex-tui.mjs)을 격리 소켓에 띄운다.
@@ -20,6 +20,10 @@ const TIMING = {...SESSION_TIMING, pollMs: 100, settleMs: 50, startupMs: 30_000,
 const TOKEN = '0a1b2c3d';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let seq = 0;
+// 시험 정리: 호출이 끝난 것으로 적고(남김 표시) 정리 명령과 같은 확인(killOwn)으로 끈다. 제품은 끝난 세션을 끄지 않고 남긴다.
+const closeSeat = (seat, deps) => { keepSeat(seat, {run: deps.run, reason: 'test'}); return killOwn(seat.dir, {run: deps.run, reason: 'test'}); };
+const KEY_COMMAND = /\b(send-keys|paste-buffer|load-buffer|set-buffer)\b/u;
+const tmuxCalls = s => fs.readFileSync(s.tmuxLog, 'utf8').split('\n').filter(Boolean);
 
 // 시험마다 자기 홈·자기 소켓·가짜 codex·tmux 기록 틀을 갖는다. 부르는 쪽 환경에는 일부러 역할·바깥 tmux 값을 넣어 둔다(새지 않아야 한다).
 function setup(t, plan = {}) {
@@ -102,7 +106,7 @@ test('실행 꼴은 고정이다: 작업 폴더·샌드박스·승인·업데이
 test('정상: 관문을 지나 한 줄을 넣고 일하는 표시 뒤 빈 입력칸에서 표지 뗀 답을 ok로 받는다. 키는 질문 한 줄의 붙여넣기+Enter 한 번뿐이고 환경은 새지 않는다', {skip}, async t => {
   const s = setup(t);
   const [seat] = s.open();
-  // 기록·세션 옵션·예약 종료는 codex가 뜨기 전에 끝나 있다(문 파일이 없어 가짜 codex는 아직 안 떴다).
+  // 기록·세션 옵션은 codex가 뜨기 전에 끝나 있다(문 파일이 없어 가짜 codex는 아직 안 떴다).
   assert.equal(fs.existsSync(path.join(s.log, 'm1.env.json')), false);
   assert.deepEqual(confirmOwn(readRecord(seat.dir), s.run), {own: true});
   assert.match(seat.session, /^senior-[0-9a-f]{8}-1$/);
@@ -120,14 +124,27 @@ test('정상: 관문을 지나 한 줄을 넣고 일하는 표시 뒤 빈 입력
   assert.equal(String(dump.pid), String(seat.panePid));
   assert.equal(dump.cwd, fs.realpathSync(seat.out));
   assert.deepEqual(dump.argv, codexArgv({out: fs.realpathSync(seat.out), model: 'm1', effort: 'low'}).slice(1));
-  assert.deepEqual(closeSeat(seat, s.deps), {killed: true});
-  assert.deepEqual(s.sessions(), []);
+  // 호출이 끝나도 세션은 끄지 않는다(2026-11-19 [kyle]): 끝 화면을 남기고 기록에 끝남·남긴 시각만 적는다. 그 뒤 키는 0회다.
+  const before = tmuxCalls(s).length, typed = s.keys('m1').any;
+  assert.deepEqual(keepSeat(seat, {...s.deps, reason: 'ok'}), {kept: true});
+  assert.deepEqual(s.sessions(), [seat.session]);
+  assert.deepEqual(confirmOwn(readRecord(seat.dir), s.run), {own: true}, '남긴 세션은 그 프로세스 그대로다');
   assert.match(fs.readFileSync(path.join(seat.dir, 'screen-final.txt'), 'utf8'), /• 끝/);
-  assert.ok(readRecord(seat.dir).endedAt);
+  const kept = readRecord(seat.dir);
+  assert.ok(kept.endedAt && kept.keptAt); assert.equal(kept.endReason, 'ok');
+  assert.deepEqual(tmuxCalls(s).slice(before).filter(line => KEY_COMMAND.test(line)), [], '남기는 길은 키 명령 0회');
+  assert.equal(s.keys('m1').any, typed, '남긴 세션의 화면이 받은 입력이 늘지 않았다');
+  // 먼저 적힌 끝난 이유·시각은 뒤에 온 표시가 덮어쓰지 않는다(감싼 프로세스가 적은 값을 부른 쪽이 지킨다).
+  assert.equal(markKept(seat.dir, 'closed'), true);
+  assert.deepEqual([readRecord(seat.dir).endReason, readRecord(seat.dir).keptAt], ['ok', kept.keptAt]);
+  assert.equal(killOwn(seat.dir, {run: s.run, reason: 'cleanup'}).killed, true);
+  assert.deepEqual(s.sessions(), []);
+  assert.deepEqual([readRecord(seat.dir).endReason, readRecord(seat.dir).closeReason], ['ok', 'cleanup'], '끈 까닭은 끝난 이유와 따로 남는다');
   // 기본 소켓 호출 0회: 이 길의 모든 tmux 호출은 자기 전용 소켓이다.
-  const calls = fs.readFileSync(s.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  const calls = tmuxCalls(s);
   assert.ok(calls.length > 10);
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${s.run.socket} -f `)), []);
+  assert.deepEqual(calls.filter(line => /\brun-shell\b/u.test(line)), [], '예약 종료를 걸지 않는다');
 });
 
 test('질문을 제출한 뒤 읽기 전용 탭 같은 작은 클라이언트가 붙어도 세션 크기는 그대로이고, 붙은 뒤에는 키를 하나도 보내지 않으며 답이 끝까지 온다(tmux 3.8 대응)', {skip}, async t => {
@@ -379,16 +396,14 @@ process.stdin.resume(); process.stdin.on('end', () => process.exit(0)); // 부�
   assert.equal(s.sessions().length, 4);
 });
 
-test('예약 종료: 같은 확인을 쓴다 — PID가 바뀐 pane은 끄지 않고 이유를 남기며, 자기 것은 상한 뒤 tmux 서버가 끈다', {skip}, async t => {
+test('끄기 확인은 그대로다 — PID가 바뀐 pane·생성 식별값이 다른 기록으로는 끄지 못한다. 예약 종료는 걸지 않고, 옛 예약이 부르는 reap은 세션을 끄지 않는다', {skip}, async t => {
   const s = setup(t);
   const [seat] = s.open();
   // 같은 이름의 세션에 다른 프로세스가 들어앉았다(pane PID가 기록과 다르다).
   s.run(['respawn-pane', '-k', '-t', `=${seat.session}:`, 'sleep 600']);
-  const reap = spawnSync(process.execPath, [SESSION_ENTRY, 'reap', seat.dir], {env: s.env, encoding: 'utf8'});
-  assert.equal(reap.status, 3);
+  assert.deepEqual(killOwn(seat.dir, {run: s.run}), {killed: false, why: 'pid-differs'});
   assert.deepEqual(s.sessions(), [seat.session]);
   assert.equal(readRecord(seat.dir).killSkipped, 'pid-differs');
-  assert.deepEqual(killOwn(seat.dir, {run: s.run}), {killed: false, why: 'pid-differs'});
   s.run(['kill-session', '-t', `=${seat.session}`]);
   // 생성 식별값이 다른 기록으로는 끄지 못한다.
   const [other] = s.open();
@@ -396,39 +411,145 @@ test('예약 종료: 같은 확인을 쓴다 — PID가 바뀐 pane은 끄지 �
   assert.deepEqual(killOwn(other.dir, {run: s.run}), {killed: false, why: 'generation-differs'});
   assert.deepEqual(s.sessions(), [other.session]);
   s.run(['kill-session', '-t', `=${other.session}`]);
-  // 실제 예약: 상한+여유가 지나면 tmux 서버가 진입 파일의 reap을 불러 자기 세션을 끈다.
-  const [timed] = s.open(1, {deadlineAt: Date.now() + 500, reapMarginMs: 500});
+  // 상한+여유가 지나도 tmux 서버가 세션을 끄지 않는다(예약이 없다). 기록의 만료 시각으로 끝난 호출임을 알 뿐이다.
+  const [timed] = s.open(1, {deadlineAt: Date.now() + 300, reapMarginMs: 300});
+  await sleep(1500);
   assert.deepEqual(s.sessions(), [timed.session]);
-  for (let i = 0; i < 80 && s.sessions().length; i++) await sleep(100);
-  assert.deepEqual(s.sessions(), []);
-  assert.equal(readRecord(timed.dir).endReason, 'scheduled');
+  assert.equal(readRecord(timed.dir).endedAt, undefined);
+  assert.deepEqual(seniorSessionStates({home: s.home, run: s.run}).map(row => [row.name, row.state]), [[timed.session, 'kept']]);
+  // 이미 떠 있는 tmux 서버에 걸린 옛 예약이 새 진입 파일의 reap을 부른다: 세션을 끄지 않고 tmux를 한 번도 부르지 않으며 끝남만 적는다.
+  const before = tmuxCalls(s).length;
+  const reap = spawnSync(process.execPath, [SESSION_ENTRY, 'reap', timed.dir], {env: s.env, encoding: 'utf8'});
+  assert.equal(reap.status, 0);
+  assert.deepEqual(tmuxCalls(s).slice(before), [], 'reap은 tmux 호출 0회');
+  assert.deepEqual(s.sessions(), [timed.session]);
+  assert.deepEqual([readRecord(timed.dir).endReason, Boolean(readRecord(timed.dir).keptAt)], ['scheduled', true]);
+  // 이미 끝남이 적힌 세션(남긴 세션)에 옛 예약이 와도 끝난 이유는 그대로다.
+  const [done] = s.open();
+  markKept(done.dir, 'ok');
+  spawnSync(process.execPath, [SESSION_ENTRY, 'reap', done.dir], {env: s.env, encoding: 'utf8'});
+  assert.equal(readRecord(done.dir).endReason, 'ok');
+  assert.deepEqual(s.sessions().sort(), [timed.session, done.session].sort());
 });
 
-test('청소: 다음 호출은 기록이 맞고 끝난 자기 세션만 끈다 — 기록 없는 세션·도는 호출·기록이 다른 세션은 그대로 둔다', {skip}, t => {
+test('분류: 끝난 호출이고 기록 대조가 맞는 세션만 남긴 세션이다 — 기록 없는 세션·도는 호출·기록이 다른 세션·다른 홈의 세션은 진행 중으로 센다. 다음 호출은 남긴 세션을 끄지 않는다', {skip}, t => {
   const s = setup(t);
-  // 자리를 먼저 다 잡고(잡을 때마다 청소가 돈다) 그 뒤에 기록을 바꾼다.
   const [ended] = s.open(), [running] = s.open(), [changed] = s.open(), [gone] = s.open();
   const patch = (seat, more) => fs.writeFileSync(path.join(seat.dir, 'session.json'), JSON.stringify({...readRecord(seat.dir), ...more}));
-  patch(ended, {endedAt: new Date().toISOString()});   // 끝남 기록이 있다
+  markKept(ended.dir, 'ok');                            // 끝남 기록이 있다
   patch(changed, {panePid: '1', endedAt: 'x'});         // 끝났다고 적혀 있지만 pane PID가 기록과 다르다
-  patch(gone, {ownerPid: 2 ** 22 + 12345});             // 부른 프로세스가 없다
+  patch(gone, {ownerPid: 2 ** 22 + 12345});             // 부른 프로세스가 없다(끝남 기록 없이 죽은 호출)
   s.run(['new-session', '-d', '-s', 'senior-foreign', 'sleep 600']); // 기록 없는 남의 세션(옵션 없음)
-  const swept = sweepEnded({home: s.home, run: s.run});
-  assert.deepEqual(swept.sort(), [ended.session, gone.session].sort());
-  assert.deepEqual(s.sessions().sort(), ['senior-foreign', running.session, changed.session].sort());
-  assert.equal(readRecord(changed.dir).killSkipped, 'pid-differs');
-  // 도는 호출(부른 프로세스가 살아 있음)은 만료 시각이 지난 뒤에만 끈다.
-  assert.deepEqual(sweepEnded({home: s.home, run: s.run, now: () => readRecord(running.dir).expiresAt}), []);
-  assert.deepEqual(sweepEnded({home: s.home, run: s.run, now: () => readRecord(running.dir).expiresAt + 1}), [running.session]);
-  // 호출 폴더가 이 홈의 advice/ 밖을 가리키는 세션은 기록이 있어도 건드리지 않는다.
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'kso-'));
-  s.run(['kill-session', '-t', '=senior-foreign']);
   s.run(['new-session', '-d', '-s', 'senior-elsewhere', 'sleep 600']);
   s.run(['set-option', '-t', '=senior-elsewhere:', '@kadan_senior_dir', outside]);
   fs.writeFileSync(path.join(outside, 'session.json'), JSON.stringify({session: 'senior-elsewhere', dir: outside, endedAt: 'x',
     socket: s.run.socket, askId: 'a', panePid: '1'}));
-  assert.deepEqual(sweepEnded({home: s.home, run: s.run}), []);
-  assert.ok(s.sessions().includes('senior-elsewhere'));
+  const states = now => Object.fromEntries(seniorSessionStates({home: s.home, run: s.run, ...(now ? {now} : {})}).map(row => [row.name, row.state === 'kept' ? 'kept' : row.why]));
+  const before = tmuxCalls(s).length, records = [ended, running, changed, gone].map(seat => fs.readFileSync(path.join(seat.dir, 'session.json'), 'utf8'));
+  assert.deepEqual(states(), {[ended.session]: 'kept', [gone.session]: 'kept', [running.session]: 'running', [changed.session]: 'pid-differs',
+    'senior-foreign': 'no-record', 'senior-elsewhere': 'outside-home'});
+  // 분류는 읽기만 한다: tmux 명령은 목록·조회뿐이고 기록은 그대로다.
+  assert.deepEqual(tmuxCalls(s).slice(before).filter(line => !/ (list-sessions|display-message) /u.test(line)), []);
+  assert.deepEqual([ended, running, changed, gone].map(seat => fs.readFileSync(path.join(seat.dir, 'session.json'), 'utf8')), records);
+  // 도는 호출(부른 프로세스가 살아 있음)은 만료 시각이 지난 뒤에만 끝난 것으로 본다.
+  assert.equal(states(() => readRecord(running.dir).expiresAt)[running.session], 'running');
+  assert.equal(states(() => readRecord(running.dir).expiresAt + 1)[running.session], 'kept');
+  // 진행 중 4개(도는 호출·대조 실패·기록 없음·다른 홈)가 자리를 채웠다: 남긴 세션 2개는 세지 않지만 새 호출은 거절되고, 아무것도 끄지 않는다.
+  const all = s.sessions().sort();
+  assert.throws(() => s.open(1), /자리가 모자란다\(지금 4개 \+ 이번 1명 > 4\)/);
+  assert.deepEqual(s.sessions().sort(), all);
+  // 진행 중이 2개로 줄면 남긴 세션 2개가 있어도 2명을 더 부를 수 있다(남긴 세션은 4개 상한에 세지 않는다). 남긴 세션은 그대로다.
+  s.run(['kill-session', '-t', '=senior-foreign']); s.run(['kill-session', '-t', '=senior-elsewhere']);
+  const next = s.open(2);
+  assert.deepEqual(s.sessions().sort(), [ended, running, changed, gone, ...next].map(seat => seat.session).sort(), '다음 호출이 남긴 세션을 끄지 않았다');
+  assert.equal(readRecord(ended.dir).closedAt, undefined);
+});
+
+test('남긴 세션 상한: 남긴 수 + 이번 인원이 6을 넘으면 가장 오래 남긴 것부터 끄고 탭을 닫는다. 끄지 못한 세션은 그대로 두고 진행 중으로 센다', {skip}, t => {
+  const s = setup(t);
+  assert.equal(SENIOR_KEPT, 6);
+  // 세션 6개를 차례로 남긴다(남긴 시각을 1분씩 벌린다 — 0번이 가장 오래됐다).
+  const kept = [];
+  for (let i = 0; i < 6; i++) {
+    const [seat] = s.open();
+    markKept(seat.dir, 'ok');
+    fs.writeFileSync(path.join(seat.dir, 'session.json'), JSON.stringify({...readRecord(seat.dir), keptAt: new Date(Date.UTC(2026, 10, 19, 0, i)).toISOString()}));
+    kept.push(seat);
+  }
+  assert.equal(s.sessions().length, 6, '남긴 세션 6개는 진행 중 4개 상한에 걸리지 않는다');
+  // 6 + 2 > 6 → 가장 오래된 2개를 내보낸다. 내보낸 세션의 호출 폴더로 탭 닫기가 불린다.
+  const closedTabs = [], before = tmuxCalls(s).length;
+  const next = s.open(2, {closeKeptTab: dir => closedTabs.push(dir)});
+  assert.deepEqual(closedTabs, [kept[0].dir, kept[1].dir]);
+  assert.deepEqual(s.sessions().sort(), [...kept.slice(2), ...next].map(seat => seat.session).sort());
+  assert.deepEqual([readRecord(kept[0].dir).closeReason, readRecord(kept[0].dir).endReason], ['evicted', 'ok']);
+  assert.deepEqual(tmuxCalls(s).slice(before).filter(line => KEY_COMMAND.test(line)), [], '내보내기는 키 명령 0회');
+  // 딱 6이면 내보내지 않는다(6 - 2 + 2 = 6: 남긴 4 + 이번 2).
+  for (const seat of next) markKept(seat.dir, 'ok');
+  assert.equal(s.sessions().length, 6);
+  // 남긴 6 + 이번 1 → 1개를 내보내야 하는데 가장 오래된 것이 끌 때 대조에 실패한다(분류 뒤 pane이 바뀜): 그대로 두고 그 다음 것을 끈다.
+  const oldest = kept[2];
+  const racing = Object.assign((args, input) => s.run(args, input), {
+    try: args => {
+      if (args[0] === 'kill-session' && args.includes(`=${oldest.session}`)) return {status: 1, stdout: '', stderr: '끄기 실패(주입)'};
+      return s.run.try(args);
+    }, socket: s.run.socket, home: s.home});
+  const [one] = s.open(1, {run: racing});
+  assert.ok(s.sessions().includes(oldest.session), '끄지 못한 세션은 그대로 둔다');
+  assert.ok(!s.sessions().includes(kept[3].session), '그 다음으로 오래된 것을 대신 껐다');
+  assert.ok(s.sessions().includes(one.session), '남긴 세션 때문에 새 호출을 거절하지 않는다');
+});
+
+test('이름 충돌: 같은 이름의 세션이 이미 있으면 새 세션 만들기가 실패해 아무도 부르지 않는다(남긴 세션에는 키 0회, 만든 자리는 치운다)', {skip}, t => {
+  const s = setup(t);
+  const [old] = s.open();
+  markKept(old.dir, 'ok');
+  const askId = randomUUID(), clash = `senior-${askId.slice(0, 8)}-2`;
+  s.run(['new-session', '-d', '-s', clash, 'sleep 600']);
+  const calls = [1, 2].map(n => { const dir = path.join(s.home, 'advice', askId, `${n}-codex-m${n}`); fs.mkdirSync(dir, {recursive: true}); return {dir, model: `m${n}`, effort: 'low', token: TOKEN, timing: TIMING}; });
+  const before = tmuxCalls(s).length;
+  assert.throws(() => openSeats({home: s.home, run: s.run, askId, calls, deadlineAt: Date.now() + 30_000}), /new-session 실패/);
+  assert.deepEqual(s.sessions().sort(), [old.session, clash].sort(), '첫 자리는 치우고, 이름이 겹친 남의 세션과 남긴 세션은 그대로다');
+  assert.deepEqual(tmuxCalls(s).slice(before).filter(line => KEY_COMMAND.test(line)), []);
+  assert.equal(fs.existsSync(path.join(s.log, 'm1.env.json')), false, '아무도 부르지 않았다');
+});
+
+test('정리(cleanup): 끝난 호출이고 대조가 맞는 세션만 끄고 탭을 닫는다 — 진행 중·기록 없음·대조 실패는 그대로 두고 이유를 보인다. --dry-run은 아무것도 바꾸지 않는다', {skip}, t => {
+  const s = setup(t);
+  const [ended] = s.open(), [running] = s.open(), [changed] = s.open();
+  markKept(ended.dir, 'ok');
+  fs.writeFileSync(path.join(changed.dir, 'session.json'), JSON.stringify({...readRecord(changed.dir), panePid: '1', endedAt: 'x'}));
+  s.run(['new-session', '-d', '-s', 'senior-foreign', 'sleep 600']);
+  const snapshot = () => JSON.stringify([s.sessions().sort(), [ended, running, changed].map(seat => fs.readdirSync(seat.dir).sort().map(name =>
+    [name, fs.statSync(path.join(seat.dir, name)).isFile() ? fs.readFileSync(path.join(seat.dir, name), 'utf8') : 'dir'])), fs.readdirSync(s.home).sort()]);
+  // --dry-run: 무엇을 끌지만 돌려주고 세션·기록·탭·잠금 어느 것도 바꾸지 않는다. tmux 명령은 목록·조회뿐이다.
+  const tabs = [], closeTab = dir => { tabs.push(dir); return {tab: 'closed'}; };
+  const was = snapshot(), before = tmuxCalls(s).length;
+  const dry = cleanupSeniorSessions({home: s.home, run: s.run, dryRun: true, closeTab});
+  assert.deepEqual(Object.fromEntries(dry.map(row => [row.session, row.action === 'left' ? row.why : row.action])),
+    {[ended.session]: 'would-close', [running.session]: 'running', [changed.session]: 'pid-differs', 'senior-foreign': 'no-record'});
+  assert.equal(snapshot(), was, '--dry-run은 바꾸는 것이 0');
+  assert.deepEqual(tabs, []);
+  assert.deepEqual(tmuxCalls(s).slice(before).filter(line => !/ (list-sessions|display-message) /u.test(line)), []);
+  const row = dry.find(item => item.session === ended.session);
+  assert.deepEqual([row.runner, row.model, row.endReason, row.dir, Boolean(row.createdAt), Boolean(row.keptAt)], ['codex', 'm1', 'ok', ended.dir, true, true]);
+  // 본 실행: 남긴 세션 하나만 끄고 그 호출 폴더로 탭 닫기를 부른다. tmux 명령은 목록·조회·세션 끄기뿐이다(키 0회).
+  const mark = tmuxCalls(s).length;
+  const done = cleanupSeniorSessions({home: s.home, run: s.run, closeTab});
+  assert.deepEqual(Object.fromEntries(done.map(item => [item.session, item.action === 'left' ? item.why : item.action])),
+    {[ended.session]: 'closed', [running.session]: 'running', [changed.session]: 'pid-differs', 'senior-foreign': 'no-record'});
+  assert.deepEqual(tabs, [ended.dir]);
+  assert.deepEqual(done.find(item => item.session === ended.session).tab, {tab: 'closed'});
+  assert.deepEqual(s.sessions().sort(), [running.session, changed.session, 'senior-foreign'].sort());
+  assert.deepEqual(tmuxCalls(s).slice(mark).filter(line => !/ (list-sessions|display-message|kill-session) /u.test(line)), [], '정리 명령의 tmux 명령은 세 가지뿐이다');
+  assert.equal(readRecord(ended.dir).closeReason, 'cleanup');
+  assert.equal(fs.existsSync(path.join(s.home, 'senior-seats.lock')), false);
+  // 자리 잠금이 잡혀 있으면(다른 호출이 자리를 잡는 중) 본 실행은 거절하고 아무것도 끄지 않는다. --dry-run은 잠금 없이 본다.
+  fs.mkdirSync(path.join(s.home, 'senior-seats.lock'));
+  assert.throws(() => cleanupSeniorSessions({home: s.home, run: s.run}), /자리 잠금을 얻지 못했다/);
+  assert.equal(cleanupSeniorSessions({home: s.home, run: s.run, dryRun: true}).length, 3);
+  fs.rmdirSync(path.join(s.home, 'senior-seats.lock'));
 });
 
 // ---- 수정 라운드(검수 F1·F2) 회귀 시험 ----
@@ -450,7 +571,25 @@ function breakCreate(s, at, before = () => {}, {failQuery = false} = {}) {
   assert.ok(broke, '주입 지점에 닿았다');
   return session;
 }
-const isReap = args => args[0] === 'run-shell';
+// 둘째 자리 만들기(new-session)에서 실패를 주입한다: 기록까지 쓴 첫째 자리를 openSeats가 같은 확인(killOwn)으로 치우는 길이다.
+// before(첫째 세션 이름)를 부른 뒤 던진다. failQuery면 그 뒤의 세션 조회(display-message)가 실패한다. 첫째 세션 이름을 돌려준다.
+function breakSecond(s, before = () => {}, {failQuery = false} = {}) {
+  let first = null, broke = false;
+  const run = Object.assign((args, input) => {
+    if (args[0] === 'new-session') {
+      if (first) { broke = true; before(first); throw new Error('둘째 자리 실패(주입)'); }
+      first = args[args.indexOf('-s') + 1];
+    }
+    return s.run(args, input);
+  }, {
+    try: args => broke && failQuery && args[0] === 'display-message'
+      ? {status: 1, stdout: '', stderr: '조회 실패(주입)'} : s.run.try(args),
+    socket: s.run.socket, home: s.home,
+  });
+  assert.throws(() => s.open(2, {run}), /둘째 자리 실패\(주입\)/);
+  assert.ok(broke, '주입 지점에 닿았다');
+  return first;
+}
 const isSetAsk = args => args[0] === 'set-option' && args.includes('@kadan_senior_ask');
 const cleanupNote = dir => JSON.parse(fs.readFileSync(path.join(dir, 'create-cleanup.json'), 'utf8'));
 
@@ -459,26 +598,26 @@ test('부분 생성 실패 정리(F1): 기록이 있는 세션은 소유 확인�
   // 마지막 세션을 끈 직후에도 같은 시험 소켓에서 다음 사례를 시작한다.
   s.run(['start-server', ';', 'set-option', '-s', 'exit-empty', 'off']);
   const drop = name => s.run(['kill-session', '-t', `=${name}`]);
-  // 정상 대조: 예약 등록만 실패하면 방금 만든 자기 세션을 치운다.
-  breakCreate(s, isReap);
+  // 정상 대조: 다음 자리 만들기가 실패하면 방금 만든 자기 세션을 치운다.
+  breakSecond(s);
   assert.deepEqual(s.sessions(), []);
   assert.equal(readRecord(s.lastDir()).endReason, 'partial-create');
   // 같은 이름의 세션에 다른 프로세스가 들어앉았다(pane PID가 기록과 다르다) → 끄지 않고 이유를 남긴다.
-  let session = breakCreate(s, isReap, name => s.run(['respawn-pane', '-k', '-t', `=${name}:`, 'sleep 600']));
+  let session = breakSecond(s, name => s.run(['respawn-pane', '-k', '-t', `=${name}:`, 'sleep 600']));
   assert.deepEqual(s.sessions(), [session], 'PID가 바뀐 세션은 남아 있어야 한다');
   assert.equal(readRecord(s.lastDir()).killSkipped, 'pid-differs');
   drop(session);
   // 생성 식별값(세션 옵션의 askId)이 바뀌었다.
-  session = breakCreate(s, isReap, name => s.run(['set-option', '-t', `=${name}:`, '@kadan_senior_ask', randomUUID()]));
+  session = breakSecond(s, name => s.run(['set-option', '-t', `=${name}:`, '@kadan_senior_ask', randomUUID()]));
   assert.deepEqual(s.sessions(), [session], '세대가 바뀐 세션은 남아 있어야 한다');
   assert.equal(readRecord(s.lastDir()).killSkipped, 'generation-differs');
   drop(session);
   // 기록이 못 읽게 바뀌었다: 무엇이 자기 것인지 견줄 근거가 없다.
-  session = breakCreate(s, isReap, () => fs.writeFileSync(path.join(s.lastDir(), 'session.json'), '{깨진 기록'));
+  session = breakSecond(s, () => fs.writeFileSync(path.join(s.lastDir(), 'session.json'), '{깨진 기록'));
   assert.deepEqual(s.sessions(), [session], '기록을 못 읽으면 남아 있어야 한다');
   drop(session);
   // 정리 때 세션 조회가 실패했다: 확인하지 못한 세션을 이름만으로 끄지 않는다.
-  session = breakCreate(s, isReap, () => {}, {failQuery: true});
+  session = breakSecond(s, () => {}, {failQuery: true});
   assert.deepEqual(s.sessions(), [session], '조회가 실패하면 남아 있어야 한다');
   assert.equal(readRecord(s.lastDir()).killSkipped, 'query-failed');
   assert.equal(readRecord(s.lastDir()).endedAt, undefined, '확인하지 못한 세션을 끝난 것으로 적지 않는다');
@@ -652,6 +791,37 @@ test('세션 조회 분류: tmux가 "없다"고 확정한 문구만 세션 없�
     if (want === 'no-session' && name !== '세션 없음') assert.deepEqual(listSeniorSessions(run), [], name);
     if (want === 'query-failed') assert.throws(() => listSeniorSessions(run), /세션 목록 조회 실패/, name);
   }
+});
+
+// 2026-11-19 격리 소켓에서 관찰(tmux 3.6a): 서버는 살아 있는데 그 이름의 세션이 없으면 조회가 실패하지 않고 네 칸이 모두 빈 답을 준다.
+// 세션을 남겨 두면 같은 소켓에 다른 세션이 늘 있어 이 답이 흔해진다.
+test('세션 조회 분류(종료 코드 0인 답): 칸이 다 온 답의 이름이 다르면 세션 없음, 칸이 모자란 답(출력 없음 포함)은 조회 실패, 이름이 같으면 PID·식별값을 견준다', () => {
+  const cases = [
+    ['서버는 있고 세션이 없음(네 칸 모두 빔)', '\t\t\t\n', 'no-session'],
+    ['다른 세션의 이름', 'senior-other\t123\tfixture\t{dir}\n', 'no-session'],
+    ['출력 없음(신호를 받은 tmux 호출)', '', 'query-failed'],
+    ['칸이 모자람', 'senior-fake\t123\n', 'query-failed'],
+    ['이름은 같고 PID가 다름', 'senior-fake\t999\tfixture\t{dir}\n', 'pid-differs'],
+    ['이름은 같고 식별값이 다름', 'senior-fake\t123\tother\t{dir}\n', 'generation-differs'],
+  ];
+  for (const [name, answer, want] of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ksz-'));
+    const record = {session: 'senior-fake', socket: 'isolated-fake', dir, askId: 'fixture', panePid: '123'};
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(record));
+    const asked = [];
+    const run = Object.assign(() => { throw new Error('키 명령은 없어야 한다'); },
+      {socket: record.socket, try: args => { asked.push(args[0]); return {status: 0, stdout: answer.replace('{dir}', dir), stderr: ''}; }});
+    assert.deepEqual(confirmOwn(record, run), {own: false, why: want}, name);
+    assert.deepEqual(killOwn(dir, {run}), {killed: false, why: want}, name);
+    assert.ok(!asked.includes('kill-session'), `${name}: 끄지 않는다`);
+    const after = readRecord(dir);
+    if (want === 'no-session') assert.deepEqual([Boolean(after.endedAt), after.killSkipped], [true, undefined], `${name}: 없는 세션은 끝난 것으로만 적는다`);
+    else assert.deepEqual([after.endedAt, after.killSkipped], [undefined, want], `${name}: 확인하지 못한 세션을 끝난 것으로 적지 않는다`);
+  }
+  // 네 칸이 모두 맞을 때만 자기 것이다.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ksz-'));
+  const record = {session: 'senior-fake', socket: 'isolated-fake', dir, askId: 'fixture', panePid: '123'};
+  assert.deepEqual(confirmOwn(record, {socket: record.socket, try: () => ({status: 0, stdout: `senior-fake\t123\tfixture\t${dir}\n`, stderr: ''})}), {own: true});
 });
 
 test('TERM이 tmux 호출 도중에 오면(같은 프로세스 묶음이라 그 tmux 호출도 신호로 죽는다) 죽은 세션이 아니라 중단으로 읽는다', async () => {
