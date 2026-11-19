@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {seniorCommand} from '../src/senior.mjs';
+import {EFFORT_FROM_MODEL, seniorCommand, seniorEffortLabel} from '../src/senior.mjs';
 import {initSettings, readSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -95,10 +95,10 @@ test('agy 대화창(모드 파일 없음 = 대화형): 고정 작업 폴더의 �
   const record = readRecord(a.evidencePath);
   assert.equal(record.runner, 'agy'); assert.equal(record.workdir, f.workdir);
   assert.equal(a.follow, `tmux -L ${f.tmux.socket} attach -r -t '=${record.session}'`);
-  // 화면에는 질문 파일을 가리키는 한 줄만 들어갔고, 질문 파일은 호출 끝에 지워졌다(같은 글이 증거 폴더 input.txt에 남는다).
+  // 화면에는 질문 파일을 가리키는 한 줄만 들어갔다. 질문 파일은 세션과 함께 남고 세션을 끌 때 지운다(같은 글이 증거 폴더 input.txt에도 있다).
   assert.deepEqual(f.fakeLog(ARGON.model, 'submitted'), [agyAskLine(record.askFile)]);
   assert.equal(record.askFile, path.join(f.workdir, 'asks', `${r.askId}-1.txt`));
-  assert.deepEqual(f.asks(), []);
+  assert.deepEqual(f.asks(), [`${r.askId}-1.txt`]);
   const input = fs.readFileSync(path.join(a.evidencePath, 'input.txt'), 'utf8');
   assert.match(input, /답은 파일로 쓰지 않고 이 대화의 답으로 화면에 쓴다/);
   assert.ok(input.includes(`읽기 전용 폴더로 열려 있다: ${f.repo}`));
@@ -114,7 +114,9 @@ test('agy 대화창(모드 파일 없음 = 대화형): 고정 작업 폴더의 �
   assert.equal(f.commands.length, 1);
   assert.match(f.commands[0], /senior-session-run\.mjs' ask /);
   assert.ok(!f.commands.some(command => /senior\.sh|--print|^agy/u.test(command)));
-  assert.deepEqual(f.sessions(), []);
+  // 답을 받은 뒤에도 agy 세션은 남는다(화면 아래의 모델·강도 줄을 사람이 직접 본다).
+  assert.deepEqual(f.sessions(), [record.session]);
+  assert.deepEqual([record.endReason, Boolean(record.keptAt), r.keptSessions], ['ok', true, 1]);
   assert.deepEqual(readLedger(f.home).filter(e => ['start', 'stop', 'trust'].includes(e.kind)), [], '역할이 아니다: 원장에 start·stop·trust 없음');
   // 둘째 호출: 신뢰 창이 없어 알림도 없다. --effort는 agy에 넘기지 않고 무시한 사실을 알린다.
   const again = await f.run({timeout: '60', effort: 'low'});
@@ -124,6 +126,14 @@ test('agy 대화창(모드 파일 없음 = 대화형): 고정 작업 폴더의 �
   assert.deepEqual(f.fakeLog(ARGON.model, 'trust-enter').length, 1, '신뢰 창 Enter는 첫 호출의 한 번뿐이다');
   const calls = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${f.tmux.socket} -f `)), []);
+  // 둘째 호출은 남긴 첫 세션을 건드리지 않았다(끄지도, 키를 보내지도 않는다). 정리 명령이 둘을 끄고 자리별 질문 파일도 치운다.
+  assert.equal(f.sessions().length, 2);
+  assert.equal(f.fakeLog(ARGON.model, 'submitted').length, 2, '질문 줄은 호출마다 한 번, 새 세션에만 들어갔다');
+  assert.equal(f.asks().length, 2);
+  const cleaned = await seniorCommand(['cleanup'], {}, {home: f.home, by: 'qa-슈퍼감독', env: f.env});
+  assert.match(cleaned, new RegExp(`끔  ${record.session}  agy/${ARGON.model}  `));
+  assert.match(cleaned, /끈 세션 2개, 둔 세션 0개/);
+  assert.deepEqual(f.sessions(), []); assert.deepEqual(f.asks(), []);
 });
 
 test('저장소가 git 최상위가 아니면 --add-dir 없이 띄우고 카드 본문·첨부만 근거로 답하게 한다', {skip}, async t => {
@@ -184,7 +194,8 @@ test('혼합 등록(codex + agy) 정상: 두 칸 모두 답하고 각자 자기 
   assert.ok(fs.existsSync(path.join(r.answers[0].evidencePath, 'out', 'result.txt')), 'codex 칸은 답 파일로 회수한다');
   assert.equal(fs.existsSync(path.join(r.answers[1].evidencePath, 'out')), false, 'agy 칸에는 답 파일 폴더가 없다');
   assert.deepEqual(f.advices().map(e => [e.model, e.reason, e.runner]), [['gpt-6-astra', 'ok', undefined], [ARGON.model, 'ok', 'agy']]);
-  assert.deepEqual(f.sessions(), []); assert.deepEqual(f.asks(), []);
+  assert.deepEqual(f.sessions().sort(), r.answers.map(a => readRecord(a.evidencePath).session).sort(), '두 세션 모두 남는다');
+  assert.deepEqual(f.asks(), [`${r.askId}-2.txt`]);
   const picked = await f.run({timeout: '60', model: ARGON.model});
   assert.deepEqual(picked.answers.map(a => [a.runner, a.source, a.reason]), [['agy', 'flag', 'ok']]);
   assert.equal(f.fakeLog('gpt-6-astra', 'submitted').length, 1, '고르지 않은 codex는 부르지 않았다');
@@ -202,7 +213,10 @@ test('혼합 등록: agy 신뢰 창을 지나지 못하면 두 칸 모두 질문
   }
   assert.deepEqual(f.commands, [], '질문 프로세스를 띄우지 않았다');
   assert.deepEqual(f.advices().map(e => [e.model, e.reason, e.tabReason]), [['gpt-6-astra', 'call-failed', 'gate-failed'], [ARGON.model, 'call-failed', 'gate-failed']]);
-  assert.deepEqual(f.sessions(), []); assert.deepEqual(f.asks(), []);
+  // 관문에서 걸린 두 세션도 남는다(신뢰 창이 떠 있는 화면을 본다). 남긴 뒤에도 키는 0회다.
+  assert.deepEqual(f.sessions().sort(), error.answers.map(a => readRecord(a.evidencePath).session).sort());
+  assert.equal(error.keptSessions, 2);
+  for (const model of ['gpt-6-astra', ARGON.model]) assert.equal(f.fakeLog(model, 'keys').length, 0, `${model}: 남긴 뒤에도 키 0회`);
 });
 
 test('혼합 등록: 한쪽(agy)이 질문 제출 뒤에 실패해도 다른 칸(codex)의 답은 그대로 돌려준다(종료 코드 0)', {skip}, async t => {
@@ -212,7 +226,11 @@ test('혼합 등록: 한쪽(agy)이 질문 제출 뒤에 실패해도 다른 칸
   assert.equal(r.answers[0].answer, CODEX_ANSWER); assert.ok(!('answer' in r.answers[1]));
   assert.equal(r.answers[1].detail, 'pane-dead');
   assert.equal(f.fakeLog(ARGON.model, 'submitted').length, 1, 'agy 칸은 질문을 받은 뒤에 죽었다');
-  assert.deepEqual(f.sessions(), []); assert.deepEqual(f.asks(), []);
+  // 답한 codex 세션은 남고, 스스로 죽은 agy 세션은 남길 것이 없어 그 자리의 질문 파일을 치운다.
+  assert.deepEqual(f.sessions(), [readRecord(r.answers[0].evidencePath).session]); assert.deepEqual(f.asks(), []);
+  assert.equal(r.keptSessions, 1);
+  // 없는 세션을 '기록과 다름'으로 읽지 않는다: 같은 소켓에 남긴 세션이 있어도 끝난 것으로만 적는다.
+  assert.equal(readRecord(r.answers[1].evidencePath).killSkipped, undefined);
   // 반대쪽: codex가 한도 화면으로 끝나도 agy 칸의 답은 온다.
   const g = fixture(t, {seniors: [ASTRA, ARGON], agy: {default: {startup: 'composer'}}, codex: {default: {answer: 'limit'}}});
   const mixed = await g.run({timeout: '60'});
@@ -262,4 +280,37 @@ test('로티 읽기 전용 탭은 agy 칸도 질문을 제출한 뒤에 연다: 
   assert.equal(all.slice(0, mark).filter(line => / send-keys .*Enter$/u.test(line)).length, 2, '탭 전에 신뢰 창 Enter와 질문 Enter가 나갔다');
   assert.equal(all.slice(0, mark).filter(line => / paste-buffer /u.test(line)).length, 1);
   assert.deepEqual(keys(all.slice(mark + 1)), [], '탭이 붙은 뒤 키 명령 0회');
+});
+
+// 2026-11-19 [kyle]: agy 칸이 effort: max로 찍혔다(카단은 agy에 강도를 넘기지 않는데 빈 값을 max로 채웠다).
+test('강도 표시: 강도를 넘기지 않는 agy 칸은 영수증·원장·세션 기록·화면 머리 어디에도 강도 값을 지어내지 않고(기본·--effort low 모두 같은 표시), codex 칸은 실제로 넘긴 값과 같다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA, ARGON]});
+  for (const [flags, passed] of [[{}, 'high'], [{effort: 'low'}, 'low']]) {
+    const r = await f.run({timeout: '60', ...flags});
+    const [codex, agy] = r.answers;
+    assert.deepEqual([codex.reason, agy.reason], ['ok', 'ok']);
+    const entries = f.advices().filter(e => e.askId === r.askId);
+    const codexEntry = entries.find(e => e.adviceId === codex.adviceId), agyEntry = entries.find(e => e.adviceId === agy.adviceId);
+    // agy 칸: 강도 칸이 없고 출처만 있다. --effort로 준 값도, 빈 칸 기본값 max도 어디에도 없다.
+    for (const row of [agy, agyEntry]) {
+      for (const key of ['effort', 'effortOverride', 'settingsEffort']) assert.ok(!(key in row), `agy 칸에 ${key}가 없다`);
+      assert.equal(row.effortSource, EFFORT_FROM_MODEL);
+      assert.ok(!Object.values(row).some(value => ['max', 'low', 'high', 'medium'].includes(value)), '강도 낱말을 값으로 가진 칸이 없다');
+    }
+    assert.equal(seniorEffortLabel(agy), '강도 모델 이름 따름');
+    const record = fs.readFileSync(path.join(agy.evidencePath, 'session.json'), 'utf8');
+    assert.ok(!/"effort/u.test(record), '세션 기록에 강도 칸이 없다');
+    assert.ok(!f.dump(ARGON.model).argv.some(word => /effort/u.test(word)), 'agy 실행 인자에 강도가 없다');
+    // --effort를 줬으면 무시한 사실을 알리는 글은 그대로다.
+    assert.equal(agy.note?.includes('--effort는 agy에 넘기지 않아 무시했다(강도는 모델 이름이 정한다)') ?? false, flags.effort != null);
+    // codex 칸: 영수증·원장의 강도가 codex 실행 인자로 실제 넘어간 값과 같다. 덮어쓰기 기록도 그대로다.
+    const sent = f.dump('gpt-6-astra').argv.map(word => /^model_reasoning_effort="(.+)"$/u.exec(word)?.[1]).find(Boolean);
+    assert.deepEqual([sent, codex.effort, codexEntry.effort, seniorEffortLabel(codex)], [passed, passed, passed, passed]);
+    assert.ok(!('effortSource' in codex) && !('effortSource' in codexEntry));
+    assert.deepEqual([codexEntry.effortOverride, codexEntry.settingsEffort], flags.effort == null ? [undefined, undefined] : [true, 'high']);
+    assert.ok(!/"effort/u.test(fs.readFileSync(path.join(codex.evidencePath, 'session.json'), 'utf8')));
+  }
+  // 화면 머리는 강도 자리를 그 표시 함수로 채운다(값을 그대로 찍지 않는다).
+  const cli = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.ok(cli.includes('${a.runner}/${a.model}/${seniorEffortLabel(a)}') && !cli.includes('${a.effort}'));
 });
