@@ -363,3 +363,17 @@ test('옵션 없는 restart 비서는 다시 여는 순간의 설정을 읽는�
   assertChoice(changed.launched[0], {model: 'gpt-6-sol', effort: 'medium'});
   assert.equal(changed.latestStart().settingsRevision, 8);
 });
+
+test('restart 비서 --model-from-settings: 모델 목록을 읽지 못해 값을 확인할 수 없으면 끄기 전에 거절한다', t => {
+  const prior = process.env.KADAN_CODEX_MODELS_CACHE;
+  t.after(() => {
+    if (prior === undefined) delete process.env.KADAN_CODEX_MODELS_CACHE; else process.env.KADAN_CODEX_MODELS_CACHE = prior;
+  });
+  const codex = {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"', catalog: 'codex-models-cache'};
+  const f = fixture({slot: SOL, codex});
+  process.env.KADAN_CODEX_MODELS_CACHE = path.join(f.home, 'no-such-models-cache.json');
+  assert.throws(() => f.run.restart({'model-from-settings': true}),
+    /비서 자리 값을 적용할 수 없다\(비서 자리 실행기의 모델 목록을 읽지 못해 값을 확인할 수 없음\).*기존 세션은 그대로 둔다/);
+  assert.equal(f.stops(), 0);
+  assert.equal(f.launched.length, 0);
+});
