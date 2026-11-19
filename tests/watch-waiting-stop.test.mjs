@@ -252,7 +252,12 @@ test('인용 판정은 오류 줄 위의 논리 줄을 본다: 어떤 너비에�
   // 도구 출력(`• Ran …` 아래의 `│ └` 줄, 그 아래 들여쓴 출력) 바로 아래의 오류는 답변 문단이 아니다: 모든 너비에서 읽는다.
   const tools = [INCIDENT, errorScreen(CAPACITY), `• Ran date\n  │ if test -e log; then wc -l log; fi\n\n${CAPACITY}\n\n${COMPOSER}`,
     `⏺ Bash(npm test)\n  ⎿  12 passed\n     and one more line of output\n\n${CAPACITY}\n\n${COMPOSER}`, `tool output\n\n${CAPACITY}\n\n› \n`];
-  for (const screen of tools) {
+  // 실제 codex 화면(보안 필터 표본)의 알림 덩어리만 용량 초과 줄로 바꾼 것: `• Edited … (+5 -0)` 아래에 4칸 들여쓴 줄만 있고
+  // `│ └` 표시가 없다. 깊게 들여쓴 줄은 접힌 답변 조각이 아니라 출력이라, 그 아래의 오류는 현재 오류다.
+  const real = fixture('security-filter-screens.json')['A-test-output-then-notice'];
+  const edited = `${real.slice(0, real.indexOf('ⓘ This content'))}${CAPACITY}\n\n\n${COMPOSER}`;
+  assert.match(edited, /\n• Edited [^\n]+\n {4}\d+ [^\n]*\n(?: {4,}[^\n]*\n)+\n■ Selected/u, '편집 블록 모양 확인');
+  for (const screen of [...tools, edited]) {
     const misses = WIDTHS.filter(width => !read(wrap(screen, width)).every(Boolean));
     assert.deepEqual(misses, [], `못 읽은 너비: ${screen.split('\n')[0]}`);
   }

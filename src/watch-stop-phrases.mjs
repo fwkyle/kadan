@@ -240,8 +240,10 @@ export function currentErrorBlock(screen, { claudeHead = false, afterResponse = 
 // lines[at]이 응답 문단의 줄인가: 빈 줄 없이 이어진 줄을 거슬러 올라가 가장 가까운 머리표 줄을 찾는다(접힌 오류 줄을 이어 붙이는 것과
 // 같은 기준 — 빈 줄에서 끊는다). 응답 머리표(`• …`·`⏺ …`)에 닿으면 응답 문단이다. 그 전에 도구 출력 표시(`│ └ ⎿`)·오류 표시·입력창
 // 줄에 닿으면 응답이 아니다: `• Ran …` 아래의 도구 출력은 응답 문단이 아니라서, 그 아래의 오류는 지금처럼 현재 오류로 읽는다.
+// 3칸 이상 들여쓴 줄도 응답이 아니다: 접힌 줄 조각은 줄 맨 앞(또는 잘린 자리의 공백 하나)에서 시작하고 화면이 나눈 응답의 이어지는
+// 줄은 2칸 들여쓰기다. 그보다 깊은 줄은 표시 없는 출력(`• Edited …` 아래의 바뀐 줄, `└` 아래의 출력)이다.
 const RESPONSE_HEAD = /^\s*[•⏺]\s/u;
-const OTHER_LINE_HEAD = /^\s*[│└⎿■✕×ⓘ›❯]/u;
+const OTHER_LINE_HEAD = /^\s*[│└⎿■✕×ⓘ›❯]|^\s{3,}\S/u;
 function responseParagraphAt(lines, at) {
   for (; at >= 0 && !RULE_OR_BLANK.test(lines[at]); at--) {
     if (RESPONSE_HEAD.test(lines[at])) return true;
