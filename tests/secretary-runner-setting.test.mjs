@@ -71,10 +71,11 @@ function fixture({slot, startCmd = LUNA} = {}) {
     restart: (flags = {}) => restartRole({home, role: '비서', session: 'kadan-비서', flags, floor, settings: null, deps}),
     up: () => { checkpointSecretary(deps); kill(); assert.equal(resumeSecretary(deps), 'restored'); },
     // 로티가 준 명령은 옵션 없는 맨 명령일 수 있다. 저장된 체크포인트의 옵션으로 채워진다.
-    rottie: (command = "'codex' 'resume' 'exact-conversation'") => {
+    // checkpoint: false면 체크포인트를 다시 만들지 않는다(실제로는 로티 복원 두 번 사이에 아무도 다시 만들지 않는다).
+    rottie: ({command = "'codex' 'resume' 'exact-conversation'", checkpoint = true} = {}) => {
       const tab = latestStart().rottieTerminalId;
       const context = inspectRecovery({terminal: tab}, recoveryDeps);
-      checkpointSecretary(deps);
+      if (checkpoint) checkpointSecretary(deps);
       kill();
       return restoreRecovery({context: JSON.stringify(context), command, 'rottie-bin': '/fixture/rottie'}, recoveryDeps);
     },
@@ -171,9 +172,28 @@ test('restart → 체크포인트 → restart를 되풀이해도 모델·강도 
 test('로티 탭 복원을 연달아 두 번 해도 두 번째가 거절되지 않고 설정값으로 열린다', () => {
   const f = fixture({slot: SOL});
   f.run.rottie();
-  f.run.rottie();
+  // 두 번째는 첫 복원이 남긴 체크포인트만으로 연다. 체크포인트가 옛 모델로 남아 있으면 원본 start(설정 모델)와 어긋나 거절된다.
+  const saved = JSON.parse(fs.readFileSync(path.join(f.home, 'secretary-resume.json'), 'utf8'));
+  assertChoice(saved.command, {model: 'gpt-6-sol', effort: 'medium'});
+  f.run.rottie({checkpoint: false});
   assert.equal(f.launched.length, 2);
   for (const command of f.launched) assertChoice(command, {model: 'gpt-6-sol', effort: 'medium'});
+  // 로티 복원 바로 뒤 up 복원도 체크포인트를 다시 만들지 않고 이어진다.
+  f.kill();
+  assert.equal(resumeSecretary(f.deps), 'restored');
+  assertChoice(f.launched[2], {model: 'gpt-6-sol', effort: 'medium'});
+});
+
+test('정책으로 막은 모델이 비서 자리에 있으면 그 값을 쓰지 않고 저장된 명령 그대로 연다', () => {
+  for (const name of PATHS) {
+    const f = fixture({slot: SOL});
+    const settings = JSON.parse(fs.readFileSync(settingsFile(f.home), 'utf8'));
+    settings.blocked = [{model: 'gpt-6-sol', roles: ['secretary'], reason: '시험'}];
+    fs.writeFileSync(settingsFile(f.home), JSON.stringify(settings));
+    f.run[name]();
+    assert.deepEqual(f.launched, [BEFORE[name]]);
+    assert.equal(f.latestStart().modelFromSettingsSkipped, 'model-blocked');
+  }
 });
 
 test('띄운 명령이 체크포인트에 남는다: 로티 복원 뒤 up 복원, 자리를 비운 뒤에도 옛 모델로 돌아가지 않는다', () => {
