@@ -258,6 +258,9 @@ test('인용 판정은 오류 줄 위의 논리 줄을 본다: 어떤 너비에�
   }
   // 앞선 다른 오류 줄 바로 아래는 답변 문단이 아니다(그 위가 답변이어도 오류 표시 줄에서 끊는다).
   assert.deepEqual(read(`• 다시 시도합니다.\n\n■ stream error\n${CAPACITY}\n\n${COMPOSER}`), [true, true]);
+  // 논리 줄은 빈 줄에서 끊는다: 빈 줄 건너 그 위에 답변이 있어도, 오류 바로 위 문단이 머리표 없는 출력이면 답변 문단이 아니다.
+  for (const width of [80, 55, 45])
+    assert.deepEqual(read(wrap(`• 앞선 답변입니다. 시험을 돌려 보겠습니다.\n\ntool output without any marker\n\n${CAPACITY}\n\n${COMPOSER}`, width)), [true, true], `${width}칸`);
 });
 
 test('다른 문구의 판정은 main 그대로다: 접힌 답변 아래의 429는 지금처럼 바로 위 한 줄만 본다', () => {
