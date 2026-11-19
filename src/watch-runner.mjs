@@ -54,6 +54,7 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
+import { assessWaitingStops } from "./watch-waiting-stop.mjs";
 import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
@@ -362,7 +363,8 @@ export async function runWatch({
         // 할 일 판정에서 이어 맡은 감독이 빠졌다(PR #99 검수 2). 원장의 owner 원문은 바꾸지 않는다.
         cards = readCards(); works = readWorks().map(w => withEffectiveOwner(w, entries));
         entries = projectEntries(entries, cards);
-        scope = buildWatchScope(cards, entries, parents, works);
+        // 대기 표시로 뺀 실행(waitingSessions)은 같은 한 번의 훑기에서 함께 받는다. sessions·entries는 그대로다.
+        scope = buildWatchScope(cards, entries, parents, works, {waiting:true});
         supervisorScope = buildSupervisorScope(cards, entries, parents, works);
       }
       catch (error) { cardError = error; scope = null; supervisorScope = null; }
@@ -457,6 +459,9 @@ export async function runWatch({
         if (alert.kind === '큐대기') return true;
         // 일시정지 중 작업은 hold 역할이라 처음부터 scope 밖이다. 퇴역 기록(감시제외)을 남기지 않는다.
         if (alert.kind === '일시정지중작업') return true;
+        // 대기 표시 실행은 처음부터 scope 밖이다. 이 경보의 수명은 화면·대기 표시가 정한다(아래 assessWaitingStops) —
+        // 여기서 퇴역시키면 같은 정지 화면이 매 주기 새 경보로 다시 울린다.
+        if (alert.kind === '대기중정지') return true;
         if (!alert.session || observedSessions.has(alert.session)) return true;
         recordAlert(record, {...alert, kind:'감시제외'}, null, false, true);
         alertRecipients.delete(alert.id); deliveryFailures.delete(alert.id);
@@ -634,6 +639,11 @@ export async function runWatch({
       : assessHoldWorking(holdWorkingStates,roles.observations,cards,{now:cycleAt,alerted:holdWorkingAlerted,
           isHeld:role=>holdTracker?.isHeld(role)??false,supervisors:new Set(parents.values())});
     holdWorkingStates=holdWorking.states;
+    // 대기 표시로 감시 범위에서 빠진 실행도 이미 읽은 화면(roles.observations)에 결정식 정지 화면 검사만 한다.
+    // 새 화면 읽기·AI 호출·키 전송이 없고, 자동 재개·큐 재개·정체 판정은 지금처럼 scope.sessions만 본다.
+    // 원장도 읽지 않고 상태도 두지 않는다. 받는 쪽은 다른 경보와 같은 경로(아래 explainAlertRoute)가 고른다.
+    // 관찰 실패 주기에는 판정하지 않는다(열린 경보는 아래 observationError 이월이 그대로 둔다).
+    const waitingStops=observationError||!scope ? [] : assessWaitingStops(scope.waitingSessions,roles.observations);
     // 백그라운드 셸 표시로 멈춤을 늦추는 중인 세션(held)도 화면이 그대로라서 나는 정체 후보(경보·정체 판정 AI)에서 뺀다.
     // 멈춤이 4분에 먼저 나가 5분의 정체를 대신하던 자리라, 멈춤만 늦추면 정체가 그 자리를 채운다. 상한이 지나면 멈춤이 나가고
     // 정체는 지금처럼 멈춤 세션에서 빠진다. 죽음·끊김·한도·완료후보는 이 집합과 무관하다.
@@ -907,6 +917,7 @@ export async function runWatch({
       ...queuedAssessment.alerts.filter(a=>!queueSessions.has(a.session)),
       ...idleStopAssessment.alerts.filter(a=>!confirmationDeferred(a)),
       ...holdWorking.alerts,
+      ...waitingStops,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       // 알림이 3번 이상 연속 밀린 창. 지난 주기까지의 횟수이며 사용자에게만 간다.

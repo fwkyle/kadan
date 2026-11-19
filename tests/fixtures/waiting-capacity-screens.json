@@ -1,0 +1,4 @@
+{
+  "_comment": "2026-11-18 사고 화면. 대기 표시를 남긴 codex 검수자가 용량 초과 오류 뒤 빈 입력창에서 22시간 멈췄다. 오류 줄과 그 위 도구 블록은 그 창의 스크롤 기록 원문이고(경로·역할 이름은 일반 값으로 바꿈), 입력창·바닥글은 사고 당시 모양이 남아 있지 않아 다른 codex 표본의 모양으로 채웠다.",
+  "incident": "  │ … +2 lines\n  └ 07:03:43 UTC\n    [\n      {\n    +18 lines (⌃t to view transcript)\n\n• Ran date -u '+%H:%M:%S UTC'\n  │ if test -e '<CARD>/evidence/\n  │ npm-test-full.log'; then wc -l '<CARD>/evidence/\n  │ … +2 lines\n  └ 07:05:00 UTC\n    [\n      {\n    +18 lines (⌃t to view transcript)\n\n■ Selected model is at capacity. Please try a different model.\n\n\n› Ask Codex to do anything\n\n  gpt-6.1-sol high · ~/Dev/PROJ · main · Context 41% used\n"
+}

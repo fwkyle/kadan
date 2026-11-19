@@ -45,6 +45,15 @@ export const STOP_PHRASES = [
     pattern: /502 Bad Gateway|Provider unreachable/iu, sample: "없음(사고표 E2)" },
   { id: "dns", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
     pattern: /getaddrinfo ENOTFOUND/iu, sample: "없음(사고표 E2)" },
+  // codex 화면: `■ Selected model is at capacity. Please try a different model.` 뒤에 빈 입력창만 남는다
+  // (2026-11-18 대기 표시를 남긴 검수자가 이 화면에서 22시간 멈춘 사고). 오류 표시로 시작하는 현재 오류 덩어리 전체가 이 두 문장일 때만
+  // 읽는다 — 낱말 `capacity`(아래 OVERLOAD_PATTERN), 다른 오류가 인용한 문장(`■ Could not read … "Selected model is at capacity".`),
+  // 뒤에 다른 말이 붙은 줄(`… at capacity planning stage.`)은 아니다. 좁은 창에서 접힌 줄은 이어 붙여 읽는다(아래 capacityStopLine).
+  // 이 pattern은 그렇게 읽은 한 줄의 종류·순서를 정하는 데만 쓴다. 줄 하나씩 읽는 낱말 판정(WORKER_SIGNATURES)에는 넣지 않는다.
+  // 자동 재개는 붙이지 않고 직속 감독이 다시 보낼지·모델을 바꿀지 정한다.
+  { id: "model-capacity", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
+    pattern: /^\s*[■✕×]\s+Selected model is at capacity\.\s+Please try a different model\.\s*$/iu,
+    sample: "codex `■ Selected model is at capacity. Please try a different model.` (tests/fixtures/waiting-capacity-screens.json)" },
   { id: "sse-timeout", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
     pattern: /idle timeout waiting for SSE/iu, sample: "없음" },
   { id: "compact-error", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
@@ -56,6 +65,7 @@ export const STOP_PHRASES = [
 
 // 설명 AI(explain-diag.mjs)의 '모델 과부하' 낱말 모양. STOP_PHRASES에 넣지 않는다 — 넣으면 감시 경보가 새로 생기고,
 // `capacity`는 일반 문장에도 흔한 낱말이다. 감시 판정(WORKER_SIGNATURES·SUPERVISOR_ERROR_PATTERN 등)에는 쓰이지 않는다.
+// 감시가 읽는 것은 위 목록의 두 문장 전체(`model-capacity`)뿐이다.
 export const OVERLOAD_PATTERN = /overloaded|capacity/u;
 
 const withPattern = (scope) => STOP_PHRASES.filter((p) => p.pattern && p.scope.includes(scope));
@@ -63,7 +73,10 @@ const sourceOf = (entries) => entries.map(({ pattern }) => pattern.source).join(
 
 // 작업자 화면의 끊김·한도·설정·인증 줄 낱말 판정. 첫 번째로 맞는 항목의 종류가 줄의 종류다.
 export const WORKER_PHRASES = withPattern("worker");
-export const WORKER_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES), "giu");
+// 줄 하나씩 읽는 낱말(현재 오류 덩어리의 각 줄, 일하는 중 거부용 넓은 검사). 용량 초과 문장은 여기 없다: 덩어리 전체를 이어 붙여
+// 따로 읽고(capacityStopLine), 넓은 검사에는 넣지 않는다 — 넣으면 문장이 화면 아래에 보이는 동안 시계가 도는 정상 작업이
+// '일하는 중 아님'이 되어 정체 판정 AI가 불린다(2026-11-19 검수).
+export const WORKER_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES.filter((p) => p.id !== "model-capacity")), "giu");
 export const SUPERVISOR_ERROR_PATTERN = new RegExp(sourceOf(withPattern("supervisor")), "iu");
 
 const SLEEP_SIGNATURE = new RegExp(STOP_PHRASES.find((p) => p.id === "sleep-interrupted").pattern.source, "giu");
@@ -174,7 +187,11 @@ export function linesWithFence(screen) {
 // (currentStopPhrases) — 기본값(false)은 main과 같은 판정이다. 다른 Claude API 오류를 작업자 즉시 경보로 넓히지 않는다(2026-10-22 검수 F1).
 // afterResponse: 오류 머리줄 바로 위가 응답 한 줄(`• …`)이어도 덩어리로 읽는다(콜론으로 끝나는 소개 문장은 여전히 제외). 사용 한도 줄 판정에만 쓴다
 // (currentStopPhrases) — 기본값(false)은 main과 같은 판정이라 다른 낱말의 판정 범위는 그대로다.
-export function currentErrorBlock(screen, { claudeHead = false, afterResponse = false } = {}) {
+// wrappedRows: 좁은 창에서 tmux가 접은 줄은 들여쓰기 없이(낱말 중간에서도) 이어진다. 덩어리 끝에서 위로, 빈 줄 없이 붙은 줄
+// wrappedRows개 안에서 가장 가까운 오류 표시 줄을 머리줄로 삼는다. 용량 초과 문장 판정에만 쓴다(capacityStopLine) —
+// 기본값(0)은 main과 같은 판정이다. 나머지 조건(빈 입력창·바닥글·코드 울타리·위쪽 소개 문단)은 그대로 적용되고,
+// 위쪽 소개 문단은 바로 위 한 줄이 아니라 접힌 줄을 거슬러 올라간 논리 줄로 본다(responseParagraphAt).
+export function currentErrorBlock(screen, { claudeHead = false, afterResponse = false, wrappedRows = 0 } = {}) {
   // tmux는 floor.read에서 추천 문구를 뺀 판정용 화면을 준다. 표시용 readView를 넣지 않는다.
   const rows = linesWithFence(screen);
   const lines = rows.map((r) => r.line);
@@ -194,6 +211,10 @@ export function currentErrorBlock(screen, { claudeHead = false, afterResponse = 
   }
   const headOf = (from) => { let at = from; while (at > 0 && /^\s+\S/u.test(lines[at])) at--; return at; };
   let head = headOf(end);
+  if (wrappedRows > 0) {
+    head = end;
+    while (head > 0 && end - head < wrappedRows - 1 && !ERROR_HEAD.test(lines[head]) && !RULE_OR_BLANK.test(lines[head - 1])) head--;
+  }
   // Claude는 오류 줄과 입력창 사이에 턴 끝 줄이 낀다. 그 줄을 건너뛴 위가 `⏺ API Error:` 머리줄일 때만 덩어리로 읽는다(다른 머리줄 판정은 그대로).
   if (claudeHead && TURN_DONE.test(lines[end])) {
     let above = end - 1;
@@ -208,9 +229,41 @@ export function currentErrorBlock(screen, { claudeHead = false, afterResponse = 
     let above = head - 1;
     while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--; // 빈 줄·가로선 등 장식 줄은 몇 개든 건너뛴다
     const intro = above >= 0 ? lines[above] : "";
-    if ((!afterResponse && /^\s*[•⏺]\s/u.test(intro)) || /[:：]\s*$/u.test(intro)) return null;
+    // 접힌 줄을 이어 붙여 읽을 때(wrappedRows)는 위쪽도 같은 기준으로 논리 줄을 본다: 좁은 창에서는 응답 줄의 끝 조각만
+    // 바로 위 줄에 남고 머리표(`•`)는 그 위 줄에 있다. 한 줄만 보면 접힌 응답의 인용이 현재 오류로 읽힌다(2026-11-19 재검수 2).
+    const response = wrappedRows > 0 ? responseParagraphAt(lines, above) : /^\s*[•⏺]\s/u.test(intro);
+    if ((!afterResponse && response) || /[:：]\s*$/u.test(intro)) return null;
   }
   return { head: lines[head], lines: lines.slice(head, end + 1) };
+}
+
+// lines[at]이 응답 문단의 줄인가: 빈 줄 없이 이어진 줄을 거슬러 올라가 가장 가까운 머리표 줄을 찾는다(접힌 오류 줄을 이어 붙이는 것과
+// 같은 기준 — 빈 줄에서 끊는다). 응답 머리표(`• …`·`⏺ …`)에 닿으면 응답 문단이다. 그 전에 도구 출력 표시(`│ └ ⎿`)·오류 표시·입력창
+// 줄에 닿으면 응답이 아니다: `• Ran …` 아래의 도구 출력은 응답 문단이 아니라서, 그 아래의 오류는 지금처럼 현재 오류로 읽는다.
+// 3칸 이상 들여쓴 줄도 응답이 아니다: 접힌 줄 조각은 줄 맨 앞(또는 잘린 자리의 공백 하나)에서 시작하고 화면이 나눈 응답의 이어지는
+// 줄은 2칸 들여쓰기다. 그보다 깊은 줄은 표시 없는 출력(`• Edited …` 아래의 바뀐 줄, `└` 아래의 출력)이다.
+const RESPONSE_HEAD = /^\s*[•⏺]\s/u;
+const OTHER_LINE_HEAD = /^\s*[│└⎿■✕×ⓘ›❯]|^\s{3,}\S/u;
+function responseParagraphAt(lines, at) {
+  for (; at >= 0 && !RULE_OR_BLANK.test(lines[at]); at--) {
+    if (RESPONSE_HEAD.test(lines[at])) return true;
+    if (OTHER_LINE_HEAD.test(lines[at])) return false;
+  }
+  return false;
+}
+
+// 용량 초과: 현재 오류 덩어리 전체가 두 문장 `Selected model is at capacity. Please try a different model.`일 때만 그 한 줄을 돌려준다.
+// 창이 문장(62칸)보다 좁으면 tmux가 줄을 접고 접힌 자리의 끝 공백은 화면 읽기에서 사라진다. 그래서 덩어리의 줄을 이어 붙이고
+// 공백을 모두 지운 모양으로 앞뒤 끝까지 대조한다(2026-11-19 재검수: 55·45칸 창에서 사고 문구를 놓쳤다). 덩어리에 다른 말이
+// 한 글자라도 더 있으면(인용·접두어·뒤에 붙은 말·딸린 줄) 아니다. 돌려주는 줄은 창 너비와 무관하게 같은 한 줄이다(경보 id가 같다).
+const CAPACITY_SENTENCE = "Selected model is at capacity. Please try a different model.";
+const squeeze = (text) => text.replace(/\s+/gu, "").toLowerCase();
+const CAPACITY_SQUEEZED = squeeze(CAPACITY_SENTENCE);
+const CAPACITY_WRAPPED_ROWS = 6; // 12칸 창까지. 그보다 좁으면 입력창 줄도 접혀 현재 오류 덩어리로 읽지 못한다
+function capacityStopLine(screen) {
+  const block = currentErrorBlock(screen, { wrappedRows: CAPACITY_WRAPPED_ROWS });
+  const joined = squeeze((block?.lines ?? []).join(""));
+  return /^[■✕×]/u.test(joined) && joined.slice(1) === CAPACITY_SQUEEZED ? `${joined[0]} ${CAPACITY_SENTENCE}` : null;
 }
 
 // 현재 오류 덩어리 안의 목록 낱말: Map(줄 키 → 줄). 덩어리가 아니면 빈 Map.
@@ -223,6 +276,8 @@ export function currentStopPhrases(screen) {
     }
   };
   collect(currentErrorBlock(screen), WORKER_SIGNATURES);
+  const capacity = capacityStopLine(screen);
+  if (capacity) found.set(lineKey(capacity, capacity), capacity);
   // Claude `⏺ API Error:` 덩어리는 절전 중단 낱말만 읽는다(다른 낱말의 판정 범위는 main 그대로).
   collect(currentErrorBlock(screen, { claudeHead: true }), SLEEP_SIGNATURE);
   // 사용 한도 줄(codex `■ …`)은 바로 위가 응답 한 줄(`• …`)이어도 읽는다. 문구가 줄 맨 앞이고 `■` 오류 줄이라야 하며 콜론 소개 문장 아래는 여전히 제외다.
