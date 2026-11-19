@@ -257,3 +257,37 @@ test('cwd 아래 같은 이름의 다른 저장소 폴더가 있어도 순수 �
     assert.equal((await run(f, ['acquire', './app-name'], {for: 'card-c'})).repo, fs.realpathSync(shadow));
   } finally { process.chdir(before); }
 });
+
+// 2026-11-19 사고: 자기 자리 폴더 안에서 release를 치면 다른 저장소 풀의 "경로 없는" 임차까지 풀렸다.
+// real('')가 현재 폴더가 되어, 경로 없는 임차가 모두 일치했기 때문이다.
+test('경로 없는 남의 임차는 자리 폴더 안에서 release·deps를 쳐도 건드리지 않는다', async () => {
+  const f = fixture();
+  // 풀 이름이 내 풀보다 앞서 정렬되게 해, 수정 전에는 남의 임차가 먼저 집히도록 한다.
+  const other = path.join(f.base, 'aaa-other');
+  fs.mkdirSync(other);
+  git(other, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(other, 'a.txt'), 'a'); git(other, 'add', '.'); git(other, 'commit', '-q', '-m', 'first');
+  const mine = await run(f, ['acquire', f.repo], {for: 'card-mine'});
+  await run(f, ['acquire', other], {for: 'card-theirs'});
+  const leaseFiles = fs.readdirSync(path.join(f.home, 'review-slots'), {recursive: true})
+    .filter(n => n.endsWith('.lease.json')).map(n => path.join(f.home, 'review-slots', n));
+  const theirFile = leaseFiles.find(file => JSON.parse(fs.readFileSync(file, 'utf8')).for === 'card-theirs');
+  const theirLease = JSON.parse(fs.readFileSync(theirFile, 'utf8'));
+  const cwd = process.cwd();
+  process.chdir(mine.path); // 대상 폴더 안에서 친다 — 빈 경로가 현재 폴더로 풀리는 조건
+  try {
+    // 남의 임차를 "자리를 준비하는 중이라 아직 path가 없는" 모양으로 만든다: path 없음, 빈 값.
+    for (const variant of ['path 없음', 'path 빈 값']) {
+      const {path: _dropped, ...rest} = theirLease;
+      fs.writeFileSync(theirFile, JSON.stringify(variant === 'path 빈 값' ? {...rest, path: ''} : rest) + '\n');
+      const before = fs.readFileSync(theirFile, 'utf8');
+      const installed = await run(f, ['deps', mine.path], {cmd: 'true'});
+      assert.equal(installed.path, mine.path, `deps는 내 자리를 집는다 (${variant})`);
+      const released = await run(f, ['release', mine.path]);
+      assert.deepEqual(released.released.map(r => r.slot), ['slot-1'], `내 임차만 풀린다 (${variant})`);
+      assert.equal(fs.readFileSync(theirFile, 'utf8'), before, `남의 임차 파일은 그대로 (${variant})`);
+      // 다음 변형을 위해 내 자리를 다시 빌린다.
+      Object.assign(mine, await run(f, ['acquire', f.repo], {for: 'card-mine'}));
+    }
+  } finally { process.chdir(cwd); }
+});
