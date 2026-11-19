@@ -8,7 +8,7 @@ import { inboxCommand } from "./mailbox.mjs";
 import { decisionCommand } from "./decisions.mjs";
 import { autopilotCommand, autopilotOriginalText } from "./commands/autopilot.mjs";
 import { autopilotGuard } from "./autopilot-guard.mjs";
-import { seniorCommand } from "./senior.mjs";
+import { seniorCommand, seniorEffortLabel } from "./senior.mjs";
 import { runnersCommand } from "./runners-command.mjs";
 import { CardStore } from "./card-store.mjs";
 import { cardCommand } from "./card-command.mjs";
@@ -235,7 +235,7 @@ export const COMMANDS = {
     // 모델별로 나눠 보인다: 영수증(JSON)에는 답을 빼고, 답은 칸마다 이어서 쓴다.
     const {answers,...rest}=result;
     console.log(JSON.stringify({...rest,answers:answers.map(({answer,...receipt})=>receipt)},null,2));
-    for(const a of answers)console.log(`\n--- 시니어 ${a.runner}/${a.model}/${a.effort} · ${a.status} ---\n${a.answer??'(답 없음 — 증거 폴더 참고)'}`);
+    for(const a of answers)console.log(`\n--- 시니어 ${a.runner}/${a.model}/${seniorEffortLabel(a)} · ${a.status} ---\n${a.answer??'(답 없음 — 증거 폴더 참고)'}`);
   },
   // 옛 이름(2026-10-05 advisor→senior 개명). 이미 떠 있는 감독이 옛 지침대로 불러도 같은 명령이 돈다.
   advise: (argv,flags) => COMMANDS.senior(argv,flags),

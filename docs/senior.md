@@ -25,7 +25,7 @@ KADAN_ROLE=<감독> kadan senior <카드키> --question "<질문>" [--file <절�
   - 이유: 감독이 '시니어 둘'에게 물으려고 두 번째 모델을 스스로 골랐다(10/22 가벼운 flash 계열, 10/21 다른 모델). 시니어 구성은 kyle이 정하는 일이다.
   - 등록: `kadan runners set senior --set "codex:gpt-6-astra:high,agy:gemini-4-argon-medium" --revision N --reason …`(최대 2명, 같은 실행기+모델 중복·3명 이상은 거절). 한 명만 등록하려면 기존 `--runner/--model [--effort]`(목록이 그 한 명이 된다).
   - **덮어쓰기는 등록된 시니어 중 고르기만 한다.** `--runner X --model Y`는 등록된 항목과 같아야 하고, `--model Y`만 주면 등록 항목을 모델로 찾는다(같은 모델이 두 실행기에 있으면 `--runner`도 필요). 고르면 그 한 명만 부른다. 등록에 없는 값은 호출 전에 거절하고 오류 글에 등록된 시니어 목록을 보여 준다. 새 모델을 부르려면 kyle이 설정을 바꾼다. `--runner`만 주면 오류다.
-  - `--effort`는 이번 호출만 강도를 바꾸며 **부르는 모델마다** 검사한다(지원하지 않는 모델이 하나라도 있으면 아무도 부르지 않는다). agy에는 강도를 넘기지 않는다(강도는 모델 이름이 정한다) — `--effort`를 줘도 무시하고 그 칸에 `note`를 단다.
+  - `--effort`는 이번 호출만 강도를 바꾸며 **부르는 모델마다** 검사한다(지원하지 않는 모델이 하나라도 있으면 아무도 부르지 않는다). agy에는 강도를 넘기지 않는다(강도는 모델 이름이 정한다) — `--effort`를 줘도 무시하고 그 칸에 `note`를 단다. 그 칸의 강도는 아래 **강도 표시**대로 값 없이 보인다.
   - **호출 직전 검사는 저장 검사와 같은 함수다**(`assertSeniorCallable`, 저장은 `setSeniors`가 같은 `assertSeniorShape`를 쓴다). 설정 파일에 든 목록 전체가 3명 이상·같은 실행기+모델 중복·안전 실행기 밖·정책 차단(`block` 전역 또는 `--roles senior`)에 걸리면 **하나라도 걸리면 전원 거절(fail closed)**한다. 차단 안 된 시니어만 부르지 않는다 — kyle이 정한 목록과 다른 조합으로 몰래 도는 것을 막으려는 판단이다(2026-10-22). 덮어쓰기로 한 명만 골라도 같다. 외부 호출·증거 폴더 전에 거절하고, 오류 글에 걸린 항목과 고치는 명령(`kadan runners set senior --set …`)이 있다.
   - 준비(헤드리스의 agy 등록 검사·프롬프트 크기·증거 폴더·대화형의 자리와 agy 고정 작업 폴더)는 호출 전에 모두 끝낸다. 한 명이라도 거절되면 아무도 부르지 않는다(실행 0회).
   - **동시 호출 충돌 확인(2026-10-22)**: 감시 AI·설명 AI와 같은 `runJudgeProcess`(`src/watch-ai-process.mjs`)를 쓰지만 호출 하나가 자기 자식 프로세스·자기 `settings` 객체를 가진다. 직렬화(전역 잠금·큐)가 없고 공유하는 임시 파일·환경도 없다(환경은 호출마다 새로 합친다). 시니어마다 따로 갖는 것: 증거 폴더, `input.txt`·`diagnostic.log`·`stderr.txt`·`exit-code.txt`·`result.txt`·`model.txt`, 로티 탭. agy 대화창은 그 홈의 고정 작업 폴더 하나(`$KADAN_HOME/senior-agy`, 에이전트 파일 포함)를 여러 호출·여러 자리가 함께 쓰고 질문 파일만 자리별이다([agy 대화창](#agy-대화창)). 코드에서 확인한 것이며 실제 codex·agy를 동시에 돌린 실측은 하지 않았다(모델 호출 금지). 두 도구가 사용자 홈의 자기 상태(`~/.codex`·`~/.gemini`)를 동시에 쓰는 문제는 이 쪽에서 막지 못한다.
@@ -37,19 +37,25 @@ KADAN_ROLE=<감독> kadan senior <카드키> --question "<질문>" [--file <절�
     - 경로가 없거나 git이 아니거나 공백·메타문자·`{}`·한글처럼 허용 글자 밖이면 `--add-dir`를 붙이지 않고 카드 본문과 `--file` 첨부만 근거로 쓴다. 프롬프트에 '저장소를 직접 읽을 수 없다'고 적는다.
     - **가림 범위**: `scrubForAI`(웹훅 주소·토큰 모양 가림)는 **프롬프트에만** 적용된다. agy가 직접 읽는 저장소 파일에는 적용되지 않는다. codex 시니어가 저장소를 읽어 외부로 보내는 것과 같은 수준이다(kyle 판단). 비밀이 든 파일이 있는 저장소는 이 점을 알고 부른다.
     - 프롬프트 200KB 상한과 `scrubForAI` 가림은 그대로다. 상한을 넘으면 부르지 않는다.
-    - `--effort`는 agy에 넘기지 않는다. 영수증에 `note`로 알린다. 모델 이름의 강도가 우선 적용되는 것은 조사에서 쓴 조합(`gemini-4-argon-medium` + `--effort low` → 경고 뒤 medium)에서만 확인했다.
+    - `--effort`는 agy에 넘기지 않는다. 영수증에 `note`로 알린다. 모델 이름의 강도가 우선 적용되는 것은 조사에서 쓴 조합(`gemini-4-argon-medium` + `--effort low` → 경고 뒤 medium)에서만 확인했다. 그래서 카단은 agy 칸의 강도를 **적지 않는다**(아래 강도 표시).
   - 기록: 덮어쓰기로 한 명만 골라 부르면 원장 `advice` 사건과 영수증 칸에 `source: "flag"`와 쓴 `runner`·`model`이 남는다.
 - 상한: 기본 1800초(30분), `--timeout`으로 1..3600초. 고급 모델이 저장소를 읽고 시험까지 돌려 보며 오래 고민할 수 있게 넉넉히 둔다(2026-10-05 [kyle]).
-- **결과(모델별)**: 영수증(JSON)에는 `askId`·`card`와 `answers[]`가 있고, 그 뒤에 시니어마다 답변 본문을 `--- 시니어 <실행기>/<모델>/<강도> · <상태> ---` 머리로 나눠 출력한다. 각 칸에는 실행기·모델·강도·`status`(`ok`·`한도`·`실패(<이유>)`)·`reason`·`adviceId`·`durationMs`·`evidencePath`·따라 보기 정보가 있고, 답은 `ok`인 칸에만 `answer`로 있다. **옛 단일 `answer`·`model` 칸은 없앴다**(2026-10-22): 예전 명령 출력을 읽던 코드는 `answers[0]`을 본다. 답변은 네 칸이다 — **결론** 한 줄, **근거**, **위험**, **확인할 것**.
+- **결과(모델별)**: 영수증(JSON)에는 `askId`·`card`와 `answers[]`가 있고, 그 뒤에 시니어마다 답변 본문을 `--- 시니어 <실행기>/<모델>/<강도> · <상태> ---` 머리로 나눠 출력한다. 각 칸에는 실행기·모델·강도(`effort`, 카단이 강도를 넘기지 않는 칸은 `effortSource`)·`status`(`ok`·`한도`·`실패(<이유>)`)·`reason`·`adviceId`·`durationMs`·`evidencePath`·따라 보기 정보가 있고, 답은 `ok`인 칸에만 `answer`로 있다. **옛 단일 `answer`·`model` 칸은 없앴다**(2026-10-22): 예전 명령 출력을 읽던 코드는 `answers[0]`을 본다. 답변은 네 칸이다 — **결론** 한 줄, **근거**, **위험**, **확인할 것**.
   ```
   {"askId": "…", "card": "repo/card", "answers": [
     {"runner": "codex", "model": "gpt-6-astra", "effort": "high", "status": "ok", "reason": "ok", "adviceId": "…", "evidencePath": "…/advice/<askId>/1-codex-gpt-6-astra", …},
-    {"runner": "agy", "model": "gemini-4-argon-medium", "effort": "max", "status": "한도", "reason": "limit", "adviceId": "…", "evidencePath": "…/2-agy-gemini-4-argon-medium", …}]}
+    {"runner": "agy", "model": "gemini-4-argon-medium", "effortSource": "model-name", "status": "한도", "reason": "limit", "adviceId": "…", "evidencePath": "…/2-agy-gemini-4-argon-medium", …}]}
   --- 시니어 codex/gpt-6-astra/high · ok ---
   결론: …
-  --- 시니어 agy/gemini-4-argon-medium/max · 한도 ---
+  --- 시니어 agy/gemini-4-argon-medium/강도 모델 이름 따름 · 한도 ---
   (답 없음 — 증거 폴더 참고)
   ```
+- **강도 표시(2026-11-19 [kyle])**: 강도 칸은 카단이 그 모델에 **실제로 넘긴 값**만 적는다.
+  - codex 칸: `effort`는 codex 실행 인자(`model_reasoning_effort`)에 넘긴 값이다. 설정에 강도가 없으면 `max`, `--effort`를 주면 그 값이다.
+  - agy 칸(카단이 강도를 넘기지 않는 칸): `effort` 칸이 **없고** `effortSource: "model-name"`만 있다. 화면 머리의 강도 자리는 고정 문구 `강도 모델 이름 따름`이다. `--effort low`를 줘도 같다(무시한 사실은 `note`). 설정에 강도가 적힌 agy 항목도 같다.
+  - 카단은 모델 이름에서 강도 낱말(`medium` 등)을 뽑아 적지 않는다. 실제 강도는 agy 화면 아래의 모델 줄에서 본다.
+  - 이유: 2026-11-19 agy 칸(`gemini-4-neon-medium`)이 `effort: max`로 찍혔다. 넘기지 않은 값을 빈 칸 기본값 `max`로 채운 것이었다. 그 전의 원장 줄(agy 칸의 `effort: "max"`)은 고치지 않는다 — agy 칸의 옛 `effort` 값은 믿지 않는다.
+  - JSON 모양을 `effort: null`이 아니라 '칸 없음 + `effortSource`'로 한 이유: 왜 없는지가 줄에 남고, `effort`를 그대로 문자열로 다루는 코드가 `null`을 글자로 찍거나 비교하다 멈추지 않는다.
 - **종료 코드**: 하나라도 `ok`면 0이고 나머지 칸은 상태로 보인다. 전원이 `ok`가 아니면 1이고 오류 글에 시니어마다 이유와 증거 경로가 있다.
 - **한도 판정(헤드리스)**: 실패한 호출의 stderr·stdout에 `429`·`quota`·`usage limit`·`rate limit` 중 하나가 있으면(대소문자 무시) `reason: limit`, 화면 '한도'다. 그 밖의 실패는 시간 초과(`timeout`)·호출 실패(`call-failed`)·빈 답(`empty`)이다. **어떤 실패도 자동 재시도하지 않는다.** `ocx refresh` 같은 한도 복구 동작도 하지 않는다. 다시 부르는 것은 감독이 명령을 다시 내는 것이다.
 - 실패 기준: `ok`는 종료 코드 0이고 답이 비어 있지 않을 때뿐이다(fail closed). 답을 쓰지 않는다.
@@ -151,12 +157,12 @@ Why: kyle이 gemini 모델(아르곤 등)을 시니어로 다시 쓰고 싶다(2
 
 시니어는 비싼 모델이라 실제로 부르는 시험은 강도를 낮춰 돌린다(2026-10-05 [kyle]).
 
-- `kadan senior … --effort low`: 이번 호출만 강도를 바꾼다. 실행 모델 설정은 그대로이고, 원장에는 `effort`(쓴 값)·`effortOverride: true`·`settingsEffort`(설정 값)가 남는다. 모델이 지원하지 않는 강도는 호출 전에 거절한다.
+- `kadan senior … --effort low`: 이번 호출만 강도를 바꾼다. 실행 모델 설정은 그대로이고, 원장에는 `effort`(쓴 값)·`effortOverride: true`·`settingsEffort`(설정 값)가 남는다(agy 칸에는 셋 다 없고 `effortSource: "model-name"`만 있다). 모델이 지원하지 않는 강도는 호출 전에 거절한다.
 - `npm run smoke:senior [-- --effort low --timeout 600]`: 임시 `KADAN_HOME`에 실행 모델 설정만 복사하고 가상 카드 하나로 실제 모델을 한 번 부른다. 답에 결론·근거·위험·확인할 것 네 칸이 있으면 통과. 비용이 들어 `npm test`에는 넣지 않는다. 운영 원장은 건드리지 않는다.
 
 ## 원장 기록
 
-질문 하나에 시니어마다 `advice` 사건 한 줄을 남긴다(성공·실패 모두). 줄마다 같은 `askId`(질문 하나의 공통 ID), 자기 `adviceId`, `seniorIndex`·`seniorCount`(몇 번째/몇 명)가 있다. 그 밖에 `by`(부른 감독), `card`, 질문 앞 200자와 지문, `model`·`effort`(덮어쓰기로 골랐으면 `runner`·`source: "flag"`)·`settingsRevision`·`settingsPreset`, `reason`(`ok`·`limit`·`timeout`·`call-failed`·`empty`·`interrupted`), `exitCode`, `durationMs`, 답변 `bytes`·`digest`, 첨부 `files`, `evidencePath`, 따라 보기 탭의 `tab`·`tabReason`·`rottieTerminalId`가 있다. 대화형 방식으로 부른 줄에는 `mode: "interactive"`와(실패했으면) 상세 이유 `detail`이 붙는다. 증거 폴더는 `KADAN_HOME/advice/<askId>/<n>-<실행기>-<모델>/`다(옛 `advice/<adviceId>/` 폴더 기록은 그대로 남는다). 신호(TERM/INT)로 끊기면 아직 끝나지 않은 시니어마다 `reason: interrupted` 줄을 남긴다. 새 사건 종류는 만들지 않았다. 답변 본문은 원장에 넣지 않고 증거 폴더의 `result.txt`에만 둔다. 기록 화면에서는 **자문**으로 보이고, 질문 하나에 줄이 여러 개일 수 있다(`askId`로 묶인다). 사건은 호출이 끝난 뒤 쓰므로 SIGKILL이면 증거 폴더만 남을 수 있다.
+질문 하나에 시니어마다 `advice` 사건 한 줄을 남긴다(성공·실패 모두). 줄마다 같은 `askId`(질문 하나의 공통 ID), 자기 `adviceId`, `seniorIndex`·`seniorCount`(몇 번째/몇 명)가 있다. 그 밖에 `by`(부른 감독), `card`, 질문 앞 200자와 지문, `model`·`effort`(agy 칸은 `effort` 없이 `effortSource: "model-name"`, 덮어쓰기로 골랐으면 `runner`·`source: "flag"`)·`settingsRevision`·`settingsPreset`, `reason`(`ok`·`limit`·`timeout`·`call-failed`·`empty`·`interrupted`), `exitCode`, `durationMs`, 답변 `bytes`·`digest`, 첨부 `files`, `evidencePath`, 따라 보기 탭의 `tab`·`tabReason`·`rottieTerminalId`가 있다. 대화형 방식으로 부른 줄에는 `mode: "interactive"`와(실패했으면) 상세 이유 `detail`이 붙는다. 증거 폴더는 `KADAN_HOME/advice/<askId>/<n>-<실행기>-<모델>/`다(옛 `advice/<adviceId>/` 폴더 기록은 그대로 남는다). 신호(TERM/INT)로 끊기면 아직 끝나지 않은 시니어마다 `reason: interrupted` 줄을 남긴다. 새 사건 종류는 만들지 않았다. 답변 본문은 원장에 넣지 않고 증거 폴더의 `result.txt`에만 둔다. 기록 화면에서는 **자문**으로 보이고, 질문 하나에 줄이 여러 개일 수 있다(`askId`로 묶인다). 사건은 호출이 끝난 뒤 쓰므로 SIGKILL이면 증거 폴더만 남을 수 있다.
 
 횟수 제한은 일부러 두지 않는다(2026-10-05 [kyle] 결정): 감독이 필요할 때만 부르는 것이 전제이고, 같은 카드로 다시 부르면 다시 돈다(비용이 든다). "카드당 1회"는 템플릿의 기본 습관이지 명령이 막는 규칙이 아니다.
 

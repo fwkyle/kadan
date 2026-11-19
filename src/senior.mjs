@@ -49,6 +49,17 @@ export const seniorCommandLabel = value => {
     : `${v.runner} 대화창 · 모델 ${v.model} (도구 없는 에이전트, 저장소 읽기 전용 폴더)`).join(' + ') : null;
 };
 
+// 카단이 강도를 넘기지 않는 칸(지금은 대화창 agy). 이 칸의 강도는 카단이 알지 못한다 — 모델 이름이 정한다.
+// 그래서 영수증·원장·세션 기록 어디에도 강도 값을 지어내 넣지 않고(2026-11-19 [kyle]: agy 칸이 max로 찍혔다),
+// 강도 칸 대신 effortSource: "model-name"을 적는다. 모델 이름에서 강도 낱말을 뽑아내지도 않는다.
+// 빈 값이 아니라 실행기로 가른다: 설정에 강도가 적힌 agy 항목도, --effort를 준 호출도 같다.
+const passesEffort = runner => runner === SENIOR_SCRIPT_RUNNER;
+export const EFFORT_FROM_MODEL = 'model-name';
+export const EFFORT_FROM_MODEL_LABEL = '강도 모델 이름 따름';
+// 화면 머리의 강도 자리. 강도를 넘기지 않은 칸은 고정 문구 하나다.
+export const seniorEffortLabel = answer => answer.effortSource === EFFORT_FROM_MODEL ? EFFORT_FROM_MODEL_LABEL : answer.effort;
+const withoutEffort = ({effort, ...rest}) => rest;
+
 const registered = list => list.map(v => `${v.runner}/${v.model}${v.effort ? `/${v.effort}` : ''}`).join(', ');
 // 덮어쓰기는 등록된 시니어 중 고르기만 한다(2026-10-22 [kyle]). 지정이 없으면 등록된 전원이다.
 // --runner만 주면 오류, --model만 주면 등록 항목을 모델로 찾는다(같은 모델이 두 실행기에 등록돼 있으면 --runner도 필요).
@@ -176,7 +187,9 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   // --effort: 이번 호출만 강도를 바꾼다(설정은 그대로). 부르는 모델마다 그 모델이 지원하는지 본다(2026-10-05 [kyle]).
   const targets = values.map(base => {
     assertSeniorRunner(base.runner);
-    return {base, value: flags.effort == null ? base : {...base, effort: checkEffort(settings, base, flags.effort, readCodexModels)}};
+    // 강도 검사는 부르는 전원에게 한다(지금 그대로). 강도를 넘기지 않는 칸은 그 뒤에 강도 값을 버린다.
+    const value = flags.effort == null ? base : {...base, effort: checkEffort(settings, base, flags.effort, readCodexModels)};
+    return {base, value: passesEffort(value.runner) ? value : withoutEffort(value)};
   });
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
@@ -210,10 +223,13 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const closeTab = call => {
     if (call.opened.tab === 'opened') { call.tab = closeSeniorTab(call.opened); writeTabState(call.dir, {state: call.tab.tab, reason: call.tab.tabReason}); call.opened = {...call.opened, tab: 'closed'}; }
   };
+  // 강도 칸: 넘긴 칸(codex)은 넘긴 값 그대로, 넘기지 않은 칸은 값 없이 출처만 적는다.
+  const effortOf = call => call.onScreen ? {effortSource: EFFORT_FROM_MODEL} : {effort: call.value.effort ?? 'max'};
   const makeEntry = (call, fields) => ({kind: 'advice', by, role: by, card: card.key, askId, adviceId: call.adviceId, seniorIndex: call.index + 1, seniorCount: calls.length,
     question: question.trim().slice(0, QUESTION_PREVIEW), questionDigest: digest(question.trim()), ...(interactive ? {mode: 'interactive'} : {}),
     ...(picked ? {source: 'flag', runner: call.value.runner} : call.onScreen ? {runner: call.value.runner} : {}),
-    model: call.value.model, effort: call.value.effort ?? 'max', ...(flags.effort == null ? {} : {effortOverride: true, settingsEffort: call.base.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
+    model: call.value.model, ...effortOf(call),
+    ...(flags.effort == null || call.onScreen ? {} : {effortOverride: true, settingsEffort: call.base.effort ?? 'max'}), settingsRevision: settings.revision, settingsPreset: settings.activePreset,
     files: attachments.map(a => a.file), evidencePath: call.dir, ...call.tab, ...(call.opened.tabKey ? {tabKey: call.opened.tabKey} : {}),
     ...(call.opened.rottieTerminalId ? {rottieTerminalId: call.opened.rottieTerminalId} : {}), t: new Date(started).toISOString(), ...fields});
   // 신호로 끝나도 아직 끝나지 않은 시니어마다 advice 사건 한 줄(reason: interrupted)을 남긴다. 모든 단계가 동기이고 실패해도 신호 종료 코드는 지킨다.
@@ -237,8 +253,8 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     let seats;
     try {
       seats = openSeats({home, run: sessionRun, askId, deadlineAt: started + timeoutS * 1000, now,
-        calls: calls.map(call => ({dir: call.dir, runner: call.value.runner, model: call.value.model, effort: call.value.effort ?? 'max', token: call.token, timing: sessionTiming,
-          ...(call.onScreen ? {prompt: call.prompt, readDir: call.readDir} : {})}))});
+        calls: calls.map(call => ({dir: call.dir, runner: call.value.runner, model: call.value.model, token: call.token, timing: sessionTiming,
+          ...(call.onScreen ? {prompt: call.prompt, readDir: call.readDir} : effortOf(call))}))});
     } catch (error) { detach(); throw error; }
     calls.forEach((call, index) => { call.seat = seats[index]; });
     const gates = await Promise.all(calls.map(call => passGate(call.seat, {run: sessionRun, now, timing: sessionTiming})));
@@ -338,7 +354,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     // agy에는 강도를 넘기지 않는다(강도는 모델 이름이 정한다). --effort를 줬으면 무시한 사실을 그 칸에 알린다.
     const notes = [call.onScreen && flags.effort != null ? `--effort는 ${value.runner}에 넘기지 않아 무시했다(강도는 모델 이름이 정한다)` : null,
       call.trustNote, interactive ? result.note : null].filter(Boolean);
-    return {adviceId: call.adviceId, runner: value.runner, model: value.model, effort: value.effort ?? 'max', status: statusOf(reason), reason, ...(picked ? {source: 'flag'} : {}),
+    return {adviceId: call.adviceId, runner: value.runner, model: value.model, ...effortOf(call), status: statusOf(reason), reason, ...(picked ? {source: 'flag'} : {}),
       ...(interactive ? {mode: 'interactive', ...(result.detail ? {detail: result.detail} : {})} : {}),
       ...(notes.length ? {note: notes.join(' · ')} : {}),
       durationMs: entry.durationMs, evidencePath: dir, ...call.tab,
@@ -349,7 +365,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   try { settled = await Promise.allSettled(calls.map(runOne)); }
   finally { detach(); calls.forEach(closeTab); calls.forEach(closeSeat); }
   const answers = settled.map((r, i) => r.status === 'fulfilled' ? r.value
-    : {adviceId: calls[i].adviceId, runner: calls[i].value.runner, model: calls[i].value.model, effort: calls[i].value.effort ?? 'max', status: statusOf('call-failed'), reason: 'call-failed', evidencePath: calls[i].dir});
+    : {adviceId: calls[i].adviceId, runner: calls[i].value.runner, model: calls[i].value.model, ...effortOf(calls[i]), status: statusOf('call-failed'), reason: 'call-failed', evidencePath: calls[i].dir});
   if (!answers.some(a => a.reason === 'ok')) {
     const error = new Error(answers.map(a => `${answers.length > 1 ? `[${a.runner}/${a.model}] ` : ''}자문 실패(${a.reason}) — 답은 쓰지 않는다. 증거: ${a.evidencePath}${a.note ? ` — ${a.note}` : ''}`).join('\n'));
     error.exitCode = 1;

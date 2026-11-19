@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {seniorCommand} from '../src/senior.mjs';
+import {EFFORT_FROM_MODEL, seniorCommand, seniorEffortLabel} from '../src/senior.mjs';
 import {initSettings, readSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -262,4 +262,37 @@ test('로티 읽기 전용 탭은 agy 칸도 질문을 제출한 뒤에 연다: 
   assert.equal(all.slice(0, mark).filter(line => / send-keys .*Enter$/u.test(line)).length, 2, '탭 전에 신뢰 창 Enter와 질문 Enter가 나갔다');
   assert.equal(all.slice(0, mark).filter(line => / paste-buffer /u.test(line)).length, 1);
   assert.deepEqual(keys(all.slice(mark + 1)), [], '탭이 붙은 뒤 키 명령 0회');
+});
+
+// 2026-11-19 [kyle]: agy 칸이 effort: max로 찍혔다(카단은 agy에 강도를 넘기지 않는데 빈 값을 max로 채웠다).
+test('강도 표시: 강도를 넘기지 않는 agy 칸은 영수증·원장·세션 기록·화면 머리 어디에도 강도 값을 지어내지 않고(기본·--effort low 모두 같은 표시), codex 칸은 실제로 넘긴 값과 같다', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA, ARGON]});
+  for (const [flags, passed] of [[{}, 'high'], [{effort: 'low'}, 'low']]) {
+    const r = await f.run({timeout: '60', ...flags});
+    const [codex, agy] = r.answers;
+    assert.deepEqual([codex.reason, agy.reason], ['ok', 'ok']);
+    const entries = f.advices().filter(e => e.askId === r.askId);
+    const codexEntry = entries.find(e => e.adviceId === codex.adviceId), agyEntry = entries.find(e => e.adviceId === agy.adviceId);
+    // agy 칸: 강도 칸이 없고 출처만 있다. --effort로 준 값도, 빈 칸 기본값 max도 어디에도 없다.
+    for (const row of [agy, agyEntry]) {
+      for (const key of ['effort', 'effortOverride', 'settingsEffort']) assert.ok(!(key in row), `agy 칸에 ${key}가 없다`);
+      assert.equal(row.effortSource, EFFORT_FROM_MODEL);
+      assert.ok(!Object.values(row).some(value => ['max', 'low', 'high', 'medium'].includes(value)), '강도 낱말을 값으로 가진 칸이 없다');
+    }
+    assert.equal(seniorEffortLabel(agy), '강도 모델 이름 따름');
+    const record = fs.readFileSync(path.join(agy.evidencePath, 'session.json'), 'utf8');
+    assert.ok(!/"effort/u.test(record), '세션 기록에 강도 칸이 없다');
+    assert.ok(!f.dump(ARGON.model).argv.some(word => /effort/u.test(word)), 'agy 실행 인자에 강도가 없다');
+    // --effort를 줬으면 무시한 사실을 알리는 글은 그대로다.
+    assert.equal(agy.note?.includes('--effort는 agy에 넘기지 않아 무시했다(강도는 모델 이름이 정한다)') ?? false, flags.effort != null);
+    // codex 칸: 영수증·원장의 강도가 codex 실행 인자로 실제 넘어간 값과 같다. 덮어쓰기 기록도 그대로다.
+    const sent = f.dump('gpt-6-astra').argv.map(word => /^model_reasoning_effort="(.+)"$/u.exec(word)?.[1]).find(Boolean);
+    assert.deepEqual([sent, codex.effort, codexEntry.effort, seniorEffortLabel(codex)], [passed, passed, passed, passed]);
+    assert.ok(!('effortSource' in codex) && !('effortSource' in codexEntry));
+    assert.deepEqual([codexEntry.effortOverride, codexEntry.settingsEffort], flags.effort == null ? [undefined, undefined] : [true, 'high']);
+    assert.ok(!/"effort/u.test(fs.readFileSync(path.join(codex.evidencePath, 'session.json'), 'utf8')));
+  }
+  // 화면 머리는 강도 자리를 그 표시 함수로 채운다(값을 그대로 찍지 않는다).
+  const cli = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.ok(cli.includes('${a.runner}/${a.model}/${seniorEffortLabel(a)}') && !cli.includes('${a.effort}'));
 });
