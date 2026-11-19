@@ -155,7 +155,10 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
 export const seniorKeptLine = count => `세션 ${count}개를 남겼다 — 정리: kadan senior cleanup (목록만: kadan senior cleanup --dry-run)`;
 
 // 남긴 세션 상한을 넘겨 오래된 세션을 내보냈을 때의 한 줄. 탭을 닫았는지·못 닫았는지와 그 이유를 함께 보인다(결과를 버리지 않는다).
+// 닫지 못한 탭에는 두 갈래가 있다. 닫아 보다 못 닫은 것(실행 파일 없음·보호·닫기 오류)은 다음 정리가 다시 닫는다.
+// 탭 기록·표지를 믿을 수 없어 닫지 않은 것(untrustedTab)은 다음 정리도 그대로 둔다 — '다시 닫는다'고 약속하지 않는다.
 const tabNote = tab => !tab ? '탭 없음' : tab.tab === 'closed' ? '탭 닫음'
+  : untrustedTab(tab) ? `탭 닫지 않음: ${tabWhy(tab.tabReason)} — 표지는 그대로다`
   : `탭 ${tab.tab}: ${tab.tabReason} — 다음 kadan senior cleanup이 다시 닫는다`;
 export const seniorEvictedLine = evicted => `남긴 세션 상한(${SENIOR_KEPT}개)을 넘겨 오래된 세션 ${evicted.length}개를 껐다: ` +
   evicted.map(row => `${row.session}(${tabNote(row.tab ? row : null)})`).join(', ');
@@ -170,6 +173,8 @@ const TAB_WHY = {'marker-unreadable': '표지를 읽지 못함', 'marker-not-reg
   'session-present': '그 이름의 세션이 살아 있다(진행 중으로 본다)', 'other-socket': '다른 소켓의 세션 기록(그 소켓에서 정리한다)',
   'session-record-missing': '세션 기록을 읽지 못함', 'query-failed': '세션 조회 실패'};
 const tabWhy = why => TAB_WHY[why] ?? (String(why).startsWith('tab-record-') ? TAB_RECORD_WHY[String(why).slice('tab-record-'.length)] : null) ?? why;
+// 탭 기록·표지를 믿을 수 없어 닫지 않은 결과인가(이유가 위 표에 있는 판정 이유다). 닫아 보다 못 닫은 결과(로티 오류 코드 등)와 가른다.
+const untrustedTab = tab => tab.tab !== 'closed' && tabWhy(tab.tabReason) !== tab.tabReason;
 // kadan senior cleanup [--dry-run]: 시니어 소켓의 세션을 나열하고, 끝난 호출의 세션 중 기록 대조가 맞는 것만 끈다(로티 탭도 닫는다).
 // 진행 중 호출·기록 없는 세션·대조가 안 되는 세션은 끄지 않고 이유를 보인다. 세션 없이 남은 탭(내보낼 때 못 닫음 등)도 표지로 찾아 닫는다.
 // 세션에 키를 보내지 않는다. 받는 인자는 --dry-run 하나뿐이다: 그 밖의 인자·표기(--dry-run=true 등)는 아무것도 끄지 않고 거절한다 —
@@ -186,9 +191,9 @@ export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, 
   const rows = cleanupSeniorSessions({home, run, dryRun, now, closeTab: dir => closeKeptTab({home, env, dir, rottie}),
     sweepTabs: ({seen, dryRun: dry, presence}) => sweepOpenTabs({home, env, rottie, seen, presence, dryRun: dry})});
   if (!rows.length) return `남은 시니어 세션이 없다(소켓 ${run.socket})`;
-  // 세션을 끄며 그 탭을 다룬 결과. 탭 기록·표지를 믿을 수 없어 닫지 않았으면 그 이유를 말로 보인다(표지는 남는다).
+  // 세션을 끄며 그 탭을 다룬 결과. 탭 기록·표지를 믿을 수 없어 닫지 않았으면 그 이유를 말로 보인다(표지가 있었으면 그대로 있다).
   const tabNoteOf = tab => tab.tab === 'closed' ? `— 탭 closed${tab.tabReason ? `(${tab.tabReason})` : ''}`
-    : tabWhy(tab.tabReason) !== tab.tabReason ? `— 탭 닫지 않음: ${tabWhy(tab.tabReason)} · 표지를 남겼다`
+    : untrustedTab(tab) ? `— 탭 닫지 않음: ${tabWhy(tab.tabReason)} · 표지는 그대로다`
     : `— 탭 ${tab.tab}${tab.tabReason ? `(${tab.tabReason})` : ''} · 다음 cleanup이 다시 닫는다`;
   const head = {closed: '끔', 'would-close': '끌 것', left: '둠', 'tab-closed': '탭 닫음', 'tab-would-close': '탭 닫을 것', 'tab-left': '탭 둠'};
   const isTab = row => row.action.startsWith('tab-');

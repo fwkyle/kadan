@@ -511,7 +511,12 @@ test('닫힘 기록이어도 탭 id가 없거나 형식이 틀리거나 표지�
   const kept = seed(4, true), mark = calls.length;
   fs.writeFileSync(kept.tabFile, JSON.stringify({state: 'closed', rottieTerminalId: 'different-tab'}));
   const closing = await cleanup({});
-  assert.match(closing, /끔 {2}senior-shape-4 .*— 탭 닫지 않음: 표지의 탭 id가 탭 기록과 다름 · 표지를 남겼다/u);
+  assert.match(closing, /끔 {2}senior-shape-4 .*— 탭 닫지 않음: 표지의 탭 id가 탭 기록과 다름 · 표지는 그대로다/u);
+  // 내보내기 안내 줄도 같다: 믿을 수 없어 닫지 않은 탭에는 '다시 닫는다'고 약속하지 않는다(닫아 보다 못 닫은 탭에만 한다).
+  assert.equal(seniorEvictedLine([{session: 's-1', tab: 'close-skipped', tabReason: 'tab-id-differs'}, {session: 's-2', tab: 'close-skipped', tabReason: 'tab-record-bad-json'},
+    {session: 's-3', tab: 'close-failed', tabReason: 'ROTTIE_INTERNAL'}, {session: 's-4', tab: 'closed'}, {session: 's-5'}]),
+    '남긴 세션 상한(6개)을 넘겨 오래된 세션 5개를 껐다: s-1(탭 닫지 않음: 표지의 탭 id가 탭 기록과 다름 — 표지는 그대로다), s-2(탭 닫지 않음: 탭 기록이 깨짐 — 표지는 그대로다), ' +
+    's-3(탭 close-failed: ROTTIE_INTERNAL — 다음 kadan senior cleanup이 다시 닫는다), s-4(탭 닫음), s-5(탭 없음)');
   assert.equal(calls.length, mark); assert.ok(markers().includes(kept.marker)); assert.ok(!f.sessions().includes(kept.name));
   fs.writeFileSync(kept.tabFile, JSON.stringify({state: 'opened', rottieTerminalId: 'tab-4'}));
   assert.ok((await cleanup({})).includes('탭 닫음  (세션 없음)  탭 tab-4  '));
