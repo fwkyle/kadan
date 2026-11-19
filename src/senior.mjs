@@ -165,7 +165,8 @@ const TAB_RECORD_WHY = {missing: '탭 기록이 없음', 'not-regular': '탭 기
   'bad-json': '탭 기록이 깨짐', 'bad-shape': '탭 기록의 모양이 다름'};
 const TAB_WHY = {'marker-unreadable': '표지를 읽지 못함', 'marker-not-regular': '표지가 정규 파일이 아님(링크·폴더)', 'marker-folder-not-directory': '표지 폴더가 폴더가 아님(링크 등)',
   'marker-outside-home': '이 홈의 호출 폴더가 아님', 'marker-name-differs': '표지 이름이 호출 폴더와 다름', 'call-dir-missing': '호출 폴더를 찾지 못함',
-  'tab-id-differs': '표지의 탭 id가 탭 기록과 다름', 'tab-state-not-open': '탭 기록이 열림 상태가 아님',
+  'tab-id-differs': '표지의 탭 id가 탭 기록과 다름', 'tab-id-missing': '탭 기록에 탭 id가 없음', 'tab-id-bad-shape': '탭 기록의 탭 id 형식이 다름',
+  'tab-state-not-open': '탭 기록이 열림 상태가 아님',
   'session-present': '그 이름의 세션이 살아 있다(진행 중으로 본다)', 'other-socket': '다른 소켓의 세션 기록(그 소켓에서 정리한다)',
   'session-record-missing': '세션 기록을 읽지 못함', 'query-failed': '세션 조회 실패'};
 const tabWhy = why => TAB_WHY[why] ?? (String(why).startsWith('tab-record-') ? TAB_RECORD_WHY[String(why).slice('tab-record-'.length)] : null) ?? why;
@@ -185,12 +186,16 @@ export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, 
   const rows = cleanupSeniorSessions({home, run, dryRun, now, closeTab: dir => closeKeptTab({home, env, dir, rottie}),
     sweepTabs: ({seen, dryRun: dry, presence}) => sweepOpenTabs({home, env, rottie, seen, presence, dryRun: dry})});
   if (!rows.length) return `남은 시니어 세션이 없다(소켓 ${run.socket})`;
+  // 세션을 끄며 그 탭을 다룬 결과. 탭 기록·표지를 믿을 수 없어 닫지 않았으면 그 이유를 말로 보인다(표지는 남는다).
+  const tabNoteOf = tab => tab.tab === 'closed' ? `— 탭 closed${tab.tabReason ? `(${tab.tabReason})` : ''}`
+    : tabWhy(tab.tabReason) !== tab.tabReason ? `— 탭 닫지 않음: ${tabWhy(tab.tabReason)} · 표지를 남겼다`
+    : `— 탭 ${tab.tab}${tab.tabReason ? `(${tab.tabReason})` : ''} · 다음 cleanup이 다시 닫는다`;
   const head = {closed: '끔', 'would-close': '끌 것', left: '둠', 'tab-closed': '탭 닫음', 'tab-would-close': '탭 닫을 것', 'tab-left': '탭 둠'};
   const isTab = row => row.action.startsWith('tab-');
   const sessionLine = row => [`${head[row.action]}  ${row.session}`, row.runner ? `${row.runner}/${row.model}` : '(기록 없음)',
     `만든 ${row.createdAt ?? '-'}`, `끝 ${row.endReason ?? '-'}`, `남긴 ${row.keptAt ?? '-'}`, row.dir ?? '(호출 폴더 없음)',
     ...(row.action === 'left' ? [`— 끄지 않음: ${CLEANUP_WHY[row.why] ?? `기록과 다름(${row.why})`}`] : []),
-    ...(row.tab ? [`— 탭 ${row.tab.tab}${row.tab.tabReason ? `(${row.tab.tabReason})` : ''}${row.tab.tab === 'closed' ? '' : ' · 다음 cleanup이 다시 닫는다'}`] : [])].join('  ');
+    ...(row.tab ? [tabNoteOf(row.tab)] : [])].join('  ');
   // 세션 줄 밖의 탭(표지로 찾은 탭)의 줄. 닫은·닫을 탭은 세션이 없다는 것이 확정된 탭이다(내보낼 때 닫지 못했거나 세션이 먼저 사라졌다).
   // 둔 탭은 그렇지 않다: 그 이름의 세션이 살아 있거나, 모르거나, 표지·탭 기록을 믿을 수 없다 — 이유를 줄 끝에 보인다.
   const tabLine = row => [`${head[row.action]}  ${row.action === 'tab-left' ? '(세션 줄 밖의 탭)' : '(세션 없음)'}`, `탭 ${row.id ?? '-'}`, row.dir ?? '(호출 폴더 모름)',

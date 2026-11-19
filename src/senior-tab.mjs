@@ -165,13 +165,38 @@ function markerFolderKind(home) {
   return !stat ? 'absent' : stat.isDirectory() ? 'dir' : 'not-directory';
 }
 
-// 탭 기록 읽기. 반환: {ok: true, state, id} | {ok: false, why}. why는 tab-record-<못 읽은 까닭> 또는 tab-record-bad-shape.
+// 탭 기록 읽기. 반환: {ok: true, state, id, idWhy?} | {ok: false, why}. why는 tab-record-<못 읽은 까닭> 또는 tab-record-bad-shape.
+// id는 탭 id가 정상 형식(빈 글이 아닌 글)일 때만 그 값이고, 아니면 null이며 idWhy에 까닭이 있다(tab-id-missing: 칸이 없음 · tab-id-bad-shape: 글이 아님·빈 글).
 function readTabState(dir) {
   const read = readRegularJson(path.join(dir, 'tab.json'));
   if (!read.ok) return {ok: false, why: `tab-record-${read.why}`};
   const value = read.value;
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.state !== 'string') return {ok: false, why: 'tab-record-bad-shape'};
-  return {ok: true, state: value.state, id: typeof value.rottieTerminalId === 'string' && value.rottieTerminalId ? value.rottieTerminalId : null};
+  const raw = value.rottieTerminalId;
+  if (typeof raw === 'string' && raw) return {ok: true, state: value.state, id: raw};
+  return {ok: true, state: value.state, id: null, idWhy: raw == null ? 'tab-id-missing' : 'tab-id-bad-shape'};
+}
+
+// 그 호출 폴더의 표지에 적힌 탭 id. 반환: {kind: 'absent'} | {kind: 'id', id} | {kind: 'unknown', why}(읽지 못함·링크·id 없음).
+function markerId(home, dir) {
+  const kind = markerFolderKind(home);
+  if (kind === 'absent') return {kind: 'absent'};
+  if (kind !== 'dir') return {kind: 'unknown', why: 'marker-folder-not-directory'};
+  const read = readRegularJson(markerFile(home, dir));
+  if (!read.ok) return read.why === 'missing' ? {kind: 'absent'} : {kind: 'unknown', why: read.why === 'not-regular' ? 'marker-not-regular' : 'marker-unreadable'};
+  const id = read.value?.rottieTerminalId;
+  return typeof id === 'string' && id ? {kind: 'id', id} : {kind: 'unknown', why: 'marker-unreadable'};
+}
+// 탭 id의 닫힘이 확인됐을 때 그 표지를 지운다 — 표지가 '바로 그 탭'의 것일 때만이다(표지의 id와 정확히 같다).
+// 다른 탭의 닫힘으로 표지를 지우면 아직 열린 탭을 다시는 찾지 못한다(2026-11-19 재검수 2).
+// 반환: null(지웠거나 표지가 없다) | 표지를 남긴 까닭.
+function forgetClosedTab(home, dir, id) {
+  const marker = markerId(home, dir);
+  if (marker.kind === 'absent') return null;
+  if (marker.kind === 'unknown') return marker.why;
+  if (marker.id !== id) return 'tab-id-differs';
+  forgetOpenTab(home, dir);
+  return null;
 }
 
 // 표지 쓰기. 표지 폴더가 진짜 폴더이고 표지 자리에 아무것도 없거나 정규 파일일 때만 쓴다(링크·폴더가 있으면 쓰지 않는다).
@@ -201,7 +226,7 @@ function insideAdvice(home, dir) {
 
 // 표지 목록(읽기만 한다). 줄마다 {file, dir, id, status, why?}.
 //  pending — 닫아 볼 탭이다: 호출 폴더가 이 홈의 advice/ 아래이고, 표지 이름이 그 폴더에서 나온 이름이며, tab.json의 탭 id가 표지와 같다
-//  stale   — 탭 기록을 정상으로 읽었고 이미 닫힘이다(표지만 남음). 지워도 되는 것은 이것뿐이다
+//  stale   — 탭 기록을 정상으로 읽었고, 그 기록의 탭 id가 표지의 id와 정확히 같으며, 이미 닫힘이다(표지만 남음). 지워도 되는 것은 이것뿐이다
 //  invalid — 닫을 수 없는 표지: 믿을 수 없거나(깨진 글·링크·다른 홈·이름 불일치·탭 id 불일치) 탭 기록을 읽지 못해 모른다. 닫지도 지우지도 않는다
 export function listOpenTabs(home) {
   const folder = path.join(home, OPEN_TABS_DIR);
@@ -224,9 +249,13 @@ export function listOpenTabs(home) {
     if (markerFile(home, dir) !== file) return bad('marker-name-differs');
     const tab = readTabState(dir);
     if (!tab.ok) return bad(tab.why);
+    // 상태를 보기 전에 '바로 그 탭'의 기록인지 본다: 기록의 탭 id가 정상 형식이고 표지의 id와 정확히 같다.
+    // 닫힘이라고 적혀 있어도 id가 없거나 형식이 틀리거나 표지와 다르면 다른 탭의 일일 수 있다 — 표지를 지우지 않는다.
+    if (!id) return bad('marker-unreadable');
+    if (!tab.id) return bad(tab.idWhy);
+    if (tab.id !== id) return bad('tab-id-differs');
     if (tab.state === 'closed') return {file, dir, id, status: 'stale'};
     if (!RETRYABLE.has(tab.state)) return bad('tab-state-not-open');
-    if (!id || tab.id !== id) return bad('tab-id-differs');
     return {file, dir, id, status: 'pending'};
   });
 }
@@ -240,8 +269,14 @@ export function listOpenTabs(home) {
 export function closeKeptTab({home, env, dir, rottie}) {
   const tab = readTabState(dir);
   if (!tab.ok) return tab.why === 'tab-record-missing' ? null : {tab: 'close-skipped', tabReason: tab.why};
-  // 정상으로 읽었고 이미 닫힘이면 표지를 지운다. 그 밖에 닫을 탭이 없는 상태(열지 않음 등)는 표지를 건드리지 않는다.
-  if (tab.state === 'closed') { forgetOpenTab(home, dir); return null; }
+  // 정상으로 읽었고 이미 닫힘이면 로티를 부르지 않고 표지를 지운다 — 그 기록이 표지가 가리키는 바로 그 탭의 것일 때만이다
+  // (기록의 탭 id가 정상 형식이고 표지의 id와 정확히 같다). 아니면 표지를 남기고 까닭을 돌려준다.
+  // 그 밖에 닫을 탭이 없는 상태(열지 않음 등)는 표지를 건드리지 않는다.
+  if (tab.state === 'closed') {
+    if (markerId(home, dir).kind === 'absent') return null;
+    const kept = tab.id ? forgetClosedTab(home, dir, tab.id) : tab.idWhy;
+    return kept ? {tab: 'close-skipped', tabReason: kept} : null;
+  }
   const id = RETRYABLE.has(tab.state) ? tab.id : null;
   if (!id) return null;
   let result;
@@ -267,8 +302,10 @@ export function closeKeptTab({home, env, dir, rottie}) {
   } catch (error) {
     result = {tab: 'close-skipped', tabReason: reasonOf(error)};
   }
-  if (result.tab === 'closed') forgetOpenTab(home, dir);
-  else rememberOpenTab(home, dir, id);
+  // 닫은 것은 tab.json의 그 탭(id)이다. 표지가 그 탭의 것일 때만 지우고, 다른 탭 id의 표지는 건드리지 않는다(덮어쓰지도 않는다).
+  const marker = markerId(home, dir);
+  if (result.tab === 'closed') forgetClosedTab(home, dir, id);
+  else if (marker.kind === 'absent' || (marker.kind === 'id' && marker.id === id)) rememberOpenTab(home, dir, id);
   return result;
 }
 

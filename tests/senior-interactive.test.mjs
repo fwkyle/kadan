@@ -464,6 +464,68 @@ test('탭 기록(tab.json)을 한 번 읽지 못해도 표지를 지우지 않�
   assert.deepEqual(fs.readdirSync(dir).filter(name => name.endsWith('.tmp')), [], '임시 파일이 남지 않는다');
 });
 
+test('닫힘 기록이어도 탭 id가 없거나 형식이 틀리거나 표지와 다르면 표지를 지우지 않는다 — 이유를 보이고, 기록이 돌아오면 그 탭을 닫는다. 같은 id의 닫힘만 표지를 지운다(재검수 2)', {skip}, async t => {
+  const f = fixture(t, {seniors: [ASTRA]});
+  const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
+  const calls = [];
+  const rottie = argv => { calls.push([argv[1], argv[argv.indexOf('--terminal') + 1]]); if (argv[1] === 'show') throw Object.assign(new Error('없다'), {code: 'ROTTIE_TERMINAL_NOT_FOUND', effect: 'none'}); return {ok: true, result: {}}; };
+  const cleanup = flags => seniorCommand(['cleanup'], flags, {home: f.home, by: 'qa-슈퍼감독', env, rottie});
+  const markers = () => { try { return fs.readdirSync(path.join(f.home, OPEN_TABS_DIR)).sort(); } catch { return []; } };
+  // 끝난 호출의 세션(살려 둘지 끌지는 사례마다 정한다)과 열린 탭·표지.
+  const seed = (n, alive) => {
+    const name = `senior-shape-${n}`, ask = `ask-shape-${n}`, dir = path.join(f.home, 'advice', ask, '1-codex-m');
+    fs.mkdirSync(dir, {recursive: true});
+    f.tmux(['new-session', '-d', '-s', name, 'exec /bin/sleep 300']);
+    f.tmux(['set-option', '-t', `=${name}:`, '@kadan_senior_ask', ask]);
+    f.tmux(['set-option', '-t', `=${name}:`, '@kadan_senior_dir', dir]);
+    const panePid = f.tmux(['display-message', '-p', '-t', `=${name}:`, '#{pane_pid}']).trim();
+    const at = new Date(Date.UTC(2026, 10, 19, 0, n)).toISOString();
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({session: name, dir, runner: 'codex', home: f.home, socket: f.tmux.socket, askId: ask,
+      panePid, ownerPid: process.pid, expiresAt: Date.now() + 600_000, model: 'm', createdAt: at, endedAt: at, keptAt: at, endReason: 'ok'}));
+    fs.writeFileSync(path.join(dir, 'tab.json'), JSON.stringify({state: 'opened', rottieTerminalId: `tab-${n}`}));
+    rememberOpenTab(f.home, dir, `tab-${n}`);
+    if (!alive) f.tmux(['kill-session', '-t', `=${name}`]);
+    return {name, dir, tabFile: path.join(dir, 'tab.json'), marker: `${ask}--1-codex-m.json`};
+  };
+  f.tmux(['start-server', ';', 'set-option', '-s', 'exit-empty', 'off']); // 마지막 세션을 끈 뒤에도 같은 소켓에서 다음 사례를 잇는다
+  // (가) 표지 훑기: 세션이 이미 없는 탭. 재검수 재현의 세 경우.
+  const samples = [[{state: 'closed'}, '탭 기록에 탭 id가 없음'], [{state: 'closed', rottieTerminalId: ['tab-2']}, '탭 기록의 탭 id 형식이 다름'],
+    [{state: 'closed', rottieTerminalId: 'different-tab'}, '표지의 탭 id가 탭 기록과 다름']];
+  for (const [index, [sample, reason]] of samples.entries()) {
+    const seat = seed(index + 1, false);
+    const good = fs.readFileSync(seat.tabFile, 'utf8'), before = calls.length;
+    fs.writeFileSync(seat.tabFile, JSON.stringify(sample));
+    for (const flags of [{'dry-run': true}, {}]) {
+      const out = await cleanup(flags);
+      assert.ok(out.includes(`탭 둠  (세션 줄 밖의 탭)  탭 tab-${index + 1}  ${seat.dir}  — 닫지 않음: ${reason}`), out);
+    }
+    assert.equal(calls.length, before, '닫힘 기록으로는 로티를 부르지 않는다');
+    assert.ok(markers().includes(seat.marker), `${reason}: 표지를 지우지 않는다`);
+    // 원래의 열린 탭 기록이 돌아오면 다음 정리가 그 탭을 닫고 표지를 지운다.
+    fs.writeFileSync(seat.tabFile, good);
+    assert.ok((await cleanup({})).includes(`탭 닫음  (세션 없음)  탭 tab-${index + 1}  `));
+    assert.deepEqual(calls.slice(before), [['close', `tab-${index + 1}`], ['show', `tab-${index + 1}`]]);
+    assert.ok(!markers().includes(seat.marker));
+  }
+  // (나) 세션 줄에서 바로 정리하는 길: 끝난 호출의 살아 있는 세션을 끄면서 그 탭 기록이 '다른 탭의 닫힘'이면 표지를 남기고 이유를 보인다.
+  const kept = seed(4, true), mark = calls.length;
+  fs.writeFileSync(kept.tabFile, JSON.stringify({state: 'closed', rottieTerminalId: 'different-tab'}));
+  const closing = await cleanup({});
+  assert.match(closing, /끔 {2}senior-shape-4 .*— 탭 닫지 않음: 표지의 탭 id가 탭 기록과 다름 · 표지를 남겼다/u);
+  assert.equal(calls.length, mark); assert.ok(markers().includes(kept.marker)); assert.ok(!f.sessions().includes(kept.name));
+  fs.writeFileSync(kept.tabFile, JSON.stringify({state: 'opened', rottieTerminalId: 'tab-4'}));
+  assert.ok((await cleanup({})).includes('탭 닫음  (세션 없음)  탭 tab-4  '));
+  assert.deepEqual(calls.slice(mark), [['close', 'tab-4'], ['show', 'tab-4']]); assert.deepEqual(markers(), []);
+  // (다) 반대 대조: 표지와 같은 id의 닫힘은 로티를 부르지 않고 표지를 지운다 — 훑기와 세션 줄 길 모두.
+  const same = seed(5, false), sameKept = seed(6, true), count = calls.length;
+  fs.writeFileSync(same.tabFile, JSON.stringify({state: 'closed', rottieTerminalId: 'tab-5'}));
+  fs.writeFileSync(sameKept.tabFile, JSON.stringify({state: 'closed', rottieTerminalId: 'tab-6'}));
+  assert.match(await cleanup({'dry-run': true}), /끌 세션 1개, 둘 세션 0개$/u);
+  assert.equal(markers().length, 2, '미리보기는 표지를 지우지 않는다');
+  assert.match(await cleanup({}), /끈 세션 1개, 둔 세션 0개$/u);
+  assert.equal(calls.length, count, '같은 id의 닫힘에는 로티 호출 0회'); assert.deepEqual(markers(), []);
+});
+
 test('정리 명령 --dry-run은 빈 홈에서도 파일을 하나도 만들지 않는다(검수 발견 3)', {skip}, () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kse-')));
   const env = {...process.env, KADAN_HOME: home, KADAN_SOCKET: `ke${process.pid}x${++seq}`, KADAN_ROLE: 'qa-슈퍼감독'};
