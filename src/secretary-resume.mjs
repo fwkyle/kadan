@@ -160,8 +160,11 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
 // 세션을 먼저 만든 뒤에만 부르고, 탭이 안 열려도(없음·실패·시간 초과) 시작은 성공이며 숨김으로 기록한다.
 // 실행 모델 설정에 비서 자리가 있으면 저장된 명령의 모델·강도 값만 그 값으로 바꿔 연다(secretary-settings.mjs).
 // onSettings(결과)는 세션을 만든 뒤 한 번 불린다. 기본은 적용하지 못한 이유를 표준 오류에 한 줄 낸다.
+// settingsPinned: 호출자가 이미 확인을 마친 자리 값(secretaryCommandFromSettings의 pinned). 주면 설정을 다시 읽지 않고 그 값으로 연다.
+// restart 비서 --model-from-settings만 넘긴다. 그 밖의 길(평소 restart·up 복원)은 여는 순간의 설정을 읽는다.
 export function resumeSecretary({home, floor, startNew, read = () => readSystemLedger(home),
-  record = entry => appendLedger(entry, home), startExtra = {}, openTab = null, onSettings = warnSecretarySkip} = {}) {
+  record = entry => appendLedger(entry, home), startExtra = {}, openTab = null, onSettings = warnSecretarySkip,
+  settingsPinned = null} = {}) {
   return withRecoveryLock(home, 'kadan-비서', () => {
     if (floor.alive('kadan-비서')) return 'reused';
     const entries = read();
@@ -173,7 +176,7 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
     assertCheckpointMatches(saved, start);
     const window = currentRottieWindow(entries, start.session);
     const savedCommand = dedupeResumeCommand(saved.command); // 이미 겹쳐 쌓인 체크포인트도 한 벌로 낫는다
-    const fromSettings = secretaryCommandFromSettings({home, command: savedCommand});
+    const fromSettings = secretaryCommandFromSettings({home, command: savedCommand, pinned: settingsPinned});
     const command = withInlineScreen(fromSettings.command); // 옛 체크포인트에도 인라인 화면을 붙인다
     const evidence = floor.create({session: start.session, role: start.role,
       cwd: saved.cwd, cmd: command});

@@ -10,7 +10,7 @@ import {checkpointSecretary, resumeSecretary} from '../src/secretary-resume.mjs'
 import {commandWords, launchIdentityOf} from '../src/ai-identity.mjs';
 import {inspectRecovery, restoreRecovery} from '../src/recovery.mjs';
 import {restartRole} from '../src/restart.mjs';
-import {DEFAULT_FAMILIES} from '../src/runner-settings.mjs';
+import {DEFAULT_FAMILIES, checkChoice, readSettings} from '../src/runner-settings.mjs';
 
 const LUNA = 'codex --model gpt-6-luna -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox';
 const SOL = {runner: 'codex', model: 'gpt-6-sol', effort: 'medium'};
@@ -26,21 +26,24 @@ const BEFORE = {
 };
 
 const settingsFile = home => path.join(home, 'runner-settings.json');
-function writeSettings(home, secretary) {
-  fs.writeFileSync(settingsFile(home), JSON.stringify({version: 1, revision: 7, activePreset: 'A',
+const CODEX_LISTED = {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"',
+  models: ['gpt-6-luna', 'gpt-6-sol'].map(model => ({model, efforts: ['medium', 'high']}))};
+// codex: 실행기 표의 codex 줄(기본은 등록 목록에 luna·sol, 강도 medium·high). revision: 설정 버전.
+function writeSettings(home, secretary, {codex = CODEX_LISTED, revision = 7} = {}) {
+  fs.writeFileSync(settingsFile(home), JSON.stringify({version: 1, revision, activePreset: 'A',
     families: DEFAULT_FAMILIES, blocked: [],
     runners: {
-      codex: {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"',
-        models: ['gpt-6-luna', 'gpt-6-sol'].map(model => ({model, efforts: ['medium', 'high']}))},
+      codex,
       claude: {spawn: 'claude --model {model} --effort {effort}', models: [{model: 'claude-test', efforts: ['high']}]},
     },
     presets: {A: {label: '시험', roles: secretary ? {secretary} : {}}}}));
 }
 
 // slot: undefined면 설정 파일 없음, null이면 파일은 있고 비서 자리만 비어 있음.
-function fixture({slot, startCmd = LUNA} = {}) {
+// codex: 실행기 표의 codex 줄을 바꿀 때. beforeStop(home): restart가 끄기 직전 확인하는 순간에 끼워 넣을 일.
+function fixture({slot, startCmd = LUNA, codex, beforeStop = () => {}} = {}) {
   const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'secretary-setting-'));
-  if (slot !== undefined) writeSettings(home, slot);
+  if (slot !== undefined) writeSettings(home, slot, {codex});
   const transcript = path.join(home, 'rollout-exact.jsonl');
   fs.writeFileSync(transcript, [
     {type: 'session_meta', payload: {id: 'exact-conversation', cwd: home}},
@@ -61,7 +64,7 @@ function fixture({slot, startCmd = LUNA} = {}) {
   const record = entry => entries.push(entry);
   const deps = {home, floor, read: () => entries, record, findTranscript: () => transcript,
     startNew: () => assert.fail('새 비서를 만들면 안 된다'), pendingCards: () => [], closeWindow: () => ({}),
-    openWindow: () => ({method: 'manual'}), beforeStop: () => {}};
+    openWindow: () => ({method: 'manual'}), beforeStop: () => beforeStop(home)};
   const recoveryDeps = {home, entries, read: () => entries, record, livePane: () => pane, create: floor.create,
     secretaryConversation: () => 'exact-conversation', warn: line => warnings.push(line),
     spawn: () => ({status: 0, stdout: JSON.stringify({ok: true, result: {terminal: {id: `tab-${++tabs}`}}})})};
@@ -212,8 +215,10 @@ test('띄운 명령이 체크포인트에 남는다: 로티 복원 뒤 up 복원
 });
 
 test('설정 자리의 강도가 비어 있으면 강도는 바꾸지 않는다', () => {
+  // 강도 없는 값은 강도 자리가 없는 실행기 틀에서만 저장된다(저장 단계 checkChoice와 같은 판정). 그 틀로 본다.
+  const codex = {spawn: 'codex --model {model}', models: ['gpt-6-luna', 'gpt-6-sol'].map(model => ({model, efforts: []}))};
   for (const name of PATHS) {
-    const f = fixture({slot: {runner: 'codex', model: 'gpt-6-sol'}});
+    const f = fixture({slot: {runner: 'codex', model: 'gpt-6-sol'}, codex});
     f.run[name]();
     assertChoice(f.launched[0], {model: 'gpt-6-sol', effort: 'high'});
     const start = f.latestStart();
@@ -257,4 +262,104 @@ test('restart 비서 --model-from-settings: 자리가 비었거나 쓸 수 없�
   const plain = fixture({slot: SOL});
   assert.equal(plain.run.restart().modelFromSettings.changed, true);
   assert.deepEqual(plain.launched, f.launched);
+});
+
+// ---- 2라운드(검수 exec-7ecc53fa 중요 1): 다시 열 때도 저장 단계와 같은 판정(checkChoice)을 쓴다 ----
+const UNLISTED = {runner: 'codex', model: 'gpt-not-in-catalog', effort: 'medium'};
+const UNSUPPORTED = {runner: 'codex', model: 'gpt-6-sol', effort: 'xhigh'};
+// 강도가 필요한 틀인데 강도가 없는 값. 저장 단계가 거절하므로 다시 열 때도 쓰지 않는다.
+const NO_EFFORT = {runner: 'codex', model: 'gpt-6-sol'};
+
+for (const name of PATHS) {
+  test(`${name}: 목록에 없는 모델·지원하지 않는 강도는 쓰지 않고 저장된 명령 그대로 연다`, () => {
+    for (const slot of [UNLISTED, UNSUPPORTED, NO_EFFORT]) {
+      const f = fixture({slot});
+      assert.throws(() => checkChoice(readSettings(f.home), 'secretary', slot), /고를 수 없는 모델|지원하지 않는 강도/,
+        '저장 단계가 거절하는 값이다');
+      f.run[name]();
+      assert.deepEqual(f.launched, [BEFORE[name]], JSON.stringify(slot));
+      const start = f.latestStart();
+      assert.equal(start.modelFromSettingsSkipped, 'choice-rejected');
+      assert.equal('modelFromSettings' in start, false);
+    }
+  });
+
+  test(`${name}: 모델 목록 파일을 읽지 못하면 확인 못 한 값을 쓰지 않고 저장된 명령 그대로 연다`, t => {
+    const prior = process.env.KADAN_CODEX_MODELS_CACHE;
+    t.after(() => {
+      if (prior === undefined) delete process.env.KADAN_CODEX_MODELS_CACHE; else process.env.KADAN_CODEX_MODELS_CACHE = prior;
+    });
+    // codex처럼 모델 목록을 파일에서 읽는 실행기 줄. 운영 설정의 꼴이다.
+    const codex = {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"', catalog: 'codex-models-cache'};
+    const cacheOf = home => path.join(home, 'models_cache.json');
+    const models = {models: [{slug: 'gpt-6-sol', supported_reasoning_levels: [{effort: 'medium'}, {effort: 'high'}]}]};
+    for (const [label, prepare, reason] of [
+      ['파일 없음', () => {}, 'catalog-unreadable'],
+      ['깨진 파일', home => fs.writeFileSync(cacheOf(home), '{"models": ['), 'catalog-unreadable'],
+      ['목록 모양이 아님', home => fs.writeFileSync(cacheOf(home), '{"other": 1}'), 'catalog-unreadable'],
+    ]) {
+      const f = fixture({slot: SOL, codex});
+      process.env.KADAN_CODEX_MODELS_CACHE = cacheOf(f.home);
+      prepare(f.home);
+      f.run[name]();
+      assert.deepEqual(f.launched, [BEFORE[name]], label);
+      assert.equal(f.latestStart().modelFromSettingsSkipped, reason, label);
+    }
+    // 목록을 읽을 수 있으면 그 목록으로 판정한다: 있는 모델·강도는 쓰고, 없는 강도는 쓰지 않는다.
+    const ok = fixture({slot: SOL, codex});
+    process.env.KADAN_CODEX_MODELS_CACHE = cacheOf(ok.home);
+    fs.writeFileSync(cacheOf(ok.home), JSON.stringify(models));
+    ok.run[name]();
+    assertChoice(ok.launched[0], {model: 'gpt-6-sol', effort: 'medium'});
+    const low = fixture({slot: {...SOL, effort: 'low'}, codex});
+    process.env.KADAN_CODEX_MODELS_CACHE = cacheOf(low.home);
+    fs.writeFileSync(cacheOf(low.home), JSON.stringify(models));
+    low.run[name]();
+    assert.deepEqual(low.launched, [BEFORE[name]]);
+    assert.equal(low.latestStart().modelFromSettingsSkipped, 'choice-rejected');
+  });
+}
+
+test('restart 비서 --model-from-settings: 저장 단계가 거절하는 값이면 끄기 전에 거절한다', () => {
+  for (const slot of [UNLISTED, UNSUPPORTED, NO_EFFORT]) {
+    const f = fixture({slot});
+    assert.throws(() => f.run.restart({'model-from-settings': true}), /비서 자리 값을 적용할 수 없다.*기존 세션은 그대로 둔다/);
+    assert.equal(f.stops(), 0, JSON.stringify(slot));
+    assert.equal(f.launched.length, 0);
+  }
+});
+
+// ---- 2라운드(중요 2): --model-from-settings는 끄기 전에 확인한 값을 그대로 이어 써서 연다 ----
+test('restart 비서 --model-from-settings: 끄기 전 확인과 끄기 사이에 설정이 바뀌어도 확인한 값으로 연다', () => {
+  const edits = {
+    '자리를 비움': home => writeSettings(home, null, {revision: 8}),
+    '다른 값으로 바꿈': home => writeSettings(home, {runner: 'codex', model: 'gpt-6-luna', effort: 'medium'}, {revision: 8}),
+    '설정 파일이 깨짐': home => fs.writeFileSync(settingsFile(home), '{"version": 1,'),
+    '설정 파일이 사라짐': home => fs.renameSync(settingsFile(home), settingsFile(home) + '.moved'),
+  };
+  for (const [label, edit] of Object.entries(edits)) {
+    const f = fixture({slot: SOL, beforeStop: edit});
+    const receipt = f.run.restart({'model-from-settings': true});
+    assert.equal(f.stops(), 1, label);
+    assertChoice(f.launched[0], {model: 'gpt-6-sol', effort: 'medium'});
+    const start = f.latestStart();
+    assert.deepEqual([start.modelFromSettings, start.settingsRevision, start.settingsPreset, start.runnerChoice],
+      [true, 7, 'A', SOL], `${label}: 원장에는 끄기 전에 확인한 설정 버전이 남는다`);
+    assert.equal('modelFromSettingsSkipped' in start, false, label);
+    assert.deepEqual(receipt.modelFromSettings, {changed: true, model: 'gpt-6-sol', effort: 'medium',
+      previousModel: 'gpt-6-luna', previousEffort: 'high', revision: 7, preset: 'A'}, label);
+    assertChoice(JSON.parse(fs.readFileSync(path.join(f.home, 'secretary-resume.json'), 'utf8')).command,
+      {model: 'gpt-6-sol', effort: 'medium'});
+  }
+});
+
+test('옵션 없는 restart 비서는 다시 여는 순간의 설정을 읽는다(끄기 직전에 바뀌면 바뀐 값)', () => {
+  const cleared = fixture({slot: SOL, beforeStop: home => writeSettings(home, null, {revision: 8})});
+  cleared.run.restart();
+  assert.deepEqual(cleared.launched, [BEFORE.restart]);
+  assert.equal('modelFromSettings' in cleared.latestStart(), false);
+  const changed = fixture({slot: null, beforeStop: home => writeSettings(home, SOL, {revision: 8})});
+  changed.run.restart();
+  assertChoice(changed.launched[0], {model: 'gpt-6-sol', effort: 'medium'});
+  assert.equal(changed.latestStart().settingsRevision, 8);
 });

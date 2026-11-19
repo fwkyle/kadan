@@ -233,7 +233,7 @@ function settingsSwap({settings, harness, model, launch, kept}) {
 // 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
 function restartSecretary({home, role, session, floor, force, reason, expectPid, deps, requireSettings = false}) {
   // 확인·체크포인트·끄기는 잠금 안에서, 다시 열기는 resumeSecretary의 잠금 안에서 한다(둘 사이에 kadan up이 끼어들어도 한 번만 열린다).
-  const {pending, previous} = withRecoveryLock(home, session, () => {
+  const {pending, previous, pinned} = withRecoveryLock(home, session, () => {
     const entries = deps.read();
     const start = ensureReady({role, session, floor, entries, deps, expectPid});
     const generation = restartGeneration(entries, role);
@@ -242,8 +242,12 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     // 복원 정보를 못 만들면(codex가 아닌 비서·래퍼 명령 등) 지원하지 않는 역할을 끄지 않는다.
     if (!checkpoint) fail('이 비서는 기억 유지 restart를 지원하지 않는다 — 복원 정보(secretary-resume.json)를 만들 수 없다(codex 비서만 지원). 기존 세션은 그대로 둔다');
     // --model-from-settings: 다시 열 때와 같은 함수로 미리 입혀 보고, 설정값을 쓸 수 없으면 끄기 전에 거절한다.
+    // 여기서 확인한 자리 값과 설정 버전(planned.pinned)을 다시 여는 단계에 그대로 넘긴다. 끈 뒤 설정을 다시 읽으면
+    // 그 사이 자리가 비워지거나 바뀌었을 때 옛 값으로 조용히 성공해 이 옵션의 약속이 깨진다(2026-11-19 검수 exec-7ecc53fa).
+    // 끄기 직전에 한 번 더 읽어 거절하는 길은 쓰지 않는다: 안전 지점 확인과 floor.stop 사이에는 아무 단계도 두지 않는다.
+    let planned = null;
     if (requireSettings) {
-      const planned = secretaryCommandFromSettings({home, command: dedupeResumeCommand(checkpoint.command)});
+      planned = secretaryCommandFromSettings({home, command: dedupeResumeCommand(checkpoint.command)});
       if (planned.skipped) {
         const why = SECRETARY_SKIP_REASONS[planned.skipped] ?? planned.skipped;
         fail(`실행 모델 설정의 비서 자리 값을 적용할 수 없다(${why}) — 기존 세션은 그대로 둔다`);
@@ -257,14 +261,14 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
     stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
       confirm: force ? null : () => confirmBeforeStop(session, deps, false), conversation: {conversationSkipped: 'infrastructure'}});
-    return {pending: open, previous: startDigest(start)};
+    return {pending: open, previous: startDigest(start), pinned: planned?.pinned ?? null};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
   // 다시 여는 명령에는 실행 모델 설정의 비서 자리 값이 입혀진다(resumeSecretary). 그 결과를 받아 호출자에게 알린다.
   let fromSettings = null;
   const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
     startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다'),
-    onSettings: value => { fromSettings = value; },
+    onSettings: value => { fromSettings = value; }, settingsPinned: pinned,
     ...(deps.openSecretaryTab ? {openTab: deps.openSecretaryTab} : {})});
   if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
   const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);

@@ -57,7 +57,8 @@ console.log('›');${WATCH_PARENT}`, {mode: 0o700});
     {encoding: 'utf8', timeout: 60000, env: {...process.env, KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux'}});
   const writeSettings = secretary => fs.writeFileSync(path.join(home, 'runner-settings.json'), JSON.stringify({
     version: 1, revision: 4, activePreset: 'A', families: DEFAULT_FAMILIES, blocked: [],
-    runners: {codex: {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"', models: []}},
+    runners: {codex: {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"',
+      models: [{model: 'gpt-6-sol', efforts: ['medium', 'high']}]}},
     presets: {A: {label: '시험', roles: secretary ? {secretary} : {}}}}));
   const latestStart = () => readLedger(home).findLast(e => e.kind === 'start' && e.session === SESSION);
   return {home, restart, writeSettings, waitLaunch, launchCount, latestStart};
