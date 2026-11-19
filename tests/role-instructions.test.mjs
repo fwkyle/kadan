@@ -176,6 +176,10 @@ test('conductor 지침: 정상 발령 후 AI 반복 폴링·문맥 유입 금지
   // 한 실행을 기다리는 프로그램의 wait는 허용, AI의 반복 조회와 구분
   assert.match(r.instructions,/외부 대기 프로그램 자체는 허용/);
   assert.match(r.instructions,/반복 조회하지 않는다/);
+  // 한도 교대 전 확인(이어가기 1회 → 실패면 교대)은 감독 전용이다
+  assert.match(r.instructions,/0\. 교대 전 확인/);
+  assert.match(r.instructions,/이어가기 1회 → 실패면 교대/);
+  assert.doesNotMatch(f.compose({profile:'worker'}).instructions,/0\. 교대 전 확인/);
   // conductor 템플릿 전용 규칙 — 템플릿에서 문장이 빠지면 위 매칭이 실패한다
   assert.doesNotMatch(f.compose({profile:'worker'}).instructions,/대화 문맥으로 가져오지 않는다/);
 });
