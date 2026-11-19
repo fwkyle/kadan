@@ -3,12 +3,17 @@ import {createHash} from 'node:crypto';
 export const RETRY_DELAYS = [60_000, 120_000, 180_000];
 const hardLimit = /insufficient_quota|billing_hard_limit|daily.{0,30}(quota|limit)|requests per day|\bRPD\b|credit.{0,20}(exhausted|insufficient)|잔액 부족|일일.{0,10}한도/iu;
 
+// 실제 사용 한도 줄(일일·주간·세션·사용). 낱말표의 usage-limit이 이 식을 그대로 쓴다(watch-stop-phrases.mjs) — 줄 맨 앞(표시 기호 하나 허용)만 본다.
+export const USAGE_LIMIT_LINE = /^\s*(?:[■✕×⏺⎿●✗⚠]\s+)?You['’]ve hit your (?:[\w-]+ ){0,2}limit\b/iu;
+
 // Only a terminal CLI error followed by an empty prompt; tool/API output is not a resume signal.
 export function terminal429(screen, now) {
   if (typeof screen !== 'string') return null;
   const lines = screen.split('\n');
   const index = lines.findLastIndex(line => /^\s*[■✕×]\s*.*(?:exceeded retry limit|429 Too Many Requests)/iu.test(line));
   if (index < 0) return null;
+  // 그 429보다 아래(더 최근)에 사용 한도 줄이 있으면 지금의 오류는 사용 한도다 — 지난 429를 다시 재개하지 않는다(재개해도 같은 한도에 걸린다).
+  if (lines.slice(index + 1).some(line => USAGE_LIMIT_LINE.test(line))) return null;
   const tail = lines.slice(index).join('\n');
   if (!/429|Too Many Requests/iu.test(tail)) return null;
   if (/Working\s*\(|esc to interrupt|Reconnecting|Retrying|Messages to be submitted|KADAN:DONE/iu.test(tail)) return null;
