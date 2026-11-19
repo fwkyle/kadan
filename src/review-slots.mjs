@@ -204,7 +204,8 @@ function temporary(pool, holder, sha, reason) {
 function findLeases(home, {target, forKey}) {
   const want = target ? real(target) : null;
   return allPools(home).flatMap(pool => leasesOf(pool).map(x => ({...x, pool})))
-    .filter(x => want ? real(x.lease.path ?? '') === want : x.lease.for === forKey);
+    // 경로로 찾을 때 path가 없는(자리를 준비하는 중인) 임차는 뺀다. real('')가 현재 폴더가 되어 모두 일치하기 때문이다.
+    .filter(x => want ? typeof x.lease.path === 'string' && x.lease.path !== '' && real(x.lease.path) === want : x.lease.for === forKey);
 }
 
 function release(target, flags, ctx) {
