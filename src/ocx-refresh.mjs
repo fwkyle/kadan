@@ -31,9 +31,15 @@ const entryAt = (entry) => (Number.isFinite(entry?.at) ? entry.at : Date.parse(e
 // 공급자 접두어(`kimi/…`·`zai/…`·`command-code/…`)는 openai가 아니다. 위 꼴이 아닌 이름(kimi-k2.5 등)은 모르는 이름이라 부르지 않는다.
 export const OPENAI_MODEL_NAME = /^(?:gpt-|o[134](?:-|$)|codex-)/iu;
 
+// 지금 세대를 띄운 start 기록: 그 역할의 마지막 start 중 재사용 기록을 뺀 것. 살아 있는 세션을 `kadan start`로 다시 부르면 명령 없는 start
+// (`reuseOf`가 그 세대를 띄운 기록을 가리킴)가 붙는데, 이 기록은 세대를 바꾸지 않는다 — ocx 대상 판단(codexBasis)과 교대 안내
+// (watch-limit-fallback.mjs)가 같은 기록을 읽도록 읽는 법을 여기 한 곳에 둔다.
+export const generationStart = (entries, role) => (entries ?? []).findLast(
+  (e) => e?.kind === "start" && e.role === role && !e.reuseOf && !e.reused);
+
 // 반환: {target:true, basis} | {target:false, reason:'not-codex'} | {target:false, reason:'other-provider'|'unknown-provider', basis}
 export function codexBasis(entries, role) {
-  const start = (entries ?? []).findLast((e) => e?.kind === "start" && e.role === role);
+  const start = generationStart(entries, role);
   if (!start) return { target: false, reason: "not-codex" };
   const word = String(start.harness ?? "").split("/").pop();
   if (!/codex/iu.test(word)) return { target: false, reason: "not-codex" };
@@ -92,6 +98,14 @@ export function createOcxRefresher({ record = () => {}, env = process.env, run =
 }
 
 const summary = (entry) => ({ outcome: entry.outcome, exitCode: entry.exitCode ?? null, usage: entry.usage ?? {} });
+
+// 새로 받은 사용량이 '아직 한도'인지: 받기에 성공했고 숫자가 있고 모두 낮은 것은 아닐 때만 true.
+// 실패·시간 초과·없음·숫자 미확인·대상 아님·결과 없음(null)은 모두 false다 — 교대 안내(watch-limit-fallback.mjs)는 이때 붙이지 않는다.
+export function ocxStillLimited(result) {
+  if (result?.outcome !== "ok") return false;
+  const values = [result.usage?.fiveHour, result.usage?.weekly].filter((v) => v !== undefined);
+  return values.length > 0 && !values.every((v) => v < OCX_LOW_USAGE_PERCENT);
+}
 
 // 경보 본문에 붙는 한 줄. 쉬운 말로, 감독이 할 일까지 적는다.
 export function ocxAlertLine(result) {
