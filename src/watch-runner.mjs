@@ -248,8 +248,8 @@ export async function runWatch({
   // 일시정지 중 작업 감지: 지난 순회 상태와, 이미 경보를 낸 hold(카드@역할@hold 진입 시각). 메모리에만 둔다.
   let holdWorkingStates = new Map();
   const holdWorkingAlerted = new Set();
-  // 대기 표시 실행의 정지 화면 검사: 지난 순회에 대기 중이면서 살아 있던 세션(죽음 판정용). 메모리에만 둔다.
-  let waitingAlive = new Set();
+  // 대기 표시 실행의 정지 화면 검사: 지난 순회에 살아 있던 대기 세션과, 사라진 세션에 한 번 내린 판정. 메모리에만 둔다.
+  let waitingSeen = {alive:new Set(), judged:new Map()};
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   // 복원용 첫 원장 읽기도 기기 메모리 관측·울림 뒤로 둔다.
@@ -645,9 +645,9 @@ export async function runWatch({
     // 새 화면 읽기·AI 호출·키 전송이 없고, 자동 재개·큐 재개·정체 판정은 지금처럼 scope.sessions만 본다.
     // 관찰 실패 주기에는 판정하지 않는다(열린 경보는 아래 observationError 이월이 그대로 둔다).
     const waitingStops=observationError||!scope
-      ? {alive:waitingAlive,alerts:[]}
-      : assessWaitingStops(waitingAlive,scope.waitingSessions,roles.observations,{entries,now:cycleAt,active:activeAlerts});
-    waitingAlive=waitingStops.alive;
+      ? {...waitingSeen,alerts:[]}
+      : assessWaitingStops(waitingSeen,scope.waitingSessions,roles.observations,{entries,active:activeAlerts});
+    waitingSeen={alive:waitingStops.alive,judged:waitingStops.judged};
     // 백그라운드 셸 표시로 멈춤을 늦추는 중인 세션(held)도 화면이 그대로라서 나는 정체 후보(경보·정체 판정 AI)에서 뺀다.
     // 멈춤이 4분에 먼저 나가 5분의 정체를 대신하던 자리라, 멈춤만 늦추면 정체가 그 자리를 채운다. 상한이 지나면 멈춤이 나가고
     // 정체는 지금처럼 멈춤 세션에서 빠진다. 죽음·끊김·한도·완료후보는 이 집합과 무관하다.
@@ -1011,19 +1011,46 @@ export async function runWatch({
         superRole,
         parents
       );
-      // 대기 표시 중 정지는 그 실행을 발령한 역할이 결과를 기다리는 쪽이라 그 역할에게 먼저 보낸다(관계표의 직속 상위와
-      // 다를 수 있다: 다른 계열의 감독이 검수자에게 재판정을 맡긴 경우). 발령한 역할을 모르거나 그 세션이 살아 있지 않으면
-      // 기존 경로(직속 상위, 죽었으면 그 위)로 간다. 죽은 세션에 보내 알림이 조용히 사라지지 않게 한다.
-      const waitingDispatcher = alert.kind === '대기중정지' && !observationError
-        && alert.dispatcher && alert.dispatcher !== alert.role ? alert.dispatcher : null;
-      const dispatcherRoute = !waitingDispatcher ? null
-        : roles.liveSessions.has(`kadan-${waitingDispatcher}`)
-          ? {recipient:waitingDispatcher, basis:'dispatcher', skipped:[]}
-          : {...baseRoute, skipped:[`${waitingDispatcher}(발령한 역할 세션 없음)`, ...(baseRoute.skipped ?? [])]};
+      // 대기 표시 중 정지는 그 실행을 발령한 역할이 결과를 기다리는 쪽이라 그 역할에게 먼저 한 번 보낸다(관계표의 직속 상위와
+      // 다를 수 있다: 다른 계열의 감독이 검수자에게 재판정을 맡긴 경우). 발령한 역할은 이번 순회의 관측에서 세션이 살아 있고
+      // 창 PID가 원장에 등록된 PID와 같을 때만 고른다(이름만 같은 다른 프로세스에는 전송 보호기가 넣지 않는다).
+      // 아니거나 전달이 실패하면 아래 기존 경로(대기 실행 담당의 직속 상위, 죽었으면 그 위)로 간다 — 실패한 경보가 같은 id로
+      // 열린 채 직속 상위에 안 가는 일이 없게 한다. 발령한 역할이 직속 상위와 같으면 처음부터 기존 경로다(실패 승급 그대로).
+      const waitingDispatcher = alert.kind === '대기중정지' && !observationError && alert.dispatcher
+        && alert.dispatcher !== alert.role && alert.dispatcher !== baseRoute.recipient ? alert.dispatcher : null;
+      const dispatcherSeen = waitingDispatcher ? roles.observations.get(`kadan-${waitingDispatcher}`) : null;
+      let dispatcherSkipped = null;
+      if (waitingDispatcher && !(dispatcherSeen?.alive === true && dispatcherSeen.expectedPid != null
+        && String(dispatcherSeen.pid) === String(dispatcherSeen.expectedPid))) {
+        dispatcherSkipped = `${waitingDispatcher}(발령한 역할 세션 없음 또는 PID 불일치)`;
+      } else if (waitingDispatcher) {
+        const hopRoute = {recipient:waitingDispatcher, basis:'dispatcher', skipped:[]};
+        if (retry && !recordAlert(record, {...alert,route:hopRoute,held:false}, waitingDispatcher, false)) {
+          pendingAlerts.set(alert.id, alert);
+          continue;
+        }
+        let hop = 'ok';
+        try {
+          sendAlert(waitingDispatcher, itemizedAlert(alert, clockTime(cycleAt)), `alert:${alert.id}:${alert.level ?? ""}`,
+            workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode, alert.level);
+        } catch (error) {
+          hop = isNotificationHold(error) ? 'held' : error.delivery === "sent" ? 'sent' : null;
+          // 미룸도 '이미 들어감'도 아닌 실패는 직속 상위로 넘긴다(전달 여부를 모르는 실패 포함: 둘 다 받는 쪽이 아무도 못 받는 쪽보다 낫다).
+          if (!hop) dispatcherSkipped = `${waitingDispatcher}(발령한 역할 전달 실패: ${error.message})`;
+        }
+        if (hop) {
+          if (hop === 'held') pendingAlerts.set(alert.id, alert);
+          else { alertRecipients.set(alert.id, waitingDispatcher); deliveredRecipients.add(waitingDispatcher); }
+          recordAlert(record, {...alert,route:hopRoute,held:hop === 'held'}, waitingDispatcher, hop === 'ok');
+          print(`${message} → ${waitingDispatcher}${hop === 'held' ? ' 알림 미룸' : ''}`);
+          continue;
+        }
+      }
       // Autopilot Wingman 경로(PR F): 사용자로 갈 놀고 있음 2단·정체만 Wingman으로 돌린다. 스냅샷은 필요한 첫 경보에서 주기당 한 번만 만든다.
-      const route = dispatcherRoute ?? (baseRoute.recipient === USER_RECIPIENT && readAutopilotWingman && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
+      const routed = baseRoute.recipient === USER_RECIPIENT && readAutopilotWingman && (alert.kind === "정체" || (alert.kind === "놀고 있음" && alert.stage === 2))
         ? applyWingmanRoute({route: baseRoute, alert, autopilot: autopilotWingmanOnce(), liveSessions: observationError ? null : roles.liveSessions})
-        : baseRoute);
+        : baseRoute;
+      const route = dispatcherSkipped ? {...routed, skipped:[dispatcherSkipped, ...(routed.skipped ?? [])]} : routed;
       const recipient=route.recipient;
       let target = "stdout";
       // Wingman은 사용자 대신 받는 자리다: Wingman 전달이 확실히 실패하면 상신 대상은 원래 수신자(사용자)다. 관계표에 Wingman이 없어도 같다.

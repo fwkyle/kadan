@@ -46,10 +46,12 @@ export const STOP_PHRASES = [
   { id: "dns", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
     pattern: /getaddrinfo ENOTFOUND/iu, sample: "없음(사고표 E2)" },
   // codex 화면: `■ Selected model is at capacity. Please try a different model.` 뒤에 빈 입력창만 남는다
-  // (2026-11-18 대기 표시를 남긴 검수자가 이 화면에서 22시간 멈춘 사고). 정확한 문장만 읽는다 — 낱말 `capacity` 하나로는
-  // 판정하지 않는다(아래 OVERLOAD_PATTERN). 자동 재개는 붙이지 않고 직속 감독이 다시 보낼지·모델을 바꿀지 정한다.
+  // (2026-11-18 대기 표시를 남긴 검수자가 이 화면에서 22시간 멈춘 사고). 오류 표시로 시작하는 줄 전체가 이 문장일 때만 읽는다 —
+  // 낱말 `capacity`(아래 OVERLOAD_PATTERN), 다른 오류가 인용한 문장(`■ Could not read … "Selected model is at capacity".`),
+  // 뒤에 다른 말이 붙은 줄(`… at capacity planning stage.`)은 아니다. 일하는 중 거부용 넓은 검사(anyStopWordInBottom)에서도 뺀다.
+  // 자동 재개는 붙이지 않고 직속 감독이 다시 보낼지·모델을 바꿀지 정한다.
   { id: "model-capacity", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
-    pattern: /Selected model is at capacity/iu,
+    pattern: /^\s*[■✕×]\s+Selected model is at capacity\.\s+Please try a different model\.\s*$/iu,
     sample: "codex `■ Selected model is at capacity. Please try a different model.` (tests/fixtures/waiting-capacity-screens.json)" },
   { id: "sse-timeout", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
     pattern: /idle timeout waiting for SSE/iu, sample: "없음" },
@@ -62,7 +64,7 @@ export const STOP_PHRASES = [
 
 // 설명 AI(explain-diag.mjs)의 '모델 과부하' 낱말 모양. STOP_PHRASES에 넣지 않는다 — 넣으면 감시 경보가 새로 생기고,
 // `capacity`는 일반 문장에도 흔한 낱말이다. 감시 판정(WORKER_SIGNATURES·SUPERVISOR_ERROR_PATTERN 등)에는 쓰이지 않는다.
-// 감시가 읽는 것은 위 목록의 정확한 문장 하나(`model-capacity`)뿐이다.
+// 감시가 읽는 것은 위 목록의 오류 줄 전체 문장 하나(`model-capacity`)뿐이다.
 export const OVERLOAD_PATTERN = /overloaded|capacity/u;
 
 const withPattern = (scope) => STOP_PHRASES.filter((p) => p.pattern && p.scope.includes(scope));
@@ -248,7 +250,10 @@ export function currentStopPhrases(screen) {
 // 넓은 검사(일하는 중 거부 전용): 화면 아래 12줄 안에 목록 낱말이 하나라도 있으면 true. 덩어리·인용·코드 울타리 여부는 따지지 않는다.
 // 즉시 경보는 만들지 않는다 — (a) 일하는 중으로 분류하지 않고 (c) 정체 경로로 보내는 데만 쓴다.
 // 거부 쪽은 넓게: 잘못 걸리면 정상 인용이 정체 20분 뒤 감시AI 호출 하나로 가고, 잘못 통과시키면 429를 되풀이하며 멈춘 화면이 영원히 일하는 중으로 묻힌다.
+// 용량 초과 문장(model-capacity)은 이 넓은 검사에 넣지 않는다. 이 문장은 현재 오류 덩어리(즉시 경보)로만 읽는다 — 넓은 검사에 넣으면
+// 문장이 화면 아래에 보이는 동안 시계가 도는 정상 작업이 '일하는 중 아님'이 되어 정체 판정 AI가 불린다(2026-11-19 검수 발견 2).
+const BROAD_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES.filter((p) => p.id !== "model-capacity")), "giu");
 export function anyStopWordInBottom(screen, count = 12) {
   const lines = trimmedLines(screen).slice(-count);
-  return lines.some((line) => { WORKER_SIGNATURES.lastIndex = 0; return WORKER_SIGNATURES.test(line); });
+  return lines.some((line) => { BROAD_SIGNATURES.lastIndex = 0; return BROAD_SIGNATURES.test(line); });
 }
