@@ -37,6 +37,12 @@ export const STOP_PHRASES = [
     pattern: /502 Bad Gateway|Provider unreachable/iu, sample: "없음(사고표 E2)" },
   { id: "dns", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
     pattern: /getaddrinfo ENOTFOUND/iu, sample: "없음(사고표 E2)" },
+  // codex 화면: `■ Selected model is at capacity. Please try a different model.` 뒤에 빈 입력창만 남는다
+  // (2026-11-18 대기 표시를 남긴 검수자가 이 화면에서 22시간 멈춘 사고). 정확한 문장만 읽는다 — 낱말 `capacity` 하나로는
+  // 판정하지 않는다(아래 OVERLOAD_PATTERN). 자동 재개는 붙이지 않고 직속 감독이 다시 보낼지·모델을 바꿀지 정한다.
+  { id: "model-capacity", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
+    pattern: /Selected model is at capacity/iu,
+    sample: "codex `■ Selected model is at capacity. Please try a different model.` (tests/fixtures/waiting-capacity-screens.json)" },
   { id: "sse-timeout", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
     pattern: /idle timeout waiting for SSE/iu, sample: "없음" },
   { id: "compact-error", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
@@ -48,6 +54,7 @@ export const STOP_PHRASES = [
 
 // 설명 AI(explain-diag.mjs)의 '모델 과부하' 낱말 모양. STOP_PHRASES에 넣지 않는다 — 넣으면 감시 경보가 새로 생기고,
 // `capacity`는 일반 문장에도 흔한 낱말이다. 감시 판정(WORKER_SIGNATURES·SUPERVISOR_ERROR_PATTERN 등)에는 쓰이지 않는다.
+// 감시가 읽는 것은 위 목록의 정확한 문장 하나(`model-capacity`)뿐이다.
 export const OVERLOAD_PATTERN = /overloaded|capacity/u;
 
 const withPattern = (scope) => STOP_PHRASES.filter((p) => p.pattern && p.scope.includes(scope));

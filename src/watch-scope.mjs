@@ -25,7 +25,8 @@ export function resultOfDispatch(card, role, sent) {
 }
 
 // previous를 주면 이전 세대 소속이라 거른 발령을 거기 담는다(대시보드 "이전 세대 업무" 건수, owner-generation.mjs).
-function activeExecutions(cards, entries, parents, works, excludeWaiting, previous = null) {
+// held를 주면 대기 표시라서 뺀 실행을 거기 담는다(같은 한 번의 훑기. 정지 화면 검사 전용: watch-waiting-stop.mjs).
+function activeExecutions(cards, entries, parents, works, excludeWaiting, previous = null, held = null) {
   if (entries.some(entry => entry?.broken)) throw new Error('감시 대상 원장 읽기 실패');
   const identity=taskIdentity(cards);
   const facts = watchScopeFacts(entries, cards);
@@ -58,7 +59,10 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
     if (isPreviousOwner(generations, role, Object.hasOwn(sent, 'ownedAt') ? sent.ownedAt : sent.t)) { previous?.push({kind:'execution', key:card.key, role}); continue; }
     const waiting = card.activity === 'waiting' && card.activityRole === role && Date.parse(card.activityAt) >= Date.parse(sent.t);
     const awaitsConfirmation = waiting && resultAwaitsConfirmation(card, role, sent, handledBy(card, role, sent));
-    if (excludeWaiting && waiting && !awaitsConfirmation) continue;
+    if (excludeWaiting && waiting && !awaitsConfirmation) {
+      held?.push({role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), by:sent.by ?? null, card});
+      continue;
+    }
     tasks.push({kind:'send', role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), t:sent.t, ...(Object.hasOwn(sent,'ownedAt')?{ownedAt:sent.ownedAt}:{}),
       ...(awaitsConfirmation?{awaitsConfirmation:true}:{})});
   }
@@ -66,9 +70,16 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
 }
 
 // 작업자 화면 감시와 감독의 정기 응답 점검은 대기 조건이 다르다.
-export function buildWatchScope(cards, entries, parents = new Map(), works = []) {
-  const tasks = activeExecutions(cards, entries, parents, works, true);
-  return {sessions:new Set(tasks.map(e => `kadan-${e.role}`)), entries:tasks};
+// waiting:true면 대기 표시로 감시에서 뺀 실행을 waitingSessions로 함께 돌려준다(세션·역할·실행 키·발령한 역할·카드).
+// sessions·entries는 그대로라 자동 재개·큐 재개·정체 판정·감시 AI는 대기 세션을 보지 않는다. 감시 중인 다른 실행이 있는
+// 역할의 세션은 이미 sessions에 있으므로 waitingSessions에 넣지 않는다(같은 화면을 두 길로 보지 않는다).
+export function buildWatchScope(cards, entries, parents = new Map(), works = [], {waiting = false} = {}) {
+  const held = waiting ? [] : null;
+  const tasks = activeExecutions(cards, entries, parents, works, true, null, held);
+  const sessions = new Set(tasks.map(e => `kadan-${e.role}`));
+  if (!held) return {sessions, entries:tasks};
+  return {sessions, entries:tasks,
+    waitingSessions:held.map(e => ({session:`kadan-${e.role}`, ...e})).filter(e => !sessions.has(e.session))};
 }
 
 export function buildSupervisorScope(cards, entries, parents = new Map(), works = []) {
