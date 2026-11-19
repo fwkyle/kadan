@@ -3,15 +3,17 @@
 // skills/kadan-super/references/intervention.md 표는 이 목록의 id를 참조한다(원본은 여기, tests/watch-stop-phrases.test.mjs가 어긋남을 잡는다).
 //
 // 행동: auto-resume(자동 재개) | alert-supervisor(직속 감독 경보) | replace-runner(실행기 교체 필요 — 직속 감독에게 올리되 같은 세션 재시도 금지)
+//   | report(보고만 — 실제 한도로 멈춘 화면. 자동 재개 없음, 경보에 대체 후보 교대 명령 한 줄이 붙는다: watch-limit-fallback.mjs)
 // scope: worker(작업자 화면) | supervisor(감독 화면). live: 지금 그려진 상태 줄이라 감시기가 처음 본 주기에도 바로 경보한다
 //   (스크롤백 줄은 처음 본 주기를 기준선으로만 삼는다 — 옛 줄 헛경보 방지).
 // sample: 실제 화면 표본이 있는 근거. '없음'은 문구를 사고표·설치본에서만 확인했고 감시AI 입력 기록에서 못 찾았다는 뜻이다.
 // 모든 낱말은 아래 '현재 오류 덩어리' 안에서만 읽는다(한 줄 낱말 판정 없음, PR #200 수정 2라운드). 덩어리로 확정 못 한 화면은 정체 경로로 간다.
 // 구조로 판정하는 항목(detect)은 마지막 입력창 주변 덩어리만 본다 — 인용·설명·오래된 스크롤 줄을 멈춤으로 읽지 않는다.
-import { terminal429 } from "./watch-rate-limit.mjs";
+import { terminal429, USAGE_LIMIT_LINE } from "./watch-rate-limit.mjs";
 import { securityFilterNotice } from "./watch-security-filter.mjs";
+import { claudeLimitLine } from "./claude-limit-line.mjs";
 
-export const STOP_ACTIONS = ["auto-resume", "alert-supervisor", "replace-runner"];
+export const STOP_ACTIONS = ["auto-resume", "alert-supervisor", "replace-runner", "report"];
 
 export const STOP_PHRASES = [
   { id: "rate-limit-429", kind: "한도", action: "auto-resume", scope: ["worker"],
@@ -22,6 +24,12 @@ export const STOP_PHRASES = [
   // 입력창 바로 위 오류 줄 + 빈 입력창 구조로 자동 재개 대상인지 가른다(watch-rate-limit.mjs).
   { id: "rate-limit-terminal", kind: "한도", action: "auto-resume", scope: ["worker"],
     detect: terminal429, sample: "codex 0.163 429 방치 사고 화면" },
+  // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
+  // 줄 맨 앞(표시 기호 하나 허용)이 문구일 때만 읽는다: 문장 중간의 인용·설명은 걸리지 않는다. 읽는 자리는 아래 currentStopPhrases:
+  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄). 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
+  { id: "usage-limit", kind: "한도", action: "report", scope: ["worker"],
+    pattern: USAGE_LIMIT_LINE,
+    sample: "claude `You've hit your session limit · resets 3pm (Asia/Seoul)` (tests/fixtures/claude-limit-screens.json), codex `■ You've hit your usage limit. Upgrade or try again later.` (tests/helpers/fake-codex-tui.mjs)" },
   { id: "no-api-key", kind: "설정", action: "replace-runner", scope: ["worker", "supervisor"],
     pattern: /No API key/iu, sample: "없음(사고표 E5)" },
   { id: "auth-token", kind: "인증", action: "replace-runner", scope: ["worker", "supervisor"],
@@ -66,6 +74,49 @@ export const WORKER_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES), "giu");
 export const SUPERVISOR_ERROR_PATTERN = new RegExp(sourceOf(withPattern("supervisor")), "iu");
 
 const SLEEP_SIGNATURE = new RegExp(STOP_PHRASES.find((p) => p.id === "sleep-interrupted").pattern.source, "giu");
+const USAGE_SIGNATURE = new RegExp(USAGE_LIMIT_LINE.source, "giu");
+// 실측 Claude 한도 줄 꼴: `⎿  You've hit your session limit · resets 12:40pm (Asia/Seoul)`, `… Fable limit · resets Nov 17 at 4pm (Asia/Seoul)`.
+const CLAUDE_LIMIT_SHAPE = /^(?:[⏺⎿●✗⚠]\s+)?You['’]ve hit your (?:[\w-]+ ){0,2}limit\s+·\s+resets\s+[^·()]{1,40}?(?:\s+\([\w/+-]+\))?\s*$/u;
+// 초기화 시각이 없는 맨 한도 줄은 바로 아래에 슬래시 안내 줄(`  /upgrade to increase your usage limit.`·`  /usage-credits to …`)이 붙을 때만 받는다.
+// 도구 출력 안의 맨 문구(known-f5)·설명 문장(known-f7)에는 그 안내가 없다.
+const CLAUDE_LIMIT_BARE = /^(?:[⏺⎿●✗⚠]\s+)?You['’]ve hit your (?:[\w-]+ ){0,2}limit\.?\s*$/u;
+const SLASH_HINT = /^\s+\/[\w-]+\b/u;
+
+// 또는 바로 위(빈 줄·가로선 건너뜀)가 턴 끝 줄(`✻ Baked for 10s · done …`)이라 턴이 끝난 뒤 처음 나온 시스템 줄일 때.
+// 요약 배너(`⏺ Usage limit reached · continuing automatically at …`)는 한도 줄이 아니라 안내다. claudeLimitLine이 입력창 바로 위의 이 배너를 고르면
+// (배너가 상세 줄보다 아래인 순서 — 2026-11-18 실제 화면), 배너 바로 위(빈 줄·가로선만 건너뜀)의 실측 꼴 상세 줄(`⎿ You've hit your Fable limit · resets …`)을
+// 한도 줄로 쓴다(복귀 시각이 같을 때만 — 아래). 상세 줄이 없거나 실측 꼴이 아니거나 시각이 다르면 배너 그대로 돌려줘 예전과 같이 한도로 올리지 않는다(배너만 있는 화면은 정체 경로).
+const CLAUDE_BANNER = /^(?:[⏺⎿●✗⚠]\s+)?Usage limit reached\b/u;
+const LEAD_SYMBOL = /^(?:[⏺⎿●✗⚠]\s+)?/u;
+const clockKey = (clock, meridiem) => `${clock}${meridiem}`.toLowerCase();
+const CLOCK_TIME = /\b(\d{1,2}(?::\d{2})?)\s*([ap]m)\b/giu;
+const CONTINUING_AT = /continuing automatically at\s+(\d{1,2}(?::\d{2})?)\s*([ap]m)\b/giu;
+// 문자열 안 마지막 시각(`Nov 17 at 4pm` → `4pm`). 날짜 부분은 비교하지 않는다.
+const lastClockTime = (text) => { let last = null; for (const m of text.matchAll(CLOCK_TIME)) last = clockKey(m[1], m[2]); return last; };
+function claudeLimitDetail(screen, found) {
+  if (!CLAUDE_BANNER.test(found.line)) return found;
+  const lines = screen.split("\n");
+  let above = found.at - 1;
+  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+  const line = above >= 0 ? lines[above].trim() : "";
+  if (!CLAUDE_LIMIT_SHAPE.test(line)) return found;
+  // 짝짓기 조건: 상세 줄의 복귀 시각(`resets 11pm`)이 배너 줄과 그 아래 화면(자동 계속 안내 포함)의 `continuing automatically at 11pm`과 같을 때만.
+  // 응답·도구 출력에 인용된 옛 상세 줄(다른 시각)이 무관한 배너와 짝지어 오탐을 만들지 않게 한다. 비교할 시각이 없거나 다르면 짝짓지 않는다.
+  const detailTime = lastClockTime(line.split(/\bresets\s+/iu)[1] ?? "");
+  if (!detailTime) return found;
+  const resumes = new Set([...lines.slice(found.at).join("\n").matchAll(CONTINUING_AT)].map((m) => clockKey(m[1], m[2])));
+  return resumes.has(detailTime) ? { line, head: line.replace(LEAD_SYMBOL, ""), at: above } : found;
+}
+
+function claudeLimitShape(screen, found) {
+  if (CLAUDE_LIMIT_SHAPE.test(found.line)) return true;
+  if (!CLAUDE_LIMIT_BARE.test(found.line)) return false;
+  const lines = screen.split("\n");
+  if (SLASH_HINT.test(lines[found.at + 1] ?? "")) return true;
+  let above = found.at - 1;
+  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+  return above >= 0 && TURN_DONE.test(lines[above]);
+}
 
 export const phraseKinds = () => [...new Set(WORKER_PHRASES.map(({ kind }) => kind))];
 export const phraseByKind = (kind) => STOP_PHRASES.find((p) => p.kind === kind);
@@ -92,6 +143,20 @@ const EMPTY_COMPOSER = /^\s*(?:›\s*(?:Ask Codex to do anything)?|[❯>])\s*$/u
 const ANY_COMPOSER = /^\s*[›❯]/u;
 const RULE_OR_BLANK = /^[\s─━—-]*$/u;
 const FOOTER_LINES = 5;
+// 감시기가 역할 창에 넣은 미확인 우편 안내(watch-notice-format.mjs unreadMailMessage)는 오류 줄이 아니다. 입력창 바로 위에 이 블록이 있으면
+// 건너뛰고 그 위의 현재 오류 줄을 본다. 블록은 `[감시sh] 미확인 우편 N건` 머리줄에서 `…별개입니다.` 끝줄까지다(창 너비로 줄이 접혀도 끝줄은 `별개입니다.`로 끝난다,
+// 입력으로 되울린 `› ` 머리 허용). 우편 미리보기 안의 문장은 블록 안이라 오류로 읽지 않는다. 끝줄을 못 찾으면 건너뛰지 않는다(예전 판정 그대로).
+const MAIL_NOTICE_HEAD = /^\s*(?:[›❯]\s*)?\[감시sh\]\s*미확인 우편 \d+건/u;
+const MAIL_NOTICE_TAIL = /별개입니다\.?\s*$/u;
+const MAIL_NOTICE_MAX_LINES = 60;
+const MAIL_NOTICE_STACK = 3;
+
+// lines[end]가 안내 블록의 끝줄이면 그 블록의 머리줄 번호, 아니면 -1.
+function mailNoticeStart(lines, end) {
+  if (!MAIL_NOTICE_TAIL.test(lines[end] ?? "")) return -1;
+  for (let at = end; at >= 0 && end - at <= MAIL_NOTICE_MAX_LINES; at--) if (MAIL_NOTICE_HEAD.test(lines[at])) return at;
+  return -1;
+}
 
 // 줄 키: 시계·횟수 숫자만 바뀌는 줄이 주기마다 새 줄로 보이지 않게 숫자를 지운 모양으로 센다.
 export const lineKey = (match, line) => `${String(match).toLowerCase()}|${line.trim().replace(/\d+/gu, "#")}`;
@@ -114,7 +179,9 @@ export function linesWithFence(screen) {
 
 // claudeHead: Claude 화면의 `⏺ API Error:` 머리줄과 턴 끝 줄(`✻ …`) 건너뛰기까지 덩어리로 읽는다. 이 덩어리는 절전 중단 낱말 판정에만 쓴다
 // (currentStopPhrases) — 기본값(false)은 main과 같은 판정이다. 다른 Claude API 오류를 작업자 즉시 경보로 넓히지 않는다(2026-10-22 검수 F1).
-export function currentErrorBlock(screen, { claudeHead = false } = {}) {
+// afterResponse: 오류 머리줄 바로 위가 응답 한 줄(`• …`)이어도 덩어리로 읽는다(콜론으로 끝나는 소개 문장은 여전히 제외). 사용 한도 줄 판정에만 쓴다
+// (currentStopPhrases) — 기본값(false)은 main과 같은 판정이라 다른 낱말의 판정 범위는 그대로다.
+export function currentErrorBlock(screen, { claudeHead = false, afterResponse = false } = {}) {
   // tmux는 floor.read에서 추천 문구를 뺀 판정용 화면을 준다. 표시용 readView를 넣지 않는다.
   const rows = linesWithFence(screen);
   const lines = rows.map((r) => r.line);
@@ -125,6 +192,13 @@ export function currentErrorBlock(screen, { claudeHead = false } = {}) {
   let end = composer - 1;
   while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
   if (end < 0) return null;
+  for (let n = 0; n < MAIL_NOTICE_STACK; n++) {
+    const notice = mailNoticeStart(lines, end);
+    if (notice < 0) break;
+    end = notice - 1;
+    while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
+    if (end < 0) return null;
+  }
   const headOf = (from) => { let at = from; while (at > 0 && /^\s+\S/u.test(lines[at])) at--; return at; };
   let head = headOf(end);
   // Claude는 오류 줄과 입력창 사이에 턴 끝 줄이 낀다. 그 줄을 건너뛴 위가 `⏺ API Error:` 머리줄일 때만 덩어리로 읽는다(다른 머리줄 판정은 그대로).
@@ -141,7 +215,7 @@ export function currentErrorBlock(screen, { claudeHead = false } = {}) {
     let above = head - 1;
     while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--; // 빈 줄·가로선 등 장식 줄은 몇 개든 건너뛴다
     const intro = above >= 0 ? lines[above] : "";
-    if (/^\s*[•⏺]\s/u.test(intro) || /[:：]\s*$/u.test(intro)) return null;
+    if ((!afterResponse && /^\s*[•⏺]\s/u.test(intro)) || /[:：]\s*$/u.test(intro)) return null;
   }
   return { head: lines[head], lines: lines.slice(head, end + 1) };
 }
@@ -158,6 +232,16 @@ export function currentStopPhrases(screen) {
   collect(currentErrorBlock(screen), WORKER_SIGNATURES);
   // Claude `⏺ API Error:` 덩어리는 절전 중단 낱말만 읽는다(다른 낱말의 판정 범위는 main 그대로).
   collect(currentErrorBlock(screen, { claudeHead: true }), SLEEP_SIGNATURE);
+  // 사용 한도 줄(codex `■ …`)은 바로 위가 응답 한 줄(`• …`)이어도 읽는다. 문구가 줄 맨 앞이고 `■` 오류 줄이라야 하며 콜론 소개 문장 아래는 여전히 제외다.
+  collect(currentErrorBlock(screen, { afterResponse: true }), USAGE_SIGNATURE);
+  // Claude 한도 줄은 `■` 머리줄 덩어리가 아니라 응답 문맥의 맨 줄이다. 빈 입력창 바로 위에 붙은 줄만 읽는 기존 판정(claudeLimitLine)을 쓰되,
+  // 이 경보 경로에서는 실측 줄 꼴(`… limit · resets <시각> [(지역)]`이 줄 끝까지, 또는 맨 줄 + 바로 아래 슬래시 안내 줄)만 받는다 —
+  // 도구 출력·응답 안의 맨 문구와 설명 문장은 한도로 올리지 않는다.
+  const picked = claudeLimitLine(screen);
+  const claude = picked && claudeLimitDetail(screen, picked);
+  if (claude && claudeLimitShape(screen, claude) && phraseOfLine(claude.line)?.id === "usage-limit") {
+    found.set(lineKey(claude.head.slice(0, 40), claude.line), claude.line);
+  }
   return found;
 }
 

@@ -59,6 +59,7 @@ import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-s
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
 import { readSettings } from "./runner-settings.mjs";
+import { limitFallbackLine } from "./watch-limit-fallback.mjs";
 import { currentSocket } from "./floor-tmux.mjs";
 import { assertSingleWatch, notifyUser, watchProcessName } from "./watch-system.mjs";
 import { ALERT_DEDUP_WINDOW_MS } from "./user-notify.mjs";
@@ -872,6 +873,9 @@ export async function runWatch({
         if(a.kind!=='한도'||a.ocx||known.has(a.id)||retrySessions.has(a.session))continue;
         restoredChecked.add(a.id);
         try{a.ocx=refreshOcxFor({role:a.role,session:a.session,entries,now:cycleAt});}catch{}
+        // 교대 명령 한 줄: 경보를 만들 때마다 설정을 새로 읽고(작은 파일), 시작 기록은 이 순회가 이미 읽은 entries를 쓴다.
+        // 경보 id에는 넣지 않는다 — 설정만 바뀌어 같은 경보가 다시 울리지 않는다. 읽기·계산 실패는 줄을 빼기만 한다.
+        try{a.fallbackLine=limitFallbackLine({alert:a,entries,settings:readSettings(ledgerHome()),ocx:a.ocx})??undefined;}catch{}
       }
     }
     // Stop 훅 빠른 길을 켠 기계(claude 설정 파일이 있음)에서만 codex 훅 신뢰 상태를 읽어 알린다. 읽기 전용이다.

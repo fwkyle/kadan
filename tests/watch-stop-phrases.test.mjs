@@ -7,7 +7,7 @@ import {screenDisconnects, disconnectKind, DISCONNECT_ALERT_KINDS} from '../src/
 
 const read = p => fs.readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
-test('목록 항목은 id가 겹치지 않고 행동이 셋 중 하나이며 낱말 또는 구조 판정 하나를 가진다', () => {
+test('목록 항목은 id가 겹치지 않고 행동이 넷 중 하나이며 낱말 또는 구조 판정 하나를 가진다', () => {
   const ids = STOP_PHRASES.map(p => p.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const p of STOP_PHRASES) {

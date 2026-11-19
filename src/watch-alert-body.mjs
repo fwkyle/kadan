@@ -143,7 +143,9 @@ export function formatAlertBody(alert) {
     const ocx = alert.kind === "한도" && alert.ocx ? ` · ${ocxAlertLine(alert.ocx)}` : "";
     // 실행기 교체가 필요한 종류(설정·인증)는 같은 세션을 다시 시도하지 말라고 알린다.
     const replace = phraseAction(alert.kind) === "replace-runner" ? " · 실행기 교체 필요(같은 세션 재시도 금지)" : "";
-    return `${alert.kind} ${alert.session} (${alert.line})${ocx}${replace}`;
+    // 대체 후보가 있을 때만 교대 명령 한 줄(watch-limit-fallback.mjs). 감시기는 세션을 바꾸지 않고 안내만 한다.
+    const fallback = alert.kind === "한도" && alert.fallbackLine ? ` · ${alert.fallbackLine}` : "";
+    return `${alert.kind} ${alert.session} (${alert.line})${ocx}${fallback}${replace}`;
   }
   if (alert.kind === "보안필터") {
     return `보안 필터로 멈춤 ${alert.role ?? alert.session}${alert.taskId ? ` / ${alert.taskId}` : ""} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;
