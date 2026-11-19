@@ -11,7 +11,10 @@ import { moveToTrash } from './trash-dir.mjs';
 export const AUTOSTART_LABEL = 'dev.kadan.up';
 export const START_INTERVAL_S = 60;
 // 로그인 직후 launchd에는 PATH가 거의 없다. node·tmux·실행기(claude·codex)를 찾을 수 있게 설치 때의 값을 적어 둔다.
-const CARRIED_ENV = ['PATH', 'KADAN_HOME', 'KADAN_WINDOW', 'KADAN_WINDOW_FORCE', 'KADAN_FLOOR', 'KADAN_ROTTIE_BIN', 'KADAN_SOCKET'];
+const CARRIED_ENV = [
+  'PATH', 'KADAN_HOME', 'KADAN_WINDOW', 'KADAN_WINDOW_FORCE', 'KADAN_FLOOR', 'KADAN_ROTTIE_BIN',
+  'KADAN_SOCKET', 'KADAN_CODEX_MODELS_CACHE',
+];
 
 export function autostartPath(userHome = os.homedir()) {
   return path.join(userHome, 'Library', 'LaunchAgents', AUTOSTART_LABEL + '.plist');
