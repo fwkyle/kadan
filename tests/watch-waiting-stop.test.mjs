@@ -2,7 +2,12 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {setImmediate} from 'node:timers/promises';
+import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {CardStore} from '../src/card-store.mjs';
+import {createWatchStoreReaders} from '../src/watch-store-cache.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
 import {buildWatchScope} from '../src/watch-scope.mjs';
 import {assessWaitingStops, waitingStopScreen} from '../src/watch-waiting-stop.mjs';
@@ -94,12 +99,27 @@ test('정당한 대기 화면(일하는 중·빈 입력창, 정지 문구 없음
   }
 });
 
+test('정체 판정 AI가 불릴 만한 화면(입력창에 글이 남은 채 그대로)이어도 대기 세션에는 AI를 부르지 않는다', async () => {
+  // 감시 범위 안이었다면 5분 뒤 정체 후보가 되어 작업 감시AI가 불리는 화면이다(빈 입력창이 아니라 멈춤 경보로 가지 않는다).
+  const still = '• 다른 시험이 끝나기를 기다립니다.\n\n› 감독에게 보낼 메모를 쓰는 중';
+  const r = await simulate({screen: () => still, until: 20});
+  assert.deepEqual(r.workerAI, [], '대기 세션을 두고 AI를 불렀다');
+  assert.deepEqual(r.alerts, []);
+  assert.deepEqual(r.keys, []);
+  // 대조: 같은 화면이 감시 범위 안(대기 표시 없음)이면 AI가 실제로 불린다 — 위 0회가 빈 검사가 아님을 보인다.
+  const watched = await simulate({screen: () => still, card: () => running, until: 20});
+  assert.ok(watched.workerAI.some(([, source]) => source === 'stall'), `감시 범위 안에서는 정체 판정 AI가 불려야 한다: ${JSON.stringify(watched.aiCalls)}`);
+});
+
 test('대기 세션의 최종 429 화면은 자동 재개 없이 경보만 한 번', async () => {
   const r = await simulate({screen: () => LIMIT_429});
   assert.equal(r.waitingStops.length, 1);
   assert.equal(r.waitingStops[0].recipient, BOSS);
-  assert.deepEqual(r.keys, [], '재개 문구를 보내지 않는다');
+  assert.deepEqual(r.keys, [], '대기 세션에 재개 문구를 보냈다');
   assert.deepEqual(r.retries, [], '재개 예약도 만들지 않는다');
+  // 대조: 같은 화면이 감시 범위 안(대기 표시 없음)이면 재개가 실제로 예약·전송된다 — 위 키 0회가 빈 검사가 아님을 보인다.
+  const watched = await simulate({screen: () => LIMIT_429, card: () => running, until: 6});
+  assert.ok(watched.keys.some(([kind, role]) => kind === 'resume429' && role === WORKER), `감시 범위 안에서는 재개 문구가 가야 한다: ${JSON.stringify(watched.retries.map(e => e.action))}`);
   assert.deepEqual(r.workerAI, []);
   assert.match(r.sent.find(m => /대기 표시 중/u.test(m.message)).message, /429 Too Many Requests/u);
   // 오류 덩어리로 읽지 못하는 모양(바로 위가 한 줄 응답)이어도 최종 429 판정이 잡는다.
@@ -218,10 +238,37 @@ test('판정 함수: 살아 있는 것을 본 세션만 죽음 후보이고, PID
   assert.deepEqual(swapped.alerts.map(a => a.dead), [true]);
   assert.deepEqual(assessWaitingStops(new Set(), [entry], seen({pid: 9}), {entries: starts, now: epoch}).alerts, []);
   assert.deepEqual(assessWaitingStops(new Set(), [], seen(), {entries: starts, now: epoch}), {alive: new Set(), alerts: []});
-  // 대기 사유는 그 대기 표시를 만든 보고 한 줄이다. 뒤에 붙은 일반 메모는 사유가 아니다.
-  const memo = {...waiting, at: stamp(5), noteKind: 'decision', note: '감독 메모', history: [waiting]};
-  assert.equal(assessWaitingStops(new Set(), [{...entry, card: memo}], seen(), {entries: starts, now: epoch}).alerts[0].waitingNote, WAIT_NOTE);
-  assert.equal(assessWaitingStops(new Set(), [{...entry, card: {...memo, history: []}}], seen(), {entries: starts, now: epoch}).alerts[0].waitingNote, '');
+  // 대기 사유는 그 대기 표시를 만든 보고 한 줄이다. 뒤에 붙은 일반 메모는 사유가 아니다(사유 없이 알린다).
+  const memo = {...waiting, at: stamp(5), noteKind: 'decision', note: '감독 메모'};
+  assert.equal(assessWaitingStops(new Set(), [{...entry, card: memo}], seen(), {entries: starts, now: epoch}).alerts[0].waitingNote, '');
+  assert.equal(assessWaitingStops(new Set(), [{...entry, card: {...waiting, noteKind: 'decision'}}], seen(), {entries: starts, now: epoch}).alerts[0].waitingNote, '');
+});
+
+test('실제 카드 저장소: 감시기가 읽는 카드 요약(이력 없음)으로도 실행 키·발령한 역할·대기 사유가 경보에 실린다', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-waiting-stop-'));
+  createDatabase(home); writeStorageMarker(home, 'sqlite');
+  const store = new CardStore(home), readers = createWatchStoreReaders(home);
+  const made = store.create({repo: 'qa', id: 'real-task', repoPath: home, body: '# 지시'});
+  store.update(made.key, {status: 'assigned', role: WORKER, board: 'qa', scope: '시험 범위',
+    rallyId: 'rally', rallyTitle: '묶음', rallyRound: '1', rallyStep: 'review'}, {revision: 1, note: '배정'});
+  const entries = [...starts, {kind: 'send', role: WORKER, session: SESSION, taskId: made.id, executionKey: made.key, by: LEAD,
+    t: new Date(Date.now() - 60_000).toISOString()}];
+  const observed = new Map([[SESSION, {role: WORKER, alive: true, pid: 1, expectedPid: 1, screen: INCIDENT}]]);
+  const alertOf = () => {
+    const scope = buildWatchScope(readers.cards.read(), entries, parents, [], {waiting: true});
+    return assessWaitingStops(new Set(), scope.waitingSessions, observed, {entries, now: Date.now()}).alerts;
+  };
+  assert.deepEqual(alertOf(), [], '대기 표시 전에는 대기 목록에 없다(정상 감시 대상)');
+  const reported = store.update(made.key, {activity: 'waiting'}, {revision: store.get(made.key).revision, note: WAIT_NOTE, noteKind: 'progress', by: WORKER});
+  const [alert] = alertOf();
+  assert.equal(readers.cards.read().find(c => c.key === made.key).history, undefined, '감시기의 카드 요약에는 이력이 없다');
+  assert.deepEqual([alert.executionKey, alert.taskId, alert.dispatcher, alert.waitingAt, alert.waitingNote, alert.line],
+    [made.key, made.id, LEAD, reported.activityAt, WAIT_NOTE, CAPACITY]);
+  // 대기 보고 뒤에 다른 메모가 붙으면 사유는 싣지 않고(뒤 메모를 사유로 읽지 않는다) 같은 경보를 그대로 낸다.
+  store.update(made.key, {}, {revision: store.get(made.key).revision, note: '확인 중', by: 'qa-other'});
+  const [later] = alertOf();
+  assert.deepEqual([later.id, later.waitingAt, later.waitingNote], [alert.id, reported.activityAt, '']);
+  assert.match(formatAlertBody(later), /\(대기 표시 \d+\/\d+ \d\d:\d\d; 화면: ■ Selected model is at capacity/u);
 });
 
 test('경보 본문: 실행 키·대기 표시 시각과 사유·정지 줄·감시 밖이었던 이유를 담고, 복원된 경보(값 없음)도 문장이 깨지지 않는다', () => {

@@ -24,11 +24,12 @@ export function waitingStopScreen(screen, now) {
   return { key: `429:${limit.fingerprint ?? "blocked"}`, line };
 }
 
-// 지금 대기 사유: 그 대기 표시를 만든 보고 한 줄(뒤에 붙은 일반 메모는 사유가 아니다). 경보를 만들 때만 읽는다.
+// 지금 대기 사유: 그 대기 표시를 만든 보고 한 줄. 경보를 만들 때만 읽는다.
+// 감시기의 카드 요약(watch-store-cache.mjs)은 이력 없이 마지막 기록만 싣는다. 그래서 대기 보고가 카드의 마지막 기록일 때만
+// 사유를 알 수 있고, 뒤에 다른 메모가 붙었으면 사유 없이 대기 표시 시각만 알린다(뒤 메모를 사유로 읽지 않는다).
 function waitingNote(card) {
-  const row = card.at === card.activityAt ? card
-    : card.history?.findLast((h) => h.at === card.activityAt && h.activity === "waiting");
-  const note = String(row?.noteKind === "progress" ? row.note ?? "" : "").replace(/\s+/gu, " ").trim();
+  if (card.at !== card.activityAt || card.noteKind !== "progress") return "";
+  const note = String(card.note ?? "").replace(/\s+/gu, " ").trim();
   return note.length > 80 ? `${note.slice(0, 80)}…` : note;
 }
 
