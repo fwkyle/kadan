@@ -161,9 +161,14 @@ export const seniorEvictedLine = evicted => `남긴 세션 상한(${SENIOR_KEPT}
   evicted.map(row => `${row.session}(${tabNote(row.tab ? row : null)})`).join(', ');
 
 const CLEANUP_WHY = {running: '진행 중인 호출', 'no-record': '기록 없음', 'outside-home': '이 홈의 기록이 아님'};
-const TAB_WHY = {'marker-unreadable': '표지를 읽지 못함', 'marker-outside-home': '이 홈의 호출 폴더가 아님', 'marker-name-differs': '표지 이름이 호출 폴더와 다름',
-  'tab-id-differs': '표지의 탭 id가 탭 기록과 다름', 'other-socket': '다른 소켓의 세션 기록(그 소켓에서 정리한다)',
-  'session-record-missing': '세션 기록을 읽지 못함'};
+const TAB_RECORD_WHY = {missing: '탭 기록이 없음', 'not-regular': '탭 기록이 정규 파일이 아님(링크·폴더)', 'too-big': '탭 기록이 너무 큼', unreadable: '탭 기록을 읽지 못함',
+  'bad-json': '탭 기록이 깨짐', 'bad-shape': '탭 기록의 모양이 다름'};
+const TAB_WHY = {'marker-unreadable': '표지를 읽지 못함', 'marker-not-regular': '표지가 정규 파일이 아님(링크·폴더)', 'marker-folder-not-directory': '표지 폴더가 폴더가 아님(링크 등)',
+  'marker-outside-home': '이 홈의 호출 폴더가 아님', 'marker-name-differs': '표지 이름이 호출 폴더와 다름', 'call-dir-missing': '호출 폴더를 찾지 못함',
+  'tab-id-differs': '표지의 탭 id가 탭 기록과 다름', 'tab-state-not-open': '탭 기록이 열림 상태가 아님',
+  'session-present': '그 이름의 세션이 살아 있다(진행 중으로 본다)', 'other-socket': '다른 소켓의 세션 기록(그 소켓에서 정리한다)',
+  'session-record-missing': '세션 기록을 읽지 못함', 'query-failed': '세션 조회 실패'};
+const tabWhy = why => TAB_WHY[why] ?? (String(why).startsWith('tab-record-') ? TAB_RECORD_WHY[String(why).slice('tab-record-'.length)] : null) ?? why;
 // kadan senior cleanup [--dry-run]: 시니어 소켓의 세션을 나열하고, 끝난 호출의 세션 중 기록 대조가 맞는 것만 끈다(로티 탭도 닫는다).
 // 진행 중 호출·기록 없는 세션·대조가 안 되는 세션은 끄지 않고 이유를 보인다. 세션 없이 남은 탭(내보낼 때 못 닫음 등)도 표지로 찾아 닫는다.
 // 세션에 키를 보내지 않는다. 받는 인자는 --dry-run 하나뿐이다: 그 밖의 인자·표기(--dry-run=true 등)는 아무것도 끄지 않고 거절한다 —
@@ -178,7 +183,7 @@ export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, 
   // --dry-run은 파일을 하나도 만들지 않는다(tmux 설정 파일·표지 폴더·잠금 포함).
   const run = seniorTmux({socket: seniorSocket(env, home), home, env, readOnly: dryRun});
   const rows = cleanupSeniorSessions({home, run, dryRun, now, closeTab: dir => closeKeptTab({home, env, dir, rottie}),
-    sweepTabs: ({seen, dryRun: dry}) => sweepOpenTabs({home, env, rottie, seen, socket: run.socket, dryRun: dry})});
+    sweepTabs: ({seen, dryRun: dry, presence}) => sweepOpenTabs({home, env, rottie, seen, presence, dryRun: dry})});
   if (!rows.length) return `남은 시니어 세션이 없다(소켓 ${run.socket})`;
   const head = {closed: '끔', 'would-close': '끌 것', left: '둠', 'tab-closed': '탭 닫음', 'tab-would-close': '탭 닫을 것', 'tab-left': '탭 둠'};
   const isTab = row => row.action.startsWith('tab-');
@@ -187,13 +192,13 @@ export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, 
     ...(row.action === 'left' ? [`— 끄지 않음: ${CLEANUP_WHY[row.why] ?? `기록과 다름(${row.why})`}`] : []),
     ...(row.tab ? [`— 탭 ${row.tab.tab}${row.tab.tabReason ? `(${row.tab.tabReason})` : ''}${row.tab.tab === 'closed' ? '' : ' · 다음 cleanup이 다시 닫는다'}`] : [])].join('  ');
   // 세션 없이 남은 탭의 줄: 그 탭의 세션은 이미 없다(내보낼 때 닫지 못했거나 세션이 먼저 사라졌다).
-  const tabLine = row => [`${head[row.action]}  (세션 없음)`, `탭 ${row.id ?? '-'}`, row.dir ?? '(호출 폴더 모름)',
-    ...(row.action === 'tab-left' ? [`— 닫지 않음: ${TAB_WHY[row.why] ?? row.why}`] : [])].join('  ');
+  const tabLine = row => [`${head[row.action]}  ${row.action === 'tab-left' ? '(세션 줄 밖의 탭)' : '(세션 없음)'}`, `탭 ${row.id ?? '-'}`, row.dir ?? '(호출 폴더 모름)',
+    ...(row.action === 'tab-left' ? [`— 닫지 않음: ${tabWhy(row.why)}`] : [])].join('  ');
   const count = action => rows.filter(row => row.action === action).length;
   const tabs = rows.some(isTab);
   const summary = dryRun
-    ? `--dry-run: 아무것도 바꾸지 않았다. 끌 세션 ${count('would-close')}개, 둘 세션 ${count('left')}개${tabs ? ` · 세션 없이 남은 탭: 닫을 것 ${count('tab-would-close')}개, 둘 것 ${count('tab-left')}개` : ''}`
-    : `끈 세션 ${count('closed')}개, 둔 세션 ${count('left')}개${tabs ? ` · 세션 없이 남은 탭: 닫음 ${count('tab-closed')}개, 남음 ${count('tab-left')}개` : ''}`;
+    ? `--dry-run: 아무것도 바꾸지 않았다. 끌 세션 ${count('would-close')}개, 둘 세션 ${count('left')}개${tabs ? ` · 세션 줄 밖의 탭: 닫을 것 ${count('tab-would-close')}개, 둘 것 ${count('tab-left')}개` : ''}`
+    : `끈 세션 ${count('closed')}개, 둔 세션 ${count('left')}개${tabs ? ` · 세션 줄 밖의 탭: 닫음 ${count('tab-closed')}개, 남음 ${count('tab-left')}개` : ''}`;
   return [`시니어 세션 ${rows.filter(row => !isTab(row)).length}개 (소켓 ${run.socket})`, ...rows.map(row => isTab(row) ? tabLine(row) : sessionLine(row)), summary].join('\n');
 }
 

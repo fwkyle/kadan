@@ -198,6 +198,21 @@ export function confirmOwn(record, run) {
   return {own: true};
 }
 
+// 탭 정리를 위한 세션 유무 판정. 그 호출의 기록에 적힌 세션 이름으로 같은 소켓에 직접 조회한다(confirmOwn과 같은 기준).
+// 세션 목록에 그 호출 폴더가 보이지 않는다는 것은 근거가 아니다 — 목록의 경로 칸은 비어 있을 수 있다.
+//  gone    — 세션이 없다는 것이 확정됐다(서버 없음·세션 없음·칸이 다 온 답의 이름이 다름)
+//  present — 그 이름의 세션이 있다. 자기 것으로 확인됐든, 호출 폴더 칸이 비었거나 PID·식별값이 기록과 다르든 같다(진행 중으로 본다)
+//  unknown — 모른다: 세션 기록이 없음 · 다른 소켓의 호출 · 조회 실패. why에 이유
+// 읽기만 한다(tmux 명령은 display-message뿐, 기록을 고치지 않는다).
+export function sessionPresence(dir, run) {
+  const record = readRecord(dir);
+  if (!record) return {state: 'unknown', why: 'session-record-missing'};
+  if (record.socket !== run.socket) return {state: 'unknown', why: 'other-socket'};
+  const verdict = confirmOwn(record, run);
+  if (verdict.own || verdict.why === 'pid-differs' || verdict.why === 'generation-differs') return {state: 'present'};
+  return verdict.why === 'no-session' ? {state: 'gone'} : {state: 'unknown', why: verdict.why};
+}
+
 // 자기 세션만 끈다. 확인이 맞지 않으면 끄지 않고 이유를 기록에 남긴다. 이미 없는 세션은 끝난 것으로만 적는다.
 export function killOwn(dir, {run, reason = 'done', env = process.env} = {}) {
   const record = readRecord(dir);
@@ -251,9 +266,10 @@ const keptOrder = row => String(row.record.keptAt ?? row.record.endedAt ?? row.r
 // 정리 명령의 본체. 끝난 호출이고 대조가 맞는 세션(kept)만 끈다. 진행 중·기록 없음·대조 실패는 그대로 두고 이유를 돌려준다.
 // dryRun이면 무엇을 끌지만 돌려주고 아무것도 바꾸지 않는다(끄기 확인 함수도 부르지 않는다 — 그 함수는 거절 이유를 기록에 적는다).
 // closeTab(호출 폴더): 그 세션의 열린 로티 탭 닫기(부른 쪽이 준다). 반환: 줄마다 {session, dir, …기록 칸, action, why?, tab?}.
-// sweepTabs({seen, dryRun}): 세션 없이 남은 탭 훑기(부른 쪽이 준다). seen은 이번에 본 세션들의 호출 폴더다. 그 줄들이 뒤에 붙는다.
+// sweepTabs({seen, dryRun, presence}): 세션 없이 남은 탭 훑기(부른 쪽이 준다). seen은 이번에 본 세션들의 호출 폴더이고,
+// presence(호출 폴더)는 그 호출의 세션이 있는지를 이름으로 직접 조회한 판정(sessionPresence)이다. 그 줄들이 뒤에 붙는다.
 export function cleanupSeniorSessions({home, run, dryRun = false, now = Date.now, closeTab = () => null, sweepTabs = () => []}) {
-  const sweep = () => { const rows = sweepSessions(); return [...rows, ...sweepTabs({seen: new Set(rows.map(row => row.dir).filter(Boolean)), dryRun})]; };
+  const sweep = () => { const rows = sweepSessions(); return [...rows, ...sweepTabs({seen: new Set(rows.map(row => row.dir).filter(Boolean)), dryRun, presence: dir => sessionPresence(dir, run)})]; };
   const sweepSessions = () => seniorSessionStates({home, run, now}).map(row => {
     const {record} = row;
     const info = {session: row.name, dir: row.dir, runner: record ? record.runner ?? 'codex' : null, model: record?.model ?? null,

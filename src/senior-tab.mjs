@@ -18,14 +18,43 @@ export const SENIOR_TAB_ENV = 'KADAN_SENIOR_TAB';
 export const SENIOR_TAB_DEFAULT_ON = true;
 
 const shellWord = value => /^[A-Za-z0-9_@%+:,./-]+$/.test(value) ? value : `'${String(value).replace(/'/g, "'\\''")}'`;
+// 작은 JSON 파일을 링크를 따라가지 않고 읽는다. 정규 파일일 때만 읽고(링크·폴더 거절), 못 읽은 까닭을 가려 돌려준다 —
+// '읽지 못함'과 '없음'과 '읽었더니 닫힘'은 서로 다른 일이다. 반환: {ok: true, value} | {ok: false, why}.
+// why: missing(없음) · not-regular(링크·폴더 등) · too-big · unreadable · bad-json
+const SMALL_FILE_LIMIT = 64 * 1024;
+function readRegularJson(file) {
+  let stat;
+  try { stat = fs.lstatSync(file); } catch (error) { return {ok: false, why: error.code === 'ENOENT' ? 'missing' : 'unreadable'}; }
+  if (!stat.isFile()) return {ok: false, why: 'not-regular'};
+  if (stat.size > SMALL_FILE_LIMIT) return {ok: false, why: 'too-big'};
+  let text;
+  try {
+    // lstat과 읽기 사이에 링크로 바뀌어도 따라가지 않는다.
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try { if (!fs.fstatSync(fd).isFile()) return {ok: false, why: 'not-regular'}; text = fs.readFileSync(fd, 'utf8'); }
+    finally { fs.closeSync(fd); }
+  } catch (error) { return {ok: false, why: error.code === 'ELOOP' ? 'not-regular' : 'unreadable'}; }
+  try { return {ok: true, value: JSON.parse(text)}; } catch { return {ok: false, why: 'bad-json'}; }
+}
+// 임시 파일에 쓴 뒤 옮긴다: 다른 프로세스가 읽는 순간에 반쯤 쓴 파일이 보이지 않는다. 그 자리에 링크가 있어도 따라가 쓰지 않고
+// 링크 자체를 갈아 끼운다. 임시 파일도 새로 만들 때만 쓴다(이미 있는 이름·링크 위에 쓰지 않는다).
+function writeAtomic(file, text) {
+  const temp = `${file}.${process.pid}.tmp`;
+  try { fs.unlinkSync(temp); } catch { /* 없으면 지울 것이 없다 */ }
+  fs.writeFileSync(temp, text, {mode: 0o600, flag: 'wx'});
+  fs.renameSync(temp, file);
+}
+
 // 복구 근거: 호출 폴더의 tab.json. create 전에 키를 먼저 쓰고 결과가 나올 때마다 갱신한다(동기). 쓰기 실패는 삼킨다.
 // 사람은 이 key로 로티에서 그 탭을 직접 닫는다. 제목·키로 목록을 뒤져 자동으로 지우지는 않는다.
+// 그 자리에 정규 파일이 아닌 것(링크·폴더)이 있으면 쓰지 않는다. 깨진 글이면 새로 쓴다.
 export function writeTabState(dir, state) {
   try {
     const file = path.join(dir, 'tab.json');
-    let prev = {};
-    try { prev = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* 처음 쓴다 */ }
-    fs.writeFileSync(file, JSON.stringify({...prev, ...state, at: new Date().toISOString()}), {mode: 0o600});
+    const read = readRegularJson(file);
+    if (!read.ok && (read.why === 'not-regular' || read.why === 'too-big')) return;
+    const prev = read.ok && read.value && typeof read.value === 'object' && !Array.isArray(read.value) ? read.value : {};
+    writeAtomic(file, JSON.stringify({...prev, ...state, at: new Date().toISOString()}));
   } catch { /* 꾸밈이다 */ }
 }
 
@@ -113,62 +142,79 @@ export function closeSeniorTab(opened) {
 // ---- 닫을 탭 표지 ----
 // 남겨 둔 탭은 연 호출이 끝난 뒤에 닫는다. 그 세션이 이미 없어도(내보낼 때 닫지 못함·재부팅) 다음 정리 명령이 탭을 찾을 수 있게,
 // 홈의 작은 폴더(`senior-open-tabs/`)에 탭마다 표지 파일 하나를 둔다. 원장·advice 폴더 전체를 훑지 않는다.
-//  - 만든다: 대화형 호출이 탭을 열었을 때, 그리고 닫으려다 닫지 못했을 때(건너뜀·실패). 지운다: 닫혔을 때만.
+//  - 만든다: 대화형 호출이 탭을 열었을 때, 그리고 닫으려다 닫지 못했을 때(건너뜀·실패).
+//  - 지운다: 확실할 때만 — 닫기가 확인됐거나(닫힘·로티가 '그런 탭 없음'으로 답함), 탭 기록(tab.json)을 정상으로 읽었더니 이미 닫힘일 때.
+//    탭 기록을 읽지 못했거나 깨졌거나 모양이 다르면 '모름'이다: 표지를 그대로 두고 이유를 보인다(2026-11-19 재검수 발견 2).
 //  - 파일 하나가 탭 하나라 여러 호출이 동시에 써도 서로 덮어쓰지 않는다(목록 파일 하나를 읽고-고쳐-쓰지 않는다).
 // 표지는 찾는 실마리일 뿐이다: 닫는 탭 id는 그 호출 폴더의 tab.json에서 읽고, 표지의 id와 같을 때만 닫는다.
+// 표지와 tab.json은 정규 파일일 때만 읽고 쓴다(링크·폴더 거절). 호출 폴더가 이 홈의 것인지는 실제 경로로 본다.
 export const OPEN_TABS_DIR = 'senior-open-tabs';
 // 다시 닫아 볼 수 있는 탭 상태: 열려 있거나, 닫으려다 실패했다.
 const RETRYABLE = new Set(['opened', 'close-failed']);
 const markerFile = (home, dir) => path.join(home, OPEN_TABS_DIR, `${path.basename(path.dirname(dir))}--${path.basename(dir)}.json`);
+// 표지 폴더가 진짜 폴더인가: 'dir' | 'absent' | 'not-directory'(링크이거나 폴더가 아니다 — 읽지도 쓰지도 않는다).
+function markerFolderKind(home) {
+  const stat = fs.lstatSync(path.join(home, OPEN_TABS_DIR), {throwIfNoEntry: false});
+  return !stat ? 'absent' : stat.isDirectory() ? 'dir' : 'not-directory';
+}
 
+// 탭 기록 읽기. 반환: {ok: true, state, id} | {ok: false, why}. why는 tab-record-<못 읽은 까닭> 또는 tab-record-bad-shape.
 function readTabState(dir) {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(dir, 'tab.json'), 'utf8'));
-    return value && typeof value === 'object' ? value : null;
-  } catch { return null; }
-}
-// 그 호출의 세션이 뜬 소켓 이름(세션 기록에서 읽는다). 읽지 못하면 null.
-function sessionSocket(dir) {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
-    return typeof value?.socket === 'string' && value.socket ? value.socket : null;
-  } catch { return null; }
-}
-// 닫아 볼 수 있는 자기 탭 id. 없으면 null.
-function closableId(state) {
-  return state && RETRYABLE.has(state.state) && typeof state.rottieTerminalId === 'string' && state.rottieTerminalId ? state.rottieTerminalId : null;
+  const read = readRegularJson(path.join(dir, 'tab.json'));
+  if (!read.ok) return {ok: false, why: `tab-record-${read.why}`};
+  const value = read.value;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.state !== 'string') return {ok: false, why: 'tab-record-bad-shape'};
+  return {ok: true, state: value.state, id: typeof value.rottieTerminalId === 'string' && value.rottieTerminalId ? value.rottieTerminalId : null};
 }
 
 export function rememberOpenTab(home, dir, id) {
   try {
-    const file = markerFile(home, dir);
-    fs.mkdirSync(path.dirname(file), {recursive: true, mode: 0o700});
-    fs.writeFileSync(file, JSON.stringify({dir, rottieTerminalId: id, at: new Date().toISOString()}) + '\n', {mode: 0o600});
+    const kind = markerFolderKind(home);
+    if (kind === 'not-directory') return;
+    if (kind === 'absent') fs.mkdirSync(path.join(home, OPEN_TABS_DIR), {mode: 0o700});
+    writeAtomic(markerFile(home, dir), JSON.stringify({dir, rottieTerminalId: id, at: new Date().toISOString()}) + '\n');
   } catch { /* 꾸밈이다: 표지를 못 써도 호출·정리는 그대로 간다 */ }
 }
 export function forgetOpenTab(home, dir) {
-  try { fs.unlinkSync(markerFile(home, dir)); } catch { /* 없으면 지울 것이 없다 */ }
+  try { if (markerFolderKind(home) === 'dir') fs.unlinkSync(markerFile(home, dir)); } catch { /* 없으면 지울 것이 없다 */ }
+}
+
+// 그 경로가 이 홈의 advice/ 아래인가 — 실제 경로(링크를 푼 경로)로 본다. 반환: true | false | null(실제 경로를 얻지 못함).
+function insideAdvice(home, dir) {
+  let real, root;
+  try { root = fs.realpathSync(path.join(home, 'advice')); real = fs.realpathSync(dir); } catch { return null; }
+  const rel = path.relative(root, real);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 // 표지 목록(읽기만 한다). 줄마다 {file, dir, id, status, why?}.
 //  pending — 닫아 볼 탭이다: 호출 폴더가 이 홈의 advice/ 아래이고, 표지 이름이 그 폴더에서 나온 이름이며, tab.json의 탭 id가 표지와 같다
-//  stale   — 이미 닫혔거나 탭 기록이 없다(표지만 남음)
-//  invalid — 믿을 수 없는 표지(깨진 글·다른 홈·이름 불일치·탭 id 불일치). 닫지 않는다
+//  stale   — 탭 기록을 정상으로 읽었고 이미 닫힘이다(표지만 남음). 지워도 되는 것은 이것뿐이다
+//  invalid — 닫을 수 없는 표지: 믿을 수 없거나(깨진 글·링크·다른 홈·이름 불일치·탭 id 불일치) 탭 기록을 읽지 못해 모른다. 닫지도 지우지도 않는다
 export function listOpenTabs(home) {
-  const folder = path.join(home, OPEN_TABS_DIR), root = path.join(home, 'advice') + path.sep;
+  const folder = path.join(home, OPEN_TABS_DIR);
+  const kind = markerFolderKind(home);
+  if (kind === 'absent') return [];
+  if (kind === 'not-directory') return [{file: folder, dir: null, id: null, status: 'invalid', why: 'marker-folder-not-directory'}];
   let names;
   try { names = fs.readdirSync(folder).filter(name => name.endsWith('.json')).sort(); } catch { return []; }
   return names.map(name => {
     const file = path.join(folder, name);
-    let value;
-    try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {file, dir: null, id: null, status: 'invalid', why: 'marker-unreadable'}; }
+    const marker = readRegularJson(file);
+    if (!marker.ok) return {file, dir: null, id: null, status: 'invalid', why: marker.why === 'not-regular' ? 'marker-not-regular' : 'marker-unreadable'};
+    const value = marker.value;
     const dir = typeof value?.dir === 'string' ? value.dir : null, id = typeof value?.rottieTerminalId === 'string' ? value.rottieTerminalId : null;
     const bad = why => ({file, dir, id, status: 'invalid', why});
-    if (!dir || !path.isAbsolute(dir) || !path.resolve(dir).startsWith(root)) return bad('marker-outside-home');
+    if (!dir || !path.isAbsolute(dir)) return bad('marker-outside-home');
+    const inside = insideAdvice(home, dir);
+    if (inside === null) return bad('call-dir-missing');
+    if (!inside) return bad('marker-outside-home');
     if (markerFile(home, dir) !== file) return bad('marker-name-differs');
-    const state = readTabState(dir);
-    if (!state || !RETRYABLE.has(state.state)) return {file, dir, id, status: 'stale'};
-    if (!id || closableId(state) !== id) return bad('tab-id-differs');
+    const tab = readTabState(dir);
+    if (!tab.ok) return bad(tab.why);
+    if (tab.state === 'closed') return {file, dir, id, status: 'stale'};
+    if (!RETRYABLE.has(tab.state)) return bad('tab-state-not-open');
+    if (!id || tab.id !== id) return bad('tab-id-differs');
     return {file, dir, id, status: 'pending'};
   });
 }
@@ -178,9 +224,14 @@ export function listOpenTabs(home) {
 // (카단 pane 안의 감독은 KADAN_WINDOW=none을 물려받는다). 필요한 것은 로티 실행 파일과 운영 로티 보호(기본이 아닌 홈은 거절)뿐이다.
 // 반환: 닫을 탭이 없으면 null, 닫았으면 {tab: 'closed'}, 못 닫았으면 {tab: 'close-skipped'|'close-failed', tabReason}. 던지지 않는다.
 // 닫히면 표지를 지우고, 닫지 못하면 표지를 남겨(없으면 만들어) 다음 정리 명령이 다시 찾게 한다. 제목·키로 목록을 뒤져 지우지 않는다.
+// 탭 기록이 있는데 읽지 못하면(깨짐·링크) 닫지 않고 그 이유를 돌려준다 — 표지는 건드리지 않는다.
 export function closeKeptTab({home, env, dir, rottie}) {
-  const state = readTabState(dir), id = closableId(state);
-  if (!id) { if (state && !RETRYABLE.has(state.state)) forgetOpenTab(home, dir); return null; }
+  const tab = readTabState(dir);
+  if (!tab.ok) return tab.why === 'tab-record-missing' ? null : {tab: 'close-skipped', tabReason: tab.why};
+  // 정상으로 읽었고 이미 닫힘이면 표지를 지운다. 그 밖에 닫을 탭이 없는 상태(열지 않음 등)는 표지를 건드리지 않는다.
+  if (tab.state === 'closed') { forgetOpenTab(home, dir); return null; }
+  const id = RETRYABLE.has(tab.state) ? tab.id : null;
+  if (!id) return null;
   let result;
   try {
     const bin = effectiveWindow(env, home).rottieBin.value;
@@ -210,18 +261,25 @@ export function closeKeptTab({home, env, dir, rottie}) {
 }
 
 // 정리 명령의 탭 훑기: 표지가 가리키는 탭 가운데 세션 없이 남은 것을 닫는다. seen은 이번 정리가 본 세션들의 호출 폴더다
-// (그 탭은 세션 줄에서 다뤘거나, 살아 있는 세션의 것이라 그대로 둔다). 소켓의 세션 목록에 없는 호출 폴더의 탭이 세션 없이 남은 탭이다.
-// 표지는 홈마다 있고 세션 목록은 소켓마다 있다: 그 호출의 세션 기록(session.json)이 지금 소켓(socket)의 것일 때만 '세션 없음'을 믿는다.
-// 다른 소켓의 기록이거나 기록을 읽지 못하면 그 세션이 살아 있을 수 있으므로 닫지 않고 이유를 보인다(표지는 남는다).
+// (그 탭은 세션 줄에서 이미 다뤘다 — 껐으면 닫아 봤고, 뒀으면 그 세션의 탭이라 그대로 둔다).
+// 나머지 탭은 presence(호출 폴더)로 그 세션이 있는지 묻는다(부른 쪽이 준다 — 기록에 적힌 세션 이름으로 같은 소켓에 직접 조회한다).
+//  gone    — 세션이 없다는 것이 확정됐다. 이때만 닫는다
+//  present — 그 이름의 세션이 있다(호출 폴더 칸이 비었거나 기록과 달라도). 탭을 두고 진행 중으로 본다
+//  unknown — 모른다(조회 실패·다른 소켓의 호출·세션 기록 없음). 탭을 두고 이유를 보인다
+// 세션 목록에 그 호출 폴더가 보이지 않는다는 것만으로는 세션이 없다고 보지 않는다(2026-11-19 재검수 발견 1: 목록의 경로 칸이 빈 살아 있는 세션).
 // dryRun이면 무엇을 닫을지만 돌려주고 표지·탭 기록을 바꾸지 않는다. 반환: 줄마다 {dir, id, action: tab-closed|tab-would-close|tab-left, why?, tab?}.
-export function sweepOpenTabs({home, env, rottie, seen, socket, dryRun = false}) {
+export function sweepOpenTabs({home, env, rottie, seen, presence, dryRun = false}) {
   const rows = [];
   for (const entry of listOpenTabs(home)) {
-    if (entry.status === 'stale') { if (!dryRun) { try { fs.unlinkSync(entry.file); } catch { /* 이미 없다 */ } } continue; }
+    if (entry.status === 'stale') { if (!dryRun) forgetOpenTab(home, entry.dir); continue; }
     if (entry.status === 'invalid') { rows.push({dir: entry.dir, id: entry.id, action: 'tab-left', why: entry.why}); continue; }
     if (seen.has(entry.dir)) continue;
-    const owner = sessionSocket(entry.dir);
-    if (owner !== socket) { rows.push({dir: entry.dir, id: entry.id, action: 'tab-left', why: owner == null ? 'session-record-missing' : 'other-socket'}); continue; }
+    let session;
+    try { session = presence(entry.dir); } catch { session = {state: 'unknown', why: 'query-failed'}; }
+    if (session?.state !== 'gone') {
+      rows.push({dir: entry.dir, id: entry.id, action: 'tab-left', why: session?.state === 'present' ? 'session-present' : session?.why ?? 'query-failed'});
+      continue;
+    }
     if (dryRun) { rows.push({dir: entry.dir, id: entry.id, action: 'tab-would-close'}); continue; }
     const tab = closeKeptTab({home, env, dir: entry.dir, rottie});
     rows.push(tab?.tab === 'closed' ? {dir: entry.dir, id: entry.id, action: 'tab-closed', tab}
