@@ -31,6 +31,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 import { cmdStart } from "./start.mjs";
 import { checkpointSecretary, resumeSecretary, withRecoveryLock } from "../secretary-resume.mjs";
+import { secretarySkipNote } from "../secretary-settings.mjs";
 import { openSecretaryTab, attachHiddenSecretary, attachFailureLine } from "../secretary-tab.mjs";
 import { dashboardBuild } from "../dashboard-static.mjs";
 
@@ -145,8 +146,13 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
     // 1분마다 도는 자동 실행은 바뀐 것이 있을 때만 출력한다. 화면 빌드 경고는 사람이 친 up에만 낸다.
     ...(auto ? {} : { dashboardBuild }),
     ...(tmuxFloor ? {
+      // 실행 모델 설정의 비서 자리 값을 입힌 결과를 한 줄로 남긴다(자동 실행은 autostart.log, 사람이 친 up은 화면).
       restoreSecretary: startNew => resumeSecretary({home, floor, startNew,
-        openTab: tab => openSecretaryTab({home, auto, ...tab})}),
+        openTab: tab => openSecretaryTab({home, auto, ...tab}),
+        onSettings: result => {
+          if (result.skipped) log(`경고: ${secretarySkipNote(result.skipped)}`);
+          else if (result.applied?.changed) log(`비서 실행 모델 설정 반영: ${result.applied.model} · ${result.applied.effort ?? "강도 그대로"}`);
+        }}),
       startWatch: () => startWatchSession(home),
       startBridge: () => startBridgeSession(home),
     } : {}),

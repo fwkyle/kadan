@@ -62,7 +62,7 @@ test('역할 값은 목록의 모델·지원 강도만 받고, 바꾸기 전→�
   assert.throws(() => set('worker', 'xai/grok-9', 'xhigh', 1), /고를 수 없는 모델/);
   assert.throws(() => set('reviewer', 'gpt-6-sol', 'xhigh', 1), /지원하지 않는 강도/);
   assert.throws(() => set('worker', 'xai/grok-4.7-build-fast', 'xhigh', 1, {reason:''}), /이유/);
-  assert.throws(() => set('secretary', 'gpt-6-sol', 'medium', 1), /역할은/);
+  assert.throws(() => set('butler', 'gpt-6-sol', 'medium', 1), /역할은/);
   set('worker', 'xai/grok-4.7-build-fast', 'xhigh', 1);
   assert.throws(() => set('reviewer', 'gpt-6-sol', 'medium', 1), /설정이 바뀌었다/);
   set('reviewer', 'gpt-6-sol', 'medium', 2);
@@ -162,7 +162,7 @@ test('감독 자리: 실행기 틀·실측 모델을 기록으로 등록한 뒤 
 
 test('정책 차단은 기록으로 추가하고 역할을 비우면 모든 역할에서 막는다', () => {
   const f = fixture(); initialize(f);
-  assert.throws(() => blockModel(f.home, {model:'gpt-6-astra', roles:'secretary', revision:1, by:'kyle', reason:'시험', record:f.record}), /역할은/);
+  assert.throws(() => blockModel(f.home, {model:'gpt-6-astra', roles:'butler', revision:1, by:'kyle', reason:'시험', record:f.record}), /역할은/);
   blockModel(f.home, {model:'gpt-6-astra', roles:'reviewer', revision:1, by:'kyle', reason:'astra는 검수자로 쓰지 않는다', record:f.record});
   assert.deepEqual(readSettings(f.home).blocked, [{model:'gpt-6-astra', roles:['reviewer'], reason:'astra는 검수자로 쓰지 않는다'}]);
   assert.throws(() => setRole(f.home, {role:'reviewer', runner:'codex', model:'gpt-6-astra', effort:'medium', revision:2, by:'kyle', reason:'시험', record:f.record, ...f.options}), /정책으로 막은/);

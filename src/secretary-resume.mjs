@@ -11,6 +11,7 @@ import {buildStartLedgerEntry} from './cli-start-support.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {descendantPids, openFilesOf} from './process-tree.mjs';
 import {mergeCodexOptions, dedupeResumeCommand, serializeWords} from './codex-option-merge.mjs';
+import {secretaryCommandFromSettings, warnSecretarySkip} from './secretary-settings.mjs';
 
 export const startDigest = entry => createHash('sha256').update(JSON.stringify(entry)).digest('hex');
 const checkpointPath = home => path.join(home, 'secretary-resume.json');
@@ -157,8 +158,10 @@ export function checkpointSecretary({home, floor, read = () => readSystemLedger(
 
 // openTab({entries, session, role, cwd, panePid})은 로티 탭을 열고 {window, rottieTerminalId, ...}를 돌려준다(던지지 않음).
 // 세션을 먼저 만든 뒤에만 부르고, 탭이 안 열려도(없음·실패·시간 초과) 시작은 성공이며 숨김으로 기록한다.
+// 실행 모델 설정에 비서 자리가 있으면 저장된 명령의 모델·강도 값만 그 값으로 바꿔 연다(secretary-settings.mjs).
+// onSettings(결과)는 세션을 만든 뒤 한 번 불린다. 기본은 적용하지 못한 이유를 표준 오류에 한 줄 낸다.
 export function resumeSecretary({home, floor, startNew, read = () => readSystemLedger(home),
-  record = entry => appendLedger(entry, home), startExtra = {}, openTab = null} = {}) {
+  record = entry => appendLedger(entry, home), startExtra = {}, openTab = null, onSettings = warnSecretarySkip} = {}) {
   return withRecoveryLock(home, 'kadan-비서', () => {
     if (floor.alive('kadan-비서')) return 'reused';
     const entries = read();
@@ -170,9 +173,11 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
     assertCheckpointMatches(saved, start);
     const window = currentRottieWindow(entries, start.session);
     const savedCommand = dedupeResumeCommand(saved.command); // 이미 겹쳐 쌓인 체크포인트도 한 벌로 낫는다
-    const command = withInlineScreen(savedCommand); // 옛 체크포인트에도 인라인 화면을 붙인다
+    const fromSettings = secretaryCommandFromSettings({home, command: savedCommand});
+    const command = withInlineScreen(fromSettings.command); // 옛 체크포인트에도 인라인 화면을 붙인다
     const evidence = floor.create({session: start.session, role: start.role,
       cwd: saved.cwd, cmd: command});
+    try { onSettings(fromSettings); } catch { /* 알림 실패는 시작을 막지 않는다 */ }
     let tab = null;
     try { tab = openTab?.({entries, session: start.session, role: start.role, cwd: saved.cwd,
       panePid: evidence.panePid}) ?? null; } catch { /* 탭을 못 열어도 시작은 성공(숨김) */ }
@@ -182,36 +187,40 @@ export function resumeSecretary({home, floor, startNew, read = () => readSystemL
       rottieTerminalId: tabOpened ? tab.rottieTerminalId : window?.rottieTerminalId}),
       ...(tabOpened ? {rottieBundleId: tab.rottieBundleId, rottieConnect: tab.rottieConnect} : {}), roleProfile: start.roleProfile || 'secretary',
       by: start.by || '사람', secretaryResumeSource: saved.startDigest,
-      secretaryConversation: saved.conversation, ...startExtra});
+      secretaryConversation: saved.conversation, ...fromSettings.extra, ...startExtra});
     // Same conversation, new pane generation. Preserve the checkpoint if UI startup is later.
     const current = secretaryStart(read());
     if (!current || String(current.panePid) !== String(evidence.panePid)) {
       throw new Error('비서 복원 시작 기록 확인 필요. 자동 재시도하지 않습니다.');
     }
-    fs.writeFileSync(file + '.tmp', JSON.stringify({...saved, command: savedCommand, startDigest: startDigest(current)}) + '\n',
-      {mode: 0o600});
+    // 체크포인트에는 실제로 띄운 명령(설정값을 입혔으면 그 값)을 남긴다. 이 세대의 시작 명령과 같아야 다음 체크포인트·
+    // 로티 탭 복원의 원본 대조가 어긋나지 않고, 나중에 비서 자리를 비워도 옛 모델로 되돌아가지 않는다.
+    const advanced = {...saved, command: fromSettings.command, startDigest: startDigest(current)};
+    fs.writeFileSync(file + '.tmp', JSON.stringify(advanced) + '\n', {mode: 0o600});
     fs.renameSync(file + '.tmp', file);
     return 'restored';
   });
 }
 
-export function advanceSecretaryCheckpoint(home, previous, current, command) {
+// launched: 이번에 실제로 띄운 명령(인라인 화면 옵션 앞). 설정값을 입혀 띄웠을 때만 주고, 체크포인트의 명령도 그것으로 바꾼다.
+export function advanceSecretaryCheckpoint(home, previous, current, command, launched = null) {
   if (current.role !== '비서' || !fs.existsSync(checkpointPath(home))) return;
   const saved = JSON.parse(fs.readFileSync(checkpointPath(home), 'utf8'));
   const words = commandWords(command);
   if (saved.startDigest !== previous || words?.[1] !== 'resume'
     || words[2] !== saved.conversation) return;
   const file = checkpointPath(home);
-  fs.writeFileSync(file + '.tmp', JSON.stringify({...saved, startDigest: startDigest(current)}) + '\n',
-    {mode: 0o600});
+  fs.writeFileSync(file + '.tmp', JSON.stringify({...saved, ...(launched ? {command: launched} : {}),
+    startDigest: startDigest(current)}) + '\n', {mode: 0o600});
   fs.renameSync(file + '.tmp', file);
 }
 
 // Rottie may start before login; its older plan need not contain implicit Codex settings.
-export function savedSecretaryCommand(home, context, command) {
-  if (context.role !== '비서' || !fs.existsSync(checkpointPath(home))) return command;
+// 반환: 저장된 체크포인트의 옵션으로 채운 명령(인라인 화면 옵션 앞), 또는 체크포인트가 이 세대 것이 아니면 null.
+function savedSecretaryBase(home, context, command) {
+  if (!fs.existsSync(checkpointPath(home))) return null;
   const saved = JSON.parse(fs.readFileSync(checkpointPath(home), 'utf8'));
-  if (saved.startDigest !== context.startDigest) return command;
+  if (saved.startDigest !== context.startDigest) return null;
   const words = commandWords(command);
   const savedWords = commandWords(saved.command);
   const identity = transcriptIdentity(saved.transcript);
@@ -222,8 +231,27 @@ export function savedSecretaryCommand(home, context, command) {
     throw new Error('비서 복원 요청과 저장된 대화가 다릅니다.');
   }
   const joined = serializeWords([words[0], ...savedWords.slice(1)]);
-  return joined ? withInlineScreen(dedupeResumeCommand(joined)) : command;
+  return joined ? dedupeResumeCommand(joined) : null;
 }
+
+// 로티 탭 복원이 비서를 띄울 명령. resumeSecretary와 같은 함수(secretaryCommandFromSettings)로 실행 모델 설정의 비서 자리 값을 입힌다.
+// 반환: {command, base, settings, checkpoint}
+// - base: 설정값을 입히기 전 명령(지금까지의 savedSecretaryCommand 결과와 글자까지 같다). 원본 역할과의 모델 대조는 이것으로 한다.
+// - command: 실제로 띄울 명령. 비서 자리가 비었거나 적용하지 못했으면 base와 같다.
+// - settings: secretaryCommandFromSettings의 결과(extra·applied·skipped). 비서가 아니면 null.
+// - checkpoint: 설정값으로 값이 바뀌었을 때만, 체크포인트에 남길 명령(인라인 화면 옵션 앞).
+export function savedSecretaryLaunch(home, context, command) {
+  if (context.role !== '비서') return {command, base: command, settings: null, checkpoint: null};
+  const plain = savedSecretaryBase(home, context, command);
+  // 체크포인트가 이 세대 것이 아니면 로티가 준 명령이 바탕이다(이미 인라인 화면 옵션이 있을 수 있어 다시 붙이지 않는다).
+  const base = plain === null ? command : withInlineScreen(plain);
+  const settings = secretaryCommandFromSettings({home, command: plain ?? command});
+  if (!settings.applied?.changed) return {command: base, base, settings, checkpoint: null};
+  return {command: plain === null ? settings.command : withInlineScreen(settings.command), base, settings,
+    checkpoint: plain === null ? null : settings.command};
+}
+
+export const savedSecretaryCommand = (home, context, command) => savedSecretaryLaunch(home, context, command).command;
 
 // An autostart may precede Rottie. Only a continuous exact-conversation lineage may attach.
 export function resumedSecretaryStart(context, entries, command) {

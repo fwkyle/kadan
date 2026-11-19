@@ -35,7 +35,9 @@ export function RunnerForm({
         ? data.senior.runners
         : role === "explain" && data.explain
           ? data.explain.runners
-          : Object.keys(data.catalog);
+          : role === "secretary" && data.secretary
+            ? [data.secretary.runner]
+            : Object.keys(data.catalog);
   const initial = () =>
     fallback
       ? { runner: runners[0] || "", model: "", effort: "" }
@@ -340,6 +342,9 @@ export function RunnerForm({
                   ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (${choice.runner} exec, 저장소 읽기 전용)`
                   : role === "explain"
                     ? "실행기 표의 exec 틀로 한 번 호출 (실행기 이름은 코드에 없음)"
+                    : role === "secretary"
+                    ? "비서를 다시 열 때 저장된 명령의 모델·강도만 바꿈: " +
+                      `--model ${choice.model}${choice.effort ? ` -c model_reasoning_effort="${choice.effort}"` : ""}`
                     : spec?.spawn
                     .replaceAll("{model}", choice.model)
                     .replaceAll("{effort}", choice.effort || "")}
