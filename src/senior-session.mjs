@@ -1,11 +1,15 @@
 // 시니어 대화형 세션. senior-mode에 headless를 명시하면 기존 헤드리스 경로를 사용한다.
-// codex 대화형 화면을 카단 전용 tmux 소켓(`-L kadan-senior`)에 띄워 질문 한 줄을 넣고, 답 파일의 끝 표지와 화면을 보고 끝을 안 뒤 끈다.
+// codex 대화형 화면을 카단 전용 tmux 소켓(`-L kadan-senior`)에 띄워 질문 한 줄을 넣고, 답 파일의 끝 표지와 화면을 보고 끝을 안다.
+// 끝난 세션은 끄지 않고 남겨 둔다(2026-11-19 [kyle]: 사람이 화면의 모델·강도를 직접 볼 수 있게). 끄는 것은 정리 명령
+// (`kadan senior cleanup`)과 남긴 세션 상한을 넘겼을 때의 내보내기뿐이다.
 // agy(gemini)도 같은 소켓·같은 자리·같은 끄기 확인을 쓰되 작업 폴더·관문·답 회수가 다르다(실행기별 갈래는 아래 seatKind, agy 쪽은 src/senior-agy.mjs).
 // 역할이 아니다: 원장 start·stop·지침 우편·감시 대상에 들지 않는다. 기록은 호출마다 advice 한 줄과 증거 폴더다.
 // 지키는 것(설계 2026-11-17):
 //  - 키는 두 단계로만 나간다: 붙여넣기 직전에 빈 입력칸, Enter 직전에 '입력칸의 글 = 방금 붙인 자기 한 줄'. 아니면 키 0회로 실패한다.
 //    2026-11-17 업데이트 선택 창에 Enter가 들어가 전역 codex 업데이트가 시작된 적이 있다. Esc는 보내지 않는다(알아본 닫기 대상이 없다).
-//  - 끄기는 정상·신호·예약·다음 호출 청소가 모두 같은 확인(killOwn)을 쓴다: 소켓·세션 이름·생성 식별값·pane PID가 기록과 같을 때만.
+//  - 끄기(정리 명령·내보내기·만들다 만 자리)는 모두 같은 확인(killOwn)을 쓴다: 소켓·세션 이름·생성 식별값·pane PID가 기록과 같을 때만.
+//  - 호출이 끝난 세션에는 키를 하나도 보내지 않는다. 끝남은 기록(session.json)에만 적는다(markKept) — 정상·실패·시간 초과·신호 모두.
+//    정리 명령이 쓰는 tmux 명령은 list-sessions·display-message·kill-session뿐이다.
 //  - 자동 재시도·헤드리스 전환·한도 새로고침을 하지 않는다. 운영 코드에 kill-server는 없다.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,12 +28,14 @@ export const SENIOR_MODE_FILE = 'senior-mode';
 export const SUBMITTED_FILE = 'submitted.json';
 export const SENIOR_SOCKET = 'kadan-senior';
 export const SENIOR_SEATS = 4;
+// 남긴 세션의 상한(3번 부른 분량). 진행 중 자리(위 4개)와 따로 센다. 넘으면 가장 오래 남긴 것부터 끈다.
+export const SENIOR_KEPT = 6;
 export const SESSION_ENTRY = fileURLToPath(new URL('./senior-session-run.mjs', import.meta.url));
 // 세션 안 codex가 물려받으면 안 되는 값. KADAN_ROLE이 새면 사용자 설정의 카단 Stop 훅이 부른 감독의 역할로 돈다.
 export const PANE_ENV_STRIP = ['KADAN_ROLE', 'TMUX', 'TMUX_PANE'];
 // 화면에 넣는 한 줄. 작업 폴더가 out/이라 input.txt는 한 칸 위다(2026-11-17 실측한 꼴 그대로 — 짧아서 입력칸에서 감기지 않는다).
 export const ASK_LINE = '../input.txt 를 끝까지 읽고 거기 적힌 대로 수행하라.';
-// 예약 종료·기록 만료의 여유. 호출 상한이 지나고 이만큼 뒤에도 남은 자기 세션은 꺼도 된다.
+// 기록 만료의 여유. 호출 상한이 지나고 이만큼 뒤에는 끝남 기록이 없어도 끝난 호출로 본다(부른 쪽이 기록 없이 죽은 경우).
 const REAP_MARGIN_MS = 120_000;
 export const SESSION_TIMING = {pollMs: 2000, startupMs: 60_000, settleMs: 3000, submitGraceMs: 30_000,
   idleConfirm: 2, keyGapS: '1'};
@@ -125,12 +131,28 @@ export function readRecord(dir) {
     return value && typeof value === 'object' && typeof value.session === 'string' ? value : null;
   } catch { return null; }
 }
+// 임시 파일에 쓴 뒤 옮긴다: 부른 쪽과 감싼 프로세스가 같은 신호에서 함께 적어도 반쯤 쓴 기록이 남지 않는다.
+// (깨진 기록의 세션은 자기 것으로 확인할 수 없어 끄지 못하고 진행 중 자리로 계속 세어진다.)
 function writeRecord(dir, record) {
-  fs.writeFileSync(recordPath(dir), JSON.stringify(record, null, 1) + '\n', {mode: 0o600});
+  const file = recordPath(dir), temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(record, null, 1) + '\n', {mode: 0o600});
+  fs.renameSync(temp, file);
 }
 function patchRecord(dir, patch) {
   // 근거 기록 실패가 끄기를 막지 않는다.
   try { const record = readRecord(dir); if (record) writeRecord(dir, {...record, ...patch}); } catch { /* 위 */ }
+}
+
+// 남김 표시: 세션은 끄지 않고 기록에 끝남과 남긴 시각만 적는다. tmux를 부르지 않는다(신호 처리기에서도 쓴다).
+// 먼저 적힌 값은 지킨다 — 감싼 프로세스가 적은 끝난 이유를 부른 쪽이 덮어쓰지 않는다. 반환: 적었는가.
+export function markKept(dir, reason) {
+  try {
+    const record = readRecord(dir);
+    if (!record) return false;
+    const at = new Date().toISOString();
+    writeRecord(dir, {...record, endedAt: record.endedAt ?? at, endReason: record.endReason ?? reason, keptAt: record.keptAt ?? at});
+    return true;
+  } catch { return false; }
 }
 
 function processAlive(pid) {
@@ -159,10 +181,13 @@ function queryMiss(result) { return GONE.test(String(result.stderr ?? '')) ? 'no
 // 같은 확인: 이 소켓의 그 이름 세션이 기록과 같은 생성 식별값·호출 폴더·pane PID를 갖고 있을 때만 자기 것이다.
 export function confirmOwn(record, run) {
   if (record.socket !== run.socket) return {own: false, why: 'socket-differs'};
-  const format = '#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}';
+  const format = '#{session_name}\t#{pane_pid}\t#{@kadan_senior_ask}\t#{@kadan_senior_dir}';
   const result = run.try(['display-message', '-p', '-t', `=${record.session}:`, format]);
   if (result.status !== 0) return {own: false, why: queryMiss(result)};
-  const [pid, ask, dir] = result.stdout.replace(/\n$/u, '').split('\t');
+  const [name, pid, ask, dir] = result.stdout.replace(/\n$/u, '').split('\t');
+  // 그 이름의 세션이 없는데 같은 소켓에 다른 세션이 있으면 tmux가 실패하지 않고 다른 세션의 값을 답한다(tmux 3.6a, 2026-11-19 관찰:
+  // 세션을 남겨 두면서 드러났다). 답한 세션의 이름이 다르면 그 세션은 없는 것이다 — '기록과 다름'으로 읽지 않는다.
+  if (name !== record.session) return {own: false, why: 'no-session'};
   if (ask !== record.askId || dir !== record.dir) return {own: false, why: 'generation-differs'};
   if (String(pid) !== String(record.panePid)) return {own: false, why: 'pid-differs'};
   return {own: true};
@@ -187,6 +212,8 @@ export function killOwn(dir, {run, reason = 'done', env = process.env} = {}) {
   patchRecord(dir, {endedAt: record.endedAt ?? at, endReason: record.endReason ?? reason});
   const result = tmux.try(['kill-session', '-t', `=${record.session}`]);
   if (result.status !== 0) return {killed: false, why: 'kill-failed'};
+  // 끈 시각과 까닭(정리 명령·내보내기·만들다 만 자리)은 끝난 이유와 따로 적는다.
+  patchRecord(dir, {closedAt: new Date().toISOString(), closeReason: reason});
   release();
   return {killed: true};
 }
@@ -196,19 +223,47 @@ export function killOwn(dir, {run, reason = 'done', env = process.env} = {}) {
 const callEnded = (record, nowMs) =>
   record.endedAt != null || nowMs > Number(record.expiresAt) || !processAlive(record.ownerPid);
 
-// 다음 호출 시작 때의 청소. 소켓의 세션 목록에서 출발해 세션 옵션이 가리키는 기록을 찾고, 기록이 맞고 끝난 호출의 것만 끈다.
-// 기록이 없거나 못 읽으면 끄지 않는다. 이름으로 추측하지 않고 advice/ 전체를 훑지 않는다.
-export function sweepEnded({home, run, now = Date.now}) {
-  const swept = [];
+// 소켓의 세션을 하나씩 가른다. 세션 목록에서 출발해 세션 옵션이 가리키는 기록을 찾는다(이름으로 추측하지 않고 advice/ 전체를 훑지 않는다).
+//  kept   — 끝난 호출의 세션이고 기록 대조(confirmOwn)가 맞다. 꺼도 되는 것은 이것뿐이다.
+//  active — 그 밖의 모두. 진행 중인 호출(running)뿐 아니라 기록이 없거나(no-record) 이 홈의 것이 아니거나(outside-home)
+//           대조가 안 되는(pid-differs 등) 세션도 보수적으로 진행 중 자리로 센다.
+// 읽기만 한다: tmux 명령은 list-sessions·display-message뿐이고 기록을 고치지 않는다.
+export function seniorSessionStates({home, run, now = Date.now}) {
   const root = path.join(home, 'advice') + path.sep;
-  for (const row of listSeniorSessions(run)) {
-    if (!row.dir || !path.resolve(row.dir).startsWith(root)) continue;
+  return listSeniorSessions(run).map(row => {
+    const base = {name: row.name, dir: row.dir};
+    if (!row.dir) return {...base, state: 'active', why: 'no-record'};
+    if (!path.resolve(row.dir).startsWith(root)) return {...base, state: 'active', why: 'outside-home'};
     const record = readRecord(row.dir);
-    if (!record || record.session !== row.name || record.dir !== row.dir) continue;
-    if (!callEnded(record, now())) continue;
-    if (killOwn(row.dir, {run, reason: 'swept'}).killed) swept.push(row.name);
-  }
-  return swept;
+    if (!record || record.session !== row.name || record.dir !== row.dir) return {...base, state: 'active', why: 'no-record'};
+    if (!callEnded(record, now())) return {...base, record, state: 'active', why: 'running'};
+    const verdict = confirmOwn(record, run);
+    return verdict.own ? {...base, record, state: 'kept'} : {...base, record, state: 'active', why: verdict.why};
+  });
+}
+const keptOrder = row => String(row.record.keptAt ?? row.record.endedAt ?? row.record.createdAt ?? '');
+
+// 정리 명령의 본체. 끝난 호출이고 대조가 맞는 세션(kept)만 끈다. 진행 중·기록 없음·대조 실패는 그대로 두고 이유를 돌려준다.
+// dryRun이면 무엇을 끌지만 돌려주고 아무것도 바꾸지 않는다(끄기 확인 함수도 부르지 않는다 — 그 함수는 거절 이유를 기록에 적는다).
+// closeTab(호출 폴더): 그 세션의 열린 로티 탭 닫기(부른 쪽이 준다). 반환: 줄마다 {session, dir, …기록 칸, action, why?, tab?}.
+export function cleanupSeniorSessions({home, run, dryRun = false, now = Date.now, closeTab = () => null}) {
+  const sweep = () => seniorSessionStates({home, run, now}).map(row => {
+    const {record} = row;
+    const info = {session: row.name, dir: row.dir, runner: record ? record.runner ?? 'codex' : null, model: record?.model ?? null,
+      createdAt: record?.createdAt ?? null, endReason: record?.endReason ?? null, keptAt: record?.keptAt ?? null};
+    if (row.state !== 'kept') return {...info, action: 'left', why: row.why};
+    if (dryRun) return {...info, action: 'would-close'};
+    const result = killOwn(row.dir, {run, reason: 'cleanup'});
+    if (!result.killed && result.why !== 'no-session') return {...info, action: 'left', why: result.why};
+    let tab = null;
+    try { tab = closeTab(row.dir); } catch { /* 탭은 꾸밈이다 */ }
+    return {...info, action: 'closed', ...(tab ? {tab} : {})};
+  });
+  if (dryRun) return sweep();
+  // 자리 확보(openSeats)의 분류·내보내기와 겹치지 않게 같은 잠금을 잡는다.
+  const lock = path.join(home, 'senior-seats.lock');
+  if (!acquireDirLock(lock)) throw new Error(`시니어 자리 잠금을 얻지 못했다(${lock}) — 다른 호출이 자리를 잡는 중이거나 멈춘 잠금이다`);
+  try { return sweep(); } finally { fs.rmdirSync(lock); }
 }
 
 // codex 자리: 모델 작업 폴더는 호출 폴더의 out/이고 답은 그 안의 result.txt다.
@@ -244,7 +299,7 @@ function seatKind(runner = 'codex') {
   return kinds[runner];
 }
 
-function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, node, reapMarginMs, shared}) {
+function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, reapMarginMs, shared}) {
   const {dir} = call;
   const kind = seatKind(call.runner);
   const plan = kind.plan({call, askId, index, shared});
@@ -254,7 +309,7 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
   try { run(['new-session', '-d', '-s', session, '-x', '150', '-y', '50', '-c', plan.cwd, paneCommand({gate, argv: plan.argv})]); }
   catch (error) { release(); throw error; }
   // 여기서부터 실패하면 방금 만든 세션을 치운다. 어디까지 했는지를 적어 두고, 치우기 전에 아는 만큼 견준다(discardSeat).
-  const made = {session, askId, dir, panePid: null, dirOption: 'none', askOption: 'none', recorded: false};
+  const made = {session, askId, dir, panePid: null, dirOption: 'none', askOption: 'none'};
   try {
     const panePid = run(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']).trim();
     if (!/^\d+$/u.test(panePid)) throw new Error(`시니어 세션의 pane PID를 읽지 못했다: ${session}`);
@@ -273,17 +328,14 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
       ...(call.runner ? {runner: call.runner} : {}), model: call.model,
       marker: markerOf(call.token), line: plan.line, createdAt: new Date(now()).toISOString(), deadlineAt, expiresAt,
       timing: call.timing ?? SESSION_TIMING};
+    // 기록이 마지막 단계다. 예약 종료는 걸지 않는다(2026-11-19): 끝난 세션은 남겨 두고, 부른 쪽이 기록 없이 죽은 호출은
+    // 기록의 만료 시각(expiresAt)·부른 프로세스 생존으로 끝난 것을 안다(callEnded). tmux 서버가 따로 띄우는 일이 없다.
     writeRecord(dir, record);
-    made.recorded = true;
-    // 예약 종료: 상한과 여유가 지나면 tmux 서버가 같은 확인 함수(reap → killOwn)를 부른다. 이름만으로 끄지 않는다.
-    const delay = Math.max(1, Math.ceil((expiresAt - now()) / 1000));
-    const reap = `${quote(node)} ${quote(SESSION_ENTRY)} reap ${quote(dir)}`;
-    run(['run-shell', '-b', '-d', String(delay), '-t', `=${session}:`, reap]);
     return {...record, index};
   } catch (error) {
     const cleanup = discardSeat(made, run);
-    // 기록을 쓴 뒤의 정리(killOwn)는 그 자리의 파일도 치운다. 기록 전이면 세션을 껐거나 이미 없을 때만 여기서 치운다.
-    if (!made.recorded && (cleanup.killed || cleanup.why === 'no-session')) release();
+    // 세션을 껐거나 이미 없을 때만 그 자리가 만든 파일을 치운다.
+    if (cleanup.killed || cleanup.why === 'no-session') release();
     error.seatCleanup = cleanup;
     if (!cleanup.killed && cleanup.why !== 'no-session') {
       error.message += ` — 만든 세션 ${session}은 끄지 않았다(${cleanup.why}): 자기 것인지 확인하지 못했다`;
@@ -292,14 +344,14 @@ function createSeat({home, run, askId, call, index, deadlineAt, now, ownerPid, n
   }
 }
 
-// 만들다 만 세션의 정리. 같은 이름은 소유 근거가 아니다 — 확인이 틀리거나 불명확하면 끄지 않고 이유를 남긴다.
-//  - 기록을 쓴 뒤: 다른 길과 같은 확인(killOwn)만 쓴다. 거절되면 그대로 둔다(이유는 기록의 killSkipped).
-//  - 기록을 쓰기 전: 방금 읽은 pane PID와, 그때까지 붙인 세션 옵션(호출 폴더·askId)을 다시 읽어 같을 때만 끈다.
+// 만들다 만 세션의 정리(기록을 쓰기 전 단계 — 기록이 마지막 단계라 기록을 쓴 자리는 여기로 오지 않는다).
+// 같은 이름은 소유 근거가 아니다 — 확인이 틀리거나 불명확하면 끄지 않고 이유를 남긴다.
+//  - 방금 읽은 pane PID와, 그때까지 붙인 세션 옵션(호출 폴더·askId)을 다시 읽어 같을 때만 끈다.
 //    PID를 읽지 못했으면 견줄 것이 없어 끄지 않는다. 그 세션은 문이 열리지 않은 대기 셸이라 60초 뒤 스스로 끝난다.
+//  - 기록까지 쓴 앞자리(다음 자리가 실패한 경우)는 openSeats가 다른 길과 같은 확인(killOwn)으로 끈다.
 // 끄지 않은 이유는 호출 폴더의 create-cleanup.json에 남긴다(기록이 없는 단계라 session.json에는 적을 수 없다).
 function discardSeat(made, run) {
   const {session, dir} = made;
-  if (made.recorded) return killOwn(dir, {run, reason: 'partial-create'});
   const leave = why => {
     const note = {session, socket: run.socket, askId: made.askId, why, at: new Date().toISOString()};
     const text = JSON.stringify(note, null, 1) + '\n';
@@ -325,21 +377,35 @@ function discardSeat(made, run) {
   return run.try(['kill-session', '-t', `=${session}`]).status === 0 ? {killed: true} : leave('kill-failed');
 }
 
-// 자리 확보: 짧은 생성 잠금 안에서 청소 → 현재 수 → `현재 + 이번 전원 ≤ 4` → 이번 전원의 세션 만들기를 한 묶음으로 한다.
-// 자리가 모자라면 아무도 부르지 않는다(줄 세우기 없음). 한 세션을 만든 뒤 다음이 실패하면 만든 자기 세션을 끄고 던진다.
-// calls: [{dir, model, effort, token, timing?}]. 반환: seats[] (session.json 기록과 같은 값 + index).
+// 자리 확보: 짧은 생성 잠금 안에서 분류 → 남긴 세션 내보내기 → 진행 중 수 → `진행 중 + 이번 전원 ≤ 4` → 이번 전원의 세션 만들기를 한 묶음으로 한다.
+//  - 진행 중 자리(4개)에는 끝난 호출의 세션 중 대조가 맞는 것(남긴 세션)을 세지 않는다. 기록이 없거나 대조가 안 되는 세션은 진행 중으로 센다.
+//  - 남긴 세션은 따로 6개까지다: `남긴 수 + 이번 인원 > 6`이면 가장 오래 남긴 것부터 같은 확인(killOwn)으로 끄고 그 탭을 닫는다(closeKeptTab).
+//    남긴 세션 때문에 새 호출을 거절하지 않는다. 끄지 못한 세션은 그대로 두고 진행 중 쪽에 센다.
+// 진행 중 자리가 모자라면 아무도 부르지 않는다(줄 세우기 없음). 한 세션을 만든 뒤 다음이 실패하면 만든 자기 세션을 끄고 던진다.
+// calls: [{dir, model, effort?, token, timing?}]. 반환: seats[] (session.json 기록과 같은 값 + index).
 export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, ownerPid = process.pid,
-  node = process.execPath, reapMarginMs = REAP_MARGIN_MS}) {
+  reapMarginMs = REAP_MARGIN_MS, closeKeptTab = () => {}}) {
   const lock = path.join(home, 'senior-seats.lock');
   if (!acquireDirLock(lock)) throw new Error(`시니어 자리 잠금을 얻지 못했다(${lock}) — 다른 호출이 자리를 잡는 중이거나 멈춘 잠금이다`);
   const seats = [];
+  const short = current => new Error(`시니어 대화형 자리가 모자란다(지금 ${current}개 + 이번 ${calls.length}명 > ${SENIOR_SEATS}) — 아무도 부르지 않는다. ` +
+    '진행 중인 호출이 끝난 뒤 다시 불러라(끝난 세션은 자리를 차지하지 않는다 — 무엇이 남았는지는 kadan senior cleanup --dry-run)');
   try {
-    sweepEnded({home, run, now});
-    const current = listSeniorSessions(run).length;
-    if (current + calls.length > SENIOR_SEATS) {
-      throw new Error(`시니어 대화형 자리가 모자란다(지금 ${current}개 + 이번 ${calls.length}명 > ${SENIOR_SEATS}) — 아무도 부르지 않는다. ` +
-        '앞선 호출이 끝난 뒤 다시 불러라');
+    const states = seniorSessionStates({home, run, now});
+    let current = states.filter(row => row.state === 'active').length;
+    // 내보내기 전에 한 번 본다: 어차피 못 부를 호출 때문에 남긴 세션을 끄지 않는다.
+    if (current + calls.length > SENIOR_SEATS) throw short(current);
+    const kept = states.filter(row => row.state === 'kept').sort((a, b) => keptOrder(a).localeCompare(keptOrder(b)));
+    let over = kept.length + calls.length - SENIOR_KEPT;
+    for (const old of kept) {
+      if (over <= 0) break;
+      const result = killOwn(old.dir, {run, reason: 'evicted'});
+      if (result.killed || result.why === 'no-session') {
+        over -= 1;
+        try { closeKeptTab(old.dir); } catch { /* 탭은 꾸밈이다 */ }
+      } else current += 1; // 끄지 못한 세션은 그대로 두고 진행 중 쪽에 센다.
     }
+    if (current + calls.length > SENIOR_SEATS) throw short(current);
     // 실행기마다 한 번 하는 준비(agy의 고정 작업 폴더: git 밖 확인 → 에이전트 파일)를 세션을 하나도 만들기 전에 끝낸다.
     // 여기서 걸리면 던져 아무도 부르지 않는다. 잠금 안이라 첫 두 호출이 같은 폴더를 동시에 만들지 않는다.
     const prepared = new Map();
@@ -348,7 +414,7 @@ export function openSeats({home, run, askId, calls, deadlineAt, now = Date.now, 
       const kind = seatKind(key);
       if (kind.prepare && !prepared.has(key)) prepared.set(key, kind.prepare(home));
     }
-    const common = {home, run, askId, deadlineAt, now, ownerPid, node, reapMarginMs};
+    const common = {home, run, askId, deadlineAt, now, ownerPid, reapMarginMs};
     for (const [index, call] of calls.entries()) {
       seats.push(createSeat({...common, call, index, shared: prepared.get(call.runner ?? 'codex')}));
     }
@@ -572,11 +638,12 @@ async function askSeatCodex(seat, {run, now = Date.now, sleep = defaultSleep, ti
   }
 }
 
-// 끄기 직전 화면을 남기고 자기 세션을 끈다(정상·실패·시간 초과 공통).
-export function closeSeat(seat, {run, reason}) {
+// 호출이 끝났다: 끝 화면을 남기고(읽기만 한다) 세션은 끄지 않은 채 남김 표시만 적는다(정상·실패·시간 초과 공통).
+// 이 뒤로 이 세션에는 키를 하나도 보내지 않는다. 끄는 것은 정리 명령·내보내기다.
+export function keepSeat(seat, {run, reason}) {
   try { fs.writeFileSync(path.join(seat.dir, 'screen-final.txt'), captureSeat(run, seat.session), {mode: 0o600}); }
-  catch { /* 이미 꺼진 세션이면 화면이 없다 */ }
-  return killOwn(seat.dir, {run, reason});
+  catch { /* 이미 없는 세션이면 화면이 없다 */ }
+  return {kept: markKept(seat.dir, reason)};
 }
 
 export function writeOutcome(dir, outcome) {
@@ -589,6 +656,6 @@ export function readOutcome(dir) {
   } catch { return null; }
 }
 
-// 감싸는 프로세스의 명령(기존 호출 프로세스 runJudgeProcess가 셸로 돌린다). 그 프로세스가 TERM을 받으면 세션을 끄고 나간다.
+// 감싸는 프로세스의 명령(기존 호출 프로세스 runJudgeProcess가 셸로 돌린다). 그 프로세스가 TERM을 받으면 남김 표시만 적고 나간다.
 export const sessionRunCommand = (dir, node = process.execPath) =>
   `${quote(node)} ${quote(SESSION_ENTRY)} ask ${quote(dir)}`;

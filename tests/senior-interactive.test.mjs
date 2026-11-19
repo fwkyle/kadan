@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawn, spawnSync} from 'node:child_process';
-import {seniorCommand} from '../src/senior.mjs';
+import {seniorCommand, seniorKeptLine} from '../src/senior.mjs';
 import {initSettings, setRunner, setRunnerModel, setSeniors} from '../src/runner-settings.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {readLedger} from '../src/ledger.mjs';
@@ -28,7 +28,14 @@ const ASTRA = {runner: 'codex', model: 'gpt-6-astra', effort: 'high'}, SOL = {ru
 const ARGON = {runner: 'agy', model: 'gemini-4-argon-medium'};
 const BOUND = 'agy --agent kadan-noexec --model {model} --print-timeout 90s --output-format json --print {prompt}';
 const digest = text => createHash('sha256').update(text).digest('hex');
+const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 let seq = 0;
+// 호출이 끝나도 세션은 끄지 않고 남긴다(2026-11-19 [kyle]). 남은 세션이 이번 호출의 것이고 끝난 이유·남긴 시각이 적혔는지 본다.
+function assertKept(f, answers, reasons) {
+  const records = answers.map(a => readRecord(a.evidencePath));
+  assert.deepEqual(f.sessions().sort(), records.map(r => r.session).sort());
+  assert.deepEqual(records.map(r => [r.endReason, Boolean(r.endedAt), Boolean(r.keptAt), r.closedAt]), reasons.map(reason => [reason, true, true, undefined]));
+}
 
 function fixture(t, {seniors = [ASTRA, SOL], mode = null, plan = {}} = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ksi-')));
@@ -103,7 +110,7 @@ test('명시한 headless에서 agy가 등록돼 있으면 codex도 부르지 않
   assert.equal(fs.existsSync(f.tmuxLog), false);
 });
 
-test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답·advice·영수증이 같은 글을 가리킨다. 세션은 남지 않고 기본 소켓 호출은 0회다', {skip}, async t => {
+test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답·advice·영수증이 같은 글을 가리킨다. 세션은 끄지 않고 남기며(키 0회) 정리 명령이 끈다. 기본 소켓 호출은 0회다', {skip}, async t => {
   const f = fixture(t);
   const note = path.join(f.home, 'note.md'); fs.writeFileSync(note, '첨부 내용');
   const r = await f.run({file: note, timeout: '60'});
@@ -134,12 +141,47 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(a.evidencePath, 'outcome.json'), 'utf8')), {reason: 'ok'});
     assert.equal(fs.existsSync(path.join(a.evidencePath, 'diagnostic.log')), false);
   }
-  assert.deepEqual(f.sessions(), []);
+  // 답을 받은 뒤에도 두 세션은 남는다. 영수증에 남긴 수가 있고, 끝 화면도 지금처럼 저장했다.
+  assertKept(f, r.answers, ['ok', 'ok']);
+  assert.equal(r.keptSessions, 2);
+  assert.equal(seniorKeptLine(2), '세션 2개를 남겼다 — 정리: kadan senior cleanup (목록만: kadan senior cleanup --dry-run)');
+  for (const a of r.answers) assert.ok(fs.existsSync(path.join(a.evidencePath, 'screen-final.txt')));
   // 원장에는 start·stop이 없다(역할이 아니다).
   assert.deepEqual(readLedger(f.home).filter(e => ['start', 'stop'].includes(e.kind)), []);
   const calls = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
   assert.ok(calls.length > 20);
   assert.deepEqual(calls.filter(line => !line.startsWith(`-u -L ${f.tmux.socket} -f `)), []);
+  // 키 명령은 시니어마다 질문 한 줄(붙여넣기 1 + Enter 1)뿐이다. 답을 회수한 뒤 남긴 세션에는 하나도 가지 않았다. 예약 종료도 걸지 않는다.
+  assert.deepEqual([calls.filter(line => / paste-buffer /u.test(line)).length, calls.filter(line => / send-keys /u.test(line)).length], [2, 2]);
+  assert.deepEqual(calls.filter(line => /\brun-shell\b/u.test(line)), []);
+  const typed = r.answers.map(a => f.fakeLog(a.model, 'keys').length);
+  // 정리 명령(제품 경로 — CLI): --dry-run은 목록만 보이고 아무것도 바꾸지 않는다. 작업자 명의는 거절한다.
+  const cli = (args, role = 'qa-슈퍼감독') => spawnSync(process.execPath, [CLI, 'senior', 'cleanup', ...args], {env: {...f.env, KADAN_ROLE: role}, encoding: 'utf8'});
+  const records = r.answers.map(a => readRecord(a.evidencePath));
+  const dry = cli(['--dry-run']);
+  assert.equal(dry.status, 0, dry.stderr);
+  for (const [index, record] of records.entries()) {
+    const line = dry.stdout.split('\n').find(text => text.includes(record.session));
+    assert.equal(line, [`끌 것  ${record.session}`, `codex/${r.answers[index].model}`, `만든 ${record.createdAt}`, '끝 ok', `남긴 ${record.keptAt}`, record.dir].join('  '));
+  }
+  assert.match(dry.stdout, /--dry-run: 아무것도 바꾸지 않았다\. 끌 세션 2개, 둘 세션 0개/);
+  assertKept(f, r.answers, ['ok', 'ok']);
+  const denied = cli([], 'qa-작업자');
+  assert.equal(denied.status, 1); assert.match(denied.stderr, /감독\(일반감독·슈퍼감독\) 또는 사람 명의로만/);
+  assert.equal(f.sessions().length, 2);
+  const mark = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean).length;
+  const done = cli([]);
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /끈 세션 2개, 둔 세션 0개/);
+  assert.deepEqual(f.sessions(), []);
+  assert.deepEqual(r.answers.map(a => readRecord(a.evidencePath).closeReason), ['cleanup', 'cleanup']);
+  // 정리 명령이 쓴 tmux 명령은 목록·조회·세션 끄기뿐이고, 남긴 세션의 화면이 받은 입력은 늘지 않았다.
+  const after = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean).slice(mark);
+  assert.deepEqual(after.filter(line => !/ (list-sessions|display-message|kill-session) /u.test(line)), []);
+  assert.deepEqual(r.answers.map(a => f.fakeLog(a.model, 'keys').length), typed);
+  assert.match(cli([]).stdout, /남은 시니어 세션이 없다/);
+  // 영수증 아래의 남김 안내 줄은 CLI가 붙인다(남긴 수가 있을 때만).
+  assert.ok(fs.readFileSync(CLI, 'utf8').includes('if(rest.keptSessions)console.log(seniorKeptLine(rest.keptSessions));'));
 });
 
 // 탭을 연 순간을 tmux 호출 기록에 남기는 가짜 로티 호출. 그 줄 뒤에 키 명령이 있으면 '탭이 붙은 뒤에 키를 보낸 것'이다.
@@ -207,16 +249,37 @@ test('탭이 열린 순간 진짜 읽기 전용 클라이언트가 붙어도(tmu
   };
   const {answers: [answer]} = await f.run({}, {env, rottie});
   assert.deepEqual(clients, [0]);
-  assert.deepEqual([answer.reason, answer.tab, answer.tabReason], ['ok', 'closed', undefined], JSON.stringify(answer));
-  assert.deepEqual(calls, ['create', 'close', 'show']);
+  // 탭은 세션과 함께 남긴다(닫지 않는다).
+  assert.deepEqual([answer.reason, answer.tab, answer.tabReason], ['ok', 'opened', undefined], JSON.stringify(answer));
+  assert.deepEqual(calls, ['create']);
   assert.deepEqual(f.fakeLog(ASTRA.model, 'submitted'), [ASK_LINE]);
   const all = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
   const mark = all.indexOf(TAB_MARK);
   assert.ok(mark > 0);
   assert.equal(all.slice(0, mark).filter(line => / send-keys .*Enter$/u.test(line)).length, 1, '탭 전에 Enter가 한 번 나갔다');
   assert.deepEqual(keyCommands(all.slice(mark + 1)), [], '탭이 붙은 뒤 키 명령 0회');
-  assert.equal(f.advices()[0].tab, 'closed');
+  assert.deepEqual([f.advices()[0].tab, f.advices()[0].rottieTerminalId], ['opened', 'term-1']);
+  assertKept(f, [answer], ['ok']);
+  const tabFile = path.join(answer.evidencePath, 'tab.json');
+  assert.deepEqual([JSON.parse(fs.readFileSync(tabFile, 'utf8')).state, JSON.parse(fs.readFileSync(tabFile, 'utf8')).rottieTerminalId], ['opened', 'term-1']);
+  // 정리 명령: 창 설정이 none이면 세션만 끄고 탭은 닫지 못한 이유를 보인다(로티 호출 0회). --dry-run은 탭도 건드리지 않는다.
+  const cleanup = (flags, more) => seniorCommand(['cleanup'], flags, {home: f.home, by: 'qa-슈퍼감독', env, rottie, ...more});
+  assert.match(await cleanup({'dry-run': true}), /끌 세션 1개/);
+  assert.deepEqual(calls, ['create']);
+  assert.equal(JSON.parse(fs.readFileSync(tabFile, 'utf8')).state, 'opened');
+  // 본 실행: 세션을 끄고 그 호출 폴더의 tab.json에 열린 자기 탭을 기존 닫기(close → show)로 닫는다. 키는 끝까지 0회다.
+  const done = await cleanup({});
+  assert.match(done, /끔 {2}senior-.*— 탭 closed/u);
+  assert.deepEqual(calls, ['create', 'close', 'show']);
+  assert.equal(JSON.parse(fs.readFileSync(tabFile, 'utf8')).state, 'closed');
   assert.deepEqual(f.sessions(), []);
+  assert.deepEqual(keyCommands(fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean).slice(mark + 1)), [], '정리까지 키 명령 0회');
+  // 창이 none인 환경에서 정리하면 세션만 끄고 탭은 닫지 않은 이유를 보인다(로티 호출 0회).
+  const again = await f.run({}, {env, rottie});
+  assert.equal(again.answers[0].tab, 'opened');
+  const before = calls.length;
+  assert.match(await cleanup({}, {env: {...env, KADAN_WINDOW: 'none'}}), /— 탭 close-skipped\(window-none\)/);
+  assert.equal(calls.length, before); assert.deepEqual(f.sessions(), []);
 });
 
 // 제출되지 않은 칸(붙인 직후 업데이트 창 → Enter 0회)의 호출 폴더에 거짓 표지를 심는다. 부모는 표지를 읽어 확인하므로 탭을 열지 않는다.
@@ -254,7 +317,7 @@ test('거짓 제출 표지(깨진 글·폴더·링크·다른 호출의 표지)�
   }
 });
 
-test('탭이 열린 직후 세션이 끝나도(수용한 틈) 열린 탭은 기존 닫기·지우기로 정리되고 호출은 끝난다', {skip}, async t => {
+test('탭이 열린 직후 세션이 사라지면(수용한 틈) 남길 세션이 없으므로 열린 탭은 기존 닫기·지우기로 정리되고 호출은 끝난다', {skip}, async t => {
   const f = fixture(t, {seniors: [ASTRA]});
   const env = {...f.env, KADAN_WINDOW: 'rottie', KADAN_ROTTIE_BIN: '/fake/rottie', KADAN_ALLOW_FAKE_ROTTIE: '1'};
   const calls = [];
@@ -272,6 +335,7 @@ test('탭이 열린 직후 세션이 끝나도(수용한 틈) 열린 탭은 기�
   assert.deepEqual(calls, ['create', 'close', 'show']);
   assert.deepEqual(error.answers.map(a => [a.reason, a.tab]), [['call-failed', 'closed']]);
   assert.deepEqual(f.sessions(), []);
+  assert.equal(error.keptSessions, 0); assert.ok(!error.message.includes('남겼다'), '남은 세션이 없으면 안내 줄도 없다');
 });
 
 test('제출 전에 끝난 칸은 탭을 열지 않는다(not-submitted), 제출 표지를 보기 전에 호출이 끝났으면 열지 않는다(finished-before-open)', {skip}, async t => {
@@ -311,7 +375,11 @@ test('관문 교차: 한 명이 관문에서 걸리면 통과한 다른 한 명�
   // 둘 다 키를 한 번도 받지 않았다(/mcp도 질문 줄도 없다 — 모델 호출 0회).
   for (const model of ['gpt-6-astra', 'gpt-6-sol']) { assert.deepEqual(f.fakeLog(model, 'submitted'), []); assert.equal(f.fakeLog(model, 'keys').length, 0); }
   assert.deepEqual(f.advices().map(e => [e.model, e.reason]).sort(), [['gpt-6-astra', 'call-failed'], ['gpt-6-sol', 'call-failed']]);
-  assert.deepEqual(f.sessions(), []);
+  // 관문에서 걸린 호출의 세션도 남긴다(무엇이 떴는지 화면으로 본다). 전원 실패로 끝나는 길에도 남김 안내 줄이 있다. 남긴 뒤에도 키는 0회다.
+  assertKept(f, error.answers, ['call-failed', 'call-failed']);
+  assert.equal(error.keptSessions, 2); assert.ok(error.message.endsWith(seniorKeptLine(2)));
+  for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.equal(f.fakeLog(model, 'keys').length, 0);
+  assert.deepEqual(keyCommands(fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean)), []);
 });
 
 test('허용 목록 파일이 없고 모르는 MCP가 연결돼 있어도 질문이 나간다. 한도·빈 답은 칸마다 상태로 남고 하나라도 답하면 종료 코드 0이다', {skip}, async t => {
@@ -327,12 +395,16 @@ test('허용 목록 파일이 없고 모르는 MCP가 연결돼 있어도 질문
     const r = await mixed.run();
     assert.deepEqual(r.answers.map(a => [a.model, a.status, a.reason]), [['gpt-6-astra', '한도', 'limit'], ['gpt-6-sol', 'ok', 'ok']]);
     assert.ok(!('answer' in r.answers[0]));
+    // 한도로 끝난 칸의 세션도 남는다(한도 화면을 직접 본다).
+    assertKept(mixed, r.answers, ['limit', 'ok']);
+    assert.equal(r.keptSessions, 2);
   };
   const emptyAnswer = async () => {
     const empty = fixture(t, {seniors: [SOL], plan: {default: {answer: 'marker-only'}}});
     const failed = await empty.run().then(() => assert.fail('실패해야 한다'), e => e);
     assert.deepEqual(failed.answers.map(a => [a.reason, a.detail]), [['empty', 'marker-only']]);
     assert.deepEqual(empty.advices().map(e => [e.reason, e.bytes]), [['empty', 0]]);
+    assertKept(empty, failed.answers, ['empty']);
   };
   await Promise.all([noAllow(), limitAndOk(), emptyAnswer()]);
 });
@@ -350,7 +422,7 @@ test('자리가 모자라면 아무도 부르지 않고(advice 0줄) 입력이 2
   assert.equal(fs.existsSync(path.join(big.home, 'advice')), false);
 });
 
-test('TERM: 도는 중에 신호를 받으면 자기 세션을 끄고 143으로 나가며 advice에 interrupted가 남는다', {skip}, async t => {
+test('TERM: 도는 중에 신호를 받으면 세션을 끄지 않고 남긴 채(키 0회) 143으로 나가며 advice에 interrupted가 남는다', {skip}, async t => {
   const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
   const script = path.join(f.home, 'ask.mjs');
   fs.writeFileSync(script, `import {seniorCommand} from ${JSON.stringify(SENIOR)};
@@ -367,15 +439,20 @@ await seniorCommand(['qa/card-a'], {question: '바꿀까?', timeout: '120'}, {ho
   assert.equal(f.sessions().length, 1);
   child.kill('SIGTERM');
   assert.deepEqual(await exited, {code: 143, signal: null});
-  for (let i = 0; i < 50 && f.sessions().length; i++) await new Promise(r => setTimeout(r, 100));
-  assert.deepEqual(f.sessions(), []);
   assert.deepEqual(f.advices().map(e => [e.reason, e.mode]), [['interrupted', 'interactive']]);
+  // 중단된 호출의 세션도 남는다. 끝남·남긴 시각은 신호 처리기가 기록에만 적는다(감싼 프로세스가 정리될 시간을 조금 준다).
+  await new Promise(r => setTimeout(r, 1500));
   const record = readRecord(f.advices()[0].evidencePath);
-  assert.ok(record.endedAt);
+  assert.deepEqual(f.sessions(), [record.session]);
+  assert.deepEqual([record.endReason, Boolean(record.endedAt), Boolean(record.keptAt)], ['interrupted', true, true]);
+  assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE], '중단 뒤에도 더 넣은 것이 없다');
+  const lines = fs.readFileSync(f.tmuxLog, 'utf8').split('\n').filter(Boolean);
+  assert.deepEqual([lines.filter(line => / paste-buffer /u.test(line)).length, lines.filter(line => / send-keys /u.test(line)).length], [1, 1]);
+  assert.ok(!lines.some(line => / kill-session /u.test(line)), '아무 세션도 끄지 않았다');
   assert.ok(!fs.readFileSync(path.join(f.advices()[0].evidencePath, 'input.txt'), 'utf8').includes(markerOf(record.marker.slice(-8))));
 });
 
-test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프로세스가 TERM을 받으면 자기 세션을 끄고 나가며 칸은 timeout으로 남는다', {skip}, async t => {
+test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프로세스가 TERM을 받으면 세션을 끄지 않고 남김 표시만 적고 나가며 칸은 timeout으로 남는다', {skip}, async t => {
   const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
   // 기존 호출 프로세스(runJudgeProcess)의 상한만 짧게 준다: 상한에 걸리면 감싼 프로세스 묶음에 TERM이 간다.
   const error = await f.run({timeout: '60'}, {spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})})
@@ -384,8 +461,8 @@ test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프�
   const [entry] = f.advices();
   assert.equal(entry.reason, 'timeout');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(entry.evidencePath, 'outcome.json'), 'utf8')), {reason: 'interrupted', detail: 'SIGTERM'});
-  assert.equal(readRecord(entry.evidencePath).endReason, 'interrupted', '세션을 끈 것은 감싼 프로세스의 신호 처리기다');
-  assert.deepEqual(f.sessions(), []);
+  assertKept(f, error.answers, ['interrupted']); // 남김 표시를 먼저 적은 것은 감싼 프로세스의 신호 처리기다
+  assert.equal(error.keptSessions, 1); assert.ok(error.message.endsWith(seniorKeptLine(1)));
   assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE], '다시 넣지 않는다');
 });
 
@@ -404,7 +481,7 @@ test('시간 상한(F2): 준비·관문이 끝났을 때 상한이 지났으면 
   // 관문은 키를 보내지 않으므로 질문 줄은 누구에게도 가지 않았다.
   for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), []);
   assert.deepEqual(f.advices().map(e => e.reason), ['timeout', 'timeout']);
-  assert.deepEqual(f.sessions(), []);
+  assertKept(f, error.answers, ['timeout', 'timeout']);
 });
 
 test('시간 상한: 관문 도중 상한이 끝난 칸은 timeout이고 탭을 열지 않으며 탭 이유는 gate-timeout이다(검수 exec-276744c7 발견 2)', {skip}, async t => {
@@ -422,7 +499,7 @@ test('시간 상한: 관문 도중 상한이 끝난 칸은 timeout이고 탭을 
   assert.deepEqual(f.advices().map(e => [e.model, e.tab, e.tabReason]).sort(),
     [['gpt-6-astra', 'skipped', 'gate-timeout'], ['gpt-6-sol', 'skipped', 'gate-timeout']]);
   for (const model of ['gpt-6-astra', 'gpt-6-sol']) assert.deepEqual(f.fakeLog(model, 'submitted'), []);
-  assert.deepEqual(f.sessions(), []);
+  assertKept(f, error.answers, ['timeout', 'timeout']);
 });
 
 // 감싼 프로세스가 상한에 걸리면 TERM은 프로세스 묶음 전체에 간다. 그때 돌던 tmux 호출이 어떻게 끝나든 칸은 timeout이어야 한다.
@@ -442,6 +519,7 @@ for (const mode of ['trap']) {
     assert.deepEqual(f.fakeLog('gpt-6-astra', 'submitted'), [ASK_LINE]);
     assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
     assert.deepEqual(f.advices().map(e => e.reason), ['timeout']);
-    assert.deepEqual(f.sessions(), []);
+    assert.equal(f.sessions().length, 1, '시간 초과로 끝난 호출의 세션도 남는다');
+    assert.ok(readRecord(error.answers[0].evidencePath).keptAt);
   });
 }

@@ -19,12 +19,12 @@ import {runJudgeProcess} from './watch-ai-process.mjs';
 import {appendLedger} from './ledger.mjs';
 import {assertWritable} from './storage.mjs';
 import {isUserActor} from './actors.mjs';
-import {closeOnSignal, closeSeniorTab, openSeniorTab, seniorAttachCommand, writeTabState} from './senior-tab.mjs';
+import {closeKeptTab, closeOnSignal, closeSeniorTab, openSeniorTab, seniorAttachCommand, writeTabState} from './senior-tab.mjs';
 import {markerParts} from './senior-screen.mjs';
-import {SESSION_TIMING, killOwn, openSeats, passGate, readOutcome, readSeniorMode, seniorSocket, seniorTmux,
+import {SESSION_TIMING, cleanupSeniorSessions, confirmOwn, killOwn, markKept, openSeats, passGate, readOutcome, readSeniorMode, seniorSocket, seniorTmux,
   readSubmitted, sessionRunCommand, submittedTabCheck} from './senior-session.mjs';
 
-export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 등록된 시니어(실행 모델 설정의 senior, 최대 2명) 전원에게 의견을 동시에 한 번 묻는다. 감독은 모델을 고르지 않는다. --runner/--model은 등록된 시니어 중 한 명만 고를 때만 쓰고(--model만 주면 등록 항목을 모델로 찾는다), 등록되지 않은 모델은 거절한다. 한도·실패는 재시도하지 않고 칸마다 상태로 보인다. 하나라도 답하면 종료 코드 0이다. agy는 대화창으로만 부른다(senior-mode headless에서 agy가 등록돼 있으면 아무도 부르지 않는다). agy는 카드 저장소(git, 안전한 경로)를 읽기 전용 폴더로 받아 읽고, 그렇지 못하면 카드 본문·첨부만 근거로 답한다. --effort는 agy에 넘기지 않는다. 상세: docs/senior.md';
+export const SENIOR_USAGE = 'kadan senior <카드키> --question <질문> [--file <경로>]... [--timeout <초>] [--effort <강도>] [--runner <실행기> --model <모델>] — 작업 결과에 결정할 부분이 있을 때 감독이 등록된 시니어(실행 모델 설정의 senior, 최대 2명) 전원에게 의견을 동시에 한 번 묻는다. 감독은 모델을 고르지 않는다. --runner/--model은 등록된 시니어 중 한 명만 고를 때만 쓰고(--model만 주면 등록 항목을 모델로 찾는다), 등록되지 않은 모델은 거절한다. 한도·실패는 재시도하지 않고 칸마다 상태로 보인다. 하나라도 답하면 종료 코드 0이다. agy는 대화창으로만 부른다(senior-mode headless에서 agy가 등록돼 있으면 아무도 부르지 않는다). agy는 카드 저장소(git, 안전한 경로)를 읽기 전용 폴더로 받아 읽고, 그렇지 못하면 카드 본문·첨부만 근거로 답한다. --effort는 agy에 넘기지 않는다. 대화형 호출이 끝난 세션(과 로티 탭)은 끄지 않고 남겨 둔다 — kadan senior cleanup [--dry-run]이 끝난 호출의 세션만 골라 끄고(--dry-run은 목록만 보이고 아무것도 바꾸지 않는다) 진행 중·기록 없는 세션은 그대로 둔다. 상세: docs/senior.md';
 // 시니어는 고급·느린 모델이고 저장소를 직접 읽고 시험까지 돌려 볼 수 있으므로 감시 AI(5분)보다 훨씬 길게 둔다
 // (기본 30분, 2026-10-05 [kyle] 결정). --timeout으로 바꾼다.
 export const SENIOR_TIMEOUT_MS = 1_800_000;
@@ -150,6 +150,31 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
   ].join('\n');
 }
 
+// 영수증 아래에 붙이는 한 줄. 남긴 세션은 감시기·대시보드에 보이지 않으므로(역할이 아니다) 여기서 정리 명령을 알린다.
+export const seniorKeptLine = count => `세션 ${count}개를 남겼다 — 정리: kadan senior cleanup (목록만: kadan senior cleanup --dry-run)`;
+
+const CLEANUP_WHY = {running: '진행 중인 호출', 'no-record': '기록 없음', 'outside-home': '이 홈의 기록이 아님'};
+// kadan senior cleanup [--dry-run]: 시니어 소켓의 세션을 나열하고, 끝난 호출의 세션 중 기록 대조가 맞는 것만 끈다(로티 탭도 닫는다).
+// 진행 중 호출·기록 없는 세션·대조가 안 되는 세션은 끄지 않고 이유를 보인다. 세션에 키를 보내지 않는다.
+export function seniorCleanupCommand(argv, flags, {home, by, env = process.env, rottie, now = Date.now}) {
+  if (argv.length !== 1) throw new Error('사용: kadan senior cleanup [--dry-run]');
+  if (!supervisor(by) && !isUserActor(by)) throw new Error('시니어 세션 정리는 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
+  const dryRun = flags['dry-run'] === true;
+  if (!dryRun) assertWritable(home);
+  const run = seniorTmux({socket: seniorSocket(env, home), home, env});
+  const rows = cleanupSeniorSessions({home, run, dryRun, now, closeTab: dir => closeKeptTab({home, env, dir, rottie})});
+  if (!rows.length) return `남은 시니어 세션이 없다(소켓 ${run.socket})`;
+  const head = {closed: '끔', 'would-close': '끌 것', left: '둠'};
+  const lines = rows.map(row => [`${head[row.action]}  ${row.session}`, row.runner ? `${row.runner}/${row.model}` : '(기록 없음)',
+    `만든 ${row.createdAt ?? '-'}`, `끝 ${row.endReason ?? '-'}`, `남긴 ${row.keptAt ?? '-'}`, row.dir ?? '(호출 폴더 없음)',
+    ...(row.action === 'left' ? [`— 끄지 않음: ${CLEANUP_WHY[row.why] ?? `기록과 다름(${row.why})`}`] : []),
+    ...(row.tab ? [`— 탭 ${row.tab.tab}${row.tab.tabReason ? `(${row.tab.tabReason})` : ''}`] : [])].join('  '));
+  const count = action => rows.filter(row => row.action === action).length;
+  const summary = dryRun ? `--dry-run: 아무것도 바꾸지 않았다. 끌 세션 ${count('would-close')}개, 둘 세션 ${count('left')}개`
+    : `끈 세션 ${count('closed')}개, 둔 세션 ${count('left')}개`;
+  return [`시니어 세션 ${rows.length}개 (소켓 ${run.socket})`, ...lines, summary].join('\n');
+}
+
 // 헤드리스 길이 부를 수 있는 것은 고정된 codex 스크립트(scripts/senior.sh) 하나다. 등록 목록 전체를 본다(고른 한 명이 아니라):
 // `--model`로 codex만 골라도, 등록 순서가 어떻든, 그 밖의 실행기(agy)가 하나라도 있으면 아무도 부르지 않는다(호출 0회).
 // 이유 낱말은 headless-agy다. 선택 옵션(--runner/--model/--effort)을 처리하기 전에 부른다.
@@ -165,6 +190,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   script = DEFAULT_SCRIPT, followScript = FOLLOW_SCRIPT, rottie, now = Date.now, record = entry => appendLedger(entry, home), env = process.env, readCodexModels,
   sessionTiming = SESSION_TIMING, tabPollMs = TAB_POLL_MS}) {
   if (flags.help || !argv[0]) return SENIOR_USAGE;
+  if (argv[0] === 'cleanup') return seniorCleanupCommand(argv, flags, {home, by, env, rottie, now});
   if (argv.length !== 1) throw new Error(SENIOR_USAGE);
   if (!supervisor(by) && !isUserActor(by)) throw new Error('자문은 감독(일반감독·슈퍼감독) 또는 사람 명의로만 부른다 — KADAN_ROLE 확인');
   const question = flags.question;
@@ -219,7 +245,9 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     // 따라 볼 진행 출력 파일을 미리 만들어 둔다(탭이 먼저 떠도 비어 있는 채로 기다린다). senior.sh가 같은 파일에 쓴다.
     if (!interactive) fs.writeFileSync(path.join(call.dir, 'diagnostic.log'), '', {mode: 0o600});
   }
-  // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 시니어마다 탭 하나다. 닫기는 성공·실패·시간 초과·신호 모두에서 한다.
+  // 탭은 꾸밈이다: 열지 못해도 건너뛰고 호출은 그대로 간다. 시니어마다 탭 하나다.
+  // 헤드리스 호출의 탭은 성공·실패·시간 초과·신호 모두에서 닫는다. 대화형 호출의 탭은 세션이 남았으면 함께 남긴다
+  // (닫는 것은 정리 명령·내보내기). 세션이 남지 않았으면(도중에 사라짐) 볼 것이 없고 정리 명령도 찾지 못하므로 그때는 닫는다.
   const closeTab = call => {
     if (call.opened.tab === 'opened') { call.tab = closeSeniorTab(call.opened); writeTabState(call.dir, {state: call.tab.tab, reason: call.tab.tabReason}); call.opened = {...call.opened, tab: 'closed'}; }
   };
@@ -242,10 +270,27 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
       } catch { /* 다른 시니어 줄은 계속 남긴다 */ }
     }
   };
-  // 대화형 세션은 정상·실패·신호 모두 같은 확인(killOwn)으로 자기 것만 끈다. 세션이 없는 호출 폴더에는 아무 일도 없다.
-  const closeSeat = call => { if (call.seat) try { killOwn(call.dir, {run: sessionRun, reason: 'closed'}); } catch { /* 예약 종료가 남아 있다 */ } };
+  // 대화형 세션은 정상·실패·신호 모두 끄지 않고 남긴다: 기록에 끝남·남긴 시각만 적는다(tmux 호출·키 0회 — 신호 처리기에서도 쓴다).
+  // 끝난 이유는 먼저 적은 쪽(감싼 프로세스)의 값이 남는다. 세션이 없는 호출 폴더에는 아무 일도 없다.
+  const keepSeat = (call, reason) => { if (call.seat && call.kept !== false) markKept(call.dir, reason); };
+  // 이 호출의 세션이 남았는가(한 번만 본다): 지금 살아 있고 기록 대조가 맞는다. 문(launch 파일)을 열지 않은 자리는 남은 것으로 치지 않는다 —
+  // 모델이 뜨지 않은 대기 셸이라 60초 뒤 스스로 끝난다(관문이 문을 열기 전에 거절한 경우: codex 작업 폴더가 git 안).
+  const seatKept = call => {
+    if (call.kept != null) return call.kept;
+    try { call.kept = interactive && call.seat != null && fs.existsSync(call.seat.gate) && confirmOwn(call.seat, sessionRun).own; }
+    catch { call.kept = false; }
+    return call.kept;
+  };
+  // 남지 않은 호출의 뒷정리: 열린 탭을 닫고, 자리가 만든 파일(agy 질문 파일)을 같은 확인(killOwn)으로 치운다.
+  // 세션이 이미 없으면 끝남만 적고 파일을 치운다. 문을 열지 않은 대기 셸이면 지금 끈다(화면에 볼 것이 없다). 대조가 안 되면 그대로 둔다.
+  const settle = call => {
+    if (seatKept(call)) return;
+    closeTab(call);
+    if (interactive && call.seat) try { killOwn(call.dir, {run: sessionRun, reason: 'not-kept'}); } catch { /* 정리 실패가 결과를 바꾸지 않는다 */ }
+  };
   // 신호 처리기는 탭·세션을 만들기 전에 설치한다. create는 동기라 신호는 create가 돌려준 뒤 처리되므로 그때는 id를 안다.
-  const detach = closeOnSignal(() => { calls.forEach(closeTab); calls.forEach(closeSeat); }, undefined, onSignal);
+  // 신호 길은 짧게: 헤드리스는 탭을 닫고, 대화형은 탭·세션을 그대로 둔 채 기록만 적는다(tmux를 부르지 않는다).
+  const detach = closeOnSignal(() => { if (!interactive) calls.forEach(closeTab); calls.forEach(call => { if (!call.done) keepSeat(call, 'interrupted'); }); }, undefined, onSignal);
   if (interactive) {
     // 전원 준비: 자리 확보(잠금 안: 청소 → 수 → agy 고정 작업 폴더 준비 → 전원 세션) → 전원 관문. 자리가 모자라거나
     // agy 작업 폴더를 쓸 수 없으면(git 안·에이전트 파일을 못 씀) 여기서 던져 아무도 부르지 않는다.
@@ -253,6 +298,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     let seats;
     try {
       seats = openSeats({home, run: sessionRun, askId, deadlineAt: started + timeoutS * 1000, now,
+        closeKeptTab: dir => closeKeptTab({home, env, dir, rottie}),
         calls: calls.map(call => ({dir: call.dir, runner: call.value.runner, model: call.value.model, token: call.token, timing: sessionTiming,
           ...(call.onScreen ? {prompt: call.prompt, readDir: call.readDir} : effortOf(call))}))});
     } catch (error) { detach(); throw error; }
@@ -270,7 +316,8 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
       else if (blocked && now() >= started + timeoutS * 1000) call.refused = {reason: 'timeout', detail: 'deadline:before-ask'};
       else if (blocked) call.refused = {detail: 'isolation:peer-gate-failed', note: '함께 부른 시니어의 관문이 통과하지 못해 질문을 넣지 않았다'};
     });
-    if (blocked) calls.forEach(closeSeat);
+    // 질문을 넣지 않는 호출의 세션도 남긴다(관문에서 무엇이 떴는지 화면으로 볼 수 있게).
+    if (blocked) calls.forEach(call => keepSeat(call, call.refused.reason ?? 'call-failed'));
   }
   // 탭을 연다. 대화형은 질문이 제출된 뒤(아래 callSession), 헤드리스는 호출 전에 연다.
   const openCallTab = call => {
@@ -335,7 +382,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
         : await spawn(quote(script), {input: prompt, timeout: timeoutS * 1000, reportComplete: () => false,
           env: {...env, KADAN_HOME: home, KADAN_SENIOR_DIR: dir, KADAN_SENIOR_REPO: card.repoPath, KADAN_SENIOR_MODEL: value.model, KADAN_SENIOR_EFFORT: value.effort ?? 'max'}});
     } catch (error) { result = interactive ? {error, reason: 'call-failed', detail: 'session-error', stderr: String(error?.message ?? error)} : {error}; }
-    finally { closeTab(call); closeSeat(call); }
+    finally { settle(call); }
     const stderr = String(result.stderr ?? '');
     fs.writeFileSync(path.join(dir, 'stderr.txt'), stderr, {mode: 0o600});
     const resultFile = path.join(dir, 'result.txt');
@@ -349,6 +396,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
       : failed ? (LIMIT_PATTERN.test(`${stderr}\n${result.stdout ?? ''}`) ? 'limit' : 'call-failed') : answer.trim() ? 'ok' : 'empty';
     const entry = makeEntry(call, {reason, ...(result.detail ? {detail: String(result.detail).slice(0, 200)} : {}), exitCode: result.status ?? null,
       durationMs: now() - started, bytes: Buffer.byteLength(answer), digest: digest(answer)});
+    keepSeat(call, reason);
     call.done = true;
     record(entry);
     // agy에는 강도를 넘기지 않는다(강도는 모델 이름이 정한다). --effort를 줬으면 무시한 사실을 그 칸에 알린다.
@@ -363,16 +411,20 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   };
   let settled;
   try { settled = await Promise.allSettled(calls.map(runOne)); }
-  finally { detach(); calls.forEach(closeTab); calls.forEach(closeSeat); }
+  finally { detach(); calls.forEach(settle); calls.forEach(call => keepSeat(call, 'closed')); }
   const answers = settled.map((r, i) => r.status === 'fulfilled' ? r.value
     : {adviceId: calls[i].adviceId, runner: calls[i].value.runner, model: calls[i].value.model, ...effortOf(calls[i]), status: statusOf('call-failed'), reason: 'call-failed', evidencePath: calls[i].dir});
+  // 남긴 세션 수는 만든 자리 수가 아니라 호출이 끝날 때 살아 있고 기록 대조가 맞던 수다.
+  const keptSessions = calls.filter(seatKept).length;
   if (!answers.some(a => a.reason === 'ok')) {
-    const error = new Error(answers.map(a => `${answers.length > 1 ? `[${a.runner}/${a.model}] ` : ''}자문 실패(${a.reason}) — 답은 쓰지 않는다. 증거: ${a.evidencePath}${a.note ? ` — ${a.note}` : ''}`).join('\n'));
+    const error = new Error([...answers.map(a => `${answers.length > 1 ? `[${a.runner}/${a.model}] ` : ''}자문 실패(${a.reason}) — 답은 쓰지 않는다. 증거: ${a.evidencePath}${a.note ? ` — ${a.note}` : ''}`),
+      ...(keptSessions ? [seniorKeptLine(keptSessions)] : [])].join('\n'));
     error.exitCode = 1;
+    error.keptSessions = keptSessions;
     error.askId = askId;
     error.answers = answers;
     throw error;
   }
   // 옛 단일 answer 칸은 없앴다: 모델별 answers[]만 돌려준다. 하나라도 ok면 종료 코드 0이고, 나머지 칸은 '한도'·'실패(...)'로 보인다.
-  return {askId, card: card.key, answers};
+  return {askId, card: card.key, answers, ...(keptSessions ? {keptSessions} : {})};
 }

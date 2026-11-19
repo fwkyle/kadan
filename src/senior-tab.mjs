@@ -1,4 +1,6 @@
-// 시니어 따라 보기 탭 — 호출이 도는 동안만 로티에 읽기 전용 탭을 띄워 진행 출력을 보여 준다(2026-10-16 [kyle]).
+// 시니어 따라 보기 탭 — 로티에 읽기 전용 탭을 띄워 진행 출력을 보여 준다(2026-10-16 [kyle]).
+// 헤드리스 호출의 탭은 호출이 끝나면 닫는다. 대화형 호출의 탭은 세션과 함께 남겨 두고(2026-11-19 [kyle]) 그 세션을 끌 때
+// (정리 명령·남긴 세션 내보내기) 닫는다(closeKeptTab).
 // 탭은 꾸밈이다: 어떤 실패도 던지지 않고 건너뜀 사유로 돌려준다. 역할이 아니므로 KADAN_ROLE·kadan-* 이름·start 원장 사건을 쓰지 않는다.
 // 로티 호출은 rottie-cli의 runRottie 길목(운영 로티 보호 포함)을 그대로 쓴다.
 import fs from 'node:fs';
@@ -105,6 +107,30 @@ export function closeSeniorTab(opened) {
     return {tab: 'closed', tabReason: reason};
   } catch (error) {
     return {tab: 'close-failed', tabReason: `remove: ${reasonOf(error)}`};
+  }
+}
+
+// 남겨 둔 세션의 탭 닫기. 탭을 연 호출은 이미 끝났으므로 호출 폴더의 tab.json(열림 + 자기 탭 id)으로 다시 닫는다.
+// 여는 길과 같은 조건(탭 스위치·창 설정·로티 실행 파일·운영 로티 보호)을 거친다. 닫을 탭이 없으면 null,
+// 조건이 맞지 않으면 닫지 않고 이유를 돌려준다(close-skipped). 던지지 않는다. 제목·키로 목록을 뒤져 지우지 않는다.
+export function closeKeptTab({home, env, dir, rottie}) {
+  let state;
+  try { state = JSON.parse(fs.readFileSync(path.join(dir, 'tab.json'), 'utf8')); } catch { return null; }
+  const id = state?.state === 'opened' ? state.rottieTerminalId : null;
+  if (typeof id !== 'string' || !id) return null;
+  try {
+    if (!seniorTabEnabled(env)) return {tab: 'close-skipped', tabReason: 'tab-off'};
+    const setting = effectiveWindow(env, home);
+    if (setting.window.value !== 'rottie') return {tab: 'close-skipped', tabReason: 'window-none'};
+    const bin = setting.rottieBin.value;
+    if (!bin) return {tab: 'close-skipped', tabReason: 'rottie-bin-missing'};
+    const runEnv = {...env, KADAN_ROTTIE_BIN: bin, KADAN_HOME: home};
+    assertNotLiveRottie(runEnv);
+    const closed = closeSeniorTab({call: rottie ?? (argv => runRottie(argv, spawnSync, runEnv)), rottieTerminalId: id});
+    writeTabState(dir, {state: closed.tab, reason: closed.tabReason});
+    return closed;
+  } catch (error) {
+    return {tab: 'close-skipped', tabReason: reasonOf(error)};
   }
 }
 

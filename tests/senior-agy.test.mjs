@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {SESSION_TIMING, askSeat, closeSeat, listSeniorSessions, openSeats, passGate, readRecord, seniorSocket,
+import {SESSION_TIMING, askSeat, keepSeat, killOwn, listSeniorSessions, openSeats, passGate, readRecord, seniorSocket,
   seniorTmux} from '../src/senior-session.mjs';
 import {AGY_WORKDIR, agyArgv, agyAskLine, askSeatAgy, prepareAgyWorkdir} from '../src/senior-agy.mjs';
 import {NOEXEC_AGENT_MD} from '../src/exec-agent.mjs';
@@ -22,6 +22,8 @@ const TOKEN = '0a1b2c3d';
 const PROMPT = `질문\n끝 표지 조각: ${markerParts(TOKEN).map(part => JSON.stringify(part)).join(' ')}\n`;
 const OK_ANSWER = '결론: 가짜 답이다\n근거: 질문 파일을 읽었다';
 let seq = 0;
+// 시험 정리: 호출이 끝난 것으로 적고(남김 표시) 정리 명령과 같은 확인(killOwn)으로 끈다. 제품은 끝난 세션을 끄지 않고 남긴다.
+const closeSeat = (seat, deps) => { keepSeat(seat, {run: deps.run, reason: 'test'}); return killOwn(seat.dir, {run: deps.run, reason: 'test'}); };
 
 // 시험마다 자기 홈·자기 소켓·가짜 agy·tmux 기록 틀을 갖는다. 부르는 쪽 환경에는 일부러 역할·바깥 tmux 값을 넣어 둔다(새지 않아야 한다).
 function setup(t, plan = {}, {conf = null} = {}) {
@@ -113,9 +115,13 @@ test('정상: 첫 호출은 고정 작업 폴더의 신뢰 창을 Enter 한 번�
   assert.equal(dump.cwd, s.workdir); assert.equal(String(dump.pid), String(seat.panePid));
   assert.deepEqual(dump.argv, agyArgv({model: 'm1'}).slice(1));
   assert.equal(JSON.parse(fs.readFileSync(path.join(seat.dir, 'boundary.json'), 'utf8')).line, seat.line);
-  assert.deepEqual(closeSeat(seat, s.deps), {killed: true});
+  // 호출이 끝나도 세션과 자리별 질문 파일은 남는다. 세션을 끌 때(정리 명령·내보내기와 같은 확인) 질문 파일도 치운다.
+  assert.deepEqual(keepSeat(seat, {...s.deps, reason: 'ok'}), {kept: true});
+  assert.deepEqual(s.sessions(), [seat.session]);
+  assert.deepEqual(s.asks(), [`${seat.askId}-1.txt`]);
+  assert.deepEqual(killOwn(seat.dir, {run: s.run, reason: 'cleanup'}), {killed: true});
   assert.deepEqual(s.sessions(), []);
-  assert.deepEqual(s.asks(), [], '끝난 질문 파일은 지운다');
+  assert.deepEqual(s.asks(), [], '세션을 끌 때 질문 파일을 지운다');
   // 둘째 호출: 같은 고정 폴더라 신뢰 창이 없다. 신뢰 목록은 그 폴더 하나 그대로다.
   const [again] = s.open(['m2']);
   const second = await passGate(again, s.deps);
