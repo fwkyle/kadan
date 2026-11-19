@@ -11,14 +11,13 @@ import {randomBytes} from 'node:crypto';
 export const NOEXEC_AGENT = 'kadan-noexec';
 
 // 실행기 → 묶기 정보(데이터). program: 틀 첫 낱말의 이름. agent: 틀에 정확히 한 번 있어야 할 `--agent <이름>`.
-// timeoutFlag: 틀 안의 자체 시간 상한 인자(시니어가 값을 바꾼다). flags: 받는 옵션과 옵션별 값 모양(옵션 + 값 1개 쌍만 받는다).
+// flags: 받는 옵션과 옵션별 값 모양(옵션 + 값 1개 쌍만 받는다).
 // 여기에 없는 옵션(예: --add-dir)이나 다른 낱말은 틀이 거절된다. 코드는 이 표만 읽고 실행기 이름으로 갈라지지 않는다.
+// 이 틀은 설명 AI가 쓴다. 시니어는 agy를 이 헤드리스 틀로 부르지 않는다(대화창으로만 — src/senior-agy.mjs, 2026-11-18 [kyle]).
 const MODEL_VALUE = /^(?:\{model\}|[A-Za-z0-9][A-Za-z0-9._-]*)$/;
 export const EXEC_BINDINGS = {
   agy: {
-    program: 'agy', agent: NOEXEC_AGENT, timeoutFlag: '--print-timeout',
-    // readDirFlag: 저장된 틀에는 못 쓰는 옵션(위 flags에 없다). 시니어 코드만 실행 직전에 정규화한 절대경로 값을 덧붙인다(withReadDir).
-    readDirFlag: '--add-dir',
+    program: 'agy', agent: NOEXEC_AGENT,
     flags: {
       '--agent': /^kadan-noexec$/,
       '--model': MODEL_VALUE,
@@ -59,8 +58,7 @@ function findBinding(runner, template) {
 // 허용 글자 밖(# ; & | $ ` ( ) < > ' " \ 줄바꿈·글롭 등)이 하나라도 있으면 거절 → 검사가 읽은 낱말과 셸이 실행하는 인자가 같다.
 const TEMPLATE_CHARS = /^[A-Za-z0-9_@%+=:,./{} \t-]+$/;
 const PROGRAM_WORD = /^[A-Za-z0-9_./-]+$/;
-// readDir: 코드가 덧붙인 읽기 폴더 값. 있으면 readDirFlag가 정확히 그 값으로 한 번 있어야 하고, 없으면 readDirFlag는 다른 낱말처럼 거절된다.
-export function checkBoundTemplate(binding, template, readDir = null) {
+export function checkBoundTemplate(binding, template) {
   const fail = why => { throw new Error(`${binding.program} 실행 틀이 묶기 문법에 맞지 않는다(${why}) — 도구 없는 에이전트로 묶으려면 단순 명령 문법만 받는다(docs/runner-settings.md)`); };
   const text = String(template ?? '');
   if (!TEMPLATE_CHARS.test(text)) fail('허용하지 않는 글자');
@@ -68,7 +66,7 @@ export function checkBoundTemplate(binding, template, readDir = null) {
   if (!PROGRAM_WORD.test(words[0]) || programName(words[0]) !== binding.program) fail('첫 낱말이 실행기 프로그램이 아니다');
   const rest = words.slice(1);
   if (rest.length % 2 !== 0) fail('옵션과 값이 짝이 아니다');
-  const flags = readDir && binding.readDirFlag ? {...binding.flags, [binding.readDirFlag]: {test: value => value === readDir}} : binding.flags;
+  const flags = binding.flags;
   const seen = new Set();
   for (let i = 0; i < rest.length; i += 2) {
     const [flag, value] = [rest[i], rest[i + 1]];
@@ -77,22 +75,21 @@ export function checkBoundTemplate(binding, template, readDir = null) {
     seen.add(flag);
     if (!flags[flag].test(value)) fail(`${flag} 값 모양`);
   }
-  if (readDir && binding.readDirFlag && !seen.has(binding.readDirFlag)) fail(`${binding.readDirFlag}가 없다`);
   if (!seen.has('--agent')) fail(`--agent ${binding.agent}가 없다`);
   return words;
 }
 
 // 그 실행기 행의 exec 틀이 묶기 문법을 지키는지. 묶기가 필요 없는 실행기는 그냥 통과한다(null).
-export function assertExecBound(settings, runner, readDir = null) {
+export function assertExecBound(settings, runner) {
   const template = settings?.runners?.[runner]?.exec;
   const binding = findBinding(runner, template);
   if (!binding) return null;
-  checkBoundTemplate(binding, template, readDir);
+  checkBoundTemplate(binding, template);
   return binding;
 }
 
 // 경로의 한 단계가 링크 아닌 진짜 디렉터리여야 한다. 없으면 이 한 단계만 만든다(recursive 아님).
-function ensureRealDir(dir) {
+export function ensureRealDir(dir) {
   let st = fs.lstatSync(dir, {throwIfNoEntry: false});
   if (!st) { fs.mkdirSync(dir, {mode: 0o700}); st = fs.lstatSync(dir); }
   if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('링크이거나 디렉터리가 아니다');
@@ -147,23 +144,6 @@ export function bindExec(settings, runner, cwd) {
   return binding;
 }
 
-// 틀 안의 자체 시간 상한 인자 값을 seconds초로 바꾼 틀을 돌려준다. 문법을 통과한 틀(낱말이 공백으로만 나뉜다)에서만 쓴다.
-// timeoutFlag 바로 다음 낱말 하나만 바꾸고 다시 잇는다. 인자가 없는 틀은 그대로 둔다.
-export function withTimeout(template, binding, seconds) {
-  if (!binding?.timeoutFlag) return template;
-  const words = template.trim().split(/[ \t]+/);
-  const at = words.indexOf(binding.timeoutFlag);
-  if (at < 0 || at + 1 >= words.length) return template;
-  words[at + 1] = `${seconds}s`;
-  return words.join(' ');
-}
-
-// 읽기 폴더로 덧붙일 수 있는 값: 절대경로, 허용 글자만(공백·메타문자·`{}`·`..` 없음). 틀 문법과 {model} 같은 자리 치환에 걸리지 않는 값만 받는다.
+// 읽기 폴더로 넘길 수 있는 값: 절대경로, 허용 글자만(공백·메타문자·`{}`·`..` 없음). 시니어 agy 대화창이 `--add-dir` 값으로 쓴다.
 const READ_DIR_VALUE = /^\/[A-Za-z0-9_@%+=:,./-]+$/;
 export const isReadDirValue = value => typeof value === 'string' && READ_DIR_VALUE.test(value) && !value.split('/').includes('..');
-
-// 시니어 코드가 실행 직전에 틀 뒤에 `<readDirFlag> <절대경로>`를 덧붙인다. 묶기 정보에 readDirFlag가 없거나 값이 안전한 모양이 아니면 틀 그대로 둔다(저장 틀의 같은 옵션은 여전히 거절된다).
-export function withReadDir(template, binding, dir) {
-  if (!binding?.readDirFlag || !isReadDirValue(dir)) return template;
-  return `${template.trim()} ${binding.readDirFlag} ${dir}`;
-}

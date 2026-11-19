@@ -30,10 +30,11 @@ export const HARD_ROLE = 'worker-hard';
 export const WATCH_RUNNER = 'codex';
 export const ONE_SHOT_ROLES = {watch: '감시 AI', senior: '시니어'};
 // 시니어가 쓸 수 있는 '안전하게 묶을 수 있는 실행기' 허용 목록(2026-10-20 [kyle]). 쓰기·명령 실행이 막힌다고 확인된 실행기만 넣는다.
-// codex는 scripts/senior.sh가 읽기 전용 샌드박스로 부르고, agy는 실행기 표 exec 틀 + 도구 없는 에이전트(--agent kadan-noexec, src/exec-agent.mjs)로 부른다.
+// codex는 대화창(기본) 또는 scripts/senior.sh(헤드리스)로 부르고, agy는 대화창 + 도구 없는 에이전트(--agent kadan-noexec)로만 부른다
+// (src/senior-agy.mjs — 헤드리스로는 부르지 않는다, 2026-11-18 [kyle]).
 // 설정 저장(runners set senior)과 호출(kadan senior --runner)이 같은 목록·같은 함수로 거절한다.
 export const SENIOR_SAFE_RUNNERS = ['codex', 'agy'];
-// scripts/senior.sh가 직접 부르는 실행기. 그 밖의 허용 실행기는 실행기 표 exec 틀로 부른다.
+// scripts/senior.sh가 직접 부르는 실행기. 헤드리스 길은 이 실행기만 부른다(그 밖의 허용 실행기가 등록돼 있으면 헤드리스 호출은 전원 거절).
 export const SENIOR_SCRIPT_RUNNER = 'codex';
 // 시니어는 최대 2명을 등록하고, 질문하면 등록된 전원에게 동시에 묻는다(2026-10-22 [kyle] 승인). 둘은 폴백이 아니라 동등하다.
 export const SENIOR_MAX = 2;
@@ -108,6 +109,16 @@ export function assertSeniorShape(list) {
   if (new Set(keys).size !== keys.length) throw new Error('같은 실행기·모델 시니어가 두 번 있다');
 }
 
+// 시니어 대화창 가운데 scripts/senior.sh를 거치지 않는 실행기(agy)는 모델 값을 실행 인자로 그대로 놓는다(`agy --model <값> …`).
+// 값이 옵션 모양이면(`--print`·`-p` 등) agy가 그것을 옵션으로 읽어 헤드리스로 돌 수 있다(2026-11-18 검수 exec-89326673).
+// 그래서 그 값은 이름 규칙(NAME_PATTERN) 안이면서 `-`로 시작하지 않아야 한다. 저장·호출 직전·실행 인자 조립이 같은 검사를 쓴다.
+export const isArgvSafeModel = value => typeof value === 'string' && NAME_PATTERN.test(value) && !value.startsWith('-');
+export function assertSeniorModel({runner, model}) {
+  if (runner === SENIOR_SCRIPT_RUNNER || isArgvSafeModel(model)) return;
+  const message = `시니어 ${runner} 모델 값을 쓸 수 없다(senior-model-shape): ${JSON.stringify(model)} — 영문·숫자·./-[]만 쓰고 \`-\`로 시작할 수 없다(실행 인자에서 옵션으로 읽힌다)`;
+  throw Object.assign(new Error(message), {reason: 'senior-model-shape'});
+}
+
 // 호출 직전 검사(2026-10-22 검수 F1·F2): 저장 때와 같은 모양·안전 실행기·정책 차단 검사를 설정 파일에 든 목록 전체에 한다.
 // 하나라도 걸리면 전원 거절한다(fail closed) — kyle이 정한 목록과 다른 조합으로 몰래 돌지 않게. 외부 호출·증거 폴더 전에 부른다.
 export function assertSeniorCallable(settings, list) {
@@ -115,6 +126,7 @@ export function assertSeniorCallable(settings, list) {
   try { assertSeniorShape(list); } catch (error) { throw new Error(`${error.message}${hint}`); }
   list.forEach((item, i) => {
     try { assertSeniorRunner(item.runner); } catch (error) { throw new Error(`시니어 ${i + 1}번(${item.runner}/${item.model}): ${error.message}${hint}`); }
+    try { assertSeniorModel(item); } catch (error) { throw Object.assign(new Error(`시니어 ${i + 1}번: ${error.message}${hint}`), {reason: error.reason}); }
     const blocked = findBlocked(settings, 'senior', item.model);
     if (blocked) throw new Error(`시니어 ${i + 1}번(${item.runner}/${item.model}): 정책으로 막은 모델 — ${blocked.reason}${hint} (차단은 block 설정이라 풀려면 kyle 승인으로 설정을 고친다)`);
   });
@@ -124,7 +136,7 @@ export function checkChoice(settings, role, {runner, model, effort}, options, {c
   if (![runner, model].every(v => typeof v === 'string' && VALUE.test(v)) || (effort != null && !VALUE.test(effort)))
     throw new Error('실행기·모델·강도에는 영문·숫자·./-[]만 쓴다');
   const choices = runnerChoices(settings, runner, options);
-  if (role === 'senior') assertSeniorRunner(runner);
+  if (role === 'senior') { assertSeniorRunner(runner); assertSeniorModel({runner, model}); }
   else if (ONE_SHOT_ROLES[role] && runner !== WATCH_RUNNER) throw new Error(`${ONE_SHOT_ROLES[role]}는 ${WATCH_RUNNER} 실행기만 고를 수 있다 — ${role === 'watch' ? 'watch-judge.sh' : 'senior.sh'}가 codex exec로 부른다`);
   if (!choices.has(model)) throw new Error(`${runner}에서 고를 수 없는 모델: ${model}`);
   const efforts = choices.get(model);

@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {LIMIT_PATTERN} from '../src/senior.mjs';
-import {SCREEN_LIMIT_PATTERN, composerHolds, composerReady, gateVerdict, limitScreen, markerOf, markerParts, parseAllowList,
-  readAnswerText, readComposer, readMcpBlock} from '../src/senior-screen.mjs';
+import {SCREEN_LIMIT_PATTERN, composerHolds, composerReady, limitScreen, markerOf, markerParts, readAnswerText,
+  readComposer} from '../src/senior-screen.mjs';
+import * as seniorScreen from '../src/senior-screen.mjs';
 
 // 시니어 대화형 화면 판정(순수 함수). 화면 모양은 codex 0.166 `--no-alt-screen` 실제 화면의 줄 배치를 따랐다(이름·경로는 가짜).
 const STATUS = '  GPT-Fake low · ~/fake/advice/ask/1-codex/out  ⚠ 2 warnings · f2 to view';
@@ -22,8 +23,6 @@ const WORKING = screen(BANNER, '› ../input.txt 를 끝까지 읽고 거기 적
   '› Ask Codex to do anything', '', STATUS);
 // 슬래시 명령을 넣으면 명령 목록이 입력칸 위에 뜬다(입력칸은 여전히 마지막 `›` 줄이다).
 const SLASH = screen(BANNER, '', '› /mcp           list configured MCP tools', '', '› /mcp', '', STATUS);
-const MCP = (rows, {tail = true} = {}) => screen(BANNER, '/mcp', '', '🔌  MCP Tools', '', rows, '',
-  tail ? ['  Use /mcp verbose for tools and resources.', ''] : [], '', '› Ask Codex to do anything', '', STATUS);
 
 test('빈 입력칸 판정(붙여넣기 직전): 빈 입력칸이 화면 끝에 있을 때만 통과하고 선택 창·일하는 표시·글이 든 입력칸은 거절한다', () => {
   assert.deepEqual(composerReady(IDLE), {ok: true});
@@ -58,30 +57,8 @@ test('자기 한 줄 판정(Enter 직전): 입력칸의 글이 방금 붙인 줄
   assert.deepEqual(readComposer(held).text, line);
 });
 
-test('/mcp 구간: 메아리·머리줄·끝줄이 다 있고 입력칸으로 돌아왔을 때만 연결된 이름 전부로 읽는다', () => {
-  const full = MCP(['  • codex_worktrees: connected (3 tools)', '  • fixture-a: connected (1 tool)', '  • fixture-off: disabled (0 tools)']);
-  assert.deepEqual(readMcpBlock(full), {ok: true, connected: ['codex_worktrees', 'fixture-a'], disabled: ['fixture-off']});
-  assert.deepEqual(readMcpBlock(MCP(['  • codex_worktrees: connected (3 tools)'], {tail: false})), {ok: false, why: 'mcp-incomplete'});
-  assert.deepEqual(readMcpBlock(MCP(['  • fixture-a: starting'])), {ok: false, why: 'mcp-pending', pending: 'fixture-a'});
-  assert.deepEqual(readMcpBlock(MCP(['  • fixture-a: connected (1 tool)', '  뭔가 다른 줄'])), {ok: false, why: 'mcp-unreadable'});
-  assert.deepEqual(readMcpBlock(IDLE), {ok: false, why: 'mcp-not-shown'});
-  assert.deepEqual(readMcpBlock(SLASH), {ok: false, why: 'mcp-not-shown'}, '입력칸에 든 /mcp는 출력이 아니다');
-  // 끝줄 뒤가 입력칸이 아니면(다른 창이 떠 있으면) 완전한 구간으로 보지 않는다.
-  const noComposer = screen(BANNER, '/mcp', '', '🔌  MCP Tools', '', '  • fixture-a: connected (1 tool)', '', '  Use /mcp verbose for tools and resources.');
-  assert.deepEqual(readMcpBlock(noComposer), {ok: false, why: 'mcp-incomplete'});
-  // 마지막 /mcp 출력만 본다(스크롤 기록의 옛 출력은 근거가 아니다).
-  const twice = full.trimEnd() + '\n' + MCP(['  • fixture-b: connected (2 tools)']);
-  assert.deepEqual(readMcpBlock(twice).connected, ['fixture-b']);
-});
-
-test('허용 목록: 연결된 이름이 모두 목록 안일 때만 통과한다. 파일이 없으면(null) 거절한다', () => {
-  const allow = parseAllowList('# 주석\ncodex_worktrees\n\n  fixture-a  \nfixture-b\n');
-  assert.deepEqual([...allow], ['codex_worktrees', 'fixture-a', 'fixture-b']);
-  assert.deepEqual(gateVerdict(['codex_worktrees', 'fixture-a'], allow), {ok: true});
-  assert.deepEqual(gateVerdict([], allow), {ok: true});
-  assert.deepEqual(gateVerdict(['codex_worktrees', 'fixture-x'], allow), {ok: false, why: 'not-allowed', outside: ['fixture-x']});
-  assert.deepEqual(gateVerdict(['codex_worktrees'], null), {ok: false, why: 'allow-missing', outside: ['codex_worktrees']});
-  assert.deepEqual(gateVerdict(['codex_worktrees'], parseAllowList('')), {ok: false, why: 'not-allowed', outside: ['codex_worktrees']});
+test('MCP 허용 목록 판정은 없다: 화면 판정 모듈이 /mcp 출력·허용 목록 함수를 내보내지 않는다(2026-11-18 [kyle])', () => {
+  for (const name of ['readMcpBlock', 'gateVerdict', 'parseAllowList']) assert.equal(name in seniorScreen, false, name);
 });
 
 test('답 파일: 마지막 줄이 표지이고 표지가 한 번이며 표지 뗀 답이 비어 있지 않을 때만 답이다. 줄끝은 정규화한다', () => {

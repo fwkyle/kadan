@@ -73,45 +73,6 @@ export function limitScreen(screen, now) {
   return terminal429(text, now) != null;
 }
 
-// `/mcp` 출력 구간. 명령 메아리 줄 → 머리줄 → 서버 줄들 → 끝줄이 모두 있고 그 뒤가 입력칸일 때만 완전한 구간이다.
-// 잘린 구간·모르는 줄·모르는 상태 낱말은 통과시키지 않는다(연결된 이름 '전부'를 읽었다고 말할 수 없다).
-const MCP_HEAD = /^🔌\s+MCP Tools$/u;
-const MCP_ROW = /^\s+•\s+([A-Za-z0-9_.-]+):\s+([a-z]+)(?:\s+\(\d+\s+tools?\))?$/u;
-const MCP_TAIL = /^\s+Use \/mcp verbose for tools and resources\.$/u;
-export function readMcpBlock(screen) {
-  const lines = screenLines(screen);
-  const echo = lines.findLastIndex(line => line.trim() === '/mcp');
-  if (echo < 0) return {ok: false, why: 'mcp-not-shown'};
-  const rest = lines.slice(echo + 1).filter(line => line !== '');
-  if (!MCP_HEAD.test(rest[0] ?? '')) return {ok: false, why: 'mcp-not-shown'};
-  const tail = rest.findIndex(line => MCP_TAIL.test(line));
-  if (tail < 0) return {ok: false, why: 'mcp-incomplete'};
-  if (!/^›/u.test(rest[tail + 1] ?? '') || rest.slice(tail + 2).some(line => /^›/u.test(line))) {
-    return {ok: false, why: 'mcp-incomplete'};
-  }
-  const connected = [], disabled = [];
-  for (const line of rest.slice(1, tail)) {
-    const row = MCP_ROW.exec(line);
-    if (!row) return {ok: false, why: 'mcp-unreadable'};
-    if (row[2] === 'connected') connected.push(row[1]);
-    else if (row[2] === 'disabled') disabled.push(row[1]);
-    else return {ok: false, why: 'mcp-pending', pending: row[1]};
-  }
-  return {ok: true, connected, disabled};
-}
-
-// 허용 목록 글(한 줄에 이름 하나, 빈 줄과 `#` 줄은 건너뜀) → 이름 집합.
-export function parseAllowList(text) {
-  return new Set(String(text ?? '').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#')));
-}
-
-// 연결된 이름이 모두 허용 목록 안인가. allow가 null이면 파일이 없는 것이다(거절 — 스스로 저장하지 않는다).
-export function gateVerdict(connected, allow) {
-  if (allow == null) return {ok: false, why: 'allow-missing', outside: connected};
-  const outside = connected.filter(name => !allow.has(name));
-  return outside.length ? {ok: false, why: 'not-allowed', outside} : {ok: true};
-}
-
 // 끝 표지는 조각으로만 건네고 모델이 조립한다(완성된 표지는 input.txt에도 화면 입력에도 없다 — 잠긴 규칙 6과 같은 이유).
 export const markerParts = token => ['KADAN-SENIOR', '-END-', String(token)];
 export const markerOf = token => markerParts(token).join('');
