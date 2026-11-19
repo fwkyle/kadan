@@ -130,7 +130,7 @@ test('서버 쓰기 경로는 사람 명의로 저장하고, 토큰·revision·�
     await refused(await set({model:'gpt-9-nowhere'}), 409, /고를 수 없는 모델/);
     await refused(await set({effort:'max'}), 409, /지원하지 않는 강도/);
     await refused(await set({runner:'nobody'}), 409, /등록되지 않은 실행기/);
-    await refused(await set({role:'secretary'}), 409, /역할은/);
+    await refused(await set({role:'butler'}), 409, /역할은/);
     await refused(await set({role:'reviewer', model:'gpt-6-astra', effort:'low'}), 409, /정책으로 막은 모델/);
     await refused(await set({role:'reviewer', model:'xai/grok-5-review', effort:'medium'}), 409, /같은 계열\(grok\)/);
     await refused(await post('/runners/preset', {preset:'Z'}), 409, /없는 프리셋/);

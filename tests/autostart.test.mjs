@@ -25,6 +25,19 @@ test('로그인 때와 60초마다 kadan up --hidden --auto — KeepAlive 없음
   assert.doesNotMatch(plist, /SECRET_TOKEN|nope/, '카단과 무관한 환경 변수는 옮기지 않는다');
 });
 
+test('자동 복원에 설치 셸의 Codex 모델 목록 경로를 전달하고, 경로가 없으면 항목을 생략한다', () => {
+  const opts = base();
+  const show = env => autostartCommand('show', { ...opts, env }).content;
+  const original = show(env);
+  assert.doesNotMatch(original, /KADAN_CODEX_MODELS_CACHE/);
+  assert.equal(show({ ...env, KADAN_CODEX_MODELS_CACHE: '' }), original);
+
+  const custom = show({ ...env, KADAN_CODEX_MODELS_CACHE: '/models/r&d/catalog file.json' });
+  const variables = custom.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/)[1];
+  assert.match(variables,
+    /<key>KADAN_CODEX_MODELS_CACHE<\/key>\s*<string>\/models\/r&amp;d\/catalog file\.json<\/string>/);
+});
+
 test('show는 쓰지 않고, install은 없을 때만 쓰고, 같은 내용이면 그대로, 다르면 거부, remove는 .trash로 옮긴다', () => {
   const opts = base();
   const file = path.join(opts.userHome, 'Library', 'LaunchAgents', AUTOSTART_LABEL + '.plist');

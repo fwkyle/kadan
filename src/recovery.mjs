@@ -13,7 +13,8 @@ import {commandWords, launchIdentityOf} from './ai-identity.mjs';
 import {reportRecovery} from './recovery-report.mjs';
 import {recoveryLaunch} from './recovery-launch.mjs';
 import {resumedSecretaryStart, withRecoveryLock, advanceSecretaryCheckpoint,
-  liveSecretaryTranscript, transcriptIdentity, savedSecretaryCommand} from './secretary-resume.mjs';
+  liveSecretaryTranscript, transcriptIdentity, savedSecretaryLaunch} from './secretary-resume.mjs';
+import {secretarySkipNote} from './secretary-settings.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -212,7 +213,10 @@ function restoreLocked(flags, deps) {
   // Rottie uses exec for standalone PTYs. The stored Kadan command starts at the executable
   // so existing AI identity/card checks continue to recognize the restored role.
   const requested = typeof flags.command === 'string' ? flags.command.replace(/^exec /, '') : flags.command;
-  const command = savedSecretaryCommand(home, context, requested);
+  // 비서는 저장된 체크포인트의 옵션으로 채우고, 실행 모델 설정에 비서 자리가 있으면 모델·강도 값을 그 값으로 바꾼다.
+  // saved.base는 설정값을 입히기 전 명령이고 command는 실제로 띄울 명령이다. 비서가 아니면 둘 다 받은 명령 그대로다.
+  const saved = savedSecretaryLaunch(home, context, requested);
+  const command = saved.command;
   const bin = flags['rottie-bin'];
   if (typeof command !== 'string' || !command.trim() || !absolute(bin)) {
     fail('정확한 대화 복원 명령과 Rottie 실행 파일이 필요합니다.');
@@ -224,9 +228,17 @@ function restoreLocked(flags, deps) {
   const autostart = resumedSecretaryStart(context, entries, command);
   const resumedIdentity = launchIdentityOf(command);
   const originalIdentity = launchIdentityOf(start.cmd);
-  if (!autostart && originalIdentity.ok && (!resumedIdentity.ok || resumedIdentity.harness !== originalIdentity.harness
-    || resumedIdentity.model !== originalIdentity.model)) {
+  // 원본 역할과의 대조는 설정값을 입히기 전 명령(saved.base)으로 한다. 설정값으로 모델을 바꾼 경우에도 이 검사는 그대로 돈다.
+  const baseIdentity = saved.base === command ? resumedIdentity : launchIdentityOf(saved.base);
+  if (!autostart && originalIdentity.ok && (!baseIdentity.ok || baseIdentity.harness !== originalIdentity.harness
+    || baseIdentity.model !== originalIdentity.model)) {
     fail('복원 명령의 실행기 또는 모델이 원본 역할과 다릅니다.');
+  }
+  // 모델이 원본과 달라도 되는 것은 실행 모델 설정의 비서 자리 값으로 바꾼 경우뿐이다. 그때는 실행기가 같고
+  // 모델이 그 설정값으로 읽혀야 한다(근거는 새 start의 modelFromSettings·settingsRevision·runnerChoice 칸에 남는다).
+  if (saved.base !== command && (!saved.settings?.applied || !resumedIdentity.ok
+    || resumedIdentity.harness !== baseIdentity.harness || resumedIdentity.model !== saved.settings.applied.model)) {
+    fail('실행 모델 설정을 입힌 복원 명령이 설정값과 다릅니다.');
   }
   const effort = effortOf(start, entries);
   if (effort && effortOf({cmd: command}, []) !== effort) {
@@ -247,8 +259,10 @@ function restoreLocked(flags, deps) {
   // 새로 만들 세션의 실행 명령: 원본 세대가 쓰던 권한·프로필·설정 값과 Stop 훅을 잇는다. 위·아래의 검사는 모두
   // Rottie가 준 원래 명령(command)으로 하고, 이 문자열은 세션 만들기와 start 기록에만 쓴다. 살아 있는 pane을
   // 다시 잇는 경우에는 만들지 않는다. 요청 표시(claim)를 남기기 전에 계산한다(이 계산은 던지지 않는다).
-  const launch = pane ? null : recoveryLaunch({command, start, home,
-    warn: deps.warn || (message => console.error(message))});
+  const warn = deps.warn || (message => console.error(message));
+  const launch = pane ? null : recoveryLaunch({command, start, home, warn});
+  // 비서 자리 값을 적용하지 못했으면 저장된 명령 그대로 연다. 새로 띄울 때만 이유를 한 줄 알린다(막지 않는다).
+  if (!pane && saved.settings?.skipped) warn(`경고: ${secretarySkipNote(saved.settings.skipped)}`);
   const dir = path.join(home, 'recovery');
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   const claim = path.join(dir, `${digest(context)}.json`);
@@ -276,6 +290,7 @@ function restoreLocked(flags, deps) {
       evidence, window: terminalId ? 'rottie' : 'hidden', rottieTerminalId: terminalId,
       cmd: launch.launch, cwd: context.cwd}),
     ...launch.extra,
+    ...(saved.settings?.extra ?? {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
     // 어려운 일 작업자 표시는 복원 대상 세대의 것을 그대로 잇는다(restart·reopen과 같다). 이 칸이 빠지면 발령 검사가
     // 이 세션을 보통 작업자 기본값과 대조해 "옛 세션"으로 거절한다. 실행 명령의 모델·강도는 바꾸지 않는다.
@@ -297,7 +312,7 @@ function restoreLocked(flags, deps) {
   }
   if (!pane) {
     recordStart(terminal.id);
-    advanceSecretaryCheckpoint(home, context.startDigest, latest(read(), context.session), command);
+    advanceSecretaryCheckpoint(home, context.startDigest, latest(read(), context.session), command, saved.checkpoint);
   }
   (deps.record || (entry => appendLedger(entry, home)))({kind: 'window', role: context.role,
     session: context.session, panePid: evidence.panePid, rottieTerminalId: terminal.id,

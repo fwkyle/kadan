@@ -2,7 +2,8 @@ import {Fragment, useContext, useEffect, useId, useState} from 'react';
 import {save} from '../resource';
 import {AppContext, ErrorMessage} from '../ui';
 import {
-  HARD_ROLE, adoptSettings, clearPreset, followSettings, presetSaveFields, presetStamp, reasonFor, stagePreset, withRegistered,
+  HARD_ROLE, SECRETARY_ROLE, adoptSettings, clearPreset, followSettings, presetSaveFields, presetStamp, reasonFor, stagePreset,
+  withRegistered,
 } from '../preset-draft';
 import {changedRoles, effortProblems, emptyModelRoles} from '../runner-draft';
 import {EMPTY_EFFORT_NOTE} from '../effort-keep';
@@ -27,6 +28,20 @@ export function HardSlot({draft, clear}: {draft: Settings; clear: () => void}) {
         ? ' 대체 후보는 아래에서 고르고, 번호로 띄웁니다: --difficulty hard --fallback 번호. 비우면 대체 후보도 함께 지워집니다.'
         : ' 값을 정하면 대체 후보 칸이 열립니다. 값이 비어 있으면 작업자와 같아 따로 후보를 둘 수 없습니다.'}</p>
     <button type="button" disabled={!value} onClick={clear}>비우기{count ? ` (대체 후보 ${count}개도 지움)` : ''}</button>
+  </div>;
+}
+
+// 비서 자리: 비워 두면 비서는 저장된 명령 그대로 다시 열린다. 값이 있으면 다시 열 때 모델·강도만 그 값으로 바뀐다.
+// 대체 후보는 없다. 비우기도 저장 전까지는 변경안이다.
+export function SecretarySlot({draft, clear}: {draft: Settings; clear: () => void}) {
+  const value = draft.presets[draft.activePreset].roles[SECRETARY_ROLE] as Choice | undefined;
+  return <div className="action-form">
+    <p>{value ? `지금 값: ${[value.runner, value.model, value.effort].filter(Boolean).join(' / ')}`
+      : '비어 있음 — 비서는 저장된 명령 그대로 다시 열립니다'}</p>
+    <p className="muted">비서를 새로 띄울 때가 아니라 같은 대화로 다시 열 때(<code>kadan restart 비서</code>, <code>kadan up</code> 복원,
+      로티 탭 복원) 쓰는 값입니다. 저장된 명령에서 모델과 추론 강도만 이 값으로 바꾸고 다른 옵션은 그대로 둡니다.
+      지금 켜져 있는 비서에는 다음에 다시 열 때 반영됩니다. 대체 후보는 두지 않습니다.</p>
+    <button type="button" disabled={!value} onClick={clear}>비우기</button>
   </div>;
 }
 
@@ -110,7 +125,7 @@ export function PresetEditor({data, settings, initialOpen = []}: {
                 <td>{edited && cells.value !== next.value
                   ? <>{cells.value} → <strong>{next.value}</strong> <span className="pending-mark">(저장 전)</span></>
                   : cells.value}
-                  <CommandFold command={cells.command} /></td>
+                  <CommandFold command={cells.command} title={cells.commandTitle} /></td>
                 <td>{listChanged
                   ? <>
                     <div>지금: <List items={cells.fallbacks} empty="없음" /></div>
@@ -126,7 +141,10 @@ export function PresetEditor({data, settings, initialOpen = []}: {
                       {role !== 'senior' && <RunnerForm key={`${reset}:${role}:base`} data={data} settings={draft}
                         role={role} stage={stage} registered={registered} />}
                       {role === HARD_ROLE && <HardSlot draft={draft} clear={() => setDraft(clearPreset(draft, HARD_ROLE))} />}
-                      {(role !== HARD_ROLE || hardReady(draft)) && <RunnerForm key={`${reset}:${role}:fallback`} data={data}
+                      {role === SECRETARY_ROLE && <SecretarySlot draft={draft}
+                        clear={() => setDraft(clearPreset(draft, SECRETARY_ROLE))} />}
+                      {role !== SECRETARY_ROLE && (role !== HARD_ROLE || hardReady(draft)) && <RunnerForm
+                        key={`${reset}:${role}:fallback`} data={data}
                         settings={draft} role={role} fallback stage={stage} registered={registered} />}
                     </fieldset>
                   </div>

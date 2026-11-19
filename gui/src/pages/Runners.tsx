@@ -74,6 +74,8 @@ export type RunnersData = Stamp & {
   senior?: { runners: string[]; max: number };
   // 설명 AI는 실행기 표에 한 번 호출(exec) 틀이 있는 실행기만 고를 수 있고, 1순위 포함 최대 maxAttempts개를 시도한다.
   explain?: { runners: string[]; maxAttempts: number };
+  // 비서 자리는 이 실행기만 고를 수 있다(비서를 같은 대화로 다시 여는 길이 그 실행기 전용). 대체 후보는 없다.
+  secretary?: { runner: string };
 };
 // 설정 화면은 설정만 둔다(2026-10-25 [kyle]). 지금 열린 창의 생존·모델·다시 띄우기는 전략 맵 옆 칸에 있다.
 export default function Runners() {

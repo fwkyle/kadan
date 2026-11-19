@@ -17,7 +17,10 @@ import {
   SENIOR_MAX,
   WATCH_MAX_ATTEMPTS,
   EXPLAIN_MAX_ATTEMPTS,
+  SECRETARY_ROLE,
+  SECRETARY_RUNNER,
 } from "../runner-settings.mjs";
+import { secretaryCommandLabel } from "../secretary-settings.mjs";
 import { TABLE_KEYS } from "../runner-table.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
 import { seniorCommandLabel } from "../senior.mjs";
@@ -129,6 +132,10 @@ export function runnersData(snapshot, url, stamp) {
   commands.explain =
     explainCommand(settings, settings.presets[settings.activePreset].roles.explain) ||
     "미설정 — 설명 AI는 아무것도 하지 않는다";
+  // 비서 자리는 띄우는 명령이 아니라 비서를 같은 대화로 다시 열 때 모델·강도만 바꾸는 값이다.
+  commands[SECRETARY_ROLE] =
+    secretaryCommandLabel(settings.presets[settings.activePreset].roles[SECRETARY_ROLE]) ||
+    "비어 있음 — 저장된 명령 그대로 다시 연다";
   return {
     ...stamp,
     window,
@@ -148,6 +155,8 @@ export function runnersData(snapshot, url, stamp) {
         .map(([name]) => name),
       maxAttempts: EXPLAIN_MAX_ATTEMPTS,
     },
+    // 비서 자리는 codex만 고를 수 있다(비서를 같은 대화로 다시 여는 길이 codex 전용). 대체 후보는 없다.
+    secretary: { runner: SECRETARY_RUNNER },
     roles: RUNNER_ROLE_LABELS,
     history: (snapshot.entries || [])
       .filter((e) => e.kind === "runner-settings")

@@ -162,3 +162,50 @@ test("요약 글: 모델을 안 고른 초안은 빈 글자가 아니라 안 골
   const draft = { ...data.settings, presets: { ...data.settings.presets, [data.settings.activePreset]: { ...preset, roles: { ...preset.roles, worker: { runner: "claude", model: "" } } } } };
   assert.equal(summaryCells(data, "worker", draft).value, "claude / (모델 안 골랐음)");
 });
+
+// ---- 비서 자리(2026-11-19): 표 맨 아래 줄. 띄우는 명령이 아니라 다시 열 때 모델·강도만 바꾸는 값이다. ----
+const withSecretary = (value?: { runner: string; model: string; effort?: string }) => {
+  const data = dataOf("empty");
+  const preset = data.settings.presets[data.settings.activePreset];
+  const settings = { ...data.settings, presets: { ...data.settings.presets,
+    [data.settings.activePreset]: { ...preset, roles: { ...preset.roles, ...(value ? { secretary: value } : {}) } } } };
+  const commands = { ...data.commands, secretary: value
+    ? `비서를 다시 열 때 저장된 명령의 모델·강도만 바꾼다: --model ${value.model}`
+    : "비어 있음 — 저장된 명령 그대로 다시 연다" };
+  return { ...data, settings, commands, roles: { ...roles, secretary: "비서" }, secretary: { runner: "codex" } };
+};
+
+test("비서 줄: 값이 없으면 비어 있음으로 보이고 대체 후보는 두지 않는다고 말한다", () => {
+  const data = withSecretary();
+  const cells = summaryCells(data, "secretary");
+  assert.equal(cells.value, "비어 있음 — 저장된 명령 그대로 다시 엽니다");
+  assert.deepEqual(cells.fallbacks, []);
+  assert.equal(cells.note, "없음 (대체 후보를 두지 않습니다)");
+  assert.equal(cells.commandTitle, "다시 열 때 동작 보기");
+  const html = render(React.createElement(RunnerSummary, { data }));
+  assert.equal([...html.matchAll(/<th>([^<]+)<\/th><td>/g)].map(m => m[1]).at(-1), "비서", "표의 맨 아래 줄");
+  assert.match(html, /<summary>다시 열 때 동작 보기<\/summary><code>비어 있음 — 저장된 명령 그대로 다시 연다<\/code>/);
+  assert.equal([...html.matchAll(/<summary>발령 명령 보기<\/summary>/g)].length, Object.keys(roles).length, "다른 줄의 접힌 칸 제목은 그대로");
+  assert.doesNotMatch(html, /undefined|NaN/);
+});
+
+test("비서 줄: 값이 있으면 값과 다시 열 때 동작이 보인다", () => {
+  const data = withSecretary({ runner: "codex", model: "gpt-test2" });
+  assert.equal(summaryCells(data, "secretary").value, "codex / gpt-test2");
+  assert.match(render(React.createElement(RunnerSummary, { data })), /<code>비서를 다시 열 때 저장된 명령의 모델·강도만 바꾼다: --model gpt-test2<\/code>/);
+});
+
+test("비서 편집 칸: 기본 실행 모델과 비우기만 있고 대체 후보 칸은 없다", () => {
+  const empty = editor(withSecretary() as never, ["secretary"]);
+  const slot = empty.slice(empty.indexOf("비서 바꾸기"));
+  assert.match(slot, /기본 실행 모델/);
+  assert.match(slot, /비어 있음 — 비서는 저장된 명령 그대로 다시 열립니다/);
+  assert.match(slot, /<button type="button" disabled="">비우기<\/button>/);
+  assert.doesNotMatch(slot, /대체 후보 순서|대체 후보 추가/);
+  assert.match(slot, /대체 후보는 두지 않습니다/);
+  const filled = editor(withSecretary({ runner: "codex", model: "gpt-test2" }) as never, ["secretary"]);
+  const filledSlot = filled.slice(filled.indexOf("비서 바꾸기"));
+  assert.match(filledSlot, /지금 값: codex \/ gpt-test2/);
+  assert.match(filledSlot, /<button type="button">비우기<\/button>/);
+  assert.doesNotMatch(filledSlot, /대체 후보 순서|대체 후보 추가/);
+});
