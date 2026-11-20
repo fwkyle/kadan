@@ -62,10 +62,8 @@ function screenLines(screenText) {
   return lines;
 }
 
-// kind: working(일하는 표시 있음) | idle(일하는 표시 없음 + 빈 입력창) | unknown(그 밖)
-// clockSec: 일하는 줄의 경과 시계(초). 읽지 못하면 null.
-export function readStatusLine(screenText) {
-  const all = screenLines(screenText);
+// 화면 아래쪽의 일하는 줄(readStatusLine·workingClockText 공용). tool과 그 줄의 시계 글자 원문을 준다. 없으면 null.
+function workingHit(all) {
   const bottomStart = Math.max(0, all.length - BOTTOM_LINES);
   // 끝 14줄 안의 마지막 입력 기호 줄(글이 있어도 된다). 없으면 예전과 똑같이 끝 14줄만 본다.
   const anchor = all.findLastIndex((line, i) => i >= bottomStart && INPUT_SYMBOL.test(line));
@@ -74,13 +72,28 @@ export function readStatusLine(screenText) {
     const codex = CODEX_WORKING.exec(all[i]);
     const claude = codex ? null : CLAUDE_WORKING.exec(all[i]) ?? CLAUDE_TOOL_RUNNING.exec(all[i]);
     const hit = codex ?? claude;
-    if (hit) return { kind: "working", tool: codex ? "codex" : "claude", clockSec: parseClock(hit[1]) };
+    if (hit) return { tool: codex ? "codex" : "claude", clockText: hit[1] };
   }
+  return null;
+}
+
+// kind: working(일하는 표시 있음) | idle(일하는 표시 없음 + 빈 입력창) | unknown(그 밖)
+// clockSec: 일하는 줄의 경과 시계(초). 읽지 못하면 null.
+export function readStatusLine(screenText) {
+  const all = screenLines(screenText);
+  const working = workingHit(all);
+  if (working) return { kind: "working", tool: working.tool, clockSec: parseClock(working.clockText) };
   // idle 판정의 빈 입력 줄은 예전처럼 끝 14줄에서만 찾는다.
-  const lines = all.slice(bottomStart);
+  const lines = all.slice(Math.max(0, all.length - BOTTOM_LINES));
   const input = lines.findLast((line) => CODEX_INPUT.test(line) || CLAUDE_INPUT.test(line));
   if (input != null) return { kind: "idle", tool: CODEX_INPUT.test(input) ? "codex" : "claude", clockSec: null };
   return { kind: "unknown", tool: null, clockSec: null };
+}
+
+// 일하는 줄의 시계 글자 원문(앞뒤 공백 뗌). 일하는 줄이 없으면 null.
+// 초 없이 분만 보이는 시계(`2h 06m`)는 clockSec이 null이지만 글자는 순회마다 바뀐다. 그 변화를 보려는 쪽이 쓴다.
+export function workingClockText(screenText) {
+  return workingHit(screenLines(screenText))?.clockText.trim() ?? null;
 }
 
 // 화면 아래쪽(일하는 표시를 찾는 것과 같은 범위)의 백그라운드 셸 표시. 없으면 null.

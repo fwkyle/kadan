@@ -11,6 +11,7 @@ import {
   launchForHard,
   watchJudgeCommand,
   explainCommand,
+  fallbackCommands,
   PROFILE_ROLES,
   WATCH_RUNNER,
   SENIOR_SAFE_RUNNERS,
@@ -23,7 +24,7 @@ import {
 import { secretaryCommandLabel } from "../secretary-settings.mjs";
 import { TABLE_KEYS } from "../runner-table.mjs";
 import { RUNNER_ROLE_LABELS } from "../runner-settings-wall.mjs";
-import { seniorCommandLabel } from "../senior.mjs";
+import { seniorCommandLabel, seniorCommandLines } from "../senior.mjs";
 import { describeWindowSetting } from "../window-setting.mjs";
 import { idleRolesSummary } from "../idle-roles-setting.mjs";
 
@@ -144,6 +145,9 @@ export function runnersData(snapshot, url, stamp) {
     settings,
     catalog,
     commands,
+    // 줄마다 여는 '발령 명령 보기' 팝업 재료: 역할별 대체 후보 명령(순서대로, kadan runners show와 같은 값)과 시니어 한 명씩의 명령.
+    fallbackCommands: fallbackCommands(settings),
+    seniorCommands: seniorCommandLines(settings.presets[settings.activePreset].roles.senior),
     // 감시 AI는 codex만 고를 수 있고, 1순위 포함 최대 N개를 자동으로 차례로 시도한다.
     watch: { runner: WATCH_RUNNER, maxAttempts: WATCH_MAX_ATTEMPTS },
     // 시니어는 안전 허용 목록의 실행기(codex·agy)에서 최대 N명을 등록하고, 질문하면 전원에게 동시에 묻는다. 폴백은 없다.

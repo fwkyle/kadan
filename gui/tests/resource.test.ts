@@ -187,3 +187,49 @@ test("구독 취소 후 살아난 요청도 새 요청과 섞이지 않는다", 
   assert.equal(resource.getSnapshot().data, 9);
   next();
 });
+
+// 2026-11-20 실행 모델 설정 화면: 마지막으로 받은 값을 먼저 보이고 뒤에서 새로 읽는다.
+test("받아 둔 값(initial)은 첫 응답 전에 먼저 보이고(stored), 구독하면 바로 다시 읽어 새 값으로 바뀌며 onData로 보관한다", async () => {
+  const next = deferred<string>();
+  const kept: string[] = [];
+  let count = 0;
+  const resource = new Resource<string>(() => { count++; return next.promise; },
+    { initial: "지난 값", onData: (data) => kept.push(data), staleMs: 5000 });
+  assert.equal(resource.getSnapshot().data, "지난 값");
+  assert.equal(resource.getSnapshot().stored, true);
+  assert.equal(resource.getSnapshot().updatedAt, 0, "낡은 값으로 친다");
+  const off = resource.subscribe(() => {});
+  await wait();
+  assert.equal(count, 1, "보관 값이 있어도 구독하면 바로 읽는다");
+  assert.equal(resource.getSnapshot().data, "지난 값", "읽는 동안에도 보관 값이 보인다");
+  next.resolve("새 값");
+  await wait();
+  assert.deepEqual([resource.getSnapshot().data, resource.getSnapshot().stored], ["새 값", false]);
+  assert.deepEqual(kept, ["새 값"]);
+  off();
+});
+
+test("받아 둔 값이 없으면 지금처럼 자료 없이 시작하고 stored는 false다", () => {
+  const resource = new Resource<string>(() => new Promise(() => {}), { initial: undefined });
+  assert.equal(resource.getSnapshot().data, undefined);
+  assert.equal(resource.getSnapshot().stored, false);
+});
+
+test("먼저 보낸 조회(구독 전 refresh)는 나중 구독이 그대로 이어 쓴다 — 같은 주소를 두 번 부르지 않는다", async () => {
+  const first = deferred<string>();
+  let count = 0;
+  const resource = new Resource<string>(() => { count++; return first.promise; }, { staleMs: 5000 });
+  void resource.refresh(); // 화면을 그리기 전에 먼저 보낸 조회
+  await wait();
+  const off = resource.subscribe(() => {});
+  await wait();
+  assert.equal(count, 1);
+  first.resolve("값");
+  await wait();
+  assert.equal(resource.getSnapshot().data, "값");
+  // 방금 받은 값은 낡지 않았으므로 또 구독해도 다시 읽지 않는다.
+  const off2 = resource.subscribe(() => {});
+  await wait();
+  assert.equal(count, 1);
+  off(); off2();
+});

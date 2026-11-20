@@ -94,10 +94,13 @@ function Models({ name, spec, revision }: { name: string; spec: RunnerCatalog[st
     e.preventDefault();
     if (noReason) return setError("바꾸는 이유를 적어 주세요.");
     if (await run("/runners/model-add", { runner: name, model, efforts, reason, revision: String(revision) }, `${name} 모델을 등록했습니다: ${model}`)) {
+      // 불러온 목록은 지우지 않는다: 방금 등록한 줄만 '이미 등록됨'으로 바꿔, 강도별 모델 여러 개를 이어서 등록할 때
+      // 목록을 매번 다시 불러오지 않게 한다(2026-11-20: 등록할 때마다 목록이 사라졌다).
+      const added = model;
+      setListed((old) => old?.map((m) => (m.model === added ? { ...m, registered: true } : m)) ?? null);
       setModel("");
       setEfforts("");
       setReason("");
-      setListed(null);
     }
   };
   // 삭제도 등록처럼 사람이 이유를 적어야 한다. 이유 칸이 비어 있으면 삭제 버튼을 막고 안내한다.

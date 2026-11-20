@@ -45,6 +45,39 @@ const same = value => JSON.parse(JSON.stringify(value, (key, v) => key === 'coll
 const getJson = async (base, url) => { const r = await fetch(base + url); return {status: r.status, headers: r.headers, body: JSON.parse(await r.text())}; };
 const never = counter => () => { counter.n++; throw new Error('공유 수집을 부르면 안 된다'); };
 
+// 2026-11-20 운영 실측: 크롬이 화면을 열 때마다 찾는 /favicon.ico가 전체 수집 + 17MB 옛 화면 그리기로 떨어져 다른 요청을 6.6~24.7초 세웠다.
+test('화면 빌드를 서빙할 때 파일 이름 꼴의 없는 주소(/favicon.ico 등)는 수집·옛 화면 그리기 없이 404로 끝나고 미리 수집도 걸지 않는다', async () => {
+  const home = sqliteHome(); const loads = {n: 0};
+  const server = createWallServer(never(loads), {home, cacheSec: 10, warmAfterMs: 20, gui: true});
+  const base = await start(server);
+  try {
+    for (const url of ['/favicon.ico', '/runners.json', '/apple-touch-icon.png', '/robots.txt', '/.well-known/appspecific/com.chrome.devtools.json']) {
+      const r = await fetch(base + url);
+      assert.equal(r.status, 404, url);
+      assert.equal(r.headers.get('content-type'), 'text/plain; charset=utf-8');
+      assert.ok((await r.text()).length < 100, '옛 화면 HTML을 싣지 않는다');
+    }
+    assert.equal((await fetch(base + '/favicon.ico', {method: 'HEAD'})).status, 404);
+    // 원래 있던 조회 주소는 그대로 답한다.
+    assert.equal((await fetch(base + '/api/dashboard/runners')).status, 200);
+    assert.equal((await fetch(base + '/runners/compare')).status, 200);
+    await wait(150);
+    assert.equal(loads.n, 0, '없는 주소는 공유 수집을 부르지 않는다');
+  } finally { server.close(); }
+});
+
+test('재현: 화면 빌드를 서빙하지 않는 서버(옛 화면)는 같은 주소에 지금처럼 화면을 그린다 — 바뀐 것은 화면 빌드 서버뿐이다', async () => {
+  const home = sqliteHome(); const loads = {n: 0};
+  const server = createWallServer(() => { loads.n++; return emptySnapshot(); }, {home, cacheSec: 0});
+  const base = await start(server);
+  try {
+    const r = await fetch(base + '/favicon.ico');
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type'), /text\/html/);
+    assert.equal(loads.n, 1, '옛 화면은 수집 한 번을 한다(고치기 전 화면 빌드 서버도 이 길로 떨어졌다)');
+  } finally { server.close(); }
+});
+
 test('runners·create·decisions는 공유 수집을 부르지 않고 1초 안에 200으로 답한다', async () => {
   const home = sqliteHome(); const loads = {n: 0};
   const server = createWallServer(never(loads), {home, cacheSec: 10, warmAfterMs: 20, gui: true});

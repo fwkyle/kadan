@@ -560,6 +560,14 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       }
     }
     if(gui&&url.searchParams.get('legacy')!=='1'&&serveDashboard(request,response,url,{root:guiRoot}))return;
+    // 화면 빌드를 서빙하는 서버에서 파일 이름 꼴(끝이 .확장자)인 없는 주소 — 브라우저가 스스로 찾는 /favicon.ico·/apple-touch-icon.png·
+    // /robots.txt 따위 — 는 수집도 옛 화면 그리기도 하지 않고 404로 끝낸다. 2026-11-20 실측(운영): 크롬은 아이콘 링크가 없는 화면을
+    // 열 때마다 /favicon.ico를 요청했고, 그 한 번이 전체 수집 + 17MB 옛 화면 그리기로 6.6~24.7초 동안 다른 요청(session·runners)을 모두 세웠다.
+    // 확장자가 없는 주소는 지금처럼 옛 화면으로 간다(원격 캐시 구분 시험이 그 길을 쓴다).
+    if(gui&&['GET','HEAD'].includes(request.method)&&url.searchParams.get('legacy')!=='1'&&!url.pathname.startsWith('/api/')&&/\.[A-Za-z0-9]+$/.test(url.pathname)){
+      response.writeHead(404,{'content-type':'text/plain; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});
+      response.end('없는 주소');return;
+    }
     const separateRead = url.pathname === '/api/dashboard/ledger' ? loadLedger
       : ['/api/dashboard/mail', '/api/dashboard/mail-body'].includes(url.pathname) ? loadMail : null;
     if (request.method === 'GET' && separateRead) {

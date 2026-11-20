@@ -26,7 +26,9 @@ export function stagePreset(settings: Settings, role: string, fallback: boolean,
     if (action === 'add') list.push(choice);
     else {
       if (!Number.isInteger(i) || i < 0 || i >= list.length) throw new Error('없는 후보 번호입니다.');
-      if (action === 'remove') list.splice(i, 1);
+      // 고치기: 같은 번호 자리에 값만 바꾼다. 번호는 `kadan start --fallback N`이 가리키므로 삭제+추가로 뒤로 밀지 않는다.
+      if (action === 'replace') list[i] = choice;
+      else if (action === 'remove') list.splice(i, 1);
       else if (action === 'up' || action === 'down') {
         const j = i + (action === 'up' ? -1 : 1);
         if (j < 0 || j >= list.length) throw new Error('더 옮길 수 없습니다.');

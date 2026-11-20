@@ -89,3 +89,38 @@ test('모델을 안 고른 초안: 실행기만 바꾼 역할을 짚고, 모델�
   assert.deepEqual(emptyModelRoles(picked, roles), []);
   assert.deepEqual(emptyModelRoles(clearPreset({...settings, presets: {A: {roles: {'worker-hard': {runner: 'codex', model: 'x'}}}}}, 'worker-hard'), roles), [], '비운 자리는 모델 빈 값이 아니다');
 });
+
+// 줄 고치기(2026-11-20): 대체 후보 번호는 `kadan start --fallback N`이 가리킨다. 고친 줄은 같은 번호 자리에 남아야 한다.
+const three = () => ({revision: 3, activePreset: 'A', presets: {A: {
+  roles: {reviewer: {runner: 'codex', model: 'r'}, senior: [{runner: 'codex', model: 's1', effort: 'high'}, {runner: 'agy', model: 's2'}]},
+  fallback: {reviewer: [{runner: 'codex', model: 'a', effort: 'high'}, {runner: 'codex', model: 'b', effort: 'high'}, {runner: 'codex', model: 'c'}]},
+}}});
+
+test('재현: 고치기를 삭제+추가로 하면 고친 줄이 맨 뒤로 밀려 2·3번이 가리키는 값이 바뀐다', () => {
+  let draft = stagePreset(three(), 'reviewer', true, {runner: 'codex', model: 'b'}, 'remove:2');
+  draft = stagePreset(draft, 'reviewer', true, {runner: 'codex', model: 'b2', effort: 'low'}, 'add');
+  assert.deepEqual(draft.presets.A.fallback.reviewer.map(item => item.model), ['a', 'c', 'b2'], '2번이 c로 바뀌었다');
+});
+
+test('줄 고치기(replace:N): 같은 번호 자리의 값만 바뀌고 앞뒤 줄·순서·다른 역할은 그대로다', () => {
+  const settings = three(), before = JSON.stringify(settings);
+  const draft = stagePreset(settings, 'reviewer', true, {runner: 'codex', model: 'b2', effort: 'low'}, 'replace:2');
+  assert.equal(JSON.stringify(settings), before, '원본은 건드리지 않는다');
+  assert.deepEqual(draft.presets.A.fallback.reviewer, [
+    {runner: 'codex', model: 'a', effort: 'high'}, {runner: 'codex', model: 'b2', effort: 'low'}, {runner: 'codex', model: 'c'}]);
+  assert.deepEqual(draft.presets.A.roles, settings.presets.A.roles);
+  assert.deepEqual(changedRoles(settings, draft, ['reviewer', 'senior']), ['reviewer']);
+  // 강도를 받지 않는 값으로 바꾸면 빈 강도 칸을 남기지 않는다.
+  const noEffort = stagePreset(settings, 'reviewer', true, {runner: 'agy', model: 'g', effort: ''}, 'replace:1');
+  assert.deepEqual(noEffort.presets.A.fallback.reviewer[0], {runner: 'agy', model: 'g'});
+  // 저장 요청은 프리셋 한 벌 하나다(쓰기 한 번).
+  assert.deepEqual(JSON.parse(presetSaveFields(draft, '시험').value).fallback.reviewer.map((item: {model: string}) => item.model), ['a', 'b2', 'c']);
+});
+
+test('줄 고치기: 시니어 목록도 같은 조작으로 고치고(가득 찬 2명에서도), 없는 번호는 거절한다', () => {
+  const draft = stagePreset(three(), 'senior', true, {runner: 'agy', model: 's2b', effort: ''}, 'replace:2');
+  assert.deepEqual(draft.presets.A.roles.senior, [{runner: 'codex', model: 's1', effort: 'high'}, {runner: 'agy', model: 's2b'}]);
+  for (const op of ['replace:0', 'replace:3', 'replace:x', 'replace'])
+    assert.throws(() => stagePreset(three(), 'senior', true, {runner: 'agy', model: 'z'}, op), /없는 후보 번호/);
+  assert.throws(() => stagePreset(three(), 'reviewer', true, {runner: 'agy', model: 'z'}, 'replace:4'), /없는 후보 번호/);
+});

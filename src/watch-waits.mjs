@@ -29,6 +29,18 @@ export function waitsOfCard(waits, card, taskId, works, role) {
   return (waits ?? []).filter(w => w.ids?.some(id => ids.has(id)) && (w.asker == null || w.asker === role));
 }
 
+// 대기 시간 상한 전용: 이 답 대기 항목이 그 실행의 타이머를 버릴 근거인가(waitsOfCard가 고른 항목을 다시 거른다).
+// Why: waitsOfCard는 소속 업무 키와 짧은 카드 id로도 맞춘다. 한 업무에 실행이 이어지거나(구현 → 수정 → 재검수) 정식 주소가
+// 다른 실행의 짧은 id가 같으면, 끝난 이전 실행에 걸린 미답 질문·결정 하나가 지금 실행의 멈춤을 계속 가렸다(2026-11-20 검수 세 번).
+// 다른 소비자(정체·멈춤·AI 입력)의 결과는 그대로다.
+//  - 우편·결정 항목은 그 항목의 정식 실행 키(execution: 전체 카드 key)가 이 실행의 정식 키와 정확히 같을 때만 근거다.
+//    짧은 id·taskId 별칭·업무 키 일치는 쓰지 않는다. 실행 키 없이 업무에만 걸린 질문·채팅 결정은 근거가 아니다.
+//  - 그 밖의 항목(사용자 차례·업무 대기 시각)은 업무 단위 대기라 그대로 근거다.
+export function waitOfExecution(wait, executionKey) {
+  if (wait.kind !== 'mail' && wait.kind !== 'decision') return true;
+  return typeof executionKey === 'string' && wait.execution === executionKey;
+}
+
 // AI 입력용 요약(질문 본문은 싣지 않는다). 못 읽었으면 null.
 export function waitFields(waits, waitsRead, card, taskId, works, role) {
   if (!waitsRead) return {waits: null, waitsUnread: true};

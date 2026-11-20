@@ -43,6 +43,9 @@ export type RunnersData = Stamp & {
   settings: Settings | null;
   roles: Record<string, string>;
   commands: Record<string, string>;
+  // '발령 명령 보기' 팝업 재료: 역할별 대체 후보 명령(순서대로)과 시니어 한 명씩의 명령. 서버가 만든 글이다.
+  fallbackCommands?: Record<string, string[]>;
+  seniorCommands?: string[];
   catalog: Record<
     string,
     {
@@ -78,10 +81,13 @@ export type RunnersData = Stamp & {
   secretary?: { runner: string };
 };
 // 설정 화면은 설정만 둔다(2026-10-25 [kyle]). 지금 열린 창의 생존·모델·다시 띄우기는 전략 맵 옆 칸에 있다.
-export default function Runners() {
+// ready: 쓰기 토큰·원격 여부(session)를 읽었는가. 읽기 전에는 원격 읽기 전용일 수 있으므로 표만 보이고 쓰기 칸은 열지 않는다.
+// 표는 runners 자료 하나로 그린다. 마지막으로 받은 설정을 먼저 보이고(stored) 그 사이 새 값을 읽는다. 보관 값으로는 고치지 않는다.
+export default function Runners({ ready = true }: { ready?: boolean }) {
   const { readOnly } = useContext(AppContext),
-    resource = useResource<RunnersData>("runners"),
+    resource = useResource<RunnersData>("runners", { remember: true }),
     data = resource.data,
+    viewOnly = readOnly || !ready || resource.stored,
     // 열어 둔 고급 설정이 주기 새로고침·저장 뒤에도 닫히지 않도록 이 화면이 직접 들고 있는다.
     [advancedOpen, setAdvancedOpen] = useState(false);
   return (
@@ -115,14 +121,20 @@ export default function Runners() {
             활성 프리셋 <strong>{data.settings.activePreset}</strong> · 버전{" "}
             {data.settings.revision}
           </p>
-          {readOnly ? (
+          {resource.stored && (
+            <p className="muted" role="status">
+              마지막으로 받은 설정을 먼저 보입니다. 최신 값을 읽은 뒤에 바꿀 수 있습니다.
+            </p>
+          )}
+          {viewOnly ? (
             <RunnerSummary data={data} />
           ) : (
             <PresetEditor data={data} settings={data.settings} />
           )}
-          {!readOnly && <PresetSwitch settings={data.settings} />}
-          <CompareMode settings={data.settings} />
-          {readOnly ? (
+          {!viewOnly && <PresetSwitch settings={data.settings} />}
+          {/* 비교 모드는 따로 조회(/runners/compare)를 보낸다. 표를 먼저 그리고, 최신 설정과 session을 읽은 뒤에 붙인다. */}
+          {ready && !resource.stored && <CompareMode settings={data.settings} />}
+          {viewOnly ? (
             <RecentChanges history={data.history} />
           ) : (
             <details

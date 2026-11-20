@@ -1,5 +1,5 @@
 import {Fragment, useContext, useEffect, useId, useState} from 'react';
-import {save} from '../resource';
+import {invalidateResources, save} from '../resource';
 import {AppContext, ErrorMessage} from '../ui';
 import {
   HARD_ROLE, SECRETARY_ROLE, adoptSettings, clearPreset, followSettings, presetSaveFields, presetStamp, reasonFor, stagePreset,
@@ -8,7 +8,7 @@ import {
 import {changedRoles, effortProblems, emptyModelRoles} from '../runner-draft';
 import {EMPTY_EFFORT_NOTE} from '../effort-keep';
 import {RunnerForm} from './RunnerForm';
-import {CommandFold, summaryCells} from './RunnerSummary';
+import {CommandButton, NumberedList as List, ValueCell, summaryCells} from './RunnerSummary';
 import type {Choice, RunnersData, Settings} from './Runners';
 
 // 어려운 일 작업자 자리의 값이 정해져 있는가(모델까지 골랐는가). 대체 후보 칸은 이때만 연다.
@@ -47,10 +47,6 @@ export function SecretarySlot({draft, clear}: {draft: Settings; clear: () => voi
 
 const sameList = (a: string[], b: string[]) => JSON.stringify(a) === JSON.stringify(b);
 
-function List({items, empty}: {items: string[]; empty: string}) {
-  return items.length ? <ol>{items.map((item, i) => <li key={i}>{item}</li>)}</ol> : <>{empty}</>;
-}
-
 // '다음 발령의 실행 모델' 표 = 편집기. 표와 편집 칸이 초안 하나를 같이 본다(저장 전 충돌 판정도 하나).
 // 고칠 곳은 표의 '지금 값'(= 활성 프리셋)이라 저장도 활성 프리셋에 한다. 새 저장소·서버 경로는 없다.
 export function PresetEditor({data, settings, initialOpen = []}: {
@@ -58,7 +54,10 @@ export function PresetEditor({data, settings, initialOpen = []}: {
 }) {
   const context = useContext(AppContext), id = useId();
   const [draft, setDraft] = useState(settings), [base, setBase] = useState(presetStamp(settings));
-  const [reason, setReason] = useState(''), [busy, setBusy] = useState(false);
+  // 바꾸는 이유: 손대기 전(null)에는 기본 문구(바꾼 역할 이름)를 칸에 미리 채워 보인다. 칸은 늘 보이고 고쳐 쓸 수 있다.
+  const [reason, setReason] = useState<string | null>(null), [busy, setBusy] = useState(false);
+  // 저장이 서버에서 '설정이 바뀌었다'로 거절됐을 때의 변경안 버전(화면이 아직 새 값을 못 읽은 사이의 리비전 충돌). 최신 설정을 읽으면 푼다.
+  const [refused, setRefused] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]), [reset, setReset] = useState(0);
   // 편집 칸을 여는 것만으로는 초안이 바뀌지 않는다(열린 줄 이름만 따로 든다).
@@ -66,8 +65,10 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   const dirty = presetStamp(draft) !== base;
   const locked = Boolean(settings.compare?.enabled && settings.compare.presets.includes(settings.activePreset));
   const conflict = dirty && presetStamp(settings) !== base;
-  const frozen = busy || conflict || locked;
+  const waiting = refused !== null;
+  const frozen = busy || conflict || locked || waiting;
   const changed = changedRoles(settings, draft, Object.keys(data.roles));
+  const labels = changed.map(role => data.roles[role] ?? role);
   // 모델을 안 고른 초안은 서버까지 보내지 않고 저장 줄에서 알린다.
   const unpicked = emptyModelRoles(draft, Object.keys(data.roles)).map(role => data.roles[role] ?? role);
   // 강도를 고르지 않았거나(조용히 낮은 강도로 저장되지 않게) 강도 목록이 빈 모델이면 서버가 거절하므로 저장하지 않는다.
@@ -91,10 +92,19 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   // 이 줄은 등록한 모델을 고른 변경안으로 만든다(대체 후보 칸은 '추가'를 눌러야 반영). 등록을 기다리는 동안 고친 줄을 잃지 않게 함수형 갱신이다.
   const registered = (role: string, fallback: boolean, choice: Choice, revision: number) =>
     setDraft(old => withRegistered(old, role, fallback, choice, revision));
+  // 거절 뒤 최신 설정을 읽었다. 이 프리셋이 그대로면(다른 프리셋·모델 목록·즐겨찾기만 바뀜) 변경안은 새 버전으로 이어 쓰므로
+  // 저장을 다시 누르면 된다. 이 프리셋이 바뀌었으면 위의 conflict가 '다시 읽기'를 보인다.
+  useEffect(() => {
+    if (refused === null || settings.revision <= refused) return;
+    setRefused(null);
+    if (presetStamp(settings) === base) context.notice('최신 값을 읽었습니다. 바꾼 것은 그대로입니다 — 저장을 다시 누르세요.');
+  }, [settings, refused, base, context.notice]);
   const discard = () => {
-    setDraft(old => adoptSettings(old, settings)); setBase(presetStamp(settings)); setReason(''); setError(null);
-    setOpen([]); setReset(n => n + 1);
+    setDraft(old => adoptSettings(old, settings)); setBase(presetStamp(settings)); setReason(null); setError(null);
+    setOpen([]); setReset(n => n + 1); setRefused(null);
   };
+  // 다시 읽기: 최신 설정을 새로 받아 오고 고치던 변경안은 버린다. 설정 파일은 건드리지 않는다.
+  const reload = () => { invalidateResources(); discard(); };
   const toggle = (role: string) => setOpen(old => old.includes(role) ? old.filter(r => r !== role) : [...old, role]);
   return <div style={{wordBreak: 'keep-all', overflowWrap: 'break-word', textWrap: 'pretty'}}>
     <p className="muted">역할 줄의 <strong>바꾸기</strong>로 값을 고른 뒤 표 아래 <strong>저장</strong>을 한 번 누르세요.
@@ -107,6 +117,7 @@ export function PresetEditor({data, settings, initialOpen = []}: {
             <th>역할</th>
             <th>지금 값</th>
             <th>대체 후보 (순서대로)</th>
+            <th>편집</th>
           </tr>
         </thead>
         <tbody>
@@ -116,25 +127,32 @@ export function PresetEditor({data, settings, initialOpen = []}: {
             const listChanged = edited && !sameList(cells.fallbacks, next.fallbacks);
             return <Fragment key={role}>
               <tr className={edited ? 'is-changed' : undefined}>
-                <th>{label}<br />
-                  <button type="button" className="row-edit" aria-expanded={isOpen}
-                    disabled={!isOpen && frozen} onClick={() => toggle(role)}>
-                    {isOpen ? '닫기' : '바꾸기'}
-                  </button>
-                </th>
+                <th>{label}</th>
                 <td>{edited && cells.value !== next.value
-                  ? <>{cells.value} → <strong>{next.value}</strong> <span className="pending-mark">(저장 전)</span></>
-                  : cells.value}
-                  <CommandFold command={cells.command} title={cells.commandTitle} /></td>
+                  ? (cells.seniors
+                    ? <>
+                      <div>지금: <List items={cells.seniors} empty="미설정" /></div>
+                      <div><strong>바꿀 값</strong> <span className="pending-mark">(저장 전)</span>: <List items={next.seniors ?? []} empty="미설정" /></div>
+                    </>
+                    : <>{cells.value} → <strong>{next.value}</strong> <span className="pending-mark">(저장 전)</span></>)
+                  : <ValueCell cells={cells} />}
+                  <CommandButton data={data} role={role} label={label} cells={cells} /></td>
                 <td>{listChanged
                   ? <>
                     <div>지금: <List items={cells.fallbacks} empty="없음" /></div>
                     <div><strong>바꿀 값</strong> <span className="pending-mark">(저장 전)</span>: <List items={next.fallbacks} empty="없음" /></div>
                   </>
                   : <List items={cells.fallbacks} empty={cells.note} />}</td>
+                {/* '바꾸기'는 역할 칸이 아니라 오른쪽 끝 '편집' 칸에 둔다(2026-11-20 [kyle]). 펼침 편집·저장 흐름은 그대로다. */}
+                <td className="edit-cell">
+                  <button type="button" className="row-edit" aria-expanded={isOpen}
+                    disabled={!isOpen && frozen} onClick={() => toggle(role)}>
+                    {isOpen ? '닫기' : '바꾸기'}
+                  </button>
+                </td>
               </tr>
               {isOpen && <tr className="runner-edit-row">
-                <td colSpan={3}>
+                <td colSpan={4}>
                   <div className="runner-edit">
                     <fieldset disabled={frozen}>
                       <legend>{label} 바꾸기</legend>
@@ -160,26 +178,32 @@ export function PresetEditor({data, settings, initialOpen = []}: {
       if (blocked) return;
       setBusy(true); setError(null);
       try {
-        const labels = changed.map(role => data.roles[role] ?? role);
-        const saved = await save('/runners/preset-save', presetSaveFields(draft, reasonFor(reason, labels)), context.token);
+        const saved = await save('/runners/preset-save', presetSaveFields(draft, reasonFor(reason ?? '', labels)), context.token);
         setWarnings(saved.result.warnings ?? []);
-        setBase(presetStamp(draft)); setReason(''); setOpen([]); setReset(n => n + 1);
+        setBase(presetStamp(draft)); setReason(null); setOpen([]); setReset(n => n + 1);
         context.notice('저장했습니다. 다음 발령부터 적용됩니다.');
-      } catch (e) { setError(e instanceof Error ? e.message : '저장 실패'); }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : '저장 실패';
+        // 서버의 리비전 거절(runner-settings change): 저장되지 않았다. 최신 값을 바로 다시 읽는다.
+        if (message.startsWith('설정이 바뀌었다')) { setRefused(draft.revision); invalidateResources(); }
+        else setError(message);
+      }
       finally { setBusy(false); }
     }}>
       <p className="save-title"><strong>{changed.length ? `바꾼 것 ${changed.length}줄` : '바꾼 것 있음'} — 아직 저장 전</strong></p>
       <button className="primary" disabled={blocked}>{busy ? '저장 중…' : '저장'}</button>
       <button type="button" disabled={busy} onClick={discard}>되돌리기</button>
       <p className="muted save-note">프리셋 <strong>{settings.activePreset}</strong>에 저장됩니다. 다음 발령부터 적용되고 열린 창은 그대로입니다.</p>
-      {conflict && <p className="save-warn">다른 곳에서 이 프리셋이 바뀌었습니다. 되돌리기로 최신 값을 불러온 뒤 다시 고르세요.</p>}
+      {waiting && <p className="save-warn">다른 곳에서 설정이 바뀌어 저장되지 않았습니다. 최신 값을 읽는 중입니다.</p>}
+      {conflict && <p className="save-warn">다른 곳에서 이 프리셋이 바뀌어 저장되지 않습니다. 최신 값을 불러온 뒤 다시 고르세요.{' '}
+        <button type="button" disabled={busy} onClick={reload}>다시 읽기</button></p>}
       {unpicked.length > 0 && <p className="save-warn">{unpicked.map(label => `${label}: 모델을 고르세요`).join(' · ')}</p>}
       {noEffort.length > 0 && <p className="save-warn">{noEffort.map(label => `${label}: 강도를 고르세요`).join(' · ')}</p>}
       {emptyList.length > 0 && <p className="save-warn">{emptyList.map(label => `${label}: ${EMPTY_EFFORT_NOTE}`).join(' · ')}</p>}
-      <details className="save-reason"><summary>바꾸는 이유 적기 (선택)</summary>
-        <input aria-label="바꾸는 이유" maxLength={500} value={reason} disabled={busy}
+      <label className="save-reason">바꾸는 이유
+        <input maxLength={500} value={reason ?? reasonFor('', labels)} disabled={busy}
           placeholder="비우면 바꾼 역할 이름으로 채웁니다" onChange={event => setReason(event.target.value)} />
-      </details>
+      </label>
     </form>
     <ErrorMessage error={error} /></div>}
     {!dirty && <ErrorMessage error={error} />}
