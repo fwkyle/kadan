@@ -52,7 +52,7 @@ import {
   disconnectKind,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
-import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
+import { assessIdleStop, IDLE_STOP_AFTER_MS, hasOpenQuestion } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
 import { assessWaitingStops, assessWaitingCap } from "./watch-waiting-stop.mjs";
 import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
@@ -328,7 +328,7 @@ export async function runWatch({
         if (a.held) pendingAlerts.set(a.id, a);
         if (a.id.startsWith('hold-working:')) holdWorkingAlerted.add(a.id.slice('hold-working:'.length));
         // 열려 있던 대기 시간 상한 경보는 재시작 뒤 처음 본 화면을 기준으로 이어 둔다(첫 순회에 닫혔다가 1시간 뒤 다시 울리지 않게).
-        if (a.id.startsWith('waiting-cap:')) waitingCapStates.set(a.id, {digest:null, stillMs:0, clockSec:null, alert:a});
+        if (a.id.startsWith('waiting-cap:')) waitingCapStates.set(a.id, {digest:null, stillMs:0, clockText:null, alert:a});
         // 감시 AI를 켠 경우에만 미해소 점검 오류도 복원한다. 성공한 다음 점검이 닫는다.
         if (judgeCmd && a.kind === '감시AI오류' && a.id.startsWith('ai-call:')) {
           if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
@@ -743,16 +743,17 @@ export async function runWatch({
     const workerAsks = e => waits.some(w => w.kind === 'mail' && w.asker === e.role && [e.taskId, e.executionKey].some(id => id && w.ids.includes(id)));
     // 대기 시간 상한(마지막 그물): 대기 표시 실행의 화면이 일하는 표시 없이 1시간 그대로면 직속 상위에게 1회(assessWaitingCap).
     // 이미 읽은 화면과 위에서 만든 답 대기 목록만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
-    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 그 역할이 물어 답을 기다리는 질문 우편,
-    // 그 실행·소속 업무에 걸린 답 대기(사용자 결정·사용자 차례·업무 대기 시각), 감독이 그 실행으로 상위에게 물어 기다리는 답
+    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 그 역할이 이번 발령 뒤에 보내 답을 기다리는 질문 우편
+    // (멈춤 판정과 같은 hasOpenQuestion. 이전 발령 때의 미답 우편은 가리지 않는다), 그 실행·소속 업무에 걸린 답 대기
+    // (그 실행에 연결한 질문 우편·사용자 결정·사용자 차례·업무 대기 시각), 감독이 그 실행으로 상위에게 물어 기다리는 답
     // (supervisorWaits: 알림을 받을 감독이 이미 기다리는 중이다). hold와 결과 등록 뒤 확정 대기는 처음부터 대상이 아니다.
-    // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
+    // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 그 역할의 열린 질문·답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
     const stopSessions = new Set(waitingStops.map(a => a.session));
     const waitingCap = observationError || !scope
       ? {states: waitingCapStates, alerts: []}
       : assessWaitingCap(waitingCapStates, scope.waitingSessions, roles.observations, {
           elapsedMs: cycleAt - lastCycleAt, intervalMs, canOpen: waitsRead,
-          excluded: e => stopSessions.has(e.session) || waits.some(w => w.kind === 'mail' && w.asker === e.role)
+          excluded: e => stopSessions.has(e.session) || hasOpenQuestion(mailEntries, e.role, e.t)
             || waitsOfCard(waits, e.card, e.taskId, works, e.role).length > 0 || supervisorWaits(e),
         });
     waitingCapStates = waitingCap.states;

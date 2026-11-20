@@ -6,7 +6,7 @@ import {setImmediate} from 'node:timers/promises';
 import {runWatch} from '../src/watch-runner.mjs';
 import {assessWaitingCap, waitingStopScreen, WAITING_CAP_MS} from '../src/watch-waiting-stop.mjs';
 import {SUPERVISOR_CHECK_MS} from '../src/watch-supervisor-health.mjs';
-import {readStatusLine, backgroundMarker} from '../src/watch-status-line.mjs';
+import {readStatusLine, backgroundMarker, statusProgress, workingClockText} from '../src/watch-status-line.mjs';
 import {changeDigest} from '../src/watch-roles.mjs';
 import {formatAlertBody, itemizedAlert} from '../src/watch-alert-body.mjs';
 
@@ -189,8 +189,8 @@ test('기대 결과 표 8: 정지 문구 화면은 대기중정지 1회만 나�
   assert.deepEqual(cleared.cap.map(e => e.t), [stamp(20 + CAP)]);
 });
 
-test('스스로 정한 경계: 얼어붙은 일하는 줄·백그라운드 표시·보내지 않은 입력도 1시간 그대로면 알린다', async () => {
-  // 일하는 줄이 있어도 시계가 멈춰 있으면 턴이 도는 것이 아니다(statusProgress와 같은 기준).
+test('경계: 얼어붙은 일하는 줄·백그라운드 표시·보내지 않은 입력도 1시간 그대로면 알린다', async () => {
+  // 일하는 줄이 있어도 시계가 멈춰 있으면 턴이 도는 것이 아니다.
   const frozen = await simulate({screen: () => REAL.codexWorking});
   assert.equal(frozen.cap.length, 1);
   // 백그라운드 셸을 기다리는 빈 입력창: 일하는 줄(Working)이 아니라 idle로 읽힌다. 감시 범위 안의 멈춤도 30분 유예 뒤에 난다.
@@ -199,14 +199,66 @@ test('스스로 정한 경계: 얼어붙은 일하는 줄·백그라운드 표�
     '', '', COMPOSER].join('\n');
   assert.deepEqual([readStatusLine(background(0)).kind, backgroundMarker(background(0))?.count], ['idle', 1]);
   assert.equal((await simulate({screen: background})).cap.length, 1);
-  // 시계가 돌아도 화면 아래에 정지 낱말이 보이면 턴이 도는 것으로 보지 않는다(statusProgress의 기존 기준: 끊김 화면이 일하는 중으로 묻히지 않게).
-  const noisy = minute => `  └ upstream returned 429 Too Many Requests\n\n${codexTurn(60 + minute)}`;
-  assert.equal(waitingStopScreen(noisy(0)), null, '인용된 오류라 대기중정지는 아니다');
-  assert.equal((await simulate({screen: noisy})).cap.length, 1);
   // 입력창에 보내지 않은 글이 남은 화면(일하는 표시도 빈 입력창도 아님).
   const typed = QUIET.replace('› Ask Codex to do anything', '› 임시로 적어 둔 글');
   assert.equal(readStatusLine(typed).kind, 'unknown');
   assert.equal((await simulate({screen: () => typed})).cap.length, 1);
+});
+
+// 수정 1(2026-11-20 검수 발견 2건)에서 기대 결과 표에 더한 줄.
+test('더한 표 1: 시계가 매분 도는 작업 화면은 과거 도구 출력에 429 인용이 한 줄 있어도 0회', async () => {
+  const quoted = minute => `  └ upstream returned 429 Too Many Requests\n\n${codexTurn(80 + minute)}`;
+  assert.equal(waitingStopScreen(quoted(0)), null, '인용된 오류라 지금의 오류 화면(대기중정지)은 아니다');
+  assert.equal(statusProgress(quoted(1), readStatusLine(quoted(0)).clockSec).moving, false, '공용 판정은 이 화면을 진행 중으로 보지 않는다(그대로 둔다)');
+  assert.equal(changeDigest(quoted(0)), changeDigest(quoted(CAP + 20)), '화면 지문은 내내 같다');
+  const r = await simulate({screen: quoted, until: CAP + 25});
+  assert.deepEqual([r.cap, r.capMails, r.keys, r.workerAI], [[], [], [], []]);
+});
+
+test('더한 표 2: 분만 보이는 시계가 매분 바뀌는 작업 화면은 0회', async () => {
+  const coarse = minute => codexTurn(80 + minute).replace(' 36s', '');
+  assert.deepEqual([readStatusLine(coarse(0)).kind, readStatusLine(coarse(0)).clockSec], ['working', null], '초가 없어 시계 값은 읽히지 않는다');
+  assert.notEqual(workingClockText(coarse(0)), workingClockText(coarse(1)), '시계 글자는 바뀐다');
+  assert.equal(changeDigest(coarse(0)), changeDigest(coarse(CAP + 20)));
+  const r = await simulate({screen: coarse, until: CAP + 25});
+  assert.deepEqual([r.cap, r.capMails], [[], []]);
+  // claude 일하는 줄도 같다.
+  const claudeCoarse = minute => REAL.claudeLimiterWait.replace('31m 36s', `${100 + minute}m`);
+  assert.equal(readStatusLine(claudeCoarse(0)).kind, 'working');
+  assert.deepEqual((await simulate({screen: claudeCoarse, until: CAP + 25})).cap, []);
+});
+
+test('더한 표 3: 일하는 줄이 보여도 시계가 순회마다 그대로면(얼어붙음) 60분에 1회', async () => {
+  for (const frozen of [REAL.codexWorking, REAL.codexWorking.replace(' 03s', ''), `  └ upstream returned 429 Too Many Requests\n\n${REAL.codexWorking}`]) {
+    const r = await simulate({screen: () => frozen});
+    assert.deepEqual(r.cap.map(e => e.t), [stamp(CAP)]);
+  }
+  // 시계가 한 순회만 그대로였다가 다시 돌면 알리지 않는다.
+  const hiccup = await simulate({screen: minute => codexTurn(80 + (minute === 40 ? 39 : minute)), until: CAP + 25});
+  assert.deepEqual(hiccup.cap, []);
+});
+
+const mailFrom = (minute, executionKey = null) => ({kind: 'send', mailId: `q-${minute}`, by: WORKER, role: BOSS, session: `kadan-${BOSS}`,
+  keyDelivery: 'sent', expectReply: true, ...(executionKey ? {executionKey} : {}), t: stamp(minute)});
+
+test('더한 표 4: 빈 입력창 60분 + 이전 발령 때 다른 실행으로 보낸 미답 질문은 1회(가리지 않는다)', async () => {
+  for (const [name, old] of [['다른 실행에 연결한 옛 질문', mailFrom(-5, 'qa/qa-previous')], ['실행 연결 없는 옛 질문', mailFrom(-5)]]) {
+    const r = await simulate({screen: () => QUIET, seed: [...starts, old, dispatch]});
+    assert.deepEqual([r.cap.map(e => e.t), r.capMails.length], [[stamp(CAP)], 1], name);
+  }
+});
+
+test('더한 표 5: 빈 입력창 + 현재 실행에 등록한 질문, 또는 현재 발령 뒤 보낸 열린 질문은 0회', async () => {
+  const cases = {
+    '현재 실행에 등록한 질문': [...starts, dispatch, mailFrom(1, KEY)],
+    '현재 발령 뒤 보낸 열린 질문(실행 연결 없음)': [...starts, dispatch, mailFrom(1)],
+    '현재 발령 뒤 다른 실행 키로 보낸 열린 질문': [...starts, dispatch, mailFrom(1, 'qa/qa-previous')],
+    '재발령 전에 현재 실행에 등록해 둔 질문': [...starts, mailFrom(-5, KEY), dispatch],
+  };
+  for (const [name, seed] of Object.entries(cases)) {
+    const r = await simulate({screen: () => QUIET, seed});
+    assert.deepEqual([r.cap, r.capMails], [[], []], name);
+  }
 });
 
 // --- 판정 함수 단독(감시기 없이) ---

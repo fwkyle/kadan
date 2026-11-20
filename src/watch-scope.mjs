@@ -60,7 +60,7 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
     const waiting = card.activity === 'waiting' && card.activityRole === role && Date.parse(card.activityAt) >= Date.parse(sent.t);
     const awaitsConfirmation = waiting && resultAwaitsConfirmation(card, role, sent, handledBy(card, role, sent));
     if (excludeWaiting && waiting && !awaitsConfirmation) {
-      held?.push({role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), by:sent.by ?? null, card});
+      held?.push({role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), by:sent.by ?? null, t:sent.t, card});
       continue;
     }
     tasks.push({kind:'send', role, taskId:identity.taskIdFor(card), ...(card.key?{executionKey:card.key}:{}), t:sent.t, ...(Object.hasOwn(sent,'ownedAt')?{ownedAt:sent.ownedAt}:{}),
@@ -70,7 +70,7 @@ function activeExecutions(cards, entries, parents, works, excludeWaiting, previo
 }
 
 // 작업자 화면 감시와 감독의 정기 응답 점검은 대기 조건이 다르다.
-// waiting:true면 대기 표시로 감시에서 뺀 실행을 waitingSessions로 함께 돌려준다(세션·역할·실행 키·발령한 역할·카드).
+// waiting:true면 대기 표시로 감시에서 뺀 실행을 waitingSessions로 함께 돌려준다(세션·역할·실행 키·발령한 역할·발령 시각·카드).
 // sessions·entries는 그대로라 자동 재개·큐 재개·정체 판정·감시 AI는 대기 세션을 보지 않는다. 감시 중인 다른 실행이 있는
 // 역할의 세션은 이미 sessions에 있으므로 waitingSessions에 넣지 않는다(같은 화면을 두 길로 보지 않는다).
 export function buildWatchScope(cards, entries, parents = new Map(), works = [], {waiting = false} = {}) {
