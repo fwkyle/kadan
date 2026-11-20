@@ -173,6 +173,9 @@ const GUARDED = [
   ['runners', ['export', 'p'], {out: 'x.json'}],
   ['runners', ['새쓰기명령'], {}],
   ['window', ['새쓰기명령'], {}],
+  ['trash', ['set', '/tmp/x'], {reason: 'x'}],
+  ['trash', ['clear'], {reason: 'x'}],
+  ['trash', ['새쓰기명령'], {}],
   ['stop', ['비서'], {}],
   ['stop', ['디코'], {}],
   ['autopilot', ['on', '밤'], {level: 'full'}],
@@ -191,6 +194,7 @@ test('켜진 동안 역할 세션의 보호 명령은 거절, 사람·꺼짐·�
   }
   for (const [command, args, flags] of [['restart', ['x'], {}], ['stop', ['a-작업'], {}], ['window', ['show'], {}], ['runners', ['show'], {}], ['runners', ['report'], {}],
     ['runners', ['compare', 'show'], {}], ['runners', ['export', 'p'], {}], ['runners', [], {}], ['window', [], {}],
+    ['trash', ['show'], {}], ['trash', [], {}],
     ['stop', ['a-검수'], {}], ['restart', ['x', '--help'], {}]])
     assert.equal(guardedReason(command, args, flags), null, `${command} ${args}`);
 });
@@ -200,13 +204,13 @@ test('Autopilot이 한 번도 안 켜졌으면 역할 세션도 통과한다', (
   autopilotGuard({home: f.home, command: 'stop', args: ['watch'], flags: {}, env: {KADAN_ROLE: 'a-작업'}, now: T0, entries: readLedger(f.home), decisionEvents: []});
 });
 
-test('CLI 입구: 켜진 홈에서 역할 세션의 stop watch·window unset은 종료 코드 2', () => {
+test('CLI 입구: 켜진 홈에서 역할 세션의 stop watch·window unset·trash clear는 종료 코드 2', () => {
   const f = fixture();
   // 켜진 상태를 실제 시계 기준 끝 시각의 사건으로 직접 만든다(CLI 자식 프로세스는 가짜 시계를 쓰지 않는다).
   appendLedger({kind: 'autopilot', phase: 'on', by: '사람', text: 'cli', viaChat: false, until: new Date(Date.now() + 3600_000).toISOString(),
     to: [], delivered: [], t: new Date().toISOString()}, f.home);
   const env = {...process.env, KADAN_HOME: f.home, KADAN_ROLE: 'a-작업', KADAN_WINDOW: 'none'};
-  for (const argv of [['stop', 'watch'], ['window', 'unset'], ['restart', 'a-작업', '--force']]) {
+  for (const argv of [['stop', 'watch'], ['window', 'unset'], ['trash', 'clear', '--reason', 'x'], ['restart', 'a-작업', '--force']]) {
     const r = spawnSync(process.execPath, [CLI, ...argv], {env, encoding: 'utf8', timeout: 20_000});
     assert.equal(r.status, 2, `${argv.join(' ')}: ${r.stderr}`);
     assert.match(r.stderr, /Autopilot이 켜져 있어/);
