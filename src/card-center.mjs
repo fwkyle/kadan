@@ -27,6 +27,10 @@ export function liveSessionTree(cards,liveSessions) {
   }))}];
 }
 
+// 같은 카드·역할의 재발령은 sentAt(마지막 발령)을 덮지만, 첫 발령 시각은 처음 본 발령에서만 정해 다시 덮지 않는다(2026-11-20).
+// 첫 발령에 유효한 시각이 없으면 null로 남는다 — 뒤 재발령의 시각으로 메우면 먼저·나중 순서를 지어내게 된다.
+const firstSentAtOf=(old,e)=>old&&Object.hasOwn(old,'firstSentAt')?old.firstSentAt:Date.parse(e.t)?e.t:null;
+
 // 카드 한 장과 그 카드에 대한 여러 역할의 실행을 분리한다.
 export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now()}) {
   if(entries.some(e=>e?.broken))throw new Error('원장 손상: 카드 실행 상태 모름');
@@ -43,7 +47,7 @@ export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.n
     if(!['send','done'].includes(e.kind)||!e.role)continue;
     const key=`${e.role}\0${taskEventKey(e)}`;
     const old=runs.get(key);
-    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,...(Object.hasOwn(e,'ownedAt')?{ownedAt:e.ownedAt}:{}),at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
+    if(e.kind==='send')runs.set(key,{role:e.role,taskId:e.taskId,by:e.by??'모름',sentAt:e.t,firstSentAt:firstSentAtOf(old,e),...(Object.hasOwn(e,'ownedAt')?{ownedAt:e.ownedAt}:{}),at:e.t,state:'unconfirmed',board:e.board??null,executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
     else runs.set(key,{...old,role:e.role,taskId:e.taskId,at:e.t,state:e.result==='ok'?'done':'failed',result:e.result,doneBy:e.by??'모름',executionKey:e.executionKey,rawTaskId:e.rawTaskId,taskConnection:e.taskConnection});
   }
   // 역할별 가장 최근 시작 기록의 실행기·모델. 카단은 판단에 쓰지 않고 화면 답변용으로만 옮긴다(2026-09-06 결정).
