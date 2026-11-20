@@ -28,10 +28,10 @@
 import { readSettings, launchFor, launchForFallback, launchForHard, HARD_ROLE, PROFILE_ROLES } from "./runner-settings.mjs";
 import { withoutInlineScreen } from "./inline-screen.mjs";
 import { launchIdentityOf } from "./ai-identity.mjs";
+import { describeCommandDiff } from "./command-summary.mjs";
 
 export const GUARDED_PROFILES = ["worker", "reviewer"];
 
-const shorten = (text, length = 100) => (text.length > length ? `${text.slice(0, length)}…` : text);
 const shownValue = ({ runner, model, effort }) => [runner, model, effort ?? "강도 없음"].join(" · ");
 const PHASE_CARD = { reviewer: "검수 카드(review)", worker: "작업 카드(구현·수정 등)" };
 const PROFILE_SESSION = { reviewer: "검수자(reviewer)", worker: "작업자(worker)" };
@@ -89,7 +89,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   if (!want.ok) {
     return {
       result: "warn", code: "expected-unreadable",
-      warning: `경고: ${slotName} 명령에서 실행기·모델을 읽지 못해 ${session}과(와) 대조하지 못했다: ${shorten(expected.cmd)}`,
+      warning: `경고: ${slotName} 명령에서 실행기·모델을 읽지 못해 ${session}과(와) 대조하지 못했다(${shownValue(expected)}, 읽지 못한 이유: ${want.reason}) — 명령 원문은 표시하지 않는다`,
       ledger: { result: "warn", code: "expected-unreadable", settingsRevision: expected.revision },
     };
   }
@@ -128,7 +128,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     ], expected.revision);
     return {
       result: "warn", code: "effort-or-args",
-      warning: `경고: ${session}의 강도·실행 인자가 지금 ${slotName}${slotName.endsWith('자리') ? '와' : '과'} 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 세션 명령: ${shorten(identity.launch.cmd)}`,
+      warning: `경고: ${session}의 강도·실행 인자가 지금 ${slotName}${slotName.endsWith('자리') ? '와' : '과'} 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 다른 점: ${describeCommandDiff(identity.launch.cmd, expected.cmd)} (명령 원문은 표시하지 않는다)`,
       ledger: { result: "warn", code: "effort-or-args", settingsRevision: expected.revision },
     };
   }

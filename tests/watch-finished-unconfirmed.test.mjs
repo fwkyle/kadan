@@ -105,9 +105,11 @@ test('재현: 결과 등록 뒤 종료 메모가 waiting이어도 감독 본인 
   assert.deepEqual(out.messages.filter(m => m.role === BOSS).map(m => m.via), ['alert', 'nudge'], '감독 본인 창: 완료후보 1회 + 놀고 있음 1단 1회');
 });
 
-test('정당한 대기는 그대로 조용하다: 결과 등록 없는 waiting(화면에 완료 표시가 있어도, 알려진 한계)', async () => {
+// 2026-11-20 대기 시간 상한: 예전에는 120분 내내 조용했다. 지금은 화면이 1시간 그대로면 직속 감독에게 한 번 알린다.
+test('정당한 대기는 1시간까지 조용하다: 결과 등록 없는 waiting(화면에 완료 표시가 있어도). 1시간 그대로면 시간 상한 경보 1회뿐', async () => {
   const out = await watch(setup({finalActivity: 'waiting', report: false}), {until: 120});
-  assert.deepEqual(out.sent, []);
+  assert.deepEqual(out.sent, [[60, BOSS, '기타']]);
+  assert.match(out.messages[0].message, /대기 표시 중 화면이 오래 그대로/u);
 });
 
 test('조용: 감독이 유예 안에 done을 적으면 알림이 없다(통지가 정상으로 온 경우와 같다)', async () => {

@@ -94,3 +94,14 @@ test('로그인 뒤 비서 복원 행이 로티 탭 붙이기 판정을 담는�
   for (const text of ['기계 설정이 rottie', '로티가 살아 있으면', 'up --auto'])
     assert.ok(row.includes(text), `비서 복원 행에 "${text}" 없음`);
 });
+
+test('대기 표시 실행의 시간 상한이 흐름 지도와 감시 문서에 이어진다', () => {
+  const row = section('4\\. 감시가 잡는 것').split('\n').find(l => l.includes('`대기중장기정지`'));
+  assert.ok(row, '4절에 대기중장기정지 행이 없음');
+  for (const text of ['1시간', '직속 상위', 'AI를 부르지 않', '원장을 읽지 않', '처음부터 다시 잰다'])
+    assert.ok(row.includes(text), `대기중장기정지 행에 "${text}" 없음`);
+  const overview = read('docs/watch-overview.md');
+  assert.ok(overview.includes('## 대기 표시 실행의 시간 상한 (`대기중장기정지`, 2026-11-20)'), 'watch-overview.md에 시간 상한 절 없음');
+  for (const text of ['WAITING_CAP_MS', '재시작 직후 1시간은 새 경보가 늦게 울린다', '대기 세션 수'])
+    assert.ok(overview.includes(text), `watch-overview.md에 ${text} 없음`);
+});

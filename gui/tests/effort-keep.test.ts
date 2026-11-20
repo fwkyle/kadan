@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, keepEffort, needsEffortPick, sameChoice} from '../src/effort-keep.ts';
+import {afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, keepEffort, listProblem, needsEffortPick, sameChoice} from '../src/effort-keep.ts';
 import {alreadyRegistered, modelAddFields, registerModel, registeredChoice} from '../src/model-register.ts';
 import {adoptSettings, followSettings, presetSaveFields, presetStamp, stagePreset, withRegistered} from '../src/preset-draft.ts';
 import {changedRoles, effortProblems} from '../src/runner-draft.ts';
@@ -163,4 +163,26 @@ test('서버와 같은 판정: 설명 AI는 spawn이 아니라 exec 틀의 {effo
   assert.equal(effortProblem(forRole(spec, 'worker'), {runner: 'claude', model: 'c-h', effort: ''}), 'empty');
   const withEffort = {...spec, table: {exec: 'claude -p --model {model} --effort {effort}'}};
   assert.equal(effortNeeded(withEffort, 'explain'), true);
+});
+
+// 목록에 넣거나 줄을 고칠 때의 중복 판정(2026-11-20). 서버 기준과 같다: 대체 후보는 세 값이 모두 같은 줄, 시니어는 실행기+모델.
+test('목록 중복 판정: 고치는 줄 자신은 빼고, 값이 그대로면 바뀐 것이 없다고 알린다', () => {
+  const list = [{runner: 'codex', model: 'a', effort: 'high'}, {runner: 'codex', model: 'b', effort: 'high'}];
+  const b = {runner: 'codex', model: 'b', effort: 'high'};
+  assert.match(listProblem(list, b)!, /이미 대체 후보에 있는 값/, '추가: 있는 값은 막는다');
+  assert.match(listProblem(list, b, {editing: 0})!, /이미 대체 후보에 있는 값/, '고치기: 다른 줄과 같아지면 막는다');
+  assert.match(listProblem(list, b, {editing: 1})!, /이 줄의 지금 값과 같습니다/, '고치기: 자기 줄과 같으면 바뀐 것 없음');
+  assert.equal(listProblem(list, {...b, effort: 'low'}, {editing: 1}), null, '고치기: 자기 줄의 강도만 바꾸는 것은 된다');
+  assert.equal(listProblem(list, {...b, effort: 'low'}), null, '대체 후보는 강도가 다르면 다른 줄이다(서버와 같다)');
+  assert.match(listProblem(list, {runner: 'codex', model: 'p', effort: 'high'}, {current: {runner: 'codex', model: 'p', effort: 'high'}})!, /지금 값과 같아/);
+  assert.equal(listProblem(list, {runner: 'codex', model: '', effort: ''}), null, '모델을 고르기 전에는 판정하지 않는다');
+});
+
+test('목록 중복 판정: 시니어는 강도가 달라도 실행기·모델이 같으면 막는다(서버 assertSeniorShape와 같다)', () => {
+  const seniors = [{runner: 'codex', model: 's1', effort: 'high'}, {runner: 'agy', model: 's2'}];
+  // 옛 화면 기준(세 값 일치)은 이 값을 통과시켰고 저장 때 서버가 거절했다.
+  assert.equal(seniors.some(item => sameChoice(item, {runner: 'codex', model: 's1', effort: 'low'})), false);
+  assert.match(listProblem(seniors, {runner: 'codex', model: 's1', effort: 'low'}, {senior: true})!, /이미 등록된 시니어/);
+  assert.equal(listProblem(seniors, {runner: 'codex', model: 's1', effort: 'low'}, {senior: true, editing: 0}), null, '자기 줄의 강도 고치기는 된다');
+  assert.match(listProblem(seniors, {runner: 'agy', model: 's2'}, {senior: true, editing: 0})!, /이미 등록된 시니어/);
 });

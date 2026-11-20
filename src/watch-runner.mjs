@@ -23,7 +23,7 @@ import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
 import { intendedStop } from "./lifecycle-tail.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
-import { decisionList, decisionFields, waitFields, waitingCardKeys } from "./watch-waits.mjs";
+import { decisionList, decisionFields, waitFields, waitingCardKeys, waitsOfCard, waitOfExecution } from "./watch-waits.mjs";
 import { assessMissingStartReports, alertedStartReports } from "./watch-start-report.mjs";
 import {
   buildCycleEntry,
@@ -52,9 +52,9 @@ import {
   disconnectKind,
 } from "./watch.mjs";
 import { eligibleStallAlerts } from "./watch-judge.mjs";
-import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
+import { assessIdleStop, IDLE_STOP_AFTER_MS, hasOpenQuestion } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
-import { assessWaitingStops } from "./watch-waiting-stop.mjs";
+import { assessWaitingStops, assessWaitingCap } from "./watch-waiting-stop.mjs";
 import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
@@ -248,6 +248,8 @@ export async function runWatch({
   // 일시정지 중 작업 감지: 지난 순회 상태와, 이미 경보를 낸 hold(카드@역할@hold 진입 시각). 메모리에만 둔다.
   let holdWorkingStates = new Map();
   const holdWorkingAlerted = new Set();
+  // 대기 시간 상한: 대기 실행마다 화면이 그대로인 시간(경보 id → 상태). 메모리에만 둔다(재시작하면 0부터 다시 잰다).
+  let waitingCapStates = new Map();
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   // 복원용 첫 원장 읽기도 기기 메모리 관측·울림 뒤로 둔다.
@@ -325,6 +327,8 @@ export async function runWatch({
       for (const a of activeAlerts) {
         if (a.held) pendingAlerts.set(a.id, a);
         if (a.id.startsWith('hold-working:')) holdWorkingAlerted.add(a.id.slice('hold-working:'.length));
+        // 열려 있던 대기 시간 상한 경보는 재시작 뒤 처음 본 화면을 기준으로 이어 둔다(첫 순회에 닫혔다가 1시간 뒤 다시 울리지 않게).
+        if (a.id.startsWith('waiting-cap:')) waitingCapStates.set(a.id, {digest:null, stillMs:0, clockText:null, alert:a});
         // 감시 AI를 켠 경우에만 미해소 점검 오류도 복원한다. 성공한 다음 점검이 닫는다.
         if (judgeCmd && a.kind === '감시AI오류' && a.id.startsWith('ai-call:')) {
           if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
@@ -461,7 +465,7 @@ export async function runWatch({
         if (alert.kind === '일시정지중작업') return true;
         // 대기 표시 실행은 처음부터 scope 밖이다. 이 경보의 수명은 화면·대기 표시가 정한다(아래 assessWaitingStops) —
         // 여기서 퇴역시키면 같은 정지 화면이 매 주기 새 경보로 다시 울린다.
-        if (alert.kind === '대기중정지') return true;
+        if (alert.kind === '대기중정지' || alert.kind === '대기중장기정지') return true;
         if (!alert.session || observedSessions.has(alert.session)) return true;
         recordAlert(record, {...alert, kind:'감시제외'}, null, false, true);
         alertRecipients.delete(alert.id); deliveryFailures.delete(alert.id);
@@ -686,7 +690,9 @@ export async function runWatch({
     try {
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
-      const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean) });
+      // execution은 대기 시간 상한만 읽는다(waitOfExecution): 항목이 걸린 정식 실행 키(전체 카드 key). ids와 기존 소비자는 그대로다.
+      const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean),
+        execution: key ?? null });
       // 완전자율: 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 결정은 답 대기로 세지 않는다(그 결정이 막던 일이 다시 요청한 감독의 할 일이다).
       // 자격 판정은 decision-proceed의 함수 하나이고, 값을 읽지 못하면(스냅샷 없음) 계속 답 대기다. 감시기는 결정·원장을 쓰지 않는다.
       const releasedDecision = d => {
@@ -737,6 +743,30 @@ export async function runWatch({
     const supervisorWaits = e => parents.has(e.role) && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role)));
     // 담당이 그 실행에 연결해 보낸 질문 우편이 답을 기다리는가. 실행 연결이 없는 질문은 세지 않는다.
     const workerAsks = e => waits.some(w => w.kind === 'mail' && w.asker === e.role && [e.taskId, e.executionKey].some(id => id && w.ids.includes(id)));
+    // 대기 시간 상한(마지막 그물): 대기 표시 실행의 화면이 일하는 표시 없이 1시간 그대로면 직속 상위에게 1회(assessWaitingCap).
+    // 이미 읽은 화면과 위에서 만든 답 대기 목록만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
+    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 사용자 차례·업무 대기 시각(업무 단위 대기), 그리고 우편·결정 답 대기.
+    // 우편·결정이 타이머를 버리는 조건은 둘뿐이다.
+    //  (1) 그 역할이 이번 발령 뒤에 보내 답을 기다리는 질문 우편(멈춤 판정과 같은 hasOpenQuestion. 이전 발령 때의 미답 우편은 아니다).
+    //  (2) 항목의 정식 실행 키가 이 실행의 정식 키와 정확히 같다(waitOfExecution). 그 카드에 걸린 항목(waitsOfCard: 그 역할의 질문 우편·
+    //      사용자 결정)과, 감독이 그 실행으로 상위에게 물은 답 대기(supervisorWaitsOn) 둘 다 이 조건 하나로 본다.
+    // 짧은 카드 id·taskId 별칭·소속 업무 키가 같다는 것으로는 빼지 않는다. 실행 키 없이 업무에만 걸린 질문·채팅 결정도 빼지 않는다
+    // (끝난 이전 실행이나 짧은 id만 같은 다른 실행에 걸린 미답 질문·결정이 지금 실행의 멈춤을 가리지 않게).
+    // hold와 결과 등록 뒤 확정 대기는 처음부터 대상이 아니다.
+    // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 그 역할의 열린 질문·답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
+    const stopSessions = new Set(waitingStops.map(a => a.session));
+    // 감독이 그 실행으로 상위에게 물은 답 대기: 정식 실행 키가 같은 항목만 골라 기존 판정(waitingExcluder: 답할 쪽이 그 감독·그 아래가 아님)에 넣는다.
+    const supervisorWaitsOn = e => Boolean(e.executionKey && parents.has(e.role)
+      && waitingExcluder(waits.filter(w => w.execution === e.executionKey), parents)(e.executionKey, parents.get(e.role)));
+    const waitingCap = observationError || !scope
+      ? {states: waitingCapStates, alerts: []}
+      : assessWaitingCap(waitingCapStates, scope.waitingSessions, roles.observations, {
+          elapsedMs: cycleAt - lastCycleAt, intervalMs, canOpen: waitsRead,
+          excluded: e => stopSessions.has(e.session) || hasOpenQuestion(mailEntries, e.role, e.t)
+            || waitsOfCard(waits, e.card, e.taskId, works, e.role).some(w => waitOfExecution(w, e.executionKey))
+            || supervisorWaitsOn(e),
+        });
+    waitingCapStates = waitingCap.states;
     const settledSessions = settled => {
       const byRole = new Map();
       for (const e of scope?.entries ?? []) byRole.set(e.role, (byRole.get(e.role) ?? true) && Boolean(e.awaitsConfirmation) && settled(e));
@@ -813,7 +843,10 @@ export async function runWatch({
       if(check&&!check.due)continue;
       const input={...candidate.input,...observationContext(role,seen,mailEntries,cards??[],
         candidate.source==='supervisor-health'?supervisorScope.entries:scope?.entries??[],
-        candidate.source==='supervisor-health'?decisionsNow:undefined)};
+        candidate.source==='supervisor-health'?decisionsNow:undefined,
+        // 감독 점검에는 "이 하위 실행은 대기 표시로 작업자 화면 감시 밖"임을 싣는다. 감시 범위가 이미 만든 목록의 키만 쓴다.
+        candidate.source==='supervisor-health'
+          ?{keys:new Set((scope?.waitingSessions??[]).map(e=>e.executionKey??e.taskId)),now:cycleAt}:null)};
       if(candidate.source==='progress'){
         // 걸러지지 않아 AI를 부르는 실행에는 그 실행에 걸린 답 대기와, 알림을 받을 상위 감독이 올린 열린 결정을 문맥으로 싣는다(거름 근거가 아니다).
         const card=(cards??[]).find(c=>c.key===taskIdentity(cards??[]).resolve(candidate.taskId).key);
@@ -918,6 +951,7 @@ export async function runWatch({
       ...idleStopAssessment.alerts.filter(a=>!confirmationDeferred(a)),
       ...holdWorking.alerts,
       ...waitingStops,
+      ...waitingCap.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       // 알림이 3번 이상 연속 밀린 창. 지난 주기까지의 횟수이며 사용자에게만 간다.

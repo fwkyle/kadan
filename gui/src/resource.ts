@@ -10,13 +10,35 @@ document.addEventListener("visibilitychange", () => {
   for (const resource of resources.values())
     resource.setVisible(!document.hidden);
 });
-export function useResource<T>(path: string, options: ResourceOptions = {}) {
+// remember: 마지막으로 받은 응답을 이 브라우저에 보관해 두었다가 다음에 화면을 열 때 먼저 보인다(그 사이 새 값을 읽는다).
+// 쓰기 토큰이 없는 조회 응답에만 쓴다. 보관 값으로는 저장하지 않게 화면이 stored를 보고 읽기 전용으로 둔다.
+export type UseOptions = ResourceOptions & { remember?: boolean };
+const LAST = "kadan:last:v1:";
+function lastValue<T>(url: string): T | undefined {
+  try {
+    const text = localStorage.getItem(LAST + url);
+    return text ? (JSON.parse(text) as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function keepLast(url: string, data: unknown) {
+  try {
+    localStorage.setItem(LAST + url, JSON.stringify(data));
+  } catch {
+    // 보관하지 못해도(용량·사생활 보호 모드) 화면은 그대로 동작한다.
+  }
+}
+function resourceFor<T>(path: string, { remember, ...options }: UseOptions) {
   const url = path.startsWith("/") ? path : api + path;
   let resource = resources.get(url) as Resource<T> | undefined;
   if (!resource) {
     resource = new Resource<T>(
       createJsonLoader<T>(url),
-      { pollMs: 15_000, staleMs: 5000, ...options },
+      {
+        pollMs: 15_000, staleMs: 5000, ...(options as ResourceOptions<T>),
+        ...(remember ? { initial: lastValue<T>(url), onData: (data: T) => keepLast(url, data) } : {}),
+      },
     );
     resource.setVisible(!document.hidden);
     resources.set(url, resource as Resource<unknown>);
@@ -28,11 +50,21 @@ export function useResource<T>(path: string, options: ResourceOptions = {}) {
         }
       }
   }
+  return resource;
+}
+export function useResource<T>(path: string, options: UseOptions = {}) {
+  const resource = resourceFor<T>(path, options);
   const snapshot = useSyncExternalStore(
     resource.subscribe,
     resource.getSnapshot,
   );
   return { ...snapshot, refresh: resource.refresh };
+}
+// 화면을 그리기 전에 조회를 먼저 보낸다. 서버는 요청을 온 순서대로 하나씩 처리하므로, 가벼운 조회(session·runners)를
+// 무거운 조회(summary·autopilot/repos)보다 앞에 세우려는 것이다. 나중에 같은 주소를 구독하면 이 조회를 그대로 이어 쓴다.
+// 옵션은 그 주소의 useResource와 같게 준다(먼저 만든 쪽의 옵션이 쓰인다).
+export function prime(path: string, options: UseOptions = {}) {
+  void resourceFor(path, options).refresh();
 }
 export function invalidateResources() {
   for (const resource of resources.values()) resource.invalidate();

@@ -130,9 +130,10 @@ export class WatchReports {
     const delivery=entries.findLast(e=>e.kind==='watch-ai-delivery'&&e.requestId===requestId);
     return {report,delivery,complete:!report.notify||Boolean(delivery)};
   }
-  completed(request,result) {
+  // complete: 호출자가 방금 읽은 목록·직접 기록한 사건으로 이미 알면 넘긴다(원장 전체를 다시 읽지 않는다). 없으면 영수증을 읽어 대조한다.
+  completed(request,result,complete=this.receipt(request.requestId)?.complete) {
     // 신호 파일은 원장이 아니다. 호출자는 실제 보고·전달 기록을 대조한 뒤 종료한다.
-    if(this.receipt(request.requestId)?.complete)
+    if(complete)
       fs.writeFileSync(path.join(request.evidencePath,'report-complete'),request.requestId,{mode:0o600});
     return result;
   }
@@ -140,7 +141,7 @@ export class WatchReports {
     if (!WATCH_VERDICTS.includes(verdict)) throw new Error(`판정은 ${WATCH_VERDICTS.join(', ')} 중 하나`);
     if (typeof reason!=='string'||!reason.trim()||reason.length>500) throw new Error('판단 이유는 1~500자로 입력하세요');
     reason=reason.replace(/[\x00-\x1f\x7f]/g,' ').trim();
-    let request,parents,report,duplicate=false;
+    let request,parents,report,duplicate=false,complete=false;
     this.locked(()=>{
       const entries=this.entries();
       request=entries.find(e=>e.kind==='watch-ai-request'&&e.requestId===requestId);
@@ -148,7 +149,11 @@ export class WatchReports {
       request=this.fullRequest(request);
       if (request.protocol === 2 && verdict === '죽음') throw new Error('새 감시AI 보고는 죽음을 쓰지 않습니다. 완료 후 대기는 실행완료, 연결·압축 실패는 응답장애, 근거 부족은 모름으로 보고하세요.');
       const old=entries.find(e=>e.kind==='watch-ai-report'&&e.requestId===requestId);
-      if (old) { duplicate=true; report=old; return; }
+      if (old) {
+        duplicate=true; report=old;
+        complete=!old.notify||Boolean(entries.findLast(e=>e.kind==='watch-ai-delivery'&&e.requestId===requestId));
+        return;
+      }
       parents=request.hierarchyPath ? parseHierarchy(JSON.parse(fs.readFileSync(request.hierarchyPath,'utf8'))) : new Map(request.parents);
       const cards=this.readCards(),identity=taskIdentity(cards);
       const current=currentRequest(request,cards,entries,parents,this.readWorks());
@@ -174,13 +179,19 @@ export class WatchReports {
         requestId,role:request.role,session:request.session,taskId:request.taskId,alertKind:previous.verdict,
         level:previous.level,resolved:true,delivered:false,recipient:null,resolution:'ai-normal'});
     });
-    if (duplicate||!report.notify) return this.completed(request,{...report,duplicate});
+    // 알림이 없으면 방금 기록한 보고가 곧 완료다. 영수증을 다시 읽지 않는다.
+    if (duplicate) {
+      // 잠금 안에서 전달 기록이 없었어도, 첫 호출이 잠금 반환 뒤 기록했을 수 있다. 알림 대상 보고만 신호 직전에 다시 읽어 확인한다(main과 같다).
+      return this.completed(request,{...report,duplicate},complete||(report.notify?undefined:true));
+    }
+    if (!report.notify) return this.completed(request,{...report,duplicate},true);
     const label=report.idleWithoutAsk?'카드 미완인데 입력 대기'
       :{'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
     const message=`[${watchAILabel(request.source)}] ${label} · ${request.role}${request.taskId?` / ${request.taskId}`:''}: ${reason}${report.consecutive>=2?' 반복 조정 판정입니다. 상위 감독과 범위·담당 조정을 검토하세요.':''} 감독이 확인 후 후속 조치를 결정하세요.`;
-    return this.deliver(request,report,message,parents);
+    return this.deliver(request,report,message,parents,true);
   }
-  deliver(request,report,message,parents) {
+  // reported: 호출자가 보고를 방금 기록했음을 아는 경우. 전달 기록은 아래에서 직접 남기므로 완료 확인용 원장 읽기를 건너뛴다.
+  deliver(request,report,message,parents,reported=false) {
     const {requestId} = request, {verdict} = report;
     const live=new Set(this.floor.list().filter(x=>x.alive!==false).map(x=>x.session));
     const routes=new Map(request.routes);
@@ -218,7 +229,7 @@ export class WatchReports {
       taskId:request.taskId,alertKind:verdict,level:report.level,recipient,route,delivered:delivery==='sent'});
     if(escalation) this.record({kind:'alert',by:'watch',source:'watch-ai',requestId,role:request.role,session:request.session,
       taskId:request.taskId,alertKind:'전달실패',level:report.level,recipient:escalation.recipient,delivered:escalation.delivery==='sent'});
-    return this.completed(request,{...report,recipient,delivery,escalation});
+    return this.completed(request,{...report,recipient,delivery,escalation},reported?true:undefined);
   }
   retryHeld(entries,parents) {
     const deliveries=new Map(entries.filter(e=>e.kind==='watch-ai-delivery').map(e=>[e.requestId,e]));
