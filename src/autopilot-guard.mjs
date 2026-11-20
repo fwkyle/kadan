@@ -10,6 +10,7 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 // 허용 목록 방식(2026-11-02 PR #327 검수 F2): 막을 쓰기 목록이 아니라 읽기만 하는 하위 명령 목록이다.
 // 새 쓰기 하위 명령이 생겨도 여기 넣지 않는 한 켜진 동안 역할 세션에서 자동으로 거절된다.
 // - `window`: 하위 명령 없음(사용법 출력)·`show`만 통과. `set`·`unset`과 모르는 것은 거절.
+// - `trash`: `window`와 같다. 하위 명령 없음(사용법 출력)·`show`만 통과. `set`·`clear`와 모르는 것은 거절(휴지통 자리를 KADAN_HOME 밖으로 바꾸지 못하게).
 // - `runners`: 하위 명령 없음(사용법)·`show`·`report`·`compare show`·`--out` 없는 `export`만 통과.
 //   `set`·`runner`·`model`·`block`·`preset`·`import`·`fallback`·`favorite`·`init`·`compare on|off`·`export --out`은 거절.
 // - `limit`: `run`·`status`·사용법은 통과. `set`(기준 개수 등 기계 설정 쓰기)은 거절.
@@ -34,6 +35,7 @@ export function guardedReason(command, args = [], flags = {}) {
   if (command === 'restart' && flags.force) return 'restart --force';
   if (command === 'stop' && TARGETS.includes(first)) return `stop ${first}`;
   if (command === 'window' && first !== undefined && first !== 'show') return `window ${first}`;
+  if (command === 'trash' && first !== undefined && first !== 'show') return `trash ${first}`;
   if (command === 'runners' && !runnersIsReadOnly(args, flags)) return `runners ${first}`;
   // `limit`: 실행(run)·보기(status)는 통과. 기계 설정을 바꾸는 `set`만 거절한다.
   if (command === 'limit' && first === 'set') return 'limit set';
