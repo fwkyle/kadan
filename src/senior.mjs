@@ -44,11 +44,11 @@ const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
 const digest = text => createHash('sha256').update(text).digest('hex');
 
 // 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
-export const seniorCommandLabel = value => {
-  const list = seniorList(value);
-  return list.length ? list.map(v => v.runner === SENIOR_SCRIPT_RUNNER ? `KADAN_SENIOR_MODEL=${v.model} KADAN_SENIOR_EFFORT=${v.effort ?? 'max'} senior.sh (codex exec, 저장소 읽기 전용)`
-    : `${v.runner} 대화창 · 모델 ${v.model} (도구 없는 에이전트, 저장소 읽기 전용 폴더)`).join(' + ') : null;
-};
+// 시니어마다 한 줄. 대시보드의 '발령 명령 보기'는 줄 목록으로, 표·show는 ' + '로 이은 한 줄(seniorCommandLabel)로 쓴다.
+export const seniorCommandLines = value => seniorList(value).map(v => v.runner === SENIOR_SCRIPT_RUNNER
+  ? `KADAN_SENIOR_MODEL=${v.model} KADAN_SENIOR_EFFORT=${v.effort ?? 'max'} senior.sh (codex exec, 저장소 읽기 전용)`
+  : `${v.runner} 대화창 · 모델 ${v.model} (도구 없는 에이전트, 저장소 읽기 전용 폴더)`);
+export const seniorCommandLabel = value => seniorCommandLines(value).join(' + ') || null;
 
 // 카단이 강도를 넘기지 않는 칸(지금은 대화창 agy). 이 칸의 강도는 카단이 알지 못한다 — 모델 이름이 정한다.
 // 그래서 영수증·원장·세션 기록 어디에도 강도 값을 지어내 넣지 않고(2026-11-19 [kyle]: agy 칸이 max로 찍혔다),

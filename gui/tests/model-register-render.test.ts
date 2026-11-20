@@ -67,13 +67,14 @@ test("지금 강도를 이어 쓸 수 없어 비어 있는 선택이면 강도�
   assert.match(html, /이 모델은 강도를 골라야 합니다/);
 });
 
-test("명령 칸은 표 칸이 아니라 줄마다 접혀 있고, 읽기 전용 요약표에서도 열어 볼 수 있다", () => {
+test("명령은 표 칸이 아니라 줄마다 버튼으로 여는 팝업에 있고, 읽기 전용 요약표에서도 열어 볼 수 있다", () => {
   for (const html of [
     render(React.createElement(PresetEditor, { data, settings })),
     render(React.createElement(RunnerSummary, { data }), true),
   ]) {
     assert.doesNotMatch(html, /<th>발령 때 채워질 명령<\/th>/);
-    assert.match(html, /<details class="row-command"><summary>발령 명령 보기<\/summary><code>agy --model m-old --effort high<\/code><\/details>/);
+    assert.doesNotMatch(html, /<details class="row-command">/, "옛 펼침은 없다");
+    assert.match(html, /<button type="button" class="row-command">발령 명령 보기<\/button><dialog class="command-dialog" aria-label="작업자 발령 명령 보기"><h3>작업자 · 발령 명령<\/h3><h4>지금 값<\/h4><code>agy --model m-old --effort high<\/code>/);
     assert.match(html, /<code>codex --model gpt-test<\/code>/, "정보는 지우지 않는다");
     assert.equal((html.match(/<th>/g) ?? []).length >= 3, true);
   }
