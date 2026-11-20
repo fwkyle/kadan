@@ -81,6 +81,21 @@ test('실행기: --shard=1/2와 2/2가 서로 다른 파일을 돌고 합치면 
   assert.match(second.stderr, /시험 파일: 완료 1\/1, 실패 0/);
 });
 
+test('실행기: 조각에 고른 파일이 0개면 시험을 돌리지 않고 실패한다(검수 재현 두 가지)', t => {
+  const {names, log} = fixture(t);
+  // 파일 1개를 2/2로 나누면 2번 조각이 빈다. 번호가 전체 파일 수를 넘어도 같다.
+  for (const [shard, files] of [['--shard=2/2', names.slice(0, 1)], ['--shard=456/456', names]]) {
+    const result = runShard([shard], files);
+    assert.notEqual(result.status, 0, shard);
+    assert.match(result.stderr, /고른 시험 파일이 0개/, shard);
+    assert.doesNotMatch(result.stderr, /시험 파일: 완료/, shard);
+  }
+  assert.deepEqual(ran(log), []);
+  // --shard가 없으면 기존 동작 그대로 돈다.
+  assert.equal(runShard([], names.slice(0, 1)).status, 0);
+  assert.deepEqual(ran(log), ['a.test.mjs']);
+});
+
 test('실행기: 잘못된 조각 인자는 시험을 하나도 돌리지 않고 실패한다', t => {
   const {names, log} = fixture(t);
   for (const bad of [['--shard=0/2'], ['--shard=3/2'], ['--shard=x'], ['--shard']]) {

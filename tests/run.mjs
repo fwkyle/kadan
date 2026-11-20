@@ -100,6 +100,11 @@ const allFiles = selected.length ? selected
   : fs.readdirSync(dir).filter(f => f.endsWith('.test.mjs')).sort().map(f => `tests/${f}`);
 const files = shard ? selectShard(allFiles, shard) : allFiles;
 if (shard) console.error(`시험 조각 ${shard.index}/${shard.total}: 전체 ${allFiles.length}개 중 ${files.length}개`);
+if (shard && files.length === 0) {
+  // 조각 설정이 틀렸는데 아무 시험도 안 돌고 초록이 되면 시험이 조용히 빠진다.
+  console.error(`시험 조각 ${shard.index}/${shard.total}에 고른 시험 파일이 0개입니다. 시험을 돌리지 않고 실패합니다.`);
+  process.exit(1);
+}
 const controller = new AbortController();
 let interrupted = null; // 중단 신호를 받으면 시험 쪽 종료 코드와 상관없이 128+신호 번호로 끝낸다
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
