@@ -10,7 +10,7 @@ import {readActiveHierarchy} from './hierarchy-register.mjs';
 import {inferDispatchProfile} from './role-instructions.mjs';
 import {readConductorOpenWorks} from './heavy-limit.mjs';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const RECENT_MAIL_WINDOW_MS = 12 * 60 * 60 * 1000;
 const NAMES_SHOWN = 3;
 // 업무는 우편을 받은 감독이 나중에 만들어 진행 중 업무 수가 늦게 잡힌다. 그래서 최근 맡긴 우편 수로도 기준을 본다(기준 개수의 몇 배부터인가).
 export const RECENT_MAIL_FACTOR = 2;
@@ -36,7 +36,7 @@ export function formatLoadHint({recipient, open, hold, recentMails, threshold}) 
   const parts = [
     `받는 감독 ${recipient}: 진행 중 업무 ${open.length}건${open.length ? `(${names})` : ''}`,
     `보류 ${hold}건`,
-    `최근 24시간 슈퍼감독이 맡긴 새 우편 ${recentMails}통(이번 포함)`,
+    `최근 12시간 슈퍼감독이 맡긴 새 우편 ${recentMails}통(이번 포함)`,
   ];
   const mailLimit = threshold * RECENT_MAIL_FACTOR;
   const reasons = threshold > 0 ? [
@@ -60,7 +60,7 @@ export function conductorLoadHint({home, entries, by, recipient, receiptProfile,
   if (!isSuper(by)) return null;
   if (recipientProfile({home, entries, recipient, profiles, receiptProfile}) !== 'conductor') return null;
   const mine = readWorks().map(w => withEffectiveOwner(w, entries)).filter(w => w.owner === recipient);
-  const since = now - DAY_MS;
+  const since = now - RECENT_MAIL_WINDOW_MS;
   const recentMails = 1 + entries.filter(e => isContextMail(e) && e.role === recipient
     && Date.parse(e.t) >= since && isSuper(e.by)).length;
   return formatLoadHint({
