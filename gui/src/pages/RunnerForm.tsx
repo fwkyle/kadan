@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useState } from "react";
 import { save } from "../resource";
-import { EMPTY_EFFORT_NOTE, NO_EFFORT_NOTE, afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, sameChoice } from "../effort-keep";
+import { EMPTY_EFFORT_NOTE, NO_EFFORT_NOTE, afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, listProblem } from "../effort-keep";
 import { listOf, ownPart } from "../runner-draft";
 import { seniorPreview } from "../runner-preview";
 import { AppContext, ErrorMessage } from "../ui";
@@ -51,6 +51,8 @@ export function RunnerForm({
     [revision, setRevision] = useState(settings.revision),
     [base, setBase] = useState(() => ownPart(settings, role, fallback)),
     [dirty, setDirty] = useState(false),
+    // 고치는 중인 줄의 자리(0부터). null이면 아래 선택 칸은 새 줄 추가용이다.
+    [editing, setEditing] = useState<number | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -64,7 +66,10 @@ export function RunnerForm({
       setChoice(initial());
       setRevision(settings.revision);
       setBase(part);
+      setEditing(null);
     } else if (part === base) setRevision(settings.revision);
+    // 고치는 사이 목록이 바뀌었으면 옛 번호로 다른 줄을 덮지 않게 고치던 줄을 버린다(다시 고르게 한다).
+    else setEditing(null);
   }, [settings, dirty, busy, base]);
   const spec = data.catalog[choice.runner],
     listed = spec?.models.find((m) => m.model === choice.model)?.efforts,
@@ -91,14 +96,28 @@ export function RunnerForm({
   const pickEffort = problem === "pick";
   const emptyList = problem === "empty";
   const effortBlocked = problem !== null;
-  const duplicate =
-    !fallback || !choice.model
-      ? null
-      : list.some((item) => sameChoice(item, choice))
-        ? "이미 대체 후보에 있는 값입니다."
-        : current && !Array.isArray(current) && sameChoice(current as Choice, choice)
-          ? "지금 값과 같아 대체 후보로 둘 수 없습니다."
-          : null;
+  const duplicate = !fallback ? null : listProblem(list, choice, {
+    senior: role === "senior", editing,
+    current: current && !Array.isArray(current) ? (current as Choice) : null,
+  });
+  // 목록이 받을 수 있는 최대 줄 수(서버와 같다): 시니어는 최대 인원, 설명 AI는 1순위를 뺀 시도 수. 가득 차도 줄 고치기는 된다.
+  const limit = role === "senior" ? (data.senior?.max ?? 2) : role === "explain" ? (data.explain?.maxAttempts ?? 2) - 1 : null;
+  const full = limit !== null && list.length >= limit;
+  const fullNote = `최대 ${limit}${role === "senior" ? "명" : "개"}까지입니다 — 줄의 '수정'으로 바꾸거나 삭제한 뒤 추가하세요.`;
+  // 작성하는 사이 이 목록이 다른 곳에서 바뀌었다: 옛 목록 기준의 추가·고치기를 반영하지 않는다.
+  const stale = fallback && dirty && revision !== settings.revision;
+  const startEdit = (i: number) => {
+    const item = list[i];
+    setEditing(i);
+    setError(null);
+    setChoice({ runner: item.runner, model: item.model, effort: item.effort || "" });
+    setDirty(true);
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setError(null);
+    setDirty(false);
+  };
   const favorites = settings.favorites || [];
   const blockedFor = (model: string) =>
     settings.blocked?.find(
@@ -159,12 +178,19 @@ export function RunnerForm({
         const submitter = (event.nativeEvent as SubmitEvent).submitter;
         const op =
           submitter instanceof HTMLButtonElement ? submitter.value : "add";
-        if ((!fallback || op === "add") && !choice.model) {
+        // 값을 쓰는 조작(추가·N번 자리 바꾸기)만 선택 칸을 검사한다. 위로·아래로·삭제는 선택 칸과 무관하다.
+        const writes = op === "add" || op.startsWith("replace:");
+        if (writes && !choice.model) {
           setError("모델을 고르세요.");
           return;
         }
-        if (op === "add" && (effortBlocked || duplicate)) {
-          setError(emptyList ? EMPTY_EFFORT_NOTE : pickEffort ? "강도를 고르세요." : duplicate);
+        if (writes && (effortBlocked || duplicate || stale)) {
+          setError(stale ? "목록이 바뀌었습니다. 지금 값을 불러온 뒤 다시 고르세요."
+            : emptyList ? EMPTY_EFFORT_NOTE : pickEffort ? "강도를 고르세요." : duplicate);
+          return;
+        }
+        if (op === "add" && full) {
+          setError(fullNote);
           return;
         }
         setBusy(true);
@@ -172,6 +198,7 @@ export function RunnerForm({
         try {
           stage(role, fallback, choice, op);
           setDirty(false);
+          setEditing(null);
           context.draft(id, false);
           context.notice("변경안에 반영했습니다. 표 아래 저장을 눌러 적용하세요.");
         } catch (e) {
@@ -203,6 +230,7 @@ export function RunnerForm({
             type="button"
             onClick={() => {
               setDirty(false);
+              setEditing(null);
               setError(null);
             }}
           >
@@ -214,10 +242,14 @@ export function RunnerForm({
         {fallback && (
           <ol>
             {list.map((item, i) => (
-              <li key={i}>
+              <li key={i} className={editing === i ? "is-editing" : undefined}>
                 {[item.runner, item.model, item.effort]
                   .filter(Boolean)
                   .join(" / ")}{" "}
+                {editing === i && <span className="pending-mark">(고치는 중) </span>}
+                <button type="button" disabled={editing === i} onClick={() => startEdit(i)}>
+                  수정
+                </button>
                 <button name="op" value={"up:" + (i + 1)} disabled={i === 0}>
                   위로
                 </button>
@@ -234,6 +266,12 @@ export function RunnerForm({
               </li>
             ))}
           </ol>
+        )}
+        {editing !== null && (
+          <p className="edit-target">
+            <strong>{editing + 1}번 줄 고치기</strong> — 아래에서 값을 고른 뒤 <strong>{editing + 1}번 자리 바꾸기</strong>를
+            누르면 같은 자리의 값만 바뀝니다(순서·다른 줄은 그대로).
+          </p>
         )}
         <div className="toolbar">
           <label>
@@ -335,6 +373,7 @@ export function RunnerForm({
         )}
         {emptyList && <p className="warning">{EMPTY_EFFORT_NOTE}</p>}
         {duplicate && <p className="muted">{duplicate}</p>}
+        {fallback && full && editing === null && <p className="muted">{fullNote}</p>}
         {choice.model && (
           <p>
             바뀔 명령:{" "}
@@ -354,15 +393,21 @@ export function RunnerForm({
             </code>
           </p>
         )}
-        {fallback && <button className="primary" value="add" disabled={effortBlocked || Boolean(duplicate)}>
+        {fallback && <button className="primary" value={editing === null ? "add" : `replace:${editing + 1}`}
+          disabled={effortBlocked || Boolean(duplicate) || stale || (editing === null && full)}>
           {busy
             ? "저장 중…"
-            : role === "senior"
-              ? "시니어 추가"
-              : fallback
-                ? "대체 후보 추가"
-                : "변경안에 반영"}
+            : editing !== null
+              ? `${editing + 1}번 자리 바꾸기`
+              : role === "senior"
+                ? "시니어 추가"
+                : "대체 후보 추가"}
         </button>}
+        {fallback && editing !== null && (
+          <button type="button" onClick={cancelEdit}>
+            취소
+          </button>
+        )}
         {!fallback && (
           <button
             type="button"

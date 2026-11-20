@@ -169,6 +169,11 @@ td small { display: block; margin-top: 2px; }
 .runner-edit fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .runner-edit legend { padding: 0; font-weight: 600; font-size: 13px; }
 .runner-edit .toolbar select { max-width: 100%; }
+/* 대체 후보·시니어 줄 고치기: 고치는 줄을 짚고, 줄의 버튼들은 좁은 폭에서도 낱말 중간에서 끊기지 않게 한다. */
+.runner-edit ol li { margin-bottom: 4px; }
+.runner-edit ol li button { margin: 2px 2px 2px 0; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+.runner-edit ol li.is-editing { background: #fff8e1; outline: 1px solid #e3c36a; border-radius: 4px; }
+.runner-edit .edit-target { margin: 6px 0; font-size: 13px; text-wrap: pretty; }
 .runner-edit .toolbar .effort-note { flex: 1 1 220px; min-width: 0; font-size: 12px; }
 /* 발령 때 채워질 명령은 길어서 표 칸에 두지 않고, 줄마다 작은 버튼으로 기본 dialog 팝업을 연다. */
 .runners-summary .row-command { display: block; margin-top: 4px; padding: 1px 8px; font-size: 12px; white-space: nowrap; color: var(--ds-color-muted); }
@@ -201,7 +206,7 @@ td small { display: block; margin-top: 2px; }
 .runner-save-bar { position: sticky; bottom: 0; z-index: 6; margin: 10px 0 0; padding: 8px 12px; border: 1px solid #b07712; border-radius: 8px; background: #fff8e1; box-shadow: 0 -3px 8px rgba(0, 0, 0, .14); }
 .runner-save-bar .error { margin: 6px 0 0; padding: 8px 10px; max-height: 20vh; overflow: auto; }
 .runner-save-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.runner-save-row > p, .runner-save-row > details { margin: 0; }
+.runner-save-row > p, .runner-save-row > label { margin: 0; }
 /* 실행 모델 화면 아래쪽: 드물게 쓰는 관리 항목을 접어 두는 고급 설정 묶음. 한국어는 낱말 중간에서 끊지 않는다. */
 .runner-advanced { margin: 22px 0 12px; min-width: 0; word-break: keep-all; overflow-wrap: break-word; }
 .runner-advanced > summary { font-weight: 600; text-wrap: balance; }

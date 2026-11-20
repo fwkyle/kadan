@@ -49,3 +49,60 @@ test('발령 명령 팝업 재료: 대체 후보 명령은 kadan runners show와
   assert.match(data.seniorCommands[0], /senior\.sh \(codex exec/);
   assert.doesNotMatch(data.seniorCommands[1], /senior\.sh|max|exec/);
 });
+
+// 화면의 줄 고치기는 초안의 N번 자리만 바꾼 프리셋 한 벌을 /runners/preset-save로 한 번 보낸다(새 서버 경로 없음).
+// 대체 후보 줄에 cmd는 저장되지 않는다 — runners show가 조회 때 runner/model/effort로 만든다. 그래서 고친 뒤에도 둘은 같은 값이다.
+test('줄 고치기 저장 왕복: 2번만 바뀌고 1·3번은 그대로, show의 cmd가 고친 값과 일치하며, 옛 revision·중복·없는 강도는 거절되고 파일은 그대로다', async () => {
+  const f = makeHome();
+  const {createWallServer} = await import('../src/wall.mjs');
+  const {readLedger} = await import('../src/ledger.mjs');
+  const server = createWallServer(() => ({center: null, entries: readLedger(f.home), tree: [],
+    ledgerLines: 0, collectedAt: new Date()}), {home: f.home, cacheSec: 0});
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const file = path.join(f.home, 'runner-settings.json');
+  try {
+    const token = (await (await fetch(base)).text()).match(/name="token" value="([a-f0-9]+)"/)[1];
+    const post = (preset, revision = readSettings(f.home).revision) => fetch(base + '/runners/preset-save', {method: 'POST',
+      headers: {'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', origin: base},
+      body: new URLSearchParams({token, preset: 'A', value: JSON.stringify(preset), reason: '줄 고치기', revision: String(revision)})});
+    // 화면 초안과 같은 조작: 검수자 대체 후보 2번 자리의 값만 바꾼다.
+    const edited = structuredClone(readSettings(f.home).presets.A);
+    edited.fallback.reviewer[1] = choice('gpt-d', 'low');
+    const ok = await post(edited);
+    assert.equal(ok.status, 200);
+    const saved = readSettings(f.home);
+    assert.equal(saved.revision, 2, '쓰기는 한 번');
+    assert.deepEqual(saved.presets.A.fallback.reviewer, [choice('gpt-a'), choice('gpt-d', 'low'), choice('gpt-c')]);
+    assert.deepEqual(saved.presets.A.fallback.watch, [choice('gpt-b')], '다른 역할 목록은 그대로');
+    const shown = runnersCommand(['show'], {}, f).fallback.reviewer;
+    assert.deepEqual(shown.map(({cmd, ...item}) => item), [choice('gpt-a'), choice('gpt-d', 'low'), choice('gpt-c')]);
+    assert.equal(shown[1].cmd.startsWith('codex --model gpt-d --effort low'), true, shown[1].cmd);
+    assert.equal(shown[0].cmd.startsWith('codex --model gpt-a --effort high'), true);
+    assert.equal(shown[2].cmd.startsWith('codex --model gpt-c --effort high'), true);
+    assert.equal(Object.hasOwn(saved.presets.A.fallback.reviewer[1], 'cmd'), false, 'cmd는 설정 파일에 저장하지 않는다');
+
+    // 시니어(가득 찬 2명)도 같은 길로 한 자리만 고친다.
+    const seniors = structuredClone(saved.presets.A);
+    seniors.roles.senior[1] = {runner: 'agy', model: 'gem-x-low'};
+    assert.equal((await post(seniors)).status, 200);
+    assert.deepEqual(readSettings(f.home).presets.A.roles.senior, [choice('gpt-a'), {runner: 'agy', model: 'gem-x-low'}]);
+
+    // 리비전 충돌: 옛 revision으로 보내면 409, 파일은 글자 그대로다.
+    const before = fs.readFileSync(file, 'utf8');
+    const stale = structuredClone(readSettings(f.home).presets.A);
+    stale.fallback.reviewer[0] = choice('gpt-norm');
+    const refused = await post(stale, readSettings(f.home).revision - 1);
+    assert.equal(refused.status, 409);
+    assert.match(await refused.text(), /^설정이 바뀌었다/, '화면이 이 글로 리비전 거절을 알아본다');
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    // 실패하면 줄이 그대로 남는다: 다른 줄과 같은 값(중복)·모델이 지원하지 않는 강도·시니어 실행기+모델 중복.
+    const dup = structuredClone(readSettings(f.home).presets.A); dup.fallback.reviewer[1] = choice('gpt-a');
+    const badEffort = structuredClone(readSettings(f.home).presets.A); badEffort.fallback.reviewer[1] = choice('gpt-d', 'max');
+    const dupSenior = structuredClone(readSettings(f.home).presets.A); dupSenior.roles.senior[1] = choice('gpt-a', 'low');
+    for (const preset of [dup, badEffort, dupSenior]) assert.equal((await post(preset)).status, 409);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, '거절된 저장은 파일을 바꾸지 않는다');
+  } finally {
+    await new Promise(r => server.close(r));
+  }
+});

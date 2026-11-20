@@ -50,5 +50,19 @@ export const EMPTY_EFFORT_NOTE =
 export const NO_EFFORT_NOTE =
   '추론 강도 칸 없음 — 이 실행기는 강도를 따로 받지 않습니다. 강도는 모델 이름에 포함됩니다(강도가 나뉘는 모델은 이름 끝의 -low · -high 등으로 고릅니다)';
 
-export const sameChoice =(a: Choice, b: Choice) =>
+// 대체 후보·시니어 목록에 넣거나 N번 줄을 고칠 때 막을 이유(없으면 null). 서버 검사와 같은 기준이다:
+// 대체 후보는 실행기·모델·강도가 모두 같은 줄(setFallback·가져오기), 시니어는 강도가 달라도 실행기·모델이 같은 줄(assertSeniorShape).
+// editing은 고치는 줄의 자리(0부터)다. 그 줄 자신은 중복으로 세지 않고, 값이 그대로면 바뀐 것이 없다고 알린다.
+export function listProblem(list: Choice[], choice: Choice, {senior = false, editing = null, current = null}:
+  {senior?: boolean; editing?: number | null; current?: Choice | null} = {}) {
+  if (!choice.model) return null;
+  if (editing !== null && list[editing] && sameChoice(list[editing], choice)) return '이 줄의 지금 값과 같습니다. 바꿀 값을 고르세요.';
+  const others = list.filter((_, i) => i !== editing);
+  if (senior) return others.some(item => item.runner === choice.runner && item.model === choice.model)
+    ? '이미 등록된 시니어입니다(실행기와 모델이 같으면 강도가 달라도 함께 둘 수 없습니다).' : null;
+  if (others.some(item => sameChoice(item, choice))) return '이미 대체 후보에 있는 값입니다.';
+  return current && sameChoice(current, choice) ? '지금 값과 같아 대체 후보로 둘 수 없습니다.' : null;
+}
+
+export const sameChoice = (a: Choice, b: Choice) =>
   a.runner === b.runner && a.model === b.model && (a.effort || '') === (b.effort || '');

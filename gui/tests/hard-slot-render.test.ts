@@ -187,6 +187,18 @@ test("발령 명령 팝업: 지금 값 명령과 대체 후보 명령이 순서�
   assert.match(old, /<h4>지금 값<\/h4><code>codex --model gpt-hard<\/code><form method="dialog">/);
 });
 
+test("편집 칸: 대체 후보·시니어 줄마다 수정 버튼이 있고(제출 버튼이 아니다), 가득 찬 시니어는 추가만 막히고 안내가 보인다", () => {
+  const html = editor(withSeniors(), ["reviewer", "senior"]);
+  const reviewer = html.slice(html.indexOf("검수자 바꾸기"), html.indexOf('<span class="role-name">일반감독'));
+  assert.equal([...reviewer.matchAll(/<button type="button">수정<\/button>/g)].length, 2, "대체 후보 두 줄");
+  assert.match(reviewer, /<button class="primary" value="add">대체 후보 추가<\/button>/, "가득 찬 목록이 아니면 추가는 지금처럼 켜져 있다");
+  assert.doesNotMatch(reviewer, /자리 바꾸기|고치는 중|최대 \d/);
+  const senior = html.slice(html.indexOf("시니어 바꾸기"), html.indexOf('<span class="role-name">설명 AI'));
+  assert.equal([...senior.matchAll(/<button type="button">수정<\/button>/g)].length, 2, "시니어 두 줄");
+  assert.match(senior, /최대 2명까지입니다 — 줄의 &#x27;수정&#x27;으로 바꾸거나 삭제한 뒤 추가하세요\./);
+  assert.match(senior, /<button class="primary" value="add" disabled="">시니어 추가<\/button>/);
+});
+
 test("비교 모드 잠금: 경고가 보이고 바꾸기 버튼이 모두 꺼진다", () => {
   const data = dataOf("empty");
   const settings = { ...data.settings, compare: { enabled: true, presets: [data.settings.activePreset], enabledAt: null } };
