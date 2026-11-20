@@ -23,7 +23,7 @@ import { buildWatchScope, buildSupervisorScope } from "./watch-scope.mjs";
 import { SupervisorHealth, observationContext } from "./watch-supervisor-health.mjs";
 import { intendedStop } from "./lifecycle-tail.mjs";
 import { ProgressWatch, WORKER_RECHECK_MS } from "./watch-progress.mjs";
-import { decisionList, decisionFields, waitFields, waitingCardKeys } from "./watch-waits.mjs";
+import { decisionList, decisionFields, waitFields, waitingCardKeys, waitsOfCard } from "./watch-waits.mjs";
 import { assessMissingStartReports, alertedStartReports } from "./watch-start-report.mjs";
 import {
   buildCycleEntry,
@@ -54,7 +54,7 @@ import {
 import { eligibleStallAlerts } from "./watch-judge.mjs";
 import { assessIdleStop, IDLE_STOP_AFTER_MS } from "./watch-status-line.mjs";
 import { assessHoldWorking } from "./watch-hold-working.mjs";
-import { assessWaitingStops } from "./watch-waiting-stop.mjs";
+import { assessWaitingStops, assessWaitingCap } from "./watch-waiting-stop.mjs";
 import { assessSupervisorIdle, buildIdleNudge, waitingExcluder } from "./watch-supervisor.mjs";
 import { superProfiles } from "./super-role.mjs";
 import { assessProcesses, collectProcesses, processThresholds } from "./process-watch.mjs";
@@ -248,6 +248,8 @@ export async function runWatch({
   // 일시정지 중 작업 감지: 지난 순회 상태와, 이미 경보를 낸 hold(카드@역할@hold 진입 시각). 메모리에만 둔다.
   let holdWorkingStates = new Map();
   const holdWorkingAlerted = new Set();
+  // 대기 시간 상한: 대기 실행마다 화면이 그대로인 시간(경보 id → 상태). 메모리에만 둔다(재시작하면 0부터 다시 잰다).
+  let waitingCapStates = new Map();
   const pendingCompletions = new Map();
   // 재시작 첫 순회에 같은 경보를 다시 본내지 않게, 원장의 미해소 경보를 직전 상태로 복원한다.
   // 복원용 첫 원장 읽기도 기기 메모리 관측·울림 뒤로 둔다.
@@ -325,6 +327,8 @@ export async function runWatch({
       for (const a of activeAlerts) {
         if (a.held) pendingAlerts.set(a.id, a);
         if (a.id.startsWith('hold-working:')) holdWorkingAlerted.add(a.id.slice('hold-working:'.length));
+        // 열려 있던 대기 시간 상한 경보는 재시작 뒤 처음 본 화면을 기준으로 이어 둔다(첫 순회에 닫혔다가 1시간 뒤 다시 울리지 않게).
+        if (a.id.startsWith('waiting-cap:')) waitingCapStates.set(a.id, {digest:null, stillMs:0, clockSec:null, alert:a});
         // 감시 AI를 켠 경우에만 미해소 점검 오류도 복원한다. 성공한 다음 점검이 닫는다.
         if (judgeCmd && a.kind === '감시AI오류' && a.id.startsWith('ai-call:')) {
           if (a.id === TOOL_DOWN_ID) toolDownAlert = a;
@@ -461,7 +465,7 @@ export async function runWatch({
         if (alert.kind === '일시정지중작업') return true;
         // 대기 표시 실행은 처음부터 scope 밖이다. 이 경보의 수명은 화면·대기 표시가 정한다(아래 assessWaitingStops) —
         // 여기서 퇴역시키면 같은 정지 화면이 매 주기 새 경보로 다시 울린다.
-        if (alert.kind === '대기중정지') return true;
+        if (alert.kind === '대기중정지' || alert.kind === '대기중장기정지') return true;
         if (!alert.session || observedSessions.has(alert.session)) return true;
         recordAlert(record, {...alert, kind:'감시제외'}, null, false, true);
         alertRecipients.delete(alert.id); deliveryFailures.delete(alert.id);
@@ -723,6 +727,20 @@ export async function runWatch({
       waitsRead = decisionsNow !== null;
     } catch { waits = []; userTurnWaits = []; waitsRead = false; }
     const progressWaits = waits.filter(w => w.kind !== "wait-until");
+    // 대기 시간 상한(마지막 그물): 대기 표시 실행의 화면이 일하는 표시 없이 1시간 그대로면 직속 상위에게 1회(assessWaitingCap).
+    // 이미 읽은 화면과 위에서 만든 답 대기 목록만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
+    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 그 역할이 물어 답을 기다리는 질문 우편,
+    // 그 실행·소속 업무에 걸린 답 대기(사용자 결정·사용자 차례·업무 대기 시각). hold와 결과 등록 뒤 확정 대기는 처음부터 대상이 아니다.
+    // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
+    const stopSessions = new Set(waitingStops.map(a => a.session));
+    const waitingCap = observationError || !scope
+      ? {states: waitingCapStates, alerts: []}
+      : assessWaitingCap(waitingCapStates, scope.waitingSessions, roles.observations, {
+          elapsedMs: cycleAt - lastCycleAt, intervalMs, canOpen: waitsRead,
+          excluded: e => stopSessions.has(e.session) || waits.some(w => w.kind === 'mail' && w.asker === e.role)
+            || waitsOfCard(waits, e.card, e.taskId, works, e.role).length > 0,
+        });
+    waitingCapStates = waitingCap.states;
     // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation) 가운데 답 대기가 등록된 것은 화면이 멈춰 있는 것이 정상이다.
     //  - 감독의 답 대기(사용자 결정·감독이 물은 질문 우편): 완료후보·멈춤·정체를 내지 않는다. 답이 닫히면 그때 난다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다).
     //  - 담당이 그 실행으로 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
@@ -918,6 +936,7 @@ export async function runWatch({
       ...idleStopAssessment.alerts.filter(a=>!confirmationDeferred(a)),
       ...holdWorking.alerts,
       ...waitingStops,
+      ...waitingCap.alerts,
       ...(!observationError ? rateLimitRetry.alerts ?? [] : []),
       ...(!observationError ? queueResume.alerts ?? [] : []),
       // 알림이 3번 이상 연속 밀린 창. 지난 주기까지의 횟수이며 사용자에게만 간다.

@@ -1,0 +1,5 @@
+{
+  "_comment": "턴이 도는 정당한 대기의 실제 화면(감시AI 관찰 자료에 저장된 화면의 아래쪽 원문). 경로·프로젝트·브랜치 이름만 일반 값으로 바꿨다. claudeLimiterWait: claude가 제한기(kadan limit run) 호출을 기다리며 턴이 31분째 도는 화면(도는 도구 호출 줄부터 끝까지). codexWorking: codex가 46분째 일하는 화면(일하는 줄부터 끝까지).",
+  "claudeLimiterWait": "  Bash(cd <REPO>;\n      E=<CARD>/evidence; git status --short; kadan limit run b…)\n  ⎿  Running… (1m 11s · timeout 10m)\n     (ctrl+b ctrl+b (twice) to run in background)\n\n✳ Synthesizing… (31m 36s · ↓ 59.3k tokens)\n  ⎿  Tip: Use /clear to start fresh when switching topics and free up context\n\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ \n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ~/Dev/PROJ[BRANCH]\n  Sonnet 5.5 | effort:medium | 4h 14m left | ctx:20%\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents\n\n",
+  "codexWorking": "• Working (46m 03s • esc to interrupt)\n\n\n› Ask Codex to do anything\n\n  gpt-6-astra max · ~/Dev/PROJ · BRANCH · Context 51% used · 258K window\n"
+}
