@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {describeEvent, eventSlots, planRevert, revertReason, sameValue, type SettingsEvent} from '../src/revert.ts';
+import {REVERT_COMPARE_NOTE, describeEvent, eventSlots, planRevert, revertReason, revertSaveBlock, sameValue, type SettingsEvent} from '../src/revert.ts';
 import type {Choice, Settings} from '../src/pages/Runners';
 
 // 최근 변경의 '되돌리기': 그 변경이 바꾼 칸만, 지금 값 위에, 변경안(저장 전)에 채운다.
@@ -139,4 +139,30 @@ test('줄 글과 기본 저장 이유', () => {
   assert.equal(revertReason([event]), '11번 변경 되돌리기');
   assert.equal(revertReason([event, list]), '11·12번 변경 되돌리기');
   assert.ok(sameValue(c('a', ''), {runner: 'codex', model: 'a'}));
+});
+
+// 비교 모드 중 저장 막기: 되돌리기로 채운 값이 변경안에 남아 있는 동안만 막는다(비교를 켜기 전에 채웠어도 같다).
+test('비교 모드가 켜져 있으면 되돌리기로 채운 변경안은 저장을 막고, 비교를 끄거나 변경안을 버리면 풀린다', () => {
+  const saved = base();
+  const event: SettingsEvent = {action: 'set', preset: 'B', role: 'worker', revision: 9, before: c('old', 'low'), after: c('sol', 'high')};
+  const filled = ready(planOf(event, saved)).apply(saved);
+  // 1: 비교 끔 → 되돌리기 채움 → 비교 켬(저장된 설정은 같고 compare만 켜짐) → 저장 막힘
+  assert.equal(revertSaveBlock([event], saved, filled, data, true), REVERT_COMPARE_NOTE);
+  // 3·6: 비교를 끄면(또는 처음부터 꺼져 있으면) 풀린다
+  assert.equal(revertSaveBlock([event], saved, filled, data, false), null);
+  // 2: 되돌린 줄을 취소(변경안 버리기)하면 막을 것이 없다
+  assert.equal(revertSaveBlock([event], saved, saved, data, true), null);
+  assert.equal(revertSaveBlock([], saved, saved, data, true), null);
+  // 7: 되돌린 값과 일반 편집이 섞인 변경안도 막힌다
+  const mixed = structuredClone(filled);
+  mixed.presets.B.roles.super = c('flash', 'low');
+  assert.equal(revertSaveBlock([event], saved, mixed, data, true), REVERT_COMPARE_NOTE);
+  // 4: 되돌리기와 무관한 일반 편집 변경안은 막지 않는다
+  const plain = structuredClone(saved);
+  plain.presets.B.roles.super = c('flash', 'low');
+  assert.equal(revertSaveBlock([], saved, plain, data, true), null);
+  // 되돌려 채운 칸을 사용자가 다른 값으로 고쳤다면 그 값은 되돌리기가 채운 값이 아니므로 막지 않는다
+  const edited = structuredClone(filled);
+  edited.presets.B.roles.worker = c('flash', 'low');
+  assert.equal(revertSaveBlock([event], saved, edited, data, true), null);
 });

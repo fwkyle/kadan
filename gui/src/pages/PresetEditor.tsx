@@ -10,7 +10,7 @@ import {EMPTY_EFFORT_NOTE} from '../effort-keep';
 import {RunnerForm} from './RunnerForm';
 import {CommandButton, NumberedList as List, OriginLine, ValueCell, summaryCells} from './RunnerSummary';
 import {RecentChanges} from './RecentChanges';
-import {revertReason, type SettingsEvent} from '../revert';
+import {revertReason, revertSaveBlock, type SettingsEvent} from '../revert';
 import type {OriginSession} from '../launch-origin';
 import type {Choice, RunnersData, Settings} from './Runners';
 
@@ -80,7 +80,9 @@ export function PresetEditor({data, settings, initialOpen = [], live}: {
   const problems = effortProblems(draft, changed, data.catalog);
   const noEffort = problems.filter(p => p.kind === 'pick').map(p => data.roles[p.role] ?? p.role);
   const emptyList = problems.filter(p => p.kind === 'empty').map(p => data.roles[p.role] ?? p.role);
-  const blocked = frozen || unpicked.length > 0 || problems.length > 0;
+  // 비교 모드가 켜진 동안 되돌리기로 채운 값이 든 변경안은 저장하지 않는다(비교를 켜기 전에 채웠어도 같다).
+  const revertBlock = revertSaveBlock(reverts, settings, draft, data, Boolean(settings.compare?.enabled));
+  const blocked = frozen || unpicked.length > 0 || problems.length > 0 || revertBlock !== null;
   const autoReason = reverts.length ? revertReason(reverts) : reasonFor('', labels);
   useEffect(() => {
     context.draft(id, dirty || busy);
@@ -211,6 +213,7 @@ export function PresetEditor({data, settings, initialOpen = [], live}: {
       {waiting && <p className="save-warn">다른 곳에서 설정이 바뀌어 저장되지 않았습니다. 최신 값을 읽는 중입니다.</p>}
       {conflict && <p className="save-warn">다른 곳에서 이 프리셋이 바뀌어 저장되지 않습니다. 최신 값을 불러온 뒤 다시 고르세요.{' '}
         <button type="button" disabled={busy} onClick={reload}>다시 읽기</button></p>}
+      {revertBlock && <p className="save-warn">{revertBlock}</p>}
       {unpicked.length > 0 && <p className="save-warn">{unpicked.map(label => `${label}: 모델을 고르세요`).join(' · ')}</p>}
       {noEffort.length > 0 && <p className="save-warn">{noEffort.map(label => `${label}: 강도를 고르세요`).join(' · ')}</p>}
       {emptyList.length > 0 && <p className="save-warn">{emptyList.map(label => `${label}: ${EMPTY_EFFORT_NOTE}`).join(' · ')}</p>}
