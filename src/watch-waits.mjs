@@ -29,6 +29,18 @@ export function waitsOfCard(waits, card, taskId, works, role) {
   return (waits ?? []).filter(w => w.ids?.some(id => ids.has(id)) && (w.asker == null || w.asker === role));
 }
 
+// 대기 시간 상한 전용: 이 답 대기 항목이 그 실행의 타이머를 버릴 근거인가(waitsOfCard가 고른 항목을 다시 거른다).
+// Why: waitsOfCard는 소속 업무 키로도 맞춘다. 한 업무에 실행이 이어지면(구현 → 수정 → 재검수) 끝난 이전 실행에 걸린
+// 미답 질문·결정 하나가 지금 실행의 멈춤을 계속 가렸다(2026-11-20 재검수). 다른 소비자(정체·멈춤·AI 입력)의 결과는 그대로다.
+//  - 우편·결정 항목에 자기 실행 연결(own: taskId·실행 키·카드 id)이 있으면 그 연결이 이 실행일 때만 근거다. 업무 키가 같아도 아니다.
+//  - 자기 실행 연결이 없으면(업무에만 걸린 질문·채팅 결정) 이번 발령(since) 뒤에 생겼을 때만 근거다. 시각을 못 읽으면 근거가 아니다.
+//  - 그 밖의 항목(사용자 차례·업무 대기 시각)은 업무 단위 대기라 그대로 근거다.
+export function waitOfExecution(wait, card, taskId, since) {
+  if (wait.kind !== 'mail' && wait.kind !== 'decision') return true;
+  if (wait.own?.length) return wait.own.some(id => id === taskId || id === card.key || id === card.id);
+  return Date.parse(wait.at) >= Date.parse(since);
+}
+
 // AI 입력용 요약(질문 본문은 싣지 않는다). 못 읽었으면 null.
 export function waitFields(waits, waitsRead, card, taskId, works, role) {
   if (!waitsRead) return {waits: null, waitsUnread: true};

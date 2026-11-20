@@ -2,7 +2,14 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {setImmediate} from 'node:timers/promises';
+import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {readLedger} from '../src/ledger.mjs';
+import {CardStore} from '../src/card-store.mjs';
+import {WorkStore} from '../src/work-store.mjs';
+import {Mailbox} from '../src/mailbox.mjs';
 import {runWatch} from '../src/watch-runner.mjs';
 import {assessWaitingCap, waitingStopScreen, WAITING_CAP_MS} from '../src/watch-waiting-stop.mjs';
 import {SUPERVISOR_CHECK_MS} from '../src/watch-supervisor-health.mjs';
@@ -45,7 +52,7 @@ const work = extra => ({key: WORK, status: 'open', owner: BOSS, executions: [{ke
 // screen·card·alive·extra·works·decisions는 분(minute)을 받아 그 순회의 값을 준다. from~until-1분의 순회를 돈다.
 // keys: 대기 세션에 닿을 수 있는 모든 입력 길(재개·큐 Enter·알림·넛지). seed: 앞선 감시기가 남긴 원장(재시작).
 async function simulate({screen = () => UNKNOWN_ERROR, card = () => waiting, alive = () => true, from = 0, until = CAP + 10, seed = null,
-  extra = () => [], works = () => [], decisions = () => []} = {}) {
+  extra = () => [], works = () => [], decisions = () => [], others = []} = {}) {
   let minute = from;
   const entries = seed ?? [...starts, dispatch];
   const before = entries.length, sent = [], keys = [], aiCalls = [];
@@ -54,7 +61,7 @@ async function simulate({screen = () => UNKNOWN_ERROR, card = () => waiting, ali
     parents, routes: new Map(), superRole: TOP, now: () => epoch + minute * 60_000,
     floor: {list: () => starts.filter(s => s.role !== WORKER || alive(minute)).map(s => ({session: s.session, pid: s.panePid})),
       read: session => session === SESSION ? screen(minute) : `• 맡긴 재판정 결과를 기다립니다. ${minute}분\n\n${COMPOSER}`, alive: () => true},
-    readEntries: () => [...entries, ...extra(minute)], readCards: () => [card(minute)], readWorks: () => works(minute),
+    readEntries: () => [...entries, ...extra(minute)], readCards: () => [card(minute), ...others], readWorks: () => works(minute),
     readDecisions: () => decisions(minute),
     resume429: (role, text) => keys.push(['resume429', role, text]),
     sendQueueEnter: session => keys.push(['queue-enter', session]),
@@ -259,6 +266,90 @@ test('더한 표 5: 빈 입력창 + 현재 실행에 등록한 질문, 또는 �
     const r = await simulate({screen: () => QUIET, seed});
     assert.deepEqual([r.cap, r.capMails], [[], []], name);
   }
+});
+
+// 수정 2(2026-11-20 재검수 발견 1건): 답 대기로 타이머를 버리는 규칙을 모든 경로에서 고정한다.
+// 두 실행(끝난 이전 실행 + 대기 표시한 현재 실행)을 같은 열린 업무에 둔다. 한 업무에 구현 → 수정 → 재검수 실행이 이어지는 평소 모양이다.
+// 우편은 실제 우편함 저장 경로(Mailbox.send → resolveWorkMail)가 격리 홈에 남긴 원장 줄을 그대로 쓰고 시각(t)만 가짜 시계에 맞춘다.
+const PREV = 'qa/qa-prev';
+const MAILS = (() => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-waiting-cap-mail-'));
+  createDatabase(home); writeStorageMarker(home, 'sqlite');
+  const cards = new CardStore(home), works = new WorkStore(home);
+  works.create({key: WORK, title: '업무', goal: '결과', scope: '범위', acceptance: '기준', owner: BOSS, repoPath: home, board: 'qa', by: BOSS});
+  for (const id of ['qa-prev', 'qa-task']) cards.create({repo: 'qa', id, repoPath: home, body: `# ${id}`, by: BOSS});
+  const ask = (to, by, link) => new Mailbox(home, to).send({by, message: '확인 부탁드립니다', expectReply: true, ...link}).mailId;
+  // 실행을 업무에 잇기 전에 보낸 우편에는 업무 키가 붙지 않는다.
+  const ids = {prevNoWork: ask(BOSS, WORKER, {executionKey: PREV})};
+  works.change(WORK, 'link', {execution: PREV, phase: 'implementation', round: 1}, {revision: 1, by: BOSS, note: '실행 연결'});
+  works.change(WORK, 'link', {execution: KEY, phase: 'review', round: 1}, {revision: 2, by: BOSS, note: '실행 연결'});
+  Object.assign(ids, {prev: ask(BOSS, WORKER, {executionKey: PREV}), current: ask(BOSS, WORKER, {executionKey: KEY}),
+    workOnly: ask(BOSS, WORKER, {workKey: WORK}), bossPrev: ask(TOP, BOSS, {executionKey: PREV}), bossCurrent: ask(TOP, BOSS, {executionKey: KEY})});
+  const rows = readLedger(home);
+  return Object.fromEntries(Object.entries(ids).map(([name, mailId]) => [name, rows.find(e => e.mailId === mailId)]));
+})();
+const mailAt = (name, minute) => ({...MAILS[name], t: stamp(minute)});
+// 결정 저장소가 남기는 열린 결정의 칸(src/decisions.mjs의 request): 카드 결정은 card에 실행 키, 채팅 결정은 card 없이 chat·work.
+const decisionAt = (minute, link) => ({id: `d-${minute}`, revision: 1, to: '@user', requestedBy: BOSS, question: '진행할까요',
+  options: ['진행', '보류'], recommendation: '진행', reason: '확인 필요', status: 'open', at: stamp(minute), card: null, ...link});
+const prevCard = {...running, id: 'qa-prev', key: PREV, status: 'done'};
+const early = starts.map(s => ({...s, t: stamp(-15)}));
+const priorSend = {...dispatch, taskId: 'qa-prev', executionKey: PREV, t: stamp(-8)};
+// 이전 실행: 발령(-8분) → [before] → 완료(-3분). 현재 실행: 발령(0분) → [after] → 대기 표시(1분).
+const timeline = ({before = [], after = []} = {}) => [...early, priorSend, ...before, {...priorSend, kind: 'done', result: 'ok', t: stamp(-3)}, dispatch, ...after];
+const sameWork = extra => () => [work({executions: [{key: PREV}, {key: KEY}], ...extra})];
+const inSameWork = (options = {}) => simulate({screen: () => QUIET, others: [prevCard], works: sameWork(), seed: timeline(options.mail), ...options});
+const once = r => [r.cap.map(e => e.t), r.capMails.length];
+const ONCE = [[stamp(CAP)], 1], NEVER = [[], 0];
+
+test('수정 2 준비: 우편 고정본은 실제 저장 경로가 남긴 칸이고, 같은 업무에 답 대기가 없으면 60분에 1회', async () => {
+  const links = name => [MAILS[name].transport, MAILS[name].by, MAILS[name].role, MAILS[name].expectReply, MAILS[name].executionKey ?? null, MAILS[name].workKey ?? null];
+  assert.deepEqual(links('prev'), ['mailbox', WORKER, BOSS, true, PREV, WORK], '--execution만 줘도 연결 업무 키가 붙는다');
+  assert.deepEqual(links('prevNoWork'), ['mailbox', WORKER, BOSS, true, PREV, null]);
+  assert.deepEqual(links('workOnly'), ['mailbox', WORKER, BOSS, true, null, WORK]);
+  assert.deepEqual(links('bossPrev'), ['mailbox', BOSS, TOP, true, PREV, WORK]);
+  assert.deepEqual(once(await inSameWork()), ONCE);
+});
+
+test('수정 2 표 1·2: 이전 실행의 미답 질문은 같은 업무여도 가리지 않는다(업무 키가 붙은 우편, 없는 우편)', async () => {
+  for (const name of ['prev', 'prevNoWork'])
+    assert.deepEqual(once(await inSameWork({mail: {before: [mailAt(name, -5)]}})), ONCE, name);
+});
+
+test('수정 2 표 3: 이전 실행 카드에 걸린 열린 사용자 결정은 가리지 않는다', async () => {
+  for (const link of [{card: PREV}, {card: PREV, work: WORK}])
+    assert.deepEqual(once(await inSameWork({decisions: () => [decisionAt(-5, link)]})), ONCE, JSON.stringify(link));
+});
+
+test('수정 2 표 4: 감독이 이전 실행으로 상위에게 물은 미답 질문은 가리지 않는다', async () => {
+  assert.deepEqual(once(await inSameWork({mail: {before: [mailAt('bossPrev', -5)]}})), ONCE);
+});
+
+test('수정 2 표 5·6: 실행 키 없이 업무에만 연결한 답 대기는 현재 발령 전이면 1회, 뒤면 0회', async () => {
+  assert.deepEqual(once(await inSameWork({mail: {before: [mailAt('workOnly', -5)]}})), ONCE, '발령 전 업무 질문');
+  assert.deepEqual(once(await inSameWork({mail: {after: [mailAt('workOnly', 1)]}})), NEVER, '발령 뒤 업무 질문');
+  // 업무 단위(채팅) 사용자 결정도 같다. 질문 우편과 달리 이 갈래는 답 대기 표로만 걸린다.
+  const chat = minute => () => [decisionAt(minute, {chat: true, work: WORK})];
+  assert.deepEqual(once(await inSameWork({decisions: chat(-5)})), ONCE, '발령 전 업무 결정');
+  assert.deepEqual(once(await inSameWork({decisions: chat(1)})), NEVER, '발령 뒤 업무 결정');
+});
+
+test('수정 2 표 7: 현재 실행에 연결한 질문·결정과 감독이 현재 실행으로 물은 질문은 0회(지금과 같음)', async () => {
+  const cases = {
+    '현재 실행에 연결한 질문': {mail: {after: [mailAt('current', 1)]}},
+    '재발령 전에 현재 실행에 연결해 둔 질문': {mail: {before: [mailAt('current', -5)]}},
+    '현재 실행 카드의 사용자 결정': {decisions: () => [decisionAt(1, {card: KEY, work: WORK})]},
+    '발령 전에 현재 실행 카드에 걸어 둔 사용자 결정': {decisions: () => [decisionAt(-5, {card: KEY})]},
+    '감독이 현재 실행으로 상위에게 물은 질문': {mail: {after: [mailAt('bossCurrent', 1)]}},
+  };
+  for (const [name, options] of Object.entries(cases)) assert.deepEqual(once(await inSameWork(options)), NEVER, name);
+});
+
+test('수정 2 표 8: 사용자 차례·업무 대기 시각은 0회(지금과 같음)', async () => {
+  assert.deepEqual(once(await inSameWork({works: sameWork({turnOwner: '@user', turnAt: stamp(2)})})), NEVER, '사용자 차례');
+  assert.deepEqual(once(await inSameWork({works: sameWork({waitUntil: stamp(600), waitUntilSetAt: stamp(-5)})})), NEVER, '업무 대기 시각');
+  // 양성 대조: 차례 기록이 마지막 하위 실행보다 앞이면(stale) 사용자 차례가 아니다.
+  assert.deepEqual(once(await inSameWork({works: sameWork({turnOwner: '@user', turnAt: stamp(-9)})})), ONCE, '지난 차례 기록');
 });
 
 // --- 판정 함수 단독(감시기 없이) ---
