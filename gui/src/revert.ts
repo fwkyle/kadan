@@ -115,12 +115,17 @@ export function planRevert(event: SettingsEvent, saved: Settings, draft: Setting
 }
 
 // 비교 모드가 켜져 있는 동안은 되돌리기로 채운 값이 들어 있는 변경안을 저장하지 못한다(비교를 켜기 전에 채운 변경안도 같다).
-// 되돌리기로 채운 칸이 지금 변경안에 그대로 남아 있는 때만 막는다 — 그 칸을 버리거나 비교 모드를 끄면 풀린다. 일반 편집 변경안은 막지 않는다.
+// 칸 단위로 본다: 되돌린 사건의 칸 중 지금 변경안에 이전 값(before)이 그대로 남은 칸이 하나라도 있으면 막는다.
+// 그 칸을 사용자가 다른 값으로 고치거나 변경안을 버리면 그 칸은 빠지고, 비교 모드를 끄면 풀린다. 일반 편집 변경안은 막지 않는다.
 export const REVERT_COMPARE_NOTE =
   '비교 모드 중에는 되돌리기로 채운 변경을 저장할 수 없습니다 — 저장 줄의 되돌리기로 변경안을 버리거나 비교 모드를 끄세요';
-export const revertSaveBlock = (
-  events: SettingsEvent[], saved: Settings, draft: Settings, data: Pick<RunnersData, 'catalog' | 'roles'>, compareOn: boolean,
-): string | null => compareOn && events.some(event => planRevert(event, saved, draft, data).state === 'filled') ? REVERT_COMPARE_NOTE : null;
+const slotStillReverted = (slot: Slot, saved: Settings, draft: Settings) =>
+  sameValue(current(saved, slot), slot.after) && sameValue(current(draft, slot), slot.before) && !sameValue(slot.before, slot.after);
+export const revertSaveBlock = (events: SettingsEvent[], saved: Settings, draft: Settings, compareOn: boolean): string | null =>
+  compareOn && events.some(event => {
+    const found = eventSlots(event);
+    return 'slots' in found && found.slots.some(slot => slotStillReverted(slot, saved, draft));
+  }) ? REVERT_COMPARE_NOTE : null;
 
 // 되돌리기 뒤 저장 줄의 기본 이유 문구: 'N번 변경 되돌리기'(N = 그 변경이 만든 설정 버전. 여러 개를 채웠으면 'N·M번').
 export const revertReason = (events: SettingsEvent[]) => `${events.map(event => event.revision ?? '?').join('·')}번 변경 되돌리기`;

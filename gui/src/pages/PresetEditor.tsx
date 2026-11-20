@@ -81,7 +81,7 @@ export function PresetEditor({data, settings, initialOpen = [], live}: {
   const noEffort = problems.filter(p => p.kind === 'pick').map(p => data.roles[p.role] ?? p.role);
   const emptyList = problems.filter(p => p.kind === 'empty').map(p => data.roles[p.role] ?? p.role);
   // 비교 모드가 켜진 동안 되돌리기로 채운 값이 든 변경안은 저장하지 않는다(비교를 켜기 전에 채웠어도 같다).
-  const revertBlock = revertSaveBlock(reverts, settings, draft, data, Boolean(settings.compare?.enabled));
+  const revertBlock = revertSaveBlock(reverts, settings, draft, Boolean(settings.compare?.enabled));
   const blocked = frozen || unpicked.length > 0 || problems.length > 0 || revertBlock !== null;
   const autoReason = reverts.length ? revertReason(reverts) : reasonFor('', labels);
   useEffect(() => {

@@ -147,22 +147,48 @@ test('비교 모드가 켜져 있으면 되돌리기로 채운 변경안은 저�
   const event: SettingsEvent = {action: 'set', preset: 'B', role: 'worker', revision: 9, before: c('old', 'low'), after: c('sol', 'high')};
   const filled = ready(planOf(event, saved)).apply(saved);
   // 1: 비교 끔 → 되돌리기 채움 → 비교 켬(저장된 설정은 같고 compare만 켜짐) → 저장 막힘
-  assert.equal(revertSaveBlock([event], saved, filled, data, true), REVERT_COMPARE_NOTE);
+  assert.equal(revertSaveBlock([event], saved, filled, true), REVERT_COMPARE_NOTE);
   // 3·6: 비교를 끄면(또는 처음부터 꺼져 있으면) 풀린다
-  assert.equal(revertSaveBlock([event], saved, filled, data, false), null);
+  assert.equal(revertSaveBlock([event], saved, filled, false), null);
   // 2: 되돌린 줄을 취소(변경안 버리기)하면 막을 것이 없다
-  assert.equal(revertSaveBlock([event], saved, saved, data, true), null);
-  assert.equal(revertSaveBlock([], saved, saved, data, true), null);
+  assert.equal(revertSaveBlock([event], saved, saved, true), null);
+  assert.equal(revertSaveBlock([], saved, saved, true), null);
   // 7: 되돌린 값과 일반 편집이 섞인 변경안도 막힌다
   const mixed = structuredClone(filled);
   mixed.presets.B.roles.super = c('flash', 'low');
-  assert.equal(revertSaveBlock([event], saved, mixed, data, true), REVERT_COMPARE_NOTE);
+  assert.equal(revertSaveBlock([event], saved, mixed, true), REVERT_COMPARE_NOTE);
   // 4: 되돌리기와 무관한 일반 편집 변경안은 막지 않는다
   const plain = structuredClone(saved);
   plain.presets.B.roles.super = c('flash', 'low');
-  assert.equal(revertSaveBlock([], saved, plain, data, true), null);
+  assert.equal(revertSaveBlock([], saved, plain, true), null);
   // 되돌려 채운 칸을 사용자가 다른 값으로 고쳤다면 그 값은 되돌리기가 채운 값이 아니므로 막지 않는다
   const edited = structuredClone(filled);
   edited.presets.B.roles.worker = c('flash', 'low');
-  assert.equal(revertSaveBlock([event], saved, edited, data, true), null);
+  assert.equal(revertSaveBlock([event], saved, edited, true), null);
+});
+
+// 칸 단위 잠금: 한 사건이 두 칸을 바꿨을 때 한 칸만 다시 고쳐도 남은 되돌린 칸이 있으면 막는다.
+test('여러 칸을 바꾼 사건을 되돌린 뒤 한 칸만 다시 고쳐도 남은 되돌린 칸이 있으면 저장을 막는다', () => {
+  const before = {roles: {worker: c('old', 'low'), reviewer: c('astra', 'high'), super: c('flash', 'medium')}};
+  const after = {roles: {worker: c('sol', 'high'), reviewer: c('astra', 'high'), super: c('sol', 'low')}};
+  const saved = base({roles: after.roles, fallback: undefined});
+  const event: SettingsEvent = {action: 'preset-import', preset: 'B', revision: 120, before, after};
+  const filled = ready(planOf(event, saved)).apply(saved);
+  assert.deepEqual(ready(planOf(event, saved)).roles.sort(), ['super', 'worker'], '두 칸을 채운다');
+  assert.equal(revertSaveBlock([event], saved, filled, true), REVERT_COMPARE_NOTE, '8 이전: 두 칸 모두 되돌린 값');
+  // 8: 작업자만 일반 편집으로 다른 값 → 슈퍼감독의 되돌린 값이 남아 있으므로 막힌다(사건 단위 판정은 여기서 풀려 버렸다)
+  const workerEdited = structuredClone(filled);
+  workerEdited.presets.B.roles.worker = c('astra', 'medium');
+  assert.equal(revertSaveBlock([event], saved, workerEdited, true), REVERT_COMPARE_NOTE);
+  assert.equal(planOf(event, saved, workerEdited).state, 'blocked', '사건 단위 판정은 filled가 아니다(고치기 전 코드가 놓친 지점)');
+  // 9: 남은 칸까지 다른 값으로 고치면 되돌린 값이 남은 칸이 0개 → 일반 편집처럼 막지 않는다
+  const bothEdited = structuredClone(workerEdited);
+  bothEdited.presets.B.roles.super = c('astra', 'low');
+  assert.equal(revertSaveBlock([event], saved, bothEdited, true), null);
+  // 비교 모드가 꺼져 있으면 어느 경우든 막지 않는다
+  assert.equal(revertSaveBlock([event], saved, workerEdited, false), null);
+  // 한 칸을 되돌린 값 그대로 두고 다른 칸을 saved 값으로 되돌려 놓은 경우(그 칸은 바뀐 것이 없음)도 남은 칸이 있으면 막는다
+  const oneSlotLeft = structuredClone(filled);
+  oneSlotLeft.presets.B.roles.worker = c('sol', 'high');
+  assert.equal(revertSaveBlock([event], saved, oneSlotLeft, true), REVERT_COMPARE_NOTE);
 });
