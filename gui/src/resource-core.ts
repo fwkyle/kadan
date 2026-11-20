@@ -5,13 +5,19 @@ export type ResourceState<T> = {
   updatedAt: number;
   // 시간 초과로 이번 조회를 중단했지만 이전 자료가 있어 그대로 보여 주는 중. 큰 오류 띠 대신 작은 표시만 쓴다.
   timedOut: boolean;
+  // 이번에 읽은 값이 아니라 지난번에 받아 둔 값을 먼저 보이는 중(initial로 준 값). 새 응답이 오면 false가 된다.
+  stored: boolean;
 };
-export type ResourceOptions = {
+export type ResourceOptions<T = unknown> = {
   pollMs?: number;
   deadlineMs?: number;
   staleMs?: number;
   // false면 숨겼던 탭을 다시 볼 때 자동으로 다시 읽지 않는다(기본은 다시 읽는다). 길잡이처럼 고정 문서용.
   refreshOnResume?: boolean;
+  // 지난번에 받아 둔 값. 첫 응답이 오기 전에 먼저 보인다(낡은 값으로 치므로 구독하면 바로 다시 읽는다).
+  initial?: T;
+  // 새 응답을 받을 때마다 부른다(다음에 먼저 보일 값을 보관하는 데 쓴다).
+  onData?: (data: T) => void;
 };
 type Listener = () => void;
 // 2026-10-14 격리 측정(원장 사본, 부하 평균 50): 개선 전 동시 조회 p95 61초, 개선 후 최악 13초.
@@ -25,6 +31,7 @@ export class Resource<T> {
     refreshing: false,
     updatedAt: 0,
     timedOut: false,
+    stored: false,
   };
   private listeners = new Set<Listener>();
   private controller: AbortController | null = null;
@@ -33,14 +40,15 @@ export class Resource<T> {
   private generation = 0;
   private visible = true;
   private loader: (signal: AbortSignal, force?: boolean) => Promise<T>;
-  private options: ResourceOptions;
+  private options: ResourceOptions<T>;
 
   constructor(
     loader: (signal: AbortSignal, force?: boolean) => Promise<T>,
-    options: ResourceOptions = {},
+    options: ResourceOptions<T> = {},
   ) {
     this.loader = loader;
     this.options = options;
+    if (options.initial !== undefined) this.state = { ...this.state, data: options.initial, stored: true };
   }
   getSnapshot = () => this.state;
   get subscribed() {
@@ -133,14 +141,17 @@ export class Resource<T> {
         Promise.resolve().then(() => this.loader(controller.signal, force)),
         deadline,
       ]);
-      if (generation === this.generation && !controller.signal.aborted)
+      if (generation === this.generation && !controller.signal.aborted) {
         this.publish({
           data,
           error: null,
           refreshing: false,
           updatedAt: Date.now(),
           timedOut: false,
+          stored: false,
         });
+        this.options.onData?.(data);
+      }
     } catch (error) {
       if (
         generation === this.generation &&

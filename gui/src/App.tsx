@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { setReadOnly, useResource } from "./resource";
+import { prime, setReadOnly, useResource } from "./resource";
 import {
   navigate,
   setNavigationGuard,
@@ -43,6 +43,15 @@ const Mailbox = lazy(() =>
   Runs = lazy(() =>
     import("./pages/Records").then((m) => ({ default: m.Runs })),
   );
+// 2026-11-20 실측(운영): 화면을 열면 autopilot/repos(2.7초)·summary(0.8초)가 먼저 나가 session(0.003초)이 그 뒤에 3.5초 줄을 섰고,
+// 본문은 session → 화면 코드 → runners 순서로 하나씩 기다렸다. session은 화면을 그리기 전에 먼저 보내고,
+// 실행 모델 설정으로 바로 여는 경우에는 그 화면 코드와 runners도 함께 먼저 보낸다(옵션은 아래 useResource·Runners와 같다).
+const SESSION_OPTIONS = { pollMs: 0, staleMs: 300_000 };
+prime("session", SESSION_OPTIONS);
+if (viewOf(new URL(location.href)) === "runner-settings") {
+  prime("runners", { remember: true });
+  void import("./pages/Runners");
+}
 const links = [
   ["status", "전체 현황"],
   ["strategy-map", "전략 맵"],
@@ -66,10 +75,7 @@ export default function App() {
     repo = url.searchParams.get("repo") || null,
     section = ["dashboard", "operations-flow", "work-create", "card-create"].includes(view)
       ? "dashboard" : view === "runs" ? "ledger" : view,
-    session = useResource<{ token: string; decisionToken?: string; readOnly?: boolean }>("session", {
-      pollMs: 0,
-      staleMs: 300_000,
-    }),
+    session = useResource<{ token: string; decisionToken?: string; readOnly?: boolean }>("session", SESSION_OPTIONS),
     summary = useResource<Summary>("summary");
   const readOnly = session.data?.readOnly === true;
   const drafts = useRef(new Set<string>()),
@@ -134,7 +140,7 @@ export default function App() {
     ) : view === "how-to" ? (
       <HowTo />
     ) : view === "runner-settings" ? (
-      <Runners />
+      <Runners ready={Boolean(session.data)} />
     ) : view === "operations-flow" ? (
       <Operations url={url} />
     ) : view === "work-create" || view === "card-create" ? (
@@ -224,7 +230,8 @@ export default function App() {
           )}
           {readOnly && <div className="dw-secretary" role="status">원격 보기(읽기 전용) — 이 화면에서는 보기만 할 수 있습니다.</div>}
           <SecretaryNotice on={summary.data?.secretary} />
-          {!session.data ? (
+          {/* 실행 모델 설정은 session을 기다리지 않고 runners 자료만으로 먼저 그린다(session 전에는 읽기 전용 표). */}
+          {!session.data && view !== "runner-settings" ? (
             <Loading />
           ) : (
             <Boundary key={view}>
