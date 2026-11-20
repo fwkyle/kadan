@@ -135,6 +135,7 @@ test('줄 글과 기본 저장 이유', () => {
   const list: SettingsEvent = {action: 'fallback', preset: 'B', role: 'reviewer', revision: 12, before: [], after: [c('flash', 'low')]};
   assert.deepEqual(describeEvent(list, roles), {what: '프리셋 B · 검수자 대체 후보', change: '없음 → 1. codex / flash / low'});
   assert.deepEqual(describeEvent({action: 'favorite', revision: 3}, roles), {what: '즐겨찾기', change: ''});
+  assert.deepEqual(describeEvent({action: 'compare', revision: 4}, roles), {what: '비교 모드', change: ''});
   assert.equal(revertReason([event]), '11번 변경 되돌리기');
   assert.equal(revertReason([event, list]), '11·12번 변경 되돌리기');
   assert.ok(sameValue(c('a', ''), {runner: 'codex', model: 'a'}));

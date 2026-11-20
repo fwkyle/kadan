@@ -115,7 +115,8 @@ export function PresetEditor({data, settings, initialOpen = [], live}: {
   const fillRevert = (event: SettingsEvent, apply: (draft: Settings) => Settings) => {
     setDraft(old => apply(old)); setReverts(old => [...old, event]);
   };
-  const lockReason = busy ? '저장 중입니다' : locked ? '비교 모드 중 — 먼저 끄기'
+  // 최근 변경의 되돌리기는 활성 프리셋이 비교 목록 안이든 밖이든 비교 모드가 켜져 있으면 모두 끈다(일반 편집 잠금 locked와 따로 판정).
+  const lockReason = busy ? '저장 중입니다' : locked || settings.compare?.enabled ? '비교 모드 중 — 먼저 끄기'
     : conflict || waiting ? '다른 곳에서 설정이 바뀌었습니다 — 최신 값을 읽은 뒤 되돌릴 수 있습니다' : null;
   const toggle = (role: string) => setOpen(old => old.includes(role) ? old.filter(r => r !== role) : [...old, role]);
   return <div style={{wordBreak: 'keep-all', overflowWrap: 'break-word', textWrap: 'pretty'}}>

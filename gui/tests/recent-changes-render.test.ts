@@ -26,6 +26,7 @@ for (const ext of [".ts", ".tsx"]) M._extensions[ext] = (module, filename) => {
 };
 const { RunnerSummary } = req("./src/pages/RunnerSummary.tsx");
 const { RecentChanges } = req("./src/pages/RecentChanges.tsx");
+const { PresetEditor } = req("./src/pages/PresetEditor.tsx");
 const { AppContext } = req("./src/ui.tsx");
 
 const c = (model: string, effort: string) => ({ runner: "codex", model, effort });
@@ -73,4 +74,36 @@ test("값의 출처 줄: 살아 있는 세션이 있는 역할 줄에만 보이�
   assert.deepEqual(lines, ["떠 있는 2개 · 설정 1 · 대체 1번 1"], "작업자 줄에만");
   assert.doesNotMatch(render(React.createElement(RunnerSummary, { data, live: null })), /class="origin"/);
   assert.doesNotMatch(render(React.createElement(RunnerSummary, { data })), /class="origin"/);
+});
+
+// 비교 모드: 활성 프리셋이 비교 목록 안이든 밖이든 켜져 있으면 되돌리기는 모두 꺼진다. 일반 편집('바꾸기') 잠금은 기존 정책 그대로다(목록 밖은 허용).
+const withCompare = (compare: unknown) => ({ ...data, settings: { ...settings, compare } });
+const editor = (d: ReturnType<typeof withCompare>) => render(React.createElement(PresetEditor, { data: d, settings: d.settings }));
+const editButtons = (html: string) => [...html.matchAll(/<button[^>]*class="row-edit"[^>]*>/g)].map(m => /disabled/.test(m[0]));
+
+test("비교 모드가 켜져 있으면 활성 프리셋이 비교 목록 밖이어도 최근 변경 되돌리기가 모두 꺼지고 이유를 보인다", () => {
+  const outside = editor(withCompare({ enabled: true, presets: ["C", "D"], enabledAt: "2026-11-20T00:00:00Z" }));
+  const all = rows(outside);
+  assert.equal(all.length, 3);
+  assert.ok(all.every(row => row.disabled && row.why === "비교 모드 중 — 먼저 끄기"), JSON.stringify(all));
+  assert.doesNotMatch(outside, /class="warning">비교 모드 중/, "목록 밖 프리셋은 일반 편집 잠금 경고를 띄우지 않는다");
+  assert.ok(editButtons(outside).length > 0 && editButtons(outside).every(disabled => !disabled), "목록 밖 프리셋의 일반 편집(바꾸기)은 전처럼 된다");
+});
+
+test("비교 목록 안이면 되돌리기도 일반 편집도 꺼지고, 비교 모드를 끄면 되돌리기가 다시 켜진다", () => {
+  const inside = editor(withCompare({ enabled: true, presets: ["B", "C"], enabledAt: "2026-11-20T00:00:00Z" }));
+  assert.ok(rows(inside).every(row => row.disabled && row.why === "비교 모드 중 — 먼저 끄기"));
+  assert.match(inside, /class="warning">비교 모드 중 — 먼저 끄기/);
+  assert.ok(editButtons(inside).every(disabled => disabled), "목록 안 프리셋의 일반 편집은 기존대로 잠김");
+  for (const compare of [{ enabled: false, presets: ["B", "C"], enabledAt: null }, undefined]) {
+    const off = rows(editor(withCompare(compare)));
+    assert.equal(off[0].disabled, false, "비교 모드가 꺼지면 되돌릴 수 있는 줄이 다시 켜진다");
+  }
+});
+
+test("비교 모드 켜기·끄기 사건은 최근 변경에서 '비교 모드'로 보인다", () => {
+  const events = [{ t: "2026-11-20T07:00:00Z", by: "사람", kind: "runner-settings", action: "compare", revision: 10, reason: "시험" }, ...history];
+  const html = render(React.createElement(RecentChanges, { data: { ...data, history: events }, saved: settings, draft: settings, locked: null }));
+  assert.match(html, /<td data-label="무엇을">비교 모드</);
+  assert.doesNotMatch(html, /<td data-label="무엇을">compare/);
 });

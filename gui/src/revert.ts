@@ -120,7 +120,7 @@ export const revertReason = (events: SettingsEvent[]) => `${events.map(event => 
 const ACTION_LABEL: Record<string, string> = {
   init: '처음 설정', set: '역할 값', fallback: '대체 후보', favorite: '즐겨찾기', preset: '프리셋 전환', 'preset-add': '프리셋 추가',
   'preset-rename': '프리셋 이름 바꾸기', 'preset-remove': '프리셋 삭제', 'preset-import': '프리셋 저장', block: '차단 모델',
-  runner: '실행기 표', 'model-add': '모델 등록', 'model-remove': '모델 삭제',
+  compare: '비교 모드', runner: '실행기 표', 'model-add': '모델 등록', 'model-remove': '모델 삭제',
 };
 const choiceText = (c: Choice) => [c.runner, c.model, c.effort].filter(Boolean).join(' / ');
 const valueText = (value: Value, empty: string) => Array.isArray(value)
