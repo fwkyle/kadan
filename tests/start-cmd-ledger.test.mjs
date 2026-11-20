@@ -117,3 +117,40 @@ test("따옴표 없는 기존 명령의 describeStartCmd 결과는 글자 하나
   };
   for (const [cmd, expected] of Object.entries(before)) assert.deepEqual(describeStartCmd(cmd), expected, cmd);
 });
+
+// 검수(exec-adb719cf) 중요 1건: 따옴표 친 프롬프트 끝의 `--model`을 옵션으로 읽어 원장 model이 `--model`로 적혔다.
+test("따옴표 친 프롬프트 끝이 --model이어도 실제 --model 옵션 값을 남긴다 — 검수 재현 명령", () => {
+  const cmd = 'codex "please describe --model" --model fixture-old';
+  const entry = buildStartLedgerEntry({
+    floorName: "tmux", role: "review-fixture-quoted-prompt", session: "kadan-review-fixture-quoted-prompt",
+    evidence: { panePid: "555" }, window: "hidden", cmd, env: {},
+  });
+
+  assert.equal(entry.harness, "codex");
+  assert.equal(entry.model, "fixture-old");
+  assert.equal(entry.cmd, cmd);
+  // 따옴표 친 옵션 낱말 뒤가 다시 옵션이면 그것을 모델로 읽지 않는다.
+  assert.equal(describeStartCmd('codex "--model" --model y').model, "y");
+});
+
+test("프롬프트·옵션·복원 명령 꼴별 모델 칸: 따옴표 없는 꼴은 원래 코드(4176552)와 같고 따옴표 친 옵션만 새로 읽는다", () => {
+  // 앞 6줄의 기대값은 이 묶음을 넣기 전 코드(4176552)가 같은 입력에 낸 실제 출력이다(프롬프트 안의 `--model x`를 값으로 읽는
+  // 기존 한계도 그대로다). 뒤 4줄은 따옴표 친 꼴로, 원래 코드는 대부분 모델을 못 읽었고 harness에 따옴표가 남았다(2026-11-20 TODO 18행).
+  const cases = [
+    ['codex "describe --model x" --model fixture-old', "x"],
+    ['codex "describe --model x"', "x"],
+    ['codex --model="gpt-x" -c a=b', "gpt-x"],
+    ["codex --model='gpt-x'", "gpt-x"],
+    ["codex -p 'a --model b' --model=gpt-z", "b"],
+    ["codex --model=gpt-x", "gpt-x"],
+    [`'codex' '--model' 'gpt-x' '-c' 'k=v'`, "gpt-x"],
+    [`'codex' '--model=gpt-x'`, "gpt-x"],
+    [`'codex' 'resume' 'c1' '--model' 'gpt-x'`, "gpt-x"],
+    [`"codex" "--model" "gpt-x"`, "gpt-x"],
+  ];
+  for (const [cmd, model] of cases) {
+    const described = describeStartCmd(cmd);
+    assert.equal(described.model, model, cmd);
+    assert.equal(described.harness, "codex", cmd);
+  }
+});

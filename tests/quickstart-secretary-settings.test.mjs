@@ -75,7 +75,7 @@ test('설정이 깨졌거나 쓸 수 없으면 원래 명령으로 시작하고 
       {codex: CODEX_LISTED}), 'codex'), /codex가 아님/, 'runner-differs'],
     ['목록에 없는 모델', withRunner(homeWith({...SOL, model: 'gpt-nope'}), 'codex'), /목록에 없거나/, 'choice-rejected'],
     ['지원하지 않는 강도', withRunner(homeWith({...SOL, effort: 'low'}), 'codex'), /목록에 없거나/, 'choice-rejected'],
-    ['실행기 명령이 codex가 아님', withRunner(homeWith(SOL), '/opt/bin/claude --effort low'), /resume 꼴이 아니거나/, 'command-shape'],
+    ['실행기 명령이 codex가 아님', withRunner(homeWith(SOL), '/opt/bin/claude --effort low'), /실행기 명령이 codex가 아니거나/, 'command-shape'],
     ['모델 옵션 자리를 하나로 읽지 못함', withRunner(homeWith(SOL), 'codex -m gpt-6-luna --model gpt-6-sol'), /하나로 읽지 못함/, 'command-shape'],
   ];
   for (const [label, home, reason, word] of cases) {
@@ -87,6 +87,8 @@ test('설정이 깨졌거나 쓸 수 없으면 원래 명령으로 시작하고 
     const warnings = logs.filter(line => /^경고: 비서 실행 모델 설정을 적용하지 못해/.test(line));
     assert.equal(warnings.length, 1, label);
     assert.match(warnings[0], reason, label);
+    // 복원 전용 설명(저장된 명령·resume 꼴·다시 열기)이 첫 시작 경고에 새지 않는다.
+    assert.doesNotMatch(warnings[0], /다시 열|저장된|resume/, label);
   }
 });
 

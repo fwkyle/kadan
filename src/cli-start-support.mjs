@@ -223,7 +223,9 @@ export function describeStartCmd(cmd) {
   // 따옴표 친 명령(체크포인트·복원이 쓰는 `'codex' '--model' 'x'` 꼴)에서도 실행기 이름에 따옴표가 남지 않게 벗긴다.
   const harness = tokens[index]?.replace(/^["']+|["']+$/g, "").split("/").pop();
   // 따옴표를 벗겨서 남긴다. 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 따옴표째 박힌다(2026-09-12 실측).
-  const model = text.match(/--model["']*[=\s]+["']*([^\s"']+)["']*/)?.[1];
+  // 따옴표가 `--model` 바로 앞에 붙은 낱말(`'--model' 'x'`)일 때만 뒤 따옴표를 허용한다. 프롬프트 끝의 `--model"`을 옵션으로
+  // 읽지 않고(`codex "describe --model" --model x` → x), 따옴표 친 옵션 뒤의 값이 다시 옵션(`-…`)이면 값으로 보지 않는다.
+  const model = text.match(/(?:(?<=["'])--model["']\s+["']*(?!-)|--model(?:=|\s+)["']*)([^\s"']+)/)?.[1];
   return {
     ...(harness ? { harness } : {}),
     ...(model ? { model } : {}),

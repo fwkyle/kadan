@@ -111,10 +111,16 @@ export function secretaryCommandFromSettings({home, command, read = readSettings
 }
 
 // 새 비서의 첫 시작(quickstart.mjs runUp의 secretarySettings 자리)에 넣는 함수. 결과에 사람이 읽을 한 줄(note)을 더한다.
+// 새 비서의 첫 시작 경고에 쓰는 풀이. 복원 전용 설명(저장된 명령·resume 꼴·다시 열기)이 든 두 낱말만 첫 시작에 맞게 바꾼다.
+export const SECRETARY_FRESH_SKIP_REASONS = {
+  ...SECRETARY_SKIP_REASONS,
+  'runner-differs': `비서 자리의 실행기가 ${SECRETARY_RUNNER}가 아님(새 비서의 설정값 적용은 ${SECRETARY_RUNNER}만 지원)`,
+  'command-shape': `실행기 명령이 ${SECRETARY_RUNNER}가 아니거나 모델·강도 옵션 자리를 하나로 읽지 못함`,
+};
 export const freshSecretarySettings = home => ({command}) => {
   const result = secretaryCommandFromSettings({home, command, fresh: true});
   return {...result, note: result.skipped
-    ? `비서 실행 모델 설정을 적용하지 못해 실행기 명령 그대로 띄운다(${SECRETARY_SKIP_REASONS[result.skipped] ?? result.skipped})` : null};
+    ? `비서 실행 모델 설정을 적용하지 못해 실행기 명령 그대로 띄운다(${SECRETARY_FRESH_SKIP_REASONS[result.skipped] ?? result.skipped})` : null};
 };
 
 // 설정 화면·runners show의 '무엇이 일어나는가' 한 줄. 자리가 비어 있으면 null이다.
