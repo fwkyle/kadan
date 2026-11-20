@@ -148,6 +148,45 @@ test("편집 칸: 강도를 받지 않는 실행기는 꺼진 강도 칸 대신 
   assert.doesNotMatch(shown, /추론 강도 칸 없음/);
 });
 
+// 시니어 두 명과 검수자 대체 후보 두 개가 저장된 설정. 서버가 주는 팝업 재료(fallbackCommands·seniorCommands)도 함께 싣는다.
+const withSeniors = () => {
+  const data = dataOf("filled");
+  const preset = data.settings.presets[data.settings.activePreset];
+  const seniors = [{ runner: "codex", model: "gpt-test", effort: "high" }, { runner: "codex", model: "gpt-test2" }];
+  const settings = { ...data.settings, presets: { ...data.settings.presets, [data.settings.activePreset]: { ...preset,
+    roles: { ...preset.roles, senior: seniors },
+    fallback: { reviewer: [{ runner: "codex", model: "gpt-test2" }, { runner: "codex", model: "gpt-hard" }] } } } };
+  return { ...data, settings, commands: { ...data.commands, senior: "S1 + S2" },
+    fallbackCommands: { reviewer: ["codex --model gpt-test2", "codex --model gpt-hard"] }, seniorCommands: ["S1", "S2"] };
+};
+
+test("시니어 '지금 값'은 옆으로 잇지 않고 대체 후보와 같은 번호 목록으로 아래로 보인다(편집 표·읽기 전용 표 모두)", () => {
+  const data = withSeniors();
+  assert.deepEqual(summaryCells(data, "senior").seniors, ["codex / gpt-test / high", "codex / gpt-test2"]);
+  assert.equal(summaryCells(data, "worker").seniors, null);
+  for (const html of [render(React.createElement(RunnerSummary, { data })), editor(data)]) {
+    assert.match(html, /<td><ol><li>codex \/ gpt-test \/ high<\/li><li>codex \/ gpt-test2<\/li><\/ol><button type="button" class="row-command">/);
+    assert.doesNotMatch(html, /codex \/ gpt-test \/ high \+ codex/, "옆으로 이은 글은 없다");
+  }
+});
+
+test("역할 칸: 이름과 바꾸기 버튼이 한 묶음(같은 줄)에 있고 강제 줄바꿈이 없다", () => {
+  const html = editor(dataOf("empty"));
+  assert.match(html, /<th><div class="role-head"><span class="role-name">작업자<\/span><button type="button" class="row-edit" aria-expanded="false">바꾸기<\/button><\/div><\/th>/);
+  assert.doesNotMatch(html, /<th>[^<]*<br\/?>/);
+});
+
+test("발령 명령 팝업: 지금 값 명령과 대체 후보 명령이 순서대로, 시니어는 한 명씩 줄로 보인다", () => {
+  const html = render(React.createElement(RunnerSummary, { data: withSeniors() }));
+  const reviewer = html.slice(html.indexOf('aria-label="검수자 발령 명령 보기"'), html.indexOf("<th>일반감독"));
+  assert.match(reviewer, /<h4>지금 값<\/h4><code>codex --model claude-test<\/code><h4>대체 후보 \(순서대로\)<\/h4><ol><li><code>codex --model gpt-test2<\/code><\/li><li><code>codex --model gpt-hard<\/code><\/li><\/ol><form method="dialog"><button>닫기<\/button><\/form><\/dialog>/);
+  const senior = html.slice(html.indexOf('aria-label="시니어 발령 명령 보기"'), html.indexOf("<th>설명 AI"));
+  assert.match(senior, /<h4>지금 값<\/h4><ol><li><code>S1<\/code><\/li><li><code>S2<\/code><\/li><\/ol><form method="dialog">/);
+  // 팝업 재료가 없는 옛 응답이어도 지금 값 명령은 보인다.
+  const old = render(React.createElement(RunnerSummary, { data: dataOf("filled") }));
+  assert.match(old, /<h4>지금 값<\/h4><code>codex --model gpt-hard<\/code><form method="dialog">/);
+});
+
 test("비교 모드 잠금: 경고가 보이고 바꾸기 버튼이 모두 꺼진다", () => {
   const data = dataOf("empty");
   const settings = { ...data.settings, compare: { enabled: true, presets: [data.settings.activePreset], enabledAt: null } };
@@ -196,8 +235,8 @@ test("비서 줄: 값이 없으면 비어 있음으로 보이고 대체 후보�
   assert.equal(cells.commandTitle, "다시 열 때 동작 보기");
   const html = render(React.createElement(RunnerSummary, { data }));
   assert.equal([...html.matchAll(/<th>([^<]+)<\/th><td>/g)].map(m => m[1]).at(-1), "비서", "표의 맨 아래 줄");
-  assert.match(html, /<summary>다시 열 때 동작 보기<\/summary><code>비어 있음 — 저장된 명령 그대로 다시 연다<\/code>/);
-  assert.equal([...html.matchAll(/<summary>발령 명령 보기<\/summary>/g)].length, Object.keys(roles).length, "다른 줄의 접힌 칸 제목은 그대로");
+  assert.match(html, /<button type="button" class="row-command">다시 열 때 동작 보기<\/button><dialog class="command-dialog" aria-label="비서 다시 열 때 동작 보기"><h3>비서 · 다시 열 때 동작<\/h3><h4>지금 값<\/h4><code>비어 있음 — 저장된 명령 그대로 다시 연다<\/code>/);
+  assert.equal([...html.matchAll(/<button type="button" class="row-command">발령 명령 보기<\/button>/g)].length, Object.keys(roles).length, "다른 줄의 버튼 글은 그대로");
   assert.doesNotMatch(html, /undefined|NaN/);
 });
 

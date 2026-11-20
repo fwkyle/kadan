@@ -157,7 +157,11 @@ td small { display: block; margin-top: 2px; }
 .action-form label > input:not([type=checkbox]):not([type=radio]) { width: 100%; }
 .action-form fieldset > button { margin-top: 6px; }
 /* 실행 모델 설정 표: 줄에서 바로 고치기. 편집 칸은 줄 바로 아래 전체 폭, 좁은 화면에서도 보이는 폭 안에 둔다. */
-.runners-summary .row-edit { margin-top: 4px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+/* 역할 이름과 '바꾸기'는 같은 줄에 두고 버튼은 오른쪽 끝에 붙인다(버튼 글은 줄을 바꾸지 않는다). */
+.runners-summary .role-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.runners-summary .role-name { min-width: 0; }
+.runners-summary .row-edit { flex: none; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+.runners-summary td ol { margin: 0; padding-left: 20px; }
 .runners-summary tr.is-changed > th, .runners-summary tr.is-changed > td { background: #fff8e1; }
 .runners-summary .pending-mark { color: #8a5a00; font-size: 12px; white-space: nowrap; }
 .runners-summary .runner-edit-row > td { padding: 0; background: #f6f8f6; }
@@ -166,10 +170,29 @@ td small { display: block; margin-top: 2px; }
 .runner-edit legend { padding: 0; font-weight: 600; font-size: 13px; }
 .runner-edit .toolbar select { max-width: 100%; }
 .runner-edit .toolbar .effort-note { flex: 1 1 220px; min-width: 0; font-size: 12px; }
-/* 발령 때 채워질 명령은 길어서 표 칸 대신 줄마다 접는다. 좁은 화면에서도 칸 폭 안에서 줄을 바꾼다. */
-.runners-summary .row-command { margin-top: 4px; font-size: 12px; }
-.runners-summary .row-command summary { cursor: pointer; color: var(--ds-color-muted); }
-.runners-summary .row-command code { display: block; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; word-break: keep-all; }
+/* 발령 때 채워질 명령은 길어서 표 칸에 두지 않고, 줄마다 작은 버튼으로 기본 dialog 팝업을 연다. */
+.runners-summary .row-command { display: block; margin-top: 4px; padding: 1px 8px; font-size: 12px; white-space: nowrap; color: var(--ds-color-muted); }
+.command-dialog { box-sizing: border-box; width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 48px); padding: 16px 18px; border: 1px solid #b9c4bd; border-radius: 10px; word-break: keep-all; overflow-wrap: break-word; }
+.command-dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.command-dialog h3 { margin: 0 0 10px; font-size: 15px; text-wrap: balance; }
+.command-dialog h4 { margin: 12px 0 4px; font-size: 13px; }
+.command-dialog ol { margin: 0; padding-left: 22px; }
+.command-dialog li + li { margin-top: 6px; }
+.command-dialog code { display: block; white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
+.command-dialog form { margin-top: 14px; text-align: right; }
+/* 좁은 화면: 세 칸을 옆으로 두면 역할 이름과 '바꾸기'가 한 줄에 들어가지 않는다. 줄마다 세로 묶음으로 접고 칸 이름을 앞에 붙인다. */
+@media (max-width: 600px) {
+  .runners-summary table, .runners-summary tbody, .runners-summary tr, .runners-summary th, .runners-summary td { display: block; width: auto; }
+  .runners-summary thead { display: none; }
+  .runners-summary tbody tr + tr { border-top: 1px solid #dce2de; }
+  .runners-summary tbody th, .runners-summary tbody td { border: 0; padding: 4px 12px; }
+  .runners-summary tbody th { padding-top: 10px; }
+  .runners-summary tbody td:last-child { padding-bottom: 10px; }
+  .runners-summary tbody tr:not(.runner-edit-row) > td::before { display: block; font-size: 12px; font-weight: 600; color: var(--ds-color-muted); }
+  .runners-summary tbody tr:not(.runner-edit-row) > td:nth-child(2)::before { content: '지금 값'; }
+  .runners-summary tbody tr:not(.runner-edit-row) > td:nth-child(3)::before { content: '대체 후보 (순서대로)'; }
+  .runners-summary .runner-edit-row > td { padding: 0; }
+}
 .model-register { margin: 6px 0 4px; }
 .model-register > summary { cursor: pointer; font-weight: 600; font-size: 13px; text-wrap: balance; }
 .model-register .action-form { word-break: keep-all; overflow-wrap: break-word; }

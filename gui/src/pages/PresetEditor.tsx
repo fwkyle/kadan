@@ -8,7 +8,7 @@ import {
 import {changedRoles, effortProblems, emptyModelRoles} from '../runner-draft';
 import {EMPTY_EFFORT_NOTE} from '../effort-keep';
 import {RunnerForm} from './RunnerForm';
-import {CommandFold, summaryCells} from './RunnerSummary';
+import {CommandButton, NumberedList as List, ValueCell, summaryCells} from './RunnerSummary';
 import type {Choice, RunnersData, Settings} from './Runners';
 
 // 어려운 일 작업자 자리의 값이 정해져 있는가(모델까지 골랐는가). 대체 후보 칸은 이때만 연다.
@@ -46,10 +46,6 @@ export function SecretarySlot({draft, clear}: {draft: Settings; clear: () => voi
 }
 
 const sameList = (a: string[], b: string[]) => JSON.stringify(a) === JSON.stringify(b);
-
-function List({items, empty}: {items: string[]; empty: string}) {
-  return items.length ? <ol>{items.map((item, i) => <li key={i}>{item}</li>)}</ol> : <>{empty}</>;
-}
 
 // '다음 발령의 실행 모델' 표 = 편집기. 표와 편집 칸이 초안 하나를 같이 본다(저장 전 충돌 판정도 하나).
 // 고칠 곳은 표의 '지금 값'(= 활성 프리셋)이라 저장도 활성 프리셋에 한다. 새 저장소·서버 경로는 없다.
@@ -116,16 +112,21 @@ export function PresetEditor({data, settings, initialOpen = []}: {
             const listChanged = edited && !sameList(cells.fallbacks, next.fallbacks);
             return <Fragment key={role}>
               <tr className={edited ? 'is-changed' : undefined}>
-                <th>{label}<br />
+                <th><div className="role-head"><span className="role-name">{label}</span>
                   <button type="button" className="row-edit" aria-expanded={isOpen}
                     disabled={!isOpen && frozen} onClick={() => toggle(role)}>
                     {isOpen ? '닫기' : '바꾸기'}
                   </button>
-                </th>
+                </div></th>
                 <td>{edited && cells.value !== next.value
-                  ? <>{cells.value} → <strong>{next.value}</strong> <span className="pending-mark">(저장 전)</span></>
-                  : cells.value}
-                  <CommandFold command={cells.command} title={cells.commandTitle} /></td>
+                  ? (cells.seniors
+                    ? <>
+                      <div>지금: <List items={cells.seniors} empty="미설정" /></div>
+                      <div><strong>바꿀 값</strong> <span className="pending-mark">(저장 전)</span>: <List items={next.seniors ?? []} empty="미설정" /></div>
+                    </>
+                    : <>{cells.value} → <strong>{next.value}</strong> <span className="pending-mark">(저장 전)</span></>)
+                  : <ValueCell cells={cells} />}
+                  <CommandButton data={data} role={role} label={label} cells={cells} /></td>
                 <td>{listChanged
                   ? <>
                     <div>지금: <List items={cells.fallbacks} empty="없음" /></div>

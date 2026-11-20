@@ -43,6 +43,9 @@ export type RunnersData = Stamp & {
   settings: Settings | null;
   roles: Record<string, string>;
   commands: Record<string, string>;
+  // '발령 명령 보기' 팝업 재료: 역할별 대체 후보 명령(순서대로)과 시니어 한 명씩의 명령. 서버가 만든 글이다.
+  fallbackCommands?: Record<string, string[]>;
+  seniorCommands?: string[];
   catalog: Record<
     string,
     {
