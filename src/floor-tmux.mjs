@@ -5,6 +5,7 @@ import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
 import { splitGhostText } from "./ghost-text.mjs";
 import { inlineScreenEnv } from "./inline-screen.mjs";
+import { describeCommand, withoutCommands } from "./command-summary.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
@@ -454,18 +455,22 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd, home }) {
   ];
 }
 
+// 세션이 바로 죽었을 때의 오류 문구. 시작 명령 원문에는 토큰·프롬프트가 실릴 수 있어 싣지 않는다 —
+// restart·reopen·kadan up·kadan start가 이 문구를 그대로 사람 화면에 중계한다(2026-11-20 검수). 원문은 원장 start 기록에 있다.
+export function sessionDiedMessage(cmd) {
+  const shown = typeof cmd === "string" && cmd.trim() ? describeCommand(cmd) : "기본 셸";
+  return `세션이 만들어지자마자 죽었다 — 시작 명령이 실패한 것 같다(${shown}; 명령 원문은 표시하지 않는다)`;
+}
+
 function create({ session, role, cwd, cmd }) {
   ensureTmuxConf();
   const result = tmux(buildTmuxCreateArgv({ session, role, cwd, cmd, home: process.env.KADAN_HOME }));
   if (result.status !== 0) {
-    throw new Error(`세션 생성 실패: ${(result.stderr || "").trim()}`);
+    // tmux가 stderr에 명령을 되풀이하는 경우를 대비해 원문이 있으면 지운다.
+    throw new Error(`세션 생성 실패: ${withoutCommands((result.stderr || "").trim(), cmd)}`);
   }
   spawnSync("sleep", ["0.3"]);
-  if (!hasSession(session)) {
-    throw new Error(
-      `세션이 만들어지자마자 죽었다 — 명령이 실패한 것 같다: ${cmd ?? "(기본 셸)"}`
-    );
-  }
+  if (!hasSession(session)) throw new Error(sessionDiedMessage(cmd));
   const outputLog = attachOutputLog(session);
   return {
     panePid: panePid(session),

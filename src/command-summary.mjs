@@ -4,12 +4,14 @@
 // 가릴 것을 찾는 방식이 아니라 허용 목록이다. 보이는 것: 실행기·모델·강도, `-`로 시작하는 옵션의 이름(`=` 앞까지,
 // `-c`/`--config`는 키까지). 그 밖의 낱말(환경변수 대입, 옵션 값, `--` 뒤 프롬프트, 하위 명령)은 내용 없이 개수만 센다.
 // 반쯤 가린 줄을 명령처럼 복사해 칠 수 없도록, 결과는 한국어 라벨이 붙은 요약이며 명령 꼴이 아니다.
-import {commandWords, launchIdentityOf} from './ai-identity.mjs';
+import {commandWords, identityOfWords} from './ai-identity.mjs';
 import {INLINE_FLAG} from './inline-screen.mjs';
 import {wordsWithoutStopHook} from './stop-hook-settings.mjs';
 
 const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none']);
-const EFFORT_FLAGS = new Set(['--effort', '--reasoning-effort']);
+// 실행기 명령 표의 강도 자리: claude `--effort`, omo `--thinking`, codex `-c model_reasoning_effort=`(아래 EFFORT_KEY).
+const EFFORT_FLAGS = new Set(['--effort', '--reasoning-effort', '--thinking']);
+const ENV_VALUE_OPTIONS = new Set(['-u', '--unset', '-C', '--chdir']);
 const EFFORT_KEY = 'model_reasoning_effort';
 const MODEL_FLAGS = new Set(['--model', '-m']);
 const CONFIG_FLAGS = new Set(['-c', '--config']);
@@ -23,11 +25,23 @@ export function summarizeCommand(cmd) {
   // 카단이 스스로 붙이는 화면 고정·Stop 훅 설정 낱말은 요약에서 뺀다(옛 세션과 견줄 때 가짜 차이가 된다).
   const words = all ? wordsWithoutStopHook(all.filter(word => word !== INLINE_FLAG)) : null;
   if (!words) return {ok: false, reason: 'unsafe-command', harness: null, model: null, effort: null, names: [], others: []};
-  const identity = launchIdentityOf(cmd);
+  // `env [옵션] [KEY=값…] <실행기> …` 앞머리는 실행기 판독 전에 걷는다(복구 가능 판정 launchIdentityOf는 그대로 둔다).
+  // 걷어 낸 대입·옵션의 값은 내용 없이 개수로만 센다.
+  const others = [];
+  while (words.length && ENV_ASSIGNMENT.test(words[0])) others.push(words.shift());
+  if (words[0]?.split('/').pop() === 'env') {
+    words.shift();
+    while (words.length) {
+      if (ENV_ASSIGNMENT.test(words[0])) others.push(words.shift());
+      else if (ENV_VALUE_OPTIONS.has(words[0])) { words.shift(); if (words.length) others.push(words.shift()); }
+      else if (words[0].startsWith('-') && words[0] !== '--') others.push(words.shift());
+      else break;
+    }
+  }
+  const identity = identityOfWords(words);
   const summary = {ok: identity.ok, harness: identity.harness ?? null, model: identity.model ?? null,
-    effort: null, names: [], others: []};
+    effort: null, names: [], others};
   if (!identity.ok) summary.reason = identity.reason;
-  while (words.length && ENV_ASSIGNMENT.test(words[0])) summary.others.push(words.shift());
   words.shift(); // 실행 파일 — 실행기 이름은 위 identity가 등록 이름으로만 보여 준다
   const setEffort = value => {
     // `-c 'model_reasoning_effort="high"'`처럼 셸 인용이 TOML 따옴표를 그대로 남기는 꼴도 있다

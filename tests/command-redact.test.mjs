@@ -8,6 +8,9 @@ import {inspectDispatchRunnerGuard} from '../src/dispatch-runner-guard.mjs';
 import {summarizeCommand, describeCommand, describeCommandDiff, withoutCommands} from '../src/command-summary.mjs';
 import {restartRole} from '../src/restart.mjs';
 import {reopenRole} from '../src/reopen.mjs';
+import {resumeSecretary} from '../src/secretary-resume.mjs';
+import {tmuxFloor, tmux, sessionDiedMessage} from '../src/floor-tmux.mjs';
+import {spawnSync} from 'node:child_process';
 import {settingsWith} from './helpers/runner-table.mjs';
 
 // Why: 발령 경고·재시작 실패 안내가 역할의 시작 명령 원문을 싣던 길을 막는다(#435 후속).
@@ -110,7 +113,7 @@ function failingFloor() {
     create: options => {
       log.push(options);
       if (log.length === 1) { // 첫 호출(restart의 다시 열기)만 실패한다
-        throw new Error(`세션이 만들어지자마자 죽었다 — 명령이 실패한 것 같다: ${options.cmd}`);
+        throw new Error(sessionDiedMessage(options.cmd));
       }
       alive = true; return {panePid: '200'};
     }};
@@ -156,12 +159,12 @@ test('비서 restart 실패(끈 뒤 새 세션 실패): 바닥 문구의 명령 
     roleProfile: 'secretary', cmd, by: '사람'}];
   let pane = {pid: '20'};
   const floor = {name: 'tmux', alive: () => Boolean(pane), pid: () => pane?.pid, stop: () => { pane = null; },
-    create: options => { throw new Error(`세션이 만들어지자마자 죽었다 — 명령이 실패한 것 같다: ${options.cmd}`); }};
+    create: options => { throw new Error(sessionDiedMessage(options.cmd)); }};
   const deps = {read: () => entries, record: e => entries.push(e), findTranscript: () => transcript, pendingCards: () => [],
     closeWindow: () => ({}), openWindow: () => ({method: 'manual'}), beforeStop: () => {}};
   assert.throws(() => restartRole({home, role: '비서', session: 'kadan-비서', flags: {}, floor, settings: null, deps}), error => {
     noSecrets(error.message, '비서 restart 실패 문구');
-    assert.match(error.message, /명령이 실패한 것 같다: .*시작 명령 생략/);
+    assert.match(error.message, /시작 명령이 실패한 것 같다\(실행기 codex · 모델 test-model · 강도 high/);
     assert.match(error.message, /kadan up으로 복원한다/);
     return true;
   });
@@ -170,4 +173,120 @@ test('비서 restart 실패(끈 뒤 새 세션 실패): 바닥 문구의 명령 
 test('withoutCommands: -- 뒤 프롬프트도 지운다', () => {
   const cleaned = withoutCommands(`실패 ${PROMPT} 끝`, `codex --model x -- ${PROMPT}`);
   noSecrets(cleaned, '프롬프트');
+});
+
+// ---- 2라운드(검수 exec-77879902): 원천(바닥 오류 문구)에서 명령 원문을 뺀다 ----
+// 검수 독립 시험(evidence/output-contract.test.mjs)이 겨눈 상황을 옮겼다. 가짜 값은 공백·인라인·분리 꼴을 모두 포함한다.
+const S2 = {env: 'fixture-env-21A', cfg: 'fixture setting with spaces 21B', prompt: 'fixture prompt with spaces 21C',
+  inline: 'fixture-inline-21D', split: 'fixture-split-21E', remote: 'fixture remote endpoint 21F'};
+const gone = (text, label) => {
+  const present = Object.entries(S2).filter(([, value]) => String(text).includes(value)).map(([key]) => key);
+  assert.deepEqual(present, [], `${label}: 출력에 남은 가짜 값 종류\n${text}`);
+};
+const WID = '00000000-0000-4000-8000-000000000021';
+const WMODEL = 'codex-fixture';
+// 같은 대화 resume 꼬리를 붙일 수 있는 꼴(옵션 값 낱말이 위치 인자처럼 보이지 않게 `--remote`는 따옴표 값 하나)
+const CODEX2 = `codex --model ${WMODEL} -c model_reasoning_effort='"high"' -c "api_key=${S2.cfg}" --remote "${S2.remote}"`;
+
+function workerFixture() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact2-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact2-cwd-'));
+  const role = 'fixture-worker', session = 'kadan-fixture-worker';
+  const entries = [{kind: 'start', floor: 'tmux', role, session, cwd, cmd: `TOKEN=${S2.env} ${CODEX2}`, panePid: '110', roleProfile: 'worker'}];
+  const created = [];
+  let alive = true;
+  const floor = {name: 'tmux', alive: () => alive, pid: () => '110', stop: () => { alive = false; },
+    create: ({cmd: command, cwd: directory}) => { created.push({command, directory}); throw new Error(sessionDiedMessage(command)); }};
+  const deps = {read: () => entries, record: entry => entries.push({...entry, t: '2026-11-20T00:00:10Z'}),
+    beforeStop: () => {}, pendingCards: () => [], closeWindow: () => ({}),
+    paneInfo: () => ({panePid: '110', location: 'fixture:@1.%1'}),
+    processTree: () => [{pid: '110', ppid: '1', args: '-zsh'}, {pid: '120', ppid: '110', args: `codex --model ${WMODEL}`}],
+    openFiles: pids => pids.includes('120') ? [`/fixture/.codex/sessions/2026/11/20/rollout-2026-11-20T00-00-00-${WID}.jsonl`,
+      `/fixture/.codex/thread-writer-locks/${WID}.lock`] : [],
+    processStartedAt: () => 1000, modelChoices: () => new Map([[WMODEL, ['high']]]), windowPolicy: () => ({}),
+    openWindow: () => ({method: 'hidden'}), register: () => ({}), exists: () => true, homeDir: home};
+  return {home, role, session, floor, settings: settingsWith(), deps, cwd, created, entries};
+}
+const capture = fn => { try { fn(); } catch (error) { return error.message; } return assert.fail('실패를 주입했는데 성공했다'); };
+
+test('2라운드: restart 실패 뒤 안내한 kadan reopen이 다시 실패해도 가짜 값 0건, 같은 대화·실행기·모델 표시', () => {
+  const f = workerFixture();
+  const restartError = capture(() => restartRole(f));
+  gone(restartError, 'restart');
+  assert.equal(f.created.length, 1, restartError);
+  assert.equal(f.entries.at(-1).conversation, WID);
+  const reopenError = capture(() => reopenRole(f));
+  assert.equal(f.created.length, 2);
+  assert.equal(f.created[0].command, f.created[1].command); // 같은 명령으로 다시 열려 한다
+  gone(reopenError, 'reopen');
+  assert.match(reopenError, /실행기 codex · 모델 codex-fixture · 강도 high/);
+  assert.match(restartError, /다시 열기: kadan reopen fixture-worker$/);
+});
+
+test('2라운드: 새 설정을 적용한 비서 restart가 실패해도 가짜 값 0건, kadan up 안내 유지', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact2-secretary-'));
+  const transcript = path.join(home, 'rollout-fixture.jsonl');
+  fs.writeFileSync(transcript, JSON.stringify({type: 'session_meta', payload: {id: WID, cwd: home}}) + '\n');
+  const entries = [{kind: 'start', floor: 'tmux', role: '비서', session: 'kadan-비서', panePid: '10', cwd: home,
+    roleProfile: 'secretary', cmd: CODEX2}];
+  const settings = {version: 1, revision: 19, activePreset: 'A', blocked: [],
+    runners: {codex: {spawn: 'codex --model {model} -c model_reasoning_effort="{effort}"',
+      models: [WMODEL, 'codex-fixture-new'].map(value => ({model: value, efforts: ['high', 'medium']}))}},
+    presets: {A: {label: 'fixture', roles: {secretary: {runner: 'codex', model: 'codex-fixture-new', effort: 'medium'}}}}};
+  fs.writeFileSync(path.join(home, 'runner-settings.json'), JSON.stringify(settings));
+  let alive = true, command;
+  const floor = {name: 'tmux', alive: () => alive, pid: () => (alive ? '10' : null), stop: () => { alive = false; },
+    create: options => { command = options.cmd; throw new Error(sessionDiedMessage(options.cmd)); }};
+  const deps = {read: () => entries, record: entry => entries.push(entry), findTranscript: () => transcript,
+    pendingCards: () => [], closeWindow: () => ({}), openWindow: () => ({}), beforeStop: () => {}};
+  const error = capture(() => restartRole({home, role: '비서', session: 'kadan-비서', floor, settings: null, deps}));
+  assert.match(command, /codex-fixture-new/, '새 설정이 입혀진 명령이어야 한다');
+  assert.ok(command.includes(S2.remote), '명령에는 가짜 값이 실제로 들어 있다');
+  gone(error, '비서 restart');
+  assert.match(error, /kadan up으로 복원한다/);
+  assert.match(error, /실행기 codex · 모델 codex-fixture-new · 강도 medium/);
+  // kadan up(quickstart.mjs)은 같은 resumeSecretary를 부르고 오류 문구를 그대로 로그·결과에 싣는다.
+  const upError = capture(() => resumeSecretary({home, floor, read: deps.read, record: deps.record,
+    startNew: () => assert.fail('같은 대화만')}));
+  gone(upError, 'kadan up 복원');
+});
+
+test('2라운드: 바닥(tmux) 단위 — 세션이 바로 죽는 실제 상황의 오류에 가짜 값 0건', t => {
+  const sockDir = fs.mkdtempSync('/tmp/kr-');
+  const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR};
+  process.env.KADAN_SOCKET = `r${process.pid}died`;
+  process.env.TMUX_TMPDIR = sockDir;
+  t.after(() => {
+    tmux(['kill-server']); fs.rmSync(sockDir, {recursive: true, force: true});
+    for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact2-tmux-'));
+  // `false`는 인자를 무시하고 바로 끝난다 — 세션이 만들어지자마자 죽는 상황이다.
+  const cmd = `TOKEN=${S2.env} false --token=${S2.inline} --api-key ${S2.split} -c "api_key=${S2.cfg}" -- "${S2.prompt}"`;
+  const error = capture(() => tmuxFloor.create({session: 'kadan-fixture-died', role: 'fixture-died', cwd, cmd}));
+  gone(error, 'tmux 바닥');
+  assert.match(error, /세션이 만들어지자마자 죽었다 — 시작 명령이 실패한 것 같다/);
+  assert.equal(error, sessionDiedMessage(cmd));
+});
+
+test('2라운드: sessionDiedMessage — 기본 셸·읽을 수 없는 명령도 원문 없이', () => {
+  assert.match(sessionDiedMessage(undefined), /기본 셸/);
+  gone(sessionDiedMessage(`false; echo ${S2.env}`), '셸 결합');
+});
+
+test('2라운드: env 앞머리 요약은 실행기·모델·강도를 보이고 값은 숨긴다', () => {
+  const text = describeCommand(`env TOKEN=${S2.env} -u FIXTURE_UNSET claude --model claude-fixture --effort high ` +
+    `-c api_key="${S2.cfg}" --token=${S2.inline} --api-key ${S2.split} -- "${S2.prompt}"`);
+  gone(text, 'env 요약');
+  assert.match(text, /실행기 claude · 모델 claude-fixture · 강도 high/);
+  assert.match(text, /옵션 이름 .*--token, --api-key/);
+  assert.match(describeCommand('/usr/bin/env FOO=bar codex --model m -c model_reasoning_effort="low"'), /실행기 codex · 모델 m · 강도 low/);
+  // 복구 가능 판정(launchIdentityOf)의 범위는 그대로: env 앞머리 명령은 여전히 등록 실행기가 아니다.
+  assert.equal(summarizeCommand(`env TOKEN=x claude --model m`).harness, 'claude');
+});
+
+test('2라운드: OMO의 --thinking이 강도로 보인다', () => {
+  assert.match(describeCommand('omo --model omo-fixture --thinking high --no-recommended-models'), /실행기 omo · 모델 omo-fixture · 강도 high/);
 });

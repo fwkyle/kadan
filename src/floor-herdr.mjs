@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { commandWords, matchesAiProcess } from "./ai-identity.mjs";
+import { withoutCommands } from "./command-summary.mjs";
 import { readLedger } from "./ledger.mjs";
 import { herdrNotificationGuard } from "./herdr-notification.mjs";
 import { forcedIdleMsFor } from "./notification-guard.mjs";
@@ -205,6 +206,8 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
         warnIfTrustPrompt(pane);
         return evidence;
       } catch (error) {
+        // 서버가 돌려준 거절 문구에 시작 명령이 되풀이될 수 있다 — 호출자가 사람 화면에 중계하므로 원문은 지운다.
+        error.message = withoutCommands(error.message, cmd);
         try { call("workspace.close", { workspace_id: workspaceId, close_group: false }); }
         catch { error.message += " — 방금 만든 작업공간 종료 미확인"; }
         throw error;
