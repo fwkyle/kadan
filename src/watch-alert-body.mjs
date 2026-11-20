@@ -21,6 +21,7 @@ const ALERT_LABELS = {
   "멈춤": "일하는 표시 없이 입력을 기다리며 멈춤",
   "일시정지중작업": "일시정지했는데 계속 일하는 중",
   "대기중정지": "대기 표시 중 오류 화면으로 멈춤",
+  "대기중장기정지": "대기 표시 중 화면이 오래 그대로",
   "완료후보": "끝난 것 같음",
   "응답장애": "대답을 못 함",
   "감시제외": "감시 대상에서 빠짐",
@@ -80,6 +81,16 @@ function waitingStopBasis(alert) {
   const note = alert.waitingNote ? ` "${alert.waitingNote}"` : "";
   const screen = alert.line ? `; 화면: ${alert.line}` : "";
   return `대기 표시${when}${note}${screen}; 대기 표시 때문에 정체 감시 밖이었음`;
+}
+
+// 대기 시간 상한 경보(watch-waiting-stop.mjs assessWaitingCap) 근거: 대기 표시 시각·사유, 화면이 그대로인 시간.
+// 재시작 뒤 원장에서 복원한 경보에는 시각·시간이 없다. 없는 값은 지어내지 않고 뺀다.
+function waitingCapBasis(alert) {
+  const at = new Date(alert.waitingAt);
+  const when = Number.isFinite(at.getTime()) ? ` ${at.getMonth() + 1}/${at.getDate()} ${clockTime(at)}` : "";
+  const note = alert.waitingNote ? ` "${alert.waitingNote}"` : "";
+  const still = Number.isFinite(alert.stillMs) ? ` ${Math.floor(alert.stillMs / 60_000)}분째` : "";
+  return `대기 표시${when}${note}; 일하는 표시 없이 같은 화면${still}; 대기 표시 때문에 정체 감시 밖이었음`;
 }
 
 // 멈춤 경보에 붙는 백그라운드 셸 표시 시간. 표시가 상한을 넘겨 이어진 경우에만 값이 있다(끝나지 않는 서버를 띄워 둔 것일 수 있다).
@@ -167,6 +178,11 @@ export function formatAlertBody(alert) {
     const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";
     return `대기 표시 중 오류 화면으로 멈춤 ${alert.session} / ${alert.executionKey ?? alert.taskId}`
       + ` (${waitingStopBasis(alert)}${dispatcher} — 감독 확인 필요)`;
+  }
+  if (alert.kind === "대기중장기정지") {
+    const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";
+    return `대기 표시 중 화면이 오래 그대로 ${alert.session} / ${alert.executionKey ?? alert.taskId}`
+      + ` (${waitingCapBasis(alert)}${dispatcher} — 정당한 대기인지 감독 확인 필요)`;
   }
   if (alert.kind === "멈춤") {
     const minutes = Math.floor((alert.idleMs ?? 0) / 60_000);
@@ -298,6 +314,7 @@ export function itemizedAlert(alert, clock, ctx = null) {
   else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째${backgroundNote(alert)}, 미완료 실행 있음·답 기다리는 질문 없음`;
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
   else if (alert.kind === "대기중정지") basis = waitingStopBasis(alert);
+  else if (alert.kind === "대기중장기정지") basis = waitingCapBasis(alert);
   const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
   return [`[감시sh ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,
     ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), ...turnHint, ...proceedHints, `할 일: ${todo}`].join("\n");

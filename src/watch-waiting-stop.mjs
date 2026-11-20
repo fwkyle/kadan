@@ -7,7 +7,13 @@
 // 기존 경보 중복 막기가 한 번만 알린다). 정체 시간·자동 재개·큐 재개는 대기 세션에 붙지 않는다.
 // 세션이 사라진 것은 알리지 않는다(대기 세션의 죽음은 이 검사의 범위 밖이다).
 import { WORKER_PHRASES, phraseOfLine, currentStopPhrases } from "./watch-stop-phrases.mjs";
-import { shortDigest } from "./watch-roles.mjs";
+import { shortDigest, changeDigest } from "./watch-roles.mjs";
+import { workingClockText } from "./watch-status-line.mjs";
+
+// 대기 표시 실행의 화면이 일하는 표시 없이 이 시간 동안 그대로면 한 번 알린다(아래 assessWaitingCap). 설정이 아닌 상수다.
+// 감독 정기 점검(SUPERVISOR_CHECK_MS, 1시간)과 같은 값: 감독이 "하위 결과 대기"로 한 번 정상 판정을 받는 동안에는 조용하고,
+// 그보다 오래 멈춘 대기만 알린다. 백그라운드 셸을 기다리는 빈 입력창의 유예(30분)보다 길어 그 대기에도 먼저 울리지 않는다.
+export const WAITING_CAP_MS = 60 * 60_000;
 
 const rank = (line) => WORKER_PHRASES.indexOf(phraseOfLine(line));
 
@@ -48,4 +54,58 @@ export function assessWaitingStops(waitingSessions, observations) {
     });
   }
   return alerts;
+}
+
+// 대기 시간 상한(마지막 그물, 2026-11-20): 대기 표시 실행의 화면이 일하는 표시 없이 capMs 동안 그대로면 `대기중장기정지` 1회.
+// Why: 위 정지 화면 검사는 이미 아는 문구만 본다. 모르는 오류 화면이나 문구 검사가 놓치는 모양에 멈춘 대기는 여전히 조용했다.
+// 화면 문구를 읽지 않고 두 가지만 본다: (1) 턴이 도는 중인가 — 화면 아래에 일하는 줄이 있고 그 줄의 시계 글자가 직전 순회와 다르다.
+// (2) 변화 지문(changeDigest: 숫자·회전 표시를 지운 화면)이 그대로인가. 턴이 돌거나 화면이 바뀌면 처음부터 다시 잰다.
+// (1)은 시계 글자만 견준다. 분만 보이는 시계(`2h 06m`)도 글자가 바뀌면 도는 중이다. 공용 statusProgress의 넓은 정지 낱말
+// 검사(화면 아래에 `429` 같은 낱말이 보이면 진행 중이 아님)는 쓰지 않는다: 지난 도구 출력에 인용된 낱말 하나로 일하는 턴에
+// 경보가 났다(2026-11-20 검수). 지금의 오류 화면은 위 정지 화면 검사(`대기중정지`)가 맡는다.
+// 이미 읽은 화면만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
+//
+// previous: 지난 순회의 states(경보 id → {digest, stillMs, clockText, alert}). 감시기 메모리에만 둔다. 재시작하면 0부터 다시 잰다.
+//   재시작 때 원장에서 복원한 열린 경보는 {digest:null, alert}로 심는다: 처음 본 화면을 기준으로 삼아 그 화면이 그대로인 동안
+//   경보를 그대로 내보낸다(같은 id라 다시 알리지 않는다). 심지 않으면 첫 순회에 해소로 닫히고 capMs 뒤 같은 경보가 또 울린다.
+// excluded(entry): 다른 경로가 맡는 대기(등록된 답 대기·업무 대기 시각·이번 순회 `대기중정지` 세션)면 true. 상태를 버린다.
+// canOpen: 답 대기 목록을 읽지 못한 순회에는 false. 시간은 세되 새 경보는 열지 않는다(정당한 대기를 모르고 알리지 않는다).
+// 경보 id에는 화면 지문이 없다(세션 + 실행). 화면이 바뀌어 닫힌 뒤 다시 capMs 동안 그대로면 같은 id로 다시 열려 한 번 알린다.
+const capId = (entry) => `waiting-cap:${entry.session}:${entry.executionKey ?? entry.taskId}`;
+
+export function assessWaitingCap(previous, waitingSessions, observations, {
+  elapsedMs, intervalMs, capMs = WAITING_CAP_MS, excluded = () => false, canOpen = true,
+} = {}) {
+  const states = new Map();
+  const alerts = [];
+  // 맥북이 잠든 공백은 세지 않는다(assessIdleStop과 같은 기준). 세면 깨어난 순간 모든 대기 세션이 한꺼번에 울린다.
+  const slept = elapsedMs > intervalMs * 3;
+  for (const entry of waitingSessions ?? []) {
+    const id = capId(entry);
+    const before = previous.get(id);
+    const seen = observations.get(entry.session);
+    // 세션이 사라졌으면 상태를 버린다(대기 세션의 죽음은 이 검사의 범위 밖이다. 열린 경보는 해소로 닫힌다).
+    if (!seen || seen.alive === false) continue;
+    // 화면만 못 읽은 순회(읽기 실패·PID 불일치)는 판단하지 않는다. 상태와 이미 연 경보를 그대로 둔다.
+    if (seen.alive !== true || seen.screen == null
+      || !(seen.expectedPid == null || String(seen.pid) === String(seen.expectedPid))) {
+      if (before) { states.set(id, before); if (before.alert) alerts.push(before.alert); }
+      continue;
+    }
+    if (excluded(entry)) continue;
+    const clockText = workingClockText(seen.screen);
+    const moving = clockText != null && before?.clockText != null && clockText !== before.clockText;
+    const digest = seen.digest ?? changeDigest(seen.screen);
+    const still = before != null && !moving && (before.digest == null || before.digest === digest);
+    const stillMs = still ? (before.stillMs ?? 0) + (slept ? 0 : elapsedMs) : 0;
+    const open = still && (before.alert != null || (canOpen && stillMs >= capMs));
+    const alert = !open ? null : {
+      id, kind: "대기중장기정지", level: "AMBER", role: entry.role, session: entry.session, taskId: entry.taskId,
+      executionKey: entry.executionKey ?? null, dispatcher: entry.by, waitingAt: entry.card.activityAt,
+      waitingNote: waitingNote(entry.card), stillMs,
+    };
+    states.set(id, { digest, stillMs, clockText, alert });
+    if (alert) alerts.push(alert);
+  }
+  return { states, alerts };
 }

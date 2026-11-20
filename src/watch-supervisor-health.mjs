@@ -16,8 +16,19 @@ const REUSABLE_VERDICTS = new Set(['입력대기', '실행완료']);
 const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
 
 // decisions: 이번 순회에 한 번 읽은 결정 목록(못 읽었으면 null, 안 넘기면 결정 필드를 싣지 않는다).
-export function observationContext(role, observation, entries, cards, tasks, decisions) {
+// outside: 감독 점검의 AI 호출 직전(watch-runner.mjs)에만 넘긴다. {keys, now} — 대기 표시로 작업자 화면 감시에서 빠진
+//   실행의 키(감시 범위의 waitingSessions)와 지금 시각.
+//   그 실행의 항목에만 outsideScreenWatch·activityAt·waitingMinutes를 싣는다. 안 넘기면(작업자 감시) 항목은 예전 그대로다.
+//   Why: 2026-11-18 감독 점검은 activity:"waiting"만 보고 "하위 결과 대기 = 정상"으로 판정했다. 그 하위가 22시간 동안
+//   화면 감시 밖에서 멈춰 있었다는 것은 관찰 자료에 없었다.
+export function observationContext(role, observation, entries, cards, tasks, decisions, outside = null) {
   const identity=taskIdentity(cards);
+  const outsideFields = c => {
+    if (!outside?.keys?.has(c.key ?? identity.taskIdFor(c))) return {};
+    const minutes = Math.floor((outside.now - Date.parse(c.activityAt)) / 60_000);
+    return {outsideScreenWatch:true, activityAt:c.activityAt ?? null,
+      ...(Number.isFinite(minutes) ? {waitingMinutes:Math.max(0, minutes)} : {})};
+  };
   const own = tasks.filter(e => e.role === role);
   const ids = new Set(own.map(e => e.taskId));
   // 지금 담당(감독의 항목이면 subject)이 이번 발령 뒤에 등록한 결과만 지금 결과다. 재발령 전 담당이 남긴 결과는 싣지 않는다.
@@ -26,7 +37,7 @@ export function observationContext(role, observation, entries, cards, tasks, dec
     ...(decisions===undefined?{}:decisionFields(decisions,role)),
     process:{alive:observation.alive,pid:observation.pid,expectedPid:observation.expectedPid},
     // 담당이 결과를 등록했는지도 싣는다. activity만 보면 결과를 등록하고 확정을 기다리는 실행이 '아직 일하는 중'으로 읽힌다.
-    tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,
+    tasks:cards.filter(c => ids.has(identity.taskIdFor(c))).map(c => ({id:c.id,title:c.title,status:c.status,activity:c.activity,...outsideFields(c),
       ...(currentResult(c)?{resultReportedAt:c.result.at,resultOutcome:c.result.outcome}:{}),scope:c.scope?.slice(0,1000)})),
     responsibilities:tasks.filter(e => e.role === role),
     recentTaskEvents:workEntries(entries,identity).filter(e => e.kind === 'done' && (e.role === role || e.by === role))
