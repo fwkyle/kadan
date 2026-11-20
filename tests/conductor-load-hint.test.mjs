@@ -36,7 +36,7 @@ test('슈퍼 → 일반감독 새 우편: 영수증 뒤 stderr 마지막 줄에 
   assert.match(r.stdout[0], /^키 전송됨|^전달됨/);
   assert.equal(r.stdout.length, 1);
   const hint = r.stderr.at(-1);
-  assert.match(hint, /받는 감독 lh-감독: 진행 중 업무 2건\(r\/w1, r\/w2\) · 보류 1건 · 최근 24시간 슈퍼감독이 맡긴 새 우편 1통\(이번 포함\)$/);
+  assert.match(hint, /받는 감독 lh-감독: 진행 중 업무 2건\(r\/w1, r\/w2\) · 보류 1건 · 최근 12시간 슈퍼감독이 맡긴 새 우편 1통\(이번 포함\)$/);
   assert.doesNotMatch(hint, RULE);
 });
 
@@ -123,12 +123,12 @@ test('인계된 업무는 이어받은 감독으로 센다', () => {
   assert.match(old.stderr.at(-1), /받는 감독 lh-감독: 진행 중 업무 0건 · 보류 0건/);
 });
 
-test('최근 24시간 새 우편 수: 슈퍼가 맡긴 새 우편만 세고 답장·발령·알림·작업자 통지·하루 지난 것은 뺀다', () => {
+test('최근 12시간 새 우편 수: 슈퍼가 맡긴 새 우편만 세고 답장·발령·알림·작업자 통지·12시간 넘은 것은 뺀다', () => {
   const r = mail(base(['open'], {
     roles: [['lh-슈퍼', 'super'], ['lh-감독', 'conductor'], ['lh-작업자', 'worker']],
     mails: [
-      ['lh-감독', 'lh-슈퍼', 1], ['lh-감독', 'lh-슈퍼', 5], ['lh-감독', 'lh-슈퍼', 23],
-      ['lh-감독', 'lh-슈퍼', 30],
+      ['lh-감독', 'lh-슈퍼', 1], ['lh-감독', 'lh-슈퍼', 5], ['lh-감독', 'lh-슈퍼', 11],
+      ['lh-감독', 'lh-슈퍼', 13], ['lh-감독', 'lh-슈퍼', 23], ['lh-감독', 'lh-슈퍼', 30],
       ['lh-감독', 'lh-슈퍼', 2, {replyTo: 'x'}],
       ['lh-감독', 'lh-슈퍼', 2, {taskId: 'card-y'}],
       ['lh-감독', 'lh-슈퍼', 2, {notificationOnly: true}],
@@ -137,6 +137,19 @@ test('최근 24시간 새 우편 수: 슈퍼가 맡긴 새 우편만 세고 답�
     ],
   }));
   assert.match(r.stderr.at(-1), /새 우편 4통\(이번 포함\)/);
+});
+
+test('시간 창 12시간 경계: 정확히 12시간 전 우편은 세고(>=), 1ms 넘으면 세지 않는다', () => {
+  const now = Date.parse('2026-11-20T12:00:00.000Z');
+  const HOUR = 3600_000;
+  const mailAt = ms => ({kind: 'send', role: 'lh-감독', by: 'lh-슈퍼', mailId: `m-${ms}`, t: new Date(now - ms).toISOString()});
+  const entries = [{kind: 'start', role: 'lh-슈퍼', roleProfile: 'super'}, {kind: 'start', role: 'lh-감독', roleProfile: 'conductor'}];
+  const call = ages => conductorLoadHint({home: '/nonexistent', entries: [...entries, ...ages.map(mailAt)], newContext: true,
+    readWorks: () => [], by: 'lh-슈퍼', recipient: 'lh-감독', now});
+  assert.match(call([12 * HOUR]), /새 우편 2통\(이번 포함\)/);
+  assert.match(call([12 * HOUR + 1]), /새 우편 1통\(이번 포함\)/);
+  assert.match(call([13 * HOUR, 24 * HOUR]), /새 우편 1통\(이번 포함\)/);
+  assert.match(call([11 * HOUR]), /최근 12시간 슈퍼감독이 맡긴 새 우편 2통/);
 });
 
 test('과거 --raw 전송은 새 우편 수에 세지 않는다: raw 5통 뒤 일반 우편 1통이면 1통이고 기준 문장이 없다', () => {
@@ -231,7 +244,7 @@ test('기준 문장의 두 조건: 진행 중 업무 수 ≥ 기준 또는 최�
   assert.equal(RECENT_MAIL_FACTOR, 2);
 });
 
-test('실제 전송: 진행 중 업무가 기준 미만이어도 최근 24시간에 맡긴 새 우편이 기준의 2배면 문장이 붙는다', () => {
+test('실제 전송: 진행 중 업무가 기준 미만이어도 최근 12시간에 맡긴 새 우편이 기준의 2배면 문장이 붙는다', () => {
   const mails = n => Array.from({length: n}, (_, i) => ['lh-감독', 'lh-슈퍼', i + 1]);
   const piled = mail(base(['open', 'open', 'hold'], {mails: mails(5)}));
   assert.match(piled.stderr.at(-1), /진행 중 업무 2건.*새 우편 6통\(이번 포함\) — 기준 도달\(최근 새 우편 6통 ≥ 기준의 2배 6통\)/);
@@ -250,7 +263,7 @@ test('슈퍼감독이 일반감독에게 보내는 질문(--expect-reply)에도 
 
 test('한 줄 문장: 줄바꿈이 없고 0건이면 이름 괄호를 붙이지 않는다', () => {
   const line = formatLoadHint({recipient: 'x-감독', open: [], hold: 2, recentMails: 1, threshold: 3});
-  assert.equal(line, '받는 감독 x-감독: 진행 중 업무 0건 · 보류 2건 · 최근 24시간 슈퍼감독이 맡긴 새 우편 1통(이번 포함)');
+  assert.equal(line, '받는 감독 x-감독: 진행 중 업무 0건 · 보류 2건 · 최근 12시간 슈퍼감독이 맡긴 새 우편 1통(이번 포함)');
   assert.doesNotMatch(formatLoadHint({recipient: 'x', open: ['a', 'b', 'c', 'd'], hold: 0, recentMails: 9, threshold: 3}), /\n/);
 });
 
