@@ -220,12 +220,15 @@ export function describeStartCmd(cmd) {
   const tokens = text.split(/\s+/);
   let index = 0;
   while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
-  // 따옴표 친 명령(체크포인트·복원이 쓰는 `'codex' '--model' 'x'` 꼴)에서도 실행기 이름에 따옴표가 남지 않게 벗긴다.
-  const harness = tokens[index]?.replace(/^["']+|["']+$/g, "").split("/").pop();
-  // 따옴표를 벗겨서 남긴다. 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 따옴표째 박힌다(2026-09-12 실측).
-  // 따옴표가 `--model` 바로 앞에 붙은 낱말(`'--model' 'x'`)일 때만 뒤 따옴표를 허용한다. 프롬프트 끝의 `--model"`을 옵션으로
-  // 읽지 않고(`codex "describe --model" --model x` → x), 따옴표 친 옵션 뒤의 값이 다시 옵션(`-…`)이면 값으로 보지 않는다.
-  const model = text.match(/(?:(?<=["'])--model["']\s+["']*(?!-)|--model(?:=|\s+)["']*)([^\s"']+)/)?.[1];
+  // 기준은 원래 코드(main 4176552)의 결과다. 아래 두 곳 모두 "원래 읽던 것은 그대로, 원래 못 읽던 따옴표 친 낱말만 새로 읽는다".
+  // 실행기: 낱말 전체가 따옴표로 감싸인 경우(체크포인트·복원이 쓰는 `'codex' '--model' 'x'` 꼴)에만 따옴표를 벗긴다.
+  const word = tokens[index];
+  const wrapped = word?.match(/^(["'])(.*)\1$/);
+  const harness = (wrapped ? wrapped[2] : word)?.split("/").pop();
+  // 모델: 먼저 원래 코드의 읽기를 그대로 돌리고(따옴표를 벗겨서 남긴다 — 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 박힌다,
+  // 2026-09-12 실측), 값이 나오면 그것을 쓴다. 못 읽었을 때만 낱말 전체가 따옴표로 감싸인 `'--model' 'x'` 꼴을 읽는다.
+  const model = text.match(/--model[=\s]+["']*([^\s"']+)["']*/)?.[1]
+    ?? text.match(/(?:^|\s)(["'])--model\1\s+["']?([^\s"']+)/)?.[2];
   return {
     ...(harness ? { harness } : {}),
     ...(model ? { model } : {}),

@@ -154,3 +154,48 @@ test("프롬프트·옵션·복원 명령 꼴별 모델 칸: 따옴표 없는 �
     assert.equal(described.harness, "codex", cmd);
   }
 });
+
+// 수정 2(재검수 exec-bc4f1434): 정규식을 반례마다 고치면 다음 반례가 나온다. 그래서 기준을 "원래 코드(main 4176552)의 결과"로
+// 고정한다 — 원래 읽던 값은 그대로 쓰고, 원래 못 읽던 따옴표 친 낱말(`'--model' 'x'`)만 새로 읽는다.
+test("기대 결과 표: 모델·실행기 칸 — 재검수 반례 포함", () => {
+  const table = [
+    [`codex --cd="--model" "inspect project" --model fixture-old`, "fixture-old", "codex"],
+    [`codex "please describe --model" --model fixture-old`, "fixture-old", "codex"],
+    [`codex "--model" --model y`, "y", "codex"],
+    [`'codex' 'resume' 'conv-1' '--model' 'gpt-x'`, "gpt-x", "codex"],
+    [`"codex" "--model" "gpt-x"`, "gpt-x", "codex"],
+    [`codex "describe --model x"`, "x", "codex"], // 알려진 한계: 원래 코드와 같다
+  ];
+  for (const [cmd, model, harness] of table) {
+    const described = describeStartCmd(cmd);
+    assert.deepEqual([described.model, described.harness], [model, harness], cmd);
+  }
+});
+
+test("main 동치: 4176552의 모델 읽기가 값을 내는 입력은 새 함수도 같은 값을 낸다", () => {
+  // 4176552 src/cli-start-support.mjs의 모델 읽기 원문(사본).
+  const mainModel = text => text.match(/--model[=\s]+["']*([^\s"']+)["']*/)?.[1];
+  const commands = [
+    "codex", "claude", 'codex -p lite --model gpt-6-astra -c model_reasoning_effort="medium"', "codex --model=gpt-6-sol",
+    "LC_ALL=C /opt/homebrew/bin/claude --model claude-fable-5-1", "omo --model openai-codex/gpt-6-astra --thinking high",
+    "codex resume abc --model gpt-6-luna", `codex -p lite --model 'kimi/k3[1m]'`,
+    `codex --cd="--model" "inspect project" --model fixture-old`, `codex "please describe --model" --model fixture-old`,
+    `codex "--model" --model y`, `codex "describe --model x" --model fixture-old`, `codex "describe --model x"`,
+    `codex --model="gpt-x" -c a=b`, `codex --model='gpt-x'`, `codex -p 'a --model b' --model=gpt-z`,
+    `codex --cd '--model' 'inspect' --model fixture-old`, `codex 'x --model' --model=fixture-old`,
+    `codex "a" "--model" --model y`, `codex --config 'p="--model z"' --model fixture-old`,
+    `codex "--model=" --model fixture-old`, `codex -m a "--model b"`, `FOO="--model" codex --model m1`,
+    `'codex' '--model=gpt-x'`, `'codex' '--model' 'gpt-x' '-c' 'k=v'`,
+  ];
+  for (const cmd of commands) {
+    const expected = mainModel(cmd.trim());
+    if (expected !== undefined) assert.equal(describeStartCmd(cmd).model, expected, cmd);
+  }
+  // 원래 못 읽던 따옴표 친 낱말만 새로 읽는다.
+  assert.equal(mainModel(`'codex' '--model' 'gpt-x'`), undefined);
+  assert.equal(describeStartCmd(`'codex' '--model' 'gpt-x'`).model, "gpt-x");
+  // 실행기: 낱말 전체가 따옴표로 감싸인 경우에만 벗기고, 따옴표 없는 낱말은 원래대로다.
+  assert.equal(describeStartCmd(`'/opt/bin/codex' 'resume' 'c1'`).harness, "codex");
+  assert.equal(describeStartCmd("/opt/bin/codex resume c1").harness, "codex");
+  assert.equal(describeStartCmd(`LC_ALL=C 'claude' '--model' 'm'`).harness, "claude");
+});
