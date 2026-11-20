@@ -47,6 +47,38 @@ test('분류: 같은 업무에 뒤 라운드가 있으면 오래된 미확정, �
   assert.equal(bucketOf(cs, 'o1'), 'stuck');
 });
 
+test('분류(발령 순서): 더 큰 라운드가 먼저 발령된 뒤 발령한 작은 라운드는 넘어간 것이 아니다', () => {
+  const {card} = mk();
+  const big = card('big', '검수자-5', {round: '5'}), small = card('small', '작업자-1', {round: '1'});
+  const entries = [send('big', '검수자-5', '2026-10-19T05:00:00Z'), send('small', '작업자-1', '2026-10-19T05:30:00Z')];
+  const cs = center([big, small], entries);
+  assert.equal(cs.find(c => c.id === 'small').movedOn, undefined);
+  assert.equal(bucketOf(cs, 'small'), 'stuck');
+  // 재안내 경로: 세션이 사라진 상태여도 방금 발령한 작은 라운드는 안내 대상이 아니다
+  assert.deepEqual(planStaleNotices({cards: [big, small], entries, now: NOW, liveSessions: new Set()}), []);
+});
+
+test('분류(발령 순서): 라운드 N이 미확정인 채 N+1이 나중에 발령되면 round 표시와 재안내가 유지된다', () => {
+  const {card} = mk();
+  const r1 = card('r1', '검수자-1', {round: '1'}), r2 = card('r2', '작업자-2', {round: '2'});
+  const entries = [send('r1', '검수자-1', '2026-10-19T05:00:00Z'), send('r2', '작업자-2', '2026-10-19T05:30:00Z')];
+  const cs = center([r1, r2], entries);
+  assert.equal(cs.find(c => c.id === 'r1').movedOn, 'round');
+  assert.equal(cs.find(c => c.id === 'r2').movedOn, undefined);
+  const plan = planStaleNotices({cards: [r1, r2], entries, now: NOW, liveSessions: new Set()});
+  assert.deepEqual(plan.flatMap(p => p.keys), ['repo/r1']);
+});
+
+test('분류(발령 순서): 발령 시각을 모르면 라운드로 넘어간 것으로 표시하지 않는다', () => {
+  const {card} = mk();
+  const r1 = card('r1', '검수자-1', {round: '1'}), r2 = card('r2', '작업자-2', {round: '2'});
+  const noTime = center([r1, r2], [{...send('r1', '검수자-1'), t: undefined}, send('r2', '작업자-2', '2026-10-19T05:30:00Z')]);
+  assert.equal(noTime.find(c => c.id === 'r1').movedOn, undefined);
+  // 큰 라운드 쪽의 발령 시각을 모르면 먼저인지 나중인지 알 수 없으니 이 역시 표시하지 않는다
+  const bigNoTime = center([r1, r2], [send('r1', '검수자-1', '2026-10-19T05:00:00Z'), {...send('r2', '작업자-2'), t: undefined}]);
+  assert.equal(bigNoTime.find(c => c.id === 'r1').movedOn, undefined);
+});
+
 test('분류: 취소·일시정지된 옛 실행은 오래된 미확정이 아니라 제 칸에 남고 재안내도 없다', () => {
   const {card, store} = mk();
   const a = card('c1', '작업자-1', {work: 'w1'}), b = card('h1', '작업자-1', {work: 'w3'}), next = card('n1', '작업자-1', {work: 'w2'});
