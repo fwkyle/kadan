@@ -31,7 +31,7 @@ import { guardedSend } from "../cli-guarded-send.mjs";
 import { requireWindowChoice } from "../cli-start-support.mjs";
 import { cmdStart } from "./start.mjs";
 import { checkpointSecretary, resumeSecretary, withRecoveryLock } from "../secretary-resume.mjs";
-import { secretarySkipNote } from "../secretary-settings.mjs";
+import { freshSecretarySettings, secretarySkipNote } from "../secretary-settings.mjs";
 import { openSecretaryTab, attachHiddenSecretary, attachFailureLine } from "../secretary-tab.mjs";
 import { dashboardBuild } from "../dashboard-static.mjs";
 
@@ -143,6 +143,7 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
     start: (argv, startFlags) => cmdStart(argv, startFlags),
     skip: prepared.skip,
     log,
+    secretarySettings: freshSecretarySettings(home),
     // 1분마다 도는 자동 실행은 바뀐 것이 있을 때만 출력한다. 화면 빌드 경고는 사람이 친 up에만 낸다.
     ...(auto ? {} : { dashboardBuild }),
     ...(tmuxFloor ? {
