@@ -113,7 +113,7 @@ export function dashboardCommand({ home, flags = {}, cliPath, nodePath = process
 
 // skip: 건너뛸 대상 역할 이름 집합(`kadan up --auto`가 멈춤 상태·상한에 걸린 대상을 뺀다). 사람이 친 up은 비워 둔다.
 export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = process.execPath,
- log = console.log, sessionName, restoreSecretary, startWatch, startBridge, skip = new Set(), dashboardBuild } = {}) {
+ log = console.log, sessionName, restoreSecretary, startWatch, startBridge, skip = new Set(), dashboardBuild, secretarySettings } = {}) {
  ensureStorage(home);
  const config = readConfig(home);
  const runner = flags.cmd || config.runner || detectRunners()[0];
@@ -125,9 +125,21 @@ export function runUp({ home, flags = {}, floor, start, cliPath, nodePath = proc
  if (skip.has(SECRETARY_ROLE)) out.secretary = 'skipped';
  else if (floor.alive(secretarySession)) { out.secretary = 'reused'; log(`비서 이미 살아 있음: ${secretarySession}`); }
  else {
-  const startNew = () => start([SECRETARY_ROLE], {
-   cmd: runner, hidden: Boolean(flags.hidden), profile:'secretary', 'no-prompt': Boolean(flags['no-prompt']),
-  });
+  // 새 비서의 첫 시작도 다시 여는 길과 같은 함수로 실행 모델 설정의 비서 자리(모델·강도)를 입힌다(2026-11-20 TODO 17행).
+  // secretarySettings({command}) → {command, extra, applied, skipped, note}는 호출자(commands/quickstart.mjs)가 넣는다:
+  // runner-settings.mjs가 이 파일을 import하므로 여기서 secretary-settings.mjs를 import하면 순환이 된다(모듈 시작 때 TDZ 오류).
+  // 사람이 --cmd로 직접 준 명령은 그대로 쓴다. 적용하지 못하면 원래 명령으로 시작하고 이유를 한 번 남긴다(시작을 막지 않는다).
+  const startNew = () => {
+   const settings = flags.cmd || !secretarySettings ? null : secretarySettings({ command: runner });
+   if (settings?.skipped) log(`경고: ${settings.note}`);
+   else if (settings?.applied?.changed) log(`비서 실행 모델 설정 반영: ${settings.applied.model} · ${settings.applied.effort ?? '강도 그대로'}`);
+   const extra = settings?.extra ?? {};
+   start([SECRETARY_ROLE], {
+    cmd: settings?.command ?? runner, hidden: Boolean(flags.hidden), profile:'secretary', 'no-prompt': Boolean(flags['no-prompt']),
+    ...(Object.keys(extra).length ? { startExtra: extra } : {}),
+   });
+  };
+
   try {
    out.secretary = restoreSecretary ? restoreSecretary(startNew) : (startNew(), 'started');
   } catch (error) {

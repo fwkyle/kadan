@@ -6,7 +6,7 @@
 
 ## 현재 적용 경계
 
-2026-09-07 실제 기본 데이터 폴더 `~/.kadan`를 SQLite로 전환했다. 현재 원본은 `kadan.sqlite`의 `events` 하나다. 옛 JSONL 백엔드는 제거했다(마지막 지원 태그 `jsonl-last`). 전환 시점의 동결 JSONL 파일은 코드가 더 읽지 않으며, 머지·재시작 뒤 `.trash/`로 옮기고 삭제는 사람이 한다(아래 '동결 JSONL 파일').
+2026-09-07 실제 기본 데이터 폴더 `~/.kadan`를 SQLite로 전환했다. 현재 원본은 `kadan.sqlite`의 `events` 하나다. 옛 JSONL 백엔드는 제거했다(마지막 지원 태그 `jsonl-last`). 전환 시점의 동결 JSONL 파일은 코드가 더 읽지 않으며, 머지·재시작 뒤 그 기계의 휴지통 규칙에 따라 옮기고 삭제는 사람이 한다(아래 '동결 JSONL 파일').
 
 - 기본 선택: 새 홈은 SQLite로 자동 시작한다. storage.json·kadan.sqlite(-wal/-shm)와 옛 흔적이 모두 없는 홈에서 `kadan init`·`kadan up` 또는 첫 쓰기가 일어나면 `ensureStorage`가 DB와 storage.json을 만든다. 읽기는 홈을 만들지 않는다(빈 홈 읽기는 빈 결과). storage.json이 이미 있으면(backend가 무엇이든) 건드리지 않는다.
 - 옛 흔적이 있으면 멈춘다: storage.json이 없는데 `ledger.jsonl`·`cards/*/*/events.jsonl`·`card.md` 등 옛 JSONL 파일이 있는 홈에 쓰면 오류로 멈춘다. DB 파일만 있고 storage.json이 없는 홈은 아래 판정을 따른다.
@@ -47,7 +47,7 @@
 node src/cli.mjs storage verify
 ```
 
-`verify`는 DB 무결성·외래키·사건 순번·heads 일치·`imports`가 가리키는 수입 행(행 수, `raw`가 `payload`와 같은 값인지)·카드 revision·결정 참조·brief를 검증한다. 동결 JSONL 원본 파일은 열지 않으므로 파일을 `.trash/`로 옮겨도 통과한다. 사람이 가끔 치는 한 번짜리 명령이라 `events` 전체를 읽는다.
+`verify`는 DB 무결성·외래키·사건 순번·heads 일치·`imports`가 가리키는 수입 행(행 수, `raw`가 `payload`와 같은 값인지)·카드 revision·결정 참조·brief를 검증한다. 동결 JSONL 원본 파일은 열지 않으므로 파일을 휴지통으로 옮겨도 통과한다. 사람이 가끔 치는 한 번짜리 명령이라 `events` 전체를 읽는다.
 
 ## 복구
 
@@ -67,7 +67,7 @@ KADAN_HOME=/SQLite자료 node src/cli.mjs storage resume
 2026-09-07 전환 때 `imports` 표에 기록한 옛 JSONL 원본(운영 홈 기준 260개: `ledger.jsonl`, `decisions/events.jsonl`, `cards/<저장소>/<ID>/events.jsonl`·`briefs.jsonl`)과 `storage-import.json`은 현재 코드가 읽지 않는다. 이동 방법은 다음과 같다.
 
 - 옮기는 것은 `imports` 표에 적힌 파일뿐이다. 같은 폴더의 현행 `card.md`·`result.md`·`evidence/`는 건드리지 않는다.
-- `.trash/` 아래에 **원래 상대경로를 유지**해 옮긴다(예: `.trash/jsonl-frozen-<날짜>/cards/<저장소>/<ID>/events.jsonl`). 파일은 하나씩 절대경로로 옮기고, 이동 전 `shasum -a 256`으로 `imports.sha256`과 같은지 대조한 해시 목록을 `.trash/` 폴더에 함께 남긴다.
+- 그 기계의 휴지통 규칙이 정한 자리 아래에 **원래 상대경로를 유지**해 옮긴다(예: `<휴지통>/jsonl-frozen-<날짜>/cards/<저장소>/<ID>/events.jsonl`). 파일은 하나씩 절대경로로 옮기고, 이동 전 `shasum -a 256`으로 `imports.sha256`과 같은지 대조한 해시 목록을 그 폴더에 함께 남긴다.
 - 복원은 같은 상대경로로 되돌리면 된다. 삭제는 사람이 한다.
 - 이 버전의 `verify`는 이 파일이 없어도 통과한다. 태그 `jsonl-last` 같은 옛 버전의 `inspect`·`export`·`verify`는 이 파일을 읽으므로, 옛 버전을 쓸 때는 파일을 제자리로 복원해야 한다.
 

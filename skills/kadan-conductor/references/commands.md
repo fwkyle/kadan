@@ -16,6 +16,7 @@
 | 원장 보여줘 | `kadan log` |
 | 새 작업자 띄워 | `kadan start <판>-작업자 --profile worker` (설정과 다른 명령은 `--cmd … --reason …`) |
 | 어려운 일 작업자 띄워 | `kadan start <판>-작업자 --profile worker --difficulty hard` (어려운 일 자리가 비면 보통 작업자와 같게 뜬다) |
+| 어려운 일 작업자를 대체 후보로 띄워(429 등) | `kadan start <판>-작업자 --profile worker --difficulty hard --fallback N --reason "<이유>"` (어려운 일 자리의 N번 대체 후보로 띄운다. `--cmd`로 우회하지 않는다 — [근거](../../../docs/runner-settings.md#어려운-일-작업자-자리)) |
 | 어려운 일로 실행 만들어 | `kadan work execute … --difficulty hard` (작업자 단계 실행만, 검수 실행은 거절) |
 | 카드를 어려움으로 올려 | `kadan card update <키> --revision N --difficulty hard\|normal --note <이유>` (다음 발령부터 반영) |
 | 카드 보내 | 중앙 배정·plan 후 `kadan dispatch <역할> --task <현재실행키> "<카드 경로와 지시>"` |

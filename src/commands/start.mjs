@@ -261,7 +261,7 @@ export function cmdStart(argv, flags) {
       reused,
       cmd: startedCmd,
       cwd: process.cwd(),
-    }), ...(reuseOf ? { reuseOf } : {}), ...(alternateOn === null ? {} : { alternateOn }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
+    }), ...(reuseOf ? { reuseOf } : {}), ...(alternateOn === null ? {} : { alternateOn }), ...rottieConnection, ...(roleProfile?{roleProfile}: {}), ...(nameCheck?.nameReuse && flags["inherit-mail"] === true ? { inheritMail: true, inheritedUnread: nameCheck.nameReuse.previousUnread } : {}), ...launchRecord, ...(flags.startExtra && typeof flags.startExtra === "object" ? flags.startExtra : {}), ...(preflight.switched ? { rottieBinSwitched: preflight.switched } : {}) });
   } catch (error) {
     // 시작 기록이 없는 세션은 다음 start에서 재사용으로 읽혀 막히고 감시에도 잡히지 않는다(2026-10-08).
     // 방금 만든 세션만 닫는다. 재사용한 세션은 남의 세대라 건드리지 않는다.

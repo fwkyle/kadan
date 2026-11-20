@@ -32,3 +32,14 @@ test('감독 갈래는 정당한 하위 결과 대기를 가지고, 두 갈래 �
   assert.ok(build('stall').includes('완료 마커가 지시문·입력 에코 안에 있으면 완료 근거가 아니다.'));
   assert.ok(!build('stall').includes('일반감독의 응답 처리'));
 });
+
+// 11/20 report-missing 12회: 점검 AI가 "아직 실행 중" 응답에서 턴을 끝내 보고 명령이 함께 중단됐다. 기다리라는 문장이 두 갈래 모두에 있어야 한다.
+for (const source of ['progress', 'supervisor-health']) {
+  test(`감시AI 지시문(${source}): 보고 명령 결과를 기다린 뒤 끝내라는 문장이 보고 명령 바로 앞에 있다`, () => {
+    const text = build(source);
+    const wait = '보고 명령은 결과(JSON)가 나올 때까지 기다린 뒤 끝내라.';
+    assert.ok(text.includes(wait), `${source}: 기다림 문장 없음`);
+    assert.ok(text.includes('"아직 실행 중"(세션 ID) 응답이면 명령을 다시 실행하지 말고'), `${source}: 재확인 문장 없음`);
+    assert.ok(text.indexOf(wait) < text.indexOf(COMMAND), `${source}: 기다림 문장이 보고 명령보다 앞이어야 한다`);
+  });
+}
