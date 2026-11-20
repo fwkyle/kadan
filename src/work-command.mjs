@@ -13,6 +13,38 @@ import {closeWorkRoles} from './work-role-cleanup.mjs';
 
 const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 
+// 하위 명령이 아는 플래그. 모르는 플래그는 조용히 무시하면 `--next`처럼 틀린 이름이 성공으로 끝나 값이 안 적힌 채 남으므로
+// 이름을 적어 거절한다(종료 코드 2, work list가 먼저 쓰던 방식). 목록은 각 동작의 코드가 실제로 읽는 플래그다.
+// --help는 모든 동작이 받는다. 자동 왕복(auto-*)도 같은 표를 쓴다. 표에 없는 동작은 기존 오류('알 수 없는 업무 변경')를 그대로 낸다.
+const REVISION_NOTE=['revision','note'];
+export const WORK_FLAGS={
+ create:['title','goal','scope','acceptance','owner','repo-path','board'],
+ list:['repo','status','open'],
+ show:[],
+ update:[...REVISION_NOTE,'title','goal','scope','acceptance','owner','board','progress','next-action','turn-owner','status','wait-until'],
+ execute:[...REVISION_NOTE,'phase','round','title','body-file','difficulty','assign','dispatch'],
+ // unlink는 --phase·--round를 읽지 않지만 문서가 link와 묶어 적었다(docs 쪽 정리는 감독 판단) — 거절하지 않는다.
+ link:[...REVISION_NOTE,'execution','phase','round'],
+ unlink:[...REVISION_NOTE,'execution','phase','round'],
+ mail:[...REVISION_NOTE,'mail'],
+ complete:[...REVISION_NOTE,'result','keep-roles'],
+ cancel:[...REVISION_NOTE,'result'],
+ reopen:[...REVISION_NOTE],
+ 'auto-configure':['revision','implementation','review','worker','reviewer','notify','deadline','next-block'],
+ 'auto-show':[],
+ 'auto-report':['execution','outcome','result-file'],
+ 'auto-step':[],
+ 'auto-run':['interval'],
+};
+function rejectUnknownFlags(action,flags){
+ const allowed=Object.hasOwn(WORK_FLAGS,action)?WORK_FLAGS[action]:null;
+ if(!allowed||flags.help)return;
+ const unknown=Object.keys(flags).filter(name=>name!=='help'&&!allowed.includes(name));
+ if(!unknown.length)return;
+ const usable=allowed.length?allowed.map(name=>`--${name}`).join(', '):'없음';
+ throw Object.assign(new Error(`work ${action}가 모르는 플래그: ${unknown.map(name=>`--${name}`).join(', ')} (쓸 수 있는 것: ${usable})`),{exitCode:2});
+}
+
 // 수동 발령 1명령화(2026-10-05 점검 보고서 1-H2): 자동 경로의 prepare가 하던 "실행 생성 → 배정·묶음 → plan"을
 // 감독이 손으로 4명령에 나눠 치던 것을 `work execute … --assign <역할> [--dispatch "<지시>"]` 하나로 묶는다.
 // 전송은 자동 경로의 deliver와 같이 기존 send 검사(생존·PID·배정·범위·실행기)를 그대로 거친다.
@@ -43,6 +75,7 @@ function assignAndDispatch(store,work,before,flags,{home,by,send}){
 // 바뀌었을 수 있어 finally에서 맞춘다. 맞추기는 실패해도 던지지 않고, 글이 없거나 디코 설정이 없으면 요청 0건이다.
 const STATUS_ACTIONS=new Set(['update','execute','complete','cancel','reopen']);
 export function workCommand(args,flags,context){
+ rejectUnknownFlags(args[0]??'list',flags); // 업무를 읽거나 쓰기 전에 거절한다(거절된 명령이 revision을 올리면 안 된다)
  let result,failure;
  const revisionBefore=revisionOf(args,flags,context);
  try{result=workCommandInner(args,flags,context);}
@@ -102,12 +135,9 @@ function chatDecisionsAfter([action='list',key],flags,{home,by},revisionBefore,f
  }catch(error){process.stderr.write(`열린 채팅 결정을 확인하지 못했습니다(${error.message}): \`kadan decision list --status open\`으로 확인\n`);}
 }
 
-// work list가 아는 플래그. 모르는 플래그는 조용히 무시하면 잘못 거른 목록을 사실로 믿게 되므로 이름을 적어 거절한다(종료 코드 2).
 // --open은 끝나지 않은 업무(open·hold). open만 보려면 --status open.
-const LIST_FLAGS=new Set(['repo','status','open','help']),UNFINISHED=new Set(['open','hold']);
+const UNFINISHED=new Set(['open','hold']);
 function listWorks(store,flags){
- const unknown=Object.keys(flags).filter(name=>!LIST_FLAGS.has(name));
- if(unknown.length)throw Object.assign(new Error(`work list가 모르는 플래그: ${unknown.map(name=>`--${name}`).join(', ')} (쓸 수 있는 것: --repo, --status, --open)`),{exitCode:2});
  if(flags.open!==undefined&&flags.open!==true)throw Object.assign(new Error('--open은 값 없이 씁니다(끝나지 않은 업무 = open·hold)'),{exitCode:2});
  if(flags.open&&flags.status!==undefined)throw Object.assign(new Error('--open과 --status는 함께 쓸 수 없습니다(--open = open·hold, 한 상태만 보려면 --status)'),{exitCode:2});
  return store.list().filter(w=>(!flags.repo||w.repo===flags.repo)&&(!flags.status||w.status===flags.status)&&(!flags.open||UNFINISHED.has(w.status)));
