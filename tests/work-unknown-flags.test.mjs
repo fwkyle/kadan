@@ -121,10 +121,30 @@ function sources(dir, out = []) {
   return out;
 }
 
+// JS 보간식 `${…}`은 안에 `)`·`|`·따옴표가 있어 아래 줄 단위 자르기를 깬다(`quote(workKey)` 뒤 옵션, 삼항 안 `' --result-file …'`).
+// 균형 잡힌 `${…}`를 그 안에서 보이는 `--플래그`만 남긴 공백 조각으로 바꾼다. 안의 따옴표·괄호·`|`는 버린다.
+// 한 호출은 다음 `kadan work`에서도 끝난다(한 줄에 두 호출이 있을 때 앞 호출이 뒤 플래그를 가져가지 않게).
+// 남은 한계: 보간식이 아닌 곳의 `)`·`|`·`;`·백틱은 여전히 한 호출의 끝으로 본다(그 뒤 플래그는 못 본다. 허용 목록은 코드 기준이라 영향 작음).
+function flattenInterpolations(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '$' || text[i + 1] !== '{') { out += text[i]; continue; }
+    let depth = 0, j = i + 1;
+    for (; j < text.length; j++) {
+      if (text[j] === '{') depth++;
+      else if (text[j] === '}' && --depth === 0) break;
+    }
+    if (j >= text.length) { out += text[i]; continue; } // 닫히지 않은 `${`는 그대로 둔다
+    out += ` X${[...text.slice(i, j + 1).matchAll(/(?<=^|[\s'"`[])--([a-z][a-z-]*)/gu)].map(m => ` --${m[1]}`).join('')} `;
+    i = j;
+  }
+  return out;
+}
+
 export function workFlagsMentioned(text) {
   const found = [];
-  const joined = text.replace(/\\\r?\n\s*/gu, ' ');
-  for (const match of joined.matchAll(/kadan work ([a-z][a-z-]*)([^\n`|;)]*)/gu)) {
+  const joined = flattenInterpolations(text.replace(/\\\r?\n\s*/gu, ' '));
+  for (const match of joined.matchAll(/kadan work ([a-z][a-z-]*)((?:(?!kadan work )[^\n`|;)])*)/gu)) {
     const segment = match[2].replace(/"[^"]*"|'[^']*'|<[^>]*>/gu, ' ').replace(/["'].*$/u, ' ');
     for (const flag of segment.matchAll(/(?:^|[\s[])--([a-z][a-z-]*)/gu)) found.push({action: match[1], flag: flag[1]});
   }
@@ -136,6 +156,30 @@ test('추출기 자체: 줄 이음·따옴표·꺾쇠 안 플래그는 세지 �
   assert.deepEqual(workFlagsMentioned(text), [
     {action: 'update', flag: 'revision'}, {action: 'update', flag: 'note'}, {action: 'update', flag: 'next-action'},
   ]);
+});
+
+test('추출기 자체: 보간식 안 `|`·`quote(…)` 뒤와 삼항 안 `--result-file`도 센다', () => {
+  const source = "lines.push(`kadan work auto-report ${work.key} --execution ${card.key} --outcome ${a==='review'?'pass|changes':'implemented'}${card.resultPath?'':' --result-file <경로>'}`);\n"
+    + "`kadan work update ${quote(workKey)} --revision ${revision} --turn-owner ${quote(sender)} --note '차례'`";
+  assert.deepEqual(workFlagsMentioned(source), [
+    {action: 'auto-report', flag: 'execution'}, {action: 'auto-report', flag: 'outcome'}, {action: 'auto-report', flag: 'result-file'},
+    {action: 'update', flag: 'revision'}, {action: 'update', flag: 'turn-owner'}, {action: 'update', flag: 'note'},
+  ]);
+  // 한 줄에 두 호출: 앞 호출(show)이 뒤 호출(update)의 플래그를 가져가면 안 된다.
+  assert.deepEqual(workFlagsMentioned("확인: kadan work show ${quote(k)} — 직접: kadan work update ${quote(k)} --revision 2"), [
+    {action: 'update', flag: 'revision'},
+  ]);
+});
+
+// 결과 경로가 없는 이전 실행의 자동 보고 안내(src/role-instructions.mjs, docs/automatic-review.md)가 쓰는 옵션. 허용 목록을 거치지 않는 고정 기대값이다.
+test('auto-report의 --execution·--outcome·--result-file은 고정 기대값으로 허용되고, 안내문 원문에서도 뽑힌다', async () => {
+  for (const flag of ['execution', 'outcome', 'result-file']) assert.ok(WORK_FLAGS['auto-report'].includes(flag), flag);
+  const {error} = await attempt(['auto-report', 'repo-z/없음'], {execution: 'repo-z/e', outcome: 'implemented', 'result-file': '/tmp/r.md'}, ctx(fixture()));
+  assert.doesNotMatch(error?.message ?? '', /모르는 플래그/u);
+  const bad = await attempt(['auto-report', 'repo-z/없음'], {execution: 'repo-z/e', outcome: 'implemented', 'result-fil': '/tmp/r.md'}, ctx(fixture()));
+  assert.equal(bad.error?.exitCode, 2);
+  const mentioned = workFlagsMentioned(fs.readFileSync(path.join(root, 'src/role-instructions.mjs'), 'utf8'));
+  assert.ok(mentioned.some(x => x.action === 'auto-report' && x.flag === 'result-file'), 'role-instructions.mjs 안내문에서 --result-file을 못 뽑았다');
 });
 
 test('docs·skills·src·gui·scripts에 적힌 kadan work 플래그는 모두 허용 목록에 있다', () => {
