@@ -19,6 +19,7 @@ import {buildStartLedgerEntry, buildStopLedgerEntry, workdirInsideHome, workdirI
 import {sessionOwner, assertSessionOwner} from './session-ownership.mjs';
 import {dedupeResumeCommand} from './codex-option-merge.mjs';
 import {secretaryCommandFromSettings, SECRETARY_SKIP_REASONS} from './secretary-settings.mjs';
+import {withoutCommands} from './command-summary.mjs';
 
 const SECRETARY = '비서';
 export const MODEL_FROM_SETTINGS = 'model-from-settings';
@@ -173,7 +174,8 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
-    fail(`기존 ${session}은 종료됐고 새 세션을 만들지 못했다: ${error.message} — 직접 복구: cd ${start.cwd} && ${command}`);
+    // 시작 명령 원문은 싣지 않는다(토큰·프롬프트가 실릴 수 있다). stop 기록에 대화 번호가 남았으니 reopen이 같은 대화로 다시 연다.
+    fail(`기존 ${session}은 종료됐고 새 세션을 만들지 못했다: ${withoutCommands(error.message, command, start.cmd)} — 다시 열기: kadan reopen ${role}`);
   }
   const window = deps.openWindow({session, role, cwd: start.cwd, panePid: evidence.panePid ?? evidence.rottiePid}) ?? {};
   deps.record({
@@ -233,7 +235,7 @@ function settingsSwap({settings, harness, model, launch, kept}) {
 // 비서는 일반 찾기를 쓰지 않는다 — kadan up과 같은 체크포인트(secretary-resume.json) 경로로 같은 start 사건을 만든다.
 function restartSecretary({home, role, session, floor, force, reason, expectPid, deps, requireSettings = false}) {
   // 확인·체크포인트·끄기는 잠금 안에서, 다시 열기는 resumeSecretary의 잠금 안에서 한다(둘 사이에 kadan up이 끼어들어도 한 번만 열린다).
-  const {pending, previous, pinned} = withRecoveryLock(home, session, () => {
+  const {pending, previous, pinned, commands} = withRecoveryLock(home, session, () => {
     const entries = deps.read();
     const start = ensureReady({role, session, floor, entries, deps, expectPid});
     const generation = restartGeneration(entries, role);
@@ -261,15 +263,22 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
     // 화면 상태 줄(claude·codex 둘 다 읽음)만 보고 실행기에 묶이지 않는다. 거절되면 위에서 만든 체크포인트 파일만 남는다.
     stopForRestart({role, session, floor, entries, deps, generation, forced: force ? open : null, pending: open, reason,
       confirm: force ? null : () => confirmBeforeStop(session, deps, false), conversation: {conversationSkipped: 'infrastructure'}});
-    return {pending: open, previous: startDigest(start), pinned: planned?.pinned ?? null};
+    return {pending: open, previous: startDigest(start), pinned: planned?.pinned ?? null,
+      commands: [checkpoint.command, planned?.command, start.cmd]};
   });
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
   // 다시 여는 명령에는 실행 모델 설정의 비서 자리 값이 입혀진다(resumeSecretary). 그 결과를 받아 호출자에게 알린다.
   let fromSettings = null;
-  const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
-    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다'),
-    onSettings: value => { fromSettings = value; }, settingsPinned: pinned,
-    ...(deps.openSecretaryTab ? {openTab: deps.openSecretaryTab} : {})});
+  let result;
+  try {
+    result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
+      startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다'),
+      onSettings: value => { fromSettings = value; }, settingsPinned: pinned,
+      ...(deps.openSecretaryTab ? {openTab: deps.openSecretaryTab} : {})});
+  } catch (error) {
+    // 바닥이 던진 문구에 시작 명령 원문이 실릴 수 있다(tmux 바닥: "…명령이 실패한 것 같다: <명령>"). 명령은 싣지 않고, 이미 끈 비서는 kadan up이 체크포인트로 복원한다.
+    fail(`${withoutCommands(error.message, ...commands)} — 비서는 이미 종료됐을 수 있다. kadan up으로 복원한다`);
+  }
   if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
   const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
   return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,
