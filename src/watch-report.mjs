@@ -179,8 +179,12 @@ export class WatchReports {
         requestId,role:request.role,session:request.session,taskId:request.taskId,alertKind:previous.verdict,
         level:previous.level,resolved:true,delivered:false,recipient:null,resolution:'ai-normal'});
     });
-    // 알림이 없으면 방금 기록한 보고가 곧 완료다(복제는 위에서 읽은 전달 기록으로 정했다). 영수증을 다시 읽지 않는다.
-    if (duplicate||!report.notify) return this.completed(request,{...report,duplicate},duplicate?complete:true);
+    // 알림이 없으면 방금 기록한 보고가 곧 완료다. 영수증을 다시 읽지 않는다.
+    if (duplicate) {
+      // 잠금 안에서 전달 기록이 없었어도, 첫 호출이 잠금 반환 뒤 기록했을 수 있다. 알림 대상 보고만 신호 직전에 다시 읽어 확인한다(main과 같다).
+      return this.completed(request,{...report,duplicate},complete||(report.notify?undefined:true));
+    }
+    if (!report.notify) return this.completed(request,{...report,duplicate},true);
     const label=report.idleWithoutAsk?'카드 미완인데 입력 대기'
       :{'정체':'작업 정체 확인 필요','죽음':'세션 종료 의심','응답장애':'응답 장애 의심','모름':'상태 판단 근거 부족','조정':'진행 조정 필요'}[verdict];
     const message=`[${watchAILabel(request.source)}] ${label} · ${request.role}${request.taskId?` / ${request.taskId}`:''}: ${reason}${report.consecutive>=2?' 반복 조정 판정입니다. 상위 감독과 범위·담당 조정을 검토하세요.':''} 감독이 확인 후 후속 조치를 결정하세요.`;

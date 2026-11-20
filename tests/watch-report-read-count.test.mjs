@@ -66,3 +66,23 @@ test('이미 보고된 요청에 다시 보고: 같은 결과(duplicate)이고 �
   assert.equal(quietAgain.reads,1);assert.equal(quietAgain.result.duplicate,true);
   assert.equal(f.signal(quiet.id),true);
 });
+
+// 검수 발견 1: 중복 보고가 잠금에서 나온 뒤 첫 호출의 전달 기록이 추가되면 main은 신호 파일을 썼다(신호 직전에 다시 읽기).
+test('중복 보고가 잠금을 나온 뒤 첫 호출의 전달 기록이 추가되면 완료 신호 파일이 써진다',()=>{
+  const f=fixture();
+  const first=f.r;
+  const second=new WatchReports(first.options??{home:f.home,now:()=>Date.now(),
+    readCards:()=>[{id:'a',key:'r/a',role:'p-작업자',board:'p',status:'assigned',workType:'execution'}],
+    floor:{list:()=>['p-작업자','p-감독','p-슈퍼감독'].map((role,i)=>({session:`kadan-${role}`,pid:i+1}))},
+    send:()=>{},readEntries:()=>readLedger(f.home)});
+  const id=first.request({source:'stall',role:'p-작업자',parents}).requestId;
+  let deferred;const record=first.record;
+  first.record=row=>{if(row.kind==='watch-ai-delivery'){deferred=row;throw new Error('전달 기록 직전 중단');}return record(row);};
+  assert.throws(()=>first.submit(id,'정체','원본'),/전달 기록 직전 중단/);
+  assert.equal(f.signal(id),false);
+  const locked=second.locked.bind(second);
+  second.locked=fn=>{const out=locked(fn);appendLedger(deferred,f.home);return out;};
+  const result=second.submit(id,'모름','중복');
+  assert.equal(result.duplicate,true);assert.equal(result.verdict,'정체');
+  assert.equal(f.signal(id),true);
+});
