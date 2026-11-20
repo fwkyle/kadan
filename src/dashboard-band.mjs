@@ -19,6 +19,9 @@ export function liveSessions(center) {
         pidState: r.life?.pidState || null,
         // 전략 맵 옆 칸의 '다시 띄우기' 세대 표시. 서버가 restart 직전 원장의 최근 start PID와 대조한다.
         recordedPid: r.life?.recordedPid ?? null,
+        // 실행 모델 설정 화면의 '값의 출처'가 세는 재료: 이 세션의 역할 프로필과 떠 있는 방식(start 사건에 이미 적힌 칸).
+        profile: r.roleProfile ?? null,
+        launch: r.launch ?? null,
       };
     })
     .sort((a, b) => a.role.localeCompare(b.role, "ko"));

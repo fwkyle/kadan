@@ -4,7 +4,7 @@ import { workEntries } from "./handover-state.mjs";
 import { ledgerBy } from "./ledger.mjs";
 import { boardFromRole } from "./board.mjs";
 import { recordedPid } from "./cli-basics.mjs";
-import { startDisplay } from "./cli-family.mjs";
+import { launchOrigin, startDisplay } from "./cli-family.mjs";
 
 export function roleFromSession(session) {
   return typeof session === "string" && session.startsWith("kadan-")
@@ -68,6 +68,7 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
         session,
         window: null,
         lastStart: null,
+        originStart: null,
         lastStop: null,
         lastActivityAt: null,
         untrackedSends: 0,
@@ -86,6 +87,8 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
     }
     if (entry.kind === "start") {
       item.lastStart = entry;
+      // 이미 살아 있어 재사용한 start(reuseOf)는 새로 띄운 것이 아니다: 출처는 그 세대를 띄운 마지막 start가 말한다.
+      if (!entry.reuseOf) item.originStart = entry;
       item.window = entry.window ?? item.window;
     } else if (entry.kind === "stop") {
       item.lastStop = entry;
@@ -172,6 +175,7 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
       cards,
       roleProfile: item.lastStart?.roleProfile ?? null,
       ...startDisplay(item.lastStart),
+      launch: launchOrigin(item.originStart),
     });
   }
   for (const board of boards.values()) {

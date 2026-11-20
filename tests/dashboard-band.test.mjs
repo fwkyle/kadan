@@ -6,7 +6,7 @@ test("살아 있는 담당: 창이 열린 역할만, 시작 기록의 모델·�
   const center = {
     runtimeKnown: true,
     roles: [
-      { role: "p-작업자", life: { state: "alive", pidState: "match", recordedPid: "41" } },
+      { role: "p-작업자", life: { state: "alive", pidState: "match", recordedPid: "41" }, roleProfile: "worker", launch: { source: "settings" } },
       { role: "p-검수자", life: { state: "dead" } },
       { role: "p-감독", life: { state: "alive", pidState: "changed" } },
     ],
@@ -16,8 +16,8 @@ test("살아 있는 담당: 창이 열린 역할만, 시작 기록의 모델·�
     },
   };
   assert.deepEqual(liveSessions(center), [
-    { role: "p-감독", harness: null, model: null, effort: null, pidState: "changed", recordedPid: null },
-    { role: "p-작업자", harness: "claude", model: "sonnet", effort: "high", pidState: "match", recordedPid: "41" },
+    { role: "p-감독", harness: null, model: null, effort: null, pidState: "changed", recordedPid: null, profile: null, launch: null },
+    { role: "p-작업자", harness: "claude", model: "sonnet", effort: "high", pidState: "match", recordedPid: "41", profile: "worker", launch: { source: "settings" } },
   ]);
   assert.equal(liveSessions({ ...center, runtimeKnown: false }), null, "세션 상태를 모르면 null");
   assert.equal(liveSessions(null), null);
