@@ -120,6 +120,32 @@ test('분류(첫 발령 보존): 큰 라운드가 나중에 발령된 뒤 시각
   assert.deepEqual(noticeKeys([low, high], entries), ['repo/low']);
 });
 
+// 재검수 changes(2026-11-20): 발령 없이 완료만 기록된 행(수동 완료)은 큰 라운드의 발령 시각 계산에 넣지 않는다.
+const manualDone = (taskId, role, t) => ({kind: 'done', taskId, role, by: '감독-A', result: 'ok', t, board: 'b'});
+
+test('분류(완료만 있는 행): 큰 라운드에 다른 역할의 수동 완료가 있어도 확인된 첫 발령으로 round 표시가 유지된다', () => {
+  const [low, high] = lowHigh();
+  const base = [send('low', '작업자-1', '2026-10-19T05:10:00Z'), send('high', '검수자-2', '2026-10-19T05:15:00Z')];
+  for (const [name, extra] of [['완료 없음', []], ['다른 역할의 완료만', [manualDone('high', '다른-역할', '2026-10-19T05:20:00Z')]],
+    ['실제 발령 담당의 완료', [manualDone('high', '검수자-2', '2026-10-19T05:20:00Z')]]]) {
+    const entries = [...base, ...extra];
+    const cs = center([low, high], entries);
+    assert.equal(cs.find(c => c.id === 'low').movedOn, 'round', name);
+    assert.equal(bucketOf(cs, 'low'), 'stale', name);
+    assert.deepEqual(noticeKeys([low, high], entries), ['repo/low'], name);
+  }
+});
+
+test('분류(완료만 있는 행): 다른 역할의 실제 발령인데 시각을 모르면 여전히 판정하지 않는다', () => {
+  const [low, high] = lowHigh();
+  const entries = [send('low', '작업자-1', '2026-10-19T05:10:00Z'), send('high', '검수자-2', '2026-10-19T05:15:00Z'),
+    {...send('high', '다른-역할'), t: undefined}];
+  const cs = center([low, high], entries);
+  assert.equal(cs.find(c => c.id === 'low').movedOn, undefined);
+  assert.equal(bucketOf(cs, 'low'), 'stuck');
+  assert.deepEqual(noticeKeys([low, high], entries), []);
+});
+
 test('분류: 취소·일시정지된 옛 실행은 오래된 미확정이 아니라 제 칸에 남고 재안내도 없다', () => {
   const {card, store} = mk();
   const a = card('c1', '작업자-1', {work: 'w1'}), b = card('h1', '작업자-1', {work: 'w3'}), next = card('n1', '작업자-1', {work: 'w2'});
