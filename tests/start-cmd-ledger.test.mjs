@@ -4,6 +4,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildStartLedgerEntry, describeStartCmd } from "../src/cli.mjs";
+import { serializeWords } from "../src/codex-option-merge.mjs";
+import { withInlineScreen } from "../src/inline-screen.mjs";
 
 test("codex 명령이면 실행기와 모델을 원장에 남기고 명령 원문도 보존한다 — 2026-09-06", () => {
   const entry = buildStartLedgerEntry({
@@ -198,4 +200,65 @@ test("main 동치: 4176552의 모델 읽기가 값을 내는 입력은 새 함�
   assert.equal(describeStartCmd(`'/opt/bin/codex' 'resume' 'c1'`).harness, "codex");
   assert.equal(describeStartCmd("/opt/bin/codex resume c1").harness, "codex");
   assert.equal(describeStartCmd(`LC_ALL=C 'claude' '--model' 'm'`).harness, "claude");
+});
+
+// 수정 3(세 번째 검수 exec-182e4440): 새 읽기(따옴표 친 낱말)는 카단이 만든 비서 명령 꼴에만 쓴다 — 따옴표 밖 낱말이
+// 하나라도 있으면 결과가 main(4176552)과 같다. 카단이 만든 꼴은 serializeWords(낱말마다 통째로 따옴표) + withInlineScreen이
+// 끝에 따옴표 없이 붙이는 `--no-alt-screen`이다(secretary-resume.mjs·commands/start.mjs가 같은 순서로 만든다).
+const MAIN_MODEL = text => text.match(/--model[=\s]+["']*([^\s"']+)["']*/)?.[1];
+const MAIN_HARNESS = cmd => {
+  const tokens = cmd.trim().split(/\s+/);
+  let index = 0;
+  while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
+  return tokens[index]?.split("/").pop();
+};
+
+test("세 번째 검수 반례: 프롬프트 따옴표 안의 '--model'은 옵션이 아니다 — main과 같은 빈 칸", () => {
+  for (const cmd of [
+    `codex "please say '--model' aloud" '--model' 'fixture-old'`,
+    `codex '--model' 'fixture-old' "please say '--model' aloud"`,
+    `codex "please say '--model' aloud"`,
+  ]) {
+    const described = describeStartCmd(cmd);
+    assert.equal(described.model, MAIN_MODEL(cmd), cmd);
+    assert.equal(described.model, undefined, cmd);
+    assert.equal(described.harness, "codex", cmd);
+  }
+});
+
+test("실제 카단 비서 명령 꼴(복원·첫 시작, 끝의 --no-alt-screen 포함)은 그 모델·실행기로 읽힌다", () => {
+  const restore = withInlineScreen(serializeWords(["codex", "resume", "exact-conversation", "--model", "gpt-6-sol",
+    "-c", 'model_reasoning_effort="medium"', "--dangerously-bypass-approvals-and-sandbox"]));
+  const fresh = withInlineScreen(serializeWords(["codex", "--model", "gpt-6-sol", "-c", 'model_reasoning_effort="medium"']));
+  const absolute = withInlineScreen(serializeWords(["/opt/bin/codex", "resume", "exact-conversation", "--model", "gpt-6-sol"]));
+  // 이 시험이 실제 꼴을 쓰고 있는지: 낱말마다 따옴표, 끝만 따옴표 없는 --no-alt-screen.
+  assert.match(restore, /^'codex' 'resume' 'exact-conversation' '--model' 'gpt-6-sol' .* --no-alt-screen$/);
+  assert.match(fresh, /^'codex' '--model' 'gpt-6-sol' '-c' .* --no-alt-screen$/);
+  for (const cmd of [restore, fresh, absolute]) {
+    assert.equal(MAIN_MODEL(cmd), undefined, `main은 못 읽던 꼴: ${cmd}`);
+    const described = describeStartCmd(cmd);
+    assert.deepEqual([described.harness, described.model], ["codex", "gpt-6-sol"], cmd);
+  }
+});
+
+test("main 동치 불변식: 따옴표 밖 낱말이 있으면 모델·실행기가 main(4176552)과 완전히 같다 — 지난 세 검수 반례 전부", () => {
+  const inputs = [
+    "codex", "claude", 'codex -p lite --model gpt-6-astra -c model_reasoning_effort="medium"', "codex --model=gpt-6-sol",
+    "LC_ALL=C /opt/homebrew/bin/claude --model claude-fable-5-1", "omo --model openai-codex/gpt-6-astra --thinking high",
+    "codex resume abc --model gpt-6-luna", `codex -p lite --model 'kimi/k3[1m]'`,
+    `codex --cd="--model" "inspect project" --model fixture-old`, `codex "please describe --model" --model fixture-old`,
+    `codex "--model" --model y`, `codex "describe --model x" --model fixture-old`, `codex "describe --model x"`,
+    `codex --model="gpt-x" -c a=b`, `codex --model='gpt-x'`, `codex -p 'a --model b' --model=gpt-z`,
+    `codex --cd '--model' 'inspect' --model fixture-old`, `codex 'x --model' --model=fixture-old`,
+    `codex "a" "--model" --model y`, `codex --config 'p="--model z"' --model fixture-old`,
+    `codex "--model=" --model fixture-old`, `codex -m a "--model b"`, `FOO="--model" codex --model m1`,
+    `codex "please say '--model' aloud" '--model' 'fixture-old'`, `codex '--model' 'fixture-old' "please say '--model' aloud"`,
+    `codex "please say '--model' aloud"`, `codex '--model' 'gpt-x'`, `'codex' '--model' 'gpt-x' -c k=v`,
+    `'codex' 'say' '--model' 'x' extra`, `LC_ALL=C 'codex' '--model' 'gpt-x' plain`,
+  ];
+  for (const cmd of inputs) {
+    const described = describeStartCmd(cmd);
+    assert.equal(described.model, MAIN_MODEL(cmd.trim()), `model: ${cmd}`);
+    assert.equal(described.harness, MAIN_HARNESS(cmd), `harness: ${cmd}`);
+  }
 });

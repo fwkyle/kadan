@@ -1,5 +1,6 @@
 // start·stop 보조 — 창 선택·로티 사전 점검·시작/종료 기록 (HW-3-impl: cli.mjs에서 옮김)
 import { conversationOf } from "./conversation-ref.mjs";
+import { INLINE_FLAG } from "./inline-screen.mjs";
 import { openTaskIds } from "./handover-state.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -220,15 +221,20 @@ export function describeStartCmd(cmd) {
   const tokens = text.split(/\s+/);
   let index = 0;
   while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
-  // 기준은 원래 코드(main 4176552)의 결과다. 아래 두 곳 모두 "원래 읽던 것은 그대로, 원래 못 읽던 따옴표 친 낱말만 새로 읽는다".
-  // 실행기: 낱말 전체가 따옴표로 감싸인 경우(체크포인트·복원이 쓰는 `'codex' '--model' 'x'` 꼴)에만 따옴표를 벗긴다.
-  const word = tokens[index];
-  const wrapped = word?.match(/^(["'])(.*)\1$/);
-  const harness = (wrapped ? wrapped[2] : word)?.split("/").pop();
-  // 모델: 먼저 원래 코드의 읽기를 그대로 돌리고(따옴표를 벗겨서 남긴다 — 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 박힌다,
-  // 2026-09-12 실측), 값이 나오면 그것을 쓴다. 못 읽었을 때만 낱말 전체가 따옴표로 감싸인 `'--model' 'x'` 꼴을 읽는다.
+  // 기준은 원래 코드(main 4176552)의 결과다. 새 읽기는 카단이 만든 비서 명령 꼴에만 쓴다: 환경변수 접두를 뺀 모든 낱말이
+  // 각각 통째로 따옴표에 싸여 있다(serializeWords가 만든 꼴). 따옴표 밖 낱말이 하나라도 있으면 새 경로를 쓰지 않아 결과가 main과 같다.
+  // 예외 하나: withInlineScreen이 끝에 따옴표 없이 붙이는 `--no-alt-screen`은 허용한다(실제 비서 명령이 그 꼴이다).
+  const words = tokens.slice(index);
+  const quotedWord = /^(?:'[^']*'|"[^"]*")$/;
+  const cameFromKadan = words.length > 0 && words[0] !== undefined && quotedWord.test(words[0])
+    && words.every(word => quotedWord.test(word) || word === INLINE_FLAG);
+  const plain = cameFromKadan ? words.filter(word => word !== INLINE_FLAG).map(word => word.slice(1, -1)) : [];
+  const harness = (cameFromKadan ? plain[0] : tokens[index])?.split("/").pop();
+  // 모델: 원래 코드의 읽기를 그대로 먼저 돌리고(따옴표를 벗겨서 남긴다 — 안 벗기면 원장에 '\'kimi/k3[1m]\'' 처럼 박힌다,
+  // 2026-09-12 실측), 값이 나오면 그것을 쓴다. 못 읽었고 카단이 만든 꼴일 때만 낱말 목록에서 `--model` 다음 낱말을 읽는다.
+  const at = plain.indexOf("--model");
   const model = text.match(/--model[=\s]+["']*([^\s"']+)["']*/)?.[1]
-    ?? text.match(/(?:^|\s)(["'])--model\1\s+["']?([^\s"']+)/)?.[2];
+    ?? (cameFromKadan && at >= 0 ? plain[at + 1] : undefined);
   return {
     ...(harness ? { harness } : {}),
     ...(model ? { model } : {}),
