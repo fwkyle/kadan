@@ -5,6 +5,7 @@ import path from "node:path";
 import { matchesAiProcess } from "./ai-identity.mjs";
 import { splitGhostText } from "./ghost-text.mjs";
 import { inlineScreenEnv } from "./inline-screen.mjs";
+import { describeCommand } from "./command-summary.mjs";
 import { ledgerHome } from "./ledger.mjs";
 import { assertNotLiveFloor } from "./live-floor-guard.mjs";
 import { assertRottieArgv } from "./rottie-cli.mjs";
@@ -454,18 +455,36 @@ export function buildTmuxCreateArgv({ session, role, cwd, cmd, home }) {
   ];
 }
 
+// 세션이 바로 죽었을 때의 오류 문구. 시작 명령 원문에는 토큰·프롬프트가 실릴 수 있어 싣지 않는다 —
+// restart·reopen·kadan up·kadan start가 이 문구를 그대로 사람 화면에 중계한다(2026-11-20 검수). 원문은 원장 start 기록에 있다.
+export function sessionDiedMessage(cmd) {
+  const shown = typeof cmd === "string" && cmd.trim() ? describeCommand(cmd) : "기본 셸";
+  return `세션이 만들어지자마자 죽었다 — 시작 명령이 실패한 것 같다(${shown}; 명령 원문은 표시하지 않는다)`;
+}
+
+// tmux new-session 실패의 사유를 정해진 낱말로만 말한다(외부 문구를 싣지 않는다).
+const CREATE_FAILURES = [
+  [/duplicate session/i, "같은 이름의 세션이 이미 있다"],
+  [/no server running|error connecting|server exited|lost server/i, "tmux 서버에 연결하지 못했다"],
+  [/can't find|no such file|not a directory|bad working directory/i, "작업 폴더 또는 대상을 찾지 못했다"],
+  [/too long|usage:/i, "tmux가 인자를 받아들이지 않았다"],
+];
+export function createFailureReason(result) {
+  const text = String(result.stderr || "");
+  const known = CREATE_FAILURES.find(([pattern]) => pattern.test(text))?.[1];
+  return `${known ?? "원인 미분류"}(tmux 종료 코드 ${result.status ?? "없음"}; 서버 오류 문구는 표시하지 않는다)`;
+}
+
 function create({ session, role, cwd, cmd }) {
   ensureTmuxConf();
   const result = tmux(buildTmuxCreateArgv({ session, role, cwd, cmd, home: process.env.KADAN_HOME }));
   if (result.status !== 0) {
-    throw new Error(`세션 생성 실패: ${(result.stderr || "").trim()}`);
+    // tmux stderr는 싣지 않는다 — 명령 낱말을 어떤 꼴로 되풀이할지 알 수 없어 지우기로는 막을 수 없다.
+    // 아는 사유는 고정 낱말로만 말하고, 그 밖은 종료 코드만 낸다.
+    throw new Error(`세션 생성 실패: ${createFailureReason(result)}`);
   }
   spawnSync("sleep", ["0.3"]);
-  if (!hasSession(session)) {
-    throw new Error(
-      `세션이 만들어지자마자 죽었다 — 명령이 실패한 것 같다: ${cmd ?? "(기본 셸)"}`
-    );
-  }
+  if (!hasSession(session)) throw new Error(sessionDiedMessage(cmd));
   const outputLog = attachOutputLog(session);
   return {
     panePid: panePid(session),

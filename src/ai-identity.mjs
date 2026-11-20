@@ -160,6 +160,12 @@ export function inspectCardSendIdentity({ entries, session, currentPid } = {}) {
 export function launchIdentityOf(cmd) {
   const words = commandWords(cmd);
   if (!words) return {ok:false, reason:"unsafe-command"};
+  return identityOfWords(words);
+}
+
+// 이미 낱말로 나눈 명령의 실행기·모델 판독(launchIdentityOf와 같은 규칙). 받은 배열은 바꾸지 않는다.
+export function identityOfWords(input) {
+  const words = [...input];
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
   const executable = words.shift()?.split("/").pop() ?? "";
   // `kadan-<실행기>` 래퍼(예: ~/.kadan/bin/kadan-claude)는 인증 환경만 준비하고 실행기로 exec한다.
