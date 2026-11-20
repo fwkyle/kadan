@@ -123,6 +123,8 @@ test('기대 결과 표 4: 등록된 답 대기·업무 대기 시각·일시정
   const cases = {
     '실행에 연결한 질문 우편(--execution --expect-reply)': {extra: ask(true)},
     '실행을 특정하지 않은 질문 우편(--expect-reply)': {extra: ask(false)},
+    '감독이 그 실행으로 상위에게 물은 질문 우편': {extra: () => [{kind: 'send', mailId: 'q-boss', by: BOSS, role: TOP, session: `kadan-${TOP}`,
+      keyDelivery: 'sent', expectReply: true, executionKey: KEY, t: stamp(1)}]},
     '사용자 결정 대기': {decisions: () => [{id: 'd-1', status: 'open', card: KEY, requestedBy: BOSS, question: '진행할까요', at: stamp(1)}]},
     '업무 대기 시각(wait-until)': {works: () => [work({waitUntil: stamp(600), waitUntilSetAt: stamp(1)})]},
     '일시정지(hold)': {card: () => ({...waiting, status: 'hold'})},
@@ -197,6 +199,10 @@ test('스스로 정한 경계: 얼어붙은 일하는 줄·백그라운드 표�
     '', '', COMPOSER].join('\n');
   assert.deepEqual([readStatusLine(background(0)).kind, backgroundMarker(background(0))?.count], ['idle', 1]);
   assert.equal((await simulate({screen: background})).cap.length, 1);
+  // 시계가 돌아도 화면 아래에 정지 낱말이 보이면 턴이 도는 것으로 보지 않는다(statusProgress의 기존 기준: 끊김 화면이 일하는 중으로 묻히지 않게).
+  const noisy = minute => `  └ upstream returned 429 Too Many Requests\n\n${codexTurn(60 + minute)}`;
+  assert.equal(waitingStopScreen(noisy(0)), null, '인용된 오류라 대기중정지는 아니다');
+  assert.equal((await simulate({screen: noisy})).cap.length, 1);
   // 입력창에 보내지 않은 글이 남은 화면(일하는 표시도 빈 입력창도 아님).
   const typed = QUIET.replace('› Ask Codex to do anything', '› 임시로 적어 둔 글');
   assert.equal(readStatusLine(typed).kind, 'unknown');

@@ -727,20 +727,6 @@ export async function runWatch({
       waitsRead = decisionsNow !== null;
     } catch { waits = []; userTurnWaits = []; waitsRead = false; }
     const progressWaits = waits.filter(w => w.kind !== "wait-until");
-    // 대기 시간 상한(마지막 그물): 대기 표시 실행의 화면이 일하는 표시 없이 1시간 그대로면 직속 상위에게 1회(assessWaitingCap).
-    // 이미 읽은 화면과 위에서 만든 답 대기 목록만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
-    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 그 역할이 물어 답을 기다리는 질문 우편,
-    // 그 실행·소속 업무에 걸린 답 대기(사용자 결정·사용자 차례·업무 대기 시각). hold와 결과 등록 뒤 확정 대기는 처음부터 대상이 아니다.
-    // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
-    const stopSessions = new Set(waitingStops.map(a => a.session));
-    const waitingCap = observationError || !scope
-      ? {states: waitingCapStates, alerts: []}
-      : assessWaitingCap(waitingCapStates, scope.waitingSessions, roles.observations, {
-          elapsedMs: cycleAt - lastCycleAt, intervalMs, canOpen: waitsRead,
-          excluded: e => stopSessions.has(e.session) || waits.some(w => w.kind === 'mail' && w.asker === e.role)
-            || waitsOfCard(waits, e.card, e.taskId, works, e.role).length > 0,
-        });
-    waitingCapStates = waitingCap.states;
     // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation) 가운데 답 대기가 등록된 것은 화면이 멈춰 있는 것이 정상이다.
     //  - 감독의 답 대기(사용자 결정·감독이 물은 질문 우편): 완료후보·멈춤·정체를 내지 않는다. 답이 닫히면 그때 난다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다).
     //  - 담당이 그 실행으로 묻고 답을 기다림: 정체(경보·정체 판정 AI)만 내지 않는다. 멈춤은 원래 빠지고, 완료후보와 답할 감독의 본인 차례는 그대로다.
@@ -755,6 +741,21 @@ export async function runWatch({
     const supervisorWaits = e => parents.has(e.role) && [e.taskId, e.executionKey].some(id => id && answerWait(id, parents.get(e.role)));
     // 담당이 그 실행에 연결해 보낸 질문 우편이 답을 기다리는가. 실행 연결이 없는 질문은 세지 않는다.
     const workerAsks = e => waits.some(w => w.kind === 'mail' && w.asker === e.role && [e.taskId, e.executionKey].some(id => id && w.ids.includes(id)));
+    // 대기 시간 상한(마지막 그물): 대기 표시 실행의 화면이 일하는 표시 없이 1시간 그대로면 직속 상위에게 1회(assessWaitingCap).
+    // 이미 읽은 화면과 위에서 만든 답 대기 목록만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
+    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 그 역할이 물어 답을 기다리는 질문 우편,
+    // 그 실행·소속 업무에 걸린 답 대기(사용자 결정·사용자 차례·업무 대기 시각), 감독이 그 실행으로 상위에게 물어 기다리는 답
+    // (supervisorWaits: 알림을 받을 감독이 이미 기다리는 중이다). hold와 결과 등록 뒤 확정 대기는 처음부터 대상이 아니다.
+    // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
+    const stopSessions = new Set(waitingStops.map(a => a.session));
+    const waitingCap = observationError || !scope
+      ? {states: waitingCapStates, alerts: []}
+      : assessWaitingCap(waitingCapStates, scope.waitingSessions, roles.observations, {
+          elapsedMs: cycleAt - lastCycleAt, intervalMs, canOpen: waitsRead,
+          excluded: e => stopSessions.has(e.session) || waits.some(w => w.kind === 'mail' && w.asker === e.role)
+            || waitsOfCard(waits, e.card, e.taskId, works, e.role).length > 0 || supervisorWaits(e),
+        });
+    waitingCapStates = waitingCap.states;
     const settledSessions = settled => {
       const byRole = new Map();
       for (const e of scope?.entries ?? []) byRole.set(e.role, (byRole.get(e.role) ?? true) && Boolean(e.awaitsConfirmation) && settled(e));
