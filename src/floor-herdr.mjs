@@ -4,10 +4,14 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { commandWords, matchesAiProcess } from "./ai-identity.mjs";
-import { withoutCommands } from "./command-summary.mjs";
 import { readLedger } from "./ledger.mjs";
 import { herdrNotificationGuard } from "./herdr-notification.mjs";
 import { forcedIdleMsFor } from "./notification-guard.mjs";
+
+// create가 직접 만든 거절(고정 문구)에 표시를 단다. 그 밖의 오류는 서버·바닥이 만든 문구라 사람 화면에 싣지 않는다.
+function ownDeny(code, message) {
+  try { deny(code, message); } catch (error) { error.ownDeny = true; throw error; }
+}
 
 function deny(code, message, delivery = "not-sent") {
   const error = new Error(`${code}: ${message}`);
@@ -197,17 +201,21 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
           root: { type: "pane", cwd, command, env: inherited, label: role } });
         const pane = snapshot().panes.find(p => p.workspace_id === workspaceId &&
           p.pane_id === applied.layout?.root?.pane_id && p.tab_id === applied.layout?.tab_id);
-        if (!pane?.terminal_id || pane.cwd !== cwd) deny("KADAN_HERDR_CWD", "생성 경로·터미널 주소 불일치");
+        if (!pane?.terminal_id || pane.cwd !== cwd) ownDeny("KADAN_HERDR_CWD", "생성 경로·터미널 주소 불일치");
         const pid = processInfo(pane)?.shell_pid;
-        if (!Number.isInteger(pid) || pid <= 0) deny("KADAN_HERDR_PROCESS", "실행 프로세스 확인 실패");
+        if (!Number.isInteger(pid) || pid <= 0) ownDeny("KADAN_HERDR_PROCESS", "실행 프로세스 확인 실패");
         const evidence = { panePid: String(pid), herdrSocket: socket(),
           herdrWorkspaceId: workspaceId, herdrPaneId: pane.pane_id, herdrTerminalId: pane.terminal_id };
         pending.set(session, evidence);
         warnIfTrustPrompt(pane);
         return evidence;
       } catch (error) {
-        // 서버가 돌려준 거절 문구에 시작 명령이 되풀이될 수 있다 — 호출자가 사람 화면에 중계하므로 원문은 지운다.
-        error.message = withoutCommands(error.message, cmd);
+        // 서버가 돌려준 거절 문구에는 시작 명령 낱말이 어떤 꼴(문자열·배열·JSON)로든 되풀이될 수 있고, 호출자가 사람
+        // 화면에 중계한다. 지우기로는 꼴을 다 막지 못하므로 서버 문구는 싣지 않고 코드(식별자 꼴일 때만)만 남긴다.
+        if (!error.ownDeny) {
+          const code = /^[A-Za-z0-9_.-]{1,64}$/.test(String(error.code)) ? error.code : "KADAN_HERDR_ERROR";
+          error.message = `${code}: 서버 거절 문구는 표시하지 않는다`;
+        }
         try { call("workspace.close", { workspace_id: workspaceId, close_group: false }); }
         catch { error.message += " — 방금 만든 작업공간 종료 미확인"; }
         throw error;

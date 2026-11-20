@@ -4,7 +4,7 @@
 // 가릴 것을 찾는 방식이 아니라 허용 목록이다. 보이는 것: 실행기·모델·강도, `-`로 시작하는 옵션의 이름(`=` 앞까지,
 // `-c`/`--config`는 키까지). 그 밖의 낱말(환경변수 대입, 옵션 값, `--` 뒤 프롬프트, 하위 명령)은 내용 없이 개수만 센다.
 // 반쯤 가린 줄을 명령처럼 복사해 칠 수 없도록, 결과는 한국어 라벨이 붙은 요약이며 명령 꼴이 아니다.
-import {commandWords, identityOfWords} from './ai-identity.mjs';
+import {AI_HARNESS_NAMES, commandWords, identityOfWords} from './ai-identity.mjs';
 import {INLINE_FLAG} from './inline-screen.mjs';
 import {wordsWithoutStopHook} from './stop-hook-settings.mjs';
 
@@ -12,6 +12,8 @@ const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'no
 // 실행기 명령 표의 강도 자리: claude `--effort`, omo `--thinking`, codex `-c model_reasoning_effort=`(아래 EFFORT_KEY).
 const EFFORT_FLAGS = new Set(['--effort', '--reasoning-effort', '--thinking']);
 const ENV_VALUE_OPTIONS = new Set(['-u', '--unset', '-C', '--chdir']);
+// 값을 받지 않는 `env` 옵션. 이 밖의 옵션(`-S`처럼 다음 낱말이 명령이 되는 것 포함)은 뜻을 모르므로 더 걷지 않는다.
+const ENV_FLAG_OPTIONS = new Set(['-i', '--ignore-environment', '-0', '--null', '-v', '--debug']);
 const EFFORT_KEY = 'model_reasoning_effort';
 const MODEL_FLAGS = new Set(['--model', '-m']);
 const CONFIG_FLAGS = new Set(['-c', '--config']);
@@ -29,17 +31,23 @@ export function summarizeCommand(cmd) {
   // 걷어 낸 대입·옵션의 값은 내용 없이 개수로만 센다.
   const others = [];
   while (words.length && ENV_ASSIGNMENT.test(words[0])) others.push(words.shift());
+  let envUnknown = false;
   if (words[0]?.split('/').pop() === 'env') {
     words.shift();
     while (words.length) {
       if (ENV_ASSIGNMENT.test(words[0])) others.push(words.shift());
       else if (ENV_VALUE_OPTIONS.has(words[0])) { words.shift(); if (words.length) others.push(words.shift()); }
-      else if (words[0].startsWith('-') && words[0] !== '--') others.push(words.shift());
+      else if (/^--(unset|chdir)=/.test(words[0]) || ENV_FLAG_OPTIONS.has(words[0])) others.push(words.shift());
+      else if (words[0].startsWith('-') && words[0] !== '--') { envUnknown = true; break; }
       else break;
     }
   }
-  const identity = identityOfWords(words);
-  const summary = {ok: identity.ok, harness: identity.harness ?? null, model: identity.model ?? null,
+  // 원칙: 실행기·모델 칸은 등록 실행기로 판독된 경우에만 값을 보인다. 판독이 실패하면(`env -S …`처럼 모르는 옵션,
+  // 등록 밖 낱말) 명령 낱말을 실행기 이름 자리에 옮기지 않는다 — 그 낱말에 값이 실려 있을 수 있다.
+  const identity = envUnknown ? {ok: false, reason: 'env-option'} : identityOfWords(words);
+  // 모델을 못 읽어도 실행기 이름이 등록 이름이면 이름은 보인다(고정 낱말이라 값이 실릴 수 없다).
+  const harness = identity.ok || AI_HARNESS_NAMES.has(identity.harness) ? identity.harness : null;
+  const summary = {ok: identity.ok, harness: harness ?? null, model: identity.ok ? identity.model : null,
     effort: null, names: [], others};
   if (!identity.ok) summary.reason = identity.reason;
   words.shift(); // 실행 파일 — 실행기 이름은 위 identity가 등록 이름으로만 보여 준다

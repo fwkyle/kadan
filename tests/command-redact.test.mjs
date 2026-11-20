@@ -9,9 +9,10 @@ import {summarizeCommand, describeCommand, describeCommandDiff, withoutCommands}
 import {restartRole} from '../src/restart.mjs';
 import {reopenRole} from '../src/reopen.mjs';
 import {resumeSecretary} from '../src/secretary-resume.mjs';
-import {tmuxFloor, tmux, sessionDiedMessage} from '../src/floor-tmux.mjs';
+import {tmuxFloor, tmux, sessionDiedMessage, createFailureReason} from '../src/floor-tmux.mjs';
 import {spawnSync} from 'node:child_process';
 import {settingsWith} from './helpers/runner-table.mjs';
+import {makeHerdrFloor} from '../src/floor-herdr.mjs';
 
 // Why: 발령 경고·재시작 실패 안내가 역할의 시작 명령 원문을 싣던 길을 막는다(#435 후속).
 // 시험의 비밀은 모두 가짜 값이다. 가짜 비밀 세 꼴: 환경변수 앞머리, `-c api_key="…"`, `--` 뒤 프롬프트.
@@ -289,4 +290,123 @@ test('2라운드: env 앞머리 요약은 실행기·모델·강도를 보이고
 
 test('2라운드: OMO의 --thinking이 강도로 보인다', () => {
   assert.match(describeCommand('omo --model omo-fixture --thinking high --no-recommended-models'), /실행기 omo · 모델 omo-fixture · 강도 high/);
+});
+
+// ---- 3라운드(재검수 exec-93cd25d4): 모양을 더 찾지 않고 원칙으로 막는다 ----
+// 원칙 1: 요약의 실행기·모델 칸은 등록 실행기로 판독된 경우에만 값을 보인다.
+// 원칙 2: 바닥은 외부(tmux stderr·herdr RPC) 오류 문구를 싣지 않고 정해진 사유 낱말만 싣는다.
+const S3 = {value: 'fixture-env-split-31A', arg: 'fixture arg with spaces 31B', word: 'fixture-word-31C'};
+const gone3 = (text, label) => {
+  const present = Object.entries(S3).filter(([, value]) => String(text).includes(value)).map(([key]) => key);
+  assert.deepEqual(present, [], `${label}: 출력에 남은 가짜 값 종류\n${text}`);
+};
+
+test('3라운드 원칙 시험: 등록 실행기가 아닌 첫 낱말은 실행기·모델 칸에 나오지 않는다', () => {
+  const commands = [
+    `env -S "${S3.value} claude" --model m`,
+    `env -S ${S3.value} claude --model m`,
+    `env --split-string=${S3.value} claude --model m`,
+    `env -x ${S3.value} claude --model m`,
+    `${S3.word} --model ${S3.value}`,
+    `env ${S3.word} claude --model m`,
+    `/opt/${S3.word}/run --model m`,
+    `kadan-${S3.word} --model m`,
+    `FOO=bar ${S3.word} -c "api_key=${S3.arg}"`,
+  ];
+  for (const cmd of commands) {
+    const summary = summarizeCommand(cmd);
+    assert.equal(summary.ok, false, cmd);
+    assert.equal(summary.harness, null, `실행기 칸: ${cmd}`);
+    assert.equal(summary.model, null, `모델 칸: ${cmd}`);
+    gone3(describeCommand(cmd), `describe ${cmd}`);
+    gone3(describeCommandDiff(cmd, 'claude --model m'), `diff ${cmd}`);
+    assert.match(describeCommand(cmd), /읽지 못함/);
+  }
+  // 등록 실행기이면 값을 읽는다(모델이 없으면 실행기 이름만, 모델은 모름)
+  assert.equal(summarizeCommand('env -i claude --model m').harness, 'claude');
+  assert.equal(summarizeCommand('kadan-claude --model m').harness, 'claude');
+  const noModel = summarizeCommand('codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(noModel.harness, 'codex'); assert.equal(noModel.model, null);
+});
+
+test('3라운드: 격리 tmux에서 `env -S` 값이 든 명령이 바로 죽어도 가짜 값 0건, 실행기는 "모름"', t => {
+  const sockDir = fs.mkdtempSync('/tmp/kr3-');
+  const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR, tmux: process.env.TMUX, pane: process.env.TMUX_PANE};
+  delete process.env.TMUX; delete process.env.TMUX_PANE;
+  process.env.KADAN_SOCKET = `r3${process.pid}envs`;
+  process.env.TMUX_TMPDIR = sockDir;
+  t.after(() => {
+    tmux(['kill-server']); fs.rmSync(sockDir, {recursive: true, force: true});
+    for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir], ['TMUX', prior.tmux], ['TMUX_PANE', prior.pane]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact3-tmux-'));
+  const cmd = `env -S "${S3.value} --token ${S3.arg}" claude --model m --effort high`;
+  const error = capture(() => tmuxFloor.create({session: 'kadan-fixture-envs', role: 'fixture-envs', cwd, cmd}));
+  gone3(error, 'tmux 바닥');
+  assert.match(error, /세션이 만들어지자마자 죽었다/);
+  assert.match(error, /시작 명령을 읽지 못함/);
+  assert.doesNotMatch(error, /실행기 /);
+});
+
+test('3라운드: tmux new-session 실패 stderr는 어떤 꼴로 명령 낱말을 되풀이해도 싣지 않고 정해진 사유만 말한다', () => {
+  const argv = ['claude', '--model', 'm', '-c', `api_key=${S3.arg}`, `--token=${S3.value}`, '--', S3.word];
+  const stderrs = [JSON.stringify(argv), argv.join(','), `bad command: ${argv.join(' ')}`, `duplicate session: ${argv.join(' ')}`,
+    `can't find window: ${S3.word}`, `usage: new-session ${S3.value}`, ''];
+  for (const stderr of stderrs) {
+    const reason = createFailureReason({status: 1, stderr});
+    gone3(reason, `stderr ${stderr.slice(0, 20)}`);
+    assert.match(reason, /tmux 종료 코드 1; 서버 오류 문구는 표시하지 않는다/);
+  }
+  assert.match(createFailureReason({status: 1, stderr: 'duplicate session: x'}), /^같은 이름의 세션이 이미 있다/);
+  assert.match(createFailureReason({status: 1, stderr: `zzz ${S3.value}`}), /^원인 미분류/);
+});
+
+test('3라운드: herdr 생성 거절 문구가 인자 배열을 문자열·JSON·따옴표 없는 꼴로 되풀이해도 가짜 값 0건', () => {
+  const cmd = `claude --model m -c "api_key=${S3.arg}" --token=${S3.value} -- ${S3.word}`;
+  const argv = ['claude', '--model', 'm', '-c', `api_key=${S3.arg}`, `--token=${S3.value}`, '--', S3.word];
+  const echoes = {
+    'JSON 배열': JSON.stringify(argv),
+    '배열 문자열': `[${argv.map(word => `"${word}"`).join(', ')}]`,
+    '쉼표 나열': argv.join(','),
+    '분리 낱말 줄': argv.join('\n'),
+    '러스트 디버그 꼴': `command: ${JSON.stringify(argv)} (invalid)`,
+  };
+  for (const [label, echo] of Object.entries(echoes)) {
+    for (const kind of ['server', 'plain']) {
+      const closed = [];
+      const rpc = (_socket, method) => {
+        if (method === 'workspace.create') return {workspace: {workspace_id: 'w'}, tab: {tab_id: 't'}};
+        if (method === 'workspace.close') { closed.push(method); return {type: 'ok'}; }
+        if (method === 'layout.apply') {
+          if (kind === 'plain') throw new Error(`layout rejected: ${echo}`);
+          throw Object.assign(new Error(`invalid_command: ${echo}`), {code: 'invalid_command', delivery: 'not-sent'});
+        }
+        throw new Error(method);
+      };
+      const floor = makeHerdrFloor({
+        env: {KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact3-herdr-')),
+          KADAN_HERDR_SOCKET: path.join(os.homedir(), '.config/herdr/sessions/test/herdr.sock')},
+        rpc, entries: () => []});
+      const error = capture(() => floor.create({session: 'kadan-fixture-h', role: 'fixture-h', cwd: '/tmp', cmd}));
+      gone3(error, `herdr ${label}/${kind}`);
+      assert.equal(closed.length, 1, '만든 작업공간은 닫는다');
+      assert.match(error, /서버 거절 문구는 표시하지 않는다/);
+    }
+  }
+});
+
+test('3라운드: herdr 자체 거절(고정 문구)은 그대로 보인다', () => {
+  const rpc = (_socket, method) => {
+    if (method === 'workspace.create') return {workspace: {workspace_id: 'w'}, tab: {tab_id: 't'}};
+    if (method === 'layout.apply') return {layout: {tab_id: 't2', root: {pane_id: 'p'}}};
+    if (method === 'session.snapshot') return {snapshot: {panes: [{workspace_id: 'w', tab_id: 't2', pane_id: 'p', terminal_id: 'x', cwd: '/elsewhere'}]}};
+    if (method === 'workspace.close') return {type: 'ok'};
+    throw new Error(method);
+  };
+  const floor = makeHerdrFloor({env: {KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact3-herdr-')),
+    KADAN_HERDR_SOCKET: path.join(os.homedir(), '.config/herdr/sessions/test/herdr.sock')}, rpc, entries: () => []});
+  const error = capture(() => floor.create({session: 'kadan-fixture-h', role: 'fixture-h', cwd: '/tmp', cmd: 'claude --model m'}));
+  assert.match(error, /KADAN_HERDR_CWD: 생성 경로·터미널 주소 불일치/);
 });
