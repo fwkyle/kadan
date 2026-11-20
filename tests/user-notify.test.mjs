@@ -522,25 +522,31 @@ test('심볼릭 링크인 비밀 파일도 그대로 읽힌다', async () => {
   } finally { w.stop(); }
 });
 
-test('R1 첫 호출이 잠금을 5초 넘게 쥐고 있어도(500 지연 뒤 재시도) 같은 업무는 글 하나', async () => {
-  const w = await forumWorld([], ['kadan'], {steps: [{status: 500, body: {}, delayMs: 4900}]});
-  try {
-    const a = {home: w.base.home, envFile: w.base.envFile, work: 'kadan/work-a', title: 't'};
-    const [r1, r2] = await Promise.all([runChild({...a, key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, key: 'k2'}); })()]);
-    assert.equal(r1.via, 'discord'); assert.equal(r2.via, 'discord');
-    // thread_name 요청은 첫 호출의 500 + 재시도 성공 = 2건이고, 두 번째 호출은 thread_id로 이어 붙는다
-    assert.equal(postCount(w, 'new'), 2); assert.equal(postCount(w, 'old'), 1);
-    assert.deepEqual(w.threads(), {'kadan/work-a': 'T1'});
-  } finally { w.stop(); }
-});
-
-test('R1 첫 호출이 잠금을 5초 넘게 쥐고 있어도 다른 업무의 기록이 지워지지 않는다', async () => {
-  const w = await forumWorld([], ['kadan'], {steps: [{status: 500, body: {}, delayMs: 4900}]});
-  try {
-    const a = {home: w.base.home, envFile: w.base.envFile, title: 't'};
-    await Promise.all([runChild({...a, work: 'kadan/work-a', key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, work: 'kadan/work-b', key: 'k2'}); })()]);
-    assert.deepEqual(Object.keys(w.threads()).sort(), ['kadan/work-a', 'kadan/work-b']);
-  } finally { w.stop(); }
+// 두 시나리오는 각자 세계(가짜 포럼·홈)를 갖고 서로 닿지 않으며, 둘 다 첫 호출이 4.9초 지연+500을 받는 같은 상황이라
+// 한 시험 안에서 동시에 돌린다(예전에는 따로 두 시험이라 4.9초를 두 번 기다렸다). 두 시나리오의 단언은 그대로다.
+test('R1 첫 호출이 잠금을 5초 넘게 쥐고 있어도: 같은 업무는 글 하나, 다른 업무의 기록은 지워지지 않는다', async () => {
+  const sameWork = async () => {
+    const w = await forumWorld([], ['kadan'], {steps: [{status: 500, body: {}, delayMs: 4900}]});
+    try {
+      const a = {home: w.base.home, envFile: w.base.envFile, work: 'kadan/work-a', title: 't'};
+      const [r1, r2] = await Promise.all([runChild({...a, key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, key: 'k2'}); })()]);
+      assert.equal(r1.via, 'discord'); assert.equal(r2.via, 'discord');
+      // thread_name 요청은 첫 호출의 500 + 재시도 성공 = 2건이고, 두 번째 호출은 thread_id로 이어 붙는다
+      assert.equal(postCount(w, 'new'), 2); assert.equal(postCount(w, 'old'), 1);
+      assert.deepEqual(w.threads(), {'kadan/work-a': 'T1'});
+    } finally { w.stop(); }
+  };
+  const otherWork = async () => {
+    const w = await forumWorld([], ['kadan'], {steps: [{status: 500, body: {}, delayMs: 4900}]});
+    try {
+      const a = {home: w.base.home, envFile: w.base.envFile, title: 't'};
+      await Promise.all([runChild({...a, work: 'kadan/work-a', key: 'k1'}), (async () => { await new Promise(r => setTimeout(r, 300)); return runChild({...a, work: 'kadan/work-b', key: 'k2'}); })()]);
+      assert.deepEqual(Object.keys(w.threads()).sort(), ['kadan/work-a', 'kadan/work-b']);
+    } finally { w.stop(); }
+  };
+  const results = await Promise.allSettled([sameWork(), otherWork()]);
+  const failed = results.filter(r => r.status === 'rejected').map(r => r.reason);
+  if (failed.length) throw failed[0];
 });
 
 test('R4 시스템 알림 판정: 성공은 status 0뿐, 시간 초과·신호·오류·비정상 종료는 안전한 사유가 있는 실패', async () => {
