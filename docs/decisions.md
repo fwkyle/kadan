@@ -152,7 +152,7 @@ Why: 사람이 자리를 비운 동안 tmux 서버 전체가 사라져도 직전
 - 복원 시도는 60분에 한 번까지다. 시작 전에 `server-restore-state.json`에 예약하여 중간 종료에도 상한을 보존한다.
   같은 스냅숏으로 확인한 손실을 다시 처리·통지하지 않는다. 서버 재생성을 관찰한 뒤 다음 손실을 받는다.
   `$KADAN_HOME/server-restore.off`가 있으면 감독 복원을 끈다. 기반 4개 되살리기는 계속된다.
-  이 파일을 `.trash/`로 옮기면 다시 켜진다. 사람이 친 `up`도 감독 복원 상한을 초기화하지 않는다.
+  이 파일을 그 기계의 휴지통 규칙에 따라 치우면 다시 켜진다. 사람이 친 `up`도 감독 복원 상한을 초기화하지 않는다.
 - 손실 결과는 `revive` 사건 하나(`reason: server-loss`, `restoreId`, 후보별 결과, `by: autostart`)다.
   새 start에는 `reason: server-restore`, 같은 `serverRestoreId`, 원본 시작 지문 `serverRestoreOf`가 붙는다.
   원장은 뒤에만 추가한다. 자식 CLI 종료 0뿐 아니라 새 start 연결 기록도 확인한다.

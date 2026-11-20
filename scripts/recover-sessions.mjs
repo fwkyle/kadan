@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // 재부팅·세션 유실 뒤 역할을 기억째 되살리기 위한 조사 도구.
 // 읽기 전용이다. 아무것도 실행하지 않고 복구 명령만 출력한다.
-//   사용: node scripts/recover-sessions.mjs [--since 2026-09-09] [--all]
+//   사용: node scripts/recover-sessions.mjs [--since 2026-09-09] [--all] [--show-commands]
+//   기본 출력은 요약(실행기·모델·강도·대화 ID·상태)뿐이다. 시작 명령 원문에는 토큰·프롬프트가 실릴 수 있어
+//   `원래 <명령>`과 `복구>` 줄은 --show-commands를 줬을 때만 낸다.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +12,7 @@ import {pathToFileURL} from 'node:url';
 import {launchIdentityOf} from '../src/ai-identity.mjs';
 import {conversationOf} from '../src/conversation-ref.mjs';
 import {shellQuote} from '../src/mail-instructions.mjs';
+import {describeCommand} from '../src/command-summary.mjs';
 
 const HOME = process.env.KADAN_HOME || path.join(os.homedir(), '.kadan');
 const SESSIONS = path.join(os.homedir(), '.codex', 'sessions');
@@ -17,6 +20,7 @@ const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf('--' + name); return i < 0 ? null : (args[i + 1] || true); };
 const since = typeof flag('since') === 'string' ? flag('since') : '2000-01-01';
 const showAll = args.includes('--all');
+const showCommands = args.includes('--show-commands');
 
 function die(message) { console.error('오류: ' + message); process.exit(1); }
 
@@ -138,16 +142,20 @@ function main() {
   for (const r of lines) {
     console.log('[' + r.live + '] ' + r.role + '  (' + String(r.t).slice(0, 19).replace('T', ' ') + ' UTC)');
     console.log('    폴더 ' + (r.cwd || '모름'));
-    console.log('    원래 ' + (r.cmd || '모름'));
+    if (showCommands) console.log('    원래 ' + (r.cmd || '모름'));
+    else console.log('    요약 ' + (r.cmd ? describeCommand(r.cmd) : '모름'));
     console.log('    대화 ' + (r.id || '모름') + '  [' + r.how + ']');
     for (const o of r.others) console.log('      후보 ' + o.id + ' (' + o.d.toFixed(1) + '초)');
-    if (r.recovery) console.log('    복구> ' + r.recovery);
+    if (r.recovery && showCommands) console.log('    복구> ' + r.recovery);
+    else if (r.recovery) console.log('    복구 명령 있음(원문은 --show-commands를 붙여 다시 실행하면 보임)');
     else console.log('    복구 명령 보류: ' + r.error);
     console.log('');
   }
   console.log('되살릴 수 있음 ' + ready + ' / 후보 여럿 ' + ambiguous + ' / 대화 못 찾음 ' + missing +
     ' / 명령 보류 ' + blocked + (skipped ? ' / 살아있어 건너뜀 ' + skipped : ''));
-  console.log('이 도구는 아무것도 실행하지 않는다. 위 복구 줄을 사람이 확인하고 직접 친다.');
+  console.log(showCommands
+    ? '이 도구는 아무것도 실행하지 않는다. 위 복구 줄을 사람이 확인하고 직접 친다. 복구 줄에는 시작 명령 원문이 들어 있으니 남에게 보이는 곳에 붙이지 않는다.'
+    : '이 도구는 아무것도 실행하지 않는다. 시작 명령 원문과 복구 줄은 --show-commands를 붙이면 보인다(토큰·프롬프트가 실릴 수 있어 기본은 숨김).');
   console.log('주의: 같은 폴더에서 몇 초 간격으로 띄운 역할은 구분되지 않는다. 그때는 ' + path.join(HOME, 'out') + ' 의 화면 기록으로 대조하라.');
 }
 
