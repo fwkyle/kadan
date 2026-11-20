@@ -250,6 +250,17 @@ export function explainCommand(settings, value) {
 // 감시 AI가 채울 호출 값. 화면·show에서 '발령 때 채워질 명령' 자리에 보여 준다.
 export const watchJudgeCommand = value => value ? `KADAN_JUDGE_MODEL=${value.model} KADAN_JUDGE_EFFORT=${value.effort ?? 'max'} watch-judge.sh (codex exec)` : null;
 
+// 활성 프리셋의 역할별 대체 후보 명령 글(순서대로). `kadan runners show`와 대시보드의 '발령 명령 보기'가 같은 값을 쓴다.
+// 손으로 고친 설정 파일에 자리 없는 어려운 일 대체 후보가 남아 있어도 전체가 죽지 않게 그 줄만 '모름'으로 보인다.
+export function fallbackCommands(settings) {
+  const fallbacks = settings.presets[settings.activePreset].fallback ?? {};
+  return Object.fromEntries(Object.entries(fallbacks).map(([role, list]) => [role, list.map((item, i) => {
+    if (role === 'watch') return watchJudgeCommand(item);
+    if (role === 'explain') return explainCommand(settings, item);
+    try { return launchForFallback(settings, role, i + 1).cmd; } catch (error) { return `모름: ${error.message}`; }
+  })]));
+}
+
 // 'runner:model[:effort],…' → 폴백 항목 목록. 값에는 ':'·','가 들어갈 수 없다(VALUE). 빈 글은 빈 목록.
 export function parseFallbackSpec(text) {
   return String(text ?? '').split(',').map(v => v.trim()).filter(Boolean).map(part => {
