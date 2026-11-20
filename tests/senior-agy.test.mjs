@@ -219,7 +219,9 @@ test('회수를 믿을 수 없으면 call-failed다: 시작 경계가 스크롤�
     askSeat(tiny, {...s.deps, captureMaxBytes: 64})]);
   assert.deepEqual(cleared, {reason: 'call-failed', detail: 'boundary-lost'});
   assert.deepEqual(died, {reason: 'call-failed', detail: 'pane-dead'});
-  assert.equal(timedOut.reason, 'timeout'); assert.match(timedOut.detail, /^deadline/);
+  // 정확히 'deadline'(질문을 낸 뒤 일하는 중에 끝남). 'deadline:before-ask'(제출 전 시간 초과)는 질문이 안 나가므로 다르다.
+  assert.deepEqual(timedOut, {reason: 'timeout', detail: 'deadline'});
+  assert.deepEqual(s.keys('forever').submitted, [late.line]);
   // 캡처가 출력 상한을 넘으면 잘린 것이다: 질문을 넣기 전에 걸리므로 키는 0회다.
   assert.deepEqual(overflow, {reason: 'call-failed', detail: 'capture-too-big'});
   assert.equal(s.keys('tiny').any, 0);
