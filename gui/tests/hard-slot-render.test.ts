@@ -136,6 +136,18 @@ test("편집 칸: 시니어는 기본 실행 모델 없이 등록 목록만 연�
   assert.doesNotMatch(html, /기본 실행 모델/);
 });
 
+test("편집 칸: 강도를 받지 않는 실행기는 꺼진 강도 칸 대신 '강도는 모델 이름에 포함' 안내를 보인다", () => {
+  const html = editor(dataOf("filled"), ["worker"]);
+  assert.match(html, /추론 강도 칸 없음 — 이 실행기는 강도를 따로 받지 않습니다\. 강도는 모델 이름에 포함됩니다/);
+  assert.doesNotMatch(html, /해당 없음|강도 고르기/);
+  // 강도를 받는 실행기는 지금처럼 강도 칸이 보인다.
+  const data = dataOf("filled");
+  const withEffort = { ...data, catalog: { codex: { ...data.catalog.codex, needsEffort: true, models: data.catalog.codex.models.map(m => ({ ...m, efforts: ["low", "high"] })) } } };
+  const shown = editor(withEffort, ["worker"]);
+  assert.match(shown, /강도 고르기/);
+  assert.doesNotMatch(shown, /추론 강도 칸 없음/);
+});
+
 test("비교 모드 잠금: 경고가 보이고 바꾸기 버튼이 모두 꺼진다", () => {
   const data = dataOf("empty");
   const settings = { ...data.settings, compare: { enabled: true, presets: [data.settings.activePreset], enabledAt: null } };

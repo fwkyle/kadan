@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useState } from "react";
 import { save } from "../resource";
-import { EMPTY_EFFORT_NOTE, afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, sameChoice } from "../effort-keep";
+import { EMPTY_EFFORT_NOTE, NO_EFFORT_NOTE, afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, sameChoice } from "../effort-keep";
 import { listOf, ownPart } from "../runner-draft";
 import { seniorPreview } from "../runner-preview";
 import { AppContext, ErrorMessage } from "../ui";
@@ -280,21 +280,23 @@ export function RunnerForm({
               })}
             </select>
           </label>
-          <label>
-            추론 강도
-            <select
-              disabled={!spec?.needsEffort}
-              value={choice.effort || ""}
-              onChange={(e) => change({ ...choice, effort: e.target.value })}
-            >
-              <option value="">
-                {spec?.needsEffort ? "강도 고르기" : "해당 없음"}
-              </option>
-              {efforts.map((e) => (
-                <option key={e}>{e}</option>
-              ))}
-            </select>
-          </label>
+          {/* 강도가 필요한지는 역할 기준(effortSpec)으로 본다. 받지 않는 실행기는 꺼진 칸 대신 안내를 보인다. */}
+          {effortSpec?.needsEffort ? (
+            <label>
+              추론 강도
+              <select
+                value={choice.effort || ""}
+                onChange={(e) => change({ ...choice, effort: e.target.value })}
+              >
+                <option value="">강도 고르기</option>
+                {efforts.map((e) => (
+                  <option key={e}>{e}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            spec && <span className="muted effort-note">{NO_EFFORT_NOTE}</span>
+          )}
           {favorites.length > 0 && (
             <label className="favorite-pick">
               즐겨찾기

@@ -45,5 +45,10 @@ export const effortProblem = (spec: Spec, choice: Choice): 'empty' | 'pick' | nu
 export const EMPTY_EFFORT_NOTE =
   '이 모델은 강도 목록이 비어 있어 이 실행기에서 저장할 수 없습니다 — 고급 설정의 실행기 표에서 강도를 등록하세요';
 
-export const sameChoice = (a: Choice, b: Choice) =>
+// 강도를 받지 않는 실행기(agy 등)에서 강도 칸 자리에 보이는 안내. 강도는 모델 이름이 정하고 카단은 이름에서 강도를 뽑아내지 않는다
+// (2026-11-19 [kyle], 서버 EFFORT_FROM_MODEL_LABEL '강도 모델 이름 따름'과 같은 뜻). 강도가 없는 모델에도 거짓이 되지 않게 적는다.
+export const NO_EFFORT_NOTE =
+  '추론 강도 칸 없음 — 이 실행기는 강도를 따로 받지 않습니다. 강도는 모델 이름에 포함됩니다(강도가 나뉘는 모델은 이름 끝의 -low · -high 등으로 고릅니다)';
+
+export const sameChoice =(a: Choice, b: Choice) =>
   a.runner === b.runner && a.model === b.model && (a.effort || '') === (b.effort || '');
