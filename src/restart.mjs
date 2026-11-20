@@ -173,7 +173,9 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
   let evidence;
   try { evidence = floor.create({session, role, cwd: start.cwd, cmd: command}); }
   catch (error) {
-    fail(`기존 ${session}은 종료됐고 새 세션을 만들지 못했다: ${error.message} — 직접 복구: cd ${start.cwd} && ${command}`);
+    // 시작 명령 원문은 싣지 않는다(토큰·프롬프트가 실릴 수 있다). 바닥 오류 문구에서 원문을 뺐고(floor-tmux sessionDiedMessage),
+    // stop 기록에 대화 번호가 남았으니 reopen이 같은 대화로 다시 연다.
+    fail(`기존 ${session}은 종료됐고 새 세션을 만들지 못했다: ${error.message} — 다시 열기: kadan reopen ${role}`);
   }
   const window = deps.openWindow({session, role, cwd: start.cwd, panePid: evidence.panePid ?? evidence.rottiePid}) ?? {};
   deps.record({
@@ -266,10 +268,16 @@ function restartSecretary({home, role, session, floor, force, reason, expectPid,
   // 새 start에도 restartOf(·forced)를 남겨 감시 발령·우편·책임이 일반 역할과 같게 이어진다(kadan up 복원 경로는 그대로).
   // 다시 여는 명령에는 실행 모델 설정의 비서 자리 값이 입혀진다(resumeSecretary). 그 결과를 받아 호출자에게 알린다.
   let fromSettings = null;
-  const result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
-    startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다'),
-    onSettings: value => { fromSettings = value; }, settingsPinned: pinned,
-    ...(deps.openSecretaryTab ? {openTab: deps.openSecretaryTab} : {})});
+  let result;
+  try {
+    result = resumeSecretary({home, floor, read: deps.read, record: deps.record,
+      startExtra: {restartOf: previous, ...(reason ? {reason} : {}), ...(force ? {forced: true, forcedTasks: pending} : {}), ...(pending.length ? {pendingTasks: pending} : {})}, startNew: () => fail('비서 대화 정보가 없어 새로 만들지 않는다'),
+      onSettings: value => { fromSettings = value; }, settingsPinned: pinned,
+      ...(deps.openSecretaryTab ? {openTab: deps.openSecretaryTab} : {})});
+  } catch (error) {
+    // 바닥 오류 문구에는 시작 명령 원문이 없다(floor-tmux sessionDiedMessage). 이미 끈 비서는 kadan up이 체크포인트로 복원한다.
+    fail(`${error.message} — 비서는 이미 종료됐을 수 있다. kadan up으로 복원한다`);
+  }
   if (result !== 'restored') fail(`비서 복원 결과가 예상과 다르다: ${result}`);
   const latest = deps.read().findLast(e => e.kind === 'start' && e.session === session);
   return {role, session, conversation: latest?.secretaryConversation ?? null, command: latest?.cmd ?? null, harness: latest?.harness ?? null,
