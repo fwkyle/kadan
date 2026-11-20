@@ -46,8 +46,10 @@ test("실제 start/stop: 새 세대 start가 X의 상위 줄만 바꾼다. resum
   const { home, file } = makeHome({ P1: "@user", P2: "@user", X: "P1", Y: "X" });
   const socket = `kadan-reparent-${process.pid}`;
   // 실행기 대신 아무 일도 안 하는 가짜 claude를 PATH 앞에 둔다(명령 문자열은 claude 형식이어야 대화 방식을 읽는다).
+  // 프롬프트 한 줄을 찍어 화면이 곧 안정되게 한다. 빈 화면이면 start가 신뢰 창 확인(5초)과 첫 안내 대기(20초)를
+  // 끝까지 기다려 이 시험 한 개가 80초 걸렸다(2026-11-20 실측 82.7초 → 26.5초, 단언은 그대로).
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "kadan-fake-claude-"));
-  fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nexec sleep 600\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nprintf '> \\n'\nexec sleep 600\n", { mode: 0o755 });
   const env = role => ({
     ...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_WINDOW: "none", KADAN_NOTIFY: "off",
     KADAN_FLOOR: "tmux", KADAN_ROLE: role,

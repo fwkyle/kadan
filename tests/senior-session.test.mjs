@@ -319,7 +319,8 @@ test('ok 오판 막기: 옛 답 파일이 있으면 부르지 않고, 일하는 
     calls: [{dir, model: 'm1', effort: 'low', token: TOKEN, timing: TIMING}]}), /답 파일이 이미 있다/);
   assert.deepEqual(old.sessions(), []);
   const s = setup(t, {default: {answer: 'working-forever'}});
-  const [seat] = s.open(1, {deadlineAt: Date.now() + 9000});
+  // 상한 5초: 관문(약 1~2초)을 지난 뒤 일하는 화면이 상한까지 이어지는지 본다. 예전 9초는 기다림만 길었다(2026-11-20).
+  const [seat] = s.open(1, {deadlineAt: Date.now() + 5000});
   assert.deepEqual(await passGate(seat, s.deps), {ok: true});
   // 답 파일은 이미 완성된 표지를 갖고 있지만 화면이 계속 일하는 중이다.
   assert.deepEqual(await askSeat(seat, s.deps), {reason: 'timeout', detail: 'deadline'});

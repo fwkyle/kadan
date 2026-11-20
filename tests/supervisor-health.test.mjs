@@ -109,7 +109,8 @@ test('실제 감시 루프가 감독을 1시간마다 호출하고 자원 경고
  }),e=>e===stop);}finally{os.loadavg=oldLoad;}
  // 최상위 top도 1시간 점검을 받는다(2026-10-05). 한 주기에 한 명씩이라 boss 다음 주기에 온다.
  assert.deepEqual(calls.map(([m,c])=>[m,c.role,c.source]),[[60,'boss','supervisor-health'],[61,'top','supervisor-health']]);
- assert.deepEqual(messages,[]);
+ // 2026-11-20 대기 시간 상한: 하위가 대기 표시 뒤 같은 화면으로 1시간이면 직속 감독에게 그 경보 한 통이 간다. 그 밖의 우편(자원 경고·해제)은 없다.
+ assert.deepEqual(messages.map(([role,message])=>[role,/대기 표시 중 화면이 오래 그대로/u.test(message)]),[['boss',true]]);
  assert(!records.some(e=>e.alertKind==='자원'));
 });
 
