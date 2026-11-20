@@ -38,6 +38,8 @@
 
 `work list`는 `--repo`·`--status`·`--open`만 받는다. `--open`은 끝나지 않은 업무(`open`·`hold`)만 남기고, `open`만 보려면 `--status open`을 쓴다(둘을 같이 주면 거절). 모르는 플래그는 이름을 적어 거절한다(종료 코드 2).
 
+`kadan work`의 다른 하위 명령(`create`·`show`·`update`·`execute`·`link`·`unlink`·`mail`·`complete`·`cancel`·`reopen`·`auto-*`)도 각자 아는 플래그만 받는다. 목록 밖 플래그(예: `--next-action`을 `--next`로 잘못 적은 것)는 `work update가 모르는 플래그: --next (쓸 수 있는 것: …)`처럼 이름과 쓸 수 있는 플래그를 보이며 종료 코드 2로 거절하고, 업무를 쓰기 전에 거절하므로 revision은 그대로다. `--help`는 그대로 통과한다. 하위 명령별 허용 목록은 `src/work-command.mjs`의 `WORK_FLAGS`가 원본이고, `tests/work-unknown-flags.test.mjs`가 docs·skills·코드에 적힌 `kadan work` 플래그가 모두 이 목록에 있는지 대조한다.
+
 사용자 결정 요청은 해당 실행의 대기로 표시한다. 일시정지·기다림 기록이 없으면 연결 확인이 필요하다고 알리고, 같은 업무의 다른 실행은 유지한다. 답변 전달 실패·재개 미확인은 작업 중으로 바꾸지 않는다. 주소나 근거를 읽지 못하면 ‘확인 필요’로 남긴다.
 
 감독은 기존 `work update --next-action ... --turn-owner ... --note ...` 또는 `work complete`로 후속 판단을 남긴다. 새 결과보다 오래된 다음 행동은 현재 판단으로 쓰지 않는다. 조회는 원장·읽음·카드 상태를 수정하거나 역할을 깨우지 않는다.
