@@ -12,7 +12,7 @@ import {resumeSecretary} from '../src/secretary-resume.mjs';
 import {tmuxFloor, tmux, sessionDiedMessage, createFailureReason} from '../src/floor-tmux.mjs';
 import {spawnSync} from 'node:child_process';
 import {settingsWith} from './helpers/runner-table.mjs';
-import {makeHerdrFloor} from '../src/floor-herdr.mjs';
+import {makeHerdrFloor, HERDR_REASON_WORDS} from '../src/floor-herdr.mjs';
 
 // Why: 발령 경고·재시작 실패 안내가 역할의 시작 명령 원문을 싣던 길을 막는다(#435 후속).
 // 시험의 비밀은 모두 가짜 값이다. 가짜 비밀 세 꼴: 환경변수 앞머리, `-c api_key="…"`, `--` 뒤 프롬프트.
@@ -409,4 +409,69 @@ test('3라운드: herdr 자체 거절(고정 문구)은 그대로 보인다', ()
     KADAN_HERDR_SOCKET: path.join(os.homedir(), '.config/herdr/sessions/test/herdr.sock')}, rpc, entries: () => []});
   const error = capture(() => floor.create({session: 'kadan-fixture-h', role: 'fixture-h', cwd: '/tmp', cmd: 'claude --model m'}));
   assert.match(error, /KADAN_HERDR_CWD: 생성 경로·터미널 주소 불일치/);
+});
+
+// ---- 4라운드(재검수 exec-b3e9b9da): herdr create() 전체가 같은 규칙을 따른다 ----
+// 사유 낱말은 카단이 정한 고정 목록에서만 고른다. 외부 문자열은 모양이 맞아도 싣지 않는다.
+const S4 = 'fixture-herdr-外-41D';
+const herdrEnv = () => ({KADAN_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-redact4-herdr-')),
+  KADAN_HERDR_SOCKET: path.join(os.homedir(), '.config/herdr/sessions/test/herdr.sock')});
+const OLD_START = {kind: 'start', session: 'kadan-fixture-h', floor: 'herdr', herdrSocket: herdrEnv().KADAN_HERDR_SOCKET,
+  herdrTerminalId: 'old-term', herdrWorkspaceId: 'old-ws', panePid: '1'};
+const EXTERNAL = {
+  '코드 없음': () => new Error(`rejected: ${S4}`),
+  '목록 안 코드': () => Object.assign(new Error(`invalid_command: ${S4}`), {code: 'invalid_command'}),
+  '목록 밖·식별자 꼴 코드': () => Object.assign(new Error(`${S4}: x`), {code: S4}),
+  '봉투 거절(external)': () => Object.assign(new Error(`${S4}: ${S4}`),
+    {code: S4, exitCode: 2, delivery: 'not-sent', external: true}),
+};
+const failingRpc = (phase, make, closed) => (_socket, method) => {
+  if (method === 'workspace.close') { closed.push(method); return {type: 'ok'}; }
+  if (method === 'session.snapshot') {
+    if (phase === 'previous') throw make();
+    return {snapshot: {panes: []}};
+  }
+  if (method === 'workspace.create') {
+    if (phase === 'create') throw make();
+    return {workspace: {workspace_id: 'w'}, tab: {tab_id: 't'}};
+  }
+  if (method === 'layout.apply') throw make();
+  throw new Error(method);
+};
+
+test('4라운드: workspace.create·이전 주소 확인·layout.apply 실패 모두 외부 문구 0건, 사유는 고정 목록 낱말', () => {
+  for (const phase of ['create', 'previous', 'layout']) {
+    for (const [label, make] of Object.entries(EXTERNAL)) {
+      const closed = [];
+      const floor = makeHerdrFloor({env: herdrEnv(), rpc: failingRpc(phase, make, closed),
+        entries: () => phase === 'previous' ? [OLD_START] : []});
+      let caught;
+      try { floor.create({session: 'kadan-fixture-h', role: 'fixture-h', cwd: '/tmp', cmd: 'claude --model m'}); }
+      catch (error) { caught = error; }
+      assert.ok(caught, `${phase}/${label}: 실패해야 한다`);
+      assert.equal(String(caught.message).includes(S4), false, `${phase}/${label}: 외부 문구 노출\n${caught.message}`);
+      assert.equal(String(caught.code).includes(S4), false, `${phase}/${label}: 외부 code 노출`);
+      assert.doesNotMatch(caught.message, /undefined/, `${phase}/${label}`);
+      assert.ok(HERDR_REASON_WORDS.includes(caught.code), `${phase}/${label}: 고정 목록 밖 낱말 ${caught.code}`);
+      assert.match(caught.message, new RegExp(`^${caught.code}: `));
+      const expected = label === '목록 안 코드' ? 'invalid_command' : 'rpc-error';
+      assert.equal(caught.code, expected, `${phase}/${label}`);
+      assert.equal(closed.length, phase === 'layout' ? 1 : 0, `${phase}/${label}: 작업공간 닫기 시도`);
+    }
+  }
+});
+
+test('4라운드: 닫기 실패는 그대로 덧붙고, 카단이 만든 거절(생성 주소 미확인)은 고정 문구가 보인다', () => {
+  const floor = makeHerdrFloor({env: herdrEnv(), entries: () => [],
+    rpc: (_socket, method) => {
+      if (method === 'workspace.create') return {workspace: {workspace_id: 'w'}, tab: {tab_id: 't'}};
+      if (method === 'workspace.close') throw new Error(`close failed ${S4}`);
+      throw Object.assign(new Error(`${S4}`), {code: 'invalid_command'});
+    }});
+  const error = capture(() => floor.create({session: 'kadan-fixture-h', role: 'fixture-h', cwd: '/tmp', cmd: 'claude'}));
+  assert.equal(error.includes(S4), false);
+  assert.match(error, /^invalid_command: .*방금 만든 작업공간 종료 미확인$/);
+  const noIds = makeHerdrFloor({env: herdrEnv(), entries: () => [], rpc: () => ({workspace: {}})});
+  assert.match(capture(() => noIds.create({session: 'kadan-fixture-h', role: 'fixture-h', cwd: '/tmp', cmd: 'claude'})),
+    /KADAN_HERDR_RESPONSE: 생성 주소 미확인/);
 });

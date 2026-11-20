@@ -8,9 +8,25 @@ import { readLedger } from "./ledger.mjs";
 import { herdrNotificationGuard } from "./herdr-notification.mjs";
 import { forcedIdleMsFor } from "./notification-guard.mjs";
 
-// create가 직접 만든 거절(고정 문구)에 표시를 단다. 그 밖의 오류는 서버·바닥이 만든 문구라 사람 화면에 싣지 않는다.
-function ownDeny(code, message) {
-  try { deny(code, message); } catch (error) { error.ownDeny = true; throw error; }
+// create가 사람 화면에 싣는 사유 낱말의 고정 목록이다. 서버가 돌려준 code가 여기 있을 때만 그 낱말을 쓰고,
+// 그 밖(코드 없음·모양만 맞는 낯선 문자열)은 일반 낱말 rpc-error다. 외부 문자열은 모양이 맞아도 싣지 않는다.
+export const HERDR_REASON_WORDS = [
+  "KADAN_HERDR_CONNECTION", "KADAN_HERDR_RESPONSE", "KADAN_HERDR_ERROR",
+  "invalid_target", "invalid_command", "invalid_params", "invalid_request",
+  "workspace_not_found", "tab_not_found", "pane_not_found", "method_not_found",
+  "agent_not_found", "agent_blocked", "agent_not_ready", "empty_agent_prompt", "internal_error", "rpc-error",
+];
+
+// 서버·바닥이 만든 오류의 문구에는 시작 명령 낱말이 어떤 꼴(문자열·배열·JSON)로든 되풀이될 수 있고, 호출자가 사람
+// 화면에 중계한다. 지우기로는 꼴을 다 막지 못하므로 외부 문구는 싣지 않고 고정 목록의 사유 낱말만 남긴다.
+// 카단이 직접 만든 거절(deny; 외부 응답을 옮긴 것은 external 표시)은 고정 문구라 그대로 둔다.
+function redactReason(error) {
+  if (error?.exitCode === 2 && !error.external) return error;
+  const word = HERDR_REASON_WORDS.includes(error?.code) ? error.code : "rpc-error";
+  const redacted = error instanceof Error ? error : new Error();
+  redacted.code = word;
+  redacted.message = `${word}: 서버 거절 문구는 표시하지 않는다`;
+  return redacted;
 }
 
 function deny(code, message, delivery = "not-sent") {
@@ -42,8 +58,10 @@ export function herdrRpc(socket, method, params = {}) {
   catch { deny("KADAN_HERDR_RESPONSE", "JSON 응답 미확인", "unknown"); }
   if (envelope.error) {
     const beforeInput = ["empty_agent_prompt", "agent_blocked", "agent_not_ready", "agent_not_found", "invalid_target"];
-    deny(envelope.error.code || "KADAN_HERDR_ERROR", envelope.error.message || "서버 요청 거절",
-      method === "agent.prompt" && !beforeInput.includes(envelope.error.code) ? "unknown" : "not-sent");
+    try {
+      deny(envelope.error.code || "KADAN_HERDR_ERROR", envelope.error.message || "서버 요청 거절",
+        method === "agent.prompt" && !beforeInput.includes(envelope.error.code) ? "unknown" : "not-sent");
+    } catch (error) { error.external = true; throw error; } // 서버가 만든 문구 — create는 싣지 않는다
   }
   if (!envelope.result) deny("KADAN_HERDR_RESPONSE", "결과가 없는 응답", "unknown");
   return envelope.result;
@@ -182,15 +200,18 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
   return {
     name: "herdr",
     create({ session, role, cwd, cmd }) {
-      socket();
-      const previous = address(session);
-      if (previous && paneFor(previous)) deny("KADAN_HERDR_EXISTING_ADDRESS", "살아 있는 역할 주소를 덮어쓸 수 없다");
-      const command = commandWords(cmd || "/bin/zsh");
-      if (!command?.length || !path.isAbsolute(cwd)) deny("KADAN_HERDR_COMMAND", "절대 작업 경로와 단일 실행 명령이 필요하다");
-      const workspace = call("workspace.create", { cwd, label: role, focus: false });
-      const workspaceId = workspace.workspace?.workspace_id;
-      const tabId = workspace.tab?.tab_id;
-      if (!workspaceId || !tabId) deny("KADAN_HERDR_RESPONSE", "생성 주소 미확인; 서버에서 직접 확인 필요", "unknown");
+      let command, workspaceId, tabId;
+      try {
+        socket();
+        const previous = address(session);
+        if (previous && paneFor(previous)) deny("KADAN_HERDR_EXISTING_ADDRESS", "살아 있는 역할 주소를 덮어쓸 수 없다");
+        command = commandWords(cmd || "/bin/zsh");
+        if (!command?.length || !path.isAbsolute(cwd)) deny("KADAN_HERDR_COMMAND", "절대 작업 경로와 단일 실행 명령이 필요하다");
+        const workspace = call("workspace.create", { cwd, label: role, focus: false });
+        workspaceId = workspace.workspace?.workspace_id;
+        tabId = workspace.tab?.tab_id;
+        if (!workspaceId || !tabId) deny("KADAN_HERDR_RESPONSE", "생성 주소 미확인; 서버에서 직접 확인 필요", "unknown");
+      } catch (error) { throw redactReason(error); }
       try {
         const inherited = Object.fromEntries(Object.entries(env).filter(([k, v]) =>
           (k.startsWith("KADAN_") || ["PATH", "CLAUDE_CONFIG_DIR", "CODEX_HOME"].includes(k)) && typeof v === "string"));
@@ -201,21 +222,16 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
           root: { type: "pane", cwd, command, env: inherited, label: role } });
         const pane = snapshot().panes.find(p => p.workspace_id === workspaceId &&
           p.pane_id === applied.layout?.root?.pane_id && p.tab_id === applied.layout?.tab_id);
-        if (!pane?.terminal_id || pane.cwd !== cwd) ownDeny("KADAN_HERDR_CWD", "생성 경로·터미널 주소 불일치");
+        if (!pane?.terminal_id || pane.cwd !== cwd) deny("KADAN_HERDR_CWD", "생성 경로·터미널 주소 불일치");
         const pid = processInfo(pane)?.shell_pid;
-        if (!Number.isInteger(pid) || pid <= 0) ownDeny("KADAN_HERDR_PROCESS", "실행 프로세스 확인 실패");
+        if (!Number.isInteger(pid) || pid <= 0) deny("KADAN_HERDR_PROCESS", "실행 프로세스 확인 실패");
         const evidence = { panePid: String(pid), herdrSocket: socket(),
           herdrWorkspaceId: workspaceId, herdrPaneId: pane.pane_id, herdrTerminalId: pane.terminal_id };
         pending.set(session, evidence);
         warnIfTrustPrompt(pane);
         return evidence;
-      } catch (error) {
-        // 서버가 돌려준 거절 문구에는 시작 명령 낱말이 어떤 꼴(문자열·배열·JSON)로든 되풀이될 수 있고, 호출자가 사람
-        // 화면에 중계한다. 지우기로는 꼴을 다 막지 못하므로 서버 문구는 싣지 않고 코드(식별자 꼴일 때만)만 남긴다.
-        if (!error.ownDeny) {
-          const code = /^[A-Za-z0-9_.-]{1,64}$/.test(String(error.code)) ? error.code : "KADAN_HERDR_ERROR";
-          error.message = `${code}: 서버 거절 문구는 표시하지 않는다`;
-        }
+      } catch (raw) {
+        const error = redactReason(raw);
         try { call("workspace.close", { workspace_id: workspaceId, close_group: false }); }
         catch { error.message += " — 방금 만든 작업공간 종료 미확인"; }
         throw error;
