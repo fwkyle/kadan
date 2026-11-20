@@ -831,7 +831,10 @@ export async function runWatch({
       if(check&&!check.due)continue;
       const input={...candidate.input,...observationContext(role,seen,mailEntries,cards??[],
         candidate.source==='supervisor-health'?supervisorScope.entries:scope?.entries??[],
-        candidate.source==='supervisor-health'?decisionsNow:undefined)};
+        candidate.source==='supervisor-health'?decisionsNow:undefined,
+        // 감독 점검에는 "이 하위 실행은 대기 표시로 작업자 화면 감시 밖"임을 싣는다. 감시 범위가 이미 만든 목록의 키만 쓴다.
+        candidate.source==='supervisor-health'
+          ?{keys:new Set((scope?.waitingSessions??[]).map(e=>e.executionKey??e.taskId)),now:cycleAt}:null)};
       if(candidate.source==='progress'){
         // 걸러지지 않아 AI를 부르는 실행에는 그 실행에 걸린 답 대기와, 알림을 받을 상위 감독이 올린 열린 결정을 문맥으로 싣는다(거름 근거가 아니다).
         const card=(cards??[]).find(c=>c.key===taskIdentity(cards??[]).resolve(candidate.taskId).key);
