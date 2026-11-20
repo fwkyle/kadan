@@ -43,7 +43,7 @@ claude 2.1.302에는 설정 경로를 주는 환경 변수가 없다. `CLAUDE_CO
 3. 훅 명령과 `--settings` 값은 같은 셸 인용 함수(`shellQuote`)로 만든다: 작은따옴표가 없으면 `'…'`, 있으면 `"…"`, 둘 다 안전하게 못 쓰면(`$`·백틱·`\`·`"`와 `'` 동시) 설정 파일 생성이 거절되고, 이미 만든 뒤 경로가 바뀌어 붙일 수 없으면 `kadan start`가 `경고: Stop 훅을 붙이지 못했다(…)`를 낸다(조용히 빠지지 않는다).
 4. 이 파일이 있을 때만, 새로 띄우는 claude 역할 명령의 실행 파일 바로 뒤에 `--settings '<파일>'`이 붙는다(`kadan start --cmd`, 실행 모델 설정 기본 명령, `kadan restart`). **이미 떠 있는 역할은 다음 start·restart부터** 적용된다. 사람이 이미 `--settings`를 준 명령에는 붙이지 않는다.
 5. 확인: `node <main 체크아웃>/src/cli.mjs stop-hook status`. 역할의 실제 실행 인자는 `ps`에서 `--settings`로 보인다.
-6. 되돌리기: 설정 파일을 `.trash/`로 옮긴다. 이후 새로 띄우는 역할부터 붙지 않는다(이미 떠 있는 역할은 훅이 계속 돌지만 spool만 늘 뿐 해롭지 않다).
+6. 되돌리기: 설정 파일을 그 기계의 휴지통 규칙에 따라 치운다. 이후 새로 띄우는 역할부터 붙지 않는다(이미 떠 있는 역할은 훅이 계속 돌지만 spool만 늘 뿐 해롭지 않다).
 
 신원·재시작 비교(`withoutInlineScreen`)는 카단이 붙인 `--settings <우리 파일>`을 걷어내고 비교한다. 모델 다름은 거절, 강도 다름은 경고 그대로다(시험: `tests/stop-hook.test.mjs`, `tests/dispatch-runner-guard.test.mjs`).
 

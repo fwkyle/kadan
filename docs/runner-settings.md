@@ -271,7 +271,7 @@ kadan runners set secretary --runner codex --model <모델> --effort <강도> --
 kadan runners set secretary --clear --revision N --reason <이유>   # 비운다(이미 비어 있으면 "바뀐 것 없음"으로 거절)
 ```
 
-- **쓰이는 때는 비서를 같은 대화로 다시 열 때다.** 세 길 모두 같은 함수(`src/secretary-settings.mjs`) 하나를 지난다: `kadan restart 비서`, `kadan up`·`kadan up --auto`의 비서 복원, 로티 탭 복원(`kadan recovery restore`). 설정을 저장해도 지금 켜져 있는 비서는 그대로이고, 다음에 다시 열릴 때 반영된다. 바로 반영하려면 `kadan restart 비서`.
+- **쓰이는 때는 비서를 같은 대화로 다시 열 때와 새 비서를 처음 띄울 때다.** 다시 여는 세 길 모두 같은 함수(`src/secretary-settings.mjs`) 하나를 지난다: `kadan restart 비서`, `kadan up`·`kadan up --auto`의 비서 복원, 로티 탭 복원(`kadan recovery restore`). 설정을 저장해도 지금 켜져 있는 비서는 그대로이고, 다음에 다시 열릴 때 반영된다. 바로 반영하려면 `kadan restart 비서`.
 - **적용 시점은 실행할 명령을 만드는 순간이다.** 비서는 저장된 명령(`secretary-resume.json` 체크포인트)으로 다시 열리는데, 그 명령에서 모델(`--model`·`-m`·`--model=`)과 `-c model_reasoning_effort` **두 값만** 활성 프리셋의 비서 자리 값으로 바꾼다. 실행 파일·대화 ID·승인·샌드박스 등 다른 옵션·순서는 그대로다. 덧붙이지 않고 바꾸므로 모델·강도 옵션은 늘 한 벌이다(옵션이 아예 없던 명령에는 한 번만 넣는다).
 - **자리가 비어 있으면 아무것도 달라지지 않는다.** 다시 여는 명령이 이 기능이 없을 때와 글자 하나 다르지 않다.
 - **자리의 강도가 비어 있으면** 모델만 바꾸고 강도는 그대로 둔다. 강도 없는 값은 강도 자리(`{effort}`)가 없는 실행기 틀에서만 저장된다(아래 "같은 판정").
@@ -283,7 +283,7 @@ kadan runners set secretary --clear --revision N --reason <이유>   # 비운다
 - **원장**: 설정값을 쓴 `start`에 `restart --model-from-settings`와 같은 칸(`modelFromSettings: true`·`settingsRevision`·`settingsPreset`·`runnerChoice`, 값이 바뀌었으면 `previousModel`·`previousEffort`)이 남는다. 값이 이미 같아 바뀐 것이 없어도 앞의 네 칸은 남는다.
 - **`kadan restart 비서 --model-from-settings`**: 비서는 옵션 없이도 설정값으로 열리므로 평소에는 필요 없다. 옵션을 주면 "반드시 설정값으로"라는 뜻이라, 자리가 비었거나 값을 쓸 수 없을 때 **끄기 전에** 거절한다(옵션이 없으면 저장된 명령 그대로 연다). 통과하면 **끄기 전에 확인한 자리 값과 설정 버전을 그대로 이어 써서** 연다: 확인과 끄기 사이에 다른 저장이 자리를 비우거나 값을 바꿔도 확인한 값으로 열리고, 새 `start`의 `settingsRevision`도 확인한 버전이다. 옵션 없는 평소 restart와 `up` 복원은 다시 여는 순간의 설정을 읽는다.
 - 대체 후보(`fallback.secretary`)·비교 모드 돌려 고르기·`kadan runners init`의 기본 채우기 대상이 아니다.
-- **새 비서를 처음 띄울 때**(`kadan up`이 비서를 새로 만드는 경우)는 이 값을 쓰지 않는다. 그때는 `kadan init`에서 정한 실행 명령 그대로다.
+- **새 비서를 처음 띄울 때**(`kadan up`이 비서를 새로 만드는 경우, 2026-11-20)도 같은 함수를 지난다(`fresh` 모드: `resume` 꼴을 요구하지 않는다). `kadan init`에서 정한 실행 명령(`codex` 또는 `codex <옵션…>`)의 모델·강도 두 값만 자리 값으로 바꿔 띄우고, 그 `start` 원장에 다시 여는 길과 같은 칸(`modelFromSettings`·`settingsRevision`·`runnerChoice` 등)이 남는다. 자리가 비어 있으면 명령은 글자 하나 다르지 않다. 값을 쓸 수 없으면(설정 파일을 못 읽음·실행기가 codex가 아님·모델이 막혔거나 목록에 없음·실행기 명령이 codex가 아니거나 모델 옵션 자리를 하나로 읽지 못함) 원래 명령으로 시작하고 `modelFromSettingsSkipped` 칸과 경고 한 줄이 남는다 — 시작은 막지 않는다. `kadan up --cmd <명령>`으로 사람이 직접 준 명령에는 자리 값을 입히지 않는다.
 - `kadan runners show`의 `launch.secretary`와 대시보드 비서 줄의 **다시 열 때 동작 보기**가 지금 값이 무엇을 하는지 한 줄로 보인다.
 
 ## 옛 세션 발령 막기
