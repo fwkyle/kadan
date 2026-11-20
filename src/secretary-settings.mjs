@@ -57,6 +57,8 @@ function readSlot(home, read) {
 }
 
 // command: 인라인 화면 옵션을 붙이기 전의 `codex resume <대화> …` 명령.
+// fresh: true면 새 비서의 첫 시작 명령(`codex` 또는 `codex <옵션…>`)을 받는다. resume 꼴을 요구하지 않고 실행 파일 낱말 하나 뒤에
+//   두 값만 바꾼다(quickstart.mjs runUp의 startNew). 나머지 규칙은 그대로다. 주지 않으면 지금까지와 같다.
 // pinned: 앞선 호출이 돌려준 pinned(확인을 마친 자리 값과 설정 버전). 주면 설정을 다시 읽지 않고 그 값을 그대로 입힌다.
 //   restart 비서 --model-from-settings가 끄기 전에 확인한 값을 끈 뒤에도 그대로 쓰려고 넘긴다.
 // 반환: {command, extra, applied, skipped, pinned}
@@ -65,7 +67,7 @@ function readSlot(home, read) {
 // - applied: 적용했을 때만 {changed, model, effort, previousModel, previousEffort, revision, preset}.
 // - skipped: 적용하지 못한 이유 낱말. 자리가 비어 있는 것은 이유가 아니다(null).
 // - pinned: 적용했을 때만 {slot, revision, preset}. 다음 호출의 pinned로 넘길 수 있다.
-export function secretaryCommandFromSettings({home, command, read = readSettings, pinned = null}) {
+export function secretaryCommandFromSettings({home, command, read = readSettings, pinned = null, fresh = false}) {
   const keep = (skipped = null) =>
     ({command, extra: skipped ? {modelFromSettingsSkipped: skipped} : {}, applied: null, skipped, pinned: null});
   try {
@@ -73,17 +75,19 @@ export function secretaryCommandFromSettings({home, command, read = readSettings
     if (skipped) return keep(skipped);
     if (!slot) return keep();
     const words = commandWords(command);
-    const resumeShape = words && words.length >= 3 && words[0].split('/').pop() === SECRETARY_RUNNER && words[1] === 'resume';
-    if (!resumeShape) return keep('command-shape');
-    const head = words.slice(0, 3);
-    const swapped = replaceModelOptions(words.slice(3), slot);
+    const keepWords = fresh ? 1 : 3;
+    const shape = words && words.length >= keepWords && words[0].split('/').pop() === SECRETARY_RUNNER
+      && (fresh || words[1] === 'resume');
+    if (!shape) return keep('command-shape');
+    const head = words.slice(0, keepWords);
+    const swapped = replaceModelOptions(words.slice(keepWords), slot);
     if (!swapped) return keep('command-shape');
     let next = command;
     if (swapped.changed) {
       next = serializeWords([...head, ...swapped.args]);
       if (!next) return keep('quote-failed');
       // 스스로 확인: 두 값 말고 모든 낱말이 같고, 모델·강도 키가 하나씩 설정값이며, 원장이 읽는 모델도 설정값이다.
-      const again = replaceModelOptions(commandWords(next).slice(3), slot);
+      const again = replaceModelOptions(commandWords(next).slice(keepWords), slot);
       const identity = launchIdentityOf(next);
       const sameRest = again && !again.changed && JSON.stringify(again.rest) === JSON.stringify(swapped.rest);
       const sameIdentity = identity.ok && identity.harness === SECRETARY_RUNNER && identity.model === slot.model;
@@ -105,6 +109,13 @@ export function secretaryCommandFromSettings({home, command, read = readSettings
     };
   } catch { return keep('internal'); }
 }
+
+// 새 비서의 첫 시작(quickstart.mjs runUp의 secretarySettings 자리)에 넣는 함수. 결과에 사람이 읽을 한 줄(note)을 더한다.
+export const freshSecretarySettings = home => ({command}) => {
+  const result = secretaryCommandFromSettings({home, command, fresh: true});
+  return {...result, note: result.skipped
+    ? `비서 실행 모델 설정을 적용하지 못해 실행기 명령 그대로 띄운다(${SECRETARY_SKIP_REASONS[result.skipped] ?? result.skipped})` : null};
+};
 
 // 설정 화면·runners show의 '무엇이 일어나는가' 한 줄. 자리가 비어 있으면 null이다.
 export function secretaryCommandLabel(value) {

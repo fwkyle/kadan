@@ -79,3 +79,41 @@ test("따옴표로 감싼 모델 이름은 벗겨서 남긴다 — 2026-09-12 ki
   assert.equal(described.harness, "codex");
   assert.equal(described.model, "kimi/k3[1m]");
 });
+
+// TODO 18행(2026-11-20): 비서 복원·재시작이 쓰는 따옴표 친 명령에서 실행기 이름과 모델을 못 읽어
+// `kadan status`에 `'codex' · 모름 · 모름`으로 보였다. 기록용 칸만 고친다 — 카단은 이 값으로 판단하지 않는다.
+test("따옴표 친 비서 명령도 실행기 이름(따옴표 없이)과 --model 값을 원장 start 칸에 남긴다 — TODO 18행", () => {
+  const cmd = `'codex' 'resume' 'conv-1' '--model' 'gpt-x' '-c' 'model_reasoning_effort="high"' --no-alt-screen`;
+  const entry = buildStartLedgerEntry({
+    floorName: "tmux", role: "비서", session: "kadan-비서", evidence: { panePid: "444" }, window: "hidden", cmd, env: {},
+  });
+
+  assert.equal(entry.harness, "codex");
+  assert.equal(entry.model, "gpt-x");
+  assert.equal(entry.cmd, cmd, "명령 원문은 그대로 보존한다");
+  // 새 비서의 첫 시작 명령 꼴(resume 없음)도 같다.
+  const fresh = describeStartCmd(`'codex' '--model' 'gpt-x' '-c' 'model_reasoning_effort="medium"'`);
+  assert.equal(fresh.harness, "codex");
+  assert.equal(fresh.model, "gpt-x");
+  // 큰따옴표·한 낱말 꼴·절대경로 실행기도 따옴표 없이 남는다.
+  assert.deepEqual(
+    [describeStartCmd(`"codex" "--model" "gpt-x"`), describeStartCmd(`'--model=gpt-x'`), describeStartCmd(`'/opt/bin/codex' '--model=gpt-x'`)]
+      .map(({ harness, model }) => [harness, model]),
+    [["codex", "gpt-x"], ["--model=gpt-x", "gpt-x"], ["codex", "gpt-x"]],
+  );
+});
+
+test("따옴표 없는 기존 명령의 describeStartCmd 결과는 글자 하나 달라지지 않는다 — TODO 18행 회귀 0", () => {
+  // 기준값은 이 수정을 넣기 전 코드가 같은 입력에 낸 실제 출력이다(2026-11-20 수정 전 코드로 뽑아 옮겼다).
+  const before = {
+    "codex": {"harness": "codex", "conversationMode": "new", "cmd": "codex"},
+    "codex -p lite --model gpt-6-astra -c model_reasoning_effort=\"medium\"": {"harness": "codex", "model": "gpt-6-astra", "conversationMode": "new", "cmd": "codex -p lite --model gpt-6-astra -c model_reasoning_effort=\"medium\""},
+    "codex --model=gpt-6-sol": {"harness": "codex", "model": "gpt-6-sol", "conversationMode": "new", "cmd": "codex --model=gpt-6-sol"},
+    "LC_ALL=C /opt/homebrew/bin/claude --model claude-fable-5-1": {"harness": "claude", "model": "claude-fable-5-1", "conversationMode": "new", "cmd": "LC_ALL=C /opt/homebrew/bin/claude --model claude-fable-5-1"},
+    "omo --model openai-codex/gpt-6-astra --thinking high": {"harness": "omo", "model": "openai-codex/gpt-6-astra", "conversationMode": "new", "cmd": "omo --model openai-codex/gpt-6-astra --thinking high"},
+    "claude": {"harness": "claude", "conversationMode": "new", "cmd": "claude"},
+    "codex resume abc --model gpt-6-luna": {"harness": "codex", "model": "gpt-6-luna", "conversationMode": "resume", "conversationRef": "abc", "cmd": "codex resume abc --model gpt-6-luna"},
+    "codex -p lite --model 'kimi/k3[1m]'": {"harness": "codex", "model": "kimi/k3[1m]", "conversationMode": "new", "cmd": "codex -p lite --model 'kimi/k3[1m]'"},
+  };
+  for (const [cmd, expected] of Object.entries(before)) assert.deepEqual(describeStartCmd(cmd), expected, cmd);
+});
