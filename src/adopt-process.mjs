@@ -72,6 +72,8 @@ export function captureSource({conversation, env = process.env, inspect = proces
 // --allowed-tools/--allowedTools is only a pre-approval list: dropping it can make the new conductor ask
 // more often (never less), so it is not a restriction and is not rejected. Its value is not carried over
 // (ps cannot restore quoting such as `Bash(git diff:*)` exactly).
+// The check is a flat-string scan on purpose: ps loses argument boundaries, so a restriction name inside an
+// allow-list value (e.g. `Bash(dotnet test --settings x *)`) is rejected too rather than guessed apart.
 export function checkLaunchPermissions(ai, run = spawnSync) {
   if (!ai) return;
   const result = run('ps', ['-ww', '-p', ai.pid, '-o', 'args='], {encoding: 'utf8', timeout: 3000});

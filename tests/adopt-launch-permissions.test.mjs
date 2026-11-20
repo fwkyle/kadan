@@ -52,6 +52,14 @@ test('허용 목록과 제한 옵션이 함께 있으면 제한 쪽 때문에 �
   assert.throws(check('claude --allowed-tools a --tools Read'), REJECT);
 });
 
+test('허용 목록 값 안에 제한 옵션 이름이 있으면 인자 경계를 알 수 없어 거절한다(의도된 보수적 동작)', () => {
+  const value = 'Bash(dotnet test --settings sample.runsettings *)';
+  for (const option of ['--allowed-tools', '--allowedTools']) {
+    assert.throws(check(`claude ${option} ${value}`), REJECT, `${option} 공백`);
+    assert.throws(check(`claude ${option}=${value}`), REJECT, `${option}=`);
+  }
+});
+
 test('ps 확인에 실패하면 옵션을 모른 채 통과시키지 않는다', () => {
   assert.throws(() => checkLaunchPermissions(ai, () => ({status: 1, stdout: ''})), /확인하지 못했습니다/);
 });
