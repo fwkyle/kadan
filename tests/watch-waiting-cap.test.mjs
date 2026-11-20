@@ -271,20 +271,24 @@ test('더한 표 5: 빈 입력창 + 현재 실행에 등록한 질문, 또는 �
 // 수정 2(2026-11-20 재검수 발견 1건): 답 대기로 타이머를 버리는 규칙을 모든 경로에서 고정한다.
 // 두 실행(끝난 이전 실행 + 대기 표시한 현재 실행)을 같은 열린 업무에 둔다. 한 업무에 구현 → 수정 → 재검수 실행이 이어지는 평소 모양이다.
 // 우편은 실제 우편함 저장 경로(Mailbox.send → resolveWorkMail)가 격리 홈에 남긴 원장 줄을 그대로 쓰고 시각(t)만 가짜 시계에 맞춘다.
-const PREV = 'qa/qa-prev';
+const PREV = 'qa/qa-prev', TWIN = 'sibling/qa-task';
 const MAILS = (() => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-waiting-cap-mail-'));
   createDatabase(home); writeStorageMarker(home, 'sqlite');
   const cards = new CardStore(home), works = new WorkStore(home);
   works.create({key: WORK, title: '업무', goal: '결과', scope: '범위', acceptance: '기준', owner: BOSS, repoPath: home, board: 'qa', by: BOSS});
   for (const id of ['qa-prev', 'qa-task']) cards.create({repo: 'qa', id, repoPath: home, body: `# ${id}`, by: BOSS});
+  // 정식 주소가 다르고 짧은 ID만 현재 실행과 같은 이전 실행(짧은 ID 중복은 지원하는 입력이다: docs/task-identity.md).
+  cards.create({repo: 'sibling', id: 'qa-task', repoPath: home, body: '# qa-task', by: BOSS});
   const ask = (to, by, link) => new Mailbox(home, to).send({by, message: '확인 부탁드립니다', expectReply: true, ...link}).mailId;
   // 실행을 업무에 잇기 전에 보낸 우편에는 업무 키가 붙지 않는다.
   const ids = {prevNoWork: ask(BOSS, WORKER, {executionKey: PREV})};
   works.change(WORK, 'link', {execution: PREV, phase: 'implementation', round: 1}, {revision: 1, by: BOSS, note: '실행 연결'});
   works.change(WORK, 'link', {execution: KEY, phase: 'review', round: 1}, {revision: 2, by: BOSS, note: '실행 연결'});
+  works.change(WORK, 'link', {execution: TWIN, phase: 'review', round: 2}, {revision: 3, by: BOSS, note: '실행 연결'});
   Object.assign(ids, {prev: ask(BOSS, WORKER, {executionKey: PREV}), current: ask(BOSS, WORKER, {executionKey: KEY}),
-    workOnly: ask(BOSS, WORKER, {workKey: WORK}), bossPrev: ask(TOP, BOSS, {executionKey: PREV}), bossCurrent: ask(TOP, BOSS, {executionKey: KEY})});
+    workOnly: ask(BOSS, WORKER, {workKey: WORK}), bossPrev: ask(TOP, BOSS, {executionKey: PREV}), bossCurrent: ask(TOP, BOSS, {executionKey: KEY}),
+    bossWorkOnly: ask(TOP, BOSS, {workKey: WORK}), twin: ask(BOSS, WORKER, {executionKey: TWIN}), bossTwin: ask(TOP, BOSS, {executionKey: TWIN})});
   const rows = readLedger(home);
   return Object.fromEntries(Object.entries(ids).map(([name, mailId]) => [name, rows.find(e => e.mailId === mailId)]));
 })();
@@ -325,13 +329,10 @@ test('수정 2 표 4: 감독이 이전 실행으로 상위에게 물은 미답 �
   assert.deepEqual(once(await inSameWork({mail: {before: [mailAt('bossPrev', -5)]}})), ONCE);
 });
 
-test('수정 2 표 5·6: 실행 키 없이 업무에만 연결한 답 대기는 현재 발령 전이면 1회, 뒤면 0회', async () => {
+// 수정 3(축소)으로 바뀐 줄: 업무 단위 채팅 결정은 발령 뒤에 생겼어도 가리지 않는다(예전 0회 → 1회).
+test('수정 2 표 5·6: 실행 키 없이 업무에만 연결한 질문은 현재 발령 전이면 1회, 뒤면 0회(발령 뒤 질문은 hasOpenQuestion)', async () => {
   assert.deepEqual(once(await inSameWork({mail: {before: [mailAt('workOnly', -5)]}})), ONCE, '발령 전 업무 질문');
   assert.deepEqual(once(await inSameWork({mail: {after: [mailAt('workOnly', 1)]}})), NEVER, '발령 뒤 업무 질문');
-  // 업무 단위(채팅) 사용자 결정도 같다. 질문 우편과 달리 이 갈래는 답 대기 표로만 걸린다.
-  const chat = minute => () => [decisionAt(minute, {chat: true, work: WORK})];
-  assert.deepEqual(once(await inSameWork({decisions: chat(-5)})), ONCE, '발령 전 업무 결정');
-  assert.deepEqual(once(await inSameWork({decisions: chat(1)})), NEVER, '발령 뒤 업무 결정');
 });
 
 test('수정 2 표 7: 현재 실행에 연결한 질문·결정과 감독이 현재 실행으로 물은 질문은 0회(지금과 같음)', async () => {
@@ -350,6 +351,66 @@ test('수정 2 표 8: 사용자 차례·업무 대기 시각은 0회(지금과 �
   assert.deepEqual(once(await inSameWork({works: sameWork({waitUntil: stamp(600), waitUntilSetAt: stamp(-5)})})), NEVER, '업무 대기 시각');
   // 양성 대조: 차례 기록이 마지막 하위 실행보다 앞이면(stale) 사용자 차례가 아니다.
   assert.deepEqual(once(await inSameWork({works: sameWork({turnOwner: '@user', turnAt: stamp(-9)})})), ONCE, '지난 차례 기록');
+});
+
+// 수정 3(2026-11-20 재검수 2 발견 1건): 우편·결정이 타이머를 버리는 조건을 둘로 줄인다 —
+// 항목의 정식 실행 키가 현재 실행의 정식 키와 정확히 같음, 또는 hasOpenQuestion(이번 발령 뒤 그 역할이 보낸 열린 질문).
+// 짧은 ID가 같고 정식 주소가 다른 이전 실행(sibling/qa-task ↔ qa/qa-task)을 같은 열린 업무에 둔다.
+const twinCard = {...running, id: 'qa-task', key: TWIN, status: 'done'};
+const twinSend = {...dispatch, executionKey: TWIN, t: stamp(-8)};
+const twinTimeline = ({before = [], after = []} = {}) => [...early, twinSend, ...before, {...twinSend, kind: 'done', result: 'ok', t: stamp(-3)}, dispatch, ...after];
+const withTwin = (options = {}) => simulate({screen: () => QUIET, others: [twinCard],
+  works: () => [work({executions: [{key: TWIN}, {key: KEY}]})], seed: twinTimeline(options.mail), ...options});
+
+test('수정 3 준비: 두 실행은 짧은 ID가 같고 정식 주소가 다르며, 답 대기가 없으면 60분에 1회', async () => {
+  assert.deepEqual([twinCard.id, twinCard.key, waiting.id, waiting.key], ['qa-task', TWIN, 'qa-task', KEY]);
+  assert.deepEqual([MAILS.twin.executionKey, MAILS.twin.workKey, MAILS.bossTwin.executionKey], [TWIN, WORK, TWIN], '우편은 이전 실행의 정식 주소에만 걸려 있다');
+  assert.deepEqual(once(await withTwin()), ONCE);
+});
+
+test('수정 3 표 1: 짧은 ID가 같고 정식 주소가 다른 이전 실행에만 연결한 미답 질문은 60분에 1회', async () => {
+  assert.deepEqual(once(await withTwin({mail: {before: [mailAt('twin', -5)]}})), ONCE, '작업자의 질문');
+  assert.deepEqual(once(await withTwin({mail: {before: [mailAt('bossTwin', -5)]}})), ONCE, '감독이 상위에게 물은 질문');
+  assert.deepEqual(once(await withTwin({mail: {after: [mailAt('bossTwin', 1)]}})), ONCE, '감독이 현재 발령 뒤에 이전 실행 키로 물은 질문');
+  // 우편에 짧은 ID(taskId 별칭)가 함께 적혀 있고 이전 실행 카드가 목록에 없어도(짧은 ID가 현재 실행 하나로 풀리는 상황) 가리지 않는다.
+  const aliased = name => ({...mailAt(name, -5), taskId: 'qa-task'});
+  for (const name of ['bossTwin', 'twin'])
+    assert.deepEqual(once(await withTwin({others: [], mail: {before: [aliased(name)]}})), ONCE, `taskId 별칭이 붙은 ${name}`);
+});
+
+test('수정 3 표 2: 짧은 ID가 같고 정식 주소가 다른 이전 실행 카드에 건 열린 사용자 결정은 60분에 1회', async () => {
+  for (const [minute, link] of [[-5, {card: TWIN, work: WORK}], [-5, {card: TWIN}], [1, {card: TWIN, work: WORK}]])
+    assert.deepEqual(once(await withTwin({decisions: () => [decisionAt(minute, link)]})), ONCE, `${minute}분 ${JSON.stringify(link)}`);
+});
+
+test('수정 3 표 3: 현재 실행 정식 키에 연결한 질문·결정과 감독이 현재 실행 키로 물은 질문은 0회', async () => {
+  const cases = {
+    '재발령 전에 현재 실행 키에 연결해 둔 질문': {mail: {before: [mailAt('current', -5)]}},
+    '현재 실행 카드의 사용자 결정': {decisions: () => [decisionAt(-5, {card: KEY, work: WORK})]},
+    '감독이 현재 실행 키로 상위에게 물은 질문': {mail: {after: [mailAt('bossCurrent', 1)]}},
+  };
+  for (const [name, options] of Object.entries(cases)) assert.deepEqual(once(await withTwin(options)), NEVER, name);
+});
+
+test('수정 3 표 4: 작업자가 이번 발령 뒤 보낸 열린 질문은 0회(hasOpenQuestion). 같은 질문이 발령 전 것이면 1회', async () => {
+  for (const name of ['twin', 'workOnly', 'prev']) {
+    assert.deepEqual(once(await withTwin({mail: {after: [mailAt(name, 1)]}})), NEVER, `발령 뒤 ${name}`);
+    assert.deepEqual(once(await withTwin({mail: {before: [mailAt(name, -5)]}})), ONCE, `발령 전 ${name}`);
+  }
+});
+
+test('수정 3 표 5: 실행 키 없이 업무에만 연결한 감독 질문·업무 단위 결정은 60분에 1회(결정은 축소로 바뀜)', async () => {
+  for (const minute of [-5, 1]) {
+    const mail = minute < 0 ? {before: [mailAt('bossWorkOnly', minute)]} : {after: [mailAt('bossWorkOnly', minute)]};
+    assert.deepEqual(once(await inSameWork({mail})), ONCE, `감독의 업무 단위 질문 ${minute}분`);
+    assert.deepEqual(once(await inSameWork({decisions: () => [decisionAt(minute, {chat: true, work: WORK})]})), ONCE, `업무 단위 채팅 결정 ${minute}분`);
+  }
+});
+
+test('수정 3 표 6: 사용자 차례·업무 대기 시각은 0회(그대로)', async () => {
+  const works = extra => () => [work({executions: [{key: TWIN}, {key: KEY}], ...extra})];
+  assert.deepEqual(once(await withTwin({works: works({turnOwner: '@user', turnAt: stamp(2)})})), NEVER, '사용자 차례');
+  assert.deepEqual(once(await withTwin({works: works({waitUntil: stamp(600), waitUntilSetAt: stamp(-5)})})), NEVER, '업무 대기 시각');
 });
 
 // --- 판정 함수 단독(감시기 없이) ---

@@ -690,9 +690,9 @@ export async function runWatch({
     try {
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
       const worksOf = key => (works ?? []).filter(w => (w.executions ?? []).some(x => x.key === key)).map(w => `work:${w.key}`);
-      // own·at은 대기 시간 상한만 읽는다(waitOfExecution): 항목 자신의 실행 연결(업무 키 제외)과 생긴 시각. ids와 기존 소비자는 그대로다.
-      const item = (key, taskId, workKey, answerer, at) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean),
-        own: [taskId, key, idOf(key)].filter(Boolean), at: at ?? null });
+      // execution은 대기 시간 상한만 읽는다(waitOfExecution): 항목이 걸린 정식 실행 키(전체 카드 key). ids와 기존 소비자는 그대로다.
+      const item = (key, taskId, workKey, answerer) => ({ answerer, ids: [taskId, key, idOf(key), ...(key ? worksOf(key) : []), workKey ? `work:${workKey}` : null].filter(Boolean),
+        execution: key ?? null });
       // 완전자율: 진행 기록이 붙었거나 대기 시간이 지나 진행할 자격이 생긴 결정은 답 대기로 세지 않는다(그 결정이 막던 일이 다시 요청한 감독의 할 일이다).
       // 자격 판정은 decision-proceed의 함수 하나이고, 값을 읽지 못하면(스냅샷 없음) 계속 답 대기다. 감시기는 결정·원장을 쓰지 않는다.
       const releasedDecision = d => {
@@ -712,10 +712,10 @@ export async function runWatch({
       for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) {
         const released = releasedDecision(d);
         if (released === "free") continue;
-        waits.push({ ...item(d.card ?? null, null, d.work ?? null, released === "duty" ? d.requestedBy : "@user", d.at), kind: "decision", ref: d.id });
+        waits.push({ ...item(d.card ?? null, null, d.work ?? null, released === "duty" ? d.requestedBy : "@user"), kind: "decision", ref: d.id });
       }
       for (const l of waitingLetters(entries))
-        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient, l.t), kind: "mail", ref: l.mailId, mailId: l.mailId, asker: l.currentSender || l.by });
+        if (l.expectReply && !l.replyFinal && !l.notificationOnly && !l.systemGenerated && l.currentRecipient) waits.push({ ...item(l.executionKey, l.taskId, l.workKey, l.currentRecipient), kind: "mail", ref: l.mailId, mailId: l.mailId, asker: l.currentSender || l.by });
       // 차례 칸이 사용자이고 기록이 current인 업무도 사용자 답 대기다(B4a). 카드를 못 읽었으면 current를 모르므로 빼지 않는다.
       if (cards) {
         userTurnWaits = userTurnWaitList(works, cards);
@@ -745,21 +745,26 @@ export async function runWatch({
     const workerAsks = e => waits.some(w => w.kind === 'mail' && w.asker === e.role && [e.taskId, e.executionKey].some(id => id && w.ids.includes(id)));
     // 대기 시간 상한(마지막 그물): 대기 표시 실행의 화면이 일하는 표시 없이 1시간 그대로면 직속 상위에게 1회(assessWaitingCap).
     // 이미 읽은 화면과 위에서 만든 답 대기 목록만 쓴다. 화면 새로 읽기·원장 읽기·AI 호출·키 전송이 없다.
-    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션과, 아래 답 대기다. 우편·결정은 "이 실행의 것"만 센다.
+    // 다른 경로가 맡는 대기는 뺀다: 이번 순회에 `대기중정지`가 난 세션, 사용자 차례·업무 대기 시각(업무 단위 대기), 그리고 우편·결정 답 대기.
+    // 우편·결정이 타이머를 버리는 조건은 둘뿐이다.
     //  (1) 그 역할이 이번 발령 뒤에 보내 답을 기다리는 질문 우편(멈춤 판정과 같은 hasOpenQuestion. 이전 발령 때의 미답 우편은 아니다).
-    //  (2) 답 대기 표에서 그 카드에 걸린 항목(waitsOfCard) 가운데 waitOfExecution이 고른 것: 자기 실행 연결이 이 실행인 우편·결정,
-    //      실행 연결 없이 이번 발령 뒤에 생긴 우편·결정, 사용자 차례·업무 대기 시각. 소속 업무 키가 같다는 것만으로는 빼지 않는다
-    //      (같은 업무의 끝난 이전 실행에 걸린 미답 질문·결정이 지금 실행의 멈춤을 가리지 않게).
-    //  (3) 감독이 그 실행으로 상위에게 물어 기다리는 답(supervisorWaits: 이 실행의 taskId·실행 키로만 찾는다).
+    //  (2) 항목의 정식 실행 키가 이 실행의 정식 키와 정확히 같다(waitOfExecution). 그 카드에 걸린 항목(waitsOfCard: 그 역할의 질문 우편·
+    //      사용자 결정)과, 감독이 그 실행으로 상위에게 물은 답 대기(supervisorWaitsOn) 둘 다 이 조건 하나로 본다.
+    // 짧은 카드 id·taskId 별칭·소속 업무 키가 같다는 것으로는 빼지 않는다. 실행 키 없이 업무에만 걸린 질문·채팅 결정도 빼지 않는다
+    // (끝난 이전 실행이나 짧은 id만 같은 다른 실행에 걸린 미답 질문·결정이 지금 실행의 멈춤을 가리지 않게).
     // hold와 결과 등록 뒤 확정 대기는 처음부터 대상이 아니다.
     // 비용: 대기 세션 수 × (상태 줄 검사 한 번 + 그 역할의 열린 질문·답 대기 목록·업무 목록 훑기 한 번). 원장이 10배여도 그대로다.
     const stopSessions = new Set(waitingStops.map(a => a.session));
+    // 감독이 그 실행으로 상위에게 물은 답 대기: 정식 실행 키가 같은 항목만 골라 기존 판정(waitingExcluder: 답할 쪽이 그 감독·그 아래가 아님)에 넣는다.
+    const supervisorWaitsOn = e => Boolean(e.executionKey && parents.has(e.role)
+      && waitingExcluder(waits.filter(w => w.execution === e.executionKey), parents)(e.executionKey, parents.get(e.role)));
     const waitingCap = observationError || !scope
       ? {states: waitingCapStates, alerts: []}
       : assessWaitingCap(waitingCapStates, scope.waitingSessions, roles.observations, {
           elapsedMs: cycleAt - lastCycleAt, intervalMs, canOpen: waitsRead,
           excluded: e => stopSessions.has(e.session) || hasOpenQuestion(mailEntries, e.role, e.t)
-            || waitsOfCard(waits, e.card, e.taskId, works, e.role).some(w => waitOfExecution(w, e.card, e.taskId, e.t)) || supervisorWaits(e),
+            || waitsOfCard(waits, e.card, e.taskId, works, e.role).some(w => waitOfExecution(w, e.executionKey))
+            || supervisorWaitsOn(e),
         });
     waitingCapStates = waitingCap.states;
     const settledSessions = settled => {
