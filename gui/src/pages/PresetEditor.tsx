@@ -56,16 +56,17 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   const [draft, setDraft] = useState(settings), [base, setBase] = useState(presetStamp(settings));
   // 바꾸는 이유: 손대기 전(null)에는 기본 문구(바꾼 역할 이름)를 칸에 미리 채워 보인다. 칸은 늘 보이고 고쳐 쓸 수 있다.
   const [reason, setReason] = useState<string | null>(null), [busy, setBusy] = useState(false);
-  // 저장이 서버에서 '설정이 바뀌었다'로 거절됐다(화면이 아직 새 값을 못 읽은 사이의 리비전 충돌).
-  const [refused, setRefused] = useState(false);
+  // 저장이 서버에서 '설정이 바뀌었다'로 거절됐을 때의 변경안 버전(화면이 아직 새 값을 못 읽은 사이의 리비전 충돌). 최신 설정을 읽으면 푼다.
+  const [refused, setRefused] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]), [reset, setReset] = useState(0);
   // 편집 칸을 여는 것만으로는 초안이 바뀌지 않는다(열린 줄 이름만 따로 든다).
   const [open, setOpen] = useState<string[]>(initialOpen);
   const dirty = presetStamp(draft) !== base;
   const locked = Boolean(settings.compare?.enabled && settings.compare.presets.includes(settings.activePreset));
-  const conflict = dirty && (presetStamp(settings) !== base || refused);
-  const frozen = busy || conflict || locked;
+  const conflict = dirty && presetStamp(settings) !== base;
+  const waiting = refused !== null;
+  const frozen = busy || conflict || locked || waiting;
   const changed = changedRoles(settings, draft, Object.keys(data.roles));
   const labels = changed.map(role => data.roles[role] ?? role);
   // 모델을 안 고른 초안은 서버까지 보내지 않고 저장 줄에서 알린다.
@@ -91,9 +92,16 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   // 이 줄은 등록한 모델을 고른 변경안으로 만든다(대체 후보 칸은 '추가'를 눌러야 반영). 등록을 기다리는 동안 고친 줄을 잃지 않게 함수형 갱신이다.
   const registered = (role: string, fallback: boolean, choice: Choice, revision: number) =>
     setDraft(old => withRegistered(old, role, fallback, choice, revision));
+  // 거절 뒤 최신 설정을 읽었다. 이 프리셋이 그대로면(다른 프리셋·모델 목록·즐겨찾기만 바뀜) 변경안은 새 버전으로 이어 쓰므로
+  // 저장을 다시 누르면 된다. 이 프리셋이 바뀌었으면 위의 conflict가 '다시 읽기'를 보인다.
+  useEffect(() => {
+    if (refused === null || settings.revision <= refused) return;
+    setRefused(null);
+    if (presetStamp(settings) === base) context.notice('최신 값을 읽었습니다. 바꾼 것은 그대로입니다 — 저장을 다시 누르세요.');
+  }, [settings, refused, base, context.notice]);
   const discard = () => {
     setDraft(old => adoptSettings(old, settings)); setBase(presetStamp(settings)); setReason(null); setError(null);
-    setOpen([]); setReset(n => n + 1); setRefused(false);
+    setOpen([]); setReset(n => n + 1); setRefused(null);
   };
   // 다시 읽기: 최신 설정을 새로 받아 오고 고치던 변경안은 버린다. 설정 파일은 건드리지 않는다.
   const reload = () => { invalidateResources(); discard(); };
@@ -173,8 +181,8 @@ export function PresetEditor({data, settings, initialOpen = []}: {
         context.notice('저장했습니다. 다음 발령부터 적용됩니다.');
       } catch (e) {
         const message = e instanceof Error ? e.message : '저장 실패';
-        // 서버의 리비전 거절(runner-settings change): 저장되지 않았다. 최신 값을 바로 다시 읽기 시작하고 '다시 읽기'를 보인다.
-        if (message.startsWith('설정이 바뀌었다')) { setRefused(true); invalidateResources(); }
+        // 서버의 리비전 거절(runner-settings change): 저장되지 않았다. 최신 값을 바로 다시 읽는다.
+        if (message.startsWith('설정이 바뀌었다')) { setRefused(draft.revision); invalidateResources(); }
         else setError(message);
       }
       finally { setBusy(false); }
@@ -183,7 +191,8 @@ export function PresetEditor({data, settings, initialOpen = []}: {
       <button className="primary" disabled={blocked}>{busy ? '저장 중…' : '저장'}</button>
       <button type="button" disabled={busy} onClick={discard}>되돌리기</button>
       <p className="muted save-note">프리셋 <strong>{settings.activePreset}</strong>에 저장됩니다. 다음 발령부터 적용되고 열린 창은 그대로입니다.</p>
-      {conflict && <p className="save-warn">다른 곳에서 설정이 바뀌어 저장되지 않습니다. 최신 값을 불러온 뒤 다시 고르세요.{' '}
+      {waiting && <p className="save-warn">다른 곳에서 설정이 바뀌어 저장되지 않았습니다. 최신 값을 읽는 중입니다.</p>}
+      {conflict && <p className="save-warn">다른 곳에서 이 프리셋이 바뀌어 저장되지 않습니다. 최신 값을 불러온 뒤 다시 고르세요.{' '}
         <button type="button" disabled={busy} onClick={reload}>다시 읽기</button></p>}
       {unpicked.length > 0 && <p className="save-warn">{unpicked.map(label => `${label}: 모델을 고르세요`).join(' · ')}</p>}
       {noEffort.length > 0 && <p className="save-warn">{noEffort.map(label => `${label}: 강도를 고르세요`).join(' · ')}</p>}

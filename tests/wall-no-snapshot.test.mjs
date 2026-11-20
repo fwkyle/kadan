@@ -46,12 +46,12 @@ const getJson = async (base, url) => { const r = await fetch(base + url); return
 const never = counter => () => { counter.n++; throw new Error('공유 수집을 부르면 안 된다'); };
 
 // 2026-11-20 운영 실측: 크롬이 화면을 열 때마다 찾는 /favicon.ico가 전체 수집 + 17MB 옛 화면 그리기로 떨어져 다른 요청을 6.6~24.7초 세웠다.
-test('화면 빌드를 서빙할 때 없는 주소(/favicon.ico 등)는 수집·옛 화면 그리기 없이 404로 끝나고 미리 수집도 걸지 않는다', async () => {
+test('화면 빌드를 서빙할 때 파일 이름 꼴의 없는 주소(/favicon.ico 등)는 수집·옛 화면 그리기 없이 404로 끝나고 미리 수집도 걸지 않는다', async () => {
   const home = sqliteHome(); const loads = {n: 0};
   const server = createWallServer(never(loads), {home, cacheSec: 10, warmAfterMs: 20, gui: true});
   const base = await start(server);
   try {
-    for (const url of ['/favicon.ico', '/runners.json', '/apple-touch-icon.png', '/robots.txt']) {
+    for (const url of ['/favicon.ico', '/runners.json', '/apple-touch-icon.png', '/robots.txt', '/.well-known/appspecific/com.chrome.devtools.json']) {
       const r = await fetch(base + url);
       assert.equal(r.status, 404, url);
       assert.equal(r.headers.get('content-type'), 'text/plain; charset=utf-8');
