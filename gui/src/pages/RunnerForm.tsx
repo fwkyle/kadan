@@ -2,6 +2,7 @@ import { useContext, useEffect, useId, useState } from "react";
 import { save } from "../resource";
 import { EMPTY_EFFORT_NOTE, afterModelChange, afterRunnerChange, effortNeeded, effortProblem, forRole, sameChoice } from "../effort-keep";
 import { listOf, ownPart } from "../runner-draft";
+import { seniorPreview } from "../runner-preview";
 import { AppContext, ErrorMessage } from "../ui";
 import { ModelRegister } from "./ModelRegister";
 import type { Choice, Settings, RunnersData } from "./Runners";
@@ -339,7 +340,7 @@ export function RunnerForm({
               {role === "watch"
                 ? `KADAN_JUDGE_MODEL=${choice.model} KADAN_JUDGE_EFFORT=${choice.effort || "max"} watch-judge.sh (codex exec)`
                 : role === "senior"
-                  ? `KADAN_SENIOR_MODEL=${choice.model} KADAN_SENIOR_EFFORT=${choice.effort || "max"} senior.sh (${choice.runner} exec, 저장소 읽기 전용)`
+                  ? seniorPreview(choice)
                   : role === "explain"
                     ? "실행기 표의 exec 틀로 한 번 호출 (실행기 이름은 코드에 없음)"
                     : role === "secretary"
