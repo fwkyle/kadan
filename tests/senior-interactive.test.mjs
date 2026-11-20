@@ -766,7 +766,7 @@ await seniorCommand(['qa/card-a'], {question: '바꿀까?', timeout: '120'}, {ho
 test('감싼 프로세스: 호출 하나는 프로세스 하나다 — 그 프로세스가 TERM을 받으면 세션을 끄지 않고 남김 표시만 적고 나가며 칸은 timeout으로 남는다', {skip}, async t => {
   const f = fixture(t, {seniors: [ASTRA], plan: {default: {answer: 'working-forever'}}});
   // 기존 호출 프로세스(runJudgeProcess)의 상한만 짧게 준다: 상한에 걸리면 감싼 프로세스 묶음에 TERM이 간다.
-  const error = await f.run({timeout: '60'}, {spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})})
+  const error = await f.run({timeout: '60'}, {spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 4500})})
     .then(() => assert.fail('실패해야 한다'), e => e);
   assert.deepEqual(error.answers.map(a => [a.reason, a.status]), [['timeout', '실패(timeout)']]);
   const [entry] = f.advices();
@@ -822,7 +822,7 @@ for (const mode of ['trap']) {
     t.after(() => fs.rmSync(f.slowTmux, {force: true}));
     // 폴링 간격을 아주 짧게 두고 tmux 호출을 0.5초씩 늦추면, 감싼 프로세스는 거의 늘 tmux 호출 안에 있다.
     const pending = f.run({timeout: '60'}, {sessionTiming: {...TIMING, pollMs: 10},
-      spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 6000})}).then(() => assert.fail('실패해야 한다'), e => e);
+      spawn: (command, settings) => runJudgeProcess(command, {...settings, timeout: 4500})}).then(() => assert.fail('실패해야 한다'), e => e);
     for (let i = 0; i < 400 && f.fakeLog('gpt-6-astra', 'submitted').length < 1; i++) await new Promise(r => setTimeout(r, 25));
     fs.writeFileSync(f.slowTmux, mode);
     const error = await pending;

@@ -140,7 +140,7 @@ test('신뢰 창 키 조건: 다른 경로·경로 두 줄·No가 선택됨·끄
     stay: {startup: 'trust', afterTrust: 'stay'}}});
   const seats = s.open(['other', 'two', 'no', 'stay']);
   // 거절은 신뢰 창을 본 그 자리에서 끝난다(기다림 없음). 창이 남는 경우만 정해 둔 시간까지 기다린 뒤 실패한다.
-  const gates = await Promise.all(seats.map(seat => passGate(seat, seat.model === 'stay' ? {...s.deps, timing: {...TIMING, startupMs: 8000}} : s.deps)));
+  const gates = await Promise.all(seats.map(seat => passGate(seat, seat.model === 'stay' ? {...s.deps, timing: {...TIMING, startupMs: 4000}} : s.deps)));
   assert.deepEqual(gates.map(gate => [gate.ok, gate.why]), [[false, 'startup:trust-path-mismatch'], [false, 'startup:trust-path-unreadable'],
     [false, 'startup:trust-not-yes'], [false, 'startup:trust-remains']]);
   for (const model of ['other', 'two', 'no']) assert.equal(s.keys(model).any, 0, `${model}: 키 0회`);
@@ -214,7 +214,7 @@ test('회수를 믿을 수 없으면 call-failed다: 시작 경계가 스크롤�
   const s = setup(t, {default: {startup: 'composer'}, models: {clear: {answer: 'clear'}, exit: {answer: 'exit'}, forever: {answer: 'working-forever'}}});
   const [clear, exit, forever, tiny] = s.open(['clear', 'exit', 'forever', 'tiny']);
   await Promise.all([clear, exit, forever, tiny].map(seat => passGate(seat, s.deps)));
-  const late = {...forever, deadlineAt: Date.now() + 8000};
+  const late = {...forever, deadlineAt: Date.now() + 4000};
   const [cleared, died, timedOut, overflow] = await Promise.all([askSeat(clear, s.deps), askSeat(exit, s.deps), askSeat(late, s.deps),
     askSeat(tiny, {...s.deps, captureMaxBytes: 64})]);
   assert.deepEqual(cleared, {reason: 'call-failed', detail: 'boundary-lost'});

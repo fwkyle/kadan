@@ -30,7 +30,22 @@ test('격리 실제 CLI+tmux: 5 profiles·원문/수신/저장·완료 회신·r
   // 카드 발령 대상은 등록 실행기+모델로 시작한 세대여야 한다 — 시험 실행기도 그 형태를 갖춘다.
   const harness=path.join(home,'codex');
   fs.writeFileSync(harness,`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(receiver)} "$@"\n`);fs.chmodSync(harness,0o755);
-  const begin=(role,profile)=>{run('start',role,'--hidden','--cmd',`${quote(harness)} --model test-model`,...(profile?['--profile',profile]:[]));started.push(role);};
+  // 프로필로 시작하면 start가 첫 안내를 한 번 보낸다(start-brief.test.mjs의 "새 세션 + --profile" 시험을 여기로 합쳤다, 2026-11-20).
+  // 영수증 1건·roleProfile·roleInstructions 메타를 확인하고, 수신기가 프롬프트마다 화면을 지우므로 화면 대신 수신 파일에서 안내 문구를 본다.
+  const BRIEF_NEEDLE={super:'kadan-super',conductor:'kadan-conductor',secretary:'kadan-secretary',worker:'card-template',reviewer:'card-template'};
+  const begin=(role,profile)=>{
+    const before=profile?sends().length:0;
+    const out=run('start',role,'--hidden','--cmd',`${quote(harness)} --model test-model`,...(profile?['--profile',profile]:[]));started.push(role);
+    if(!profile)return;
+    assert.match(out,/첫 안내 전송됨/);
+    const added=sends().slice(before);
+    assert.equal(added.length,1,`${profile}: 영수증 1건`);
+    assert.equal(added[0].role,role);assert.equal(added[0].roleProfile,profile);assert.ok(added[0].roleInstructions,`${profile}: receiver-instructions 메타데이터`);
+    const needle=new RegExp(BRIEF_NEEDLE[profile]),end=Date.now()+30000;
+    while(Date.now()<end&&!(needle.test(received(role))&&/kadan:receiver-instructions/.test(received(role))))pause();
+    assert.match(received(role),needle,`${profile}: 본문/지침에 ${BRIEF_NEEDLE[profile]}`);
+    assert.match(received(role),/kadan:receiver-instructions/,`${profile}: 수신 내용`);
+  };
   const entries=()=>readLedger(home),sends=()=>entries().filter(e=>e.kind==='send'&&e.transport!=='mailbox');
   const ack=(mailId,role)=>`우편 ID: ${mailId}. 내용을 확인한 수신자가 직접 읽음 확인을 기록하라.\n`+
     `KADAN_ROLE=${quote(role)} kadan inbox ack ${quote(mailId)} --role ${quote(role)}\n`+

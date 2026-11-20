@@ -64,7 +64,7 @@ test('rust는 동시에 하나만: 두 번째는 기다렸다가 첫 번째가 �
 
 test('install은 동시에 둘까지 바로 돈다', async () => {
   const home = freshHome();
-  const jobs = [1, 2].map(() => start(home, 'install', node('setTimeout(()=>{},3000)')));
+  const jobs = [1, 2].map(() => start(home, 'install', node('setTimeout(()=>{},2000)')));
   await until(() => lockCount(home) === 2);
   const results = await Promise.all(jobs.map(j => j.done));
   assert.deepEqual(results.map(r => [r.code, /대기/.test(r.stderr)]), [[0, false], [0, false]]);

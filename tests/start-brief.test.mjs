@@ -110,35 +110,8 @@ function world(t, tag) {
   return {root, home, bin, fake, env, kadan, tmux, sends};
 }
 const hasTmux = () => spawnSync('tmux', ['-V']).status === 0;
-// 붙여넣기는 화면이 그려지는 것을 기다리지 않는다 → 기대 문구가 나타날 때까지 상한 있는 조건 대기 뒤에 화면을 돌려준다. 상한에 닿으면 그때 화면으로 단언이 실패한다.
-function screenWhen(w, session, ready, {timeoutMs = 30000, stepMs = 100} = {}) {
-  const read = () => w.tmux('capture-pane', '-p', '-J', '-S', '-2000', '-t', `=${session}:`).stdout;
-  const end = Date.now() + timeoutMs;
-  let screen = read();
-  while (!ready(screen) && Date.now() < end) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stepMs); screen = read(); }
-  return screen;
-}
 
-test('격리 tmux: 새 세션 + --profile은 프로필이 붙은 첫 안내를 정확히 1건 보낸다', t => {
-  if (!hasTmux()) return t.skip('tmux 없음');
-  const w = world(t, 'p');
-  const expected = {super: 'kadan-super', conductor: 'kadan-conductor', secretary: 'kadan-secretary', worker: 'card-template', reviewer: 'card-template'};
-  for (const [profile, needle] of Object.entries(expected)) {
-    const role = `r-${profile}`;
-    const before = w.sends().length;
-    const r = w.kadan('start', role, '--hidden', '--profile', profile, '--cmd', 'claude', '--reason', 'brief test');
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /첫 안내 전송됨/);
-    const added = w.sends().slice(before);
-    assert.equal(added.length, 1, `${profile}: 영수증 1건`);
-    assert.equal(added[0].role, role); assert.equal(added[0].roleProfile, profile);
-    assert.ok(added[0].roleInstructions, `${profile}: receiver-instructions 메타데이터`);
-    const screen = screenWhen(w, `kadan-${role}`, text => new RegExp(needle).test(text) && /kadan:receiver-instructions/.test(text));
-    assert.match(screen, new RegExp(needle), `${profile}: 본문/지침에 ${needle}\n화면:\n${screen}`);
-    assert.match(screen, /kadan:receiver-instructions/, `${profile}: 화면:\n${screen}`);
-  }
-});
-
+// '새 세션 + --profile은 첫 안내 1건' 시험은 role-instructions-cli.test.mjs의 begin()으로 합쳤다(같은 5개 프로필 start를 두 번 하지 않으려고, 2026-11-20).
 test('격리 tmux: 재사용 세션·--no-prompt·--cmd sh·프로필 없음은 0건', t => {
   if (!hasTmux()) return t.skip('tmux 없음');
   const w = world(t, 'n');
